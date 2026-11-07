@@ -1449,6 +1449,14 @@ RADIO_FAIL_EVENTS = frozenset((
     "RX_FAIL_GO_TO_SEARCH",
 ))
 
+# The stack owning up to a slot it chose not to listen in: two of its own
+# channels wanted the radio at once and one lost. That is loss in the
+# receiver's scheduler - neither the air's nor the host's - and a retail
+# 8-channel stick reports it by the hundred on four mixed-period channels
+# (the Garmin USB-m, 2026-11-07: 156 in 300 s). Filed as "after the radio"
+# it read as a USB fault on a receiver whose host path was fine.
+COLLISION_EVENTS = frozenset(("EVENT_CHANNEL_COLLISION", "CHANNEL_COLLISION"))
+
 
 def loss_accounting(result: dict) -> dict | None:
     """Decide whether the radio can account for the packets that went missing.
@@ -1475,12 +1483,14 @@ def loss_accounting(result: dict) -> dict | None:
 
     radio_fails = sum(count for name, count in events.items()
                       if name in RADIO_FAIL_EVENTS)
+    collisions = sum(count for name, count in events.items()
+                     if name in COLLISION_EVENTS)
     missing = sum(max(0, round(c["expected_packets"]) - c["packets"])
                   for c in result["channels"])
     if missing <= 0:
         return None
 
-    unaccounted = max(0, missing - radio_fails)
+    unaccounted = max(0, missing - radio_fails - collisions)
 
     # Not zero tolerance: `missing` carries a packet of rounding either way,
     # and a boundary event can land in one column and not the other. A
@@ -1488,7 +1498,14 @@ def loss_accounting(result: dict) -> dict | None:
     # half the read-timeout bug produced.
     allowed = max(2, round(0.25 * missing))
 
-    if unaccounted == 0:
+    if collisions:
+        verdict = (f"{radio_fails} reported as RX_FAIL (on the air) and "
+                   f"{collisions} as CHANNEL_COLLISION (the receiver's own "
+                   f"channels contending for its radio)")
+        if unaccounted:
+            verdict += (f"; the other {unaccounted} went missing without "
+                        f"the radio noticing")
+    elif unaccounted == 0:
         verdict = ("all of it reported by the radio as RX_FAIL, so it "
                    "happened on the air")
     elif radio_fails > 0:
@@ -1501,6 +1518,7 @@ def loss_accounting(result: dict) -> dict | None:
     return {
         "missing": missing,
         "radio_fails": radio_fails,
+        "collisions": collisions,
         "unaccounted": unaccounted,
         "allowed_unaccounted": allowed,
         "verdict": verdict,
@@ -1970,8 +1988,11 @@ def main() -> int:
     if len(profiles) == 1:
         profiles = profiles * count
 
-    channels = per_channel_args(args.channel, count, "--channel", default=0,
-                                ramp=True)
+    # Absent means 0, 1, 2, ... - not 0 on every channel, which the repeat
+    # check below refuses: that made the --profile-alone form documented
+    # above fail on every multi-profile run that did not also pass --channel.
+    channels = per_channel_args(args.channel or [0], count, "--channel",
+                                default=0, ramp=True)
     device_numbers = per_channel_args(args.device_number, count,
                                       "--device-number", default=0, ramp=True,
                                       wildcard=0)

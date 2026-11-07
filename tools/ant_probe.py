@@ -243,9 +243,24 @@ def close_device(dev) -> None:
 
 def _serial_of(dev):
     try:
-        return usb.util.get_string(dev, dev.iSerialNumber)
+        text = usb.util.get_string(dev, dev.iSerialNumber)
     except (usb.core.USBError, ValueError):
         return None
+    return _clean_serial(text)
+
+
+def _clean_serial(text):
+    """The serial as the device means it: up to the first NUL.
+
+    The Garmin ANT USB-m's string descriptor is '006' followed by a NUL and
+    ~25 bytes of firmware garbage ('006\\x00\\x06\\x9fR...GRMN...'). Windows
+    shows it as '006'; pyusb returns all of it, so `--serial 006` (an
+    endswith() match) could never select the reference stick. Measured
+    2026-11-07.
+    """
+    if text is None:
+        return None
+    return text.split("\x00", 1)[0]
 
 
 def _pip_libusb1():

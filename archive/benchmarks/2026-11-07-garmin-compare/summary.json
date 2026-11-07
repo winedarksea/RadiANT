@@ -1,0 +1,5551 @@
+{
+  "rig": "2026-11-07-fixed",
+  "reference": "Garmin",
+  "generated": "2026-11-07T08:47:21.682119+00:00",
+  "identity": {
+    "Garmin": {
+      "version": "AJK2.05RAF",
+      "channels": 8,
+      "networks": 8,
+      "pass": true,
+      "probe_rc": 0,
+      "features_rc": 1,
+      "stack": "reference",
+      "is_radiant": false
+    },
+    "Feather": {
+      "version": "RADIANT0.01B00",
+      "channels": 32,
+      "networks": 3,
+      "pass": true,
+      "probe_rc": 0,
+      "features_rc": 0,
+      "stack": "radiant",
+      "is_radiant": true
+    },
+    "Dongle": {
+      "version": "RADIANT0.01B00",
+      "channels": 32,
+      "networks": 3,
+      "pass": true,
+      "probe_rc": 0,
+      "features_rc": 0,
+      "stack": "radiant",
+      "is_radiant": true
+    },
+    "5340": {
+      "version": "RADIANT0.01B00",
+      "channels": 32,
+      "networks": 3,
+      "pass": true,
+      "probe_rc": 0,
+      "features_rc": 0,
+      "stack": "radiant",
+      "is_radiant": true
+    },
+    "54L15": {
+      "version": "RADIANT0.01B00",
+      "channels": 32,
+      "networks": 3,
+      "pass": true,
+      "probe_rc": 0,
+      "features_rc": 0,
+      "stack": "radiant",
+      "is_radiant": true
+    }
+  },
+  "rounds": [
+    {
+      "round": "A",
+      "transmitters": [
+        "5340"
+      ],
+      "receivers": [
+        "Garmin",
+        "Feather",
+        "Dongle",
+        "54L15"
+      ],
+      "metrics": {
+        "loss": {
+          "Garmin": [
+            0.41562759767248547,
+            0.24937655860349128
+          ],
+          "Feather": [
+            0.0,
+            0.0
+          ],
+          "Dongle": [
+            0.0,
+            0.0
+          ],
+          "54L15": [
+            0.0,
+            0.16638935108153077
+          ]
+        },
+        "loss (multi, pooled)": {
+          "Garmin": [
+            null
+          ],
+          "Feather": [
+            null
+          ],
+          "Dongle": [
+            null
+          ],
+          "54L15": [
+            null
+          ]
+        },
+        "multi per profile": {
+          "Garmin": {},
+          "Feather": {},
+          "Dongle": {},
+          "54L15": {}
+        },
+        "acquire": {
+          "Garmin": {
+            "n": 20,
+            "acquired": 20,
+            "misses": 0,
+            "median": 0.18699999999807915,
+            "q1": 0.12474999999722058,
+            "q3": 0.22275000000445289
+          },
+          "Feather": {
+            "n": 20,
+            "acquired": 20,
+            "misses": 0,
+            "median": 0.19549999999799184,
+            "q1": 0.03175000000010186,
+            "q3": 0.20300000000133878
+          },
+          "Dongle": {
+            "n": 20,
+            "acquired": 20,
+            "misses": 0,
+            "median": 0.17199999999866122,
+            "q1": 0.13699999999698775,
+            "q3": 0.20300000000133878
+          },
+          "54L15": {
+            "n": 20,
+            "acquired": 20,
+            "misses": 0,
+            "median": 0.18000000000392902,
+            "q1": 0.042999999999665306,
+            "q3": 0.23399999999674037
+          }
+        },
+        "ladder": {
+          "Garmin": {
+            "knee_dbm": null,
+            "knee_rssi_dbm": null,
+            "dial_trustworthy": true,
+            "rssi_slope": {
+              "slope": null,
+              "n": 0,
+              "reason": "fewer than three rungs with usable RSSI below the knee"
+            },
+            "reason": "the quietest rung (-40 dBm) still only loses 2.50 %, so the knee is below the bottom of the ladder. The ladder spans 40 dB and the link needs more: move the boards apart and run it again. Extrapolating past the last rung would invent the answer",
+            "steps": [
+              {
+                "tx_power_dbm": 0,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": null
+              },
+              {
+                "tx_power_dbm": -1,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": null
+              },
+              {
+                "tx_power_dbm": -2,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": null
+              },
+              {
+                "tx_power_dbm": -3,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": null
+              },
+              {
+                "tx_power_dbm": -4,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": null
+              },
+              {
+                "tx_power_dbm": -5,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": null
+              },
+              {
+                "tx_power_dbm": -6,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": null
+              },
+              {
+                "tx_power_dbm": -7,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": null
+              },
+              {
+                "tx_power_dbm": -8,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": null
+              },
+              {
+                "tx_power_dbm": -12,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": null
+              },
+              {
+                "tx_power_dbm": -16,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": null
+              },
+              {
+                "tx_power_dbm": -20,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": null
+              },
+              {
+                "tx_power_dbm": -40,
+                "loss_pct": 2.5,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": null
+              }
+            ],
+            "dial_basis": "inherited from the receivers that report RSSI"
+          },
+          "Feather": {
+            "knee_dbm": -21.00414937759336,
+            "knee_rssi_dbm": -62.004149377593365,
+            "dial_trustworthy": true,
+            "rssi_slope": {
+              "slope": 0.969137437911014,
+              "n": 12,
+              "worst_residual_db": 0.7910056316435998,
+              "reason": "least squares of mean RSSI against commanded transmit power"
+            },
+            "reason": "interpolated between the two rungs that bracket it; the bracket is 20 dB wide, which is most of what this number is made of - use --rungs fine for a tighter one",
+            "steps": [
+              {
+                "tx_power_dbm": 0,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -41.0
+              },
+              {
+                "tx_power_dbm": -1,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -41.99586776859504
+              },
+              {
+                "tx_power_dbm": -2,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -42.549586776859506
+              },
+              {
+                "tx_power_dbm": -3,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -43.99586776859504
+              },
+              {
+                "tx_power_dbm": -4,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -44.88429752066116
+              },
+              {
+                "tx_power_dbm": -5,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -45.6198347107438
+              },
+              {
+                "tx_power_dbm": -6,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -45.79338842975206
+              },
+              {
+                "tx_power_dbm": -7,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -47.33884297520661
+              },
+              {
+                "tx_power_dbm": -8,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -48.01239669421488
+              },
+              {
+                "tx_power_dbm": -12,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -52.107438016528924
+              },
+              {
+                "tx_power_dbm": -16,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -57.045643153526974
+              },
+              {
+                "tx_power_dbm": -20,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -60.045643153526974
+              },
+              {
+                "tx_power_dbm": -40,
+                "loss_pct": 99.58677685950413,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -60.0
+              }
+            ]
+          },
+          "Dongle": {
+            "knee_dbm": -35.0,
+            "knee_rssi_dbm": -66.04526748971193,
+            "dial_trustworthy": true,
+            "rssi_slope": {
+              "slope": 0.9918350857159345,
+              "n": 13,
+              "worst_residual_db": 0.7241981262930182,
+              "reason": "least squares of mean RSSI against commanded transmit power"
+            },
+            "reason": "interpolated between the two rungs that bracket it; the bracket is 20 dB wide, which is most of what this number is made of - use --rungs fine for a tighter one",
+            "steps": [
+              {
+                "tx_power_dbm": 0,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -31.045267489711936
+              },
+              {
+                "tx_power_dbm": -1,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -32.99173553719008
+              },
+              {
+                "tx_power_dbm": -2,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -33.0
+              },
+              {
+                "tx_power_dbm": -3,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -34.00413223140496
+              },
+              {
+                "tx_power_dbm": -4,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -35.37603305785124
+              },
+              {
+                "tx_power_dbm": -5,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -36.946280991735534
+              },
+              {
+                "tx_power_dbm": -6,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -37.0
+              },
+              {
+                "tx_power_dbm": -7,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -38.93801652892562
+              },
+              {
+                "tx_power_dbm": -8,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -39.99170124481328
+              },
+              {
+                "tx_power_dbm": -12,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -44.19834710743802
+              },
+              {
+                "tx_power_dbm": -16,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -47.98760330578512
+              },
+              {
+                "tx_power_dbm": -20,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -51.00413223140496
+              },
+              {
+                "tx_power_dbm": -40,
+                "loss_pct": 6.666666666666667,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -70.94196428571429
+              }
+            ]
+          },
+          "54L15": {
+            "knee_dbm": -21.794871794871796,
+            "knee_rssi_dbm": -69.7948717948718,
+            "dial_trustworthy": true,
+            "rssi_slope": {
+              "slope": 1.0088860030476818,
+              "n": 12,
+              "worst_residual_db": 0.875078019110461,
+              "reason": "least squares of mean RSSI against commanded transmit power"
+            },
+            "reason": "interpolated between the two rungs that bracket it; the bracket is 20 dB wide, which is most of what this number is made of - use --rungs fine for a tighter one",
+            "steps": [
+              {
+                "tx_power_dbm": 0,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -48.0
+              },
+              {
+                "tx_power_dbm": -1,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -49.52610441767068
+              },
+              {
+                "tx_power_dbm": -2,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -50.0
+              },
+              {
+                "tx_power_dbm": -3,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -50.99196787148595
+              },
+              {
+                "tx_power_dbm": -4,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -52.00403225806452
+              },
+              {
+                "tx_power_dbm": -5,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -53.0
+              },
+              {
+                "tx_power_dbm": -6,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -53.14859437751004
+              },
+              {
+                "tx_power_dbm": -7,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -54.979838709677416
+              },
+              {
+                "tx_power_dbm": -8,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -56.00404858299595
+              },
+              {
+                "tx_power_dbm": -12,
+                "loss_pct": 1.6666666666666667,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -59.970338983050844
+              },
+              {
+                "tx_power_dbm": -16,
+                "loss_pct": 2.5,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -64.95726495726495
+              },
+              {
+                "tx_power_dbm": -20,
+                "loss_pct": 2.0833333333333335,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -67.80851063829788
+              },
+              {
+                "tx_power_dbm": -40,
+                "loss_pct": 34.583333333333336,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -87.97452229299363
+              }
+            ]
+          }
+        },
+        "acked": {
+          "Garmin": {
+            "sent": 120,
+            "completed": 120,
+            "failed": 0,
+            "peer_received": 120,
+            "blocks": 2,
+            "errors": 0
+          },
+          "Feather": {
+            "sent": 120,
+            "completed": 120,
+            "failed": 0,
+            "peer_received": 120,
+            "blocks": 2,
+            "errors": 0
+          },
+          "Dongle": {
+            "sent": 120,
+            "completed": 120,
+            "failed": 0,
+            "peer_received": 120,
+            "blocks": 2,
+            "errors": 0
+          },
+          "54L15": {
+            "sent": 120,
+            "completed": 120,
+            "failed": 0,
+            "peer_received": 120,
+            "blocks": 2,
+            "errors": 0
+          }
+        }
+      },
+      "verdicts": [
+        {
+          "round": "A",
+          "metric": "loss",
+          "receiver": "Feather",
+          "verdict": "Better",
+          "detail": "0.00 % [0.00, 0.16] vs reference 0.33 % [0.17, 0.65]",
+          "windows": 2,
+          "gap_spread_pp": 0.1662510390689942
+        },
+        {
+          "round": "A",
+          "metric": "loss",
+          "receiver": "Dongle",
+          "verdict": "Better",
+          "detail": "0.00 % [0.00, 0.16] vs reference 0.33 % [0.17, 0.65]",
+          "windows": 2,
+          "gap_spread_pp": 0.1662510390689942
+        },
+        {
+          "round": "A",
+          "metric": "loss",
+          "receiver": "54L15",
+          "verdict": "Equal",
+          "detail": "0.08 % [0.02, 0.30] vs reference 0.33 % [0.17, 0.65]",
+          "windows": 2,
+          "gap_spread_pp": 0.33264039015052493
+        },
+        {
+          "round": "A",
+          "metric": "loss (multi, pooled)",
+          "receiver": "Feather",
+          "verdict": "Inconclusive",
+          "detail": "a figure is missing",
+          "windows": 0
+        },
+        {
+          "round": "A",
+          "metric": "loss (multi, pooled)",
+          "receiver": "Dongle",
+          "verdict": "Inconclusive",
+          "detail": "a figure is missing",
+          "windows": 0
+        },
+        {
+          "round": "A",
+          "metric": "loss (multi, pooled)",
+          "receiver": "54L15",
+          "verdict": "Inconclusive",
+          "detail": "a figure is missing",
+          "windows": 0
+        },
+        {
+          "round": "A",
+          "metric": "acquire",
+          "receiver": "Feather",
+          "verdict": "Equal",
+          "detail": "median 0.20 s (IQR 0.03-0.20, 0 miss) vs reference 0.19 s (IQR 0.12-0.22, 0 miss)"
+        },
+        {
+          "round": "A",
+          "metric": "acquire",
+          "receiver": "Dongle",
+          "verdict": "Equal",
+          "detail": "median 0.17 s (IQR 0.14-0.20, 0 miss) vs reference 0.19 s (IQR 0.12-0.22, 0 miss)"
+        },
+        {
+          "round": "A",
+          "metric": "acquire",
+          "receiver": "54L15",
+          "verdict": "Equal",
+          "detail": "median 0.18 s (IQR 0.04-0.23, 0 miss) vs reference 0.19 s (IQR 0.12-0.22, 0 miss)"
+        },
+        {
+          "round": "A",
+          "metric": "ladder",
+          "receiver": "Feather",
+          "verdict": "Inconclusive",
+          "detail": "the reference's ladder never reached its knee: the quietest rung (-40 dBm) still only loses 2.50 %, so the knee is below the bottom of the ladder. The ladder spans 40 dB and the link needs more: move the boards apart and run it again. Extrapolating past the last rung would invent the answer"
+        },
+        {
+          "round": "A",
+          "metric": "ladder",
+          "receiver": "Dongle",
+          "verdict": "Inconclusive",
+          "detail": "the reference's ladder never reached its knee: the quietest rung (-40 dBm) still only loses 2.50 %, so the knee is below the bottom of the ladder. The ladder spans 40 dB and the link needs more: move the boards apart and run it again. Extrapolating past the last rung would invent the answer"
+        },
+        {
+          "round": "A",
+          "metric": "ladder",
+          "receiver": "54L15",
+          "verdict": "Inconclusive",
+          "detail": "the reference's ladder never reached its knee: the quietest rung (-40 dBm) still only loses 2.50 %, so the knee is below the bottom of the ladder. The ladder spans 40 dB and the link needs more: move the boards apart and run it again. Extrapolating past the last rung would invent the answer"
+        },
+        {
+          "round": "A",
+          "metric": "acked",
+          "receiver": "Feather",
+          "verdict": "Inconclusive",
+          "detail": "0.00 % [0.00, 3.10] vs reference 0.00 % [0.00, 3.10]; the interval straddles the 0.5 pp margin"
+        },
+        {
+          "round": "A",
+          "metric": "acked",
+          "receiver": "Dongle",
+          "verdict": "Inconclusive",
+          "detail": "0.00 % [0.00, 3.10] vs reference 0.00 % [0.00, 3.10]; the interval straddles the 0.5 pp margin"
+        },
+        {
+          "round": "A",
+          "metric": "acked",
+          "receiver": "54L15",
+          "verdict": "Inconclusive",
+          "detail": "0.00 % [0.00, 3.10] vs reference 0.00 % [0.00, 3.10]; the interval straddles the 0.5 pp margin"
+        }
+      ],
+      "warnings": [
+        "multi 1: Garmin: no json written - see log",
+        "multi 1: Garmin: no JSON written",
+        "multi 1: Feather: no json written - see log",
+        "multi 1: Feather: no JSON written",
+        "multi 1: Dongle: no json written - see log",
+        "multi 1: Dongle: no JSON written",
+        "multi 1: 54L15: no json written - see log",
+        "multi 1: 54L15: no JSON written",
+        "multi 1: 5340: ant_sim rc 1",
+        "multi 1: 5340: 19 messages on the wall-clock fallback (pacing guessed)"
+      ]
+    },
+    {
+      "round": "B",
+      "transmitters": [
+        "54L15"
+      ],
+      "receivers": [
+        "Garmin",
+        "Feather",
+        "Dongle",
+        "5340"
+      ],
+      "metrics": {
+        "loss": {
+          "Garmin": [
+            0.3325020781379884,
+            0.24937655860349128
+          ],
+          "Feather": [
+            1.9966722129783694,
+            2.3275145469659186
+          ],
+          "Dongle": [
+            2.4958402662229617,
+            2.660016625103907
+          ],
+          "5340": [
+            1.913477537437604,
+            2.0798668885191347
+          ]
+        },
+        "loss (multi, pooled)": {
+          "Garmin": [
+            null
+          ],
+          "Feather": [
+            null
+          ],
+          "Dongle": [
+            null
+          ],
+          "5340": [
+            null
+          ]
+        },
+        "multi per profile": {
+          "Garmin": {},
+          "Feather": {},
+          "Dongle": {},
+          "5340": {}
+        },
+        "acquire": {
+          "Garmin": {
+            "n": 20,
+            "acquired": 20,
+            "misses": 0,
+            "median": 0.16449999999895226,
+            "q1": 0.031000000002677552,
+            "q3": 0.22274999999717693
+          },
+          "Feather": {
+            "n": 20,
+            "acquired": 20,
+            "misses": 0,
+            "median": 0.2029999999977008,
+            "q1": 0.13650000000234286,
+            "q3": 0.22274999999717693
+          },
+          "Dongle": {
+            "n": 20,
+            "acquired": 20,
+            "misses": 0,
+            "median": 0.17949999999837019,
+            "q1": 0.14100000000325963,
+            "q3": 0.2032500000004802
+          },
+          "5340": {
+            "n": 20,
+            "acquired": 20,
+            "misses": 0,
+            "median": 0.1720000000022992,
+            "q1": 0.0,
+            "q3": 0.20700000000215368
+          }
+        },
+        "ladder": {
+          "Garmin": {
+            "knee_dbm": null,
+            "knee_rssi_dbm": null,
+            "dial_trustworthy": false,
+            "rssi_slope": {
+              "slope": null,
+              "n": 0,
+              "reason": "fewer than three rungs with usable RSSI below the knee"
+            },
+            "reason": "the quietest rung (-28 dBm) still only loses 5.00 %, so the knee is below the bottom of the ladder. The ladder spans 36 dB and the link needs more: move the boards apart and run it again. Extrapolating past the last rung would invent the answer",
+            "steps": [
+              {
+                "tx_power_dbm": 8,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": null
+              },
+              {
+                "tx_power_dbm": 7,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": null
+              },
+              {
+                "tx_power_dbm": 6,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": null
+              },
+              {
+                "tx_power_dbm": 5,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": null
+              },
+              {
+                "tx_power_dbm": 4,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": null
+              },
+              {
+                "tx_power_dbm": 3,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": null
+              },
+              {
+                "tx_power_dbm": 2,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": null
+              },
+              {
+                "tx_power_dbm": 1,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": null
+              },
+              {
+                "tx_power_dbm": 0,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": null
+              },
+              {
+                "tx_power_dbm": -1,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": null
+              },
+              {
+                "tx_power_dbm": -2,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": null
+              },
+              {
+                "tx_power_dbm": -3,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": null
+              },
+              {
+                "tx_power_dbm": -4,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": null
+              },
+              {
+                "tx_power_dbm": -5,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": null
+              },
+              {
+                "tx_power_dbm": -6,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": null
+              },
+              {
+                "tx_power_dbm": -7,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": null
+              },
+              {
+                "tx_power_dbm": -8,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": null
+              },
+              {
+                "tx_power_dbm": -9,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": null
+              },
+              {
+                "tx_power_dbm": -10,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": null
+              },
+              {
+                "tx_power_dbm": -12,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": null
+              },
+              {
+                "tx_power_dbm": -14,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": null
+              },
+              {
+                "tx_power_dbm": -16,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": null
+              },
+              {
+                "tx_power_dbm": -18,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": null
+              },
+              {
+                "tx_power_dbm": -20,
+                "loss_pct": 1.25,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": null
+              },
+              {
+                "tx_power_dbm": -28,
+                "loss_pct": 5.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": null
+              }
+            ],
+            "dial_basis": "inherited from the receivers that report RSSI"
+          },
+          "Feather": {
+            "knee_dbm": -27.384615384615383,
+            "knee_rssi_dbm": -62.852969814995134,
+            "dial_trustworthy": false,
+            "rssi_slope": {
+              "slope": 0.9965534804362369,
+              "n": 25,
+              "worst_residual_db": 3.937922596788237,
+              "reason": "least squares of mean RSSI against commanded transmit power"
+            },
+            "reason": "interpolated between the two rungs that bracket it; the bracket is 8 dB wide, which is most of what this number is made of - use --rungs fine for a tighter one",
+            "steps": [
+              {
+                "tx_power_dbm": 8,
+                "loss_pct": 1.25,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -27.468354430379748
+              },
+              {
+                "tx_power_dbm": 7,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -28.06198347107438
+              },
+              {
+                "tx_power_dbm": 6,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -28.99586776859504
+              },
+              {
+                "tx_power_dbm": 5,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -29.99586776859504
+              },
+              {
+                "tx_power_dbm": 4,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -30.99586776859504
+              },
+              {
+                "tx_power_dbm": 3,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -31.99586776859504
+              },
+              {
+                "tx_power_dbm": 2,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -33.0
+              },
+              {
+                "tx_power_dbm": 1,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -33.99586776859504
+              },
+              {
+                "tx_power_dbm": 0,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -31.012396694214875
+              },
+              {
+                "tx_power_dbm": -1,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -36.0
+              },
+              {
+                "tx_power_dbm": -2,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -37.00413223140496
+              },
+              {
+                "tx_power_dbm": -3,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -37.99586776859504
+              },
+              {
+                "tx_power_dbm": -4,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -39.00413223140496
+              },
+              {
+                "tx_power_dbm": -5,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -40.239669421487605
+              },
+              {
+                "tx_power_dbm": -6,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -41.87190082644628
+              },
+              {
+                "tx_power_dbm": -7,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -42.99586776859504
+              },
+              {
+                "tx_power_dbm": -8,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -43.88429752066116
+              },
+              {
+                "tx_power_dbm": -9,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -44.3801652892562
+              },
+              {
+                "tx_power_dbm": -10,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -45.83471074380165
+              },
+              {
+                "tx_power_dbm": -12,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -46.99586776859504
+              },
+              {
+                "tx_power_dbm": -14,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -47.99583333333333
+              },
+              {
+                "tx_power_dbm": -16,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -49.98760330578512
+              },
+              {
+                "tx_power_dbm": -18,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -52.34710743801653
+              },
+              {
+                "tx_power_dbm": -20,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -56.12448132780083
+              },
+              {
+                "tx_power_dbm": -28,
+                "loss_pct": 5.416666666666667,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -62.136563876651984
+              }
+            ]
+          },
+          "Dongle": {
+            "knee_dbm": null,
+            "knee_rssi_dbm": null,
+            "dial_trustworthy": false,
+            "rssi_slope": {
+              "slope": 0.9918115600286047,
+              "n": 25,
+              "worst_residual_db": 3.7789654755085067,
+              "reason": "least squares of mean RSSI against commanded transmit power"
+            },
+            "reason": "the quietest rung (-28 dBm) still only loses 1.67 %, so the knee is below the bottom of the ladder. The ladder spans 36 dB and the link needs more: move the boards apart and run it again. Extrapolating past the last rung would invent the answer",
+            "steps": [
+              {
+                "tx_power_dbm": 8,
+                "loss_pct": 1.6666666666666667,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -29.0
+              },
+              {
+                "tx_power_dbm": 7,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -29.99586776859504
+              },
+              {
+                "tx_power_dbm": 6,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -30.99586776859504
+              },
+              {
+                "tx_power_dbm": 5,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -31.99586776859504
+              },
+              {
+                "tx_power_dbm": 4,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -32.99586776859504
+              },
+              {
+                "tx_power_dbm": 3,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -33.99586776859504
+              },
+              {
+                "tx_power_dbm": 2,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -34.995850622406635
+              },
+              {
+                "tx_power_dbm": 1,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -36.05785123966942
+              },
+              {
+                "tx_power_dbm": 0,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -33.01239669421488
+              },
+              {
+                "tx_power_dbm": -1,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -37.95454545454545
+              },
+              {
+                "tx_power_dbm": -2,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -38.85123966942149
+              },
+              {
+                "tx_power_dbm": -3,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -39.99586776859504
+              },
+              {
+                "tx_power_dbm": -4,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -40.99170124481328
+              },
+              {
+                "tx_power_dbm": -5,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -42.14876033057851
+              },
+              {
+                "tx_power_dbm": -6,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -43.743801652892564
+              },
+              {
+                "tx_power_dbm": -7,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -44.0
+              },
+              {
+                "tx_power_dbm": -8,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -45.00826446280992
+              },
+              {
+                "tx_power_dbm": -9,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -46.02479338842975
+              },
+              {
+                "tx_power_dbm": -10,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -47.36099585062241
+              },
+              {
+                "tx_power_dbm": -12,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -48.00829875518672
+              },
+              {
+                "tx_power_dbm": -14,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -50.00413223140496
+              },
+              {
+                "tx_power_dbm": -16,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -51.99173553719008
+              },
+              {
+                "tx_power_dbm": -18,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -54.66528925619835
+              },
+              {
+                "tx_power_dbm": -20,
+                "loss_pct": 0.8333333333333334,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -57.98739495798319
+              },
+              {
+                "tx_power_dbm": -28,
+                "loss_pct": 1.6666666666666667,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -63.96186440677966
+              }
+            ]
+          },
+          "5340": {
+            "knee_dbm": -11.899313501144164,
+            "knee_rssi_dbm": -63.85657845840912,
+            "dial_trustworthy": false,
+            "rssi_slope": {
+              "slope": 1.017031135364304,
+              "n": 25,
+              "worst_residual_db": 4.1690557995876105,
+              "reason": "least squares of mean RSSI against commanded transmit power"
+            },
+            "reason": "interpolated between the two rungs that bracket it",
+            "steps": [
+              {
+                "tx_power_dbm": 8,
+                "loss_pct": 2.5,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -43.957264957264954
+              },
+              {
+                "tx_power_dbm": 7,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -44.04016064257028
+              },
+              {
+                "tx_power_dbm": 6,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -44.99598393574297
+              },
+              {
+                "tx_power_dbm": 5,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -46.0
+              },
+              {
+                "tx_power_dbm": 4,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -46.99598393574297
+              },
+              {
+                "tx_power_dbm": 3,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -48.096385542168676
+              },
+              {
+                "tx_power_dbm": 2,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -49.03225806451613
+              },
+              {
+                "tx_power_dbm": 1,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -50.032128514056225
+              },
+              {
+                "tx_power_dbm": 0,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -47.01204819277108
+              },
+              {
+                "tx_power_dbm": -1,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -52.261044176706825
+              },
+              {
+                "tx_power_dbm": -2,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -53.04435483870968
+              },
+              {
+                "tx_power_dbm": -3,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -54.23293172690763
+              },
+              {
+                "tx_power_dbm": -4,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -55.72357723577236
+              },
+              {
+                "tx_power_dbm": -5,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -56.607287449392715
+              },
+              {
+                "tx_power_dbm": -6,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -58.18257261410788
+              },
+              {
+                "tx_power_dbm": -7,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -59.02057613168724
+              },
+              {
+                "tx_power_dbm": -8,
+                "loss_pct": 0.4166666666666667,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -60.20502092050209
+              },
+              {
+                "tx_power_dbm": -9,
+                "loss_pct": 0.8333333333333334,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -61.30672268907563
+              },
+              {
+                "tx_power_dbm": -10,
+                "loss_pct": 0.8333333333333334,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -63.403361344537814
+              },
+              {
+                "tx_power_dbm": -12,
+                "loss_pct": 5.220883534136546,
+                "loss_basis": "event_counter",
+                "rssi_dbm_mean": -65.0042194092827
+              },
+              {
+                "tx_power_dbm": -14,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -64.01646090534979
+              },
+              {
+                "tx_power_dbm": -16,
+                "loss_pct": 0.0,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -65.92116182572614
+              },
+              {
+                "tx_power_dbm": -18,
+                "loss_pct": 0.8333333333333334,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -68.00840336134453
+              },
+              {
+                "tx_power_dbm": -20,
+                "loss_pct": 3.75,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -72.15151515151516
+              },
+              {
+                "tx_power_dbm": -28,
+                "loss_pct": 4.166666666666667,
+                "loss_basis": "master_sent",
+                "rssi_dbm_mean": -79.43913043478261
+              }
+            ]
+          }
+        },
+        "acked": {
+          "Garmin": {
+            "sent": 120,
+            "completed": 120,
+            "failed": 0,
+            "peer_received": 120,
+            "blocks": 2,
+            "errors": 0
+          },
+          "Feather": {
+            "sent": 120,
+            "completed": 120,
+            "failed": 0,
+            "peer_received": 120,
+            "blocks": 2,
+            "errors": 0
+          },
+          "Dongle": {
+            "sent": 60,
+            "completed": 60,
+            "failed": 0,
+            "peer_received": 60,
+            "blocks": 2,
+            "errors": 1
+          },
+          "5340": {
+            "sent": 120,
+            "completed": 120,
+            "failed": 0,
+            "peer_received": 120,
+            "blocks": 2,
+            "errors": 0
+          }
+        }
+      },
+      "verdicts": [
+        {
+          "round": "B",
+          "metric": "loss",
+          "receiver": "Feather",
+          "verdict": "Worse",
+          "detail": "2.16 % [1.65, 2.82] vs reference 0.29 % [0.14, 0.60]",
+          "windows": 2,
+          "gap_spread_pp": 0.41396785352204635
+        },
+        {
+          "round": "B",
+          "metric": "loss",
+          "receiver": "Dongle",
+          "verdict": "Worse",
+          "detail": "2.58 % [2.02, 3.29] vs reference 0.29 % [0.14, 0.60]",
+          "windows": 2,
+          "gap_spread_pp": 0.24730187841544238
+        },
+        {
+          "round": "B",
+          "metric": "loss",
+          "receiver": "5340",
+          "verdict": "Worse",
+          "detail": "2.00 % [1.51, 2.64] vs reference 0.29 % [0.14, 0.60]",
+          "windows": 2,
+          "gap_spread_pp": 0.24951487061602773
+        },
+        {
+          "round": "B",
+          "metric": "loss (multi, pooled)",
+          "receiver": "Feather",
+          "verdict": "Inconclusive",
+          "detail": "a figure is missing",
+          "windows": 0
+        },
+        {
+          "round": "B",
+          "metric": "loss (multi, pooled)",
+          "receiver": "Dongle",
+          "verdict": "Inconclusive",
+          "detail": "a figure is missing",
+          "windows": 0
+        },
+        {
+          "round": "B",
+          "metric": "loss (multi, pooled)",
+          "receiver": "5340",
+          "verdict": "Inconclusive",
+          "detail": "a figure is missing",
+          "windows": 0
+        },
+        {
+          "round": "B",
+          "metric": "acquire",
+          "receiver": "Feather",
+          "verdict": "Equal",
+          "detail": "median 0.20 s (IQR 0.14-0.22, 0 miss) vs reference 0.16 s (IQR 0.03-0.22, 0 miss)"
+        },
+        {
+          "round": "B",
+          "metric": "acquire",
+          "receiver": "Dongle",
+          "verdict": "Equal",
+          "detail": "median 0.18 s (IQR 0.14-0.20, 0 miss) vs reference 0.16 s (IQR 0.03-0.22, 0 miss)"
+        },
+        {
+          "round": "B",
+          "metric": "acquire",
+          "receiver": "5340",
+          "verdict": "Equal",
+          "detail": "median 0.17 s (IQR 0.00-0.21, 0 miss) vs reference 0.16 s (IQR 0.03-0.22, 0 miss)"
+        },
+        {
+          "round": "B",
+          "metric": "ladder",
+          "receiver": "Feather",
+          "verdict": "Inconclusive",
+          "detail": "the receiver's dial (RSSI slope) check failed"
+        },
+        {
+          "round": "B",
+          "metric": "ladder",
+          "receiver": "Dongle",
+          "verdict": "Inconclusive",
+          "detail": "the receiver's ladder never reached its knee: the quietest rung (-28 dBm) still only loses 1.67 %, so the knee is below the bottom of the ladder. The ladder spans 36 dB and the link needs more: move the boards apart and run it again. Extrapolating past the last rung would invent the answer"
+        },
+        {
+          "round": "B",
+          "metric": "ladder",
+          "receiver": "5340",
+          "verdict": "Inconclusive",
+          "detail": "the receiver's dial (RSSI slope) check failed"
+        },
+        {
+          "round": "B",
+          "metric": "acked",
+          "receiver": "Feather",
+          "verdict": "Inconclusive",
+          "detail": "0.00 % [0.00, 3.10] vs reference 0.00 % [0.00, 3.10]; the interval straddles the 0.5 pp margin"
+        },
+        {
+          "round": "B",
+          "metric": "acked",
+          "receiver": "Dongle",
+          "verdict": "Inconclusive",
+          "detail": "0.00 % [0.00, 6.02] vs reference 0.00 % [0.00, 3.10]; the interval straddles the 0.5 pp margin"
+        },
+        {
+          "round": "B",
+          "metric": "acked",
+          "receiver": "5340",
+          "verdict": "Inconclusive",
+          "detail": "0.00 % [0.00, 3.10] vs reference 0.00 % [0.00, 3.10]; the interval straddles the 0.5 pp margin"
+        }
+      ],
+      "warnings": [
+        "multi 1: Garmin: no json written - see log",
+        "multi 1: Garmin: no JSON written",
+        "multi 1: Feather: no json written - see log",
+        "multi 1: Feather: no JSON written",
+        "multi 1: Dongle: no json written - see log",
+        "multi 1: Dongle: no JSON written",
+        "multi 1: 5340: no json written - see log",
+        "multi 1: 5340: no JSON written",
+        "multi 1: 54L15: ant_sim rc 1",
+        "multi 1: 54L15: 9 messages on the wall-clock fallback (pacing guessed)",
+        "acked 1: pass 1 Dongle: RuntimeError: endpoint 3D55F77818BE772A did not reset"
+      ]
+    },
+    {
+      "round": "C",
+      "transmitters": [
+        "5340",
+        "54L15"
+      ],
+      "receivers": [
+        "Garmin",
+        "Feather",
+        "Dongle"
+      ],
+      "metrics": {
+        "loss (multi, pooled)": {
+          "Garmin": [
+            null,
+            null
+          ],
+          "Feather": [
+            null,
+            null
+          ],
+          "Dongle": [
+            null,
+            null
+          ]
+        },
+        "multi per profile": {
+          "Garmin": {},
+          "Feather": {},
+          "Dongle": {}
+        },
+        "acquire": {
+          "Garmin": {
+            "n": 20,
+            "acquired": 20,
+            "misses": 0,
+            "median": 0.11700000000200816,
+            "q1": 0.011999999996987754,
+            "q3": 0.20300000000133878
+          },
+          "Feather": {
+            "n": 20,
+            "acquired": 20,
+            "misses": 0,
+            "median": 0.10149999999703141,
+            "q1": 0.031000000002677552,
+            "q3": 0.19099999999889405
+          },
+          "Dongle": {
+            "n": 20,
+            "acquired": 20,
+            "misses": 0,
+            "median": 0.20300000000133878,
+            "q1": 0.13700000000244472,
+            "q3": 0.21824999999989814
+          }
+        }
+      },
+      "verdicts": [
+        {
+          "round": "C",
+          "metric": "loss (multi, pooled)",
+          "receiver": "Feather",
+          "verdict": "Inconclusive",
+          "detail": "a figure is missing",
+          "windows": 0
+        },
+        {
+          "round": "C",
+          "metric": "loss (multi, pooled)",
+          "receiver": "Dongle",
+          "verdict": "Inconclusive",
+          "detail": "a figure is missing",
+          "windows": 0
+        },
+        {
+          "round": "C",
+          "metric": "acquire",
+          "receiver": "Feather",
+          "verdict": "Equal",
+          "detail": "median 0.10 s (IQR 0.03-0.19, 0 miss) vs reference 0.12 s (IQR 0.01-0.20, 0 miss)"
+        },
+        {
+          "round": "C",
+          "metric": "acquire",
+          "receiver": "Dongle",
+          "verdict": "Equal",
+          "detail": "median 0.20 s (IQR 0.14-0.22, 0 miss) vs reference 0.12 s (IQR 0.01-0.20, 0 miss)"
+        }
+      ],
+      "warnings": [
+        "multi 1: Garmin: no json written - see log",
+        "multi 1: Garmin: no JSON written",
+        "multi 1: Feather: no json written - see log",
+        "multi 1: Feather: no JSON written",
+        "multi 1: Dongle: no json written - see log",
+        "multi 1: Dongle: no JSON written",
+        "multi 2: Garmin: no json written - see log",
+        "multi 2: Garmin: no JSON written",
+        "multi 2: Feather: no json written - see log",
+        "multi 2: Feather: no JSON written",
+        "multi 2: Dongle: no json written - see log",
+        "multi 2: Dongle: no JSON written"
+      ]
+    }
+  ],
+  "usb": {
+    "metrics": {
+      "Garmin": {
+        "p50": 0.581299995246809,
+        "p90": 0.6261999951675534,
+        "p99": 0.6881000008434057,
+        "max": 5.100200003653299,
+        "mean": 0.5998331997252535,
+        "timeouts": 0,
+        "msgs_per_s": 2006.691916230887,
+        "rc": 0
+      },
+      "Feather": {
+        "p50": 0.33909999910974875,
+        "p90": 0.36410000029718503,
+        "p99": 0.462200005131308,
+        "max": 0.5669000020134263,
+        "mean": 0.3394494002131978,
+        "timeouts": 0,
+        "msgs_per_s": 3015.7943180215743,
+        "rc": 0
+      },
+      "Dongle": {
+        "p50": 0.32559999817749485,
+        "p90": 0.37420000444399193,
+        "p99": 0.4160999960731715,
+        "max": 0.5010999957448803,
+        "mean": 0.3327409999619704,
+        "timeouts": 0,
+        "msgs_per_s": 3018.4050265184496,
+        "rc": 0
+      }
+    },
+    "verdicts": [
+      {
+        "round": "-",
+        "metric": "usb",
+        "receiver": "Feather",
+        "verdict": "Better",
+        "detail": "p50 0.339 ms / p99 0.462 ms vs reference p50 0.581 / p99 0.688"
+      },
+      {
+        "round": "-",
+        "metric": "usb",
+        "receiver": "Dongle",
+        "verdict": "Better",
+        "detail": "p50 0.326 ms / p99 0.416 ms vs reference p50 0.581 / p99 0.688"
+      }
+    ]
+  },
+  "verdicts": [
+    {
+      "round": "A",
+      "metric": "loss",
+      "receiver": "Feather",
+      "verdict": "Better",
+      "detail": "0.00 % [0.00, 0.16] vs reference 0.33 % [0.17, 0.65]",
+      "windows": 2,
+      "gap_spread_pp": 0.1662510390689942
+    },
+    {
+      "round": "A",
+      "metric": "loss",
+      "receiver": "Dongle",
+      "verdict": "Better",
+      "detail": "0.00 % [0.00, 0.16] vs reference 0.33 % [0.17, 0.65]",
+      "windows": 2,
+      "gap_spread_pp": 0.1662510390689942
+    },
+    {
+      "round": "A",
+      "metric": "loss",
+      "receiver": "54L15",
+      "verdict": "Equal",
+      "detail": "0.08 % [0.02, 0.30] vs reference 0.33 % [0.17, 0.65]",
+      "windows": 2,
+      "gap_spread_pp": 0.33264039015052493
+    },
+    {
+      "round": "A",
+      "metric": "loss (multi, pooled)",
+      "receiver": "Feather",
+      "verdict": "Inconclusive",
+      "detail": "a figure is missing",
+      "windows": 0
+    },
+    {
+      "round": "A",
+      "metric": "loss (multi, pooled)",
+      "receiver": "Dongle",
+      "verdict": "Inconclusive",
+      "detail": "a figure is missing",
+      "windows": 0
+    },
+    {
+      "round": "A",
+      "metric": "loss (multi, pooled)",
+      "receiver": "54L15",
+      "verdict": "Inconclusive",
+      "detail": "a figure is missing",
+      "windows": 0
+    },
+    {
+      "round": "A",
+      "metric": "acquire",
+      "receiver": "Feather",
+      "verdict": "Equal",
+      "detail": "median 0.20 s (IQR 0.03-0.20, 0 miss) vs reference 0.19 s (IQR 0.12-0.22, 0 miss)"
+    },
+    {
+      "round": "A",
+      "metric": "acquire",
+      "receiver": "Dongle",
+      "verdict": "Equal",
+      "detail": "median 0.17 s (IQR 0.14-0.20, 0 miss) vs reference 0.19 s (IQR 0.12-0.22, 0 miss)"
+    },
+    {
+      "round": "A",
+      "metric": "acquire",
+      "receiver": "54L15",
+      "verdict": "Equal",
+      "detail": "median 0.18 s (IQR 0.04-0.23, 0 miss) vs reference 0.19 s (IQR 0.12-0.22, 0 miss)"
+    },
+    {
+      "round": "A",
+      "metric": "ladder",
+      "receiver": "Feather",
+      "verdict": "Inconclusive",
+      "detail": "the reference's ladder never reached its knee: the quietest rung (-40 dBm) still only loses 2.50 %, so the knee is below the bottom of the ladder. The ladder spans 40 dB and the link needs more: move the boards apart and run it again. Extrapolating past the last rung would invent the answer"
+    },
+    {
+      "round": "A",
+      "metric": "ladder",
+      "receiver": "Dongle",
+      "verdict": "Inconclusive",
+      "detail": "the reference's ladder never reached its knee: the quietest rung (-40 dBm) still only loses 2.50 %, so the knee is below the bottom of the ladder. The ladder spans 40 dB and the link needs more: move the boards apart and run it again. Extrapolating past the last rung would invent the answer"
+    },
+    {
+      "round": "A",
+      "metric": "ladder",
+      "receiver": "54L15",
+      "verdict": "Inconclusive",
+      "detail": "the reference's ladder never reached its knee: the quietest rung (-40 dBm) still only loses 2.50 %, so the knee is below the bottom of the ladder. The ladder spans 40 dB and the link needs more: move the boards apart and run it again. Extrapolating past the last rung would invent the answer"
+    },
+    {
+      "round": "A",
+      "metric": "acked",
+      "receiver": "Feather",
+      "verdict": "Inconclusive",
+      "detail": "0.00 % [0.00, 3.10] vs reference 0.00 % [0.00, 3.10]; the interval straddles the 0.5 pp margin"
+    },
+    {
+      "round": "A",
+      "metric": "acked",
+      "receiver": "Dongle",
+      "verdict": "Inconclusive",
+      "detail": "0.00 % [0.00, 3.10] vs reference 0.00 % [0.00, 3.10]; the interval straddles the 0.5 pp margin"
+    },
+    {
+      "round": "A",
+      "metric": "acked",
+      "receiver": "54L15",
+      "verdict": "Inconclusive",
+      "detail": "0.00 % [0.00, 3.10] vs reference 0.00 % [0.00, 3.10]; the interval straddles the 0.5 pp margin"
+    },
+    {
+      "round": "B",
+      "metric": "loss",
+      "receiver": "Feather",
+      "verdict": "Worse",
+      "detail": "2.16 % [1.65, 2.82] vs reference 0.29 % [0.14, 0.60]",
+      "windows": 2,
+      "gap_spread_pp": 0.41396785352204635
+    },
+    {
+      "round": "B",
+      "metric": "loss",
+      "receiver": "Dongle",
+      "verdict": "Worse",
+      "detail": "2.58 % [2.02, 3.29] vs reference 0.29 % [0.14, 0.60]",
+      "windows": 2,
+      "gap_spread_pp": 0.24730187841544238
+    },
+    {
+      "round": "B",
+      "metric": "loss",
+      "receiver": "5340",
+      "verdict": "Worse",
+      "detail": "2.00 % [1.51, 2.64] vs reference 0.29 % [0.14, 0.60]",
+      "windows": 2,
+      "gap_spread_pp": 0.24951487061602773
+    },
+    {
+      "round": "B",
+      "metric": "loss (multi, pooled)",
+      "receiver": "Feather",
+      "verdict": "Inconclusive",
+      "detail": "a figure is missing",
+      "windows": 0
+    },
+    {
+      "round": "B",
+      "metric": "loss (multi, pooled)",
+      "receiver": "Dongle",
+      "verdict": "Inconclusive",
+      "detail": "a figure is missing",
+      "windows": 0
+    },
+    {
+      "round": "B",
+      "metric": "loss (multi, pooled)",
+      "receiver": "5340",
+      "verdict": "Inconclusive",
+      "detail": "a figure is missing",
+      "windows": 0
+    },
+    {
+      "round": "B",
+      "metric": "acquire",
+      "receiver": "Feather",
+      "verdict": "Equal",
+      "detail": "median 0.20 s (IQR 0.14-0.22, 0 miss) vs reference 0.16 s (IQR 0.03-0.22, 0 miss)"
+    },
+    {
+      "round": "B",
+      "metric": "acquire",
+      "receiver": "Dongle",
+      "verdict": "Equal",
+      "detail": "median 0.18 s (IQR 0.14-0.20, 0 miss) vs reference 0.16 s (IQR 0.03-0.22, 0 miss)"
+    },
+    {
+      "round": "B",
+      "metric": "acquire",
+      "receiver": "5340",
+      "verdict": "Equal",
+      "detail": "median 0.17 s (IQR 0.00-0.21, 0 miss) vs reference 0.16 s (IQR 0.03-0.22, 0 miss)"
+    },
+    {
+      "round": "B",
+      "metric": "ladder",
+      "receiver": "Feather",
+      "verdict": "Inconclusive",
+      "detail": "the receiver's dial (RSSI slope) check failed"
+    },
+    {
+      "round": "B",
+      "metric": "ladder",
+      "receiver": "Dongle",
+      "verdict": "Inconclusive",
+      "detail": "the receiver's ladder never reached its knee: the quietest rung (-28 dBm) still only loses 1.67 %, so the knee is below the bottom of the ladder. The ladder spans 36 dB and the link needs more: move the boards apart and run it again. Extrapolating past the last rung would invent the answer"
+    },
+    {
+      "round": "B",
+      "metric": "ladder",
+      "receiver": "5340",
+      "verdict": "Inconclusive",
+      "detail": "the receiver's dial (RSSI slope) check failed"
+    },
+    {
+      "round": "B",
+      "metric": "acked",
+      "receiver": "Feather",
+      "verdict": "Inconclusive",
+      "detail": "0.00 % [0.00, 3.10] vs reference 0.00 % [0.00, 3.10]; the interval straddles the 0.5 pp margin"
+    },
+    {
+      "round": "B",
+      "metric": "acked",
+      "receiver": "Dongle",
+      "verdict": "Inconclusive",
+      "detail": "0.00 % [0.00, 6.02] vs reference 0.00 % [0.00, 3.10]; the interval straddles the 0.5 pp margin"
+    },
+    {
+      "round": "B",
+      "metric": "acked",
+      "receiver": "5340",
+      "verdict": "Inconclusive",
+      "detail": "0.00 % [0.00, 3.10] vs reference 0.00 % [0.00, 3.10]; the interval straddles the 0.5 pp margin"
+    },
+    {
+      "round": "C",
+      "metric": "loss (multi, pooled)",
+      "receiver": "Feather",
+      "verdict": "Inconclusive",
+      "detail": "a figure is missing",
+      "windows": 0
+    },
+    {
+      "round": "C",
+      "metric": "loss (multi, pooled)",
+      "receiver": "Dongle",
+      "verdict": "Inconclusive",
+      "detail": "a figure is missing",
+      "windows": 0
+    },
+    {
+      "round": "C",
+      "metric": "acquire",
+      "receiver": "Feather",
+      "verdict": "Equal",
+      "detail": "median 0.10 s (IQR 0.03-0.19, 0 miss) vs reference 0.12 s (IQR 0.01-0.20, 0 miss)"
+    },
+    {
+      "round": "C",
+      "metric": "acquire",
+      "receiver": "Dongle",
+      "verdict": "Equal",
+      "detail": "median 0.20 s (IQR 0.14-0.22, 0 miss) vs reference 0.12 s (IQR 0.01-0.20, 0 miss)"
+    },
+    {
+      "round": "-",
+      "metric": "usb",
+      "receiver": "Feather",
+      "verdict": "Better",
+      "detail": "p50 0.339 ms / p99 0.462 ms vs reference p50 0.581 / p99 0.688"
+    },
+    {
+      "round": "-",
+      "metric": "usb",
+      "receiver": "Dongle",
+      "verdict": "Better",
+      "detail": "p50 0.326 ms / p99 0.416 ms vs reference p50 0.581 / p99 0.688"
+    }
+  ],
+  "tally": {
+    "Better": 4,
+    "Equal": 9,
+    "Inconclusive": 20,
+    "Worse": 3
+  },
+  "rules": {
+    "loss": "Wilson 95 % CI on exact loss. Equal: RadiANT upper CI <= reference point + 0.5 pp. Better: RadiANT upper CI < reference lower CI. Worse: RadiANT lower CI > reference point + 0.5 pp.",
+    "acquire": "Median time to first packet over the cycles. Equal: <= reference median + 0.25 s. Better: lower median AND RadiANT Q3 < reference Q1. Worse: > reference median + 0.25 s.",
+    "ladder": "5 %-loss TX power. Equal: within 1 dB (the ab_gates repeatability limit). Better: more than 1 dB lower. Worse: more than 1 dB higher. Inconclusive if either dial check failed or either ladder never reached its knee.",
+    "acked": "Wilson 95 % CI on the acknowledged-transfer failure rate (sent - completed), the loss rule applied unchanged.",
+    "usb": "ant_bench round-trip latency. Equal: median <= reference median x 1.1. Better: lower median AND lower p99. Worse: median > reference median x 1.1."
+  },
+  "caveats": [
+    "Every figure is for this fixed placement: antenna and position are part of each result until a swap round separates them.",
+    "The DKs transmit from ant_sim.py (EVENT_TX-paced host masters), not from a sensor's own firmware.",
+    "The nRF5340 network core transmits at 0 dBm at most (no positive TXPOWER setting in silicon), up to 8 dB below the other parts - its rounds sit lower on the link budget.",
+    "5340, 54L15 attach over UART, not USB: excluded from the usb phase, and their receive path includes a UART rather than the USB stack a real dongle has.",
+    "RSSI is not comparable across chip families (each reports on its own calibration); it is shown, never judged.",
+    "Some loss figures are wall-clock (received radio messages against the window's slot count), not the transmitter's event counter: ant_verify withholds 'loss (exact)' once the counter stands still even once, and the DK master occasionally re-sends its previous buffer when a host refill misses a slot. That repeat lands on every receiver in the window alike, so the receiver-minus-reference gap is unaffected; the absolute figures assume the transmitter's crystal is exact."
+  ],
+  "records": [
+    {
+      "phase": "identity",
+      "round": "-",
+      "rep": 0,
+      "results": {
+        "Garmin": {
+          "version": "AJK2.05RAF",
+          "channels": 8,
+          "networks": 8,
+          "pass": true,
+          "probe_rc": 0,
+          "features_rc": 1,
+          "stack": "reference",
+          "is_radiant": false
+        },
+        "Feather": {
+          "version": "RADIANT0.01B00",
+          "channels": 32,
+          "networks": 3,
+          "pass": true,
+          "probe_rc": 0,
+          "features_rc": 0,
+          "stack": "radiant",
+          "is_radiant": true
+        },
+        "Dongle": {
+          "version": "RADIANT0.01B00",
+          "channels": 32,
+          "networks": 3,
+          "pass": true,
+          "probe_rc": 0,
+          "features_rc": 0,
+          "stack": "radiant",
+          "is_radiant": true
+        },
+        "5340": {
+          "version": "RADIANT0.01B00",
+          "channels": 32,
+          "networks": 3,
+          "pass": true,
+          "probe_rc": 0,
+          "features_rc": 0,
+          "stack": "radiant",
+          "is_radiant": true
+        },
+        "54L15": {
+          "version": "RADIANT0.01B00",
+          "channels": 32,
+          "networks": 3,
+          "pass": true,
+          "probe_rc": 0,
+          "features_rc": 0,
+          "stack": "radiant",
+          "is_radiant": true
+        }
+      },
+      "warnings": [],
+      "commands": [
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_probe.py",
+          "--serial",
+          "006"
+        ],
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_features.py",
+          "--serial",
+          "006"
+        ],
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_probe.py",
+          "--serial",
+          "755972D7183A6183"
+        ],
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_features.py",
+          "--serial",
+          "755972D7183A6183"
+        ],
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_probe.py",
+          "--serial",
+          "3D55F77818BE772A"
+        ],
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_features.py",
+          "--serial",
+          "3D55F77818BE772A"
+        ],
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_probe.py",
+          "--port",
+          "COM5",
+          "--baud",
+          "115200"
+        ],
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_features.py",
+          "--port",
+          "COM5",
+          "--baud",
+          "115200"
+        ],
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_probe.py",
+          "--port",
+          "COM4",
+          "--baud",
+          "115200"
+        ],
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_features.py",
+          "--port",
+          "COM4",
+          "--baud",
+          "115200"
+        ]
+      ]
+    },
+    {
+      "phase": "loss",
+      "round": "A",
+      "rep": 1,
+      "seconds": 300.0,
+      "profiles": [
+        "power"
+      ],
+      "device_numbers": [
+        53000
+      ],
+      "transmitters": {
+        "5340": {
+          "rc": 0,
+          "fallbacks": 0,
+          "device_numbers": [
+            53000
+          ],
+          "paced": true
+        }
+      },
+      "results": {
+        "Garmin": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\A_loss_1_Garmin.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\A_loss_1_Garmin.log",
+          "exit": 0,
+          "wall_s": 301.6869999999981,
+          "counts": {
+            "missed": 5,
+            "sent": 1203,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 5,
+                "sent": 1203,
+                "basis": "wall_clock",
+                "loss_pct": 0.41562759767248547,
+                "device_number": 53000
+              }
+            }
+          },
+          "rssi_dbm_mean": null,
+          "problems": []
+        },
+        "Feather": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\A_loss_1_Feather.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\A_loss_1_Feather.log",
+          "exit": 0,
+          "wall_s": 301.6880000000019,
+          "counts": {
+            "missed": 0,
+            "sent": 1203,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 0,
+                "sent": 1203,
+                "basis": "wall_clock",
+                "loss_pct": 0.0,
+                "device_number": 53000
+              }
+            }
+          },
+          "rssi_dbm_mean": -40.86866167913549,
+          "problems": []
+        },
+        "Dongle": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\A_loss_1_Dongle.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\A_loss_1_Dongle.log",
+          "exit": 0,
+          "wall_s": 301.68700000000536,
+          "counts": {
+            "missed": 0,
+            "sent": 1203,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 0,
+                "sent": 1203,
+                "basis": "wall_clock",
+                "loss_pct": 0.0,
+                "device_number": 53000
+              }
+            }
+          },
+          "rssi_dbm_mean": -31.01163757273483,
+          "problems": []
+        },
+        "54L15": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\A_loss_1_54L15.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\A_loss_1_54L15.log",
+          "exit": 0,
+          "wall_s": 301.68700000000536,
+          "counts": {
+            "missed": 0,
+            "sent": 1202,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 0,
+                "sent": 1202,
+                "basis": "wall_clock",
+                "loss_pct": 0.0,
+                "device_number": 53000
+              }
+            }
+          },
+          "rssi_dbm_mean": -47.59234608985025,
+          "problems": []
+        }
+      },
+      "warnings": [],
+      "commands": [
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_sim.py",
+          "--port",
+          "COM5",
+          "--baud",
+          "115200",
+          "--seconds",
+          "330",
+          "--device-number",
+          "53000",
+          "--profile",
+          "power"
+        ]
+      ]
+    },
+    {
+      "phase": "loss",
+      "round": "A",
+      "rep": 2,
+      "seconds": 300.0,
+      "profiles": [
+        "power"
+      ],
+      "device_numbers": [
+        53000
+      ],
+      "transmitters": {
+        "5340": {
+          "rc": 0,
+          "fallbacks": 0,
+          "device_numbers": [
+            53000
+          ],
+          "paced": true
+        }
+      },
+      "results": {
+        "Garmin": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\A_loss_2_Garmin.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\A_loss_2_Garmin.log",
+          "exit": 0,
+          "wall_s": 301.6880000000019,
+          "counts": {
+            "missed": 3,
+            "sent": 1203,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 3,
+                "sent": 1203,
+                "basis": "wall_clock",
+                "loss_pct": 0.24937655860349128,
+                "device_number": 53000
+              }
+            }
+          },
+          "rssi_dbm_mean": null,
+          "problems": []
+        },
+        "Feather": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\A_loss_2_Feather.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\A_loss_2_Feather.log",
+          "exit": 0,
+          "wall_s": 301.6869999999981,
+          "counts": {
+            "missed": 0,
+            "sent": 1203,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 0,
+                "sent": 1203,
+                "basis": "wall_clock",
+                "loss_pct": 0.0,
+                "device_number": 53000
+              }
+            }
+          },
+          "rssi_dbm_mean": -40.999168744804656,
+          "problems": []
+        },
+        "Dongle": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\A_loss_2_Dongle.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\A_loss_2_Dongle.log",
+          "exit": 0,
+          "wall_s": 301.6869999999981,
+          "counts": {
+            "missed": 0,
+            "sent": 1203,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 0,
+                "sent": 1203,
+                "basis": "wall_clock",
+                "loss_pct": 0.0,
+                "device_number": 53000
+              }
+            }
+          },
+          "rssi_dbm_mean": -31.00166251039069,
+          "problems": []
+        },
+        "54L15": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\A_loss_2_54L15.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\A_loss_2_54L15.log",
+          "exit": 0,
+          "wall_s": 301.68799999999464,
+          "counts": {
+            "missed": 2,
+            "sent": 1202,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 2,
+                "sent": 1202,
+                "basis": "wall_clock",
+                "loss_pct": 0.16638935108153077,
+                "device_number": 53000
+              }
+            }
+          },
+          "rssi_dbm_mean": -47.625,
+          "problems": []
+        }
+      },
+      "warnings": [],
+      "commands": [
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_sim.py",
+          "--port",
+          "COM5",
+          "--baud",
+          "115200",
+          "--seconds",
+          "330",
+          "--device-number",
+          "53000",
+          "--profile",
+          "power"
+        ]
+      ]
+    },
+    {
+      "phase": "multi",
+      "round": "A",
+      "rep": 1,
+      "seconds": 300.0,
+      "profiles": [
+        "power",
+        "heart-rate",
+        "csc",
+        "fec-treadmill"
+      ],
+      "device_numbers": [
+        53010,
+        53011,
+        53012,
+        53013
+      ],
+      "transmitters": {
+        "5340": {
+          "rc": 1,
+          "fallbacks": 19,
+          "device_numbers": [
+            53010,
+            53011,
+            53012,
+            53013
+          ],
+          "paced": false
+        }
+      },
+      "results": {
+        "Garmin": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\A_multi_1_Garmin.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\A_multi_1_Garmin.log",
+          "exit": 1,
+          "wall_s": 0.2970000000059372,
+          "counts": {
+            "missed": null,
+            "sent": null,
+            "basis": null,
+            "per_channel": {}
+          },
+          "rssi_dbm_mean": null,
+          "problems": [
+            "no json written - see log",
+            "no JSON written"
+          ]
+        },
+        "Feather": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\A_multi_1_Feather.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\A_multi_1_Feather.log",
+          "exit": 1,
+          "wall_s": 0.28100000000267755,
+          "counts": {
+            "missed": null,
+            "sent": null,
+            "basis": null,
+            "per_channel": {}
+          },
+          "rssi_dbm_mean": null,
+          "problems": [
+            "no json written - see log",
+            "no JSON written"
+          ]
+        },
+        "Dongle": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\A_multi_1_Dongle.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\A_multi_1_Dongle.log",
+          "exit": 1,
+          "wall_s": 0.26600000000325963,
+          "counts": {
+            "missed": null,
+            "sent": null,
+            "basis": null,
+            "per_channel": {}
+          },
+          "rssi_dbm_mean": null,
+          "problems": [
+            "no json written - see log",
+            "no JSON written"
+          ]
+        },
+        "54L15": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\A_multi_1_54L15.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\A_multi_1_54L15.log",
+          "exit": 1,
+          "wall_s": 0.26600000000325963,
+          "counts": {
+            "missed": null,
+            "sent": null,
+            "basis": null,
+            "per_channel": {}
+          },
+          "rssi_dbm_mean": null,
+          "problems": [
+            "no json written - see log",
+            "no JSON written"
+          ]
+        }
+      },
+      "warnings": [
+        "Garmin: no json written - see log",
+        "Garmin: no JSON written",
+        "Feather: no json written - see log",
+        "Feather: no JSON written",
+        "Dongle: no json written - see log",
+        "Dongle: no JSON written",
+        "54L15: no json written - see log",
+        "54L15: no JSON written",
+        "5340: ant_sim rc 1",
+        "5340: 19 messages on the wall-clock fallback (pacing guessed)"
+      ],
+      "commands": [
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_sim.py",
+          "--port",
+          "COM5",
+          "--baud",
+          "115200",
+          "--seconds",
+          "330",
+          "--device-number",
+          "53010",
+          "--profile",
+          "power",
+          "--profile",
+          "heart-rate",
+          "--profile",
+          "csc",
+          "--profile",
+          "fec-treadmill"
+        ]
+      ]
+    },
+    {
+      "phase": "acquire",
+      "round": "A",
+      "rep": 1,
+      "seconds": 10.0,
+      "device_numbers": [
+        53020
+      ],
+      "transmitters": {
+        "5340": {
+          "rc": 0,
+          "fallbacks": 0,
+          "device_numbers": [
+            53020
+          ],
+          "paced": true
+        }
+      },
+      "cycles": [
+        {
+          "Garmin": 0.030999999995401595,
+          "Feather": 0.25,
+          "Dongle": 0.23399999999674037,
+          "54L15": 0.046999999998661224
+        },
+        {
+          "Garmin": 0.15600000000267755,
+          "Feather": 0.17100000000209548,
+          "Dongle": 0.10900000000401633,
+          "54L15": 0.125
+        },
+        {
+          "Garmin": 0.2190000000045984,
+          "Feather": 0.20300000000133878,
+          "Dongle": 0.14100000000325963,
+          "54L15": 0.15600000000267755
+        },
+        {
+          "Garmin": 0.031000000002677552,
+          "Feather": 0.031000000002677552,
+          "Dongle": 0.23399999999674037,
+          "54L15": 0.031000000002677552
+        },
+        {
+          "Garmin": 0.20399999999790452,
+          "Feather": 0.21899999999732245,
+          "Dongle": 0.17199999999866122,
+          "54L15": 0.20300000000133878
+        },
+        {
+          "Garmin": 0.030999999995401595,
+          "Feather": 0.030999999995401595,
+          "Dongle": 0.20299999999406282,
+          "54L15": 0.0
+        },
+        {
+          "Garmin": 0.18699999999807915,
+          "Feather": 0.2180000000007567,
+          "Dongle": 0.125,
+          "54L15": 0.18800000000192085
+        },
+        {
+          "Garmin": 0.01600000000325963,
+          "Feather": 0.0319999999992433,
+          "Dongle": 0.2190000000045984,
+          "54L15": 0.0
+        },
+        {
+          "Garmin": 0.18699999999807915,
+          "Feather": 0.17199999999866122,
+          "Dongle": 0.14099999999598367,
+          "54L15": 0.15600000000267755
+        },
+        {
+          "Garmin": 0.23400000000401633,
+          "Feather": 0.20300000000133878,
+          "Dongle": 0.20300000000133878,
+          "54L15": 0.0
+        },
+        {
+          "Garmin": 0.23500000000058208,
+          "Feather": 0.20300000000133878,
+          "Dongle": 0.17200000000593718,
+          "54L15": 0.23399999999674037
+        },
+        {
+          "Garmin": 0.014999999999417923,
+          "Feather": 0.014999999999417923,
+          "Dongle": 0.0,
+          "54L15": 0.23400000000401633
+        },
+        {
+          "Garmin": 0.17199999999866122,
+          "Feather": 0.18800000000192085,
+          "Dongle": 0.14100000000325963,
+          "54L15": 0.17200000000593718
+        },
+        {
+          "Garmin": 0.23500000000058208,
+          "Feather": 0.20299999999406282,
+          "Dongle": 0.17199999999866122,
+          "54L15": 0.23399999999674037
+        },
+        {
+          "Garmin": 0.17199999999866122,
+          "Feather": 0.20300000000133878,
+          "Dongle": 0.10900000000401633,
+          "54L15": 0.21899999999732245
+        },
+        {
+          "Garmin": 0.2180000000007567,
+          "Feather": 0.2180000000007567,
+          "Dongle": 0.17199999999866122,
+          "54L15": 0.25
+        },
+        {
+          "Garmin": 0.20300000000133878,
+          "Feather": 0.20300000000133878,
+          "Dongle": 0.17199999999866122,
+          "54L15": 0.20300000000133878
+        },
+        {
+          "Garmin": 0.1559999999954016,
+          "Feather": 0.1559999999954016,
+          "Dongle": 0.125,
+          "54L15": 0.0
+        },
+        {
+          "Garmin": 0.25,
+          "Feather": 0.0,
+          "Dongle": 0.2180000000007567,
+          "54L15": 0.23399999999674037
+        },
+        {
+          "Garmin": 0.25,
+          "Feather": 0.0,
+          "Dongle": 0.20300000000133878,
+          "54L15": 0.23400000000401633
+        }
+      ],
+      "warnings": [],
+      "commands": [
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_sim.py",
+          "--port",
+          "COM5",
+          "--baud",
+          "115200",
+          "--seconds",
+          "390",
+          "--device-number",
+          "53020",
+          "--profile",
+          "power"
+        ]
+      ]
+    },
+    {
+      "phase": "ladder",
+      "round": "A",
+      "rep": 1,
+      "rc": 1,
+      "tx_part": "nrf5340net",
+      "results": {
+        "Garmin": {
+          "knee_dbm": null,
+          "knee_rssi_dbm": null,
+          "dial_trustworthy": false,
+          "rssi_slope": {
+            "slope": null,
+            "n": 0,
+            "reason": "fewer than three rungs with usable RSSI below the knee"
+          },
+          "reason": "the quietest rung (-40 dBm) still only loses 2.50 %, so the knee is below the bottom of the ladder. The ladder spans 40 dB and the link needs more: move the boards apart and run it again. Extrapolating past the last rung would invent the answer",
+          "steps": [
+            {
+              "tx_power_dbm": 0,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": null
+            },
+            {
+              "tx_power_dbm": -1,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": null
+            },
+            {
+              "tx_power_dbm": -2,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": null
+            },
+            {
+              "tx_power_dbm": -3,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": null
+            },
+            {
+              "tx_power_dbm": -4,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": null
+            },
+            {
+              "tx_power_dbm": -5,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": null
+            },
+            {
+              "tx_power_dbm": -6,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": null
+            },
+            {
+              "tx_power_dbm": -7,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": null
+            },
+            {
+              "tx_power_dbm": -8,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": null
+            },
+            {
+              "tx_power_dbm": -12,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": null
+            },
+            {
+              "tx_power_dbm": -16,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": null
+            },
+            {
+              "tx_power_dbm": -20,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": null
+            },
+            {
+              "tx_power_dbm": -40,
+              "loss_pct": 2.5,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": null
+            }
+          ]
+        },
+        "Feather": {
+          "knee_dbm": -21.00414937759336,
+          "knee_rssi_dbm": -62.004149377593365,
+          "dial_trustworthy": true,
+          "rssi_slope": {
+            "slope": 0.969137437911014,
+            "n": 12,
+            "worst_residual_db": 0.7910056316435998,
+            "reason": "least squares of mean RSSI against commanded transmit power"
+          },
+          "reason": "interpolated between the two rungs that bracket it; the bracket is 20 dB wide, which is most of what this number is made of - use --rungs fine for a tighter one",
+          "steps": [
+            {
+              "tx_power_dbm": 0,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -41.0
+            },
+            {
+              "tx_power_dbm": -1,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -41.99586776859504
+            },
+            {
+              "tx_power_dbm": -2,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -42.549586776859506
+            },
+            {
+              "tx_power_dbm": -3,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -43.99586776859504
+            },
+            {
+              "tx_power_dbm": -4,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -44.88429752066116
+            },
+            {
+              "tx_power_dbm": -5,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -45.6198347107438
+            },
+            {
+              "tx_power_dbm": -6,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -45.79338842975206
+            },
+            {
+              "tx_power_dbm": -7,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -47.33884297520661
+            },
+            {
+              "tx_power_dbm": -8,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -48.01239669421488
+            },
+            {
+              "tx_power_dbm": -12,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -52.107438016528924
+            },
+            {
+              "tx_power_dbm": -16,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -57.045643153526974
+            },
+            {
+              "tx_power_dbm": -20,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -60.045643153526974
+            },
+            {
+              "tx_power_dbm": -40,
+              "loss_pct": 99.58677685950413,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -60.0
+            }
+          ]
+        },
+        "Dongle": {
+          "knee_dbm": -35.0,
+          "knee_rssi_dbm": -66.04526748971193,
+          "dial_trustworthy": true,
+          "rssi_slope": {
+            "slope": 0.9918350857159345,
+            "n": 13,
+            "worst_residual_db": 0.7241981262930182,
+            "reason": "least squares of mean RSSI against commanded transmit power"
+          },
+          "reason": "interpolated between the two rungs that bracket it; the bracket is 20 dB wide, which is most of what this number is made of - use --rungs fine for a tighter one",
+          "steps": [
+            {
+              "tx_power_dbm": 0,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -31.045267489711936
+            },
+            {
+              "tx_power_dbm": -1,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -32.99173553719008
+            },
+            {
+              "tx_power_dbm": -2,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -33.0
+            },
+            {
+              "tx_power_dbm": -3,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -34.00413223140496
+            },
+            {
+              "tx_power_dbm": -4,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -35.37603305785124
+            },
+            {
+              "tx_power_dbm": -5,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -36.946280991735534
+            },
+            {
+              "tx_power_dbm": -6,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -37.0
+            },
+            {
+              "tx_power_dbm": -7,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -38.93801652892562
+            },
+            {
+              "tx_power_dbm": -8,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -39.99170124481328
+            },
+            {
+              "tx_power_dbm": -12,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -44.19834710743802
+            },
+            {
+              "tx_power_dbm": -16,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -47.98760330578512
+            },
+            {
+              "tx_power_dbm": -20,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -51.00413223140496
+            },
+            {
+              "tx_power_dbm": -40,
+              "loss_pct": 6.666666666666667,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -70.94196428571429
+            }
+          ]
+        },
+        "54L15": {
+          "knee_dbm": -21.794871794871796,
+          "knee_rssi_dbm": -69.7948717948718,
+          "dial_trustworthy": true,
+          "rssi_slope": {
+            "slope": 1.0088860030476818,
+            "n": 12,
+            "worst_residual_db": 0.875078019110461,
+            "reason": "least squares of mean RSSI against commanded transmit power"
+          },
+          "reason": "interpolated between the two rungs that bracket it; the bracket is 20 dB wide, which is most of what this number is made of - use --rungs fine for a tighter one",
+          "steps": [
+            {
+              "tx_power_dbm": 0,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -48.0
+            },
+            {
+              "tx_power_dbm": -1,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -49.52610441767068
+            },
+            {
+              "tx_power_dbm": -2,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -50.0
+            },
+            {
+              "tx_power_dbm": -3,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -50.99196787148595
+            },
+            {
+              "tx_power_dbm": -4,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -52.00403225806452
+            },
+            {
+              "tx_power_dbm": -5,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -53.0
+            },
+            {
+              "tx_power_dbm": -6,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -53.14859437751004
+            },
+            {
+              "tx_power_dbm": -7,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -54.979838709677416
+            },
+            {
+              "tx_power_dbm": -8,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -56.00404858299595
+            },
+            {
+              "tx_power_dbm": -12,
+              "loss_pct": 1.6666666666666667,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -59.970338983050844
+            },
+            {
+              "tx_power_dbm": -16,
+              "loss_pct": 2.5,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -64.95726495726495
+            },
+            {
+              "tx_power_dbm": -20,
+              "loss_pct": 2.0833333333333335,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -67.80851063829788
+            },
+            {
+              "tx_power_dbm": -40,
+              "loss_pct": 34.583333333333336,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -87.97452229299363
+            }
+          ]
+        }
+      },
+      "warnings": [],
+      "commands": [
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_sens.py",
+          "--tx-port",
+          "COM5",
+          "--tx-baud",
+          "115200",
+          "--rungs",
+          "fine",
+          "--tx-part",
+          "nrf5340net",
+          "--seconds",
+          "60",
+          "--settle",
+          "2.0",
+          "--device-number",
+          "53030",
+          "--json",
+          "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\A_ladder_1.json",
+          "-q",
+          "--rx-baud",
+          "115200",
+          "--rx",
+          "Garmin=usb:006",
+          "--rx",
+          "Feather=usb:755972D7183A6183",
+          "--rx",
+          "Dongle=usb:3D55F77818BE772A",
+          "--rx",
+          "54L15=port:COM4"
+        ]
+      ]
+    },
+    {
+      "phase": "acked",
+      "round": "A",
+      "rep": 1,
+      "device_number": 53040,
+      "blocks": [
+        {
+          "receiver": "Garmin",
+          "pass": 1,
+          "rc": 0,
+          "sent": 60,
+          "completed": 60,
+          "failed": 0,
+          "peer_received": 60,
+          "accepted": 0,
+          "seconds": 60.0,
+          "errors": []
+        },
+        {
+          "receiver": "Feather",
+          "pass": 1,
+          "rc": 0,
+          "sent": 60,
+          "completed": 60,
+          "failed": 0,
+          "peer_received": 60,
+          "accepted": 60,
+          "seconds": 60.06300000000192,
+          "errors": []
+        },
+        {
+          "receiver": "Dongle",
+          "pass": 1,
+          "rc": 0,
+          "sent": 60,
+          "completed": 60,
+          "failed": 0,
+          "peer_received": 60,
+          "accepted": 60,
+          "seconds": 60.0,
+          "errors": []
+        },
+        {
+          "receiver": "54L15",
+          "pass": 1,
+          "rc": 0,
+          "sent": 60,
+          "completed": 60,
+          "failed": 0,
+          "peer_received": 60,
+          "accepted": 60,
+          "seconds": 60.0,
+          "errors": []
+        },
+        {
+          "receiver": "Garmin",
+          "pass": 2,
+          "rc": 0,
+          "sent": 60,
+          "completed": 60,
+          "failed": 0,
+          "peer_received": 60,
+          "accepted": 0,
+          "seconds": 60.0,
+          "errors": []
+        },
+        {
+          "receiver": "Feather",
+          "pass": 2,
+          "rc": 0,
+          "sent": 60,
+          "completed": 60,
+          "failed": 0,
+          "peer_received": 60,
+          "accepted": 60,
+          "seconds": 60.04699999999866,
+          "errors": []
+        },
+        {
+          "receiver": "Dongle",
+          "pass": 2,
+          "rc": 0,
+          "sent": 60,
+          "completed": 60,
+          "failed": 0,
+          "peer_received": 60,
+          "accepted": 60,
+          "seconds": 60.0,
+          "errors": []
+        },
+        {
+          "receiver": "54L15",
+          "pass": 2,
+          "rc": 0,
+          "sent": 60,
+          "completed": 60,
+          "failed": 0,
+          "peer_received": 60,
+          "accepted": 60,
+          "seconds": 60.0,
+          "errors": []
+        }
+      ],
+      "warnings": [],
+      "commands": [
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_ack_pair.py",
+          "--master-port",
+          "COM5",
+          "--master-baud",
+          "115200",
+          "--slave-serial",
+          "006",
+          "--device",
+          "53040",
+          "--sends",
+          "60",
+          "--interval",
+          "1.0",
+          "--seconds",
+          "60.0",
+          "--acquire-seconds",
+          "20.0",
+          "--tx-power",
+          "3",
+          "--json",
+          "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\A_acked_p1_Garmin.json"
+        ],
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_ack_pair.py",
+          "--master-port",
+          "COM5",
+          "--master-baud",
+          "115200",
+          "--slave-serial",
+          "755972D7183A6183",
+          "--device",
+          "53040",
+          "--sends",
+          "60",
+          "--interval",
+          "1.0",
+          "--seconds",
+          "60.0",
+          "--acquire-seconds",
+          "20.0",
+          "--tx-power",
+          "3",
+          "--json",
+          "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\A_acked_p1_Feather.json"
+        ],
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_ack_pair.py",
+          "--master-port",
+          "COM5",
+          "--master-baud",
+          "115200",
+          "--slave-serial",
+          "3D55F77818BE772A",
+          "--device",
+          "53040",
+          "--sends",
+          "60",
+          "--interval",
+          "1.0",
+          "--seconds",
+          "60.0",
+          "--acquire-seconds",
+          "20.0",
+          "--tx-power",
+          "3",
+          "--json",
+          "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\A_acked_p1_Dongle.json"
+        ],
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_ack_pair.py",
+          "--master-port",
+          "COM5",
+          "--master-baud",
+          "115200",
+          "--slave-port",
+          "COM4",
+          "--device",
+          "53040",
+          "--sends",
+          "60",
+          "--interval",
+          "1.0",
+          "--seconds",
+          "60.0",
+          "--acquire-seconds",
+          "20.0",
+          "--tx-power",
+          "3",
+          "--json",
+          "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\A_acked_p1_54L15.json"
+        ],
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_ack_pair.py",
+          "--master-port",
+          "COM5",
+          "--master-baud",
+          "115200",
+          "--slave-serial",
+          "006",
+          "--device",
+          "53040",
+          "--sends",
+          "60",
+          "--interval",
+          "1.0",
+          "--seconds",
+          "60.0",
+          "--acquire-seconds",
+          "20.0",
+          "--tx-power",
+          "3",
+          "--json",
+          "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\A_acked_p2_Garmin.json"
+        ],
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_ack_pair.py",
+          "--master-port",
+          "COM5",
+          "--master-baud",
+          "115200",
+          "--slave-serial",
+          "755972D7183A6183",
+          "--device",
+          "53040",
+          "--sends",
+          "60",
+          "--interval",
+          "1.0",
+          "--seconds",
+          "60.0",
+          "--acquire-seconds",
+          "20.0",
+          "--tx-power",
+          "3",
+          "--json",
+          "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\A_acked_p2_Feather.json"
+        ],
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_ack_pair.py",
+          "--master-port",
+          "COM5",
+          "--master-baud",
+          "115200",
+          "--slave-serial",
+          "3D55F77818BE772A",
+          "--device",
+          "53040",
+          "--sends",
+          "60",
+          "--interval",
+          "1.0",
+          "--seconds",
+          "60.0",
+          "--acquire-seconds",
+          "20.0",
+          "--tx-power",
+          "3",
+          "--json",
+          "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\A_acked_p2_Dongle.json"
+        ],
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_ack_pair.py",
+          "--master-port",
+          "COM5",
+          "--master-baud",
+          "115200",
+          "--slave-port",
+          "COM4",
+          "--device",
+          "53040",
+          "--sends",
+          "60",
+          "--interval",
+          "1.0",
+          "--seconds",
+          "60.0",
+          "--acquire-seconds",
+          "20.0",
+          "--tx-power",
+          "3",
+          "--json",
+          "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\A_acked_p2_54L15.json"
+        ]
+      ]
+    },
+    {
+      "phase": "loss",
+      "round": "B",
+      "rep": 1,
+      "seconds": 300.0,
+      "profiles": [
+        "power"
+      ],
+      "device_numbers": [
+        54100
+      ],
+      "transmitters": {
+        "54L15": {
+          "rc": 0,
+          "fallbacks": 0,
+          "device_numbers": [
+            54100
+          ],
+          "paced": true
+        }
+      },
+      "results": {
+        "Garmin": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\B_loss_1_Garmin.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\B_loss_1_Garmin.log",
+          "exit": 0,
+          "wall_s": 301.67199999999866,
+          "counts": {
+            "missed": 4,
+            "sent": 1203,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 4,
+                "sent": 1203,
+                "basis": "wall_clock",
+                "loss_pct": 0.3325020781379884,
+                "device_number": 54100
+              }
+            }
+          },
+          "rssi_dbm_mean": null,
+          "problems": []
+        },
+        "Feather": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\B_loss_1_Feather.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\B_loss_1_Feather.log",
+          "exit": 1,
+          "wall_s": 301.67199999999866,
+          "counts": {
+            "missed": 24,
+            "sent": 1202,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 24,
+                "sent": 1202,
+                "basis": "wall_clock",
+                "loss_pct": 1.9966722129783694,
+                "device_number": 54100
+              }
+            }
+          },
+          "rssi_dbm_mean": -31.0,
+          "problems": []
+        },
+        "Dongle": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\B_loss_1_Dongle.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\B_loss_1_Dongle.log",
+          "exit": 1,
+          "wall_s": 301.67199999999866,
+          "counts": {
+            "missed": 30,
+            "sent": 1202,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 30,
+                "sent": 1202,
+                "basis": "wall_clock",
+                "loss_pct": 2.4958402662229617,
+                "device_number": 54100
+              }
+            }
+          },
+          "rssi_dbm_mean": -32.29948805460751,
+          "problems": []
+        },
+        "5340": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\B_loss_1_5340.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\B_loss_1_5340.log",
+          "exit": 1,
+          "wall_s": 301.67200000000594,
+          "counts": {
+            "missed": 23,
+            "sent": 1202,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 23,
+                "sent": 1202,
+                "basis": "wall_clock",
+                "loss_pct": 1.913477537437604,
+                "device_number": 54100
+              }
+            }
+          },
+          "rssi_dbm_mean": -45.99830364715861,
+          "problems": []
+        }
+      },
+      "warnings": [],
+      "commands": [
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_sim.py",
+          "--port",
+          "COM4",
+          "--baud",
+          "115200",
+          "--seconds",
+          "330",
+          "--device-number",
+          "54100",
+          "--profile",
+          "power"
+        ]
+      ]
+    },
+    {
+      "phase": "loss",
+      "round": "B",
+      "rep": 2,
+      "seconds": 300.0,
+      "profiles": [
+        "power"
+      ],
+      "device_numbers": [
+        54100
+      ],
+      "transmitters": {
+        "54L15": {
+          "rc": 0,
+          "fallbacks": 0,
+          "device_numbers": [
+            54100
+          ],
+          "paced": true
+        }
+      },
+      "results": {
+        "Garmin": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\B_loss_2_Garmin.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\B_loss_2_Garmin.log",
+          "exit": 0,
+          "wall_s": 301.70300000000134,
+          "counts": {
+            "missed": 3,
+            "sent": 1203,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 3,
+                "sent": 1203,
+                "basis": "wall_clock",
+                "loss_pct": 0.24937655860349128,
+                "device_number": 54100
+              }
+            }
+          },
+          "rssi_dbm_mean": null,
+          "problems": []
+        },
+        "Feather": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\B_loss_2_Feather.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\B_loss_2_Feather.log",
+          "exit": 1,
+          "wall_s": 301.70300000000134,
+          "counts": {
+            "missed": 28,
+            "sent": 1203,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 28,
+                "sent": 1203,
+                "basis": "wall_clock",
+                "loss_pct": 2.3275145469659186,
+                "device_number": 54100
+              }
+            }
+          },
+          "rssi_dbm_mean": -31.0,
+          "problems": []
+        },
+        "Dongle": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\B_loss_2_Dongle.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\B_loss_2_Dongle.log",
+          "exit": 1,
+          "wall_s": 301.70300000000134,
+          "counts": {
+            "missed": 32,
+            "sent": 1203,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 32,
+                "sent": 1203,
+                "basis": "wall_clock",
+                "loss_pct": 2.660016625103907,
+                "device_number": 54100
+              }
+            }
+          },
+          "rssi_dbm_mean": -32.752348420153716,
+          "problems": []
+        },
+        "5340": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\B_loss_2_5340.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\B_loss_2_5340.log",
+          "exit": 1,
+          "wall_s": 301.71800000000076,
+          "counts": {
+            "missed": 25,
+            "sent": 1202,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 25,
+                "sent": 1202,
+                "basis": "wall_clock",
+                "loss_pct": 2.0798668885191347,
+                "device_number": 54100
+              }
+            }
+          },
+          "rssi_dbm_mean": -46.223449447748514,
+          "problems": []
+        }
+      },
+      "warnings": [],
+      "commands": [
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_sim.py",
+          "--port",
+          "COM4",
+          "--baud",
+          "115200",
+          "--seconds",
+          "330",
+          "--device-number",
+          "54100",
+          "--profile",
+          "power"
+        ]
+      ]
+    },
+    {
+      "phase": "multi",
+      "round": "B",
+      "rep": 1,
+      "seconds": 300.0,
+      "profiles": [
+        "power",
+        "heart-rate",
+        "csc",
+        "fec-treadmill"
+      ],
+      "device_numbers": [
+        54110,
+        54111,
+        54112,
+        54113
+      ],
+      "transmitters": {
+        "54L15": {
+          "rc": 1,
+          "fallbacks": 9,
+          "device_numbers": [
+            54110,
+            54111,
+            54112,
+            54113
+          ],
+          "paced": false
+        }
+      },
+      "results": {
+        "Garmin": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\B_multi_1_Garmin.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\B_multi_1_Garmin.log",
+          "exit": 1,
+          "wall_s": 0.2969999999986612,
+          "counts": {
+            "missed": null,
+            "sent": null,
+            "basis": null,
+            "per_channel": {}
+          },
+          "rssi_dbm_mean": null,
+          "problems": [
+            "no json written - see log",
+            "no JSON written"
+          ]
+        },
+        "Feather": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\B_multi_1_Feather.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\B_multi_1_Feather.log",
+          "exit": 1,
+          "wall_s": 0.2809999999954016,
+          "counts": {
+            "missed": null,
+            "sent": null,
+            "basis": null,
+            "per_channel": {}
+          },
+          "rssi_dbm_mean": null,
+          "problems": [
+            "no json written - see log",
+            "no JSON written"
+          ]
+        },
+        "Dongle": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\B_multi_1_Dongle.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\B_multi_1_Dongle.log",
+          "exit": 1,
+          "wall_s": 0.2809999999954016,
+          "counts": {
+            "missed": null,
+            "sent": null,
+            "basis": null,
+            "per_channel": {}
+          },
+          "rssi_dbm_mean": null,
+          "problems": [
+            "no json written - see log",
+            "no JSON written"
+          ]
+        },
+        "5340": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\B_multi_1_5340.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\B_multi_1_5340.log",
+          "exit": 1,
+          "wall_s": 0.26599999999598367,
+          "counts": {
+            "missed": null,
+            "sent": null,
+            "basis": null,
+            "per_channel": {}
+          },
+          "rssi_dbm_mean": null,
+          "problems": [
+            "no json written - see log",
+            "no JSON written"
+          ]
+        }
+      },
+      "warnings": [
+        "Garmin: no json written - see log",
+        "Garmin: no JSON written",
+        "Feather: no json written - see log",
+        "Feather: no JSON written",
+        "Dongle: no json written - see log",
+        "Dongle: no JSON written",
+        "5340: no json written - see log",
+        "5340: no JSON written",
+        "54L15: ant_sim rc 1",
+        "54L15: 9 messages on the wall-clock fallback (pacing guessed)"
+      ],
+      "commands": [
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_sim.py",
+          "--port",
+          "COM4",
+          "--baud",
+          "115200",
+          "--seconds",
+          "330",
+          "--device-number",
+          "54110",
+          "--profile",
+          "power",
+          "--profile",
+          "heart-rate",
+          "--profile",
+          "csc",
+          "--profile",
+          "fec-treadmill"
+        ]
+      ]
+    },
+    {
+      "phase": "acquire",
+      "round": "B",
+      "rep": 1,
+      "seconds": 10.0,
+      "device_numbers": [
+        54120
+      ],
+      "transmitters": {
+        "54L15": {
+          "rc": 0,
+          "fallbacks": 0,
+          "device_numbers": [
+            54120
+          ],
+          "paced": true
+        }
+      },
+      "cycles": [
+        {
+          "Garmin": 0.031000000002677552,
+          "Feather": 0.23500000000058208,
+          "Dongle": 0.20399999999790452,
+          "5340": 0.0940000000045984
+        },
+        {
+          "Garmin": 0.1569999999992433,
+          "Feather": 0.17199999999866122,
+          "Dongle": 0.10899999999674037,
+          "5340": 0.15600000000267755
+        },
+        {
+          "Garmin": 0.25,
+          "Feather": 0.01599999999598367,
+          "Dongle": 0.21899999999732245,
+          "5340": 0.23500000000058208
+        },
+        {
+          "Garmin": 0.014999999999417923,
+          "Feather": 0.031000000002677552,
+          "Dongle": 0.20300000000133878,
+          "5340": 0.0
+        },
+        {
+          "Garmin": 0.23500000000058208,
+          "Feather": 0.25,
+          "Dongle": 0.17199999999866122,
+          "5340": 0.20300000000133878
+        },
+        {
+          "Garmin": 0.25,
+          "Feather": 0.20300000000133878,
+          "Dongle": 0.21899999999732245,
+          "5340": 0.2190000000045984
+        },
+        {
+          "Garmin": 0.031000000002677552,
+          "Feather": 0.062000000005355105,
+          "Dongle": 0.2180000000007567,
+          "5340": 0.0
+        },
+        {
+          "Garmin": 0.18800000000192085,
+          "Feather": 0.23500000000058208,
+          "Dongle": 0.14100000000325963,
+          "5340": 0.20300000000133878
+        },
+        {
+          "Garmin": 0.23399999999674037,
+          "Feather": 0.23399999999674037,
+          "Dongle": 0.20300000000133878,
+          "5340": 0.23400000000401633
+        },
+        {
+          "Garmin": 0.125,
+          "Feather": 0.20399999999790452,
+          "Dongle": 0.18800000000192085,
+          "5340": 0.0
+        },
+        {
+          "Garmin": 0.17199999999866122,
+          "Feather": 0.20299999999406282,
+          "Dongle": 0.125,
+          "5340": 0.18699999999807915
+        },
+        {
+          "Garmin": 0.23400000000401633,
+          "Feather": 0.20300000000133878,
+          "Dongle": 0.18699999999807915,
+          "5340": 0.25
+        },
+        {
+          "Garmin": 0.14100000000325963,
+          "Feather": 0.07800000000133878,
+          "Dongle": 0.125,
+          "5340": 0.17199999999866122
+        },
+        {
+          "Garmin": 0.21899999999732245,
+          "Feather": 0.21899999999732245,
+          "Dongle": 0.17199999999866122,
+          "5340": 0.0
+        },
+        {
+          "Garmin": 0.20300000000133878,
+          "Feather": 0.15600000000267755,
+          "Dongle": 0.17100000000209548,
+          "5340": 0.0
+        },
+        {
+          "Garmin": 0.20300000000133878,
+          "Feather": 0.20300000000133878,
+          "Dongle": 0.14100000000325963,
+          "5340": 0.20300000000133878
+        },
+        {
+          "Garmin": 0.01600000000325963,
+          "Feather": 0.01600000000325963,
+          "Dongle": 0.25,
+          "5340": 0.23400000000401633
+        },
+        {
+          "Garmin": 0.014999999999417923,
+          "Feather": 0.15600000000267755,
+          "Dongle": 0.17199999999866122,
+          "5340": 0.17200000000593718
+        },
+        {
+          "Garmin": 0.1569999999992433,
+          "Feather": 0.18800000000192085,
+          "Dongle": 0.11000000000058208,
+          "5340": 0.13999999999941792
+        },
+        {
+          "Garmin": 0.030999999995401595,
+          "Feather": 0.23399999999674037,
+          "Dongle": 0.20299999999406282,
+          "5340": 0.0
+        }
+      ],
+      "warnings": [],
+      "commands": [
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_sim.py",
+          "--port",
+          "COM4",
+          "--baud",
+          "115200",
+          "--seconds",
+          "390",
+          "--device-number",
+          "54120",
+          "--profile",
+          "power"
+        ]
+      ]
+    },
+    {
+      "phase": "ladder",
+      "round": "B",
+      "rep": 1,
+      "rc": 1,
+      "tx_part": "nrf54l15",
+      "results": {
+        "Garmin": {
+          "knee_dbm": null,
+          "knee_rssi_dbm": null,
+          "dial_trustworthy": false,
+          "rssi_slope": {
+            "slope": null,
+            "n": 0,
+            "reason": "fewer than three rungs with usable RSSI below the knee"
+          },
+          "reason": "the quietest rung (-28 dBm) still only loses 5.00 %, so the knee is below the bottom of the ladder. The ladder spans 36 dB and the link needs more: move the boards apart and run it again. Extrapolating past the last rung would invent the answer",
+          "steps": [
+            {
+              "tx_power_dbm": 8,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": null
+            },
+            {
+              "tx_power_dbm": 7,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": null
+            },
+            {
+              "tx_power_dbm": 6,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": null
+            },
+            {
+              "tx_power_dbm": 5,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": null
+            },
+            {
+              "tx_power_dbm": 4,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": null
+            },
+            {
+              "tx_power_dbm": 3,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": null
+            },
+            {
+              "tx_power_dbm": 2,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": null
+            },
+            {
+              "tx_power_dbm": 1,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": null
+            },
+            {
+              "tx_power_dbm": 0,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": null
+            },
+            {
+              "tx_power_dbm": -1,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": null
+            },
+            {
+              "tx_power_dbm": -2,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": null
+            },
+            {
+              "tx_power_dbm": -3,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": null
+            },
+            {
+              "tx_power_dbm": -4,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": null
+            },
+            {
+              "tx_power_dbm": -5,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": null
+            },
+            {
+              "tx_power_dbm": -6,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": null
+            },
+            {
+              "tx_power_dbm": -7,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": null
+            },
+            {
+              "tx_power_dbm": -8,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": null
+            },
+            {
+              "tx_power_dbm": -9,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": null
+            },
+            {
+              "tx_power_dbm": -10,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": null
+            },
+            {
+              "tx_power_dbm": -12,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": null
+            },
+            {
+              "tx_power_dbm": -14,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": null
+            },
+            {
+              "tx_power_dbm": -16,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": null
+            },
+            {
+              "tx_power_dbm": -18,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": null
+            },
+            {
+              "tx_power_dbm": -20,
+              "loss_pct": 1.25,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": null
+            },
+            {
+              "tx_power_dbm": -28,
+              "loss_pct": 5.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": null
+            }
+          ]
+        },
+        "Feather": {
+          "knee_dbm": -27.384615384615383,
+          "knee_rssi_dbm": -62.852969814995134,
+          "dial_trustworthy": false,
+          "rssi_slope": {
+            "slope": 0.9965534804362369,
+            "n": 25,
+            "worst_residual_db": 3.937922596788237,
+            "reason": "least squares of mean RSSI against commanded transmit power"
+          },
+          "reason": "interpolated between the two rungs that bracket it; the bracket is 8 dB wide, which is most of what this number is made of - use --rungs fine for a tighter one",
+          "steps": [
+            {
+              "tx_power_dbm": 8,
+              "loss_pct": 1.25,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -27.468354430379748
+            },
+            {
+              "tx_power_dbm": 7,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -28.06198347107438
+            },
+            {
+              "tx_power_dbm": 6,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -28.99586776859504
+            },
+            {
+              "tx_power_dbm": 5,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -29.99586776859504
+            },
+            {
+              "tx_power_dbm": 4,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -30.99586776859504
+            },
+            {
+              "tx_power_dbm": 3,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -31.99586776859504
+            },
+            {
+              "tx_power_dbm": 2,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -33.0
+            },
+            {
+              "tx_power_dbm": 1,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -33.99586776859504
+            },
+            {
+              "tx_power_dbm": 0,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -31.012396694214875
+            },
+            {
+              "tx_power_dbm": -1,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -36.0
+            },
+            {
+              "tx_power_dbm": -2,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -37.00413223140496
+            },
+            {
+              "tx_power_dbm": -3,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -37.99586776859504
+            },
+            {
+              "tx_power_dbm": -4,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -39.00413223140496
+            },
+            {
+              "tx_power_dbm": -5,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -40.239669421487605
+            },
+            {
+              "tx_power_dbm": -6,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -41.87190082644628
+            },
+            {
+              "tx_power_dbm": -7,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -42.99586776859504
+            },
+            {
+              "tx_power_dbm": -8,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -43.88429752066116
+            },
+            {
+              "tx_power_dbm": -9,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -44.3801652892562
+            },
+            {
+              "tx_power_dbm": -10,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -45.83471074380165
+            },
+            {
+              "tx_power_dbm": -12,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -46.99586776859504
+            },
+            {
+              "tx_power_dbm": -14,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -47.99583333333333
+            },
+            {
+              "tx_power_dbm": -16,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -49.98760330578512
+            },
+            {
+              "tx_power_dbm": -18,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -52.34710743801653
+            },
+            {
+              "tx_power_dbm": -20,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -56.12448132780083
+            },
+            {
+              "tx_power_dbm": -28,
+              "loss_pct": 5.416666666666667,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -62.136563876651984
+            }
+          ]
+        },
+        "Dongle": {
+          "knee_dbm": null,
+          "knee_rssi_dbm": null,
+          "dial_trustworthy": false,
+          "rssi_slope": {
+            "slope": 0.9918115600286047,
+            "n": 25,
+            "worst_residual_db": 3.7789654755085067,
+            "reason": "least squares of mean RSSI against commanded transmit power"
+          },
+          "reason": "the quietest rung (-28 dBm) still only loses 1.67 %, so the knee is below the bottom of the ladder. The ladder spans 36 dB and the link needs more: move the boards apart and run it again. Extrapolating past the last rung would invent the answer",
+          "steps": [
+            {
+              "tx_power_dbm": 8,
+              "loss_pct": 1.6666666666666667,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -29.0
+            },
+            {
+              "tx_power_dbm": 7,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -29.99586776859504
+            },
+            {
+              "tx_power_dbm": 6,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -30.99586776859504
+            },
+            {
+              "tx_power_dbm": 5,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -31.99586776859504
+            },
+            {
+              "tx_power_dbm": 4,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -32.99586776859504
+            },
+            {
+              "tx_power_dbm": 3,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -33.99586776859504
+            },
+            {
+              "tx_power_dbm": 2,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -34.995850622406635
+            },
+            {
+              "tx_power_dbm": 1,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -36.05785123966942
+            },
+            {
+              "tx_power_dbm": 0,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -33.01239669421488
+            },
+            {
+              "tx_power_dbm": -1,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -37.95454545454545
+            },
+            {
+              "tx_power_dbm": -2,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -38.85123966942149
+            },
+            {
+              "tx_power_dbm": -3,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -39.99586776859504
+            },
+            {
+              "tx_power_dbm": -4,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -40.99170124481328
+            },
+            {
+              "tx_power_dbm": -5,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -42.14876033057851
+            },
+            {
+              "tx_power_dbm": -6,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -43.743801652892564
+            },
+            {
+              "tx_power_dbm": -7,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -44.0
+            },
+            {
+              "tx_power_dbm": -8,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -45.00826446280992
+            },
+            {
+              "tx_power_dbm": -9,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -46.02479338842975
+            },
+            {
+              "tx_power_dbm": -10,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -47.36099585062241
+            },
+            {
+              "tx_power_dbm": -12,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -48.00829875518672
+            },
+            {
+              "tx_power_dbm": -14,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -50.00413223140496
+            },
+            {
+              "tx_power_dbm": -16,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -51.99173553719008
+            },
+            {
+              "tx_power_dbm": -18,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -54.66528925619835
+            },
+            {
+              "tx_power_dbm": -20,
+              "loss_pct": 0.8333333333333334,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -57.98739495798319
+            },
+            {
+              "tx_power_dbm": -28,
+              "loss_pct": 1.6666666666666667,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -63.96186440677966
+            }
+          ]
+        },
+        "5340": {
+          "knee_dbm": -11.899313501144164,
+          "knee_rssi_dbm": -63.85657845840912,
+          "dial_trustworthy": false,
+          "rssi_slope": {
+            "slope": 1.017031135364304,
+            "n": 25,
+            "worst_residual_db": 4.1690557995876105,
+            "reason": "least squares of mean RSSI against commanded transmit power"
+          },
+          "reason": "interpolated between the two rungs that bracket it",
+          "steps": [
+            {
+              "tx_power_dbm": 8,
+              "loss_pct": 2.5,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -43.957264957264954
+            },
+            {
+              "tx_power_dbm": 7,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -44.04016064257028
+            },
+            {
+              "tx_power_dbm": 6,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -44.99598393574297
+            },
+            {
+              "tx_power_dbm": 5,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -46.0
+            },
+            {
+              "tx_power_dbm": 4,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -46.99598393574297
+            },
+            {
+              "tx_power_dbm": 3,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -48.096385542168676
+            },
+            {
+              "tx_power_dbm": 2,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -49.03225806451613
+            },
+            {
+              "tx_power_dbm": 1,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -50.032128514056225
+            },
+            {
+              "tx_power_dbm": 0,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -47.01204819277108
+            },
+            {
+              "tx_power_dbm": -1,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -52.261044176706825
+            },
+            {
+              "tx_power_dbm": -2,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -53.04435483870968
+            },
+            {
+              "tx_power_dbm": -3,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -54.23293172690763
+            },
+            {
+              "tx_power_dbm": -4,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -55.72357723577236
+            },
+            {
+              "tx_power_dbm": -5,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -56.607287449392715
+            },
+            {
+              "tx_power_dbm": -6,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -58.18257261410788
+            },
+            {
+              "tx_power_dbm": -7,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -59.02057613168724
+            },
+            {
+              "tx_power_dbm": -8,
+              "loss_pct": 0.4166666666666667,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -60.20502092050209
+            },
+            {
+              "tx_power_dbm": -9,
+              "loss_pct": 0.8333333333333334,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -61.30672268907563
+            },
+            {
+              "tx_power_dbm": -10,
+              "loss_pct": 0.8333333333333334,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -63.403361344537814
+            },
+            {
+              "tx_power_dbm": -12,
+              "loss_pct": 5.220883534136546,
+              "loss_basis": "event_counter",
+              "rssi_dbm_mean": -65.0042194092827
+            },
+            {
+              "tx_power_dbm": -14,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -64.01646090534979
+            },
+            {
+              "tx_power_dbm": -16,
+              "loss_pct": 0.0,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -65.92116182572614
+            },
+            {
+              "tx_power_dbm": -18,
+              "loss_pct": 0.8333333333333334,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -68.00840336134453
+            },
+            {
+              "tx_power_dbm": -20,
+              "loss_pct": 3.75,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -72.15151515151516
+            },
+            {
+              "tx_power_dbm": -28,
+              "loss_pct": 4.166666666666667,
+              "loss_basis": "master_sent",
+              "rssi_dbm_mean": -79.43913043478261
+            }
+          ]
+        }
+      },
+      "warnings": [],
+      "commands": [
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_sens.py",
+          "--tx-port",
+          "COM4",
+          "--tx-baud",
+          "115200",
+          "--rungs",
+          "fine",
+          "--tx-part",
+          "nrf54l15",
+          "--seconds",
+          "60",
+          "--settle",
+          "2.0",
+          "--device-number",
+          "54130",
+          "--json",
+          "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\B_ladder_1.json",
+          "-q",
+          "--rx-baud",
+          "115200",
+          "--rx",
+          "Garmin=usb:006",
+          "--rx",
+          "Feather=usb:755972D7183A6183",
+          "--rx",
+          "Dongle=usb:3D55F77818BE772A",
+          "--rx",
+          "5340=port:COM5"
+        ]
+      ]
+    },
+    {
+      "phase": "acked",
+      "round": "B",
+      "rep": 1,
+      "device_number": 54140,
+      "blocks": [
+        {
+          "receiver": "Garmin",
+          "pass": 1,
+          "rc": 0,
+          "sent": 60,
+          "completed": 60,
+          "failed": 0,
+          "peer_received": 60,
+          "accepted": 0,
+          "seconds": 60.046000000002095,
+          "errors": []
+        },
+        {
+          "receiver": "Feather",
+          "pass": 1,
+          "rc": 0,
+          "sent": 60,
+          "completed": 60,
+          "failed": 0,
+          "peer_received": 60,
+          "accepted": 60,
+          "seconds": 60.0,
+          "errors": []
+        },
+        {
+          "receiver": "Dongle",
+          "pass": 1,
+          "rc": 1,
+          "sent": 0,
+          "completed": 0,
+          "failed": 0,
+          "peer_received": 0,
+          "accepted": 0,
+          "seconds": 0,
+          "errors": [
+            "RuntimeError: endpoint 3D55F77818BE772A did not reset"
+          ]
+        },
+        {
+          "receiver": "5340",
+          "pass": 1,
+          "rc": 0,
+          "sent": 60,
+          "completed": 60,
+          "failed": 0,
+          "peer_received": 60,
+          "accepted": 60,
+          "seconds": 60.0,
+          "errors": []
+        },
+        {
+          "receiver": "Garmin",
+          "pass": 2,
+          "rc": 0,
+          "sent": 60,
+          "completed": 60,
+          "failed": 0,
+          "peer_received": 60,
+          "accepted": 0,
+          "seconds": 60.0,
+          "errors": []
+        },
+        {
+          "receiver": "Feather",
+          "pass": 2,
+          "rc": 0,
+          "sent": 60,
+          "completed": 60,
+          "failed": 0,
+          "peer_received": 60,
+          "accepted": 60,
+          "seconds": 60.0,
+          "errors": []
+        },
+        {
+          "receiver": "Dongle",
+          "pass": 2,
+          "rc": 0,
+          "sent": 60,
+          "completed": 60,
+          "failed": 0,
+          "peer_received": 60,
+          "accepted": 60,
+          "seconds": 60.0,
+          "errors": []
+        },
+        {
+          "receiver": "5340",
+          "pass": 2,
+          "rc": 0,
+          "sent": 60,
+          "completed": 60,
+          "failed": 0,
+          "peer_received": 60,
+          "accepted": 60,
+          "seconds": 60.0,
+          "errors": []
+        }
+      ],
+      "warnings": [
+        "pass 1 Dongle: RuntimeError: endpoint 3D55F77818BE772A did not reset"
+      ],
+      "commands": [
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_ack_pair.py",
+          "--master-port",
+          "COM4",
+          "--master-baud",
+          "115200",
+          "--slave-serial",
+          "006",
+          "--device",
+          "54140",
+          "--sends",
+          "60",
+          "--interval",
+          "1.0",
+          "--seconds",
+          "60.0",
+          "--acquire-seconds",
+          "20.0",
+          "--tx-power",
+          "3",
+          "--json",
+          "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\B_acked_p1_Garmin.json"
+        ],
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_ack_pair.py",
+          "--master-port",
+          "COM4",
+          "--master-baud",
+          "115200",
+          "--slave-serial",
+          "755972D7183A6183",
+          "--device",
+          "54140",
+          "--sends",
+          "60",
+          "--interval",
+          "1.0",
+          "--seconds",
+          "60.0",
+          "--acquire-seconds",
+          "20.0",
+          "--tx-power",
+          "3",
+          "--json",
+          "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\B_acked_p1_Feather.json"
+        ],
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_ack_pair.py",
+          "--master-port",
+          "COM4",
+          "--master-baud",
+          "115200",
+          "--slave-serial",
+          "3D55F77818BE772A",
+          "--device",
+          "54140",
+          "--sends",
+          "60",
+          "--interval",
+          "1.0",
+          "--seconds",
+          "60.0",
+          "--acquire-seconds",
+          "20.0",
+          "--tx-power",
+          "3",
+          "--json",
+          "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\B_acked_p1_Dongle.json"
+        ],
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_ack_pair.py",
+          "--master-port",
+          "COM4",
+          "--master-baud",
+          "115200",
+          "--slave-port",
+          "COM5",
+          "--device",
+          "54140",
+          "--sends",
+          "60",
+          "--interval",
+          "1.0",
+          "--seconds",
+          "60.0",
+          "--acquire-seconds",
+          "20.0",
+          "--tx-power",
+          "3",
+          "--json",
+          "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\B_acked_p1_5340.json"
+        ],
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_ack_pair.py",
+          "--master-port",
+          "COM4",
+          "--master-baud",
+          "115200",
+          "--slave-serial",
+          "006",
+          "--device",
+          "54140",
+          "--sends",
+          "60",
+          "--interval",
+          "1.0",
+          "--seconds",
+          "60.0",
+          "--acquire-seconds",
+          "20.0",
+          "--tx-power",
+          "3",
+          "--json",
+          "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\B_acked_p2_Garmin.json"
+        ],
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_ack_pair.py",
+          "--master-port",
+          "COM4",
+          "--master-baud",
+          "115200",
+          "--slave-serial",
+          "755972D7183A6183",
+          "--device",
+          "54140",
+          "--sends",
+          "60",
+          "--interval",
+          "1.0",
+          "--seconds",
+          "60.0",
+          "--acquire-seconds",
+          "20.0",
+          "--tx-power",
+          "3",
+          "--json",
+          "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\B_acked_p2_Feather.json"
+        ],
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_ack_pair.py",
+          "--master-port",
+          "COM4",
+          "--master-baud",
+          "115200",
+          "--slave-serial",
+          "3D55F77818BE772A",
+          "--device",
+          "54140",
+          "--sends",
+          "60",
+          "--interval",
+          "1.0",
+          "--seconds",
+          "60.0",
+          "--acquire-seconds",
+          "20.0",
+          "--tx-power",
+          "3",
+          "--json",
+          "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\B_acked_p2_Dongle.json"
+        ],
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_ack_pair.py",
+          "--master-port",
+          "COM4",
+          "--master-baud",
+          "115200",
+          "--slave-port",
+          "COM5",
+          "--device",
+          "54140",
+          "--sends",
+          "60",
+          "--interval",
+          "1.0",
+          "--seconds",
+          "60.0",
+          "--acquire-seconds",
+          "20.0",
+          "--tx-power",
+          "3",
+          "--json",
+          "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\B_acked_p2_5340.json"
+        ]
+      ]
+    },
+    {
+      "phase": "multi",
+      "round": "C",
+      "rep": 1,
+      "seconds": 300.0,
+      "profiles": [
+        "power",
+        "heart-rate",
+        "csc",
+        "fec-treadmill"
+      ],
+      "device_numbers": [
+        53210,
+        53211,
+        54210,
+        54211
+      ],
+      "transmitters": {
+        "5340": {
+          "rc": 0,
+          "fallbacks": 0,
+          "device_numbers": [
+            53210,
+            53211
+          ],
+          "paced": true
+        },
+        "54L15": {
+          "rc": 0,
+          "fallbacks": 0,
+          "device_numbers": [
+            54210,
+            54211
+          ],
+          "paced": true
+        }
+      },
+      "results": {
+        "Garmin": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\C_multi_1_Garmin.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\C_multi_1_Garmin.log",
+          "exit": 1,
+          "wall_s": 0.2649999999994179,
+          "counts": {
+            "missed": null,
+            "sent": null,
+            "basis": null,
+            "per_channel": {}
+          },
+          "rssi_dbm_mean": null,
+          "problems": [
+            "no json written - see log",
+            "no JSON written"
+          ]
+        },
+        "Feather": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\C_multi_1_Feather.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\C_multi_1_Feather.log",
+          "exit": 1,
+          "wall_s": 0.2649999999994179,
+          "counts": {
+            "missed": null,
+            "sent": null,
+            "basis": null,
+            "per_channel": {}
+          },
+          "rssi_dbm_mean": null,
+          "problems": [
+            "no json written - see log",
+            "no JSON written"
+          ]
+        },
+        "Dongle": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\C_multi_1_Dongle.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\C_multi_1_Dongle.log",
+          "exit": 1,
+          "wall_s": 0.25,
+          "counts": {
+            "missed": null,
+            "sent": null,
+            "basis": null,
+            "per_channel": {}
+          },
+          "rssi_dbm_mean": null,
+          "problems": [
+            "no json written - see log",
+            "no JSON written"
+          ]
+        }
+      },
+      "warnings": [
+        "Garmin: no json written - see log",
+        "Garmin: no JSON written",
+        "Feather: no json written - see log",
+        "Feather: no JSON written",
+        "Dongle: no json written - see log",
+        "Dongle: no JSON written"
+      ],
+      "commands": [
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_sim.py",
+          "--port",
+          "COM5",
+          "--baud",
+          "115200",
+          "--seconds",
+          "330",
+          "--device-number",
+          "53210",
+          "--profile",
+          "power",
+          "--profile",
+          "heart-rate"
+        ],
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_sim.py",
+          "--port",
+          "COM4",
+          "--baud",
+          "115200",
+          "--seconds",
+          "330",
+          "--device-number",
+          "54210",
+          "--profile",
+          "csc",
+          "--profile",
+          "fec-treadmill"
+        ]
+      ]
+    },
+    {
+      "phase": "multi",
+      "round": "C",
+      "rep": 2,
+      "seconds": 300.0,
+      "profiles": [
+        "power",
+        "heart-rate",
+        "csc",
+        "fec-treadmill"
+      ],
+      "device_numbers": [
+        53210,
+        53211,
+        54210,
+        54211
+      ],
+      "transmitters": {
+        "5340": {
+          "rc": 0,
+          "fallbacks": 0,
+          "device_numbers": [
+            53210,
+            53211
+          ],
+          "paced": true
+        },
+        "54L15": {
+          "rc": 0,
+          "fallbacks": 0,
+          "device_numbers": [
+            54210,
+            54211
+          ],
+          "paced": true
+        }
+      },
+      "results": {
+        "Garmin": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\C_multi_2_Garmin.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\C_multi_2_Garmin.log",
+          "exit": 1,
+          "wall_s": 0.3280000000013388,
+          "counts": {
+            "missed": null,
+            "sent": null,
+            "basis": null,
+            "per_channel": {}
+          },
+          "rssi_dbm_mean": null,
+          "problems": [
+            "no json written - see log",
+            "no JSON written"
+          ]
+        },
+        "Feather": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\C_multi_2_Feather.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\C_multi_2_Feather.log",
+          "exit": 1,
+          "wall_s": 0.31300000000192085,
+          "counts": {
+            "missed": null,
+            "sent": null,
+            "basis": null,
+            "per_channel": {}
+          },
+          "rssi_dbm_mean": null,
+          "problems": [
+            "no json written - see log",
+            "no JSON written"
+          ]
+        },
+        "Dongle": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\C_multi_2_Dongle.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\C_multi_2_Dongle.log",
+          "exit": 1,
+          "wall_s": 0.2969999999986612,
+          "counts": {
+            "missed": null,
+            "sent": null,
+            "basis": null,
+            "per_channel": {}
+          },
+          "rssi_dbm_mean": null,
+          "problems": [
+            "no json written - see log",
+            "no JSON written"
+          ]
+        }
+      },
+      "warnings": [
+        "Garmin: no json written - see log",
+        "Garmin: no JSON written",
+        "Feather: no json written - see log",
+        "Feather: no JSON written",
+        "Dongle: no json written - see log",
+        "Dongle: no JSON written"
+      ],
+      "commands": [
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_sim.py",
+          "--port",
+          "COM5",
+          "--baud",
+          "115200",
+          "--seconds",
+          "330",
+          "--device-number",
+          "53210",
+          "--profile",
+          "power",
+          "--profile",
+          "heart-rate"
+        ],
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_sim.py",
+          "--port",
+          "COM4",
+          "--baud",
+          "115200",
+          "--seconds",
+          "330",
+          "--device-number",
+          "54210",
+          "--profile",
+          "csc",
+          "--profile",
+          "fec-treadmill"
+        ]
+      ]
+    },
+    {
+      "phase": "acquire",
+      "round": "C",
+      "rep": 1,
+      "seconds": 10.0,
+      "device_numbers": [
+        53220
+      ],
+      "transmitters": {
+        "5340": {
+          "rc": 0,
+          "fallbacks": 0,
+          "device_numbers": [
+            53220,
+            53221
+          ],
+          "paced": true
+        },
+        "54L15": {
+          "rc": 0,
+          "fallbacks": 0,
+          "device_numbers": [
+            54220,
+            54221
+          ],
+          "paced": true
+        }
+      },
+      "cycles": [
+        {
+          "Garmin": 0.031000000002677552,
+          "Feather": 0.2190000000045984,
+          "Dongle": 0.20300000000133878
+        },
+        {
+          "Garmin": 0.125,
+          "Feather": 0.09399999999732245,
+          "Dongle": 0.07800000000133878
+        },
+        {
+          "Garmin": 0.0,
+          "Feather": 0.23500000000058208,
+          "Dongle": 0.21899999999732245
+        },
+        {
+          "Garmin": 0.23399999999674037,
+          "Feather": 0.01599999999598367,
+          "Dongle": 0.17199999999866122
+        },
+        {
+          "Garmin": 0.18699999999807915,
+          "Feather": 0.13999999999941792,
+          "Dongle": 0.2180000000007567
+        },
+        {
+          "Garmin": 0.0,
+          "Feather": 0.0,
+          "Dongle": 0.20300000000133878
+        },
+        {
+          "Garmin": 0.14099999999598367,
+          "Feather": 0.10899999999674037,
+          "Dongle": 0.10899999999674037
+        },
+        {
+          "Garmin": 0.26599999999598367,
+          "Feather": 0.031000000002677552,
+          "Dongle": 0.20300000000133878
+        },
+        {
+          "Garmin": 0.20300000000133878,
+          "Feather": 0.20300000000133878,
+          "Dongle": 0.14100000000325963
+        },
+        {
+          "Garmin": 0.04700000000593718,
+          "Feather": 0.01600000000325963,
+          "Dongle": 0.25
+        },
+        {
+          "Garmin": 0.15600000000267755,
+          "Feather": 0.10899999999674037,
+          "Dongle": 0.125
+        },
+        {
+          "Garmin": 0.25,
+          "Feather": 0.0319999999992433,
+          "Dongle": 0.21899999999732245
+        },
+        {
+          "Garmin": 0.01599999999598367,
+          "Feather": 0.0,
+          "Dongle": 0.21899999999732245
+        },
+        {
+          "Garmin": 0.10900000000401633,
+          "Feather": 0.06199999999807915,
+          "Dongle": 0.0930000000007567
+        },
+        {
+          "Garmin": 0.2190000000045984,
+          "Feather": 0.2190000000045984,
+          "Dongle": 0.20300000000133878
+        },
+        {
+          "Garmin": 0.0,
+          "Feather": 0.18699999999807915,
+          "Dongle": 0.20300000000133878
+        },
+        {
+          "Garmin": 0.0,
+          "Feather": 0.031000000002677552,
+          "Dongle": 0.2180000000007567
+        },
+        {
+          "Garmin": 0.01600000000325963,
+          "Feather": 0.2190000000045984,
+          "Dongle": 0.23500000000058208
+        },
+        {
+          "Garmin": 0.20300000000133878,
+          "Feather": 0.13999999999941792,
+          "Dongle": 0.125
+        },
+        {
+          "Garmin": 0.0,
+          "Feather": 0.0319999999992433,
+          "Dongle": 0.20399999999790452
+        }
+      ],
+      "warnings": [],
+      "commands": [
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_sim.py",
+          "--port",
+          "COM5",
+          "--baud",
+          "115200",
+          "--seconds",
+          "390",
+          "--device-number",
+          "53220",
+          "--profile",
+          "power",
+          "--profile",
+          "heart-rate"
+        ],
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_sim.py",
+          "--port",
+          "COM4",
+          "--baud",
+          "115200",
+          "--seconds",
+          "390",
+          "--device-number",
+          "54220",
+          "--profile",
+          "csc",
+          "--profile",
+          "fec-treadmill"
+        ]
+      ]
+    },
+    {
+      "phase": "usb",
+      "round": "-",
+      "rep": 0,
+      "results": {
+        "Garmin": {
+          "p50": 0.581299995246809,
+          "p90": 0.6261999951675534,
+          "p99": 0.6881000008434057,
+          "max": 5.100200003653299,
+          "mean": 0.5998331997252535,
+          "timeouts": 0,
+          "msgs_per_s": 2006.691916230887,
+          "rc": 0
+        },
+        "Feather": {
+          "p50": 0.33909999910974875,
+          "p90": 0.36410000029718503,
+          "p99": 0.462200005131308,
+          "max": 0.5669000020134263,
+          "mean": 0.3394494002131978,
+          "timeouts": 0,
+          "msgs_per_s": 3015.7943180215743,
+          "rc": 0
+        },
+        "Dongle": {
+          "p50": 0.32559999817749485,
+          "p90": 0.37420000444399193,
+          "p99": 0.4160999960731715,
+          "max": 0.5010999957448803,
+          "mean": 0.3327409999619704,
+          "timeouts": 0,
+          "msgs_per_s": 3018.4050265184496,
+          "rc": 0
+        }
+      },
+      "warnings": [],
+      "commands": [
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_bench.py",
+          "--serial",
+          "006",
+          "--label",
+          "Garmin",
+          "--count",
+          "500",
+          "--depth",
+          "8",
+          "--json",
+          "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\usb_Garmin.json"
+        ],
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_bench.py",
+          "--serial",
+          "755972D7183A6183",
+          "--label",
+          "Feather",
+          "--count",
+          "500",
+          "--depth",
+          "8",
+          "--json",
+          "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\usb_Feather.json"
+        ],
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_bench.py",
+          "--serial",
+          "3D55F77818BE772A",
+          "--label",
+          "Dongle",
+          "--count",
+          "500",
+          "--depth",
+          "8",
+          "--json",
+          "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\usb_Dongle.json"
+        ]
+      ]
+    }
+  ]
+}

@@ -1,0 +1,134 @@
+# RadiANT receivers vs the Garmin ANT USB-m, fixed placement, 2026-11-07.
+#
+# Run:   python tools/ant_compare.py --rig tools/compare_rigs/2026-11-07-fixed.toml
+# Rerun a re-placement round: copy this file, edit [placement] and any
+# addresses that moved, set meta.results_dir to a new directory, then
+#        python tools/ant_compare.py --rig <copy> --phases loss,ladder
+#
+# COM numbers move between enumerations - re-read them before every sitting
+# (the 5340's ANT serial is its MI_00 port, the 54L15's likewise).
+
+[meta]
+name = "2026-11-07-fixed"
+results_dir = "archive/benchmarks/2026-11-07-garmin-compare"
+caveats = [
+  "The DKs transmit from ant_sim.py (EVENT_TX-paced host masters), not from a sensor's own firmware.",
+]
+
+[placement]
+# Describe the positions and distances BEFORE the run; this block is copied
+# into the results and is what a later swap round is compared against.
+notes = "TODO: describe the room, the bench surface and anything metal nearby"
+[placement.positions]
+Feather = "TODO: position / orientation / USB port or hub"
+Dongle  = "TODO"
+Garmin  = "TODO"
+"5340"  = "TODO"
+"54L15" = "TODO"
+[placement.distances_cm]
+"5340-Feather" = 0
+"5340-Dongle"  = 0
+"5340-Garmin"  = 0
+"54L15-Feather" = 0
+"54L15-Dongle"  = 0
+"54L15-Garmin"  = 0
+
+# ---------------------------------------------------------------------------
+# Devices. stack = "reference" marks the one every verdict is measured against.
+# ---------------------------------------------------------------------------
+
+[[device]]
+name = "Garmin"
+address = "usb:006"
+stack = "reference"
+notes = "Garmin ANT USB-m, 0FCF:1009, libusb-win32"
+
+[[device]]
+name = "Feather"
+address = "usb:755972D7183A6183"
+stack = "radiant"
+part = "nrf52840"
+notes = "Adafruit Feather nRF52840 Express, current image (not reflashed)"
+
+[[device]]
+name = "Dongle"
+address = "usb:3D55F77818BE772A"   # read after the DFU flash, 2026-11-07
+stack = "radiant"
+part = "nrf52840"
+notes = "nRF52840 Dongle (PCA10059), reflashed over DFU this session"
+
+[[device]]
+name = "5340"
+address = "port:COM5"
+stack = "radiant"
+part = "nrf5340net"
+transmit = true
+device_number_base = 53000
+notes = "nRF5340 DK net-core endpoint; app-core companion; heartbeat on COM6; probe SN 1050006310"
+
+[[device]]
+name = "54L15"
+address = "port:COM4"
+stack = "radiant"
+part = "nrf54l15"
+transmit = true
+device_number_base = 54000
+notes = "nRF54L15 DK; log VCOM COM3 (needs DTR); probe SN 1057737173"
+
+# ---------------------------------------------------------------------------
+# Rounds. Receivers default to every receiving device that is not
+# transmitting that round, so the idle DK listens too.
+# ---------------------------------------------------------------------------
+
+[[round]]
+name = "A"
+transmitters = ["5340"]
+phases = ["loss", "multi", "acquire", "ladder", "acked"]
+device_number_offset = 0
+notes = "5340 transmits (0 dBm ceiling)"
+
+[[round]]
+name = "B"
+transmitters = ["54L15"]
+phases = ["loss", "multi", "acquire", "ladder", "acked"]
+device_number_offset = 100
+
+[[round]]
+name = "C"
+transmitters = ["5340", "54L15"]
+phases = ["multi", "acquire"]
+device_number_offset = 200
+repeats = { multi = 2 }
+# Two independent clocks and mixed periods: power and HR from one board,
+# speed/cadence and FE-C from the other.
+multi_split = { power = "5340", "heart-rate" = "5340", csc = "54L15", "fec-treadmill" = "54L15" }
+
+# ---------------------------------------------------------------------------
+# Phase settings (defaults in tools/ant_compare.py PHASE_DEFAULTS).
+# ---------------------------------------------------------------------------
+
+[phases.loss]
+seconds = 300
+repeats = 2
+max_gap_spread_pp = 1.0
+
+[phases.multi]
+seconds = 300
+repeats = 1     # round C overrides this with its own repeats = { multi = 2 }
+
+[phases.acquire]
+cycles = 20
+seconds = 10
+
+[phases.ladder]
+seconds = 60
+rungs = "fine"
+
+[phases.acked]
+block_seconds = 60
+passes = 2
+interval = 1.0
+tx_power_level = 3   # 0 dBm on every part, so no originator gets a TX-power head start
+
+[phases.usb]
+count = 500

@@ -1,0 +1,2223 @@
+{
+  "rig": "2026-11-07-fixed",
+  "reference": "Garmin",
+  "generated": "2026-11-07T09:44:43.013669+00:00",
+  "identity": {
+    "Garmin": {
+      "version": "AJK2.05RAF",
+      "channels": 8,
+      "networks": 8,
+      "pass": true,
+      "probe_rc": 0,
+      "features_rc": 1,
+      "stack": "reference",
+      "is_radiant": false
+    },
+    "Feather": {
+      "version": "RADIANT0.01B00",
+      "channels": 32,
+      "networks": 3,
+      "pass": true,
+      "probe_rc": 0,
+      "features_rc": 0,
+      "stack": "radiant",
+      "is_radiant": true
+    },
+    "Dongle": {
+      "version": "RADIANT0.01B00",
+      "channels": 32,
+      "networks": 3,
+      "pass": true,
+      "probe_rc": 0,
+      "features_rc": 0,
+      "stack": "radiant",
+      "is_radiant": true
+    },
+    "5340": {
+      "version": "RADIANT0.01B00",
+      "channels": 32,
+      "networks": 3,
+      "pass": true,
+      "probe_rc": 0,
+      "features_rc": 0,
+      "stack": "radiant",
+      "is_radiant": true
+    },
+    "54L15": {
+      "version": "RADIANT0.01B00",
+      "channels": 32,
+      "networks": 3,
+      "pass": true,
+      "probe_rc": 0,
+      "features_rc": 0,
+      "stack": "radiant",
+      "is_radiant": true
+    }
+  },
+  "rounds": [
+    {
+      "round": "A",
+      "transmitters": [
+        "5340"
+      ],
+      "receivers": [
+        "Garmin",
+        "Feather",
+        "Dongle",
+        "54L15"
+      ],
+      "metrics": {
+        "loss": {
+          "Garmin": [
+            0.0,
+            0.0831255195344971
+          ],
+          "Feather": [
+            0.0,
+            0.0
+          ],
+          "Dongle": [
+            0.0,
+            0.0
+          ],
+          "54L15": [
+            0.0,
+            0.0
+          ]
+        },
+        "loss (multi, pooled)": {
+          "Garmin": [
+            3.434009102192801
+          ],
+          "Feather": [
+            0.7238883143743536
+          ],
+          "Dongle": [
+            0.7238883143743536
+          ],
+          "54L15": [
+            null
+          ]
+        },
+        "multi per profile": {
+          "Garmin": {
+            "power": {
+              "loss_pct": 3.5833333333333335,
+              "basis": "wall_clock"
+            },
+            "heart-rate": {
+              "loss_pct": 3.7766830870279144,
+              "basis": "wall_clock"
+            },
+            "csc": {
+              "loss_pct": 2.960526315789474,
+              "basis": "wall_clock"
+            },
+            "fec-treadmill": {
+              "loss_pct": 3.4166666666666665,
+              "basis": "wall_clock"
+            }
+          },
+          "Feather": {
+            "power": {
+              "loss_pct": 0.832639467110741,
+              "basis": "wall_clock"
+            },
+            "heart-rate": {
+              "loss_pct": 0.6568144499178982,
+              "basis": "wall_clock"
+            },
+            "csc": {
+              "loss_pct": 0.5756578947368421,
+              "basis": "wall_clock"
+            },
+            "fec-treadmill": {
+              "loss_pct": 0.8333333333333334,
+              "basis": "wall_clock"
+            }
+          },
+          "Dongle": {
+            "power": {
+              "loss_pct": 0.832639467110741,
+              "basis": "wall_clock"
+            },
+            "heart-rate": {
+              "loss_pct": 0.6568144499178982,
+              "basis": "wall_clock"
+            },
+            "csc": {
+              "loss_pct": 0.5756578947368421,
+              "basis": "wall_clock"
+            },
+            "fec-treadmill": {
+              "loss_pct": 0.8333333333333334,
+              "basis": "wall_clock"
+            }
+          },
+          "54L15": {}
+        }
+      },
+      "verdicts": [
+        {
+          "round": "A",
+          "metric": "loss",
+          "receiver": "Feather",
+          "verdict": "Equal",
+          "detail": "0.00 % [0.00, 0.16] vs reference 0.04 % [0.01, 0.24]",
+          "windows": 2,
+          "gap_spread_pp": 0.0831255195344971
+        },
+        {
+          "round": "A",
+          "metric": "loss",
+          "receiver": "Dongle",
+          "verdict": "Equal",
+          "detail": "0.00 % [0.00, 0.16] vs reference 0.04 % [0.01, 0.24]",
+          "windows": 2,
+          "gap_spread_pp": 0.0831255195344971
+        },
+        {
+          "round": "A",
+          "metric": "loss",
+          "receiver": "54L15",
+          "verdict": "Equal",
+          "detail": "0.00 % [0.00, 0.16] vs reference 0.04 % [0.01, 0.24]",
+          "windows": 2,
+          "gap_spread_pp": 0.0831255195344971
+        },
+        {
+          "round": "A",
+          "metric": "loss (multi, pooled)",
+          "receiver": "Feather",
+          "verdict": "Better",
+          "detail": "0.72 % [0.52, 1.01] vs reference 3.43 % [2.96, 3.99] (window warnings present - see below)",
+          "windows": 1
+        },
+        {
+          "round": "A",
+          "metric": "loss (multi, pooled)",
+          "receiver": "Dongle",
+          "verdict": "Better",
+          "detail": "0.72 % [0.52, 1.01] vs reference 3.43 % [2.96, 3.99] (window warnings present - see below)",
+          "windows": 1
+        },
+        {
+          "round": "A",
+          "metric": "loss (multi, pooled)",
+          "receiver": "54L15",
+          "verdict": "Inconclusive",
+          "detail": "a figure is missing",
+          "windows": 0
+        }
+      ],
+      "warnings": [
+        "multi 1: 54L15: no json written - see log",
+        "multi 1: 54L15: no JSON written",
+        "multi 1: 5340: ant_sim rc 1",
+        "multi 1: 5340: 23 messages on the wall-clock fallback (pacing guessed)"
+      ]
+    },
+    {
+      "round": "B",
+      "transmitters": [
+        "54L15"
+      ],
+      "receivers": [
+        "Garmin",
+        "Feather",
+        "Dongle",
+        "5340"
+      ],
+      "metrics": {
+        "loss": {
+          "Garmin": [
+            0.2497918401332223,
+            0.3325020781379884
+          ],
+          "Feather": [
+            2.57689110556941,
+            2.5833333333333335
+          ],
+          "Dongle": [
+            2.3275145469659186,
+            2.493765586034913
+          ],
+          "5340": [
+            3.0833333333333335,
+            2.0798668885191347
+          ]
+        },
+        "loss (multi, pooled)": {
+          "Garmin": [
+            3.4318792640066156
+          ],
+          "Feather": [
+            0.4139072847682119
+          ],
+          "Dongle": [
+            0.43478260869565216
+          ],
+          "5340": [
+            0.4758948893027105
+          ]
+        },
+        "multi per profile": {
+          "Garmin": {
+            "power": {
+              "loss_pct": 3.826955074875208,
+              "basis": "wall_clock"
+            },
+            "heart-rate": {
+              "loss_pct": 3.2019704433497536,
+              "basis": "wall_clock"
+            },
+            "csc": {
+              "loss_pct": 3.2046014790468367,
+              "basis": "wall_clock"
+            },
+            "fec-treadmill": {
+              "loss_pct": 3.5,
+              "basis": "wall_clock"
+            }
+          },
+          "Feather": {
+            "power": {
+              "loss_pct": 0.415973377703827,
+              "basis": "wall_clock"
+            },
+            "heart-rate": {
+              "loss_pct": 0.16420361247947454,
+              "basis": "wall_clock"
+            },
+            "csc": {
+              "loss_pct": 0.4942339373970346,
+              "basis": "wall_clock"
+            },
+            "fec-treadmill": {
+              "loss_pct": 0.5843071786310517,
+              "basis": "wall_clock"
+            }
+          },
+          "Dongle": {
+            "power": {
+              "loss_pct": 0.49916805324459235,
+              "basis": "wall_clock"
+            },
+            "heart-rate": {
+              "loss_pct": 0.16420361247947454,
+              "basis": "wall_clock"
+            },
+            "csc": {
+              "loss_pct": 0.41220115416323166,
+              "basis": "wall_clock"
+            },
+            "fec-treadmill": {
+              "loss_pct": 0.6683375104427736,
+              "basis": "wall_clock"
+            }
+          },
+          "5340": {
+            "power": {
+              "loss_pct": 0.49916805324459235,
+              "basis": "wall_clock"
+            },
+            "heart-rate": {
+              "loss_pct": 0.24630541871921183,
+              "basis": "wall_clock"
+            },
+            "csc": {
+              "loss_pct": 0.4942339373970346,
+              "basis": "wall_clock"
+            },
+            "fec-treadmill": {
+              "loss_pct": 0.6672226855713094,
+              "basis": "wall_clock"
+            }
+          }
+        }
+      },
+      "verdicts": [
+        {
+          "round": "B",
+          "metric": "loss",
+          "receiver": "Feather",
+          "verdict": "Worse",
+          "detail": "2.58 % [2.02, 3.29] vs reference 0.29 % [0.14, 0.60]",
+          "windows": 2,
+          "gap_spread_pp": 0.07626801024084262
+        },
+        {
+          "round": "B",
+          "metric": "loss",
+          "receiver": "Dongle",
+          "verdict": "Worse",
+          "detail": "2.41 % [1.87, 3.10] vs reference 0.29 % [0.14, 0.60]",
+          "windows": 2,
+          "gap_spread_pp": 0.08354080106422801
+        },
+        {
+          "round": "B",
+          "metric": "loss",
+          "receiver": "5340",
+          "verdict": "Inconclusive",
+          "detail": "2.58 % [2.02, 3.30] vs reference 0.29 % [0.14, 0.60]; but the gap moved 1.09 pp between windows (limit 1.0 pp), so it does not repeat",
+          "windows": 2,
+          "gap_spread_pp": 1.086176682818965
+        },
+        {
+          "round": "B",
+          "metric": "loss (multi, pooled)",
+          "receiver": "Feather",
+          "verdict": "Better",
+          "detail": "0.41 % [0.27, 0.64] vs reference 3.43 % [2.95, 3.98] (window warnings present - see below)",
+          "windows": 1
+        },
+        {
+          "round": "B",
+          "metric": "loss (multi, pooled)",
+          "receiver": "Dongle",
+          "verdict": "Better",
+          "detail": "0.43 % [0.28, 0.66] vs reference 3.43 % [2.95, 3.98] (window warnings present - see below)",
+          "windows": 1
+        },
+        {
+          "round": "B",
+          "metric": "loss (multi, pooled)",
+          "receiver": "5340",
+          "verdict": "Better",
+          "detail": "0.48 % [0.32, 0.71] vs reference 3.43 % [2.95, 3.98] (window warnings present - see below)",
+          "windows": 1
+        }
+      ],
+      "warnings": [
+        "multi 1: 54L15: ant_sim rc 1",
+        "multi 1: 54L15: 11 messages on the wall-clock fallback (pacing guessed)"
+      ]
+    },
+    {
+      "round": "C",
+      "transmitters": [
+        "5340",
+        "54L15"
+      ],
+      "receivers": [
+        "Garmin",
+        "Feather",
+        "Dongle"
+      ],
+      "metrics": {
+        "loss (multi, pooled)": {
+          "Garmin": [
+            3.6386189787058094,
+            4.052098408104197
+          ],
+          "Feather": [
+            0.7864238410596026,
+            0.8278145695364238
+          ],
+          "Dongle": [
+            0.9519867549668874,
+            0.9525781735348934
+          ]
+        },
+        "multi per profile": {
+          "Garmin": {
+            "power": {
+              "loss_pct": 3.6189683860232944,
+              "basis": "wall_clock"
+            },
+            "heart-rate": {
+              "loss_pct": 4.1461412151067325,
+              "basis": "wall_clock"
+            },
+            "csc": {
+              "loss_pct": 4.1495480690221855,
+              "basis": "wall_clock"
+            },
+            "fec-treadmill": {
+              "loss_pct": 3.4583333333333335,
+              "basis": "wall_clock"
+            }
+          },
+          "Feather": {
+            "power": {
+              "loss_pct": 0.37437603993344426,
+              "basis": "wall_clock"
+            },
+            "heart-rate": {
+              "loss_pct": 1.477832512315271,
+              "basis": "wall_clock"
+            },
+            "csc": {
+              "loss_pct": 1.2355848434925865,
+              "basis": "wall_clock"
+            },
+            "fec-treadmill": {
+              "loss_pct": 0.12520868113522537,
+              "basis": "wall_clock"
+            }
+          },
+          "Dongle": {
+            "power": {
+              "loss_pct": 0.4993757802746567,
+              "basis": "wall_clock"
+            },
+            "heart-rate": {
+              "loss_pct": 1.477832512315271,
+              "basis": "wall_clock"
+            },
+            "csc": {
+              "loss_pct": 1.4833127317676142,
+              "basis": "wall_clock"
+            },
+            "fec-treadmill": {
+              "loss_pct": 0.33402922755741127,
+              "basis": "wall_clock"
+            }
+          }
+        }
+      },
+      "verdicts": [
+        {
+          "round": "C",
+          "metric": "loss (multi, pooled)",
+          "receiver": "Feather",
+          "verdict": "Better",
+          "detail": "0.81 % [0.65, 1.01] vs reference 3.85 % [3.48, 4.25]",
+          "windows": 2
+        },
+        {
+          "round": "C",
+          "metric": "loss (multi, pooled)",
+          "receiver": "Dongle",
+          "verdict": "Better",
+          "detail": "0.95 % [0.78, 1.17] vs reference 3.85 % [3.48, 4.25]",
+          "windows": 2
+        }
+      ],
+      "warnings": []
+    }
+  ],
+  "usb": null,
+  "verdicts": [
+    {
+      "round": "A",
+      "metric": "loss",
+      "receiver": "Feather",
+      "verdict": "Equal",
+      "detail": "0.00 % [0.00, 0.16] vs reference 0.04 % [0.01, 0.24]",
+      "windows": 2,
+      "gap_spread_pp": 0.0831255195344971
+    },
+    {
+      "round": "A",
+      "metric": "loss",
+      "receiver": "Dongle",
+      "verdict": "Equal",
+      "detail": "0.00 % [0.00, 0.16] vs reference 0.04 % [0.01, 0.24]",
+      "windows": 2,
+      "gap_spread_pp": 0.0831255195344971
+    },
+    {
+      "round": "A",
+      "metric": "loss",
+      "receiver": "54L15",
+      "verdict": "Equal",
+      "detail": "0.00 % [0.00, 0.16] vs reference 0.04 % [0.01, 0.24]",
+      "windows": 2,
+      "gap_spread_pp": 0.0831255195344971
+    },
+    {
+      "round": "A",
+      "metric": "loss (multi, pooled)",
+      "receiver": "Feather",
+      "verdict": "Better",
+      "detail": "0.72 % [0.52, 1.01] vs reference 3.43 % [2.96, 3.99] (window warnings present - see below)",
+      "windows": 1
+    },
+    {
+      "round": "A",
+      "metric": "loss (multi, pooled)",
+      "receiver": "Dongle",
+      "verdict": "Better",
+      "detail": "0.72 % [0.52, 1.01] vs reference 3.43 % [2.96, 3.99] (window warnings present - see below)",
+      "windows": 1
+    },
+    {
+      "round": "A",
+      "metric": "loss (multi, pooled)",
+      "receiver": "54L15",
+      "verdict": "Inconclusive",
+      "detail": "a figure is missing",
+      "windows": 0
+    },
+    {
+      "round": "B",
+      "metric": "loss",
+      "receiver": "Feather",
+      "verdict": "Worse",
+      "detail": "2.58 % [2.02, 3.29] vs reference 0.29 % [0.14, 0.60]",
+      "windows": 2,
+      "gap_spread_pp": 0.07626801024084262
+    },
+    {
+      "round": "B",
+      "metric": "loss",
+      "receiver": "Dongle",
+      "verdict": "Worse",
+      "detail": "2.41 % [1.87, 3.10] vs reference 0.29 % [0.14, 0.60]",
+      "windows": 2,
+      "gap_spread_pp": 0.08354080106422801
+    },
+    {
+      "round": "B",
+      "metric": "loss",
+      "receiver": "5340",
+      "verdict": "Inconclusive",
+      "detail": "2.58 % [2.02, 3.30] vs reference 0.29 % [0.14, 0.60]; but the gap moved 1.09 pp between windows (limit 1.0 pp), so it does not repeat",
+      "windows": 2,
+      "gap_spread_pp": 1.086176682818965
+    },
+    {
+      "round": "B",
+      "metric": "loss (multi, pooled)",
+      "receiver": "Feather",
+      "verdict": "Better",
+      "detail": "0.41 % [0.27, 0.64] vs reference 3.43 % [2.95, 3.98] (window warnings present - see below)",
+      "windows": 1
+    },
+    {
+      "round": "B",
+      "metric": "loss (multi, pooled)",
+      "receiver": "Dongle",
+      "verdict": "Better",
+      "detail": "0.43 % [0.28, 0.66] vs reference 3.43 % [2.95, 3.98] (window warnings present - see below)",
+      "windows": 1
+    },
+    {
+      "round": "B",
+      "metric": "loss (multi, pooled)",
+      "receiver": "5340",
+      "verdict": "Better",
+      "detail": "0.48 % [0.32, 0.71] vs reference 3.43 % [2.95, 3.98] (window warnings present - see below)",
+      "windows": 1
+    },
+    {
+      "round": "C",
+      "metric": "loss (multi, pooled)",
+      "receiver": "Feather",
+      "verdict": "Better",
+      "detail": "0.81 % [0.65, 1.01] vs reference 3.85 % [3.48, 4.25]",
+      "windows": 2
+    },
+    {
+      "round": "C",
+      "metric": "loss (multi, pooled)",
+      "receiver": "Dongle",
+      "verdict": "Better",
+      "detail": "0.95 % [0.78, 1.17] vs reference 3.85 % [3.48, 4.25]",
+      "windows": 2
+    }
+  ],
+  "tally": {
+    "Equal": 3,
+    "Better": 7,
+    "Inconclusive": 2,
+    "Worse": 2
+  },
+  "rules": {
+    "loss": "Wilson 95 % CI on exact loss. Equal: RadiANT upper CI <= reference point + 0.5 pp. Better: RadiANT upper CI < reference lower CI. Worse: RadiANT lower CI > reference point + 0.5 pp.",
+    "acquire": "Median time to first packet over the cycles. Equal: <= reference median + 0.25 s. Better: lower median AND RadiANT Q3 < reference Q1. Worse: > reference median + 0.25 s.",
+    "ladder": "5 %-loss TX power. Equal: within 1 dB (the ab_gates repeatability limit). Better: more than 1 dB lower. Worse: more than 1 dB higher. Inconclusive if either dial check failed or either ladder never reached its knee.",
+    "acked": "Wilson 95 % CI on the acknowledged-transfer failure rate (sent - completed), the loss rule applied unchanged.",
+    "usb": "ant_bench round-trip latency. Equal: median <= reference median x 1.1. Better: lower median AND lower p99. Worse: median > reference median x 1.1."
+  },
+  "caveats": [
+    "Every figure is for this fixed placement: antenna and position are part of each result until a swap round separates them.",
+    "The DKs transmit from ant_sim.py (EVENT_TX-paced host masters), not from a sensor's own firmware.",
+    "The nRF5340 network core transmits at 0 dBm at most (no positive TXPOWER setting in silicon), up to 8 dB below the other parts - its rounds sit lower on the link budget.",
+    "5340, 54L15 attach over UART, not USB: excluded from the usb phase, and their receive path includes a UART rather than the USB stack a real dongle has.",
+    "RSSI is not comparable across chip families (each reports on its own calibration); it is shown, never judged.",
+    "Some loss figures are wall-clock (received radio messages against the window's slot count), not the transmitter's event counter: ant_verify withholds 'loss (exact)' once the counter stands still even once, and the DK master occasionally re-sends its previous buffer when a host refill misses a slot. That repeat lands on every receiver in the window alike, so the receiver-minus-reference gap is unaffected; the absolute figures assume the transmitter's crystal is exact."
+  ],
+  "records": [
+    {
+      "phase": "identity",
+      "round": "-",
+      "rep": 0,
+      "results": {
+        "Garmin": {
+          "version": "AJK2.05RAF",
+          "channels": 8,
+          "networks": 8,
+          "pass": true,
+          "probe_rc": 0,
+          "features_rc": 1,
+          "stack": "reference",
+          "is_radiant": false
+        },
+        "Feather": {
+          "version": "RADIANT0.01B00",
+          "channels": 32,
+          "networks": 3,
+          "pass": true,
+          "probe_rc": 0,
+          "features_rc": 0,
+          "stack": "radiant",
+          "is_radiant": true
+        },
+        "Dongle": {
+          "version": "RADIANT0.01B00",
+          "channels": 32,
+          "networks": 3,
+          "pass": true,
+          "probe_rc": 0,
+          "features_rc": 0,
+          "stack": "radiant",
+          "is_radiant": true
+        },
+        "5340": {
+          "version": "RADIANT0.01B00",
+          "channels": 32,
+          "networks": 3,
+          "pass": true,
+          "probe_rc": 0,
+          "features_rc": 0,
+          "stack": "radiant",
+          "is_radiant": true
+        },
+        "54L15": {
+          "version": "RADIANT0.01B00",
+          "channels": 32,
+          "networks": 3,
+          "pass": true,
+          "probe_rc": 0,
+          "features_rc": 0,
+          "stack": "radiant",
+          "is_radiant": true
+        }
+      },
+      "warnings": [],
+      "commands": [
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_probe.py",
+          "--serial",
+          "006"
+        ],
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_features.py",
+          "--serial",
+          "006"
+        ],
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_probe.py",
+          "--serial",
+          "755972D7183A6183"
+        ],
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_features.py",
+          "--serial",
+          "755972D7183A6183"
+        ],
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_probe.py",
+          "--serial",
+          "3D55F77818BE772A"
+        ],
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_features.py",
+          "--serial",
+          "3D55F77818BE772A"
+        ],
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_probe.py",
+          "--port",
+          "COM5",
+          "--baud",
+          "115200"
+        ],
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_features.py",
+          "--port",
+          "COM5",
+          "--baud",
+          "115200"
+        ],
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_probe.py",
+          "--port",
+          "COM4",
+          "--baud",
+          "115200"
+        ],
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_features.py",
+          "--port",
+          "COM4",
+          "--baud",
+          "115200"
+        ]
+      ]
+    },
+    {
+      "phase": "loss",
+      "round": "A",
+      "rep": 1,
+      "seconds": 300.0,
+      "profiles": [
+        "power"
+      ],
+      "device_numbers": [
+        53000
+      ],
+      "transmitters": {
+        "5340": {
+          "rc": 0,
+          "fallbacks": 0,
+          "device_numbers": [
+            53000
+          ],
+          "paced": true
+        }
+      },
+      "results": {
+        "Garmin": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\A_loss_1_Garmin.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\A_loss_1_Garmin.log",
+          "exit": 0,
+          "wall_s": 301.8130000000019,
+          "counts": {
+            "missed": 0,
+            "sent": 1203,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 0,
+                "sent": 1203,
+                "basis": "wall_clock",
+                "loss_pct": 0.0,
+                "device_number": 53000
+              }
+            }
+          },
+          "rssi_dbm_mean": null,
+          "problems": []
+        },
+        "Feather": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\A_loss_1_Feather.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\A_loss_1_Feather.log",
+          "exit": 0,
+          "wall_s": 301.8119999999981,
+          "counts": {
+            "missed": 0,
+            "sent": 1202,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 0,
+                "sent": 1202,
+                "basis": "wall_clock",
+                "loss_pct": 0.0,
+                "device_number": 53000
+              }
+            }
+          },
+          "rssi_dbm_mean": -41.00582362728785,
+          "problems": []
+        },
+        "Dongle": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\A_loss_1_Dongle.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\A_loss_1_Dongle.log",
+          "exit": 0,
+          "wall_s": 301.8130000000019,
+          "counts": {
+            "missed": 0,
+            "sent": 1203,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 0,
+                "sent": 1203,
+                "basis": "wall_clock",
+                "loss_pct": 0.0,
+                "device_number": 53000
+              }
+            }
+          },
+          "rssi_dbm_mean": -31.0,
+          "problems": []
+        },
+        "54L15": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\A_loss_1_54L15.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\A_loss_1_54L15.log",
+          "exit": 0,
+          "wall_s": 301.81200000000536,
+          "counts": {
+            "missed": 0,
+            "sent": 1202,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 0,
+                "sent": 1202,
+                "basis": "wall_clock",
+                "loss_pct": 0.0,
+                "device_number": 53000
+              }
+            }
+          },
+          "rssi_dbm_mean": -47.01747088186356,
+          "problems": []
+        }
+      },
+      "warnings": [],
+      "commands": [
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_sim.py",
+          "--port",
+          "COM5",
+          "--baud",
+          "115200",
+          "--seconds",
+          "330",
+          "--device-number",
+          "53000",
+          "--profile",
+          "power"
+        ]
+      ]
+    },
+    {
+      "phase": "loss",
+      "round": "A",
+      "rep": 2,
+      "seconds": 300.0,
+      "profiles": [
+        "power"
+      ],
+      "device_numbers": [
+        53000
+      ],
+      "transmitters": {
+        "5340": {
+          "rc": 0,
+          "fallbacks": 0,
+          "device_numbers": [
+            53000
+          ],
+          "paced": true
+        }
+      },
+      "results": {
+        "Garmin": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\A_loss_2_Garmin.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\A_loss_2_Garmin.log",
+          "exit": 0,
+          "wall_s": 301.68700000000536,
+          "counts": {
+            "missed": 1,
+            "sent": 1203,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 1,
+                "sent": 1203,
+                "basis": "wall_clock",
+                "loss_pct": 0.0831255195344971,
+                "device_number": 53000
+              }
+            }
+          },
+          "rssi_dbm_mean": null,
+          "problems": []
+        },
+        "Feather": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\A_loss_2_Feather.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\A_loss_2_Feather.log",
+          "exit": 0,
+          "wall_s": 301.6869999999981,
+          "counts": {
+            "missed": 0,
+            "sent": 1203,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 0,
+                "sent": 1203,
+                "basis": "wall_clock",
+                "loss_pct": 0.0,
+                "device_number": 53000
+              }
+            }
+          },
+          "rssi_dbm_mean": -41.00249376558604,
+          "problems": []
+        },
+        "Dongle": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\A_loss_2_Dongle.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\A_loss_2_Dongle.log",
+          "exit": 0,
+          "wall_s": 301.67199999999866,
+          "counts": {
+            "missed": 0,
+            "sent": 1203,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 0,
+                "sent": 1203,
+                "basis": "wall_clock",
+                "loss_pct": 0.0,
+                "device_number": 53000
+              }
+            }
+          },
+          "rssi_dbm_mean": -31.0,
+          "problems": []
+        },
+        "54L15": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\A_loss_2_54L15.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\A_loss_2_54L15.log",
+          "exit": 0,
+          "wall_s": 301.6880000000019,
+          "counts": {
+            "missed": 0,
+            "sent": 1202,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 0,
+                "sent": 1202,
+                "basis": "wall_clock",
+                "loss_pct": 0.0,
+                "device_number": 53000
+              }
+            }
+          },
+          "rssi_dbm_mean": -47.01747088186356,
+          "problems": []
+        }
+      },
+      "warnings": [],
+      "commands": [
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_sim.py",
+          "--port",
+          "COM5",
+          "--baud",
+          "115200",
+          "--seconds",
+          "330",
+          "--device-number",
+          "53000",
+          "--profile",
+          "power"
+        ]
+      ]
+    },
+    {
+      "phase": "multi",
+      "round": "A",
+      "rep": 1,
+      "seconds": 300.0,
+      "profiles": [
+        "power",
+        "heart-rate",
+        "csc",
+        "fec-treadmill"
+      ],
+      "device_numbers": [
+        53010,
+        53011,
+        53012,
+        53013
+      ],
+      "transmitters": {
+        "5340": {
+          "rc": 1,
+          "fallbacks": 23,
+          "device_numbers": [
+            53010,
+            53011,
+            53012,
+            53013
+          ],
+          "paced": false
+        }
+      },
+      "results": {
+        "Garmin": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\A_multi_1_Garmin.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\A_multi_1_Garmin.log",
+          "exit": 1,
+          "wall_s": 301.4369999999981,
+          "counts": {
+            "missed": 166,
+            "sent": 4834,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 43,
+                "sent": 1200,
+                "basis": "wall_clock",
+                "loss_pct": 3.5833333333333335,
+                "device_number": 53010
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 46,
+                "sent": 1218,
+                "basis": "wall_clock",
+                "loss_pct": 3.7766830870279144,
+                "device_number": 53011
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 36,
+                "sent": 1216,
+                "basis": "wall_clock",
+                "loss_pct": 2.960526315789474,
+                "device_number": 53012
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 41,
+                "sent": 1200,
+                "basis": "wall_clock",
+                "loss_pct": 3.4166666666666665,
+                "device_number": 53013
+              }
+            }
+          },
+          "rssi_dbm_mean": null,
+          "problems": []
+        },
+        "Feather": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\A_multi_1_Feather.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\A_multi_1_Feather.log",
+          "exit": 1,
+          "wall_s": 301.43799999999464,
+          "counts": {
+            "missed": 35,
+            "sent": 4835,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 10,
+                "sent": 1201,
+                "basis": "wall_clock",
+                "loss_pct": 0.832639467110741,
+                "device_number": 53010
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 8,
+                "sent": 1218,
+                "basis": "wall_clock",
+                "loss_pct": 0.6568144499178982,
+                "device_number": 53011
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 7,
+                "sent": 1216,
+                "basis": "wall_clock",
+                "loss_pct": 0.5756578947368421,
+                "device_number": 53012
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 10,
+                "sent": 1200,
+                "basis": "wall_clock",
+                "loss_pct": 0.8333333333333334,
+                "device_number": 53013
+              }
+            }
+          },
+          "rssi_dbm_mean": -41.008125,
+          "problems": []
+        },
+        "Dongle": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\A_multi_1_Dongle.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\A_multi_1_Dongle.log",
+          "exit": 1,
+          "wall_s": 301.4380000000019,
+          "counts": {
+            "missed": 35,
+            "sent": 4835,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 10,
+                "sent": 1201,
+                "basis": "wall_clock",
+                "loss_pct": 0.832639467110741,
+                "device_number": 53010
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 8,
+                "sent": 1218,
+                "basis": "wall_clock",
+                "loss_pct": 0.6568144499178982,
+                "device_number": 53011
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 7,
+                "sent": 1216,
+                "basis": "wall_clock",
+                "loss_pct": 0.5756578947368421,
+                "device_number": 53012
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 10,
+                "sent": 1200,
+                "basis": "wall_clock",
+                "loss_pct": 0.8333333333333334,
+                "device_number": 53013
+              }
+            }
+          },
+          "rssi_dbm_mean": -31.000208333333333,
+          "problems": []
+        },
+        "54L15": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\A_multi_1_54L15.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\A_multi_1_54L15.log",
+          "exit": 1,
+          "wall_s": 301.4690000000046,
+          "counts": {
+            "missed": null,
+            "sent": null,
+            "basis": null,
+            "per_channel": {}
+          },
+          "rssi_dbm_mean": null,
+          "problems": [
+            "no json written - see log",
+            "no JSON written"
+          ]
+        }
+      },
+      "warnings": [
+        "54L15: no json written - see log",
+        "54L15: no JSON written",
+        "5340: ant_sim rc 1",
+        "5340: 23 messages on the wall-clock fallback (pacing guessed)"
+      ],
+      "commands": [
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_sim.py",
+          "--port",
+          "COM5",
+          "--baud",
+          "115200",
+          "--seconds",
+          "330",
+          "--device-number",
+          "53010",
+          "--profile",
+          "power",
+          "--profile",
+          "heart-rate",
+          "--profile",
+          "csc",
+          "--profile",
+          "fec-treadmill"
+        ]
+      ]
+    },
+    {
+      "phase": "loss",
+      "round": "B",
+      "rep": 1,
+      "seconds": 300.0,
+      "profiles": [
+        "power"
+      ],
+      "device_numbers": [
+        54100
+      ],
+      "transmitters": {
+        "54L15": {
+          "rc": 0,
+          "fallbacks": 0,
+          "device_numbers": [
+            54100
+          ],
+          "paced": true
+        }
+      },
+      "results": {
+        "Garmin": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\B_loss_1_Garmin.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\B_loss_1_Garmin.log",
+          "exit": 0,
+          "wall_s": 301.6880000000019,
+          "counts": {
+            "missed": 3,
+            "sent": 1201,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 3,
+                "sent": 1201,
+                "basis": "wall_clock",
+                "loss_pct": 0.2497918401332223,
+                "device_number": 54100
+              }
+            }
+          },
+          "rssi_dbm_mean": null,
+          "problems": []
+        },
+        "Feather": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\B_loss_1_Feather.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\B_loss_1_Feather.log",
+          "exit": 1,
+          "wall_s": 301.67199999999866,
+          "counts": {
+            "missed": 31,
+            "sent": 1203,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 31,
+                "sent": 1203,
+                "basis": "wall_clock",
+                "loss_pct": 2.57689110556941,
+                "device_number": 54100
+              }
+            }
+          },
+          "rssi_dbm_mean": -31.0,
+          "problems": []
+        },
+        "Dongle": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\B_loss_1_Dongle.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\B_loss_1_Dongle.log",
+          "exit": 1,
+          "wall_s": 301.6869999999981,
+          "counts": {
+            "missed": 28,
+            "sent": 1203,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 28,
+                "sent": 1203,
+                "basis": "wall_clock",
+                "loss_pct": 2.3275145469659186,
+                "device_number": 54100
+              }
+            }
+          },
+          "rssi_dbm_mean": -33.0,
+          "problems": []
+        },
+        "5340": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\B_loss_1_5340.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\B_loss_1_5340.log",
+          "exit": 1,
+          "wall_s": 301.68799999999464,
+          "counts": {
+            "missed": 37,
+            "sent": 1200,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 37,
+                "sent": 1200,
+                "basis": "wall_clock",
+                "loss_pct": 3.0833333333333335,
+                "device_number": 54100
+              }
+            }
+          },
+          "rssi_dbm_mean": -45.85640584694755,
+          "problems": []
+        }
+      },
+      "warnings": [],
+      "commands": [
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_sim.py",
+          "--port",
+          "COM4",
+          "--baud",
+          "115200",
+          "--seconds",
+          "330",
+          "--device-number",
+          "54100",
+          "--profile",
+          "power"
+        ]
+      ]
+    },
+    {
+      "phase": "loss",
+      "round": "B",
+      "rep": 2,
+      "seconds": 300.0,
+      "profiles": [
+        "power"
+      ],
+      "device_numbers": [
+        54100
+      ],
+      "transmitters": {
+        "54L15": {
+          "rc": 0,
+          "fallbacks": 0,
+          "device_numbers": [
+            54100
+          ],
+          "paced": true
+        }
+      },
+      "results": {
+        "Garmin": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\B_loss_2_Garmin.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\B_loss_2_Garmin.log",
+          "exit": 0,
+          "wall_s": 301.67199999999866,
+          "counts": {
+            "missed": 4,
+            "sent": 1203,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 4,
+                "sent": 1203,
+                "basis": "wall_clock",
+                "loss_pct": 0.3325020781379884,
+                "device_number": 54100
+              }
+            }
+          },
+          "rssi_dbm_mean": null,
+          "problems": []
+        },
+        "Feather": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\B_loss_2_Feather.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\B_loss_2_Feather.log",
+          "exit": 1,
+          "wall_s": 301.6869999999981,
+          "counts": {
+            "missed": 31,
+            "sent": 1200,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 31,
+                "sent": 1200,
+                "basis": "wall_clock",
+                "loss_pct": 2.5833333333333335,
+                "device_number": 54100
+              }
+            }
+          },
+          "rssi_dbm_mean": -31.0,
+          "problems": []
+        },
+        "Dongle": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\B_loss_2_Dongle.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\B_loss_2_Dongle.log",
+          "exit": 1,
+          "wall_s": 301.68799999999464,
+          "counts": {
+            "missed": 30,
+            "sent": 1203,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 30,
+                "sent": 1203,
+                "basis": "wall_clock",
+                "loss_pct": 2.493765586034913,
+                "device_number": 54100
+              }
+            }
+          },
+          "rssi_dbm_mean": -32.7996589940324,
+          "problems": []
+        },
+        "5340": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\B_loss_2_5340.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\B_loss_2_5340.log",
+          "exit": 1,
+          "wall_s": 301.68799999999464,
+          "counts": {
+            "missed": 25,
+            "sent": 1202,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 25,
+                "sent": 1202,
+                "basis": "wall_clock",
+                "loss_pct": 2.0798668885191347,
+                "device_number": 54100
+              }
+            }
+          },
+          "rssi_dbm_mean": -45.8428207306712,
+          "problems": []
+        }
+      },
+      "warnings": [],
+      "commands": [
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_sim.py",
+          "--port",
+          "COM4",
+          "--baud",
+          "115200",
+          "--seconds",
+          "330",
+          "--device-number",
+          "54100",
+          "--profile",
+          "power"
+        ]
+      ]
+    },
+    {
+      "phase": "multi",
+      "round": "B",
+      "rep": 1,
+      "seconds": 300.0,
+      "profiles": [
+        "power",
+        "heart-rate",
+        "csc",
+        "fec-treadmill"
+      ],
+      "device_numbers": [
+        54110,
+        54111,
+        54112,
+        54113
+      ],
+      "transmitters": {
+        "54L15": {
+          "rc": 1,
+          "fallbacks": 11,
+          "device_numbers": [
+            54110,
+            54111,
+            54112,
+            54113
+          ],
+          "paced": false
+        }
+      },
+      "results": {
+        "Garmin": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\B_multi_1_Garmin.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\B_multi_1_Garmin.log",
+          "exit": 1,
+          "wall_s": 301.46800000000076,
+          "counts": {
+            "missed": 166,
+            "sent": 4837,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 46,
+                "sent": 1202,
+                "basis": "wall_clock",
+                "loss_pct": 3.826955074875208,
+                "device_number": 54110
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 39,
+                "sent": 1218,
+                "basis": "wall_clock",
+                "loss_pct": 3.2019704433497536,
+                "device_number": 54111
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 39,
+                "sent": 1217,
+                "basis": "wall_clock",
+                "loss_pct": 3.2046014790468367,
+                "device_number": 54112
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 42,
+                "sent": 1200,
+                "basis": "wall_clock",
+                "loss_pct": 3.5,
+                "device_number": 54113
+              }
+            }
+          },
+          "rssi_dbm_mean": null,
+          "problems": []
+        },
+        "Feather": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\B_multi_1_Feather.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\B_multi_1_Feather.log",
+          "exit": 1,
+          "wall_s": 301.48399999999674,
+          "counts": {
+            "missed": 20,
+            "sent": 4832,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 5,
+                "sent": 1202,
+                "basis": "wall_clock",
+                "loss_pct": 0.415973377703827,
+                "device_number": 54110
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 2,
+                "sent": 1218,
+                "basis": "wall_clock",
+                "loss_pct": 0.16420361247947454,
+                "device_number": 54111
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 6,
+                "sent": 1214,
+                "basis": "wall_clock",
+                "loss_pct": 0.4942339373970346,
+                "device_number": 54112
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 7,
+                "sent": 1198,
+                "basis": "wall_clock",
+                "loss_pct": 0.5843071786310517,
+                "device_number": 54113
+              }
+            }
+          },
+          "rssi_dbm_mean": -31.0,
+          "problems": []
+        },
+        "Dongle": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\B_multi_1_Dongle.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\B_multi_1_Dongle.log",
+          "exit": 1,
+          "wall_s": 301.4850000000006,
+          "counts": {
+            "missed": 21,
+            "sent": 4830,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 6,
+                "sent": 1202,
+                "basis": "wall_clock",
+                "loss_pct": 0.49916805324459235,
+                "device_number": 54110
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 2,
+                "sent": 1218,
+                "basis": "wall_clock",
+                "loss_pct": 0.16420361247947454,
+                "device_number": 54111
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 5,
+                "sent": 1213,
+                "basis": "wall_clock",
+                "loss_pct": 0.41220115416323166,
+                "device_number": 54112
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 8,
+                "sent": 1197,
+                "basis": "wall_clock",
+                "loss_pct": 0.6683375104427736,
+                "device_number": 54113
+              }
+            }
+          },
+          "rssi_dbm_mean": -32.71740486587648,
+          "problems": []
+        },
+        "5340": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\B_multi_1_5340.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\B_multi_1_5340.log",
+          "exit": 1,
+          "wall_s": 301.4690000000046,
+          "counts": {
+            "missed": 23,
+            "sent": 4833,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 6,
+                "sent": 1202,
+                "basis": "wall_clock",
+                "loss_pct": 0.49916805324459235,
+                "device_number": 54110
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 3,
+                "sent": 1218,
+                "basis": "wall_clock",
+                "loss_pct": 0.24630541871921183,
+                "device_number": 54111
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 6,
+                "sent": 1214,
+                "basis": "wall_clock",
+                "loss_pct": 0.4942339373970346,
+                "device_number": 54112
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 8,
+                "sent": 1199,
+                "basis": "wall_clock",
+                "loss_pct": 0.6672226855713094,
+                "device_number": 54113
+              }
+            }
+          },
+          "rssi_dbm_mean": -45.91725571725572,
+          "problems": []
+        }
+      },
+      "warnings": [
+        "54L15: ant_sim rc 1",
+        "54L15: 11 messages on the wall-clock fallback (pacing guessed)"
+      ],
+      "commands": [
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_sim.py",
+          "--port",
+          "COM4",
+          "--baud",
+          "115200",
+          "--seconds",
+          "330",
+          "--device-number",
+          "54110",
+          "--profile",
+          "power",
+          "--profile",
+          "heart-rate",
+          "--profile",
+          "csc",
+          "--profile",
+          "fec-treadmill"
+        ]
+      ]
+    },
+    {
+      "phase": "multi",
+      "round": "C",
+      "rep": 1,
+      "seconds": 300.0,
+      "profiles": [
+        "power",
+        "heart-rate",
+        "csc",
+        "fec-treadmill"
+      ],
+      "device_numbers": [
+        53210,
+        53211,
+        54210,
+        54211
+      ],
+      "transmitters": {
+        "5340": {
+          "rc": 0,
+          "fallbacks": 0,
+          "device_numbers": [
+            53210,
+            53211
+          ],
+          "paced": true
+        },
+        "54L15": {
+          "rc": 0,
+          "fallbacks": 0,
+          "device_numbers": [
+            54210,
+            54211
+          ],
+          "paced": true
+        }
+      },
+      "results": {
+        "Garmin": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\C_multi_1_Garmin.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\C_multi_1_Garmin.log",
+          "exit": 1,
+          "wall_s": 301.4690000000046,
+          "counts": {
+            "missed": 176,
+            "sent": 4837,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 35,
+                "sent": 1202,
+                "basis": "wall_clock",
+                "loss_pct": 2.9118136439267888,
+                "device_number": 53210
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 52,
+                "sent": 1218,
+                "basis": "wall_clock",
+                "loss_pct": 4.269293924466338,
+                "device_number": 53211
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 50,
+                "sent": 1217,
+                "basis": "wall_clock",
+                "loss_pct": 4.108463434675431,
+                "device_number": 54210
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 39,
+                "sent": 1200,
+                "basis": "wall_clock",
+                "loss_pct": 3.25,
+                "device_number": 54211
+              }
+            }
+          },
+          "rssi_dbm_mean": null,
+          "problems": []
+        },
+        "Feather": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\C_multi_1_Feather.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\C_multi_1_Feather.log",
+          "exit": 1,
+          "wall_s": 301.46800000000076,
+          "counts": {
+            "missed": 38,
+            "sent": 4832,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 4,
+                "sent": 1202,
+                "basis": "wall_clock",
+                "loss_pct": 0.33277870216306155,
+                "device_number": 53210
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 18,
+                "sent": 1218,
+                "basis": "wall_clock",
+                "loss_pct": 1.477832512315271,
+                "device_number": 53211
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 15,
+                "sent": 1214,
+                "basis": "wall_clock",
+                "loss_pct": 1.2355848434925865,
+                "device_number": 54210
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 1,
+                "sent": 1198,
+                "basis": "wall_clock",
+                "loss_pct": 0.08347245409015025,
+                "device_number": 54211
+              }
+            }
+          },
+          "rssi_dbm_mean": -35.99666249478515,
+          "problems": []
+        },
+        "Dongle": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\C_multi_1_Dongle.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\C_multi_1_Dongle.log",
+          "exit": 1,
+          "wall_s": 301.4689999999973,
+          "counts": {
+            "missed": 46,
+            "sent": 4832,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 7,
+                "sent": 1202,
+                "basis": "wall_clock",
+                "loss_pct": 0.5823627287853578,
+                "device_number": 53210
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 17,
+                "sent": 1218,
+                "basis": "wall_clock",
+                "loss_pct": 1.3957307060755337,
+                "device_number": 53211
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 18,
+                "sent": 1214,
+                "basis": "wall_clock",
+                "loss_pct": 1.4827018121911038,
+                "device_number": 54210
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 4,
+                "sent": 1198,
+                "basis": "wall_clock",
+                "loss_pct": 0.333889816360601,
+                "device_number": 54211
+              }
+            }
+          },
+          "rssi_dbm_mean": -31.958420392812368,
+          "problems": []
+        }
+      },
+      "warnings": [],
+      "commands": [
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_sim.py",
+          "--port",
+          "COM5",
+          "--baud",
+          "115200",
+          "--seconds",
+          "330",
+          "--device-number",
+          "53210",
+          "--profile",
+          "power",
+          "--profile",
+          "heart-rate"
+        ],
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_sim.py",
+          "--port",
+          "COM4",
+          "--baud",
+          "115200",
+          "--seconds",
+          "330",
+          "--device-number",
+          "54210",
+          "--profile",
+          "csc",
+          "--profile",
+          "fec-treadmill"
+        ]
+      ]
+    },
+    {
+      "phase": "multi",
+      "round": "C",
+      "rep": 2,
+      "seconds": 300.0,
+      "profiles": [
+        "power",
+        "heart-rate",
+        "csc",
+        "fec-treadmill"
+      ],
+      "device_numbers": [
+        53210,
+        53211,
+        54210,
+        54211
+      ],
+      "transmitters": {
+        "5340": {
+          "rc": 0,
+          "fallbacks": 0,
+          "device_numbers": [
+            53210,
+            53211
+          ],
+          "paced": true
+        },
+        "54L15": {
+          "rc": 0,
+          "fallbacks": 0,
+          "device_numbers": [
+            54210,
+            54211
+          ],
+          "paced": true
+        }
+      },
+      "results": {
+        "Garmin": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\C_multi_2_Garmin.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\C_multi_2_Garmin.log",
+          "exit": 1,
+          "wall_s": 301.48399999999674,
+          "counts": {
+            "missed": 196,
+            "sent": 4837,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 52,
+                "sent": 1202,
+                "basis": "wall_clock",
+                "loss_pct": 4.3261231281198,
+                "device_number": 53210
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 49,
+                "sent": 1218,
+                "basis": "wall_clock",
+                "loss_pct": 4.022988505747127,
+                "device_number": 53211
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 51,
+                "sent": 1217,
+                "basis": "wall_clock",
+                "loss_pct": 4.19063270336894,
+                "device_number": 54210
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 44,
+                "sent": 1200,
+                "basis": "wall_clock",
+                "loss_pct": 3.6666666666666665,
+                "device_number": 54211
+              }
+            }
+          },
+          "rssi_dbm_mean": null,
+          "problems": []
+        },
+        "Feather": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\C_multi_2_Feather.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\C_multi_2_Feather.log",
+          "exit": 1,
+          "wall_s": 301.5,
+          "counts": {
+            "missed": 40,
+            "sent": 4832,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 5,
+                "sent": 1202,
+                "basis": "wall_clock",
+                "loss_pct": 0.415973377703827,
+                "device_number": 53210
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 18,
+                "sent": 1218,
+                "basis": "wall_clock",
+                "loss_pct": 1.477832512315271,
+                "device_number": 53211
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 15,
+                "sent": 1214,
+                "basis": "wall_clock",
+                "loss_pct": 1.2355848434925865,
+                "device_number": 54210
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 2,
+                "sent": 1198,
+                "basis": "wall_clock",
+                "loss_pct": 0.1669449081803005,
+                "device_number": 54211
+              }
+            }
+          },
+          "rssi_dbm_mean": -36.00479966611018,
+          "problems": []
+        },
+        "Dongle": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\C_multi_2_Dongle.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-garmin-compare\\rerun\\C_multi_2_Dongle.log",
+          "exit": 1,
+          "wall_s": 301.5,
+          "counts": {
+            "missed": 46,
+            "sent": 4829,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 5,
+                "sent": 1201,
+                "basis": "wall_clock",
+                "loss_pct": 0.4163197335553705,
+                "device_number": 53210
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 19,
+                "sent": 1218,
+                "basis": "wall_clock",
+                "loss_pct": 1.5599343185550083,
+                "device_number": 53211
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 18,
+                "sent": 1213,
+                "basis": "wall_clock",
+                "loss_pct": 1.4839241549876339,
+                "device_number": 54210
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 4,
+                "sent": 1197,
+                "basis": "wall_clock",
+                "loss_pct": 0.3341687552213868,
+                "device_number": 54211
+              }
+            }
+          },
+          "rssi_dbm_mean": -31.989964457453482,
+          "problems": []
+        }
+      },
+      "warnings": [],
+      "commands": [
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_sim.py",
+          "--port",
+          "COM5",
+          "--baud",
+          "115200",
+          "--seconds",
+          "330",
+          "--device-number",
+          "53210",
+          "--profile",
+          "power",
+          "--profile",
+          "heart-rate"
+        ],
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_sim.py",
+          "--port",
+          "COM4",
+          "--baud",
+          "115200",
+          "--seconds",
+          "330",
+          "--device-number",
+          "54210",
+          "--profile",
+          "csc",
+          "--profile",
+          "fec-treadmill"
+        ]
+      ]
+    }
+  ]
+}

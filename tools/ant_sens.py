@@ -20,6 +20,11 @@ repeatable distance this bench does not have.
     python tools/ant_sens.py --tx-serial 1234 --rx-serial 5678 --repeat 2 \
         --json sens.json
 
+    # several receivers hearing the SAME rungs at the same moment, one knee
+    # each - the only form whose between-receiver differences mean anything
+    python tools/ant_sens.py --tx-port COM4 --rungs fine --tx-part nrf54l15 \
+        --rx "Feather=usb:755972D7183A6183" --rx "Garmin=usb:006"
+
 Exit status: 0 if the run (or, under `--repeat`, the agreement between runs)
 passes the gate; 1 otherwise, including any rig setup failure.
 
@@ -33,9 +38,12 @@ transmitter's own event counter, is read out of that analyser's summary.
 **Ladder range.** The six ANT power levels span -20 to +8 dBm (28 dB). With
 `--rungs fine` and a transmitter carrying the custom byte of
 MESG_CHANNEL_RADIO_TX_POWER (0x60), the nRF52840 register table reaches
--40 dBm (48 dB). If the bottom rung still shows no loss, the knee was not
-reached - this reports that rather than extrapolating a fabricated figure; move
-the boards apart or add absorber and rerun.
+-40 dBm (48 dB), the nRF5340 network core's 0 to -40 dBm (its ceiling is
+0 dBm) and the nRF54L15's +8 to -28 dBm (its -40/-46 dBm settings are 11-bit
+register values the one custom byte cannot carry). If the bottom rung still
+shows no loss, the knee was not reached - this reports that rather than
+extrapolating a fabricated figure; move the boards apart or add absorber and
+rerun.
 
 **The RSSI slope check is not decoration.** Every rung's mean RSSI should fall
 ~1 dB per commanded dB. It won't if `CONFIG_ANT_DONGLE_TX_POWER_BOOST` folds
@@ -71,6 +79,7 @@ sys.path.insert(0, __file__.rsplit("\\", 1)[0].rsplit("/", 1)[0])
 import ant_pages as ap  # noqa: E402
 import ant_sim  # noqa: E402
 import ant_verify  # noqa: E402
+from ant_multi_verify import Target, parse_target  # noqa: E402
 from ant_probe import (  # noqa: E402
     EP_OUT,
     FrameReader,
@@ -107,11 +116,44 @@ DBM_LEVEL = {dbm: level for level, dbm in LEVEL_DBM.items()}
 # same byte means two different powers, with no error on the wrong one. Only
 # parts with an entry here can drive a fine ladder; the RSSI slope check below
 # catches a wrong --tx-part.
-PART_FINE_DBM = {
-    # radiant/src/radiant_radio_nrf.c radiant_txp_table[], which is every
-    # setting the part has. The register value is the dBm in two's complement.
-    "nrf52840": (8, 7, 6, 5, 4, 3, 2, 0, -4, -8, -12, -16, -20, -40),
+#
+# {dBm: register byte}. Every value is copied from the NCS MDK's
+# RADIO_TXPOWER_TXPOWER_* enumerators (C:\ncs\v3.4.0\modules\hal\nordic\nrfx\
+# bsp\stable\mdk\), never derived from a formula: the firmware writes the byte
+# straight to NRF_RADIO->TXPOWER (apply_power()'s use_raw), so a wrong entry is
+# a wrong power with no error anywhere.
+PART_FINE_DBM: dict[str, dict[int, int]] = {
+    # nrf52840_bitfields.h, as radiant/src/radiant_radio_nrf.c's
+    # radiant_txp_table[] carries it: signed dBm in two's complement.
+    "nrf52840": {dbm: dbm & 0xFF
+                 for dbm in (8, 7, 6, 5, 4, 3, 2, 0, -4, -8, -12, -16, -20,
+                             -40)},
+    # nrf5340_network_bitfields.h. Also two's complement, but the ceiling is
+    # 0 dBm in silicon (no Pos* enumerators at all) and -1..-8 is a 1 dB
+    # ladder the nRF52840 lacks. Neg30dBm (0xE2) is omitted: the header marks
+    # it "Deprecated enumerator - -40 dBm", so it is not a -30 dBm rung.
+    "nrf5340net": {0: 0x00, -1: 0xFF, -2: 0xFE, -3: 0xFD, -4: 0xFC,
+                   -5: 0xFB, -6: 0xFA, -7: 0xF9, -8: 0xF8, -12: 0xF4,
+                   -16: 0xF0, -20: 0xEC, -40: 0xD8},
+    # nrf54l15_types.h. NOT dBm at all: +8 is 0x3F and 0 is 0x18. The field
+    # is 11 bits wide and Neg40dBm (0x130) / Neg46dBm (0x110) do not fit the
+    # one custom byte the wire carries (apps/common/ant_radio_radiant.c holds
+    # it as uint8_t), so -28 dBm is the floor of a fine ladder on this part.
+    # Neg22dBm is omitted because the header gives it 0x002, the same value as
+    # Neg20dBm - one register value cannot be two rungs.
+    "nrf54l15": {8: 0x3F, 7: 0x39, 6: 0x33, 5: 0x2D, 4: 0x28, 3: 0x23,
+                 2: 0x1F, 1: 0x1B, 0: 0x18, -1: 0x15, -2: 0x13, -3: 0x11,
+                 -4: 0x0F, -5: 0x0D, -6: 0x0B, -7: 0x0A, -8: 0x09, -9: 0x08,
+                 -10: 0x07, -12: 0x06, -14: 0x05, -16: 0x04, -18: 0x03,
+                 -20: 0x02, -28: 0x01},
 }
+
+# The highest power each part can actually transmit. A named ANT level above
+# this is clamped by the firmware (radiant_channel.c against
+# caps.tx_power_max_dbm), so a ladder rung above it would be measured at the
+# ceiling while labelled as something louder - and the RSSI slope check would
+# then fail the whole ladder for a reason that is not the dial.
+PART_MAX_DBM = {"nrf52840": 8, "nrf5340net": 0, "nrf54l15": 8}
 
 
 def encode_power(dbm: int, part: str | None = None) -> tuple[int, int]:
@@ -121,6 +163,10 @@ def encode_power(dbm: int, part: str | None = None) -> tuple[int, int]:
     nothing part-specific. Anything else needs the custom escape, which is a raw
     register value - so it needs `part`, and refuses rather than guessing.
     """
+    if part is not None and dbm > PART_MAX_DBM.get(part, dbm):
+        raise ValueError(f"{part} cannot transmit at {dbm} dBm; its ceiling "
+                         f"is {PART_MAX_DBM[part]} dBm and the firmware would "
+                         f"clamp the rung there while it is labelled {dbm}")
     if dbm in DBM_LEVEL:
         return DBM_LEVEL[dbm], 0
     if part is None:
@@ -137,7 +183,7 @@ def encode_power(dbm: int, part: str | None = None) -> tuple[int, int]:
     if dbm not in PART_FINE_DBM[part]:
         raise ValueError(f"{part} has no {dbm} dBm setting; it has "
                          f"{sorted(PART_FINE_DBM[part])}")
-    return RADIO_TX_POWER_LVL_CUSTOM, dbm & 0xFF
+    return RADIO_TX_POWER_LVL_CUSTOM, PART_FINE_DBM[part][dbm]
 
 
 def ladder_dbm(rungs: str, part: str | None, top: int | None = None,
@@ -528,10 +574,58 @@ def measure_rung(rx_dev, rx_reader, channel: int, profile: str, seconds: float,
     }
 
 
-def run_ladder(rx_dev, rx_reader, channel: int, profile: str, rungs: list[int],
-               part: str | None, seconds: float, settle: float,
-               master: MasterDriver, verbose: bool) -> list[dict]:
-    steps = []
+def measure_rung_all(receivers: list[tuple[str, object, object]], channel: int,
+                     profile: str, seconds: float, master: MasterDriver,
+                     verbose: bool, measure=None) -> dict[str, dict]:
+    """One rung on every receiver at once: one thread per receiver, all
+    listening to the same transmitted packets in the same window.
+
+    That simultaneity is the whole point of a multi-receiver ladder. Two
+    receivers measured one after the other sit in two different rooms as far
+    as this bench is concerned (run-to-run drift is as large as the effects
+    being compared); measured together, any difference is the receiver's.
+
+    `measure` defaults to measure_rung and is a parameter so the threading can
+    be tested without a radio. A receiver whose thread raises gets an `error`
+    entry instead of a step, rather than taking the other receivers' rung down
+    with it.
+    """
+    measure = measure or measure_rung
+    if len(receivers) == 1:
+        name, dev, reader = receivers[0]
+        return {name: measure(dev, reader, channel, profile, seconds, master,
+                              verbose)}
+
+    out: dict[str, dict] = {}
+    lock = threading.Lock()
+
+    def one(name, dev, reader):
+        try:
+            step = measure(dev, reader, channel, profile, seconds, master,
+                           verbose)
+        except Exception as exc:  # noqa: BLE001 - reported, not swallowed
+            step = {"error": f"{type(exc).__name__}: {exc}"}
+        with lock:
+            out[name] = step
+
+    threads = [threading.Thread(target=one, args=r, daemon=True,
+                                name=f"ant-sens-rx-{r[0]}")
+               for r in receivers]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    # Receiver order, not completion order, so the JSON is stable.
+    return {name: out[name] for name, _, _ in receivers}
+
+
+def run_ladder_multi(receivers: list[tuple[str, object, object]], channel: int,
+                     profile: str, rungs: list[int], part: str | None,
+                     seconds: float, settle: float, master: MasterDriver,
+                     verbose: bool, measure=None) -> dict[str, list[dict]]:
+    """The ladder, measured on every receiver at each rung. Returns
+    {receiver name: steps}, each list in rung order."""
+    steps: dict[str, list[dict]] = {name: [] for name, _, _ in receivers}
     for dbm in rungs:
         level, custom = encode_power(dbm, part)
         if not master.set_power(level, custom):
@@ -546,18 +640,33 @@ def run_ladder(rx_dev, rx_reader, channel: int, profile: str, rungs: list[int],
         # Give the master a slot or two at the new power before anything is
         # counted. A rung that includes the change includes a partial rung.
         time.sleep(settle)
-        step = measure_rung(rx_dev, rx_reader, channel, profile, seconds,
-                            master, verbose)
-        step["tx_power_dbm"] = dbm
-        step["tx_level"] = level
-        step["tx_custom"] = custom
-        steps.append(step)
-        if verbose:
-            rssi = step["rssi_dbm_mean"]
-            print(f"  {dbm:+4d} dBm: loss {step['loss_pct']:6.2f} % "
-                  f"({step['loss_basis']}), {step['packets']} packets"
-                  + (f", RSSI {rssi:.1f} dBm" if rssi is not None else ""))
+        rung = measure_rung_all(receivers, channel, profile, seconds, master,
+                                verbose, measure)
+        for name, step in rung.items():
+            if "error" in step:
+                print(f"  ! {name} at {dbm:+d} dBm: {step['error']} - rung "
+                      f"dropped for this receiver")
+                continue
+            step["tx_power_dbm"] = dbm
+            step["tx_level"] = level
+            step["tx_custom"] = custom
+            steps[name].append(step)
+            if verbose:
+                rssi = step["rssi_dbm_mean"]
+                who = f"{name}: " if len(receivers) > 1 else ""
+                print(f"  {dbm:+4d} dBm: {who}loss {step['loss_pct']:6.2f} % "
+                      f"({step['loss_basis']}), {step['packets']} packets"
+                      + (f", RSSI {rssi:.1f} dBm" if rssi is not None else ""))
     return steps
+
+
+def run_ladder(rx_dev, rx_reader, channel: int, profile: str, rungs: list[int],
+               part: str | None, seconds: float, settle: float,
+               master: MasterDriver, verbose: bool) -> list[dict]:
+    """The single-receiver ladder, kept for callers of the old signature."""
+    return run_ladder_multi([("rx", rx_dev, rx_reader)], channel, profile,
+                            rungs, part, seconds, settle, master,
+                            verbose)["rx"]
 
 
 def derive(steps: list[dict], target_pct: float) -> dict:
@@ -620,12 +729,41 @@ def open_master(args, verbose: bool):
     return dev, reader, sensor
 
 
-def open_receiver(args, verbose: bool):
-    dev = open_device(verbose, serial=args.rx_serial, port=args.rx_port,
-                      baud=args.rx_baud or args.baud)
+def receiver_targets(args) -> list[Target]:
+    """Who listens. `--rx` (repeatable, NAME=usb:SERIAL|port:COMn) or the
+    single-receiver `--rx-serial` / `--rx-port`, never both - mixing them would
+    leave it unclear which one the top-level JSON fields describe."""
+    single = args.rx_serial is not None or args.rx_port is not None
+    if args.rx and single:
+        raise ValueError("give receivers either as --rx (repeatable) or as "
+                         "--rx-serial/--rx-port, not both")
+    if args.rx:
+        names = [t.name for t in args.rx]
+        if len(set(names)) != len(names):
+            raise ValueError(f"--rx names must be unique, got {names}: the "
+                             f"per-receiver results are keyed by name")
+        return list(args.rx)
+    if args.rx_serial is not None and args.rx_port is not None:
+        raise ValueError("give one of --rx-serial / --rx-port")
+    if args.rx_port is not None:
+        return [Target("rx", "port", args.rx_port)]
+    # A bare --rx-serial, or nothing at all (open_device then takes the only
+    # USB stick attached, as this tool always has).
+    return [Target("rx", "usb", args.rx_serial)]
+
+
+def open_receiver(args, verbose: bool, target: Target | None = None):
+    if target is None:
+        target = receiver_targets(args)[0]
+    if target.kind == "port":
+        dev = open_device(verbose, port=target.value,
+                          baud=args.rx_baud or args.baud)
+    else:
+        dev = open_device(verbose, serial=target.value)
     reader = FrameReader(dev)
     if not reset_stack(dev, reader):
-        sys.exit("the receiver sent no startup message after reset")
+        sys.exit(f"the receiver {target.name} sent no startup message after "
+                 f"reset")
     # 0xE0: channel id, RSSI and the receive timestamp. RSSI is not optional
     # here - it is the axis the dial is checked against, and without it this
     # tool cannot tell a working ladder from a stuck one.
@@ -654,8 +792,20 @@ def close_channel(dev, reader, channel: int, what: str) -> None:
 
 
 def report(result: dict) -> None:
-    for index, ladder in enumerate(result["ladders"], start=1):
-        print(f"\n=== ladder {index} of {len(result['ladders'])} ===")
+    receivers = result.get("receivers") or {"rx": {"ladders": result["ladders"]}}
+    for name, block in receivers.items():
+        if len(receivers) > 1:
+            print(f"\n##### receiver {name} #####")
+        _report_ladders(block["ladders"])
+
+    for check in result["checks"]:
+        print(f"\n{'OK  ' if check['pass'] else 'FAIL'} {check['name']}: "
+              f"{check['detail']}")
+
+
+def _report_ladders(ladders: list[dict]) -> None:
+    for index, ladder in enumerate(ladders, start=1):
+        print(f"\n=== ladder {index} of {len(ladders)} ===")
         for step in ladder["steps"]:
             rssi = step["rssi_dbm_mean"]
             print(f"  {step['tx_power_dbm']:+4d} dBm  "
@@ -677,9 +827,116 @@ def report(result: dict) -> None:
                       f"{ladder['rssi_reference']['tx_power_dbm']:+d} dBm rung")
         print(f"  dial: {ladder['dial_detail']}")
 
-    for check in result["checks"]:
-        print(f"\n{'OK  ' if check['pass'] else 'FAIL'} {check['name']}: "
-              f"{check['detail']}")
+
+def assemble(ladders_by_rx: dict[str, list[dict]], *, profile: str,
+             rf_channel: int, seconds: float, rungs: list[int],
+             part: str | None, max_repeat_delta_db: float, repeat: int,
+             master_sent: int, master_fallbacks: int,
+             master_failures: list[str]) -> dict:
+    """The result document, from already-derived ladders.
+
+    `ladders_by_rx` is {receiver name: [ladder, ...]} in receiver order, each
+    ladder being {"steps": [...]} plus derive()'s block. With more than one
+    receiver every per-ladder check is made per receiver and named after it;
+    the top-level `ladders`, `steps`, `loss5pct_*` and `repeat_spread_db`
+    describe the FIRST receiver, so a single-receiver consumer
+    (archive/benchmarks/baseline.schema.json) reads exactly what it always did.
+    """
+    names = list(ladders_by_rx)
+    multi = len(names) > 1
+    checks: list[dict] = []
+
+    def check(name: str, ok: bool, detail: str) -> None:
+        checks.append({"name": name, "pass": bool(ok), "detail": detail})
+
+    receivers: dict[str, dict] = {}
+    for name in names:
+        ladders = ladders_by_rx[name]
+        knees = [ladder["loss5pct_tx_power_dbm"] for ladder in ladders]
+        spread = agreement_db(knees)
+        tag = f" [{name}]" if multi else ""
+        check("knee reached" + tag,
+              bool(ladders) and all(k is not None for k in knees),
+              "; ".join(ladder["knee"]["reason"] for ladder in ladders)
+              or "no ladder was measured")
+        check("dial" + tag,
+              bool(ladders) and all(ladder["dial_trustworthy"]
+                                    for ladder in ladders),
+              "; ".join(ladder["dial_detail"] for ladder in ladders)
+              or "no ladder was measured")
+        if spread is not None:
+            # The Phase 0 gate. Everything downstream of this file is graded
+            # against a 1 dB claim, and an instrument whose own repeat is
+            # worse than 1 dB cannot grade one - so this failing means Phases
+            # 2 and 5 have no gate, not that this run was unlucky.
+            check("repeatability" + tag, spread <= max_repeat_delta_db,
+                  f"{len(knees)} ladders spread {spread:.2f} dB "
+                  f"(limit {max_repeat_delta_db:.2f} dB). Below the limit the "
+                  f"instrument can grade a 1 dB claim; above it, nothing that "
+                  f"depends on one has a gate")
+        elif repeat > 1:
+            check("repeatability" + tag, False,
+                  "not every ladder produced a 5 % point, so they cannot be "
+                  "compared")
+        first = ladders[0] if ladders else {}
+        receivers[name] = {
+            "ladders": ladders,
+            "steps": first.get("steps", []),
+            "knee": first.get("knee"),
+            "loss5pct_tx_power_dbm": knees[0] if knees else None,
+            "loss5pct_rssi_dbm": first.get("loss5pct_rssi_dbm"),
+            "rssi_reference": first.get("rssi_reference"),
+            "rssi_slope": first.get("rssi_slope"),
+            "dial_trustworthy": (bool(ladders)
+                                 and all(ladder["dial_trustworthy"]
+                                         for ladder in ladders)),
+            "dial_detail": first.get("dial_detail"),
+            "repeat_spread_db": spread,
+        }
+
+    # Transmitter-side checks, once: there is one master however many listen.
+    if master_fallbacks:
+        check("EVENT_TX pacing", False,
+              f"{master_fallbacks} of {master_sent} messages went out on the "
+              f"wall-clock fallback rather than paced by EVENT_TX, so the "
+              f"transmitter's rate was guessed and the loss figures are not "
+              f"the link's")
+    else:
+        check("EVENT_TX pacing", True,
+              f"all {master_sent} messages paced by EVENT_TX")
+    for failure in master_failures:
+        check("transmit power accepted", False, failure)
+
+    head = receivers[names[0]] if names else {}
+    head_ladders = head.get("ladders", [])
+    return {
+        "method": "tx_ladder",
+        "transmitter": "ant_sim_py",
+        "profile": profile,
+        "rf_channel": rf_channel,
+        "seconds_per_step": seconds,
+        "rungs": rungs,
+        "tx_part": part,
+        "ladders": head_ladders,
+        # The fields archive/benchmarks/baseline.schema.json names, lifted from
+        # the first ladder, so this block can be pasted into a baseline whole.
+        "steps": [{"tx_power_dbm": s["tx_power_dbm"],
+                   "loss_exact_pct": s["loss_pct"],
+                   # Which counter the figure came from. Named, because past
+                   # the knee it is not the transmitter's event counter and a
+                   # field called loss_exact_pct would otherwise say it was.
+                   "loss_basis": s["loss_basis"],
+                   "packets": s["packets"],
+                   "rx_fail": s["rx_fail"],
+                   "rssi_dbm_mean": s["rssi_dbm_mean"]}
+                  for s in head_ladders[0]["steps"]] if head_ladders else [],
+        "loss5pct_tx_power_dbm": head.get("loss5pct_tx_power_dbm"),
+        "loss5pct_rssi_dbm": head.get("loss5pct_rssi_dbm"),
+        "repeat_spread_db": head.get("repeat_spread_db"),
+        "receivers": receivers,
+        "checks": checks,
+        "pass": all(c["pass"] for c in checks),
+    }
 
 
 def main() -> int:
@@ -735,6 +992,13 @@ def main() -> int:
     parser.add_argument("--tx-port", help="serial port of the transmitter")
     parser.add_argument("--rx-serial", help="serial suffix of the receiver")
     parser.add_argument("--rx-port", help="serial port of the receiver")
+    parser.add_argument("--rx", type=parse_target, action="append",
+                        default=[], metavar="NAME=usb:SERIAL|port:COMn",
+                        help="a receiver; repeat for several, all measured "
+                             "at the same moment on every rung (one thread "
+                             "each), giving one knee per receiver. Replaces "
+                             "--rx-serial/--rx-port. --rx-baud applies to "
+                             "every port: receiver")
     parser.add_argument("--baud", type=int, default=115200,
                         help="serial baud for both sides, unless overridden "
                              "per-side (the TI LaunchXL's XDS110 backchannel "
@@ -759,7 +1023,15 @@ def main() -> int:
 
     part = args.tx_part if args.rungs == "fine" else None
     try:
-        rungs = ladder_dbm(args.rungs, part, args.top_dbm, args.bottom_dbm)
+        # A part with a ceiling below +8 dBm (the nRF5340 network core's is
+        # 0) cannot run the coarse ladder's top rungs either: the firmware
+        # clamps them, so trim to the ceiling whichever rung set is in use.
+        top = args.top_dbm
+        ceiling = PART_MAX_DBM.get(args.tx_part)
+        if ceiling is not None and (top is None or top > ceiling):
+            top = ceiling
+        rungs = ladder_dbm(args.rungs, part, top, args.bottom_dbm)
+        targets = receiver_targets(args)
     except ValueError as exc:
         sys.exit(str(exc))
 
@@ -771,97 +1043,47 @@ def main() -> int:
 
     print("\nOpening the transmitter")
     tx_dev, tx_reader, sensor = open_master(args, verbose)
-    print("\nOpening the receiver")
-    rx_dev, rx_reader = open_receiver(args, verbose)
+    receivers = []
+    for target in targets:
+        print(f"\nOpening the receiver {target.name} "
+              f"({target.kind}:{target.value})")
+        rx_dev, rx_reader = open_receiver(args, verbose, target)
+        receivers.append((target.name, rx_dev, rx_reader))
 
     master = MasterDriver(tx_dev, tx_reader, sensor, verbose)
     master.start()
 
-    ladders = []
+    ladders_by_rx: dict[str, list[dict]] = {t.name: [] for t in targets}
     try:
         for pass_index in range(args.repeat):
             print(f"\nLadder {pass_index + 1} of {args.repeat}")
-            steps = run_ladder(rx_dev, rx_reader, args.channel, args.profile,
-                               rungs, part, args.seconds, args.settle, master,
-                               verbose)
-            ladder = {"steps": steps}
-            ladder.update(derive(steps, args.target))
-            ladders.append(ladder)
+            by_rx = run_ladder_multi(receivers, args.channel, args.profile,
+                                     rungs, part, args.seconds, args.settle,
+                                     master, verbose)
+            for name, steps in by_rx.items():
+                ladder = {"steps": steps}
+                ladder.update(derive(steps, args.target))
+                ladders_by_rx[name].append(ladder)
     finally:
         master.stop()
         master.join(timeout=5.0)
         print("\nClosing")
-        close_channel(rx_dev, rx_reader, args.channel, "rx")
+        for name, rx_dev, rx_reader in receivers:
+            close_channel(rx_dev, rx_reader, args.channel, f"rx {name}")
         close_channel(tx_dev, tx_reader, args.channel, "tx")
-        close_device(rx_dev)
+        for _, rx_dev, _ in receivers:
+            close_device(rx_dev)
         close_device(tx_dev)
 
-    knees = [ladder["loss5pct_tx_power_dbm"] for ladder in ladders]
-    checks = []
-
-    def check(name: str, ok: bool, detail: str) -> None:
-        checks.append({"name": name, "pass": bool(ok), "detail": detail})
-
-    check("knee reached", all(k is not None for k in knees),
-          "; ".join(ladder["knee"]["reason"] for ladder in ladders))
-    check("dial", all(ladder["dial_trustworthy"] for ladder in ladders),
-          "; ".join(ladder["dial_detail"] for ladder in ladders))
-    if master.fallbacks:
-        check("EVENT_TX pacing", False,
-              f"{master.fallbacks} of {master.sent} messages went out on the "
-              f"wall-clock fallback rather than paced by EVENT_TX, so the "
-              f"transmitter's rate was guessed and the loss figures are not "
-              f"the link's")
-    else:
-        check("EVENT_TX pacing", True,
-              f"all {master.sent} messages paced by EVENT_TX")
-    for failure in master.failures:
-        check("transmit power accepted", False, failure)
-
-    spread = agreement_db(knees)
-    if spread is not None:
-        # The Phase 0 gate. Everything downstream of this file is graded against
-        # a 1 dB claim, and an instrument whose own repeat is worse than 1 dB
-        # cannot grade one - so this failing means Phases 2 and 5 have no gate,
-        # not that this run was unlucky.
-        check("repeatability", spread <= args.max_repeat_delta_db,
-              f"{len(knees)} ladders spread {spread:.2f} dB "
-              f"(limit {args.max_repeat_delta_db:.2f} dB). Below the limit the "
-              f"instrument can grade a 1 dB claim; above it, nothing that "
-              f"depends on one has a gate")
-    elif args.repeat > 1:
-        check("repeatability", False,
-              "not every ladder produced a 5 % point, so they cannot be "
-              "compared")
-
-    result = {
-        "method": "tx_ladder",
-        "transmitter": "ant_sim_py",
-        "profile": args.profile,
-        "rf_channel": args.rf_freq,
-        "seconds_per_step": args.seconds,
-        "rungs": rungs,
-        "tx_part": part,
-        "ladders": ladders,
-        # The fields archive/benchmarks/baseline.schema.json names, lifted from
-        # the first ladder, so this block can be pasted into a baseline whole.
-        "steps": [{"tx_power_dbm": s["tx_power_dbm"],
-                   "loss_exact_pct": s["loss_pct"],
-                   # Which counter the figure came from. Named, because past
-                   # the knee it is not the transmitter's event counter and a
-                   # field called loss_exact_pct would otherwise say it was.
-                   "loss_basis": s["loss_basis"],
-                   "packets": s["packets"],
-                   "rx_fail": s["rx_fail"],
-                   "rssi_dbm_mean": s["rssi_dbm_mean"]}
-                  for s in ladders[0]["steps"]] if ladders else [],
-        "loss5pct_tx_power_dbm": knees[0] if knees else None,
-        "loss5pct_rssi_dbm": (ladders[0]["loss5pct_rssi_dbm"]
-                              if ladders else None),
-        "repeat_spread_db": spread,
-        "checks": checks,
-        "pass": all(c["pass"] for c in checks),
-    }
+    result = assemble(ladders_by_rx, profile=args.profile,
+                      rf_channel=args.rf_freq, seconds=args.seconds,
+                      rungs=rungs, part=part,
+                      max_repeat_delta_db=args.max_repeat_delta_db,
+                      repeat=args.repeat, master_sent=master.sent,
+                      master_fallbacks=master.fallbacks,
+                      master_failures=master.failures)
+    result["receiver_targets"] = {t.name: f"{t.kind}:{t.value}"
+                                  for t in targets}
 
     stack.close()
 

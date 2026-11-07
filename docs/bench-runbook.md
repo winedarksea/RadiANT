@@ -132,3 +132,54 @@ self_channels: bound device 33333 (type 0x78, trans 5) on channel 7
                as source 0, period 8070
 bridge_pump: liveness: 3 binding(s) went STALE (total 3, no_period 0)
 ```
+
+---
+
+## Comparing against a reference dongle
+
+`tools/ant_compare.py` puts RadiANT receivers head to head with a reference
+stick (the Garmin ANT USB-m) and grades each one Equal, Better, Worse or
+Inconclusive against rules fixed in the tool before any data exists. It does
+not need the bench to be fit in the sense above, because it never compares
+two sittings: every receiver hears the same DK master in the same window, so
+only the gap between a receiver and the reference counts. The room's
+5-8 % moves everyone together. It still costs statistical power, though: at
+high loss the Wilson intervals widen and more verdicts come out Inconclusive.
+That is the honest result, not a reason to loosen the margin.
+
+```powershell
+# 0. Re-read COM ports and the dongle's serial, edit them into the rig, then
+#    shake out each phase before the real run:
+python tools\ant_compare.py --rig tools\compare_rigs\2026-11-07-fixed.toml --dry-run
+python tools\ant_compare.py --rig tools\compare_rigs\2026-11-07-fixed.toml `
+       --phases identity,loss --rounds A --set phases.loss.seconds=30 `
+       --set phases.loss.repeats=1 --out $env:TEMP\compare-shakeout
+# 1. The full run (about 2.5 h, unattended once it starts):
+python tools\ant_compare.py --rig tools\compare_rigs\2026-11-07-fixed.toml
+```
+
+Its phases are identity, loss (×2), multi, acquire, ladder, acked and usb. The
+results directory holds every child's JSON and log, `summary.json` and
+`summary.md`. Re-running a subset into the same directory replaces only those
+records; `--report-only` re-derives the verdicts without touching hardware.
+
+**A re-placement round is a copy of the rig file.** Edit `[placement]`, any
+addresses that moved, and `meta.results_dir`, then rerun with
+`--phases loss,ladder`. Antenna and position are part of every figure until a
+swap round separates them, so compare against the first run's placement
+block, never its numbers alone.
+
+Traps this tool already handles, so don't work around them by hand:
+
+- **It never kills `ant_sim`.** A killed sim leaves its master channels on air.
+  Each transmitter runs to its own end, and every phase starts by resetting
+  each DK with `ant_probe` until rc 0 (the 5340's first probe after a flash
+  often fails).
+- **Device numbers are pinned per round and phase** (5340 → 53xxx, 54L15 →
+  54xxx), never 14871, so a leftover master is never acquired by mistake. A
+  window whose receiver heard a different number is flagged.
+- **A short window is flagged**, because a dropped COM port can produce a
+  truncated run that still looks like a pass.
+- **The 54L15's fine ladder bottoms out at −28 dBm.** Its −40/−46 dBm settings
+  are 11-bit register values, and the wire's custom TX-power byte is one byte.
+  If no knee is reached, move the transmitter away; don't extrapolate.

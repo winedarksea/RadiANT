@@ -36,6 +36,8 @@ def curve(points, rssi_at_top: float | None = -35.0, samples: int = 240):
         steps.append({
             "tx_power_dbm": dbm,
             "loss_pct": loss,
+            "loss_basis": "event_counter",
+            "rx_fail": 0,
             "packets": int(samples * (1.0 - loss / 100.0)),
             "rssi_dbm_mean": (None if rssi_at_top is None
                               else rssi_at_top - (top - dbm)),
@@ -198,7 +200,21 @@ class TestTheLadderItself(unittest.TestCase):
         with self.assertRaises(ValueError):
             ant_sens.ladder_dbm("fine", None)
         with self.assertRaises(ValueError):
-            ant_sens.ladder_dbm("fine", "nrf54l15")
+            ant_sens.ladder_dbm("fine", "nrf52832")
+
+    def test_the_5340_net_core_ladder_tops_out_at_zero(self):
+        fine = ant_sens.ladder_dbm("fine", "nrf5340net")
+        self.assertEqual(fine[0], 0)
+        self.assertEqual(fine[-1], -40)
+        self.assertNotIn(-30, fine, "Neg30dBm is a deprecated alias of -40")
+
+    def test_the_54l15_ladder_stops_where_one_byte_does(self):
+        fine = ant_sens.ladder_dbm("fine", "nrf54l15")
+        self.assertEqual(fine[0], 8)
+        self.assertEqual(fine[-1], -28)
+        self.assertNotIn(-22, fine, "shares 0x002 with -20 in the header")
+        # The extra resolution below -20 is the point of the 54L15 ladder.
+        self.assertTrue({-14, -18, -28} <= set(fine))
 
     def test_a_ladder_trimmed_to_one_rung_refuses(self):
         with self.assertRaises(ValueError):
@@ -228,12 +244,50 @@ class TestPowerEncoding(unittest.TestCase):
 
     def test_an_unknown_part_refuses(self):
         with self.assertRaises(ValueError) as raised:
-            ant_sens.encode_power(-8, "nrf54l15")
+            ant_sens.encode_power(-8, "nrf52832")
         self.assertIn("radiant_radio_nrf.c", str(raised.exception))
 
     def test_a_power_the_part_does_not_have_refuses(self):
         with self.assertRaises(ValueError):
             ant_sens.encode_power(-1, "nrf52840")
+
+    def test_54l15_register_values_are_the_mdk_ones_not_dbm(self):
+        # nrf54l15_types.h RADIO_TXPOWER_TXPOWER_*: the same byte means a
+        # different power on the nRF52840, which is the whole hazard.
+        cases = {7: 0x39, 1: 0x1B, -1: 0x15, -8: 0x09, -9: 0x08, -10: 0x07,
+                 -14: 0x05, -18: 0x03, -28: 0x01}
+        for dbm, reg in cases.items():
+            level, custom = ant_sens.encode_power(dbm, "nrf54l15")
+            self.assertEqual(level, ant_sens.RADIO_TX_POWER_LVL_CUSTOM)
+            self.assertEqual(custom, reg, f"{dbm} dBm")
+        self.assertNotEqual(ant_sens.encode_power(-8, "nrf54l15"),
+                            ant_sens.encode_power(-8, "nrf52840"))
+
+    def test_5340_register_values_are_twos_complement(self):
+        cases = {-1: 0xFF, -3: 0xFD, -7: 0xF9, -40: 0xD8}
+        for dbm, reg in cases.items():
+            self.assertEqual(ant_sens.encode_power(dbm, "nrf5340net")[1], reg)
+
+    def test_every_table_entry_round_trips_and_fits_one_byte(self):
+        for part, table in ant_sens.PART_FINE_DBM.items():
+            regs = []
+            for dbm in table:
+                level, custom = ant_sens.encode_power(dbm, part)
+                self.assertTrue(0 <= custom <= 0xFF, f"{part} {dbm}")
+                if level == ant_sens.RADIO_TX_POWER_LVL_CUSTOM:
+                    self.assertEqual(custom, table[dbm])
+                    regs.append(custom)
+                else:
+                    self.assertEqual(ant_sens.LEVEL_DBM[level], dbm)
+            self.assertEqual(len(regs), len(set(regs)),
+                             f"{part}: two rungs share a register value")
+
+    def test_a_named_level_above_the_ceiling_refuses(self):
+        # +4 dBm is a named ANT level, but the 5340 net core clamps it to 0;
+        # measuring it would label a 0 dBm rung "+4".
+        with self.assertRaises(ValueError):
+            ant_sens.encode_power(4, "nrf5340net")
+        self.assertEqual(ant_sens.encode_power(0, "nrf5340net"), (3, 0))
 
 
 @unittest.skipIf(ant_sens is None, "pyusb is not installed")
@@ -286,6 +340,119 @@ class TestDerivedBlock(unittest.TestCase):
         # `dial_trustworthy` says it's fiction.
         self.assertIsNotNone(derived["loss5pct_tx_power_dbm"])
         self.assertFalse(derived["dial_trustworthy"])
+
+
+class _Args:
+    """argparse.Namespace stand-in for receiver_targets()."""
+
+    def __init__(self, rx=(), rx_serial=None, rx_port=None):
+        self.rx = list(rx)
+        self.rx_serial = rx_serial
+        self.rx_port = rx_port
+
+
+@unittest.skipIf(ant_sens is None, "pyusb is not installed")
+class TestSeveralReceivers(unittest.TestCase):
+    def test_rx_parses_with_the_multi_verify_parser(self):
+        t = ant_sens.parse_target("Feather=usb:755972D7183A6183")
+        self.assertEqual((t.name, t.kind, t.value),
+                         ("Feather", "usb", "755972D7183A6183"))
+        targets = ant_sens.receiver_targets(_Args(rx=[
+            t, ant_sens.parse_target("L15=port:COM4")]))
+        self.assertEqual([x.name for x in targets], ["Feather", "L15"])
+
+    def test_the_single_receiver_forms_still_work(self):
+        self.assertEqual(ant_sens.receiver_targets(
+            _Args(rx_port="COM8"))[0].value, "COM8")
+        only = ant_sens.receiver_targets(_Args(rx_serial="5678"))[0]
+        self.assertEqual((only.name, only.kind, only.value),
+                         ("rx", "usb", "5678"))
+        # Nothing given: the one attached stick, as before.
+        self.assertIsNone(ant_sens.receiver_targets(_Args())[0].value)
+
+    def test_mixing_the_two_forms_or_duplicate_names_refuses(self):
+        t = ant_sens.parse_target("A=usb:1")
+        with self.assertRaises(ValueError):
+            ant_sens.receiver_targets(_Args(rx=[t], rx_serial="2"))
+        with self.assertRaises(ValueError):
+            ant_sens.receiver_targets(_Args(rx=[t, t]))
+
+    def test_every_receiver_is_measured_in_the_same_rung_concurrently(self):
+        import threading
+        barrier = threading.Barrier(3, timeout=5)
+
+        def fake(dev, reader, channel, profile, seconds, master, verbose):
+            # All three must be inside measure at once, or this times out -
+            # which is what proves they share one window.
+            barrier.wait()
+            return {"loss_pct": dev, "loss_basis": "event_counter",
+                    "packets": 240, "rssi_dbm_mean": -40.0,
+                    "rssi_samples": 240}
+
+        receivers = [("a", 1.0, None), ("b", 2.0, None), ("c", 3.0, None)]
+        out = ant_sens.measure_rung_all(receivers, 0, "power", 1.0, None,
+                                        False, measure=fake)
+        self.assertEqual(list(out), ["a", "b", "c"])
+        self.assertEqual([s["loss_pct"] for s in out.values()],
+                         [1.0, 2.0, 3.0])
+
+    def test_one_receiver_failing_does_not_take_the_rung_down(self):
+        def fake(dev, *_):
+            if dev == "bad":
+                raise OSError("port vanished")
+            return {"loss_pct": 0.0}
+
+        out = ant_sens.measure_rung_all([("ok", "ok", None),
+                                         ("bad", "bad", None)],
+                                        0, "power", 1.0, None, False,
+                                        measure=fake)
+        self.assertEqual(out["ok"], {"loss_pct": 0.0})
+        self.assertIn("port vanished", out["bad"]["error"])
+
+    def test_derive_runs_per_receiver_giving_one_knee_each(self):
+        loud = [(d, l) for d, l in SYNTHETIC]
+        deaf = [(d, min(100.0, l * 3)) for d, l in SYNTHETIC]
+        ladders = {
+            "good": [{"steps": curve(loud), **ant_sens.derive(curve(loud),
+                                                              5.0)}],
+            "bad": [{"steps": curve(deaf), **ant_sens.derive(curve(deaf),
+                                                             5.0)}],
+        }
+        result = ant_sens.assemble(
+            ladders, profile="power", rf_channel=57, seconds=60.0,
+            rungs=[d for d, _ in SYNTHETIC], part="nrf52840",
+            max_repeat_delta_db=1.0, repeat=1, master_sent=100,
+            master_fallbacks=0, master_failures=[])
+        good = result["receivers"]["good"]["loss5pct_tx_power_dbm"]
+        bad = result["receivers"]["bad"]["loss5pct_tx_power_dbm"]
+        self.assertAlmostEqual(good, -13.0)
+        self.assertGreater(bad, good, "a worse receiver has a higher knee")
+        names = [c["name"] for c in result["checks"]]
+        self.assertIn("knee reached [good]", names)
+        self.assertIn("dial [bad]", names)
+        self.assertEqual(names.count("EVENT_TX pacing"), 1,
+                         "one transmitter, one pacing check")
+
+    def test_a_single_receiver_keeps_the_old_json_shape(self):
+        steps = curve(SYNTHETIC)
+        ladder = {"steps": steps, **ant_sens.derive(steps, 5.0)}
+        result = ant_sens.assemble(
+            {"rx": [ladder]}, profile="power", rf_channel=57, seconds=60.0,
+            rungs=[d for d, _ in SYNTHETIC], part=None,
+            max_repeat_delta_db=1.0, repeat=1, master_sent=100,
+            master_fallbacks=0, master_failures=[])
+        # The fields archive/benchmarks/baseline.schema.json reads, with the
+        # same names and meaning as before --rx existed.
+        for key in ("method", "transmitter", "profile", "rf_channel",
+                    "seconds_per_step", "rungs", "tx_part", "ladders",
+                    "steps", "loss5pct_tx_power_dbm", "loss5pct_rssi_dbm",
+                    "repeat_spread_db", "checks", "pass"):
+            self.assertIn(key, result)
+        self.assertAlmostEqual(result["loss5pct_tx_power_dbm"], -13.0)
+        self.assertEqual(result["steps"][0]["loss_exact_pct"], 0.4)
+        self.assertEqual({c["name"] for c in result["checks"]},
+                         {"knee reached", "dial", "EVENT_TX pacing"})
+        self.assertTrue(result["pass"])
 
 
 if __name__ == "__main__":

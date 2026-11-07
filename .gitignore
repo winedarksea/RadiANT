@@ -6,6 +6,17 @@ build*/
 dist/
 # Local FE-C test artifacts and firmware package.
 archive/benchmarks/2026-10-19-fec/
+# Garmin comparison: ~760 per-window logs/JSONs stay local. Tracked: the
+# README, each run's rig + summary (summary.json embeds every window's counts),
+# and the device-number A/B's per-receiver results plus its script.
+archive/benchmarks/2026-11-07-garmin-compare/**
+!archive/benchmarks/2026-11-07-garmin-compare/**/
+!archive/benchmarks/2026-11-07-garmin-compare/**/README.md
+!archive/benchmarks/2026-11-07-garmin-compare/**/rig.toml
+!archive/benchmarks/2026-11-07-garmin-compare/**/summary.json
+!archive/benchmarks/2026-11-07-garmin-compare/**/summary.md
+!archive/benchmarks/2026-11-07-garmin-compare/devnum-ab/diag_b.ps1
+!archive/benchmarks/2026-11-07-garmin-compare/devnum-ab/*/*.json
 twister-out*/
 
 # Tool caches. Each of these regenerates on demand; none is an input to

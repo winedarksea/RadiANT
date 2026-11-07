@@ -40,6 +40,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -65,6 +66,140 @@ def parse_target(spec: str) -> Target:
     if kind not in ("usb", "port"):
         raise argparse.ArgumentTypeError(f"--target kind must be usb or port, got {kind!r}")
     return Target(name=name, kind=kind, value=value)
+
+
+def slug_of(name: str) -> str:
+    """The file stem a target's --json/log/antcap are written under."""
+    return "".join(c if c.isalnum() else "_" for c in name)
+
+
+def child_command(t: Target, seconds: float, device_numbers: list[int],
+                  extra: list[str], json_path: Path, baud: int = 115200,
+                  record_path: Path | None = None) -> list[str]:
+    """The ant_verify.py invocation for one target. Split out so the
+    orchestrator (tools/ant_compare.py) and the tests can see exactly what is
+    launched without launching it."""
+    cmd = [sys.executable, str(_HERE / "ant_verify.py"),
+           "--seconds", str(seconds),
+           "--json", str(json_path), "-q"]
+    for d in device_numbers:
+        cmd += ["--device-number", str(d)]
+    if t.kind == "usb":
+        cmd += ["--serial", t.value]
+    else:
+        cmd += ["--port", t.value, "--baud", str(baud)]
+    if record_path is not None:
+        cmd += ["--record", str(record_path)]
+    cmd += list(extra)
+    return cmd
+
+
+def run_targets(targets: list[Target], seconds: float,
+                device_numbers: list[int], extra: list[str], out_dir: Path,
+                record_dir: Path | None = None, baud: int = 115200,
+                prefix: str = "", verbose: bool = True) -> list[dict]:
+    """Launch one ant_verify.py per target, concurrently, and collect them.
+
+    Returns one entry per target, in the order given: `target`, `exit`,
+    `json`, `log`, `wall_s` (how long the child actually ran - a dropped COM
+    port gives a short run whose JSON can still look like a pass), and either
+    `data` (the child's JSON) or `error`.
+
+    `prefix` is prepended to every file stem so one results directory can hold
+    many windows (the orchestrator's L1/L2/acquire-cycle files) without one
+    overwriting another.
+    """
+    if "--record" in extra:
+        raise ValueError("--record in extra sends every target to one file; "
+                         "use record_dir")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if record_dir is not None:
+        record_dir.mkdir(parents=True, exist_ok=True)
+
+    procs = []
+    for t in targets:
+        slug = prefix + slug_of(t.name)
+        json_path = out_dir / f"{slug}.json"
+        log_path = out_dir / f"{slug}.log"
+        # A stale file from an earlier run would be read back as this run's.
+        json_path.unlink(missing_ok=True)
+        record_path = (record_dir / f"{slug}.antcap"
+                       if record_dir is not None else None)
+        cmd = child_command(t, seconds, device_numbers, extra, json_path,
+                            baud, record_path)
+        log_f = open(log_path, "w", encoding="utf-8")
+        if verbose:
+            print(f"launching {t.name}: {' '.join(cmd)}")
+        started = time.monotonic()
+        proc = subprocess.Popen(cmd, stdout=log_f, stderr=subprocess.STDOUT)
+        procs.append((t, proc, json_path, log_path, log_f, started))
+
+    if verbose:
+        print(f"\n{len(procs)} target(s) running concurrently for "
+              f"{seconds:.0f} s ...")
+    results = []
+    for t, proc, json_path, log_path, log_f, started in procs:
+        rc = proc.wait()
+        wall = time.monotonic() - started
+        log_f.close()
+        entry = {"target": t.name, "exit": rc, "json": str(json_path),
+                 "log": str(log_path), "wall_s": wall}
+        if json_path.exists():
+            try:
+                entry["data"] = json.loads(json_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as e:
+                entry["error"] = f"bad json: {e}"
+        else:
+            entry["error"] = "no json written - see log"
+        results.append(entry)
+    return results
+
+
+def _fmt(value, spec: str) -> str:
+    return format(value, spec) if value is not None else "n/a"
+
+
+def print_summary(results: list[dict]) -> None:
+    header = (f"{'target':<24} {'loss_exact%':>11} {'unacct':>7} "
+              f"{'rssi dBm':>9} {'ttfp s':>7} {'pass':>5}")
+    print(header)
+    print("-" * len(header))
+    for r in results:
+        data = r.get("data", {})
+        d = data.get("derived", {})
+        unacct = data.get("accounting", {}).get("unaccounted")
+        pass_s = "OK" if data.get("pass") else "FAIL" if "data" in r else "ERR"
+        print(f"{r['target']:<24} {_fmt(d.get('loss_exact_pct'), '.2f'):>11} "
+              f"{_fmt(unacct, 'd'):>7} {_fmt(d.get('rssi_dbm_mean'), '.1f'):>9} "
+              f"{_fmt(d.get('time_to_first_packet_s'), '.2f'):>7} {pass_s:>5}")
+
+    # Per channel, only when there is more than one: on one channel it would
+    # restate the row above. The spread between receivers on the SAME channel
+    # is the comparison; the spread between channels on one receiver is a
+    # scheduling effect.
+    multi = [r for r in results
+             if len(r.get("data", {}).get("derived", {})
+                    .get("per_channel", {})) > 1]
+    if not multi:
+        return
+    print("\nper channel, exact loss %:")
+    keys: list[str] = []
+    labels: dict[str, str] = {}
+    for r in multi:
+        for key, entry in r["data"]["derived"]["per_channel"].items():
+            if key not in keys:
+                keys.append(key)
+                labels[key] = (f"ch{key} {entry.get('profile') or ''} "
+                               f"#{entry.get('device_number')}").strip()
+    print(f"  {'target':<24} " + " ".join(f"{labels[k]:>22}" for k in keys))
+    for r in multi:
+        per = r["data"]["derived"]["per_channel"]
+        cells = []
+        for k in keys:
+            entry = per.get(k)
+            cells.append(_fmt(entry.get("loss_exact_pct") if entry else None,
+                              ".2f"))
+        print(f"  {r['target']:<24} " + " ".join(f"{c:>22}" for c in cells))
 
 
 def main() -> int:
@@ -98,62 +233,13 @@ def main() -> int:
                      "use --record-dir")
 
     out_dir = Path(args.out_dir) if args.out_dir else Path(tempfile.mkdtemp(prefix="ant_multi_"))
-    out_dir.mkdir(parents=True, exist_ok=True)
     record_dir = Path(args.record_dir) if args.record_dir else None
-    if record_dir is not None:
-        record_dir.mkdir(parents=True, exist_ok=True)
 
-    procs = []
-    for t in args.target:
-        slug = "".join(c if c.isalnum() else "_" for c in t.name)
-        json_path = out_dir / f"{slug}.json"
-        log_path = out_dir / f"{slug}.log"
-        cmd = [sys.executable, str(_HERE / "ant_verify.py"),
-               "--seconds", str(args.seconds),
-               "--json", str(json_path), "-q"]
-        for d in args.device_number:
-            cmd += ["--device-number", str(d)]
-        if t.kind == "usb":
-            cmd += ["--serial", t.value]
-        else:
-            cmd += ["--port", t.value, "--baud", str(args.baud)]
-        if record_dir is not None:
-            cmd += ["--record", str(record_dir / f"{slug}.antcap")]
-        cmd += extra
-        log_f = open(log_path, "w", encoding="utf-8")
-        print(f"launching {t.name}: {' '.join(cmd)}")
-        proc = subprocess.Popen(cmd, stdout=log_f, stderr=subprocess.STDOUT)
-        procs.append((t, proc, json_path, log_path, log_f))
-
-    print(f"\n{len(procs)} target(s) running concurrently for {args.seconds:.0f} s ...")
-    results = []
-    for t, proc, json_path, log_path, log_f in procs:
-        rc = proc.wait()
-        log_f.close()
-        entry = {"target": t.name, "exit": rc, "json": str(json_path), "log": str(log_path)}
-        if json_path.exists():
-            try:
-                entry["data"] = json.loads(json_path.read_text(encoding="utf-8"))
-            except json.JSONDecodeError as e:
-                entry["error"] = f"bad json: {e}"
-        else:
-            entry["error"] = "no json written - see log"
-        results.append(entry)
+    results = run_targets(args.target, args.seconds, args.device_number,
+                          extra, out_dir, record_dir, args.baud)
 
     print()
-    header = f"{'target':<24} {'loss_exact%':>11} {'unacct':>7} {'rssi dBm':>9} {'pass':>5}"
-    print(header)
-    print("-" * len(header))
-    for r in results:
-        d = r.get("data", {}).get("derived", {})
-        loss = d.get("loss_exact_pct")
-        unacct = r.get("data", {}).get("accounting", {}).get("unaccounted")
-        rssi = d.get("rssi_dbm_mean")
-        loss_s = f"{loss:.2f}" if loss is not None else "n/a"
-        unacct_s = str(unacct) if unacct is not None else "n/a"
-        rssi_s = f"{rssi:.1f}" if rssi is not None else "n/a"
-        pass_s = "OK" if r.get("data", {}).get("pass") else "FAIL" if "data" in r else "ERR"
-        print(f"{r['target']:<24} {loss_s:>11} {unacct_s:>7} {rssi_s:>9} {pass_s:>5}")
+    print_summary(results)
 
     print(f"\nresults directory: {out_dir}")
     return 0 if all(r.get("data", {}).get("pass") for r in results) else 1

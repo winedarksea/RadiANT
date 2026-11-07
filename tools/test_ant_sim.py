@@ -816,6 +816,26 @@ class TestLossAccounting(unittest.TestCase):
     def test_a_clean_run_has_nothing_to_account_for(self):
         self.assertIsNone(self.run_of(1200, 1200, {"RX_FAIL": 0}))
 
+    def test_channel_collisions_are_the_receivers_own_loss(self):
+        # The Garmin USB-m on four mixed-period channels, 2026-11-07: 166
+        # missing, 11 RX_FAIL, 156 CHANNEL_COLLISION. Its stack reported
+        # every one; calling 155 of them "after the radio" sent the reader
+        # to a USB path that was fine.
+        result = self.run_of(4966, 4800, {"EVENT_RX_FAIL": 11,
+                                          "EVENT_CHANNEL_COLLISION": 156})
+        self.assertEqual(result["collisions"], 156)
+        self.assertEqual(result["unaccounted"], 0)
+        self.assertTrue(result["pass"])
+        self.assertIn("CHANNEL_COLLISION", result["verdict"])
+        self.assertNotIn("without the radio noticing", result["verdict"])
+
+    def test_collisions_do_not_hide_silent_loss(self):
+        result = self.run_of(1200, 1150, {"RX_FAIL": 5,
+                                          "EVENT_CHANNEL_COLLISION": 5})
+        self.assertEqual(result["unaccounted"], 40)
+        self.assertFalse(result["pass"])
+        self.assertIn("without the radio noticing", result["verdict"])
+
 
 @unittest.skipIf(ant_verify is None, "pyusb is not installed")
 class TestExtendedFields(unittest.TestCase):

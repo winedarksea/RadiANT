@@ -134,6 +134,28 @@ class PerChannelArguments(unittest.TestCase):
 
 
 @unittest.skipIf(ant_verify is None, "pyusb is not installed")
+class ChannelsDefaultToARamp(unittest.TestCase):
+    """Several channels with no --channel open 0, 1, ... rather than 0, 0.
+
+    Until 2026-11-07 an absent --channel expanded to 0 on every channel, which
+    the repeat refusal then rejected - so the --profile-alone form, the one
+    ant_compare.py and ant_multi_verify.py hand down, failed on every
+    multi-profile run before a single packet was read.
+    """
+
+    def test_two_profiles_alone_match_the_explicit_ramp(self):
+        implicit = replay("--profile", "power", "--profile", "power",
+                          "--device-number", str(DEVICE_A),
+                          "--device-number", str(DEVICE_B))
+        explicit = replay("--profile", "power", "--profile", "power",
+                          "--channel", "0", "--device-number", str(DEVICE_A),
+                          "--channel", "1", "--device-number", str(DEVICE_B))
+        self.assertEqual(len(implicit["derived"]["per_channel"]), 2)
+        self.assertEqual(implicit["derived"]["per_channel"],
+                         explicit["derived"]["per_channel"])
+
+
+@unittest.skipIf(ant_verify is None, "pyusb is not installed")
 class MultiChannelReplay(unittest.TestCase):
     """Two sensors in one capture, counted apart."""
 
