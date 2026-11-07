@@ -69,6 +69,7 @@ def extract_run(action: Path) -> str:
 
 KCONFIG_BODY = extract_run(ACTIONS / "assert-kconfig" / "action.yml")
 SYMBOLS_BODY = extract_run(ACTIONS / "assert-symbols" / "action.yml")
+BINUTILS_BODY = extract_run(ACTIONS / "arm-binutils" / "action.yml")
 
 
 @unittest.skipIf(BASH is None, "no bash available to run the action bodies")
@@ -283,6 +284,61 @@ class AssertSymbols(ActionHarness):
                           "20000100 D _radiant_sink_list_end\n")
         self.assertEqual(rc, 1)
         self.assertIn("iterate zero sinks", out)
+
+
+class ArmBinutils(ActionHarness):
+    """The SDK lookup. Fake tools under a fake SDK; HOME points at a temp dir
+    so the CMake package registry read is the fixture's, not this machine's."""
+
+    def resolve(self, layout, registry_points_at_cmake=True):
+        with tempfile.TemporaryDirectory() as tmp:
+            t = Path(tmp).as_posix()
+            sdk = Path(tmp) / "zephyr-sdk"
+            (sdk / "cmake").mkdir(parents=True)
+            (sdk / "cmake" / "Zephyr-sdkConfig.cmake").write_text("")
+            if layout:
+                bindir = sdk / layout / "bin"
+                bindir.mkdir(parents=True)
+                for tool in ("arm-zephyr-eabi-nm", "arm-zephyr-eabi-size"):
+                    p = bindir / tool
+                    p.write_text("#!/bin/sh\n", newline="\n")
+                    p.chmod(0o755)
+            reg = Path(tmp) / ".cmake" / "packages" / "Zephyr-sdk"
+            reg.mkdir(parents=True)
+            target = sdk / "cmake" if registry_points_at_cmake else sdk
+            (reg / "abc123").write_text(target.as_posix() + "\n")
+            out = Path(tmp) / "out"
+            rc, log = self.run_body(BINUTILS_BODY, {
+                "HOME": t, "ZEPHYR_SDK_INSTALL_DIR": "",
+                "GITHUB_WORKSPACE": t + "/nowhere",
+                "GITHUB_OUTPUT": out.as_posix()}, tmp)
+            outputs = out.read_text() if out.exists() else ""
+            return rc, log, outputs, sdk.as_posix()
+
+    def test_registry_entry_is_the_cmake_dir_not_the_root(self):
+        """CI, 2026-11-06: 'arm-zephyr-eabi-nm not found (.../zephyr-sdk/cmake)'."""
+        rc, log, outputs, sdk = self.resolve("arm-zephyr-eabi")
+        self.assertEqual(rc, 0, log)
+        self.assertIn(f"nm={sdk}/arm-zephyr-eabi/bin/arm-zephyr-eabi-nm", outputs)
+        self.assertIn(f"sdk={sdk}\n", outputs)
+
+    def test_sdk_1_0_gnu_layout(self):
+        rc, log, outputs, sdk = self.resolve("gnu/arm-zephyr-eabi")
+        self.assertEqual(rc, 0, log)
+        self.assertIn(
+            f"size={sdk}/gnu/arm-zephyr-eabi/bin/arm-zephyr-eabi-size", outputs)
+
+    def test_a_registry_entry_that_is_already_the_root_still_works(self):
+        rc, log, outputs, sdk = self.resolve(
+            "arm-zephyr-eabi", registry_points_at_cmake=False)
+        self.assertEqual(rc, 0, log)
+        self.assertIn(f"nm={sdk}/arm-zephyr-eabi/bin/", outputs)
+
+    def test_no_tools_is_a_named_failure(self):
+        rc, log, outputs, _ = self.resolve(None)
+        self.assertEqual(rc, 1, log)
+        self.assertIn("arm-zephyr-eabi-nm not found", log)
+        self.assertEqual(outputs, "")
 
 
 class TheWorkflowsThemselvesAreWellFormed(unittest.TestCase):

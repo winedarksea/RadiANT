@@ -914,13 +914,25 @@ jobs:
           # apt package and connectedhomeip's own bootstrap pulls it from the
           # same place, along with a whole pigweed environment this build does
           # not need.
+          #
+          # PINNED, NEVER `+/latest`. chip_gn.cmake runs `gn gen --check`, and
+          # what --check accepts changes between gn releases: `latest` failed
+          # this row inside CHIP's own tree with "Can't include this header
+          # from here" at zzz_generated/app-common/clusters/ZoneManagement/
+          # Structs.h - nothing of ours. This is the gn the NCS toolchain
+          # bundle dcbdc366a1 ships (`gn --version` = 2223 (6e8e0d6d4a15)),
+          # i.e. the one every local Matter build here has passed with. Move
+          # it when west.yml moves the toolchain, and check the version
+          # printed below against the bundle's.
+          gn_rev=6e8e0d6d4a151ab2ed9b4a35366e630c55888444
           curl -fsSL -o /tmp/gn.zip \
-            "https://chrome-infra-packages.appspot.com/dl/gn/gn/linux-amd64/+/latest"
+            "https://chrome-infra-packages.appspot.com/dl/gn/gn/linux-amd64/+/git_revision:${gn_rev}"
           mkdir -p "${HOME}/.local/bin"
           unzip -o /tmp/gn.zip gn -d "${HOME}/.local/bin"
           chmod +x "${HOME}/.local/bin/gn"
           echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
           "${HOME}/.local/bin/gn" --version
+          "${HOME}/.local/bin/gn" --version | grep -q "(${gn_rev:0:12})"
 
       - name: Build
         env:

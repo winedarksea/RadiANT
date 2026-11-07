@@ -55,14 +55,30 @@ runs:
           sdk="$(cat "${HOME}"/.cmake/packages/Zephyr-sdk/* 2>/dev/null | head -n1 || true)"
         fi
         if [[ -z "${sdk}" ]]; then
-          sdk="$(ls -d "${HOME}"/zephyr-sdk-* /opt/zephyr-sdk-* 2>/dev/null | head -n1 || true)"
+          sdk="$(ls -d "${GITHUB_WORKSPACE:-/nonexistent}"/zephyr-sdk \
+                       "${HOME}"/zephyr-sdk-* /opt/zephyr-sdk-* 2>/dev/null | head -n1 || true)"
+        fi
+
+        # THE REGISTRY ENTRY IS NOT THE SDK ROOT. CMake's package registry
+        # records the directory holding Zephyr-sdkConfig.cmake, which is
+        # <sdk>/cmake. Taken as the root, every lookup below searched inside
+        # cmake/ and found nothing - "arm-zephyr-eabi-nm not found
+        # (.../zephyr-sdk/cmake)" on the MQTT and zero-cost rows. Normalise
+        # whichever source supplied it.
+        sdk="${sdk%/}"
+        if [[ "${sdk}" == */cmake && -f "${sdk}/Zephyr-sdkConfig.cmake" ]]; then
+          sdk="$(dirname "${sdk}")"
         fi
 
         find_tool() {   # $1 = tool basename
-          local tool="$1" p=""
+          local tool="$1" p="" sub
           if [[ -n "${sdk}" ]]; then
-            p="${sdk}/arm-zephyr-eabi/bin/${tool}"
-            [[ -x "${p}" ]] && { printf '%s\n' "${p}"; return 0; }
+            # Pre-1.0 SDKs put each toolchain at the root; 1.0 moved the GNU
+            # ones under gnu/.
+            for sub in arm-zephyr-eabi gnu/arm-zephyr-eabi; do
+              p="${sdk}/${sub}/bin/${tool}"
+              [[ -x "${p}" ]] && { printf '%s\n' "${p}"; return 0; }
+            done
           fi
           p="$(command -v "${tool}" 2>/dev/null || true)"
           [[ -n "${p}" && -x "${p}" ]] && { printf '%s\n' "${p}"; return 0; }
@@ -77,11 +93,11 @@ runs:
         nm="$(find_tool arm-zephyr-eabi-nm || true)"
         size="$(find_tool arm-zephyr-eabi-size || true)"
         if [[ -z "${nm}" ]]; then
-          echo "::error::arm-zephyr-eabi-nm not found (ZEPHYR_SDK_INSTALL_DIR='${sdk}')"
+          echo "::error::arm-zephyr-eabi-nm not found (searched SDK root '${sdk}', ZEPHYR_SDK_INSTALL_DIR='${ZEPHYR_SDK_INSTALL_DIR:-}', and PATH)"
           rc=1
         fi
         if [[ -z "${size}" ]]; then
-          echo "::error::arm-zephyr-eabi-size not found (ZEPHYR_SDK_INSTALL_DIR='${sdk}')"
+          echo "::error::arm-zephyr-eabi-size not found (searched SDK root '${sdk}', ZEPHYR_SDK_INSTALL_DIR='${ZEPHYR_SDK_INSTALL_DIR:-}', and PATH)"
           rc=1
         fi
         [[ "${rc}" -eq 0 ]] || exit 1
