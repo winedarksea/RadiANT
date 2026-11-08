@@ -12,6 +12,10 @@
  */
 
 #include <zephyr/kernel.h>
+#if defined(CONFIG_ANT_DONGLE_UF2_REBOOT_REQUEST)
+#include <zephyr/sys/reboot.h>
+#include <hal/nrf_power.h>
+#endif
 #include <zephyr/sys/byteorder.h>
 #include <zephyr/usb/usb_device.h>
 #include <zephyr/usb/bos.h>
@@ -270,6 +274,49 @@ USBD_CLASS_DESCR_DEFINE(primary, 0) struct usb_ant_descriptor ant_desc = {
 
 static void ep_out_cb(uint8_t ep, int tsize, void *priv);
 
+#if defined(CONFIG_ANT_DONGLE_UF2_REBOOT_REQUEST)
+
+/* Reboot into the UF2 bootloader on request - see the Kconfig help. Every
+ * field is matched so that nothing a host sends by accident can trip it. */
+#define ANT_UF2_REBOOT_REQUEST  0x57
+#define ANT_UF2_REBOOT_WVALUE   0x5546 /* "UF" */
+/* DFU_MAGIC_UF2_RESET in the Adafruit nRF52 bootloader. */
+#define ANT_UF2_GPREGRET_MAGIC  0x57
+
+static void uf2_reboot_work_fn(struct k_work *work)
+{
+	ARG_UNUSED(work);
+
+	/* Written directly rather than through nrf_power_gpregret_set(), whose
+	 * signature differs between nrfx releases, and not through
+	 * sys_reboot()'s type argument, which Zephyr's nRF reboot path
+	 * ignores. The bootloader reads GPREGRET at reset and clears it. */
+	NRF_POWER->GPREGRET = ANT_UF2_GPREGRET_MAGIC;
+	sys_reboot(SYS_REBOOT_COLD);
+}
+
+/* Deferred so that the status stage of the control transfer completes and
+ * the host sees the request succeed before the device drops off the bus. */
+static K_WORK_DELAYABLE_DEFINE(uf2_reboot_work, uf2_reboot_work_fn);
+
+static bool ant_uf2_reboot_req(const struct usb_setup_packet *setup)
+{
+	if (!usb_reqtype_is_to_device(setup) ||
+	    setup->RequestType.recipient != USB_REQTYPE_RECIPIENT_DEVICE ||
+	    setup->bRequest != ANT_UF2_REBOOT_REQUEST ||
+	    setup->wValue != ANT_UF2_REBOOT_WVALUE ||
+	    setup->wIndex != 0U ||
+	    setup->wLength != 0U) {
+		return false;
+	}
+
+	LOG_WRN("rebooting into the UF2 bootloader on host request");
+	k_work_schedule(&uf2_reboot_work, K_MSEC(100));
+	return true;
+}
+
+#endif /* CONFIG_ANT_DONGLE_UF2_REBOOT_REQUEST */
+
 #if defined(CONFIG_ANT_DONGLE_MSOS_DESCRIPTORS)
 
 static int ant_custom_handle_req(struct usb_setup_packet *setup,
@@ -290,14 +337,36 @@ static int ant_custom_handle_req(struct usb_setup_packet *setup,
 	return -EINVAL;
 }
 
+#define ANT_CUSTOM_HANDLER ant_custom_handle_req
+
+#else
+
+/* No 0xEE string descriptor: a retail stick does not answer it, and
+ * answering it is what makes Windows bind WinUSB.
+ */
+#define ANT_CUSTOM_HANDLER NULL
+
+#endif /* CONFIG_ANT_DONGLE_MSOS_DESCRIPTORS */
+
+#if defined(CONFIG_ANT_DONGLE_MSOS_DESCRIPTORS) || \
+	defined(CONFIG_ANT_DONGLE_UF2_REBOOT_REQUEST)
+
 static int ant_vendor_handle_req(struct usb_setup_packet *setup,
 				      int32_t *len,
 				      uint8_t **data)
 {
+#if defined(CONFIG_ANT_DONGLE_UF2_REBOOT_REQUEST)
+	if (ant_uf2_reboot_req(setup)) {
+		*len = 0;
+		return 0;
+	}
+#endif
+
 	if (usb_reqtype_is_to_device(setup)) {
 		return -ENOTSUP;
 	}
 
+#if defined(CONFIG_ANT_DONGLE_MSOS_DESCRIPTORS)
 	if (setup->bRequest == ANT_MSOSV2_VENDOR_CODE &&
 	    setup->wIndex == MS_OS_20_DESCRIPTOR_INDEX) {
 		*data = (uint8_t *)&ant_msosv2_descriptor;
@@ -311,22 +380,22 @@ static int ant_vendor_handle_req(struct usb_setup_packet *setup,
 		*len = sizeof(ant_msos1_compatid_descriptor);
 		return 0;
 	}
+#else
+	ARG_UNUSED(len);
+	ARG_UNUSED(data);
+#endif
 
 	return -ENOTSUP;
 }
 
-#define ANT_CUSTOM_HANDLER ant_custom_handle_req
 #define ANT_VENDOR_HANDLER ant_vendor_handle_req
 
 #else
 
-/* No 0xEE string descriptor and no vendor requests: a retail stick answers
- * neither, and answering them is what makes Windows bind WinUSB.
- */
-#define ANT_CUSTOM_HANDLER NULL
+/* No vendor requests: a retail stick answers none. */
 #define ANT_VENDOR_HANDLER NULL
 
-#endif /* CONFIG_ANT_DONGLE_MSOS_DESCRIPTORS */
+#endif
 
 /* How long a bulk-IN transfer may take before we stop waiting for it. A host
  * that has stopped polling IN while still configured is indistinguishable

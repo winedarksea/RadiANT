@@ -414,6 +414,35 @@ def open_device(verbose: bool, wait_s: float = 0.0, serial: str | None = None,
     return dev
 
 
+# CONFIG_ANT_DONGLE_UF2_REBOOT_REQUEST in apps/dongle/Kconfig: a vendor,
+# host-to-device, device-recipient request with wLength 0. Every field is
+# matched by the firmware, so a build without the option simply STALLs it.
+UF2_REBOOT_BMREQUESTTYPE = 0x40
+UF2_REBOOT_BREQUEST = 0x57
+UF2_REBOOT_WVALUE = 0x5546  # "UF"
+
+
+def reboot_to_bootloader(dev) -> int:
+    """Ask the dongle to reboot into its UF2 bootloader. 0 if it accepted."""
+    if isinstance(dev, SerialDevice):
+        print("--reboot-to-bootloader needs the USB transport, not --port")
+        return 2
+    try:
+        dev.ctrl_transfer(UF2_REBOOT_BMREQUESTTYPE, UF2_REBOOT_BREQUEST,
+                          UF2_REBOOT_WVALUE, 0, None, timeout=1000)
+    except usb.core.USBError as exc:
+        print(f"FAIL: the dongle refused the request ({exc}).\n"
+              "  The image was built without "
+              "CONFIG_ANT_DONGLE_UF2_REBOOT_REQUEST (uf2_reboot.conf).")
+        return 1
+    close_device(dev)
+    print("OK: rebooting into the UF2 bootloader. The drive (FTHR840BOOT, "
+          "NICENANO, ...) should mount in a few seconds;\n"
+          "  then: scripts/flash_uf2.sh path/to/zephyr.uf2\n"
+          "  or on Windows: scripts\\flash_uf2.ps1 -Uf2Path path\\to\\zephyr.uf2 -VolumeLabel NICENANO")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -432,11 +461,18 @@ def main() -> int:
     )
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("-q", "--quiet", action="store_true")
+    parser.add_argument(
+        "--reboot-to-bootloader", action="store_true",
+        help="reboot the dongle into its UF2 bootloader instead of probing it "
+             "(needs an image built with uf2_reboot.conf)",
+    )
     args = parser.parse_args()
     verbose = not args.quiet
 
     dev = open_device(verbose, serial=args.serial, port=args.port,
                       baud=args.baud)
+    if args.reboot_to_bootloader:
+        return reboot_to_bootloader(dev)
     reader = FrameReader(dev)
 
     failures = []

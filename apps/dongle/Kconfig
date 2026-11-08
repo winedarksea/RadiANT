@@ -422,6 +422,33 @@ config ANT_DONGLE_MSOS_DESCRIPTORS
 	  installed ANT driver wins either way: it matches on the hardware ID,
 	  which outranks a compatible ID match.
 
+config ANT_DONGLE_UF2_REBOOT_REQUEST
+	bool "Reboot into the UF2 bootloader on a USB vendor request"
+	depends on ANT_DONGLE_TRANSPORT_USB_LEGACY
+	depends on SOC_NRF52840
+	help
+	  Answer one vendor control request - bmRequestType 0x40, bRequest
+	  0x57, wValue 0x5546 ("UF"), wIndex 0, wLength 0 - by writing 0x57 to
+	  GPREGRET and rebooting. 0x57 is DFU_MAGIC_UF2_RESET, which the Adafruit nRF52
+	  bootloader on the Feather and on Pro Micro / nice!nano boards checks
+	  at boot to stay in UF2 mode, so the drive mounts without a RESET
+	  button. That is the point of it: most Pro Micro clones have no button,
+	  and the only other way in is shorting RST to GND twice.
+
+	  Send it with: python tools/ant_probe.py --reboot-to-bootloader
+
+	  Invisible to a host that does not send it. No descriptor changes, the
+	  request is ignored (STALLed, as a retail stick would) unless every
+	  field matches, and Windows only issues vendor requests after reading
+	  the MS OS descriptors that ANT_DONGLE_MSOS_DESCRIPTORS controls.
+
+	  The trade-off: with this on, any software on the host that can open
+	  the device can put the board into a writable bootloader with no
+	  physical access. The request carries no authentication.
+
+	  Only meaningful on a board whose bootloader honours GPREGRET 0x57;
+	  elsewhere the board simply reboots into the application.
+
 config ANT_DONGLE_ENCRYPTION
 	bool "Bridge the single channel encryption configuration messages"
 	help
