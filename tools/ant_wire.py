@@ -1193,9 +1193,9 @@ MESG_RADIANT_SET_KEY_ID = 0xF2
 # Set or read the epoch and its time anchor. [0] channel; [1] flags, bit 0 =
 # the epoch is coarse real time (minutes since the RadiANT date) rather than a
 # bare ordinal; [2..5] epoch (u32 LE); [6..13] microseconds into that epoch
-# (u64 LE), which is the phase a receiver derives the packet counter from
-# rather than from arrival history. REFUSES an epoch less than or equal to the
-# current one, and refuses epochs near 0xFFFFFFFF so a counter wrap always has
+# (u64 LE), which is the phase a receiver derives the slot counter from rather
+# than from arrival history. REFUSES an epoch less than or equal to the current
+# one, and refuses epochs near 0xFFFFFFFF so a counter wrap always has
 # headroom. No transform enables until this has been set after a reset: a
 # reboot that restarts the counter under an unchanged epoch is a two-time pad
 # for X_CONF and a full session replay against X_AUTH. [K4 (docs/radiant-
@@ -1204,7 +1204,7 @@ MESG_RADIANT_EPOCH_ID = 0xF3
 
 # Per-channel security state, requested with MESG_REQUEST (0x4D). [0] channel;
 # [1] switches currently active, as in 0xF1; [2] W; [3] page range low; [4]
-# high; [5..8] epoch (u32 LE); [9..10] the expected packet index, low 16 bits
+# high; [5..8] epoch (u32 LE); [9..10] the expected slot index, low 16 bits
 # (u16 LE); [11..12] windows verified; [13..14] windows unverified; [15..16]
 # non-broadcast frames dropped for carrying a secured-range page; [17..18]
 # frames dropped as replay or time-inconsistent; [19..20] windows dropped by
@@ -1776,13 +1776,13 @@ RADIANT_MESSAGES = {
         "name": 'MESG_RADIANT_EPOCH_ID',
         "direction": 'both',
         "payload_len": 14,
-        "desc": 'Set or read the epoch and its time anchor. [0] channel; [1] flags, bit 0 = the epoch is coarse real time (minutes since the RadiANT date) rather than a bare ordinal; [2..5] epoch (u32 LE); [6..13] microseconds into that epoch (u64 LE), which is the phase a receiver derives the packet counter from rather than from arrival history. REFUSES an epoch less than or equal to the current one, and refuses epochs near 0xFFFFFFFF so a counter wrap always has headroom. No transform enables until this has been set after a reset: a reboot that restarts the counter under an unchanged epoch is a two-time pad for X_CONF and a full session replay against X_AUTH.',
+        "desc": 'Set or read the epoch and its time anchor. [0] channel; [1] flags, bit 0 = the epoch is coarse real time (minutes since the RadiANT date) rather than a bare ordinal; [2..5] epoch (u32 LE); [6..13] microseconds into that epoch (u64 LE), which is the phase a receiver derives the slot counter from rather than from arrival history. REFUSES an epoch less than or equal to the current one, and refuses epochs near 0xFFFFFFFF so a counter wrap always has headroom. No transform enables until this has been set after a reset: a reboot that restarts the counter under an unchanged epoch is a two-time pad for X_CONF and a full session replay against X_AUTH.',
     },
     0xF4: {
         "name": 'MESG_RADIANT_SEC_STATUS_ID',
         "direction": 'd2h',
         "payload_len": 23,
-        "desc": 'Per-channel security state, requested with MESG_REQUEST (0x4D). [0] channel; [1] switches currently active, as in 0xF1; [2] W; [3] page range low; [4] high; [5..8] epoch (u32 LE); [9..10] the expected packet index, low 16 bits (u16 LE); [11..12] windows verified; [13..14] windows unverified; [15..16] non-broadcast frames dropped for carrying a secured-range page; [17..18] frames dropped as replay or time-inconsistent; [19..20] windows dropped by the deliver policy; [21] epoch advances since the key was installed; [22] the most recent verdict - 0 clear, 1 verified, 2 unverified. All counters are u16 LE and saturate rather than wrapping. This exists so a host that ignores the per-message verdict flag still has an auditable stream: deliver-as-unverified only means something if unverified cannot be silently treated as verified.',
+        "desc": 'Per-channel security state, requested with MESG_REQUEST (0x4D). [0] channel; [1] switches currently active, as in 0xF1; [2] W; [3] page range low; [4] high; [5..8] epoch (u32 LE); [9..10] the expected slot index, low 16 bits (u16 LE); [11..12] windows verified; [13..14] windows unverified; [15..16] non-broadcast frames dropped for carrying a secured-range page; [17..18] frames dropped as replay or time-inconsistent; [19..20] windows dropped by the deliver policy; [21] epoch advances since the key was installed; [22] the most recent verdict - 0 clear, 1 verified, 2 unverified. All counters are u16 LE and saturate rather than wrapping. This exists so a host that ignores the per-message verdict flag still has an auditable stream: deliver-as-unverified only means something if unverified cannot be silently treated as verified.',
     },
     0xF5: {
         "name": 'MESG_RADIANT_PAIRING_ID',

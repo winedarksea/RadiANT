@@ -1860,7 +1860,7 @@ radiant_messages:
              [1] flags, bit 0 = the epoch is coarse real time (minutes since
              the RadiANT date) rather than a bare ordinal; [2..5] epoch
              (u32 LE); [6..13] microseconds into that epoch (u64 LE), which is
-             the phase a receiver derives the packet counter from rather than
+             the phase a receiver derives the slot counter from rather than
              from arrival history. REFUSES an epoch less than or equal to the
              current one, and refuses epochs near 0xFFFFFFFF so a counter wrap
              always has headroom. No transform enables until this has been
@@ -1875,7 +1875,7 @@ radiant_messages:
       desc: "Per-channel security state, requested with MESG_REQUEST (0x4D).
              [0] channel; [1] switches currently active, as in 0xF1; [2] W;
              [3] page range low; [4] high; [5..8] epoch (u32 LE); [9..10] the
-             expected packet index, low 16 bits (u16 LE); [11..12] windows
+             expected slot index, low 16 bits (u16 LE); [11..12] windows
              verified; [13..14] windows unverified; [15..16] non-broadcast
              frames dropped for carrying a secured-range page; [17..18] frames
              dropped as replay or time-inconsistent; [19..20] windows dropped

@@ -185,9 +185,9 @@ def encode_epoch(channel: int, epoch: int, us_into_epoch: int = 0,
                  real_time: bool = False) -> bytes:
     """Body for MESG_RADIANT_EPOCH_ID.
 
-    `us_into_epoch` is the phase a receiver derives the packet counter from,
+    `us_into_epoch` is the phase a receiver derives the slot counter from,
     rather than from arrival history - the only thing that works for a
-    mid-epoch join, a gap longer than 255 packets, or sparse mode.
+    mid-epoch join, a gap longer than 255 slots, or slot-aligned sparse mode.
 
     Monotonicity is the HOST's job: firmware refuses an epoch <= the one it
     holds, but a reset clears that state. A reboot that restarts the counter

@@ -1580,7 +1580,7 @@
  * Set or read the epoch and its time anchor. [0] channel; [1] flags, bit 0 =
  * the epoch is coarse real time (minutes since the RadiANT date) rather than
  * a bare ordinal; [2..5] epoch (u32 LE); [6..13] microseconds into that epoch
- * (u64 LE), which is the phase a receiver derives the packet counter from
+ * (u64 LE), which is the phase a receiver derives the slot counter from
  * rather than from arrival history. REFUSES an epoch less than or equal to
  * the current one, and refuses epochs near 0xFFFFFFFF so a counter wrap
  * always has headroom. No transform enables until this has been set after a
@@ -1593,17 +1593,17 @@
 /*
  * Per-channel security state, requested with MESG_REQUEST (0x4D). [0]
  * channel; [1] switches currently active, as in 0xF1; [2] W; [3] page range
- * low; [4] high; [5..8] epoch (u32 LE); [9..10] the expected packet index,
- * low 16 bits (u16 LE); [11..12] windows verified; [13..14] windows
- * unverified; [15..16] non-broadcast frames dropped for carrying a secured-
- * range page; [17..18] frames dropped as replay or time-inconsistent;
- * [19..20] windows dropped by the deliver policy; [21] epoch advances since
- * the key was installed; [22] the most recent verdict - 0 clear, 1 verified,
- * 2 unverified. All counters are u16 LE and saturate rather than wrapping.
- * This exists so a host that ignores the per-message verdict flag still has
- * an auditable stream: deliver-as-unverified only means something if
- * unverified cannot be silently treated as verified. [K4 (docs/radiant-
- * security.md sec 3.2 and 9)]
+ * low; [4] high; [5..8] epoch (u32 LE); [9..10] the expected slot index, low
+ * 16 bits (u16 LE); [11..12] windows verified; [13..14] windows unverified;
+ * [15..16] non-broadcast frames dropped for carrying a secured-range page;
+ * [17..18] frames dropped as replay or time-inconsistent; [19..20] windows
+ * dropped by the deliver policy; [21] epoch advances since the key was
+ * installed; [22] the most recent verdict - 0 clear, 1 verified, 2
+ * unverified. All counters are u16 LE and saturate rather than wrapping. This
+ * exists so a host that ignores the per-message verdict flag still has an
+ * auditable stream: deliver-as-unverified only means something if unverified
+ * cannot be silently treated as verified. [K4 (docs/radiant-security.md sec
+ * 3.2 and 9)]
  */
 #define RADIANT_WIRE_MESG_RADIANT_SEC_STATUS_ID              0xF4
 
