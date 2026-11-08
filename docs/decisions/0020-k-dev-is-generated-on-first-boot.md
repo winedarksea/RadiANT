@@ -156,6 +156,19 @@ settings subsystem's deletion) is still absent.
   stack once, on a part with 256 KB of RAM; shrinking it back would leave the
   one call that needs it — the first boot — to overflow.
 
+  **This cost is accepted for now, for the builds that self-provision, and
+  only for them.** A product that does not need self-provisioning (it is
+  given its identity at the factory, or it uses a fixed device number like
+  the trainer) should not link the entropy component at all. Setting
+  `CONFIG_RADIANT_NODE_IDENT_SELF_PROVISION=n` alone is not enough, because
+  the cost comes from `CONFIG_RADIANT_SEC_RNG_ENTROPY=y`, which hrm_ble and
+  treadmill set explicitly. Such a build must also drop that line, unless
+  another feature needs `radiant_sec_rng()` (`RADIANT_SEC_HAS_RNG`, for
+  example X25519 pairing). The trainer already links neither. The Kconfig
+  dependency runs the wrong way for this: self-provisioning follows from the
+  entropy backend, not the other way round. If more products opt out, flip
+  it so that self-provisioning selects the backend.
+
 ## Consequences
 
 - **Tier 0 runs on every node build with an entropy backend**, which is now
