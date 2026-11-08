@@ -761,64 +761,126 @@ static void rx_absorb(struct compat_ctx *c, const uint8_t *pay)
 
 static int rx_tier1(struct compat_ctx *c, const uint8_t *pay, uint64_t t_sync)
 {
-	uint8_t                  tag[RADIANT_SEC_COMPAT_TIER_I_TAG_BYTES];
-	enum radiant_sec_verdict verdict;
-	uint64_t                 t_us = interval_us_of(c);
-	int64_t                  jitter;
-	int64_t                  slew;
-	int64_t                  obs;
-	int64_t                  err;
-	uint32_t                 low;
-	uint32_t                 full;
-	int                      rc;
-	bool                     ok;
+	struct radiant_sec_key        tmp;
+	const struct radiant_sec_key *k;
+	uint8_t                       tag[RADIANT_SEC_COMPAT_TIER_I_TAG_BYTES];
+	enum radiant_sec_verdict      verdict;
+	uint64_t                      t_us = interval_us_of(c);
+	int64_t                       jitter;
+	int64_t                       slew;
+	int64_t                       obs;
+	int64_t                       err;
+	uint32_t                      cand[2];
+	uint32_t                      full;
+	uint32_t                      wraps;
+	uint8_t                       i;
+	int                           rc = RADIANT_SEC_OK;
+	bool                          ok = false;
 
 	jitter = (int64_t)(COMPAT_JITTER_PERIODS * period_us_of(c));
 	slew = (int64_t)(t_us >> COMPAT_SLEW_SHIFT);
 
-	low = (uint32_t)pay[1] | ((uint32_t)pay[2] << 8);
+	/*
+	 * The counters to try: cand[0] first, cand[1] only if it differs and
+	 * cand[0] failed. Locked, both are the counter resolved from the lock.
+	 *
+	 * First contact tries the on-air bits as the counter within the held
+	 * base epoch: a wrap advances the epoch, so the counter is below 65536
+	 * by definition, whatever the receiver's anchor is, and its wraps of 0
+	 * undo any false wrap an announce, command or Tier II call applied from
+	 * the unlocked anchor. That is wrong for a receiver set_epoch'd to the
+	 * sensor's BOOT epoch, phase and all, after the sensor's counter has
+	 * wrapped (65536 x T in), so a page that fails is tried once more with
+	 * the counter resolved from the held anchor. Floor and slack do not
+	 * apply: there is no lock yet.
+	 */
+	cand[1] = resolve_low(interval_index(c, t_sync),
+			      (uint32_t)pay[1] | ((uint32_t)pay[2] << 8),
+			      0x10000u);
+	cand[0] = cand[1] & 0xFFFFu;
 	if (c->rx_t1_any) {
-		full = resolve_low(interval_index(c, t_sync), low, 0x10000u);
-	} else {
-		/* First contact: the on-air bits ARE the counter within the
-		 * held epoch, since a wrap advances the epoch and so the counter
-		 * is below 65536 by definition. The wraps go back to 0 with it,
-		 * undoing any false wrap that an announce, command or Tier II
-		 * call already applied from the unlocked anchor. */
-		full = low;
+		cand[0] = cand[1];
+		rc = apply_wraps(c, cand[0] >> 16);
+		if (rc != RADIANT_SEC_OK) {
+			return rc;
+		}
+
+		/* Replay is closed by the counter and the phase: the tag covers
+		 * no payload, so a recorded page stays validly-tagged forever. A
+		 * spent counter is the floor; a page later than the lock allows
+		 * is the slack. Both are checked before the MAC, so a replay
+		 * isn't counted as a forgery and can't refresh the freshness
+		 * anchor. Modular, then signed, as in elapsed_us(). */
+		if (cand[0] <= c->rx_t1_last) {
+			stat_bump(&c->stats.tier1_replays);
+			return RADIANT_SEC_EREPLAY;
+		}
+		err = (int64_t)(t_sync - (uint64_t)cand[0] * t_us) -
+		      c->anchor_us;
+		if (err > 2 * jitter + slew) {
+			stat_bump(&c->stats.tier1_replays);
+			return RADIANT_SEC_EREPLAY;
+		}
 	}
 
-	rc = apply_wraps(c, full >> 16);
+	/*
+	 * A counter whose wraps differ from the held ones is checked under a key
+	 * derived into a local and moved into K_auth only if its tag matches, so
+	 * a page that fails every try leaves wraps, epoch and K_auth as they
+	 * were and is counted once below. The second try costs one CMAC and at
+	 * most one KDF, on first contact only.
+	 */
+	memset(&tmp, 0, sizeof(tmp));
+	full = cand[0];
+	wraps = c->wraps;
+	for (i = 0u; i < 2u && !ok; i++) {
+		if (i == 1u && cand[1] == cand[0]) {
+			break;
+		}
+		full = cand[i];
+		wraps = full >> 16;
+		k = &c->k_auth;
+		if (wraps != c->wraps) {
+			if ((uint64_t)c->base_epoch + wraps >
+			    (uint64_t)0xFFFFFFFFu - RADIANT_SEC_EPOCH_HEADROOM) {
+				break;
+			}
+			radiant_sec_key_destroy(&tmp);
+			rc = radiant_sec_kdf(&c->k_root, RADIANT_SEC_LABEL_AUTH,
+					     c->base_epoch + wraps,
+					     c->base_devnum, &tmp);
+			if (rc != RADIANT_SEC_OK) {
+				break;
+			}
+			k = &tmp;
+		}
+		rc = radiant_sec_compat_tier1_tag(k, c->base_epoch + wraps,
+						  c->devnum,
+						  (uint16_t)(full & 0xFFFFu), tag);
+		if (rc != RADIANT_SEC_OK) {
+			break;
+		}
+		ok = radiant_sec_ct_equal(tag, &pay[3], sizeof(tag));
+	}
+	radiant_sec_wipe(tag, sizeof(tag));
+	if (ok && wraps != c->wraps) {
+		/* Moved, not re-derived: the handle is plain bytes and an import
+		 * serial, and the serial goes with it. Zeroed rather than
+		 * destroyed so the AES schedule just built for it survives. */
+		radiant_sec_key_destroy(&c->k_auth);
+		c->k_auth = tmp;
+		memset(&tmp, 0, sizeof(tmp));
+		c->wraps = wraps;
+		c->epoch = c->base_epoch + wraps;
+		stat_bump(&c->stats.epoch_advances);
+	}
+	radiant_sec_key_destroy(&tmp);
 	if (rc != RADIANT_SEC_OK) {
 		return rc;
 	}
 
-	/* Replay is closed by the counter and the phase: the tag covers no
-	 * payload, so a recorded page stays validly-tagged forever. A spent
-	 * counter is the floor; a page later than the lock allows is the
-	 * slack. Both are checked before the MAC, so a replay isn't counted as
-	 * a forgery and can't refresh the freshness anchor. */
-	if (c->rx_t1_any && full <= c->rx_t1_last) {
-		stat_bump(&c->stats.tier1_replays);
-		return RADIANT_SEC_EREPLAY;
-	}
-
-	/* Modular, then signed, as in elapsed_us(). */
 	obs = (int64_t)(t_sync - (uint64_t)full * t_us);
 	err = obs - c->anchor_us;
-	if (c->rx_t1_any && err > 2 * jitter + slew) {
-		stat_bump(&c->stats.tier1_replays);
-		return RADIANT_SEC_EREPLAY;
-	}
-
-	rc = radiant_sec_compat_tier1_tag(&c->k_auth, c->epoch, c->devnum,
-					  (uint16_t)(full & 0xFFFFu), tag);
-	if (rc != RADIANT_SEC_OK) {
-		return rc;
-	}
-
-	ok = radiant_sec_ct_equal(tag, &pay[3], sizeof(tag));
-	radiant_sec_wipe(tag, sizeof(tag));
 	if (ok) {
 		verdict = RADIANT_SEC_VERDICT_VERIFIED;
 		stat_bump(&c->stats.tier1_verified);

@@ -17,8 +17,9 @@
  *
  * Coverage: Tier I cadence/loss-independence/replay/skipped-page; Tier I's
  * phase lock at a receiver whose clock is not the sensor's (false wrap, late
- * delivery, an anchor before the receiver's zero, the first-contact limit,
- * drift, a new T); Tier II window/flipped-bit/lost-packet; subtype separation
+ * delivery, an anchor before the receiver's zero, the first-contact limit, a
+ * boot epoch set after the sensor wrapped, a forged first page, drift, a new
+ * T); Tier II window/flipped-bit/lost-packet; subtype separation
  * through the emit path; epoch recovery by hint (50/1000/65536 boots stale,
  * hint collision, tag search with advertise off, backwards re-provision, and
  * a search that matches nothing but still terminates).
@@ -918,6 +919,186 @@ ZTEST(sec_compat_stream, test_first_contact_proves_the_epoch_and_not_freshness)
 	zassert_equal(3u, st.tier1_verified, NULL);
 	zassert_equal(2u, st.tier1_replays, NULL);
 	zassert_equal(0u, st.tier1_unverified, NULL);
+}
+
+/*
+ * A receiver given the sensor's BOOT epoch, and its phase, only after the
+ * sensor's 16-bit counter has wrapped (65 536 x T, ~15.2 days at the default
+ * T): the sensor is in boot + 1 by then. First contact reads the on-air bits
+ * as a counter within the held epoch, which is one rollover low here, so it
+ * falls back once to the counter resolved from the held anchor. Interval
+ * 0x10007 is the page used: its low bits (7) and its resolved counter differ,
+ * so the fallback is what is under test. `phase_err_us` is how far EARLY the
+ * receiver's held phase is (negative: late). Returns the page's instant.
+ */
+#define WRAPPED_K (0x10000u + 7u)
+
+static uint64_t boot_epoch_after_wrap(uint8_t rx_sw, int64_t phase_err_us,
+				      uint8_t *air)
+{
+	uint64_t t;
+	uint64_t now;
+
+	/* The receiver is set again below, and set_epoch only goes forward. */
+	setup_pair(RADIANT_SEC_COMPAT_SW_TIER_I, rx_sw, 500u, 499u);
+
+	t = tier1_page(T_ORIGIN, WRAPPED_K, 0u, air);
+	zassert_equal((uint16_t)(WRAPPED_K & 0xFFFFu), counter_of(air), NULL);
+
+	/* Its host learns the boot epoch, and how far into it the sensor is,
+	 * one period before the page. */
+	now = rx_time(t - PERIOD_US);
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_compat_set_epoch(
+			      RX_CH, 500u, now,
+			      (uint64_t)((int64_t)(t - PERIOD_US - T_ORIGIN) +
+					 phase_err_us),
+			      TEST_PERIOD));
+	vlog_n = 0u;
+	return t;
+}
+
+ZTEST(sec_compat_stream, test_a_boot_epoch_set_after_the_sensor_wrapped_still_locks)
+{
+	/* Before the phase lock a receiver whose anchor matched the sensor's
+	 * locked here; with it, every page failed the MAC and it never locked.
+	 * Run with the held phase exact (kept: the page lies within JITTER
+	 * after it), 5 s early and 5 s late (both replaced from the page). */
+	static const int64_t            errs[] = { 0, 5000000, -5000000 };
+	const uint8_t                   pinned = RADIANT_SEC_COMPAT_SW_TIER_I |
+						 RADIANT_SEC_COMPAT_SW_PIN;
+	struct radiant_sec_compat_stats st;
+	uint8_t                         first[RADIANT_SEC_COMPAT_MSG_BYTES];
+	uint8_t                         air[RADIANT_SEC_COMPAT_MSG_BYTES];
+	uint64_t                        t;
+	uint32_t                        i;
+	uint32_t                        k;
+
+	for (i = 0u; i < ARRAY_SIZE(errs); i++) {
+		t = boot_epoch_after_wrap(pinned, errs[i], first);
+
+		zassert_equal(RADIANT_SEC_OK, deliver(first, t),
+			      "phase error %d us: a receiver set to the boot "
+			      "epoch after the sensor wrapped did not lock on its "
+			      "first page", (int)errs[i]);
+		zassert_equal(1u, verdicts_at(RADIANT_SEC_COMPAT_SUBTYPE_TIER_I,
+					      7u, RADIANT_SEC_VERDICT_VERIFIED),
+			      NULL);
+		zassert_equal(RADIANT_SEC_VERDICT_VERIFIED,
+			      radiant_sec_compat_stream_verdict(RX_CH,
+								rx_time(t)),
+			      NULL);
+
+		/* Locked on the wrapped counter and the true phase: the next
+		 * pages resolve and verify through the ordinary path... */
+		for (k = WRAPPED_K + 1u; k <= WRAPPED_K + 3u; k++) {
+			t = tier1_page(T_ORIGIN, k, 0u, air);
+			zassert_equal(RADIANT_SEC_OK, deliver(air, t),
+				      "phase error %d us: interval 0x%x after the "
+				      "lock did not verify", (int)errs[i], k);
+		}
+
+		/* ...and the first page, replayed now, is refused. */
+		zassert_equal(RADIANT_SEC_EREPLAY, deliver(first, t + PERIOD_US),
+			      NULL);
+
+		radiant_sec_compat_get_stats(RX_CH, &st);
+		zassert_equal(4u, st.tier1_verified, NULL);
+		zassert_equal(0u, st.tier1_unverified, NULL);
+		zassert_equal(1u, st.tier1_replays, NULL);
+		zassert_equal(1u, st.epoch_advances,
+			      "the sensor wrapped once; the receiver advanced %u "
+			      "time(s)", st.epoch_advances);
+	}
+}
+
+ZTEST(sec_compat_stream, test_a_forged_first_page_fails_once_and_moves_nothing)
+{
+	/* The fallback is a second MAC on the same page, not a second chance
+	 * for an attacker to move state: a page that fails both is ONE
+	 * forgery, and the epoch, wraps, K_auth and phase are as they were. The
+	 * observable for the epoch is epoch_advances; for K_auth, a command
+	 * tag (same key root, same epoch) taken before and after; for the
+	 * phase, the genuine page still locking at the end. */
+	const uint8_t                   pinned = RADIANT_SEC_COMPAT_SW_TIER_I |
+						 RADIANT_SEC_COMPAT_SW_PIN;
+	static const uint8_t            cmd[RADIANT_SEC_COMPAT_CMD_BYTES] = {
+		0x01u, 0x02u, 0x03u,
+	};
+	struct radiant_sec_compat_stats st;
+	uint8_t                         air[RADIANT_SEC_COMPAT_MSG_BYTES];
+	uint8_t                         bad[RADIANT_SEC_COMPAT_MSG_BYTES];
+	uint8_t                         tag_a[RADIANT_SEC_COMPAT_CMD_TAG_BYTES];
+	uint8_t                         tag_b[RADIANT_SEC_COMPAT_CMD_TAG_BYTES];
+	uint64_t                        t;
+
+	t = boot_epoch_after_wrap(pinned, 0, air);
+
+	/* A genuine page with one tag bit flipped. Held wraps 0, so the
+	 * fallback derives its candidate key into a scratch one. */
+	memcpy(bad, air, sizeof(bad));
+	bad[5] ^= 0x10u;
+	zassert_equal(RADIANT_SEC_EBADMAC, deliver(bad, t), NULL);
+	radiant_sec_compat_get_stats(RX_CH, &st);
+	zassert_equal(1u, st.tier1_unverified,
+		      "one forged page was counted %u time(s)",
+		      st.tier1_unverified);
+	zassert_equal(0u, st.tier1_verified, NULL);
+	zassert_equal(0u, st.tier1_replays, NULL);
+	zassert_equal(0u, st.epoch_advances, NULL);
+	zassert_equal(1u, vlog_n, "one page, %u verdicts", vlog_n);
+
+	/* Garbage carrying the Tier I page byte, at the same low bits. */
+	bad[0] = (uint8_t)(PAGE_BASE | RADIANT_SEC_COMPAT_SUBTYPE_TIER_I);
+	bad[1] = 7u;
+	bad[2] = 0u;
+	bad[3] = 0xDEu;
+	bad[4] = 0xADu;
+	bad[5] = 0xBEu;
+	bad[6] = 0xEFu;
+	bad[7] = 0x5Au;
+	zassert_equal(RADIANT_SEC_EBADMAC, deliver(bad, t), NULL);
+	radiant_sec_compat_get_stats(RX_CH, &st);
+	zassert_equal(2u, st.tier1_unverified, NULL);
+	zassert_equal(0u, st.epoch_advances, NULL);
+
+	/* A command at the receiver applies the wrap its anchor implies (held
+	 * wraps 1 now), so the first try is the one needing the scratch key and
+	 * a failed page must not leave wraps at 0. */
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_compat_cmd_tag(RX_CH, rx_time(t), cmd,
+						 sizeof(cmd), tag_a),
+		      NULL);
+	radiant_sec_compat_get_stats(RX_CH, &st);
+	zassert_equal(1u, st.epoch_advances, NULL);
+
+	zassert_equal(RADIANT_SEC_EBADMAC, deliver(bad, t), NULL);
+	radiant_sec_compat_get_stats(RX_CH, &st);
+	zassert_equal(3u, st.tier1_unverified, NULL);
+	zassert_equal(1u, st.epoch_advances,
+		      "a page that failed both tries moved the epoch (%u "
+		      "advances)", st.epoch_advances);
+
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_compat_cmd_tag(RX_CH, rx_time(t), cmd,
+						 sizeof(cmd), tag_b),
+		      NULL);
+	zassert_mem_equal(tag_a, tag_b, sizeof(tag_a),
+			  "the receiver's keys changed under a failed page");
+	radiant_sec_compat_get_stats(RX_CH, &st);
+	zassert_equal(1u, st.epoch_advances, NULL);
+	zassert_equal(RADIANT_SEC_VERDICT_UNVERIFIED,
+		      radiant_sec_compat_stream_verdict(RX_CH, rx_time(t)),
+		      NULL);
+
+	/* Nothing moved, so the genuine page still locks. */
+	zassert_equal(RADIANT_SEC_OK, deliver(air, t), NULL);
+	radiant_sec_compat_get_stats(RX_CH, &st);
+	zassert_equal(1u, st.tier1_verified, NULL);
+	zassert_equal(3u, st.tier1_unverified, NULL);
+	zassert_equal(0u, st.tier1_replays, NULL);
+	zassert_equal(1u, st.epoch_advances, NULL);
+	zassert_equal(4u, vlog_n, NULL);
 }
 
 /* One slot the emit hook must not claim, to move the sender's message count. */

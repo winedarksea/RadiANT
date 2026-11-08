@@ -1535,8 +1535,13 @@ One self-contained page every `T` seconds, **decoupled from the data rate**:
   `att_counter` is monotone and derivable from elapsed time. A receiver is never
   told where the sensor's epoch began (a hostless strap anchors on its own
   power-up), so it **learns the phase from the air**: on first contact it takes
-  the on-air 16 bits as the counter within the held epoch, and the first
-  verified page locks the phase at `t_sync - counter x T`. After that, three
+  the on-air 16 bits as the counter within the held epoch, and if that fails
+  the tag it tries once more with the counter resolved from the held anchor
+  (which is right for a receiver given the sensor's boot epoch and phase after
+  the sensor's counter has wrapped). Neither try moves the epoch, the key or
+  the phase unless its tag matches, and a page that fails both is counted
+  once. The first verified page locks the phase at `t_sync - counter x T`.
+  After that, three
   checks apply in order:
   - **the floor:** a counter at or below the last verified one is a replay;
   - **the staleness slack:** a page more than `2 x JITTER + SLEW` later than the
@@ -1553,7 +1558,8 @@ One self-contained page every `T` seconds, **decoupled from the data rate**:
   tracked. A wrap advances the epoch on both sides, exactly as section 3.5
   requires. A new `T` clears the lock.
 - **40 bits of tag, not 48**, because the counter needs two bytes in-page now
-  that no window index is implied. 2^-40 per attempt against a mechanism
+  that no window index is implied. 2^-40 per attempt (2^-39 before the first
+  lock, where a page can be checked under two counters) against a mechanism
   rate-limited to one attempt per `T` by construction is not the weak link.
 
 #### Tier II — data attestation. Default off.
