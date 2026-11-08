@@ -301,9 +301,13 @@ as CI, makes the same two assertions after each build, and leaves the artifacts
 in `dist\`:
 
 ```powershell
-. .\scripts\env.ps1 -NcsVersion v3.2.4
+. .\scripts\env.ps1 -NcsVersion v3.4.0
 .\scripts\build_all.ps1
 ```
+
+v3.4.0, not v3.2.4: that is what `west.yml` pins, what `build_all.ps1`
+defaults to, and what the TI rows need (`hal_ti` is absent under v3.2.4).
+v3.2.4 is only for the `-Backend sdk_ant` comparison build above.
 
 `dist\` is gitignored — it is a build output, not a tracked one. Rebuild it
 rather than trusting whatever is sitting there, since nothing warns when an
