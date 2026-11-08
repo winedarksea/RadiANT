@@ -473,9 +473,12 @@ void PersistIndexes()
 
 /*
  * Creates the CHIP endpoint for a shadow row, or adopts the one a previous
- * boot left behind. Runs on the CHIP thread.
+ * boot left behind. Runs on the CHIP thread. Returns true when it ADOPTED a
+ * stored endpoint (built unreachable at boot): the flush then makes this pass
+ * send Reachable and the label, before any attribute report can read the
+ * device while it is still unreachable.
  */
-void CreateEndpointForRow(Row &row)
+bool CreateEndpointForRow(Row &row)
 {
 	char uniqueID[Nrf::MatterBridgedDevice::kUniqueIDSize + 1];
 	char nodeLabel[RADIANT_NAMING_MAX];
@@ -527,12 +530,13 @@ void CreateEndpointForRow(Row &row)
 		 * the bind-time reachableDirty has usually been consumed by a pass
 		 * that ran before this row existed (an HR strap's derived rows
 		 * appear >= 2 s after bind). The flush works from a pass-start
-		 * copy, so this mid-pass flag is sent by the NEXT pass (one pacer
-		 * tick later; AnythingDirty() sees it). */
+		 * copy; it refreshes this row's copy itself when this function reports
+		 * the adoption, and leaves THESE flags set for the source's other
+		 * rows, which pick them up on the next pass (AnythingDirty() sees them). */
 		sSources[row.source].reachableDirty = true;
 		k_mutex_unlock(&sShadowLock);
 		LOG_INF("matter: adopted stored endpoint %u for %s", rd.endpointId, uniqueID);
-		return;
+		return true;
 	}
 
 	auto *provider = chip::Platform::New<RadiantMatter::AntDataProvider>(Nrf::BridgeManager::HandleUpdate,
@@ -540,7 +544,7 @@ void CreateEndpointForRow(Row &row)
 	if (provider == nullptr) {
 		sCreateFailures++;
 		LOG_ERR("matter: out of CHIP heap creating a data provider (trap 10)");
-		return;
+		return false;
 	}
 
 	/* The composed name, never the UniqueID. A controller used to show
@@ -552,7 +556,7 @@ void CreateEndpointForRow(Row &row)
 		chip::Platform::Delete(provider);
 		sCreateFailures++;
 		LOG_ERR("matter: no bridged device type for 0x%04x", deviceType);
-		return;
+		return false;
 	}
 
 	Nrf::MatterBridgedDevice *devices[] = { device };
@@ -565,7 +569,7 @@ void CreateEndpointForRow(Row &row)
 	if (err != CHIP_NO_ERROR) {
 		sCreateFailures++;
 		LOG_ERR("matter: AddBridgedDevices failed for %s: %" CHIP_ERROR_FORMAT, uniqueID, err.Format());
-		return;
+		return false;
 	}
 
 	EndpointId assigned = device->GetEndpointId();
@@ -601,6 +605,8 @@ void CreateEndpointForRow(Row &row)
 	LOG_INF("matter: endpoint %u = radiant endpoint %u (source %u field %u, device type 0x%04x) \"%s\"",
 		assigned, row.radiantEndpoint, static_cast<unsigned int>(row.source), row.fieldId, deviceType,
 		nodeLabel);
+
+	return false;
 }
 
 /*
@@ -732,6 +738,7 @@ void FlushHandler(intptr_t)
 		bool needRemove;
 		bool used;
 		uint32_t source;
+		bool adopted = false;
 
 		k_mutex_lock(&sShadowLock, K_FOREVER);
 		used = row.used;
@@ -755,7 +762,7 @@ void FlushHandler(intptr_t)
 		}
 
 		if (needCreate) {
-			CreateEndpointForRow(row);
+			adopted = CreateEndpointForRow(row);
 		}
 
 		/* Re-read the pointer: CreateEndpointForRow() may have set it,
@@ -764,6 +771,20 @@ void FlushHandler(intptr_t)
 		 * write re-dirties its cell. */
 		k_mutex_lock(&sShadowLock, K_FOREVER);
 		RadiantMatter::AntDataProvider *provider = row.provider;
+		if (adopted) {
+			/* A restored device was built UNREACHABLE and carries a stored
+			 * name. This row's attribute writes below would otherwise go
+			 * out while it is still unreachable, and a report that fires
+			 * before the next pass fails its read (bridge_manager
+			 * VerifyOrReturnError(GetIsReachable())) and consumes the
+			 * dirty mark: once-only values are then not re-sent. So Reachable
+			 * and the label go out in THIS pass, from the live state.
+			 * sSources' own flags (set by the adoption) stay set, so the
+			 * source's other rows get theirs next pass. */
+			snap[source].reachable = sSources[source].reachable;
+			snap[source].reachableDirty = true;
+			snap[source].labelDirty = true;
+		}
 		bool reachable = snap[source].reachable;
 		bool reachableDirty = snap[source].reachableDirty;
 		bool labelDirty = snap[source].labelDirty;

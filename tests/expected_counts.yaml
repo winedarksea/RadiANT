@@ -66,7 +66,7 @@ min_scenarios: 13
 # backstop and the floors cannot disagree. It was 874 against ~2.7k executed -
 # the ~1.7k of slack E3-1 found. The per-scenario floors are now the real
 # check; this is kept as the backstop.
-min_testcases: 3595
+min_testcases: 3627
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -83,9 +83,9 @@ min_testcases: 3595
 # treadmill.pages 20, treadmill.hr_rx 3. radiant.unit.sec_modes was NOT run
 # on the DK; its floor assumes the same suites as radiant.unit with extra
 # margin. Raise these to the printed counts on the first green CI run.
-min_cases.radiant.unit: 828
-min_cases.radiant.unit.sec_modes: 820
-min_cases.radiant.unit.no_pairing: 790
+min_cases.radiant.unit: 836
+min_cases.radiant.unit.sec_modes: 828
+min_cases.radiant.unit.no_pairing: 798
 min_cases.radiant.api: 51
 min_cases.radiant.api.sec: 53
 min_cases.radiant.api.sec_host: 62
@@ -97,5 +97,5 @@ min_cases.treadmill.hr_rx: 3
 # 2026-11-04, nRF5340 DK runs: radiant.unit.ack_faults 876 (radiant.unit's
 # then-869 plus seven reply_plan cases), trainer.model 14. min_testcases
 # above is the sum of every floor here.
-min_cases.radiant.unit.ack_faults: 867
+min_cases.radiant.unit.ack_faults: 875
 min_cases.trainer.model: 14

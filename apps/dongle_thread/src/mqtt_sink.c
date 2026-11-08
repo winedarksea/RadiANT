@@ -375,9 +375,10 @@ static bool owed_rearm[RADIANT_BINDING_MAX];
 
 /* The owed "offline"s, one list of sensor uuids NOT tied to a source (see
  * radiant_owed.h): release A, bind B, release B on one source during an outage
- * owes both. Under owed_lock. Its overflow counter (more owed than 2 x
- * RADIANT_BINDING_MAX, which needs more releases than the table can hold) is
- * the only way an offline is still lost, and is logged. */
+ * owes both. Under owed_lock. Every release adds a distinct uuid, so more
+ * than RADIANT_OWED_MAX (16) releases in ONE outage overflow, whatever the
+ * binding table size, and the newest offline is the one lost; that is what the
+ * overflow counter reports, and it is logged. */
 static struct radiant_owed owed_offline;
 
 /* The uuid each source was last bound with, 0 for none. A release
@@ -905,14 +906,63 @@ static bool publish_discovery(uint32_t source, const struct radiant_sample *s)
 	return publish_raw(work_topic, work_payload, true) == 0;
 }
 
+/* The send half of radiant_owed_drain(): the lock ops and one publish. */
+static k_spinlock_key_t owed_key;
+
+static void owed_ops_lock(void *ctx)
+{
+	ARG_UNUSED(ctx);
+	owed_key = k_spin_lock(&owed_lock);
+}
+
+static void owed_ops_unlock(void *ctx)
+{
+	ARG_UNUSED(ctx);
+	k_spin_unlock(&owed_lock, owed_key);
+}
+
+/* Non-zero keeps the uuid owed. */
+static int owed_ops_send(void *ctx, uint64_t off)
+{
+	char uuid[17];
+
+	ARG_UNUSED(ctx);
+
+	/* `connecting` first: during keepalive_connect()'s blocking phase
+	 * `connected` is written without `lock`. A failed send below disconnects,
+	 * so every later slot is refused here without a publish attempt. */
+	if (connecting || !connected) {
+		return 1;
+	}
+
+	uuid_str(off, uuid, sizeof(uuid));
+	(void)snprintf(work_topic, sizeof(work_topic), "radiant/%s/%s/status",
+		       CONFIG_ANT_DONGLE_MQTT_BRIDGE_ID, uuid);
+	if (publish_raw(work_topic, "offline", true) != 0) {
+		/* Still owed. A failed send has already disconnected the client
+		 * and armed the backoff, so the retry waits for the next connect -
+		 * which the keepalive thread makes for it (offline_owed()). */
+		mqtt_stats.publish_failed++;
+		return 1;
+	}
+	mqtt_stats.published++;
+	return 0;
+}
+
 /*
- * Apply what binding_changed() recorded (see `owed`). Caller holds `lock`.
- * Each source's entry is snapshotted and cleared under owed_lock, and the
- * publish happens outside it; a binding change that lands meanwhile sets the
- * entry again and the next drain sees it.
+ * Apply what binding_changed() recorded. Caller holds `lock`. The per-source
+ * re-announce flags are snapshotted and cleared under owed_lock; the owed
+ * offlines go through radiant_owed_drain() (the code radiant/tests runs), which
+ * publishes outside owed_lock and clears only the uuid it sent. A binding change
+ * that lands meanwhile is seen by the next drain.
  */
 static void drain_owed(void)
 {
+	static const struct radiant_owed_ops ops = {
+		.lock = owed_ops_lock,
+		.unlock = owed_ops_unlock,
+		.send = owed_ops_send,
+	};
 	uint32_t s;
 
 	for (s = 0u; s < RADIANT_BINDING_MAX; s++) {
@@ -930,42 +980,7 @@ static void drain_owed(void)
 		}
 	}
 
-	/* The owed offlines, by list slot. Each is snapshotted under owed_lock and
-	 * the publish happens outside it. */
-	for (s = 0u; s < RADIANT_OWED_MAX; s++) {
-		k_spinlock_key_t key = k_spin_lock(&owed_lock);
-		uint64_t off = radiant_owed_at(&owed_offline, s);
-		char uuid[17];
-
-		k_spin_unlock(&owed_lock, key);
-
-		/* `connecting` first: during keepalive_connect()'s blocking
-		 * phase `connected` is written without `lock`. A failed send
-		 * below disconnects, which stops this loop at the next slot. */
-		if (off == 0u || connecting || !connected) {
-			continue;
-		}
-
-		uuid_str(off, uuid, sizeof(uuid));
-		(void)snprintf(work_topic, sizeof(work_topic), "radiant/%s/%s/status",
-			       CONFIG_ANT_DONGLE_MQTT_BRIDGE_ID, uuid);
-		if (publish_raw(work_topic, "offline", true) != 0) {
-			/* Still owed. A failed send has already disconnected
-			 * the client and armed the backoff, so the retry waits
-			 * for the next connect - which the keepalive thread
-			 * makes for it (offline_owed()). */
-			mqtt_stats.publish_failed++;
-			continue;
-		}
-		mqtt_stats.published++;
-
-		/* Only the uuid that was sent, wherever it now sits: anything
-		 * released or bound while the publish was in flight is a
-		 * different uuid and stays. */
-		key = k_spin_lock(&owed_lock);
-		(void)radiant_owed_cancel(&owed_offline, off);
-		k_spin_unlock(&owed_lock, key);
-	}
+	(void)radiant_owed_drain(&owed_offline, &ops);
 }
 
 /*
@@ -1179,7 +1194,7 @@ static void mqtt_publish_sample(const struct radiant_sample *s)
 
 /*
  * Runs on the self-channel thread. Records what is owed and returns: no
- * publish, no socket call, and never `lock` - see `owed` for why.
+ * publish, no socket call, and never `lock` - see "What binding_changed() owes" above for why.
  */
 static void mqtt_binding_changed(uint32_t source, const struct radiant_binding *b)
 {
@@ -1199,9 +1214,11 @@ static void mqtt_binding_changed(uint32_t source, const struct radiant_binding *
 		(void)radiant_owed_add(&owed_offline, bound_uuid[source]);
 	}
 
-	/* Bound again to the very sensor whose "offline" is still owed (a
-	 * release and re-pin before the drain ran), on ANY source: sending it
-	 * now would overwrite the "online" its next sample publishes. */
+	/* DEFENSIVE, and not reachable today: radiant_binding_bind() mints a new
+	 * uuid for every row and a release frees the row before the sink is told,
+	 * so a bind never carries a uuid that is owed. Kept (on ANY source) so
+	 * that if a bind ever reuses a uuid, its "offline" is not sent over the
+	 * "online" the next sample publishes. It does NOT cover a real re-pair. */
 	if (b != NULL) {
 		(void)radiant_owed_cancel(&owed_offline, b->uuid);
 	}
