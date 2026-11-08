@@ -2423,6 +2423,14 @@ ZTEST(radiant_sched, test_an_operation_that_never_terminates_is_reclaimed)
 	post_track(0u, t0 + 10000u, t0 + 10200u);
 	zassert_ok(radiant_sched_tick());
 
+	/* Not yet: a terminal this late is still not declared lost. */
+	fake_radio_advance_to(t0 + 10200u + RADIANT_SCHED_ARMED_STALE_US - 1000u);
+	zassert_ok(radiant_sched_tick());
+	zassert_equal(0u, radiant_sched_stats_get()->armed_stale,
+		      "an operation was reclaimed before the threshold");
+	zassert_equal(0u, log.aborted_count[0],
+		      "its owner was told ABORTED before the threshold");
+
 	fake_radio_advance_to(t0 + 10200u + 150000u);
 	post_track(1u, t0 + 400000u, t0 + 400200u);
 	zassert_ok(radiant_sched_tick());
