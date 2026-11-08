@@ -240,8 +240,10 @@ ZTEST(api, test_sec_host_status_reports_enrolments)
 	 * already covers which pairings bump it. An enrolment the owner did not
 	 * perform is the attack, so the counter has to reach the host at all.
 	 */
+	k_mutex_lock(&api_lock, K_FOREVER);
 	radiant_sec_stat_enrolment(HOST_CH);
 	radiant_sec_stat_enrolment(HOST_CH);
+	k_mutex_unlock(&api_lock);
 
 	memset(st, 0xEE, sizeof(st));
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
@@ -377,6 +379,13 @@ ZTEST(api, test_sec_host_the_lock_check_sees_an_unlocked_call)
 	struct radiant_sec_state state;
 	uint32_t                 base = antr_api_lock_violations;
 
+	/* With CONFIG_ASSERT the unlocked call below halts the image, which is
+	 * the check working and not something a test can survive: skip, and run
+	 * this in the ASSERT-off scenario (the unit is the counter). */
+	if (IS_ENABLED(CONFIG_ASSERT)) {
+		ztest_test_skip();
+	}
+
 	zassert_false(antr_api_lock_held());
 	radiant_sec_get_state(HOST_CH, &state);
 	zassert_equal(base + 1u, antr_api_lock_violations,
@@ -446,8 +455,7 @@ ZTEST(api, test_sec_host_pairing_holds_api_lock_and_its_hold_time)
 	uint32_t us_exchange = (uint32_t)(((uint64_t)t_exchange * 1000000u) /
 					  sys_clock_hw_cycles_per_sec());
 
-	printk("X25519 api_lock hold: SCALAR %u us, EXCHANGE %u us
-",
+	printk("X25519 api_lock hold: SCALAR %u us, EXCHANGE %u us\n",
 	       us_scalar, us_exchange);
 	zassert_true(us_scalar < 1000000u && us_exchange < 1000000u);
 

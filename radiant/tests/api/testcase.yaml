@@ -65,6 +65,10 @@ tests:
       - CONFIG_RADIANT_SEC_HOST_MESSAGES=y
       - CONFIG_RADIANT_SEC_LOCK_CHECK=y
       - CONFIG_RADIANT_SEC_PAIRING_X25519=y
+      # Assertions OFF here, so the lock check COUNTS instead of halting and the
+      # instrument test can prove it sees an unlocked call. radiant.api.sec
+      # (assertions on, the default) is the one where a violation halts.
+      - CONFIG_ASSERT=n
 
   # The same application with CRC repair compiled in (default n everywhere
   # else). The first api-level scenario that ever runs the repair path - added
