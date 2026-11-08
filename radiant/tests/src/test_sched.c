@@ -2406,6 +2406,40 @@ ZTEST(radiant_sched, test_a_crc_failure_does_not_end_a_stop_on_first_window)
 	finish();
 }
 
+/* An armed operation whose terminal never comes (the backend lost it - a
+ * compare written behind the counter, say) is reclaimed once it is
+ * RADIANT_SCHED_ARMED_STALE_US past its own end. want_preempt() never displaces
+ * an already-open window, so without this every later request waits forever
+ * (review 2026-10-31, A9-3). The assertion is on the SCHEDULE: the mock can
+ * withhold a terminal, it cannot write a compare in the past. */
+ZTEST(radiant_sched, test_an_operation_that_never_terminates_is_reclaimed)
+{
+	radiant_time_t t0;
+	const struct fake_radio_arm *last;
+
+	bring_up();
+	fake_radio_set_rx_terminal_delay_us(1000000u);
+	t0 = radiant_radio_now();
+	post_track(0u, t0 + 10000u, t0 + 10200u);
+	zassert_ok(radiant_sched_tick());
+
+	fake_radio_advance_to(t0 + 10200u + 150000u);
+	post_track(1u, t0 + 400000u, t0 + 400200u);
+	zassert_ok(radiant_sched_tick());
+
+	zassert_equal(1u, radiant_sched_stats_get()->armed_stale,
+		      "a dead operation was not reclaimed");
+	zassert_equal(1u, log.aborted_count[0], "its owner was not told");
+	last = fake_radio_last_arm();
+	zassert_not_null(last, NULL);
+	zassert_equal(t0 + 400000u, last->t_open,
+		      "the next request never got the radio");
+
+	fake_radio_set_rx_terminal_delay_us(0u);
+	fake_radio_advance_to(t0 + 400200u + 1100000u);
+	finish();
+}
+
 /* A backend reporting it could not complete an operation ends the request
  * rather than leaving it in flight forever - a scheduler with no case for
  * RADIANT_RADIO_STATUS_FAILED would hold the channel in flight and never

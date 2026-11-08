@@ -162,6 +162,15 @@ extern "C" {
 #define RADIANT_SCHED_MERGE_SPAN_MAX_US 2000u
 
 /*
+ * An armed operation still unterminated this long after its own end is dead
+ * (lost terminal, compare written in the past) and is aborted rather than left
+ * holding the one radio slot forever. Far past any legitimate terminal
+ * latency, the MPSL gate's 20 ms DEADLINE_SLACK_US backstop included (review
+ * 2026-10-31, A9-3).
+ */
+#define RADIANT_SCHED_ARMED_STALE_US 100000u
+
+/*
  * Energy detect: modelled on the continuous background scan, not the bounded
  * window path - never ends, armed one gap-sized chunk at a time. Unlike the
  * scan it has the lowest priority: the scan, every tracked window, and every
@@ -458,6 +467,9 @@ struct radiant_sched_stats {
 				     * is what says whether mixing PHYs is
 				     * affordable. Zero-cost on both nRF builds
 				     * (phy_switch_us == 0) but still counted. */
+	uint32_t armed_stale;       /* armed ops reclaimed because no terminal
+				     * came RADIANT_SCHED_ARMED_STALE_US past
+				     * their end. SHOULD STAY ZERO */
 };
 
 /* ---------------------------------------------------------------------------

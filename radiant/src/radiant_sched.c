@@ -1798,10 +1798,18 @@ static enum step pass_step(radiant_time_t now)
 	}
 
 	if (s.armed_kind != (uint8_t)SLOT_IDLE) {
-		if (!want_preempt(earliest)) {
+		if (now > t_fwd(s.armed_end, RADIANT_SCHED_ARMED_STALE_US)) {
+			/* No terminal, long past its end: the backend lost it
+			 * (e.g. a compare written behind the counter). Nothing
+			 * else ever displaces an already-open window, so without
+			 * this the one radio slot is held forever (review
+			 * 2026-10-31, A9-3). abort_armed() aborts the radio and
+			 * tells the members ABORTED, so owners re-post. */
+			s.stats.armed_stale++;
+			(void)abort_armed(RADIANT_SCHED_CH_NONE);
+		} else if (!want_preempt(earliest)) {
 			return STEP_DONE;
-		}
-		if (abort_armed(RADIANT_SCHED_CH_NONE)) {
+		} else if (abort_armed(RADIANT_SCHED_CH_NONE)) {
 			s.stats.preempted++;
 		} else {
 			s.stats.replans++;
