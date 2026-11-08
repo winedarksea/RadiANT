@@ -111,5 +111,68 @@ class AckGateTests(unittest.TestCase):
                          report['sufficiency_failures'] + report['quality_failures'])
 
 
+class RunExitStatus(unittest.TestCase):
+    """run() itself, on fake endpoints: the callsite that maps the verdict to
+    the process exit status. A short run that sends nothing has no runner
+    error but fails quality (no transfers completed, no receive stimulus)."""
+
+    def _run(self, gate):
+        import argparse
+        from unittest import mock
+
+        import ant_ack_gate as g
+
+        class Dev:
+            def __init__(self):
+                self.last = None
+
+            def write(self, ep, data):
+                self.last = data[2] if len(data) > 2 else None
+
+        class Reader:
+            def __init__(self, dev, timeout_ms=None):
+                self.dev = dev
+                self.checksum_errors = 0
+                self.discarded_bytes = 0
+
+            def next_frame(self, deadline=None):
+                import time
+                time.sleep(0.001)
+                msg, self.dev.last = self.dev.last, None
+                if msg is not None and msg != w.MESG_BROADCAST_DATA_ID:
+                    return (w.MESG_RESPONSE_EVENT_ID, bytes([0, msg, 0]))
+                return (w.MESG_BROADCAST_DATA_ID, bytes(9))
+
+        args = argparse.Namespace(
+            master_port='M', master_serial=None, slave_port='S',
+            slave_serial=None, master_baud=115200, slave_trans_type=0,
+            zwift_load=False, tx_power=4, device=14871, sends=0,
+            seconds=0, interval=1.0, acquire_seconds=5, settle_seconds=0,
+            json_out=None, gate=gate)
+        with mock.patch.object(g, 'open_device', lambda *a, **k: Dev()),                 mock.patch.object(g, 'close_device', lambda d: None),                 mock.patch.object(g, 'reset_stack', lambda d, r: True),                 mock.patch.object(g, 'FrameReader', Reader),                 mock.patch('builtins.print'):
+            report = {}
+            real = g.exit_code
+
+            def spy(r, gt):
+                report.update(r)
+                return real(r, gt)
+
+            with mock.patch.object(g, 'exit_code', spy):
+                code = g.run(args)
+        return code, report
+
+    def test_a_quality_failure_exits_nonzero_without_gate(self):
+        code, report = self._run(gate=False)
+        self.assertEqual(report['errors'], [])
+        self.assertTrue(report['quality_failures'])
+        self.assertEqual(code, 1)
+
+    def test_a_short_run_that_only_lacks_sufficiency_is_not_a_failure_here(self):
+        # Sanity for the fake: the sufficiency reason is present too.
+        code, report = self._run(gate=True)
+        self.assertTrue(report['sufficiency_failures'])
+        self.assertEqual(code, 1)
+
+
 if __name__ == '__main__':
     unittest.main()

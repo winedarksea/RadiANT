@@ -640,9 +640,10 @@ class ExactLossWording(unittest.TestCase):
     """TODO.md Security 14: FE-C has no exact-loss source, and saying its
     counter 'stood still' is false."""
 
-    def entry(self, device_type, exact=None):
+    def entry(self, device_type, exact=None, pairs=40, still=1):
         return {"device_type": device_type, "loss_exact_pct": exact,
-                "exact_missed": 1, "exact_sent": 100, "exact_scope": "page"}
+                "exact_missed": 1, "exact_sent": 100, "exact_scope": "page",
+                "exact_pairs": pairs, "exact_still": still}
 
     def test_a_profile_with_no_source_says_so(self):
         for device_type in (ap.FEC_DEVICE_TYPE, ap.HRM_DEVICE_TYPE):
@@ -654,6 +655,71 @@ class ExactLossWording(unittest.TestCase):
         self.assertIn("stood still", text)
         self.assertNotIn("no exact-loss source", text)
 
+    def test_a_power_channel_that_never_stood_still_does_not_say_so(self):
+        # A 3 s run (under 30 pairs) and a torque-only meter (no page 0x10)
+        # both lack a figure with the counter never having stood still.
+        short = ant_verify.exact_loss_text(
+            self.entry(ap.BPWR_DEVICE_TYPE, pairs=11, still=0))
+        self.assertNotIn("stood still", short)
+        self.assertIn("11 event-counter pair(s)", short)
+        torque_only = ant_verify.exact_loss_text(
+            self.entry(ap.BPWR_DEVICE_TYPE, pairs=0, still=0))
+        self.assertNotIn("stood still", torque_only)
+        self.assertIn("torque-only", torque_only)
+
+    def power_wording(self, payloads):
+        analyzer = ant_verify.ChannelAnalyzer(
+            "power", ap.BPWR_DEVICE_TYPE, 8182, None, None, 2.105)
+        for i, payload in enumerate(payloads):
+            analyzer.feed(i * 0.25, payload)
+        summary = analyzer.summary(100.0, 10.0, None)
+        entry = ant_verify.derive(
+            {"channels": [summary], "identities": {}})["per_channel"]["power"]
+        return ant_verify.exact_loss_text(entry)
+
+    def test_the_real_analyser_words_short_torque_only_and_frozen_runs(self):
+        short = [ap.encode_power_std(i, 80, i * 100, 100) for i in range(12)]
+        self.assertIn("event-counter pair(s)", self.power_wording(short))
+        frozen = [ap.encode_power_std(7, 80, i * 100, 100) for i in range(40)]
+        self.assertIn("stood still", self.power_wording(frozen))
+        torque = [ap.encode_power_torque(0x12, i, i * 10, 80, 1000, 50)
+                  for i in range(12)]
+        self.assertIn("torque-only", self.power_wording(torque))
+
+    def test_the_tlm_branch_has_its_own_neutral_wording(self):
+        text = ant_verify.exact_loss_text(self.entry(ap.RADIANT_TLM_DEVICE_TYPE))
+        self.assertIn("too few slot pairs", text)
+        self.assertNotIn("stood still", text)
+        self.assertNotIn("no exact-loss source", text)
+
+    def test_report_prints_each_wording_on_the_per_channel_lines(self):
+        # Through report(), the callsite, not just the helper.
+        def ch(profile, number, device_type, **extra):
+            e = {"channel": number, "profile": profile,
+                 "device_type": device_type,
+                 "loss_exact_pct": None, "exact_missed": None,
+                 "exact_sent": None, "exact_scope": None,
+                 "exact_pairs": 0, "exact_still": 0}
+            e.update(extra)
+            return e
+        result = {"channels": [], "identities": {}, "derived": {"per_channel": {
+            "1": ch("fec", 1, ap.FEC_DEVICE_TYPE),
+            "2": ch("power", 2, ap.BPWR_DEVICE_TYPE, exact_pairs=40,
+                    exact_still=3),
+            "3": ch("tlm", 3, ap.RADIANT_TLM_DEVICE_TYPE,
+                    loss_exact_pct=1.0, exact_missed=2, exact_sent=200,
+                    exact_scope="slot (upper bound)")}}}
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            ant_verify.report(result)
+        text = out.getvalue()
+        lines = {l.split()[1]: l for l in text.splitlines()
+                 if l.startswith("  channel ")}
+        self.assertIn("no exact-loss source for this profile", lines["1"])
+        self.assertIn("stood still", lines["2"])
+        self.assertIn("slot (upper bound)", lines["3"])
+        self.assertIn("UPPER BOUND", text)
+
     def test_a_figure_is_printed_as_before(self):
         text = ant_verify.exact_loss_text(self.entry(ap.BPWR_DEVICE_TYPE, 1.0))
         self.assertTrue(text.startswith("1.00 % (1 of 100 page message(s)"))
@@ -664,6 +730,29 @@ class ExactLossWording(unittest.TestCase):
                                 "packets": 10}], "identities": {}}
         entry = ant_verify.derive(result)["per_channel"]["1"]
         self.assertEqual(entry["device_type"], ap.FEC_DEVICE_TYPE)
+
+
+@unittest.skipIf(ant_verify is None, "pyusb is not installed")
+class PooledExactLoss(unittest.TestCase):
+    def channel(self, number, scope, missed):
+        return {"profile": f"c{number}", "channel": number, "packets": 100,
+                "exact_loss": {"scope": scope, "missed": missed, "sent": 100,
+                               "loss_pct": float(missed)}}
+
+    def test_an_upper_bound_channel_withholds_the_pooled_gate_figure(self):
+        derived = ant_verify.derive({"identities": {}, "channels": [
+            self.channel(1, "slot (upper bound)", 6),
+            self.channel(2, "slot", 0)]})
+        self.assertIsNone(derived["loss_exact_pct"])
+        # Each channel keeps its own figure and its label.
+        self.assertEqual(derived["per_channel"]["1"]["exact_scope"],
+                         "slot (upper bound)")
+        self.assertEqual(derived["per_channel"]["2"]["loss_exact_pct"], 0.0)
+
+    def test_exact_channels_still_pool(self):
+        derived = ant_verify.derive({"identities": {}, "channels": [
+            self.channel(1, "slot", 2), self.channel(2, "slot", 0)]})
+        self.assertEqual(derived["loss_exact_pct"], 1.0)
 
 
 @unittest.skipIf(ant_verify is None, "pyusb is not installed")
@@ -743,6 +832,25 @@ class SealedTelemetryDescriptor(unittest.TestCase):
         self.assertEqual(summary["telemetry"]["data_pages_sealed"], 1)
         self.assertEqual(summary["violations"]["count"], 0,
                          summary["violations"]["first"])
+
+    def test_sealed_pages_still_count_their_slots(self):
+        # Byte [1] is in the clear: five sealed pages with a gap are five
+        # counted pages, four pairs, one slot missing.
+        fields = [ap.TlmField(id=1, type=0x10, page=1, bit_offset=0,
+                              width_code=7)]
+        d = ap.TlmDescriptor(schema_id=0x05, period=8192, fields=fields,
+                             flags=ap.TLM_FLAG_X_AUTH, w_code=ap.TLM_W_CODE_2)
+        auth = ap.TlmDescAuth(self.ROOT, self.DEVNUM, self.DEVNUM, self.EPOCH)
+        pages = [bytes([0x01, c, 0x12, 0x34, 0, 0, 0, 0])
+                 for c in (5, 6, 7, 9, 10)]
+        compat = ant_verify.CompatVerifier(self.ROOT, self.EPOCH - 3,
+                                           self.DEVNUM)
+        summary = self.run_frames(ap.encode_tlm_descriptor(d, auth) + pages,
+                                  compat)
+        tlm = summary["telemetry"]
+        self.assertEqual(tlm["data_pages_sealed"], 5)
+        self.assertEqual(tlm["data_pages_decoded"], 0)
+        self.assertEqual(tlm["slot_pairs"], 4)
 
     def test_x_conf_ciphertext_is_counted_not_decoded(self):
         # Ciphertext of the value 100 used to decode as 6579.

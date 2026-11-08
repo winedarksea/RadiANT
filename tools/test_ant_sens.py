@@ -448,6 +448,49 @@ class TestSeveralReceivers(unittest.TestCase):
                                   False, measure=fake)
         self.assertEqual(seen, [0, 0])
 
+    def test_frames_arriving_during_the_settle_are_drained_too(self):
+        # A queue that is full at the start and never refills lets "drain once,
+        # then sleep" pass. Here a frame arrives every 10 ms THROUGH the
+        # settle, so only reading until the end leaves the queue empty.
+        import time
+
+        class Reader:
+            def __init__(self, t0):
+                self.arrivals = [t0 + 0.01 * k for k in range(60)]
+
+            def ready(self):
+                now = time.monotonic()
+                return sum(1 for a in self.arrivals if a <= now)
+
+            def next_frame(self, deadline):
+                while True:
+                    now = time.monotonic()
+                    if self.arrivals and self.arrivals[0] <= now:
+                        self.arrivals.pop(0)
+                        return (0x4E, b"x")
+                    if now >= deadline:
+                        return None
+                    time.sleep(0.002)
+
+        class Master:
+            def set_power(self, level, custom):
+                return True
+
+        t0 = time.monotonic()
+        readers = [Reader(t0), Reader(t0)]
+        seen = []
+
+        def fake(dev, reader, channel, profile, seconds, master, verbose):
+            seen.append(reader.ready())
+            return {"loss_pct": 0.0, "loss_basis": "event_counter",
+                    "packets": 1, "rssi_dbm_mean": None, "rssi_samples": 0}
+
+        ant_sens.run_ladder_multi([("a", 1, readers[0]), ("b", 2, readers[1])],
+                                  0, "power", [4], None, 1.0, 0.4, Master(),
+                                  False, measure=fake)
+        # At most the one frame landing in the last millisecond.
+        self.assertLessEqual(max(seen), 1, seen)
+
     def test_one_receiver_failing_does_not_take_the_rung_down(self):
         def fake(dev, *_):
             if dev == "bad":

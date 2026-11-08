@@ -865,11 +865,15 @@ class ChannelAnalyzer:
         if missed < 0:
             self.tlm_slot_overheard += 1
             return
-        if (last_t is not None and self.period_s > 0
-                and d_slots > round((t - last_t) / self.period_s)):
-            # More counter steps than slots that elapsed. Rounded, so ordinary
-            # host jitter (milliseconds against a period of ~125 ms or more)
-            # cannot trip it.
+        if (missed > 0 and last_t is not None and self.period_s > 0
+                and d_slots > (t - last_t) / self.period_s + 0.5):
+            # More counter steps than slots that elapsed, and the surplus read
+            # as loss. Only a pair that counts something lost can inflate the
+            # figure, so a late or doubled-up frame (host stall, two frames
+            # with one timestamp) that makes dt look short is ignored when
+            # nothing was counted lost. Half a slot of margin; a stall of more
+            # than half a period on a pair that also lost a slot can still
+            # false-label it, which only makes the label conservative.
             self.tlm_slot_inflated += 1
         self.tlm_slot_pairs += 1
         self.tlm_slot_span += d_slots
@@ -1399,6 +1403,10 @@ class ChannelAnalyzer:
             "channel": self.channel,
             "device_number": self.device_number or None,
             "device_type": self.device_type,
+            # What the standard-power exact-loss source saw, so a missing
+            # figure can say why (too few pairs, a frozen counter, no page 0x10).
+            "exact_basis": {"pairs": self.std_event_pairs,
+                            "still": self.std_event_still},
             "period_ticks": self.period,
             "packets": self.packets,
             "elapsed_s": elapsed,
@@ -1846,6 +1854,7 @@ def derive(result: dict) -> dict:
     per_channel: dict[str, dict] = {}
     missed_total = 0
     sent_total = 0
+    upper_bound = False
     packets_total = 0
     expected_total = 0.0
     violations_total = 0
@@ -1873,6 +1882,8 @@ def derive(result: dict) -> dict:
             "profile": channel.get("profile"),
             "device_number": channel.get("device_number"),
             "device_type": channel.get("device_type"),
+            "exact_pairs": channel.get("exact_basis", {}).get("pairs"),
+            "exact_still": channel.get("exact_basis", {}).get("still"),
             "packets": channel.get("packets", 0),
             "loss_pct": _number(channel.get("loss_pct")),
             "loss_exact_pct": None,
@@ -1902,6 +1913,8 @@ def derive(result: dict) -> dict:
             entry["exact_missed"] = exact["missed"]
             entry["exact_sent"] = exact["sent"]
             entry["exact_scope"] = exact["scope"]
+            if exact["scope"].endswith("(upper bound)"):
+                upper_bound = True
             missed_total += exact["missed"]
             sent_total += exact["sent"]
 
@@ -1935,8 +1948,14 @@ def derive(result: dict) -> dict:
         # THE gate. None, not 0.0, when no channel could produce one - "the
         # counter couldn't be trusted" differs from "nothing was lost", and
         # ant_ab.py fails a gate whose field is missing, where 0.0 would pass.
+        # Also None when any channel's figure is only an upper bound (0x60
+        # slots a host refill advanced without sending): pooled, it would be a
+        # number the gate treats as a measurement. Withheld rather than flagged
+        # because the baseline schema takes no extra field and ant_ab.py already
+        # fails a missing one; the per-channel entries still carry each figure
+        # with its "(upper bound)" scope.
         "loss_exact_pct": (100.0 * missed_total / sent_total
-                           if sent_total else None),
+                           if sent_total and not upper_bound else None),
         # None on --replay: a capture records payloads, not channel events,
         # so there are no RX_FAILs to account with.
         "unexplained_loss": (accounting["unaccounted"]
@@ -1972,8 +1991,15 @@ def exact_loss_text(entry: dict) -> str:
     if device_type == ap.RADIANT_TLM_DEVICE_TYPE:
         return ("no exact figure - too few slot pairs, a sparse node, or a "
                 "counter that is not a slot index")
-    return ("no exact figure - the event counter stood still, so it "
-            "is not stepped per message")
+    pairs, still = entry.get("exact_pairs"), entry.get("exact_still")
+    if still:
+        return ("no exact figure - the event counter stood still, so it "
+                "is not stepped per message")
+    if pairs:
+        return (f"no exact figure - only {pairs} event-counter pair(s), "
+                "30 needed")
+    return ("no exact figure - no standard-power event counter was seen "
+            "(a torque-only meter, or no page 0x10)")
 
 
 def report(result: dict) -> None:
@@ -2079,6 +2105,12 @@ def report(result: dict) -> None:
     for channel, ident in result.get("identities", {}).items():
         print(f"heard on channel {channel}: device #{ident['device_number']}, "
               f"type 0x{ident['device_type']:02X}")
+
+    if any(str(e.get("exact_scope")).endswith("(upper bound)")
+           for e in result.get("derived", {}).get("per_channel", {}).values()):
+        print("\nNOTE: loss (exact) is an UPPER BOUND for at least one "
+              "channel (its slot counter outran the clock); the pooled "
+              "loss_exact_pct is withheld")
 
     # Printed only for more than one channel - on one it would just restate
     # the `loss (exact)` check line above.

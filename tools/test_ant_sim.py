@@ -616,6 +616,28 @@ class TestTelemetryEnvelope(unittest.TestCase):
                       if c["name"] == "loss (exact)")
         self.assertIn("UPPER BOUND", detail)
 
+    def _clean_with_timing(self, change):
+        sensor = build("telemetry")
+        records = [list(r) for r in ant_sim.dry_run([sensor], 120.0)]
+        change(records)
+        return analyse(sensor, [tuple(r) for r in records])
+
+    def test_a_late_frame_on_a_clean_stream_is_not_an_upper_bound(self):
+        # 0.6 of a period late: the NEXT pair looks too short, with nothing lost.
+        def late(records):
+            records[300][0] += 0.6 * 0.25
+        summary = self._clean_with_timing(late)
+        self.assertEqual(summary["exact_loss"]["missed"], 0)
+        self.assertEqual(summary["telemetry"]["slot_inflated"], 0)
+        self.assertEqual(summary["exact_loss"]["scope"], "slot")
+
+    def test_two_frames_sharing_a_timestamp_are_not_an_upper_bound(self):
+        def doubled(records):
+            records[300][0] = records[299][0]
+        summary = self._clean_with_timing(doubled)
+        self.assertEqual(summary["exact_loss"]["missed"], 0)
+        self.assertEqual(summary["telemetry"]["slot_inflated"], 0)
+
     def test_a_clean_stream_is_not_labelled_an_upper_bound(self):
         _, _, summary = self._run("telemetry")
         self.assertEqual(summary["telemetry"]["slot_inflated"], 0)
