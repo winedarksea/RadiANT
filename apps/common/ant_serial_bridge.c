@@ -484,7 +484,7 @@ static void handle_request(const uint8_t *body, uint8_t len)
 		err = antr_sec_status_get(ch, payload, (uint8_t)sizeof(payload));
 		if (!err) {
 			send_message(ANTW_MESG_RADIANT_SEC_STATUS_ID, payload,
-				     23);
+				     ANTR_SEC_STATUS_LEN);
 		}
 		break;
 	}

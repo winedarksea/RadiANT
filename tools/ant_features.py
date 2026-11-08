@@ -562,10 +562,16 @@ def check_radiant_security(dev, reader) -> list[str]:
               f"{ant_sec.STATUS_LEN}: {got.hex()}")
         return ["radiant security: status reply misframed"]
 
-    st = ant_sec.decode_status(got)
-    print(f"  OK: channel {st.channel} switches={ant_sec.switches_str(st.switches)} "
+    try:
+        st = ant_sec.decode_status(got)
+    except ValueError as e:
+        print(f"  FAIL: status reply did not decode ({e}): {got.hex()}")
+        return ["radiant security: status reply misframed"]
+    print(f"  OK: channel {st.channel} v{st.version} "
+          f"switches={ant_sec.switches_str(st.switches)} "
           f"W={st.w} pages=0x{st.page_lo:02X}..0x{st.page_hi:02X} "
-          f"epoch={st.epoch} verdict={ant_sec.verdict_str(st.verdict)}")
+          f"epoch={st.epoch} verdict={ant_sec.verdict_str(st.verdict)} "
+          f"enrolments={st.enrolments}")
 
     problems = []
 

@@ -1197,7 +1197,7 @@ records what the IDs are for. The allocation below is the one in the YAML.
 | `0xF1` | `ANTW_MESG_RADIANT_SEC_CONFIG_ID` | Per-channel switch bitmask (`X_CONF`/`X_AUTH`), the MAC window W, the secured page range and the drop-vs-deliver policy bit |
 | `0xF2` | `ANTW_MESG_RADIANT_SET_KEY_ID` | Install the 16-byte `K_root` for a channel. Write-only |
 | `0xF3` | `ANTW_MESG_RADIANT_EPOCH_ID` | Set or read the epoch and its microsecond time anchor |
-| `0xF4` | `ANTW_MESG_RADIANT_SEC_STATUS_ID` | Read back: epoch, expected index, window verdict counters, drop counters |
+| `0xF4` | `ANTW_MESG_RADIANT_SEC_STATUS_ID` | Read back (structure version at `[1]`): epoch, expected index, window verdict counters, drop counters, enrolments |
 | `0xF5` | `ANTW_MESG_RADIANT_PAIRING_ID` | Enter/leave pairing mode; carry the host-supplied scalar and the X25519 exchange |
 | `0xF6-0xFA` | reserved | The rest of the RadiANT family |
 
@@ -1881,11 +1881,13 @@ Four rules:
 - **A newly enrolled receiver finds an already-private node without an
   announcement**, because the locator is derived. Enrolment therefore does not
   depend on the `announce` setting at all.
-- **Enrolment is visible to the receivers that already exist.** The pairing-open
-  state is a beacon bit and a descriptor bit, and a completed enrolment
-  increments a counter in `struct radiant_sec_stats` that the `0xF4` report
-  already carries. An enrolment the owner did not perform is the whole attack;
-  making it silent would be the mistake.
+- **Enrolment is visible.** The pairing-open state is a beacon bit and a
+  descriptor bit, which the receivers that already exist see over the air. A
+  completed enrolment also increments a counter in `struct radiant_sec_stats`,
+  which the `0xF4` report carries at `[24..25]` (section 11.7.2). That counter
+  is read by a host on the node that did the enrolment; other receivers cannot
+  see it over the air. An enrolment the owner did not perform is the whole
+  attack; making it silent would be the mistake.
 - **The screen-free fingerprint limit of section 7.4 applies unchanged and is
   not solved here.** A strap with no display gives a one-sided fingerprint; the
   mitigations are the bounded window, one pairing per window, a physical
@@ -1963,14 +1965,18 @@ refused small-order peer key leaves it alone. It counts the `0xF5` host exchange
 and the over-air window alike, because from the group's point of view they are
 one event.
 
-**It is not in the `0xF4` report yet, and that is a deferral rather than an
-oversight.** `0xF4`'s payload is a *fixed* 23 bytes and every one of them is
-spoken for through `[22]`, so surfacing the counter there is a protocol
-extension: `protocol/ant_wire.yaml` and everything `scripts/gen_ant_wire.py`
-generates from it, `tools/ant_sec.py`'s `STATUS_LEN`, and every host that reads
-the message. That is a host-surface change and it belongs with one, not with the
-phase that created the counter. A keyholder on the same device reads it through
-`radiant_sec_get_stats()` today.
+**A host reads it from the `0xF4` report, at `[24..25]`** (u16 LE, saturating
+rather than wrapping, like every other `0xF4` counter). `0xF4` carries a
+structure version at `[1]` for this reason: fields are only ever added at the
+end, an offset is never reused, and the version goes up whenever a field is
+added or a field's meaning changes, so a later field does not break a reader.
+Version 1 is the first to carry `enrolments`. On the device itself,
+`radiant_sec_get_stats()` reads the same counter.
+
+**The reader is a host on the node that did the enrolment.** The counter is not
+transmitted, so the other receivers in the group cannot see it over the air.
+What they can see is the pairing-open beacon and descriptor bit while a window
+is open (section 11.7, rule 3).
 
 ### 11.8 The page allocation, and the conventions the checker enforces
 

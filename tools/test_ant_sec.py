@@ -21,6 +21,7 @@ from ant_sec import (
     PAGE_HI_MAX,
     PAGE_LO_MIN,
     STATUS_LEN,
+    STATUS_VERSION,
     SW_AUTH,
     SW_CONF,
     SW_DESC_CONF,
@@ -185,11 +186,12 @@ class TestStatus(unittest.TestCase):
 
     def sample(self, **kw) -> SecStatus:
         base = dict(
-            channel=1, switches=SW_AUTH, w=4, page_lo=0x01, page_hi=0x0F,
+            channel=1, version=STATUS_VERSION, switches=SW_AUTH, w=4,
+            page_lo=0x01, page_hi=0x0F,
             epoch=0x00ABCDEF, expected_index=0x1234,
             windows_verified=100, windows_unverified=3,
             dropped_non_broadcast=1, dropped_replay=2, dropped_policy=0,
-            epoch_advances=7, verdict=VERDICT_VERIFIED)
+            epoch_advances=7, verdict=VERDICT_VERIFIED, enrolments=9)
         base.update(kw)
         return SecStatus(**base)
 
@@ -203,24 +205,27 @@ class TestStatus(unittest.TestCase):
         # Against bytes laid out by hand, from the 0xF4 description in
         # protocol/ant_wire.yaml. This is the test that would catch a field
         # inserted in the middle by a well-meaning edit.
-        body = bytearray(STATUS_LEN)
+        body = bytearray(26)
         body[0] = 5           # channel
-        body[1] = SW_CONF     # switches
-        body[2] = 8           # W
-        body[3] = 0x02        # page lo
-        body[4] = 0x1F        # page hi
-        body[5:9] = struct.pack("<I", 0xDEADBEEF & 0x0FFFFFFF)
-        body[9:11] = struct.pack("<H", 0xBEEF)
-        body[11:13] = struct.pack("<H", 11)
-        body[13:15] = struct.pack("<H", 22)
-        body[15:17] = struct.pack("<H", 33)
-        body[17:19] = struct.pack("<H", 44)
-        body[19:21] = struct.pack("<H", 55)
-        body[21] = 66
-        body[22] = VERDICT_UNVERIFIED
+        body[1] = 1           # structure version
+        body[2] = SW_CONF     # switches
+        body[3] = 8           # W
+        body[4] = 0x02        # page lo
+        body[5] = 0x1F        # page hi
+        body[6:10] = struct.pack("<I", 0xDEADBEEF & 0x0FFFFFFF)
+        body[10:12] = struct.pack("<H", 0xBEEF)
+        body[12:14] = struct.pack("<H", 11)
+        body[14:16] = struct.pack("<H", 22)
+        body[16:18] = struct.pack("<H", 33)
+        body[18:20] = struct.pack("<H", 44)
+        body[20:22] = struct.pack("<H", 55)
+        body[22] = 66
+        body[23] = VERDICT_UNVERIFIED
+        body[24:26] = struct.pack("<H", 0x0201)  # enrolments
 
         st = decode_status(bytes(body))
         self.assertEqual(5, st.channel)
+        self.assertEqual(1, st.version)
         self.assertEqual(SW_CONF, st.switches)
         self.assertEqual(8, st.w)
         self.assertEqual(0x02, st.page_lo)
@@ -234,12 +239,47 @@ class TestStatus(unittest.TestCase):
         self.assertEqual(55, st.dropped_policy)
         self.assertEqual(66, st.epoch_advances)
         self.assertEqual(VERDICT_UNVERIFIED, st.verdict)
+        self.assertEqual(0x0201, st.enrolments,
+                         "enrolments is not little-endian at [24..25]")
+
+    def test_the_layout_is_26_bytes_at_version_1(self):
+        # Pinned literally, so a change to either constant has to be made on
+        # purpose here as well as in ant_radio.h's ANTR_SEC_STATUS_LEN/_VERSION.
+        self.assertEqual(26, STATUS_LEN)
+        self.assertEqual(1, STATUS_VERSION)
 
     def test_counters_saturate_rather_than_wrapping(self):
         # A wrapped counter would let a long noisy run look quiet, and "quiet"
         # is exactly the reading these counters exist to disprove.
         st = self.sample(windows_unverified=70000)
         self.assertEqual(0xFFFF, decode_status(encode_status(st)).windows_unverified)
+
+    def test_enrolments_saturates_rather_than_wrapping(self):
+        st = self.sample(enrolments=70000)
+        self.assertEqual(0xFFFF, decode_status(encode_status(st)).enrolments)
+
+    def test_version_zero_is_refused(self):
+        # Firmware writes the version even for an unkeyed channel, so a zero
+        # at [1] means this layout is being applied to the wrong bytes - for
+        # instance the old 23-byte reply padded out, whose [1] is the switch
+        # byte. Decoding it would shift every field by one, silently.
+        body = bytearray(encode_status(self.sample()))
+        body[1] = 0
+        with self.assertRaises(ValueError):
+            decode_status(bytes(body))
+
+    def test_a_longer_higher_version_body_still_decodes_the_known_fields(self):
+        # Fields are only ever appended, so a reader built for version 1 reads
+        # version 1's fields from a later, longer reply and ignores the rest.
+        st = self.sample()
+        body = bytearray(encode_status(st))
+        body[1] = STATUS_VERSION + 1
+        body += bytes([0xAA, 0xBB, 0xCC])
+        got = decode_status(bytes(body))
+        self.assertEqual(STATUS_VERSION + 1, got.version)
+        self.assertEqual(st.windows_verified, got.windows_verified)
+        self.assertEqual(st.verdict, got.verdict)
+        self.assertEqual(st.enrolments, got.enrolments)
 
     def test_epoch_advances_saturates_in_its_single_byte(self):
         st = self.sample(epoch_advances=1000)
@@ -250,12 +290,16 @@ class TestStatus(unittest.TestCase):
             decode_status(bytes(STATUS_LEN - 1))
 
     def test_an_unkeyed_channel_reads_as_clear_not_as_an_error(self):
-        # antr_sec_status_get() answers with zeros for a channel nobody keyed.
-        # "No security here" is a state a host must be able to read without
-        # treating an ordinary channel as a fault.
-        st = decode_status(bytes(STATUS_LEN))
+        # antr_sec_status_get() answers with zeros for a channel nobody keyed,
+        # apart from the version byte, which describes the layout rather than
+        # the channel. "No security here" is a state a host must be able to
+        # read without treating an ordinary channel as a fault.
+        body = bytearray(STATUS_LEN)
+        body[1] = STATUS_VERSION
+        st = decode_status(bytes(body))
         self.assertFalse(st.secured)
         self.assertEqual(ant_sec.VERDICT_CLEAR, st.verdict)
+        self.assertEqual(0, st.enrolments)
 
     def test_the_deliver_policy_alone_is_not_security(self):
         # DROP_UNVER with neither transform on is a delivery policy for a

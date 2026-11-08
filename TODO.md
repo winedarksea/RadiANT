@@ -234,7 +234,12 @@ first verified page; docs/radiant-security.md 7.6 and 11.4). Still open:
 - Done when the encoder emits the frame, a receiver rejects a descriptor whose
   frame 1 was altered, and tools/ant_pages.py mirrors it with shared vectors.
 
-## 3. [PROTOCOL, LOW effort] Version the 0xF4 status reply
+## 3. [DONE 2026-11-07] Version the 0xF4 status reply
+**Done:** 0xF4 is now 26 bytes with a structure version (1) at [1] and
+`enrolments` (u16 LE, saturating) at [24..25]; readable by a host on the
+enrolling node, not over the air (docs/radiant-security.md 11.7.2).
+
+(Original notes follow.)
 - protocol/ant_wire.yaml MESG_RADIANT_SEC_STATUS_ID is a fixed 23 bytes with
   no version byte. 0xF6 learned this and carries one.
 - docs/radiant-security.md 11.7.2 already defers the `enrolments` counter

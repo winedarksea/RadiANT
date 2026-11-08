@@ -1147,12 +1147,22 @@ antr_err_t antr_sec_key_set(uint8_t channel, uint8_t bits, const uint8_t *key);
 antr_err_t antr_sec_epoch_set(uint8_t channel, uint8_t flags, uint32_t epoch,
 			      uint64_t us_into_epoch);
 
+/** 0xF4's payload length, in bytes. */
+#define ANTR_SEC_STATUS_LEN     26u
+
+/** 0xF4's structure version, carried at [1]. Fields are only ever appended and
+ * an offset is never reused; this goes up whenever a field is added or a
+ * field's meaning changes. */
+#define ANTR_SEC_STATUS_VERSION 1u
+
 /**
  * Read a channel's security state. Message 0xF4, via MESG_REQUEST.
  *
- * @param out      23 bytes, laid out as ANTW_MESG_RADIANT_SEC_STATUS_ID
- *                 documents. Counters are u16 LE and saturate rather than wrap.
- * @param out_len  Capacity of `out`; must be at least 23.
+ * @param out      ANTR_SEC_STATUS_LEN bytes, laid out as
+ *                 ANTW_MESG_RADIANT_SEC_STATUS_ID documents, with the structure
+ *                 version ANTR_SEC_STATUS_VERSION at [1]. Counters are u16 LE
+ *                 and saturate rather than wrap.
+ * @param out_len  Capacity of `out`; must be at least ANTR_SEC_STATUS_LEN.
  *
  * An unkeyed channel answers with zeros and a CLEAR verdict rather than an
  * error: "no security on this channel" is a state a host must be able to read

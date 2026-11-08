@@ -46,9 +46,6 @@ BUILD_ASSERT(RADIANT_SEC_SW_DESC_CONF == 0x08,
  * switch from being silently ignored by a node too old to know it. */
 #define SEC_SW_KNOWN_MASK 0x0Fu
 
-/* 0xF4's fixed payload length. */
-#define SEC_STATUS_LEN 23u
-
 /*
  * The module's codes, in the serial protocol's vocabulary.
  *
@@ -176,7 +173,7 @@ antr_err_t antr_sec_status_get(uint8_t channel, uint8_t *out, uint8_t out_len)
 	struct radiant_sec_state state;
 	struct radiant_sec_stats stats;
 
-	if (out == NULL || out_len < SEC_STATUS_LEN) {
+	if (out == NULL || out_len < ANTR_SEC_STATUS_LEN) {
 		return (antr_err_t)ANTW_INVALID_MESSAGE;
 	}
 	if (channel >= (uint8_t)RADIANT_CHANNEL_COUNT) {
@@ -184,28 +181,34 @@ antr_err_t antr_sec_status_get(uint8_t channel, uint8_t *out, uint8_t out_len)
 	}
 
 	/* An unkeyed channel answers with zeros and CLEAR rather than erroring
-	 * - "no security here" is a legitimate state, not a fault. */
+	 * - "no security here" is a legitimate state, not a fault. The version
+	 * byte is set either way: it describes the layout, not the channel. */
 	radiant_sec_get_state(channel, &state);
 	radiant_sec_get_stats(channel, &stats);
 
-	memset(out, 0, SEC_STATUS_LEN);
+	memset(out, 0, ANTR_SEC_STATUS_LEN);
 	out[0] = channel;
-	out[1] = state.switches;
-	out[2] = state.w;
-	out[3] = state.page_lo;
-	out[4] = state.page_hi;
-	put_u32(&out[5], state.epoch);
-	out[9] = (uint8_t)state.expected_index;
-	out[10] = (uint8_t)(state.expected_index >> 8);
-	put_u16_sat(&out[11], stats.windows_verified);
-	put_u16_sat(&out[13], stats.windows_unverified);
-	put_u16_sat(&out[15], stats.dropped_non_broadcast);
-	put_u16_sat(&out[17], stats.dropped_replay);
-	put_u16_sat(&out[19], stats.dropped_policy);
-	out[21] = (uint8_t)((stats.epoch_advances > 0xFFu)
+	out[1] = (uint8_t)ANTR_SEC_STATUS_VERSION;
+	out[2] = state.switches;
+	out[3] = state.w;
+	out[4] = state.page_lo;
+	out[5] = state.page_hi;
+	put_u32(&out[6], state.epoch);
+	out[10] = (uint8_t)state.expected_index;
+	out[11] = (uint8_t)(state.expected_index >> 8);
+	put_u16_sat(&out[12], stats.windows_verified);
+	put_u16_sat(&out[14], stats.windows_unverified);
+	put_u16_sat(&out[16], stats.dropped_non_broadcast);
+	put_u16_sat(&out[18], stats.dropped_replay);
+	put_u16_sat(&out[20], stats.dropped_policy);
+	out[22] = (uint8_t)((stats.epoch_advances > 0xFFu)
 				    ? 0xFFu
 				    : stats.epoch_advances);
-	out[22] = (uint8_t)state.last_verdict;
+	out[23] = (uint8_t)state.last_verdict;
+	/* Pairings that took - the 0xF5 host exchange and the over-air window
+	 * alike. An enrolment the owner did not perform is the attack this
+	 * exists to show. */
+	put_u16_sat(&out[24], stats.enrolments);
 
 	return (antr_err_t)ANTW_RESPONSE_NO_ERROR;
 }

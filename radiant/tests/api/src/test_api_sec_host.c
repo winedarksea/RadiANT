@@ -39,8 +39,6 @@
 #define HOST_TRANS  0x05u
 #define HOST_RF     57u
 
-#define STATUS_LEN 23u
-
 static const uint8_t host_key[16] = {
 	0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
 	0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
@@ -221,9 +219,41 @@ ZTEST(api, test_sec_host_an_epoch_needs_a_key_and_only_moves_forwards)
 	host_done();
 }
 
+ZTEST(api, test_sec_host_status_reports_enrolments)
+{
+	uint8_t st[ANTR_SEC_STATUS_LEN];
+
+	host_assign(true, true);
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_key_set(HOST_CH, 128u, host_key));
+
+	memset(st, 0xEE, sizeof(st));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_status_get(HOST_CH, st, sizeof(st)));
+	zassert_equal(0u, rd16(&st[24]),
+		      "a freshly keyed channel reports enrolments");
+
+	/*
+	 * Driven through the internal hook rather than a real pairing: this
+	 * tests the ADAPTER's encoding of the counter, and test_profile_enrol.c
+	 * already covers which pairings bump it. An enrolment the owner did not
+	 * perform is the attack, so the counter has to reach the host at all.
+	 */
+	radiant_sec_stat_enrolment(HOST_CH);
+	radiant_sec_stat_enrolment(HOST_CH);
+
+	memset(st, 0xEE, sizeof(st));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_status_get(HOST_CH, st, sizeof(st)));
+	zassert_equal((uint8_t)ANTR_SEC_STATUS_VERSION, st[1]);
+	zassert_equal(2u, rd16(&st[24]),
+		      "enrolments is not little-endian at [24..25]");
+	host_done();
+}
+
 ZTEST(api, test_sec_host_status_reports_what_was_configured)
 {
-	uint8_t st[STATUS_LEN];
+	uint8_t st[ANTR_SEC_STATUS_LEN];
 
 	host_assign(true, true);
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
@@ -240,20 +270,22 @@ ZTEST(api, test_sec_host_status_reports_what_was_configured)
 		      antr_sec_status_get(HOST_CH, st, sizeof(st)));
 
 	zassert_equal(HOST_CH, st[0]);
-	zassert_equal(RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_CONF, st[1]);
-	zassert_equal(4u, st[2]);
-	zassert_equal(0x02u, st[3]);
-	zassert_equal(0x1Fu, st[4]);
-	zassert_equal(0x00ABCDEFu, rd32(&st[5]),
-		      "the epoch is not little-endian at [5..8]");
-	zassert_equal(0u, rd16(&st[11]), "nothing has verified yet");
-	zassert_equal((uint8_t)RADIANT_SEC_VERDICT_CLEAR, st[22]);
+	zassert_equal(1u, st[1], "0xF4 is not structure version 1");
+	zassert_equal(RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_CONF, st[2]);
+	zassert_equal(4u, st[3]);
+	zassert_equal(0x02u, st[4]);
+	zassert_equal(0x1Fu, st[5]);
+	zassert_equal(0x00ABCDEFu, rd32(&st[6]),
+		      "the epoch is not little-endian at [6..9]");
+	zassert_equal(0u, rd16(&st[12]), "nothing has verified yet");
+	zassert_equal((uint8_t)RADIANT_SEC_VERDICT_CLEAR, st[23]);
+	zassert_equal(0u, rd16(&st[24]), "nothing has enrolled");
 	host_done();
 }
 
 ZTEST(api, test_sec_host_an_unkeyed_channel_reads_as_zeros_not_as_an_error)
 {
-	uint8_t st[STATUS_LEN];
+	uint8_t st[ANTR_SEC_STATUS_LEN];
 
 	/*
 	 * "No security on this channel" is a state a host must be able to read.
@@ -266,26 +298,31 @@ ZTEST(api, test_sec_host_an_unkeyed_channel_reads_as_zeros_not_as_an_error)
 		      antr_sec_status_get(HOST_CH, st, sizeof(st)));
 
 	zassert_equal(HOST_CH, st[0]);
-	zassert_equal(0u, st[1], "an unkeyed channel reports switches on");
-	zassert_equal((uint8_t)RADIANT_SEC_VERDICT_CLEAR, st[22]);
+	/* The version describes the layout, not the channel, so it is set
+	 * even here: a reader must never see version 0. */
+	zassert_equal(1u, st[1], "0xF4 is not structure version 1");
+	zassert_equal(0u, st[2], "an unkeyed channel reports switches on");
+	zassert_equal((uint8_t)RADIANT_SEC_VERDICT_CLEAR, st[23]);
+	zassert_equal(0u, rd16(&st[24]));
 }
 
 ZTEST(api, test_sec_host_a_short_status_buffer_is_refused)
 {
-	uint8_t st[STATUS_LEN];
+	uint8_t st[ANTR_SEC_STATUS_LEN];
 
 	/* Refused rather than truncated: a short reply on the wire would be
 	 * parsed by field offset and would misreport every counter after the
 	 * cut. */
 	zassert_equal((antr_err_t)ANTW_INVALID_MESSAGE,
-		      antr_sec_status_get(HOST_CH, st, STATUS_LEN - 1u));
+		      antr_sec_status_get(HOST_CH, st,
+					  ANTR_SEC_STATUS_LEN - 1u));
 	zassert_equal((antr_err_t)ANTW_INVALID_MESSAGE,
 		      antr_sec_status_get(HOST_CH, NULL, sizeof(st)));
 }
 
 ZTEST(api, test_sec_host_a_channel_out_of_range_is_refused_everywhere)
 {
-	uint8_t st[STATUS_LEN];
+	uint8_t st[ANTR_SEC_STATUS_LEN];
 	uint8_t bad = (uint8_t)RADIANT_CHANNEL_COUNT;
 
 	zassert_equal((antr_err_t)ANTW_INVALID_MESSAGE,

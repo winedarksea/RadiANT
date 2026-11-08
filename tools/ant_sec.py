@@ -50,7 +50,7 @@ __all__ = [
     "SW_CONF", "SW_AUTH", "SW_DROP_UNVER", "SW_DESC_CONF",
     "VERDICT_CLEAR", "VERDICT_VERIFIED", "VERDICT_UNVERIFIED",
     "PAGE_LO_MIN", "PAGE_HI_MAX", "LEGAL_W", "KEY_BITS", "STATUS_LEN",
-    "SecStatus",
+    "STATUS_VERSION", "SecStatus",
     "encode_config", "decode_config",
     "encode_set_key", "decode_set_key",
     "encode_epoch", "decode_epoch",
@@ -87,7 +87,12 @@ LEGAL_W = (2, 4, 8)
 
 KEY_BITS = 128
 KEY_BYTES = KEY_BITS // 8
-STATUS_LEN = 23
+
+# 0xF4's length and the structure version this module writes and fully
+# understands. Fields are only ever appended and an offset is never reused, so a
+# longer body or a higher version still decodes everything named here.
+STATUS_LEN = 26
+STATUS_VERSION = 1
 
 # The epoch headroom radiant_sec reserves so a counter wrap always has
 # somewhere to advance into.
@@ -230,9 +235,16 @@ class SecStatus:
     matters for how they are read: a wrapped counter would let a long noisy run
     look quiet, and "quiet" is exactly the reading these exist to disprove. A
     field sitting at 0xFFFF means "at least that many", not "that many".
+
+    `enrolments` counts pairings on this channel that took - the 0xF5 host
+    exchange and the over-air enrolment window alike. It is a security signal,
+    not a diagnostic: an enrolment the owner did not perform is the attack. Only
+    a host on the node that did the enrolment can read it; other receivers
+    cannot see it over the air.
     """
 
     channel: int
+    version: int
     switches: int
     w: int
     page_lo: int
@@ -246,6 +258,7 @@ class SecStatus:
     dropped_policy: int
     epoch_advances: int
     verdict: int
+    enrolments: int
 
     @property
     def secured(self) -> bool:
@@ -258,19 +271,34 @@ class SecStatus:
 
 
 def decode_status(body: bytes) -> SecStatus:
+    """Decode a 0xF4 body.
+
+    Refuses a body shorter than STATUS_LEN. Decodes the known fields from a
+    longer body or a higher version, since fields are only ever appended.
+    Refuses version 0: firmware always writes a version, even for an unkeyed
+    channel, so a zero there means this layout is being applied to bytes that
+    are not a versioned 0xF4 (such as the old 23-byte reply, whose [1] is the
+    switch byte).
+    """
     if len(body) < STATUS_LEN:
         raise ValueError(f"0xF4 body is {len(body)} bytes, want {STATUS_LEN}")
+    if body[1] == 0:
+        raise ValueError(
+            "0xF4 structure version is 0; every versioned reply carries 1 or "
+            "more, so this body is not laid out the way this decoder reads it")
 
-    epoch, expected = struct.unpack("<IH", bytes(body[5:11]))
+    epoch, expected = struct.unpack("<IH", bytes(body[6:12]))
     (verified, unverified, non_bcast, replay,
-     policy) = struct.unpack("<HHHHH", bytes(body[11:21]))
+     policy) = struct.unpack("<HHHHH", bytes(body[12:22]))
+    (enrolments,) = struct.unpack("<H", bytes(body[24:26]))
 
     return SecStatus(
         channel=body[0],
-        switches=body[1],
-        w=body[2],
-        page_lo=body[3],
-        page_hi=body[4],
+        version=body[1],
+        switches=body[2],
+        w=body[3],
+        page_lo=body[4],
+        page_hi=body[5],
         epoch=epoch,
         expected_index=expected,
         windows_verified=verified,
@@ -278,8 +306,9 @@ def decode_status(body: bytes) -> SecStatus:
         dropped_non_broadcast=non_bcast,
         dropped_replay=replay,
         dropped_policy=policy,
-        epoch_advances=body[21],
-        verdict=body[22],
+        epoch_advances=body[22],
+        verdict=body[23],
+        enrolments=enrolments,
     )
 
 
@@ -293,7 +322,8 @@ def encode_status(st: SecStatus) -> bytes:
     def sat16(v: int) -> int:
         return 0xFFFF if v > 0xFFFF else v
 
-    return (bytes([st.channel, st.switches, st.w, st.page_lo, st.page_hi]) +
+    return (bytes([st.channel, st.version, st.switches, st.w, st.page_lo,
+                   st.page_hi]) +
             struct.pack("<IH", st.epoch, st.expected_index) +
             struct.pack("<HHHHH",
                         sat16(st.windows_verified),
@@ -301,7 +331,8 @@ def encode_status(st: SecStatus) -> bytes:
                         sat16(st.dropped_non_broadcast),
                         sat16(st.dropped_replay),
                         sat16(st.dropped_policy)) +
-            bytes([min(st.epoch_advances, 0xFF), st.verdict]))
+            bytes([min(st.epoch_advances, 0xFF), st.verdict]) +
+            struct.pack("<H", sat16(st.enrolments)))
 
 
 # ── Human-readable ──────────────────────────────────────────────────────────
