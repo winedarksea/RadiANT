@@ -825,6 +825,42 @@ class TestFitnessEquipmentPages(unittest.TestCase):
         with self.assertRaises(ValueError):
             ap.encode_fec_request(0x10, tx_count=0x80)
 
+    # Page 25, hand-packed: 0x5A3 W (1443) split across the nibble boundary
+    # under trainer status 0x9, event 7, 90 rpm, accumulated 0x1234 W, flags
+    # 0x2 and state IN_USE. Byte 6 is 0x95: status high, power's top nibble low.
+    TRAINER = bytes([0x19, 0x07, 0x5A, 0x34, 0x12, 0xA3, 0x95, 0x32])
+
+    def test_trainer_page_splits_power_across_the_nibble_boundary(self):
+        got = ap.decode_fec_trainer(self.TRAINER)
+        self.assertEqual(got["inst_power"], 0x5A3)
+        self.assertTrue(got["power_valid"])
+        self.assertEqual(got["trainer_status"], 0x9)
+        self.assertEqual(got["event_count"], 7)
+        self.assertEqual(got["cadence"], 90)
+        # Bytes 3..4, one earlier than bicycle power page 0x10's 4..5.
+        self.assertEqual(got["acc_power"], 0x1234)
+        self.assertEqual(got["flags"], 0x2)
+        self.assertEqual(got["state"], ap.FEC_STATE_IN_USE)
+        self.assertFalse(got["lap_toggle"])
+
+    def test_trainer_page_sentinels(self):
+        raw = bytearray(self.TRAINER)
+        raw[2] = ap.INVALID_U8
+        raw[5] = 0xFF
+        raw[6] = 0x9F   # status kept; power's top nibble all ones
+        got = ap.decode_fec_trainer(bytes(raw))
+        self.assertIsNone(got["cadence"])
+        self.assertEqual(got["inst_power"], ap.FEC_INVALID_INST_POWER)
+        self.assertFalse(got["power_valid"])
+        self.assertEqual(got["trainer_status"], 0x9)
+
+    def test_trainer_page_routes_by_device_type(self):
+        # 0x19 on FE-C is page 25; nothing else in this file claims it, so
+        # a missing registration would come back raw rather than wrong.
+        got = ap.decode(self.TRAINER, ap.FEC_DEVICE_TYPE)
+        self.assertEqual(got["inst_power"], 0x5A3)
+        self.assertNotIn("raw", got)
+
     def test_period_and_device_type(self):
         self.assertEqual(ap.FEC_DEVICE_TYPE, 0x11)
         self.assertEqual(ap.FEC_PERIOD, 8192)

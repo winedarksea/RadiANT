@@ -624,16 +624,26 @@ class ChannelAnalyzer:
             # Start counting so the gap is reported once one does show up.
             self.messages_since_common = 0
 
+        # Device type first, page second - the rule ap.decode_page() states.
+        # FE-C's and SDM's page 0x10 (and FE-C's 0x11/0x12) collide with
+        # bicycle power's, and routing them by page alone read a treadmill's
+        # constant equipment-type byte as the power event count: a false
+        # liveness FAIL, a false continuity FAIL and a 13843 W "reading".
+        # Any other device type is histogrammed above and decoded no further.
         if self.device_type == ap.HRM_DEVICE_TYPE:
             self._feed_hr(payload)
         elif self.device_type == ap.RADIANT_TLM_DEVICE_TYPE:
             self._feed_telemetry(t, payload)
-        elif page == ap.PAGE_POWER_STANDARD:
-            self._feed_power_std(payload)
-        elif page in (ap.PAGE_POWER_WHEEL_TORQUE, ap.PAGE_POWER_CRANK_TORQUE):
-            self._feed_power_torque(payload)
-        elif page == ap.PAGE_POWER_TORQUE_FREQ:
-            self._feed_power_torque_freq(payload)
+        elif self.device_type == ap.FEC_DEVICE_TYPE:
+            self._feed_fec(payload)
+        elif self.device_type == ap.BPWR_DEVICE_TYPE:
+            if page == ap.PAGE_POWER_STANDARD:
+                self._feed_power_std(payload)
+            elif page in (ap.PAGE_POWER_WHEEL_TORQUE,
+                          ap.PAGE_POWER_CRANK_TORQUE):
+                self._feed_power_torque(payload)
+            elif page == ap.PAGE_POWER_TORQUE_FREQ:
+                self._feed_power_torque_freq(payload)
 
     # -- the RadiANT telemetry envelope, device type 0x60 -----------------
 
@@ -925,6 +935,27 @@ class ChannelAnalyzer:
             self.power_samples.append(watts)
         else:
             self._violation(f"page 0x20: {watts:.0f} W is not a bicycle")
+
+    def _feed_fec(self, payload: bytes) -> None:
+        """Fitness equipment, device type 0x11: what the pages carry, no more.
+
+        Speed from page 0x10 and power/cadence from page 0x19 (a trainer; a
+        treadmill sends 0x13 instead and so reports no power at all). No
+        liveness, continuity or exact-loss evidence is collected: those are
+        tuned to bicycle power's counters, and page 0x19's own event count
+        would need its own rules before it could feed them.
+        """
+        page = payload[0]
+        if page == ap.PAGE_FEC_GENERAL:
+            got = ap.decode_fec_general(payload)
+            if got["speed_valid"]:
+                self.speed_samples.append(got["speed_mm_s"] / 1000.0)
+        elif page == ap.PAGE_FEC_TRAINER:
+            got = ap.decode_fec_trainer(payload)
+            if got["power_valid"]:
+                self.power_samples.append(float(got["inst_power"]))
+            if got["cadence"] is not None:
+                self.cadence_samples.append(float(got["cadence"]))
 
     def _feed_hr(self, payload: bytes) -> None:
         """Heart rate, device type 0x78.

@@ -1194,6 +1194,10 @@ FEC_CMD_STATUS_REJECTED = 3
 FEC_CMD_STATUS_PENDING = 4
 FEC_CMD_STATUS_UNINITIALISED = 0xFF
 
+# Page 25 bytes 5 and 6's low nibble: 12-bit instantaneous power. 0xFFF
+# invalidates the accumulated power in bytes 3..4 as well (Table 8-25).
+FEC_INVALID_INST_POWER = 0x0FFF
+
 # Page 19 byte 7, bits 0..1.
 FEC_TREADMILL_CAP_NEG_VERTICAL = 1 << 0
 FEC_TREADMILL_CAP_POS_VERTICAL = 1 << 1
@@ -1361,6 +1365,31 @@ def decode_fec_treadmill(payload: bytes) -> dict:
         "neg_vertical_dm": payload[5],
         "pos_vertical_dm": payload[6],
         "capabilities": payload[7] & 0x03,
+        "state": (payload[7] >> 4) & 0x07,
+        "lap_toggle": bool(payload[7] & 0x80),
+    }
+
+
+def decode_fec_trainer(payload: bytes) -> dict:
+    """Page 25 (0x19), Specific Trainer/Stationary Bike Data - Table 8-25.
+
+    The mirror of profile_fec_decode_trainer() in radiant/src/profiles/
+    profile_fec.c. Accumulated power is at bytes 3..4, one byte EARLIER than
+    bicycle power page 0x10's. Instantaneous power is 12 bits split across a
+    nibble boundary: byte 5 is the low 8 bits, byte 6's LOW nibble the high 4,
+    and byte 6's HIGH nibble is the trainer status. 0xFFF condemns both power
+    fields, so `power_valid` covers the accumulator too.
+    """
+    inst = payload[5] | ((payload[6] & 0x0F) << 8)
+    return {
+        "page": payload[0],
+        "event_count": payload[1],
+        "cadence": None if payload[2] == INVALID_U8 else payload[2],
+        "acc_power": _rd_le16(payload, 3),
+        "inst_power": inst,
+        "power_valid": inst != FEC_INVALID_INST_POWER,
+        "trainer_status": (payload[6] >> 4) & 0x0F,
+        "flags": payload[7] & 0x0F,
         "state": (payload[7] >> 4) & 0x07,
         "lap_toggle": bool(payload[7] & 0x80),
     }
@@ -1565,6 +1594,7 @@ _FEC_DECODERS = {
     PAGE_FEC_SETTINGS: decode_fec_settings,
     PAGE_FEC_METABOLIC: decode_fec_metabolic,
     PAGE_FEC_TREADMILL: decode_fec_treadmill,
+    PAGE_FEC_TRAINER: decode_fec_trainer,
     PAGE_FEC_BASIC_RESISTANCE: decode_fec_basic_resistance,
     PAGE_FEC_TARGET_POWER: decode_fec_target_power,
     PAGE_FEC_WIND_RESISTANCE: decode_fec_wind_resistance,

@@ -510,5 +510,130 @@ class TheDerivedBlockFitsTheBaselineSchema(unittest.TestCase):
         self.assertAlmostEqual(value, derived["loss_exact_pct"])
 
 
+def fec_trainer_page(event_count: int, cadence_rpm: int | None,
+                     acc_power_w: int, inst_power_w: int | None,
+                     trainer_status: int = 0, state: int = ap.FEC_STATE_IN_USE
+                     ) -> bytes:
+    """FE-C page 25, packed as profile_fec_encode_trainer() packs it.
+
+    ant_pages has a decoder for this page and no encoder; the C encoder is
+    the reference, so the packing is restated here rather than invented.
+    """
+    inst = ap.FEC_INVALID_INST_POWER if inst_power_w is None else inst_power_w
+    return bytes([
+        ap.PAGE_FEC_TRAINER,
+        event_count & 0xFF,
+        ap.INVALID_U8 if cadence_rpm is None else cadence_rpm,
+        acc_power_w & 0xFF, (acc_power_w >> 8) & 0xFF,
+        inst & 0xFF,
+        ((inst >> 8) & 0x0F) | ((trainer_status & 0x0F) << 4),
+        (state & 0x07) << 4,
+    ])
+
+
+@unittest.skipIf(ant_verify is None, "pyusb is not installed")
+class FitnessEquipmentIsNotBicyclePower(unittest.TestCase):
+    """FE-C (0x11) and SDM (0x7C) pages are not bicycle power pages.
+
+    Their page numbers collide with bicycle power's 0x10/0x11/0x12, and until
+    2026-11-07 the analyser routed them by page number alone. A treadmill's
+    page 0x10 was read as a standard power page: the CONSTANT equipment-type
+    byte became the event count (a false "sensor liveness" FAIL), the
+    speed/heart-rate bytes became accumulators (a false "accumulator
+    continuity" FAIL) and the result printed as 13843 W. Any run with an FE-C
+    channel was therefore reported FAILED whatever the link did.
+    """
+
+    SPEED_MM_S = 2500
+
+    def analyzer(self, device_type: int, period: int):
+        return ant_verify.ChannelAnalyzer("fe", device_type, period, None,
+                                          None, 2.105)
+
+    def feed_all(self, analyzer, payloads):
+        t = 0.0
+        for payload in payloads:
+            analyzer.feed(t, payload)
+            t += analyzer.period_s
+        return analyzer.summary(100.0, 10.0, None)
+
+    def assert_no_false_fail(self, summary):
+        for check in summary["checks"]:
+            if check["name"] in ("sensor liveness", "accumulator continuity"):
+                self.assertTrue(check["pass"], check)
+        self.assertEqual(summary["violations"]["count"], 0,
+                         summary["violations"]["first"])
+
+    def test_a_treadmill_reports_speed_and_no_bike_power(self):
+        payloads = []
+        for i in range(100):
+            if i % 32 == 30:
+                payloads.append(ap.encode_common_80(1, 2, 3))
+            elif i % 32 == 31:
+                payloads.append(ap.encode_common_81(1, 2))
+            elif i % 4 == 2:
+                # A changing incline: read as wheel torque, it is an
+                # accumulator advancing with no new event.
+                payloads.append(ap.encode_fec_settings(
+                    None, 100 + 10 * i, None, ap.FEC_STATE_IN_USE))
+            elif i % 4 == 3:
+                payloads.append(ap.encode_fec_treadmill(
+                    80, 0, 0, ap.FEC_STATE_IN_USE))
+            else:
+                payloads.append(ap.encode_fec_general(
+                    ap.FEC_TYPE_TREADMILL, elapsed_time_qs=i,
+                    distance_m=i // 2, speed_mm_s=self.SPEED_MM_S,
+                    heart_rate=None, state=ap.FEC_STATE_IN_USE))
+        summary = self.feed_all(
+            self.analyzer(ap.FEC_DEVICE_TYPE, ap.FEC_PERIOD), payloads)
+
+        self.assertIsNone(summary["power"])
+        self.assertIsNone(summary["cadence"])
+        self.assert_no_false_fail(summary)
+        self.assertIsNotNone(summary["speed_mps"])
+        self.assertAlmostEqual(summary["speed_mps"]["mean"],
+                               self.SPEED_MM_S / 1000.0)
+
+    def test_an_invalid_speed_is_not_a_sample(self):
+        payloads = [ap.encode_fec_general(
+            ap.FEC_TYPE_TREADMILL, i, i, None, None, ap.FEC_STATE_READY)
+            for i in range(10)]
+        summary = self.feed_all(
+            self.analyzer(ap.FEC_DEVICE_TYPE, ap.FEC_PERIOD), payloads)
+        self.assertIsNone(summary["speed_mps"])
+
+    def test_a_trainer_reports_page_25_power_and_cadence(self):
+        payloads = []
+        acc = 0
+        for i in range(40):
+            if i % 2 == 0:
+                payloads.append(ap.encode_fec_general(
+                    ap.FEC_TYPE_TRAINER, i, i, 8000, None,
+                    ap.FEC_STATE_IN_USE))
+            else:
+                acc += 200
+                payloads.append(fec_trainer_page(i, 90, acc, 200))
+        # The sentinels: neither gives a sample.
+        payloads.append(fec_trainer_page(41, None, acc, None))
+        summary = self.feed_all(
+            self.analyzer(ap.FEC_DEVICE_TYPE, ap.FEC_PERIOD), payloads)
+
+        self.assertEqual(summary["power"]["n"], 20)
+        self.assertEqual(summary["power"]["min"], 200.0)
+        self.assertEqual(summary["power"]["max"], 200.0)
+        self.assertEqual(summary["cadence"]["n"], 20)
+        self.assertEqual(summary["cadence"]["mean"], 90.0)
+        self.assertAlmostEqual(summary["speed_mps"]["mean"], 8.0)
+        self.assert_no_false_fail(summary)
+
+    def test_an_sdm_page_16_is_not_a_power_page(self):
+        payloads = [ap.encode_sdm_summary(i * 3, i * 512) for i in range(20)]
+        summary = self.feed_all(
+            self.analyzer(ap.SDM_DEVICE_TYPE, ap.SDM_PERIOD), payloads)
+        self.assertIsNone(summary["power"])
+        self.assertIsNone(summary["cadence"])
+        self.assert_no_false_fail(summary)
+
+
 if __name__ == "__main__":
     unittest.main()
