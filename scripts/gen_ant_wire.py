@@ -58,8 +58,11 @@ try:
     import yaml
 except ImportError:  # pragma: no cover - user-facing guidance
     sys.exit(
-        "PyYAML is not available to this interpreter. Use the NCS toolchain's:\n"
-        "  C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe scripts\\gen_ant_wire.py"
+        "PyYAML is not available to this interpreter. Either pip install pyyaml,\n"
+        "or use the NCS toolchain's Python, which ships it (<id> is the bundle\n"
+        "directory under toolchains/):\n"
+        "  Windows:     C:\\ncs\\toolchains\\<id>\\opt\\bin\\python.exe scripts\\gen_ant_wire.py\n"
+        "  macOS:       /opt/nordic/ncs/toolchains/<id>/bin/python3 scripts/gen_ant_wire.py"
     )
 
 ROOT = Path(__file__).resolve().parent.parent
