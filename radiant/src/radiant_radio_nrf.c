@@ -1855,9 +1855,24 @@ static volatile bool radio_on_loan;
 
 /* Defined beside the other gate callbacks, where the RADIO-ownership
  * reasoning lives; declared here because the allocation they capture
- * happens at init, above them. */
+ * happens at init, above them.
+ *
+ * Both definitions live inside CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL, while
+ * radiant_nrf_gate_on_grant()/_on_grant_end() - which call attach() - are
+ * compiled unconditionally. Declaring attach() unconditionally therefore left
+ * an undefined reference to a static function in every non-gate build ("used
+ * but never defined"), which linked only because --gc-sections happened to
+ * discard the unreferenced grant hooks. Without the gate there is no
+ * per-grant swap, so the non-gate build gets an explicit no-op instead. */
+#if defined(CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL)
 static void radio_endpoints_save(void);
 __maybe_unused static void radio_endpoints_attach(bool on);
+#else
+static inline void radio_endpoints_attach(bool on)
+{
+	(void)on;
+}
+#endif
 
 /* Give every borrowed register back to its owner, once, at init - not the
  * per-grant swap (see radiant_nrf_gate_on_grant()), just the other half of
