@@ -116,7 +116,7 @@ class RunExitStatus(unittest.TestCase):
     the process exit status. A short run that sends nothing has no runner
     error but fails quality (no transfers completed, no receive stimulus)."""
 
-    def _run(self, gate):
+    def _run(self, gate, parts=None):
         import argparse
         from unittest import mock
 
@@ -158,7 +158,12 @@ class RunExitStatus(unittest.TestCase):
                 return real(r, gt)
 
             with mock.patch.object(g, 'exit_code', spy):
-                code = g.run(args)
+                if parts is None:
+                    code = g.run(args)
+                else:
+                    with mock.patch.object(g, 'assess_parts',
+                                           lambda r, c: parts):
+                        code = g.run(args)
         return code, report
 
     def test_a_quality_failure_exits_nonzero_without_gate(self):
@@ -167,10 +172,13 @@ class RunExitStatus(unittest.TestCase):
         self.assertTrue(report['quality_failures'])
         self.assertEqual(code, 1)
 
-    def test_a_short_run_that_only_lacks_sufficiency_is_not_a_failure_here(self):
-        # Sanity for the fake: the sufficiency reason is present too.
-        code, report = self._run(gate=True)
-        self.assertTrue(report['sufficiency_failures'])
+    def test_sufficiency_alone_fails_only_under_gate(self):
+        # Isolated: assess_parts says short and nothing else, no runner error.
+        code, report = self._run(gate=False, parts=(['short'], []))
+        self.assertEqual(report['errors'], [])
+        self.assertEqual(code, 0)
+        code, report = self._run(gate=True, parts=(['short'], []))
+        self.assertEqual(report['errors'], [])
         self.assertEqual(code, 1)
 
 

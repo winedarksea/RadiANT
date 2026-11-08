@@ -563,6 +563,7 @@ class TestTelemetryEnvelope(unittest.TestCase):
         exact = summary["exact_loss"]
         self.assertIsNotNone(exact, "no exact figure from a 0x60 node")
         self.assertEqual(exact["scope"], "slot")
+        self.assertEqual(summary["telemetry"]["slot_inflated"], 0)
         self.assertEqual(exact["missed"], 0)
         self.assertEqual(summary["telemetry"]["slot_overheard"], 0)
         names = {c["name"] for c in summary["checks"]}
@@ -585,6 +586,9 @@ class TestTelemetryEnvelope(unittest.TestCase):
         exact = summary["exact_loss"]
         self.assertIsNotNone(exact)
         self.assertEqual(exact["missed"], dropped_inside)
+        # Real loss alone is not an upper bound.
+        self.assertEqual(exact["scope"], "slot")
+        self.assertEqual(summary["telemetry"]["slot_inflated"], 0)
         self.assertEqual(exact["sent"], data[-1] - data[0])
 
     def _double_refill(self, at_indices):

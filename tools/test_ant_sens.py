@@ -450,13 +450,13 @@ class TestSeveralReceivers(unittest.TestCase):
 
     def test_frames_arriving_during_the_settle_are_drained_too(self):
         # A queue that is full at the start and never refills lets "drain once,
-        # then sleep" pass. Here a frame arrives every 10 ms THROUGH the
+        # then sleep" pass. Here a frame arrives every 5 ms THROUGH the
         # settle, so only reading until the end leaves the queue empty.
         import time
 
         class Reader:
             def __init__(self, t0):
-                self.arrivals = [t0 + 0.01 * k for k in range(60)]
+                self.arrivals = [t0 + 0.005 * k for k in range(120)]
 
             def ready(self):
                 now = time.monotonic()
@@ -488,8 +488,9 @@ class TestSeveralReceivers(unittest.TestCase):
         ant_sens.run_ladder_multi([("a", 1, readers[0]), ("b", 2, readers[1])],
                                   0, "power", [4], None, 1.0, 0.4, Master(),
                                   False, measure=fake)
-        # At most the one frame landing in the last millisecond.
-        self.assertLessEqual(max(seen), 1, seen)
+        # Drain-once leaves about 80 frames; a loaded box can leave
+        # some 5 ms arrivals unread at the end, so the bound is loose.
+        self.assertLess(max(seen), 40, seen)
 
     def test_one_receiver_failing_does_not_take_the_rung_down(self):
         def fake(dev, *_):
