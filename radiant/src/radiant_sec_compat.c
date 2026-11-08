@@ -52,36 +52,72 @@ void radiant_sec_compat_nonce_block(uint8_t out[RADIANT_SEC_BLOCK_BYTES],
 	out[9] = sub;
 }
 
+/* One CMAC over a nonce block and the covered bytes, truncated to `taglen`: the
+ * shape of every tag in this file (Tier I covers nothing past the nonce, Tier II
+ * its window, the announcement and the command their message). One copy of the
+ * pipeline rather than one per tag. */
+static int tagged(const struct radiant_sec_key *k, uint32_t epoch,
+		  uint16_t devnum, uint16_t counter, uint8_t sub,
+		  const uint8_t *msg, size_t len, uint8_t *out, uint8_t taglen)
+{
+	struct radiant_sec_cmac_ctx ctx;
+	uint8_t block[RADIANT_SEC_BLOCK_BYTES];
+	uint8_t tag[RADIANT_SEC_BLOCK_BYTES];
+	int     rc;
+
+	radiant_sec_compat_nonce_block(block, epoch, devnum, counter, sub);
+
+	rc = radiant_sec_cmac_init(&ctx, k);
+	if (rc == RADIANT_SEC_OK) {
+		rc = radiant_sec_cmac_update(&ctx, block, sizeof(block));
+	}
+	if (rc == RADIANT_SEC_OK) {
+		rc = radiant_sec_cmac_update(&ctx, msg, len);
+	}
+	if (rc == RADIANT_SEC_OK) {
+		rc = radiant_sec_cmac_final(&ctx, tag);
+	}
+	if (rc == RADIANT_SEC_OK) {
+		memcpy(out, tag, taglen);
+	}
+
+	radiant_sec_wipe(&ctx, sizeof(ctx));
+	radiant_sec_wipe(tag, sizeof(tag));
+	radiant_sec_wipe(block, sizeof(block));
+	return rc;
+}
+
 int radiant_sec_compat_tier1_tag(const struct radiant_sec_key *k_auth,
 				 uint32_t epoch, uint16_t devnum,
 				 uint16_t att_counter,
 				 uint8_t out[RADIANT_SEC_COMPAT_TIER_I_TAG_BYTES])
 {
-	uint8_t block[RADIANT_SEC_BLOCK_BYTES];
-	uint8_t tag[RADIANT_SEC_BLOCK_BYTES];
-	int rc;
-
 	if (k_auth == NULL || out == NULL) {
 		return RADIANT_SEC_EINVAL;
 	}
 
-	radiant_sec_compat_nonce_block(block, epoch, devnum, att_counter,
-				       RADIANT_SEC_COMPAT_SUBTYPE_TIER_I);
-
 	/* The message IS the nonce and there is nothing after it. That single
 	 * fact is the tier: with no payload covered, a delivered tag verifies
-	 * whatever else was lost. */
-	rc = radiant_sec_cmac(k_auth, block, sizeof(block), tag);
-	if (rc == RADIANT_SEC_OK) {
-		memcpy(out, tag, RADIANT_SEC_COMPAT_TIER_I_TAG_BYTES);
-	}
+	 * whatever else was lost. The eleven bytes not sent are as secret as
+	 * the key that made them, and tagged() wipes them. */
+	return tagged(k_auth, epoch, devnum, att_counter,
+		      RADIANT_SEC_COMPAT_SUBTYPE_TIER_I, NULL, 0u, out,
+		      RADIANT_SEC_COMPAT_TIER_I_TAG_BYTES);
+}
 
-	/* The eleven bytes not sent are as secret as the key that made them:
-	 * an attacker who learns them learns the untruncated tag for a counter
-	 * value that has not been used yet. */
-	radiant_sec_wipe(tag, sizeof(tag));
-	radiant_sec_wipe(block, sizeof(block));
-	return rc;
+/* The MAC over `count` covered messages. A window is n-1 of them, or up to
+ * COMPAT_WIN_EXTRA more when it closes late (see the stream section). The
+ * covered bytes are streamed through the CMAC, never copied, which is why
+ * there is no buffer for them here. */
+static int tier2_mac(const struct radiant_sec_key *k_auth, uint32_t epoch,
+		     uint16_t devnum, uint16_t window_index,
+		     const uint8_t *msgs, uint8_t count,
+		     uint8_t out[RADIANT_SEC_COMPAT_TIER_II_TAG_BYTES])
+{
+	return tagged(k_auth, epoch, devnum, window_index,
+		      RADIANT_SEC_COMPAT_SUBTYPE_TIER_II, msgs,
+		      (size_t)count * RADIANT_SEC_COMPAT_MSG_BYTES, out,
+		      RADIANT_SEC_COMPAT_TIER_II_TAG_BYTES);
 }
 
 int radiant_sec_compat_tier2_tag(const struct radiant_sec_key *k_auth,
@@ -90,43 +126,12 @@ int radiant_sec_compat_tier2_tag(const struct radiant_sec_key *k_auth,
 				 uint8_t n,
 				 uint8_t out[RADIANT_SEC_COMPAT_TIER_II_TAG_BYTES])
 {
-	struct radiant_sec_cmac_ctx ctx;
-	uint8_t block[RADIANT_SEC_BLOCK_BYTES];
-	uint8_t tag[RADIANT_SEC_BLOCK_BYTES];
-	int rc;
-
 	if (k_auth == NULL || msgs == NULL || out == NULL ||
 	    !window_is_legal(n)) {
 		return RADIANT_SEC_EINVAL;
 	}
-
-	radiant_sec_compat_nonce_block(block, epoch, devnum, window_index,
-				       RADIANT_SEC_COMPAT_SUBTYPE_TIER_II);
-
-	/* Absorbed incrementally, which is why there is no buffer here for the
-	 * covered messages at all: at N = 32 a one-shot call would want 248
-	 * bytes of stack for something CMAC consumes sixteen at a time. The
-	 * same reason the spread MAC's window needs no payload buffer. */
-	rc = radiant_sec_cmac_init(&ctx, k_auth);
-	if (rc == RADIANT_SEC_OK) {
-		rc = radiant_sec_cmac_update(&ctx, block, sizeof(block));
-	}
-	if (rc == RADIANT_SEC_OK) {
-		rc = radiant_sec_cmac_update(&ctx, msgs,
-					     (size_t)(n - 1u) *
-					     RADIANT_SEC_COMPAT_MSG_BYTES);
-	}
-	if (rc == RADIANT_SEC_OK) {
-		rc = radiant_sec_cmac_final(&ctx, tag);
-	}
-	if (rc == RADIANT_SEC_OK) {
-		memcpy(out, tag, RADIANT_SEC_COMPAT_TIER_II_TAG_BYTES);
-	}
-
-	radiant_sec_wipe(&ctx, sizeof(ctx));
-	radiant_sec_wipe(tag, sizeof(tag));
-	radiant_sec_wipe(block, sizeof(block));
-	return rc;
+	return tier2_mac(k_auth, epoch, devnum, window_index, msgs,
+			 (uint8_t)(n - 1u), out);
 }
 
 /*
@@ -137,7 +142,13 @@ int radiant_sec_compat_tier2_tag(const struct radiant_sec_key *k_auth,
 
 #define COMPAT_MAX_CH   CONFIG_RADIANT_SEC_COMPAT_MAX_CHANNELS
 #define COMPAT_MSG      RADIANT_SEC_COMPAT_MSG_BYTES
-#define COMPAT_WIN_MAX  ((RADIANT_SEC_COMPAT_N_MAX - 1) * COMPAT_MSG)
+/* A Tier II window is N-1 covered messages and then its tag. The tag goes out
+ * in the first slot the seam offers once N-1 have gone, and the seam never
+ * offers two slots of every 121 (messages 119 and 120, the common pages), so a
+ * tag due on one of them is OWED past them: those messages join the window and
+ * the tag follows. COMPAT_WIN_EXTRA is the most that can be, on both sides. */
+#define COMPAT_WIN_EXTRA 2u
+#define COMPAT_WIN_MAX  ((RADIANT_SEC_COMPAT_N_MAX - 1 + COMPAT_WIN_EXTRA) * COMPAT_MSG)
 #define COMPAT_US_PER_S 1000000u
 
 struct compat_ctx {
@@ -171,6 +182,7 @@ struct compat_ctx {
 	/* ── TX ── */
 	uint32_t tx_msgs;               /* transmitted messages since the anchor */
 	uint8_t  tx_win[COMPAT_WIN_MAX];
+	uint8_t  tx_fill;               /* messages in the open window */
 	bool     tx_closing;            /* the body just handed out is a Tier II
 					 * tag, so the message it becomes closes
 					 * the window instead of joining it */
@@ -452,6 +464,7 @@ int radiant_sec_compat_configure(uint8_t ch, uint8_t switches, uint8_t n,
 	/* Any window in flight was counted against a different N. */
 	c->tx_msgs = 0u;
 	c->tx_closing = false;
+	c->tx_fill = 0u;
 	c->rx_absorbed = 0u;
 	c->rx_overflow = false;
 	c->rx_t2_ok = false;
@@ -493,6 +506,7 @@ int radiant_sec_compat_set_epoch(uint8_t ch, uint32_t epoch, uint64_t now_us,
 
 	c->tx_msgs = 0u;
 	c->tx_closing = false;
+	c->tx_fill = 0u;
 	c->tx_t1_any = false;
 	c->rx_absorbed = 0u;
 	c->rx_overflow = false;
@@ -626,7 +640,8 @@ int radiant_sec_compat_tx_attest(uint8_t ch, uint64_t now_us, uint8_t *body,
 		return RADIANT_SEC_EINVAL;
 	}
 
-	rc = apply_wraps(c, interval_index(c, now_us) >> 16);
+	idx = interval_index(c, now_us);
+	rc = apply_wraps(c, idx >> 16);
 	if (rc != RADIANT_SEC_OK) {
 		return rc;
 	}
@@ -635,13 +650,12 @@ int radiant_sec_compat_tx_attest(uint8_t ch, uint64_t now_us, uint8_t *body,
 	 * message with no slack, while Tier I's time-derived counter tolerates
 	 * a slot of slip. */
 	if ((c->switches & RADIANT_SEC_COMPAT_SW_TIER_II) != 0u &&
-	    (c->tx_msgs % c->n) == (uint32_t)(c->n - 1u)) {
+	    c->tx_fill >= (uint8_t)(c->n - 1u)) {
 		uint32_t window = c->tx_msgs / c->n;
 
-		rc = radiant_sec_compat_tier2_tag(&c->k_auth, c->epoch,
-						  c->devnum,
-						  (uint16_t)(window & 0xFFFFu),
-						  c->tx_win, c->n, tag);
+		rc = tier2_mac(&c->k_auth, c->epoch, c->devnum,
+			       (uint16_t)(window & 0xFFFFu), c->tx_win,
+			       c->tx_fill, tag);
 		if (rc != RADIANT_SEC_OK) {
 			return rc;
 		}
@@ -652,7 +666,6 @@ int radiant_sec_compat_tx_attest(uint8_t ch, uint64_t now_us, uint8_t *body,
 	}
 
 	if ((c->switches & RADIANT_SEC_COMPAT_SW_TIER_I) != 0u) {
-		idx = interval_index(c, now_us);
 		if (!c->tx_t1_any || idx != c->tx_t1_last) {
 			rc = radiant_sec_compat_tier1_tag(&c->k_auth, c->epoch,
 							  c->devnum,
@@ -677,7 +690,6 @@ int radiant_sec_compat_tx_attest(uint8_t ch, uint64_t now_us, uint8_t *body,
 int radiant_sec_compat_tx_sent(uint8_t ch, const uint8_t *pay, uint8_t len)
 {
 	struct compat_ctx *c = ctx_of(ch);
-	uint32_t           pos;
 
 	if (!ctx_armed(c)) {
 		return RADIANT_SEC_OK;
@@ -687,19 +699,24 @@ int radiant_sec_compat_tx_sent(uint8_t ch, const uint8_t *pay, uint8_t len)
 	}
 
 	if ((c->switches & RADIANT_SEC_COMPAT_SW_TIER_II) != 0u) {
-		pos = c->tx_msgs % c->n;
 		if (c->tx_closing) {
 			/* This message IS the tag. It closes the window rather
 			 * than joining it, and the next window starts empty at
 			 * the message after it. */
 			c->tx_closing = false;
-		} else if (pos < (uint32_t)(c->n - 1u)) {
-			memcpy(&c->tx_win[pos * COMPAT_MSG], pay, COMPAT_MSG);
+			c->tx_fill = 0u;
+		} else if (c->tx_fill < (uint8_t)(c->n - 1u + COMPAT_WIN_EXTRA)) {
+			/* Joins the window, including one sent in a slot that
+			 * was owed a tag: the tag stays owed and goes in the
+			 * next slot the seam offers, so a tag due on 119/120
+			 * is late rather than lost. */
+			memcpy(&c->tx_win[c->tx_fill * COMPAT_MSG], pay,
+			       COMPAT_MSG);
+			c->tx_fill++;
 		}
-		/* else: the slot owed a tag and the caller sent something else.
-		 * The window closes untagged; a receiver will absorb N messages
-		 * without a close and report the window unverified, which is
-		 * the truth about what went on the air. */
+		/* else: more late than the seam can make it. The window is no
+		 * longer what a receiver counted, so its tag will not verify,
+		 * which is the truth about what went on the air. */
 	}
 	c->tx_msgs++;
 	return RADIANT_SEC_OK;
@@ -712,7 +729,7 @@ static void rx_absorb(struct compat_ctx *c, const uint8_t *pay)
 	if ((c->switches & RADIANT_SEC_COMPAT_SW_TIER_II) == 0u) {
 		return;
 	}
-	if (c->rx_absorbed < (uint8_t)(c->n - 1u)) {
+	if (c->rx_absorbed < (uint8_t)(c->n - 1u + COMPAT_WIN_EXTRA)) {
 		memcpy(&c->rx_win[c->rx_absorbed * COMPAT_MSG], pay, COMPAT_MSG);
 		c->rx_absorbed++;
 	} else {
@@ -758,6 +775,16 @@ static void rx_absorb(struct compat_ctx *c, const uint8_t *pay)
  */
 #define COMPAT_JITTER_PERIODS 4u
 #define COMPAT_SLEW_SHIFT     12u
+
+/* The tail both tiers' verdicts share: record it, tell the port, answer. */
+static int rx_verdict(struct compat_ctx *c, uint8_t sub, uint16_t index,
+		      enum radiant_sec_verdict verdict)
+{
+	c->last_verdict = verdict;
+	radiant_sec_compat_verdict(c->ch, sub, index, verdict);
+	return (verdict == RADIANT_SEC_VERDICT_VERIFIED) ? RADIANT_SEC_OK
+							 : RADIANT_SEC_EBADMAC;
+}
 
 static int rx_tier1(struct compat_ctx *c, const uint8_t *pay, uint64_t t_sync)
 {
@@ -903,11 +930,8 @@ static int rx_tier1(struct compat_ctx *c, const uint8_t *pay, uint64_t t_sync)
 		stat_bump(&c->stats.tier1_unverified);
 	}
 
-	c->last_verdict = verdict;
-	radiant_sec_compat_verdict(c->ch, RADIANT_SEC_COMPAT_SUBTYPE_TIER_I,
-				   (uint16_t)(full & 0xFFFFu), verdict);
-	return (verdict == RADIANT_SEC_VERDICT_VERIFIED) ? RADIANT_SEC_OK
-							 : RADIANT_SEC_EBADMAC;
+	return rx_verdict(c, RADIANT_SEC_COMPAT_SUBTYPE_TIER_I,
+			  (uint16_t)(full & 0xFFFFu), verdict);
 }
 
 static int rx_tier2(struct compat_ctx *c, const uint8_t *pay, uint64_t t_sync)
@@ -931,11 +955,10 @@ static int rx_tier2(struct compat_ctx *c, const uint8_t *pay, uint64_t t_sync)
 	/* Judged on what arrived; a hole is not a forgery. A window CMAC is
 	 * not self-synchronising under loss the way the spread tag is - the
 	 * reason this tier is off by default. */
-	if (!c->rx_overflow && c->rx_absorbed == (uint8_t)(c->n - 1u)) {
-		rc = radiant_sec_compat_tier2_tag(&c->k_auth, c->epoch,
-						  c->devnum,
-						  (uint16_t)(window & 0xFFFFu),
-						  c->rx_win, c->n, tag);
+	if (!c->rx_overflow && c->rx_absorbed >= (uint8_t)(c->n - 1u)) {
+		rc = tier2_mac(&c->k_auth, c->epoch, c->devnum,
+			       (uint16_t)(window & 0xFFFFu), c->rx_win,
+			       c->rx_absorbed, tag);
 		if (rc == RADIANT_SEC_OK &&
 		    radiant_sec_ct_equal(tag, &pay[2], sizeof(tag))) {
 			verdict = RADIANT_SEC_VERDICT_VERIFIED;
@@ -958,11 +981,8 @@ static int rx_tier2(struct compat_ctx *c, const uint8_t *pay, uint64_t t_sync)
 	if (c->rx_t2_ok) {
 		c->rx_t2_us = t_sync;
 	}
-	c->last_verdict = verdict;
-	radiant_sec_compat_verdict(c->ch, RADIANT_SEC_COMPAT_SUBTYPE_TIER_II,
-				   (uint16_t)(window & 0xFFFFu), verdict);
-	return (verdict == RADIANT_SEC_VERDICT_VERIFIED) ? RADIANT_SEC_OK
-							 : RADIANT_SEC_EBADMAC;
+	return rx_verdict(c, RADIANT_SEC_COMPAT_SUBTYPE_TIER_II,
+			  (uint16_t)(window & 0xFFFFu), verdict);
 }
 
 int radiant_sec_compat_rx(uint8_t ch, uint8_t sub, const uint8_t *pay,
@@ -1120,36 +1140,6 @@ int radiant_sec_compat_locator(uint8_t ch, uint32_t epoch, uint8_t attempt,
  * the counter from time on both sides rather than carrying one. The header says
  * why that is exact rather than tolerant, and what the exactness costs.
  */
-static int tagged(const struct radiant_sec_key *k, uint32_t epoch,
-		  uint16_t devnum, uint16_t counter, uint8_t sub,
-		  const uint8_t *msg, uint8_t len, uint8_t *out, uint8_t taglen)
-{
-	struct radiant_sec_cmac_ctx ctx;
-	uint8_t block[RADIANT_SEC_BLOCK_BYTES];
-	uint8_t tag[RADIANT_SEC_BLOCK_BYTES];
-	int     rc;
-
-	radiant_sec_compat_nonce_block(block, epoch, devnum, counter, sub);
-
-	rc = radiant_sec_cmac_init(&ctx, k);
-	if (rc == RADIANT_SEC_OK) {
-		rc = radiant_sec_cmac_update(&ctx, block, sizeof(block));
-	}
-	if (rc == RADIANT_SEC_OK) {
-		rc = radiant_sec_cmac_update(&ctx, msg, len);
-	}
-	if (rc == RADIANT_SEC_OK) {
-		rc = radiant_sec_cmac_final(&ctx, tag);
-	}
-	if (rc == RADIANT_SEC_OK) {
-		memcpy(out, tag, taglen);
-	}
-
-	radiant_sec_wipe(&ctx, sizeof(ctx));
-	radiant_sec_wipe(tag, sizeof(tag));
-	radiant_sec_wipe(block, sizeof(block));
-	return rc;
-}
 
 /* Armed enough to authenticate: a key and an epoch, weaker than ctx_armed()
  * because it doesn't require either attestation tier on. `physical` +
@@ -1160,17 +1150,27 @@ static bool ctx_keyed(const struct compat_ctx *c)
 	return c != NULL && c->used && c->epoch_set && c->k_root.bits != 0u;
 }
 
+/* Compare a freshly computed tag with the one received, and wipe the former. */
+static int tag_matches(uint8_t *want, const uint8_t *got, size_t n)
+{
+	bool ok = radiant_sec_ct_equal(want, got, n);
+
+	radiant_sec_wipe(want, n);
+	return ok ? RADIANT_SEC_OK : RADIANT_SEC_EBADMAC;
+}
+
 static int announce_tag(struct compat_ctx *c, uint64_t when_us,
 			const uint8_t *msg, uint8_t len, uint8_t *out)
 {
-	int rc;
+	uint32_t idx = interval_index(c, when_us);
+	int      rc;
 
-	rc = apply_wraps(c, interval_index(c, when_us) >> 16);
+	rc = apply_wraps(c, idx >> 16);
 	if (rc != RADIANT_SEC_OK) {
 		return rc;
 	}
 	return tagged(&c->k_auth, c->epoch, c->devnum,
-		      (uint16_t)(interval_index(c, when_us) & 0xFFFFu),
+		      (uint16_t)(idx & 0xFFFFu),
 		      RADIANT_SEC_COMPAT_SUBTYPE_ANNOUNCE, msg, len, out,
 		      RADIANT_SEC_COMPAT_ANNOUNCE_TAG_BYTES);
 }
@@ -1213,19 +1213,20 @@ int radiant_sec_compat_announce_verify(uint8_t ch, uint64_t t_sync,
 	 * attestation: it says where the stream is going, not that the stream
 	 * is authentic, and folding it into the stream verdict would let a
 	 * refused announcement read as a stream that stopped verifying. */
-	{
-		bool ok = radiant_sec_ct_equal(want, tag, sizeof(want));
-
-		radiant_sec_wipe(want, sizeof(want));
-		return ok ? RADIANT_SEC_OK : RADIANT_SEC_EBADMAC;
-	}
+	return tag_matches(want, tag, sizeof(want));
 }
 
 static int cmd_tag(struct compat_ctx *c, uint64_t when_us, const uint8_t *msg,
 		   uint8_t len, uint8_t *out)
 {
 	struct radiant_sec_key k_cmd;
+	uint32_t               idx = interval_index(c, when_us);
 	int                    rc;
+
+	rc = apply_wraps(c, idx >> 16);
+	if (rc != RADIANT_SEC_OK) {
+		return rc;
+	}
 
 	/* Derived per call and destroyed rather than cached: a command is
 	 * rare, and a key slot is the scarce resource on a node with no key
@@ -1236,8 +1237,7 @@ static int cmd_tag(struct compat_ctx *c, uint64_t when_us, const uint8_t *msg,
 	if (rc != RADIANT_SEC_OK) {
 		return rc;
 	}
-	rc = tagged(&k_cmd, c->epoch, c->devnum,
-		    (uint16_t)(interval_index(c, when_us) & 0xFFFFu),
+	rc = tagged(&k_cmd, c->epoch, c->devnum, (uint16_t)(idx & 0xFFFFu),
 		    RADIANT_SEC_COMPAT_SUBTYPE_COMMAND, msg, len, out,
 		    RADIANT_SEC_COMPAT_CMD_TAG_BYTES);
 	radiant_sec_key_destroy(&k_cmd);
@@ -1249,17 +1249,12 @@ int radiant_sec_compat_cmd_tag(uint8_t ch, uint64_t now_us, const uint8_t *msg,
 			       uint8_t out[RADIANT_SEC_COMPAT_CMD_TAG_BYTES])
 {
 	struct compat_ctx *c = ctx_of(ch);
-	int                rc;
 
 	if (!ctx_keyed(c)) {
 		return RADIANT_SEC_ENOKEY;
 	}
 	if (msg == NULL || out == NULL || len != RADIANT_SEC_COMPAT_CMD_BYTES) {
 		return RADIANT_SEC_EINVAL;
-	}
-	rc = apply_wraps(c, interval_index(c, now_us) >> 16);
-	if (rc != RADIANT_SEC_OK) {
-		return rc;
 	}
 	return cmd_tag(c, now_us, msg, len, out);
 }
@@ -1278,20 +1273,11 @@ int radiant_sec_compat_cmd_verify(uint8_t ch, uint64_t t_sync,
 	if (msg == NULL || tag == NULL || len != RADIANT_SEC_COMPAT_CMD_BYTES) {
 		return RADIANT_SEC_EINVAL;
 	}
-	rc = apply_wraps(c, interval_index(c, t_sync) >> 16);
-	if (rc != RADIANT_SEC_OK) {
-		return rc;
-	}
 	rc = cmd_tag(c, t_sync, msg, len, want);
 	if (rc != RADIANT_SEC_OK) {
 		return rc;
 	}
-	{
-		bool ok = radiant_sec_ct_equal(want, tag, sizeof(want));
-
-		radiant_sec_wipe(want, sizeof(want));
-		return ok ? RADIANT_SEC_OK : RADIANT_SEC_EBADMAC;
-	}
+	return tag_matches(want, tag, sizeof(want));
 }
 
 /* What a candidate epoch is tested against; kept as one internal struct so

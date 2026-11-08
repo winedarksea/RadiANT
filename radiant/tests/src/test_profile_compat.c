@@ -603,6 +603,7 @@ ZTEST(profile_compat, test_tier1_leaves_within_the_receivers_jitter_allowance)
 	struct radiant_sec_compat_stats st;
 	uint64_t                        max_slip = 0u;
 	uint32_t                        pages = 0u;
+	uint32_t                        windows = 0u;
 	uint32_t                        i;
 
 	keys_up(both, (uint8_t)(both | RADIANT_SEC_COMPAT_SW_PIN),
@@ -652,17 +653,17 @@ ZTEST(profile_compat, test_tier1_leaves_within_the_receivers_jitter_allowance)
 			pages++;
 		}
 
-		/* Tier II's verdict is not asserted per window: a tag that falls
-		 * due on message 119 or 120, which the seam never offers, closes
-		 * its window untagged (radiant_sec_compat_tx_sent()), and the
-		 * receiver also loses the window after it. That is Tier II's own
-		 * behaviour and not this test's subject. */
+		/* Every message, Tier II tags included: a tag that falls due on
+		 * message 119 or 120, which the seam never offers, is owed past
+		 * them (radiant_sec_compat_tx_sent()) and the receiver counts to
+		 * it, so no window is lost with no packet lost. */
 		rc = radiant_sec_compat_rx(RX_CH, sub_of(body), body, 8u,
 					   now + skew);
-		if (sub_of(body) != RADIANT_SEC_COMPAT_SUBTYPE_TIER_II) {
-			zassert_equal(RADIANT_SEC_OK, rc,
-				      "message %u (page 0x%02X) refused at the "
-				      "receiver: %d", i, body[0], rc);
+		zassert_equal(RADIANT_SEC_OK, rc,
+			      "message %u (page 0x%02X) refused at the "
+			      "receiver: %d", i, body[0], rc);
+		if (sub_of(body) == RADIANT_SEC_COMPAT_SUBTYPE_TIER_II) {
+			windows++;
 		}
 	}
 
@@ -681,10 +682,14 @@ ZTEST(profile_compat, test_tier1_leaves_within_the_receivers_jitter_allowance)
 		      "%u genuine pages refused as late", st.tier1_replays);
 	zassert_equal(pages, st.tier1_verified, NULL);
 	/* Resolved against the phase Tier I taught the receiver: against the
-	 * five-day-wrong one it held before, no window could verify. */
-	zassert_true(st.tier2_verified > st.tier2_unverified,
-		     "Tier II windows: %u verified, %u not", st.tier2_verified,
-		     st.tier2_unverified);
+	 * five-day-wrong one it held before, no window could verify. And ALL of
+	 * them, not "more than not": with no packet lost, an unverified window
+	 * is a defect (before the owed-tag fix, 17 of 998 were). */
+	zassert_true(windows >= 900u, "only %u Tier II windows", windows);
+	zassert_equal(windows, st.tier2_verified,
+		      "Tier II windows: %u sent, %u verified, %u not", windows,
+		      st.tier2_verified, st.tier2_unverified);
+	zassert_equal(0u, st.tier2_unverified, NULL);
 }
 
 /* ═══ Bicycle power, the other compat target ═════════════════════════════ */

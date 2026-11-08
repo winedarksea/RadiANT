@@ -308,15 +308,18 @@ class CompatVerifier:
         if self.window is None:
             self.tier2["unconfigured"] += 1
             return ATTEST_UNVERIFIED
-        if len(covered) != self.window - 1:
+        if not self.window - 1 <= len(covered) <= self.window + 1:
             # NOT a failed tag - the window's messages didn't all arrive, so
             # there's nothing to check against: the honest regression a
-            # window CMAC has and Tier I does not.
+            # window CMAC has and Tier I does not. A window may hold up to
+            # two MORE than N-1: a tag due on message 119 or 120, which the
+            # firmware seam never offers, is owed past them and they join
+            # the window (radiant_sec_compat.c, COMPAT_WIN_EXTRA).
             self.tier2[ATTEST_LOST] += 1
             return ATTEST_LOST
 
         expected = rc.compat_tier2_tag(self.k_auth, self.epoch, self.devnum,
-                                       index, covered)
+                                       index, covered, late=True)
         if expected == got["tag"]:
             self.tier2[ATTEST_VERIFIED] += 1
             return ATTEST_VERIFIED
