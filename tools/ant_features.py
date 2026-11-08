@@ -97,6 +97,24 @@ ADV3_BITS = [
     (0x80, "single channel encryption"),
 ]
 
+# A capabilities reply is 7 standard bytes (max channels, max networks,
+# standard/advanced/advanced 2 options, max SensRcore channels, advanced
+# options 3); bytes 7 and up are extended and optional. A Garmin ANT USB-m
+# answers with exactly 7, and the only byte this tool reads is [6].
+MIN_CAPABILITIES_LEN = 7
+FULL_CAPABILITIES_LEN = 9
+
+
+def capabilities_usable(caps) -> bool:
+    """True when a capabilities reply carries every byte this tool reads.
+
+    `request()` returns an int (the refusal code) or None (no reply) when
+    there is no reply body, and both are unusable, like a short reply.
+    """
+    return (isinstance(caps, (bytes, bytearray))
+            and len(caps) >= MIN_CAPABILITIES_LEN)
+
+
 # Advertised, not bridged, and staying that way (clearing the capability bit
 # would make this dongle report something a real ANT USB-m does not).
 KNOWN_GAPS = {
@@ -643,11 +661,18 @@ def main() -> int:
         close_device(dev)
         return 1
     caps = request(dev, reader, 0, MESG_CAPABILITIES_ID)
-    if isinstance(caps, (int, type(None))) or len(caps) < 9:
+    if not capabilities_usable(caps):
         print(f"  FAIL: capabilities unreadable ({caps})")
         close_device(dev)
         return 1
-    print(f"  OK: {caps.hex()}")
+    if len(caps) < FULL_CAPABILITIES_LEN:
+        # Said out loud so a short reply is visible in the log rather than
+        # accepted silently; nothing below indexes past caps[6].
+        extended = len(caps) - MIN_CAPABILITIES_LEN
+        which = "absent" if extended == 0 else f"{extended} of 2"
+        print(f"  OK: {caps.hex()} (standard 7 bytes; extended bytes {which})")
+    else:
+        print(f"  OK: {caps.hex()}")
 
     by_message = load_host_api()
 
