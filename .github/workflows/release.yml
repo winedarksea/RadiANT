@@ -1657,6 +1657,11 @@ jobs:
             # CONFIG_BT is not set
             # CONFIG_MPSL is not set
             # CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL is not set
+            # ADR 0020's opt-out: the simulator keeps its fixed device number
+            # and links no entropy backend, so neither its number nor its
+            # stack changes with self-provisioning.
+            absent:CONFIG_RADIANT_NODE_IDENT_SELF_PROVISION
+            # CONFIG_RADIANT_SEC_RNG_ENTROPY is not set
 
   # The governing constraint of the security feature, as a job rather than as a
   # claim in a comment.
