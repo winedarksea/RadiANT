@@ -726,7 +726,7 @@ static void rx_absorb(struct compat_ctx *c, const uint8_t *pay)
  * Tier I's phase lock.
  *
  * A compat receiver is never told where the sensor's epoch began: a hostless
- * strap anchors on its own power-up, and adopt_epoch() changes the epoch but
+ * strap anchors on its own boot, and adopt_epoch() changes the epoch but
  * not the receiver's guess at the phase. So the anchor is learned from the
  * air, and it is the EARLIEST phase any verified page has proven. A genuine
  * page arrives at obs = t_sync - counter x T = A + d, where d is the sender's
