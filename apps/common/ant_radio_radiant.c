@@ -1295,6 +1295,17 @@ static const struct radiant_search_cbs api_search_cbs = {
 	.permit = api_search_permit,
 };
 
+/* Does the channel's network have a key installed? */
+static bool api_net_keyed(uint8_t ch)
+{
+	uint8_t net = radiant_channel_network_get(ch);
+
+	if (net >= API_NETWORKS) {
+		net = 0u;
+	}
+	return api_net_valid[net];
+}
+
 static void api_search_begin(uint8_t ch, radiant_time_t now)
 {
 	struct radiant_search_id_filter want;
@@ -1315,11 +1326,25 @@ static void api_search_begin(uint8_t ch, radiant_time_t now)
 		       ? RADIANT_SEARCH_MODE_SCAN
 		       : RADIANT_SEARCH_MODE_ACQUIRE;
 
-	/* The sweep follows the frequency its searchers sit on, and a channel
-	 * is only offered devices heard on its own. All-57 sessions never
-	 * leave the default. */
-	(void)radiant_search_begin_rf(&api_search, ch, mode, &want, now,
-				      RADIANT_SEARCH_TIMEOUT_NONE, api_rf_of(ch));
+	/*
+	 * A channel on a KEYED network declares its frequency: the sweep follows
+	 * it, and the channel is only offered devices heard there. A channel on a
+	 * keyless network declares nothing. The sweep hears only the ANT+
+	 * address, so a keyless channel's own RF says nothing about where ANT+
+	 * devices are: Zwift's keyless background scans sit on RF 71 (network 2)
+	 * and RF 53 (network 1) and rely on the sweep staying on 57 and handing
+	 * them what it hears there (captures/zwift-20261018). Declared, they
+	 * would drag the sweep to a frequency with no ANT+ devices on it and
+	 * refuse every frame heard on 57.
+	 */
+	if (api_net_keyed(ch)) {
+		(void)radiant_search_begin_rf(&api_search, ch, mode, &want, now,
+					      RADIANT_SEARCH_TIMEOUT_NONE,
+					      api_rf_of(ch));
+	} else {
+		(void)radiant_search_begin(&api_search, ch, mode, &want, now,
+					   RADIANT_SEARCH_TIMEOUT_NONE);
+	}
 }
 
 /* ---------------------------------------------------------------------------
@@ -3313,19 +3338,29 @@ static void api_warn_slip_prone_id(uint8_t ch)
 	}
 }
 
-/* A slave on another frequency is legal and now served (the sweep retunes to
- * follow its searchers), but only on the ANT+ network key, and a mixed session
- * alternates passes between its frequencies. Say so once per open, so the
- * longer discovery has a readable cause. */
+/* A slave on another frequency is legal and, on a keyed network, now served
+ * (the sweep retunes to follow it, and a mixed session alternates passes
+ * between its frequencies). A keyless network's channel never moves the sweep.
+ * Say so once per open, so the longer discovery has a readable cause. */
 static void api_warn_off_57_slave(uint8_t ch)
 {
 	uint8_t rf = api_rf_of(ch);
 
-	if (!radiant_channel_is_master(ch) && rf != RADIANT_RF_INDEX_ANT_PLUS) {
+	if (radiant_channel_is_master(ch) || rf == RADIANT_RF_INDEX_ANT_PLUS) {
+		return;
+	}
+	if (api_net_keyed(ch)) {
 		LOG_WRN("ch %u: slave opened on RF %u (not %u): the discovery "
 			"sweep retunes to follow it, and alternates passes "
 			"when channels disagree",
 			(unsigned int)ch, (unsigned int)rf,
+			(unsigned int)RADIANT_RF_INDEX_ANT_PLUS);
+	} else {
+		LOG_WRN("ch %u: slave opened on RF %u (not %u) on a network with "
+			"no key: the discovery sweep stays on RF %u and this "
+			"channel takes what it hears there",
+			(unsigned int)ch, (unsigned int)rf,
+			(unsigned int)RADIANT_RF_INDEX_ANT_PLUS,
 			(unsigned int)RADIANT_RF_INDEX_ANT_PLUS);
 	}
 }

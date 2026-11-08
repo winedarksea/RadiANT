@@ -490,9 +490,10 @@ struct radiant_search_chan {
 
 struct radiant_search_seen {
 	bool                  valid;
+	uint8_t                   rf; /* the frequency it was heard on (fits the
+				       * padding before the 64-bit t_seen) */
 	struct radiant_channel_id id;
 	radiant_time_t            t_seen;
-	uint8_t                   rf; /* the frequency it was heard on */
 };
 
 struct radiant_search {

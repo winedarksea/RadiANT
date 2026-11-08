@@ -281,3 +281,52 @@ ZTEST(radiant_search_rf, test_the_seen_cache_does_not_steer_across_frequencies)
 		      "a device heard on RF %u steered a channel on RF %u", RF_A, RF_B);
 	zassert_ok(radiant_search_end(&g_s, 0u));
 }
+
+/*
+ * A pass that ends while nobody (or nobody with a declared frequency) is
+ * searching must not leave its "pass done" flag behind: the next mixed session
+ * would otherwise leave its first frequency at the very first boundary instead
+ * of after a whole pass on it.
+ */
+/* `windows` is what is left of the pass the cursor is part-way through. */
+static void expect_mixed_session_stays_for(uint16_t windows)
+{
+	uint8_t rf[64];
+
+	begin(0u, RF_B);
+	begin(1u, RF_A);
+	run_pass(rf, windows);
+	expect_pass_on(rf, windows, RF_A, "first mixed pass after a stale wrap");
+	zassert_ok(radiant_search_end(&g_s, 0u));
+	zassert_ok(radiant_search_end(&g_s, 1u));
+}
+
+ZTEST(radiant_search_rf, test_a_pass_that_ended_with_no_searchers_does_not_leak)
+{
+	uint8_t rf[64];
+	uint16_t n;
+
+	bring_up();
+	begin(0u, RF_A);
+	n = radiant_search_sets(&g_s);
+	run_pass(rf, n); /* selecting the last set wraps the cursor */
+	zassert_ok(radiant_search_end(&g_s, 0u));
+	zassert_equal(RADIANT_SEARCH_ENOENT, win_open());
+
+	expect_mixed_session_stays_for(n);
+}
+
+ZTEST(radiant_search_rf, test_a_pass_that_ended_undeclared_does_not_leak)
+{
+	uint8_t rf[64];
+	uint16_t n;
+
+	bring_up();
+	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE, &want_any,
+					radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+	n = radiant_search_sets(&g_s);
+	run_pass(rf, n + 1u); /* one window past the wrap: the cursor is at set 1 */
+	zassert_ok(radiant_search_end(&g_s, 0u));
+
+	expect_mixed_session_stays_for(n - 1u);
+}

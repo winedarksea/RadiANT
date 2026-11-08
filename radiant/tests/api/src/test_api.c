@@ -2044,6 +2044,186 @@ ZTEST(api, test_a_slave_on_57_still_sweeps_57)
 }
 
 /*
+ * Zwift's keyless background scans, in the order its capture sets them up
+ * (captures/zwift-20261018: key on network 0 only, then channel 0 assigned to
+ * network 2 with ALWAYS_SEARCH, wildcard ID, RF 71; network 1 scans sit on RF
+ * 53). Such a channel's own frequency says nothing about where ANT+ devices
+ * are - the sweep hears only the ANT+ address - so it must neither move the
+ * sweep nor be refused what the sweep hears on 57.
+ */
+static void open_keyless_slave(uint8_t ch, uint8_t network, uint8_t rf,
+			       uint8_t ext_assign)
+{
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_network_address_set(0u, ant_plus_key));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_lib_config_set((uint8_t)ANTW_LIB_CONFIG_ALL_EXT_FIELDS));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_assign(ch, (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
+					  network, ext_assign));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_id_set(ch, 0u, 0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_period_set(ch, RADIANT_CHANNEL_PERIOD_ANT_PLUS));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_radio_freq_set(ch, rf));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR, antr_channel_open(ch));
+}
+
+static void open_keyless_scan(uint8_t ch, uint8_t network, uint8_t rf)
+{
+	open_keyless_slave(ch, network, rf,
+			   (uint8_t)ANTW_EXT_PARAM_ALWAYS_SEARCH);
+}
+
+/* (a) The sweep stays on 57. */
+ZTEST(api, test_a_keyless_scan_on_rf_71_leaves_the_sweep_on_57)
+{
+	const struct fake_radio_arm *w;
+
+	open_keyless_scan(CH, 2u, 71u);
+	w = armed_search_window();
+	zassert_equal((uint8_t)RF_INDEX, w->rf_index,
+		      "a keyless scan on RF 71 pulled the sweep to RF %u",
+		      (unsigned int)w->rf_index);
+	end_of_test();
+}
+
+/* (b) ...and the scan is still handed a device heard there. */
+ZTEST(api, test_a_keyless_scan_on_rf_71_is_still_offered_a_device_heard_on_57)
+{
+	const struct fake_radio_arm *w;
+	uint16_t                     dev;
+
+	open_keyless_scan(CH, 2u, 71u);
+	w = armed_search_window();
+	/* fake_radio does not model frequency, so the frequency the window was
+	 * armed on is what makes this "a frame heard on 57". */
+	zassert_equal((uint8_t)RF_INDEX, w->rf_index,
+		      "setup: the sweep is not on 57 (RF %u)",
+		      (unsigned int)w->rf_index);
+	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &dev);
+	fake_radio_advance_to(w->t_close + 1u);
+	drain();
+	zassert_true(count_bcast_from(dev) >= 1u,
+		     "the keyless scan was not offered #%u, heard on 57",
+		     (unsigned int)dev);
+	end_of_test();
+}
+
+/* (c) Network 1, RF 53. */
+ZTEST(api, test_a_keyless_scan_on_rf_53_leaves_the_sweep_on_57_and_hears_it)
+{
+	const struct fake_radio_arm *w;
+	uint16_t                     dev;
+
+	open_keyless_scan(CH, 1u, 53u);
+	w = armed_search_window();
+	zassert_equal((uint8_t)RF_INDEX, w->rf_index,
+		      "a keyless scan on RF 53 pulled the sweep to RF %u",
+		      (unsigned int)w->rf_index);
+	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &dev);
+	fake_radio_advance_to(w->t_close + 1u);
+	drain();
+	zassert_true(count_bcast_from(dev) >= 1u,
+		     "the RF 53 scan was not offered #%u, heard on 57",
+		     (unsigned int)dev);
+	end_of_test();
+}
+
+/* Does the armed window carry this device-number low byte in a filter? */
+static bool window_has_lo(const struct fake_radio_arm *w, uint8_t lo)
+{
+	for (uint8_t i = 0u; i < w->n_filters; i++) {
+		if (w->filters[i].addr[2] == lo) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/*
+ * A tracked slave notes its device in the seen cache on ITS channel's
+ * frequency, not on whatever the sweep happens to be on. Setup: a keyless
+ * channel on RF 71 acquires #D off the 57 sweep and tracks it on network 2's
+ * zero address (what Zwift's channels do). A tracked frame arrives, so D is
+ * noted - as heard on 71. A keyed wildcard slave on 57 then starts searching:
+ * the cache must not steer it to a device heard on another frequency, so its
+ * first window is the round-robin's next set, not D's set again.
+ */
+ZTEST(api, test_a_tracked_slaves_device_is_cached_on_its_own_frequency)
+{
+	const struct fake_radio_arm *w;
+	uint8_t                      frame[FAKE_RADIO_AIR_FRAME_MAX];
+	uint8_t                      len;
+	uint16_t                     dev;
+	uint8_t                      lo;
+	radiant_time_t               t_acq;
+	uint32_t                     n_before;
+
+	/* A plain slave, not a background scan: a scan never leaves the search. */
+	open_keyless_slave(CH, 2u, 71u, 0u);
+	w = armed_search_window();
+	air_device(w, 1u, 0x0500u, 0x0Bu, 1000u, &dev);
+	t_acq = w->t_open + 1000u; /* the acquiring frame's own sync */
+	lo = (uint8_t)(dev & 0xFFu);
+	fake_radio_advance_to(w->t_close + 1u);
+	drain();
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH),
+		      "setup: the keyless slave did not acquire");
+
+	/* The tracked channel hears network 2's own (all-zero) address: queue a
+	 * few of its device's frames on that address, one per period from the
+	 * acquisition, and let the tracked slots run. */
+	len = fake_radio_build_ant_frame(frame, dev, 0x0Bu, 5u, peer_payload);
+	frame[0] = 0u;
+	frame[1] = 0u;
+	zassert_equal(6u, fake_radio_air_master(t_acq + PERIOD_US,
+						PERIOD_US, 6u, frame, len));
+	run_virtual_us(4u * PERIOD_US);
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH));
+	zassert_true(count_bcast_from(dev) >= 2u,
+		     "setup: the tracked slave heard none of its own frames "
+		     "(%u)", (unsigned int)count_bcast_from(dev));
+
+	/* A keyed wildcard slave on 57 starts searching. */
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_assign(1u,
+					  (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
+					  0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_id_set(1u, 0u, 0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_period_set(1u, RADIANT_CHANNEL_PERIOD_ANT_PLUS));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_radio_freq_set(1u, (uint8_t)RF_INDEX));
+	n_before = fake_radio_arm_count();
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR, antr_channel_open(1u));
+	run_virtual_us(PERIOD_US);
+
+	/* The first sweep window armed since channel 1 opened. */
+	w = NULL;
+	for (uint32_t i = n_before; i < fake_radio_arm_count(); i++) {
+		const struct fake_radio_arm *a = fake_radio_arm(i);
+
+		if (a != NULL && a->kind == FAKE_RADIO_ARM_RX &&
+		    a->rc == RADIANT_RADIO_OK_RC && a->n_filters >= 2u) {
+			w = a;
+			break;
+		}
+	}
+	zassert_not_null(w, "channel 1's sweep window was never armed");
+	zassert_false(window_has_lo(w, lo),
+		      "the cache steered a 57 searcher to #%u, a device last "
+		      "heard on RF 71", (unsigned int)dev);
+
+	(void)antr_channel_close(1u);
+	fake_radio_advance(1000u);
+	drain();
+	end_of_test();
+}
+
+/*
  * A tracked channel owes its next window immediately, not one pump later -
  * the invariant a background scan lives or dies on. radiant_sched.c ends a
  * scan chunk at t_back(committed, lead), so if a tracked slave's next window

@@ -604,6 +604,9 @@ static void retune_at_boundary(struct radiant_search *s)
 	}
 
 	if (n == 0) {
+		/* Nothing declared a frequency, so no pass decision is owed; a
+		 * wrap flagged now must not leak into a later mixed session. */
+		s->pass_done = false;
 		return;
 	}
 	if (!cur_wanted) {
@@ -672,6 +675,9 @@ int radiant_search_window(struct radiant_search *s, radiant_time_t t_earliest,
 		return RADIANT_SEARCH_ESTATE;
 	}
 	if (radiant_search_n_searching(s) == 0u) {
+		/* Same: a pass that ended with nobody searching is not a pass a
+		 * later session should rotate on. */
+		s->pass_done = false;
 		return RADIANT_SEARCH_ENOENT;
 	}
 
