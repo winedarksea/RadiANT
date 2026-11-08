@@ -69,7 +69,7 @@ Grab `radiant_dongle.uf2` from the
 | Platform | What you need to do |
 |---|---|
 | **Windows** | Install a libusb-win32 driver — see [Windows drivers](#windows-drivers). Same requirement as a retail ANT stick. |
-| **macOS** | Nothing. It is a vendor-class device, so libusb claims it directly. |
+| **macOS** | Nothing for apps such as Zwift. It is a vendor-class device, so libusb claims it directly. To run this repository's Python tools, `brew install libusb` first. |
 | **Linux** | Install the udev rule so you don't need root: `sudo cp host/linux/99-ant-usb.rules /etc/udev/rules.d/ && sudo udevadm control --reload-rules && sudo udevadm trigger`, then replug. |
 | **Android** | Needs USB host/OTG. Apps should include [`host/android/device_filter.xml`](host/android/device_filter.xml) so the dongle is recognised on attach. |
 
@@ -102,7 +102,12 @@ takes the Nordic DFU package `radiant_dongle_nrf52840dongle.zip`:
 The **Pro Micro nRF52840** footprint — nice!nano and the unbranded "SuperMini"
 clones, a few dollars on AliExpress — works too, and takes
 `radiant_dongle_promicro.uf2` by the same double-tap-and-drag as the Feather. Its
-bootloader uses the same `0x26000` layout.
+bootloader uses the same `0x26000` layout, but its drive is named `NICENANO`
+(some clones: `NRF52BOOT`) rather than `FTHR840BOOT`. Most of these boards have
+no RESET button: bridge the `RST` pad to `GND` twice in quick succession. On
+macOS or Linux, `scripts/flash_uf2.sh path/to/radiant_dongle_promicro.uf2`
+finds any of these drives; on Windows pass
+`scripts\flash_uf2.ps1 -Uf2Path path\to\radiant_dongle_promicro.uf2 -VolumeLabel NICENANO`.
 
 The catch is that these are not one board. What they have in common is a
 schematic; what they leave off varies by seller, and the **32.768 kHz crystal
