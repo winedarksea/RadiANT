@@ -980,6 +980,9 @@ static volatile uint32_t radiant_dbg_ok;
 static volatile uint32_t radiant_dbg_rx_no_addr;
 /* Achieved t_sync minus requested t_sync on the last transmit, microseconds. */
 static volatile int32_t  radiant_dbg_tx_err;
+/* Receive windows refused because CC_START landed behind the counter while it
+ * was being written (review 2026-10-31, A14-1). Expected 0 or single digits. */
+static volatile uint32_t radiant_dbg_start_late;
 
 /* The DMA buffer the RADIO reads and writes. Backend-owned, handed to the core
  * as rx_event.body for the duration of one callback only, which is exactly what
@@ -3017,6 +3020,27 @@ static int program_tx(const struct radiant_tx_req *req)
  */
 
 /*
+ * A compare written behind the free-running counter never fires (until the
+ * 32-bit wrap, ~71 min): no RXEN, and TASKS_DISABLE on a DISABLED radio raises
+ * no EVENTS_DISABLED, so no terminal either - the op would hold the
+ * scheduler's one slot forever (review 2026-10-31, A14-1). program_rx() clears
+ * the event and enables conn_start BEFORE writing the compare, so "counter at
+ * or past start_cc with the event still clear" can only mean the compare was
+ * written too late, and an event that did fire was wired to TASKS_RXEN when it
+ * fired: that window is live and stays armed. The capture comes first: read
+ * the other way round, the event could be clear, the compare fire, and the
+ * capture then see the counter past start_cc - calling a live window missed.
+ */
+static bool start_compare_missed(uint32_t start_cc)
+{
+	uint32_t now_cc = timer_capture(CC_NOW);
+
+	return (int32_t)(now_cc - start_cc) >= 0 &&
+	       !nrf_timer_event_check(TIMER_ADDR,
+				      nrf_timer_compare_event_get(CC_START));
+}
+
+/*
  * Everything a receive window does to the peripheral, from the staged
  * request. Separated from the arm call only because of the gate - on the
  * direct gate this is called one line below the arm and the compiler
@@ -3153,11 +3177,16 @@ static int program_rx(const struct radiant_rx_req *req)
 			(radiant_time_t)tail);
 	}
 
+	/* Event cleared and start connection enabled BEFORE the compare is
+	 * written - see start_compare_missed(). The endpoints were wired at
+	 * init; only the enable is per operation. A stale CC_START left by an
+	 * aborted window can only match inside these few instructions, and the
+	 * worst that does is open this window a moment early. */
+	nrf_timer_event_clear(TIMER_ADDR, nrf_timer_compare_event_get(CC_START));
+	nrfx_gppi_conn_enable(radiant_op.conn_start);
 	nrf_timer_cc_set(TIMER_ADDR, CC_START, start_cc);
 	nrf_timer_cc_set(TIMER_ADDR, CC_CLOSE, close_cc);
 
-	/* The endpoints were wired at init; only the enable is per operation. */
-	nrfx_gppi_conn_enable(radiant_op.conn_start);
 	nrfx_gppi_conn_enable(radiant_op.conn_close);
 	/* Receive only. A transmit ramps up through TXREADY and never raises
 	 * RXREADY, so leaving this on would cost nothing - but it is enabled and
@@ -3165,12 +3194,26 @@ static int program_rx(const struct radiant_rx_req *req)
 	 * answer rather than an exception. */
 	nrfx_gppi_conn_enable(radiant_op.conn_rssi);
 
-	LOG_DBG("rx op=%u n=%u alen=%u cov=%u open=+%d close=+%d isr=%u ev=%u ok=%u term=%u noaddr=%u",
+	if (start_compare_missed(start_cc)) {
+		/* The ETIME return unwinds like the early check above: the
+		 * direct path releases the gate and clears the op, the grant
+		 * path reports FAILED after the grant is back, and the
+		 * scheduler reports MISSED and retries the pass. */
+		nrfx_gppi_conn_disable(radiant_op.conn_start);
+		nrfx_gppi_conn_disable(radiant_op.conn_close);
+		nrfx_gppi_conn_disable(radiant_op.conn_rssi);
+		nrf_radio_shorts_set(NRF_RADIO, 0);
+		radiant_dbg_start_late++;
+		return RADIANT_RADIO_ETIME;
+	}
+
+	LOG_DBG("rx op=%u n=%u alen=%u cov=%u open=+%d close=+%d isr=%u ev=%u ok=%u term=%u noaddr=%u late=%u",
 		(unsigned)radiant_op.id, req->n_filters,
 		(unsigned)req->fmt->addr_len, (unsigned)req->fmt->crc.cover_addr,
 		(int)(int64_t)(req->t_open - now), (int)(int64_t)(req->t_close - now),
 		(unsigned)radiant_dbg_isr, (unsigned)radiant_dbg_rx_ev, (unsigned)radiant_dbg_ok,
-		(unsigned)radiant_dbg_term, (unsigned)radiant_dbg_rx_no_addr);
+		(unsigned)radiant_dbg_term, (unsigned)radiant_dbg_rx_no_addr,
+		(unsigned)radiant_dbg_start_late);
 	return RADIANT_RADIO_OK_RC;
 }
 
