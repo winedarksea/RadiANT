@@ -245,9 +245,9 @@ static enum profile_slot_kind take_descriptor(struct profile_sched *ps,
 }
 
 /*
- * Build one data page from the rotation. The counter advances only when the
- * builder actually produced a body: it counts transmissions, and a declined
- * slot is not one.
+ * Build one data page from the rotation, carrying this slot's counter. The
+ * counter is the slot index and advances in profile_sched_next_at() whatever
+ * the slot turns out to carry, so nothing here moves it.
  */
 static enum profile_slot_kind take_data(struct profile_sched *ps, uint8_t page,
 					uint8_t *body)
@@ -258,7 +258,6 @@ static enum profile_slot_kind take_data(struct profile_sched *ps, uint8_t page,
 	if (ps->cfg.data_page(page, ps->counter, body, ps->cfg.user) != 0) {
 		return PROFILE_SLOT_IDLE;
 	}
-	ps->counter++;
 	return PROFILE_SLOT_DATA;
 }
 
@@ -379,10 +378,19 @@ static enum profile_slot_kind next_sparse(struct profile_sched *ps, uint32_t m,
 	return PROFILE_SLOT_IDLE;
 }
 
+/*
+ * One call is one slot. The event counter advances on EVERY call - descriptor,
+ * common, client and idle slots alike - so a data page's byte [1] is the slot
+ * index (docs/radiant-telemetry.md section 6). That is the wire meaning a
+ * secured channel needs, where radiant_sec writes byte [1] from the slot's
+ * time and the receiver counts one per slot; an unsecured node uses the same
+ * meaning so a receiver has one loss rule, not two.
+ */
 enum profile_slot_kind profile_sched_next_at(struct profile_sched *ps,
 					     uint8_t *body, radiant_time_t t_sync)
 {
-	uint32_t m;
+	enum profile_slot_kind kind;
+	uint32_t               m;
 
 	if (ps == NULL || body == NULL) {
 		return PROFILE_SLOT_IDLE;
@@ -391,11 +399,13 @@ enum profile_slot_kind profile_sched_next_at(struct profile_sched *ps,
 	m = ps->m;
 	if (ps->sparse) {
 		ps->m++;
-		return next_sparse(ps, m, body, t_sync);
+		kind = next_sparse(ps, m, body, t_sync);
+	} else {
+		ps->m = (m + 1u) % PROFILE_TLM_CYCLE;
+		kind = next_periodic(ps, m, body, t_sync);
 	}
-
-	ps->m = (m + 1u) % PROFILE_TLM_CYCLE;
-	return next_periodic(ps, m, body, t_sync);
+	ps->counter++;   /* uint8_t: wraps at 256, like the wire */
+	return kind;
 }
 
 enum profile_slot_kind profile_sched_next(struct profile_sched *ps, uint8_t *body)

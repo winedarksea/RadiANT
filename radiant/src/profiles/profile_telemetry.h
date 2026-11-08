@@ -460,14 +460,15 @@ int profile_desc_rx_feed_long(struct profile_desc_rx *rx, const uint8_t *payload
  * Data pages 0x01..0x0F
  *
  *   [0]    page number
- *   [1]    event counter, +1 per TRANSMITTED data page, wraps at 256
+ *   [1]    event counter: the slot index within the epoch, low 8 bits
  *   [2..7] field area, 48 bits, bit offset 0 = MSB of byte [2]
  *
- * The counter counts transmissions, not application writes: a master
- * retransmits its current body every slot regardless, and a counter
- * advancing per write would repeat across retransmissions - a repeated
- * counter within one (epoch, device number) is keystream reuse under a
- * secured channel, so this is mandatory in v1 even unsecured.
+ * The counter is the SLOT index (docs/radiant-telemetry.md section 6): +1
+ * every slot, transmitted or not, descriptor and common slots included -
+ * not per application write (a master retransmits its body every slot, and
+ * a counter repeated within one (epoch, device number) is keystream reuse
+ * under a secured channel) and not per data page (the secured receiver
+ * counts time, one per slot). Mandatory in v1 even unsecured.
  * ---------------------------------------------------------------------------
  */
 

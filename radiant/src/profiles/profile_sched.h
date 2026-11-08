@@ -123,7 +123,7 @@ struct profile_sched_downlink {
  * What the node supplies.
  *
  * Every page builder is a callback rather than a buffer, because a body must
- * be built at the moment it goes out: the event counter is the packet index,
+ * be built at the moment it goes out: the event counter is the slot index,
  * and a cached body would repeat a counter, which under a secured channel is
  * keystream reuse.
  *
@@ -154,8 +154,10 @@ struct profile_sched_cfg {
 	uint8_t        n_pages;
 
 	/* Build the body of one data page. `counter` is the event counter the
-	 * engine has already chosen for this transmission; put it in byte [1].
-	 * Return 0, or negative to decline (the slot becomes idle). */
+	 * engine has already chosen for this slot - the slot index, which has
+	 * also advanced over every descriptor, common and idle slot; put it in
+	 * byte [1]. Return 0, or negative to decline (the slot becomes idle,
+	 * and the counter still advances). */
 	int (*data_page)(uint8_t page, uint8_t counter, uint8_t *body, void *user);
 
 	int (*common_80)(uint8_t *body, void *user);
@@ -193,7 +195,8 @@ struct profile_sched {
 	uint8_t page_cursor;
 
 	uint32_t m;       /* message index; mod 121 in periodic mode */
-	uint8_t  counter; /* event counter: data pages only, wraps at 256 */
+	uint8_t  counter; /* event counter: the slot index, +1 every slot,
+			   * wraps at 256 */
 
 	bool    burst;       /* a descriptor set is being sent */
 	uint8_t burst_index;
@@ -287,7 +290,8 @@ int profile_sched_post_event(struct profile_sched *ps, uint8_t page);
  */
 void profile_sched_post_heartbeat(struct profile_sched *ps);
 
-/* The event counter the next data page will carry. */
+/* The event counter the next slot will carry - the slot index, whatever that
+ * slot turns out to hold. */
 uint8_t profile_sched_counter(const struct profile_sched *ps);
 
 /* Message index of the slot profile_sched_next() will serve next; mod 121 in

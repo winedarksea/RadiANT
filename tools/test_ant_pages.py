@@ -1761,21 +1761,23 @@ class TestTelemetryPageScheduler(unittest.TestCase):
         # six cycles instead of one.
         self.assertEqual(data, 3 * 113)
 
-    def test_the_rotation_alternates_and_the_counter_counts_only_data(self):
+    def test_the_rotation_alternates_and_the_counter_is_the_slot_index(self):
+        # TODO item 7: byte [1] advances every SLOT - descriptor and common
+        # slots too - because the secured receiver counts time, one per slot.
         d = sample_descriptor()
         sched = ap.TlmPageScheduler(d, self.builders(d))
-        expect_page, expect_counter, seen = 1, 0, 0
-        for _ in range(3 * ap.RADIANT_TLM_CYCLE):
+        expect_page, seen = 1, 0
+        for slot in range(3 * ap.RADIANT_TLM_CYCLE):
             kind, body = sched.next()
             if kind != ap.SLOT_DATA:
                 continue
             self.assertEqual(body[0], expect_page)
-            self.assertEqual(body[1], expect_counter)
+            self.assertEqual(body[1], slot & 0xFF, f"slot {slot}")
             expect_page = 2 if expect_page == 1 else 1
-            expect_counter = (expect_counter + 1) % 256
             seen += 1
         self.assertEqual(seen, 3 * 113)
-        self.assertGreater(seen, 256, "the run must cross the counter's wrap")
+        self.assertGreater(3 * ap.RADIANT_TLM_CYCLE, 256,
+                           "the run must cross the counter's wrap")
 
     def test_the_client_seam_takes_slots_but_never_the_cadence(self):
         d = sample_descriptor()
@@ -1858,8 +1860,10 @@ class TestTelemetryPageScheduler(unittest.TestCase):
                     if kind == ap.SLOT_DATA]
         # k = 3, one per slot, spaced by roughly one channel period - there is
         # no retransmission and a scanning receiver may be mid-dwell elsewhere.
-        # The counter is what lets it deduplicate the repeats.
-        self.assertEqual(counters, [0, 1, 2])
+        # The counter is the slot index, so the repeats carry consecutive
+        # counters (slots 16, 17, 18) and identical bodies: that pair is what
+        # tells a receiver they are repeats.
+        self.assertEqual(counters, [16, 17, 18])
 
         # Command 0x06: how a receiver that just joined gets a schema without
         # waiting for the next heartbeat.

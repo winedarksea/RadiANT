@@ -695,7 +695,14 @@ ZTEST(profiles, test_the_interleave_is_119_120_over_121)
 	zassert_equal(3u * 113u, data_pages);
 }
 
-ZTEST(profiles, test_the_rotation_alternates_and_the_counter_counts_only_data)
+/*
+ * TODO item 7: byte [1] is the SLOT index, advanced over descriptor and common
+ * slots too. On a secured channel the receiver's expected counter is elapsed
+ * time over the period, one per slot, and radiant_sec writes byte [1] from the
+ * slot's time; an unsecured node carries the same meaning so a receiver has
+ * one loss rule (radiant-telemetry.md section 6).
+ */
+ZTEST(profiles, test_the_rotation_alternates_and_the_counter_is_the_slot_index)
 {
 	struct profile_sched ps;
 	struct profile_sched_cfg cfg;
@@ -703,34 +710,36 @@ ZTEST(profiles, test_the_rotation_alternates_and_the_counter_counts_only_data)
 	uint32_t slot;
 	uint32_t n_data = 0u;
 	uint8_t expect_page = 1u;
-	uint8_t expect_counter = 0u;
 
 	build_node_descriptor(&sched_desc);
 	sched_cfg_init(&cfg);
 	zassert_ok(profile_sched_init(&ps, &cfg));
 
 	for (slot = 0u; slot < 3u * PROFILE_TLM_CYCLE; slot++) {
-		enum profile_slot_kind kind = profile_sched_next(&ps, body);
+		enum profile_slot_kind kind;
 
+		zassert_equal((uint8_t)slot, profile_sched_counter(&ps),
+			      "the counter did not advance over slot %u",
+			      slot - 1u);
+		kind = profile_sched_next(&ps, body);
 		if (kind != PROFILE_SLOT_DATA) {
 			continue;
 		}
 		zassert_equal(expect_page, body[0],
 			      "the rotation runs the schema's pages ascending, "
 			      "slot %u", slot);
-		zassert_equal(expect_counter, body[1],
-			      "the counter counts data pages only, slot %u",
-			      slot);
+		zassert_equal((uint8_t)slot, body[1],
+			      "byte [1] is not the slot index at slot %u", slot);
 		expect_page = (uint8_t)(expect_page == 1u ? 2u : 1u);
-		expect_counter++; /* uint8_t: wraps at 256, like the wire */
 		n_data++;
 	}
 
-	/* 339 data pages over three cycles, which is past the counter's wrap -
-	 * so the assertion above checked the wrap for real rather than
-	 * checking arithmetic that never reached it. */
+	/* 363 slots over three cycles, which is past the counter's wrap - so
+	 * the assertion above checked the wrap for real rather than checking
+	 * arithmetic that never reached it. */
 	zassert_equal(3u * 113u, n_data);
-	zassert_true(n_data > 256u, "the run was too short to cross the wrap");
+	zassert_true(3u * PROFILE_TLM_CYCLE > 256u,
+		     "the run was too short to cross the wrap");
 }
 
 /*
@@ -953,9 +962,10 @@ ZTEST(profiles, test_a_sparse_event_is_repeated_k_times)
 	 * there is no retransmission and a scanning receiver may be mid-dwell
 	 * elsewhere. */
 	zassert_equal(3u, data_pages);
-	/* Distinct counters, which is what lets the receiver deduplicate the
-	 * repeats. The same counter detects loss in periodic mode: one
-	 * mechanism, two jobs. */
+	/* Consecutive counters - the slot index, slots 16..18 - with identical
+	 * bodies, which is what tells the receiver they are repeats. The same
+	 * counter detects loss in periodic mode: one mechanism, two jobs. */
+	zassert_equal(16u, counters[0], "the counter is not the slot index");
 	zassert_equal((uint8_t)(counters[0] + 1u), counters[1]);
 	zassert_equal((uint8_t)(counters[1] + 1u), counters[2]);
 

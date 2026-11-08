@@ -3470,14 +3470,16 @@ def encode_tlm_data(d: TlmDescriptor, page: int, counter: int,
     """Pack every field the schema places on `page`.
 
         [0]    page number, 0x01..0x0F
-        [1]    event counter, +1 per TRANSMITTED data page, wraps at 256
+        [1]    event counter: the SLOT index within the epoch, low 8 bits
         [2..7] field area, 48 bits, bit offset 0 = MSB of byte [2]
 
     `values` is keyed by field id; entries for other pages are ignored and a
-    missing one packs as zero. The event counter counts TRANSMISSIONS, not
-    application writes: a master retransmits its current body whether or not
-    the app supplied a new one; a counter advancing per write would repeat
-    across retransmissions - keystream reuse under a secured channel.
+    missing one packs as zero. The event counter is the slot index - it
+    advances every slot, transmitted or not, descriptor and common slots
+    included (docs/radiant-telemetry.md section 6) - not a count of writes or
+    of data pages: a counter advancing per write would repeat across a
+    master's retransmissions (keystream reuse under a secured channel), and
+    one advancing per data page falls behind a receiver that counts time.
 
     Bytes the schema does not claim come out zero: a later schema may claim
     them, and a receiver mid-change would otherwise read a stale value as real.
@@ -4090,13 +4092,21 @@ class TlmPageScheduler:
 
     # -- the engine -------------------------------------------------------
     def next(self):
-        """Returns (kind, body). body is None for SLOT_IDLE."""
+        """Returns (kind, body). body is None for SLOT_IDLE.
+
+        One call is one slot, and the counter advances on every call -
+        descriptor, common, client and idle slots alike - so a data page's
+        byte [1] is the slot index (profile_sched_next_at() does the same).
+        """
         m = self.m
         if self.sparse:
             self.m += 1
-            return self._next_sparse(m)
-        self.m = (m + 1) % RADIANT_TLM_CYCLE
-        return self._next_periodic(m)
+            result = self._next_sparse(m)
+        else:
+            self.m = (m + 1) % RADIANT_TLM_CYCLE
+            result = self._next_periodic(m)
+        self.counter = (self.counter + 1) % U8_WRAP
+        return result
 
     def _take_descriptor(self):
         body = self.frames[self.burst_index]
@@ -4110,12 +4120,10 @@ class TlmPageScheduler:
         builder = self.builders.get("data_page")
         if builder is None:
             return SLOT_IDLE, None
+        # This slot's index; next() advances it whatever the slot carries.
         body = builder(page, self.counter)
         if body is None:
             return SLOT_IDLE, None
-        # Advanced only when the builder actually produced a body: the counter
-        # counts transmissions, and a slot the application declined is not one.
-        self.counter = (self.counter + 1) % U8_WRAP
         return SLOT_DATA, body
 
     def _take_rotation(self):

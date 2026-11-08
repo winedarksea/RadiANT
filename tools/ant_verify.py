@@ -507,6 +507,20 @@ class ChannelAnalyzer:
         self.tlm_data_decoded = 0
         self.tlm_baseline: dict[int, dict] = {}   # per data page; see above
 
+        # Device type 0x60's exact loss. A data page's byte [1] is the SLOT
+        # index (docs/radiant-telemetry.md section 6), advanced every slot
+        # whatever it carried, so between two data pages the counter delta is
+        # the slots that passed: delta - 1 - (packets heard in between) of
+        # them were lost. A pair that heard MORE than the delta allows means
+        # the counter is not a slot index (a node from before the rule, which
+        # counted data pages only), and withholds the figure.
+        self.tlm_slot_pairs = 0
+        self.tlm_slot_span = 0
+        self.tlm_slot_missed = 0
+        self.tlm_slot_overheard = 0
+        self._tlm_last_counter: int | None = None
+        self._tlm_last_packet = 0
+
     # -- helpers ---------------------------------------------------------
 
     def _violation(self, message: str) -> None:
@@ -683,6 +697,10 @@ class ChannelAnalyzer:
             # A command, reserved, or vendor-private page - ignored, not guessed.
             return
 
+        # Byte [1] is in the clear and in the same place on every data page,
+        # schema or not, so slots are counted before the schema is known.
+        self._count_tlm_slots(payload[1])
+
         if self.tlm_desc is None:
             # Counted, not decoded: a receiver joining mid-stream may see
             # data before a schema; inventing one is the failure this
@@ -716,9 +734,11 @@ class ChannelAnalyzer:
         self._note_event(d_counter != 0)
 
         if d_counter == 0:
-            # The counter counts TRANSMISSIONS, so two packets sharing one are
-            # the same transmission - a sparse node's repeat, meant for
-            # dedup - and their bodies must be identical.
+            # The counter is the slot index, so two packets sharing one are
+            # one slot's body sent twice - a host-driven master resending its
+            # buffer when a refill missed a slot - and must be identical. (A
+            # sparse node's repeats are consecutive slots: consecutive
+            # counters, not equal ones.)
             if got["values"] != before["values"]:
                 self._violation(
                     f"page 0x{page:02X}: two packets share counter "
@@ -744,10 +764,30 @@ class ChannelAnalyzer:
             if delta > span // 2:
                 self._violation(
                     f"page 0x{page:02X} {name}: accumulator advanced by "
-                    f"{delta} in {field.width} bits over {d_counter} event(s), "
+                    f"{delta} in {field.width} bits over {d_counter} slot(s), "
                     "which is more than half its range")
 
         self._check_tlm_integral(t, page, got, before, d_counter)
+
+    def _count_tlm_slots(self, counter: int) -> None:
+        """One data page's share of 0x60's exact loss; see __init__."""
+        last = self._tlm_last_counter
+        heard_between = self.packets - self._tlm_last_packet - 1
+        self._tlm_last_counter = counter
+        self._tlm_last_packet = self.packets
+        if last is None:
+            return
+        d_slots = ap.delta_u8(counter, last)
+        if d_slots == 0:
+            # One slot heard twice (a resent buffer), not a slot that passed.
+            return
+        missed = d_slots - 1 - heard_between
+        if missed < 0:
+            self.tlm_slot_overheard += 1
+            return
+        self.tlm_slot_pairs += 1
+        self.tlm_slot_span += d_slots
+        self.tlm_slot_missed += missed
 
     def _check_tlm_integral(self, t: float, page: int, got: dict, before: dict,
                             d_counter: int) -> None:
@@ -1172,6 +1212,23 @@ class ChannelAnalyzer:
                   f"{exact['loss_pct']:.2f} % - {missed} of {sent} "
                   f"{scope} message(s) missing, counted from the "
                   f"transmitter's own event counter rather than a clock")
+        elif (self.device_type == ap.RADIANT_TLM_DEVICE_TYPE
+              and not sparse_node and self.tlm_slot_pairs >= 30
+              and self.tlm_slot_overheard == 0):
+            # 0x60's counter is the slot index, so this needs no vote: every
+            # slot between two data pages that was not heard was lost.
+            missed = self.tlm_slot_missed
+            sent = self.tlm_slot_span
+            exact = {
+                "scope": "slot",
+                "missed": missed,
+                "sent": sent,
+                "loss_pct": 100.0 * missed / sent if sent else 0.0,
+            }
+            check("loss (exact)", round(exact["loss_pct"], 2) <= max_loss_pct,
+                  f"{exact['loss_pct']:.2f} % - {missed} of {sent} slot(s) "
+                  "missing, counted from the node's slot counter (byte [1] "
+                  "of its data pages) rather than a clock")
 
         if self.event_comparisons:
             # Not a rate threshold - a real sensor at low cadence can go many
@@ -1274,6 +1331,10 @@ class ChannelAnalyzer:
                 "schema_changes": self.tlm_schema_changes,
                 "data_pages_decoded": self.tlm_data_decoded,
                 "data_pages_before_schema": self.tlm_data_before_schema,
+                # The slot-counter pairs behind 0x60's "loss (exact)";
+                # overheard > 0 is a counter that is not a slot index.
+                "slot_pairs": self.tlm_slot_pairs,
+                "slot_overheard": self.tlm_slot_overheard,
                 "fields": [
                     {
                         "id": f.id,

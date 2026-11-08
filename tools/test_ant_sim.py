@@ -555,6 +555,56 @@ class TestTelemetryEnvelope(unittest.TestCase):
                 f"the counter on page {page} never wrapped")
         self.assertEqual(summary["violations"]["count"], 0)
 
+    def test_the_slot_counter_gives_an_exact_loss_figure(self):
+        # TODO item 7: byte [1] is the slot index, so a clean stream reads as
+        # zero slots missing - descriptor and common slots are counted as
+        # heard, not lost.
+        _, _, summary = self._run("telemetry")
+        exact = summary["exact_loss"]
+        self.assertIsNotNone(exact, "no exact figure from a 0x60 node")
+        self.assertEqual(exact["scope"], "slot")
+        self.assertEqual(exact["missed"], 0)
+        self.assertEqual(summary["telemetry"]["slot_overheard"], 0)
+        names = {c["name"] for c in summary["checks"]}
+        self.assertIn("loss (exact)", names)
+
+    def test_dropped_slots_are_counted_exactly_whatever_they_carried(self):
+        # Every 20th slot lost on the air, data, descriptor or common alike.
+        # Loss is delta - 1 - (packets heard in between), so each one between
+        # the first and last data page heard is counted, and only those.
+        sensor = build("telemetry")
+        records = ant_sim.dry_run([sensor], 120.0)
+        kept = [r for i, r in enumerate(records) if i % 20 != 7]
+        data = [i for i, r in enumerate(records)
+                if i % 20 != 7
+                and ap.PAGE_TLM_DATA_FIRST <= r[3][0] <= ap.PAGE_TLM_DATA_LAST]
+        dropped_inside = sum(1 for i in range(data[0], data[-1])
+                             if i % 20 == 7)
+
+        summary = analyse(sensor, kept)
+        exact = summary["exact_loss"]
+        self.assertIsNotNone(exact)
+        self.assertEqual(exact["missed"], dropped_inside)
+        self.assertEqual(exact["sent"], data[-1] - data[0])
+
+    def test_a_counter_that_counts_data_pages_only_gets_no_exact_figure(self):
+        # A node from before the rule: byte [1] +1 per DATA page. Common and
+        # descriptor slots then make some pairs hear more packets than the
+        # delta allows, which is how the figure knows to withhold itself
+        # rather than report a negative loss.
+        sensor = build("telemetry")
+        records = ant_sim.dry_run([sensor], 120.0)
+        legacy, n = [], 0
+        for t, dt_, dn, payload in records:
+            if ap.PAGE_TLM_DATA_FIRST <= payload[0] <= ap.PAGE_TLM_DATA_LAST:
+                payload = bytes([payload[0], n & 0xFF]) + payload[2:]
+                n += 1
+            legacy.append((t, dt_, dn, payload))
+
+        summary = analyse(sensor, legacy)
+        self.assertIsNone(summary["exact_loss"])
+        self.assertGreater(summary["telemetry"]["slot_overheard"], 0)
+
     def test_a_corrupted_accumulator_is_caught(self):
         # Jump the energy accumulator on one page-2 packet; the integral check
         # must notice it disagreeing with the instantaneous power beside it.

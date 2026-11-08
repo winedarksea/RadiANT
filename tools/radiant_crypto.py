@@ -566,11 +566,13 @@ def window_start(counter: int, window: int) -> int:
 
 
 def expected_index(epoch_us: int, period_counts: int) -> int:
-    """The packet index a receiver expects `epoch_us` into the epoch.
+    """The slot index a receiver expects `epoch_us` into the epoch.
 
     `period_counts` is the ANT channel period in counts of 1/32768 s. Deriving
     the counter from time rather than arrival history is what makes a
-    mid-epoch join, a >255-packet gap, and sparse mode all work.
+    mid-epoch join, a >255-slot gap, and slot-aligned sparse mode all work -
+    and it is why the sender's counter is its slot index too, advanced on
+    every slot whether or not the slot carried a secured page.
     """
     if period_counts <= 0:
         raise ValueError("the channel period is 1..65535 counts of 1/32768 s")
