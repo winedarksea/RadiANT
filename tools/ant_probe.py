@@ -222,7 +222,18 @@ class SerialDevice:
         64-byte read) and was misread as a dongle event-filter bug. So: block
         for the first byte, then take whatever else has already arrived.
         """
-        self._port.timeout = (timeout or 0) / 1000.0
+        # Only when it changes. In pyserial 3.5 every assignment is
+        # SetCommTimeouts + GetCommState + SetCommState, which on a USB CDC
+        # port means control requests to the device - ~20/s from ant_verify,
+        # thousands per window. The 54L15 DK's J-Link OB VCOM is the port that
+        # keeps dying with PermissionError 13/31, raised from SetCommState
+        # ("Cannot configure port"). A bare reconfigure flood did NOT reliably
+        # reproduce that death (1 in ~17 min, about the soak's own background
+        # rate; 2026-11-07, TODO.md item 3), so this is not a fix - it is
+        # hygiene: reconfiguring on every read buys nothing.
+        wanted = (timeout or 0) / 1000.0
+        if self._port.timeout != wanted:
+            self._port.timeout = wanted
         data = self._port.read(1)
         if not data:
             # FrameReader treats this as "nothing to say yet", the same as an

@@ -15,6 +15,7 @@ archive/benchmarks/2026-11-07-vcom-soak/**
 !archive/benchmarks/2026-11-07-vcom-soak/**/rig.toml
 !archive/benchmarks/2026-11-07-vcom-soak/**/summary.json
 !archive/benchmarks/2026-11-07-vcom-soak/**/summary.md
+!archive/benchmarks/2026-11-07-vcom-soak/S_multi_3_54L15_console.log
 
 # Garmin comparison: ~760 per-window logs/JSONs stay local. Tracked: the
 # README, each run's rig + summary (summary.json embeds every window's counts),

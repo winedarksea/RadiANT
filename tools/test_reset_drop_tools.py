@@ -225,6 +225,42 @@ class TestConsoleCapture(unittest.TestCase):
         self.assertIn("open failed", cap.error)
 
 
+class CountingPort:
+    """pyserial-like: every timeout assignment would be a SetCommState."""
+
+    def __init__(self):
+        self._timeout = None
+        self.sets = 0
+        self.in_waiting = 0
+
+    @property
+    def timeout(self):
+        return self._timeout
+
+    @timeout.setter
+    def timeout(self, value):
+        self._timeout = value
+        self.sets += 1
+
+    def read(self, n):
+        return b"\xa4"
+
+
+class TestSerialDeviceDoesNotReconfigureEveryRead(unittest.TestCase):
+    def test_repeated_reads_at_one_timeout_configure_the_port_once(self):
+        try:
+            from ant_probe import SerialDevice
+        except SystemExit:  # pragma: no cover - pyusb missing
+            self.skipTest("pyusb not installed")
+        dev = SerialDevice.__new__(SerialDevice)
+        dev._port = CountingPort()
+        for _ in range(500):
+            dev.read(0x81, 64, timeout=1000)
+        self.assertEqual(dev._port.sets, 1)
+        dev.read(0x81, 64, timeout=50)
+        self.assertEqual(dev._port.sets, 2, "a real change still applies")
+
+
 class TestResetLoop(unittest.TestCase):
     def test_startup_latency_and_the_frames_that_came_first(self):
         reader = FakeReader([(MESG_BROADCAST_DATA_ID, bytes(9)),

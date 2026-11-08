@@ -1,0 +1,22 @@
+[2026-11-07T17:13:50.488] [console_capture] COM3: capturing at 115200
+[2026-11-07T17:14:17.094] [00:30:56.397,569] [0m<inf> radiant_api: rxpath/30043ms sched=398 tracked=10013 on_data=0 up=0 posted=10025 | xfer=0 dropped=0 tot=10034[0m
+[2026-11-07T17:14:17.094] [00:30:56.397,582] [0m<inf> radiant_api: xfer failures: no_opener=0 no_ack=0 bad_ack=0 radio=0[0m
+[2026-11-07T17:14:47.149] [00:31:26.411,261] [0m<inf> radiant_api: rxpath/30012ms sched=479 tracked=10492 on_data=0 up=0 posted=10504 | xfer=0 dropped=0 tot=10513[0m
+[2026-11-07T17:14:47.149] [00:31:26.411,274] [0m<inf> radiant_api: xfer failures: no_opener=0 no_ack=0 bad_ack=0 radio=0[0m
+[2026-11-07T17:15:17.046] [00:31:56.436,553] [0m<inf> radiant_api: rxpath/30024ms sched=482 tracked=10974 on_data=0 up=0 posted=10986 | xfer=0 dropped=0 tot=10995[0m
+[2026-11-07T17:15:17.248] [00:31:56.436,565] [0m<inf> radiant_api: xfer failures: no_opener=0 no_ack=0 bad_ack=0 radio=0[0m
+[2026-11-07T17:15:47.128] [00:32:26.487,502] [0m<inf> radiant_api: rxpath/30050ms sched=481 tracked=11455 on_data=0 up=0 posted=11467 | xfer=0 dropped=0 tot=11476[0m
+[2026-11-07T17:15:47.128] [00:32:26.487,514] [0m<inf> radiant_api: xfer failures: no_opener=0 no_ack=0 bad_ack=0 radio=0[0m
+[2026-11-07T17:16:17.157] [00:32:56.501,019] [0m<inf> radiant_api: rxpath/30012ms sched=480 tracked=11935 on_data=0 up=0 posted=11947 | xfer=0 dropped=0 tot=11956[0m
+[2026-11-07T17:16:17.157] [00:32:56.501,033] [0m<inf> radiant_api: xfer failures: no_opener=0 no_ack=0 bad_ack=0 radio=0[0m
+[2026-11-07T17:16:47.187] [00:33:26.514,708] [0m<inf> radiant_api: rxpath/30012ms sched=481 tracked=12416 on_data=0 up=0 posted=12428 | xfer=0 dropped=0 tot=12437[0m
+[2026-11-07T17:16:47.187] [00:33:26.514,721] [0m<inf> radiant_api: xfer failures: no_opener=0 no_ack=0 bad_ack=0 radio=0[0m
+[2026-11-07T17:17:17.239] [00:33:56.537,044] [0m<inf> radiant_api: rxpath/30021ms sched=479 tracked=12895 on_data=0 up=0 posted=12907 | xfer=0 dropped=0 tot=12916[0m
+[2026-11-07T17:17:17.239] [00:33:56.537,057] [0m<inf> radiant_api: xfer failures: no_opener=0 no_ack=0 bad_ack=0 radio=0[0m
+[2026-11-07T17:17:47.262] [00:34:26.587,985] [0m<inf> radiant_api: rxpath/30050ms sched=482 tracked=13377 on_data=0 up=0 posted=13389 | xfer=0 dropped=0 tot=13398[0m
+[2026-11-07T17:17:47.262] [00:34:26.587,998] [0m<inf> radiant_api: xfer failures: no_opener=0 no_ack=0 bad_ack=0 radio=0[0m
+[2026-11-07T17:18:17.339] [00:34:56.601,341] [0m<inf> radiant_api: rxpath/30012ms sched=480 tracked=13857 on_data=0 up=0 posted=13869 | xfer=0 dropped=0 tot=13878[0m
+[2026-11-07T17:18:17.339] [00:34:56.601,354] [0m<inf> radiant_api: xfer failures: no_opener=0 no_ack=0 bad_ack=0 radio=0[0m
+[2026-11-07T17:18:47.386] [00:35:26.618,154] [0m<inf> radiant_api: rxpath/30015ms sched=482 tracked=14339 on_data=0 up=0 posted=14351 | xfer=0 dropped=0 tot=14360[0m
+[2026-11-07T17:18:47.386] [00:35:26.618,167] [0m<inf> radiant_api: xfer failures: no_opener=0 no_ack=0 bad_ack=0 radio=0[0m
+[2026-11-07T17:18:52.264] [console_capture] COM3: stopped
