@@ -236,8 +236,24 @@ reads.
 
 ### Security
 
-Both fixes apply only to builds with the opt-in `security.conf`; no release
+These fixes apply only to builds with the opt-in `security.conf`; no release
 image includes it.
+
+- **A secured channel stopped verifying within minutes when it carried
+  anything else.** The sender's counter advanced once per secured transmission,
+  while the receiver counts time, one per slot. Each clear slot (a 0x60 node's
+  descriptor and common pages, 5–12 per 121-slot cycle), each MPSL-denied slot
+  and each sparse silence put the sender one count behind, faster than the
+  receiver's `period / 16` re-anchor follows; within 8–45 minutes nothing
+  verified, and a sparse `X_CONF` node decrypted under the wrong nonce after
+  any silence over 128 slots. The counter is now the sender's slot index,
+  derived from the slot's time (`radiant_sec_tx_transform()` takes `t_sync`),
+  and a slot posted twice resends identical bytes. Unsecured 0x60 nodes carry
+  the slot index in byte `[1]` too, and `tools/ant_verify.py` reports their
+  exact loss with scope `slot`. Still a cost, by decision: a window holding a
+  clear slot is unverified, as is the one before it (2–14 % of secured pages,
+  W = 2…8; [docs/radiant-security.md](docs/radiant-security.md) §3.2). Sparse
+  plus `X_AUTH` is refused in v1. +228 B text, +192 B bss.
 
 - **A keyless injector could replay or desynchronise a secured channel.** The
   receiver re-anchored its clock on every packet that passed the replay check,

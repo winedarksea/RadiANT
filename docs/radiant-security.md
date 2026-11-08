@@ -143,18 +143,40 @@ not.** This is not a stylistic choice. A master retransmits its current
 broadcast body every slot whether or not the application wrote a new one, so a
 host-maintained counter repeats across retransmissions — and a repeated counter
 under one `(epoch, devnum)` is keystream reuse, which is the one failure that
-turns CTR from weak into catastrophic. The counter therefore counts
-*transmissions*, not host writes.
+turns CTR from weak into catastrophic. The counter therefore counts *slots*,
+not host writes and not transmissions.
+
+**The counter is the sender's slot index.** `radiant_sec_tx_transform()` is
+handed the slot's own instant (`t_sync`) and derives the index from it: the
+first secured transform after `0xF3` latches the slot nearest the host's anchor,
+and every later slot counts from there in the channel's own slot spacing. So
+the counter advances on every slot — one carrying a clear page (the descriptor,
+the common pages), one MPSL denied or the radio missed, a sparse node's silence
+— and never on anything else. Until 2026-11-07 it advanced once per *secured
+transmission*, and fell 5 to 12 counts behind the receiver's clock every
+121-message cycle of a 0x60 node, more for every denied slot. The receiver may
+re-anchor only on verified windows, at most `period / 16` each, which is slower
+than that gap grew, so within 8 to 45 minutes every window failed (TODO item 7;
+`radiant/tests/src/test_sec.c`, the slot-index tests).
+
+**A slot posted twice resends identical bytes.** If the scheduler refuses a
+transmit and the same slot is posted again, the transform returns the bytes it
+built the first time, whatever the host wrote since: a second build would be a
+second ciphertext under one nonce, and a second absorb into the window's MAC. A
+slot earlier than one already built is refused, and nothing is transmitted.
 
 **The counter is reconstructed from time, not from arrival history.** The
 receiver knows the epoch, the epoch's time anchor and the channel period, so it
-computes the packet index it *expects* now and picks the 16-bit rollover that
+computes the slot index it *expects* now and picks the 16-bit rollover that
 lands nearest to the counter byte(s) actually on the air. This is what makes the
 scheme work on the three cases an arrival-history counter cannot handle at all:
 
 - a receiver joining mid-epoch, which is the *normal* case, not an edge case;
-- a gap longer than 255 packets;
-- sparse mode, where most slots carry nothing.
+- a gap longer than 255 slots;
+- slot-aligned sparse mode, where most slots carry nothing — under `X_CONF`
+  only. `X_AUTH`'s tag lags one window (section 3.2), so a sparse burst never
+  carries its own tag and never verifies; sparse plus `X_AUTH` is refused in
+  v1. Asynchronous sparse (period 0) has no slot clock and `0xF3` refuses it.
 
 Drift budget: nearest-rollover resolution needs combined clock error below
 ±128 packet periods — ±32 s at 4 Hz, against two 50 ppm crystals diverging about
@@ -257,6 +279,44 @@ Consequences, stated rather than left to be discovered:
 - A window's own tag is still computed at its own boundary, so nothing about
   the self-synchronising property below changes.
 
+**A clear slot inside a window costs that window and the one before it.**
+Windows are cut from the counter, and the counter is the slot index (section
+3.1), so a slot that carries a clear page — a descriptor frame, page 80 or 81 —
+or carries nothing (an MPSL denial, a missed arm) is a hole in its window: the
+receiver never absorbs it, so that window cannot verify. And the tag of the
+window before it rides in the next window that carries secured packets, so
+when that window has a hole too, its tag bytes are incomplete and the earlier
+window is not verified either. Windows made entirely of clear slots are simply
+skipped: the tag rides on to the next window that carries secured packets.
+Nothing is ever wrongly verified; the cost is fail-safe.
+
+What it costs a 0x60 node, measured by
+`test_clear_slots_inside_a_secured_stream_do_not_desync_the_counter` and
+`test_skipped_slots_do_not_desync_the_counter` (`radiant/tests/src/test_sec.c`,
+20 000 slots, every window checked against the slot index): the share of
+secured data pages that land in a `VERIFIED` window.
+
+| Clear slots per 121-slot cycle | W = 2 | W = 4 | W = 8 |
+|---|---|---|---|
+| 12 (10 descriptor frames + pages 80/81) | 98.1 % | 94.4 % | 86.2 % |
+| 5 (3 descriptor frames + pages 80/81) | 97.4 % | 93.9 % | 87.0 % |
+| 1 slot in 40 denied, no clear pages | 92.3 % | — | 61.5 % |
+
+The rest are delivered marked `unverified` (or held and dropped under
+`DROP_UNVER`). The length of the clear run matters less than W, because the
+cost is whole windows at each edge of the run. Denied slots are the expensive
+case, because each one is a run of its own: at W = 8 a 2.5 % denial rate leaves
+four pages in ten unverified, so a secured channel on an MPSL build wants the
+smallest W its forgery budget (section 7.5) allows.
+
+**Aligning each clear run to whole windows is deferred, deliberately.** It would
+recover most of the cost above, but it changes the 121-message cadence copied
+from certified sensors (a secured channel would need a cycle that is a multiple
+of W), spends up to W−1 padding slots per cycle, couples the page scheduler to
+this module's slot index, breaks for the cycle whenever an MPSL-denied slot
+shifts a page already written, and cannot be enforced for a host-driven master
+at all. TODO item 7a carries it.
+
 **Tag byte index and window boundary are derived from the counter, not from
 arrival order.** By arrival order, one lost packet — against a measured ~0.4%
 bench loss floor — desynchronises every window after it, permanently, with no
@@ -310,7 +370,7 @@ kdf_block   = 0x01 || label || 0x00 || epoch[4 LE] || base_devnum[2 LE] || 0x008
 - The nonce is a **full 16 bytes**, because AES-CTR consumes 16-byte blocks.
   Stating "the nonce is 8 bytes" and leaving the rest to the implementer is how
   two implementations end up with different keystreams.
-- `counter` in `nonce_block` is the 16-bit packet index within the epoch. Byte
+- `counter` in `nonce_block` is the 16-bit slot index within the epoch. Byte
   `[1]` on the air is its low 8 bits; the high 8 bits are reconstructed from
   time (section 3.1).
 - **`base_devnum` is the device number fixed at provisioning time**, not the
@@ -392,9 +452,12 @@ headroom.
 
 Two definitions of "the counter" were in circulation — a packet index within the
 epoch, and a free-running loss detector — and they are not compatible. Pinned:
-**the counter is the packet index within the current epoch, and it resets to
-zero when the epoch advances.** A loss detector built on it must handle that
-reset, which is cheap because the receiver is told the epoch.
+**the counter is the slot index within the current epoch, and it resets to
+zero when the epoch advances.** Slot, not packet: it advances on every slot of
+the channel, transmitted or not, secured or clear (section 3.1). A loss detector
+built on it must handle the epoch reset, which is cheap because the receiver is
+told the epoch, and must subtract the clear pages it heard between two data
+pages (`docs/radiant-telemetry.md` section 6).
 
 And the byte-`[1]`-is-a-counter invariant has two documented exceptions, which
 the first draft did not admit: **the descriptor's byte `[1]` is a frame index**,
@@ -658,7 +721,17 @@ build the CI job uses as its reference:
 | `X_AUTH` + `X_CONF` + the `0xF1`–`0xF4` host surface | **+5084 B** | **+5277 B** |
 | the same, after review D1-1 (2026-11-06, NCS v3.4.0) | **+5712 B** | **+6301 B** |
 | the same, after the verified-only re-anchor and replay floor (2026-11-06, NCS v3.4.0) | **+5720 B** | **+6301 B** |
+| the same, after the slot-index counter (TODO item 7, 2026-11-07, NCS v3.4.0) | **+5948 B** | **+6493 B** |
 | X25519 and pairing, on top of that | **+2812 B** | +705 B |
+
+The slot-index row was measured against a same-day baseline of the commit before
+it, which reproduced +5720 B / +6301 B exactly, so the change's own cost is
+**+228 B of text and +192 B of bss**. `radiant_sec_tx_transform` grew from 350 B
+to 562 B: it now derives the slot from `t_sync`, applies a wrap of more than
+one epoch, and keeps the last slot's bytes for a re-post. The context grew from
+536 B to 560 B (+24 B, eight channels): the slot phase (8 B), the last slot's
+index and bytes (12 B) and the wrap count, less the 2 B counter they replace,
+rounded to the context's 8-byte alignment.
 
 The re-anchor row was measured against a baseline rebuilt at `645eee8`, which
 gave **+5560 B**, not the +5712 B recorded for D1-1. Nobody has looked into
@@ -670,8 +743,8 @@ from 820 B to 752 B because the per-packet re-anchor is gone. The two new
 context fields sit in alignment holes, so the context stays at 536 B.
 
 The largest single contributors to text are `radiant_sec_pump` (752 B, the RX
-policy engine), `rx_close_window` (488 B), `encrypt_block` (344 B),
-`radiant_sec_tx_transform` (350 B) and the AES `sbox` (256 B of rodata). Nothing else
+policy engine), `radiant_sec_tx_transform` (562 B), `rx_close_window` (488 B),
+`encrypt_block` (344 B) and the AES `sbox` (256 B of rodata). Nothing else
 exceeds 250 B (`radiant_sec_cmac_final` is 248 B). The largest single contributor to bss is the ISR-to-pump queue
 at 1536 B — `RADIANT_SEC_MAX_CHANNELS` × `RADIANT_SEC_W_MAX` entries.
 
@@ -1147,7 +1220,7 @@ one, and refuses epochs near `0xFFFFFFFF`; see section 3.5.
   derive every sub-key under device number 0, which fails as a link that
   verifies nothing rather than as an error.
 - **The channel period must be set before the epoch.** The period is what turns
-  `us_into_epoch` into a packet index. A host-supplied period that disagreed
+  `us_into_epoch` into a slot index. A host-supplied period that disagreed
   with the channel's would desynchronise the counter in a way that looks exactly
   like clock drift, so `0xF3` does not carry one either.
 

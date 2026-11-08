@@ -542,25 +542,42 @@ leaves open in the meantime.
 
 ```
 [0]    page number, 0x01..0x0F
-[1]    event counter (u8), +1 per transmitted data page, wraps at 256
+[1]    event counter (u8): the slot index within the epoch, low 8 bits
 [2..7] field area, 48 bits, bit offset 0 = MSB of byte [2]
 ```
 
-- The **event counter counts data pages only**, not descriptor or common
-  pages. It is what a receiver counts holes with, and it is the low half of the
-  `X_CONF` nonce counter. It is mandatory in v1 whether or not any security
-  switch is ever enabled, because adding it later would renumber every field
-  offset in every deployed schema.
-- **It counts transmissions, not application writes.** A master retransmits its
-  current body every slot whether or not the application supplied a new one, so
-  a counter that advanced per write would repeat across retransmissions — and a
-  repeated counter under one `(epoch, device number)` is keystream reuse. On a
-  secured channel the transform layer owns this byte outright.
-- **It is the packet index within the current epoch and resets to zero when the
-  epoch advances.** A loss detector built on it has to handle that reset; the
-  receiver is told the epoch, so this is cheap. The 16-bit nonce counter's high
-  byte is reconstructed from time rather than from arrival history, and a wrap
-  of it advances the epoch by 1 on both sides.
+- The **event counter is the slot index**: it advances on **every slot**,
+  whether or not that slot is transmitted and whatever it carries — data,
+  descriptor, common page, a client's page, an idle slot, or a slot the radio
+  never got (an MPSL denial, a missed arm). It is what a receiver counts holes
+  with, and it is the low half of the `X_CONF` nonce counter. It is mandatory in
+  v1 whether or not any security switch is ever enabled, because adding it later
+  would renumber every field offset in every deployed schema.
+- **Slots, not data pages, because the secured receiver counts time.** Its
+  expected counter is elapsed time over the channel period
+  (`docs/radiant-security.md` 3.1), one count per slot. A counter that skipped
+  the descriptor and common slots fell 5 to 12 counts behind that clock every
+  121-message cycle, faster than a receiver allowed to re-anchor only on
+  verified windows can follow, and within 8 to 45 minutes nothing on the
+  channel verified again (TODO item 7, fixed 2026-11-07).
+- **Not application writes either.** A master retransmits its current body every
+  slot whether or not the application supplied a new one, so a counter that
+  advanced per write would repeat across retransmissions — and a repeated
+  counter under one `(epoch, device number)` is keystream reuse. On a secured
+  channel the transform layer owns this byte outright and derives it from the
+  slot's own time; a slot posted twice resends the bytes it was first given.
+- **It resets to zero when the epoch advances.** A loss detector built on it has
+  to handle that reset; the receiver is told the epoch, so this is cheap. The
+  16-bit nonce counter's high byte is reconstructed from time rather than from
+  arrival history, and a wrap of it advances the epoch by 1 on both sides.
+- **Loss detection.** Between two data pages heard, the counter delta is the
+  slots that passed. Lost slots are that delta, minus 1, minus the packets
+  heard in between (descriptor frames, common pages and any other clear page):
+  `lost = (c_now - c_prev) mod 256 - 1 - heard_between`. A pair that heard
+  more packets than the delta allows is a node whose counter is not a slot
+  index, and a receiver withholds the figure rather than report it negative.
+  `tools/ant_verify.py` reports this as `loss (exact)` with scope `slot`. A gap
+  of 256 slots or more aliases, as any 8-bit counter does.
 - **With `X_AUTH` on**, byte `[7]` is the spread-MAC tag byte and the field
   area is bits 0..39. The descriptor's explicit bit offsets are what make this
   a schema change rather than a format break: the node re-publishes a
@@ -574,6 +591,14 @@ leaves open in the meantime.
   (and so is delivery latency under the drop policy), the first window of an
   epoch is verified by the next window's tag while its own tag bytes are zeros,
   and the last window before a node goes quiet is never verified.
+
+  **A window that holds a clear slot is not verified**, and neither is the
+  window before it, whose tag bytes the clear slot displaces. Windows are cut
+  from the slot index, so the descriptor-and-common run of every cycle costs
+  the windows at each edge of it: 2 to 14 % of a 0x60 node's secured data
+  pages arrive unverified, from W = 2 to W = 8 (section 3.2 of
+  `docs/radiant-security.md` has the measured table). Nothing is wrongly
+  verified: the cost is fail-safe.
 - **With `X_CONF` on**, bytes `[2..7]` (or `[2..6]` when `X_AUTH` is also on)
   are ciphertext. Bytes `[0]` and `[1]` stay in the clear, because a receiver
   needs the page number to tell a data page from a descriptor and needs the
@@ -950,9 +975,16 @@ for building the handoff *sender*.
 - Because there is no retransmission and a scanning receiver may be mid-dwell
   elsewhere, a sparse node sends each event **k times** (frame 1 byte `[3]`
   bits 5..4; default 3x) spaced by roughly one channel period. The event
-  counter in byte `[1]` is what lets the receiver deduplicate the repeats, and
-  it is the same counter that detects loss in periodic mode — one mechanism,
-  two jobs.
+  counter in byte `[1]` is the slot index (section 6), so the repeats carry
+  **consecutive counters and identical body bytes**, and that pair is what tells
+  a receiver they are repeats of one event rather than three readings. It is the
+  same counter that detects loss in periodic mode — one mechanism, two jobs.
+- **A secured sparse node may use `X_CONF` only.** `X_AUTH`'s tag lags one
+  window (`docs/radiant-security.md` 3.2), so a burst never carries its own tag
+  and never verifies; sparse plus `X_AUTH` is refused in v1. `X_CONF` alone
+  works on a slot-aligned sparse node, because the counter follows time across
+  the silences. An asynchronous sparse node (period `0x0000`) has no slot clock
+  and cannot be secured at all: `0xF3` refuses a zero period.
 
 ### Descriptor cadence in sparse mode
 
