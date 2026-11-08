@@ -4,12 +4,14 @@
  * Provenance: original clean-room work against radiant_owed.h/.c.
  *
  * The list behind mqtt_sink.c's owed "offline" statuses. The case that earns
- * the file is the release review 2026-11-08 item 4 sequence, run exactly as
- * mqtt_sink.c's binding_changed()/drain_owed() run it (the helpers below
- * mirror those two bodies line for line, because mqtt_sink.c itself is in
- * apps/ and no ztest reaches it): release A, bind B, release B during an
- * outage, and after the reconnect BOTH must go out. With the old per-source
- * uuid slot, the second release overwrote the first.
+ * the file is the release review 2026-11-08 item 4 sequence: release A, bind B,
+ * release B during an outage, and after the reconnect BOTH must go out. With
+ * the old per-source uuid slot, the second release overwrote the first.
+ *
+ * The drain under test is radiant_owed_drain(), the very function mqtt_sink.c
+ * calls. What is NOT shared is the sink's own glue, which no ztest reaches
+ * (apps/): model_bind() below mirrors mqtt_binding_changed()'s add/cancel
+ * calls, and send_cb stands in for owed_ops_send (publish).
  */
 
 #include <stdbool.h>
@@ -55,9 +57,20 @@ static uint32_t n_offered;
 static uint32_t fail_from;
 static uint32_t n_calls;
 
-static void nop(void *ctx)
+/* The sink's lock is a spinlock that publish() must never run under. Track the
+ * depth so send_cb can assert the drain really drops it. */
+static int lock_depth;
+
+static void lock_cb(void *ctx)
 {
 	ARG_UNUSED(ctx);
+	lock_depth++;
+}
+
+static void unlock_cb(void *ctx)
+{
+	ARG_UNUSED(ctx);
+	lock_depth--;
 }
 
 static uint64_t add_during_send; /* a release landing while a publish is in flight */
@@ -66,6 +79,7 @@ static int send_cb(void *ctx, uint64_t uuid)
 {
 	ARG_UNUSED(ctx);
 	n_calls++;
+	zassert_equal(lock_depth, 0, "send() must run with the owed lock dropped");
 	if (add_during_send != 0u) {
 		(void)radiant_owed_add(&o, add_during_send);
 		add_during_send = 0u;
@@ -77,13 +91,14 @@ static int send_cb(void *ctx, uint64_t uuid)
 	return 0;
 }
 
-static const struct radiant_owed_ops ops = { .lock = nop, .unlock = nop, .send = send_cb };
+static const struct radiant_owed_ops ops = { .lock = lock_cb, .unlock = unlock_cb, .send = send_cb };
 
 static uint32_t model_drain(uint32_t fail_at)
 {
 	n_offered = 0u;
 	n_calls = 0u;
 	fail_from = fail_at;
+	lock_depth = 0;
 	return radiant_owed_drain(&o, &ops);
 }
 

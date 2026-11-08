@@ -13,9 +13,12 @@
  * whatever the table size, and the NEWEST offline is the one refused and
  * counted in `overflow`.
  *
- * Pure data, no locking and no I/O. The caller (apps/dongle_thread/src/
- * mqtt_sink.c) holds its owed spinlock around every call, which is what lets
- * radiant/tests drive the policy.
+ * Pure data, no locking and no I/O of its own. For the list functions (init,
+ * add, cancel, at, any) the caller (apps/dongle_thread/src/mqtt_sink.c) holds
+ * its owed spinlock around each call. radiant_owed_drain() is the exception and
+ * must be called with NO lock held: it takes and drops the caller's lock itself
+ * through ops->lock/unlock, and calls ops->send with it dropped (a caller that
+ * held the lock around the drain would deadlock, and publish under a spinlock).
  *
  * Slots hold 0 when empty (a uuid is never 0: radiant_binding.h). Order is
  * not meaningful.
