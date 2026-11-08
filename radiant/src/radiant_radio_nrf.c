@@ -2041,12 +2041,14 @@ static void deliver_terminal(enum radiant_radio_status st);
 
 #if defined(CORE_CB_DEFERRED)
 
-/* The longest body the backend ever hands up, copied because the pointer in
- * struct radiant_rx_event is "valid only for the duration of this callback"
- * and the callback now happens later. ANT frames are 8 payload bytes plus
- * headers; 32 covers every PHY this backend offers with room to spare, and a
- * body longer than this is refused at the queue rather than truncated. */
-#define CORE_CB_BODY_MAX 32u
+/* The longest body the backend ever hands up - the HAL's own maximum, raised
+ * to 40 for the long-range format (radiant_frame.h RADIANT_FRAME_LR_BODY_MAX).
+ * Copied because the pointer in struct radiant_rx_event is "valid only for the
+ * duration of this callback" and the callback now happens later. It used to be
+ * 32, and an LR body of 33-40 bytes was queued with no body and dropped
+ * silently on MPSL builds (review 2026-10-31, A14-2). */
+#define CORE_CB_BODY_MAX RADIANT_RADIO_BODY_MAX
+BUILD_ASSERT(CORE_CB_BODY_MAX <= UINT8_MAX, "core_cb_entry.body_len is uint8_t");
 
 enum core_cb_kind { CORE_CB_RX = 0, CORE_CB_TX, CORE_CB_ED };
 
@@ -2062,6 +2064,8 @@ struct core_cb_entry {
 	uint8_t body[CORE_CB_BODY_MAX];
 	uint8_t body_len;
 };
+BUILD_ASSERT(sizeof(((struct core_cb_entry *)0)->body) >= RADIANT_RADIO_BODY_MAX,
+	     "a body the HAL accepts would be queued without its bytes");
 
 /*
  * Eight, not one. Two completions can land before the trampoline gets the CPU -
@@ -2231,6 +2235,10 @@ static void core_cb_rx(struct radiant_rx_event *evt)
 		    evt->body_len <= CORE_CB_BODY_MAX) {
 			memcpy(e.body, evt->body, evt->body_len);
 			e.body_len = evt->body_len;
+		} else {
+			/* No copy, so say "no body" consistently rather than a
+			 * NULL body with a non-zero length. */
+			e.ev.rx.body_len = 0u;
 		}
 		/* A frame is terminal only when stop_on_first has already
 		 * retired the operation. */
