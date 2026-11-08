@@ -113,12 +113,11 @@ size_t ant_health_fill(uint8_t *out, size_t cap)
 	 */
 	ev = radiant_event_stats_get();
 
-	/* [0] structure version. Bump it if any field below changes meaning,
-	 * never reuse a byte silently: a host that pattern-matches this reply
-	 * has no other way to know. Version 2 reused [22..23] (previously
-	 * reserved, sent as zero) and appended [24..29]; a version-1 reader
-	 * that only looks at the first 24 bytes still decodes correctly. */
-	out[0] = 2u;
+	/* [0] structure version. Fields are only ever added at the end and an
+	 * offset is never reused; bump this whenever a field is added or a
+	 * field's meaning changes. A host that pattern-matches this reply has
+	 * no other way to know. */
+	out[0] = 1u;
 	/* [1] flags, bit 0 = something saturated, so the whole set is a floor
 	 * rather than a total. */
 	out[1] = (atomic_get(&saturated) != 0) ? 0x01u : 0x00u;
@@ -141,10 +140,8 @@ size_t ant_health_fill(uint8_t *out, size_t cap)
 		(uint32_t)atomic_get(&counters[ANT_HEALTH_BURST_STALL]));
 	put_u16(&out[20],
 		(uint32_t)atomic_get(&counters[ANT_HEALTH_SWEEP_BUSY]));
-	/* [22..23] used to be reserved-as-zero; it briefly carried the idle
-	 * half of the sweep decline, see ANT_HEALTH_SWEEP_BUSY for why that
-	 * field could not exist. Version 2 gives it to HOST_DESYNC instead -
-	 * covered by the version bump at out[0], not a silent reuse. */
+	/* [22..23] HOST_DESYNC. Not the idle half of the sweep decline: see
+	 * ANT_HEALTH_SWEEP_BUSY for why that field cannot exist. */
 	put_u16(&out[22],
 		(uint32_t)atomic_get(&counters[ANT_HEALTH_HOST_DESYNC]));
 	put_u16(&out[24],

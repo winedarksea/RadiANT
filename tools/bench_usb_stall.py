@@ -81,10 +81,11 @@ except ImportError:  # pragma: no cover - user-facing guidance
 
 sys.path.insert(0, __file__.rsplit("\\", 1)[0].rsplit("/", 1)[0])
 
-# The 0xF6 request and its version-aware decode are ant_health.py's, not a
-# second copy here. That module owns the field table and the rule for reading a
-# v1 body off an older stick; duplicating either is how two tools end up
-# disagreeing about what a counter means.
+# The 0xF6 request and its decode are ant_health.py's, not a second copy here.
+# That module owns the field table and the length rule (a body shorter than the
+# current layout is refused, so every field this test reads is always present);
+# duplicating either is how two tools end up disagreeing about what a counter
+# means.
 from ant_health import decode as decode_health  # noqa: E402
 from ant_health import request as request_health  # noqa: E402
 from ant_probe import (  # noqa: E402
@@ -256,19 +257,15 @@ def main() -> int:
     before = read_health(dev, reader, "baseline")
     if before is None:
         sys.exit(
-            "no 0xF6 reply. This needs CONFIG_ANT_DONGLE_HEALTH_COUNTERS=y "
-            "(build with\n-DEXTRA_CONF_FILE=health.conf): two of the three "
-            "assertions are counter reads, and\nwithout them a pass would "
-            "only mean the dongle was still answering."
+            "no usable 0xF6 reply. This needs "
+            "CONFIG_ANT_DONGLE_HEALTH_COUNTERS=y (build with\n"
+            "-DEXTRA_CONF_FILE=health.conf), and firmware new enough to send "
+            "the 30-byte layout:\ntwo of the three assertions are counter "
+            "reads, and without them a pass would\nonly mean the dongle was "
+            "still answering."
         )
-    print(f"  tx_drops={before.get('tx_drops')} "
-          f"tx_timeout={before.get('tx_timeout')}")
-    if "tx_timeout" not in before:
-        sys.exit(
-            f"this dongle answers 0xF6 structure version {before['version']}, "
-            "which has no tx_timeout\nfield. It is older than the firmware "
-            "this test is for."
-        )
+    print(f"  tx_drops={before['tx_drops']} "
+          f"tx_timeout={before['tx_timeout']}")
 
     print("\nOpening a wildcard ANT+ receive channel (the load)")
     if not open_channel(dev, reader):

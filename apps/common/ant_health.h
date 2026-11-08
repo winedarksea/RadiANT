@@ -123,10 +123,9 @@ enum ant_health_counter {
 #define ANT_HEALTH_DEPTH_EVENT 1u
 
 /* Bytes ant_health_fill() writes - the 0xF6 payload_len in
- * protocol/ant_wire.yaml, which is the definition. Version 2: the four
- * counters above reuse what were the [22..23] reserved bytes plus six new
- * bytes appended after them. A host that only knows version 1 (24 bytes)
- * still gets a valid, if shorter, reply - see the version byte at out[0]. */
+ * protocol/ant_wire.yaml, which is the definition. Structure version 1, at
+ * out[0]. Fields are only ever appended and an offset is never reused, so a
+ * host decodes the fields it knows from a longer reply or a higher version. */
 #define ANT_HEALTH_PAYLOAD_LEN 30u
 
 #if defined(CONFIG_ANT_DONGLE_HEALTH_COUNTERS)
