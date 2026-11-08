@@ -500,11 +500,24 @@ enum radiant_sec_verdict {
  * makes every slot whether or not the application wrote a new body, and a
  * repeated counter under one (epoch, devnum) is keystream reuse.
  *
+ * `t_sync` is the slot's own instant (radiant_channel_next_slot()), and the
+ * counter is the SLOT index derived from it - not a count of calls. A slot
+ * that carried a clear page, a slot MPSL denied and a sparse node's silence
+ * all advance it, exactly as the receiver's time-derived index advances, so
+ * the two never drift apart (docs/radiant-security.md 3.1). A uint64_t rather
+ * than radiant_time_t so this header stays freestanding.
+ *
+ * The same slot posted twice gets the bytes built the first time, whatever
+ * `pay` holds now - one slot, one nonce, one absorb. A slot earlier than one
+ * already built is refused (RADIANT_SEC_EINVAL), and the caller transmits
+ * nothing.
+ *
  * Returns RADIANT_SEC_OK when the payload was transformed or deliberately left
  * alone, and a negative code when the channel is configured for something the
- * backend cannot do.
+ * backend cannot do, the slot has passed, or the epoch is spent.
  */
-int radiant_sec_tx_transform(uint8_t ch, uint8_t *pay, uint8_t len);
+int radiant_sec_tx_transform(uint8_t ch, uint8_t *pay, uint8_t len,
+			     uint64_t t_sync);
 
 /*
  * RX ingest. ISR CONTEXT, ZERO CRYPTO - it classifies and, when the packet is
@@ -572,9 +585,10 @@ int  radiant_sec_configure(uint8_t ch, uint8_t switches, uint8_t w,
  * Set the epoch and anchor its phase.
  *
  * `us_into_epoch` is how far into the epoch the caller believes it is now,
- * letting the receiver derive the packet counter from TIME rather than
- * arrival history - the only thing that works for a mid-epoch join, a gap
- * longer than 255 packets, or sparse mode.
+ * letting the receiver derive the slot counter from TIME rather than arrival
+ * history - the only thing that works for a mid-epoch join, a gap longer than
+ * 255 slots, or slot-aligned sparse mode. The sender latches its own slot
+ * phase from it at the first secured transform.
  *
  * `period_counts` (channel period in 1/32768 s counts) is passed in rather
  * than read from radiant_channel so this module depends on nothing but the
@@ -676,10 +690,10 @@ void radiant_sec_stat_enrolment(uint8_t ch);
  * counters a host subtracts for a rate; these are levels. Merging them would
  * conflate "did this change" with "how many since last time".
  *
- * `expected_index` is the packet index time says we should be at: it
- * advances regardless of arrivals, so a climbing expected_index against a
- * flat verified count means the link has gone quiet, not the receiver gone
- * wrong. Zero when no epoch is set.
+ * `expected_index` is the slot index time says we should be at - the
+ * sender's counter counts slots too: it advances regardless of arrivals, so
+ * a climbing expected_index against a flat verified count means the link has
+ * gone quiet, not the receiver gone wrong. Zero when no epoch is set.
  */
 struct radiant_sec_state {
 	uint8_t                  switches;
@@ -701,9 +715,10 @@ void radiant_sec_get_state(uint8_t ch, struct radiant_sec_state *out);
  * without the compiler having to prove a struct copy dead - and there is no
  * ops table anywhere for the linker to fail to garbage-collect.
  */
-static inline int radiant_sec_tx_transform(uint8_t ch, uint8_t *p, uint8_t l)
+static inline int radiant_sec_tx_transform(uint8_t ch, uint8_t *p, uint8_t l,
+					   uint64_t t_sync)
 {
-	(void)ch; (void)p; (void)l;
+	(void)ch; (void)p; (void)l; (void)t_sync;
 	return RADIANT_SEC_OK;
 }
 

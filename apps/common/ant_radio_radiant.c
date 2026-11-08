@@ -1694,9 +1694,11 @@ static void api_post_master_tx(uint8_t ch)
 	 */
 	memcpy(api_ch[ch].sec_pay, api_ch[ch].bcast, sizeof(api_ch[ch].sec_pay));
 	api_ch[ch].sec_pay_valid = false;
+	/* `t` is this slot's instant: the counter is the slot index derived
+	 * from it, and a re-post of the same slot gets the same bytes. */
 	if (radiant_sec_tx_transform(ch, api_ch[ch].sec_pay,
-				     (uint8_t)sizeof(api_ch[ch].sec_pay)) !=
-	    RADIANT_SEC_OK) {
+				     (uint8_t)sizeof(api_ch[ch].sec_pay),
+				     (uint64_t)t) != RADIANT_SEC_OK) {
 		/* A channel configured for something the backend cannot do
 		 * transmits nothing rather than transmitting it in the clear.
 		 * Failing open here would be a channel the host believes is

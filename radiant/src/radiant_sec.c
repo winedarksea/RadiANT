@@ -83,16 +83,33 @@ struct sec_ctx {
 	struct radiant_sec_key k_auth;
 
 	/* ── TX ── */
-	uint16_t tx_ctr;
-	bool     tx_win_open;
+	/* The counter is the SLOT index on the sender's own clock, derived from
+	 * each slot's t_sync (TODO item 7; docs/radiant-security.md 3.1).
+	 * tx_zero_t is the instant slot 0 of this epoch would have had, latched
+	 * by the first secured transform after set_epoch: from then on the index
+	 * is (t_sync - tx_zero_t) / slot, rounded, so the host anchor's offset
+	 * between slots is absorbed once and the phase cannot creep. Signed: a
+	 * latch close to an anchor near zero can put slot 0 before time 0. */
+	int64_t  tx_zero_t;
+	/* The last slot built, and its bytes as they went on the air: a slot
+	 * posted again resends them (no second ciphertext under one nonce, no
+	 * second absorb), and a slot before it is refused. */
+	uint32_t tx_last_idx;
 	uint16_t tx_win_start;
+	/* Counter wraps applied since the latch: idx >> 16 above this advances
+	 * the epoch, by more than one after a long enough silence. */
+	uint16_t tx_wraps;
+	bool     tx_win_open;
+	bool     tx_latched;
+	bool     tx_last_valid;
+	bool     tx_prev_valid;   /* tx_prev_tag holds a closed window's tag */
+	/* Epoch exhausted at a wrap: no further secured TX until a new epoch. */
+	bool     tx_spent;
+	uint8_t  tx_last_out[SEC_PAGE_BYTES];
 	struct radiant_sec_cmac_ctx tx_cmac;
 	/* The tag of the window that just closed, transmitted one byte per
 	 * packet across the NEXT window. See the header comment on the lag. */
 	uint8_t  tx_prev_tag[RADIANT_SEC_W_MAX];
-	bool     tx_prev_valid;
-	/* Epoch exhausted at a wrap: no further secured TX until a new epoch. */
-	bool     tx_spent;
 
 	/* ── RX ── */
 	bool     rx_win_open;
@@ -233,8 +250,11 @@ static uint64_t period_us_of(const struct sec_ctx *c)
 	return ((uint64_t)c->period_counts * 1000000u) / 32768u;
 }
 
-/* D4: expected packet index, from TIME rather than arrival history - a
- * receiver joining mid-epoch (the normal case) has none to count from. */
+/* D4: expected slot index, from TIME rather than arrival history - a receiver
+ * joining mid-epoch (the normal case) has none to count from. The sender's
+ * counter is its slot index too (tx_slot_index()), one count per slot whether
+ * that slot carried a secured page, a clear one or nothing at all, so the two
+ * clocks advance together however much of the stream is not secured. */
 static uint32_t expected_index(const struct sec_ctx *c, uint64_t now)
 {
 	uint64_t period_us = period_us_of(c);
@@ -255,9 +275,10 @@ static uint32_t expected_index(const struct sec_ctx *c, uint64_t now)
  * rollover nearest what time says. `epoch_delta` reports how many counter
  * wraps that implies (a wrap advances the epoch by 1 on both sides, D14).
  * Drift budget: nearest-rollover resolution needs combined clock error below
- * +/-128 packet periods, and the anchor re-establishes on every VERIFIED
- * window (rx_close_window()), so drift only accumulates across a gap with
- * nothing verified.
+ * +/-128 periods, and the anchor re-establishes on every VERIFIED window
+ * (rx_close_window()), so drift only accumulates across a gap with nothing
+ * verified. Clear, skipped and silent slots cost nothing here: the sender
+ * counts them as slots, exactly as `expected` does.
  */
 static uint16_t resolve_counter(uint32_t expected, uint8_t low,
 				uint16_t *epoch_delta)
@@ -314,7 +335,11 @@ static int advance_epoch(struct sec_ctx *c, uint16_t by)
 	if (by == 0u) {
 		return RADIANT_SEC_OK;
 	}
-	if (c->epoch > 0xFFFFFFFFu - RADIANT_SEC_EPOCH_HEADROOM) {
+	/* `by` is more than 1 after a silence longer than a wrap (a sparse
+	 * sender's next slot, a receiver back from a long gap), so the headroom
+	 * test alone could let epoch + by overflow into an epoch already used. */
+	if (c->epoch > 0xFFFFFFFFu - RADIANT_SEC_EPOCH_HEADROOM ||
+	    by > 0xFFFFFFFFu - c->epoch) {
 		return RADIANT_SEC_EINVAL;
 	}
 	c->epoch += by;
@@ -466,6 +491,10 @@ int radiant_sec_configure(uint8_t ch, uint8_t switches, uint8_t w,
 	c->rx_floor = 0u;
 	c->tx_win_open = false;
 	c->tx_prev_valid = false;
+	/* The slot clock's latch and the last-slot guard stay: neither the
+	 * epoch nor the period changes here, so a fresh latch could only move
+	 * the phase, and the guard is what stops one slot being built twice
+	 * under one nonce. */
 	hold_reset(c);
 	return RADIANT_SEC_OK;
 }
@@ -499,8 +528,11 @@ int radiant_sec_set_epoch(uint8_t ch, uint32_t epoch, uint64_t us_into_epoch,
 	c->period_counts = period_counts;
 	c->epoch_set = true;
 
-	/* Everything in flight belonged to the old epoch. */
-	c->tx_ctr = 0u;
+	/* Everything in flight belonged to the old epoch, the slot clock's
+	 * phase included: the next secured transform latches it afresh. */
+	c->tx_latched = false;
+	c->tx_wraps = 0u;
+	c->tx_last_valid = false;
 	c->tx_spent = false;
 	c->tx_win_open = false;
 	c->tx_prev_valid = false;
@@ -740,10 +772,51 @@ static void tx_absorb(struct sec_ctx *c, const uint8_t *pay, uint16_t counter)
 	}
 }
 
-int radiant_sec_tx_transform(uint8_t ch, uint8_t *pay, uint8_t len)
+/*
+ * The slot `t_sync` belongs to, counted from slot 0 of the epoch the host set.
+ * The spacing is radiant_channel_counts_to_us() - the rounded microseconds a
+ * channel advances its slot clock by, MISSED and DENIED slots included - so
+ * every slot of a master lands exactly on an integer and the rounding below
+ * only ever absorbs the latch's own offset. Exact 1/32768 counts would creep
+ * against that clock by up to half a microsecond a slot.
+ */
+static int tx_slot_index(struct sec_ctx *c, uint64_t t_sync, uint32_t *idx)
+{
+	uint64_t slot_us = radiant_channel_counts_to_us(c->period_counts);
+	uint64_t n;
+	int64_t  d;
+
+	if (slot_us == 0u) {
+		return RADIANT_SEC_EINVAL;
+	}
+	if (!c->tx_latched) {
+		/* The host's anchor need not fall on a slot; whatever slot is
+		 * nearest is this one, and every later slot counts from it. */
+		n = (t_sync > c->epoch_anchor)
+			    ? (t_sync - c->epoch_anchor + slot_us / 2u) / slot_us
+			    : 0u;
+		c->tx_zero_t = (int64_t)t_sync - (int64_t)(n * slot_us);
+		c->tx_latched = true;
+	}
+
+	d = (int64_t)t_sync - c->tx_zero_t + (int64_t)(slot_us / 2u);
+	if (d < 0) {
+		return RADIANT_SEC_EINVAL;   /* before slot 0 */
+	}
+	n = (uint64_t)d / slot_us;
+	if (n > UINT32_MAX) {
+		return RADIANT_SEC_EINVAL;
+	}
+	*idx = (uint32_t)n;
+	return RADIANT_SEC_OK;
+}
+
+int radiant_sec_tx_transform(uint8_t ch, uint8_t *pay, uint8_t len,
+			     uint64_t t_sync)
 {
 	struct sec_ctx *c = ctx_of(ch);
 	uint8_t         nonce[RADIANT_SEC_BLOCK_BYTES];
+	uint32_t        idx;
 	uint16_t        counter;
 	int             rc;
 
@@ -752,7 +825,9 @@ int radiant_sec_tx_transform(uint8_t ch, uint8_t *pay, uint8_t len)
 	}
 	if (!page_secured(c, pay[0])) {
 		/* The descriptor and the common pages travel in the clear, and
-		 * the range is what makes that mechanical. */
+		 * the range is what makes that mechanical. They touch no state:
+		 * the next secured slot's counter comes from time, so it already
+		 * counts this one. */
 		return RADIANT_SEC_OK;
 	}
 	if (c->tx_spent) {
@@ -763,12 +838,52 @@ int radiant_sec_tx_transform(uint8_t ch, uint8_t *pay, uint8_t len)
 		return RADIANT_SEC_EINVAL;
 	}
 
-	counter = c->tx_ctr;
+	rc = tx_slot_index(c, t_sync, &idx);
+	if (rc != RADIANT_SEC_OK) {
+		return rc;
+	}
+
+	if (c->tx_last_valid) {
+		if (idx == c->tx_last_idx) {
+			/* The same slot posted again (request_tx refused, then
+			 * re-posted): the bytes it already has, whatever the
+			 * host wrote since. A second build would be a second
+			 * ciphertext under this slot's nonce and a second
+			 * absorb into its window's MAC. */
+			memcpy(pay, c->tx_last_out, SEC_PAGE_BYTES);
+			return RADIANT_SEC_OK;
+		}
+		if (idx < c->tx_last_idx) {
+			/* A slot already passed. Nothing goes out. */
+			return RADIANT_SEC_EINVAL;
+		}
+	}
+
+	if ((idx >> 16) > c->tx_wraps) {
+		/* The wrap - one or several, after a long silence. Advancing the
+		 * epoch stops the counter repeating under one (epoch, devnum);
+		 * the receiver derives the same advance from time. If it cannot
+		 * advance (no headroom left), nothing secured goes out again
+		 * until a new epoch is installed - it used to carry on and reuse
+		 * the keystream (review 2026-10-31, D1-6(a)). */
+		if (advance_epoch(c, (uint16_t)((idx >> 16) - c->tx_wraps)) !=
+		    RADIANT_SEC_OK) {
+			c->tx_spent = true;
+			return RADIANT_SEC_EINVAL;
+		}
+		c->tx_wraps = (uint16_t)(idx >> 16);
+		c->tx_prev_valid = false;
+		c->tx_win_open = false;
+	}
+
+	counter = (uint16_t)idx;
 
 	/* radiant_sec owns byte [1] on a secured master channel: a
 	 * host-maintained counter would repeat across retransmissions (a
 	 * master resends its body every slot), and a repeated counter under
-	 * one (epoch, devnum) is keystream reuse. */
+	 * one (epoch, devnum) is keystream reuse. It is the slot index, so it
+	 * advances on every slot - transmitted, clear or skipped - exactly as
+	 * the receiver's time-derived index does. */
 	pay[1] = (uint8_t)counter;
 
 	if ((c->switches & RADIANT_SEC_SW_AUTH) != 0u) {
@@ -797,20 +912,9 @@ int radiant_sec_tx_transform(uint8_t ch, uint8_t *pay, uint8_t len)
 		tx_absorb(c, pay, counter);
 	}
 
-	c->tx_ctr = (uint16_t)(counter + 1u);
-	if (c->tx_ctr == 0u) {
-		/* The wrap. Advancing the epoch here stops the counter
-		 * repeating under one (epoch, devnum); the receiver derives
-		 * the same advance from time. If it cannot advance (no
-		 * headroom left), nothing secured goes out again until a new
-		 * epoch is installed - it used to carry on and reuse the
-		 * keystream (review 2026-10-31, D1-6(a)). */
-		if (advance_epoch(c, 1u) != RADIANT_SEC_OK) {
-			c->tx_spent = true;
-		}
-		c->tx_prev_valid = false;
-		c->tx_win_open = false;
-	}
+	memcpy(c->tx_last_out, pay, SEC_PAGE_BYTES);
+	c->tx_last_idx = idx;
+	c->tx_last_valid = true;
 	return RADIANT_SEC_OK;
 }
 
