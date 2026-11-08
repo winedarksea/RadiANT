@@ -245,6 +245,8 @@ target_sources(app PRIVATE
   # The self channels' decisions (apps/dongle_thread/src/self_channels.c keeps
   # only the antr_* calls). Pure functions; src/test_self_policy.c.
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge/radiant_self_policy.c"
+  # mqtt_sink.c's owed-offline list. Pure; src/test_owed.c.
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge/radiant_owed.c"
 )
 target_include_directories(app PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge")

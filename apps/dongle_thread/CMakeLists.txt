@@ -120,6 +120,9 @@ if(CONFIG_RADIANT_BRIDGE)
     # mqtt_sink.c and src/matter/ant/ant_bridge.cpp need it and each is behind
     # its own Kconfig symbol.
     "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge/radiant_naming.c"
+    # mqtt_sink.c's owed-offline list, pure so radiant/tests can drive it
+    # (src/test_owed.c). Also not a sink.
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge/radiant_owed.c"
     # Liveness lands with the bus, not after a sink. RADIANT_SAMPLE_STALE has
     # been defined and honoured since P6 with nothing producing it, and a sink
     # written against a bus that never marks anything stale grows that

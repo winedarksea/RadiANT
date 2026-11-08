@@ -74,6 +74,7 @@
 #include "radiant_binding.h"
 #include "radiant_bridge.h"
 #include "radiant_naming.h"
+#include "radiant_owed.h"
 
 #include "bridge_app.h"
 
@@ -357,7 +358,7 @@ static bool avail_online[RADIANT_BINDING_MAX];
  *                 re-pair gets a new uuid (radiant_binding.h), so its retained
  *                 discovery messages are new topics and must be sent again,
  *                 and the slot may now hold a different physical machine.
- *   offline_uuid  the released sensor's status still reads "online" on the
+ *   owed_offline  the released sensor's status still reads "online" on the
  *                 broker and must be overwritten. Kept until a publish of it
  *                 SUCCEEDS; it used to be dropped. A release made while
  *                 disconnected does not wait for some other sensor's sample to
@@ -369,15 +370,15 @@ static bool avail_online[RADIANT_BINDING_MAX];
  */
 static struct k_spinlock owed_lock;
 
-static struct {
-	bool     rearm;
-	uint64_t offline_uuid; /* 0 = nothing owed */
-} owed[RADIANT_BINDING_MAX];
+/* Per-source re-announce flag. */
+static bool owed_rearm[RADIANT_BINDING_MAX];
 
-/* A second release on a source before the first one's "offline" went out.
- * The newer uuid is kept; the older sensor's retained status stays "online"
- * on the broker. Counted because it should be rare and is invisible otherwise. */
-static uint32_t offline_overwritten;
+/* The owed "offline"s, one list of sensor uuids NOT tied to a source (see
+ * radiant_owed.h): release A, bind B, release B on one source during an outage
+ * owes both. Under owed_lock. Its overflow counter (more owed than 2 x
+ * RADIANT_BINDING_MAX, which needs more releases than the table can hold) is
+ * the only way an offline is still lost, and is logged. */
+static struct radiant_owed owed_offline;
 
 /* The uuid each source was last bound with, 0 for none. A release
  * (binding_changed(source, NULL), the self channels evicting a sensor) arrives
@@ -916,11 +917,9 @@ static void drain_owed(void)
 
 	for (s = 0u; s < RADIANT_BINDING_MAX; s++) {
 		k_spinlock_key_t key = k_spin_lock(&owed_lock);
-		bool rearm = owed[s].rearm;
-		uint64_t off = owed[s].offline_uuid;
-		char uuid[17];
+		bool rearm = owed_rearm[s];
 
-		owed[s].rearm = false;
+		owed_rearm[s] = false;
 		k_spin_unlock(&owed_lock, key);
 
 		if (rearm) {
@@ -929,9 +928,20 @@ static void drain_owed(void)
 			subtype[s] = 0u;
 			avail_online[s] = false;
 		}
+	}
+
+	/* The owed offlines, by list slot. Each is snapshotted under owed_lock and
+	 * the publish happens outside it. */
+	for (s = 0u; s < RADIANT_OWED_MAX; s++) {
+		k_spinlock_key_t key = k_spin_lock(&owed_lock);
+		uint64_t off = radiant_owed_at(&owed_offline, s);
+		char uuid[17];
+
+		k_spin_unlock(&owed_lock, key);
 
 		/* `connecting` first: during keepalive_connect()'s blocking
-		 * phase `connected` is written without `lock`. */
+		 * phase `connected` is written without `lock`. A failed send
+		 * below disconnects, which stops this loop at the next slot. */
 		if (off == 0u || connecting || !connected) {
 			continue;
 		}
@@ -949,12 +959,11 @@ static void drain_owed(void)
 		}
 		mqtt_stats.published++;
 
-		/* Only the uuid that was sent: a newer release may have
-		 * replaced it while the publish was in flight. */
+		/* Only the uuid that was sent, wherever it now sits: anything
+		 * released or bound while the publish was in flight is a
+		 * different uuid and stays. */
 		key = k_spin_lock(&owed_lock);
-		if (owed[s].offline_uuid == off) {
-			owed[s].offline_uuid = 0u;
-		}
+		(void)radiant_owed_cancel(&owed_offline, off);
 		k_spin_unlock(&owed_lock, key);
 	}
 }
@@ -968,15 +977,8 @@ static void drain_owed(void)
 static bool offline_owed(void)
 {
 	k_spinlock_key_t key = k_spin_lock(&owed_lock);
-	bool any = false;
-	uint32_t s;
+	bool any = radiant_owed_any(&owed_offline);
 
-	for (s = 0u; s < RADIANT_BINDING_MAX; s++) {
-		if (owed[s].offline_uuid != 0u) {
-			any = true;
-			break;
-		}
-	}
 	k_spin_unlock(&owed_lock, key);
 
 	return any;
@@ -1189,23 +1191,19 @@ static void mqtt_binding_changed(uint32_t source, const struct radiant_binding *
 
 	key = k_spin_lock(&owed_lock);
 
-	owed[source].rearm = true;
+	owed_rearm[source] = true;
 
 	/* Released: the sensor's retained status would otherwise say "online"
 	 * on the broker for good. */
 	if (b == NULL && bound_uuid[source] != 0u) {
-		if (owed[source].offline_uuid != 0u &&
-		    owed[source].offline_uuid != bound_uuid[source]) {
-			offline_overwritten++;
-		}
-		owed[source].offline_uuid = bound_uuid[source];
+		(void)radiant_owed_add(&owed_offline, bound_uuid[source]);
 	}
 
 	/* Bound again to the very sensor whose "offline" is still owed (a
-	 * release and re-pin before the drain ran): sending it now would
-	 * overwrite the "online" its next sample publishes. */
-	if (b != NULL && owed[source].offline_uuid == b->uuid) {
-		owed[source].offline_uuid = 0u;
+	 * release and re-pin before the drain ran), on ANY source: sending it
+	 * now would overwrite the "online" its next sample publishes. */
+	if (b != NULL) {
+		(void)radiant_owed_cancel(&owed_offline, b->uuid);
 	}
 
 	bound_uuid[source] = (b != NULL) ? b->uuid : 0u;
@@ -1338,7 +1336,7 @@ static void mqtt_keepalive_fn(void *a, void *b, void *c)
 				mqtt_stats.connect_attempts -
 					mqtt_stats.connect_failed,
 				mqtt_stats.connect_attempts);
-			LOG_INF("mqtt: offline_overwritten=%u", offline_overwritten);
+			LOG_INF("mqtt: offline_overflow=%u", owed_offline.overflow);
 			LOG_INF("mqtt: bus posted=%u dropped=%u max_pub_ms=%d",
 				radiant_bridge_stats_get()->posted,
 				radiant_bridge_stats_get()->dropped,
