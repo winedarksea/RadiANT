@@ -297,19 +297,20 @@ int main(void)
 	}
 
 	/*
-	 * Device number comes from the identity record when provisioned (see
-	 * docs/decisions/0009-hostless-node-identity.md); falls back to
-	 * Kconfig so a freshly-flashed DK works on a bench without a
-	 * provisioning step.
+	 * Device number from the identity record (ADR 0009). On the first boot
+	 * of a part with no record, node_ident_boot() generates K_dev from the
+	 * on-chip TRNG and stores it first (ADR 0020,
+	 * CONFIG_RADIANT_NODE_IDENT_SELF_PROVISION), so every unit flashed from
+	 * one build gets its own number with no factory step.
 	 *
-	 * NOTHING IN apps/ CALLS node_ident_provision() TODAY, so on every
-	 * board in this tree the fallback is the only branch that runs. That is
-	 * a real gap, not a nuance: production checklist items 3 and 4 in
-	 * docs/hrm-reference-design.md are unachievable until it is closed, and
-	 * closing it is a manufacturing-process decision with its own ADR
-	 * rather than something to bolt on here.
+	 * Any failure - no entropy backend, a storage error, an exhausted boot
+	 * counter - falls back to the Kconfig number with no transforms, which
+	 * is what every board did before ADR 0020. It is logged as an error on
+	 * every boot because a shipped strap on that branch shares its identity
+	 * with every other unit built from the same image.
 	 */
-	if (node_ident_boot() == 0 && node_ident_is_provisioned()) {
+	err = node_ident_boot();
+	if (err == 0) {
 		uint16_t d;
 
 		if (node_ident_devnum(&d) == 0 && d != 0u) {
@@ -317,8 +318,9 @@ int main(void)
 			LOG_INF("device number %u from the identity record", d);
 		}
 	} else {
-		LOG_INF("device number %u from Kconfig (node not provisioned)",
-			devnum);
+		LOG_ERR("identity boot failed: %s (%d); falling back to Kconfig "
+			"device number %u, no transforms",
+			node_ident_strerror(err), err, devnum);
 	}
 
 	/*

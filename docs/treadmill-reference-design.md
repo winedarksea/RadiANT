@@ -348,7 +348,9 @@ failure this project keeps paying for.
    contains the instructions, and read `src/treadmill_sim.c` as the worked
    example — particularly its ramp, which is what exercises the reporting loop
    that a snap-to-target implementation would short-circuit.
-3. **Set the identity.** `CONFIG_TREADMILL_DEVICE_NUMBER`,
+3. **Set the identity.** The device number comes from the identity record the
+   node generates on its first boot (ADR 0020); `CONFIG_TREADMILL_DEVICE_NUMBER`
+   is only the fallback when that fails. Set
    `CONFIG_TREADMILL_MANUFACTURER_ID`, and the four placeholder `1`s in
    `main.c`'s `fill_common_id()` — model number, hardware revision and the two
    software revisions all land on a head unit's device-information screen.
@@ -373,14 +375,18 @@ failure this project keeps paying for.
 
 ## 6. The production checklist
 
-Seven items. Items 1 and 2 are **not achievable in this tree today** and say so.
+Seven items.
 
-1. **A per-unit device number.** Nothing in `apps/` calls
-   `node_ident_provision()`, so every machine flashed from one build shares one
-   ANT device number. For a single demo that is fine. **For a gym it is fatal**
-   — twenty treadmills answering to one number is twenty machines a receiver
-   cannot tell apart — and closing it is a manufacturing-process decision with
-   its own ADR, exactly as `hrm-reference-design.md`'s items 3 and 4 record.
+1. **A per-unit device number.** Met by the firmware since
+   [ADR 0020](decisions/0020-k-dev-is-generated-on-first-boot.md): the node
+   generates `K_dev` from its own TRNG on first boot and derives its number
+   from it. What you check is the same as `hrm-reference-design.md` §5.1: the
+   entropy backend is on (`CONFIG_RADIANT_SEC_RNG_ENTROPY=y`, in `prj.conf`) and
+   the boot log says `device number N from the identity record`. If it says
+   `identity boot failed ... falling back to Kconfig device number`, every
+   machine built from that image shares one number — **for a gym that is
+   fatal**, twenty treadmills a receiver cannot tell apart. A full flash erase
+   re-rolls the number; receivers re-pair once.
 2. **A real manufacturer id.** 255 is the ANT+ development id. Shipping with it
    is claiming somebody else's identity.
 3. **Real model and revision numbers** in `fill_common_id()`.

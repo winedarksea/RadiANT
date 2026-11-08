@@ -38,6 +38,12 @@ struct record {
 	void       *buf;
 	size_t      len;
 	bool        present;
+	/* A record was found in flash but could not be loaded (wrong length,
+	 * read error). NOT the same as absent: node_ident.c generates a new
+	 * K_dev on "absent" (ADR 0020), so a record that fails to load must
+	 * answer NODE_NVM_EIO, never NODE_NVM_ENOENT, or one bad read would
+	 * re-roll the node's identity. */
+	bool        bad;
 };
 
 static uint32_t cache_boot;
@@ -45,9 +51,9 @@ static uint32_t cache_pair;
 static uint8_t  cache_kdev[16];
 
 static struct record records[] = {
-	{ NODE_NVM_KEY_BOOT, &cache_boot, sizeof(cache_boot), false },
-	{ NODE_NVM_KEY_PAIR, &cache_pair, sizeof(cache_pair), false },
-	{ NODE_NVM_KEY_KDEV, cache_kdev,  sizeof(cache_kdev), false },
+	{ NODE_NVM_KEY_BOOT, &cache_boot, sizeof(cache_boot), false, false },
+	{ NODE_NVM_KEY_PAIR, &cache_pair, sizeof(cache_pair), false, false },
+	{ NODE_NVM_KEY_KDEV, cache_kdev,  sizeof(cache_kdev), false, false },
 };
 
 static bool initialised;
@@ -76,16 +82,29 @@ static int set_cb(const char *name, size_t len, settings_read_cb read_cb,
 	if (r == NULL) {
 		return -ENOENT;
 	}
-	/* Wrong-length record left absent rather than partially loaded
-	 * (see node_nvm.h). */
+	/* Zero length is how the settings subsystem records a deletion: the
+	 * record is genuinely absent (a future factory reset deletes K_dev to
+	 * get exactly this). */
+	if (len == 0u) {
+		r->present = false;
+		r->bad = false;
+		return 0;
+	}
+	/* Wrong-length record never partially loaded, and marked bad rather
+	 * than left looking absent (see node_nvm.h and the `bad` field). */
 	if (len != r->len) {
+		r->present = false;
+		r->bad = true;
 		return -EINVAL;
 	}
 	got = read_cb(cb_arg, r->buf, r->len);
 	if (got < 0 || (size_t)got != r->len) {
+		r->present = false;
+		r->bad = true;
 		return -EIO;
 	}
 	r->present = true;
+	r->bad = false;
 	return 0;
 }
 
@@ -126,6 +145,9 @@ int node_nvm_load(const char *key, void *out, size_t len)
 		return NODE_NVM_EINVAL;
 	}
 	if (len != r->len) {
+		return NODE_NVM_EIO;
+	}
+	if (r->bad) {
 		return NODE_NVM_EIO;
 	}
 	if (!r->present) {
@@ -169,5 +191,6 @@ int node_nvm_store(const char *key, const void *val, size_t len)
 	}
 	memcpy(r->buf, val, len);
 	r->present = true;
+	r->bad = false;
 	return NODE_NVM_OK;
 }

@@ -8,8 +8,13 @@ pinned to one fitness-equipment master, sends an acknowledged control page into
 it, and reads the page 71 Command Status that FE-C SS8.8 obliges the machine to
 answer with.
 
-    python tools/ant_fec_control.py --device 4243 --grade 3.0
+    python tools/ant_fec_control.py --device <N> --grade 3.0
     python tools/ant_fec_control.py --device 52233 --request-page 54
+
+apps/treadmill's number is no longer 4243: it generates its identity on first
+boot (ADR 0020), so read <N> from its boot log ("device number N from the
+identity record") or from tools/ant_scan.py. 4243 is only its fallback, and
+apps/trainer stays on its fixed 4244.
 
 Exit status: 0 only if the command was both delivered (acknowledged) and
 answered with a page 71 Command Status; 1 otherwise.

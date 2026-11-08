@@ -38,6 +38,7 @@ static struct rec parts[] = {
 
 static bool     initialised;
 static uint32_t fail_remaining;
+static uint32_t load_fail_remaining;
 static bool     swallow;
 static uint32_t stores;
 
@@ -61,6 +62,7 @@ void fake_nvm_wipe(void)
 	}
 	initialised = false;
 	fail_remaining = 0u;
+	load_fail_remaining = 0u;
 	swallow = false;
 	stores = 0u;
 }
@@ -81,14 +83,24 @@ void fake_nvm_swallow_stores(bool on)
 	swallow = on;
 }
 
+void fake_nvm_fail_loads(uint32_t n)
+{
+	load_fail_remaining = n;
+}
+
 bool fake_nvm_peek_u32(const char *key, uint32_t *out)
+{
+	return fake_nvm_peek(key, out, sizeof(uint32_t));
+}
+
+bool fake_nvm_peek(const char *key, void *out, size_t len)
 {
 	const struct rec *r = find(key);
 
-	if (r == NULL || r->len != sizeof(uint32_t) || out == NULL) {
+	if (r == NULL || r->len == 0u || r->len != len || out == NULL) {
 		return false;
 	}
-	memcpy(out, r->buf, sizeof(uint32_t));
+	memcpy(out, r->buf, len);
 	return true;
 }
 
@@ -118,6 +130,12 @@ int node_nvm_load(const char *key, void *out, size_t len)
 	r = find(key);
 	if (r == NULL) {
 		return NODE_NVM_EINVAL;
+	}
+	if (load_fail_remaining > 0u) {
+		/* A read error, present record or not: never ENOENT, which is
+		 * the one answer a caller may act on as "first boot". */
+		load_fail_remaining--;
+		return NODE_NVM_EIO;
 	}
 	if (r->len == 0u) {
 		return NODE_NVM_ENOENT;

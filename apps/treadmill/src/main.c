@@ -823,19 +823,18 @@ int main(void)
 	}
 
 	/*
-	 * Device number from the identity record when provisioned (ADR 0009),
-	 * falling back to Kconfig so a freshly-flashed DK works on a bench.
+	 * Device number from the identity record (ADR 0009). On the first boot
+	 * of a part with no record, node_ident_boot() generates K_dev from the
+	 * on-chip TRNG and stores it first (ADR 0020), so every treadmill
+	 * flashed from one build gets its own number - which a gym needs.
 	 *
-	 * NOTHING IN apps/ CALLS node_ident_provision() TODAY, so on every
-	 * board in this tree the fallback is the only branch that runs - every
-	 * treadmill flashed from one build shares one identity. For a single
-	 * demo that is fine; FOR A GYM IT IS FATAL, and it is the first item on
-	 * this application's production checklist for that reason. See
-	 * docs/treadmill-reference-design.md and
-	 * docs/hrm-reference-design.md's items 3 and 4, which record the same
-	 * gap and the ADR it needs.
+	 * Any failure falls back to the Kconfig number with no transforms, and
+	 * is logged as an error on every boot: on that branch every machine
+	 * built from the same image shares one identity, which for a gym is
+	 * fatal. See docs/treadmill-reference-design.md.
 	 */
-	if (node_ident_boot() == 0 && node_ident_is_provisioned()) {
+	err = node_ident_boot();
+	if (err == 0) {
 		uint16_t d;
 
 		if (node_ident_devnum(&d) == 0 && d != 0u) {
@@ -843,8 +842,9 @@ int main(void)
 			LOG_INF("device number %u from the identity record", d);
 		}
 	} else {
-		LOG_INF("device number %u from Kconfig (node not provisioned)",
-			devnum);
+		LOG_ERR("identity boot failed: %s (%d); falling back to Kconfig "
+			"device number %u, no transforms",
+			node_ident_strerror(err), err, devnum);
 	}
 
 	treadmill_state_init(&state);

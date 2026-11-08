@@ -43,10 +43,17 @@ void fake_nvm_fail_stores(uint32_t n);
  * early from a queued write. */
 void fake_nvm_swallow_stores(bool on);
 
+/* Make the next `n` loads fail with NODE_NVM_EIO whether or not the record
+ * exists - a read error, which is NOT "never written". ADR 0020's trigger rule
+ * rests on telling the two apart: only ENOENT may lead to a new K_dev. */
+void fake_nvm_fail_loads(uint32_t n);
+
 /* Read a record straight out of the simulated part, bypassing node_nvm.h -
  * a suite asserting "the counter is in NVM by now" must not ask the layer
- * under test. Returns false when the record is absent. */
+ * under test. Returns false when the record is absent or `len` is not the
+ * stored length. */
 bool fake_nvm_peek_u32(const char *key, uint32_t *out);
+bool fake_nvm_peek(const char *key, void *out, size_t len);
 
 /* How many stores have been attempted, so ADR 0009's flash-wear argument
  * ("once per boot, once per pairing window") is assertable. */

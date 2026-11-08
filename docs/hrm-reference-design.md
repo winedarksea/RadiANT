@@ -23,8 +23,8 @@ repository where RadiANT transmits as a **master** with a profile on top.
 
 **What it is not.**
 
-- **It is not a product.** §5's checklist has nine items and at least two of them
-  cannot be completed on any board in this tree today (§5.1).
+- **It is not a product.** §5's checklist has nine items, and several of them
+  (the manufacturer ID, the placeholder revisions, signing) are yours to do.
 - **It is not a bench instrument any more, but it was one.** It began as
   `strap/`, written to give the BLE coexistence work (P8/P9) a node whose ANT+
   side is a master — a dongle, being a slave, cannot stand in, because a master
@@ -277,8 +277,8 @@ build as a working node.
 
 ## 5. The production checklist
 
-Nine items. Items 3 and 4 are **not achievable on any board in this tree today** —
-see §5.1.
+Nine items. Items 3 and 4 are met by the firmware since ADR 0020 — see §5.1 for
+what you still check.
 
 1. **Manufacturer ID ≠ 255.** `CONFIG_HRM_MANUFACTURER_ID` defaults to 255, the
    ANT+ development ID. A shipped product needs a real one from the alliance;
@@ -287,11 +287,17 @@ see §5.1.
    `1` in `main.c`, and common pages 0x50/0x51 are what a head unit's
    device-information screen displays. They are placeholders, and they look
    exactly like real values from the outside.
-3. **Device number from the identity record, not from Kconfig.**
-   `CONFIG_HRM_DEVICE_NUMBER` is a bench fallback so a freshly-flashed DK works
-   without a provisioning step. ADR 0009 makes the number a property of the
-   node's identity, not of the image.
-4. **`K_dev` provisioned at manufacture,** per ADR 0009.
+3. **Device number from the identity record, not from Kconfig.** The boot log
+   must say `device number N from the identity record`.
+   `CONFIG_HRM_DEVICE_NUMBER` is used only when identity boot fails, and the
+   log then says so at error level — a unit on that branch shares its number
+   with every other unit built from the same image. ADR 0009 makes the number a
+   property of the node's identity, not of the image.
+4. **`K_dev` exists,** per ADR 0009. Since ADR 0020 the node generates it from
+   its own TRNG on first boot (`identity provisioned on first boot`, once), so
+   this needs an entropy backend in your build
+   (`CONFIG_RADIANT_SEC_RNG_ENTROPY=y`, on in `prj.conf`) and nothing else. A
+   factory that writes its own key through `node_ident_provision()` keeps it.
 5. **The 22-character BLE name budget.** Against the 31-byte legacy advertising
    payload: flags `1+1+1 = 3`, UUID16 list `1+1+2 = 4`, name `1+1+N = 2+N`, so
    `9 + N ≤ 31` and **N ≤ 22**. `src/hrm_ble.c` used to claim "~24" from memory
@@ -325,26 +331,32 @@ see §5.1.
    - Version: there is no `VERSION` file in this repository yet, so
      `APP_VERSION_STRING` is unavailable.
 
-### 5.1 The gap items 3 and 4 depend on
+### 5.1 Identity: closed by ADR 0020
 
-**Nothing in `apps/` calls `node_ident_provision()`.**
+This section used to record a gap: nothing in `apps/` called
+`node_ident_provision()`, so every board ran on the Kconfig number and items 3
+and 4 were unachievable. It listed three shapes for closing it — a bench-only
+`PROVISION_ON_FIRST_BOOT`, a one-shot provisioning image, a factory programmer
+step — and asked for an ADR.
 
-`radiant/src/node/node_ident.c` implements provisioning; no application invokes
-it. So on every board in this tree the Kconfig fallback is the only branch that
-ever runs, and checklist items 3 and 4 are unachievable — not difficult,
-unachievable.
+[ADR 0020](decisions/0020-k-dev-is-generated-on-first-boot.md) chose a fourth:
+**the node generates `K_dev` from its own TRNG on the first boot that finds no
+`K_dev` record**, with no factory tooling, and the key never leaves the chip.
+No protocol needs `K_dev` off the device — a printed or QR-code key is
+`K_root`, a different key.
 
-Closing it is a **manufacturing-process decision, not a firmware one**, and it
-has at least three shapes with different consequences:
+What a manufacturer still checks:
 
-- a bench-only `PROVISION_ON_FIRST_BOOT` that refuses to compile in a release
-  configuration;
-- a separate one-shot provisioning image;
-- a factory step that writes `K_dev` through the programmer.
-
-**It should be scoped as its own phase with its own ADR.** This document names
-the gap so that it is a recorded decision rather than something discovered at
-manufacture; it does not close it.
+- **An entropy backend is on.** `CONFIG_RADIANT_SEC_RNG_ENTROPY=y` (in
+  `prj.conf`), so `.config` shows `CONFIG_RADIANT_SEC_HAS_RNG=y` and
+  `CONFIG_RADIANT_NODE_IDENT_SELF_PROVISION=y`. Without one the node boots on
+  the Kconfig number and logs an error every boot.
+- **The boot log shows the identity record.** First boot: `identity provisioned
+  on first boot`, then `device number N from the identity record`. Every later
+  boot: the same `N` and no provisioned line.
+- **A full flash erase re-rolls the number.** Erasing the storage partition is
+  a factory reset; receivers paired to the unit re-pair once. A reflash that
+  programs only the image keeps it.
 
 ---
 
@@ -442,7 +454,7 @@ floor above. It is a real trade, made deliberately, in one direction.
   than measured.
 - **The BLE half has never been compiled, let alone run, on an nRF52.** SDC,
   MPSL and the gate together on that family is untested.
-- **No provisioning path** — §5.1.
+- **A full flash erase re-rolls the device number** — §5.1, ADR 0020.
 - **No signing, watchdog or version string** — §5, item 9.
 - **The MPSL gate's BLE arm is the less-measured one.** `radiant-bridge.md`
   records that bug 22's `elastic_skew_us` removal "has only been measured against

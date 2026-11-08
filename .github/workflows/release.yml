@@ -1175,6 +1175,8 @@ jobs:
             assert_symbols: |
               CONFIG_RADIANT_BACKEND_NRF=y
               CONFIG_HRM_SENSOR_SIMULATED=y
+              CONFIG_RADIANT_SEC_HAS_RNG=y
+              CONFIG_RADIANT_NODE_IDENT_SELF_PROVISION=y
               # CONFIG_BT is not set
               absent:CONFIG_HRM_BLE_HRS
           # THE OTHER HALF OF THE nrf BACKEND'S `depends on`.
@@ -1190,10 +1192,15 @@ jobs:
           # this application, and radiant/Kconfig records that the part's on-air
           # behaviour is predicted from nRF54L15 measurements, not confirmed.
           - name: "hrm_ble: ANT+ node (nRF52840)"
+            # ADR 0020's first-boot K_dev needs an entropy backend; on this
+            # family the overlay picks the RNG peripheral over CryptoCell.
             board: nrf52840dk/nrf52840
             assert_symbols: |
               CONFIG_RADIANT_BACKEND_NRF=y
               CONFIG_HRM_SENSOR_SIMULATED=y
+              CONFIG_RADIANT_SEC_HAS_RNG=y
+              CONFIG_RADIANT_NODE_IDENT_SELF_PROVISION=y
+              CONFIG_ENTROPY_NRF5_RNG=y
               # CONFIG_BT is not set
           - name: "hrm_ble: BLE HRS"
             # CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL and
@@ -1398,6 +1405,8 @@ jobs:
               CONFIG_RADIANT_BACKEND_NRF=y
               CONFIG_TREADMILL_SOURCE_SIMULATED=y
               CONFIG_TREADMILL_ANT_SDM=y
+              CONFIG_RADIANT_SEC_HAS_RNG=y
+              CONFIG_RADIANT_NODE_IDENT_SELF_PROVISION=y
               # CONFIG_BT is not set
               absent:CONFIG_TREADMILL_BLE
           # THE OTHER HALF OF THE nrf BACKEND'S `depends on`, exactly as in
@@ -1410,6 +1419,9 @@ jobs:
             assert_symbols: |
               CONFIG_RADIANT_BACKEND_NRF=y
               CONFIG_TREADMILL_SOURCE_SIMULATED=y
+              CONFIG_RADIANT_SEC_HAS_RNG=y
+              CONFIG_RADIANT_NODE_IDENT_SELF_PROVISION=y
+              CONFIG_ENTROPY_NRF5_RNG=y
               # CONFIG_BT is not set
           # THE COEXISTENCE FALLBACK, COMPILED SO IT CANNOT ROT. Two ANT+
           # masters at 8192 and 8134 counts beat against each other with a

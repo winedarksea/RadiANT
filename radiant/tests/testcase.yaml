@@ -71,6 +71,14 @@ tests:
   # their own #if; min_cases.radiant.unit.no_pairing in
   # tests/expected_counts.yaml says how many cases that leaves, so a suite that
   # vanishes elsewhere is still caught.
+  #
+  # The fake entropy backend goes off here too, for the same reason: a dongle
+  # has no RNG and no node identity of its own, and this is the build of what
+  # a dongle ships. With it off, CONFIG_RADIANT_NODE_IDENT_SELF_PROVISION is
+  # off by dependency, so node_ident's "unprovisioned node cannot boot" and
+  # "the RNG seam compiles out" cases run here and the first-boot provisioning
+  # cases (ADR 0020) compile out by their own #if. Folded into this scenario
+  # rather than given its own because a scenario is a whole-suite run.
   radiant.unit.no_pairing:
     timeout: 300
     tags:
@@ -82,6 +90,7 @@ tests:
       - native_sim
     extra_configs:
       - CONFIG_RADIANT_SEC_PAIRING_X25519=n
+      - CONFIG_RADIANT_TEST_FAKE_RNG=n
 
   # The same suites with the ACK fault instrument COMPILED IN
   # (CONFIG_RADIANT_ACK_FAULTS, apps/trainer's lever on the acknowledger).

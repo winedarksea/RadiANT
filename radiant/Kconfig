@@ -1093,10 +1093,12 @@ config RADIANT_SEC_PAIRING_X25519
 	  or a typed key - which needs no protocol and has no attack surface
 	  during pairing at all.
 
-	  The 32-byte scalar comes from the host over 0xF5. There is no
-	  entropy driver here and no PSA: on nRF54L the only entropy source is
-	  psa_rng/CRACEN, and reaching it drags nrf_security into every build.
-	  The honest consequence is that a host-less node cannot pair this way.
+	  On a dongle the 32-byte scalar comes from the host over 0xF5, and
+	  this symbol adds no entropy driver and no PSA of its own. A hostless
+	  node (src/node/) derives its scalar from K_dev and a persisted
+	  counter instead (ADR 0009), so it can pair this way with or without
+	  an entropy backend; RADIANT_SEC_HAS_RNG below only decides whether
+	  the scalar could come from the RNG.
 
 config RADIANT_SEC_HAS_RNG
 	bool
@@ -1130,10 +1132,39 @@ config RADIANT_SEC_RNG_PSA
 	  transmitted, because its second job is forward secrecy and its first
 	  is not being a fingerprint.
 
-	  NOT BUILT BY ANY GATE IN THIS REPOSITORY. Nothing on the bench links
-	  nrf_security, so this file's first compile will be on the part that
-	  needs it. It is small and it is one PSA call, and that is the reason
-	  the risk is acceptable rather than an argument that there is none.
+	  NOT BUILT BY ANY GATE IN THIS REPOSITORY. The node applications use
+	  RADIANT_SEC_RNG_ENTROPY below instead, which reaches the same CRACEN
+	  on nRF54L through Zephyr's entropy driver and also covers the nRF52.
+	  This file is small and it is one PSA call, and that is the reason the
+	  risk is acceptable rather than an argument that there is none.
+
+config RADIANT_SEC_RNG_ENTROPY
+	bool "Zephyr entropy-driver backend (the zephyr,entropy chosen node)"
+	default n
+	depends on !RADIANT_SEC_RNG_PSA
+	select RADIANT_SEC_HAS_RNG
+	select ENTROPY_GENERATOR
+	help
+	  src/radiant_sec_rng_entropy.c: radiant_sec_rng() over
+	  entropy_get_entropy() on the board's zephyr,entropy chosen node.
+	  That node is psa_rng (CRACEN's TRNG) on nRF54L, and the RNG
+	  peripheral on nRF52840 once the board overlay chooses it. The
+	  nRF52840 default is CryptoCell, which pulls its platform library in
+	  for one 16-byte draw - so the node apps' nRF52840 board files also
+	  set CONFIG_ENTROPY_CC3XX=n (measured: 6.7 KB flash, 1.9 KB RAM).
+
+	  On nRF54L this links the CRACEN CTR_DRBG driver, and NCS then raises
+	  MAIN_STACK_SIZE to 3584: +2.5 KB of RAM on a build that did not
+	  already have it (a BLE build does).
+
+	  The node applications turn this on so that K_dev can be generated on
+	  the device at first boot (docs/decisions/0020-k-dev-is-generated-on-
+	  first-boot.md). That is its one caller today: 16 bytes, once in the
+	  life of the part.
+
+	  Mutually exclusive with RADIANT_SEC_RNG_PSA because both define
+	  radiant_sec_rng(). Policy still never names this symbol - it reads
+	  radiant_sec_caps()->has_rng, which RADIANT_SEC_HAS_RNG drives.
 
 config RADIANT_SEC_COMPAT
 	bool "compat-mode attestation primitives (ANT+ device types)"

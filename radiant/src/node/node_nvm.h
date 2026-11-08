@@ -48,7 +48,7 @@ extern "C" {
  * the whole argument for this design. */
 #define NODE_NVM_KEY_BOOT  "boot"   /* uint32_t, +1 at every boot */
 #define NODE_NVM_KEY_PAIR  "pair"   /* uint32_t, +1 per pairing window */
-#define NODE_NVM_KEY_KDEV  "kdev"   /* 16 bytes, provisioned at manufacture */
+#define NODE_NVM_KEY_KDEV  "kdev"   /* 16 bytes, written once (ADR 0020) */
 
 /* Prepare the backend. Idempotent; node_ident_boot() calls it first. */
 int node_nvm_init(void);

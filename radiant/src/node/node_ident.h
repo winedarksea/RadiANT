@@ -50,7 +50,11 @@ extern "C" {
 #define NODE_IDENT_ESTATE   -5
 
 /*
- * ── Manufacture ────────────────────────────────────────────────────────────
+ * ── Provisioning ───────────────────────────────────────────────────────────
+ *
+ * Called by node_ident_boot() itself on a first boot when
+ * CONFIG_RADIANT_NODE_IDENT_SELF_PROVISION is on (ADR 0020), or by a factory
+ * step that writes its own key.
  *
  * Writes K_dev and zeroes both counters as one operation; there is no way to
  * reset a counter on its own (ADR 0009: counters are never reset independently
@@ -75,11 +79,24 @@ bool node_ident_is_provisioned(void);
  * 0xF3 refusal, relocated) - callers must check the return code, since a
  * reused epoch reuses keystream silently.
  *
- * Returns NODE_IDENT_ENOKEY when unprovisioned, NODE_IDENT_EIO on store
- * failure, NODE_IDENT_ESTATE when the counter has run out of room (see the
- * headroom note in the .c).
+ * With CONFIG_RADIANT_NODE_IDENT_SELF_PROVISION (ADR 0020), a boot that finds
+ * NO K_dev record - the storage backend's NODE_NVM_ENOENT, and nothing else -
+ * first generates one from radiant_sec_rng() and provisions it through
+ * node_ident_provision(), then boots normally. Any other K_dev load failure is
+ * NODE_IDENT_EIO and provisions nothing: a flaky read must never re-roll the
+ * identity.
+ *
+ * Returns NODE_IDENT_ENOKEY when unprovisioned (or when self-provisioning had
+ * no usable entropy), NODE_IDENT_EIO on a storage failure, NODE_IDENT_ESTATE
+ * when the counter has run out of room (see the headroom note in the .c). On
+ * any failure the caller falls back to its Kconfig device number with no
+ * transforms, and should say so with node_ident_strerror().
  */
 int node_ident_boot(void);
+
+/* A fixed English reason for a NODE_IDENT_* code, for the one boot log line
+ * every node application prints on failure. Never NULL. */
+const char *node_ident_strerror(int rc);
 
 int node_ident_boot_counter(uint32_t *out);
 int node_ident_epoch(uint32_t *out);

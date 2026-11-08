@@ -445,16 +445,23 @@ int main(void)
 		return 0;
 	}
 
-	if (node_ident_boot() == 0 && node_ident_is_provisioned()) {
-		uint16_t d;
-
-		if (node_ident_devnum(&d) == 0 && d != 0u) {
-			devnum = d;
-			LOG_INF("device number %u from the identity record", d);
-		}
+	/*
+	 * THE FIXTURE KEEPS ITS FIXED NUMBER, whatever the identity record
+	 * says. tools/fec_ack_sweep.py and the bench recipes address this
+	 * board as CONFIG_TRAINER_DEVICE_NUMBER (4244), so prj.conf turns
+	 * first-boot provisioning off (ADR 0020) - and a record left in
+	 * storage by an hrm_ble or treadmill image flashed on the same DK
+	 * without an erase is ignored here rather than silently moving the
+	 * fixture to a derived number. node_ident_boot() still runs so the
+	 * boot counter behaves as on the other nodes.
+	 */
+	err = node_ident_boot();
+	if (err == 0) {
+		LOG_INF("device number %u, the fixture's fixed number (an "
+			"identity record is present and ignored)", devnum);
 	} else {
-		LOG_INF("device number %u from Kconfig (node not provisioned)",
-			devnum);
+		LOG_INF("device number %u, the fixture's fixed number (%s)",
+			devnum, node_ident_strerror(err));
 	}
 
 	trainer_model_init(&model);

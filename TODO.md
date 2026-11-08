@@ -264,7 +264,15 @@ enrolling node, not over the air (docs/radiant-security.md 11.7.2).
   - carry it only when the epoch is coarse real time (0xF3 already has that
     flag), zero otherwise.
 
-## 5. [DESIGN DECISION - needs an ADR] Provisioning so identity Tier 0 actually runs
+## 5. [DONE 2026-11-07] Provisioning so identity Tier 0 actually runs
+**Done:** ADR 0020. K_dev is generated on the device from its TRNG on the
+first boot that finds no K_dev record (NODE_NVM_ENOENT only; a read error is
+EIO and never re-provisions). CONFIG_RADIANT_SEC_RNG_ENTROPY on hrm_ble and
+treadmill; apps/trainer opts out and keeps 4244. Failure falls back to the
+Kconfig number with an error log every boot. Tests: test_node_ident.c's
+first-boot cases against tests/fake_rng.c.
+
+(Original notes follow.)
 - Nothing in apps/ calls node_ident_provision() (hrm-reference-design.md 5.1,
   and the comments in apps/hrm_ble/src/main.c and apps/treadmill/src/main.c).
 - Consequence: Tier 0, the only privacy feature that is on by default, never

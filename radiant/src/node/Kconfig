@@ -32,6 +32,41 @@ config RADIANT_NODE_IDENT
 	  pairing scalar arriving silently. A build with no backend fails to
 	  link, which is the loudest available way to say so.
 
+config RADIANT_NODE_IDENT_SELF_PROVISION
+	bool "generate K_dev on the device at first boot"
+	default y
+	depends on RADIANT_NODE_IDENT && RADIANT_SEC_HAS_RNG
+	help
+	  docs/decisions/0020-k-dev-is-generated-on-first-boot.md. When
+	  node_ident_boot() finds NO K_dev record at all (the storage backend
+	  says "never written"), it draws 16 bytes from radiant_sec_rng(),
+	  provisions them through node_ident_provision() - key first, then
+	  zeroed counters, each confirmed by read-back - and carries on
+	  booting. The key never leaves the part and no factory step needs to
+	  know it.
+
+	  ONLY "never written" triggers it. Any other storage failure returns
+	  NODE_IDENT_EIO and provisions nothing, because a flaky read that
+	  re-rolled the identity would silently change the device number and
+	  orphan every receiver paired to it. An RNG failure writes nothing and
+	  returns NODE_IDENT_ENOKEY.
+
+	  Depends on an entropy backend (RADIANT_SEC_HAS_RNG): without one
+	  there is nothing safe to make a key from, and the node falls back to
+	  its application's Kconfig device number with no transforms, as
+	  before. Turn it off for a fixture whose device number must stay
+	  fixed (apps/trainer does) or for a product that writes K_dev at the
+	  factory.
+
+	  The accepted cost: a full flash erase re-rolls the device number, so
+	  receivers paired to the node re-pair once.
+
+if RADIANT_NODE_IDENT
+module = RADIANT_NODE_IDENT
+module-str = radiant node identity
+source "subsys/logging/Kconfig.template.log_config"
+endif
+
 config RADIANT_NODE_NVM_SETTINGS
 	bool "store the node's counters in the Zephyr settings subsystem"
 	default y if RADIANT_NODE_IDENT

@@ -9,7 +9,10 @@ pairing counter advancing **before** the public key is transmitted, and the
 ADR 0008: `docs/radiant-security.md` section 7.4 states that the host-supplied
 scalar is not the answer for a hostless node and names this decision.
 
-- **Status:** Accepted.
+- **Status:** Accepted. **Amended by [0020](0020-k-dev-is-generated-on-first-boot.md)
+  (2026-11-07):** decision 2's "provisioned at manufacture" is now "generated
+  on the device from its own TRNG at first boot"; a factory may still write
+  its own.
 - **Date:** 2026-08-11
 - **Related:** [0006 security v1 scope](0006-security-v1-scope-and-x-priv-withdrawal.md),
   [0008 additive pages and compat security](0008-antplus-additive-pages-and-compat-security.md),
@@ -49,7 +52,9 @@ one kind of that.
    for free.
 2. **`K_dev` is a per-device secret provisioned at manufacture.** It is also the
    identity Tier 0 device-number source, so it is needed regardless of anything
-   in this ADR.
+   in this ADR. *(Amended by [0020](0020-k-dev-is-generated-on-first-boot.md):
+   the node generates it from its own TRNG on the first boot that finds no
+   `K_dev` record.)*
 3. **The pairing scalar is deterministic:**
    `KDF(K_dev, "pair" || pair_counter)`, where `pair_counter` is a second `u32`
    in NVM, `+1` per pairing window entered.

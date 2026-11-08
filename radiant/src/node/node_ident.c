@@ -15,12 +15,22 @@
 #include <string.h>
 
 #include <zephyr/kernel.h>   /* __weak, for the clock hook a node overrides */
+#include <zephyr/logging/log.h>
 
 #include <radiant/radiant_sec.h>
 #include <radiant/radiant_sec_compat.h>
 
 #include "node_ident.h"
 #include "node_nvm.h"
+
+/* The level symbol exists only where src/node/Kconfig is sourced with
+ * RADIANT_NODE_IDENT on; every caller that compiles this file does that, and
+ * the fallback keeps the file compilable in an image that lists it bare. */
+#if defined(CONFIG_RADIANT_NODE_IDENT_LOG_LEVEL)
+LOG_MODULE_REGISTER(radiant_node_ident, CONFIG_RADIANT_NODE_IDENT_LOG_LEVEL);
+#else
+LOG_MODULE_REGISTER(radiant_node_ident, LOG_LEVEL_INF);
+#endif
 
 /* Cache of NVM-backed state; `booted` disambiguates "not booted" from
  * "booted to zero". Storage is the authority, not this struct. */
@@ -93,7 +103,7 @@ static int store_u32_confirmed(const char *key, uint32_t val)
 	return NODE_IDENT_OK;
 }
 
-/* ── Manufacture ──────────────────────────────────────────────────────────── */
+/* ── Provisioning (first boot, ADR 0020, or a factory step) ──────────────── */
 
 int node_ident_provision(const uint8_t k_dev[NODE_IDENT_K_DEV_BYTES])
 {
@@ -216,12 +226,45 @@ uint32_t node_ident_epoch_from(uint32_t boot_counter, bool clock_valid,
 	return (uint32_t)minutes;
 }
 
+#if defined(CONFIG_RADIANT_NODE_IDENT_SELF_PROVISION)
+/*
+ * ADR 0020: K_dev generated on the part, from its own entropy source, the
+ * first time it boots with no K_dev record. Reached ONLY on NODE_NVM_ENOENT -
+ * see node_ident_boot() for why no other failure may get here.
+ *
+ * node_ident_provision() does the rest: refuses an all-zero key, writes the
+ * key before the counters, confirms each by read-back. An all-zero draw is
+ * what a failed backend leaves (radiant_sec_rng_*.c zero-fill on failure), so
+ * EINVAL from it is an RNG failure and is reported as one.
+ */
+static int self_provision(void)
+{
+	uint8_t k[NODE_IDENT_K_DEV_BYTES];
+	int     rc;
+
+	if (!radiant_sec_caps()->has_rng) {
+		return NODE_IDENT_ENOKEY;
+	}
+	if (radiant_sec_rng(k, sizeof(k)) != RADIANT_SEC_OK) {
+		radiant_sec_wipe(k, sizeof(k));
+		return NODE_IDENT_ENOKEY;
+	}
+	rc = node_ident_provision(k);
+	radiant_sec_wipe(k, sizeof(k));
+	if (rc == NODE_IDENT_EINVAL) {
+		return NODE_IDENT_ENOKEY;
+	}
+	return rc;
+}
+#endif /* CONFIG_RADIANT_NODE_IDENT_SELF_PROVISION */
+
 int node_ident_boot(void)
 {
 	uint64_t wall = 0u;
 	bool     clock_valid;
 	bool     present;
 	uint32_t counter;
+	int      nrc;
 	int      rc;
 
 	node_ident_reset();
@@ -229,13 +272,40 @@ int node_ident_boot(void)
 	if (node_nvm_init() != NODE_NVM_OK) {
 		return NODE_IDENT_EIO;
 	}
-	if (node_nvm_load(NODE_NVM_KEY_KDEV, s.k_dev,
-			  sizeof(s.k_dev)) != NODE_NVM_OK) {
+
+	/*
+	 * Three outcomes, and only one of them may lead to a new key. "Never
+	 * written" (ENOENT) is a first boot. Anything else - a read error, a
+	 * record of the wrong size - is a failure, reported as EIO and never
+	 * repaired by re-provisioning: a flaky read that re-rolled K_dev would
+	 * silently move the device number and orphan every paired receiver.
+	 */
+	nrc = node_nvm_load(NODE_NVM_KEY_KDEV, s.k_dev, sizeof(s.k_dev));
+	if (nrc == NODE_NVM_ENOENT) {
+#if defined(CONFIG_RADIANT_NODE_IDENT_SELF_PROVISION)
+		rc = self_provision();
+		if (rc != NODE_IDENT_OK) {
+			goto fail;
+		}
+		LOG_INF("identity provisioned on first boot");
+		nrc = node_nvm_load(NODE_NVM_KEY_KDEV, s.k_dev,
+				    sizeof(s.k_dev));
+		if (nrc != NODE_NVM_OK) {
+			rc = NODE_IDENT_EIO;
+			goto fail;
+		}
+#else
 		return NODE_IDENT_ENOKEY;
+#endif
+	} else if (nrc != NODE_NVM_OK) {
+		rc = NODE_IDENT_EIO;
+		goto fail;
 	}
+	/* A stored all-zero key is not "never written", so it is not repaired
+	 * either; node_ident_provision() can never have written one. */
 	if (key_is_all_zero(s.k_dev, sizeof(s.k_dev))) {
-		memset(s.k_dev, 0, sizeof(s.k_dev));
-		return NODE_IDENT_ENOKEY;
+		rc = NODE_IDENT_ENOKEY;
+		goto fail;
 	}
 	s.have_k_dev = true;
 
@@ -275,6 +345,26 @@ int node_ident_boot(void)
 fail:
 	node_ident_reset();
 	return rc;
+}
+
+const char *node_ident_strerror(int rc)
+{
+	switch (rc) {
+	case NODE_IDENT_OK:
+		return "ok";
+	case NODE_IDENT_EINVAL:
+		return "invalid argument";
+	case NODE_IDENT_ENOTSUP:
+		return "the crypto backend refused K_dev";
+	case NODE_IDENT_ENOKEY:
+		return "no K_dev (not provisioned, and none could be generated)";
+	case NODE_IDENT_EIO:
+		return "identity storage failed";
+	case NODE_IDENT_ESTATE:
+		return "boot counter exhausted, or identity not booted";
+	default:
+		return "unknown error";
+	}
 }
 
 int node_ident_boot_counter(uint32_t *out)

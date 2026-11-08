@@ -30,6 +30,10 @@
 #include "node_ident.h"
 #include "node_nvm.h"
 
+#if defined(CONFIG_RADIANT_TEST_FAKE_RNG)
+#include "fake_rng.h"
+#endif
+
 /* K_dev = 00 01 02 ... 0f, the vector key in tools/test_radiant_crypto.py. */
 static const uint8_t k_dev[NODE_IDENT_K_DEV_BYTES] = {
 	0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
@@ -75,6 +79,9 @@ static void node_before(void *f)
 {
 	ARG_UNUSED(f);
 	fake_nvm_wipe();
+#if defined(CONFIG_RADIANT_TEST_FAKE_RNG)
+	fake_rng_reset();
+#endif
 	node_ident_reset();
 	radiant_sec_reset();
 }
@@ -90,6 +97,9 @@ ZTEST_SUITE(node_ident, NULL, NULL, node_before, NULL, NULL);
 
 /* ── Provisioning ─────────────────────────────────────────────────────────── */
 
+#if !defined(CONFIG_RADIANT_NODE_IDENT_SELF_PROVISION)
+/* Self-provisioning off (no entropy backend, or a fixture that opts out):
+ * the behaviour before ADR 0020, unchanged. */
 ZTEST(node_ident, test_unprovisioned_node_cannot_boot)
 {
 	/* No K_dev: no identity, no pairing path, and - the part that matters -
@@ -103,6 +113,192 @@ ZTEST(node_ident, test_unprovisioned_node_cannot_boot)
 	zassert_equal(NODE_IDENT_ESTATE, node_ident_epoch(&epoch));
 	zassert_equal(NODE_IDENT_ESTATE, node_ident_arm_sec(TEST_CH,
 							    TEST_PERIOD));
+
+	/* And a boot with nothing to boot from wrote nothing. */
+	zassert_equal(0u, fake_nvm_store_count());
+	zassert_false(node_ident_is_provisioned());
+}
+#endif /* !CONFIG_RADIANT_NODE_IDENT_SELF_PROVISION */
+
+#if defined(CONFIG_RADIANT_NODE_IDENT_SELF_PROVISION)
+/* ── First-boot provisioning (ADR 0020) ───────────────────────────────────── */
+
+ZTEST(node_ident, test_first_boot_generates_and_stores_k_dev)
+{
+	uint8_t  expect[NODE_IDENT_K_DEV_BYTES];
+	uint8_t  stored[NODE_IDENT_K_DEV_BYTES];
+	uint32_t v;
+	uint16_t devnum;
+
+	/* A factory-fresh part: no K_dev record at all. */
+	zassert_false(node_ident_is_provisioned());
+	zassert_equal(NODE_IDENT_OK, node_ident_boot());
+
+	/* One draw, and the stored key is that draw - not a derivation of it
+	 * and not a second draw. */
+	zassert_equal(1u, fake_rng_draw_count());
+	fake_rng_expected(0u, expect, sizeof(expect));
+	zassert_true(fake_nvm_peek(NODE_NVM_KEY_KDEV, stored, sizeof(stored)));
+	zassert_mem_equal(expect, stored, sizeof(stored));
+	zassert_true(node_ident_is_provisioned());
+
+	/* Provisioning zeroed the counters with the key, then this boot
+	 * advanced the boot counter once, exactly as a factory-provisioned
+	 * node's first boot does. */
+	zassert_true(fake_nvm_peek_u32(NODE_NVM_KEY_BOOT, &v));
+	zassert_equal(1u, v);
+	zassert_true(fake_nvm_peek_u32(NODE_NVM_KEY_PAIR, &v));
+	zassert_equal(0u, v);
+	zassert_equal(NODE_IDENT_OK, node_ident_epoch(&v));
+	zassert_equal(1u, v);
+
+	/* And a Tier 0 device number came out of it. */
+	zassert_equal(NODE_IDENT_OK, node_ident_devnum(&devnum));
+	zassert_not_equal(0u, devnum);
+}
+
+ZTEST(node_ident, test_the_generated_identity_survives_a_power_cycle)
+{
+	uint8_t  first[NODE_IDENT_K_DEV_BYTES];
+	uint8_t  after[NODE_IDENT_K_DEV_BYTES];
+	uint16_t d1;
+	uint16_t d2;
+	uint32_t counter;
+
+	zassert_equal(NODE_IDENT_OK, node_ident_boot());
+	zassert_equal(NODE_IDENT_OK, node_ident_devnum(&d1));
+	zassert_true(fake_nvm_peek(NODE_NVM_KEY_KDEV, first, sizeof(first)));
+
+	/* The second and later boots find the record and draw nothing: a
+	 * redraw here would be a new device number on every power-up. */
+	for (uint32_t expected = 2u; expected <= 4u; expected++) {
+		fake_nvm_reboot();
+		node_ident_reset();
+		zassert_equal(NODE_IDENT_OK, node_ident_boot());
+		zassert_equal(1u, fake_rng_draw_count(),
+			      "a later boot drew from the RNG again");
+		zassert_equal(NODE_IDENT_OK, node_ident_devnum(&d2));
+		zassert_equal(d1, d2, "the device number moved across a reboot");
+		zassert_equal(NODE_IDENT_OK, node_ident_boot_counter(&counter));
+		zassert_equal(expected, counter);
+	}
+	zassert_true(fake_nvm_peek(NODE_NVM_KEY_KDEV, after, sizeof(after)));
+	zassert_mem_equal(first, after, sizeof(first));
+}
+
+ZTEST(node_ident, test_a_factory_key_is_never_replaced)
+{
+	uint16_t devnum;
+
+	/* A product that writes K_dev at the factory keeps it: the record
+	 * exists, so there is no first boot to provision. */
+	zassert_equal(NODE_IDENT_OK, node_ident_provision(k_dev));
+	zassert_equal(NODE_IDENT_OK, node_ident_boot());
+	zassert_equal(0u, fake_rng_draw_count());
+	zassert_equal(NODE_IDENT_OK, node_ident_devnum(&devnum));
+	zassert_equal(VECTOR_DEVNUM, devnum);
+}
+
+ZTEST(node_ident, test_a_k_dev_read_error_is_eio_and_never_reprovisions)
+{
+	uint8_t  stored[NODE_IDENT_K_DEV_BYTES];
+	uint16_t devnum;
+	uint32_t stores;
+
+	zassert_equal(NODE_IDENT_OK, node_ident_provision(k_dev));
+	fake_nvm_reboot();
+	node_ident_reset();
+
+	/* THE TRIGGER RULE. A read that fails is not a record that is absent,
+	 * and treating it as one would re-roll the identity on a flaky flash
+	 * read - a new device number, every paired receiver orphaned, and no
+	 * error anywhere. */
+	stores = fake_nvm_store_count();
+	fake_nvm_fail_loads(1u);
+	zassert_equal(NODE_IDENT_EIO, node_ident_boot());
+	zassert_equal(0u, fake_rng_draw_count(), "a read error drew a new key");
+	zassert_equal(stores, fake_nvm_store_count(),
+		      "a read error wrote to storage");
+	zassert_true(fake_nvm_peek(NODE_NVM_KEY_KDEV, stored, sizeof(stored)));
+	zassert_mem_equal(k_dev, stored, sizeof(stored));
+
+	/* Nothing booted, so nothing can enable a transform. */
+	zassert_equal(NODE_IDENT_ESTATE, node_ident_devnum(&devnum));
+
+	/* The error was transient: the same identity comes back. */
+	zassert_equal(NODE_IDENT_OK, node_ident_boot());
+	zassert_equal(NODE_IDENT_OK, node_ident_devnum(&devnum));
+	zassert_equal(VECTOR_DEVNUM, devnum);
+}
+
+ZTEST(node_ident, test_an_rng_failure_writes_nothing)
+{
+	uint32_t v;
+
+	fake_rng_fail_next(1u);
+	zassert_equal(NODE_IDENT_ENOKEY, node_ident_boot());
+	zassert_equal(1u, fake_rng_draw_count());
+	zassert_equal(0u, fake_nvm_store_count(),
+		      "a failed draw reached storage");
+	zassert_false(node_ident_is_provisioned());
+	zassert_equal(NODE_IDENT_ESTATE, node_ident_epoch(&v));
+
+	/* The next boot with working entropy provisions normally. */
+	fake_nvm_reboot();
+	node_ident_reset();
+	zassert_equal(NODE_IDENT_OK, node_ident_boot());
+	zassert_true(node_ident_is_provisioned());
+}
+
+ZTEST(node_ident, test_an_rng_that_returns_zeros_is_not_a_key)
+{
+	/* A backend that reports success with sixteen zero bytes. The
+	 * all-zero refusal in node_ident_provision() is what stops it - and it
+	 * is reported as the entropy failure it is, not as a bad argument. */
+	fake_rng_return_zeros(true);
+	zassert_equal(NODE_IDENT_ENOKEY, node_ident_boot());
+	zassert_equal(0u, fake_nvm_store_count());
+	zassert_false(node_ident_is_provisioned());
+}
+
+ZTEST(node_ident, test_a_store_failure_while_provisioning_is_eio)
+{
+	uint32_t v;
+
+	/* The key write itself fails. */
+	fake_nvm_fail_stores(1u);
+	zassert_equal(NODE_IDENT_EIO, node_ident_boot());
+	zassert_false(node_ident_is_provisioned());
+	zassert_equal(NODE_IDENT_ESTATE, node_ident_epoch(&v));
+
+	/* A write reported durable that never landed: provisioning's
+	 * read-back catches it, at the write. */
+	fake_nvm_wipe();
+	fake_rng_reset();
+	node_ident_reset();
+	fake_nvm_swallow_stores(true);
+	zassert_equal(NODE_IDENT_EIO, node_ident_boot());
+	zassert_false(node_ident_is_provisioned());
+}
+#endif /* CONFIG_RADIANT_NODE_IDENT_SELF_PROVISION */
+
+ZTEST(node_ident, test_every_error_code_has_a_reason)
+{
+	static const int codes[] = {
+		NODE_IDENT_OK, NODE_IDENT_EINVAL, NODE_IDENT_ENOTSUP,
+		NODE_IDENT_ENOKEY, NODE_IDENT_EIO, NODE_IDENT_ESTATE, -99,
+	};
+
+	/* The apps print this on the fallback line; a NULL there is a fault
+	 * in the one log line that says why the node has no identity. */
+	for (size_t i = 0u; i < ARRAY_SIZE(codes); i++) {
+		const char *s = node_ident_strerror(codes[i]);
+
+		zassert_not_null(s);
+		zassert_true(s[0] != '\0');
+	}
+	zassert_true(strcmp(node_ident_strerror(NODE_IDENT_EIO),
+			    node_ident_strerror(NODE_IDENT_ENOKEY)) != 0);
 }
 
 ZTEST(node_ident, test_an_all_zero_key_is_refused)
@@ -555,6 +751,7 @@ ZTEST(node_ident, test_scalar_source_precedence)
 		      node_ident_scalar_src(false, false));
 }
 
+#if !defined(CONFIG_RADIANT_SEC_HAS_RNG)
 ZTEST(node_ident, test_the_rng_seam_compiles_out_and_refuses)
 {
 	uint8_t buf[8];
@@ -574,6 +771,17 @@ ZTEST(node_ident, test_the_rng_seam_compiles_out_and_refuses)
 		zassert_equal(0xC7u, buf[i]);
 	}
 }
+#else
+ZTEST(node_ident, test_the_rng_seam_reports_a_backend)
+{
+	uint8_t buf[8];
+
+	/* The other side of the same seam: a backend is linked, the cap says
+	 * so, and policy learns nothing else about it (ADR 0009). */
+	zassert_true(radiant_sec_caps()->has_rng);
+	zassert_equal(RADIANT_SEC_OK, radiant_sec_rng(buf, sizeof(buf)));
+}
+#endif /* !CONFIG_RADIANT_SEC_HAS_RNG */
 
 #if defined(CONFIG_RADIANT_SEC_PAIRING_X25519)
 

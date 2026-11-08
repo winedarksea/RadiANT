@@ -26,10 +26,15 @@ menuconfig TRAINER
 if TRAINER
 
 config TRAINER_DEVICE_NUMBER
-	int "ANT device number when the node is not provisioned"
+	int "the fixture's ANT device number"
 	range 1 65535
 	default 4244
 	help
+	  The fixture's number, always: unlike apps/hrm_ble and
+	  apps/treadmill this node never takes its number from an identity
+	  record, and prj.conf turns first-boot provisioning off (ADR 0020).
+	  tools/fec_ack_sweep.py defaults to 4244.
+
 	  4244: not the treadmill's 4243, not apps/hrm_ble's 4242, and not
 	  the bench's real trainer (#52233), so a sweep pinned to this number
 	  can never be answered by the real machine in the room.

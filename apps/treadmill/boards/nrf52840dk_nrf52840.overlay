@@ -44,6 +44,14 @@
 		 * nRF52 reserves TIMER0 (mpsl_hwres.h), not these.
 		 */
 		radiant,radio-timer = &timer4;
+
+		/*
+		 * The entropy source K_dev is drawn from on first boot (ADR
+		 * 0020), for the reason apps/hrm_ble's overlay gives: the RNG
+		 * peripheral, not the SoC default &cryptocell, whose driver
+		 * links CryptoCell's platform library for one 16-byte draw.
+		 */
+		zephyr,entropy = &rng;
 	};
 };
 

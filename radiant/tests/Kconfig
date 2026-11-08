@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# The radiant unit-test application's own Kconfig tree.
+#
+# It exists for two lines. src/node/Kconfig is sourced by the node and dongle
+# applications rather than by radiant/Kconfig (ADR 0009 decision 7: node
+# identity lives in the application), so without the rsource below this image
+# could not set CONFIG_RADIANT_NODE_IDENT at all - and
+# CONFIG_RADIANT_NODE_IDENT_SELF_PROVISION, which depends on it, would compile
+# to nothing in the one image that tests it. The fake entropy backend is the
+# other line.
+
+rsource "../src/node/Kconfig"
+
+config RADIANT_TEST_FAKE_RNG
+	bool "test image: radiant_sec_rng() from tests/fake_rng.c"
+	default n
+	depends on RADIANT_SEC && !RADIANT_SEC_RNG_PSA && !RADIANT_SEC_RNG_ENTROPY
+	select RADIANT_SEC_HAS_RNG
+	help
+	  Compiles tests/fake_rng.c, a deterministic radiant_sec_rng() with
+	  injectable failures, and reports caps.has_rng - the same seam a real
+	  entropy backend fills (ADR 0009), so that node_ident_boot()'s
+	  first-boot provisioning (ADR 0020) runs here against the real
+	  node_ident.c. Test images only: nothing outside radiant/tests sources
+	  this file.
+
+source "Kconfig.zephyr"

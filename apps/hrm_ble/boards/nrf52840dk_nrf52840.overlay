@@ -39,6 +39,17 @@
 		 * TIMER0 (mpsl_hwres.h), not these.
 		 */
 		radiant,radio-timer = &timer4;
+
+		/*
+		 * The entropy source K_dev is drawn from on first boot (ADR
+		 * 0020, CONFIG_RADIANT_SEC_RNG_ENTROPY). The SoC default is
+		 * &cryptocell, whose entropy driver needs CryptoCell's
+		 * platform library linked in for one 16-byte draw in the
+		 * life of the part; the RNG peripheral is a TRNG of its own
+		 * and its driver is a few hundred bytes. Bias correction is
+		 * Zephyr's default for it (ENTROPY_NRF5_BIAS_CORRECTION).
+		 */
+		zephyr,entropy = &rng;
 	};
 };
 

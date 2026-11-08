@@ -120,6 +120,9 @@ zephyr_library_sources_ifdef(CONFIG_RADIANT_SEC src/radiant_sec.c)
 # file rather than three lines inside radiant_sec_aes.c, whose include list is a
 # deliberately protected property.
 zephyr_library_sources_ifdef(CONFIG_RADIANT_SEC_RNG_PSA src/radiant_sec_rng_psa.c)
+# The same seam over Zephyr's entropy driver (ADR 0020's first-boot K_dev):
+# the board's zephyr,entropy node picks the source, so this file names none.
+zephyr_library_sources_ifdef(CONFIG_RADIANT_SEC_RNG_ENTROPY src/radiant_sec_rng_entropy.c)
 
 # The compat attestation primitives, under their own symbol and inside
 # CONFIG_RADIANT_SEC's `if` block in Kconfig. A file, not a directory: this

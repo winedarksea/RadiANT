@@ -58,6 +58,14 @@ reads.
 
 ### Changed
 
+- **The heart-rate and treadmill nodes change device number once.** They now
+  generate their identity key from the chip's own TRNG on the first boot that
+  finds none ([ADR 0020](docs/decisions/0020-k-dev-is-generated-on-first-boot.md)),
+  so each unit gets its own derived device number instead of the shared
+  Kconfig 4242/4243. Receivers paired to the old number re-pair once, and a
+  full flash erase re-rolls it. If identity boot fails the node falls back to
+  the Kconfig number and logs an error every boot. `apps/trainer` keeps its
+  fixed 4244.
 - **Transmit power: an explicit 0 dBm is now 0 dBm, and the nRF54L15 and
   CC26xx boost higher.** `CONFIG_ANT_DONGLE_TX_POWER_BOOST` raises only the
   unset default and level 4; an explicit level 3 is a true 0 dBm. The boost

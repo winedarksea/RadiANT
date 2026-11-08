@@ -79,21 +79,21 @@ menuconfig TREADMILL
 if TREADMILL
 
 config TREADMILL_DEVICE_NUMBER
-	int "ANT device number when the node is not provisioned"
+	int "ANT device number used only when identity boot fails"
 	range 1 65535
 	default 4243
 	help
-	  Used only when radiant/src/node/ has no identity record. A
-	  provisioned node takes its device number from that record instead,
-	  which is what ADR 0009 requires.
+	  Used only when node_ident_boot() fails - no entropy backend to make
+	  K_dev from, a storage error, an exhausted boot counter - and the boot
+	  log then says so at error level. Normally the node generates K_dev on
+	  its first boot (ADR 0020) and takes its device number from the
+	  identity record, which is what ADR 0009 requires.
 
-	  A SHIPPED PRODUCT MUST NOT USE THE FALLBACK, and today it has no
-	  choice: nothing in apps/ calls node_ident_provision(), so no board in
-	  this tree can be provisioned and every treadmill flashed from one
-	  build shares one identity. For a single demo that is fine. FOR A GYM
-	  IT IS FATAL - twenty machines answering to one device number is
-	  twenty machines a receiver cannot tell apart - and it is item 1 of
-	  this application's production checklist for that reason.
+	  A SHIPPED PRODUCT MUST NOT RUN ON THE FALLBACK: every treadmill built
+	  from one image shares it. For a single demo that is fine. FOR A GYM IT
+	  IS FATAL - twenty machines answering to one device number is twenty
+	  machines a receiver cannot tell apart - which is why the boot log
+	  reports the fallback as an error.
 
 	  4243 rather than apps/hrm_ble's 4242, so the two reference designs on
 	  one bench are two devices.

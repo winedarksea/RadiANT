@@ -61,6 +61,18 @@ target_sources(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/fake_radio.c")
 # NONE provides for the radio.
 target_sources(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/fake_nvm.c")
 
+# ── The mock entropy source ─────────────────────────────────────────────────
+#
+# And once more for radiant_sec_rng(): fake_rng.c is deterministic and can be
+# told to fail, so node_ident_boot()'s first-boot provisioning (ADR 0020) is
+# testable here. Conditional, unlike the two above, because the scenario with
+# the fake OFF is a real configuration - every dongle, which has no entropy
+# backend - and there src/radiant_sec.c's refusing radiant_sec_rng() is the
+# definition, so linking this too would be a duplicate symbol.
+if(CONFIG_RADIANT_TEST_FAKE_RNG)
+  target_sources(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/fake_rng.c")
+endif()
+
 # ── src/profiles ────────────────────────────────────────────────────────────
 #
 # The RadiANT telemetry envelope (device type 0x60): docs/radiant-telemetry.md
