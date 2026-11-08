@@ -4,7 +4,10 @@
  *
  * Provenance: docs/radiant-telemetry.md sections 3-9 and 11, this project's
  * own written specification of the envelope, authored before any code
- * existed. Frame layouts, flag assignments, the width-code table, the
+ * existed; the descriptor authentication frame also follows
+ * docs/radiant-security.md 3.3 and 5.3, the same project's own text, and
+ * builds only on radiant_sec.h's KDF, nonce block and CMAC. Frame layouts,
+ * flag assignments, the width-code table, the
  * class-0x30 accumulate rule and the "every reservation is populated with
  * zeros" rule all come from there. No ANT+ device profile
  * document was read for this file, no sdk-ant source was consulted, and
@@ -38,6 +41,11 @@
  * account for. The collapse packs payload bytes; the bound is on the whole
  * body. */
 #include <radiant/radiant_frame.h>
+
+/* The descriptor authentication frame's MAC: the KDF, nonce block and CMAC,
+ * and radiant_sec_ct_equal()/radiant_sec_wipe(), which are inline and exist
+ * with or without CONFIG_RADIANT_SEC. */
+#include <radiant/radiant_sec.h>
 
 #include "profile_bits.h"
 #include "profile_telemetry.h"
@@ -93,9 +101,19 @@ bool profile_desc_may_decode_data(const struct profile_descriptor *d)
 	if (d == NULL) {
 		return false;
 	}
-	/* v1 implements no transform, so any transform bit is unimplemented.
-	 * Fail closed. */
-	return (d->flags & PROFILE_TLM_FLAG_TRANSFORM_MASK) == 0u;
+	/* Bits 5 and 4 are reserved transforms nothing implements. Fail
+	 * closed. */
+	if ((d->flags & (PROFILE_TLM_FLAG_RSVD_5 | PROFILE_TLM_FLAG_RSVD_4)) !=
+	    0u) {
+		return false;
+	}
+	/* X_CONF and X_AUTH: the schema is only trusted once its
+	 * authentication frame verified - otherwise one forged descriptor
+	 * frame turns correctly MAC'd packets into wrong numbers. */
+	if ((d->flags & PROFILE_TLM_FLAG_TRANSFORM_MASK) != 0u) {
+		return d->authenticated;
+	}
+	return true;
 }
 
 uint8_t profile_desc_frame_count(const struct profile_descriptor *d)
@@ -103,10 +121,12 @@ uint8_t profile_desc_frame_count(const struct profile_descriptor *d)
 	if (d == NULL) {
 		return 0u;
 	}
-	/* Two header frames, the schedule frame if the node sends one, then
-	 * one per field. The authentication frame is mandatory when a
-	 * transform bit is set; v1 sets none, so it never appears. */
-	return (uint8_t)(2u + (d->has_schedule ? 1u : 0u) + d->n_fields);
+	/* Two header frames, the schedule frame if the node sends one, one per
+	 * field, then the authentication frame, mandatory when a transform bit
+	 * is set. */
+	return (uint8_t)(2u + (d->has_schedule ? 1u : 0u) + d->n_fields +
+			 ((d->flags & PROFILE_TLM_FLAG_TRANSFORM_MASK) != 0u ? 1u
+									     : 0u));
 }
 
 int profile_desc_schedule_index(const struct profile_descriptor *d)
@@ -308,13 +328,52 @@ static int check_descriptor(const struct profile_descriptor *d)
 	return 0;
 }
 
+/*
+ * The transform rules of a sealed set, shared by the sealed encoder and the
+ * decoder. Only reached with at least one transform bit set on the decode
+ * side; the encoder calls it for every sealed set.
+ */
+static int check_transforms(const struct profile_descriptor *d)
+{
+	uint8_t x = (uint8_t)(d->flags & PROFILE_TLM_FLAG_TRANSFORM_MASK);
+
+	if ((x & (PROFILE_TLM_FLAG_RSVD_5 | PROFILE_TLM_FLAG_RSVD_4)) != 0u) {
+		/* Descriptor encryption and TESLA: specified by nothing. */
+		return -ENOTSUP;
+	}
+	if (x == 0u) {
+		/* Nothing to seal; the plain encoder is the path for this. */
+		return -EINVAL;
+	}
+	if ((x & PROFILE_TLM_FLAG_X_AUTH) != 0u &&
+	    (d->flags & PROFILE_TLM_FLAG_SPARSE) != 0u) {
+		/* The spread tag lags one window, so a sparse burst never
+		 * carries its own tag and never verifies (decided with TODO
+		 * item 7). X_CONF alone stays legal on a sparse node. */
+		return -EINVAL;
+	}
+	return 0;
+}
+
 /* ---------------------------------------------------------------------------
  * Descriptor encode
  * ---------------------------------------------------------------------------
  */
 
-int profile_desc_encode(const struct profile_descriptor *d, uint8_t *frames,
-			uint8_t cap_frames)
+/*
+ * Lay out a validated set. Frame 1 bytes [4..7] are `f1_epoch`: d->epoch on
+ * the plain path, the item-4 rule's value on the sealed one. When a transform
+ * bit is set the last frame gets its page and index bytes and zero bodies;
+ * the sealed encoder writes the tag over them.
+ *
+ * Forced inline: with two callers in this file the compiler would otherwise
+ * keep it out of line, and the call and the second prologue would land on
+ * every standard device, which links only profile_desc_encode(). A sealed
+ * node carries the body twice instead, ~290 B it can afford.
+ */
+static inline __attribute__((always_inline)) int
+encode_frames(const struct profile_descriptor *d, uint32_t f1_epoch,
+	      uint8_t *frames, uint8_t cap_frames)
 {
 	uint8_t count;
 	uint8_t base;
@@ -322,35 +381,12 @@ int profile_desc_encode(const struct profile_descriptor *d, uint8_t *frames,
 	uint8_t *f;
 	int rc;
 
-	if (d == NULL || frames == NULL) {
-		return -EINVAL;
-	}
-
-	/*
-	 * The set is refused rather than emitted when a transform is
-	 * announced, and checked BEFORE the rest of validation: X_AUTH
-	 * shrinks the field area from 48 bits to 40, so a well-formed schema
-	 * would otherwise report a misleading -ERANGE unrelated to where the
-	 * fields actually sit. Section 6 makes the authentication frame
-	 * mandatory whenever a transform bit is set - without it, an attacker
-	 * who forges one descriptor frame gets wrong readings out of
-	 * correctly authenticated packets. This build cannot produce that
-	 * frame, so it does not get to announce a transform.
-	 */
-	if ((d->flags & PROFILE_TLM_FLAG_TRANSFORM_MASK) != 0u) {
-		return -ENOTSUP;
-	}
-
-	rc = check_descriptor(d);
-	if (rc != 0) {
-		return rc;
-	}
-
 	count = profile_desc_frame_count(d);
-	base = (uint8_t)(count - d->n_fields); /* 2, or 3 with a schedule frame */
+	base = (uint8_t)(2u + (d->has_schedule ? 1u : 0u));
 	if (count > PROFILE_TLM_MAX_FRAMES) {
-		/* A schedule frame costs a field: 14 fields plus one is 17
-		 * frames, and the index is a nibble. */
+		/* A schedule frame or an authentication frame costs a field:
+		 * 14 fields plus one is 17 frames, and the index is a
+		 * nibble. */
 		return -EINVAL;
 	}
 	if (cap_frames < count) {
@@ -388,10 +424,10 @@ int profile_desc_encode(const struct profile_descriptor *d, uint8_t *frames,
 			 ((uint32_t)d->k_code << 4) |
 			 profile_sched_clk_nibble(d->clock_accuracy,
 						  d->clock_stated));
-	f[4] = (uint8_t)(d->epoch & 0xFFu);
-	f[5] = (uint8_t)((d->epoch >> 8) & 0xFFu);
-	f[6] = (uint8_t)((d->epoch >> 16) & 0xFFu);
-	f[7] = (uint8_t)((d->epoch >> 24) & 0xFFu);
+	f[4] = (uint8_t)(f1_epoch & 0xFFu);
+	f[5] = (uint8_t)((f1_epoch >> 8) & 0xFFu);
+	f[6] = (uint8_t)((f1_epoch >> 16) & 0xFFu);
+	f[7] = (uint8_t)((f1_epoch >> 24) & 0xFFu);
 
 	/* Frame 2 - the schedule frame, when there is one. */
 	if (d->has_schedule) {
@@ -400,9 +436,9 @@ int profile_desc_encode(const struct profile_descriptor *d, uint8_t *frames,
 					(d->flags & PROFILE_TLM_FLAG_LR_PHY) != 0u,
 					profile_desc_clock_ppm(d), &f[2]);
 		if (rc != 0) {
-			/* Unreachable given the check above, but checked
-			 * anyway rather than emitting whatever the packer
-			 * left behind. */
+			/* Unreachable given check_descriptor() in both
+			 * callers, but checked anyway rather than emitting
+			 * whatever the packer left behind. */
 			return rc;
 		}
 	}
@@ -427,6 +463,250 @@ int profile_desc_encode(const struct profile_descriptor *d, uint8_t *frames,
 	return (int)count;
 }
 
+int profile_desc_encode(const struct profile_descriptor *d, uint8_t *frames,
+			uint8_t cap_frames)
+{
+	int rc;
+
+	if (d == NULL || frames == NULL) {
+		return -EINVAL;
+	}
+
+	/*
+	 * The set is refused rather than emitted when a transform is
+	 * announced, and checked BEFORE the rest of validation: X_AUTH
+	 * shrinks the field area from 48 bits to 40, so a well-formed schema
+	 * would otherwise report a misleading -ERANGE unrelated to where the
+	 * fields actually sit. Section 6 makes the authentication frame
+	 * mandatory whenever a transform bit is set - without it, an attacker
+	 * who forges one descriptor frame gets wrong readings out of
+	 * correctly authenticated packets. This function holds no key and
+	 * cannot produce that frame, so it does not get to announce a
+	 * transform; profile_desc_encode_auth() can. Keeping the two apart is
+	 * also what keeps the sealed path out of every standard device's
+	 * image.
+	 */
+	if ((d->flags & PROFILE_TLM_FLAG_TRANSFORM_MASK) != 0u) {
+		return -ENOTSUP;
+	}
+
+	rc = check_descriptor(d);
+	if (rc != 0) {
+		return rc;
+	}
+
+	return encode_frames(d, d->epoch, frames, cap_frames);
+}
+
+int profile_desc_encode_auth(const struct profile_descriptor *d,
+			     const struct profile_desc_auth *a, uint8_t *frames,
+			     uint8_t cap_frames)
+{
+	int n;
+	int rc;
+
+	if (d == NULL || a == NULL || frames == NULL) {
+		return -EINVAL;
+	}
+
+	/* Before check_descriptor(), for the plain encoder's reason: a
+	 * transform rule broken should not report as a field misfit. */
+	rc = check_transforms(d);
+	if (rc != 0) {
+		return rc;
+	}
+	if (d->epoch != 0u && d->epoch != a->epoch) {
+		/* Frame 1 is written from `a`; a descriptor that names a
+		 * different epoch would have its own statement silently
+		 * overruled. */
+		return -EINVAL;
+	}
+
+	rc = check_descriptor(d);
+	if (rc != 0) {
+		return rc;
+	}
+
+	/* TODO item 4: the epoch goes on the air only when it is coarse real
+	 * time. Otherwise it is a hostless node's boot counter - a slowly
+	 * incrementing number that defeats identity Tier 2 - and frame 1
+	 * carries zero; the tag below still binds the real epoch, so a keyed
+	 * receiver recovers it by trial verification. */
+	n = encode_frames(d, a->epoch_is_time ? a->epoch : 0u, frames,
+			  cap_frames);
+	if (n < 0) {
+		return n;
+	}
+
+	rc = profile_desc_auth_tag(
+		a, frames, (uint8_t)n,
+		&frames[(size_t)(n - 1) * PROFILE_TLM_FRAME_LEN + 2u]);
+	if (rc != 0) {
+		/* A set announcing a transform with no valid tag is the one
+		 * thing this function exists not to emit. */
+		memset(frames, 0, (size_t)n * PROFILE_TLM_FRAME_LEN);
+		return rc;
+	}
+	return n;
+}
+
+/* ---------------------------------------------------------------------------
+ * The descriptor authentication frame
+ * ---------------------------------------------------------------------------
+ */
+
+int profile_desc_auth_tag(const struct profile_desc_auth *a,
+			  const uint8_t *frames, uint8_t n_frames,
+			  uint8_t tag[PROFILE_TLM_AUTH_TAG_LEN])
+{
+#if defined(CONFIG_RADIANT_SEC)
+	struct radiant_sec_cmac_ctx ctx;
+	struct radiant_sec_key k_auth;
+	uint8_t nonce[RADIANT_SEC_BLOCK_BYTES];
+	uint8_t full[RADIANT_SEC_BLOCK_BYTES];
+	uint8_t i;
+	int rc;
+
+	if (a == NULL || frames == NULL || tag == NULL) {
+		return -EINVAL;
+	}
+	/* Two header frames and the authentication frame, at least. */
+	if (n_frames < 3u || n_frames > PROFILE_TLM_MAX_FRAMES) {
+		return -EINVAL;
+	}
+	if (a->k_root == NULL) {
+		return -EACCES;
+	}
+
+	/* Derived per call and destroyed before returning, like
+	 * profile_cmd_tag(): this runs once per epoch change on a node and
+	 * once per trial on a receiver, and a cached subkey would outlive the
+	 * epoch it was bound to. */
+	rc = radiant_sec_kdf(a->k_root, RADIANT_SEC_LABEL_AUTH, a->epoch,
+			     a->base_devnum, &k_auth);
+	if (rc != RADIANT_SEC_OK) {
+		return -EIO;
+	}
+
+	/* The schema id rides the nonce's counter position: a descriptor has
+	 * no counter (byte [1] is a frame index), and the schema id is the
+	 * one byte that names which schema the bodies describe. */
+	radiant_sec_nonce_block(nonce, a->epoch, a->devnum, (uint16_t)frames[3],
+				RADIANT_SEC_DOM_DESC_MAC);
+
+	rc = radiant_sec_cmac_init(&ctx, &k_auth);
+	if (rc == RADIANT_SEC_OK) {
+		rc = radiant_sec_cmac_update(&ctx, nonce, sizeof(nonce));
+	}
+	/* Bodies only: bytes [0..1] are the page and the frame index, and the
+	 * index is implied by position - reordering the bodies breaks the tag
+	 * anyway, and so does adding or dropping one. */
+	for (i = 0u; rc == RADIANT_SEC_OK && i < (uint8_t)(n_frames - 1u);
+	     i++) {
+		rc = radiant_sec_cmac_update(
+			&ctx, &frames[(size_t)i * PROFILE_TLM_FRAME_LEN + 2u],
+			PROFILE_TLM_FRAME_LEN - 2u);
+	}
+	if (rc == RADIANT_SEC_OK) {
+		rc = radiant_sec_cmac_final(&ctx, full);
+	}
+	radiant_sec_key_destroy(&k_auth);
+	if (rc != RADIANT_SEC_OK) {
+		radiant_sec_wipe(full, sizeof(full));
+		return -EIO;
+	}
+
+	/* Truncation is a prefix, matching every other truncated tag here. */
+	memcpy(tag, full, PROFILE_TLM_AUTH_TAG_LEN);
+	radiant_sec_wipe(full, sizeof(full));
+	return 0;
+#else
+	(void)a;
+	(void)frames;
+	(void)n_frames;
+	(void)tag;
+	/* Never OK with an untouched buffer. */
+	return -ENOTSUP;
+#endif
+}
+
+int profile_desc_auth_verify(const uint8_t *frames, uint8_t n_frames,
+			     const struct profile_desc_auth *a)
+{
+	uint8_t want[PROFILE_TLM_AUTH_TAG_LEN];
+	bool ok;
+	int rc;
+
+	rc = profile_desc_auth_tag(a, frames, n_frames, want);
+	if (rc != 0) {
+		return rc;
+	}
+	ok = radiant_sec_ct_equal(
+		want, &frames[(size_t)(n_frames - 1u) * PROFILE_TLM_FRAME_LEN + 2u],
+		PROFILE_TLM_AUTH_TAG_LEN);
+	radiant_sec_wipe(want, sizeof(want));
+	return ok ? 0 : -EBADMSG;
+}
+
+int profile_desc_auth_find_epoch(const uint8_t *frames, uint8_t n_frames,
+				 const struct profile_desc_auth *a_template,
+				 uint32_t from_epoch, uint32_t span,
+				 uint32_t *out)
+{
+	struct profile_desc_auth a;
+	const uint8_t *f1;
+	uint32_t shown;
+	uint32_t k;
+	int rc;
+
+	if (frames == NULL || a_template == NULL || out == NULL) {
+		return -EINVAL;
+	}
+	if (n_frames < 3u || n_frames > PROFILE_TLM_MAX_FRAMES) {
+		return -EINVAL;
+	}
+
+	a = *a_template;
+	f1 = &frames[PROFILE_TLM_FRAME_LEN];
+	shown = (uint32_t)f1[4] | ((uint32_t)f1[5] << 8) |
+		((uint32_t)f1[6] << 16) | ((uint32_t)f1[7] << 24);
+
+	if (shown != 0u) {
+		/* The node says which epoch, and the tag binds it. Below what
+		 * this receiver already knows is a recording. */
+		if (shown < from_epoch) {
+			return -EBADMSG;
+		}
+		a.epoch = shown;
+		rc = profile_desc_auth_verify(frames, n_frames, &a);
+		if (rc == 0) {
+			*out = shown;
+		}
+		return rc;
+	}
+
+	/* Frame 1 shows zero: the 48-bit tag is the epoch check. Forward
+	 * from the last epoch known, never back. */
+	for (k = 0u;; k++) {
+		if (from_epoch > 0xFFFFFFFFu - k) {
+			break; /* would wrap into an epoch long gone */
+		}
+		a.epoch = from_epoch + k;
+		rc = profile_desc_auth_verify(frames, n_frames, &a);
+		if (rc == 0) {
+			*out = a.epoch;
+			return 0;
+		}
+		if (rc != -EBADMSG) {
+			return rc; /* no key, no SEC: searching further won't help */
+		}
+		if (k == span) {
+			break; /* inclusive, and no wrap for span = UINT32_MAX */
+		}
+	}
+	return -EBADMSG;
+}
+
 /* ---------------------------------------------------------------------------
  * Descriptor decode
  * ---------------------------------------------------------------------------
@@ -440,6 +720,7 @@ int profile_desc_decode(const uint8_t *frames, uint8_t n_frames,
 	const uint8_t *f;
 	uint8_t base;
 	uint8_t i;
+	bool sealed;
 
 	if (frames == NULL || out == NULL) {
 		return -EINVAL;
@@ -490,10 +771,21 @@ int profile_desc_decode(const uint8_t *frames, uint8_t n_frames,
 	}
 
 	/* The shape of the set, derived rather than announced: two header
-	 * frames plus one per field, with one extra (the schedule frame) at
-	 * index 2. No presence bit was spent on this, since the count byte
-	 * and field count already say it. */
-	base = (uint8_t)(2u + d.n_fields);
+	 * frames plus one per field, one extra at index 2 for the schedule
+	 * frame, and - whenever a transform bit is set - the authentication
+	 * frame last. No presence bit was spent on either, since the count
+	 * byte, the field count and the flags already say it. */
+	sealed = (d.flags & PROFILE_TLM_FLAG_TRANSFORM_MASK) != 0u;
+	if (sealed) {
+		/* The sealed set's own rules, keyless. Reserved bits 5 and 4
+		 * are not malformed - a later version may set them, and the
+		 * descriptor still decodes so the receiver keeps listening;
+		 * profile_desc_may_decode_data() refuses the data. */
+		if (check_transforms(&d) == -EINVAL) {
+			return -EPROTO;
+		}
+	}
+	base = (uint8_t)(2u + d.n_fields + (sealed ? 1u : 0u));
 	if (n_frames == base) {
 		d.has_schedule = false;
 		base = 2u;
@@ -656,6 +948,57 @@ int profile_desc_rx_take(const struct profile_desc_rx *rx,
 	return profile_desc_decode(flat, rx->count, out);
 }
 
+int profile_desc_rx_take_auth(const struct profile_desc_rx *rx,
+			      const struct profile_desc_auth *a_template,
+			      uint32_t from_epoch, struct profile_descriptor *out,
+			      uint32_t *epoch)
+{
+	uint8_t flat[PROFILE_TLM_MAX_FRAMES * PROFILE_TLM_FRAME_LEN];
+	struct profile_descriptor d;
+	uint32_t found = 0u;
+	uint8_t i;
+	int rc;
+
+	if (rx == NULL || a_template == NULL || out == NULL || epoch == NULL) {
+		return -EINVAL;
+	}
+	if (!profile_desc_rx_complete(rx)) {
+		return -EAGAIN;
+	}
+
+	for (i = 0u; i < rx->count; i++) {
+		memcpy(&flat[(size_t)i * PROFILE_TLM_FRAME_LEN], rx->frames[i],
+		       PROFILE_TLM_FRAME_LEN);
+	}
+
+	rc = profile_desc_decode(flat, rx->count, &d);
+	if (rc != 0) {
+		return rc;
+	}
+
+	if ((d.flags & (PROFILE_TLM_FLAG_X_CONF | PROFILE_TLM_FLAG_X_AUTH)) ==
+	    0u) {
+		/* No transform this build implements: nothing to verify, and
+		 * `authenticated` stays false - a plain schema needs nothing,
+		 * and a reserved-bit one may not decode data anyway. */
+		*out = d;
+		return 0;
+	}
+
+	rc = profile_desc_auth_find_epoch(flat, rx->count, a_template,
+					  from_epoch, PROFILE_TLM_AUTH_EPOCH_SPAN,
+					  &found);
+	/* Written either way: on failure the receiver still learns who the
+	 * node is, and `authenticated` false keeps its data undecoded. */
+	d.authenticated = (rc == 0);
+	*out = d;
+	if (rc != 0) {
+		return rc;
+	}
+	*epoch = found;
+	return 0;
+}
+
 /* ---------------------------------------------------------------------------
  * Data pages
  * ---------------------------------------------------------------------------
@@ -730,8 +1073,9 @@ int profile_data_decode(const struct profile_descriptor *d, const uint8_t *body,
 		return -EINVAL;
 	}
 	if (!profile_desc_may_decode_data(d)) {
-		/* A transform bit this build doesn't implement. Loudly, not
-		 * silently - zeros here would look like plaintext off a
+		/* A transform bit this build doesn't implement, or a sealed
+		 * schema whose authentication frame never verified. Loudly,
+		 * not silently - zeros here would look like plaintext off a
 		 * ciphertext page. */
 		return -EACCES;
 	}

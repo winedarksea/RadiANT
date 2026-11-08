@@ -29,11 +29,13 @@
 #include <stdint.h>
 #include <string.h>
 
+#include <zephyr/kernel.h>
 #include <zephyr/toolchain.h>
 #include <zephyr/ztest.h>
 
 #include <radiant/radiant_frame.h>
 #include <radiant/radiant_sched.h>
+#include <radiant/radiant_sec.h>
 
 #include "../fake_radio.h"
 
@@ -366,34 +368,683 @@ ZTEST(profiles, test_the_encoder_refuses_a_malformed_schema)
 						   PROFILE_TLM_MAX_FRAMES));
 }
 
-/*
- * v1 announces no transform, because the descriptor authentication frame
- * section 6 makes mandatory alongside one has no implementation yet.
- * Refusing to encode is the honest response: a transform announced without
- * the frame that authenticates the schema gets an attacker wrong readings
- * out of correctly authenticated packets.
+/* ---------------------------------------------------------------------------
+ * The descriptor authentication frame
+ *
+ * docs/radiant-telemetry.md section 6 and docs/radiant-security.md 5.3, with
+ * TODO item 4's frame-1 rule. The vectors are shared byte for byte with
+ * tools/test_ant_pages.py (TestTelemetryDescriptorAuth): a 0x61-shaped node -
+ * docs/device-profiles.md 5.1's four fields on page 1, X_AUTH, W = 4, period
+ * 65535 - under one root key, with the on-air and provisioned device numbers
+ * deliberately different so a swap of the two shows up.
+ * ---------------------------------------------------------------------------
  */
-ZTEST(profiles, test_v1_refuses_to_announce_a_transform)
+
+static const uint8_t AUTH_ROOT[16] = {
+	0x2Bu, 0x7Eu, 0x15u, 0x16u, 0x28u, 0xAEu, 0xD2u, 0xA6u,
+	0xABu, 0xF7u, 0x15u, 0x88u, 0x09u, 0xCFu, 0x4Fu, 0x3Cu,
+};
+
+#define AUTH_DEVNUM      0xC61Au
+#define AUTH_BASE_DEVNUM 0x4D2Eu
+#define AUTH_EPOCH       0x0001E240u
+#define AUTH_FRAMES      7u
+
+/* epoch_is_time: frame 1 carries the epoch. */
+static const uint8_t AUTH_VECTOR_TIME[AUTH_FRAMES][8] = {
+	{ 0x00, 0x06, 0x14, 0x01, 0xFF, 0xFF, 0x39, 0x40 },
+	{ 0x00, 0x16, 0x00, 0x80, 0x40, 0xE2, 0x01, 0x00 },
+	{ 0x00, 0x26, 0x01, 0x28, 0x18, 0xFE, 0x01, 0x00 },
+	{ 0x00, 0x36, 0x02, 0x27, 0x18, 0x00, 0x01, 0x0C },
+	{ 0x00, 0x46, 0x03, 0x40, 0x08, 0x00, 0x01, 0x18 },
+	{ 0x00, 0x56, 0x04, 0x40, 0x08, 0x00, 0x01, 0x1C },
+	{ 0x00, 0x66, 0x8F, 0x7E, 0x32, 0x81, 0x70, 0x2C },
+};
+
+/* Not real time: frame 1 carries zero, and only the tag moves. */
+static const uint8_t AUTH_VECTOR_HIDDEN[AUTH_FRAMES][8] = {
+	{ 0x00, 0x06, 0x14, 0x01, 0xFF, 0xFF, 0x39, 0x40 },
+	{ 0x00, 0x16, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00 },
+	{ 0x00, 0x26, 0x01, 0x28, 0x18, 0xFE, 0x01, 0x00 },
+	{ 0x00, 0x36, 0x02, 0x27, 0x18, 0x00, 0x01, 0x0C },
+	{ 0x00, 0x46, 0x03, 0x40, 0x08, 0x00, 0x01, 0x18 },
+	{ 0x00, 0x56, 0x04, 0x40, 0x08, 0x00, 0x01, 0x1C },
+	{ 0x00, 0x66, 0x99, 0x71, 0xA7, 0xAC, 0xDF, 0xC7 },
+};
+
+/* AUTH_ROOT with its last bit flipped. */
+static const uint8_t AUTH_WRONG_ROOT[16] = {
+	0x2Bu, 0x7Eu, 0x15u, 0x16u, 0x28u, 0xAEu, 0xD2u, 0xA6u,
+	0xABu, 0xF7u, 0x15u, 0x88u, 0x09u, 0xCFu, 0x4Fu, 0x3Du,
+};
+
+static struct radiant_sec_key auth_root;
+static struct radiant_sec_key auth_wrong_root;
+
+static void build_cgm_descriptor(struct profile_descriptor *d, uint8_t flags)
+{
+	memset(d, 0, sizeof(*d));
+	d->version = PROFILE_TLM_VERSION;
+	d->schema_id = 0x01u;
+	d->period = 65535u;
+	d->rf_index = PROFILE_TLM_RF_INDEX_DEFAULT;
+	d->flags = flags;
+	d->w_code = (flags & PROFILE_TLM_FLAG_X_AUTH) != 0u
+			    ? PROFILE_TLM_W_CODE_4
+			    : PROFILE_TLM_W_CODE_RESERVED;
+	d->n_fields = 4u;
+
+	/* Glucose, 12 bits at 0, exp -2. */
+	d->fields[0].id = 1u;
+	d->fields[0].type = 0x28u;
+	d->fields[0].width_code = 6u;
+	d->fields[0].exponent = -2;
+	d->fields[0].page = 1u;
+	d->fields[0].bit_offset = 0u;
+	/* Reading age, 12 bits at 12. */
+	d->fields[1].id = 2u;
+	d->fields[1].type = 0x27u;
+	d->fields[1].width_code = 6u;
+	d->fields[1].page = 1u;
+	d->fields[1].bit_offset = 12u;
+	/* Trend and sensor status, 4 bits each at 24 and 28. */
+	d->fields[2].id = 3u;
+	d->fields[2].type = 0x40u;
+	d->fields[2].width_code = 2u;
+	d->fields[2].page = 1u;
+	d->fields[2].bit_offset = 24u;
+	d->fields[3].id = 4u;
+	d->fields[3].type = 0x40u;
+	d->fields[3].width_code = 2u;
+	d->fields[3].page = 1u;
+	d->fields[3].bit_offset = 28u;
+}
+
+static void auth_init(struct profile_desc_auth *a, uint32_t epoch,
+		      bool epoch_is_time)
+{
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_key_import(&auth_root, AUTH_ROOT, 128u));
+	memset(a, 0, sizeof(*a));
+	a->k_root = &auth_root;
+	a->devnum = AUTH_DEVNUM;
+	a->base_devnum = AUTH_BASE_DEVNUM;
+	a->epoch = epoch;
+	a->epoch_is_time = epoch_is_time;
+}
+
+/*
+ * A transform needs the sealed encoder. The plain one still refuses: it holds
+ * no key, and a transform announced without the frame that authenticates the
+ * schema gets an attacker wrong readings out of correctly authenticated
+ * packets. Reserved transform bits 5 and 4 stay refused on both paths.
+ */
+ZTEST(profiles, test_a_transform_needs_the_sealed_encoder)
+{
+	static const uint8_t flags[2] = { PROFILE_TLM_FLAG_X_AUTH,
+					  PROFILE_TLM_FLAG_X_CONF };
+	static const uint8_t reserved[2] = { PROFILE_TLM_FLAG_RSVD_5,
+					     PROFILE_TLM_FLAG_RSVD_4 };
+	struct profile_descriptor d;
+	struct profile_desc_auth a;
+	uint8_t frames[PROFILE_TLM_MAX_FRAMES * PROFILE_TLM_FRAME_LEN];
+	size_t i;
+
+	auth_init(&a, AUTH_EPOCH, false);
+
+	for (i = 0u; i < ARRAY_SIZE(flags); i++) {
+		build_cgm_descriptor(&d, flags[i]);
+		zassert_equal(-ENOTSUP, profile_desc_encode(
+				&d, frames, PROFILE_TLM_MAX_FRAMES),
+			      "flag 0x%02x", flags[i]);
+		zassert_equal((int)AUTH_FRAMES, profile_desc_encode_auth(
+				&d, &a, frames, PROFILE_TLM_MAX_FRAMES),
+			      "flag 0x%02x", flags[i]);
+	}
+	for (i = 0u; i < ARRAY_SIZE(reserved); i++) {
+		build_cgm_descriptor(&d, PROFILE_TLM_FLAG_X_AUTH | reserved[i]);
+		zassert_equal(-ENOTSUP, profile_desc_encode(
+				&d, frames, PROFILE_TLM_MAX_FRAMES));
+		zassert_equal(-ENOTSUP, profile_desc_encode_auth(
+				&d, &a, frames, PROFILE_TLM_MAX_FRAMES));
+	}
+	/* Nothing to seal: the plain encoder is the path for this. */
+	build_cgm_descriptor(&d, 0u);
+	zassert_equal(-EINVAL, profile_desc_encode_auth(&d, &a, frames,
+							PROFILE_TLM_MAX_FRAMES));
+
+	/* The receiver's half of the rule. A set announcing X_CONF or X_AUTH
+	 * still decodes - identity, period and RF are learned - but its data
+	 * is refused until the authentication frame verified. Fail closed
+	 * means "do not decode", not "do not listen". */
+	build_cgm_descriptor(&d, PROFILE_TLM_FLAG_X_CONF);
+	zassert_false(profile_desc_may_decode_data(&d));
+	d.authenticated = true;
+	zassert_true(profile_desc_may_decode_data(&d));
+	d.flags |= PROFILE_TLM_FLAG_RSVD_4;
+	zassert_false(profile_desc_may_decode_data(&d),
+		      "a reserved transform is refused even when verified");
+	d.flags = 0u;
+	d.authenticated = false;
+	zassert_true(profile_desc_may_decode_data(&d));
+}
+
+ZTEST(profiles, test_the_sealed_frames_are_the_shared_vectors)
 {
 	struct profile_descriptor d;
+	struct profile_desc_auth a;
 	uint8_t frames[PROFILE_TLM_MAX_FRAMES * PROFILE_TLM_FRAME_LEN];
 
-	build_node_descriptor(&d);
-	d.flags |= PROFILE_TLM_FLAG_X_AUTH;
-	d.w_code = PROFILE_TLM_W_CODE_4;
-	d.epoch = 7u;
-	zassert_equal(-ENOTSUP, profile_desc_encode(&d, frames,
-						    PROFILE_TLM_MAX_FRAMES));
+	build_cgm_descriptor(&d, PROFILE_TLM_FLAG_X_AUTH);
 
-	/* And a v1 receiver that HEARS one decodes the descriptor - it has
-	 * still learned the node's identity, period and RF index - but must
-	 * not turn its data pages into numbers. Fail closed means "do not
-	 * decode", not "do not listen". */
-	d.flags = PROFILE_TLM_FLAG_X_CONF;
-	d.w_code = 0u;
-	zassert_false(profile_desc_may_decode_data(&d));
-	d.flags = 0u;
-	zassert_true(profile_desc_may_decode_data(&d));
+	auth_init(&a, AUTH_EPOCH, true);
+	zassert_equal((int)AUTH_FRAMES,
+		      profile_desc_encode_auth(&d, &a, frames,
+					       PROFILE_TLM_MAX_FRAMES));
+	zassert_mem_equal(frames, AUTH_VECTOR_TIME, sizeof(AUTH_VECTOR_TIME),
+			  "the epoch_is_time vector");
+
+	auth_init(&a, AUTH_EPOCH, false);
+	zassert_equal((int)AUTH_FRAMES,
+		      profile_desc_encode_auth(&d, &a, frames,
+					       PROFILE_TLM_MAX_FRAMES));
+	zassert_mem_equal(frames, AUTH_VECTOR_HIDDEN, sizeof(AUTH_VECTOR_HIDDEN),
+			  "the hidden-epoch vector");
+
+	/* The descriptor's own epoch may be zero or the real one; frame 1
+	 * follows the item-4 rule either way. */
+	d.epoch = AUTH_EPOCH;
+	zassert_equal((int)AUTH_FRAMES,
+		      profile_desc_encode_auth(&d, &a, frames,
+					       PROFILE_TLM_MAX_FRAMES));
+	zassert_mem_equal(frames, AUTH_VECTOR_HIDDEN, sizeof(AUTH_VECTOR_HIDDEN));
+
+	/* The plain encoder is untouched for a plain descriptor. */
+	build_node_descriptor(&d);
+	zassert_equal(2 + (int)NODE_FIELDS,
+		      profile_desc_encode(&d, frames, PROFILE_TLM_MAX_FRAMES));
+	zassert_equal(2 + (int)NODE_FIELDS, profile_desc_frame_count(&d));
+}
+
+ZTEST(profiles, test_the_sealed_encoder_refuses_what_cannot_verify)
+{
+	struct profile_descriptor d;
+	struct profile_desc_auth a;
+	uint8_t frames[PROFILE_TLM_MAX_FRAMES * PROFILE_TLM_FRAME_LEN];
+	uint8_t i;
+
+	auth_init(&a, AUTH_EPOCH, false);
+
+	/* X_AUTH with sparse never verifies: the spread tag lags one window
+	 * (TODO item 7). X_CONF alone with sparse is legal. */
+	build_cgm_descriptor(&d, PROFILE_TLM_FLAG_X_AUTH |
+				 PROFILE_TLM_FLAG_SPARSE);
+	d.heartbeat_s = 30u;
+	d.k_code = PROFILE_TLM_K_CODE_3;
+	zassert_equal(-EINVAL, profile_desc_encode_auth(&d, &a, frames,
+							PROFILE_TLM_MAX_FRAMES));
+	build_cgm_descriptor(&d, PROFILE_TLM_FLAG_X_CONF |
+				 PROFILE_TLM_FLAG_SPARSE);
+	d.heartbeat_s = 30u;
+	d.k_code = PROFILE_TLM_K_CODE_3;
+	zassert_equal((int)AUTH_FRAMES,
+		      profile_desc_encode_auth(&d, &a, frames,
+					       PROFILE_TLM_MAX_FRAMES));
+
+	/* Fourteen fields and a transform is 17 frames; thirteen is the
+	 * budget. */
+	build_cgm_descriptor(&d, PROFILE_TLM_FLAG_X_AUTH);
+	d.n_fields = 14u;
+	for (i = 0u; i < 14u; i++) {
+		memset(&d.fields[i], 0, sizeof(d.fields[i]));
+		d.fields[i].id = (uint8_t)(i + 1u);
+		d.fields[i].type = PROFILE_TLM_TYPE_TEMPERATURE;
+		d.fields[i].width_code = 4u; /* 8 bits */
+		d.fields[i].page = (uint8_t)(1u + i / 5u);
+		d.fields[i].bit_offset = (uint8_t)(8u * (i % 5u));
+	}
+	zassert_equal(17u, profile_desc_frame_count(&d));
+	zassert_equal(-EINVAL, profile_desc_encode_auth(&d, &a, frames,
+							PROFILE_TLM_MAX_FRAMES));
+	d.n_fields = 13u;
+	zassert_equal(16, profile_desc_encode_auth(&d, &a, frames,
+						   PROFILE_TLM_MAX_FRAMES));
+
+	/* The descriptor and the seal disagreeing about the epoch. */
+	build_cgm_descriptor(&d, PROFILE_TLM_FLAG_X_AUTH);
+	d.epoch = 7u;
+	zassert_equal(-EINVAL, profile_desc_encode_auth(&d, &a, frames,
+							PROFILE_TLM_MAX_FRAMES));
+
+	/* No key: never a set announcing a transform without its tag. */
+	build_cgm_descriptor(&d, PROFILE_TLM_FLAG_X_AUTH);
+	a.k_root = NULL;
+	zassert_equal(-EACCES, profile_desc_encode_auth(&d, &a, frames,
+							PROFILE_TLM_MAX_FRAMES));
+}
+
+ZTEST(profiles, test_with_a_schedule_frame_it_is_index_2_and_auth_is_last)
+{
+	struct profile_descriptor d;
+	struct profile_descriptor back;
+	struct profile_desc_auth a;
+	struct profile_desc_rx rx;
+	uint8_t frames[PROFILE_TLM_MAX_FRAMES * PROFILE_TLM_FRAME_LEN];
+	static const uint8_t zeros[6] = { 0u };
+	uint32_t epoch = 0u;
+	uint8_t i;
+
+	build_cgm_descriptor(&d, PROFILE_TLM_FLAG_X_AUTH);
+	d.has_schedule = true;
+	d.schedule = (struct profile_schedule)PROFILE_SCHED_INIT_DEFAULT;
+	auth_init(&a, AUTH_EPOCH, false);
+
+	zassert_equal(8u, profile_desc_frame_count(&d));
+	zassert_equal(2, profile_desc_schedule_index(&d));
+	zassert_equal(8, profile_desc_encode_auth(&d, &a, frames,
+						  PROFILE_TLM_MAX_FRAMES));
+	zassert_mem_equal(&frames[2u * 8u + 2u], zeros, 6u,
+			  "the silent schedule frame at index 2");
+	zassert_equal(1u, frames[3u * 8u + 2u], "field 1 follows it");
+	zassert_equal(0x77u, frames[7u * 8u + 1u], "auth is frame 7 of 8");
+
+	profile_desc_rx_init(&rx);
+	for (i = 0u; i < 8u; i++) {
+		(void)profile_desc_rx_feed(&rx, &frames[(size_t)i * 8u]);
+	}
+	zassert_ok(profile_desc_rx_take_auth(&rx, &a, AUTH_EPOCH - 2u, &back,
+					     &epoch));
+	zassert_true(back.authenticated);
+	zassert_equal(AUTH_EPOCH, epoch);
+	zassert_true(back.has_schedule);
+	zassert_equal(4u, back.n_fields);
+	zassert_equal(28u, back.fields[3].bit_offset);
+}
+
+ZTEST(profiles, test_a_keyless_receiver_learns_the_node_but_not_its_data)
+{
+	struct profile_descriptor back;
+	struct profile_desc_auth a;
+	struct profile_desc_rx rx;
+	int64_t values[4] = { 0 };
+	uint8_t body[8] = { 0x01u, 0x00u, 0, 0, 0, 0, 0, 0 };
+	uint32_t epoch = 0xDEADu;
+	uint8_t i;
+
+	/* No key: the schema still decodes. */
+	zassert_ok(profile_desc_decode(&AUTH_VECTOR_HIDDEN[0][0], AUTH_FRAMES,
+				       &back));
+	zassert_equal(0x01u, back.schema_id);
+	zassert_equal(65535u, back.period);
+	zassert_equal(4u, back.n_fields);
+	zassert_false(back.authenticated);
+	zassert_false(profile_desc_may_decode_data(&back));
+	zassert_equal(-EACCES, profile_data_decode(&back, body, values, 4u,
+						   NULL));
+
+	/* With the key, through the verified take. */
+	profile_desc_rx_init(&rx);
+	for (i = 0u; i < AUTH_FRAMES; i++) {
+		(void)profile_desc_rx_feed(&rx, AUTH_VECTOR_HIDDEN[i]);
+	}
+	auth_init(&a, 0u, false);
+	zassert_ok(profile_desc_rx_take_auth(&rx, &a, AUTH_EPOCH - 5u, &back,
+					     &epoch));
+	zassert_equal(AUTH_EPOCH, epoch);
+	zassert_true(back.authenticated);
+	zassert_true(profile_desc_may_decode_data(&back));
+	zassert_equal(0u, back.epoch,
+		      "the decoded epoch is what frame 1 said; the recovered "
+		      "one comes back separately");
+	zassert_equal(4, profile_data_decode(&back, body, values, 4u, NULL));
+
+	/* A wrong key: -EBADMSG, but the node's identity is still there and
+	 * its data is still refused. */
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_key_import(&auth_wrong_root, AUTH_WRONG_ROOT,
+					     128u));
+	a.k_root = &auth_wrong_root;
+	epoch = 0xDEADu;
+	zassert_equal(-EBADMSG, profile_desc_rx_take_auth(&rx, &a, AUTH_EPOCH,
+							  &back, &epoch));
+	zassert_equal(0xDEADu, epoch);
+	zassert_equal(0x01u, back.schema_id);
+	zassert_false(back.authenticated);
+	zassert_false(profile_desc_may_decode_data(&back));
+}
+
+/*
+ * TODO item 2's done criterion: a receiver rejects a descriptor whose frame 1
+ * was altered. Every covered byte of every frame but the tag - frame 1's
+ * heartbeat, W, clock nibble and epoch; each field's id, type, encoding,
+ * exponent, page and offset - flipped one bit at a time.
+ */
+ZTEST(profiles, test_every_altered_body_byte_fails_verification)
+{
+	const uint8_t (*const vectors[2])[8] = { AUTH_VECTOR_TIME,
+						 AUTH_VECTOR_HIDDEN };
+	struct profile_desc_auth a;
+	uint8_t bad[AUTH_FRAMES * 8u];
+	uint32_t epoch;
+	size_t v;
+	uint8_t i;
+	uint8_t b;
+
+	auth_init(&a, AUTH_EPOCH, false);
+
+	for (v = 0u; v < ARRAY_SIZE(vectors); v++) {
+		memcpy(bad, vectors[v], sizeof(bad));
+		zassert_ok(profile_desc_auth_verify(bad, AUTH_FRAMES, &a),
+			   "vector %u verifies unaltered", (unsigned)v);
+
+		for (i = 0u; i < AUTH_FRAMES - 1u; i++) {
+			for (b = 2u; b < 8u; b++) {
+				memcpy(bad, vectors[v], sizeof(bad));
+				bad[i * 8u + b] ^= 0x01u;
+				zassert_equal(-EBADMSG,
+					      profile_desc_auth_verify(
+						      bad, AUTH_FRAMES, &a),
+					      "vector %u frame %u byte %u",
+					      (unsigned)v, i, b);
+				zassert_equal(-EBADMSG,
+					      profile_desc_auth_find_epoch(
+						      bad, AUTH_FRAMES, &a,
+						      AUTH_EPOCH,
+						      PROFILE_TLM_AUTH_EPOCH_SPAN,
+						      &epoch),
+					      "vector %u frame %u byte %u",
+					      (unsigned)v, i, b);
+			}
+		}
+	}
+}
+
+ZTEST(profiles, test_altered_sets_fail_verification)
+{
+	struct profile_descriptor d;
+	struct profile_desc_auth a;
+	struct profile_desc_auth w;
+	uint8_t next[AUTH_FRAMES * 8u];
+	uint8_t bad[(AUTH_FRAMES + 1u) * 8u];
+	const uint8_t *base = &AUTH_VECTOR_TIME[0][0];
+	uint32_t e;
+
+	/* The next epoch's set, real-time flavour, so frame 1 differs. */
+	build_cgm_descriptor(&d, PROFILE_TLM_FLAG_X_AUTH);
+	auth_init(&a, AUTH_EPOCH + 1u, true);
+	zassert_equal((int)AUTH_FRAMES,
+		      profile_desc_encode_auth(&d, &a, next, AUTH_FRAMES));
+
+	for (e = AUTH_EPOCH; e <= AUTH_EPOCH + 1u; e++) {
+		a.epoch = e;
+
+		/* A field frame dropped. */
+		memcpy(bad, base, 3u * 8u);
+		memcpy(&bad[3u * 8u], &base[4u * 8u], 3u * 8u);
+		zassert_equal(-EBADMSG,
+			      profile_desc_auth_verify(bad, AUTH_FRAMES - 1u,
+						       &a), "dropped, %u", e);
+
+		/* A field frame duplicated. */
+		memcpy(bad, base, 4u * 8u);
+		memcpy(&bad[4u * 8u], &base[3u * 8u], 4u * 8u);
+		zassert_equal(-EBADMSG,
+			      profile_desc_auth_verify(bad, AUTH_FRAMES + 1u,
+						       &a), "duplicated, %u", e);
+
+		/* Two field frames swapped. */
+		memcpy(bad, base, AUTH_FRAMES * 8u);
+		memcpy(&bad[2u * 8u], &base[3u * 8u], 8u);
+		memcpy(&bad[3u * 8u], &base[2u * 8u], 8u);
+		zassert_equal(-EBADMSG,
+			      profile_desc_auth_verify(bad, AUTH_FRAMES, &a),
+			      "swapped, %u", e);
+
+		/* Frame 1 spliced in from the next epoch's set. */
+		memcpy(bad, base, AUTH_FRAMES * 8u);
+		memcpy(&bad[8u], &next[8u], 8u);
+		zassert_equal(-EBADMSG,
+			      profile_desc_auth_verify(bad, AUTH_FRAMES, &a),
+			      "spliced frame 1, %u", e);
+
+		/* The next epoch's tag on this epoch's bodies. */
+		memcpy(bad, base, AUTH_FRAMES * 8u);
+		memcpy(&bad[6u * 8u], &next[6u * 8u], 8u);
+		zassert_equal(-EBADMSG,
+			      profile_desc_auth_verify(bad, AUTH_FRAMES, &a),
+			      "spliced tag, %u", e);
+	}
+
+	/* The genuine set under the wrong device numbers or key. */
+	auth_init(&a, AUTH_EPOCH, false);
+	zassert_ok(profile_desc_auth_verify(base, AUTH_FRAMES, &a));
+	w = a;
+	w.devnum ^= 1u;
+	zassert_equal(-EBADMSG, profile_desc_auth_verify(base, AUTH_FRAMES, &w));
+	w = a;
+	w.base_devnum ^= 1u;
+	zassert_equal(-EBADMSG, profile_desc_auth_verify(base, AUTH_FRAMES, &w));
+	w = a;
+	w.devnum = AUTH_BASE_DEVNUM;
+	w.base_devnum = AUTH_DEVNUM;
+	zassert_equal(-EBADMSG, profile_desc_auth_verify(base, AUTH_FRAMES, &w),
+		      "the two device numbers swapped");
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_key_import(&auth_wrong_root, AUTH_WRONG_ROOT,
+					     128u));
+	w = a;
+	w.k_root = &auth_wrong_root;
+	zassert_equal(-EBADMSG, profile_desc_auth_verify(base, AUTH_FRAMES, &w));
+}
+
+ZTEST(profiles, test_the_epoch_search_is_forward_only_and_bounded)
+{
+	struct profile_desc_auth a;
+	const uint8_t *hidden = &AUTH_VECTOR_HIDDEN[0][0];
+	const uint8_t *shown = &AUTH_VECTOR_TIME[0][0];
+	uint32_t got;
+	uint32_t k;
+
+	auth_init(&a, 0u, false);
+
+	/* Frame 1 shows zero: found from every start within the span... */
+	for (k = 0u; k <= PROFILE_TLM_AUTH_EPOCH_SPAN; k++) {
+		got = 0u;
+		zassert_ok(profile_desc_auth_find_epoch(
+				   hidden, AUTH_FRAMES, &a, AUTH_EPOCH - k,
+				   PROFILE_TLM_AUTH_EPOCH_SPAN, &got),
+			   "k = %u", k);
+		zassert_equal(AUTH_EPOCH, got, "k = %u", k);
+	}
+	/* ...and not from one start further back. */
+	zassert_equal(-EBADMSG,
+		      profile_desc_auth_find_epoch(
+			      hidden, AUTH_FRAMES, &a,
+			      AUTH_EPOCH - PROFILE_TLM_AUTH_EPOCH_SPAN - 1u,
+			      PROFILE_TLM_AUTH_EPOCH_SPAN, &got));
+	/* Never backwards: a receiver that knows a newer epoch does not find
+	 * this one. */
+	zassert_equal(-EBADMSG,
+		      profile_desc_auth_find_epoch(hidden, AUTH_FRAMES, &a,
+						   AUTH_EPOCH + 1u,
+						   PROFILE_TLM_AUTH_EPOCH_SPAN,
+						   &got));
+
+	/* Frame 1 shows the epoch: exactly that one, and the replayed old
+	 * descriptor - below what the receiver knows - is refused. */
+	got = 0u;
+	zassert_ok(profile_desc_auth_find_epoch(shown, AUTH_FRAMES, &a,
+						AUTH_EPOCH, 0u, &got));
+	zassert_equal(AUTH_EPOCH, got);
+	zassert_equal(-EBADMSG,
+		      profile_desc_auth_find_epoch(shown, AUTH_FRAMES, &a,
+						   AUTH_EPOCH + 1u,
+						   PROFILE_TLM_AUTH_EPOCH_SPAN,
+						   &got));
+}
+
+/*
+ * What sealing costs in time: one KDF and one CMAC per call, run once per
+ * epoch change on a node. Measured with the kernel cycle counter over 16
+ * calls (the counter is the 32768 Hz RTC on Nordic parts, so one call alone
+ * would be a handful of ticks), printed for docs/radiant-security.md 5.6, and
+ * bounded loosely so a regression by an order of magnitude fails here.
+ */
+ZTEST(profiles, test_sealing_a_set_costs_one_kdf_and_one_cmac)
+{
+	struct profile_descriptor d;
+	struct profile_desc_auth a;
+	uint8_t frames[PROFILE_TLM_MAX_FRAMES * PROFILE_TLM_FRAME_LEN];
+	uint32_t t0;
+	uint32_t dt;
+	uint64_t us7;
+	uint64_t us16;
+	uint8_t i;
+
+	auth_init(&a, AUTH_EPOCH, false);
+
+	build_cgm_descriptor(&d, PROFILE_TLM_FLAG_X_AUTH);
+	t0 = k_cycle_get_32();
+	for (i = 0u; i < 16u; i++) {
+		zassert_equal((int)AUTH_FRAMES,
+			      profile_desc_encode_auth(&d, &a, frames,
+						       PROFILE_TLM_MAX_FRAMES));
+	}
+	dt = k_cycle_get_32() - t0;
+	us7 = k_cyc_to_us_floor64(dt) / 16u;
+
+	/* The largest set: thirteen fields, sixteen frames. */
+	d.n_fields = 13u;
+	for (i = 0u; i < 13u; i++) {
+		memset(&d.fields[i], 0, sizeof(d.fields[i]));
+		d.fields[i].id = (uint8_t)(i + 1u);
+		d.fields[i].type = PROFILE_TLM_TYPE_TEMPERATURE;
+		d.fields[i].width_code = 4u;
+		d.fields[i].page = (uint8_t)(1u + i / 5u);
+		d.fields[i].bit_offset = (uint8_t)(8u * (i % 5u));
+	}
+	t0 = k_cycle_get_32();
+	for (i = 0u; i < 16u; i++) {
+		zassert_equal(16, profile_desc_encode_auth(
+				      &d, &a, frames, PROFILE_TLM_MAX_FRAMES));
+	}
+	dt = k_cycle_get_32() - t0;
+	us16 = k_cyc_to_us_floor64(dt) / 16u;
+
+	TC_PRINT("profile_desc_encode_auth: %u us (7 frames), %u us "
+		 "(16 frames); cycle counter %u Hz\n", (unsigned)us7,
+		 (unsigned)us16, (unsigned)sys_clock_hw_cycles_per_sec());
+	zassert_true(us7 < 20000u, "%u us", (unsigned)us7);
+	zassert_true(us16 < 20000u, "%u us", (unsigned)us16);
+}
+
+/* The scheduler: a burst carries the sealed set, and a reseal partway
+ * through one never lets a receiver assemble a set mixing two epochs. */
+static int32_t auth_phase_hook(radiant_time_t t_sync, void *user)
+{
+	ARG_UNUSED(t_sync);
+	ARG_UNUSED(user);
+	return 0;
+}
+
+ZTEST(profiles, test_a_reseal_mid_burst_never_yields_a_mixed_set)
+{
+	static struct profile_descriptor cgm;
+	struct profile_sched ps;
+	struct profile_sched_cfg cfg;
+	struct profile_desc_auth a1;
+	struct profile_desc_auth a2;
+	struct profile_desc_auth rxa;
+	struct profile_desc_rx rx;
+	struct profile_descriptor back;
+	const struct profile_sched_downlink dl = { .phase = auth_phase_hook };
+	uint8_t old_set[AUTH_FRAMES * 8u];
+	uint8_t new_set[AUTH_FRAMES * 8u];
+	uint8_t mixed[AUTH_FRAMES * 8u];
+	uint8_t body[8];
+	uint32_t verified[4];
+	uint32_t n_verified = 0u;
+	uint32_t epoch;
+	uint32_t slot;
+	bool resealed = false;
+
+	build_cgm_descriptor(&cgm, PROFILE_TLM_FLAG_X_AUTH);
+	auth_init(&a1, AUTH_EPOCH, true);
+	a2 = a1;
+	a2.epoch = AUTH_EPOCH + 1u;
+	auth_init(&rxa, 0u, false);
+
+	/* The control: e1's first three frames and e2's last four - what
+	 * continuing the burst after a reseal would hand a receiver -
+	 * verify under neither epoch. */
+	zassert_equal((int)AUTH_FRAMES,
+		      profile_desc_encode_auth(&cgm, &a1, old_set, AUTH_FRAMES));
+	zassert_equal((int)AUTH_FRAMES,
+		      profile_desc_encode_auth(&cgm, &a2, new_set, AUTH_FRAMES));
+	memcpy(mixed, old_set, 3u * 8u);
+	memcpy(&mixed[3u * 8u], &new_set[3u * 8u], 4u * 8u);
+	zassert_equal(-EBADMSG, profile_desc_auth_verify(mixed, AUTH_FRAMES,
+							 &a1));
+	zassert_equal(-EBADMSG, profile_desc_auth_verify(mixed, AUTH_FRAMES,
+							 &a2));
+
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.desc = &cgm;
+	/* The plain init refuses a sealed descriptor... */
+	zassert_equal(-ENOTSUP, profile_sched_init(&ps, &cfg));
+	/* ...and the sealed one takes it, into the same 16-frame buffer. */
+	zassert_ok(profile_sched_init_auth(&ps, &cfg, &a1));
+	zassert_equal(AUTH_FRAMES, ps.n_frames);
+	zassert_mem_equal(ps.frames, old_set, sizeof(old_set));
+
+	profile_desc_rx_init(&rx);
+	for (slot = 0u; slot < 2u * PROFILE_TLM_CYCLE; slot++) {
+		enum profile_slot_kind kind = profile_sched_next(&ps, body);
+
+		if (kind != PROFILE_SLOT_DESCRIPTOR) {
+			continue;
+		}
+		if (!resealed && ps.burst_index == 3u) {
+			zassert_ok(profile_sched_reseal(&ps, &a2));
+			resealed = true;
+		}
+		if (profile_desc_rx_feed(&rx, body) == 1) {
+			epoch = 0u;
+			zassert_ok(profile_desc_rx_take_auth(&rx, &rxa,
+							     AUTH_EPOCH, &back,
+							     &epoch),
+				   "a complete set failed verification");
+			zassert_true(n_verified < ARRAY_SIZE(verified));
+			verified[n_verified++] = epoch;
+			profile_desc_rx_init(&rx);
+		}
+	}
+	zassert_true(resealed);
+	zassert_equal(2u, n_verified);
+	zassert_equal(AUTH_EPOCH + 1u, verified[0],
+		      "the interrupted burst restarted under e2");
+	zassert_equal(AUTH_EPOCH + 1u, verified[1]);
+
+	/* Refusals: a plain set, and a reseal that changes the shape. */
+	cgm.n_fields = 3u;
+	zassert_equal(-EINVAL, profile_sched_reseal(&ps, &a1));
+	zassert_mem_equal(ps.frames, new_set, sizeof(new_set),
+			  "a refused reseal leaves the set as it was");
+	build_cgm_descriptor(&cgm, 0u);
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.desc = &cgm;
+	zassert_ok(profile_sched_init(&ps, &cfg));
+	zassert_equal(-EINVAL, profile_sched_reseal(&ps, &a1));
+
+	/* A sealed set's schedule frame is under the MAC, so the per-frame
+	 * re-phase is refused rather than left to break every set. */
+	build_cgm_descriptor(&cgm, PROFILE_TLM_FLAG_X_AUTH);
+	cgm.has_schedule = true;
+	cgm.schedule = (struct profile_schedule)PROFILE_SCHED_INIT_DEFAULT;
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.desc = &cgm;
+	zassert_ok(profile_sched_init_auth(&ps, &cfg, &a1));
+	zassert_equal(-ENOTSUP, profile_sched_set_downlink(&ps, &dl));
 }
 
 ZTEST(profiles, test_a_receiver_rejects_a_version_it_does_not_implement)

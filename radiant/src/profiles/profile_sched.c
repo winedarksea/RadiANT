@@ -35,27 +35,30 @@
  * stated in seconds into a count of message slots. */
 #define ANT_TICKS_PER_S 32768u
 
-int profile_sched_init(struct profile_sched *ps,
-		       const struct profile_sched_cfg *cfg)
+static inline __attribute__((always_inline)) void
+sched_init_head(struct profile_sched *ps, const struct profile_sched_cfg *cfg)
 {
-	int rc;
-
-	if (ps == NULL || cfg == NULL) {
-		return -EINVAL;
-	}
-
 	memset(ps, 0, sizeof(*ps));
 	ps->cfg = *cfg;
 	ps->sched_frame = -1;
+}
+
+/*
+ * Everything init does after the descriptor set is encoded. Split out so the
+ * plain and sealed inits share it while only the sealed one references the
+ * sealed encoder - the plain init's call graph must not reach
+ * profile_desc_encode_auth(), or --gc-sections could not drop it from every
+ * standard device. Forced inline for the same reason as encode_frames() in
+ * profile_telemetry.c: out of line, the split itself would cost every
+ * standard device a call; inline, only a sealed node pays, with a second
+ * copy.
+ */
+static inline __attribute__((always_inline)) int
+sched_init_tail(struct profile_sched *ps, const struct profile_sched_cfg *cfg)
+{
+	int rc;
 
 	if (cfg->desc != NULL) {
-		rc = profile_desc_encode(cfg->desc, ps->frames,
-					 PROFILE_TLM_MAX_FRAMES);
-		if (rc < 0) {
-			return rc;
-		}
-		ps->n_frames = (uint8_t)rc;
-
 		rc = profile_desc_data_pages(cfg->desc, ps->pages,
 					     (uint8_t)sizeof(ps->pages));
 		if (rc < 0) {
@@ -110,6 +113,98 @@ int profile_sched_init(struct profile_sched *ps,
 	return 0;
 }
 
+int profile_sched_init(struct profile_sched *ps,
+		       const struct profile_sched_cfg *cfg)
+{
+	int rc;
+
+	if (ps == NULL || cfg == NULL) {
+		return -EINVAL;
+	}
+
+	sched_init_head(ps, cfg);
+
+	if (cfg->desc != NULL) {
+		rc = profile_desc_encode(cfg->desc, ps->frames,
+					 PROFILE_TLM_MAX_FRAMES);
+		if (rc < 0) {
+			return rc;
+		}
+		ps->n_frames = (uint8_t)rc;
+	}
+
+	return sched_init_tail(ps, cfg);
+}
+
+int profile_sched_init_auth(struct profile_sched *ps,
+			    const struct profile_sched_cfg *cfg,
+			    const struct profile_desc_auth *a)
+{
+	int rc;
+
+	if (ps == NULL || cfg == NULL || a == NULL || cfg->desc == NULL) {
+		/* A family with no descriptor has nothing to seal. */
+		return -EINVAL;
+	}
+
+	sched_init_head(ps, cfg);
+
+	/* Into ps->frames, the buffer every node already has: the
+	 * authentication frame is one of its sixteen, so sealing costs no
+	 * RAM. */
+	rc = profile_desc_encode_auth(cfg->desc, a, ps->frames,
+				      PROFILE_TLM_MAX_FRAMES);
+	if (rc < 0) {
+		memset(ps, 0, sizeof(*ps));
+		return rc;
+	}
+	ps->n_frames = (uint8_t)rc;
+
+	return sched_init_tail(ps, cfg);
+}
+
+int profile_sched_reseal(struct profile_sched *ps,
+			 const struct profile_desc_auth *a)
+{
+	uint8_t frames[PROFILE_TLM_MAX_FRAMES * PROFILE_TLM_FRAME_LEN];
+	int rc;
+
+	if (ps == NULL || a == NULL) {
+		return -EINVAL;
+	}
+	if (ps->cfg.desc == NULL || ps->n_frames == 0u ||
+	    (ps->cfg.desc->flags & PROFILE_TLM_FLAG_TRANSFORM_MASK) == 0u) {
+		/* Not a sealed set: nothing to reseal. */
+		return -EINVAL;
+	}
+
+	/* Into a scratch copy first, so a refusal leaves the set on the air
+	 * exactly as it was rather than half-written. */
+	rc = profile_desc_encode_auth(ps->cfg.desc, a, frames,
+				      PROFILE_TLM_MAX_FRAMES);
+	if (rc < 0) {
+		return rc;
+	}
+	if ((uint8_t)rc != ps->n_frames) {
+		/* A different shape is a schema change, which is init's job:
+		 * the rotation and the schedule-frame index were latched from
+		 * the old one. */
+		return -EINVAL;
+	}
+
+	memcpy(ps->frames, frames, (size_t)rc * PROFILE_TLM_FRAME_LEN);
+
+	/* A burst in progress starts again from frame 0. Continuing it would
+	 * hand a receiver the old set's first frames and the new set's last,
+	 * a set that verifies under neither epoch; restarting means every
+	 * index the interrupted burst reached is sent again under the new
+	 * epoch before the set can complete. */
+	if (ps->burst) {
+		ps->burst_index = 0u;
+	}
+	return 0;
+}
+
 int profile_sched_set_client(struct profile_sched *ps,
 			     const struct profile_sched_client *client)
 {
@@ -146,6 +241,12 @@ int profile_sched_set_downlink(struct profile_sched *ps,
 	if (ps->sched_frame < 0) {
 		/* A hook with no schedule frame under it - see the header. */
 		return -ENOENT;
+	}
+	if ((ps->cfg.desc->flags & PROFILE_TLM_FLAG_TRANSFORM_MASK) != 0u) {
+		/* A sealed set's schedule frame is under the authentication
+		 * frame's MAC; re-phasing it per transmission would make every
+		 * set fail verification - see the header. */
+		return -ENOTSUP;
 	}
 	ps->dl = *dl;
 	ps->have_dl = true;

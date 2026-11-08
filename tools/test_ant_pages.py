@@ -1457,6 +1457,42 @@ def sample_descriptor(**kwargs) -> ap.TlmDescriptor:
     return ap.TlmDescriptor(**kwargs)
 
 
+# The shared descriptor-authentication vectors: the same literals are in
+# radiant/tests/src/test_profiles.c. A 0x61-shaped node (docs/device-profiles.md
+# 5.1: four fields on page 1, X_AUTH, W = 4, period 65535) under one root key,
+# with the on-air and provisioned device numbers deliberately different so a
+# swap of the two shows up.
+DESC_AUTH_ROOT = bytes.fromhex("2b7e151628aed2a6abf7158809cf4f3c")
+DESC_AUTH_DEVNUM = 0xC61A
+DESC_AUTH_BASE_DEVNUM = 0x4D2E
+DESC_AUTH_EPOCH = 0x0001E240
+
+
+def cgm_descriptor(**kwargs) -> ap.TlmDescriptor:
+    fields = [
+        ap.TlmField(id=1, type=0x28, page=1, bit_offset=0, width_code=6,
+                    exponent=-2),
+        ap.TlmField(id=2, type=0x27, page=1, bit_offset=12, width_code=6),
+        ap.TlmField(id=3, type=0x40, page=1, bit_offset=24, width_code=2),
+        ap.TlmField(id=4, type=0x40, page=1, bit_offset=28, width_code=2),
+    ]
+    kwargs.setdefault("schema_id", 0x01)
+    kwargs.setdefault("period", 65535)
+    kwargs.setdefault("fields", fields)
+    kwargs.setdefault("flags", ap.TLM_FLAG_X_AUTH)
+    kwargs.setdefault("w_code", ap.TLM_W_CODE_4
+                      if kwargs["flags"] & ap.TLM_FLAG_X_AUTH else 0)
+    return ap.TlmDescriptor(**kwargs)
+
+
+def desc_auth(epoch: int = DESC_AUTH_EPOCH, epoch_is_time: bool = False,
+              **kwargs) -> ap.TlmDescAuth:
+    kwargs.setdefault("k_root", DESC_AUTH_ROOT)
+    kwargs.setdefault("devnum", DESC_AUTH_DEVNUM)
+    kwargs.setdefault("base_devnum", DESC_AUTH_BASE_DEVNUM)
+    return ap.TlmDescAuth(epoch=epoch, epoch_is_time=epoch_is_time, **kwargs)
+
+
 class TestTelemetryBitPacker(unittest.TestCase):
     """The MSB-first field area of device type 0x60.
 
@@ -1617,15 +1653,26 @@ class TestTelemetryDescriptor(unittest.TestCase):
         with self.assertRaises(ValueError):
             ap.encode_tlm_descriptor(d)
 
-    def test_v1_refuses_to_announce_a_transform(self):
-        # There is no descriptor authentication frame to go with it, and a
+    def test_a_transform_needs_the_sealed_encoder(self):
+        # Without a key there is no descriptor authentication frame, and a
         # transform announced without one gets an attacker wrong readings out
-        # of correctly authenticated packets.
+        # of correctly authenticated packets - so the plain encoder still
+        # refuses. With one, the sealed encoder emits it. Reserved transform
+        # bits 5 and 4 stay refused either way.
         for flag in (ap.TLM_FLAG_X_AUTH, ap.TLM_FLAG_X_CONF):
             with self.subTest(flag=flag):
-                d = sample_descriptor(flags=flag, w_code=ap.TLM_W_CODE_4)
+                d = cgm_descriptor(flags=flag)
                 with self.assertRaises(ValueError):
                     ap.encode_tlm_descriptor(d)
+                self.assertEqual(len(ap.encode_tlm_descriptor(d, desc_auth())),
+                                 7)
+        for flag in (ap.TLM_FLAG_RSVD_5, ap.TLM_FLAG_RSVD_4):
+            with self.subTest(flag=flag):
+                d = cgm_descriptor(flags=ap.TLM_FLAG_X_AUTH | flag)
+                with self.assertRaises(ValueError):
+                    ap.encode_tlm_descriptor(d)
+                with self.assertRaises(ValueError):
+                    ap.encode_tlm_descriptor(d, desc_auth())
 
     def test_a_receiver_fails_closed_on_a_transform_it_cannot_do(self):
         d = sample_descriptor()
@@ -1686,6 +1733,266 @@ class TestTelemetryDescriptorAssembly(unittest.TestCase):
         for frame in new[1:]:
             rx.feed(frame)
         self.assertEqual(rx.take().fields[0].bit_offset, 16)
+
+
+class TestTelemetryDescriptorAuth(unittest.TestCase):
+    """The descriptor authentication frame (radiant-telemetry.md section 6,
+    radiant-security.md 5.3), and TODO item 4's frame-1 epoch rule.
+
+    The done criterion of TODO item 2: the encoder emits the frame, a
+    receiver rejects a descriptor whose frame 1 was altered, and this module
+    mirrors the C with shared vectors.
+    """
+
+    # Pinned, and the same hex is in radiant/tests/src/test_profiles.c.
+    # Checked by hand against the layout: frame 0 = 1|4 fields, schema 01,
+    # period ffff, RF 0x39, flags 0x40; frame 1 = heartbeat 0, W code 2 << 6,
+    # then the epoch (0x0001e240 LE) or zeros; four field frames; then the tag.
+    VECTOR_TIME = [            # epoch_is_time: frame 1 carries the epoch
+        "00061401ffff3940",
+        "0016008040e20100",
+        "0026012818fe0100",
+        "003602271800010c",
+        "0046034008000118",
+        "005604400800011c",
+        "00668f7e3281702c",
+    ]
+    VECTOR_HIDDEN = [          # not real time: frame 1 carries zero
+        "00061401ffff3940",
+        "0016008000000000",
+        "0026012818fe0100",
+        "003602271800010c",
+        "0046034008000118",
+        "005604400800011c",
+        "00669971a7acdfc7",
+    ]
+
+    @staticmethod
+    def frames(vector):
+        return [bytes.fromhex(f) for f in vector]
+
+    # -- the encoder ------------------------------------------------------
+
+    def test_the_sealed_frames_are_the_shared_vectors(self):
+        for vector, is_time in ((self.VECTOR_TIME, True),
+                                (self.VECTOR_HIDDEN, False)):
+            with self.subTest(epoch_is_time=is_time):
+                got = ap.encode_tlm_descriptor(cgm_descriptor(),
+                                               desc_auth(epoch_is_time=is_time))
+                self.assertEqual([f.hex() for f in got], vector)
+        # Hiding the epoch changes frame 1 and the tag, and nothing else.
+        for i in (0, 2, 3, 4, 5):
+            self.assertEqual(self.VECTOR_TIME[i], self.VECTOR_HIDDEN[i])
+
+    def test_the_tag_is_the_pinned_construction(self):
+        # Rebuilt from the primitives, not from desc_auth_tag(): KDF label
+        # "auth" under the provisioned number, nonce under the on-air number
+        # with the schema id in the counter slot and domain 0x03, then the
+        # six-byte bodies of every frame but the last.
+        frames = self.frames(self.VECTOR_HIDDEN)
+        k_auth = rc.kdf(DESC_AUTH_ROOT, rc.LABEL_AUTH, DESC_AUTH_EPOCH,
+                        DESC_AUTH_BASE_DEVNUM)
+        msg = rc.nonce_block(DESC_AUTH_EPOCH, DESC_AUTH_DEVNUM, 0x01,
+                             rc.DOM_DESC_MAC)
+        msg += b"".join(f[2:8] for f in frames[:-1])
+        self.assertEqual(rc.cmac(k_auth, msg)[:6], frames[-1][2:8])
+
+    def test_x_auth_with_sparse_is_refused_and_x_conf_with_sparse_is_not(self):
+        # Decided with TODO item 7: the spread tag lags one window, so a
+        # sparse burst never carries its own tag and never verifies.
+        sparse = dict(heartbeat_s=30, k_code=ap.TLM_K_CODE_3)
+        d = cgm_descriptor(flags=ap.TLM_FLAG_X_AUTH | ap.TLM_FLAG_SPARSE,
+                           **sparse)
+        with self.assertRaises(ValueError):
+            ap.encode_tlm_descriptor(d, desc_auth())
+        d = cgm_descriptor(flags=ap.TLM_FLAG_X_CONF | ap.TLM_FLAG_SPARSE,
+                           **sparse)
+        self.assertEqual(len(ap.encode_tlm_descriptor(d, desc_auth())), 7)
+
+    def test_fourteen_fields_and_a_transform_is_seventeen_frames(self):
+        fields = [ap.TlmField(id=i + 1, type=0x10, page=1 + i // 5,
+                              bit_offset=8 * (i % 5), width_code=4)
+                  for i in range(14)]
+        d = cgm_descriptor(fields=fields)
+        self.assertEqual(d.frame_count, 17)
+        with self.assertRaises(ValueError):
+            ap.encode_tlm_descriptor(d, desc_auth())
+        # Thirteen is the budget.
+        d = cgm_descriptor(fields=fields[:13])
+        self.assertEqual(len(ap.encode_tlm_descriptor(d, desc_auth())), 16)
+
+    def test_the_descriptor_and_the_seal_may_not_disagree_about_the_epoch(self):
+        with self.assertRaises(ValueError):
+            ap.encode_tlm_descriptor(cgm_descriptor(epoch=7), desc_auth())
+        # Zero, or the same epoch, is fine - and frame 1 still follows the
+        # item-4 rule, not d.epoch.
+        frames = ap.encode_tlm_descriptor(
+            cgm_descriptor(epoch=DESC_AUTH_EPOCH), desc_auth())
+        self.assertEqual([f.hex() for f in frames], self.VECTOR_HIDDEN)
+
+    def test_with_a_schedule_frame_it_is_index_2_and_auth_is_last(self):
+        d = cgm_descriptor(schedule=ap.TlmSchedule())
+        frames = ap.encode_tlm_descriptor(d, desc_auth())
+        self.assertEqual(len(frames), 8)
+        self.assertEqual(frames[2][2:8], bytes(6))   # the silent schedule
+        self.assertEqual(frames[3][2], 1)            # field 1 follows it
+        self.assertEqual(frames[-1][1], 0x77)        # index 7 of 8
+        back, epoch = ap.decode_tlm_descriptor(frames, desc_auth(epoch=0),
+                                               DESC_AUTH_EPOCH)
+        self.assertTrue(back.authenticated)
+        self.assertEqual(epoch, DESC_AUTH_EPOCH)
+        self.assertIsNotNone(back.schedule)
+        self.assertEqual(len(back.fields), 4)
+
+    # -- the receiver -----------------------------------------------------
+
+    def test_a_keyless_receiver_learns_the_node_but_not_its_data(self):
+        back = ap.decode_tlm_descriptor(self.frames(self.VECTOR_HIDDEN))
+        self.assertEqual(back.schema_id, 0x01)
+        self.assertEqual(back.period, 65535)
+        self.assertEqual(len(back.fields), 4)
+        self.assertFalse(back.authenticated)
+        self.assertFalse(back.may_decode_data)
+        with self.assertRaises(ValueError):
+            ap.decode_tlm_data(back, bytes([1, 0, 0, 0, 0, 0, 0, 0]))
+
+    def test_a_verified_receiver_may_decode(self):
+        back, epoch = ap.decode_tlm_descriptor(
+            self.frames(self.VECTOR_HIDDEN), desc_auth(epoch=0),
+            from_epoch=DESC_AUTH_EPOCH - 5)
+        self.assertEqual(epoch, DESC_AUTH_EPOCH)
+        self.assertTrue(back.authenticated)
+        self.assertTrue(back.may_decode_data)
+        self.assertEqual(back.epoch, 0, "the decoded epoch is what frame 1 "
+                         "said; the recovered one is returned")
+
+    def test_every_altered_body_byte_fails(self):
+        # Frame 1 (heartbeat, W, the clock nibble, the epoch) and every field
+        # frame (id, type, encoding, exponent, page, offset): one flipped bit
+        # anywhere in the covered bodies and the tag no longer verifies.
+        for vector in (self.VECTOR_TIME, self.VECTOR_HIDDEN):
+            frames = self.frames(vector)
+            for i in range(len(frames) - 1):
+                for b in range(2, 8):
+                    with self.subTest(frame=i, byte=b):
+                        bad = list(frames)
+                        bad[i] = bad[i][:b] + bytes([bad[i][b] ^ 0x01]) \
+                            + bad[i][b + 1:]
+                        self.assertFalse(ap.tlm_desc_auth_verify(
+                            bad, desc_auth()))
+                        self.assertIsNone(ap.tlm_desc_auth_find_epoch(
+                            bad, desc_auth(), DESC_AUTH_EPOCH))
+
+    def test_altered_sets_fail(self):
+        frames = self.frames(self.VECTOR_TIME)
+        other = ap.encode_tlm_descriptor(
+            cgm_descriptor(), desc_auth(epoch=DESC_AUTH_EPOCH + 1,
+                                        epoch_is_time=True))
+        cases = {
+            "a field frame dropped": frames[:3] + frames[4:],
+            "a field frame duplicated": frames[:4] + frames[3:],
+            "two field frames swapped":
+                frames[:2] + [frames[3], frames[2]] + frames[4:],
+            "frame 1 spliced from the next epoch's set":
+                [frames[0], other[1]] + frames[2:],
+            "the next epoch's tag on this epoch's bodies":
+                frames[:-1] + [other[-1]],
+        }
+        for name, bad in cases.items():
+            with self.subTest(name):
+                for epoch in (DESC_AUTH_EPOCH, DESC_AUTH_EPOCH + 1):
+                    self.assertFalse(ap.tlm_desc_auth_verify(
+                        bad, desc_auth(), epoch))
+        for name, auth in {
+            "wrong on-air device number":
+                desc_auth(devnum=DESC_AUTH_DEVNUM ^ 1),
+            "wrong provisioned device number":
+                desc_auth(base_devnum=DESC_AUTH_BASE_DEVNUM ^ 1),
+            "device numbers swapped":
+                desc_auth(devnum=DESC_AUTH_BASE_DEVNUM,
+                          base_devnum=DESC_AUTH_DEVNUM),
+            "wrong key": desc_auth(k_root=bytes(16)),
+        }.items():
+            with self.subTest(name):
+                self.assertFalse(ap.tlm_desc_auth_verify(frames, auth))
+
+    def test_the_epoch_search_is_forward_only_and_bounded(self):
+        frames = self.frames(self.VECTOR_HIDDEN)
+        for k in range(ap.TLM_AUTH_EPOCH_SPAN + 1):
+            with self.subTest(k=k):
+                self.assertEqual(ap.tlm_desc_auth_find_epoch(
+                    frames, desc_auth(epoch=0), DESC_AUTH_EPOCH - k),
+                    DESC_AUTH_EPOCH)
+        self.assertIsNone(ap.tlm_desc_auth_find_epoch(
+            frames, desc_auth(epoch=0),
+            DESC_AUTH_EPOCH - ap.TLM_AUTH_EPOCH_SPAN - 1))
+        # Never backwards: a receiver that already knows a newer epoch does
+        # not find this one.
+        self.assertIsNone(ap.tlm_desc_auth_find_epoch(
+            frames, desc_auth(epoch=0), DESC_AUTH_EPOCH + 1))
+
+    def test_a_replayed_old_descriptor_is_refused(self):
+        # Frame 1 shows its epoch (real time): verified under exactly that one,
+        # and refused below what the receiver already knows.
+        frames = self.frames(self.VECTOR_TIME)
+        self.assertEqual(ap.tlm_desc_auth_find_epoch(
+            frames, desc_auth(epoch=0), DESC_AUTH_EPOCH), DESC_AUTH_EPOCH)
+        self.assertIsNone(ap.tlm_desc_auth_find_epoch(
+            frames, desc_auth(epoch=0), DESC_AUTH_EPOCH + 1))
+        _, epoch = ap.decode_tlm_descriptor(frames, desc_auth(epoch=0),
+                                            DESC_AUTH_EPOCH + 1)
+        self.assertIsNone(epoch)
+
+    # -- the scheduler ----------------------------------------------------
+
+    def test_a_reseal_mid_burst_never_yields_a_mixed_set(self):
+        d = cgm_descriptor()
+        e1, e2 = DESC_AUTH_EPOCH, DESC_AUTH_EPOCH + 1
+        sched = ap.TlmPageScheduler(
+            d, {"data_page": lambda page, counter: ap.encode_tlm_data(
+                d, page, counter, {})},
+            auth=desc_auth(epoch=e1, epoch_is_time=True))
+
+        # The control: the first three frames of e1's set and the rest of
+        # e2's - what continuing the burst after a reseal would hand a
+        # receiver - verify under neither epoch.
+        old = sched.frames
+        new = ap.encode_tlm_descriptor(d, desc_auth(epoch=e2,
+                                                    epoch_is_time=True))
+        mixed = old[:3] + new[3:]
+        self.assertFalse(ap.tlm_desc_auth_verify(mixed, desc_auth(), e1))
+        self.assertFalse(ap.tlm_desc_auth_verify(mixed, desc_auth(), e2))
+
+        rx = ap.TlmDescriptorRx()
+        verified = []
+        resealed = False
+        for _slot in range(2 * ap.RADIANT_TLM_CYCLE):
+            kind, body = sched.next()
+            if kind != ap.SLOT_DESCRIPTOR:
+                continue
+            if not resealed and sched.burst_index == 3:
+                sched.reseal(desc_auth(epoch=e2, epoch_is_time=True))
+                resealed = True
+            if rx.feed(body):
+                back, epoch = rx.take(desc_auth(epoch=0), e1)
+                self.assertTrue(back.authenticated,
+                                "a complete set failed verification")
+                verified.append(epoch)
+                rx = ap.TlmDescriptorRx()
+        self.assertTrue(resealed)
+        self.assertEqual(verified, [e2, e2],
+                         "the interrupted burst restarted under e2, so no "
+                         "set completed with e1's first frames")
+
+    def test_reseal_refuses_a_plain_set_and_a_new_shape(self):
+        plain = ap.TlmPageScheduler(sample_descriptor(), {})
+        with self.assertRaises(ValueError):
+            plain.reseal(desc_auth())
+        d = cgm_descriptor()
+        sched = ap.TlmPageScheduler(d, {}, auth=desc_auth())
+        d.fields.pop()
+        with self.assertRaises(ValueError):
+            sched.reseal(desc_auth(epoch=DESC_AUTH_EPOCH + 1))
 
 
 class TestTelemetryDataPages(unittest.TestCase):

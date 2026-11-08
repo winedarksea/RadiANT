@@ -635,5 +635,69 @@ class FitnessEquipmentIsNotBicyclePower(unittest.TestCase):
         self.assert_no_false_fail(summary)
 
 
+class SealedTelemetryDescriptor(unittest.TestCase):
+    """A 0x60 node's descriptor authentication frame, as the analyser sees it.
+
+    Before it existed the analyser's shape check raised on a sealed set, so a
+    sealed node read as a malformed one. Now the set decodes without a key,
+    and with the compat key it is judged: authenticated, FAILED, or no key.
+    """
+
+    ROOT = bytes.fromhex("2b7e151628aed2a6abf7158809cf4f3c")
+    DEVNUM = 0x1234
+    EPOCH = 9
+
+    def sealed_frames(self, epoch=EPOCH):
+        fields = [ap.TlmField(id=1, type=0x10, page=1, bit_offset=0,
+                              width_code=7)]
+        d = ap.TlmDescriptor(schema_id=0x05, period=8192, fields=fields,
+                             flags=ap.TLM_FLAG_X_AUTH, w_code=ap.TLM_W_CODE_2)
+        auth = ap.TlmDescAuth(self.ROOT, self.DEVNUM, self.DEVNUM, epoch)
+        return ap.encode_tlm_descriptor(d, auth)
+
+    def run_frames(self, frames, compat):
+        analyzer = ant_verify.ChannelAnalyzer(
+            "tlm", ap.RADIANT_TLM_DEVICE_TYPE, 8192, None, None, 2.105,
+            compat=compat, device_number=self.DEVNUM)
+        t = 0.0
+        for frame in frames:
+            analyzer.feed(t, frame)
+            t += analyzer.period_s
+        return analyzer.summary(100.0, 10.0, None)
+
+    def check(self, summary, name):
+        for check in summary["checks"]:
+            if check["name"] == name:
+                return check
+        return None
+
+    def test_without_a_key_it_decodes_and_says_no_key(self):
+        summary = self.run_frames(self.sealed_frames(), None)
+        self.assertEqual(summary["telemetry"]["schema_id"], 0x05)
+        self.assertEqual(summary["telemetry"]["descriptor_auth"], "no key")
+        self.assertIsNone(self.check(summary, "descriptor authenticated"))
+        self.assertEqual(summary["violations"]["count"], 0,
+                         summary["violations"]["first"])
+
+    def test_with_the_key_it_is_authenticated(self):
+        compat = ant_verify.CompatVerifier(self.ROOT, self.EPOCH - 3,
+                                           self.DEVNUM)
+        summary = self.run_frames(self.sealed_frames(), compat)
+        self.assertEqual(summary["telemetry"]["descriptor_auth"],
+                         "authenticated")
+        self.assertEqual(summary["telemetry"]["descriptor_epoch"], self.EPOCH)
+        self.assertTrue(self.check(summary, "descriptor authenticated")["pass"])
+
+    def test_an_altered_frame_fails(self):
+        frames = self.sealed_frames()
+        frames[2] = frames[2][:7] + bytes([frames[2][7] ^ 0x08])  # offset
+        compat = ant_verify.CompatVerifier(self.ROOT, self.EPOCH,
+                                           self.DEVNUM)
+        summary = self.run_frames(frames, compat)
+        self.assertEqual(summary["telemetry"]["descriptor_auth"], "FAILED")
+        self.assertFalse(self.check(summary, "descriptor authenticated")
+                         ["pass"])
+
+
 if __name__ == "__main__":
     unittest.main()

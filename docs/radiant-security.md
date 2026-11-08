@@ -647,15 +647,35 @@ mandatory whenever any transform bit is set.
 ```
 [0]    0x00                        page number, like every descriptor frame
 [1]    (index << 4) | (count - 1)  frame index, like every descriptor frame
-[2..7] 48-bit CMAC(K_auth, epoch[4 LE] || devnum[2 LE] || schema_id || bodies)
-       where "bodies" is bytes [2..7] of every preceding frame of this set,
-       in frame order, and the MAC uses domain byte 0x03 in nonce_block.
+[2..7] the first 6 bytes of CMAC(K_auth, msg), where
+
+       K_auth = KDF(K_root, "auth", epoch, base_devnum)   (the spread MAC's key)
+       msg    = nonce_block(epoch, devnum, counter = schema_id, dom = 0x03)
+                || bodies
+       bodies = bytes [2..7] of frames 0 .. n-2 of this set, in frame order,
+                exactly as transmitted
 ```
 
-It costs **one slot in 121** and **zero data-page bytes**. It is specified here
-and implemented when `src/profiles/` arrives; until then there is no descriptor
-encoder to authenticate. Section 7.6 states the limit that leaves open in the
-meantime.
+The construction is pinned to the reading that matches the other MACs, with the
+domain byte in the first block (section 3.3's nonce block). `epoch` is the
+**real** epoch even when descriptor frame 1 shows zero (frame 1 carries the
+epoch only when it is coarse real time — `docs/radiant-telemetry.md` section 6,
+TODO item 4). `devnum` is the on-air device number as in the nonce;
+`base_devnum` is the provisioned one as in the KDF, the split `radiant_sec.c`'s
+`derive_keys()` already uses. Domain `0x03` separates it from the spread MAC
+under the same K_auth. The bodies fix the shape of the set, so adding, dropping
+or reordering a frame breaks the tag.
+
+It costs **one slot in 121** and **zero data-page bytes**, and it is
+implemented: `profile_desc_encode_auth()`, `profile_desc_auth_verify()`,
+`profile_desc_auth_find_epoch()` and `profile_desc_rx_take_auth()` in
+`radiant/src/profiles/profile_telemetry.c`, `profile_sched_init_auth()` and
+`profile_sched_reseal()` in `profile_sched.c`, `desc_auth_tag()` in
+`tools/radiant_crypto.py`, with shared vectors in `test_profiles.c` and
+`tools/test_ant_pages.py`. The plain encoder still refuses every transform bit,
+which keeps "no key, no transform" and keeps the sealed path out of every
+standard device. Section 7.6 states what it does and does not stop; section 5.6
+its cost.
 
 ### 5.4 The common pages leak more than the device number ever did, and that is fixable in one rule
 
@@ -795,6 +815,29 @@ is the number the 288 B applies to. When the emit and verify entry points land
 the ceiling moves — with a per-symbol breakdown and a measurement behind the new
 figure, in this table, or it does not move.
 
+**The descriptor authentication frame (section 5.3) costs a standard device
+nothing it can see, and a sealed node about 1 KB.** Measured 2026-11-07, NCS
+v3.4.0:
+
+| | text | bss/data | time |
+|---|---|---|---|
+| `apps/hrm_ble`, `apps/treadmill` (nrf54l15dk, `CONFIG_RADIANT_SEC=y`), against the parent commit | **+20 B** | **0 B** | — |
+| a sealed node: `profile_desc_encode_auth` 398, `profile_desc_auth_tag` 224, `profile_sched_init_auth` 250, `profile_sched_reseal` 92, `check_transforms` 38 | **+1002 B** | 0 B | 497 µs per seal (7 frames), 726 µs (16 frames) |
+| a keyed receiver: `profile_desc_auth_tag` 224, `profile_desc_rx_take_auth` 202, `profile_desc_auth_find_epoch` 130, `profile_desc_auth_verify` 78 | **+634 B** | 0 B | one seal's worth per trial epoch, up to 17 |
+
+The standard devices link none of the new symbols (`nm --defined-only`); the
++20 B is `profile_desc_frame_count()` learning the authentication frame (+8),
+`profile_desc_encode()` (+10) and `profile_sched_init()` (+2). The shared
+encoder body and the init tail are forced inline so the split itself costs the
+standard path nothing; a sealed node carries those bodies twice instead, which
+is most of `profile_desc_encode_auth`'s and `profile_sched_init_auth`'s size.
+A sealed node's set lives in the 16-frame buffer every node already has, so
+sealing costs no RAM; `profile_sched_reseal()` uses 128 B of stack for a
+scratch copy. Sizes are from the `radiant/tests` image (nRF5340 application
+core, `-Os`); the times are that core, 16 calls timed on the 32768 Hz kernel
+counter, and include the KDF, the CMAC over at most 106 bytes and the
+encoding. A node seals once per epoch change, not per cycle.
+
 ---
 
 ## 6. Threat model
@@ -851,6 +894,17 @@ Category fingerprinting survives everything here: device type and transmission
 type must stay fixed because a searching receiver matches on them, so an
 observer still learns "a heart-rate sensor is here, and it left at 09:40".
 Transmission timing — period and phase — is a second, weaker fingerprint.
+
+**Known gap: a command-only `0x60` node broadcasts its boot counter.** A node
+with the reliable-command page and no transform carries a non-zero epoch in
+descriptor frame 1 (`docs/radiant-telemetry.md` section 6), and on a hostless
+node the epoch is the boot counter (ADR 0009) — the slowly incrementing number
+that defeats identity Tier 2, which ADR 0008 removed from the compat beacon and
+the handoff page for that reason. A *sealed* node no longer does this: frame 1
+carries the epoch only when it is coarse real time, and a keyed receiver
+recovers it from the descriptor authentication frame (TODO item 4, decided
+2026-11-07). The command-only node has no authentication frame to recover an
+epoch from, so it keeps the fingerprint. Recorded, not fixed.
 
 ### 7.2 Any keyholder can forge
 
@@ -1050,10 +1104,23 @@ and from then on it refuses a page that arrives more than `2 x JITTER + SLEW`
   supply one.
 
 The limit: a joining receiver's freshness is anchored on the **host-supplied**
-epoch via `0xF3`, not on anything it hears. The descriptor that carries the
-epoch is unauthenticated until section 5.3's frame ships, so **a captured old
-epoch replays wholesale to a receiver whose host does not know the current
-one.** Stated here rather than implied.
+epoch via `0xF3`, not on anything it hears. Section 5.3's descriptor
+authentication frame narrows that and does not remove it. What it does, plainly:
+
+- **It stops forgery of a schema or an epoch.** A changed offset, scale, W,
+  transform bit, field count or frame-1 epoch fails the tag, and a receiver
+  does not decode data against a schema that did not verify
+  (`profile_desc_may_decode_data()`).
+- **It stops a replayed descriptor only against a receiver that already knows
+  a newer epoch.** The epoch search runs forward only, from the last epoch the
+  receiver knew, and a frame-1 epoch below it is refused outright — so a
+  recording from an older epoch never verifies there.
+- **It does not stop a replay against a receiver that knows no epoch.** A
+  descriptor recorded under an old epoch verifies, genuinely, at a receiver
+  searching from that epoch or below. So **a captured old descriptor still
+  replays to a receiver whose host does not know the current epoch**, exactly
+  as before; the host-supplied epoch is still the anchor. Stated here rather
+  than implied.
 
 ### 7.7 What compat attestation costs, in numbers
 

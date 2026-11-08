@@ -14,7 +14,8 @@ byte**, plus a `0x60` node discovered and decoded across the mock radio), and
 which learns the schema from the descriptor and checks the accumulators against
 it). Sections 5–9 are therefore a description as well as a specification; the
 parts that are still specification only are named where they occur — the
-security transforms and the descriptor authentication frame of section 6, the
+security transforms of section 6 (its descriptor authentication frame is now
+implemented, with shared vectors in the same two test files), the
 schedule block in frame 1's reserved bits, and the idempotency rule of
 section 9, of which only the page layouts exist.
 
@@ -284,7 +285,8 @@ authentication frame** if any transform bit is set. The authentication frame
 always occupies the last slot in the set; the schedule frame always occupies
 index 2, which is why the two never contend for a position. The field frames are
 whatever is left — 14 of them on a node that announces neither, 12 on one that
-announces both.
+announces both. **With any transform bit set the field count is therefore at
+most 13, or 12 with a schedule frame**; an encoder refuses a fourteenth.
 
 **The shape of the set is derived, not announced.** `2 + field count` is a set
 with no schedule frame; one more frame than that is a set with one, and the
@@ -359,17 +361,36 @@ of frame 1 byte `[3]` — not from this byte, which is full.
       bits 5..4  sparse repeat count: 0 = 1x, 1 = 2x, 2 = 3x, 3 = 5x
       bit 3      clock accuracy stated: the three bits below are a ladder code
       bits 2..0  clock-accuracy ladder code, when bit 3 is set; zero otherwise
-[4..7] epoch (u32 LE); zero only on a node that enables no transform AND sends
-       no reliable-command page. A command-only node carries a non-zero epoch
+[4..7] epoch (u32 LE). With a transform bit set: the epoch ONLY when it is
+       coarse real time (the 0xF3 flag bit 0), zero otherwise - the
+       authentication frame's MAC binds the real epoch either way. With no
+       transform: zero, unless the node sends the reliable-command page
 ```
+
+- **Why the epoch is withheld unless it is real time** (TODO item 4, decided
+  2026-11-07). On a hostless node the epoch is the boot counter (ADR 0009), and
+  a slowly incrementing number in the clear defeats identity Tier 2 — the
+  reason ADR 0008 removed the epoch from the compat beacon and the handoff
+  page. A coarse real-time epoch says nothing a clock does not, so it may go on
+  the air. Otherwise frame 1 carries zero and a keyed receiver recovers the
+  epoch by trial-verifying the authentication frame forward from the last epoch
+  it knew (`PROFILE_TLM_AUTH_EPOCH_SPAN` = 16 epochs). The 48-bit tag is the
+  epoch check, so no separate hint field is spent on it.
+- **A command-only node** — the reliable-command page, no transform — has no
+  authentication frame to recover an epoch from, so **it keeps broadcasting a
+  non-zero epoch**. That is the boot-counter fingerprint this rule removes from
+  sealed nodes, left open on this one and recorded in
+  `docs/radiant-security.md` 7.1.
 
 **The epoch's "zero when unused" rule and section 9's "a command-only node still
 needs the epoch" were, in an earlier draft, a direct contradiction.** Resolved
 in favour of section 9: the command page's inline tag covers the epoch, and that
 coverage is the only thing that stops a command captured yesterday from being
-adopted as a fresh sequence after a reboot. So the epoch is zero only when
-neither a transform nor the command page is in use — which is the ordinary
-telemetry node, and is the case the zero was written for.
+adopted as a fresh sequence after a reboot. So, with no transform, the epoch is
+zero only when the command page is not in use either — which is the ordinary
+telemetry node, and is the case the zero was written for. A sealed node is the
+other case: its zero means "not real time, recover it from the tag", per the
+rule above.
 
 **This frame is the reserved space, and it is reserved from v1 even though
 nothing populates it until the security phase.** The epoch is four bytes wide
@@ -521,10 +542,29 @@ otherwise, and its slot is a field frame instead.
 ```
 [0]    0x00                        page number, like every descriptor frame
 [1]    (index << 4) | (count - 1)  frame index, like every descriptor frame
-[2..7] 48-bit CMAC(K_auth, epoch[4 LE] || devnum[2 LE] || schema_id || bodies)
-       "bodies" is bytes [2..7] of every preceding frame of this set, in frame
-       order. The MAC uses domain byte 0x03; see docs/radiant-security.md 3.3.
+[2..7] the first 6 bytes of CMAC(K_auth, msg), where
+
+       K_auth = KDF(K_root, "auth", epoch, base_devnum)   (the spread MAC's key)
+       msg    = nonce_block(epoch, devnum, counter = schema_id, dom = 0x03)
+                || bodies
+       bodies = bytes [2..7] of frames 0 .. n-2 of this set, in frame order,
+                exactly as transmitted
 ```
+
+Pinned, because "CMAC(K_auth, epoch ‖ devnum ‖ schema_id ‖ bodies), domain 0x03"
+could be read two ways; this is the reading that matches the other MACs, with the
+domain byte in the first block (`docs/radiant-security.md` 3.3's nonce block):
+
+- **`epoch` is the real epoch**, even when frame 1 shows zero. That is what lets
+  a keyed receiver recover it by trial verification.
+- **`devnum` is the on-air device number** (as in every nonce) and
+  **`base_devnum` the provisioned one** (as in every KDF) — the split
+  `radiant_sec.c` already uses.
+- **Domain 0x03** separates this MAC from the spread MAC, which uses the same
+  K_auth.
+- **The bodies fix the shape of the set** — the field count, the transform
+  bits, whether a schedule frame is present — so adding, dropping or reordering
+  a frame breaks the tag. Byte `[1]` is not covered; it is implied by position.
 
 **Without it, the MAC on the data pages protects the wrong thing.** The
 descriptor carries the epoch, the window W, the transform flags, and every
@@ -533,10 +573,23 @@ field's offset and scale — so an attacker who forges one descriptor frame gets
 the numbers are still a lie.
 
 It costs **one slot in 121** and **zero data-page bytes**, which is why it is
-mandatory rather than a further opt-in. It is specified here and implemented
-when `src/profiles/` exists; there is no descriptor encoder to authenticate
-until then, and `docs/radiant-security.md` section 7.6 states the limit that
-leaves open in the meantime.
+mandatory rather than a further opt-in. **It is implemented**:
+`profile_desc_encode_auth()` and the `profile_desc_auth_*()` receiver half in
+`radiant/src/profiles/profile_telemetry.c`, `profile_sched_init_auth()` and
+`profile_sched_reseal()` for a node, mirrored in `tools/ant_pages.py`, with
+shared vectors in `radiant/tests/src/test_profiles.c` and
+`tools/test_ant_pages.py`. The plain encoder still refuses every transform bit,
+so a standard device never links the sealed path. Two rules belong to the node
+application: **reseal on every epoch change** (until it does, the descriptor
+fails verification — the safe failure), and run both under the same lock as
+every other `radiant_sec` call. What the frame does and does not stop is in
+`docs/radiant-security.md` 7.6.
+
+**Two consequences for the rest of this section.** The encoder refuses
+`X_AUTH` together with the sparse flag (section 8: a sparse burst never carries
+its own spread tag), and a sealed node's schedule frame is covered by the MAC,
+so the per-transmission downlink re-phase is refused on one: a sealed node
+announces its downlink phase as encoded.
 
 ### Data pages `0x01..0x0F`
 

@@ -30,11 +30,14 @@
  * ---------------------------------------------------------------------------
  * What this deliberately does NOT do, and why
  * ---------------------------------------------------------------------------
- *   - NO SECURITY. v1 sets no transform bit, computes no MAC, emits no
- *     descriptor authentication frame; every reserved field is zero (section
- *     11). The encoder refuses a descriptor with a transform bit set rather
- *     than emitting one it cannot authenticate, since the mandatory
- *     authentication frame of section 6 has no implementation yet.
+ *   - NO SECURITY ON THE PLAIN PATH. profile_desc_encode() sets no transform
+ *     bit, computes no MAC and emits no descriptor authentication frame;
+ *     every reserved field is zero (section 11). A transform bit is refused
+ *     there, because section 6 makes the authentication frame mandatory
+ *     alongside one. The SEALED path - profile_desc_encode_auth() and the
+ *     profile_desc_auth_*() receiver half, near the end of this file - is a
+ *     separate set of functions, so a node that never seals a descriptor
+ *     never references them and --gc-sections drops them.
  *   - NO COMMAND STATE MACHINE. The page 0x10/0x11 byte layouts are here
  *     since section 9 fixes them; the idempotency rule, accept window, tag
  *     computation and rate limit are in profile_command.h, which needs a key
@@ -241,7 +244,12 @@ struct profile_descriptor {
 	uint8_t  heartbeat_s;   /* sparse only; zero is INVALID for a sparse node */
 	uint8_t  w_code;        /* MAC window; zero while no transform is enabled */
 	uint8_t  k_code;        /* sparse repeat count */
-	uint32_t epoch;         /* zero only with no transform and no command page */
+	/* What frame 1 carries. Zero with no transform and no command page.
+	 * With a transform it is the epoch only when that epoch is coarse real
+	 * time, zero otherwise (TODO item 4); the sealed encoder writes it from
+	 * struct profile_desc_auth, and a caller leaves this zero or equal to
+	 * the real epoch. */
+	uint32_t epoch;
 
 	/*
 	 * The schedule block - frame 1 byte [3] bits 3..0, plus one frame.
@@ -258,6 +266,14 @@ struct profile_descriptor {
 
 	uint8_t  n_fields;
 	struct profile_field fields[PROFILE_TLM_MAX_FIELDS];
+
+	/*
+	 * Receiver-side only, never encoded: true when the set this came from
+	 * carried a descriptor authentication frame that verified. Only
+	 * profile_desc_rx_take_auth() sets it; every other path leaves it
+	 * false. profile_desc_may_decode_data() reads it.
+	 */
+	bool     authenticated;
 };
 
 /* Bits of field area a data page has: 48, or 40 when X_AUTH claims byte [7]. */
@@ -274,27 +290,40 @@ uint16_t profile_desc_field_area_bits(const struct profile_descriptor *d);
 uint16_t profile_desc_clock_ppm(const struct profile_descriptor *d);
 
 /*
- * The forward-compatibility rule, in one function. False when any transform
- * bit is set (v1 implements none). A receiver getting false has still
- * learned the node's identity, period, RF index and schema - fail closed
- * means "do not decode", not "do not listen".
+ * The forward-compatibility rule, in one function.
+ *
+ *   - bit 5 or bit 4 set (reserved transforms, implemented by nothing): false;
+ *   - X_CONF or X_AUTH set: true only when `authenticated` - the descriptor
+ *     came through profile_desc_rx_take_auth() and its authentication frame
+ *     verified;
+ *   - no transform bit: true.
+ *
+ * True here is about the SCHEMA, not the packets. With a transform on, the
+ * data bytes handed to profile_data_decode() must have come through
+ * radiant_sec's receive path - decrypted, and carrying a verdict - and gating
+ * each packet on that verdict (docs/device-profiles.md 5.1's rule for 0x61:
+ * an unverified reading is no reading) is still the caller's job.
+ *
+ * A receiver getting false has still learned the node's identity, period, RF
+ * index and schema - fail closed means "do not decode", not "do not listen".
  */
 bool profile_desc_may_decode_data(const struct profile_descriptor *d);
 
 /*
  * How many frames the set has: 2 + a schedule frame if there is one +
- * n_fields. No authentication frame in v1 (no transform in v1); when there
- * is one, it takes the last slot and this grows by one.
+ * n_fields + the authentication frame when any transform bit is set.
  *
  * The schedule frame is fixed at index 2, before the fields, so the
  * authentication frame keeps the last slot section 6 promises it, and a
  * receiver joining mid-rotation gets the node's timing before its schema.
+ * With a transform on, the field budget is therefore 13, or 12 with a
+ * schedule frame.
  */
 uint8_t profile_desc_frame_count(const struct profile_descriptor *d);
 
 /* The index of the schedule frame in the set, or -ENOENT when the node sends
- * none. A constant today; a function since the authentication frame will
- * make the set's shape depend on the flags. */
+ * none. Always 2 when present: the authentication frame takes the LAST
+ * slot, so it never displaces the schedule frame. */
 int profile_desc_schedule_index(const struct profile_descriptor *d);
 
 /*
@@ -311,7 +340,9 @@ int profile_desc_data_pages(const struct profile_descriptor *d, uint8_t *pages,
  *
  * Returns the number of frames, or:
  *   -EINVAL   malformed - see the validation list in profile_telemetry.c
- *   -ENOTSUP  a transform bit is set, and v1 cannot authenticate the set
+ *   -ENOTSUP  a transform bit is set: this function never emits the
+ *             authentication frame, so it never announces a transform.
+ *             profile_desc_encode_auth() is the sealed path.
  *   -ENOSPC   cap_frames too small
  *
  * Every reserved bit in the output is zero, per section 11.
@@ -325,11 +356,126 @@ int profile_desc_encode(const struct profile_descriptor *d, uint8_t *frames,
  *
  * Returns 0, or -EPROTO for a malformed set, or -ENOTSUP for a version this
  * build does not implement. A transform bit is NOT an error here - the
- * descriptor still decodes; profile_desc_may_decode_data() refuses the data
- * pages.
+ * descriptor still decodes WITHOUT A KEY, so a receiver learns identity,
+ * period and RF; the last frame is then the authentication frame, which this
+ * function skips, and profile_desc_may_decode_data() refuses the data pages
+ * because `authenticated` stays false. X_AUTH with the sparse flag is
+ * -EPROTO: no encoder emits it.
  */
 int profile_desc_decode(const uint8_t *frames, uint8_t n_frames,
 			struct profile_descriptor *out);
+
+/* ---------------------------------------------------------------------------
+ * The descriptor authentication frame - docs/radiant-telemetry.md section 6,
+ * docs/radiant-security.md 5.3
+ *
+ * The last frame of a set whose frame 0 announces X_CONF or X_AUTH:
+ *
+ *   K_auth = KDF(K_root, "auth", epoch, base_devnum)  (the spread MAC's key)
+ *   msg    = nonce_block(epoch, devnum, counter = schema_id, dom = 0x03)
+ *            || bytes [2..7] of frames 0..n-2, as on air
+ *   tag    = CMAC(K_auth, msg)[0..5]  ->  the last frame's bytes [2..7]
+ *
+ * `epoch` is the REAL epoch even when frame 1 shows zero; that is what lets
+ * a keyed receiver recover the epoch by trial verification
+ * (profile_desc_auth_find_epoch()) while a hostless node stops broadcasting
+ * its boot counter (TODO item 4). `devnum` is the on-air device number, as
+ * in the nonce; `base_devnum` is the provisioned one, as in the KDF - the
+ * same split radiant_sec.c's derive_keys() and nonce use. Domain 0x03 keeps
+ * this MAC apart from the spread MAC, which uses the same K_auth.
+ *
+ * Every function here needs CONFIG_RADIANT_SEC for the MAC and returns
+ * -ENOTSUP without it. Only a sealed node or a keyed receiver references
+ * them; a standard device links none of this.
+ *
+ * THE LOCK. The software AES keeps one key schedule, so every call here must
+ * run under the same lock as every other radiant_sec call (api_lock in the
+ * applications) - the hazard of TODO item 8.
+ * ---------------------------------------------------------------------------
+ */
+
+struct radiant_sec_key;
+
+#define PROFILE_TLM_AUTH_TAG_LEN 6u
+
+/* How far forward a receiver searches for an epoch frame 1 does not carry.
+ * Forward only: see profile_desc_auth_find_epoch(). */
+#define PROFILE_TLM_AUTH_EPOCH_SPAN 16u
+
+struct profile_desc_auth {
+	const struct radiant_sec_key *k_root;
+	uint16_t devnum;        /* on air - the nonce's */
+	uint16_t base_devnum;   /* provisioned - the KDF's */
+	uint32_t epoch;         /* the real epoch */
+	/* The 0xF3 "coarse real time" flag: frame 1 carries the epoch only
+	 * when this is set, zero otherwise. Ignored by the receiver. */
+	bool     epoch_is_time;
+};
+
+/*
+ * The six tag bytes over a set's first n_frames - 1 frames, as encoded.
+ * Frame 0 byte [3] is the schema id the nonce carries. The key is derived on
+ * every call and destroyed before returning, like profile_cmd_tag().
+ *
+ * Returns 0, -EINVAL, -EACCES (no root key), -EIO, or -ENOTSUP without
+ * CONFIG_RADIANT_SEC. Never 0 with an untouched buffer.
+ */
+int profile_desc_auth_tag(const struct profile_desc_auth *a,
+			  const uint8_t *frames, uint8_t n_frames,
+			  uint8_t tag[PROFILE_TLM_AUTH_TAG_LEN]);
+
+/*
+ * The sealed encoder: the plain set plus the authentication frame.
+ *
+ * Refuses, beyond everything profile_desc_encode() refuses:
+ *   -ENOTSUP  reserved transform bit 5 or 4;
+ *   -EINVAL   no transform bit at all (use profile_desc_encode());
+ *   -EINVAL   X_AUTH with the sparse flag - the spread tag lags one window,
+ *             so a sparse burst never carries its own tag (TODO item 7);
+ *   -EINVAL   d->epoch neither 0 nor a->epoch - the two would silently
+ *             disagree about what frame 1 says;
+ *   -EINVAL   more than 16 frames: 13 fields, or 12 with a schedule frame.
+ *
+ * Frame 1 bytes [4..7] are a->epoch when a->epoch_is_time, zero otherwise.
+ * Returns the frame count. On a MAC failure the frames are zeroed and the
+ * error returned (-EACCES, -EIO, -ENOTSUP).
+ */
+int profile_desc_encode_auth(const struct profile_descriptor *d,
+			     const struct profile_desc_auth *a, uint8_t *frames,
+			     uint8_t cap_frames);
+
+/*
+ * Verify a complete set's authentication frame under a->epoch. Constant-time
+ * compare. Returns 0, -EBADMSG for a tag that does not match, or the
+ * profile_desc_auth_tag() errors.
+ */
+int profile_desc_auth_verify(const uint8_t *frames, uint8_t n_frames,
+			     const struct profile_desc_auth *a);
+
+/*
+ * Find the epoch a sealed set was MAC'd under. `a_template` supplies the key
+ * and both device numbers; its epoch is ignored.
+ *
+ *   - frame 1 carries a non-zero epoch: verify under exactly that one, and
+ *     refuse it below `from_epoch` - the replay guard;
+ *   - frame 1 carries zero: try from_epoch .. from_epoch + span, in order.
+ *
+ * NEVER BACKWARDS. That is what stops a captured old descriptor being
+ * replayed against a receiver that already knows a newer epoch. It does NOT
+ * stop a replay against a receiver that knows no epoch at all (from_epoch 0
+ * finds whatever old epoch the recording was made under) - docs/
+ * radiant-security.md 7.6.
+ *
+ * A trial is one KDF and one CMAC over at most 106 bytes (the 16-byte nonce
+ * block and fifteen 6-byte bodies, seven AES blocks), so the worst case is
+ * span + 1 of each. Returns 0 with *out set, -EBADMSG when nothing in
+ * range verifies (or the frame-1 epoch is below from_epoch), or the
+ * profile_desc_auth_tag() errors.
+ */
+int profile_desc_auth_find_epoch(const uint8_t *frames, uint8_t n_frames,
+				 const struct profile_desc_auth *a_template,
+				 uint32_t from_epoch, uint32_t span,
+				 uint32_t *out);
 
 /* ---------------------------------------------------------------------------
  * Receiver-side assembly
@@ -365,9 +511,28 @@ int profile_desc_rx_feed(struct profile_desc_rx *rx, const uint8_t *body);
 
 bool profile_desc_rx_complete(const struct profile_desc_rx *rx);
 
-/* Decode the assembled set. -EAGAIN while it is still incomplete. */
+/* Decode the assembled set. -EAGAIN while it is still incomplete. Never sets
+ * `authenticated`; profile_desc_rx_take_auth() is the verified version. */
 int profile_desc_rx_take(const struct profile_desc_rx *rx,
 			 struct profile_descriptor *out);
+
+/*
+ * The verified take: decode, then, for a set announcing X_CONF or X_AUTH,
+ * recover its epoch with profile_desc_auth_find_epoch() and set
+ * out->authenticated.
+ *
+ * Returns 0 with *epoch set for a verified set; 0 with *epoch untouched and
+ * `authenticated` false for a set with no transform (nothing to verify, and
+ * profile_desc_may_decode_data() needs nothing); -EBADMSG when the
+ * authentication frame does not verify - and `out` still holds the
+ * unauthenticated schema, so the receiver keeps the node's identity while
+ * profile_desc_may_decode_data() refuses its data. Decode errors as
+ * profile_desc_rx_take().
+ */
+int profile_desc_rx_take_auth(const struct profile_desc_rx *rx,
+			      const struct profile_desc_auth *a_template,
+			      uint32_t from_epoch, struct profile_descriptor *out,
+			      uint32_t *epoch);
 
 /* ---------------------------------------------------------------------------
  * The descriptor-set collapse - ADR 0007

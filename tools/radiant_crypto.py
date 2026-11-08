@@ -330,6 +330,41 @@ def spread_tag(k_auth: bytes, epoch: int, devnum: int, window_start: int,
     return cmac(k_auth, message)[:window]
 
 
+# ── The descriptor authentication frame ─────────────────────────────────────
+
+#: Bytes of tag in the last descriptor frame, bytes [2..7].
+DESC_AUTH_TAG_BYTES = 6
+
+
+def desc_auth_tag(k_root: bytes, epoch: int, devnum: int, base_devnum: int,
+                  schema_id: int, bodies) -> bytes:
+    """The descriptor authentication frame's tag, radiant-telemetry.md
+    section 6 and radiant-security.md 5.3, pinned:
+
+        K_auth = KDF(K_root, "auth", epoch, base_devnum)
+        msg    = nonce_block(epoch, devnum, counter = schema_id, dom = 0x03)
+                 || bodies
+        tag    = CMAC(K_auth, msg)[0..5]
+
+    `bodies` is bytes [2..7] of frames 0..n-2 as they go on the air (6 bytes
+    each, frame 1 showing zero where the epoch is not real time). `epoch` is
+    the REAL epoch either way. `devnum` is the on-air device number, as in the
+    nonce; `base_devnum` the provisioned one, as in the KDF - the split
+    radiant_sec.c uses. Mirrors profile_desc_auth_tag() in
+    radiant/src/profiles/profile_telemetry.c; like the rest of this module it
+    knows no page layout beyond "six bytes per frame".
+    """
+    message = nonce_block(epoch, devnum, schema_id & 0xFF, DOM_DESC_MAC)
+    for body in bodies:
+        body = bytes(body)
+        if len(body) != 6:
+            raise ValueError(f"a descriptor frame body is 6 bytes, got "
+                             f"{len(body)}")
+        message += body
+    k_auth = kdf(k_root, LABEL_AUTH, epoch, base_devnum)
+    return cmac(k_auth, message)[:DESC_AUTH_TAG_BYTES]
+
+
 # ── Compat attestation: two tiers over one domain byte ──────────────────────
 #
 # The mirror of radiant/src/radiant_sec_compat.c. docs/radiant-security.md

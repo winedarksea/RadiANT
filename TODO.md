@@ -213,7 +213,38 @@ first verified page; docs/radiant-security.md 7.6 and 11.4). Still open:
   (`tier1_replays`) until the host re-runs epoch recovery. That was already the
   behaviour before the fix, which does not change it.
 
-## 2. [FIRMWARE, MEDIUM] Implement the descriptor authentication frame
+## 2. [DONE 2026-11-07] Implement the descriptor authentication frame
+**Done:** `profile_desc_encode_auth()` emits the frame last, under the pinned
+construction (K_auth = KDF(K_root, "auth", epoch, base_devnum); CMAC over
+nonce_block(epoch, devnum, schema_id, 0x03) || the bodies of every other frame;
+radiant-telemetry.md section 6, radiant-security.md 5.3). The receiver half is
+`profile_desc_auth_verify()`, `profile_desc_auth_find_epoch()` (forward-only)
+and `profile_desc_rx_take_auth()`, which sets `authenticated`;
+`profile_desc_may_decode_data()` now requires it for X_CONF/X_AUTH.
+`profile_sched_init_auth()` and `profile_sched_reseal()` seal a node's set in
+the existing 16-frame buffer. The plain encoder still refuses every transform
+bit. The encoder refuses X_AUTH with sparse, reserved bits 5/4, 17 frames, and
+a descriptor epoch that disagrees with the seal. tools/ant_pages.py mirrors it
+(`TlmDescAuth`, `encode_tlm_descriptor(d, auth)`,
+`decode_tlm_descriptor(frames, auth, ...)`, `TlmPageScheduler(auth=)` and
+`reseal()`), `radiant_crypto.desc_auth_tag()` is the MAC, and ant_verify
+reports `descriptor: authenticated / FAILED / no key`. 0x61 now requires
+W >= 4 (device-profiles.md 5.1).
+**Evidence:** two shared vectors (0x61-shaped, frame 1 with and without the
+epoch) as the same hex in test_profiles.c and test_ant_pages.py, checked by
+hand against the layout. Every flipped body byte of frames 0..5 fails, as do a
+dropped, duplicated or swapped frame, a frame 1 spliced from the next epoch,
+and a wrong devnum, base_devnum or key. radiant/tests on the nRF5340 DK
+932/932 (profiles 30/30, 9 new). Python: test_ant_pages, test_ant_verify,
+test_radiant_crypto, test_ant_sim, test_compat_capture all pass. Standard
+devices: apps/hrm_ble and apps/treadmill (nrf54l15dk, CONFIG_RADIANT_SEC=y)
+link none of the new symbols, bss/data +0, text +20 B. Cost on a sealed
+node: radiant-security.md 5.6.
+**Open, found doing it:** a sealed node's schedule frame is under the MAC, so
+profile_sched_set_downlink() refuses a sealed set (-ENOTSUP) rather than
+re-phasing a MAC'd body per transmission.
+
+(Original notes follow.)
 - Specified byte for byte in docs/radiant-telemetry.md section 6 ("The last
   frame") and docs/radiant-security.md 5.3. Not implemented:
   profile_desc_encode() refuses any transform bit
@@ -249,7 +280,19 @@ enrolling node, not over the air (docs/radiant-security.md 11.7.2).
   scripts/gen_ant_wire.py, update tools/ant_sec.py STATUS_LEN and the api
   tests. Cheapest now, while no release image answers 0xF4.
 
-## 4. [DESIGN DECISION - ask the user, do not just change it] The epoch in descriptor frame 1
+## 4. [DECIDED 2026-11-07, implemented with item 2] The epoch in descriptor frame 1
+**Decided (user):** the third option. With a transform on, frame 1 bytes
+[4..7] carry the epoch only when it is coarse real time (0xF3 flag bit 0), zero
+otherwise. The authentication frame's MAC always binds the real epoch, so a
+keyed receiver recovers it by trial-verifying forward from the last epoch it
+knew (`PROFILE_TLM_AUTH_EPOCH_SPAN` = 16); the 48-bit tag is the check, so no
+hint field. Removes the boot-counter fingerprint from sealed hostless nodes.
+**Left open, recorded:** a command-only node (command page, no transform) has
+no auth frame and keeps broadcasting a non-zero epoch (radiant-security.md
+7.1). Evidence: the two shared vectors differ only in frame 1 and the tag;
+test_the_epoch_search_is_forward_only_and_bounded in both suites.
+
+(Original notes follow.)
 - radiant-telemetry.md section 6 frame 1 bytes [4..7] broadcast the epoch in
   the clear (profile_telemetry.c:391). It is zero on air today only because
   no transform can be announced; item 2 makes it non-zero.

@@ -143,6 +143,14 @@ ATTEST_VERIFIED = "verified"
 ATTEST_UNVERIFIED = "unverified"
 ATTEST_LOST = "lost"
 
+# A 0x60 node's descriptor authentication frame (docs/radiant-telemetry.md
+# section 6), judged only when the node announces X_CONF or X_AUTH. "no key"
+# is this run having nothing to check with, the same distinction CLEAR draws
+# above - not a verdict on the node.
+DESC_AUTHENTICATED = "authenticated"
+DESC_FAILED = "FAILED"
+DESC_NO_KEY = "no key"
+
 
 class CompatVerifier:
     """The receiver half of docs/radiant-security.md section 11.4.
@@ -160,6 +168,9 @@ class CompatVerifier:
     def __init__(self, root: bytes, epoch: int, devnum: int,
                  window: int | None = None):
         keys = rc.derive_keys(root, epoch, devnum)
+        # The root too: a 0x60 node's descriptor authentication frame derives
+        # its own K_auth per trial epoch (ChannelAnalyzer._tlm_take()).
+        self.root = root
         self.k_auth = keys[rc.LABEL_AUTH]
         self.k_id = keys[rc.LABEL_ID]
         self.epoch = epoch
@@ -503,6 +514,11 @@ class ChannelAnalyzer:
         self.tlm_rx = ap.TlmDescriptorRx()
         self.tlm_desc: ap.TlmDescriptor | None = None
         self.tlm_schema_changes = 0
+        # The descriptor authentication frame's verdict, for a set announcing
+        # X_CONF/X_AUTH: DESC_AUTHENTICATED, DESC_FAILED, or DESC_NO_KEY when
+        # this run holds no key. None for a plain descriptor.
+        self.tlm_auth: str | None = None
+        self.tlm_auth_epoch: int | None = None
         self.tlm_data_before_schema = 0
         self.tlm_data_decoded = 0
         self.tlm_baseline: dict[int, dict] = {}   # per data page; see above
@@ -661,6 +677,40 @@ class ChannelAnalyzer:
 
     # -- the RadiANT telemetry envelope, device type 0x60 -----------------
 
+    def _tlm_take(self) -> ap.TlmDescriptor:
+        """Decode the assembled set and judge its authentication frame.
+
+        A sealed set (X_CONF/X_AUTH) decodes without a key - identity, period
+        and schema are learned either way - and is verified only when this run
+        holds the compat key: the root, this channel's device number for both
+        the on-air and provisioned numbers (as CompatVerifier derives), and a
+        forward search from --epoch. Without the key the verdict is "no key",
+        which is not the same as unauthenticated.
+        """
+        if self.compat is None:
+            schema = self.tlm_rx.take()
+            self.tlm_auth = (None if not schema.flags
+                             & (ap.TLM_FLAG_X_CONF | ap.TLM_FLAG_X_AUTH)
+                             else DESC_NO_KEY)
+            return schema
+        auth = ap.TlmDescAuth(k_root=self.compat.root,
+                              devnum=self.compat.devnum,
+                              base_devnum=self.compat.devnum)
+        schema, epoch = self.tlm_rx.take(auth, from_epoch=self.compat.epoch)
+        if not schema.flags & (ap.TLM_FLAG_X_CONF | ap.TLM_FLAG_X_AUTH):
+            self.tlm_auth = None
+        elif schema.authenticated:
+            self.tlm_auth = DESC_AUTHENTICATED
+            self.tlm_auth_epoch = epoch
+        else:
+            self.tlm_auth = DESC_FAILED
+            self._violation("descriptor authentication frame FAILED: no "
+                            f"epoch from {self.compat.epoch} to "
+                            f"{self.compat.epoch + ap.TLM_AUTH_EPOCH_SPAN} "
+                            "verifies under this key - a forged or replayed "
+                            "schema, a wrong key, or a stale --epoch")
+        return schema
+
     def _feed_telemetry(self, t: float, payload: bytes) -> None:
         """Learn the schema from the node, then check its accumulators.
 
@@ -680,7 +730,7 @@ class ChannelAnalyzer:
             if not complete:
                 return
             try:
-                schema = self.tlm_rx.take()
+                schema = self._tlm_take()
             except ValueError as error:
                 self._violation(f"descriptor set: {error}")
                 return
@@ -709,10 +759,17 @@ class ChannelAnalyzer:
             return
 
         if not self.tlm_desc.may_decode_data:
-            # Fail closed: a transform bit this build does not implement.
-            self._violation("the node announced a transform this receiver "
-                            "does not implement; its data pages are not "
-                            "decodable and must not be decoded")
+            # Fail closed: a reserved transform bit, or a sealed schema whose
+            # authentication frame did not verify (or could not be checked).
+            if self.tlm_auth in (DESC_NO_KEY, DESC_FAILED):
+                self._violation(f"the node's schema is sealed and its "
+                                f"descriptor is {self.tlm_auth}; its data "
+                                "pages must not be decoded against it")
+            else:
+                self._violation("the node announced a transform this "
+                                "receiver does not implement; its data "
+                                "pages are not decodable and must not be "
+                                "decoded")
             return
 
         try:
@@ -1259,6 +1316,17 @@ class ChannelAnalyzer:
                   f"{self.tlm_desc.period}, "
                   f"{self.tlm_data_decoded} data page(s) decoded against it "
                   f"({self.tlm_data_before_schema} seen before it arrived)")
+            # A sealed schema with a key in hand must verify. Without a key
+            # there is nothing to judge, so no check - the summary says
+            # "no key" instead.
+            if self.tlm_auth in (DESC_AUTHENTICATED, DESC_FAILED):
+                check("descriptor authenticated",
+                      self.tlm_auth == DESC_AUTHENTICATED,
+                      f"epoch {self.tlm_auth_epoch}"
+                      if self.tlm_auth == DESC_AUTHENTICATED else
+                      f"no epoch in {self.compat.epoch}.."
+                      f"{self.compat.epoch + ap.TLM_AUTH_EPOCH_SPAN} "
+                      "verifies")
 
         if self.compat is not None:
             tier1 = attestation["tier_i"]
@@ -1327,6 +1395,10 @@ class ChannelAnalyzer:
                 "flags": self.tlm_desc.flags,
                 "sparse": bool(self.tlm_desc.flags & ap.TLM_FLAG_SPARSE),
                 "heartbeat_s": self.tlm_desc.heartbeat_s,
+                # "authenticated" / "FAILED" / "no key", or None when the
+                # node announces no transform and sends no auth frame.
+                "descriptor_auth": self.tlm_auth,
+                "descriptor_epoch": self.tlm_auth_epoch,
                 "descriptor_frames_heard": self.tlm_rx.frames_fed,
                 "schema_changes": self.tlm_schema_changes,
                 "data_pages_decoded": self.tlm_data_decoded,
@@ -1902,6 +1974,15 @@ def report(result: dict) -> None:
         elif attestation:
             print("  attestation: clear - no key here, which is not the same "
                   "as unprotected")
+
+        telemetry = channel.get("telemetry")
+        if telemetry and telemetry.get("descriptor_auth"):
+            verdict = telemetry["descriptor_auth"]
+            print(f"  descriptor: {verdict}"
+                  + (f" (epoch {telemetry['descriptor_epoch']})"
+                     if verdict == DESC_AUTHENTICATED else "")
+                  + (" - pass --compat-key to verify it"
+                     if verdict == DESC_NO_KEY else ""))
 
         for label in ("power", "cadence", "speed_mps", "heart_rate_bpm"):
             stats = channel[label]

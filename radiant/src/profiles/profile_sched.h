@@ -186,7 +186,8 @@ struct profile_sched {
 	int8_t                        sched_frame;
 
 	/* The encoded descriptor set, built once at init: at most 128 bytes,
-	 * changing only when the schema does. */
+	 * changing only when the schema does - or, on a sealed node, when
+	 * profile_sched_reseal() re-tags it for a new epoch. */
 	uint8_t frames[PROFILE_TLM_MAX_FRAMES * PROFILE_TLM_FRAME_LEN];
 	uint8_t n_frames;
 
@@ -223,6 +224,56 @@ struct profile_sched {
 int profile_sched_init(struct profile_sched *ps,
 		       const struct profile_sched_cfg *cfg);
 
+/*
+ * The same, for a node whose descriptor announces X_CONF or X_AUTH: the set
+ * is encoded with profile_desc_encode_auth(), authentication frame last, into
+ * the same 16-frame buffer (sealing costs no RAM). cfg->desc must not be NULL.
+ *
+ * Returns 0, or whatever profile_desc_encode_auth() refused - including
+ * -ENOTSUP from a build without CONFIG_RADIANT_SEC, and -EINVAL for a
+ * descriptor with no transform bit (profile_sched_init() is the path for it).
+ *
+ * A separate function rather than a field in the config, so a standard device
+ * - which calls profile_sched_init() - never references the sealed encoder
+ * and --gc-sections drops it.
+ *
+ * TWO RULES THE NODE APPLICATION OWNS:
+ *
+ *   1. RESEAL ON EVERY EPOCH CHANGE. The tag binds the epoch, so call
+ *      profile_sched_reseal() after every radiant_sec_set_epoch(), and when
+ *      radiant_sec_get_state() shows the epoch advanced on a counter wrap.
+ *      Until it does, the descriptor fails verification at every keyed
+ *      receiver - the safe failure, but a failure.
+ *   2. THE LOCK. init_auth and reseal run a KDF and a CMAC on the software
+ *      AES's single key schedule, so they must run under the same lock as
+ *      every other radiant_sec call (api_lock in the applications) - the
+ *      hazard TODO item 8 records for the host commands.
+ *
+ * And one refusal: profile_sched_set_downlink() returns -ENOTSUP on a sealed
+ * set, because re-phasing the schedule frame per transmission would change
+ * a MAC'd body. A sealed node announcing a downlink window announces it with
+ * the phase it was encoded with.
+ */
+int profile_sched_init_auth(struct profile_sched *ps,
+			    const struct profile_sched_cfg *cfg,
+			    const struct profile_desc_auth *a);
+
+/*
+ * Re-encode a sealed set for a new epoch (or a new epoch_is_time), in place.
+ *
+ * Refuses (-EINVAL) a set that was not sealed and a re-encode whose frame
+ * count differs - a different shape is a schema change, which is
+ * profile_sched_init_auth()'s job. A refusal leaves the set on the air as it
+ * was. If a burst is in progress it restarts from frame 0, so no receiver can
+ * assemble a set that mixes the two epochs.
+ *
+ * Leave the descriptor's own `epoch` zero: the sealed encoder refuses one
+ * that disagrees with a->epoch. Same lock rule as profile_sched_init_auth().
+ * Uses 128 bytes of stack for the scratch copy.
+ */
+int profile_sched_reseal(struct profile_sched *ps,
+			 const struct profile_desc_auth *a);
+
 /* Install or replace the client. NULL removes it. */
 int profile_sched_set_client(struct profile_sched *ps,
 			     const struct profile_sched_client *client);
@@ -233,6 +284,10 @@ int profile_sched_set_client(struct profile_sched *ps,
  * -ENOENT when the configured descriptor carries no schedule frame - a caller
  * that thinks it announced a window and did not, worth catching at start-up
  * rather than a downlink that silently never opens.
+ *
+ * -ENOTSUP on a sealed set (profile_sched_init_auth()): the schedule frame is
+ * covered by the authentication frame's MAC, and a phase rewritten per
+ * transmission would fail verification every time.
  */
 int profile_sched_set_downlink(struct profile_sched *ps,
 			       const struct profile_sched_downlink *dl);

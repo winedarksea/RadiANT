@@ -3096,6 +3096,10 @@ class TlmDescriptor:
     # a dataclass default is evaluated at import time.
     clock_accuracy: int = 0
     schedule: object = None      # a TlmSchedule, or None for no schedule frame
+    # Receiver-side only, never encoded and never compared: True when the set
+    # this came from carried a descriptor authentication frame that verified.
+    # Only decode_tlm_descriptor(..., auth=...) sets it.
+    authenticated: bool = dataclasses.field(default=False, compare=False)
 
     @property
     def field_area_bits(self) -> int:
@@ -3107,20 +3111,30 @@ class TlmDescriptor:
     def may_decode_data(self) -> bool:
         """The forward-compatibility rule, in one place.
 
-        False when ANY transform bit is set, because v1 implements none of
-        them. A receiver that gets False has still learned the node's identity,
-        period, RF index and schema - fail closed means "do not decode", not
-        "do not listen".
+        False when reserved transform bit 5 or 4 is set (nothing implements
+        them). With X_CONF or X_AUTH, True only when `authenticated` - the
+        schema's authentication frame verified. With no transform, True.
+
+        True is about the SCHEMA: the data bytes must still have come through
+        the secured receive path, decrypted and carrying a verdict, and gating
+        each packet on that verdict is the caller's job. A receiver that gets
+        False has still learned the node's identity, period, RF index and
+        schema - fail closed means "do not decode", not "do not listen".
         """
-        return not self.flags & TLM_FLAG_TRANSFORM_MASK
+        if self.flags & (TLM_FLAG_RSVD_5 | TLM_FLAG_RSVD_4):
+            return False
+        if self.flags & TLM_FLAG_TRANSFORM_MASK:
+            return self.authenticated
+        return True
 
     @property
     def frame_count(self) -> int:
-        # Two header frames, the schedule frame if the node sends one, then one
-        # per field. No descriptor authentication frame in v1 (no transform in
-        # v1); when there is one it takes the last slot, so the schedule frame
-        # takes index 2 rather than the end.
-        return 2 + (1 if self.schedule is not None else 0) + len(self.fields)
+        # Two header frames, the schedule frame if the node sends one, one per
+        # field, then the descriptor authentication frame whenever a transform
+        # bit is set. The authentication frame takes the last slot, so the
+        # schedule frame takes index 2 rather than the end.
+        return (2 + (1 if self.schedule is not None else 0) + len(self.fields)
+                + (1 if self.flags & TLM_FLAG_TRANSFORM_MASK else 0))
 
     @property
     def clock_ppm(self) -> int:
@@ -3232,7 +3246,109 @@ def _tlm_validate(d: TlmDescriptor) -> None:
             raise ValueError("the scale exponent is an int8")
 
 
-def encode_tlm_descriptor(d: TlmDescriptor) -> list:
+# ---------------------------------------------------------------------------
+# The descriptor authentication frame - radiant-telemetry.md section 6,
+# radiant-security.md 5.3. The last frame of any set announcing a transform:
+#
+#   tag = CMAC(KDF(K_root, "auth", epoch, base_devnum),
+#              nonce_block(epoch, devnum, schema_id, 0x03) || bodies)[0..5]
+#
+# bodies = bytes [2..7] of every frame before it, as on air. The MAC itself is
+# tools/radiant_crypto.py's desc_auth_tag(); this module frames, and reaches
+# for that one function lazily so importing ant_pages still pulls in no
+# cryptography.
+# ---------------------------------------------------------------------------
+
+TLM_AUTH_TAG_LEN = 6
+# How far forward a receiver searches for an epoch frame 1 does not carry.
+TLM_AUTH_EPOCH_SPAN = 16
+
+
+@dataclasses.dataclass
+class TlmDescAuth:
+    """What sealing or verifying a descriptor set needs.
+
+    `devnum` is the on-air device number (the nonce's), `base_devnum` the
+    provisioned one (the KDF's). `epoch` is the REAL epoch; frame 1 carries it
+    only when `epoch_is_time` (TODO item 4), zero otherwise. A receiver's
+    epoch and epoch_is_time are ignored - the epoch is what it searches for.
+    """
+    k_root: bytes
+    devnum: int
+    base_devnum: int
+    epoch: int = 0
+    epoch_is_time: bool = False
+
+
+def _desc_auth_mac(auth: TlmDescAuth, epoch: int, frames) -> bytes:
+    import importlib
+    import os
+    import sys
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    rc = importlib.import_module("radiant_crypto")
+    return rc.desc_auth_tag(auth.k_root, epoch, auth.devnum, auth.base_devnum,
+                            frames[0][3], [bytes(f[2:8]) for f in frames[:-1]])
+
+
+def _tlm_check_transforms(d: TlmDescriptor) -> None:
+    """profile_telemetry.c's check_transforms(), for a sealed set."""
+    if d.flags & (TLM_FLAG_RSVD_5 | TLM_FLAG_RSVD_4):
+        raise ValueError("transform bits 5 and 4 are reserved and specified "
+                         "by nothing")
+    if not d.flags & TLM_FLAG_TRANSFORM_MASK:
+        raise ValueError("nothing to seal: no transform bit is set")
+    if d.flags & TLM_FLAG_X_AUTH and d.flags & TLM_FLAG_SPARSE:
+        raise ValueError("X_AUTH with the sparse flag never verifies: the "
+                         "spread tag lags one window (TODO item 7)")
+
+
+def tlm_desc_auth_tag(frames, auth: TlmDescAuth, epoch: int | None = None
+                      ) -> bytes:
+    """The tag over a complete set's first n-1 frames, under `epoch`
+    (default: auth.epoch)."""
+    frames = [bytes(f[:RADIANT_TLM_FRAME_LEN]) for f in frames]
+    if not 3 <= len(frames) <= RADIANT_TLM_MAX_FRAMES:
+        raise ValueError("a sealed set is 3..16 frames")
+    return _desc_auth_mac(auth, auth.epoch if epoch is None else epoch, frames)
+
+
+def tlm_desc_auth_verify(frames, auth: TlmDescAuth,
+                         epoch: int | None = None) -> bool:
+    import hmac
+    frames = [bytes(f[:RADIANT_TLM_FRAME_LEN]) for f in frames]
+    want = tlm_desc_auth_tag(frames, auth, epoch)
+    return hmac.compare_digest(want, frames[-1][2:8])
+
+
+def tlm_desc_auth_find_epoch(frames, auth: TlmDescAuth, from_epoch: int = 0,
+                             span: int = TLM_AUTH_EPOCH_SPAN) -> int | None:
+    """profile_desc_auth_find_epoch(): the epoch the set was MAC'd under, or
+    None.
+
+    Frame 1 carrying a non-zero epoch is verified under exactly that one and
+    refused below `from_epoch` (a recording). Frame 1 carrying zero is
+    searched forward, from_epoch .. from_epoch + span inclusive. NEVER
+    backwards - that is the whole of the replay guard.
+    """
+    frames = [bytes(f[:RADIANT_TLM_FRAME_LEN]) for f in frames]
+    shown = int.from_bytes(frames[1][4:8], "little")
+    if shown:
+        if shown < from_epoch:
+            return None
+        return shown if tlm_desc_auth_verify(frames, auth, shown) else None
+    for k in range(span + 1):
+        epoch = from_epoch + k
+        if epoch > 0xFFFFFFFF:
+            break
+        if tlm_desc_auth_verify(frames, auth, epoch):
+            return epoch
+    return None
+
+
+def encode_tlm_descriptor(d: TlmDescriptor,
+                          auth: TlmDescAuth | None = None) -> list:
     """The whole descriptor set, as a list of 8-byte frames.
 
         [0] 0x00                       page number
@@ -3242,15 +3358,28 @@ def encode_tlm_descriptor(d: TlmDescriptor) -> list:
     Byte [1] is a FRAME INDEX and not a counter - one of the two documented
     exceptions to the counter invariant of section 4.
 
-    A transform bit is REFUSED rather than emitted: section 6 makes the
-    descriptor authentication frame mandatory alongside one, this build cannot
-    produce that frame, and a transform announced without it gets an attacker
-    wrong readings out of correctly authenticated packets. Checked before field
-    validation, since X_AUTH shrinks the field area.
+    Without `auth`, a transform bit is REFUSED rather than emitted: section 6
+    makes the descriptor authentication frame mandatory alongside one, and a
+    transform announced without it gets an attacker wrong readings out of
+    correctly authenticated packets. Checked before field validation, since
+    X_AUTH shrinks the field area.
+
+    With `auth` the set is SEALED: profile_desc_encode_auth()'s rules (a
+    transform bit required, bits 5/4 refused, X_AUTH with sparse refused,
+    d.epoch 0 or auth.epoch), frame 1's epoch only when auth.epoch_is_time,
+    and the authentication frame last.
     """
-    if d.flags & TLM_FLAG_TRANSFORM_MASK:
-        raise ValueError("v1 announces no transform: there is no descriptor "
-                         "authentication frame to go with it")
+    f1_epoch = d.epoch
+    if auth is None:
+        if d.flags & TLM_FLAG_TRANSFORM_MASK:
+            raise ValueError("a transform needs the descriptor authentication "
+                             "frame, and that needs a key: pass auth")
+    else:
+        _tlm_check_transforms(d)
+        if d.epoch not in (0, auth.epoch):
+            raise ValueError("the descriptor's epoch and the sealing epoch "
+                             "disagree")
+        f1_epoch = auth.epoch if auth.epoch_is_time else 0
     _tlm_validate(d)
 
     count = d.frame_count
@@ -3280,10 +3409,10 @@ def encode_tlm_descriptor(d: TlmDescriptor) -> list:
             d.heartbeat_s,
             (d.w_code << 6) | (d.k_code << 4)
             | tlm_sched_clk_nibble(d.clock_accuracy, d.clock_stated),
-            d.epoch & 0xFF,
-            (d.epoch >> 8) & 0xFF,
-            (d.epoch >> 16) & 0xFF,
-            (d.epoch >> 24) & 0xFF,
+            f1_epoch & 0xFF,
+            (f1_epoch >> 8) & 0xFF,
+            (f1_epoch >> 16) & 0xFF,
+            (f1_epoch >> 24) & 0xFF,
         ]),
     ]
 
@@ -3305,14 +3434,33 @@ def encode_tlm_descriptor(d: TlmDescriptor) -> list:
             f.bit_offset,
         ]))
 
+    if auth is not None:
+        # The authentication frame, last. Its tag covers every body above,
+        # frame 1 as it went on the air, under the REAL epoch.
+        frames.append(head(count - 1) + bytes(TLM_AUTH_TAG_LEN))
+        frames[-1] = head(count - 1) + tlm_desc_auth_tag(frames, auth)
+
     return frames
 
 
-def decode_tlm_descriptor(frames) -> TlmDescriptor:
+def decode_tlm_descriptor(frames, auth: TlmDescAuth | None = None,
+                          from_epoch: int = 0,
+                          span: int = TLM_AUTH_EPOCH_SPAN):
     """Turn a complete, in-order frame set back into a schema.
 
     The Phase E gate: given nothing but eight bytes at a time off the air,
     produce the schema, with no registry lookup and no out-of-band knowledge.
+
+    A transform bit is not an error: the schema decodes WITHOUT A KEY (the
+    last frame is then the authentication frame, skipped here), so a receiver
+    keeps the node's identity while may_decode_data refuses its data.
+
+    With `auth`, returns (descriptor, epoch): for a set announcing X_CONF or
+    X_AUTH the epoch is recovered with tlm_desc_auth_find_epoch() and
+    descriptor.authenticated says whether it verified (epoch None if not).
+    A plain set returns (descriptor, None) with authenticated False. A failed
+    verification is not raised - the schema is still the node's identity.
+    Without `auth`, returns the descriptor alone, as it always has.
     """
     frames = [bytes(f[:RADIANT_TLM_FRAME_LEN]) for f in frames]
     n = len(frames)
@@ -3341,12 +3489,20 @@ def decode_tlm_descriptor(frames) -> TlmDescriptor:
                          "descriptor - a different frame set, not 15 fields")
     # THE SHAPE OF THE SET, DERIVED RATHER THAN ANNOUNCED. Two header frames
     # plus one per field is the set as it was; one extra frame is the schedule
-    # frame at index 2. No presence bit was spent on this: the count byte and
-    # field count already say it, and a bit that could disagree with the
-    # arithmetic would let a node describe a set it did not send.
-    if n == 2 + n_fields:
+    # frame at index 2, and a transform bit puts the authentication frame
+    # last. No presence bit was spent on this: the count byte, field count and
+    # flags already say it, and a bit that could disagree with the arithmetic
+    # would let a node describe a set it did not send.
+    flags = frames[0][7]
+    sealed = bool(flags & TLM_FLAG_TRANSFORM_MASK)
+    if sealed and flags & TLM_FLAG_X_AUTH and flags & TLM_FLAG_SPARSE:
+        # check_transforms()'s malformed case. Reserved bits 5/4 are not
+        # malformed: the schema still decodes and may_decode_data refuses.
+        raise ValueError("X_AUTH with the sparse flag: no encoder emits it")
+    sealed_extra = 1 if sealed else 0
+    if n == 2 + n_fields + sealed_extra:
         base = 2
-    elif n == 3 + n_fields:
+    elif n == 3 + n_fields + sealed_extra:
         base = 3
     else:
         raise ValueError("the field count and the frame count disagree")
@@ -3396,7 +3552,13 @@ def decode_tlm_descriptor(frames) -> TlmDescriptor:
         schedule=schedule,
     )
     _tlm_validate(d)
-    return d
+    if auth is None:
+        return d
+    if not d.flags & (TLM_FLAG_X_CONF | TLM_FLAG_X_AUTH):
+        return d, None
+    epoch = tlm_desc_auth_find_epoch(frames, auth, from_epoch, span)
+    d.authenticated = epoch is not None
+    return d, epoch
 
 
 class TlmDescriptorRx:
@@ -3453,11 +3615,16 @@ class TlmDescriptorRx:
     def complete(self) -> bool:
         return bool(self.count) and len(self.frames) == self.count
 
-    def take(self) -> TlmDescriptor:
+    def take(self, auth: TlmDescAuth | None = None, from_epoch: int = 0,
+             span: int = TLM_AUTH_EPOCH_SPAN):
+        """Decode the assembled set. With `auth`, returns (descriptor, epoch)
+        exactly as decode_tlm_descriptor() does - the verified take."""
         if not self.complete:
             raise ValueError("the descriptor set is incomplete")
-        return decode_tlm_descriptor([self.frames[i]
-                                      for i in range(self.count)])
+        frames = [self.frames[i] for i in range(self.count)]
+        if auth is None:
+            return decode_tlm_descriptor(frames)
+        return decode_tlm_descriptor(frames, auth, from_epoch, span)
 
 
 # ---------------------------------------------------------------------------
@@ -4029,13 +4196,18 @@ class TlmPageScheduler:
     """
 
     def __init__(self, descriptor: TlmDescriptor | None, builders: dict,
-                 common_82_every: int = 0, client=None):
+                 common_82_every: int = 0, client=None,
+                 auth: TlmDescAuth | None = None):
         self.desc = descriptor
         self.builders = builders
         self.common_82_every = common_82_every
         self.client = client
 
-        self.frames = (encode_tlm_descriptor(descriptor)
+        # `auth` seals the set (profile_sched_init_auth()); reseal() re-tags
+        # it for a new epoch.
+        if auth is not None and descriptor is None:
+            raise ValueError("a family with no descriptor has nothing to seal")
+        self.frames = (encode_tlm_descriptor(descriptor, auth)
                        if descriptor is not None else [])
         self.pages = descriptor.data_pages if descriptor is not None else []
         self.page_cursor = 0
@@ -4078,6 +4250,25 @@ class TlmPageScheduler:
         command 0x06, or a heartbeat."""
         if self.frames:
             self.burst = True
+            self.burst_index = 0
+
+    def reseal(self, auth: TlmDescAuth) -> None:
+        """profile_sched_reseal(): re-tag a sealed set for a new epoch.
+
+        Refuses a set that was not sealed and a re-encode of a different
+        size (a schema change, which is a new scheduler's job). A burst in
+        progress restarts from frame 0, so no receiver assembles a set that
+        mixes the two epochs.
+        """
+        if (self.desc is None or not self.frames
+                or not self.desc.flags & TLM_FLAG_TRANSFORM_MASK):
+            raise ValueError("not a sealed set: nothing to reseal")
+        frames = encode_tlm_descriptor(self.desc, auth)
+        if len(frames) != len(self.frames):
+            raise ValueError("a reseal that changes the frame count is a "
+                             "schema change")
+        self.frames = frames
+        if self.burst:
             self.burst_index = 0
 
     def post_event(self, page: int) -> None:

@@ -248,6 +248,38 @@ class TestTransforms(unittest.TestCase):
                          rc.spread_tag(k_auth, self.EPOCH, self.DEVNUM, 0, b))
 
 
+class TestDescriptorAuthTag(unittest.TestCase):
+    """desc_auth_tag(), the descriptor authentication frame's MAC.
+
+    The vector is the hidden-epoch set shared with tools/test_ant_pages.py
+    and radiant/tests/src/test_profiles.c (frame 1 shows zero; the tag still
+    binds epoch 0x0001E240)."""
+
+    ROOT = bytes.fromhex("2b7e151628aed2a6abf7158809cf4f3c")
+    BODIES = [bytes.fromhex(b) for b in (
+        "1401ffff3940", "008000000000", "012818fe0100",
+        "02271800010c", "034008000118", "04400800011c")]
+    TAG = bytes.fromhex("9971a7acdfc7")
+
+    def test_the_shared_vector(self):
+        self.assertEqual(rc.desc_auth_tag(self.ROOT, 0x0001E240, 0xC61A,
+                                          0x4D2E, 0x01, self.BODIES),
+                         self.TAG)
+
+    def test_every_input_is_bound(self):
+        args = [self.ROOT, 0x0001E240, 0xC61A, 0x4D2E, 0x01, self.BODIES]
+        for index, other in ((1, 0x0001E241), (2, 0xC61B), (3, 0x4D2F),
+                             (4, 0x02), (5, self.BODIES[:-1])):
+            with self.subTest(index=index):
+                changed = list(args)
+                changed[index] = other
+                self.assertNotEqual(rc.desc_auth_tag(*changed), self.TAG)
+
+    def test_a_body_is_six_bytes(self):
+        with self.assertRaises(ValueError):
+            rc.desc_auth_tag(self.ROOT, 1, 1, 1, 1, [bytes(8)])
+
+
 class TestWindowArithmetic(unittest.TestCase):
     """D2: the window is derived from the counter, never from arrival order."""
 
