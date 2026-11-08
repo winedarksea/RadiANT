@@ -510,3 +510,118 @@ defaults 4242/4243 were safe (run 4).
 - Done when a test_node_ident case gives 5d00..00 then a good key from
   tests/fake_rng.c and the second key is the one persisted. Note the rule in ADR
   0020.
+
+# Beta cleanup from the 2026-11-08 reviewer pass
+
+No production devices exist yet, so these only remove code nothing needs. All
+were checked by reading the code at 1a6c8fa; nothing here has been built or run.
+Considered and left out (decided 2026-11-08): renaming the ANTW_* aliases to
+RADIANT_WIRE_* (about 1,300 changed lines to remove one generated header), and
+making tools/ant_health.py reject other versions (see item 2).
+
+## 1. [FIRMWARE, Matter, LOW] Turn off the version-1 bridge storage migration
+`CONFIG_BRIDGE_MIGRATE_VERSION_1` defaults to y
+(apps/dongle_thread/src/matter/Kconfig:86), but this application has only ever
+stored version 2 (`kCurrentVersion`), so the code looks for data that cannot
+exist. Pre-2.7 migration is already off, and a fresh boot takes the same path.
+- Task: drop the `default y` and rewrite the help text, which explains why it
+  was left on. Update the table at docs/matter-bringup.md:595.
+- Leave the vendored bridge_storage_manager.cpp alone. Its #ifdefs already
+  exclude the code, and that keeps vendor updates simple.
+- Done when a Matter build's .config has it unset, nm shows no
+  `MigrateDataVersion1`, and a bound sensor's row survives a reboot on hardware.
+
+## 2. [DOCS, LOW] Version comments contradict the pinned-at-1 rule
+During beta every structure version stays 1, even when a field is added
+(decided 2026-11-08). Readers tell which fields exist from the body length.
+These still say to bump it:
+- protocol/ant_wire.yaml:1890 (0xF4) and :1949 (0xF6);
+- apps/common/ant_health.c:116;
+- tools/ant_health.py:66, and the "older firmware" reasoning in `decode()` at :102.
+
+Task: correct the text and run scripts/gen_ant_wire.py. Keep decoding regardless
+of version: firmware from 2026-08-16 to 2026-11-07 (before 920eddb) sends version
+2 with the same 30-byte layout, and a version check would reject those boards.
+Post-beta versioning is a separate decision.
+
+## 3. [FIRMWARE, LOW] Make backends state max_addr_groups explicitly
+`max_addr_groups == 0` means "no constraint" for backward compatibility
+(radiant_radio_hal.h:644). The nRF, cc26xx and null backends and both fake_radio
+presets all set it, so the fallback only hides a backend that forgot to.
+- Task: have `radiant_sched` init (radiant_sched.c:2125) refuse 0, the way it
+  already refuses NULL caps. Remove the fallback at radiant_sched.c:300 and its
+  copy at tests/fake_radio.c:1987, and fix the header comment.
+- Done when a ztest shows init failing on a 0 cap instead of the backend
+  returning `RADIANT_RADIO_ENOTSUP` during reception.
+
+## 4. [FIRMWARE, bench, decide before the first production release] Move nRF52/53 to USB_NEXT
+Two USB device classes are maintained because the legacy one has hours on it
+against Zwift (apps/dongle/next.conf:11). The legacy stack is on borrowed time:
+`USB_DEVICE_STACK` does `select DEPRECATED` in NCS v3.4.0
+(zephyr/subsys/usb/device/Kconfig:10). nRF54 boards already have no choice.
+
+Measured on a Feather (docs/backends.md:784): USB_NEXT costs 9.8 KB more flash
+and saves 1.6 KB RAM, with 27 % lower throughput that is still 75x what eight
+channels need.
+- Before switching, on the Pro Micro, compare USB_NEXT with legacy:
+  - a real Zwift session (no Zwift testing of USB_NEXT is recorded);
+  - a byte compare of the descriptors, including endpoint order, because
+    positional hosts depend on it;
+  - ant_probe, ant_scan and bench_usb_stall.py with `next.conf;health.conf`;
+  - USB reboot to bootloader.
+- Then remove apps/common/usb_ant_class.c (745 lines), the USB_LEGACY Kconfig
+  option in apps/dongle and apps/dongle_thread, and next.conf. Update the
+  transports in release.yml, build_all.ps1 and sample.yaml, the board confs, and
+  docs/backends.md.
+- Also remove the two USB transport options and their stack defaults from
+  apps/dongle_ti/Kconfig (:25-31, :44-48). That silicon has no USB, and they
+  exist only to match the shape of the other apps' Kconfig. This part can go first.
+- Check that the 9.8 KB still fits the Matter builds on nRF52840.
+- Done when the checks above match legacy and no release image selects
+  USB_DEVICE_STACK.
+
+## 5. [TOOLS + FIRMWARE, LOW] Delete compatibility shims with no remaining user
+- `RADIANT_BACKEND_MPSL` (radiant/Kconfig:808): no code or config uses it, and
+  it exists only for "an out-of-tree configuration naming the old symbol".
+- `ant_sens.run_ladder()` (tools/ant_sens.py:677): "kept for callers of the old
+  signature", and it has no callers.
+- `EVENT_MARKER` (tools/ant_session.py:94): its own comment says to delete it
+  once ant_sim imports `MESG_EVENT_ID` directly. Switch ant_sim.py:71 and :1137
+  and ant_sens.py:513, then delete it and the note at ant_session.py:57. Change
+  the `source:` text at protocol/ant_wire.yaml:215 and regenerate.
+- scripts/run_ztest_hw.ps1:92 still defaults to NCS v3.2.4, and its help at :70
+  warns that every v3.4.0 run must override it. Default to v3.4.0 and drop the
+  warning.
+- Done when ruff and the Python tests pass, `gen_ant_wire.py --check` is clean,
+  and a ztest run works with no `-NcsVersion`.
+
+## 6. [FIRMWARE, LOW] Remove the finished bisection switches
+`RADIANT_NRF_NO_RADIO0_IRQ`, `RADIANT_NRF_NO_GPPI`, `RADIANT_NRF_NO_HFXO_HOLD`
+and `RADIANT_GATE_MPSL_NO_SESSION` (radiant/Kconfig:524-577, :670-689) came from
+the SDC-assert bisection, which is closed. All are marked diagnostic, and no
+.conf, script or CI job enables any of them. A NO_GPPI build cannot transmit or
+receive at all.
+- Task: delete the symbols and their branches (radiant_radio_nrf.c:2330, :2407,
+  :2706; radiant_radio_nrf_gate_mpsl.c:1598). Git history keeps them. The
+  NO_SESSION help argues for keeping that switch, but the result it found is
+  already written down, so it goes too.
+- Update docs/p4-coexistence-bugs.md:441 so it reads as history.
+- Keep `RADIANT_NRF_RX_DIAG` (the device-number follow-up may need it) and
+  `ANT_DONGLE_PAIRING_WINDOW_AT_BOOT` (in the bench runbook).
+- Done when no reference to the four symbols remains outside history, and the
+  nRF and MPSL gate images still build.
+
+## 7. [REPO, LOW] Move radiant/spike out of the source tree
+Six directories, about 7,300 lines, built by no CI job and mostly documented for
+NCS v3.2.4, so nothing notices if they stop compiling. They do not ship; the gain
+is a source tree holding only maintained code.
+- First promote what is still live: the nRF5340 net-core dongle needs
+  radiant/spike/promisc/appcore programmed alongside it
+  (apps/dongle/boards/nrf5340dk_nrf5340_cpunet.conf:18, .overlay:13), and
+  net_rtt.conf is referenced at :47 of that .conf. Give them a supported path.
+- Check whether radiant/Kconfig:254-257 still needs radiant/spike/ti_phy. It tells
+  readers to rerun that spike before turning on TI COEX.
+- Move the rest to archive/spikes/ and repoint the roughly 20 files that cite
+  them. They are the provenance for measured numbers, so keep them, not delete.
+- Done when scripts/check_links.py passes, the 5340 net-core build still works,
+  and only archive/ and history mention radiant/spike.
