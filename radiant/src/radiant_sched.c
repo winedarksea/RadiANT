@@ -1778,9 +1778,17 @@ static enum step pass_step(radiant_time_t now)
 		} else {
 			/* A receive window whose open has passed is still worth
 			 * arming for the rest of its span, so only the close
-			 * expires it. */
+			 * expires it - and the close must clear the PHY switch,
+			 * exactly as arm_rx_window() computes its open. Otherwise
+			 * a window that can no longer be armed survives here,
+			 * arm_rx_window() returns STEP_SKIP for it, and arm_next()
+			 * ends the pass with the radio idle and every later
+			 * receive unarmed until the next pump (review 2026-10-31,
+			 * A8-4). phy_lead() is 0 on a build without a PHY switch
+			 * to pay for, so this is unchanged there. */
 			expired = !sl->continuous &&
-				  sl->t_end < slot_earliest(sl, earliest);
+				  sl->t_end < slot_earliest(sl, earliest) +
+						      phy_lead(sl->fmt);
 		}
 		if (expired) {
 			slot_clear((uint8_t)i);

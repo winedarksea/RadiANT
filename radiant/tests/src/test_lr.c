@@ -375,6 +375,90 @@ static struct radiant_rx_filter tracking_filter(uint16_t devnum)
 	return f;
 }
 
+/*
+ * A receive window whose close falls inside the PHY switch it needs can no
+ * longer be armed, and must be reported MISSED - not skipped, which ended the
+ * pass with the radio idle and left every later receive unarmed until the next
+ * pump (review 2026-10-31, A8-4). Only reachable with a PHY switch to pay for,
+ * hence the RAIL preset here; phy_lead() is 0 on a build with one PHY.
+ */
+ZTEST(lr, test_a_window_inside_the_phy_switch_is_missed_not_skipped)
+{
+	static struct radiant_rx_filter f1m;
+	static struct radiant_rx_filter flr0;
+	static struct radiant_rx_filter flr1;
+	struct radiant_sched_rx req;
+	const struct fake_radio_arm *rec;
+	radiant_time_t n;
+	uint32_t lead;
+	uint32_t missed0;
+
+	fake_radio_caps_preset_rail();
+	fake_radio_set_phys(fake_phys_1m_lr, fake_phys_1m_lr_count);
+	lead = fake_radio_caps_mut()->min_arm_lead_us;
+	zassert_true(fake_radio_caps_mut()->phy_switch_us > 100u,
+		     "this test needs a backend that pays for a switch");
+
+	zassert_ok(radiant_sched_init(NULL, NULL));
+	zassert_ok(radiant_radio_init(radiant_sched_radio_cbs(), NULL));
+	zassert_ok(radiant_radio_enable());
+
+	f1m = tracking_filter(0x1111u);
+	flr0 = lr_filter(0x2222u);
+	flr1 = lr_filter(0x3333u);
+
+	/* One 1 M window to completion, so the radio's PHY is known: 1 M. */
+	memset(&req, 0, sizeof(req));
+	req.fmt = radiant_frame_format(RADIANT_FRAME_CFG_TRACKING);
+	req.rf_index = RADIANT_RF_INDEX_ANT_PLUS;
+	req.filters = &f1m;
+	req.n_filters = 1u;
+	req.t_open = radiant_radio_now() + 1u;
+	req.t_close = req.t_open + 5000u;
+	zassert_ok(radiant_sched_request_rx(0u, &req));
+	radiant_sched_tick();
+	fake_radio_advance(200000u);
+
+	n = radiant_radio_now();
+	missed0 = radiant_sched_stats_get()->missed;
+
+	/* Channel 1: a coded window well clear of the switch. */
+	memset(&req, 0, sizeof(req));
+	req.fmt = radiant_frame_format(RADIANT_FRAME_CFG_LR);
+	req.rf_index = RADIANT_RF_INDEX_ANT_PLUS;
+	req.filters = &flr1;
+	req.n_filters = 1u;
+	req.t_open = n + 20000u;
+	req.t_close = n + 20200u;
+	zassert_ok(radiant_sched_request_rx(1u, &req));
+
+	/* Channel 0: a coded window whose close is past the plain lead but
+	 * inside lead + switch - it can no longer be opened in time. */
+	memset(&req, 0, sizeof(req));
+	req.fmt = radiant_frame_format(RADIANT_FRAME_CFG_LR);
+	req.rf_index = RADIANT_RF_INDEX_ANT_PLUS;
+	req.filters = &flr0;
+	req.n_filters = 1u;
+	req.t_open = n + lead + 10u;
+	req.t_close = n + lead + 100u;
+	zassert_ok(radiant_sched_request_rx(0u, &req));
+
+	radiant_sched_tick();
+
+	zassert_equal(missed0 + 1u, radiant_sched_stats_get()->missed,
+		      "the window inside the PHY switch was not reported MISSED");
+	rec = fake_radio_last_arm();
+	zassert_not_null(rec, NULL);
+	zassert_equal(n + 20000u, rec->t_open,
+		      "the pass ended idle instead of arming the next window "
+		      "(last arm opened at %u)", (unsigned)(rec->t_open - n));
+	zassert_equal(RADIANT_PHY_LR_CODED, rec->fmt.phy, NULL);
+
+	(void)radiant_sched_cancel(0u);
+	(void)radiant_sched_cancel(1u);
+	fake_radio_advance(100000u);
+}
+
 ZTEST(lr, test_a_change_of_phy_is_budgeted_and_a_repeat_is_not)
 {
 	static struct radiant_rx_filter f1m;
