@@ -109,6 +109,12 @@ macOS or Linux, `scripts/flash_uf2.sh path/to/radiant_dongle_promicro.uf2`
 finds any of these drives; on Windows pass
 `scripts\flash_uf2.ps1 -Uf2Path path\to\radiant_dongle_promicro.uf2 -VolumeLabel NICENANO`.
 
+Once a release image with this feature is on the board, later reflashes need no
+shorting: `python tools/ant_probe.py --reboot-to-bootloader` reboots it into the
+same drive over USB. Any software on the host that can open the device can send
+that request, so a Pro Micro running these images can be reflashed by whatever
+it is plugged into.
+
 The catch is that these are not one board. What they have in common is a
 schematic; what they leave off varies by seller, and the **32.768 kHz crystal
 is the part most likely to be missing** — it is exactly the component a $2 board

@@ -464,7 +464,7 @@ def main() -> int:
     parser.add_argument(
         "--reboot-to-bootloader", action="store_true",
         help="reboot the dongle into its UF2 bootloader instead of probing it "
-             "(needs an image built with uf2_reboot.conf)",
+             "(Pro Micro release images, or a build with uf2_reboot.conf)",
     )
     args = parser.parse_args()
     verbose = not args.quiet

@@ -13,6 +13,12 @@ reads.
 
 ### Added
 
+- **Pro Micro images reboot into their UF2 bootloader over USB.**
+  `python tools/ant_probe.py --reboot-to-bootloader` mounts the drive with no
+  RST-to-GND short. On in both Pro Micro release images and asserted at build
+  time; other boards opt in with `apps/dongle/uf2_reboot.conf`. Any software on
+  the host that can open the device can now put these boards into a writable
+  bootloader with no physical access.
 - **Acknowledged data works on MPSL builds.** Until `c3bc9e6` acked transfers
   never completed on a Thread/BLE-coexisting image: the scheduler lead was
   wrong, a grant was released before its callback ran, and master reserves

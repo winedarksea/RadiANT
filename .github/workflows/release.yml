@@ -148,6 +148,10 @@ jobs:
             package: uf2
             offset: "0x26000"
             release: true
+            assert_config: |
+              # Most of these boards have no RESET button. Without this
+              # every reflash means shorting RST to GND twice.
+              CONFIG_ANT_DONGLE_UF2_REBOOT_REQUEST=y
           # The Pro Micro sold without the 32.768 kHz crystal. Same image, a
           # synthesized low-frequency clock.
           - name: "core: promicro, synth clock"
@@ -159,6 +163,10 @@ jobs:
             package: uf2
             offset: "0x26000"
             release: true
+            assert_config: |
+              # Most of these boards have no RESET button. Without this
+              # every reflash means shorting RST to GND twice.
+              CONFIG_ANT_DONGLE_UF2_REBOOT_REQUEST=y
           # ── Everything below is built to keep it compiling ────────────────
           #
           # Not a shipping image. The nRF54 targets can only use the new USB
