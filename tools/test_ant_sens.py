@@ -415,6 +415,39 @@ class TestSeveralReceivers(unittest.TestCase):
         self.assertEqual([s["loss_pct"] for s in out.values()],
                          [1.0, 2.0, 3.0])
 
+    def test_settle_drains_every_receiver_so_no_stale_frames_reach_the_rung(self):
+        # TODO.md Garmin item 4: frames queued during the settle were counted
+        # in the next rung (34 packets for 32 sent) with a counter gap behind
+        # them, read as 17.5 % loss. A bare sleep leaves the queue full.
+        import time
+
+        class Reader:
+            def __init__(self):
+                self.queue = [b"stale"] * 10
+
+            def next_frame(self, deadline):
+                if self.queue:
+                    return (0x4E, self.queue.pop(0))
+                time.sleep(max(0.0, min(0.01, deadline - time.monotonic())))
+                return None
+
+        class Master:
+            def set_power(self, level, custom):
+                return True
+
+        readers = [Reader(), Reader()]
+        seen = []
+
+        def fake(dev, reader, channel, profile, seconds, master, verbose):
+            seen.append(len(reader.queue))
+            return {"loss_pct": 0.0, "loss_basis": "event_counter",
+                    "packets": 1, "rssi_dbm_mean": None, "rssi_samples": 0}
+
+        ant_sens.run_ladder_multi([("a", 1, readers[0]), ("b", 2, readers[1])],
+                                  0, "power", [4], None, 1.0, 0.3, Master(),
+                                  False, measure=fake)
+        self.assertEqual(seen, [0, 0])
+
     def test_one_receiver_failing_does_not_take_the_rung_down(self):
         def fake(dev, *_):
             if dev == "bad":

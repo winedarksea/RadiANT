@@ -633,6 +633,40 @@ def measure_rung_all(receivers: list[tuple[str, object, object]], channel: int,
     return {name: out[name] for name, _, _ in receivers}
 
 
+def drain_all(receivers: list[tuple[str, object, object]],
+              seconds: float) -> None:
+    """Read and discard every receiver's frames for `seconds`, concurrently.
+
+    The settle period after a power change used to be a bare sleep, so each
+    receiver went on receiving into its transport queue with nobody reading.
+    The queue is bounded: it kept the oldest frames and dropped the rest, so the
+    next rung's first reads were stale frames from the settle (hence 34 packets
+    against 32 sent) followed by a counter gap of about one settle's worth of
+    slots, which the exact-loss rule read as 7 of 40 lost (17.5 %) with 0
+    RX_FAIL. Reading through the settle leaves nothing stale at the rung's
+    start. One thread per receiver, each blocking on its own reader, because a
+    short per-read timeout on USB can lose a frame (ant_probe.READ_TIMEOUT_MS).
+    """
+    if seconds <= 0:
+        return
+    end = time.monotonic() + seconds
+
+    def one(reader):
+        try:
+            while time.monotonic() < end:
+                reader.next_frame(end)
+        except Exception:  # noqa: BLE001 - the measurement will report a dead port
+            pass
+
+    threads = [threading.Thread(target=one, args=(reader,), daemon=True,
+                                name=f"ant-sens-drain-{name}")
+               for name, _, reader in receivers]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+
 def run_ladder_multi(receivers: list[tuple[str, object, object]], channel: int,
                      profile: str, rungs: list[int], part: str | None,
                      seconds: float, settle: float, master: MasterDriver,
@@ -653,7 +687,8 @@ def run_ladder_multi(receivers: list[tuple[str, object, object]], channel: int,
             continue
         # Give the master a slot or two at the new power before anything is
         # counted. A rung that includes the change includes a partial rung.
-        time.sleep(settle)
+        # Reading, not sleeping: see drain_all().
+        drain_all(receivers, settle)
         rung = measure_rung_all(receivers, channel, profile, seconds, master,
                                 verbose, measure)
         for name, step in rung.items():
