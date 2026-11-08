@@ -635,6 +635,7 @@ class FitnessEquipmentIsNotBicyclePower(unittest.TestCase):
         self.assert_no_false_fail(summary)
 
 
+@unittest.skipIf(ant_verify is None, "pyusb is not installed")
 class SealedTelemetryDescriptor(unittest.TestCase):
     """A 0x60 node's descriptor authentication frame, as the analyser sees it.
 
