@@ -183,21 +183,13 @@ static void api_before(void *f)
 	n_msg = 0u;
 }
 
-/* Whole-suite form of the api_lock rule (TODO security item 8): no test, and
- * nothing the event thread did during it, may reach a radiant_sec entry point
- * without the lock. Only builds with the check on (CONFIG_ASSERT, or the sec
- * scenarios, which ask for it) count anything. */
-static void api_after(void *f)
-{
-	ARG_UNUSED(f);
-#if defined(CONFIG_RADIANT_SEC_LOCK_CHECK)
-	zassert_equal(0u, antr_api_lock_violations,
-		      "%u radiant_sec call(s) reached without api_lock",
-		      (unsigned)antr_api_lock_violations);
-#endif
-}
-
-ZTEST_SUITE(api, NULL, api_setup, api_before, api_after, NULL);
+/* The whole-suite form of the api_lock rule (TODO security item 8) is the
+ * assertion itself: in a build with CONFIG_ASSERT (radiant.api.sec and the
+ * ASSERT run of sec_host) any radiant_sec call without the lock halts the
+ * image, in any test and on the event thread. Not an after() hook: a failing
+ * after() makes ztest SKIP every test behind it and still report the suite as
+ * passed, which is a worse signal than the halt. */
+ZTEST_SUITE(api, NULL, api_setup, api_before, NULL, NULL);
 
 /* Close the channel first: a live channel keeps the radio armed forever
  * (correct behaviour), which would make an unconditional is_idle() a false
