@@ -3185,11 +3185,17 @@ static int program_rx(const struct radiant_rx_req *req)
 			(radiant_time_t)tail);
 	}
 
-	/* Event cleared and start connection enabled BEFORE the compare is
-	 * written - see start_compare_missed(). The endpoints were wired at
-	 * init; only the enable is per operation. A stale CC_START left by an
-	 * aborted window can only match inside these few instructions, and the
-	 * worst that does is open this window a moment early. */
+	/*
+	 * The order is what start_compare_missed() relies on. Park first: a
+	 * stale CC_START left by an aborted window may be just ahead of the
+	 * counter, and half a wrap away from start_cc cannot match in the few
+	 * instructions before the real write. Then clear the event, which also
+	 * takes away anything that stale value raised before it was parked,
+	 * and enable the connection, so that the only compare able to set the
+	 * event from here on is the real one and it finds TASKS_RXEN wired.
+	 * The endpoints were wired at init; only the enable is per operation.
+	 */
+	nrf_timer_cc_set(TIMER_ADDR, CC_START, start_cc - 0x80000000u);
 	nrf_timer_event_clear(TIMER_ADDR, nrf_timer_compare_event_get(CC_START));
 	nrfx_gppi_conn_enable(radiant_op.conn_start);
 	nrf_timer_cc_set(TIMER_ADDR, CC_START, start_cc);
