@@ -17,11 +17,13 @@
 # shrink and needs a reason in the commit message.
 
 # Twister scenarios across radiant/tests, radiant/tests/api,
-# radiant/tests/gate, apps/hrm_ble/tests/sim_sched, apps/treadmill/tests/pages
-# and apps/treadmill/tests/hr_rx. Counted from the six testcase.yaml files:
-# radiant.unit, radiant.unit.sec_modes, radiant.unit.no_pairing, radiant.api,
+# radiant/tests/gate, apps/hrm_ble/tests/sim_sched, apps/treadmill/tests/pages,
+# apps/treadmill/tests/hr_rx and apps/trainer/tests/model. Counted from the
+# seven testcase.yaml files: radiant.unit, radiant.unit.sec_modes,
+# radiant.unit.no_pairing, radiant.unit.ack_faults, radiant.api,
 # radiant.api.sec, radiant.api.sec_host, radiant.api.crc_repair, radiant.gate,
-# hrm_ble.sim_sched, treadmill.pages, treadmill.hr_rx. (2026-10-31 review:
+# hrm_ble.sim_sched, treadmill.pages, treadmill.hr_rx, trainer.model - the 13
+# that min_scenarios below asserts. (2026-10-31 review:
 # radiant.api.crc_repair - the first scenario that compiles the CRC-repair path
 # at all; treadmill.hr_rx - the HR slave against a stub antr_*; and
 # radiant.unit.pairing renamed no_pairing, now the build of the shipped
