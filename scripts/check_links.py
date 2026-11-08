@@ -38,6 +38,7 @@ check_license.py, which are its neighbours in the host-tests job.
 from __future__ import annotations
 
 import argparse
+import functools
 import re
 import sys
 from pathlib import Path
@@ -55,6 +56,24 @@ SKIP_DIRS = {
     "dist",
 }
 SKIP_DIR_PREFIXES = ("build", "twister-out")
+
+
+# A virtualenv under any name other than .venv - venv/, env/, venv312/ - holds
+# thousands of third-party files, none of them ours. Every venv has a
+# pyvenv.cfg at its root whatever it is called, so detect that rather than
+# guessing names.
+@functools.cache
+def _is_venv(directory: Path) -> bool:
+    return (directory / "pyvenv.cfg").is_file()
+
+
+def in_virtualenv(parts: tuple[str, ...]) -> bool:
+    directory = REPO
+    for part in parts[:-1]:
+        directory = directory / part
+        if _is_venv(directory):
+            return True
+    return False
 
 # [text](target) - the target group stops at whitespace or the closing paren so
 # that a title (`[t](p "title")`) does not end up in the path.
@@ -102,6 +121,8 @@ def iter_markdown() -> list[Path]:
         if any(p in SKIP_DIRS for p in parts):
             continue
         if any(p.startswith(SKIP_DIR_PREFIXES) for p in parts[:-1]):
+            continue
+        if in_virtualenv(parts):
             continue
         out.append(path)
     return out

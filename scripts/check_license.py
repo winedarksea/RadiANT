@@ -25,6 +25,7 @@ is the neighbouring check in the same job.
 
 from __future__ import annotations
 
+import functools
 import sys
 from pathlib import Path
 
@@ -59,6 +60,24 @@ SKIP_DIRS = {
 # prefix test because the tree carries build/, build_p4 output dirs and
 # twister-out/ all at once.
 SKIP_DIR_PREFIXES = ("build", "twister-out")
+
+
+# A virtualenv under any name other than .venv - venv/, env/, venv312/ - holds
+# thousands of third-party files, none of them ours. Every venv has a
+# pyvenv.cfg at its root whatever it is called, so detect that rather than
+# guessing names.
+@functools.cache
+def _is_venv(directory: Path) -> bool:
+    return (directory / "pyvenv.cfg").is_file()
+
+
+def in_virtualenv(parts: tuple[str, ...]) -> bool:
+    directory = REPO
+    for part in parts[:-1]:
+        directory = directory / part
+        if _is_venv(directory):
+            return True
+    return False
 
 # Files exempt from the SPDX rule, each with the reason. An entry here is a
 # claim that needs to survive review - "it was awkward" is not one.
@@ -131,6 +150,8 @@ def iter_sources():
         if any(part in SKIP_DIRS for part in parts):
             continue
         if any(part.startswith(SKIP_DIR_PREFIXES) for part in parts[:-1]):
+            continue
+        if in_virtualenv(parts):
             continue
         if path.suffix in SOURCE_SUFFIXES or path.name in SOURCE_NAMES:
             yield path
