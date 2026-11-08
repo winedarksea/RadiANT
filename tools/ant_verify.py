@@ -538,8 +538,14 @@ class ChannelAnalyzer:
         self.tlm_slot_span = 0
         self.tlm_slot_missed = 0
         self.tlm_slot_overheard = 0
+        # Pairs whose counter advanced by MORE slots than the wall clock
+        # allows between the two packets: a host-driven master that refills
+        # twice advances the counter for a slot that never goes out. Those
+        # slots read as lost, so the figure is then an upper bound.
+        self.tlm_slot_inflated = 0
         self._tlm_last_counter: int | None = None
         self._tlm_last_packet = 0
+        self._tlm_last_t: float | None = None
 
     # -- helpers ---------------------------------------------------------
 
@@ -753,7 +759,7 @@ class ChannelAnalyzer:
 
         # Byte [1] is in the clear and in the same place on every data page,
         # schema or not, so slots are counted before the schema is known.
-        self._count_tlm_slots(payload[1])
+        self._count_tlm_slots(payload[1], t)
 
         if self.tlm_desc is None:
             # Counted, not decoded: a receiver joining mid-stream may see
@@ -841,12 +847,14 @@ class ChannelAnalyzer:
 
         self._check_tlm_integral(t, page, got, before, d_counter)
 
-    def _count_tlm_slots(self, counter: int) -> None:
+    def _count_tlm_slots(self, counter: int, t: float) -> None:
         """One data page's share of 0x60's exact loss; see __init__."""
         last = self._tlm_last_counter
+        last_t = self._tlm_last_t
         heard_between = self.packets - self._tlm_last_packet - 1
         self._tlm_last_counter = counter
         self._tlm_last_packet = self.packets
+        self._tlm_last_t = t
         if last is None:
             return
         d_slots = ap.delta_u8(counter, last)
@@ -857,6 +865,12 @@ class ChannelAnalyzer:
         if missed < 0:
             self.tlm_slot_overheard += 1
             return
+        if (last_t is not None and self.period_s > 0
+                and d_slots > round((t - last_t) / self.period_s)):
+            # More counter steps than slots that elapsed. Rounded, so ordinary
+            # host jitter (milliseconds against a period of ~125 ms or more)
+            # cannot trip it.
+            self.tlm_slot_inflated += 1
         self.tlm_slot_pairs += 1
         self.tlm_slot_span += d_slots
         self.tlm_slot_missed += missed
@@ -1291,16 +1305,22 @@ class ChannelAnalyzer:
             # slot between two data pages that was not heard was lost.
             missed = self.tlm_slot_missed
             sent = self.tlm_slot_span
+            upper = self.tlm_slot_inflated > 0
             exact = {
-                "scope": "slot",
+                "scope": "slot (upper bound)" if upper else "slot",
                 "missed": missed,
                 "sent": sent,
                 "loss_pct": 100.0 * missed / sent if sent else 0.0,
             }
             check("loss (exact)", round(exact["loss_pct"], 2) <= max_loss_pct,
+                  f"{'UPPER BOUND ' if upper else ''}"
                   f"{exact['loss_pct']:.2f} % - {missed} of {sent} slot(s) "
                   "missing, counted from the node's slot counter (byte [1] "
-                  "of its data pages) rather than a clock")
+                  "of its data pages) rather than a clock"
+                  + (f"; the counter advanced faster than the clock allows "
+                     f"on {self.tlm_slot_inflated} pair(s) (a host-driven "
+                     "master refilling twice), and those slots are counted "
+                     "lost although none was due" if upper else ""))
 
         if self.event_comparisons:
             # Not a rate threshold - a real sensor at low cadence can go many
@@ -1425,6 +1445,7 @@ class ChannelAnalyzer:
                 # overheard > 0 is a counter that is not a slot index.
                 "slot_pairs": self.tlm_slot_pairs,
                 "slot_overheard": self.tlm_slot_overheard,
+                "slot_inflated": self.tlm_slot_inflated,
                 "fields": [
                     {
                         "id": f.id,

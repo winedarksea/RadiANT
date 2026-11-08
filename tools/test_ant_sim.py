@@ -587,6 +587,40 @@ class TestTelemetryEnvelope(unittest.TestCase):
         self.assertEqual(exact["missed"], dropped_inside)
         self.assertEqual(exact["sent"], data[-1] - data[0])
 
+    def _double_refill(self, at_indices):
+        # A host-driven master refilling twice advances the counter for a slot
+        # that never goes out: from there on every data counter is one higher,
+        # while the packets keep arriving on the same wall-clock slots.
+        sensor = build("telemetry")
+        records = ant_sim.dry_run([sensor], 120.0)
+        shifted, extra = [], 0
+        for i, (t, dt_, dn, payload) in enumerate(records):
+            if i in at_indices:
+                extra += 1
+            if (extra and ap.PAGE_TLM_DATA_FIRST <= payload[0]
+                    <= ap.PAGE_TLM_DATA_LAST):
+                payload = bytes([payload[0], (payload[1] + extra) & 0xFF])                     + payload[2:]
+            shifted.append((t, dt_, dn, payload))
+        return analyse(sensor, shifted)
+
+    def test_a_double_refill_makes_the_slot_figure_an_upper_bound(self):
+        # TODO.md Security 13: the 2026-11-07 review saw 6 lost against 3
+        # real. Two phantom slots here, nothing was actually lost.
+        summary = self._double_refill({150, 350})
+        self.assertEqual(summary["telemetry"]["slot_inflated"], 2)
+        exact = summary["exact_loss"]
+        self.assertIsNotNone(exact)
+        self.assertEqual(exact["scope"], "slot (upper bound)")
+        self.assertEqual(exact["missed"], 2)
+        detail = next(c["detail"] for c in summary["checks"]
+                      if c["name"] == "loss (exact)")
+        self.assertIn("UPPER BOUND", detail)
+
+    def test_a_clean_stream_is_not_labelled_an_upper_bound(self):
+        _, _, summary = self._run("telemetry")
+        self.assertEqual(summary["telemetry"]["slot_inflated"], 0)
+        self.assertEqual(summary["exact_loss"]["scope"], "slot")
+
     def test_a_counter_that_counts_data_pages_only_gets_no_exact_figure(self):
         # A node from before the rule: byte [1] +1 per DATA page. Common and
         # descriptor slots then make some pairs hear more packets than the
