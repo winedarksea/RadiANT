@@ -39,8 +39,15 @@ import os
 import unittest
 
 import ant_pages as ap
-import ant_verify as av
 import radiant_crypto as rc
+
+try:
+    import ant_verify as av
+except SystemExit:  # pyusb missing: ant_verify exits rather than raising
+    # Only the two classes that call into ant_verify are skipped; the
+    # capture-presence and byte-exactness checks still run and still fail
+    # loudly if the fixtures are gone.
+    av = None
 
 TOOLS = os.path.dirname(os.path.abspath(__file__))
 VECTORS = os.path.join(TOOLS, "vectors")
@@ -257,6 +264,7 @@ class TestByteExactness(unittest.TestCase):
                                  f"page 0x{page:02X} did not decode")
 
 
+@unittest.skipIf(av is None, "pyusb is not installed")
 class TestTheCadence(unittest.TestCase):
     """119 / 120 / 121, which is what a certified receiver pairs on."""
 
@@ -328,6 +336,7 @@ class TestTheTwoPercentClaim(unittest.TestCase):
                             f"RadiANT; the claim is 2.0%")
 
 
+@unittest.skipIf(av is None, "pyusb is not installed")
 class TestTheAttestation(unittest.TestCase):
     """The tags the C wrote verify under a Python receiver holding the root."""
 

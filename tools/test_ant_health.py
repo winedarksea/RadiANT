@@ -20,7 +20,12 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import ant_health as h  # noqa: E402
+try:
+    import ant_health as h  # noqa: E402
+except SystemExit:  # pyusb missing: ant_probe exits rather than raising
+    # Same reason as test_ant_features.py; otherwise this one module takes
+    # the whole discover run down with an ERROR instead of a skip.
+    raise unittest.SkipTest("pyusb is not installed") from None
 
 
 def _body(version: int, length: int, **fields: int) -> bytes:

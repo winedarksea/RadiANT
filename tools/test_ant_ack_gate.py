@@ -4,8 +4,14 @@ import copy
 import unittest
 
 import ant_wire as w
-from ant_ack_gate import assess, named_events, reader_timeout_ms, receive_loss
-from ant_probe import READ_TIMEOUT_MS, SerialDevice
+
+try:
+    from ant_ack_gate import assess, named_events, reader_timeout_ms, receive_loss
+    from ant_probe import READ_TIMEOUT_MS, SerialDevice
+except SystemExit:  # pyusb missing: ant_probe exits rather than raising
+    # Same reason as test_ant_features.py; otherwise this one module takes
+    # the whole discover run down with an ERROR instead of a skip.
+    raise unittest.SkipTest("pyusb is not installed") from None
 
 
 class ReaderTimeoutSplit(unittest.TestCase):

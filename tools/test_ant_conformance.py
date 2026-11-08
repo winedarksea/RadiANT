@@ -20,7 +20,12 @@ import os
 import tempfile
 import unittest
 
-import ant_conformance as conf
+try:
+    import ant_conformance as conf
+except SystemExit:  # pyusb missing: ant_probe exits rather than raising
+    # Same reason as test_ant_features.py; otherwise this one module takes
+    # the whole discover run down with an ERROR instead of a skip.
+    raise unittest.SkipTest("pyusb is not installed") from None
 import ant_trace
 import ant_wire as wire
 
