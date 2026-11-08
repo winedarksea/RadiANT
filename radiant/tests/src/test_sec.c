@@ -5,9 +5,9 @@
  * on-air device number (the 1:N model - sensor keeps zero per-receiver state).
  *
  * Uses fake_radio's virtual clock so t_sync can be chosen rather than waited
- * for. The receiver derives packet index from epoch phase + channel period,
- * not arrival history, which is what makes mid-stream join and gap cases
- * testable at all.
+ * for. The receiver derives the slot index from epoch phase + channel period,
+ * not arrival history, and the sender derives its counter from each slot's
+ * t_sync, which is what makes mid-stream join and gap cases testable at all.
  *
  * Coverage: happy path, flipped bit (forgery caught once), lost packet (one
  * window breaks, next recovers), injected ack (D15 - MAC not skippable by
@@ -15,12 +15,16 @@
  * page (descriptor/common pages untouched), and a keyless injector against
  * the clock: forged counters must not move it, a verified window must not
  * verify twice, a late replay must not grow its delay, while real drift
- * is still followed.
+ * is still followed. And the counter's meaning (TODO item 7): it is the
+ * sender's SLOT index, so clear slots, skipped slots and a sparse silence
+ * cannot walk it away from the receiver's clock, and a slot posted twice
+ * resends the bytes it already built.
  */
 
 #include <zephyr/ztest.h>
 #include <string.h>
 
+#include <radiant/radiant_channel.h>
 #include <radiant/radiant_sec.h>
 #include <radiant/radiant_radio_hal.h>
 
@@ -60,6 +64,17 @@ static uint32_t           log_n_pkt;
 static struct verdict_rec log_verdict[LOG_MAX];
 static uint32_t           log_n_verdict;
 
+/* Every window the receiver judged VERIFIED, for streams far longer than
+ * log_verdict holds. Indexed by window_start / 2, since every legal W is even
+ * and so every window starts on an even counter. */
+static uint8_t verified_map[65536u / 2u / 8u];
+
+static bool window_was_verified(uint16_t start)
+{
+	return (verified_map[(start / 2u) / 8u] &
+		(uint8_t)(1u << ((start / 2u) % 8u))) != 0u;
+}
+
 /* Strong definitions displacing the weak ones in radiant_sec.c. Direct calls
  * rather than an ops struct because a function-pointer table is a .data
  * relocation the linker can't garbage-collect, defeating the size gate. */
@@ -86,13 +101,22 @@ void radiant_sec_window_verdict(uint8_t ch, uint16_t window_start,
 		log_verdict[log_n_verdict].verdict = verdict;
 	}
 	log_n_verdict++;
+	if (ch == RX_CH && verdict == RADIANT_SEC_VERDICT_VERIFIED) {
+		verified_map[(window_start / 2u) / 8u] |=
+			(uint8_t)(1u << ((window_start / 2u) % 8u));
+	}
 }
 
 /* ── Harness ────────────────────────────────────────────────────────────── */
 
+/* The slot spacing, as radiant_channel spaces a master's slots: the period in
+ * whole microseconds, ROUNDED (radiant_channel_counts_to_us()). The sender
+ * derives its counter from the slot's t_sync, so the harness has to put slots
+ * where a real channel puts them; the receiver's own period (truncated, 1 us
+ * shorter at 8182 counts) is a drift its re-anchor absorbs. */
 static uint64_t period_us(void)
 {
-	return ((uint64_t)TEST_PERIOD * 1000000u) / 32768u;
+	return (uint64_t)radiant_channel_counts_to_us(TEST_PERIOD);
 }
 
 /* Epoch anchor as the receiver computed it. radiant_sec_set_epoch() anchors on
@@ -101,6 +125,13 @@ static uint64_t period_us(void)
  * expected_index() floors every packet to 0 and the test passes without
  * exercising D4's time-derived counter reconstruction at all. */
 static uint64_t sec_anchor;
+
+/* The instant of slot `slot` on the sender's clock, which is also when the
+ * receiver hears it. The sender's counter IS this slot index. */
+static uint64_t slot_t(uint32_t slot)
+{
+	return sec_anchor + (uint64_t)slot * period_us();
+}
 
 static void key_both(void)
 {
@@ -135,8 +166,9 @@ static void epoch_both(uint32_t epoch)
 	sec_anchor = (uint64_t)radiant_radio_now();
 }
 
-/* Build packet `index` as the sensor would and hand back exactly what went on
- * the air, so a test can deliver it late, twice, or never. */
+/* Build packet `index` - the one in slot `index` - as the sensor would and hand
+ * back exactly what went on the air, so a test can deliver it late, twice, or
+ * never. */
 static void tx_hop(uint32_t index, uint8_t air[8])
 {
 	memset(air, 0, 8u);
@@ -150,7 +182,8 @@ static void tx_hop(uint32_t index, uint8_t air[8])
 	air[6] = 0x44u;
 	air[7] = 0x55u;                 /* likewise the tag byte */
 
-	zassert_equal(RADIANT_SEC_OK, radiant_sec_tx_transform(TX_CH, air, 8u));
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_tx_transform(TX_CH, air, 8u, slot_t(index)));
 }
 
 /* Hand on-air bytes to the receiver as heard at `t_sync`, and run the pump. */
@@ -204,6 +237,7 @@ static void sec_before(void *f)
 	radiant_sec_reset();
 	memset(log_pkt, 0, sizeof(log_pkt));
 	memset(log_verdict, 0, sizeof(log_verdict));
+	memset(verified_map, 0, sizeof(verified_map));
 	log_n_pkt = 0u;
 	log_n_verdict = 0u;
 	sec_anchor = 0u;
@@ -227,7 +261,8 @@ ZTEST(radiant_sec, test_nothing_transforms_until_the_epoch_advances)
 	 * epoch. */
 	memcpy(before, pay, sizeof(pay));
 	zassert_equal(RADIANT_SEC_OK,
-		      radiant_sec_tx_transform(TX_CH, pay, sizeof(pay)));
+		      radiant_sec_tx_transform(TX_CH, pay, sizeof(pay),
+					       (uint64_t)radiant_radio_now()));
 	zassert_mem_equal(pay, before, sizeof(pay),
 			  "a transform ran before the epoch was set");
 
@@ -236,7 +271,8 @@ ZTEST(radiant_sec, test_nothing_transforms_until_the_epoch_advances)
 
 	epoch_both(1000u);
 	zassert_equal(RADIANT_SEC_OK,
-		      radiant_sec_tx_transform(TX_CH, pay, sizeof(pay)));
+		      radiant_sec_tx_transform(TX_CH, pay, sizeof(pay),
+					       slot_t(0u)));
 	zassert_true(memcmp(pay, before, sizeof(pay)) != 0,
 		     "the transform is still inert after a fresh epoch");
 }
@@ -304,10 +340,10 @@ ZTEST(radiant_sec, test_the_transform_owns_byte_one)
 		pay[0] = TEST_PAGE;
 		pay[1] = 0xAAu;  /* whatever the host wrote */
 		zassert_equal(RADIANT_SEC_OK,
-			      radiant_sec_tx_transform(TX_CH, pay,
-						       sizeof(pay)));
+			      radiant_sec_tx_transform(TX_CH, pay, sizeof(pay),
+						       slot_t(i)));
 		zassert_equal(i, pay[1],
-			      "byte [1] must count TRANSMISSIONS. A host "
+			      "byte [1] must be the SLOT index. A host "
 			      "counter repeats across the retransmissions a "
 			      "master makes every slot, and a repeated counter "
 			      "under one (epoch, devnum) is keystream reuse");
@@ -325,7 +361,8 @@ ZTEST(radiant_sec, test_a_page_outside_the_range_is_untouched)
 
 	memcpy(before, pay, sizeof(pay));
 	zassert_equal(RADIANT_SEC_OK,
-		      radiant_sec_tx_transform(TX_CH, pay, sizeof(pay)));
+		      radiant_sec_tx_transform(TX_CH, pay, sizeof(pay),
+					       slot_t(0u)));
 	zassert_mem_equal(pay, before, sizeof(pay),
 			  "the descriptor was transformed; it must stay in the "
 			  "clear or a protected node is indistinguishable from "
@@ -523,8 +560,8 @@ ZTEST(radiant_sec, test_two_receivers_share_one_key_with_no_sensor_state)
 		pay[0] = TEST_PAGE;
 		pay[2] = (uint8_t)i;
 		zassert_equal(RADIANT_SEC_OK,
-			      radiant_sec_tx_transform(TX_CH, pay,
-						       sizeof(pay)));
+			      radiant_sec_tx_transform(TX_CH, pay, sizeof(pay),
+						       slot_t(i)));
 
 		/* The sensor transmits once; both receivers consume the same
 		 * eight bytes with no per-receiver state - unlike BLE's pairwise
@@ -655,15 +692,13 @@ static const uint8_t conf_plain[8] = {
 	TEST_PAGE, 0xAAu, 0xDEu, 0xADu, 0xBEu, 0xEFu, 0x42u, 0x55u,
 };
 
-/* Transform one packet at `index` and hand back exactly what went on the air
- * (hop() deliberately doesn't expose this). */
+/* Transform one packet in slot `index` and hand back exactly what went on the
+ * air (hop() deliberately doesn't expose this). */
 static void tx_air(uint32_t index, uint8_t air[8])
 {
-	ARG_UNUSED(index);
-
 	memcpy(air, conf_plain, 8u);
 	zassert_equal(RADIANT_SEC_OK,
-		      radiant_sec_tx_transform(TX_CH, air, 8u));
+		      radiant_sec_tx_transform(TX_CH, air, 8u, slot_t(index)));
 }
 
 /*
@@ -682,14 +717,16 @@ ZTEST(radiant_sec, test_a_wrap_with_no_epoch_left_stops_tx_instead_of_reusing_a_
 	zassert_ok(radiant_sec_set_epoch(TX_CH,
 					 0xFFFFFFFFu - RADIANT_SEC_EPOCH_HEADROOM,
 					 0u, TEST_PERIOD));
+	sec_anchor = (uint64_t)radiant_radio_now();
 	/* Wrap 1 advances into the headroom; wrap 2 has nowhere to go. */
 	for (i = 0; i < 2u * 65536u && rc == RADIANT_SEC_OK; i++) {
 		memcpy(pay, conf_plain, 8u);
-		rc = radiant_sec_tx_transform(TX_CH, pay, 8u);
+		rc = radiant_sec_tx_transform(TX_CH, pay, 8u, slot_t(i));
 	}
 	zassert_ok(rc, "a transform failed before the second wrap (i=%u)", i);
 	memcpy(pay, conf_plain, 8u);
-	zassert_not_equal(RADIANT_SEC_OK, radiant_sec_tx_transform(TX_CH, pay, 8u),
+	zassert_not_equal(RADIANT_SEC_OK,
+			  radiant_sec_tx_transform(TX_CH, pay, 8u, slot_t(i)),
 			  "TX continued with counter 0 under an epoch already used");
 }
 
@@ -891,7 +928,7 @@ ZTEST(radiant_sec, test_the_counter_wrap_does_not_repeat_the_keystream)
 
 		tx_air(i, scratch);
 	}
-	tx_air(0u, again);
+	tx_air(65536u, again);
 
 	zassert_equal(0u, again[1], "the counter did not return to zero");
 	zassert_true(memcmp(&first[2], &again[2], 5u) != 0,
@@ -1194,10 +1231,11 @@ ZTEST(radiant_sec, test_held_packets_do_not_survive_try_devnum)
  * counter wrap advances its own epoch, and must drop what it held from the
  * old one there.
  *
- * Reached WITHOUT running the sender through 65536 packets: the two pre-wrap
+ * Reached WITHOUT running the sender through 65536 slots: the two pre-wrap
  * packets (counters 65532/65533, an open window) are ingested raw - they are
- * only ever held, so nothing needs their MAC - and the sender is put straight
- * into the advanced epoch, as its own wrap would have.
+ * only ever held, so nothing needs their MAC - and the sender's first transform
+ * is slot 65536 itself. Its counter is the slot index, so that one call is its
+ * own wrap: epoch 48, counter 0.
  *
  * The packet that carries the advance (counter 0 of epoch 48) must itself be
  * accepted. It used to be refused as a replay: `expected` was computed
@@ -1229,10 +1267,8 @@ ZTEST(radiant_sec, test_held_packets_do_not_survive_an_epoch_advance_at_the_wrap
 	zassert_equal(0u, log_n_pkt, "setup: an open window was released");
 	zassert_equal(0u, dropped_policy_now(), "setup: nothing dropped yet");
 
-	/* The sender's own wrap: epoch + 1, counter back to 0. */
-	zassert_equal(RADIANT_SEC_OK,
-		      radiant_sec_set_epoch(TX_CH, 48u, 0u, TEST_PERIOD));
-
+	/* The sender's own wrap - epoch + 1, counter back to 0 - happens inside
+	 * this hop: slot 65536 is past the end of epoch 47. */
 	hop(65536u, false, -1);
 	zassert_equal(2u, dropped_policy_now(),
 		      "the receiver's epoch advance kept the old epoch's held "
@@ -1581,6 +1617,338 @@ ZTEST(radiant_sec, test_a_delayed_replay_cannot_grow_its_delay)
 	}
 }
 
+/* ── The counter is the slot index (TODO item 7) ────────────────────────── */
+
+/*
+ * The receiver's expected_index() is elapsed time over the period: one count
+ * per SLOT. A sender that counted only the slots it transformed fell one count
+ * behind for every slot it did not: the descriptor frames and common pages of
+ * every 121-message cycle, every slot MPSL denied, every slot a sparse node
+ * kept silent. The receiver slews at most period/16 per verified window, which
+ * is slower than that gap grows, so within minutes the gap passed the
+ * 128-period slack and nothing on the channel verified again.
+ *
+ * These run long streams and check the receiver against a model computed from
+ * the slot index alone: window k (slots kW..kW+W-1) verifies exactly when all
+ * of its slots carried secured packets AND so did every slot of the next window
+ * that carried any secured packet at all - that window holds k's tag bytes.
+ * A clear or skipped slot inside a window therefore costs that window and the
+ * one before it, and never makes anything wrongly VERIFIED.
+ */
+
+enum stream_slot {
+	STREAM_SECURED,
+	STREAM_CLEAR,      /* transmitted, outside the secured page range */
+	STREAM_SKIPPED,    /* never transformed, never transmitted */
+};
+
+#define STREAM_SLOTS 20000u
+#define STREAM_CYCLE 121u
+
+/* The 0x60 interleave: descriptor frames at m = 0..stream_desc_frames-1, page
+ * 0x50 at m = 119 and 0x51 at m = 120 - one contiguous clear run per cycle,
+ * 2 + stream_desc_frames slots long. */
+static uint8_t stream_desc_frames;
+
+static enum stream_slot cycle_slot(uint32_t slot, uint8_t *page)
+{
+	uint32_t m = slot % STREAM_CYCLE;
+
+	if (m < stream_desc_frames) {
+		*page = 0x00u;
+		return STREAM_CLEAR;
+	}
+	if (m == 119u) {
+		*page = 0x50u;
+		return STREAM_CLEAR;
+	}
+	if (m == 120u) {
+		*page = 0x51u;
+		return STREAM_CLEAR;
+	}
+	*page = TEST_PAGE;
+	return STREAM_SECURED;
+}
+
+/* A master that loses one slot in forty to MPSL: the slot clock advances a
+ * full period and the transform is never called for it. */
+static enum stream_slot skip_slot(uint32_t slot, uint8_t *page)
+{
+	*page = TEST_PAGE;
+	return ((slot % 40u) == 39u) ? STREAM_SKIPPED : STREAM_SECURED;
+}
+
+static bool window_full(enum stream_slot (*kind)(uint32_t, uint8_t *),
+			uint32_t k, uint8_t w)
+{
+	uint8_t  page;
+	uint32_t s;
+
+	for (s = k * w; s < (k + 1u) * w; s++) {
+		if (kind(s, &page) != STREAM_SECURED) {
+			return false;
+		}
+	}
+	return true;
+}
+
+static bool window_any(enum stream_slot (*kind)(uint32_t, uint8_t *),
+		       uint32_t k, uint8_t w)
+{
+	uint8_t  page;
+	uint32_t s;
+
+	for (s = k * w; s < (k + 1u) * w; s++) {
+		if (kind(s, &page) == STREAM_SECURED) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/* Runs one stream and prints what it measured. Returns false, saying why,
+ * instead of asserting, so one ZTEST reports every W before failing. */
+static bool stream_case(uint8_t switches, uint8_t w,
+			enum stream_slot (*kind)(uint32_t, uint8_t *),
+			const char *label)
+{
+	struct radiant_sec_stats st;
+	uint32_t                 n_win = STREAM_SLOTS / w;
+	uint32_t                 secured = 0u;
+	uint32_t                 in_verified = 0u;
+	uint32_t                 expected = 0u;
+	uint32_t                 missing = 0u;
+	uint32_t                 extra = 0u;
+	uint32_t                 last_cycle = 0u;
+	uint32_t                 slot;
+	uint32_t                 k;
+
+	sec_before(NULL);
+	key_both();
+	configure_both(switches, w);
+	epoch_both(73u);
+
+	for (slot = 0u; slot < STREAM_SLOTS; slot++) {
+		uint8_t          air[8];
+		uint8_t          page;
+		enum stream_slot sk = kind(slot, &page);
+
+		if (sk == STREAM_SKIPPED) {
+			continue;
+		}
+		air[0] = page;
+		air[1] = 0xAAu;
+		air[2] = (uint8_t)slot;
+		air[3] = (uint8_t)(slot >> 8);
+		air[4] = 0x22u;
+		air[5] = 0x33u;
+		air[6] = 0x44u;
+		air[7] = 0x55u;
+		zassert_equal(RADIANT_SEC_OK,
+			      radiant_sec_tx_transform(TX_CH, air, 8u,
+						       slot_t(slot)),
+			      "%s: slot %u refused", label, slot);
+		if (sk == STREAM_CLEAR) {
+			zassert_equal(0xAAu, air[1],
+				      "%s: clear slot %u was transformed", label,
+				      slot);
+			zassert_equal(RADIANT_SEC_RX_PLAIN,
+				      radiant_sec_rx_ingest(RX_CH, air, 8u, true,
+							    slot_t(slot)),
+				      "%s: clear slot %u was taken", label,
+				      slot);
+		} else {
+			secured++;
+			ingest_at(air, slot_t(slot));
+		}
+	}
+
+	/* The model. A window's verdict exists only once the window holding its
+	 * tag has closed in-window, so the last one or two are not judged. */
+	for (k = 0u; k < n_win; k++) {
+		bool     want = false;
+		uint32_t next;
+
+		if (window_full(kind, k, w)) {
+			for (next = k + 1u;
+			     next < n_win && !window_any(kind, next, w); next++) {
+			}
+			if (next >= n_win) {
+				continue;   /* never judged in this run */
+			}
+			want = window_full(kind, next, w);
+		}
+		if (want) {
+			expected++;
+		}
+		if (want && !window_was_verified((uint16_t)(k * w))) {
+			missing++;
+		}
+		if (!want && window_was_verified((uint16_t)(k * w))) {
+			extra++;
+		}
+		if (window_was_verified((uint16_t)(k * w))) {
+			in_verified += w;
+			if (k * w >= STREAM_SLOTS - STREAM_CYCLE) {
+				last_cycle++;
+			}
+		}
+	}
+
+	radiant_sec_get_stats(RX_CH, &st);
+	TC_PRINT("%s W=%u sw=0x%02x: verified %u unverified %u replay %u | "
+		 "model %u windows, missing %u, extra %u | secured %u, in "
+		 "verified windows %u (%u.%u %%)\n",
+		 label, w, switches, st.windows_verified,
+		 st.windows_unverified, st.dropped_replay, expected, missing,
+		 extra, secured, in_verified,
+		 (secured != 0u) ? (in_verified * 100u) / secured : 0u,
+		 (secured != 0u) ? ((in_verified * 1000u) / secured) % 10u
+				 : 0u);
+
+	if (st.dropped_replay != 0u) {
+		TC_PRINT("  FAIL: %u packets refused as replays\n",
+			 st.dropped_replay);
+	}
+	if (missing != 0u) {
+		TC_PRINT("  FAIL: %u of %u windows the slot index says should "
+			 "verify did not - the sender's counter left the "
+			 "receiver's clock\n", missing, expected);
+	}
+	if (extra != 0u) {
+		TC_PRINT("  FAIL: %u windows verified that the slot index says "
+			 "hold a hole or lost their tag\n", extra);
+	}
+	if (last_cycle == 0u) {
+		TC_PRINT("  FAIL: nothing verified in the last cycle\n");
+	}
+	return st.dropped_replay == 0u && missing == 0u && extra == 0u &&
+	       last_cycle > 0u;
+}
+
+ZTEST(radiant_sec, test_clear_slots_inside_a_secured_stream_do_not_desync_the_counter)
+{
+	bool ok = true;
+
+	/* The worst case of section 6's interleave: ten descriptor frames, so a
+	 * twelve-slot clear run every cycle. */
+	stream_desc_frames = 10u;
+	ok &= stream_case(RADIANT_SEC_SW_AUTH, 2u, cycle_slot, "clear12");
+	ok &= stream_case(RADIANT_SEC_SW_AUTH, 4u, cycle_slot, "clear12");
+	ok &= stream_case(RADIANT_SEC_SW_AUTH, 8u, cycle_slot, "clear12");
+	ok &= stream_case(RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_CONF, 2u,
+			  cycle_slot, "clear12");
+	ok &= stream_case(RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_CONF, 8u,
+			  cycle_slot, "clear12");
+
+	/* And the shortest: three descriptor frames, a five-slot run. With the
+	 * W = 2/4/8 runs above, these are the numbers docs/radiant-security.md
+	 * 3.2 quotes. */
+	stream_desc_frames = 3u;
+	ok &= stream_case(RADIANT_SEC_SW_AUTH, 2u, cycle_slot, "clear5");
+	ok &= stream_case(RADIANT_SEC_SW_AUTH, 4u, cycle_slot, "clear5");
+	ok &= stream_case(RADIANT_SEC_SW_AUTH, 8u, cycle_slot, "clear5");
+
+	zassert_true(ok, "a stream above failed; its FAIL lines say how");
+}
+
+ZTEST(radiant_sec, test_skipped_slots_do_not_desync_the_counter)
+{
+	bool ok = true;
+
+	ok &= stream_case(RADIANT_SEC_SW_AUTH, 2u, skip_slot, "skip1in40");
+	ok &= stream_case(RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_CONF, 8u,
+			  skip_slot, "skip1in40");
+
+	zassert_true(ok, "a stream above failed; its FAIL lines say how");
+}
+
+/*
+ * Slot-aligned sparse under X_CONF alone: three packets, a thousand silent
+ * slots, three more. The silence is far past the 128-period slack, so a counter
+ * that counted transmissions sent counter 3 at slot 1003, the receiver resolved
+ * it to the rollover nearest 1003, and decrypted under the wrong nonce.
+ * (Sparse with X_AUTH is refused in v1: the tag lags a window, so a burst
+ * never carries its own tag and never verifies.)
+ */
+ZTEST(radiant_sec, test_slot_aligned_sparse_conf_survives_a_long_silence)
+{
+	static const uint32_t slots[] = { 0u, 1u, 2u, 1003u, 1004u, 1005u };
+	struct radiant_sec_stats st;
+	uint8_t                  air[8];
+	uint32_t                 i;
+
+	key_both();
+	configure_both(RADIANT_SEC_SW_CONF, 2u);
+	epoch_both(79u);
+
+	for (i = 0u; i < ARRAY_SIZE(slots); i++) {
+		tx_air(slots[i], air);
+		zassert_equal((uint8_t)slots[i], air[1],
+			      "slot %u went out with counter byte %u", slots[i],
+			      air[1]);
+		ingest_at(air, slot_t(slots[i]));
+	}
+
+	radiant_sec_get_stats(RX_CH, &st);
+	zassert_equal(0u, st.dropped_replay, "%u refused as replays",
+		      st.dropped_replay);
+	zassert_equal(ARRAY_SIZE(slots), log_n_pkt, "%u delivered", log_n_pkt);
+	for (i = 0u; i < ARRAY_SIZE(slots); i++) {
+		zassert_mem_equal(&log_pkt[i].pay[2], &conf_plain[2], 5u,
+				  "slot %u did not decrypt to the plaintext",
+				  slots[i]);
+	}
+}
+
+/*
+ * A slot posted twice - request_tx refused and the slot re-posted, the shape
+ * the arming path can produce - must resend the bytes already built for it: a
+ * second ciphertext under the same nonce is keystream reuse, and a second
+ * absorb into the window CMAC breaks a window the receiver hears only once.
+ * A slot EARLIER than one already built is refused outright.
+ */
+ZTEST(radiant_sec, test_a_reposted_slot_reuses_its_bytes)
+{
+	uint8_t  first[8];
+	uint8_t  again[8];
+	uint8_t  air[8];
+	uint32_t i;
+
+	key_both();
+	configure_both(RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_CONF, 4u);
+	epoch_both(83u);
+
+	for (i = 0u; i < 12u; i++) {
+		if (i != 5u) {
+			hop(i, false, -1);
+			continue;
+		}
+		tx_hop(5u, first);
+		/* The host wrote a new body before the re-post. */
+		memset(again, 0x99u, sizeof(again));
+		again[0] = TEST_PAGE;
+		zassert_equal(RADIANT_SEC_OK,
+			      radiant_sec_tx_transform(TX_CH, again, 8u,
+						       slot_t(5u)));
+		zassert_mem_equal(first, again, 8u,
+				  "a re-posted slot built different bytes: a "
+				  "second ciphertext under slot 5's nonce");
+		ingest_at(first, slot_t(5u));
+	}
+
+	zassert_equal(1u, verdicts_for(0u, RADIANT_SEC_VERDICT_VERIFIED),
+		      "setup: window 0 did not verify");
+	zassert_equal(1u, verdicts_for(4u, RADIANT_SEC_VERDICT_VERIFIED),
+		      "window 4, which holds the re-posted slot, did not "
+		      "verify: the re-post was absorbed into its MAC twice");
+
+	memcpy(air, conf_plain, sizeof(air));
+	zassert_not_equal(RADIANT_SEC_OK,
+			  radiant_sec_tx_transform(TX_CH, air, 8u, slot_t(10u)),
+			  "slot 10 was built again after slot 11");
+}
+
 /* ── Lifecycle ──────────────────────────────────────────────────────────── */
 
 ZTEST(radiant_sec, test_release_and_reset_wipe_the_keys)
@@ -1595,7 +1963,8 @@ ZTEST(radiant_sec, test_release_and_reset_wipe_the_keys)
 	radiant_sec_channel_release(TX_CH);
 	memcpy(before, pay, sizeof(pay));
 	zassert_equal(RADIANT_SEC_OK,
-		      radiant_sec_tx_transform(TX_CH, pay, sizeof(pay)));
+		      radiant_sec_tx_transform(TX_CH, pay, sizeof(pay),
+					       slot_t(0u)));
 	zassert_mem_equal(pay, before, sizeof(pay),
 			  "a released channel still transforms");
 
