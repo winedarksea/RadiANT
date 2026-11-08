@@ -15,11 +15,42 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import ant_wire as w
-from ant_probe import EP_OUT, FrameReader, close_device, frame, open_device, reset_stack
+from ant_probe import (
+    EP_OUT,
+    READ_TIMEOUT_MS,
+    FrameReader,
+    SerialDevice,
+    close_device,
+    frame,
+    open_device,
+    reset_stack,
+)
 from ant_sim import HeartRateSensor, Signal, StandardPowerSensor
 from ant_verify import extended_fields
 
 KEY = bytes.fromhex('b9a521fbbd72c345')
+
+# A UART endpoint's read is a pyserial read: a timeout loses nothing, so it can
+# stay short and keep the loops below responsive.
+SERIAL_READ_TIMEOUT_MS = 50
+
+
+def reader_timeout_ms(dev) -> int:
+    """The per-read timeout for one endpoint's FrameReader.
+
+    Never short on USB. Under libusb-win32 a read timeout cancels the pending
+    bulk-IN transfer, and a cancel that lands as a frame arrives loses that
+    frame whole (ant_probe.READ_TIMEOUT_MS). The firmware answers SYSTEM_RESET
+    52 ms after it, so a 50 ms read parked reset_stack()'s wait right on the
+    STARTUP: measured 2026-11-07 on the nRF52840 Dongle, 11 of 1000 resets lost
+    their STARTUP at 50 ms, 10/1000 at 52 ms, 0/1000 at 1000 ms - the one "did
+    not reset" of the Garmin comparison (TODO.md item 2). The loops here poll
+    with 50-100 ms deadlines, but on USB every slave channel and the master's
+    EVENT_TX stream keep data arriving well inside 1 s, so a 1 s read returns
+    long before it times out; the worst case is a send or stop check up to 1 s
+    late, inside every 2 s budget below.
+    """
+    return SERIAL_READ_TIMEOUT_MS if isinstance(dev, SerialDevice) else READ_TIMEOUT_MS
 
 
 def command(dev, reader, msg, body):
@@ -197,7 +228,7 @@ def run(args, *, phase_hook=None):
                              (args.slave_port, args.slave_serial)):
             dev = open_device(True, port=port, serial=serial, baud=args.master_baud)
             devices.append(dev)
-            reader = FrameReader(dev, timeout_ms=50)
+            reader = FrameReader(dev, timeout_ms=reader_timeout_ms(dev))
             readers.append(reader)
             if not reset_stack(dev, reader):
                 raise RuntimeError(f'endpoint {port or serial} did not reset')

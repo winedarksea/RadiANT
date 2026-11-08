@@ -128,10 +128,12 @@ rungs = "fine"
 block_seconds = 60
 passes = 2
 interval = 1.0
-# Level 2 (-4 dBm) is the highest level every image honours as asked: with
-# CONFIG_ANT_DONGLE_TX_POWER_BOOST (default y) the RadiANT images raise levels
-# 3 and 4 to the part's ceiling - +8 dBm on a 52840, +4 on the 54L15, 0 on the
-# 5340 net core - so level 3 is NOT 0 dBm everywhere. The 2026-11-07 run used 3.
+# Level 2 (-4 dBm) was the highest level every image of 2026-11-07 honoured as
+# asked: CONFIG_ANT_DONGLE_TX_POWER_BOOST (default y) then raised levels 3 and
+# 4 to the part's ceiling - +8 dBm on a 52840, +4 on the 54L15, 0 on the 5340
+# net core. Images built after that run honour an explicit level 3 as 0 dBm and
+# raise only level 4 (and the unset default) - to +8 on the 54L15 too, so a
+# 54L15 master is not comparable with earlier runs. The 2026-11-07 run used 3.
 tx_power_level = 2
 
 [phases.usb]

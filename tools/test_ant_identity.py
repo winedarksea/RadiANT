@@ -38,6 +38,67 @@ class TestRandomDeviceNumber(unittest.TestCase):
         seen = {ai.random_device_number() for _ in range(200)}
         self.assertGreater(len(seen), 100)
 
+    def test_never_draws_a_number_nrf_receivers_slip_on(self):
+        for _ in range(2000):
+            self.assertFalse(ai.rx_slip_prone(ai.random_device_number()))
+
+    def test_an_empty_type_list_draws_from_the_whole_space(self):
+        # About 11 % of numbers are excluded by default; with no types none
+        # are, so 2000 draws all but certainly include one of them.
+        drawn = [ai.random_device_number(()) for _ in range(2000)]
+        self.assertTrue(any(ai.rx_slip_prone(n) for n in drawn))
+
+
+class TestSlipProneNumbers(unittest.TestCase):
+    """The mirror of radiant_channel_id_alt_run(); vectors match test_frame.c.
+
+    docs/decisions/0019: the nRF demodulator drops a bit in a long alternating
+    run near the address, so a transmitter should not choose such a number.
+    """
+
+    # The 2026-11-07 sweep's numbers as a power sensor (0x0B). 43634 scores
+    # 11 as sent and 13 with the pairing bit set.
+    SWEEP = {21845: 21, 54101: 12, 54100: 11, 43634: 13, 54102: 10,
+             54096: 9, 54186: 9, 54058: 8, 54080: 7, 54132: 6, 54900: 6}
+
+    def test_sweep_vectors(self):
+        for number, run in self.SWEEP.items():
+            self.assertEqual(ai.rx_slip_run(number, 0x0B), run, number)
+
+    def test_raw_counter_matches_the_receive_guard(self):
+        self.assertEqual(ai.alt_run(bytes([0xA6, 0xC5, 0x54, 0xD3, 0x0B])), 11)
+        # 0000[1010 1010]0000: nine across the byte boundary.
+        self.assertEqual(ai.alt_run(bytes([0x0A, 0xA0])), 9)
+        self.assertEqual(ai.alt_run(b"\x00"), 1)
+        self.assertEqual(ai.alt_run(b""), 0)
+
+    def test_the_pairing_bit_is_checked(self):
+        # #10752 is 7 as sent and 9 while pairing.
+        plain = ai.alt_run(ai.tracking_address(10752, 0x0B))
+        self.assertEqual(plain, 7)
+        self.assertEqual(ai.rx_slip_run(10752, 0x0B), 9)
+        self.assertEqual(ai.rx_slip_run(10752, 0x8B), 9)
+
+    def test_the_network_address_is_part_of_it(self):
+        self.assertEqual(ai.rx_slip_run(54100, 0x0B, b"\x00\x00"), 7)
+
+    def test_every_default_in_apps_is_clean(self):
+        for number in (4242, 4243, 4244, 14871):
+            self.assertFalse(ai.rx_slip_prone(number), number)
+
+    def test_threshold_and_warning(self):
+        self.assertTrue(ai.rx_slip_prone(54058, (0x0B,)))      # run 8
+        self.assertFalse(ai.rx_slip_prone(54080, (0x0B,)))     # run 7
+        self.assertIsNone(ai.slip_warning(54900))
+        self.assertIn("#54100", ai.slip_warning(54100))
+
+    def test_cli_check_exit_status(self):
+        self.assertEqual(ai.main(["check", "54900"]), 0)
+        self.assertEqual(ai.main(["check", "54900", "54100"]), 2)
+        self.assertEqual(ai.main(["check", "54080", "--device-type",
+                                  "0x0B"]), 0)
+        self.assertEqual(ai.main(["check", "0"]), 2)
+
 
 class TestIdentity(unittest.TestCase):
 

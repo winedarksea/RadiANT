@@ -46,8 +46,10 @@ extrapolating a fabricated figure; move the boards apart or add absorber and
 rerun.
 
 **The RSSI slope check is not decoration.** Every rung's mean RSSI should fall
-~1 dB per commanded dB. It won't if `CONFIG_ANT_DONGLE_TX_POWER_BOOST` folds
-levels 3 and 4 onto the same +8 dBm, if `--rungs fine` is used against the
+~1 dB per commanded dB. It won't if the transmitter folds two levels onto one
+power - `CONFIG_ANT_DONGLE_TX_POWER_BOOST` raises level 4 to the part's
+maximum, and before 2026-11 it raised level 3 too, so an older RadiANT image
+folds the top three coarse rungs together - if `--rungs fine` is used against the
 wrong `--tx-part` (the raw register values then mean something else), or if
 the firmware predates the custom byte and silently transmits at 0 dBm for
 every fine rung. All three still produce a plausible-looking curve, which is
@@ -159,15 +161,25 @@ PART_MAX_DBM = {"nrf52840": 8, "nrf5340net": 0, "nrf54l15": 8}
 def encode_power(dbm: int, part: str | None = None) -> tuple[int, int]:
     """The (level, custom) bytes of MESG_CHANNEL_RADIO_TX_POWER for `dbm`.
 
-    A dBm that is one of the six named levels is sent as that level and needs
-    nothing part-specific. Anything else needs the custom escape, which is a raw
-    register value - so it needs `part`, and refuses rather than guessing.
+    With a `part` (the fine ladder - main() passes one only for --rungs fine),
+    EVERY rung is the custom escape with that part's raw register value, the
+    named levels included. A named level is not a power, it is a request the
+    transmitter's bridge may remap: CONFIG_ANT_DONGLE_TX_POWER_BOOST raises
+    level 4 to the part's maximum (and raised level 3 too before 2026-11), so a
+    fine ladder that sent its +4 rung as LVL_4 would measure +8 there and fail
+    its own dial check - the 2026-11-07 54L15 failure, one rung higher. The raw
+    escape is passed through untouched by every bridge.
+
+    Without a part (the levels ladder), a named level is sent as that level -
+    it needs nothing part-specific, and on a RadiANT transmitter its LVL_4 rung
+    reads at the ceiling (use --rungs fine there). Anything else needs the
+    custom escape and therefore a part, and refuses rather than guessing.
     """
     if part is not None and dbm > PART_MAX_DBM.get(part, dbm):
         raise ValueError(f"{part} cannot transmit at {dbm} dBm; its ceiling "
                          f"is {PART_MAX_DBM[part]} dBm and the firmware would "
                          f"clamp the rung there while it is labelled {dbm}")
-    if dbm in DBM_LEVEL:
+    if part is None and dbm in DBM_LEVEL:
         return DBM_LEVEL[dbm], 0
     if part is None:
         raise ValueError(
@@ -334,10 +346,12 @@ def rssi_slope(steps: list[dict]) -> dict:
 # How far the slope may sit from 1, and how far any one rung may sit off the
 # fitted line.
 #
-# The residual bound does the real work, not the slope bound: TX_POWER_BOOST
-# collapses the coarse ladder's top three rungs onto one point and leaves the
-# bottom three alone, giving a best-fit slope of 1.12 (inside tolerance) while
-# three rungs sit 3-6 dB off the line - only the residual catches it.
+# The residual bound does the real work, not the slope bound: a pre-2026-11
+# TX_POWER_BOOST image collapses the coarse ladder's top three rungs onto one
+# point and leaves the bottom three alone, giving a best-fit slope of 1.12
+# (inside tolerance) while three rungs sit 3-6 dB off the line - only the
+# residual catches it. A current image folds only level 4 onto level 5 (both
+# the part's maximum), which the residual catches the same way.
 #
 # 3 dB is loose against a real path (RSSI is a mean over hundreds of packets,
 # so the residual is mostly the part's own TX-power accuracy) and tight
@@ -355,8 +369,8 @@ def slope_verdict(slope: dict, tolerance: float = SLOPE_TOLERANCE,
                        f"measured RSSI ({slope['reason']}), so nothing here "
                        f"knows whether the ladder moved the power it asked for")
     blame = ("Check CONFIG_ANT_DONGLE_TX_POWER_BOOST on the transmitter (it "
-             "folds levels 3 and 4 onto the same power), and --tx-part if "
-             "--rungs fine is in use")
+             "raises level 4 to the part's maximum, and images before 2026-11 "
+             "raised level 3 too), and --tx-part if --rungs fine is in use")
     if abs(slope["slope"] - 1.0) > tolerance:
         return False, (
             f"RSSI moved {slope['slope']:.2f} dB per commanded dB, not ~1. The "

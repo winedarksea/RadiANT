@@ -18,7 +18,9 @@ timing, acknowledged transfers and the USB round trip, behind one rig file.
 
 The rig file (TOML) names the devices, which one is the reference, the rounds
 (which DK transmits in each) and the phase settings, plus a free-form
-placement block. It is copied into the results directory verbatim, so a
+placement block. A device's optional `log_port` is its console, which is
+captured with host timestamps for every loss, multi and acquire window
+(tools/console_capture.py). It is copied into the results directory verbatim, so a
 later re-placement run - copy the rig, edit the placement and addresses,
 rerun - can be set beside this one.
 
@@ -127,6 +129,12 @@ class RigError(ValueError):
     pass
 
 
+# Every key a [[device]] table may carry. Anything else is warned about.
+DEVICE_KEYS = frozenset({"name", "address", "stack", "part", "receive",
+                         "transmit", "device_number_base", "baud", "notes",
+                         "log_port"})
+
+
 @dataclass
 class Device:
     name: str
@@ -138,6 +146,11 @@ class Device:
     device_number_base: int | None = None
     baud: int = 115200
     notes: str = ""
+    # The board's log console (e.g. the 54L15 DK's second J-Link VCOM). When
+    # set, every loss/multi/acquire window captures it to
+    # <window>_<device>_console.log with host timestamps - see
+    # tools/console_capture.py for what that tells apart.
+    log_port: str | None = None
 
     @property
     def address(self) -> str:
@@ -171,6 +184,8 @@ class Rig:
     results_dir: str | None
     caveats: list[str]
     raw: dict
+    # Non-fatal findings from parse_rig, printed before anything runs.
+    warnings: list[str] = field(default_factory=list)
 
     @property
     def reference(self) -> Device:
@@ -263,9 +278,17 @@ def parse_rig(raw: dict, path: Path | None = None) -> Rig:
     that half-parses runs a bench session that measures the wrong thing."""
     meta = raw.get("meta", {})
     name = meta.get("name") or (path.stem if path else "rig")
+    warnings: list[str] = []
 
     devices: dict[str, Device] = {}
     for entry in raw.get("device", []):
+        unknown = sorted(set(entry) - DEVICE_KEYS)
+        if unknown:
+            # A warning, not a refusal, so an older tool can still read a
+            # newer rig - but never silent: a misspelt `log_port` used to be
+            # dropped without a word, and the window ran with no console.
+            warnings.append(f"device {entry.get('name', '?')}: unknown keys "
+                            f"{unknown} ignored; known: {sorted(DEVICE_KEYS)}")
         try:
             dname = entry["name"]
             target = parse_target(f"{dname}={entry['address']}")
@@ -285,10 +308,25 @@ def parse_rig(raw: dict, path: Path | None = None) -> Rig:
             receive=bool(entry.get("receive", True)),
             transmit=bool(entry.get("transmit", False)),
             device_number_base=base, baud=int(entry.get("baud", 115200)),
-            notes=entry.get("notes", ""))
+            notes=entry.get("notes", ""), log_port=entry.get("log_port"))
 
     if not devices:
         raise RigError("the rig names no [[device]]")
+    ant_ports = {d.target.value.upper() for d in devices.values()
+                 if not d.is_usb}
+    log_ports: dict[str, str] = {}
+    for d in devices.values():
+        if d.log_port is None:
+            continue
+        key = d.log_port.upper()
+        if key in ant_ports:
+            raise RigError(f"device {d.name}: log_port {d.log_port} is also "
+                           f"an ANT port - the console capture would steal "
+                           f"its bytes")
+        if key in log_ports:
+            raise RigError(f"devices {log_ports[key]} and {d.name} share "
+                           f"log_port {d.log_port}")
+        log_ports[key] = d.name
     refs = [d for d in devices.values() if d.stack == "reference"]
     if len(refs) != 1:
         raise RigError(f"exactly one device must have stack = \"reference\"; "
@@ -383,7 +421,8 @@ def parse_rig(raw: dict, path: Path | None = None) -> Rig:
     rig = Rig(name=name, path=path, devices=devices, rounds=rounds,
               phases=phases, placement=raw.get("placement", {}),
               results_dir=meta.get("results_dir"),
-              caveats=list(meta.get("caveats", [])), raw=raw)
+              caveats=list(meta.get("caveats", [])), raw=raw,
+              warnings=warnings)
 
     # Device numbers: in range, never a default, never shared between two
     # transmitters' blocks anywhere in the rig.
@@ -650,6 +689,14 @@ def window_sanity(data: dict | None, pinned: list[int], seconds: float,
             problems.append(f"ch{index}: never identified a device")
         elif heard != dn:
             problems.append(f"ch{index}: heard #{heard}, pinned #{dn}")
+    for reboot in data.get("receiver_reboots") or []:
+        name = reboot.get("reason_name") or f"0x{reboot.get('reason') or 0:02X}"
+        problems.append(f"receiver rebooted at {reboot.get('t_s', 0):.0f} s "
+                        f"(startup reason {name})")
+    death = data.get("port_death")
+    if death:
+        problems.append(f"ANT port died at {death.get('t_s', 0):.0f} s: "
+                        f"{death.get('error')}")
     if wall_s is not None and wall_s < 0.95 * seconds:
         problems.append(f"ran {wall_s:.0f} s of a {seconds:.0f} s window "
                         f"(dropped port?)")
@@ -1177,6 +1224,37 @@ def _targets(devs: list[Device]) -> list[Target]:
     return [d.target for d in devs]
 
 
+def _start_consoles(bench: Bench, rnd: Round, tag: str) -> list:
+    """One ConsoleCapture per device in this round (transmitters too - a
+    master that faults is as much a finding) that has a log_port."""
+    if bench.dry_run:
+        return []
+    from console_capture import ConsoleCapture
+
+    names = list(dict.fromkeys(
+        rnd.transmitters + [d.name for d in bench.rig.receivers_for(rnd)]))
+    caps = []
+    for name in names:
+        dev = bench.rig.devices[name]
+        if dev.log_port:
+            path = bench.out / f"{tag}_{_slug(name)}_console.log"
+            caps.append((name, ConsoleCapture(dev.log_port, path).start()))
+    return caps
+
+
+def _stop_consoles(caps: list) -> tuple[dict, list[str]]:
+    out, warnings = {}, []
+    for name, cap in caps:
+        summary = cap.stop()
+        out[name] = summary
+        if summary["error"]:
+            when = (f" after {summary['died_after_s']:.0f} s"
+                    if summary["died_after_s"] is not None else "")
+            warnings.append(f"{name}: console {summary['port']}{when}: "
+                            f"{summary['error']}")
+    return out, warnings
+
+
 def phase_identity(bench: Bench) -> dict:
     results = {}
     commands = []
@@ -1290,9 +1368,15 @@ def phase_window(bench: Bench, rnd: Round, phase: str, rep: int) -> dict:
     commands = [c for _, c, _, _ in sims]
     results = {}
     warnings = []
+    consoles = {}
     if started and not bench.dry_run:
-        rows = run_targets(_targets(receivers), seconds, numbers, extra,
-                           bench.out, prefix=f"{tag}_")
+        caps = _start_consoles(bench, rnd, tag)
+        try:
+            rows = run_targets(_targets(receivers), seconds, numbers, extra,
+                               bench.out, prefix=f"{tag}_")
+        finally:
+            consoles, console_warn = _stop_consoles(caps)
+            warnings += console_warn
         for dev, row in zip(receivers, rows, strict=True):
             data = row.get("data")
             problems = window_sanity(data, numbers, seconds, row["wall_s"])
@@ -1314,10 +1398,13 @@ def phase_window(bench: Bench, rnd: Round, phase: str, rep: int) -> dict:
     status, sim_warn = _finish_sims(bench, sims,
                                     seconds + float(cfg["margin_s"]))
     warnings += sim_warn
-    return {"phase": phase, "round": rnd.name, "rep": rep,
-            "seconds": seconds, "profiles": profiles,
-            "device_numbers": numbers, "transmitters": status,
-            "results": results, "warnings": warnings, "commands": commands}
+    record = {"phase": phase, "round": rnd.name, "rep": rep,
+              "seconds": seconds, "profiles": profiles,
+              "device_numbers": numbers, "transmitters": status,
+              "results": results, "warnings": warnings, "commands": commands}
+    if consoles:
+        record["consoles"] = consoles
+    return record
 
 
 def phase_acquire(bench: Bench, rnd: Round) -> dict:
@@ -1348,38 +1435,55 @@ def phase_acquire(bench: Bench, rnd: Round) -> dict:
     out_cycles = []
     warnings = []
     end_by = time.monotonic() + tx_seconds - seconds - 5.0
-    if started and not bench.dry_run:
-        for i in range(cycles):
-            if time.monotonic() > end_by:
-                warnings.append(f"stopped after {i} cycles: the transmitter's "
-                                f"window would end inside the next one "
-                                f"(raise cycle_overhead_s)")
-                break
-            rows = run_targets(_targets(receivers), seconds, numbers,
-                               ["--profile", profile], bench.out,
-                               prefix=f"{tag}_c{i + 1:02d}_", verbose=False)
-            cycle = {}
-            for dev, row in zip(receivers, rows, strict=True):
-                data = row.get("data") or {}
-                ttfp = data.get("derived", {}).get("time_to_first_packet_s")
-                heard = (data.get("identities", {}).get("0", {})
-                         .get("device_number"))
-                if heard is not None and heard != numbers[0]:
-                    warnings.append(f"cycle {i + 1} {dev.name}: heard "
-                                    f"#{heard}, pinned #{numbers[0]}")
-                    ttfp = None
-                cycle[dev.name] = ttfp
-            out_cycles.append(cycle)
-            print(f"  cycle {i + 1}/{cycles}: " + ", ".join(
-                f"{k} {_fmt(v)}" for k, v in cycle.items()))
-    elif not started:
-        warnings.append("the transmitter never started")
+    consoles = {}
+    caps = _start_consoles(bench, rnd, tag) if started else []
+    try:
+        if started and not bench.dry_run:
+            _acquire_cycles(bench, rnd, receivers, cycles, seconds, numbers,
+                            profile, tag, end_by, out_cycles, warnings)
+        elif not started:
+            warnings.append("the transmitter never started")
+    finally:
+        consoles, console_warn = _stop_consoles(caps)
+        warnings += console_warn
     status, sim_warn = _finish_sims(bench, sims, tx_seconds)
     warnings += sim_warn
-    return {"phase": "acquire", "round": rnd.name, "rep": 1,
-            "seconds": seconds, "device_numbers": numbers,
-            "transmitters": status, "cycles": out_cycles,
-            "warnings": warnings, "commands": [c for _, c, _, _ in sims]}
+    record = {"phase": "acquire", "round": rnd.name, "rep": 1,
+              "seconds": seconds, "device_numbers": numbers,
+              "transmitters": status, "cycles": out_cycles,
+              "warnings": warnings, "commands": [c for _, c, _, _ in sims]}
+    if consoles:
+        record["consoles"] = consoles
+    return record
+
+
+def _acquire_cycles(bench: Bench, rnd: Round, receivers: list[Device],
+                    cycles: int, seconds: float, numbers: list[int],
+                    profile: str, tag: str, end_by: float,
+                    out_cycles: list, warnings: list[str]) -> None:
+    for i in range(cycles):
+        if time.monotonic() > end_by:
+            warnings.append(f"stopped after {i} cycles: the transmitter's "
+                            f"window would end inside the next one "
+                            f"(raise cycle_overhead_s)")
+            break
+        rows = run_targets(_targets(receivers), seconds, numbers,
+                           ["--profile", profile], bench.out,
+                           prefix=f"{tag}_c{i + 1:02d}_", verbose=False)
+        cycle = {}
+        for dev, row in zip(receivers, rows, strict=True):
+            data = row.get("data") or {}
+            ttfp = data.get("derived", {}).get("time_to_first_packet_s")
+            heard = (data.get("identities", {}).get("0", {})
+                     .get("device_number"))
+            if heard is not None and heard != numbers[0]:
+                warnings.append(f"cycle {i + 1} {dev.name}: heard "
+                                f"#{heard}, pinned #{numbers[0]}")
+                ttfp = None
+            cycle[dev.name] = ttfp
+        out_cycles.append(cycle)
+        print(f"  cycle {i + 1}/{cycles}: " + ", ".join(
+            f"{k} {_fmt(v)}" for k, v in cycle.items()))
 
 
 def phase_ladder(bench: Bench, rnd: Round) -> dict:
@@ -1631,6 +1735,8 @@ def main() -> int:
         rig = load_rig(args.rig, args.set)
     except (RigError, tomllib.TOMLDecodeError, OSError) as exc:
         sys.exit(f"rig: {exc}")
+    for warning in rig.warnings:
+        print(f"rig warning: {warning}")
 
     out = args.out or (Path(rig.results_dir) if rig.results_dir else None)
     if out is None:

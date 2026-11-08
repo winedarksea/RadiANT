@@ -822,6 +822,63 @@ int radiant_frame_addr(enum radiant_frame_cfg cfg, const uint8_t net_addr[RADIAN
 	return addr_len;
 }
 
+/* Bit i of a byte string, byte 0 first, each byte MSb first. */
+static inline uint8_t alt_bit_at(const uint8_t *s, uint32_t i)
+{
+	return (uint8_t)((s[i >> 3] >> (7u - (i & 7u))) & 1u);
+}
+
+uint8_t radiant_addr_alt_run(const uint8_t *addr, uint8_t len)
+{
+	uint8_t best, cur;
+
+	if (addr == NULL || len == 0u) {
+		return 0u;
+	}
+	best = cur = 1u;
+	for (uint32_t i = 1; i < (uint32_t)len * 8u; i++) {
+		cur = (alt_bit_at(addr, i) != alt_bit_at(addr, i - 1u))
+			      ? (uint8_t)(cur + 1u)
+			      : 1u;
+		if (cur > best) {
+			best = cur;
+		}
+	}
+	return best;
+}
+
+uint8_t radiant_channel_id_alt_run(const uint8_t net_addr[RADIANT_NET_ADDR_LEN],
+				   uint16_t device_number, uint8_t device_type)
+{
+	struct radiant_channel_id id = { .device_number = device_number };
+	uint8_t addr[RADIANT_FRAME_ADDR_MAX];
+	uint8_t best = 0u;
+
+	if (net_addr == NULL) {
+		return 0u;
+	}
+	for (int pairing = 0; pairing < 2; pairing++) {
+		uint8_t run;
+		int n;
+
+		id.device_type = pairing != 0
+					 ? (uint8_t)(device_type |
+						     RADIANT_DEVICE_TYPE_PAIRING_BIT)
+					 : (uint8_t)(device_type &
+						     RADIANT_DEVICE_TYPE_MASK);
+		n = radiant_frame_addr(RADIANT_FRAME_CFG_TRACKING, net_addr, &id,
+				       addr, sizeof(addr));
+		if (n <= 0) {
+			return 0u;
+		}
+		run = radiant_addr_alt_run(addr, (uint8_t)n);
+		if (run > best) {
+			best = run;
+		}
+	}
+	return best;
+}
+
 /*
  * Lay out the body. Tracking puts only what the address did not already carry;
  * search carries the rest of the channel ID because its address stopped after

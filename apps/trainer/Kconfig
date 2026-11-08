@@ -34,6 +34,11 @@ config TRAINER_DEVICE_NUMBER
 	  the bench's real trainer (#52233), so a sweep pinned to this number
 	  can never be answered by the real machine in the room.
 
+	  Avoid numbers with a long alternating bit run in the on-air address:
+	  nRF-based receivers lose up to ~5 % of their frames (ADR 0019). Check
+	  one with `tools/ant_identity.py check <number> --device-type 0x11`.
+	  The image logs a warning when it opens a channel with such a number.
+
 config TRAINER_MANUFACTURER_ID
 	int "manufacturer id for the common pages"
 	range 0 65535

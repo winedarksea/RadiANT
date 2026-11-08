@@ -6,8 +6,12 @@
     C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe tools\\ant_identity.py provision --tier 0
     C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe tools\\ant_identity.py reroll
 
+    C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe tools\\ant_identity.py check 54100
+
 Exit status: 0 on success; 1 if `show` or `reroll` is run with no identity
-file yet provisioned.
+file yet provisioned; 2 if `check` finds a number that nRF receivers find
+hard to hear (an alternating bit run in its address, ADR 0019). Generated
+numbers already avoid those.
 
 An ANT+ sensor broadcasts a fixed 16-bit device number forever, and that number
 is typically a factory serial - so it ties the node to a purchase record, a
@@ -85,9 +89,94 @@ PRIVACY_SW_REVISION = 1
 DEFAULT_PROVISIONING_FILE = Path.home() / ".radiant" / "identity.json"
 
 
-def random_device_number() -> int:
-    """A uniformly random device number in 1..65535."""
-    return secrets.randbelow(DEVICE_NUMBER_MAX) + DEVICE_NUMBER_MIN
+#: The first two bytes of every on-air ANT+ address (the network address).
+ANT_PLUS_NET_ADDR = b"\xA6\xC5"
+
+#: Pairing bit: the MSb of the device type byte.
+DEVICE_TYPE_PAIRING_BIT = 0x80
+
+#: Alternating-run length at which a transmitter should pick another number.
+#: Mirrors RADIANT_ADDR_ALT_RUN_AVOID in radiant/include/radiant/radiant_frame.h,
+#: which gives the reasons; about 11 % of numbers for every ANT+ device type.
+RX_SLIP_AVOID_RUN = 8
+
+#: The ANT+ device types this project transmits: power, FE-C, heart rate,
+#: stride-based speed and distance, speed and cadence, speed, cadence. A
+#: provisioning record has no device type, so a number it generates is checked
+#: against all of them; the at-risk numbers barely differ between types.
+ANT_PLUS_DEVICE_TYPES = (0x0B, 0x11, 0x78, 0x7C, 0x79, 0x7B, 0x7A)
+
+
+def alt_run(addr: bytes) -> int:
+    """Longest run of alternating bits in an address, byte 0 first, MSb first.
+
+    Mirrors radiant_addr_alt_run(). A single bit is a run of 1; an empty
+    address is 0.
+    """
+    bits = [(byte >> (7 - i)) & 1 for byte in addr for i in range(8)]
+    if not bits:
+        return 0
+    best = cur = 1
+    for prev, bit in zip(bits[:-1], bits[1:], strict=True):
+        cur = cur + 1 if bit != prev else 1
+        best = max(best, cur)
+    return best
+
+
+def tracking_address(device_number: int, device_type: int,
+                     net_addr: bytes = ANT_PLUS_NET_ADDR) -> bytes:
+    """The 5-byte on-air address: network, device number low/high, type."""
+    return bytes([net_addr[0], net_addr[1], device_number & 0xFF,
+                  (device_number >> 8) & 0xFF, device_type & 0xFF])
+
+
+def rx_slip_run(device_number: int, device_type: int,
+                net_addr: bytes = ANT_PLUS_NET_ADDR) -> int:
+    """The longest alternating run a master with this ID puts on the air.
+
+    Mirrors radiant_channel_id_alt_run(): the worse of the two pairing-bit
+    states, since that bit sits next to the device number. At
+    RX_SLIP_AVOID_RUN or above, nRF receivers can drop one bit of the
+    address and miss the frame (docs/decisions/0019-...).
+    """
+    plain = device_type & ~DEVICE_TYPE_PAIRING_BIT & 0xFF
+    return max(alt_run(tracking_address(device_number, plain, net_addr)),
+               alt_run(tracking_address(device_number,
+                                        plain | DEVICE_TYPE_PAIRING_BIT,
+                                        net_addr)))
+
+
+def rx_slip_prone(device_number: int,
+                  device_types=ANT_PLUS_DEVICE_TYPES) -> bool:
+    """True if any of these device types makes the number hard to receive."""
+    return any(rx_slip_run(device_number, t) >= RX_SLIP_AVOID_RUN
+               for t in device_types)
+
+
+def random_device_number(device_types=ANT_PLUS_DEVICE_TYPES) -> int:
+    """A uniformly random device number in 1..65535 that is easy to receive.
+
+    Numbers rx_slip_prone() flags for any of `device_types` are drawn again.
+    That leaves about 88 % of the space, which costs a fifth of a bit of
+    anonymity against a receive loss of up to several percent. Pass an empty
+    tuple to draw from all of 1..65535.
+    """
+    while True:
+        number = secrets.randbelow(DEVICE_NUMBER_MAX) + DEVICE_NUMBER_MIN
+        if not rx_slip_prone(number, device_types):
+            return number
+
+
+def slip_warning(device_number: int,
+                 device_types=ANT_PLUS_DEVICE_TYPES) -> str | None:
+    """A one-line warning if this number is hard to receive, else None."""
+    worst = max((rx_slip_run(device_number, t), t) for t in device_types)
+    if worst[0] < RX_SLIP_AVOID_RUN:
+        return None
+    return (f"warning: device #{device_number} has a {worst[0]}-bit "
+            f"alternating run in its on-air address (device type "
+            f"0x{worst[1]:02X}). nRF-based receivers can lose up to ~5 % of "
+            f"its frames (ADR 0019); prefer another number")
 
 
 class Identity:
@@ -209,7 +298,27 @@ def _cmd_show(args) -> int:
           % ("yes - page 81 serial 0xFFFFFFFF, page 82 suppressed, page 80 "
              "generic" if identity.privacy_pages else "NO"))
     print("provisioned        : %s" % (identity.created or "unknown"))
+    warning = slip_warning(identity.device_number)
+    if warning:
+        print(warning)
     return 0
+
+
+def _cmd_check(args) -> int:
+    types = tuple(args.device_type) if args.device_type \
+        else ANT_PLUS_DEVICE_TYPES
+    prone = False
+    for number in args.number:
+        if not DEVICE_NUMBER_MIN <= number <= DEVICE_NUMBER_MAX:
+            print(f"device #{number}: outside 1..65535 (0 is the wildcard)")
+            prone = True
+            continue
+        runs = ", ".join(f"0x{t:02X}:{rx_slip_run(number, t)}" for t in types)
+        warning = slip_warning(number, types)
+        print(f"device #{number} (0x{number:04X}): alternating run by type "
+              f"{runs} -> {'AVOID' if warning else 'ok'}")
+        prone = prone or warning is not None
+    return 2 if prone else 0
 
 
 def _cmd_provision(args) -> int:
@@ -224,6 +333,10 @@ def _cmd_provision(args) -> int:
         save(args.file, identity)
     print(f"device number {identity.device_number} "
           f"(0x{identity.device_number:04X}), tier {identity.tier}")
+    # A new number is drawn clean; one kept from an older record may not be.
+    warning = slip_warning(identity.device_number)
+    if warning:
+        print(warning + " (`reroll` draws a clean one)")
     return 0
 
 
@@ -271,6 +384,17 @@ def main(argv=None) -> int:
     reroll = sub.add_parser("reroll",
                             help="Tier 1: take a new on-air device number")
     reroll.set_defaults(func=_cmd_reroll)
+
+    check = sub.add_parser(
+        "check",
+        help="say whether a device number is hard for nRF receivers to "
+             "hear (ADR 0019); exit 2 if any number given should be avoided")
+    check.add_argument("number", type=int, nargs="+")
+    check.add_argument("--device-type", type=lambda s: int(s, 0),
+                       action="append",
+                       help="device type to check, e.g. 0x0B; repeatable "
+                            "(default: every ANT+ type this project sends)")
+    check.set_defaults(func=_cmd_check)
 
     args = parser.parse_args(argv)
     return args.func(args)

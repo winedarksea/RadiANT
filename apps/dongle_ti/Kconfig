@@ -138,9 +138,10 @@ config ANT_DONGLE_TX_POWER_BOOST
 	bool "Transmit at the radio's maximum power by default"
 	default y
 	help
-	  See apps/dongle/Kconfig's own copy of this symbol. Whether this
-	  actually changes anything on the TI radio backend is a question for
-	  radiant/src/radiant_radio_cc26xx.c, not for this application.
+	  See apps/dongle/Kconfig's own copy of this symbol. On the TI backend
+	  the boosted LVL_5 (+8 dBm) is rounded down to the highest table entry
+	  not above it (radiant/src/radiant_radio_cc26xx.c), which is +5 dBm;
+	  before 2026-11 the boost asked for LVL_4 here and got +4.
 
 endmenu
 

@@ -87,6 +87,14 @@ target_sources_ifdef(CONFIG_ANT_DONGLE_TRANSPORT_USB_NEXT app PRIVATE
 target_sources_ifdef(CONFIG_ANT_DONGLE_TRANSPORT_UART app PRIVATE
   "${CMAKE_CURRENT_LIST_DIR}/ant_serial_bridge.c" "${CMAKE_CURRENT_LIST_DIR}/ant_uart_transport.c")
 
+# The cached boot reset cause - read by the boot sequence (UF2 settle, boot
+# log) and the bridge (boot STARTUP on UART builds), so it goes wherever the
+# bridge does. See ant_reset_cause.h.
+if(CONFIG_ANT_DONGLE_TRANSPORT_USB_LEGACY OR CONFIG_ANT_DONGLE_TRANSPORT_USB_NEXT
+   OR CONFIG_ANT_DONGLE_TRANSPORT_UART)
+  target_sources(app PRIVATE "${CMAKE_CURRENT_LIST_DIR}/ant_reset_cause.c")
+endif()
+
 target_sources_ifdef(CONFIG_ANT_DONGLE_FLASH_LOG app PRIVATE
   "${CMAKE_CURRENT_LIST_DIR}/diag_flash_log.c")
 

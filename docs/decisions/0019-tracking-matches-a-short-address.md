@@ -137,3 +137,16 @@ Phase 5. A stock Feather sat in every window as the control.
   guard (5 % → 10 %). Not decided; it needs a controlled-level run.
 - If a future part's demodulator slips differently (an insertion, or two
   bits), those frames stay lost exactly as before; nothing is made worse.
+- **Transmit side (added 2026-11-07).** The guard only helps RadiANT
+  receivers, so a transmitter that can choose its number should avoid the
+  risky ones. `radiant_channel_id_alt_run()` scores a channel ID with the
+  same counter the guard uses, over both pairing-bit states. A RadiANT image
+  logs a warning when it opens a master whose run is 8 or more
+  (`RADIANT_ADDR_ALT_RUN_AVOID`). `tools/ant_identity.py` never generates
+  such a number and has a `check` command, and `ant_sim.py` warns on stderr.
+  The bar is 8 rather than the guard's 9 because choosing another number
+  costs nothing, while a shorter hardware match has a noise cost. That
+  excludes about 11 % of numbers for every ANT+ device type. Every default
+  number in `apps/` is clean. The Tier 0 number `node_ident` derives from
+  K_dev is not steered, because changing that derivation changes every
+  provisioned node's identity.

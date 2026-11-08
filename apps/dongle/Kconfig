@@ -476,24 +476,26 @@ config ANT_DONGLE_TX_POWER_BOOST
 	bool "Transmit at the radio's maximum power by default"
 	default y
 	help
-	  Default every channel to RADIO_TX_POWER_LVL_5 (+8 dBm) instead of the
-	  stack's LVL_3 (0 dBm), and raise a host's request for LVL_3 or LVL_4
-	  to the same.
+	  Default every channel to the radio's maximum (RADIO_TX_POWER_LVL_5,
+	  rounded by the backend to what the part has) instead of the stack's
+	  LVL_3 (0 dBm), and raise a host's request for LVL_4 to the same.
 
 	  Without this the +8 dBm the nRF52840 is chosen for is unreachable. The
-	  stack defaults to 0 dBm, and no host will ever ask for more, because
-	  LVL_5 exists only on the nRF52820, nRF52833 and nRF52840 - the stick
-	  being impersonated is an nRF51422, whose ceiling is LVL_4 at +4 dBm.
-	  So a host asking for LVL_4 is asking for everything the hardware has
-	  and should get 8 dBm, and a host sending LVL_3 is sending the
-	  documented default because it has no opinion. Both are raised.
+	  stack defaults to 0 dBm, and no host will ever ask for more by name:
+	  the stick being impersonated is an nRF51422, whose ceiling is LVL_4 at
+	  +4 dBm. So a host that never sets power - Zwift, whose one
+	  MESG_RADIO_TX_POWER is wiped by the SYSTEM_RESET straight after it -
+	  gets the maximum, and a host asking for LVL_4 is asking for
+	  everything the hardware has and gets it too.
 
-	  Levels 0 to 2 (-20, -12 and -4 dBm) are passed through untouched.
-	  Nothing sends those by accident, so they are a deliberate request to
-	  be quiet - a bike shop, or a race paddock with forty trainers in one
-	  room - and overriding one by up to 28 dB would be antisocial. A value
-	  with RADIO_TX_POWER_LVL_CUSTOM (0x80) set names a raw register value
-	  rather than a level and is likewise left alone.
+	  Everything else is honoured as asked. An explicit LVL_3 is a true
+	  0 dBm (it was raised as well until 2026-11, which made 0 dBm
+	  unrequestable and broke the sensitivity ladder's dial check). Levels 0
+	  to 2 (-20, -12 and -4 dBm) are a deliberate request to be quiet - a
+	  bike shop, or a race paddock with forty trainers in one room - and
+	  overriding one by up to 28 dB would be antisocial. A value with
+	  RADIO_TX_POWER_LVL_CUSTOM (0x80) set names a raw register value rather
+	  than a level and is likewise left alone.
 
 	  This only affects transmission: reading a power meter is unaffected,
 	  since that is the sensor's transmit path. What it improves is the
@@ -504,7 +506,10 @@ config ANT_DONGLE_TX_POWER_BOOST
 	  one. ANT has no message that reads transmit power back, so no host can
 	  observe the difference except as better range.
 
-	  On parts without LVL_5 this settles at LVL_4 instead.
+	  What "maximum" comes to per part, on the radiant backend: +8 dBm on
+	  the nRF52840 and nRF54L15, 0 dBm on the nRF5340 network core (its
+	  ceiling), +5 dBm on CC26xx. On the sdk-ant backend LVL_5 exists only on
+	  the nRF52820/33/40, and other parts settle at LVL_4.
 
 config ANT_DONGLE_BCD_DEVICE
 	hex "Override bcdDevice in the USB device descriptor"

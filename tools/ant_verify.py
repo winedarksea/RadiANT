@@ -99,8 +99,10 @@ from ant_wire import (  # noqa: E402
     MESG_NETWORK_KEY_ID,
     MESG_OPEN_CHANNEL_ID,
     MESG_RESPONSE_EVENT_ID,
+    MESG_STARTUP_MESG_ID,
     MESG_UNASSIGN_CHANNEL_ID,
     RSSI_MEASUREMENT_TYPE_DBM,
+    STARTUP_REASONS_BY_VALUE,
 )
 
 ANT_TICKS_PER_S = 32768.0
@@ -1389,16 +1391,44 @@ def listen(dev, reader, analyzers: dict, seconds: float, verbose: bool,
     """
     events = Counter()
     identities = {}
+    reboots = []
+    port_death = None
     start = time.monotonic()
     end = start + seconds
     last_report = start
 
     while time.monotonic() < end:
-        result = reader.next_frame(min(end, time.monotonic() + 0.25))
+        try:
+            result = reader.next_frame(min(end, time.monotonic() + 0.25))
+        except OSError as exc:
+            # pyserial's SerialException and pyusb's USBError are both
+            # OSErrors. A port that dies mid-window (the 54L15 DK's J-Link OB
+            # VCOM, 2026-11-07: PermissionError 13 at ~245 s of 300) used to
+            # take the whole run down with no JSON at all, so nothing could
+            # say how far it got. Stop here and report what was heard, with
+            # the time of death; the caller skips the close sequence.
+            port_death = {"t_s": round(time.monotonic() - start, 3),
+                          "at_unix": round(time.time(), 3),
+                          "error": f"{type(exc).__name__}: {exc}"}
+            break
         if result is None:
             continue
         msg_id, body = result
         now = time.monotonic() - start
+
+        if msg_id == MESG_STARTUP_MESG_ID:
+            # Nothing in this window asked for a reset, so a startup message
+            # here is the receiver announcing that it rebooted (UART builds
+            # send one at boot, with the hardware reset cause), and every
+            # channel this tool opened is gone with it. Recorded, not fatal:
+            # the loss that follows is real, and its cause is now named.
+            reason = body[0] if body else None
+            reboots.append({
+                "t_s": round(now, 3), "at_unix": round(time.time(), 3),
+                "reason": reason,
+                "reason_name": (STARTUP_REASONS_BY_VALUE.get(reason)
+                                if reason is not None else None)})
+            continue
 
         if msg_id in (MESG_BROADCAST_DATA_ID, MESG_ACKNOWLEDGED_DATA_ID):
             if not body:
@@ -1428,11 +1458,30 @@ def listen(dev, reader, analyzers: dict, seconds: float, verbose: bool,
             print("  " + ", ".join(
                 f"ch{ch} {a.packets} pkts" for ch, a in analyzers.items()))
 
-    return {"events": {EVENT_CODES_BY_VALUE.get(code, str(code)): count
-                       for code, count in sorted(events.items())},
-            "identities": {str(ch): {"device_number": ident[0],
-                                     "device_type": ident[1]}
-                           for ch, ident in identities.items()}}
+    out = {"events": {EVENT_CODES_BY_VALUE.get(code, str(code)): count
+                      for code, count in sorted(events.items())},
+           "identities": {str(ch): {"device_number": ident[0],
+                                    "device_type": ident[1]}
+                          for ch, ident in identities.items()},
+           "receiver_reboots": reboots}
+    if port_death is not None:
+        out["port_death"] = port_death
+    return out
+
+
+def window_faults(result: dict) -> list[str]:
+    """What, beyond the per-channel checks, makes this window fail: a receiver
+    that rebooted mid-window, or a port that died. Both are named here so the
+    summary says which happened rather than reporting bare loss."""
+    faults = []
+    for reboot in result.get("receiver_reboots") or []:
+        name = reboot.get("reason_name") or f"0x{reboot.get('reason') or 0:02X}"
+        faults.append(f"receiver rebooted at {reboot['t_s']:.1f} s "
+                      f"(startup reason {name})")
+    death = result.get("port_death")
+    if death:
+        faults.append(f"port died at {death['t_s']:.1f} s: {death['error']}")
+    return faults
 
 
 # The two events by which the radio owns up to an empty slot, in both spellings
@@ -2140,15 +2189,23 @@ def main() -> int:
         t_listen_unix = time.time()
         extra = listen(dev, reader, analyzers, args.seconds, verbose, records)
 
-        print("\nClosing")
-        for channel in analyzers:
-            command(dev, reader, MESG_CLOSE_CHANNEL_ID, bytes([channel]),
-                    f"close ch{channel}")
-            if not wait_for_close(reader, channel):
-                print(f"  ! channel {channel} never reported closed")
-            command(dev, reader, MESG_UNASSIGN_CHANNEL_ID, bytes([channel]),
-                    f"unassign ch{channel}")
-        close_device(dev)
+        if "port_death" in extra:
+            # Nothing to close on a port that is gone; trying would raise
+            # again and lose the partial result this exists to keep.
+            print(f"\n  ! port died at {extra['port_death']['t_s']:.1f} s: "
+                  f"{extra['port_death']['error']}")
+            with contextlib.suppress(Exception):
+                close_device(dev)
+        else:
+            print("\nClosing")
+            for channel in analyzers:
+                command(dev, reader, MESG_CLOSE_CHANNEL_ID, bytes([channel]),
+                        f"close ch{channel}")
+                if not wait_for_close(reader, channel):
+                    print(f"  ! channel {channel} never reported closed")
+                command(dev, reader, MESG_UNASSIGN_CHANNEL_ID,
+                        bytes([channel]), f"unassign ch{channel}")
+            close_device(dev)
         ordered = list(analyzers.values())
 
         # T1: (t_listen - t_open[ch]) + the analyser's own first_t. Left at
@@ -2198,8 +2255,12 @@ def main() -> int:
     # After accounting (unexplained_loss comes from it), before report()
     # (which prints derive()'s per-channel table).
     result["derived"] = derive(result)
+    faults = window_faults(result)
+    if faults:
+        result["window_faults"] = faults
     result["pass"] = (all(c["pass"] for c in result["channels"])
-                      and (accounting is None or accounting["pass"]))
+                      and (accounting is None or accounting["pass"])
+                      and not faults)
 
     stack.close()
 
@@ -2209,6 +2270,8 @@ def main() -> int:
         return 0 if result["pass"] else 1
 
     report(result)
+    for fault in faults:
+        print(f"\n  ! {fault}")
     if args.json:
         with open(args.json, "w") as handle:
             json.dump(result, handle, indent=2)

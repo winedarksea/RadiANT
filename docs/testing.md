@@ -284,8 +284,9 @@ Three things about it are load-bearing:
   step records `loss_basis: master_sent` rather than pretending otherwise.
 - **The dial is checked, not trusted.** Every rung records mean RSSI, and across
   the ladder that must fall about 1 dB per commanded dB with no rung far off the
-  line. `CONFIG_ANT_DONGLE_TX_POWER_BOOST` on the transmitter folds levels 3 and
-  4 onto the same power; a fine ladder against the wrong part writes raw
+  line. `CONFIG_ANT_DONGLE_TX_POWER_BOOST` on the transmitter folds level 4 onto
+  the part's maximum (images before 2026-11 folded level 3 as well, so their
+  "0 dBm" rung was really the ceiling); a fine ladder against the wrong part writes raw
   register values that mean something else; firmware without the custom byte of
   `MESG_CHANNEL_RADIO_TX_POWER` transmits at 0 dBm for every fine rung. All
   three produce a normal-looking curve and a fabricated dB figure, and only the

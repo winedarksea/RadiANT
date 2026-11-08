@@ -179,7 +179,37 @@ Traps this tool already handles, so don't work around them by hand:
   54xxx), never 14871, so a leftover master is never acquired by mistake. A
   window whose receiver heard a different number is flagged.
 - **A short window is flagged**, because a dropped COM port can produce a
-  truncated run that still looks like a pass.
+  truncated run that still looks like a pass. `wall_s` is each receiver's own
+  run time, so this fires for every receiver. (It used to be read in launch
+  order, which gave every receiver after the first the slowest one's time, and
+  that hid the 54L15's VCOM death at 245 s.)
+- **A receiver that reboots or loses its port is named.** UART builds send an
+  unsolicited STARTUP at boot carrying the hardware reset cause (0x00
+  power-on, 0x01 pin or debugger, 0x02 watchdog, lockup, software reset or
+  crash), and ant_verify records one that arrives mid-window as
+  `receiver_reboots`. A port that dies still writes partial JSON, with
+  `port_death` giving the time and the error.
+- **`log_port` on a `[[device]]` captures that board's console for every
+  window** to `<window>_<device>_console.log`, with every line stamped in host
+  time. To classify a drop, compare that log with the ANT side's
+  `port_death` time and with `Get-WinEvent` from Kernel-PnP. A console that
+  dies at the same moment points at the probe or USB; a fault dump or boot
+  banner points at the firmware. An unknown device key is warned about, not
+  dropped silently.
+- **ant_compare and every tool here use a 1 s USB read, never a short one.**
+  Under libusb-win32 a read timeout that lands as a frame arrives loses that
+  frame whole. STARTUP arrives 52 ms after SYSTEM_RESET, so a 50 ms read lost
+  it about 1 % of the time (TODO.md item 2). `tools/ant_reset_loop.py`
+  measures this.
+- **Transmit power changed after 2026-11-07.** A RadiANT ant_sim master
+  (which never sets power) runs at the part's maximum, which is now +8 dBm on
+  the 54L15 (it was +4) and +5 on CC26xx (it was +4). Signal figures from a
+  54L15 master are therefore not comparable with earlier runs. An explicit
+  level 3 is now a true 0 dBm.
+- **The fine ladder sends every rung as a raw register value**, named levels
+  included, so no bridge level mapping can move a rung. (Sent as LVL_4, its
+  +4 rung would now measure +8.) The levels ladder still sends named levels,
+  so against a RadiANT transmitter its LVL_4 rung reads at the ceiling.
 - **The 54L15's fine ladder bottoms out at −28 dBm.** Its −40/−46 dBm settings
   are 11-bit register values, and the wire's custom TX-power byte is one byte.
   If no knee is reached, move the transmitter away; don't extrapolate.

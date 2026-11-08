@@ -305,7 +305,9 @@ config ANT_DONGLE_TX_POWER_BOOST
 	default y
 	help
 	  See apps/dongle/Kconfig's own copy of this symbol for the full
-	  rationale. Left on by default for parity; the P4 gate's own conf
+	  rationale: an unset default and LVL_4 go to the part's maximum (+8 dBm
+	  on the nRF54L15), and an explicit LVL_3 is a true 0 dBm. Left on by
+	  default for parity; the P4 gate's own conf
 	  fragments do not touch it, so the bench measures the same transmit
 	  power a shipping apps/dongle image would use.
 

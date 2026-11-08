@@ -94,16 +94,43 @@ def child_command(t: Target, seconds: float, device_numbers: list[int],
     return cmd
 
 
+def wait_each(procs: list, poll_s: float = 0.2) -> dict[int, tuple[int, float]]:
+    """Wait for every child, noting the moment EACH one finished.
+
+    Returns {id(proc): (returncode, monotonic finish time)}. `procs` holds the
+    run_targets() tuples; only element 1 (the Popen) is used.
+
+    Polled in one loop, not wait()ed in launch order. Waiting in order stamps
+    every child after the first with the time the SLOWEST one before it
+    finished: a receiver whose COM port died at 245 s of a 300 s window read
+    back as wall_s=301, which disarmed ant_compare.py's dropped-port check for
+    every receiver but the first (2026-11-07, the 54L15's VCOM death).
+    """
+    pending = {id(entry[1]): entry[1] for entry in procs}
+    done: dict[int, tuple[int, float]] = {}
+    while pending:
+        for key, proc in list(pending.items()):
+            rc = proc.poll()
+            if rc is not None:
+                done[key] = (rc, time.monotonic())
+                del pending[key]
+        if pending:
+            time.sleep(poll_s)
+    return done
+
+
 def run_targets(targets: list[Target], seconds: float,
                 device_numbers: list[int], extra: list[str], out_dir: Path,
                 record_dir: Path | None = None, baud: int = 115200,
-                prefix: str = "", verbose: bool = True) -> list[dict]:
+                prefix: str = "", verbose: bool = True,
+                poll_s: float = 0.2) -> list[dict]:
     """Launch one ant_verify.py per target, concurrently, and collect them.
 
     Returns one entry per target, in the order given: `target`, `exit`,
-    `json`, `log`, `wall_s` (how long the child actually ran - a dropped COM
-    port gives a short run whose JSON can still look like a pass), and either
-    `data` (the child's JSON) or `error`.
+    `json`, `log`, `wall_s` (how long THAT child ran, to within `poll_s` - a
+    dropped COM port gives a short run whose JSON can still look like a pass;
+    see wait_each() for why it is per child), and either `data` (the child's
+    JSON) or `error`.
 
     `prefix` is prepended to every file stem so one results directory can hold
     many windows (the orchestrator's L1/L2/acquire-cycle files) without one
@@ -137,10 +164,11 @@ def run_targets(targets: list[Target], seconds: float,
     if verbose:
         print(f"\n{len(procs)} target(s) running concurrently for "
               f"{seconds:.0f} s ...")
+    finished = wait_each(procs, poll_s)
     results = []
     for t, proc, json_path, log_path, log_f, started in procs:
-        rc = proc.wait()
-        wall = time.monotonic() - started
+        rc, ended = finished[id(proc)]
+        wall = ended - started
         log_f.close()
         entry = {"target": t.name, "exit": rc, "json": str(json_path),
                  "log": str(log_path), "wall_s": wall}

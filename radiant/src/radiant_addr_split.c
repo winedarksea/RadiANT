@@ -45,24 +45,6 @@ static inline uint8_t bit_at(const uint8_t *s, uint32_t i)
 	return (uint8_t)((s[i >> 3] >> (7u - (i & 7u))) & 1u);
 }
 
-uint8_t radiant_addr_split_alt_run(const uint8_t *addr, uint8_t len)
-{
-	uint8_t best, cur;
-
-	if (addr == NULL || len == 0u) {
-		return 0u;
-	}
-	best = cur = 1u;
-	for (uint32_t i = 1; i < (uint32_t)len * 8u; i++) {
-		cur = (bit_at(addr, i) != bit_at(addr, i - 1u)) ? (uint8_t)(cur + 1u)
-								 : 1u;
-		if (cur > best) {
-			best = cur;
-		}
-	}
-	return best;
-}
-
 uint8_t radiant_addr_split_rx_hw_len(const struct radiant_rx_filter *filters,
 				     uint8_t n, uint8_t addr_len, bool phy_1m,
 				     uint8_t hw_len_cfg, uint8_t guard_run)

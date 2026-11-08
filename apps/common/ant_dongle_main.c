@@ -15,6 +15,8 @@
 
 #include "ant_dongle_main.h"
 #include "ant_heartbeat_led.h"
+#include "ant_reset_cause.h"
+#include "ant_serial_bridge.h"
 #include "ant_transport.h"
 #include "diag_flash_log.h"
 
@@ -49,9 +51,6 @@ BUILD_ASSERT(!(IS_ENABLED(CONFIG_CLOCK_CONTROL_NRF_K32SRC_SYNTH) &&
  */
 LOG_MODULE_REGISTER(ant_dongle, LOG_LEVEL_INF);
 
-/* Forward declaration — defined in ant_serial_bridge.c */
-extern int ant_serial_bridge_init(void);
-
 /* The default post-radio hook: nothing. See the header for why it is weak. */
 __weak void ant_dongle_post_radio_init(void)
 {
@@ -63,31 +62,21 @@ __weak void ant_dongle_post_radio_init(void)
  * leaves the dongle unusable until replugged. That race only exists right
  * after a flash - a cold plug has nothing to detach from, so RESETREAS
  * distinguishes the cases (software reset vs. power-on vs. pin reset) and
- * only the former waits. RESETREAS latches until cleared, so this clears it
- * after reading, or the wait would never be skipped again.
+ * only the former waits. RESETREAS latches until cleared; ant_reset_cause()
+ * clears it on its first read, or the wait would never be skipped again.
  *
  * On a board with no UF2 bootloader (every apps/dongle_thread P4 gate board)
  * CONFIG_ANT_DONGLE_UF2_SETTLE_MS may be 0 and this is a no-op; it stays
  * compiled so a USB-capable board built from either application behaves the
  * same way.
  */
-static void settle_after_uf2_bootloader(void)
+static void settle_after_uf2_bootloader(bool cause_known, uint32_t cause)
 {
 	if (CONFIG_ANT_DONGLE_UF2_SETTLE_MS == 0) {
 		return;
 	}
 
-#if defined(CONFIG_HWINFO)
-	uint32_t cause = 0;
-
-	/* Zephyr's weak z_impl_hwinfo_get_reset_cause() answers -ENOSYS on a
-	 * part with no driver, and the whole file is only compiled when
-	 * CONFIG_HWINFO is set - hence the #if rather than IS_ENABLED(), which
-	 * would leave an unresolved symbol at link time.
-	 */
-	if (hwinfo_get_reset_cause(&cause) == 0) {
-		(void)hwinfo_clear_reset_cause();
-
+	if (cause_known) {
 		/* Power-on reset leaves RESETREAS empty and is the only cause
 		 * guaranteeing no mass-storage device preceded us. Every other
 		 * cause (bootloader jump, or RESET pressed while the drive is
@@ -97,10 +86,9 @@ static void settle_after_uf2_bootloader(void)
 			return;
 		}
 
-		LOG_INF("reset cause 0x%08x: settling %d ms for the bootloader",
-			cause, CONFIG_ANT_DONGLE_UF2_SETTLE_MS);
+		LOG_INF("settling %d ms for the bootloader",
+			CONFIG_ANT_DONGLE_UF2_SETTLE_MS);
 	}
-#endif
 
 	/* Wait unconditionally if the reset cause could not be established,
 	 * rather than assume a cold boot and risk the race.
@@ -111,8 +99,21 @@ static void settle_after_uf2_bootloader(void)
 int ant_dongle_main_run(void)
 {
 	int ret;
+	uint32_t cause;
+	/* Read and cleared here, first, and cached for everyone after: the
+	 * settle below, and the bridge's boot STARTUP. See ant_reset_cause.h. */
+	bool cause_known = ant_reset_cause(&cause);
 
-	settle_after_uf2_bootloader();
+	/* Every boot, not only the ones that settle: a board that rebooted
+	 * itself mid-session is otherwise indistinguishable on the console from
+	 * one that was power-cycled. */
+	if (cause_known) {
+		LOG_INF("reset cause 0x%08x", cause);
+	} else {
+		LOG_INF("reset cause unknown (no hwinfo)");
+	}
+
+	settle_after_uf2_bootloader(cause_known, cause);
 
 	LOG_INF("%s starting", CONFIG_ANT_DONGLE_MAIN_BANNER);
 
@@ -162,6 +163,11 @@ int ant_dongle_main_run(void)
 	}
 
 	LOG_INF("transport up");
+
+	/* After the transport, never before: a UART write before
+	 * ant_transport_enable() is refused (-ENODEV). A no-op on USB builds. */
+	ant_serial_bridge_announce_boot();
+
 	(void)diag_flash_log_flush();
 
 	/* The heartbeat owns the main thread from here; it never returns. See

@@ -27,7 +27,7 @@ Dynastream. See [Licensing and identity](#licensing-and-identity).
 > [Windows drivers](#windows-drivers) before anything else.
 
 ### Why?
-Before this project, the 'latest' ANT+ dongles on the market are from 2012. They use old, weak nRF24AP2 (circa 2010) or the nRF51422 (circa 2012) chips. Switching to the NRF52840 (which is widely available and cheap) can lead to a 10 db improvement in sensitivity. That 10 dB improvement in sensitivity means the new nRF52840 chip can pick up a signal that is *ten times weaker* than what the old 2012 chips could detect. Big difference. While ANT+ is mostly your computer listening, in ERG mode there is a transmit element, and the +8 dBm signal strength vs the older chips means more range (more than double) and reliability there too.
+Before this project, the 'latest' ANT+ dongles on the market are from 2012. They use old, weak nRF24AP2 (circa 2010) or the nRF51422 (circa 2012) chips. Switching to the NRF52840 (which is widely available and cheap) can lead to a 10 db improvement in sensitivity. That 10 dB improvement in sensitivity means the new nRF52840 chip can pick up a signal that is *ten times weaker* than what the old 2012 chips could detect. Big difference. While ANT+ is mostly your computer listening, in ERG mode there is a transmit element, and the +8 dBm signal strength vs the older chips means more range (more than double) and reliability there too. The dongle transmits at its maximum by default, which is what apps like Zwift get, since they never set the power. An app that explicitly asks for a lower level, including the standard 0 dBm, gets what it asked for.
 
 This uses Zephyr as the base. Zephyr provides a modern, Linux Foundation-backed RTOS. That is heavily vetted, actively maintained USB stacks, superior power management, advanced radio libraries, and true concurrency. Combined with the newer chips that have EasyDMA direct memory access and built-in USB peripherals, this can lead to up to a 90% reduction in latency and packet loss.
 
@@ -386,7 +386,7 @@ that way.
 | [Device profiles](docs/device-profiles.md) | Every profile in one place: ANT+ page layouts, accumulators, common pages and rates, plus the RadiANT profile device types and `0x60` schema recipes |
 | [Profile registry](docs/profile-registry.md) | Device types and pages claimed, and how a third party claims one |
 | [RadiANT telemetry](docs/radiant-telemetry.md) | The generic telemetry envelope and its MQTT mapping |
-| [RadiANT security](docs/radiant-security.md) | Threat model, the three independent switches, and the honest limits |
+| [RadiANT security](docs/radiant-security.md) | Threat model, the two independent payload switches and the identity rule, and the honest limits |
 | [Preservation](docs/preservation.md) | What `archive/` holds, and why each item is or is not redistributable |
 | [Third-party dependencies](docs/third-party.md) | What this project uses that it does not own, and the licence position of each |
 | [Decisions](docs/decisions/) | The ADRs: release default, clean-room policy, naming and identity, licence, extension placement |

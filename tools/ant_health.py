@@ -163,10 +163,12 @@ def main() -> int:
     dev = open_device(True, serial=args.serial, port=args.port, baud=args.baud)
     reader = FrameReader(dev)
 
-    # Deliberately NO reset_stack() here. A reset zeroes every counter this
-    # tool exists to read, which would make it always report a healthy dongle.
-    # It also drops any channel another tool has open, so this can be run
-    # against a live session - which is the intended use.
+    # Deliberately NO reset_stack() here: it would drop any channel another
+    # tool has open, and this is meant to be run against a live session.
+    # (Not because a reset clears the counters - it does not. Nothing in
+    # apps/common/ant_health.c ever zeroes them short of a reboot, so they
+    # count since boot, across every SYSTEM_RESET; tools/ant_reset_loop.py
+    # --health relies on that to span a whole loop with one before/after.)
     try:
         body = request(dev, reader)
     finally:

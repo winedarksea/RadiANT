@@ -131,6 +131,13 @@ config ANT_SIM_DEVICE_NUMBER
 	  warranty and a previous owner, and that is what the identity tiers in
 	  docs/radiant-security.md section 4 exist to correct.
 
+	  Avoid numbers with a long alternating bit run in the on-air address:
+	  nRF-based receivers lose up to ~5 % of their frames (ADR 0019). Check
+	  one with `tools/ant_identity.py check <number>`, which provisioning
+	  already does for you. This image is built on sdk-ant, so it cannot
+	  warn at run time the way a RadiANT image does, and its Tier 2 random
+	  roll does not avoid them either.
+
 config ANT_SIM_IDENTITY_TIER_2
 	bool "Tier 2: re-roll the device number at every power-up"
 	default n

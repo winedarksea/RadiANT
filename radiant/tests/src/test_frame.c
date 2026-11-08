@@ -1542,3 +1542,66 @@ ZTEST(radiant_frame, test_long_payload_arithmetic_and_the_format_limit)
 		     "this test only means something while the encoder can "
 		     "produce a body the hardware format refuses");
 }
+
+/*
+ * The transmit-side check against device numbers the nRF demodulator slips on
+ * (ADR 0019). Vectors: the 2026-11-07 sweep's numbers as a power sensor (dtype
+ * 0x0B), each with the run that sweep scored, and tools/test_ant_identity.py
+ * holds the same ones.
+ */
+ZTEST(radiant_frame, test_channel_id_alt_run)
+{
+	static const struct {
+		uint16_t dn;
+		uint8_t  run;
+	} v[] = {
+		/* 43634 scores 11 as sent, 13 with the pairing bit set. */
+		{ 21845u, 21u }, { 54101u, 12u }, { 54100u, 11u }, { 43634u, 13u },
+		{ 54102u, 10u }, { 54096u, 9u },  { 54186u, 9u },  { 54058u, 8u },
+		{ 54080u, 7u },  { 54132u, 6u },  { 54900u, 6u },
+	};
+	static const uint8_t zero_net[RADIANT_NET_ADDR_LEN] = { 0x00, 0x00 };
+	static const uint8_t a54100[5] = { 0xA6, 0xC5, 0x54, 0xD3, 0x0B };
+
+	for (size_t i = 0; i < ARRAY_SIZE(v); i++) {
+		zassert_equal(radiant_channel_id_alt_run(radiant_net_addr_ant_plus,
+							 v[i].dn, 0x0Bu),
+			      v[i].run, "dn %u", v[i].dn);
+	}
+
+	/* Agrees with the raw counter on the address radiant_frame_addr()
+	 * builds, which is what the receive guard scores. */
+	zassert_equal(radiant_addr_alt_run(a54100, 5u), 11u);
+
+	/* The pairing bit sits next to the device number: #10752 is 7 as sent
+	 * and 9 while pairing, so it must be flagged. Passing the type with
+	 * the bit already set gives the same answer. */
+	zassert_equal(radiant_channel_id_alt_run(radiant_net_addr_ant_plus,
+						 10752u, 0x0Bu),
+		      9u);
+	zassert_equal(radiant_channel_id_alt_run(radiant_net_addr_ant_plus,
+						 10752u, 0x8Bu),
+		      9u);
+	zassert_true(radiant_channel_id_alt_run(radiant_net_addr_ant_plus,
+						10752u, 0x0Bu) >=
+		     RADIANT_ADDR_ALT_RUN_AVOID);
+
+	/* Every default device number in apps/ is clean. */
+	zassert_true(radiant_channel_id_alt_run(radiant_net_addr_ant_plus, 4242u,
+						0x78u) < RADIANT_ADDR_ALT_RUN_AVOID);
+	zassert_true(radiant_channel_id_alt_run(radiant_net_addr_ant_plus, 4243u,
+						0x11u) < RADIANT_ADDR_ALT_RUN_AVOID);
+	zassert_true(radiant_channel_id_alt_run(radiant_net_addr_ant_plus, 4244u,
+						0x11u) < RADIANT_ADDR_ALT_RUN_AVOID);
+	zassert_true(radiant_channel_id_alt_run(radiant_net_addr_ant_plus,
+						14871u, 0x0Bu) <
+		     RADIANT_ADDR_ALT_RUN_AVOID);
+
+	/* The network bytes are part of it: C5's trailing 0101 is what makes
+	 * #54100 bad on ANT+, and a different network moves the risk. */
+	zassert_equal(radiant_channel_id_alt_run(zero_net, 54100u, 0x0Bu), 7u);
+
+	zassert_equal(radiant_channel_id_alt_run(NULL, 54100u, 0x0Bu), 0u);
+	zassert_equal(radiant_addr_alt_run(NULL, 5u), 0u);
+	zassert_equal(radiant_addr_alt_run(a54100, 0u), 0u);
+}

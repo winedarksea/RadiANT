@@ -1104,18 +1104,23 @@ constant_groups:
       - {name: RADIO_TX_POWER_LVL_2, value: 0x02, desc: "-4 dBm.",
          source: bridge}
       - {name: RADIO_TX_POWER_LVL_3, value: 0x03,
-         desc: "0 dBm. The ANT default, and what a host sends when it has no
-                opinion - the common case.",
+         desc: "0 dBm. The ANT default. Honoured as a true 0 dBm when a host
+                sends it explicitly; a host that never sets power gets the
+                bridge's boosted default instead
+                (CONFIG_ANT_DONGLE_TX_POWER_BOOST), not this.",
          source: bridge}
       - {name: RADIO_TX_POWER_LVL_4, value: 0x04,
          desc: "+4 dBm. The ceiling on the nRF51422 inside the stick being
                 impersonated, so a host asking for it is asking for everything
-                the hardware has.",
+                the hardware has - with the boost on, the bridge raises it to
+                the part's maximum.",
          source: bridge}
       - {name: RADIO_TX_POWER_LVL_5, value: 0x05,
-         desc: "+8 dBm. Exists only on the nRF52820, nRF52833 and nRF52840. No
-                host will ever request it by name, because no retail stick has
-                ever had it.",
+         desc: "+8 dBm. No host will ever request it by name, because no retail
+                stick has ever had it. The radiant backend accepts it on every
+                part and rounds it to the part's ceiling (+8 nRF52840/nRF54L15,
+                0 nRF5340 net core, +5 CC26xx); sdk-ant accepts it only on the
+                nRF52820, nRF52833 and nRF52840.",
          source: bridge}
       - {name: RADIO_TX_POWER_LVL_CUSTOM, value: 0x80,
          desc: "Names a raw register value rather than a level, so it is passed
@@ -1208,19 +1213,29 @@ constant_groups:
            means a power-on reset with no other flag set."
     values:
       - {name: STARTUP_POWER_ON_RESET, value: 0x00,
-         desc: "Power-on. This firmware never sends it: the startup message is
-                emitted only in answer to MESG_SYSTEM_RESET, which reports
-                STARTUP_COMMAND_RESET.",
-         source: "tools (ant_probe)"}
+         desc: "Power-on. Sent unsolicited at boot by UART builds only
+                (ant_serial_bridge_announce_boot()) for power-on, brown-out,
+                VBUS, wake from System OFF, or a cause that could not be read
+                (apps/common/ant_reset_cause.h). Never in answer to
+                MESG_SYSTEM_RESET, which reports STARTUP_COMMAND_RESET.",
+         source: "bridge, tools (ant_probe)"}
       - {name: STARTUP_HARDWARE_RESET_LINE, value: 0x01,
-         desc: "Hardware reset line.", source: "tools (ant_probe)"}
+         desc: "Hardware reset line. Sent at boot by UART builds for a reset
+                pin or debugger (CTRL-AP) reset.",
+         source: "bridge, tools (ant_probe)"}
       - {name: STARTUP_WATCH_DOG_RESET, value: 0x02,
-         desc: "Watchdog.", source: "tools (ant_probe)"}
+         desc: "Watchdog. Sent at boot by UART builds for a watchdog, CPU
+                lockup or software reset - the firmware reset itself, which is
+                how a fatal error reboots. A debugger's flash-and-reset also
+                arrives as a software reset on nRF, so a fresh flash reports
+                this too.",
+         source: "bridge, tools (ant_probe)"}
       - {name: STARTUP_COMMAND_RESET, value: 0x20,
-         desc: "Reset by MESG_SYSTEM_RESET. What this firmware reports, and the
-                only reason it ever reports: send_startup() in
-                apps/common/ant_serial_bridge.c has one caller, the reset arm
-                of dispatch(). It sent 0x00 until 2026-08-20, which told hosts
+         desc: "Reset by MESG_SYSTEM_RESET. What this firmware reports for every
+                reset the host asks for; the arm of dispatch() that handles
+                MESG_SYSTEM_RESET is the only sender of this reason (the boot
+                STARTUP above carries a hardware cause instead, and is never
+                sent on USB builds). It sent 0x00 until 2026-08-20, which told hosts
                 the stick had cold-booted and defeated the one thing this byte
                 is watched for - telling an unexpected reset apart from the
                 host's own. The basis for 0x20 is sdk-ant's own header, which

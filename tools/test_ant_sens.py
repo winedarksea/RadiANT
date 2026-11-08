@@ -141,8 +141,10 @@ class TestTheDialIsChecked(unittest.TestCase):
         self.assertIn("not transmitting at the powers it was told", detail)
 
     def test_tx_power_boost_folding_two_levels_together_is_caught(self):
-        # CONFIG_ANT_DONGLE_TX_POWER_BOOST maps levels 3 and 4 both onto
-        # +8 dBm. The best-fit slope through that is still ~1.12 (within any
+        # A pre-2026-11 CONFIG_ANT_DONGLE_TX_POWER_BOOST image maps levels 3
+        # and 4 both onto +8 dBm (a current one folds only level 4, which is
+        # still the case old transmitters and old evidence present). The
+        # best-fit slope through that is still ~1.12 (within any
         # sane tolerance), so it's the per-rung residual, not the slope, that
         # catches the three rungs sitting 3-6 dB off the line.
         steps = curve([(8, 0.4), (4, 0.4), (0, 0.4), (-4, 0.6), (-12, 1.2),
@@ -287,7 +289,24 @@ class TestPowerEncoding(unittest.TestCase):
         # measuring it would label a 0 dBm rung "+4".
         with self.assertRaises(ValueError):
             ant_sens.encode_power(4, "nrf5340net")
-        self.assertEqual(ant_sens.encode_power(0, "nrf5340net"), (3, 0))
+        self.assertEqual(ant_sens.encode_power(0, "nrf5340net"),
+                         (ant_sens.RADIO_TX_POWER_LVL_CUSTOM, 0x00))
+
+    def test_a_fine_ladder_never_sends_a_level_the_bridge_can_remap(self):
+        # CONFIG_ANT_DONGLE_TX_POWER_BOOST raises LVL_4 to the part's maximum
+        # (and raised LVL_3 before 2026-11). A fine ladder that sent +4 as
+        # LVL_4 would measure +8 on that rung and fail its own dial check, so
+        # with a part every rung - named levels too - is the raw escape.
+        for part, table in ant_sens.PART_FINE_DBM.items():
+            for dbm in table:
+                if dbm > ant_sens.PART_MAX_DBM[part]:
+                    continue
+                level, custom = ant_sens.encode_power(dbm, part)
+                self.assertEqual(level, ant_sens.RADIO_TX_POWER_LVL_CUSTOM,
+                                 f"{part} {dbm} dBm went out as a named level")
+                self.assertEqual(custom, table[dbm])
+        self.assertEqual(ant_sens.encode_power(4, "nrf54l15"),
+                         (ant_sens.RADIO_TX_POWER_LVL_CUSTOM, 0x28))
 
 
 @unittest.skipIf(ant_sens is None, "pyusb is not installed")

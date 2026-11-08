@@ -128,6 +128,11 @@ config HRM_DEVICE_NUMBER
 	  this tree can be provisioned. See docs/hrm-reference-design.md's
 	  production checklist, item 3.
 
+	  Avoid numbers with a long alternating bit run in the on-air address:
+	  nRF-based receivers lose up to ~5 % of their frames (ADR 0019). Check
+	  one with `tools/ant_identity.py check <number> --device-type 0x78`.
+	  The image logs a warning when it opens a channel with such a number.
+
 config HRM_MANUFACTURER_ID
 	int "manufacturer id for the common pages"
 	range 0 255

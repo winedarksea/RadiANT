@@ -4,7 +4,22 @@ import copy
 import unittest
 
 import ant_wire as w
-from ant_ack_gate import assess, named_events, receive_loss
+from ant_ack_gate import assess, named_events, reader_timeout_ms, receive_loss
+from ant_probe import READ_TIMEOUT_MS, SerialDevice
+
+
+class ReaderTimeoutSplit(unittest.TestCase):
+    def test_a_usb_endpoint_never_gets_a_read_short_enough_to_race_startup(self):
+        # STARTUP arrives 52 ms after SYSTEM_RESET; a 50 ms libusb0 read lost
+        # it 11 times in 1000 (TODO.md item 2). Anything under ~200 ms races.
+        usb_dev = object()
+        self.assertEqual(reader_timeout_ms(usb_dev), READ_TIMEOUT_MS)
+        self.assertGreaterEqual(reader_timeout_ms(usb_dev), 1000)
+
+    def test_a_serial_endpoint_keeps_the_short_read(self):
+        # pyserial loses nothing on a timeout, so short is free there.
+        serial_dev = SerialDevice.__new__(SerialDevice)
+        self.assertEqual(reader_timeout_ms(serial_dev), 50)
 
 
 class AckGateTests(unittest.TestCase):

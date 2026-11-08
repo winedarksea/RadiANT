@@ -1399,6 +1399,13 @@ def main() -> int:
                              f"descriptor; {name} has none")
                 descriptor.clock_stated = True
                 descriptor.clock_accuracy = args.clock_accuracy
+            # Not refused: the bench sends these numbers on purpose to
+            # measure the receive side. Said once, on stderr, so a choice
+            # made by accident does not go unnoticed.
+            warning = ai.slip_warning(sensor.device_number,
+                                      (sensor.device_type,))
+            if warning:
+                print(warning, file=sys.stderr)
             built.append(sensor)
         return built
 

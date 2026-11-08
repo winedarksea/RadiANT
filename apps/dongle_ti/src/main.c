@@ -23,6 +23,8 @@
 #include <zephyr/logging/log.h>
 
 #include "ant_heartbeat_led.h"
+#include "ant_reset_cause.h"
+#include "ant_serial_bridge.h"
 #include "ant_transport.h"
 
 /* The radio contract - whichever backend is compiled in behind it. Bringing
@@ -32,12 +34,19 @@
 
 LOG_MODULE_REGISTER(ant_dongle_ti, LOG_LEVEL_INF);
 
-/* Forward declaration — defined in apps/common/ant_serial_bridge.c */
-extern int ant_serial_bridge_init(void);
-
 int main(void)
 {
 	int ret;
+	uint32_t cause;
+
+	/* Read and cleared first, cached for the bridge's boot STARTUP - see
+	 * apps/common/ant_reset_cause.h. Logged on every boot, so a dongle that
+	 * rebooted itself mid-ride can be told from one that was replugged. */
+	if (ant_reset_cause(&cause)) {
+		LOG_INF("reset cause 0x%08x", cause);
+	} else {
+		LOG_INF("reset cause unknown (no hwinfo)");
+	}
 
 	LOG_INF("ANT+ Dongle (TI CC26x2) starting");
 
@@ -89,6 +98,12 @@ int main(void)
 		return ret;
 	}
 	LOG_INF("transport up");
+
+	/* After the transport, never before (a UART write before it is
+	 * refused). This is the board where it matters most: the CP2102N keeps
+	 * the host's USB handle open across an MCU reboot, so without this the
+	 * host sees only silence. */
+	ant_serial_bridge_announce_boot();
 
 	/* The heartbeat owns the main thread from here; it never returns, and
 	 * on a board with no led0 alias it sleeps. Bring-up wants a louder

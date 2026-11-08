@@ -1,0 +1,18 @@
+[2026-11-07T16:43:02.382] [console_capture] COM3: capturing at 115200
+[2026-11-07T16:43:06.244] [01:11:20.504,044] [0m<inf> radiant_radio_nrf: rxdiag hw=0 win=0 ok=0 crc=0 cut=0 noaddr=0 silent=0 abort=0 fr_crc=0 fr_noaddr=0 fr_foreign=0 fr_repaired=0 off=2147483647..-2147483648 dbg_noaddr=0[0m
+[2026-11-07T16:43:07.863] *** Booting nRF Connect SDK v3.4.0-99553055607b ***
+[2026-11-07T16:43:07.863] *** Using Zephyr OS v4.4.0-bf801e4e3d19 ***
+[2026-11-07T16:43:07.863] [01:11:23.101,799] [0m<inf> ant_dongle: reset cause 0x00000001[0m
+[2026-11-07T16:43:07.863] [01:11:23.101,803] [0m<inf> ant_dongle: settling 1000 ms for the bootloader[0m
+[2026-11-07T16:43:08.875] [01:11:24.101,883] [0m<inf> ant_dongle: ANT+ USB Dongle starting[0m
+[2026-11-07T16:43:08.884] [01:11:24.104,475] [0m<inf> radiant_radio_nrf: timer @0x500ca000, 1002 us elapsed over a 1000 us wait[0m
+[2026-11-07T16:43:08.884] [01:11:24.104,518] [0m<inf> radiant_radio_nrf: die temperature at init: 2.77 degC[0m
+[2026-11-07T16:43:08.884] [01:11:24.104,598] [0m<inf> radiant_api: radiant up: 32 channels, 8 filters/window, 32 search sets[0m
+[2026-11-07T16:43:08.884] [01:11:24.104,602] [0m<inf> ant_dongle: antr_init ok[0m
+[2026-11-07T16:43:08.884] [01:11:24.104,610] [0m<inf> ant_dongle: usb_ant_class_init ok[0m
+[2026-11-07T16:43:08.884] [01:11:24.104,622] [0m<inf> ant_dongle: ant_serial_bridge_init ok[0m
+[2026-11-07T16:43:08.884] [01:11:24.104,626] [0m<inf> ant_dongle: enabling transport[0m
+[2026-11-07T16:43:08.884] [01:11:24.104,643] [0m<inf> ant_uart: ANT serial on uart@104000[0m
+[2026-11-07T16:43:08.884] [01:11:24.104,647] [0m<inf> ant_dongle: transport up[0m
+[2026-11-07T16:43:08.884] [01:11:24.104,710] [0m<inf> ant_bridge: ANT serial bridge thread started[0m
+[2026-11-07T16:43:47.461] [console_capture] COM3: stopped

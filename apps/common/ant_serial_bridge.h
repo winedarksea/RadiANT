@@ -77,6 +77,10 @@ struct ant_bridge_host_state {
 
 int ant_serial_bridge_init(void);
 
+/* Send the boot STARTUP (MESG_STARTUP_MESG with the hardware reset cause) on a
+ * UART transport; a no-op on USB. Call once, after ant_transport_enable(). */
+void ant_serial_bridge_announce_boot(void);
+
 /* A consistent snapshot for one network. Safe from any thread. A network at or
  * above ANT_BRIDGE_HOST_NETWORKS reads as never written. */
 void ant_serial_bridge_host_state(uint8_t net, struct ant_bridge_host_state *out);

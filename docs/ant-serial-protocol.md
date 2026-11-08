@@ -438,9 +438,9 @@ Byte 1 of MESG_RADIO_TX_POWER (device-wide) and byte 1 of MESG_CHANNEL_RADIO_TX_
 | `ANTW_RADIO_TX_POWER_LVL_0` | `0x00` | -20 dBm. A deliberate request to be quiet - a bike shop, or a race paddock with forty trainers in one room. | bridge |
 | `ANTW_RADIO_TX_POWER_LVL_1` | `0x01` | -12 dBm. | bridge |
 | `ANTW_RADIO_TX_POWER_LVL_2` | `0x02` | -4 dBm. | bridge |
-| `ANTW_RADIO_TX_POWER_LVL_3` | `0x03` | 0 dBm. The ANT default, and what a host sends when it has no opinion - the common case. | bridge |
-| `ANTW_RADIO_TX_POWER_LVL_4` | `0x04` | +4 dBm. The ceiling on the nRF51422 inside the stick being impersonated, so a host asking for it is asking for everything the hardware has. | bridge |
-| `ANTW_RADIO_TX_POWER_LVL_5` | `0x05` | +8 dBm. Exists only on the nRF52820, nRF52833 and nRF52840. No host will ever request it by name, because no retail stick has ever had it. | bridge |
+| `ANTW_RADIO_TX_POWER_LVL_3` | `0x03` | 0 dBm. The ANT default. Honoured as a true 0 dBm when a host sends it explicitly; a host that never sets power gets the bridge's boosted default instead (CONFIG_ANT_DONGLE_TX_POWER_BOOST), not this. | bridge |
+| `ANTW_RADIO_TX_POWER_LVL_4` | `0x04` | +4 dBm. The ceiling on the nRF51422 inside the stick being impersonated, so a host asking for it is asking for everything the hardware has - with the boost on, the bridge raises it to the part's maximum. | bridge |
+| `ANTW_RADIO_TX_POWER_LVL_5` | `0x05` | +8 dBm. No host will ever request it by name, because no retail stick has ever had it. The radiant backend accepts it on every part and rounds it to the part's ceiling (+8 nRF52840/nRF54L15, 0 nRF5340 net core, +5 CC26xx); sdk-ant accepts it only on the nRF52820, nRF52833 and nRF52840. | bridge |
 | `ANTW_RADIO_TX_POWER_LVL_CUSTOM` | `0x80` | Names a raw register value rather than a level, so it is passed through untouched. | bridge |
 
 ## Library configuration bits
@@ -481,10 +481,10 @@ The single payload byte of MESG_STARTUP_MESG. Zero is not a bit: it means a powe
 
 | Constant | Value | Meaning | Provenance |
 |---|---|---|---|
-| `ANTW_STARTUP_POWER_ON_RESET` | `0x00` | Power-on. This firmware never sends it: the startup message is emitted only in answer to MESG_SYSTEM_RESET, which reports STARTUP_COMMAND_RESET. | tools (ant_probe) |
-| `ANTW_STARTUP_HARDWARE_RESET_LINE` | `0x01` | Hardware reset line. | tools (ant_probe) |
-| `ANTW_STARTUP_WATCH_DOG_RESET` | `0x02` | Watchdog. | tools (ant_probe) |
-| `ANTW_STARTUP_COMMAND_RESET` | `0x20` | Reset by MESG_SYSTEM_RESET. What this firmware reports, and the only reason it ever reports: send_startup() in apps/common/ant_serial_bridge.c has one caller, the reset arm of dispatch(). It sent 0x00 until 2026-08-20, which told hosts the stick had cold-booted and defeated the one thing this byte is watched for - telling an unexpected reset apart from the host's own. The basis for 0x20 is sdk-ant's own header, which ant_radio_sdk_ant.c pins with ANTW_EQ(STARTUP_COMMAND_RESET, RESET_CMD); no observed retail-stick capture of this frame exists here, and the 0x20 frame vectors are tagged hand, not observed. | tools (ant_probe) |
+| `ANTW_STARTUP_POWER_ON_RESET` | `0x00` | Power-on. Sent unsolicited at boot by UART builds only (ant_serial_bridge_announce_boot()) for power-on, brown-out, VBUS, wake from System OFF, or a cause that could not be read (apps/common/ant_reset_cause.h). Never in answer to MESG_SYSTEM_RESET, which reports STARTUP_COMMAND_RESET. | bridge, tools (ant_probe) |
+| `ANTW_STARTUP_HARDWARE_RESET_LINE` | `0x01` | Hardware reset line. Sent at boot by UART builds for a reset pin or debugger (CTRL-AP) reset. | bridge, tools (ant_probe) |
+| `ANTW_STARTUP_WATCH_DOG_RESET` | `0x02` | Watchdog. Sent at boot by UART builds for a watchdog, CPU lockup or software reset - the firmware reset itself, which is how a fatal error reboots. A debugger's flash-and-reset also arrives as a software reset on nRF, so a fresh flash reports this too. | bridge, tools (ant_probe) |
+| `ANTW_STARTUP_COMMAND_RESET` | `0x20` | Reset by MESG_SYSTEM_RESET. What this firmware reports for every reset the host asks for; the arm of dispatch() that handles MESG_SYSTEM_RESET is the only sender of this reason (the boot STARTUP above carries a hardware cause instead, and is never sent on USB builds). It sent 0x00 until 2026-08-20, which told hosts the stick had cold-booted and defeated the one thing this byte is watched for - telling an unexpected reset apart from the host's own. The basis for 0x20 is sdk-ant's own header, which ant_radio_sdk_ant.c pins with ANTW_EQ(STARTUP_COMMAND_RESET, RESET_CMD); no observed retail-stick capture of this frame exists here, and the 0x20 frame vectors are tagged hand, not observed. | tools (ant_probe) |
 | `ANTW_STARTUP_SYNCHRONOUS_RESET` | `0x40` | Synchronous serial reset. | tools (ant_probe) |
 | `ANTW_STARTUP_SUSPEND_RESET` | `0x80` | Resume from suspend. | tools (ant_probe) |
 
@@ -777,6 +777,7 @@ These are used at a visible site in this repository but their numeric value is n
 | bridge, rev5.1 sec 9.5.6 | 2 |
 | bridge, stub | 1 |
 | bridge, tools | 33 |
+| bridge, tools (ant_probe) | 3 |
 | bridge, tools (ant_session.EVENT_MARKER) | 1 |
 | host-api | 2 |
 | inferred | 7 |
@@ -802,7 +803,7 @@ These are used at a visible site in this repository but their numeric value is n
 | stub, tools | 9 |
 | tools | 3 |
 | tools (ant_features) | 10 |
-| tools (ant_probe) | 6 |
+| tools (ant_probe) | 3 |
 | tools (ant_session) | 5 |
 | tools (ant_session, ant_sim) | 1 |
 | tools (ant_session, ant_verify) | 1 |

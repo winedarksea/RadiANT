@@ -6,6 +6,16 @@ build*/
 dist/
 # Local FE-C test artifacts and firmware package.
 archive/benchmarks/2026-10-19-fec/
+# VCOM soak (TODO.md item 3): per-window logs/JSONs stay local, like the
+# comparison below. Tracked: README, rig, summary, and the console capture of
+# any window that a drop or reboot made worth keeping (named in the README).
+archive/benchmarks/2026-11-07-vcom-soak/**
+!archive/benchmarks/2026-11-07-vcom-soak/**/
+!archive/benchmarks/2026-11-07-vcom-soak/**/README.md
+!archive/benchmarks/2026-11-07-vcom-soak/**/rig.toml
+!archive/benchmarks/2026-11-07-vcom-soak/**/summary.json
+!archive/benchmarks/2026-11-07-vcom-soak/**/summary.md
+
 # Garmin comparison: ~760 per-window logs/JSONs stay local. Tracked: the
 # README, each run's rig + summary (summary.json embeds every window's counts),
 # and the device-number A/B's per-receiver results plus its script.

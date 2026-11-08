@@ -98,6 +98,13 @@ config TREADMILL_DEVICE_NUMBER
 	  4243 rather than apps/hrm_ble's 4242, so the two reference designs on
 	  one bench are two devices.
 
+	  Avoid numbers with a long alternating bit run in the on-air address:
+	  nRF-based receivers lose up to ~5 % of their frames (ADR 0019). The
+	  number goes out as both FE-C and SDM, so check it with
+	  `tools/ant_identity.py check <number> --device-type 0x11
+	  --device-type 0x7C`. The image logs a warning when it opens a channel
+	  with such a number.
+
 config TREADMILL_MANUFACTURER_ID
 	int "manufacturer id for the common pages"
 	range 0 65535

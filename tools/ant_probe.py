@@ -191,6 +191,13 @@ class SerialDevice:
             sys.exit("pyserial is not installed. Run: pip install pyserial")
 
         self._port = serial.Serial(port, baud, timeout=0)
+        # Whatever the board said while nobody was listening is not an answer
+        # to anything this session will ask. UART builds announce every boot
+        # with an unsolicited STARTUP (0x6F + the hardware reset cause), and
+        # a bridge chip such as the CP2102N buffers it until the port opens -
+        # left there, it would satisfy reset_stack()'s wait before the reset
+        # just sent had been processed.
+        self._port.reset_input_buffer()
         self.name = port
         # The tools print these; a UART carries no descriptors, so report the
         # identity the firmware would have presented over USB.

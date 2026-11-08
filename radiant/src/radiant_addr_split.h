@@ -26,6 +26,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include <radiant/radiant_frame.h>
 #include <radiant/radiant_radio_hal.h>
 
 #ifdef __cplusplus
@@ -86,8 +87,15 @@ int radiant_addr_split_match(const struct radiant_rx_filter *filters,
  * loss). Inside the address the frame is never seen at all. The run length is
  * what predicts it: 9 or more lost 1-5 % on every nRF part tested, 8 lost at
  * most 0.2 %, 7 and below nothing measurable.
+ *
+ * One implementation, in radiant_frame.c, shared with the transmit-side check
+ * radiant_channel_id_alt_run(), so the guard and the warning cannot disagree.
  */
-uint8_t radiant_addr_split_alt_run(const uint8_t *addr, uint8_t len);
+static inline uint8_t radiant_addr_split_alt_run(const uint8_t *addr,
+						  uint8_t len)
+{
+	return radiant_addr_alt_run(addr, len);
+}
 
 /*
  * How many address bytes the hardware matches for one receive window, given

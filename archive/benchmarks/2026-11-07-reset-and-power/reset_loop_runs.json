@@ -1,0 +1,439 @@
+{
+ "a_1000ms_1000x": {
+  "recorded": "2026-11-07T22:25:59.309552+00:00",
+  "endpoint": "3D55F77818BE772A",
+  "args": {
+   "serial": "3D55F77818BE772A",
+   "port": null,
+   "baud": 115200,
+   "count": 1000,
+   "read_timeout_ms": 1000,
+   "reset_timeout_s": 3.0,
+   "reopen": false,
+   "traffic": false,
+   "device_number": null,
+   "device_type": 11,
+   "period": 8182,
+   "dwell_s": 0.6,
+   "pause_s": 0.0,
+   "health": false
+  },
+  "summary": {
+   "iterations": 1000,
+   "failures": 0,
+   "failed_iterations": [],
+   "failure_rate_pct": 0.0,
+   "failure_ci95_pct": [
+    0.0,
+    0.38267584855551234
+   ],
+   "read_timeout_ms": 1000,
+   "latency_ms": {
+    "p10": 47.0,
+    "p50": 47.0,
+    "p90": 63.0,
+    "p99": 63.0,
+    "min": 46.0,
+    "max": 78.0
+   },
+   "within_one_read_timeout": 1000,
+   "checksum_errors": 0,
+   "discarded_bytes": 0
+  },
+  "failed_rows": [],
+  "rows_with_frames_before_startup": 0
+ },
+ "a2_1000ms_300x_perfcounter": {
+  "recorded": "2026-11-07T22:27:17.013282+00:00",
+  "endpoint": "3D55F77818BE772A",
+  "args": {
+   "serial": "3D55F77818BE772A",
+   "port": null,
+   "baud": 115200,
+   "count": 300,
+   "read_timeout_ms": 1000,
+   "reset_timeout_s": 3.0,
+   "reopen": false,
+   "traffic": false,
+   "device_number": null,
+   "device_type": 11,
+   "period": 8182,
+   "dwell_s": 0.6,
+   "pause_s": 0.0,
+   "health": false
+  },
+  "summary": {
+   "iterations": 300,
+   "failures": 0,
+   "failed_iterations": [],
+   "failure_rate_pct": 0.0,
+   "failure_ci95_pct": [
+    0.0,
+    1.2642971224546034
+   ],
+   "read_timeout_ms": 1000,
+   "latency_ms": {
+    "p10": 52.0949,
+    "p50": 52.159499999999994,
+    "p90": 52.3692,
+    "p99": 53.13032999999997,
+    "min": 52.052,
+    "max": 64.216
+   },
+   "within_one_read_timeout": 300,
+   "checksum_errors": 0,
+   "discarded_bytes": 0
+  },
+  "failed_rows": [],
+  "rows_with_frames_before_startup": 0
+ },
+ "b_52ms_1000x": {
+  "recorded": "2026-11-07T22:27:43.536284+00:00",
+  "endpoint": "3D55F77818BE772A",
+  "args": {
+   "serial": "3D55F77818BE772A",
+   "port": null,
+   "baud": 115200,
+   "count": 1000,
+   "read_timeout_ms": 52,
+   "reset_timeout_s": 3.0,
+   "reopen": false,
+   "traffic": false,
+   "device_number": null,
+   "device_type": 11,
+   "period": 8182,
+   "dwell_s": 0.6,
+   "pause_s": 0.0,
+   "health": false
+  },
+  "summary": {
+   "iterations": 1000,
+   "failures": 10,
+   "failed_iterations": [
+    69,
+    283,
+    323,
+    363,
+    534,
+    674,
+    693,
+    747,
+    789,
+    992
+   ],
+   "failure_rate_pct": 1.0,
+   "failure_ci95_pct": [
+    0.5440754445529249,
+    1.8309468870314773
+   ],
+   "read_timeout_ms": 52,
+   "latency_ms": {
+    "p10": 52.112,
+    "p50": 52.172,
+    "p90": 52.3551,
+    "p99": 52.56711,
+    "min": 52.056,
+    "max": 73.358
+   },
+   "within_one_read_timeout": 990,
+   "checksum_errors": 0,
+   "discarded_bytes": 0
+  },
+  "failed_rows": [
+   {
+    "i": 69,
+    "ok": false,
+    "latency_ms": null,
+    "reason": null,
+    "frames_before": []
+   },
+   {
+    "i": 283,
+    "ok": false,
+    "latency_ms": null,
+    "reason": null,
+    "frames_before": []
+   },
+   {
+    "i": 323,
+    "ok": false,
+    "latency_ms": null,
+    "reason": null,
+    "frames_before": []
+   },
+   {
+    "i": 363,
+    "ok": false,
+    "latency_ms": null,
+    "reason": null,
+    "frames_before": []
+   },
+   {
+    "i": 534,
+    "ok": false,
+    "latency_ms": null,
+    "reason": null,
+    "frames_before": []
+   },
+   {
+    "i": 674,
+    "ok": false,
+    "latency_ms": null,
+    "reason": null,
+    "frames_before": []
+   },
+   {
+    "i": 693,
+    "ok": false,
+    "latency_ms": null,
+    "reason": null,
+    "frames_before": []
+   },
+   {
+    "i": 747,
+    "ok": false,
+    "latency_ms": null,
+    "reason": null,
+    "frames_before": []
+   },
+   {
+    "i": 789,
+    "ok": false,
+    "latency_ms": null,
+    "reason": null,
+    "frames_before": []
+   },
+   {
+    "i": 992,
+    "ok": false,
+    "latency_ms": null,
+    "reason": null,
+    "frames_before": []
+   }
+  ],
+  "rows_with_frames_before_startup": 0
+ },
+ "c_50ms_idle_1000x": {
+  "recorded": "2026-11-07T22:29:18.792850+00:00",
+  "endpoint": "3D55F77818BE772A",
+  "args": {
+   "serial": "3D55F77818BE772A",
+   "port": null,
+   "baud": 115200,
+   "count": 1000,
+   "read_timeout_ms": 50,
+   "reset_timeout_s": 3.0,
+   "reopen": false,
+   "traffic": false,
+   "device_number": null,
+   "device_type": 11,
+   "period": 8182,
+   "dwell_s": 0.6,
+   "pause_s": 0.0,
+   "health": false
+  },
+  "summary": {
+   "iterations": 1000,
+   "failures": 11,
+   "failed_iterations": [
+    4,
+    7,
+    30,
+    73,
+    195,
+    493,
+    828,
+    877,
+    880,
+    886,
+    901
+   ],
+   "failure_rate_pct": 1.0999999999999999,
+   "failure_ci95_pct": [
+    0.6153174098086638,
+    1.9589395700786276
+   ],
+   "read_timeout_ms": 50,
+   "latency_ms": {
+    "p10": 52.106,
+    "p50": 52.175,
+    "p90": 52.362,
+    "p99": 52.60372,
+    "min": 52.046,
+    "max": 120.751
+   },
+   "within_one_read_timeout": 988,
+   "checksum_errors": 0,
+   "discarded_bytes": 0
+  },
+  "failed_rows": [
+   {
+    "i": 4,
+    "ok": false,
+    "latency_ms": null,
+    "reason": null,
+    "frames_before": []
+   },
+   {
+    "i": 7,
+    "ok": false,
+    "latency_ms": null,
+    "reason": null,
+    "frames_before": []
+   },
+   {
+    "i": 30,
+    "ok": false,
+    "latency_ms": null,
+    "reason": null,
+    "frames_before": []
+   },
+   {
+    "i": 73,
+    "ok": false,
+    "latency_ms": null,
+    "reason": null,
+    "frames_before": []
+   },
+   {
+    "i": 195,
+    "ok": false,
+    "latency_ms": null,
+    "reason": null,
+    "frames_before": []
+   },
+   {
+    "i": 493,
+    "ok": false,
+    "latency_ms": null,
+    "reason": null,
+    "frames_before": []
+   },
+   {
+    "i": 828,
+    "ok": false,
+    "latency_ms": null,
+    "reason": null,
+    "frames_before": []
+   },
+   {
+    "i": 877,
+    "ok": false,
+    "latency_ms": null,
+    "reason": null,
+    "frames_before": []
+   },
+   {
+    "i": 880,
+    "ok": false,
+    "latency_ms": null,
+    "reason": null,
+    "frames_before": []
+   },
+   {
+    "i": 886,
+    "ok": false,
+    "latency_ms": null,
+    "reason": null,
+    "frames_before": []
+   },
+   {
+    "i": 901,
+    "ok": false,
+    "latency_ms": null,
+    "reason": null,
+    "frames_before": []
+   }
+  ],
+  "rows_with_frames_before_startup": 0
+ },
+ "c_50ms_traffic_500x": {
+  "recorded": "2026-11-07T22:31:18.816630+00:00",
+  "endpoint": "3D55F77818BE772A",
+  "args": {
+   "serial": "3D55F77818BE772A",
+   "port": null,
+   "baud": 115200,
+   "count": 500,
+   "read_timeout_ms": 50,
+   "reset_timeout_s": 3.0,
+   "reopen": false,
+   "traffic": true,
+   "device_number": 54321,
+   "device_type": 11,
+   "period": 8182,
+   "dwell_s": 1.5,
+   "pause_s": 0.0,
+   "health": false
+  },
+  "summary": {
+   "iterations": 500,
+   "failures": 0,
+   "failed_iterations": [],
+   "failure_rate_pct": 0.0,
+   "failure_ci95_pct": [
+    0.0,
+    0.7624340461552241
+   ],
+   "read_timeout_ms": 50,
+   "latency_ms": {
+    "p10": 52.175,
+    "p50": 52.223,
+    "p90": 52.350100000000005,
+    "p99": 52.93204,
+    "min": 52.111,
+    "max": 54.956
+   },
+   "within_one_read_timeout": 500,
+   "checksum_errors": 0,
+   "discarded_bytes": 0,
+   "traffic_open_failures": 0
+  },
+  "failed_rows": [],
+  "rows_with_frames_before_startup": 5
+ },
+ "fix_gate_reopen_1000ms_1000x": {
+  "recorded": "2026-11-07T22:45:01.400754+00:00",
+  "endpoint": "3D55F77818BE772A",
+  "args": {
+   "serial": "3D55F77818BE772A",
+   "port": null,
+   "baud": 115200,
+   "count": 1000,
+   "read_timeout_ms": 1000,
+   "reset_timeout_s": 3.0,
+   "reopen": true,
+   "traffic": false,
+   "device_number": null,
+   "device_type": 11,
+   "period": 8182,
+   "dwell_s": 0.6,
+   "pause_s": 0.0,
+   "health": false
+  },
+  "summary": {
+   "iterations": 1000,
+   "failures": 0,
+   "failed_iterations": [],
+   "failure_rate_pct": 0.0,
+   "failure_ci95_pct": [
+    0.0,
+    0.38267584855551234
+   ],
+   "read_timeout_ms": 1000,
+   "latency_ms": {
+    "p10": 52.1929,
+    "p50": 52.275,
+    "p90": 52.7056,
+    "p99": 53.21711,
+    "min": 52.117,
+    "max": 137.083
+   },
+   "within_one_read_timeout": 1000,
+   "checksum_errors": 0,
+   "discarded_bytes": 0
+  },
+  "failed_rows": [],
+  "rows_with_frames_before_startup": 0
+ }
+}

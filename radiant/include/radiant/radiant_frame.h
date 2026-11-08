@@ -714,6 +714,51 @@ int radiant_frame_addr(enum radiant_frame_cfg cfg, const uint8_t net_addr[RADIAN
 		   const struct radiant_channel_id *id, uint8_t *out,
 		   size_t out_len);
 
+/* ---------------------------------------------------------------------------
+ * Channel IDs that are hard to receive
+ *
+ * The nRF RADIO in Nrf_1Mbit drops one bit when a long run of alternating bits
+ * (0101...) sits inside the address it is matching, or just after it. The
+ * frame is then never seen. A RadiANT receiver repairs this for the numbers it
+ * knows are at risk (ADR 0019, CONFIG_RADIANT_NRF_SLIP_GUARD), but other nRF
+ * receivers may not, and the repair fails more often at weak signal. A
+ * transmitter that can choose its device number should simply not choose one
+ * of these. Evidence: archive/benchmarks/2026-11-07-devnum-rx-loss/.
+ * ---------------------------------------------------------------------------
+ */
+
+/*
+ * The alternating-run length at which a transmitter should pick another device
+ * number: about 11 % of numbers for every ANT+ device type.
+ *
+ * 8, not the receive guard's 9 (CONFIG_RADIANT_NRF_SLIP_GUARD_RUN). Runs of 9
+ * or more lost 1-5 % on every nRF receiver measured. Runs of 8 lost at most
+ * 0.2 % at strong signal but 0.83 % at -50 dBm. The guard stops at 9 because a
+ * shorter hardware match has a noise cost of its own; choosing a different
+ * number costs nothing, so the bar for avoiding one is lower.
+ */
+#define RADIANT_ADDR_ALT_RUN_AVOID 8u
+
+/*
+ * Longest run of alternating bits (0101... or 1010...) in an address, byte 0
+ * first and each byte MSb first. That is the order the slip measurements
+ * were scored in, not the radio's LSb-first transmit order. A single bit is
+ * a run of 1. An empty or NULL address returns 0.
+ */
+uint8_t radiant_addr_alt_run(const uint8_t *addr, uint8_t len);
+
+/*
+ * The longest alternating run in the TRACKING address a master with this
+ * device number and type puts on the air, over both states of the pairing bit,
+ * since a master may set it and the bit sits next to the device number.
+ * Compare the result with RADIANT_ADDR_ALT_RUN_AVOID. Returns 0 for a NULL
+ * net_addr.
+ *
+ * Mirrored by tools/ant_identity.py's rx_slip_run(), with the same vectors.
+ */
+uint8_t radiant_channel_id_alt_run(const uint8_t net_addr[RADIANT_NET_ADDR_LEN],
+				   uint16_t device_number, uint8_t device_type);
+
 /*
  * Encode. Fills out->addr, out->body and out->crc; fully overwritten on
  * success, untouched on failure.

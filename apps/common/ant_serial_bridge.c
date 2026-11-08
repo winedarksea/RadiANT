@@ -39,6 +39,7 @@
 #include "ant_activity.h"
 #include "ant_health.h"
 #include "ant_radio.h"
+#include "ant_reset_cause.h"
 #include "ant_serial_bridge.h"
 #include "ant_wire.h"
 
@@ -96,13 +97,16 @@ static void send_response(uint8_t ch, uint8_t msg_id, uint8_t code)
 	usb_ant_send(buf, sizeof(buf));
 }
 
-/* Startup message sent after antr_stack_reset().
+/* The startup message, with its reason byte.
  *
- * The reason byte is ANTW_STARTUP_COMMAND_RESET (0x20), not zero. This is the
- * only place the startup message is ever sent and the only caller is the
- * ANTW_MESG_SYSTEM_RESET_ID arm of dispatch(), so every startup frame this
- * firmware emits *is* a commanded reset - there is no power-on path to be
- * confused with. Sending 0x00 (ANTW_STARTUP_POWER_ON_RESET) told every host
+ * Two callers. The ANTW_MESG_SYSTEM_RESET_ID arm of dispatch() sends
+ * ANTW_STARTUP_COMMAND_RESET (0x20) after antr_stack_reset(), and that is the
+ * only reason it ever reports for a reset the host asked for.
+ * ant_serial_bridge_announce_boot() sends the hardware reset cause once at
+ * boot, on UART builds only - see there for why.
+ *
+ * On the commanded reset's 0x20, not zero: sending 0x00
+ * (ANTW_STARTUP_POWER_ON_RESET) after a commanded reset told every host
  * the stick had just cold-booted, which is exactly what a host watches this
  * byte to rule out: it is how an unexpected brown-out or watchdog reset is
  * told apart from the reset the host itself asked for.
@@ -133,15 +137,46 @@ static void send_response(uint8_t ch, uint8_t msg_id, uint8_t code)
  * Re-record the transcripts after this change: they now differ by this frame,
  * and only by this frame.
  */
-static void send_startup(void)
+static void send_startup(uint8_t reason)
 {
 	uint8_t buf[5];
 	buf[0] = ANTW_SYNC_TX;
 	buf[1] = ANTW_MESG_STARTUP_MESG_SIZE;  /* 1 */
 	buf[2] = ANTW_MESG_STARTUP_MESG_ID;    /* 0x6F */
-	buf[3] = ANTW_STARTUP_COMMAND_RESET;   /* 0x20 */
+	buf[3] = reason;
 	buf[4] = buf[0] ^ buf[1] ^ buf[2] ^ buf[3];
 	usb_ant_send(buf, sizeof(buf));
+}
+
+/*
+ * The unsolicited STARTUP a real ANT part sends when it comes out of reset,
+ * with the hardware cause as its reason byte (ant_reset_cause.h has the
+ * mapping). Only on a UART transport, where it is the one thing that tells a
+ * host the board rebooted:
+ *
+ *   - A UART has no session boundary. On the CC2652P dongle the CP2102N keeps
+ *     the host's USB handle open straight through an MCU reboot - exactly the
+ *     shape of the Dynastream USB2 stick (an AP2 behind a CP210x), which does
+ *     send this - so without it the host sees only its channels going quiet.
+ *     The same is true of a DK's VCOM, which is how a 54L15 firmware fault was
+ *     indistinguishable from a probe fault (TODO.md, 2026-11-07).
+ *   - A USB build needs none of it: a reboot drops the device off the bus, the
+ *     host must reopen, and the reopen's own SYSTEM_RESET gets its STARTUP.
+ *
+ * Safe against a host that is mid-reset: frames go out whole under the
+ * transport's TX lock, and the bridge handles the host's commands in order, so
+ * at worst a host's reset-wait is satisfied by this frame a few milliseconds
+ * early and its next command still runs after the reset. Host tools flush the
+ * port on open (tools/ant_probe.py SerialDevice) so a stale one cannot.
+ */
+void ant_serial_bridge_announce_boot(void)
+{
+#if defined(CONFIG_ANT_DONGLE_TRANSPORT_UART)
+	uint32_t cause;
+
+	(void)ant_reset_cause(&cause);
+	send_startup(ant_reset_cause_startup_reason(cause));
+#endif
 }
 
 static void send_message(uint8_t msg_id, const uint8_t *payload, uint8_t len)
@@ -170,18 +205,31 @@ static void send_message(uint8_t msg_id, const uint8_t *payload, uint8_t len)
 
 /* ── Transmit power ────────────────────────────────────────────────────────── */
 
-/* ANTW_RADIO_TX_POWER_LVL_5 (+8 dBm) exists only on the nRF52820, nRF52833 and
- * nRF52840; every other part this builds for tops out at LVL_4 (+4 dBm).
- * src/ant_wire.h states that restriction in the constant's doc comment rather
- * than exposing a symbol for it, so it is restated here.
+/* The boosted level: "the most this radio has". A capability rule, not a SoC
+ * list - the list this replaced named three nRF52 parts and held everything
+ * else at LVL_4, which left the nRF54L15 at +4 dBm though it has +8.
+ *
+ *   - radiant (and the stub): always LVL_5. radiant_channel_tx_power_set()
+ *     accepts it on every part and the backend rounds it to what the part can
+ *     do - nearest table entry on nRF (+8 on nRF52840 and nRF54L15, 0 on the
+ *     nRF5340 network core), highest entry not above it on TI (+5 on CC26xx).
+ *   - sdk-ant: LVL_5 only where sdk-ant accepts it, the nRF52820/33/40; it
+ *     refuses the level elsewhere, so other parts keep LVL_4 there.
+ */
+#if defined(CONFIG_ANT_DONGLE_RADIO_SDK_ANT) && \
+	!(defined(CONFIG_SOC_NRF52840) || defined(CONFIG_SOC_NRF52833) || \
+	  defined(CONFIG_SOC_NRF52820))
+#define ANT_DONGLE_TX_POWER_MAX ANTW_RADIO_TX_POWER_LVL_4
+#else
+#define ANT_DONGLE_TX_POWER_MAX ANTW_RADIO_TX_POWER_LVL_5
+#endif
+
+/* What a channel transmits at when the host never says (and after every
+ * SYSTEM_RESET). Zwift is this case: its one MESG_RADIO_TX_POWER is wiped by
+ * the SYSTEM_RESET that follows it, so it always runs at this value.
  */
 #if defined(CONFIG_ANT_DONGLE_TX_POWER_BOOST)
-#if defined(CONFIG_SOC_NRF52840) || defined(CONFIG_SOC_NRF52833) || \
-	defined(CONFIG_SOC_NRF52820)
-#define ANT_DONGLE_TX_POWER_DEFAULT ANTW_RADIO_TX_POWER_LVL_5
-#else
-#define ANT_DONGLE_TX_POWER_DEFAULT ANTW_RADIO_TX_POWER_LVL_4
-#endif
+#define ANT_DONGLE_TX_POWER_DEFAULT ANT_DONGLE_TX_POWER_MAX
 #else
 #define ANT_DONGLE_TX_POWER_DEFAULT ANTW_RADIO_TX_POWER_LVL_3
 #endif
@@ -210,25 +258,25 @@ static void tx_power_reset(void)
 
 /*
  * Map a host's requested power level onto what this radio can actually do.
- * Levels 0-2 (-20/-12/-4 dBm) are honoured exactly - a deliberate request to
- * be quiet. Level 3 (0 dBm, the common default) and level 4 (+4 dBm, the
- * ceiling on the impersonated nRF51422) are both raised to the boosted
- * default, since a host asking for level 4 wants everything the hardware
- * has, and on an nRF52840 that's +8 dBm - the only way the extra 8 dB is
- * reachable, as no retail stick ever had LVL_5 to request by name.
+ * Only level 4 (+4 dBm, the ceiling on the impersonated nRF51422) is raised,
+ * to the boosted maximum: a host asking for it wants everything the hardware
+ * has, and no retail stick ever had LVL_5 to request by name, so this is the
+ * only way a host can reach the extra dB on purpose.
+ *
+ * Every other level is honoured as asked - 0-2 (-20/-12/-4 dBm) as a
+ * deliberate request to be quiet, and an EXPLICIT level 3 as a true 0 dBm.
+ * Level 3 used to be raised too, which made "0 dBm" unrequestable: the
+ * 2026-11-07 sensitivity ladder's 0 dBm rung on the 54L15 was really +4 and
+ * failed its dial check. A host that never sets power is not affected by
+ * this - it gets the boosted default from tx_power_reset(), not level 3.
  * ANTW_RADIO_TX_POWER_LVL_CUSTOM (0x80) names a raw register value, passed
  * through untouched.
  */
 static uint8_t tx_power_resolve(uint8_t requested)
 {
 #if defined(CONFIG_ANT_DONGLE_TX_POWER_BOOST)
-	if (requested & ANTW_RADIO_TX_POWER_LVL_CUSTOM) {
-		return requested;
-	}
-
-	if (requested == ANTW_RADIO_TX_POWER_LVL_3 ||
-	    requested == ANTW_RADIO_TX_POWER_LVL_4) {
-		return ANT_DONGLE_TX_POWER_DEFAULT;
+	if (requested == ANTW_RADIO_TX_POWER_LVL_4) {
+		return ANT_DONGLE_TX_POWER_MAX;
 	}
 #endif
 	return requested;
@@ -778,7 +826,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 
 	case ANTW_MESG_SYSTEM_RESET_ID:
 		handle_system_reset();
-		send_startup();
+		send_startup(ANTW_STARTUP_COMMAND_RESET);
 		return; /* no RESPONSE_EVENT for reset */
 
 	case ANTW_MESG_NETWORK_KEY_ID:

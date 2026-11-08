@@ -1,0 +1,2321 @@
+{
+  "rig": "2026-11-07-vcom-soak",
+  "reference": "Garmin",
+  "generated": "2026-11-07T23:58:08.828992+00:00",
+  "identity": null,
+  "rounds": [
+    {
+      "round": "S",
+      "transmitters": [
+        "Feather"
+      ],
+      "receivers": [
+        "Garmin",
+        "Dongle",
+        "54L15"
+      ],
+      "metrics": {
+        "loss (multi, pooled)": {
+          "Garmin": [
+            3.0202730657840298,
+            2.81282316442606,
+            2.9357039487285506,
+            2.95637792019847,
+            2.8736820343187928,
+            2.813405047579644,
+            3.0810587262200166,
+            2.997725863138309,
+            3.0390738060781475,
+            3.0810587262200166
+          ],
+          "Dongle": [
+            0.5996691480562448,
+            0.6203473945409429,
+            0.6615670870374198,
+            0.5791106514994829,
+            0.5995451726276618,
+            0.5997931747673216,
+            0.5376344086021505,
+            0.5376344086021505,
+            0.5995451726276618,
+            0.49627791563275436
+          ],
+          "54L15": [
+            0.5376344086021505,
+            0.5996691480562448,
+            0.6993006993006993,
+            0.5583126550868487,
+            0.5791106514994829,
+            0.5997931747673216,
+            0.5170630816959669,
+            0.5375232582179037,
+            0.5584281282316442,
+            0.4550155118924509
+          ]
+        },
+        "multi per profile": {
+          "Garmin": {
+            "power": {
+              "loss_pct": 2.7546604527296936,
+              "basis": "wall_clock"
+            },
+            "heart-rate": {
+              "loss_pct": 3.2663110381616742,
+              "basis": "wall_clock"
+            },
+            "csc": {
+              "loss_pct": 2.9779532741033234,
+              "basis": "wall_clock"
+            },
+            "fec-treadmill": {
+              "loss_pct": 2.8409564275597767,
+              "basis": "wall_clock"
+            }
+          },
+          "Dongle": {
+            "power": {
+              "loss_pct": 0.5658179397570311,
+              "basis": "wall_clock"
+            },
+            "heart-rate": {
+              "loss_pct": 0.64849778361517,
+              "basis": "wall_clock"
+            },
+            "csc": {
+              "loss_pct": 0.6086026811415413,
+              "basis": "wall_clock"
+            },
+            "fec-treadmill": {
+              "loss_pct": 0.5082486252291285,
+              "basis": "wall_clock"
+            }
+          },
+          "54L15": {
+            "power": {
+              "loss_pct": 0.5416559195254063,
+              "basis": "wall_clock"
+            },
+            "heart-rate": {
+              "loss_pct": 0.6359165677463117,
+              "basis": "wall_clock"
+            },
+            "csc": {
+              "loss_pct": 0.560890626327866,
+              "basis": "wall_clock"
+            },
+            "fec-treadmill": {
+              "loss_pct": 0.49926831367823016,
+              "basis": "wall_clock"
+            }
+          }
+        }
+      },
+      "verdicts": [
+        {
+          "round": "S",
+          "metric": "loss (multi, pooled)",
+          "receiver": "Dongle",
+          "verdict": "Better",
+          "detail": "0.58 % [0.52, 0.66] vs reference 2.96 % [2.81, 3.12] (window warnings present - see below)",
+          "windows": 10
+        },
+        {
+          "round": "S",
+          "metric": "loss (multi, pooled)",
+          "receiver": "54L15",
+          "verdict": "Better",
+          "detail": "0.56 % [0.50, 0.63] vs reference 2.96 % [2.81, 3.12] (window warnings present - see below)",
+          "windows": 10
+        }
+      ],
+      "warnings": [
+        "multi 1: Feather: ant_sim rc 1",
+        "multi 1: Feather: 10 messages on the wall-clock fallback (pacing guessed)",
+        "multi 2: Feather: ant_sim rc 1",
+        "multi 2: Feather: 9 messages on the wall-clock fallback (pacing guessed)",
+        "multi 3: 54L15: ANT port died at 204 s: SerialException: Cannot configure port, something went wrong. Original message: PermissionError(13, 'A device attached to the system is not functioning.', None, 31)",
+        "multi 3: 54L15: ran 205 s of a 300 s window (dropped port?)",
+        "multi 3: Feather: ant_sim rc 1",
+        "multi 3: Feather: 15 messages on the wall-clock fallback (pacing guessed)",
+        "multi 4: Feather: ant_sim rc 1",
+        "multi 4: Feather: 11 messages on the wall-clock fallback (pacing guessed)",
+        "multi 5: Feather: ant_sim rc 1",
+        "multi 5: Feather: 14 messages on the wall-clock fallback (pacing guessed)",
+        "multi 6: Feather: ant_sim rc 1",
+        "multi 6: Feather: 13 messages on the wall-clock fallback (pacing guessed)",
+        "multi 7: Feather: ant_sim rc 1",
+        "multi 7: Feather: 14 messages on the wall-clock fallback (pacing guessed)",
+        "multi 8: Feather: ant_sim rc 1",
+        "multi 8: Feather: 11 messages on the wall-clock fallback (pacing guessed)",
+        "multi 9: Feather: ant_sim rc 1",
+        "multi 9: Feather: 13 messages on the wall-clock fallback (pacing guessed)",
+        "multi 10: Feather: ant_sim rc 1",
+        "multi 10: Feather: 10 messages on the wall-clock fallback (pacing guessed)"
+      ]
+    }
+  ],
+  "usb": null,
+  "verdicts": [
+    {
+      "round": "S",
+      "metric": "loss (multi, pooled)",
+      "receiver": "Dongle",
+      "verdict": "Better",
+      "detail": "0.58 % [0.52, 0.66] vs reference 2.96 % [2.81, 3.12] (window warnings present - see below)",
+      "windows": 10
+    },
+    {
+      "round": "S",
+      "metric": "loss (multi, pooled)",
+      "receiver": "54L15",
+      "verdict": "Better",
+      "detail": "0.56 % [0.50, 0.63] vs reference 2.96 % [2.81, 3.12] (window warnings present - see below)",
+      "windows": 10
+    }
+  ],
+  "tally": {
+    "Better": 2
+  },
+  "rules": {
+    "loss": "Wilson 95 % CI on exact loss. Equal: RadiANT upper CI <= reference point + 0.5 pp. Better: RadiANT upper CI < reference lower CI. Worse: RadiANT lower CI > reference point + 0.5 pp.",
+    "acquire": "Median time to first packet over the cycles. Equal: <= reference median + 0.25 s. Better: lower median AND RadiANT Q3 < reference Q1. Worse: > reference median + 0.25 s.",
+    "ladder": "5 %-loss TX power. Equal: within 1 dB (the ab_gates repeatability limit). Better: more than 1 dB lower. Worse: more than 1 dB higher. Inconclusive if either dial check failed or either ladder never reached its knee.",
+    "acked": "Wilson 95 % CI on the acknowledged-transfer failure rate (sent - completed), the loss rule applied unchanged.",
+    "usb": "ant_bench round-trip latency. Equal: median <= reference median x 1.1. Better: lower median AND lower p99. Worse: median > reference median x 1.1."
+  },
+  "caveats": [
+    "Every figure is for this fixed placement: antenna and position are part of each result until a swap round separates them.",
+    "The Feather transmits from ant_sim.py (EVENT_TX-paced host masters) on its pre-SLIP_GUARD image, at its bridge default power.",
+    "A drop is the finding here, not the loss figures; four masters on one board share one clock.",
+    "54L15 attach over UART, not USB: excluded from the usb phase, and their receive path includes a UART rather than the USB stack a real dongle has.",
+    "RSSI is not comparable across chip families (each reports on its own calibration); it is shown, never judged.",
+    "Some loss figures are wall-clock (received radio messages against the window's slot count), not the transmitter's event counter: ant_verify withholds 'loss (exact)' once the counter stands still even once, and the DK master occasionally re-sends its previous buffer when a host refill misses a slot. That repeat lands on every receiver in the window alike, so the receiver-minus-reference gap is unaffected; the absolute figures assume the transmitter's crystal is exact."
+  ],
+  "records": [
+    {
+      "phase": "multi",
+      "round": "S",
+      "rep": 1,
+      "seconds": 300.0,
+      "profiles": [
+        "power",
+        "heart-rate",
+        "csc",
+        "fec-treadmill"
+      ],
+      "device_numbers": [
+        55010,
+        55011,
+        55012,
+        55013
+      ],
+      "transmitters": {
+        "Feather": {
+          "rc": 1,
+          "fallbacks": 10,
+          "device_numbers": [
+            55010,
+            55011,
+            55012,
+            55013
+          ],
+          "paced": false
+        }
+      },
+      "results": {
+        "Garmin": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_1_Garmin.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_1_Garmin.log",
+          "exit": 1,
+          "wall_s": 301.7039999999979,
+          "counts": {
+            "missed": 146,
+            "sent": 4834,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 31,
+                "sent": 1202,
+                "basis": "wall_clock",
+                "loss_pct": 2.579034941763727,
+                "device_number": 55010
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 41,
+                "sent": 1218,
+                "basis": "wall_clock",
+                "loss_pct": 3.3661740558292284,
+                "device_number": 55011
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 37,
+                "sent": 1214,
+                "basis": "wall_clock",
+                "loss_pct": 3.047775947281713,
+                "device_number": 55012
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 37,
+                "sent": 1200,
+                "basis": "wall_clock",
+                "loss_pct": 3.0833333333333335,
+                "device_number": 55013
+              }
+            }
+          },
+          "rssi_dbm_mean": null,
+          "problems": []
+        },
+        "Dongle": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_1_Dongle.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_1_Dongle.log",
+          "exit": 1,
+          "wall_s": 301.48399999999674,
+          "counts": {
+            "missed": 29,
+            "sent": 4836,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 4,
+                "sent": 1202,
+                "basis": "wall_clock",
+                "loss_pct": 0.33277870216306155,
+                "device_number": 55010
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 9,
+                "sent": 1218,
+                "basis": "wall_clock",
+                "loss_pct": 0.7389162561576355,
+                "device_number": 55011
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 9,
+                "sent": 1216,
+                "basis": "wall_clock",
+                "loss_pct": 0.7401315789473685,
+                "device_number": 55012
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 7,
+                "sent": 1200,
+                "basis": "wall_clock",
+                "loss_pct": 0.5833333333333334,
+                "device_number": 55013
+              }
+            }
+          },
+          "rssi_dbm_mean": -20.000416059912627,
+          "problems": []
+        },
+        "54L15": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_1_54L15.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_1_54L15.log",
+          "exit": 1,
+          "wall_s": 301.46800000000803,
+          "counts": {
+            "missed": 26,
+            "sent": 4836,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 4,
+                "sent": 1202,
+                "basis": "wall_clock",
+                "loss_pct": 0.33277870216306155,
+                "device_number": 55010
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 8,
+                "sent": 1218,
+                "basis": "wall_clock",
+                "loss_pct": 0.6568144499178982,
+                "device_number": 55011
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 8,
+                "sent": 1216,
+                "basis": "wall_clock",
+                "loss_pct": 0.6578947368421053,
+                "device_number": 55012
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 6,
+                "sent": 1200,
+                "basis": "wall_clock",
+                "loss_pct": 0.5,
+                "device_number": 55013
+              }
+            }
+          },
+          "rssi_dbm_mean": -26.0,
+          "problems": []
+        }
+      },
+      "warnings": [
+        "Feather: ant_sim rc 1",
+        "Feather: 10 messages on the wall-clock fallback (pacing guessed)"
+      ],
+      "commands": [
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_sim.py",
+          "--serial",
+          "755972D7183A6183",
+          "--seconds",
+          "330",
+          "--device-number",
+          "55010",
+          "--profile",
+          "power",
+          "--profile",
+          "heart-rate",
+          "--profile",
+          "csc",
+          "--profile",
+          "fec-treadmill"
+        ]
+      ],
+      "consoles": {
+        "54L15": {
+          "port": "COM3",
+          "path": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_1_54L15_console.log",
+          "opened": true,
+          "lines": 20,
+          "bytes": 2395,
+          "started_at_unix": 1794092564.666804,
+          "died_at_unix": null,
+          "died_after_s": null,
+          "error": null
+        }
+      }
+    },
+    {
+      "phase": "multi",
+      "round": "S",
+      "rep": 2,
+      "seconds": 300.0,
+      "profiles": [
+        "power",
+        "heart-rate",
+        "csc",
+        "fec-treadmill"
+      ],
+      "device_numbers": [
+        55010,
+        55011,
+        55012,
+        55013
+      ],
+      "transmitters": {
+        "Feather": {
+          "rc": 1,
+          "fallbacks": 9,
+          "device_numbers": [
+            55010,
+            55011,
+            55012,
+            55013
+          ],
+          "paced": false
+        }
+      },
+      "results": {
+        "Garmin": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_2_Garmin.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_2_Garmin.log",
+          "exit": 1,
+          "wall_s": 301.8119999999908,
+          "counts": {
+            "missed": 136,
+            "sent": 4835,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 33,
+                "sent": 1201,
+                "basis": "wall_clock",
+                "loss_pct": 2.7477102414654455,
+                "device_number": 55010
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 35,
+                "sent": 1218,
+                "basis": "wall_clock",
+                "loss_pct": 2.8735632183908044,
+                "device_number": 55011
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 33,
+                "sent": 1216,
+                "basis": "wall_clock",
+                "loss_pct": 2.713815789473684,
+                "device_number": 55012
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 35,
+                "sent": 1200,
+                "basis": "wall_clock",
+                "loss_pct": 2.9166666666666665,
+                "device_number": 55013
+              }
+            }
+          },
+          "rssi_dbm_mean": null,
+          "problems": []
+        },
+        "Dongle": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_2_Dongle.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_2_Dongle.log",
+          "exit": 1,
+          "wall_s": 301.5939999999973,
+          "counts": {
+            "missed": 30,
+            "sent": 4836,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 7,
+                "sent": 1202,
+                "basis": "wall_clock",
+                "loss_pct": 0.5823627287853578,
+                "device_number": 55010
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 8,
+                "sent": 1218,
+                "basis": "wall_clock",
+                "loss_pct": 0.6568144499178982,
+                "device_number": 55011
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 7,
+                "sent": 1215,
+                "basis": "wall_clock",
+                "loss_pct": 0.5761316872427984,
+                "device_number": 55012
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 8,
+                "sent": 1201,
+                "basis": "wall_clock",
+                "loss_pct": 0.6661115736885929,
+                "device_number": 55013
+              }
+            }
+          },
+          "rssi_dbm_mean": -20.000416146483563,
+          "problems": []
+        },
+        "54L15": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_2_54L15.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_2_54L15.log",
+          "exit": 1,
+          "wall_s": 301.375,
+          "counts": {
+            "missed": 29,
+            "sent": 4836,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 6,
+                "sent": 1202,
+                "basis": "wall_clock",
+                "loss_pct": 0.49916805324459235,
+                "device_number": 55010
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 8,
+                "sent": 1218,
+                "basis": "wall_clock",
+                "loss_pct": 0.6568144499178982,
+                "device_number": 55011
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 7,
+                "sent": 1216,
+                "basis": "wall_clock",
+                "loss_pct": 0.5756578947368421,
+                "device_number": 55012
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 8,
+                "sent": 1200,
+                "basis": "wall_clock",
+                "loss_pct": 0.6666666666666666,
+                "device_number": 55013
+              }
+            }
+          },
+          "rssi_dbm_mean": -26.0,
+          "problems": []
+        }
+      },
+      "warnings": [
+        "Feather: ant_sim rc 1",
+        "Feather: 9 messages on the wall-clock fallback (pacing guessed)"
+      ],
+      "commands": [
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_sim.py",
+          "--serial",
+          "755972D7183A6183",
+          "--seconds",
+          "330",
+          "--device-number",
+          "55010",
+          "--profile",
+          "power",
+          "--profile",
+          "heart-rate",
+          "--profile",
+          "csc",
+          "--profile",
+          "fec-treadmill"
+        ]
+      ],
+      "consoles": {
+        "54L15": {
+          "port": "COM3",
+          "path": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_2_54L15_console.log",
+          "opened": true,
+          "lines": 20,
+          "bytes": 2410,
+          "started_at_unix": 1794092897.7723572,
+          "died_at_unix": null,
+          "died_after_s": null,
+          "error": null
+        }
+      }
+    },
+    {
+      "phase": "multi",
+      "round": "S",
+      "rep": 3,
+      "seconds": 300.0,
+      "profiles": [
+        "power",
+        "heart-rate",
+        "csc",
+        "fec-treadmill"
+      ],
+      "device_numbers": [
+        55010,
+        55011,
+        55012,
+        55013
+      ],
+      "transmitters": {
+        "Feather": {
+          "rc": 1,
+          "fallbacks": 15,
+          "device_numbers": [
+            55010,
+            55011,
+            55012,
+            55013
+          ],
+          "paced": false
+        }
+      },
+      "results": {
+        "Garmin": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_3_Garmin.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_3_Garmin.log",
+          "exit": 1,
+          "wall_s": 301.5940000000119,
+          "counts": {
+            "missed": 142,
+            "sent": 4837,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 33,
+                "sent": 1202,
+                "basis": "wall_clock",
+                "loss_pct": 2.7454242928452577,
+                "device_number": 55010
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 40,
+                "sent": 1219,
+                "basis": "wall_clock",
+                "loss_pct": 3.281378178835111,
+                "device_number": 55011
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 35,
+                "sent": 1216,
+                "basis": "wall_clock",
+                "loss_pct": 2.8782894736842106,
+                "device_number": 55012
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 34,
+                "sent": 1200,
+                "basis": "wall_clock",
+                "loss_pct": 2.8333333333333335,
+                "device_number": 55013
+              }
+            }
+          },
+          "rssi_dbm_mean": null,
+          "problems": []
+        },
+        "Dongle": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_3_Dongle.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_3_Dongle.log",
+          "exit": 1,
+          "wall_s": 301.5940000000119,
+          "counts": {
+            "missed": 32,
+            "sent": 4837,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 7,
+                "sent": 1202,
+                "basis": "wall_clock",
+                "loss_pct": 0.5823627287853578,
+                "device_number": 55010
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 9,
+                "sent": 1219,
+                "basis": "wall_clock",
+                "loss_pct": 0.7383100902379,
+                "device_number": 55011
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 8,
+                "sent": 1216,
+                "basis": "wall_clock",
+                "loss_pct": 0.6578947368421053,
+                "device_number": 55012
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 8,
+                "sent": 1200,
+                "basis": "wall_clock",
+                "loss_pct": 0.6666666666666666,
+                "device_number": 55013
+              }
+            }
+          },
+          "rssi_dbm_mean": -20.000208116545267,
+          "problems": []
+        },
+        "54L15": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_3_54L15.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_3_54L15.log",
+          "exit": 1,
+          "wall_s": 205.40600000000268,
+          "counts": {
+            "missed": 23,
+            "sent": 3289,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 5,
+                "sent": 817,
+                "basis": "wall_clock",
+                "loss_pct": 0.6119951040391677,
+                "device_number": 55010
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 7,
+                "sent": 829,
+                "basis": "wall_clock",
+                "loss_pct": 0.8443908323281062,
+                "device_number": 55011
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 5,
+                "sent": 827,
+                "basis": "wall_clock",
+                "loss_pct": 0.6045949214026602,
+                "device_number": 55012
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 6,
+                "sent": 816,
+                "basis": "wall_clock",
+                "loss_pct": 0.7352941176470589,
+                "device_number": 55013
+              }
+            }
+          },
+          "rssi_dbm_mean": -26.0,
+          "problems": [
+            "ANT port died at 204 s: SerialException: Cannot configure port, something went wrong. Original message: PermissionError(13, 'A device attached to the system is not functioning.', None, 31)",
+            "ran 205 s of a 300 s window (dropped port?)"
+          ]
+        }
+      },
+      "warnings": [
+        "54L15: ANT port died at 204 s: SerialException: Cannot configure port, something went wrong. Original message: PermissionError(13, 'A device attached to the system is not functioning.', None, 31)",
+        "54L15: ran 205 s of a 300 s window (dropped port?)",
+        "Feather: ant_sim rc 1",
+        "Feather: 15 messages on the wall-clock fallback (pacing guessed)"
+      ],
+      "commands": [
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_sim.py",
+          "--serial",
+          "755972D7183A6183",
+          "--seconds",
+          "330",
+          "--device-number",
+          "55010",
+          "--profile",
+          "power",
+          "--profile",
+          "heart-rate",
+          "--profile",
+          "csc",
+          "--profile",
+          "fec-treadmill"
+        ]
+      ],
+      "consoles": {
+        "54L15": {
+          "port": "COM3",
+          "path": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_3_54L15_console.log",
+          "opened": true,
+          "lines": 20,
+          "bytes": 2440,
+          "started_at_unix": 1794093230.4593291,
+          "died_at_unix": null,
+          "died_after_s": null,
+          "error": null
+        }
+      }
+    },
+    {
+      "phase": "multi",
+      "round": "S",
+      "rep": 4,
+      "seconds": 300.0,
+      "profiles": [
+        "power",
+        "heart-rate",
+        "csc",
+        "fec-treadmill"
+      ],
+      "device_numbers": [
+        55010,
+        55011,
+        55012,
+        55013
+      ],
+      "transmitters": {
+        "Feather": {
+          "rc": 1,
+          "fallbacks": 11,
+          "device_numbers": [
+            55010,
+            55011,
+            55012,
+            55013
+          ],
+          "paced": false
+        }
+      },
+      "results": {
+        "Garmin": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_4_Garmin.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_4_Garmin.log",
+          "exit": 1,
+          "wall_s": 301.95299999999406,
+          "counts": {
+            "missed": 143,
+            "sent": 4837,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 32,
+                "sent": 1201,
+                "basis": "wall_clock",
+                "loss_pct": 2.6644462947543714,
+                "device_number": 55010
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 38,
+                "sent": 1219,
+                "basis": "wall_clock",
+                "loss_pct": 3.1173092698933553,
+                "device_number": 55011
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 40,
+                "sent": 1216,
+                "basis": "wall_clock",
+                "loss_pct": 3.289473684210526,
+                "device_number": 55012
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 33,
+                "sent": 1201,
+                "basis": "wall_clock",
+                "loss_pct": 2.7477102414654455,
+                "device_number": 55013
+              }
+            }
+          },
+          "rssi_dbm_mean": null,
+          "problems": []
+        },
+        "Dongle": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_4_Dongle.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_4_Dongle.log",
+          "exit": 1,
+          "wall_s": 301.7340000000113,
+          "counts": {
+            "missed": 28,
+            "sent": 4835,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 8,
+                "sent": 1201,
+                "basis": "wall_clock",
+                "loss_pct": 0.6661115736885929,
+                "device_number": 55010
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 7,
+                "sent": 1218,
+                "basis": "wall_clock",
+                "loss_pct": 0.5747126436781609,
+                "device_number": 55011
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 8,
+                "sent": 1216,
+                "basis": "wall_clock",
+                "loss_pct": 0.6578947368421053,
+                "device_number": 55012
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 5,
+                "sent": 1200,
+                "basis": "wall_clock",
+                "loss_pct": 0.4166666666666667,
+                "device_number": 55013
+              }
+            }
+          },
+          "rssi_dbm_mean": -20.000624089868943,
+          "problems": []
+        },
+        "54L15": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_4_54L15.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_4_54L15.log",
+          "exit": 1,
+          "wall_s": 301.3280000000086,
+          "counts": {
+            "missed": 27,
+            "sent": 4836,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 7,
+                "sent": 1202,
+                "basis": "wall_clock",
+                "loss_pct": 0.5823627287853578,
+                "device_number": 55010
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 7,
+                "sent": 1219,
+                "basis": "wall_clock",
+                "loss_pct": 0.5742411812961444,
+                "device_number": 55011
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 8,
+                "sent": 1215,
+                "basis": "wall_clock",
+                "loss_pct": 0.6584362139917695,
+                "device_number": 55012
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 5,
+                "sent": 1200,
+                "basis": "wall_clock",
+                "loss_pct": 0.4166666666666667,
+                "device_number": 55013
+              }
+            }
+          },
+          "rssi_dbm_mean": -26.0,
+          "problems": []
+        }
+      },
+      "warnings": [
+        "Feather: ant_sim rc 1",
+        "Feather: 11 messages on the wall-clock fallback (pacing guessed)"
+      ],
+      "commands": [
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_sim.py",
+          "--serial",
+          "755972D7183A6183",
+          "--seconds",
+          "330",
+          "--device-number",
+          "55010",
+          "--profile",
+          "power",
+          "--profile",
+          "heart-rate",
+          "--profile",
+          "csc",
+          "--profile",
+          "fec-treadmill"
+        ]
+      ],
+      "consoles": {
+        "54L15": {
+          "port": "COM3",
+          "path": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_4_54L15_console.log",
+          "opened": true,
+          "lines": 21,
+          "bytes": 2557,
+          "started_at_unix": 1794093563.0687046,
+          "died_at_unix": null,
+          "died_after_s": null,
+          "error": null
+        }
+      }
+    },
+    {
+      "phase": "multi",
+      "round": "S",
+      "rep": 5,
+      "seconds": 300.0,
+      "profiles": [
+        "power",
+        "heart-rate",
+        "csc",
+        "fec-treadmill"
+      ],
+      "device_numbers": [
+        55010,
+        55011,
+        55012,
+        55013
+      ],
+      "transmitters": {
+        "Feather": {
+          "rc": 1,
+          "fallbacks": 14,
+          "device_numbers": [
+            55010,
+            55011,
+            55012,
+            55013
+          ],
+          "paced": false
+        }
+      },
+      "results": {
+        "Garmin": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_5_Garmin.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_5_Garmin.log",
+          "exit": 1,
+          "wall_s": 301.875,
+          "counts": {
+            "missed": 139,
+            "sent": 4837,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 33,
+                "sent": 1201,
+                "basis": "wall_clock",
+                "loss_pct": 2.7477102414654455,
+                "device_number": 55010
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 40,
+                "sent": 1219,
+                "basis": "wall_clock",
+                "loss_pct": 3.281378178835111,
+                "device_number": 55011
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 35,
+                "sent": 1216,
+                "basis": "wall_clock",
+                "loss_pct": 2.8782894736842106,
+                "device_number": 55012
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 31,
+                "sent": 1201,
+                "basis": "wall_clock",
+                "loss_pct": 2.5811823480432974,
+                "device_number": 55013
+              }
+            }
+          },
+          "rssi_dbm_mean": null,
+          "problems": []
+        },
+        "Dongle": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_5_Dongle.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_5_Dongle.log",
+          "exit": 1,
+          "wall_s": 301.64100000000326,
+          "counts": {
+            "missed": 29,
+            "sent": 4837,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 8,
+                "sent": 1202,
+                "basis": "wall_clock",
+                "loss_pct": 0.6655574043261231,
+                "device_number": 55010
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 9,
+                "sent": 1218,
+                "basis": "wall_clock",
+                "loss_pct": 0.7389162561576355,
+                "device_number": 55011
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 7,
+                "sent": 1216,
+                "basis": "wall_clock",
+                "loss_pct": 0.5756578947368421,
+                "device_number": 55012
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 5,
+                "sent": 1201,
+                "basis": "wall_clock",
+                "loss_pct": 0.4163197335553705,
+                "device_number": 55013
+              }
+            }
+          },
+          "rssi_dbm_mean": -20.000207986688853,
+          "problems": []
+        },
+        "54L15": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_5_54L15.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_5_54L15.log",
+          "exit": 1,
+          "wall_s": 301.42200000000594,
+          "counts": {
+            "missed": 28,
+            "sent": 4835,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 8,
+                "sent": 1201,
+                "basis": "wall_clock",
+                "loss_pct": 0.6661115736885929,
+                "device_number": 55010
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 9,
+                "sent": 1218,
+                "basis": "wall_clock",
+                "loss_pct": 0.7389162561576355,
+                "device_number": 55011
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 6,
+                "sent": 1216,
+                "basis": "wall_clock",
+                "loss_pct": 0.4934210526315789,
+                "device_number": 55012
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 5,
+                "sent": 1200,
+                "basis": "wall_clock",
+                "loss_pct": 0.4166666666666667,
+                "device_number": 55013
+              }
+            }
+          },
+          "rssi_dbm_mean": -26.0,
+          "problems": []
+        }
+      },
+      "warnings": [
+        "Feather: ant_sim rc 1",
+        "Feather: 14 messages on the wall-clock fallback (pacing guessed)"
+      ],
+      "commands": [
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_sim.py",
+          "--serial",
+          "755972D7183A6183",
+          "--seconds",
+          "330",
+          "--device-number",
+          "55010",
+          "--profile",
+          "power",
+          "--profile",
+          "heart-rate",
+          "--profile",
+          "csc",
+          "--profile",
+          "fec-treadmill"
+        ]
+      ],
+      "consoles": {
+        "54L15": {
+          "port": "COM3",
+          "path": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_5_54L15_console.log",
+          "opened": true,
+          "lines": 20,
+          "bytes": 2440,
+          "started_at_unix": 1794093895.6999125,
+          "died_at_unix": null,
+          "died_after_s": null,
+          "error": null
+        }
+      }
+    },
+    {
+      "phase": "multi",
+      "round": "S",
+      "rep": 6,
+      "seconds": 300.0,
+      "profiles": [
+        "power",
+        "heart-rate",
+        "csc",
+        "fec-treadmill"
+      ],
+      "device_numbers": [
+        55010,
+        55011,
+        55012,
+        55013
+      ],
+      "transmitters": {
+        "Feather": {
+          "rc": 1,
+          "fallbacks": 13,
+          "device_numbers": [
+            55010,
+            55011,
+            55012,
+            55013
+          ],
+          "paced": false
+        }
+      },
+      "results": {
+        "Garmin": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_6_Garmin.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_6_Garmin.log",
+          "exit": 1,
+          "wall_s": 301.81299999999464,
+          "counts": {
+            "missed": 136,
+            "sent": 4834,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 30,
+                "sent": 1201,
+                "basis": "wall_clock",
+                "loss_pct": 2.4979184013322233,
+                "device_number": 55010
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 38,
+                "sent": 1218,
+                "basis": "wall_clock",
+                "loss_pct": 3.1198686371100166,
+                "device_number": 55011
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 36,
+                "sent": 1214,
+                "basis": "wall_clock",
+                "loss_pct": 2.9654036243822075,
+                "device_number": 55012
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 32,
+                "sent": 1201,
+                "basis": "wall_clock",
+                "loss_pct": 2.6644462947543714,
+                "device_number": 55013
+              }
+            }
+          },
+          "rssi_dbm_mean": null,
+          "problems": []
+        },
+        "Dongle": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_6_Dongle.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_6_Dongle.log",
+          "exit": 1,
+          "wall_s": 301.5939999999973,
+          "counts": {
+            "missed": 29,
+            "sent": 4835,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 7,
+                "sent": 1201,
+                "basis": "wall_clock",
+                "loss_pct": 0.5828476269775187,
+                "device_number": 55010
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 8,
+                "sent": 1218,
+                "basis": "wall_clock",
+                "loss_pct": 0.6568144499178982,
+                "device_number": 55011
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 7,
+                "sent": 1216,
+                "basis": "wall_clock",
+                "loss_pct": 0.5756578947368421,
+                "device_number": 55012
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 7,
+                "sent": 1200,
+                "basis": "wall_clock",
+                "loss_pct": 0.5833333333333334,
+                "device_number": 55013
+              }
+            }
+          },
+          "rssi_dbm_mean": -20.000416146483563,
+          "problems": []
+        },
+        "54L15": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_6_54L15.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_6_54L15.log",
+          "exit": 1,
+          "wall_s": 301.375,
+          "counts": {
+            "missed": 29,
+            "sent": 4835,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 7,
+                "sent": 1201,
+                "basis": "wall_clock",
+                "loss_pct": 0.5828476269775187,
+                "device_number": 55010
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 8,
+                "sent": 1218,
+                "basis": "wall_clock",
+                "loss_pct": 0.6568144499178982,
+                "device_number": 55011
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 7,
+                "sent": 1216,
+                "basis": "wall_clock",
+                "loss_pct": 0.5756578947368421,
+                "device_number": 55012
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 7,
+                "sent": 1200,
+                "basis": "wall_clock",
+                "loss_pct": 0.5833333333333334,
+                "device_number": 55013
+              }
+            }
+          },
+          "rssi_dbm_mean": -26.0,
+          "problems": []
+        }
+      },
+      "warnings": [
+        "Feather: ant_sim rc 1",
+        "Feather: 13 messages on the wall-clock fallback (pacing guessed)"
+      ],
+      "commands": [
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_sim.py",
+          "--serial",
+          "755972D7183A6183",
+          "--seconds",
+          "330",
+          "--device-number",
+          "55010",
+          "--profile",
+          "power",
+          "--profile",
+          "heart-rate",
+          "--profile",
+          "csc",
+          "--profile",
+          "fec-treadmill"
+        ]
+      ],
+      "consoles": {
+        "54L15": {
+          "port": "COM3",
+          "path": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_6_54L15_console.log",
+          "opened": true,
+          "lines": 20,
+          "bytes": 2440,
+          "started_at_unix": 1794094228.2850738,
+          "died_at_unix": null,
+          "died_after_s": null,
+          "error": null
+        }
+      }
+    },
+    {
+      "phase": "multi",
+      "round": "S",
+      "rep": 7,
+      "seconds": 300.0,
+      "profiles": [
+        "power",
+        "heart-rate",
+        "csc",
+        "fec-treadmill"
+      ],
+      "device_numbers": [
+        55010,
+        55011,
+        55012,
+        55013
+      ],
+      "transmitters": {
+        "Feather": {
+          "rc": 1,
+          "fallbacks": 14,
+          "device_numbers": [
+            55010,
+            55011,
+            55012,
+            55013
+          ],
+          "paced": false
+        }
+      },
+      "results": {
+        "Garmin": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_7_Garmin.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_7_Garmin.log",
+          "exit": 1,
+          "wall_s": 301.76600000000326,
+          "counts": {
+            "missed": 149,
+            "sent": 4836,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 37,
+                "sent": 1202,
+                "basis": "wall_clock",
+                "loss_pct": 3.0782029950083194,
+                "device_number": 55010
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 40,
+                "sent": 1218,
+                "basis": "wall_clock",
+                "loss_pct": 3.284072249589491,
+                "device_number": 55011
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 37,
+                "sent": 1216,
+                "basis": "wall_clock",
+                "loss_pct": 3.0427631578947367,
+                "device_number": 55012
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 35,
+                "sent": 1200,
+                "basis": "wall_clock",
+                "loss_pct": 2.9166666666666665,
+                "device_number": 55013
+              }
+            }
+          },
+          "rssi_dbm_mean": null,
+          "problems": []
+        },
+        "Dongle": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_7_Dongle.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_7_Dongle.log",
+          "exit": 1,
+          "wall_s": 301.5469999999914,
+          "counts": {
+            "missed": 26,
+            "sent": 4836,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 8,
+                "sent": 1202,
+                "basis": "wall_clock",
+                "loss_pct": 0.6655574043261231,
+                "device_number": 55010
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 8,
+                "sent": 1218,
+                "basis": "wall_clock",
+                "loss_pct": 0.6568144499178982,
+                "device_number": 55011
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 6,
+                "sent": 1216,
+                "basis": "wall_clock",
+                "loss_pct": 0.4934210526315789,
+                "device_number": 55012
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 4,
+                "sent": 1200,
+                "basis": "wall_clock",
+                "loss_pct": 0.3333333333333333,
+                "device_number": 55013
+              }
+            }
+          },
+          "rssi_dbm_mean": -20.0002079002079,
+          "problems": []
+        },
+        "54L15": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_7_54L15.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_7_54L15.log",
+          "exit": 1,
+          "wall_s": 301.3439999999973,
+          "counts": {
+            "missed": 25,
+            "sent": 4835,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 8,
+                "sent": 1202,
+                "basis": "wall_clock",
+                "loss_pct": 0.6655574043261231,
+                "device_number": 55010
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 7,
+                "sent": 1218,
+                "basis": "wall_clock",
+                "loss_pct": 0.5747126436781609,
+                "device_number": 55011
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 6,
+                "sent": 1215,
+                "basis": "wall_clock",
+                "loss_pct": 0.49382716049382713,
+                "device_number": 55012
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 4,
+                "sent": 1200,
+                "basis": "wall_clock",
+                "loss_pct": 0.3333333333333333,
+                "device_number": 55013
+              }
+            }
+          },
+          "rssi_dbm_mean": -26.0,
+          "problems": []
+        }
+      },
+      "warnings": [
+        "Feather: ant_sim rc 1",
+        "Feather: 14 messages on the wall-clock fallback (pacing guessed)"
+      ],
+      "commands": [
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_sim.py",
+          "--serial",
+          "755972D7183A6183",
+          "--seconds",
+          "330",
+          "--device-number",
+          "55010",
+          "--profile",
+          "power",
+          "--profile",
+          "heart-rate",
+          "--profile",
+          "csc",
+          "--profile",
+          "fec-treadmill"
+        ]
+      ],
+      "consoles": {
+        "54L15": {
+          "port": "COM3",
+          "path": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_7_54L15_console.log",
+          "opened": true,
+          "lines": 20,
+          "bytes": 2440,
+          "started_at_unix": 1794094560.7873788,
+          "died_at_unix": null,
+          "died_after_s": null,
+          "error": null
+        }
+      }
+    },
+    {
+      "phase": "multi",
+      "round": "S",
+      "rep": 8,
+      "seconds": 300.0,
+      "profiles": [
+        "power",
+        "heart-rate",
+        "csc",
+        "fec-treadmill"
+      ],
+      "device_numbers": [
+        55010,
+        55011,
+        55012,
+        55013
+      ],
+      "transmitters": {
+        "Feather": {
+          "rc": 1,
+          "fallbacks": 11,
+          "device_numbers": [
+            55010,
+            55011,
+            55012,
+            55013
+          ],
+          "paced": false
+        }
+      },
+      "results": {
+        "Garmin": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_8_Garmin.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_8_Garmin.log",
+          "exit": 1,
+          "wall_s": 301.60899999999674,
+          "counts": {
+            "missed": 145,
+            "sent": 4837,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 34,
+                "sent": 1202,
+                "basis": "wall_clock",
+                "loss_pct": 2.8286189683860234,
+                "device_number": 55010
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 41,
+                "sent": 1219,
+                "basis": "wall_clock",
+                "loss_pct": 3.3634126333059884,
+                "device_number": 55011
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 35,
+                "sent": 1216,
+                "basis": "wall_clock",
+                "loss_pct": 2.8782894736842106,
+                "device_number": 55012
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 35,
+                "sent": 1200,
+                "basis": "wall_clock",
+                "loss_pct": 2.9166666666666665,
+                "device_number": 55013
+              }
+            }
+          },
+          "rssi_dbm_mean": null,
+          "problems": []
+        },
+        "Dongle": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_8_Dongle.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_8_Dongle.log",
+          "exit": 1,
+          "wall_s": 301.5929999999935,
+          "counts": {
+            "missed": 26,
+            "sent": 4836,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 7,
+                "sent": 1202,
+                "basis": "wall_clock",
+                "loss_pct": 0.5823627287853578,
+                "device_number": 55010
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 7,
+                "sent": 1218,
+                "basis": "wall_clock",
+                "loss_pct": 0.5747126436781609,
+                "device_number": 55011
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 6,
+                "sent": 1216,
+                "basis": "wall_clock",
+                "loss_pct": 0.4934210526315789,
+                "device_number": 55012
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 6,
+                "sent": 1200,
+                "basis": "wall_clock",
+                "loss_pct": 0.5,
+                "device_number": 55013
+              }
+            }
+          },
+          "rssi_dbm_mean": -20.0002079002079,
+          "problems": []
+        },
+        "54L15": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_8_54L15.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_8_54L15.log",
+          "exit": 1,
+          "wall_s": 301.3899999999994,
+          "counts": {
+            "missed": 26,
+            "sent": 4837,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 7,
+                "sent": 1202,
+                "basis": "wall_clock",
+                "loss_pct": 0.5823627287853578,
+                "device_number": 55010
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 7,
+                "sent": 1219,
+                "basis": "wall_clock",
+                "loss_pct": 0.5742411812961444,
+                "device_number": 55011
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 6,
+                "sent": 1215,
+                "basis": "wall_clock",
+                "loss_pct": 0.49382716049382713,
+                "device_number": 55012
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 6,
+                "sent": 1201,
+                "basis": "wall_clock",
+                "loss_pct": 0.4995836802664446,
+                "device_number": 55013
+              }
+            }
+          },
+          "rssi_dbm_mean": -26.0,
+          "problems": []
+        }
+      },
+      "warnings": [
+        "Feather: ant_sim rc 1",
+        "Feather: 11 messages on the wall-clock fallback (pacing guessed)"
+      ],
+      "commands": [
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_sim.py",
+          "--serial",
+          "755972D7183A6183",
+          "--seconds",
+          "330",
+          "--device-number",
+          "55010",
+          "--profile",
+          "power",
+          "--profile",
+          "heart-rate",
+          "--profile",
+          "csc",
+          "--profile",
+          "fec-treadmill"
+        ]
+      ],
+      "consoles": {
+        "54L15": {
+          "port": "COM3",
+          "path": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_8_54L15_console.log",
+          "opened": true,
+          "lines": 20,
+          "bytes": 2440,
+          "started_at_unix": 1794094893.381571,
+          "died_at_unix": null,
+          "died_after_s": null,
+          "error": null
+        }
+      }
+    },
+    {
+      "phase": "multi",
+      "round": "S",
+      "rep": 9,
+      "seconds": 300.0,
+      "profiles": [
+        "power",
+        "heart-rate",
+        "csc",
+        "fec-treadmill"
+      ],
+      "device_numbers": [
+        55010,
+        55011,
+        55012,
+        55013
+      ],
+      "transmitters": {
+        "Feather": {
+          "rc": 1,
+          "fallbacks": 13,
+          "device_numbers": [
+            55010,
+            55011,
+            55012,
+            55013
+          ],
+          "paced": false
+        }
+      },
+      "results": {
+        "Garmin": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_9_Garmin.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_9_Garmin.log",
+          "exit": 1,
+          "wall_s": 301.64100000000326,
+          "counts": {
+            "missed": 147,
+            "sent": 4837,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 36,
+                "sent": 1202,
+                "basis": "wall_clock",
+                "loss_pct": 2.995008319467554,
+                "device_number": 55010
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 43,
+                "sent": 1219,
+                "basis": "wall_clock",
+                "loss_pct": 3.527481542247744,
+                "device_number": 55011
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 36,
+                "sent": 1216,
+                "basis": "wall_clock",
+                "loss_pct": 2.960526315789474,
+                "device_number": 55012
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 32,
+                "sent": 1200,
+                "basis": "wall_clock",
+                "loss_pct": 2.6666666666666665,
+                "device_number": 55013
+              }
+            }
+          },
+          "rssi_dbm_mean": null,
+          "problems": []
+        },
+        "Dongle": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_9_Dongle.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_9_Dongle.log",
+          "exit": 1,
+          "wall_s": 301.625,
+          "counts": {
+            "missed": 29,
+            "sent": 4837,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 7,
+                "sent": 1202,
+                "basis": "wall_clock",
+                "loss_pct": 0.5823627287853578,
+                "device_number": 55010
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 7,
+                "sent": 1219,
+                "basis": "wall_clock",
+                "loss_pct": 0.5742411812961444,
+                "device_number": 55011
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 9,
+                "sent": 1216,
+                "basis": "wall_clock",
+                "loss_pct": 0.7401315789473685,
+                "device_number": 55012
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 6,
+                "sent": 1200,
+                "basis": "wall_clock",
+                "loss_pct": 0.5,
+                "device_number": 55013
+              }
+            }
+          },
+          "rssi_dbm_mean": -20.000415973377702,
+          "problems": []
+        },
+        "54L15": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_9_54L15.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_9_54L15.log",
+          "exit": 1,
+          "wall_s": 301.4060000000027,
+          "counts": {
+            "missed": 27,
+            "sent": 4835,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 7,
+                "sent": 1201,
+                "basis": "wall_clock",
+                "loss_pct": 0.5828476269775187,
+                "device_number": 55010
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 7,
+                "sent": 1219,
+                "basis": "wall_clock",
+                "loss_pct": 0.5742411812961444,
+                "device_number": 55011
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 7,
+                "sent": 1215,
+                "basis": "wall_clock",
+                "loss_pct": 0.5761316872427984,
+                "device_number": 55012
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 6,
+                "sent": 1200,
+                "basis": "wall_clock",
+                "loss_pct": 0.5,
+                "device_number": 55013
+              }
+            }
+          },
+          "rssi_dbm_mean": -26.0,
+          "problems": []
+        }
+      },
+      "warnings": [
+        "Feather: ant_sim rc 1",
+        "Feather: 13 messages on the wall-clock fallback (pacing guessed)"
+      ],
+      "commands": [
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_sim.py",
+          "--serial",
+          "755972D7183A6183",
+          "--seconds",
+          "330",
+          "--device-number",
+          "55010",
+          "--profile",
+          "power",
+          "--profile",
+          "heart-rate",
+          "--profile",
+          "csc",
+          "--profile",
+          "fec-treadmill"
+        ]
+      ],
+      "consoles": {
+        "54L15": {
+          "port": "COM3",
+          "path": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_9_54L15_console.log",
+          "opened": true,
+          "lines": 21,
+          "bytes": 2557,
+          "started_at_unix": 1794095226.0854316,
+          "died_at_unix": null,
+          "died_after_s": null,
+          "error": null
+        }
+      }
+    },
+    {
+      "phase": "multi",
+      "round": "S",
+      "rep": 10,
+      "seconds": 300.0,
+      "profiles": [
+        "power",
+        "heart-rate",
+        "csc",
+        "fec-treadmill"
+      ],
+      "device_numbers": [
+        55010,
+        55011,
+        55012,
+        55013
+      ],
+      "transmitters": {
+        "Feather": {
+          "rc": 1,
+          "fallbacks": 10,
+          "device_numbers": [
+            55010,
+            55011,
+            55012,
+            55013
+          ],
+          "paced": false
+        }
+      },
+      "results": {
+        "Garmin": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_10_Garmin.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_10_Garmin.log",
+          "exit": 1,
+          "wall_s": 301.82799999999406,
+          "counts": {
+            "missed": 149,
+            "sent": 4836,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 32,
+                "sent": 1202,
+                "basis": "wall_clock",
+                "loss_pct": 2.6622296173044924,
+                "device_number": 55010
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 42,
+                "sent": 1218,
+                "basis": "wall_clock",
+                "loss_pct": 3.4482758620689653,
+                "device_number": 55011
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 38,
+                "sent": 1216,
+                "basis": "wall_clock",
+                "loss_pct": 3.125,
+                "device_number": 55012
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 37,
+                "sent": 1200,
+                "basis": "wall_clock",
+                "loss_pct": 3.0833333333333335,
+                "device_number": 55013
+              }
+            }
+          },
+          "rssi_dbm_mean": null,
+          "problems": []
+        },
+        "Dongle": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_10_Dongle.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_10_Dongle.log",
+          "exit": 1,
+          "wall_s": 301.81200000000536,
+          "counts": {
+            "missed": 24,
+            "sent": 4836,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 5,
+                "sent": 1202,
+                "basis": "wall_clock",
+                "loss_pct": 0.415973377703827,
+                "device_number": 55010
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 7,
+                "sent": 1218,
+                "basis": "wall_clock",
+                "loss_pct": 0.5747126436781609,
+                "device_number": 55011
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 7,
+                "sent": 1216,
+                "basis": "wall_clock",
+                "loss_pct": 0.5756578947368421,
+                "device_number": 55012
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 5,
+                "sent": 1200,
+                "basis": "wall_clock",
+                "loss_pct": 0.4166666666666667,
+                "device_number": 55013
+              }
+            }
+          },
+          "rssi_dbm_mean": -20.0,
+          "problems": []
+        },
+        "54L15": {
+          "json": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_10_54L15.json",
+          "log": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_10_54L15.log",
+          "exit": 1,
+          "wall_s": 301.375,
+          "counts": {
+            "missed": 22,
+            "sent": 4835,
+            "basis": "wall_clock",
+            "per_channel": {
+              "0": {
+                "profile": "power",
+                "missed": 4,
+                "sent": 1201,
+                "basis": "wall_clock",
+                "loss_pct": 0.33305578684429643,
+                "device_number": 55010
+              },
+              "1": {
+                "profile": "heart-rate",
+                "missed": 7,
+                "sent": 1218,
+                "basis": "wall_clock",
+                "loss_pct": 0.5747126436781609,
+                "device_number": 55011
+              },
+              "2": {
+                "profile": "csc",
+                "missed": 6,
+                "sent": 1216,
+                "basis": "wall_clock",
+                "loss_pct": 0.4934210526315789,
+                "device_number": 55012
+              },
+              "3": {
+                "profile": "fec-treadmill",
+                "missed": 5,
+                "sent": 1200,
+                "basis": "wall_clock",
+                "loss_pct": 0.4166666666666667,
+                "device_number": 55013
+              }
+            }
+          },
+          "rssi_dbm_mean": -26.0,
+          "problems": []
+        }
+      },
+      "warnings": [
+        "Feather: ant_sim rc 1",
+        "Feather: 10 messages on the wall-clock fallback (pacing guessed)"
+      ],
+      "commands": [
+        [
+          "C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe",
+          "-u",
+          "C:\\Users\\Colin\\ant_dongle\\tools\\ant_sim.py",
+          "--serial",
+          "755972D7183A6183",
+          "--seconds",
+          "330",
+          "--device-number",
+          "55010",
+          "--profile",
+          "power",
+          "--profile",
+          "heart-rate",
+          "--profile",
+          "csc",
+          "--profile",
+          "fec-treadmill"
+        ]
+      ],
+      "consoles": {
+        "54L15": {
+          "port": "COM3",
+          "path": "C:\\Users\\Colin\\ant_dongle\\archive\\benchmarks\\2026-11-07-vcom-soak\\S_multi_10_54L15_console.log",
+          "opened": true,
+          "lines": 20,
+          "bytes": 2440,
+          "started_at_unix": 1794095558.7847853,
+          "died_at_unix": null,
+          "died_after_s": null,
+          "error": null
+        }
+      }
+    }
+  ]
+}

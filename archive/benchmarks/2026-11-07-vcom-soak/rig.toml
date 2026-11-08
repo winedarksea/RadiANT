@@ -1,0 +1,72 @@
+# TODO.md item 3: the 54L15 receiver's J-Link OB VCOM died mid-window once
+# (2026-11-07 rerun, A_multi_1_54L15.log, PermissionError 13 at ~245 s of 300).
+# This rig repeats that shape - four-profile multi windows, the 54L15 receiving -
+# with the instruments that can now classify a drop:
+#
+#   - ant_verify flags an unsolicited STARTUP mid-window as a receiver reboot
+#     (UART builds now announce every boot with the hardware reset cause);
+#   - a dying ANT port writes partial JSON with the time of death;
+#   - wall_s is per receiver, so ant_compare's dropped-port check fires for
+#     every receiver, not only the first;
+#   - the 54L15's log VCOM (log_port) is captured per window, line-stamped.
+#
+# Run:   python tools/ant_compare.py --rig tools/compare_rigs/2026-11-07-vcom-soak.toml --phases multi
+#
+# Changed from the plan: the Feather transmits instead of the nRF5340 DK, which
+# another bench user held at the time. The question is the RECEIVER's port, so
+# which board transmits does not matter, only that four mixed-period masters
+# keep the 54L15 busy. COM numbers move - re-read them (Get-PnpDevice: the
+# 54L15 probe is 1057737173, ANT on MI_00, log on MI_02) before every sitting.
+
+[meta]
+name = "2026-11-07-vcom-soak"
+results_dir = "archive/benchmarks/2026-11-07-vcom-soak"
+caveats = [
+  "The Feather transmits from ant_sim.py (EVENT_TX-paced host masters) on its pre-SLIP_GUARD image, at its bridge default power.",
+  "A drop is the finding here, not the loss figures; four masters on one board share one clock.",
+]
+
+[placement]
+notes = "Same bench as 2026-11-07-fixed; boards unmoved."
+
+[[device]]
+name = "Garmin"
+address = "usb:006"
+stack = "reference"
+notes = "Garmin ANT USB-m, 0FCF:1009, libusb-win32"
+
+[[device]]
+name = "Dongle"
+address = "usb:3D55F77818BE772A"
+stack = "radiant"
+part = "nrf52840"
+notes = "nRF52840 Dongle, DFU-flashed with this change set 2026-11-07"
+
+[[device]]
+name = "54L15"
+address = "port:COM4"
+stack = "radiant"
+part = "nrf54l15"
+log_port = "COM3"
+notes = "nRF54L15 DK, J-Link-flashed with this change set 2026-11-07 (boot STARTUP, reset-cause log); probe SN 1057737173"
+
+[[device]]
+name = "Feather"
+address = "usb:755972D7183A6183"
+stack = "radiant"
+part = "nrf52840"
+receive = false
+transmit = true
+device_number_base = 55000
+notes = "Adafruit Feather nRF52840 Express, current image (not reflashed)"
+
+[[round]]
+name = "S"
+transmitters = ["Feather"]
+phases = ["multi"]
+device_number_offset = 0
+receivers = ["Garmin", "Dongle", "54L15"]
+repeats = { multi = 10 }
+
+[phases.multi]
+seconds = 300

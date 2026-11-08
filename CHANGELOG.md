@@ -58,6 +58,19 @@ reads.
 
 ### Changed
 
+- **Transmit power: an explicit 0 dBm is now 0 dBm, and the nRF54L15 and
+  CC26xx boost higher.** `CONFIG_ANT_DONGLE_TX_POWER_BOOST` raises only the
+  unset default and level 4; an explicit level 3 is a true 0 dBm. The boost
+  now asks for level 5 on every radiant build and lets the backend round:
+  +8 dBm on the nRF54L15 (was +4) and +5 on CC26xx (was +4); the nRF52840
+  (+8) and nRF5340 net core (0) are unchanged. Zwift never sets power, so it
+  still gets the maximum.
+- **UART builds announce every boot.** They send an unsolicited STARTUP with
+  the hardware reset cause (0x00 power-on, 0x01 pin, 0x02 watchdog, lockup or
+  software reset, which includes a crash), so a host can tell that the board
+  rebooted. That matters most on the CC2652P, where the CP2102N keeps the
+  USB handle open across a reboot. Every build now logs its reset cause at
+  boot. USB builds are unchanged.
 - **A pending acknowledged command waits longer for a master slot.** A slave's
   queued ACK command now gets three master slots (`RADIANT_API_ACK_OPENER_PERIODS`),
   so it waits up to max(500 ms, 3 channel periods) — 750 ms on FE-C — before

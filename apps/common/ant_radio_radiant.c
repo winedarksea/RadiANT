@@ -3265,6 +3265,35 @@ antr_err_t antr_channel_unassign(uint8_t channel)
 	return rc;
 }
 
+/*
+ * A master is about to transmit an ID that nRF receivers find hard to hear: a
+ * long alternating run in its on-air address (ADR 0019). Nothing is refused.
+ * The number may be a real sensor's, a provisioned identity, or a test case.
+ * This only tells whoever chose it, once per open, that another number would
+ * be received more reliably.
+ */
+static void api_warn_slip_prone_id(uint8_t ch)
+{
+	struct radiant_channel_id id;
+	uint8_t run;
+
+	if (!radiant_channel_is_master(ch) ||
+	    radiant_channel_id_get(ch, &id) != RADIANT_CH_OK ||
+	    id.device_number == 0u) {
+		return;
+	}
+	run = radiant_channel_id_alt_run(api_net_addr_for(ch), id.device_number,
+					 id.device_type);
+	if (run >= RADIANT_ADDR_ALT_RUN_AVOID) {
+		LOG_WRN("ch %u: device #%u type 0x%02x has a %u-bit alternating "
+			"run in its address; nRF-based receivers can lose up to "
+			"~5%% of its frames (ADR 0019). Prefer another device "
+			"number",
+			(unsigned int)ch, (unsigned int)id.device_number,
+			(unsigned int)id.device_type, (unsigned int)run);
+	}
+}
+
 antr_err_t antr_channel_open_with_offset(uint8_t channel, uint16_t offset)
 {
 	antr_err_t rc;
@@ -3273,6 +3302,8 @@ antr_err_t antr_channel_open_with_offset(uint8_t channel, uint16_t offset)
 	rc = radiant_channel_open(channel, offset, radiant_radio_now());
 	if (rc == RADIANT_CH_OK) {
 		int trc = api_xfer_setup(channel);
+
+		api_warn_slip_prone_id(channel);
 
 		if (trc != RADIANT_TRANSFER_OK) {
 			/* radiant_transfer_init() refuses a backend too slow for
