@@ -591,6 +591,22 @@ ZTEST(profiles, test_the_sealed_encoder_refuses_what_cannot_verify)
 		      profile_desc_encode_auth(&d, &a, frames,
 					       PROFILE_TLM_MAX_FRAMES));
 
+	/* The decoder holds the same line, and a reserved transform bit does
+	 * not buy an exception: X_AUTH with sparse is malformed whatever else
+	 * is set. The window is made legal too, so that the sparse rule is the
+	 * only thing left to refuse these frames. */
+	frames[7] |= PROFILE_TLM_FLAG_X_AUTH;
+	frames[PROFILE_TLM_FRAME_LEN + 3u] |=
+		(uint8_t)(PROFILE_TLM_W_CODE_4 << 6);
+	zassert_equal(-EPROTO, profile_desc_decode(frames, (uint8_t)AUTH_FRAMES,
+						   &d));
+	frames[7] |= PROFILE_TLM_FLAG_RSVD_5;
+	zassert_equal(-EPROTO, profile_desc_decode(frames, (uint8_t)AUTH_FRAMES,
+						   &d));
+	frames[7] ^= PROFILE_TLM_FLAG_RSVD_5 | PROFILE_TLM_FLAG_RSVD_4;
+	zassert_equal(-EPROTO, profile_desc_decode(frames, (uint8_t)AUTH_FRAMES,
+						   &d));
+
 	/* Fourteen fields and a transform is 17 frames; thirteen is the
 	 * budget. */
 	build_cgm_descriptor(&d, PROFILE_TLM_FLAG_X_AUTH);

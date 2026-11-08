@@ -337,19 +337,21 @@ static int check_transforms(const struct profile_descriptor *d)
 {
 	uint8_t x = (uint8_t)(d->flags & PROFILE_TLM_FLAG_TRANSFORM_MASK);
 
+	/* First, so that a reserved bit cannot excuse it: the decoder turns
+	 * this -EINVAL into -EPROTO and lets -ENOTSUP through. */
+	if ((x & PROFILE_TLM_FLAG_X_AUTH) != 0u &&
+	    (d->flags & PROFILE_TLM_FLAG_SPARSE) != 0u) {
+		/* The spread tag lags one window, so a sparse burst never
+		 * carries its own tag and never verifies (decided with TODO
+		 * item 7). X_CONF alone stays legal on a sparse node. */
+		return -EINVAL;
+	}
 	if ((x & (PROFILE_TLM_FLAG_RSVD_5 | PROFILE_TLM_FLAG_RSVD_4)) != 0u) {
 		/* Descriptor encryption and TESLA: specified by nothing. */
 		return -ENOTSUP;
 	}
 	if (x == 0u) {
 		/* Nothing to seal; the plain encoder is the path for this. */
-		return -EINVAL;
-	}
-	if ((x & PROFILE_TLM_FLAG_X_AUTH) != 0u &&
-	    (d->flags & PROFILE_TLM_FLAG_SPARSE) != 0u) {
-		/* The spread tag lags one window, so a sparse burst never
-		 * carries its own tag and never verifies (decided with TODO
-		 * item 7). X_CONF alone stays legal on a sparse node. */
 		return -EINVAL;
 	}
 	return 0;
