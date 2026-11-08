@@ -952,6 +952,30 @@ stated rather than fixed:
   that (section 3.1). Any receiver that tracks drift can be dragged at the rate
   it tracks.
 
+**Compat Tier I (section 11.4) has the same shape, with no host phase at all.**
+A compat receiver learns the sensor's phase from the first verified Tier I page,
+and from then on it refuses a page that arrives more than `2 x JITTER + SLEW`
+(about 2 s at 4 Hz) later than that phase predicts. What that leaves open:
+
+- **A fresh receiver accepts one recorded page**, or a stream of them replayed
+  in order at the real rate, until it hears the genuine sensor. The page covers
+  no payload and no receiver nonce, and the receiver shares no clock with the
+  sensor, so nothing in the first page can show when it was sent. The first
+  genuine page heals this: its counter is one no recording holds, so it pulls
+  the phase earlier in one step, and every older recording is then refused.
+- **A locked receiver can be dragged** later by at most `SLEW` (`T / 4096`,
+  about 5 ms at T = 20 s) per interval, by an attacker who jams each page and
+  replays it slightly late. That is the price of tracking crystal drift, the
+  same class of limit as the spread MAC's `period / 16`.
+- **A genuine page later than the slack is refused** and counted in
+  `tier1_replays`. A sender's seam slips a Tier I page by at most a few slots
+  (test_profile_compat.c measures it against the 4-period allowance), so this
+  does not happen to a sensor built from this tree.
+- **A sensor that reboots into epoch + 1** usually reads as floor replays until
+  the host re-runs epoch recovery, as it always has. A receiver that only ever
+  hears Tier II has no phase source at all: an 8-bit window index cannot
+  supply one.
+
 The limit: a joining receiver's freshness is anchored on the **host-supplied**
 epoch via `0xF3`, not on anything it hears. The descriptor that carries the
 epoch is unauthenticated until section 5.3's frame ships, so **a captured old
@@ -1423,16 +1447,38 @@ One self-contained page every `T` seconds, **decoupled from the data rate**:
 ```
 
 - **It covers no payload, and that is the point.** The page proves "this stream
-  comes from the holder of `K_auth`, now, and is not a replay" and nothing else.
-  Because nothing outside the page is covered it is **verifiable on receipt**,
-  and a lost packet anywhere else costs nothing. See section 7.7.
+  comes from the holder of `K_auth`, under this epoch" and nothing else. From
+  the second verified page on it also proves **bounded lateness**: a page that
+  arrives more than about 2 s later than the phase the receiver has learned is
+  refused. The first page
+  after first contact (a `set_epoch` or `adopt_epoch`) proves the epoch, not
+  freshness; section 7.6 says why no design can do better. Because nothing
+  outside the page is covered it is **verifiable on receipt**, and a lost packet
+  anywhere else costs nothing. See section 7.7.
 - **`T` default 20 s, manufacturer-configurable.** At 4 Hz that is one page in
   ~81, **1.2% of slots**. `T` is in *seconds*, so a slower profile spends
   proportionally less, not more.
-- **Replay is closed by the counter, not by payload coverage.** `att_counter` is
-  monotone and derivable from elapsed time; a receiver rejects a counter it has
-  already seen and re-anchors after a gap. A wrap advances the epoch on both
-  sides, exactly as section 3.5 requires.
+- **Replay is closed by the counter and the phase, not by payload coverage.**
+  `att_counter` is monotone and derivable from elapsed time. A receiver is never
+  told where the sensor's epoch began (a hostless strap anchors on its own
+  power-up), so it **learns the phase from the air**: on first contact it takes
+  the on-air 16 bits as the counter within the held epoch, and the first
+  verified page locks the phase at `t_sync - counter x T`. After that, three
+  checks apply in order:
+  - **the floor:** a counter at or below the last verified one is a replay;
+  - **the staleness slack:** a page more than `2 x JITTER + SLEW` later than the
+    lock predicts is a replay, where `JITTER` is 4 channel periods (the slot
+    slip a sender's seam adds) and `SLEW` is `T / 4096`. That is about 2 s at
+    4 Hz. Both refusals are counted in `tier1_replays`, never as forgeries, and
+    neither refreshes the stream verdict;
+  - **the tag.**
+
+  Only a verified page moves the phase. A page with a higher counter that pulls
+  the phase earlier is trusted in full, because a keyless attacker cannot
+  produce a counter the sensor has not reached yet. A page that would pull it
+  later moves it by at most `SLEW` per interval, which is how crystal drift is
+  tracked. A wrap advances the epoch on both sides, exactly as section 3.5
+  requires. A new `T` clears the lock.
 - **40 bits of tag, not 48**, because the counter needs two bytes in-page now
   that no window index is implied. 2^-40 per attempt against a mechanism
   rate-limited to one attempt per `T` by construction is not the weak link.

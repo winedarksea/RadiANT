@@ -338,6 +338,12 @@ int radiant_sec_compat_configure(uint8_t ch, uint8_t switches, uint8_t n,
  * `now_us - us_into_epoch`; `period_counts` is the channel period in counts of
  * 1/32768 s, which is what turns elapsed time into a transmitted-message index.
  *
+ * On a RECEIVER the anchor is only a starting guess: a compat receiver is never
+ * told where the sensor's epoch began, so the first verified Tier I page
+ * replaces it with the phase the page proves (unless the guess already agrees
+ * to within the sender's slot slip), and later pages track it. A sender's
+ * anchor is authoritative and is never moved.
+ *
  * Refuses a non-forward epoch and refuses one inside RADIANT_SEC_EPOCH_HEADROOM
  * of 0xFFFFFFFF, both for D3's reasons. The ONE route that may move an epoch
  * backwards is radiant_sec_compat_adopt_epoch() below, and it exists because a
@@ -396,8 +402,10 @@ int radiant_sec_compat_tx_sent(uint8_t ch, const uint8_t *pay, uint8_t len);
  * closes, which is what one lost packet costs.
  *
  * Returns RADIANT_SEC_OK, RADIANT_SEC_EBADMAC when a tag did not verify,
- * RADIANT_SEC_EREPLAY for a counter already seen, or another negative code. The
- * verdict also arrives through the hook below, and the last one is readable.
+ * RADIANT_SEC_EREPLAY for a counter already seen or a Tier I page later than
+ * the phase learned from earlier pages allows (docs/radiant-security.md 11.4),
+ * or another negative code. The verdict also arrives through the hook below,
+ * and the last one is readable.
  */
 int radiant_sec_compat_rx(uint8_t ch, uint8_t sub, const uint8_t *pay,
 			  uint8_t len, uint64_t t_sync);
@@ -424,7 +432,8 @@ enum radiant_sec_verdict radiant_sec_compat_last_verdict(uint8_t ch);
  *
  *   CLEAR       no key here, or attestation is not expected. Unchanged meaning.
  *   VERIFIED    a Tier I page verified inside the staleness horizon: this
- *               stream is coming from the holder of K_auth, now. IT IS AN
+ *               stream is coming from the holder of K_auth (and, from the
+ *               second page after first contact, recently). IT IS AN
  *               IDENTITY CLAIM AND NOT AN INTEGRITY CLAIM - Tier I covers no
  *               payload, and a receiver that wants "were these exact bytes
  *               sent by that holder" enables Tier II and reads its per-window
@@ -596,7 +605,8 @@ int radiant_sec_compat_recover_tier2(uint8_t ch, uint16_t devnum,
  *
  * Clears window state and the Tier I replay high-water mark, since a fresh
  * epoch has its own counter space and judging it against the old mark would
- * reject every page.
+ * reject every page. It also clears the Tier I phase lock: a rebooted sensor
+ * has a new phase, which the next verified Tier I page teaches the receiver.
  */
 int radiant_sec_compat_adopt_epoch(uint8_t ch, uint32_t epoch);
 

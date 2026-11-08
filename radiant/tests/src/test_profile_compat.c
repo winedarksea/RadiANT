@@ -553,6 +553,140 @@ ZTEST(profile_compat, test_a_strap_with_no_compat_layer_is_stock_ant_plus)
 	}
 }
 
+/* ═══ Tier I's slip through the real seam ════════════════════════════════ */
+
+/* A seam client that always has two frames: with one active, the beacon set
+ * is promoted to a frame every eight messages, the busiest the seam gets. */
+static uint8_t busy_frames(void *user, uint64_t now_us)
+{
+	ARG_UNUSED(user);
+	ARG_UNUSED(now_us);
+	return 2u;
+}
+
+static bool busy_frame(void *user, uint8_t i, uint8_t *payload)
+{
+	ARG_UNUSED(user);
+	memset(payload, (uint8_t)(0xA0u + i), 6u);
+	return true;
+}
+
+ZTEST(profile_compat, test_tier1_leaves_within_the_receivers_jitter_allowance)
+{
+	/*
+	 * radiant_sec_compat.c's receiver learns the sensor's phase from the
+	 * Tier I pages themselves, allows a genuine page 4 periods of slot slip
+	 * (its JITTER), and refuses one more than ~8 periods later than its lock
+	 * says. The slack is tight by decision (2026-11-07), which is safe only
+	 * while the seam really does get every Tier I page out within those 4
+	 * periods. This drives the real seam with everything that competes for
+	 * it - Tier II, the beacon and a client at the promoted cadence - and
+	 * measures the slip, so a future claimant that pushes Tier I later fails
+	 * here instead of as false replays in the field.
+	 *
+	 * The receiver's clock is five days ahead of the strap's, so it holds
+	 * the wrong phase until the first Tier I page teaches it the right one.
+	 * Its Tier II windows verifying afterwards is the other half: the window
+	 * index is resolved against the same learned phase.
+	 */
+	const uint8_t                   both = RADIANT_SEC_COMPAT_SW_TIER_I |
+					       RADIANT_SEC_COMPAT_SW_TIER_II;
+	const uint64_t                  period = period_us(PROFILE_HR_PERIOD);
+	const uint64_t                  t_us = (uint64_t)TEST_T_S * US_PER_S;
+	const uint32_t                  slots = (uint32_t)(100u * t_us / period);
+	const uint64_t                  skew = (uint64_t)5u * 86400u * US_PER_S +
+					       7300000u;
+	struct profile_hr               hr;
+	struct profile_hr_cfg           cfg;
+	struct profile_compat           pc;
+	struct profile_compat_client    client;
+	struct radiant_sec_compat_stats st;
+	uint64_t                        max_slip = 0u;
+	uint32_t                        pages = 0u;
+	uint32_t                        i;
+
+	keys_up(both, (uint8_t)(both | RADIANT_SEC_COMPAT_SW_PIN),
+		PROFILE_HR_PERIOD);
+	hr_cfg_fill(&cfg);
+	zassert_equal(0, profile_hr_init(&hr, &cfg));
+	compat_up(&pc);
+
+	memset(&client, 0, sizeof(client));
+	client.frames = busy_frames;
+	client.frame = busy_frame;
+	client.user = &client;
+	zassert_equal(0, profile_compat_set_client(&pc, &client));
+	zassert_equal(0, profile_hr_set_compat(&hr, &pc));
+	profile_hr_set_computed(&hr, 60u);
+
+	for (i = 0u; i < slots; i++) {
+		uint8_t                body[8];
+		uint64_t               now = T_ORIGIN + (uint64_t)i * period;
+		enum profile_slot_kind kind;
+		int                    rc;
+
+		if ((i % 4u) == 0u) {
+			profile_hr_beat(&hr, (uint16_t)((i / 4u) * 1024u));
+		}
+		profile_hr_set_operating_time(&hr, i / 4u);
+
+		kind = profile_hr_next(&hr, now, body);
+		zassert_not_equal(PROFILE_SLOT_IDLE, kind, "slot %u went silent",
+				  i);
+
+		if (sub_of(body) == RADIANT_SEC_COMPAT_SUBTYPE_TIER_I) {
+			uint32_t k = (uint32_t)body[1] | ((uint32_t)body[2] << 8);
+			uint64_t start = T_ORIGIN + (uint64_t)k * t_us;
+			uint64_t slip;
+
+			zassert_true(now >= start,
+				     "interval %u's page left before it began", k);
+			slip = now - start;
+			zassert_true(slip <= 4u * period,
+				     "interval %u's Tier I page left %u us into "
+				     "it, past the receiver's 4-period jitter "
+				     "allowance", k, (uint32_t)slip);
+			if (slip > max_slip) {
+				max_slip = slip;
+			}
+			pages++;
+		}
+
+		/* Tier II's verdict is not asserted per window: a tag that falls
+		 * due on message 119 or 120, which the seam never offers, closes
+		 * its window untagged (radiant_sec_compat_tx_sent()), and the
+		 * receiver also loses the window after it. That is Tier II's own
+		 * behaviour and not this test's subject. */
+		rc = radiant_sec_compat_rx(RX_CH, sub_of(body), body, 8u,
+					   now + skew);
+		if (sub_of(body) != RADIANT_SEC_COMPAT_SUBTYPE_TIER_II) {
+			zassert_equal(RADIANT_SEC_OK, rc,
+				      "message %u (page 0x%02X) refused at the "
+				      "receiver: %d", i, body[0], rc);
+		}
+	}
+
+	radiant_sec_compat_get_stats(RX_CH, &st);
+	TC_PRINT("%u Tier I pages over %u slots, worst slip %u us (allowance "
+		 "%u us); Tier II windows %u verified, %u not\n", pages, slots,
+		 (uint32_t)max_slip, (uint32_t)(4u * period), st.tier2_verified,
+		 st.tier2_unverified);
+
+	zassert_true(pages >= 99u, "only %u Tier I pages", pages);
+	zassert_true(max_slip > period,
+		     "no Tier I page slipped a whole slot in %u intervals, so "
+		     "the scenario is not exercising the seam", pages);
+
+	zassert_equal(0u, st.tier1_replays,
+		      "%u genuine pages refused as late", st.tier1_replays);
+	zassert_equal(pages, st.tier1_verified, NULL);
+	/* Resolved against the phase Tier I taught the receiver: against the
+	 * five-day-wrong one it held before, no window could verify. */
+	zassert_true(st.tier2_verified > st.tier2_unverified,
+		     "Tier II windows: %u verified, %u not", st.tier2_verified,
+		     st.tier2_unverified);
+}
+
 /* ═══ Bicycle power, the other compat target ═════════════════════════════ */
 
 ZTEST(profile_compat, test_power_keeps_the_interleave_and_its_own_pages)

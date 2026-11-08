@@ -159,7 +159,10 @@ struct compat_ctx {
 	uint32_t base_epoch;
 	uint32_t wraps;
 	uint32_t epoch;
-	uint64_t anchor_us;
+	/* Where base_epoch began, in the caller's clock. Signed: a receiver
+	 * learns it from the air (rx_tier1), and a sensor up for days before
+	 * the receiver booted began before the receiver's clock's zero. */
+	int64_t  anchor_us;
 
 	struct radiant_sec_key k_root;
 	struct radiant_sec_key k_auth;
@@ -222,16 +225,30 @@ static void stat_bump(uint32_t *counter)
 	}
 }
 
+/* Unsigned subtraction, then signed: modular rather than undefined, and exact
+ * for any two instants less than 2^63 us apart. */
 static uint64_t elapsed_us(const struct compat_ctx *c, uint64_t now_us)
 {
-	return (now_us > c->anchor_us) ? (now_us - c->anchor_us) : 0u;
+	int64_t d = (int64_t)(now_us - (uint64_t)c->anchor_us);
+
+	return (d > 0) ? (uint64_t)d : 0u;
+}
+
+static uint64_t interval_us_of(const struct compat_ctx *c)
+{
+	return (uint64_t)c->t_s * COMPAT_US_PER_S;
+}
+
+static uint64_t period_us_of(const struct compat_ctx *c)
+{
+	return ((uint64_t)c->period_counts * COMPAT_US_PER_S) / 32768u;
 }
 
 /* Tier I's counter: intervals of T seconds since the epoch anchor, derived
  * from time on both sides rather than carried per-packet. */
 static uint32_t interval_index(const struct compat_ctx *c, uint64_t now_us)
 {
-	uint64_t t_us = (uint64_t)c->t_s * COMPAT_US_PER_S;
+	uint64_t t_us = interval_us_of(c);
 
 	if (t_us == 0u) {
 		return 0u;
@@ -248,7 +265,7 @@ static uint32_t msg_index(const struct compat_ctx *c, uint64_t now_us)
 	if (c->period_counts == 0u) {
 		return 0u;
 	}
-	period_us = ((uint64_t)c->period_counts * COMPAT_US_PER_S) / 32768u;
+	period_us = period_us_of(c);
 	if (period_us == 0u) {
 		return 0u;
 	}
@@ -423,6 +440,13 @@ int radiant_sec_compat_configure(uint8_t ch, uint8_t switches, uint8_t n,
 	if ((switches & RADIANT_SEC_COMPAT_SW_TIER_II) != 0u) {
 		c->n = n;
 	}
+	if (t_s != c->t_s) {
+		/* A new T changes what both the Tier I counter and the learned
+		 * phase mean, so the lock goes with it and the next page
+		 * re-locks instead of being judged against the old one. */
+		c->rx_t1_any = false;
+		c->rx_t1_ok = false;
+	}
 	c->t_s = t_s;
 
 	/* Any window in flight was counted against a different N. */
@@ -452,11 +476,18 @@ int radiant_sec_compat_set_epoch(uint8_t ch, uint32_t epoch, uint64_t now_us,
 	if (epoch > 0xFFFFFFFFu - RADIANT_SEC_EPOCH_HEADROOM) {
 		return RADIANT_SEC_EINVAL;
 	}
+	/* The anchor is signed, so the difference must be representable. */
+	if (us_into_epoch > (uint64_t)INT64_MAX) {
+		return RADIANT_SEC_EINVAL;
+	}
 
 	c->base_epoch = epoch;
 	c->wraps = 0u;
 	c->epoch = epoch;
-	c->anchor_us = (now_us > us_into_epoch) ? (now_us - us_into_epoch) : 0u;
+	/* Not clamped at 0: an epoch that began before this clock's zero is
+	 * an ordinary state for a receiver (see rx_tier1). A sender passes
+	 * us_into_epoch = 0, so its anchor is exactly now_us, as before. */
+	c->anchor_us = (int64_t)(now_us - us_into_epoch);
 	c->period_counts = period_counts;
 	c->epoch_set = true;
 
@@ -556,8 +587,7 @@ enum radiant_sec_verdict radiant_sec_compat_stream_verdict(uint8_t ch,
 		 * one could still be on its way - else stripping the tag pages
 		 * leaves the stream VERIFIED forever. Not last_verdict, which a
 		 * Tier I page also sets (review 2026-10-31, D2-2). */
-		uint64_t period_us = ((uint64_t)c->period_counts *
-				      COMPAT_US_PER_S) / 32768u;
+		uint64_t period_us = period_us_of(c);
 
 		if (!c->rx_t2_ok) {
 			return RADIANT_SEC_VERDICT_UNVERIFIED;
@@ -572,7 +602,7 @@ enum radiant_sec_verdict radiant_sec_compat_stream_verdict(uint8_t ch,
 		return RADIANT_SEC_VERDICT_UNVERIFIED;
 	}
 	horizon = (uint64_t)RADIANT_SEC_COMPAT_STALE_INTERVALS *
-		  (uint64_t)c->t_s * COMPAT_US_PER_S;
+		  interval_us_of(c);
 	if (now_us >= c->rx_t1_us + horizon) {
 		return RADIANT_SEC_VERDICT_UNVERIFIED;
 	}
@@ -692,28 +722,91 @@ static void rx_absorb(struct compat_ctx *c, const uint8_t *pay)
 	}
 }
 
+/*
+ * Tier I's phase lock.
+ *
+ * A compat receiver is never told where the sensor's epoch began: a hostless
+ * strap anchors on its own power-up, and adopt_epoch() changes the epoch but
+ * not the receiver's guess at the phase. So the anchor is learned from the
+ * air, and it is the EARLIEST phase any verified page has proven. A genuine
+ * page arrives at obs = t_sync - counter x T = A + d, where d is the sender's
+ * slot slip (0..~4 periods: Tier II pre-empts a slot, and profile_compat.c's
+ * seam never offers messages 119/120). A replayed page arrives at
+ * A + d + delay. So obs >= A always, and only a VERIFIED page moves the
+ * anchor, as in the spread MAC's rx_close_window():
+ *
+ *   earlier, in full - a keyless attacker cannot make a counter the sensor has
+ *     not reached yet, so this cannot be forged, and it heals a receiver whose
+ *     first contact was a recording;
+ *   later, by at most SLEW per page and only past JITTER - that is drift.
+ *
+ * JITTER = 4 periods, the sender's slot slip; test_profile_compat.c measures
+ * the real seam against it. SLEW = T / 4096 (~244 ppm per interval), more than
+ * twice the 100 ppm relative crystal drift at every T from 1 to 3600 s; it is
+ * also the most an attacker who jams each page and replays it late can drag
+ * the anchor per interval, the same class of limit as the spread MAC's
+ * period / 16. SLACK = 2 x JITTER + SLEW (~2 s at 4 Hz): an anchor lagging by
+ * up to JITTER plus one interval's drift, and a page slipped by JITTER.
+ *
+ * What the first page after first contact cannot prove is freshness: it covers
+ * no payload and no receiver nonce, and the receiver shares no clock with the
+ * sensor (docs/radiant-security.md 7.6).
+ *
+ * Free with the lock, and with no code of their own: Tier II's window
+ * resolution (msg_index), announce_verify() and cmd_tag() all read the same
+ * anchor, so once Tier I has locked they are right too.
+ */
+#define COMPAT_JITTER_PERIODS 4u
+#define COMPAT_SLEW_SHIFT     12u
+
 static int rx_tier1(struct compat_ctx *c, const uint8_t *pay, uint64_t t_sync)
 {
 	uint8_t                  tag[RADIANT_SEC_COMPAT_TIER_I_TAG_BYTES];
 	enum radiant_sec_verdict verdict;
+	uint64_t                 t_us = interval_us_of(c);
+	int64_t                  jitter;
+	int64_t                  slew;
+	int64_t                  obs;
+	int64_t                  err;
 	uint32_t                 low;
 	uint32_t                 full;
 	int                      rc;
 	bool                     ok;
 
+	jitter = (int64_t)(COMPAT_JITTER_PERIODS * period_us_of(c));
+	slew = (int64_t)(t_us >> COMPAT_SLEW_SHIFT);
+
 	low = (uint32_t)pay[1] | ((uint32_t)pay[2] << 8);
-	full = resolve_low(interval_index(c, t_sync), low, 0x10000u);
+	if (c->rx_t1_any) {
+		full = resolve_low(interval_index(c, t_sync), low, 0x10000u);
+	} else {
+		/* First contact: the on-air bits ARE the counter within the
+		 * held epoch, since a wrap advances the epoch and so the counter
+		 * is below 65536 by definition. The wraps go back to 0 with it,
+		 * undoing any false wrap that an announce, command or Tier II
+		 * call already applied from the unlocked anchor. */
+		full = low;
+	}
 
 	rc = apply_wraps(c, full >> 16);
 	if (rc != RADIANT_SEC_OK) {
 		return rc;
 	}
 
-	/* Replay is closed by the counter alone: the tag covers no payload, so
-	 * a recorded page stays validly-tagged forever, and only a spent
-	 * counter makes it worthless. Checked before the MAC so a replay isn't
-	 * counted as a forgery and can't refresh the freshness anchor. */
+	/* Replay is closed by the counter and the phase: the tag covers no
+	 * payload, so a recorded page stays validly-tagged forever. A spent
+	 * counter is the floor; a page later than the lock allows is the
+	 * slack. Both are checked before the MAC, so a replay isn't counted as
+	 * a forgery and can't refresh the freshness anchor. */
 	if (c->rx_t1_any && full <= c->rx_t1_last) {
+		stat_bump(&c->stats.tier1_replays);
+		return RADIANT_SEC_EREPLAY;
+	}
+
+	/* Modular, then signed, as in elapsed_us(). */
+	obs = (int64_t)(t_sync - (uint64_t)full * t_us);
+	err = obs - c->anchor_us;
+	if (c->rx_t1_any && err > 2 * jitter + slew) {
 		stat_bump(&c->stats.tier1_replays);
 		return RADIANT_SEC_EREPLAY;
 	}
@@ -729,6 +822,16 @@ static int rx_tier1(struct compat_ctx *c, const uint8_t *pay, uint64_t t_sync)
 	if (ok) {
 		verdict = RADIANT_SEC_VERDICT_VERIFIED;
 		stat_bump(&c->stats.tier1_verified);
+		/* On first contact a held anchor already within JITTER before
+		 * the page is kept, so a receiver whose host does know the phase
+		 * gains no slot-slip offset; any other is replaced. Once locked,
+		 * earlier is taken in full and later is slewed. */
+		if (err < 0 || (!c->rx_t1_any && err > jitter)) {
+			c->anchor_us = obs;
+		} else if (err > jitter) {
+			c->anchor_us += (err - jitter < slew) ? (err - jitter)
+							       : slew;
+		}
 		c->rx_t1_last = full;
 		c->rx_t1_any = true;
 		c->rx_t1_ok = true;

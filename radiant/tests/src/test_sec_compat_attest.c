@@ -15,11 +15,13 @@
  * beyond "put this nibble in the page byte". Values mirror
  * tools/ant_pages.py's COMPAT_PAGE_BASE.
  *
- * Coverage: Tier I cadence/loss-independence/replay/skipped-page; Tier II
- * window/flipped-bit/lost-packet; subtype separation through the emit path;
- * epoch recovery by hint (50/1000/65536 boots stale, hint collision, tag
- * search with advertise off, backwards re-provision, and a search that
- * matches nothing but still terminates).
+ * Coverage: Tier I cadence/loss-independence/replay/skipped-page; Tier I's
+ * phase lock at a receiver whose clock is not the sensor's (false wrap, late
+ * delivery, an anchor before the receiver's zero, the first-contact limit,
+ * drift, a new T); Tier II window/flipped-bit/lost-packet; subtype separation
+ * through the emit path; epoch recovery by hint (50/1000/65536 boots stale,
+ * hint collision, tag search with advertise off, backwards re-provision, and
+ * a search that matches nothing but still terminates).
  */
 
 #include <zephyr/ztest.h>
@@ -118,9 +120,35 @@ static uint32_t verdicts_at(uint8_t sub, uint16_t counter,
 
 /* ── Harness ────────────────────────────────────────────────────────────── */
 
+#define T_US   ((uint64_t)TEST_T_S * 1000000u)
+#define DAY_US ((uint64_t)86400u * 1000000u)
+
+/*
+ * The receiver's clock, as a different machine's: an offset and a rate error
+ * against the sender's. Every instant below is the SENDER's; delivery converts
+ * it. Both are zero unless a test sets them, and set_epoch() on the receiver
+ * is still called at T_ORIGIN of its own clock, so a skewed receiver starts
+ * with an anchor that is wrong by exactly the skew - which is the situation a
+ * compat receiver is always in, since it never learns the sensor's real anchor.
+ */
+static int64_t  rx_skew_us;
+static int32_t  rx_ppm;
+
+/* Messages handed to tx_sent() since setup_pair(), mirroring the module's own
+ * tx_msgs, so a test can line a Tier II close up with a chosen slot. */
+static uint32_t tx_n;
+
 static uint64_t t_of(uint32_t slot)
 {
 	return T_ORIGIN + (uint64_t)slot * PERIOD_US;
+}
+
+static uint64_t rx_time(uint64_t t)
+{
+	int64_t since = (int64_t)(t - T_ORIGIN);
+
+	return (uint64_t)((int64_t)t + rx_skew_us +
+			  (since * (int64_t)rx_ppm) / 1000000);
 }
 
 /* The subtype a receiver reads out of byte [0], done here so the round trip
@@ -164,6 +192,7 @@ static void setup_pair(uint8_t tx_sw, uint8_t rx_sw, uint32_t tx_epoch,
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_compat_set_epoch(RX_CH, rx_epoch, T_ORIGIN, 0u,
 						   TEST_PERIOD));
+	tx_n = 0u;
 }
 
 /* One transmitted slot, as a profile would drive it: ask whether it owes an
@@ -198,6 +227,7 @@ static int slot_run(uint32_t slot, bool deliver, int corrupt_bit, uint8_t *air,
 
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_compat_tx_sent(TX_CH, pay, sizeof(pay)));
+	tx_n++;
 
 	if (corrupt_bit >= 0) {
 		pay[corrupt_bit / 8] ^= (uint8_t)(1u << (corrupt_bit % 8));
@@ -208,7 +238,7 @@ static int slot_run(uint32_t slot, bool deliver, int corrupt_bit, uint8_t *air,
 
 	if (deliver) {
 		rc = radiant_sec_compat_rx(RX_CH, sub_of(pay), pay, sizeof(pay),
-					   t);
+					   rx_time(t));
 		if (rx_rc != NULL) {
 			*rx_rc = rc;
 		}
@@ -221,12 +251,78 @@ static int slot_at(uint32_t slot, bool deliver)
 	return slot_run(slot, deliver, -1, NULL, NULL);
 }
 
+/*
+ * The sender's slots from instant `t` on, one period apart, until the emit hook
+ * claims one for Tier I; returns that slot's (sender) instant and its bytes in
+ * `air`. Nothing is delivered. This is what lets a multi-day scenario cost one
+ * call per page instead of a million slots: the sender's Tier I counter is a
+ * function of time alone, so the slots skipped between pages change nothing it
+ * emits.
+ */
+static uint64_t tier1_from(uint64_t t, uint8_t *air)
+{
+	uint8_t  body[RADIANT_SEC_COMPAT_BODY_BYTES];
+	uint32_t i;
+	int      sub;
+
+	for (i = 0u; i < 16u; i++, t += PERIOD_US) {
+		sub = radiant_sec_compat_tx_attest(TX_CH, t, body, sizeof(body));
+		zassert_true(sub >= 0, "the emit hook refused: %d", sub);
+		if (sub > 0) {
+			air[0] = (uint8_t)(PAGE_BASE | (uint8_t)sub);
+			memcpy(&air[1], body, sizeof(body));
+		} else {
+			air[0] = DATA_PAGE;
+			memset(&air[1], (uint8_t)i, sizeof(body));
+		}
+		zassert_equal(RADIANT_SEC_OK,
+			      radiant_sec_compat_tx_sent(TX_CH, air,
+							 RADIANT_SEC_COMPAT_MSG_BYTES));
+		tx_n++;
+		if (sub == RADIANT_SEC_COMPAT_SUBTYPE_TIER_I) {
+			return t;
+		}
+	}
+	zassert_unreachable("no Tier I page in 16 consecutive slots");
+	return 0u;
+}
+
+/* Interval k of an epoch the sender anchored at `origin`, starting `d` periods
+ * into it: d is the slot slip a real seam adds. */
+static uint64_t tier1_page(uint64_t origin, uint32_t k, uint32_t d,
+			   uint8_t *air)
+{
+	return tier1_from(origin + (uint64_t)k * T_US + (uint64_t)d * PERIOD_US,
+			  air);
+}
+
+/* Bytes off the air, delivered at a RECEIVER instant. */
+static int deliver_rx(const uint8_t *air, uint64_t t_rx)
+{
+	return radiant_sec_compat_rx(RX_CH, sub_of(air), air,
+				     RADIANT_SEC_COMPAT_MSG_BYTES, t_rx);
+}
+
+/* ...and at the receiver's reading of a sender instant. */
+static int deliver(const uint8_t *air, uint64_t t)
+{
+	return deliver_rx(air, rx_time(t));
+}
+
+static uint16_t counter_of(const uint8_t *air)
+{
+	return (uint16_t)((uint32_t)air[1] | ((uint32_t)air[2] << 8));
+}
+
 static void compat_before(void *f)
 {
 	ARG_UNUSED(f);
 	radiant_sec_compat_reset();
 	memset(vlog, 0, sizeof(vlog));
 	vlog_n = 0u;
+	rx_skew_us = 0;
+	rx_ppm = 0;
+	tx_n = 0u;
 }
 
 ZTEST_SUITE(sec_compat_stream, NULL, NULL, compat_before, NULL, NULL);
@@ -626,6 +722,320 @@ ZTEST(sec_compat_stream, test_the_subtype_reaches_the_nonce_through_the_emit_pat
 		      radiant_sec_compat_rx(RX_CH, sub_of(tier1_air), tier1_air,
 					    sizeof(tier1_air), t_of(0u)),
 		      NULL);
+}
+
+/* ═══ Tier I's phase, at a receiver that never knew the sensor's anchor ══ */
+
+/*
+ * A compat receiver is never told where the sensor's epoch began: a hostless
+ * strap anchors on its own power-up, and adopt_epoch() changes the epoch but
+ * not the receiver's guess at the phase. Every test above gives both ends one
+ * anchor, so none of them could see what follows.
+ */
+
+ZTEST(sec_compat_stream, test_a_long_running_receiver_follows_a_freshly_booted_sensor)
+{
+	/* A bridge up for nine days since its set_epoch, and a strap that just
+	 * rebooted. More than half the counter span (32 768 x T, ~7.6 days)
+	 * apart, so a counter resolved against the bridge's own anchor lands one
+	 * rollover off: a false wrap, the wrong K_auth, and every page refused
+	 * until the next adopt. */
+	static const uint32_t           ks[] = { 0u, 1u, 2u, 40000u };
+	const uint64_t                  booted = T_ORIGIN + 9u * DAY_US;
+	struct radiant_sec_compat_stats st;
+	uint8_t                         air[RADIANT_SEC_COMPAT_MSG_BYTES];
+	uint32_t                        i;
+
+	setup_pair(RADIANT_SEC_COMPAT_SW_TIER_I, RADIANT_SEC_COMPAT_SW_TIER_I,
+		   1000u, 1000u);
+
+	/* The strap reboots into the next epoch; the bridge recovers it (the
+	 * searches are tested below) and adopts it. */
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_compat_set_epoch(TX_CH, 1001u, booted, 0u,
+						   TEST_PERIOD));
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_compat_adopt_epoch(RX_CH, 1001u));
+
+	for (i = 0u; i < ARRAY_SIZE(ks); i++) {
+		uint64_t t = tier1_page(booted, ks[i], 0u, air);
+
+		zassert_equal(RADIANT_SEC_OK, deliver(air, t),
+			      "interval %u of a freshly booted strap did not "
+			      "verify at a receiver up for nine days", ks[i]);
+	}
+
+	radiant_sec_compat_get_stats(RX_CH, &st);
+	zassert_equal(0u, st.epoch_advances,
+		      "a counter that never wrapped advanced the receiver's "
+		      "epoch %u time(s)", st.epoch_advances);
+	zassert_equal(ARRAY_SIZE(ks), st.tier1_verified, NULL);
+	zassert_equal(0u, st.tier1_unverified, NULL);
+}
+
+ZTEST(sec_compat_stream, test_a_page_delivered_late_to_a_locked_receiver_is_refused)
+{
+	/* Jam page k and deliver its bytes later. The counter floor cannot
+	 * refuse it, because k has not been seen, so a receiver that does not
+	 * track the sensor's phase accepts any counter above the floor however
+	 * late it arrives. */
+	const uint8_t                   pinned = RADIANT_SEC_COMPAT_SW_TIER_I |
+						 RADIANT_SEC_COMPAT_SW_PIN;
+	struct radiant_sec_compat_stats st;
+	uint8_t                         air[RADIANT_SEC_COMPAT_MSG_BYTES];
+	uint64_t                        t;
+	uint64_t                        t_late;
+
+	setup_pair(RADIANT_SEC_COMPAT_SW_TIER_I, pinned, 2024u, 2024u);
+
+	t = tier1_page(T_ORIGIN, 0u, 0u, air);
+	zassert_equal(RADIANT_SEC_OK, deliver(air, t),
+		      "setup: the first page did not verify");
+
+	/* Page 1, jammed: it never arrives on time. */
+	t = tier1_page(T_ORIGIN, 1u, 0u, air);
+	zassert_equal(1u, counter_of(air), NULL);
+	t_late = t + T_US;
+
+	zassert_equal(RADIANT_SEC_EREPLAY, deliver(air, t_late),
+		      "page 1, delivered one interval late, was accepted by a "
+		      "receiver locked on page 0");
+
+	radiant_sec_compat_get_stats(RX_CH, &st);
+	zassert_equal(1u, st.tier1_replays,
+		      "the late page must be counted, or it is invisible to a "
+		      "host");
+	zassert_equal(1u, st.tier1_verified, NULL);
+	zassert_equal(0u, st.tier1_unverified,
+		      "a late page is not a forgery and must not be counted as "
+		      "one");
+	zassert_equal(0u, verdicts_at(RADIANT_SEC_COMPAT_SUBTYPE_TIER_I, 1u,
+				      RADIANT_SEC_VERDICT_VERIFIED),
+		      "counter 1 was reported VERIFIED");
+
+	/* ...and it did not refresh the freshness anchor: with nothing genuine
+	 * heard since page 0, the pinned stream is past its horizon. */
+	zassert_equal(RADIANT_SEC_VERDICT_UNVERIFIED,
+		      radiant_sec_compat_stream_verdict(RX_CH,
+							rx_time(t_late) + 1u),
+		      "the late page kept a pinned stream VERIFIED");
+
+	/* The lock survives the refusal: the next genuine page verifies. */
+	t = tier1_page(T_ORIGIN, 2u, 0u, air);
+	zassert_equal(RADIANT_SEC_OK, deliver(air, t), NULL);
+}
+
+ZTEST(sec_compat_stream, test_a_receiver_booted_after_the_sensor_follows_it_through_a_wrap)
+{
+	/* The other direction: a bridge that came up nine days after the strap,
+	 * so the phase it learns lies before its own clock's zero. Run across
+	 * the strap's counter wrap (65 536 x T, ~15.2 days in), where a phase
+	 * clamped at zero would resolve the post-wrap counter one rollover low
+	 * and refuse the genuine wrap as a replay. */
+	struct radiant_sec_compat_stats st;
+	uint8_t                         air[RADIANT_SEC_COMPAT_MSG_BYTES];
+	uint32_t                        k;
+
+	rx_skew_us = -(int64_t)(9u * DAY_US);
+	setup_pair(RADIANT_SEC_COMPAT_SW_TIER_I, RADIANT_SEC_COMPAT_SW_TIER_I,
+		   300u, 300u);
+
+	for (k = 0xFFFAu; k <= 0x10005u; k++) {
+		uint64_t t = tier1_page(T_ORIGIN, k, 0u, air);
+
+		zassert_equal(RADIANT_SEC_OK, deliver(air, t),
+			      "interval %u did not verify at a receiver booted "
+			      "nine days after the sensor", k);
+	}
+
+	radiant_sec_compat_get_stats(RX_CH, &st);
+	zassert_equal(1u, st.epoch_advances,
+		      "the strap wrapped once; the receiver advanced %u time(s)",
+		      st.epoch_advances);
+	zassert_equal(12u, st.tier1_verified, NULL);
+	zassert_equal(0u, st.tier1_replays, NULL);
+}
+
+ZTEST(sec_compat_stream, test_first_contact_proves_the_epoch_and_not_freshness)
+{
+	/* What no design can do, pinned so that no later change quietly claims
+	 * it. The page covers no payload and no receiver nonce, and the
+	 * receiver shares no clock with the sensor, so the FIRST page a fresh
+	 * receiver hears proves the epoch and says nothing about when it was
+	 * sent. What the phase lock buys is everything after the first genuine
+	 * page. */
+	const uint8_t                   pinned = RADIANT_SEC_COMPAT_SW_TIER_I |
+						 RADIANT_SEC_COMPAT_SW_PIN;
+	const uint32_t                  k_old = 1000u;
+	const uint32_t                  k_now = k_old +
+						(uint32_t)(3u * DAY_US / T_US);
+	struct radiant_sec_compat_stats st;
+	uint8_t                         old0[RADIANT_SEC_COMPAT_MSG_BYTES];
+	uint8_t                         old1[RADIANT_SEC_COMPAT_MSG_BYTES];
+	uint8_t                         air[RADIANT_SEC_COMPAT_MSG_BYTES];
+	uint64_t                        t;
+
+	/* The receiver's host does not know the sensor's phase either. */
+	rx_skew_us = 12345678;
+	setup_pair(RADIANT_SEC_COMPAT_SW_TIER_I, pinned, 4040u, 4040u);
+
+	/* The attacker's recordings, three days old by the time they're used. */
+	(void)tier1_page(T_ORIGIN, k_old, 0u, old0);
+	(void)tier1_page(T_ORIGIN, k_old + 1u, 0u, old1);
+
+	/* Played to the fresh receiver just before the genuine page: it
+	 * verifies, and the pinned stream reads VERIFIED. The documented
+	 * limit. */
+	t = T_ORIGIN + (uint64_t)k_now * T_US;
+	zassert_equal(RADIANT_SEC_OK, deliver(old0, t - PERIOD_US),
+		      "a fresh receiver refused a recording; if that is now "
+		      "possible, docs/radiant-security.md 7.6 and 11.4 understate "
+		      "the design");
+	zassert_equal(RADIANT_SEC_VERDICT_VERIFIED,
+		      radiant_sec_compat_stream_verdict(RX_CH, rx_time(t)), NULL);
+
+	/* The genuine sensor heals it at once: a counter nobody could have
+	 * recorded pulls the phase three days earlier in one step. */
+	t = tier1_page(T_ORIGIN, k_now, 1u, air);
+	zassert_equal(RADIANT_SEC_OK, deliver(air, t),
+		      "the genuine page did not re-anchor a receiver whose first "
+		      "contact was a recording");
+
+	/* After that an older recording is refused by the counter floor... */
+	zassert_equal(RADIANT_SEC_EREPLAY, deliver(old1, t + PERIOD_US),
+		      "a recording older than the lock was accepted");
+
+	/* ...and a late copy of the genuine page by the phase. */
+	t = tier1_page(T_ORIGIN, k_now + 1u, 0u, air);
+	zassert_equal(RADIANT_SEC_EREPLAY, deliver(air, t + T_US),
+		      "a genuine page delivered an interval late was accepted "
+		      "after the lock");
+
+	t = tier1_page(T_ORIGIN, k_now + 2u, 0u, air);
+	zassert_equal(RADIANT_SEC_OK, deliver(air, t), NULL);
+
+	radiant_sec_compat_get_stats(RX_CH, &st);
+	zassert_equal(3u, st.tier1_verified, NULL);
+	zassert_equal(2u, st.tier1_replays, NULL);
+	zassert_equal(0u, st.tier1_unverified, NULL);
+}
+
+/* One slot the emit hook must not claim, to move the sender's message count. */
+static void tx_filler(uint64_t t)
+{
+	uint8_t body[RADIANT_SEC_COMPAT_BODY_BYTES];
+	uint8_t pay[RADIANT_SEC_COMPAT_MSG_BYTES];
+
+	zassert_equal(0, radiant_sec_compat_tx_attest(TX_CH, t, body,
+						      sizeof(body)),
+		      "a filler slot was claimed");
+	memset(pay, 0x5A, sizeof(pay));
+	pay[0] = DATA_PAGE;
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_compat_tx_sent(TX_CH, pay, sizeof(pay)));
+	tx_n++;
+}
+
+/*
+ * Two days of pages at a receiver whose crystal runs `ppm` off the sensor's,
+ * each page `k % 4` periods into its interval - the slot slip a real seam adds.
+ * The sender runs both tiers, so a Tier II close also pre-empts some pages by a
+ * slot. Ends with a page deliberately pre-empted at d = 3, which leaves at
+ * d = 4: the most slip the receiver allows for.
+ */
+static void drift_run(int32_t ppm)
+{
+	const uint32_t                  pages = (uint32_t)(2u * DAY_US / T_US);
+	struct radiant_sec_compat_stats st;
+	uint8_t                         air[RADIANT_SEC_COMPAT_MSG_BYTES];
+	uint64_t                        t;
+	uint32_t                        k;
+	uint32_t                        j;
+	int                             rc;
+
+	setup_pair(BOTH_TIERS, RADIANT_SEC_COMPAT_SW_TIER_I, 5050u, 5050u);
+	rx_ppm = ppm;
+
+	for (k = 0u; k < pages; k++) {
+		t = tier1_page(T_ORIGIN, k, k % 4u, air);
+		rc = deliver(air, t);
+		if (rc != RADIANT_SEC_OK) {
+			zassert_equal(RADIANT_SEC_OK, rc,
+				      "interval %u (d = %u periods) refused at "
+				      "%d ppm: %d", k, k % 4u, ppm, rc);
+		}
+	}
+
+	/* Line a Tier II close up with slot d = 3 of interval k. The filler
+	 * slots sit at the end of interval k - 1, whose page has gone. */
+	j = 0u;
+	while ((tx_n % TEST_N) != (uint32_t)(TEST_N - 1u)) {
+		tx_filler(T_ORIGIN + (uint64_t)k * T_US -
+			  (uint64_t)(TEST_N - j) * PERIOD_US);
+		j++;
+	}
+	t = tier1_page(T_ORIGIN, k, 3u, air);
+	zassert_equal(T_ORIGIN + (uint64_t)k * T_US + 4u * PERIOD_US, t,
+		      "setup: the Tier II close did not pre-empt the page");
+	zassert_equal(RADIANT_SEC_OK, deliver(air, t),
+		      "a page pre-empted at d = 3 was refused at %d ppm", ppm);
+
+	radiant_sec_compat_get_stats(RX_CH, &st);
+	zassert_equal(0u, st.tier1_replays,
+		      "%u genuine pages were refused as late at %d ppm",
+		      st.tier1_replays, ppm);
+	zassert_equal(pages + 1u, st.tier1_verified, NULL);
+	zassert_equal(0u, st.tier1_unverified, NULL);
+}
+
+ZTEST(sec_compat_stream, test_a_receiver_running_fast_keeps_the_lock)
+{
+	drift_run(200);
+}
+
+ZTEST(sec_compat_stream, test_a_receiver_running_slow_keeps_the_lock)
+{
+	drift_run(-200);
+}
+
+ZTEST(sec_compat_stream, test_a_new_interval_clears_the_phase_lock)
+{
+	/* A new T changes what both the counter and the anchor mean. Judged
+	 * against the old lock, the first page at T = 40 s - a counter half the
+	 * last one seen - would be refused as a replay for as long as the old
+	 * counter took to reach. */
+	struct radiant_sec_compat_stats st;
+	uint8_t                         air[RADIANT_SEC_COMPAT_MSG_BYTES];
+	uint64_t                        t;
+
+	rx_skew_us = 7000000;
+	setup_pair(RADIANT_SEC_COMPAT_SW_TIER_I, RADIANT_SEC_COMPAT_SW_TIER_I,
+		   6060u, 6060u);
+
+	t = tier1_page(T_ORIGIN, 100u, 0u, air);
+	zassert_equal(RADIANT_SEC_OK, deliver(air, t), "setup");
+
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_compat_configure(TX_CH,
+						   RADIANT_SEC_COMPAT_SW_TIER_I,
+						   TEST_N, 2u * TEST_T_S));
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_compat_configure(RX_CH,
+						   RADIANT_SEC_COMPAT_SW_TIER_I,
+						   TEST_N, 2u * TEST_T_S));
+
+	t = tier1_from(T_ORIGIN + 52u * 2u * T_US, air);
+	zassert_equal(52u, counter_of(air), NULL);
+	zassert_equal(RADIANT_SEC_OK, deliver(air, t),
+		      "the first page at the new T was judged against the old "
+		      "lock");
+	t = tier1_from(T_ORIGIN + 53u * 2u * T_US, air);
+	zassert_equal(RADIANT_SEC_OK, deliver(air, t),
+		      "the receiver did not re-lock at the new T");
+
+	radiant_sec_compat_get_stats(RX_CH, &st);
+	zassert_equal(0u, st.tier1_replays, NULL);
+	zassert_equal(3u, st.tier1_verified, NULL);
 }
 
 /* ═══ Occasional contact: recovering an epoch nobody broadcasts ══════════ */
