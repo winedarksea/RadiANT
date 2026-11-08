@@ -1276,7 +1276,7 @@ one, and refuses epochs near `0xFFFFFFFF`; see section 3.5.
 
 ### The two ordering rules, and why they are refusals rather than defaults
 
-`0xF1`–`0xF4` are implemented by `radiant/src/radiant_sec_host.c` behind
+`0xF1`–`0xF4` are implemented by `apps/common/ant_sec_host.c` behind
 `CONFIG_RADIANT_SEC_HOST_MESSAGES`, and reached from the host through
 `antr_sec_config()`, `antr_sec_key_set()`, `antr_sec_epoch_set()` and
 `antr_sec_status_get()`. Two orderings are mandatory, and both answer

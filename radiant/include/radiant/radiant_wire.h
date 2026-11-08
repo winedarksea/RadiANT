@@ -1296,10 +1296,10 @@
 /*
  * Supply the host's 32-byte X25519 private scalar at [2..33]. The reply
  * carries the local public key from [2]. The scalar comes from the host
- * because the only entropy source on nRF54L is psa_rng/CRACEN and reaching it
- * drags nrf_security into every build; the honest consequence is that a host-
- * less node cannot pair this way. [K4 (docs/radiant-security.md sec 7.4 and
- * 8)]
+ * because no dongle image turns on a radiant_sec_rng() backend
+ * (CONFIG_RADIANT_SEC_RNG_PSA or _ENTROPY, which node builds use for ADR
+ * 0020); the honest consequence is that a host-less node cannot pair this
+ * way. [K4 (docs/radiant-security.md sec 7.4 and 8)]
  */
 #define RADIANT_WIRE_RADIANT_PAIR_SCALAR                     0x02
 
@@ -1622,11 +1622,12 @@
  * means the 60 s default), 0x02 supply the host's 32-byte X25519 scalar at
  * [2..33], 0x03 begin the exchange. The reply echoes the sub-command at [1]
  * and carries the local public key or the comparison fingerprint from [3].
- * THE SCALAR COMES FROM THE HOST because the only entropy source on nRF54L is
- * psa_rng/CRACEN and reaching it drags nrf_security into every build; the
- * honest consequence is that a host-less node cannot pair this way. Pairing
- * in the clear is structural rather than an oversight - see docs/radiant-
- * security.md section 7.4. [K4 (docs/radiant-security.md sec 7.4, 8 and 9)]
+ * THE SCALAR COMES FROM THE HOST because no dongle image turns on a
+ * radiant_sec_rng() backend (CONFIG_RADIANT_SEC_RNG_PSA or _ENTROPY, which
+ * node builds use for ADR 0020); the honest consequence is that a host-less
+ * node cannot pair this way. Pairing in the clear is structural rather than
+ * an oversight - see docs/radiant-security.md section 7.4. [K4 (docs/radiant-
+ * security.md sec 7.4, 8 and 9)]
  */
 #define RADIANT_WIRE_MESG_RADIANT_PAIRING_ID                 0xF5
 
