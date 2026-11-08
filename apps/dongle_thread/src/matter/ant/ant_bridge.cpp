@@ -526,8 +526,9 @@ void CreateEndpointForRow(Row &row)
 		/* And Reachable: the restored device was built unreachable, and
 		 * the bind-time reachableDirty has usually been consumed by a pass
 		 * that ran before this row existed (an HR strap's derived rows
-		 * appear >= 2 s after bind). The flush reads this flag right after
-		 * CreateEndpointForRow() returns, in this same pass. */
+		 * appear >= 2 s after bind). The flush works from a pass-start
+		 * copy, so this mid-pass flag is sent by the NEXT pass (one pacer
+		 * tick later; AnythingDirty() sees it). */
 		sSources[row.source].reachableDirty = true;
 		k_mutex_unlock(&sShadowLock);
 		LOG_INF("matter: adopted stored endpoint %u for %s", rd.endpointId, uniqueID);
@@ -668,6 +669,35 @@ void FlushHandler(intptr_t)
 	atomic_set(&sFlushPending, 0);
 
 	/*
+	 * THE PER-SOURCE FLAGS ARE SNAPSHOTTED AND CLEARED HERE, IN ONE LOCK HOLD,
+	 * and every row below reads the copy. They used to be read per row and
+	 * cleared for every source at the end of the pass, so a reachability or
+	 * label change (or a bind) landing while the pass was in
+	 * CreateEndpointForRow() / PersistRowLabel() was erased unseen, and
+	 * reachableDirty is set only on a CHANGE, so nothing repaired it. Now such
+	 * a change stays dirty and the next pass sends it. Every flag consumer in
+	 * the pass reads `snap`, never sSources; the producers (note_sample,
+	 * binding_changed, the adoption branch of CreateEndpointForRow) only ever
+	 * set flags under the lock, which is what the next pass picks up.
+	 */
+	struct SourceSnap {
+		bool reachable;
+		bool reachableDirty;
+		bool labelDirty;
+	};
+	SourceSnap snap[RADIANT_BINDING_MAX];
+
+	k_mutex_lock(&sShadowLock, K_FOREVER);
+	for (uint32_t i = 0; i < RADIANT_BINDING_MAX; i++) {
+		snap[i].reachable = sSources[i].reachable;
+		snap[i].reachableDirty = sSources[i].reachableDirty;
+		snap[i].labelDirty = sSources[i].labelDirty;
+		sSources[i].reachableDirty = false;
+		sSources[i].labelDirty = false;
+	}
+	k_mutex_unlock(&sShadowLock);
+
+	/*
 	 * REMOVALS FIRST, in a pass of their own. A sensor that inherits an
 	 * unbound one's endpoint id gets a new row (see FindRow()), and that row
 	 * can sit at a lower index than the dying one. In a single pass its CHIP
@@ -734,9 +764,9 @@ void FlushHandler(intptr_t)
 		 * write re-dirties its cell. */
 		k_mutex_lock(&sShadowLock, K_FOREVER);
 		RadiantMatter::AntDataProvider *provider = row.provider;
-		bool reachable = sSources[source].reachable;
-		bool reachableDirty = sSources[source].reachableDirty;
-		bool labelDirty = sSources[source].labelDirty;
+		bool reachable = snap[source].reachable;
+		bool reachableDirty = snap[source].reachableDirty;
+		bool labelDirty = snap[source].labelDirty;
 		k_mutex_unlock(&sShadowLock);
 
 		if (provider == nullptr) {
@@ -824,16 +854,7 @@ void FlushHandler(intptr_t)
 						    &r, sizeof(r));
 		}
 	}
-
-	/* One clear per pass, after every row has seen it. Both flags are per
-	 * SOURCE and every row of that source has to act on them, which is why
-	 * they cannot be cleared inside the loop above. */
-	k_mutex_lock(&sShadowLock, K_FOREVER);
-	for (SourceState &s : sSources) {
-		s.reachableDirty = false;
-		s.labelDirty = false;
-	}
-	k_mutex_unlock(&sShadowLock);
+	/* No end-of-pass clear: the flags were cleared with the snapshot. */
 }
 
 bool AnythingDirty()
