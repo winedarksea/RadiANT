@@ -521,6 +521,10 @@ class ChannelAnalyzer:
         self.tlm_auth_epoch: int | None = None
         self.tlm_data_before_schema = 0
         self.tlm_data_decoded = 0
+        # Data pages under a sealed (X_CONF/X_AUTH) schema: counted, never
+        # decoded. Without the secured receive path they are ciphertext or
+        # unauthenticated bytes, and decoding them reports forged data as clean.
+        self.tlm_data_sealed = 0
         self.tlm_baseline: dict[int, dict] = {}   # per data page; see above
 
         # Device type 0x60's exact loss. A data page's byte [1] is the SLOT
@@ -758,6 +762,11 @@ class ChannelAnalyzer:
             self.tlm_data_before_schema += 1
             return
 
+        sealed = bool(self.tlm_desc.flags
+                      & (ap.TLM_FLAG_X_CONF | ap.TLM_FLAG_X_AUTH))
+        if sealed:
+            self.tlm_data_sealed += 1
+
         if not self.tlm_desc.may_decode_data:
             # Fail closed: a reserved transform bit, or a sealed schema whose
             # authentication frame did not verify (or could not be checked).
@@ -770,6 +779,12 @@ class ChannelAnalyzer:
                                 "receiver does not implement; its data "
                                 "pages are not decodable and must not be "
                                 "decoded")
+            return
+
+        if sealed:
+            # may_decode_data vouches for the schema only; the per-packet gate
+            # (decrypt, verify) is the secured receive path's job and this tool
+            # has none. Slots were counted above (byte [1] is in the clear).
             return
 
         try:
@@ -1315,7 +1330,9 @@ class ChannelAnalyzer:
                   f"{len(self.tlm_desc.fields)} field(s), period "
                   f"{self.tlm_desc.period}, "
                   f"{self.tlm_data_decoded} data page(s) decoded against it "
-                  f"({self.tlm_data_before_schema} seen before it arrived)")
+                  f"({self.tlm_data_before_schema} seen before it arrived"
+                  + (f", {self.tlm_data_sealed} sealed page(s) counted, not "
+                     "decoded" if self.tlm_data_sealed else "") + ")")
             # A sealed schema with a key in hand must verify. Without a key
             # there is nothing to judge, so no check - the summary says
             # "no key" instead.
@@ -1403,6 +1420,7 @@ class ChannelAnalyzer:
                 "schema_changes": self.tlm_schema_changes,
                 "data_pages_decoded": self.tlm_data_decoded,
                 "data_pages_before_schema": self.tlm_data_before_schema,
+                "data_pages_sealed": self.tlm_data_sealed,
                 # The slot-counter pairs behind 0x60's "loss (exact)";
                 # overheard > 0 is a counter that is not a slot index.
                 "slot_pairs": self.tlm_slot_pairs,

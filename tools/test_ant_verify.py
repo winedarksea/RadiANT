@@ -689,6 +689,39 @@ class SealedTelemetryDescriptor(unittest.TestCase):
         self.assertEqual(summary["telemetry"]["descriptor_epoch"], self.EPOCH)
         self.assertTrue(self.check(summary, "descriptor authenticated")["pass"])
 
+    def sealed_data_case(self, flags, page_bytes):
+        fields = [ap.TlmField(id=1, type=0x10, page=1, bit_offset=0,
+                              width_code=7)]
+        d = ap.TlmDescriptor(schema_id=0x05, period=8192, fields=fields,
+                             flags=flags, w_code=(ap.TLM_W_CODE_2
+                                                  if flags & ap.TLM_FLAG_X_AUTH else 0))
+        auth = ap.TlmDescAuth(self.ROOT, self.DEVNUM, self.DEVNUM, self.EPOCH)
+        frames = ap.encode_tlm_descriptor(d, auth) + [page_bytes]
+        compat = ant_verify.CompatVerifier(self.ROOT, self.EPOCH - 3,
+                                           self.DEVNUM)
+        return self.run_frames(frames, compat)
+
+    def test_an_unauthenticated_data_page_under_x_auth_is_counted_not_decoded(self):
+        # Reproduced 2026-11-07: a valid X_AUTH descriptor, then an arbitrary
+        # page, was decoded as 4660 with 0 violations.
+        summary = self.sealed_data_case(
+            ap.TLM_FLAG_X_AUTH, bytes([0x01, 0x05, 0x12, 0x34, 0, 0, 0, 0]))
+        self.assertEqual(summary["telemetry"]["descriptor_auth"],
+                         "authenticated")
+        self.assertEqual(summary["telemetry"]["data_pages_decoded"], 0)
+        self.assertEqual(summary["telemetry"]["data_pages_sealed"], 1)
+        self.assertEqual(summary["violations"]["count"], 0,
+                         summary["violations"]["first"])
+
+    def test_x_conf_ciphertext_is_counted_not_decoded(self):
+        # Ciphertext of the value 100 used to decode as 6579.
+        summary = self.sealed_data_case(
+            ap.TLM_FLAG_X_CONF, bytes([0x01, 0x05, 0x19, 0xB3, 0, 0, 0, 0]))
+        self.assertEqual(summary["telemetry"]["descriptor_auth"],
+                         "authenticated")
+        self.assertEqual(summary["telemetry"]["data_pages_decoded"], 0)
+        self.assertEqual(summary["telemetry"]["data_pages_sealed"], 1)
+
     def test_an_altered_frame_fails(self):
         frames = self.sealed_frames()
         frames[2] = frames[2][:7] + bytes([frames[2][7] ^ 0x08])  # offset
