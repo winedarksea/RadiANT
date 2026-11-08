@@ -1851,6 +1851,7 @@ def derive(result: dict) -> dict:
             "channel": number,
             "profile": channel.get("profile"),
             "device_number": channel.get("device_number"),
+            "device_type": channel.get("device_type"),
             "packets": channel.get("packets", 0),
             "loss_pct": _number(channel.get("loss_pct")),
             "loss_exact_pct": None,
@@ -1929,6 +1930,29 @@ def derive(result: dict) -> dict:
         "reacquire_s": max(reacquire_values) if reacquire_values else None,
         "per_channel": per_channel,
     }
+
+
+def exact_loss_text(entry: dict) -> str:
+    """The per-channel exact-loss column, with the reason when there is none.
+
+    Only standard power (event counter on page 0x10) and the 0x60 envelope
+    (slot index) have an exact-loss source. Every other device type, FE-C
+    included since the routing fix (7ddbb45), has none, and blaming a frozen
+    counter there is false.
+    """
+    exact = entry["loss_exact_pct"]
+    if exact is not None:
+        return (f"{exact:.2f} % ({entry['exact_missed']} of "
+                f"{entry['exact_sent']} {entry['exact_scope']} "
+                f"message(s) missing)")
+    device_type = entry.get("device_type")
+    if device_type not in (ap.BPWR_DEVICE_TYPE, ap.RADIANT_TLM_DEVICE_TYPE):
+        return "no exact-loss source for this profile"
+    if device_type == ap.RADIANT_TLM_DEVICE_TYPE:
+        return ("no exact figure - too few slot pairs, a sparse node, or a "
+                "counter that is not a slot index")
+    return ("no exact figure - the event counter stood still, so it "
+            "is not stepped per message")
 
 
 def report(result: dict) -> None:
@@ -2043,12 +2067,7 @@ def report(result: dict) -> None:
               "counters):")
         for key, entry in per_channel.items():
             exact = entry["loss_exact_pct"]
-            figure = ("no exact figure - the event counter stood still, so it "
-                      "is not stepped per message"
-                      if exact is None else
-                      f"{exact:.2f} % ({entry['exact_missed']} of "
-                      f"{entry['exact_sent']} {entry['exact_scope']} "
-                      f"message(s) missing)")
+            figure = exact_loss_text(entry)
             label = f"channel {key}" if entry["channel"] is not None else key
             print(f"  {label:12} {entry['profile']:24} {figure}")
         # Spread, not mean: a scheduler dropping the later of two nearby

@@ -636,6 +636,37 @@ class FitnessEquipmentIsNotBicyclePower(unittest.TestCase):
 
 
 @unittest.skipIf(ant_verify is None, "pyusb is not installed")
+class ExactLossWording(unittest.TestCase):
+    """TODO.md Security 14: FE-C has no exact-loss source, and saying its
+    counter 'stood still' is false."""
+
+    def entry(self, device_type, exact=None):
+        return {"device_type": device_type, "loss_exact_pct": exact,
+                "exact_missed": 1, "exact_sent": 100, "exact_scope": "page"}
+
+    def test_a_profile_with_no_source_says_so(self):
+        for device_type in (ap.FEC_DEVICE_TYPE, ap.HRM_DEVICE_TYPE):
+            text = ant_verify.exact_loss_text(self.entry(device_type))
+            self.assertEqual(text, "no exact-loss source for this profile")
+
+    def test_a_power_channel_with_a_frozen_counter_still_says_stood_still(self):
+        text = ant_verify.exact_loss_text(self.entry(ap.BPWR_DEVICE_TYPE))
+        self.assertIn("stood still", text)
+        self.assertNotIn("no exact-loss source", text)
+
+    def test_a_figure_is_printed_as_before(self):
+        text = ant_verify.exact_loss_text(self.entry(ap.BPWR_DEVICE_TYPE, 1.0))
+        self.assertTrue(text.startswith("1.00 % (1 of 100 page message(s)"))
+
+    def test_derive_carries_the_device_type_to_the_report(self):
+        result = {"channels": [{"profile": "fec", "channel": 1,
+                                "device_type": ap.FEC_DEVICE_TYPE,
+                                "packets": 10}], "identities": {}}
+        entry = ant_verify.derive(result)["per_channel"]["1"]
+        self.assertEqual(entry["device_type"], ap.FEC_DEVICE_TYPE)
+
+
+@unittest.skipIf(ant_verify is None, "pyusb is not installed")
 class SealedTelemetryDescriptor(unittest.TestCase):
     """A 0x60 node's descriptor authentication frame, as the analyser sees it.
 
