@@ -2091,6 +2091,24 @@ jobs:
           # the disabled build's assertions above - the symbol does not exist
           # there at all - so it needs no ceiling of its own until something
           # links it.
+          #
+          # ── 3584 -> 4608, and the overrun nobody saw ──────────────────────
+          #
+          # The object was already 3988 B at a1c8f01: a pre-existing overrun,
+          # unnoticed because this workflow runs only on a tag or a manual
+          # dispatch, so no push ever measured it. Then +228 B for the Tier I
+          # phase anchor (971e38c: rx_tier1 learns the sensor's phase from the
+          # air), 4216 B; then +236 B for the first-contact fallback (a page
+          # that fails as a counter in the held base epoch is tried once more
+          # at the counter resolved from the held anchor; docs/radiant-
+          # security.md 11.4), 4452 B. All measured as this step builds it, at
+          # NCS v3.4.0.
+          #
+          # 4608 is the next multiple of 512 above 4452, as every ceiling here
+          # is a multiple of 512, and deliberately not another fifth: as the
+          # bss paragraph above says, generous rounding hides the drift this
+          # step exists to catch. That leaves 156 B, so the next feature in
+          # this file arrives with its own measurement.
           compat_text="$(sect_of text "${compat_elf}")"
           test -n "${compat_text}"
           check "compat text (linked)" "$(( compat_text - on_text ))" 288
@@ -2105,7 +2123,7 @@ jobs:
           else
             obj_text="$("${size}" -A "${compat_obj}" |
                           awk '$1 ~ /^\.text/ { total += $2 } END { print total+0 }')"
-            check "compat object text" "${obj_text}" 3584
+            check "compat object text" "${obj_text}" 4608
           fi
 
           # The check people forget, in the direction that catches a rename:
