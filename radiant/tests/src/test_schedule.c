@@ -287,14 +287,24 @@ ZTEST(schedule, test_round_trip)
 	zassert_equal(CANON_SCHED.tx_power_dbm, got.tx_power_dbm);
 }
 
-ZTEST(schedule, test_the_reservation_is_refused_rather_than_ignored)
+/* Bits 42..47 are the next informational flags (TODO security item 9): a v1
+ * receiver ignores them, because a layout-compatible version 2..7 node may set
+ * one and must not be rejected for it. They used to be refused. */
+ZTEST(schedule, test_the_next_flag_bits_are_ignored_not_refused)
 {
 	struct profile_schedule got;
+	struct profile_schedule base;
 	uint8_t body[6];
 
 	zassert_ok(profile_sched_pack(&CANON_SCHED, false, 30u, body));
-	body[5] |= 0x01u; /* the last of the six reserved bits */
-	zassert_equal(-EPROTO, profile_sched_unpack(body, false, 30u, &got));
+	zassert_ok(profile_sched_unpack(body, false, 30u, &base));
+	body[5] |= 0x3Fu; /* all six, bits 42..47 */
+	zassert_ok(profile_sched_unpack(body, false, 30u, &got));
+	zassert_equal(base.dl_interval, got.dl_interval);
+	zassert_equal(base.dl_phase, got.dl_phase);
+	zassert_equal(base.dl_dwell, got.dl_dwell);
+	zassert_equal(base.coding, got.coding);
+	zassert_equal(base.tx_power_dbm, got.tx_power_dbm);
 }
 
 ZTEST(schedule, test_the_phy_bit_and_the_coding_rate_must_agree)

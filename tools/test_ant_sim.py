@@ -691,13 +691,14 @@ class TestTelemetryEnvelope(unittest.TestCase):
         broken = []
         for t, dt_, dn, payload in records:
             if payload[0] == ap.PAGE_TLM_DESCRIPTOR and payload[1] >> 4 == 0:
-                payload = bytes([payload[0], payload[1], 0x24]) + payload[3:]
+                payload = bytes([payload[0], payload[1], 0x84]) + payload[3:]
             broken.append((t, dt_, dn, payload))
 
         summary = analyse(sensor, broken)
         self.assertIsNone(summary["telemetry"],
-                          "a version-2 descriptor must be rejected, not "
-                          "decoded under v1 rules")
+                          "a version-8 descriptor must be rejected, not "
+                          "decoded under v1 rules (versions 1..7 are "
+                          "layout-compatible, 8..15 are not)")
         decoded = [c for c in summary["checks"]
                    if c["name"] == "descriptor decoded"][0]
         self.assertFalse(decoded["pass"])

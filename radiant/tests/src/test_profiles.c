@@ -1073,16 +1073,80 @@ ZTEST(profiles, test_a_receiver_rejects_a_version_it_does_not_implement)
 	n = profile_desc_encode(&d, frames, PROFILE_TLM_MAX_FRAMES);
 	zassert_true(n > 0);
 
-	/* Version 2 in the high nibble of frame 0 byte [2]. The version
+	/* Version 8 in the high nibble of frame 0 byte [2]. The version
 	 * governs the frame layout itself, so a receiver that guessed would be
-	 * reading fields at offsets that may not exist. */
-	frames[2] = (uint8_t)(0x20u | NODE_FIELDS);
+	 * reading fields at offsets that may not exist. 8..15 and 0 are
+	 * rejected; 1..7 are layout-compatible (the extension rule, TODO
+	 * security item 9, and the shared vectors below). */
+	frames[2] = (uint8_t)(0x80u | NODE_FIELDS);
+	zassert_equal(-ENOTSUP, profile_desc_decode(frames, (uint8_t)n, &back));
+	frames[2] = (uint8_t)(0xF0u | NODE_FIELDS);
+	zassert_equal(-ENOTSUP, profile_desc_decode(frames, (uint8_t)n, &back));
+	frames[2] = (uint8_t)(0x00u | NODE_FIELDS);
 	zassert_equal(-ENOTSUP, profile_desc_decode(frames, (uint8_t)n, &back));
 
 	/* Field count 15 is reserved for an extended descriptor: a different
 	 * frame set, not fifteen fields. */
 	frames[2] = (uint8_t)((PROFILE_TLM_VERSION << 4) | 0x0Fu);
 	zassert_equal(-ENOTSUP, profile_desc_decode(frames, (uint8_t)n, &back));
+}
+
+/*
+ * TODO security item 9: the extension rule. Versions 1..7 are layout-compatible
+ * and a v1 receiver decodes them by the v1 layout; 8..15 are rejected. The same
+ * frame set, as the same hex, is in tools/test_ant_pages.py
+ * (test_the_extension_rule_shared_vectors): the sample node, announced as
+ * version 1, 2, 7 and 8. Only frame 0 byte [2] differs.
+ */
+static const uint8_t ext_v1[6][8] = {
+	{ 0x00, 0x05, 0x14, 0x2b, 0xf6, 0x1f, 0x39, 0x00 },
+	{ 0x00, 0x15, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
+	{ 0x00, 0x25, 0x01, 0x26, 0x10, 0x00, 0x01, 0x00 },
+	{ 0x00, 0x35, 0x02, 0x10, 0x1c, 0xfe, 0x01, 0x08 },
+	{ 0x00, 0x45, 0x03, 0x30, 0xa8, 0x00, 0x02, 0x00 },
+	{ 0x00, 0x55, 0x04, 0x1c, 0x58, 0x00, 0x02, 0x20 },
+};
+
+ZTEST(profiles, test_the_extension_rule_shared_vectors)
+{
+	struct profile_descriptor v1, v2, v7, v8;
+	uint8_t set[6u * 8u];
+
+	memcpy(set, ext_v1, sizeof(set));
+	zassert_ok(profile_desc_decode(set, 6u, &v1));
+	zassert_equal(1u, v1.version);
+	zassert_equal(4u, v1.n_fields);
+	zassert_equal(0x2Bu, v1.schema_id);
+
+	/* Version 2: accepted, decoded by the v1 layout, version kept. */
+	set[2] = 0x24u;
+	zassert_ok(profile_desc_decode(set, 6u, &v2),
+		   "a layout-compatible version 2 node was rejected");
+	zassert_equal(2u, v2.version);
+	zassert_equal(v1.n_fields, v2.n_fields);
+	zassert_equal(v1.schema_id, v2.schema_id);
+	zassert_equal(v1.period, v2.period);
+	zassert_mem_equal(v1.fields, v2.fields,
+			  sizeof(v1.fields[0]) * v1.n_fields);
+
+	set[2] = 0x74u;
+	zassert_ok(profile_desc_decode(set, 6u, &v7));
+	zassert_equal(7u, v7.version);
+
+	/* Version 8: the first that changes the layout. Rejected. */
+	set[2] = 0x84u;
+	zassert_equal(-ENOTSUP, profile_desc_decode(set, 6u, &v8));
+
+	/* The node this build encodes is the version 1 vector, byte for byte. */
+	{
+		struct profile_descriptor d;
+		uint8_t frames[PROFILE_TLM_MAX_FRAMES * PROFILE_TLM_FRAME_LEN];
+
+		build_node_descriptor(&d);
+		zassert_equal(6, profile_desc_encode(&d, frames,
+						     PROFILE_TLM_MAX_FRAMES));
+		zassert_mem_equal(frames, ext_v1, sizeof(ext_v1));
+	}
 }
 
 /* ---------------------------------------------------------------------------

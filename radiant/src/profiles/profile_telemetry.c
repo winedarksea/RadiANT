@@ -762,8 +762,10 @@ int profile_desc_decode(const uint8_t *frames, uint8_t n_frames,
 
 	/* A receiver that does not implement the version MUST REJECT THE NODE
 	 * rather than guess: the version governs the frame layout, including
-	 * every byte read above. */
-	if (d.version != PROFILE_TLM_VERSION) {
+	 * every byte read above. 1..7 are layout-compatible by the extension
+	 * rule (profile_telemetry.h) and decode as v1; 0 and 8..15 are not. */
+	if (d.version < PROFILE_TLM_VERSION ||
+	    d.version > PROFILE_TLM_VERSION_LAYOUT_MAX) {
 		return -ENOTSUP;
 	}
 	if (d.n_fields == 0x0Fu) {
@@ -841,8 +843,19 @@ int profile_desc_decode(const uint8_t *frames, uint8_t n_frames,
 		fd->bit_offset = f[7];
 	}
 
-	if (check_descriptor(&d) != 0) {
-		return -EPROTO;
+	/* The shape checks run against the v1 layout whatever layout-compatible
+	 * version (2..7) the node announced; the version itself was judged
+	 * above, and is kept as announced. */
+	{
+		uint8_t announced = d.version;
+		int     chk;
+
+		d.version = PROFILE_TLM_VERSION;
+		chk = check_descriptor(&d);
+		d.version = announced;
+		if (chk != 0) {
+			return -EPROTO;
+		}
 	}
 
 	*out = d;

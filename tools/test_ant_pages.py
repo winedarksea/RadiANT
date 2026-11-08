@@ -1682,10 +1682,42 @@ class TestTelemetryDescriptor(unittest.TestCase):
         with self.assertRaises(ValueError):
             ap.decode_tlm_data(d, bytes([1, 0, 0, 0, 0, 0, 0, 0]))
 
+    # TODO security item 9, the extension rule. The same frame set as the
+    # same hex is in radiant/tests/src/test_profiles.c
+    # (test_the_extension_rule_shared_vectors); only frame 0 byte [2] differs.
+    EXT_V1 = ("0005142bf61f3900 0015000000000000 0025012610000100 "
+              "003502101cfe0108 00450330a8000200 0055041c58000220")
+
+    def _ext_frames(self, version_byte):
+        frames = [bytes.fromhex(h) for h in self.EXT_V1.split()]
+        frames[0] = frames[0][:2] + bytes([version_byte]) + frames[0][3:]
+        return frames
+
+    def test_the_extension_rule_shared_vectors(self):
+        # The sample node encodes to the version 1 vector, byte for byte.
+        self.assertEqual(
+            [f.hex() for f in ap.encode_tlm_descriptor(sample_descriptor())],
+            self.EXT_V1.split())
+        v1 = ap.decode_tlm_descriptor(self._ext_frames(0x14))
+        # Version 2 and 7: layout-compatible, decoded by the v1 layout.
+        for version_byte, version in ((0x24, 2), (0x74, 7)):
+            d = ap.decode_tlm_descriptor(self._ext_frames(version_byte))
+            self.assertEqual(d.version, version)
+            self.assertEqual(d.fields, v1.fields)
+            self.assertEqual(d.schema_id, v1.schema_id)
+            self.assertEqual(d.period, v1.period)
+        # Version 8 and 15, and 0: not.
+        for version_byte in (0x84, 0xF4, 0x04):
+            with self.assertRaises(ValueError):
+                ap.decode_tlm_descriptor(self._ext_frames(version_byte))
+        # A node still WRITES version 1.
+        with self.assertRaises(ValueError):
+            ap.encode_tlm_descriptor(sample_descriptor(version=2))
+
     def test_an_unimplemented_version_is_rejected_not_guessed_at(self):
         frames = ap.encode_tlm_descriptor(sample_descriptor())
         broken = list(frames)
-        broken[0] = bytes([frames[0][0], frames[0][1], 0x24]) + frames[0][3:]
+        broken[0] = bytes([frames[0][0], frames[0][1], 0x84]) + frames[0][3:]
         with self.assertRaises(ValueError):
             ap.decode_tlm_descriptor(broken)
         # Field count 15 names an extended descriptor - a different frame set,
@@ -2403,11 +2435,13 @@ class TestTelemetryScheduleBlock(unittest.TestCase):
         with self.assertRaises(ValueError):
             ap.decode_tlm_schedule(bytes(body), False, 30)
 
-    def test_the_reservation_is_refused_rather_than_ignored(self):
+    def test_the_next_flag_bits_are_ignored_not_refused(self):
+        # Bits 42..47 are the next informational flags (TODO security item
+        # 9): a v1 receiver ignores them. Mirrors test_schedule.c.
         body = bytearray(ap.encode_tlm_schedule(self.CANON_SCHED, False, 30))
-        body[5] |= 0x01
-        with self.assertRaises(ValueError):
-            ap.decode_tlm_schedule(bytes(body), False, 30)
+        want = ap.decode_tlm_schedule(bytes(body), False, 30)
+        body[5] |= 0x3F
+        self.assertEqual(ap.decode_tlm_schedule(bytes(body), False, 30), want)
 
     def test_a_window_the_node_does_not_open_carries_no_phase(self):
         with self.assertRaises(ValueError):

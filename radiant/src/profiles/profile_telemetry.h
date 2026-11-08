@@ -77,9 +77,17 @@ extern "C" {
 #define PROFILE_TLM_RF_INDEX_DEFAULT 57u
 #define PROFILE_TLM_RF_INDEX_MAX     124u
 
-/* The envelope version. A receiver that does not implement it must REJECT the
- * node rather than guess: the version governs the frame layout itself. */
+/* The envelope version this build writes. Every format stays at 1 during beta.
+ *
+ * The extension rule, for what a receiver accepts: versions 1..7 are
+ * layout-compatible, so a v1 receiver decodes a node announcing 2..7 by the v1
+ * layout and ignores what it does not know (informational flags, schedule-frame
+ * bits 42..47, unknown flag bits 3..0). Versions 8..15 (and 0) change the
+ * layout and are REJECTED: the receiver must reject the node rather than guess.
+ * A change a v1 receiver cannot ignore must use 8 or above. docs/radiant-
+ * telemetry.md section 6. */
 #define PROFILE_TLM_VERSION 1u
+#define PROFILE_TLM_VERSION_LAYOUT_MAX 7u
 
 #define PROFILE_TLM_FRAME_LEN  8u
 #define PROFILE_TLM_MAX_FIELDS 14u

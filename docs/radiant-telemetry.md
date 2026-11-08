@@ -304,9 +304,10 @@ arithmetic would be a way for a node to describe a set it did not send.
 [7] flags (below)
 ```
 
-- **envelope version** is 1. A receiver that does not implement the version
-  **must reject the node** rather than guess, because the version governs the
-  frame layout itself.
+- **envelope version** is 1, and a node writes 1. A receiver accepts **1 to 7**
+  as layout-compatible and decodes them by the v1 layout, ignoring anything it
+  does not know (the extension rule, below). It **rejects 8 to 15 and 0**
+  rather than guess, because those change the frame layout itself.
 - **schema id** is a node-chosen byte that changes whenever any field
   descriptor changes. It is what lets a receiver cache a schema and notice a
   change after reading a single frame instead of the whole set. It is not a
@@ -348,8 +349,23 @@ Bit 4 exists so that the v2 tier can be added without a v1 receiver silently
 decoding transformed bytes as plaintext. That is exactly the retrofit this
 document was written in Phase 4 to avoid.
 
-Further informational flags, when they are needed, come from the reserved bits
-of frame 1 byte `[3]` — not from this byte, which is full.
+**The extension rule (decided 2026-11-08; no version is bumped by it).** Byte
+`[7]` here is full, and frame 1 byte `[3]` is full too (W, the repeat count and
+the clock-accuracy nibble), so the room for later informational flags is:
+
+- **Schedule-frame bits 42..47** (six bits), present only when the node sends a
+  schedule frame. A v1 receiver ignores them; they must not be refused, because a
+  node that sets one announces version 2 to 7 and a v1 receiver accepts it.
+- **The version nibble.** 2 to 7 mean "same layout, something informational
+  added": a v1 receiver decodes the node as v1. A change that a v1 receiver
+  cannot safely ignore (a different frame layout, a new frame set) takes 8 or
+  above, and v1 receivers reject the node. Field count 15 stays reserved for an
+  extended descriptor.
+- A change that alters how data bytes must be read is a **transform** bit above,
+  never an informational one: fail closed.
+
+Every format in this repository is still at version 1 and stays there during
+beta; this rule defines what a v1 receiver accepts, not a new version.
 
 ### Frame 1 — mode and reserved security space
 
@@ -456,7 +472,7 @@ bits 31..33  coding rate: 0 = uncoded (1 M), 1 = LE Coded S=8, 2 = LE Coded
              S=2 (defined, not implemented), 3..7 reserved
 bits 34..41  announced TX power, dBm EIRP biased by 100 (60..120 for
              -40..+20 dBm); 0 means not stated
-bits 42..47  reserved, must be 0
+bits 42..47  reserved for informational flags; written as 0, ignored on receipt
 ```
 
 **The downlink window is announced here and opened by a later phase.** Today a
@@ -606,6 +622,14 @@ announces its downlink phase as encoded.
   with, and it is the low half of the `X_CONF` nonce counter. It is mandatory in
   v1 whether or not any security switch is ever enabled, because adding it later
   would renumber every field offset in every deployed schema.
+  **Caveat: this holds only where the counter is derived from the slot's time.**
+  On a secured channel `radiant_sec` derives it from `t_sync`, so a denied or
+  missed slot still advances it. On an **unsecured `profile_sched` node** it
+  advances only when the caller calls `profile_sched_next_at()`, and the apps call
+  that once per `EVENT_TX`: a slot the radio never got is not counted, and the
+  counter then understates the holes. No 0x60 app exists yet, so nothing is wrong
+  on air; the first one must either have the radio glue call `next_at()` for
+  denied and missed slots or accept the caveat.
 - **Slots, not data pages, because the secured receiver counts time.** Its
   expected counter is elapsed time over the channel period
   (`docs/radiant-security.md` 3.1), one count per slot. A counter that skipped

@@ -2548,6 +2548,9 @@ RADIANT_TLM_DEVICE_TYPE = 0x60
 # Fixed at 5, because a searching receiver matches on it. Not a node choice.
 RADIANT_TLM_TRANS_TYPE = 0x05
 RADIANT_TLM_VERSION = 1
+#: Versions 1..7 are layout-compatible and decode by the v1 layout, ignoring
+#: what they do not know; 0 and 8..15 are rejected (radiant-telemetry.md 6).
+RADIANT_TLM_VERSION_LAYOUT_MAX = 7
 RADIANT_TLM_RF_INDEX_DEFAULT = 57
 RADIANT_TLM_RF_INDEX_MAX = 124
 # The period this project's simulated 0x60 nodes choose. NOT a property of the
@@ -3046,10 +3049,8 @@ def decode_tlm_schedule(body, lr_phy: bool = False,
     body = bytes(body)
     if len(body) != TLM_SCHED_AREA_BITS // 8:
         raise ValueError("the schedule block is 6 bytes")
-    if unpack_bits(body, TLM_SCHED_AREA_BITS, TLM_SCHED_RSVD_OFF,
-                   TLM_SCHED_RSVD_W):
-        raise ValueError("the schedule block's reserved bits are "
-                         "must-be-zero, and have no meaning to ignore")
+    # Bits 42..47 are the next informational flags and are IGNORED here, as in
+    # profile_sched_unpack(): a layout-compatible version 2..7 node may set one.
 
     power = unpack_bits(body, TLM_SCHED_AREA_BITS, TLM_SCHED_POWER_OFF,
                         TLM_SCHED_POWER_W)
@@ -3157,13 +3158,15 @@ class TlmDescriptor:
         return None
 
 
-def _tlm_validate(d: TlmDescriptor) -> None:
+def _tlm_validate(d: TlmDescriptor, decoding: bool = False) -> None:
     """Every check here exists because the failure it prevents is silent on air.
 
     See src/profiles/profile_telemetry.c, which carries the same list - the C
     node and the Python simulator must refuse identical descriptors.
     """
-    if d.version != RADIANT_TLM_VERSION:
+    # A node WRITES version 1; a receiver also accepts 2..7 (decode has already
+    # judged the announced version), so the decode path skips this one check.
+    if not decoding and d.version != RADIANT_TLM_VERSION:
         raise ValueError(f"envelope version {d.version} is not implemented")
     if len(d.fields) > RADIANT_TLM_MAX_FIELDS:
         raise ValueError("15 field descriptors is reserved for an extended "
@@ -3482,7 +3485,7 @@ def decode_tlm_descriptor(frames, auth: TlmDescAuth | None = None,
     # A receiver that does not implement the version MUST REJECT THE NODE
     # rather than guess: the version governs the frame layout itself, so every
     # byte read below would be read under the wrong rules.
-    if version != RADIANT_TLM_VERSION:
+    if not RADIANT_TLM_VERSION <= version <= RADIANT_TLM_VERSION_LAYOUT_MAX:
         raise ValueError(f"envelope version {version} is not implemented")
     if n_fields == 0x0F:
         raise ValueError("field count 15 is reserved for an extended "
@@ -3551,7 +3554,7 @@ def decode_tlm_descriptor(frames, auth: TlmDescAuth | None = None,
         clock_accuracy=clock_accuracy,
         schedule=schedule,
     )
-    _tlm_validate(d)
+    _tlm_validate(d, decoding=True)
     if auth is None:
         return d
     if not d.flags & (TLM_FLAG_X_CONF | TLM_FLAG_X_AUTH):

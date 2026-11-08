@@ -324,15 +324,11 @@ int profile_sched_unpack(const uint8_t *body, bool lr_phy, uint16_t clk_ppm,
 
 	memset(&s, 0, sizeof(s));
 
-	(void)profile_bits_unpack(body, PROFILE_SCHED_AREA_BITS,
-				  PROFILE_SCHED_RSVD_OFF, PROFILE_SCHED_RSVD_W,
-				  &value);
-	if (value != 0u) {
-		/* Reserved-must-be-zero; unlike an unknown informational flag,
-		 * these bits have no defined meaning a receiver could assume. */
-		return -EPROTO;
-	}
-
+	/* Bits 42..47 are the next informational flags (docs/radiant-telemetry.md
+	 * section 6, the extension rule): a v1 receiver IGNORES what it does not
+	 * know. They used to be refused, which would have rejected every node
+	 * that set one, including a layout-compatible version 2..7 node. Nothing
+	 * in this build writes them; the packer still emits zero. */
 	(void)profile_bits_unpack(body, PROFILE_SCHED_AREA_BITS,
 				  PROFILE_SCHED_DWELL_OFF, PROFILE_SCHED_DWELL_W,
 				  &value);
