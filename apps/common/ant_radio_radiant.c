@@ -1182,9 +1182,22 @@ static void api_ack_pending_fail(uint8_t ch)
 static void api_search_cfg_build(struct radiant_search_cfg *cfg)
 {
 	radiant_search_cfg_default(cfg);
-	/* The sweep runs on network 0's address, where every host puts the
-	 * ANT+ key; copied rather than assumed. */
-	memcpy(cfg->net_addr, api_net_addr[0], RADIANT_NET_ADDR_LEN);
+	uint8_t net = 0u;
+
+	/* The sweep runs on network 0's address, where nearly every host puts
+	 * the ANT+ key; copied rather than assumed. A host that installed the
+	 * key only on another network gets the lowest such network instead of
+	 * a sweep on the all-zero address that hears nothing. With no key
+	 * anywhere it stays on network 0, as it always did. */
+	if (!api_net_valid[0]) {
+		for (uint8_t n = 1u; n < API_NETWORKS; n++) {
+			if (api_net_valid[n]) {
+				net = n;
+				break;
+			}
+		}
+	}
+	memcpy(cfg->net_addr, api_net_addr[net], RADIANT_NET_ADDR_LEN);
 }
 
 /* The sweep offered this channel a device. Runs in the radio interrupt. */
@@ -1302,8 +1315,11 @@ static void api_search_begin(uint8_t ch, radiant_time_t now)
 		       ? RADIANT_SEARCH_MODE_SCAN
 		       : RADIANT_SEARCH_MODE_ACQUIRE;
 
-	(void)radiant_search_begin(&api_search, ch, mode, &want, now,
-			       RADIANT_SEARCH_TIMEOUT_NONE);
+	/* The sweep follows the frequency its searchers sit on, and a channel
+	 * is only offered devices heard on its own. All-57 sessions never
+	 * leave the default. */
+	(void)radiant_search_begin_rf(&api_search, ch, mode, &want, now,
+				      RADIANT_SEARCH_TIMEOUT_NONE, api_rf_of(ch));
 }
 
 /* ---------------------------------------------------------------------------
@@ -2003,7 +2019,8 @@ static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 	 */
 	if (!radiant_channel_is_master(ch)) {
 		radiant_channel_on_slot(ch, evt->t_sync);
-		radiant_search_seen_note(&api_search, &id, evt->t_sync);
+		radiant_search_seen_note_rf(&api_search, &id, evt->t_sync,
+					    api_rf_of(ch));
 	}
 
 	mt = radiant_frame_msg_type(f.ctrl_byte);
@@ -3224,7 +3241,7 @@ antr_err_t antr_channel_assign(uint8_t channel, uint8_t type, uint8_t network,
 	if (network > 0u && network < API_NETWORKS && !api_net_valid[network]) {
 		LOG_WRN("ch%u assigned to network %u, which has no address "
 			"installed - a background scan still works (the sweep "
-			"uses network 0), but tracking on it will hear nothing",
+			"uses the lowest keyed network), but tracking on it will hear nothing",
 			channel, network);
 	}
 
@@ -3296,6 +3313,23 @@ static void api_warn_slip_prone_id(uint8_t ch)
 	}
 }
 
+/* A slave on another frequency is legal and now served (the sweep retunes to
+ * follow its searchers), but only on the ANT+ network key, and a mixed session
+ * alternates passes between its frequencies. Say so once per open, so the
+ * longer discovery has a readable cause. */
+static void api_warn_off_57_slave(uint8_t ch)
+{
+	uint8_t rf = api_rf_of(ch);
+
+	if (!radiant_channel_is_master(ch) && rf != RADIANT_RF_INDEX_ANT_PLUS) {
+		LOG_WRN("ch %u: slave opened on RF %u (not %u): the discovery "
+			"sweep retunes to follow it, and alternates passes "
+			"when channels disagree",
+			(unsigned int)ch, (unsigned int)rf,
+			(unsigned int)RADIANT_RF_INDEX_ANT_PLUS);
+	}
+}
+
 antr_err_t antr_channel_open_with_offset(uint8_t channel, uint16_t offset)
 {
 	antr_err_t rc;
@@ -3306,6 +3340,7 @@ antr_err_t antr_channel_open_with_offset(uint8_t channel, uint16_t offset)
 		int trc = api_xfer_setup(channel);
 
 		api_warn_slip_prone_id(channel);
+		api_warn_off_57_slave(channel);
 
 		if (trc != RADIANT_TRANSFER_OK) {
 			/* radiant_transfer_init() refuses a backend too slow for
@@ -3561,6 +3596,16 @@ antr_err_t antr_network_address_set(uint8_t network, const uint8_t *key)
 	}
 
 	k_mutex_lock(&api_lock, K_FOREVER);
+	/* The first valid key of ANY network moves the sweep off the all-zero
+	 * address; later keys only matter if they are network 0 (which takes
+	 * precedence), and re-sending the same one changes nothing. */
+	bool first_key = true;
+
+	for (uint8_t n = 0u; n < API_NETWORKS; n++) {
+		if (api_net_valid[n]) {
+			first_key = false;
+		}
+	}
 	api_net_addr[network][0] = RADIANT_NET_ADDR_ANT_PLUS_0;
 	api_net_addr[network][1] = RADIANT_NET_ADDR_ANT_PLUS_1;
 	/* The only place this is ever set. Everything above this line can fail,
@@ -3576,7 +3621,8 @@ antr_err_t antr_network_address_set(uint8_t network, const uint8_t *key)
 	 * (api_search_reinit_pending). Deferred, not dropped: a re-sent key
 	 * changes nothing, but the FIRST one moves the sweep off the all-zero
 	 * address it started on. */
-	if (network == 0u && radiant_search_n_searching(&api_search) == 0u) {
+	if ((network == 0u || first_key) &&
+	    radiant_search_n_searching(&api_search) == 0u) {
 		if (api_search_slot == RADIANT_SCHED_CH_NONE) {
 			struct radiant_search_cfg scfg;
 

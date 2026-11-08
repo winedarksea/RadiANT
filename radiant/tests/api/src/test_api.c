@@ -1950,6 +1950,99 @@ ZTEST(api, test_a_first_key_deferred_by_a_live_chunk_still_reaches_the_sweep)
 	end_of_test();
 }
 
+/* A wildcard ANT+ slave on `network` and `rf`, opened. */
+static void open_wildcard_slave(uint8_t ch, uint8_t network, uint8_t rf)
+{
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_assign(ch, (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
+					  network, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_id_set(ch, 0u, 0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_period_set(ch, RADIANT_CHANNEL_PERIOD_ANT_PLUS));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_radio_freq_set(ch, rf));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR, antr_channel_open(ch));
+}
+
+/*
+ * Release review 1a. A host that installs the ANT+ key on network 1 only used
+ * to leave the sweep on network 0's all-zero address: a wildcard slave on
+ * network 1 searched forever and found nothing, with no error anywhere. The
+ * first valid key of any network must reach the sweep.
+ */
+ZTEST(api, test_a_key_on_network_1_only_moves_the_sweep_to_the_ant_plus_address)
+{
+	const struct fake_radio_arm *w;
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_network_address_set(1u, ant_plus_key));
+	open_wildcard_slave(CH, 1u, (uint8_t)RF_INDEX);
+
+	w = armed_search_window();
+	zassert_true(w->filters[0].addr[0] == 0xA6u && w->filters[0].addr[1] == 0xC5u,
+		     "the sweep is on %02x %02x after the key went to network 1 "
+		     "only: it still searches network 0's empty address",
+		     w->filters[0].addr[0], w->filters[0].addr[1]);
+
+	end_of_test();
+}
+
+/* Network 0 keeps precedence: a key on network 1 first, then network 0, leaves
+ * the sweep on the ANT+ address either way (both are the same key here, so the
+ * assertion is that the second install does not break it). */
+ZTEST(api, test_the_sweep_stays_on_the_ant_plus_address_when_both_networks_are_keyed)
+{
+	const struct fake_radio_arm *w;
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_network_address_set(1u, ant_plus_key));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_network_address_set(0u, ant_plus_key));
+	open_wildcard_slave(CH, 0u, (uint8_t)RF_INDEX);
+
+	w = armed_search_window();
+	zassert_true(w->filters[0].addr[0] == 0xA6u && w->filters[0].addr[1] == 0xC5u);
+
+	end_of_test();
+}
+
+/*
+ * Release review 1b. A slave on another frequency used to search on 57 and
+ * could never acquire a master on its own. The sweep follows its searchers.
+ */
+ZTEST(api, test_a_slave_off_57_moves_the_sweep_to_its_frequency)
+{
+	const struct fake_radio_arm *w;
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_network_address_set(0u, ant_plus_key));
+	open_wildcard_slave(CH, 0u, 66u);
+
+	w = armed_search_window();
+	zassert_equal(66u, w->rf_index,
+		      "the sweep was armed on RF %u for a slave on 66",
+		      (unsigned int)w->rf_index);
+
+	end_of_test();
+}
+
+/* An all-57 session still sweeps 57, so nothing in the line above is a
+ * default that moved. */
+ZTEST(api, test_a_slave_on_57_still_sweeps_57)
+{
+	const struct fake_radio_arm *w;
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_network_address_set(0u, ant_plus_key));
+	open_wildcard_slave(CH, 0u, (uint8_t)RF_INDEX);
+
+	w = armed_search_window();
+	zassert_equal((uint8_t)RF_INDEX, w->rf_index);
+
+	end_of_test();
+}
+
 /*
  * A tracked channel owes its next window immediately, not one pump later -
  * the invariant a background scan lives or dies on. radiant_sched.c ends a

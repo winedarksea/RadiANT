@@ -1,0 +1,283 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * test_search_rf.c - the sweep's frequency axis (release review 1b).
+ *
+ * A slave on another RF index used to be unable to acquire anything, because
+ * the one shared sweep sat on RF 57 whatever its searchers asked for. The
+ * sweep now follows the frequency its channels declare via
+ * radiant_search_begin_rf(), keeps a whole pass per frequency when they
+ * disagree, and offers a channel only devices heard on its own frequency.
+ *
+ * A separate file from test_search.c on purpose: that suite is the contract
+ * for a search in which nobody declares a frequency, and the first test here
+ * pins that this still holds with the axis present.
+ */
+
+#include <stdbool.h>
+#include <stdint.h>
+#include <string.h>
+
+#include <zephyr/toolchain.h>
+#include <zephyr/ztest.h>
+
+#include "../fake_radio.h"
+
+#include <radiant/radiant_frame.h>
+#include <radiant/radiant_radio_hal.h>
+#include <radiant/radiant_search.h>
+
+static struct radiant_search g_s;
+static struct radiant_search_window g_w;
+static uint32_t g_op;
+static radiant_time_t g_close; /* the arm log is bounded; keep our own */
+
+#define N_CAP 8
+static uint8_t g_acq_chan[N_CAP];
+static uint8_t g_acq_rf[N_CAP];
+static uint32_t g_n_acq;
+
+static void on_acquired(uint8_t channel, const struct radiant_search_result *r, void *user)
+{
+	ARG_UNUSED(user);
+	ARG_UNUSED(r);
+	if (g_n_acq < N_CAP) {
+		g_acq_chan[g_n_acq] = channel;
+		g_acq_rf[g_n_acq] = radiant_search_rf_get(&g_s);
+	}
+	g_n_acq++;
+}
+
+static const struct radiant_search_cbs cbs = { .acquired = on_acquired };
+
+static void rx_cb(const struct radiant_rx_event *evt, void *user)
+{
+	ARG_UNUSED(user);
+	radiant_search_on_rx(&g_s, evt);
+}
+
+static const struct radiant_radio_cbs radio_cbs = { .rx = rx_cb, .tx = NULL };
+
+static const uint8_t payload8[8] = { 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17 };
+static const struct radiant_search_id_filter want_any = { 0u, 0u, 0u };
+
+#define RF_A 57u
+#define RF_B 66u
+
+static void setup(void *f)
+{
+	ARG_UNUSED(f);
+	fake_radio_reset();
+}
+
+ZTEST_SUITE(radiant_search_rf, NULL, NULL, setup, NULL, NULL);
+
+static void bring_up(void)
+{
+	struct radiant_search_cfg cfg;
+
+	memset(&g_s, 0, sizeof(g_s));
+	g_n_acq = 0u;
+	radiant_search_cfg_default(&cfg);
+	zassert_ok(radiant_search_init(&g_s, &cfg, &cbs, NULL));
+	zassert_ok(radiant_radio_init(&radio_cbs, NULL));
+	zassert_ok(radiant_radio_enable());
+}
+
+static void begin(uint8_t ch, uint8_t rf)
+{
+	zassert_ok(radiant_search_begin_rf(&g_s, ch, RADIANT_SEARCH_MODE_ACQUIRE,
+					   &want_any, radiant_radio_now(),
+					   RADIANT_SEARCH_TIMEOUT_NONE, rf));
+}
+
+static int win_open(void)
+{
+	struct radiant_rx_req req;
+	radiant_time_t earliest =
+		radiant_radio_now() + radiant_radio_caps_get()->min_arm_lead_us + 100u;
+	int rc = radiant_search_window(&g_s, earliest, &g_w);
+
+	if (rc != RADIANT_SEARCH_OK) {
+		return rc;
+	}
+	memset(&req, 0, sizeof(req));
+	req.fmt = g_w.fmt;
+	req.rf_index = g_w.rf_index;
+	req.filters = g_w.filters;
+	req.n_filters = g_w.n_filters;
+	req.t_open = g_w.t_open;
+	req.t_close = g_w.t_close;
+	req.flags = g_w.flags;
+	zassert_ok(radiant_radio_rx(&req, &g_op));
+	radiant_search_armed(&g_s, g_op, req.t_open, req.t_close);
+	g_close = req.t_close;
+	return RADIANT_SEARCH_OK;
+}
+
+static void win_run(void)
+{
+	fake_radio_advance_to(g_close + 1u);
+	radiant_search_tick(&g_s, radiant_radio_now());
+}
+
+/* One whole round-robin pass, returning every window's frequency in `rf`. */
+static void run_pass(uint8_t *rf, uint16_t n_sets)
+{
+	for (uint16_t i = 0u; i < n_sets; i++) {
+		zassert_equal(RADIANT_SEARCH_OK, win_open());
+		rf[i] = g_w.rf_index;
+		win_run();
+	}
+}
+
+static void expect_pass_on(const uint8_t *rf, uint16_t n, uint8_t want, const char *what)
+{
+	for (uint16_t i = 0u; i < n; i++) {
+		zassert_equal(want, rf[i], "%s: window %u armed on RF %u, want %u", what,
+			      (unsigned int)i, (unsigned int)rf[i], (unsigned int)want);
+	}
+}
+
+/* No channel declared a frequency, or every one declared 57: the sweep never
+ * leaves the configured RF, in any window. */
+ZTEST(radiant_search_rf, test_undeclared_and_all_57_sessions_never_retune)
+{
+	uint8_t rf[64];
+	uint16_t n;
+
+	bring_up();
+	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE, &want_any,
+					radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+	n = radiant_search_sets(&g_s);
+	run_pass(rf, n);
+	run_pass(rf, n);
+	expect_pass_on(rf, n, RF_A, "undeclared");
+	zassert_ok(radiant_search_end(&g_s, 0u));
+
+	begin(0u, RF_A);
+	begin(1u, RF_A);
+	run_pass(rf, n);
+	run_pass(rf, n);
+	expect_pass_on(rf, n, RF_A, "all 57");
+	zassert_equal(RF_A, radiant_search_rf_get(&g_s));
+	zassert_ok(radiant_search_end(&g_s, 0u));
+	zassert_ok(radiant_search_end(&g_s, 1u));
+}
+
+/* Every searcher is on 66: the sweep goes to 66 for its very first window
+ * (a pass on 57 would be heard by nobody) and stays. */
+ZTEST(radiant_search_rf, test_sweep_follows_a_frequency_all_searchers_agree_on)
+{
+	uint8_t rf[64];
+	uint16_t n;
+
+	bring_up();
+	begin(0u, RF_B);
+	begin(1u, RF_B);
+	n = radiant_search_sets(&g_s);
+	run_pass(rf, n);
+	expect_pass_on(rf, n, RF_B, "agree, pass 1");
+	run_pass(rf, n);
+	expect_pass_on(rf, n, RF_B, "agree, pass 2");
+	zassert_ok(radiant_search_end(&g_s, 0u));
+	zassert_ok(radiant_search_end(&g_s, 1u));
+}
+
+/* Mixed: whole passes alternate, and the sweep never changes frequency in the
+ * middle of one, so each frequency keeps "certain within one pass". */
+ZTEST(radiant_search_rf, test_mixed_frequencies_alternate_whole_passes)
+{
+	uint8_t rf[64];
+	uint16_t n;
+
+	bring_up();
+	begin(0u, RF_B);
+	begin(1u, RF_A);
+	n = radiant_search_sets(&g_s);
+
+	run_pass(rf, n);
+	expect_pass_on(rf, n, RF_A, "mixed, pass 1");
+	run_pass(rf, n);
+	expect_pass_on(rf, n, RF_B, "mixed, pass 2");
+	run_pass(rf, n);
+	expect_pass_on(rf, n, RF_A, "mixed, pass 3");
+	zassert_ok(radiant_search_end(&g_s, 0u));
+	zassert_ok(radiant_search_end(&g_s, 1u));
+}
+
+/* When the last searcher on the current frequency leaves, the sweep moves on
+ * at once rather than finishing a pass nobody can hear. */
+ZTEST(radiant_search_rf, test_the_sweep_leaves_a_frequency_nobody_searches)
+{
+	uint8_t rf[4];
+
+	bring_up();
+	begin(0u, RF_B);
+	begin(1u, RF_A);
+	run_pass(rf, 2u);
+	expect_pass_on(rf, 2u, RF_A, "before");
+	zassert_ok(radiant_search_end(&g_s, 1u));
+	run_pass(rf, 2u);
+	expect_pass_on(rf, 2u, RF_B, "after the 57 searcher left");
+	zassert_ok(radiant_search_end(&g_s, 0u));
+}
+
+/* Offer filtering, live. Channel 0 (first in channel order, so it would take
+ * the frame) is on 66; channel 1 on 57. The sweep is on 57, so a device heard
+ * there is channel 1's and must not be offered to channel 0. */
+ZTEST(radiant_search_rf, test_a_channel_is_offered_only_devices_heard_on_its_frequency)
+{
+	uint8_t frame[FAKE_RADIO_AIR_FRAME_MAX];
+	uint8_t len;
+
+	bring_up();
+	begin(0u, RF_B);
+	begin(1u, RF_A);
+
+	zassert_equal(RADIANT_SEARCH_OK, win_open());
+	zassert_equal(RF_A, g_w.rf_index);
+	len = fake_radio_build_ant_frame(frame, 0x0703u, 0x78u, 1u, payload8);
+	zassert_ok(fake_radio_air_frame(g_w.t_open + 1000u, frame, len));
+	win_run();
+
+	zassert_equal(1u, g_n_acq, "the device was not acquired at all");
+	zassert_equal(1u, g_acq_chan[0],
+		      "channel %u took a device heard on RF %u; it listens on %u",
+		      (unsigned int)g_acq_chan[0], RF_A, RF_B);
+	zassert_true(radiant_search_is_searching(&g_s, 0u));
+	zassert_false(radiant_search_is_searching(&g_s, 1u));
+	zassert_ok(radiant_search_end(&g_s, 0u));
+}
+
+/* Offer filtering, cached. A device heard on 57 is in the seen cache; a channel
+ * that then begins searching on 66 for anything must not be steered to it. */
+ZTEST(radiant_search_rf, test_the_seen_cache_does_not_steer_across_frequencies)
+{
+	struct radiant_channel_id id;
+	uint16_t steered;
+
+	bring_up();
+	memset(&id, 0, sizeof(id));
+	id.device_number = 0x0A09u; /* set 0x09 / 8 = 1 on the nRF geometry */
+	id.device_type = 0x0Bu;
+	id.trans_type = 5u;
+	radiant_search_seen_note_rf(&g_s, &id, radiant_radio_now(), RF_A);
+
+	/* Same frequency: steered (control, so the filter is what is tested). */
+	zassert_ok(radiant_search_begin_rf(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE,
+					   &want_any, radiant_radio_now(),
+					   RADIANT_SEARCH_TIMEOUT_NONE, RF_A));
+	zassert_equal(1u, g_s.n_steer, "control: a same-frequency cache hit must steer");
+	steered = g_s.steer[0];
+	zassert_equal(radiant_search_set_for_devnum(&g_s, 0x0A09u), steered);
+	zassert_ok(radiant_search_end(&g_s, 0u));
+	g_s.n_steer = 0u;
+
+	/* Other frequency: not steered. */
+	zassert_ok(radiant_search_begin_rf(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE,
+					   &want_any, radiant_radio_now(),
+					   RADIANT_SEARCH_TIMEOUT_NONE, RF_B));
+	zassert_equal(0u, g_s.n_steer,
+		      "a device heard on RF %u steered a channel on RF %u", RF_A, RF_B);
+	zassert_ok(radiant_search_end(&g_s, 0u));
+}

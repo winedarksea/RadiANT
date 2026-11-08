@@ -250,6 +250,7 @@ static void select_next_set(struct radiant_search *s)
 		if (s->next_set >= s->n_sets) {
 			s->next_set = 0u;
 			s->stats.sweeps++;
+			s->pass_done = true;
 		}
 		tick_revisits(s, set);
 	}
@@ -439,10 +440,36 @@ const struct radiant_search_stats *radiant_search_get_stats(const struct radiant
  * ---------------------------------------------------------------------------
  */
 
+static int begin_common(struct radiant_search *s, uint8_t channel,
+			enum radiant_search_mode mode,
+			const struct radiant_search_id_filter *want,
+			radiant_time_t now, uint32_t timeout_us, uint8_t rf_plus1);
+
 int radiant_search_begin(struct radiant_search *s, uint8_t channel,
 		     enum radiant_search_mode mode,
 		     const struct radiant_search_id_filter *want, radiant_time_t now,
 		     uint32_t timeout_us)
+{
+	return begin_common(s, channel, mode, want, now, timeout_us, 0u);
+}
+
+int radiant_search_begin_rf(struct radiant_search *s, uint8_t channel,
+			    enum radiant_search_mode mode,
+			    const struct radiant_search_id_filter *want,
+			    radiant_time_t now, uint32_t timeout_us,
+			    uint8_t rf_index)
+{
+	if (rf_index > (uint8_t)RADIANT_RF_INDEX_MAX) {
+		return RADIANT_SEARCH_EINVAL;
+	}
+	return begin_common(s, channel, mode, want, now, timeout_us,
+			    (uint8_t)(rf_index + 1u));
+}
+
+static int begin_common(struct radiant_search *s, uint8_t channel,
+			enum radiant_search_mode mode,
+			const struct radiant_search_id_filter *want,
+			radiant_time_t now, uint32_t timeout_us, uint8_t rf_plus1)
 {
 	struct radiant_search_chan *ch;
 
@@ -459,6 +486,7 @@ int radiant_search_begin(struct radiant_search *s, uint8_t channel,
 	ch = &s->chans[channel];
 	ch->active = true;
 	ch->mode = mode;
+	ch->rf_plus1 = rf_plus1; /* before the seen_find() below reads it */
 	ch->want = *want;
 	ch->deadline = (timeout_us == RADIANT_SEARCH_TIMEOUT_NONE)
 			       ? RADIANT_TIME_NEVER
@@ -516,6 +544,82 @@ int radiant_search_end(struct radiant_search *s, uint8_t channel)
 	}
 	memset(&s->chans[channel], 0, sizeof(s->chans[channel]));
 	return RADIANT_SEARCH_OK;
+}
+
+uint8_t radiant_search_rf_get(const struct radiant_search *s)
+{
+	return inst_ok(s) ? s->cfg.rf_index : 0u;
+}
+
+/*
+ * Decide the sweep's frequency for the window about to be selected. Called
+ * only with no window in flight and only at a set boundary, so it can neither
+ * disturb an armed window nor cut a set's dwell short.
+ *
+ *  - No channel declared a frequency: nothing to follow, never retune.
+ *  - Nobody declared the current frequency: this pass would be heard by no
+ *    one, so move now to the lowest declared one.
+ *  - Several frequencies declared and a pass has just completed: move to the
+ *    next declared one above the current (wrapping), so each gets a whole
+ *    pass in turn. Never mid-pass: one frequency per pass keeps "certain
+ *    within one sweep" true for each of them.
+ * A move restarts the cursor so the new frequency gets a complete pass.
+ */
+static void retune_at_boundary(struct radiant_search *s)
+{
+	int n = 0;
+	int lowest = -1;
+	int above = -1;
+	bool cur_wanted = false;
+	int target;
+
+	for (uint8_t c = 0; c < (uint8_t)RADIANT_SEARCH_MAX_CHANNELS; c++) {
+		const struct radiant_search_chan *ch = &s->chans[c];
+		bool dup = false;
+		int rf;
+
+		if (!ch->active || ch->rf_plus1 == 0u) {
+			continue;
+		}
+		rf = (int)ch->rf_plus1 - 1;
+		for (uint8_t j = 0; j < c; j++) {
+			if (s->chans[j].active && s->chans[j].rf_plus1 == ch->rf_plus1) {
+				dup = true;
+				break;
+			}
+		}
+		if (dup) {
+			continue;
+		}
+		n++;
+		if (rf == (int)s->cfg.rf_index) {
+			cur_wanted = true;
+		}
+		if (lowest < 0 || rf < lowest) {
+			lowest = rf;
+		}
+		if (rf > (int)s->cfg.rf_index && (above < 0 || rf < above)) {
+			above = rf;
+		}
+	}
+
+	if (n == 0) {
+		return;
+	}
+	if (!cur_wanted) {
+		target = lowest;
+	} else if (n > 1 && s->pass_done) {
+		target = (above >= 0) ? above : lowest;
+	} else {
+		s->pass_done = false;
+		return;
+	}
+
+	s->pass_done = false;
+	if (target != (int)s->cfg.rf_index) {
+		s->cfg.rf_index = (uint8_t)target;
+		s->next_set = 0u;
+	}
 }
 
 bool radiant_search_is_searching(const struct radiant_search *s, uint8_t channel)
@@ -576,6 +680,7 @@ int radiant_search_window(struct radiant_search *s, radiant_time_t t_earliest,
 	 * selected for the remainder, so "certain within one sweep" survives
 	 * fragmentation instead of degrading into "likely". */
 	if (!s->set_valid || dwell_owed(s) == 0u) {
+		retune_at_boundary(s);
 		select_next_set(s);
 	}
 	if (!s->set_valid) {
@@ -685,7 +790,7 @@ static void handle_ok(struct radiant_search *s, const struct radiant_rx_event *e
 	}
 
 	s->stats.frames_ok++;
-	radiant_search_seen_note(s, &f.id, evt->t_sync);
+	radiant_search_seen_note_rf(s, &f.id, evt->t_sync, s->cfg.rf_index);
 
 	memset(&r, 0, sizeof(r));
 	r.id = f.id;
@@ -719,6 +824,11 @@ static void handle_ok(struct radiant_search *s, const struct radiant_rx_event *e
 		struct radiant_search_chan *ch = &s->chans[c];
 
 		if (!ch->active || !id_match(&ch->want, &f.id)) {
+			continue;
+		}
+		/* Heard on a frequency this channel is not on. */
+		if (ch->rf_plus1 != 0u &&
+		    (uint8_t)(ch->rf_plus1 - 1u) != s->cfg.rf_index) {
 			continue;
 		}
 		if (ch->mode == RADIANT_SEARCH_MODE_ACQUIRE && acquire_claimed) {
@@ -1024,6 +1134,16 @@ static bool same_device(const struct radiant_channel_id *a, const struct radiant
 void radiant_search_seen_note(struct radiant_search *s, const struct radiant_channel_id *id,
 			  radiant_time_t now)
 {
+	if (!inst_ok(s)) {
+		return;
+	}
+	radiant_search_seen_note_rf(s, id, now, s->cfg.rf_index);
+}
+
+void radiant_search_seen_note_rf(struct radiant_search *s,
+				 const struct radiant_channel_id *id,
+				 radiant_time_t now, uint8_t rf_index)
+{
 	if (!inst_ok(s) || id == NULL) {
 		return;
 	}
@@ -1034,6 +1154,7 @@ void radiant_search_seen_note(struct radiant_search *s, const struct radiant_cha
 		if (s->seen[i].valid && same_device(&s->seen[i].id, id)) {
 			s->seen[i].id = *id;
 			s->seen[i].t_seen = now;
+			s->seen[i].rf = rf_index;
 			return;
 		}
 	}
@@ -1044,6 +1165,7 @@ void radiant_search_seen_note(struct radiant_search *s, const struct radiant_cha
 	s->seen[s->seen_next].valid = true;
 	s->seen[s->seen_next].id = *id;
 	s->seen[s->seen_next].t_seen = now;
+	s->seen[s->seen_next].rf = rf_index;
 	s->seen_next = (uint8_t)((s->seen_next + 1u) % (uint8_t)RADIANT_SEARCH_SEEN_ENTRIES);
 }
 
@@ -1070,6 +1192,11 @@ static bool seen_find(const struct radiant_search *s,
 			continue;
 		}
 		if (best != NULL && e->t_seen <= best->t_seen) {
+			continue;
+		}
+		/* A device heard on another frequency is not this channel's. */
+		if (filtered && s->chans[channel].rf_plus1 != 0u &&
+		    (uint8_t)(s->chans[channel].rf_plus1 - 1u) != e->rf) {
 			continue;
 		}
 		if (filtered && !chan_permits(s, channel, &e->id)) {

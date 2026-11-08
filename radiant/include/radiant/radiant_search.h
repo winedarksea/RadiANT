@@ -481,12 +481,18 @@ struct radiant_search_chan {
 	uint16_t                        steer_set;
 	uint16_t                        revisit_gap;  /* round-robin sets between revisits */
 	uint16_t                        revisit_left; /* round-robin sets until the next one */
+	/* The RF index this channel listens on, plus one; 0 = not declared, which
+	 * is every caller before radiant_search_chan_rf_set() existed: such a
+	 * channel takes whatever the sweep hears and never steers the sweep's
+	 * frequency. */
+	uint8_t                         rf_plus1;
 };
 
 struct radiant_search_seen {
 	bool                  valid;
 	struct radiant_channel_id id;
 	radiant_time_t            t_seen;
+	uint8_t                   rf; /* the frequency it was heard on */
 };
 
 struct radiant_search {
@@ -530,6 +536,9 @@ struct radiant_search {
 	uint16_t next_set;
 	uint16_t steer[RADIANT_SEARCH_STEER_ENTRIES];
 	uint8_t  n_steer;
+	/* The round-robin cursor wrapped since the last retune decision: a pass
+	 * has just finished. See retune_at_boundary(). */
+	bool     pass_done;
 
 	struct radiant_search_chan chans[RADIANT_SEARCH_MAX_CHANNELS];
 	struct radiant_search_seen seen[RADIANT_SEARCH_SEEN_ENTRIES];
@@ -805,6 +814,39 @@ void radiant_search_note_denied(struct radiant_search *s, uint32_t window_us);
  * cache useful at the moment that sensor drops. */
 void radiant_search_seen_note(struct radiant_search *s, const struct radiant_channel_id *id,
 			  radiant_time_t now);
+
+/* The same, for a device heard on a known frequency that need not be the
+ * sweep's (a tracked slave's own channel). */
+void radiant_search_seen_note_rf(struct radiant_search *s,
+				 const struct radiant_channel_id *id,
+				 radiant_time_t now, uint8_t rf_index);
+
+/*
+ * The frequency axis, kept off the sweep's geometry.
+ *
+ * A channel declares its RF index by starting with radiant_search_begin_rf()
+ * (radiant_search_begin() leaves it undeclared). Once declared:
+ *  - the channel is offered only devices heard on that frequency (live offers
+ *    and the seen cache both);
+ *  - the sweep follows it. When every declared channel agrees, the sweep
+ *    retunes to that frequency as soon as the window being selected would be
+ *    heard by nobody, restarting the pass so it is complete on the new
+ *    frequency. When they disagree, the sweep stays for whole passes and
+ *    alternates between the wanted frequencies, never in the middle of one.
+ *
+ * The retune happens inside radiant_search_window(), between windows, so it
+ * never touches a window in flight and never drops a searching channel
+ * (radiant_search_init() does both). A search in which no channel declares a
+ * frequency never retunes: cfg.rf_index stays as configured.
+ */
+int radiant_search_begin_rf(struct radiant_search *s, uint8_t channel,
+			    enum radiant_search_mode mode,
+			    const struct radiant_search_id_filter *want,
+			    radiant_time_t now, uint32_t timeout_us,
+			    uint8_t rf_index);
+
+/* The frequency the sweep is on now (cfg.rf_index until a retune). */
+uint8_t radiant_search_rf_get(const struct radiant_search *s);
 
 /* The most recently seen unexpired device matching want, if any. */
 bool radiant_search_seen_lookup(const struct radiant_search *s,
