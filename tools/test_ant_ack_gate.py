@@ -6,7 +6,7 @@ import unittest
 import ant_wire as w
 
 try:
-    from ant_ack_gate import assess, named_events, reader_timeout_ms, receive_loss
+    from ant_ack_gate import assess, assess_parts, exit_code, named_events, reader_timeout_ms, receive_loss
     from ant_probe import READ_TIMEOUT_MS, SerialDevice
 except SystemExit:  # pyusb missing: ant_probe exits rather than raising
     # Same reason as test_ant_features.py; otherwise this one module takes
@@ -76,6 +76,39 @@ class AckGateTests(unittest.TestCase):
             report.update(changes)
             with self.subTest(changes=changes):
                 self.assertTrue(assess(report, 1.5))
+
+    def _verdict(self, **changes):
+        report = copy.deepcopy(self.report)
+        report.update(changes)
+        sufficiency, quality = assess_parts(report, 1.5)
+        report['sufficiency_failures'] = sufficiency
+        report['quality_failures'] = quality
+        return report
+
+    def test_a_short_clean_run_is_only_insufficient(self):
+        report = self._verdict(seconds=60, sent=50, accepted=50, completed=50,
+                               terminal_events=50, peer_received=50)
+        self.assertEqual(len(report['sufficiency_failures']), 1)
+        self.assertEqual(report['quality_failures'], [])
+        self.assertEqual(exit_code(report, gate=False), 0)
+        self.assertEqual(exit_code(report, gate=True), 1)
+
+    def test_a_short_run_with_a_quality_failure_exits_nonzero_without_gate(self):
+        report = self._verdict(seconds=60, sent=50, accepted=50, completed=40,
+                               terminal_events=50, peer_received=50)
+        self.assertTrue(report['quality_failures'])
+        self.assertEqual(exit_code(report, gate=False), 1)
+        self.assertEqual(exit_code(report, gate=True), 1)
+
+    def test_a_clean_full_run_exits_zero_either_way(self):
+        report = self._verdict()
+        self.assertEqual(exit_code(report, gate=False), 0)
+        self.assertEqual(exit_code(report, gate=True), 0)
+
+    def test_assess_is_both_halves(self):
+        report = self._verdict(seconds=60, completed=0)
+        self.assertEqual(assess(report, 1.5),
+                         report['sufficiency_failures'] + report['quality_failures'])
 
 
 if __name__ == '__main__':

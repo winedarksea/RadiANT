@@ -78,10 +78,33 @@ def channel(dev, reader, ch, master, number, dtype, period, trans_type=5, scan=F
     command(dev, reader, w.MESG_OPEN_CHANNEL_ID, bytes([ch]))
 
 
-def assess(report, ceiling):
-    reasons = []
+def assess_parts(report, ceiling):
+    """Split the verdict: (sufficiency, quality) failure reasons.
+
+    Sufficiency is only "the run was too short to count as acceptance" (300 s,
+    300 commands); a short smoke run is legitimate without --gate. Quality is
+    everything else: a run that lost, duplicated or mis-delivered anything is
+    wrong however short it was.
+    """
+    sufficiency = []
     if report['seconds'] < 300 or report['sent'] < 300:
-        reasons.append('acceptance requires at least 300 seconds and 300 commands')
+        sufficiency.append('acceptance requires at least 300 seconds and 300 commands')
+    return sufficiency, _quality(report, ceiling)
+
+
+def assess(report, ceiling):
+    sufficiency, quality = assess_parts(report, ceiling)
+    return sufficiency + quality
+
+
+def exit_code(report, gate):
+    """Quality failures always exit non-zero; sufficiency only under --gate."""
+    return int(bool(report['errors']) or bool(report['quality_failures'])
+               or (gate and bool(report['sufficiency_failures'])))
+
+
+def _quality(report, ceiling):
+    reasons = []
     if report['accepted'] != report['sent']:
         reasons.append('not every command was accepted')
     if report['completed'] / max(1, report['sent']) < 0.99:
@@ -356,9 +379,13 @@ def run(args, *, phase_hook=None):
         if phase_hook is not None:
             phase_hook('after_cleanup')
     gates = tomllib.loads((Path(__file__).parent / 'ab_gates.toml').read_text())
-    report['gate_failures'] = assess(report, gates['gates']['loss_exact']['absolute_ceiling_pct'])
+    sufficiency, quality = assess_parts(
+        report, gates['gates']['loss_exact']['absolute_ceiling_pct'])
+    report['sufficiency_failures'] = sufficiency
+    report['quality_failures'] = quality
+    report['gate_failures'] = sufficiency + quality
     report['pass'] = not report['gate_failures']
     if args.json_out:
         Path(args.json_out).write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
     print(json.dumps(report, indent=2))
-    return int(bool(report['errors']) or (args.gate and not report['pass']))
+    return exit_code(report, args.gate)

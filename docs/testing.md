@@ -28,7 +28,13 @@ and a 100 ms allowance for host notification latency (less than half a bench
 channel period). Each RX matches at most one TX; a neighbouring slot cannot
 replace a missing broadcast. Staged payload gaps are a separate producer
 diagnostic: a host update can be overwritten before it reaches the air. The
-receive check uses the existing 1.5% absolute ceiling. A comparative
+receive check uses the existing 1.5% absolute ceiling. The verdict has two
+parts. Quality failures (a lost, duplicated or mis-delivered command, a runner
+error, receive loss over the ceiling) make the exit status non-zero with or
+without `--gate`. Sufficiency (at least 300 seconds and 300 commands) fails the
+exit status only under `--gate`, so a short smoke run is not mistaken for
+acceptance but cannot hide a defect. The JSON report lists them separately as
+`quality_failures` and `sufficiency_failures`. A comparative
 SDK-receiver loss gate still requires a
 separate, comparable SDK receiver baseline; this two-ended test alone does not
 provide one. Synthetic sensor pages exercise delivery and scheduling, not trainer
