@@ -17,8 +17,7 @@ Raw per-window logs are gitignored but still on disk on the bench PC.
     J-Link CommanderScript.
   - Never kill ant_sim.
   - Feather flashes are rationed. Reflash the nRF52840 Dongle over DFU.
-- Only one agent may use the bench at a time. Items 5 and 6 need no hardware
-  and can run in parallel with anything.
+- Only one agent may use the bench at a time.
 
 ## 1. [DONE 2026-11-07, one open follow-up] Receive loss that depends on the device number
 **Fixed** by `CONFIG_RADIANT_NRF_SLIP_GUARD` (ADR 0019). Cause: the nRF demodulator
@@ -66,30 +65,6 @@ not the transmitter. 120 s windows at -31..-48 dBm, one pinned power channel:
 - Done when RadiANT loss on #54100 is within the Wilson CI of the Garmin's,
   with a 0.5 pp margin.
 
-## 2. [DONE 2026-11-07: HOST TOOL, not firmware] Dongle did not answer SYSTEM_RESET
-**Cause:** a host read race. ant_ack_gate.py read USB through a 50 ms
-FrameReader; STARTUP arrives 52.2 ms after SYSTEM_RESET; a libusb-win32 read
-timeout that lands as a frame arrives loses it whole.
-`tools/ant_reset_loop.py` on the Dongle, idle:
-- 50 ms read: 11/1000 lost (1.1 %).
-- 52 ms read: 10/1000 lost.
-- 1000 ms read: 0/1000 lost.
-With a channel tracking: 0/500 at 50 ms (mechanism not established).
-**Fix:** `ant_ack_gate.reader_timeout_ms()`: USB gets `READ_TIMEOUT_MS`, and
-only serial endpoints keep 50 ms. Verified 0/1000 through open-then-reset.
-Evidence: archive/benchmarks/2026-11-07-reset-and-power/.
-
-(Original notes follow.)
-- Board: nRF52840 Dongle, serial 3D55F77818BE772A.
-- In round B acked pass 1 (B_acked_p1_Dongle.log), ant_probe.reset_stack sent
-  SYSTEM_RESET and got no STARTUP message within 3 s. ant_ack_gate then
-  raised "endpoint ... did not reset".
-- It happened once in about 94 endpoint opens across the run, and the next
-  pass was fine.
-- Task: loop reset_stack on the Dongle (500 or more times, with and without a
-  channel open and traffic flowing) to get a rate. If it reproduces, find
-  where STARTUP is dropped or delayed.
-
 ## 3. [CLASSIFIED 2026-11-07: PROBE side, not firmware; trigger unknown] 54L15 receiver's VCOM died mid-window
 **Soak:** 1 drop in 10 × 300 s windows (window 3, 204 s), with the same
 error. All three checks say it is not the firmware:
@@ -119,82 +94,17 @@ Evidence: archive/benchmarks/2026-11-07-vcom-soak/README.md.
 - Task: repeat 300 s four-channel windows with the 54L15 receiving, and
   capture its log VCOM (it needs DTR) to see whether the firmware faulted.
 
-## 4. [DONE 2026-11-07: decided "boost the unset default and level 4 only"]
-**Change:** the boost raises only the unset default and LVL_4; an explicit
-LVL_3 is a true 0 dBm. It asks for LVL_5 on every radiant build and lets the
-backend round, so the 54L15 goes to +8 (was +4) and CC26xx to +5 (was +4);
-the 52840 (+8) and the 5340 net core (0) are unchanged.
-**On air, 54L15 transmitting, Dongle RSSI, A/B/A:**
-- unset default: -21.0 / -21.0 dBm, the same as explicit LVL_5 (-20.96).
-- LVL_3: -27.9 dBm.
-- Levels 3, 2, 1 and 0: a slope of 1.05 dB per dB.
-- Fine ladder: dial check PASS (0.99 dB per dB, worst rung 1.1 dB off).
-ant_sens's fine ladder now sends every rung raw, because its +4 rung sent as
-LVL_4 would now measure +8.
-Evidence: archive/benchmarks/2026-11-07-reset-and-power/.
-**Open (found doing this):** ant_sens reports a spurious 17.5 % loss on short
-rungs whose basis is `event_counter` (0 RX_FAIL, every packet received), which
-produced a fake knee. See that README.
+## 4. [HOST TOOL, open] ant_sens reports spurious loss on short event_counter rungs
+- Found while settling the TX power boost (done 2026-11-07: the boost now
+  raises only the unset default and LVL_4; LVL_3 is a true 0 dBm).
+- ant_sens reports a spurious 17.5 % loss on short rungs whose basis is
+  `event_counter` (0 RX_FAIL, every packet received), which produced a fake
+  knee. Evidence: archive/benchmarks/2026-11-07-reset-and-power/README.md.
 
-(Original notes follow.)
-- CONFIG_ANT_DONGLE_TX_POWER_BOOST defaults to y. It maps ANT power levels
-  3 and 4 to the part's ceiling: +8 dBm on a 52840, +4 on the 54L15, 0 on the
-  5340.
-- In ANT, level 3 means 0 dBm and is the default, so a host that never sets
-  the power transmits at +8 dBm on a 52840.
-- It also skewed the comparison: the 54L15 ladder's "0 dBm" step was really
-  +4 dBm and failed its dial check.
-- Options:
-  - keep the boost and document it;
-  - boost level 4 only;
-  - default the boost to n.
-
-## 5. [DONE 2026-11-07] ant_verify decodes FE-C pages as bike-power pages
-**Fixed:** `ChannelAnalyzer.feed()` routes on device type first; the
-bike-power decoders run only on 0x0B, FE-C gets `_feed_fec()` (speed from
-0x10, power/cadence from 0x19 via the new `ap.decode_fec_trainer()`), and SDM
-and unknown types stop at the page histogram. Worse than noted below: the
-misrouting also produced two **false FAILs** on every FE-C channel
-("accumulator continuity: 74 violations", "sensor liveness: advanced on 0 of
-681 pairs") from the constant equipment-type byte read as the event count, so
-any run with an FE-C channel reported FAILED. Cadence n=672 was page 0x10's
-distance byte (460) plus page 0x11's cycle-length byte (212).
-Test: tools/test_ant_verify.py `FitnessEquipmentIsNotBicyclePower`.
-
-(Original notes follow.)
-- ant_verify.py:625-634 routes by page number alone. On an FE-C channel
-  (device type 17), page 0x10 is General FE Data, but it goes to
-  _feed_power_std.
-- The result is a "power" of 9471-17663 W (mean 13843) on every receiver,
-  including the Garmin. Those values fit speed in mm/s. The cadence figures
-  (up to 254 rpm) are probably wrong for the same reason.
-- Fix: send pages to the bike-power decoders only on device type 11. Either
-  give FE-C its own decoder (power comes from page 0x19) or report nothing.
-- Add a test that replays FE-C pages and expects no bike-power figures.
-
-## 6. [DONE 2026-11-07] ant_features rejects 7-byte capabilities
-**Fixed:** the step-1 gate is now `ant_features.capabilities_usable()`, which
-needs `MIN_CAPABILITIES_LEN = 7` bytes (the only byte read is [6], advanced
-options 3); a reply shorter than 9 logs "standard 7 bytes; extended bytes
-absent". **Correction to the note below:** only line 646 was the capabilities
-check. Line 373 checks the SDU mask readback (1 index byte + 8 mask bytes = 9),
-which is correct and unchanged. Test: tools/test_ant_features.py with the
-Garmin's real reply `080800ba3600df`. The Garmin re-run of the tool itself
-waits for the stick to be plugged in.
-
-(Original notes follow.)
-- ant_features.py:373 and :646 require at least 9 bytes. The Garmin USB-m
-  returns 7, so the tool exits with rc 1.
-- Fix: decode the standard bytes and treat the extended ones as absent.
-- Add a test using the Garmin's real 7-byte reply.
-
-## Not bugs (rig follow-ups, for context only)
-- The sensitivity ladder never reached the Garmin's knee. The boards need
-  more distance; fill in [placement] in
-  tools/compare_rigs/2026-11-07-fixed.toml.
-- The 54L15's lowest custom TX power is -28 dBm; the 5340's is -40 dBm.
-- Acked transfers at n=120 can never show Equal under the 0.5 pp rule.
-  That needs about 770 transfers per receiver.
+## 6. [HOST TOOL, residual] Re-run ant_features against the Garmin
+- The 7-byte capabilities fix landed 2026-11-07 (`capabilities_usable()`,
+  tested with the Garmin's real reply `080800ba3600df`). The tool itself has
+  not been re-run on the Garmin; do it when the stick is plugged in.
 
 # Open issues from the 2026-11-07 extensions and security review
 
@@ -324,65 +234,8 @@ first-boot cases against tests/fake_rng.c.
 - Task: write the ADR choosing among the three shapes in
   hrm-reference-design.md 5.1, then add the one caller it chooses.
 
-## 6. [DONE 2026-11-07] README calls it "three independent switches"
-- README.md:389. X_PRIV was withdrawn (ADR 0006); there are two switches.
-- Now reads "the two independent payload switches and the identity rule",
-  matching the title of docs/radiant-security.md.
-
-## 7. [DONE 2026-11-07] The secured counter counts pages; the receiver counts periods
-**Fixed:** the counter is the sender's slot index, derived from the slot's
-t_sync (radiant_sec_tx_transform() gained the argument; ant_radio_radiant.c
-passes radiant_channel_next_slot()). The first secured transform after 0xF3
-latches the phase; slots are spaced with radiant_channel_counts_to_us(), the
-channel's own rounded spacing, so it cannot creep. A wrap of more than one
-epoch is applied at once; a slot posted twice returns its cached bytes; an
-earlier slot is refused. profile_sched now advances byte [1] every slot, and
-tools/ant_pages.py's TlmPageScheduler mirrors it; ant_verify reports 0x60
-exact loss as delta - 1 - heard-between (scope "slot"), withheld when a pair
-hears more than its delta allows (a pre-rule node).
-Evidence (radiant/tests on the nRF5340 DK, 20 000-slot streams):
-- Before (master radiant_sec.c, same tests): a 12-slot clear run per cycle
-  verified 816 / 353 / 162 windows at W = 2 / 4 / 8 against 8838 / 4253 / 1941
-  the slot index says should, and nothing in the last cycle; skipping 1 slot
-  in 40 at W = 8 verified 900, 1538 unverified; slot-aligned sparse X_CONF sent
-  counter 3 at slot 1003; a re-posted slot built a second ciphertext.
-  dropped_replay stayed 0 throughout: nearest-rollover resolution keeps every
-  counter within 128 of expected, so the failure shows as windows that never
-  verify (wrong nonce, wrong window), not as replays.
-- After: every window the slot index says should verify does, none other does,
-  dropped_replay 0, in all ten stream runs; radiant/tests 914/914,
-  radiant/tests/api (SEC + host messages) 66/66.
-- Cost of a clear slot in a window: docs/radiant-security.md 3.2 (2-14 % of
-  secured pages unverified, W = 2..8). Aligning the runs is item 7a.
-- Size: security text +5948 B (ceiling 6144), bss +6493 B (ceiling 7168),
-  i.e. +228 / +192 against the same-day baseline.
-
-(Original notes follow.)
-- radiant_sec_tx_transform() (radiant/src/radiant_sec.c) advances the counter
-  only for pages inside the secured range. The receiver's expected_index() is
-  elapsed time divided by the channel period: one count per slot.
-- Every 0x60 node also sends descriptor frames and common pages 80/81 in each
-  121-message cycle (radiant-telemetry.md section 6). Those slots do not
-  advance the counter, so it falls behind the receiver's clock every cycle.
-- Since 4f5cf4f (2026-11-06) the receiver corrects its anchor by at most
-  period/16 per verified window, which is slower than the gap grows. With 5 to
-  12 unsecured slots per cycle the gap passes the 128-period slack in roughly
-  8-45 min at 4 Hz; a larger W and a longer descriptor are faster. After that
-  every packet is counted as dropped_replay. The old per-packet re-anchor hid
-  this.
-- Sparse mode cannot work on a secured channel at all: the first packet after
-  a silence longer than 128 periods is outside the slack. Section 3.1 of
-  docs/radiant-security.md lists sparse mode as a case the design handles.
-- No test sends unsecured pages inside a secured stream.
-- Task: write the failing test first (a descriptor set plus 0x50/0x51 in every
-  121 slots, 20 000 slots, verified windows expected throughout). Then define
-  the counter as the slot index: advance it on every transmitted slot, and
-  derive it from time on a sparse node. Amend radiant-telemetry.md section 6
-  ("counts data pages only") and its loss-detection rule to match.
-- Do this before item 2: it is the counter's meaning on the wire.
-
 ## 7a. [DESIGN, deferred by decision 2026-11-07] Align clear runs to MAC windows
-- With the counter now the slot index (item 7), every window that holds a
+- With the counter now the slot index (item 7, done 2026-11-07), every window that holds a
   clear slot (descriptor, page 80/81) is unverified, and so is the window
   before it. Measured cost: docs/radiant-security.md 3.2.
 - The fix would be profile_sched placing each cycle's clear run on whole
@@ -431,13 +284,23 @@ Evidence (radiant/tests on the nRF5340 DK, 20 000-slot streams):
 - The same exclusion radius (open decision R1 of the 2026-10-31 review)
   predicts about 8.7 % loss per master on the treadmill BLE build, against
   9.5 % measured.
-- Task: build ADR 0018's recommendation (hold the elastic grant through each
-  boundary, decided at the placement deadline), adding the per-set coverage
-  counter first. A/B/A with the stepped-offset harness. That harness
-  (disc_phase.py) lived in a session scratchpad and may be gone; if so,
-  rebuild it into tools/.
-- Done when the offsets that failed bind as fast as the control with no
-  tracked channel.
+- Not the shared-radio tradeoff: measured with the other stack silent and
+  MPSL refusing nothing. It is one 24 ms placement notice per grant boundary,
+  and the boundaries are phase-locked to the tracked slot.
+- ADR revised 2026-11-07: MPSL caps a grant at 100 ms, so a 246 ms period
+  needs three grants whatever is done. Candidate (a) (hold the elastic grant
+  through the tracked boundary, with a bridging extension decided at the
+  placement deadline) takes the deaf fraction from ~30 % locked to ~21 %
+  drifting, and makes it independent of how many channels are tracked. It
+  does not reach zero; that needs the next request pipelined behind the live
+  grant (candidate d, a follow-on with its own mpsl_arb spike first).
+- Task: build (a) per the ADR, adding the per-set coverage counter first.
+  A/B/A with the stepped-offset harness. That harness (disc_phase.py) lived
+  in a session scratchpad and may be gone; if so, rebuild it into tools/.
+- Done when all 17 offsets bind, the median within about one sweep of the
+  control and none beyond about four, and the chunk mask moves between
+  reports instead of repeating. Not done-when "as fast as the control at
+  every offset": with one session that is (d)'s criterion, not (a)'s.
 
 ## 11. [BRANCH, bench] review/2026-10-31-timing has waited a week
 - One commit, 6df53e7, "timing fixes (UNVERIFIED on air - do not merge without
@@ -498,19 +361,152 @@ Evidence (radiant/tests on the nRF5340 DK, 20 000-slot streams):
   next_at() for denied and missed slots so the docs become true. Decide when
   the first 0x60 app lands.
 
-## Reviewed and not moved here
-- X_CONF without X_AUTH is legal. Its verdict is CLEAR, so a host is told it
-  is unauthenticated, and its integrity is no worse than a clear channel.
-  The real fault is wording: docs/radiant-security.md section 2 calls
-  unauthenticated encryption worse than none, while section 3 allows it.
-- The deterministic pairing scalar on an RNG-less node ties every past pairing
-  to K_dev. Recovering K_dev needs physical capture, which ADR 0009 puts out
-  of scope and which already exposes the current root key.
-- The coded-PHY 6 dB gate, nRF52840 errata 191, the unused ED-scan caller and
-  the heart-rate toggle-bit bench are already recorded as owed in ADR 0007,
-  ADR 0012 and ADR 0008. None affects a default build, since the coded PHY is
-  default n and no app enables the compat layer.
-- radiant_sec_configure() keeps the last-slot re-post cache. A re-post of the
-  same slot right after a W or switch change resends bytes built under the
-  old configuration. That is harmless: the nonce is the same, and the next
-  slot uses the new configuration.
+- Look into reducing the code size for fewer bytes in the critical size
+
+# Open issues from the 2026-11-08 release review (HEAD b89a112)
+
+Items 1-4 were confirmed by reading the code at this HEAD. The reviewer also ran
+compiled probes for 2 and 4. Nothing here has been run on hardware. The
+review's other two findings are already fixed (9ab6bc9, 971e38c); what is left
+of the second is item 1 of the section above.
+
+## 1. [FIRMWARE] Discovery assumes network 0 and frequency 57
+`api_search_cfg_build()` (apps/common/ant_radio_radiant.c:1182) gives the one
+shared sweep network 0's address and frequency 57, whatever the searching
+channels asked for. Tracking does honour both (`api_net_addr_for()`,
+`api_rf_of()`), so the channel never gets that far.
+
+**a. Network: small and clearly worth fixing.** With the ANT+ key installed
+only on network 1, the sweep stays on network 0's all-zero address and finds
+nothing, with no error.
+- Task: sweep on network 0's address if it is valid, else the lowest valid
+  network's. Re-init on the first valid key of any network, not only network 0
+  (:3579), keeping the live-carrier deferral. This is complete for now because
+  the key table only ever holds the ANT+ address.
+- Do not break Zwift: it scans on keyless networks 1 and 2 and relies on the
+  sweep still hearing ANT+ there. `test_an_assign_to_a_network_with_no_key_is_accepted`
+  must stay green, and do not refuse the assign.
+- Done when an api ztest shows the sweep moving to the ANT+ address after a key
+  on network 1 only.
+
+**b. Frequency: real, but lower value, and it needs a decision.** A slave on
+frequency 66 can never acquire a master on 66, though this library can be that
+master. One frequency per sweep is a deliberate design (radiant_search.h:360,
+radiant_search.c:306: a frequency axis multiplies sweep time). Only the ANT+ key
+is accepted, so private-network hosts are excluded regardless; this reaches only
+hosts using the ANT+ key off 57.
+- Cheapest useful step: `LOG_WRN` when a slave opens off 57, as the keyless
+  assign already does, so the silence becomes readable.
+- Full fix: let the sweep follow the searching channels' frequency when they all
+  agree, which costs ANT+-only sessions nothing. Alternate passes only when they
+  are mixed. Same live-carrier deferral as the key install.
+
+## 2. [FIRMWARE] Capabilities advertise features that only store configuration
+ADVANCED_OPTIONS_3 (ant_radio_radiant.c:4070) claims event filtering and
+selective data update. The filter is stored and never consulted
+(radiant_event.c:250), and SDU masks are only stored and read back. This is the
+"advertised and unimplemented" trap in docs/gotchas.md.
+- The stated reason not to filter (ant_radio.h:805, loss accounting needs
+  RX_FAIL) only matters to a host that sets the filter. It defaults to 0.
+- Same byte, same class, not in the review: search sharing round-trips but is
+  never consulted outside radiant_channel.c, and the encrypted-channel bit is set
+  although AES-CTR is refused (comment at :4075). Audit the whole byte.
+- No known host is at risk either way: archive/host-api says Zwift uses neither
+  the filter nor SDU.
+- Task: implement the event filter at the delivery point to the host
+  (`antr_on_message()` call, :559), after any internal accounting. Check the
+  bit-to-event mapping against the ANT message protocol document first. Replace
+  `test_event_filter_round_trips_and_filters_nothing`.
+- For each remaining bit, implement it or clear it. Clearing changes the
+  capabilities frame, so the nRF and cc26xx .antser transcripts need regenerating
+  on hardware, and the frame stops matching the sdk_ant reference. Keep accepting
+  the commands either way: an error to a host with no recovery path is a
+  regression (see the comment at :3216).
+
+## 3. [FIRMWARE, Matter] A reachability or label change can be lost until the next transition
+The flush reads each source's dirty flags per row with the lock held, drops the
+lock for the endpoint work, then clears every source's flags at the end
+(apps/dongle_thread/src/matter/ant/ant_bridge.cpp:831). A change landing in
+between is erased. `reachableDirty` is only set on a change (:1150), so later
+fresh samples do not repair it: Matter can show a live sensor as unreachable, or
+a dead one as reachable. A bind (:1184, :1198) races the same way. The window is
+the whole pass, which includes `PersistRowLabel()`.
+- Task: at the top of the pass, copy `reachable` and both flags for every source
+  into a local array and clear them, in one lock hold. Rows read the copy. A
+  change during the pass then stays dirty for the next pass.
+
+## 4. [FIRMWARE, MQTT] A pending offline is lost when a source is reused during an outage
+`owed[source]` holds one uuid (apps/dongle_thread/src/mqtt_sink.c:1201). Release
+A, bind B, release B during a broker outage, and A's "offline" is overwritten. A's
+retained status then reads "online" until A is bound again.
+`offline_overwritten` only counts it. Derived and rotated fields have no
+`expire_after`, so nothing else clears them in Home Assistant.
+- Task: replace the per-source uuid with one de-duplicated list of owed uuids,
+  2 x RADIANT_BINDING_MAX entries (16, 128 B). The drain clears only the uuid it
+  sent. A bind cancels a matching uuid anywhere in the list, not only on its own
+  source (:1207). Keep the counter for overflow.
+- Done when a ztest or the reviewer's probe shows both A and B offline after
+  reconnect.
+
+Items 5-7 come from a second pass over 69ac822..b89a112. 5 and the numbers in 7
+were reproduced with the real Python tools; the C side of 6 and 7 was read, not
+run.
+
+## 5. [HOST TOOL] ant_verify decodes sealed data pages it has not processed
+tools/ant_verify.py:775 hands received bytes to the decoder once the descriptor
+authenticates. `may_decode_data` only vouches for the schema, and its docstring
+(ant_pages.py:3118) makes the per-packet gate the caller's job. This caller has
+no gate, so the tool that produces our evidence reports forged data as clean.
+Reproduced through `ChannelAnalyzer`:
+- Valid X_AUTH descriptor, then an arbitrary unauthenticated page: decoded 4660,
+  counted as decoded, 0 violations.
+- X_CONF ciphertext of the value 100: decoded as 6579, 0 violations.
+- Task: when the schema has X_CONF or X_AUTH, count the page and do not decode
+  it, and report that count in the summary. Keep counting slots, since byte [1]
+  is in the clear. Real decryption and window verdicts are a separate, larger
+  job, only if someone needs them.
+- Done when both cases above report 0 decoded, with a test for each.
+
+## 6. [FIRMWARE, before any X_CONF node ships] X_CONF alone leaves byte [7] in plaintext
+CTR covers five bytes whether or not X_AUTH has claimed byte [7]: TX
+radiant/src/radiant_sec.c:903, RX :1241, and tools/radiant_crypto.py:307. Without
+X_AUTH the field area is 48 bits, so a field at bit offset 40 is sent in the
+clear under a schema announcing confidentiality. The sealed encoder accepts that
+layout. Reproduced in Python: byte [7] 0xAB went out as 0xAB.
+- The specs disagree: radiant-telemetry.md:655 says [2..7] without X_AUTH,
+  radiant-security.md:132 says [2..6] always.
+- X_CONF alone is not a corner case: it is the only secured mode a sparse node
+  may use (radiant-telemetry.md:1035). A host-driven X_CONF-only channel leaks
+  byte [7] the same way.
+- Task: process six bytes when AUTH is off, in TX, RX and `conf_transform()` and
+  its callers. Fix radiant-security.md 3.1 and the "reserved tag space" comment
+  at radiant_crypto.py:300, and update the shared vectors.
+- Prefer this to making the encoder refuse the layout, which would not help
+  host-driven channels. The on-air change is free now: `security.conf` is in no
+  release image.
+
+## 7. [FIRMWARE, before nodes ship] First-boot provisioning can pick a number that is hard to receive
+`self_provision()` (radiant/src/node/node_ident.c:248) stores the first key it
+draws without looking at the device number that key derives.
+`ant_identity.random_device_number()` already avoids run >= 8, and firmware only
+warns. The number comes from K_dev, so a bad draw is permanent, and the old
+defaults 4242/4243 were safe (run 4).
+- Computed over 1..65535: 11.1 % of numbers have run >= 8 for one device type,
+  11.8 % across the seven ANT+ types, 5.4 % have run >= 9. The reviewer's key
+  5d00..00 derives #37976, run 8, as claimed.
+- Size of the harm: run 9+ loses 1-5 % on an unguarded receiver. Run 8 sits below
+  the guard's default threshold of 9 and loses at most 0.2 % on a strong signal
+  (radiant/Kconfig:640), up to 1.25 % when weak (follow-up on item 1 of the
+  Garmin section). It is worth fixing because it is cheap and can only be done
+  before the first persistence.
+- Task: in `self_provision()`, derive the candidate's number before
+  `node_ident_provision()`. Redraw if `radiant_channel_id_alt_run()` reaches
+  `RADIANT_ADDR_ALT_RUN_AVOID` for any of the seven types `ant_identity.py`
+  checks. Bound it (16 draws is ample), and on exhaustion keep the last draw
+  rather than fail the boot. An all-zero draw must still fail as an RNG failure,
+  not be redrawn.
+- Do not change `derive_devnum()` or touch an already-provisioned key: existing
+  nodes keep their numbers and paired receivers.
+- Done when a test_node_ident case gives 5d00..00 then a good key from
+  tests/fake_rng.c and the second key is the one persisted. Note the rule in ADR
+  0020.

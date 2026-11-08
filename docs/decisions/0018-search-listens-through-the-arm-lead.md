@@ -2,17 +2,23 @@
 
 - **Status:** proposed. The measurement is done; the fix is not designed in
   code and nothing here has been built. It becomes its own plan.
-- **Date:** 2026-11-05
+- **Date:** 2026-11-05. **Revised 2026-11-07:** the candidate (a) arithmetic
+  was wrong (it assumed one grant could span a whole period; the gate caps a
+  grant at MPSL's 100 ms); the self-inflicted/inherent split, the 100 ms
+  consequence, the bridging-extension requirement, candidate (d) and the
+  corrected pass criteria were added. The measurement sections are unchanged.
 - **Builds on:** [0013](0013-sweep-is-the-elastic-consumer.md) (the sweep is the
   elastic consumer; tracked slots are inviolate),
   [0016](0016-merge-reach-is-the-arm-lead.md) (`min_arm_lead_us` is an
   exclusion radius, not slack)
 - **Related:** `review/2026-10-31-timing` (R1, C5-1, A14-1; unmerged and
-  unverified), review 2026-11-05 item 1
+  unverified), review 2026-11-05 item 1, `docs/p4-coexistence-bugs.md` bug 26
+  (where the 24 ms came from)
 
 > **Provenance.** Clean-room. Written from this project's source, its own bench
-> measurements and earlier decision records. Nothing here derives from sdk-ant,
-> `libant.a` or any ANT+ profile document. See [0002](0002-clean-room-policy.md).
+> measurements, nrfxlib's public `mpsl_timeslot.h` and earlier decision
+> records. Nothing here derives from sdk-ant, `libant.a` or any ANT+ profile
+> document. See [0002](0002-clean-room-policy.md).
 
 ---
 
@@ -150,32 +156,120 @@ spaced evenly, each 61.6 ms gap keeps ≈12.8 ms of listening. Discovery would
 then be blind to ~80 % of phases. The bridge's two self channels, and Zwift's
 four, are exactly that case.
 
+## Why this is not the shared-radio tradeoff
+
+Reviewers have asked whether this is just what sharing a radio costs. It is
+not, and the record should say so plainly, because the two costs scale with
+different things.
+
+**The inherent cost** is that when BLE or 802.15.4 actually owns the air,
+RadiANT cannot listen. It scales with the other stack's duty cycle and no
+design removes it.
+
+**The measured deafness is not that.** `gate.conf` runs MPSL with no other
+stack. Bug 26's sweep is the reference: at a 24 ms placement lead MPSL
+refused nothing (`blocked` 0 across 8563 grants). During all three bands the
+radio is off and the air is free. The band is RadiANT's own choreography: it
+hands the grant back, and then asks for a new one with 24 ms of notice.
+
+The 24 ms is **notice, not occupancy.** It is `PLACE_LEAD_US`, a Kconfig value
+swept until the *other* stack's scheduler stopped refusing requests (bug 26).
+It is paid once per request MPSL receives, and it is coupled to listening
+only through one API rule: `mpsl_timeslot_request()` answers `-NRF_EAGAIN`
+unless the session is IDLE (`mpsl_timeslot.h`; the gate's rule 1 at the top
+of `radiant_radio_nrf_gate_mpsl.c`). A request cannot be queued behind a live
+timeslot in its own session. So every boundary between two grants is a full
+lead with the radio idle, and the deaf fraction is
+
+> (notice) × (grant boundaries per period), with the boundaries phase-locked
+> to the tracked slot because the tracked window is its own grant.
+
+That is why it scales with the number of tracked channels (two boundaries
+each) and not with the other stack's load. The inherent cost scales the other
+way round. A design that leaves only the inherent cost is the target.
+
+## The 100 ms ceiling, which the first draft missed
+
+MPSL's `MPSL_TIMESLOT_LENGTH_MAX_US` is 100 ms, and the gate enforces it on
+the *extended* total: the extension chain stops at
+`g.granted_len_us + step <= MPSL_TIMESLOT_LENGTH_MAX_US`
+(`radiant_radio_nrf_gate_mpsl.c`, the `SIGNAL_TIMER0` case), and
+`caps.max_window_us` is 94.2 ms for the same reason. nrfxlib's header does not
+say whether MPSL itself accepts an extension past 100 ms total; the gate does
+not try. A 246.3 ms period therefore needs **at least three grants**, so at
+least three boundaries per period cyclically, and with one session each
+boundary is a full lead. The first draft's claim that holding one grant
+would close all three bands to "the tracked window plus 2 × 168 µs" assumed a
+grant spanning the whole period. It cannot.
+
+What a single held grant *can* do is stop the tracked window from being a
+grant of its own. Today the tracked window is one grant and the two chunks
+are two more: three boundaries, all locked to the tracked phase. If the
+tracked window sits inside a scan grant, the scan chain free-runs at one
+grant plus one lead per cycle (94.2 + 24.4 ≈ 118.6 ms), which is about 2.08
+boundaries per period, and, because 118.6 does not divide 246.3, the gaps
+**drift ≈9 ms per period against the tracked slot** instead of sitting on it.
+A master at a fixed phase is then deaf on some visits rather than on every
+visit.
+
+So the honest arithmetic for candidate (a) below is: about 21 % of each
+period unlistened instead of 30 %, no longer phase-locked, and independent of
+how many channels are tracked for as long as a 24.4 ms gap fits between
+neighbouring tracked instants (it does at four). Closing the remaining
+≈2 leads per period needs the next request to reach MPSL *before* the current
+grant ends, which is candidate (d), and that is a core change this ADR scopes
+but does not take.
+
 ## Candidates, judged against the measurement
 
-**(a) Hold the elastic grant through the boundary, and arm in-grant.** A scan
-chunk is already the elastic class: it is granted short and extended, and
-the gate handles `SIGNAL_EXTEND`. A grant still held when the next operation
-is due can serve it at `min_arm_lead_in_grant_us` (168 µs) instead of 24.4 ms.
-The burst path already does this (`radiant_burst.c:331`), and
-`gate_acquire()` already serves a request that fits inside `g.grant_end`. If
-the scan's grant is extended to cover the tracked window, and the scheduler
-plans that window and the chunk after it against the in-grant lead, all three
-bands shrink to the tracked window plus 2 × 168 µs. That is under 1 % of the
-period, and it is the part a second master at that phase would collide on
-anyway. It is the only candidate that closes all three bands with one
-mechanism, and the mid-period band closes for free because chunk 2 is
-in-grant too.
+**(a) Hold the elastic grant through the tracked boundary, and arm in-grant.**
+A scan chunk is already the elastic class: it is granted short and extended,
+and the gate handles `SIGNAL_EXTEND`. A grant still held when the next
+operation is due can serve it at `min_arm_lead_in_grant_us` (168 µs) instead
+of 24.4 ms: `gate_acquire()` already serves a request that fits inside
+`g.grant_end`, and the acknowledged-data reply path already relies on it
+(`radiant_burst.c`, the `min_arm_lead_in_grant_us` check). If the scan grant
+is extended to cover the tracked window, and the scheduler plans that window
+and the chunk's continuation against the in-grant lead, the two bands at the
+tracked slot shrink to the tracked window plus two in-grant handoffs. The
+mid-period boundary stays, as above, but it stops being pinned.
+
+Three things the first draft left implicit, which the plan has to build:
+
+1. **A bridging extension, not the chain.** The chain grows just in time, one
+   `EXTEND_STEP_US` (1 ms) at the compare before the current end, so at
+   T − `min_arm_lead_us` the grant's end is only ~2 ms ahead and nothing is
+   known about T. The gate must arm a compare at T − lead − margin and ask
+   there for one extension of (lead + window + tail) in a single step. The API
+   allows any length ≥ 200 µs; the 1 ms step is this file's own drift policy
+   and a 30 ms step costs 15 µs of drift at the 500 ppm it already budgets.
+   The answer arrives within `MPSL_TIMESLOT_EXTENSION_PROCESSING_TIME_MAX_US`
+   (25 µs), so the decision is made at the compare.
+2. **The handoff is an operation boundary, not just a grant boundary.** The
+   HAL allows one operation in flight. The scan chunk must *end as an
+   operation* at T − handoff, the tracked window be armed in-grant, and the
+   scan continuation be armed in-grant after it. Each handoff goes through
+   `deliver_terminal()` and a scheduler pass on the gate's work queue, so
+   budget a handoff of 1–2 ms, not 168 µs, until it is measured.
+3. **The scheduler places the boundaries.** With the tracked window inside a
+   grant, `arm_next()` no longer stops the scan `lead` early. The chain will
+   sometimes land a boundary across T on its own; rather than fall back in
+   those periods, the scheduler should shorten the preceding chunk so that
+   the next grant starts inside (T − 94.2 ms + window, T − lead − margin).
+   It knows T a period ahead. The same freedom lets it rotate the mid-period
+   gap deliberately instead of relying on drift.
 
 The risk is ADR 0013 rule 1. The tracked slot would now depend on an
 extension MPSL may refuse when the other stack has the air scheduled. **The
 rule that keeps it safe:** decide at T − `min_arm_lead_us`, the last instant a
-fresh request for the tracked window can still be placed. If the extension
-that covers the tracked window has already succeeded by then, keep listening
-to T − in-grant lead and arm the tracked window inside the grant. Otherwise
-stop the chunk there and place the tracked request exactly as today. A
-refused extension then costs listening, never a tracked slot. Under real
-802.15.4 traffic some periods will fall back, and the band then reappears in
-those periods only, which is no worse than today.
+fresh request for the tracked window can still be placed. If the bridging
+extension has succeeded by then, keep listening to T − handoff and arm the
+tracked window inside the grant. Otherwise end the chunk there and place the
+tracked request exactly as today: the session goes IDLE, the staged request is
+placed, and the notice MPSL gets is the lead minus the hand-back. A refused
+extension then costs listening, never a tracked slot. Under real 802.15.4
+traffic some periods will fall back, and the band then reappears in those
+periods only, which is no worse than today.
 
 **(b) Let the 3-byte search window cover the tracked slot and route the
 tracked master's frame to its channel by channel ID.** This works only when
@@ -185,8 +279,8 @@ window into a merge across address formats, which ADR 0016's rule 1
 deliberately forbids. Its contention exposure is the same as (a)'s, because
 the tracked slot again lives inside the search's grant, and it is far more
 invasive in the channel layer, which would have to accept timing sync from a
-search frame. It solves the same three bands as (a) at a much higher cost.
-**Rejected.**
+search frame. It solves the same two bands as (a) at a much higher cost, and
+nothing about the mid-period one. **Rejected.**
 
 **(c) Yield the tracked slot to the search one period in K, only while a
 search is active.** This is the fallback, and the measurement shows how poor
@@ -199,48 +293,114 @@ search whenever a paired sensor is absent. That breaks ADR 0013 rule 1 by
 design. It does nothing for the mid-period band. **Kept only as a last
 resort** if (a) proves unbuildable on MPSL.
 
+**(d) Pipeline the next request so the notice runs while the current grant
+is live.** This is the only way past the ≈2 leads per period the 100 ms
+ceiling leaves, and it is what would take the self-inflicted cost from about
+a fifth of the period to the grant latency per boundary (≈1.7–2.8 ms
+measured, so ≈2–3 % per period). The API offers two routes:
+
+- **`SIGNAL_ACTION_REQUEST` returned from the scan grant's end.** MPSL closes
+  the timeslot and takes the next request in the same return, with
+  `distance_us` from this grant's start. The gate's split rejected this
+  action because it closes the timeslot; at a chunk boundary that is exactly
+  what is wanted. MPSL receives the request with no notice beyond the
+  distance, so whether it is granted at short notice with the other stack
+  idle, and how often it is BLOCKED under 802.15.4 continuous receive and
+  under a BLE advertiser, is a measurement, not a design question.
+- **A second timeslot session** (`mpsl_timeslot_session_count_set()`,
+  `CONFIG_MPSL_TIMESLOT_SESSION_COUNT=2`). A request in the idle session is
+  placed with the full lead while the other session's grant is live. It keeps
+  the 24 ms notice the other stack was swept to need, and MPSL arbitrates the
+  two sessions by priority, so a tracked window in the second session never
+  depends on an extension at all: the scan's extension simply fails where it
+  would overlap, which is ADR 0013's yield point. The gate would carry two
+  anchors, since `distance_us` is per session.
+
+Both routes need the next operation to be *known* before the current one
+ends: a two-deep arm in the HAL and scheduler, which breaks the one-operation
+rule that the gate's rule 1 mirrors 1:1, or a gate that holds a speculative
+elastic continuation and tells the core the air is held. Either is a larger
+change than (a) and is not taken here. **(d) is the follow-on decision**, to
+be opened after (a) is measured, and its first step is the `mpsl_arb` spike
+answering the short-notice question above on `gate.conf`, under Thread, and
+under BLE, before any core change.
+
 ## Phase-aware dwell credit, and its stall escape
 
-With (a) working, the never-listened band shrinks to the tracked window
-itself. Crediting time is then honest to within a few tenths of a millisecond
-per period, so credit needs no change for correctness.
+With (a) working, each visit still leaves about a fifth of the period
+unlistened, so time credit is not honest per visit. What changes is that the
+unlistened fifth moves between visits, so a set's coverage accumulates across
+sweeps instead of repeating. The expected cost to a master at a fixed phase is
+then about 1.3 sweeps rather than never, and it is bounded by how many periods
+the drift (or the scheduler's deliberate rotation) takes to cover the band:
+three to four at 9 ms per period.
 
-It is still owed for honesty in the periods where (a) falls back, which are
-exactly the periods of real coexistence pressure. Credit alone stalls the
+Credit is still owed for honesty in the periods where (a) falls back, which
+are exactly the periods of real coexistence pressure. Credit alone stalls the
 sweep, as last session found: a set whose phases cannot all be covered never
 advances, and the denial escape fires only on denials, not on uncredited
 listening. If it is added, it needs its own escape. Advance after a wall-clock
 cap of about 3 × dwell regardless of coverage, and count that as
 `advanced_uncovered`. The cheaper first step is that counter alone. Record per
 set what fraction of the period it listened to before advancing, and decide
-on credit once the A/B under Thread shows how often (a) falls back.
+on credit once the A/B under Thread shows how often (a) falls back. If (d) is
+built later the question mostly goes away, since the unlistened fraction
+falls to the grant latency.
+
+## What (a) does not promise
+
+- **R1 of the 2026-10-31 review** (the tracked channel's own loss under a
+  live BLE stack, 9.5 % measured against 8.7 % predicted from the exclusion
+  radius) is the inherent kind of cost. (a) is not aimed at it. The lever
+  there, if any, is whether `PLACE_LEAD_US` is larger than the BLE stack
+  needs, which is a Kconfig sweep per other-stack, not a design change.
+- **Under real 802.15.4 or BLE load** the bridging extension will fail in
+  some periods and those periods look like today. The A/B under Thread
+  (step 4 below) measures that fraction; it is the number that says how much
+  of the remaining deafness is inherent.
+- **One sweep.** With one session the mid-period boundary remains, so "found
+  in one sweep for every phase" is not the pass criterion for (a). It is the
+  criterion for (d).
 
 ## Recommendation
 
-**(a)**, with the decide-at-the-placement-deadline rule above, the coverage
-counter, and no credit change in the first iteration.
+**(a)**, with the decide-at-the-placement-deadline rule, the bridging
+extension, the scheduler-placed boundaries, the coverage counter, and no
+credit change in the first iteration. Then open (d) as its own record once
+(a)'s fallback rate under Thread is known.
 
 **The A/B/A that decides it** uses the same rig and harness (a host process
 driving both masters and stepping B's start offset; the bridge's per-frame
-log for calibration):
+log for calibration). The harness `disc_phase.py` lived in a session
+scratchpad and may be gone; if so it is rebuilt into `tools/` first.
 
 1. **A** (master): the 17-offset sweep plus the 5-offset control, exactly as
-   above. Expect 12/17 and 5/5, and mask `0x003fcffc`.
-2. **B** (fix): the same. Pass means 17/17 found, each within about one
-   sweep. The chunk mask covers every 10 ms bin except, at most, the one
-   holding the tracked window. ch0's loss and `sched_missed` stay within the
-   room's floor: a two-receiver concurrent reading, since the room has been
-   at 5–8 %. And the gate's extend-failed and fallback counts are recorded.
+   above. Expect 12/17 and 5/5, and mask `0x003fcffc` in every report.
+2. **B** (fix): the same. Pass means **17/17 found**, with a median
+   time-to-found within about one sweep of the control's and no offset
+   beyond about four sweeps. The chunk mask is **no longer constant** across
+   the five-second reports (a mask that moves is the signature of the fix;
+   a mask that is constant and merely wider means the gaps are still
+   locked), and over any 1 s window every 10 ms bin except the tracked
+   window's is listened to at least once. ch0's loss and `sched_missed` stay
+   within the room's floor: a two-receiver concurrent reading, since the
+   room has been at 5–8 %. The gate's bridging-extension failed and fallback
+   counts are recorded and should be zero on `gate.conf`, where nothing else
+   is on the air: a non-zero count there is a defect in the fix, not
+   contention.
 3. **A'** (master again): back to 12/17. Without this leg a room that changed
    between A and B reads as a fix.
 4. **Then under Thread**, with an attached 802.15.4 peer (the 5340 as OT
    leader through `scripts/flash_p4_peer.ps1`, so B needs another board).
    Count how often (a) falls back. That number decides whether phase-aware
-   credit is needed.
+   credit is needed, and it is the baseline (d) is judged against.
 
 Deterministic coverage comes first, before any of that: a `test_sched` case on
 the fake radio with `min_arm_lead_in_grant_us` and the held-reserve model
 (`fake_radio.c` already has both), tracking one channel and searching on
-another. It asserts that the listened phases cover the period except the
-tracked window, and that a refused extension at T − lead still arms the
-tracked window on time.
+another over several periods. It asserts that the tracked window is armed
+inside the scan grant when the bridging extension succeeds; that a refused
+extension at T − lead still arms the tracked window on time; that no scan
+grant exceeds `max_window_us`; and that the union of listened phases over the
+run covers the period except the tracked window, with the unlistened band of
+any single period not at the same phase as the previous period's.
