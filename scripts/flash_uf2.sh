@@ -1,12 +1,19 @@
 #!/bin/sh
 #
-# Copy the built UF2 image onto the Feather's bootloader volume (macOS/Linux).
-# The Windows equivalent is scripts/flash_uf2.ps1.
+# Copy the built UF2 image onto an Adafruit-style UF2 bootloader volume
+# (macOS/Linux): the Feather nRF52840 (FTHR840BOOT) or a Pro Micro nRF52840 /
+# nice!nano / SuperMini clone (NICENANO, or NRF52BOOT on some clones). The
+# Windows equivalent is scripts/flash_uf2.ps1.
 #
 # `west flash` is not usable: the uf2 runner fails with
 # "ValueError: uf2 doesn't support --dev-id option".
 #
-# Double-tap RESET on the Feather first so the bootloader volume mounts.
+# Double-tap RESET first so the bootloader volume mounts. A Pro Micro with no
+# button needs RST bridged to GND twice in quick succession.
+#
+# Usage: scripts/flash_uf2.sh [path/to/zephyr.uf2]
+#   UF2_VOLUME=<label or mount path>   pick the volume explicitly; the same
+#                                      job as flash_uf2.ps1's -VolumeLabel
 
 set -eu
 
@@ -14,11 +21,12 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 # sysbuild nests the image one level deeper (build/<dir>/radiant_dongle/zephyr/)
 # than a plain application build does, so search for the newest one rather
-# than hardcoding a path.
+# than hardcoding a path. `-exec ... {} +` rather than `| xargs`: xargs splits
+# on whitespace, so a checkout under a path with a space found nothing.
 UF2_PATH="${1:-}"
 if [ -z "$UF2_PATH" ]; then
-	UF2_PATH="$(find "$REPO_ROOT/build" -name zephyr.uf2 -type f 2>/dev/null |
-		xargs -r ls -t 2>/dev/null | head -n 1)"
+	UF2_PATH="$(find "$REPO_ROOT/build" -name zephyr.uf2 -type f \
+		-exec ls -t {} + 2>/dev/null | head -n 1)"
 fi
 
 if [ -z "$UF2_PATH" ] || [ ! -f "$UF2_PATH" ]; then
@@ -28,20 +36,30 @@ if [ -z "$UF2_PATH" ] || [ ! -f "$UF2_PATH" ]; then
 fi
 
 # macOS mounts under /Volumes; most Linux desktops under /media or /run/media.
+USER_NAME="$(id -un)"
+LABELS="FTHR840BOOT NICENANO NRF52BOOT"
 BOOT_VOLUME=""
-for candidate in \
-	/Volumes/FTHR840BOOT \
-	"/media/$(id -un)/FTHR840BOOT" \
-	"/run/media/$(id -un)/FTHR840BOOT"; do
-	if [ -d "$candidate" ]; then
-		BOOT_VOLUME="$candidate"
-		break
-	fi
+case "${UF2_VOLUME:-}" in
+	"") ;;
+	*/*) LABELS="" ; [ -d "$UF2_VOLUME" ] && BOOT_VOLUME="$UF2_VOLUME" ;;
+	*) LABELS="$UF2_VOLUME" ;;
+esac
+for label in $LABELS; do
+	for candidate in \
+		"/Volumes/$label" \
+		"/media/$USER_NAME/$label" \
+		"/run/media/$USER_NAME/$label"; do
+		if [ -d "$candidate" ]; then
+			BOOT_VOLUME="$candidate"
+			break 2
+		fi
+	done
 done
 
 if [ -z "$BOOT_VOLUME" ]; then
-	echo "Bootloader volume FTHR840BOOT is not mounted." >&2
-	echo "Close any tool using the Feather and double-tap RESET first." >&2
+	echo "No UF2 bootloader volume is mounted (looked for: ${UF2_VOLUME:-$LABELS})." >&2
+	echo "Close any tool using the board and double-tap RESET first." >&2
+	echo "A different label can be given with UF2_VOLUME=<label or path>." >&2
 	echo "If it never appears, try a different USB cable - some are charge-only." >&2
 	exit 1
 fi
