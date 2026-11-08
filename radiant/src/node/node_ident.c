@@ -17,6 +17,7 @@
 #include <zephyr/kernel.h>   /* __weak, for the clock hook a node overrides */
 #include <zephyr/logging/log.h>
 
+#include <radiant/radiant_frame.h>
 #include <radiant/radiant_sec.h>
 #include <radiant/radiant_sec_compat.h>
 
@@ -237,6 +238,48 @@ uint32_t node_ident_epoch_from(uint32_t boot_counter, bool clock_valid,
  * what a failed backend leaves (radiant_sec_rng_*.c zero-fill on failure), so
  * EINVAL from it is an RNG failure and is reported as one.
  */
+
+/* Redraw bound. 11.8 % of numbers are hard to receive for some ANT+ type, so
+ * sixteen draws all being bad is about 1 in 10^15: on exhaustion the last draw
+ * is kept rather than failing the boot (release review 2026-11-08, item 7). */
+#define SELF_PROVISION_DRAWS 16u
+
+/* The device types tools/ant_identity.py's ANT_PLUS_DEVICE_TYPES checks: a
+ * K_dev has no device type of its own, so its number must be easy to receive
+ * as any of them. */
+static const uint8_t ant_plus_types[] = { 0x0B, 0x11, 0x78, 0x7C, 0x79, 0x7B, 0x7A };
+
+/* True when the number this K_dev derives has an alternating run of
+ * RADIANT_ADDR_ALT_RUN_AVOID or more in its on-air address, for any type. The
+ * number is permanent (it is derived from K_dev, and K_dev is stored once), so
+ * a bad draw cannot be fixed afterwards. */
+static bool devnum_is_hard_to_receive(const uint8_t *k)
+{
+	uint16_t devnum;
+
+	if (derive_devnum(k, &devnum) != NODE_IDENT_OK) {
+		return false;
+	}
+	for (size_t i = 0u; i < sizeof(ant_plus_types); i++) {
+		if (radiant_channel_id_alt_run(radiant_net_addr_ant_plus,
+					       devnum, ant_plus_types[i]) >=
+		    RADIANT_ADDR_ALT_RUN_AVOID) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool all_zero(const uint8_t *k, size_t n)
+{
+	uint8_t acc = 0u;
+
+	for (size_t i = 0u; i < n; i++) {
+		acc |= k[i];
+	}
+	return acc == 0u;
+}
+
 static int self_provision(void)
 {
 	uint8_t k[NODE_IDENT_K_DEV_BYTES];
@@ -245,9 +288,17 @@ static int self_provision(void)
 	if (!radiant_sec_caps()->has_rng) {
 		return NODE_IDENT_ENOKEY;
 	}
-	if (radiant_sec_rng(k, sizeof(k)) != RADIANT_SEC_OK) {
-		radiant_sec_wipe(k, sizeof(k));
-		return NODE_IDENT_ENOKEY;
+	for (uint32_t draw = 0u; draw < SELF_PROVISION_DRAWS; draw++) {
+		if (radiant_sec_rng(k, sizeof(k)) != RADIANT_SEC_OK) {
+			radiant_sec_wipe(k, sizeof(k));
+			return NODE_IDENT_ENOKEY;
+		}
+		/* An all-zero draw is what a failed backend leaves: never
+		 * redrawn, so node_ident_provision() refuses it below as the
+		 * RNG failure it is. */
+		if (all_zero(k, sizeof(k)) || !devnum_is_hard_to_receive(k)) {
+			break;
+		}
 	}
 	rc = node_ident_provision(k);
 	radiant_sec_wipe(k, sizeof(k));

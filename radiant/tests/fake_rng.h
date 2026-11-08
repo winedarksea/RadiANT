@@ -36,6 +36,11 @@ void fake_rng_expected(uint32_t draw, uint8_t *out, size_t len);
  * buffer, RADIANT_SEC_ENOTSUP. */
 void fake_rng_fail_next(uint32_t n);
 
+/* The next draws return these keys, in order, before the deterministic
+ * pattern resumes. For a suite that needs a specific K_dev (up to 16). Each is
+ * `len` bytes, copied. fake_rng_reset() clears them. */
+void fake_rng_force_next(const uint8_t *key, size_t len);
+
 /* Report success with an all-zero buffer: a backend that lies. The caller's
  * all-zero refusal is what has to catch it. */
 void fake_rng_return_zeros(bool on);

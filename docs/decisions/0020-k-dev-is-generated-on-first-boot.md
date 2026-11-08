@@ -65,6 +65,19 @@ decision needing its own ADR. This is that ADR.
    `CONFIG_RADIANT_NODE_IDENT_SELF_PROVISION=n` and it always uses
    `CONFIG_TRAINER_DEVICE_NUMBER`, even when another image left an identity
    record on the same DK.
+6. **A draw whose number is hard to receive is redrawn (2026-11-08).** The
+   Tier 0 number is derived from K_dev and K_dev is stored once, so a bad draw
+   is permanent. Before storing, `self_provision()` derives the number and
+   redraws if `radiant_channel_id_alt_run()` reaches
+   `RADIANT_ADDR_ALT_RUN_AVOID` (8) for any of the seven ANT+ device types
+   `tools/ant_identity.py` checks, in either pairing-bit state. 11.8 % of
+   numbers fail that test, so a draw is redrawn about one time in nine. The bound
+   is 16 draws; on exhaustion the last draw is kept rather than failing the boot
+   (about 1 in 10^15). An all-zero draw is never redrawn: it is what a failed
+   backend leaves, and it stays an RNG failure. `derive_devnum()` is unchanged
+   and an already-provisioned key is never touched, so existing nodes keep their
+   numbers and their paired receivers. `test_node_ident` covers 5d00..00 (derives
+   #37976, an 8-bit run) followed by a good key, the bound, and the all-zero case.
 
 ## The four shapes, and why this one
 

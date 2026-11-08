@@ -28,11 +28,31 @@ static uint32_t draws;
 static uint32_t fail_remaining;
 static bool     zeros;
 
+#define FORCED_MAX 16u
+#define FORCED_LEN 32u
+static uint8_t  forced[FORCED_MAX][FORCED_LEN];
+static size_t   forced_len[FORCED_MAX];
+static uint32_t forced_n;
+static uint32_t forced_next;
+
 void fake_rng_reset(void)
 {
 	draws = 0u;
 	fail_remaining = 0u;
 	zeros = false;
+	forced_n = 0u;
+	forced_next = 0u;
+}
+
+void fake_rng_force_next(const uint8_t *key, size_t len)
+{
+	if (forced_n < FORCED_MAX && len <= FORCED_LEN) {
+		for (size_t i = 0u; i < len; i++) {
+			forced[forced_n][i] = key[i];
+		}
+		forced_len[forced_n] = len;
+		forced_n++;
+	}
 }
 
 void fake_rng_expected(uint32_t draw, uint8_t *out, size_t len)
@@ -82,6 +102,13 @@ int radiant_sec_rng(uint8_t *out, size_t len)
 		for (size_t i = 0u; i < len; i++) {
 			out[i] = 0u;
 		}
+		return RADIANT_SEC_OK;
+	}
+	if (forced_next < forced_n && forced_len[forced_next] == len) {
+		for (size_t i = 0u; i < len; i++) {
+			out[i] = forced[forced_next][i];
+		}
+		forced_next++;
 		return RADIANT_SEC_OK;
 	}
 	fake_rng_expected(n, out, len);

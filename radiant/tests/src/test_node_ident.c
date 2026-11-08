@@ -257,8 +257,59 @@ ZTEST(node_ident, test_an_rng_that_returns_zeros_is_not_a_key)
 	 * is reported as the entropy failure it is, not as a bad argument. */
 	fake_rng_return_zeros(true);
 	zassert_equal(NODE_IDENT_ENOKEY, node_ident_boot());
+	zassert_equal(1u, fake_rng_draw_count(),
+		      "an all-zero draw was redrawn instead of refused");
 	zassert_equal(0u, fake_nvm_store_count());
 	zassert_false(node_ident_is_provisioned());
+}
+
+/* Release review 2026-11-08, item 7. 5d00..00 derives #37976, an eight-bit
+ * alternating run in its on-air address for the ANT+ types; the reviewer's
+ * example. The number is permanent, so the first draw is checked before it is
+ * stored. */
+static const uint8_t hard_key[NODE_IDENT_K_DEV_BYTES] = { 0x5Du };
+
+ZTEST(node_ident, test_a_hard_to_receive_draw_is_redrawn_and_the_good_key_persisted)
+{
+	uint8_t  good[NODE_IDENT_K_DEV_BYTES];
+	uint8_t  stored[NODE_IDENT_K_DEV_BYTES];
+	uint16_t devnum;
+
+	fake_rng_force_next(hard_key, sizeof(hard_key));
+	/* The second draw is the generator's own draw 1... which is itself a bad
+	 * number (#8540, run 8), so the key persisted is the third draw. */
+	fake_rng_expected(2u, good, sizeof(good));
+
+	zassert_equal(NODE_IDENT_OK, node_ident_boot());
+	zassert_equal(3u, fake_rng_draw_count());
+	zassert_true(fake_nvm_peek(NODE_NVM_KEY_KDEV, stored, sizeof(stored)));
+	zassert_mem_equal(good, stored, sizeof(stored),
+			  "the stored key is not the first good draw");
+	zassert_equal(NODE_IDENT_OK, node_ident_devnum(&devnum));
+	zassert_not_equal(37976u, devnum);
+	zassert_equal(13433u, devnum);
+}
+
+ZTEST(node_ident, test_a_good_first_draw_is_not_redrawn)
+{
+	zassert_equal(NODE_IDENT_OK, node_ident_boot());
+	zassert_equal(1u, fake_rng_draw_count());
+}
+
+ZTEST(node_ident, test_sixteen_bad_draws_keep_the_last_rather_than_fail_the_boot)
+{
+	uint8_t  stored[NODE_IDENT_K_DEV_BYTES];
+	uint16_t devnum;
+
+	for (uint32_t i = 0u; i < 20u; i++) {
+		fake_rng_force_next(hard_key, sizeof(hard_key));
+	}
+	zassert_equal(NODE_IDENT_OK, node_ident_boot());
+	zassert_equal(16u, fake_rng_draw_count(), "the redraw is not bounded");
+	zassert_true(fake_nvm_peek(NODE_NVM_KEY_KDEV, stored, sizeof(stored)));
+	zassert_mem_equal(hard_key, stored, sizeof(stored));
+	zassert_equal(NODE_IDENT_OK, node_ident_devnum(&devnum));
+	zassert_equal(37976u, devnum);
 }
 
 ZTEST(node_ident, test_a_store_failure_while_provisioning_is_eio)
