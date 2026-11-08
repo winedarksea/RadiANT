@@ -1266,7 +1266,8 @@ records what the IDs are for. The allocation below is the one in the YAML.
 | `0xF3` | `ANTW_MESG_RADIANT_EPOCH_ID` | Set or read the epoch and its microsecond time anchor |
 | `0xF4` | `ANTW_MESG_RADIANT_SEC_STATUS_ID` | Read back (structure version at `[1]`): epoch, expected index, window verdict counters, drop counters, enrolments |
 | `0xF5` | `ANTW_MESG_RADIANT_PAIRING_ID` | Enter/leave pairing mode; carry the host-supplied scalar and the X25519 exchange |
-| `0xF6-0xFA` | reserved | The rest of the RadiANT family |
+| `0xF6` | `ANTW_MESG_RADIANT_HEALTH_ID` | Not a security message: the dongle's health counters (structure version at `[0]`), allocated from the same RadiANT block |
+| `0xF7-0xFA` | reserved | The rest of the RadiANT family. Claim by PR against `docs/profile-registry.md` |
 
 `0xF1` bit 3 (descriptor encryption) returns `ANTW_INVALID_PARAMETER_PROVIDED`
 in v1; see section 5.2. A page range outside `0x01..0x1F` is refused the same
