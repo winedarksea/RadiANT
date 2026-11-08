@@ -15,6 +15,7 @@
 
 #include "ant_radio.h"
 #include "ant_wire.h"
+#include "ant_radio_radiant_priv.h"
 
 #include <radiant/radiant_channel.h>
 #include <radiant/radiant_frame.h>
@@ -291,18 +292,20 @@ ZTEST(api, test_sec_an_acknowledgement_carries_what_the_broadcast_put_on_air)
 
 		/* Keyed through radiant_sec directly (the host surface is P6)
 		 * since this assertion is about the air, not key delivery. */
-		zassert_equal(RADIANT_SEC_OK,
-			      radiant_sec_set_key(SEC_CH, root, 128,
-						  SEC_DEVNUM));
-		zassert_equal(RADIANT_SEC_OK,
-			      radiant_sec_set_devnum(SEC_CH, SEC_DEVNUM));
-		zassert_equal(RADIANT_SEC_OK,
-			      radiant_sec_configure(SEC_CH,
-						    RADIANT_SEC_SW_CONF, 2u,
-						    RADIANT_SEC_PAGE_LO_DEFAULT,
-						    RADIANT_SEC_PAGE_HI_DEFAULT));
-		zassert_equal(RADIANT_SEC_OK,
-			      radiant_sec_set_epoch(SEC_CH, 1u, 0u, 8182u));
+		int rc[4];
+
+		/* Under api_lock, as every real caller is. */
+		k_mutex_lock(&api_lock, K_FOREVER);
+		rc[0] = radiant_sec_set_key(SEC_CH, root, 128, SEC_DEVNUM);
+		rc[1] = radiant_sec_set_devnum(SEC_CH, SEC_DEVNUM);
+		rc[2] = radiant_sec_configure(SEC_CH, RADIANT_SEC_SW_CONF, 2u,
+					      RADIANT_SEC_PAGE_LO_DEFAULT,
+					      RADIANT_SEC_PAGE_HI_DEFAULT);
+		rc[3] = radiant_sec_set_epoch(SEC_CH, 1u, 0u, 8182u);
+		k_mutex_unlock(&api_lock);
+		for (int i = 0; i < 4; i++) {
+			zassert_equal(RADIANT_SEC_OK, rc[i], "setup step %d", i);
+		}
 		zassert_true(radiant_sec_channel_is_secured(SEC_CH),
 			     "the channel did not arm; the rest of this test "
 			     "would assert nothing");

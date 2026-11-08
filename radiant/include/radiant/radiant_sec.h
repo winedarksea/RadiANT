@@ -552,6 +552,21 @@ int radiant_sec_rx_ingest(uint8_t ch, const uint8_t *pay, uint8_t len,
 void radiant_sec_pump(void);
 
 /*
+ * Port hook: called at the top of every thread-context radiant_sec entry
+ * point when CONFIG_RADIANT_SEC_LOCK_CHECK is on (the default in an ASSERT
+ * build). radiant is freestanding and has no lock of its own, so the check is
+ * the port's: apps/common/ant_radio_radiant.c overrides this to assert that
+ * api_lock is held by the calling thread. The weak default does nothing.
+ * `who` is the entry point's name.
+ */
+#if defined(CONFIG_RADIANT_SEC_LOCK_CHECK)
+void radiant_sec_port_lock_check(const char *who);
+#define RADIANT_SEC_ASSERT_LOCKED() radiant_sec_port_lock_check(__func__)
+#else
+#define RADIANT_SEC_ASSERT_LOCKED() ((void)0)
+#endif
+
+/*
  * Where the pump's output goes. A DIRECT CALL, NOT A CALLBACK TABLE: an ops
  * struct is a .data relocation the linker cannot garbage-collect, and one
  * surviving relocation defeats the size gate.

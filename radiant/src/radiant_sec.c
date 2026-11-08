@@ -354,6 +354,13 @@ static int advance_epoch(struct sec_ctx *c, uint16_t by)
 
 /* ── Weak delivery hooks ────────────────────────────────────────────────── */
 
+#if defined(CONFIG_RADIANT_SEC_LOCK_CHECK)
+__weak void radiant_sec_port_lock_check(const char *who)
+{
+	ARG_UNUSED(who);
+}
+#endif
+
 __weak void radiant_sec_deliver(uint8_t ch, const uint8_t *pay, uint8_t len,
 				enum radiant_sec_verdict verdict,
 				uint64_t t_sync)
@@ -378,6 +385,7 @@ __weak void radiant_sec_window_verdict(uint8_t ch, uint16_t window_start,
 int radiant_sec_set_key(uint8_t ch, const uint8_t *root, size_t bits,
 			uint16_t base_devnum)
 {
+	RADIANT_SEC_ASSERT_LOCKED();
 	struct sec_ctx *c;
 	uint8_t         i;
 	int             rc;
@@ -439,6 +447,7 @@ int radiant_sec_set_key(uint8_t ch, const uint8_t *root, size_t bits,
 int radiant_sec_configure(uint8_t ch, uint8_t switches, uint8_t w,
 			  uint8_t page_lo, uint8_t page_hi)
 {
+	RADIANT_SEC_ASSERT_LOCKED();
 	struct sec_ctx *c = ctx_of(ch);
 
 	if (c == NULL) {
@@ -502,6 +511,7 @@ int radiant_sec_configure(uint8_t ch, uint8_t switches, uint8_t w,
 int radiant_sec_set_epoch(uint8_t ch, uint32_t epoch, uint64_t us_into_epoch,
 			  uint16_t period_counts)
 {
+	RADIANT_SEC_ASSERT_LOCKED();
 	struct sec_ctx *c = ctx_of(ch);
 	uint64_t        now;
 
@@ -563,6 +573,7 @@ int radiant_sec_rng(uint8_t *out, size_t len)
 
 int radiant_sec_set_devnum(uint8_t ch, uint16_t devnum)
 {
+	RADIANT_SEC_ASSERT_LOCKED();
 	struct sec_ctx *c = ctx_of(ch);
 
 	if (c == NULL) {
@@ -574,6 +585,7 @@ int radiant_sec_set_devnum(uint8_t ch, uint16_t devnum)
 
 int radiant_sec_try_devnum(uint8_t ch, uint16_t devnum)
 {
+	RADIANT_SEC_ASSERT_LOCKED();
 	struct sec_ctx *c = ctx_of(ch);
 
 	if (c == NULL) {
@@ -609,6 +621,7 @@ int radiant_sec_try_devnum(uint8_t ch, uint16_t devnum)
 
 void radiant_sec_channel_release(uint8_t ch)
 {
+	RADIANT_SEC_ASSERT_LOCKED();
 	struct sec_ctx *c = ctx_of(ch);
 
 	if (c == NULL) {
@@ -645,6 +658,7 @@ void radiant_sec_channel_release(uint8_t ch)
 
 void radiant_sec_reset(void)
 {
+	RADIANT_SEC_ASSERT_LOCKED();
 	uint8_t i;
 
 	sec_map_init();
@@ -675,6 +689,7 @@ enum radiant_sec_verdict radiant_sec_last_verdict(uint8_t ch)
 
 void radiant_sec_stat_enrolment(uint8_t ch)
 {
+	RADIANT_SEC_ASSERT_LOCKED();
 	struct sec_ctx *c = ctx_of(ch);
 
 	/* Silent for a channel with no context. Unreachable from the one
@@ -687,6 +702,7 @@ void radiant_sec_stat_enrolment(uint8_t ch)
 
 void radiant_sec_get_stats(uint8_t ch, struct radiant_sec_stats *out)
 {
+	RADIANT_SEC_ASSERT_LOCKED();
 	const struct sec_ctx *c = ctx_of(ch);
 
 	if (out == NULL) {
@@ -701,6 +717,7 @@ void radiant_sec_get_stats(uint8_t ch, struct radiant_sec_stats *out)
 
 void radiant_sec_get_state(uint8_t ch, struct radiant_sec_state *out)
 {
+	RADIANT_SEC_ASSERT_LOCKED();
 	const struct sec_ctx *c = ctx_of(ch);
 
 	if (out == NULL) {
@@ -814,6 +831,14 @@ static int tx_slot_index(struct sec_ctx *c, uint64_t t_sync, uint32_t *idx)
 int radiant_sec_tx_transform(uint8_t ch, uint8_t *pay, uint8_t len,
 			     uint64_t t_sync)
 {
+	/* NOT RADIANT_SEC_ASSERT_LOCKED(), deliberately, and that is a finding
+	 * rather than an omission: the port reaches this from
+	 * api_post_master_tx(), which api_sched_done() calls from the
+	 * scheduler's terminal callback (the track_repost and turn-around
+	 * paths), i.e. not under api_lock and not in thread context. A
+	 * secured master can therefore run the shared AES schedule from that
+	 * callback while the pump holds it. TODO.md records it (WP-B report,
+	 * 2026-11-08); an assert here would fire on every secured master. */
 	struct sec_ctx *c = ctx_of(ch);
 	uint8_t         nonce[RADIANT_SEC_BLOCK_BYTES];
 	uint32_t        idx;
@@ -900,7 +925,12 @@ int radiant_sec_tx_transform(uint8_t ch, uint8_t *pay, uint8_t len,
 	if ((c->switches & RADIANT_SEC_SW_CONF) != 0u) {
 		radiant_sec_nonce_block(nonce, c->epoch, c->devnum, counter,
 					RADIANT_SEC_DOM_CTR);
-		rc = radiant_sec_ctr_xor(&c->k_enc, nonce, &pay[2], 5u);
+		/* Byte [7] is X_AUTH's tag byte only when X_AUTH is on; without
+		 * it that byte is payload and is ciphertext too. */
+		rc = radiant_sec_ctr_xor(&c->k_enc, nonce, &pay[2],
+					 ((c->switches & RADIANT_SEC_SW_AUTH) != 0u)
+						 ? 5u
+						 : 6u);
 		if (rc != RADIANT_SEC_OK) {
 			return rc;
 		}
@@ -1238,8 +1268,10 @@ static void rx_process(struct sec_pkt *pkt)
 	if ((c->switches & RADIANT_SEC_SW_CONF) != 0u) {
 		radiant_sec_nonce_block(nonce, c->epoch, c->devnum, counter,
 					RADIANT_SEC_DOM_CTR);
-		if (radiant_sec_ctr_xor(&c->k_enc, nonce, &pkt->pay[2], 5u) !=
-		    RADIANT_SEC_OK) {
+		if (radiant_sec_ctr_xor(&c->k_enc, nonce, &pkt->pay[2],
+					((c->switches & RADIANT_SEC_SW_AUTH) != 0u)
+						? 5u
+						: 6u) != RADIANT_SEC_OK) {
 			return;
 		}
 	}
@@ -1299,6 +1331,7 @@ static void rx_process(struct sec_pkt *pkt)
 
 void radiant_sec_pump(void)
 {
+	RADIANT_SEC_ASSERT_LOCKED();
 	for (;;) {
 		k_spinlock_key_t key;
 		struct sec_pkt   pkt;

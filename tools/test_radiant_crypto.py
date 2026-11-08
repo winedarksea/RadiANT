@@ -202,17 +202,44 @@ class TestTransforms(unittest.TestCase):
     def test_conf_leaves_the_clear_bytes_alone(self):
         page = bytes([0x01, 0x07, 1, 2, 3, 4, 5, 0xAA])
         k_enc = self.keys()[rc.LABEL_ENC]
-        ct = rc.conf_transform(k_enc, self.EPOCH, self.DEVNUM, 7, page)
+        ct = rc.conf_transform(k_enc, self.EPOCH, self.DEVNUM, 7, page, True)
         self.assertEqual(ct[0:2], page[0:2])   # page number and counter
-        self.assertEqual(ct[7], page[7])       # tag space
+        self.assertEqual(ct[7], page[7])       # X_AUTH's tag byte
         self.assertNotEqual(ct[2:7], page[2:7])
 
     def test_conf_round_trips(self):
         page = bytes([0x03, 0x40, 9, 8, 7, 6, 5, 0x00])
         k_enc = self.keys()[rc.LABEL_ENC]
-        ct = rc.conf_transform(k_enc, self.EPOCH, self.DEVNUM, 0x40, page)
-        back = rc.conf_transform(k_enc, self.EPOCH, self.DEVNUM, 0x40, ct)
-        self.assertEqual(back, page)
+        for auth in (False, True):
+            ct = rc.conf_transform(k_enc, self.EPOCH, self.DEVNUM, 0x40, page,
+                                   auth)
+            back = rc.conf_transform(k_enc, self.EPOCH, self.DEVNUM, 0x40, ct,
+                                     auth)
+            self.assertEqual(back, page)
+
+    def test_conf_alone_encrypts_byte_7(self):
+        # TODO release-review 6: without X_AUTH the field area is 48 bits, so
+        # byte [7] is payload and must be ciphertext. CTR covers six bytes.
+        page = bytes([0x01, 0x07, 1, 2, 3, 4, 5, 0xAB])
+        k_enc = self.keys()[rc.LABEL_ENC]
+        ct = rc.conf_transform(k_enc, self.EPOCH, self.DEVNUM, 7, page, False)
+        self.assertNotEqual(ct[7], page[7])
+        self.assertEqual(ct[:7], rc.conf_transform(
+            k_enc, self.EPOCH, self.DEVNUM, 7, page, True)[:7])
+
+    def test_conf_vectors_shared_with_the_c_implementation(self):
+        # The same hex is asserted in radiant/tests/src/test_sec.c
+        # (test_conf_vectors_shared_with_python). Root 00..ff, epoch 7,
+        # devnum 0x3A17, counter 0, plaintext 05 00 de ad be ef 42 55.
+        root = bytes(range(0x00, 0x100, 0x11))
+        k_enc = rc.derive_keys(root, 7, 0x3A17)[rc.LABEL_ENC]
+        page = bytes.fromhex("0500deadbeef4255")
+        self.assertEqual(
+            rc.conf_transform(k_enc, 7, 0x3A17, 0, page, False).hex(),
+            "0500c90023ae8879")
+        self.assertEqual(
+            rc.conf_transform(k_enc, 7, 0x3A17, 0, page, True).hex(),
+            "0500c90023ae8855")
 
     def test_tag_length_is_eight_times_w_bits(self):
         k_auth = self.keys()[rc.LABEL_AUTH]

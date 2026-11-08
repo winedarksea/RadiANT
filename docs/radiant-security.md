@@ -129,14 +129,17 @@ v1.
 ```
 K_enc  = KDF(K_root, "enc" || epoch)
 stream = AES-128-CTR(K_enc, nonce_block)
-ct[2..6] = pt[2..6] XOR stream[2..6]
+ct[2..6] = pt[2..6] XOR stream[2..6]           (X_AUTH on)
+ct[2..7] = pt[2..7] XOR stream[2..7]           (X_AUTH off)
 ```
 
 Bytes `[0]` (page number) and `[1]` (counter) stay in the clear, because a
 receiver needs the page number to tell a data page from a descriptor and needs
 the counter to build the nonce. With `X_AUTH` also on, byte `[7]` is the tag
-byte and is likewise not ciphertext. That is what makes `X_CONF` cost **zero
-payload bytes**.
+byte and is not ciphertext. Without `X_AUTH` byte `[7]` is payload (the field
+area is 48 bits) and **is** ciphertext: CTR covers six bytes, not five, or a
+field at bit offset 40 would go out in the clear under a schema announcing
+confidentiality. That is what makes `X_CONF` cost **zero payload bytes**.
 
 **`radiant_sec` owns byte `[1]` on a secured master channel, and the host does
 not.** This is not a stylistic choice. A master retransmits its current
@@ -1647,6 +1650,15 @@ that genuinely fears injected values rather than colliding sensors:
 - **The window is `N` consecutive transmitted messages, not `N` data
   messages**, so the tag covers the common pages, the beacon and the Tier I page
   too.
+- **A tag due on message 119 or 120 is owed, not lost.** The seam never offers
+  those two slots (they carry the common pages), so a tag that falls due on one
+  goes in the first slot after them, and the two pages join the window it covers:
+  the window is `N-1` messages, or up to `N+1` when it closes late. The receiver
+  counts to the tag rather than to a fixed `N`, accepting `N-1` to `N+1`
+  covered messages and treating more as a lost tag. The window index is the
+  tag's own slot index over `N`, so it still resolves against the receiver's
+  clock. Before this, 17 of 998 windows were lost with no packet lost
+  (TODO security item 12, fixed 2026-11-08).
 - **`N in {4, 8, 16, 32}`, default 8 when enabled**, announced in the beacon.
 - **The honest regression:** a window CMAC is not self-synchronising under loss
   the way section 3.2's spread tag is, so any lost packet in the window makes it

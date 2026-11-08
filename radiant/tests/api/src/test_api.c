@@ -23,6 +23,7 @@
 #include "fake_radio.h"
 
 #include "ant_radio_radiant.h"
+#include "ant_radio_radiant_priv.h"
 #include <radiant/radiant_channel.h>
 #include <radiant/radiant_event.h>
 #include <radiant/radiant_frame.h>
@@ -182,7 +183,21 @@ static void api_before(void *f)
 	n_msg = 0u;
 }
 
-ZTEST_SUITE(api, NULL, api_setup, api_before, NULL, NULL);
+/* Whole-suite form of the api_lock rule (TODO security item 8): no test, and
+ * nothing the event thread did during it, may reach a radiant_sec entry point
+ * without the lock. Only builds with the check on (CONFIG_ASSERT, or the sec
+ * scenarios, which ask for it) count anything. */
+static void api_after(void *f)
+{
+	ARG_UNUSED(f);
+#if defined(CONFIG_RADIANT_SEC_LOCK_CHECK)
+	zassert_equal(0u, antr_api_lock_violations,
+		      "%u radiant_sec call(s) reached without api_lock",
+		      (unsigned)antr_api_lock_violations);
+#endif
+}
+
+ZTEST_SUITE(api, NULL, api_setup, api_before, api_after, NULL);
 
 /* Close the channel first: a live channel keeps the radio armed forever
  * (correct behaviour), which would make an unconditional is_idle() a false
@@ -4116,14 +4131,21 @@ static void fec_secure(uint16_t number)
 		0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
 	};
 
-	zassert_equal(RADIANT_SEC_OK, radiant_sec_set_key(CH, root, 128, number));
-	zassert_equal(RADIANT_SEC_OK, radiant_sec_set_devnum(CH, number));
-	zassert_equal(RADIANT_SEC_OK,
-		      radiant_sec_configure(CH, RADIANT_SEC_SW_AUTH |
-						    RADIANT_SEC_SW_DROP_UNVER, 2u,
-					    RADIANT_SEC_PAGE_LO_DEFAULT,
-					    RADIANT_SEC_PAGE_HI_DEFAULT));
-	zassert_equal(RADIANT_SEC_OK, radiant_sec_set_epoch(CH, 1u, 0u, 8192u));
+	int rc[4];
+
+	/* Under api_lock, as every real caller is (radiant_sec asserts it). */
+	k_mutex_lock(&api_lock, K_FOREVER);
+	rc[0] = radiant_sec_set_key(CH, root, 128, number);
+	rc[1] = radiant_sec_set_devnum(CH, number);
+	rc[2] = radiant_sec_configure(CH, RADIANT_SEC_SW_AUTH |
+					      RADIANT_SEC_SW_DROP_UNVER, 2u,
+				      RADIANT_SEC_PAGE_LO_DEFAULT,
+				      RADIANT_SEC_PAGE_HI_DEFAULT);
+	rc[3] = radiant_sec_set_epoch(CH, 1u, 0u, 8192u);
+	k_mutex_unlock(&api_lock);
+	for (int i = 0; i < 4; i++) {
+		zassert_equal(RADIANT_SEC_OK, rc[i], "setup step %d", i);
+	}
 	zassert_true(radiant_sec_channel_is_secured(CH),
 		     "setup: the channel did not arm");
 }

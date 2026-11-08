@@ -828,6 +828,53 @@ ZTEST(radiant_sec, test_confidentiality_hides_five_bytes_and_gives_them_back)
 	zassert_equal(RADIANT_SEC_VERDICT_CLEAR, radiant_sec_last_verdict(RX_CH));
 }
 
+/*
+ * TODO release-review 6, and the vectors shared with
+ * tools/test_radiant_crypto.py (test_conf_vectors_shared_with_the_c_
+ * implementation): root 00..ff, epoch 7, devnum 0x3A17, slot 0, plaintext
+ * 05 00 de ad be ef 42 55 (tx_air() overwrites byte [1] with the counter, 0
+ * here). Without X_AUTH, byte [7] is payload and is ciphertext: CTR covers six
+ * bytes. With X_AUTH it is the tag byte (zero in the first window) and CTR
+ * covers five.
+ */
+ZTEST(radiant_sec, test_conf_vectors_shared_with_python)
+{
+	static const uint8_t want_conf_only[8] = {
+		0x05, 0x00, 0xC9, 0x00, 0x23, 0xAE, 0x88, 0x79,
+	};
+	static const uint8_t want_with_auth[7] = {
+		0x05, 0x00, 0xC9, 0x00, 0x23, 0xAE, 0x88,
+	};
+	uint8_t air[8];
+
+	key_both();
+	configure_both(RADIANT_SEC_SW_CONF, 2u);
+	epoch_both(7u);
+	tx_air(0u, air);
+	zassert_mem_equal(air, want_conf_only, 8u,
+			  "X_CONF alone: byte [7] must be ciphertext");
+
+	/* And the receiver gives byte [7] back, which the five-byte receiver
+	 * would have left as ciphertext. */
+	zassert_equal(RADIANT_SEC_RX_DEFER,
+		      radiant_sec_rx_ingest(RX_CH, air, 8u, true, sec_anchor));
+	radiant_sec_pump();
+	zassert_equal(1u, log_n_pkt);
+	zassert_equal(conf_plain[7], log_pkt[0].pay[7],
+		      "the receiver left byte [7] as ciphertext");
+	zassert_mem_equal(&log_pkt[0].pay[2], &conf_plain[2], 6u);
+
+	radiant_sec_channel_release(TX_CH);
+	radiant_sec_channel_release(RX_CH);
+	key_both();
+	configure_both(RADIANT_SEC_SW_CONF | RADIANT_SEC_SW_AUTH, 2u);
+	epoch_both(7u);
+	tx_air(0u, air);
+	zassert_mem_equal(air, want_with_auth, 7u,
+			  "X_CONF with X_AUTH: bytes [2..6] only");
+	zassert_equal(0x00u, air[7], "byte [7] is the tag byte, not ciphertext");
+}
+
 ZTEST(radiant_sec, test_the_same_plaintext_twice_is_two_different_ciphertexts)
 {
 	uint8_t a[8];

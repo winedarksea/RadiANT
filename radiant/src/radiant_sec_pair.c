@@ -228,6 +228,7 @@ static int pair_derive(const uint8_t *shared, const uint8_t *pub_a,
 
 int radiant_sec_pair_enter(uint8_t ch, uint8_t timeout_s)
 {
+	RADIANT_SEC_ASSERT_LOCKED();
 	struct pair_ctx *c = ctx_alloc(ch);
 
 	if (c == NULL) {
@@ -249,6 +250,7 @@ int radiant_sec_pair_enter(uint8_t ch, uint8_t timeout_s)
 
 void radiant_sec_pair_leave(uint8_t ch)
 {
+	RADIANT_SEC_ASSERT_LOCKED();
 	ctx_free(ctx_of(ch));
 }
 
@@ -265,6 +267,7 @@ void radiant_sec_pair_on_search(uint8_t ch)
 
 int radiant_sec_pair_set_scalar(uint8_t ch, const uint8_t *scalar)
 {
+	RADIANT_SEC_ASSERT_LOCKED();
 	struct pair_ctx *c = ctx_of(ch);
 	int              rc;
 
@@ -305,6 +308,7 @@ int radiant_sec_pair_set_scalar(uint8_t ch, const uint8_t *scalar)
 
 int radiant_sec_pair_local_pubkey(uint8_t ch, uint8_t *out)
 {
+	RADIANT_SEC_ASSERT_LOCKED();
 	const struct pair_ctx *c = ctx_of(ch);
 
 	if (c == NULL || out == NULL) {
@@ -320,6 +324,7 @@ int radiant_sec_pair_local_pubkey(uint8_t ch, uint8_t *out)
 int radiant_sec_pair_peer(uint8_t ch, const uint8_t *peer_pub,
 			  uint32_t *fingerprint)
 {
+	RADIANT_SEC_ASSERT_LOCKED();
 	struct pair_ctx          *c = ctx_of(ch);
 	struct radiant_channel_id id;
 	uint8_t                   shared[RADIANT_SEC_X25519_BYTES];
@@ -399,6 +404,7 @@ out:
 
 int radiant_sec_pair_fingerprint(uint8_t ch, uint32_t *out)
 {
+	RADIANT_SEC_ASSERT_LOCKED();
 	const struct pair_ctx *c = ctx_of(ch);
 
 	if (c == NULL || out == NULL || !c->have_fp) {
@@ -424,6 +430,7 @@ bool radiant_sec_pair_is_open(uint8_t ch)
 
 void radiant_sec_pair_reset(void)
 {
+	RADIANT_SEC_ASSERT_LOCKED();
 	uint8_t i;
 
 	pair_map_init();

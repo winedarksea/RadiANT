@@ -29,6 +29,7 @@
 
 #include "ant_radio.h"
 #include "ant_wire.h"
+#include "ant_radio_radiant_priv.h"
 
 #include <radiant/radiant_channel.h>
 #include <radiant/radiant_sec.h>
@@ -335,5 +336,127 @@ ZTEST(api, test_sec_host_a_channel_out_of_range_is_refused_everywhere)
 	zassert_equal((antr_err_t)ANTW_INVALID_MESSAGE,
 		      antr_sec_status_get(bad, st, sizeof(st)));
 }
+
+#if defined(CONFIG_RADIANT_SEC_LOCK_CHECK)
+
+/*
+ * TODO security item 8: the 0xF1-0xF5 commands take api_lock. The check is
+ * the port hook in ant_radio_radiant.c, counted rather than asserted here
+ * (this image builds without CONFIG_ASSERT). Without the lock in
+ * ant_sec_host.c every call below counts a violation.
+ */
+ZTEST(api, test_sec_host_commands_hold_api_lock)
+{
+	uint8_t  st[ANTR_SEC_STATUS_LEN];
+	uint32_t base;
+
+	host_assign(true, true);
+	base = antr_api_lock_violations;
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_key_set(HOST_CH, 128u, host_key));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_config(HOST_CH, RADIANT_SEC_SW_AUTH, 2u, 0x01u,
+				      0x0Fu));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_epoch_set(HOST_CH, 0u, 1u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_status_get(HOST_CH, st, sizeof(st)));
+	zassert_equal(base, antr_api_lock_violations,
+		      "a 0xF1-0xF4 command reached radiant_sec without "
+		      "api_lock");
+
+	host_done();
+}
+
+/* The instrument itself: a call that really is unlocked must be counted, or
+ * the test above passes on a hook that never fires. The counter is put back
+ * so the suite's after-check does not see the deliberate violation. */
+ZTEST(api, test_sec_host_the_lock_check_sees_an_unlocked_call)
+{
+	struct radiant_sec_state state;
+	uint32_t                 base = antr_api_lock_violations;
+
+	zassert_false(antr_api_lock_held());
+	radiant_sec_get_state(HOST_CH, &state);
+	zassert_equal(base + 1u, antr_api_lock_violations,
+		      "an unlocked radiant_sec call was not counted");
+
+	k_mutex_lock(&api_lock, K_FOREVER);
+	zassert_true(antr_api_lock_held());
+	radiant_sec_get_state(HOST_CH, &state);
+	k_mutex_unlock(&api_lock);
+	zassert_equal(base + 1u, antr_api_lock_violations,
+		      "a locked call was counted as a violation");
+
+	antr_api_lock_violations = base;
+}
+
+#if defined(CONFIG_RADIANT_SEC_PAIRING_X25519)
+/*
+ * How long a pairing command holds api_lock. Each X25519 is a full scalar
+ * multiplication on this build's software implementation; the number printed
+ * is the figure to read against the RX thread (which needs api_lock for the
+ * pump and the scheduler). Asserts only that the exchange works under the
+ * lock and takes under a second.
+ */
+ZTEST(api, test_sec_host_pairing_holds_api_lock_and_its_hold_time)
+{
+	static const uint8_t scalar[RADIANT_SEC_X25519_BYTES] = {
+		0x77, 0x07, 0x6d, 0x0a, 0x73, 0x18, 0xa5, 0x7d,
+		0x3c, 0x16, 0xc1, 0x72, 0x51, 0xb2, 0x66, 0x45,
+		0xdf, 0x4c, 0x2f, 0x87, 0xeb, 0xc0, 0x99, 0x2a,
+		0xb1, 0x77, 0xfb, 0xa5, 0x1d, 0xb9, 0x2c, 0x2a,
+	};
+	uint8_t  reply[2 + RADIANT_SEC_X25519_BYTES];
+	uint8_t  rlen = 0u;
+	uint32_t base;
+	uint32_t t0, t_scalar, t_exchange;
+
+	host_assign(true, true);
+	base = antr_api_lock_violations;
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_pair(HOST_CH, ANTW_RADIANT_PAIR_ENTER, NULL, 0u,
+				    reply, sizeof(reply), &rlen));
+	t0 = k_cycle_get_32();
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_pair(HOST_CH, ANTW_RADIANT_PAIR_SCALAR, scalar,
+				    sizeof(scalar), reply, sizeof(reply),
+				    &rlen));
+	t_scalar = k_cycle_get_32() - t0;
+	zassert_equal(2u + RADIANT_SEC_X25519_BYTES, rlen);
+
+	/* The peer's public key is the one just produced: a valid, non-
+	 * degenerate point, so the exchange runs to the end. */
+	uint8_t peer[RADIANT_SEC_X25519_BYTES];
+
+	memcpy(peer, &reply[2], sizeof(peer));
+	t0 = k_cycle_get_32();
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_pair(HOST_CH, ANTW_RADIANT_PAIR_EXCHANGE, peer,
+				    sizeof(peer), reply, sizeof(reply), &rlen));
+	t_exchange = k_cycle_get_32() - t0;
+
+	zassert_equal(base, antr_api_lock_violations,
+		      "a 0xF5 command reached radiant_sec without api_lock");
+
+	uint32_t us_scalar = (uint32_t)(((uint64_t)t_scalar * 1000000u) /
+					sys_clock_hw_cycles_per_sec());
+	uint32_t us_exchange = (uint32_t)(((uint64_t)t_exchange * 1000000u) /
+					  sys_clock_hw_cycles_per_sec());
+
+	printk("X25519 api_lock hold: SCALAR %u us, EXCHANGE %u us
+",
+	       us_scalar, us_exchange);
+	zassert_true(us_scalar < 1000000u && us_exchange < 1000000u);
+
+	(void)antr_sec_pair(HOST_CH, ANTW_RADIANT_PAIR_LEAVE, NULL, 0u, reply,
+			    sizeof(reply), &rlen);
+	host_done();
+}
+#endif /* CONFIG_RADIANT_SEC_PAIRING_X25519 */
+
+#endif /* CONFIG_RADIANT_SEC_LOCK_CHECK */
 
 #endif /* CONFIG_RADIANT_SEC_HOST_MESSAGES */

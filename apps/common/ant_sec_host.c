@@ -29,6 +29,7 @@
 #include <radiant/radiant_channel.h>
 
 #include "ant_radio.h"
+#include "ant_radio_radiant_priv.h"
 #include "ant_wire.h"
 
 BUILD_ASSERT(RADIANT_SEC_SW_CONF == 0x01,
@@ -89,8 +90,17 @@ static void put_u32(uint8_t *out, uint32_t v)
  * wire. Decoding 0xF3's epoch and us_into_epoch happens in
  * ant_serial_bridge.c, where the frame still exists. */
 
-antr_err_t antr_sec_config(uint8_t channel, uint8_t switches, uint8_t w,
-			   uint8_t page_lo, uint8_t page_hi)
+/*
+ * Every radiant_sec call runs under api_lock, like every other antr_* entry
+ * point: the pump runs on the event thread under it, and the software AES
+ * shares one key schedule that a preempting host command would re-expand
+ * under another key. Each public function below validates, then calls its
+ * _locked body with the lock held. radiant_sec asserts it in a debug build
+ * (RADIANT_SEC_LOCK_CHECK).
+ */
+
+static antr_err_t sec_config_locked(uint8_t channel, uint8_t switches, uint8_t w,
+				    uint8_t page_lo, uint8_t page_hi)
 {
 	if (channel >= (uint8_t)RADIANT_CHANNEL_COUNT) {
 		return (antr_err_t)ANTW_INVALID_MESSAGE;
@@ -107,7 +117,8 @@ antr_err_t antr_sec_config(uint8_t channel, uint8_t switches, uint8_t w,
 					     page_hi));
 }
 
-antr_err_t antr_sec_key_set(uint8_t channel, uint8_t bits, const uint8_t *key)
+static antr_err_t sec_key_set_locked(uint8_t channel, uint8_t bits,
+				     const uint8_t *key)
 {
 	if (channel >= (uint8_t)RADIANT_CHANNEL_COUNT || key == NULL) {
 		return (antr_err_t)ANTW_INVALID_MESSAGE;
@@ -142,8 +153,8 @@ antr_err_t antr_sec_key_set(uint8_t channel, uint8_t bits, const uint8_t *key)
 	return (antr_err_t)ANTW_RESPONSE_NO_ERROR;
 }
 
-antr_err_t antr_sec_epoch_set(uint8_t channel, uint8_t flags, uint32_t epoch,
-			      uint64_t us_into_epoch)
+static antr_err_t sec_epoch_set_locked(uint8_t channel, uint8_t flags,
+				       uint32_t epoch, uint64_t us_into_epoch)
 {
 	uint16_t period;
 
@@ -168,6 +179,38 @@ antr_err_t antr_sec_epoch_set(uint8_t channel, uint8_t flags, uint32_t epoch,
 					     period));
 }
 
+antr_err_t antr_sec_config(uint8_t channel, uint8_t switches, uint8_t w,
+			   uint8_t page_lo, uint8_t page_hi)
+{
+	antr_err_t rc;
+
+	k_mutex_lock(&api_lock, K_FOREVER);
+	rc = sec_config_locked(channel, switches, w, page_lo, page_hi);
+	k_mutex_unlock(&api_lock);
+	return rc;
+}
+
+antr_err_t antr_sec_key_set(uint8_t channel, uint8_t bits, const uint8_t *key)
+{
+	antr_err_t rc;
+
+	k_mutex_lock(&api_lock, K_FOREVER);
+	rc = sec_key_set_locked(channel, bits, key);
+	k_mutex_unlock(&api_lock);
+	return rc;
+}
+
+antr_err_t antr_sec_epoch_set(uint8_t channel, uint8_t flags, uint32_t epoch,
+			      uint64_t us_into_epoch)
+{
+	antr_err_t rc;
+
+	k_mutex_lock(&api_lock, K_FOREVER);
+	rc = sec_epoch_set_locked(channel, flags, epoch, us_into_epoch);
+	k_mutex_unlock(&api_lock);
+	return rc;
+}
+
 antr_err_t antr_sec_status_get(uint8_t channel, uint8_t *out, uint8_t out_len)
 {
 	struct radiant_sec_state state;
@@ -183,8 +226,10 @@ antr_err_t antr_sec_status_get(uint8_t channel, uint8_t *out, uint8_t out_len)
 	/* An unkeyed channel answers with zeros and CLEAR rather than erroring
 	 * - "no security here" is a legitimate state, not a fault. The version
 	 * byte is set either way: it describes the layout, not the channel. */
+	k_mutex_lock(&api_lock, K_FOREVER);
 	radiant_sec_get_state(channel, &state);
 	radiant_sec_get_stats(channel, &stats);
+	k_mutex_unlock(&api_lock);
 
 	memset(out, 0, ANTR_SEC_STATUS_LEN);
 	out[0] = channel;
@@ -221,9 +266,10 @@ antr_err_t antr_sec_status_get(uint8_t channel, uint8_t *out, uint8_t out_len)
  * exchange, leave. The reply echoes the sub-command at [1] so a host can
  * tell which one answered.
  */
-antr_err_t antr_sec_pair(uint8_t channel, uint8_t subcmd, const uint8_t *arg,
-			 uint8_t arg_len, uint8_t *reply, uint8_t reply_cap,
-			 uint8_t *reply_len)
+static antr_err_t sec_pair_locked(uint8_t channel, uint8_t subcmd,
+				  const uint8_t *arg, uint8_t arg_len,
+				  uint8_t *reply, uint8_t reply_cap,
+				  uint8_t *reply_len)
 {
 	uint32_t fp = 0u;
 	int      rc;
@@ -294,6 +340,22 @@ antr_err_t antr_sec_pair(uint8_t channel, uint8_t subcmd, const uint8_t *arg,
 	default:
 		return (antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED;
 	}
+}
+
+/* The X25519 exchange (0xF5 EXCHANGE, and SCALAR for the public key) holds
+ * api_lock for its whole duration, like the rest; see the hold-time
+ * measurement in radiant/tests/api/src/test_api_sec_host.c. */
+antr_err_t antr_sec_pair(uint8_t channel, uint8_t subcmd, const uint8_t *arg,
+			 uint8_t arg_len, uint8_t *reply, uint8_t reply_cap,
+			 uint8_t *reply_len)
+{
+	antr_err_t rc;
+
+	k_mutex_lock(&api_lock, K_FOREVER);
+	rc = sec_pair_locked(channel, subcmd, arg, arg_len, reply, reply_cap,
+			     reply_len);
+	k_mutex_unlock(&api_lock);
+	return rc;
 }
 
 #endif /* CONFIG_RADIANT_SEC_PAIRING_X25519 */

@@ -1016,7 +1016,7 @@ config RADIANT_SEC
 	help
 	  src/radiant_sec.c and src/radiant_sec_aes.c: two orthogonal
 	  per-channel payload transforms - X_AUTH (a spread AES-CMAC tag in
-	  byte [7]) and X_CONF (AES-128-CTR over bytes [2..6]). Both are off
+	  byte [7]) and X_CONF (AES-128-CTR over bytes [2..6], or [2..7] without X_AUTH). Both are off
 	  at runtime until a host configures them, and this symbol is off at
 	  build time so that the overwhelming majority of builds carry none of
 	  it. docs/radiant-security.md is normative.
@@ -1039,7 +1039,8 @@ config RADIANT_SEC_CONF
 	bool "compile X_CONF (confidentiality)"
 	default y
 	help
-	  AES-128-CTR over bytes [2..6] of a data page in the secured range.
+	  AES-128-CTR over bytes [2..6] of a data page in the secured range
+	  ([2..7] when X_AUTH is off, since byte [7] is then payload).
 	  Bytes [0] and [1] stay in the clear so a receiver can tell a data
 	  page from a descriptor and can build the nonce, which is what makes
 	  the transform cost zero payload bytes.
@@ -1061,6 +1062,23 @@ config RADIANT_SEC_AUTH
 	  discarded - discarding costs W packets for every one lost, against a
 	  measured ~0.4% bench loss floor, and hands an attacker a W-for-1
 	  denial of service.
+
+config RADIANT_SEC_LOCK_CHECK
+	bool "assert the caller's lock in the radiant_sec entry points"
+	default y if ASSERT
+	help
+	  radiant_sec is not re-entrant: the software AES keeps one shared key
+	  schedule, and the per-channel window state is rewritten by the pump.
+	  The port serialises every call (apps/common: api_lock). With this on,
+	  the configuration, pump, status and pairing entry points call
+	  radiant_sec_port_lock_check(), which the port overrides to assert the
+	  lock is held. The default is a no-op, and the whole check compiles
+	  away when this is off. Entry points that run in an ISR
+	  (radiant_sec_rx_ingest()), the single-word reads
+	  (radiant_sec_channel_is_secured(), radiant_sec_last_verdict()) and
+	  radiant_sec_tx_transform() are deliberately not checked; the last
+	  because the port calls it from the scheduler's terminal callback
+	  without api_lock, which is an open finding and not a design.
 
 config RADIANT_SEC_MAX_CHANNELS
 	int "secured channels"

@@ -63,6 +63,7 @@
 #include "ant_radio.h"
 
 #include "ant_radio_radiant.h"
+#include "ant_radio_radiant_priv.h"
 #include <radiant/radiant_channel.h>
 #include <radiant/radiant_crc_repair.h>
 #include <radiant/radiant_event.h>
@@ -450,6 +451,27 @@ static struct radiant_api_stats api_stats;
  * saves/restores `in_pass` and runs slot-table writes with interrupts off.
  */
 K_MUTEX_DEFINE(api_lock);
+
+#if defined(CONFIG_RADIANT_SEC_LOCK_CHECK)
+uint32_t antr_api_lock_violations;
+
+bool antr_api_lock_held(void)
+{
+	return api_lock.lock_count > 0u && api_lock.owner == k_current_get();
+}
+
+/* The port's half of radiant_sec's lock check (radiant_sec.h). radiant_sec
+ * is not re-entrant, so reaching it without api_lock is a bug whether or not
+ * a race happens to land. */
+void radiant_sec_port_lock_check(const char *who)
+{
+	if (!antr_api_lock_held()) {
+		antr_api_lock_violations++;
+		__ASSERT(false, "radiant_sec: %s without api_lock", who);
+	}
+	ARG_UNUSED(who);
+}
+#endif
 
 /* Given once per queued message (possibly from the radio ISR), and once per
  * housekeeping interval by the take's timeout. */
@@ -3066,7 +3088,12 @@ antr_err_t antr_init(void)
 	struct radiant_search_cfg scfg;
 	int                   rc;
 
+	/* No other thread exists yet, but radiant_sec_reset() inside asserts
+	 * the lock (CONFIG_RADIANT_SEC_LOCK_CHECK), and the rule is simpler
+	 * with no exceptions. */
+	k_mutex_lock(&api_lock, K_FOREVER);
 	api_reset_state();
+	k_mutex_unlock(&api_lock);
 	memset(&api_stats, 0, sizeof(api_stats));
 
 	/*

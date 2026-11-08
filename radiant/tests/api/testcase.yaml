@@ -41,6 +41,7 @@ tests:
     extra_configs:
       - CONFIG_RADIANT_SEC=y
       - CONFIG_RADIANT_SEC_HOST_MESSAGES=n
+      - CONFIG_RADIANT_SEC_LOCK_CHECK=y
 
   # The same again with the 0xF1-0xF4 adapter linked in.
   #
@@ -62,6 +63,8 @@ tests:
     extra_configs:
       - CONFIG_RADIANT_SEC=y
       - CONFIG_RADIANT_SEC_HOST_MESSAGES=y
+      - CONFIG_RADIANT_SEC_LOCK_CHECK=y
+      - CONFIG_RADIANT_SEC_PAIRING_X25519=y
 
   # The same application with CRC repair compiled in (default n everywhere
   # else). The first api-level scenario that ever runs the repair path - added

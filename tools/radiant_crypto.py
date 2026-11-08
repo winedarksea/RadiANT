@@ -294,18 +294,20 @@ def derive_keys(root: bytes, epoch: int, base_devnum: int) -> dict:
 
 
 def conf_transform(k_enc: bytes, epoch: int, devnum: int, counter: int,
-                   payload: bytes) -> bytes:
+                   payload: bytes, auth: bool) -> bytes:
     """X_CONF, both directions - CTR is its own inverse.
 
     Bytes [0..1] stay clear (page number, counter for the nonce). Byte [7] is
-    left alone too: it's X_AUTH's tag byte when on, and reserved tag space
-    regardless.
+    left alone only when `auth` says X_AUTH is on, because then it is the tag
+    byte. Without X_AUTH it is payload (the field area is 48 bits) and is
+    ciphertext like [2..6]: CTR covers 6 bytes, not 5.
     """
     if len(payload) != 8:
         raise ValueError(f"a RadiANT page is 8 bytes, got {len(payload)}")
     iv = nonce_block(epoch, devnum, counter, DOM_CTR)
-    body = ctr_xor(k_enc, iv, payload[2:7])
-    return payload[:2] + body + payload[7:]
+    end = 7 if auth else 8
+    body = ctr_xor(k_enc, iv, payload[2:end])
+    return payload[:2] + body + payload[end:]
 
 
 def spread_tag(k_auth: bytes, epoch: int, devnum: int, window_start: int,
@@ -413,7 +415,8 @@ def compat_tier1_tag(k_auth: bytes, epoch: int, devnum: int,
 
 
 def compat_tier2_tag(k_auth: bytes, epoch: int, devnum: int,
-                     window_index: int, messages) -> bytes:
+                     window_index: int, messages,
+                     late: bool = False) -> bytes:
     """Tier II, the data attestation:
 
         trunc48( CMAC(K_auth, nonce_block || p_1 || p_2 || ... || p_{N-1}) )
@@ -427,9 +430,18 @@ def compat_tier2_tag(k_auth: bytes, epoch: int, devnum: int,
 
     Off by default because a window CMAC isn't self-synchronising under loss:
     one lost packet makes the whole window unverifiable.
+
+    `late` accepts a window that closed late: up to two more messages than
+    N-1, because a tag due on message 119 or 120 (which the firmware seam
+    never offers) is owed past them. The MAC is the same construction over
+    however many messages the window held.
     """
     window = len(messages) + 1
-    if window not in COMPAT_WINDOW_SIZES:
+    if late:
+        ok = any(window - extra in COMPAT_WINDOW_SIZES for extra in (0, 1, 2))
+    else:
+        ok = window in COMPAT_WINDOW_SIZES
+    if not ok:
         raise ValueError(
             f"N must be one of {COMPAT_WINDOW_SIZES}, so `messages` is "
             f"N-1 = {tuple(n - 1 for n in COMPAT_WINDOW_SIZES)} messages, "
