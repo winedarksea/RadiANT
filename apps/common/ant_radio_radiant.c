@@ -4203,14 +4203,20 @@ antr_err_t antr_capabilities_get(uint8_t *capabilities)
 
 	capabilities[ANTW_CAPABILITIES_OFFSET_ADVANCED_OPTIONS_3] =
 		(uint8_t)(ANTW_CAPABILITIES_ADVANCED_BURST_ENABLED |
-			  ANTW_CAPABILITIES_EVENT_FILTERING_ENABLED |
-			  ANTW_CAPABILITIES_SEARCH_SHARING_ENABLED |
-			  ANTW_CAPABILITIES_SELECTIVE_DATA_UPDATE_ENABLED |
-			  /* Describes what the radio layer can do, same as
-			   * src/ant_radio_stub.c reports, so an A/B diff won't
-			   * flag it. radiant actually refuses AES-CTR - see
-			   * antr_crypto_channel_enable(). */
-			  ANTW_CAPABILITIES_ENCRYPTED_CHANNEL_ENABLED);
+			  /* Honoured: radiant_event.c filters at delivery. */
+			  ANTW_CAPABILITIES_EVENT_FILTERING_ENABLED);
+	/*
+	 * Three bits this byte used to claim and does not: search sharing
+	 * (0x10), selective data update (0x40) and encrypted channel (0x80). The
+	 * first two only stored their configuration and the third described a
+	 * mode antr_crypto_channel_enable() refuses - "advertised and
+	 * unimplemented" (docs/gotchas.md), which strands a host that believes
+	 * the bit. The commands behind them are still accepted and stored: a
+	 * host with no recovery path for an error is worse off than one whose
+	 * setting quietly does nothing. The byte was 0xD5; it is 0x05, so it no
+	 * longer matches the sdk_ant reference (0xFD), and the recorded nRF and
+	 * cc26xx conformance transcripts are stale until re-recorded.
+	 */
 
 	capabilities[ANTW_CAPABILITIES_OFFSET_ADVANCED_OPTIONS_4] = 0x00u;
 

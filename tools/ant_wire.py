@@ -319,15 +319,22 @@ MESG_CONFIG_ADV_BURST_ID = 0x78
 
 # Command is [filter lo, filter hi] with no channel byte; the reply is [filler,
 # filter lo, filter hi]. That asymmetry is real and is what the round-trip
-# check in ant_features.py exists to catch. REQUEST REPLY, a different shape
-# from the command above: 3 bytes (MESG_EVENT_FILTER_CONFIG_REQ_SIZE), selected
-# by nothing - there is only one shape. One shape, one byte longer than the
-# command. The `2..3` on payload_len above is the union of the two and predates
-# this field; it is left as it stands because tools/ant_conformance.py derives
-# its malformed-short and malformed-long cases from those bounds, so narrowing
-# it would change the generated case set and the committed Tier 1 reference
-# transcript would stop being reproducible. The reply side is exact here
-# regardless, which is where the asymmetry actually shows. [bridge, tools]
+# check in ant_features.py exists to catch. Bit N filters channel event code
+# N+1 (codes 1..16; ANT Message Protocol and Usage Rev 5.1 sec 9.5.2.28 /
+# 9.5.7.9 / 9.5.6.1), so 0x0001 is EVENT_RX_SEARCH_TIMEOUT, 0x0002
+# EVENT_RX_FAIL, 0x0004 EVENT_TX and so on up to 0x0200
+# EVENT_TRANSFER_TX_START. RadiANT applies it at delivery to the host, after
+# its own accounting; 0, the default, passes everything. TRANSFER_TX_COMPLETED
+# / TX_FAILED still release the burst buffer internally when filtered. REQUEST
+# REPLY, a different shape from the command above: 3 bytes
+# (MESG_EVENT_FILTER_CONFIG_REQ_SIZE), selected by nothing - there is only one
+# shape. One shape, one byte longer than the command. The `2..3` on payload_len
+# above is the union of the two and predates this field; it is left as it
+# stands because tools/ant_conformance.py derives its malformed-short and
+# malformed-long cases from those bounds, so narrowing it would change the
+# generated case set and the committed Tier 1 reference transcript would stop
+# being reproducible. The reply side is exact here regardless, which is where
+# the asymmetry actually shows. [bridge, tools]
 MESG_EVENT_FILTER_CONFIG_ID = 0x79
 
 # [channel, mask config]. Binds one of the masks to a channel; INVALID_SDU_MASK
@@ -1096,26 +1103,30 @@ CAPABILITIES_ADVANCED_BURST_ENABLED = 0x01
 # reports as zero, because sdk-ant has no API for it. [tools, readme]
 CAPABILITIES_EVENT_BUFFERING_ENABLED = 0x02
 
-# MESG_EVENT_FILTER_CONFIG (0x79). [stub, tools]
+# MESG_EVENT_FILTER_CONFIG (0x79). RadiANT honours it. [stub, tools]
 CAPABILITIES_EVENT_FILTERING_ENABLED = 0x04
 
 # MESG_HIGH_DUTY_SEARCH_MODE (0x77). Advertised and not bridged, on purpose -
 # see the README. [tools, readme]
 CAPABILITIES_HIGH_DUTY_SEARCH_ENABLED = 0x08
 
-# MESG_ACTIVE_SEARCH_SHARING (0x81). [tools (ant_features)]
+# MESG_ACTIVE_SEARCH_SHARING (0x81). The sdk-ant reference sets it; RadiANT
+# reports 0 (the command is accepted and stored, nothing acts on it). [tools
+# (ant_features)]
 CAPABILITIES_SEARCH_SHARING_ENABLED = 0x10
 
 # Radio coexistence configuration. No host API reaches it. [tools
 # (ant_features)]
 CAPABILITIES_RADIO_COEX_CONFIG_ENABLED = 0x20
 
-# MESG_SDU_CONFIG / MESG_SDU_SET_MASK (0x7A, 0x7B). [stub, tools]
+# MESG_SDU_CONFIG / MESG_SDU_SET_MASK (0x7A, 0x7B). The sdk-ant reference sets
+# it; RadiANT reports 0 (accepted and stored, never applied). [stub, tools]
 CAPABILITIES_SELECTIVE_DATA_UPDATE_ENABLED = 0x40
 
 # Single-channel encryption (0x7D-0x7F). Advertised whether or not the write
 # side was compiled in: the bit describes what the radio layer can do, not what
-# the bridge chose to expose. [stub, tools]
+# the bridge chose to expose. The sdk-ant reference sets it; RadiANT reports 0,
+# because it declines AES-CTR (enable is refused). [stub, tools]
 CAPABILITIES_ENCRYPTED_CHANNEL_ENABLED = 0x80
 
 # RF-active notification: an event when the time to the next synchronous RF
@@ -1678,7 +1689,7 @@ MESSAGES = {
                  "desc": '[filler, filter lo, filter hi].'},
             ),
         },
-        "desc": 'Command is [filter lo, filter hi] with no channel byte; the reply is [filler, filter lo, filter hi]. That asymmetry is real and is what the round-trip check in ant_features.py exists to catch.',
+        "desc": 'Command is [filter lo, filter hi] with no channel byte; the reply is [filler, filter lo, filter hi]. That asymmetry is real and is what the round-trip check in ant_features.py exists to catch. Bit N filters channel event code N+1 (codes 1..16; ANT Message Protocol and Usage Rev 5.1 sec 9.5.2.28 / 9.5.7.9 / 9.5.6.1), so 0x0001 is EVENT_RX_SEARCH_TIMEOUT, 0x0002 EVENT_RX_FAIL, 0x0004 EVENT_TX and so on up to 0x0200 EVENT_TRANSFER_TX_START. RadiANT applies it at delivery to the host, after its own accounting; 0, the default, passes everything. TRANSFER_TX_COMPLETED / TX_FAILED still release the burst buffer internally when filtered.',
     },
     0x7A: {
         "name": 'MESG_SDU_CONFIG_ID',
@@ -2014,12 +2025,12 @@ CAPABILITY_BYTES = {
     6: ('advanced_options_3', (
         (0x01, 'CAPABILITIES_ADVANCED_BURST_ENABLED', 'MESG_CONFIG_ADV_BURST (0x78) and 24-byte burst packets.'),
         (0x02, 'CAPABILITIES_EVENT_BUFFERING_ENABLED', 'MESG_EVENT_BUFFERING_CONFIG (0x74). The one bit this firmware honestly reports as zero, because sdk-ant has no API for it.'),
-        (0x04, 'CAPABILITIES_EVENT_FILTERING_ENABLED', 'MESG_EVENT_FILTER_CONFIG (0x79).'),
+        (0x04, 'CAPABILITIES_EVENT_FILTERING_ENABLED', 'MESG_EVENT_FILTER_CONFIG (0x79). RadiANT honours it.'),
         (0x08, 'CAPABILITIES_HIGH_DUTY_SEARCH_ENABLED', 'MESG_HIGH_DUTY_SEARCH_MODE (0x77). Advertised and not bridged, on purpose - see the README.'),
-        (0x10, 'CAPABILITIES_SEARCH_SHARING_ENABLED', 'MESG_ACTIVE_SEARCH_SHARING (0x81).'),
+        (0x10, 'CAPABILITIES_SEARCH_SHARING_ENABLED', 'MESG_ACTIVE_SEARCH_SHARING (0x81). The sdk-ant reference sets it; RadiANT reports 0 (the command is accepted and stored, nothing acts on it).'),
         (0x20, 'CAPABILITIES_RADIO_COEX_CONFIG_ENABLED', 'Radio coexistence configuration. No host API reaches it.'),
-        (0x40, 'CAPABILITIES_SELECTIVE_DATA_UPDATE_ENABLED', 'MESG_SDU_CONFIG / MESG_SDU_SET_MASK (0x7A, 0x7B).'),
-        (0x80, 'CAPABILITIES_ENCRYPTED_CHANNEL_ENABLED', 'Single-channel encryption (0x7D-0x7F). Advertised whether or not the write side was compiled in: the bit describes what the radio layer can do, not what the bridge chose to expose.'),
+        (0x40, 'CAPABILITIES_SELECTIVE_DATA_UPDATE_ENABLED', 'MESG_SDU_CONFIG / MESG_SDU_SET_MASK (0x7A, 0x7B). The sdk-ant reference sets it; RadiANT reports 0 (accepted and stored, never applied).'),
+        (0x80, 'CAPABILITIES_ENCRYPTED_CHANNEL_ENABLED', 'Single-channel encryption (0x7D-0x7F). Advertised whether or not the write side was compiled in: the bit describes what the radio layer can do, not what the bridge chose to expose. The sdk-ant reference sets it; RadiANT reports 0, because it declines AES-CTR (enable is refused).'),
     )),
     7: ('advanced_options_4', (
         (0x01, 'CAPABILITIES_RFACTIVE_NOTIFICATION_ENABLED', 'RF-active notification: an event when the time to the next synchronous RF activity exceeds a configured threshold. Set in the observed reply.'),

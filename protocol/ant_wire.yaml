@@ -705,7 +705,14 @@ messages:
     bridged: true
     desc: "Command is [filter lo, filter hi] with no channel byte; the reply is
            [filler, filter lo, filter hi]. That asymmetry is real and is what
-           the round-trip check in ant_features.py exists to catch."
+           the round-trip check in ant_features.py exists to catch. Bit N
+           filters channel event code N+1 (codes 1..16; ANT Message Protocol
+           and Usage Rev 5.1 sec 9.5.2.28 / 9.5.7.9 / 9.5.6.1), so 0x0001 is
+           EVENT_RX_SEARCH_TIMEOUT, 0x0002 EVENT_RX_FAIL, 0x0004 EVENT_TX and
+           so on up to 0x0200 EVENT_TRANSFER_TX_START. RadiANT applies it at
+           delivery to the host, after its own accounting; 0, the default,
+           passes everything. TRANSFER_TX_COMPLETED / TX_FAILED still release
+           the burst buffer internally when filtered."
     source: "bridge, tools"
     reply_len:
       selector: none
@@ -1674,24 +1681,31 @@ capabilities:
                   honestly reports as zero, because sdk-ant has no API for it.",
            source: "tools, readme"}
         - {name: CAPABILITIES_EVENT_FILTERING_ENABLED, value: 0x04,
-           desc: "MESG_EVENT_FILTER_CONFIG (0x79).", source: "stub, tools"}
+           desc: "MESG_EVENT_FILTER_CONFIG (0x79). RadiANT honours it.",
+           source: "stub, tools"}
         - {name: CAPABILITIES_HIGH_DUTY_SEARCH_ENABLED, value: 0x08,
            desc: "MESG_HIGH_DUTY_SEARCH_MODE (0x77). Advertised and not
                   bridged, on purpose - see the README.",
            source: "tools, readme"}
         - {name: CAPABILITIES_SEARCH_SHARING_ENABLED, value: 0x10,
-           desc: "MESG_ACTIVE_SEARCH_SHARING (0x81).",
+           desc: "MESG_ACTIVE_SEARCH_SHARING (0x81). The sdk-ant reference
+                  sets it; RadiANT reports 0 (the command is accepted and
+                  stored, nothing acts on it).",
            source: "tools (ant_features)"}
         - {name: CAPABILITIES_RADIO_COEX_CONFIG_ENABLED, value: 0x20,
            desc: "Radio coexistence configuration. No host API reaches it.",
            source: "tools (ant_features)"}
         - {name: CAPABILITIES_SELECTIVE_DATA_UPDATE_ENABLED, value: 0x40,
-           desc: "MESG_SDU_CONFIG / MESG_SDU_SET_MASK (0x7A, 0x7B).",
+           desc: "MESG_SDU_CONFIG / MESG_SDU_SET_MASK (0x7A, 0x7B). The
+                  sdk-ant reference sets it; RadiANT reports 0 (accepted and
+                  stored, never applied).",
            source: "stub, tools"}
         - {name: CAPABILITIES_ENCRYPTED_CHANNEL_ENABLED, value: 0x80,
            desc: "Single-channel encryption (0x7D-0x7F). Advertised whether or
                   not the write side was compiled in: the bit describes what
-                  the radio layer can do, not what the bridge chose to expose.",
+                  the radio layer can do, not what the bridge chose to expose.
+                  The sdk-ant reference sets it; RadiANT reports 0, because it
+                  declines AES-CTR (enable is refused).",
            source: "stub, tools"}
     - index: 7
       field: advanced_options_4

@@ -268,12 +268,20 @@ radiant_msg_err_t radiant_event_lib_config_clear(uint8_t config);
 radiant_msg_err_t radiant_event_lib_config_get(uint8_t *config);
 
 /* ---------------------------------------------------------------------------
- * Event filtering - stored, honoured by nobody, deliberately
+ * Event filtering (MESG_EVENT_FILTER_CONFIG, 0x79)
  *
- * src/ant_radio.h requires a non-filtering backend to still round-trip the
- * mask (tools/ant_features.py checks it) and NOT pretend to filter, since
- * loss accounting needs every RX_FAIL to actually arrive ("unexplained loss
- * must be 0" is an A/B gate). So: storage plus a getter, no filtering.
+ * Applied at DELIVERY, in the drain, after the event was posted and counted:
+ * every internal counter and the loss accounting see an event whether or not
+ * the host asked not to. A set bit N suppresses unsolicited channel event
+ * code N+1 (codes 1..16) on its way to the host; 0, the default and what
+ * radiant_event_flush() restores, passes everything. The mapping and its
+ * source (ANT Message Protocol and Usage, Rev 5.1, 9.5.2.28 / 9.5.7.9 /
+ * 9.5.6.1) are with event_filtered() in radiant_event.c.
+ *
+ * TRANSFER_TX_COMPLETED and TRANSFER_TX_FAILED are the exception: they free
+ * the bridge's burst buffer, so they are still handed to radiant_on_message()
+ * when filtered and the bridge keeps them off the wire. Suppressed events are
+ * counted in radiant_event_stats.filtered.
  * ---------------------------------------------------------------------------
  */
 radiant_msg_err_t radiant_event_filter_set(uint16_t filter);
@@ -510,6 +518,9 @@ struct radiant_event_stats {
 				     * downgraded to absent */
 	uint32_t rssi_suppressed;   /* RSSI asked for, backend has none */
 	uint32_t overflow_marks;    /* RADIANT_WIRE_EVENT_QUE_OVERFLOW messages sent */
+	uint32_t filtered;          /* events the host's event filter named; all
+				     * but the two burst-release codes were
+				     * withheld from radiant_on_message() */
 
 	/* The three release codes, counted separately so the burst
 	 * buffer-ownership obligation is assertable. */

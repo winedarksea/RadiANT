@@ -2381,6 +2381,92 @@ static void air_tracked_frame(const struct fake_radio_arm *w, uint16_t number)
 }
 
 /*
+ * The host's event filter (MESG_EVENT_FILTER_CONFIG) takes RX_FAIL off the
+ * wire - bit 1, ANT Message Protocol and Usage Rev 5.1 9.5.2.28 - but the
+ * dongle's own loss accounting runs at post time and must still see every
+ * miss: "unexplained loss must be 0" is an A/B gate that reads it.
+ *
+ * A tracked master that has gone quiet, six periods (fewer than the eight that
+ * drop a channel to search): the first three with RX_FAIL filtered, the last
+ * three with the filter cleared as the control.
+ */
+ZTEST(api, test_a_filtered_rx_fail_never_reaches_the_host_but_is_still_counted)
+{
+	uint16_t dev;
+	uint32_t missed_before;
+	uint32_t missed_filtered;
+	uint32_t filtered_before;
+
+	open_and_acquire_slave(&dev);
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_event_filtering_set(0x0002u));
+	missed_before = radiant_api_stats_get()->slots_missed;
+	filtered_before = radiant_event_stats_get()->filtered;
+	memset(msglog, 0, sizeof(msglog));
+	n_msg = 0u;
+
+	run_virtual_us(3u * PERIOD_US);
+
+	missed_filtered = radiant_api_stats_get()->slots_missed - missed_before;
+	zassert_true(missed_filtered >= 2u,
+		     "setup: the silent master produced %u misses",
+		     (unsigned int)missed_filtered);
+	zassert_equal(0u, count_channel_events(CH, (uint8_t)ANTW_EVENT_RX_FAIL),
+		      "the host received RX_FAIL with it filtered");
+	zassert_true(radiant_event_stats_get()->filtered - filtered_before >=
+			     missed_filtered,
+		     "the misses were counted by the loss accounting (%u) but "
+		     "the event layer never saw (and filtered) as many RX_FAILs "
+		     "(%u)", (unsigned int)missed_filtered,
+		     (unsigned int)(radiant_event_stats_get()->filtered -
+				    filtered_before));
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH),
+		      "setup: the channel dropped to search");
+
+	/* Control: the same silence with no filter does reach the host. */
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_event_filtering_set(0u));
+	run_virtual_us(2u * PERIOD_US);
+	zassert_true(count_channel_events(CH, (uint8_t)ANTW_EVENT_RX_FAIL) >= 1u,
+		     "control: with no filter the host got no RX_FAIL either, so "
+		     "the zero above proves nothing");
+
+	end_of_test();
+}
+
+/*
+ * advanced_options_3 claims only what is implemented: advanced burst and event
+ * filtering. Search sharing, selective data update and encrypted channel only
+ * stored configuration (or, for encryption, describe a mode that is refused),
+ * so they read 0 - 0x05, not the 0xD5 this byte used to carry - while the
+ * commands behind them are still accepted: a host with no recovery path for an
+ * error is worse off than one whose setting quietly does nothing.
+ */
+ZTEST(api, test_capabilities_claim_only_what_is_implemented)
+{
+	uint8_t caps[ANTW_MESG_CAPABILITIES_SIZE];
+	uint8_t adv3;
+	uint8_t mask[ANTW_ANT_MAX_PAYLOAD_SIZE] = { 0u };
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR, antr_capabilities_get(caps));
+	adv3 = caps[ANTW_CAPABILITIES_OFFSET_ADVANCED_OPTIONS_3];
+
+	zassert_equal(0x05u, adv3, "advanced_options_3 is 0x%02x", adv3);
+	zassert_true((adv3 & ANTW_CAPABILITIES_EVENT_FILTERING_ENABLED) != 0u);
+	zassert_true((adv3 & ANTW_CAPABILITIES_ADVANCED_BURST_ENABLED) != 0u);
+	zassert_equal(0u, adv3 & ANTW_CAPABILITIES_SEARCH_SHARING_ENABLED);
+	zassert_equal(0u, adv3 & ANTW_CAPABILITIES_SELECTIVE_DATA_UPDATE_ENABLED);
+	zassert_equal(0u, adv3 & ANTW_CAPABILITIES_ENCRYPTED_CHANNEL_ENABLED);
+
+	/* Not advertised is not refused: the host's setup sequence still works. */
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sdu_mask_set(0u, mask));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_event_filtering_set(0x0006u));
+}
+
+/*
  * ONE SENSOR GOING AWAY MUST NOT COST THE OTHER ITS SLOTS.
  *
  * The sibling test above guards the SWEEP against starvation. Its only

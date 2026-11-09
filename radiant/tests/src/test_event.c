@@ -977,30 +977,196 @@ ZTEST(radiant_event, test_lib_config_is_additive_and_refuses_unknown_bits)
 	zassert_equal(0u, cfg);
 }
 
-ZTEST(radiant_event, test_event_filter_round_trips_and_filters_nothing)
-{
-	struct radiant_rx_event hal;
-	struct radiant_event_rx rx;
-	uint16_t            f = 0u;
+/*
+ * The event filter (MESG_EVENT_FILTER_CONFIG). Bit N suppresses channel event
+ * code N+1 on its way to the host - ANT Message Protocol and Usage Rev 5.1,
+ * 9.5.2.28 / 9.5.6.1; its own example filters EVENT_TX (3) with 0x04.
+ *
+ * Written against the document's numbers, not against the module's table, so
+ * the module and the test cannot share a mistake: each row is code, bit.
+ */
+static const struct {
+	uint8_t  code;
+	uint16_t bit;
+} filter_map[] = {
+	{ 0x01u, 0x0001u }, /* EVENT_RX_SEARCH_TIMEOUT */
+	{ 0x02u, 0x0002u }, /* EVENT_RX_FAIL */
+	{ 0x03u, 0x0004u }, /* EVENT_TX (the document's own example) */
+	{ 0x04u, 0x0008u }, /* EVENT_TRANSFER_RX_FAILED */
+	{ 0x05u, 0x0010u }, /* EVENT_TRANSFER_TX_COMPLETED */
+	{ 0x06u, 0x0020u }, /* EVENT_TRANSFER_TX_FAILED */
+	{ 0x07u, 0x0040u }, /* EVENT_CHANNEL_CLOSED */
+	{ 0x08u, 0x0080u }, /* EVENT_RX_FAIL_GO_TO_SEARCH */
+	{ 0x09u, 0x0100u }, /* EVENT_CHANNEL_COLLISION */
+	{ 0x0Au, 0x0200u }, /* EVENT_TRANSFER_TX_START */
+};
+#define N_MAP  (sizeof(filter_map) / sizeof(filter_map[0]))
 
-	/* tools/ant_features.py round-trips this, so it must be stored... */
+/* Post one of each code in the table, channel 0. */
+static void post_every_mapped_event(void)
+{
+	for (size_t i = 0u; i < N_MAP; i++) {
+		zassert_equal(RADIANT_EVENT_OK,
+			      radiant_event_post_channel_event(0u, filter_map[i].code));
+	}
+}
+
+/* How many delivered messages are the channel event `code`. */
+static uint32_t delivered_code(uint8_t code)
+{
+	uint32_t n = 0u;
+
+	for (uint32_t i = 0u; i < n_recs && i < REC_MAX; i++) {
+		if (recs[i].id == (uint8_t)RADIANT_WIRE_MESG_RESPONSE_EVENT_ID &&
+		    recs[i].len >= 3u &&
+		    recs[i].data[1] == (uint8_t)RADIANT_WIRE_MESG_EVENT_ID &&
+		    recs[i].data[2] == code) {
+			n++;
+		}
+	}
+	return n;
+}
+
+ZTEST(radiant_event, test_the_filter_round_trips)
+{
+	uint16_t f = 0u;
+
+	/* tools/ant_features.py round-trips this whole. */
 	zassert_equal((radiant_msg_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      radiant_event_filter_set(0xFFFFu));
 	zassert_equal((radiant_msg_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      radiant_event_filter_get(&f));
 	zassert_equal(0xFFFFu, f);
+}
 
-	/* ...and it must not actually suppress anything, because loss
-	 * accounting depends on RX_FAIL events arriving and "unexplained loss
-	 * must be 0" is an A/B gate. */
+ZTEST(radiant_event, test_a_default_filter_of_zero_passes_every_event)
+{
+	struct radiant_rx_event hal;
+	struct radiant_event_rx rx;
+	uint16_t f = 0xFFFFu;
+
+	zassert_equal((radiant_msg_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_event_filter_get(&f));
+	zassert_equal(0u, f, "the default filter is not 0");
+
+	post_every_mapped_event();
 	zassert_equal(RADIANT_EVENT_OK,
 		      radiant_event_post_channel_event(
-			      0u, (uint8_t)RADIANT_WIRE_EVENT_RX_FAIL));
+			      0u, (uint8_t)RADIANT_WIRE_EVENT_TRANSFER_NEXT_DATA_BLOCK));
 	hal = mk_hal(RADIANT_RADIO_STATUS_OK, 1000000u, true, true, -40);
 	rx = mk_rx(&hal, 0u, payload8);
 	zassert_equal(RADIANT_EVENT_OK, radiant_event_post_rx(&rx));
 
+	zassert_equal((uint32_t)N_MAP + 2u, radiant_event_drain(0u));
+	for (size_t i = 0u; i < N_MAP; i++) {
+		zassert_equal(1u, delivered_code(filter_map[i].code),
+			      "event %u did not reach the host with no filter set",
+			      (unsigned int)filter_map[i].code);
+	}
+	zassert_equal(0u, radiant_event_stats_get()->filtered);
+}
+
+/* Each bit takes out its own event and nothing else. Codes 5 and 6 are the two
+ * burst-release codes: still handed to the bridge (which frees its buffer and
+ * keeps them off the wire), so their bits are checked in the next test. */
+ZTEST(radiant_event, test_each_filter_bit_suppresses_exactly_its_event)
+{
+	for (size_t i = 0u; i < N_MAP; i++) {
+		if (filter_map[i].code == 0x05u || filter_map[i].code == 0x06u) {
+			continue;
+		}
+		n_recs = 0u;
+		zassert_equal((radiant_msg_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+			      radiant_event_filter_set(filter_map[i].bit));
+		post_every_mapped_event();
+		zassert_equal((uint32_t)N_MAP - 1u, radiant_event_drain(0u),
+			      "bit 0x%04x filtered the wrong number of events",
+			      (unsigned int)filter_map[i].bit);
+		for (size_t j = 0u; j < N_MAP; j++) {
+			zassert_equal(i == j ? 0u : 1u, delivered_code(filter_map[j].code),
+				      "bit 0x%04x: event %u delivered %u time(s)",
+				      (unsigned int)filter_map[i].bit,
+				      (unsigned int)filter_map[j].code,
+				      (unsigned int)delivered_code(filter_map[j].code));
+		}
+	}
+}
+
+/* The two burst-release codes carry buffer ownership for the bridge, so a
+ * filter naming them still delivers them to radiant_on_message(); the bridge
+ * drops them after the release. Counted as filtered all the same. */
+ZTEST(radiant_event, test_the_burst_release_codes_still_reach_the_bridge_when_filtered)
+{
+	zassert_equal((radiant_msg_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_event_filter_set(0x0010u | 0x0020u));
+	zassert_equal(RADIANT_EVENT_OK,
+		      radiant_event_post_channel_event(
+			      0u, (uint8_t)RADIANT_WIRE_EVENT_TRANSFER_TX_COMPLETED));
+	zassert_equal(RADIANT_EVENT_OK,
+		      radiant_event_post_channel_event(
+			      0u, (uint8_t)RADIANT_WIRE_EVENT_TRANSFER_TX_FAILED));
 	zassert_equal(2u, radiant_event_drain(0u));
+	zassert_equal(1u, delivered_code(0x05u));
+	zassert_equal(1u, delivered_code(0x06u));
+	zassert_equal(2u, radiant_event_stats_get()->filtered);
+}
+
+/* A full filter must not touch anything that is not a filterable event: data,
+ * command replies, and event codes with no bit. */
+ZTEST(radiant_event, test_a_full_filter_leaves_data_replies_and_unmapped_codes_alone)
+{
+	struct radiant_rx_event hal;
+	struct radiant_event_rx rx;
+	uint8_t reply[3] = { 0u, 0x42u, 0x00u }; /* a command's reply: byte 1 != 1 */
+
+	zassert_equal((radiant_msg_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_event_filter_set(0xFFFFu));
+	hal = mk_hal(RADIANT_RADIO_STATUS_OK, 1000000u, true, true, -40);
+	rx = mk_rx(&hal, 0u, payload8);
+	zassert_equal(RADIANT_EVENT_OK, radiant_event_post_rx(&rx));
+	zassert_equal(RADIANT_EVENT_OK,
+		      radiant_event_post_raw(
+			      (uint8_t)RADIANT_WIRE_MESG_RESPONSE_EVENT_ID, reply,
+			      (uint8_t)sizeof(reply)));
+	zassert_equal(RADIANT_EVENT_OK,
+		      radiant_event_post_channel_event(
+			      0u, (uint8_t)RADIANT_WIRE_EVENT_TRANSFER_NEXT_DATA_BLOCK));
+	/* 0x11 is above bit 15's reach (code 16): never filterable. */
+	zassert_equal(3u, radiant_event_drain(0u));
+	zassert_equal(1u, delivered_code((uint8_t)RADIANT_WIRE_EVENT_TRANSFER_NEXT_DATA_BLOCK));
+	zassert_equal(0u, radiant_event_stats_get()->filtered);
+}
+
+/*
+ * The point of filtering at delivery: everything counted when an event is
+ * POSTED - the ring, the release-code counters - has already seen an event the
+ * host later asked not to receive, so loss accounting still sees RX_FAIL.
+ */
+ZTEST(radiant_event, test_a_filtered_event_is_still_counted_when_posted)
+{
+	const struct radiant_event_stats *st = radiant_event_stats_get();
+
+	zassert_equal((radiant_msg_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_event_filter_set(0x0002u | 0x0010u));
+	for (unsigned int i = 0u; i < 3u; i++) {
+		zassert_equal(RADIANT_EVENT_OK,
+			      radiant_event_post_channel_event(
+				      0u, (uint8_t)RADIANT_WIRE_EVENT_RX_FAIL));
+	}
+	zassert_equal(RADIANT_EVENT_OK,
+		      radiant_event_post_channel_event(
+			      0u, (uint8_t)RADIANT_WIRE_EVENT_TRANSFER_TX_COMPLETED));
+
+	/* Counted on the way in, before anything is delivered. */
+	zassert_equal(4u, st->posted);
+	zassert_equal(1u, st->tx_completed);
+	zassert_equal(4u, radiant_event_queued());
+
+	(void)radiant_event_drain(0u);
+	zassert_equal(0u, delivered_code((uint8_t)RADIANT_WIRE_EVENT_RX_FAIL),
+		      "the host received an RX_FAIL it filtered");
+	zassert_equal(4u, st->filtered);
+	zassert_equal(0u, radiant_event_queued(), "a filtered event left on the ring");
 }
 
 /*

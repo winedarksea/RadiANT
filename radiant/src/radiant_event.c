@@ -247,9 +247,9 @@ radiant_msg_err_t radiant_event_lib_config_get(uint8_t *config)
 
 radiant_msg_err_t radiant_event_filter_set(uint16_t filter)
 {
-	/* Stored and never consulted: a backend that doesn't filter must still
-	 * round-trip the value for tools/ant_features.py, and must not pretend
-	 * to filter, since loss accounting needs RX_FAIL events to arrive. */
+	/* Stored here, consulted at delivery (deliver()), never at post: every
+	 * internal counter and the loss accounting have already seen the event
+	 * by then. Round-trips whole for tools/ant_features.py. */
 	g.filter = filter;
 	return (radiant_msg_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR;
 }
@@ -574,11 +574,68 @@ int radiant_event_post_channel_event(uint8_t channel, uint8_t code)
  * ---------------------------------------------------------------------------
  */
 
-static void deliver(const struct radiant_event_slot *s)
+/*
+ * The event filter's bit-to-event mapping, from ANT Message Protocol and
+ * Usage, Rev 5.1: section 9.5.2.28 Configure Event Filter (0x79, p.83) and
+ * section 9.5.7.9 Event Filter (p.125), with the event values of section
+ * 9.5.6.1 (p.115-116). "Bit N - Filter event (N+1) where N is max 15", and
+ * the document's own example filters EVENT_TX (value 3) with 0x04. So an
+ * event with code C (1..16) is filtered by bit C-1:
+ *
+ *     0x0001 EVENT_RX_SEARCH_TIMEOUT (1)     0x0020 EVENT_TRANSFER_TX_FAILED (6)
+ *     0x0002 EVENT_RX_FAIL (2)               0x0040 EVENT_CHANNEL_CLOSED (7)
+ *     0x0004 EVENT_TX (3)                    0x0080 EVENT_RX_FAIL_GO_TO_SEARCH (8)
+ *     0x0008 EVENT_TRANSFER_RX_FAILED (4)    0x0100 EVENT_CHANNEL_COLLISION (9)
+ *     0x0010 EVENT_TRANSFER_TX_COMPLETED (5) 0x0200 EVENT_TRANSFER_TX_START (10)
+ *
+ * The document's two-line bit list labels bit 0 RESPONSE_NO_ERROR and bit 1
+ * EVENT_RX_SEARCH_TIMEOUT, which is one off from its own formula and example.
+ * The formula and the example agree with each other, and they are what is
+ * implemented. Under either reading a command RESPONSE is never filtered
+ * here: only unsolicited channel events (message ID 1) are.
+ *
+ * Codes above 16 - EVENT_TRANSFER_NEXT_DATA_BLOCK (0x11) and the error and
+ * response codes - have no bit and are never filtered. That is also why the
+ * queue-overflow marker always reaches the host.
+ */
+static bool event_filtered(const struct radiant_event_slot *s)
+{
+	uint8_t code;
+
+	if (g.filter == 0u ||
+	    s->msg_id != (uint8_t)RADIANT_WIRE_MESG_RESPONSE_EVENT_ID ||
+	    s->body_len < 3u || s->body[1] != (uint8_t)RADIANT_WIRE_MESG_EVENT_ID) {
+		return false;
+	}
+	code = s->body[2];
+	if (code < 1u || code > 16u) {
+		return false;
+	}
+	return (g.filter & (uint16_t)(1u << (code - 1u))) != 0u;
+}
+
+/* Returns false when the filter swallowed the message. */
+static bool deliver(const struct radiant_event_slot *s)
 {
 	uint8_t         out[RADIANT_EVENT_MSG_MAX];
 	struct radiant_msg msg;
 	uint8_t         n = s->body_len;
+
+	/*
+	 * After the post-time accounting, before the host. Two codes still go to
+	 * radiant_on_message() when filtered: TRANSFER_TX_COMPLETED and
+	 * TRANSFER_TX_FAILED are what frees the bridge's burst buffer
+	 * (ant_serial_bridge.c), and withholding them from the bridge would wedge
+	 * the next burst. The bridge reads the filter itself and keeps them off
+	 * the wire. Everything else a filter names is dropped here.
+	 */
+	if (event_filtered(s)) {
+		bump(&g.stats.filtered);
+		if (s->body[2] != (uint8_t)RADIANT_WIRE_EVENT_TRANSFER_TX_COMPLETED &&
+		    s->body[2] != (uint8_t)RADIANT_WIRE_EVENT_TRANSFER_TX_FAILED) {
+			return false;
+		}
+	}
 
 	if (n > 0u) {
 		memcpy(out, s->body, n);
@@ -609,6 +666,7 @@ static void deliver(const struct radiant_event_slot *s)
 	msg.data = out;
 	radiant_on_message(&msg);
 	g.stats.delivered++;
+	return true;
 }
 
 static void deliver_overflow(void)
@@ -691,8 +749,9 @@ uint32_t radiant_event_drain(uint32_t max_msgs)
 
 		/* Outside the section: radiant_on_message() must not run with
 		 * interrupts masked. */
-		deliver(&s);
-		sent++;
+		if (deliver(&s)) {
+			sent++;
+		}
 	}
 
 	key = radiant_event_crit_enter();

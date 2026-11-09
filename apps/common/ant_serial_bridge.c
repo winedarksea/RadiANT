@@ -1696,6 +1696,18 @@ void antr_on_message(const struct antr_msg *msg)
 				       (atomic_val_t)msg_data[0], -1)) {
 				k_sem_give(&burst_block_free);
 			}
+			/* The buffer is released; now honour the host's event
+			 * filter (bit code-1, MESG_EVENT_FILTER_CONFIG). The
+			 * radiant core hands these two on even when filtered,
+			 * for exactly this reason. */
+			{
+				uint16_t filter = 0u;
+
+				if (antr_event_filtering_get(&filter) == 0 &&
+				    (filter & (uint16_t)(1u << (msg_data[2] - 1u))) != 0u) {
+					return;
+				}
+			}
 			break;
 		default:
 			break;

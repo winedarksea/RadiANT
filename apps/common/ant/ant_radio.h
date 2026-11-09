@@ -793,19 +793,21 @@ antr_err_t antr_lib_config_get(uint8_t *config);
 
 /**
  * Set the event filter - which channel events are suppressed before they reach
- * antr_on_message().
+ * the host.
  *
- * @param filter  16-bit mask, one bit per channel event code. A set bit
- *                suppresses that event. src/ant_wire.h names no constants for
- *                the individual bits - only ANTW_MESG_EVENT_FILTER_CONFIG_ID
- *                and its reply size - because the bridge passes the mask
- *                through whole.
+ * @param filter  16-bit mask: bit N suppresses channel event code N+1 (codes
+ *                1..16; ANT Message Protocol and Usage Rev 5.1, 9.5.2.28 and
+ *                9.5.6.1), so 0x0002 is EVENT_RX_FAIL and 0x0004 EVENT_TX.
+ *                src/ant_wire.h names no constants for the individual bits -
+ *                only ANTW_MESG_EVENT_FILTER_CONFIG_ID and its reply size -
+ *                because the bridge passes the mask through whole.
  *
  * Exists to keep a busy multi-channel session from drowning the host in
- * ANTW_EVENT_RX_FAIL. A backend that does not filter must still store and
- * return the value, because tools/ant_features.py round-trips it - but it must
- * not pretend to filter, because loss accounting depends on the RX_FAIL events
- * actually arriving.
+ * ANTW_EVENT_RX_FAIL. The radiant backend applies it at delivery, after every
+ * internal counter has seen the event, so loss accounting still counts the
+ * RX_FAIL a host filtered out. 0, the default, passes everything. A backend
+ * that does not filter must still store and return the value, because
+ * tools/ant_features.py round-trips it.
  *
  * Returns 0 or ANTW_INVALID_PARAMETER_PROVIDED.
  */
