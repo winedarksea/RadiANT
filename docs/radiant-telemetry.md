@@ -1289,9 +1289,9 @@ Encode and decode go in `src/profiles/` and are mirrored into
 `tools/ant_pages.py`. That is the same split the ANT+ pages already use, and
 it is what makes the envelope **host-testable in CI with no board**: the
 Python encoders and decoders check each other in `tools/test_ant_pages.py`, and
-the same vectors feed the C decoders. Given that `native_sim` does not build on
-Windows and every C unit test runs only in CI on Linux, the Python mirror is
-the only layer a developer can iterate against locally.
+the same vectors feed the C decoders. `native_sim` does not build on
+Windows, and a DK or Linux run is a heavier loop, so the Python mirror is the
+fastest layer a developer can iterate against.
 
 As built, that is:
 

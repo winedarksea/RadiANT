@@ -26,8 +26,8 @@
  *     frame) rather than only asserting the right one comes out - these
  *     were real documented errors or hazards.
  *
- * These run only in CI on Linux: native_sim does not build on Windows, so no
- * local work executes them. See radiant/tests/testcase.yaml.
+ * native_sim does not build on Windows, so these run under Linux or on a DK;
+ * see docs/testing.md and radiant/tests/testcase.yaml.
  */
 
 #include <stdint.h>

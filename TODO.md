@@ -99,14 +99,6 @@ Evidence: archive/benchmarks/2026-11-07-vcom-soak/README.md.
   capture its log VCOM (it needs DTR) to see whether the firmware faulted.
 
 ## 4. [DONE 2026-11-08] ant_sens reports spurious loss on short event_counter rungs
-**Fixed:** every receiver is drained through the settle. Stale frames were
-inferred as the cause from the saved rungs. The on-air fine ladder has no
-spurious rung or knee (archive/benchmarks/2026-11-08-todo-clearance/README.md).
-- Found while settling the TX power boost (done 2026-11-07: the boost now
-  raises only the unset default and LVL_4; LVL_3 is a true 0 dBm).
-- ant_sens reports a spurious 17.5 % loss on short rungs whose basis is
-  `event_counter` (0 RX_FAIL, every packet received), which produced a fake
-  knee. Evidence: archive/benchmarks/2026-11-07-reset-and-power/README.md.
 
 ## 6. [DONE 2026-11-08] Re-run ant_features against the Garmin
 **Done:** sections 1-4 and 6 pass. Section 5 reads the event filter back as
@@ -124,68 +116,8 @@ deployed host or node. Findings were verified by reading the code; nothing was
 run.
 
 ## 1. [CLOSED 2026-11-08, accepted limits] What the Tier I phase lock does not cover
-No task; documented at docs/radiant-security.md:1101. Adopting an epoch from the
-air changes the rule that the host runs epoch recovery, and spends compat bytes.
-The phase anchor itself landed 2026-11-07 (rx_tier1 learns the phase from the
-first verified page; docs/radiant-security.md 7.6 and 11.4). Still open:
-- A **Tier II-only** compat receiver has no phase source: an 8-bit window index
-  cannot supply one, so its window resolution still trusts the receiver's own
-  anchor.
-- A sensor that reboots into epoch + 1 usually reads as floor replays
-  (`tier1_replays`) until the host re-runs epoch recovery. That was already the
-  behaviour before the fix, which does not change it.
 
 ## 2. [DONE 2026-11-07] Implement the descriptor authentication frame
-**Done:** `profile_desc_encode_auth()` emits the frame last, under the pinned
-construction (K_auth = KDF(K_root, "auth", epoch, base_devnum); CMAC over
-nonce_block(epoch, devnum, schema_id, 0x03) || the bodies of every other frame;
-radiant-telemetry.md section 6, radiant-security.md 5.3). The receiver half is
-`profile_desc_auth_verify()`, `profile_desc_auth_find_epoch()` (forward-only)
-and `profile_desc_rx_take_auth()`, which sets `authenticated`;
-`profile_desc_may_decode_data()` now requires it for X_CONF/X_AUTH.
-`profile_sched_init_auth()` and `profile_sched_reseal()` seal a node's set in
-the existing 16-frame buffer. The plain encoder still refuses every transform
-bit. The encoder refuses X_AUTH with sparse, reserved bits 5/4, 17 frames, and
-a descriptor epoch that disagrees with the seal. tools/ant_pages.py mirrors it
-(`TlmDescAuth`, `encode_tlm_descriptor(d, auth)`,
-`decode_tlm_descriptor(frames, auth, ...)`, `TlmPageScheduler(auth=)` and
-`reseal()`), `radiant_crypto.desc_auth_tag()` is the MAC, and ant_verify
-reports `descriptor: authenticated / FAILED / no key`. 0x61 now requires
-W >= 4 (device-profiles.md 5.1).
-**Evidence:** two shared vectors (0x61-shaped, frame 1 with and without the
-epoch) as the same hex in test_profiles.c and test_ant_pages.py, checked by
-hand against the layout. Every flipped body byte of frames 0..5 fails, as do a
-dropped, duplicated or swapped frame, a frame 1 spliced from the next epoch,
-and a wrong devnum, base_devnum or key. radiant/tests on the nRF5340 DK
-932/932 (profiles 30/30, 9 new). Python: test_ant_pages, test_ant_verify,
-test_radiant_crypto, test_ant_sim, test_compat_capture all pass. Standard
-devices: apps/hrm_ble and apps/treadmill (nrf54l15dk, CONFIG_RADIANT_SEC=y)
-link none of the new symbols, bss/data +0, text +20 B. Cost on a sealed
-node: radiant-security.md 5.6.
-**Open, found doing it:** a sealed node's schedule frame is under the MAC, so
-profile_sched_set_downlink() refuses a sealed set (-ENOTSUP) rather than
-re-phasing a MAC'd body per transmission.
-
-(Original notes follow.)
-- Specified byte for byte in docs/radiant-telemetry.md section 6 ("The last
-  frame") and docs/radiant-security.md 5.3. Not implemented:
-  profile_desc_encode() refuses any transform bit
-  (profile_telemetry.c:266, asserted by test_profiles.c:376).
-- Consequence: no 0x60 node can announce X_AUTH or X_CONF, the 0x61 CGM
-  profile cannot ship (docs/device-profiles.md 5.1 says so), and Layer C
-  private mode is specified to land on a 0x60 stream nothing can encode.
-- In the same change, give 0x61 a minimum W in docs/device-profiles.md 5.1.
-  X_AUTH is mandatory there but W is not stated. W = 2 is a 16-bit tag: at
-  0.5 Hz that is about 73 hours of continuous injection per expected forged
-  reading. W = 8 costs 32 s of latency on a 5-minute reading.
-- Decide item 4 first, because it changes what frame 1 carries.
-- The descriptor encoder must refuse X_AUTH together with the sparse flag
-  (decided with item 7, 2026-11-07: the tag lags one window, so a sparse burst
-  never carries its own tag and never verifies; radiant-telemetry.md section 8
-  and radiant-security.md 3.1 say so). Not enforceable before this item,
-  because profile_desc_encode() refuses every transform bit today.
-- Done when the encoder emits the frame, a receiver rejects a descriptor whose
-  frame 1 was altered, and tools/ant_pages.py mirrors it with shared vectors.
 
 ## 3. [DONE 2026-11-07] Version the 0xF4 status reply
 
@@ -235,36 +167,8 @@ test_the_epoch_search_is_forward_only_and_bounded in both suites.
 - Today's behaviour fails safe: nothing is ever wrongly VERIFIED.
 
 ## 8. [DONE 2026-11-08] The 0xF1-0xF5 host commands run without api_lock
-**Fixed:** every radiant_sec call is under api_lock, with a debug-build hook
-(`radiant_sec_port_lock_check`, `CONFIG_RADIANT_SEC_LOCK_CHECK`). A secured
-master is now posted by the pump, not the scheduler callback, and a lost peer's
-pairing is released under the lock. X25519 holds the lock 366-376 ms (a stall
-for the event thread, accepted; see the list at the end of this file).
-- apps/common/ant_sec_host.c calls radiant_sec_configure, _set_key,
-  _set_epoch, the status read and the pairing calls with no lock. Every other
-  antr_* entry point takes api_lock (apps/common/ant_radio_radiant.c:452).
-- The RX thread runs radiant_sec_pump() under api_lock, and the parser thread
-  outranks it. The software AES keeps one shared key schedule and is safe only
-  because api_lock serialises every call (radiant_sec_aes.c:127).
-- So a host command that preempts the pump mid-CMAC can re-expand the schedule
-  under another key, or clear window state under it. Result: spurious
-  UNVERIFIED windows or a wrong keystream.
-- The 2026-10-31 review recorded this as not fixed; it still is not.
-- Task: take api_lock around those calls. A preemption ztest is hard; at least
-  assert the lock is held inside the radiant_sec entry points in a debug build.
 
 ## 9. [DONE 2026-11-08] No informational bits left in the descriptor
-**Fixed:** version nibble 1-7 is layout-compatible, 8-15 rejected, and the next
-flags use schedule-frame bits 42..47.
-- Frame 0 byte [7] is full. radiant-telemetry.md section 6 says further
-  informational flags come from frame 1 byte [3], but W, the repeat count and
-  the clock-accuracy nibble now fill that byte.
-- What remains: the version nibble, which makes every v1 receiver reject the
-  node; field count 15, "reserved for an extended descriptor" and undefined;
-  and schedule-frame bits 42..47, present only when a schedule frame is sent.
-- Task: choose and write down the extension rule, for example a minor-version
-  rule a v1 receiver accepts, or a definition of field count 15. Fix the stale
-  sentence in section 6 in the same edit.
 
 ## 10. [FIRMWARE, HIGH, bench] Search is deaf through the MPSL arm lead (ADR 0018)
 - ADR 0018 is proposed and nothing is built. On MPSL builds a search is deaf
@@ -305,63 +209,12 @@ both in the list at the end of this file.
   coexistence soak. Or delete the branch: it drifts further from master daily.
 
 ## 12. [DONE 2026-11-08] Tier II loses windows at the HR seam with no packet loss
-**Fixed:** a tag due on 119/120 is owed past the seam, on TX and RX. The
-profile_compat seam test now asserts every window verifies.
-- Found while writing the seam test for the Tier I phase anchor (971e38c). It
-  existed before that change, which did not cause it.
-- When a Tier II tag falls due on message 119 or 120, the window closes
-  untagged. The profile_compat seam never offers those two slots
-  (profile_compat.c, near the "slots 119/120" comment). The receiver also
-  loses the window after it.
-- Measured through the real seam: 17 of 998 windows unverified (1.7 %) with
-  zero packet loss. Only a comment at test_profile_compat.c:655 records it.
-  That test asserts "more verified than not", not every window.
-- Related margin from the same test: Tier I slip on the seam is 818 ms
-  against the 985 ms JITTER allowance (about 0.7 of a period of headroom).
-  A future seam claimant that delays Tier I trips that test first.
-- Low because nothing in apps/ links the compat layer yet.
-- Task: let a tag due on 119/120 move to the next offered slot (and teach the
-  receiver to expect it there), or keep a window from closing over a slot the
-  seam never offers. Then tighten test_profile_compat.c to assert every window.
 
 ## 13. [DONE 2026-11-08] 0x60 exact loss over-counts on host-driven masters
-**Fixed** by labelling: the slot figure is an upper bound when the counter delta
-outruns the wall clock, and the pooled figure is withheld.
-- The slot-based 0x60 loss rule (tools/ant_verify.py, about lines 772-790,
-  from e1e9660) counts a slot as lost whenever the counter jumps.
-- A host-driven master that refills twice, advancing the counter for a slot
-  that never goes out, reads as loss. Seen live in the 2026-11-07 final
-  review: a two-channel ant_sim run reported 6 lost slots against 3 RX_FAILs
-  and 3 by wall clock. It came with an accumulator-continuity violation from
-  the same skipped page. A single-channel rerun matched exactly (2/2/2).
-- Gaps of 256 slots or more also alias. That is documented, and bike power
-  has the same limit.
-- Task: cross-check the counter delta against wall-clock slots between the
-  pair. Withhold the figure, or call it an upper bound, when the delta is
-  larger than the elapsed slots.
 
 ## 14. [DONE 2026-11-08] ant_verify's liveness line is wrong for FE-C
-- tools/ant_verify.py:1947 prints "the event counter stood still" for any
-  channel without an exact-loss figure.
-- Since the FE-C routing fix (7ddbb45), FE-C channels deliberately collect no
-  liveness evidence, so every FE-C channel prints this false statement.
-- Task: say "no exact-loss source for this profile" when the device type has
-  none, and keep "stood still" for a channel that really has a frozen counter.
 
 ## 15. [DONE 2026-11-08] Telemetry section 6 overstates when unsecured byte [1] advances
-- docs/radiant-telemetry.md section 6 (from 5655901) says byte [1] advances
-  on every slot, including MPSL-denied and missed ones.
-- That holds on secured channels, where radiant_sec derives the counter from
-  t_sync. On an unsecured profile_sched node it holds only if the caller calls
-  profile_sched_next_at() for denied slots too. The apps call it once per
-  EVENT_TX.
-- No 0x60 app exists yet, so nothing is wrong on air.
-- Task: either add the caveat to section 6, or have the radio glue call
-  next_at() for denied and missed slots so the docs become true. Decide when
-  the first 0x60 app lands.
-
-- Code size: `radiant_sec_compat.c` is 4260 B, down from 4452 B (ceiling 4608).
-  Security text is 6128 B against a 6144 B ceiling, so 16 B remain.
 
 # Open issues from the 2026-11-08 release review (HEAD b89a112)
 
@@ -371,159 +224,18 @@ review's other two findings are already fixed (9ab6bc9, 971e38c); what is left
 of the second is item 1 of the section above.
 
 ## 1. [DONE 2026-11-08] Discovery assumes network 0 and frequency 57
-**Fixed:** the sweep follows the ANT+ key's network and the searchers' frequency
-on keyed networks. Keyless channels never steer it, so Zwift's RF 71 and 53
-scans behave as before. A keyed slave that sets no frequency defaults to 66 and
-moves the sweep to 66. Ztest-verified only, not on air.
-`api_search_cfg_build()` (apps/common/ant_radio_radiant.c:1182) gives the one
-shared sweep network 0's address and frequency 57, whatever the searching
-channels asked for. Tracking does honour both (`api_net_addr_for()`,
-`api_rf_of()`), so the channel never gets that far.
-
-**a. Network: small and clearly worth fixing.** With the ANT+ key installed
-only on network 1, the sweep stays on network 0's all-zero address and finds
-nothing, with no error.
-- Task: sweep on network 0's address if it is valid, else the lowest valid
-  network's. Re-init on the first valid key of any network, not only network 0
-  (:3579), keeping the live-carrier deferral. This is complete for now because
-  the key table only ever holds the ANT+ address.
-- Do not break Zwift: it scans on keyless networks 1 and 2 and relies on the
-  sweep still hearing ANT+ there. `test_an_assign_to_a_network_with_no_key_is_accepted`
-  must stay green, and do not refuse the assign.
-- Done when an api ztest shows the sweep moving to the ANT+ address after a key
-  on network 1 only.
-
-**b. Frequency: real, but lower value, and it needs a decision.** A slave on
-frequency 66 can never acquire a master on 66, though this library can be that
-master. One frequency per sweep is a deliberate design (radiant_search.h:360,
-radiant_search.c:306: a frequency axis multiplies sweep time). Only the ANT+ key
-is accepted, so private-network hosts are excluded regardless; this reaches only
-hosts using the ANT+ key off 57.
-- Cheapest useful step: `LOG_WRN` when a slave opens off 57, as the keyless
-  assign already does, so the silence becomes readable.
-- Full fix: let the sweep follow the searching channels' frequency when they all
-  agree, which costs ANT+-only sessions nothing. Alternate passes only when they
-  are mixed. Same live-carrier deferral as the key install.
 
 ## 2. [DONE 2026-11-08] Capabilities advertise features that only store configuration
-**Fixed:** the event filter applies at delivery after accounting, from ANT
-Message Protocol and Usage Rev 5.1 (bit N filters event code N+1, per its
-formula and example; its two-line bit list labels are one off).
-advanced_options_3 is 0x05: SDU, search sharing and encrypted channel are no
-longer advertised, and their commands are still accepted. The nRF transcript
-is re-recorded; the cc26xx one is owed.
-ADVANCED_OPTIONS_3 (ant_radio_radiant.c:4070) claims event filtering and
-selective data update. The filter is stored and never consulted
-(radiant_event.c:250), and SDU masks are only stored and read back. This is the
-"advertised and unimplemented" trap in docs/gotchas.md.
-- The stated reason not to filter (ant_radio.h:805, loss accounting needs
-  RX_FAIL) only matters to a host that sets the filter. It defaults to 0.
-- Same byte, same class, not in the review: search sharing round-trips but is
-  never consulted outside radiant_channel.c, and the encrypted-channel bit is set
-  although AES-CTR is refused (comment at :4075). Audit the whole byte.
-- No known host is at risk either way: archive/host-api says Zwift uses neither
-  the filter nor SDU.
-- Task: implement the event filter at the delivery point to the host
-  (`antr_on_message()` call, :559), after any internal accounting. Check the
-  bit-to-event mapping against the ANT message protocol document first. Replace
-  `test_event_filter_round_trips_and_filters_nothing`.
-- For each remaining bit, implement it or clear it. Clearing changes the
-  capabilities frame, so the nRF and cc26xx .antser transcripts need regenerating
-  on hardware, and the frame stops matching the sdk_ant reference. Keep accepting
-  the commands either way: an error to a host with no recovery path is a
-  regression (see the comment at :3216).
 
 ## 3. [DONE 2026-11-08] A reachability or label change can be lost until the next transition
-**Fixed:** snapshot taken at the top of the flush. Build, .config and nm checked
-only: no ztest reaches this file and it has not been run on air.
-The flush reads each source's dirty flags per row with the lock held, drops the
-lock for the endpoint work, then clears every source's flags at the end
-(apps/dongle_thread/src/matter/ant/ant_bridge.cpp:831). A change landing in
-between is erased. `reachableDirty` is only set on a change (:1150), so later
-fresh samples do not repair it: Matter can show a live sensor as unreachable, or
-a dead one as reachable. A bind (:1184, :1198) races the same way. The window is
-the whole pass, which includes `PersistRowLabel()`.
-- Task: at the top of the pass, copy `reachable` and both flags for every source
-  into a local array and clear them, in one lock hold. Rows read the copy. A
-  change during the pass then stays dirty for the next pass.
 
 ## 4. [DONE 2026-11-08] A pending offline is lost when a source is reused during an outage
-**Fixed:** `radiant_owed`, 16 de-duplicated uuids, the drain clears only what it
-sent. Ztest-verified; not run against a real broker.
-`owed[source]` holds one uuid (apps/dongle_thread/src/mqtt_sink.c:1201). Release
-A, bind B, release B during a broker outage, and A's "offline" is overwritten. A's
-retained status then reads "online" until A is bound again.
-`offline_overwritten` only counts it. Derived and rotated fields have no
-`expire_after`, so nothing else clears them in Home Assistant.
-- Task: replace the per-source uuid with one de-duplicated list of owed uuids,
-  2 x RADIANT_BINDING_MAX entries (16, 128 B). The drain clears only the uuid it
-  sent. A bind cancels a matching uuid anywhere in the list, not only on its own
-  source (:1207). Keep the counter for overflow.
-- Done when a ztest or the reviewer's probe shows both A and B offline after
-  reconnect.
-
-Items 5-7 come from a second pass over 69ac822..b89a112. 5 and the numbers in 7
-were reproduced with the real Python tools; the C side of 6 and 7 was read, not
-run.
 
 ## 5. [DONE 2026-11-08] ant_verify decodes sealed data pages it has not processed
-tools/ant_verify.py:775 hands received bytes to the decoder once the descriptor
-authenticates. `may_decode_data` only vouches for the schema, and its docstring
-(ant_pages.py:3118) makes the per-packet gate the caller's job. This caller has
-no gate, so the tool that produces our evidence reports forged data as clean.
-Reproduced through `ChannelAnalyzer`:
-- Valid X_AUTH descriptor, then an arbitrary unauthenticated page: decoded 4660,
-  counted as decoded, 0 violations.
-- X_CONF ciphertext of the value 100: decoded as 6579, 0 violations.
-- Task: when the schema has X_CONF or X_AUTH, count the page and do not decode
-  it, and report that count in the summary. Keep counting slots, since byte [1]
-  is in the clear. Real decryption and window verdicts are a separate, larger
-  job, only if someone needs them.
-- Done when both cases above report 0 decoded, with a test for each.
 
 ## 6. [DONE 2026-11-08] X_CONF alone leaves byte [7] in plaintext
-CTR covers five bytes whether or not X_AUTH has claimed byte [7]: TX
-radiant/src/radiant_sec.c:903, RX :1241, and tools/radiant_crypto.py:307. Without
-X_AUTH the field area is 48 bits, so a field at bit offset 40 is sent in the
-clear under a schema announcing confidentiality. The sealed encoder accepts that
-layout. Reproduced in Python: byte [7] 0xAB went out as 0xAB.
-- The specs disagree: radiant-telemetry.md:655 says [2..7] without X_AUTH,
-  radiant-security.md:132 says [2..6] always.
-- X_CONF alone is not a corner case: it is the only secured mode a sparse node
-  may use (radiant-telemetry.md:1035). A host-driven X_CONF-only channel leaks
-  byte [7] the same way.
-- Task: process six bytes when AUTH is off, in TX, RX and `conf_transform()` and
-  its callers. Fix radiant-security.md 3.1 and the "reserved tag space" comment
-  at radiant_crypto.py:300, and update the shared vectors.
-- Prefer this to making the encoder refuse the layout, which would not help
-  host-driven channels. The on-air change is free now: `security.conf` is in no
-  release image.
 
 ## 7. [DONE 2026-11-08] First-boot provisioning can pick a number that is hard to receive
-`self_provision()` (radiant/src/node/node_ident.c:248) stores the first key it
-draws without looking at the device number that key derives.
-`ant_identity.random_device_number()` already avoids run >= 8, and firmware only
-warns. The number comes from K_dev, so a bad draw is permanent, and the old
-defaults 4242/4243 were safe (run 4).
-- Computed over 1..65535: 11.1 % of numbers have run >= 8 for one device type,
-  11.8 % across the seven ANT+ types, 5.4 % have run >= 9. The reviewer's key
-  5d00..00 derives #37976, run 8, as claimed.
-- Size of the harm: run 9+ loses 1-5 % on an unguarded receiver. Run 8 sits below
-  the guard's default threshold of 9 and loses at most 0.2 % on a strong signal
-  (radiant/Kconfig:640), up to 1.25 % when weak (follow-up on item 1 of the
-  Garmin section). It is worth fixing because it is cheap and can only be done
-  before the first persistence.
-- Task: in `self_provision()`, derive the candidate's number before
-  `node_ident_provision()`. Redraw if `radiant_channel_id_alt_run()` reaches
-  `RADIANT_ADDR_ALT_RUN_AVOID` for any of the seven types `ant_identity.py`
-  checks. Bound it (16 draws is ample), and on exhaustion keep the last draw
-  rather than fail the boot. An all-zero draw must still fail as an RNG failure,
-  not be redrawn.
-- Do not change `derive_devnum()` or touch an already-provisioned key: existing
-  nodes keep their numbers and paired receivers.
-- Done when a test_node_ident case gives 5d00..00 then a good key from
-  tests/fake_rng.c and the second key is the one persisted. Note the rule in ADR
-  0020.
 
 # Beta cleanup from the 2026-11-08 reviewer pass
 

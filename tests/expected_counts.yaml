@@ -45,28 +45,17 @@
 # reached through the ztest job's `-T app/apps/trainer/tests`).
 min_scenarios: 13
 
-# Total ztest cases twister executes, summed over every scenario. This is a
-# SAFE floor rather than the observed total: it is the static count of
-# `^ZTEST(` under radiant/tests, plus the four cases in
-# apps/hrm_ble/tests/sim_sched/src/main.c and the eighteen in
-# apps/treadmill/tests/pages/src/main.c. Raise it the same way, in the same
+# Total ztest cases twister executes, summed over every scenario. It equals the
+# sum of the per-scenario floors below, so the backstop and the floors cannot
+# disagree; the per-scenario floors are the real check. Raise it in the same
 # commit that adds coverage; the reasoning behind each past raise is in
 # `git log` on this file.
 #
-# NOTE THAT THE FLOOR HAS DRIFTED BELOW WHAT THE RULE ABOVE WOULD GIVE, the
-# same way it had before the arm-lead work. Counting `^ZTEST(` under
-# radiant/tests today gives 861, so the rule's figure is 861 + 4 + 18 = 883 and
-# this file is 14 under it. It is left conservative rather than jumped, because
-# 883 has not been observed on a green run and a floor set from a static count
-# that turns out to include a suite twister does not reach fails for a reason
-# that has nothing to do with coverage. Raise it to the printed total when a
-# run reports one.
-#
-# 2026-10-31 REVIEW: RAISED TO THE SUM OF THE PER-SCENARIO FLOORS BELOW, so the
-# backstop and the floors cannot disagree. It was 874 against ~2.7k executed -
-# the ~1.7k of slack E3-1 found. The per-scenario floors are now the real
-# check; this is kept as the backstop.
-min_testcases: 3762
+# 2026-11-09: RAISED FROM 3762 TO THE FIRST OBSERVED TWISTER TOTAL, 4167 on
+# 7df6ada. Measured with the ztest job's own twister command and
+# check_test_counts.py on a Linux machine, on the versions west.yml pins
+# (docs/testing.md), rather than on a GitHub runner.
+min_testcases: 4167
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -74,31 +63,20 @@ min_testcases: 3762
 # suite (E3-3), could vanish under its slack. scripts/check_test_counts.py
 # prints the executed count for each.
 #
-# Set from the nRF5340 DK runs of 2026-10-31 (scripts/run_ztest_hw.ps1, the
-# same prj.conf + extra_configs as each scenario) minus about 1%, since
-# twister on native_sim cannot run here. Observed: radiant.unit 837,
-# radiant.unit.no_pairing 798 (837 less the 39 X25519-gated cases),
-# radiant.api 52, radiant.api.sec 54, radiant.api.sec_host 63,
-# radiant.api.crc_repair 53, radiant.gate 31, hrm_ble.sim_sched 4,
-# treadmill.pages 20, treadmill.hr_rx 3. radiant.unit.sec_modes was NOT run
-# on the DK; its floor assumes the same suites as radiant.unit with extra
-# margin. Raise these to the printed counts on the first green CI run.
-min_cases.radiant.unit: 860
-min_cases.radiant.unit.sec_modes: 852
-min_cases.radiant.unit.no_pairing: 816
-min_cases.radiant.api: 61
-min_cases.radiant.api.sec: 64
-min_cases.radiant.api.sec_host: 76
-min_cases.radiant.api.crc_repair: 62
+# 2026-11-09: each floor is that scenario's executed count from the run named
+# above. The earlier values were nRF5340 DK counts minus about 1%, plus static
+# counts. A floor equal to the observed count still fails only when coverage
+# goes down, which is the event it exists to catch.
+min_cases.radiant.unit: 965
+min_cases.radiant.unit.sec_modes: 965
+min_cases.radiant.unit.no_pairing: 913
+min_cases.radiant.api: 65
+min_cases.radiant.api.sec: 68
+min_cases.radiant.api.sec_host: 81
+min_cases.radiant.api.crc_repair: 66
 min_cases.radiant.gate: 31
 min_cases.hrm_ble.sim_sched: 4
 min_cases.treadmill.pages: 20
 min_cases.treadmill.hr_rx: 3
-# 2026-11-04, nRF5340 DK runs: radiant.unit.ack_faults 876 (radiant.unit's
-# then-869 plus seven reply_plan cases), trainer.model 14. min_testcases
-# above is the sum of every floor here.
-min_cases.radiant.unit.ack_faults: 899
+min_cases.radiant.unit.ack_faults: 972
 min_cases.trainer.model: 14
-# Release 2 (event filter, capabilities): +5 cases in each radiant.unit* scenario (the
-# old round-trip test became six) and +2 in each radiant.api* scenario. Static counts,
-# not yet observed on a CI run; min_testcases is the sum of the floors.

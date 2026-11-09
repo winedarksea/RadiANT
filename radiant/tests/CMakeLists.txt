@@ -5,10 +5,10 @@
 # This is a standalone Zephyr application, deliberately not a subdirectory of
 # the dongle build: it never includes the top-level CMakeLists.txt, so it has
 # no sdk-ant dependency of any kind and the CI job that runs it needs no
-# secret. That is the whole point - native_sim does not build on Windows (no
-# host C compiler, no QEMU), so every C assertion in this project executes
-# only in CI on Linux, and it has to execute on forks and on every pull
-# request or the parallel core work has no verification at all.
+# secret. That is the whole point - CI is the one place every C assertion in
+# this project runs on every change, and it has to run on forks and on every
+# pull request or the parallel core work has no gate at all. Locally,
+# native_sim needs Linux (it does not build on Windows); see docs/testing.md.
 
 cmake_minimum_required(VERSION 3.20.0)
 

@@ -352,8 +352,8 @@ manual run.** That is the trade taken.
 | Links | [`linkcheck.yml`](.github/workflows/linkcheck.yml) | weekly, dispatch | external URLs, `archive/` budget |
 
 **No fast-lane job needs a secret**, so it runs in full on a fork — that is what
-`ztest` exists for, and it is the entire C verification path for `radiant/`
-(`native_sim` does not build on Windows).
+`ztest` exists for, and it is the only C verification that runs on every change
+(`native_sim` needs Linux; [`docs/testing.md`](docs/testing.md) covers running it yourself).
 
 The release lane attaches four artifacts to a `v*` release:
 

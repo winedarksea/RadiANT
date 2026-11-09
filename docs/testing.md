@@ -130,7 +130,7 @@ accumulator-wrap mistake in any of them otherwise costs two boards and a flash
 cycle to find.
 
 C unit tests used to be a different story: `native_sim` does not build on
-Windows — no host C compiler, no QEMU — so `west twister` cannot run locally,
+Windows — no host C compiler, no QEMU — so `west twister` cannot run there,
 and that was taken to mean the ztests in `radiant/tests/` execute only in
 CI on Linux.
 
@@ -152,7 +152,43 @@ This does not replace the CI job and is not meant to. `twister` runs
 `native_sim` at **32 bits**, which is the width that catches the struct-packing
 and size assumptions a 64-bit host would hide; the DK runs at the real target
 width instead. Two different checks — and this is the one you can have before
-you push.
+you push with nothing but a Windows machine and a DK.
+
+### The full twister run on a Linux machine
+
+`native_sim` needs Linux, not GitHub. Any Linux machine can run the `ztest` job's
+own command, and a rootless Ubuntu 24.04 container is enough to match its
+environment without installing anything on the host. First run on 2026-11-09:
+**13 scenarios, 4167 cases, all passed, in 78 s on 12 cores**, after about four
+minutes of one-time setup and 3.7 GB of disk.
+
+Lay the workspace out as CI does, with the repository at `app/`. On Windows, take
+the snapshot with `git -c core.autocrlf=false archive -o head.tar HEAD`, because
+a plain archive can carry CRLF into the Linux tree. Then, as root in the container:
+
+```sh
+apt-get update
+apt-get install -y --no-install-recommends gcc-multilib g++-multilib make cmake \
+  ninja-build device-tree-compiler gperf git ccache python3-venv file xz-utils \
+  ca-certificates
+python3 -m venv .venv && . .venv/bin/activate && pip install west
+git -C app init -q && git -C app add -A \
+  && git -C app -c user.name=t -c user.email=t@localhost commit -qm snapshot
+west init -l app
+west update --narrow -o=--depth=1
+pip install -r zephyr/scripts/requirements.txt
+
+export ZEPHYR_TOOLCHAIN_VARIANT=host ZEPHYR_BASE="$PWD/zephyr"
+zephyr/scripts/twister -T app/radiant/tests -T app/apps/hrm_ble/tests \
+  -T app/apps/treadmill/tests -T app/apps/trainer/tests \
+  -p native_sim --inline-logs -v
+python app/scripts/check_test_counts.py twister-out/twister.json
+```
+
+The `git init` is there because `west init -l` expects a manifest repository and
+`git archive` does not produce one. **Keep a login session open for the whole
+run:** without `loginctl enable-linger`, a rootless Podman container is sent
+SIGTERM when its owner's last session ends, and `nohup` does not prevent it.
 
 What it found the first time it ran, which is the argument for it: seven suites
 green, and `transfer` at 6 of 16. Ten of those failures were one cause — the

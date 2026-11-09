@@ -107,13 +107,13 @@ jobs:
       # against 1 forever.
       - run: python scripts/version_int.py
 
-  # Every C unit test in this project runs here and nowhere else. native_sim
-  # does not build on the development machine - Windows, no host C compiler,
-  # no QEMU - so `west twister` cannot run locally at all and local C
-  # verification is compile-check only. That makes this job the entire
-  # verification path for radiant, which is why it takes no secret: it has to
-  # run on forks and on every pull request, or a parallel core rewrite has no
-  # way to know whether it works.
+  # The one place every C unit test in this project runs on every change.
+  # native_sim does not build on Windows - no host C compiler, no QEMU - so a
+  # Windows checkout gets its C coverage from scripts/run_ztest_hw.ps1 on a DK,
+  # or from this same twister command on a Linux machine (docs/testing.md).
+  # Neither is a gate, so this job takes no secret: it has to run on forks and
+  # on every pull request, or a parallel core rewrite has no way to know
+  # whether it works.
   ztest:
     name: ztest (native_sim)
     runs-on: ubuntu-24.04

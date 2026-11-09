@@ -239,9 +239,8 @@ accepted-block count, across three paths:
 2. mid-transfer failure — k blocks accepted, k−1 `NEXT_DATA_BLOCK` plus one `TX_FAILED`;
 3. rejected block — `antr_burst_tx()` returns non-zero and **no** event is raised for it.
 
-`radiant/tests` owns this. It runs on Linux CI: `native_sim` does not build on Windows (no host C
-compiler, no QEMU), so no C unit test executes locally and local verification is compile-check
-only.
+`radiant/tests` owns this. It runs on Linux CI and on any Linux machine; `native_sim` does not build
+on Windows (no host C compiler, no QEMU), where `scripts/run_ztest_hw.ps1` runs the suites on a DK.
 
 `NEXT_DATA_BLOCK` never reaches the host — the bridge consumes it and returns
 (`src/ant_serial_bridge.c:1005-1011`). A real ANT stick frames bursts itself and never puts it on

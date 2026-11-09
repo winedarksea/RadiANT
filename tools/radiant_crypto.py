@@ -9,8 +9,8 @@ counter-mode KDF, in pure Python with no dependency of any kind - the
 toolchain interpreter has pyusb and nothing else, so pycryptodome is not
 installable here.
 
-Exists because `native_sim` does not build on Windows (every C assertion runs
-only in CI on Linux) - this is the layer for local iteration, cross-checked
+Exists because `native_sim` does not build on Windows (C assertions need Linux
+or a DK) - this is the layer for quick iteration, cross-checked
 against FIPS-197/RFC 4493/SP 800-38A vectors and the C implementation's own
 output - and because the host tools need it anyway: `ant_verify.py` cannot
 tell replay from packet loss without computing a tag.
