@@ -66,7 +66,7 @@ min_scenarios: 13
 # backstop and the floors cannot disagree. It was 874 against ~2.7k executed -
 # the ~1.7k of slack E3-1 found. The per-scenario floors are now the real
 # check; this is kept as the backstop.
-min_testcases: 3762
+min_testcases: 3763
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -90,7 +90,8 @@ min_cases.radiant.api: 61
 min_cases.radiant.api.sec: 64
 min_cases.radiant.api.sec_host: 76
 min_cases.radiant.api.crc_repair: 62
-min_cases.radiant.gate: 31
+# 32 since C5-1 (inline BLOCKED backs off the class that was refused).
+min_cases.radiant.gate: 32
 min_cases.hrm_ble.sim_sched: 4
 min_cases.treadmill.pages: 20
 min_cases.treadmill.hr_rx: 3

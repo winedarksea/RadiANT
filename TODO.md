@@ -651,14 +651,7 @@ MPSL (needs a soak beside BLE or Thread, which that clearance excluded):
   `deliver_terminal()` and `program_rx()` fold from the ZLI signal callback that
   irq_lock does not mask; a ZLI fold between capture and fold wraps
   `counter-last` to ~2^32, a permanent +71.6 min step. Soak reading
-  `radiant_dbg_clock_back` (expect 0).
-- **C5-1.** In `radiant_radio_nrf_gate_mpsl.c` record `placed_extendable` and
-  `placed_high_prio` in `request_work_fn` before `mpsl_timeslot_request()`, and
-  have the BLOCKED/CANCELLED handling read those. MPSL can answer BLOCKED inside
-  the request, before `commit_next_grant()`, so the first refusal after a class
-  change is attributed to the previous class and the elastic chunk is not
-  shortened (ADR 0013). The test (`test_an_inline_block_backs_off_the_class_that_was_refused`,
-  `gate_probe_reset_elastic()`) and A13-1 are in
+  `radiant_dbg_clock_back` (expect 0). The patch is
   archive/review-2026-10-31-timing/6df53e7-timing-fixes.patch.
 - A14-1: on an MPSL grant, an ETIME from `program_rx()` is reported through
   `gate_failed` only after the grant ends, so the grant is not released early and

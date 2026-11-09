@@ -1112,6 +1112,43 @@ static uint32_t place_window(enum gate_op op, uint8_t prio, uint32_t win_len_us)
 	return fake_mpsl_last_request()->params.normal.length_us;
 }
 
+/*
+ * An inline BLOCKED backs off the class that was REFUSED (review 2026-10-31,
+ * C5-1). MPSL can answer BLOCKED from inside mpsl_timeslot_request(), before
+ * commit_next_grant() has made the placed request the current one - so the
+ * BLOCKED case read the PREVIOUS grant's class. Here that is the bootstrap
+ * (non-extendable), so a refused elastic chunk was not shortened and the next
+ * one asked the full first bite again: ADR 0013's "give way by asking for
+ * less" skipped exactly the chunk that was refused.
+ */
+ZTEST(radiant_gate, test_an_inline_block_backs_off_the_class_that_was_refused)
+{
+	uint32_t first;
+	uint32_t second;
+
+	gate_probe_reset_elastic();
+
+	fake_mpsl_answer_inline(MPSL_TIMESLOT_SIGNAL_BLOCKED, 1u);
+	first = place_window(GATE_OP_RX, RADIANT_GATE_PRIO_NORMAL,
+			     ELASTIC_CHUNK_US);
+	gate_probe_read(&p);
+	second = place_window(GATE_OP_RX, RADIANT_GATE_PRIO_NORMAL,
+			      ELASTIC_CHUNK_US);
+
+	/* Restore BEFORE asserting: the elastic state is file-static and
+	 * survives gate_init(), so a failure here must not leak a halved first
+	 * bite into every later elastic test. after() tears the session down. */
+	gate_probe_reset_elastic();
+
+	zassert_equal(ELASTIC_GRANT_US, first,
+		      "setup: the elastic first bite is not the full one");
+	zassert_equal(1u, p.blocked, "setup: the inline BLOCKED was not delivered");
+	zassert_equal(ELASTIC_GRANT_US / 2u, second,
+		      "a refused elastic chunk did not shorten the next one (%u): "
+		      "the inline BLOCKED was attributed to the previous grant's "
+		      "class", (unsigned)second);
+}
+
 ZTEST(radiant_gate, test_a_tracked_window_asks_for_only_the_fixed_end_margin)
 {
 	zassert_equal(WIN_REQ_LEN_US,

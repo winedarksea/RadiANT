@@ -72,6 +72,12 @@ struct gate_probe {
 
 void gate_probe_read(struct gate_probe *out);
 
+/* Put the elastic class's adaptive state (first-bite length, phase skew,
+ * refusal run) back to its power-on values. It is file-static and survives
+ * gate_init(), so a test that makes the elastic class back off must undo it or
+ * every later test inherits a halved first bite. */
+void gate_probe_reset_elastic(void);
+
 #ifdef __cplusplus
 }
 #endif
