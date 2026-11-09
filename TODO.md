@@ -188,19 +188,6 @@ re-phasing a MAC'd body per transmission.
   frame 1 was altered, and tools/ant_pages.py mirrors it with shared vectors.
 
 ## 3. [DONE 2026-11-07] Version the 0xF4 status reply
-**Done:** 0xF4 is now 26 bytes with a structure version (1) at [1] and
-`enrolments` (u16 LE, saturating) at [24..25]; readable by a host on the
-enrolling node, not over the air (docs/radiant-security.md 11.7.2).
-
-(Original notes follow.)
-- protocol/ant_wire.yaml MESG_RADIANT_SEC_STATUS_ID is a fixed 23 bytes with
-  no version byte. 0xF6 learned this and carries one.
-- docs/radiant-security.md 11.7.2 already defers the `enrolments` counter
-  because 0xF4 has no room. That counter is the only on-air-visible sign of
-  an enrolment the owner did not perform.
-- Task: add a structure version and `enrolments`, regenerate with
-  scripts/gen_ant_wire.py, update tools/ant_sec.py STATUS_LEN and the api
-  tests. Cheapest now, while no release image answers 0xF4.
 
 ## 4. [DECIDED 2026-11-07, implemented with item 2] The epoch in descriptor frame 1
 **Decided (user):** the third option. With a transform on, frame 1 bytes
@@ -230,21 +217,6 @@ test_the_epoch_search_is_forward_only_and_bounded in both suites.
     flag), zero otherwise.
 
 ## 5. [DONE 2026-11-07] Provisioning so identity Tier 0 actually runs
-**Done:** ADR 0020. K_dev is generated on the device from its TRNG on the
-first boot that finds no K_dev record (NODE_NVM_ENOENT only; a read error is
-EIO and never re-provisions). CONFIG_RADIANT_SEC_RNG_ENTROPY on hrm_ble and
-treadmill; apps/trainer opts out and keeps 4244. Failure falls back to the
-Kconfig number with an error log every boot. Tests: test_node_ident.c's
-first-boot cases against tests/fake_rng.c.
-
-(Original notes follow.)
-- Nothing in apps/ calls node_ident_provision() (hrm-reference-design.md 5.1,
-  and the comments in apps/hrm_ble/src/main.c and apps/treadmill/src/main.c).
-- Consequence: Tier 0, the only privacy feature that is on by default, never
-  runs on any board. The Kconfig device number ships, and with no K_dev a
-  hostless node has no epoch source and no pairing path.
-- Task: write the ADR choosing among the three shapes in
-  hrm-reference-design.md 5.1, then add the one caller it chooses.
 
 ## 7a. [DESIGN, deferred by decision 2026-11-07] Align clear runs to MAC windows
 - With the counter now the slot index (item 7, done 2026-11-07), every window that holds a
