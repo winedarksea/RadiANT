@@ -13,6 +13,14 @@ reads.
 
 ### Added
 
+- **The event filter filters.** `MESG_EVENT_FILTER_CONFIG` (0x79) now suppresses
+  the events it names at delivery, after internal accounting. The default of 0
+  passes everything.
+- **Discovery follows the key and the searchers.** The sweep uses the ANT+ key's
+  network even when it is not network 0, and the frequency of searching slaves on
+  keyed networks. Channels on keyless networks, such as Zwift's scans on RF 71 and
+  53, never move it. A keyed slave that sets no frequency defaults to 66 and moves
+  the sweep there.
 - **Pro Micro images reboot into their UF2 bootloader over USB.**
   `python tools/ant_probe.py --reboot-to-bootloader` mounts the drive with no
   RST-to-GND short. On in both Pro Micro release images and asserted at build
@@ -64,6 +72,14 @@ reads.
 
 ### Changed
 
+- **The capabilities reply claims less.** Search sharing, selective data update and
+  encrypted channel are no longer advertised (`advanced_options_3` 0xD5 to 0x05).
+  Their commands are still accepted.
+- **Host tools.** `ant_ack_gate` exits non-zero on any quality failure with or
+  without `--gate`. `ant_sens` drains every receiver through the settle.
+  `ant_verify` counts sealed 0x60 pages without decoding them, labels slot loss an
+  upper bound when the counter outruns the clock, and prints "no exact-loss source
+  for this profile".
 - **The heart-rate and treadmill nodes change device number once.** They now
   generate their identity key from the chip's own TRNG on the first boot that
   finds none ([ADR 0020](docs/decisions/0020-k-dev-is-generated-on-first-boot.md)),
@@ -156,6 +172,16 @@ reads.
 
 ### Fixed
 
+- **Scheduler and nRF backend.** An armed operation that never terminates is
+  reclaimed (A9-3), a receive window inside its PHY switch is reported MISSED
+  (A8-4), a window whose start compare was written too late is refused rather
+  than hanging (A14-1), and the deferred callback queue carries the HAL's longest
+  body (A14-2).
+- **Bridges.** A Matter reachability or label change is no longer lost during a
+  flush, and every owed MQTT offline survives a broker outage.
+- **Security.** The 0xF1-0xF5 host commands and secured-master posts run under
+  `api_lock`; a Tier II tag due on HR messages 119/120 is no longer lost at the
+  seam; first-boot provisioning avoids hard-to-receive device numbers.
 - **Matter pressure was 10× and 1000× too small.** `MeasuredValue` is now
   0.1 kPa per step (Matter 1.5.1 §2.4.5.1), so it reads 10× larger than before
   (101325 Pa: `101` → `1013`), and `Scale` changes from `2` to `-1` because
@@ -250,6 +276,8 @@ reads.
 
 ### Security
 
+- X_CONF without X_AUTH now encrypts byte [7]; it previously went out in clear.
+  Sealed-frame layouts accept versions 1-7 as compatible and reject 8-15.
 These fixes apply only to builds with the opt-in `security.conf`; no release
 image includes it.
 

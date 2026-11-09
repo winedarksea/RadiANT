@@ -2,7 +2,7 @@
   "tool": "ant_conformance.py",
   "format": "antser-v1",
   "antser_path": "archive\\captures\\serial\\conformance-nrf-radiant.antser",
-  "sha256": "15705b5a0827ee54b9c17232b53351911ce244bbfd3631dc4c83980b89b78bf6",
+  "sha256": "d123adff589c6d8a96908ef683b5c5d9b0a2cd7a8c7ac97f3aa6ff28eeff8ed3",
   "cases": 284,
   "records": 1273,
   "replies": 613,
@@ -1344,7 +1344,7 @@
     {
       "name": "4d-request-capabilities-0/valid",
       "records": 4,
-      "sha256": "5204ab22c42b1b1d261fb0ec99cc87a6372f9427caf716d525400c1c1dc46a0e"
+      "sha256": "03d7b377080f20301ef897a53e546c88590fcd6d1f188f62f6e8230b69d82312"
     },
     {
       "name": "4d-request-version-0/valid",

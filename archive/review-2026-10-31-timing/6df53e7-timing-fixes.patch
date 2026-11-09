@@ -1,0 +1,594 @@
+From 6df53e7cddf25bd6106875062b4fc1250485518d Mon Sep 17 00:00:00 2001
+From: Colin Catlin <colin.catlin@gmail.com>
+Date: Sat, 31 Oct 2026 22:52:56 -0500
+Subject: [PATCH] review: timing fixes (UNVERIFIED on air - do not merge
+ without A/B)
+
+UNVERIFIED: these changes touch radio/scheduler timing and have NOT been
+proven by a concurrent two-receiver on-air A/B. The room was at ~32% loss
+on both receivers (only trainer #52233 on air), which voids any loss
+comparison. ztest-verified only. Do not merge into review/2026-10-31 or
+master until an A/B (see memory: promicro-clone-bringup, ant-bench-loss-floor)
+shows no regression.
+
+- A14-1 radiant_radio_nrf.c: detect a START compare that is already in the
+  past (clear event before CC write, ETIME path, radiant_dbg_start_late)
+- A13-1 radiant_radio_nrf.c: CLOCK_LOCK/UNLOCK (ZLI lock when the core
+  callback is deferred), radiant_dbg_clock_back
+- A14-2 radiant_radio_nrf.c: CORE_CB_BODY_MAX bound + BUILD_ASSERT; the
+  oversize branch sets body_len 0
+- A9-3 radiant_sched.c/.h: reclaim an armed operation that never terminated
+  (RADIANT_SCHED_ARMED_STALE_US, armed_stale stat)
+- A8-4 radiant_sched.c: RX expiry accounts for phy_lead()
+- C5-1 radiant_radio_nrf_gate_mpsl.c: BLOCKED/CANCELLED back off the class
+  that was actually placed, not the current one
+
+Tests (each fails under its named mutation, passes fixed):
+  test_sched: test_an_operation_that_never_terminates_is_reclaimed (A9-3)
+  test_lr: test_a_window_inside_the_phy_switch_is_missed_not_skipped (A8-4)
+  test_gate: test_an_inline_block_backs_off_the_class_that_was_refused (C5-1)
+ztest on nRF5340 DK: main 839/839, gate 32/32, api 52/52.
+---
+ radiant/include/radiant/radiant_sched.h   | 12 +++
+ radiant/src/radiant_radio_nrf.c           | 98 ++++++++++++++++++-----
+ radiant/src/radiant_radio_nrf_gate_mpsl.c | 22 +++--
+ radiant/src/radiant_sched.c               | 26 ++++--
+ radiant/tests/gate/gate_probe.h           |  6 ++
+ radiant/tests/gate/gate_under_test.c      |  8 ++
+ radiant/tests/gate/src/test_gate.c        | 37 +++++++++
+ radiant/tests/src/test_lr.c               | 84 +++++++++++++++++++
+ radiant/tests/src/test_sched.c            | 34 ++++++++
+ 9 files changed, 299 insertions(+), 28 deletions(-)
+
+diff --git a/radiant/include/radiant/radiant_sched.h b/radiant/include/radiant/radiant_sched.h
+index 75b9b15..32b29e1 100644
+--- a/radiant/include/radiant/radiant_sched.h
++++ b/radiant/include/radiant/radiant_sched.h
+@@ -161,6 +161,15 @@ extern "C" {
+  */
+ #define RADIANT_SCHED_MERGE_SPAN_MAX_US 2000u
+ 
++/*
++ * An armed operation still unterminated this long after its own end is dead
++ * (lost terminal, compare written in the past) and is aborted rather than left
++ * holding the one radio slot forever. Far past any legitimate terminal
++ * latency, the MPSL gate's 20 ms DEADLINE_SLACK_US backstop included (review
++ * 2026-10-31, A9-3).
++ */
++#define RADIANT_SCHED_ARMED_STALE_US 100000u
++
+ /*
+  * Energy detect: modelled on the continuous background scan, not the bounded
+  * window path - never ends, armed one gap-sized chunk at a time. Unlike the
+@@ -458,6 +467,9 @@ struct radiant_sched_stats {
+ 				     * is what says whether mixing PHYs is
+ 				     * affordable. Zero-cost on both nRF builds
+ 				     * (phy_switch_us == 0) but still counted. */
++	uint32_t armed_stale;       /* armed ops reclaimed because no terminal
++				     * came RADIANT_SCHED_ARMED_STALE_US past
++				     * their end. SHOULD STAY ZERO */
+ };
+ 
+ /* ---------------------------------------------------------------------------
+diff --git a/radiant/src/radiant_radio_nrf.c b/radiant/src/radiant_radio_nrf.c
+index 280bfae..3ba635a 100644
+--- a/radiant/src/radiant_radio_nrf.c
++++ b/radiant/src/radiant_radio_nrf.c
+@@ -196,15 +196,32 @@ TIMER4; every nRF54L TIMER has at least six."
+ 
+ /*
+  * Extends the 32-bit us counter (wraps every 71.6 min) to the HAL's 64 bits.
+- * Exact provided a fold runs at least once per wrap; the subtraction is done
+- * under an interrupt lock and `last` only moves forwards, so two racing
+- * folds cannot lose a tick.
++ * Exact provided a fold runs at least once per wrap. Capture AND fold must be
++ * one critical section against EVERY context that folds - on an arbitrated
++ * build that includes MPSL's zero-latency signal callback (radio_isr(),
++ * deliver_terminal(), program_rx()), which irq_lock() does not mask. A ZLI
++ * fold between a thread's capture and its fold moves `last` past the thread's
++ * stale counter, and the thread's `counter - last` wraps to ~2^32: a permanent
++ * +71.6 min step (review 2026-10-31, A13-1). PRIMASK there, for a capture and
++ * an add (< 1 us).
+  */
+ static struct {
+ 	uint64_t base;   /* microseconds accounted for up to `last` */
+ 	uint32_t last;   /* the counter value `base` was folded at */
+ } radiant_clock;
+ 
++#if defined(CORE_CB_DEFERRED)
++#define CLOCK_LOCK()    radiant_swi_zli_lock()
++#define CLOCK_UNLOCK(k) radiant_swi_zli_unlock(k)
++#else
++#define CLOCK_LOCK()    ((uint32_t)irq_lock())
++#define CLOCK_UNLOCK(k) irq_unlock((unsigned int)(k))
++#endif
++
++/* Folds that went backwards: one raced another context. Counted so a soak can
++ * show it is zero; stays 0 on the direct build. */
++static volatile uint32_t radiant_dbg_clock_back;
++
+ 
+ static uint32_t timer_capture(uint8_t cc)
+ {
+@@ -214,7 +231,11 @@ static uint32_t timer_capture(uint8_t cc)
+ 
+ static uint64_t clock_fold(uint32_t counter)
+ {
+-	/* Caller holds the interrupt lock. */
++	/* Caller holds CLOCK_LOCK(). A fold never goes backwards (one runs
++	 * every pump, << 35 min); one that does raced another context. */
++	if ((int32_t)(counter - radiant_clock.last) < 0) {
++		radiant_dbg_clock_back++;
++	}
+ 	radiant_clock.base += counter - radiant_clock.last;
+ 	radiant_clock.last = counter;
+ 	return radiant_clock.base;
+@@ -222,10 +243,10 @@ static uint64_t clock_fold(uint32_t counter)
+ 
+ radiant_time_t radiant_radio_now(void)
+ {
+-	unsigned int key = irq_lock();
++	uint32_t key = CLOCK_LOCK();
+ 	uint64_t now = clock_fold(timer_capture(CC_NOW));
+ 
+-	irq_unlock(key);
++	CLOCK_UNLOCK(key);
+ 	return (radiant_time_t)now;
+ }
+ 
+@@ -239,11 +260,11 @@ radiant_time_t radiant_radio_now(void)
+  */
+ static radiant_time_t clock_absolute(uint32_t counter)
+ {
+-	unsigned int key = irq_lock();
++	uint32_t key = CLOCK_LOCK();
+ 	uint64_t base = clock_fold(timer_capture(CC_NOW));
+ 	int32_t  delta = (int32_t)(counter - radiant_clock.last);
+ 
+-	irq_unlock(key);
++	CLOCK_UNLOCK(key);
+ 	return (radiant_time_t)((int64_t)base + delta);
+ }
+ 
+@@ -251,11 +272,11 @@ static radiant_time_t clock_absolute(uint32_t counter)
+  * Only the low 32 bits reach the hardware, which is all a compare uses. */
+ static uint32_t clock_counter_at(radiant_time_t t)
+ {
+-	unsigned int key = irq_lock();
++	uint32_t key = CLOCK_LOCK();
+ 	uint64_t base = clock_fold(timer_capture(CC_NOW));
+ 	uint32_t last = radiant_clock.last;
+ 
+-	irq_unlock(key);
++	CLOCK_UNLOCK(key);
+ 	return last + (uint32_t)((int64_t)t - (int64_t)base);
+ }
+ 
+@@ -943,6 +964,9 @@ static volatile uint32_t radiant_dbg_ok;
+ static volatile uint32_t radiant_dbg_rx_no_addr;
+ /* Achieved t_sync minus requested t_sync on the last transmit, microseconds. */
+ static volatile int32_t  radiant_dbg_tx_err;
++/* Receive windows refused because CC_START landed behind the counter while it
++ * was being written (review 2026-10-31, A14-1). Expected 0 or single digits. */
++static volatile uint32_t radiant_dbg_start_late;
+ 
+ /* The DMA buffer the RADIO reads and writes. Backend-owned, handed to the core
+  * as rx_event.body for the duration of one callback only, which is exactly what
+@@ -1794,12 +1818,14 @@ static void deliver_terminal(enum radiant_radio_status st);
+ 
+ #if defined(CORE_CB_DEFERRED)
+ 
+-/* The longest body the backend ever hands up, copied because the pointer in
+- * struct radiant_rx_event is "valid only for the duration of this callback"
+- * and the callback now happens later. ANT frames are 8 payload bytes plus
+- * headers; 32 covers every PHY this backend offers with room to spare, and a
+- * body longer than this is refused at the queue rather than truncated. */
+-#define CORE_CB_BODY_MAX 32u
++/* The longest body the backend ever hands up - the HAL's own maximum, raised
++ * to 40 for the long-range format (radiant_frame.h RADIANT_FRAME_LR_BODY_MAX).
++ * Copied because the pointer in struct radiant_rx_event is "valid only for the
++ * duration of this callback" and the callback now happens later. It used to be
++ * 32, and an LR body of 33-40 bytes was queued with no body and dropped
++ * silently on MPSL builds (review 2026-10-31, A14-2). */
++#define CORE_CB_BODY_MAX ((uint8_t)RADIANT_RADIO_BODY_MAX)
++BUILD_ASSERT(RADIANT_RADIO_BODY_MAX <= 255, "core_cb_entry.body_len is uint8_t");
+ 
+ enum core_cb_kind { CORE_CB_RX = 0, CORE_CB_TX, CORE_CB_ED };
+ 
+@@ -1984,6 +2010,10 @@ static void core_cb_rx(struct radiant_rx_event *evt)
+ 		    evt->body_len <= CORE_CB_BODY_MAX) {
+ 			memcpy(e.body, evt->body, evt->body_len);
+ 			e.body_len = evt->body_len;
++		} else {
++			/* No copy, so say "no body" consistently rather than a
++			 * NULL body with a non-zero length. */
++			e.ev.rx.body_len = 0u;
+ 		}
+ 		/* A frame is terminal only when stop_on_first has already
+ 		 * retired the operation. */
+@@ -2768,6 +2798,24 @@ static int program_tx(const struct radiant_tx_req *req)
+  * other refusal is a pure function of the request, answered before the gate
+  * was consulted.
+  */
++/*
++ * A compare written behind the free-running counter never fires (until the
++ * 32-bit wrap, ~71 min): no RXEN, and TASKS_DISABLE on a DISABLED radio raises
++ * no EVENTS_DISABLED, so no terminal either - the op would hold the
++ * scheduler's one slot forever (review 2026-10-31, A14-1). The event is
++ * cleared before the CC write, so "counter at or past start_cc with the event
++ * still clear" can only mean the compare was written too late; if it fired,
++ * the window is live and stays armed.
++ */
++static bool start_compare_missed(uint32_t start_cc)
++{
++	uint32_t now_cc = timer_capture(CC_NOW);
++
++	return (int32_t)(now_cc - start_cc) >= 0 &&
++	       !nrf_timer_event_check(TIMER_ADDR,
++				      nrf_timer_compare_event_get(CC_START));
++}
++
+ static int program_rx(const struct radiant_rx_req *req)
+ {
+ 	radiant_time_t now;
+@@ -2880,6 +2928,7 @@ static int program_rx(const struct radiant_rx_req *req)
+ 			(radiant_time_t)tail);
+ 	}
+ 
++	nrf_timer_event_clear(TIMER_ADDR, nrf_timer_compare_event_get(CC_START));
+ 	nrf_timer_cc_set(TIMER_ADDR, CC_START, start_cc);
+ 	nrf_timer_cc_set(TIMER_ADDR, CC_CLOSE, close_cc);
+ 
+@@ -2892,12 +2941,25 @@ static int program_rx(const struct radiant_rx_req *req)
+ 	 * answer rather than an exception. */
+ 	nrfx_gppi_conn_enable(radiant_op.conn_rssi);
+ 
+-	LOG_DBG("rx op=%u n=%u alen=%u cov=%u open=+%d close=+%d isr=%u ev=%u ok=%u term=%u noaddr=%u",
++	if (start_compare_missed(start_cc)) {
++		/* The ETIME return unwinds like the early check above: the
++		 * direct path releases the gate and clears the op, the
++		 * scheduler reports MISSED and retries the pass. */
++		nrfx_gppi_conn_disable(radiant_op.conn_start);
++		nrfx_gppi_conn_disable(radiant_op.conn_close);
++		nrfx_gppi_conn_disable(radiant_op.conn_rssi);
++		nrf_radio_shorts_set(NRF_RADIO, 0);
++		radiant_dbg_start_late++;
++		return RADIANT_RADIO_ETIME;
++	}
++
++	LOG_DBG("rx op=%u n=%u alen=%u cov=%u open=+%d close=+%d isr=%u ev=%u ok=%u term=%u noaddr=%u late=%u clkback=%u",
+ 		(unsigned)radiant_op.id, req->n_filters,
+ 		(unsigned)req->fmt->addr_len, (unsigned)req->fmt->crc.cover_addr,
+ 		(int)(int64_t)(req->t_open - now), (int)(int64_t)(req->t_close - now),
+ 		(unsigned)radiant_dbg_isr, (unsigned)radiant_dbg_rx_ev, (unsigned)radiant_dbg_ok,
+-		(unsigned)radiant_dbg_term, (unsigned)radiant_dbg_rx_no_addr);
++		(unsigned)radiant_dbg_term, (unsigned)radiant_dbg_rx_no_addr,
++		(unsigned)radiant_dbg_start_late, (unsigned)radiant_dbg_clock_back);
+ 	return RADIANT_RADIO_OK_RC;
+ }
+ 
+diff --git a/radiant/src/radiant_radio_nrf_gate_mpsl.c b/radiant/src/radiant_radio_nrf_gate_mpsl.c
+index 4864981..137eed6 100644
+--- a/radiant/src/radiant_radio_nrf_gate_mpsl.c
++++ b/radiant/src/radiant_radio_nrf_gate_mpsl.c
+@@ -740,6 +740,15 @@ static struct {
+ 
+ /* The class of the request MPSL currently holds, for the probe counters. */
+ static bool grant_high_prio;
++/* The class of the request most recently PLACED. BLOCKED/CANCELLED answer the
++ * placed request, and may arrive from inside mpsl_timeslot_request() - before
++ * commit_next_grant() has made it the current one - so reading g.extendable /
++ * grant_high_prio there attributed the first refusal after every class change
++ * to the previous grant's class (review 2026-10-31, C5-1). Only one request is
++ * ever outstanding, so recording at placement is right for inline and
++ * deferred answers alike. */
++static bool placed_extendable;
++static bool placed_high_prio;
+ 
+ /*
+  * How big the elastic class asks its first bite, and why it's a variable.
+@@ -825,6 +834,8 @@ static void request_work_fn(struct k_work *w)
+ 	 * the not-placed case needs undoing below, and no answer can be in
+ 	 * flight for that. stats.answered_inline counts the inline case.
+ 	 */
++	placed_extendable = next_grant.extendable;
++	placed_high_prio = next_grant.high_prio;
+ 	g.mpsl_owes = true;
+ 	rc = mpsl_timeslot_request(session_id, &req);
+ 	if (rc == 0) {
+@@ -1369,7 +1380,7 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
+ 		 */
+ 		if (signal == MPSL_TIMESLOT_SIGNAL_BLOCKED) {
+ 			stats.blocked++;
+-			if (grant_high_prio) {
++			if (placed_high_prio) {
+ 				stats.hi_blocked++;
+ 			}
+ 		} else {
+@@ -1392,11 +1403,12 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
+ 		/*
+ 		 * GIVE WAY BY ASKING FOR LESS, not merely by asking again. See
+ 		 * elastic_initial_us. Only the elastic class is shortened, and
+-		 * `g.extendable` is exactly that class - it is the flag that
+-		 * says this request is allowed to grow, which is the same thing
+-		 * as saying its length was ours to choose.
++		 * the placed request's extendable flag is exactly that class -
++		 * it says this request is allowed to grow, which is the same
++		 * thing as saying its length was ours to choose. The PLACED
++		 * request's, not g.extendable: see placed_extendable.
+ 		 */
+-		if (g.extendable) {
++		if (placed_extendable) {
+ 			if (elastic_initial_us > ELASTIC_FLOOR_US) {
+ 				elastic_initial_us /= 2u;
+ 				if (elastic_initial_us < ELASTIC_FLOOR_US) {
+diff --git a/radiant/src/radiant_sched.c b/radiant/src/radiant_sched.c
+index 957b080..8aae98d 100644
+--- a/radiant/src/radiant_sched.c
++++ b/radiant/src/radiant_sched.c
+@@ -1778,9 +1778,17 @@ static enum step pass_step(radiant_time_t now)
+ 		} else {
+ 			/* A receive window whose open has passed is still worth
+ 			 * arming for the rest of its span, so only the close
+-			 * expires it. */
++			 * expires it - and the close must clear the PHY switch,
++			 * exactly as arm_rx_window() computes its open. Otherwise
++			 * a window that can no longer be armed survives here,
++			 * arm_rx_window() returns STEP_SKIP for it, and arm_next()
++			 * ends the pass with the radio idle and every later
++			 * receive unarmed until the next pump (review 2026-10-31,
++			 * A8-4; phy_lead() is 0 on every build without the LR
++			 * PHY, so this is unchanged there). */
+ 			expired = !sl->continuous &&
+-				  sl->t_end < slot_earliest(sl, earliest);
++				  sl->t_end < slot_earliest(sl, earliest) +
++						      phy_lead(sl->fmt);
+ 		}
+ 		if (expired) {
+ 			slot_clear((uint8_t)i);
+@@ -1790,10 +1798,18 @@ static enum step pass_step(radiant_time_t now)
+ 	}
+ 
+ 	if (s.armed_kind != (uint8_t)SLOT_IDLE) {
+-		if (!want_preempt(earliest)) {
++		if (now > t_fwd(s.armed_end, RADIANT_SCHED_ARMED_STALE_US)) {
++			/* No terminal, long past its end: the backend lost it
++			 * (e.g. a compare written behind the counter). Nothing
++			 * else ever displaces an already-open window, so without
++			 * this the one radio slot is held forever (review
++			 * 2026-10-31, A9-3). abort_armed() aborts the radio and
++			 * tells the members ABORTED, so owners re-post. */
++			s.stats.armed_stale++;
++			(void)abort_armed(RADIANT_SCHED_CH_NONE);
++		} else if (!want_preempt(earliest)) {
+ 			return STEP_DONE;
+-		}
+-		if (abort_armed(RADIANT_SCHED_CH_NONE)) {
++		} else if (abort_armed(RADIANT_SCHED_CH_NONE)) {
+ 			s.stats.preempted++;
+ 		} else {
+ 			s.stats.replans++;
+diff --git a/radiant/tests/gate/gate_probe.h b/radiant/tests/gate/gate_probe.h
+index 747d063..270e96d 100644
+--- a/radiant/tests/gate/gate_probe.h
++++ b/radiant/tests/gate/gate_probe.h
+@@ -72,6 +72,12 @@ struct gate_probe {
+ 
+ void gate_probe_read(struct gate_probe *out);
+ 
++/* Put the elastic class's adaptive state (first-bite length, phase skew,
++ * refusal run) back to its power-on values. It is file-static and survives
++ * gate_init(), so a test that makes the elastic class back off must undo it or
++ * every later test inherits a halved first bite. */
++void gate_probe_reset_elastic(void);
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/radiant/tests/gate/gate_under_test.c b/radiant/tests/gate/gate_under_test.c
+index 0d7288f..cf9fe54 100644
+--- a/radiant/tests/gate/gate_under_test.c
++++ b/radiant/tests/gate/gate_under_test.c
+@@ -57,3 +57,11 @@ void gate_probe_read(struct gate_probe *out)
+ 	out->extendable     = g.extendable;
+ 	out->end_margin_us  = g.end_margin_us;
+ }
++
++/* The one writer in this file: test-harness state reset, never behaviour. */
++void gate_probe_reset_elastic(void)
++{
++	elastic_initial_us = ELASTIC_INITIAL_US;
++	elastic_skew_us = 0u;
++	blocked_run = 0u;
++}
+diff --git a/radiant/tests/gate/src/test_gate.c b/radiant/tests/gate/src/test_gate.c
+index 9a5e3b9..fb08066 100644
+--- a/radiant/tests/gate/src/test_gate.c
++++ b/radiant/tests/gate/src/test_gate.c
+@@ -1112,6 +1112,43 @@ static uint32_t place_window(enum gate_op op, uint8_t prio, uint32_t win_len_us)
+ 	return fake_mpsl_last_request()->params.normal.length_us;
+ }
+ 
++/*
++ * An inline BLOCKED backs off the class that was REFUSED (review 2026-10-31,
++ * C5-1). MPSL can answer BLOCKED from inside mpsl_timeslot_request(), before
++ * commit_next_grant() has made the placed request the current one - so the
++ * BLOCKED case read the PREVIOUS grant's class. Here that is the bootstrap
++ * (non-extendable), so a refused elastic chunk was not shortened and the next
++ * one asked the full first bite again: ADR 0013's "give way by asking for
++ * less" skipped exactly the chunk that was refused.
++ */
++ZTEST(radiant_gate, test_an_inline_block_backs_off_the_class_that_was_refused)
++{
++	uint32_t first;
++	uint32_t second;
++
++	gate_probe_reset_elastic();
++
++	fake_mpsl_answer_inline(MPSL_TIMESLOT_SIGNAL_BLOCKED, 1u);
++	first = place_window(GATE_OP_RX, RADIANT_GATE_PRIO_NORMAL,
++			     ELASTIC_CHUNK_US);
++	gate_probe_read(&p);
++	second = place_window(GATE_OP_RX, RADIANT_GATE_PRIO_NORMAL,
++			      ELASTIC_CHUNK_US);
++
++	/* Restore BEFORE asserting: the elastic state is file-static and
++	 * survives gate_init(), so a failure here must not leak a halved first
++	 * bite into every later elastic test. after() tears the session down. */
++	gate_probe_reset_elastic();
++
++	zassert_equal(ELASTIC_GRANT_US, first,
++		      "setup: the elastic first bite is not the full one");
++	zassert_equal(1u, p.blocked, "setup: the inline BLOCKED was not delivered");
++	zassert_equal(ELASTIC_GRANT_US / 2u, second,
++		      "a refused elastic chunk did not shorten the next one (%u): "
++		      "the inline BLOCKED was attributed to the previous grant's "
++		      "class", (unsigned)second);
++}
++
+ ZTEST(radiant_gate, test_a_tracked_window_asks_for_only_the_fixed_end_margin)
+ {
+ 	zassert_equal(WIN_REQ_LEN_US,
+diff --git a/radiant/tests/src/test_lr.c b/radiant/tests/src/test_lr.c
+index 208618c..da62498 100644
+--- a/radiant/tests/src/test_lr.c
++++ b/radiant/tests/src/test_lr.c
+@@ -375,6 +375,90 @@ static struct radiant_rx_filter tracking_filter(uint16_t devnum)
+ 	return f;
+ }
+ 
++/*
++ * A receive window whose close falls inside the PHY switch it needs can no
++ * longer be armed, and must be reported MISSED - not skipped, which ended the
++ * pass with the radio idle and left every later receive unarmed until the next
++ * pump (review 2026-10-31, A8-4). Only reachable with a PHY switch to pay for,
++ * hence the RAIL preset here; phy_lead() is 0 on every shipping nRF build.
++ */
++ZTEST(lr, test_a_window_inside_the_phy_switch_is_missed_not_skipped)
++{
++	static struct radiant_rx_filter f1m;
++	static struct radiant_rx_filter flr0;
++	static struct radiant_rx_filter flr1;
++	struct radiant_sched_rx req;
++	const struct fake_radio_arm *rec;
++	radiant_time_t n;
++	uint32_t lead;
++	uint32_t missed0;
++
++	fake_radio_caps_preset_rail();
++	fake_radio_set_phys(fake_phys_1m_lr, fake_phys_1m_lr_count);
++	lead = fake_radio_caps_mut()->min_arm_lead_us;
++	zassert_true(fake_radio_caps_mut()->phy_switch_us > 100u,
++		     "this test needs a backend that pays for a switch");
++
++	zassert_ok(radiant_sched_init(NULL, NULL));
++	zassert_ok(radiant_radio_init(radiant_sched_radio_cbs(), NULL));
++	zassert_ok(radiant_radio_enable());
++
++	f1m = tracking_filter(0x1111u);
++	flr0 = lr_filter(0x2222u);
++	flr1 = lr_filter(0x3333u);
++
++	/* One 1 M window to completion, so the radio's PHY is known: 1 M. */
++	memset(&req, 0, sizeof(req));
++	req.fmt = radiant_frame_format(RADIANT_FRAME_CFG_TRACKING);
++	req.rf_index = RADIANT_RF_INDEX_ANT_PLUS;
++	req.filters = &f1m;
++	req.n_filters = 1u;
++	req.t_open = radiant_radio_now() + 1u;
++	req.t_close = req.t_open + 5000u;
++	zassert_ok(radiant_sched_request_rx(0u, &req));
++	radiant_sched_tick();
++	fake_radio_advance(200000u);
++
++	n = radiant_radio_now();
++	missed0 = radiant_sched_stats_get()->missed;
++
++	/* Channel 1: a coded window well clear of the switch. */
++	memset(&req, 0, sizeof(req));
++	req.fmt = radiant_frame_format(RADIANT_FRAME_CFG_LR);
++	req.rf_index = RADIANT_RF_INDEX_ANT_PLUS;
++	req.filters = &flr1;
++	req.n_filters = 1u;
++	req.t_open = n + 20000u;
++	req.t_close = n + 20200u;
++	zassert_ok(radiant_sched_request_rx(1u, &req));
++
++	/* Channel 0: a coded window whose close is past the plain lead but
++	 * inside lead + switch - it can no longer be opened in time. */
++	memset(&req, 0, sizeof(req));
++	req.fmt = radiant_frame_format(RADIANT_FRAME_CFG_LR);
++	req.rf_index = RADIANT_RF_INDEX_ANT_PLUS;
++	req.filters = &flr0;
++	req.n_filters = 1u;
++	req.t_open = n + lead + 10u;
++	req.t_close = n + lead + 100u;
++	zassert_ok(radiant_sched_request_rx(0u, &req));
++
++	radiant_sched_tick();
++
++	zassert_equal(missed0 + 1u, radiant_sched_stats_get()->missed,
++		      "the window inside the PHY switch was not reported MISSED");
++	rec = fake_radio_last_arm();
++	zassert_not_null(rec, NULL);
++	zassert_equal(n + 20000u, rec->t_open,
++		      "the pass ended idle instead of arming the next window "
++		      "(last arm opened at %u)", (unsigned)(rec->t_open - n));
++	zassert_equal(RADIANT_PHY_LR_CODED, rec->fmt.phy, NULL);
++
++	(void)radiant_sched_cancel(0u);
++	(void)radiant_sched_cancel(1u);
++	fake_radio_advance(100000u);
++}
++
+ ZTEST(lr, test_a_change_of_phy_is_budgeted_and_a_repeat_is_not)
+ {
+ 	static struct radiant_rx_filter f1m;
+diff --git a/radiant/tests/src/test_sched.c b/radiant/tests/src/test_sched.c
+index b755d8e..f6a4692 100644
+--- a/radiant/tests/src/test_sched.c
++++ b/radiant/tests/src/test_sched.c
+@@ -2406,6 +2406,40 @@ ZTEST(radiant_sched, test_a_crc_failure_does_not_end_a_stop_on_first_window)
+ 	finish();
+ }
+ 
++/* An armed operation whose terminal never comes (the backend lost it - a
++ * compare written behind the counter, say) is reclaimed once it is
++ * RADIANT_SCHED_ARMED_STALE_US past its own end. want_preempt() never displaces
++ * an already-open window, so without this every later request waits forever
++ * (review 2026-10-31, A9-3). The assertion is on the SCHEDULE: the mock can
++ * withhold a terminal, it cannot write a compare in the past. */
++ZTEST(radiant_sched, test_an_operation_that_never_terminates_is_reclaimed)
++{
++	radiant_time_t t0;
++	const struct fake_radio_arm *last;
++
++	bring_up();
++	fake_radio_set_rx_terminal_delay_us(1000000u);
++	t0 = radiant_radio_now();
++	post_track(0u, t0 + 10000u, t0 + 10200u);
++	zassert_ok(radiant_sched_tick());
++
++	fake_radio_advance_to(t0 + 10200u + 150000u);
++	post_track(1u, t0 + 400000u, t0 + 400200u);
++	zassert_ok(radiant_sched_tick());
++
++	zassert_equal(1u, radiant_sched_stats_get()->armed_stale,
++		      "a dead operation was not reclaimed");
++	zassert_equal(1u, log.aborted_count[0], "its owner was not told");
++	last = fake_radio_last_arm();
++	zassert_not_null(last, NULL);
++	zassert_equal(t0 + 400000u, last->t_open,
++		      "the next request never got the radio");
++
++	fake_radio_set_rx_terminal_delay_us(0u);
++	fake_radio_advance_to(t0 + 400200u + 1100000u);
++	finish();
++}
++
+ /* A backend reporting it could not complete an operation ends the request
+  * rather than leaving it in flight forever - a scheduler with no case for
+  * RADIANT_RADIO_STATUS_FAILED would hold the channel in flight and never
+-- 
+2.56.0.windows.4
+

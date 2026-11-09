@@ -1,0 +1,781 @@
+{
+  "channels": [
+    {
+      "profile": "power",
+      "channel": 0,
+      "device_number": 53000,
+      "device_type": 11,
+      "exact_basis": {
+        "pairs": 1174,
+        "still": 119
+      },
+      "period_ticks": 8182,
+      "packets": 1194,
+      "elapsed_s": 299.625,
+      "expected_packets": 1200.9648007822047,
+      "loss_pct": 0.579933798032084,
+      "time_to_first_packet_s": 0.15599999999994907,
+      "reacquire_s": null,
+      "jitter": {
+        "n": 1193,
+        "mean_s": 0.2511525565800503,
+        "stdev_s": 0.01928665471366041,
+        "max_s": 0.5,
+        "period_s": 0.24969482421875,
+        "radio_n": 1193,
+        "offgrid_host_s": 0.0025463212413455866,
+        "offgrid_radio_s": 1.1022094139165497e-05
+      },
+      "signal": {
+        "n": 1194,
+        "mean_dbm": -32.0,
+        "min_dbm": -32,
+        "max_dbm": -32
+      },
+      "pages": {
+        "0x10": 1175,
+        "0x50": 9,
+        "0x51": 10
+      },
+      "common_page_gaps": {
+        "count": 18,
+        "max": 121
+      },
+      "power": {
+        "n": 1175,
+        "mean": 100.03489361702128,
+        "min": 97.0,
+        "max": 103.0
+      },
+      "cadence": {
+        "n": 1175,
+        "mean": 79.98893617021277,
+        "min": 77.0,
+        "max": 83.0
+      },
+      "speed_mps": null,
+      "heart_rate_bpm": null,
+      "attestation": {
+        "verdict": "clear"
+      },
+      "accumulator_wraps": {
+        "event_count": 4,
+        "acc_power": 1
+      },
+      "telemetry": null,
+      "event_advances": 1055,
+      "event_comparisons": 1174,
+      "exact_loss": null,
+      "violations": {
+        "count": 0,
+        "first": []
+      },
+      "checks": [
+        {
+          "name": "packets",
+          "pass": true,
+          "detail": "1194 received, 1201 expected over 299.6 s"
+        },
+        {
+          "name": "loss",
+          "pass": true,
+          "detail": "0.58 % (limit 1.50 %, one packet = 0.08 %)"
+        },
+        {
+          "name": "jitter",
+          "pass": true,
+          "detail": "stddev 19.3 ms, max 500.0 ms (limit 124.8 ms, period 249.7 ms)"
+        },
+        {
+          "name": "accumulator continuity",
+          "pass": true,
+          "detail": "0 violation(s)"
+        },
+        {
+          "name": "sensor liveness",
+          "pass": true,
+          "detail": "the event counter advanced on 1055 of 1174 packet pairs"
+        },
+        {
+          "name": "common pages",
+          "pass": true,
+          "detail": "80 x9, 81 x10, worst gap 121 (limit 121)"
+        }
+      ],
+      "pass": true
+    },
+    {
+      "profile": "heart-rate",
+      "channel": 1,
+      "device_number": 53001,
+      "device_type": 120,
+      "exact_basis": {
+        "pairs": 0,
+        "still": 0
+      },
+      "period_ticks": 8070,
+      "packets": 1211,
+      "elapsed_s": 299.96900000000005,
+      "expected_packets": 1219.0153893432469,
+      "loss_pct": 0.657529791118161,
+      "time_to_first_packet_s": 0.03099999999994907,
+      "reacquire_s": null,
+      "jitter": {
+        "n": 1210,
+        "mean_s": 0.24790826446280995,
+        "stdev_s": 0.0211657531227299,
+        "max_s": 0.5,
+        "period_s": 0.24627685546875,
+        "radio_n": 1210,
+        "offgrid_host_s": 0.006672835298727379,
+        "offgrid_radio_s": 1.0909301538796111e-05
+      },
+      "signal": {
+        "n": 1211,
+        "mean_dbm": -32.002477291494635,
+        "min_dbm": -33,
+        "max_dbm": -32
+      },
+      "pages": {
+        "0x00": 3,
+        "0x01": 4,
+        "0x02": 4,
+        "0x03": 1,
+        "0x04": 1179,
+        "0x50": 11,
+        "0x51": 9
+      },
+      "common_page_gaps": {
+        "count": 19,
+        "max": 121
+      },
+      "power": null,
+      "cadence": null,
+      "speed_mps": null,
+      "heart_rate_bpm": {
+        "n": 690,
+        "mean": 145.06884739214993,
+        "min": 141.89376443418013,
+        "max": 148.04819277108433
+      },
+      "attestation": {
+        "verdict": "clear"
+      },
+      "accumulator_wraps": {
+        "hr_event_time": 4,
+        "beat_count": 2
+      },
+      "telemetry": null,
+      "event_advances": 690,
+      "event_comparisons": 1190,
+      "exact_loss": null,
+      "violations": {
+        "count": 0,
+        "first": []
+      },
+      "checks": [
+        {
+          "name": "packets",
+          "pass": true,
+          "detail": "1211 received, 1219 expected over 300.0 s"
+        },
+        {
+          "name": "loss",
+          "pass": true,
+          "detail": "0.66 % (limit 1.50 %, one packet = 0.08 %)"
+        },
+        {
+          "name": "jitter",
+          "pass": true,
+          "detail": "stddev 21.2 ms, max 500.0 ms (limit 123.1 ms, period 246.3 ms)"
+        },
+        {
+          "name": "accumulator continuity",
+          "pass": true,
+          "detail": "0 violation(s)"
+        },
+        {
+          "name": "sensor liveness",
+          "pass": true,
+          "detail": "the event counter advanced on 690 of 1190 packet pairs"
+        },
+        {
+          "name": "common pages",
+          "pass": true,
+          "detail": "80 x11, 81 x9, worst gap 121 (limit 121)"
+        }
+      ],
+      "pass": true
+    },
+    {
+      "profile": "csc",
+      "channel": 2,
+      "device_number": 53002,
+      "device_type": 121,
+      "exact_basis": {
+        "pairs": 0,
+        "still": 0
+      },
+      "period_ticks": 8086,
+      "packets": 1208,
+      "elapsed_s": 299.8129999999999,
+      "expected_packets": 1215.973087311402,
+      "loss_pct": 0.6556960342790963,
+      "time_to_first_packet_s": 0.06200000000012551,
+      "reacquire_s": null,
+      "jitter": {
+        "n": 1207,
+        "mean_s": 0.24839519469759724,
+        "stdev_s": 0.02072542099694352,
+        "max_s": 0.5,
+        "period_s": 0.24676513671875,
+        "radio_n": 1207,
+        "offgrid_host_s": 0.006336312868727927,
+        "offgrid_radio_s": 1.0641938084539153e-05
+      },
+      "signal": {
+        "n": 1208,
+        "mean_dbm": -32.00248344370861,
+        "min_dbm": -33,
+        "max_dbm": -32
+      },
+      "pages": {},
+      "common_page_gaps": {
+        "count": 0,
+        "max": null
+      },
+      "power": null,
+      "cadence": {
+        "n": 398,
+        "mean": 80.02293164402013,
+        "min": 76.99248120300751,
+        "max": 83.02702702702703
+      },
+      "speed_mps": {
+        "n": 1055,
+        "mean": 8.322471042471042,
+        "min": 8.322471042471042,
+        "max": 8.322471042471042
+      },
+      "heart_rate_bpm": null,
+      "attestation": {
+        "verdict": "clear"
+      },
+      "accumulator_wraps": {
+        "spd_event_time": 4,
+        "cad_event_time": 4
+      },
+      "telemetry": null,
+      "event_advances": 1061,
+      "event_comparisons": 1207,
+      "exact_loss": null,
+      "violations": {
+        "count": 0,
+        "first": []
+      },
+      "checks": [
+        {
+          "name": "packets",
+          "pass": true,
+          "detail": "1208 received, 1216 expected over 299.8 s"
+        },
+        {
+          "name": "loss",
+          "pass": true,
+          "detail": "0.66 % (limit 1.50 %, one packet = 0.08 %)"
+        },
+        {
+          "name": "jitter",
+          "pass": true,
+          "detail": "stddev 20.7 ms, max 500.0 ms (limit 123.4 ms, period 246.8 ms)"
+        },
+        {
+          "name": "accumulator continuity",
+          "pass": true,
+          "detail": "0 violation(s)"
+        },
+        {
+          "name": "sensor liveness",
+          "pass": true,
+          "detail": "the event counter advanced on 1061 of 1207 packet pairs"
+        }
+      ],
+      "pass": true
+    },
+    {
+      "profile": "power",
+      "channel": 3,
+      "device_number": 41000,
+      "device_type": 11,
+      "exact_basis": {
+        "pairs": 1172,
+        "still": 177
+      },
+      "period_ticks": 8182,
+      "packets": 1191,
+      "elapsed_s": 299.125,
+      "expected_packets": 1198.9623563920802,
+      "loss_pct": 0.664103952024031,
+      "time_to_first_packet_s": 0.6879999999998745,
+      "reacquire_s": null,
+      "jitter": {
+        "n": 1190,
+        "mean_s": 0.2513655462184874,
+        "stdev_s": 0.020621030046140628,
+        "max_s": 0.5,
+        "period_s": 0.24969482421875,
+        "radio_n": 1190,
+        "offgrid_host_s": 0.00261268825171638,
+        "offgrid_radio_s": 6.984868382819553e-06
+      },
+      "signal": {
+        "n": 1191,
+        "mean_dbm": -35.04785894206549,
+        "min_dbm": -37,
+        "max_dbm": -35
+      },
+      "pages": {
+        "0x10": 1173,
+        "0x50": 9,
+        "0x51": 9
+      },
+      "common_page_gaps": {
+        "count": 17,
+        "max": 121
+      },
+      "power": {
+        "n": 1173,
+        "mean": 100.00255754475704,
+        "min": 97.0,
+        "max": 103.0
+      },
+      "cadence": {
+        "n": 1173,
+        "mean": 80.00085251491902,
+        "min": 77.0,
+        "max": 83.0
+      },
+      "speed_mps": null,
+      "heart_rate_bpm": null,
+      "attestation": {
+        "verdict": "clear"
+      },
+      "accumulator_wraps": {
+        "event_count": 4,
+        "acc_power": 1
+      },
+      "telemetry": null,
+      "event_advances": 995,
+      "event_comparisons": 1172,
+      "exact_loss": null,
+      "violations": {
+        "count": 0,
+        "first": []
+      },
+      "checks": [
+        {
+          "name": "packets",
+          "pass": true,
+          "detail": "1191 received, 1199 expected over 299.1 s"
+        },
+        {
+          "name": "loss",
+          "pass": true,
+          "detail": "0.66 % (limit 1.50 %, one packet = 0.08 %)"
+        },
+        {
+          "name": "jitter",
+          "pass": true,
+          "detail": "stddev 20.6 ms, max 500.0 ms (limit 124.8 ms, period 249.7 ms)"
+        },
+        {
+          "name": "accumulator continuity",
+          "pass": true,
+          "detail": "0 violation(s)"
+        },
+        {
+          "name": "sensor liveness",
+          "pass": true,
+          "detail": "the event counter advanced on 995 of 1172 packet pairs"
+        },
+        {
+          "name": "common pages",
+          "pass": true,
+          "detail": "80 x9, 81 x9, worst gap 121 (limit 121)"
+        }
+      ],
+      "pass": true
+    },
+    {
+      "profile": "heart-rate",
+      "channel": 4,
+      "device_number": 41001,
+      "device_type": 120,
+      "exact_basis": {
+        "pairs": 0,
+        "still": 0
+      },
+      "period_ticks": 8070,
+      "packets": 1206,
+      "elapsed_s": 299.453,
+      "expected_packets": 1216.9201863692688,
+      "loss_pct": 0.8973625790405837,
+      "time_to_first_packet_s": 0.5629999999998745,
+      "reacquire_s": null,
+      "jitter": {
+        "n": 1205,
+        "mean_s": 0.24850871369294603,
+        "stdev_s": 0.02629922231161827,
+        "max_s": 0.7339999999999236,
+        "period_s": 0.24627685546875,
+        "radio_n": 1205,
+        "offgrid_host_s": 0.006678114623434529,
+        "offgrid_radio_s": 6.843776644375055e-06
+      },
+      "signal": {
+        "n": 1206,
+        "mean_dbm": -35.66749585406302,
+        "min_dbm": -37,
+        "max_dbm": -33
+      },
+      "pages": {
+        "0x00": 3,
+        "0x01": 6,
+        "0x02": 3,
+        "0x03": 5,
+        "0x04": 1171,
+        "0x50": 11,
+        "0x51": 7
+      },
+      "common_page_gaps": {
+        "count": 17,
+        "max": 121
+      },
+      "power": null,
+      "cadence": null,
+      "speed_mps": null,
+      "heart_rate_bpm": {
+        "n": 683,
+        "mean": 145.04921270470723,
+        "min": 141.89376443418013,
+        "max": 148.04819277108433
+      },
+      "attestation": {
+        "verdict": "clear"
+      },
+      "accumulator_wraps": {
+        "hr_event_time": 4,
+        "beat_count": 2
+      },
+      "telemetry": null,
+      "event_advances": 683,
+      "event_comparisons": 1187,
+      "exact_loss": null,
+      "violations": {
+        "count": 0,
+        "first": []
+      },
+      "checks": [
+        {
+          "name": "packets",
+          "pass": true,
+          "detail": "1206 received, 1217 expected over 299.5 s"
+        },
+        {
+          "name": "loss",
+          "pass": true,
+          "detail": "0.90 % (limit 1.50 %, one packet = 0.08 %)"
+        },
+        {
+          "name": "jitter",
+          "pass": true,
+          "detail": "stddev 26.3 ms, max 734.0 ms (limit 123.1 ms, period 246.3 ms)"
+        },
+        {
+          "name": "accumulator continuity",
+          "pass": true,
+          "detail": "0 violation(s)"
+        },
+        {
+          "name": "sensor liveness",
+          "pass": true,
+          "detail": "the event counter advanced on 683 of 1187 packet pairs"
+        },
+        {
+          "name": "common pages",
+          "pass": true,
+          "detail": "80 x11, 81 x7, worst gap 121 (limit 121)"
+        }
+      ],
+      "pass": true
+    },
+    {
+      "profile": "csc",
+      "channel": 5,
+      "device_number": 41002,
+      "device_type": 121,
+      "exact_basis": {
+        "pairs": 0,
+        "still": 0
+      },
+      "period_ticks": 8086,
+      "packets": 1204,
+      "elapsed_s": 299.3130000000001,
+      "expected_packets": 1213.9468691565673,
+      "loss_pct": 0.8193825783725073,
+      "time_to_first_packet_s": 0.5939999999998236,
+      "reacquire_s": null,
+      "jitter": {
+        "n": 1203,
+        "mean_s": 0.24880548628428936,
+        "stdev_s": 0.025066204671175055,
+        "max_s": 0.734000000000151,
+        "period_s": 0.24676513671875,
+        "radio_n": 1203,
+        "offgrid_host_s": 0.006370769431847006,
+        "offgrid_radio_s": 6.206171481694877e-06
+      },
+      "signal": {
+        "n": 1204,
+        "mean_dbm": -35.04485049833887,
+        "min_dbm": -36,
+        "max_dbm": -35
+      },
+      "pages": {},
+      "common_page_gaps": {
+        "count": 0,
+        "max": null
+      },
+      "power": null,
+      "cadence": {
+        "n": 398,
+        "mean": 80.02293164402013,
+        "min": 76.99248120300751,
+        "max": 83.02702702702703
+      },
+      "speed_mps": {
+        "n": 1007,
+        "mean": 8.322471042471042,
+        "min": 8.322471042471042,
+        "max": 8.322471042471042
+      },
+      "heart_rate_bpm": null,
+      "attestation": {
+        "verdict": "clear"
+      },
+      "accumulator_wraps": {
+        "spd_event_time": 4,
+        "cad_event_time": 4
+      },
+      "telemetry": null,
+      "event_advances": 1013,
+      "event_comparisons": 1203,
+      "exact_loss": null,
+      "violations": {
+        "count": 0,
+        "first": []
+      },
+      "checks": [
+        {
+          "name": "packets",
+          "pass": true,
+          "detail": "1204 received, 1214 expected over 299.3 s"
+        },
+        {
+          "name": "loss",
+          "pass": true,
+          "detail": "0.82 % (limit 1.50 %, one packet = 0.08 %)"
+        },
+        {
+          "name": "jitter",
+          "pass": true,
+          "detail": "stddev 25.1 ms, max 734.0 ms (limit 123.4 ms, period 246.8 ms)"
+        },
+        {
+          "name": "accumulator continuity",
+          "pass": true,
+          "detail": "0 violation(s)"
+        },
+        {
+          "name": "sensor liveness",
+          "pass": true,
+          "detail": "the event counter advanced on 1013 of 1203 packet pairs"
+        }
+      ],
+      "pass": true
+    }
+  ],
+  "events": {
+    "EVENT_RX_FAIL": 52
+  },
+  "identities": {
+    "1": {
+      "device_number": 53001,
+      "device_type": 120
+    },
+    "2": {
+      "device_number": 53002,
+      "device_type": 121
+    },
+    "0": {
+      "device_number": 53000,
+      "device_type": 11
+    },
+    "4": {
+      "device_number": 41001,
+      "device_type": 120
+    },
+    "5": {
+      "device_number": 41002,
+      "device_type": 121
+    },
+    "3": {
+      "device_number": 41000,
+      "device_type": 11
+    }
+  },
+  "receiver_reboots": [],
+  "accounting": {
+    "missing": 52,
+    "radio_fails": 52,
+    "collisions": 0,
+    "unaccounted": 0,
+    "allowed_unaccounted": 13,
+    "verdict": "all of it reported by the radio as RX_FAIL, so it happened on the air",
+    "pass": true
+  },
+  "derived": {
+    "loss_pct": 0.7126925146087482,
+    "loss_exact_pct": null,
+    "unexplained_loss": 0,
+    "accumulator_violations": 0,
+    "timing_offgrid_host_ms": 6.678114623434529,
+    "timing_offgrid_radio_ms": 0.011022094139165496,
+    "rssi_dbm_mean": -33.625311893540335,
+    "time_to_first_packet_s": 0.6879999999998745,
+    "reacquire_s": null,
+    "per_channel": {
+      "0": {
+        "channel": 0,
+        "profile": "power",
+        "device_number": 53000,
+        "device_type": 11,
+        "exact_pairs": 1174,
+        "exact_still": 119,
+        "packets": 1194,
+        "loss_pct": 0.579933798032084,
+        "loss_exact_pct": null,
+        "exact_missed": null,
+        "exact_sent": null,
+        "exact_scope": null,
+        "accumulator_violations": 0,
+        "timing_offgrid_host_ms": 2.5463212413455865,
+        "timing_offgrid_radio_ms": 0.011022094139165496,
+        "rssi_dbm_mean": -32.0,
+        "time_to_first_packet_s": 0.15599999999994907,
+        "reacquire_s": null
+      },
+      "1": {
+        "channel": 1,
+        "profile": "heart-rate",
+        "device_number": 53001,
+        "device_type": 120,
+        "exact_pairs": 0,
+        "exact_still": 0,
+        "packets": 1211,
+        "loss_pct": 0.657529791118161,
+        "loss_exact_pct": null,
+        "exact_missed": null,
+        "exact_sent": null,
+        "exact_scope": null,
+        "accumulator_violations": 0,
+        "timing_offgrid_host_ms": 6.672835298727379,
+        "timing_offgrid_radio_ms": 0.010909301538796112,
+        "rssi_dbm_mean": -32.002477291494635,
+        "time_to_first_packet_s": 0.03099999999994907,
+        "reacquire_s": null
+      },
+      "2": {
+        "channel": 2,
+        "profile": "csc",
+        "device_number": 53002,
+        "device_type": 121,
+        "exact_pairs": 0,
+        "exact_still": 0,
+        "packets": 1208,
+        "loss_pct": 0.6556960342790963,
+        "loss_exact_pct": null,
+        "exact_missed": null,
+        "exact_sent": null,
+        "exact_scope": null,
+        "accumulator_violations": 0,
+        "timing_offgrid_host_ms": 6.336312868727926,
+        "timing_offgrid_radio_ms": 0.010641938084539154,
+        "rssi_dbm_mean": -32.00248344370861,
+        "time_to_first_packet_s": 0.06200000000012551,
+        "reacquire_s": null
+      },
+      "3": {
+        "channel": 3,
+        "profile": "power",
+        "device_number": 41000,
+        "device_type": 11,
+        "exact_pairs": 1172,
+        "exact_still": 177,
+        "packets": 1191,
+        "loss_pct": 0.664103952024031,
+        "loss_exact_pct": null,
+        "exact_missed": null,
+        "exact_sent": null,
+        "exact_scope": null,
+        "accumulator_violations": 0,
+        "timing_offgrid_host_ms": 2.61268825171638,
+        "timing_offgrid_radio_ms": 0.006984868382819553,
+        "rssi_dbm_mean": -35.04785894206549,
+        "time_to_first_packet_s": 0.6879999999998745,
+        "reacquire_s": null
+      },
+      "4": {
+        "channel": 4,
+        "profile": "heart-rate",
+        "device_number": 41001,
+        "device_type": 120,
+        "exact_pairs": 0,
+        "exact_still": 0,
+        "packets": 1206,
+        "loss_pct": 0.8973625790405837,
+        "loss_exact_pct": null,
+        "exact_missed": null,
+        "exact_sent": null,
+        "exact_scope": null,
+        "accumulator_violations": 0,
+        "timing_offgrid_host_ms": 6.678114623434529,
+        "timing_offgrid_radio_ms": 0.006843776644375055,
+        "rssi_dbm_mean": -35.66749585406302,
+        "time_to_first_packet_s": 0.5629999999998745,
+        "reacquire_s": null
+      },
+      "5": {
+        "channel": 5,
+        "profile": "csc",
+        "device_number": 41002,
+        "device_type": 121,
+        "exact_pairs": 0,
+        "exact_still": 0,
+        "packets": 1204,
+        "loss_pct": 0.8193825783725073,
+        "loss_exact_pct": null,
+        "exact_missed": null,
+        "exact_sent": null,
+        "exact_scope": null,
+        "accumulator_violations": 0,
+        "timing_offgrid_host_ms": 6.370769431847006,
+        "timing_offgrid_radio_ms": 0.0062061714816948775,
+        "rssi_dbm_mean": -35.04485049833887,
+        "time_to_first_packet_s": 0.5939999999998236,
+        "reacquire_s": null
+      }
+    }
+  },
+  "pass": true
+}

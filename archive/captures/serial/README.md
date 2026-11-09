@@ -4,13 +4,14 @@ Checked by: `tools/test_ant_golden.py`, which replays every `.antser` here in
 the CI `host-tests` job and re-hashes it against the summary of the same
 basename in `archive/benchmarks/`.
 
-**Status (2026-11-06): three conformance transcripts, all hashed, and the two
-radiant ones are byte-identical.**
+**Status (2026-11-09): three conformance transcripts, all hashed. The two
+radiant ones differ in one record until cc26xx is re-recorded on a CC2652 (see
+"The nRF re-record, 2026-11-09").**
 
 | File | Recorded from | Summary in `archive/benchmarks/`? |
 |---|---|---|
 | `conformance-cc26xx.antser` | CC2652P dongle over COM15, re-recorded 2026-08-21 | **yes** — `conformance-cc26xx.json`, added the same day |
-| `conformance-nrf-radiant.antser` | nRF54L15 DK, `apps/dongle` over UART, re-recorded 2026-11-06 (originally an nRF52840) | **yes** — `conformance-nrf-radiant.json`, added the same day |
+| `conformance-nrf-radiant.antser` | nRF54L15 DK, `apps/dongle` over UART, re-recorded 2026-11-09 (originally an nRF52840) | **yes** — `conformance-nrf-radiant.json`, added the same day |
 | `conformance-sdk-ant.antser` | the sdk-ant build (the Tier 1 reference) | yes |
 
 **The hash check silently skips a transcript that has no summary.**
@@ -53,6 +54,17 @@ recorded while a working sdk-ant build exists, so it is a frozen record of what
 the bridge did on 2026-08-09, not a statement about today's firmware. Read a
 diff against it accordingly — the startup frame and the capabilities byte above
 are expected differences, not regressions.
+
+**The nRF re-record, 2026-11-09.** Re-recorded on the nRF54L15 DK from the
+integrated image, after `advanced_options_3` stopped advertising search sharing,
+selective data update and encrypted channel, whose commands are only stored. The
+diff against the 2026-11-06 file is one record, the capabilities reply:
+
+    - < a40954200300b22600d500019a  ->  - < a40954200300b226000500014a
+
+`conformance-cc26xx.antser` still has `0xd5` and needs a CC2652 to re-record, so
+a `--compare` of the two radiant transcripts reports this one record until then.
+The 2026-11-06 statement that the two hashes match describes that date only.
 
 Where [`../radio/`](../radio/) records what went over the air, this records
 what went over USB: the `0xA4`-framed serial protocol, byte for byte, in both

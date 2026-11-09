@@ -1,0 +1,21 @@
+=== old1
+PM: PASS: reset -> startup -> capabilities -> version
+old1_dn54100_p0 | PM pkts=168 fail=155 | N53 pkts=271 fail=52 | Garmin pkts=310 fail=12
+old1_dn53000_p-18 | PM pkts=200 fail=123 | N53 pkts=266 fail=56 | Garmin pkts=282 fail=41
+old1_dn54100_p-18 | PM pkts=313 fail=10 | N53 pkts=269 fail=53 | Garmin pkts=298 fail=25
+=== new1
+PM: PASS: reset -> startup -> capabilities -> version
+new1_dn54100_p0 | PM pkts=166 fail=156 | N53 pkts=271 fail=49 | Garmin pkts=99 fail=221
+new1_dn53000_p-18 | PM pkts=301 fail=21 | N53 pkts=263 fail=59 | Garmin pkts=88 fail=227
+new1_dn54100_p-18 | PM pkts=299 fail=23 | N53 pkts=259 fail=64 | Garmin pkts=261 fail=61
+=== old2
+PM: PASS: reset -> startup -> capabilities -> version
+old2_dn54100_p0 | PM pkts=321 fail=1 | N53 pkts=322 fail=0 | Garmin pkts=313 fail=9
+old2_dn53000_p-18 | PM pkts=300 fail=22 | N53 pkts=245 fail=77 | Garmin pkts=80 fail=231
+old2_dn54100_p-18 | PM pkts=296 fail=26 | N53 pkts=250 fail=73 | Garmin pkts=257 fail=65
+=== new2
+PM: PASS: reset -> startup -> capabilities -> version
+new2_dn54100_p0 | PM pkts=166 fail=156 | N53 pkts=251 fail=72 | Garmin pkts=316 fail=6
+new2_dn53000_p-18 | PM pkts=294 fail=28 | N53 pkts=242 fail=80 | Garmin pkts=259 fail=63
+new2_dn54100_p-18 | PM pkts=164 fail=154 | N53 pkts=248 fail=75 | Garmin pkts=250 fail=72
+DONE

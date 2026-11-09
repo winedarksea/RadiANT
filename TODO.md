@@ -1,8 +1,9 @@
 TI coexistence builds: the reviewer thinks TI's scheduler may refuse the command re-armed right after an early-stopped receive window, because the cancelled window still holds its reserved time. That needs a CC2652 on the bench.
 MPSL air use: after a received frame or an ACK reply, the grant is now held to its natural end (up to about 4.5 ms) instead of being handed back early. That costs the other stack some air but isn't a correctness problem.
 MPSL bursts: multi-packet bursts still can't run on MPSL builds. That's a scope gap, not a regression; Zwift uses acknowledged messages.
-Weak tests: the new tests that claim the reserve is cleared on deny, abort, cancel and reset would pass without those clears. The gate tests don't exercise the handoff code at all.
-Tool footgun: ant_ack_gate.py exits 0 on a failed verdict unless --gate is passed
+Weak tests: the scheduler half is fixed (`reserve_from_done_case()` in radiant/tests/src/test_sched.c, with cancel and reset recorded there as equivalent mutants); the gate-test half is MPSL and still open.
+Tool footgun: fixed 2026-11-08. ant_ack_gate.py exits non-zero on any quality failure with or without --gate; the 300 s / 300 command sufficiency reason fails only under --gate.
+cc26xx conformance transcript: owed. Release review item 2 changed advanced_options_3 from 0xD5 to 0x05, so `conformance-cc26xx.antser` is stale until re-recorded on a CC2652.
 
 # Open issues from the 2026-11-07 RadiANT vs Garmin ANT USB-m comparison
 
@@ -27,7 +28,10 @@ hardware-matched address. A/B/A on #54100 with the Garmin receiving: 54L15
 Evidence: archive/benchmarks/2026-11-07-devnum-rx-loss/README.md.
 Follow-up: at -50..-60 dBm guarded boards still lose 0.2-1.25 % on runs of
 8-12, including the unguarded run-8 #54058 on the 5340. Measure at a controlled
-level, and consider `SLIP_GUARD_RUN=8`.
+level, and consider `SLIP_GUARD_RUN=8`. Tried 2026-11-08 (archive/benchmarks/2026-11-08-todo-clearance/README.md):
+loss was bimodal, 0.3 % to 48 % for the same image and level, so run 8 could
+not be separated from run 9. Default stays 9; this needs shielding or an
+attenuator.
 Feather (755972D7183A6183) still runs the stock image, so reflash it with the
 fix when convenient.
 
@@ -94,14 +98,20 @@ Evidence: archive/benchmarks/2026-11-07-vcom-soak/README.md.
 - Task: repeat 300 s four-channel windows with the 54L15 receiving, and
   capture its log VCOM (it needs DTR) to see whether the firmware faulted.
 
-## 4. [HOST TOOL, open] ant_sens reports spurious loss on short event_counter rungs
+## 4. [DONE 2026-11-08] ant_sens reports spurious loss on short event_counter rungs
+**Fixed:** every receiver is drained through the settle. Stale frames were
+inferred as the cause from the saved rungs. The on-air fine ladder has no
+spurious rung or knee (archive/benchmarks/2026-11-08-todo-clearance/README.md).
 - Found while settling the TX power boost (done 2026-11-07: the boost now
   raises only the unset default and LVL_4; LVL_3 is a true 0 dBm).
 - ant_sens reports a spurious 17.5 % loss on short rungs whose basis is
   `event_counter` (0 RX_FAIL, every packet received), which produced a fake
   knee. Evidence: archive/benchmarks/2026-11-07-reset-and-power/README.md.
 
-## 6. [HOST TOOL, residual] Re-run ant_features against the Garmin
+## 6. [DONE 2026-11-08] Re-run ant_features against the Garmin
+**Done:** sections 1-4 and 6 pass. Section 5 reads the event filter back as
+`0000f1` after setting 0x0006, not investigated (archive/benchmarks/2026-11-08-todo-clearance/README.md). The run also
+leaves the Garmin configured: reset it before using it as a reference.
 - The 7-byte capabilities fix landed 2026-11-07 (`capabilities_usable()`,
   tested with the Garmin's real reply `080800ba3600df`). The tool itself has
   not been re-run on the Garmin; do it when the stick is plugged in.
@@ -113,7 +123,9 @@ layer are in no release image, so every protocol change below breaks no
 deployed host or node. Findings were verified by reading the code; nothing was
 run.
 
-## 1. [FIRMWARE, LOW] What the Tier I phase lock does not cover
+## 1. [CLOSED 2026-11-08, accepted limits] What the Tier I phase lock does not cover
+No task; documented at docs/radiant-security.md:1101. Adopting an epoch from the
+air changes the rule that the host runs epoch recovery, and spends compat bytes.
 The phase anchor itself landed 2026-11-07 (rx_tier1 learns the phase from the
 first verified page; docs/radiant-security.md 7.6 and 11.4). Still open:
 - A **Tier II-only** compat receiver has no phase source: an 8-bit window index
@@ -250,7 +262,12 @@ first-boot cases against tests/fake_rng.c.
   - it cannot be enforced for host-driven masters at all.
 - Today's behaviour fails safe: nothing is ever wrongly VERIFIED.
 
-## 8. [FIRMWARE, MEDIUM] The 0xF1-0xF5 host commands run without api_lock
+## 8. [DONE 2026-11-08] The 0xF1-0xF5 host commands run without api_lock
+**Fixed:** every radiant_sec call is under api_lock, with a debug-build hook
+(`radiant_sec_port_lock_check`, `CONFIG_RADIANT_SEC_LOCK_CHECK`). A secured
+master is now posted by the pump, not the scheduler callback, and a lost peer's
+pairing is released under the lock. X25519 holds the lock 366-376 ms (a stall
+for the event thread, accepted; see the list at the end of this file).
 - apps/common/ant_sec_host.c calls radiant_sec_configure, _set_key,
   _set_epoch, the status read and the pairing calls with no lock. Every other
   antr_* entry point takes api_lock (apps/common/ant_radio_radiant.c:452).
@@ -264,7 +281,9 @@ first-boot cases against tests/fake_rng.c.
 - Task: take api_lock around those calls. A preemption ztest is hard; at least
   assert the lock is held inside the radiant_sec entry points in a debug build.
 
-## 9. [ENVELOPE, decide before v1 nodes ship] No informational bits left in the descriptor
+## 9. [DONE 2026-11-08] No informational bits left in the descriptor
+**Fixed:** version nibble 1-7 is layout-compatible, 8-15 rejected, and the next
+flags use schedule-frame bits 42..47.
 - Frame 0 byte [7] is full. radiant-telemetry.md section 6 says further
   informational flags come from frame 1 byte [3], but W, the repeat count and
   the clock-accuracy nibble now fill that byte.
@@ -302,14 +321,20 @@ first-boot cases against tests/fake_rng.c.
   reports instead of repeating. Not done-when "as fast as the control at
   every offset": with one session that is (d)'s criterion, not (a)'s.
 
-## 11. [BRANCH, bench] review/2026-10-31-timing has waited a week
+## 11. [DONE 2026-11-08] review/2026-10-31-timing has waited a week
+**Done:** A8-4, A9-3, A14-1 and A14-2 ported and on master. The crossover showed
+no regression (archive/benchmarks/2026-11-08-todo-clearance/README.md). The branch is deleted; its commit is kept as
+archive/review-2026-10-31-timing/6df53e7-timing-fixes.patch for A13-1 and C5-1,
+both in the list at the end of this file.
 - One commit, 6df53e7, "timing fixes (UNVERIFIED on air - do not merge without
   A/B)". It holds A14-1, A13-1, A9-3, A14-2, A8-4 and C5-1.
 - Task: a crossover A/B (old and new firmware swapped across two identical
   receivers, using the multi-channel recipe); A13-1 and C5-1 also need an MPSL
   coexistence soak. Or delete the branch: it drifts further from master daily.
 
-## 12. [FIRMWARE, LOW] Tier II loses windows at the HR seam with no packet loss
+## 12. [DONE 2026-11-08] Tier II loses windows at the HR seam with no packet loss
+**Fixed:** a tag due on 119/120 is owed past the seam, on TX and RX. The
+profile_compat seam test now asserts every window verifies.
 - Found while writing the seam test for the Tier I phase anchor (971e38c). It
   existed before that change, which did not cause it.
 - When a Tier II tag falls due on message 119 or 120, the window closes
@@ -327,7 +352,9 @@ first-boot cases against tests/fake_rng.c.
   receiver to expect it there), or keep a window from closing over a slot the
   seam never offers. Then tighten test_profile_compat.c to assert every window.
 
-## 13. [HOST TOOL, LOW] 0x60 exact loss over-counts on host-driven masters
+## 13. [DONE 2026-11-08] 0x60 exact loss over-counts on host-driven masters
+**Fixed** by labelling: the slot figure is an upper bound when the counter delta
+outruns the wall clock, and the pooled figure is withheld.
 - The slot-based 0x60 loss rule (tools/ant_verify.py, about lines 772-790,
   from e1e9660) counts a slot as lost whenever the counter jumps.
 - A host-driven master that refills twice, advancing the counter for a slot
@@ -341,7 +368,7 @@ first-boot cases against tests/fake_rng.c.
   pair. Withhold the figure, or call it an upper bound, when the delta is
   larger than the elapsed slots.
 
-## 14. [HOST TOOL, cosmetic] ant_verify's liveness line is wrong for FE-C
+## 14. [DONE 2026-11-08] ant_verify's liveness line is wrong for FE-C
 - tools/ant_verify.py:1947 prints "the event counter stood still" for any
   channel without an exact-loss figure.
 - Since the FE-C routing fix (7ddbb45), FE-C channels deliberately collect no
@@ -349,7 +376,7 @@ first-boot cases against tests/fake_rng.c.
 - Task: say "no exact-loss source for this profile" when the device type has
   none, and keep "stood still" for a channel that really has a frozen counter.
 
-## 15. [DOCS, LOW] Telemetry section 6 overstates when unsecured byte [1] advances
+## 15. [DONE 2026-11-08] Telemetry section 6 overstates when unsecured byte [1] advances
 - docs/radiant-telemetry.md section 6 (from 5655901) says byte [1] advances
   on every slot, including MPSL-denied and missed ones.
 - That holds on secured channels, where radiant_sec derives the counter from
@@ -361,7 +388,8 @@ first-boot cases against tests/fake_rng.c.
   next_at() for denied and missed slots so the docs become true. Decide when
   the first 0x60 app lands.
 
-- Look into reducing the code size for fewer bytes in the critical size
+- Code size: `radiant_sec_compat.c` is 4260 B, down from 4452 B (ceiling 4608).
+  Security text is 6128 B against a 6144 B ceiling, so 16 B remain.
 
 # Open issues from the 2026-11-08 release review (HEAD b89a112)
 
@@ -370,7 +398,11 @@ compiled probes for 2 and 4. Nothing here has been run on hardware. The
 review's other two findings are already fixed (9ab6bc9, 971e38c); what is left
 of the second is item 1 of the section above.
 
-## 1. [FIRMWARE] Discovery assumes network 0 and frequency 57
+## 1. [DONE 2026-11-08] Discovery assumes network 0 and frequency 57
+**Fixed:** the sweep follows the ANT+ key's network and the searchers' frequency
+on keyed networks. Keyless channels never steer it, so Zwift's RF 71 and 53
+scans behave as before. A keyed slave that sets no frequency defaults to 66 and
+moves the sweep to 66. Ztest-verified only, not on air.
 `api_search_cfg_build()` (apps/common/ant_radio_radiant.c:1182) gives the one
 shared sweep network 0's address and frequency 57, whatever the searching
 channels asked for. Tracking does honour both (`api_net_addr_for()`,
@@ -401,7 +433,13 @@ hosts using the ANT+ key off 57.
   agree, which costs ANT+-only sessions nothing. Alternate passes only when they
   are mixed. Same live-carrier deferral as the key install.
 
-## 2. [FIRMWARE] Capabilities advertise features that only store configuration
+## 2. [DONE 2026-11-08] Capabilities advertise features that only store configuration
+**Fixed:** the event filter applies at delivery after accounting, from ANT
+Message Protocol and Usage Rev 5.1 (bit N filters event code N+1, per its
+formula and example; its two-line bit list labels are one off).
+advanced_options_3 is 0x05: SDU, search sharing and encrypted channel are no
+longer advertised, and their commands are still accepted. The nRF transcript
+is re-recorded; the cc26xx one is owed.
 ADVANCED_OPTIONS_3 (ant_radio_radiant.c:4070) claims event filtering and
 selective data update. The filter is stored and never consulted
 (radiant_event.c:250), and SDU masks are only stored and read back. This is the
@@ -423,7 +461,9 @@ selective data update. The filter is stored and never consulted
   the commands either way: an error to a host with no recovery path is a
   regression (see the comment at :3216).
 
-## 3. [FIRMWARE, Matter] A reachability or label change can be lost until the next transition
+## 3. [DONE 2026-11-08] A reachability or label change can be lost until the next transition
+**Fixed:** snapshot taken at the top of the flush. Build, .config and nm checked
+only: no ztest reaches this file and it has not been run on air.
 The flush reads each source's dirty flags per row with the lock held, drops the
 lock for the endpoint work, then clears every source's flags at the end
 (apps/dongle_thread/src/matter/ant/ant_bridge.cpp:831). A change landing in
@@ -435,7 +475,9 @@ the whole pass, which includes `PersistRowLabel()`.
   into a local array and clear them, in one lock hold. Rows read the copy. A
   change during the pass then stays dirty for the next pass.
 
-## 4. [FIRMWARE, MQTT] A pending offline is lost when a source is reused during an outage
+## 4. [DONE 2026-11-08] A pending offline is lost when a source is reused during an outage
+**Fixed:** `radiant_owed`, 16 de-duplicated uuids, the drain clears only what it
+sent. Ztest-verified; not run against a real broker.
 `owed[source]` holds one uuid (apps/dongle_thread/src/mqtt_sink.c:1201). Release
 A, bind B, release B during a broker outage, and A's "offline" is overwritten. A's
 retained status then reads "online" until A is bound again.
@@ -452,7 +494,7 @@ Items 5-7 come from a second pass over 69ac822..b89a112. 5 and the numbers in 7
 were reproduced with the real Python tools; the C side of 6 and 7 was read, not
 run.
 
-## 5. [HOST TOOL] ant_verify decodes sealed data pages it has not processed
+## 5. [DONE 2026-11-08] ant_verify decodes sealed data pages it has not processed
 tools/ant_verify.py:775 hands received bytes to the decoder once the descriptor
 authenticates. `may_decode_data` only vouches for the schema, and its docstring
 (ant_pages.py:3118) makes the per-packet gate the caller's job. This caller has
@@ -467,7 +509,7 @@ Reproduced through `ChannelAnalyzer`:
   job, only if someone needs them.
 - Done when both cases above report 0 decoded, with a test for each.
 
-## 6. [FIRMWARE, before any X_CONF node ships] X_CONF alone leaves byte [7] in plaintext
+## 6. [DONE 2026-11-08] X_CONF alone leaves byte [7] in plaintext
 CTR covers five bytes whether or not X_AUTH has claimed byte [7]: TX
 radiant/src/radiant_sec.c:903, RX :1241, and tools/radiant_crypto.py:307. Without
 X_AUTH the field area is 48 bits, so a field at bit offset 40 is sent in the
@@ -485,7 +527,7 @@ layout. Reproduced in Python: byte [7] 0xAB went out as 0xAB.
   host-driven channels. The on-air change is free now: `security.conf` is in no
   release image.
 
-## 7. [FIRMWARE, before nodes ship] First-boot provisioning can pick a number that is hard to receive
+## 7. [DONE 2026-11-08] First-boot provisioning can pick a number that is hard to receive
 `self_provision()` (radiant/src/node/node_ident.c:248) stores the first key it
 draws without looking at the device number that key derives.
 `ant_identity.random_device_number()` already avoids run >= 8, and firmware only
@@ -625,3 +667,69 @@ is a source tree holding only maintained code.
   them. They are the provenance for measured numbers, so keep them, not delete.
 - Done when scripts/check_links.py passes, the 5340 net-core build still works,
   and only archive/ and history mention radiant/spike.
+
+
+# Left open by the 2026-11-08 clearance
+
+MPSL (needs a soak beside BLE or Thread, which that clearance excluded):
+- **A13-1.** Replace `irq_lock()` around capture-and-fold in `radiant_radio_now()`,
+  `clock_absolute()` and `clock_counter_at()` with `CLOCK_LOCK()/CLOCK_UNLOCK()`
+  (`radiant_swi_zli_lock()` when `CORE_CB_DEFERRED`, else irq_lock) and add
+  `radiant_dbg_clock_back` in `clock_fold()`. On MPSL builds `radio_isr()`,
+  `deliver_terminal()` and `program_rx()` fold from the ZLI signal callback that
+  irq_lock does not mask; a ZLI fold between capture and fold wraps
+  `counter-last` to ~2^32, a permanent +71.6 min step. Soak reading
+  `radiant_dbg_clock_back` (expect 0).
+- **C5-1.** In `radiant_radio_nrf_gate_mpsl.c` record `placed_extendable` and
+  `placed_high_prio` in `request_work_fn` before `mpsl_timeslot_request()`, and
+  have the BLOCKED/CANCELLED handling read those. MPSL can answer BLOCKED inside
+  the request, before `commit_next_grant()`, so the first refusal after a class
+  change is attributed to the previous class and the elastic chunk is not
+  shortened (ADR 0013). The test (`test_an_inline_block_backs_off_the_class_that_was_refused`,
+  `gate_probe_reset_elastic()`) and A13-1 are in
+  archive/review-2026-10-31-timing/6df53e7-timing-fixes.patch.
+- A14-1: on an MPSL grant, an ETIME from `program_rx()` is reported through
+  `gate_failed` only after the grant ends, so the grant is not released early and
+  its remaining air is wasted. The comment at gate_mpsl:1160 is wrong.
+- A pending `gate_failed` is not cleared by `radiant_radio_abort()`, so an abort
+  before `denied_work_fn` runs delivers FAILED to the next operation. Self-heals;
+  found by reading only.
+- `program_tx()` writes CC_TXSTART before enabling `conn_start_tx` and re-checks
+  with `t_start <= now`, the ordering A14-1 replaced for receive. A compare just
+  after the enable, before `now` is read, gives a false ETIME.
+
+Security and pairing:
+- X25519 pairing holds api_lock 366-376 ms. A multiply outside the lock on a
+  copied scalar would remove the stall.
+- `node_ident_arm_sec` and `node_ident_pair_*` call lock-checked entry points
+  without api_lock. No app calls them today; the first one that does on a build
+  linking `ant_radio_radiant.c` must take it.
+- The ISR half of `antr_api_lock_held()` is untested (`irq_offload()` could reach
+  it). A ztest `after()` failure under CONFIG_ASSERT skips the rest of the suite
+  and reports pass.
+
+Discovery (ztest only, not on air; bench checks in the release review):
+- Retune restarts the cursor, so a host cycling keyed frequencies faster than a
+  pass truncates each pass and coverage becomes probabilistic.
+- In a mixed-frequency session a steer or revisit queued while the sweep is on the
+  other frequency wastes a dwell and doubles that channel's backoff.
+- When only undeclared channels remain, the sweep stays on the last declared
+  frequency: a keyless scan opened after a keyed RF 66 slave sits on 66.
+- The ENOENT clear of `pass_done` is unreachable through the API, so a declared
+  channel acquired in the last set of a pass delays a later mixed session by up to
+  a pass.
+- A chunk reclaimed by A9-3 is credited as a full listen in the sweep accounting.
+- Never verified on air: a slave on a non-57 frequency acquiring its master; mixed
+  57/66 passes; a real Zwift session on these images.
+
+Bridge and tools:
+- Filtered TX_COMPLETED / TX_FAILED are dropped by an early return in
+  `antr_on_message()` after the burst buffer is released. The bridge is in no ztest
+  app; order is release first, then drop.
+- Matter adoption renames and re-persists each adopted row's NodeLabel (one flash
+  write each); each row can be renamed up to 2 x the number of distinct adoption
+  passes for its source, bounded per boot and not recurring. Left unchanged.
+- The Matter bridge fixes and the MQTT owed list have not run on air or against a
+  real broker.
+- `ant_compare.py:640` and `ant_sens.py:561` still show unlabelled 0x60 upper bounds.
+- `radiant_sched.h` still says "Zero-cost on both nRF builds".

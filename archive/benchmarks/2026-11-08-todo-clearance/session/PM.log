@@ -1,0 +1,110 @@
+Found 0FCF:1009  bcdDevice=0x0100
+  manufacturer: RadiANT Project
+  product:      RadiANT ANT+ compatible USB stick
+  serial:       EE6986854FD72803
+
+[1/5] session setup
+  OK: stack reset
+  OK: extended messages
+  OK: ANT+ network key
+
+[2/5] opening 8 channels
+  OK: ch0 assign
+  OK: ch0 channel id
+  OK: ch0 frequency
+  OK: ch0 period
+  OK: ch0 search timeout
+  OK: ch0 open
+  OK: channel 0 - heart rate
+  OK: ch1 assign
+  OK: ch1 channel id
+  OK: ch1 frequency
+  OK: ch1 period
+  OK: ch1 search timeout
+  OK: ch1 open
+  OK: channel 1 - power, pinned to #53000
+  OK: ch2 assign
+  OK: ch2 channel id
+  OK: ch2 frequency
+  OK: ch2 period
+  OK: ch2 search timeout
+  OK: ch2 open
+  OK: channel 2 - trainer (FE-C)
+  OK: ch3 assign
+  OK: ch3 channel id
+  OK: ch3 frequency
+  OK: ch3 period
+  OK: ch3 search timeout
+  OK: ch3 open
+  OK: channel 3 - speed and cadence
+  OK: ch4 assign
+  OK: ch4 channel id
+  OK: ch4 frequency
+  OK: ch4 period
+  OK: ch4 search timeout
+  OK: ch4 open
+  OK: channel 4 - cadence
+  OK: ch5 assign
+  OK: ch5 channel id
+  OK: ch5 frequency
+  OK: ch5 period
+  OK: ch5 search timeout
+  OK: ch5 open
+  OK: channel 5 - speed
+  OK: ch6 assign
+  OK: ch6 channel id
+  OK: ch6 frequency
+  OK: ch6 period
+  OK: ch6 search timeout
+  OK: ch6 open
+  OK: channel 6 - running speed
+  OK: ch7 assign
+  OK: ch7 channel id
+  OK: ch7 frequency
+  OK: ch7 period
+  OK: ch7 search timeout
+  OK: ch7 open
+  OK: channel 7 - wildcard
+
+[3/5] running all 8 channels for 45 s
+  found: #52233 - power meter (on channel 7)
+  found: #53001 - heart rate monitor (on channel 0)
+  found: #53002 - speed and cadence (on channel 3)
+  found: #52233 - fitness equipment (trainer) (on channel 2)
+  found: #53000 - power meter (on channel 1)
+  found: #52233 - speed (on channel 5)
+  channel 0: 182 broadcasts
+  channel 1: 177 broadcasts
+  channel 2: 123 broadcasts
+  channel 3: 182 broadcasts
+  channel 5: 117 broadcasts
+  channel 7: 20 broadcasts
+  events: EVENT_RX_FAIL x257, EVENT_RX_FAIL_GO_TO_SEARCH x19
+
+[4/5] acknowledged data (the trainer-control path)
+  sending FE-C basic resistance on channel 0 (182 broadcasts heard)
+  OK: the sensor acknowledged it - trainer control works
+
+closing
+  OK: close ch0
+  OK: unassign ch0
+  OK: close ch1
+  OK: unassign ch1
+  OK: close ch2
+  OK: unassign ch2
+  OK: close ch3
+  OK: unassign ch3
+  OK: close ch4
+  OK: unassign ch4
+  OK: close ch5
+  OK: unassign ch5
+  OK: close ch6
+  OK: unassign ch6
+  OK: close ch7
+  OK: unassign ch7
+
+[5/5] burst transmit is bridged
+  OK: reached the stack (code 22 from the stack)
+
+8/8 channels ran simultaneously, 801 broadcasts, 6 sensor(s) identified
+PASS: eight-channel session held, events flowed, ack path wired

@@ -1,0 +1,16 @@
+launching PM: C:\ncs\toolchains\dcbdc366a1\opt\bin\python.exe C:\wt_int\tools\ant_verify.py --seconds 600.0 --json C:\wt_int\build\bench\xover\arm1_PMnew_DongleOld\PM.json -q --device-number 53000 --device-number 53001 --device-number 53002 --device-number 41000 --device-number 41001 --device-number 41002 --serial EE6986854FD72803 --record C:\wt_int\build\bench\xover\arm1_PMnew_DongleOld\PM.antcap --profile power --profile heart-rate --profile csc --profile power --profile heart-rate --profile csc
+launching Dongle: C:\ncs\toolchains\dcbdc366a1\opt\bin\python.exe C:\wt_int\tools\ant_verify.py --seconds 600.0 --json C:\wt_int\build\bench\xover\arm1_PMnew_DongleOld\Dongle.json -q --device-number 53000 --device-number 53001 --device-number 53002 --device-number 41000 --device-number 41001 --device-number 41002 --serial 3D55F77818BE772A --record C:\wt_int\build\bench\xover\arm1_PMnew_DongleOld\Dongle.antcap --profile power --profile heart-rate --profile csc --profile power --profile heart-rate --profile csc
+
+2 target(s) running concurrently for 600 s ...
+
+target                   loss_exact%  unacct  rssi dBm  ttfp s  pass
+--------------------------------------------------------------------
+PM                               n/a       0     -50.7    1.22  FAIL
+Dongle                           n/a       0     -63.5    0.70  FAIL
+
+per channel, exact loss %:
+  target                         ch0 power #53000  ch1 heart-rate #53001         ch2 csc #53002       ch3 power #41000  ch4 heart-rate #41001         ch5 csc #41002
+  PM                                          n/a                    n/a                    n/a                    n/a                    n/a                    n/a
+  Dongle                                      n/a                    n/a                    n/a                    n/a                    n/a                    n/a
+
+results directory: C:\wt_int\build\bench\xover\arm1_PMnew_DongleOld

@@ -1,0 +1,444 @@
+{
+  "method": "tx_ladder",
+  "transmitter": "ant_sim_py",
+  "profile": "power",
+  "rf_channel": 57,
+  "seconds_per_step": 60.0,
+  "rungs": [
+    0,
+    -1
+  ],
+  "tx_part": "nrf54l15",
+  "ladders": [
+    {
+      "steps": [
+        {
+          "loss_pct": 36.206896551724135,
+          "loss_basis": "event_counter",
+          "packets": 156,
+          "master_sent": 240,
+          "rx_fail": 85,
+          "rssi_dbm_mean": -76.50641025641026,
+          "rssi_samples": 156,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 85
+          },
+          "tx_power_dbm": 0,
+          "tx_level": 128,
+          "tx_custom": 24
+        },
+        {
+          "loss_pct": 36.8421052631579,
+          "loss_basis": "event_counter",
+          "packets": 140,
+          "master_sent": 241,
+          "rx_fail": 100,
+          "rssi_dbm_mean": -76.49285714285715,
+          "rssi_samples": 140,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 99,
+            "EVENT_RX_FAIL_GO_TO_SEARCH": 1
+          },
+          "tx_power_dbm": -1,
+          "tx_level": 128,
+          "tx_custom": 21
+        }
+      ],
+      "loss5pct_tx_power_dbm": null,
+      "knee": {
+        "tx_power_dbm": null,
+        "reason": "the loudest rung (0 dBm) already loses 36.21 %, over the 5.0 % target - the link is broken before the ladder starts, so this measures the bench and not the receiver"
+      },
+      "rssi_slope": {
+        "slope": null,
+        "n": 0,
+        "reason": "fewer than three rungs with usable RSSI below the knee"
+      },
+      "dial_trustworthy": false,
+      "dial_detail": "the transmit-power dial was never checked against measured RSSI (fewer than three rungs with usable RSSI below the knee), so nothing here knows whether the ladder moved the power it asked for",
+      "loss5pct_rssi_dbm": null
+    }
+  ],
+  "steps": [
+    {
+      "tx_power_dbm": 0,
+      "loss_exact_pct": 36.206896551724135,
+      "loss_basis": "event_counter",
+      "packets": 156,
+      "rx_fail": 85,
+      "rssi_dbm_mean": -76.50641025641026
+    },
+    {
+      "tx_power_dbm": -1,
+      "loss_exact_pct": 36.8421052631579,
+      "loss_basis": "event_counter",
+      "packets": 140,
+      "rx_fail": 100,
+      "rssi_dbm_mean": -76.49285714285715
+    }
+  ],
+  "loss5pct_tx_power_dbm": null,
+  "loss5pct_rssi_dbm": null,
+  "repeat_spread_db": null,
+  "receivers": {
+    "PM": {
+      "ladders": [
+        {
+          "steps": [
+            {
+              "loss_pct": 36.206896551724135,
+              "loss_basis": "event_counter",
+              "packets": 156,
+              "master_sent": 240,
+              "rx_fail": 85,
+              "rssi_dbm_mean": -76.50641025641026,
+              "rssi_samples": 156,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 85
+              },
+              "tx_power_dbm": 0,
+              "tx_level": 128,
+              "tx_custom": 24
+            },
+            {
+              "loss_pct": 36.8421052631579,
+              "loss_basis": "event_counter",
+              "packets": 140,
+              "master_sent": 241,
+              "rx_fail": 100,
+              "rssi_dbm_mean": -76.49285714285715,
+              "rssi_samples": 140,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 99,
+                "EVENT_RX_FAIL_GO_TO_SEARCH": 1
+              },
+              "tx_power_dbm": -1,
+              "tx_level": 128,
+              "tx_custom": 21
+            }
+          ],
+          "loss5pct_tx_power_dbm": null,
+          "knee": {
+            "tx_power_dbm": null,
+            "reason": "the loudest rung (0 dBm) already loses 36.21 %, over the 5.0 % target - the link is broken before the ladder starts, so this measures the bench and not the receiver"
+          },
+          "rssi_slope": {
+            "slope": null,
+            "n": 0,
+            "reason": "fewer than three rungs with usable RSSI below the knee"
+          },
+          "dial_trustworthy": false,
+          "dial_detail": "the transmit-power dial was never checked against measured RSSI (fewer than three rungs with usable RSSI below the knee), so nothing here knows whether the ladder moved the power it asked for",
+          "loss5pct_rssi_dbm": null
+        }
+      ],
+      "steps": [
+        {
+          "loss_pct": 36.206896551724135,
+          "loss_basis": "event_counter",
+          "packets": 156,
+          "master_sent": 240,
+          "rx_fail": 85,
+          "rssi_dbm_mean": -76.50641025641026,
+          "rssi_samples": 156,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 85
+          },
+          "tx_power_dbm": 0,
+          "tx_level": 128,
+          "tx_custom": 24
+        },
+        {
+          "loss_pct": 36.8421052631579,
+          "loss_basis": "event_counter",
+          "packets": 140,
+          "master_sent": 241,
+          "rx_fail": 100,
+          "rssi_dbm_mean": -76.49285714285715,
+          "rssi_samples": 140,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 99,
+            "EVENT_RX_FAIL_GO_TO_SEARCH": 1
+          },
+          "tx_power_dbm": -1,
+          "tx_level": 128,
+          "tx_custom": 21
+        }
+      ],
+      "knee": {
+        "tx_power_dbm": null,
+        "reason": "the loudest rung (0 dBm) already loses 36.21 %, over the 5.0 % target - the link is broken before the ladder starts, so this measures the bench and not the receiver"
+      },
+      "loss5pct_tx_power_dbm": null,
+      "loss5pct_rssi_dbm": null,
+      "rssi_reference": null,
+      "rssi_slope": {
+        "slope": null,
+        "n": 0,
+        "reason": "fewer than three rungs with usable RSSI below the knee"
+      },
+      "dial_trustworthy": false,
+      "dial_detail": "the transmit-power dial was never checked against measured RSSI (fewer than three rungs with usable RSSI below the knee), so nothing here knows whether the ladder moved the power it asked for",
+      "repeat_spread_db": null
+    },
+    "N53": {
+      "ladders": [
+        {
+          "steps": [
+            {
+              "loss_pct": 12.5,
+              "loss_basis": "master_sent",
+              "packets": 210,
+              "master_sent": 240,
+              "rx_fail": 31,
+              "rssi_dbm_mean": -68.26666666666667,
+              "rssi_samples": 210,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 31
+              },
+              "tx_power_dbm": 0,
+              "tx_level": 128,
+              "tx_custom": 24
+            },
+            {
+              "loss_pct": 17.842323651452283,
+              "loss_basis": "master_sent",
+              "packets": 198,
+              "master_sent": 241,
+              "rx_fail": 43,
+              "rssi_dbm_mean": -68.3080808080808,
+              "rssi_samples": 198,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 42,
+                "EVENT_RX_FAIL_GO_TO_SEARCH": 1
+              },
+              "tx_power_dbm": -1,
+              "tx_level": 128,
+              "tx_custom": 21
+            }
+          ],
+          "loss5pct_tx_power_dbm": null,
+          "knee": {
+            "tx_power_dbm": null,
+            "reason": "the loudest rung (0 dBm) already loses 12.50 %, over the 5.0 % target - the link is broken before the ladder starts, so this measures the bench and not the receiver"
+          },
+          "rssi_slope": {
+            "slope": null,
+            "n": 2,
+            "reason": "fewer than three rungs with usable RSSI below the knee"
+          },
+          "dial_trustworthy": false,
+          "dial_detail": "the transmit-power dial was never checked against measured RSSI (fewer than three rungs with usable RSSI below the knee), so nothing here knows whether the ladder moved the power it asked for",
+          "loss5pct_rssi_dbm": null
+        }
+      ],
+      "steps": [
+        {
+          "loss_pct": 12.5,
+          "loss_basis": "master_sent",
+          "packets": 210,
+          "master_sent": 240,
+          "rx_fail": 31,
+          "rssi_dbm_mean": -68.26666666666667,
+          "rssi_samples": 210,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 31
+          },
+          "tx_power_dbm": 0,
+          "tx_level": 128,
+          "tx_custom": 24
+        },
+        {
+          "loss_pct": 17.842323651452283,
+          "loss_basis": "master_sent",
+          "packets": 198,
+          "master_sent": 241,
+          "rx_fail": 43,
+          "rssi_dbm_mean": -68.3080808080808,
+          "rssi_samples": 198,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 42,
+            "EVENT_RX_FAIL_GO_TO_SEARCH": 1
+          },
+          "tx_power_dbm": -1,
+          "tx_level": 128,
+          "tx_custom": 21
+        }
+      ],
+      "knee": {
+        "tx_power_dbm": null,
+        "reason": "the loudest rung (0 dBm) already loses 12.50 %, over the 5.0 % target - the link is broken before the ladder starts, so this measures the bench and not the receiver"
+      },
+      "loss5pct_tx_power_dbm": null,
+      "loss5pct_rssi_dbm": null,
+      "rssi_reference": null,
+      "rssi_slope": {
+        "slope": null,
+        "n": 2,
+        "reason": "fewer than three rungs with usable RSSI below the knee"
+      },
+      "dial_trustworthy": false,
+      "dial_detail": "the transmit-power dial was never checked against measured RSSI (fewer than three rungs with usable RSSI below the knee), so nothing here knows whether the ladder moved the power it asked for",
+      "repeat_spread_db": null
+    },
+    "Garmin": {
+      "ladders": [
+        {
+          "steps": [
+            {
+              "loss_pct": 72.91666666666667,
+              "loss_basis": "master_sent",
+              "packets": 65,
+              "master_sent": 240,
+              "rx_fail": 174,
+              "rssi_dbm_mean": null,
+              "rssi_samples": 0,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 171,
+                "EVENT_RX_FAIL_GO_TO_SEARCH": 3
+              },
+              "tx_power_dbm": 0,
+              "tx_level": 128,
+              "tx_custom": 24
+            },
+            {
+              "loss_pct": 73.33333333333333,
+              "loss_basis": "master_sent",
+              "packets": 64,
+              "master_sent": 240,
+              "rx_fail": 161,
+              "rssi_dbm_mean": null,
+              "rssi_samples": 0,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 156,
+                "EVENT_RX_FAIL_GO_TO_SEARCH": 5
+              },
+              "tx_power_dbm": -1,
+              "tx_level": 128,
+              "tx_custom": 21
+            }
+          ],
+          "loss5pct_tx_power_dbm": null,
+          "knee": {
+            "tx_power_dbm": null,
+            "reason": "the loudest rung (0 dBm) already loses 72.92 %, over the 5.0 % target - the link is broken before the ladder starts, so this measures the bench and not the receiver"
+          },
+          "rssi_slope": {
+            "slope": null,
+            "n": 0,
+            "reason": "fewer than three rungs with usable RSSI below the knee"
+          },
+          "dial_trustworthy": false,
+          "dial_detail": "the transmit-power dial was never checked against measured RSSI (fewer than three rungs with usable RSSI below the knee), so nothing here knows whether the ladder moved the power it asked for",
+          "loss5pct_rssi_dbm": null
+        }
+      ],
+      "steps": [
+        {
+          "loss_pct": 72.91666666666667,
+          "loss_basis": "master_sent",
+          "packets": 65,
+          "master_sent": 240,
+          "rx_fail": 174,
+          "rssi_dbm_mean": null,
+          "rssi_samples": 0,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 171,
+            "EVENT_RX_FAIL_GO_TO_SEARCH": 3
+          },
+          "tx_power_dbm": 0,
+          "tx_level": 128,
+          "tx_custom": 24
+        },
+        {
+          "loss_pct": 73.33333333333333,
+          "loss_basis": "master_sent",
+          "packets": 64,
+          "master_sent": 240,
+          "rx_fail": 161,
+          "rssi_dbm_mean": null,
+          "rssi_samples": 0,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 156,
+            "EVENT_RX_FAIL_GO_TO_SEARCH": 5
+          },
+          "tx_power_dbm": -1,
+          "tx_level": 128,
+          "tx_custom": 21
+        }
+      ],
+      "knee": {
+        "tx_power_dbm": null,
+        "reason": "the loudest rung (0 dBm) already loses 72.92 %, over the 5.0 % target - the link is broken before the ladder starts, so this measures the bench and not the receiver"
+      },
+      "loss5pct_tx_power_dbm": null,
+      "loss5pct_rssi_dbm": null,
+      "rssi_reference": null,
+      "rssi_slope": {
+        "slope": null,
+        "n": 0,
+        "reason": "fewer than three rungs with usable RSSI below the knee"
+      },
+      "dial_trustworthy": false,
+      "dial_detail": "the transmit-power dial was never checked against measured RSSI (fewer than three rungs with usable RSSI below the knee), so nothing here knows whether the ladder moved the power it asked for",
+      "repeat_spread_db": null
+    }
+  },
+  "checks": [
+    {
+      "name": "knee reached [PM]",
+      "pass": false,
+      "detail": "the loudest rung (0 dBm) already loses 36.21 %, over the 5.0 % target - the link is broken before the ladder starts, so this measures the bench and not the receiver"
+    },
+    {
+      "name": "dial [PM]",
+      "pass": false,
+      "detail": "the transmit-power dial was never checked against measured RSSI (fewer than three rungs with usable RSSI below the knee), so nothing here knows whether the ladder moved the power it asked for"
+    },
+    {
+      "name": "knee reached [N53]",
+      "pass": false,
+      "detail": "the loudest rung (0 dBm) already loses 12.50 %, over the 5.0 % target - the link is broken before the ladder starts, so this measures the bench and not the receiver"
+    },
+    {
+      "name": "dial [N53]",
+      "pass": false,
+      "detail": "the transmit-power dial was never checked against measured RSSI (fewer than three rungs with usable RSSI below the knee), so nothing here knows whether the ladder moved the power it asked for"
+    },
+    {
+      "name": "knee reached [Garmin]",
+      "pass": false,
+      "detail": "the loudest rung (0 dBm) already loses 72.92 %, over the 5.0 % target - the link is broken before the ladder starts, so this measures the bench and not the receiver"
+    },
+    {
+      "name": "dial [Garmin]",
+      "pass": false,
+      "detail": "the transmit-power dial was never checked against measured RSSI (fewer than three rungs with usable RSSI below the knee), so nothing here knows whether the ladder moved the power it asked for"
+    },
+    {
+      "name": "EVENT_TX pacing",
+      "pass": true,
+      "detail": "all 509 messages paced by EVENT_TX"
+    }
+  ],
+  "pass": false,
+  "receiver_targets": {
+    "PM": "usb:EE6986854FD72803",
+    "N53": "port:COM5",
+    "Garmin": "usb:006"
+  }
+}
