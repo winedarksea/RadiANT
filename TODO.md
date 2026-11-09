@@ -644,12 +644,18 @@ is a source tree holding only maintained code.
 # Left open by the 2026-11-08 clearance
 
 MPSL (needs a soak beside BLE or Thread, which that clearance excluded):
+- MPSL assert 69:108, once in about 111,000 failed extensions on the L15 beside
+  an attached Thread peer (2026-11-09, docs/adr18-eval/phase-0a.md). It fired on
+  the CLOCK_LOCK arm about 5 min into a run and did not repeat in a further
+  30 min on the same image; the irq_lock arms saw none in 65,000. One event, so
+  neither arm is implicated. Last signal EXTEND_FAILED, returned END.
 - A14-1: on an MPSL grant, an ETIME from `program_rx()` is reported through
   `gate_failed` only after the grant ends, so the grant is not released early and
-  its remaining air is wasted. The comment at gate_mpsl:1160 is wrong.
+  its remaining air is wasted. Not fixed: no ztest reaches radiant_radio_nrf.c,
+  and a soak counter saw 0 on-grant ETIMEs in 87 min beside a Thread peer.
 - A pending `gate_failed` is not cleared by `radiant_radio_abort()`, so an abort
   before `denied_work_fn` runs delivers FAILED to the next operation. Self-heals;
-  found by reading only.
+  found by reading only. Not fixed, for the same two reasons (0 in the same soak).
 - `program_tx()` writes CC_TXSTART before enabling `conn_start_tx` and re-checks
   with `t_start <= now`, the ordering A14-1 replaced for receive. A compare just
   after the enable, before `now` is read, gives a false ETIME.

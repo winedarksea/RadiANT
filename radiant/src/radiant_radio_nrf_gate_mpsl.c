@@ -1169,10 +1169,13 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		radiant_nrf_gate_on_grant();
 
 		if (g.release_wanted) {
-			/* Either the operation completed synchronously, or its
-			 * programming failed and recorded the fact. Give the
-			 * timeslot back now and let the work queue tell the core
-			 * about it. */
+			/* Either the operation completed synchronously or nothing
+			 * was staged for this grant, and the backend released it.
+			 * Give the timeslot back now and let the work queue tell
+			 * the core. A programming failure (ETIME from the on-grant
+			 * program_rx()) does NOT come through here: it only sets
+			 * radiant_op.gate_failed, the grant is held to its TIMER0
+			 * end, and end_housekeeping() reports FAILED after that. */
 			g.granted = false;
 			timer0_disarm();
 			end_housekeeping();
