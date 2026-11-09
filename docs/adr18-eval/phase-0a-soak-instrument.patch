@@ -1,0 +1,260 @@
+diff --git a/apps/dongle_thread/soak_ctrl.conf b/apps/dongle_thread/soak_ctrl.conf
+new file mode 100644
+index 0000000..8d383a8
+--- /dev/null
++++ b/apps/dongle_thread/soak_ctrl.conf
+@@ -0,0 +1,2 @@
++CONFIG_RADIANT_SOAK_DIAG=y
++CONFIG_RADIANT_SOAK_CONTROL_IRQ_LOCK=y
+diff --git a/apps/dongle_thread/soak_fixed.conf b/apps/dongle_thread/soak_fixed.conf
+new file mode 100644
+index 0000000..b80e3f4
+--- /dev/null
++++ b/apps/dongle_thread/soak_fixed.conf
+@@ -0,0 +1 @@
++CONFIG_RADIANT_SOAK_DIAG=y
+diff --git a/apps/dongle_thread/soak_hammer_ctrl.conf b/apps/dongle_thread/soak_hammer_ctrl.conf
+new file mode 100644
+index 0000000..6363236
+--- /dev/null
++++ b/apps/dongle_thread/soak_hammer_ctrl.conf
+@@ -0,0 +1,3 @@
++CONFIG_RADIANT_SOAK_DIAG=y
++CONFIG_RADIANT_SOAK_CONTROL_IRQ_LOCK=y
++CONFIG_RADIANT_SOAK_CLOCK_HAMMER=y
+diff --git a/apps/dongle_thread/soak_hammer_fixed.conf b/apps/dongle_thread/soak_hammer_fixed.conf
+new file mode 100644
+index 0000000..bd8f4cd
+--- /dev/null
++++ b/apps/dongle_thread/soak_hammer_fixed.conf
+@@ -0,0 +1,2 @@
++CONFIG_RADIANT_SOAK_DIAG=y
++CONFIG_RADIANT_SOAK_CLOCK_HAMMER=y
+diff --git a/radiant/Kconfig b/radiant/Kconfig
+index ac9c0ed..d77bdae 100644
+--- a/radiant/Kconfig
++++ b/radiant/Kconfig
+@@ -401,6 +401,18 @@ config RADIANT_BACKEND_NRF_GATE_MPSL
+ # trampoline turns "call the kernel" into "pend an ordinary interrupt", which a
+ # zero-latency context can do with one register write. See
+ # radiant/include/radiant/radiant_swi.h and docs/p4-coexistence-bugs.md.
++config RADIANT_SOAK_DIAG
++	bool "Phase 0a soak: 30 s log line with gate and clock counters"
++	depends on RADIANT_BACKEND_NRF_GATE_MPSL
++
++config RADIANT_SOAK_CONTROL_IRQ_LOCK
++	bool "Phase 0a soak control arm: irq_lock around the clock fold (the bug)"
++	depends on RADIANT_SOAK_DIAG
++
++config RADIANT_SOAK_CLOCK_HAMMER
++	bool "Phase 0a soak stress: lowest-priority thread folds the clock in a loop"
++	depends on RADIANT_SOAK_DIAG
++
+ config RADIANT_SWI
+ 	bool
+ 	default y if RADIANT_BACKEND_NRF_GATE_MPSL
+diff --git a/radiant/src/radiant_radio_nrf.c b/radiant/src/radiant_radio_nrf.c
+index 78b4f4c..d746057 100644
+--- a/radiant/src/radiant_radio_nrf.c
++++ b/radiant/src/radiant_radio_nrf.c
+@@ -211,15 +211,33 @@ TIMER4; every nRF54L TIMER has at least six."
+ 
+ /*
+  * Extends the 32-bit us counter (wraps every 71.6 min) to the HAL's 64 bits.
+- * Exact provided a fold runs at least once per wrap; the subtraction is done
+- * under an interrupt lock and `last` only moves forwards, so two racing
+- * folds cannot lose a tick.
++ * Exact provided a fold runs at least once per wrap. Capture AND fold must be
++ * one critical section against EVERY context that folds. On an arbitrated
++ * build that includes MPSL's zero-latency signal callback (radio_isr(),
++ * deliver_terminal(), program_rx()), which irq_lock() does not mask: a ZLI
++ * fold between a thread's capture and its fold moves `last` past the thread's
++ * stale counter, and the thread's `counter - last` wraps to ~2^32, a permanent
++ * +71.6 min step (review 2026-10-31, A13-1). So CLOCK_LOCK is PRIMASK there,
++ * for a capture and an add (< 1 us). On the direct build no zero-latency
++ * context exists, it is the same irq_lock as ever, and the counter and branch
++ * below are compiled out: a build without CORE_CB_DEFERRED is byte-identical.
+  */
+ static struct {
+ 	uint64_t base;   /* microseconds accounted for up to `last` */
+ 	uint32_t last;   /* the counter value `base` was folded at */
+ } radiant_clock;
+ 
++#if defined(CORE_CB_DEFERRED)
++/* Folds that went backwards: one raced another context. Should stay zero. */
++static volatile uint32_t radiant_dbg_clock_back;
++#endif
++#if defined(CORE_CB_DEFERRED) && !defined(CONFIG_RADIANT_SOAK_CONTROL_IRQ_LOCK)
++#define CLOCK_LOCK()    radiant_swi_zli_lock()
++#define CLOCK_UNLOCK(k) radiant_swi_zli_unlock(k)
++#else
++#define CLOCK_LOCK()    irq_lock()
++#define CLOCK_UNLOCK(k) irq_unlock(k)
++#endif
+ 
+ static uint32_t timer_capture(uint8_t cc)
+ {
+@@ -229,7 +247,12 @@ static uint32_t timer_capture(uint8_t cc)
+ 
+ static uint64_t clock_fold(uint32_t counter)
+ {
+-	/* Caller holds the interrupt lock. */
++	/* Caller holds CLOCK_LOCK(). */
++#if defined(CORE_CB_DEFERRED)
++	if ((int32_t)(counter - radiant_clock.last) < 0) {
++		radiant_dbg_clock_back++;
++	}
++#endif
+ 	radiant_clock.base += counter - radiant_clock.last;
+ 	radiant_clock.last = counter;
+ 	return radiant_clock.base;
+@@ -237,10 +260,10 @@ static uint64_t clock_fold(uint32_t counter)
+ 
+ radiant_time_t radiant_radio_now(void)
+ {
+-	unsigned int key = irq_lock();
++	unsigned int key = CLOCK_LOCK();
+ 	uint64_t now = clock_fold(timer_capture(CC_NOW));
+ 
+-	irq_unlock(key);
++	CLOCK_UNLOCK(key);
+ 	return (radiant_time_t)now;
+ }
+ 
+@@ -254,11 +277,11 @@ radiant_time_t radiant_radio_now(void)
+  */
+ static radiant_time_t clock_absolute(uint32_t counter)
+ {
+-	unsigned int key = irq_lock();
++	unsigned int key = CLOCK_LOCK();
+ 	uint64_t base = clock_fold(timer_capture(CC_NOW));
+ 	int32_t  delta = (int32_t)(counter - radiant_clock.last);
+ 
+-	irq_unlock(key);
++	CLOCK_UNLOCK(key);
+ 	return (radiant_time_t)((int64_t)base + delta);
+ }
+ 
+@@ -266,11 +289,11 @@ static radiant_time_t clock_absolute(uint32_t counter)
+  * Only the low 32 bits reach the hardware, which is all a compare uses. */
+ static uint32_t clock_counter_at(radiant_time_t t)
+ {
+-	unsigned int key = irq_lock();
++	unsigned int key = CLOCK_LOCK();
+ 	uint64_t base = clock_fold(timer_capture(CC_NOW));
+ 	uint32_t last = radiant_clock.last;
+ 
+-	irq_unlock(key);
++	CLOCK_UNLOCK(key);
+ 	return last + (uint32_t)((int64_t)t - (int64_t)base);
+ }
+ 
+@@ -3721,6 +3744,26 @@ static void program_ed(const struct radiant_ed_req *req)
+  * ---------------------------------------------------------------------------
+  */
+ 
++#if defined(CONFIG_RADIANT_SOAK_DIAG)
++static volatile uint32_t soak_gate_failed;
++static volatile uint32_t soak_abort_failed_pending;
++uint32_t radiant_soak_clock_back(void) { return radiant_dbg_clock_back; }
++uint32_t radiant_soak_start_late(void) { return radiant_dbg_start_late; }
++uint32_t radiant_soak_gate_failed(void) { return soak_gate_failed; }
++uint32_t radiant_soak_abort_failed_pending(void) { return soak_abort_failed_pending; }
++#if defined(CONFIG_RADIANT_SOAK_CLOCK_HAMMER)
++static void soak_hammer(void *a, void *b, void *c)
++{
++	ARG_UNUSED(a); ARG_UNUSED(b); ARG_UNUSED(c);
++	for (;;) {
++		(void)radiant_radio_now();
++	}
++}
++K_THREAD_DEFINE(soak_hammer_tid, 512, soak_hammer, NULL, NULL, NULL,
++		K_LOWEST_APPLICATION_THREAD_PRIO, 0, 15000);
++#endif
++#endif
++
+ void radiant_nrf_gate_on_grant(void)
+ {
+ 	unsigned int key;
+@@ -3851,6 +3894,9 @@ void radiant_nrf_gate_on_grant(void)
+ 		 * pass, and possibly another arm before this callback can return.
+ 		 */
+ 		radiant_op.gate_failed = true;
++#if defined(CONFIG_RADIANT_SOAK_DIAG)
++		soak_gate_failed++;
++#endif
+ 	}
+ }
+ 
+@@ -4206,6 +4252,11 @@ int radiant_radio_abort(void)
+ 	}
+ 
+ 	key = irq_lock();
++#if defined(CONFIG_RADIANT_SOAK_DIAG)
++	if (radiant_op.gate_failed) {
++		soak_abort_failed_pending++;
++	}
++#endif
+ 	if (radiant_op.kind == OP_NONE) {
+ 		irq_unlock(key);
+ 		return RADIANT_RADIO_OK_RC;
+diff --git a/radiant/src/radiant_radio_nrf_gate_mpsl.c b/radiant/src/radiant_radio_nrf_gate_mpsl.c
+index b0878a8..6ea6aad 100644
+--- a/radiant/src/radiant_radio_nrf_gate_mpsl.c
++++ b/radiant/src/radiant_radio_nrf_gate_mpsl.c
+@@ -695,6 +695,15 @@ static struct k_work_q gate_wq;
+ static K_THREAD_STACK_DEFINE(gate_wq_stack, CONFIG_RADIANT_GATE_WQ_STACK_SIZE);
+ static bool gate_wq_started;
+ 
++#if defined(CONFIG_RADIANT_SOAK_DIAG)
++extern uint32_t radiant_soak_clock_back(void);
++extern uint32_t radiant_soak_start_late(void);
++extern uint32_t radiant_soak_gate_failed(void);
++extern uint32_t radiant_soak_abort_failed_pending(void);
++static void soak_work_fn(struct k_work *w);
++static K_WORK_DELAYABLE_DEFINE(soak_work, soak_work_fn);
++#endif
++
+ /*
+  * The gate's end of the trampoline. Runs at CONFIG_RADIANT_SWI_IRQ_PRIO - an
+  * ordinary interrupt priority - so k_work_submit_to_queue() and the k_timer
+@@ -1589,6 +1598,29 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
+  * ---------------------------------------------------------------------------
+  */
+ 
++#if defined(CONFIG_RADIANT_SOAK_DIAG)
++static void soak_work_fn(struct k_work *w)
++{
++	ARG_UNUSED(w);
++	LOG_INF("soak1 up=%u acq=%u placed=%u granted=%u blocked=%u cancelled=%u "
++		"refused_eagain=%u ans_inline=%u ext_ok=%u ext_fail=%u over=%u "
++		"invalid=%u deadline=%u",
++		(unsigned)(k_uptime_get_32() / 1000u), stats.acquires, stats.placed,
++		stats.granted, stats.blocked, stats.cancelled, stats.refused_eagain,
++		stats.answered_inline, stats.extends_ok, stats.extends_failed,
++		stats.overstayed, stats.invalid_return, stats.deadline_fired);
++	LOG_INF("soak2 hi_acq=%u hi_pending=%u hi_reserve=%u hi_blocked=%u "
++		"hi_granted=%u sent_after=%u sent_blocked=%u den_owed=%u late_disarm=%u "
++		"clkback=%u start_late=%u gatefail=%u abort_fail_pending=%u",
++		stats.hi_acq, stats.hi_pending, stats.hi_reserve, stats.hi_blocked,
++		stats.hi_granted, stats.sent_after_grant, stats.sent_blocked,
++		stats.den_owed, stats.late_disarm, radiant_soak_clock_back(),
++		radiant_soak_start_late(), radiant_soak_gate_failed(),
++		radiant_soak_abort_failed_pending());
++	k_work_reschedule_for_queue(&gate_wq, &soak_work, K_SECONDS(30));
++}
++#endif
++
+ int gate_init(void)
+ {
+ 	int32_t rc;
+@@ -1639,6 +1671,9 @@ int gate_init(void)
+ 				   K_THREAD_STACK_SIZEOF(gate_wq_stack),
+ 				   CONFIG_RADIANT_GATE_WQ_PRIO, &gate_wq_cfg);
+ 		gate_wq_started = true;
++#if defined(CONFIG_RADIANT_SOAK_DIAG)
++		k_work_reschedule_for_queue(&gate_wq, &soak_work, K_SECONDS(10));
++#endif
+ 	}
+ 	if (!swi_registered) {
+ 		rc = (int32_t)radiant_swi_register(RADIANT_SWI_GATE_REQUEST |
