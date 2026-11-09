@@ -645,7 +645,9 @@ acquisition is certain within one full sweep rather than merely likely. Worst ca
 
 Three things about the sweep are **not optional**:
 
-1. **One sweep serves every searching channel.** All ANT+ traffic is on RF 57, network 0, so a single
+1. **One sweep serves every searching channel.** All ANT+ traffic is on RF 57 (the sweep moves only for
+   a host's slave on a keyed network at another frequency, and uses whichever network holds the ANT+
+   key, network 0 when valid), so a single
    window that accepts all eight logical addresses catches any matching packet; the resulting channel
    ID is then offered *in software* to every channel in SEARCHING. Without this, eight simultaneous
    searches take ~64 s and `tools/ant_session.py` fails outright.

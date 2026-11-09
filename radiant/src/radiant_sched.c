@@ -784,9 +784,11 @@ static enum step arm_failed(uint8_t ch, int rc)
 		s.stats.arm_rejected++;
 		return STEP_DONE;
 	case RADIANT_RADIO_ETIME:
-		/* Unreachable by construction (the pass subtracts
-		 * min_arm_lead_us itself); reaching it means the backend is
-		 * stricter than advertised. Report missed and move on. */
+		/* The pass subtracts min_arm_lead_us itself, so this is not
+		 * the usual way to be late, but it is reachable: since A14-1
+		 * the nRF backend returns it when the start compare was
+		 * written too late (radiant_dbg_start_late, expected 0 or
+		 * single digits). Report missed and move on. */
 		s.stats.arm_rejected++;
 		slot_clear(ch);
 		notify_done(ch, RADIANT_SCHED_DONE_MISSED);

@@ -113,7 +113,8 @@ class TestCtr(unittest.TestCase):
         self.assertEqual(back, NIST_MESSAGE)
 
     def test_partial_block(self):
-        # Five bytes is what X_CONF actually uses (bytes [2..6] of a page).
+        # Five bytes is what X_CONF uses with X_AUTH on (bytes [2..6] of a page);
+        # without X_AUTH it covers six, [2..7].
         got = rc.ctr_xor(RFC4493_KEY, self.IV, NIST_MESSAGE[:5])
         self.assertEqual(got, self.CIPHERTEXT[:5])
 

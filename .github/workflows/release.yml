@@ -2059,7 +2059,8 @@ jobs:
           # 4480 B of the bss). 6124 / 6493 after the WP-B follow-ups
           # (2026-11-08, measured with this recipe at NCS v3.4.0): text +8
           # against 6116 at c4f893c, bss +0, so 20 B of text headroom is left
-          # under the 6144 ceiling. Ceilings unchanged.
+          # under the 6144 ceiling. 6128 / 6493 on the merged tree of
+          # 2026-11-08 (+4 B text from the other packages). Ceilings unchanged.
           check "security text" "$(( on_text - off_text ))" 6144
           check "security bss"  "$(( on_bss  - off_bss  ))" 7168
 

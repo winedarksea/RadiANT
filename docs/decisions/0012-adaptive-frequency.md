@@ -48,7 +48,8 @@ commissioned — see *What was measured* for what that means for the gate.
 6. **An off-57 channel cannot join the merged RX window.** The accepted price of
    axis 5, scoped to the types that opted in.
 7. **Discovery never moves.** The search sweep is 1 M on RF 57, the three-byte
-   search format, forever.
+   search format, forever, except when a host opens a keyed slave on another
+   frequency, which moves it there (TODO release 1b, 2026-11-08).
 8. **ANT+ compatibility channels are permanently excluded.** Not deferred —
    excluded.
 
@@ -163,8 +164,9 @@ frequency cannot count slots on the other; and ADR 0005's own text says the
 three candidates "are the defaults a receiver tries first", which only makes
 sense if the node is not on 57.
 
-> **The honest statement: the search sweep is 1 M on RF 57 forever, and no
-> frequency axis multiplies it.** A node that has moved is outside that
+> **The honest statement: the search sweep is 1 M on RF 57 forever, unless a
+> host's keyed slave asks for another frequency, and no frequency axis
+> multiplies it.** A node that has moved is outside that
 > sweep's certainty and is re-acquired from the descriptor a receiver already
 > holds, from the sync handoff of page `0x12`, or from a **bounded retry list
 > of at most five named indices** — the last announced target, the three

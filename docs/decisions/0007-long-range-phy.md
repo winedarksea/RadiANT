@@ -89,7 +89,9 @@ made.
    stock receiver physically cannot demodulate.
 5. **ANT+ compatibility channels are permanently excluded** from this PHY and
    from the length extension. Not deferred — excluded.
-6. **Discovery never moves.** The search sweep stays 1 M on RF 57 forever.
+6. **Discovery never moves.** The search sweep stays 1 M on RF 57 forever,
+   except that a host opening a keyed slave on another frequency moves it
+   there (TODO release 1b, 2026-11-08). No node design here may rely on that.
 7. **A node's frame must stay under 25 % of its channel period at its announced
    rate**, enforced by encoder refusal.
 
@@ -386,6 +388,11 @@ numbers, converting a solved re-acquisition problem into an unsolved one.
 
 ### Discovery never moves
 
+The one exception to this section is a host that opens a slave on a keyed
+network at another frequency: the sweep then follows that channel between
+passes, and alternates when searchers disagree. Keyless and RF 57 channels
+never move it, and nothing below depends on it moving.
+
 A searching receiver stays on **1 M, RF 57, the 3-byte search format**, and
 finds every node there. An LR node is found by its 1 M descriptor or by the
 sync handoff (RF-5b) — never by sweeping the coded PHY. The sweep covers all
@@ -492,7 +499,8 @@ make the scheduler's PHY budgeting dead code on the only backend that ships.
 
 - S=2 (defined, not built — see above).
 - Any change to ANT+ compatibility channels.
-- Any move of discovery off 1 M / RF 57.
+- Any move of discovery off 1 M / RF 57, other than following a host's keyed
+  off-57 slave.
 - Length extension anywhere the PHY does not already hide us.
 
 ---
