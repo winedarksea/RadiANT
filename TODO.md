@@ -5,6 +5,33 @@ Weak tests: the scheduler half is fixed (`reserve_from_done_case()` in radiant/t
 Tool footgun: fixed 2026-11-08. ant_ack_gate.py exits non-zero on any quality failure with or without --gate; the 300 s / 300 command sufficiency reason fails only under --gate.
 cc26xx conformance transcript: owed. Release review item 2 changed advanced_options_3 from 0xD5 to 0x05, so `conformance-cc26xx.antser` is stale until re-recorded on a CC2652.
 
+# Discovery issues from the 2026-11-09 review of the last 35 commits
+
+Reviewed through `86233e8`; both issues affect the discovery changes in
+`2079575`. Verified by code inspection; C tests and hardware validation pending.
+
+- [ ] **P2: Restore the configured discovery frequency when the last declared search ends.**
+  A keyed off-57 search retunes the shared sweep. If that channel acquires or
+  closes while a keyless scan remains active, `retune_at_boundary()`'s
+  no-declared-frequency branch leaves the sweep on the off-57 frequency
+  indefinitely, so the keyless scan misses normal ANT+ traffic on RF 57.
+  Preserve the configured default separately from the current sweep frequency
+  and restore it when no declared searches remain. Add a regression test for
+  an off-57 keyed search ending while a keyless scan continues.
+  Code: `radiant/src/radiant_search.c`, `retune_at_boundary()` (around line 606).
+
+- [ ] **P2: Apply a first nonzero-network key installed during an active search.**
+  If searches are active when the first valid key is installed on network 1
+  or higher, `antr_network_address_set()` skips sweep reinitialization without
+  recording pending work. Discovery keeps using the zero address. Closing all
+  searches and retrying the same key still fails because `first_key` is now
+  false; recovery requires a network-0 key or reset. Record the pending address
+  change independently of active search membership and apply it safely between
+  windows. Add regression coverage for installation during an active search
+  and for closing searches and retrying the key. The analogous late-key
+  limitation on network 0 predates this review range.
+  Code: `apps/common/ant_radio_radiant.c`, `antr_network_address_set()` (around line 3712).
+
 # Open issues from the 2026-11-07 RadiANT vs Garmin ANT USB-m comparison
 
 Evidence: archive/benchmarks/2026-11-07-garmin-compare/ (README there).
