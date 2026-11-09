@@ -644,15 +644,6 @@ is a source tree holding only maintained code.
 # Left open by the 2026-11-08 clearance
 
 MPSL (needs a soak beside BLE or Thread, which that clearance excluded):
-- **A13-1.** Replace `irq_lock()` around capture-and-fold in `radiant_radio_now()`,
-  `clock_absolute()` and `clock_counter_at()` with `CLOCK_LOCK()/CLOCK_UNLOCK()`
-  (`radiant_swi_zli_lock()` when `CORE_CB_DEFERRED`, else irq_lock) and add
-  `radiant_dbg_clock_back` in `clock_fold()`. On MPSL builds `radio_isr()`,
-  `deliver_terminal()` and `program_rx()` fold from the ZLI signal callback that
-  irq_lock does not mask; a ZLI fold between capture and fold wraps
-  `counter-last` to ~2^32, a permanent +71.6 min step. Soak reading
-  `radiant_dbg_clock_back` (expect 0). The patch is
-  archive/review-2026-10-31-timing/6df53e7-timing-fixes.patch.
 - A14-1: on an MPSL grant, an ETIME from `program_rx()` is reported through
   `gate_failed` only after the grant ends, so the grant is not released early and
   its remaining air is wasted. The comment at gate_mpsl:1160 is wrong.
