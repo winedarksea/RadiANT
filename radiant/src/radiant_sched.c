@@ -1463,7 +1463,7 @@ static bool want_preempt(radiant_time_t earliest)
 		 * STARTS EARLIER. Without this, arm_next()'s "commit the radio
 		 * early" rule is a trap for the channel it did not choose: a
 		 * tracked window re-posted after its predecessor was reported
-		 * MISSED (see api_sched_done() in apps/common/ant_radio_radiant.c)
+		 * MISSED (see api_sched_done() in radiant/src/antr/ant_radio_radiant.c)
 		 * arrives to find the radio already committed to something up to
 		 * a quarter of a second away, waits behind it, and is itself
 		 * reported MISSED. Eight of those in a row is

@@ -30,14 +30,12 @@
 # each is its own `west build`, its own project(), so "shared" here means
 # "one file admins one list", not "one binary artifact reused across images".
 #
-# WHY THIS IS NOT PART OF THE radiant MODULE: every file here reaches an
-# application header (src/ant_radio.h's antr_* declarations) or IS one - the
-# module's own self-containment rule (radiant/CMakeLists.txt reaches no path
-# outside itself) is exactly what this directory is on the other side of.
-# ant_app_common is the seam; radiant is what it adapts onto.
+# WHY THIS IS NOT PART OF THE radiant MODULE: what is left here is the dongle
+# product - the serial bridge, its transports, LEDs and boot sequence. The
+# module does not know any of it exists.
 
-# ant/ carries ant_radio.h and ant_wire.h - the antr_* contract and the wire
-# constants every backend and the bridge itself need in scope. PUBLIC (via
+# ant/ carries forwarding headers for ant_radio.h and ant_wire.h, the antr_*
+# contract and the wire constants, so bare includes keep working. PUBLIC (via
 # target_include_directories(app ...)) so a consuming application's own
 # sources (radiant-adjacent test doubles, apps/dongle_ti's not-yet-written
 # backend) can `#include "ant_radio.h"` too, and so files in this directory
@@ -49,23 +47,14 @@ target_include_directories(app PUBLIC
   "${CMAKE_CURRENT_LIST_DIR}/ant"
 )
 
-# ── The antr_* adapter onto radiant ──────────────────────────────────────
-#
-# Unconditional, unlike everything below it: every consumer of this file that
-# selects the radiant core backend (ANT_RADIO=core, or apps/hrm_ble's
-# unconditional CONFIG_RADIANT=y) needs it, and CONFIG_RADIANT_ANTR_API
-# defaults to y precisely so that is the common case. See
-# apps/common/Kconfig.antr_api's own header for why the symbol exists at all
-# rather than an unconditional target_sources() call.
-target_sources_ifdef(CONFIG_RADIANT_ANTR_API app PRIVATE
-  "${CMAKE_CURRENT_LIST_DIR}/ant_radio_radiant.c")
-target_sources_ifdef(CONFIG_RADIANT_SEC_HOST_MESSAGES app PRIVATE
-  "${CMAKE_CURRENT_LIST_DIR}/ant_sec_host.c")
+# The antr_* adapter onto radiant is compiled by the radiant module itself,
+# under CONFIG_RADIANT_ANTR_API. apps/common/Kconfig.antr_api turns it on for
+# the applications in this repository.
 
 # The other two antr_* implementations. Neither reaches the radiant module at
 # all; CONFIG_ANT_DONGLE_RADIO_* is what CMake's ANT_RADIO axis
 # (apps/common/ant_radio_backend.cmake) writes into the generated fragment,
-# so these two and the two lines above are mutually exclusive by
+# so these two and CONFIG_RADIANT_ANTR_API are mutually exclusive by
 # construction, not by convention.
 target_sources_ifdef(CONFIG_ANT_DONGLE_RADIO_SDK_ANT app PRIVATE
   "${CMAKE_CURRENT_LIST_DIR}/ant_radio_sdk_ant.c")

@@ -230,7 +230,7 @@ choice ANT_DONGLE_RADIO
 	prompt "ANT radio backend"
 	default ANT_DONGLE_RADIO_CORE
 	help
-	  Which implementation of apps/common/ant/ant_radio.h is compiled. All three
+	  Which implementation of radiant/include/radiant/ant_radio.h is compiled. All three
 	  present the same antr_* contract, so the serial bridge and main() do
 	  not know which is present - the same shape as the transport choice
 	  above, and for the same reason.

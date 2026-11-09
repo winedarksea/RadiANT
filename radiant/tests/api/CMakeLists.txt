@@ -4,7 +4,7 @@
 #
 # ── Why this is a second application and not a suite in ../src ───────────────
 #
-# apps/common/ant_radio_radiant.c (radiant_api.c, before it moved out of radiant -
+# radiant/src/antr/ant_radio_radiant.c (radiant_api.c, before it moved out of radiant -
 # see radiant/include/radiant/radiant_msg.h for why) is the only
 # module in radiant's orbit with no ztest coverage, and the whole
 # master-exchange path lives in it: every module underneath is tested and the
@@ -47,22 +47,12 @@ target_sources(app PRIVATE ${suite_sources})
 # CONFIG_RADIANT_BACKEND_NONE for the same reason.
 target_sources(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../fake_radio.c")
 
-# The one thing this application exists to build: the antr_* adapter, from its
-# new home outside the module. Unconditional rather than
-# target_sources_ifdef(CONFIG_RADIANT_ANTR_API ...) - compiling it is the
-# whole point of this application, unlike root/strap's CMakeLists.txt where the
-# symbol genuinely toggles whether a real product links it.
-target_sources(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../../apps/common/ant_radio_radiant.c")
-target_sources_ifdef(CONFIG_RADIANT_SEC_HOST_MESSAGES app PRIVATE
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../../apps/common/ant_sec_host.c")
+# The adapter under test is compiled by the module, through
+# CONFIG_RADIANT_ANTR_API=y in prj.conf - the same door a real application uses.
 
 # ../ so a suite writes #include "fake_radio.h", the same spelling the parent's
-# suites use. The module's own zephyr_include_directories() puts
-# radiant/include on the search path; ../../../apps/common and its ant/
-# subdirectory are added explicitly here (unlike the parent application, which
-# never needs it) for ant_radio_radiant.c's own #include "ant_wire.h" /
-# "ant_radio.h" and for any suite that wants the same.
+# suites use. ../../src/antr is for the adapter's private headers; the public
+# ones come from the module's own zephyr_include_directories().
 target_include_directories(app PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/.."
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../../apps/common"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../../apps/common/ant")
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/antr")

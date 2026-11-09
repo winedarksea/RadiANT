@@ -39,25 +39,4 @@ project(radiant_import_smoke)
 
 target_sources(app PRIVATE src/main.c)
 
-# radiant_bridge.c and radiant_hr_adapter.c are library material the module
-# ships but does not compile itself - see radiant/CMakeLists.txt's own
-# header on src/profiles and src/bridge, and apps/dongle's node-identity
-# wiring for the same pattern with radiant/src/node. A consumer that wants
-# the sample bus and an HR decoder reaches into the module's own source tree
-# for them, the same way this smoke test does - there is nothing more
-# private about this path than about #include <radiant/radiant_channel.h>,
-# it is simply not pre-linked into every image that only wants the core.
-target_sources(app PRIVATE
-  "${RADIANT_MODULE_DIR}/src/bridge/radiant_bridge.c"
-  "${RADIANT_MODULE_DIR}/src/bridge/radiant_hr_adapter.c"
-)
-target_include_directories(app PRIVATE "${RADIANT_MODULE_DIR}/src/bridge")
-
-# RADIANT_SINK_DEFINE's STRUCT_SECTION_ITERABLE needs a linker fragment
-# naming the section, or the _radiant_sink_list_start/_end symbols
-# radiant_bridge.c's dispatch loop reads never exist - a link error, not a
-# silent empty list, but only once something calls dispatch_one(); a sink
-# defined and never iterated would otherwise vanish at run time with no
-# build error at all. See radiant/tests/CMakeLists.txt for the same line
-# against the same file.
-zephyr_linker_sources(SECTIONS "${RADIANT_MODULE_DIR}/src/bridge/radiant_bridge_sections.ld")
+# The sample bus and HR decoder come from CONFIG_RADIANT_BRIDGE=y in prj.conf.

@@ -1,0 +1,29 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * The Pro Micro board's default console is USB CDC-ACM, which this sample does
+ * not need, so the sample runs with no console at all. Confirm it with any ANT+
+ * receiver.
+ */
+/ {
+	chosen {
+		/delete-property/ zephyr,console;
+		/delete-property/ zephyr,shell-uart;
+		/delete-property/ zephyr,uart-mcumgr;
+		/delete-property/ zephyr,bt-mon-uart;
+		/delete-property/ zephyr,bt-c2h-uart;
+
+		radiant,radio-timer = &timer4;
+	};
+};
+
+&timer4 {
+	status = "okay";
+};
+
+&board_cdc_acm_uart {
+	status = "disabled";
+};
+
+&uart0 {
+	status = "disabled";
+};

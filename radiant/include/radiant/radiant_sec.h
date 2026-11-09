@@ -563,7 +563,7 @@ void radiant_sec_pump(void);
  * Port hook: called at the top of every thread-context radiant_sec entry
  * point when CONFIG_RADIANT_SEC_LOCK_CHECK is on (the default in an ASSERT
  * build). radiant is freestanding and has no lock of its own, so the check is
- * the port's: apps/common/ant_radio_radiant.c overrides this to assert that
+ * the port's: radiant/src/antr/ant_radio_radiant.c overrides this to assert that
  * api_lock is held by the calling thread. The weak default does nothing.
  * `who` is the entry point's name.
  */

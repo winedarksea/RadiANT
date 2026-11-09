@@ -58,9 +58,9 @@
 #include <zephyr/logging/log.h>
 
 /* First, and see the note above. */
-#include "ant_wire.h"
-#include "ant_health.h"
-#include "ant_radio.h"
+#include <radiant/ant_wire.h>
+#include <radiant/ant_health.h>
+#include <radiant/ant_radio.h>
 
 #include "ant_radio_radiant.h"
 #include "ant_radio_radiant_priv.h"

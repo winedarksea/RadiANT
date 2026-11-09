@@ -1,20 +1,102 @@
-# Integration guide: ANT+ heart rate reception in ~30 lines
+# Integration guide
 
-Checked by: [`../../tests/import_smoke/`](../../tests/import_smoke/), which
-is exactly this walkthrough as a buildable application. CI builds it against
-an isolated copy of `radiant/` extracted with `git archive`, so this guide
-cannot silently reach a path the module does not actually expose - if it
-did, that build would fail rather than this document quietly going stale.
+There are two ways to use RadiANT. Almost everyone wants the first.
 
-This is the whole downstream story: what a project that wants to receive an
-ANT+ heart-rate broadcast, and nothing else, has to write. It stops short of
-a working receiver on purpose - see the note at the end - but every line
-here is real, linked, and the same shape a working port uses.
+- **The `antr_*` API.** RadiANT runs itself. You configure channels and receive
+  messages. This is what every application in this repository uses.
+- **The low-level API.** You write the runtime that connects the scheduler, search
+  and event queue yourself. Only worth it if `antr_*` cannot do what you need.
 
-## 1. Bring the module in
+## The `antr_*` API
 
-Before `find_package(Zephyr)`, so `ZEPHYR_EXTRA_MODULES` is set in time for
-Kconfig to source `radiant/Kconfig`:
+This is [`samples/hr_receiver`](../samples/hr_receiver/), which CI builds. Follow
+the [README](../README.md) to add the module first.
+
+`prj.conf`:
+
+```
+CONFIG_RADIANT=y
+CONFIG_RADIANT_ANTR_API=y
+```
+
+### Open a channel
+
+Every call returns `ANTW_RESPONSE_NO_ERROR` (0) or an ANT response code.
+
+```c
+#include <radiant/ant_radio.h>
+
+static const uint8_t ant_plus_key[8] = {
+	0xB9, 0xA5, 0x21, 0xFB, 0xBD, 0x72, 0xC3, 0x45
+};
+
+int main(void)
+{
+	antr_init();
+	antr_network_address_set(0, ant_plus_key);
+
+	antr_channel_assign(0, ANTW_CHANNEL_TYPE_SLAVE, 0, 0);
+	antr_channel_id_set(0, 0, 0x78, 0);        /* any heart-rate sensor */
+	antr_channel_period_set(0, 8070);          /* 4.06 Hz */
+	antr_channel_radio_freq_set(0, 57);        /* 2457 MHz */
+	antr_channel_search_timeout_set(0, 0xFF);  /* search until found */
+	antr_channel_open(0);
+	return 0;
+}
+```
+
+`antr_init()` starts RadiANT's own thread, so `main()` can return.
+
+### Receive
+
+Define `antr_on_message()` once in your application. It is resolved at link time,
+with no registration call, and it runs on RadiANT's event thread, so it must not
+block.
+
+```c
+void antr_on_message(const struct antr_msg *msg)
+{
+	if (msg->id == ANTW_MESG_BROADCAST_DATA_ID && msg->len >= 9) {
+		uint8_t channel = msg->data[0];
+		const uint8_t *page = &msg->data[1];
+
+		printk("ch %u: %u bpm
+", channel, page[7]);
+	}
+}
+```
+
+`data[0]` is the channel and the eight payload bytes follow. Byte 7 of every
+heart-rate page is the computed heart rate. Events arrive the same way, with `id`
+set to `ANTW_MESG_RESPONSE_EVENT_ID` and the event code in `data[2]`.
+
+### Transmit
+
+Assign the channel as `ANTW_CHANNEL_TYPE_MASTER`, give it your own device number,
+open it, and supply each next page when `ANTW_EVENT_TX` arrives. See
+[`samples/hr_transmitter`](../samples/hr_transmitter/).
+
+### Decode profiles
+
+For anything beyond a heart-rate byte, set `CONFIG_RADIANT_PROFILES=y` to get the
+page encoders and decoders, or `CONFIG_RADIANT_BRIDGE=y` to get decoded samples
+delivered to sinks you register. [`../../docs/radiant-bridge.md`](../../docs/radiant-bridge.md)
+describes the bridge.
+
+The full API is [`include/radiant/ant_radio.h`](../include/radiant/ant_radio.h).
+
+## The low-level API
+
+Checked by [`../../tests/import_smoke/`](../../tests/import_smoke/), which is this
+walkthrough as a buildable application. CI builds it against an isolated copy of
+`radiant/`.
+
+This path stops short of a working receiver: see the note at the end. Every line
+here is real and linked.
+
+### 1. Bring the module in
+
+Before `find_package(Zephyr)`:
 
 ```cmake
 list(APPEND ZEPHYR_EXTRA_MODULES path/to/radiant)
@@ -22,31 +104,18 @@ find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(my_hr_receiver)
 
 target_sources(app PRIVATE src/main.c)
-
-# The sample bus and the HR decoder are library material the module ships
-# but does not compile for you - see radiant/README.md's "What is not
-# compiled for you". Reach into the module's own source tree for them.
-target_sources(app PRIVATE
-  path/to/radiant/src/bridge/radiant_bridge.c
-  path/to/radiant/src/bridge/radiant_hr_adapter.c
-)
-target_include_directories(app PRIVATE path/to/radiant/src/bridge)
-
-# RADIANT_SINK_DEFINE (step 4 below) needs this or the sink list's start/end
-# symbols never exist - a link error, but only once something dispatches to
-# it, so it is easy to miss until step 6 actually runs.
-zephyr_linker_sources(SECTIONS path/to/radiant/src/bridge/radiant_bridge_sections.ld)
 ```
 
-`prj.conf` needs one line: `CONFIG_RADIANT=y`. Its default backend,
-`CONFIG_RADIANT_BACKEND_NULL`, has a real lifecycle and clock and refuses
-every radio arm - correct for this walkthrough, since the point here is the
-API shape, not a real receive. A real product sets
-`CONFIG_RADIANT_BACKEND_NRF=y` (or `_CC26XX`) and reads
-[`../../docs/backends.md`](../../docs/backends.md) for what that backend
-needs from the devicetree.
+`prj.conf`:
 
-## 2. The two hooks the module needs from you
+```
+CONFIG_RADIANT=y
+CONFIG_RADIANT_BRIDGE=y
+```
+
+Leave `CONFIG_RADIANT_ANTR_API` off: it defines the hooks in step 2.
+
+### 2. The two hooks the module needs from you
 
 `radiant/include/radiant/radiant_event.h` declares two functions and calls
 them; nothing in the module defines them, so a build that forgets one fails
@@ -62,7 +131,7 @@ A real port wakes a work queue or gives a semaphore here; this walkthrough's
 own [`main.c`](../../tests/import_smoke/src/main.c) just polls, so its
 `radiant_event_wakeup()` is empty.
 
-## 3. Receive a message
+### 3. Receive a message
 
 `radiant/include/radiant/radiant_msg.h` declares the one function the
 module calls for every message it decides you should see -
@@ -88,7 +157,7 @@ count, computed heart rate - and posts up to three records onto the sample
 bus via `radiant_bridge_post()`. It does not care which HR page arrived,
 because those four bytes are the same on all of them.
 
-## 4. Register a sink
+### 4. Register a sink
 
 A sink is a registration, not a case in a switch - `RADIANT_SINK_DEFINE`
 links every translation unit's definition into one array with no central
@@ -115,7 +184,7 @@ actually wants heart rate to go. See
 [`../../docs/radiant-bridge.md`](../../docs/radiant-bridge.md) for the full
 sink/binding/rule design if you want more than one source feeding one sink.
 
-## 5. Open a channel
+### 5. Open a channel
 
 `radiant/include/radiant/radiant_channel.h` mirrors the ANT serial
 protocol's own four channel calls almost one to one:
@@ -135,7 +204,7 @@ usual channels. `radiant_channel.c` calls no HAL function - it only updates
 channel state - so this much links and runs correctly even with no radio
 behind it at all, which is what makes it safe to demonstrate without one.
 
-## 6. Drive it
+### 6. Drive it
 
 ```c
 while (1) {
@@ -145,7 +214,7 @@ while (1) {
 }
 ```
 
-## What this does not do
+### What this does not do
 
 This walkthrough never calls `radiant_sched_init()` or `radiant_radio_init()`
 - the two calls that actually arm a radio and let the scheduler drive it.
@@ -154,14 +223,9 @@ there forever: correct behaviour for an unarmed channel, and proof that the
 API sequence above is real and linkable, but not a receiver that will ever
 hear a heart-rate strap.
 
-Wiring a real receiver needs `struct radiant_sched_cbs` and the radio
-callbacks `radiant_sched_radio_cbs()` returns, and is the antr_* adapter's
-whole job -
-[`../../apps/common/ant_radio_radiant.c`](../../apps/common/ant_radio_radiant.c)
-is the reference implementation, ~2500 lines because an ANT-serial dongle's
-bridge protocol needs all of it. A product that is not an ANT-serial dongle
-needs much less: read that file for the full sequence
-(`radiant_channel_init()` → `radiant_event_init()` → `radiant_sched_init()`
-→ `radiant_radio_init()` → `radiant_search_init()`, in that order, each step
-preconditioning the next) and keep only the parts your product's channel
-plan actually uses.
+Wiring a real receiver needs `struct radiant_sched_cbs`, the radio callbacks
+`radiant_sched_radio_cbs()` returns, and a thread driving it all. That is what
+[`src/antr/ant_radio_radiant.c`](../src/antr/ant_radio_radiant.c) does, and
+`antr_init()` shows the order: `radiant_channel_init()`, `radiant_event_init()`,
+`radiant_sched_init()`, `radiant_radio_init()`, `radiant_search_init()`, with each
+step preconditioning the next.

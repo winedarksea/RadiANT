@@ -89,7 +89,7 @@ uint32_t radiant_binding_find(uint16_t devnum, uint8_t devtype, uint8_t trans_ty
  *
  * A separate call rather than a widened radiant_binding_bind() signature, and
  * the reason is the layering rather than convenience: the value comes from
- * antr_channel_period_get(), which lives in apps/common/ant/ant_radio.h - a
+ * antr_channel_period_get(), which lives in radiant/include/radiant/ant_radio.h - a
  * header this directory reaches neither directly nor transitively, and the
  * absence of which is a property radiant/tests/CMakeLists.txt states as the
  * reason src/bridge is compiled where it is. So the period necessarily arrives

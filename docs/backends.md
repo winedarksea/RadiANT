@@ -61,8 +61,8 @@ already works and is already asserted in CI.
 ```
 apps/common/ant_serial_bridge.c   unchanged logic; speaks only ANTW_*/antr_*
         |
-   apps/common/ant/ant_radio.h    OUR ~50-function contract  (antr_*)
-   apps/common/ant/ant_wire.h     OUR protocol constants     (ANTW_*)
+   radiant/include/radiant/ant_radio.h    OUR ~50-function contract  (antr_*)
+   radiant/include/radiant/ant_wire.h     OUR protocol constants     (ANTW_*)
         |
    +----+-----------------+----------------------+
    |                      |                      |

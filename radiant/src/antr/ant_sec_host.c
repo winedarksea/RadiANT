@@ -28,9 +28,9 @@
 #include <radiant/radiant_sec.h>
 #include <radiant/radiant_channel.h>
 
-#include "ant_radio.h"
+#include <radiant/ant_radio.h>
 #include "ant_radio_radiant_priv.h"
-#include "ant_wire.h"
+#include <radiant/ant_wire.h>
 
 BUILD_ASSERT(RADIANT_SEC_SW_CONF == 0x01,
 	     "0xF1 bit 0 is X_CONF; the wire and the module must agree");

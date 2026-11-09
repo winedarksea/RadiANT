@@ -1239,7 +1239,7 @@ ZTEST(radiant_sched, test_three_tracked_slots_inside_one_lead_still_drop_the_thi
  * that a request arriving afterwards finds the radio spoken for up to a quarter
  * of a second out, and a tracked window is only 200 us wide. That is how a
  * window re-posted after a MISSED terminal (see api_sched_done() in
- * apps/common/ant_radio_radiant.c) was itself reported MISSED, and eight of
+ * radiant/src/antr/ant_radio_radiant.c) was itself reported MISSED, and eight of
  * those in a row is RX_FAIL_GO_TO_SEARCH: a ~2 s dropout with nothing wrong on
  * the air.
  *

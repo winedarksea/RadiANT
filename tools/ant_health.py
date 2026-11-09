@@ -88,7 +88,7 @@ FIELDS = (
      "USB bulk-IN transfers that timed out waiting on the host"),
 )
 
-# What ant_health_fill() writes today - apps/common/ant_health.h's
+# What ant_health_fill() writes today - radiant/include/radiant/ant_health.h's
 # ANT_HEALTH_PAYLOAD_LEN, which is the definition this mirrors. It is the
 # shortest body this tool accepts.
 PAYLOAD_LEN = 30

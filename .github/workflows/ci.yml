@@ -370,3 +370,80 @@ jobs:
             -p always \
             -- "-DRADIANT_MODULE_DIR=/tmp/radiant-isolated"
 
+      # The module's own tests and samples, from the isolated copy. Built, not
+      # run: the ztest job runs the suites, and this job is about what the
+      # module can reach. Each finds the module by relative path, so here that
+      # is the copy and nothing else.
+      - name: Build the module's tests against the isolated copy
+        env:
+          ZEPHYR_TOOLCHAIN_VARIANT: host
+        run: |
+          set -euxo pipefail
+          for app in tests tests/api; do
+            west build "/tmp/radiant-isolated/${app}" -b native_sim \
+              -d build -p always
+          done
+
+      - name: Build the samples against the isolated copy
+        run: |
+          set -euxo pipefail
+          for sample in hr_receiver hr_transmitter; do
+            ZEPHYR_TOOLCHAIN_VARIANT=host west build \
+              "/tmp/radiant-isolated/samples/${sample}" -b native_sim \
+              -d build -p always
+            west build "/tmp/radiant-isolated/samples/${sample}" \
+              -b nrf52840dk/nrf52840 -d build -p always
+            grep -qx 'CONFIG_RADIANT_BACKEND_NRF=y' \
+              "build/${sample}/zephyr/.config" build/zephyr/.config 2>/dev/null
+          done
+
+  # Everything else in this workflow builds against the Nordic Connect SDK, so
+  # none of it can notice radiant/ depending on that SDK. This job has no NCS in
+  # its workspace. A Kconfig symbol only NCS defines once aborted every build on
+  # stock Zephyr, with CONFIG_RADIANT=n, and nothing caught it.
+  upstream-zephyr:
+    name: radiant/ builds on stock Zephyr
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout application
+        uses: actions/checkout@v4
+        with:
+          path: app
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install 32-bit host runtime
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y gcc-multilib g++-multilib
+
+      - name: Set up stock Zephyr
+        uses: zephyrproject-rtos/action-zephyr-setup@v1
+        with:
+          app-path: app
+          manifest-file-name: .github/zephyr-upstream.yml
+          toolchains: arm-zephyr-eabi
+
+      - name: Prove the workspace has no Nordic Connect SDK
+        run: |
+          set -euxo pipefail
+          ! west list nrf
+
+      - name: Build the samples
+        run: |
+          set -euxo pipefail
+          for sample in hr_receiver hr_transmitter; do
+            ZEPHYR_TOOLCHAIN_VARIANT=host west build \
+              "app/radiant/samples/${sample}" -b native_sim -d build -p always
+            west build "app/radiant/samples/${sample}" \
+              -b nrf52840dk/nrf52840 -d build -p always
+            grep -qx 'CONFIG_RADIANT_BACKEND_NRF=y' build/zephyr/.config
+          done
+

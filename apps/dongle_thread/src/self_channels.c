@@ -437,7 +437,7 @@ static void log_assign_refusal(uint8_t ch, int res, antr_err_t rc,
 
 /*
  * The most device IDs one channel's exclusion list can hold, on either backend:
- * the radiant backend's API_ID_LIST_MAX (apps/common/ant_radio_radiant.c,
+ * the radiant backend's API_ID_LIST_MAX (radiant/src/antr/ant_radio_radiant.c,
  * "what a retail stick accepts") and sdk-ant's ant_id_list_config() list size
  * (0-4, include/ant_interface.h). One more is ANTW_INVALID_LIST_ID.
  */

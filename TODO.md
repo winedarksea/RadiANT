@@ -5,6 +5,41 @@ Weak tests: the scheduler half is fixed (`reserve_from_done_case()` in radiant/t
 Tool footgun: fixed 2026-11-08. ant_ack_gate.py exits non-zero on any quality failure with or without --gate; the 300 s / 300 command sufficiency reason fails only under --gate.
 cc26xx conformance transcript: owed. Release review item 2 changed advanced_options_3 from 0xD5 to 0x05, so `conformance-cc26xx.antser` is stale until re-recorded on a CC2652.
 
+# Module packaging follow-ups
+
+Remaining steps to make `radiant/` an installable, listed Zephyr module. The
+usability work (samples, `antr_*` in the module, stock Zephyr support) is done.
+
+- [ ] **Root-level `zephyr/module.yml`, so a west project entry just works.**
+  West only finds a module at a project's root, and ours is at
+  `radiant/zephyr/module.yml`, so today a consumer adds the repository as a project
+  and then also appends `radiant/` to `ZEPHYR_EXTRA_MODULES`. Add a root
+  `zephyr/module.yml` with `build: cmake: radiant`, `kconfig: radiant/Kconfig`, and
+  `samples`/`tests` paths under `radiant/`.
+  To resolve first: this repo's own west workspace would then discover the module
+  automatically while every app, test and sample also appends it by path under the
+  same name, so check what `zephyr_module.py` does with the duplicate and remove
+  the appends if needed (the Windows `C:\ncs` workflow is not a west workspace for
+  this repo, so it still needs them).
+  Not a blocker: clone size. The whole history packs to 6.7 MiB and `archive/` is
+  5.2 MB, so cleaning up `archive/` is optional, and `.gitignore` would not shrink
+  history anyway. Consumers can also set `clone-depth: 1`.
+
+- [ ] **Rename `antr_*`, `ANTW_*` and `ant_radio.h` to RadiANT-specific names.**
+  They are public API now, and the names describe the ANT serial protocol rather
+  than this project. Keep compatibility aliases for a release. Do this before the
+  listing below, while few people depend on them. `ant_wire.h` is generated, so the
+  prefix changes in `scripts/gen_ant_wire.py`; the sdk-ant comparison backend
+  relies on the prefix not colliding with sdk-ant's own names.
+
+- [ ] **List RadiANT in Zephyr's External Modules docs.** Blocked on the root
+  `module.yml`. Open a "New External Source Code" issue for TSC approval, then a PR
+  adding `doc/develop/manifest/external/radiant.rst` from the template in that
+  directory (`external.rst.tmpl`). Apache-2.0 skips the licence review. Use the
+  "compatible, not certified" wording from ADR 0003. The default manifest is not
+  the target: it is limited to code a Zephyr subsystem, platform, driver or tool
+  uses.
+
 # Discovery issues from the 2026-11-09 review of the last 35 commits
 
 Reviewed through `86233e8`; both issues affect the discovery changes in
@@ -30,7 +65,7 @@ Reviewed through `86233e8`; both issues affect the discovery changes in
   windows. Add regression coverage for installation during an active search
   and for closing searches and retrying the key. The analogous late-key
   limitation on network 0 predates this review range.
-  Code: `apps/common/ant_radio_radiant.c`, `antr_network_address_set()` (around line 3712).
+  Code: `radiant/src/antr/ant_radio_radiant.c`, `antr_network_address_set()` (around line 3712).
 
 # Open issues from the 2026-11-07 RadiANT vs Garmin ANT USB-m comparison
 

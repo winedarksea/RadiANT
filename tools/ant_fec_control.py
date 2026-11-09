@@ -37,7 +37,7 @@ WHAT A FAILURE HERE MEANS. An acknowledged transfer from a slave has to land in
 the master's reply window, ~2190 us after the master's own transmission and only
 +-250 us wide. If every attempt returns TRANSFER_TX_FAILED with no page 71, the
 question is whether the transmit was SLOT-ALIGNED at all - which was a real
-defect in apps/common/ant_radio_radiant.c until 2026-08-17, and which showed up
+defect in radiant/src/antr/ant_radio_radiant.c until 2026-08-17, and which showed up
 identically against a commercial trainer. Run --request-page 70 against a
 known-good commercial machine first: it is read-only, it changes nothing, and it
 separates "this dongle cannot originate" from "that machine refused".

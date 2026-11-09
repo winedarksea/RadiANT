@@ -1,14 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# CONFIG_RADIANT_SEC_HOST_MESSAGES is the only symbol this application needs
-# from apps/common/Kconfig.antr_api - testcase.yaml's radiant.api.sec_host
-# scenario turns it on to compile apps/common/ant_sec_host.c in - but
-# CONFIG_RADIANT_ANTR_API comes along with it from the same file. That is
-# harmless: this application's own CMakeLists.txt adds
-# ../../../apps/common/ant_radio_radiant.c unconditionally rather than reading
-# that symbol (see the comment there), so RADIANT_ANTR_API's value has no
-# effect here either way - it is declared only because RADIANT_SEC_HOST_MESSAGES
-# `depends on` it, and a `depends on` names a symbol that must exist.
-rsource "../../../apps/common/Kconfig.antr_api"
+# prj.conf turns CONFIG_RADIANT_ANTR_API on, which is what compiles the adapter
+# under test. Any scenario that enables CONFIG_RADIANT_SEC gets the host
+# messages too, matching the applications.
+config RADIANT_SEC_HOST_MESSAGES
+	default y if RADIANT_ANTR_API && RADIANT_SEC
 
 source "Kconfig.zephyr"

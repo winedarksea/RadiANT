@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Stock Zephyr, with no Nordic Connect SDK anywhere, for ci.yml's upstream-zephyr
+# job. It is the check that radiant/ works for someone who is not using NCS.
+#
+# v4.4.0 is the Zephyr that NCS v3.4.0 (west.yml) is based on. Move this when
+# that moves, so a failure here means a real difference between the two.
+
+manifest:
+  version: "0.13"
+
+  projects:
+    - name: zephyr
+      url: https://github.com/zephyrproject-rtos/zephyr
+      revision: v4.4.0
+      import:
+        name-allowlist:
+          - cmsis
+          - cmsis_6
+          - hal_nordic
+
+  self:
+    path: app

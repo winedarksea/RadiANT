@@ -13,6 +13,14 @@ reads.
 
 ### Added
 
+- **RadiANT is usable from other firmware.** The `antr_*` API and its runtime
+  moved into the `radiant` module behind `CONFIG_RADIANT_ANTR_API`, with
+  heart-rate receiver and transmitter samples in `radiant/samples/` and two
+  component switches, `CONFIG_RADIANT_PROFILES` and `CONFIG_RADIANT_BRIDGE`. See
+  `radiant/README.md`.
+- **The module builds on stock Zephyr.** It used to abort Kconfig for every build
+  in a workspace without the Nordic Connect SDK. CI now builds the samples on
+  stock Zephyr v4.4.0.
 - **The event filter filters.** `MESG_EVENT_FILTER_CONFIG` (0x79) now suppresses
   the events it names at delivery, after internal accounting. The default of 0
   passes everything.

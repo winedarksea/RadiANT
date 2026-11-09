@@ -796,7 +796,7 @@ slot, in *both* arms. The proposed root cause — that `RADIANT_TIME_NEVER`
 resolves to an arbitrary phase and the packet "lands where nobody is listening"
 — is false on this backend, and the slot-aligned build bought nothing while
 adding up to one channel period of latency to every acknowledged transfer in
-the tree. **Arm B was therefore reverted.** `apps/common/ant_radio_radiant.c`
+the tree. **Arm B was therefore reverted.** `radiant/src/antr/ant_radio_radiant.c`
 carries the tombstone so the idea is not re-had.
 
 **What is actually broken is the return acknowledgement.** The receiver has the
@@ -893,7 +893,7 @@ host's point of view does not stop the radio re-sending it.
 An acknowledged transfer now completes on air, end to end, for the first time:
 **16 of 18** `TRANSFER_TX_COMPLETED` against 0 of 13 before. Everything in
 §7.4a–§7.7a was chasing a receiver that was never the problem — all four faults
-are in the dongle stack (`apps/common/ant_radio_radiant.c` and `radiant/`), and
+are in the dongle stack (`radiant/src/antr/ant_radio_radiant.c` and `radiant/`), and
 both ends of every failing test were ours.
 
 **The rig that finally separated the failure modes.** Two boards, both running

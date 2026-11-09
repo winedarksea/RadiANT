@@ -87,7 +87,7 @@ choice ANT_DONGLE_RADIO
 	prompt "ANT radio backend"
 	default ANT_DONGLE_RADIO_CORE
 	help
-	  Which implementation of apps/common/ant/ant_radio.h is compiled.
+	  Which implementation of radiant/include/radiant/ant_radio.h is compiled.
 
 	  UNLIKE EVERY OTHER APPLICATION IN THIS REPOSITORY, "sdk_ant" is not a
 	  real option here: sdk-ant is Nordic's proprietary radio stack, built

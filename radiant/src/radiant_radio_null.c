@@ -43,8 +43,11 @@
  */
 
 #include <zephyr/kernel.h>
+#include <zephyr/logging/log.h>
 
 #include <radiant/radiant_radio_hal.h>
+
+LOG_MODULE_REGISTER(radiant_radio_null, CONFIG_RADIANT_LOG_LEVEL);
 
 /* ---------------------------------------------------------------------------
  * Capabilities
@@ -137,6 +140,11 @@ int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 	null_user = user;
 	null_inited = true;
 	null_enabled = false;
+#if !defined(CONFIG_ARCH_POSIX)
+	/* The build warned too, but this is the line someone debugging a silent
+	 * board will actually be looking at. */
+	LOG_WRN("NULL radio backend: this image cannot transmit or receive");
+#endif
 	return RADIANT_RADIO_OK_RC;
 }
 

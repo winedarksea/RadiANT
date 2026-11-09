@@ -24,11 +24,25 @@ source "subsys/logging/Kconfig.template.log_config"
 
 choice RADIANT_BACKEND
 	prompt "radiant radio backend"
+	# The radio the silicon actually has, and null only where it has none.
+	# A null image boots, answers every call with OK and hears nothing, which
+	# looks exactly like a dead antenna, so it must not be what a downstream
+	# project gets for writing CONFIG_RADIANT=y and nothing else. A default
+	# whose symbol is not visible is skipped, so a depends-on that fails below
+	# (CONFIG_BT with no MPSL gate, say) still lands on null - which
+	# CMakeLists.txt then says out loud.
+	default RADIANT_BACKEND_NRF if SOC_COMPATIBLE_NRF52X || \
+				       SOC_COMPATIBLE_NRF54LX || \
+				       SOC_COMPATIBLE_NRF53X
+	default RADIANT_BACKEND_CC26XX if SOC_SERIES_CC13X2_CC26X2
 	default RADIANT_BACKEND_NULL
 	help
 	  radiant decides what goes on the air and when; a backend decides
 	  how. include/radiant/radiant_radio_hal.h is the whole of that
 	  boundary and its eight entry points are what a backend supplies.
+
+	  Defaults to the backend for this SoC, or to null on a target with
+	  no supported radio (native_sim, for one).
 
 	  A backend REPLACES the others rather than joining them: two
 	  definitions of radiant_radio_now() is a duplicate-symbol link error,
@@ -43,7 +57,9 @@ config RADIANT_BACKEND_NULL
 	  host, runs the scheduler, the search policy, the channel state
 	  machines and the event queue, and finds no sensors.
 
-	  This is the honest default while no real backend exists.
+	  Right for a compile check or a target with no supported radio. On
+	  real hardware the build prints a warning, because such an image
+	  never receives anything.
 
 config RADIANT_BACKEND_NONE
 	bool "none - the application supplies the HAL"
@@ -366,6 +382,10 @@ config RADIANT_BACKEND_NRF_GATE_MPSL
 	# in the middle of a hundred lines of them, compiled the direct backend,
 	# and produced an image that works perfectly and answers a different
 	# question than the one asked.
+	#
+	# MPSL itself is a Nordic Connect SDK component, though, so the gate can
+	# only exist where that SDK does. On stock Zephyr this is unselectable.
+	depends on ZEPHYR_NRF_MODULE
 	select MPSL
 	select MPSL_ASSERT_HANDLER
 	help
@@ -734,7 +754,13 @@ config SYSTEM_WORKQUEUE_STACK_SIZE
 # handlers hand their work on rather than doing it - but the default is 1024
 # and the margin over "hand it on" is not worth being tight about on a path
 # that only runs when something has already gone wrong.
+#
+# THE TYPE IS REQUIRED. This symbol is declared by the Nordic Connect SDK and
+# nowhere else, so on stock Zephyr this block is its only definition, and a
+# typeless definition is a Kconfig warning that Zephyr turns into a hard error
+# for every build in the workspace, CONFIG_RADIANT=n included.
 config MPSL_WORK_STACK_SIZE
+	int
 	default 2048 if RADIANT_BACKEND_NRF_GATE_MPSL
 
 # ==== W4: the gate's own work queue ==========================================
@@ -815,13 +841,34 @@ config RADIANT_BACKEND_MPSL
 	  CONFIG_RADIANT_BACKEND_NRF plus
 	  CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL.
 
-# CONFIG_RADIANT_ANTR_API and CONFIG_RADIANT_SEC_HOST_MESSAGES used to be
-# declared here. They moved to src/Kconfig.antr_api - an application-side
-# fragment, rsourced by every Kconfig tree that links this module's "core"
-# backend - because the files they gate (src/ant_radio_radiant.c,
-# src/ant_sec_host.c) are the seam between radiant and the ANT serial
-# protocol, not core module material. See that file's header for the full
-# reasoning.
+config RADIANT_PROFILES
+	bool "the ANT+ device profile library (src/profiles/)"
+	help
+	  Page encoders and decoders for heart rate, power, fitness equipment
+	  and the other profiles, on the include path as "profile_hr.h" and
+	  so on. Unused profiles are dropped at link time, so there is one
+	  switch rather than one per profile.
+
+config RADIANT_BRIDGE
+	bool "the sample bus, sinks and profile adapters (src/bridge/)"
+	select RADIANT_PROFILES
+	help
+	  Turns decoded profile data into typed samples and delivers them to
+	  sinks registered with RADIANT_SINK_DEFINE. On the include path as
+	  "radiant_bridge.h", "radiant_hr_adapter.h" and so on.
+
+config RADIANT_ANTR_API
+	bool "the antr_* channel API and its runtime"
+	help
+	  src/antr/: initialises the link layer, runs the event thread and
+	  drives the scheduler, search and transfers, behind the antr_* calls
+	  declared in <radiant/ant_radio.h>. This is the usual way to use
+	  radiant: call antr_init(), configure a channel, and implement
+	  antr_on_message() to receive.
+
+	  Default n because it defines the port hooks (radiant_on_message()
+	  and the radiant_event_* functions) that a project using the
+	  low-level API writes for itself.
 
 config RADIANT_PHY_LR_CODED
 	bool "advertise the coded (LE Coded S=8) PHY"
@@ -1092,11 +1139,17 @@ config RADIANT_SEC_MAX_CHANNELS
 	  CONFIG_RADIANT_SEC is off, because the table does not exist. Eight
 	  matches the legacy ANT+ channel ceiling.
 
-# CONFIG_RADIANT_SEC_HOST_MESSAGES used to be declared here, inside this `if
-# RADIANT_SEC` block. It moved to src/Kconfig.antr_api alongside
-# CONFIG_RADIANT_ANTR_API (see the note near that symbol, above), and
-# carries an explicit `depends on RADIANT_SEC` now that it is no longer
-# nested inside this block to inherit the dependency implicitly.
+config RADIANT_SEC_HOST_MESSAGES
+	bool "compile the 0xF1-0xF5 host messages"
+	depends on RADIANT_ANTR_API
+	help
+	  src/antr/ant_sec_host.c: the antr_sec_* calls behind message IDs
+	  0xF1 (configure), 0xF2 (set key), 0xF3 (epoch), 0xF4 (status) and
+	  0xF5 (pairing).
+
+	  Without it the transforms exist and nothing can turn them on over
+	  the serial protocol, which is the right shape for a node application
+	  that configures its own channels in C.
 
 config RADIANT_SEC_PAIRING_X25519
 	bool "X25519 pairing over the acknowledged/burst path"

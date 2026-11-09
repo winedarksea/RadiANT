@@ -108,12 +108,11 @@ endfunction()
 # a link-only check is genuinely what is wanted, as docs/matter-bringup.md
 # and scripts/flash_ti.ps1's size-comparison recipe both do.
 #
-# One thing deliberately NOT changed: the Kconfig choice default in
-# radiant/Kconfig is still RADIANT_BACKEND_NULL. tests/import_smoke depends on
-# it - it builds radiant standalone on native_sim, never calls this function,
-# and has no radio, no nRF SoC symbols and no `radiant,radio-timer` node. That
-# is the one build in the tree that genuinely needs null, and a CMake-side
-# default cannot reach it anyway.
+# The Kconfig choice default in radiant/Kconfig now follows the SoC too, for
+# projects that never call this function, and is null only on a target with no
+# supported radio. tests/import_smoke is that case: it builds radiant
+# standalone on native_sim, with no nRF SoC symbols and no
+# `radiant,radio-timer` node.
 #
 # RADIANT_BACKEND is forwarded from sysbuild the same way ANT_RADIO is, and
 # for the same reason: `west build -- -DRADIANT_BACKEND=nrf` sets it on the

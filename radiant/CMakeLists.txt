@@ -43,13 +43,11 @@
 # violation for a module meant to be dropped into a project with nothing else
 # from this repository on its include path. radiant_msg.h and radiant_wire.h
 # (both in include/) are what replaced it: radiant_event.c now produces struct
-# radiant_msg and calls radiant_on_message(), both module-owned, and
-# radiant_api.c moved out entirely to src/ant_radio_radiant.c, where the
-# antr_* names it always spoke belong. See those two headers' own comments for
-# the full story.
+# radiant_msg and calls radiant_on_message(), both module-owned. See those two
+# headers' own comments for the full story.
 #
 # EXPOSED BEFORE THE CONFIG_RADIANT GUARD, unconditionally, and that is not an
-# accident either: apps/common/ant/ant_wire.h - the ANTW_* header every ANT_RADIO
+# accident either: radiant/include/radiant/ant_wire.h - the ANTW_* header every ANT_RADIO
 # backend compiles, sdk_ant included - is generated as a thin alias of
 # radiant_wire.h rather than a second independently-generated copy of the same
 # wire constants (see that file's own header). A header of pure constants
@@ -79,16 +77,15 @@ zephyr_library_sources(
 # application can exercise the arithmetic whether or not a given build turns
 # the feature on, so the syndrome table's duplicate check runs in CI on every
 # build instead of only on the ones that opted in. CONFIG_RADIANT_CRC_REPAIR
-# gates the CALL SITE in src/ant_radio_radiant.c (application-side; it moved
-# out of this module, see the note on zephyr_include_directories() above),
-# which is where the false-accept trade-off is actually taken.
+# gates the CALL SITE in src/antr/ant_radio_radiant.c, which is where the
+# false-accept trade-off is actually taken.
 zephyr_library_sources(src/radiant_crc_repair.c)
 
 # The third refutation for a repaired frame: is the payload a physically
 # possible reading, for the handful of device types where that is decidable
 # from one frame. Compiled unconditionally for the same reason as
 # radiant_crc_repair.c above; CONFIG_RADIANT_PROFILE_SANITY gates the
-# call site in src/ant_radio_radiant.c.
+# call site in src/antr/ant_radio_radiant.c.
 zephyr_library_sources(src/radiant_profile_sanity.c)
 
 # The channel-quality map. Gated rather than compiled unconditionally like
@@ -132,13 +129,58 @@ zephyr_library_sources_ifdef(CONFIG_RADIANT_SEC_RNG_ENTROPY src/radiant_sec_rng_
 # src/profiles/'s business; this authenticates bytes.
 zephyr_library_sources_ifdef(CONFIG_RADIANT_SEC_COMPAT src/radiant_sec_compat.c)
 
-# The host surface - src/ant_sec_host.c - moved out to the application beside
-# radiant_api.c, for the same reason: it is the one security file that reaches
-# an application header. CONFIG_RADIANT_SEC_HOST_MESSAGES now lives in
-# src/Kconfig.antr_api and gates root/strap's own CMakeLists.txt instead of a
-# source line here. A node with a key baked in and no serial host still has no
-# use for 0xF1-0xF4 and still should not link them - that choice just belongs
-# to the application now, same as CONFIG_RADIANT_ANTR_API's did.
+# The antr_* runtime: the usual way to use this module. Off by default, because
+# it defines the port hooks a project on the low-level API writes for itself.
+# A node with a key baked in and no serial host has no use for the 0xF1-0xF5
+# messages and should not link them, so those have their own symbol.
+zephyr_library_sources_ifdef(CONFIG_RADIANT_ANTR_API src/antr/ant_radio_radiant.c)
+zephyr_library_sources_ifdef(CONFIG_RADIANT_SEC_HOST_MESSAGES src/antr/ant_sec_host.c)
+
+# Library code a project opts into. One switch each rather than one per profile:
+# the link drops whatever nothing calls. The applications in this repository
+# leave both off and list exactly the files they use. The headers are not under
+# include/radiant/, so these paths are added only when asked for.
+if(CONFIG_RADIANT_PROFILES)
+  zephyr_include_directories(src/profiles)
+  zephyr_library_sources(
+    src/profiles/profile_bits.c
+    src/profiles/profile_command.c
+    src/profiles/profile_common.c
+    src/profiles/profile_compat.c
+    src/profiles/profile_controls.c
+    src/profiles/profile_enrol.c
+    src/profiles/profile_env.c
+    src/profiles/profile_fec.c
+    src/profiles/profile_fec_tx.c
+    src/profiles/profile_freq.c
+    src/profiles/profile_handoff.c
+    src/profiles/profile_hr.c
+    src/profiles/profile_lev.c
+    src/profiles/profile_power.c
+    src/profiles/profile_power_decode.c
+    src/profiles/profile_private.c
+    src/profiles/profile_rd.c
+    src/profiles/profile_sched.c
+    src/profiles/profile_schedule.c
+    src/profiles/profile_sdm.c
+    src/profiles/profile_telemetry.c
+    src/profiles/profile_tracker.c
+  )
+endif()
+
+if(CONFIG_RADIANT_BRIDGE)
+  zephyr_include_directories(src/bridge)
+  zephyr_library_sources(
+    src/bridge/radiant_bridge.c
+    src/bridge/radiant_hr_adapter.c
+    src/bridge/radiant_power_adapter.c
+    src/bridge/radiant_common_adapter.c
+    src/bridge/radiant_env_adapter.c
+    src/bridge/radiant_rd_adapter.c
+  )
+  # Without this the sink list's start and end symbols do not exist.
+  zephyr_linker_sources(SECTIONS src/bridge/radiant_bridge_sections.ld)
+endif()
 
 # X25519, under its own symbol and in src/ext/ because it is a standard
 # algorithm rather than RadiANT protocol logic - the directory is the signal
@@ -161,6 +203,15 @@ zephyr_library_sources_ifdef(CONFIG_RADIANT_SEC_PAIRING_X25519
 # beats a link error whose cause is three layers away.
 if(CONFIG_RADIANT_BACKEND_NULL)
   zephyr_library_sources(src/radiant_radio_null.c)
+  # native_sim has no radio, so null is simply correct there. Anywhere else this
+  # image will boot and never hear anything, which looks like a dead antenna.
+  if(NOT CONFIG_ARCH_POSIX)
+    message(WARNING
+      "radiant: building the NULL radio backend for ${BOARD}. This image "
+      "cannot transmit or receive. If that is not what you want, set "
+      "CONFIG_RADIANT_BACKEND_NRF=y or CONFIG_RADIANT_BACKEND_CC26XX=y and "
+      "check that its `depends on` is met (CONFIG_BT needs the MPSL gate).")
+  endif()
 elseif(CONFIG_RADIANT_BACKEND_CC26XX)
   # The second vendor. Written against include/radiant/radiant_radio_hal.h
   # and the measurements in radiant/spike/ti_phy, and against nothing else
@@ -303,18 +354,8 @@ elseif(CONFIG_RADIANT_BACKEND_NRF)
   else()
     zephyr_library_sources(src/radiant_radio_nrf_gate_direct.c)
   endif()
-  message(WARNING
-    "radiant: the nrf backend transmits and receives. Its ramp-up and "
-    "turnaround figures are datasheet values, and the t_sync calibration "
-    "constants - now three, one per PHY on receive plus one shared on "
-    "transmit - are SEEDED from Zephyr's per-SoC BLE chain delays rather than "
-    "measured on this bench - a defensible prior at a different deviation, not "
-    "the wired two-board trigger the HAL contract asks for. The coded PHY's "
-    "receive constant (-30 us) is three times the 1 M one and is no better "
-    "established; ADR 0007 records both as bounded rather than measured. "
-    "Every register "
-    "fact is measured on nRF54L15 only. Expect timing to be approximately "
-    "calibrated rather than exact - see the 'what is measured and what is not' "
-    "header in src/radiant_radio_nrf.c before reading any A/B timing result "
-    "off this build.")
+  # This used to be a CMake WARNING on every nRF build. A permanent warning is
+  # one nobody reads, and it would bury the null-backend warning above. The
+  # calibration caveats it carried live in the 'what is measured and what is
+  # not' header of src/radiant_radio_nrf.c and in README.md.
 endif()

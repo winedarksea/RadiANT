@@ -27,8 +27,8 @@
 #include <zephyr/ztest.h>
 #include <string.h>
 
-#include "ant_radio.h"
-#include "ant_wire.h"
+#include <radiant/ant_radio.h>
+#include <radiant/ant_wire.h>
 #include "ant_radio_radiant_priv.h"
 
 #include <radiant/radiant_channel.h>

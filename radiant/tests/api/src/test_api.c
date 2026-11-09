@@ -32,8 +32,8 @@
 #include <radiant/radiant_sec.h>
 #include <radiant/radiant_transfer.h>
 
-#include "ant_radio.h"
-#include "ant_wire.h"
+#include <radiant/ant_radio.h>
+#include <radiant/ant_wire.h>
 
 /* A real sensor (#14871 / 0x3A17, bicycle power, trans type 5) so byte
  * comparisons against capture lines need no translation. */

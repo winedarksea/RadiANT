@@ -349,7 +349,7 @@ radiant made them in two places, and the second is the one that mattered:
 ```
 SIGNAL_RADIO (ZLI) -> radiant_nrf_gate_on_radio_irq() -> deliver_terminal()
   -> radiant_event_post_rx() -> radiant_event_wakeup()   radiant_event.c:404
-  -> k_sem_give(&api_event_sem)            apps/common/ant_radio_radiant.c
+  -> k_sem_give(&api_event_sem)            radiant/src/antr/ant_radio_radiant.c
 ```
 
 The API event thread waits on that semaphore **with a timeout**
@@ -568,7 +568,7 @@ where it went - knowingly, and reversible.
 * `radiant/Kconfig` - `CONFIG_RADIANT_GATE_MPSL_PLACE_LEAD_US` /
   `..._PLACE_MIN_US` and the sweep table.
 * `radiant/include/radiant/radiant_swi.h`, `radiant/src/radiant_swi.c`.
-* `apps/common/ant_radio_radiant.c` - `radiant_event_wakeup()`.
+* `radiant/src/antr/ant_radio_radiant.c` - `radiant_event_wakeup()`.
 * `apps/dongle_thread/thread.conf` - the work-queue stack, with the reason.
 * `radiant/tests/gate/src/test_gate.c` (the `fake_mpsl_last_request()`
   assertion bug 25 walked past) and `radiant/tests/gate/fake_swi.c`.

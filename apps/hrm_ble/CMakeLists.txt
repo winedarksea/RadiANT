@@ -29,9 +29,8 @@ cmake_minimum_required(VERSION 3.20.0)
 # puts nothing on the air - indistinguishable from a dead antenna, and it has
 # cost this project a Feather flash and a whole session once already.
 #
-# radiant's own KCONFIG default is still RADIANT_BACKEND_NULL, and that
-# asymmetry is deliberate and permanent: it is what tests/import_smoke builds
-# against on native_sim, where no real backend could resolve.
+# radiant's own Kconfig default follows the SoC as well, and is null only where
+# no real backend could resolve - tests/import_smoke on native_sim.
 include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/radiant_backend.cmake")
 radiant_select_backend("${CMAKE_CURRENT_SOURCE_DIR}/../../radiant" "nrf" RADIANT_BACKEND_CONF)
 
@@ -120,9 +119,9 @@ endif()
 
 # ── The antr_* adapter ──────────────────────────────────────────────────────
 #
-# apps/common/ant_radio_radiant.c (radiant_api.c, before it moved out of
+# radiant/src/antr/ant_radio_radiant.c (radiant_api.c, before it moved out of
 # radiant) is what actually implements antr_init() and the rest of
-# apps/common/ant/ant_radio.h on top of radiant's modules -
+# radiant/include/radiant/ant_radio.h on top of radiant's modules -
 # CONFIG_RADIANT=y alone no longer pulls it in, since it is application-side
 # now (see apps/common/Kconfig.antr_api). hrm_backend_conf above forces
 # CONFIG_RADIANT_ANTR_API=y unconditionally, so this is never conditional in

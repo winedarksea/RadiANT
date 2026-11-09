@@ -119,8 +119,8 @@ endif()
 
 # ── The antr_* adapter ──────────────────────────────────────────────────────
 #
-# apps/common/ant_radio_radiant.c is what implements antr_init() and the rest of
-# apps/common/ant/ant_radio.h on top of radiant's modules. The generated backend
+# radiant/src/antr/ant_radio_radiant.c is what implements antr_init() and the rest of
+# radiant/include/radiant/ant_radio.h on top of radiant's modules. The generated backend
 # fragment above forces CONFIG_RADIANT_ANTR_API=y unconditionally.
 include("${CMAKE_CURRENT_SOURCE_DIR}/../common/sources.cmake")
 

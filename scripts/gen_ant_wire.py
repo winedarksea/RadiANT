@@ -67,13 +67,15 @@ except ImportError:  # pragma: no cover - user-facing guidance
 
 ROOT = Path(__file__).resolve().parent.parent
 SPEC_PATH = ROOT / "protocol" / "ant_wire.yaml"
-# apps/common/ant/, NOT src/. A stale path here is worse than a broken one:
-# the generator would CREATE a stray file at the wrong location, --check would
-# compare against that stray and find it "in sync", and the real header could
-# drift freely with CI green throughout. Anything added here must fail loudly
-# when its target is missing rather than quietly write a new file beside it -
-# see check_outputs() below.
-HEADER_PATH = ROOT / "apps" / "common" / "ant" / "ant_wire.h"
+# The module's include/, beside radiant_wire.h, because the antr_* API that uses
+# these names is part of the module. apps/common/ant/ant_wire.h is a hand-written
+# one-line forward and is not an output. A stale path here is worse than a broken
+# one: the generator would CREATE a stray file at the wrong location, --check
+# would compare against that stray and find it "in sync", and the real header
+# could drift freely with CI green throughout. Anything added here must fail
+# loudly when its target is missing rather than quietly write a new file beside
+# it - see check_outputs() below.
+HEADER_PATH = ROOT / "radiant" / "include" / "radiant" / "ant_wire.h"
 RADIANT_WIRE_HEADER_PATH = ROOT / "radiant" / "include" / "radiant" / "radiant_wire.h"
 PYTHON_PATH = ROOT / "tools" / "ant_wire.py"
 DOC_PATH = ROOT / "docs" / "ant-serial-protocol.md"

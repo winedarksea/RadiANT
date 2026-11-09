@@ -1,0 +1,14 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * The timer RadiANT's nRF backend uses. It needs five compare channels, which
+ * on nRF52 means TIMER3 or TIMER4.
+ */
+/ {
+	chosen {
+		radiant,radio-timer = &timer4;
+	};
+};
+
+&timer4 {
+	status = "okay";
+};

@@ -34,6 +34,11 @@ project(radiant_tests)
 # one suite file: an explicit source list would make this file contested, and
 # a contested file serialises the fan-out it exists to enable.
 file(GLOB suite_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.c")
+# The one suite whose code is outside the module. See the end of this file.
+set(RADIANT_TESTS_APPS_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/../../apps/common")
+if(NOT EXISTS "${RADIANT_TESTS_APPS_COMMON}/ant_rgb_led_curve.c")
+  list(REMOVE_ITEM suite_sources "${CMAKE_CURRENT_SOURCE_DIR}/src/test_rgb_led_curve.c")
+endif()
 target_sources(app PRIVATE ${suite_sources})
 
 # ── The mock radio ──────────────────────────────────────────────────────────
@@ -313,7 +318,10 @@ target_sources(app PRIVATE
 # Listed explicitly, like every implementation above: src/ is globbed and
 # implementations are not, so a missing line here is a link error rather than a
 # silently missing test.
-target_sources(app PRIVATE
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../apps/common/ant_rgb_led_curve.c")
-target_include_directories(app PRIVATE
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../apps/common")
+#
+# Guarded so this suite still configures when radiant/ is built on its own, away
+# from the rest of the repository. CI's import-smoke job does exactly that.
+if(EXISTS "${RADIANT_TESTS_APPS_COMMON}/ant_rgb_led_curve.c")
+  target_sources(app PRIVATE "${RADIANT_TESTS_APPS_COMMON}/ant_rgb_led_curve.c")
+  target_include_directories(app PRIVATE "${RADIANT_TESTS_APPS_COMMON}")
+endif()
