@@ -2047,7 +2047,8 @@ ZTEST(api, test_a_slave_on_57_still_sweeps_57)
  * Zwift's keyless background scans, in the order its capture sets them up
  * (captures/zwift-20261018: key on network 0 only, then channel 0 assigned to
  * network 2 with ALWAYS_SEARCH, wildcard ID, RF 71; network 1 scans sit on RF
- * 53). Such a channel's own frequency says nothing about where ANT+ devices
+ * 53 in captures/zwift-20260818 and -20260820, where that assign was accepted).
+ * Such a channel's own frequency says nothing about where ANT+ devices
  * are - the sweep hears only the ANT+ address - so it must neither move the
  * sweep nor be refused what the sweep hears on 57.
  */
@@ -2146,7 +2147,7 @@ static bool window_has_lo(const struct fake_radio_arm *w, uint8_t lo)
  * A tracked slave notes its device in the seen cache on ITS channel's
  * frequency, not on whatever the sweep happens to be on. Setup: a keyless
  * channel on RF 71 acquires #D off the 57 sweep and tracks it on network 2's
- * zero address (what Zwift's channels do). A tracked frame arrives, so D is
+ * zero address. A tracked frame arrives, so D is
  * noted - as heard on 71. A keyed wildcard slave on 57 then starts searching:
  * the cache must not steer it to a device heard on another frequency, so its
  * first window is the round-robin's next set, not D's set again.

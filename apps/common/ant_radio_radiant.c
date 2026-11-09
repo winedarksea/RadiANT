@@ -1333,7 +1333,8 @@ static void api_search_begin(uint8_t ch, radiant_time_t now)
 	 * address, so a keyless channel's own RF says nothing about where ANT+
 	 * devices are: Zwift's keyless background scans sit on RF 71 (network 2)
 	 * and RF 53 (network 1) and rely on the sweep staying on 57 and handing
-	 * them what it hears there (captures/zwift-20261018). Declared, they
+	 * them what it hears there (RF 71: captures/zwift-20261018; RF 53:
+	 * captures/zwift-20260818 and -20260820). Declared, they
 	 * would drag the sweep to a frequency with no ANT+ devices on it and
 	 * refuse every frame heard on 57.
 	 */
