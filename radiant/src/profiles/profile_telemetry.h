@@ -81,8 +81,10 @@ extern "C" {
  *
  * The extension rule, for what a receiver accepts: versions 1..7 are
  * layout-compatible, so a v1 receiver decodes a node announcing 2..7 by the v1
- * layout and ignores what it does not know (informational flags, schedule-frame
- * bits 42..47, unknown flag bits 3..0). Versions 8..15 (and 0) change the
+ * layout and ignores what it does not know (schedule-frame bits 42..47; of the
+ * frame 0 flags, bits 2..0 are known and bit 3 is reserved-must-be-zero and
+ * REFUSED, so a new informational flag does not live there). Versions 8..15 (and
+ * 0) change the
  * layout and are REJECTED: the receiver must reject the node rather than guess.
  * A change a v1 receiver cannot ignore must use 8 or above. docs/radiant-
  * telemetry.md section 6. */

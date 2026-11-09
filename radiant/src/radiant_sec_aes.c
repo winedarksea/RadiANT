@@ -124,8 +124,10 @@ static uint32_t mix_column(uint32_t c)
  * cache would silently encrypt under the old key if one were destroyed and
  * another imported at the same address.
  *
- * NOT RE-ENTRANT - radiant serialises every call with api_lock, and the
- * no-crypto-in-ISR rule makes that sufficient.
+ * NOT RE-ENTRANT - radiant serialises every call with api_lock (and
+ * radiant_sec asserts it in a CONFIG_ASSERT build), and no crypto runs in an
+ * ISR: the TX transform is posted from the pump, not from the scheduler's
+ * terminal callback.
  */
 static uint32_t sched[AES128_WORDS];
 static uint32_t sched_serial;   /* 0 = nothing cached */

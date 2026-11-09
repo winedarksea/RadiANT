@@ -26,6 +26,7 @@
 #include <string.h>
 
 #include <zephyr/kernel.h>
+#include <zephyr/sys/atomic.h>
 
 #include <radiant/radiant_sec.h>
 #include <radiant/radiant_channel.h>
@@ -254,14 +255,35 @@ void radiant_sec_pair_leave(uint8_t ch)
 	ctx_free(ctx_of(ch));
 }
 
+/* Channels whose peer was lost, to be released under the port's lock. */
+static atomic_t pair_lost;
+
 void radiant_sec_pair_on_search(uint8_t ch)
 {
-	struct pair_ctx *c = ctx_of(ch);
-
 	/* Loss of tracking: peer is gone mid-exchange, no completion/failure
-	 * event will ever arrive, so this is the only release point. */
-	if (c != NULL) {
-		ctx_free(c);
+	 * event will ever arrive, so this is the only release point. Called
+	 * from the radio callback, so it only records the fact: freeing here
+	 * would zero local_pub and the scalar under a pair_peer() that is in
+	 * the middle of its 375 ms X25519 (it would then derive and install a
+	 * root from zeros and leave the channel silently dead). */
+	if (ch < (uint8_t)RADIANT_CHANNEL_COUNT) {
+		(void)atomic_or(&pair_lost, (atomic_val_t)(1u << ch));
+	}
+}
+
+void radiant_sec_pair_service(void)
+{
+	uint8_t ch;
+
+	RADIANT_SEC_ASSERT_LOCKED();
+	if (atomic_get(&pair_lost) == 0) {
+		return;
+	}
+	for (ch = 0u; ch < (uint8_t)RADIANT_CHANNEL_COUNT; ch++) {
+		if ((atomic_and(&pair_lost, ~(atomic_val_t)(1u << ch)) &
+		     (atomic_val_t)(1u << ch)) != 0) {
+			ctx_free(ctx_of(ch));
+		}
 	}
 }
 
@@ -434,6 +456,7 @@ void radiant_sec_pair_reset(void)
 	uint8_t i;
 
 	pair_map_init();
+	atomic_set(&pair_lost, 0);
 	for (i = 0u; i < (uint8_t)PAIR_MAX_CH; i++) {
 		ctx_free(&pair[i]);
 	}

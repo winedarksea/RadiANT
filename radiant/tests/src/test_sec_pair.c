@@ -288,7 +288,10 @@ ZTEST(sec_pair, test_loss_of_tracking_releases_the_exchange)
 		      radiant_sec_pair_set_scalar(A_CH, scalar_a));
 	zassert_true(radiant_sec_pair_is_open(A_CH));
 
+	/* Loss of tracking comes from the radio callback, which only marks the
+	 * channel; the port releases it under its lock (housekeeping). */
 	radiant_sec_pair_on_search(A_CH);
+	radiant_sec_pair_service();
 
 	zassert_false(radiant_sec_pair_is_open(A_CH),
 		      "pairing survived loss of tracking; there is no other "

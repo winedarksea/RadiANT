@@ -129,8 +129,8 @@ v1.
 ```
 K_enc  = KDF(K_root, "enc" || epoch)
 stream = AES-128-CTR(K_enc, nonce_block)
-ct[2..6] = pt[2..6] XOR stream[2..6]           (X_AUTH on)
-ct[2..7] = pt[2..7] XOR stream[2..7]           (X_AUTH off)
+ct[2..6] = pt[2..6] XOR stream[0..4]           (X_AUTH on)
+ct[2..7] = pt[2..7] XOR stream[0..5]           (X_AUTH off)
 ```
 
 Bytes `[0]` (page number) and `[1]` (counter) stay in the clear, because a

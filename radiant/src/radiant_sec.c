@@ -831,14 +831,6 @@ static int tx_slot_index(struct sec_ctx *c, uint64_t t_sync, uint32_t *idx)
 int radiant_sec_tx_transform(uint8_t ch, uint8_t *pay, uint8_t len,
 			     uint64_t t_sync)
 {
-	/* NOT RADIANT_SEC_ASSERT_LOCKED(), deliberately, and that is a finding
-	 * rather than an omission: the port reaches this from
-	 * api_post_master_tx(), which api_sched_done() calls from the
-	 * scheduler's terminal callback (the track_repost and turn-around
-	 * paths), i.e. not under api_lock and not in thread context. A
-	 * secured master can therefore run the shared AES schedule from that
-	 * callback while the pump holds it. TODO.md records it (WP-B report,
-	 * 2026-11-08); an assert here would fire on every secured master. */
 	struct sec_ctx *c = ctx_of(ch);
 	uint8_t         nonce[RADIANT_SEC_BLOCK_BYTES];
 	uint32_t        idx;
@@ -846,8 +838,17 @@ int radiant_sec_tx_transform(uint8_t ch, uint8_t *pay, uint8_t len,
 	int             rc;
 
 	if (!ctx_armed(c) || pay == NULL || len < SEC_PAGE_BYTES) {
+		/* An unsecured channel is posted from the scheduler's terminal
+		 * callback too and touches no shared state here, so it is not
+		 * held to the lock. */
 		return RADIANT_SEC_OK;
 	}
+	/* From here the call is a SECURED master's, and it reads and writes the
+	 * channel's window state and the shared AES schedule: thread context
+	 * under the port's lock. The port reaches it only from
+	 * api_post_master_tx() via the pump; api_sched_done() leaves a secured
+	 * master to the pump. */
+	RADIANT_SEC_ASSERT_LOCKED();
 	if (!page_secured(c, pay[0])) {
 		/* The descriptor and the common pages travel in the clear, and
 		 * the range is what makes that mechanical. They touch no state:

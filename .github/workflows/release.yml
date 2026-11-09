@@ -2056,7 +2056,10 @@ jobs:
           # same-day baseline; docs/radiant-security.md 5.6). 5948 / 6493
           # after the slot-index counter (TODO item 7, 2026-11-07: +228 / +192
           # against a same-day 5720 / 6301; the context is 560 B, 8 x 560 =
-          # 4480 B of the bss). Ceilings unchanged.
+          # 4480 B of the bss). 6124 / 6493 after the WP-B follow-ups
+          # (2026-11-08, measured with this recipe at NCS v3.4.0): text +8
+          # against 6116 at c4f893c, bss +0, so 20 B of text headroom is left
+          # under the 6144 ceiling. Ceilings unchanged.
           check "security text" "$(( on_text - off_text ))" 6144
           check "security bss"  "$(( on_bss  - off_bss  ))" 7168
 
@@ -2110,9 +2113,11 @@ jobs:
           # ceiling on a third of a feature.
           #
           # RAM APPEARS HERE FOR THE FIRST TIME, because until C4 this file had
-          # none: 1344 B of bss, which is CONFIG_RADIANT_SEC_COMPAT_MAX_CHANNELS
-          # (2) contexts of 672 B, and the bulk of each is the two 248-byte
-          # window buffers a Tier II tag at N = 32 has to cover. It is inside
+          # none: 1440 B of bss, which is CONFIG_RADIANT_SEC_COMPAT_MAX_CHANNELS
+          # (2) contexts of 720 B (was 1344 B / 672 B; the owed-tag window of
+          # 2026-11-08 grew each buffer to 264 B and added tx_fill), and the
+          # bulk of each is the two 264-byte window buffers a Tier II tag at
+          # N = 32 has to cover, N+1 messages. It is inside
           # the disabled build's assertions above - the symbol does not exist
           # there at all - so it needs no ceiling of its own until something
           # links it.
@@ -2126,14 +2131,17 @@ jobs:
           # air), 4216 B; then +236 B for the first-contact fallback (a page
           # that fails as a counter in the held base epoch is tried once more
           # at the counter resolved from the held anchor; docs/radiant-
-          # security.md 11.4), 4452 B. All measured as this step builds it, at
-          # NCS v3.4.0.
+          # security.md 11.4), 4452 B; then the owed Tier II tag (a tag due on
+          # message 119/120 goes out late, so a window holds up to N+1 messages)
+          # cost +16 B and sharing one CMAC pipeline across all four tags took
+          # 208 B back, 4260 B (2026-11-08). All measured as this step builds
+          # it, at NCS v3.4.0.
           #
           # 4608 is the next multiple of 512 above 4452, as every ceiling here
           # is a multiple of 512, and deliberately not another fifth: as the
           # bss paragraph above says, generous rounding hides the drift this
-          # step exists to catch. That leaves 156 B, so the next feature in
-          # this file arrives with its own measurement.
+          # step exists to catch. That leaves 348 B at 4260 B, so the next
+          # feature in this file arrives with its own measurement.
           compat_text="$(sect_of text "${compat_elf}")"
           test -n "${compat_text}"
           check "compat text (linked)" "$(( compat_text - on_text ))" 288

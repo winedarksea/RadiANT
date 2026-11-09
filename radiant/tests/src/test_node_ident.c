@@ -290,6 +290,22 @@ ZTEST(node_ident, test_a_hard_to_receive_draw_is_redrawn_and_the_good_key_persis
 	zassert_equal(13433u, devnum);
 }
 
+ZTEST(node_ident, test_an_all_zero_redraw_is_still_an_rng_failure)
+{
+	static const uint8_t zero_key[NODE_IDENT_K_DEV_BYTES];
+
+	/* The zero rule is not first-draw-only: a hard-to-receive draw followed
+	 * by a backend that now returns zeros must fail as an RNG failure, not be
+	 * redrawn again or stored. */
+	fake_rng_force_next(hard_key, sizeof(hard_key));
+	fake_rng_force_next(zero_key, sizeof(zero_key));
+	zassert_equal(NODE_IDENT_ENOKEY, node_ident_boot());
+	zassert_equal(2u, fake_rng_draw_count(),
+		      "an all-zero redraw was drawn past");
+	zassert_equal(0u, fake_nvm_store_count(), "a zero key reached storage");
+	zassert_false(node_ident_is_provisioned());
+}
+
 ZTEST(node_ident, test_a_good_first_draw_is_not_redrawn)
 {
 	zassert_equal(NODE_IDENT_OK, node_ident_boot());

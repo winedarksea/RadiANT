@@ -1070,15 +1070,13 @@ config RADIANT_SEC_LOCK_CHECK
 	  radiant_sec is not re-entrant: the software AES keeps one shared key
 	  schedule, and the per-channel window state is rewritten by the pump.
 	  The port serialises every call (apps/common: api_lock). With this on,
-	  the configuration, pump, status and pairing entry points call
+	  the configuration, TX, pump, status and pairing entry points call
 	  radiant_sec_port_lock_check(), which the port overrides to assert the
 	  lock is held. The default is a no-op, and the whole check compiles
 	  away when this is off. Entry points that run in an ISR
 	  (radiant_sec_rx_ingest()), the single-word reads
-	  (radiant_sec_channel_is_secured(), radiant_sec_last_verdict()) and
-	  radiant_sec_tx_transform() are deliberately not checked; the last
-	  because the port calls it from the scheduler's terminal callback
-	  without api_lock, which is an open finding and not a design.
+	  (radiant_sec_channel_is_secured(), radiant_sec_last_verdict()) are
+	  deliberately not checked.
 
 config RADIANT_SEC_MAX_CHANNELS
 	int "secured channels"

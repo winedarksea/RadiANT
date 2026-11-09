@@ -872,5 +872,41 @@ class SealedTelemetryDescriptor(unittest.TestCase):
                          ["pass"])
 
 
+class TestCompatTierIILateWindow(unittest.TestCase):
+    """A tag due on message 119 or 120 is owed past them (radiant_sec_compat.c,
+    COMPAT_WIN_EXTRA): a window may hold N-1, N or N+1 covered messages."""
+
+    ROOT = bytes(range(16))
+    EPOCH = 7
+    DEVNUM = 0x3A17
+    N = 8
+
+    def verdict(self, covered_count: int) -> str:
+        v = ant_verify.CompatVerifier(self.ROOT, self.EPOCH, self.DEVNUM,
+                                      window=self.N)
+        msgs = [bytes([0x04, i, 0, 0, 0, 0, 0, 0])
+                for i in range(covered_count)]
+        for m in msgs:
+            v.feed(m)
+        try:
+            tag = ant_verify.rc.compat_tier2_tag(
+                v.k_auth, self.EPOCH, self.DEVNUM, 0, msgs, late=True)
+        except ValueError:
+            tag = bytes(6)      # no honest sender builds a window this size
+        return v.feed(ant_verify.ap.encode_compat_attest_tier2(0, tag))
+
+    def test_n_minus_1_n_and_n_plus_1_covered_messages_verify(self):
+        for covered in (self.N - 1, self.N, self.N + 1):
+            with self.subTest(covered=covered):
+                self.assertEqual(self.verdict(covered),
+                                 ant_verify.ATTEST_VERIFIED)
+
+    def test_a_window_outside_that_range_is_lost_not_verified(self):
+        for covered in (self.N - 2, self.N + 2):
+            with self.subTest(covered=covered):
+                self.assertEqual(self.verdict(covered),
+                                 ant_verify.ATTEST_LOST)
+
+
 if __name__ == "__main__":
     unittest.main()

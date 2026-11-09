@@ -270,6 +270,14 @@ void radiant_sec_pair_leave(uint8_t ch);
 void radiant_sec_pair_on_search(uint8_t ch);
 
 /*
+ * Releases what radiant_sec_pair_on_search() recorded. radiant_sec_pair_on_search()
+ * runs in the radio callback and must not free pairing state a locked
+ * radiant_sec_pair_peer() may be reading, so it only marks the channel; the
+ * port calls this under its lock (housekeeping) to do the free.
+ */
+void radiant_sec_pair_service(void);
+
+/*
  * The host's 32-byte private scalar, and the local public key it produces.
  *
  * THE SCALAR COMES FROM THE HOST because the only entropy source on nRF54L is

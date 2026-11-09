@@ -457,7 +457,10 @@ uint32_t antr_api_lock_violations;
 
 bool antr_api_lock_held(void)
 {
-	return api_lock.lock_count > 0u && api_lock.owner == k_current_get();
+	/* k_current_get() in an ISR is the interrupted thread, which would pass
+	 * exactly the dangerous case, so an ISR never holds the lock. */
+	return !k_is_in_isr() && api_lock.lock_count > 0u &&
+	       api_lock.owner == k_current_get();
 }
 
 /* The port's half of radiant_sec's lock check (radiant_sec.h). radiant_sec
@@ -1750,9 +1753,11 @@ static void api_post_master_tx(uint8_t ch)
 
 #if defined(CONFIG_RADIANT_SEC)
 	/*
-	 * The TX hook: thread context, under api_lock, immediately before the
-	 * frame is built - the latest correct moment, since the TX body is
-	 * DMA'd and armed early. Transforms into a copy, never into
+	 * The TX hook: thread context, under api_lock (api_pump_locked() is
+	 * the only caller for a secured master; the terminal callback does not
+	 * re-post one, see api_sched_done()), immediately before the frame is
+	 * built - the latest correct moment, since the TX body is DMA'd and
+	 * armed early. Transforms into a copy, never into
 	 * api_ch[ch].bcast, whose readback must stay the host's plaintext and
 	 * must not be re-encrypted on every retransmission.
 	 */
@@ -2732,7 +2737,22 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 		    !radiant_sched_pending(ch) &&
 		    radiant_transfer_is_idle(&api_xfer[ch])) {
 			if (radiant_channel_is_master(ch)) {
-				api_post_master_tx(ch);
+				/* A SECURED master is not re-posted from here:
+				 * this is the scheduler's terminal callback
+				 * (the radio ISR on a direct build, the SWI under
+				 * MPSL), and posting runs radiant_sec_tx_transform(),
+				 * which expands the one shared AES key schedule
+				 * under whatever thread holds it and does AES in the
+				 * scheduler's interrupts-off section. It falls
+				 * through to the wake below; the pump posts it under
+				 * api_lock, in thread context
+				 * (api_pump_locked() posts any TRACKING master with
+				 * nothing pending). Costs a secured master one pump
+				 * of latency per missed, denied or acknowledged slot,
+				 * which the 250 ms period absorbs. */
+				if (!radiant_sec_channel_is_secured(ch)) {
+					api_post_master_tx(ch);
+				}
 			} else {
 				api_post_track_rx(ch);
 			}
@@ -2889,6 +2909,11 @@ static void api_housekeep(void)
 	 * housekeeping interval later. */
 	api_watchdogs_locked(now);
 
+#if defined(CONFIG_RADIANT_SEC_PAIRING_X25519)
+	/* The release radiant_sec_pair_on_search() could not do in the radio
+	 * callback. */
+	radiant_sec_pair_service();
+#endif
 	api_pump_locked();
 	api_stats.housekeeps++;
 

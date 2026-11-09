@@ -347,6 +347,74 @@ ZTEST(api, test_sec_an_acknowledgement_carries_what_the_broadcast_put_on_air)
 	sec_close();
 }
 
+#if defined(CONFIG_RADIANT_SEC) && defined(CONFIG_RADIANT_SEC_LOCK_CHECK)
+/*
+ * TODO security item 8 follow-up. A secured master's re-post after a MISSED,
+ * DENIED or completed slot used to be made from api_sched_done(), the
+ * scheduler's terminal callback (the radio ISR on a direct build, the SWI
+ * under MPSL), where radiant_sec_tx_transform() ran without api_lock: the one
+ * shared AES key schedule rewritten under whatever thread held it. Now the
+ * callback leaves a secured master to the pump, which posts under api_lock.
+ * This image's fake radio runs the callback on the test thread without the
+ * lock, so the old path counts a violation (and halts a CONFIG_ASSERT build)
+ * exactly as the real one would be wrong; the new one counts none, and the
+ * denied master still comes back.
+ */
+ZTEST(api, test_sec_a_denied_secured_master_slot_is_posted_by_the_pump_under_the_lock)
+{
+	static const uint8_t root[16] = {
+		0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+		0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+	};
+	const uint32_t period = (uint32_t)radiant_channel_counts_to_us(
+		RADIANT_CHANNEL_PERIOD_ANT_PLUS);
+	uint32_t       base;
+	uint32_t       tx_before;
+	int            rc[4];
+
+	sec_open((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	k_mutex_lock(&api_lock, K_FOREVER);
+	rc[0] = radiant_sec_set_key(SEC_CH, root, 128, SEC_DEVNUM);
+	rc[1] = radiant_sec_set_devnum(SEC_CH, SEC_DEVNUM);
+	rc[2] = radiant_sec_configure(SEC_CH, RADIANT_SEC_SW_CONF, 2u,
+				      RADIANT_SEC_PAGE_LO_DEFAULT,
+				      RADIANT_SEC_PAGE_HI_DEFAULT);
+	rc[3] = radiant_sec_set_epoch(SEC_CH, 1u, 0u, 8182u);
+	k_mutex_unlock(&api_lock);
+	for (int i = 0; i < 4; i++) {
+		zassert_equal(RADIANT_SEC_OK, rc[i], "setup step %d", i);
+	}
+	zassert_true(radiant_sec_channel_is_secured(SEC_CH));
+
+	/* From here, so the completion of the very first slot counts: that
+	 * terminal is where the old code re-posted the master. */
+	base = antr_api_lock_violations;
+	sec_write();
+	sec_run_slot();
+	sec_write();
+	tx_before = fake_radio_stats()->arms_tx;
+	zassert_true(tx_before > 0u, "setup: nothing was ever transmitted");
+
+	/* The arbiter accepts the next slots and then never grants them: the
+	 * DENIED terminal arrives in the radio callback (here, inside
+	 * fake_radio_advance_to()), which is where the old code re-posted. Then
+	 * it gives the air back; the host keeps writing, as a real one does
+	 * every period. */
+	fake_radio_force_terminal_repeat(RADIANT_RADIO_STATUS_DENIED, 3u);
+	for (int i = 0; i < 6; i++) {
+		fake_radio_advance_to(radiant_radio_now() + period);
+		sec_write();
+	}
+
+	zassert_equal(base, antr_api_lock_violations,
+		      "a secured master was re-posted outside api_lock (the "
+		      "scheduler's terminal callback)");
+	zassert_true(fake_radio_stats()->arms_tx > tx_before,
+		     "the denied secured master never transmitted again");
+	sec_close();
+}
+#endif
+
 ZTEST(api, test_sec_an_unsecured_channel_reports_clear)
 {
 	/* "Clear" is the honest word for a channel with no transform on it, and
