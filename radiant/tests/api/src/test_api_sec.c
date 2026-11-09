@@ -409,8 +409,13 @@ ZTEST(api, test_sec_a_denied_secured_master_slot_is_posted_by_the_pump_under_the
 	zassert_equal(base, antr_api_lock_violations,
 		      "a secured master was re-posted outside api_lock (the "
 		      "scheduler's terminal callback)");
-	zassert_true(fake_radio_stats()->arms_tx > tx_before,
-		     "the denied secured master never transmitted again");
+	/* Three denied arms plus at least one that went out once the air came
+	 * back: only the pump can post those, so a master it stops posting
+	 * after a denial falls short. */
+	zassert_true(fake_radio_stats()->arms_tx >= tx_before + 4u,
+		     "the denied secured master never transmitted again "
+		     "(%u arms after %u)", fake_radio_stats()->arms_tx,
+		     tx_before);
 	sec_close();
 }
 #endif

@@ -374,4 +374,19 @@ ZTEST(sec_pair, test_an_exchange_spends_the_scalar)
 		     "the paired key was replaced");
 }
 
+/*
+ * A loss of tracking is recorded on every RX_FAIL_GO_TO_SEARCH, pairing or
+ * not, and waits for the next housekeeping pass. It must not release a pairing
+ * entered after it.
+ */
+ZTEST(sec_pair, test_a_loss_recorded_before_enter_does_not_release_the_pairing)
+{
+	give_id(A_CH, A_DEVNUM);
+	radiant_sec_pair_on_search(A_CH);
+	zassert_ok(radiant_sec_pair_enter(A_CH, 60u));
+	radiant_sec_pair_service();
+	zassert_true(radiant_sec_pair_is_open(A_CH),
+		     "a loss from before ENTER released the new pairing");
+}
+
 #endif /* CONFIG_RADIANT_SEC_PAIRING_X25519 */

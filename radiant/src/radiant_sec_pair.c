@@ -227,9 +227,19 @@ static int pair_derive(const uint8_t *shared, const uint8_t *pub_a,
 	return RADIANT_SEC_OK;
 }
 
+/* Channels whose peer was lost, to be released under the port's lock. */
+static atomic_t pair_lost;
+
 int radiant_sec_pair_enter(uint8_t ch, uint8_t timeout_s)
 {
 	RADIANT_SEC_ASSERT_LOCKED();
+
+	/* A loss recorded before this pairing belongs to whatever came before
+	 * it, and must not release it at the next service. */
+	if (ch < (uint8_t)RADIANT_CHANNEL_COUNT) {
+		(void)atomic_and(&pair_lost, ~(atomic_val_t)(1u << ch));
+	}
+
 	struct pair_ctx *c = ctx_alloc(ch);
 
 	if (c == NULL) {
@@ -254,9 +264,6 @@ void radiant_sec_pair_leave(uint8_t ch)
 	RADIANT_SEC_ASSERT_LOCKED();
 	ctx_free(ctx_of(ch));
 }
-
-/* Channels whose peer was lost, to be released under the port's lock. */
-static atomic_t pair_lost;
 
 void radiant_sec_pair_on_search(uint8_t ch)
 {
