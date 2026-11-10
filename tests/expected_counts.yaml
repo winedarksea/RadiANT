@@ -54,8 +54,9 @@ min_scenarios: 13
 # 2026-11-09: RAISED FROM 3762 TO THE FIRST OBSERVED TWISTER TOTAL, 4167 on
 # 7df6ada. Measured with the ztest job's own twister command and
 # check_test_counts.py on a Linux machine, on the versions west.yml pins
-# (docs/testing.md), rather than on a GitHub runner.
-min_testcases: 4167
+# (docs/testing.md), rather than on a GitHub runner. 4168 since C5-1 added one
+# gate test.
+min_testcases: 4168
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -74,7 +75,8 @@ min_cases.radiant.api: 65
 min_cases.radiant.api.sec: 68
 min_cases.radiant.api.sec_host: 81
 min_cases.radiant.api.crc_repair: 66
-min_cases.radiant.gate: 31
+# 32 since C5-1 (inline BLOCKED backs off the class that was refused).
+min_cases.radiant.gate: 32
 min_cases.hrm_ble.sim_sched: 4
 min_cases.treadmill.pages: 20
 min_cases.treadmill.hr_rx: 3

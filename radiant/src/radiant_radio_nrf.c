@@ -211,15 +211,31 @@ TIMER4; every nRF54L TIMER has at least six."
 
 /*
  * Extends the 32-bit us counter (wraps every 71.6 min) to the HAL's 64 bits.
- * Exact provided a fold runs at least once per wrap; the subtraction is done
- * under an interrupt lock and `last` only moves forwards, so two racing
- * folds cannot lose a tick.
+ * Exact provided a fold runs at least once per wrap. Capture AND fold must be
+ * one critical section against EVERY context that folds. On an arbitrated
+ * build that includes MPSL's zero-latency signal callback (radio_isr(),
+ * deliver_terminal(), program_rx()), which irq_lock() does not mask: a ZLI
+ * fold between a thread's capture and its fold moves `last` past the thread's
+ * stale counter, and the thread's `counter - last` wraps to ~2^32, a permanent
+ * +71.6 min step (review 2026-10-31, A13-1). So CLOCK_LOCK is PRIMASK there,
+ * for a capture and an add (< 1 us). On the direct build no zero-latency
+ * context exists, it is the same irq_lock as ever, and the counter and branch
+ * below are compiled out: a build without CORE_CB_DEFERRED is byte-identical.
  */
 static struct {
 	uint64_t base;   /* microseconds accounted for up to `last` */
 	uint32_t last;   /* the counter value `base` was folded at */
 } radiant_clock;
 
+#if defined(CORE_CB_DEFERRED)
+#define CLOCK_LOCK()    radiant_swi_zli_lock()
+#define CLOCK_UNLOCK(k) radiant_swi_zli_unlock(k)
+/* Folds that went backwards: one raced another context. Should stay zero. */
+static volatile uint32_t radiant_dbg_clock_back;
+#else
+#define CLOCK_LOCK()    irq_lock()
+#define CLOCK_UNLOCK(k) irq_unlock(k)
+#endif
 
 static uint32_t timer_capture(uint8_t cc)
 {
@@ -229,7 +245,12 @@ static uint32_t timer_capture(uint8_t cc)
 
 static uint64_t clock_fold(uint32_t counter)
 {
-	/* Caller holds the interrupt lock. */
+	/* Caller holds CLOCK_LOCK(). */
+#if defined(CORE_CB_DEFERRED)
+	if ((int32_t)(counter - radiant_clock.last) < 0) {
+		radiant_dbg_clock_back++;
+	}
+#endif
 	radiant_clock.base += counter - radiant_clock.last;
 	radiant_clock.last = counter;
 	return radiant_clock.base;
@@ -237,10 +258,10 @@ static uint64_t clock_fold(uint32_t counter)
 
 radiant_time_t radiant_radio_now(void)
 {
-	unsigned int key = irq_lock();
+	unsigned int key = CLOCK_LOCK();
 	uint64_t now = clock_fold(timer_capture(CC_NOW));
 
-	irq_unlock(key);
+	CLOCK_UNLOCK(key);
 	return (radiant_time_t)now;
 }
 
@@ -254,11 +275,11 @@ radiant_time_t radiant_radio_now(void)
  */
 static radiant_time_t clock_absolute(uint32_t counter)
 {
-	unsigned int key = irq_lock();
+	unsigned int key = CLOCK_LOCK();
 	uint64_t base = clock_fold(timer_capture(CC_NOW));
 	int32_t  delta = (int32_t)(counter - radiant_clock.last);
 
-	irq_unlock(key);
+	CLOCK_UNLOCK(key);
 	return (radiant_time_t)((int64_t)base + delta);
 }
 
@@ -266,11 +287,11 @@ static radiant_time_t clock_absolute(uint32_t counter)
  * Only the low 32 bits reach the hardware, which is all a compare uses. */
 static uint32_t clock_counter_at(radiant_time_t t)
 {
-	unsigned int key = irq_lock();
+	unsigned int key = CLOCK_LOCK();
 	uint64_t base = clock_fold(timer_capture(CC_NOW));
 	uint32_t last = radiant_clock.last;
 
-	irq_unlock(key);
+	CLOCK_UNLOCK(key);
 	return last + (uint32_t)((int64_t)t - (int64_t)base);
 }
 

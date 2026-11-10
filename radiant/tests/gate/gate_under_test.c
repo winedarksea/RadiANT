@@ -57,3 +57,11 @@ void gate_probe_read(struct gate_probe *out)
 	out->extendable     = g.extendable;
 	out->end_margin_us  = g.end_margin_us;
 }
+
+/* The one writer in this file: test-harness state reset, never behaviour. */
+void gate_probe_reset_elastic(void)
+{
+	elastic_initial_us = ELASTIC_INITIAL_US;
+	elastic_skew_us = 0u;
+	blocked_run = 0u;
+}

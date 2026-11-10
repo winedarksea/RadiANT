@@ -741,6 +741,15 @@ static struct {
 
 /* The class of the request MPSL currently holds, for the probe counters. */
 static bool grant_high_prio;
+/* The class of the request most recently PLACED. BLOCKED/CANCELLED answer the
+ * placed request, and may arrive from inside mpsl_timeslot_request() - before
+ * commit_next_grant() has made it the current one - so reading g.extendable /
+ * grant_high_prio there attributed the first refusal after every class change
+ * to the previous grant's class (review 2026-10-31, C5-1). Only one request is
+ * ever outstanding, so recording at placement is right for inline and
+ * deferred answers alike. */
+static bool placed_extendable;
+static bool placed_high_prio;
 
 /*
  * How big the elastic class asks its first bite, and why it's a variable.
@@ -826,6 +835,8 @@ static void request_work_fn(struct k_work *w)
 	 * the not-placed case needs undoing below, and no answer can be in
 	 * flight for that. stats.answered_inline counts the inline case.
 	 */
+	placed_extendable = next_grant.extendable;
+	placed_high_prio = next_grant.high_prio;
 	g.mpsl_owes = true;
 	rc = mpsl_timeslot_request(session_id, &req);
 	if (rc == 0) {
@@ -1158,10 +1169,13 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		radiant_nrf_gate_on_grant();
 
 		if (g.release_wanted) {
-			/* Either the operation completed synchronously, or its
-			 * programming failed and recorded the fact. Give the
-			 * timeslot back now and let the work queue tell the core
-			 * about it. */
+			/* Either the operation completed synchronously or nothing
+			 * was staged for this grant, and the backend released it.
+			 * Give the timeslot back now and let the work queue tell
+			 * the core. A programming failure (ETIME from the on-grant
+			 * program_rx()) does NOT come through here: it only sets
+			 * radiant_op.gate_failed, the grant is held to its TIMER0
+			 * end, and end_housekeeping() reports FAILED after that. */
 			g.granted = false;
 			timer0_disarm();
 			end_housekeeping();
@@ -1370,7 +1384,7 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		 */
 		if (signal == MPSL_TIMESLOT_SIGNAL_BLOCKED) {
 			stats.blocked++;
-			if (grant_high_prio) {
+			if (placed_high_prio) {
 				stats.hi_blocked++;
 			}
 		} else {
@@ -1393,11 +1407,12 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		/*
 		 * GIVE WAY BY ASKING FOR LESS, not merely by asking again. See
 		 * elastic_initial_us. Only the elastic class is shortened, and
-		 * `g.extendable` is exactly that class - it is the flag that
-		 * says this request is allowed to grow, which is the same thing
-		 * as saying its length was ours to choose.
+		 * the placed request's extendable flag is exactly that class -
+		 * it says this request is allowed to grow, which is the same
+		 * thing as saying its length was ours to choose. The PLACED
+		 * request's, not g.extendable: see placed_extendable.
 		 */
-		if (g.extendable) {
+		if (placed_extendable) {
 			if (elastic_initial_us > ELASTIC_FLOOR_US) {
 				elastic_initial_us /= 2u;
 				if (elastic_initial_us < ELASTIC_FLOOR_US) {
