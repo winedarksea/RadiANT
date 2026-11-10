@@ -4564,6 +4564,13 @@ static void radio_isr(const void *arg)
 						   radiant_op.t_sync_req);
 
 			radiant_op.kind = OP_NONE;
+#if defined(CORE_CB_DEFERRED)
+			/* This completion is a terminal too, so it owes the
+			 * release deliver_terminal() would have. See THE GRANT
+			 * HANDOFF. Only where a release can be owed: a direct
+			 * build's gate has nothing to give back. */
+			grant_release_after_core();
+#endif
 			core_cb_tx(&evt);
 		}
 
@@ -4810,6 +4817,15 @@ static void radio_isr(const void *arg)
 					rx_diag_window_end(false);
 #endif
 					radiant_op.kind = OP_NONE;
+#if defined(CORE_CB_DEFERRED)
+					/* Owed like any other terminal's, or a
+					 * tracked window that heard its frame holds
+					 * its whole follow-on reserve to the grant's
+					 * own end compare. Before the callback, so
+					 * the handoff keeps the grant if that
+					 * callback arms a follow-on into it. */
+					grant_release_after_core();
+#endif
 				}
 				core_cb_rx(&evt);
 			}
