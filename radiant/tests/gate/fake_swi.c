@@ -22,6 +22,8 @@
 
 #include <radiant/radiant_swi.h>
 
+#include "radiant_radio_nrf_gate.h"
+
 #include "fake_swi.h"
 
 #define FAKE_SWI_SUBS 4
@@ -51,6 +53,9 @@ int radiant_swi_register(uint32_t bits, radiant_swi_handler_t handler)
 void radiant_swi_pend(uint32_t bits)
 {
 	counts.pends++;
+	if (gate_in_signal()) {
+		counts.pends_in_signal++;
+	}
 	counts.bits_seen |= bits;
 	if ((bits & RADIANT_SWI_GATE_REQUEST) != 0u) {
 		counts.request++;

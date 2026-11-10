@@ -213,7 +213,7 @@ uint32_t gate_min_arm_lead_us(void);
  */
 
 /*
- * TRUE WHILE THIS THREAD OF CONTROL IS INSIDE AN MPSL TIMESLOT SIGNAL CALLBACK.
+ * TRUE WHILE THIS THREAD OF CONTROL IS INSIDE A HIGH-PRIORITY MPSL SIGNAL.
  *
  * Which is to say: true while running in a ZERO-LATENCY interrupt, where no
  * kernel API may be called and no Zephyr lock excludes anything (bug 27, and
@@ -225,9 +225,10 @@ uint32_t gate_min_arm_lead_us(void);
  * other ordinary interrupt, and both of those are contexts where calling the
  * core directly is correct. The only context that is not is this one.
  *
- * Reads as a plain bool because the flag is only ever written by the signal
- * callback itself, which cannot preempt itself - MPSL delivers all of
- * START/RADIO/TIMER0 from one priority.
+ * Reads as a plain bool because the flag is only ever written by the
+ * high-priority half of the signal callback, which cannot preempt itself. The
+ * low-priority signals (BLOCKED, SESSION_IDLE and the rest) run in MPSL's
+ * cooperative thread and leave it alone.
  *
  * Always false on the direct backend, where there is no such context.
  *

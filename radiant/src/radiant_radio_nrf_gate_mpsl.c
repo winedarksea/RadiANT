@@ -1111,10 +1111,13 @@ static inline void submit_denial(void)
 	radiant_swi_pend(RADIANT_SWI_GATE_DENY);
 }
 
-/* See gate_in_signal() in radiant_radio_nrf_gate.h. Set for the whole of the
- * callback so the backend can tell a zero-latency completion from an ordinary
- * one; a plain bool because MPSL delivers every signal this file answers from
- * one interrupt priority, so the callback cannot preempt itself. */
+/* See gate_in_signal() in radiant_radio_nrf_gate.h. Set for the whole of a
+ * high-priority signal so the backend can tell a zero-latency completion from
+ * an ordinary one. Not for a low-priority signal: that runs in MPSL's
+ * cooperative thread, where the trampoline can preempt it, and seeing the flag
+ * set there would make a second producer for the backend's single-producer
+ * ring. A plain bool: only the zero-latency callback ever writes it, and that
+ * cannot preempt itself. */
 static volatile bool in_signal;
 
 bool gate_in_signal(void)
@@ -1125,9 +1128,14 @@ bool gate_in_signal(void)
 static mpsl_timeslot_signal_return_param_t *on_signal(
 	mpsl_timeslot_session_id_t id, uint32_t signal)
 {
+	const bool high_prio_signal =
+		signal <= MPSL_TIMESLOT_SIGNAL_EXTEND_SUCCEEDED;
+
 	ARG_UNUSED(id);
 
-	in_signal = true;
+	if (high_prio_signal) {
+		in_signal = true;
+	}
 
 	/* The trace records sequence for a debugging halt: START then TIMER0
 	 * repeating means the compare is re-firing; START then silence means
@@ -1633,7 +1641,9 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 	}
 
 	trace_put(signal, rv.callback_action);
-	in_signal = false;
+	if (high_prio_signal) {
+		in_signal = false;
+	}
 	return &rv;
 }
 

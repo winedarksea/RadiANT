@@ -13,6 +13,8 @@ extern "C" {
 struct fake_swi_counts {
 	uint32_t registers;
 	uint32_t pends;
+	/* How many of them gate_in_signal() called the zero-latency context. */
+	uint32_t pends_in_signal;
 	/* Per producer, so a test can say WHICH deferral was asked for rather
 	 * than only that one was. */
 	uint32_t request;

@@ -59,7 +59,7 @@ min_scenarios: 14
 # check_test_counts.py on a Linux machine, on the versions west.yml pins
 # (docs/testing.md), rather than on a GitHub runner. 4168 since C5-1 added one
 # gate test.
-min_testcases: 4234
+min_testcases: 4237
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -83,7 +83,7 @@ min_cases.radiant.api.sec_host: 81
 min_cases.radiant.api.crc_repair: 66
 # 32 since C5-1 (inline BLOCKED backs off the class that was refused). 38 with
 # the extension skip (ADR 0021).
-min_cases.radiant.gate: 38
+min_cases.radiant.gate: 41
 # radiant.backend (ADR 0021): the backend completion path against register models.
 min_cases.radiant.backend: 8
 min_cases.hrm_ble.sim_sched: 4
