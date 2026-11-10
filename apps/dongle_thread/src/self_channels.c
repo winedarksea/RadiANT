@@ -113,8 +113,8 @@ static const uint8_t ant_plus_key[8] = {
  * merely acquire more slowly - it never acquires at all. Each row's period is
  * transcribed from the named constant in the comment beside it, which is the
  * primary-source-derived definition in radiant/src/profiles/. Those headers
- * are not on this file's include path with CONFIG_ANT_DONGLE_PROFILES_EXTRA
- * off (see CMakeLists.txt), so the numbers are written out, each naming the
+ * were not on its include path when the table was written (they are now, via
+ * the module), so the numbers are written out, each naming the
  * constant it must agree with, and the agreement is a review obligation rather
  * than a compiler-enforced one.
  *

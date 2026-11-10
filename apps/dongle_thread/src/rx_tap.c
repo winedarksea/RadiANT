@@ -81,9 +81,9 @@
 #include "radiant_bridge.h"
 #include "radiant_hr_adapter.h"
 
-/* Packages A-C. These three headers pull in radiant/src/profiles, which is on
- * the include path only when the same symbol is set - see CMakeLists.txt - so
- * the guard is a build precondition here and not only a policy. */
+/* Packages A-C. The module compiles these adapters for every bridge build; the
+ * guard keeps the calls, and so the linked decoders, out of images without the
+ * symbol - see CMakeLists.txt. It is policy, not a build precondition. */
 #ifdef CONFIG_ANT_DONGLE_PROFILES_EXTRA
 #include "radiant_common_adapter.h"
 #include "radiant_env_adapter.h"
@@ -281,8 +281,8 @@ void ant_dongle_rx_tap(const struct antr_msg *msg)
 	 *
 	 * THE EXCEPTION IS COMPILED ONLY WITH CONFIG_ANT_DONGLE_PROFILES_EXTRA.
 	 * Everything from here to the end of the common-page block is inside
-	 * that guard, because the decoder it calls is one of the sources the
-	 * symbol gates (see this file's header, and the symbol's help in
+	 * that guard, because the decoder it calls is one of the decoders the
+	 * symbol links (see this file's header, and the symbol's help in
 	 * Kconfig, for why bridge.conf must not grow it). The argument above is
 	 * unconditional and is why the path exists AT ALL; the #ifdef is only
 	 * about which images carry it.
