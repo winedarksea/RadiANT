@@ -76,6 +76,11 @@ void radiant_swi_pend(uint32_t bits)
 	}
 }
 
+uint32_t fake_swi_zli_depth_now(void)
+{
+	return counts.zli_depth;
+}
+
 /* No PRIMASK on the host, and nothing to mask: the suite drives every signal
  * from its own thread. So this records the bracket instead - how often, and
  * that it is balanced - which is what the suite can actually assert. */

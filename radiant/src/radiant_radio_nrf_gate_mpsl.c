@@ -1469,6 +1469,7 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 	/* The return parameter is this session's own (it must outlive the
 	 * callback, mpsl_timeslot.h). Every branch below writes through rv. */
 	mpsl_timeslot_signal_return_param_t *const rvp = &s->rv;
+	uint32_t zkey;
 #define rv (*rvp)
 
 	if (high_prio_signal) {
@@ -1852,11 +1853,19 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		 * fault (today: a dead receiver hours later) that would
 		 * otherwise be untraceable.
 		 */
-		if (g.hw_held && (!g.ts_live || g.live_sess == si)) {
-			stats.late_disarm++;
-			g.granted = false;
-			timer0_disarm();
-			g.ts_live = false;
+		{
+			/* Masked: this runs in MPSL's cooperative thread, and
+			 * the other session's START is a zero-latency interrupt
+			 * that could land between the test and the disarm. */
+			const uint32_t zkey = radiant_swi_zli_lock();
+
+			if (g.hw_held && (!g.ts_live || g.live_sess == si)) {
+				stats.late_disarm++;
+				g.granted = false;
+				timer0_disarm();
+				g.ts_live = false;
+			}
+			radiant_swi_zli_unlock(zkey);
 		}
 		/* Answered, and refused. See struct sess::mpsl_owes. */
 		s->mpsl_owes = false;
@@ -2001,7 +2010,12 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		 * The radio-level backstop below runs only when no timeslot of
 		 * ours is running or the running one is this session's.
 		 */
+		/* Masked for the same reason as BLOCKED: another session's
+		 * START landing after this test would have its grant torn down
+		 * by the writes below. */
+		zkey = radiant_swi_zli_lock();
 		if (g.ts_live && g.live_sess != si) {
+			radiant_swi_zli_unlock(zkey);
 			s->mpsl_owes = false;
 			if (s->want_place) {
 				radiant_swi_pend(RADIANT_SWI_GATE_REQUEST);
@@ -2035,6 +2049,7 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		 * longer ours (the re-entering interrupt of bug 14).
 		 */
 		timer0_disarm();
+		radiant_swi_zli_unlock(zkey);
 		/* "No request is outstanding" is exactly what mpsl_owes
 		 * tracks, so this is its authoritative clear - the backstop for
 		 * any answer path that did not run. The re-place below sets it
@@ -2072,6 +2087,7 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		 * hand-back, so a skipped disarm would leave an interrupt
 		 * armed on a peripheral about to stop being ours. Only for
 		 * this session's own timeslot, for the reason given there. */
+		zkey = radiant_swi_zli_lock();
 		if (!g.ts_live || g.live_sess == si) {
 			g.granted = false;
 			g.ts_live = false;
@@ -2080,6 +2096,7 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 			}
 			timer0_disarm();
 		}
+		radiant_swi_zli_unlock(zkey);
 		if (g.pending && g.op_sess == si) {
 			deadline_stop();
 			g.pending = false;
@@ -2598,9 +2615,18 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 				GSTAT(stats.book_denied++);
 				return GATE_DENIED;
 			}
-			b->role = ROLE_OP;
-			g.op_sess = (uint8_t)i;
-			g.pending = true;
+			{
+				/* One step as far as this session's START can
+				 * tell, or a START between the writes finds a
+				 * role with nobody pending and hands the grant
+				 * back. */
+				const uint32_t zkey = radiant_swi_zli_lock();
+
+				g.op_sess = (uint8_t)i;
+				g.pending = true;
+				b->role = ROLE_OP;
+				radiant_swi_zli_unlock(zkey);
+			}
 			GSTAT(stats.book_hit++);
 #if defined(CONFIG_RADIANT_GATE_MPSL_STATS)
 			if (b->r_start < now + 1000u) {

@@ -433,6 +433,70 @@ ZTEST(radiant_gate_d2, test_d2_refused_extensions_are_not_asked_for_again)
 	assert_invariant();
 }
 
+/*
+ * A low-priority signal runs in MPSL's cooperative thread, and the other
+ * session's START is a zero-latency interrupt, so only a masked check-then-act
+ * keeps that START from landing between the test of g.ts_live and the disarm.
+ * The fake cannot land one there; it can say whether the disarm was masked.
+ */
+ZTEST(radiant_gate_d2, test_d2_session_idle_disarms_with_the_callback_masked)
+{
+	(void)scan_granted();
+	fake_mpsl_timer0.int_disable_zli_depth = 0u;
+
+	(void)fake_mpsl_signal_s(0u, MPSL_TIMESLOT_SIGNAL_SESSION_IDLE);
+
+	zassert_true(fake_mpsl_timer0.int_disable_zli_depth > 0u,
+		     "SESSION_IDLE tore a grant down unmasked");
+	zassert_equal(0u, fake_swi()->zli_depth, "unbalanced lock");
+	assert_invariant();
+}
+
+ZTEST(radiant_gate_d2, test_d2_session_closed_disarms_with_the_callback_masked)
+{
+	(void)scan_granted();
+	fake_mpsl_timer0.int_disable_zli_depth = 0u;
+
+	(void)fake_mpsl_signal_s(0u, MPSL_TIMESLOT_SIGNAL_SESSION_CLOSED);
+
+	zassert_true(fake_mpsl_timer0.int_disable_zli_depth > 0u,
+		     "SESSION_CLOSED tore a grant down unmasked");
+	zassert_equal(0u, fake_swi()->zli_depth, "unbalanced lock");
+}
+
+ZTEST(radiant_gate_d2, test_d2_blocked_disarms_with_the_callback_masked)
+{
+	(void)scan_granted();
+	fake_mpsl_timer0.int_disable_zli_depth = 0u;
+
+	(void)fake_mpsl_signal_s(0u, MPSL_TIMESLOT_SIGNAL_BLOCKED);
+
+	zassert_true(fake_mpsl_timer0.int_disable_zli_depth > 0u,
+		     "BLOCKED tore a stale grant down unmasked");
+	zassert_equal(0u, fake_swi()->zli_depth, "unbalanced lock");
+}
+
+/* Two writes make the arm the booking's owner, and a START between them hands
+ * the grant back. */
+ZTEST(radiant_gate_d2, test_d2_the_booking_match_is_masked)
+{
+	radiant_time_t t = radiant_radio_now() + SCAN_LEAD_US;
+	uint32_t       locks;
+
+	zassert_equal(GATE_BOOK_OK, gate_book(t, t + TRACK_LEN_US, 0u), NULL);
+	k_msleep(WORK_MS);
+	locks = fake_swi()->zli_locks;
+
+	zassert_equal(GATE_PENDING,
+		      gate_acquire(GATE_OP_RX, t, t + TRACK_LEN_US, 0u,
+				   RADIANT_GATE_PRIO_HIGH), NULL);
+
+	zassert_true(fake_swi()->zli_locks > locks, "the match ran unmasked");
+	zassert_equal(0u, fake_swi()->zli_depth, "unbalanced lock");
+	gate_probe_read(&p);
+	zassert_equal(1u, p.book_hit, NULL);
+}
+
 ZTEST(radiant_gate_d2, test_d2_one_session_is_masters_gate)
 {
 	gate_shutdown();
