@@ -137,9 +137,11 @@ zephyr_library_sources_ifdef(CONFIG_RADIANT_ANTR_API src/antr/ant_radio_radiant.
 zephyr_library_sources_ifdef(CONFIG_RADIANT_SEC_HOST_MESSAGES src/antr/ant_sec_host.c)
 
 # Library code a project opts into. One switch each rather than one per profile:
-# the link drops whatever nothing calls. The applications in this repository
-# leave both off and list exactly the files they use. The headers are not under
-# include/radiant/, so these paths are added only when asked for.
+# the link drops whatever nothing calls. apps/dongle_thread uses both through
+# CONFIG_RADIANT_BRIDGE; the transmitting applications (hrm_ble, treadmill,
+# trainer) leave both off and list exactly the profile files they link, and
+# radiant/tests lists its own. The headers are not under include/radiant/, so
+# these paths are added only when asked for.
 if(CONFIG_RADIANT_PROFILES)
   zephyr_include_directories(src/profiles)
   zephyr_library_sources(
@@ -177,7 +179,18 @@ if(CONFIG_RADIANT_BRIDGE)
     src/bridge/radiant_common_adapter.c
     src/bridge/radiant_env_adapter.c
     src/bridge/radiant_rd_adapter.c
+    src/bridge/radiant_binding.c
+    # Pure helpers with no sink, here so radiant/tests can drive them.
+    src/bridge/radiant_naming.c
+    src/bridge/radiant_owed.c
+    src/bridge/radiant_self_policy.c
   )
+  # These three register a sink. STRUCT_SECTION_ITERABLE keeps a sink in the
+  # image whether or not anything calls into its file, so unlike the files
+  # above they cannot be left to the linker: each has its own symbol.
+  zephyr_library_sources_ifdef(CONFIG_RADIANT_BRIDGE_RULES src/bridge/radiant_rules.c)
+  zephyr_library_sources_ifdef(CONFIG_RADIANT_BRIDGE_LIVENESS src/bridge/radiant_liveness.c)
+  zephyr_library_sources_ifdef(CONFIG_RADIANT_BRIDGE_MATTER_MAP src/bridge/radiant_matter.c)
   # Without this the sink list's start and end symbols do not exist.
   zephyr_linker_sources(SECTIONS src/bridge/radiant_bridge_sections.ld)
 endif()
