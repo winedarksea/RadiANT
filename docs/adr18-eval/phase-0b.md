@@ -13,7 +13,7 @@ the repository: see [phase-0b-raw-logs.md](phase-0b-raw-logs.md).
 | 3. Schedule-shape ztests | **Done** | deaf fraction at 1/2/4/8 tracked channels, the three-lead ceiling, the direct-lead control, the R1 characterization |
 | 4. `check_zero_cost.ps1` | **Done** | all 8 rows (6 nRF + 2 TI) identical against 42475c6: sections, symbols and `zephyr.bin`; a missing hal_ti fails the run |
 | 5. Size baselines | **Partly done; blocked on master** | 42475c6 does not link the L15 bridge arm nor either Matter arm (duplicate sources from 1d0d821). Bridge measured with a two-line local patch; both Matter baselines not measured |
-| 6. Baseline A leg | **STOPPED: differs** | **13/17** found against the expected 12/17. Every failure sits in a predicted band; the extra success is a band-edge trial found at 40.6 s. Mask `0x003fcffc` reproduced. Controls and R1 not run, per the stop rule |
+| 6. Baseline A leg | **Done; 13/17 accepted by the user** | 13/17 against the expected 12/17; every failure is in a predicted band; the extra success is a band-edge trial. Mask `0x003fcffc`. Controls **5/5**. R1: DUT A 0.00 %, B 100 % (never acquired, so the discovery band and R1 are not separated); Garmin on B 3.68 % |
 
 **TI:** the changes compile out of every TI build and both TI rows are compared
 by binary in step 4. TI is build-only on this bench: nothing here is verified on
@@ -333,9 +333,108 @@ stop at step 6 if the baseline differs, so the bench stopped there and the
 lock was released. `--r1` exists and is host-tested, but it has not run on
 air.
 
+## Step 6, finished (after the user accepted 13/17)
+
+The user accepted the 13/17 leg as the baseline. The rest of step 6 then ran
+on the same images, with the bench lock taken again.
+
+**Identity, no reflash** (`step6b_identity.txt`). The Pro Micro and the Dongle
+both passed `ant_probe` with `RADIANT0.01B00`. The DUT passed `ant_probe --port
+COM4`, and its log was still printing `TEMPDIAG chunks` lines. Only the
+`phase_diag.conf` image has those, and nothing has touched the L15 probe since
+it was flashed from `0771cc3`, so the DUT was not reflashed. Neither master was
+reflashed.
+
+### Controls: 5/5 (expected 5/5)
+
+These are the leg's four failing offsets plus the 221.7 ms edge trial. Each
+used the same open delay as in the leg; then A was taken off air and ch0 was
+pinned to the absent #9999 (`--a-off --ch0 9999`), so nothing was tracked.
+
+| B's phase (host, ms) | ch1 | First packet | #5005 frames heard |
+|---|---|---|---|
+| 5.6 | found | 7.5 s | 1 (claimed) |
+| 19.6 | found | 7.5 s | 1 |
+| 130.9 | found | 7.6 s | 1 |
+| 237.0 | found | 7.4 s | 1 |
+| 221.3 | found | 7.4 s | 1 |
+
+The ADR measured 7.3-7.4 s. With nothing tracked, the masks are irregular
+(`0x01ffffff`, `0x00ffcffe`, ...), never `0x003fcffc`.
+
+### R1: one reading
+
+Two runs, both reported:
+
+- **`r1/`, aborted, no reading.** `--r1-delay-ms 12` put B 67.6-68.6 ms
+  after A (once 121.5) on all six attempts, so the harness aborted as
+  designed. B's bring-up from open to its first transmit adds about 56 ms, so
+  the open delay is not the phase. The leg shows the same offset (delay 195 →
+  4.8 ms). No code changed; the second run passed a delay of 202 ms.
+- **`r1b/`, the reading.** B was placed at **11.6 ms** after A (host; the DUT
+  phase is the host phase minus about 0.1 ms, see below). One 60 s window,
+  with the DUT tracking both and the Garmin tracking B:
+
+| Receiver | Channel | Packets | Loss |
+|---|---|---|---|
+| DUT | ch0, #2002 (A, earlier) | 244 of 244 expected | **0.00 %** |
+| DUT | ch1, #5005 (B, later) | **0**, no first packet in 60 s | **100 %** |
+| Garmin USB-m | #5005 (B, later) | 236 of 245 | **3.68 %** (9 `EVENT_RX_FAIL`, on the air) |
+
+**What this reading can and cannot say.** The DUT never received B in this
+window, and the Garmin did, so B was on the air. But the DUT never *acquired*
+B either. ch1 is a pinned search channel, and B at 11.6 ms after A is inside
+the after-slot deaf band that the leg just measured: the DUT log has 0 frames
+from #5005, and the mask stayed `0x003fcffc` in 11 of 14 reports. So the 100 %
+is the discovery band (ADR 0018) as much as R1. The two cannot be separated
+here. The ztest characterization does separate them: once both channels are
+tracking, the later slot is missed in every period at 5, 12 and 24 ms. An
+on-air R1 measurement that isolates the slot loss needs B acquired before it
+is moved into the 2.6-24.4 ms window. The harness cannot do that, because
+restarting B is the only way it sets phase, and a restarted B must be found
+again. That is a gap for Phase 1, not something fixed here.
+
+### 13/17 against the ADR's 12/17
+
+What the raw data shows. These are findings, not a retune.
+
+- **The DUT-phase offset is a transport effect.** With both masters on USB, the
+  DUT's per-frame phase of B equals the host phase minus 0.07-0.30 ms over the
+  13 heard trials (median 0.09 ms). The ADR, with B on the 5340 net
+  core over UART and A on USB, found minus 25.2 ms. Host phase is measured
+  from EVENT_TX timestamps on the host, so it carries each master's
+  host-to-air latency. When A and B share a transport the latencies cancel;
+  when they differ the difference shows up as the offset. Both rigs set phase
+  by host timing, so the 17-offset grid lands at different DUT phases on the
+  two rigs. **The two counts were taken on different phase grids**, which
+  alone can move one trial across a band edge.
+- **The 221.7 ms trial straddled the before-slot band's edge.** All 12
+  `TEMPDIAG` reports while ch0 tracked read `0x003fcffc`. Bin 22 (220-230 ms)
+  was never marked, but that diagnostic steps through each chunk in 10 ms
+  strides from its start, so it can miss a chunk's last few ms. B's one frame
+  was heard at **DUT phase 221.369 ms** in set 17, 42 s into the window. The
+  ch1 first packet was at 40.6 s; earlier sweeps visited set 17 without
+  hearing it. The chunk before the slot should end at slot − guard −
+  `min_arm_lead_us` (24418) − dispatch slack (200) − frame tail: about
+  221.2-221.5 ms DUT phase, with the guard adaptive and not logged. B's frame
+  sat inside that uncertainty.
+- **Drift moved B toward the listened side during the trial.** Host phase was
+  221.67 ms at the start and 221.28 ms at the end, about −6 us/s. So B
+  probably began just past the chunk's end and drifted onto it. A full-trial
+  miss in the ADR's rig needed only a slightly later start.
+- **Reading.** The three bands, their positions, and the zero frames at every
+  failing offset all reproduce. The one-trial difference is a grid point
+  sitting at a band edge on a rig whose phase grid is offset from the ADR's.
+  That is a likely explanation, not a proven one: the guard actually in use
+  was not logged, so the exact edge cannot be computed for this trial. **The
+  takeaway for later phases:** compare candidates on in-band offsets and the
+  mask, not on the raw found count, and log the tracked guard if an edge
+  matters.
+
 ## Deviations and things not done
 
-- Step 6 stopped at the leg. No controls, no R1 reading, no on-air 0xF6 read.
+- Step 6 stopped at the leg at first. The controls and R1 ran later on the same images, after the user accepted 13/17 (above). The on-air 0xF6 read was still not done.
+- The first R1 attempt aborted: the open delay was not the phase (+56 ms bring-up). The second, with a corrected delay, is the reading. Both are in the logs.
 - Step 5: both Matter baselines are not measured, and the bridge baseline is on
   a locally patched base (see above).
 - `RADIANT_SEARCH_COVERAGE_PERIOD_US` is a fixed 246277 us, not the tracked

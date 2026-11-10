@@ -25,8 +25,15 @@ All files are in `C:\adr18_logs\phase-0b\`, outside the repository. Measured
 | `leg_a_offsets/dut_log.txt` | the DUT's whole log (COM3, DTR) for the leg: 98 `TDIAG frame` and 224 `TEMPDIAG chunks` lines |
 | `leg_a_offsets/tNN.json`, `tNN_verify.txt` | ant_verify per trial (ch0 pinned to #2002, ch1 wildcard HR) |
 
-The controls (5 offsets, A off air) and the R1 reading were not run: the leg
-did not reproduce 12/17, which is the plan's stop condition. See the report.
+The controls and R1 ran later, after the user accepted 13/17, on the same
+images:
+
+| File | What it is |
+|---|---|
+| `step6b_identity.txt` | `ant_probe` on the Pro Micro, the Dongle and the DUT (COM4), plus a DUT log sample (`TEMPDIAG` present, so the phase-diag image was still flashed) |
+| `leg_a_controls_console.txt`, `leg_a_controls/` | the 5 controls (`--a-off --ch0 9999`, delays 195,210,75,180,165): `run.txt`, `results.jsonl`, `summary.json`, `dut_log.txt`, `tNN.json` / `tNN_verify.txt`. 5/5 |
+| `r1_console.txt`, `r1/run.txt` | the first R1 attempt: B landed 67-68 ms after A on six tries (open delay 12 ms), so it aborted. No reading |
+| `r1b_console.txt`, `r1b/` | the R1 reading: B at 11.6 ms. `r1_dut.json` / `r1_dut_verify.txt` (DUT, both channels), `r1_ref.json` / `r1_ref_verify.txt` (Garmin on #5005; that text file contains NUL bytes from the Garmin's serial string), `r1_summary.json`, `dut_log.txt` |
 
 ## Tests
 
