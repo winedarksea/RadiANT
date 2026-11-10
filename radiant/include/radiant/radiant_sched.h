@@ -170,6 +170,36 @@ extern "C" {
  */
 #define RADIANT_SCHED_ARMED_STALE_US 100000u
 
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+/*
+ * ADR 0018 (d2): what a scan chunk leaves in front of a BOOKED committed
+ * operation, on top of the in-grant lead, the dispatch slack and the chunk's
+ * own frame tail - instead of a whole min_arm_lead_us. Covers the scan grant's
+ * end margin and the arbiter's guard between two sessions. The MPSL gate's
+ * Kconfig sets it; the unit tests take the default.
+ */
+#if defined(CONFIG_RADIANT_GATE_MPSL_D2_GAP_US)
+#define RADIANT_SCHED_BOOK_GAP_US CONFIG_RADIANT_GATE_MPSL_D2_GAP_US
+#else
+#define RADIANT_SCHED_BOOK_GAP_US 3000u
+#endif
+/* The floor for arming a booked operation: the in-grant lead plus this, so it
+ * is staged before its booking's grant starts (the gate's head margin and the
+ * grant's own start), never after. */
+#define RADIANT_SCHED_BOOK_ARM_US 1000u
+/* After a fixed-class operation's air (close + follow-on), how far a scan
+ * chunk's open must be for its timeslot to begin after the one that carried
+ * that operation has ended at the arbiter: the frame tail (~150), the gate's
+ * tail and fixed end margins (250 + 750), the chunk's own head margin and air
+ * lead (~400) and the arbiter's guard between sessions (0.2-0.4 ms, Phase 0c
+ * F2). */
+#define RADIANT_SCHED_BOOK_TAIL_US 2000u
+/* How many bookings the scheduler tracks at once. A two-session gate holds at
+ * most two requests; the table is larger so an entry whose operation has just
+ * run does not block the next booking before it ages out. */
+#define RADIANT_SCHED_BOOK_MAX 4u
+#endif
+
 /*
  * Energy detect: modelled on the continuous background scan, not the bounded
  * window path - never ends, armed one gap-sized chunk at a time. Unlike the
@@ -470,6 +500,16 @@ struct radiant_sched_stats {
 	uint32_t armed_stale;       /* armed ops reclaimed because no terminal
 				     * came RADIANT_SCHED_ARMED_STALE_US past
 				     * their end. SHOULD STAY ZERO */
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+	/* ADR 0018 (d2), only in booking builds: committed operations booked
+	 * with the backend, booking calls refused for want of a free session
+	 * (busy) or for any other reason (refused), and scan chunks stopped
+	 * early so a second committed operation can still be booked (r1). */
+	uint32_t booked;
+	uint32_t book_busy;
+	uint32_t book_refused;
+	uint32_t book_r1_cut;
+#endif
 };
 
 /* ---------------------------------------------------------------------------

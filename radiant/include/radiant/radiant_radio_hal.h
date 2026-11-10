@@ -367,6 +367,14 @@ struct radiant_tx_req {
  * meaningful gate, and for bench diagnostics.
  */
 #define RADIANT_RX_REPORT_CRC_FAIL (1u << 1)
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+/* ADR 0018 (d2): this window is the ELASTIC class (a scan chunk or a sweep),
+ * whatever its length. On a booking backend it is placed at
+ * caps.min_arm_lead_elastic_us and may be refused or cut short by an arbiter.
+ * Without it a backend may class a window by length alone. Only in builds
+ * with CONFIG_RADIANT_SCHED_BOOKING. */
+#define RADIANT_RX_ELASTIC (1u << 2)
+#endif
 
 /*
  * Open one receive window matching up to n_filters addresses.
@@ -822,6 +830,24 @@ struct radiant_radio_caps {
 	 * bench sweep's bounds. */
 	int8_t tx_power_min_dbm;
 	int8_t tx_power_max_dbm;
+
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+	/*
+	 * ADR 0018 candidate (d2). True if radiant_radio_book() works: the
+	 * backend can place the air for a committed operation a lead ahead,
+	 * while another operation is armed, so that operation may later be
+	 * armed at min_arm_lead_in_grant_us. Set at run time (an MPSL gate
+	 * that could open only one session clears it).
+	 */
+	bool booking;
+	/*
+	 * The lead for an operation marked RADIANT_RX_ELASTIC, in microseconds,
+	 * or 0 for "same as min_arm_lead_us". May change between passes (an
+	 * arbiter that refuses short notice raises it); the scheduler re-reads
+	 * it every pass, as it does every other field.
+	 */
+	uint16_t min_arm_lead_elastic_us;
+#endif
 };
 
 /* ---------------------------------------------------------------------------
@@ -888,6 +914,27 @@ int radiant_radio_ed(const struct radiant_ed_req *req, uint32_t *op);
  * ended without an event. Returns RADIANT_RADIO_OK_RC when there was nothing to do.
  */
 int radiant_radio_abort(void);
+
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+/*
+ * ADR 0018 (d2): book the air for an operation that will be armed later.
+ * Exactly one of rx/tx is non-NULL and describes the operation exactly as the
+ * later arm call will (a later arm whose air lies inside the booked air is
+ * staged behind the booking; anything else is placed afresh). Callable while
+ * another operation is armed: a booking is not an operation, has no id, no
+ * callback and no terminal.
+ *
+ *   RADIANT_RADIO_OK_RC     placed (its refusal, if any, surfaces as an
+ *                           EDENIED refusal of the later arm)
+ *   RADIANT_RADIO_EBUSY     no room for another booking right now
+ *   RADIANT_RADIO_EDENIED   cannot be placed (too near, or no anchor yet)
+ *   RADIANT_RADIO_ENOTSUP   caps.booking is false
+ *
+ * A booking nobody arms into is simply never used.
+ */
+int radiant_radio_book(const struct radiant_rx_req *rx,
+		       const struct radiant_tx_req *tx);
+#endif
 
 /*
  * Deliberately absent, so that their absence is a decision rather than an

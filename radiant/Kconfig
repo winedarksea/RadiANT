@@ -687,12 +687,83 @@ config RADIANT_NRF_RX_DIAG
 	  Off by default and never in a shipping image. With it off nothing
 	  here compiles, so the non-diagnostic interrupt path is unchanged.
 
+# ------ ADR 0018 candidate (d2): a second timeslot session (Phase 1) -------
+#
+# A committed operation's request is BOOKED a lead ahead in a second MPSL
+# session while the scan holds the first, so the scan runs up to a small gap
+# before the tracked slot instead of a whole placement lead, and a tracked slot
+# depends on one fresh request placed with full notice and never on an
+# extension. docs/adr18-eval/d2.md.
+config RADIANT_GATE_MPSL_D2
+	bool "ADR 0018 (d2): book committed operations in a second MPSL session"
+	# No `depends on RADIANT_BACKEND_NRF_GATE_MPSL`, for the reason
+	# PLACE_LEAD_US gives: radiant/tests/gate compiles the gate against
+	# fakes with BACKEND_NONE and sets this in its prj.conf.
+	default y if RADIANT_BACKEND_NRF_GATE_MPSL
+	select RADIANT_SCHED_BOOKING
+	help
+	  The gate opens two timeslot sessions and places any request in
+	  whichever is free. The core books a committed operation (a tracked
+	  window or a transmit) while a scan chunk runs in the other session; the
+	  operation is armed later into its booking at the in-grant lead.
+	  Needs CONFIG_MPSL_TIMESLOT_SESSION_COUNT one higher than without it.
+	  If the second session cannot be opened the gate runs single-session
+	  and reports caps.booking false, which is exactly master's behaviour.
+
+config RADIANT_GATE_MPSL_D2_SCAN_LEAD_US
+	int "(d2) starting placement lead for scan chunks (us)"
+	depends on RADIANT_GATE_MPSL_D2
+	range 300 100000
+	default 3000
+	help
+	  The notice an elastic (scan or sweep) request starts with, advertised
+	  as caps.min_arm_lead_elastic_us. A BLOCKED elastic request that had
+	  been given at least this notice doubles it up to
+	  RADIANT_GATE_MPSL_PLACE_LEAD_US, and each elastic grant takes 250 us
+	  back. ADR 0018 Phase 0c F3: an ACTION_REQUEST with 50 us of notice is
+	  not refused with no other stack. A fresh mpsl_timeslot_request() is
+	  different: on gate.conf the d2 prototype measured requests reaching
+	  MPSL with under 2 ms of notice refused 43 of 49 times, and 0 of 970
+	  with 2 ms or more. 3000 leaves a request deferred by -NRF_EAGAIN
+	  (placed when its session goes idle) above that.
+
+config RADIANT_GATE_MPSL_D2_GAP_US
+	int "(d2) gap a scan chunk leaves before a booked operation (us)"
+	depends on RADIANT_GATE_MPSL_D2
+	range 0 30000
+	default 3000
+	help
+	  On top of the in-grant lead, the frame tail and the dispatch slack.
+	  Covers the scan grant's own end margin (2 ms past its air) plus MPSL's
+	  0.2-0.4 ms guard between two sessions (Phase 0c F2), so the chunk's
+	  last extension is not refused by the booking.
+
+config RADIANT_GATE_MPSL_STATS
+	bool "DIAGNOSTIC: compile the MPSL gate's bench counters"
+	depends on RADIANT_GATE_MPSL_D2
+	help
+	  The booking, notice and release counters a bench reading is scored
+	  on. They cost RAM and flash on every image that has them, so they are
+	  off unless a bench image asks. The gate unit tests set this directly.
+
 config RADIANT_GATE_MPSL_STATS_LOG
 	bool "DIAGNOSTIC: log the MPSL gate's counters every 5 s"
+	depends on RADIANT_GATE_MPSL_D2
+	select RADIANT_GATE_MPSL_STATS
 	help
-	  A GATESTAT line from the gate's own work queue every 5 s. Bench only:
-	  it costs a log line, never anything inside a grant. Set by
-	  apps/dongle_thread/d2_stats.conf.
+	  The gate's counters on the log every 5 s, from the gate's own work
+	  queue. Bench only: it costs a log line, never anything inside a
+	  grant. Set by apps/dongle_thread/d2_stats.conf.
+
+config RADIANT_SCHED_BOOKING
+	bool "scheduler support for a backend that books committed operations"
+	default n
+	help
+	  Selected by RADIANT_GATE_MPSL_D2; the radiant unit tests set it
+	  directly. Compiles the scheduler's booking (radiant_radio_book()),
+	  the short gap in front of a booked operation and the elastic lead. It
+	  is inert at run time unless the backend sets caps.booking, and it
+	  compiles out of every plain build.
 
 config RADIANT_GATE_MPSL_NO_SESSION
 	bool "DIAGNOSTIC: build the MPSL gate but never open a timeslot session"

@@ -377,6 +377,27 @@ struct fake_radio_viol_rec {
  * air queue and every log emptied, no operation armed, HAL lifecycle back to
  * pre-init. Call from a ztest setup/before hook. The one place the clock may
  * go backwards - a reset is a new program run for monotonicity purposes. */
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+/* ADR 0018 (d2): the booking model (radiant_radio_book()). Off until a test
+ * sets caps.booking. */
+struct fake_radio_book_stats {
+	uint32_t calls;
+	uint32_t placed;
+	uint32_t busy;
+	uint32_t near;
+	uint32_t hits;           /* arms served from a booking */
+	uint32_t denied;         /* arms refused because their booking was */
+	uint32_t layout_b;       /* bookings placed into held elastic air */
+	uint32_t unbooked_fixed; /* fixed-class arms NOT inside a booking */
+};
+/* How many request slots the backend has (default 2: a two-session gate). */
+void fake_radio_book_sessions(uint32_t n);
+/* Refuse the next n bookings (the arbiter's BLOCKED); each refuses the arm
+ * that comes for it with EDENIED. */
+void fake_radio_book_refuse_next(uint32_t n);
+const struct fake_radio_book_stats *fake_radio_book_stats(void);
+#endif
+
 void fake_radio_reset(void);
 
 /* reset() + radiant_radio_init() with both callbacks NULL + radiant_radio_enable().

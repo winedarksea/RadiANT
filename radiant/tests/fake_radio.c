@@ -117,6 +117,8 @@ struct cur_op {
 	enum radiant_radio_status force_terminal;
 };
 
+#define FBK_N 4u /* ADR 0018 (d2) booking slots in the model */
+
 struct fake_state {
 	enum fake_lifecycle  lc;
 	struct radiant_radio_cbs cbs;
@@ -196,6 +198,31 @@ struct fake_state {
 	 * returns, so retaining the pointer (forbidden - it's a DMA buffer on
 	 * hardware) produces visible garbage rather than passing by luck. */
 	uint8_t body_buf[RADIANT_RADIO_BODY_MAX];
+
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+	/*
+	 * ADR 0018 (d2): a booking backend's model. Each booking holds one of
+	 * book_sessions request slots until its air is over or the operation
+	 * it served ends; an armed operation that is not inside a booking
+	 * holds one too. A booking placed while an armed ELASTIC window
+	 * already covers its start is refused (Phase 0c F2 layout B: first
+	 * come, first served), and counted, because a correct scheduler never
+	 * does it.
+	 */
+	struct {
+		bool           used;
+		bool           refused;
+		uint8_t        kind;
+		radiant_time_t open;
+		radiant_time_t close;
+		uint16_t       follow_on_us;
+	} bk[FBK_N];
+	uint32_t book_sessions;
+	uint32_t book_refuse_left;
+	int32_t  cur_bk;  /* the booking the armed op is inside, or -1 */
+	bool     cur_elastic;
+	struct fake_radio_book_stats bstats;
+#endif
 };
 
 static struct fake_state g;
@@ -867,6 +894,15 @@ static void clear_cur(void)
 	memset(&g.cur, 0, sizeof(g.cur));
 	g.cur.kind = FAKE_RADIO_ARM_NONE;
 	g.cur.arm_idx = -1;
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+	/* Whatever ended the operation, its booking has served; the session is
+	 * free again. */
+	if (g.cur_bk >= 0 && g.cur_bk < (int32_t)FBK_N) {
+		g.bk[g.cur_bk].used = false;
+	}
+	g.cur_bk = -1;
+	g.cur_elastic = false;
+#endif
 }
 
 /* The slot is freed *before* the terminal callback runs: chaining is done by
@@ -1676,6 +1712,55 @@ static int8_t clamp_dbm(int8_t dbm)
 	return dbm;
 }
 
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+static void fbk_prune(void)
+{
+	for (uint32_t i = 0u; i < FBK_N; i++) {
+		if (g.bk[i].used && (int32_t)i != g.cur_bk &&
+		    g.bk[i].close + (radiant_time_t)g.bk[i].follow_on_us < g.now) {
+			g.bk[i].used = false;
+		}
+	}
+}
+
+static uint32_t fbk_sessions_used(void)
+{
+	uint32_t n = 0u;
+
+	for (uint32_t i = 0u; i < FBK_N; i++) {
+		n += g.bk[i].used ? 1u : 0u;
+	}
+	if (g.cur.kind != FAKE_RADIO_ARM_NONE && g.cur_bk < 0) {
+		n++;
+	}
+	return n;
+}
+
+/* The booking an arm lies inside, or -1. */
+static int32_t fbk_match(uint8_t kind, radiant_time_t open, radiant_time_t close,
+			 uint16_t follow_on_us)
+{
+	if (!g.caps.booking) {
+		return -1;
+	}
+	fbk_prune();
+	for (uint32_t i = 0u; i < FBK_N; i++) {
+		if (g.bk[i].used && g.bk[i].kind == kind && open >= g.bk[i].open &&
+		    close <= g.bk[i].close && follow_on_us <= g.bk[i].follow_on_us) {
+			return (int32_t)i;
+		}
+	}
+	return -1;
+}
+
+/* The lead an arm needs on a booking backend: the in-grant lead inside a
+ * booking, the elastic lead for an elastic window, otherwise the ordinary
+ * test. Sets *denied for an arm into a booking the arbiter refused. */
+static bool fbk_too_late(uint8_t kind, radiant_time_t t, radiant_time_t open,
+			 radiant_time_t close, uint16_t follow_on_us, bool elastic,
+			 bool *denied, int32_t *bk_out);
+#endif
+
 /* `end` is the operation's last instant: inside the previous arm's reserve, the
  * in-grant lead applies instead, as on an arbitrated backend holding that air.
  * Unchanged wherever min_arm_lead_in_grant_us is 0 (every preset). */
@@ -1689,6 +1774,115 @@ static bool too_late(radiant_time_t t, radiant_time_t end)
 	}
 	return t < g.now + (radiant_time_t)lead;
 }
+
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+static bool fbk_too_late(uint8_t kind, radiant_time_t t, radiant_time_t open,
+			 radiant_time_t close, uint16_t follow_on_us, bool elastic,
+			 bool *denied, int32_t *bk_out)
+{
+	int32_t i = fbk_match(kind, open, close, follow_on_us);
+	uint32_t ig = (g.caps.min_arm_lead_in_grant_us != 0u)
+			      ? g.caps.min_arm_lead_in_grant_us
+			      : g.caps.min_arm_lead_us;
+
+	*denied = false;
+	*bk_out = -1;
+	if (i >= 0) {
+		if (g.bk[i].refused) {
+			g.bk[i].used = false;
+			g.bstats.denied++;
+			*denied = true;
+			return false;
+		}
+		*bk_out = i;
+		return t < g.now + (radiant_time_t)ig;
+	}
+	if (elastic && g.caps.booking && g.caps.min_arm_lead_elastic_us != 0u) {
+		return t < g.now + (radiant_time_t)g.caps.min_arm_lead_elastic_us;
+	}
+	return too_late(t, close);
+}
+
+int radiant_radio_book(const struct radiant_rx_req *rx,
+		       const struct radiant_tx_req *tx)
+{
+	radiant_time_t open;
+	radiant_time_t close;
+	uint16_t       fo;
+	uint8_t        kind;
+	uint32_t       i;
+
+	isr_tick();
+	g.bstats.calls++;
+	if (!g.caps.booking) {
+		return RADIANT_RADIO_ENOTSUP;
+	}
+	if (g.lc != LC_ENABLED) {
+		return RADIANT_RADIO_ESTATE;
+	}
+	if ((rx == NULL) == (tx == NULL)) {
+		return RADIANT_RADIO_EINVAL;
+	}
+	if (rx != NULL) {
+		if (rx->fmt == NULL || rx->t_close < rx->t_open ||
+		    (rx->flags & RADIANT_RX_ELASTIC) != 0u) {
+			return RADIANT_RADIO_EINVAL;
+		}
+		kind = (uint8_t)FAKE_RADIO_ARM_RX;
+		open = rx->t_open;
+		close = rx->t_close;
+		fo = rx->follow_on_us;
+	} else {
+		kind = (uint8_t)FAKE_RADIO_ARM_TX;
+		open = tx->t_sync_at;
+		close = tx->t_sync_at;
+		fo = tx->follow_on_us;
+	}
+	if (fbk_match(kind, open, close, fo) >= 0) {
+		return RADIANT_RADIO_OK_RC; /* already booked */
+	}
+	if (fbk_sessions_used() >= ((g.book_sessions != 0u) ? g.book_sessions : 2u)) {
+		g.bstats.busy++;
+		return RADIANT_RADIO_EBUSY;
+	}
+	/* A booking is placed with a full lead or not at all - the gate's
+	 * PLACE_MIN_US is three quarters of its advertised lead. */
+	if (open < g.now + (radiant_time_t)((g.caps.min_arm_lead_us * 3u) / 4u)) {
+		g.bstats.near++;
+		return RADIANT_RADIO_EDENIED;
+	}
+	for (i = 0u; i < FBK_N; i++) {
+		if (!g.bk[i].used) {
+			break;
+		}
+	}
+	if (i >= FBK_N) {
+		g.bstats.busy++;
+		return RADIANT_RADIO_EBUSY;
+	}
+	g.bk[i].used = true;
+	g.bk[i].kind = kind;
+	g.bk[i].open = open;
+	g.bk[i].close = close;
+	g.bk[i].follow_on_us = fo;
+	g.bk[i].refused = false;
+	if (g.cur.kind == FAKE_RADIO_ARM_RX && g.cur_elastic &&
+	    g.cur.t_open <= open && g.cur.t_close >= open) {
+		/* F2 layout B: the elastic grant already holds this instant. */
+		g.bk[i].refused = true;
+		g.bstats.layout_b++;
+	} else if (g.book_refuse_left > 0u) {
+		g.book_refuse_left--;
+		g.bk[i].refused = true;
+	}
+	g.bstats.placed++;
+	return RADIANT_RADIO_OK_RC;
+}
+
+void fake_radio_book_sessions(uint32_t n) { g.book_sessions = n; }
+void fake_radio_book_refuse_next(uint32_t n) { g.book_refuse_left = n; }
+const struct fake_radio_book_stats *fake_radio_book_stats(void) { return &g.bstats; }
+#endif
 
 static void set_reserve(radiant_time_t end, uint16_t follow_on_us)
 {
@@ -1994,6 +2188,10 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 	int32_t rec_idx;
 	int rc;
 	uint8_t i;
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+	bool    bk_denied = false;
+	int32_t bk_idx = -1;
+#endif
 
 	isr_tick();
 
@@ -2061,6 +2259,9 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 	}
 	if (rc == RADIANT_RADIO_OK_RC) {
 		const uint32_t known = RADIANT_RX_STOP_ON_FIRST |
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+				       RADIANT_RX_ELASTIC |
+#endif
 				       RADIANT_RX_REPORT_CRC_FAIL;
 
 		if ((req->flags & ~known) != 0u) {
@@ -2082,8 +2283,17 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 			rc = RADIANT_RADIO_EINVAL;
 		} else if (req->t_close < req->t_open) {
 			rc = RADIANT_RADIO_EINVAL;
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+		} else if (fbk_too_late((uint8_t)FAKE_RADIO_ARM_RX, req->t_open,
+					req->t_open, req->t_close,
+					req->follow_on_us,
+					(req->flags & RADIANT_RX_ELASTIC) != 0u,
+					&bk_denied, &bk_idx) || bk_denied) {
+			rc = bk_denied ? RADIANT_RADIO_EDENIED : RADIANT_RADIO_ETIME;
+#else
 		} else if (too_late(req->t_open, req->t_close)) {
 			rc = RADIANT_RADIO_ETIME;
+#endif
 		} else if (window_over_cap(req->t_open, req->t_close)) {
 			/* Longer than caps.max_window_us, an API ceiling on an
 			 * arbitrated backend (MPSL_TIMESLOT_LENGTH_MAX_US is
@@ -2120,6 +2330,15 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 	 * rather than at the terminal event, because the terminal event is
 	 * where it is read. */
 	g.rx_any = false;
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+	g.cur_bk = bk_idx;
+	g.cur_elastic = (req->flags & RADIANT_RX_ELASTIC) != 0u;
+	if (bk_idx >= 0) {
+		g.bstats.hits++;
+	} else if (g.caps.booking && !g.cur_elastic) {
+		g.bstats.unbooked_fixed++;
+	}
+#endif
 
 	take_pending_force();
 

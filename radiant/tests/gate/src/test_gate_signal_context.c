@@ -13,6 +13,7 @@
 #include <zephyr/ztest.h>
 
 #include <mpsl_timeslot.h>
+#include <nrf_errno.h>
 
 #include "radiant_radio_nrf_gate.h"
 
@@ -83,6 +84,8 @@ ZTEST(radiant_gate_signal_context, test_a_refusal_is_not_the_signal_context)
 
 ZTEST(radiant_gate_signal_context, test_session_idle_is_not_the_signal_context)
 {
+	/* A deferred request is what SESSION_IDLE re-pends. */
+	fake_mpsl_force_request_rc(-NRF_EAGAIN, 1u);
 	place();
 	(void)fake_mpsl_signal(MPSL_TIMESLOT_SIGNAL_SESSION_IDLE);
 	zassert_true(fake_swi()->pends > 0u, "SESSION_IDLE re-pended nothing");

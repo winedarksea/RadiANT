@@ -49,13 +49,40 @@ void gate_probe_read(struct gate_probe *out)
 	out->pending        = g.pending;
 	out->release_wanted = g.release_wanted;
 	out->ended          = g.ended;
-	out->bootstrapping  = g.bootstrapping;
-	out->anchor_valid   = g.anchor_valid;
-	out->mpsl_owes      = g.mpsl_owes;
+	/* Session 0's: the only session every pre-d2 test has. */
+	out->bootstrapping  = ss[0].bootstrapping;
+	out->anchor_valid   = ss[0].anchor_valid;
+	out->mpsl_owes      = ss[0].mpsl_owes;
 	out->granted_len_us = g.granted_len_us;
 	out->want_len_us    = g.want_len_us;
 	out->extendable     = g.extendable;
 	out->end_margin_us  = g.end_margin_us;
+
+	out->n_open = n_open;
+	for (uint32_t i = 0u; i < 2u; i++) {
+		const struct sess *s = &ss[(i < NSESS) ? i : 0u];
+
+		out->role[i] = (i < NSESS) ? s->role : 0u;
+		out->book_failed[i] = (i < NSESS) && s->book_failed;
+		out->s_owes[i] = (i < NSESS) && s->mpsl_owes;
+		out->s_anchor_valid[i] = (i < NSESS) && s->anchor_valid;
+	}
+	out->op_sess        = g.op_sess;
+	out->book_placed    = stats.book_placed;
+	out->book_hit       = stats.book_hit;
+	out->book_denied    = stats.book_denied;
+	out->book_blocked   = stats.book_blocked;
+	out->book_mismatch  = stats.book_mismatch;
+	out->book_early     = stats.book_early;
+	out->book_busy      = stats.book_busy;
+	out->book_near      = stats.book_near;
+	out->orphan_start   = stats.orphan_start;
+	out->den_nosess     = stats.den_nosess;
+	out->refused_too_near = stats.refused_too_near;
+#if defined(CONFIG_RADIANT_GATE_MPSL_D2)
+	out->el_lead_us     = el_lead_us;
+	out->d2_on          = d2_on;
+#endif
 }
 
 /* The one writer in this file: test-harness state reset, never behaviour. */
@@ -63,5 +90,10 @@ void gate_probe_reset_elastic(void)
 {
 	elastic_initial_us = ELASTIC_INITIAL_US;
 	elastic_skew_us = 0u;
-	blocked_run = 0u;
+	for (uint32_t i = 0u; i < NSESS; i++) {
+		ss[i].blocked_run = 0u;
+	}
+#if defined(CONFIG_RADIANT_GATE_MPSL_D2)
+	el_lead_us = EL_LEAD_START_US;
+#endif
 }

@@ -314,13 +314,139 @@ BUILD_ASSERT(MAX_WINDOW_US > 0u && MAX_WINDOW_US < MPSL_TIMESLOT_LENGTH_MAX_US,
  * ---------------------------------------------------------------------------
  */
 
-/* The returned parameter must outlive the callback (mpsl_timeslot.h). One
- * static per session. */
-static mpsl_timeslot_signal_return_param_t rv;
-static mpsl_timeslot_request_t             req;
+/*
+ * ADR 0018 candidate (d2): a POOL of timeslot sessions, any request in
+ * whichever is free. With one session (D2 off, or the second session_open
+ * failed) everything below reduces to the single-session gate exactly. See
+ * docs/adr18-eval/d2.md.
+ */
+#if defined(CONFIG_RADIANT_GATE_MPSL_D2)
+#define NSESS 2u
+#else
+#define NSESS 1u
+#endif
+#define SESS_NONE 0xFFu
 
-static mpsl_timeslot_session_id_t session_id;
-static bool                       session_open;
+/* What a session's outstanding request is for. */
+#define ROLE_NONE 0u /* nothing the core is waiting on (free, or an orphan) */
+#define ROLE_OP   1u /* the staged operation is waiting on it (g.op_sess) */
+#define ROLE_BOOK 2u /* a booking: placed for an operation not yet armed */
+
+/*
+ * What the next grant will be read with, held apart from the current one. An
+ * acquire constantly happens during a live grant (a tracked window's receive
+ * callback commonly arms the next slot mid-window), and writing these straight
+ * into `g` would retune the running grant's own end/extension arithmetic for a
+ * window not yet placed. So they are staged per session and committed at that
+ * session's SIGNAL_START - with two sessions a request can be accepted while
+ * the OTHER session's grant is live, so committing at acceptance (as the
+ * single-session gate once did) would rewrite the live grant's numbers.
+ */
+struct next_grant {
+	uint32_t       want_len_us;
+	uint32_t       granted_len_us;
+	radiant_time_t grant_end;
+	bool           extendable;
+	bool           no_extend;
+	/* The margin this request's length was built with. See g.end_margin_us
+	 * - it has to travel with the request, not be re-derived later. */
+	uint32_t       end_margin_us;
+	/* Bench probe only: which class this request belongs to, so a BLOCKED
+	 * or a START can be attributed to it. */
+	bool           high_prio;
+};
+
+struct sess {
+	/* The returned parameter must outlive the callback (mpsl_timeslot.h). One
+	 * per session. */
+	mpsl_timeslot_signal_return_param_t rv;
+	mpsl_timeslot_request_t             req;
+	mpsl_timeslot_session_id_t          id;
+	bool                                open;
+	/*
+	 * The anchor. distance_us is measured from the PREVIOUS timeslot's
+	 * START IN THIS SESSION, not an absolute time, so every later distance
+	 * is computed against this - and a BLOCKED request means no timeslot
+	 * started, so this must not move then. 0-17 us of error over 640
+	 * chained requests when kept right.
+	 */
+	radiant_time_t anchor;
+	bool           anchor_valid;
+	/*
+	 * MPSL has a request of ours in this session and has not answered it.
+	 * A placed request cannot be withdrawn, so nothing on our side can clear
+	 * it early; see request_work_fn() (bug 15).
+	 */
+	volatile bool  mpsl_owes;
+	/* req is built and request_work_fn() should place it. */
+	volatile bool  want_place;
+	/* The anchor-establishing timeslot is outstanding. Nothing is staged
+	 * behind it and the core must hear about neither its grant nor its
+	 * refusal - see bootstrap_anchor(). */
+	volatile bool  bootstrapping;
+	volatile uint8_t role;
+	/* A booking MPSL refused (or that could not be placed). The window is
+	 * kept so the arm it was for is refused synchronously. */
+	volatile bool  book_failed;
+	/* The air this session's request covers: [start, end] exactly as
+	 * gate_acquire() computes them. Read by the booking match. */
+	radiant_time_t r_start;
+	radiant_time_t r_end;
+	/* Consecutive refusals before the anchor is abandoned; see BLOCKED. */
+	uint32_t       blocked_run;
+	/* The class of the request most recently PLACED here. BLOCKED/CANCELLED
+	 * answer the placed request, and may arrive from inside
+	 * mpsl_timeslot_request() - before its numbers are the live ones - so
+	 * reading the live grant's class there attributed the first refusal
+	 * after every class change to the previous grant's class (review
+	 * 2026-10-31, C5-1). Recording at placement is right for inline and
+	 * deferred answers alike. */
+	bool           placed_extendable;
+	bool           placed_high_prio;
+	struct next_grant ng;
+	/* The notice MPSL got at placement (start - now when
+	 * mpsl_timeslot_request() was called). */
+	int32_t        notice_us;
+#if defined(CONFIG_RADIANT_GATE_MPSL_STATS)
+	/* Bench counters, per session. */
+	uint32_t       n_placed;
+	uint32_t       n_granted;
+	uint32_t       n_blocked;
+	/* Where this session's last request's TIMESLOT ends (start + the length
+	 * asked for), to tell a refusal for notice from a refusal for adjacency
+	 * to the other session's booking. */
+	radiant_time_t ts_end;
+	/* Whether this request was deferred by -NRF_EAGAIN first. */
+	bool           deferred;
+	radiant_time_t hold_at;
+#endif
+	/* Placement held back until the OTHER session's running timeslot has
+	 * ended - see place_one(). */
+	volatile bool  wait_live;
+};
+
+static struct sess ss[NSESS];
+/* How many sessions opened. 1 means the single-session gate. */
+static uint8_t     n_open;
+
+/* The primary session is open: the gate is up. */
+#define session_open (ss[0].open)
+
+static inline struct sess *sess_of(mpsl_timeslot_session_id_t id)
+{
+	for (uint32_t i = 0u; i < NSESS; i++) {
+		if (ss[i].open && ss[i].id == id) {
+			return &ss[i];
+		}
+	}
+	return &ss[0];
+}
+
+static inline uint8_t sess_idx(const struct sess *s)
+{
+	return (uint8_t)(s - &ss[0]);
+}
+
 /* The trampoline subscription is taken once per boot and never given back; see
  * gate_init(). Separate from session_open, which comes and goes. */
 static bool                       swi_registered;
@@ -363,15 +489,16 @@ static struct {
 	 */
 	uint32_t end_margin_us;
 
-	/*
-	 * The anchor. distance_us is measured from the PREVIOUS timeslot's
-	 * START, not an absolute time, so every later distance is computed
-	 * against this - and a BLOCKED request means no timeslot started, so
-	 * this must not move then. 0-17 us of error over 640 chained requests
-	 * when kept right.
-	 */
-	radiant_time_t anchor;
-	bool           anchor_valid;
+	/* Which session the staged operation is waiting on (valid while
+	 * `pending`), and which session's timeslot is running (valid while
+	 * `ts_live`). With one session both are always 0. */
+	volatile uint8_t op_sess;
+	volatile uint8_t live_sess;
+	/* One of our timeslots is running: SIGNAL_START until ACTION_END is
+	 * returned, or until that session's SESSION_IDLE/CLOSED backstop. MPSL
+	 * never runs two of our sessions' timeslots at once (Phase 0c F2), so
+	 * the radio-level state below always describes this one. */
+	volatile bool    ts_live;
 
 	/*
 	 * The last instant the radio may still be busy under the grant we hold
@@ -391,21 +518,13 @@ static struct {
 	 * EXTEND_STEP_US; the last one is the remainder. */
 	uint32_t       ext_step_us;
 	/*
-	 * The session's anchor-establishing timeslot is outstanding. Nothing is
-	 * staged behind it and the core must hear about neither its grant nor
-	 * its refusal - see bootstrap_anchor().
+	 * (Per session now: bootstrapping and mpsl_owes live in struct sess.
+	 * mpsl_owes is distinct from `pending` - the core's question, "is a
+	 * grant coming for what's staged", which the backstop timer answers
+	 * `false` on the core's behalf so nothing strands - and nothing on our
+	 * side can clear it early: a placed request cannot be withdrawn, so the
+	 * backstop firing must not re-open the placement path.)
 	 */
-	volatile bool  bootstrapping;
-	/*
-	 * MPSL has a request of ours and has not answered it. Distinct from
-	 * `pending` (the core's question, "is a grant coming for what's
-	 * staged" - the backstop timer answers `false` on the core's behalf so
-	 * nothing strands). This is MPSL's own state and nothing on our side
-	 * can clear it early: a placed request cannot be withdrawn, so the
-	 * backstop firing must not re-open the placement path. Counted via
-	 * den_owed since it should almost never be what refuses an acquire.
-	 */
-	volatile bool  mpsl_owes;
 	volatile bool  deny_wanted;
 #define DENY_SRC_BLOCKED     0u
 #define DENY_SRC_AFTER_GRANT 1u
@@ -538,7 +657,87 @@ static struct {
 	uint32_t hi_reserve;  /* ...served from air already held */
 	uint32_t hi_blocked;  /* ...refused by the arbiter */
 	uint32_t hi_granted;  /* ...that actually got the air */
+#if defined(CONFIG_RADIANT_GATE_MPSL_STATS)
+	/*
+	 * ADR 0018 (d2). Bookings: placed; matched by the arm they were for
+	 * (hit); refused at that arm because MPSL had refused the booking
+	 * (denied); refused by MPSL (blocked) or not placeable (unplaced);
+	 * an arm overlapping a booking without fitting inside it (mismatch);
+	 * a booking granted before its operation was staged (early - the slot
+	 * is lost; expected 0); gate_book() refused for want of a free session
+	 * (busy) or for too little notice (near).
+	 */
+	uint32_t book_placed;
+	uint32_t book_hit;
+	uint32_t book_denied;
+	uint32_t book_blocked;
+	uint32_t book_unplaced;
+	uint32_t book_mismatch;
+	uint32_t book_early;
+	uint32_t book_busy;
+	uint32_t book_near;
+	/* A grant with nothing staged on its session (an aborted op's request,
+	 * a booking nobody armed into): handed straight back. */
+	uint32_t orphan_start;
+	/* An acquire refused because every session had a request out. */
+	uint32_t den_nosess;
+	/* Elastic requests BLOCKED, and the elastic lead's range. */
+	uint32_t el_blocked;
+	uint32_t el_lead_max;
+	uint32_t el_lead_min;
+	/* Bench diagnostics (d2). Elastic refusals whose timeslot ended within
+	 * 3 ms of the other session's booked start, and the smallest such gap;
+	 * an early booking grant with an op staged on the other session vs none
+	 * staged at all; booking hits with under 1 ms between now and the
+	 * booked start. */
+	uint32_t el_blk_adj;
+	int32_t  el_blk_gap_min;
+	uint32_t early_other;
+	uint32_t early_none;
+	uint32_t hit_late;
+	/* Elastic refusals by the notice MPSL got: <1, 1-2, 2-4, 4-8, >=8 ms;
+	 * and how many of them had been deferred by -NRF_EAGAIN. Elastic
+	 * grants by the same bins, for the denominator. */
+	uint32_t el_blk_by_notice[5];
+	uint32_t el_gr_by_notice[5];
+	uint32_t el_blk_deferred;
+	/* Placements held back because the other session's running timeslot was
+	 * still scheduled over this request's start. */
+	uint32_t defer_live;
+	/* How long after its grant started a fixed-class (tracked/TX) grant was
+	 * released by the core (last, max), and how long a held-back placement
+	 * waited (last, max). Bench diagnostics. */
+	/* Elastic requests not placed because their notice had run below
+	 * EL_NOTICE_MIN_US while they waited (refused locally, re-armed by the
+	 * core at a fresh lead). */
+	uint32_t el_late_drop;
+	/* gate_release()'s compare: which branch (moved / already inside the
+	 * end margin / lost the race and restored the backstop), and the last
+	 * capture against the free-timer estimate of the same instant. */
+	/* TIMER0 signals for a fixed grant: provoked by a release vs the
+	 * grant's own backstop, and the last such signal's time after START. */
+	uint32_t t0_fix_rel;
+	uint32_t t0_fix_backstop;
+	uint32_t t0_fix_at;
+	/* SIGNAL_START/END pairs per session seen by on_signal (sanity). */
+	uint32_t rel_br_ok;
+	uint32_t rel_br_inside;
+	uint32_t rel_br_restore;
+	uint32_t rel_cap_last;
+	uint32_t rel_est_last;
+	uint32_t rel_fixed_last;
+	uint32_t rel_fixed_max;
+	uint32_t hold_last;
+	uint32_t hold_max;
+#endif
 } stats;
+
+/* A bench counter: gone unless a bench image asked for it. */
+#if defined(CONFIG_RADIANT_GATE_MPSL_STATS)
+#define GSTAT(x) do { x; } while (0)
+#else
+#define GSTAT(x) do { } while (0)
+#endif
 
 /*
  * A ring buffer rather than a printk: a printk in this path costs ~87 us/char
@@ -725,39 +924,10 @@ static void gate_swi_handler(uint32_t bits)
 	}
 }
 
-/*
- * What the next grant will be read with, held apart from the current one. An
- * acquire constantly happens during a live grant (a tracked window's receive
- * callback commonly arms the next slot mid-window), and writing these four
- * straight into `g` would retune the running grant's own end/extension
- * arithmetic for a window not yet placed. So they are staged here and
- * committed by request_work_fn() once mpsl_timeslot_request() accepts.
- */
-static struct {
-	uint32_t       want_len_us;
-	uint32_t       granted_len_us;
-	radiant_time_t grant_end;
-	bool           extendable;
-	bool           no_extend;
-	/* The margin this request's length was built with. See g.end_margin_us
-	 * - it has to travel with the request, not be re-derived later. */
-	uint32_t       end_margin_us;
-	/* Bench probe only: which class this request belongs to, so a BLOCKED
-	 * or a START can be attributed to it. */
-	bool           high_prio;
-} next_grant;
+/* (next_grant and the placed class are per session now: struct sess.) */
 
 /* The class of the request MPSL currently holds, for the probe counters. */
 static bool grant_high_prio;
-/* The class of the request most recently PLACED. BLOCKED/CANCELLED answer the
- * placed request, and may arrive from inside mpsl_timeslot_request() - before
- * commit_next_grant() has made it the current one - so reading g.extendable /
- * grant_high_prio there attributed the first refusal after every class change
- * to the previous grant's class (review 2026-10-31, C5-1). Only one request is
- * ever outstanding, so recording at placement is right for inline and
- * deferred answers alike. */
-static bool placed_extendable;
-static bool placed_high_prio;
 
 /*
  * How big the elastic class asks its first bite, and why it's a variable.
@@ -793,9 +963,9 @@ static uint32_t elastic_initial_us = ELASTIC_INITIAL_US;
 #define ELASTIC_SKEW_SPAN_US 13000u
 static uint32_t elastic_skew_us;
 
-/* Consecutive refusals before the anchor is abandoned; see the BLOCKED case. */
+/* Consecutive refusals before the anchor is abandoned; see the BLOCKED case.
+ * Counted per session (struct sess). */
 #define BLOCKED_RUN_REANCHOR 4u
-static uint32_t blocked_run;
 
 /*
  * STOP ASKING FOR EXTENSIONS THE ARBITER KEEPS REFUSING (ADR 0021, decision 3).
@@ -823,30 +993,179 @@ BUILD_ASSERT(ELASTIC_FLOOR_US >= MPSL_TIMESLOT_LENGTH_MIN_US,
 BUILD_ASSERT(ELASTIC_FLOOR_US > END_MARGIN_EXTEND_US,
 	     "an elastic grant must outlive its own hand-back margin");
 
-static void commit_next_grant(void)
+/*
+ * ADR 0018 (d2): the elastic lead. A scan chunk or sweep placed in a free
+ * session needs no full PLACE_LEAD_US of notice when nothing refuses short
+ * notice (Phase 0c F3: no stack refused 50 us; BLE 0.3-1 %, independent of
+ * notice). It starts at D2_SCAN_LEAD_US, doubles on every elastic BLOCKED up to
+ * PLACE_LEAD_US and gives back EL_LEAD_DECAY_US per elastic grant, so a stack
+ * that refuses short notice (Thread, bug 26) settles it near what it needs
+ * instead of turning the scan into a request storm. A safety backoff, not
+ * candidate (e). Published to the core as caps.min_arm_lead_elastic_us.
+ */
+#if defined(CONFIG_RADIANT_GATE_MPSL_D2)
+#define EL_LEAD_START_US CONFIG_RADIANT_GATE_MPSL_D2_SCAN_LEAD_US
+#define EL_LEAD_DECAY_US 250u
+/* Below this much notice a fresh elastic request is refused by MPSL even with
+ * no other stack (measured on gate.conf: every one under 2 ms, none above). */
+#define EL_NOTICE_MIN_US 2000u
+static uint32_t el_lead_us = EL_LEAD_START_US;
+/* Booking is live: two sessions opened. */
+static bool d2_on;
+
+static void el_lead_publish(void)
 {
-	g.want_len_us    = next_grant.want_len_us;
-	g.granted_len_us = next_grant.granted_len_us;
-	g.grant_end      = next_grant.grant_end;
-	g.extendable     = next_grant.extendable;
-	g.no_extend      = next_grant.no_extend;
-	g.end_margin_us  = next_grant.end_margin_us;
-	grant_high_prio  = next_grant.high_prio;
+#if defined(CONFIG_RADIANT_GATE_MPSL_STATS)
+	if (el_lead_us > stats.el_lead_max) {
+		stats.el_lead_max = el_lead_us;
+	}
+	if (stats.el_lead_min == 0u || el_lead_us < stats.el_lead_min) {
+		stats.el_lead_min = el_lead_us;
+	}
+#endif
+	/* What the core must plan against is the GRANT START clearing the
+	 * lead, HEAD_MARGIN_US before the caller's instant - the same sum
+	 * gate_min_arm_lead_us() advertises for the full lead. */
+	radiant_nrf_gate_set_elastic_lead(d2_on ? el_lead_us + HEAD_MARGIN_US : 0u);
+}
+
+/* The too-near floor for an elastic request: three quarters of the lead, the
+ * same proportion PLACE_MIN_US is of PLACE_LEAD_US, and for the same reason
+ * (the core plans with an earlier `now` than this test samples). */
+static inline uint32_t el_floor_us(void)
+{
+	return (el_lead_us * 3u) / 4u;
+}
+#else
+#define d2_on false
+#endif
+
+/* Commit a session's staged numbers as the live grant's. At SIGNAL_START. */
+static void commit_next_grant(const struct sess *s)
+{
+	g.want_len_us    = s->ng.want_len_us;
+	g.granted_len_us = s->ng.granted_len_us;
+	g.grant_end      = s->ng.grant_end;
+	g.extendable     = s->ng.extendable;
+	g.no_extend      = s->ng.no_extend;
+	g.end_margin_us  = s->ng.end_margin_us;
+	grant_high_prio  = s->ng.high_prio;
+}
+
+/* The staged operation will not be served by the request it was staged on
+ * (aborted, forgotten, or its backstop fired). The request is still MPSL's,
+ * so the session stays unusable until it is answered; its window is kept as
+ * a booking, so an operation re-armed into the same air (a rebuild before the
+ * window opens) is staged behind it again rather than refused too near. A
+ * grant nobody arms into is handed straight back (orphan_start). */
+static void op_forget(void)
+{
+	struct sess *s;
+
+	if (!g.pending) {
+		return;
+	}
+	g.pending = false;
+	s = &ss[g.op_sess];
+	if (s->role == ROLE_OP) {
+		s->role = (s->mpsl_owes || s->want_place) ? ROLE_BOOK : ROLE_NONE;
+	}
 }
 
 /*
- * Place the reservation. Thread context, so the MPSL call is legal and a
+ * Place the reservations. Thread context, so the MPSL call is legal and a
  * refusal can be handled by simply telling the core.
  */
+static void place_one(struct sess *s);
+
+#if defined(CONFIG_RADIANT_GATE_MPSL_STATS)
+/* Bench diagnostic bins for the notice a request was placed with. */
+static inline uint32_t notice_bin(int32_t us)
+{
+	return (us < 1000) ? 0u : (us < 2000) ? 1u : (us < 4000) ? 2u
+		: (us < 8000) ? 3u : 4u;
+}
+#endif
+
 static void request_work_fn(struct k_work *w)
+{
+	ARG_UNUSED(w);
+
+	for (uint32_t i = 0u; i < NSESS; i++) {
+		if (ss[i].open && ss[i].want_place) {
+			place_one(&ss[i]);
+		}
+	}
+}
+
+static void place_one(struct sess *s)
 {
 	int32_t rc;
 
-	ARG_UNUSED(w);
+	/*
+	 * NOT WHILE THE OTHER SESSION'S TIMESLOT IS STILL SCHEDULED OVER THIS
+	 * ONE'S START. With one session that case cannot arise - the request
+	 * answers -NRF_EAGAIN and is placed at SESSION_IDLE. With two, MPSL
+	 * judges it at once against the running timeslot's whole booked length,
+	 * not the air the core still wants: a tracked window's timeslot carries
+	 * its follow-on reserve (up to 4.15 ms) until gate_release() provokes
+	 * its end, and the scan chunk after it is acquired from inside that
+	 * window's own completion, before the release. Measured on gate.conf
+	 * with no other stack: 51 of 51 elastic refusals were such requests,
+	 * placed with 2-8 ms of notice, none deferred and none near a booking.
+	 * So hold it until that timeslot ends (the ACTION_END in on_signal()
+	 * re-pends placement) - the same wait a single session gets from
+	 * -NRF_EAGAIN. Set the flag before testing, so an end landing between
+	 * the test and the return still finds it and re-pends.
+	 */
+	if (!s->bootstrapping && g.ts_live && g.live_sess != sess_idx(s)) {
+		s->wait_live = true;
+		if (g.ts_live && g.live_sess != sess_idx(s) &&
+		    ss[g.live_sess].anchor + (radiant_time_t)g.granted_len_us +
+				    300u >
+			    s->r_start) {
+			GSTAT(stats.defer_live++);
+			GSTAT(s->hold_at = radiant_radio_now());
+			return;
+		}
+	}
+#if defined(CONFIG_RADIANT_GATE_MPSL_STATS)
+	if (s->wait_live && s->hold_at != 0u) {
+		uint32_t d = (uint32_t)(radiant_radio_now() - s->hold_at);
 
-	if (!g.pending || !session_open) {
+		stats.hold_last = d;
+		if (d > stats.hold_max) {
+			stats.hold_max = d;
+		}
+		s->hold_at = 0u;
+	}
+#endif
+	s->wait_live = false;
+#if defined(CONFIG_RADIANT_GATE_MPSL_D2)
+	/*
+	 * A scan chunk whose notice ran out while it waited - for -NRF_EAGAIN or
+	 * for the other session's timeslot to end, both of which last until the
+	 * core's completion dispatch has drained - would only be refused: on
+	 * gate.conf every elastic request that reached MPSL with under 2 ms of
+	 * notice was (424 of 424, 448 of 448), and none with more. Refuse it
+	 * here instead and let the core arm the chunk again at a fresh lead,
+	 * now that the session is idle; that costs one lead, which is what the
+	 * refusal would have cost too, without a BLOCKED counted against the
+	 * arbiter.
+	 */
+	if (s->role == ROLE_OP && s->ng.extendable && d2_on &&
+	    (int64_t)(s->r_start - radiant_radio_now()) < (int64_t)EL_NOTICE_MIN_US) {
+		s->want_place = false;
+		s->role = ROLE_NONE;
+		GSTAT(stats.el_late_drop++);
+		if (g.pending && g.op_sess == sess_idx(s)) {
+			g.pending = false;
+			deadline_stop();
+			radiant_nrf_gate_on_denied();
+		}
 		return;
 	}
+#endif
 
 	/*
 	 * Bug 15: the flag must be armed BEFORE the call, or it's a permanent
@@ -865,25 +1184,27 @@ static void request_work_fn(struct k_work *w)
 	 * the not-placed case needs undoing below, and no answer can be in
 	 * flight for that. stats.answered_inline counts the inline case.
 	 */
-	placed_extendable = next_grant.extendable;
-	placed_high_prio = next_grant.high_prio;
-	g.mpsl_owes = true;
-	rc = mpsl_timeslot_request(session_id, &req);
+	s->placed_extendable = s->ng.extendable;
+	s->placed_high_prio = s->ng.high_prio;
+	s->notice_us = (int32_t)(int64_t)(s->r_start - radiant_radio_now());
+	s->mpsl_owes = true;
+	rc = mpsl_timeslot_request(s->id, &s->req);
 	if (rc == 0) {
-		if (!g.mpsl_owes) {
+		s->want_place = false;
+		if (!s->mpsl_owes) {
 			/* Answered from inside the call. The flag has done its
 			 * job; do NOT raise it again. */
 			stats.answered_inline++;
 		}
-		/* Accepted, so the staged numbers are now the numbers this
-		 * session's next grant will be read with. See next_grant. */
-		commit_next_grant();
+		/* Accepted. The staged numbers (s->ng) are committed at this
+		 * session's SIGNAL_START, not here - see struct next_grant. */
 		stats.placed++;
+		GSTAT(s->n_placed++);
 		return;
 	}
 	/* Not placed, so nothing is owed. See the note above for why this
 	 * write cannot lose a race. */
-	g.mpsl_owes = false;
+	s->mpsl_owes = false;
 
 	if (rc == -NRF_EAGAIN) {
 		/*
@@ -900,6 +1221,7 @@ static void request_work_fn(struct k_work *w)
 		 * session that never goes idle still resolves the operation.
 		 */
 		stats.refused_eagain++;
+		GSTAT(s->deferred = true);
 		return;
 	}
 	/*
@@ -907,16 +1229,27 @@ static void request_work_fn(struct k_work *w)
 	 * any other from the core's point of view - it did not get the air -
 	 * and it is reported the same way rather than through a second path.
 	 */
-	g.pending = false;
-	deadline_stop();
-	if (g.bootstrapping) {
+	s->want_place = false;
+	if (s->bootstrapping) {
 		/* No operation is behind the bootstrap. Leaving anchor_valid
 		 * false is the whole recovery: the next real request falls back
 		 * to EARLIEST exactly as it did before there was a bootstrap. */
-		g.bootstrapping = false;
+		s->bootstrapping = false;
 		return;
 	}
-	radiant_nrf_gate_on_denied();
+	if (s->role == ROLE_BOOK) {
+		/* A booking that never reached MPSL: the arm it was for is
+		 * refused when it comes, exactly as if MPSL had refused it. */
+		s->book_failed = true;
+		GSTAT(stats.book_unplaced++);
+		return;
+	}
+	s->role = ROLE_NONE;
+	if (g.pending && g.op_sess == sess_idx(s)) {
+		g.pending = false;
+		deadline_stop();
+		radiant_nrf_gate_on_denied();
+	}
 }
 
 /*
@@ -934,36 +1267,35 @@ static void request_work_fn(struct k_work *w)
  * chained requests). Callable from any context; the MPSL call itself is
  * deferred like every other one.
  */
-static void bootstrap_anchor(void)
+static void bootstrap_anchor(struct sess *s)
 {
-	if (!session_open || g.pending || g.granted || g.anchor_valid) {
+	if (!s->open || s->want_place || s->mpsl_owes || s->anchor_valid ||
+	    s->role != ROLE_NONE ||
+	    (g.ts_live && g.live_sess == sess_idx(s))) {
 		return;
 	}
-	memset(&req, 0, sizeof(req));
-	req.request_type = MPSL_TIMESLOT_REQ_TYPE_EARLIEST;
-	req.params.earliest.hfclk = MPSL_TIMESLOT_HFCLK_CFG_XTAL_GUARANTEED;
-	req.params.earliest.priority = MPSL_TIMESLOT_PRIORITY_NORMAL;
-	req.params.earliest.length_us = MPSL_TIMESLOT_LENGTH_MIN_US;
-	req.params.earliest.timeout_us = BOOTSTRAP_TIMEOUT_US;
+	memset(&s->req, 0, sizeof(s->req));
+	s->req.request_type = MPSL_TIMESLOT_REQ_TYPE_EARLIEST;
+	s->req.params.earliest.hfclk = MPSL_TIMESLOT_HFCLK_CFG_XTAL_GUARANTEED;
+	s->req.params.earliest.priority = MPSL_TIMESLOT_PRIORITY_NORMAL;
+	s->req.params.earliest.length_us = MPSL_TIMESLOT_LENGTH_MIN_US;
+	s->req.params.earliest.timeout_us = BOOTSTRAP_TIMEOUT_US;
 
-	/* Staged like every other request, and it has to be: request_work_fn()
-	 * commits next_grant on every acceptance, so a bootstrap that wrote
-	 * through `g` would have its own numbers overwritten by whatever the
-	 * last real window staged. It cannot grow and it is the shortest
-	 * timeslot there is. */
-	next_grant.extendable = false;
-	next_grant.no_extend = false;
-	next_grant.high_prio = false;
+	/* Staged like every other request. It cannot grow and it is the
+	 * shortest timeslot there is. */
+	s->ng.extendable = false;
+	s->ng.high_prio = false;
+	s->ng.no_extend = false;
 	/* The conservative margin, not the class-derived one: this slot is handed
 	 * straight back from SIGNAL_START and never places a compare against it,
 	 * and both margins are longer than the 100 us slot anyway, so every
 	 * compare site would fall to its own short-grant fallback. */
-	next_grant.end_margin_us = END_MARGIN_EXTEND_US;
-	next_grant.want_len_us = MPSL_TIMESLOT_LENGTH_MIN_US;
-	next_grant.granted_len_us = MPSL_TIMESLOT_LENGTH_MIN_US;
-	next_grant.grant_end = 0u;
-	g.bootstrapping = true;
-	g.pending = true;
+	s->ng.end_margin_us = END_MARGIN_EXTEND_US;
+	s->ng.want_len_us = MPSL_TIMESLOT_LENGTH_MIN_US;
+	s->ng.granted_len_us = MPSL_TIMESLOT_LENGTH_MIN_US;
+	s->ng.grant_end = 0u;
+	s->bootstrapping = true;
+	s->want_place = true;
 	radiant_swi_pend(RADIANT_SWI_GATE_REQUEST);
 }
 
@@ -1021,7 +1353,9 @@ static void deadline_expired(struct k_timer *t)
 		return;
 	}
 	stats.deadline_fired++;
-	g.pending = false;
+	/* The request stays MPSL's; op_forget() keeps it as a booking that a
+	 * grant nobody arms into hands straight back. */
+	op_forget();
 	/* A k_timer expiry is ISR context. Hand it on. This IS a refusal - the
 	 * grant did not arrive in time to be of use - so the staged operation
 	 * is orphaned and must be told. */
@@ -1130,8 +1464,12 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 {
 	const bool high_prio_signal =
 		signal <= MPSL_TIMESLOT_SIGNAL_EXTEND_SUCCEEDED;
-
-	ARG_UNUSED(id);
+	struct sess   *s = sess_of(id);
+	const uint8_t  si = sess_idx(s);
+	/* The return parameter is this session's own (it must outlive the
+	 * callback, mpsl_timeslot.h). Every branch below writes through rv. */
+	mpsl_timeslot_signal_return_param_t *const rvp = &s->rv;
+#define rv (*rvp)
 
 	if (high_prio_signal) {
 		in_signal = true;
@@ -1147,13 +1485,72 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 	switch (signal) {
 	case MPSL_TIMESLOT_SIGNAL_START:
 		stats.granted++;
+		GSTAT(s->n_granted++);
+		/* Answered. The session is ours again as far as placing the
+		 * next request goes. See struct sess::mpsl_owes. */
+		s->mpsl_owes = false;
+		s->blocked_run = 0u;
+		s->anchor = radiant_radio_now();
+		s->anchor_valid = true;
+		/* The radio is on loan from this instant until timer0_disarm()
+		 * gives it back, whatever else happens to g.granted in between. */
+		g.hw_held = true;
+		g.ts_live = true;
+		g.live_sess = si;
+		g.release_wanted = false;
+		/* A fresh timeslot, so ACTION_END is legal again. */
+		g.ended = false;
+
+		if (s->bootstrapping) {
+			/* The anchor set above is the whole point of this
+			 * timeslot; nothing is staged behind it, so hand the
+			 * air straight back without touching the peripheral
+			 * or the core. */
+			s->bootstrapping = false;
+			g.granted = false;
+			timer0_disarm();
+			rv.callback_action = MPSL_TIMESLOT_SIGNAL_ACTION_END;
+			break;
+		}
+		if (!g.pending || g.op_sess != si) {
+			/*
+			 * Nothing is staged on THIS session: an aborted
+			 * operation's request, or a booking nobody armed into
+			 * (yet). Handed straight back without touching the
+			 * backend - with two sessions the staged operation may
+			 * belong to the other one, and programming it into this
+			 * grant would put it on the air at the wrong instant.
+			 */
+			if (s->role == ROLE_BOOK) {
+				GSTAT(stats.book_early++);
+				if (g.pending) {
+					GSTAT(stats.early_other++);
+				} else {
+					GSTAT(stats.early_none++);
+				}
+			} else {
+				GSTAT(stats.orphan_start++);
+			}
+			s->role = ROLE_NONE;
+			s->book_failed = false;
+			g.granted = false;
+			timer0_disarm();
+			rv.callback_action = MPSL_TIMESLOT_SIGNAL_ACTION_END;
+			break;
+		}
+		/* The staged operation's grant. Its numbers become the live ones
+		 * only now - see struct next_grant. */
+		commit_next_grant(s);
+#if defined(CONFIG_RADIANT_GATE_MPSL_STATS)
+		if (g.extendable) {
+			stats.el_gr_by_notice[notice_bin(s->notice_us)]++;
+		}
+#endif
+		GSTAT(s->deferred = false);
+		s->role = ROLE_NONE;
 		if (grant_high_prio) {
 			stats.hi_granted++;
 		}
-		/* Answered. The session is ours again as far as placing the
-		 * next request goes. See g.mpsl_owes. */
-		g.mpsl_owes = false;
-		blocked_run = 0u;
 		/* The air was there for it, so take a little more next time. One
 		 * step per grant, against halving per refusal - deliberately
 		 * asymmetric, so a neighbour that has just started advertising is
@@ -1167,29 +1564,18 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		if (g.no_extend && ext_skip > 0u) {
 			ext_skip--;
 		}
-		g.anchor = radiant_radio_now();
-		g.anchor_valid = true;
+#if defined(CONFIG_RADIANT_GATE_MPSL_D2)
+		/* The elastic lead is given back slowly, for the same reason. */
+		if (g.extendable && el_lead_us > EL_LEAD_START_US) {
+			el_lead_us = (el_lead_us > EL_LEAD_START_US + EL_LEAD_DECAY_US)
+					     ? (el_lead_us - EL_LEAD_DECAY_US)
+					     : EL_LEAD_START_US;
+			el_lead_publish();
+		}
+#endif
 		g.pending = false;
 		g.granted = true;
-		/* The radio is on loan from this instant until timer0_disarm()
-		 * gives it back, whatever else happens to g.granted in between. */
-		g.hw_held = true;
-		g.release_wanted = false;
-		/* A fresh timeslot, so ACTION_END is legal again. */
-		g.ended = false;
 		deadline_stop();
-
-		if (g.bootstrapping) {
-			/* The anchor set above is the whole point of this
-			 * timeslot; nothing is staged behind it, so hand the
-			 * air straight back without touching the peripheral
-			 * or the core. */
-			g.bootstrapping = false;
-			g.granted = false;
-			timer0_disarm();
-			rv.callback_action = MPSL_TIMESLOT_SIGNAL_ACTION_END;
-			break;
-		}
 		/*
 		 * What we actually hold, which for an elastic request is a
 		 * fraction of what was asked for. g.end_margin_us of it is
@@ -1198,7 +1584,7 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		 * elastic class, FIXED for tracked/TX) - the same figure
 		 * gate_acquire() sized the request with.
 		 */
-		g.grant_end = g.anchor + (radiant_time_t)g.granted_len_us -
+		g.grant_end = s->anchor + (radiant_time_t)g.granted_len_us -
 			      (radiant_time_t)g.end_margin_us;
 
 		/*
@@ -1302,6 +1688,16 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 	case MPSL_TIMESLOT_SIGNAL_TIMER0:
 		stats.sig_timer0++;
 		nrf_timer_event_clear(MPSL_TIMER0, NRF_TIMER_EVENT_COMPARE0);
+#if defined(CONFIG_RADIANT_GATE_MPSL_STATS)
+		if (!g.extendable && !g.ended) {
+			if (g.release_wanted) {
+				stats.t0_fix_rel++;
+			} else {
+				stats.t0_fix_backstop++;
+			}
+			stats.t0_fix_at = (uint32_t)(radiant_radio_now() - s->anchor);
+		}
+#endif
 		if (g.no_extend && !g.release_wanted && g.extendable &&
 		    g.granted_len_us < g.want_len_us) {
 			/* As EXTEND_FAILED below, without asking. See ext_skip. */
@@ -1442,7 +1838,8 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		 */
 		if (signal == MPSL_TIMESLOT_SIGNAL_BLOCKED) {
 			stats.blocked++;
-			if (placed_high_prio) {
+			GSTAT(s->n_blocked++);
+			if (s->placed_high_prio) {
 				stats.hi_blocked++;
 			}
 		} else {
@@ -1455,13 +1852,14 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		 * fault (today: a dead receiver hours later) that would
 		 * otherwise be untraceable.
 		 */
-		if (g.hw_held) {
+		if (g.hw_held && (!g.ts_live || g.live_sess == si)) {
 			stats.late_disarm++;
 			g.granted = false;
 			timer0_disarm();
+			g.ts_live = false;
 		}
-		/* Answered, and refused. See g.mpsl_owes. */
-		g.mpsl_owes = false;
+		/* Answered, and refused. See struct sess::mpsl_owes. */
+		s->mpsl_owes = false;
 		/*
 		 * GIVE WAY BY ASKING FOR LESS, not merely by asking again. See
 		 * elastic_initial_us. Only the elastic class is shortened, and
@@ -1470,7 +1868,53 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		 * thing as saying its length was ours to choose. The PLACED
 		 * request's, not g.extendable: see placed_extendable.
 		 */
-		if (placed_extendable) {
+		if (s->placed_extendable) {
+#if defined(CONFIG_RADIANT_GATE_MPSL_D2)
+			/* And give more notice next time: see el_lead_us. */
+#if defined(CONFIG_RADIANT_GATE_MPSL_STATS)
+			stats.el_blocked++;
+			stats.el_blk_by_notice[notice_bin(s->notice_us)]++;
+			if (s->deferred) {
+				stats.el_blk_deferred++;
+			}
+			for (uint32_t i = 0u; i < NSESS; i++) {
+				const struct sess *o = &ss[i];
+
+				if (o != s && o->open &&
+				    (o->role == ROLE_BOOK || o->role == ROLE_OP)) {
+					int32_t gap = (int32_t)(int64_t)(o->r_start -
+									 s->ts_end);
+
+					if (gap < 3000 && gap > -100000) {
+						stats.el_blk_adj++;
+						if (stats.el_blk_adj == 1u ||
+						    gap < stats.el_blk_gap_min) {
+							stats.el_blk_gap_min = gap;
+						}
+					}
+				}
+			}
+#endif
+			/*
+			 * Only a refusal of a request that WAS given the
+			 * elastic notice says the lead is too short. One that
+			 * reached MPSL with less - deferred by -NRF_EAGAIN
+			 * until the session it was placed in went idle -
+			 * says nothing about the other stack. Measured on
+			 * gate.conf with no other stack: 43 of 43 elastic
+			 * refusals were such deferred requests, every one with
+			 * under 2 ms of notice left, against 0 refused of 970
+			 * placed with 2 ms or more; growing the lead on them
+			 * drove it to 12.5 ms for nothing.
+			 */
+			if (d2_on && el_lead_us < PLACE_LEAD_US &&
+			    s->notice_us >= (int32_t)el_floor_us()) {
+				el_lead_us = (el_lead_us * 2u > PLACE_LEAD_US)
+						     ? PLACE_LEAD_US
+						     : el_lead_us * 2u;
+				el_lead_publish();
+			}
+#endif
 			if (elastic_initial_us > ELASTIC_FLOOR_US) {
 				elastic_initial_us /= 2u;
 				if (elastic_initial_us < ELASTIC_FLOOR_US) {
@@ -1495,19 +1939,28 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		 * busy neighbour can't starve; cheap since a fresh anchor
 		 * costs one minimum-length timeslot.
 		 */
-		if (++blocked_run >= BLOCKED_RUN_REANCHOR) {
-			blocked_run = 0u;
-			g.anchor_valid = false;
+		if (++s->blocked_run >= BLOCKED_RUN_REANCHOR) {
+			s->blocked_run = 0u;
+			s->anchor_valid = false;
 		}
-		deadline_stop();
-		if (g.pending && g.bootstrapping) {
+		if (s->bootstrapping) {
 			/* Nothing is behind it and nothing needs telling; the
 			 * next real request bootstraps again. */
-			g.pending = false;
-			g.bootstrapping = false;
+			s->bootstrapping = false;
 			break;
 		}
-		if (g.pending) {
+		if (s->role == ROLE_BOOK) {
+			/* A refused booking. Nobody is waiting on it yet; the
+			 * arm it was for is refused synchronously when it comes
+			 * (gate_acquire()), exactly as a refused fresh request
+			 * for that window would have been. */
+			s->book_failed = true;
+			GSTAT(stats.book_blocked++);
+			break;
+		}
+		s->role = ROLE_NONE;
+		if (g.pending && g.op_sess == si) {
+			deadline_stop();
 			g.pending = false;
 			/*
 			 * Handed on rather than called. This IS a cooperative
@@ -1541,7 +1994,28 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		 * radio still on loan. hw_held is exactly "radio out and not
 		 * yet returned".
 		 */
+		/*
+		 * With two sessions, THIS session going idle says nothing about
+		 * a timeslot the OTHER session has running - MPSL_TIMER0 and the
+		 * radio are that grant's, and disarming them would overstay it.
+		 * The radio-level backstop below runs only when no timeslot of
+		 * ours is running or the running one is this session's.
+		 */
+		if (g.ts_live && g.live_sess != si) {
+			s->mpsl_owes = false;
+			if (s->want_place) {
+				radiant_swi_pend(RADIANT_SWI_GATE_REQUEST);
+			}
+			break;
+		}
+		g.ts_live = false;
 		g.granted = false;
+		for (uint32_t i = 0u; i < NSESS; i++) {
+			if (ss[i].wait_live) {
+				radiant_swi_pend(RADIANT_SWI_GATE_REQUEST);
+				break;
+			}
+		}
 		if (g.hw_held) {
 			/* Counted apart from late_disarm on purpose. This one is
 			 * the designed backstop for a timeslot MPSL ended by its
@@ -1561,16 +2035,16 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		 * longer ours (the re-entering interrupt of bug 14).
 		 */
 		timer0_disarm();
-		/* "No request is outstanding" is exactly what g.mpsl_owes
+		/* "No request is outstanding" is exactly what mpsl_owes
 		 * tracks, so this is its authoritative clear - the backstop for
 		 * any answer path that did not run. The re-place below sets it
 		 * again on acceptance. */
-		g.mpsl_owes = false;
+		s->mpsl_owes = false;
 		/* Where a request that was too early finally gets placed -
 		 * mpsl_timeslot_request() answers -NRF_EAGAIN until this
 		 * point, which is the normal case, not the exception. See
 		 * request_work_fn. */
-		if (g.pending) {
+		if (s->want_place) {
 			radiant_swi_pend(RADIANT_SWI_GATE_REQUEST);
 		}
 		break;
@@ -1584,25 +2058,32 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		 * its terminal event, or the core waits for one that is not
 		 * coming.
 		 */
-		g.granted = false;
-		g.anchor_valid = false;
-		g.mpsl_owes = false;
+		s->anchor_valid = false;
+		s->mpsl_owes = false;
+		s->want_place = false;
+		s->bootstrapping = false;
+		if (s->role == ROLE_BOOK) {
+			s->book_failed = true;
+		} else {
+			s->role = ROLE_NONE;
+		}
 		/* Counter guarded, call unconditional - see SESSION_IDLE
 		 * above; the compare gate_release() leaves armed outlives the
 		 * hand-back, so a skipped disarm would leave an interrupt
-		 * armed on a peripheral about to stop being ours. */
-		if (g.hw_held) {
-			stats.idle_disarm++;
-		}
-		timer0_disarm();
-		deadline_stop();
-		if (g.pending) {
-			g.pending = false;
-			if (g.bootstrapping) {
-				g.bootstrapping = false;
-			} else {
-				submit_denial();
+		 * armed on a peripheral about to stop being ours. Only for
+		 * this session's own timeslot, for the reason given there. */
+		if (!g.ts_live || g.live_sess == si) {
+			g.granted = false;
+			g.ts_live = false;
+			if (g.hw_held) {
+				stats.idle_disarm++;
 			}
+			timer0_disarm();
+		}
+		if (g.pending && g.op_sess == si) {
+			deadline_stop();
+			g.pending = false;
+			submit_denial();
 		}
 		break;
 
@@ -1638,13 +2119,22 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		rv.callback_action = MPSL_TIMESLOT_SIGNAL_ACTION_NONE;
 	} else if (rv.callback_action == MPSL_TIMESLOT_SIGNAL_ACTION_END) {
 		g.ended = true;
+		g.ts_live = false;
+		/* A placement held back for this timeslot (place_one()). */
+		for (uint32_t i = 0u; i < NSESS; i++) {
+			if (ss[i].wait_live) {
+				radiant_swi_pend(RADIANT_SWI_GATE_REQUEST);
+				break;
+			}
+		}
 	}
 
 	trace_put(signal, rv.callback_action);
 	if (high_prio_signal) {
 		in_signal = false;
 	}
-	return &rv;
+	return rvp;
+#undef rv
 }
 
 /* ---------------------------------------------------------------------------
@@ -1654,21 +2144,58 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 
 #if defined(CONFIG_RADIANT_GATE_MPSL_STATS_LOG)
 /*
- * Bench only: the counters a soak is scored on, every 5 s, from the gate's own
- * work queue - never from inside a grant. Cumulative since boot.
+ * Bench only: every counter a bench reading is scored on, every
+ * 5 s, from the gate's own work queue - never from inside a grant. Cumulative
+ * since boot; the reader takes differences.
  */
 static void gate_stats_fn(struct k_work *w);
 static K_WORK_DELAYABLE_DEFINE(gate_stats_work, gate_stats_fn);
 
+extern uint32_t radiant_d2_dbg[8];
+
 static void gate_stats_fn(struct k_work *w)
 {
 	ARG_UNUSED(w);
-	LOG_INF("GATESTAT pl=%u gr=%u bl=%u ext=%u/%u skip=%u near=%u eag=%u "
-		"dl=%u hi %u/%u/%u/%u",
-		stats.placed, stats.granted, stats.blocked, stats.extends_ok,
-		stats.extends_failed, stats.ext_skipped, stats.refused_too_near,
-		stats.refused_eagain, stats.deadline_fired, stats.hi_acq,
+	LOG_INF("D2SETTLE rel=%u keep=%u wait=%u none=%u now=%u imm=%u owed=%u",
+		radiant_d2_dbg[0], radiant_d2_dbg[1], radiant_d2_dbg[2],
+		radiant_d2_dbg[3], radiant_d2_dbg[4], radiant_d2_dbg[5],
+		radiant_d2_dbg[6]);
+	LOG_INF("D2STAT pl=%u gr=%u bl=%u s0=%u/%u/%u s1=%u/%u/%u ext=%u/%u "
+		"near=%u eag=%u dl=%u",
+		stats.placed, stats.granted, stats.blocked, ss[0].n_placed,
+		ss[0].n_granted, ss[0].n_blocked, ss[NSESS - 1u].n_placed,
+		ss[NSESS - 1u].n_granted, ss[NSESS - 1u].n_blocked,
+		stats.extends_ok, stats.extends_failed, stats.refused_too_near,
+		stats.refused_eagain, stats.deadline_fired);
+	LOG_INF("D2BOOK pl=%u hit=%u den=%u blk=%u unpl=%u mis=%u early=%u "
+		"busy=%u near=%u orph=%u nosess=%u owed=%u | el=%u [%u..%u] "
+		"elblk=%u adj=%u/%d | eo=%u en=%u hl=%u dfl=%u | sent ag=%u dl=%u "
+		"bl=%u sup=%u | hi %u/%u/%u/%u",
+		stats.book_placed, stats.book_hit, stats.book_denied,
+		stats.book_blocked, stats.book_unplaced, stats.book_mismatch,
+		stats.book_early, stats.book_busy, stats.book_near,
+		stats.orphan_start, stats.den_nosess, stats.den_owed,
+		(unsigned)el_lead_us, stats.el_lead_min, stats.el_lead_max,
+		stats.el_blocked, stats.el_blk_adj, (int)stats.el_blk_gap_min,
+		stats.early_other, stats.early_none, stats.hit_late,
+		stats.defer_live, stats.sent_after_grant, stats.sent_deadline,
+		stats.sent_blocked, stats.deny_suppressed, stats.hi_acq,
 		stats.hi_pending, stats.hi_blocked, stats.hi_granted);
+	LOG_INF("D2REL fixed rel %u/%u us after start, hold %u/%u us (last/max) "
+		"late_drop %u | br ok=%u inside=%u restore=%u cap=%u est=%u | "
+		"t0fix rel=%u bs=%u at=%u | ext_skipped=%u",
+		stats.rel_fixed_last, stats.rel_fixed_max, stats.hold_last,
+		stats.hold_max, stats.el_late_drop, stats.rel_br_ok,
+		stats.rel_br_inside, stats.rel_br_restore, stats.rel_cap_last,
+		stats.rel_est_last, stats.t0_fix_rel, stats.t0_fix_backstop,
+		stats.t0_fix_at, stats.ext_skipped);
+	LOG_INF("D2EL blk by notice %u/%u/%u/%u/%u gr %u/%u/%u/%u/%u deferred-blk %u",
+		stats.el_blk_by_notice[0], stats.el_blk_by_notice[1],
+		stats.el_blk_by_notice[2], stats.el_blk_by_notice[3],
+		stats.el_blk_by_notice[4], stats.el_gr_by_notice[0],
+		stats.el_gr_by_notice[1], stats.el_gr_by_notice[2],
+		stats.el_gr_by_notice[3], stats.el_gr_by_notice[4],
+		stats.el_blk_deferred);
 	(void)k_work_reschedule_for_queue(&gate_wq, &gate_stats_work, K_SECONDS(5));
 }
 #endif
@@ -1684,6 +2211,10 @@ int gate_init(void)
 	memset(&stats, 0, sizeof(stats));
 	ext_fail_run = 0u;
 	ext_skip = 0u;
+	for (uint32_t i = 0u; i < NSESS; i++) {
+		memset(&ss[i], 0, sizeof(ss[i]));
+	}
+	n_open = 0u;
 	/*
 	 * The memset above would leave the hand-back margin at zero, and a zero
 	 * margin means a compare placed at the very end of a grant - an overstay
@@ -1737,7 +2268,7 @@ int gate_init(void)
 		}
 		swi_registered = true;
 	}
-	rc = mpsl_timeslot_session_open(on_signal, &session_id);
+	rc = mpsl_timeslot_session_open(on_signal, &ss[0].id);
 	LOG_INF("gate: session_open rc=%d, max_window=%u us, place_lead=%u us",
 		(int)rc, (unsigned)MAX_WINDOW_US, (unsigned)PLACE_LEAD_US);
 	if (rc != 0) {
@@ -1745,14 +2276,35 @@ int gate_init(void)
 		 * default of 0, sizing the context array to nothing. */
 		return RADIANT_RADIO_EIO;
 	}
-	session_open = true;
+	ss[0].open = true;
+	n_open = 1u;
+#if defined(CONFIG_RADIANT_GATE_MPSL_D2)
+	/*
+	 * The second session (ADR 0018 d2). Not fatal if it fails: the gate
+	 * then runs single-session, reports caps.booking false, and behaves as
+	 * master - which is what an app that never raised
+	 * CONFIG_MPSL_TIMESLOT_SESSION_COUNT gets.
+	 */
+	rc = mpsl_timeslot_session_open(on_signal, &ss[1].id);
+	LOG_INF("gate: (d2) second session_open rc=%d, scan lead %u us", (int)rc,
+		(unsigned)EL_LEAD_START_US);
+	if (rc == 0) {
+		ss[1].open = true;
+		n_open = 2u;
+	}
+	d2_on = (n_open == 2u);
+	el_lead_us = EL_LEAD_START_US;
+	el_lead_publish();
+#endif
 #if defined(CONFIG_RADIANT_GATE_MPSL_STATS_LOG)
 	(void)k_work_reschedule_for_queue(&gate_wq, &gate_stats_work, K_SECONDS(5));
 #endif
-	/* Spend one minimum-length EARLIEST timeslot on nothing but its start
-	 * time, so that every window the core asks for is a NORMAL request that
-	 * lands where it was asked for. */
-	bootstrap_anchor();
+	/* Spend one minimum-length EARLIEST timeslot per session on nothing but
+	 * its start time, so that every window the core asks for is a NORMAL
+	 * request that lands where it was asked for. */
+	for (uint32_t i = 0u; i < NSESS; i++) {
+		bootstrap_anchor(&ss[i]);
+	}
 	return RADIANT_RADIO_OK_RC;
 }
 
@@ -1769,11 +2321,23 @@ void gate_shutdown(void)
 		stats.idle_disarm++;
 		timer0_disarm();
 	}
-	(void)mpsl_timeslot_session_close(session_id);
-	session_open = false;
+	for (uint32_t i = NSESS; i-- > 0u;) {
+		if (ss[i].open) {
+			(void)mpsl_timeslot_session_close(ss[i].id);
+		}
+		ss[i].open = false;
+		ss[i].anchor_valid = false;
+		ss[i].want_place = false;
+		ss[i].role = ROLE_NONE;
+	}
+	n_open = 0u;
+#if defined(CONFIG_RADIANT_GATE_MPSL_D2)
+	d2_on = false;
+	el_lead_publish();
+#endif
 	g.pending = false;
 	g.granted = false;
-	g.anchor_valid = false;
+	g.ts_live = false;
 }
 
 uint32_t gate_max_window_us(void)
@@ -1796,6 +2360,53 @@ uint32_t gate_min_arm_lead_us(void)
 	return PLACE_LEAD_US + HEAD_MARGIN_US;
 }
 
+static bool build_normal(struct sess *s, radiant_time_t start, radiant_time_t end,
+			 uint64_t len, bool extendable, bool no_extend,
+			 uint32_t end_margin_us, uint8_t prio);
+
+/*
+ * A session with nothing outstanding. NULL if every session has a request out
+ * or carries something the core is waiting on.
+ *
+ * Which one, when both are free, matters (d2). A request into the session
+ * whose timeslot is still running answers -NRF_EAGAIN and is placed only when
+ * that session goes idle - after the core's completion has drained and the
+ * grant's own end has been provoked, which can take milliseconds. So both
+ * callers prefer the OTHER session: a scan chunk placed at the short elastic
+ * lead cannot afford the wait (measured on gate.conf with the scan in the
+ * running session: 448 of 448 elastic refusals were requests deferred that
+ * way and placed with under 1 ms of notice left), and a booking made BEFORE
+ * the chunk in front of it must reach MPSL before that chunk's grant can grow
+ * over its instant (Phase 0c F2 layout B). The scheduler books a far-off
+ * operation only after arming the chunk, so that booking finds only the
+ * running session free and the scan has the idle one.
+ */
+static struct sess *pick_free(bool prefer_live)
+{
+	struct sess *s = NULL;
+
+	for (uint32_t i = 0u; i < NSESS; i++) {
+		struct sess *c = &ss[i];
+		bool         c_live;
+		bool         s_live;
+
+		if (!c->open || c->role != ROLE_NONE || c->mpsl_owes ||
+		    c->want_place || c->bootstrapping) {
+			continue;
+		}
+		if (s == NULL) {
+			s = c;
+			continue;
+		}
+		c_live = g.ts_live && g.live_sess == (uint8_t)i;
+		s_live = g.ts_live && g.live_sess == sess_idx(s);
+		if (c_live != s_live && c_live == prefer_live) {
+			s = c;
+		}
+	}
+	return s;
+}
+
 enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 			  radiant_time_t t_to, uint16_t follow_on_us,
 			  uint8_t prio)
@@ -1804,6 +2415,7 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 	radiant_time_t start;
 	radiant_time_t end;
 	uint64_t       len;
+	struct sess   *s;
 	/*
 	 * THE CLASSIFICATION, DECIDED BEFORE THE LENGTH RATHER THAN AFTER IT.
 	 *
@@ -1888,19 +2500,6 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 		return GATE_DENIED;
 	}
 
-	if (g.mpsl_owes) {
-		/*
-		 * g.pending is clear but MPSL still holds the last request.
-		 * Placing now would just cost an -NRF_EAGAIN round trip and
-		 * re-arm the backstop - one turn of the DEADLINE_SLACK_US
-		 * spiral. Refuse here instead. Only reachable when the
-		 * backstop beat MPSL's answer, so should stay near zero;
-		 * counted rather than assumed.
-		 */
-		stats.den_owed++;
-		return GATE_DENIED;
-	}
-
 	start = (t_from > (radiant_time_t)HEAD_MARGIN_US)
 			? (t_from - (radiant_time_t)HEAD_MARGIN_US)
 			: 0u;
@@ -1977,24 +2576,101 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 		return GATE_DENIED;
 	}
 
+#if defined(CONFIG_RADIANT_GATE_MPSL_D2)
+	/*
+	 * ADR 0018 (d2): is this the operation a booking was placed for? Its
+	 * air must lie inside the booked air - then the request already with
+	 * MPSL serves it, placed a lead or more ago, and nothing new is asked
+	 * for. A booking MPSL refused refuses its operation here, synchronously,
+	 * exactly as a fresh request for the same window would have been
+	 * refused; the core already knows how to score that.
+	 */
+	for (uint32_t i = 0u; i < NSESS; i++) {
+		struct sess *b = &ss[i];
+
+		if (!b->open || b->role != ROLE_BOOK) {
+			continue;
+		}
+		if (start >= b->r_start && end <= b->r_end) {
+			if (b->book_failed) {
+				b->book_failed = false;
+				b->role = ROLE_NONE;
+				GSTAT(stats.book_denied++);
+				return GATE_DENIED;
+			}
+			b->role = ROLE_OP;
+			g.op_sess = (uint8_t)i;
+			g.pending = true;
+			GSTAT(stats.book_hit++);
+#if defined(CONFIG_RADIANT_GATE_MPSL_STATS)
+			if (b->r_start < now + 1000u) {
+				stats.hit_late++;
+			}
+#endif
+			if (prio == RADIANT_GATE_PRIO_HIGH) {
+				stats.hi_pending++;
+			}
+			deadline_arm((uint32_t)(t_from - now) + DEADLINE_SLACK_US);
+			return GATE_PENDING;
+		}
+		if (start < b->r_end && end > b->r_start) {
+			GSTAT(stats.book_mismatch++);
+		}
+	}
+#endif
+
+	/*
+	 * Which session. Any whose last request is answered and that carries
+	 * nothing the core is waiting on; one whose timeslot is still running
+	 * is taken only if nothing else is free (its request answers
+	 * -NRF_EAGAIN and is placed at SESSION_IDLE, the ordinary case with one
+	 * session). With one session this is session 0 or nothing.
+	 */
+	s = pick_free(false);
+	if (s == NULL) {
+		/*
+		 * Every session has a request out. With one session that is the
+		 * old g.mpsl_owes refusal: placing now would just cost an
+		 * -NRF_EAGAIN round trip and re-arm the backstop - one turn of
+		 * the DEADLINE_SLACK_US spiral. Only reachable when the backstop
+		 * beat MPSL's answer (or, with two, while a booking holds the
+		 * other), so counted rather than assumed.
+		 */
+		if (n_open <= 1u) {
+			stats.den_owed++;
+		} else {
+			GSTAT(stats.den_nosess++);
+		}
+		return GATE_DENIED;
+	}
+
 	/*
 	 * Too near to place at all - measured grant latency is ~1695 us, so a
 	 * request nearer than PLACE_LEAD_US can't be honoured whatever the
 	 * arbiter decides. DENIED, not ETIME: the instant itself is reachable,
 	 * only the air is missing. This is the synchronous refusal the
 	 * acknowledged-data reply path needs, since it arms with 1.56 ms to go.
+	 * (d2: the elastic class has its own, adaptive floor - see el_lead_us.)
 	 */
-	if (start < now + (radiant_time_t)PLACE_MIN_US) {
-		stats.refused_too_near++;
-		if (stats.refused_too_near <= 3u) {
-			printk("gate: too near - start +%d us, need +%u\n", (int)(int64_t)(start - now), PLACE_MIN_US);
+	{
+		uint32_t place_min = PLACE_MIN_US;
+
+#if defined(CONFIG_RADIANT_GATE_MPSL_D2)
+		if (extendable && d2_on) {
+			place_min = el_floor_us();
 		}
-		return GATE_DENIED;
+#endif
+		if (start < now + (radiant_time_t)place_min) {
+			stats.refused_too_near++;
+			if (stats.refused_too_near <= 3u) {
+				printk("gate: too near - start +%d us, need +%u\n",
+				       (int)(int64_t)(start - now), place_min);
+			}
+			return GATE_DENIED;
+		}
 	}
 
-	memset(&req, 0, sizeof(req));
-
-	if (!g.anchor_valid) {
+	if (!s->anchor_valid) {
 		/*
 		 * No anchor, so go get one rather than asking for this window
 		 * with EARLIEST - EARLIEST grants a timeslot with no fixed
@@ -2005,54 +2681,97 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 		 * - and the bootstrap behind it gets an anchor for next time.
 		 */
 		stats.den_no_anchor++;
-		bootstrap_anchor();
+		bootstrap_anchor(s);
 		return GATE_DENIED;
 	}
-	/* distance_us is measured from the previous timeslot's START,
-	 * not now or an absolute time - and the anchor doesn't move
-	 * on a blocked request, keeping a run of denials from walking
-	 * the schedule. */
-	if (start <= g.anchor) {
+	if (!build_normal(s, start, end, len, extendable, no_extend, end_margin_us,
+			  prio)) {
+		return GATE_DENIED;
+	}
+
+	/*
+	 * Handed to a thread, not called from here: radiant_sched.c arms from
+	 * the RADIO interrupt at priority 0, possibly from inside a timeslot,
+	 * where mpsl_timeslot_request() is not callable. The request is built
+	 * here and placed on the work queue where the call is legal; the core
+	 * is told PENDING either way.
+	 */
+	s->r_start = start;
+	s->r_end = end;
+	s->book_failed = false;
+	s->role = ROLE_OP;
+	g.op_sess = sess_idx(s);
+	g.pending = true;
+	s->want_place = true;
+	if (prio == RADIANT_GATE_PRIO_HIGH) {
+		stats.hi_pending++;
+	}
+	radiant_swi_pend(RADIANT_SWI_GATE_REQUEST);
+
+	/* The backstop: the operation's own start plus DEADLINE_SLACK_US
+	 * (see its comment for why not zero). */
+	deadline_arm((uint32_t)(t_from - now) + DEADLINE_SLACK_US);
+
+	return GATE_PENDING;
+}
+
+/*
+ * Build a NORMAL request into session s for [start, end] (len already the
+ * whole timeslot including the end margin). False if the anchor cannot express
+ * it. Shared by gate_acquire() and gate_book().
+ */
+static bool build_normal(struct sess *s, radiant_time_t start, radiant_time_t end,
+			 uint64_t len, bool extendable, bool no_extend,
+			 uint32_t end_margin_us, uint8_t prio)
+{
+	mpsl_timeslot_request_t *const rq = &s->req;
+
+	/* distance_us is measured from the previous timeslot's START in THIS
+	 * session, not now or an absolute time - and the anchor doesn't move
+	 * on a blocked request, keeping a run of denials from walking the
+	 * schedule. */
+	if (start <= s->anchor) {
 		stats.refused_too_near++;
-		return GATE_DENIED;
+		return false;
 	}
-	if ((start - g.anchor) > MPSL_TIMESLOT_DISTANCE_MAX_US) {
+	if ((start - s->anchor) > MPSL_TIMESLOT_DISTANCE_MAX_US) {
 		/* Further out than a NORMAL request can express. Fall
 		 * back to a fresh bootstrap rather than truncating the
 		 * distance, which would place the grant in the wrong
 		 * place entirely. */
 		stats.den_distance++;
-		g.anchor_valid = false;
-		return GATE_DENIED;
+		s->anchor_valid = false;
+		return false;
 	}
-	req.request_type = MPSL_TIMESLOT_REQ_TYPE_NORMAL;
-	req.params.normal.hfclk =
+	memset(rq, 0, sizeof(*rq));
+	rq->request_type = MPSL_TIMESLOT_REQ_TYPE_NORMAL;
+	rq->params.normal.hfclk =
 		MPSL_TIMESLOT_HFCLK_CFG_XTAL_GUARANTEED;
 	/* PRIORITY_HIGH for tracked slots/transmits, NORMAL for
 	 * elastic work. Only ranks our own requests against each
 	 * other - the SoftDevice Controller holds levels above
 	 * anything an application can request. */
-	req.params.normal.priority =
+	rq->params.normal.priority =
 		(prio == RADIANT_GATE_PRIO_HIGH)
 			? MPSL_TIMESLOT_PRIORITY_HIGH
 			: MPSL_TIMESLOT_PRIORITY_NORMAL;
-	req.params.normal.distance_us = (uint32_t)(start - g.anchor);
+	rq->params.normal.distance_us = (uint32_t)(start - s->anchor);
 	/* length_us is written BELOW, after the elastic clamp - see there. */
 
 	/* Staged, not written through `g` - this function can run during a
 	 * live grant, and these describe the NEXT one. See next_grant and
 	 * commit_next_grant(). */
-	next_grant.want_len_us = (uint32_t)len;
-	next_grant.grant_end = end;
+	s->ng.want_len_us = (uint32_t)len;
+	s->ng.grant_end = end;
 	/* Decided at the top of the function, because `len` above depends on
 	 * it. See the declarations there. */
-	next_grant.extendable = extendable;
-	next_grant.no_extend = no_extend;
+	s->ng.extendable = extendable;
+	s->ng.no_extend = no_extend;
 	/* The margin travels with the request built from it: every compare for
 	 * this grant is placed against g.end_margin_us, which is this value once
 	 * commit_next_grant() runs. */
-	next_grant.end_margin_us = end_margin_us;
-	next_grant.high_prio = (prio == RADIANT_GATE_PRIO_HIGH);
+	s->ng.end_margin_us = end_margin_us;
+	s->ng.high_prio = (prio == RADIANT_GATE_PRIO_HIGH);
 
 	/*
 	 * The elastic class asks small and grows (ADR 0013); everything else
@@ -2063,7 +2782,7 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 	if (extendable && len > (uint64_t)elastic_initial_us) {
 		len = elastic_initial_us;
 	}
-	next_grant.granted_len_us = (uint32_t)len;
+	s->ng.granted_len_us = (uint32_t)len;
 
 	/*
 	 * THE LENGTH ASSIGNMENT MUST BE THE LAST WORD, BELOW EVERY CLAMP, and it
@@ -2085,26 +2804,9 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 	 * 11517 grants being 100 us bootstrap anchors (len=100/100), and
 	 * radiant_nrf_gate_on_grant() entered zero times.
 	 */
-	req.params.normal.length_us = next_grant.granted_len_us;
-
-	/*
-	 * Handed to a thread, not called from here: radiant_sched.c arms from
-	 * the RADIO interrupt at priority 0, possibly from inside a timeslot,
-	 * where mpsl_timeslot_request() is not callable. The request is built
-	 * here and placed on the work queue where the call is legal; the core
-	 * is told PENDING either way.
-	 */
-	g.pending = true;
-	if (prio == RADIANT_GATE_PRIO_HIGH) {
-		stats.hi_pending++;
-	}
-	radiant_swi_pend(RADIANT_SWI_GATE_REQUEST);
-
-	/* The backstop: the operation's own start plus DEADLINE_SLACK_US
-	 * (see its comment for why not zero). */
-	deadline_arm((uint32_t)(t_from - now) + DEADLINE_SLACK_US);
-
-	return GATE_PENDING;
+	rq->params.normal.length_us = s->ng.granted_len_us;
+	GSTAT(s->ts_end = start + (radiant_time_t)s->ng.granted_len_us);
+	return true;
 }
 
 bool gate_held(void)
@@ -2118,10 +2820,85 @@ bool gate_held(void)
 void gate_forget_pending(void)
 {
 	if (g.pending) {
-		g.pending = false;
+		op_forget();
 		deadline_stop();
 	}
 }
+
+#if defined(CONFIG_RADIANT_GATE_MPSL_D2)
+bool gate_booking(void)
+{
+	return d2_on;
+}
+
+/*
+ * ADR 0018 (d2): place the request for an operation that will be armed later.
+ * Always the fixed class (a tracked window or a transmit: its instant is the
+ * master's and its length the core's), always into a session other than one
+ * carrying the staged operation, and refused rather than placed with less
+ * notice than PLACE_MIN_US - a booking exists precisely to give MPSL a full
+ * lead. See docs/adr18-eval/d2.md for every refusal path.
+ */
+int gate_book(radiant_time_t t_from, radiant_time_t t_to, uint16_t follow_on_us)
+{
+	radiant_time_t now;
+	radiant_time_t start;
+	radiant_time_t end;
+	uint64_t       len;
+	struct sess   *s;
+
+	if (!d2_on || !session_open) {
+		return GATE_BOOK_ENOTSUP;
+	}
+	now = radiant_radio_now();
+	start = (t_from > (radiant_time_t)HEAD_MARGIN_US)
+			? (t_from - (radiant_time_t)HEAD_MARGIN_US)
+			: 0u;
+	end = t_to + (radiant_time_t)follow_on_us + (radiant_time_t)TAIL_MARGIN_US;
+	if (end <= start) {
+		return GATE_BOOK_EDENIED;
+	}
+	len = (uint64_t)(end - start) + (uint64_t)END_MARGIN_FIXED_US;
+	if (len < MPSL_TIMESLOT_LENGTH_MIN_US) {
+		len = MPSL_TIMESLOT_LENGTH_MIN_US;
+	}
+	if (len > MPSL_TIMESLOT_LENGTH_MAX_US) {
+		return GATE_BOOK_EDENIED;
+	}
+	/* Already booked (the scheduler asks again after a rebuild)? */
+	for (uint32_t i = 0u; i < NSESS; i++) {
+		if (ss[i].open && ss[i].role == ROLE_BOOK && !ss[i].book_failed &&
+		    start >= ss[i].r_start && end <= ss[i].r_end) {
+			return GATE_BOOK_OK;
+		}
+	}
+	s = pick_free(false);
+	if (s == NULL) {
+		GSTAT(stats.book_busy++);
+		return GATE_BOOK_EBUSY;
+	}
+	if (start < now + (radiant_time_t)PLACE_MIN_US) {
+		GSTAT(stats.book_near++);
+		return GATE_BOOK_EDENIED;
+	}
+	if (!s->anchor_valid) {
+		bootstrap_anchor(s);
+		return GATE_BOOK_EDENIED;
+	}
+	if (!build_normal(s, start, end, len, false, false, END_MARGIN_FIXED_US,
+			  RADIANT_GATE_PRIO_HIGH)) {
+		return GATE_BOOK_EDENIED;
+	}
+	s->r_start = start;
+	s->r_end = end;
+	s->book_failed = false;
+	s->role = ROLE_BOOK;
+	s->want_place = true;
+	GSTAT(stats.book_placed++);
+	radiant_swi_pend(RADIANT_SWI_GATE_REQUEST);
+	return GATE_BOOK_OK;
+}
+#endif
 
 static void gate_release_masked(void);
 
@@ -2148,8 +2925,9 @@ static void gate_release_masked(void)
 	if (!g.granted) {
 		/* Nothing held. The abort path calls this without knowing,
 		 * and a pending request is cancelled by the core's own
-		 * terminal rather than here. */
-		g.pending = false;
+		 * terminal rather than here. The request stays MPSL's - see
+		 * op_forget(). */
+		op_forget();
 		deadline_stop();
 		/*
 		 * This branch is reached with the radio still ours in the
@@ -2184,6 +2962,16 @@ static void gate_release_masked(void)
 	 */
 	g.granted = false;
 	g.release_wanted = true;
+#if defined(CONFIG_RADIANT_GATE_MPSL_STATS)
+	if (!g.extendable) {
+		uint32_t d = (uint32_t)(radiant_radio_now() - ss[g.live_sess].anchor);
+
+		stats.rel_fixed_last = d;
+		if (d > stats.rel_fixed_max) {
+			stats.rel_fixed_max = d;
+		}
+	}
+#endif
 
 	/*
 	 * Bug 9: a compare written behind the counter never fires. The old
@@ -2212,6 +3000,9 @@ static void gate_release_masked(void)
 
 		nrf_timer_task_trigger(MPSL_TIMER0, NRF_TIMER_TASK_CAPTURE1);
 		want = nrf_timer_cc_get(MPSL_TIMER0, 1) + RELEASE_LEAD_US;
+		GSTAT(stats.rel_cap_last = want - RELEASE_LEAD_US);
+		GSTAT(stats.rel_est_last =
+			(uint32_t)(radiant_radio_now() - ss[g.live_sess].anchor));
 
 		if (want < cc_backstop) {
 			nrf_timer_cc_set(MPSL_TIMER0, 0, want);
@@ -2226,8 +3017,12 @@ static void gate_release_masked(void)
 			    !nrf_timer_event_check(MPSL_TIMER0,
 						   NRF_TIMER_EVENT_COMPARE0)) {
 				nrf_timer_cc_set(MPSL_TIMER0, 0, cc_backstop);
+				GSTAT(stats.rel_br_restore++);
+			} else {
+				GSTAT(stats.rel_br_ok++);
 			}
 		} else {
+			GSTAT(stats.rel_br_inside++);
 			/* Already inside the end margin - the armed compare
 			 * is the right one, moving it can only lose. */
 			nrf_timer_int_enable(MPSL_TIMER0,

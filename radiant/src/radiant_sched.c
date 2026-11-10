@@ -243,6 +243,29 @@ static struct {
 	uint8_t phy;
 	bool    phy_known;
 
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+	/*
+	 * ADR 0018 (d2): committed operations booked with the backend
+	 * (radiant_radio_book()), so they may be armed later at the in-grant
+	 * lead. Keyed by the booked air, not by channel: a merged window's
+	 * members are covered by their leader's booking. Pruned by time.
+	 */
+	struct {
+		bool                             used;
+		uint8_t                          kind; /* SLOT_RX or SLOT_TX */
+		uint8_t                          rf;
+		uint8_t                          ch;   /* TX only */
+		const struct radiant_pkt_format *fmt;
+		radiant_time_t                   open;
+		radiant_time_t                   close;
+	} bk[RADIANT_SCHED_BOOK_MAX];
+	/* Where the last fixed-class operation's air ends, follow-on reserve
+	 * included (close + follow_on_us). A scan chunk placed in the other
+	 * session must not start before the arbiter has that timeslot ending:
+	 * see arm_next(). */
+	radiant_time_t fix_end;
+#endif
+
 	struct radiant_sched_stats stats;
 } s;
 
@@ -432,11 +455,237 @@ static bool in_reserve(const struct sched_slot *sl)
 	return last <= s.reserve_end;
 }
 
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+/*
+ * ADR 0018 (d2). A booking backend (caps.booking) places the air for a
+ * committed operation a lead ahead, while another operation (normally a scan
+ * chunk) is armed; the booked operation is then armed at the in-grant lead,
+ * and the chunk in front of it stops RADIANT_SCHED_BOOK_GAP_US before it
+ * instead of a whole min_arm_lead_us. Scan chunks are placed at
+ * caps.min_arm_lead_elastic_us. Inert unless caps.booking is set.
+ * docs/adr18-eval/d2.md.
+ */
+static radiant_time_t t_max(radiant_time_t a, radiant_time_t b);
+static radiant_time_t t_min(radiant_time_t a, radiant_time_t b);
+static radiant_time_t t_fwd(radiant_time_t t, radiant_time_t d);
+
+static bool booking(void)
+{
+	return s.caps != NULL && s.caps->booking;
+}
+
+static radiant_time_t el_lead(void)
+{
+	radiant_time_t l = (s.caps != NULL)
+				   ? (radiant_time_t)s.caps->min_arm_lead_elastic_us
+				   : 0u;
+
+	return (l != 0u) ? l : arm_lead();
+}
+
+/* The floor for arming a booked operation (see RADIANT_SCHED_BOOK_ARM_US). */
+static radiant_time_t book_lead(void)
+{
+	return in_grant_lead() + (radiant_time_t)RADIANT_SCHED_BOOK_ARM_US;
+}
+
+static bool is_booked(const struct sched_slot *sl)
+{
+	const uint8_t idx = (uint8_t)(sl - &s.ch[0]);
+
+	if (!booking()) {
+		return false;
+	}
+	for (uint32_t i = 0u; i < RADIANT_SCHED_BOOK_MAX; i++) {
+		if (!s.bk[i].used || s.bk[i].kind != sl->kind) {
+			continue;
+		}
+		if (sl->kind == (uint8_t)SLOT_RX && !sl->continuous &&
+		    s.bk[i].fmt == sl->fmt && s.bk[i].rf == sl->rf_index &&
+		    sl->t_start >= s.bk[i].open && sl->t_end <= s.bk[i].close) {
+			return true;
+		}
+		if (sl->kind == (uint8_t)SLOT_TX && s.bk[i].ch == idx &&
+		    s.bk[i].open == sl->t_start) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/* Forget bookings whose air is over. */
+static void bk_prune(radiant_time_t now)
+{
+	for (uint32_t i = 0u; i < RADIANT_SCHED_BOOK_MAX; i++) {
+		if (s.bk[i].used && s.bk[i].close < now) {
+			s.bk[i].used = false;
+		}
+	}
+}
+
+/*
+ * Book slot c with the backend: the air exactly as the arm would ask for it,
+ * widened to whatever bounded receive could merge into its window (rule 4's
+ * span, the largest follow-on among them), so the later arm lies inside the
+ * booking whichever members join. A bounded receive or a transmit only.
+ */
+static int book_slot(uint8_t c)
+{
+	struct sched_slot *sl = &s.ch[c];
+	uint32_t           free_i = RADIANT_SCHED_BOOK_MAX;
+	radiant_time_t     open;
+	radiant_time_t     close;
+	int                rc;
+
+	for (uint32_t i = 0u; i < RADIANT_SCHED_BOOK_MAX; i++) {
+		if (!s.bk[i].used) {
+			free_i = i;
+			break;
+		}
+	}
+	if (free_i >= RADIANT_SCHED_BOOK_MAX) {
+		s.stats.book_busy++;
+		return RADIANT_RADIO_EBUSY;
+	}
+	if (sl->kind == (uint8_t)SLOT_RX && !sl->continuous) {
+		struct radiant_rx_req req;
+		uint16_t              fo = sl->follow_on_us;
+		radiant_time_t        span_end =
+			sl->t_start + (radiant_time_t)RADIANT_SCHED_MERGE_SPAN_MAX_US;
+
+		open = sl->t_start;
+		close = sl->t_end;
+		for (uint32_t k = 0u; k < RADIANT_SCHED_MAX_CHANNELS; k++) {
+			const struct sched_slot *m = &s.ch[k];
+
+			if (k == c || m->kind != (uint8_t)SLOT_RX || m->continuous ||
+			    m->in_flight || m->fmt != sl->fmt ||
+			    m->rf_index != sl->rf_index ||
+			    m->t_start < sl->t_start || m->t_start > span_end) {
+				continue;
+			}
+			close = t_max(close, t_min(m->t_end, span_end));
+			if (m->follow_on_us > fo) {
+				fo = m->follow_on_us;
+			}
+		}
+		memset(&req, 0, sizeof(req));
+		req.fmt = sl->fmt;
+		req.rf_index = sl->rf_index;
+		req.filters = sl->filters;
+		req.n_filters = sl->n_filters;
+		req.t_open = open;
+		req.t_close = close;
+		req.follow_on_us = fo;
+		rc = radiant_radio_book(&req, NULL);
+	} else if (sl->kind == (uint8_t)SLOT_TX) {
+		struct radiant_tx_req req;
+
+		memset(&req, 0, sizeof(req));
+		req.fmt = sl->fmt;
+		req.rf_index = sl->rf_index;
+		req.power = sl->power;
+		memcpy(req.addr, sl->addr, sizeof(req.addr));
+		req.addr_len = sl->addr_len;
+		req.body = sl->body;
+		req.body_len = sl->body_len;
+		req.t_sync_at = sl->t_start;
+		req.follow_on_us = sl->follow_on_us;
+		open = sl->t_start;
+		close = sl->t_start;
+		rc = radiant_radio_book(NULL, &req);
+	} else {
+		return RADIANT_RADIO_EINVAL;
+	}
+	if (rc == RADIANT_RADIO_OK_RC) {
+		s.bk[free_i].used = true;
+		s.bk[free_i].kind = sl->kind;
+		s.bk[free_i].rf = sl->rf_index;
+		s.bk[free_i].ch = c;
+		s.bk[free_i].fmt = sl->fmt;
+		s.bk[free_i].open = open;
+		s.bk[free_i].close = close;
+		s.stats.booked++;
+	} else if (rc == RADIANT_RADIO_EBUSY) {
+		s.stats.book_busy++;
+	} else {
+		s.stats.book_refused++;
+	}
+	return rc;
+}
+
+/* The committed (bounded, not in flight) operation that starts first after
+ * `after`, or -1. Ties go to the lower index; skip_ch is excluded. */
+static int next_committed(radiant_time_t after, int skip_ch)
+{
+	int            best = -1;
+	radiant_time_t best_at = RADIANT_TIME_NEVER;
+
+	for (uint32_t k = 0u; k < RADIANT_SCHED_MAX_CHANNELS; k++) {
+		const struct sched_slot *sl = &s.ch[k];
+
+		if ((int)k == skip_ch || sl->in_flight ||
+		    !((sl->kind == (uint8_t)SLOT_RX && !sl->continuous) ||
+		      sl->kind == (uint8_t)SLOT_TX)) {
+			continue;
+		}
+		if (sl->t_start < after || sl->t_start >= best_at) {
+			continue;
+		}
+		best = (int)k;
+		best_at = sl->t_start;
+	}
+	return best;
+}
+
+/*
+ * After a pass: book the committed operations that follow, earliest first,
+ * while the backend has room. This is what keeps an R1 pair (two tracked
+ * channels 2.6-24.4 ms apart) on both slots: each is booked a period ahead,
+ * in the session the other's grant just freed.
+ */
+static void book_ahead(radiant_time_t now)
+{
+	radiant_time_t after = t_fwd(now, arm_lead());
+
+	if (!booking()) {
+		return;
+	}
+	for (uint32_t n = 0u; n < 2u; n++) {
+		int c = next_committed(after, -1);
+
+		while (c >= 0 && is_booked(&s.ch[c])) {
+			after = s.ch[c].t_start + 1u;
+			c = next_committed(after, -1);
+		}
+		if (c < 0) {
+			return;
+		}
+		if (book_slot((uint8_t)c) != RADIANT_RADIO_OK_RC) {
+			return;
+		}
+		after = s.ch[c].t_start + 1u;
+	}
+}
+#endif /* CONFIG_RADIANT_SCHED_BOOKING */
+
 /* The earliest this slot can be armed, given the pass's ordinary floor
  * (now + arm_lead()): nearer for a follow-on inside the held reserve. */
 static radiant_time_t slot_earliest(const struct sched_slot *sl,
 				    radiant_time_t earliest)
 {
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+	/* A booked operation is armed into air already placed; a scan chunk
+	 * at the elastic lead. */
+	if (booking()) {
+		if (is_booked(sl)) {
+			return earliest - arm_lead() + book_lead();
+		}
+		if (sl->kind == (uint8_t)SLOT_RX && sl->continuous) {
+			return earliest - arm_lead() + el_lead();
+		}
+	}
+#endif
 	return in_reserve(sl) ? (earliest - arm_lead() + in_grant_lead())
 			      : earliest;
 }
@@ -1096,6 +1345,13 @@ static enum step arm_rx_window(uint8_t leader, radiant_time_t earliest,
 	if (s.n_merged == 1u && lead->stop_on_first && !lead->continuous) {
 		flags |= RADIANT_RX_STOP_ON_FIRST;
 	}
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+	/* ADR 0018 (d2): a scan chunk is the elastic class whatever its length,
+	 * so a booking backend places it at the elastic lead. */
+	if (lead->continuous && booking()) {
+		flags |= RADIANT_RX_ELASTIC;
+	}
+#endif
 
 	memset(&req, 0, sizeof(req));
 	req.fmt = lead->fmt;
@@ -1127,6 +1383,11 @@ static enum step arm_rx_window(uint8_t leader, radiant_time_t earliest,
 	s.armed_stop_on_first = (flags & RADIANT_RX_STOP_ON_FIRST) != 0u;
 	s.armed_continuous = lead->continuous;
 	s.reserve_end = (follow_on != 0u) ? close + (radiant_time_t)follow_on : 0u;
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+	if (!lead->continuous) {
+		s.fix_end = close + (radiant_time_t)follow_on;
+	}
+#endif
 	phy_armed(lead->fmt);
 	s.replan = false;
 	for (i = 0u; i < s.n_members; i++) {
@@ -1163,6 +1424,11 @@ static enum step arm_rx_leader(uint8_t leader, radiant_time_t earliest,
 {
 	const struct sched_slot *sl = &s.ch[leader];
 
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+	if (is_booked(sl)) {
+		return arm_rx_window(leader, slot_earliest(sl, earliest), limit);
+	}
+#endif
 	if (in_reserve(sl)) {
 		return arm_rx_window(leader, slot_earliest(sl, earliest),
 				     t_min(limit, s.reserve_end));
@@ -1441,8 +1707,20 @@ static bool want_preempt(radiant_time_t earliest)
 				return true;
 			}
 		} else if (s.armed_continuous && !sl->continuous) {
+			radiant_time_t need = lead;
+
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+			/* A booked operation needs only the gap the chunk in
+			 * front of it was cut to leave (arm_next()); with the
+			 * whole lead here every pass mid-chunk would tear the
+			 * chunk down. */
+			if (is_booked(sl)) {
+				need = book_lead() +
+				       (radiant_time_t)RADIANT_SCHED_DISPATCH_SLACK_US;
+			}
+#endif
 			if (sl->t_start <
-			    s.armed_end + lead + phy_lead(sl->fmt)) {
+			    s.armed_end + need + phy_lead(sl->fmt)) {
 				return true;
 			}
 		}
@@ -1582,14 +1860,122 @@ static enum step arm_next(radiant_time_t earliest)
 	}
 
 	if (scan_ch >= 0) {
-		radiant_time_t s_open = t_max(scan_at, earliest);
+		/* The scan's own floor: the ordinary one, or (d2) the elastic
+		 * lead. slot_earliest() is the identity without booking. */
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+		radiant_time_t s_earliest = slot_earliest(&s.ch[scan_ch], earliest);
+#else
+		const radiant_time_t s_earliest = earliest;
+#endif
+		radiant_time_t s_open = t_max(scan_at, s_earliest);
 		radiant_time_t s_limit = RADIANT_TIME_NEVER;
+
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+		/*
+		 * Not before the last tracked window's timeslot has ended. That
+		 * timeslot is booked to its close plus the follow-on reserve,
+		 * and with two sessions the arbiter judges the chunk's request
+		 * against all of it at once, released early or not (the nRF
+		 * gate measured the release arriving only at the grant's own end
+		 * whenever the window had received a frame). A chunk opened
+		 * inside it waits for that end and then has too little notice
+		 * left; opening after it costs the same listening without the
+		 * wasted request.
+		 */
+		if (booking() && s.fix_end != 0u) {
+			s_earliest = t_max(s_earliest,
+					   s.fix_end +
+						   (radiant_time_t)RADIANT_SCHED_BOOK_TAIL_US);
+			s_open = t_max(s_open, s_earliest);
+		}
+#endif
 		uint32_t   chunk = s.ch[scan_ch].chunk_us;
+		bool       booked_gap = false;
 
 		if (chunk == 0u) {
 			chunk = RADIANT_SCHED_SCAN_CHUNK_US;
 		}
-		if (committed != RADIANT_TIME_NEVER) {
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+		/*
+		 * ADR 0018 (d2): book the committed operation BEFORE arming the
+		 * chunk in front of it, so its request is with the arbiter before
+		 * the chunk's grant can reach its instant (Phase 0c F2: first
+		 * come, first served). Then the chunk runs to a small gap before
+		 * it instead of a whole lead.
+		 */
+		if (committed != RADIANT_TIME_NEVER && booking()) {
+			int c1 = (tx_ch >= 0 && tx_at == committed) ? tx_ch : rx_ch;
+			/*
+			 * Book here, before the chunk, only if today's limit
+			 * would bind on this chunk. A committed operation
+			 * further off than one capped chunk is booked by
+			 * book_ahead() AFTER the chunk is armed: the chunk's
+			 * grant cannot reach it before that booking is placed,
+			 * and the chunk then has the idle session (the gate's
+			 * pick_free()) instead of waiting out the one the last
+			 * operation is still releasing.
+			 */
+			const radiant_time_t c_want = window_cap(
+				s_open, s_open + (radiant_time_t)chunk);
+			const bool binds =
+				t_back(committed, arm_lead() +
+						  RADIANT_SCHED_DISPATCH_SLACK_US +
+						  rx_tail(s.ch[scan_ch].fmt)) <
+				c_want;
+
+			if (c1 >= 0 && binds && !is_booked(&s.ch[c1]) &&
+			    s.ch[c1].t_start >= earliest) {
+				(void)book_slot((uint8_t)c1);
+			}
+			if (c1 >= 0 && is_booked(&s.ch[c1])) {
+				const struct sched_slot *k1 = &s.ch[c1];
+				radiant_time_t           c1_end;
+				int                      c2;
+
+				committed = t_max(k1->t_start,
+						  earliest - arm_lead() + book_lead());
+				s_limit = t_back(committed,
+						 book_lead() +
+							 RADIANT_SCHED_DISPATCH_SLACK_US +
+							 RADIANT_SCHED_BOOK_GAP_US +
+							 phy_gap(s.ch[scan_ch].fmt,
+								 committed_fmt) +
+							 rx_tail(s.ch[scan_ch].fmt));
+				booked_gap = true;
+				/*
+				 * R1. A second committed operation that is not
+				 * booked must still be bookable with a full lead
+				 * once a session frees. If c1's own grant ends
+				 * too late for that, the only session that can
+				 * free in time is this chunk's: stop the chunk a
+				 * lead before c2 instead. Costs listening, never a
+				 * slot. (Booking c2 now instead would leave the
+				 * chunk no session at all until c1 ends, which
+				 * costs more listening than the cut.)
+				 */
+				c1_end = (k1->kind == (uint8_t)SLOT_TX)
+						 ? k1->t_start
+						 : k1->t_end;
+				c1_end += (radiant_time_t)k1->follow_on_us;
+				c2 = next_committed(k1->t_start + 1u, c1);
+				if (c2 >= 0 && !is_booked(&s.ch[c2]) &&
+				    t_fwd(c1_end, book_lead()) >
+					    t_back(s.ch[c2].t_start, arm_lead())) {
+					radiant_time_t r1 = t_back(
+						s.ch[c2].t_start,
+						arm_lead() +
+							RADIANT_SCHED_DISPATCH_SLACK_US +
+							rx_tail(s.ch[scan_ch].fmt));
+
+					if (r1 < s_limit) {
+						s_limit = r1;
+						s.stats.book_r1_cut++;
+					}
+				}
+			}
+		}
+#endif
+		if (committed != RADIANT_TIME_NEVER && !booked_gap) {
 			/*
 			 * THE GAP IN FRONT OF A COMMITTED OPERATION IS THREE
 			 * THINGS, NOT TWO. The lead the committed window needs
@@ -1631,7 +2017,7 @@ static enum step arm_next(radiant_time_t earliest)
 			radiant_time_t want = s_open + (radiant_time_t)chunk;
 			enum step  st;
 
-			st = arm_rx_window((uint8_t)scan_ch, earliest,
+			st = arm_rx_window((uint8_t)scan_ch, s_earliest,
 					   t_min(s_limit, want));
 			if (st != STEP_SKIP) {
 				return st;
@@ -1850,6 +2236,9 @@ static void pass(void)
 	}
 	s.in_pass = true;
 	now = radiant_radio_now();
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+	bk_prune(now);
+#endif
 
 	/* Bounded: every retry consumes a request or arms one, and there are
 	 * only so many. The margin over channel count covers one window
@@ -1864,6 +2253,9 @@ static void pass(void)
 			break;
 		}
 	}
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+	book_ahead(now);
+#endif
 	s.dirty = false;
 	s.in_pass = false;
 	radiant_event_crit_exit(key);

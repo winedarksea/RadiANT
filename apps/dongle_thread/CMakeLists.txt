@@ -282,6 +282,10 @@ if(CONFIG_CHIP)
   ncs_configure_data_model()
 endif()
 
+# ADR 0018 Phase 1 bench BLE load (ble_load.conf). Never in a shipping image.
+target_sources_ifdef(CONFIG_ANT_DONGLE_BLE_LOAD app PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/ble_load.c")
+
 target_sources_ifdef(CONFIG_ANT_DONGLE_RX_TAP app PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/src/rx_tap.c")
 

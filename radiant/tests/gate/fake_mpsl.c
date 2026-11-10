@@ -17,10 +17,21 @@
  * of it, the same way MPSL owns exactly one. */
 fake_timer_t fake_mpsl_timer0;
 
+#define FAKE_SESS_MAX 2u
+
 static struct {
 	mpsl_timeslot_callback_t cb;
 	mpsl_timeslot_session_id_t id;
 	bool     open;
+	/* ADR 0018 (d2): up to FAKE_SESS_MAX sessions, the first being the
+	 * one every single-session test talks to. max_sessions 0 means 1, so a
+	 * test that never asks for two sees exactly the old fake. */
+	uint32_t max_sessions;
+	bool     s_open[FAKE_SESS_MAX];
+	uint32_t s_requests[FAKE_SESS_MAX];
+	mpsl_timeslot_request_t s_last_req[FAKE_SESS_MAX];
+	uint32_t target;      /* which session fake_mpsl_signal() talks to */
+	uint32_t last_sess;   /* which session the last request was for */
 	uint32_t opens;
 	uint32_t closes;
 	uint32_t requests;
@@ -53,26 +64,52 @@ static bool release_in_radio_irq;
 int32_t mpsl_timeslot_session_open(mpsl_timeslot_callback_t cb,
 				   mpsl_timeslot_session_id_t *p_session_id)
 {
+	uint32_t max = (m.max_sessions == 0u) ? 1u : m.max_sessions;
+	uint32_t i;
+
 	if (cb == NULL || p_session_id == NULL) {
 		return -NRF_EINVAL;
 	}
+	for (i = 0u; i < max && i < FAKE_SESS_MAX; i++) {
+		if (!m.s_open[i]) {
+			break;
+		}
+	}
+	if (i >= max || i >= FAKE_SESS_MAX) {
+		/* mpsl_timeslot.h: -NRF_ENOMEM, all sessions are open. */
+		return -NRF_ENOMEM;
+	}
 	m.cb = cb;
-	m.open = true;
+	m.s_open[i] = true;
+	m.open = m.s_open[0];
 	m.opens++;
 	/* Not zero, so a gate that forgot to keep the id and passed a
 	 * zero-initialised variable back is distinguishable from one that
 	 * kept it. */
 	m.id = 3u;
-	*p_session_id = m.id;
+	*p_session_id = (mpsl_timeslot_session_id_t)(3u + i);
 	return 0;
+}
+
+static int32_t sess_index(mpsl_timeslot_session_id_t session_id)
+{
+	uint32_t i = (uint32_t)session_id - 3u;
+
+	if ((uint32_t)session_id < 3u || i >= FAKE_SESS_MAX || !m.s_open[i]) {
+		return -1;
+	}
+	return (int32_t)i;
 }
 
 int32_t mpsl_timeslot_session_close(mpsl_timeslot_session_id_t session_id)
 {
-	if (!m.open || session_id != m.id) {
+	int32_t i = sess_index(session_id);
+
+	if (i < 0) {
 		return -NRF_EINVAL;
 	}
-	m.open = false;
+	m.s_open[i] = false;
+	m.open = m.s_open[0];
 	m.closes++;
 	return 0;
 }
@@ -80,11 +117,16 @@ int32_t mpsl_timeslot_session_close(mpsl_timeslot_session_id_t session_id)
 int32_t mpsl_timeslot_request(mpsl_timeslot_session_id_t      session_id,
 			      mpsl_timeslot_request_t const *p_request)
 {
-	if (!m.open || session_id != m.id || p_request == NULL) {
+	int32_t i = sess_index(session_id);
+
+	if (i < 0 || p_request == NULL) {
 		return -NRF_EINVAL;
 	}
 	m.requests++;
 	m.last_req = *p_request;
+	m.s_requests[i]++;
+	m.s_last_req[i] = *p_request;
+	m.last_sess = (uint32_t)i;
 
 	if (m.force_left > 0u) {
 		m.force_left--;
@@ -96,7 +138,7 @@ int32_t mpsl_timeslot_request(mpsl_timeslot_session_id_t      session_id,
 	 * rule-violation counters still watch this delivery like any other. */
 	if (m.inline_left > 0u) {
 		m.inline_left--;
-		(void)fake_mpsl_signal(m.inline_signal);
+		(void)fake_mpsl_signal_s((uint32_t)i, m.inline_signal);
 	}
 	return 0;
 }
@@ -107,6 +149,11 @@ int32_t mpsl_timeslot_request(mpsl_timeslot_session_id_t      session_id,
  */
 
 uint8_t fake_mpsl_signal(uint32_t signal)
+{
+	return fake_mpsl_signal_s(m.target, signal);
+}
+
+uint8_t fake_mpsl_signal_s(uint32_t sess, uint32_t signal)
 {
 	mpsl_timeslot_signal_return_param_t *p;
 	uint8_t action;
@@ -122,7 +169,7 @@ uint8_t fake_mpsl_signal(uint32_t signal)
 		m.in_timeslot = true;
 	}
 
-	p = m.cb(m.id, signal);
+	p = m.cb((mpsl_timeslot_session_id_t)(3u + sess), signal);
 	if (p == NULL) {
 		/* mpsl_timeslot.h requires a pointer that outlives the
 		 * callback; a null one is a fault in its own right. */
@@ -185,6 +232,22 @@ const mpsl_timeslot_request_t *fake_mpsl_last_request(void)
 	return &m.last_req;
 }
 
+void fake_mpsl_set_max_sessions(uint32_t n) { m.max_sessions = n; }
+void fake_mpsl_target(uint32_t sess) { m.target = sess; }
+uint32_t fake_mpsl_last_session(void) { return m.last_sess; }
+bool fake_mpsl_is_open_s(uint32_t sess)
+{
+	return sess < FAKE_SESS_MAX && m.s_open[sess];
+}
+uint32_t fake_mpsl_requests_s(uint32_t sess)
+{
+	return (sess < FAKE_SESS_MAX) ? m.s_requests[sess] : 0u;
+}
+const mpsl_timeslot_request_t *fake_mpsl_last_request_s(uint32_t sess)
+{
+	return &m.s_last_req[(sess < FAKE_SESS_MAX) ? sess : 0u];
+}
+
 uint32_t fake_mpsl_viol_low_prio_action(void) { return m.viol_low_prio_action; }
 uint32_t fake_mpsl_viol_end_when_ended(void)  { return m.viol_end_when_ended; }
 uint32_t fake_mpsl_viol_action_no_slot(void)  { return m.viol_action_no_slot; }
@@ -236,3 +299,11 @@ void radiant_nrf_gate_on_grant_end(void)
 {
 	b.on_grant_end++;
 }
+
+#if defined(CONFIG_RADIANT_GATE_MPSL_D2)
+void radiant_nrf_gate_set_elastic_lead(uint32_t us)
+{
+	b.elastic_lead_us = us;
+	b.elastic_lead_sets++;
+}
+#endif

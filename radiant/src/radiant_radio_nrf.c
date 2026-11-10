@@ -682,8 +682,23 @@ const struct radiant_radio_caps *radiant_radio_caps_get(void)
 	 */
 	radiant_nrf_caps.min_arm_lead_us =
 		(uint16_t)(ARM_LEAD_US + gate_min_arm_lead_us());
+#if defined(CONFIG_RADIANT_GATE_MPSL_D2)
+	/* ADR 0018 (d2): true once the gate has its second session. Also kept
+	 * current by radiant_nrf_gate_set_elastic_lead(), since the scheduler
+	 * caches this pointer and re-reads the fields every pass. */
+	radiant_nrf_caps.booking = gate_booking();
+#endif
 	return &radiant_nrf_caps;
 }
+
+#if defined(CONFIG_RADIANT_GATE_MPSL_D2)
+void radiant_nrf_gate_set_elastic_lead(uint32_t us)
+{
+	radiant_nrf_caps.min_arm_lead_elastic_us =
+		(us != 0u) ? (uint16_t)(ARM_LEAD_US + us) : 0u;
+	radiant_nrf_caps.booking = (us != 0u);
+}
+#endif
 
 /*
  * t_sync is the instant the last address bit was at the antenna; hardware
@@ -2133,10 +2148,21 @@ static volatile uint32_t core_cb_tail;
  */
 static volatile bool grant_release_owed;
 static uint32_t      core_cb_depth;
+#if defined(CONFIG_RADIANT_GATE_MPSL_STATS_LOG)
+/* Bench diagnostic (ADR 0018 d2), printed by the gate's D2 log: settle calls
+ * that [0] released, [1] kept the grant for a follow-on, [2] waited for a
+ * queued completion, [3] found nothing owed; [4] d2_settle_now releases;
+ * [5] after_core immediate releases; [6] after_core owed. */
+uint32_t radiant_d2_dbg[8];
+#define D2DBG(i) (radiant_d2_dbg[(i)]++)
+#else
+#define D2DBG(i) ((void)0)
+#endif
 
 static void grant_release_after_core(void)
 {
 	if (gate_held() && (core_cb_depth != 0u || gate_in_signal())) {
+		D2DBG(6);
 		grant_release_owed = true;
 		if (gate_in_signal()) {
 			/* Pended even if the completion failed to queue, so the
@@ -2145,6 +2171,7 @@ static void grant_release_after_core(void)
 		}
 		return;
 	}
+	D2DBG(5);
 	gate_release();
 }
 
@@ -2152,18 +2179,47 @@ static void grant_release_settle(void)
 {
 	/* A completion still queued may yet arm the follow-on; its dispatch
 	 * settles instead (the enqueue pended it). */
-	if (!grant_release_owed || core_cb_tail != core_cb_head) {
+	if (!grant_release_owed) {
+		D2DBG(3);
+		return;
+	}
+	if (core_cb_tail != core_cb_head) {
+		D2DBG(2);
 		return;
 	}
 	grant_release_owed = false;
 	if (radiant_op.kind != OP_NONE && !radiant_staged.pending) {
 		/* Programmed into the held air: the follow-on owns the grant. */
+		D2DBG(1);
 		return;
 	}
 	if (gate_held()) {
+		D2DBG(0);
 		gate_release();
 	}
 }
+
+#if defined(CONFIG_RADIANT_GATE_MPSL_D2)
+/*
+ * ADR 0018 (d2): the operation just armed was staged behind a NEW request,
+ * not programmed into the held air - so nothing can follow into that air any
+ * more (one operation at a time), and an owed release can be paid now rather
+ * than when the dispatch drains. With two sessions the new request is judged
+ * by MPSL against the held timeslot's whole booked length (a tracked window's
+ * follow-on reserve included) until that timeslot ends, so every microsecond
+ * the release waits comes out of the next request's notice. Measured on
+ * gate.conf: the scan chunk after every tracked window reached MPSL with under
+ * 1 ms of its 3 ms notice left and was refused, 448 of 448.
+ */
+static void d2_settle_now(void)
+{
+	if (grant_release_owed && gate_held()) {
+		D2DBG(4);
+		grant_release_owed = false;
+		gate_release();
+	}
+}
+#endif
 
 static void core_cb_dispatch(void)
 {
@@ -2931,6 +2987,9 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 		 * stay valid and unmodified until the completion callback. */
 		radiant_staged.tx = *req;
 		radiant_staged.pending = true;
+#if defined(CONFIG_RADIANT_GATE_MPSL_D2)
+		d2_settle_now();
+#endif
 		return RADIANT_RADIO_OK_RC;
 	}
 
@@ -3252,6 +3311,88 @@ static int program_rx(const struct radiant_rx_req *req)
 	return RADIANT_RADIO_OK_RC;
 }
 
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+/*
+ * radiant_radio_rx()'s class rule (see the comment at its gate_acquire()),
+ * plus RADIANT_RX_ELASTIC, which a booking build's scheduler sets on every
+ * scan chunk so a short chunk in a short gap is not mistaken for a tracked
+ * window. Only in booking builds: every other build keeps the expression
+ * inline, byte for byte.
+ */
+static uint8_t rx_gate_prio(const struct radiant_rx_req *req)
+{
+	if ((req->flags & RADIANT_RX_ELASTIC) != 0u) {
+		return RADIANT_GATE_PRIO_NORMAL;
+	}
+	return ((req->t_close - req->t_open) >= 10000u) ? RADIANT_GATE_PRIO_NORMAL
+							: RADIANT_GATE_PRIO_HIGH;
+}
+
+/*
+ * ADR 0018 (d2): book the air for an operation that will be armed later. The
+ * instants are computed exactly as radiant_radio_rx()/_tx() compute them for
+ * gate_acquire(), so the later arm's air is the booked air. Only the fixed
+ * class is bookable: an elastic window is the scan, which gives way.
+ */
+int radiant_radio_book(const struct radiant_rx_req *rx,
+		       const struct radiant_tx_req *tx)
+{
+#if defined(CONFIG_RADIANT_GATE_MPSL_D2)
+	radiant_time_t from;
+	radiant_time_t to;
+	uint16_t       follow_on;
+	int            rc;
+
+	if (!radiant_op.inited || !radiant_op.enabled) {
+		return RADIANT_RADIO_ESTATE;
+	}
+	if ((rx == NULL) == (tx == NULL)) {
+		return RADIANT_RADIO_EINVAL;
+	}
+	if (rx != NULL) {
+		if (rx->fmt == NULL || rx->t_close < rx->t_open) {
+			return RADIANT_RADIO_EINVAL;
+		}
+		if (rx_gate_prio(rx) != RADIANT_GATE_PRIO_HIGH) {
+			return RADIANT_RADIO_ENOTSUP;
+		}
+		from = rx->t_open -
+		       (radiant_time_t)air_lead_us(rx->fmt->phy, rx->fmt->addr_len);
+		to = rx->t_close + (radiant_time_t)(((uint32_t)rx->fmt->body_len + 2u) *
+						     US_PER_BYTE);
+		follow_on = rx->follow_on_us;
+	} else {
+		uint32_t lead_us;
+
+		if (tx->fmt == NULL) {
+			return RADIANT_RADIO_EINVAL;
+		}
+		lead_us = air_lead_us(tx->fmt->phy, tx->addr_len) +
+			  (uint32_t)T_SYNC_CAL_TX_US;
+		from = tx->t_sync_at - (radiant_time_t)lead_us;
+		to = tx->t_sync_at + (radiant_time_t)(((uint32_t)tx->body_len + 2u) *
+						      US_PER_BYTE);
+		follow_on = tx->follow_on_us;
+	}
+	rc = gate_book(from, to, follow_on);
+	switch (rc) {
+	case GATE_BOOK_OK:
+		return RADIANT_RADIO_OK_RC;
+	case GATE_BOOK_EBUSY:
+		return RADIANT_RADIO_EBUSY;
+	case GATE_BOOK_EDENIED:
+		return RADIANT_RADIO_EDENIED;
+	default:
+		return RADIANT_RADIO_ENOTSUP;
+	}
+#else
+	ARG_UNUSED(rx);
+	ARG_UNUSED(tx);
+	return RADIANT_RADIO_ENOTSUP;
+#endif
+}
+#endif
+
 int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 {
 	unsigned int key;
@@ -3332,9 +3473,13 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 			  * at 400 us each way); only a scan chunk or ED sweep
 			  * runs tens of milliseconds. 10 ms clears both.
 			  */
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+			 rx_gate_prio(req));
+#else
 			 ((req->t_close - req->t_open) >= 10000u)
 				 ? RADIANT_GATE_PRIO_NORMAL
 				 : RADIANT_GATE_PRIO_HIGH);
+#endif
 	if (g == GATE_DENIED) {
 		rc = RADIANT_RADIO_EDENIED;
 		goto fail;
@@ -3358,6 +3503,9 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 		 */
 		radiant_staged.rx = *req;
 		radiant_staged.pending = true;
+#if defined(CONFIG_RADIANT_GATE_MPSL_D2)
+		d2_settle_now();
+#endif
 		return RADIANT_RADIO_OK_RC;
 	}
 
@@ -3625,6 +3773,9 @@ int radiant_radio_ed(const struct radiant_ed_req *req, uint32_t *op)
 	if (g == GATE_PENDING) {
 		radiant_staged.ed = *req;
 		radiant_staged.pending = true;
+#if defined(CONFIG_RADIANT_GATE_MPSL_D2)
+		d2_settle_now();
+#endif
 		return RADIANT_RADIO_OK_RC;
 	}
 

@@ -201,6 +201,29 @@ uint32_t gate_max_window_us(void);
  */
 uint32_t gate_min_arm_lead_us(void);
 
+#if defined(CONFIG_RADIANT_GATE_MPSL_D2)
+/*
+ * ADR 0018 candidate (d2): book the air for a committed operation that will be
+ * armed later, in a timeslot session other than the one the operation now
+ * armed is using. t_from/t_to/follow_on_us exactly as the later
+ * gate_acquire() for that operation will pass them; that acquire is then
+ * staged behind the booking (GATE_PENDING) if its air lies inside the booked
+ * air, or refused (GATE_DENIED) if MPSL refused the booking.
+ * docs/adr18-eval/d2.md.
+ */
+#define GATE_BOOK_OK       0
+#define GATE_BOOK_EBUSY   (-1)  /* no free session */
+#define GATE_BOOK_EDENIED (-2)  /* too near, no anchor yet, or too long */
+#define GATE_BOOK_ENOTSUP (-3)  /* the second session is not open */
+int  gate_book(radiant_time_t t_from, radiant_time_t t_to, uint16_t follow_on_us);
+/* True when two sessions are open and booking works (caps.booking). */
+bool gate_booking(void);
+/* The gate's current elastic lead (placement lead plus head margin), or 0
+ * when booking is off, for caps.min_arm_lead_elastic_us. The backend adds its
+ * own ARM_LEAD_US. Called from the gate whenever the value changes. */
+void radiant_nrf_gate_set_elastic_lead(uint32_t us);
+#endif
+
 /* ---------------------------------------------------------------------------
  * The other direction: what a gate calls back into radiant_radio_nrf.c.
  *

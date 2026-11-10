@@ -775,4 +775,19 @@ rsource "src/matter/Kconfig"
 
 endif # CHIP
 
+# ADR 0018 Phase 1, bench only: a BLE advertiser whose only job is to want the
+# radio, so the held grant is measured beside a second stack that has events
+# scheduled. The P3/P4 ble_coex_load.c it replaces was retired in fc04371.
+config ANT_DONGLE_BLE_LOAD
+	bool "BENCH: advertise over BLE so MPSL has a second stack to arbitrate"
+	depends on BT && BT_PERIPHERAL && RADIANT_BACKEND_NRF_GATE_MPSL
+	help
+	  Starts a connectable advertiser a few seconds after boot. Never in a
+	  shipping image. See ble_load.conf.
+
+config ANT_DONGLE_BLE_LOAD_INTERVAL_MS
+	int "advertising interval of the bench BLE load (ms)"
+	depends on ANT_DONGLE_BLE_LOAD
+	range 20 10000
+	default 1000
 source "Kconfig.zephyr"

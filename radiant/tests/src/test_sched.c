@@ -3326,6 +3326,14 @@ static void shape_longest_gap(const uint8_t *bins, uint32_t *start, uint32_t *wi
 	*width = best;
 }
 
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+/* ADR 0018 (d2): when non-zero, the shape and R1 helpers run on a booking
+ * backend with this elastic lead. */
+static uint16_t shape_el_lead;
+/* R1 with a search running beside the pair. */
+static bool r1_with_scan;
+#endif
+
 static void measure_deaf_shape(uint8_t n_tracked, uint32_t lead_us, uint32_t in_grant_us,
 			       uint32_t max_window_us, struct deaf_shape *out)
 {
@@ -3341,6 +3349,10 @@ static void measure_deaf_shape(uint8_t n_tracked, uint32_t lead_us, uint32_t in_
 	fake_radio_caps_mut()->min_arm_lead_us = (uint16_t)lead_us;
 	fake_radio_caps_mut()->min_arm_lead_in_grant_us = (uint16_t)in_grant_us;
 	fake_radio_caps_mut()->max_window_us = max_window_us;
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+	fake_radio_caps_mut()->booking = (shape_el_lead != 0u);
+	fake_radio_caps_mut()->min_arm_lead_elastic_us = shape_el_lead;
+#endif
 	bring_up();
 
 	t0 = radiant_radio_now() + 3u * SHAPE_PERIOD_US;
@@ -3513,9 +3525,24 @@ static void r1_measure(uint32_t offset_us, struct r1_result *out)
 	fake_radio_caps_mut()->min_arm_lead_us = (uint16_t)SHAPE_LEAD_MPSL;
 	fake_radio_caps_mut()->min_arm_lead_in_grant_us = 200u;
 	fake_radio_caps_mut()->max_window_us = SHAPE_MAXWIN_MPSL;
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+	fake_radio_caps_mut()->booking = (shape_el_lead != 0u);
+	fake_radio_caps_mut()->min_arm_lead_elastic_us = shape_el_lead;
+#endif
 	bring_up();
 
 	t0 = radiant_radio_now() + 3u * SHAPE_PERIOD_US;
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+	if (r1_with_scan) {
+		struct radiant_sched_rx sr;
+
+		rx_req_init(&sr, radiant_frame_format(RADIANT_FRAME_CFG_SEARCH),
+			    search_filter, 8u, t0 - 2u * SHAPE_PERIOD_US,
+			    RADIANT_TIME_NEVER);
+		sr.chunk_us = 260000u;
+		zassert_ok(radiant_sched_request_rx(SHAPE_SCAN_CH, &sr));
+	}
+#endif
 	log.repost = true;
 	log.repost_period_us = SHAPE_PERIOD_US;
 	log.repost_window_us = SHAPE_WINDOW_US;
@@ -3537,6 +3564,11 @@ static void r1_measure(uint32_t offset_us, struct r1_result *out)
 	log.repost = false;
 	log.repost_period_us = 0u;
 	log.repost_window_us = 0u;
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+	if (r1_with_scan) {
+		zassert_ok(radiant_sched_cancel(SHAPE_SCAN_CH));
+	}
+#endif
 	fake_radio_advance_to(radiant_radio_now() + 2u * SHAPE_PERIOD_US);
 	finish();
 }
@@ -3576,3 +3608,154 @@ ZTEST(radiant_sched, test_r1_two_tracked_channels_inside_the_lead_today)
 		}
 	}
 }
+
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+/* ---------------------------------------------------------------------------
+ * ADR 0018 candidate (d2): a booking backend (a second MPSL session).
+ * docs/adr18-eval/d2.md.
+ *
+ * The fake models the booking (fake_radio_book_*): two request slots, a
+ * booked arm at the in-grant lead, an elastic arm at the elastic lead, and
+ * F2's layout B (a booking placed into air an armed elastic window already
+ * covers is refused, and counted - a correct scheduler never does it).
+ * ---------------------------------------------------------------------------
+ */
+
+/* D2_SCAN_LEAD_US 3000 + HEAD_MARGIN 250 + ARM_LEAD 168, the elastic lead the
+ * MPSL gate advertises on nRF54L. */
+#define SHAPE_EL_LEAD_D2 3418u
+
+/*
+ * The per-channel cost the prediction rests on: the gap in front of a booked
+ * window (book lead 1200 + dispatch 200 + BOOK_GAP 3000 + the search format's
+ * frame tail, ~4.5 ms), the window itself, and the elastic lead behind it
+ * (2.4 ms), plus 1.5 ms of slack per edge. Each max_window_us boundary costs
+ * one elastic lead more.
+ */
+#define D2_PER_CH_US (4500u + SHAPE_EL_LEAD_D2 + 3000u)
+
+ZTEST(radiant_sched, test_d2_deaf_fraction_by_tracked_channel_count)
+{
+	static const uint8_t counts[] = {1u, 2u, 4u, 8u};
+
+	for (size_t i = 0u; i < ARRAY_SIZE(counts); i++) {
+		struct deaf_shape d;
+		uint8_t n = counts[i];
+		uint32_t ceiling = n * (SHAPE_WINDOW_US + D2_PER_CH_US) +
+				   3u * (SHAPE_EL_LEAD_D2 + 1500u);
+		const struct fake_radio_book_stats *bs;
+
+		sched_before(NULL);
+		shape_el_lead = SHAPE_EL_LEAD_D2;
+		measure_deaf_shape(n, SHAPE_LEAD_MPSL, 200u, SHAPE_MAXWIN_MPSL, &d);
+		bs = fake_radio_book_stats();
+		shape_el_lead = 0u;
+		report_shape("d2", n, &d);
+		TC_PRINT("d2-book n=%u: placed=%u hits=%u busy=%u near=%u denied=%u "
+			 "layout_b=%u unbooked_fixed=%u missed0=%u\n", n, bs->placed,
+			 bs->hits, bs->busy, bs->near, bs->denied, bs->layout_b,
+			 bs->unbooked_fixed, log.missed_count[0]);
+		zassert_true(d.deaf_us <= ceiling, "n=%u: deaf for %u us, ceiling %u", n,
+			     d.deaf_us, ceiling);
+		zassert_equal(0u, bs->layout_b,
+			      "n=%u: a booking was placed into held elastic air (F2 "
+			      "layout B: the arbiter refuses it every time)", n);
+		for (uint8_t ch = 0u; ch < n; ch++) {
+			zassert_equal(0u, log.missed_count[ch],
+				      "n=%u: tracked channel %u lost %u slots", n, ch,
+				      log.missed_count[ch]);
+			zassert_equal(0u, log.denied_count[ch], NULL);
+		}
+	}
+}
+
+/* Every tracked window after start-up goes through its booking, and the scan
+ * runs up to the small gap before it rather than a lead before it. */
+ZTEST(radiant_sched, test_d2_tracked_windows_are_armed_into_their_bookings)
+{
+	struct deaf_shape d;
+	const struct fake_radio_book_stats *bs;
+	uint32_t ok0;
+
+	shape_el_lead = SHAPE_EL_LEAD_D2;
+	measure_deaf_shape(1u, SHAPE_LEAD_MPSL, 200u, SHAPE_MAXWIN_MPSL, &d);
+	bs = fake_radio_book_stats();
+	shape_el_lead = 0u;
+	ok0 = log.ok_count[0];
+	TC_PRINT("d2-armed: ok0=%u hits=%u unbooked_fixed=%u listened=%u\n", ok0,
+		 bs->hits, bs->unbooked_fixed, d.listened_us);
+	zassert_true(bs->hits + 2u >= ok0,
+		     "only %u of %u tracked windows were armed into a booking",
+		     bs->hits, ok0);
+	/* Master listens ~70 % of a period; d2 must beat it by a wide margin. */
+	zassert_true(d.listened_us > (SHAPE_PERIOD_US * 9u) / 10u,
+		     "the scan listened only %u us a period", d.listened_us);
+}
+
+/* R1: two tracked channels 2.6-24.4 ms apart keep both slots, with and without
+ * a search beside them. The flip of test_r1_two_tracked_channels_inside_the_
+ * lead_today. */
+ZTEST(radiant_sched, test_d2_r1_both_slots_are_kept)
+{
+	static const uint32_t offsets[] = {1000u, 5000u, 12000u, 24000u};
+
+	for (uint32_t scan = 0u; scan < 2u; scan++) {
+		for (size_t i = 0u; i < ARRAY_SIZE(offsets); i++) {
+			struct r1_result r;
+
+			sched_before(NULL);
+			shape_el_lead = SHAPE_EL_LEAD_D2;
+			r1_with_scan = (scan != 0u);
+			r1_measure(offsets[i], &r);
+			TC_PRINT("d2-r1 scan=%u offset=%u us: ch0 ok=%u missed=%u ch1 "
+				 "ok=%u missed=%u arms=%u r1cut=%u\n", scan, offsets[i],
+				 r.ok[0], r.missed[0], r.ok[1], r.missed[1], r.arms,
+				 radiant_sched_stats_get()->book_r1_cut);
+			shape_el_lead = 0u;
+			r1_with_scan = false;
+			zassert_equal(0u, r.missed[0], "scan=%u offset %u: earlier lost",
+				      scan, offsets[i]);
+			zassert_equal(0u, r.missed[1], "scan=%u offset %u: later lost %u",
+				      scan, offsets[i], r.missed[1]);
+			zassert_true(r.ok[0] >= 11u && r.ok[1] >= 11u,
+				     "scan=%u offset %u: ok %u/%u", scan, offsets[i],
+				     r.ok[0], r.ok[1]);
+			zassert_equal(0u, fake_radio_book_stats()->layout_b, NULL);
+		}
+	}
+}
+
+/* A booking the arbiter refuses costs that one slot, reported DENIED (as a
+ * refused fresh request is today), never MISSED, and nothing else. */
+ZTEST(radiant_sched, test_d2_a_refused_booking_costs_exactly_its_own_slot)
+{
+	struct r1_result r;
+
+	shape_el_lead = SHAPE_EL_LEAD_D2;
+	r1_with_scan = true;
+	fake_radio_book_refuse_next(1u);
+	r1_measure(120000u, &r);
+	TC_PRINT("d2-refused: ch0 ok=%u missed=%u denied=%u ch1 ok=%u missed=%u "
+		 "denied=%u\n", r.ok[0], r.missed[0], log.denied_count[0], r.ok[1],
+		 r.missed[1], log.denied_count[1]);
+	shape_el_lead = 0u;
+	r1_with_scan = false;
+	zassert_equal(0u, r.missed[0] + r.missed[1], "a refused booking caused a MISS");
+	zassert_equal(1u, log.denied_count[0] + log.denied_count[1],
+		      "a refused booking must deny exactly its own slot");
+	zassert_equal(1u, fake_radio_book_stats()->denied, NULL);
+}
+
+/* Booking compiled in but the backend says no (caps.booking false): the
+ * schedule is master's, band for band. */
+ZTEST(radiant_sched, test_d2_without_the_capability_the_schedule_is_masters)
+{
+	struct deaf_shape d;
+
+	shape_el_lead = 0u;
+	measure_deaf_shape(1u, SHAPE_LEAD_MPSL, 200u, SHAPE_MAXWIN_MPSL, &d);
+	zassert_true(d.deaf_us >= 2u * SHAPE_LEAD_MPSL, "deaf for only %u us", d.deaf_us);
+	zassert_equal(0u, fake_radio_book_stats()->calls,
+		      "a scheduler without caps.booking called radiant_radio_book()");
+}
+#endif /* CONFIG_RADIANT_SCHED_BOOKING */

@@ -134,5 +134,75 @@ class RequireDiagTest(unittest.TestCase):
         d.require_diag(FakeLog([CHUNKS]), lambda _m: None)
 
 
+BASE = ["out", "--a-serial", "Y", "--b-serial", "X", "--bridge", "COM4",
+        "--log", "COM3"]
+
+
+class R1WalkTest(unittest.TestCase):
+    """--r1-walk: acquire B clear of A, then walk its phase by period."""
+
+    def test_walk_and_plain_r1_are_exclusive(self):
+        with self.assertRaises(SystemExit):
+            d.parse_args(BASE + ["--r1", "--r1-walk"])
+
+    def test_walk_step_is_bounded(self):
+        with self.assertRaises(SystemExit):
+            d.parse_args(BASE + ["--r1-walk", "--r1-step-counts", "0"])
+        a = d.parse_args(BASE + ["--r1-walk"])
+        self.assertEqual(2, a.r1_step_counts)
+        self.assertEqual(40.0, a.r1_start_ms)
+        self.assertEqual(12.0, a.r1_target_ms)
+
+    def test_circular_difference_takes_the_short_way(self):
+        self.assertAlmostEqual(-28.0, d.circ_diff_ms(12.0, 40.0))
+        self.assertAlmostEqual(10.0, d.circ_diff_ms(5.0, d.PERIOD_MS - 5.0),
+                               places=6)
+        self.assertAlmostEqual(-10.0, d.circ_diff_ms(d.PERIOD_MS - 5.0, 5.0),
+                               places=6)
+
+    def test_walking_earlier_runs_a_shorter_period(self):
+        period, n = d.walk_plan(40.0, 12.0, 2)
+        self.assertEqual(8068, period)
+        # 28 ms at 2 counts (61.04 us) a period
+        self.assertAlmostEqual(28.0 / (2 / 32768.0 * 1000.0), n, places=3)
+        period, _ = d.walk_plan(12.0, 40.0, 3)
+        self.assertEqual(8073, period)
+
+    def test_packets_are_counted_in_the_window_only(self):
+        recs = [(0.5, 0x78, 2002, b""), (10.0, 0x78, 2002, b""),
+                (10.1, 0x78, 5005, b""), (19.9, 0x78, 5005, b""),
+                (20.0, 0x78, 5005, b"")]
+        counts = d.count_in_window(recs, 1000.0, 1010.0, 1020.0)
+        self.assertEqual({2002: 1, 5005: 2}, counts)
+
+    def test_window_loss_against_the_hr_period(self):
+        secs = 60.0
+        full = round(secs / d.PERIOD_S)
+        self.assertLess(d.window_loss_pct(full, secs), 0.5)
+        self.assertAlmostEqual(100.0, d.window_loss_pct(0, secs))
+        self.assertAlmostEqual(50.0, d.window_loss_pct(full / 2, secs), places=0)
+
+    def test_the_capture_listen_start_is_read_from_its_comment(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "c.antser"
+            p.write_text("# ant capture v1\n# listen_start_unix=1731200000.250000\n"
+                         "0.1 120 5005 0000000000000000\n", encoding="utf-8")
+            self.assertAlmostEqual(1731200000.25, d.capture_listen_start(p))
+
+    def test_acquisition_needs_channel_1_to_claim_b(self):
+        mine = FRAME  # dev=5005 claim=1
+        other = FRAME.replace("claim=1", "claim=-1")
+        self.assertTrue(d.acquired(FakeLog([mine]), 0, 5005))
+        self.assertFalse(d.acquired(FakeLog([other]), 0, 5005))
+        self.assertFalse(d.acquired(FakeLog([mine]), 0, 2002))
+
+    def test_the_walk_steers_by_recent_events_only(self):
+        a = [i * d.PERIOD_S for i in range(100)]
+        b = [t + 0.040 for t in a[:50]] + [t + 0.012 for t in a[50:]]
+        self.assertAlmostEqual(12.0, d.phase_now_ms(a, b), places=3)
+
+
 if __name__ == "__main__":
     unittest.main()
