@@ -43,7 +43,10 @@
 # CONFIG_RADIANT_ACK_FAULTS compiled in - the only build where the reply_plan
 # cases exist) and trainer.model (apps/trainer's physics and fault model,
 # reached through the ztest job's `-T app/apps/trainer/tests`).
-min_scenarios: 13
+#
+# 2026-11-10: 14. radiant.backend, the nRF backend completion path against
+# register models.
+min_scenarios: 14
 
 # Total ztest cases twister executes, summed over every scenario. It equals the
 # sum of the per-scenario floors below, so the backstop and the floors cannot
@@ -56,7 +59,7 @@ min_scenarios: 13
 # check_test_counts.py on a Linux machine, on the versions west.yml pins
 # (docs/testing.md), rather than on a GitHub runner. 4168 since C5-1 added one
 # gate test.
-min_testcases: 4226
+min_testcases: 4234
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -81,6 +84,8 @@ min_cases.radiant.api.crc_repair: 66
 # 32 since C5-1 (inline BLOCKED backs off the class that was refused). 38 with
 # the extension skip (ADR 0021).
 min_cases.radiant.gate: 38
+# radiant.backend (ADR 0021): the backend completion path against register models.
+min_cases.radiant.backend: 8
 min_cases.hrm_ble.sim_sched: 4
 min_cases.treadmill.pages: 20
 min_cases.treadmill.hr_rx: 3
