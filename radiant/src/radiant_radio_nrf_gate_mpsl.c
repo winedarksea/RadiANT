@@ -348,6 +348,10 @@ static struct {
 	volatile bool release_wanted;
 	/* This operation is allowed to grow itself - the elastic classes. */
 	volatile bool extendable;
+	/* This elastic grant was placed while the gate had stopped asking for
+	 * extensions (ext_skip), and was sized for that: it ends at its first
+	 * compare and never asks, even if the skip lapses while it runs. */
+	volatile bool no_extend;
 	/*
 	 * The hand-back margin THIS grant was reserved with, and the only
 	 * figure any compare for it may be placed against. Split by class:
@@ -450,6 +454,9 @@ static struct {
 	uint32_t den_owed;
 	uint32_t extends_ok;
 	uint32_t extends_failed;
+	/* Elastic grants ended at their first compare without asking, because
+	 * the arbiter had refused the last few extensions (ext_skip). */
+	uint32_t ext_skipped;
 	/* How often the backstop timer fired rather than SIGNAL_BLOCKED.
 	 * Expected zero (all 17 blocks in the P0 spike arrived before the
 	 * start they referred to); non-zero means that measurement did not
@@ -731,6 +738,7 @@ static struct {
 	uint32_t       granted_len_us;
 	radiant_time_t grant_end;
 	bool           extendable;
+	bool           no_extend;
 	/* The margin this request's length was built with. See g.end_margin_us
 	 * - it has to travel with the request, not be re-derived later. */
 	uint32_t       end_margin_us;
@@ -789,6 +797,27 @@ static uint32_t elastic_skew_us;
 #define BLOCKED_RUN_REANCHOR 4u
 static uint32_t blocked_run;
 
+/*
+ * STOP ASKING FOR EXTENSIONS THE ARBITER KEEPS REFUSING (ADR 0021, decision 3).
+ * Beside OpenThread every extension is refused, and every refusal is an
+ * EXTEND_FAILED handled inside the zero-latency callback. MPSL ASSERT 69:108 has
+ * only ever followed one of those. So after EXT_FAIL_RUN_OFF refusals in a row
+ * the next EXT_SKIP_GRANTS elastic grants end at their first compare with the
+ * ABORTED terminal a refusal would have produced, without the request; then one
+ * is asked for again. Under BLE extensions are mostly granted, so a run is rare.
+ *
+ * A grant placed while skipping cannot extend, so it is sized like one that
+ * never could: END_MARGIN_FIXED_US instead of END_MARGIN_EXTEND_US. That margin
+ * has to hold a radio abort as well as the signal path here, because the window
+ * is still open at the compare. The class is decided per grant (g.no_extend),
+ * so the skip lapsing while a grant runs cannot make it ask from a margin
+ * MPSL's own extension minimum was never budgeted into.
+ */
+#define EXT_FAIL_RUN_OFF 3u
+#define EXT_SKIP_GRANTS  64u
+static uint32_t ext_fail_run;
+static uint32_t ext_skip;
+
 BUILD_ASSERT(ELASTIC_FLOOR_US >= MPSL_TIMESLOT_LENGTH_MIN_US,
 	     "the elastic floor must still be a timeslot MPSL will grant");
 BUILD_ASSERT(ELASTIC_FLOOR_US > END_MARGIN_EXTEND_US,
@@ -800,6 +829,7 @@ static void commit_next_grant(void)
 	g.granted_len_us = next_grant.granted_len_us;
 	g.grant_end      = next_grant.grant_end;
 	g.extendable     = next_grant.extendable;
+	g.no_extend      = next_grant.no_extend;
 	g.end_margin_us  = next_grant.end_margin_us;
 	grant_high_prio  = next_grant.high_prio;
 }
@@ -922,6 +952,7 @@ static void bootstrap_anchor(void)
 	 * last real window staged. It cannot grow and it is the shortest
 	 * timeslot there is. */
 	next_grant.extendable = false;
+	next_grant.no_extend = false;
 	next_grant.high_prio = false;
 	/* The conservative margin, not the class-derived one: this slot is handed
 	 * straight back from SIGNAL_START and never places a compare against it,
@@ -1125,6 +1156,9 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 				elastic_initial_us = ELASTIC_INITIAL_US;
 			}
 		}
+		if (g.no_extend && ext_skip > 0u) {
+			ext_skip--;
+		}
 		g.anchor = radiant_radio_now();
 		g.anchor_valid = true;
 		g.pending = false;
@@ -1260,6 +1294,17 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 	case MPSL_TIMESLOT_SIGNAL_TIMER0:
 		stats.sig_timer0++;
 		nrf_timer_event_clear(MPSL_TIMER0, NRF_TIMER_EVENT_COMPARE0);
+		if (g.no_extend && !g.release_wanted && g.extendable &&
+		    g.granted_len_us < g.want_len_us) {
+			/* As EXTEND_FAILED below, without asking. See ext_skip. */
+			stats.ext_skipped++;
+			g.granted = false;
+			timer0_disarm();
+			(void)radiant_radio_abort();
+			end_housekeeping();
+			rv.callback_action = MPSL_TIMESLOT_SIGNAL_ACTION_END;
+			break;
+		}
 		/*
 		 * Either the core has finished and gate_release() provoked this
 		 * compare, or the grant has run out and the operation is still
@@ -1332,6 +1377,7 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		 * cannot drift from the one that armed the first compare.
 		 */
 		stats.extends_ok++;
+		ext_fail_run = 0u;
 		g.granted_len_us += g.ext_step_us;
 		g.grant_end += (radiant_time_t)g.ext_step_us;
 		nrf_timer_cc_set(MPSL_TIMER0, 0,
@@ -1346,6 +1392,10 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		 * (RADIANT_RADIO_STATUS_ABORTED), not a denial.
 		 */
 		stats.extends_failed++;
+		if (++ext_fail_run >= EXT_FAIL_RUN_OFF) {
+			ext_fail_run = 0u;
+			ext_skip = EXT_SKIP_GRANTS;
+		}
 		g.granted = false;
 		timer0_disarm();
 		(void)radiant_radio_abort();
@@ -1592,6 +1642,27 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
  * ---------------------------------------------------------------------------
  */
 
+#if defined(CONFIG_RADIANT_GATE_MPSL_STATS_LOG)
+/*
+ * Bench only: the counters a soak is scored on, every 5 s, from the gate's own
+ * work queue - never from inside a grant. Cumulative since boot.
+ */
+static void gate_stats_fn(struct k_work *w);
+static K_WORK_DELAYABLE_DEFINE(gate_stats_work, gate_stats_fn);
+
+static void gate_stats_fn(struct k_work *w)
+{
+	ARG_UNUSED(w);
+	LOG_INF("GATESTAT pl=%u gr=%u bl=%u ext=%u/%u skip=%u near=%u eag=%u "
+		"dl=%u hi %u/%u/%u/%u",
+		stats.placed, stats.granted, stats.blocked, stats.extends_ok,
+		stats.extends_failed, stats.ext_skipped, stats.refused_too_near,
+		stats.refused_eagain, stats.deadline_fired, stats.hi_acq,
+		stats.hi_pending, stats.hi_blocked, stats.hi_granted);
+	(void)k_work_reschedule_for_queue(&gate_wq, &gate_stats_work, K_SECONDS(5));
+}
+#endif
+
 int gate_init(void)
 {
 	int32_t rc;
@@ -1601,6 +1672,8 @@ int gate_init(void)
 	}
 	memset(&g, 0, sizeof(g));
 	memset(&stats, 0, sizeof(stats));
+	ext_fail_run = 0u;
+	ext_skip = 0u;
 	/*
 	 * The memset above would leave the hand-back margin at zero, and a zero
 	 * margin means a compare placed at the very end of a grant - an overstay
@@ -1663,6 +1736,9 @@ int gate_init(void)
 		return RADIANT_RADIO_EIO;
 	}
 	session_open = true;
+#if defined(CONFIG_RADIANT_GATE_MPSL_STATS_LOG)
+	(void)k_work_reschedule_for_queue(&gate_wq, &gate_stats_work, K_SECONDS(5));
+#endif
 	/* Spend one minimum-length EARLIEST timeslot on nothing but its start
 	 * time, so that every window the core asks for is a NORMAL request that
 	 * lands where it was asked for. */
@@ -1733,8 +1809,11 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 	 */
 	const bool     extendable = (op != GATE_OP_TX) &&
 				(prio == RADIANT_GATE_PRIO_NORMAL);
-	const uint32_t end_margin_us =
-		extendable ? END_MARGIN_EXTEND_US : END_MARGIN_FIXED_US;
+	/* An elastic grant placed during a skip will never ask to grow. */
+	const bool     no_extend = extendable && (ext_skip > 0u);
+	const uint32_t end_margin_us = (extendable && !no_extend)
+					       ? END_MARGIN_EXTEND_US
+					       : END_MARGIN_FIXED_US;
 
 	if (!session_open) {
 		stats.den_no_session++;
@@ -1958,6 +2037,7 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 	/* Decided at the top of the function, because `len` above depends on
 	 * it. See the declarations there. */
 	next_grant.extendable = extendable;
+	next_grant.no_extend = no_extend;
 	/* The margin travels with the request built from it: every compare for
 	 * this grant is placed against g.end_margin_us, which is this value once
 	 * commit_next_grant() runs. */
@@ -2189,11 +2269,12 @@ void mpsl_assert_handle(const char *const file, const uint32_t line)
 	 */
 	LOG_PANIC();
 	printk("\n*** MPSL ASSERT %s:%u  placed=%u granted=%u blocked=%u "
-	       "ext=%u/%u deadline=%u\n"
+	       "ext=%u/%u skip=%u deadline=%u\n"
 	       "    over=%u invalid=%u unknown=%u last_sig=%u "
 	       "len=%u/%u granted=%d pending=%d rel=%d ext_ok=%d\n",
 	       file, line, stats.placed, stats.granted, stats.blocked,
-	       stats.extends_ok, stats.extends_failed, stats.deadline_fired,
+	       stats.extends_ok, stats.extends_failed, stats.ext_skipped,
+	       stats.deadline_fired,
 	       stats.overstayed, stats.invalid_return, stats.unknown_signal,
 	       stats.last_signal, g.granted_len_us, g.want_len_us,
 	       (int)g.granted, (int)g.pending, (int)g.release_wanted,

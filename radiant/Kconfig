@@ -687,6 +687,13 @@ config RADIANT_NRF_RX_DIAG
 	  Off by default and never in a shipping image. With it off nothing
 	  here compiles, so the non-diagnostic interrupt path is unchanged.
 
+config RADIANT_GATE_MPSL_STATS_LOG
+	bool "DIAGNOSTIC: log the MPSL gate's counters every 5 s"
+	help
+	  A GATESTAT line from the gate's own work queue every 5 s. Bench only:
+	  it costs a log line, never anything inside a grant. Set by
+	  apps/dongle_thread/d2_stats.conf.
+
 config RADIANT_GATE_MPSL_NO_SESSION
 	bool "DIAGNOSTIC: build the MPSL gate but never open a timeslot session"
 	depends on RADIANT_BACKEND_NRF_GATE_MPSL
