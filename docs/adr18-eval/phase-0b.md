@@ -225,6 +225,8 @@ definitions:
   `profile_env.c`, `profile_fec.c`, `profile_power_decode.c` and
   `radiant_power_adapter.c`.
 
+master moved to 377f926 ("usability follow up") during this phase. That commit
+touches only ci.yml and two READMEs and leaves both duplicates in place.
 release.yml's MQTT-bridge and Matter rows would fail the same way on the next
 tag; push CI does not build them. **This is a master defect, not a 0b change,
 and it is not fixed on this branch.** Fixing it means deciding which build
