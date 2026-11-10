@@ -1603,7 +1603,8 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		}
 #if defined(CONFIG_RADIANT_GATE_MPSL_D2)
 		/* The elastic lead is given back slowly, for the same reason. */
-		if (g.extendable && el_lead_us > EL_LEAD_START_US) {
+		if (!IS_ENABLED(CONFIG_RADIANT_GATE_MPSL_LEAD_SWEEP) &&
+		    g.extendable && el_lead_us > EL_LEAD_START_US) {
 			el_lead_us = (el_lead_us > EL_LEAD_START_US + EL_LEAD_DECAY_US)
 					     ? (el_lead_us - EL_LEAD_DECAY_US)
 					     : EL_LEAD_START_US;
@@ -1952,7 +1953,8 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 			 * placed with 2 ms or more; growing the lead on them
 			 * drove it to 12.5 ms for nothing.
 			 */
-			if (d2_on && el_lead_us < PLACE_LEAD_US &&
+			if (!IS_ENABLED(CONFIG_RADIANT_GATE_MPSL_LEAD_SWEEP) &&
+			    d2_on && el_lead_us < PLACE_LEAD_US &&
 			    s->notice_us >= (int32_t)el_floor_us()) {
 				el_lead_us = (el_lead_us * 2u > PLACE_LEAD_US)
 						     ? PLACE_LEAD_US
@@ -2209,6 +2211,20 @@ extern uint32_t radiant_d2_dbg[8];
 static void gate_stats_fn(struct k_work *w)
 {
 	ARG_UNUSED(w);
+#if defined(CONFIG_RADIANT_GATE_MPSL_LEAD_SWEEP)
+	{
+		static const uint16_t leads_ms[] = {4u, 6u, 8u, 12u, 16u, 24u};
+		static uint32_t ticks;
+
+		if ((ticks % 12u) == 0u) {
+			el_lead_us = 1000u * leads_ms[(ticks / 12u) % ARRAY_SIZE(leads_ms)];
+			el_lead_publish();
+			LOG_INF("D2SWEEP step=%u lead_us=%u", ticks / 12u,
+				(unsigned)el_lead_us);
+		}
+		ticks++;
+	}
+#endif
 	LOG_INF("D2SETTLE rel=%u keep=%u wait=%u none=%u now=%u imm=%u owed=%u",
 		radiant_d2_dbg[0], radiant_d2_dbg[1], radiant_d2_dbg[2],
 		radiant_d2_dbg[3], radiant_d2_dbg[4], radiant_d2_dbg[5],

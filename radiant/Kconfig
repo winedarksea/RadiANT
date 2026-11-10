@@ -765,6 +765,14 @@ config RADIANT_SCHED_BOOKING
 	  is inert at run time unless the backend sets caps.booking, and it
 	  compiles out of every plain build.
 
+config RADIANT_GATE_MPSL_LEAD_SWEEP
+	bool "DIAGNOSTIC: step the elastic lead through a fixed table"
+	depends on RADIANT_GATE_MPSL_STATS_LOG
+	help
+	  Holds the elastic lead at 4, 6, 8, 12, 16 and 24 ms for 60 s each,
+	  repeating, so what a stack refuses by notice can be read off the
+	  log. The lead policy is off while it runs. Bench only.
+
 config RADIANT_GATE_MPSL_NO_SESSION
 	bool "DIAGNOSTIC: build the MPSL gate but never open a timeslot session"
 	depends on RADIANT_BACKEND_NRF_GATE_MPSL
