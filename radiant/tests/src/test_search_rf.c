@@ -121,6 +121,68 @@ static void win_run(void)
 }
 
 /* One whole round-robin pass, returning every window's frequency in `rf`. */
+#if defined(CONFIG_RADIANT_SEARCH_COVERAGE)
+/*
+ * A RETUNE RESTARTS THE CURSOR ON A NEW FREQUENCY, SO THE MASK GOES WITH IT.
+ *
+ * The bug this catches is phases heard on one frequency counting as covered
+ * on another. Two sets, one on each frequency, each covering only one half of
+ * the period: neither set heard every phase on its own frequency, so both are
+ * counted uncovered. A mask that was not reset would make the second set's
+ * mask full and count it as covered.
+ */
+#define COV_P RADIANT_SEARCH_COVERAGE_PERIOD_US
+
+static void chunk_at(radiant_time_t open, uint32_t len_us)
+{
+	struct radiant_search_window w;
+
+	zassert_ok(radiant_search_window(&g_s, open, &w));
+	radiant_search_armed(&g_s, RADIANT_SEARCH_OP_EXTERNAL, open,
+			     open + (radiant_time_t)len_us);
+	radiant_search_on_done(&g_s, true, true, open + (radiant_time_t)len_us);
+}
+
+ZTEST(radiant_search_rf, test_coverage_mask_resets_with_a_retune)
+{
+	const radiant_time_t t0 = (radiant_time_t)COV_P * 8u;
+	struct radiant_search_window w;
+
+	bring_up();
+	begin(0u, 57u);
+
+	/* First set: the first half of the period, three times over for 375 ms
+	 * of credit, so it completes on one half of the phases only. */
+	for (uint32_t k = 0u; k < 3u; k++) {
+		chunk_at(t0 + (radiant_time_t)k * COV_P, 125000u);
+	}
+	zassert_true(radiant_search_set_complete(&g_s));
+
+	/* The channel moves to another frequency: the next window retunes and
+	 * selects a new set. The first set is counted, the mask is reset. */
+	zassert_ok(radiant_search_end(&g_s, 0u));
+	begin(1u, 66u);
+	zassert_ok(radiant_search_window(&g_s, t0 + 8u * COV_P, &w));
+	zassert_equal(66u, w.rf_index, "the sweep did not retune");
+	zassert_equal(0u, g_s.phase_mask, "the mask did not reset on the retune");
+	zassert_equal(1u, radiant_search_get_stats(&g_s)->sets_advanced_uncovered);
+	radiant_search_armed(&g_s, RADIANT_SEARCH_OP_EXTERNAL, t0 + 8u * COV_P + 125000u,
+			     t0 + 8u * COV_P + 125000u + 121000u);
+	radiant_search_on_done(&g_s, true, true, t0 + 8u * COV_P + 125000u + 121000u);
+
+	/* Second set: only the other half of the period, on the new frequency.
+	 * Two more chunks to make up the dwell. */
+	for (uint32_t k = 1u; k < 3u; k++) {
+		chunk_at(t0 + (radiant_time_t)(k + 8u) * COV_P + 125000u, 121000u);
+	}
+	zassert_true(radiant_search_set_complete(&g_s));
+	zassert_ok(radiant_search_window(&g_s, t0 + 16u * COV_P, &w));
+	zassert_equal(2u, radiant_search_get_stats(&g_s)->sets_advanced_uncovered,
+		      "phases heard on 57 counted as covered on 66");
+	radiant_search_on_done(&g_s, false, false, 0u);
+}
+#endif /* CONFIG_RADIANT_SEARCH_COVERAGE */
+
 static void run_pass(uint8_t *rf, uint16_t n_sets)
 {
 	for (uint16_t i = 0u; i < n_sets; i++) {

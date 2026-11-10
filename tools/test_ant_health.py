@@ -8,8 +8,9 @@
 Runs in the CI `host-tests` job alongside the other tools/test_*.py suites.
 
 0xF6 follows the append-only rule: fields are only ever added at the end and an
-offset is never reused, so decode() refuses a body shorter than the current
-layout and reads every field it knows from a longer body or a higher version.
+offset is never reused, so decode() refuses a body shorter than the minimum and
+reads every field it knows from a longer body. The structure version stays 1
+throughout the beta; an optional field's presence is told by the body length.
 """
 
 from __future__ import annotations
@@ -68,6 +69,40 @@ class DecodeTest(unittest.TestCase):
         self.assertEqual(got["version"], 2)
         self.assertEqual(got["tx_drops"], 5)
         self.assertEqual(got["tx_timeout"], 42)
+
+    def test_a_29_byte_body_is_refused_when_coverage_exists(self):
+        # Same check, restated from the optional field's side: a body one
+        # byte under the minimum is still an error, not a body with no
+        # coverage field.
+        with self.assertRaises(ValueError):
+            h.decode(bytes(h.PAYLOAD_LEN - 1))
+
+    def test_a_30_byte_v1_body_has_no_coverage_key(self):
+        got = h.decode(_body(1, h.PAYLOAD_LEN))
+        self.assertNotIn("sets_advanced_uncovered", got)
+
+    def test_a_31_byte_body_leaves_the_coverage_key_absent(self):
+        got = h.decode(_body(1, h.PAYLOAD_LEN + 1))
+        self.assertNotIn("sets_advanced_uncovered", got)
+
+    def test_a_32_byte_v1_body_decodes_coverage(self):
+        body = bytearray(_body(1, h.PAYLOAD_LEN + 2))
+        body[30] = 0x34
+        body[31] = 0x12
+        got = h.decode(bytes(body))
+        self.assertEqual(got["version"], 1)
+        self.assertEqual(got["sets_advanced_uncovered"], 0x1234)
+
+    def test_a_flagged_reply_does_not_imply_coverage(self):
+        # The flag in [1] says a counter pinned; the coverage field clamps
+        # without touching it, so a saturated reply keeps its own meaning.
+        body = bytearray(_body(1, h.PAYLOAD_LEN + 2))
+        body[1] = 0x01
+        body[30] = 0xFF
+        body[31] = 0xFF
+        got = h.decode(bytes(body))
+        self.assertTrue(got["saturated"])
+        self.assertEqual(65535, got["sets_advanced_uncovered"])
 
     def test_saturated_flag(self):
         body = bytearray(_body(1, h.PAYLOAD_LEN))

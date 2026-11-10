@@ -44,6 +44,7 @@
 #include <radiant/radiant_frame.h>
 #include <radiant/radiant_radio_hal.h>
 #include <radiant/radiant_search.h>
+#include <radiant/radiant_sched.h>
 
 /* ---------------------------------------------------------------------------
  * Fixtures
@@ -2023,6 +2024,150 @@ ZTEST(radiant_search, test_rejects_bad_arguments)
 /* Every channel slot the project is sized for must actually be usable, because
  * a 32-channel dongle is the capability and an off-by-one here would cap it at
  * 31 silently. */
+#if defined(CONFIG_RADIANT_SEARCH_COVERAGE)
+/* ADR 0018's per-set phase coverage. RADIANT_SEARCH_COVERAGE_PERIOD_US folds
+ * the phase, so an origin that is a multiple of it puts phases where the
+ * arithmetic below can name them. */
+#define COV_P    RADIANT_SEARCH_COVERAGE_PERIOD_US
+#define COV_FULL UINT32_MAX
+#define COV_T0   ((radiant_time_t)(COV_P * 8u))
+
+static void coverage_begin(void)
+{
+	bring_up(false);
+	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE, &want_any,
+					radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+}
+
+/* A chunk that opened and ran to close at the phases given. The window call is
+ * the pump's; only the chunk's actual bounds matter to coverage. */
+static void coverage_chunk(radiant_time_t open, uint32_t len_us)
+{
+	struct radiant_search_window w;
+
+	zassert_ok(radiant_search_window(&g_s, open, &w));
+	radiant_search_armed(&g_s, RADIANT_SEARCH_OP_EXTERNAL, open,
+			     open + (radiant_time_t)len_us);
+	radiant_search_on_done(&g_s, true, true, open + (radiant_time_t)len_us);
+}
+
+static uint32_t coverage_uncovered(void)
+{
+	return radiant_search_get_stats(&g_s)->sets_advanced_uncovered;
+}
+
+/* The next set is selected by the next window, which is what closes this one
+ * and counts it. Not ran to completion here: only the counter is asserted. */
+static void coverage_advance(void)
+{
+	struct radiant_search_window w;
+
+	zassert_ok(radiant_search_window(&g_s, COV_T0 + 40u * COV_P, &w));
+}
+
+ZTEST(radiant_search, test_coverage_a_whole_dwell_leaves_nothing_uncovered)
+{
+	coverage_begin();
+
+	coverage_chunk(COV_T0, RADIANT_SEARCH_DWELL_DEFAULT_US);
+	zassert_equal(COV_FULL, g_s.phase_mask,
+		      "260 ms of listening spans every phase of a 246 ms period");
+
+	coverage_advance();
+	zassert_equal(0u, coverage_uncovered());
+	zassert_equal(2u, radiant_search_get_stats(&g_s)->sets_advanced);
+	radiant_search_on_done(&g_s, false, false, 0u);
+	end_of_test();
+}
+
+/*
+ * THE COUNTER'S JOB. The MPSL shape from ADR 0018: phase-locked chunks that
+ * together credit a full dwell, so the set advances on time, and that leave
+ * the band after the tracked slot unlistened in every period. The mask has the
+ * hole, the set advances anyway (credit is unchanged) and it is counted.
+ */
+ZTEST(radiant_search, test_coverage_phase_locked_chunks_leave_a_hole_and_are_counted)
+{
+	coverage_begin();
+
+	/* The two chunks between the three bands, then the first of the next
+	 * period: 265 ms of credit, a whole dwell. */
+	coverage_chunk(COV_T0 + 25000u, 94000u);
+	coverage_chunk(COV_T0 + 144000u, 77000u);
+	coverage_chunk(COV_T0 + COV_P + 25000u, 94000u);
+
+	zassert_true(radiant_search_set_complete(&g_s),
+		     "265 ms of credit is more than one dwell");
+	zassert_equal(0u, g_s.phase_mask & (uint32_t)BIT_MASK(3),
+		      "the band after the tracked slot was never listened to");
+	zassert_not_equal(COV_FULL, g_s.phase_mask);
+	zassert_equal(0u, coverage_uncovered(), "only counted when the set closes");
+
+	coverage_advance();
+	zassert_equal(1u, coverage_uncovered(),
+		      "a set that advanced with a hole was not counted");
+	zassert_equal(2u, radiant_search_get_stats(&g_s)->sets_advanced,
+		      "coverage must never change when a set advances");
+	radiant_search_on_done(&g_s, false, false, 0u);
+	end_of_test();
+}
+
+/* A chunk the scheduler's A9-3 reclaimed: reported far past its own end. It is
+ * credited as a full listen, because that is what the credit path does today,
+ * but it heard nothing and marks nothing. */
+ZTEST(radiant_search, test_coverage_a_reclaimed_chunk_marks_no_phase)
+{
+	const uint32_t len = 50000u;
+	struct radiant_search_window w;
+
+	coverage_begin();
+
+	zassert_ok(radiant_search_window(&g_s, COV_T0, &w));
+	radiant_search_armed(&g_s, RADIANT_SEARCH_OP_EXTERNAL, COV_T0, COV_T0 + len);
+	radiant_search_on_done(&g_s, false, true,
+			       COV_T0 + len + RADIANT_SCHED_ARMED_STALE_US + 1u);
+
+	zassert_equal(0u, g_s.phase_mask, "a reclaimed chunk marked a phase");
+	zassert_equal(RADIANT_SEARCH_DWELL_DEFAULT_US - len,
+		      radiant_search_dwell_remaining(&g_s),
+		      "the reclaimed chunk's credit changed");
+	end_of_test();
+}
+
+/* A chunk near the phase wrap: the bins at both ends of the period, not the
+ * ones between them. */
+ZTEST(radiant_search, test_coverage_a_chunk_across_the_phase_wrap_marks_both_ends)
+{
+	struct radiant_search_window w;
+	radiant_time_t open = COV_T0 + COV_P - 5000u;
+
+	coverage_begin();
+
+	zassert_ok(radiant_search_window(&g_s, open, &w));
+	radiant_search_armed(&g_s, RADIANT_SEARCH_OP_EXTERNAL, open, open + 10000u);
+	radiant_search_on_done(&g_s, true, true, open + 10000u);
+
+	zassert_equal((uint32_t)BIT(31) | (uint32_t)BIT(0), g_s.phase_mask,
+		      "wrap bins: 0x%08x", g_s.phase_mask);
+	end_of_test();
+}
+
+/* A displaced chunk (aborted before its close) marks only what it heard. */
+ZTEST(radiant_search, test_coverage_a_displaced_chunk_marks_only_what_it_heard)
+{
+	struct radiant_search_window w;
+
+	coverage_begin();
+
+	zassert_ok(radiant_search_window(&g_s, COV_T0, &w));
+	radiant_search_armed(&g_s, RADIANT_SEARCH_OP_EXTERNAL, COV_T0, COV_T0 + 100000u);
+	radiant_search_on_done(&g_s, false, true, COV_T0 + 8000u + 1u);
+
+	zassert_equal(BIT_MASK(2), g_s.phase_mask, "0x%08x", g_s.phase_mask);
+	end_of_test();
+}
+#endif /* CONFIG_RADIANT_SEARCH_COVERAGE */
+
 ZTEST(radiant_search, test_all_channel_slots_can_search)
 {
 	bring_up(false);

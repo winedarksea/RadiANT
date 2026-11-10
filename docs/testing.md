@@ -239,6 +239,12 @@ in [`release.yml`](../.github/workflows/release.yml): `build-core` (which
 publishes), `build-new-apps`, `build-node`, `build-treadmill` and `zero-cost`.
 That lane runs only on a `v*` tag or a manual dispatch.
 
+The zero-cost check runs locally too: `scripts\check_zero_cost.ps1 -BaseRef
+<ref>` builds every plain dongle row (the six nRF boards and the two TI arms)
+from HEAD and from the base, and compares allocated sections and the
+defined-symbol set. It fails when `hal_ti` is missing rather than skipping the
+TI rows.
+
 ---
 
 ## The four verification tiers

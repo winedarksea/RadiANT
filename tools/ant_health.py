@@ -62,10 +62,11 @@ from ant_wire import (  # noqa: E402
 #
 # (name, offset, width, description)
 #
-# Fields are only ever added at the end and an offset is never reused; the
-# structure version (payload[0]) goes up whenever a field is added or a field's
-# meaning changes. So every row here is present in any body at least
-# PAYLOAD_LEN long, whatever its version.
+# Fields are only ever added at the end and an offset is never reused. The
+# structure version (payload[0]) stays 1 throughout the beta however many
+# fields are added, so a reader tells which optional fields a board has from
+# the body length, not from the version. Every row here is present in any body
+# at least PAYLOAD_LEN long; the optional ones are in OPTIONAL_FIELDS below.
 FIELDS = (
     ("tx_drops", 2, 2, "ANT events dropped: USB TX queue full"),
     ("tx_high_water", 4, 1, "deepest the USB TX queue has been (of 32)"),
@@ -88,20 +89,32 @@ FIELDS = (
      "USB bulk-IN transfers that timed out waiting on the host"),
 )
 
-# What ant_health_fill() writes today - radiant/include/radiant/ant_health.h's
+# What the shortest reply carries - radiant/include/radiant/ant_health.h's
 # ANT_HEALTH_PAYLOAD_LEN, which is the definition this mirrors. It is the
-# shortest body this tool accepts.
+# shortest body this tool accepts: a board that predates a later field still
+# decodes.
 PAYLOAD_LEN = 30
+
+# Fields only some builds carry. (name, offset, width, description, what the
+# text output says when the body is too short to hold it.) The key is present
+# in the decoded dict only when the body is long enough: a build that cannot
+# measure it must not read as 0.
+OPTIONAL_FIELDS = (
+    ("sets_advanced_uncovered", 30, 2,
+     "search sets that advanced without hearing every phase (MPSL builds)",
+     "not in this build (no coverage counter compiled in)"),
+)
 
 
 def decode(payload: bytes) -> dict:
     """Turn a 0xF6 body into a dict. Raises ValueError on a short body.
 
     Refuses a body shorter than PAYLOAD_LEN. Decodes every known field from a
-    longer body or a higher version, since fields are only ever appended - a
-    later version's extra fields are simply not reported. The fields are not
+    longer body, since fields are only ever appended. The fields are not
     gated on the version number, so a bench board on older firmware that sends
-    the same 30-byte layout under a different version still decodes.
+    the same 30-byte layout under a different version still decodes. Optional
+    fields come in only when the body is long enough to hold them; a body
+    that is one byte short of the field leaves it absent.
     """
     if len(payload) < PAYLOAD_LEN:
         raise ValueError(
@@ -118,6 +131,9 @@ def decode(payload: bytes) -> dict:
     }
     for name, off, width, _desc in FIELDS:
         out[name] = int.from_bytes(payload[off:off + width], "little")
+    for name, off, width, _desc, _absent in OPTIONAL_FIELDS:
+        if len(payload) >= off + width:
+            out[name] = int.from_bytes(payload[off:off + width], "little")
     return out
 
 
@@ -194,9 +210,14 @@ def main() -> int:
         print("  SATURATED: at least one counter has pinned at its maximum.")
         print("  Every number below is a FLOOR, not a total.")
     print()
-    width = max(len(name) for name, _o, _w, _d in FIELDS)
+    width = max(len(row[0]) for row in FIELDS + OPTIONAL_FIELDS)
     for name, _off, _w, desc in FIELDS:
         print("  %-*s %8d   %s" % (width, name, got[name], desc))
+    for name, _off, _w, desc, absent in OPTIONAL_FIELDS:
+        if name in got:
+            print("  %-*s %8d   %s" % (width, name, got[name], desc))
+        else:
+            print("  %-*s %8s   %s" % (width, name, "-", absent))
     print()
     if got["tx_drops"]:
         print("  tx_drops is non-zero: those ANT events never reached the")

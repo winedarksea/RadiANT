@@ -459,6 +459,12 @@ struct radiant_search_stats {
 	 * a debug line and not in the health reply a host acts on. */
 	uint32_t denial_escapes;
 #endif
+#if defined(CONFIG_RADIANT_SEARCH_COVERAGE)
+	/* Sets the sweep advanced past whose credited listening never touched
+	 * some phase of RADIANT_SEARCH_COVERAGE_PERIOD_US. See
+	 * CONFIG_RADIANT_SEARCH_COVERAGE. */
+	uint32_t sets_advanced_uncovered;
+#endif
 };
 
 /* ---------------------------------------------------------------------------
@@ -520,6 +526,14 @@ struct radiant_search {
 	bool                 cur_from_cache;
 	bool                 set_valid;
 	uint32_t             set_dwell_us; /* listening credited to cur_set */
+#if defined(CONFIG_RADIANT_SEARCH_COVERAGE)
+	/* One bit per RADIANT_SEARCH_COVERAGE_BINS phase bin of
+	 * RADIANT_SEARCH_COVERAGE_PERIOD_US: a chunk's credited [t_open, end)
+	 * touched it. Reset with the set, and only with the set: per-set and
+	 * not cumulative, so an unlistened phase cannot be excused by another
+	 * set's listening. */
+	uint32_t             phase_mask;
+#endif
 #if defined(CONFIG_RADIANT_SEARCH_DENIAL_ESCAPE)
 	/* Consecutive denials since the last time any REAL listening was
 	 * credited. Saturates rather than wrapping - a wrap would restart the
@@ -863,6 +877,31 @@ uint8_t radiant_search_seen_count(const struct radiant_search *s, radiant_time_t
 uint16_t radiant_search_set_for_devnum(const struct radiant_search *s, uint16_t devnum);
 
 const struct radiant_search_stats *radiant_search_get_stats(const struct radiant_search *s);
+
+#if defined(CONFIG_RADIANT_SEARCH_COVERAGE)
+/* The folding period and bin count. 246277 us is 8070 counts of 32768 Hz, the
+ * ANT+ heart-rate period the ADR 0018 measurement was made at. The fold is
+ * per-set and a set sees about 1.4 tracked periods, so a tracked channel at
+ * another ANT+ period shifts the band by less than the 7.7 ms bin. */
+#define RADIANT_SEARCH_COVERAGE_PERIOD_US 246277u
+#define RADIANT_SEARCH_COVERAGE_BINS      32u
+
+/* The sets_advanced_uncovered of the one running sweep, or 0 before it exists.
+ * For ant_health_fill(): the application cannot name the instance and core
+ * code cannot call ant_health_note(). Defined where the instance lives. */
+uint32_t radiant_search_sets_uncovered_get(void);
+#endif
+
+#if defined(CONFIG_RADIANT_SEARCH_PHASE_DIAG)
+/* Every CRC-valid search frame, for the phase diagnostic. Defined by the
+ * ANT adapter, which owns the ring and the log line. */
+void radiant_search_phase_diag_frame(const struct radiant_channel_id *id,
+				     radiant_time_t t_sync, int claim,
+				     uint8_t nact, uint8_t nmatch, uint8_t set);
+#define RADIANT_SEARCH_PHASE_DIAG_FRAME(id, t_sync, claim, nact, nmatch, set) 	radiant_search_phase_diag_frame(id, t_sync, claim, nact, nmatch, set)
+#else
+#define RADIANT_SEARCH_PHASE_DIAG_FRAME(id, t_sync, claim, nact, nmatch, set) ((void)0)
+#endif
 
 #ifdef __cplusplus
 }

@@ -1225,6 +1225,136 @@ static void api_search_cfg_build(struct radiant_search_cfg *cfg)
 	memcpy(cfg->net_addr, api_net_addr[net], RADIANT_NET_ADDR_LEN);
 }
 
+#if defined(CONFIG_RADIANT_SEARCH_COVERAGE)
+uint32_t radiant_search_sets_uncovered_get(void)
+{
+	const struct radiant_search_stats *st = radiant_search_get_stats(&api_search);
+
+	return (st != NULL) ? st->sets_advanced_uncovered : 0u;
+}
+#endif
+
+#if defined(CONFIG_RADIANT_SEARCH_PHASE_DIAG)
+/* ADR 0018's bench diagnostic for tools/ant_disc_phase.py. Filled from the
+ * radio interrupt, drained and logged from api_housekeep(). Phase is against
+ * channel 0's tracked slot at the fixed heart-rate period; the harness
+ * calibrates its host measurement against these. */
+#define PHASE_DIAG_PERIOD_US 246277u
+#define PHASE_DIAG_RING      32u
+#define PHASE_DIAG_BIN_US    10000u
+
+struct phase_diag_frame {
+	uint16_t dev;
+	uint8_t  type;
+	uint8_t  tt;
+	uint8_t  set;
+	uint8_t  nact;
+	uint8_t  nmatch;
+	uint8_t  ch0_state;
+	int8_t   claim;
+	uint32_t ph;
+};
+
+static struct phase_diag_frame phase_diag_ring[PHASE_DIAG_RING];
+static volatile uint32_t phase_diag_wr;
+static volatile uint32_t phase_diag_rd;
+static uint32_t phase_diag_lost;
+static uint32_t phase_diag_ok;
+static uint32_t phase_diag_ab;
+static uint32_t phase_diag_other;
+static uint32_t phase_diag_bins;
+static uint64_t phase_diag_us;
+
+void radiant_search_phase_diag_frame(const struct radiant_channel_id *id,
+				     radiant_time_t t_sync, int claim,
+				     uint8_t nact, uint8_t nmatch, uint8_t set)
+{
+	radiant_time_t ref = radiant_channel_next_slot(0u);
+	struct phase_diag_frame *e;
+
+	if (phase_diag_wr - phase_diag_rd >= PHASE_DIAG_RING) {
+		phase_diag_lost++;
+		return;
+	}
+	e = &phase_diag_ring[phase_diag_wr % PHASE_DIAG_RING];
+	e->dev = id->device_number;
+	e->type = id->device_type;
+	e->tt = id->trans_type;
+	e->set = set;
+	e->nact = nact;
+	e->nmatch = nmatch;
+	e->claim = (int8_t)claim;
+	e->ch0_state = (uint8_t)radiant_channel_state_get(0u);
+	e->ph = (ref == RADIANT_TIME_NEVER || ref == 0u)
+			? 0xFFFFFFFFu
+			: (uint32_t)((t_sync + PHASE_DIAG_PERIOD_US * 64u - ref) %
+				     PHASE_DIAG_PERIOD_US);
+	phase_diag_wr++;
+}
+
+/* Tally a scan chunk that ended: which 10 ms bins of the period it listened
+ * through, whether it ran out or was displaced. Called before
+ * radiant_search_on_done(), which clears the bounds this reads. */
+static void phase_diag_chunk(enum radiant_sched_done why, radiant_time_t now)
+{
+	radiant_time_t o = api_search.t_open;
+	radiant_time_t c = api_search.t_close;
+	radiant_time_t ref = radiant_channel_next_slot(0u);
+
+	if (why == RADIANT_SCHED_DONE_OK) {
+		phase_diag_ok++;
+	} else if (why == RADIANT_SCHED_DONE_ABORTED) {
+		phase_diag_ab++;
+		c = now;
+	} else {
+		phase_diag_other++;
+		c = o;
+	}
+	if (c > o && api_search.op != 0u) {
+		phase_diag_us += (uint64_t)(c - o);
+		if (ref != RADIANT_TIME_NEVER && ref != 0u) {
+			for (radiant_time_t t = o; t < c; t += PHASE_DIAG_BIN_US) {
+				radiant_time_t ph = (t + PHASE_DIAG_PERIOD_US * 64u - ref) %
+						    PHASE_DIAG_PERIOD_US;
+
+				phase_diag_bins |= 1u << (ph / PHASE_DIAG_BIN_US);
+			}
+		}
+	}
+}
+
+/* Log what the interrupt collected. Called from api_housekeep(). */
+static void phase_diag_housekeep(radiant_time_t now)
+{
+	static radiant_time_t last;
+	const struct radiant_search_stats *ss = radiant_search_get_stats(&api_search);
+
+	while (phase_diag_rd != phase_diag_wr) {
+		const struct phase_diag_frame *e =
+			&phase_diag_ring[phase_diag_rd % PHASE_DIAG_RING];
+
+		LOG_INF("TDIAG frame dev=%u type=0x%02x tt=%u ph=%u set=%u claim=%d "
+			"nact=%u nmatch=%u ch0=%u",
+			e->dev, e->type, e->tt, (unsigned int)e->ph, e->set, e->claim,
+			e->nact, e->nmatch, e->ch0_state);
+		phase_diag_rd++;
+	}
+	if (now - last >= 5000000u) {
+		last = now;
+		LOG_INF("TEMPDIAG chunks: ok=%u aborted=%u other=%u credited_ms=%u "
+			"phase_bins=0x%08x sets=%u ok_frames=%u acq=%u idrej=%u lost=%u",
+			(unsigned int)phase_diag_ok, (unsigned int)phase_diag_ab,
+			(unsigned int)phase_diag_other,
+			(unsigned int)(phase_diag_us / 1000u),
+			(unsigned int)phase_diag_bins, (unsigned int)ss->sets_advanced,
+			(unsigned int)ss->frames_ok, (unsigned int)ss->acquired,
+			(unsigned int)api_stats.id_list_rejects,
+			(unsigned int)phase_diag_lost);
+		phase_diag_bins = 0u;
+	}
+}
+#endif /* CONFIG_RADIANT_SEARCH_PHASE_DIAG */
+
 /* The sweep offered this channel a device. Runs in the radio interrupt. */
 static void api_search_acquired(uint8_t channel,
 				const struct radiant_search_result *r, void *user)
@@ -2425,6 +2555,9 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 		 * times a sweep; crediting a chunk that never opened would
 		 * advance the address set on a fraction of its real dwell.
 		 */
+#if defined(CONFIG_RADIANT_SEARCH_PHASE_DIAG)
+		phase_diag_chunk(why, now);
+#endif
 		radiant_search_on_done(&api_search, why == RADIANT_SCHED_DONE_OK,
 				   why == RADIANT_SCHED_DONE_ABORTED, now);
 		/*
@@ -2992,6 +3125,10 @@ static void api_housekeep(void)
 			rxpath_seen = api_stats.rx_sched_events;
 		}
 	}
+
+#if defined(CONFIG_RADIANT_SEARCH_PHASE_DIAG)
+	phase_diag_housekeep(now);
+#endif
 
 #if defined(CONFIG_RADIANT_CRC_REPAIR)
 	/*

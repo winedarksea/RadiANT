@@ -7,6 +7,7 @@
 
 config ANT_DONGLE_HEALTH_COUNTERS
 	bool "Count what the dongle threw away, readable as MESG_RADIANT_HEALTH (0xF6)"
+	select RADIANT_SEARCH_COVERAGE if RADIANT_BACKEND_NRF_GATE_MPSL
 	help
 	  Counts silent, dongle-side loss - USB TX queue drops, event-queue
 	  overflows, RX backpressure, refused network keys, scheduler misses

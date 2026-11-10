@@ -29,6 +29,9 @@
 
 #include <radiant/radiant_frame.h>
 #include <radiant/radiant_radio_hal.h>
+#if defined(CONFIG_RADIANT_SEARCH_COVERAGE)
+#include <radiant/radiant_sched.h>
+#endif
 
 /* ---------------------------------------------------------------------------
  * Small helpers
@@ -162,6 +165,12 @@ static void build_set(struct radiant_search *s, uint16_t set)
 	s->cur_n_filters = n;
 	s->set_valid = (n > 0u);
 	s->set_dwell_us = 0u;
+#if defined(CONFIG_RADIANT_SEARCH_COVERAGE)
+	/* Also what a retune relies on: a move of frequency is always followed
+	 * by select_next_set(), so phases heard on the old frequency cannot
+	 * count as covered on the new one. */
+	s->phase_mask = 0u;
+#endif
 }
 
 /* Queue a set ahead of the round-robin cursor. Duplicates are dropped: two
@@ -686,6 +695,12 @@ int radiant_search_window(struct radiant_search *s, radiant_time_t t_earliest,
 	 * selected for the remainder, so "certain within one sweep" survives
 	 * fragmentation instead of degrading into "likely". */
 	if (!s->set_valid || dwell_owed(s) == 0u) {
+#if defined(CONFIG_RADIANT_SEARCH_COVERAGE)
+		/* The set just finished: did its credit touch every phase? */
+		if (s->set_valid && s->phase_mask != UINT32_MAX) {
+			s->stats.sets_advanced_uncovered++;
+		}
+#endif
 		retune_at_boundary(s);
 		select_next_set(s);
 	}
@@ -750,6 +765,11 @@ static void handle_ok(struct radiant_search *s, const struct radiant_rx_event *e
 	struct radiant_search_result r;
 	int rc;
 	bool acquire_claimed = false;
+#if defined(CONFIG_RADIANT_SEARCH_PHASE_DIAG)
+	int diag_claim = -1;
+	uint8_t diag_nact = 0u;
+	uint8_t diag_nmatch = 0u;
+#endif
 
 	/* FACT ONE: filter_index indexes the filter array WE supplied, so
 	 * devnum_lo comes from looking up our own table, never parsed from the
@@ -797,6 +817,16 @@ static void handle_ok(struct radiant_search *s, const struct radiant_rx_event *e
 
 	s->stats.frames_ok++;
 	radiant_search_seen_note_rf(s, &f.id, evt->t_sync, s->cfg.rf_index);
+#if defined(CONFIG_RADIANT_SEARCH_PHASE_DIAG)
+	for (uint8_t c = 0; c < (uint8_t)RADIANT_SEARCH_MAX_CHANNELS; c++) {
+		if (s->chans[c].active) {
+			diag_nact++;
+			if (id_match(&s->chans[c].want, &f.id)) {
+				diag_nmatch++;
+			}
+		}
+	}
+#endif
 
 	memset(&r, 0, sizeof(r));
 	r.id = f.id;
@@ -859,7 +889,12 @@ static void handle_ok(struct radiant_search *s, const struct radiant_rx_event *e
 		} else {
 			s->stats.scan_reports++;
 		}
+#if defined(CONFIG_RADIANT_SEARCH_PHASE_DIAG)
+		diag_claim = (int)c;
+#endif
 	}
+	RADIANT_SEARCH_PHASE_DIAG_FRAME(&f.id, evt->t_sync, diag_claim, diag_nact,
+					diag_nmatch, (uint8_t)s->cur_set);
 }
 
 /* Does this event belong to the window we have in flight?
@@ -876,6 +911,52 @@ static bool op_matches(const struct radiant_search *s, uint32_t op)
 	}
 	return op == s->op;
 }
+
+#if defined(CONFIG_RADIANT_SEARCH_COVERAGE)
+/* Which phase bin an instant falls in, of RADIANT_SEARCH_COVERAGE_BINS. */
+static uint32_t coverage_bin(radiant_time_t t)
+{
+	uint32_t ph = (uint32_t)(t % RADIANT_SEARCH_COVERAGE_PERIOD_US);
+
+	return (uint32_t)(((uint64_t)ph * RADIANT_SEARCH_COVERAGE_BINS) /
+			  RADIANT_SEARCH_COVERAGE_PERIOD_US);
+}
+
+/*
+ * Mark the phases that credited listening [t_open, end) touched.
+ *
+ * A bin is marked if listening touched any of it, not only when it was all
+ * listened through: a merely fragmented dwell has short gaps from the
+ * ordinary arming lead, and a bin straddling one must not read as a hole. So
+ * a gap shorter than a bin is invisible here; a deaf band of two bins or more
+ * always leaves a bin unmarked, which is what the ADR 0018 bands are.
+ *
+ * A chunk reclaimed by the scheduler's A9-3 is CREDITED the way an abort is
+ * (end clamps to t_close, so a whole listen) but it heard nothing, because
+ * the backend had lost the operation. It marks nothing here; credit is left
+ * alone. It is recognised by being reported more than the reclaim distance
+ * past its own end, which no displaced chunk ever is: a displaced chunk is
+ * torn down before its close, and the terminal it would have had in place of
+ * that abort arrives within milliseconds of the close.
+ */
+static void coverage_note(struct radiant_search *s, radiant_time_t end,
+			  bool ran_to_close, radiant_time_t ended_at)
+{
+	if (!ran_to_close && ended_at > s->t_close + RADIANT_SCHED_ARMED_STALE_US) {
+		return;
+	}
+	if ((end - s->t_open) >= RADIANT_SEARCH_COVERAGE_PERIOD_US) {
+		s->phase_mask = UINT32_MAX;
+		return;
+	}
+	/* At most 34 steps, and only on a coverage build. */
+	for (radiant_time_t t = s->t_open; t < end;
+	     t += RADIANT_SEARCH_COVERAGE_PERIOD_US / RADIANT_SEARCH_COVERAGE_BINS) {
+		s->phase_mask |= 1u << coverage_bin(t);
+	}
+	s->phase_mask |= 1u << coverage_bin(end - 1u);
+}
+#endif /* CONFIG_RADIANT_SEARCH_COVERAGE */
 
 static void on_event(struct radiant_search *s, const struct radiant_rx_event *evt,
 		     uint8_t filter_index)
@@ -978,6 +1059,9 @@ void radiant_search_on_done(struct radiant_search *s, bool ran_to_close,
 			s->set_dwell_us = (total > (uint64_t)UINT32_MAX)
 						  ? UINT32_MAX
 						  : (uint32_t)total;
+#if defined(CONFIG_RADIANT_SEARCH_COVERAGE)
+			coverage_note(s, end, ran_to_close, ended_at);
+#endif
 #if defined(CONFIG_RADIANT_SEARCH_DENIAL_ESCAPE)
 			/* THE ONLY PLACE REAL LISTENING IS CREDITED, so the
 			 * only place the denial run can honestly be reset. A
