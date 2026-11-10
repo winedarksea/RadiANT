@@ -618,6 +618,15 @@ struct radiant_radio_cbs {
 	 * operation whose events have nowhere to go.
 	 */
 	void (*ed)(const struct radiant_ed_event *evt, void *user);
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+	/*
+	 * ADR 0021: a booking's start is close and no operation has been armed
+	 * into it. May be NULL. Called from ordinary interrupt context, never
+	 * from a zero-latency one, so the core can run a pass and arm the
+	 * operation before the grant arrives with nothing staged behind it.
+	 */
+	void (*book_due)(void *user);
+#endif
 };
 
 /* ---------------------------------------------------------------------------

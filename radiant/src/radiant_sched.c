@@ -1717,6 +1717,14 @@ static bool want_preempt(radiant_time_t earliest)
 			if (is_booked(sl)) {
 				need = book_lead() +
 				       (radiant_time_t)RADIANT_SCHED_DISPATCH_SLACK_US;
+				/* And a chunk that has overrun its own close
+				 * this near the booked open is taken down
+				 * whatever it said it would do. See
+				 * hal_book_due(). */
+				if (sl->t_start <= earliest - lead + book_lead() +
+				    (radiant_time_t)RADIANT_SCHED_BOOK_DUE_US) {
+					return true;
+				}
 			}
 #endif
 			if (sl->t_start <
@@ -2503,11 +2511,59 @@ static void hal_ed(const struct radiant_ed_event *evt, void *user)
 }
 #endif /* SCHED_ED_BUILT */
 
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+/*
+ * A booking's start is close and nothing is armed into it. The core only runs
+ * on events, so if the chunk in front of the booking has not ended (its request
+ * refused late, its grant running on) nothing would arm the operation before
+ * the grant arrived with nothing staged, and the slot would go. So force a
+ * pass; want_preempt() takes the overdue chunk down.
+ *
+ * Counted, so a live slot lost this way is told apart from a booking whose
+ * channel has gone. Decided before the pass, which can report the slot MISSED
+ * and clear it.
+ */
+static void hal_book_due(void *user)
+{
+	bool           wanted = false;
+	radiant_time_t now;
+	unsigned int   key;
+
+	(void)user;
+
+	key = radiant_event_crit_enter();
+	now = radiant_radio_now();
+	for (uint32_t i = 0u; i < RADIANT_SCHED_MAX_CHANNELS; i++) {
+		const struct sched_slot *sl = &s.ch[i];
+
+		if (((sl->kind == (uint8_t)SLOT_RX && !sl->continuous) ||
+		     sl->kind == (uint8_t)SLOT_TX) &&
+		    !sl->in_flight && is_booked(sl) &&
+		    sl->t_start <= now + arm_lead()) {
+			wanted = true;
+		}
+	}
+	s.dirty = true;
+	pass();
+	if (!wanted) {
+		s.stats.book_orphan++;
+	} else if (s.armed_kind != (uint8_t)SLOT_IDLE && !s.armed_continuous) {
+		s.stats.book_saved++;
+	} else {
+		s.stats.book_late++;
+	}
+	radiant_event_crit_exit(key);
+}
+#endif
+
 static const struct radiant_radio_cbs sched_radio_cbs = {
 	.rx = hal_rx,
 	.tx = hal_tx,
 #if SCHED_ED_BUILT
 	.ed = hal_ed,
+#endif
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+	.book_due = hal_book_due,
 #endif
 };
 

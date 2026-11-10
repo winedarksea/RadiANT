@@ -115,6 +115,7 @@ struct fake_backend_counts {
 	uint32_t on_denied;
 	uint32_t finish_failed;
 	uint32_t on_radio_irq;
+	uint32_t booking_due;
 	/* ADR 0018 (d2): the last elastic lead the gate published, and how
 	 * often it published one. */
 	uint32_t elastic_lead_us;

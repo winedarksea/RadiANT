@@ -222,6 +222,8 @@ bool gate_booking(void);
  * when booking is off, for caps.min_arm_lead_elastic_us. The backend adds its
  * own ARM_LEAD_US. Called from the gate whenever the value changes. */
 void radiant_nrf_gate_set_elastic_lead(uint32_t us);
+/* A booking's start is close and no operation has been armed into it. */
+void radiant_nrf_gate_on_booking_due(void);
 #endif
 
 /* ---------------------------------------------------------------------------

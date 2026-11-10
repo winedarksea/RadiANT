@@ -497,6 +497,40 @@ ZTEST(radiant_gate_d2, test_d2_the_booking_match_is_masked)
 	zassert_equal(1u, p.book_hit, NULL);
 }
 
+/* A booking nobody has armed into reaches the core a little before it starts,
+ * once. An armed one, or one still far off, does not. */
+ZTEST(radiant_gate_d2, test_d2_a_booking_due_tells_the_core_once)
+{
+	radiant_time_t t = radiant_radio_now() + SCAN_LEAD_US;
+
+	zassert_equal(GATE_BOOK_OK, gate_book(t, t + TRACK_LEN_US, 0u), NULL);
+	k_msleep(WORK_MS);
+
+	gate_probe_fire_booking_due();
+	zassert_equal(0u, fake_backend()->booking_due, "told while still far off");
+
+	fake_radio_advance_to(t - 2100u);
+	gate_probe_fire_booking_due();
+	zassert_equal(1u, fake_backend()->booking_due, "the core was not told");
+	gate_probe_fire_booking_due();
+	zassert_equal(1u, fake_backend()->booking_due, "told twice");
+}
+
+ZTEST(radiant_gate_d2, test_d2_an_armed_booking_is_not_due)
+{
+	radiant_time_t t = radiant_radio_now() + SCAN_LEAD_US;
+
+	zassert_equal(GATE_BOOK_OK, gate_book(t, t + TRACK_LEN_US, 0u), NULL);
+	k_msleep(WORK_MS);
+	zassert_equal(GATE_PENDING,
+		      gate_acquire(GATE_OP_RX, t, t + TRACK_LEN_US, 0u,
+				   RADIANT_GATE_PRIO_HIGH), NULL);
+
+	fake_radio_advance_to(t - 2100u);
+	gate_probe_fire_booking_due();
+	zassert_equal(0u, fake_backend()->booking_due, NULL);
+}
+
 ZTEST(radiant_gate_d2, test_d2_one_session_is_masters_gate)
 {
 	gate_shutdown();

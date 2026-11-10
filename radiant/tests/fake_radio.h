@@ -396,6 +396,8 @@ void fake_radio_book_sessions(uint32_t n);
  * that comes for it with EDENIED. */
 void fake_radio_book_refuse_next(uint32_t n);
 const struct fake_radio_book_stats *fake_radio_book_stats(void);
+/* A booking's start is near, as the gate's timer would say. */
+void fake_radio_fire_book_due(void);
 #endif
 
 void fake_radio_reset(void);

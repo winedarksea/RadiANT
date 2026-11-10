@@ -85,6 +85,13 @@ void gate_probe_read(struct gate_probe *out)
 #endif
 }
 
+void gate_probe_fire_booking_due(void)
+{
+#if defined(CONFIG_RADIANT_GATE_MPSL_D2)
+	booking_due_fire();
+#endif
+}
+
 /* The one writer in this file: test-harness state reset, never behaviour. */
 void gate_probe_reset_elastic(void)
 {

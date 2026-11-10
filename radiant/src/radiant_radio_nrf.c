@@ -692,6 +692,13 @@ const struct radiant_radio_caps *radiant_radio_caps_get(void)
 }
 
 #if defined(CONFIG_RADIANT_GATE_MPSL_D2)
+void radiant_nrf_gate_on_booking_due(void)
+{
+	if (radiant_op.cbs != NULL && radiant_op.cbs->book_due != NULL) {
+		radiant_op.cbs->book_due(radiant_op.user);
+	}
+}
+
 void radiant_nrf_gate_set_elastic_lead(uint32_t us)
 {
 	radiant_nrf_caps.min_arm_lead_elastic_us =

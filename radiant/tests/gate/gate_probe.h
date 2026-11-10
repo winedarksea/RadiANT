@@ -95,6 +95,9 @@ struct gate_probe {
 
 void gate_probe_read(struct gate_probe *out);
 
+/* What the gate's booking-due timer does when it fires, called directly. */
+void gate_probe_fire_booking_due(void);
+
 /* Put the elastic class's adaptive state (first-bite length, phase skew,
  * refusal run) back to its power-on values. It is file-static and survives
  * gate_init(), so a test that makes the elastic class back off must undo it or

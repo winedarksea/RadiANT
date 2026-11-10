@@ -1882,6 +1882,12 @@ int radiant_radio_book(const struct radiant_rx_req *rx,
 void fake_radio_book_sessions(uint32_t n) { g.book_sessions = n; }
 void fake_radio_book_refuse_next(uint32_t n) { g.book_refuse_left = n; }
 const struct fake_radio_book_stats *fake_radio_book_stats(void) { return &g.bstats; }
+void fake_radio_fire_book_due(void)
+{
+	if (g.cbs.book_due != NULL) {
+		g.cbs.book_due(g.user);
+	}
+}
 #endif
 
 static void set_reserve(radiant_time_t end, uint16_t follow_on_us)

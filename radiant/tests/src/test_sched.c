@@ -3746,6 +3746,157 @@ ZTEST(radiant_sched, test_d2_a_refused_booking_costs_exactly_its_own_slot)
 	zassert_equal(1u, fake_radio_book_stats()->denied, NULL);
 }
 
+/*
+ * A tracked slot depends on the core arming it inside its booking, and that
+ * normally happens when the chunk in front of it ends. A chunk whose terminal
+ * is late (its request refused late, the grant ended long after its close)
+ * would hold the one operation slot past the booked start. The gate's timer
+ * forces a pass a little before that start, and the chunk gives way.
+ */
+#define BOOK_DUE_BEFORE_OPEN_US 2340u
+
+ZTEST(radiant_sched, test_d2_a_late_chunk_gives_way_at_the_booking_due)
+{
+	struct radiant_sched_rx sr;
+	const uint32_t periods = 8u;
+	radiant_time_t t0;
+
+	fake_radio_caps_mut()->min_arm_lead_us = (uint16_t)SHAPE_LEAD_MPSL;
+	fake_radio_caps_mut()->min_arm_lead_in_grant_us = 200u;
+	fake_radio_caps_mut()->max_window_us = SHAPE_MAXWIN_MPSL;
+	fake_radio_caps_mut()->booking = true;
+	fake_radio_caps_mut()->min_arm_lead_elastic_us = SHAPE_EL_LEAD_D2;
+	bring_up();
+	/* The chunk in front of a booked window ends about 4.5 ms before it;
+	 * 8 ms late is past the window's arm deadline. */
+	fake_radio_set_rx_terminal_delay_us(8000u);
+
+	t0 = radiant_radio_now() + 3u * SHAPE_PERIOD_US;
+	rx_req_init(&sr, radiant_frame_format(RADIANT_FRAME_CFG_SEARCH), search_filter, 8u,
+		    t0 - 2u * SHAPE_PERIOD_US, RADIANT_TIME_NEVER);
+	sr.chunk_us = 260000u;
+	zassert_ok(radiant_sched_request_rx(SHAPE_SCAN_CH, &sr));
+	log.repost = true;
+	log.repost_period_us = SHAPE_PERIOD_US;
+	log.repost_window_us = SHAPE_WINDOW_US;
+	log.repost_mask = 0x1u;
+	log.next_open[0] = t0;
+	post_track(0u, t0, t0 + (radiant_time_t)SHAPE_WINDOW_US);
+	zassert_ok(radiant_sched_tick());
+
+	for (uint32_t k = 0u; k < periods; k++) {
+		radiant_time_t open = t0 + (radiant_time_t)k * SHAPE_PERIOD_US;
+
+		fake_radio_advance_to(open - BOOK_DUE_BEFORE_OPEN_US);
+		fake_radio_fire_book_due();
+		fake_radio_advance_to(open + SHAPE_PERIOD_US / 2u);
+	}
+	TC_PRINT("d2-due: ok=%u missed=%u denied=%u saved=%u late=%u orphan=%u\n",
+		 log.ok_count[0], log.missed_count[0], log.denied_count[0],
+		 radiant_sched_stats_get()->book_saved,
+		 radiant_sched_stats_get()->book_late,
+		 radiant_sched_stats_get()->book_orphan);
+	zassert_equal(0u, log.missed_count[0], "%u tracked slots lost to a late chunk",
+		      log.missed_count[0]);
+	zassert_true(log.ok_count[0] >= periods - 1u, "ok=%u", log.ok_count[0]);
+	zassert_true(radiant_sched_stats_get()->book_saved >= periods - 1u,
+		     "the forced pass saved only %u",
+		     radiant_sched_stats_get()->book_saved);
+	zassert_equal(0u, radiant_sched_stats_get()->book_late, NULL);
+	log.repost = false;
+	zassert_ok(radiant_sched_cancel(SHAPE_SCAN_CH));
+	fake_radio_set_rx_terminal_delay_us(0u);
+	fake_radio_advance_to(radiant_radio_now() + 2u * SHAPE_PERIOD_US);
+	finish();
+}
+
+/* A booking whose channel went away is an orphan, not a lost slot. */
+ZTEST(radiant_sched, test_d2_an_orphan_booking_is_counted_apart_from_a_late_slot)
+{
+	struct radiant_sched_rx sr;
+	radiant_time_t t0;
+
+	fake_radio_caps_mut()->min_arm_lead_us = (uint16_t)SHAPE_LEAD_MPSL;
+	fake_radio_caps_mut()->min_arm_lead_in_grant_us = 200u;
+	fake_radio_caps_mut()->max_window_us = SHAPE_MAXWIN_MPSL;
+	fake_radio_caps_mut()->booking = true;
+	fake_radio_caps_mut()->min_arm_lead_elastic_us = SHAPE_EL_LEAD_D2;
+	bring_up();
+
+	t0 = radiant_radio_now() + 3u * SHAPE_PERIOD_US;
+	rx_req_init(&sr, radiant_frame_format(RADIANT_FRAME_CFG_SEARCH), search_filter, 8u,
+		    t0 - 2u * SHAPE_PERIOD_US, RADIANT_TIME_NEVER);
+	sr.chunk_us = 260000u;
+	zassert_ok(radiant_sched_request_rx(SHAPE_SCAN_CH, &sr));
+	post_track(0u, t0, t0 + (radiant_time_t)SHAPE_WINDOW_US);
+	zassert_ok(radiant_sched_tick());
+	fake_radio_advance_to(t0 - 30000u);
+	zassert_true(fake_radio_book_stats()->placed >= 1u, "nothing was booked");
+
+	zassert_ok(radiant_sched_cancel(0u));
+	fake_radio_advance_to(t0 - BOOK_DUE_BEFORE_OPEN_US);
+	fake_radio_fire_book_due();
+
+	zassert_equal(1u, radiant_sched_stats_get()->book_orphan, NULL);
+	zassert_equal(0u, radiant_sched_stats_get()->book_late, NULL);
+	zassert_equal(0u, radiant_sched_stats_get()->book_saved, NULL);
+	zassert_ok(radiant_sched_cancel(SHAPE_SCAN_CH));
+	finish();
+}
+
+/*
+ * Three tracked operations inside one lead. Two sessions fix a pair; a third
+ * has nowhere to book until one frees. A characterization, not a target: it
+ * records which slots are kept, and says so loudly if that changes.
+ */
+ZTEST(radiant_sched, test_d2_three_tracked_operations_inside_one_lead)
+{
+	static const struct { uint32_t gap_us; } cases[] = {{1000u}, {5000u}, {8000u}, {12000u}};
+
+	for (size_t i = 0u; i < ARRAY_SIZE(cases); i++) {
+		const uint32_t periods = 12u;
+		radiant_time_t t0;
+		uint32_t arms_ok;
+
+		sched_before(NULL);
+		fake_radio_caps_mut()->min_arm_lead_us = (uint16_t)SHAPE_LEAD_MPSL;
+		fake_radio_caps_mut()->min_arm_lead_in_grant_us = 200u;
+		fake_radio_caps_mut()->max_window_us = SHAPE_MAXWIN_MPSL;
+		fake_radio_caps_mut()->booking = true;
+		fake_radio_caps_mut()->min_arm_lead_elastic_us = SHAPE_EL_LEAD_D2;
+		bring_up();
+
+		t0 = radiant_radio_now() + 3u * SHAPE_PERIOD_US;
+		log.repost = true;
+		log.repost_period_us = SHAPE_PERIOD_US;
+		log.repost_window_us = SHAPE_WINDOW_US;
+		log.repost_mask = 0x7u;
+		for (uint8_t ch = 0u; ch < 3u; ch++) {
+			log.next_open[ch] = t0 + (radiant_time_t)ch * cases[i].gap_us;
+			post_track(ch, log.next_open[ch],
+				   log.next_open[ch] + (radiant_time_t)SHAPE_WINDOW_US);
+		}
+		zassert_ok(radiant_sched_tick());
+		for (uint32_t k = 0u; k < periods; k++) {
+			fake_radio_advance_to(t0 + (radiant_time_t)(k + 1u) * SHAPE_PERIOD_US);
+		}
+		arms_ok = log.ok_count[0] + log.ok_count[1] + log.ok_count[2];
+		TC_PRINT("d2-three gap=%u us: ok=%u/%u/%u missed=%u/%u/%u denied=%u/%u/%u "
+			 "booked=%u busy=%u\n", cases[i].gap_us, log.ok_count[0],
+			 log.ok_count[1], log.ok_count[2], log.missed_count[0],
+			 log.missed_count[1], log.missed_count[2], log.denied_count[0],
+			 log.denied_count[1], log.denied_count[2],
+			 radiant_sched_stats_get()->booked,
+			 radiant_sched_stats_get()->book_busy);
+		/* Every period serves at least the two the sessions can hold. */
+		zassert_true(arms_ok >= 2u * (periods - 1u), "gap %u: served only %u",
+			     cases[i].gap_us, arms_ok);
+		log.repost = false;
+		fake_radio_advance_to(radiant_radio_now() + 2u * SHAPE_PERIOD_US);
+		finish();
+	}
+}
+
 /* Booking compiled in but the backend says no (caps.booking false): the
  * schedule is master's, band for band. */
 ZTEST(radiant_sched, test_d2_without_the_capability_the_schedule_is_masters)

@@ -194,6 +194,11 @@ extern "C" {
  * lead (~400) and the arbiter's guard between sessions (0.2-0.4 ms, Phase 0c
  * F2). */
 #define RADIANT_SCHED_BOOK_TAIL_US 2000u
+/* How close to a booked operation's open a pass treats a chunk still armed
+ * in front of it as overdue, on top of book_lead. The chunk was cut to end
+ * about 4.5 ms before the open, so a chunk still armed this near has lost its
+ * way, and the operation has to be armed now or never. */
+#define RADIANT_SCHED_BOOK_DUE_US 1500u
 /* How many bookings the scheduler tracks at once. A two-session gate holds at
  * most two requests; the table is larger so an entry whose operation has just
  * run does not block the next booking before it ages out. */
@@ -509,6 +514,13 @@ struct radiant_sched_stats {
 	uint32_t book_busy;
 	uint32_t book_refused;
 	uint32_t book_r1_cut;
+	/* ADR 0021: a booking's start came close with nothing armed into it.
+	 * saved: the forced pass armed its operation in time. late: the slot
+	 * was still wanted and could not be armed - a live slot lost. orphan:
+	 * nothing wants it any more (a channel closed, a slot moved). */
+	uint32_t book_saved;
+	uint32_t book_late;
+	uint32_t book_orphan;
 #endif
 };
 

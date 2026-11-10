@@ -81,6 +81,9 @@
 #include <hal/nrf_timer.h>
 
 #include <radiant/radiant_swi.h>
+#if defined(CONFIG_RADIANT_GATE_MPSL_STATS_LOG)
+#include <radiant/radiant_sched.h>
+#endif
 
 #include "radiant_radio_nrf_gate.h"
 
@@ -423,6 +426,8 @@ struct sess {
 	/* Placement held back until the OTHER session's running timeslot has
 	 * ended - see place_one(). */
 	volatile bool  wait_live;
+	/* The core has been told this booking's start is close. */
+	bool           due_told;
 };
 
 static struct sess ss[NSESS];
@@ -716,6 +721,10 @@ static struct {
 	 * capture against the free-timer estimate of the same instant. */
 	/* TIMER0 signals for a fixed grant: provoked by a release vs the
 	 * grant's own backstop, and the last such signal's time after START. */
+	int32_t  start_err_last;
+	int32_t  start_err_min;
+	int32_t  start_err_max;
+	uint32_t start_err_n;
 	uint32_t t0_fix_rel;
 	uint32_t t0_fix_backstop;
 	uint32_t t0_fix_at;
@@ -911,11 +920,21 @@ static bool gate_wq_started;
  * has no business in any interrupt handler. The trampoline changes WHICH
  * interrupt asks for the deferral, not that it is deferred.
  */
+#if defined(CONFIG_RADIANT_GATE_MPSL_D2)
+static void booking_due_fire(void);
+static void booking_due_stop(void);
+#endif
+
 static void gate_swi_handler(uint32_t bits)
 {
 	if ((bits & RADIANT_SWI_GATE_DEADLINE) != 0u) {
 		deadline_apply();
 	}
+#if defined(CONFIG_RADIANT_GATE_MPSL_D2)
+	if ((bits & RADIANT_SWI_GATE_DUE) != 0u) {
+		booking_due_fire();
+	}
+#endif
 	if ((bits & RADIANT_SWI_GATE_REQUEST) != 0u) {
 		k_work_submit_to_queue(&gate_wq, &request_work);
 	}
@@ -1542,6 +1561,23 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		/* The staged operation's grant. Its numbers become the live ones
 		 * only now - see struct next_grant. */
 		commit_next_grant(s);
+#if defined(CONFIG_RADIANT_GATE_MPSL_STATS)
+		/* How far the grant landed from where it was asked for: a
+		 * booking sits a period ahead on an anchor up to a period old,
+		 * so a board on a poor low-frequency clock shows up here. */
+		if (!g.extendable) {
+			int32_t e = (int32_t)(int64_t)(s->anchor - s->r_start);
+
+			stats.start_err_last = e;
+			if (stats.start_err_n == 0u || e < stats.start_err_min) {
+				stats.start_err_min = e;
+			}
+			if (stats.start_err_n == 0u || e > stats.start_err_max) {
+				stats.start_err_max = e;
+			}
+			stats.start_err_n++;
+		}
+#endif
 #if defined(CONFIG_RADIANT_GATE_MPSL_STATS)
 		if (g.extendable) {
 			stats.el_gr_by_notice[notice_bin(s->notice_us)]++;
@@ -2206,6 +2242,13 @@ static void gate_stats_fn(struct k_work *w)
 		stats.rel_br_inside, stats.rel_br_restore, stats.rel_cap_last,
 		stats.rel_est_last, stats.t0_fix_rel, stats.t0_fix_backstop,
 		stats.t0_fix_at, stats.ext_skipped);
+	LOG_INF("D2START n=%u err last/min/max %d/%d/%d us | due saved=%u late=%u "
+		"orphan=%u",
+		stats.start_err_n, (int)stats.start_err_last,
+		(int)stats.start_err_min, (int)stats.start_err_max,
+		radiant_sched_stats_get()->book_saved,
+		radiant_sched_stats_get()->book_late,
+		radiant_sched_stats_get()->book_orphan);
 	LOG_INF("D2EL blk by notice %u/%u/%u/%u/%u gr %u/%u/%u/%u/%u deferred-blk %u",
 		stats.el_blk_by_notice[0], stats.el_blk_by_notice[1],
 		stats.el_blk_by_notice[2], stats.el_blk_by_notice[3],
@@ -2277,7 +2320,8 @@ int gate_init(void)
 	if (!swi_registered) {
 		rc = (int32_t)radiant_swi_register(RADIANT_SWI_GATE_REQUEST |
 						   RADIANT_SWI_GATE_DENY |
-						   RADIANT_SWI_GATE_DEADLINE,
+						   RADIANT_SWI_GATE_DEADLINE |
+						   RADIANT_SWI_GATE_DUE,
 						   gate_swi_handler);
 		if (rc != 0) {
 			LOG_ERR("gate: radiant_swi_register: %d", (int)rc);
@@ -2331,6 +2375,9 @@ void gate_shutdown(void)
 		return;
 	}
 	deadline_stop();
+#if defined(CONFIG_RADIANT_GATE_MPSL_D2)
+	booking_due_stop();
+#endif
 	/* g.hw_held, not g.granted: the session must not be closed with the
 	 * 802.15.4 driver's SUBSCRIBE_RXEN still swapped out, and gate_release()
 	 * clears g.granted a good deal earlier than the radio comes back. */
@@ -2858,6 +2905,77 @@ bool gate_booking(void)
 }
 
 /*
+ * A BOOKING DEPENDS ON THE CORE ARMING INTO IT. Normally the chunk in front of
+ * it ends a few milliseconds before, and that completion arms the operation.
+ * If it does not, the booked grant starts with nothing staged and the slot is
+ * lost, so a timer tells the core a little before the start and the core forces
+ * a pass. Two milliseconds: enough to run a pass and stage, and later than any
+ * healthy chunk's end, so on the ordinary path nobody is told.
+ *
+ * One timer for the earliest booking outstanding. Started from gate_book() and
+ * from its own expiry; the expiry only pends the trampoline, so the call into
+ * the core runs where every other completion runs.
+ */
+#define BOOK_DUE_LEAD_US 2000u
+#define BOOK_DUE_SLOP_US 200u
+
+static void booking_due_expired(struct k_timer *t)
+{
+	ARG_UNUSED(t);
+	radiant_swi_pend(RADIANT_SWI_GATE_DUE);
+}
+static K_TIMER_DEFINE(booking_due_timer, booking_due_expired, NULL);
+
+static void booking_due_rearm(void)
+{
+	radiant_time_t best = RADIANT_TIME_NEVER;
+	radiant_time_t now = radiant_radio_now();
+
+	for (uint32_t i = 0u; i < NSESS; i++) {
+		const struct sess *b = &ss[i];
+
+		if (b->open && b->role == ROLE_BOOK && !b->book_failed &&
+		    !b->due_told && b->r_start < best) {
+			best = b->r_start;
+		}
+	}
+	if (best == RADIANT_TIME_NEVER) {
+		return;
+	}
+	k_timer_start(&booking_due_timer,
+		      K_USEC((best > now + BOOK_DUE_LEAD_US)
+				     ? (uint32_t)(best - now - BOOK_DUE_LEAD_US)
+				     : 0u),
+		      K_NO_WAIT);
+}
+
+static void booking_due_stop(void)
+{
+	k_timer_stop(&booking_due_timer);
+}
+
+static void booking_due_fire(void)
+{
+	radiant_time_t now = radiant_radio_now();
+	bool           due = false;
+
+	for (uint32_t i = 0u; i < NSESS; i++) {
+		struct sess *b = &ss[i];
+
+		if (b->open && b->role == ROLE_BOOK && !b->book_failed &&
+		    !b->due_told &&
+		    b->r_start <= now + BOOK_DUE_LEAD_US + BOOK_DUE_SLOP_US) {
+			b->due_told = true;
+			due = true;
+		}
+	}
+	if (due) {
+		radiant_nrf_gate_on_booking_due();
+	}
+	booking_due_rearm();
+}
+
+/*
  * ADR 0018 (d2): place the request for an operation that will be armed later.
  * Always the fixed class (a tracked window or a transmit: its instant is the
  * master's and its length the core's), always into a session other than one
@@ -2920,8 +3038,10 @@ int gate_book(radiant_time_t t_from, radiant_time_t t_to, uint16_t follow_on_us)
 	s->book_failed = false;
 	s->role = ROLE_BOOK;
 	s->want_place = true;
+	s->due_told = false;
 	GSTAT(stats.book_placed++);
 	radiant_swi_pend(RADIANT_SWI_GATE_REQUEST);
+	booking_due_rearm();
 	return GATE_BOOK_OK;
 }
 #endif
