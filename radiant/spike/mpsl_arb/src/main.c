@@ -58,6 +58,7 @@
 #include <zephyr/drivers/clock_control.h>
 #include <zephyr/drivers/clock_control/nrf_clock_control.h>
 #include <zephyr/sys/printk.h>
+#include <zephyr/sys/reboot.h>
 
 #include <hal/nrf_timer.h>
 
@@ -454,16 +455,6 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 	return &rv;
 }
 
-#if defined(CONFIG_MPSL_ASSERT_HANDLER)
-void mpsl_assert_handle(const char *const file, const uint32_t line)
-{
-	printk("\n*** MPSL ASSERT %s:%u  starts=%u blocked=%u ext_ok=%u "
-	       "ext_fail=%u overstay=%u\n",
-	       file, line, n_start, n_blocked, n_ext_ok, n_ext_fail, n_overstay);
-	k_fatal_halt(K_ERR_KERNEL_PANIC);
-}
-#endif
-
 static int open_session(void)
 {
 	int32_t rc;
@@ -768,6 +759,944 @@ static void run_timer_continuity(uint32_t seconds)
 }
 
 /* ---------------------------------------------------------------------------
+ * ADR 0018 Phase 0c: three API facts that decide which candidates are viable.
+ *
+ *   F1  Does MPSL let ONE timeslot be extended past 100 ms in total?
+ *       (MPSL_TIMESLOT_LENGTH_MAX_US documents only the "event"; the gate
+ *       assumes not.) Just-in-time 1 ms chain to 300 ms, the gate's pattern:
+ *       an MPSL_TIMER0 compare END_MARGIN before the end asks for the next
+ *       step. Plus one 30 ms step mid-grant, at 40 ms and straddling 100 ms.
+ *       Plus the old back-to-back chain (EXTEND from EXTEND_SUCCEEDED).
+ *   F2  Two sessions in this one client. Session 1 holds an extended NORMAL
+ *       grant; session 2 asks for a short slot inside it, placed either
+ *       before session 1's extensions reach that instant (A) or after one
+ *       big extension already covers it (B).
+ *   F3  ACTION_REQUEST returned at a grant's end, the next start a short
+ *       gap after the close. Grant / BLOCKED rate per gap.
+ *
+ * Nothing in a callback calls the kernel except SESSION_IDLE's semaphore:
+ * START/TIMER0/EXTEND run in a zero-latency IRQ (radiant-zli-kernel-calls),
+ * so their results reach the thread through volatile flags it polls.
+ * SESSION_IDLE runs from mpsl_low_priority_process(), as above.
+ * ---------------------------------------------------------------------------
+ */
+
+#define FX_ELASTIC_MARGIN_US 2000u  /* gate END_MARGIN_EXTEND_US */
+#define FX_FIXED_MARGIN_US   750u   /* gate END_MARGIN_FIXED_US */
+#define FX_INIT_LEN_US       5000u
+#define FX_MAXREC            64u
+
+enum fx_mode {
+	FX_NONE = 0,
+	FX_F1,
+	FX_F2,
+	FX_F3,
+};
+
+static volatile enum fx_mode fx_mode;
+static volatile uint32_t fx_iter;      /* printed by the assert handler */
+
+static mpsl_timeslot_signal_return_param_t fx_rv[2];
+static mpsl_timeslot_request_t fx_req[2];
+static mpsl_timeslot_session_id_t fx_sid[2];
+static bool fx_is_open[2];
+static K_SEM_DEFINE(fx_idle0, 0, 1);
+static K_SEM_DEFINE(fx_idle1, 0, 1);
+
+static volatile uint32_t fx_invalid, fx_overstay, fx_cancel0, fx_cancel1;
+
+/* The thread's own capture channel, so a timeslot callback that captures
+ * CC0 between the thread's trigger and read cannot hand the thread its
+ * value. */
+static inline uint32_t now_us_thr(void)
+{
+	nrf_timer_task_trigger(FREE_TIMER, nrf_timer_capture_task_get(1));
+	return nrf_timer_cc_get(FREE_TIMER, 1);
+}
+
+/* MPSL_TIMER0 runs from zero at each timeslot start and is ours inside it.
+ * CC1 as the capture, as the gate does. */
+static inline uint32_t mt0_now(void)
+{
+	nrf_timer_task_trigger(MPSL_TIMER0, nrf_timer_capture_task_get(1));
+	return nrf_timer_cc_get(MPSL_TIMER0, 1);
+}
+
+/* The gate's ordering: cc_set, event_clear, int_enable (stale compare). */
+static void fx_cc_arm(uint32_t at)
+{
+	nrf_timer_cc_set(MPSL_TIMER0, NRF_TIMER_CC_CHANNEL0, at);
+	nrf_timer_event_clear(MPSL_TIMER0, NRF_TIMER_EVENT_COMPARE0);
+	nrf_timer_int_enable(MPSL_TIMER0, NRF_TIMER_INT_COMPARE0_MASK);
+}
+
+static void fx_cc_disarm(void)
+{
+	nrf_timer_int_disable(MPSL_TIMER0, NRF_TIMER_INT_COMPARE0_MASK);
+	nrf_timer_event_clear(MPSL_TIMER0, NRF_TIMER_EVENT_COMPARE0);
+}
+
+static int fx_open(int idx, mpsl_timeslot_callback_t cb)
+{
+	int32_t rc;
+
+	if (fx_is_open[idx]) {
+		return 0;
+	}
+	rc = mpsl_timeslot_session_open(cb, &fx_sid[idx]);
+	printk("FX|session_open idx=%d rc=%d id=%u\n", idx, (int)rc,
+	       (unsigned)fx_sid[idx]);
+	if (rc == 0) {
+		fx_is_open[idx] = true;
+	}
+	return (int)rc;
+}
+
+static void fx_close_all(void)
+{
+	for (int i = 0; i < 2; i++) {
+		if (fx_is_open[i]) {
+			(void)mpsl_timeslot_session_close(fx_sid[i]);
+			fx_is_open[i] = false;
+		}
+	}
+	k_sleep(K_MSEC(50));
+}
+
+static int fx_earliest(int idx, uint8_t pr, uint32_t len_us, uint8_t hfclk)
+{
+	int32_t rc;
+
+	fx_req[idx].request_type = MPSL_TIMESLOT_REQ_TYPE_EARLIEST;
+	fx_req[idx].params.earliest.hfclk = hfclk;
+	fx_req[idx].params.earliest.priority = pr;
+	fx_req[idx].params.earliest.length_us = len_us;
+	fx_req[idx].params.earliest.timeout_us = 1000000u;
+	rc = mpsl_timeslot_request(fx_sid[idx], &fx_req[idx]);
+	if (rc != 0) {
+		printk("FX|earliest idx=%d rc=%d\n", idx, (int)rc);
+	}
+	return (int)rc;
+}
+
+static void fx_normal(int idx, uint8_t pr, uint32_t dist_us, uint32_t len_us,
+		      uint8_t hfclk)
+{
+	fx_req[idx].request_type = MPSL_TIMESLOT_REQ_TYPE_NORMAL;
+	fx_req[idx].params.normal.hfclk = hfclk;
+	fx_req[idx].params.normal.priority = pr;
+	fx_req[idx].params.normal.distance_us = dist_us;
+	fx_req[idx].params.normal.length_us = len_us;
+}
+
+static const char *stack_name(void)
+{
+	return IS_ENABLED(CONFIG_BT) ? "ble" : "none";
+}
+
+/* ------------------------------- F1 ------------------------------------- */
+
+#define F1_TARGET_US 300000u
+#define F1_STEP_US   1000u
+#define F1_BIG_US    30000u
+
+enum { END_TARGET = 1, END_EXTFAIL = 2 };
+
+struct f1_rec {
+	uint32_t total_us;    /* granted length when it ended */
+	uint32_t held_us;     /* free timer, START -> END returned */
+	uint32_t ext_ok;
+	uint32_t ext_fail;
+	uint32_t fail_ask_us; /* total the refused step would have reached */
+	uint32_t fail_step_us;
+	int32_t  drift_us;    /* free-timer elapsed minus MPSL_TIMER0 elapsed */
+	uint32_t mt0_end;     /* MPSL_TIMER0 at the end (wrap / reset check) */
+	uint8_t  big;         /* 0 none, 1 ok, 2 refused */
+	uint8_t  reason;
+};
+
+static volatile bool f1_jit;           /* false: back-to-back chain */
+static volatile uint32_t f1_big_at;    /* 0: no big step */
+static struct f1_rec f1_recs[FX_MAXREC];
+static volatile uint32_t f1_n;
+static uint32_t f1_t0, f1_m0, f1_granted, f1_step;
+static bool f1_big_done;
+
+static uint32_t f1_next_step(void)
+{
+	uint32_t step = F1_STEP_US;
+
+	if (f1_big_at != 0u && !f1_big_done && f1_granted >= f1_big_at) {
+		step = F1_BIG_US;
+	}
+	if (f1_granted + step > F1_TARGET_US) {
+		step = F1_TARGET_US - f1_granted;
+	}
+	return step;
+}
+
+static void f1_finish(uint8_t reason)
+{
+	uint32_t t = now_us();
+	uint32_t m = mt0_now();
+	struct f1_rec *r;
+
+	fx_cc_disarm();
+	if (f1_n < FX_MAXREC) {
+		r = &f1_recs[f1_n];
+		r->total_us = f1_granted;
+		r->held_us = t - f1_t0;
+		r->drift_us = (int32_t)(t - f1_t0) - (int32_t)(m - f1_m0);
+		r->mt0_end = m;
+		r->reason = reason;
+	}
+	f1_n++;
+	fx_rv[0].callback_action = MPSL_TIMESLOT_SIGNAL_ACTION_END;
+}
+
+static bool f1_try_extend(void)
+{
+	uint32_t step = f1_next_step();
+
+	if (step < MPSL_TIMESLOT_EXTENSION_TIME_MIN_US) {
+		return false;
+	}
+	f1_step = step;
+	fx_rv[0].callback_action = MPSL_TIMESLOT_SIGNAL_ACTION_EXTEND;
+	fx_rv[0].params.extend.length_us = step;
+	return true;
+}
+
+static mpsl_timeslot_signal_return_param_t *f1_cb(uint32_t signal, uint32_t t)
+{
+	switch (signal) {
+	case MPSL_TIMESLOT_SIGNAL_START:
+		f1_t0 = t;
+		f1_m0 = mt0_now();
+		f1_granted = FX_INIT_LEN_US;
+		f1_big_done = false;
+		if (f1_n < FX_MAXREC) {
+			memset(&f1_recs[f1_n], 0, sizeof(f1_recs[0]));
+		}
+		fx_cc_arm(FX_INIT_LEN_US - FX_ELASTIC_MARGIN_US);
+		if (!f1_jit) {
+			(void)f1_try_extend();
+		}
+		break;
+	case MPSL_TIMESLOT_SIGNAL_TIMER0:
+		nrf_timer_event_clear(MPSL_TIMER0, NRF_TIMER_EVENT_COMPARE0);
+		if (!(f1_jit && f1_try_extend())) {
+			f1_finish(END_TARGET);
+		}
+		break;
+	case MPSL_TIMESLOT_SIGNAL_EXTEND_SUCCEEDED:
+		f1_granted += f1_step;
+		if (f1_n < FX_MAXREC) {
+			f1_recs[f1_n].ext_ok++;
+			if (f1_step == F1_BIG_US) {
+				f1_recs[f1_n].big = 1u;
+			}
+		}
+		if (f1_step == F1_BIG_US) {
+			f1_big_done = true;
+		}
+		nrf_timer_cc_set(MPSL_TIMER0, NRF_TIMER_CC_CHANNEL0,
+				 f1_granted - FX_ELASTIC_MARGIN_US);
+		if (!f1_jit) {
+			(void)f1_try_extend();
+		}
+		break;
+	case MPSL_TIMESLOT_SIGNAL_EXTEND_FAILED:
+		if (f1_n < FX_MAXREC) {
+			f1_recs[f1_n].ext_fail++;
+			f1_recs[f1_n].fail_ask_us = f1_granted + f1_step;
+			f1_recs[f1_n].fail_step_us = f1_step;
+			if (f1_step == F1_BIG_US) {
+				f1_recs[f1_n].big = 2u;
+			}
+		}
+		f1_finish(END_EXTFAIL);
+		break;
+	case MPSL_TIMESLOT_SIGNAL_CANCELLED:
+		fx_cancel0++;
+		break;
+	case MPSL_TIMESLOT_SIGNAL_SESSION_IDLE:
+		k_sem_give(&fx_idle0);
+		break;
+	default:
+		break;
+	}
+	return &fx_rv[0];
+}
+
+/* ------------------------------- F2 ------------------------------------- */
+
+#define F2_S1_CAP_US    90000u
+#define F2_S2_OFFSET_US 40000u
+#define F2_S2_LEN_US    2000u
+#define F2_B_BIG_US     60000u
+
+struct f2_rec {
+	uint32_t s1_t0, s1_end, s1_granted, s1_fail_ask;
+	uint32_t s2_req_t, s2_target, s2_start, s2_end, s2_block_t;
+	uint8_t  s1_reason; /* 0 never ended by us, END_TARGET (cap), END_EXTFAIL */
+	uint8_t  s2_out;    /* 0 none, 1 granted, 2 blocked, 3 cancelled, 4 skipped */
+	uint8_t  s1_ext_fail;
+};
+
+static volatile bool f2_variant_b;
+/* Session 1's chain step. 1 ms is the gate's EXTEND_STEP_US; the 200 us
+ * (MPSL_TIMESLOT_EXTENSION_TIME_MIN_US) variant resolves how close to
+ * session 2's start MPSL lets session 1 extend. */
+static volatile uint32_t f2_chain_step = 1000u;
+static volatile bool f2_s2_boot;
+static struct f2_rec f2_cur;
+static volatile bool f2_s1_started, f2_s1_big_ok, f2_s1_big_fail;
+static volatile bool f2_s1_ended;
+static uint32_t f2_s1_granted, f2_s1_step;
+static volatile uint32_t f2_anchor2;
+
+static mpsl_timeslot_signal_return_param_t *f2_cb_s1(uint32_t signal, uint32_t t)
+{
+	mpsl_timeslot_signal_return_param_t *p = &fx_rv[0];
+
+	switch (signal) {
+	case MPSL_TIMESLOT_SIGNAL_START:
+		f2_cur.s1_t0 = t;
+		f2_s1_granted = FX_INIT_LEN_US;
+		fx_cc_arm(FX_INIT_LEN_US - FX_ELASTIC_MARGIN_US);
+		f2_s1_started = true;
+		if (f2_variant_b) {
+			f2_s1_step = F2_B_BIG_US;
+			p->callback_action = MPSL_TIMESLOT_SIGNAL_ACTION_EXTEND;
+			p->params.extend.length_us = F2_B_BIG_US;
+		}
+		break;
+	case MPSL_TIMESLOT_SIGNAL_TIMER0:
+		nrf_timer_event_clear(MPSL_TIMER0, NRF_TIMER_EVENT_COMPARE0);
+		if (f2_s1_granted + f2_chain_step <= F2_S1_CAP_US) {
+			f2_s1_step = f2_chain_step;
+			p->callback_action = MPSL_TIMESLOT_SIGNAL_ACTION_EXTEND;
+			p->params.extend.length_us = f2_chain_step;
+		} else {
+			fx_cc_disarm();
+			f2_cur.s1_end = t;
+			f2_cur.s1_granted = f2_s1_granted;
+			f2_cur.s1_reason = END_TARGET;
+			f2_s1_ended = true;
+			p->callback_action = MPSL_TIMESLOT_SIGNAL_ACTION_END;
+		}
+		break;
+	case MPSL_TIMESLOT_SIGNAL_EXTEND_SUCCEEDED:
+		f2_s1_granted += f2_s1_step;
+		nrf_timer_cc_set(MPSL_TIMER0, NRF_TIMER_CC_CHANNEL0,
+				 f2_s1_granted - FX_ELASTIC_MARGIN_US);
+		if (f2_s1_step == F2_B_BIG_US) {
+			f2_s1_big_ok = true;
+		}
+		break;
+	case MPSL_TIMESLOT_SIGNAL_EXTEND_FAILED:
+		fx_cc_disarm();
+		f2_cur.s1_ext_fail++;
+		f2_cur.s1_fail_ask = f2_s1_granted + f2_s1_step;
+		f2_cur.s1_end = t;
+		f2_cur.s1_granted = f2_s1_granted;
+		f2_cur.s1_reason = END_EXTFAIL;
+		if (f2_s1_step == F2_B_BIG_US) {
+			f2_s1_big_fail = true;
+		}
+		f2_s1_ended = true;
+		p->callback_action = MPSL_TIMESLOT_SIGNAL_ACTION_END;
+		break;
+	case MPSL_TIMESLOT_SIGNAL_CANCELLED:
+		fx_cancel0++;
+		break;
+	case MPSL_TIMESLOT_SIGNAL_SESSION_IDLE:
+		k_sem_give(&fx_idle0);
+		break;
+	default:
+		break;
+	}
+	return p;
+}
+
+static mpsl_timeslot_signal_return_param_t *f2_cb_s2(uint32_t signal, uint32_t t)
+{
+	mpsl_timeslot_signal_return_param_t *p = &fx_rv[1];
+
+	switch (signal) {
+	case MPSL_TIMESLOT_SIGNAL_START:
+		f2_anchor2 = t;
+		if (f2_s2_boot) {
+			p->callback_action = MPSL_TIMESLOT_SIGNAL_ACTION_END;
+			break;
+		}
+		f2_cur.s2_start = t;
+		f2_cur.s2_out = 1u;
+		/* Hold it as a tracked window would, then end. */
+		fx_cc_arm(F2_S2_LEN_US - FX_FIXED_MARGIN_US);
+		break;
+	case MPSL_TIMESLOT_SIGNAL_TIMER0:
+		fx_cc_disarm();
+		f2_cur.s2_end = t;
+		p->callback_action = MPSL_TIMESLOT_SIGNAL_ACTION_END;
+		break;
+	case MPSL_TIMESLOT_SIGNAL_BLOCKED:
+		f2_cur.s2_out = 2u;
+		f2_cur.s2_block_t = t;
+		break;
+	case MPSL_TIMESLOT_SIGNAL_CANCELLED:
+		fx_cancel1++;
+		f2_cur.s2_out = 3u;
+		f2_cur.s2_block_t = t;
+		break;
+	case MPSL_TIMESLOT_SIGNAL_SESSION_IDLE:
+		k_sem_give(&fx_idle1);
+		break;
+	default:
+		break;
+	}
+	return p;
+}
+
+/* ------------------------------- F3 ------------------------------------- */
+
+#define F3_LEN_US 5000u
+
+static volatile uint32_t f3_gap_us;
+static volatile uint32_t f3_target;   /* short-notice attempts wanted */
+static volatile uint8_t  f3_hfclk = MPSL_TIMESLOT_HFCLK_CFG_XTAL_GUARANTEED;
+static volatile bool     f3_pending_short, f3_broken, f3_stop;
+static volatile uint32_t f3_ok, f3_blk, f3_rec_ok, f3_rec_blk, f3_cancel;
+static volatile uint32_t f3_anchor;
+static uint32_t f3_pred;
+static struct stat st_f3_err, st_f3_blk_late, st_f3_blk_early;
+
+static mpsl_timeslot_signal_return_param_t *f3_cb(uint32_t signal, uint32_t t)
+{
+	mpsl_timeslot_signal_return_param_t *p = &fx_rv[0];
+
+	switch (signal) {
+	case MPSL_TIMESLOT_SIGNAL_START:
+		if (f3_pending_short) {
+			f3_ok++;
+			stat_add(&st_f3_err, (t > f3_pred) ? (t - f3_pred)
+							   : (f3_pred - t));
+		} else {
+			f3_rec_ok++;
+		}
+		f3_pending_short = false;
+		f3_anchor = t;
+		fx_cc_arm(F3_LEN_US - FX_FIXED_MARGIN_US);
+		break;
+	case MPSL_TIMESLOT_SIGNAL_TIMER0: {
+		uint32_t m = mt0_now();
+
+		fx_cc_disarm();
+		if (f3_stop || f3_ok + f3_blk >= f3_target) {
+			f3_stop = true;
+			p->callback_action = MPSL_TIMESLOT_SIGNAL_ACTION_END;
+			break;
+		}
+		/* distance is from MPSL's own start, which MPSL_TIMER0 counts
+		 * from: next start = this close + gap. */
+		fx_normal(0, MPSL_TIMESLOT_PRIORITY_NORMAL, m + f3_gap_us,
+			  F3_LEN_US, f3_hfclk);
+		f3_pred = t + f3_gap_us;
+		f3_pending_short = true;
+		p->callback_action = MPSL_TIMESLOT_SIGNAL_ACTION_REQUEST;
+		p->params.request.p_next = &fx_req[0];
+		break;
+	}
+	case MPSL_TIMESLOT_SIGNAL_BLOCKED:
+		if (f3_pending_short) {
+			f3_blk++;
+			if (t > f3_pred) {
+				stat_add(&st_f3_blk_late, t - f3_pred);
+			} else {
+				stat_add(&st_f3_blk_early, f3_pred - t);
+			}
+		} else {
+			f3_rec_blk++;
+		}
+		f3_pending_short = false;
+		f3_broken = true;
+		break;
+	case MPSL_TIMESLOT_SIGNAL_CANCELLED:
+		f3_cancel++;
+		f3_pending_short = false;
+		f3_broken = true;
+		break;
+	case MPSL_TIMESLOT_SIGNAL_SESSION_IDLE:
+		k_sem_give(&fx_idle0);
+		break;
+	default:
+		break;
+	}
+	return p;
+}
+
+/* ----------------------------- dispatch --------------------------------- */
+
+static mpsl_timeslot_signal_return_param_t *fx_cb0(
+	mpsl_timeslot_session_id_t id, uint32_t signal)
+{
+	uint32_t t = now_us();
+
+	(void)id;
+	fx_rv[0].callback_action = MPSL_TIMESLOT_SIGNAL_ACTION_NONE;
+
+	if (signal == MPSL_TIMESLOT_SIGNAL_INVALID_RETURN) {
+		fx_invalid++;
+		return &fx_rv[0];
+	}
+	if (signal == MPSL_TIMESLOT_SIGNAL_OVERSTAYED) {
+		fx_overstay++;
+		return &fx_rv[0];
+	}
+
+	switch (fx_mode) {
+	case FX_F1:
+		return f1_cb(signal, t);
+	case FX_F2:
+		return f2_cb_s1(signal, t);
+	case FX_F3:
+		return f3_cb(signal, t);
+	default:
+		if (signal == MPSL_TIMESLOT_SIGNAL_START) {
+			fx_rv[0].callback_action =
+				MPSL_TIMESLOT_SIGNAL_ACTION_END;
+		} else if (signal == MPSL_TIMESLOT_SIGNAL_SESSION_IDLE) {
+			k_sem_give(&fx_idle0);
+		}
+		return &fx_rv[0];
+	}
+}
+
+static mpsl_timeslot_signal_return_param_t *fx_cb1(
+	mpsl_timeslot_session_id_t id, uint32_t signal)
+{
+	uint32_t t = now_us();
+
+	(void)id;
+	fx_rv[1].callback_action = MPSL_TIMESLOT_SIGNAL_ACTION_NONE;
+	if (signal == MPSL_TIMESLOT_SIGNAL_INVALID_RETURN) {
+		fx_invalid++;
+		return &fx_rv[1];
+	}
+	if (signal == MPSL_TIMESLOT_SIGNAL_OVERSTAYED) {
+		fx_overstay++;
+		return &fx_rv[1];
+	}
+	if (fx_mode == FX_F2) {
+		return f2_cb_s2(signal, t);
+	}
+	if (signal == MPSL_TIMESLOT_SIGNAL_START) {
+		fx_rv[1].callback_action = MPSL_TIMESLOT_SIGNAL_ACTION_END;
+	} else if (signal == MPSL_TIMESLOT_SIGNAL_SESSION_IDLE) {
+		k_sem_give(&fx_idle1);
+	}
+	return &fx_rv[1];
+}
+
+/* ------------------------------ F1 run ---------------------------------- */
+
+static void run_f1_one(const char *name, bool jit, uint32_t big_at,
+		       uint32_t iters)
+{
+	uint32_t i, u0, t0, u1, t1;
+	uint32_t n_target = 0, n_fail = 0, n_past100 = 0, n_big_ok = 0;
+	uint32_t n_big_fail = 0;
+	uint32_t max_total = 0, min_fail_ask = 0xFFFFFFFFu;
+	int32_t dmin = INT32_MAX, dmax = INT32_MIN;
+
+	f1_jit = jit;
+	f1_big_at = big_at;
+	f1_n = 0u;
+	fx_invalid = fx_overstay = fx_cancel0 = 0u;
+	fx_mode = FX_F1;
+
+	if (fx_open(0, fx_cb0) != 0) {
+		fx_mode = FX_NONE;
+		return;
+	}
+	u0 = k_uptime_get_32();
+	t0 = now_us_thr();
+	for (i = 0u; i < iters && i < FX_MAXREC; i++) {
+		fx_iter = i;
+		k_sem_reset(&fx_idle0);
+		if (fx_earliest(0, MPSL_TIMESLOT_PRIORITY_NORMAL,
+				FX_INIT_LEN_US,
+				MPSL_TIMESLOT_HFCLK_CFG_XTAL_GUARANTEED) != 0) {
+			break;
+		}
+		if (k_sem_take(&fx_idle0, K_MSEC(2000)) != 0) {
+			printk("F1|%s timeout at iter %u\n", name, i);
+			break;
+		}
+		k_sleep(K_MSEC(5));
+	}
+	t1 = now_us_thr();
+	u1 = k_uptime_get_32();
+	fx_mode = FX_NONE;
+	fx_close_all();
+
+	for (i = 0u; i < f1_n && i < FX_MAXREC; i++) {
+		struct f1_rec *r = &f1_recs[i];
+
+		printk("F1|%s|%s|g=%u total=%u held=%u ext_ok=%u ext_fail=%u "
+		       "fail_ask=%u fail_step=%u big=%u drift=%d mt0_end=%u "
+		       "end=%s\n",
+		       name, stack_name(), i, r->total_us, r->held_us,
+		       r->ext_ok, r->ext_fail, r->fail_ask_us, r->fail_step_us,
+		       r->big, r->drift_us, r->mt0_end,
+		       (r->reason == END_TARGET) ? "target" : "extfail");
+		if (r->reason == END_TARGET) {
+			n_target++;
+		} else {
+			n_fail++;
+			if (r->fail_ask_us < min_fail_ask) {
+				min_fail_ask = r->fail_ask_us;
+			}
+		}
+		if (r->total_us > MPSL_TIMESLOT_LENGTH_MAX_US) {
+			n_past100++;
+		}
+		if (r->total_us > max_total) {
+			max_total = r->total_us;
+		}
+		if (r->drift_us < dmin) {
+			dmin = r->drift_us;
+		}
+		if (r->drift_us > dmax) {
+			dmax = r->drift_us;
+		}
+		n_big_ok += (r->big == 1u);
+		n_big_fail += (r->big == 2u);
+	}
+	printk("F1S|%s|%s|grants=%u reached_300ms=%u extfail=%u past_100ms=%u "
+	       "max_total=%u min_fail_ask=%u big_ok=%u big_fail=%u "
+	       "drift_min=%d drift_max=%d invalid=%u overstay=%u "
+	       "cancelled=%u\n",
+	       name, stack_name(), f1_n, n_target, n_fail, n_past100, max_total,
+	       (min_fail_ask == 0xFFFFFFFFu) ? 0u : min_fail_ask, n_big_ok,
+	       n_big_fail, dmin, dmax, fx_invalid, fx_overstay, fx_cancel0);
+	printk("F1S|%s|%s|run free=%u us kernel=%u ms diff=%d us\n", name,
+	       stack_name(), t1 - t0, u1 - u0,
+	       (int)((int32_t)(t1 - t0) - (int32_t)((u1 - u0) * 1000u)));
+}
+
+static void run_f1(void)
+{
+	printk("\nF1|BEGIN stack=%s\n", stack_name());
+	run_f1_one("jit1", true, 0u, 20u);
+	run_f1_one("jit1_big40", true, 40000u, 20u);
+	run_f1_one("jit1_big85", true, 85000u, 20u);
+	run_f1_one("b2b1", false, 0u, 20u);
+	printk("F1|END\n");
+}
+
+/* ------------------------------ F2 run ---------------------------------- */
+
+static bool poll_flag(volatile bool *f, uint32_t timeout_us)
+{
+	uint32_t t0 = now_us_thr();
+
+	while (!*f) {
+		if (now_us_thr() - t0 > timeout_us) {
+			return false;
+		}
+		k_busy_wait(20);
+	}
+	return true;
+}
+
+static void run_f2_one(const char *name, bool variant_b, uint8_t s2_prio,
+		       uint32_t iters)
+{
+	uint32_t i;
+	uint32_t n_s2_ok = 0, n_s2_blk = 0, n_s2_can = 0, n_skip = 0;
+	uint32_t n_s1_cut = 0, n_s1_extfail = 0, n_overlap = 0;
+	struct stat st_hand, st_short, st_s2err;
+
+	stat_reset(&st_hand);
+	stat_reset(&st_short);
+	stat_reset(&st_s2err);
+	fx_invalid = fx_overstay = fx_cancel0 = fx_cancel1 = 0u;
+	f2_variant_b = variant_b;
+	fx_mode = FX_F2;
+
+	if (fx_open(0, fx_cb0) != 0) {
+		fx_mode = FX_NONE;
+		return;
+	}
+	/* The header's own contradiction ("only one session can be open at a
+	 * time" vs -NRF_ENOMEM "all sessions are already open"): the rc of
+	 * this second open while the first is open is part of the answer. */
+	if (fx_open(1, fx_cb1) != 0) {
+		fx_mode = FX_NONE;
+		fx_close_all();
+		return;
+	}
+
+	/* Session 2's first request must be EARLIEST. */
+	f2_s2_boot = true;
+	k_sem_reset(&fx_idle1);
+	if (fx_earliest(1, s2_prio, 1000u,
+			MPSL_TIMESLOT_HFCLK_CFG_XTAL_GUARANTEED) != 0 ||
+	    k_sem_take(&fx_idle1, K_MSEC(2000)) != 0) {
+		printk("F2|%s session 2 bootstrap failed\n", name);
+		fx_mode = FX_NONE;
+		fx_close_all();
+		return;
+	}
+	f2_s2_boot = false;
+	k_sleep(K_MSEC(5));
+
+	for (i = 0u; i < iters; i++) {
+		struct f2_rec r;
+		uint32_t now, dist;
+		bool placed = false;
+
+		fx_iter = i;
+		memset(&f2_cur, 0, sizeof(f2_cur));
+		f2_s1_started = f2_s1_big_ok = f2_s1_big_fail = false;
+		f2_s1_ended = false;
+		k_sem_reset(&fx_idle0);
+		k_sem_reset(&fx_idle1);
+
+		if (fx_earliest(0, MPSL_TIMESLOT_PRIORITY_NORMAL,
+				FX_INIT_LEN_US,
+				MPSL_TIMESLOT_HFCLK_CFG_XTAL_GUARANTEED) != 0) {
+			break;
+		}
+		if (!poll_flag(&f2_s1_started, 1500000u)) {
+			printk("F2|%s s1 never started at %u\n", name, i);
+			break;
+		}
+		if (variant_b) {
+			/* Wait for the one big step to be answered. */
+			uint32_t w0 = now_us_thr();
+
+			while (!f2_s1_big_ok && !f2_s1_big_fail &&
+			       !f2_s1_ended && now_us_thr() - w0 < 10000u) {
+				k_busy_wait(10);
+			}
+		}
+		now = now_us_thr();
+		f2_cur.s2_target = f2_cur.s1_t0 + F2_S2_OFFSET_US;
+		if ((variant_b && !f2_s1_big_ok) ||
+		    (int32_t)(f2_cur.s2_target - now) < 3000) {
+			f2_cur.s2_out = 4u;
+		} else {
+			dist = f2_cur.s2_target - f2_anchor2;
+			fx_normal(1, s2_prio, dist, F2_S2_LEN_US,
+				  MPSL_TIMESLOT_HFCLK_CFG_XTAL_GUARANTEED);
+			f2_cur.s2_req_t = now_us_thr();
+			if (mpsl_timeslot_request(fx_sid[1], &fx_req[1]) == 0) {
+				placed = true;
+			} else {
+				f2_cur.s2_out = 4u;
+			}
+		}
+		(void)k_sem_take(&fx_idle0, K_MSEC(1000));
+		if (placed) {
+			(void)k_sem_take(&fx_idle1, K_MSEC(1000));
+		}
+		k_sleep(K_MSEC(2));
+		r = f2_cur;
+
+		printk("F2|%s|%s|i=%u s1_len=%u s1_granted=%u s1_end=%s "
+		       "s1_fail_ask=%u s2=%s notice=%u s2_err=%d hand=%d "
+		       "s2_len=%u\n",
+		       name, stack_name(), i, r.s1_end - r.s1_t0, r.s1_granted,
+		       (r.s1_reason == END_TARGET)    ? "cap"
+		       : (r.s1_reason == END_EXTFAIL) ? "extfail"
+						      : "unseen",
+		       r.s1_fail_ask,
+		       (r.s2_out == 1u)   ? "granted"
+		       : (r.s2_out == 2u) ? "blocked"
+		       : (r.s2_out == 3u) ? "cancelled"
+		       : (r.s2_out == 4u) ? "skipped"
+					  : "none",
+		       r.s2_target - r.s2_req_t,
+		       (r.s2_out == 1u) ? (int)(r.s2_start - r.s2_target)
+					: (int)(r.s2_block_t - r.s2_target),
+		       (r.s2_out == 1u) ? (int)(r.s2_start - r.s1_end) : 0,
+		       (r.s2_out == 1u) ? (r.s2_end - r.s2_start) : 0u);
+
+		switch (r.s2_out) {
+		case 1u:
+			n_s2_ok++;
+			if ((int32_t)(r.s2_start - r.s1_end) < 0) {
+				n_overlap++;
+			} else {
+				stat_add(&st_hand, r.s2_start - r.s1_end);
+			}
+			stat_add(&st_s2err, (r.s2_start > r.s2_target)
+						    ? r.s2_start - r.s2_target
+						    : r.s2_target - r.s2_start);
+			break;
+		case 2u:
+			n_s2_blk++;
+			break;
+		case 3u:
+			n_s2_can++;
+			break;
+		default:
+			n_skip++;
+			break;
+		}
+		if (r.s1_reason == END_EXTFAIL) {
+			n_s1_extfail++;
+			if (r.s2_out == 1u) {
+				stat_add(&st_short, r.s2_target - r.s1_end);
+			}
+		}
+		/* Session 1 ended with no END of ours: MPSL took the air some
+		 * other way. */
+		if (r.s1_reason == 0u) {
+			n_s1_cut++;
+		}
+		k_sleep(K_MSEC(10));
+	}
+	fx_mode = FX_NONE;
+	fx_close_all();
+
+	printk("F2S|%s|%s|s2_prio=%s iters=%u s2_granted=%u s2_blocked=%u "
+	       "s2_cancelled=%u skipped=%u s1_extfail=%u s1_end_unseen=%u "
+	       "overlap=%u invalid=%u overstay=%u\n",
+	       name, stack_name(),
+	       (s2_prio == MPSL_TIMESLOT_PRIORITY_HIGH) ? "HIGH" : "NORMAL",
+	       iters, n_s2_ok, n_s2_blk, n_s2_can, n_skip, n_s1_extfail,
+	       n_s1_cut, n_overlap, fx_invalid, fx_overstay);
+	stat_print("F2S handover", &st_hand);
+	stat_print("F2S s1_shortfall", &st_short);
+	stat_print("F2S s2_start_error", &st_s2err);
+}
+
+static void run_f2(void)
+{
+	printk("\nF2|BEGIN stack=%s sessions=%d\n", stack_name(),
+	       CONFIG_MPSL_TIMESLOT_SESSION_COUNT);
+	run_f2_one("A_high", false, MPSL_TIMESLOT_PRIORITY_HIGH, 30u);
+	run_f2_one("A_normal", false, MPSL_TIMESLOT_PRIORITY_NORMAL, 30u);
+	run_f2_one("B_high", true, MPSL_TIMESLOT_PRIORITY_HIGH, 30u);
+	run_f2_one("B_normal", true, MPSL_TIMESLOT_PRIORITY_NORMAL, 30u);
+	f2_chain_step = 200u;
+	run_f2_one("A_high_step200", false, MPSL_TIMESLOT_PRIORITY_HIGH, 30u);
+	f2_chain_step = 1000u;
+	printk("F2|END\n");
+}
+
+/* ------------------------------ F3 run ---------------------------------- */
+
+static void run_f3_one(uint32_t gap_us, uint8_t hfclk, uint32_t attempts)
+{
+	uint32_t deadline;
+
+	stat_reset(&st_f3_err);
+	stat_reset(&st_f3_blk_late);
+	stat_reset(&st_f3_blk_early);
+	f3_ok = f3_blk = f3_rec_ok = f3_rec_blk = f3_cancel = 0u;
+	f3_pending_short = f3_broken = f3_stop = false;
+	f3_gap_us = gap_us;
+	f3_hfclk = hfclk;
+	f3_target = attempts;
+	fx_invalid = fx_overstay = 0u;
+	fx_mode = FX_F3;
+
+	if (fx_open(0, fx_cb0) != 0) {
+		fx_mode = FX_NONE;
+		return;
+	}
+	k_sem_reset(&fx_idle0);
+	if (fx_earliest(0, MPSL_TIMESLOT_PRIORITY_NORMAL, F3_LEN_US, hfclk) !=
+	    0) {
+		fx_mode = FX_NONE;
+		fx_close_all();
+		return;
+	}
+	deadline = k_uptime_get_32() + 60000u;
+	while (k_uptime_get_32() < deadline) {
+		(void)k_sem_take(&fx_idle0, K_MSEC(50));
+		if (f3_stop && !f3_broken) {
+			break;
+		}
+		if (!f3_broken) {
+			continue;
+		}
+		if (f3_ok + f3_blk >= f3_target) {
+			break;
+		}
+		f3_broken = false;
+		{
+			/* Recovery, as run_chain(): whole 10 ms steps from
+			 * the unmoved anchor, clear of now. */
+			uint32_t el = now_us_thr() - f3_anchor;
+			uint32_t skip = (el + RECOVER_MARGIN_US) / 10000u + 1u;
+
+			fx_normal(0, MPSL_TIMESLOT_PRIORITY_NORMAL,
+				  skip * 10000u, F3_LEN_US, hfclk);
+		}
+		if (mpsl_timeslot_request(fx_sid[0], &fx_req[0]) != 0) {
+			f3_broken = true;
+		}
+	}
+	fx_mode = FX_NONE;
+	fx_close_all();
+
+	printk("F3|%s|gap=%u hfclk=%s attempts=%u granted=%u blocked=%u "
+	       "rate_blocked=%u/10000 recover_ok=%u recover_blocked=%u "
+	       "cancelled=%u invalid=%u overstay=%u\n",
+	       stack_name(), gap_us,
+	       (hfclk == MPSL_TIMESLOT_HFCLK_CFG_XTAL_GUARANTEED) ? "xtal"
+								    : "noguar",
+	       f3_ok + f3_blk, f3_ok, f3_blk,
+	       (f3_ok + f3_blk) ? (uint32_t)((uint64_t)f3_blk * 10000u /
+					     (f3_ok + f3_blk))
+				: 0u,
+	       f3_rec_ok, f3_rec_blk, f3_cancel, fx_invalid, fx_overstay);
+	stat_print("F3 start_error", &st_f3_err);
+	stat_print("F3 blocked_late", &st_f3_blk_late);
+	stat_print("F3 blocked_early", &st_f3_blk_early);
+}
+
+static void run_f3(void)
+{
+	static const uint32_t gaps[] = { 50u, 100u, 200u, 300u, 500u, 750u, 1000u,
+					 1500u, 2000u, 3000u };
+
+	printk("\nF3|BEGIN stack=%s\n", stack_name());
+	for (int h = 0; h < 2; h++) {
+		for (size_t g = 0; g < ARRAY_SIZE(gaps); g++) {
+			fx_iter = gaps[g];
+			run_f3_one(gaps[g],
+				   (h == 0) ? MPSL_TIMESLOT_HFCLK_CFG_XTAL_GUARANTEED
+					    : MPSL_TIMESLOT_HFCLK_CFG_NO_GUARANTEE,
+				   300u);
+		}
+	}
+	printk("F3|END\n");
+}
+
+#if defined(CONFIG_MPSL_ASSERT_HANDLER)
+/* Prints, then reboots rather than halting (Phase 0c): an assert is a result,
+ * and the host driver runs the next fact after the boot banner instead of
+ * needing a J-Link reset per assert. */
+void mpsl_assert_handle(const char *const file, const uint32_t line)
+{
+	printk("\n*** MPSL ASSERT %s:%u  fx_mode=%d fx_iter=%u starts=%u "
+	       "blocked=%u ext_ok=%u ext_fail=%u overstay=%u fx_overstay=%u "
+	       "fx_invalid=%u\n",
+	       file, line, (int)fx_mode, fx_iter, n_start, n_blocked, n_ext_ok,
+	       n_ext_fail, n_overstay, fx_overstay, fx_invalid);
+	k_busy_wait(50000);
+	sys_reboot(SYS_REBOOT_COLD);
+}
+#endif
+
+/* ---------------------------------------------------------------------------
  * Console
  *
  * uart_poll_in() and a one-character command set, on the same terms as the
@@ -789,6 +1718,9 @@ static void help(void)
 	       "  t  free-running TIMER continuity across timeslots\n"
 	       "  p  toggle priority NORMAL <-> HIGH\n"
 	       "  l  cycle slot length 1000 / 5000 / 20000 us\n"
+	       "  a  ADR 0018 F1: extension past 100 ms (300 ms chain)\n"
+	       "  b  ADR 0018 F2: two sessions, HIGH slot inside a held grant\n"
+	       "  c  ADR 0018 F3: ACTION_REQUEST at grant end, short gaps\n"
 	       "  ?  this\n");
 }
 
@@ -886,6 +1818,15 @@ int main(void)
 				      : (slot_len_us == 5000u) ? 20000u
 							       : 1000u;
 			printk("slot length = %u us\n", slot_len_us);
+			break;
+		case 'a':
+			run_f1();
+			break;
+		case 'b':
+			run_f2();
+			break;
+		case 'c':
+			run_f3();
 			break;
 		case '?':
 		case 'h':
