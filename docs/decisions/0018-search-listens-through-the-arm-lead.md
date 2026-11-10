@@ -1,7 +1,8 @@
 # 0018 — Under MPSL, a search must listen through the arm lead, or it is deaf for three of them every tracked period
 
-- **Status:** proposed. The measurement is done; the fix is not designed in
-  code and nothing here has been built. It becomes its own plan.
+- **Status:** accepted 2026-11-10. The fix is decided in
+  [0021](0021-tracked-slots-are-booked-a-period-ahead.md), which is being built.
+  The sections below are the problem and the candidates as first judged.
 - **Date:** 2026-11-05. **Revised 2026-11-07:** the candidate (a) arithmetic
   was wrong (it assumed one grant could span a whole period; the gate caps a
   grant at MPSL's 100 ms); the self-inflicted/inherent split, the 100 ms

@@ -1,5 +1,25 @@
 # ADR 0018 Phase 2: evaluation
 
+> **Corrections, 2026-11-10.** An independent design review changed the outcome
+> and found errors in this summary. The decision is in
+> [ADR 0021](../decisions/0021-tracked-slots-are-booked-a-period-ahead.md). The
+> text below is left as first written, so read it with these corrections:
+>
+> - **The 16-24 ms elastic lead under Thread is not what Thread needs.** It is
+>   where the backoff settles: doubling per refusal against 250 us back per
+>   grant. At 8 ms of notice or more, Thread refused 87 of 4057 requests (2.1 %,
+>   `thread3_skip`), and almost nothing shorter was tried. The case made here
+>   for dropping (d1) on that figure does not hold.
+> - **The 26.9 % deaf figure at 8 channels does not apply under Thread.** The
+>   ztest used a 3.4 ms elastic lead. At the lead actually reached, the scan
+>   would be almost deaf at 8 channels. This is inferred, and not yet measured.
+> - **"24-25 of 25 phases" came from one tracked channel.**
+> - **`d2.md` says the only early grants were channel-close orphans.** `ble1`
+>   recorded `eo=1`, so one live slot may have been lost to a late arm.
+> - **The early-release defect is now explained.** The `stop_on_first` receive
+>   branch retires the operation without owing a release.
+> - **Two sessions fix R1 pairs, not three operations within one lead.**
+
 Phase 1 built and measured two of the four candidates: (a), a held grant with
 bridging extensions, and (d2), a second MPSL timeslot session. The full
 reports are [a.md](a.md) and [d2.md](d2.md), and their raw-log indexes are
