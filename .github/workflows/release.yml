@@ -1096,7 +1096,8 @@ jobs:
 
       # RADIANT_SINK_DEFINE() uses STRUCT_SECTION_ITERABLE, and the section it
       # emits into is placed only by radiant_bridge_sections.ld, which the
-      # application has to add with zephyr_linker_sources(). Forget it and the
+      # radiant module adds with zephyr_linker_sources() under
+      # CONFIG_RADIANT_BRIDGE. Forget it and the
       # final link fails - but if it ever DID link, STRUCT_SECTION_FOREACH()
       # over an unplaced section is not a compile error: it silently iterates
       # zero sinks, and every sample the bridge produces goes nowhere while
@@ -1118,7 +1119,8 @@ jobs:
       #                                radiant_rules_sink            = 3 sinks
       #
       # radiant_liveness.c registers an ordinary RADIANT_SINK_DEFINE() sink of
-      # its own and is compiled unconditionally under CONFIG_RADIANT_BRIDGE,
+      # its own and is compiled on every bridge build (CONFIG_RADIANT_BRIDGE_LIVENESS,
+      # which apps/dongle_thread defaults on under CONFIG_RADIANT_BRIDGE),
       # which is what the plan's arithmetic misses. So the boot line reads
       # "bridge: 3 sinks" in BOTH arms, and a Matter image that silently
       # dropped radiant_matter.c and kept the MQTT sink would show the expected

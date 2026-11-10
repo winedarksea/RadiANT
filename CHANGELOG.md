@@ -180,6 +180,12 @@ reads.
 
 ### Fixed
 
+- **The bridge and Matter builds link again.** `apps/dongle_thread` listed the
+  bridge and profile sources that the module had started compiling under
+  `CONFIG_RADIANT_BRIDGE`, so `bridge.conf` and `matter.conf` failed with duplicate
+  definitions. The module now owns all of `src/bridge/`, with its three sinks
+  behind `CONFIG_RADIANT_BRIDGE_RULES`, `_LIVENESS` and `_MATTER_MAP`, and the
+  application lists none of them.
 - **Scheduler and nRF backend.** An armed operation that never terminates is
   reclaimed (A9-3), a receive window inside its PHY switch is reported MISSED
   (A8-4), a window whose start compare was written too late is refused rather

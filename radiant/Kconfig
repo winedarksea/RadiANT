@@ -857,6 +857,41 @@ config RADIANT_BRIDGE
 	  sinks registered with RADIANT_SINK_DEFINE. On the include path as
 	  "radiant_bridge.h", "radiant_hr_adapter.h" and so on.
 
+	  The bus, the binding table, the profile adapters and the pure
+	  helpers beside them (endpoint naming, the owed-offline list, the
+	  self-channel policy). None of these registers a sink, so whatever
+	  nothing calls is dropped at link time. The three files that DO
+	  register a sink have a symbol each below, because a sink is kept
+	  by the linker whether or not anything calls it.
+
+if RADIANT_BRIDGE
+
+config RADIANT_BRIDGE_RULES
+	bool "the rule evaluator sink (radiant_rules.c)"
+	help
+	  Derives worn, in-use and heart-rate zone states from the samples on
+	  the bus and posts them back as RADIANT_SAMPLE_DERIVED records.
+	  Registers radiant_rules_sink.
+
+config RADIANT_BRIDGE_LIVENESS
+	bool "the liveness sink (radiant_liveness.c)"
+	help
+	  Tracks when each bound source last produced a sample and marks it
+	  RADIANT_SAMPLE_STALE when it goes quiet. The application calls
+	  radiant_liveness_tick() from a clock of its own. Registers
+	  radiant_liveness_sink.
+
+config RADIANT_BRIDGE_MATTER_MAP
+	bool "the Matter field-type to cluster map (radiant_matter.c)"
+	help
+	  The field-type to cluster table, the SI to cluster unit conversion
+	  and the endpoint allocation, plus a __weak
+	  radiant_matter_attr_write() that a real Matter stack overrides. It
+	  contains no Matter call and builds without connectedhomeip.
+	  Registers radiant_matter_sink.
+
+endif # RADIANT_BRIDGE
+
 config RADIANT_ANTR_API
 	bool "the antr_* channel API and its runtime"
 	help

@@ -100,10 +100,12 @@ what is not.
 | `antr_*` channel API and runtime | `CONFIG_RADIANT_ANTR_API` | `<radiant/ant_radio.h>` |
 | ANT+ device profile pages | `CONFIG_RADIANT_PROFILES` | `"profile_hr.h"` and others |
 | Sample bus, sinks, profile adapters | `CONFIG_RADIANT_BRIDGE` | `"radiant_bridge.h"` and others |
+| Rule, liveness and Matter-map sinks on the bus | `CONFIG_RADIANT_BRIDGE_RULES`, `_LIVENESS`, `_MATTER_MAP` | `"radiant_rules.h"`, `"radiant_liveness.h"`, `"radiant_matter.h"` |
 | Payload authentication and encryption | `CONFIG_RADIANT_SEC` | `<radiant/radiant_sec.h>` |
 
 Code you do not call is dropped at link time, so the profile and bridge switches
-cost nothing until you use them.
+cost nothing until you use them. A sink is the exception: the linker keeps it
+whether or not you call into its file, so each of the three has its own switch.
 
 - Up to 32 channels, with background scan mode.
 - A vendor-neutral radio HAL

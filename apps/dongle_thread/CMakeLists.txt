@@ -72,133 +72,82 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/../common/sources.cmake")
 
 # ── The RadiANT bridge: the sample bus and everything on it ─────────────────
 #
-# docs/radiant-bridge.md sections 3-6 and 9. Five files from the module's
-# src/bridge/ directory plus this application's own half under src/.
+# docs/radiant-bridge.md sections 3-6 and 9. THE MODULE OWNS radiant/src/bridge/
+# AND radiant/src/profiles/: CONFIG_RADIANT_BRIDGE (radiant/Kconfig) compiles
+# both into the radiant library, adds both include paths and adds the linker
+# fragment. This application lists none of those files - listing them as well
+# is a duplicate-definition link failure, which is what 1d0d821 caused here.
+# Only this application's own half, under src/, is added below.
 #
-# The shape is copied from radiant/tests/CMakeLists.txt, which is the only
-# working precedent in the tree for consuming this directory, and the
-# zephyr_linker_sources() line below is the part of it that is NOT optional.
+# What decides which module code is LINKED is therefore the call graph, not a
+# source list. The files with no sink (the bus, the binding table, the
+# adapters, naming, the owed list, the self-channel policy, every profile
+# codec) are dropped by the linker unless something here calls them. The three
+# files that register a sink cannot be left to the linker, because a
+# RADIANT_SINK_DEFINE() is kept whether or not anything calls into its file:
+# radiant_rules.c and radiant_liveness.c follow CONFIG_RADIANT_BRIDGE_RULES and
+# CONFIG_RADIANT_BRIDGE_LIVENESS, which this application's Kconfig defaults on,
+# and radiant_matter.c follows CONFIG_RADIANT_BRIDGE_MATTER_MAP, which
+# CONFIG_ANT_DONGLE_MATTER_MAP selects. Liveness lands with the bus, not after
+# a sink: RADIANT_SAMPLE_STALE was defined and honoured since P6 with nothing
+# producing it, and a sink written against a bus that never marks anything
+# stale grows that assumption into itself.
 #
-# RADIANT_SINK_DEFINE() (radiant_bridge.h) uses STRUCT_SECTION_ITERABLE, which
-# emits each sink into a section named after the struct type. Emitting into a
-# section and having that section PLACED - with the _radiant_sink_list_start /
-# _end symbols STRUCT_SECTION_FOREACH() walks between - are two different
-# things, and radiant_sink has no in-tree linker fragment of its own the way
-# shell commands and bt_conn_cb do. Omit the line and the best case is an
-# undefined reference at the final link; the worse case is that it links and
-# STRUCT_SECTION_FOREACH() silently iterates ZERO sinks, which is not a
-# compile error, not a link error, and looks from the console exactly like
-# "no sensors in range". src/bridge_pump.c logs the count at boot for that
+# THE LINKER FRAGMENT IS NOT OPTIONAL, even though it is now the module's line
+# rather than this file's. RADIANT_SINK_DEFINE() (radiant_bridge.h) uses
+# STRUCT_SECTION_ITERABLE, which emits each sink into a section named after the
+# struct type. Emitting into a section and having that section PLACED - with
+# the _radiant_sink_list_start / _end symbols STRUCT_SECTION_FOREACH() walks
+# between - are two different things, and radiant_sink has no in-tree linker
+# fragment of its own the way shell commands and bt_conn_cb do. Without it the
+# best case is an undefined reference at the final link; the worse case is that
+# it links and STRUCT_SECTION_FOREACH() silently iterates ZERO sinks, which is
+# not a compile error, not a link error, and looks from the console exactly
+# like "no sensors in range". src/bridge_pump.c logs the count at boot for that
 # reason: "bridge: 0 sinks" is the failure announcing itself.
 #
-# radiant_rd_adapter.c is deliberately NOT here. It compiles and is tested
-# (radiant/tests builds it), but the running-dynamics adapter has no bench
-# evidence behind it yet, and linking it would make an untested path look like
-# a shipped one.
+# radiant_rd_adapter.c is compiled by the module and deliberately NOT CALLED
+# here, so it is not linked. It is tested (radiant/tests builds it), but the
+# running-dynamics adapter has no bench evidence behind it yet, and linking it
+# would make an untested path look like a shipped one.
 #
-# radiant_matter.c USED TO BE EXCLUDED BESIDE IT, FOR A REASON THAT HAS EXPIRED.
-# The old comment here said Matter needs connectedhomeip, "which is a
-# flash-budget spike this application has not run". Package E1 ran it
-# (docs/matter-bringup.md) and package E3 vendored the bridge core, so the
-# file is now compiled - but on ITS OWN Kconfig symbol
-# (CONFIG_ANT_DONGLE_MATTER_MAP), not on CONFIG_CHIP. radiant_matter.c contains
-# no CHIP call at all: it is the section 8.1 field-type -> cluster map plus a
-# __weak radiant_matter_attr_write(), and it compiles identically with or
-# without connectedhomeip in the workspace. Tying it to CONFIG_CHIP would have
-# made a pure-C lookup table unbuildable on the nRF52840 Matterless escape
-# hatch (docs/radiant-bridge.md section 11) for no reason.
+# radiant_matter.c is on ITS OWN Kconfig symbol (CONFIG_ANT_DONGLE_MATTER_MAP),
+# not on CONFIG_CHIP. It contains no CHIP call at all: it is the section 8.1
+# field-type -> cluster map plus a __weak radiant_matter_attr_write(), and it
+# compiles identically with or without connectedhomeip in the workspace. Tying
+# it to CONFIG_CHIP would have made a pure-C lookup table unbuildable on the
+# nRF52840 Matterless escape hatch (docs/radiant-bridge.md section 11) for no
+# reason, and Kconfig says why it defaults to n even here.
+#
+# The Matter plan's packages A, B and C - three more adapters and the page
+# codecs behind them - follow CONFIG_ANT_DONGLE_PROFILES_EXTRA, which gates the
+# CALLS in src/rx_tap.c and src/self_channels.c. NOT CONFIG_RADIANT_BRIDGE, AND
+# THAT IS THE WHOLE POINT OF THE SYMBOL: docs/matter-bringup.md measured
+# bridge.conf gaining 2 564 B of flash, 1 472 B of RAM and 22 defined symbols
+# plus a changed radio schedule when they were not separate. See that symbol's
+# help in Kconfig. Two things about what it links are load-bearing:
+#
+# 1. THE COMMON-PAGE PAIR IS NOT OPTIONAL AND IS NOT PER-PROFILE.
+#    ANT+ Common Data Pages Rev 3.1 Table 4-1 keys pages 0x40-0x5D on the
+#    channel's TRANSMISSION TYPE, not on the device type, so the common
+#    decoder runs on every bound channel alongside whichever profile
+#    adapter owns it - see src/rx_tap.c. Omitting it does not disable a
+#    feature, it makes every weather-reporting sensor silent.
+#
+# 2. profile_power_decode.c, NOT profile_power.c. The latter is the
+#    MASTER - page rotation, the ANT+ compat layer, RadiANT beacon
+#    insertion - so it calls profile_sched.c and profile_compat.c, and
+#    profile_compat.c reaches radiant_sec. Both are compiled by the module;
+#    calling profile_power.c from here to obtain one decoder would pull the
+#    entire transmit-side chain into an image whose whole job is to listen,
+#    and would let a linker decision nobody reviewed make a receive-only
+#    dongle capable of transmitting. See that file's header; the split exists
+#    for this reason. `nm` on the ELF is the check: no profile_power_*
+#    master symbol may appear.
 if(CONFIG_RADIANT_BRIDGE)
-  target_sources(app PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge/radiant_bridge.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge/radiant_binding.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge/radiant_hr_adapter.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge/radiant_rules.c"
-    # The endpoint-name formatter (radiant_naming.h). NOT a sink - it is a pure
-    # function both sinks call - so it adds nothing to the "bridge: N sinks"
-    # count at boot and nothing to .github/workflows/release.yml's exact-set
-    # assert_sink_names diff. It is here rather than beside a sink because both
-    # mqtt_sink.c and src/matter/ant/ant_bridge.cpp need it and each is behind
-    # its own Kconfig symbol.
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge/radiant_naming.c"
-    # mqtt_sink.c's owed-offline list, pure so radiant/tests can drive it
-    # (src/test_owed.c). Also not a sink.
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge/radiant_owed.c"
-    # Liveness lands with the bus, not after a sink. RADIANT_SAMPLE_STALE has
-    # been defined and honoured since P6 with nothing producing it, and a sink
-    # written against a bus that never marks anything stale grows that
-    # assumption into itself.
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge/radiant_liveness.c"
-    # The application half: the drain pump and the 1 Hz liveness clock.
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/bridge_pump.c"
-  )
-  target_include_directories(app PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src")
-
-  # ── The Matter plan's packages A, B and C ──────────────────────────────
-  #
-  # Three more adapters and the page codecs behind them.
-  #
-  # NOT UNDER CONFIG_RADIANT_BRIDGE, AND THAT IS THE WHOLE POINT OF THE
-  # SYMBOL. These files were added directly to the list above once, and
-  # docs/matter-bringup.md measured what that cost: bridge.conf is one
-  # of the five docs/radiant-bridge.md section 7.4 coexistence arms and it
-  # gained 2 564 B of flash, 1 472 B of RAM and 22 defined symbols - plus a
-  # changed radio schedule, via the rewritten src/self_channels.c, which is
-  # the thing section 7.4 actually measures. CONFIG_ANT_DONGLE_PROFILES_EXTRA
-  # defaults n and follows CONFIG_ANT_DONGLE_MATTER, exactly as
-  # CONFIG_ANT_DONGLE_MATTER_MAP below already does and for the same reason.
-  # See that symbol's help in Kconfig; do not "simplify" this back up into
-  # the block above.
-  #
-  # Two things about the list itself are load-bearing:
-  #
-  # 1. THE COMMON-PAGE PAIR IS NOT OPTIONAL AND IS NOT PER-PROFILE.
-  #    ANT+ Common Data Pages Rev 3.1 Table 4-1 keys pages 0x40-0x5D on the
-  #    channel's TRANSMISSION TYPE, not on the device type, so the common
-  #    decoder runs on every bound channel alongside whichever profile
-  #    adapter owns it - see src/rx_tap.c. Omitting it does not disable a
-  #    feature, it makes every weather-reporting sensor silent.
-  #
-  # 2. profile_power_decode.c, NOT profile_power.c. The latter is the
-  #    MASTER - page rotation, the ANT+ compat layer, RadiANT beacon
-  #    insertion - so it calls profile_sched.c and profile_compat.c, and
-  #    profile_compat.c reaches radiant_sec. Linking it here to obtain one
-  #    decoder would pull the entire transmit-side chain into an image
-  #    whose whole job is to listen, and would let a linker decision nobody
-  #    reviewed make a receive-only dongle capable of transmitting. See
-  #    that file's header; the split exists for this line.
-  target_sources_ifdef(CONFIG_ANT_DONGLE_PROFILES_EXTRA app PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge/radiant_power_adapter.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge/radiant_env_adapter.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge/radiant_common_adapter.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/profiles/profile_common.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/profiles/profile_power_decode.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/profiles/profile_fec.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/profiles/profile_env.c")
-
-  # The adapters include their page codec's header rather than re-deriving
-  # the bit splits, exactly as radiant_rd_adapter.c already did in
-  # radiant/tests. This application listed no profile source and no profile
-  # include path before packages A-C, and with the symbol off it lists
-  # neither again - an include path is not free, because it is also what
-  # src/self_channels.c's header cites as the reason its periods are
-  # transcribed literals rather than the profile constants.
-  if(CONFIG_ANT_DONGLE_PROFILES_EXTRA)
-    target_include_directories(app PRIVATE
-      "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/profiles")
-  endif()
-
-  zephyr_linker_sources(SECTIONS
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge/radiant_bridge_sections.ld")
-
-  # The Matter sink's data half: the section 8.1 map, the SI -> cluster unit
-  # conversion and the endpoint allocation. See the note above the `if` for why
-  # this is a symbol of its own rather than CONFIG_CHIP, and Kconfig for why the
-  # symbol defaults to n even here - the five existing coexistence arms have to
-  # stay byte-identical, and bridge.conf is one of them.
-  target_sources_ifdef(CONFIG_ANT_DONGLE_MATTER_MAP app PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge/radiant_matter.c")
+  # The application half: the drain pump and the 1 Hz liveness clock.
+  target_sources(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/bridge_pump.c")
+  target_include_directories(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 endif()
 
 # ── The CHIP stack and the vendored Matter bridge core (package E3/E7) ──────
@@ -297,8 +246,9 @@ if(CONFIG_CHIP)
   # NESTED INSIDE CONFIG_RADIANT_BRIDGE, exactly like the trap-15 assertions
   # below and for the same mechanical reason: ant_bridge.cpp includes
   # radiant_matter.h and ant_matter_sink.c includes radiant_bridge.h, and
-  # radiant/src/bridge only reaches this target's include path from the
-  # CONFIG_RADIANT_BRIDGE block further up. It is not a second opinion about
+  # radiant/src/bridge only reaches the include path when the module sees
+  # CONFIG_RADIANT_BRIDGE (src/bridge_app.h likewise comes from the block
+  # further up). It is not a second opinion about
   # whether Matter is wanted - matter.conf sets both symbols and CONFIG_CHIP
   # without the sample bus would be a bridge with nothing to bridge.
   #
@@ -340,10 +290,10 @@ target_sources_ifdef(CONFIG_ANT_DONGLE_RX_TAP app PRIVATE
 # CONFIG_ANT_DONGLE_SELF_CHANNELS=0 rather than leaving it unset for an int
 # symbol. Compare explicitly.
 if(CONFIG_ANT_DONGLE_SELF_CHANNELS GREATER 0)
-  # Its decisions, as pure functions radiant/tests can reach (this app's
-  # sources it cannot). See that header.
-  target_sources(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/self_channels.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge/radiant_self_policy.c")
+  # Its decisions are pure functions in radiant/src/bridge/radiant_self_policy.c,
+  # where radiant/tests can reach them (this app's sources it cannot); the
+  # module compiles that file under CONFIG_RADIANT_BRIDGE. See that header.
+  target_sources(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/self_channels.c")
   # try_bind() once fell off its end and the built code returned a stale
   # register, rotating a just-bound channel away (review 2026-10-31, C3-1).
   # Per file, not app-wide: app-wide would reach vendored and zap C++.
