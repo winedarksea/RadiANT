@@ -721,6 +721,7 @@ static struct {
 	 * capture against the free-timer estimate of the same instant. */
 	/* TIMER0 signals for a fixed grant: provoked by a release vs the
 	 * grant's own backstop, and the last such signal's time after START. */
+	uint32_t skip_left_min;
 	int32_t  start_err_last;
 	int32_t  start_err_min;
 	int32_t  start_err_max;
@@ -1745,6 +1746,21 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 			timer0_disarm();
 			(void)radiant_radio_abort();
 			end_housekeeping();
+#if defined(CONFIG_RADIANT_GATE_MPSL_STATS)
+			/* How much of the fixed end margin this path left. */
+			{
+				uint32_t left;
+
+				nrf_timer_task_trigger(MPSL_TIMER0,
+						       NRF_TIMER_TASK_CAPTURE1);
+				left = g.granted_len_us -
+				       nrf_timer_cc_get(MPSL_TIMER0, 1);
+				if (stats.skip_left_min == 0u ||
+				    left < stats.skip_left_min) {
+					stats.skip_left_min = left;
+				}
+			}
+#endif
 			rv.callback_action = MPSL_TIMESLOT_SIGNAL_ACTION_END;
 			break;
 		}
@@ -2242,10 +2258,11 @@ static void gate_stats_fn(struct k_work *w)
 		stats.rel_br_inside, stats.rel_br_restore, stats.rel_cap_last,
 		stats.rel_est_last, stats.t0_fix_rel, stats.t0_fix_backstop,
 		stats.t0_fix_at, stats.ext_skipped);
-	LOG_INF("D2START n=%u err last/min/max %d/%d/%d us | due saved=%u late=%u "
-		"orphan=%u",
+	LOG_INF("D2START n=%u err last/min/max %d/%d/%d us | skip_left_min=%u | "
+		"due saved=%u late=%u orphan=%u",
 		stats.start_err_n, (int)stats.start_err_last,
 		(int)stats.start_err_min, (int)stats.start_err_max,
+		stats.skip_left_min,
 		radiant_sched_stats_get()->book_saved,
 		radiant_sched_stats_get()->book_late,
 		radiant_sched_stats_get()->book_orphan);
