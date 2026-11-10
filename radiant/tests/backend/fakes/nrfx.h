@@ -142,6 +142,10 @@ static inline bool nrf_temp_event_check(NRF_TEMP_Type *t, nrf_temp_event_t e) { 
 static inline void nrf_temp_event_clear(NRF_TEMP_Type *t, nrf_temp_event_t e) { (void)t; (void)e; }
 static inline int32_t nrf_temp_result_get(NRF_TEMP_Type *t) { (void)t; return 100; }
 
+static inline uint32_t NVIC_GetEnableIRQ(int n) { (void)n; return 0u; }
+static inline void NVIC_EnableIRQ(int n) { (void)n; }
+static inline void NVIC_DisableIRQ(int n) { (void)n; }
+
 static inline int nrfx_gppi_conn_alloc(uint32_t e, uint32_t t, nrfx_gppi_handle_t *h)
 { (void)e; (void)t; *h = 1u; return 0; }
 static inline void nrfx_gppi_conn_enable(nrfx_gppi_handle_t h) { (void)h; }
