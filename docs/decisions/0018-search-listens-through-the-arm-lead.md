@@ -404,3 +404,70 @@ extension at T − lead still arms the tracked window on time; that no scan
 grant exceeds `max_window_us`; and that the union of listened phases over the
 run covers the period except the tracked window, with the unlistened band of
 any single period not at the same phase as the previous period's.
+
+## Phase 0c facts (2026-11-10)
+
+Measured with `radiant/spike/mpsl_arb` (commands `a`, `b`, `c`, code at
+`b1e76ad`) on the nRF54L15 DK, NCS v3.4.0. No radio is driven; the second
+stack is the spike's BLE advertiser (1.0-1.2 s). No Thread. Full report and
+logs: `docs/adr18-eval/phase-0c.md`, `phase-0c-raw-logs.md`. No MPSL assert,
+OVERSTAYED or INVALID_RETURN in any run.
+
+**F1: one timeslot extended past 100 ms. PASS.**
+
+| Run (20 grants each) | No stack: reached 300 ms | BLE run 1 | BLE run 2 |
+|---|---|---|---|
+| 1 ms just-in-time chain | 20/20 | 15/20 | 15/20 |
+| plus 30 ms step at 40 ms | 20/20 (step 20/20) | 15/20 (step 20/20) | 11/15 visible |
+| plus 30 ms step 85 -> 115 ms | 20/20 (step 20/20) | 15/20 (step 16/20) | 15/20 (step 15/20) |
+| back-to-back 1 ms chain | 20/20 | 4/20 | 3/20 |
+
+Free TIMER21 against MPSL_TIMER0 over each 298 ms hold: 0-2 us. MPSL_TIMER0
+counts through 100 ms without reset. Every BLE failure is a clean
+EXTEND_FAILED at an advertising event (refused at 79-193 ms). The
+back-to-back row hits one event repeatedly: it asks for 300 ms in under
+0.5 ms, so successive grants fail 7 ms nearer the same event. **The 100 ms
+ceiling is on the requested length, not on the extended total.** The
+"100 ms ceiling" section above is therefore wrong about MPSL; it remains
+true of the gate as written (`granted_len_us + step <= LENGTH_MAX_US`).
+
+**F2: two sessions in one client. Works; first come, first served.**
+
+| Layout (30 iterations, S2 at S1 + 40 ms) | No stack: S2 granted / blocked | BLE run 1 | BLE run 2 |
+|---|---|---|---|
+| A: S2 placed while S1 ends at 5 ms, S2 HIGH | 30 / 0 | 29 / 1 | 29 / 1 |
+| A, S2 NORMAL | 30 / 0 | 30 / 0 | 30 / 0 |
+| A, S1 steps of 200 us, S2 HIGH | 30 / 0 | 30 / 0 | 30 / 0 |
+| B: S2 placed after S1's 60 ms step covers it, HIGH | 0 / 30 | 0 / 24 (6 skipped) | 0 / 26 (4 skipped) |
+| B, S2 NORMAL | 0 / 30 | 0 / 26 (4 skipped) | 0 / 25 (5 skipped) |
+
+Both sessions open together (rc 0). In A, session 1's extension is refused
+0.2-0.4 ms before session 2's start; handover from session 1's END to
+session 2's start is 3.0 ms with 1 ms steps and the 2 ms end margin, 2.4 ms
+with 200 us steps. Session 2 starts within 17 us of its asked-for instant.
+In B, session 2 is BLOCKED about 28 us after the request. Session 1 is never
+cut. HIGH and NORMAL behave the same. The BLE blocks and skips are
+advertising events, not session 1.
+
+**F3: ACTION_REQUEST at a grant's end. Short notice is not refused.**
+
+| Gap after close | No stack: blocked (xtal / noguar, of 300 each) | BLE: blocked, 2 runs x 2 modes (of 300 each) |
+|---|---|---|
+| 50, 100, 200, 300, 500, 750, 1000, 1500, 2000, 3000 us | 0 / 0 at every gap | 1-3 at every gap (0.3-1.0 %) |
+
+Start error 0-41 us. Under BLE the rate does not depend on the gap: each
+blocked grant is an advertising event, and BLOCKED arrives at the request
+instant. Not measured under Thread, where bug 26 saw about 80 % blocked at
+2.5 ms notice.
+
+**Pruning (the plan's rules):**
+
+- F1 passed: **(a) becomes a full fix and moves first.** One grant can cover
+  the whole period, so the "about 21 % deaf, drifting" estimate for (a) no
+  longer applies.
+- F2 did not show the tracked request blocked or cut in (d2)'s layout (A):
+  **(d2) is kept**, with one rule: the scan must not extend over a tracked
+  start before that start's request is placed (layout B blocks 100 %).
+  Priority cannot help, and a big bridging extension breaks (d2).
+- F3 is not mostly BLOCKED with no stack (0/6000): **(d1) is kept**; its open
+  question is Thread.
