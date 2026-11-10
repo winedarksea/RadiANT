@@ -342,7 +342,7 @@ presets all set it, so the fallback only hides a backend that forgot to.
 - Done when a ztest shows init failing on a 0 cap instead of the backend
   returning `RADIANT_RADIO_ENOTSUP` during reception.
 
-## 4. [FIRMWARE, bench, decide before the first production release] Move nRF52/53 to USB_NEXT
+## 4. [FIRMWARE, bench, DEFERRED] Move nRF52/53 to USB_NEXT
 Two USB device classes are maintained because the legacy one has hours on it
 against Zwift (apps/dongle/next.conf:11). The legacy stack is on borrowed time:
 `USB_DEVICE_STACK` does `select DEPRECATED` in NCS v3.4.0
@@ -414,6 +414,17 @@ is a source tree holding only maintained code.
 - Done when scripts/check_links.py passes, the 5340 net-core build still works,
   and only archive/ and history mention radiant/spike.
 
+## 8. Cleanup the ADRs. Stop maintaining resolved troubleshooting chronology in active documentation
+Users should be able to understand RadiANT as it works today without reconstructing its development history. The ADRs currently mix enduring architecture, bug investigations, measurements and proposed work, notes we don't need as we combine this into a single production release.
+We should probably create one short current architecture and design principles document, supported by the existing integration, security and backend references.
+
+There is also a broader issue: radiant-bridge.md already exceeds 2,000 lines and mixes architecture with successive measurements and fixes. It would benefit from the same editing approach; simply moving more ADR content there would compound the problem.
+
+[treadmill-reference-design.md (line 538)](/C:/Users/Colin/ant_dongle/docs/treadmill-reference-design.md:538)	Sections 7.4a–7.9 follow successive hypotheses, bench sessions and resolved defects—including faults in the dongle rather than the treadmill. Replace that chronology with current verification procedures, supported behavior and outstanding limitations.
+
+[bench-runbook.md (line 38)](/C:/Users/Colin/ant_dongle/docs/bench-runbook.md:38)	Organized around old project phases and the backend-transition acceptance exercise. Refine it into repeatable procedures and equipment requirements; reconcile old prerequisites against the completed transition.
+
+[radiant-telemetry.md (line 402)](/C:/Users/Colin/ant_dongle/docs/radiant-telemetry.md:402)	A protocol reference should state the current format directly. References to contradictions in earlier drafts, original wording and fixed TODO items can disappear once the resulting rule is stated clearly.
 
 # Left open by the 2026-11-08 clearance
 
