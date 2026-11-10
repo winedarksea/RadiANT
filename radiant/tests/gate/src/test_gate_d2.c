@@ -349,14 +349,44 @@ ZTEST(radiant_gate_d2, test_d2_a_booking_needs_a_full_lead_and_a_free_session)
 	assert_invariant();
 }
 
-ZTEST(radiant_gate_d2, test_d2_the_elastic_lead_is_short_backs_off_and_recovers)
+/* The lead policy (ADR 0021, decision 4): OPEN until the arbiter has refused a
+ * run of extensions, CONTENDED until it grants one. A refused request says
+ * nothing: BLE refuses at any notice. */
+#define LEAD_OPEN_US      CONFIG_RADIANT_GATE_MPSL_D2_SCAN_LEAD_US
+#define LEAD_CONTENDED_US CONFIG_RADIANT_GATE_MPSL_D2_CONTENDED_LEAD_US
+
+static void elastic_granted(void)
+{
+	radiant_time_t from = radiant_radio_now() + SCAN_LEAD_US;
+
+	zassert_equal(GATE_PENDING,
+		      gate_acquire(GATE_OP_RX, from, from + SCAN_LEN_US, 0u,
+				   RADIANT_GATE_PRIO_NORMAL), NULL);
+	k_msleep(WORK_MS);
+	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_NONE,
+		      fake_mpsl_signal_s(fake_mpsl_last_session(),
+					 MPSL_TIMESLOT_SIGNAL_START), NULL);
+}
+
+static void extension_refused(void)
+{
+	elastic_granted();
+	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_EXTEND,
+		      fake_mpsl_signal_s(fake_mpsl_last_session(),
+					 MPSL_TIMESLOT_SIGNAL_TIMER0), NULL);
+	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_END,
+		      fake_mpsl_signal_s(fake_mpsl_last_session(),
+					 MPSL_TIMESLOT_SIGNAL_EXTEND_FAILED), NULL);
+	k_msleep(WORK_MS);
+}
+
+ZTEST(radiant_gate_d2, test_d2_the_elastic_lead_starts_open)
 {
 	radiant_time_t now = radiant_radio_now();
 
 	gate_probe_read(&p);
-	zassert_equal(CONFIG_RADIANT_GATE_MPSL_D2_SCAN_LEAD_US, p.el_lead_us, NULL);
-	zassert_equal(CONFIG_RADIANT_GATE_MPSL_D2_SCAN_LEAD_US + 250u,
-		      fake_backend()->elastic_lead_us,
+	zassert_equal(LEAD_OPEN_US, p.el_lead_us, NULL);
+	zassert_equal(LEAD_OPEN_US + 250u, fake_backend()->elastic_lead_us,
 		      "the published lead must include the head margin");
 
 	/* A tracked window at 3 ms of notice is too near; a scan chunk is not. */
@@ -367,30 +397,72 @@ ZTEST(radiant_gate_d2, test_d2_the_elastic_lead_is_short_backs_off_and_recovers)
 		      gate_acquire(GATE_OP_RX, now + 3000u, now + 43000u, 0u,
 				   RADIANT_GATE_PRIO_NORMAL), NULL);
 	k_msleep(5);
-	/* Refused: the next one gives twice the notice. */
-	(void)fake_mpsl_signal_s(fake_mpsl_last_session(), MPSL_TIMESLOT_SIGNAL_BLOCKED);
-	k_msleep(WORK_MS);
-	gate_probe_read(&p);
-	zassert_equal(2u * CONFIG_RADIANT_GATE_MPSL_D2_SCAN_LEAD_US, p.el_lead_us, NULL);
-	zassert_equal(2u * CONFIG_RADIANT_GATE_MPSL_D2_SCAN_LEAD_US + 250u,
-		      fake_backend()->elastic_lead_us, NULL);
+	assert_invariant();
+}
 
-	/* A granted elastic request gives 250 us back. */
-	now = radiant_radio_now();
-	zassert_equal(GATE_PENDING,
-		      gate_acquire(GATE_OP_RX, now + SCAN_LEAD_US,
-				   now + SCAN_LEAD_US + SCAN_LEN_US, 0u,
-				   RADIANT_GATE_PRIO_NORMAL), NULL);
-	k_msleep(WORK_MS);
+ZTEST(radiant_gate_d2, test_d2_a_refused_request_does_not_grow_the_lead)
+{
+	for (uint32_t i = 0u; i < 3u; i++) {
+		radiant_time_t from = radiant_radio_now() + SCAN_LEAD_US;
+
+		zassert_equal(GATE_PENDING,
+			      gate_acquire(GATE_OP_RX, from, from + SCAN_LEN_US, 0u,
+					   RADIANT_GATE_PRIO_NORMAL), NULL);
+		k_msleep(WORK_MS);
+		(void)fake_mpsl_signal_s(fake_mpsl_last_session(),
+					 MPSL_TIMESLOT_SIGNAL_BLOCKED);
+		k_msleep(WORK_MS);
+	}
+	gate_probe_read(&p);
+	zassert_equal(LEAD_OPEN_US, p.el_lead_us,
+		      "a refused request grew the lead: BLE refuses at any notice");
+}
+
+ZTEST(radiant_gate_d2, test_d2_a_run_of_refused_extensions_is_contended)
+{
+	extension_refused();
+	extension_refused();
+	gate_probe_read(&p);
+	zassert_equal(LEAD_OPEN_US, p.el_lead_us, "contended before the run was over");
+
+	extension_refused();
+	gate_probe_read(&p);
+	zassert_equal(LEAD_CONTENDED_US, p.el_lead_us, NULL);
+	zassert_equal(LEAD_CONTENDED_US + 250u, fake_backend()->elastic_lead_us, NULL);
+	assert_invariant();
+}
+
+ZTEST(radiant_gate_d2, test_d2_a_granted_extension_opens_the_lead_again)
+{
+	extension_refused();
+	extension_refused();
+	extension_refused();
+
+	/* The skip has to lapse before anything is asked for again. */
+	for (uint32_t i = 0u; i < 64u; i++) {
+		elastic_granted();
+		zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_END,
+			      fake_mpsl_signal_s(fake_mpsl_last_session(),
+						 MPSL_TIMESLOT_SIGNAL_TIMER0), NULL);
+		k_msleep(WORK_MS);
+	}
+	gate_probe_read(&p);
+	zassert_equal(LEAD_CONTENDED_US, p.el_lead_us,
+		      "the lead relaxed with no sign the arbiter had");
+
+	elastic_granted();
+	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_EXTEND,
+		      fake_mpsl_signal_s(fake_mpsl_last_session(),
+					 MPSL_TIMESLOT_SIGNAL_TIMER0), NULL);
 	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_NONE,
 		      fake_mpsl_signal_s(fake_mpsl_last_session(),
-					 MPSL_TIMESLOT_SIGNAL_START), NULL);
+					 MPSL_TIMESLOT_SIGNAL_EXTEND_SUCCEEDED), NULL);
 	gate_probe_read(&p);
-	zassert_equal(2u * CONFIG_RADIANT_GATE_MPSL_D2_SCAN_LEAD_US - 250u,
-		      p.el_lead_us, NULL);
+	zassert_equal(LEAD_OPEN_US, p.el_lead_us, NULL);
+	gate_release();
 	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_END,
 		      fake_mpsl_signal_s(fake_mpsl_last_session(),
-					 MPSL_TIMESLOT_SIGNAL_EXTEND_FAILED), NULL);
+					 MPSL_TIMESLOT_SIGNAL_TIMER0), NULL);
 	k_msleep(WORK_MS);
 	assert_invariant();
 }

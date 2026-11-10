@@ -711,21 +711,27 @@ config RADIANT_GATE_MPSL_D2
 	  and reports caps.booking false, which is exactly master's behaviour.
 
 config RADIANT_GATE_MPSL_D2_SCAN_LEAD_US
-	int "(d2) starting placement lead for scan chunks (us)"
+	int "(d2) placement lead for scan chunks with no stack contending (us)"
 	depends on RADIANT_GATE_MPSL_D2
 	range 300 100000
 	default 3000
 	help
-	  The notice an elastic (scan or sweep) request starts with, advertised
-	  as caps.min_arm_lead_elastic_us. A BLOCKED elastic request that had
-	  been given at least this notice doubles it up to
-	  RADIANT_GATE_MPSL_PLACE_LEAD_US, and each elastic grant takes 250 us
-	  back. ADR 0018 Phase 0c F3: an ACTION_REQUEST with 50 us of notice is
-	  not refused with no other stack. A fresh mpsl_timeslot_request() is
-	  different: on gate.conf the d2 prototype measured requests reaching
-	  MPSL with under 2 ms of notice refused 43 of 49 times, and 0 of 970
-	  with 2 ms or more. 3000 leaves a request deferred by -NRF_EAGAIN
+	  The notice an elastic (scan or sweep) request gets in the OPEN state,
+	  advertised as caps.min_arm_lead_elastic_us. A fresh
+	  mpsl_timeslot_request() with under 2 ms of notice is refused even with
+	  no other stack (measured on gate.conf: 43 of 49 under 2 ms, 0 of 970
+	  at 2 ms or more). 3000 leaves a request deferred by -NRF_EAGAIN
 	  (placed when its session goes idle) above that.
+
+config RADIANT_GATE_MPSL_D2_CONTENDED_LEAD_US
+	int "(d2) placement lead for scan chunks beside a contending stack (us)"
+	depends on RADIANT_GATE_MPSL_D2
+	range 300 100000
+	default 8000
+	help
+	  The notice an elastic request gets in the CONTENDED state: once the
+	  arbiter has refused a run of extensions, until it grants one. From the
+	  lead sweep on the bench (docs/adr18-eval/phase-3a.md).
 
 config RADIANT_GATE_MPSL_D2_GAP_US
 	int "(d2) gap a scan chunk leaves before a booked operation (us)"

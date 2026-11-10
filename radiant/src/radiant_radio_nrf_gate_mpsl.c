@@ -1013,18 +1013,18 @@ BUILD_ASSERT(ELASTIC_FLOOR_US > END_MARGIN_EXTEND_US,
 	     "an elastic grant must outlive its own hand-back margin");
 
 /*
- * ADR 0018 (d2): the elastic lead. A scan chunk or sweep placed in a free
- * session needs no full PLACE_LEAD_US of notice when nothing refuses short
- * notice (Phase 0c F3: no stack refused 50 us; BLE 0.3-1 %, independent of
- * notice). It starts at D2_SCAN_LEAD_US, doubles on every elastic BLOCKED up to
- * PLACE_LEAD_US and gives back EL_LEAD_DECAY_US per elastic grant, so a stack
- * that refuses short notice (Thread, bug 26) settles it near what it needs
- * instead of turning the scan into a request storm. A safety backoff, not
- * candidate (e). Published to the core as caps.min_arm_lead_elastic_us.
+ * ADR 0021, decision 4: the elastic lead. A scan chunk or sweep placed in a free
+ * session needs no full PLACE_LEAD_US of notice. It takes one of two values:
+ * OPEN (D2_SCAN_LEAD_US), or CONTENDED (D2_CONTENDED_LEAD_US, from the bench's
+ * lead sweep) from the moment the arbiter has refused a run of extensions until
+ * it grants one. Keyed on extensions and not on refused requests, because a
+ * refused request says nothing about notice: a BLE advertiser refuses at any
+ * notice (Phase 0c F3), and a backoff that grew on those settled at 16-24 ms for
+ * nothing. Published to the core as caps.min_arm_lead_elastic_us.
  */
 #if defined(CONFIG_RADIANT_GATE_MPSL_D2)
-#define EL_LEAD_START_US CONFIG_RADIANT_GATE_MPSL_D2_SCAN_LEAD_US
-#define EL_LEAD_DECAY_US 250u
+#define EL_LEAD_START_US     CONFIG_RADIANT_GATE_MPSL_D2_SCAN_LEAD_US
+#define EL_LEAD_CONTENDED_US CONFIG_RADIANT_GATE_MPSL_D2_CONTENDED_LEAD_US
 /* Below this much notice a fresh elastic request is refused by MPSL even with
  * no other stack (measured on gate.conf: every one under 2 ms, none above). */
 #define EL_NOTICE_MIN_US 2000u
@@ -1046,6 +1046,17 @@ static void el_lead_publish(void)
 	 * lead, HEAD_MARGIN_US before the caller's instant - the same sum
 	 * gate_min_arm_lead_us() advertises for the full lead. */
 	radiant_nrf_gate_set_elastic_lead(d2_on ? el_lead_us + HEAD_MARGIN_US : 0u);
+}
+
+/* From a signal, so no kernel call: this writes the caps struct and nothing else. */
+static void el_lead_state(bool contended)
+{
+	const uint32_t lead = contended ? EL_LEAD_CONTENDED_US : EL_LEAD_START_US;
+
+	if (!IS_ENABLED(CONFIG_RADIANT_GATE_MPSL_LEAD_SWEEP) && lead != el_lead_us) {
+		el_lead_us = lead;
+		el_lead_publish();
+	}
 }
 
 /* The too-near floor for an elastic request: three quarters of the lead, the
@@ -1601,16 +1612,6 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		if (g.no_extend && ext_skip > 0u) {
 			ext_skip--;
 		}
-#if defined(CONFIG_RADIANT_GATE_MPSL_D2)
-		/* The elastic lead is given back slowly, for the same reason. */
-		if (!IS_ENABLED(CONFIG_RADIANT_GATE_MPSL_LEAD_SWEEP) &&
-		    g.extendable && el_lead_us > EL_LEAD_START_US) {
-			el_lead_us = (el_lead_us > EL_LEAD_START_US + EL_LEAD_DECAY_US)
-					     ? (el_lead_us - EL_LEAD_DECAY_US)
-					     : EL_LEAD_START_US;
-			el_lead_publish();
-		}
-#endif
 		g.pending = false;
 		g.granted = true;
 		deadline_stop();
@@ -1820,6 +1821,9 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		 */
 		stats.extends_ok++;
 		ext_fail_run = 0u;
+#if defined(CONFIG_RADIANT_GATE_MPSL_D2)
+		el_lead_state(false);
+#endif
 		g.granted_len_us += g.ext_step_us;
 		g.grant_end += (radiant_time_t)g.ext_step_us;
 		nrf_timer_cc_set(MPSL_TIMER0, 0,
@@ -1837,6 +1841,9 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		if (++ext_fail_run >= EXT_FAIL_RUN_OFF) {
 			ext_fail_run = 0u;
 			ext_skip = EXT_SKIP_GRANTS;
+#if defined(CONFIG_RADIANT_GATE_MPSL_D2)
+			el_lead_state(true);
+#endif
 		}
 		g.granted = false;
 		timer0_disarm();
@@ -1915,8 +1922,6 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		 * request's, not g.extendable: see placed_extendable.
 		 */
 		if (s->placed_extendable) {
-#if defined(CONFIG_RADIANT_GATE_MPSL_D2)
-			/* And give more notice next time: see el_lead_us. */
 #if defined(CONFIG_RADIANT_GATE_MPSL_STATS)
 			stats.el_blocked++;
 			stats.el_blk_by_notice[notice_bin(s->notice_us)]++;
@@ -1939,27 +1944,6 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 						}
 					}
 				}
-			}
-#endif
-			/*
-			 * Only a refusal of a request that WAS given the
-			 * elastic notice says the lead is too short. One that
-			 * reached MPSL with less - deferred by -NRF_EAGAIN
-			 * until the session it was placed in went idle -
-			 * says nothing about the other stack. Measured on
-			 * gate.conf with no other stack: 43 of 43 elastic
-			 * refusals were such deferred requests, every one with
-			 * under 2 ms of notice left, against 0 refused of 970
-			 * placed with 2 ms or more; growing the lead on them
-			 * drove it to 12.5 ms for nothing.
-			 */
-			if (!IS_ENABLED(CONFIG_RADIANT_GATE_MPSL_LEAD_SWEEP) &&
-			    d2_on && el_lead_us < PLACE_LEAD_US &&
-			    s->notice_us >= (int32_t)el_floor_us()) {
-				el_lead_us = (el_lead_us * 2u > PLACE_LEAD_US)
-						     ? PLACE_LEAD_US
-						     : el_lead_us * 2u;
-				el_lead_publish();
 			}
 #endif
 			if (elastic_initial_us > ELASTIC_FLOOR_US) {
