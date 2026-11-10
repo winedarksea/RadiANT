@@ -11,7 +11,7 @@ the repository: see [phase-0b-raw-logs.md](phase-0b-raw-logs.md).
 | 1. Harness into `tools/` | **Done** | `tools/ant_disc_phase.py` + 12 host tests; `CONFIG_RADIANT_SEARCH_PHASE_DIAG` ported by hand; the harness fails a run whose DUT prints neither diagnostic line |
 | 2. Coverage counter | **Done** | `CONFIG_RADIANT_SEARCH_COVERAGE`, 0xF6 `[30..31]`, 30/32-byte body, version 1, clamp without the flag; host and firmware tests |
 | 3. Schedule-shape ztests | **Done** | deaf fraction at 1/2/4/8 tracked channels, the three-lead ceiling, the direct-lead control, the R1 characterization |
-| 4. `check_zero_cost.ps1` | **Done** | ZC_VERDICT |
+| 4. `check_zero_cost.ps1` | **Done** | all 8 rows (6 nRF + 2 TI) identical against 42475c6: sections, symbols and `zephyr.bin`; a missing hal_ti fails the run |
 | 5. Size baselines | **Partly done; blocked on master** | 42475c6 does not link the L15 bridge arm nor either Matter arm (duplicate sources from 1d0d821). Bridge measured with a two-line local patch; both Matter baselines not measured |
 | 6. Baseline A leg | **STOPPED: differs** | **13/17** found against the expected 12/17. Every failure sits in a predicted band; the extra success is a band-edge trial found at 40.6 s. Mask `0x003fcffc` reproduced. Controls and R1 not run, per the stop rule |
 
@@ -189,7 +189,24 @@ missing hal_ti fails the run**: at `-NcsVersion v3.2.4`, which has no hal_ti, it
 printed `FAILED: hal_ti module is not at ...` and exited 1
 (`zero_cost_no_hal_ti.txt`). Any uncaught error exits 1 through a `trap`.
 
-ZC_TABLE
+Result against 42475c6 (`zero_cost.txt`, UTF-16), every row with an explicit
+backend and its `.config` read back:
+
+| Row | Board | Sections | Defined symbols | `zephyr.bin` |
+|---|---|---|---|---|
+| feather | adafruit_feather_nrf52840/nrf52840/uf2 | same (30) | same (2167) | identical |
+| dongle | nrf52840dongle/nrf52840 | same (30) | same (2162) | identical |
+| promicro | promicro_nrf52840/nrf52840/uf2 | same (30) | same (2164) | identical |
+| net5340 | nrf5340dk/nrf5340/cpunet | same (27) | same (1952) | identical |
+| l15 | nrf54l15dk/nrf54l15/cpuapp | same (26) | same (2106) | identical |
+| lm20 | nrf54lm20dk/nrf54lm20a/cpuapp | same (32) | same (2513) | identical |
+| ti | cc26x2r1_launchxl, apps/dongle_ti | same (23) | same (1796) | identical |
+| ti_gate | cc26x2r1_launchxl, ti_gate.conf | same (23) | same (1805) | identical |
+
+The head side was built from the worktree at `0771cc3` plus the staged script
+fix; every later commit touches only scripts and documentation, so this holds
+for the branch tip. The counts match Phase 0a's table row for row. TI:
+build-only, binary-identical, not verified on air.
 
 ## Step 5: size baselines
 
@@ -221,7 +238,7 @@ What was measured, with the nm/.config method:
 | L15 `thread.conf;bridge.conf` | 42475c6 as is | **link fails** | - | - | `sizes_base.txt` |
 | L15 `thread.conf;bridge.conf` | 42475c6 **with `radiant_bridge.c` and `radiant_hr_adapter.c` removed from the app's list** (scratch worktree, never committed) | links | **321 736 B** / 1524 KB (20.62 %) | **197 928 B** / 256 KB (75.50 %) | `.config`: NRF=y, GATE_MPSL=y; nm: `radiant_radio_init` present, 5 `*_sink` symbols |
 | L15 `thread.conf;matter.conf` | same patched tree | **link fails** (the profile and power-adapter duplicates) | - | - | not measured |
-| nRF52840 DK Matter | same patched tree | N52840_RESULT | - | - | not measured |
+| nRF52840 DK Matter | same patched tree | **link fails** (same profile duplicates, 19 errors) | - | - | not measured |
 
 The bridge figure is "42475c6 plus a two-line patch", not master. A candidate
 quoting a delta against it must build its own arm with the same patch, or with

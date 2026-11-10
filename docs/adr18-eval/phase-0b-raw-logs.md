@@ -45,7 +45,7 @@ did not reproduce 12/17, which is the plan's stop condition. See the report.
 
 | File | What it is |
 |---|---|
-| `zero_cost.txt` (UTF-16), `zero_cost_exit.txt` | `scripts\check_zero_cost.ps1 -BaseRef 42475c6`. The exit file has one line per attempt: the first two attempts died in the script itself (bugs fixed in `ccfa2b4`) before building anything |
+| `zero_cost.txt` (UTF-16), `zero_cost_exit.txt` | `scripts\check_zero_cost.ps1 -BaseRef 42475c6`. The exit file has one line per attempt: `0`, `1`, `0`. The first attempt died on a script bug before building anything and still exited 0, because the error was not trapped; the second died on a missing row directory (exit 1). Both bugs are fixed in `ccfa2b4`, which also adds the `trap`. The third run is the result: PASS, 8/8 rows identical. `zero_cost.txt` holds only the third run |
 | `zero_cost_no_hal_ti.txt` | the same script at `-NcsVersion v3.2.4`, where hal_ti is absent: FAILED, exit 1, no skip |
 | `sizes_base.txt`, `size_build_base_l15_bridge.log`, `size_build_base_l15_matter.log` | size baseline on 42475c6 as is: the L15 `thread.conf;bridge.conf` build FAILS to link (logs are UTF-16) |
 | `sizes_base_patched.txt`, `size_build_base_patched_*.log` | the same on 42475c6 with two duplicate source lines removed from `apps/dongle_thread/CMakeLists.txt` (scratch worktree `build\zsz`, never committed): bridge links; both Matter arms still fail to link |
