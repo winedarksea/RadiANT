@@ -1902,10 +1902,12 @@ radiant_messages:
              counters are u16 LE and saturate rather than wrapping. An
              unkeyed channel answers zeros and a clear verdict, with the
              version still set. VERSIONING: fields are only ever added at the
-             end and an offset is never reused; the version goes up whenever
-             a field is added or a field's meaning changes. A reader refuses a
-             body shorter than it needs, and decodes the fields it knows from
-             a longer body or a higher version. This exists so a host that
+             end and an offset is never reused. The structure version stays
+             1 throughout the beta, whatever is added, so a reader tells which
+             fields exist from the body length and treats the version as
+             nothing more than a sanity check. A reader refuses a body shorter
+             than it needs, and decodes the fields it knows from a longer
+             body. This exists so a host that
              ignores the per-message verdict flag still has an auditable
              stream: deliver-as-unverified only means something if unverified
              cannot be silently treated as verified. The enrolment counter is
@@ -1932,7 +1934,7 @@ radiant_messages:
     - name: MESG_RADIANT_HEALTH_ID
       id: 0xF6
       direction: d2h
-      payload_len: 30
+      payload_len: "30..32"
       desc: "What the dongle threw away, requested with MESG_REQUEST (0x4D).
              Request-only: nothing is ever emitted unsolicited, so a host that
              never asks sees a byte stream identical to a build without it.
@@ -1958,13 +1960,25 @@ radiant_messages:
              the one that channel owned by the time they were processed;
              [28..29] USB bulk-IN transfers that never completed within their
              timeout, i.e. the host stopped polling.
-             All are u16 LE and all saturate rather than wrap, which is what
+             [30..31] OPTIONAL, sets_advanced_uncovered: sets of the MPSL sweep
+             that finished their dwell having listened to fewer than all phases
+             of the channel period, present only on a build with
+             CONFIG_RADIANT_SEARCH_COVERAGE (which an MPSL build enabling these
+             health counters takes on), where the body is 32 bytes. Every
+             other build answers 30 bytes and this field is absent, because a
+             build that cannot measure coverage must not report 0 uncovered.
+             UNLIKE the rest it clamps at 65535 WITHOUT setting the flag in
+             [1]: it climbs for as long as a search runs, and a flag set by it
+             would mark every other field a floor for the reason given below.
+             All the others are u16 LE and all saturate rather than wrap, which is what
              the flag in [1] is for: it distinguishes 65535 from
              65535-and-counting. VERSIONING: fields are only ever added at the
-             end and an offset is never reused; the version goes up whenever
-             a field is added or a field's meaning changes. A reader refuses a
-             body shorter than it needs, and decodes the fields it knows from
-             a longer body or a higher version.
+             end and an offset is never reused. The structure version stays
+             1 throughout the beta, whatever is added, so a reader tells which
+             fields exist from the body length and treats the version as
+             nothing more than a sanity check. A reader refuses a body shorter
+             than it needs, and decodes the fields it knows from a longer
+             body.
              THE OTHER HALF OF [20..21] IS DELIBERATELY ABSENT. A decline
              because NO channel was searching is discovery having succeeded,
              not failed, and it is not loss - and the pump runs about 31 times

@@ -11,6 +11,9 @@
 #include <zephyr/sys/atomic.h>
 
 #include <radiant/radiant_event.h>
+#if defined(CONFIG_RADIANT_SEARCH_COVERAGE)
+#include <radiant/radiant_search.h>
+#endif
 
 #include "ant_health.h"
 #include "ant_wire.h"
@@ -98,11 +101,11 @@ size_t ant_health_fill(uint8_t *out, size_t cap)
 {
 	const struct radiant_event_stats *ev;
 
-	if (out == NULL || cap < ANT_HEALTH_PAYLOAD_LEN) {
+	if (out == NULL || cap < ANT_HEALTH_BODY_LEN) {
 		return 0u;
 	}
 
-	memset(out, 0, ANT_HEALTH_PAYLOAD_LEN);
+	memset(out, 0, ANT_HEALTH_BODY_LEN);
 
 	/*
 	 * Read the event queue's own numbers here rather than mirroring them
@@ -113,10 +116,10 @@ size_t ant_health_fill(uint8_t *out, size_t cap)
 	 */
 	ev = radiant_event_stats_get();
 
-	/* [0] structure version. Fields are only ever added at the end and an
-	 * offset is never reused; bump this whenever a field is added or a
-	 * field's meaning changes. A host that pattern-matches this reply has
-	 * no other way to know. */
+	/* [0] structure version, pinned at 1 for the whole beta. Fields are only
+	 * ever added at the end and an offset is never reused, so a host reads
+	 * which fields exist from the body length, and a meaning that changed
+	 * would be a new field. Do not bump this for an added field. */
 	out[0] = 1u;
 	/* [1] flags, bit 0 = something saturated, so the whole set is a floor
 	 * rather than a total. */
@@ -162,5 +165,23 @@ size_t ant_health_fill(uint8_t *out, size_t cap)
 							    : ev->high_water);
 	}
 
-	return ANT_HEALTH_PAYLOAD_LEN;
+#if defined(CONFIG_RADIANT_SEARCH_COVERAGE)
+	/* [30..31] sets_advanced_uncovered. Clamped WITHOUT put_u16()'s flag:
+	 * this counter climbs for as long as a search runs, so one long-running
+	 * field would otherwise mark every other field in the reply as a
+	 * floor - the reason the idle sweep field was left out (see
+	 * ANT_HEALTH_SWEEP_BUSY). A counter that stops at 65535 says "at least
+	 * this many" on its own. */
+	{
+		uint32_t n = radiant_search_sets_uncovered_get();
+
+		if (n > ANT_HEALTH_MAX) {
+			n = ANT_HEALTH_MAX;
+		}
+		out[30] = (uint8_t)(n & 0xFFu);
+		out[31] = (uint8_t)((n >> 8) & 0xFFu);
+	}
+#endif
+
+	return ANT_HEALTH_BODY_LEN;
 }

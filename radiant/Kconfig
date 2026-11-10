@@ -1354,6 +1354,38 @@ config RADIANT_SEARCH_DENIAL_ESCAPE
 	  SWEEP debug line. Deliberately NOT on the 0xF6 health reply: an
 	  escape is the recovery, not the loss.
 
+config RADIANT_SEARCH_COVERAGE
+	bool "count sets the sweep advanced without hearing every phase"
+	default n
+	help
+	  A per-set mask of which phases of the channel period the credited
+	  listening touched, and sets_advanced_uncovered: the sets that finished
+	  their dwell with a phase never listened to. The ADR 0018 counter,
+	  ahead of any phase-aware credit. Credit itself is unchanged; a set
+	  still advances on time, which is what this exists to expose.
+
+	  OFF BY DEFAULT, and the 0xF6 health reply takes it only on an MPSL
+	  build: ANT_DONGLE_HEALTH_COUNTERS selects it when
+	  RADIANT_BACKEND_NRF_GATE_MPSL is set. So a plain health.conf build
+	  pays nothing and answers its usual 30 bytes, and the zero-cost CI job
+	  stays a real check.
+
+	  A chunk reclaimed by the scheduler's A9-3 is credited as a full
+	  listen but heard nothing, so it marks no phase. A retune restarts the
+	  cursor on a new frequency and the mask goes with it, because a phase
+	  heard on one frequency is not covered on another.
+
+config RADIANT_SEARCH_PHASE_DIAG
+	bool "log every search frame's phase and each chunk's phase bins"
+	depends on RADIANT_ANTR_API
+	default n
+	help
+	  Bench diagnostic for tools/ant_disc_phase.py (ADR 0018): a
+	  "TDIAG frame" log line per CRC-valid search frame with its phase
+	  against channel 0's tracked slot, and a "TEMPDIAG chunks" line every
+	  5 s with the listened phase bins. Off in every shipping build, where
+	  the hook compiles to ((void)0).
+
 config RADIANT_SEARCH_DENIAL_ESCAPE_RUN
 	int "consecutive zero-credit denials before the sweep credits a quantum"
 	default 8

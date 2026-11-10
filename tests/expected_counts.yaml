@@ -56,7 +56,7 @@ min_scenarios: 13
 # check_test_counts.py on a Linux machine, on the versions west.yml pins
 # (docs/testing.md), rather than on a GitHub runner. 4168 since C5-1 added one
 # gate test.
-min_testcases: 4168
+min_testcases: 4220
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -64,13 +64,16 @@ min_testcases: 4168
 # suite (E3-3), could vanish under its slack. scripts/check_test_counts.py
 # prints the executed count for each.
 #
+# 2026-11-09: +13 per unit scenario (coverage counter, the 0xF6 reply's
+# coverage field, schedule-shape helpers for ADR 0018 and R1).
+#
 # 2026-11-09: each floor is that scenario's executed count from the run named
 # above. The earlier values were nRF5340 DK counts minus about 1%, plus static
 # counts. A floor equal to the observed count still fails only when coverage
 # goes down, which is the event it exists to catch.
-min_cases.radiant.unit: 965
-min_cases.radiant.unit.sec_modes: 965
-min_cases.radiant.unit.no_pairing: 913
+min_cases.radiant.unit: 978
+min_cases.radiant.unit.sec_modes: 978
+min_cases.radiant.unit.no_pairing: 926
 min_cases.radiant.api: 65
 min_cases.radiant.api.sec: 68
 min_cases.radiant.api.sec_host: 81
@@ -80,5 +83,5 @@ min_cases.radiant.gate: 32
 min_cases.hrm_ble.sim_sched: 4
 min_cases.treadmill.pages: 20
 min_cases.treadmill.hr_rx: 3
-min_cases.radiant.unit.ack_faults: 972
+min_cases.radiant.unit.ack_faults: 985
 min_cases.trainer.model: 14

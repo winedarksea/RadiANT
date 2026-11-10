@@ -251,9 +251,10 @@ test_the_epoch_search_is_forward_only_and_bounded in both suites.
   drifting, and makes it independent of how many channels are tracked. It
   does not reach zero; that needs the next request pipelined behind the live
   grant (candidate d, a follow-on with its own mpsl_arb spike first).
-- Task: build (a) per the ADR, adding the per-set coverage counter first.
-  A/B/A with the stepped-offset harness. That harness (disc_phase.py) lived
-  in a session scratchpad and may be gone; if so, rebuild it into tools/.
+- Task: build (a) per the ADR. The per-set coverage counter
+  (sets_advanced_uncovered, 0xF6 [30..31] on MPSL health builds) landed with
+  the harness: A/B/A with tools/ant_disc_phase.py, on an image with
+  CONFIG_RADIANT_SEARCH_PHASE_DIAG=y.
 - Done when all 17 offsets bind, the median within about one sweep of the
   control and none beyond about four, and the chunk mask moves between
   reports instead of repeating. Not done-when "as fast as the control at

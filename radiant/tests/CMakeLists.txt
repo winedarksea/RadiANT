@@ -39,6 +39,10 @@ set(RADIANT_TESTS_APPS_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/../../apps/common")
 if(NOT EXISTS "${RADIANT_TESTS_APPS_COMMON}/ant_rgb_led_curve.c")
   list(REMOVE_ITEM suite_sources "${CMAKE_CURRENT_SOURCE_DIR}/src/test_rgb_led_curve.c")
 endif()
+# Likewise, when radiant/ is built away from the rest of the repository.
+if(NOT EXISTS "${RADIANT_TESTS_APPS_COMMON}/ant_health.c")
+  list(REMOVE_ITEM suite_sources "${CMAKE_CURRENT_SOURCE_DIR}/src/test_ant_health.c")
+endif()
 target_sources(app PRIVATE ${suite_sources})
 
 # ── The mock radio ──────────────────────────────────────────────────────────
@@ -324,4 +328,10 @@ target_sources(app PRIVATE
 if(EXISTS "${RADIANT_TESTS_APPS_COMMON}/ant_rgb_led_curve.c")
   target_sources(app PRIVATE "${RADIANT_TESTS_APPS_COMMON}/ant_rgb_led_curve.c")
   target_include_directories(app PRIVATE "${RADIANT_TESTS_APPS_COMMON}")
+endif()
+
+# ant_health.c: pulled into src/test_ant_health.c by relative include, so its
+# "ant_wire.h" resolves through the forwarding header beside it.
+if(EXISTS "${RADIANT_TESTS_APPS_COMMON}/ant_health.c")
+  target_include_directories(app PRIVATE "${RADIANT_TESTS_APPS_COMMON}/ant")
 endif()

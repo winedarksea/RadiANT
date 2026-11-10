@@ -105,8 +105,8 @@ extern "C" {
 #define FAKE_RADIO_AIR_FRAME_MAX   (RADIANT_RADIO_ADDR_MAX + RADIANT_RADIO_BODY_MAX)
 
 #define FAKE_RADIO_AIR_MAX         256  /* frames queued on the air at once */
-#define FAKE_RADIO_ARM_LOG_MAX     64   /* arm calls recorded, accepted or not */
-#define FAKE_RADIO_EVENT_LOG_MAX   128  /* events recorded */
+#define FAKE_RADIO_ARM_LOG_MAX     200  /* arm calls recorded, accepted or not */
+#define FAKE_RADIO_EVENT_LOG_MAX   400  /* events recorded */
 #define FAKE_RADIO_VIOL_MAX        16   /* contract violations recorded */
 
 /* Events fired inside one fake_radio_advance*() call before a livelock is

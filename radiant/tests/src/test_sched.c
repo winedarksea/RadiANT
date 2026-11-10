@@ -89,6 +89,22 @@ static const uint8_t test_tx_body[10] = {
 
 #define TEST_LOG_MAX 128u
 
+/* The schedule-shape helper's collector, used from on_armed(); defined with
+ * the helper at the end of this file. */
+#define SHAPE_PERIOD_US   246277u /* 8070 counts, the ADR 0018 rig's period */
+#define SHAPE_SCAN_CH     31u
+#define SHAPE_BIN_US      100u
+#define SHAPE_BINS        ((SHAPE_PERIOD_US + SHAPE_BIN_US - 1u) / SHAPE_BIN_US)
+#define SHAPE_PERIODS     9u
+#define SHAPE_BYTES       ((SHAPE_BINS + 7u) / 8u)
+static struct {
+	bool           active;
+	radiant_time_t origin;
+	uint8_t        bins[SHAPE_PERIODS][SHAPE_BYTES];
+	uint8_t        fold[SHAPE_BYTES];
+} shape;
+static void shape_note(radiant_time_t open, radiant_time_t close);
+
 static struct {
 	uint32_t n_rx;
 	struct {
@@ -127,6 +143,10 @@ static struct {
 	 * of the scheduler is observable at all. */
 	bool       repost;
 	radiant_time_t next_open[RADIANT_SCHED_MAX_CHANNELS];
+	/* Period and window width of the repost; 0 = TEST_PERIOD_US and
+	 * TEST_WINDOW_US, so every other test is unaffected. */
+	uint32_t   repost_period_us;
+	uint32_t   repost_window_us;
 
 	/* Which channels repost, when only some of them are tracked. Zero means
 	 * all of them, so every test predating this field is unaffected. A
@@ -284,9 +304,14 @@ static void on_done(uint8_t ch, enum radiant_sched_done why, void *user)
 	if (log.repost &&
 	    (log.repost_mask == 0u ||
 	     (log.repost_mask & ((uint32_t)1u << ch)) != 0u)) {
-		log.next_open[ch] += (radiant_time_t)TEST_PERIOD_US;
+		log.next_open[ch] += (radiant_time_t)(log.repost_period_us != 0u
+							      ? log.repost_period_us
+							      : TEST_PERIOD_US);
 		post_track(ch, log.next_open[ch],
-			   log.next_open[ch] + (radiant_time_t)TEST_WINDOW_US);
+			   log.next_open[ch] +
+				   (radiant_time_t)(log.repost_window_us != 0u
+							    ? log.repost_window_us
+							    : TEST_WINDOW_US));
 	}
 }
 
@@ -294,6 +319,9 @@ static void on_armed(uint8_t ch, radiant_time_t t_open, radiant_time_t t_close,
 		     void *user)
 {
 	ARG_UNUSED(user);
+	if (shape.active && ch == SHAPE_SCAN_CH) {
+		shape_note(t_open, t_close);
+	}
 	if (ch == 31u) {
 		radiant_time_t end = log.scan_measure_end != 0u &&
 			log.scan_measure_end < t_close ? log.scan_measure_end : t_close;
@@ -3222,4 +3250,329 @@ ZTEST(radiant_sched, test_malformed_requests_are_rejected_at_the_door)
 	zassert_false(radiant_sched_pending(0u));
 
 	finish();
+}
+
+/* ---------------------------------------------------------------------------
+ * Schedule shape: what the arbitrated lead costs the search (ADR 0018) and two
+ * tracked channels (R1)
+ *
+ * The fake radio has no grant, extension or session model, so these fold what
+ * the SCHEDULER asks for: the scan's arms against the tracked period. Every
+ * candidate in docs/adr18-eval/ asserts its prediction through them.
+ * ---------------------------------------------------------------------------
+ */
+
+#define SHAPE_WINDOW_US   TEST_WINDOW_US
+#define SHAPE_SKIP        3u   /* the first periods are start-up, not shape */
+#define SHAPE_LEAD_MPSL   24418u /* PLACE_LEAD 24000 + HEAD_MARGIN 250 + ARM 168 */
+#define SHAPE_MAXWIN_MPSL 94200u /* MAX_WINDOW_US: 100 ms less grant overhead */
+
+BUILD_ASSERT(SHAPE_BINS * 8u >= SHAPE_PERIOD_US / SHAPE_BIN_US);
+
+struct deaf_shape {
+	uint32_t deaf_us;        /* never-listened phases, folded over all periods */
+	uint32_t listened_us;    /* mean scan time per period */
+	uint32_t longest_gap_us; /* the widest circular deaf run, folded */
+	bool     gap_moves;      /* the widest gap's position differs period to period */
+	uint8_t  aborted;        /* scan chunks aborted (the fold would over-count) */
+};
+
+/* Called from on_armed for the scan channel. */
+static void shape_note(radiant_time_t open, radiant_time_t close)
+{
+	for (radiant_time_t t = open; t < close; t += SHAPE_BIN_US) {
+		uint32_t off = (uint32_t)(t - shape.origin);
+		uint32_t period = off / SHAPE_PERIOD_US;
+		uint32_t bin = (off % SHAPE_PERIOD_US) / SHAPE_BIN_US;
+
+		if (t < shape.origin || period >= SHAPE_PERIODS || bin >= SHAPE_BINS) {
+			continue;
+		}
+		if (period >= SHAPE_SKIP) {
+			shape.bins[period][bin / 8u] |= (uint8_t)BIT(bin % 8u);
+			shape.fold[bin / 8u] |= (uint8_t)BIT(bin % 8u);
+		}
+	}
+}
+
+/* Where the widest deaf run in a bin set starts, and how wide it is. Circular:
+ * a run across the wrap is one run. */
+static void shape_longest_gap(const uint8_t *bins, uint32_t *start, uint32_t *width)
+{
+	uint32_t i;
+	uint32_t best = 0u;
+	uint32_t best_at = 0u;
+	uint32_t run = 0u;
+	uint32_t run_at = 0u;
+
+	for (i = 0u; i < 2u * SHAPE_BINS; i++) {
+		uint32_t b = i % SHAPE_BINS;
+		bool heard = (bins[b / 8u] & BIT(b % 8u)) != 0u;
+
+		if (heard) {
+			run = 0u;
+			continue;
+		}
+		if (run == 0u) {
+			run_at = b;
+		}
+		run++;
+		if (run > best && run <= SHAPE_BINS) {
+			best = run;
+			best_at = run_at;
+		}
+	}
+	*start = best_at;
+	*width = best;
+}
+
+static void measure_deaf_shape(uint8_t n_tracked, uint32_t lead_us, uint32_t in_grant_us,
+			       uint32_t max_window_us, struct deaf_shape *out)
+{
+	struct radiant_sched_rx r;
+	radiant_time_t          t0;
+	uint32_t                listened_bins = 0u;
+	uint32_t                gap_at_first = 0u;
+	uint32_t                width;
+	uint32_t                start;
+
+	memset(&shape, 0, sizeof(shape));
+	memset(out, 0, sizeof(*out));
+	fake_radio_caps_mut()->min_arm_lead_us = (uint16_t)lead_us;
+	fake_radio_caps_mut()->min_arm_lead_in_grant_us = (uint16_t)in_grant_us;
+	fake_radio_caps_mut()->max_window_us = max_window_us;
+	bring_up();
+
+	t0 = radiant_radio_now() + 3u * SHAPE_PERIOD_US;
+	shape.origin = t0;
+	shape.active = true;
+
+	/* Tracked channels re-post from done() like radiant_channel.c, evenly
+	 * spread through the period - the worst case for a gap filler, and the
+	 * one a Zwift plus self-channel session tends towards as crystals drift. */
+	log.repost = true;
+	log.repost_period_us = SHAPE_PERIOD_US;
+	log.repost_window_us = SHAPE_WINDOW_US;
+	log.repost_mask = (uint32_t)BIT_MASK(n_tracked);
+	for (uint8_t ch = 0u; ch < n_tracked; ch++) {
+		log.next_open[ch] = t0 + ((radiant_time_t)ch * SHAPE_PERIOD_US) / n_tracked;
+		post_track(ch, log.next_open[ch],
+			   log.next_open[ch] + (radiant_time_t)SHAPE_WINDOW_US);
+	}
+
+	/* One standing scan, one dwell per chunk, as api_post_search_window(). */
+	rx_req_init(&r, radiant_frame_format(RADIANT_FRAME_CFG_SEARCH), search_filter, 8u,
+		    t0, RADIANT_TIME_NEVER);
+	r.chunk_us = 260000u;
+	zassert_ok(radiant_sched_request_rx(SHAPE_SCAN_CH, &r));
+	zassert_ok(radiant_sched_tick());
+
+	/* A period at a time: fake_radio_advance_to() has a livelock budget. */
+	for (uint32_t k = 0u; k < SHAPE_PERIODS + 1u; k++) {
+		fake_radio_advance_to(t0 + (radiant_time_t)(k + 1u) * SHAPE_PERIOD_US);
+	}
+	shape.active = false;
+
+	for (uint32_t i = 0u; i < SHAPE_BINS; i++) {
+		if ((shape.fold[i / 8u] & BIT(i % 8u)) != 0u) {
+			listened_bins++;
+		}
+	}
+	out->deaf_us = (SHAPE_BINS - listened_bins) * SHAPE_BIN_US;
+
+	shape_longest_gap(shape.fold, &start, &width);
+	out->longest_gap_us = width * SHAPE_BIN_US;
+
+	/* The per-period listened time and whether the gap moves period to period. */
+	{
+		uint64_t listened = 0u;
+		uint32_t n_periods = 0u;
+
+		for (uint32_t p = SHAPE_SKIP; p < SHAPE_PERIODS; p++) {
+			uint32_t n = 0u;
+
+			for (uint32_t i = 0u; i < SHAPE_BINS; i++) {
+				if ((shape.bins[p][i / 8u] & BIT(i % 8u)) != 0u) {
+					n++;
+				}
+			}
+			listened += (uint64_t)n * SHAPE_BIN_US;
+			n_periods++;
+			shape_longest_gap(shape.bins[p], &start, &width);
+			if (p == SHAPE_SKIP) {
+				gap_at_first = start;
+			} else if (start != gap_at_first) {
+				/* A different widest gap in a later period. Only
+				 * a gap wider than a bin counts: a tie between
+				 * equal gaps must not read as movement. */
+				if (width > 10u) {
+					out->gap_moves = true;
+				}
+			}
+		}
+		out->listened_us = (uint32_t)(listened / n_periods);
+	}
+
+	out->aborted = (log.aborted_count[SHAPE_SCAN_CH] > 0xFFu)
+			       ? 0xFFu
+			       : (uint8_t)log.aborted_count[SHAPE_SCAN_CH];
+
+	log.repost = false;
+	log.repost_period_us = 0u;
+	log.repost_window_us = 0u;
+	zassert_ok(radiant_sched_cancel(SHAPE_SCAN_CH));
+	/* The tracked channels' last re-posts are still pending: let them end. */
+	fake_radio_advance_to(radiant_radio_now() + 2u * SHAPE_PERIOD_US);
+	finish();
+}
+
+static void report_shape(const char *what, uint8_t n, const struct deaf_shape *d)
+{
+	TC_PRINT("deaf-shape %s n=%u: deaf=%u.%u%% (%u us never listened of %u) listened=%u us/period "
+		 "longest_gap=%u us moves=%d aborted=%u\n",
+		 what, n, (d->deaf_us * 100u) / SHAPE_PERIOD_US,
+		 (d->deaf_us * 1000u / SHAPE_PERIOD_US) % 10u, d->deaf_us, SHAPE_PERIOD_US,
+		 d->listened_us, d->longest_gap_us, d->gap_moves, d->aborted);
+}
+
+ZTEST(radiant_sched, test_under_arbitration_search_deafness_is_at_most_three_leads)
+{
+	struct deaf_shape d;
+
+	measure_deaf_shape(1u, SHAPE_LEAD_MPSL, 200u, SHAPE_MAXWIN_MPSL, &d);
+	report_shape("mpsl", 1u, &d);
+
+	/* The ceiling today: three leads, the tracked window and the small
+	 * software slack and tail the scheduler charges each edge. */
+	zassert_true(d.deaf_us <= 3u * SHAPE_LEAD_MPSL + SHAPE_WINDOW_US + 3u * 1500u,
+		     "deaf for %u us; more than three leads", d.deaf_us);
+	zassert_true(d.deaf_us >= 2u * SHAPE_LEAD_MPSL,
+		     "deaf for only %u us; the arbitrated lead is not reaching the "
+		     "scan", d.deaf_us);
+	zassert_false(d.gap_moves, "the deaf bands are phase-locked today");
+	zassert_equal(0u, d.aborted, "the fold assumes no scan chunk was displaced");
+}
+
+/* The control: a backend that needs only a peripheral's lead (the direct
+ * backend's own 168 us class) has a scan that listens to essentially every phase
+ * despite the same tracked channel. That difference is the whole of ADR 0018. */
+ZTEST(radiant_sched, test_with_a_direct_lead_search_deafness_is_under_one_percent)
+{
+	struct deaf_shape d;
+
+	measure_deaf_shape(1u, 200u, 0u, 0u, &d);
+	report_shape("direct", 1u, &d);
+
+	zassert_true(d.deaf_us < SHAPE_PERIOD_US / 100u,
+		     "direct lead deaf for %u us of %u", d.deaf_us, SHAPE_PERIOD_US);
+}
+
+/* The deaf fraction by tracked-channel count: 1, 2, 4 and 8, the last being
+ * Zwift's four plus self channels. Pins today's numbers (in the test log) and
+ * the ceiling a design must beat. Each extra channel adds two leads per period
+ * (the band after its slot and the one before it). */
+ZTEST(radiant_sched, test_deaf_fraction_by_tracked_channel_count)
+{
+	static const uint8_t counts[] = {1u, 2u, 4u, 8u};
+
+	for (size_t i = 0u; i < ARRAY_SIZE(counts); i++) {
+		struct deaf_shape d;
+		uint8_t n = counts[i];
+		uint32_t ceiling = (2u * n + 1u) * (SHAPE_LEAD_MPSL + 1500u) +
+				   n * SHAPE_WINDOW_US;
+
+		/* The whole period, as the fold counts it: the last bin is
+		 * partial but counted whole. */
+		if (ceiling > SHAPE_BINS * SHAPE_BIN_US) {
+			ceiling = SHAPE_BINS * SHAPE_BIN_US;
+		}
+		sched_before(NULL);
+		measure_deaf_shape(n, SHAPE_LEAD_MPSL, 200u, SHAPE_MAXWIN_MPSL, &d);
+		report_shape("mpsl", n, &d);
+		zassert_true(d.deaf_us <= ceiling,
+			     "n=%u: deaf for %u us, ceiling %u", n, d.deaf_us, ceiling);
+		zassert_true(d.listened_us + d.deaf_us / 2u <= SHAPE_PERIOD_US,
+			     "n=%u: the scan listened more than it could", n);
+	}
+}
+
+/* R1: two tracked channels `offset_ms` apart. Records which slots each channel
+ * gets under the arbitrated lead, so the chosen fix can flip the expectation. */
+struct r1_result {
+	uint32_t ok[2];
+	uint32_t missed[2];
+	uint32_t arms;
+};
+
+static void r1_measure(uint32_t offset_us, struct r1_result *out)
+{
+	radiant_time_t t0;
+	const uint32_t periods = 12u;
+
+	memset(out, 0, sizeof(*out));
+	fake_radio_caps_mut()->min_arm_lead_us = (uint16_t)SHAPE_LEAD_MPSL;
+	fake_radio_caps_mut()->min_arm_lead_in_grant_us = 200u;
+	fake_radio_caps_mut()->max_window_us = SHAPE_MAXWIN_MPSL;
+	bring_up();
+
+	t0 = radiant_radio_now() + 3u * SHAPE_PERIOD_US;
+	log.repost = true;
+	log.repost_period_us = SHAPE_PERIOD_US;
+	log.repost_window_us = SHAPE_WINDOW_US;
+	log.repost_mask = 0x3u;
+	for (uint8_t ch = 0u; ch < 2u; ch++) {
+		log.next_open[ch] = t0 + (radiant_time_t)ch * offset_us;
+		post_track(ch, log.next_open[ch],
+			   log.next_open[ch] + (radiant_time_t)SHAPE_WINDOW_US);
+	}
+	zassert_ok(radiant_sched_tick());
+	for (uint32_t k = 0u; k < periods; k++) {
+		fake_radio_advance_to(t0 + (radiant_time_t)(k + 1u) * SHAPE_PERIOD_US);
+	}
+	for (uint8_t ch = 0u; ch < 2u; ch++) {
+		out->ok[ch] = log.ok_count[ch];
+		out->missed[ch] = log.missed_count[ch];
+	}
+	out->arms = fake_radio_arm_count();
+	log.repost = false;
+	log.repost_period_us = 0u;
+	log.repost_window_us = 0u;
+	fake_radio_advance_to(radiant_radio_now() + 2u * SHAPE_PERIOD_US);
+	finish();
+}
+
+/* The characterization: today's behaviour. The "later slot lost every period"
+ * shape from the 2026-10-31 review. R1_EXPECT is what the scheduler does today;
+ * the chosen fix flips the two lines in between to strict. */
+ZTEST(radiant_sched, test_r1_two_tracked_channels_inside_the_lead_today)
+{
+	static const struct {
+		uint32_t offset_us;
+		bool     later_served;
+	} cases[] = {
+		{1000u, true},   /* inside the merge span */
+		{5000u, false},  /* 2.6-24.4 ms: inside the lead, past the merge span */
+		{12000u, false},
+		{24000u, false},
+	};
+
+	for (size_t i = 0u; i < ARRAY_SIZE(cases); i++) {
+		struct r1_result r;
+
+		sched_before(NULL);
+		r1_measure(cases[i].offset_us, &r);
+		TC_PRINT("r1-shape offset=%u us: ch0 ok=%u missed=%u ch1 ok=%u missed=%u "
+			 "arms=%u\n", cases[i].offset_us, r.ok[0], r.missed[0], r.ok[1],
+			 r.missed[1], r.arms);
+		zassert_equal(0u, r.missed[0], "the earlier slot must never be lost");
+		if (cases[i].later_served) {
+			zassert_equal(0u, r.missed[1],
+				      "offset %u us: the later slot was missed %u times",
+				      cases[i].offset_us, r.missed[1]);
+		} else {
+			zassert_true(r.missed[1] >= 10u,
+				     "offset %u us: the later slot was expected lost "
+				     "every period", cases[i].offset_us);
+		}
+	}
 }

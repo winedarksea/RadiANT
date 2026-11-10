@@ -122,11 +122,21 @@ enum ant_health_counter {
 #define ANT_HEALTH_DEPTH_TX    0u
 #define ANT_HEALTH_DEPTH_EVENT 1u
 
-/* Bytes ant_health_fill() writes - the 0xF6 payload_len in
- * protocol/ant_wire.yaml, which is the definition. Structure version 1, at
- * out[0]. Fields are only ever appended and an offset is never reused, so a
- * host decodes the fields it knows from a longer reply or a higher version. */
+/* Bytes the shortest 0xF6 reply has - the 0xF6 payload_len in
+ * protocol/ant_wire.yaml, which is the definition, and the minimum a host
+ * accepts. Fields are only ever appended and an offset is never reused, and
+ * a host tells which optional fields exist from the body length. The structure
+ * version at out[0] stays 1 throughout the beta. */
 #define ANT_HEALTH_PAYLOAD_LEN 30u
+
+/* What this build's ant_health_fill() writes: the minimum, or 32 bytes with
+ * the optional coverage counter at [30..31]. Never padded with zero: a build
+ * that cannot measure coverage must not report "0 uncovered". */
+#if defined(CONFIG_RADIANT_SEARCH_COVERAGE)
+#define ANT_HEALTH_BODY_LEN 32u
+#else
+#define ANT_HEALTH_BODY_LEN ANT_HEALTH_PAYLOAD_LEN
+#endif
 
 #if defined(CONFIG_ANT_DONGLE_HEALTH_COUNTERS)
 
