@@ -53,6 +53,10 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Any uncaught error is a failed check, including when this runs from another
+# script: exit 1 so $LASTEXITCODE tells the caller.
+trap { Write-Host "FAILED: $_" -ForegroundColor Red; exit 1 }
+
 function Invoke-Native([string]$Exe, [string[]]$NativeArgs) {
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
@@ -114,15 +118,15 @@ $baseTree = Join-Path $repo 'build\zc_base'
 $haveBase = $false
 if (-not $SkipBuild) {
     if (-not $BaseRef) {
-        $BaseRef = (Invoke-Native 'git' @('-C', $repo, 'merge-base', 'HEAD', 'master'))[-1].Trim()
+        $BaseRef = @(Invoke-Native 'git' @('-C', $repo, 'merge-base', 'HEAD', 'master'))[-1].Trim()
         if ($LASTEXITCODE -ne 0) { throw "git merge-base failed" }
     }
-    $baseSha = (Invoke-Native 'git' @('-C', $repo, 'rev-parse', "$BaseRef^{commit}"))[-1].Trim()
+    $baseSha = @(Invoke-Native 'git' @('-C', $repo, 'rev-parse', "$BaseRef^{commit}"))[-1].Trim()
     if ($LASTEXITCODE -ne 0) { throw "base ref '$BaseRef' does not resolve" }
     Write-Host "base: $BaseRef ($baseSha)" -ForegroundColor Cyan
 
     if (Test-Path $baseTree) {
-        $head = (Invoke-Native 'git' @('-C', $baseTree, 'rev-parse', 'HEAD'))[-1].Trim()
+        $head = @(Invoke-Native 'git' @('-C', $baseTree, 'rev-parse', 'HEAD'))[-1].Trim()
         if ($head -ne $baseSha) {
             throw "$baseTree is at $head, not $baseSha. Remove it (git worktree remove) first."
         }
@@ -142,6 +146,7 @@ function Invoke-RowBuild([hashtable]$Row, [string]$TreeRoot, [string]$Out) {
     if ($Row.conf) { $extra += "-DEXTRA_CONF_FILE=$($Row.conf)" }
 
     $log = "$Out.log"
+    New-Item -ItemType Directory -Force -Path (Split-Path $Out -Parent) | Out-Null
     Push-Location $workspace
     try {
         $westArgs = @('-z', $zephyr, 'build', '-s', $app, '-d', $Out, '-b', $Row.board, '-p', 'always') + $extra
