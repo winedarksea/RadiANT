@@ -74,8 +74,8 @@ Nordic Connect SDK.
 
 | Hardware | Backend | Status |
 |---|---|---|
-| nRF52840 | `nrf` | Used on air by the RadiANT dongle on three boards. Samples build for the nRF52840 DK and Pro Micro |
-| nRF54L15, nRF54LM20 | `nrf` | nRF54L15 on-air verified. Samples build for the nRF54L15 DK |
+| nRF52840 | `nrf` | Used on air by the RadiANT dongle on three boards. Samples build for the nRF52840 DK; the transmitter also for the Pro Micro |
+| nRF54L15, nRF54LM20 | `nrf` | nRF54L15 on-air verified, including both samples on the nRF54L15 DK |
 | nRF5340 network core | `nrf` | On-air verified. No sample overlay |
 | TI CC13x2 / CC26x2 | `cc26xx` | On-air verified on the CC2652P. Needs the `hal_ti` module. No sample overlay |
 

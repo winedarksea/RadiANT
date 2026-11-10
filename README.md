@@ -349,7 +349,7 @@ manual run.** That is the trade taken.
 
 | Lane | File | Runs on | Jobs |
 |---|---|---|---|
-| Fast | [`ci.yml`](.github/workflows/ci.yml) | PR, push to `master`, dispatch | `host-tests`, `ztest`, `generated-drift`, `readme-cap`, `import-smoke` |
+| Fast | [`ci.yml`](.github/workflows/ci.yml) | PR, push to `master`, dispatch | `host-tests`, `ztest`, `generated-drift`, `readme-cap`, `import-smoke`, `upstream-zephyr` |
 | Release | [`release.yml`](.github/workflows/release.yml) | `v*` tags, dispatch | `build-core` (publishes), `build-new-apps`, `build-node`, `build-treadmill`, `zero-cost` |
 | Links | [`linkcheck.yml`](.github/workflows/linkcheck.yml) | weekly, dispatch | external URLs, `archive/` budget |
 

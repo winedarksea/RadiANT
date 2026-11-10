@@ -434,7 +434,11 @@ jobs:
       - name: Prove the workspace has no Nordic Connect SDK
         run: |
           set -euxo pipefail
-          ! west list nrf
+          # An `if`, because `set -e` ignores a command negated with `!`.
+          if west list nrf; then
+            echo "::error::this job must not have the Nordic Connect SDK"
+            exit 1
+          fi
 
       - name: Build the samples
         run: |
