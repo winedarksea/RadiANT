@@ -11,7 +11,7 @@
 #   - GROUP="dialout" covers SSH and headless use, for members of that group.
 #
 # Install:
-#   sudo cp 70-ant-usb.rules /etc/udev/rules.d/
+#   sudo cp 70-radiant-ant.rules /etc/udev/rules.d/
 #   sudo rm -f /etc/udev/rules.d/99-ant-usb.rules   # the old name, if present
 #   sudo udevadm control --reload-rules
 # then unplug and replug the dongle. For SSH or headless use, also:
