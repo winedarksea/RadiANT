@@ -4037,6 +4037,45 @@ ZTEST(radiant_sched, test_d2_r1_with_a_real_follow_on)
 	}
 }
 
+/*
+ * The deaf fraction at 1/2/4/8 tracked channels at the CONTENDED lead the gate
+ * uses beside Thread (16 ms + head margin + arm lead), with and without the
+ * tail. The fake has no other stack: it cannot refuse extensions or cap a grant
+ * at its first bite, so this is the scheduler's shape at that lead and not a
+ * Thread measurement. Printed, not asserted (phase-3b.md item 9).
+ */
+#define SHAPE_EL_LEAD_CONTENDED 16418u
+
+ZTEST(radiant_sched, test_d2_deaf_fraction_at_the_contended_lead)
+{
+	static const uint8_t counts[] = {1u, 2u, 4u, 8u};
+
+	for (uint32_t tail = 0u; tail < 2u; tail++) {
+		for (size_t i = 0u; i < ARRAY_SIZE(counts); i++) {
+			struct deaf_shape d;
+
+			sched_before(NULL);
+			shape_el_lead = SHAPE_EL_LEAD_CONTENDED;
+			shape_tail = (tail != 0u) ? SHAPE_TAIL_US : 0u;
+			measure_deaf_shape(counts[i], SHAPE_LEAD_MPSL, 200u,
+					   SHAPE_MAXWIN_MPSL, &d);
+			shape_el_lead = 0u;
+			shape_tail = 0u;
+			report_shape(tail ? "contended+tail" : "contended", counts[i], &d);
+			TC_PRINT("contended n=%u tail=%u: tail_arms=%u booked=%u fo_max=%u "
+				 "overlaps=%u\n", counts[i], tail,
+				 radiant_sched_stats_get()->scan_tail,
+				 radiant_sched_stats_get()->booked,
+				 fake_radio_book_stats()->fo_max,
+				 fake_radio_book_stats()->overlaps);
+			for (uint8_t ch = 0u; ch < counts[i]; ch++) {
+				zassert_equal(0u, log.missed_count[ch], "n=%u tail=%u ch %u",
+					      counts[i], tail, ch);
+			}
+		}
+	}
+}
+
 /* A longer booking the arbiter refuses still costs exactly its own slot. */
 ZTEST(radiant_sched, test_d2_a_refused_tail_booking_costs_exactly_its_own_slot)
 {
