@@ -112,6 +112,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                     help="how long to wait for the DUT to acquire B")
     ap.add_argument("--r1-walk-max-s", type=float, default=240.0,
                     help="give up the walk after this long")
+    ap.add_argument("--ch1-trans-type", type=int, default=5,
+                    help="transmission type the wildcard channel 1 pairs "
+                         "with. The harness's masters send 5; a stranger "
+                         "with the same device type on air sends something "
+                         "else, and 0 here would bind it instead of B")
+    ap.add_argument("--r1-search-dev", type=int, default=None,
+                    help="with --r1-walk: a third DUT channel searching for "
+                         "this (absent) device number, so the pair is held "
+                         "with a search running")
     args = ap.parse_args(argv)
     if bool(args.a_serial) == bool(args.a_port):
         ap.error("pass exactly one of --a-serial, --a-port")
@@ -178,6 +187,12 @@ def summarize(results: list[dict], *, target_dev: int) -> dict:
         ch1 = next((c for c in chans if c.get("ch") == 1), None)
         pkts = (ch1 or {}).get("packets") or 0
         first = (ch1 or {}).get("first_s")
+        # A wildcard binds whatever it hears first. Packets from anything but
+        # B are not B found: on 2026-11-11 a stranger's strap read as 17/17.
+        bound = (ch1 or {}).get("bound_dev")
+        if bound is not None and bound != target_dev:
+            pkts = 0
+            first = None
         heard = r.get("frames_by_dev", {}).get(str(target_dev), {}).get("n", 0)
         rows.append({"trial": r["trial"], "delay_ms": r["delay_ms"],
                      "host_phase_ms": r.get("host_phase_ms"),
@@ -380,7 +395,8 @@ def discovery_verify_args(args) -> list[str]:
     return ["--port", args.bridge,
             "--profile", "heart-rate", "--profile", "heart-rate",
             "--channel", "0", "--channel", "1",
-            "--device-number", str(args.ch0), "--device-number", "0"]
+            "--device-number", str(args.ch0), "--device-number", "0",
+            "--trans-type", "0", "--trans-type", str(args.ch1_trans_type)]
 
 
 def require_diag(log: Log, note) -> None:
@@ -425,7 +441,10 @@ def run_discovery(args, out: Path, note) -> int:
             row["channels"] = [
                 {"ch": c.get("channel"), "dev": c.get("device_number"),
                  "packets": c.get("packets"),
-                 "first_s": c.get("time_to_first_packet_s")}
+                 "first_s": c.get("time_to_first_packet_s"),
+                 "bound_dev": (j.get("identities", {})
+                               .get(str(c.get("channel"))) or {})
+                 .get("device_number")}
                 for c in j.get("channels", [])]
         results.append(row)
         note(json.dumps(row))
@@ -567,6 +586,9 @@ def run_r1_walk(args, out: Path, note) -> int:
          "--profile", "heart-rate", "--profile", "heart-rate",
          "--channel", "0", "--channel", "1",
          "--device-number", str(args.a_num), "--device-number", str(args.b_num),
+         *(["--profile", "heart-rate", "--channel", "2",
+            "--device-number", str(args.r1_search_dev)]
+           if args.r1_search_dev is not None else []),
          "--seconds", str(int(dur)), "--record", str(cap),
          "--json", str(out / "r1w_dut.json")],
         cwd=TOOLS, stdout=open(out / "r1w_dut_verify.txt", "w", encoding="utf-8"),

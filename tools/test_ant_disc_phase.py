@@ -86,6 +86,25 @@ class SummaryTest(unittest.TestCase):
         self.assertEqual(0, got["trials"][1]["tdiag_frames_of_b"])
 
 
+class WrongDeviceTest(unittest.TestCase):
+
+    def test_a_wildcard_bound_to_a_stranger_is_not_found(self):
+        results = [{"trial": 0, "delay_ms": 0.0, "host_phase_ms": 2.0,
+                    "frames_by_dev": {}, "masks": [],
+                    "channels": [{"ch": 1, "packets": 180, "first_s": 5.0,
+                                  "bound_dev": 8265}]}]
+        got = d.summarize(results, target_dev=5005)
+        self.assertEqual(0, got["found"])
+        self.assertFalse(got["trials"][0]["found"])
+
+    def test_a_wildcard_bound_to_b_is_found(self):
+        results = [{"trial": 0, "delay_ms": 0.0, "host_phase_ms": 2.0,
+                    "frames_by_dev": {}, "masks": [],
+                    "channels": [{"ch": 1, "packets": 180, "first_s": 5.0,
+                                  "bound_dev": 5005}]}]
+        self.assertEqual(1, d.summarize(results, target_dev=5005)["found"])
+
+
 class PhaseTest(unittest.TestCase):
 
     def test_phase_of_b_after_a_is_recovered(self):
