@@ -138,3 +138,52 @@ master tracked request takes. DUT loss was about 1 % on both images. Phase 1's h
 **The lead policy under BLE stayed OPEN** in all six readings: `el=3000 [3000..3000]`,
 while 54-165 elastic requests a reading were refused. Extension refusals ran 13-35 a
 reading, never three in a row long enough to tip it.
+
+### 4. Thread leg, attached peer
+
+The 5340 DK is the OpenThread leader, with the DUT in its child table (RLOC16 `0x1002`
+before and after every run). Interleaved master, branch, master, branch. Each run is
+one boot: a 120 s rule-1 reading with the Garmin on #2002, then five in-band
+`ant_disc_phase.py` trials of 60 s (delays 195, 210, 75, 180, 165, which put B in the
+three master bands and on the 221 ms edge).
+
+| Run | DUT ch0 | Garmin | `sched_missed` | Fallbacks | Lead | In-band found (phase ms: first packet) |
+|---|---|---|---|---|---|---|
+| master 1 | 486/486 | 0.82 % | 0 | n/a | n/a | 1/5 (221: 27.2 s) |
+| branch 1 | 477/477 | 1.23 % | 0 | 0 | CONTENDED 16 ms | 2/5 (20: 17.6 s, 221: 17.9 s) |
+| master 2 | 484/485 | 1.02 % | 0 | n/a | n/a | 1/5 (221: 26.5 s) |
+| branch 2 | 485/485 | 0.40 % | 0 | 0 | CONTENDED 16 ms | 2/5 (21: 17.6 s, 221: 17.9 s) |
+
+**The fallback rate under Thread is 0.** In both branch rule-1 readings every tracked
+window went through its booking (`pl` 478/486, `hit` 477/485). `den`, `blk`, `unpl`,
+`busy`, `near` and `nosess` were 0, and so was `eo`. Every extension was refused (0/162,
+0/159) and the policy sat in CONTENDED.
+
+**Discovery beside Thread is 2 of 5 in-band against master's 1 of 5.** The branch found
+the 20 ms phase, which master misses, and found the 221 ms edge 9 s sooner. It missed
+5, 131 and 236 ms on both runs. Measured against the ~26 % listening cap from Stage A,
+this is what the cap allows: every grant is one 10 ms first bite at a 16 ms lead, so in
+60 s a phase may not be listened to at all. Phase 1's (d2) prototype found 4 of 6 under
+Thread at 18-21 s, a different delay set. Nothing here contradicts the cap, and the
+gate.conf bar does not apply.
+
+### 7. Thread's own traffic during a search
+
+From the same boots: 60 one-second pings from the leader to the DUT's RLOC address
+while the DUT was idle, then 120 while it tracked #2002 and searched for absent #9999
+(the start of the 140 s reading after the rule-1 one).
+
+| Run | Idle: received, RTT min/avg/max (ms) | Tracking + search: received, RTT min/avg/max (ms) |
+|---|---|---|
+| master 1 | 60/60, 10/13.8/25 | 120/120, 10/16.8/33 |
+| branch 1 | 60/60, 10/13.0/19 | 120/120, 10/18.2/42 |
+| master 2 | 60/60, 10/12.7/17 | 120/120, 10/16.0/27 |
+| branch 2 | 60/60, 10/13.2/27 | 120/120, 10/18.3/44 |
+
+**No ping was lost on either image, and the child never re-attached.** The RLOC16 was
+the same in every child table, before and after. With a search running, the branch
+adds about 1.5-2 ms to the mean round trip over master (18.2-18.3 against 16.0-16.8 ms)
+and about 10 ms to the worst (42-44 against 27-33 ms). Idle, the two are the same. This
+fits the branch taking more grants per period (a booking for each tracked slot plus
+elastic chunks), each of which the 802.15.4 driver has to wait out. It is a cost, not a
+failure, at n = 2 a side.
