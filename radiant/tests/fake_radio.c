@@ -219,6 +219,8 @@ struct fake_state {
 	} bk[FBK_N];
 	uint32_t book_sessions;
 	uint32_t book_refuse_left;
+	uint32_t book_refuse_long_left;
+	uint32_t book_refuse_long_us;
 	int32_t  cur_bk;  /* the booking the armed op is inside, or -1 */
 	/* The end of the air a completed booked operation still holds, or 0.
 	 * ADR 0021 decision 5: a scan chunk may be armed into it. */
@@ -1850,6 +1852,15 @@ static bool fbk_too_late(uint8_t kind, radiant_time_t t, radiant_time_t open,
 	if (elastic && g.caps.booking && g.caps.min_arm_lead_elastic_us != 0u) {
 		return t < g.now + (radiant_time_t)g.caps.min_arm_lead_elastic_us;
 	}
+	/* Strict arbiter: a fixed arm at the in-grant lead that no held air
+	 * covers (a joiner whose cover was refused) is the gate's too-near
+	 * refusal, DENIED rather than ETIME: the instant is reachable, the air
+	 * is not. */
+	if (!elastic && g.caps.booking && g.arb_tail_us != 0u &&
+	    t >= g.now + (radiant_time_t)ig && too_late(t, close)) {
+		*denied = true;
+		return false;
+	}
 	return too_late(t, close);
 }
 
@@ -1952,9 +1963,35 @@ int radiant_radio_book(const struct radiant_rx_req *rx,
 	} else if (g.book_refuse_left > 0u) {
 		g.book_refuse_left--;
 		g.bk[i].refused = true;
+	} else if (g.book_refuse_long_left > 0u &&
+		   close + (radiant_time_t)fo - open > (radiant_time_t)g.book_refuse_long_us) {
+		/* Refused at its full length. One asking for air past its
+		 * follow-on is placed again at plain length, as the gate does, and
+		 * fits wherever the longer one would have; any other is refused. */
+		g.book_refuse_long_left--;
+		if (rx != NULL && rx->book_tail_us != 0u &&
+		    close + (radiant_time_t)rx->follow_on_us - open <=
+			    (radiant_time_t)g.book_refuse_long_us) {
+			g.bk[i].follow_on_us = rx->follow_on_us;
+			g.bstats.replaced++;
+		} else {
+			g.bk[i].refused = true;
+		}
 	}
 	g.bstats.placed++;
 	return RADIANT_RADIO_OK_RC;
+}
+
+/* The same refusal for a fresh fixed request: refused outright, as the gate
+ * denies a refused ROLE_OP request. */
+static bool fbk_refuse_long_fresh(radiant_time_t open, radiant_time_t close, uint16_t fo)
+{
+	if (g.book_refuse_long_left == 0u ||
+	    close + (radiant_time_t)fo - open <= (radiant_time_t)g.book_refuse_long_us) {
+		return false;
+	}
+	g.book_refuse_long_left--;
+	return true;
 }
 
 void fake_radio_book_arbiter(uint32_t head_us, uint32_t tail_us)
@@ -1965,6 +2002,11 @@ void fake_radio_book_arbiter(uint32_t head_us, uint32_t tail_us)
 
 void fake_radio_book_sessions(uint32_t n) { g.book_sessions = n; }
 void fake_radio_book_refuse_next(uint32_t n) { g.book_refuse_left = n; }
+void fake_radio_book_refuse_long(uint32_t longer_than_us, uint32_t n)
+{
+	g.book_refuse_long_us = longer_than_us;
+	g.book_refuse_long_left = n;
+}
 const struct fake_radio_book_stats *fake_radio_book_stats(void) { return &g.bstats; }
 void fake_radio_fire_book_due(void)
 {
@@ -2417,7 +2459,12 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 			g.held_lo = fbk_lo(g.bk[bk_idx].open);
 			g.held_hi = fbk_hi(g.bk[bk_idx].close, g.bk[bk_idx].follow_on_us);
 		} else if (!in_held) {
-			for (uint32_t k = 0u; k < FBK_N; k++) {
+			if (fbk_refuse_long_fresh(req->t_open, req->t_close,
+						  req->follow_on_us)) {
+				rc = RADIANT_RADIO_EDENIED;
+				g.bstats.fresh_refused++;
+			}
+			for (uint32_t k = 0u; rc == RADIANT_RADIO_OK_RC && k < FBK_N; k++) {
 				if (g.bk[k].used && !g.bk[k].refused &&
 				    fbk_air_overlaps(req->t_open, req->t_close,
 						     req->follow_on_us, g.bk[k].open,
@@ -2468,6 +2515,9 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 		g.bstats.hits++;
 	} else if (g.caps.booking && !g.cur_elastic) {
 		g.bstats.unbooked_fixed++;
+		if (!in_held) {
+			g.bstats.fresh_fixed++;
+		}
 	}
 #endif
 

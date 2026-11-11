@@ -4091,6 +4091,111 @@ ZTEST(radiant_sched, test_d2_r1_pair_with_the_reply_reserve_keeps_both_slots)
 }
 
 /*
+ * Phase 4, F1. Keeping both slots is not enough: each must be kept on air placed
+ * a period ahead, or the channel is back on a request made at the arm lead, the
+ * exposure ADR 0021 exists to remove. Before this, the earlier channel A was
+ * never booked for a pair under ~14 ms: A's booking was put off for B
+ * (join_defer), and at B's completion the pass armed A's next slot as a fresh
+ * request before book_ahead() could book it.
+ *
+ * Bound: at most R1_FRESH_MAX fresh fixed arms in the whole run, the
+ * acquisition (each channel's first slot may be armed before a booking can be
+ * made); every slot after that is booked or rides a held grant. And the earlier
+ * channel is never denied, which is ADR 0013 rule 1.
+ */
+#define R1_FRESH_MAX 2u
+
+ZTEST(radiant_sched, test_d2_r1_pair_is_booked_in_steady_state)
+{
+	static const uint32_t offsets[] = {2000u,  3000u,  5000u,  8000u,
+					   10000u, 12000u, 14000u, 20000u};
+	uint32_t bad = 0u;
+
+	for (uint32_t scan = 0u; scan < 2u; scan++) {
+		for (size_t i = 0u; i < ARRAY_SIZE(offsets); i++) {
+			struct r1_result r;
+			const struct fake_radio_book_stats *bs;
+			bool ok;
+
+			sched_before(NULL);
+			shape_el_lead = SHAPE_EL_LEAD_D2;
+			r1_with_scan = (scan != 0u);
+			log.follow_on_us[0] = 4150u;
+			log.follow_on_us[1] = 4150u;
+			fake_radio_book_arbiter(R1_ARB_HEAD_US, R1_ARB_TAIL_US);
+			r1_measure(offsets[i], &r);
+			bs = fake_radio_book_stats();
+			ok = (r.missed[0] + log.denied_count[0] == 0u) &&
+			     (r.missed[1] + log.denied_count[1] == 0u) &&
+			     bs->fresh_fixed <= R1_FRESH_MAX && r.ok[0] >= 11u &&
+			     r.ok[1] >= 11u;
+			TC_PRINT("f1-booked scan=%u offset=%u: ch0 ok=%u lost=%u ch1 ok=%u "
+				 "lost=%u hits=%u rides=%u fresh=%u fresh_ref=%u "
+				 "overlaps=%u %s\n", scan, offsets[i], r.ok[0],
+				 r.missed[0] + log.denied_count[0], r.ok[1],
+				 r.missed[1] + log.denied_count[1], bs->hits, bs->rides,
+				 bs->fresh_fixed, bs->fresh_refused, bs->overlaps,
+				 ok ? "ok" : "BAD");
+			shape_el_lead = 0u;
+			r1_with_scan = false;
+			bad += ok ? 0u : 1u;
+		}
+	}
+	zassert_equal(0u, bad, "%u of %u cases lost a slot or were not booked", bad,
+		      2u * (uint32_t)ARRAY_SIZE(offsets));
+}
+
+/*
+ * Phase 4, F2. A request made long enough to carry a joiner is refused at that
+ * length (BLE refused longer requests more, Stage B). The refusal must cost the
+ * joiner, never the earlier slot (ADR 0013 rule 1): a joined booking is placed
+ * again at plain length, and no fresh request carries a joiner at all. Before
+ * this, a fresh request stretched to carry B was refused whole and A lost the
+ * slot. R1_F2_REFUSALS long requests refused; B may lose at most that many.
+ */
+#define R1_F2_REFUSALS 4u
+
+ZTEST(radiant_sched, test_d2_a_refused_joined_request_keeps_the_earlier_slot)
+{
+	static const uint32_t offsets[] = {3000u, 5000u};
+	uint32_t bad = 0u;
+
+	for (uint32_t scan = 0u; scan < 2u; scan++) {
+		for (size_t i = 0u; i < ARRAY_SIZE(offsets); i++) {
+			struct r1_result r;
+			const struct fake_radio_book_stats *bs;
+			uint32_t lost0;
+			uint32_t lost1;
+			bool ok;
+
+			sched_before(NULL);
+			shape_el_lead = SHAPE_EL_LEAD_D2;
+			r1_with_scan = (scan != 0u);
+			log.follow_on_us[0] = 4150u;
+			log.follow_on_us[1] = 4150u;
+			fake_radio_book_arbiter(R1_ARB_HEAD_US, R1_ARB_TAIL_US);
+			/* Longer than one window and its reply reserve: only a
+			 * request carrying a joiner (or a scan tail) is refused. */
+			fake_radio_book_refuse_long(SHAPE_WINDOW_US + 4150u + 1000u,
+						    R1_F2_REFUSALS);
+			r1_measure(offsets[i], &r);
+			bs = fake_radio_book_stats();
+			lost0 = r.missed[0] + log.denied_count[0];
+			lost1 = r.missed[1] + log.denied_count[1];
+			ok = lost0 == 0u && lost1 <= R1_F2_REFUSALS && r.ok[0] >= 11u;
+			TC_PRINT("f2-refused scan=%u offset=%u: ch0 ok=%u lost=%u ch1 ok=%u "
+				 "lost=%u replaced=%u fresh_ref=%u fresh=%u %s\n", scan,
+				 offsets[i], r.ok[0], lost0, r.ok[1], lost1, bs->replaced,
+				 bs->fresh_refused, bs->fresh_fixed, ok ? "ok" : "BAD");
+			shape_el_lead = 0u;
+			r1_with_scan = false;
+			bad += ok ? 0u : 1u;
+		}
+	}
+	zassert_equal(0u, bad, "%u of 4 cases cost the earlier slot", bad);
+}
+
+/*
  * The deaf fraction at 1/2/4/8 tracked channels at the CONTENDED lead the gate
  * uses beside Thread (16 ms + head margin + arm lead), with and without the
  * tail. The fake has no other stack: it cannot refuse extensions or cap a grant

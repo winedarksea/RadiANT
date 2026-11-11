@@ -294,6 +294,114 @@ ZTEST(radiant_gate_d2, test_d2_a_refused_tail_booking_is_placed_again_without_th
 	zassert_equal(0u, fake_backend()->on_denied, NULL);
 }
 
+/*
+ * Phase 4, F2. The core books a window carrying a joiner and arms into it in
+ * the same pass, before MPSL has answered, so the session is ROLE_OP when the
+ * refusal comes. It is still placed again at plain length, the staged window is
+ * still served, and the core is told nothing: the refusal costs the joiner's
+ * air, never the earlier slot. Refused again, the window is denied.
+ */
+ZTEST(radiant_gate_d2, test_d2_a_refused_joined_booking_still_serves_the_armed_window)
+{
+	radiant_time_t t = radiant_radio_now() + 60000u;
+	const uint32_t join = 9000u;
+	uint32_t       req0;
+
+	zassert_equal(GATE_BOOK_OK, gate_book_tail(t, t + TRACK_LEN_US, 0u, (uint16_t)join),
+		      NULL);
+	zassert_equal(GATE_PENDING,
+		      gate_acquire(GATE_OP_RX, t, t + TRACK_LEN_US, 0u,
+				   RADIANT_GATE_PRIO_HIGH), NULL);
+	gate_probe_read(&p);
+	zassert_equal(1u, p.book_hit, NULL);
+	zassert_equal(ROLE_OP, p.role[0], NULL);
+	k_msleep(WORK_MS);
+	zassert_equal(0u, fake_mpsl_last_session(), NULL);
+	zassert_equal(TRACK_LEN_US + join + 1250u,
+		      fake_mpsl_last_request_s(0u)->params.normal.length_us, NULL);
+	req0 = fake_mpsl_requests_s(0u);
+
+	(void)fake_mpsl_signal_s(0u, MPSL_TIMESLOT_SIGNAL_BLOCKED);
+	k_msleep(WORK_MS);
+	zassert_equal(req0 + 1u, fake_mpsl_requests_s(0u), "not placed again");
+	zassert_equal(TRACK_LEN_US + 1250u,
+		      fake_mpsl_last_request_s(0u)->params.normal.length_us,
+		      "placed again with the joiner's air");
+	zassert_equal(0u, fake_backend()->on_denied, "the armed window was denied");
+	gate_probe_read(&p);
+	zassert_equal(ROLE_OP, p.role[0], NULL);
+	zassert_true(p.pending, "the staged window was dropped");
+	zassert_equal(0u, p.op_sess, NULL);
+
+	/* The plain request is granted and the window programmed. */
+	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_NONE,
+		      fake_mpsl_signal_s(0u, MPSL_TIMESLOT_SIGNAL_START), NULL);
+	zassert_equal(1u, fake_backend()->on_grant, "the armed window was not programmed");
+	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_END,
+		      fake_mpsl_signal_s(0u, MPSL_TIMESLOT_SIGNAL_TIMER0), NULL);
+	assert_invariant();
+}
+
+ZTEST(radiant_gate_d2, test_d2_a_joined_booking_refused_twice_denies_the_armed_window)
+{
+	radiant_time_t t = radiant_radio_now() + 60000u;
+	uint32_t       req0;
+
+	zassert_equal(GATE_BOOK_OK, gate_book_tail(t, t + TRACK_LEN_US, 0u, 9000u), NULL);
+	zassert_equal(GATE_PENDING,
+		      gate_acquire(GATE_OP_RX, t, t + TRACK_LEN_US, 0u,
+				   RADIANT_GATE_PRIO_HIGH), NULL);
+	k_msleep(WORK_MS);
+	req0 = fake_mpsl_requests_s(0u);
+	(void)fake_mpsl_signal_s(0u, MPSL_TIMESLOT_SIGNAL_BLOCKED);
+	k_msleep(WORK_MS);
+	(void)fake_mpsl_signal_s(0u, MPSL_TIMESLOT_SIGNAL_BLOCKED);
+	k_msleep(WORK_MS);
+	zassert_equal(req0 + 1u, fake_mpsl_requests_s(0u), "placed a third time");
+	zassert_equal(1u, fake_backend()->on_denied, "the refusal never reached the core");
+	gate_probe_read(&p);
+	zassert_equal(ROLE_NONE, p.role[0], NULL);
+	zassert_false(p.pending, NULL);
+	assert_invariant();
+}
+
+/* A fresh request whose session last held a tailed booking is not shortened
+ * when refused: its whole length is the operation's. */
+ZTEST(radiant_gate_d2, test_d2_a_refused_fresh_request_is_not_placed_again)
+{
+	radiant_time_t t = radiant_radio_now() + 60000u;
+	uint32_t       req0;
+	uint32_t       denied0;
+
+	/* Leave session 0 with a stale tail: book, arm, run, end. */
+	zassert_equal(GATE_BOOK_OK, gate_book_tail(t, t + TRACK_LEN_US, 0u, 9000u), NULL);
+	zassert_equal(GATE_PENDING,
+		      gate_acquire(GATE_OP_RX, t, t + TRACK_LEN_US, 0u,
+				   RADIANT_GATE_PRIO_HIGH), NULL);
+	k_msleep(WORK_MS);
+	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_NONE,
+		      fake_mpsl_signal_s(0u, MPSL_TIMESLOT_SIGNAL_START), NULL);
+	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_END,
+		      fake_mpsl_signal_s(0u, MPSL_TIMESLOT_SIGNAL_TIMER0), NULL);
+	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_NONE,
+		      fake_mpsl_signal_s(0u, MPSL_TIMESLOT_SIGNAL_SESSION_IDLE), NULL);
+	k_msleep(WORK_MS);
+
+	t = radiant_radio_now() + 60000u;
+	denied0 = fake_backend()->on_denied;
+	zassert_equal(GATE_PENDING,
+		      gate_acquire(GATE_OP_RX, t, t + TRACK_LEN_US, 4150u,
+				   RADIANT_GATE_PRIO_HIGH), NULL);
+	k_msleep(WORK_MS);
+	zassert_equal(0u, fake_mpsl_last_session(), "not the session with the stale tail");
+	req0 = fake_mpsl_requests_s(0u);
+	(void)fake_mpsl_signal_s(0u, MPSL_TIMESLOT_SIGNAL_BLOCKED);
+	k_msleep(WORK_MS);
+	zassert_equal(req0, fake_mpsl_requests_s(0u), "a fresh request was placed again");
+	zassert_equal(denied0 + 1u, fake_backend()->on_denied, "the refusal was not delivered");
+	assert_invariant();
+}
+
 ZTEST(radiant_gate_d2, test_d2_a_booking_granted_with_nothing_staged_bypasses_the_backend)
 {
 	radiant_time_t t = radiant_radio_now() + SCAN_LEAD_US;

@@ -396,6 +396,10 @@ struct fake_radio_book_stats {
 	uint32_t rides;          /* fixed arms served from a booking's held air */
 	uint32_t fresh_refused;  /* strict: fresh fixed arms refused for air a
 				  * booking already holds */
+	uint32_t fresh_fixed;    /* fixed arms that were fresh requests: in no
+				  * booking and riding no air a grant holds */
+	uint32_t replaced;       /* bookings refused at full length and placed
+				  * again at plain length */
 };
 /* The strict arbiter: every fixed request (fresh or booked) holds its air plus
  * head_us before and tail_us after, first come first served against all the
@@ -407,6 +411,12 @@ void fake_radio_book_sessions(uint32_t n);
 /* Refuse the next n bookings (the arbiter's BLOCKED); each refuses the arm
  * that comes for it with EDENIED. */
 void fake_radio_book_refuse_next(uint32_t n);
+/* Refuse the next n fixed requests (bookings or fresh arms, strict arbiter)
+ * whose air from open to close + follow-on (+ book_tail_us) is longer than
+ * longer_than_us, as BLE refused longer requests more (Stage B). A booking whose
+ * plain length (without book_tail_us) fits is placed again at it, as the gate
+ * does, losing only the tail or joiner's air; anything else is refused. */
+void fake_radio_book_refuse_long(uint32_t longer_than_us, uint32_t n);
 const struct fake_radio_book_stats *fake_radio_book_stats(void);
 /* A booking's start is near, as the gate's timer would say. */
 void fake_radio_fire_book_due(void);
