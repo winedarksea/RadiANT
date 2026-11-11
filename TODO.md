@@ -479,10 +479,8 @@ Bridge and tools:
 - `ant_compare.py:640` and `ant_sens.py:561` still show unlabelled 0x60 upper bounds.
 - `radiant_sched.h` still says "Zero-cost on both nRF builds".
 
-## Linux (Bluefin) Open Items
-Problems to fix:
-
-The shipped udev rule doesn't grant access properly. 99-ant-usb.rules sets uaccess after systemd's 73-seat-late.rules has already run, so the permission step never fires. A dry run confirmed it: named 70-, the step fires; named 99-, it doesn't. Without a working rule, a normal user gets "Access denied". SSH sessions have no seat, so uaccess shouldn't help them even once renamed; they'd need a group or mode rule.
-A kernel driver does claim the device, although the rule file and ant_probe.py both say nothing does. usb_serial_simple binds it as /dev/ttyUSB0, so any libusb app that doesn't detach the driver first gets "Resource busy". The repo's tools detach it, and ANT also works over /dev/ttyUSB0 for users in dialout.
+## Device Testing Open Items
 
 Plug the tablet into the nRF5340 DK's USB port. It can log every command the ANT USB Service sends while enumerated, so we'd see what it asks for and what we refuse.
+
+Apple testing round 2
