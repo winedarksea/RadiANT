@@ -115,7 +115,12 @@
 >   only for bookings (F2). Fixed: a bounded window is booked before it is armed,
 >   the booking carries the joiner, no fresh request carries one, and the gate
 >   places a refused joined booking again at plain length whether or not the core
->   has armed into it. Still no third session and no HAL change.
+>   has armed into it. Still no third session and no HAL change. On air, fresh
+>   tracked arms went from 25-36 % of the session to 0 at 5, 8 and 12 ms on
+>   `gate.conf`, at 5 and 10 ms under BLE and at 5 ms beside Thread, interleaved
+>   with the image before. Losses were at the reference's level on both images: with
+>   no scan the fresh request had a period of notice, so the defect's measured cost
+>   was small.
 > - **"Requests reach MPSL oldest first"** holds within one work-queue run. A request
 >   held back for the other session's running timeslot (`defer_live`) or for
 >   `-NRF_EAGAIN` lets a younger one be placed first (F3, not fixed).
