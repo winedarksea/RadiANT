@@ -203,6 +203,26 @@ extern "C" {
  * most two requests; the table is larger so an entry whose operation has just
  * run does not block the next booking before it ages out. */
 #define RADIANT_SCHED_BOOK_MAX 4u
+/*
+ * R1 JOIN (phase-3c). A committed operation that starts less than JOIN_GAP
+ * after the air an earlier one will hold (its window plus follow-on reserve)
+ * cannot have a request of its own: the two requests overlap once the gate adds
+ * its margins (250 us head; 250 tail + 750 end after the follow-on) and MPSL
+ * its 0.2-0.4 ms guard between timeslots, 1.65 ms in all, and the arbiter
+ * refuses whichever reached it second. So the earlier operation's request is
+ * made long enough to cover it, and the later one is armed into that grant
+ * from the earlier one's completion, as a follow-on is. 2500 leaves 0.85 ms
+ * over the 1.65. JOIN_SLACK is added past the later operation's own air, for a
+ * guard that widens after the request was made. JOIN_MAX bounds one request.
+ * JOIN_DEFER: an operation is not booked while another one that started (or
+ * starts) within this of now is still in flight or committed behind it, so
+ * that the neighbour's next slot is known when this one's is booked (ANT+
+ * channels repeat, and two profiles' periods differ by up to ~3.4 ms a period).
+ */
+#define RADIANT_SCHED_JOIN_GAP_US   2500u
+#define RADIANT_SCHED_JOIN_SLACK_US 300u
+#define RADIANT_SCHED_JOIN_MAX_US   30000u
+#define RADIANT_SCHED_JOIN_DEFER_US 12000u
 #endif
 
 /*
@@ -523,6 +543,11 @@ struct radiant_sched_stats {
 	uint32_t book_orphan;
 	/* ADR 0021 decision 5: scan chunks armed into a booking's tail. */
 	uint32_t scan_tail;
+	/* Phase 3c R1 join: requests (bookings or fresh arms) made long enough
+	 * to carry a later committed operation, and bookings put off until the
+	 * neighbour behind them had posted its next slot. */
+	uint32_t join;
+	uint32_t join_defer;
 #endif
 };
 

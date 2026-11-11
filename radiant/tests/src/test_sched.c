@@ -4038,6 +4038,59 @@ ZTEST(radiant_sched, test_d2_r1_with_a_real_follow_on)
 }
 
 /*
+ * R1 with the reply reserve AND the arbiter's real margins (phase-3c.md). The
+ * MPSL gate holds a tracked request's window plus 250 us before it and, after
+ * its 4150 us follow-on, 250 us tail and 750 us end margin, and MPSL keeps up to
+ * 0.4 ms between two timeslots: a pair under ~6.6 ms apart overlaps, and the
+ * arbiter refuses whichever request reached it second, fresh or booked. On the
+ * bench that cost B 70 % and, through the gate's placement order, A 33.5 %.
+ *
+ * Both slots must be kept at every offset: the later window rides the earlier
+ * one's grant rather than asking for air the earlier one already holds. Up to
+ * 15 ms, where the two requests no longer touch, as the control.
+ */
+#define R1_ARB_HEAD_US 250u
+#define R1_ARB_TAIL_US 1400u /* 250 tail + 750 end margin + MPSL's 0.4 ms guard */
+
+ZTEST(radiant_sched, test_d2_r1_pair_with_the_reply_reserve_keeps_both_slots)
+{
+	static const uint32_t offsets[] = {2000u, 5000u, 8000u, 11000u, 12000u, 15000u};
+
+	for (uint32_t scan = 0u; scan < 2u; scan++) {
+		for (size_t i = 0u; i < ARRAY_SIZE(offsets); i++) {
+			struct r1_result r;
+			const struct fake_radio_book_stats *bs;
+
+			sched_before(NULL);
+			shape_el_lead = SHAPE_EL_LEAD_D2;
+			r1_with_scan = (scan != 0u);
+			log.follow_on_us[0] = 4150u;
+			log.follow_on_us[1] = 4150u;
+			fake_radio_book_arbiter(R1_ARB_HEAD_US, R1_ARB_TAIL_US);
+			r1_measure(offsets[i], &r);
+			bs = fake_radio_book_stats();
+			TC_PRINT("r1-arb scan=%u offset=%u: ch0 ok=%u missed=%u denied=%u "
+				 "ch1 ok=%u missed=%u denied=%u overlaps=%u fresh_ref=%u "
+				 "rides=%u\n", scan, offsets[i], r.ok[0], r.missed[0],
+				 log.denied_count[0], r.ok[1], r.missed[1],
+				 log.denied_count[1], bs->overlaps, bs->fresh_refused,
+				 bs->rides);
+			shape_el_lead = 0u;
+			r1_with_scan = false;
+			zassert_equal(0u, r.missed[0] + log.denied_count[0],
+				      "scan=%u offset %u: the earlier channel lost %u",
+				      scan, offsets[i], r.missed[0] + log.denied_count[0]);
+			zassert_equal(0u, r.missed[1] + log.denied_count[1],
+				      "scan=%u offset %u: the later channel lost %u",
+				      scan, offsets[i], r.missed[1] + log.denied_count[1]);
+			zassert_true(r.ok[0] >= 11u && r.ok[1] >= 11u,
+				     "scan=%u offset %u: ok %u/%u", scan, offsets[i],
+				     r.ok[0], r.ok[1]);
+		}
+	}
+}
+
+/*
  * The deaf fraction at 1/2/4/8 tracked channels at the CONTENDED lead the gate
  * uses beside Thread (16 ms + head margin + arm lead), with and without the
  * tail. The fake has no other stack: it cannot refuse extensions or cap a grant

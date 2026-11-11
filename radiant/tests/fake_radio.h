@@ -393,7 +393,15 @@ struct fake_radio_book_stats {
 	uint32_t overlaps;       /* bookings refused: another holds that air */
 	uint32_t fo_min;         /* smallest follow-on a booking asked for */
 	uint32_t fo_max;         /* largest follow-on a booking asked for */
+	uint32_t rides;          /* fixed arms served from a booking's held air */
+	uint32_t fresh_refused;  /* strict: fresh fixed arms refused for air a
+				  * booking already holds */
 };
+/* The strict arbiter: every fixed request (fresh or booked) holds its air plus
+ * head_us before and tail_us after, first come first served against all the
+ * others, as MPSL does with the gate's margins. Off (the default, and after
+ * every reset) while tail_us is 0. */
+void fake_radio_book_arbiter(uint32_t head_us, uint32_t tail_us);
 /* How many request slots the backend has (default 2: a two-session gate). */
 void fake_radio_book_sessions(uint32_t n);
 /* Refuse the next n bookings (the arbiter's BLOCKED); each refuses the arm

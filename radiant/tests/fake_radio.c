@@ -224,6 +224,17 @@ struct fake_state {
 	 * ADR 0021 decision 5: a scan chunk may be armed into it. */
 	radiant_time_t held_tail_end;
 	bool     cur_elastic;
+	/*
+	 * The strict arbiter (fake_radio_book_arbiter()), off while arb_tail_us
+	 * is 0. Every fixed-class request then holds its air plus the gate's
+	 * margins, first come first served against every other request, fresh
+	 * or booked, as MPSL does (Phase 0c F2): [open - head, close + follow-on
+	 * + tail]. held_lo/held_hi are the air the current fixed request holds.
+	 */
+	uint32_t       arb_head_us;
+	uint32_t       arb_tail_us;
+	radiant_time_t held_lo;
+	radiant_time_t held_hi;
 	struct fake_radio_book_stats bstats;
 #endif
 };
@@ -1741,6 +1752,26 @@ static uint32_t fbk_sessions_used(void)
 	return n;
 }
 
+/* The strict arbiter's view of a request's air: the gate's head margin before
+ * it, and its tail and end margins plus MPSL's own guard after it. */
+static radiant_time_t fbk_lo(radiant_time_t open)
+{
+	return (open > (radiant_time_t)g.arb_head_us) ? open - (radiant_time_t)g.arb_head_us
+						      : 0u;
+}
+
+static radiant_time_t fbk_hi(radiant_time_t close, uint32_t follow_on_us)
+{
+	return close + (radiant_time_t)follow_on_us + (radiant_time_t)g.arb_tail_us;
+}
+
+static bool fbk_air_overlaps(radiant_time_t a_open, radiant_time_t a_close, uint32_t a_fo,
+			     radiant_time_t b_open, radiant_time_t b_close, uint32_t b_fo)
+{
+	return fbk_lo(a_open) < fbk_hi(b_close, b_fo) &&
+	       fbk_lo(b_open) < fbk_hi(a_close, a_fo);
+}
+
 /* The booking an arm lies inside, or -1. */
 static int32_t fbk_match(uint8_t kind, radiant_time_t open, radiant_time_t close,
 			 uint16_t follow_on_us)
@@ -1801,6 +1832,15 @@ static bool fbk_too_late(uint8_t kind, radiant_time_t t, radiant_time_t open,
 		}
 		*bk_out = i;
 		return t < g.now + (radiant_time_t)ig;
+	}
+	/* A fixed operation inside the air a completed booked operation still
+	 * holds rides that grant, as the gate's in-grant test serves it: an R1
+	 * neighbour joined to the booking in front of it. */
+	if (!elastic && g.caps.booking && g.held_tail_end != 0u &&
+	    close + (radiant_time_t)follow_on_us <= g.held_tail_end &&
+	    t >= g.now + (radiant_time_t)ig) {
+		g.bstats.rides++;
+		return false;
 	}
 	if (elastic && g.caps.booking && g.held_tail_end != 0u &&
 	    close <= g.held_tail_end && t >= g.now + (radiant_time_t)ig) {
@@ -1886,11 +1926,21 @@ int radiant_radio_book(const struct radiant_rx_req *rx,
 	 * already holds, its follow-on and tail included, is refused. */
 	for (uint32_t k = 0u; k < FBK_N; k++) {
 		if (k != i && g.bk[k].used && !g.bk[k].refused &&
-		    open <= g.bk[k].close + (radiant_time_t)g.bk[k].follow_on_us &&
-		    close + (radiant_time_t)fo >= g.bk[k].open) {
+		    (g.arb_tail_us != 0u
+			     ? fbk_air_overlaps(open, close, fo, g.bk[k].open,
+						g.bk[k].close, g.bk[k].follow_on_us)
+			     : (open <= g.bk[k].close +
+						(radiant_time_t)g.bk[k].follow_on_us &&
+				close + (radiant_time_t)fo >= g.bk[k].open))) {
 			g.bk[i].refused = true;
 			g.bstats.overlaps++;
 		}
+	}
+	/* Strict: and the air the current fixed request holds. */
+	if (!g.bk[i].refused && g.arb_tail_us != 0u && g.held_hi > g.now &&
+	    fbk_lo(open) < g.held_hi && g.held_lo < fbk_hi(close, fo)) {
+		g.bk[i].refused = true;
+		g.bstats.overlaps++;
 	}
 	if (g.bk[i].refused) {
 		/* Counted above. */
@@ -1905,6 +1955,12 @@ int radiant_radio_book(const struct radiant_rx_req *rx,
 	}
 	g.bstats.placed++;
 	return RADIANT_RADIO_OK_RC;
+}
+
+void fake_radio_book_arbiter(uint32_t head_us, uint32_t tail_us)
+{
+	g.arb_head_us = head_us;
+	g.arb_tail_us = tail_us;
 }
 
 void fake_radio_book_sessions(uint32_t n) { g.book_sessions = n; }
@@ -2308,6 +2364,15 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 			rc = RADIANT_RADIO_EINVAL;
 		}
 	}
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+	/* Decided before this arm moves the reserve: does it ride air a grant
+	 * already holds (a follow-on, or a neighbour joined to a booking)? */
+	const bool in_held =
+		req != NULL &&
+		((g.reserve_end != 0u && req->t_close <= g.reserve_end) ||
+		 (g.held_tail_end != 0u &&
+		  req->t_close + (radiant_time_t)req->follow_on_us <= g.held_tail_end));
+#endif
 	if (rc == RADIANT_RADIO_OK_RC) {
 		if (req->t_open == RADIANT_TIME_NEVER ||
 		    req->t_close == RADIANT_TIME_NEVER) {
@@ -2338,6 +2403,37 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 			rc = RADIANT_RADIO_ENOTSUP;
 		}
 	}
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+	/*
+	 * The strict arbiter. A booked arm holds its booking's air; an arm
+	 * riding held air asks for nothing; any other fixed arm is a fresh
+	 * request, refused if a live booking already holds any of its air (MPSL
+	 * would answer BLOCKED; the scheduler scores that the same as this
+	 * synchronous refusal), and otherwise holds its own.
+	 */
+	if (rc == RADIANT_RADIO_OK_RC && g.arb_tail_us != 0u && g.caps.booking &&
+	    (req->flags & RADIANT_RX_ELASTIC) == 0u) {
+		if (bk_idx >= 0) {
+			g.held_lo = fbk_lo(g.bk[bk_idx].open);
+			g.held_hi = fbk_hi(g.bk[bk_idx].close, g.bk[bk_idx].follow_on_us);
+		} else if (!in_held) {
+			for (uint32_t k = 0u; k < FBK_N; k++) {
+				if (g.bk[k].used && !g.bk[k].refused &&
+				    fbk_air_overlaps(req->t_open, req->t_close,
+						     req->follow_on_us, g.bk[k].open,
+						     g.bk[k].close, g.bk[k].follow_on_us)) {
+					rc = RADIANT_RADIO_EDENIED;
+					g.bstats.fresh_refused++;
+					break;
+				}
+			}
+			if (rc == RADIANT_RADIO_OK_RC) {
+				g.held_lo = fbk_lo(req->t_open);
+				g.held_hi = fbk_hi(req->t_close, req->follow_on_us);
+			}
+		}
+	}
+#endif
 
 	rec->rc = rc;
 	count_rc(rc);

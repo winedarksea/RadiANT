@@ -261,6 +261,13 @@ static struct {
 		/* Where this booking's air ends, if it asked for a scan tail
 		 * (ADR 0021 decision 5); 0 if it did not. */
 		radiant_time_t                   tail_end;
+		/* Phase 3c R1 join: where the air ends once the committed
+		 * operations joined to it are covered, or 0 if none is. `ch` is
+		 * then the operation the request is for. `ride` marks an entry
+		 * that is not a booking at all but a fresh arm's request made
+		 * long enough to carry its joiners. */
+		radiant_time_t                   air_end;
+		bool                             ride;
 	} bk[RADIANT_SCHED_BOOK_MAX];
 	/* Where the last fixed-class operation's air ends, follow-on reserve
 	 * included (close + follow_on_us). A scan chunk placed in the other
@@ -499,6 +506,23 @@ static radiant_time_t book_lead(void)
 	return in_grant_lead() + (radiant_time_t)RADIANT_SCHED_BOOK_ARM_US;
 }
 
+/* A bounded operation: a receive window that is not a scan, or a transmit. */
+static bool slot_bounded(const struct sched_slot *sl)
+{
+	return (sl->kind == (uint8_t)SLOT_RX && !sl->continuous) ||
+	       sl->kind == (uint8_t)SLOT_TX;
+}
+
+/* Where a bounded operation's air ends: its close (a transmit's instant) plus
+ * the follow-on reserve it asks to have held. */
+static radiant_time_t slot_air_end(const struct sched_slot *sl)
+{
+	const radiant_time_t last =
+		(sl->kind == (uint8_t)SLOT_TX) ? sl->t_start : sl->t_end;
+
+	return last + (radiant_time_t)sl->follow_on_us;
+}
+
 static bool is_booked(const struct sched_slot *sl)
 {
 	const uint8_t idx = (uint8_t)(sl - &s.ch[0]);
@@ -507,7 +531,16 @@ static bool is_booked(const struct sched_slot *sl)
 		return false;
 	}
 	for (uint32_t i = 0u; i < RADIANT_SCHED_BOOK_MAX; i++) {
-		if (!s.bk[i].used || s.bk[i].kind != sl->kind) {
+		if (!s.bk[i].used) {
+			continue;
+		}
+		/* Joined to another operation's request (phase 3c): armed into
+		 * that grant from its completion, at the booked lead. */
+		if (s.bk[i].air_end != 0u && s.bk[i].ch != idx && slot_bounded(sl) &&
+		    sl->t_start > s.bk[i].open && slot_air_end(sl) <= s.bk[i].air_end) {
+			return true;
+		}
+		if (s.bk[i].ride || s.bk[i].kind != sl->kind) {
 			continue;
 		}
 		if (sl->kind == (uint8_t)SLOT_RX && !sl->continuous &&
@@ -523,14 +556,96 @@ static bool is_booked(const struct sched_slot *sl)
 	return false;
 }
 
-/* Forget bookings whose air is over. */
+/* Forget bookings whose air is over, joined air included. */
 static void bk_prune(radiant_time_t now)
 {
 	for (uint32_t i = 0u; i < RADIANT_SCHED_BOOK_MAX; i++) {
-		if (s.bk[i].used && s.bk[i].close < now) {
+		if (s.bk[i].used && t_max(s.bk[i].close, s.bk[i].air_end) < now) {
 			s.bk[i].used = false;
 		}
 	}
+}
+
+/*
+ * The operation a joined request was for did not get its grant (denied,
+ * aborted, failed), so nothing will carry its joiners: they are no longer
+ * covered, and are booked or armed on their own from here. A ride entry is
+ * nothing but that cover and goes; a real booking keeps its own air.
+ */
+static void bk_drop_join(uint8_t ch)
+{
+	for (uint32_t i = 0u; i < RADIANT_SCHED_BOOK_MAX; i++) {
+		if (s.bk[i].used && s.bk[i].air_end != 0u && s.bk[i].ch == ch) {
+			if (s.bk[i].ride) {
+				s.bk[i].used = false;
+			}
+			s.bk[i].air_end = 0u;
+		}
+	}
+}
+
+/*
+ * PHASE 3C, R1 JOIN. Where the air an operation opening at `open` should end,
+ * given that it holds up to `air_end` for itself: past every committed
+ * operation behind it that would start within RADIANT_SCHED_JOIN_GAP_US of that
+ * air, since a request of its own would overlap this one's and the arbiter
+ * would refuse one of the two. Chains: a joined operation's air is covered too,
+ * so a third behind it joins as well. `air_end` back unchanged if none joins.
+ */
+static radiant_time_t join_end(uint8_t c, radiant_time_t open, radiant_time_t air_end)
+{
+	radiant_time_t end = air_end;
+	bool           grew = true;
+
+	while (grew) {
+		grew = false;
+		for (uint32_t k = 0u; k < RADIANT_SCHED_MAX_CHANNELS; k++) {
+			const struct sched_slot *m = &s.ch[k];
+			radiant_time_t           m_end;
+
+			if ((uint8_t)k == c || !slot_bounded(m) || m->in_flight ||
+			    m->t_start <= open ||
+			    m->t_start >= t_fwd(end, RADIANT_SCHED_JOIN_GAP_US)) {
+				continue;
+			}
+			m_end = t_fwd(slot_air_end(m), RADIANT_SCHED_JOIN_SLACK_US);
+			if (m_end <= end || m_end - open > RADIANT_SCHED_JOIN_MAX_US) {
+				continue;
+			}
+			end = m_end;
+			grew = true;
+		}
+	}
+	return end;
+}
+
+/*
+ * Put off booking channel c while another bounded operation that started, or
+ * starts, close to now is still in flight or committed: c has usually just
+ * completed, that neighbour is next, and ITS next slot is posted only when it
+ * completes. Booking c now would make c's request before the neighbour's next
+ * slot is known, so the neighbour could not join it and its own request would
+ * be refused. The neighbour's completion books c instead, a few milliseconds
+ * later and still most of a period ahead. Never for an operation that is itself
+ * close.
+ */
+static bool join_defer(uint8_t c, radiant_time_t now)
+{
+	const struct sched_slot *cs = &s.ch[c];
+
+	if (cs->t_start <= t_fwd(now, 3u * RADIANT_SCHED_JOIN_DEFER_US)) {
+		return false;
+	}
+	for (uint32_t k = 0u; k < RADIANT_SCHED_MAX_CHANNELS; k++) {
+		const struct sched_slot *m = &s.ch[k];
+
+		if ((uint8_t)k == c || !slot_bounded(m) || slot_air_end(m) < now ||
+		    m->t_start > t_fwd(now, RADIANT_SCHED_JOIN_DEFER_US)) {
+			continue;
+		}
+		return true;
+	}
+	return false;
 }
 
 /* True if anything is searching: a tail is air nobody else would use. */
@@ -602,6 +717,20 @@ static radiant_time_t booked_tail_end(const struct sched_slot *sl, radiant_time_
 	return 0u;
 }
 
+/* The joined air of the booking this armed window lies in, or 0. */
+static radiant_time_t booked_air_end(const struct sched_slot *sl, radiant_time_t open,
+				     radiant_time_t close)
+{
+	for (uint32_t i = 0u; i < RADIANT_SCHED_BOOK_MAX; i++) {
+		if (s.bk[i].used && !s.bk[i].ride && s.bk[i].kind == (uint8_t)SLOT_RX &&
+		    s.bk[i].fmt == sl->fmt && s.bk[i].rf == sl->rf_index &&
+		    open >= s.bk[i].open && close <= s.bk[i].close) {
+			return s.bk[i].air_end;
+		}
+	}
+	return 0u;
+}
+
 /*
  * Book slot c with the backend: the air exactly as the arm would ask for it,
  * widened to whatever bounded receive could merge into its window (rule 4's
@@ -615,6 +744,7 @@ static int book_slot(uint8_t c)
 	radiant_time_t     open;
 	radiant_time_t     close;
 	radiant_time_t     tail_end = 0u;
+	radiant_time_t     join_air = 0u;
 	int                rc;
 
 	for (uint32_t i = 0u; i < RADIANT_SCHED_BOOK_MAX; i++) {
@@ -656,9 +786,21 @@ static int book_slot(uint8_t c)
 		req.n_filters = sl->n_filters;
 		req.t_open = open;
 		req.t_close = close;
-		{
+		/* Phase 3c: a committed operation close behind joins this
+		 * booking as its tail, so it is carried by this grant rather than
+		 * refused by the arbiter. A joined booking asks no scan tail: the
+		 * joiner is what follows it. The gate places a refused tailed
+		 * booking again at plain length, so a refusal costs the joiner,
+		 * never this slot. */
+		join_air = join_end(c, open, close + (radiant_time_t)fo);
+		if (join_air > close + (radiant_time_t)fo) {
+			req.follow_on_us = fo;
+			req.book_tail_us =
+				(uint16_t)(join_air - (close + (radiant_time_t)fo));
+		} else {
 			const uint16_t tail = scan_tail_for(c, radiant_radio_now(), fo);
 
+			join_air = 0u;
 			req.follow_on_us = fo;
 			req.book_tail_us = tail;
 			if (tail != 0u) {
@@ -695,7 +837,12 @@ static int book_slot(uint8_t c)
 		s.bk[free_i].open = open;
 		s.bk[free_i].close = close;
 		s.bk[free_i].tail_end = tail_end;
+		s.bk[free_i].air_end = join_air;
+		s.bk[free_i].ride = false;
 		s.stats.booked++;
+		if (join_air != 0u) {
+			s.stats.join++;
+		}
 	} else if (rc == RADIANT_RADIO_EBUSY) {
 		s.stats.book_busy++;
 	} else {
@@ -749,6 +896,10 @@ static void book_ahead(radiant_time_t now)
 			c = next_committed(after, -1);
 		}
 		if (c < 0) {
+			return;
+		}
+		if (join_defer((uint8_t)c, now)) {
+			s.stats.join_defer++;
 			return;
 		}
 		if (book_slot((uint8_t)c) != RADIANT_RADIO_OK_RC) {
@@ -978,6 +1129,10 @@ static void end_armed(enum radiant_sched_done why)
 		s.reserve_end = 0u;
 #if defined(CONFIG_RADIANT_SCHED_BOOKING)
 		s.tail_end = 0u;
+		/* No grant, so nothing carries its joiners. */
+		if (n > 0u) {
+			bk_drop_join(list[0]);
+		}
 #endif
 	}
 
@@ -1057,8 +1212,12 @@ static bool abort_armed(uint8_t skip_ch)
 		s.reserve_end = 0u;
 	}
 #if defined(CONFIG_RADIANT_SCHED_BOOKING)
-	/* An aborted operation's air is not there to arm a chunk into. */
+	/* An aborted operation's air is not there to arm a chunk into, nor to
+	 * carry what joined it. */
 	s.tail_end = 0u;
+	if (n > 0u && !s.in_radio_cb) {
+		bk_drop_join(list[0]);
+	}
 #endif
 
 	(void)radiant_radio_abort();
@@ -1117,6 +1276,12 @@ static void pass(void);
  */
 static enum step arm_failed(uint8_t ch, int rc)
 {
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+	/* A consumed refusal: nothing will carry whatever joined this one. */
+	if (rc != RADIANT_RADIO_EBUSY && rc != RADIANT_RADIO_ESTATE) {
+		bk_drop_join(ch);
+	}
+#endif
 	switch (rc) {
 	case RADIANT_RADIO_EBUSY:
 		/* Backend resolved a race with a callback about to consume the
@@ -1268,6 +1433,9 @@ static enum step arm_rx_window(uint8_t leader, radiant_time_t earliest,
 	uint32_t             op = 0u;
 	uint8_t              i;
 	int                  rc;
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+	radiant_time_t       join_air;
+#endif
 
 	if (lead->n_filters == 0u || lead->n_filters > mf) {
 		/* More addresses than this backend can match at once. Say so
@@ -1448,6 +1616,24 @@ static enum step arm_rx_window(uint8_t leader, radiant_time_t earliest,
 	if (lead->continuous && booking()) {
 		flags |= RADIANT_RX_ELASTIC;
 	}
+	/*
+	 * Phase 3c, R1 join, for a window armed as a FRESH request (no booking,
+	 * not inside held air): its request carries the committed operations
+	 * close behind it, as book_slot() does for a booking. Never for a
+	 * window armed into a booking or a held reserve - its air is already
+	 * placed, and asking past it would take the arm off that air and lose
+	 * it to the too-near refusal.
+	 */
+	join_air = 0u;
+	if (booking() && !lead->continuous && !is_booked(lead) && !in_reserve(lead)) {
+		const radiant_time_t own = close + (radiant_time_t)follow_on;
+		const radiant_time_t j = join_end(leader, open, own);
+
+		if (j > own && (j - close) <= (radiant_time_t)UINT16_MAX) {
+			join_air = j;
+			follow_on = (uint16_t)(j - close);
+		}
+	}
 #endif
 
 	memset(&req, 0, sizeof(req));
@@ -1488,6 +1674,31 @@ static enum step arm_rx_window(uint8_t leader, radiant_time_t earliest,
 		if (s.tail_end != 0u) {
 			s.fix_end = t_max(s.fix_end, s.tail_end);
 		}
+		/* A booking carrying joiners holds its air to their end; no scan
+		 * chunk opens before that timeslot has ended either. */
+		s.fix_end = t_max(s.fix_end, booked_air_end(lead, open, close));
+	}
+	/* The fresh request just made carries its joiners: record that cover so
+	 * they are armed into this grant at the booked lead and never booked on
+	 * their own. With the table full they still ride it, through the
+	 * reserve (in_reserve()), only booking_ahead does not know. */
+	if (join_air != 0u) {
+		for (uint32_t b = 0u; b < RADIANT_SCHED_BOOK_MAX; b++) {
+			if (!s.bk[b].used) {
+				memset(&s.bk[b], 0, sizeof(s.bk[b]));
+				s.bk[b].used = true;
+				s.bk[b].ride = true;
+				s.bk[b].kind = (uint8_t)SLOT_RX;
+				s.bk[b].ch = leader;
+				s.bk[b].fmt = lead->fmt;
+				s.bk[b].rf = lead->rf_index;
+				s.bk[b].open = open;
+				s.bk[b].close = close;
+				s.bk[b].air_end = join_air;
+				break;
+			}
+		}
+		s.stats.join++;
 	}
 #endif
 	phy_armed(lead->fmt);
