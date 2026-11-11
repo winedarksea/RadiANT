@@ -233,7 +233,10 @@ after-fix pair's 1 and 2 failures did not repeat interleaved.
 | Gate ztest, placement order | red before, green after | Bluefin, this session |
 | Sched ztest, R1 with the reply reserve | red before (5 ms: later channel denied 13/13), green after, 12 of 12 cases; deferral mutation-checked (removing it: later channel 6/12 denied) | Bluefin |
 | Twister, Bluefin | **PASS**, 4332 of 4332 in 14 scenarios at 1090d52, counts OK; total floor raised 4327 -> 4332 | `twister.txt` |
-<!-- CLOSEOUT -->
+| Three suites, 5340 DK | **NOT RUN.** Queued behind zero-cost; never started (see below) | |
+| Zero cost against c4e1ef8 | **NOT RUN.** Free physical memory sat at 7.2-7.3 GB (available 7.4 GB of 31 GB) for over an hour after the bench, under the 8 GB floor every build here waits for; the queued run was stopped rather than left unattended. The change is in `radiant_sched.c` (inside `CONFIG_RADIANT_SCHED_BOOKING`) and the gate (only built with `RADIANT_BACKEND_NRF_GATE_MPSL`), so plain rows are expected identical; unproven | |
+| Sizes (L15 bridge/Matter, nRF52840 Matter) | **NOT RUN**, same reason | |
+| On-target builds that did run | `img_c3_gate` FLASH 111 612 / RAM 59 920; `img_c3_thread` FLASH 300 140 / RAM 158 352 (bench images, counters in) | `build_c3_*.log` |
 
 ## Unexplained, and open
 
