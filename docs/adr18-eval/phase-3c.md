@@ -219,7 +219,8 @@ the room.
 | after (first, alone) | 59/60 (peer 60) | 58/60 (peer 59) | `ack_after` |
 | before | 60/60 | 60/60 | `ackab_before` |
 | after | **60/60** | **60/60** | `ackab_after` |
-<!-- ACK2 -->
+| before 2 | 60/60 | 60/60 | `ackab_before2` |
+| after 2 | **60/60** | **60/60** | `ackab_after2` |
 
 One tracked channel never joins anything, and every follow-on is armed inside its
 own grant's reserve, which the join leaves alone (`!in_reserve`). The first
