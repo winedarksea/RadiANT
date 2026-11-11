@@ -683,6 +683,70 @@ ZTEST(radiant_gate_d2, test_d2_a_refused_forgotten_request_does_not_hold_its_ses
 		      "the refused request still holds its session");
 }
 
+/*
+ * An aborted scan chunk's request stays with MPSL and is kept as a booking, but
+ * it asked for a short first bite and means to grow. A tracked window inside its
+ * air would depend on an extension, which ADR 0013 rule 1 forbids.
+ */
+ZTEST(radiant_gate_d2, test_d2_a_tracked_arm_does_not_ride_a_forgotten_scan_request)
+{
+	radiant_time_t from = radiant_radio_now() + SCAN_LEAD_US;
+	radiant_time_t t = from + 20000u;
+	uint32_t       req1;
+
+	zassert_equal(GATE_PENDING,
+		      gate_acquire(GATE_OP_RX, from, from + SCAN_LEN_US, 0u,
+				   RADIANT_GATE_PRIO_NORMAL), NULL);
+	k_msleep(WORK_MS);
+	gate_forget_pending();
+	gate_probe_read(&p);
+	zassert_equal(ROLE_BOOK, p.role[0], NULL);
+	req1 = fake_mpsl_requests_s(1u);
+
+	zassert_equal(GATE_PENDING,
+		      gate_acquire(GATE_OP_RX, t, t + TRACK_LEN_US, 0u,
+				   RADIANT_GATE_PRIO_HIGH), NULL);
+	k_msleep(WORK_MS);
+	gate_probe_read(&p);
+	zassert_equal(0u, p.book_hit, "staged behind a request that needs an extension");
+	zassert_equal(1u, p.op_sess, NULL);
+	zassert_equal(req1 + 1u, fake_mpsl_requests_s(1u), "no request of its own");
+	zassert_equal(MPSL_TIMESLOT_PRIORITY_HIGH,
+		      fake_mpsl_last_request_s(1u)->params.normal.priority, NULL);
+}
+
+ZTEST(radiant_gate_d2, test_d2_a_booking_is_not_satisfied_by_a_forgotten_scan_request)
+{
+	radiant_time_t from = radiant_radio_now() + SCAN_LEAD_US;
+	radiant_time_t t = from + 20000u;
+
+	zassert_equal(GATE_PENDING,
+		      gate_acquire(GATE_OP_RX, from, from + SCAN_LEN_US, 0u,
+				   RADIANT_GATE_PRIO_NORMAL), NULL);
+	k_msleep(WORK_MS);
+	gate_forget_pending();
+
+	zassert_equal(GATE_BOOK_OK, gate_book(t, t + TRACK_LEN_US, 0u), NULL);
+	gate_probe_read(&p);
+	zassert_equal(1u, p.book_placed, "it was called booked without a request");
+	zassert_equal(ROLE_BOOK, p.role[1], NULL);
+}
+
+/* A scan chunk that lands inside a tracked booking must not take it. */
+ZTEST(radiant_gate_d2, test_d2_a_scan_chunk_does_not_take_a_tracked_booking)
+{
+	radiant_time_t t = radiant_radio_now() + SCAN_LEAD_US;
+
+	zassert_equal(GATE_BOOK_OK, gate_book(t, t + 5000u, 0u), NULL);
+	k_msleep(WORK_MS);
+	zassert_equal(GATE_PENDING,
+		      gate_acquire(GATE_OP_RX, t + 1000u, t + 3000u, 0u,
+				   RADIANT_GATE_PRIO_NORMAL), NULL);
+	gate_probe_read(&p);
+	zassert_equal(0u, p.book_hit, "a chunk was staged behind a tracked booking");
+	zassert_equal(ROLE_BOOK, p.role[0], "the booking was taken");
+}
+
 /* A booking nobody has armed into reaches the core a little before it starts,
  * once. An armed one, or one still far off, does not. */
 ZTEST(radiant_gate_d2, test_d2_a_booking_due_tells_the_core_once)

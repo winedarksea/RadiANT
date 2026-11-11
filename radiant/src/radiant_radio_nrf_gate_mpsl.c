@@ -2714,7 +2714,13 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 		if (!b->open || b->role != ROLE_BOOK) {
 			continue;
 		}
-		if (start >= b->r_start && end <= b->r_end) {
+		/* Of its own class only. An aborted scan chunk's request is kept
+		 * as a booking, but it asked for a short first bite and means to
+		 * grow, so a tracked window inside its air would depend on an
+		 * extension (ADR 0013 rule 1). And a chunk that lands inside a
+		 * tracked booking must not take it. */
+		if (start >= b->r_start && end <= b->r_end &&
+		    b->ng.extendable == extendable) {
 			if (b->book_failed) {
 				b->book_failed = false;
 				b->role = ROLE_NONE;
@@ -3071,6 +3077,7 @@ int gate_book(radiant_time_t t_from, radiant_time_t t_to, uint16_t follow_on_us)
 	/* Already booked (the scheduler asks again after a rebuild)? */
 	for (uint32_t i = 0u; i < NSESS; i++) {
 		if (ss[i].open && ss[i].role == ROLE_BOOK && !ss[i].book_failed &&
+		    !ss[i].ng.extendable &&
 		    start >= ss[i].r_start && end <= ss[i].r_end) {
 			return GATE_BOOK_OK;
 		}
