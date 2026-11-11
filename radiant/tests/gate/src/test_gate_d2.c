@@ -189,6 +189,47 @@ ZTEST(radiant_gate_d2, test_d2_a_booking_goes_to_the_free_session_and_serves_its
 	assert_invariant();
 }
 
+/* ADR 0021 decision 5: a chunk armed into a booking's tail is served from the
+ * air already held, asks for no request and no extension, and a chunk reaching
+ * past the booked air is not served from it. */
+ZTEST(radiant_gate_d2, test_d2_a_chunk_inside_a_booked_tail_is_served_from_the_grant)
+{
+	radiant_time_t t = radiant_radio_now() + TRACK_AFTER_US;
+	const uint32_t tail = 10000u;
+	uint32_t       req1;
+
+	zassert_equal(GATE_BOOK_OK, gate_book(t, t + TRACK_LEN_US, (uint16_t)tail), NULL);
+	k_msleep(WORK_MS);
+	zassert_equal(TRACK_LEN_US + tail + 1250u,
+		      fake_mpsl_last_request_s(0u)->params.normal.length_us, NULL);
+	/* The tracked window asks for its plain follow-on, inside the booking. */
+	zassert_equal(GATE_PENDING,
+		      gate_acquire(GATE_OP_RX, t, t + TRACK_LEN_US, 0u,
+				   RADIANT_GATE_PRIO_HIGH), NULL);
+	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_NONE,
+		      fake_mpsl_signal_s(0u, MPSL_TIMESLOT_SIGNAL_START), NULL);
+	req1 = fake_mpsl_requests_s(0u);
+	/* The fake's grant starts when it is signalled, not at t. */
+	t = radiant_radio_now();
+
+	zassert_equal(GATE_GRANTED,
+		      gate_acquire(GATE_OP_RX, t + 200u,
+				   t + tail - 500u, 0u,
+				   RADIANT_GATE_PRIO_NORMAL),
+		      "the chunk must ride the held air");
+	k_msleep(WORK_MS);
+	zassert_equal(req1, fake_mpsl_requests_s(0u), "a request was placed for it");
+	gate_probe_read(&p);
+	zassert_false(p.extendable, "the booked grant must stay fixed-length");
+	zassert_not_equal(GATE_GRANTED,
+			  gate_acquire(GATE_OP_RX, t + 200u,
+				       t + TRACK_LEN_US + tail + 2000u, 0u,
+				       RADIANT_GATE_PRIO_NORMAL),
+			  "a chunk past the booked air must not be served from it");
+	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_END,
+		      fake_mpsl_signal_s(0u, MPSL_TIMESLOT_SIGNAL_TIMER0), NULL);
+}
+
 ZTEST(radiant_gate_d2, test_d2_a_refused_booking_refuses_only_its_own_arm)
 {
 	radiant_time_t t = radiant_radio_now() + SCAN_LEAD_US;

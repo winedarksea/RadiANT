@@ -521,6 +521,8 @@ struct radiant_sched_stats {
 	uint32_t book_saved;
 	uint32_t book_late;
 	uint32_t book_orphan;
+	/* ADR 0021 decision 5: scan chunks armed into a booking's tail. */
+	uint32_t scan_tail;
 #endif
 };
 

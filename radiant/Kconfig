@@ -774,6 +774,25 @@ config RADIANT_SCHED_BOOKING
 	  is inert at run time unless the backend sets caps.booking, and it
 	  compiles out of every plain build.
 
+config RADIANT_GATE_MPSL_D2_SCAN_TAIL_US
+	int "(d2) scan tail asked for past a tracked booking (us)"
+	depends on RADIANT_GATE_MPSL_D2
+	range 0 30000
+	default 0
+	help
+	  ADR 0021 decision 5. While a scan runs, a tracked window's booking
+	  asks for about this much more air, dithered between half and one and
+	  a half times it, and the scan chunk after the window is armed into
+	  that air at the in-grant lead rather than waiting out a fresh
+	  request. 0 for no tail.
+
+config RADIANT_GATE_MPSL_TAIL_SWEEP
+	bool "DIAGNOSTIC: step the scan tail through a fixed table"
+	depends on RADIANT_GATE_MPSL_STATS_LOG
+	help
+	  Holds the tail at 0, 5, 10 and 20 ms for 120 s each, repeating, so
+	  the choices can be compared in one sitting. Bench only.
+
 config RADIANT_GATE_MPSL_LEAD_SWEEP
 	bool "DIAGNOSTIC: step the elastic lead through a fixed table"
 	depends on RADIANT_GATE_MPSL_STATS_LOG

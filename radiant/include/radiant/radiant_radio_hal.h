@@ -856,6 +856,13 @@ struct radiant_radio_caps {
 	 * it every pass, as it does every other field.
 	 */
 	uint16_t min_arm_lead_elastic_us;
+	/*
+	 * ADR 0021 decision 5: how much air, in microseconds, a booking made
+	 * while a scan is running may ask for past the operation's follow-on,
+	 * for a scan chunk armed into it at min_arm_lead_in_grant_us. The
+	 * scheduler dithers it around this value. 0: no tail.
+	 */
+	uint16_t scan_tail_us;
 #endif
 };
 

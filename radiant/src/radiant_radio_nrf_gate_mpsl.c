@@ -1036,6 +1036,7 @@ static uint32_t el_block_run;
  * no other stack (measured on gate.conf: every one under 2 ms, none above). */
 #define EL_NOTICE_MIN_US 2000u
 static uint32_t el_lead_us = EL_LEAD_START_US;
+static uint32_t scan_tail_us = CONFIG_RADIANT_GATE_MPSL_D2_SCAN_TAIL_US;
 /* Booking is live: two sessions opened. */
 static bool d2_on;
 
@@ -1053,6 +1054,7 @@ static void el_lead_publish(void)
 	 * lead, HEAD_MARGIN_US before the caller's instant - the same sum
 	 * gate_min_arm_lead_us() advertises for the full lead. */
 	radiant_nrf_gate_set_elastic_lead(d2_on ? el_lead_us + HEAD_MARGIN_US : 0u);
+	radiant_nrf_gate_set_scan_tail(d2_on ? scan_tail_us : 0u);
 }
 
 /* From a signal, so no kernel call: this writes the caps struct and nothing else. */
@@ -2246,6 +2248,20 @@ static void gate_stats_fn(struct k_work *w)
 		ticks++;
 	}
 #endif
+#if defined(CONFIG_RADIANT_GATE_MPSL_TAIL_SWEEP)
+	{
+		static const uint16_t tails_ms[] = {0u, 5u, 10u, 20u};
+		static uint32_t ticks;
+
+		if ((ticks % 24u) == 0u) {
+			scan_tail_us = 1000u * tails_ms[(ticks / 24u) % ARRAY_SIZE(tails_ms)];
+			el_lead_publish();
+			LOG_INF("D2SWEEP step=%u tail_us=%u", ticks / 24u,
+				(unsigned)scan_tail_us);
+		}
+		ticks++;
+	}
+#endif
 	LOG_INF("D2SETTLE rel=%u keep=%u wait=%u none=%u now=%u imm=%u owed=%u",
 		radiant_d2_dbg[0], radiant_d2_dbg[1], radiant_d2_dbg[2],
 		radiant_d2_dbg[3], radiant_d2_dbg[4], radiant_d2_dbg[5],
@@ -2280,13 +2296,14 @@ static void gate_stats_fn(struct k_work *w)
 		stats.rel_est_last, stats.t0_fix_rel, stats.t0_fix_backstop,
 		stats.t0_fix_at, stats.ext_skipped);
 	LOG_INF("D2START n=%u err last/min/max %d/%d/%d us | skip_left_min=%u | "
-		"due saved=%u late=%u orphan=%u",
+		"due saved=%u late=%u orphan=%u tail=%u",
 		stats.start_err_n, (int)stats.start_err_last,
 		(int)stats.start_err_min, (int)stats.start_err_max,
 		stats.skip_left_min,
 		radiant_sched_stats_get()->book_saved,
 		radiant_sched_stats_get()->book_late,
-		radiant_sched_stats_get()->book_orphan);
+		radiant_sched_stats_get()->book_orphan,
+		radiant_sched_stats_get()->scan_tail);
 	LOG_INF("D2EL blk by notice %u/%u/%u/%u/%u gr %u/%u/%u/%u/%u deferred-blk %u",
 		stats.el_blk_by_notice[0], stats.el_blk_by_notice[1],
 		stats.el_blk_by_notice[2], stats.el_blk_by_notice[3],

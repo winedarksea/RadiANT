@@ -389,6 +389,10 @@ struct fake_radio_book_stats {
 	uint32_t denied;         /* arms refused because their booking was */
 	uint32_t layout_b;       /* bookings placed into held elastic air */
 	uint32_t unbooked_fixed; /* fixed-class arms NOT inside a booking */
+	uint32_t tail_arms;      /* elastic arms served from a booking's tail */
+	uint32_t overlaps;       /* bookings refused: another holds that air */
+	uint32_t fo_min;         /* smallest follow-on a booking asked for */
+	uint32_t fo_max;         /* largest follow-on a booking asked for */
 };
 /* How many request slots the backend has (default 2: a two-session gate). */
 void fake_radio_book_sessions(uint32_t n);

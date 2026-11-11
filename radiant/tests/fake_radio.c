@@ -220,6 +220,9 @@ struct fake_state {
 	uint32_t book_sessions;
 	uint32_t book_refuse_left;
 	int32_t  cur_bk;  /* the booking the armed op is inside, or -1 */
+	/* The end of the air a completed booked operation still holds, or 0.
+	 * ADR 0021 decision 5: a scan chunk may be armed into it. */
+	radiant_time_t held_tail_end;
 	bool     cur_elastic;
 	struct fake_radio_book_stats bstats;
 #endif
@@ -899,6 +902,8 @@ static void clear_cur(void)
 	 * free again. */
 	if (g.cur_bk >= 0 && g.cur_bk < (int32_t)FBK_N) {
 		g.bk[g.cur_bk].used = false;
+		g.held_tail_end = g.bk[g.cur_bk].close +
+				  (radiant_time_t)g.bk[g.cur_bk].follow_on_us;
 	}
 	g.cur_bk = -1;
 	g.cur_elastic = false;
@@ -1797,6 +1802,11 @@ static bool fbk_too_late(uint8_t kind, radiant_time_t t, radiant_time_t open,
 		*bk_out = i;
 		return t < g.now + (radiant_time_t)ig;
 	}
+	if (elastic && g.caps.booking && g.held_tail_end != 0u &&
+	    close <= g.held_tail_end && t >= g.now + (radiant_time_t)ig) {
+		g.bstats.tail_arms++;
+		return false;
+	}
 	if (elastic && g.caps.booking && g.caps.min_arm_lead_elastic_us != 0u) {
 		return t < g.now + (radiant_time_t)g.caps.min_arm_lead_elastic_us;
 	}
@@ -1866,7 +1876,25 @@ int radiant_radio_book(const struct radiant_rx_req *rx,
 	g.bk[i].close = close;
 	g.bk[i].follow_on_us = fo;
 	g.bk[i].refused = false;
-	if (g.cur.kind == FAKE_RADIO_ARM_RX && g.cur_elastic &&
+	if (g.bstats.placed == 0u || fo < g.bstats.fo_min) {
+		g.bstats.fo_min = fo;
+	}
+	if (fo > g.bstats.fo_max) {
+		g.bstats.fo_max = fo;
+	}
+	/* First come, first served (Phase 0c F2): air another live booking
+	 * already holds, its follow-on and tail included, is refused. */
+	for (uint32_t k = 0u; k < FBK_N; k++) {
+		if (k != i && g.bk[k].used && !g.bk[k].refused &&
+		    open <= g.bk[k].close + (radiant_time_t)g.bk[k].follow_on_us &&
+		    close + (radiant_time_t)fo >= g.bk[k].open) {
+			g.bk[i].refused = true;
+			g.bstats.overlaps++;
+		}
+	}
+	if (g.bk[i].refused) {
+		/* Counted above. */
+	} else if (g.cur.kind == FAKE_RADIO_ARM_RX && g.cur_elastic &&
 	    g.cur.t_open <= open && g.cur.t_close >= open) {
 		/* F2 layout B: the elastic grant already holds this instant. */
 		g.bk[i].refused = true;
@@ -2339,6 +2367,7 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 #if defined(CONFIG_RADIANT_SCHED_BOOKING)
 	g.cur_bk = bk_idx;
 	g.cur_elastic = (req->flags & RADIANT_RX_ELASTIC) != 0u;
+	g.held_tail_end = 0u;
 	if (bk_idx >= 0) {
 		g.bstats.hits++;
 	} else if (g.caps.booking && !g.cur_elastic) {

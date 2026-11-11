@@ -698,6 +698,11 @@ void radiant_nrf_gate_set_elastic_lead(uint32_t us)
 		(us != 0u) ? (uint16_t)(ARM_LEAD_US + us) : 0u;
 	radiant_nrf_caps.booking = (us != 0u);
 }
+
+void radiant_nrf_gate_set_scan_tail(uint32_t us)
+{
+	radiant_nrf_caps.scan_tail_us = (uint16_t)us;
+}
 #endif
 
 /*

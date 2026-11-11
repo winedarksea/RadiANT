@@ -258,12 +258,22 @@ static struct {
 		const struct radiant_pkt_format *fmt;
 		radiant_time_t                   open;
 		radiant_time_t                   close;
+		/* Where this booking's air ends, if it asked for a scan tail
+		 * (ADR 0021 decision 5); 0 if it did not. */
+		radiant_time_t                   tail_end;
 	} bk[RADIANT_SCHED_BOOK_MAX];
 	/* Where the last fixed-class operation's air ends, follow-on reserve
 	 * included (close + follow_on_us). A scan chunk placed in the other
 	 * session must not start before the arbiter has that timeslot ending:
 	 * see arm_next(). */
 	radiant_time_t fix_end;
+	/* The end of the armed operation's booked tail, or 0: while it is set
+	 * and the operation completes, a scan chunk can be armed into the air
+	 * still held, at the in-grant lead. */
+	radiant_time_t tail_end;
+	/* The tail's dither. Any cheap sequence: what matters is that the gap
+	 * left after a tail is not at one phase of the tracked period. */
+	uint32_t tail_seq;
 #endif
 
 	struct radiant_sched_stats stats;
@@ -523,6 +533,75 @@ static void bk_prune(radiant_time_t now)
 	}
 }
 
+/* True if anything is searching: a tail is air nobody else would use. */
+static bool scan_running(void)
+{
+	for (uint32_t k = 0u; k < RADIANT_SCHED_MAX_CHANNELS; k++) {
+		if (s.ch[k].kind == (uint8_t)SLOT_RX && s.ch[k].continuous) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/*
+ * ADR 0021 decision 5: the air to ask for past a booking's follow-on, or 0.
+ *
+ * Dithered between half and one and a half times the configured length, so the
+ * deaf gap a tail leaves after it moves from period to period.
+ *
+ * Never when another committed operation is close. The arbiter is first come,
+ * first served: a tail over a neighbour's instant makes the neighbour's booking
+ * the one refused, which would cost a tracked slot for the sake of listening.
+ * Tested twice: against the others' known instants, and against where they are
+ * NOW, a period before the booked air, since a neighbour's next slot is usually
+ * not posted yet and ANT+ channels repeat, so one close to this slot now is
+ * close to the next one too. Both add the lead, because the neighbour's own
+ * grant needs placing clear of the tail.
+ */
+static uint16_t scan_tail_for(uint8_t c, radiant_time_t now, uint16_t fo)
+{
+	const uint32_t base = (s.caps != NULL) ? s.caps->scan_tail_us : 0u;
+	uint32_t       tail;
+	radiant_time_t reach;
+	radiant_time_t own;
+
+	if (base == 0u || !scan_running()) {
+		return 0u;
+	}
+	s.tail_seq = s.tail_seq * 1664525u + 1013904223u;
+	tail = base / 2u + ((s.tail_seq >> 8) % base);
+	reach = now + (radiant_time_t)fo + (radiant_time_t)tail + arm_lead();
+	own = s.ch[c].t_end + (radiant_time_t)fo + (radiant_time_t)tail + arm_lead();
+	for (uint32_t k = 0u; k < RADIANT_SCHED_MAX_CHANNELS; k++) {
+		const struct sched_slot *m = &s.ch[k];
+
+		if (k == c || m->continuous ||
+		    (m->kind != (uint8_t)SLOT_RX && m->kind != (uint8_t)SLOT_TX)) {
+			continue;
+		}
+		if ((m->t_start <= reach && m->t_start + arm_lead() >= now) ||
+		    (m->t_start <= own && m->t_start + arm_lead() >= s.ch[c].t_start)) {
+			return 0u;
+		}
+	}
+	return (uint16_t)tail;
+}
+
+/* The tail end of the booking this armed window lies in, or 0. */
+static radiant_time_t booked_tail_end(const struct sched_slot *sl, radiant_time_t open,
+				      radiant_time_t close)
+{
+	for (uint32_t i = 0u; i < RADIANT_SCHED_BOOK_MAX; i++) {
+		if (s.bk[i].used && s.bk[i].kind == (uint8_t)SLOT_RX &&
+		    s.bk[i].fmt == sl->fmt && s.bk[i].rf == sl->rf_index &&
+		    open >= s.bk[i].open && close <= s.bk[i].close) {
+			return s.bk[i].tail_end;
+		}
+	}
+	return 0u;
+}
+
 /*
  * Book slot c with the backend: the air exactly as the arm would ask for it,
  * widened to whatever bounded receive could merge into its window (rule 4's
@@ -535,6 +614,7 @@ static int book_slot(uint8_t c)
 	uint32_t           free_i = RADIANT_SCHED_BOOK_MAX;
 	radiant_time_t     open;
 	radiant_time_t     close;
+	radiant_time_t     tail_end = 0u;
 	int                rc;
 
 	for (uint32_t i = 0u; i < RADIANT_SCHED_BOOK_MAX; i++) {
@@ -576,7 +656,15 @@ static int book_slot(uint8_t c)
 		req.n_filters = sl->n_filters;
 		req.t_open = open;
 		req.t_close = close;
-		req.follow_on_us = fo;
+		{
+			const uint16_t tail = scan_tail_for(c, radiant_radio_now(), fo);
+
+			req.follow_on_us = (uint16_t)(fo + tail);
+			if (tail != 0u) {
+				tail_end = close + (radiant_time_t)fo +
+					   (radiant_time_t)tail;
+			}
+		}
 		rc = radiant_radio_book(&req, NULL);
 	} else if (sl->kind == (uint8_t)SLOT_TX) {
 		struct radiant_tx_req req;
@@ -605,6 +693,7 @@ static int book_slot(uint8_t c)
 		s.bk[free_i].fmt = sl->fmt;
 		s.bk[free_i].open = open;
 		s.bk[free_i].close = close;
+		s.bk[free_i].tail_end = tail_end;
 		s.stats.booked++;
 	} else if (rc == RADIANT_RADIO_EBUSY) {
 		s.stats.book_busy++;
@@ -886,6 +975,9 @@ static void end_armed(enum radiant_sched_done why)
 	 * the owners are told, since their done() may post the next. */
 	if (why != RADIANT_SCHED_DONE_OK) {
 		s.reserve_end = 0u;
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+		s.tail_end = 0u;
+#endif
 	}
 
 	for (i = 0u; i < n; i++) {
@@ -963,6 +1055,10 @@ static bool abort_armed(uint8_t skip_ch)
 	if (!s.in_radio_cb) {
 		s.reserve_end = 0u;
 	}
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+	/* An aborted operation's air is not there to arm a chunk into. */
+	s.tail_end = 0u;
+#endif
 
 	(void)radiant_radio_abort();
 
@@ -1384,8 +1480,13 @@ static enum step arm_rx_window(uint8_t leader, radiant_time_t earliest,
 	s.armed_continuous = lead->continuous;
 	s.reserve_end = (follow_on != 0u) ? close + (radiant_time_t)follow_on : 0u;
 #if defined(CONFIG_RADIANT_SCHED_BOOKING)
+	s.tail_end = 0u;
 	if (!lead->continuous) {
 		s.fix_end = close + (radiant_time_t)follow_on;
+		s.tail_end = booked_tail_end(lead, open, close);
+		if (s.tail_end != 0u) {
+			s.fix_end = t_max(s.fix_end, s.tail_end);
+		}
 	}
 #endif
 	phy_armed(lead->fmt);
@@ -1470,6 +1571,9 @@ static enum step arm_tx_op(uint8_t ch)
 	s.reserve_end = (sl->follow_on_us != 0u)
 				? sl->t_start + (radiant_time_t)sl->follow_on_us
 				: 0u;
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+	s.tail_end = 0u;
+#endif
 	phy_armed(sl->fmt);
 	s.replan = false;
 	s.n_merged = 0u;
@@ -1879,6 +1983,34 @@ static enum step arm_next(radiant_time_t earliest)
 		radiant_time_t s_limit = RADIANT_TIME_NEVER;
 
 #if defined(CONFIG_RADIANT_SCHED_BOOKING)
+		/*
+		 * ADR 0021 decision 5. The tracked window just completed and
+		 * its booking asked for a tail: the grant is still held, so a
+		 * chunk goes straight into it at the in-grant lead, up to where
+		 * the booked air ends. It needs no request, so nothing about it
+		 * can be refused; the release owed by the completion is kept
+		 * for it (THE GRANT HANDOFF). Not if a committed operation
+		 * wants any of that air: a follow-on comes first.
+		 */
+		if (booking() && s.in_radio_cb && s.tail_end != 0u) {
+			const radiant_time_t t_ig =
+				earliest - arm_lead() + in_grant_lead();
+			const radiant_time_t t_open = t_max(s.ch[scan_ch].t_start, t_ig);
+			const radiant_time_t t_lim =
+				t_back(s.tail_end, rx_tail(s.ch[scan_ch].fmt) +
+							   RADIANT_SCHED_DISPATCH_SLACK_US);
+
+			if (t_lim >= t_open + (radiant_time_t)RADIANT_SCHED_SCAN_MIN_US &&
+			    (committed == RADIANT_TIME_NEVER ||
+			     committed > s.tail_end + book_lead())) {
+				enum step st = arm_rx_window((uint8_t)scan_ch, t_ig, t_lim);
+
+				if (st != STEP_SKIP) {
+					s.stats.scan_tail++;
+					return st;
+				}
+			}
+		}
 		/*
 		 * Not before the last tracked window's timeslot has ended. That
 		 * timeslot is booked to its close plus the follow-on reserve,

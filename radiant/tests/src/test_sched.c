@@ -3330,6 +3330,7 @@ static void shape_longest_gap(const uint8_t *bins, uint32_t *start, uint32_t *wi
 /* ADR 0018 (d2): when non-zero, the shape and R1 helpers run on a booking
  * backend with this elastic lead. */
 static uint16_t shape_el_lead;
+static uint16_t shape_tail;
 /* R1 with a search running beside the pair. */
 static bool r1_with_scan;
 #endif
@@ -3352,6 +3353,7 @@ static void measure_deaf_shape(uint8_t n_tracked, uint32_t lead_us, uint32_t in_
 #if defined(CONFIG_RADIANT_SCHED_BOOKING)
 	fake_radio_caps_mut()->booking = (shape_el_lead != 0u);
 	fake_radio_caps_mut()->min_arm_lead_elastic_us = shape_el_lead;
+	fake_radio_caps_mut()->scan_tail_us = shape_tail;
 #endif
 	bring_up();
 
@@ -3528,6 +3530,7 @@ static void r1_measure(uint32_t offset_us, struct r1_result *out)
 #if defined(CONFIG_RADIANT_SCHED_BOOKING)
 	fake_radio_caps_mut()->booking = (shape_el_lead != 0u);
 	fake_radio_caps_mut()->min_arm_lead_elastic_us = shape_el_lead;
+	fake_radio_caps_mut()->scan_tail_us = shape_tail;
 #endif
 	bring_up();
 
@@ -3895,6 +3898,133 @@ ZTEST(radiant_sched, test_d2_three_tracked_operations_inside_one_lead)
 		fake_radio_advance_to(radiant_radio_now() + 2u * SHAPE_PERIOD_US);
 		finish();
 	}
+}
+
+/* ---------------------------------------------------------------------------
+ * ADR 0021 decision 5: the scan tail. A booking made while a scan runs asks for
+ * a dithered stretch past its follow-on, and the chunk after the tracked
+ * window is armed into that air at the in-grant lead instead of waiting out a
+ * fresh request.
+ * ---------------------------------------------------------------------------
+ */
+#define SHAPE_TAIL_US 10000u
+
+ZTEST(radiant_sched, test_d2_tail_arms_the_scan_inside_the_booked_air)
+{
+	struct deaf_shape d;
+	const struct fake_radio_book_stats *bs;
+
+	shape_el_lead = SHAPE_EL_LEAD_D2;
+	shape_tail = SHAPE_TAIL_US;
+	measure_deaf_shape(1u, SHAPE_LEAD_MPSL, 200u, SHAPE_MAXWIN_MPSL, &d);
+	bs = fake_radio_book_stats();
+	shape_el_lead = 0u;
+	shape_tail = 0u;
+	report_shape("tail", 1u, &d);
+	TC_PRINT("tail: arms=%u hits=%u overlaps=%u layout_b=%u fo=%u..%u missed=%u\n",
+		 bs->tail_arms, bs->hits, bs->overlaps, bs->layout_b, bs->fo_min,
+		 bs->fo_max, log.missed_count[0]);
+	zassert_true(bs->tail_arms + 2u >= bs->hits,
+		     "only %u of %u booked windows were followed by a tail chunk",
+		     bs->tail_arms, bs->hits);
+	zassert_true(radiant_sched_stats_get()->scan_tail + 2u >= bs->hits, NULL);
+	zassert_equal(0u, log.missed_count[0], "a tail cost a tracked slot");
+	zassert_equal(0u, log.denied_count[0], NULL);
+	zassert_equal(0u, bs->layout_b, NULL);
+	zassert_equal(0u, bs->overlaps, NULL);
+}
+
+/* The band after the slot is the one the tail exists to close, and the gap it
+ * leaves moves period to period because the tail is dithered. */
+ZTEST(radiant_sched, test_d2_tail_closes_the_band_after_the_slot)
+{
+	struct deaf_shape plain;
+	struct deaf_shape tail;
+
+	shape_el_lead = SHAPE_EL_LEAD_D2;
+	measure_deaf_shape(1u, SHAPE_LEAD_MPSL, 200u, SHAPE_MAXWIN_MPSL, &plain);
+	sched_before(NULL);
+	shape_tail = SHAPE_TAIL_US;
+	measure_deaf_shape(1u, SHAPE_LEAD_MPSL, 200u, SHAPE_MAXWIN_MPSL, &tail);
+	shape_tail = 0u;
+	shape_el_lead = 0u;
+	report_shape("plain", 1u, &plain);
+	report_shape("tail", 1u, &tail);
+	zassert_true(tail.deaf_us + 3000u <= plain.deaf_us,
+		     "deaf %u with a tail against %u without", tail.deaf_us,
+		     plain.deaf_us);
+	zassert_true(tail.longest_gap_us <= plain.longest_gap_us, NULL);
+}
+
+/* The tail must never reach another committed operation's booking: the arbiter
+ * would refuse the later one, first come first served. */
+ZTEST(radiant_sched, test_d2_tail_keeps_an_r1_pair)
+{
+	static const uint32_t offsets[] = {5000u, 12000u, 24000u};
+
+	for (size_t i = 0u; i < ARRAY_SIZE(offsets); i++) {
+		struct r1_result r;
+
+		sched_before(NULL);
+		shape_el_lead = SHAPE_EL_LEAD_D2;
+		shape_tail = 20000u;
+		r1_with_scan = true;
+		r1_measure(offsets[i], &r);
+		TC_PRINT("tail-r1 offset=%u: ch0 ok=%u missed=%u ch1 ok=%u missed=%u "
+			 "overlaps=%u\n", offsets[i], r.ok[0], r.missed[0], r.ok[1],
+			 r.missed[1], fake_radio_book_stats()->overlaps);
+		shape_el_lead = 0u;
+		shape_tail = 0u;
+		r1_with_scan = false;
+		zassert_equal(0u, r.missed[0] + r.missed[1], "offset %u", offsets[i]);
+		zassert_equal(0u, fake_radio_book_stats()->overlaps,
+			      "offset %u: a tail overlapped the other booking",
+			      offsets[i]);
+		zassert_true(r.ok[0] >= 11u && r.ok[1] >= 11u, "ok %u/%u", r.ok[0],
+			     r.ok[1]);
+	}
+}
+
+/* With no scan running there is nothing to arm into a tail, so no air is
+ * asked for. And with one, the dither stays inside its band. */
+ZTEST(radiant_sched, test_d2_tail_is_only_asked_for_while_a_scan_runs)
+{
+	struct r1_result r;
+	struct deaf_shape d;
+	const struct fake_radio_book_stats *bs;
+
+	shape_el_lead = SHAPE_EL_LEAD_D2;
+	shape_tail = SHAPE_TAIL_US;
+	r1_measure(120000u, &r);
+	zassert_equal(0u, fake_radio_book_stats()->fo_max,
+		      "no scan, yet a booking asked for %u us past its window",
+		      fake_radio_book_stats()->fo_max);
+	zassert_equal(0u, fake_radio_book_stats()->tail_arms, NULL);
+
+	sched_before(NULL);
+	measure_deaf_shape(1u, SHAPE_LEAD_MPSL, 200u, SHAPE_MAXWIN_MPSL, &d);
+	bs = fake_radio_book_stats();
+	shape_el_lead = 0u;
+	shape_tail = 0u;
+	zassert_true(bs->fo_max < (SHAPE_TAIL_US * 3u) / 2u, "fo_max %u", bs->fo_max);
+	zassert_true(bs->fo_max > SHAPE_TAIL_US, "fo_max %u: not dithered up", bs->fo_max);
+}
+
+/* A longer booking the arbiter refuses still costs exactly its own slot. */
+ZTEST(radiant_sched, test_d2_a_refused_tail_booking_costs_exactly_its_own_slot)
+{
+	struct r1_result r;
+
+	shape_el_lead = SHAPE_EL_LEAD_D2;
+	shape_tail = SHAPE_TAIL_US;
+	r1_with_scan = true;
+	fake_radio_book_refuse_next(1u);
+	r1_measure(120000u, &r);
+	shape_el_lead = 0u;
+	shape_tail = 0u;
+	r1_with_scan = false;
+	zassert_equal(0u, r.missed[0] + r.missed[1], "a refused booking caused a MISS");
+	zassert_equal(1u, log.denied_count[0] + log.denied_count[1], NULL);
 }
 
 /* Booking compiled in but the backend says no (caps.booking false): the

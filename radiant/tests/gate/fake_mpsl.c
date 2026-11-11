@@ -306,6 +306,11 @@ void radiant_nrf_gate_on_booking_due(void)
 	b.booking_due++;
 }
 
+void radiant_nrf_gate_set_scan_tail(uint32_t us)
+{
+	(void)us;
+}
+
 void radiant_nrf_gate_set_elastic_lead(uint32_t us)
 {
 	b.elastic_lead_us = us;
