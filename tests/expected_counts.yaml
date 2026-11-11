@@ -59,7 +59,7 @@ min_scenarios: 14
 # check_test_counts.py on a Linux machine, on the versions west.yml pins
 # (docs/testing.md), rather than on a GitHub runner. 4168 since C5-1 added one
 # gate test.
-min_testcases: 4327
+min_testcases: 4332
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
