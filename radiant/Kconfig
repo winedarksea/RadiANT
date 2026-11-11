@@ -778,7 +778,7 @@ config RADIANT_GATE_MPSL_D2_SCAN_TAIL_US
 	int "(d2) scan tail asked for past a tracked booking (us)"
 	depends on RADIANT_GATE_MPSL_D2
 	range 0 30000
-	default 0
+	default 10000
 	help
 	  ADR 0021 decision 5. While a scan runs, a tracked window's booking
 	  asks for about this much more air, dithered between half and one and
