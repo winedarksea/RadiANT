@@ -476,7 +476,5 @@ Bridge and tools:
 - Matter adoption renames and re-persists each adopted row's NodeLabel (one flash
   write each); each row can be renamed up to 2 x the number of distinct adoption
   passes for its source, bounded per boot and not recurring. Left unchanged.
-- The Matter bridge fixes and the MQTT owed list have not run on air or against a
-  real broker.
 - `ant_compare.py:640` and `ant_sens.py:561` still show unlabelled 0x60 upper bounds.
 - `radiant_sched.h` still says "Zero-cost on both nRF builds".
