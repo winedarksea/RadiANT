@@ -687,6 +687,120 @@ config RADIANT_NRF_RX_DIAG
 	  Off by default and never in a shipping image. With it off nothing
 	  here compiles, so the non-diagnostic interrupt path is unchanged.
 
+# ------ ADR 0018 candidate (d2): a second timeslot session (Phase 1) -------
+#
+# A committed operation's request is BOOKED a lead ahead in a second MPSL
+# session while the scan holds the first, so the scan runs up to a small gap
+# before the tracked slot instead of a whole placement lead, and a tracked slot
+# depends on one fresh request placed with full notice and never on an
+# extension. docs/adr18-eval/d2.md.
+config RADIANT_GATE_MPSL_D2
+	bool "ADR 0018 (d2): book committed operations in a second MPSL session"
+	# No `depends on RADIANT_BACKEND_NRF_GATE_MPSL`, for the reason
+	# PLACE_LEAD_US gives: radiant/tests/gate compiles the gate against
+	# fakes with BACKEND_NONE and sets this in its prj.conf.
+	default y if RADIANT_BACKEND_NRF_GATE_MPSL
+	select RADIANT_SCHED_BOOKING
+	help
+	  The gate opens two timeslot sessions and places any request in
+	  whichever is free. The core books a committed operation (a tracked
+	  window or a transmit) while a scan chunk runs in the other session; the
+	  operation is armed later into its booking at the in-grant lead.
+	  Needs CONFIG_MPSL_TIMESLOT_SESSION_COUNT one higher than without it.
+	  If the second session cannot be opened the gate runs single-session
+	  and reports caps.booking false, which is exactly master's behaviour.
+
+config RADIANT_GATE_MPSL_D2_SCAN_LEAD_US
+	int "(d2) placement lead for scan chunks with no stack contending (us)"
+	depends on RADIANT_GATE_MPSL_D2
+	range 300 100000
+	default 3000
+	help
+	  The notice an elastic (scan or sweep) request gets in the OPEN state,
+	  advertised as caps.min_arm_lead_elastic_us. A fresh
+	  mpsl_timeslot_request() with under 2 ms of notice is refused even with
+	  no other stack (measured on gate.conf: 43 of 49 under 2 ms, 0 of 970
+	  at 2 ms or more). 3000 leaves a request deferred by -NRF_EAGAIN
+	  (placed when its session goes idle) above that.
+
+config RADIANT_GATE_MPSL_D2_CONTENDED_LEAD_US
+	int "(d2) placement lead for scan chunks beside a contending stack (us)"
+	depends on RADIANT_GATE_MPSL_D2
+	range 300 100000
+	default 16000
+	help
+	  The notice an elastic request gets in the CONTENDED state: once the
+	  arbiter has refused a run of extensions, or a long run of requests,
+	  until it grants an extension. The knee of the bench sweep beside
+	  OpenThread (docs/adr18-eval/phase-3a.md): listening was 25 % of the
+	  air at 16 ms against 21.5 % at 24 ms, 7.5 % at 12 ms, 2 % at 8 ms and
+	  nothing at 6 ms, attached or detached alike.
+
+config RADIANT_GATE_MPSL_D2_GAP_US
+	int "(d2) gap a scan chunk leaves before a booked operation (us)"
+	depends on RADIANT_GATE_MPSL_D2
+	range 0 30000
+	default 3000
+	help
+	  On top of the in-grant lead, the frame tail and the dispatch slack.
+	  Covers the scan grant's own end margin (2 ms past its air) plus MPSL's
+	  0.2-0.4 ms guard between two sessions (Phase 0c F2), so the chunk's
+	  last extension is not refused by the booking.
+
+config RADIANT_GATE_MPSL_STATS
+	bool "DIAGNOSTIC: compile the MPSL gate's bench counters"
+	depends on RADIANT_GATE_MPSL_D2
+	help
+	  The booking, notice and release counters a bench reading is scored
+	  on. They cost RAM and flash on every image that has them, so they are
+	  off unless a bench image asks. The gate unit tests set this directly.
+
+config RADIANT_GATE_MPSL_STATS_LOG
+	bool "DIAGNOSTIC: log the MPSL gate's counters every 5 s"
+	depends on RADIANT_GATE_MPSL_D2
+	select RADIANT_GATE_MPSL_STATS
+	help
+	  The gate's counters on the log every 5 s, from the gate's own work
+	  queue. Bench only: it costs a log line, never anything inside a
+	  grant. Set by apps/dongle_thread/d2_stats.conf.
+
+config RADIANT_SCHED_BOOKING
+	bool "scheduler support for a backend that books committed operations"
+	default n
+	help
+	  Selected by RADIANT_GATE_MPSL_D2; the radiant unit tests set it
+	  directly. Compiles the scheduler's booking (radiant_radio_book()),
+	  the short gap in front of a booked operation and the elastic lead. It
+	  is inert at run time unless the backend sets caps.booking, and it
+	  compiles out of every plain build.
+
+config RADIANT_GATE_MPSL_D2_SCAN_TAIL_US
+	int "(d2) scan tail asked for past a tracked booking (us)"
+	depends on RADIANT_GATE_MPSL_D2
+	range 0 30000
+	default 10000
+	help
+	  ADR 0021 decision 5. While a scan runs, a tracked window's booking
+	  asks for about this much more air, dithered between half and one and
+	  a half times it, and the scan chunk after the window is armed into
+	  that air at the in-grant lead rather than waiting out a fresh
+	  request. 0 for no tail.
+
+config RADIANT_GATE_MPSL_TAIL_SWEEP
+	bool "DIAGNOSTIC: step the scan tail through a fixed table"
+	depends on RADIANT_GATE_MPSL_STATS_LOG
+	help
+	  Holds the tail at 0, 5, 10 and 20 ms for 120 s each, repeating, so
+	  the choices can be compared in one sitting. Bench only.
+
+config RADIANT_GATE_MPSL_LEAD_SWEEP
+	bool "DIAGNOSTIC: step the elastic lead through a fixed table"
+	depends on RADIANT_GATE_MPSL_STATS_LOG
+	help
+	  Holds the elastic lead at 4, 6, 8, 12, 16 and 24 ms for 60 s each,
+	  repeating, so what a stack refuses by notice can be read off the
+	  log. The lead policy is off while it runs. Bench only.
+
 config RADIANT_GATE_MPSL_NO_SESSION
 	bool "DIAGNOSTIC: build the MPSL gate but never open a timeslot session"
 	depends on RADIANT_BACKEND_NRF_GATE_MPSL

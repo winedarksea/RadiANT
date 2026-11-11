@@ -68,9 +68,38 @@ struct gate_probe {
 	 * assertions are made against fake_mpsl_timer0.cc[0] and pinned
 	 * literals, not against this. */
 	uint32_t end_margin_us;
+
+	/* ADR 0018 (d2). Sessions opened (1 = single-session gate); each
+	 * session's role (ROLE_NONE 0, ROLE_OP 1, ROLE_BOOK 2), refused-booking
+	 * flag, owed flag and anchor; which session the staged op waits on. */
+	uint8_t  n_open;
+	uint8_t  role[2];
+	bool     book_failed[2];
+	bool     s_owes[2];
+	bool     s_anchor_valid[2];
+	uint8_t  op_sess;
+	uint32_t book_placed;
+	uint32_t book_hit;
+	uint32_t book_denied;
+	uint32_t book_blocked;
+	uint32_t book_mismatch;
+	uint32_t book_early;
+	uint32_t book_busy;
+	uint32_t book_near;
+	uint32_t orphan_start;
+	uint32_t den_nosess;
+	uint32_t refused_too_near;
+	uint32_t el_lead_us;
+	bool     d2_on;
 };
 
 void gate_probe_read(struct gate_probe *out);
+
+/* What the gate's booking-due timer does when it fires, called directly. */
+void gate_probe_fire_booking_due(void);
+
+/* Give a session the anchor a bootstrap timeslot would have. */
+void gate_probe_refresh_anchor(uint32_t session);
 
 /* Put the elastic class's adaptive state (first-bite length, phase skew,
  * refusal run) back to its power-on values. It is file-static and survives

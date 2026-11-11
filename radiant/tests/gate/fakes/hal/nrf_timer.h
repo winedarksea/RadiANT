@@ -67,7 +67,13 @@ typedef struct fake_timer {
 	uint32_t cc_writes[FAKE_TIMER_CC_COUNT];
 	uint32_t int_enables;
 	uint32_t int_disables;
+	/* radiant_swi_zli_lock() depth at the last int_disable: whether a
+	 * low-priority signal took the compare away with the zero-latency
+	 * callback masked. */
+	uint32_t int_disable_zli_depth;
 } fake_timer_t;
+
+uint32_t fake_swi_zli_depth_now(void);
 
 /*
  * The constants the gate names. Values are arbitrary but distinct - this model
@@ -113,6 +119,7 @@ static inline void nrf_timer_int_disable(fake_timer_t *t, uint32_t mask)
 {
 	t->inten &= ~mask;
 	t->int_disables++;
+	t->int_disable_zli_depth = fake_swi_zli_depth_now();
 }
 
 static inline void nrf_timer_event_clear(fake_timer_t *t, uint32_t event)

@@ -22,6 +22,8 @@
 
 #include <radiant/radiant_swi.h>
 
+#include "radiant_radio_nrf_gate.h"
+
 #include "fake_swi.h"
 
 #define FAKE_SWI_SUBS 4
@@ -51,6 +53,9 @@ int radiant_swi_register(uint32_t bits, radiant_swi_handler_t handler)
 void radiant_swi_pend(uint32_t bits)
 {
 	counts.pends++;
+	if (gate_in_signal()) {
+		counts.pends_in_signal++;
+	}
 	counts.bits_seen |= bits;
 	if ((bits & RADIANT_SWI_GATE_REQUEST) != 0u) {
 		counts.request++;
@@ -71,11 +76,29 @@ void radiant_swi_pend(uint32_t bits)
 	}
 }
 
+uint32_t fake_swi_zli_depth_now(void)
+{
+	return counts.zli_depth;
+}
+
 /* No PRIMASK on the host, and nothing to mask: the suite drives every signal
  * from its own thread. So this records the bracket instead - how often, and
  * that it is balanced - which is what the suite can actually assert. */
+static void (*before_next_lock)(void);
+
+void fake_swi_before_next_lock(void (*fn)(void))
+{
+	before_next_lock = fn;
+}
+
 uint32_t radiant_swi_zli_lock(void)
 {
+	if (before_next_lock != NULL) {
+		void (*fn)(void) = before_next_lock;
+
+		before_next_lock = NULL;
+		fn();
+	}
 	counts.zli_locks++;
 	return counts.zli_depth++;
 }
@@ -88,6 +111,7 @@ void radiant_swi_zli_unlock(uint32_t key)
 void fake_swi_reset(void)
 {
 	memset(&counts, 0, sizeof(counts));
+	before_next_lock = NULL;
 	/* Subscriptions deliberately survive: gate_init() registers once and
 	 * returns early on a second call, exactly as the session does. */
 }

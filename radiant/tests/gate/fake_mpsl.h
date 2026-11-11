@@ -74,6 +74,18 @@ void fake_mpsl_force_request_rc(int32_t rc, uint32_t count);
  */
 void fake_mpsl_answer_inline(uint32_t signal, uint32_t count);
 
+/* ADR 0018 (d2): allow up to n sessions (1 by default - every older test sees
+ * a single-session arbiter, so a d2 gate falls back to one session there),
+ * send fake_mpsl_signal() to session `sess` (0 or 1; each answers to its own
+ * id), or deliver one signal to a chosen session. */
+void     fake_mpsl_set_max_sessions(uint32_t n);
+void     fake_mpsl_target(uint32_t sess);
+uint8_t  fake_mpsl_signal_s(uint32_t sess, uint32_t signal);
+uint32_t fake_mpsl_last_session(void);
+bool     fake_mpsl_is_open_s(uint32_t sess);
+uint32_t fake_mpsl_requests_s(uint32_t sess);
+const mpsl_timeslot_request_t *fake_mpsl_last_request_s(uint32_t sess);
+
 bool     fake_mpsl_is_open(void);
 uint32_t fake_mpsl_opens(void);
 uint32_t fake_mpsl_closes(void);
@@ -103,6 +115,11 @@ struct fake_backend_counts {
 	uint32_t on_denied;
 	uint32_t finish_failed;
 	uint32_t on_radio_irq;
+	uint32_t booking_due;
+	/* ADR 0018 (d2): the last elastic lead the gate published, and how
+	 * often it published one. */
+	uint32_t elastic_lead_us;
+	uint32_t elastic_lead_sets;
 };
 
 void                              fake_backend_reset(void);

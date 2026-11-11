@@ -201,6 +201,37 @@ uint32_t gate_max_window_us(void);
  */
 uint32_t gate_min_arm_lead_us(void);
 
+#if defined(CONFIG_RADIANT_GATE_MPSL_D2)
+/*
+ * ADR 0018 candidate (d2): book the air for a committed operation that will be
+ * armed later, in a timeslot session other than the one the operation now
+ * armed is using. t_from/t_to/follow_on_us exactly as the later
+ * gate_acquire() for that operation will pass them; that acquire is then
+ * staged behind the booking (GATE_PENDING) if its air lies inside the booked
+ * air, or refused (GATE_DENIED) if MPSL refused the booking.
+ * docs/adr18-eval/d2.md.
+ */
+#define GATE_BOOK_OK       0
+#define GATE_BOOK_EBUSY   (-1)  /* no free session */
+#define GATE_BOOK_EDENIED (-2)  /* too near, no anchor yet, or too long */
+#define GATE_BOOK_ENOTSUP (-3)  /* the second session is not open */
+int  gate_book(radiant_time_t t_from, radiant_time_t t_to, uint16_t follow_on_us);
+/* gate_book() with tail_us more air past the follow-on (ADR 0021 decision 5).
+ * If MPSL refuses it, it is placed once more without the tail. */
+int  gate_book_tail(radiant_time_t t_from, radiant_time_t t_to, uint16_t follow_on_us,
+		    uint16_t tail_us);
+/* True when two sessions are open and booking works (caps.booking). */
+bool gate_booking(void);
+/* The gate's current elastic lead (placement lead plus head margin), or 0
+ * when booking is off, for caps.min_arm_lead_elastic_us. The backend adds its
+ * own ARM_LEAD_US. Called from the gate whenever the value changes. */
+void radiant_nrf_gate_set_elastic_lead(uint32_t us);
+/* For caps.scan_tail_us (ADR 0021 decision 5); 0 for none. */
+void radiant_nrf_gate_set_scan_tail(uint32_t us);
+/* A booking's start is close and no operation has been armed into it. */
+void radiant_nrf_gate_on_booking_due(void);
+#endif
+
 /* ---------------------------------------------------------------------------
  * The other direction: what a gate calls back into radiant_radio_nrf.c.
  *
@@ -213,7 +244,7 @@ uint32_t gate_min_arm_lead_us(void);
  */
 
 /*
- * TRUE WHILE THIS THREAD OF CONTROL IS INSIDE AN MPSL TIMESLOT SIGNAL CALLBACK.
+ * TRUE WHILE THIS THREAD OF CONTROL IS INSIDE A HIGH-PRIORITY MPSL SIGNAL.
  *
  * Which is to say: true while running in a ZERO-LATENCY interrupt, where no
  * kernel API may be called and no Zephyr lock excludes anything (bug 27, and
@@ -225,9 +256,10 @@ uint32_t gate_min_arm_lead_us(void);
  * other ordinary interrupt, and both of those are contexts where calling the
  * core directly is correct. The only context that is not is this one.
  *
- * Reads as a plain bool because the flag is only ever written by the signal
- * callback itself, which cannot preempt itself - MPSL delivers all of
- * START/RADIO/TIMER0 from one priority.
+ * Reads as a plain bool because the flag is only ever written by the
+ * high-priority half of the signal callback, which cannot preempt itself. The
+ * low-priority signals (BLOCKED, SESSION_IDLE and the rest) run in MPSL's
+ * cooperative thread and leave it alone.
  *
  * Always false on the direct backend, where there is no such context.
  *

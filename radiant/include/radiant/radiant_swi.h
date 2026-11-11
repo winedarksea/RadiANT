@@ -72,6 +72,8 @@ extern "C" {
  * excludes itself from it with a mutex and a mutex cannot do that. See the long
  * note above core_cb_rx() in radiant_radio_nrf.c. */
 #define RADIANT_SWI_CORE_CB       (1U << 4)
+/* A booking's start is close (ADR 0021). */
+#define RADIANT_SWI_GATE_DUE      (1U << 5)
 
 /* Called from the trampoline's own handler, at ordinary interrupt priority.
  * Kernel APIs are legal here; blocking is not. `bits` carries only the bits

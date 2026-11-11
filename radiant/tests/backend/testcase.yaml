@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# The nRF backend completion path, compiled against fake registers. native_sim
+# only: the fakes shadow nrfx.h, which a real nRF board SoC layer includes.
+tests:
+  radiant.backend:
+    tags:
+      - radiant
+      - mpsl
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
