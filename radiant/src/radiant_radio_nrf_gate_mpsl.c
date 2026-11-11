@@ -1098,15 +1098,19 @@ static void commit_next_grant(const struct sess *s)
 static void op_forget(void)
 {
 	struct sess *s;
+	/* Masked: that session's START between reading mpsl_owes and writing the
+	 * role would leave a booking with no request behind it. */
+	const uint32_t zkey = radiant_swi_zli_lock();
 
-	if (!g.pending) {
-		return;
+	if (g.pending) {
+		g.pending = false;
+		s = &ss[g.op_sess];
+		if (s->role == ROLE_OP) {
+			s->role = (s->mpsl_owes || s->want_place) ? ROLE_BOOK
+								  : ROLE_NONE;
+		}
 	}
-	g.pending = false;
-	s = &ss[g.op_sess];
-	if (s->role == ROLE_OP) {
-		s->role = (s->mpsl_owes || s->want_place) ? ROLE_BOOK : ROLE_NONE;
-	}
+	radiant_swi_zli_unlock(zkey);
 }
 
 /*
@@ -2731,13 +2735,23 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 				/* One step as far as this session's START can
 				 * tell, or a START between the writes finds a
 				 * role with nobody pending and hands the grant
-				 * back. */
+				 * back. The role is tested again inside the
+				 * mask: a START since the test above has
+				 * already handed it back, and nothing would
+				 * answer an operation staged behind that but
+				 * the backstop. */
 				const uint32_t zkey = radiant_swi_zli_lock();
+				const bool     still_booked = (b->role == ROLE_BOOK);
 
-				g.op_sess = (uint8_t)i;
-				g.pending = true;
-				b->role = ROLE_OP;
+				if (still_booked) {
+					g.op_sess = (uint8_t)i;
+					g.pending = true;
+					b->role = ROLE_OP;
+				}
 				radiant_swi_zli_unlock(zkey);
+				if (!still_booked) {
+					continue;
+				}
 			}
 			GSTAT(stats.book_hit++);
 #if defined(CONFIG_RADIANT_GATE_MPSL_STATS)

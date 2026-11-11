@@ -29,6 +29,9 @@ struct fake_swi_counts {
 };
 
 void                          fake_swi_reset(void);
+/* Run fn once, at the next radiant_swi_zli_lock(), just before it masks: a
+ * zero-latency signal landing in the last instant it still can. */
+void                          fake_swi_before_next_lock(void (*fn)(void));
 const struct fake_swi_counts *fake_swi(void);
 
 #ifdef __cplusplus

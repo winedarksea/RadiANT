@@ -84,8 +84,21 @@ uint32_t fake_swi_zli_depth_now(void)
 /* No PRIMASK on the host, and nothing to mask: the suite drives every signal
  * from its own thread. So this records the bracket instead - how often, and
  * that it is balanced - which is what the suite can actually assert. */
+static void (*before_next_lock)(void);
+
+void fake_swi_before_next_lock(void (*fn)(void))
+{
+	before_next_lock = fn;
+}
+
 uint32_t radiant_swi_zli_lock(void)
 {
+	if (before_next_lock != NULL) {
+		void (*fn)(void) = before_next_lock;
+
+		before_next_lock = NULL;
+		fn();
+	}
 	counts.zli_locks++;
 	return counts.zli_depth++;
 }
@@ -98,6 +111,7 @@ void radiant_swi_zli_unlock(uint32_t key)
 void fake_swi_reset(void)
 {
 	memset(&counts, 0, sizeof(counts));
+	before_next_lock = NULL;
 	/* Subscriptions deliberately survive: gate_init() registers once and
 	 * returns early on a second call, exactly as the session does. */
 }

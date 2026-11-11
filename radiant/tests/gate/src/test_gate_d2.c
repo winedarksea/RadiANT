@@ -747,6 +747,54 @@ ZTEST(radiant_gate_d2, test_d2_a_scan_chunk_does_not_take_a_tracked_booking)
 	zassert_equal(ROLE_BOOK, p.role[0], "the booking was taken");
 }
 
+/*
+ * The match tests the role before it masks. A START landing there has already
+ * handed the grant back, so the arm must not be staged behind it: nothing would
+ * ever answer it but the backstop.
+ */
+static void start_on_session_0(void)
+{
+	(void)fake_mpsl_signal_s(0u, MPSL_TIMESLOT_SIGNAL_START);
+}
+
+ZTEST(radiant_gate_d2, test_d2_a_start_just_before_the_match_masks_is_seen)
+{
+	radiant_time_t t = radiant_radio_now() + SCAN_LEAD_US;
+
+	zassert_equal(GATE_BOOK_OK, gate_book(t, t + TRACK_LEN_US, 0u), NULL);
+	k_msleep(WORK_MS);
+	fake_radio_advance_to(t - 1000u);
+
+	fake_swi_before_next_lock(start_on_session_0);
+	zassert_equal(GATE_DENIED,
+		      gate_acquire(GATE_OP_RX, t, t + TRACK_LEN_US, 0u,
+				   RADIANT_GATE_PRIO_HIGH), NULL);
+	gate_probe_read(&p);
+	zassert_false(p.pending, "staged behind a grant already handed back");
+	zassert_equal(0u, p.book_hit, NULL);
+	zassert_equal(ROLE_NONE, p.role[0], NULL);
+}
+
+/* op_forget() reads the owed flag and writes the role, and that session's START
+ * between the two leaves a booking no request stands behind. */
+ZTEST(radiant_gate_d2, test_d2_forgetting_a_staged_op_is_masked)
+{
+	radiant_time_t t = radiant_radio_now() + SCAN_LEAD_US;
+	uint32_t       locks;
+
+	zassert_equal(GATE_BOOK_OK, gate_book(t, t + TRACK_LEN_US, 0u), NULL);
+	k_msleep(WORK_MS);
+	zassert_equal(GATE_PENDING,
+		      gate_acquire(GATE_OP_RX, t, t + TRACK_LEN_US, 0u,
+				   RADIANT_GATE_PRIO_HIGH), NULL);
+	locks = fake_swi()->zli_locks;
+
+	gate_forget_pending();
+
+	zassert_true(fake_swi()->zli_locks > locks, "op_forget ran unmasked");
+	zassert_equal(0u, fake_swi()->zli_depth, "unbalanced lock");
+}
+
 /* A booking nobody has armed into reaches the core a little before it starts,
  * once. An armed one, or one still far off, does not. */
 ZTEST(radiant_gate_d2, test_d2_a_booking_due_tells_the_core_once)
