@@ -83,7 +83,7 @@ min_cases.radiant.api.sec_host: 81
 min_cases.radiant.api.crc_repair: 66
 # 32 since C5-1 (inline BLOCKED backs off the class that was refused). 38 with
 # the extension skip (ADR 0021).
-min_cases.radiant.gate: 71
+min_cases.radiant.gate: 72
 # radiant.backend (ADR 0021): the backend completion path against register models.
 min_cases.radiant.backend: 8
 min_cases.hrm_ble.sim_sched: 4

@@ -383,6 +383,9 @@ struct sess {
 	volatile bool  mpsl_owes;
 	/* req is built and request_work_fn() should place it. */
 	volatile bool  want_place;
+	/* When want_place was raised, from place_seq_next: request_work_fn()
+	 * places the oldest first. See want_place_set(). */
+	uint32_t       place_seq;
 	/* The anchor-establishing timeslot is outstanding. Nothing is staged
 	 * behind it and the core must hear about neither its grant nor its
 	 * refusal - see bootstrap_anchor(). */
@@ -1140,14 +1143,45 @@ static inline uint32_t notice_bin(int32_t us)
 }
 #endif
 
+/*
+ * THE ORDER REQUESTS REACH MPSL IS THE ORDER THE CORE MADE THEM. MPSL is first
+ * come, first served on overlapping air (Phase 0c F2), so when two requests wait
+ * for one work run, their order decides which one is refused. Placing them in
+ * session index order (as this once did) decided it by which session each
+ * happened to land in, which the core cannot see: on an R1 pair the earlier
+ * channel's fresh request sat in session 1 behind the later channel's booking
+ * in session 0 and lost every third slot (phase-3c.md). The core makes them in
+ * the order ADR 0013 rule 1 wants: the established operation first.
+ */
+static uint32_t place_seq_next;
+
+static void want_place_set(struct sess *s)
+{
+	s->place_seq = place_seq_next++;
+	s->want_place = true;
+}
+
 static void request_work_fn(struct k_work *w)
 {
+	bool tried[NSESS] = {false};
+
 	ARG_UNUSED(w);
 
-	for (uint32_t i = 0u; i < NSESS; i++) {
-		if (ss[i].open && ss[i].want_place) {
-			place_one(&ss[i]);
+	for (uint32_t n = 0u; n < NSESS; n++) {
+		struct sess *first = NULL;
+
+		for (uint32_t i = 0u; i < NSESS; i++) {
+			if (ss[i].open && ss[i].want_place && !tried[i] &&
+			    (first == NULL ||
+			     (int32_t)(ss[i].place_seq - first->place_seq) < 0)) {
+				first = &ss[i];
+			}
 		}
+		if (first == NULL) {
+			return;
+		}
+		tried[sess_idx(first)] = true;
+		place_one(first);
 	}
 }
 
@@ -1348,7 +1382,7 @@ static void bootstrap_anchor(struct sess *s)
 	s->ng.granted_len_us = MPSL_TIMESLOT_LENGTH_MIN_US;
 	s->ng.grant_end = 0u;
 	s->bootstrapping = true;
-	s->want_place = true;
+	want_place_set(s);
 	radiant_swi_pend(RADIANT_SWI_GATE_REQUEST);
 }
 
@@ -2052,7 +2086,7 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 						 false, false, END_MARGIN_FIXED_US,
 						 RADIANT_GATE_PRIO_HIGH)) {
 					s->r_end = end;
-					s->want_place = true;
+					want_place_set(s);
 					GSTAT(stats.book_replaced++);
 					radiant_swi_pend(RADIANT_SWI_GATE_REQUEST);
 					break;
@@ -2908,7 +2942,7 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 	s->role = ROLE_OP;
 	g.op_sess = sess_idx(s);
 	g.pending = true;
-	s->want_place = true;
+	want_place_set(s);
 	if (prio == RADIANT_GATE_PRIO_HIGH) {
 		stats.hi_pending++;
 	}
@@ -3178,7 +3212,7 @@ int gate_book_tail(radiant_time_t t_from, radiant_time_t t_to, uint16_t follow_o
 	s->r_end = end;
 	s->book_failed = false;
 	s->role = ROLE_BOOK;
-	s->want_place = true;
+	want_place_set(s);
 	s->due_told = false;
 	s->book_tail_us = tail_us;
 	s->book_replaced = false;

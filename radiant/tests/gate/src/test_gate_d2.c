@@ -907,6 +907,62 @@ ZTEST(radiant_gate_d2, test_d2_an_armed_booking_is_not_due)
 	zassert_equal(0u, fake_backend()->booking_due, NULL);
 }
 
+/*
+ * Requests reach MPSL in the order the core made them, not in session order.
+ * MPSL is first come, first served on overlapping air (Phase 0c F2), so when
+ * two requests are waiting in one work run the order IS which one is refused.
+ * Measured (phase-3c.md): with the earlier channel's fresh request in session
+ * 1 and the later channel's booking in session 0, index order placed the
+ * booking first and the earlier tracked channel lost every third slot.
+ *
+ * The shape here is the bench's: a tracked grant live in session 0, the next
+ * slot of the earlier channel acquired fresh (it goes to the idle session 1),
+ * then the later channel booked into session 0, and the grant ended, all
+ * before the work queue runs.
+ */
+ZTEST(radiant_gate_d2, test_d2_requests_reach_mpsl_in_the_order_they_were_made)
+{
+	radiant_time_t t0 = radiant_radio_now() + 60000u;
+	radiant_time_t ta;
+	uint32_t       req0;
+	uint32_t       req1;
+
+	zassert_equal(GATE_PENDING,
+		      gate_acquire(GATE_OP_RX, t0, t0 + TRACK_LEN_US, 0u,
+				   RADIANT_GATE_PRIO_HIGH), NULL);
+	k_msleep(WORK_MS);
+	zassert_equal(0u, fake_mpsl_last_session(), NULL);
+	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_NONE,
+		      fake_mpsl_signal_s(0u, MPSL_TIMESLOT_SIGNAL_START), NULL);
+	req0 = fake_mpsl_requests_s(0u);
+	req1 = fake_mpsl_requests_s(1u);
+	ta = radiant_radio_now() + 240000u;
+
+	k_sched_lock();
+	/* The earlier channel's next slot, fresh: the idle session. */
+	zassert_equal(GATE_PENDING,
+		      gate_acquire(GATE_OP_RX, ta, ta + TRACK_LEN_US, 4150u,
+				   RADIANT_GATE_PRIO_HIGH), NULL);
+	/* The later channel's next slot, booked: the only free session. */
+	zassert_equal(GATE_BOOK_OK, gate_book(ta + 5000u, ta + 5000u + TRACK_LEN_US, 4150u),
+		      NULL);
+	gate_probe_read(&p);
+	zassert_equal(1u, p.op_sess, "the fresh request must take the idle session");
+	zassert_equal(ROLE_BOOK, p.role[0], NULL);
+	/* The grant in session 0 ends before the work queue gets to run. */
+	gate_release();
+	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_END,
+		      fake_mpsl_signal_s(0u, MPSL_TIMESLOT_SIGNAL_TIMER0), NULL);
+	k_sched_unlock();
+	k_msleep(WORK_MS);
+
+	zassert_equal(req0 + 1u, fake_mpsl_requests_s(0u), NULL);
+	zassert_equal(req1 + 1u, fake_mpsl_requests_s(1u), NULL);
+	zassert_equal(0u, fake_mpsl_last_session(),
+		      "the booking made second reached MPSL first: the arbiter would "
+		      "refuse the earlier channel's slot");
+}
+
 ZTEST(radiant_gate_d2, test_d2_one_session_is_masters_gate)
 {
 	gate_shutdown();
