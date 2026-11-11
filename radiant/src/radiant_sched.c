@@ -259,9 +259,8 @@ static struct {
 		radiant_time_t                   open;
 		radiant_time_t                   close;
 	} bk[RADIANT_SCHED_BOOK_MAX];
-	/* Where the last fixed-class operation's air ends: close + follow_on_us
-	 * while it is armed, and the instant it ended once it has, because the
-	 * backend then gives the reserve back. A scan chunk placed in the other
+	/* Where the last fixed-class operation's air ends, follow-on reserve
+	 * included (close + follow_on_us). A scan chunk placed in the other
 	 * session must not start before the arbiter has that timeslot ending:
 	 * see arm_next(). */
 	radiant_time_t fix_end;
@@ -1881,14 +1880,15 @@ static enum step arm_next(radiant_time_t earliest)
 
 #if defined(CONFIG_RADIANT_SCHED_BOOKING)
 		/*
-		 * Not before the last tracked window's timeslot has ended. While
-		 * the window runs that timeslot is booked to its close plus the
-		 * follow-on reserve, and with two sessions the arbiter judges the
-		 * chunk's request against all of it at once. A chunk opened
+		 * Not before the last tracked window's timeslot has ended. That
+		 * timeslot is booked to its close plus the follow-on reserve,
+		 * and with two sessions the arbiter judges the chunk's request
+		 * against all of it at once, released early or not (the nRF
+		 * gate measured the release arriving only at the grant's own end
+		 * whenever the window had received a frame). A chunk opened
 		 * inside it waits for that end and then has too little notice
 		 * left; opening after it costs the same listening without the
-		 * wasted request. Once the window has ended fix_end is that
-		 * instant, since the grant is released as the dispatch drains.
+		 * wasted request.
 		 */
 		if (booking() && s.fix_end != 0u) {
 			s_earliest = t_max(s_earliest,
@@ -2296,9 +2296,6 @@ static void hal_rx(const struct radiant_rx_event *evt, void *user)
 	bool terminal = false;
 	bool was_in_pass;
 	bool was_in_cb;
-#if defined(CONFIG_RADIANT_SCHED_BOOKING)
-	bool was_continuous;
-#endif
 
 	(void)user;
 
@@ -2313,9 +2310,6 @@ static void hal_rx(const struct radiant_rx_event *evt, void *user)
 		return;
 	}
 
-#if defined(CONFIG_RADIANT_SCHED_BOOKING)
-	was_continuous = s.armed_continuous;
-#endif
 	was_in_pass = s.in_pass;
 	s.in_pass = true;
 	was_in_cb = s.in_radio_cb;
@@ -2368,11 +2362,6 @@ static void hal_rx(const struct radiant_rx_event *evt, void *user)
 		break;
 	}
 
-#if defined(CONFIG_RADIANT_SCHED_BOOKING)
-	if (terminal && !was_continuous) {
-		s.fix_end = radiant_radio_now();
-	}
-#endif
 	s.in_pass = was_in_pass;
 	/* Nested inside a thread-context pass: leave the commit to the pass
 	 * that owns it. s.dirty is set by anything a callback posted, and
@@ -2427,9 +2416,6 @@ static void hal_tx(const struct radiant_tx_event *evt, void *user)
 		end_armed(RADIANT_SCHED_DONE_FAILED);
 		break;
 	}
-#if defined(CONFIG_RADIANT_SCHED_BOOKING)
-	s.fix_end = radiant_radio_now();
-#endif
 	s.in_pass = was_in_pass;
 	if (!was_in_pass) {
 		pass();

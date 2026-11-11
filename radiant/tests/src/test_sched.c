@@ -3747,26 +3747,6 @@ ZTEST(radiant_sched, test_d2_a_refused_booking_costs_exactly_its_own_slot)
 }
 
 /*
- * A tracked window that has ended gives its follow-on reserve back (THE GRANT
- * HANDOFF), so the chunk after it does not wait out that reserve: it opens at
- * the elastic lead from the window's end. Without that, every tracked channel
- * carries its whole 4.15 ms reserve in the band after its slot.
- */
-ZTEST(radiant_sched, test_d2_the_chunk_after_a_slot_does_not_wait_out_the_reserve)
-{
-	struct deaf_shape d;
-
-	shape_el_lead = SHAPE_EL_LEAD_D2;
-	log.follow_on_us[0] = 4150u;
-	measure_deaf_shape(1u, SHAPE_LEAD_MPSL, 200u, SHAPE_MAXWIN_MPSL, &d);
-	shape_el_lead = 0u;
-	report_shape("d2-reserve", 1u, &d);
-	zassert_true(d.longest_gap_us <= 8400u,
-		     "the band around a tracked slot is %u us", d.longest_gap_us);
-	zassert_equal(0u, log.missed_count[0], NULL);
-}
-
-/*
  * A tracked slot depends on the core arming it inside its booking, and that
  * normally happens when the chunk in front of it ends. A chunk whose terminal
  * is late (its request refused late, the grant ended long after its close)
