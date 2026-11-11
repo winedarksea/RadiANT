@@ -75,6 +75,18 @@ does one operation at a time. That is the floor; master has the same one.
 
 ## The fix
 
+> **Review, 2026-11-11 ([phase-4-fix.md](phase-4-fix.md)).** Two defects in this
+> fix, both fixed on `wip/adr18-f1`. **F1:** with no scan running (the steady state
+> of every R1 walk below) the earlier channel was never booked for a pair under
+> about 14 ms. The deferral's "the neighbour's completion books c instead" did not
+> happen: at that completion the pass armed A's next slot as a fresh request
+> before `book_ahead()` ran, and the deferral's `return` also stopped every other
+> booking in that pass. **F2:** the fresh request stretched to carry a joiner was
+> denied whole when refused, so "a refused joined booking costs the joiner, never
+> the earlier slot" held for bookings only. Now a bounded window is booked before
+> it is armed, no fresh request carries a joiner, and the gate re-places a refused
+> joined booking at plain length even once armed.
+
 Two commits, each separately revertible.
 
 - **40a2089, the gate places requests in the order the core made them** (oldest
@@ -117,7 +129,12 @@ slots, 12 of 12 each.
 both are kept at 5 ms on `gate.conf` and beside an attached Thread leader, where
 the image before the fix lost a third and two thirds, interleaved in the same
 sitting. Every after-fix R1 run read `den=0 blk=0`: every tracked slot was booked
-or joined and granted.
+or joined and granted. **Corrected 2026-11-11:** granted, but not all booked or
+joined. Fresh tracked arms (`hi_pending` minus `D2BOOK hit`) were 474 (21 %) in
+`r1_after_5`, 971 (34 %) at 8 ms, 1050 (37 %) at 12 ms, 473 (25 %) in
+`r1th_after_5`, and 0 at 20 ms: the earlier channel was on fresh requests (F1,
+[phase-4-fix.md](phase-4-fix.md)). With no scan those requests had a period of
+notice, so they cost nothing measured here.
 
 ### R1 walk, `gate.conf`
 
@@ -141,10 +158,13 @@ to 285f94a). After: `img_c3_gate.hex` (1090d52). Run in the order listed.
   arms served from the held air, `hi` acquires minus pending), and both channels
   read at the reference's level.
 - 8, 12 and 20 ms need no join (`join` 0) and the gate granted every tracked slot
-  on both images. B's 5-11 % there is on air: the gate counters show no refusal,
-  B's misses are single packets spread over the whole session including the walk
-  at 30-50 ms, and Stage B read the same 8-10 % from this Garmin at 12 and 20 ms on
-  every image. At 20 ms the reference itself read 10.2 %.
+  on both images. **Corrected 2026-11-11 ([phase-4-fix.md](phase-4-fix.md)):** B's
+  5-11 % there is neither the air nor the branch. It is how this DUT receives this
+  Garmin, on every image, master included (`phase-3b\r1_ctl12`): the gate counters
+  show no refusal, B's misses are single packets spread over the whole session
+  including the walk at 30-50 ms, and the reference on B read 0.8-2.0 % at 8 and
+  12 ms. At 20 ms the reference itself read 10.2 %, so that row does not separate
+  the two. (This paragraph first said "on air".)
 - `eo` 1 once (`r1_after_5`): one booking granted while the other session had an
   operation staged, the rare late-arm counter Stage B also saw in multi-channel
   runs. It cannot be told from on-air loss here.
@@ -165,11 +185,15 @@ to 285f94a). After: `img_c3_gate.hex` (1090d52). Run in the order listed.
 
 The after image's gate read `den 0 blk 2` over the three trials (the two refusals
 are not attributed; inferred to be B's first booking at acquisition, before a join
-could be made), the before image `den 139 blk 141`. A sensor within about 1 ms of a
-tracked one was not found on either image: the tracked window holds the radio at
-that instant with A's address only. **Unexplained:** the before image's trial at
-0.3 ms counted no packets on channel 0 at all; not chased, it is the image being
-replaced. A first pair at delay 0 (`disc5_*`) landed B at 56 ms, not 5 ms (the
+could be made), the before image `den 139 blk 141`. **Corrected 2026-11-11
+([phase-4-fix.md](phase-4-fix.md)):** the third trial does not show a discovery
+floor near 1 ms. On the after image its phase is undetermined (mean -0.6 ms, sd
+81 ms: the two transmitters were not held at a phase), and on the before image the
+trial heard no packets at all on channel 0, so neither reads as "a sensor within
+about 1 ms of a tracked one is not found". That floor is not measured. (This
+paragraph first stated it as found on both images.) **Unexplained:** the before
+image's trial at 0.3 ms counted no packets on channel 0 at all; not chased, it is
+the image being replaced. A first pair at delay 0 (`disc5_*`) landed B at 56 ms, not 5 ms (the
 delay-to-phase offset had moved since Stage B), and is not an R1 reading; both
 images were clean there.
 
@@ -249,6 +273,19 @@ after-fix pair's 1 and 2 failures did not repeat interleaved.
   the earlier channel is a master (a transmit does not lead a join; the placement
   order fix still keeps the earlier one); a joined booking refused by BLE on air
   (the re-place at plain length is the Stage B mechanism, ztested there).
+- **Review, 2026-11-11, documented and not fixed:**
+  - **F3, "oldest first" is per work-queue run.** `request_work_fn()` places the
+    waiting sessions in the order they were made, but only within one run. When
+    the oldest is held back (`place_one()`'s `defer_live`, because the other
+    session's timeslot is still scheduled over its start, or an `-NRF_EAGAIN`),
+    the loop goes on and places the younger one, which then reaches MPSL first. The
+    earlier channel's request can therefore still be judged second in that case.
+    Not seen on the bench (every after-fix R1 run read `den 0 blk 0`); not
+    measured how often the held-back case arises with two tracked requests.
+  - **F4, a transmit never leads a join.** A receive window within about 6.6 ms
+    behind a master's transmit cannot join it and overlaps its request, so the
+    later window is refused every period, as on master. The earlier transmit keeps
+    its slot. Not tested on air.
 
 ## Raw logs
 

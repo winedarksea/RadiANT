@@ -104,6 +104,30 @@
 >   placed again at plain length, so under another stack's refusal it costs the
 >   joiner, never the earlier slot.
 
+> **Corrections, 2026-11-11, from the phase 4 review
+> ([phase-4-fix.md](../adr18-eval/phase-4-fix.md)).** These amend the Stage C
+> bullets above.
+>
+> - **"Both slots kept" was true; "booked" was not.** With no scan running, the
+>   earlier channel of a pair under about 14 ms was armed as a fresh request every
+>   period and never booked (F1), and the fresh request stretched to carry a joiner
+>   was denied whole on refusal, so "costs the joiner, never the earlier slot" held
+>   only for bookings (F2). Fixed: a bounded window is booked before it is armed,
+>   the booking carries the joiner, no fresh request carries one, and the gate
+>   places a refused joined booking again at plain length whether or not the core
+>   has armed into it. Still no third session and no HAL change.
+> - **"Requests reach MPSL oldest first"** holds within one work-queue run. A request
+>   held back for the other session's running timeslot (`defer_live`) or for
+>   `-NRF_EAGAIN` lets a younger one be placed first (F3, not fixed).
+> - **A transmit never leads a join**, so a receive window within about 6.6 ms
+>   behind a master's transmit is refused every period, as on master (F4).
+> - **The discovery floor is withdrawn.** "A sensor within about 1 ms of a tracked
+>   one is not found by the search" is not supported: that trial's phase was
+>   undetermined on one image and it heard nothing on the other (F6). The other
+>   floor, a window inside the earlier channel's reply exchange, stands.
+> - **Stage B's BLE check reads "no regression"**, not a gain: slots heard 98.91 %
+>   against master's 99.10 % (F6).
+
 ---
 
 ## Context

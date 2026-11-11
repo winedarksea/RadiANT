@@ -30,7 +30,7 @@ margins, so MPSL refuses whichever of the two was placed second.
 | 2. R1 pair | 12-20 ms: both kept. **5 ms: FAIL, A 33.5 % and B 70 % lost** | B 100 % lost, A kept | `r1_*`, `r1t_*` |
 | 3. ch0 loss, `sched_missed`, fallbacks, ext refused, `gate.conf` | PASS: 0 loss, 0, 0, 0 | 0 loss, 0 | `gate_*`, `gatetail_*` |
 | 4. Thread: fallback rate, in-band | fallback 0; in-band 2/5 (4/5 with the tail) | in-band 1/5 (2/5) | `thread_*`, `threadtail_*` |
-| 5. BLE granted-unheard | **PASS**: 0.07 % (master 1.52 %), lead stayed OPEN | 1.52 % | `ble_*`, `bletail_*` |
+| 5. BLE granted-unheard | **No regression** (corrected 2026-11-11, [phase-4-fix.md](phase-4-fix.md)): slots heard 98.91 % against master's 99.10 %; the 0.07 % against 1.52 % is not a like-for-like gain, master's granted over-counts. Lead stayed OPEN | 99.10 % heard | `ble_*`, `bletail_*` |
 | 6. Bridge second-sensor bind | 5/14 bound (64 % missed) | 6/14 (57 % missed) | `bind_*`, `bridge_head1` |
 | 7. Thread's own traffic | 0 ping lost, no re-attach; mean RTT +1.5-2 ms under search (+5 ms with the tail) | 0 lost | `thread_*` |
 | 8. Late arms, Matter image | `eo` 0, `hl` 0, `late` 0 in 300 s; `eo` 1 seen in two multi-channel runs elsewhere | n/a | `matter1`, `r1_head12s`, `eight2_head_2` |
@@ -157,6 +157,11 @@ c4e1ef8 in the control worktree (`ctl_patch.py`), not committed anywhere.
 |---|---|---|---|---|---|
 | master | 1444 | 99.10 % | 1.52 % | -0.62 % | 0.61 % |
 | branch | 1464 | 98.91 % | **0.07 %** | 1.02 % | 0.41 % |
+
+> **Corrected 2026-11-11 ([phase-4-fix.md](phase-4-fix.md)): read this as no
+> regression, not as a gain.** The like-for-like figure is slots heard: 99.10 % on
+> master, 98.91 % on the branch. The granted-unheard columns are not comparable,
+> because master's granted count over-counts (below).
 
 **Not a merge blocker: granted-unheard on the branch is 1.45 points under master, not
 over it.** Master's figure is too high, because its high-priority grant counter also
