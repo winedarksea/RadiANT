@@ -2367,14 +2367,15 @@ static void gate_stats_fn(struct k_work *w)
 		stats.rel_est_last, stats.t0_fix_rel, stats.t0_fix_backstop,
 		stats.t0_fix_at, stats.ext_skipped);
 	LOG_INF("D2START n=%u err last/min/max %d/%d/%d us | skip_left_min=%u | "
-		"due saved=%u late=%u orphan=%u tail=%u repl=%u",
+		"due saved=%u late=%u orphan=%u tail=%u repl=%u join=%u jdefer=%u",
 		stats.start_err_n, (int)stats.start_err_last,
 		(int)stats.start_err_min, (int)stats.start_err_max,
 		stats.skip_left_min,
 		radiant_sched_stats_get()->book_saved,
 		radiant_sched_stats_get()->book_late,
 		radiant_sched_stats_get()->book_orphan,
-		radiant_sched_stats_get()->scan_tail, stats.book_replaced);
+		radiant_sched_stats_get()->scan_tail, stats.book_replaced,
+		radiant_sched_stats_get()->join, radiant_sched_stats_get()->join_defer);
 	LOG_INF("D2EL blk by notice %u/%u/%u/%u/%u gr %u/%u/%u/%u/%u deferred-blk %u",
 		stats.el_blk_by_notice[0], stats.el_blk_by_notice[1],
 		stats.el_blk_by_notice[2], stats.el_blk_by_notice[3],
