@@ -257,6 +257,43 @@ ZTEST(radiant_gate_d2, test_d2_a_refused_booking_refuses_only_its_own_arm)
 	assert_invariant();
 }
 
+/* A refused booking that asked for a scan tail is placed once more at its
+ * plain length, so the tail costs listening and not the slot; refused again,
+ * it refuses its arm as any refused booking does. */
+ZTEST(radiant_gate_d2, test_d2_a_refused_tail_booking_is_placed_again_without_the_tail)
+{
+	radiant_time_t t = radiant_radio_now() + 60000u;
+	uint32_t       req0;
+
+	zassert_equal(GATE_BOOK_OK, gate_book_tail(t, t + TRACK_LEN_US, 0u, 10000u), NULL);
+	k_msleep(WORK_MS);
+	zassert_equal(0u, fake_mpsl_last_session(), NULL);
+	zassert_equal(TRACK_LEN_US + 10000u + 1250u,
+		      fake_mpsl_last_request_s(0u)->params.normal.length_us, NULL);
+	req0 = fake_mpsl_requests_s(0u);
+
+	(void)fake_mpsl_signal_s(0u, MPSL_TIMESLOT_SIGNAL_BLOCKED);
+	k_msleep(WORK_MS);
+	zassert_equal(req0 + 1u, fake_mpsl_requests_s(0u), "not placed again");
+	zassert_equal(TRACK_LEN_US + 1250u,
+		      fake_mpsl_last_request_s(0u)->params.normal.length_us,
+		      "placed again with the tail");
+	gate_probe_read(&p);
+	zassert_false(p.book_failed[0], NULL);
+	zassert_equal(ROLE_BOOK, p.role[0], NULL);
+
+	/* Refused again: no third request, and the arm is refused. */
+	(void)fake_mpsl_signal_s(0u, MPSL_TIMESLOT_SIGNAL_BLOCKED);
+	k_msleep(WORK_MS);
+	zassert_equal(req0 + 1u, fake_mpsl_requests_s(0u), "placed a third time");
+	gate_probe_read(&p);
+	zassert_true(p.book_failed[0], NULL);
+	zassert_equal(GATE_DENIED,
+		      gate_acquire(GATE_OP_RX, t, t + TRACK_LEN_US, 0u,
+				   RADIANT_GATE_PRIO_HIGH), NULL);
+	zassert_equal(0u, fake_backend()->on_denied, NULL);
+}
+
 ZTEST(radiant_gate_d2, test_d2_a_booking_granted_with_nothing_staged_bypasses_the_backend)
 {
 	radiant_time_t t = radiant_radio_now() + SCAN_LEAD_US;

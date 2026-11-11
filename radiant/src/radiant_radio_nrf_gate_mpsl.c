@@ -428,9 +428,17 @@ struct sess {
 	volatile bool  wait_live;
 	/* The core has been told this booking's start is close. */
 	bool           due_told;
+	/* A booking's scan tail (ADR 0021 decision 5), and whether a refused
+	 * booking has already been placed again without it. */
+	uint16_t       book_tail_us;
+	bool           book_replaced;
 };
 
 static struct sess ss[NSESS];
+
+static bool build_normal(struct sess *s, radiant_time_t start, radiant_time_t end,
+			 uint64_t len, bool extendable, bool no_extend,
+			 uint32_t end_margin_us, uint8_t prio);
 /* How many sessions opened. 1 means the single-session gate. */
 static uint8_t     n_open;
 
@@ -681,6 +689,8 @@ static struct {
 	uint32_t book_early;
 	uint32_t book_busy;
 	uint32_t book_near;
+	/* Refused tailed bookings placed again at plain length. */
+	uint32_t book_replaced;
 	/* A grant with nothing staged on its session (an aborted op's request,
 	 * a booking nobody armed into): handed straight back. */
 	uint32_t orphan_start;
@@ -2020,12 +2030,39 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 			break;
 		}
 		if (s->role == ROLE_BOOK) {
-			/* A refused booking. Nobody is waiting on it yet; the
-			 * arm it was for is refused synchronously when it comes
-			 * (gate_acquire()), exactly as a refused fresh request
-			 * for that window would have been. */
-			s->book_failed = true;
 			GSTAT(stats.book_blocked++);
+			/* A refused booking that asked for a scan tail is placed
+			 * once more at its plain length, while it still has the
+			 * notice a booking needs: the tail is listening, and must
+			 * not cost the slot it was attached to. */
+			if (s->book_tail_us != 0u && !s->book_replaced &&
+			    s->anchor_valid &&
+			    s->r_start > radiant_radio_now() + (radiant_time_t)PLACE_MIN_US) {
+				const radiant_time_t end =
+					s->r_end - (radiant_time_t)s->book_tail_us;
+				const uint64_t len = (uint64_t)(end - s->r_start) +
+						     (uint64_t)END_MARGIN_FIXED_US;
+
+				s->book_replaced = true;
+				s->book_tail_us = 0u;
+				if (build_normal(s, s->r_start, end,
+						 (len < MPSL_TIMESLOT_LENGTH_MIN_US)
+							 ? MPSL_TIMESLOT_LENGTH_MIN_US
+							 : len,
+						 false, false, END_MARGIN_FIXED_US,
+						 RADIANT_GATE_PRIO_HIGH)) {
+					s->r_end = end;
+					s->want_place = true;
+					GSTAT(stats.book_replaced++);
+					radiant_swi_pend(RADIANT_SWI_GATE_REQUEST);
+					break;
+				}
+			}
+			/* Nobody is waiting on it yet; the arm it was for is
+			 * refused synchronously when it comes (gate_acquire()),
+			 * exactly as a refused fresh request for that window
+			 * would have been. */
+			s->book_failed = true;
 			break;
 		}
 		s->role = ROLE_NONE;
@@ -2296,14 +2333,14 @@ static void gate_stats_fn(struct k_work *w)
 		stats.rel_est_last, stats.t0_fix_rel, stats.t0_fix_backstop,
 		stats.t0_fix_at, stats.ext_skipped);
 	LOG_INF("D2START n=%u err last/min/max %d/%d/%d us | skip_left_min=%u | "
-		"due saved=%u late=%u orphan=%u tail=%u",
+		"due saved=%u late=%u orphan=%u tail=%u repl=%u",
 		stats.start_err_n, (int)stats.start_err_last,
 		(int)stats.start_err_min, (int)stats.start_err_max,
 		stats.skip_left_min,
 		radiant_sched_stats_get()->book_saved,
 		radiant_sched_stats_get()->book_late,
 		radiant_sched_stats_get()->book_orphan,
-		radiant_sched_stats_get()->scan_tail);
+		radiant_sched_stats_get()->scan_tail, stats.book_replaced);
 	LOG_INF("D2EL blk by notice %u/%u/%u/%u/%u gr %u/%u/%u/%u/%u deferred-blk %u",
 		stats.el_blk_by_notice[0], stats.el_blk_by_notice[1],
 		stats.el_blk_by_notice[2], stats.el_blk_by_notice[3],
@@ -3081,6 +3118,12 @@ static void booking_due_fire(void)
  */
 int gate_book(radiant_time_t t_from, radiant_time_t t_to, uint16_t follow_on_us)
 {
+	return gate_book_tail(t_from, t_to, follow_on_us, 0u);
+}
+
+int gate_book_tail(radiant_time_t t_from, radiant_time_t t_to, uint16_t follow_on_us,
+		   uint16_t tail_us)
+{
 	radiant_time_t now;
 	radiant_time_t start;
 	radiant_time_t end;
@@ -3094,7 +3137,8 @@ int gate_book(radiant_time_t t_from, radiant_time_t t_to, uint16_t follow_on_us)
 	start = (t_from > (radiant_time_t)HEAD_MARGIN_US)
 			? (t_from - (radiant_time_t)HEAD_MARGIN_US)
 			: 0u;
-	end = t_to + (radiant_time_t)follow_on_us + (radiant_time_t)TAIL_MARGIN_US;
+	end = t_to + (radiant_time_t)follow_on_us + (radiant_time_t)tail_us +
+	      (radiant_time_t)TAIL_MARGIN_US;
 	if (end <= start) {
 		return GATE_BOOK_EDENIED;
 	}
@@ -3136,6 +3180,8 @@ int gate_book(radiant_time_t t_from, radiant_time_t t_to, uint16_t follow_on_us)
 	s->role = ROLE_BOOK;
 	s->want_place = true;
 	s->due_told = false;
+	s->book_tail_us = tail_us;
+	s->book_replaced = false;
 	GSTAT(stats.book_placed++);
 	radiant_swi_pend(RADIANT_SWI_GATE_REQUEST);
 	booking_due_rearm();

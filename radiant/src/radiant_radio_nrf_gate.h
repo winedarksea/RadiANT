@@ -216,6 +216,10 @@ uint32_t gate_min_arm_lead_us(void);
 #define GATE_BOOK_EDENIED (-2)  /* too near, no anchor yet, or too long */
 #define GATE_BOOK_ENOTSUP (-3)  /* the second session is not open */
 int  gate_book(radiant_time_t t_from, radiant_time_t t_to, uint16_t follow_on_us);
+/* gate_book() with tail_us more air past the follow-on (ADR 0021 decision 5).
+ * If MPSL refuses it, it is placed once more without the tail. */
+int  gate_book_tail(radiant_time_t t_from, radiant_time_t t_to, uint16_t follow_on_us,
+		    uint16_t tail_us);
 /* True when two sessions are open and booking works (caps.booking). */
 bool gate_booking(void);
 /* The gate's current elastic lead (placement lead plus head margin), or 0

@@ -659,7 +659,8 @@ static int book_slot(uint8_t c)
 		{
 			const uint16_t tail = scan_tail_for(c, radiant_radio_now(), fo);
 
-			req.follow_on_us = (uint16_t)(fo + tail);
+			req.follow_on_us = fo;
+			req.book_tail_us = tail;
 			if (tail != 0u) {
 				tail_end = close + (radiant_time_t)fo +
 					   (radiant_time_t)tail;

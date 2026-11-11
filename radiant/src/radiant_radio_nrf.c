@@ -3346,6 +3346,7 @@ int radiant_radio_book(const struct radiant_rx_req *rx,
 	radiant_time_t from;
 	radiant_time_t to;
 	uint16_t       follow_on;
+	uint16_t       tail = 0u;
 	int            rc;
 
 	if (!radiant_op.inited || !radiant_op.enabled) {
@@ -3366,6 +3367,7 @@ int radiant_radio_book(const struct radiant_rx_req *rx,
 		to = rx->t_close + (radiant_time_t)(((uint32_t)rx->fmt->body_len + 2u) *
 						     US_PER_BYTE);
 		follow_on = rx->follow_on_us;
+		tail = rx->book_tail_us;
 	} else {
 		uint32_t lead_us;
 
@@ -3379,7 +3381,7 @@ int radiant_radio_book(const struct radiant_rx_req *rx,
 						      US_PER_BYTE);
 		follow_on = tx->follow_on_us;
 	}
-	rc = gate_book(from, to, follow_on);
+	rc = gate_book_tail(from, to, follow_on, tail);
 	switch (rc) {
 	case GATE_BOOK_OK:
 		return RADIANT_RADIO_OK_RC;

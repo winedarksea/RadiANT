@@ -1841,7 +1841,7 @@ int radiant_radio_book(const struct radiant_rx_req *rx,
 		kind = (uint8_t)FAKE_RADIO_ARM_RX;
 		open = rx->t_open;
 		close = rx->t_close;
-		fo = rx->follow_on_us;
+		fo = (uint16_t)(rx->follow_on_us + rx->book_tail_us);
 	} else {
 		kind = (uint8_t)FAKE_RADIO_ARM_TX;
 		open = tx->t_sync_at;

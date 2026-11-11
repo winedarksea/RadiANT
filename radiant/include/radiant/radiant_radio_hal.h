@@ -411,6 +411,12 @@ struct radiant_rx_req {
 	 * slave-originated data followed by ACK may need a longer exchange reserve.
 	 */
 	uint16_t                     follow_on_us;
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+	/* radiant_radio_book() only: air asked for past follow_on_us for a
+	 * scan tail (ADR 0021 decision 5). A backend that cannot place the
+	 * longer booking may place it once more without the tail. */
+	uint16_t                     book_tail_us;
+#endif
 };
 
 /* ---------------------------------------------------------------------------
