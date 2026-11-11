@@ -54,3 +54,87 @@ on air, and channel 1's wildcard bound it within 5 s of every trial. Every figur
 that leg looked valid. Those logs are kept as `void_ambient8265_*`. Commit ecc461a
 makes channel 1 pair on transmission type 5, which only the harness's masters send,
 and refuses to count a bind to anything but B.
+
+### 2. R1 pair on air
+
+`ant_disc_phase.py --r1-walk`: B (the Garmin, which takes a period change on an open
+channel) is acquired at about 40 ms after A, walked to the target, and read for 60 s.
+The Pro Micro is the reference on B. `s`: a third DUT channel searching for absent
+#9999 throughout (`--r1-search-dev`, added in ecc461a).
+
+| Run | B-A in the window (ms) | DUT A | DUT B | Reference on B |
+|---|---|---|---|---|
+| master, 12 | 12.6 -> 11.0 | 244 (0 %) | **0 (100 %)** | 0.0 % |
+| master, 12 s | 12.7 -> 5.1 | 244 (0 %) | **0 (100 %)** | 0.4 % |
+| branch, 12 | 12.5 -> 12.0 | 244 (0 %) | 223 (8.5 %) | 0.8 % |
+| branch, 12 s | 12.5 -> 8.1 | 244 (0 %) | 221 (9.3 %) | 0.4 % |
+| branch, 20 | 20.6 -> 19.4 | 244 (0 %) | 224 (8.1 %) | 0.0 % |
+| **branch, 5** | 5.7 -> 4.7 | **162 (33.5 %)** | **73 (70.1 %)** | 0.0 % |
+
+**At 8-20 ms the branch keeps both slots, and at 5 ms it fails.** Master never hears B
+in the window. At 12 and 20 ms the branch counted every tracked window booked, hit and
+granted, with `blk` 0. Its ~8 % on B is the same at 12 and 20 ms, so it is not R1: B is
+the Garmin, and the DUT hears the Garmin a little worse than the reference does.
+
+At 5 ms the gate's bookings were refused by MPSL with no other stack on the air: `blk`
+rose by about 13 every 5 s from the moment B arrived (`hi` 40 acquires, 20 refused,
+20 granted every 5 s). **And the earlier channel lost a third of its slots, which master
+never does.** That is a rule-1 regression against master in the 2.6-~6 ms band.
+
+Partly explained. A tracked slave's booking holds its window plus the 4150 us
+acknowledged-reply reserve plus 1.25 ms of margins, about 6.5 ms. A pair closer than
+that overlaps, and MPSL refuses whichever booking was placed second, first come first
+served (Phase 0c F2). Which one is placed second depends on the order of completions,
+so either channel can lose. A ztest with the real follow-on
+(`test_d2_r1_with_a_real_follow_on`) reproduces the refusals below about 4.5 ms in the
+fake, which models no margins. It does not reproduce the loss on channel A. Also
+unexplained: in the 12 ms run the same refusals began about 110 s after the window,
+when B had drifted to about 11.2 ms, further than 6.5 ms. With a search running, 8.1 ms
+held with no refusals.
+
+ADR 0021's "two sessions fix R1 pairs" holds from about 12 ms up to the lead. Below
+about 6 ms, and possibly below 11 ms, it does not, and there it costs the earlier slot
+as well. One way to close it is for the earlier booking to take in the later window,
+whose arm then rides the held grant as a follow-on does. That was not built here.
+
+### 3. ch0 loss, `sched_missed`, fallback and extension counters, `gate.conf`
+
+Interleaved, 180 s each, ch0 #2002 and ch1 searching for absent #9999, with the Garmin
+on #2002 in the same window.
+
+| Run | DUT ch0 | Garmin | `sched_missed` | ext ok/refused | Booking fallbacks |
+|---|---|---|---|---|---|
+| master 1 | 731/731 | 0.27 % | 0 | 87 480/0 | n/a |
+| branch 1 | 731/731 | 0.82 % | 0 | 84 969/0 | 0 |
+| master 2 | 713/713 | 1.37 % | 0 | 88 428/0 | n/a |
+| branch 2 | 731/731 | 1.64 % | 0 | 84 970/0 | 0 |
+
+**PASS.** No loss on either image, at or under the Garmin's. Every tracked window was
+booked and hit (`pl` 732, `hit` 731). Fallback means a tracked window that did not go
+through its booking: `unpl`, `busy`, `near`, `nosess`, `den` and `blk` were all 0. The
+extension-failed counter was 0. `early` 2 per run are the channel-close orphans.
+
+### 5. BLE, interleaved A/B against master
+
+`coex.conf;ble_load.conf` (a 1 s connectable advertiser), six 60 s readings an image,
+alternating. Each tracked slot is classed from the gate's own counters against the
+packets heard: heard, granted-unheard (granted minus heard), and ungranted (slots
+minus granted). The control's counters come from a bench-only 5 s log line added to
+c4e1ef8 in the control worktree (`ctl_patch.py`), not committed anywhere.
+
+| | Slots | Heard | Granted-unheard | Ungranted | Garmin |
+|---|---|---|---|---|---|
+| master | 1444 | 99.10 % | 1.52 % | -0.62 % | 0.61 % |
+| branch | 1464 | 98.91 % | **0.07 %** | 1.02 % | 0.41 % |
+
+**Not a merge blocker: granted-unheard on the branch is 1.45 points under master, not
+over it.** Master's figure is too high, because its high-priority grant counter also
+counts windows that are not tracked slots. Its granted total exceeds its slots by about
+1 % on every reading, hence the negative ungranted. The branch's ungranted 1.0 % is
+bookings refused at placement by the advertiser (`blk` 1-4 a reading), the same path a
+master tracked request takes. DUT loss was about 1 % on both images. Phase 1's higher
+(d2) loss under BLE (11.9 and 18.1 % against 8.8 %) did not reproduce.
+
+**The lead policy under BLE stayed OPEN** in all six readings: `el=3000 [3000..3000]`,
+while 54-165 elastic requests a reading were refused. Extension refusals ran 13-35 a
+reading, never three in a row long enough to tip it.
