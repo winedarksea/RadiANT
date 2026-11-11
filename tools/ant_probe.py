@@ -380,7 +380,7 @@ def open_device(verbose: bool, wait_s: float = 0.0, serial: str | None = None,
             + "/".join(f"{p:04X}" for p in PIDS) + ").\n"
             "  Windows: check Device Manager shows it under 'libusb-win32 "
             "devices' bound to libusb0 (see the README).\n"
-            "  Linux:   install 99-ant-usb.rules (see host/linux/) and replug.\n"
+            "  Linux:   install 70-ant-usb.rules (see host/linux/) and replug.\n"
             "  macOS:   nothing extra needed; try a different cable."
         )
 
@@ -394,8 +394,8 @@ def open_device(verbose: bool, wait_s: float = 0.0, serial: str | None = None,
         except (usb.core.USBError, ValueError) as exc:
             print(f"  (string descriptors unavailable: {exc})")
 
-    # Linux only: the kernel does not claim a vendor interface, but detach
-    # defensively in case something else did.
+    # Linux only: usb_serial_simple binds these IDs as /dev/ttyUSBn even though
+    # the interface is vendor-class, unless 70-ant-usb.rules has released it.
     if hasattr(dev, "is_kernel_driver_active"):
         try:
             if dev.is_kernel_driver_active(0):

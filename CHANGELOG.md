@@ -180,6 +180,11 @@ reads.
 
 ### Fixed
 
+- **The Linux udev rule grants access.** It was named `99-`, which sorts after
+  the systemd rule that applies `uaccess`, so the device stayed root-only. It is
+  now `host/linux/70-ant-usb.rules`, also gives the `dialout` group access for SSH
+  and headless use, and releases the kernel's `usb_serial_simple` binding so
+  libusb apps can claim the stick. Remove any installed `99-ant-usb.rules`.
 - **The bridge and Matter builds link again.** `apps/dongle_thread` listed the
   bridge and profile sources that the module had started compiling under
   `CONFIG_RADIANT_BRIDGE`, so `bridge.conf` and `matter.conf` failed with duplicate

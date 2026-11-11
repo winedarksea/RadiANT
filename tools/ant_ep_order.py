@@ -241,6 +241,13 @@ def main() -> int:
         print("FAIL - OUT-first; positional hosts (ant-plus, Android) will read nothing")
         return 1
 
+    # Linux binds usb_serial_simple to these IDs; see ant_probe.open_device().
+    try:
+        if dev.is_kernel_driver_active(0):
+            dev.detach_kernel_driver(0)
+    except (NotImplementedError, usb.core.USBError):
+        pass
+
     dev.set_configuration()
     print()
 

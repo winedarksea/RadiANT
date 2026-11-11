@@ -1,0 +1,34 @@
+# ANT+ USB dongle: non-root access, with the interface left free for libusb.
+#
+# Keep the number in this file's name below 73. TAG+="uaccess" only takes effect
+# if it is set before systemd's 73-seat-late.rules, which is the rule that
+# applies the access list. A file sorting after it sets the tag too late, and
+# the device stays root-only.
+#
+# Access comes two ways:
+#   - TAG+="uaccess" gives it to whoever is logged in at the seat, which covers
+#     a desktop session. An SSH session has no seat, so it gets nothing here.
+#   - GROUP="dialout" covers SSH and headless use, for members of that group.
+#
+# Install:
+#   sudo cp 70-ant-usb.rules /etc/udev/rules.d/
+#   sudo rm -f /etc/udev/rules.d/99-ant-usb.rules   # the old name, if present
+#   sudo udevadm control --reload-rules
+# then unplug and replug the dongle. For SSH or headless use, also:
+#   sudo usermod -aG dialout $USER
+#
+# 0fcf:1009 is the Dynastream ANT USB-m identity this firmware presents. The
+# other two are the genuine sticks that share this rule: 1004 (ANTUSB) and
+# 1008 (ANTUSB2).
+
+SUBSYSTEM=="usb", ATTR{idVendor}=="0fcf", ATTR{idProduct}=="1009", TAG+="uaccess", GROUP="dialout", MODE="0660"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0fcf", ATTR{idProduct}=="1008", TAG+="uaccess", GROUP="dialout", MODE="0660"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0fcf", ATTR{idProduct}=="1004", TAG+="uaccess", GROUP="dialout", MODE="0660"
+
+# The interface is vendor-class, but the kernel's usb_serial_simple driver
+# matches these IDs by number and binds it as /dev/ttyUSBn. A libusb application
+# that does not detach it first then fails with "Resource busy", so release it
+# as soon as it binds. To use the stick through /dev/ttyUSBn instead, delete
+# this rule.
+
+ACTION=="bind", SUBSYSTEM=="usb", DRIVER=="usb_serial_simple", ATTRS{idVendor}=="0fcf", RUN+="/bin/sh -c 'echo %k > /sys/bus/usb/drivers/usb_serial_simple/unbind'"
