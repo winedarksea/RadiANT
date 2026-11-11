@@ -1,5 +1,5 @@
 TI coexistence builds: the reviewer thinks TI's scheduler may refuse the command re-armed right after an early-stopped receive window, because the cancelled window still holds its reserved time. That needs a CC2652 on the bench.
-MPSL air use: after a received frame or an ACK reply, the grant is now held to its natural end (up to about 4.5 ms) instead of being handed back early. That costs the other stack some air but isn't a correctness problem.
+[DONE 2026-11-11, d9c2fb2 in the ADR 0021 merge ddf8d07: the receive stop_on_first and transmit END paths now release the grant early, keeping it only for a follow-on armed from the completion] MPSL air use: after a received frame or an ACK reply, the grant is now held to its natural end (up to about 4.5 ms) instead of being handed back early. That costs the other stack some air but isn't a correctness problem.
 MPSL bursts: multi-packet bursts still can't run on MPSL builds. That's a scope gap, not a regression; Zwift uses acknowledged messages.
 Weak tests: the scheduler half is fixed (`reserve_from_done_case()` in radiant/tests/src/test_sched.c, with cancel and reset recorded there as equivalent mutants); the gate-test half is MPSL and still open.
 Tool footgun: fixed 2026-11-08. ant_ack_gate.py exits non-zero on any quality failure with or without --gate; the 300 s / 300 command sufficiency reason fails only under --gate.
@@ -232,7 +232,18 @@ test_the_epoch_search_is_forward_only_and_bounded in both suites.
 
 ## 9. [DONE 2026-11-08] No informational bits left in the descriptor
 
-## 10. [FIRMWARE, HIGH, bench] Search is deaf through the MPSL arm lead (ADR 0018)
+## 10. [DONE 2026-11-11, one criterion missed] Search is deaf through the MPSL arm lead (ADR 0018)
+**Done:** merged to master as ddf8d07 (ADR 0021: tracked slots booked a period
+ahead in a second MPSL session, early release, extension skip, 16 ms contended
+lead, a 10 ms scan tail, R1 neighbours sharing the earlier window's grant).
+Reports: docs/adr18-eval/phase-3a.md, phase-3b.md, phase-3c.md, phase-4-fix.md.
+17-offset B leg 17/17 (master 13/17), median 8.9 s, but one find took 40.2 s,
+which misses the "none beyond about four sweeps" bar below. R1 pairs at 5 ms now
+keep both channels at 0-4 % loss; master keeps only the first.
+Left open: the bridge's second-sensor bind is still 5/14 against master's 6/14;
+acked transfers 356/360 against 359/360 before the final fix (no mechanism
+found); eight channels not measured on air; the F3/F4 edge cases (phase-3c.md).
+(Original notes follow.)
 - ADR 0018 is proposed and nothing is built. On MPSL builds a search is deaf
   for 3 x min_arm_lead_us (24.4 ms) per tracked period, about 30 % of phases.
   Measured: 5 of 17 offsets failed, all inside the band; 5 of 5 were found
