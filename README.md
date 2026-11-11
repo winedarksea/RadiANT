@@ -72,7 +72,7 @@ Grab `radiant_dongle.uf2` from the
 |---|---|
 | **Windows** | Install a libusb-win32 driver — see [Windows drivers](#windows-drivers). Same requirement as a retail ANT stick. |
 | **macOS** | Nothing for apps such as Zwift. It is a vendor-class device, so libusb claims it directly. To run this repository's Python tools, `brew install libusb` first. |
-| **Linux** | Install the udev rule so you don't need root: `sudo cp host/linux/99-ant-usb.rules /etc/udev/rules.d/ && sudo udevadm control --reload-rules && sudo udevadm trigger`, then replug. |
+| **Linux** | Install the udev rule so you don't need root: `sudo cp host/linux/70-ant-usb.rules /etc/udev/rules.d/ && sudo udevadm control --reload-rules`, then replug. Over SSH or headless, also `sudo usermod -aG dialout $USER`. The rule releases the kernel's `/dev/ttyUSBn` binding so libusb apps can claim the stick. |
 | **Android** | Needs USB host/OTG. Apps should include [`host/android/device_filter.xml`](host/android/device_filter.xml) so the dongle is recognised on attach. |
 
 ### 4. Check it works
