@@ -2065,33 +2065,42 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		}
 		if (s->role == ROLE_BOOK) {
 			GSTAT(stats.book_blocked++);
-			/* A refused booking that asked for a scan tail is placed
-			 * once more at its plain length, while it still has the
-			 * notice a booking needs: the tail is listening, and must
-			 * not cost the slot it was attached to. */
-			if (s->book_tail_us != 0u && !s->book_replaced &&
-			    s->anchor_valid &&
-			    s->r_start > radiant_radio_now() + (radiant_time_t)PLACE_MIN_US) {
-				const radiant_time_t end =
-					s->r_end - (radiant_time_t)s->book_tail_us;
-				const uint64_t len = (uint64_t)(end - s->r_start) +
-						     (uint64_t)END_MARGIN_FIXED_US;
+		}
+		/*
+		 * A refused booking that asked for air past its follow-on (a scan
+		 * tail, or a later operation joined to it) is placed once more at
+		 * its plain length, while it still has the notice a booking needs:
+		 * that air is listening or the joiner's, and must not cost the
+		 * slot it was attached to. Whether or not the core has armed into
+		 * it yet (phase-4-fix.md, F2): armed, it is ROLE_OP, and the staged
+		 * operation and its backstop stay as they are. Only a booking ever
+		 * carries book_tail_us; a fresh request clears it.
+		 */
+		if ((s->role == ROLE_BOOK || s->role == ROLE_OP) &&
+		    s->book_tail_us != 0u && !s->book_replaced &&
+		    s->anchor_valid &&
+		    s->r_start > radiant_radio_now() + (radiant_time_t)PLACE_MIN_US) {
+			const radiant_time_t end =
+				s->r_end - (radiant_time_t)s->book_tail_us;
+			const uint64_t len = (uint64_t)(end - s->r_start) +
+					     (uint64_t)END_MARGIN_FIXED_US;
 
-				s->book_replaced = true;
-				s->book_tail_us = 0u;
-				if (build_normal(s, s->r_start, end,
-						 (len < MPSL_TIMESLOT_LENGTH_MIN_US)
-							 ? MPSL_TIMESLOT_LENGTH_MIN_US
-							 : len,
-						 false, false, END_MARGIN_FIXED_US,
-						 RADIANT_GATE_PRIO_HIGH)) {
-					s->r_end = end;
-					want_place_set(s);
-					GSTAT(stats.book_replaced++);
-					radiant_swi_pend(RADIANT_SWI_GATE_REQUEST);
-					break;
-				}
+			s->book_replaced = true;
+			s->book_tail_us = 0u;
+			if (build_normal(s, s->r_start, end,
+					 (len < MPSL_TIMESLOT_LENGTH_MIN_US)
+						 ? MPSL_TIMESLOT_LENGTH_MIN_US
+						 : len,
+					 false, false, END_MARGIN_FIXED_US,
+					 RADIANT_GATE_PRIO_HIGH)) {
+				s->r_end = end;
+				want_place_set(s);
+				GSTAT(stats.book_replaced++);
+				radiant_swi_pend(RADIANT_SWI_GATE_REQUEST);
+				break;
 			}
+		}
+		if (s->role == ROLE_BOOK) {
 			/* Nobody is waiting on it yet; the arm it was for is
 			 * refused synchronously when it comes (gate_acquire()),
 			 * exactly as a refused fresh request for that window
@@ -2940,6 +2949,9 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 	s->r_start = start;
 	s->r_end = end;
 	s->book_failed = false;
+	/* A fresh request carries no droppable air: its whole length is the
+	 * operation's (see the BLOCKED handler's re-place). */
+	s->book_tail_us = 0u;
 	s->role = ROLE_OP;
 	g.op_sess = sess_idx(s);
 	g.pending = true;
