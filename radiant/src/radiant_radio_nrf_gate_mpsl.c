@@ -2480,10 +2480,34 @@ static bool build_normal(struct sess *s, radiant_time_t start, radiant_time_t en
  * operation only after arming the chunk, so that booking finds only the
  * running session free and the scan has the idle one.
  */
+/*
+ * A booking that MPSL refused waits for the arm it was for, so that arm can be
+ * refused. If the arm never comes (its channel closed, its slot moved or was
+ * missed, or it was an aborted operation's request kept as a booking) nothing
+ * else would free the session, and one such leak on a single-session gate, or
+ * two on a pool, would refuse every later acquire until the next reset. Once its
+ * air is over no arm can match it.
+ */
+static void reap_dead_bookings(void)
+{
+	const radiant_time_t now = radiant_radio_now();
+
+	for (uint32_t i = 0u; i < NSESS; i++) {
+		struct sess *c = &ss[i];
+
+		if (c->open && c->role == ROLE_BOOK && c->book_failed &&
+		    c->r_end < now) {
+			c->role = ROLE_NONE;
+			c->book_failed = false;
+		}
+	}
+}
+
 static struct sess *pick_free(bool prefer_live)
 {
 	struct sess *s = NULL;
 
+	reap_dead_bookings();
 	for (uint32_t i = 0u; i < NSESS; i++) {
 		struct sess *c = &ss[i];
 		bool         c_live;

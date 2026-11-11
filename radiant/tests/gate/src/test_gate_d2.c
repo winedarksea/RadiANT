@@ -629,6 +629,60 @@ ZTEST(radiant_gate_d2, test_d2_the_booking_match_is_masked)
 	zassert_equal(1u, p.book_hit, NULL);
 }
 
+/*
+ * A refused booking waits for its arm, so the arm can be refused. If the arm
+ * never comes (its channel closed, its slot moved or was missed) nothing else
+ * frees the session: two of those and every later acquire is refused for good.
+ */
+ZTEST(radiant_gate_d2, test_d2_refused_bookings_nobody_arms_do_not_hold_their_sessions)
+{
+	radiant_time_t t = radiant_radio_now() + SCAN_LEAD_US;
+	radiant_time_t from;
+
+	zassert_equal(GATE_BOOK_OK, gate_book(t, t + TRACK_LEN_US, 0u), NULL);
+	zassert_equal(GATE_BOOK_OK,
+		      gate_book(t + 20000u, t + 20000u + TRACK_LEN_US, 0u), NULL);
+	k_msleep(WORK_MS);
+	(void)fake_mpsl_signal_s(0u, MPSL_TIMESLOT_SIGNAL_BLOCKED);
+	(void)fake_mpsl_signal_s(1u, MPSL_TIMESLOT_SIGNAL_BLOCKED);
+	k_msleep(WORK_MS);
+
+	/* Both windows pass with no arm. */
+	fake_radio_advance_to(t + 30000u);
+	from = radiant_radio_now() + SCAN_LEAD_US;
+	zassert_equal(GATE_PENDING,
+		      gate_acquire(GATE_OP_RX, from, from + SCAN_LEN_US, 0u,
+				   RADIANT_GATE_PRIO_NORMAL),
+		      "the sessions are still held by bookings long over");
+	gate_probe_read(&p);
+	zassert_equal(0u, p.den_nosess, NULL);
+}
+
+/* The same leak by the other road: an operation aborted before its answer
+ * becomes a booking, and that booking is then refused. */
+ZTEST(radiant_gate_d2, test_d2_a_refused_forgotten_request_does_not_hold_its_session)
+{
+	radiant_time_t from = radiant_radio_now() + SCAN_LEAD_US;
+
+	zassert_equal(GATE_PENDING,
+		      gate_acquire(GATE_OP_RX, from, from + SCAN_LEN_US, 0u,
+				   RADIANT_GATE_PRIO_NORMAL), NULL);
+	k_msleep(WORK_MS);
+	gate_forget_pending();
+	(void)fake_mpsl_signal_s(0u, MPSL_TIMESLOT_SIGNAL_BLOCKED);
+	k_msleep(WORK_MS);
+	gate_probe_read(&p);
+	zassert_equal(ROLE_BOOK, p.role[0], NULL);
+	zassert_true(p.book_failed[0], NULL);
+
+	fake_radio_advance_to(from + SCAN_LEN_US + 1000u);
+	from = radiant_radio_now() + SCAN_LEAD_US;
+	zassert_equal(GATE_BOOK_OK, gate_book(from, from + TRACK_LEN_US, 0u), NULL);
+	zassert_equal(GATE_BOOK_OK,
+		      gate_book(from + 20000u, from + 20000u + TRACK_LEN_US, 0u),
+		      "the refused request still holds its session");
+}
+
 /* A booking nobody has armed into reaches the core a little before it starts,
  * once. An armed one, or one still far off, does not. */
 ZTEST(radiant_gate_d2, test_d2_a_booking_due_tells_the_core_once)
