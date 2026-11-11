@@ -4010,6 +4010,33 @@ ZTEST(radiant_sched, test_d2_tail_is_only_asked_for_while_a_scan_runs)
 	zassert_true(bs->fo_max > SHAPE_TAIL_US, "fo_max %u: not dithered up", bs->fo_max);
 }
 
+/*
+ * R1 with the follow-on a real tracked channel carries (4150 us, the
+ * acknowledged-reply reserve). Each booking holds its window plus that reserve,
+ * so a pair closer than about that overlaps, and the arbiter refuses whichever
+ * booking was placed second. A characterization of the bench's 5 ms R1 failure
+ * (phase-3b.md), printed, not asserted.
+ */
+ZTEST(radiant_sched, test_d2_r1_with_a_real_follow_on)
+{
+	static const uint32_t offsets[] = {3000u, 5000u, 8000u, 12000u, 20000u};
+
+	for (size_t i = 0u; i < ARRAY_SIZE(offsets); i++) {
+		struct r1_result r;
+
+		sched_before(NULL);
+		shape_el_lead = SHAPE_EL_LEAD_D2;
+		log.follow_on_us[0] = 4150u;
+		log.follow_on_us[1] = 4150u;
+		r1_measure(offsets[i], &r);
+		TC_PRINT("r1-fo offset=%u: ch0 ok=%u missed=%u denied=%u ch1 ok=%u "
+			 "missed=%u denied=%u overlaps=%u\n", offsets[i], r.ok[0],
+			 r.missed[0], log.denied_count[0], r.ok[1], r.missed[1],
+			 log.denied_count[1], fake_radio_book_stats()->overlaps);
+		shape_el_lead = 0u;
+	}
+}
+
 /* A longer booking the arbiter refuses still costs exactly its own slot. */
 ZTEST(radiant_sched, test_d2_a_refused_tail_booking_costs_exactly_its_own_slot)
 {
