@@ -187,3 +187,75 @@ and about 10 ms to the worst (42-44 against 27-33 ms). Idle, the two are the sam
 fits the branch taking more grants per period (a booking for each tracked slot plus
 elastic chunks), each of which the 802.15.4 driver has to wait out. It is a cost, not a
 failure, at n = 2 a side.
+
+### 8. Late-arm exposure on a Matter image
+
+L15 `thread.conf;matter.conf;d2_stats.conf;health.conf` at 8b357d7, with
+`CONFIG_RADIANT_LOG_LEVEL_INF=y` (CHIP silences radiant's log otherwise). It was not
+commissioned, so CHIP was advertising over BLE and the Thread stack was detached. One
+300 s reading, ch0 #2002 and ch1 absent, the Garmin on #2002:
+
+- ch0 1209/1209, Garmin 0.35 %, `sched_missed` 0.
+- `hit` 1209 of 1209 tracked acquires, `early` 2, both `en` (channel-close orphans),
+  **`eo` 0**, `hl` 0 (no hit with under 1 ms to go), `due saved` 0, `late` 0,
+  `orphan` 1. START error -84..+19 us. CONTENDED lead, `ext=0/399`.
+
+**No late arm was seen on the Matter image.** Phase 1's `eo=1` question is not closed,
+though, because **`eo` 1 appeared twice elsewhere** with no channel closing:
+
+- the `gate.conf` R1 walk with a search running (`r1_head12s`), between 66.7 and 71.7 s
+  of the log, while B was crossing about 22 ms. The DUT capture shows B missing two
+  slots at 69.7 s, but B misses about 8 % throughout (it is the Garmin), so a lost
+  live slot cannot be told from loss on air;
+- the eight-channel run beside Thread (`eight2_head_2`, `eo` 1, `early` 4, `en` 3,
+  `mis` 14, `nosess` 22).
+
+In both, other tracked channels or a search were contending for the sessions. `eo`
+counts a booking granted while the other session had an operation staged, so it is
+the counter of a live slot lost to a late arm. It is rare (1 in about 1000-2900
+bookings in those runs) and has not been seen with one tracked channel.
+
+### 9. Eight tracked channels beside Thread
+
+**Not measured on air: the rig could not put eight masters at distinct phases.** A new
+driver (`multi_master.py`, scratchpad) opened four channels on each of the Dongle and
+the Pro Micro, one period plus period/8 apart. Each stack opened every channel (8 of
+8), but all eight transmitted within about a millisecond of one phase (the dry run's
+`phase_ms` read 0.0-0.5 and 243.8-245.7). The DUT then tracked one or two of them
+(`#3001` alone, or `#3003` and `#3006`), and the rest were never acquired. Both stacks
+evidently align a new master channel to their existing ones, so phase cannot be set
+from the host this way. What the four readings do show, all with Thread attached:
+master's search heard `0x00249124` (7 of 25 bins, locked) and the branch's moved
+between `0x00694a52` and `0x0096a44b` (about 11 bins). One earlier attempt with the
+first driver (`eight_*`, only two masters on air) is kept for its assert (below).
+
+What was measured instead is the scheduler alone, in a ztest
+(`test_d2_deaf_fraction_at_the_contended_lead`): the deaf fraction at 1/2/4/8 evenly
+spaced tracked channels at the 16 ms lead the gate uses beside Thread. The fake radio
+has no other stack, so it neither refuses extensions nor caps a grant at its first
+bite. These are upper bounds on listening, not Thread figures.
+
+| Tracked | Deaf, 3.4 ms lead (Phase 1) | Deaf, 16 ms lead | 16 ms lead + 10 ms tail |
+|---|---|---|---|
+| 1 | 6.1 % | 21.9 % | 12.3 % |
+| 2 | 9.5 % | 23.5 % | 23.5 % |
+| 4 | 13.4 % | 34.5 % | 34.5 % |
+| 8 | 26.9 % | **69.1 %** | 69.1 % |
+
+At eight channels beside Thread, the scheduler alone leaves about 70 % of phases
+unlistened, before Thread takes its share. The summary's "almost deaf" inference
+stands, now with a number under it.
+
+### An MPSL assert on an image with the early release
+
+`*** MPSL ASSERT 69:108` halted `img_a2_thread` (8b357d7) in `eight_head_1`, beside an
+attached leader, with two masters on air, two tracked channels and seven channels
+searching for absent devices: `placed=2588 granted=2554 blocked=33 ext=0/90 skip=1866`,
+`last_sig=1`, trace ending `... 7:0 0:0 1:2` (IDLE, START, TIMER0 returning EXTEND).
+
+**This is the first assert on record from an image with decision 2's early release,**
+which Stage A noted as suggestive. It also has a different shape: every earlier
+assert followed an `EXTEND_FAILED` (`1:1 3:2`). This one came on a TIMER0 that asked
+for an extension, with no refusal after it in the trace. The skip had run 1866 times,
+so this extension may be the first request after a skip ran out. The suggestion that
+the early release stops 69:108 does not hold.
