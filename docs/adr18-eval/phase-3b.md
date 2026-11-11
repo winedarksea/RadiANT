@@ -8,6 +8,32 @@ c4e1ef8 as the control. Design:
 
 Nothing here was run on TI.
 
+## Verdicts
+
+**Merge blocker for the user to rule on (not the BLE criterion, which passes): an R1
+pair closer than about 6 ms costs the slot of the channel that was already tracked.**
+Master in the same position loses the later channel only. Measured on air with the
+R1 walk (item 2: A lost 33.5 %, B 70 % at 5 ms) and, once the scan tail lets discovery
+find a sensor 4.7-5.9 ms after a tracked one, in ordinary discovery (Part 2: the
+tracked channel lost 26-28 % in those trials, on `gate.conf` and beside Thread). The
+cause is that each booking holds its window plus the 4150 us reply reserve and
+margins, so MPSL refuses whichever of the two was placed second.
+
+| Check | Branch (8b357d7 in Part 1; ff88a6a for the tail rows) | Control (c4e1ef8) | Log |
+|---|---|---|---|
+| 1. 17-offset, `gate.conf` | **FAIL** at 8b357d7: 15/17 (5.6, 101.3 ms missed). **17/17** with the tail, one find at 40.2 s | 13/17 and 13/17, in-band 1/5 | `aba_*`, `fin_B` |
+| 2. R1 pair | 12-20 ms: both kept. **5 ms: FAIL, A 33.5 % and B 70 % lost** | B 100 % lost, A kept | `r1_*`, `r1t_*` |
+| 3. ch0 loss, `sched_missed`, fallbacks, ext refused, `gate.conf` | PASS: 0 loss, 0, 0, 0 | 0 loss, 0 | `gate_*`, `gatetail_*` |
+| 4. Thread: fallback rate, in-band | fallback 0; in-band 2/5 (4/5 with the tail) | in-band 1/5 (2/5) | `thread_*`, `threadtail_*` |
+| 5. BLE granted-unheard | **PASS**: 0.07 % (master 1.52 %), lead stayed OPEN | 1.52 % | `ble_*`, `bletail_*` |
+| 6. Bridge second-sensor bind | 5/14 bound (64 % missed) | 6/14 (57 % missed) | `bind_*`, `bridge_head1` |
+| 7. Thread's own traffic | 0 ping lost, no re-attach; mean RTT +1.5-2 ms under search (+5 ms with the tail) | 0 lost | `thread_*` |
+| 8. Late arms, Matter image | `eo` 0, `hl` 0, `late` 0 in 300 s; `eo` 1 seen in two multi-channel runs elsewhere | n/a | `matter1`, `r1_head12s`, `eight2_head_2` |
+| 9. Eight channels beside Thread | **not measured on air** (masters could not be phased); ztest: 69 % deaf at the 16 ms lead | n/a | `eight2_*`, ztest |
+| Scan tail | **kept**, 10 ms with re-place at plain length | n/a | `tsw_*` |
+| MPSL 69:108 | **one assert on `img_a2_thread`** (with early release), new trace shape | none this session | `eight_head_1` |
+
+
 ## Part 1: acceptance
 
 ### 1. Discovery on the 17-offset rig, `gate.conf`
@@ -49,7 +75,7 @@ into a booking (`hit` 7221), `ext=122216/0`, `blk`, `unpl`, `busy`, `near`, `nos
 all 0, `eo` 0, `sched_missed` 0. `early` 32 are channel-close orphans (`en` 32).
 
 **A voided first attempt.** The first A leg read 17/17 with first packets near 5 s. A
-heart-rate strap nobody here owns, #8265 (transmission type 241, -68 dBm), had come
+heart-rate strap of unknown owner, #8265 (transmission type 241, -68 dBm), had come
 on air, and channel 1's wildcard bound it within 5 s of every trial. Every figure in
 that leg looked valid. Those logs are kept as `void_ambient8265_*`. Commit ecc461a
 makes channel 1 pair on transmission type 5, which only the harness's masters send,
@@ -259,3 +285,133 @@ assert followed an `EXTEND_FAILED` (`1:1 3:2`). This one came on a TIMER0 that a
 for an extension, with no refusal after it in the trace. The skip had run 1866 times,
 so this extension may be the first request after a skip ran out. The suggestion that
 the early release stops 69:108 does not hold.
+
+### 6. Bridge: a second sensor binds while the first is tracked
+
+L15 `thread.conf;bridge.conf` with the pairing window open 40 s every 100 s, MQTT off,
+`PROFILES_EXTRA=n`, the leader stopped (a detached MTD, as in the baseline). Both images
+carry a one-line bench patch (`bridge_tt.py`): discovery pairs on transmission type 5,
+because the ambient strap #8265 would otherwise take the free channel. The Dongle's
+#1001 is bound and tracked throughout. Before each window the Pro Micro restarts as a
+new device at a fresh phase, and the attempt passes if it binds in that window
+(`bind3.py`, scratchpad).
+
+| Run | Bound | Missed |
+|---|---|---|
+| master 1 | 3/7 | 4 |
+| branch 1 | 3/7 | 4 |
+| master 2 | 3/7 | 4 |
+| branch 2 | 2/7 | 5 |
+| **master** | **6/14** | **57 %** |
+| **branch** | **5/14** | **64 %** |
+
+A first run with the eviction harness (`evict3.py`) read 5 binds in 16 attempts on
+the branch (69 % missed). Its two other runs stopped at the harness's initial-bind
+step, because the second initial sensor did not bind within 230 s, which is the same
+miss. #1001 stayed TRACKING in every window on both images.
+
+**No improvement: the branch misses as often as master, within the 50-70 % baseline.**
+This image runs beside a detached Thread stack, where the gate sits in CONTENDED and
+listening is capped near 26 %. A 40 s window then holds about one sweep. The discovery
+gains measured on `gate.conf` do not carry over to this configuration.
+
+## Part 2: the scan tail (ADR 0021 decision 5)
+
+### What was built
+
+| Commit | What |
+|---|---|
+| 0d385b6 | While a scan runs, a tracked RX booking asks for a tail past its follow-on, dithered 0.5-1.5x `caps.scan_tail_us`. When the window completes, the scheduler arms the next chunk into the held grant at the in-grant lead. No tail when another committed operation is near the booked air or the slot's phase now. Six scheduler ztests and one gate ztest; three were red first (`ztest_tail_red.txt`). Fake radio: deaf 6.1 % -> 2.0 % at one channel, and the gap moves |
+| 320b0b9 | R1 characterization with a real follow-on (item 2) |
+| d95a0c7 | A refused tailed booking is placed once more at plain length. Mutation-checked on Bluefin |
+| ff88a6a | Tail on by default at 10 ms |
+| 5579440 | Contended-lead deaf characterization (item 9) |
+
+Each can be dropped. The floors commits ddbaf96 and 9edb970 go with them.
+
+### The sweep: one boot per stack, 120 s a step, tail 5/10/20/0/5/10/20 ms
+
+Image `CONFIG_RADIANT_GATE_MPSL_TAIL_SWEEP` at 0d385b6, ch0 #2002 and ch1 absent
+#9999, about 1000 s per stack. Per step, from the gate's counters (`tail_sum.py`):
+
+| Stack | Tail | Bookings refused (`blk`) | `mis` / `busy` / `nosess` / `eo` | Tail chunks per window | Listening credit |
+|---|---|---|---|---|---|
+| `gate.conf` | 0 / 5 / 10 / 20 ms | 0 / 0 / 0 / 0 | all 0 | 0.04 / 0.95 / 1.0 / 1.0 | 53.0 / 53.1 / 53.1 / 52.9 % |
+| BLE | 0 / 5 / 10 / 20 ms | **1.24 / 1.55 / 2.09 / 3.14 %** | 20 ms: `mis` 4, `early` 1 | 0.04 / 0.93 / 0.96 / 0.95 | 52.4 / 52.5 / 52.1 / 51.9 % |
+| Thread | 0 / 5 / 10 / 20 ms | 0 / 0 / 0 / 0 | all 0 | 0.05 / 0.87 / 0.98 / 1.0 | **26.8 / 34.7 / 34.9 / 35.1 %** |
+
+(Credit is the search's own `credited_ms`. Compare it within a row only.)
+
+- **Beside Thread the tail is the gain**: listening up from 26.8 to about 35 %, and
+  phase coverage from a locked 5 masks to 12-16 moving ones at 5-10 ms and a full
+  `0x00ffffff` at 20 ms. A booked grant is fixed-length and never extends, so its
+  tail is air Thread has already granted.
+- **On `gate.conf` the tail costs nothing and closes the after-slot band**: bin 24 is
+  heard (`0x01ffffff`).
+- **BLE refused more of the longer bookings.** Each refusal is a tracked slot, so
+  without a remedy the tail breaks rule 1 under BLE. d95a0c7 places a refused tailed
+  booking again at plain length.
+- **The e7749c2 failure did not appear** on `gate.conf` or Thread (`mis`, `busy`,
+  `nosess` 0, `eo` 0). BLE at 20 ms had `mis` 4 and `early` 1 in one step.
+
+### At the final image (ff88a6a, tail 10 ms with the re-place)
+
+| Check | Plain branch / master | Tail | Log |
+|---|---|---|---|
+| 17-offset B leg, `gate.conf` | 15/17 (misses 5.6, 101.3) | **17/17**, in-band 5/5, median 8.9 s; one at 40.2 s (117.5 ms), one at 25.0 s | `fin_B`, `fin_Bc` (control 5/5) |
+| BLE, ungranted / granted-unheard (6 x 60 s, interleaved with the plain branch) | 1.23 % / -0.07 % | **1.03 % / -0.14 %** | `bletail_*` |
+| `gate.conf` rule 1 (2 x 180 s against master) | master 99.93 % heard | 99.93 % heard, `sched_missed` 0, ext refused 0 | `gatetail_*` |
+| Thread in-band (one run each, same boot design as item 4) | 2/5 | **4/5** (5, 132, 222, 237 ms) | `threadtail_*` |
+| Thread ping under search, RTT avg/max | 18.2-18.3 / 42-44 ms (plain branch) | 21.3 / 67 ms, 0 lost | `threadtail_head_1` |
+| R1 at 12 / 12 s / 20 s | B kept | B kept (A 0 %, B 8.9-10.1 %, as the Garmin always reads) | `r1t_*` |
+| R1 walked to 8.7 -> 4.6 ms | A 33.5 %, B 70 % lost (5 ms run) | **A 13 %, B 36 % lost** | `r1t_8` |
+
+With the re-place, BLE ungranted is back at the plain branch's level (blk 5-9 a
+reading, but `den`, the refusals that reached an arm, 1-4). **The tail is kept.**
+
+**But the tail exposes item 2's R1 defect in discovery.** In `fin_B`, B at 5.9 ms was
+found in 8.8 s, which the plain branch never managed. Once B was tracked, the pair sat
+inside the sub-6 ms band, and **channel 0, the sensor already tracked, lost 69 of 244
+slots (28 %)** in that trial. The tail run beside Thread did the same at 4.7 ms
+(180/243). Master in the same position never finds B, so it never loses A. The 17/17
+is real, but at offsets under ~6 ms it comes at the cost of the sensor already being
+tracked.
+
+The 40.2 s find is one trial past the plan's "about four sweeps".
+
+The gate tail run 1 also read `eo` 1, `early` 3, `busy` 4 with every slot heard; `r1t_12s`
+read `mis` 156 and `nosess` 4285 with a search running and no tracked slot lost in the
+window. These are the e7749c2 counters at low rates, with no loss attached that could
+be measured.
+
+### Extras
+
+- **Re-placing a refused booking once:** built only for tailed bookings (d95a0c7).
+  For plain bookings it was not built, and Stage A's question stays open.
+- **A longer first bite at the 16 ms CONTENDED lead:** not tried. The tail's ~8 points
+  of listening beside Thread came instead, and there was no time left for a second
+  variable.
+
+## Part 3: close-out at the final head
+
+| Check | Result | Log |
+|---|---|---|
+| Twister, Bluefin | **PASS**, 4327 of 4327 in 14 scenarios at 9edb970, counts OK (floors raised: `radiant.unit` and its three variants +7, `radiant.gate` +2) | `twister_final.txt` |
+| Three suites, 5340 DK | **PASS**: gate 71, unit 993 (50 suites), API 65, one boot each | `ztest_{gate,main,api}_final.txt` |
+| Zero cost against c4e1ef8 | **PASS**, 8 of 8 rows identical, TI included (head 191285e; later commits are tests and docs) | `zero_cost.txt` |
+| Sizes at 191285e, counters out | see below | `size_*.txt` |
+| Ack regression, 60 sends each way | 60/60 and 60/60 | `ack_fin/` |
+| `ant_ack_pair.py` acceptance, DUT slave | **PASS**: 300 sent, 297 completed, peer 299, 3 `TRANSFER_TX_FAILED`, 340 s | `ack_fin/accept_slave_dut.*` |
+| 0xF6, structure version 1 | coverage build (`fin_gate`): the 32-byte field present; plain `apps/dongle` `health.conf`: field absent, so a 30-byte body (`ant_health.py` decodes `[30..31]` only from a 32-byte body) | `f6_*.txt` |
+
+| Image | FLASH | RAM | Against Stage A |
+|---|---|---|---|
+| L15 `thread.conf;bridge.conf` | 327 920 | 198 440 | +1088 / +64 B |
+| L15 `thread.conf;matter.conf` | 823 320 | 253 772 (8372 free) | +1088 / +64 B |
+| nRF52840 DK Matter | 816 092 | 245 208 | +1088 / +64 B |
+
+Against master's baselines in d2.md, RAM is +512 B on all three. Every `.config`
+reads `RADIANT_BACKEND_NRF=y`, `GATE_MPSL_D2=y` and `SCHED_BOOKING=y`, with no stats
+log. Both Matter ELFs carry 3599 `_ZN4chip` symbols and `radiant_matter_sink`.
+
+TI: build and binary comparison only. Nothing in this effort was verified on air on TI.

@@ -2,7 +2,9 @@
 
 - **Status:** Accepted as the design to build. Decisions 1-4 are built on
   `wip/adr18-impl` ([Stage A report](../adr18-eval/phase-3a.md)). The scan tail
-  (decision 5) is untested and conditional.
+  (decision 5) is untested and conditional. Stage B
+  ([report](../adr18-eval/phase-3b.md)) built decision 5 and keeps it, and found R1
+  pairs under ~6 ms still lost, now on both channels.
 - **Date:** 2026-11-10
 - **Resolves:** [0018](0018-search-listens-through-the-arm-lead.md)
 - **Builds on:** [0013](0013-sweep-is-the-elastic-consumer.md) (tracked slots
@@ -47,6 +49,33 @@
 > - **Listening under Thread is about 26 % of the air** at the 16 ms lead, measured
 >   over 30 minutes. Every grant ends at its first compare, so a grant is at most
 >   one 10 ms first bite.
+
+> **Corrections, 2026-11-11, from the Stage B bench
+> ([phase-3b.md](../adr18-eval/phase-3b.md)).**
+>
+> - **"Two sessions fix R1 pairs" holds from about 12 ms to the lead, not below about
+>   6 ms.** Each booking holds its window plus the 4150 us reply reserve and margins,
+>   about 6.5 ms, and MPSL refuses whichever of two overlapping bookings was placed
+>   second. At 5 ms both channels lost slots (33.5 % and 70 %), **including the one
+>   master keeps**. Once the scan tail lets discovery find a sensor that close to a
+>   tracked one, the tracked one loses about a quarter of its slots. Refusals were also
+>   seen near 11 ms, unexplained. Not fixed: the earlier booking taking in the later
+>   window is one route.
+> - **Decision 5 is built and kept**: 10 ms, dithered, with a refused tailed booking
+>   placed once more at plain length (BLE refused longer bookings more). It gave 17/17
+>   on the 17-offset rig and raised listening beside Thread from about 27 % to 35 %. No
+>   third session was needed. The tail is mostly not asked for when two or more
+>   channels are tracked, so its gain is a single-channel one for now.
+> - **69:108 occurred on an image with decision 2's early release** (Stage A's final
+>   Thread image, eight channels configured, seven searching). Its trace ended on a
+>   TIMER0 asking for an extension, not on an EXTEND_FAILED. The early release is not
+>   shown to prevent it.
+> - **Late arms:** `eo` 0 on the Matter image in 300 s, but `eo` 1 twice in
+>   multi-channel runs. A live slot lost to a late arm is still possible and rare.
+> - **Thread's own traffic** lost no pings and never re-attached. The round trip
+>   during a search is a few ms longer than master's.
+> - **Eight tracked channels** were not measured on air. In a ztest at the 16 ms lead
+>   the scan is 69 % deaf.
 
 ---
 
