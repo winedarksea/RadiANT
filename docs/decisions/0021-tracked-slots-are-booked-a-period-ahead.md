@@ -4,7 +4,8 @@
   `wip/adr18-impl` ([Stage A report](../adr18-eval/phase-3a.md)). The scan tail
   (decision 5) is untested and conditional. Stage B
   ([report](../adr18-eval/phase-3b.md)) built decision 5 and keeps it, and found R1
-  pairs under ~6 ms still lost, now on both channels.
+  pairs under ~6 ms still lost, now on both channels. Stage C
+  ([report](../adr18-eval/phase-3c.md)) fixed that: both slots kept at 5 ms.
 - **Date:** 2026-11-10
 - **Resolves:** [0018](0018-search-listens-through-the-arm-lead.md)
 - **Builds on:** [0013](0013-sweep-is-the-elastic-consumer.md) (tracked slots
@@ -77,6 +78,32 @@
 > - **Eight tracked channels** were not measured on air. In a ztest at the 16 ms lead
 >   the scan is 69 % deaf.
 
+> **Corrections, 2026-11-11, from Stage C
+> ([phase-3c.md](../adr18-eval/phase-3c.md)).** These replace the first Stage B
+> bullet above.
+>
+> - **R1 below ~6.6 ms had two causes, and both are fixed.** Two tracked requests
+>   overlap at the arbiter when B - A is under about 6.2-6.6 ms (window, the 4150 us
+>   reply reserve, the gate's margins, MPSL's guard), so one of the two was refused.
+>   The earlier channel lost too because the gate placed waiting requests in session
+>   index order rather than the order the core made them, which put the earlier
+>   channel's fresh request behind the later channel's booking every third period.
+>   The "refusals near 11 ms" were a misread phase: by the DUT's own timestamps they
+>   began at 5-6 ms.
+> - **The fix:** requests reach MPSL oldest first; and a committed operation that
+>   starts within 2.5 ms of the air an earlier one holds joins that one's request
+>   (booking tail or follow-on) and is armed into its grant from the earlier
+>   completion. No third session and no HAL change.
+> - **On air at 5 ms:** A 0.7 %, B 4.0 % on `gate.conf` (before, interleaved: 36 % and
+>   68 %), and 0.3 % / 2.3 % beside an attached Thread leader (before: 33.5 % /
+>   67 %). The `fin_B` discovery case keeps the tracked channel (241/244 against
+>   176/244).
+> - **Physical floor:** a later window inside the earlier channel's acknowledged
+>   reply exchange (when one is in use) cannot be served, and a sensor within about
+>   1 ms of a tracked one is not found by the search. A refused joined booking is
+>   placed again at plain length, so under another stack's refusal it costs the
+>   joiner, never the earlier slot.
+
 ---
 
 ## Context
@@ -135,8 +162,11 @@ Additions only, all compiled out unless `RADIANT_BACKEND_NRF_GATE_MPSL` is set:
   bench counters are removed.
 - A booked slot depends on the core arming within a few milliseconds of the
   chunk ending, where master stages it 24 ms ahead. The build must bound this.
-- Two sessions fix R1 pairs. Three tracked operations within one lead are
-  not yet handled.
+- Two sessions fix R1 pairs from about 6.6 ms to the lead; below that the later
+  operation rides the earlier one's grant (Stage C), so both are kept down to the
+  physical floor. Three tracked operations within one lead are still not handled:
+  the join can chain (code), but that is not tested, and spread wider than the join
+  gap inside one lead a third has nowhere to book (ztest characterization).
 
 ## Open before this is complete
 

@@ -10,6 +10,11 @@ Nothing here was run on TI.
 
 ## Verdicts
 
+> **Fixed in Stage C ([phase-3c.md](phase-3c.md)).** The blocker below is closed:
+> both slots are kept at 5 ms. The "refusals near 11 ms" were a misread phase (they
+> began at 5-6 ms by the DUT's own timestamps), and the earlier channel's loss came
+> from the gate's session-index placement order.
+
 **Merge blocker for the user to rule on (not the BLE criterion, which passes): an R1
 pair closer than about 6 ms costs the slot of the channel that was already tracked.**
 Master in the same position loses the later channel only. Measured on air with the
