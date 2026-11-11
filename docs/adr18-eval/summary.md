@@ -5,11 +5,12 @@
 > [ADR 0021](../decisions/0021-tracked-slots-are-booked-a-period-ahead.md). The
 > text below is left as first written, so read it with these corrections:
 >
-> - **The 16-24 ms elastic lead under Thread is not what Thread needs.** It is
->   where the backoff settles: doubling per refusal against 250 us back per
->   grant. At 8 ms of notice or more, Thread refused 87 of 4057 requests (2.1 %,
->   `thread3_skip`), and almost nothing shorter was tried. The case made here
->   for dropping (d1) on that figure does not hold.
+> - **WITHDRAWN, see the second corrections block.** The 16-24 ms elastic lead
+>   under Thread is not what Thread needs. It is where the backoff settles:
+>   doubling per refusal against 250 us back per grant. At 8 ms of notice or
+>   more, Thread refused 87 of 4057 requests (2.1 %, `thread3_skip`), and almost
+>   nothing shorter was tried. The case made here for dropping (d1) on that
+>   figure does not hold.
 > - **The 26.9 % deaf figure at 8 channels does not apply under Thread.** The
 >   ztest used a 3.4 ms elastic lead. At the lead actually reached, the scan
 >   would be almost deaf at 8 channels. This is inferred, and not yet measured.
@@ -19,6 +20,24 @@
 > - **The early-release defect is now explained.** The `stop_on_first` receive
 >   branch retires the operation without owing a release.
 > - **Two sessions fix R1 pairs, not three operations within one lead.**
+
+> **Second corrections, 2026-11-10, from the Stage A bench
+> ([phase-3a.md](phase-3a.md)).**
+>
+> - **The first correction above was itself wrong.** A sweep with the lead held
+>   fixed read 99-100 % refused at 4 and 6 ms, 84-89 % at 8 ms, 75-80 % at 12 ms,
+>   and 0 at 16 and 24 ms. `thread3_skip`'s `>= 8 ms` bin was mostly requests at
+>   16-24 ms. So the 16-24 ms lead was about what Thread needs, and the original
+>   text's case for dropping (d1) stands, with the limit that (d1) itself was
+>   never run under Thread.
+> - **"Blind band left ... ~5.5 ms with the early-release fix" is not achieved.**
+>   The early release works (`t0fix bs` 0 against 487 on the prototype), but the
+>   chunk that used it to open sooner lost tracked slots and was reverted.
+> - **"The same skip may protect master from the 69:108 assert" is unsupported.**
+>   At the branch head 30 minutes with no skip and 59 495 refusals read no assert,
+>   and neither did the arm with it. The row "none in 2 runs ... after it" compared
+>   two runs with two runs.
+> - **L15 Matter RAM is +448 B, not +640 B**, with the bench counters out.
 
 Phase 1 built and measured two of the four candidates: (a), a held grant with
 bridging extensions, and (d2), a second MPSL timeslot session. The full

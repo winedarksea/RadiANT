@@ -1883,9 +1883,9 @@ static enum step arm_next(radiant_time_t earliest)
 		 * Not before the last tracked window's timeslot has ended. That
 		 * timeslot is booked to its close plus the follow-on reserve,
 		 * and with two sessions the arbiter judges the chunk's request
-		 * against all of it at once, released early or not (the nRF
-		 * gate measured the release arriving only at the grant's own end
-		 * whenever the window had received a frame). A chunk opened
+		 * against all of it at once. Opening the chunk earlier, once the
+		 * early release has given that air back, lost tracked slots on
+		 * the bench (phase-3a.md, cause not found). A chunk opened
 		 * inside it waits for that end and then has too little notice
 		 * left; opening after it costs the same listening without the
 		 * wasted request.

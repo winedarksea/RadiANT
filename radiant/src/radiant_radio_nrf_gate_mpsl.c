@@ -991,7 +991,7 @@ static uint32_t elastic_skew_us;
  * STOP ASKING FOR EXTENSIONS THE ARBITER KEEPS REFUSING (ADR 0021, decision 3).
  * Beside OpenThread every extension is refused, and every refusal is an
  * EXTEND_FAILED handled inside the zero-latency callback. MPSL ASSERT 69:108 has
- * only ever followed one of those. So after EXT_FAIL_RUN_OFF refusals in a row
+ * mostly followed one (not shown causal: phase-3a.md). After EXT_FAIL_RUN_OFF in a row
  * the next EXT_SKIP_GRANTS elastic grants end at their first compare with the
  * ABORTED terminal a refusal would have produced, without the request; then one
  * is asked for again. Under BLE extensions are mostly granted, so a run is rare.

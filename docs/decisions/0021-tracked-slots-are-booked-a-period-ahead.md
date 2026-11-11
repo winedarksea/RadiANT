@@ -1,7 +1,8 @@
 # 0021 — On MPSL, tracked slots are booked a period ahead in a second session
 
-- **Status:** Accepted as the design to build. Implementation is in progress on
-  `wip/adr18-impl`. The scan tail (decision 5) is untested and conditional.
+- **Status:** Accepted as the design to build. Decisions 1-4 are built on
+  `wip/adr18-impl` ([Stage A report](../adr18-eval/phase-3a.md)). The scan tail
+  (decision 5) is untested and conditional.
 - **Date:** 2026-11-10
 - **Resolves:** [0018](0018-search-listens-through-the-arm-lead.md)
 - **Builds on:** [0013](0013-sweep-is-the-elastic-consumer.md) (tracked slots
@@ -13,6 +14,39 @@
 > **Provenance.** Clean-room. Written from this project's source, its own bench
 > measurements and nrfxlib's public `mpsl_timeslot.h`. See
 > [0002](0002-clean-room-policy.md).
+
+> **Corrections, 2026-11-10, from the Stage A bench
+> ([phase-3a.md](../adr18-eval/phase-3a.md)).** The text below is left as first
+> written, so read it with these:
+>
+> - **Decision 4's figure is wrong.** Thread did not refuse "only about 2 %" at
+>   8 ms or more, and the 16-24 ms lead was not an artefact of the backoff. With
+>   the lead held fixed, under an attached peer and detached alike, Thread refused
+>   99-100 % at 4 and 6 ms, 84-89 % at 8 ms, 75-80 % at 12 ms, and none at 16 or
+>   24 ms. The "2.1 %" was the `>= 8 ms` notice bin of a run whose lead was mostly
+>   16-24 ms, so nearly everything in that bin had enough notice. The backoff had
+>   landed about where the knee is. CONTENDED is 16 ms.
+> - **Decision 3's evidence is weaker than stated, and one sentence is false.**
+>   69:108 has not "only ever followed extension refusals": `gate_disc_master` on
+>   Phase 1's master image asserted with `ext=87/0` and no other stack. On the
+>   two-session image at HEAD the arm with the skip and the arm without it both
+>   ran 30 minutes with no assert, the second through 59 495 refusals. The skip is
+>   therefore not shown to prevent the assert. All six asserts on record came from
+>   images without decision 2's early release, and none has come from an image
+>   with it, which is suggestive and also unproven. The skip stays because it
+>   costs nothing measurable, not because it is known to be the cure.
+> - **Decision 2 gives the air back to the other stack, and not to the scan.** The
+>   evaluation's ~5.5 ms after-slot band is not achieved. Opening the chunk at the
+>   window's end (e7749c2) lost tracked slots on `gate.conf` and was reverted
+>   (6128da5), so the chunk still waits out the follow-on reserve.
+> - **Left out, (d1).** The sweep supports dropping it on the original ground:
+>   requests at 8 ms of notice or less are mostly refused beside Thread. It still
+>   was not measured as `ACTION_REQUEST`.
+> - **Consequences.** RAM is +448 B on Matter and bridge images at this branch's
+>   head, with the bench counters out.
+> - **Listening under Thread is about 26 % of the air** at the 16 ms lead, measured
+>   over 30 minutes. Every grant ends at its first compare, so a grant is at most
+>   one 10 ms first bite.
 
 ---
 
