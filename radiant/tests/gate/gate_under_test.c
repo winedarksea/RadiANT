@@ -92,6 +92,15 @@ void gate_probe_fire_booking_due(void)
 #endif
 }
 
+void gate_probe_refresh_anchor(uint32_t session)
+{
+	ss[session].anchor = radiant_radio_now();
+	ss[session].anchor_valid = true;
+	ss[session].want_place = false;
+	ss[session].bootstrapping = false;
+	ss[session].mpsl_owes = false;
+}
+
 /* The one writer in this file: test-harness state reset, never behaviour. */
 void gate_probe_reset_elastic(void)
 {
@@ -102,5 +111,6 @@ void gate_probe_reset_elastic(void)
 	}
 #if defined(CONFIG_RADIANT_GATE_MPSL_D2)
 	el_lead_us = EL_LEAD_START_US;
+	el_block_run = 0u;
 #endif
 }

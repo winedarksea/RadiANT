@@ -727,11 +727,14 @@ config RADIANT_GATE_MPSL_D2_CONTENDED_LEAD_US
 	int "(d2) placement lead for scan chunks beside a contending stack (us)"
 	depends on RADIANT_GATE_MPSL_D2
 	range 300 100000
-	default 8000
+	default 16000
 	help
 	  The notice an elastic request gets in the CONTENDED state: once the
-	  arbiter has refused a run of extensions, until it grants one. From the
-	  lead sweep on the bench (docs/adr18-eval/phase-3a.md).
+	  arbiter has refused a run of extensions, or a long run of requests,
+	  until it grants an extension. The knee of the bench sweep beside
+	  OpenThread (docs/adr18-eval/phase-3a.md): listening was 25 % of the
+	  air at 16 ms against 21.5 % at 24 ms, 7.5 % at 12 ms, 2 % at 8 ms and
+	  nothing at 6 ms, attached or detached alike.
 
 config RADIANT_GATE_MPSL_D2_GAP_US
 	int "(d2) gap a scan chunk leaves before a booked operation (us)"

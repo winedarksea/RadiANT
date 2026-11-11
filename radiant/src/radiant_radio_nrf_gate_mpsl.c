@@ -1018,14 +1018,20 @@ BUILD_ASSERT(ELASTIC_FLOOR_US > END_MARGIN_EXTEND_US,
  * session needs no full PLACE_LEAD_US of notice. It takes one of two values:
  * OPEN (D2_SCAN_LEAD_US), or CONTENDED (D2_CONTENDED_LEAD_US, from the bench's
  * lead sweep) from the moment the arbiter has refused a run of extensions until
- * it grants one. Keyed on extensions and not on refused requests, because a
+ * it grants one. Keyed on extensions and not on a refused request, because one
  * refused request says nothing about notice: a BLE advertiser refuses at any
  * notice (Phase 0c F3), and a backoff that grew on those settled at 16-24 ms for
- * nothing. Published to the core as caps.min_arm_lead_elastic_us.
+ * nothing. The one exception is a long unbroken run of refused requests: beside
+ * OpenThread almost nothing is granted at the OPEN lead (0 of 3772 at 6 ms), so
+ * there may be no grant to ask an extension from, and a BLE advertiser, whose
+ * events are a few milliseconds wide, does not refuse sixteen retries running.
+ * Published to the core as caps.min_arm_lead_elastic_us.
  */
 #if defined(CONFIG_RADIANT_GATE_MPSL_D2)
 #define EL_LEAD_START_US     CONFIG_RADIANT_GATE_MPSL_D2_SCAN_LEAD_US
 #define EL_LEAD_CONTENDED_US CONFIG_RADIANT_GATE_MPSL_D2_CONTENDED_LEAD_US
+#define EL_BLOCK_RUN_CONTENDED 16u
+static uint32_t el_block_run;
 /* Below this much notice a fresh elastic request is refused by MPSL even with
  * no other stack (measured on gate.conf: every one under 2 ms, none above). */
 #define EL_NOTICE_MIN_US 2000u
@@ -1613,6 +1619,11 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		if (g.no_extend && ext_skip > 0u) {
 			ext_skip--;
 		}
+#if defined(CONFIG_RADIANT_GATE_MPSL_D2)
+		if (g.extendable) {
+			el_block_run = 0u;
+		}
+#endif
 		g.pending = false;
 		g.granted = true;
 		deadline_stop();
@@ -1938,6 +1949,12 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		 * request's, not g.extendable: see placed_extendable.
 		 */
 		if (s->placed_extendable) {
+#if defined(CONFIG_RADIANT_GATE_MPSL_D2)
+			if (++el_block_run >= EL_BLOCK_RUN_CONTENDED) {
+				el_block_run = 0u;
+				el_lead_state(true);
+			}
+#endif
 #if defined(CONFIG_RADIANT_GATE_MPSL_STATS)
 			stats.el_blocked++;
 			stats.el_blk_by_notice[notice_bin(s->notice_us)]++;
@@ -2372,6 +2389,7 @@ int gate_init(void)
 	}
 	d2_on = (n_open == 2u);
 	el_lead_us = EL_LEAD_START_US;
+	el_block_run = 0u;
 	el_lead_publish();
 #endif
 #if defined(CONFIG_RADIANT_GATE_MPSL_STATS_LOG)

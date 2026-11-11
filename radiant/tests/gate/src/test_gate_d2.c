@@ -418,6 +418,66 @@ ZTEST(radiant_gate_d2, test_d2_a_refused_request_does_not_grow_the_lead)
 		      "a refused request grew the lead: BLE refuses at any notice");
 }
 
+/* Beside OpenThread a request at the OPEN lead is refused almost every time, so
+ * there may never be a grant to ask for an extension from. A long unbroken run
+ * of refused requests counts too; a BLE advertiser does not produce one. */
+ZTEST(radiant_gate_d2, test_d2_a_long_run_of_refused_requests_is_contended)
+{
+	for (uint32_t i = 0u; i < 16u; i++) {
+		radiant_time_t from = radiant_radio_now() + SCAN_LEAD_US;
+
+		gate_probe_read(&p);
+		zassert_equal(LEAD_OPEN_US, p.el_lead_us, "contended after %u", i);
+		zassert_equal(GATE_PENDING,
+			      gate_acquire(GATE_OP_RX, from, from + SCAN_LEN_US, 0u,
+					   RADIANT_GATE_PRIO_NORMAL), NULL);
+		k_msleep(WORK_MS);
+		(void)fake_mpsl_signal_s(fake_mpsl_last_session(),
+					 MPSL_TIMESLOT_SIGNAL_BLOCKED);
+		k_msleep(WORK_MS);
+		/* A long run also abandons the anchor; hand it a fresh one. */
+		for (uint32_t k = 0u; k < 2u; k++) {
+			gate_probe_read(&p);
+			if (!p.s_anchor_valid[k]) {
+				gate_probe_refresh_anchor(k);
+			}
+		}
+	}
+	gate_probe_read(&p);
+	zassert_equal(LEAD_CONTENDED_US, p.el_lead_us, NULL);
+}
+
+ZTEST(radiant_gate_d2, test_d2_a_grant_breaks_the_run_of_refused_requests)
+{
+	for (uint32_t round = 0u; round < 2u; round++) {
+		for (uint32_t i = 0u; i < 15u; i++) {
+			radiant_time_t from = radiant_radio_now() + SCAN_LEAD_US;
+
+			zassert_equal(GATE_PENDING,
+				      gate_acquire(GATE_OP_RX, from, from + SCAN_LEN_US,
+						   0u, RADIANT_GATE_PRIO_NORMAL), NULL);
+			k_msleep(WORK_MS);
+			(void)fake_mpsl_signal_s(fake_mpsl_last_session(),
+						 MPSL_TIMESLOT_SIGNAL_BLOCKED);
+			k_msleep(WORK_MS);
+			for (uint32_t k = 0u; k < 2u; k++) {
+				gate_probe_read(&p);
+				if (!p.s_anchor_valid[k]) {
+					gate_probe_refresh_anchor(k);
+				}
+			}
+		}
+		elastic_granted();
+		gate_release();
+		zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_END,
+			      fake_mpsl_signal_s(fake_mpsl_last_session(),
+						 MPSL_TIMESLOT_SIGNAL_TIMER0), NULL);
+		k_msleep(WORK_MS);
+	}
+	gate_probe_read(&p);
+	zassert_equal(LEAD_OPEN_US, p.el_lead_us, NULL);
+}
+
 ZTEST(radiant_gate_d2, test_d2_a_run_of_refused_extensions_is_contended)
 {
 	extension_refused();
