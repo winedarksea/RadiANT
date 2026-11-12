@@ -29,9 +29,7 @@
 
 #include <radiant/radiant_frame.h>
 #include <radiant/radiant_radio_hal.h>
-#if defined(CONFIG_RADIANT_SEARCH_COVERAGE)
-#include <radiant/radiant_sched.h>
-#endif
+#include <radiant/radiant_sched.h> /* RADIANT_SCHED_ARMED_STALE_US */
 
 /* ---------------------------------------------------------------------------
  * Small helpers
@@ -976,20 +974,12 @@ static uint32_t coverage_bin(radiant_time_t t)
  * a gap shorter than a bin is invisible here; a deaf band of two bins or more
  * always leaves a bin unmarked, which is what the ADR 0018 bands are.
  *
- * A chunk reclaimed by the scheduler's A9-3 is CREDITED the way an abort is
- * (end clamps to t_close, so a whole listen) but it heard nothing, because
- * the backend had lost the operation. It marks nothing here; credit is left
- * alone. It is recognised by being reported more than the reclaim distance
- * past its own end, which no displaced chunk ever is: a displaced chunk is
- * torn down before its close, and the terminal it would have had in place of
- * that abort arrives within milliseconds of the close.
+ * A chunk reclaimed by the scheduler's A9-3 never gets here: it heard
+ * nothing and radiant_search_on_done() credits it nothing. See
+ * chunk_was_reclaimed().
  */
-static void coverage_note(struct radiant_search *s, radiant_time_t end,
-			  bool ran_to_close, radiant_time_t ended_at)
+static void coverage_note(struct radiant_search *s, radiant_time_t end)
 {
-	if (!ran_to_close && ended_at > s->t_close + RADIANT_SCHED_ARMED_STALE_US) {
-		return;
-	}
 	if ((end - s->t_open) >= RADIANT_SEARCH_COVERAGE_PERIOD_US) {
 		s->phase_mask = UINT32_MAX;
 		return;
@@ -1072,12 +1062,41 @@ void radiant_search_on_rx_indexed(struct radiant_search *s, const struct radiant
 	on_event(s, evt, filter_index);
 }
 
+/*
+ * A chunk the scheduler's A9-3 reclaimed: the backend lost the operation, so
+ * it heard nothing, yet it is reported as opened and cut short, which the
+ * credit path below would clamp to t_close and credit as a whole listen.
+ * Recognised by being reported more than the reclaim distance past its own
+ * end, which no displaced chunk ever is: a displaced chunk is torn down
+ * before its close, and the terminal it would have had in place of that
+ * abort arrives within milliseconds of the close.
+ *
+ * Crediting it nothing cannot hold a set: A9-3 fires only after a backend has
+ * held a lost operation for more than RADIANT_SCHED_ARMED_STALE_US, so a set
+ * is never fed reclaims alone at a rate that matters, and every real listen
+ * in between is still credited.
+ */
+static bool chunk_was_reclaimed(const struct radiant_search *s, bool ran_to_close,
+				bool opened, radiant_time_t ended_at)
+{
+	return !ran_to_close && opened &&
+	       ended_at > s->t_close + RADIANT_SCHED_ARMED_STALE_US;
+}
+
 void radiant_search_on_done(struct radiant_search *s, bool ran_to_close,
 			bool opened, radiant_time_t ended_at)
 {
 	radiant_time_t end;
 
 	if (!inst_ok(s) || s->op == 0u) {
+		return;
+	}
+
+	/* Heard nothing: no dwell, no coverage, and not real listening, so the
+	 * denial run is not reset either. */
+	if (chunk_was_reclaimed(s, ran_to_close, opened, ended_at)) {
+		s->stats.reclaimed_chunks++;
+		s->op = 0u;
 		return;
 	}
 
@@ -1105,7 +1124,7 @@ void radiant_search_on_done(struct radiant_search *s, bool ran_to_close,
 						  ? UINT32_MAX
 						  : (uint32_t)total;
 #if defined(CONFIG_RADIANT_SEARCH_COVERAGE)
-			coverage_note(s, end, ran_to_close, ended_at);
+			coverage_note(s, end);
 #endif
 #if defined(CONFIG_RADIANT_SEARCH_DENIAL_ESCAPE)
 			/* THE ONLY PLACE REAL LISTENING IS CREDITED, so the

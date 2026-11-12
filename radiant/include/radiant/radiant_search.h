@@ -452,6 +452,10 @@ struct radiant_search_stats {
 	 * channel. Counted per channel offered, not per frame: one frame two
 	 * channels refuse counts twice. */
 	uint32_t permit_rejected;
+	/* Chunks the scheduler's A9-3 reclaimed (reported more than
+	 * RADIANT_SCHED_ARMED_STALE_US past their close). The backend had lost
+	 * them, so they credited no dwell. */
+	uint32_t reclaimed_chunks;
 #if defined(CONFIG_RADIANT_SEARCH_DENIAL_ESCAPE)
 	/* Times a run of denials credited a quantum so the set could finish.
 	 * Nonzero means the sweep was refused the air long enough to have
@@ -776,7 +780,10 @@ void radiant_search_on_rx_indexed(struct radiant_search *s, const struct radiant
  * since every search window there is cut short.
  *
  * ended_at is ignored except in the middle case, and clamped to
- * [t_open, t_close] so a slightly-late clock read cannot over-credit.
+ * [t_open, t_close] so a slightly-late clock read cannot over-credit. An
+ * ended_at more than RADIANT_SCHED_ARMED_STALE_US past t_close is a chunk the
+ * scheduler reclaimed from a backend that had lost it (A9-3): it credits
+ * nothing and counts in stats.reclaimed_chunks.
  *
  * Called for you by radiant_search_on_rx() on a terminal event; call
  * directly if the scheduler's completion isn't a HAL event.

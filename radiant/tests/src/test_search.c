@@ -978,7 +978,11 @@ ZTEST(radiant_search, test_a_late_reported_end_credits_no_more_than_the_window)
 
 	radiant_search_armed(&g_s, RADIANT_SEARCH_OP_EXTERNAL, w.t_open,
 			     w.t_open + 20000u);
-	radiant_search_on_done(&g_s, false, true, w.t_open + 5000000u);
+	/* Late, but inside the reclaim distance: further out it is a chunk
+	 * A9-3 reclaimed, which credits nothing at all (see
+	 * test_a_reclaimed_chunk_credits_no_dwell). */
+	radiant_search_on_done(&g_s, false, true,
+			       w.t_open + 20000u + RADIANT_SCHED_ARMED_STALE_US);
 
 	zassert_equal(before - 20000u, radiant_search_dwell_remaining(&g_s),
 		      "a late ended_at was credited past the window's close");
@@ -2273,9 +2277,9 @@ ZTEST(radiant_search, test_coverage_phase_locked_chunks_leave_a_hole_and_are_cou
 	end_of_test();
 }
 
-/* A chunk the scheduler's A9-3 reclaimed: reported far past its own end. It is
- * credited as a full listen, because that is what the credit path does today,
- * but it heard nothing and marks nothing. */
+/* A chunk the scheduler's A9-3 reclaimed: reported far past its own end. It
+ * heard nothing, so it marks nothing (and credits nothing; see
+ * test_a_reclaimed_chunk_credits_no_dwell). */
 ZTEST(radiant_search, test_coverage_a_reclaimed_chunk_marks_no_phase)
 {
 	const uint32_t len = 50000u;
@@ -2289,9 +2293,9 @@ ZTEST(radiant_search, test_coverage_a_reclaimed_chunk_marks_no_phase)
 			       COV_T0 + len + RADIANT_SCHED_ARMED_STALE_US + 1u);
 
 	zassert_equal(0u, g_s.phase_mask, "a reclaimed chunk marked a phase");
-	zassert_equal(RADIANT_SEARCH_DWELL_DEFAULT_US - len,
+	zassert_equal(RADIANT_SEARCH_DWELL_DEFAULT_US,
 		      radiant_search_dwell_remaining(&g_s),
-		      "the reclaimed chunk's credit changed");
+		      "the reclaimed chunk was credited");
 	end_of_test();
 }
 
@@ -2328,6 +2332,53 @@ ZTEST(radiant_search, test_coverage_a_displaced_chunk_marks_only_what_it_heard)
 	end_of_test();
 }
 #endif /* CONFIG_RADIANT_SEARCH_COVERAGE */
+
+/*
+ * A chunk the scheduler's A9-3 reclaimed (reported more than
+ * RADIANT_SCHED_ARMED_STALE_US past its close) is a chunk the backend had
+ * lost: it heard nothing, so it credits no dwell. It used to clamp to t_close
+ * and count as a whole listen.
+ */
+ZTEST(radiant_search, test_a_reclaimed_chunk_credits_no_dwell)
+{
+	const radiant_time_t t0 = 1000000u;
+	const uint32_t len = 50000u;
+	struct radiant_search_window w;
+
+	bring_up(false);
+	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE, &want_any,
+					radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+
+	zassert_ok(radiant_search_window(&g_s, t0, &w));
+	radiant_search_armed(&g_s, RADIANT_SEARCH_OP_EXTERNAL, t0, t0 + len);
+	radiant_search_on_done(&g_s, false, true,
+			       t0 + len + RADIANT_SCHED_ARMED_STALE_US + 1u);
+
+	zassert_equal(0u, g_s.set_dwell_us, "the reclaimed chunk was credited %u us",
+		      g_s.set_dwell_us);
+	zassert_equal(1u, radiant_search_get_stats(&g_s)->reclaimed_chunks);
+	zassert_false(radiant_search_owns_op(&g_s, RADIANT_SEARCH_OP_EXTERNAL),
+		      "the chunk is finished all the same");
+
+	/* Control: an ordinary abort, reported at the cut, is still credited. */
+	zassert_ok(radiant_search_window(&g_s, t0 + 200000u, &w));
+	radiant_search_armed(&g_s, RADIANT_SEARCH_OP_EXTERNAL, t0 + 200000u,
+			     t0 + 200000u + len);
+	radiant_search_on_done(&g_s, false, true, t0 + 200000u + 20000u);
+	zassert_equal(20000u, g_s.set_dwell_us, "an ordinary abort lost its credit");
+	zassert_equal(1u, radiant_search_get_stats(&g_s)->reclaimed_chunks);
+
+	/* Control: a terminal a little past the close (lag, not a reclaim) is
+	 * clamped and credited as before. */
+	zassert_ok(radiant_search_window(&g_s, t0 + 400000u, &w));
+	radiant_search_armed(&g_s, RADIANT_SEARCH_OP_EXTERNAL, t0 + 400000u,
+			     t0 + 400000u + len);
+	radiant_search_on_done(&g_s, false, true,
+			       t0 + 400000u + len + RADIANT_SCHED_ARMED_STALE_US);
+	zassert_equal(20000u + len, g_s.set_dwell_us);
+	zassert_equal(1u, radiant_search_get_stats(&g_s)->reclaimed_chunks);
+	end_of_test();
+}
 
 ZTEST(radiant_search, test_all_channel_slots_can_search)
 {
