@@ -1,6 +1,4 @@
 MPSL bursts: multi-packet bursts still can't run on MPSL builds. That's a scope gap, not a regression; Zwift uses acknowledged messages.
-Weak tests: the scheduler half is fixed (`reserve_from_done_case()` in radiant/tests/src/test_sched.c, with cancel and reset recorded there as equivalent mutants); the gate-test half is MPSL and still open.
-Tool footgun: fixed 2026-11-08. ant_ack_gate.py exits non-zero on any quality failure with or without --gate; the 300 s / 300 command sufficiency reason fails only under --gate.
 
 Discovery short match (ADR 0022), left open 2026-11-11:
 - Gate 3 is not settled. `CONFIG_RADIANT_SEARCH_SHORT_MATCH` puts discovery at parity with the Garmin (12.2 against 12.6 sightings/s), but the tracked-loss comparison drowned in the room's drift (`archive/benchmarks/2026-11-11-scan-rate/README.md`). Next step: a diagnostic build counting tracked slots that start while a search reception is in flight (the trainer's sibling channels share its device number), then a quiet-room interleaved A/B. Flip the nRF default only after that.
