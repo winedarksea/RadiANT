@@ -60,7 +60,11 @@ min_scenarios: 14
 # (docs/testing.md), rather than on a GitHub runner. 4168 since C5-1 added one
 # gate test. 4343 at phase 4 (wip/adr18-f1): two sched tests, three gate tests.
 # 4347 with the open-channel ID list test, which runs in all four api scenarios.
-min_testcases: 4347
+# 4403 on fix/spec-rev51-gaps (Bluefin twister, 2026-11-11): six api cases in
+# each of the four api scenarios (RX-only slave, burst refusal by type, the two
+# last-payload repeats, adv burst capabilities, plus one earlier unraised), and
+# the unit scenarios' +8 that landed with ADR 0022 and the 0x61/0xC6 work.
+min_testcases: 4403
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -75,13 +79,13 @@ min_testcases: 4347
 # above. The earlier values were nRF5340 DK counts minus about 1%, plus static
 # counts. A floor equal to the observed count still fails only when coverage
 # goes down, which is the event it exists to catch.
-min_cases.radiant.unit: 996
-min_cases.radiant.unit.sec_modes: 996
-min_cases.radiant.unit.no_pairing: 944
-min_cases.radiant.api: 66
-min_cases.radiant.api.sec: 69
-min_cases.radiant.api.sec_host: 82
-min_cases.radiant.api.crc_repair: 67
+min_cases.radiant.unit: 1004
+min_cases.radiant.unit.sec_modes: 1004
+min_cases.radiant.unit.no_pairing: 952
+min_cases.radiant.api: 72
+min_cases.radiant.api.sec: 75
+min_cases.radiant.api.sec_host: 88
+min_cases.radiant.api.crc_repair: 73
 # 32 since C5-1 (inline BLOCKED backs off the class that was refused). 38 with
 # the extension skip (ADR 0021).
 min_cases.radiant.gate: 75
@@ -90,5 +94,5 @@ min_cases.radiant.backend: 8
 min_cases.hrm_ble.sim_sched: 4
 min_cases.treadmill.pages: 20
 min_cases.treadmill.hr_rx: 3
-min_cases.radiant.unit.ack_faults: 1003
+min_cases.radiant.unit.ack_faults: 1011
 min_cases.trainer.model: 14

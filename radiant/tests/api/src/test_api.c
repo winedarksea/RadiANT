@@ -2825,6 +2825,18 @@ ZTEST(api, test_an_inbound_burst_numbers_packets_0_1_2_3_1_2_3)
 			      (unsigned)want_seq[k]);
 		zassert_equal(k == 8u, (b0 & ANTW_BURST_HEADER_LAST) != 0u,
 			      "packet %u: LAST flag wrong", k);
+		/* Rev 5.1 section 7.1.1: only the first message of a
+		 * received burst carries extended data (lib config is 0xE0
+		 * here). Channel byte + 8 is 9; packet 0 has the tail. */
+		if (k == 0u) {
+			zassert_true(msglog[i].len > 9u,
+				     "burst packet 0 lost its extended data");
+		} else {
+			zassert_equal(9u, msglog[i].len,
+				      "burst packet %u carries %u bytes; only "
+				      "packet 0 may carry extended data", k,
+				      (unsigned)msglog[i].len);
+		}
 		zassert_equal(CH, b0 & ANTW_BURST_HEADER_CHANNEL_MASK);
 		k++;
 	}
@@ -4421,4 +4433,206 @@ ZTEST(api, test_burst_tx_refuses_what_it_cannot_send)
 	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED),
 		      "an unanswered burst must end in exactly one TX_FAILED");
 	end_of_test();
+}
+
+/*
+ * Rev 5.1 spec-gap fixes, 2026-11-11 (plan: fix/spec-rev51-gaps).
+ */
+
+/*
+ * 1.4: a SLAVE_RX_ONLY channel (0x40) never transmits. An acknowledged packet
+ * from the master is still handed to the host, but no acknowledgement is armed
+ * - the master sees a missed ACK, as from a receiver out of range.
+ */
+ZTEST(api, test_an_rx_only_slave_delivers_acknowledged_data_but_never_transmits)
+{
+	uint16_t                     dev;
+	const struct fake_radio_arm *w;
+	uint8_t                      frame[AIR_LEN];
+	radiant_time_t               t_data;
+	uint32_t                     tx_before;
+
+	open_and_acquire_slave_of_type((uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
+				       &dev);
+	run_housekeeping();
+	w = last_arm_of(FAKE_RADIO_ARM_RX);
+	zassert_not_null(w, "setup: no tracked window was armed after acquiring");
+	zassert_false(w->terminated, "setup: the tracked window had already ended");
+
+	tx_before = fake_radio_stats()->arms_tx;
+	t_data = w->t_open + ((w->t_close - w->t_open) / 2u);
+	(void)build_peer_frame_for(frame, dev, RADIANT_CTRL_BURST_LAST_SEQ0,
+				   peer_payload);
+	zassert_equal(RADIANT_RADIO_OK_RC,
+		      fake_radio_air_frame(t_data, frame, AIR_LEN));
+	fake_radio_advance_to(t_data + RADIANT_TRANSFER_REPLY_US + 1000u);
+	drain();
+
+	zassert_equal(1u, count_msgs((uint8_t)ANTW_MESG_ACKNOWLEDGED_DATA_ID),
+		      "the acknowledged packet was not delivered to the host");
+	zassert_equal(tx_before, fake_radio_stats()->arms_tx,
+		      "an RX-only slave armed %u transmit(s)",
+		      (unsigned)(fake_radio_stats()->arms_tx - tx_before));
+
+	end_of_test();
+}
+
+/* 1.4: and the host cannot make it transmit a burst, nor a TX-only master
+ * take one it could never hear acknowledged. Same refusal as acknowledged
+ * data. */
+ZTEST(api, test_burst_tx_refuses_rx_only_and_tx_only_channels)
+{
+	uint8_t blk[8] = { 0x01u, 0x02u, 0x03u, 0x04u, 0x05u, 0x06u, 0x07u, 0x08u };
+	const uint8_t seg = ANTR_BURST_SEGMENT_START | ANTR_BURST_SEGMENT_END;
+	static const uint8_t types[2] = {
+		(uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
+		(uint8_t)ANTW_CHANNEL_TYPE_MASTER_TX_ONLY,
+	};
+	uint32_t i;
+
+	for (i = 0u; i < 2u; i++) {
+		open_channel(types[i]);
+		zassert_equal((antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE,
+			      antr_burst_tx(CH, 8u, blk, seg),
+			      "channel type 0x%02x took a burst", types[i]);
+		zassert_equal((antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE,
+			      antr_acknowledge_message_tx(CH, 8u, blk));
+		(void)antr_channel_close(CH);
+		fake_radio_advance(PERIOD_US);
+		drain();
+		zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+			      antr_channel_unassign(CH));
+	}
+
+	end_of_test();
+}
+
+/*
+ * 1.6: after an acknowledged message the master's next broadcast repeats
+ * the packet it sent, not the host's stale broadcast buffer (Rev 5.1 p.109,
+ * and docs/spike-b-results.md). A host broadcast write then wins again.
+ */
+ZTEST(api, test_the_master_repeats_its_last_acknowledged_payload_until_the_host_writes)
+{
+	static const uint8_t ack_payload[8] = {
+		0x33u, 0xA5u, 0x5Au, 0x01u, 0x02u, 0x03u, 0x04u, 0x05u
+	};
+	const struct fake_radio_arm *ack;
+	const struct fake_radio_arm *next;
+	radiant_time_t               t_tx;
+
+	open_channel((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	(void)run_one_quiet_period();
+	t_tx = run_one_quiet_period();
+	fake_radio_advance_to(t_tx + (PERIOD_US / 2u));
+	drain();
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_acknowledge_message_tx(CH, 8u, ack_payload));
+	ack = last_tx_with_ctrl(RADIANT_CTRL_ACK_DATA_OPEN);
+	zassert_not_null(ack, "no acknowledged-data packet was armed");
+
+	/* Nothing answers: the transfer fails and the engine goes idle. */
+	fake_radio_advance_to(ack->t_sync_at + RADIANT_TRANSFER_REPLY_US +
+			      RADIANT_TRANSFER_ACK_GUARD_US + 100u);
+	drain();
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED));
+
+	/* The next slot, with no host write in between. */
+	if (fake_radio_is_idle()) {
+		run_housekeeping();
+	}
+	next = last_tx_with_ctrl(RADIANT_CTRL_BROADCAST);
+	zassert_not_null(next);
+	zassert_true(next->t_sync_at > ack->t_sync_at,
+		     "no broadcast slot was armed after the acknowledged one");
+	zassert_mem_equal(&next->body[BODY_D0], ack_payload, 8u,
+			  "the next broadcast did not repeat the acknowledged "
+			  "payload");
+
+	/* The host writes: its page goes out from the next slot on. */
+	fake_radio_advance_to(next->t_sync_at + RADIANT_TRANSFER_SLOT_REPLY_US +
+			      RADIANT_TRANSFER_ACK_GUARD_US + 10u);
+	(void)run_one_quiet_period();
+	next = last_tx_with_ctrl(RADIANT_CTRL_BROADCAST);
+	zassert_mem_equal(&next->body[BODY_D0], bcast_payload, 8u,
+			  "a host broadcast write did not supersede the repeat");
+
+	end_of_test();
+}
+
+/*
+ * 1.6, the burst half: two one-packet blocks, the first acknowledged by the
+ * slave, the second not. The next broadcast carries the SECOND packet - the
+ * last one sent, acknowledged or not.
+ */
+ZTEST(api, test_the_master_repeats_the_last_burst_packet_it_sent)
+{
+	uint8_t blk_a[8] = { 0xA0u, 0xA1u, 0xA2u, 0xA3u, 0xA4u, 0xA5u, 0xA6u, 0xA7u };
+	uint8_t blk_b[8] = { 0xB0u, 0xB1u, 0xB2u, 0xB3u, 0xB4u, 0xB5u, 0xB6u, 0xB7u };
+	uint8_t                      frame[AIR_LEN];
+	const struct fake_radio_arm *p0;
+	const struct fake_radio_arm *p1;
+	const struct fake_radio_arm *next;
+	radiant_time_t               t_tx;
+
+	open_channel((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	(void)run_one_quiet_period();
+	t_tx = run_one_quiet_period();
+	fake_radio_advance_to(t_tx + (PERIOD_US / 2u));
+	drain();
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_burst_tx(CH, 8u, blk_a, ANTR_BURST_SEGMENT_START));
+	p0 = last_tx_with_ctrl(RADIANT_CTRL_BURST_OPEN_SEQ0);
+	zassert_not_null(p0, "burst packet 0 was not armed");
+
+	/* The slave acknowledges packet 0. */
+	(void)build_peer_frame(frame,
+			       radiant_transfer_reply_ctrl(RADIANT_CTRL_BURST_OPEN_SEQ0),
+			       peer_payload);
+	zassert_equal(RADIANT_RADIO_OK_RC,
+		      fake_radio_air_frame(p0->t_sync_at +
+					   RADIANT_TRANSFER_REPLY_US,
+					   frame, AIR_LEN));
+	fake_radio_advance_to(p0->t_sync_at + RADIANT_TRANSFER_REPLY_US + 200u);
+	drain();
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_burst_tx(CH, 8u, blk_b, ANTR_BURST_SEGMENT_END),
+		      "the second block was refused");
+	p1 = last_tx_with_ctrl(RADIANT_CTRL_BURST_LAST_SEQ1);
+	zassert_not_null(p1, "burst packet 1 was not armed");
+
+	/* Nobody acknowledges packet 1 (and, with no retries for the final
+	 * packet once they exhaust, the transfer fails). */
+	fake_radio_advance(PERIOD_US);
+	drain();
+	if (fake_radio_is_idle()) {
+		run_housekeeping();
+	}
+	next = last_tx_with_ctrl(RADIANT_CTRL_BROADCAST);
+	zassert_not_null(next);
+	zassert_true(next->t_sync_at > p1->t_sync_at,
+		     "no broadcast slot was armed after the burst");
+	zassert_mem_equal(&next->body[BODY_D0], blk_b, 8u,
+			  "the next broadcast did not repeat the last burst "
+			  "packet");
+
+	fake_radio_advance_to(next->t_sync_at + RADIANT_TRANSFER_SLOT_REPLY_US +
+			      RADIANT_TRANSFER_ACK_GUARD_US + 10u);
+	end_of_test();
+}
+
+/* 1.7: the capabilities form of 0x78 advertises no frequency hopping,
+ * because nothing in RadiANT hops. */
+ZTEST(api, test_advanced_burst_capabilities_advertise_no_frequency_hopping)
+{
+	uint8_t cfg[ANTW_MESG_CONFIG_ADV_BURST_REQ_CAPABILITIES_SIZE];
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_adv_burst_config_get(0u, cfg));
+	zassert_equal((uint8_t)ANTW_ADV_BURST_MODES_SIZE_24_BYTES, cfg[0]);
+	zassert_equal(0u, cfg[1] & (uint8_t)ANTW_ADV_BURST_MODES_FREQ_HOP,
+		      "frequency hopping is advertised (modes 0x%02x)", cfg[1]);
 }
