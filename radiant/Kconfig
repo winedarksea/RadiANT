@@ -597,7 +597,7 @@ config RADIANT_NRF_SLIP_GUARD
 
 config RADIANT_SEARCH_SHORT_MATCH
 	bool "search every device number in one window (wildcard short match)"
-	depends on RADIANT_BACKEND_NRF
+	depends on RADIANT_BACKEND_NRF || RADIANT_BACKEND_CC26XX
 	default n
 	help
 	  ADR 0022. The sweep normally matches the 3-byte search address
@@ -613,7 +613,17 @@ config RADIANT_SEARCH_SHORT_MATCH
 	  still covers the whole address, so a frame is only accepted when it
 	  verifies. The cost is the one RADIANT_NRF_SLIP_GUARD names: a 2-byte
 	  match also matches noise, so a search window locks onto more false
-	  starts. Tracking windows are unchanged.
+	  starts. On nRF, tracking windows are unchanged.
+
+	  ON cc26xx IT SHORTENS EVERY HARDWARE MATCH, NOT JUST SEARCH.
+	  formatConf.nSwBits is consumed by RF_open() and cannot change per
+	  window, so with this on the sync word is 16 bits ([A6 C5]) for
+	  every operation - tracking windows too, whose remaining three
+	  address bytes are then compared in software (two otherwise). The
+	  sweep drops from 128 sets (~33 s per pass) to one, but tracking
+	  windows also lock onto more noise and foreign frames. The backend
+	  counts those in radiant_cc26xx_sw_addr_mismatch (a JTAG-readable
+	  global, counted with this on or off so A and B images compare).
 
 	  Default n until the A/B in ADR 0022 passes its gates.
 

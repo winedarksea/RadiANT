@@ -583,7 +583,7 @@ struct radiant_search {
  * caps.filter_wildcard_dev (ADR 0022) collapses the sweep to ONE set of one
  * filter with radiant_rx_filter.wild_last set: every dwell hears every
  * device number, and devnum_lo comes from radiant_rx_event.wild_value. The
- * nRF backend sets it under CONFIG_RADIANT_SEARCH_SHORT_MATCH.
+ * nRF and cc26xx backends set it under CONFIG_RADIANT_SEARCH_SHORT_MATCH.
  */
 int radiant_search_init(struct radiant_search *s, const struct radiant_search_cfg *cfg,
 		    const struct radiant_search_cbs *cbs, void *user);

@@ -168,6 +168,23 @@ LOG_MODULE_REGISTER(radiant_cc26xx, CONFIG_RADIANT_LOG_LEVEL);
  */
 #define DEVIATION_UNITS          1000
 
+/*
+ * Address bytes the sync-word matcher compares, for EVERY operation (see
+ * setup_cmd.formatConf for why it cannot vary per window). 3 by default.
+ *
+ * CONFIG_RADIANT_SEARCH_SHORT_MATCH (ADR 0022) makes it 2, [A6 C5], so a
+ * search window can take devnum_lo as the first payload byte and sweep every
+ * device number in one set instead of 128. On this radio that is not free for
+ * tracking: a 5-byte tracking address then has THREE bytes compared in
+ * software, and the 16-bit sync word also fires on noise and on every other
+ * sensor's frames. radiant_cc26xx_sw_addr_mismatch counts what that costs.
+ */
+#if defined(CONFIG_RADIANT_SEARCH_SHORT_MATCH)
+#define CC26XX_HW_ADDR_LEN       2u
+#else
+#define CC26XX_HW_ADDR_LEN       3u
+#endif
+
 static uint32_t phy_overrides[] = {
 	/* override_prop_common.json: "DC/DC regulator: In Tx, use
 	 * DCDCCTL5[3:0]=0x3 (DITHER_EN=0 and IPEAK=3)." */
@@ -273,8 +290,12 @@ static volatile rfc_CMD_PROP_RADIO_DIV_SETUP_PA_t setup_cmd = {
 		 * wake-ups on shared devnum_lo, for a backend with no
 		 * reconfiguration path in arm calls. caps.addr_len_hw_max
 		 * reports 3 accordingly (the HAL treats it as informational).
+		 *
+		 * 16 under CONFIG_RADIANT_SEARCH_SHORT_MATCH - see
+		 * CC26XX_HW_ADDR_LEN. Then search matches [A6 C5] and takes
+		 * devnum_lo in software, and tracking finishes three bytes.
 		 */
-		.nSwBits = 24,
+		.nSwBits = 8u * CC26XX_HW_ADDR_LEN,
 		.bBitReversal = 0,
 		/*
 		 * bMsbFirst = 1. docs/ant-radio-link.md's bit-reversal note is
@@ -497,7 +518,14 @@ static RF_Mode rf_mode = {
  * ---------------------------------------------------------------------------
  */
 #define RX_CRC_BYTES      2u
+#if defined(CONFIG_RADIANT_SEARCH_SHORT_MATCH)
+/* A 5-byte tracking address over a 2-byte sync word leaves THREE address
+ * bytes in the payload. Sizes rx_data's rows, rx_cmd.maxPktLen's ceiling
+ * and tx_buf below. */
+#define RX_SW_ADDR_MAX    (RADIANT_RADIO_ADDR_MAX - CC26XX_HW_ADDR_LEN)   /* 3 */
+#else
 #define RX_SW_ADDR_MAX    (RADIANT_RADIO_ADDR_MAX - 4u)   /* 1 */
+#endif
 #define RX_PAYLOAD_MAX    (RX_SW_ADDR_MAX + RADIANT_RADIO_BODY_MAX + RX_CRC_BYTES)
 #define RX_APPEND_BYTES   (1u /* RSSI */ + 4u /* RAT */ + 1u /* status */)
 #define RX_BUF_BYTES      (RX_PAYLOAD_MAX + RX_APPEND_BYTES)
@@ -841,7 +869,13 @@ static const struct radiant_radio_caps caps = {
 	 */
 	.min_filter_hamming_bits = 4,
 
-	.filter_wildcard_dev = false,
+	/*
+	 * ADR 0022: one wild_last filter covers every devnum_lo - [A6 C5] in
+	 * the sync word, devnum_lo compared (not) in rx_match() and reported
+	 * from the payload. Only with the 2-byte sync word, so only under the
+	 * symbol; see CC26XX_HW_ADDR_LEN for what that costs tracking here.
+	 */
+	.filter_wildcard_dev = IS_ENABLED(CONFIG_RADIANT_SEARCH_SHORT_MATCH),
 
 	/*
 	 * THREE - less than the silicon can do, deliberately. formatConf.nSwBits
@@ -850,8 +884,10 @@ static const struct radiant_radio_caps caps = {
 	 * means fixing it at the 3 bytes they share (see setup_cmd.formatConf).
 	 * The 4th/5th on-air bytes on a tracked channel arrive as leading payload
 	 * bytes and are matched in software (rx_match()).
+	 *
+	 * TWO under CONFIG_RADIANT_SEARCH_SHORT_MATCH (CC26XX_HW_ADDR_LEN).
 	 */
-	.addr_len_hw_max = 3,
+	.addr_len_hw_max = CC26XX_HW_ADDR_LEN,
 
 	.max_body_len = RADIANT_RADIO_BODY_MAX,
 
@@ -1113,6 +1149,27 @@ static void deliver_tx_terminal(enum radiant_radio_status status)
  * ---------------------------------------------------------------------------
  */
 
+/*
+ * FALSE-SYNC COUNTERS, read over JTAG by symbol address (non-static and
+ * volatile so neither the compiler nor the linker drops or caches them).
+ *
+ *   radiant_cc26xx_sync_frames       every received entry rx_drain() looked
+ *                                    at: the hardware matched a sync word
+ *   radiant_cc26xx_sw_addr_mismatch  of those, the ones whose software-
+ *                                    compared address bytes matched no
+ *                                    filter - noise or another sensor's frame
+ *                                    that got past the shortened hardware
+ *                                    match, each costing the receiver one
+ *                                    frame's airtime
+ *
+ * Counted with CONFIG_RADIANT_SEARCH_SHORT_MATCH on or off, so an A image
+ * (24-bit sync) and a B image (16-bit) report the same quantity. No log line:
+ * rx_drain() runs in the RF driver's callback, and the debug builds share the
+ * UART with the ANT stream (see the note in rx_drain()).
+ */
+volatile uint32_t radiant_cc26xx_sync_frames;
+volatile uint32_t radiant_cc26xx_sw_addr_mismatch;
+
 static void rx_queue_init(void)
 {
 	memset(rx_data, 0, sizeof(rx_data));
@@ -1154,6 +1211,23 @@ static int rx_match(uint8_t sync_id, const uint8_t *payload)
 		 * the filter that sync word was programmed from. */
 		if (memcmp(f->addr, st.filters[st.sync_group[sync_id]].addr,
 			   st.hw_addr_len) != 0) {
+			continue;
+		}
+		/*
+		 * A wild_last filter (ADR 0022) accepts any final byte, so only
+		 * the software bytes before it are compared - the same rule as
+		 * radiant_addr_split_match() on the nRF, lowest index first,
+		 * exact and wild filters on equal terms. radiant_radio_rx()
+		 * refused any wild filter whose last byte the hardware would
+		 * have matched, so sw_addr_len is at least 1 here.
+		 */
+		if (IS_ENABLED(CONFIG_RADIANT_SEARCH_SHORT_MATCH) &&
+		    f->wild_last) {
+			if (st.sw_addr_len != 0u &&
+			    memcmp(&f->addr[st.hw_addr_len], payload,
+				   st.sw_addr_len - 1u) == 0) {
+				return (int)i;
+			}
 			continue;
 		}
 		if (st.sw_addr_len == 0u ||
@@ -1238,6 +1312,7 @@ static void rx_drain(void)
 		evt.rssi_dbm = (int8_t)rssi_raw;
 
 		idx = rx_match(status.status.syncWordId, p);
+		radiant_cc26xx_sync_frames++;
 
 		/* No per-frame tracing here deliberately: a LOG_DBG per frame
 		 * would block in the RF driver's callback context and, on the
@@ -1252,10 +1327,21 @@ static void rx_drain(void)
 			 * ordinary outcome of matching four bytes where five
 			 * were asked for, and it is not an event - the core
 			 * never asked to hear this frame. */
+			radiant_cc26xx_sw_addr_mismatch++;
 			goto next;
 		}
 
 		evt.filter_index = (uint8_t)idx;
+		/*
+		 * Wildcard search (ADR 0022): the final address byte the
+		 * hardware did not match and rx_match() did not compare - the
+		 * last software address byte, as radiant_addr_split_wild_value()
+		 * picks it on the nRF. Set on CRC failures too, as there.
+		 */
+		if (IS_ENABLED(CONFIG_RADIANT_SEARCH_SHORT_MATCH) &&
+		    st.filters[idx].wild_last && st.sw_addr_len != 0u) {
+			evt.wild_value = p[st.sw_addr_len - 1u];
+		}
 
 		/*
 		 * Outside [t_open, t_close]. The RX command is started early
@@ -1281,6 +1367,15 @@ static void rx_drain(void)
 			 * them back from the filter that matched. */
 			memcpy(covered, st.filters[idx].addr, st.fmt.addr_len);
 			n = st.fmt.addr_len;
+			/* ...except a wild filter's last byte, which the filter
+			 * does not know: the CRC covers the byte that was on
+			 * the air (the nRF's hardware CRC does this by
+			 * construction). Without this every wildcard frame
+			 * would fail its CRC. */
+			if (IS_ENABLED(CONFIG_RADIANT_SEARCH_SHORT_MATCH) &&
+			    st.filters[idx].wild_last) {
+				covered[n - 1u] = evt.wild_value;
+			}
 			memcpy(&covered[n], body, st.fmt.body_len);
 			n += st.fmt.body_len;
 
@@ -1631,6 +1726,17 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 	for (uint8_t i = 0; i < req->n_filters; i++) {
 		if (req->filters[i].addr_len != req->fmt->addr_len) {
 			return RADIANT_RADIO_EINVAL;
+		}
+		/*
+		 * A wild_last filter needs its last byte left to software. With
+		 * the 2-byte sync word that is every address longer than 2; a
+		 * 2-byte one would have the "wild" byte matched exactly in the
+		 * sync word, which is a different window than was asked for.
+		 */
+		if (IS_ENABLED(CONFIG_RADIANT_SEARCH_SHORT_MATCH) &&
+		    req->filters[i].wild_last &&
+		    req->filters[i].addr_len <= caps.addr_len_hw_max) {
+			return RADIANT_RADIO_ENOTSUP;
 		}
 	}
 
