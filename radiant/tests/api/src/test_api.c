@@ -2368,6 +2368,126 @@ ZTEST(api, test_a_key_on_network_1_only_moves_the_sweep_to_the_ant_plus_address)
 	end_of_test();
 }
 
+/*
+ * Review 2026-11-09: the first key installed while a channel searches. The
+ * install used to re-initialise the sweep only with nobody searching, and
+ * recorded nothing otherwise; the next install of the same key was then no
+ * longer "first", so the sweep stayed on the all-zero address until reset.
+ * Any host that keys after opening (a second app on a shared Android stack)
+ * found nothing.
+ */
+
+/* The live sweep window, once one is armed with the given address and RF,
+ * within `limit_us` of virtual time; NULL if none ever was. */
+static const struct fake_radio_arm *sweep_window_on(uint8_t a0, uint8_t a1,
+						    uint8_t rf,
+						    uint32_t limit_us)
+{
+	uint32_t waited = 0u;
+
+	for (;;) {
+		const struct fake_radio_arm *w = last_arm_of(FAKE_RADIO_ARM_RX);
+
+		if (w != NULL && !w->terminated && w->n_filters >= 2u &&
+		    w->filters[0].addr[0] == a0 && w->filters[0].addr[1] == a1 &&
+		    w->rf_index == rf) {
+			return w;
+		}
+		if (waited >= limit_us) {
+			return NULL;
+		}
+		run_virtual_us(10000u);
+		waited += 10000u;
+	}
+}
+
+static void expect_mid_search_key_reaches_the_sweep(uint8_t network)
+{
+	const struct fake_radio_arm *w;
+	uint16_t                     dev;
+
+	open_wildcard_slave(CH, network, (uint8_t)RF_INDEX);
+	w = armed_search_window();
+	zassert_true(w->filters[0].addr[0] == 0u && w->filters[0].addr[1] == 0u,
+		     "setup: a keyless sweep did not run on the zero address "
+		     "(%02x %02x)", w->filters[0].addr[0], w->filters[0].addr[1]);
+	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(CH));
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_network_address_set(network, ant_plus_key));
+
+	w = sweep_window_on(0xA6u, 0xC5u, (uint8_t)RF_INDEX, 2000000u);
+	zassert_not_null(w, "network %u: the sweep never left the zero address "
+			 "after the ANT+ key was installed mid-search",
+			 (unsigned int)network);
+
+	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &dev);
+	fake_radio_advance_to(w->t_close + 1u);
+	drain();
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH),
+		      "network %u: a real ANT+ device was not acquired - state %d",
+		      (unsigned int)network, (int)radiant_channel_state_get(CH));
+}
+
+ZTEST(api, test_a_first_key_on_network_1_installed_mid_search_reaches_the_sweep)
+{
+	expect_mid_search_key_reaches_the_sweep(1u);
+	end_of_test();
+}
+
+ZTEST(api, test_a_first_key_on_network_0_installed_mid_search_reaches_the_sweep)
+{
+	expect_mid_search_key_reaches_the_sweep(0u);
+	end_of_test();
+}
+
+/* After the mid-search install, a re-sent key and a fresh channel keep the
+ * ANT+ sweep: the re-send is a no-op, not a step back. */
+ZTEST(api, test_closing_and_retrying_the_key_keeps_the_ant_plus_sweep)
+{
+	const struct fake_radio_arm *w;
+
+	expect_mid_search_key_reaches_the_sweep(1u);
+	(void)antr_channel_close(CH);
+	fake_radio_advance(1000u);
+	drain();
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_network_address_set(1u, ant_plus_key));
+	open_wildcard_slave(1u, 1u, (uint8_t)RF_INDEX);
+	w = armed_search_window();
+	zassert_true(w->filters[0].addr[0] == 0xA6u && w->filters[0].addr[1] == 0xC5u,
+		     "the sweep is on %02x %02x after a re-sent key",
+		     w->filters[0].addr[0], w->filters[0].addr[1]);
+
+	(void)antr_channel_close(1u);
+	fake_radio_advance(1000u);
+	drain();
+	end_of_test();
+}
+
+/* A slave on 66 opened before its network had a key searches keyless, which
+ * declares no frequency, so the sweep stays on 57. Once the key arrives the
+ * channel is keyed and must declare 66, or it never hears its master. */
+ZTEST(api, test_a_slave_keyed_mid_search_declares_its_frequency)
+{
+	const struct fake_radio_arm *w;
+
+	open_wildcard_slave(CH, 1u, 66u);
+	w = armed_search_window();
+	zassert_equal((uint8_t)RF_INDEX, w->rf_index,
+		      "setup: a keyless slave on 66 moved the sweep to RF %u",
+		      (unsigned int)w->rf_index);
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_network_address_set(1u, ant_plus_key));
+
+	w = sweep_window_on(0xA6u, 0xC5u, 66u, 2000000u);
+	zassert_not_null(w, "the slave keyed mid-search never moved the sweep "
+			 "to its RF 66");
+	end_of_test();
+}
+
 /* Network 0 keeps precedence: a key on network 1 first, then network 0, leaves
  * the sweep on the ANT+ address either way (both are the same key here, so the
  * assertion is that the second install does not break it). */
