@@ -96,7 +96,8 @@ class PlanChildren(unittest.TestCase):
 
     def test_child_command_carries_the_shared_start_and_options(self):
         args = argparse.Namespace(seconds=60.0, reopen=4.5,
-                                  track=[sr.parse_track("52233:0x11")])
+                                  track=[sr.parse_track("52233:0x11")],
+                                  scan_type=0x40)
         cmd = sr._child_args(args, ["--port", "COM11", "--baud", "57600"],
                              "out.json", 123.5)
         tail = cmd[2:]
@@ -106,6 +107,9 @@ class PlanChildren(unittest.TestCase):
         self.assertEqual(tail[tail.index("--track") + 1], "52233:17:8192")
         self.assertEqual(tail[tail.index("--reopen") + 1], "4.5")
         self.assertNotIn("--serial", tail)
+        # A child must assign the same scan type as its siblings, or a
+        # same-window A/B compares two different channel configurations.
+        self.assertEqual(tail[tail.index("--scan-type") + 1], "0x40")
 
 
 class Summarise(unittest.TestCase):

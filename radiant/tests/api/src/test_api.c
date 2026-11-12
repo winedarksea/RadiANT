@@ -167,10 +167,14 @@ static void *api_setup(void)
  * the event thread calling radiant_radio_now() in that window would be
  * asking a radio that doesn't exist.
  */
+/* Channel type open_background_scan_channel() assigns; reset per test. */
+static uint8_t bg_scan_type;
+
 static void api_before(void *f)
 {
 	ARG_UNUSED(f);
 
+	bg_scan_type = (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY;
 	(void)antr_stack_reset();
 
 	k_sched_lock();
@@ -1342,8 +1346,7 @@ static void open_background_scan_channel(void)
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
 		      antr_lib_config_set((uint8_t)ANTW_LIB_CONFIG_ALL_EXT_FIELDS));
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
-		      antr_channel_assign(CH,
-					  (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY, 0u,
+		      antr_channel_assign(CH, bg_scan_type, 0u,
 					  (uint8_t)ANTW_EXT_PARAM_ALWAYS_SEARCH));
 	/* Wildcard in all three fields: find anything. */
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
@@ -1399,7 +1402,7 @@ static void air_device(const struct fake_radio_arm *w, uint8_t filter_index,
  * search on the first frame, the second has nowhere to be delivered. A third
  * device in a LATER window proves the sweep itself kept running.
  */
-ZTEST(api, test_a_background_scan_reports_every_device_not_only_the_first)
+static void test_a_background_scan_reports_every_device_not_only_the_first_body(void)
 {
 	const struct fake_radio_arm *w;
 	uint16_t                     dev_a;
@@ -1452,6 +1455,23 @@ ZTEST(api, test_a_background_scan_reports_every_device_not_only_the_first)
 	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(CH));
 
 	end_of_test();
+}
+
+ZTEST(api, test_a_background_scan_reports_every_device_not_only_the_first)
+{
+	bg_scan_type = (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY;
+	test_a_background_scan_reports_every_device_not_only_the_first_body();
+}
+
+/* The same scan assigned as a BIDIRECTIONAL slave (0x00) with ALWAYS_SEARCH:
+ * what tools/ant_scan_rate.py sends. Every other scan test uses 0x40, so this
+ * combination had no test when the Pro Micro reported 0 sightings from it on
+ * 2026-11-12. */
+ZTEST(api, test_bidir_a_background_scan_reports_every_device_not_only_the_first)
+{
+	bg_scan_type = (uint8_t)ANTW_CHANNEL_TYPE_SLAVE;
+	test_a_background_scan_reports_every_device_not_only_the_first_body();
+	bg_scan_type = (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY;
 }
 
 /* Broadcasts delivered on one channel, whatever device they came from. */
@@ -1526,7 +1546,7 @@ static void air_repeating(uint16_t number, uint8_t dev_type, radiant_time_t t_fi
  * so a healthy sweep must reach every set regardless of phase at tracking
  * start.
  */
-ZTEST(api, test_the_scan_keeps_finding_devices_while_another_channel_tracks)
+static void test_the_scan_keeps_finding_devices_while_another_channel_tracks_body(void)
 {
 	const struct fake_radio_arm *w;
 	uint16_t                     dev_a;
@@ -1601,6 +1621,23 @@ ZTEST(api, test_the_scan_keeps_finding_devices_while_another_channel_tracks)
 			     "contract violation: %s",
 			     fake_radio_viol_name(code));
 	}
+}
+
+ZTEST(api, test_the_scan_keeps_finding_devices_while_another_channel_tracks)
+{
+	bg_scan_type = (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY;
+	test_the_scan_keeps_finding_devices_while_another_channel_tracks_body();
+}
+
+/* The same scan assigned as a BIDIRECTIONAL slave (0x00) with ALWAYS_SEARCH:
+ * what tools/ant_scan_rate.py sends. Every other scan test uses 0x40, so this
+ * combination had no test when the Pro Micro reported 0 sightings from it on
+ * 2026-11-12. */
+ZTEST(api, test_bidir_the_scan_keeps_finding_devices_while_another_channel_tracks)
+{
+	bg_scan_type = (uint8_t)ANTW_CHANNEL_TYPE_SLAVE;
+	test_the_scan_keeps_finding_devices_while_another_channel_tracks_body();
+	bg_scan_type = (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY;
 }
 
 /*

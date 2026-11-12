@@ -76,6 +76,7 @@ from ant_wire import (  # noqa: E402
     EVENT_TX,
     LIB_CONFIG_ALL_EXT_FIELDS,
     MESG_ACKNOWLEDGED_DATA_ID,
+    MESG_ADV_BURST_DATA_ID,
     MESG_ANTLIB_CONFIG_ID,
     MESG_ASSIGN_CHANNEL_ID,
     MESG_BROADCAST_DATA_ID,
@@ -85,6 +86,7 @@ from ant_wire import (  # noqa: E402
     MESG_CHANNEL_RADIO_FREQ_ID,
     MESG_CHANNEL_SEARCH_TIMEOUT_ID,
     MESG_CLOSE_CHANNEL_ID,
+    MESG_CONFIG_ADV_BURST_ID,
     MESG_EVENT_ID,
     MESG_NETWORK_KEY_ID,
     MESG_OPEN_CHANNEL_ID,
@@ -246,6 +248,29 @@ def burst_packet_seq(i: int) -> int:
     return 0 if i == 0 else ((i - 1) % 3) + 1
 
 
+def burst_host_messages(b: int, n_pkts: int, block: int) -> list[tuple[int, bytes]]:
+    """The host messages that originate burst b: (message id, body) pairs.
+
+    block 8 is one MESG_BURST_DATA per on-air packet. block 24 packs three
+    packets into each MESG_ADV_BURST_DATA, so the engine chains the packets
+    inside a block from the radio callback and only the block boundaries go
+    through the bridge thread - the discriminator for that round trip. The
+    8-byte pieces carry the same [burst, packet index, ...] pattern either
+    way, so the slave's count is unchanged.
+    """
+    per = block // 8
+    pieces = [bytes([b & 0xFF, i, 0xA5, 0x5A, 0x01, 0x02, 0x03, 0x04])
+              for i in range(n_pkts)]
+    msg_id = MESG_BURST_DATA_ID if per == 1 else MESG_ADV_BURST_DATA_ID
+    out = []
+    n_msgs = n_pkts // per
+    for m in range(n_msgs):
+        data = b"".join(pieces[m * per:(m + 1) * per])
+        out.append((msg_id, bytes([burst_header(burst_packet_seq(m),
+                                                m == n_msgs - 1)]) + data))
+    return out
+
+
 def slave_burst_thread(reader, stats: dict, stop: threading.Event) -> None:
     """Count what the slave hears of the master's bursts.
 
@@ -346,6 +371,16 @@ def run_master_bursts(args, master, m_counts, slave, s_reader, stop,
               f"{args.burst_slave_tx_power}")
         time.sleep(0.5)
 
+    if args.burst_block != 8 and not args.master_acked:
+        # [filler, enable, 24-byte packets, required 0,0,0, optional 0,0,0].
+        # On the air RadiANT still sends 8-byte packets (TODO.md, advanced
+        # burst item 5); what changes is the host-side block size.
+        master.write(EP_OUT, frame(MESG_CONFIG_ADV_BURST_ID,
+                                   bytes([0, 1, 3, 0, 0, 0, 0, 0, 0])))
+        print(f"  advanced burst on the master: {args.burst_block}-byte "
+              f"host blocks")
+        time.sleep(0.5)
+
     acked = bool(args.master_acked)
     if acked:
         n_xfers, n_pkts, kind = args.master_acked, 1, "acknowledged messages"
@@ -377,12 +412,9 @@ def run_master_bursts(args, master, m_counts, slave, s_reader, stop,
                 MESG_ACKNOWLEDGED_DATA_ID,
                 bytes([CHANNEL, b & 0xFF, 0xAC, 0xA5, 0x5A, 0x01, 0x02, 0x03,
                        0x04])))
-        for i in range(0 if acked else n_pkts):
-            payload = bytes([b & 0xFF, i, 0xA5, 0x5A, 0x01, 0x02, 0x03, 0x04])
-            master.write(EP_OUT, frame(
-                MESG_BURST_DATA_ID,
-                bytes([burst_header(burst_packet_seq(i), i == n_pkts - 1)]) +
-                payload))
+        for msg_id, body in ([] if acked else
+                             burst_host_messages(b, n_pkts, args.burst_block)):
+            master.write(EP_OUT, frame(msg_id, body))
         end = time.monotonic() + 3.0 + 0.05 * n_pkts
         got = "no terminal event"
         while time.monotonic() < end:
@@ -428,6 +460,7 @@ def run_master_bursts(args, master, m_counts, slave, s_reader, stop,
         with open(args.json_bursts, "w", encoding="utf-8") as fh:
             json.dump({"mode": "acked" if acked else "bursts",
                        "bursts": n_xfers, "packets": n_pkts,
+                       "block": 8 if acked else args.burst_block,
                        "tx_power": args.burst_tx_power,
                        "master_dbm": args.burst_master_dbm,
                        "slave_tx_power": (args.burst_tx_power
@@ -459,6 +492,10 @@ def main() -> int:
                     help="serial port of the MASTER (receiver), UART build")
     ap.add_argument("--master-serial", help="USB serial of the MASTER instead")
     ap.add_argument("--master-baud", type=int, default=115200)
+    ap.add_argument("--slave-baud", type=int,
+                    help="--slave-port's baud rate (default: --master-baud). "
+                         "The TI LaunchXL as originator is --slave-port COM11 "
+                         "--slave-baud 57600")
     ap.add_argument("--slave-port",
                     help="serial port of the SLAVE (originator), UART build")
     ap.add_argument("--slave-serial", help="USB serial of the SLAVE instead")
@@ -503,6 +540,12 @@ def main() -> int:
                          'from the slave (see the module docstring)')
     ap.add_argument('--burst-packets', type=int, default=8,
                     help='packets per burst in --master-bursts mode (default 8)')
+    ap.add_argument('--burst-block', type=int, choices=(8, 24), default=8,
+                    help='--master-bursts: host block size. 24 enables '
+                         'advanced burst (0x78) and sends 0x72 messages of '
+                         'three packets each; --burst-packets must then be a '
+                         'multiple of 3 (3 = one block, no bridge-thread hop '
+                         'at all)')
     ap.add_argument('--burst-gap', type=float, default=0.5,
                     help='seconds between bursts in --master-bursts mode')
     ap.add_argument('--master-acked', type=int, default=0,
@@ -529,11 +572,16 @@ def main() -> int:
                          'acknowledgements) from a weak forward one. A Garmin '
                          'USB-m: 3 is 0 dBm, 0 and 4 are both about -20 dBm')
     args = ap.parse_args()
+    if args.slave_baud is None:
+        args.slave_baud = args.master_baud
     if args.master_bursts and args.master_acked:
         ap.error('pass at most one of --master-bursts / --master-acked')
     if args.master_bursts and args.burst_packets < 2:
         ap.error('--burst-packets must be at least 2 (one packet is '
                  'acknowledged data, which is never retried)')
+    if args.master_bursts and args.burst_packets % (args.burst_block // 8):
+        ap.error('--burst-packets must be a multiple of 3 with '
+                 '--burst-block 24')
 
     if bool(args.master_port) == bool(args.master_serial):
         ap.error("pass exactly one of --master-port / --master-serial")
@@ -549,10 +597,10 @@ def main() -> int:
         from ant_ack_gate import run
         return run(args)
 
-    def open_end(port, serial, label):
+    def open_end(port, serial, label, baud):
         print(f"\nOpening the {label}")
         if port:
-            return open_device(True, port=port, baud=args.master_baud)
+            return open_device(True, port=port, baud=baud)
         return open_device(True, serial=serial)
 
     stop = threading.Event()
@@ -567,7 +615,7 @@ def main() -> int:
         time.sleep(0.5)
 
     master = open_end(args.master_port, args.master_serial,
-                      "MASTER (the receiver)")
+                      "MASTER (the receiver)", args.master_baud)
     m_reader = FrameReader(master)
     if not configure(master, m_reader, CHANNEL_TYPE_MASTER, args.device, "master"):
         stop.set()
@@ -625,7 +673,7 @@ def main() -> int:
         return 1 if data else 0
 
     slave = open_end(args.slave_port, args.slave_serial,
-                     "SLAVE (the originator)")
+                     "SLAVE (the originator)", args.slave_baud)
     s_reader = FrameReader(slave)
     if not configure(slave, s_reader, CHANNEL_TYPE_SLAVE, args.device, "slave"):
         stop.set()
