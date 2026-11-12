@@ -755,3 +755,13 @@ const struct radiant_transfer_stats *radiant_transfer_stats(const struct radiant
 
 	return (t == NULL) ? &none : &t->stats;
 }
+
+const uint8_t *radiant_transfer_cur_payload(const struct radiant_transfer *t)
+{
+	if (t == NULL || t->state != RADIANT_TRANSFER_STATE_TX_DATA ||
+	    t->block == NULL || t->pkt_in_block >= t->n_pkt_in_block) {
+		return NULL;
+	}
+
+	return &t->block[(size_t)t->pkt_in_block * RADIANT_TRANSFER_PKT_BYTES];
+}

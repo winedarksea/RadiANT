@@ -879,6 +879,14 @@ uint32_t                radiant_transfer_op(const struct radiant_transfer *t);
 bool                    radiant_transfer_is_idle(const struct radiant_transfer *t);
 /* Never NULL for a non-NULL engine. */
 const struct radiant_transfer_stats *radiant_transfer_stats(const struct radiant_transfer *t);
+/*
+ * The 8-byte plaintext payload of the outbound data packet in flight, or NULL
+ * unless the engine is in RADIANT_TRANSFER_STATE_TX_DATA. Points into the
+ * block the engine holds (or its own acknowledged-data copy), so it is only
+ * valid until the next engine call; copy it out. The owner uses it to repeat
+ * the last packet sent in the master's next broadcast (Rev 5.1 p.109).
+ */
+const uint8_t *radiant_transfer_cur_payload(const struct radiant_transfer *t);
 
 #ifdef __cplusplus
 }

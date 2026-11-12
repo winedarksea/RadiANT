@@ -311,10 +311,20 @@ struct api_chan {
 	/* The channel's broadcast payload: what antr_broadcast_message_tx()
 	 * queues, and what an acknowledgement carries - every acknowledgement
 	 * ever captured carried the acknowledger's own broadcast buffer
-	 * (docs/spike-b-part2-results.md). */
+	 * (docs/spike-b-results.md). */
 	uint8_t bcast[ANTW_ANT_MAX_PAYLOAD_SIZE];
 	bool    bcast_valid;
 	bool    bcast_pending;
+	/* The last data packet this master put on the air, acknowledged or
+	 * burst, copied as plaintext from the engine's block (never from the
+	 * encoded tx_body). Rev 5.1 p.109: after a transfer the master's next
+	 * broadcast repeats the last packet sent, whatever its data type, so
+	 * api_post_master_tx() sends this while last_tx_newer is set. A host
+	 * broadcast write clears the flag and wins again. Kept apart from
+	 * bcast, which is also the acknowledgement payload and the readback
+	 * of what the host wrote. */
+	uint8_t last_tx[RADIANT_TRANSFER_PKT_BYTES];
+	bool    last_tx_newer;
 	/* A slave keeps receiving until a real master slot opens the exchange. */
 	bool ack_pending;
 	uint8_t ack_data[RADIANT_TRANSFER_PKT_BYTES];
@@ -1880,6 +1890,7 @@ static void api_post_master_tx(uint8_t ch)
 	struct radiant_frame       f;
 	struct radiant_frame_wire  w;
 	struct radiant_sched_tx    req;
+	uint8_t                    pay[RADIANT_TRANSFER_PKT_BYTES];
 	radiant_time_t             t = radiant_channel_next_slot(ch);
 
 	if (t == RADIANT_TIME_NEVER) {
@@ -1906,6 +1917,18 @@ static void api_post_master_tx(uint8_t ch)
 	memset(&fields, 0, sizeof(fields));
 	fields.slot_opener = true;
 
+	/* What goes out: the host's buffer, or the last transfer packet if one
+	 * went out since the host last wrote (Rev 5.1 p.109; see last_tx).
+	 * Copied under the event crit section because the TX callback writes
+	 * last_tx from radio context. */
+	{
+		unsigned int key = radiant_event_crit_enter();
+
+		memcpy(pay, api_ch[ch].last_tx_newer ? api_ch[ch].last_tx :
+			    api_ch[ch].bcast, sizeof(pay));
+		radiant_event_crit_exit(key);
+	}
+
 #if defined(CONFIG_RADIANT_SEC)
 	/*
 	 * The TX hook: thread context, under api_lock (api_pump_locked() is
@@ -1916,7 +1939,7 @@ static void api_post_master_tx(uint8_t ch)
 	 * api_ch[ch].bcast, whose readback must stay the host's plaintext and
 	 * must not be re-encrypted on every retransmission.
 	 */
-	memcpy(api_ch[ch].sec_pay, api_ch[ch].bcast, sizeof(api_ch[ch].sec_pay));
+	memcpy(api_ch[ch].sec_pay, pay, sizeof(api_ch[ch].sec_pay));
 	api_ch[ch].sec_pay_valid = false;
 	/* `t` is this slot's instant: the counter is the slot index derived
 	 * from it, and a re-post of the same slot gets the same bytes. */
@@ -1936,7 +1959,7 @@ static void api_post_master_tx(uint8_t ch)
 		return;
 	}
 #else
-	if (radiant_frame_make(&f, &id, &fields, api_ch[ch].bcast,
+	if (radiant_frame_make(&f, &id, &fields, pay,
 			   RADIANT_FRAME_PAYLOAD_STD) != RADIANT_FRAME_OK) {
 		return;
 	}
@@ -2417,9 +2440,17 @@ static void api_sched_tx(uint8_t ch, const struct radiant_tx_event *evt, void *u
 		if (radiant_channel_is_master(ch) &&
 		    radiant_transfer_state(&api_xfer[ch]) == RADIANT_TRANSFER_STATE_TX_DATA &&
 		    evt->status == RADIANT_RADIO_STATUS_OK) {
+			const uint8_t *sent =
+				radiant_transfer_cur_payload(&api_xfer[ch]);
+
 			/* Originating data occupies this master's slot just as a
 			 * broadcast does; resuming must not repost the expired slot. */
 			radiant_channel_on_slot(ch, evt->t_sync);
+			if (sent != NULL) {
+				memcpy(api_ch[ch].last_tx, sent,
+				       RADIANT_TRANSFER_PKT_BYTES);
+				api_ch[ch].last_tx_newer = true;
+			}
 		}
 		radiant_transfer_on_tx_event(&api_xfer[ch], evt);
 		return;
@@ -4078,6 +4109,8 @@ antr_err_t antr_broadcast_message_tx(uint8_t channel, uint8_t size,
 	memcpy(api_ch[channel].bcast, data, ANTW_ANT_MAX_PAYLOAD_SIZE);
 	api_ch[channel].bcast_valid = true;
 	api_ch[channel].bcast_pending = true;
+	/* A host write supersedes the repeat of the last transfer packet. */
+	api_ch[channel].last_tx_newer = false;
 	radiant_event_crit_exit(key);
 
 	api_pump_locked();

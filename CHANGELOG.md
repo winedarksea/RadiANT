@@ -198,6 +198,10 @@ reads.
 
 ### Fixed
 
+- **After a transfer, a master's next broadcast repeats the last packet it
+  sent.** It used to go back to the host's previous broadcast page. Rev 5.1
+  p.109 (and our own Spike B captures) show the master repeating the last
+  acknowledged or burst packet until the host writes a new page.
 - **Only the first packet of a received burst carries extended data.** With
   lib config on, every burst packet carried the channel ID tail; Rev 5.1 §7.1.1
   puts it on the first message only, and a host parsing by the spec misread
