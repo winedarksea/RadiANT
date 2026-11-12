@@ -27,7 +27,7 @@ Discovery short match (ADR 0022), left open 2026-11-11:
 After every `0xAA` a RadiANT master sends, its next frame on air comes two periods later, not one: 100 of 100 in one run, and the Garmin slave logs one `RX_FAIL` per message. Every other gap is one period. Seen on the Pro Micro (non-MPSL), whether the transfer completed or failed. The api suite's fake radio does not reproduce it: after a completed `AA` it arms the next broadcast one period later. So it needs on-air instrumentation: log the next slot's post time and its `rc` after the transfer's terminal event. Check bursts too. Evidence and repro: archive/benchmarks/2026-11-12-master-acked-power/README.md, section 5 (`--master-acked 100 --burst-tx-power 4 --burst-slave-tx-power 3`, sniffer on the L15).
 
 ## RadiANT vs Garmin as receivers at equal input (opened 2026-11-12):
-The master's acknowledgement misses (closed 2026-11-12) were the link budget: 10-12 % missed with the Garmin at -20 dBm, 0 % at 0 dBm, in alternating legs. Still not known: whether a RadiANT receiver needs more signal than the Garmin's. Compare the two with `tools/ant_sens.py` at equal input. Related: the weak-signal residual after SLIP_GUARD (ADR 0019). Bench note: the Garmin's `0x60` level 4 is its weakest level, not +4 dBm; use level 3 for 0 dBm.
+The master's acknowledgement misses (closed 2026-11-12) were the link budget: 10-12 % missed with the Garmin at -20 dBm, 0 % at 0 dBm, in alternating legs. Still not known: whether a RadiANT receiver needs more signal than the Garmin's. Compare the two with `tools/ant_sens.py` at equal input. Related: the weak-signal residual after SLIP_GUARD (ADR 0019). Bench note: the Garmin's `0x60` level 4 is its weakest level, not +4 dBm; use level 3 for 0 dBm. (We don't need an exact match, that's not our goal, ours should be as sensitive or better)
 
 ## Inbound and multi-packet burst work (deferred from the Rev 5.1 review, fix/spec-rev51-gaps, 2026-11-11). Outbound retries landed there (`RADIANT_TRANSFER_TX_RETRIES_MAX`, radiant/src/radiant_burst.c `retry_packet()`); these did not:
 1. Inbound continuation window. Today an inbound burst advances one packet per tracked slot (radiant/tests/api/src/test_api.c, `test_an_inbound_burst_numbers_packets_0_1_2_3_1_2_3`), because nothing opens a receive window for the next packet. Needs a `WAIT_NEXT` state and a window at ack t_sync + 1550 +/- 250 us (radiant_transfer.h, the note on `RADIANT_TRANSFER_REPLY_RETRY_US`).
@@ -99,6 +99,13 @@ Reviewed through `86233e8`; both issues affect the discovery changes in
   and for closing searches and retrying the key. The analogous late-key
   limitation on network 0 predates this review range.
   Code: `radiant/src/antr/ant_radio_radiant.c`, `antr_network_address_set()` (around line 3712).
+
+New slave-broadcast path can lose a queued update.
+It snapshots payload A for transmission about 2.19 ms after the master’s frame. If the host writes B before A finishes, the completion callback clears bcast_pending even though B was never sent. Introduced for slaves by 2898720; the older master path has similar bookkeeping. This is a code-inspection finding, not an on-air reproduction, and has limited relevance to ordinary receive-only Zwift channels. Fix with a payload generation counter so completion only clears the write actually transmitted. See [snapshot (line 1275)](/C:/Users/Colin/ant_dongle/radiant/src/antr/ant_radio_radiant.c:1275) and [completion (line 2565)](/C:/Users/Colin/ant_dongle/radiant/src/antr/ant_radio_radiant.c:2565).
+
+Burst retries can compete with sensor reception—but only during requested bursts.
+326c496 adds up to five retries per packet. Those introduce additional timed transmissions, and the scheduler allows transmissions to truncate overlapping receive windows. Other-channel packet loss is a plausible risk, not a measured regression. Ordinary broadcasts and single-packet acknowledged messages do not enter this retry path. Before extending burst support, benchmark simultaneous HR/power/cadence reception under lossy burst traffic. See [retry scheduling (line 335)](/C:/Users/Colin/ant_dongle/radiant/src/radiant_burst.c:335).
+
 
 # Open issues from the 2026-11-07 RadiANT vs Garmin ANT USB-m comparison
 
@@ -359,5 +366,7 @@ Bridge and tools:
 - `radiant_sched.h` still says "Zero-cost on both nRF builds".
 
 ## Device Testing Open Items
+
+Make continuous dual transmission the HR default (CONFIG_HRM_SUPPRESS_ANT_WHEN_CONNECTED=n). 
 
 Apple testing round 2
