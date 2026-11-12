@@ -1196,6 +1196,17 @@ one: a pairing happens once, initiated by a human who is already holding two
 devices. It would matter immediately if anything ever tried to re-key on a
 schedule, and nothing should.
 
+On the dongle both multiplies run under `api_lock`, so each hold stalls the RX
+pump, the drain, housekeeping and other host commands for about 375 ms, and a
+secured master on another channel skips about one slot. That is accepted: the
+stall delays events rather than losing them (the event ring and the sec queue
+are each 64 deep), pairing is rare and started by a person, and moving the
+multiply outside the lock would add an unlocked window to the scalar's
+lifecycle, the path that already had one scalar-reuse bug. On a slower core
+(nRF52840 at 64 MHz, roughly twice as slow) re-measure with
+`test_sec_host_pairing_holds_api_lock_and_its_hold_time` before enabling
+`CONFIG_RADIANT_SEC_PAIRING_X25519`.
+
 **The sensor holds one key. Every authorized receiver gets a copy.**
 
 That single sentence is the structural difference from BLE, and it is the

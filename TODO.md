@@ -338,16 +338,6 @@ MPSL (needs a soak beside BLE or Thread, which that clearance excluded):
   with `t_start <= now`, the ordering A14-1 replaced for receive. A compare just
   after the enable, before `now` is read, gives a false ETIME.
 
-Security and pairing:
-- X25519 pairing holds api_lock 366-376 ms. A multiply outside the lock on a
-  copied scalar would remove the stall.
-- `node_ident_arm_sec` and `node_ident_pair_*` call lock-checked entry points
-  without api_lock. No app calls them today; the first one that does on a build
-  linking `ant_radio_radiant.c` must take it.
-- The ISR half of `antr_api_lock_held()` is untested (`irq_offload()` could reach
-  it). A ztest `after()` failure under CONFIG_ASSERT skips the rest of the suite
-  and reports pass.
-
 Discovery (ztest only, not on air; bench checks in the release review):
 - Retune restarts the cursor, so a host cycling keyed frequencies faster than a
   pass truncates each pass and coverage becomes probabilistic.
