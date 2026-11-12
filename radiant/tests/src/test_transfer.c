@@ -1255,6 +1255,7 @@ ZTEST(transfer, test_a_masters_packet_0_retry_follows_the_slot_turnaround)
 {
 	struct radiant_transfer_cfg c;
 	const struct fake_radio_arm *tx[4];
+	const struct fake_radio_arm *rx;
 
 	make_cfg(&c, true, CH_XFER);
 	zassert_equal(RADIANT_TRANSFER_OK, radiant_transfer_init(&xfer, &c));
@@ -1264,11 +1265,32 @@ ZTEST(transfer, test_a_masters_packet_0_retry_follows_the_slot_turnaround)
 	zassert_true(feed_next_block());
 
 	zassert_true(fake_radio_step());   /* packet 0 */
+	/* The first attempt's window spans the slot turnaround... */
+	rx = last_arm_of(FAKE_RADIO_ARM_RX);
+	zassert_equal(last_arm_of(FAKE_RADIO_ARM_TX)->t_sync_at +
+			      (radiant_time_t)RADIANT_TRANSFER_OPENER_REPLY_US +
+			      (radiant_time_t)RADIANT_TRANSFER_ACK_GUARD_US,
+		      rx->t_close);
 	zassert_true(fake_radio_step());   /* its window, empty */
 	zassert_true(fake_radio_step());   /* retry 1 */
+	/* ...a repeat's is the burst one: every repeated 0x8A on air was
+	 * answered at +1534..+1584 (2026-11-11 A/B, A1 and A2). */
+	rx = last_arm_of(FAKE_RADIO_ARM_RX);
+	zassert_equal(last_arm_of(FAKE_RADIO_ARM_TX)->t_sync_at +
+			      (radiant_time_t)RADIANT_TRANSFER_REPLY_US +
+			      (radiant_time_t)RADIANT_TRANSFER_ACK_GUARD_US,
+		      rx->t_close,
+		      "a repeated opener still holds the slot-turnaround window");
 	zassert_true(fake_radio_step());   /* its window, empty */
 	zassert_true(fake_radio_step());   /* retry 2 */
 	zassert_equal(3u, collect_tx_arms(tx, ARRAY_SIZE(tx)));
+	/* And the air held after each transmit follows its window. */
+	zassert_equal((uint32_t)(RADIANT_TRANSFER_OPENER_REPLY_US -
+				 RADIANT_TRANSFER_REPLY_US),
+		      (uint32_t)(tx[0]->follow_on_us - tx[1]->follow_on_us),
+		      "first attempt reserves %u us, the retry %u us",
+		      (unsigned)tx[0]->follow_on_us, (unsigned)tx[1]->follow_on_us);
+	zassert_equal(tx[1]->follow_on_us, tx[2]->follow_on_us);
 	zassert_equal(tx[0]->t_sync_at +
 			      (radiant_time_t)RADIANT_TRANSFER_OPENER_REPLY_US +
 			      (radiant_time_t)RADIANT_TRANSFER_NEXT_PACKET_US,
@@ -1281,6 +1303,43 @@ ZTEST(transfer, test_a_masters_packet_0_retry_follows_the_slot_turnaround)
 	drive();
 	zassert_equal(1u, n_ev);
 	zassert_equal(RADIANT_TRANSFER_FAIL_NO_ACK, evlog[0].fail);
+	end_of_test();
+}
+
+/* A retried opener answered on the burst turnaround, as the Garmin answers
+ * one, completes, and packet 1 follows that acknowledgement by 1550 us. */
+ZTEST(transfer, test_a_masters_retried_packet_0_is_acknowledged_on_the_burst_turnaround)
+{
+	struct radiant_transfer_cfg c;
+	const struct fake_radio_arm *tx[4];
+	const struct fake_radio_arm *rx;
+
+	make_cfg(&c, true, CH_XFER);
+	zassert_equal(RADIANT_TRANSFER_OK, radiant_transfer_init(&xfer, &c));
+	reset_blocks();
+	queue_block(0u, 16u, RADIANT_TRANSFER_SEG_START | RADIANT_TRANSFER_SEG_END,
+		    0x20u);
+	zassert_true(feed_next_block());
+
+	zassert_true(fake_radio_step());   /* packet 0 */
+	zassert_true(fake_radio_step());   /* its window, empty */
+	zassert_true(fake_radio_step());   /* retry 1 */
+	rx = last_arm_of(FAKE_RADIO_ARM_RX);
+	air_the_ack();                      /* at t_open + guard = +1560 */
+	zassert_true(fake_radio_step());
+	zassert_equal(RADIANT_TRANSFER_STATE_TX_DATA, radiant_transfer_state(&xfer),
+		      "the retried opener's acknowledgement was not accepted");
+	zassert_true(fake_radio_step());   /* packet 1 */
+	zassert_equal(3u, collect_tx_arms(tx, ARRAY_SIZE(tx)));
+	zassert_equal(rx->t_open + (radiant_time_t)RADIANT_TRANSFER_ACK_GUARD_US +
+			      (radiant_time_t)RADIANT_TRANSFER_NEXT_PACKET_US,
+		      tx[2]->t_sync_at);
+
+	air_the_ack();
+	zassert_true(fake_radio_step());
+	zassert_equal(1u, n_ev);
+	zassert_equal(RADIANT_TRANSFER_EV_TX_COMPLETED, evlog[0].ev);
+	zassert_equal(1u, radiant_transfer_stats(&xfer)->retries);
 	end_of_test();
 }
 

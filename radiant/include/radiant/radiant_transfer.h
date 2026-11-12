@@ -246,9 +246,12 @@ extern "C" {
  * its 0xD2 at +2209 and +2218 us, never at +1560
  * (archive/captures/radio/2026-11-11-master-burst-garmin-ack.log). A slave
  * answers a frame on its slot the way it answers a broadcast. Once in a
- * burst it answers at RADIANT_TRANSFER_REPLY_US like any receiver, and a
- * repeated opener could meet either, so the acknowledgement window of a
- * slot-opening packet spans both offsets (radiant_burst.c arm_ack_window()).
+ * burst it answers at RADIANT_TRANSFER_REPLY_US like any receiver, so the
+ * acknowledgement window of an opener's FIRST attempt spans both offsets
+ * (radiant_burst.c arm_ack_window()). A repeated opener gets the burst
+ * window only: all eleven repeats in the 2026-11-11 A/B were answered at
+ * +1534..+1584 us, by a receiver that had heard the first attempt
+ * (archive/benchmarks/2026-11-11-burst-retry-ab/).
  */
 #define RADIANT_TRANSFER_OPENER_REPLY_US RADIANT_TRANSFER_SLOT_REPLY_US
 
