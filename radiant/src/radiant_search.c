@@ -133,6 +133,9 @@ static void build_set(struct radiant_search *s, uint16_t set)
 	uint8_t n = 0;
 
 	for (uint8_t j = 0; j < s->n_filters; j++) {
+		if (s->wildcard && j > 0u) {
+			break;
+		}
 		struct radiant_channel_id id;
 		uint8_t addr[RADIANT_FRAME_ADDR_MAX];
 		uint32_t lo = set_filter_lo(s, set, j);
@@ -157,6 +160,9 @@ static void build_set(struct radiant_search *s, uint16_t set)
 		memset(&s->filters[n], 0, sizeof(s->filters[n]));
 		memcpy(s->filters[n].addr, addr, (size_t)rc);
 		s->filters[n].addr_len = (uint8_t)rc;
+		/* The last address byte is devnum_lo; a wildcard filter takes
+		 * any value there (its 0x00 is ignored by the backend). */
+		s->filters[n].wild_last = s->wildcard;
 		s->filter_lo[n] = (uint8_t)lo;
 		n++;
 	}
@@ -327,13 +333,6 @@ int radiant_search_init(struct radiant_search *s, const struct radiant_search_cf
 	if (caps == NULL || caps->max_filters == 0u) {
 		return RADIANT_SEARCH_EINVAL;
 	}
-	/* The flag says the backend can match "any device number" with one
-	 * filter, collapsing the sweep to a single window - but there's no
-	 * field in struct radiant_rx_filter to ask for that, so nothing here
-	 * could arm it. No planned backend sets it. */
-	if (caps->filter_wildcard_dev) {
-		return RADIANT_SEARCH_ENOTSUP;
-	}
 	/* A backend that cannot carry the search body cannot search: twelve
 	 * bytes [devnum_hi][dtype][ttype][ctrl][d0..d7] is the whole of it. */
 	if (caps->max_body_len < fmt->body_len) {
@@ -343,6 +342,13 @@ int radiant_search_init(struct radiant_search *s, const struct radiant_search_cf
 	nf = caps->max_filters;
 	if (nf > (uint8_t)RADIANT_SEARCH_MAX_FILTERS) {
 		nf = (uint8_t)RADIANT_SEARCH_MAX_FILTERS;
+	}
+	/* ADR 0022: the backend matches "any devnum_lo" with one wild_last
+	 * filter, so a single set covers all 256 values. "Certain within one
+	 * sweep" still holds, and more strongly: the sweep is one dwell, and a
+	 * dwell is at least one period of the slowest profile. */
+	if (caps->filter_wildcard_dev) {
+		nf = 1u;
 	}
 
 	memset(s, 0, sizeof(*s));
@@ -356,10 +362,15 @@ int radiant_search_init(struct radiant_search *s, const struct radiant_search_cf
 	/* Complement pairing only where the backend asks for separation AND the
 	 * window holds exactly two filters, the only width the involution
 	 * covers. See set_filter_lo(). */
-	s->spread_pairs = (caps->min_filter_hamming_bits > 1u) && (nf == 2u);
+	s->wildcard = caps->filter_wildcard_dev;
+	s->spread_pairs = !s->wildcard &&
+			  (caps->min_filter_hamming_bits > 1u) && (nf == 2u);
 	/* Coverage arithmetic, and must never become a constant: 8 filters ->
-	 * 32 sets on nRF, 2 filters -> 128 sets on EFR32/RAIL, same expression. */
-	s->n_sets = (uint16_t)((RADIANT_SEARCH_LO_VALUES + nf - 1u) / nf);
+	 * 32 sets on nRF, 2 filters -> 128 sets on EFR32/RAIL, same expression.
+	 * A wildcard backend is one set whatever its filter count. */
+	s->n_sets = s->wildcard
+			    ? 1u
+			    : (uint16_t)((RADIANT_SEARCH_LO_VALUES + nf - 1u) / nf);
 	s->inited = true;
 
 	return RADIANT_SEARCH_OK;
@@ -428,6 +439,9 @@ uint16_t radiant_search_set_for_devnum(const struct radiant_search *s, uint16_t 
 {
 	if (!inst_ok(s)) {
 		return RADIANT_SEARCH_SETS_NONE;
+	}
+	if (s->wildcard) {
+		return 0u;
 	}
 	if (s->spread_pairs) {
 		uint8_t lo = (uint8_t)(devnum & 0xFFu);
@@ -790,8 +804,14 @@ static void handle_ok(struct radiant_search *s, const struct radiant_rx_event *e
 		return;
 	}
 
+	/* ...except under a wildcard filter (ADR 0022), where the hardware
+	 * matched only the bytes before devnum_lo and the backend reports the
+	 * byte it received in its place. The CRC covered it, so on an OK frame
+	 * it is as trustworthy as the table lookup. */
 	memset(&lo_id, 0, sizeof(lo_id));
-	lo_id.device_number = s->filter_lo[filter_index];
+	lo_id.device_number = s->filters[filter_index].wild_last
+				      ? evt->wild_value
+				      : s->filter_lo[filter_index];
 
 	memset(&w, 0, sizeof(w));
 	rc = radiant_frame_addr(RADIANT_FRAME_CFG_SEARCH, s->cfg.net_addr, &lo_id, w.addr,

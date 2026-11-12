@@ -244,10 +244,14 @@ struct radiant_pkt_format {
  * backend does whatever its hardware needs (e.g. one part emits addresses
  * LSB-first regardless of frame endianness, so it bit-reverses internally).
  *
- * No wildcard field, deliberately: no planned backend can match "any device
- * number" in hardware, so wildcard search is core-level policy
- * (radiant_search.c) driven by caps.filter_wildcard_dev/max_filters, not a HAL
- * feature - e.g. 8 filters sweeps 32 sets, 2 filters sweeps 128.
+ * Wildcard search is core-level policy (radiant_search.c) driven by
+ * caps.filter_wildcard_dev and max_filters: 8 filters sweep 32 sets, 2
+ * filters sweep 128. A backend that sets filter_wildcard_dev also honours
+ * wild_last below, which collapses the sweep to ONE set: the window matches
+ * every address byte but the last, receives that byte as data, and reports
+ * it in radiant_rx_event.wild_value (ADR 0022; the nRF backend does it with
+ * the same short hardware match ADR 0019 uses for tracking). A backend that
+ * does not set the cap never sees wild_last set.
  *
  * NOTE: that policy is about the 3-byte SEARCH format only. On the 5-byte
  * tracking format the device number is inside the nRF BASE, and a window
@@ -260,6 +264,11 @@ struct radiant_pkt_format {
 struct radiant_rx_filter {
 	uint8_t addr[RADIANT_RADIO_ADDR_MAX];
 	uint8_t addr_len;   /* must equal fmt->addr_len */
+	/* Accept any value in addr[addr_len - 1] and report the received value
+	 * in radiant_rx_event.wild_value. Only meaningful when
+	 * caps.filter_wildcard_dev is set; zero (the memset default) otherwise.
+	 * addr[addr_len - 1] itself is ignored. */
+	bool    wild_last;
 };
 
 /* ---------------------------------------------------------------------------
@@ -495,6 +504,10 @@ struct radiant_rx_event {
 	 * payload is parsed. Required on every OK and CRC_FAIL event.
 	 */
 	uint8_t               filter_index;
+	/* The received last address byte, valid on OK and CRC_FAIL when the
+	 * matched filter had wild_last set (in wildcard search: devnum_lo).
+	 * Zero otherwise. */
+	uint8_t               wild_value;
 	/* Backend-owned, valid only for the duration of this callback. Copy
 	 * anything that must outlive it. */
 	const uint8_t        *body;
@@ -689,9 +702,10 @@ struct radiant_radio_caps {
 	 */
 	uint8_t min_filter_hamming_bits;
 
-	/* True only if the backend can match "any value" in the device-number
-	 * bytes with a single filter. False on every planned backend; see
-	 * struct radiant_rx_filter for what the core does about it. */
+	/* True only if the backend honours radiant_rx_filter.wild_last, so one
+	 * filter matches every device number of the 3-byte search format. Set
+	 * by the nRF backend under CONFIG_RADIANT_SEARCH_SHORT_MATCH (ADR 0022)
+	 * and by nothing else; see struct radiant_rx_filter. */
 	bool filter_wildcard_dev;
 
 	/* Longest address the hardware matcher itself handles. Informational:

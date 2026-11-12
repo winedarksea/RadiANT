@@ -596,7 +596,10 @@ static struct radiant_radio_caps radiant_nrf_caps = {
 	 * bases, and on the 5-byte tracking format the device number is inside
 	 * the base. */
 	.max_addr_groups     = 2,
-	.filter_wildcard_dev = false,
+	/* ADR 0022: one wild_last filter covers every devnum_lo, matched as
+	 * [A6 C5] in hardware with the last byte received as data - the same
+	 * short match ADR 0019 built for tracking. */
+	.filter_wildcard_dev = IS_ENABLED(CONFIG_RADIANT_SEARCH_SHORT_MATCH),
 	.addr_len_hw_max     = 5,
 	.max_body_len        = RADIANT_RADIO_BODY_MAX,
 
@@ -4907,6 +4910,16 @@ static void radio_isr(const void *arg)
 				evt.t_sync_exact = true;
 
 				evt.filter_index = (uint8_t)fidx;
+				/* Wildcard search (ADR 0022): the device-number
+				 * byte the hardware no longer matched. Not on a
+				 * repaired frame: repair never accepts a wild
+				 * filter, so fidx here came from the compare. */
+				if (radiant_op.filters[fidx].wild_last) {
+					evt.wild_value =
+						radiant_addr_split_wild_value(
+							radiant_rx_buf,
+							radiant_op.sw_addr_len);
+				}
 				evt.body = body;
 				/*
 				 * Length comes off the wire and is clamped

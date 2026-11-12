@@ -40,9 +40,11 @@ extern "C" {
  * How many of a receive format's address bytes the hardware matches.
  *
  * Only the full-length (5-byte, TRACKING) address on the 1 M PHY is ever
- * shortened. `hw_len_cfg` is the configured hardware length (2..5); anything
- * shorter than the format, or not 5 bytes, is matched in full as before.
- * The search format (3 bytes) is "permanent" by design and is not touched.
+ * shortened by this function. `hw_len_cfg` is the configured hardware length
+ * (2..5); anything shorter than the format, or not 5 bytes, is matched in
+ * full as before. The 3-byte search format is shortened only for a window
+ * that carries a wild_last filter, by radiant_addr_split_rx_hw_len() (ADR
+ * 0022, which supersedes the old "search is permanent" note here).
  */
 static inline uint8_t radiant_addr_split_hw_len(uint8_t addr_len, bool phy_1m,
 						 uint8_t hw_len_cfg)
@@ -150,6 +152,15 @@ int radiant_addr_split_repair(const struct radiant_rx_filter *filters,
 			      uint8_t hint, const uint8_t *payload,
 			      uint8_t body_len, uint32_t rxcrc,
 			      uint16_t crc_init, uint8_t *body_out);
+
+/* The received final address byte of a frame that matched a wild_last filter
+ * (ADR 0022): the last of the sw_len bytes the RADIO delivered as payload.
+ * Zero when nothing was left to software. */
+static inline uint8_t radiant_addr_split_wild_value(const uint8_t *payload,
+						    uint8_t sw_len)
+{
+	return (sw_len == 0u) ? 0u : payload[sw_len - 1u];
+}
 
 /* The body the core is owed: the delivered payload with the software-matched
  * address bytes removed. */

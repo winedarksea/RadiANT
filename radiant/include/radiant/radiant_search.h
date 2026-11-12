@@ -517,6 +517,10 @@ struct radiant_search {
 	 * two addresses one bit apart. Set from caps.min_filter_hamming_bits;
 	 * see set_filter_lo() in radiant_search.c. */
 	bool     spread_pairs;
+	/* caps.filter_wildcard_dev (ADR 0022): one filter with wild_last set,
+	 * one set, and devnum_lo read from radiant_rx_event.wild_value rather
+	 * than from filter_lo[]. */
+	bool     wildcard;
 
 	/* The set currently selected, and the filters that express it. */
 	struct radiant_rx_filter filters[RADIANT_SEARCH_MAX_FILTERS];
@@ -576,10 +580,10 @@ struct radiant_search {
  * lifetime and capabilities don't change at runtime); a test wanting RAIL
  * geometry calls fake_radio_caps_preset_rail() before this, not after.
  *
- * RADIANT_SEARCH_ENOTSUP if caps.filter_wildcard_dev is set: that flag would
- * collapse the sweep to one window, but struct radiant_rx_filter has no field
- * to ask for a wildcard, so failing loudly is correct - the fix is a HAL
- * change. No planned backend sets it.
+ * caps.filter_wildcard_dev (ADR 0022) collapses the sweep to ONE set of one
+ * filter with radiant_rx_filter.wild_last set: every dwell hears every
+ * device number, and devnum_lo comes from radiant_rx_event.wild_value. The
+ * nRF backend sets it under CONFIG_RADIANT_SEARCH_SHORT_MATCH.
  */
 int radiant_search_init(struct radiant_search *s, const struct radiant_search_cfg *cfg,
 		    const struct radiant_search_cbs *cbs, void *user);

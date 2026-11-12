@@ -32,6 +32,16 @@ int radiant_addr_split_match(const struct radiant_rx_filter *filters,
 		if (memcmp(f->addr, filters[hint].addr, hw_len) != 0) {
 			continue;
 		}
+		/* A wild_last filter (ADR 0022) accepts any final byte, so only
+		 * the software bytes before it are compared. It needs at least
+		 * that final byte left to software; rx_hw_len() guarantees it. */
+		if (f->wild_last) {
+			if (sw_len != 0u &&
+			    memcmp(&f->addr[hw_len], head, sw_len - 1u) == 0) {
+				return (int)i;
+			}
+			continue;
+		}
 		if (sw_len == 0u || memcmp(&f->addr[hw_len], head, sw_len) == 0) {
 			return (int)i;
 		}
@@ -50,6 +60,21 @@ uint8_t radiant_addr_split_rx_hw_len(const struct radiant_rx_filter *filters,
 				     uint8_t hw_len_cfg, uint8_t guard_run)
 {
 	uint8_t hw = radiant_addr_split_hw_len(addr_len, phy_1m, hw_len_cfg);
+
+	/* Wildcard search (ADR 0022): the last byte must reach software, so
+	 * the hardware matches everything before it - [A6 C5] on the 3-byte
+	 * search address. Never fewer than 2: the RADIO needs a base byte and
+	 * a prefix byte. Only on 1 M, where the bit stream is unchanged by
+	 * moving the match boundary. */
+	if (filters != NULL && phy_1m && addr_len >= 3u) {
+		for (uint8_t i = 0; i < n; i++) {
+			if (filters[i].addr_len == addr_len &&
+			    filters[i].wild_last) {
+				return (hw < addr_len) ? hw
+						       : (uint8_t)(addr_len - 1u);
+			}
+		}
+	}
 
 	if (guard_run == 0u || filters == NULL || hw <= 2u ||
 	    radiant_addr_split_hw_len(addr_len, phy_1m, 2u) != 2u) {
@@ -102,7 +127,10 @@ int radiant_addr_split_repair(const struct radiant_rx_filter *filters,
 		uint32_t m = 0;
 		bool ok = true;
 
-		if ((uint32_t)f->addr_len != (uint32_t)hw_len + sw_len ||
+		/* A wild filter has no expected final byte to compare a slipped
+		 * one against, so it is never repaired here. */
+		if (f->wild_last ||
+		    (uint32_t)f->addr_len != (uint32_t)hw_len + sw_len ||
 		    memcmp(f->addr, filters[hint].addr, hw_len) != 0) {
 			continue;
 		}

@@ -331,21 +331,182 @@ ZTEST(radiant_search, test_sweep_geometry_rail)
 	end_of_test();
 }
 
-/* A caps preset the sweep cannot express must fail loudly rather than sweep
- * something it cannot arm. */
-ZTEST(radiant_search, test_wildcard_capability_is_refused)
+/* ---------------------------------------------------------------------------
+ * 1b. A wildcard-capable backend (ADR 0022): one set, devnum_lo from the event
+ * ---------------------------------------------------------------------------
+ */
+
+/* caps.filter_wildcard_dev collapses the sweep to one set of one filter with
+ * wild_last set, and the window is otherwise the ordinary search window. */
+ZTEST(radiant_search, test_wildcard_capability_is_one_set)
 {
-	struct radiant_search_cfg cfg;
+	fake_radio_caps_mut()->filter_wildcard_dev = true;
+	bring_up(false);
+
+	zassert_equal(1u, radiant_search_sets(&g_s));
+	zassert_equal(1u, radiant_search_filters_per_window(&g_s));
+	zassert_equal((uint64_t)g_s.cfg.dwell_us, radiant_search_sweep_us(&g_s),
+		      "the sweep is one dwell");
+	zassert_equal(0u, radiant_search_set_for_devnum(&g_s, 0x1234u));
+	zassert_equal(0u, radiant_search_set_for_devnum(&g_s, 0x00FFu));
+
+	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_SCAN, &want_any,
+				    radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+	zassert_equal(RADIANT_SEARCH_OK, win_open());
+	zassert_equal(1u, g_w.n_filters);
+	zassert_true(g_w.filters[0].wild_last);
+	zassert_equal(RADIANT_FRAME_ADDR_LEN_SEARCH, g_w.filters[0].addr_len);
+	zassert_equal(0u, g_w.set_index);
+	win_run();
+
+	/* Every later window is the same set. */
+	zassert_equal(RADIANT_SEARCH_OK, win_open());
+	zassert_equal(0u, g_w.set_index);
+	win_run();
+	zassert_ok(radiant_search_end(&g_s, 0u));
+	end_of_test();
+}
+
+/* The whole point: one dwell hears devices whose low bytes would sit in
+ * different sets of the 32-set sweep, and each is reported under its own
+ * device number - which only works if devnum_lo comes from the received
+ * byte (evt.wild_value), not from a table of filters. */
+ZTEST(radiant_search, test_wildcard_scan_reports_every_device_in_one_dwell)
+{
+	static const uint16_t devs[] = { 0x0510u, 0x06F3u, 0xCC09u, 0x00FFu };
+	uint8_t frame[ARRAY_SIZE(devs)][FAKE_RADIO_AIR_FRAME_MAX];
+	uint8_t len[ARRAY_SIZE(devs)];
+	bool seen[ARRAY_SIZE(devs)] = { false };
+	const struct radiant_search_stats *st;
 
 	fake_radio_caps_mut()->filter_wildcard_dev = true;
-	radiant_search_cfg_default(&cfg);
-	memset(&g_s, 0, sizeof(g_s));
+	bring_up(false);
+	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_SCAN, &want_any,
+				    radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+	zassert_equal(RADIANT_SEARCH_OK, win_open());
 
-	zassert_equal(RADIANT_SEARCH_ENOTSUP,
-		      radiant_search_init(&g_s, &cfg, &search_cbs, NULL),
-		      "struct radiant_rx_filter has no wildcard field, so a backend "
-		      "advertising one needs a HAL change, not a silent sweep");
+	for (size_t i = 0; i < ARRAY_SIZE(devs); i++) {
+		len[i] = fake_radio_build_ant_frame(frame[i], devs[i], 0x0Bu, 5u,
+						    payload8);
+		zassert_ok(fake_radio_air_frame(g_w.t_open + 1000u + 20000u * i,
+						frame[i], len[i]));
+	}
+	win_run();
 
+	zassert_equal(ARRAY_SIZE(devs), g_cap.n_acquired,
+		      "a SCAN reports every device it hears in the dwell");
+	for (uint32_t k = 0; k < g_cap.n_acquired; k++) {
+		for (size_t i = 0; i < ARRAY_SIZE(devs); i++) {
+			if (g_cap.res[k].id.device_number == devs[i]) {
+				seen[i] = true;
+			}
+		}
+		zassert_equal(0u, g_cap.res[k].set_index);
+		zassert_equal(0u, g_cap.res[k].filter_index);
+	}
+	for (size_t i = 0; i < ARRAY_SIZE(devs); i++) {
+		zassert_true(seen[i], "device 0x%04x not reported with its own number",
+			     devs[i]);
+	}
+	/* Still a SCAN: it stays in the search. */
+	zassert_true(radiant_search_is_searching(&g_s, 0u));
+
+	st = radiant_search_get_stats(&g_s);
+	zassert_equal(ARRAY_SIZE(devs), st->frames_ok);
+	zassert_equal(0u, st->bad_filter_index);
+	zassert_ok(radiant_search_end(&g_s, 0u));
+	end_of_test();
+}
+
+/* ACQUIRE under a wildcard: a channel that named its device number gets that
+ * device and not the one heard first, and a wildcard ACQUIRE channel takes
+ * the first device it hears - one frame, one ACQUIRE claim. */
+ZTEST(radiant_search, test_wildcard_acquire_tie_break)
+{
+	struct radiant_search_id_filter want_named = { 0x06F3u, 0u, 0u };
+	uint8_t f_a[FAKE_RADIO_AIR_FRAME_MAX];
+	uint8_t f_b[FAKE_RADIO_AIR_FRAME_MAX];
+	uint8_t n_a, n_b;
+
+	fake_radio_caps_mut()->filter_wildcard_dev = true;
+	bring_up(false);
+
+	n_a = fake_radio_build_ant_frame(f_a, 0x0510u, 0x0Bu, 5u, payload8);
+	n_b = fake_radio_build_ant_frame(f_b, 0x06F3u, 0x78u, 1u, payload8);
+
+	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE,
+				    &want_named, radiant_radio_now(),
+				    RADIANT_SEARCH_TIMEOUT_NONE));
+	zassert_ok(radiant_search_begin(&g_s, 1u, RADIANT_SEARCH_MODE_ACQUIRE,
+				    &want_any, radiant_radio_now(),
+				    RADIANT_SEARCH_TIMEOUT_NONE));
+	zassert_ok(radiant_search_begin(&g_s, 2u, RADIANT_SEARCH_MODE_ACQUIRE,
+				    &want_any, radiant_radio_now(),
+				    RADIANT_SEARCH_TIMEOUT_NONE));
+
+	zassert_equal(RADIANT_SEARCH_OK, win_open());
+	zassert_ok(fake_radio_air_frame(g_w.t_open + 1000u, f_a, n_a));
+	zassert_ok(fake_radio_air_frame(g_w.t_open + 30000u, f_b, n_b));
+	win_run();
+
+	/* f_a: channel 0 does not want it; channel 1 (first wildcard) takes it,
+	 * channel 2 does not get the same frame. f_b: channel 0 asked for it by
+	 * number and is first in channel order. */
+	zassert_equal(2u, g_cap.n_acquired);
+	zassert_equal(1u, g_cap.chan[0]);
+	zassert_equal(0x0510u, g_cap.res[0].id.device_number);
+	zassert_equal(0u, g_cap.chan[1]);
+	zassert_equal(0x06F3u, g_cap.res[1].id.device_number);
+	zassert_true(radiant_search_is_searching(&g_s, 2u),
+		     "channel 2 is still searching: neither frame was its");
+	zassert_ok(radiant_search_end(&g_s, 2u));
+	end_of_test();
+}
+
+/* A frame whose CRC failed is never acquired, wildcard or not: the CRC is
+ * what vouches for the device-number byte the hardware did not match. */
+ZTEST(radiant_search, test_wildcard_crc_failure_is_not_a_device)
+{
+	struct fake_radio_air air;
+	uint8_t len;
+	const struct radiant_search_stats *st;
+
+	fake_radio_caps_mut()->filter_wildcard_dev = true;
+	bring_up(true);
+	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_SCAN, &want_any,
+				    radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+	zassert_equal(RADIANT_SEARCH_OK, win_open());
+
+	fake_radio_air_init(&air);
+	len = fake_radio_build_ant_frame(air.bytes, 0x0510u, 0x0Bu, 5u, payload8);
+	air.len = len;
+	air.t_sync = g_w.t_open + 1000u;
+	air.crc_bad = true;
+	zassert_ok(fake_radio_air_add(&air));
+	win_run();
+
+	st = radiant_search_get_stats(&g_s);
+	zassert_equal(0u, g_cap.n_acquired);
+	zassert_equal(1u, st->crc_fail);
+	zassert_equal(0u, st->frames_ok);
+	zassert_ok(radiant_search_end(&g_s, 0u));
+	end_of_test();
+}
+
+/* Without the cap a wild_last filter is never produced, and the 32-set sweep
+ * is exactly what it was (the rest of this suite runs on that preset). */
+ZTEST(radiant_search, test_no_wildcard_without_the_cap)
+{
+	bring_up(false);
+	zassert_equal(32u, radiant_search_sets(&g_s));
+	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_SCAN, &want_any,
+				    radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+	zassert_equal(RADIANT_SEARCH_OK, win_open());
+	for (uint8_t i = 0; i < g_w.n_filters; i++) {
+		zassert_false(g_w.filters[i].wild_last);
+	}
+	win_run();
+	zassert_ok(radiant_search_end(&g_s, 0u));
 	end_of_test();
 }
 

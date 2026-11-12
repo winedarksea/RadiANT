@@ -595,6 +595,28 @@ config RADIANT_NRF_SLIP_GUARD
 	  register, PHY or sensitivity setting changes, and the repair runs
 	  only on a frame that already failed the address compare.
 
+config RADIANT_SEARCH_SHORT_MATCH
+	bool "search every device number in one window (wildcard short match)"
+	depends on RADIANT_BACKEND_NRF
+	default n
+	help
+	  ADR 0022. The sweep normally matches the 3-byte search address
+	  [A6 C5 devnum_lo] with 8 hardware filters, so it steps through 32
+	  sets of 260 ms and hears any one device about once every 8.3 s. A
+	  Garmin stick reports the same room 10-30x faster (the 2026-11-11
+	  Zwift captures, tools/ant_scan_rate.py).
+
+	  With this on, the nRF backend advertises caps.filter_wildcard_dev:
+	  a search window matches only [A6 C5] in hardware, receives
+	  devnum_lo as the first data byte and reports it with the frame, so
+	  the sweep is ONE set and every dwell hears every device. The CRC
+	  still covers the whole address, so a frame is only accepted when it
+	  verifies. The cost is the one RADIANT_NRF_SLIP_GUARD names: a 2-byte
+	  match also matches noise, so a search window locks onto more false
+	  starts. Tracking windows are unchanged.
+
+	  Default n until the A/B in ADR 0022 passes its gates.
+
 config RADIANT_NRF_SLIP_GUARD_RUN
 	int "alternating-run length at which an address gets the slip guard"
 	depends on RADIANT_NRF_SLIP_GUARD

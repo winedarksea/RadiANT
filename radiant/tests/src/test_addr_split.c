@@ -34,6 +34,7 @@ static void mk(struct radiant_rx_filter *f, uint16_t dn, uint8_t dtype)
 	f->addr[3] = (uint8_t)(dn >> 8);
 	f->addr[4] = dtype;
 	f->addr_len = 5u;
+	f->wild_last = false;
 }
 
 ZTEST(radiant_addr_split, test_hw_len_only_shortens_tracking_on_1m)
@@ -379,4 +380,73 @@ ZTEST(radiant_addr_split, test_t_sync_offset_is_the_bytes_airtime)
 	zassert_equal(radiant_addr_split_t_sync_us(1u), 8u);
 	zassert_equal(radiant_addr_split_t_sync_us(2u), 16u);
 	zassert_equal(radiant_addr_split_t_sync_us(3u), 24u);
+}
+
+/* ---------------------------------------------------------------------------
+ * Wildcard search (ADR 0022): [A6 C5] in hardware, devnum_lo as data
+ * ---------------------------------------------------------------------------
+ */
+
+/* [A6 C5 0x00], the 3-byte search address, wild in its last byte. */
+static void mk_wild(struct radiant_rx_filter *f)
+{
+	memset(f, 0, sizeof(*f));
+	f->addr[0] = 0xA6;
+	f->addr[1] = 0xC5;
+	f->addr_len = 3u;
+	f->wild_last = true;
+}
+
+ZTEST(radiant_addr_split, test_wild_window_leaves_the_last_byte_to_software)
+{
+	struct radiant_rx_filter w;
+	struct radiant_rx_filter plain[1];
+
+	mk_wild(&w);
+	/* 3-byte search, 1 M: two bytes in hardware whatever the slip-guard
+	 * settings, so devnum_lo always arrives as data. */
+	zassert_equal(radiant_addr_split_rx_hw_len(&w, 1u, 3u, true, 5u, 0u), 2u);
+	zassert_equal(radiant_addr_split_rx_hw_len(&w, 1u, 3u, true, 5u, 9u), 2u);
+	/* Not on the coded PHY, which has no movable match boundary. */
+	zassert_equal(radiant_addr_split_rx_hw_len(&w, 1u, 3u, false, 5u, 0u), 3u);
+	/* A plain search filter keeps the full 3-byte hardware match. */
+	memset(plain, 0, sizeof(plain));
+	plain[0].addr[0] = 0xA6;
+	plain[0].addr[1] = 0xC5;
+	plain[0].addr[2] = 0x09;
+	plain[0].addr_len = 3u;
+	zassert_equal(radiant_addr_split_rx_hw_len(plain, 1u, 3u, true, 5u, 9u),
+		      3u);
+}
+
+ZTEST(radiant_addr_split, test_wild_filter_accepts_every_devnum_lo)
+{
+	struct radiant_rx_filter w[1];
+
+	mk_wild(&w[0]);
+	for (unsigned v = 0; v < 256u; v++) {
+		const uint8_t head[] = { (uint8_t)v, 0x33 };
+
+		zassert_equal(radiant_addr_split_match(w, 1u, 2u, 1u, 0u, head), 0,
+			      "devnum_lo 0x%02x", v);
+		zassert_equal(radiant_addr_split_wild_value(head, 1u), (uint8_t)v);
+	}
+	/* Nothing left to software means nothing to report, and no match. */
+	static const uint8_t one55[] = { 0x55 };
+	zassert_equal(radiant_addr_split_wild_value(one55, 0u), 0u);
+	zassert_equal(radiant_addr_split_match(w, 1u, 3u, 0u, 0u,
+					       one55), -1);
+}
+
+ZTEST(radiant_addr_split, test_wild_filter_is_never_repaired)
+{
+	struct radiant_rx_filter w[1];
+	uint8_t payload[13] = { 0x09, 0xCC, 0x0B, 0x05 };
+	uint8_t body[12];
+
+	mk_wild(&w[0]);
+	/* Repair needs the expected address bits; a wild byte has none. */
+	zassert_equal(radiant_addr_split_repair(w, 1u, 2u, 1u, 0u, payload, 12u,
+						0x1234u, RADIANT_CRC_INIT, body),
+		      -1);
 }

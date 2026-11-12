@@ -243,6 +243,11 @@ struct fake_state {
 
 static struct fake_state g;
 
+/* The received last address byte of the frame air_matches() last accepted
+ * through a wild_last filter, handed to the next deliver_rx() as
+ * radiant_rx_event.wild_value and cleared there (ADR 0022). */
+static uint8_t g_next_wild;
+
 /*
  * The default presets advertise 1 Mbps GFSK only. This is a default, not a
  * limitation: every existing suite asserts window arithmetic that a non-zero
@@ -717,6 +722,8 @@ static void deliver_rx(uint32_t op, enum radiant_radio_status status, bool termi
 	evt.t_sync = frame ? t_sync : 0u;
 	evt.t_sync_exact = frame ? g.caps.has_sync_timestamp : false;
 	evt.filter_index = frame ? filter_index : 0u;
+	evt.wild_value = frame ? g_next_wild : 0u;
+	g_next_wild = 0u;
 	evt.body = frame ? g.body_buf : NULL;
 	evt.body_len = frame ? body_len : 0u;
 	evt.has_rssi = frame && g.caps.has_rssi;
@@ -1189,6 +1196,14 @@ uint8_t fake_radio_build_ant_frame(uint8_t *out, uint16_t devnum,
  * ---------------------------------------------------------------------------
  */
 
+/* A wild_last filter accepts any final address byte - but only on a fake
+ * whose caps claim filter_wildcard_dev, as on real hardware, so a test that
+ * forgets the cap gets the stock behaviour rather than a silent wildcard. */
+static bool filter_is_wild(const struct radiant_rx_filter *flt)
+{
+	return g.caps.filter_wildcard_dev && flt->wild_last;
+}
+
 static bool air_matches(const struct fake_radio_air *f, uint8_t *filter_index)
 {
 	uint8_t i;
@@ -1204,6 +1219,14 @@ static bool air_matches(const struct fake_radio_air *f, uint8_t *filter_index)
 		}
 		for (i = 0u; i < g.cur.n_filters; i++) {
 			if (g.cur.filters[i].addr_len != g.cur.fmt.addr_len) {
+				continue;
+			}
+			if (filter_is_wild(&g.cur.filters[i])) {
+				if (memcmp(f->bytes, g.cur.filters[i].addr,
+					   g.cur.fmt.addr_len - 1u) == 0) {
+					*filter_index = i;
+					return true;
+				}
 				continue;
 			}
 			if (memcmp(f->bytes, g.cur.filters[i].addr,
@@ -1476,6 +1499,11 @@ static void dispatch_air(int32_t idx)
 			a->n_rx_events++;
 		}
 	}
+	g_next_wild = (s->f.match == FAKE_RADIO_MATCH_ADDR &&
+		       fidx < g.cur.n_filters &&
+		       filter_is_wild(&g.cur.filters[fidx]) &&
+		       g.cur.fmt.addr_len > 0u)
+			      ? s->f.bytes[g.cur.fmt.addr_len - 1u] : 0u;
 	deliver_rx(op, status, terminal, s->f.t_sync, fidx, body, body_len,
 		   rssi, s->f.crc_rx_set, s->f.crc_rx, false);
 }
