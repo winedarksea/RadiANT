@@ -537,6 +537,15 @@ struct radiant_transfer_cfg {
 	 */
 	bool slot_opener;
 
+	/*
+	 * True for a SLAVE_RX_ONLY channel (type 0x40), which must never
+	 * transmit. Inbound acknowledged and burst data is still delivered
+	 * through ops->rx_data, but no acknowledgement is armed: the peer sees
+	 * a missed ACK, exactly as it would from a receiver out of range.
+	 * Defaults to false (zeroed cfg), which is every other channel type.
+	 */
+	bool rx_only;
+
 	const struct radiant_transfer_ops *ops;
 	void                          *ctx;
 };
@@ -590,6 +599,9 @@ struct radiant_transfer_stats {
 	 * than RADIANT_TRANSFER_REPLY_VALID_US. Non-zero means somebody is
 	 * driving the retransmission off a timer that is not the measured one. */
 	uint32_t stale_replies;
+	/* Inbound data packets delivered on a SLAVE_RX_ONLY channel and left
+	 * unacknowledged, because that channel type never transmits. */
+	uint32_t rx_only_unacked;
 #if defined(CONFIG_RADIANT_ACK_FAULTS)
 	/* A reply_plan offset that put the acknowledgement before the radio
 	 * could arm it. No ACK went out - an early one would be a fault the

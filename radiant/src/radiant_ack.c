@@ -237,6 +237,20 @@ int radiant_transfer_on_data(struct radiant_transfer *t, const struct radiant_fr
 		return RADIANT_TRANSFER_ENOTSUP;
 	}
 
+	/* A SLAVE_RX_ONLY channel never transmits: deliver, arm nothing. The
+	 * same shape as the MUTE arm of the fault seam below, and ahead of the
+	 * broadcast-buffer check because a receive-only channel has no reason
+	 * to hold one. */
+	if (t->cfg.rx_only) {
+		t->stats.rx_only_unacked++;
+		if (t->cfg.ops != NULL && t->cfg.ops->rx_data != NULL) {
+			t->cfg.ops->rx_data(t->cfg.ctx, f->payload,
+					    f->payload_len,
+					    radiant_ctrl_is_last(f->ctrl_byte));
+		}
+		return RADIANT_TRANSFER_OK;
+	}
+
 	/* Every observed acknowledgement carried the acknowledger's own
 	 * broadcast buffer, unchanged; whether it may carry something else is
 	 * untested item 4, so no substitute is invented here. */

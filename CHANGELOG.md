@@ -198,6 +198,12 @@ reads.
 
 ### Fixed
 
+- **A receive-only slave (channel type `0x40`) never transmits.** It used to
+  acknowledge inbound acknowledged and burst data like a normal slave. It now
+  delivers the data and leaves it unacknowledged, and `antr_burst_tx()` refuses
+  `0x40` and `0x50` channels with `CHANNEL_IN_WRONG_STATE`, as acknowledged
+  data already did. Zwift's discovery channel is `0x40`; its paired sensor
+  channels are `0x00` and are unaffected.
 - **Lib Config (`0x6E`) replaces the previous value.** It used to OR the new
   bits in, so a host that went from `0xE0` to `0x80` kept receiving RSSI and
   timestamps it had not asked for, and mis-parsed every message. Zero still

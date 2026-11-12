@@ -1140,6 +1140,8 @@ static int api_xfer_setup(uint8_t ch)
 	 * claiming a slot not owned) and invisible without a sniffer. Channel
 	 * type decides it. */
 	cfg.slot_opener = radiant_channel_is_master(ch);
+	cfg.rx_only = radiant_channel_type_get(ch) ==
+		      (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY;
 	cfg.channel = ch;
 	cfg.ops = &api_xfer_ops;
 	cfg.ctx = (void *)(uintptr_t)ch;
@@ -1770,8 +1772,13 @@ static void api_post_track_rx(uint8_t ch)
 	/* Unconditional: any frame here may become a transmit 1.56 ms later
 	 * (api_sched_rx() -> api_tracked_frame() -> radiant_transfer_on_data()),
 	 * depending on a control byte not yet read. Reserve is given back the
-	 * moment an empty window closes. */
-	req.follow_on_us = API_FOLLOW_ON_TRACK_US;
+	 * moment an empty window closes. A SLAVE_RX_ONLY channel never
+	 * transmits (its engine delivers and arms nothing), so it reserves
+	 * nothing. */
+	req.follow_on_us =
+		(radiant_channel_type_get(ch) ==
+		 (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY) ?
+			0u : API_FOLLOW_ON_TRACK_US;
 
 	if (radiant_sched_request_rx(ch, &req) != RADIANT_RADIO_OK_RC) {
 		api_bind_rejected(ch);
@@ -4265,6 +4272,13 @@ antr_err_t antr_burst_tx(uint8_t channel, uint16_t size, uint8_t *data,
 	}
 	if (!radiant_channel_is_open(channel)) {
 		return (antr_err_t)ANTW_CHANNEL_NOT_OPENED;
+	}
+	/* Same refusal as antr_acknowledge_message_tx(): a SLAVE_RX_ONLY
+	 * channel never transmits, and a MASTER_TX_ONLY one never listens for
+	 * the acknowledgement every burst packet needs. */
+	if (radiant_channel_type_get(channel) == ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY ||
+	    radiant_channel_type_get(channel) == ANTW_CHANNEL_TYPE_MASTER_TX_ONLY) {
+		return (antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE;
 	}
 
 	k_mutex_lock(&api_lock, K_FOREVER);
