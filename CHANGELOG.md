@@ -198,6 +198,11 @@ reads.
 
 ### Fixed
 
+- **A slave's broadcast reaches its master.** `MESG_BROADCAST_DATA` on a slave
+  channel used to return success and transmit nothing. It now goes out once,
+  in the master's next reply window (control byte `0x02`, +2190 µs, both
+  measured from a Garmin slave first), and raises `EVENT_TX`. RX-only and
+  secured slave channels still do not transmit it.
 - **A RadiANT master's bursts and acknowledged messages complete on air.**
   None ever had: a slave answers a master's slot-opening packet on its
   slot-reply turnaround (~2190 µs, a Garmin at +2209 µs), and the master only

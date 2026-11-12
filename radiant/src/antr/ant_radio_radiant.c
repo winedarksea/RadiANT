@@ -1231,6 +1231,81 @@ static void api_ack_pending_send(uint8_t ch, radiant_time_t t_sync)
 	}
 }
 
+/*
+ * A slave's broadcast back to its master. Before this, antr_broadcast_message_
+ * tx() returned success on a slave and nothing was ever transmitted: the pump
+ * only posts receive windows for a slave.
+ *
+ * Measured 2026-11-11 from a Garmin USB-m slave
+ * (archive/captures/radio/2026-11-11-slave-broadcast-garmin.log): control
+ * byte 0x02 (RADIANT_CTRL_SLAVE_BROADCAST), +2176..+2215 us after the master's
+ * frame - RADIANT_TRANSFER_SLOT_REPLY_US, the reply window acknowledged data
+ * already uses - and each host write went out exactly once, on the next slot.
+ *
+ * Called from the receive callback of a master frame, like
+ * api_ack_pending_send(), which takes priority. Bidirectional slaves only: an
+ * RX-only slave never transmits, and a secured channel keeps the write
+ * pending (its transform path is a master's). The tracked window's follow-on
+ * reserve (API_FOLLOW_ON_TRACK_US) already covers the reply. A post the
+ * scheduler refuses leaves bcast_pending set, so the next master frame tries
+ * again. The completion is api_sched_tx(): EVENT_TX, bcast_pending cleared,
+ * the slot clock left alone, tracking re-posted.
+ */
+static void api_post_slave_bcast(uint8_t ch, radiant_time_t t_sync)
+{
+	struct radiant_ctrl_fields fields;
+	struct radiant_channel_id  id;
+	struct radiant_frame       f;
+	struct radiant_frame_wire  w;
+	struct radiant_sched_tx    req;
+	uint8_t                    pay[RADIANT_TRANSFER_PKT_BYTES];
+	unsigned int               key;
+
+	if (!api_ch[ch].bcast_pending || api_ch[ch].ack_pending ||
+	    radiant_channel_type_get(ch) != (uint8_t)ANTW_CHANNEL_TYPE_SLAVE ||
+	    radiant_sec_channel_is_secured(ch) ||
+	    radiant_channel_state_get(ch) != RADIANT_CH_STATE_TRACKING ||
+	    !radiant_transfer_is_idle(&api_xfer[ch])) {
+		return;
+	}
+	if (radiant_channel_id_get(ch, &id) != RADIANT_CH_OK) {
+		return;
+	}
+
+	key = radiant_event_crit_enter();
+	memcpy(pay, api_ch[ch].bcast, sizeof(pay));
+	radiant_event_crit_exit(key);
+
+	/* All flags clear: 0x02. radiant_frame_make() refuses it unless it is
+	 * in the captured table, which it now is. */
+	memset(&fields, 0, sizeof(fields));
+	if (radiant_frame_make(&f, &id, &fields, pay,
+			       RADIANT_FRAME_PAYLOAD_STD) != RADIANT_FRAME_OK ||
+	    radiant_frame_encode(RADIANT_FRAME_CFG_TRACKING, api_net_addr_for(ch),
+				 &f, &w) != RADIANT_FRAME_OK ||
+	    (size_t)w.body_len > sizeof(api_ch[ch].tx_body) ||
+	    w.addr_len > sizeof(req.addr)) {
+		return;
+	}
+	memcpy(api_ch[ch].tx_body, w.body, w.body_len);
+	api_ch[ch].tx_body_len = w.body_len;
+
+	memset(&req, 0, sizeof(req));
+	req.fmt = radiant_frame_format(RADIANT_FRAME_CFG_TRACKING);
+	req.rf_index = api_rf_of(ch);
+	req.power = api_power_of(ch);
+	memcpy(req.addr, w.addr, w.addr_len);
+	req.addr_len = w.addr_len;
+	req.body = api_ch[ch].tx_body;
+	req.body_len = api_ch[ch].tx_body_len;
+	req.t_sync_at = t_sync + (radiant_time_t)RADIANT_TRANSFER_SLOT_REPLY_US;
+	req.follow_on_us = 0u;
+
+	if (radiant_sched_request_tx(ch, &req) == RADIANT_RADIO_OK_RC) {
+		api_stats.slave_bcast_posted++;
+	}
+}
+
 /* End an accepted, never-sent slave command with its one terminal event.
  * Every path that takes the channel off the air must come through here before
  * CHANNEL_CLOSED, or unassign wipes the command without an outcome. */
@@ -2302,6 +2377,9 @@ static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 		if (!crc_failed && api_ch[ch].ack_pending &&
 		    !radiant_channel_is_master(ch)) {
 			api_ack_pending_send(ch, evt->t_sync);
+		} else if (!crc_failed && api_ch[ch].bcast_pending &&
+			   !radiant_channel_is_master(ch)) {
+			api_post_slave_bcast(ch, evt->t_sync);
 		}
 		api_post_rx(ch, (uint8_t)ANTW_MESG_BROADCAST_DATA_ID, &id, evt,
 			    f.payload, f.payload_len, 0u, false);
@@ -2475,6 +2553,21 @@ static void api_sched_tx(uint8_t ch, const struct radiant_tx_event *evt, void *u
 			}
 		}
 		radiant_transfer_on_tx_event(&api_xfer[ch], evt);
+		return;
+	}
+
+	/* A slave's broadcast went out in its master's reply window. Not a slot
+	 * of this channel's own (the master's frame already anchored the clock),
+	 * so no radiant_channel_on_slot(); the next tracked window is re-posted
+	 * from api_sched_done(). */
+	if (!radiant_channel_is_master(ch)) {
+		if (evt->status == RADIANT_RADIO_STATUS_OK) {
+			api_ch[ch].bcast_pending = false;
+			api_stats.slave_bcast_sent++;
+			(void)radiant_event_post_channel_event(ch,
+							       (uint8_t)ANTW_EVENT_TX);
+		}
+		api_ch[ch].track_repost = true;
 		return;
 	}
 

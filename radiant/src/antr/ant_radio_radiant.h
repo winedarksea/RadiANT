@@ -174,6 +174,11 @@ struct radiant_api_stats {
 	 * permanently and silently. See api_xfer_broadcast().
 	 */
 	uint32_t acks_from_unwritten_buffer;
+	/* A slave's broadcast back to its master (control byte 0x02): posted
+	 * into the reply window of a master frame, and actually transmitted.
+	 * See api_post_slave_bcast(). */
+	uint32_t slave_bcast_posted;
+	uint32_t slave_bcast_sent;
 };
 
 const struct radiant_api_stats *radiant_api_stats_get(void);

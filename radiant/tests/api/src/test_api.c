@@ -4648,3 +4648,99 @@ ZTEST(api, test_advanced_burst_capabilities_advertise_no_frequency_hopping)
 	zassert_equal(0u, cfg[1] & (uint8_t)ANTW_ADV_BURST_MODES_FREQ_HOP,
 		      "frequency hopping is advertised (modes 0x%02x)", cfg[1]);
 }
+
+/*
+ * Phase 3: a SLAVE's broadcast goes back to its master. Captured 2026-11-11
+ * from a Garmin USB-m slave (archive/captures/radio/
+ * 2026-11-11-slave-broadcast-garmin.log): control byte 0x02, +2176..+2215 us
+ * after the master's frame, each host write once. Before, the write returned
+ * success and nothing was ever transmitted.
+ */
+ZTEST(api, test_a_slave_broadcast_goes_out_once_in_the_masters_reply_window)
+{
+	static const uint8_t page[8] = {
+		0x5Bu, 0x00u, 0xA5u, 0x5Au, 0x01u, 0x02u, 0x03u, 0x04u
+	};
+	uint8_t                      buf[8];
+	uint16_t                     dev;
+	const struct fake_radio_arm *w;
+	const struct fake_radio_arm *tx;
+	radiant_time_t               t_master;
+	uint8_t                      pending = 0xFFu;
+
+	open_and_acquire_slave_of_type((uint8_t)ANTW_CHANNEL_TYPE_SLAVE, &dev);
+	run_housekeeping();
+
+	memcpy(buf, page, sizeof(buf));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_broadcast_message_tx(CH, 8u, buf));
+	drain();
+	n_msg = 0u;
+
+	if (fake_radio_is_idle()) {
+		run_housekeeping();
+	}
+	w = last_arm_of(FAKE_RADIO_ARM_RX);
+	zassert_not_null(w, "no tracked window armed");
+	zassert_false(w->terminated);
+	t_master = w->t_open + ((w->t_close - w->t_open) / 2u);
+	air_tracked_frame(w, dev);
+	fake_radio_advance_to(t_master + RADIANT_TRANSFER_SLOT_REPLY_US + 1000u);
+	drain();
+
+	tx = last_tx_with_ctrl(RADIANT_CTRL_SLAVE_BROADCAST);
+	zassert_not_null(tx, "the slave never transmitted its broadcast");
+	zassert_equal(t_master + RADIANT_TRANSFER_SLOT_REPLY_US, tx->t_sync_at,
+		      "the slave broadcast must sit in the master's reply window");
+	zassert_mem_equal(&tx->body[BODY_D0], page, 8u);
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TX),
+		      "a slave broadcast must raise exactly one EVENT_TX");
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_pending_transmit_get(CH, &pending));
+	zassert_equal(0u, pending, "the write is still pending after it went out");
+
+	/* The slot clock is the master's frame, not our transmit: the next
+	 * tracked window is centred one period after the master. */
+	zassert_equal(t_master + PERIOD_US, radiant_channel_next_slot(CH),
+		      "the slave's own transmit moved its slot clock");
+
+	/* And once only: the next master frame carries no second 0x02. */
+	if (fake_radio_is_idle()) {
+		run_housekeeping();
+	}
+	w = last_arm_of(FAKE_RADIO_ARM_RX);
+	zassert_not_null(w);
+	air_tracked_frame(w, dev);
+	fake_radio_advance_to(w->t_close + RADIANT_TRANSFER_SLOT_REPLY_US + 1000u);
+	drain();
+	zassert_equal(1u, count_tx_with_ctrl(RADIANT_CTRL_SLAVE_BROADCAST),
+		      "one host write went out more than once");
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TX));
+
+	end_of_test();
+}
+
+/* An RX-only slave never transmits its broadcast buffer. */
+ZTEST(api, test_an_rx_only_slave_never_transmits_a_broadcast)
+{
+	uint8_t                      buf[8] = { 1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u };
+	uint16_t                     dev;
+	const struct fake_radio_arm *w;
+
+	open_and_acquire_slave_of_type((uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
+				       &dev);
+	run_housekeeping();
+	(void)antr_broadcast_message_tx(CH, 8u, buf);
+	if (fake_radio_is_idle()) {
+		run_housekeeping();
+	}
+	w = last_arm_of(FAKE_RADIO_ARM_RX);
+	zassert_not_null(w);
+	air_tracked_frame(w, dev);
+	fake_radio_advance_to(w->t_close + RADIANT_TRANSFER_SLOT_REPLY_US + 1000u);
+	drain();
+	zassert_equal(0u, fake_radio_stats()->arms_tx,
+		      "an RX-only slave transmitted");
+
+	end_of_test();
+}

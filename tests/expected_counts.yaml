@@ -66,7 +66,8 @@ min_scenarios: 14
 # the unit scenarios' +8 that landed with ADR 0022 and the 0x61/0xC6 work.
 # 4419 with outbound burst retries: four transfer cases in each unit scenario.
 # 4427 with the slot-opener acknowledgement window and its retry timing.
-min_testcases: 4427
+# 4435 with slave broadcast TX: two api cases in each of the four api scenarios.
+min_testcases: 4435
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -84,10 +85,10 @@ min_testcases: 4427
 min_cases.radiant.unit: 1010
 min_cases.radiant.unit.sec_modes: 1010
 min_cases.radiant.unit.no_pairing: 958
-min_cases.radiant.api: 72
-min_cases.radiant.api.sec: 75
-min_cases.radiant.api.sec_host: 88
-min_cases.radiant.api.crc_repair: 73
+min_cases.radiant.api: 74
+min_cases.radiant.api.sec: 77
+min_cases.radiant.api.sec_host: 90
+min_cases.radiant.api.crc_repair: 75
 # 32 since C5-1 (inline BLOCKED backs off the class that was refused). 38 with
 # the extension skip (ADR 0021).
 min_cases.radiant.gate: 75
