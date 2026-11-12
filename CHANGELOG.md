@@ -198,6 +198,12 @@ reads.
 
 ### Fixed
 
+- **Open Rx Scan Mode (`0x5B`) keeps the host's channel 0 setup.** It used to
+  reassign channel 0 as a wildcard slave on network 0 at RF 66, so a host that
+  had set RF 57 and the ANT+ key scanned the wrong band. Channel 0's type,
+  network, channel ID, RF and period now survive (Rev 5.1 §9.5.4.5); its ID
+  list, low-priority timeout and search priority still reset. A master
+  channel 0 is refused with `CHANNEL_IN_WRONG_STATE`.
 - **The Linux udev rule grants access.** It was named `99-`, which sorts after
   the systemd rule that applies `uaccess`, so the device stayed root-only. It is
   now `host/linux/70-radiant-ant.rules`, also gives the `dialout` group access for SSH

@@ -201,14 +201,19 @@ MESG_ID_LIST_ADD_ID = 0x59
 MESG_ID_LIST_CONFIG_ID = 0x5A
 
 # Background scanning. Bridged as of 2026-08-10: refuses with
-# ANTW_CLOSE_ALL_CHANNELS unless every channel is closed, then takes over
-# channel 0 as a wildcard background-scan slave - the same mechanism
-# MESG_ASSIGN_CHANNEL's extended byte already reaches, one message at a time.
-# The optional synchronous-channel-packets-only byte is accepted and ignored;
-# reporting everything is a superset of the restricted subset. radiant backend
-# only - the capabilities reply advertises this on radiant and OFF elsewhere,
-# which is why a host with the call (ANT_OpenRxScanMode) sends it only there.
-# [bridge]
+# ANTW_CLOSE_ALL_CHANNELS unless every channel is closed, then opens channel 0
+# as a background-scan slave - the same mechanism MESG_ASSIGN_CHANNEL's
+# extended byte already reaches, one message at a time. Rev 5.1 sec 9.5.4.5
+# scans with channel 0 as the host assigned and configured it, so an assigned
+# channel 0 keeps its type, network, channel ID, RF and period across the
+# reassign (its ID list, low-priority timeout and search priority return to
+# defaults); a master channel 0 is refused with CHANNEL_IN_WRONG_STATE. An
+# unassigned channel 0 becomes a wildcard slave on network 0 at the default RF,
+# as before. The optional synchronous-channel-packets-only byte is accepted and
+# ignored; reporting everything is a superset of the restricted subset. radiant
+# backend only - the capabilities reply advertises this on radiant and OFF
+# elsewhere, which is why a host with the call (ANT_OpenRxScanMode) sends it
+# only there. [bridge]
 MESG_OPEN_RX_SCAN_MODE_ID = 0x5B
 
 # Legacy extended broadcast: channel id inline instead of behind a flag byte.
@@ -1566,7 +1571,7 @@ MESSAGES = {
         "payload_len": '1..2',
         "bridged": True,
         "reply": 'MESG_RESPONSE_EVENT_ID',
-        "desc": "Background scanning. Bridged as of 2026-08-10: refuses with ANTW_CLOSE_ALL_CHANNELS unless every channel is closed, then takes over channel 0 as a wildcard background-scan slave - the same mechanism MESG_ASSIGN_CHANNEL's extended byte already reaches, one message at a time. The optional synchronous-channel-packets-only byte is accepted and ignored; reporting everything is a superset of the restricted subset. radiant backend only - the capabilities reply advertises this on radiant and OFF elsewhere, which is why a host with the call (ANT_OpenRxScanMode) sends it only there.",
+        "desc": "Background scanning. Bridged as of 2026-08-10: refuses with ANTW_CLOSE_ALL_CHANNELS unless every channel is closed, then opens channel 0 as a background-scan slave - the same mechanism MESG_ASSIGN_CHANNEL's extended byte already reaches, one message at a time. Rev 5.1 sec 9.5.4.5 scans with channel 0 as the host assigned and configured it, so an assigned channel 0 keeps its type, network, channel ID, RF and period across the reassign (its ID list, low-priority timeout and search priority return to defaults); a master channel 0 is refused with CHANNEL_IN_WRONG_STATE. An unassigned channel 0 becomes a wildcard slave on network 0 at the default RF, as before. The optional synchronous-channel-packets-only byte is accepted and ignored; reporting everything is a superset of the restricted subset. radiant backend only - the capabilities reply advertises this on radiant and OFF elsewhere, which is why a host with the call (ANT_OpenRxScanMode) sends it only there.",
     },
     0x5D: {
         "name": 'MESG_EXT_BROADCAST_DATA_ID',

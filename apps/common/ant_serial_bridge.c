@@ -1004,12 +1004,32 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		 *
 		 * Real scan mode takes over the whole radio, requiring every
 		 * other channel closed first (else ANTW_CLOSE_ALL_CHANNELS).
-		 * Channel 0 is assigned as a wildcard background-scan slave via
+		 * Channel 0 becomes a background-scan slave via
 		 * MESG_ASSIGN_CHANNEL's extended byte (ANTW_EXT_PARAM_ALWAYS_
 		 * SEARCH) - the same call ZwiftApp.exe resolves.
+		 *
+		 * Rev 5.1 section 9.5.4.5: scan mode opens channel 0 as the host
+		 * already assigned and configured it. A host that set RF 57, a
+		 * network key slot and a device-type filter expects the scan to
+		 * use them. So when channel 0 is assigned, its type, network,
+		 * channel ID, RF and period are read back, the channel is
+		 * reassigned with the always-search bit, and the five are put
+		 * back. Re-assigning resets the rest to defaults: the ID list,
+		 * the low-priority timeout and the search priority are lost
+		 * (the antr_* API has no getters for them). A master channel 0
+		 * cannot scan and is refused. An unassigned channel 0 keeps
+		 * the old fallback: a wildcard slave on network 0, default RF.
 		 */
 		uint8_t status;
 		uint8_t i;
+		bool restore = false;
+		uint8_t saved_type = ANTW_CHANNEL_TYPE_SLAVE;
+		uint8_t saved_net = 0U;
+		uint16_t saved_dev = 0U;
+		uint8_t saved_dtype = 0U;
+		uint8_t saved_ttype = 0U;
+		uint8_t saved_rf = 0U;
+		uint16_t saved_period = 0U;
 
 		for (i = 0; i < CONFIG_ANT_TOTAL_CHANNELS_ALLOCATED; i++) {
 			if (antr_channel_status_get(i, &status) ==
@@ -1023,19 +1043,51 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 			return;
 		}
 
-		err = (antr_channel_status_get(0, &status) ==
-			       (antr_err_t)ANTW_RESPONSE_NO_ERROR &&
-		       (status & 0x03u) == ANTW_STATUS_ASSIGNED_CHANNEL)
-			      ? antr_channel_unassign(0)
-			      : (antr_err_t)ANTW_RESPONSE_NO_ERROR;
+		if (antr_channel_status_get(0, &status) ==
+			    (antr_err_t)ANTW_RESPONSE_NO_ERROR &&
+		    (status & 0x03u) == ANTW_STATUS_ASSIGNED_CHANNEL) {
+			saved_type = status & 0xF0u;
+			saved_net = (status >> 2) & 0x03u;
+			/* Every master type has bit 4 set (0x10, 0x30, 0x50). */
+			if ((saved_type & ANTW_CHANNEL_TYPE_MASTER) != 0U) {
+				send_response(0, msg_id,
+					      ANTW_CHANNEL_IN_WRONG_STATE);
+				return;
+			}
+			err = antr_channel_id_get(0, &saved_dev, &saved_dtype,
+						  &saved_ttype);
+			if (!err) {
+				err = antr_channel_radio_freq_get(0, &saved_rf);
+			}
+			if (!err) {
+				err = antr_channel_period_get(0, &saved_period);
+			}
+			if (!err) {
+				err = antr_channel_unassign(0);
+			}
+			restore = true;
+		} else {
+			err = (antr_err_t)ANTW_RESPONSE_NO_ERROR;
+		}
 		if (!err) {
-			err = antr_channel_assign(0, ANTW_CHANNEL_TYPE_SLAVE, 0,
+			err = antr_channel_assign(0, saved_type, saved_net,
 						  ANTW_EXT_PARAM_ALWAYS_SEARCH);
 		}
 		if (!err) {
-			err = antr_channel_id_set(0, 0, 0, 0);
+			err = antr_channel_id_set(0, saved_dev, saved_dtype,
+						  saved_ttype);
+		}
+		if (!err && restore) {
+			err = antr_channel_radio_freq_set(0, saved_rf);
+		}
+		if (!err && restore) {
+			err = antr_channel_period_set(0, saved_period);
 		}
 		if (!err) {
+			/* As the assign arm does: the power the host asked
+			 * for (or the boosted default) survives the reassign.
+			 */
+			tx_power_apply(0);
 			err = antr_channel_open(0);
 		}
 		send_response(0, msg_id, err ? err : ANTW_RESPONSE_NO_ERROR);

@@ -1065,6 +1065,18 @@ routes in from the wire. The first is ext-assign — the
 every channel is closed, then takes channel 0 through the same ext-assign path
 in one call instead of three.
 
+Since 2026-11-11 that reassign keeps the host's channel 0 setup, as Rev 5.1
+§9.5.4.5 requires ("opens an already assigned and configured channel 0"). The
+bridge reads back the type, network, channel ID, RF and period through the
+existing `antr_*` getters, reassigns with the always-search bit and writes the
+five back. Before, the scan ran as a wildcard slave on network 0 at RF 66, the
+power-on default, so a host that had set RF 57 and the ANT+ key found nothing.
+Three settings do not survive, because the backend-neutral API has no getter
+for them: the inclusion/exclusion ID list, the low-priority search timeout and
+the search priority. A master channel 0 is refused with
+`CHANNEL_IN_WRONG_STATE`, since a master cannot scan. An unassigned channel 0
+keeps the old wildcard fallback.
+
 This was a real gap until it was closed, not a hypothetical one:
 `archive/host-api/ant_dll_exports.json` records `ANT_OpenRxScanMode` as
 `"zwift_uses": true` — `ZwiftApp.exe` resolves it — and the capabilities reply
