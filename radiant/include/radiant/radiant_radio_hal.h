@@ -250,7 +250,8 @@ struct radiant_pkt_format {
  * wild_last below, which collapses the sweep to ONE set: the window matches
  * every address byte but the last, receives that byte as data, and reports
  * it in radiant_rx_event.wild_value (ADR 0022; the nRF backend does it with
- * the same short hardware match ADR 0019 uses for tracking). A backend that
+ * the same short hardware match ADR 0019 uses for tracking; cc26xx with a
+ * 16-bit sync word for every window). A backend that
  * does not set the cap never sees wild_last set.
  *
  * NOTE: that policy is about the 3-byte SEARCH format only. On the 5-byte
@@ -704,8 +705,8 @@ struct radiant_radio_caps {
 
 	/* True only if the backend honours radiant_rx_filter.wild_last, so one
 	 * filter matches every device number of the 3-byte search format. Set
-	 * by the nRF backend under CONFIG_RADIANT_SEARCH_SHORT_MATCH (ADR 0022)
-	 * and by nothing else; see struct radiant_rx_filter. */
+	 * by the nRF and cc26xx backends under CONFIG_RADIANT_SEARCH_SHORT_MATCH
+	 * (ADR 0022) and by nothing else; see struct radiant_rx_filter. */
 	bool filter_wildcard_dev;
 
 	/* Longest address the hardware matcher itself handles. Informational:
