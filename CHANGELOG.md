@@ -98,6 +98,10 @@ reads.
 
 ### Changed
 
+- **`conformance-cc26xx.antser` re-recorded on a CC2652R LaunchXL (2026-11-12)**
+  and compares equal to the nRF transcript again. It was the first hardware
+  check of the TI serial number: the reply carries the low four bytes of the
+  chip's factory IEEE MAC (FCFG1 `MAC_15_4_0`), confirmed by a JTAG read.
 - **The capabilities reply claims less.** Search sharing, selective data update and
   encrypted channel are no longer advertised (`advanced_options_3` 0xD5 to 0x05).
   Their commands are still accepted.

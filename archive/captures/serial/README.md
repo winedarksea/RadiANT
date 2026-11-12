@@ -4,13 +4,13 @@ Checked by: `tools/test_ant_golden.py`, which replays every `.antser` here in
 the CI `host-tests` job and re-hashes it against the summary of the same
 basename in `archive/benchmarks/`.
 
-**Status (2026-11-11): three conformance transcripts, all hashed. The two
-radiant ones differ until cc26xx is re-recorded on a CC2652 (see "The nRF
-re-record, 2026-11-11", and TODO.md for the expected diff).**
+**Status (2026-11-12): three conformance transcripts, all hashed. The two
+radiant ones compare equal again (`--compare` masks the serial bytes; see "The
+cc26xx re-record, 2026-11-12").**
 
 | File | Recorded from | Summary in `archive/benchmarks/`? |
 |---|---|---|
-| `conformance-cc26xx.antser` | CC2652P dongle over COM15, re-recorded 2026-08-21 | **yes** — `conformance-cc26xx.json`, added the same day |
+| `conformance-cc26xx.antser` | LAUNCHXL-CC26X2R1 (CC2652R) over the XDS110 backchannel at 57600, re-recorded 2026-11-12 (before that the CC2652P dongle, 2026-08-21) | **yes** — `conformance-cc26xx.json`, updated the same day |
 | `conformance-nrf-radiant.antser` | Pro Micro (nRF52840, `EE6986854FD72803`), `apps/dongle` over USB, re-recorded 2026-11-11 (before that the nRF54L15 DK over UART, originally an nRF52840) | **yes** — `conformance-nrf-radiant.json`, added the same day |
 | `conformance-sdk-ant.antser` | the sdk-ant build (the Tier 1 reference) | yes |
 
@@ -100,6 +100,30 @@ unbridged. Nothing else changed byte for byte. That includes 0x79 (its legacy
 2-byte form is what the cases send) and 0x6E (its replies are the same). `--compare`
 against the cc26xx transcript is positional, so it now also reports those
 ten inserted cases until cc26xx is re-recorded.
+
+**The cc26xx re-record, 2026-11-12.** Re-recorded on the LAUNCHXL-CC26X2R1
+(`apps/dongle_ti`, arm 1, master 412d379) over COM11 at 57600. Against the
+2026-08-21 CC2652P file the diff is exactly what the three nRF re-records above
+predicted:
+
+    4d-request-capabilities-0:  < a40954200300b22600d500019a -> < a40954200300ba260005000142
+    78-config-adv-burst/... capabilities:  < a4047803010000da -> < a4047803000000db
+    + 4d-request-get-serial-num-0/valid   < a4046107f9c626df      (serial 0x26C6F907)
+    + 4d-request-serial-num-ext-0/valid   < a405c607f9c6260079
+    + ten cases c5-sleep/* and c7-set-usb-descriptor-string/*, each refused
+      with INVALID_MESSAGE (0x28)
+
+`ant_conformance.py --compare conformance-nrf-radiant.antser
+conformance-cc26xx.antser` reports 0 differing records of 1319 and exits 0.
+
+This was also the first on-hardware check of the TI serial-number path. The
+serial is the low four bytes of the chip's IEEE MAC: hwinfo is built with
+`ALWAYS_USE_FACTORY_DEFAULT` and `USE_IEEE_MAC`, so it reads FCFG1
+`MAC_15_4_0` and ignores CCFG. A read-only DSS read of this chip gave
+`MAC_15_4_0 = 0x26C6F907`, `MAC_15_4_1 = 0x00124B00` (EUI-64
+00:12:4B:00:26:C6:F9:07, TI's OUI), with CCFG's `IEEE_MAC_0/1` erased, so the
+wire serial `07 f9 c6 26` (little-endian 0x26C6F907) is that word. As with the
+Pro Micro's, this transcript's hash is specific to this board.
 
 Where [`../radio/`](../radio/) records what went over the air, this records
 what went over USB: the `0xA4`-framed serial protocol, byte for byte, in both
