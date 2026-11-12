@@ -79,6 +79,7 @@ struct ev_rec {
 	enum radiant_transfer_event ev;
 	uint8_t                *block;
 	uint8_t                 block_len;
+	uint8_t                *staged_block;
 	enum radiant_transfer_fail  fail;
 	uint32_t                packets;
 };
@@ -106,6 +107,7 @@ static void on_done(void *ctx, const struct radiant_transfer_result *r)
 		evlog[n_ev].ev = r->ev;
 		evlog[n_ev].block = r->block;
 		evlog[n_ev].block_len = r->block_len;
+		evlog[n_ev].staged_block = r->staged_block;
 		evlog[n_ev].fail = r->fail;
 		evlog[n_ev].packets = r->packets;
 	}
@@ -415,7 +417,7 @@ static void air_the_ack(void)
 }
 
 /* The host's blocks, in the order the bridge would hand them over. */
-#define BLOCKS_MAX 4
+#define BLOCKS_MAX 8
 
 static uint8_t  blocks[BLOCKS_MAX][RADIANT_TRANSFER_BLOCK_MAX];
 static uint8_t  block_len[BLOCKS_MAX];
@@ -940,10 +942,15 @@ ZTEST(transfer, test_a_rejected_block_is_never_released)
 	zassert_equal(0u, n_ev, "a rejected block raised %u events", (unsigned)n_ev);
 	zassert_equal(0u, radiant_transfer_stats(&xfer)->blocks_accepted);
 
-	/* And mid-packet, which is the ANTW_TRANSFER_IN_PROGRESS the bridge
-	 * already knows how to answer with. */
+	/* And mid-packet with a block already staged, which is the
+	 * ANTW_TRANSFER_IN_PROGRESS the bridge already knows how to answer
+	 * with. (Since 2026-11-12 the FIRST mid-packet continuation is staged,
+	 * not refused - see test_staging_refuses_a_second_block_and_anything_
+	 * after_end - so one is staged here before the stray is tried.) */
+	queue_block(1u, 8u, RADIANT_TRANSFER_SEG_CONTINUE, 0x60u);
 	zassert_true(feed_next_block());
 	zassert_equal(RADIANT_TRANSFER_STATE_TX_DATA, radiant_transfer_state(&xfer));
+	zassert_true(feed_next_block(), "the first continuation was not staged");
 	zassert_equal(RADIANT_TRANSFER_EBUSY,
 		      radiant_transfer_burst_block(&xfer, stray, 8u,
 					       RADIANT_TRANSFER_SEG_CONTINUE,
@@ -959,12 +966,14 @@ ZTEST(transfer, test_a_rejected_block_is_never_released)
 	zassert_equal(RADIANT_TRANSFER_OK, radiant_transfer_abort(&xfer));
 
 	st = radiant_transfer_stats(&xfer);
-	zassert_equal(1u, st->blocks_accepted, "only the good block was accepted");
-	zassert_equal(1u, st->blocks_released);
+	zassert_equal(2u, st->blocks_accepted,
+		      "only the good block and the staged one were accepted");
+	zassert_equal(2u, st->blocks_released);
 	zassert_equal(1u, n_ev);
 	zassert_equal_ptr(blocks[0], evlog[0].block,
 		      "the released block must be the accepted one, never the "
 		      "rejected one");
+	zassert_equal_ptr(blocks[1], evlog[0].staged_block);
 
 	end_of_test();
 }
@@ -2412,5 +2421,211 @@ ZTEST(transfer, test_a_master_opens_the_slot_on_the_first_packet_only)
 			"acknowledged data transfers no buffer ownership");
 
 	engine_b = NULL;
+	end_of_test();
+}
+
+/* ---------------------------------------------------------------------------
+ * Pre-staged continuation blocks (2026-11-12)
+ *
+ * The next burst block may be submitted while the one before it is still on
+ * the air. The engine holds it and chains it from the acknowledgement's own
+ * callback, so a block boundary never waits for the host's round trip - which
+ * on the cc26xx (600 us arm lead) did not fit in the 1550 us gap.
+ * ---------------------------------------------------------------------------
+ */
+
+/* Like drive(), but the host keeps one block staged at all times: whenever
+ * the engine is mid-block with nothing staged, the next block goes in. Returns
+ * true if the engine ever had to wait for a block. */
+static bool drive_staged(void)
+{
+	uint32_t acked_tx = 0u;
+	bool waited = false;
+
+	for (uint32_t guard = 0u; guard < 400u; guard++) {
+		enum radiant_transfer_state st = radiant_transfer_state(&xfer);
+
+		if (st == RADIANT_TRANSFER_STATE_IDLE) {
+			return waited;
+		}
+		if (st == RADIANT_TRANSFER_STATE_WAIT_BLOCK) {
+			waited = true;
+			if (!feed_next_block()) {
+				(void)radiant_transfer_abort(&xfer);
+				return waited;
+			}
+			continue;
+		}
+		if ((st == RADIANT_TRANSFER_STATE_TX_DATA ||
+		     st == RADIANT_TRANSFER_STATE_WAIT_ACK) &&
+		    xfer.staged == NULL && next_block < n_blocks) {
+			zassert_true(feed_next_block(),
+				     "block %u was refused while one was in flight",
+				     (unsigned)next_block);
+		}
+		if (st == RADIANT_TRANSFER_STATE_WAIT_ACK &&
+		    fake_radio_stats()->arms_tx != acked_tx) {
+			acked_tx = fake_radio_stats()->arms_tx;
+			if (acks_to_air > 0u) {
+				acks_to_air--;
+				air_the_ack();
+			}
+		}
+		if (!fake_radio_step()) {
+			return waited;
+		}
+	}
+	zassert_unreachable("the exchange did not converge in 400 steps");
+	return waited;
+}
+
+/* Eight back-to-back 8-byte blocks, the bench case: every block after the
+ * first is staged, every packet leaves on the same grid from the
+ * acknowledgement callback, and each block is still released exactly once. */
+ZTEST(transfer, test_staged_blocks_chain_at_ack_plus_1550_with_no_host_hop)
+{
+	const struct radiant_transfer_stats *st;
+	radiant_time_t t[8];
+	uint32_t n_tx = 0u;
+
+	reset_blocks();
+	for (uint32_t i = 0u; i < 8u; i++) {
+		queue_block(i, 8u,
+			    i == 0u ? RADIANT_TRANSFER_SEG_START
+			    : i == 7u ? RADIANT_TRANSFER_SEG_END
+				      : RADIANT_TRANSFER_SEG_CONTINUE,
+			    (uint8_t)(0x10u * (i + 1u)));
+	}
+	zassert_true(feed_next_block());
+	zassert_false(drive_staged(),
+		      "the engine waited in WAIT_BLOCK although the next block "
+		      "was always staged");
+
+	zassert_equal(8u, n_ev, "events: %u", (unsigned)n_ev);
+	for (uint32_t i = 0u; i < 7u; i++) {
+		zassert_equal(RADIANT_TRANSFER_EV_NEXT_BLOCK, evlog[i].ev);
+		zassert_equal_ptr(blocks[i], evlog[i].block,
+				  "release %u carried the wrong block", i);
+		zassert_is_null(evlog[i].staged_block);
+	}
+	zassert_equal(RADIANT_TRANSFER_EV_TX_COMPLETED, evlog[7].ev);
+	zassert_equal_ptr(blocks[7], evlog[7].block);
+	zassert_is_null(evlog[7].staged_block);
+
+	st = radiant_transfer_stats(&xfer);
+	zassert_equal(8u, st->blocks_accepted);
+	zassert_equal(7u, st->blocks_staged);
+	zassert_equal(8u, st->blocks_released);
+	zassert_equal(8u, st->packets_sent);
+
+	/* Same spacing between every pair of packets: each was armed from its
+	 * predecessor's acknowledgement at ack t_sync + NEXT_PACKET_US. */
+	for (uint32_t i = 0u; i < fake_radio_arm_count() && n_tx < 8u; i++) {
+		const struct fake_radio_arm *a = fake_radio_arm(i);
+
+		if (a != NULL && a->kind == FAKE_RADIO_ARM_TX &&
+		    a->rc == RADIANT_RADIO_OK_RC) {
+			t[n_tx++] = a->t_sync_at;
+		}
+	}
+	zassert_equal(8u, n_tx);
+	for (uint32_t i = 2u; i < 8u; i++) {
+		zassert_equal(t[1] - t[0], t[i] - t[i - 1u],
+			      "packet %u is %d us after its predecessor, not %d",
+			      i, (int)(t[i] - t[i - 1u]), (int)(t[1] - t[0]));
+	}
+	end_of_test();
+}
+
+/* Only one block may be staged, and never behind the END block. */
+ZTEST(transfer, test_staging_refuses_a_second_block_and_anything_after_end)
+{
+	reset_blocks();
+	queue_block(0u, 8u, RADIANT_TRANSFER_SEG_START, 0x10u);
+	queue_block(1u, 8u, RADIANT_TRANSFER_SEG_CONTINUE, 0x20u);
+	queue_block(2u, 8u, RADIANT_TRANSFER_SEG_END, 0x30u);
+
+	zassert_true(feed_next_block());
+	zassert_true(feed_next_block(), "the first continuation was not staged");
+	zassert_equal(RADIANT_TRANSFER_EBUSY,
+		      radiant_transfer_burst_block(&xfer, blocks[2], 8u,
+						   RADIANT_TRANSFER_SEG_END,
+						   RADIANT_TIME_NEVER),
+		      "a second block was staged behind the first");
+	(void)radiant_transfer_abort(&xfer);
+	while (fake_radio_step()) {
+	}
+
+	/* A single START|END block: nothing may follow it. */
+	reset_blocks();
+	memset(evlog, 0, sizeof(evlog));
+	n_ev = 0u;
+	queue_block(0u, 8u, RADIANT_TRANSFER_SEG_START | RADIANT_TRANSFER_SEG_END,
+		    0x40u);
+	queue_block(1u, 8u, RADIANT_TRANSFER_SEG_END, 0x50u);
+	zassert_true(feed_next_block());
+	zassert_equal(RADIANT_TRANSFER_EBUSY,
+		      radiant_transfer_burst_block(&xfer, blocks[1], 8u,
+						   RADIANT_TRANSFER_SEG_END,
+						   RADIANT_TIME_NEVER),
+		      "a block was staged behind the END block");
+	(void)radiant_transfer_abort(&xfer);
+	while (fake_radio_step()) {
+	}
+	end_of_test();
+}
+
+/* Abort mid-burst with a block staged: ONE terminal, carrying both blocks. */
+ZTEST(transfer, test_abort_mid_burst_releases_the_staged_block_too)
+{
+	const struct radiant_transfer_stats *st;
+
+	reset_blocks();
+	queue_block(0u, 8u, RADIANT_TRANSFER_SEG_START, 0x10u);
+	queue_block(1u, 8u, RADIANT_TRANSFER_SEG_CONTINUE, 0x20u);
+	zassert_true(feed_next_block());
+	zassert_true(feed_next_block());
+
+	zassert_equal(RADIANT_TRANSFER_OK, radiant_transfer_abort(&xfer));
+	for (uint32_t guard = 0u; guard < 50u && fake_radio_step(); guard++) {
+	}
+
+	zassert_equal(1u, n_ev, "events: %u", (unsigned)n_ev);
+	zassert_equal(RADIANT_TRANSFER_EV_TX_FAILED, evlog[0].ev);
+	zassert_equal(RADIANT_TRANSFER_FAIL_ABORTED, evlog[0].fail);
+	zassert_equal_ptr(blocks[0], evlog[0].block);
+	zassert_equal_ptr(blocks[1], evlog[0].staged_block,
+			  "the staged block was not handed back");
+	st = radiant_transfer_stats(&xfer);
+	zassert_equal(st->blocks_accepted, st->blocks_released,
+		      "accepted %u, released %u", st->blocks_accepted,
+		      st->blocks_released);
+	zassert_true(radiant_transfer_is_idle(&xfer));
+	end_of_test();
+}
+
+/* No acknowledgement at all: exactly one TX_FAILED, NO_ACK, and it releases
+ * the staged block as well as the one in flight. */
+ZTEST(transfer, test_a_failed_transfer_releases_the_staged_block_once)
+{
+	const struct radiant_transfer_stats *st;
+
+	reset_blocks();
+	queue_block(0u, 8u, RADIANT_TRANSFER_SEG_START, 0x10u);
+	queue_block(1u, 8u, RADIANT_TRANSFER_SEG_CONTINUE, 0x20u);
+	queue_block(2u, 8u, RADIANT_TRANSFER_SEG_END, 0x30u);
+	acks_to_air = 0u;
+	zassert_true(feed_next_block());
+	(void)drive_staged();
+
+	zassert_equal(1u, n_ev, "events: %u", (unsigned)n_ev);
+	zassert_equal(RADIANT_TRANSFER_EV_TX_FAILED, evlog[0].ev);
+	zassert_equal(RADIANT_TRANSFER_FAIL_NO_ACK, evlog[0].fail);
+	zassert_equal_ptr(blocks[0], evlog[0].block);
+	zassert_equal_ptr(blocks[1], evlog[0].staged_block);
+	st = radiant_transfer_stats(&xfer);
+	zassert_equal(2u, st->blocks_accepted);
+	zassert_equal(2u, st->blocks_released);
+	zassert_equal(1u, st->transfers_failed);
 	end_of_test();
 }

@@ -73,8 +73,9 @@ min_scenarios: 15
 # 4605 on ti/findings-2026-11-12 (Bluefin twister, 2026-11-12): the two
 # bidirectional-scan cases in each api scenario, two cc26xx-shaped
 # addr_split cases in each unit scenario, and the radiant.api.diag scenario
-# (ADR 0023; the api suite plus four 0xF7 cases).
-min_testcases: 4605
+# (ADR 0023; the api suite plus four 0xF7 cases). 4621 with four burst
+# pre-staging cases in each unit scenario.
+min_testcases: 4621
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -89,9 +90,9 @@ min_testcases: 4605
 # above. The earlier values were nRF5340 DK counts minus about 1%, plus static
 # counts. A floor equal to the observed count still fails only when coverage
 # goes down, which is the event it exists to catch.
-min_cases.radiant.unit: 1018
-min_cases.radiant.unit.sec_modes: 1018
-min_cases.radiant.unit.no_pairing: 966
+min_cases.radiant.unit: 1022
+min_cases.radiant.unit.sec_modes: 1022
+min_cases.radiant.unit.no_pairing: 970
 min_cases.radiant.api: 86
 min_cases.radiant.api.sec: 89
 min_cases.radiant.api.sec_host: 102
@@ -106,5 +107,5 @@ min_cases.radiant.backend: 8
 min_cases.hrm_ble.sim_sched: 4
 min_cases.treadmill.pages: 20
 min_cases.treadmill.hr_rx: 3
-min_cases.radiant.unit.ack_faults: 1025
+min_cases.radiant.unit.ack_faults: 1029
 min_cases.trainer.model: 14
