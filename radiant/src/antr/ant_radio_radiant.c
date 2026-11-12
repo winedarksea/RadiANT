@@ -315,6 +315,13 @@ struct api_chan {
 	uint8_t bcast[ANTW_ANT_MAX_PAYLOAD_SIZE];
 	bool    bcast_valid;
 	bool    bcast_pending;
+	/* Which host write is pending, and which one the frame now going out
+	 * carries: bumped on every antr_broadcast_message_tx(), copied when a
+	 * frame's payload is snapshotted. A completion clears bcast_pending
+	 * only if no newer write landed between the two, or that write would
+	 * be lost (review 2026-11-09). */
+	uint8_t bcast_gen;
+	uint8_t bcast_gen_tx;
 	/* The last data packet this master put on the air, acknowledged or
 	 * burst, copied as plaintext from the engine's block (never from the
 	 * encoded tx_body). Rev 5.1 p.109: after a transfer the master's next
@@ -1303,6 +1310,7 @@ static void api_post_slave_bcast(uint8_t ch, radiant_time_t t_sync)
 
 	key = radiant_event_crit_enter();
 	memcpy(pay, api_ch[ch].bcast, sizeof(pay));
+	api_ch[ch].bcast_gen_tx = api_ch[ch].bcast_gen;
 	radiant_event_crit_exit(key);
 
 	/* All flags clear: 0x02. radiant_frame_make() refuses it unless it is
@@ -2046,6 +2054,7 @@ static void api_post_master_tx(uint8_t ch)
 
 		memcpy(pay, api_ch[ch].last_tx_newer ? api_ch[ch].last_tx :
 			    api_ch[ch].bcast, sizeof(pay));
+		api_ch[ch].bcast_gen_tx = api_ch[ch].bcast_gen;
 		radiant_event_crit_exit(key);
 	}
 
@@ -2591,7 +2600,11 @@ static void api_sched_tx(uint8_t ch, const struct radiant_tx_event *evt, void *u
 	 * from api_sched_done(). */
 	if (!radiant_channel_is_master(ch)) {
 		if (evt->status == RADIANT_RADIO_STATUS_OK) {
-			api_ch[ch].bcast_pending = false;
+			/* A write that landed after the snapshot is still
+			 * pending: it goes out on the next master frame. */
+			if (api_ch[ch].bcast_gen_tx == api_ch[ch].bcast_gen) {
+				api_ch[ch].bcast_pending = false;
+			}
 			api_stats.slave_bcast_sent++;
 			(void)radiant_event_post_channel_event(ch,
 							       (uint8_t)ANTW_EVENT_TX);
@@ -2603,7 +2616,9 @@ static void api_sched_tx(uint8_t ch, const struct radiant_tx_event *evt, void *u
 	/* Our own broadcast went out. EVENT_TX is the outcome; broadcast is
 	 * unacknowledged by design so there's no failure event. */
 	api_ch[ch].slot_heard = true;
-	api_ch[ch].bcast_pending = false;
+	if (api_ch[ch].bcast_gen_tx == api_ch[ch].bcast_gen) {
+		api_ch[ch].bcast_pending = false;
+	}
 	radiant_channel_on_slot(ch, evt->t_sync);
 	(void)radiant_event_post_channel_event(ch, (uint8_t)ANTW_EVENT_TX);
 
@@ -4279,6 +4294,7 @@ antr_err_t antr_broadcast_message_tx(uint8_t channel, uint8_t size,
 	memcpy(api_ch[channel].bcast, data, ANTW_ANT_MAX_PAYLOAD_SIZE);
 	api_ch[channel].bcast_valid = true;
 	api_ch[channel].bcast_pending = true;
+	api_ch[channel].bcast_gen++;
 	/* A host write supersedes the repeat of the last transfer packet. */
 	api_ch[channel].last_tx_newer = false;
 	radiant_event_crit_exit(key);

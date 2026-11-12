@@ -5139,6 +5139,95 @@ ZTEST(api, test_a_slave_broadcast_goes_out_once_in_the_masters_reply_window)
 	end_of_test();
 }
 
+/*
+ * Review 2026-11-09: a write that lands between the reply's snapshot and its
+ * completion. The completion used to clear bcast_pending whatever had been
+ * written since, so the second write was silently dropped: never sent, and
+ * antr_pending_transmit_get() said nothing was waiting.
+ */
+ZTEST(api, test_a_slave_broadcast_written_mid_reply_still_goes_out)
+{
+	static const uint8_t page_a[8] = {
+		0x5Bu, 0x00u, 0xA5u, 0x5Au, 0x01u, 0x02u, 0x03u, 0x04u
+	};
+	static const uint8_t page_b[8] = {
+		0x5Bu, 0x01u, 0xB6u, 0x6Bu, 0x05u, 0x06u, 0x07u, 0x08u
+	};
+	uint8_t                      buf[8];
+	uint16_t                     dev;
+	const struct fake_radio_arm *w;
+	const struct fake_radio_arm *tx;
+	radiant_time_t               t_master;
+	uint8_t                      pending = 0xFFu;
+
+	open_and_acquire_slave_of_type((uint8_t)ANTW_CHANNEL_TYPE_SLAVE, &dev);
+	run_housekeeping();
+
+	memcpy(buf, page_a, sizeof(buf));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_broadcast_message_tx(CH, 8u, buf));
+	drain();
+	n_msg = 0u;
+
+	if (fake_radio_is_idle()) {
+		run_housekeeping();
+	}
+	w = last_arm_of(FAKE_RADIO_ARM_RX);
+	zassert_not_null(w, "no tracked window armed");
+	zassert_false(w->terminated);
+	t_master = w->t_open + ((w->t_close - w->t_open) / 2u);
+	air_tracked_frame(w, dev);
+
+	/* The master's frame is received and the reply posted with A, but the
+	 * reply has not gone out yet. */
+	fake_radio_advance_to(t_master + 1000u);
+	drain();
+	tx = last_tx_with_ctrl(RADIANT_CTRL_SLAVE_BROADCAST);
+	zassert_not_null(tx, "setup: the reply was not posted on reception");
+	zassert_false(tx->terminated, "setup: the reply already went out");
+	zassert_true(t_master + 1000u < tx->t_sync_at,
+		     "setup: the reply is not still ahead");
+
+	/* B, in that gap. */
+	memcpy(buf, page_b, sizeof(buf));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_broadcast_message_tx(CH, 8u, buf));
+	drain();
+
+	fake_radio_advance_to(t_master + RADIANT_TRANSFER_SLOT_REPLY_US + 1000u);
+	drain();
+	tx = last_tx_with_ctrl(RADIANT_CTRL_SLAVE_BROADCAST);
+	zassert_not_null(tx);
+	zassert_mem_equal(&tx->body[BODY_D0], page_a, 8u,
+			  "the reply in flight did not carry A");
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TX));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_pending_transmit_get(CH, &pending));
+	zassert_equal(1u, pending,
+		      "B was cleared by A's completion: it will never go out");
+
+	/* The next master frame carries B. */
+	if (fake_radio_is_idle()) {
+		run_housekeeping();
+	}
+	w = last_arm_of(FAKE_RADIO_ARM_RX);
+	zassert_not_null(w);
+	air_tracked_frame(w, dev);
+	fake_radio_advance_to(w->t_close + RADIANT_TRANSFER_SLOT_REPLY_US + 1000u);
+	drain();
+	zassert_equal(2u, count_tx_with_ctrl(RADIANT_CTRL_SLAVE_BROADCAST),
+		      "B never went out");
+	tx = last_tx_with_ctrl(RADIANT_CTRL_SLAVE_BROADCAST);
+	zassert_mem_equal(&tx->body[BODY_D0], page_b, 8u,
+			  "the second reply did not carry B");
+	zassert_equal(2u, count_channel_events(CH, ANTW_EVENT_TX));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_pending_transmit_get(CH, &pending));
+	zassert_equal(0u, pending, "B is still pending after it went out");
+
+	end_of_test();
+}
+
 /* An RX-only slave never transmits its broadcast buffer. */
 ZTEST(api, test_an_rx_only_slave_never_transmits_a_broadcast)
 {
