@@ -62,6 +62,12 @@ rsource "../common/Kconfig.activity"
 # sleeps.
 rsource "../common/Kconfig.heartbeat_led"
 
+# CONFIG_ANT_DONGLE_HEALTH_COUNTERS: the 0xF6 reply, off by default as in
+# apps/dongle. Over this UART tx_drops, tx_high_water and rx_backpressure are
+# structurally zero (tools/ant_health.py says so); the scheduler counters are
+# what this board can report.
+rsource "../common/Kconfig.health"
+
 choice ANT_DONGLE_RADIO
 	prompt "ANT radio backend"
 	default ANT_DONGLE_RADIO_CORE
