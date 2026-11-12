@@ -61,6 +61,8 @@
 
 #include <radiant/radiant_radio_hal.h>
 
+#include <radiant/radiant_diag.h>
+
 #include "radiant_addr_split.h"
 /* RADIANT_CC26XX_PRIO_* is used unconditionally below (post_op()'s non-coex
  * arm ignores the value but every call site still computes it); the
@@ -554,6 +556,35 @@ BUILD_ASSERT(CC26XX_HW_ADDR_LEN >= 2u &&
 static uint8_t rx_data[RX_ENTRIES][RX_ROW_BYTES] __aligned(4);
 static dataQueue_t rx_queue;
 static rfc_propRxOutput_t rx_output;
+
+/*
+ * The 0xF7 backend page (ADR 0023), CONFIG_RADIANT_DIAG_COUNTERS only. Every
+ * CC_DIAG() site below is an empty statement without it. rx_output is cleared
+ * at each arm, so its counts are folded into rxo_* first (and the window still
+ * running is added at read time).
+ */
+#if defined(CONFIG_RADIANT_DIAG_COUNTERS)
+static struct {
+	uint32_t rx_posted, rx_refused;
+	uint32_t term_ok, term_empty, term_error;
+	uint32_t status_err, status_last;
+	uint32_t window_drops, crc_fail, alt_sync_hits;
+	uint32_t rxo_nok, rxo_buf_full;
+	uint32_t drain_max_us;
+	uint32_t min_lead_us;
+	uint32_t win_frames;   /* OK frames in the window now open */
+	bool     lead_seen;
+} cc_diag;
+#define CC_DIAG(...) do { __VA_ARGS__; } while (0)
+
+static void cc_diag_fold_rx_output(void)
+{
+	cc_diag.rxo_nok += (uint32_t)rx_output.nRxNok + rx_output.nRxIgnored;
+	cc_diag.rxo_buf_full += rx_output.nRxBufFull;
+}
+#else
+#define CC_DIAG(...) do { } while (0)
+#endif
 
 /*
  * The read cursor is software's, not rx_queue.pCurrEntry: that field is
@@ -1180,6 +1211,16 @@ static void deliver_rx_terminal(enum radiant_radio_status status)
 	st.delivered_terminal = true;
 	st.kind = OP_NONE;
 
+	CC_DIAG(if (status == RADIANT_RADIO_STATUS_TIMEOUT) {
+			if (cc_diag.win_frames != 0u) {
+				cc_diag.term_ok++;
+			} else {
+				cc_diag.term_empty++;
+			}
+		} else {
+			cc_diag.term_error++;
+		});
+
 	if (st.cbs != NULL && st.cbs->rx != NULL) {
 		st.cbs->rx(&evt, st.user);
 	}
@@ -1318,7 +1359,7 @@ static radiant_time_t rx_t_sync(uint32_t rat)
 	       (radiant_time_t)T_SYNC_CAL_US;
 }
 
-static void rx_drain(void)
+static void rx_drain_entries(void)
 {
 	for (;;) {
 		rfc_dataEntryGeneral_t *e =
@@ -1356,6 +1397,12 @@ static void rx_drain(void)
 
 		idx = rx_match(status.status.syncWordId, p);
 		radiant_cc26xx_sync_frames++;
+		/* The decoy (one group: syncWord1 is syncWord0 with a byte
+		 * inverted, see radiant_radio_rx()) is meant never to fire. */
+		CC_DIAG(if (status.status.syncWordId == 1u &&
+			    st.sync_group[1] == st.sync_group[0]) {
+				cc_diag.alt_sync_hits++;
+			});
 
 		/* No per-frame tracing here deliberately: a LOG_DBG per frame
 		 * would block in the RF driver's callback context and, on the
@@ -1397,6 +1444,7 @@ static void rx_drain(void)
 		 * and address airtime.
 		 */
 		if (evt.t_sync < st.t_open || evt.t_sync > st.t_close) {
+			CC_DIAG(cc_diag.window_drops++);
 			goto next;
 		}
 
@@ -1431,6 +1479,7 @@ static void rx_drain(void)
 			evt.crc_rx = want;
 
 				if (got != want) {
+				CC_DIAG(cc_diag.crc_fail++);
 				if ((st.flags & RADIANT_RX_REPORT_CRC_FAIL) == 0u) {
 					goto next;
 				}
@@ -1468,12 +1517,17 @@ static void rx_drain(void)
 			st.kind = OP_NONE;
 			st.retired_handle = st.cmd_handle;
 			RF_cancelCmd(st.rf_handle, st.cmd_handle, 0);
+			/* This frame is the window's terminal too. */
+			CC_DIAG(cc_diag.win_frames++; cc_diag.term_ok++);
 			if (st.cbs != NULL && st.cbs->rx != NULL) {
 				st.cbs->rx(&evt, st.user);
 			}
 			return;
 		}
 
+		CC_DIAG(if (evt.status == RADIANT_RADIO_STATUS_OK) {
+				cc_diag.win_frames++;
+			});
 		if (st.cbs != NULL && st.cbs->rx != NULL) {
 			st.cbs->rx(&evt, st.user);
 		}
@@ -1482,6 +1536,24 @@ next:
 		e->status = DATA_ENTRY_PENDING;
 		rx_read = (uint8_t)((rx_read + 1u) % RX_ENTRIES);
 	}
+}
+
+/* rx_drain_entries(), timed for the 0xF7 backend page: the longest drain is
+ * part of the turnaround a chained transmit has to fit inside. */
+static void rx_drain(void)
+{
+#if defined(CONFIG_RADIANT_DIAG_COUNTERS)
+	uint32_t t0 = rat_raw();
+	uint32_t us;
+
+	rx_drain_entries();
+	us = (rat_raw() - t0) / RAT_TICKS_PER_US;
+	if (us > cc_diag.drain_max_us) {
+		cc_diag.drain_max_us = us;
+	}
+#else
+	rx_drain_entries();
+#endif
 }
 
 #define TERMINAL_EVENTS (RF_EventLastCmdDone | RF_EventCmdAborted | \
@@ -1532,10 +1604,12 @@ static void rf_callback(RF_Handle h, RF_CmdHandle ch, RF_EventMask events)
 	 * ERROR_PAST_START.
 	 */
 	if (st.kind == OP_RX && rx_cmd.status >= 0x3800u) {
+		CC_DIAG(cc_diag.status_err++; cc_diag.status_last = rx_cmd.status);
 		LOG_WRN("rx cmd ended status=0x%04x (start=%u end=%u sw0=%08x)",
 			rx_cmd.status, rx_cmd.startTime, rx_cmd.endTime,
 			rx_cmd.syncWord0);
 	} else if (st.kind == OP_TX && tx_cmd.status >= 0x3800u) {
+		CC_DIAG(cc_diag.status_err++; cc_diag.status_last = tx_cmd.status);
 		LOG_WRN("tx cmd ended status=0x%04x (start=%u)",
 			tx_cmd.status, tx_cmd.startTime);
 	}
@@ -1734,6 +1808,16 @@ static int arm_common(const struct radiant_pkt_format *fmt, radiant_time_t at)
 	if (at == RADIANT_TIME_NEVER) {
 		return RADIANT_RADIO_EINVAL;
 	}
+	CC_DIAG({
+		radiant_time_t now = now_us();
+		uint32_t lead = (at > now) ? (uint32_t)MIN(at - now, UINT32_MAX - 1u)
+					   : 0u;
+
+		if (!cc_diag.lead_seen || lead < cc_diag.min_lead_us) {
+			cc_diag.min_lead_us = lead;
+			cc_diag.lead_seen = true;
+		}
+	});
 	if (at < now_us() + ARM_FLOOR_US) {
 		return RADIANT_RADIO_ETIME;
 	}
@@ -1741,7 +1825,7 @@ static int arm_common(const struct radiant_pkt_format *fmt, radiant_time_t at)
 	return RADIANT_RADIO_OK_RC;
 }
 
-int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
+static int rx_arm(const struct radiant_rx_req *req, uint32_t *op)
 {
 	uint32_t start_rat;
 	uint32_t end_rat;
@@ -1901,6 +1985,7 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 	rx_cmd.endTime = end_rat;
 
 	rx_queue_init();
+	CC_DIAG(cc_diag_fold_rx_output(); cc_diag.win_frames = 0u);
 	memset(&rx_output, 0, sizeof(rx_output));
 
 	st.kind = OP_RX;
@@ -1948,6 +2033,18 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 	*op = st.op_id;
 
 	return RADIANT_RADIO_OK_RC;
+}
+
+int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
+{
+	int rc = rx_arm(req, op);
+
+	CC_DIAG(if (rc == RADIANT_RADIO_OK_RC) {
+			cc_diag.rx_posted++;
+		} else {
+			cc_diag.rx_refused++;
+		});
+	return rc;
 }
 
 int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
@@ -2108,3 +2205,34 @@ int radiant_radio_abort(void)
 
 	return RADIANT_RADIO_OK_RC;
 }
+
+#if defined(CONFIG_RADIANT_DIAG_COUNTERS)
+uint8_t radiant_radio_diag_get(struct radiant_radio_diag *out)
+{
+	unsigned int key = irq_lock();
+
+	out->v[RADIANT_RADIO_DIAG_RX_POSTED] = cc_diag.rx_posted;
+	out->v[RADIANT_RADIO_DIAG_RX_REFUSED] = cc_diag.rx_refused;
+	out->v[RADIANT_RADIO_DIAG_TERM_OK] = cc_diag.term_ok;
+	out->v[RADIANT_RADIO_DIAG_TERM_EMPTY] = cc_diag.term_empty;
+	out->v[RADIANT_RADIO_DIAG_TERM_ERROR] = cc_diag.term_error;
+	out->v[RADIANT_RADIO_DIAG_STATUS_ERR] = cc_diag.status_err;
+	out->v[RADIANT_RADIO_DIAG_STATUS_LAST] = cc_diag.status_last;
+	out->v[RADIANT_RADIO_DIAG_SYNC_ENTRIES] = radiant_cc26xx_sync_frames;
+	out->v[RADIANT_RADIO_DIAG_SW_ADDR_MISMATCH] = radiant_cc26xx_sw_addr_mismatch;
+	out->v[RADIANT_RADIO_DIAG_WINDOW_DROPS] = cc_diag.window_drops;
+	out->v[RADIANT_RADIO_DIAG_CRC_FAIL] = cc_diag.crc_fail;
+	out->v[RADIANT_RADIO_DIAG_ALT_SYNC_HITS] = cc_diag.alt_sync_hits;
+	/* The window still running is not folded yet. */
+	out->v[RADIANT_RADIO_DIAG_RX_NOK] = cc_diag.rxo_nok +
+		(uint32_t)rx_output.nRxNok + rx_output.nRxIgnored;
+	out->v[RADIANT_RADIO_DIAG_RX_BUF_FULL] = cc_diag.rxo_buf_full +
+		rx_output.nRxBufFull;
+	out->v[RADIANT_RADIO_DIAG_DRAIN_MAX_US] = cc_diag.drain_max_us;
+	out->v[RADIANT_RADIO_DIAG_MIN_LEAD_US] = cc_diag.lead_seen
+		? cc_diag.min_lead_us : RADIANT_DIAG_NOT_MEASURED;
+	irq_unlock(key);
+
+	return RADIANT_DIAG_BACKEND_CC26XX;
+}
+#endif /* CONFIG_RADIANT_DIAG_COUNTERS */

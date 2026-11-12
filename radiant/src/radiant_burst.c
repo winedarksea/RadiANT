@@ -56,6 +56,7 @@
 
 #include <radiant/radiant_transfer.h>
 #include <radiant/radiant_event.h>
+#include <radiant/radiant_diag.h>
 
 /* ---------------------------------------------------------------------------
  * Small helpers
@@ -548,7 +549,16 @@ int radiant_transfer_submit(struct radiant_transfer *t, uint8_t *block, uint8_t 
 				      (radiant_time_t)t->min_lead_us +
 				      (radiant_time_t)RADIANT_TRANSFER_ARM_SLACK_US;
 
+		RADIANT_DIAG_INC(cont_submits);
+		/* Host turnaround: the acknowledgement that asked for this
+		 * block (next_t_sync - NEXT_PACKET_US) to its arrival here. */
+		if (t->next_t_sync != RADIANT_TIME_NEVER) {
+			RADIANT_DIAG_TURN(radiant_radio_now() -
+					  (t->next_t_sync -
+					   (radiant_time_t)RADIANT_TRANSFER_NEXT_PACKET_US));
+		}
 		if (when < earliest) {
+			RADIANT_DIAG_INC(cont_late);
 			when = earliest;
 		}
 	}

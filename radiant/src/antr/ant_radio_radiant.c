@@ -70,6 +70,7 @@
 #include "ant_radio_radiant_priv.h"
 #include <radiant/radiant_channel.h>
 #include <radiant/radiant_crc_repair.h>
+#include <radiant/radiant_diag.h>
 #include <radiant/radiant_event.h>
 #include <radiant/radiant_frame.h>
 #include <radiant/radiant_noise.h>
@@ -1948,6 +1949,7 @@ static void api_post_master_rx(uint8_t ch, radiant_time_t t_sync)
 	int                       n;
 
 	if (radiant_channel_id_get(ch, &id) != RADIANT_CH_OK) {
+		RADIANT_DIAG_INC(mrx_skipped);
 		return;
 	}
 
@@ -1955,6 +1957,7 @@ static void api_post_master_rx(uint8_t ch, radiant_time_t t_sync)
 			   api_ch[ch].filter.addr,
 			   sizeof(api_ch[ch].filter.addr));
 	if (n < 0) {
+		RADIANT_DIAG_INC(mrx_skipped);
 		return;
 	}
 	api_ch[ch].filter.addr_len = (uint8_t)n;
@@ -1994,9 +1997,11 @@ static void api_post_master_rx(uint8_t ch, radiant_time_t t_sync)
 	req.follow_on_us = API_FOLLOW_ON_MASTER_RX_US;
 
 	if (radiant_sched_request_rx(ch, &req) != RADIANT_RADIO_OK_RC) {
+		RADIANT_DIAG_INC(mrx_refused);
 		api_bind_rejected(ch);
 		return;
 	}
+	RADIANT_DIAG_INC(mrx_posted);
 	api_bind_accepted(ch, API_SLOT_MASTER_RX);
 }
 
@@ -2478,6 +2483,10 @@ static void api_sched_rx(uint8_t ch, uint8_t filter_index,
 	}
 
 	api_stats.rx_sched_events++;
+	if (api_ch[ch].slot_kind == (uint8_t)API_SLOT_MASTER_RX &&
+	    evt->status == RADIANT_RADIO_STATUS_OK) {
+		RADIANT_DIAG_INC(mrx_frames);
+	}
 
 	if (api_ch[ch].slot_kind == (uint8_t)API_SLOT_SEARCH) {
 		/* radiant_search_on_rx_indexed(), never the plain form: a merged
@@ -2755,6 +2764,15 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 		 * FAILED for the transfer engine, so this is the one point the
 		 * distinction survives. */
 		api_stats.sched_denied++;
+	}
+	if (api_ch[ch].slot_kind == (uint8_t)API_SLOT_MASTER_RX) {
+		if (why == RADIANT_SCHED_DONE_OK) {
+			RADIANT_DIAG_INC(mrx_done_ok);
+		} else if (why == RADIANT_SCHED_DONE_MISSED) {
+			RADIANT_DIAG_INC(mrx_done_missed);
+		} else {
+			RADIANT_DIAG_INC(mrx_done_other);
+		}
 	}
 
 	if (api_ch[ch].slot_kind == (uint8_t)API_SLOT_SEARCH) {
@@ -3052,6 +3070,8 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 		api_ch[ch].turn_pending = false;
 		if (radiant_channel_state_get(ch) == RADIANT_CH_STATE_TRACKING) {
 			api_post_master_rx(ch, t_sync);
+		} else {
+			RADIANT_DIAG_INC(turn_dropped);
 		}
 	}
 
@@ -4833,6 +4853,114 @@ const struct radiant_api_stats *radiant_api_stats_get(void)
 {
 	return &api_stats;
 }
+
+#if defined(CONFIG_RADIANT_DIAG_COUNTERS)
+/* One 0xF7 page: see radiant_diag.h and ADR 0023 for the layout. */
+antr_err_t antr_diag_page(uint8_t page, uint8_t *out)
+{
+	uint32_t v[RADIANT_DIAG_FIELDS];
+	uint8_t backend = RADIANT_DIAG_BACKEND_NULL;
+	const struct radiant_diag_core *dc = radiant_diag_core_get();
+
+	if (out == NULL || page >= RADIANT_DIAG_PAGES) {
+		return (antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED;
+	}
+
+	switch (page) {
+	case RADIANT_DIAG_PAGE_API:
+		v[0] = api_stats.sched_dones;
+		v[1] = api_stats.sched_missed;
+		v[2] = api_stats.sched_failed;
+		v[3] = api_stats.sched_denied;
+		v[4] = api_stats.slots_missed;
+		v[5] = api_stats.slots_denied;
+		v[6] = api_stats.rx_sched_events;
+		v[7] = api_stats.xfer_no_ack;
+		break;
+	case RADIANT_DIAG_PAGE_MASTER_RX:
+		v[0] = dc->mrx_posted;
+		v[1] = dc->mrx_refused;
+		v[2] = dc->mrx_skipped;
+		v[3] = dc->turn_dropped;
+		v[4] = dc->mrx_done_ok;
+		v[5] = dc->mrx_done_missed;
+		v[6] = dc->mrx_done_other;
+		v[7] = dc->mrx_frames;
+		break;
+	case RADIANT_DIAG_PAGE_TRANSFER: {
+		const struct radiant_sched_stats *ss = radiant_sched_stats_get();
+
+		v[0] = dc->cont_submits;
+		v[1] = dc->cont_late;
+		v[2] = dc->turn_seen ? dc->turn_min_us : RADIANT_DIAG_NOT_MEASURED;
+		v[3] = dc->turn_seen ? dc->turn_max_us : RADIANT_DIAG_NOT_MEASURED;
+		v[4] = dc->tx_expired;
+		v[5] = dc->margin_seen ? (uint32_t)dc->tx_margin_min_us
+				       : RADIANT_DIAG_NOT_MEASURED;
+		v[6] = ss->arm_rejected;
+		v[7] = ss->missed;
+		break;
+	}
+	case RADIANT_DIAG_PAGE_BACKEND_A:
+	case RADIANT_DIAG_PAGE_BACKEND_B: {
+		struct radiant_radio_diag rd;
+		size_t base = (page == RADIANT_DIAG_PAGE_BACKEND_A)
+				      ? 0u : RADIANT_DIAG_FIELDS;
+
+		for (size_t i = 0; i < ARRAY_SIZE(rd.v); i++) {
+			rd.v[i] = RADIANT_DIAG_NOT_MEASURED;
+		}
+		backend = radiant_radio_diag_get(&rd);
+		memcpy(v, &rd.v[base], sizeof(v));
+		break;
+	}
+	case RADIANT_DIAG_PAGE_SEARCH_A:
+	case RADIANT_DIAG_PAGE_SEARCH_B: {
+		const struct radiant_search_stats *st =
+			radiant_search_get_stats(&api_search);
+
+		if (page == RADIANT_DIAG_PAGE_SEARCH_A) {
+			v[0] = st->windows;
+			v[1] = st->sets_advanced;
+			v[2] = st->sweeps;
+			v[3] = st->frames_ok;
+			v[4] = st->crc_fail;
+			v[5] = st->acquired;
+			v[6] = st->scan_reports;
+			v[7] = st->timeouts;
+		} else {
+			v[0] = st->cache_steers;
+			v[1] = st->cache_acquires;
+			v[2] = st->permit_rejected;
+			v[3] = st->rssi_rejected;
+			v[4] = st->decode_failed;
+			v[5] = st->bad_filter_index;
+			v[6] = st->late_events;
+#if defined(CONFIG_RADIANT_SEARCH_COVERAGE)
+			v[7] = st->sets_advanced_uncovered;
+#else
+			v[7] = RADIANT_DIAG_NOT_MEASURED;
+#endif
+		}
+		break;
+	}
+	default:
+		return (antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED;
+	}
+
+	out[0] = page;
+	out[1] = RADIANT_DIAG_VERSION;
+	out[2] = 0u;
+	out[3] = backend;
+	for (size_t i = 0; i < RADIANT_DIAG_FIELDS; i++) {
+		if (v[i] == RADIANT_DIAG_NOT_MEASURED) {
+			out[2] |= RADIANT_DIAG_FLAG_UNMEASURED;
+		}
+		sys_put_le32(v[i], &out[4u + 4u * i]);
+	}
+	return (antr_err_t)ANTW_RESPONSE_NO_ERROR;
+}
+#endif /* CONFIG_RADIANT_DIAG_COUNTERS */
 
 bool radiant_api_ready(void)
 {

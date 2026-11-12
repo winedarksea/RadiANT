@@ -1608,7 +1608,7 @@
 /* ------------------------------------------------------------------------
  * RadiANT extension messages - NOT ANT protocol
  * Ours, not Garmin's: not in Rev 5.1, not answered by any ANT device.
- * 0xF7-0xFA is reserved for the rest of the family. Semantics live in
+ * 0xF8-0xFA is reserved for the rest of the family. Semantics live in
  * docs/radiant-security.md; only the numbering is decided in the YAML.
  * These were first proposed at 0xE0-0xE4 and moved: sdk-ant defines
  * MESG_EXT_ID_0 .. MESG_EXT_ID_4 as exactly 0xE0-0xE4, an extended-
@@ -1761,5 +1761,36 @@
  * unexplained_loss]
  */
 #define RADIANT_WIRE_MESG_RADIANT_HEALTH_ID                  0xF6
+
+/*
+ * Diagnostic counters, one page per request: MESG_REQUEST (0x4D) with the
+ * page number in the channel byte. Request-only and answered only by a build
+ * with CONFIG_RADIANT_DIAG_COUNTERS (on the dongles, CONFIG_ANT_DONGLE_DIAG);
+ * a page this build does not have answers INVALID_PARAMETER_PROVIDED. Every
+ * page has the same shape: [0] page; [1] structure version, 1; [2] flags, bit
+ * 0 = a field on this page reads 0xFFFFFFFF, i.e. not measured on this build
+ * or backend (never 0, which means zero); [3] backend id, 0 null, 1 nRF, 2
+ * cc26xx, 0xFF the test fake; [4..35] eight u32 LE counters that WRAP rather
+ * than saturate - read a before/after pair and take the difference. Pages: 0
+ * api (scheduler dones, missed, failed, denied; slots missed, denied; receive
+ * events; transfers failed for no ack); 1 a master's turnaround window
+ * (posted, refused, skipped, dropped because no longer tracking, done OK,
+ * done MISSED, done otherwise, frames heard in it); 2 burst continuation
+ * (blocks submitted, late, host turnaround min and max in us, transmit slots
+ * expired in the scheduler, the smallest transmit margin in us as an i32,
+ * scheduler arm refusals, scheduler misses); 3 and 4 the backend table
+ * (radiant_radio_diag_get(): RX posted, refused, terminals OK, empty, error,
+ * command-status errors, the last such status, hardware sync matches;
+ * software-address mismatches, window-test drops, CRC fails, decoy-sync hits,
+ * hardware not-OK/ignored, buffer-full, longest receive drain in us, smallest
+ * arm lead in us); 5 and 6 radiant_search_stats (windows, sets advanced,
+ * sweeps, frames OK, CRC fails, acquisitions, scan reports, timeouts; cache
+ * steers, cache acquisitions, permit refusals, RSSI refusals, decode
+ * failures, bad filter index, late events, sets advanced uncovered).
+ * VERSIONING: pinned at 1; a field's meaning never changes and a new meaning
+ * is a new page. docs/decisions/0023-radiant-diag-message.md has the
+ * reasoning and radiant/include/radiant/radiant_diag.h the layout. [ADR 0023]
+ */
+#define RADIANT_WIRE_MESG_RADIANT_DIAG_ID                    0xF7
 
 #endif /* RADIANT_RADIANT_WIRE_H_ */

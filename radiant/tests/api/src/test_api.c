@@ -25,6 +25,7 @@
 #include "ant_radio_radiant.h"
 #include "ant_radio_radiant_priv.h"
 #include <radiant/radiant_channel.h>
+#include <radiant/radiant_diag.h>
 #include <radiant/radiant_event.h>
 #include <radiant/radiant_frame.h>
 #include <radiant/radiant_sched.h>
@@ -175,6 +176,9 @@ static void api_before(void *f)
 	ARG_UNUSED(f);
 
 	bg_scan_type = (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY;
+#if defined(CONFIG_RADIANT_DIAG_COUNTERS)
+	radiant_diag_core_reset();
+#endif
 	(void)antr_stack_reset();
 
 	k_sched_lock();
@@ -5299,3 +5303,143 @@ ZTEST(api, test_an_rx_only_slave_never_transmits_a_broadcast)
 
 	end_of_test();
 }
+
+/* ---------------------------------------------------------------------------
+ * MESG_RADIANT_DIAG (0xF7, ADR 0023). Run by the radiant.api.diag scenario.
+ * ---------------------------------------------------------------------------
+ */
+#if defined(CONFIG_RADIANT_DIAG_COUNTERS)
+#include <zephyr/sys/byteorder.h>
+
+static uint32_t diag_u32(const uint8_t *page, unsigned int field)
+{
+	return sys_get_le32(&page[4u + 4u * field]);
+}
+
+ZTEST(api, test_diag_every_page_has_the_fixed_shape)
+{
+	uint8_t out[RADIANT_DIAG_BODY_LEN];
+
+	for (uint8_t p = 0; p < RADIANT_DIAG_PAGES; p++) {
+		memset(out, 0xEE, sizeof(out));
+		zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+			      antr_diag_page(p, out), "page %u refused", p);
+		zassert_equal(p, out[0], "page byte");
+		zassert_equal(RADIANT_DIAG_VERSION, out[1], "version byte");
+		zassert_equal(RADIANT_DIAG_BACKEND_FAKE, out[3],
+			      "page %u names backend 0x%02x", p, out[3]);
+	}
+	/* The fake measures nothing on the backend pages, and says so with
+	 * 0xFFFFFFFF and the flag - never with a zero. */
+	zassert_ok(antr_diag_page(RADIANT_DIAG_PAGE_BACKEND_A, out));
+	zassert_equal(RADIANT_DIAG_FLAG_UNMEASURED,
+		      out[2] & RADIANT_DIAG_FLAG_UNMEASURED);
+	for (unsigned int f = 0; f < RADIANT_DIAG_FIELDS; f++) {
+		zassert_equal(RADIANT_DIAG_NOT_MEASURED, diag_u32(out, f),
+			      "backend field %u", f);
+	}
+	/* A build without the coverage counter says so too. */
+	zassert_ok(antr_diag_page(RADIANT_DIAG_PAGE_SEARCH_B, out));
+	zassert_equal(IS_ENABLED(CONFIG_RADIANT_SEARCH_COVERAGE)
+			      ? 0u : RADIANT_DIAG_NOT_MEASURED,
+		      diag_u32(out, 7u));
+	/* No page 7, and no NULL buffer. */
+	zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
+		      antr_diag_page(RADIANT_DIAG_PAGES, out));
+	zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
+		      antr_diag_page(0u, NULL));
+}
+
+/* A listening master posts a turnaround after every slot it transmits, and
+ * page 1 sees each one posted and each one end. */
+ZTEST(api, test_diag_counts_a_masters_turnaround_windows)
+{
+	const struct radiant_diag_core *dc = radiant_diag_core_get();
+	uint8_t out[RADIANT_DIAG_BODY_LEN];
+
+	(void)master_with_next_slot_posted();
+	(void)run_one_quiet_period();
+	(void)run_one_quiet_period();
+
+	zassert_true(dc->mrx_posted >= 2u, "turnarounds posted: %u",
+		     dc->mrx_posted);
+	zassert_true(dc->mrx_done_ok >= 1u, "turnarounds done OK: %u",
+		     dc->mrx_done_ok);
+	zassert_equal(0u, dc->mrx_frames, "nothing was aired in them");
+	zassert_equal(0u, dc->mrx_refused);
+
+	zassert_ok(antr_diag_page(RADIANT_DIAG_PAGE_MASTER_RX, out));
+	zassert_equal(dc->mrx_posted, diag_u32(out, 0u));
+	zassert_equal(dc->mrx_done_ok, diag_u32(out, 4u));
+	end_of_test();
+}
+
+/* One two-block burst; the second block arrives `host_delay_us` after the
+ * acknowledgement that asked for it. */
+static void diag_two_block_burst(uint32_t host_delay_us)
+{
+	uint8_t blk_a[8] = { 0xA0u, 0xA1u, 0xA2u, 0xA3u, 0xA4u, 0xA5u, 0xA6u, 0xA7u };
+	uint8_t blk_b[8] = { 0xB0u, 0xB1u, 0xB2u, 0xB3u, 0xB4u, 0xB5u, 0xB6u, 0xB7u };
+	uint8_t                      frame[AIR_LEN];
+	const struct fake_radio_arm *p0;
+	radiant_time_t               ack_at;
+
+	(void)master_with_next_slot_posted();
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_burst_tx(CH, 8u, blk_a, ANTR_BURST_SEGMENT_START));
+	p0 = last_tx_with_ctrl(RADIANT_CTRL_BURST_OPEN_SEQ0);
+	zassert_not_null(p0, "burst packet 0 was not armed");
+
+	ack_at = p0->t_sync_at + 2209u;
+	(void)build_peer_frame(frame,
+			       radiant_transfer_reply_ctrl(RADIANT_CTRL_BURST_OPEN_SEQ0),
+			       peer_payload);
+	zassert_equal(RADIANT_RADIO_OK_RC,
+		      fake_radio_air_frame(ack_at, frame, AIR_LEN));
+	fake_radio_advance_to(ack_at + host_delay_us);
+	drain();
+
+	(void)antr_burst_tx(CH, 8u, blk_b, ANTR_BURST_SEGMENT_END);
+	fake_radio_advance(20000u);
+	drain();
+}
+
+ZTEST(api, test_diag_an_on_time_continuation_is_not_late)
+{
+	const struct radiant_diag_core *dc = radiant_diag_core_get();
+
+	diag_two_block_burst(200u);
+	zassert_equal(1u, dc->cont_submits, "continuations: %u",
+		      dc->cont_submits);
+	zassert_equal(0u, dc->cont_late, "late: %u", dc->cont_late);
+	zassert_true(dc->turn_seen);
+	zassert_true(dc->turn_max_us < 1550u,
+		     "turnaround %u us for a block 200 us after the ack",
+		     dc->turn_max_us);
+	(void)antr_channel_close(CH);
+	fake_radio_advance(1000u);
+	drain();
+}
+
+/* The bench symptom of 2026-11-12: the next block reaches the engine after
+ * its ack + 1550 us instant. Page 2 must count it and show the turnaround. */
+ZTEST(api, test_diag_a_delayed_continuation_is_counted_late)
+{
+	const struct radiant_diag_core *dc = radiant_diag_core_get();
+	uint8_t out[RADIANT_DIAG_BODY_LEN];
+
+	diag_two_block_burst(5000u);
+	zassert_equal(1u, dc->cont_submits);
+	zassert_equal(1u, dc->cont_late, "a block 5 ms after its ack was "
+		      "not counted late");
+	zassert_true(dc->turn_max_us >= 5000u, "turnaround %u us",
+		     dc->turn_max_us);
+
+	zassert_ok(antr_diag_page(RADIANT_DIAG_PAGE_TRANSFER, out));
+	zassert_equal(1u, diag_u32(out, 1u));
+	zassert_equal(dc->turn_max_us, diag_u32(out, 3u));
+	(void)antr_channel_close(CH);
+	fake_radio_advance(1000u);
+	drain();
+}
+#endif /* CONFIG_RADIANT_DIAG_COUNTERS */

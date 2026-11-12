@@ -29,6 +29,21 @@ tests:
   # derives - which is trivially true in the scenario above and is the actual
   # claim in this one. Running both is what makes the comparison meaningful:
   # a suite that only ever runs one way has nothing to compare against.
+  # The same application with the 0xF7 diagnostic counters compiled in
+  # (ADR 0023): the page layout, the turnaround counters and the burst
+  # continuation's late count. Off in every other scenario, which is the
+  # zero-cost half: those builds compile every counter site to nothing.
+  radiant.api.diag:
+    tags:
+      - radiant
+      - radiant_api
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    extra_configs:
+      - CONFIG_RADIANT_DIAG_COUNTERS=y
+
   radiant.api.sec:
     tags:
       - radiant

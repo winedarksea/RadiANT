@@ -39,6 +39,9 @@
 
 #include "ant_activity.h"
 #include "ant_health.h"
+#if defined(CONFIG_ANT_DONGLE_DIAG)
+#include <radiant/radiant_diag.h>
+#endif
 #include "ant_radio.h"
 #include "ant_reset_cause.h"
 #include "ant_serial_bridge.h"
@@ -383,6 +386,21 @@ static void handle_request(const uint8_t *body, uint8_t len)
 		send_message(ANTW_MESG_RADIANT_HEALTH_ID, payload, (uint8_t)n);
 		break;
 	}
+#endif
+#if defined(CONFIG_ANT_DONGLE_DIAG)
+	case ANTW_MESG_RADIANT_DIAG_ID:
+		/*
+		 * Request-only, like 0xF6 beside it, and for the same reason:
+		 * a host that never asks sees an unchanged byte stream. The
+		 * channel byte is the PAGE (ADR 0023), not a channel; every
+		 * page is device-wide.
+		 */
+		err = antr_diag_page(ch, payload);
+		if (err == (antr_err_t)ANTW_RESPONSE_NO_ERROR) {
+			send_message(ANTW_MESG_RADIANT_DIAG_ID, payload,
+				     (uint8_t)RADIANT_DIAG_BODY_LEN);
+		}
+		break;
 #endif
 
 	case ANTW_MESG_CAPABILITIES_ID: {

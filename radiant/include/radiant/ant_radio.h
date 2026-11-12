@@ -870,6 +870,16 @@ antr_err_t antr_adv_burst_config_set(const uint8_t *config, uint8_t size);
  */
 antr_err_t antr_adv_burst_config_get(uint8_t request_type, uint8_t *config);
 
+#if defined(CONFIG_RADIANT_DIAG_COUNTERS)
+/*
+ * One page of MESG_RADIANT_DIAG (0xF7, ADR 0023) into `out`, which must hold
+ * RADIANT_DIAG_BODY_LEN (36) bytes: [0] page, [1] version, [2] flags,
+ * [3] backend id, then eight u32 LE counters. Device-wide, not per channel.
+ * Returns ANTW_INVALID_PARAMETER_PROVIDED for a page this build does not have.
+ */
+antr_err_t antr_diag_page(uint8_t page, uint8_t *out);
+#endif
+
 /**
  * Define a selective-data-update mask.
  *

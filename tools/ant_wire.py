@@ -1219,7 +1219,7 @@ CAPABILITIES_ID_MATCH_FIX_ON_SHARED_CHANNEL_RXBURST = 0x04
 
 # ---------------------------------------------------------------------------
 # RadiANT extension messages - NOT ANT protocol
-# Ours, not Garmin's: not in Rev 5.1, not answered by any ANT device. 0xF7-0xFA
+# Ours, not Garmin's: not in Rev 5.1, not answered by any ANT device. 0xF8-0xFA
 # is reserved for the rest of the family. Kept out of MESSAGES on purpose, so a
 # tool that walks the ANT protocol never sees them. These were first proposed
 # at 0xE0-0xE4 and moved, because sdk-ant's MESG_EXT_ID_0 .. MESG_EXT_ID_4
@@ -1355,6 +1355,35 @@ MESG_RADIANT_PAIRING_ID = 0xF5
 # LATENCY - the wrong trade for a protocol whose whole value is a 0.345 ms p50.
 # [Phase 1.4; tools/ab_gates.toml unexplained_loss]
 MESG_RADIANT_HEALTH_ID = 0xF6
+
+# Diagnostic counters, one page per request: MESG_REQUEST (0x4D) with the page
+# number in the channel byte. Request-only and answered only by a build with
+# CONFIG_RADIANT_DIAG_COUNTERS (on the dongles, CONFIG_ANT_DONGLE_DIAG); a page
+# this build does not have answers INVALID_PARAMETER_PROVIDED. Every page has
+# the same shape: [0] page; [1] structure version, 1; [2] flags, bit 0 = a
+# field on this page reads 0xFFFFFFFF, i.e. not measured on this build or
+# backend (never 0, which means zero); [3] backend id, 0 null, 1 nRF, 2 cc26xx,
+# 0xFF the test fake; [4..35] eight u32 LE counters that WRAP rather than
+# saturate - read a before/after pair and take the difference. Pages: 0 api
+# (scheduler dones, missed, failed, denied; slots missed, denied; receive
+# events; transfers failed for no ack); 1 a master's turnaround window (posted,
+# refused, skipped, dropped because no longer tracking, done OK, done MISSED,
+# done otherwise, frames heard in it); 2 burst continuation (blocks submitted,
+# late, host turnaround min and max in us, transmit slots expired in the
+# scheduler, the smallest transmit margin in us as an i32, scheduler arm
+# refusals, scheduler misses); 3 and 4 the backend table
+# (radiant_radio_diag_get(): RX posted, refused, terminals OK, empty, error,
+# command-status errors, the last such status, hardware sync matches; software-
+# address mismatches, window-test drops, CRC fails, decoy-sync hits, hardware
+# not-OK/ignored, buffer-full, longest receive drain in us, smallest arm lead
+# in us); 5 and 6 radiant_search_stats (windows, sets advanced, sweeps, frames
+# OK, CRC fails, acquisitions, scan reports, timeouts; cache steers, cache
+# acquisitions, permit refusals, RSSI refusals, decode failures, bad filter
+# index, late events, sets advanced uncovered). VERSIONING: pinned at 1; a
+# field's meaning never changes and a new meaning is a new page.
+# docs/decisions/0023-radiant-diag-message.md has the reasoning and
+# radiant/include/radiant/radiant_diag.h the layout. [ADR 0023]
+MESG_RADIANT_DIAG_ID = 0xF7
 
 # ---------------------------------------------------------------------------
 # Lookup tables
@@ -1907,8 +1936,14 @@ RADIANT_MESSAGES = {
         "payload_len": '30..32',
         "desc": "What the dongle threw away, requested with MESG_REQUEST (0x4D). Request-only: nothing is ever emitted unsolicited, so a host that never asks sees a byte stream identical to a build without it. [0] structure version, 1; [1] flags, bit 0 = at least one counter has saturated, so the whole set is a floor rather than a total; [2..3] ANT events dropped because the USB TX queue was full; [4] deepest that queue has been, in frames, out of ANT_TX_QUEUE_DEPTH; [5] deepest the radio event queue has been, out of its own depth; [6..7] event-queue overflow marks; [8..9] times bulk-OUT was left unarmed for host backpressure; [10..11] frames refused for an unusable network key; [12..13] scheduler windows missed; [14..15] failed; [16..17] denied by the arbiter; [18..19] burst transfers that hit the 1000 ms back-pressure stall; [20..21] search windows the pump declined to post WHILE a channel was still searching and its slot was held for something else, which is discovery work outstanding that could not get on the air; [22..23] bytes discarded by the host-frame parser while hunting for SYNC (0xA4), i.e. framing lost outright; [24..25] frames that reached a full, in-range XOR checksum and failed it - framed but corrupt, kept apart from [22..23] on purpose (one points at a host out of step, the other at a noisy link); [26..27] radio RX events whose channel op was no longer the one that channel owned by the time they were processed; [28..29] USB bulk-IN transfers that never completed within their timeout, i.e. the host stopped polling. [30..31] OPTIONAL, sets_advanced_uncovered: sets of the MPSL sweep that finished their dwell having listened to fewer than all phases of the channel period, present only on a build with CONFIG_RADIANT_SEARCH_COVERAGE (which an MPSL build enabling these health counters takes on), where the body is 32 bytes. Every other build answers 30 bytes and this field is absent, because a build that cannot measure coverage must not report 0 uncovered. UNLIKE the rest it clamps at 65535 WITHOUT setting the flag in [1]: it climbs for as long as a search runs, and a flag set by it would mark every other field a floor for the reason given below. All the others are u16 LE and all saturate rather than wrap, which is what the flag in [1] is for: it distinguishes 65535 from 65535-and-counting. VERSIONING: fields are only ever added at the end and an offset is never reused. The structure version stays 1 throughout the beta, whatever is added, so a reader tells which fields exist from the body length and treats the version as nothing more than a sanity check. A reader refuses a body shorter than it needs, and decodes the fields it knows from a longer body. THE OTHER HALF OF [20..21] IS DELIBERATELY ABSENT. A decline because NO channel was searching is discovery having succeeded, not failed, and it is not loss - and the pump runs about 31 times a second regardless, so such a field would climb forever on an idle dongle and saturate in about 35 minutes. Measured on the first hardware read of this reply: 231 within nine seconds of boot with no channel ever opened. Since saturation sets the flag in [1], that one field would have made every OTHER field on the board read as a floor. It was carried by the SWEEP debug log line, which was retired with that instrument; the reason this field is absent from the reply stands on its own. WHY THIS EXISTS. tools/ab_gates.toml's unexplained_loss.max = 0 is a SITTING INVALIDATOR rather than a gate: a hole with no RX_FAIL means the loss happened on the host or inside the dongle, and loss_accounting() cannot tell those two apart. A firmware-side witness splits that bucket. That check has already caught 0.4 pp of imaginary loss once; a second source makes it sharper. And on a Feather - no debugger, the board most people flash - the LOG_WRN that is the only record of a drop today does not exist at all. DEPTHS 32 AND 64 ARE NOT THE ANSWER TO A NON-ZERO [2..3]. At 3103 msg/s a 64-byte frame arrives every ~322 us, so depth 32 is about 10 ms of buffer. If the host stops reading for longer than that, a deeper queue converts a drop into LATENCY - the wrong trade for a protocol whose whole value is a 0.345 ms p50.",
     },
+    0xF7: {
+        "name": 'MESG_RADIANT_DIAG_ID',
+        "direction": 'd2h',
+        "payload_len": 36,
+        "desc": "Diagnostic counters, one page per request: MESG_REQUEST (0x4D) with the page number in the channel byte. Request-only and answered only by a build with CONFIG_RADIANT_DIAG_COUNTERS (on the dongles, CONFIG_ANT_DONGLE_DIAG); a page this build does not have answers INVALID_PARAMETER_PROVIDED. Every page has the same shape: [0] page; [1] structure version, 1; [2] flags, bit 0 = a field on this page reads 0xFFFFFFFF, i.e. not measured on this build or backend (never 0, which means zero); [3] backend id, 0 null, 1 nRF, 2 cc26xx, 0xFF the test fake; [4..35] eight u32 LE counters that WRAP rather than saturate - read a before/after pair and take the difference. Pages: 0 api (scheduler dones, missed, failed, denied; slots missed, denied; receive events; transfers failed for no ack); 1 a master's turnaround window (posted, refused, skipped, dropped because no longer tracking, done OK, done MISSED, done otherwise, frames heard in it); 2 burst continuation (blocks submitted, late, host turnaround min and max in us, transmit slots expired in the scheduler, the smallest transmit margin in us as an i32, scheduler arm refusals, scheduler misses); 3 and 4 the backend table (radiant_radio_diag_get(): RX posted, refused, terminals OK, empty, error, command-status errors, the last such status, hardware sync matches; software-address mismatches, window-test drops, CRC fails, decoy-sync hits, hardware not-OK/ignored, buffer-full, longest receive drain in us, smallest arm lead in us); 5 and 6 radiant_search_stats (windows, sets advanced, sweeps, frames OK, CRC fails, acquisitions, scan reports, timeouts; cache steers, cache acquisitions, permit refusals, RSSI refusals, decode failures, bad filter index, late events, sets advanced uncovered). VERSIONING: pinned at 1; a field's meaning never changes and a new meaning is a new page. docs/decisions/0023-radiant-diag-message.md has the reasoning and radiant/include/radiant/radiant_diag.h the layout.",
+    },
 }
-RADIANT_RESERVED_RANGE = '0xF7-0xFA'
+RADIANT_RESERVED_RANGE = '0xF8-0xFA'
 
 MESSAGE_NAMES = {mid: info["name"] for mid, info in MESSAGES.items()}
 MESSAGE_IDS = {info["name"]: mid for mid, info in MESSAGES.items()}

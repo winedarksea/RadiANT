@@ -2833,3 +2833,15 @@ void fake_radio_bring_up(void)
 	(void)radiant_radio_init(&fake_cbs_none, NULL);
 	(void)radiant_radio_enable();
 }
+
+#if defined(CONFIG_RADIANT_DIAG_COUNTERS)
+#include <radiant/radiant_diag.h>
+
+/* 0xF7 backend page (ADR 0023): nothing measured here; the caller's
+ * pre-filled "not measured" stands for every field. */
+uint8_t radiant_radio_diag_get(struct radiant_radio_diag *out)
+{
+	(void)out;
+	return RADIANT_DIAG_BACKEND_FAKE;
+}
+#endif

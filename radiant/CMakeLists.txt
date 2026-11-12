@@ -72,6 +72,10 @@ zephyr_library_sources(
   src/radiant_noise.c
 )
 
+# The 0xF7 diagnostic counters' storage (ADR 0023). Their call sites are macros
+# that compile to nothing without the symbol.
+zephyr_library_sources_ifdef(CONFIG_RADIANT_DIAG_COUNTERS src/radiant_diag.c)
+
 # Single-bit CRC repair. Compiled unconditionally rather than behind its own
 # Kconfig symbol, and the ~1 KB it costs is worth what it buys: the unit-test
 # application can exercise the arithmetic whether or not a given build turns

@@ -237,3 +237,15 @@ int radiant_radio_abort(void)
 	(void)null_user;
 	return RADIANT_RADIO_OK_RC;
 }
+
+#if defined(CONFIG_RADIANT_DIAG_COUNTERS)
+#include <radiant/radiant_diag.h>
+
+/* 0xF7 backend page (ADR 0023): nothing measured here; the caller's
+ * pre-filled "not measured" stands for every field. */
+uint8_t radiant_radio_diag_get(struct radiant_radio_diag *out)
+{
+	(void)out;
+	return RADIANT_DIAG_BACKEND_NULL;
+}
+#endif
