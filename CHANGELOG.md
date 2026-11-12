@@ -198,6 +198,11 @@ reads.
 
 ### Fixed
 
+- **Event Filter (`0x79`) takes the spec's filler byte.** The command is
+  `[filler, lo, hi]` (Rev 5.1 §9.5.2.28); RadiANT read a 3-byte command as
+  `[lo, hi, ...]` and set the wrong filter. The legacy 2-byte `[lo, hi]` form
+  is still accepted. `tools/ant_features.py` now sends the 3-byte form, which
+  also explains the Garmin's `0000f1` readback.
 - **Open Rx Scan Mode (`0x5B`) keeps the host's channel 0 setup.** It used to
   reassign channel 0 as a wildcard slave on network 0 at RF 66, so a host that
   had set RF 57 and the ANT+ key scanned the wrong band. Channel 0's type,

@@ -332,12 +332,13 @@ MESG_HIGH_DUTY_SEARCH_MODE_ID = 0x77
 # [bridge, tools]
 MESG_CONFIG_ADV_BURST_ID = 0x78
 
-# Command is [filter lo, filter hi] with no channel byte; the reply is [filler,
-# filter lo, filter hi]. That asymmetry is real and is what the round-trip
-# check in ant_features.py exists to catch. Bit N filters channel event code
-# N+1 (codes 1..16; ANT Message Protocol and Usage Rev 5.1 sec 9.5.2.28 /
-# 9.5.7.9 / 9.5.6.1), so 0x0001 is EVENT_RX_SEARCH_TIMEOUT, 0x0002
-# EVENT_RX_FAIL, 0x0004 EVENT_TX and so on up to 0x0200
+# Command is [filler, filter lo, filter hi] (Rev 5.1 sec 9.5.2.28), the same
+# shape as the reply. The legacy two-byte [filter lo, filter hi] form, with no
+# filler, is still accepted because the committed conformance transcripts send
+# it; a three-byte command is always read as the filler form. Bit N filters
+# channel event code N+1 (codes 1..16; ANT Message Protocol and Usage Rev 5.1
+# sec 9.5.2.28 / 9.5.7.9 / 9.5.6.1), so 0x0001 is EVENT_RX_SEARCH_TIMEOUT,
+# 0x0002 EVENT_RX_FAIL, 0x0004 EVENT_TX and so on up to 0x0200
 # EVENT_TRANSFER_TX_START. RadiANT applies it at delivery to the host, after
 # its own accounting; 0, the default, passes everything. TRANSFER_TX_COMPLETED
 # / TX_FAILED still release the burst buffer internally when filtered. REQUEST
@@ -1747,7 +1748,7 @@ MESSAGES = {
                  "desc": '[filler, filter lo, filter hi].'},
             ),
         },
-        "desc": 'Command is [filter lo, filter hi] with no channel byte; the reply is [filler, filter lo, filter hi]. That asymmetry is real and is what the round-trip check in ant_features.py exists to catch. Bit N filters channel event code N+1 (codes 1..16; ANT Message Protocol and Usage Rev 5.1 sec 9.5.2.28 / 9.5.7.9 / 9.5.6.1), so 0x0001 is EVENT_RX_SEARCH_TIMEOUT, 0x0002 EVENT_RX_FAIL, 0x0004 EVENT_TX and so on up to 0x0200 EVENT_TRANSFER_TX_START. RadiANT applies it at delivery to the host, after its own accounting; 0, the default, passes everything. TRANSFER_TX_COMPLETED / TX_FAILED still release the burst buffer internally when filtered.',
+        "desc": 'Command is [filler, filter lo, filter hi] (Rev 5.1 sec 9.5.2.28), the same shape as the reply. The legacy two-byte [filter lo, filter hi] form, with no filler, is still accepted because the committed conformance transcripts send it; a three-byte command is always read as the filler form. Bit N filters channel event code N+1 (codes 1..16; ANT Message Protocol and Usage Rev 5.1 sec 9.5.2.28 / 9.5.7.9 / 9.5.6.1), so 0x0001 is EVENT_RX_SEARCH_TIMEOUT, 0x0002 EVENT_RX_FAIL, 0x0004 EVENT_TX and so on up to 0x0200 EVENT_TRANSFER_TX_START. RadiANT applies it at delivery to the host, after its own accounting; 0, the default, passes everything. TRANSFER_TX_COMPLETED / TX_FAILED still release the burst buffer internally when filtered.',
     },
     0x7A: {
         "name": 'MESG_SDU_CONFIG_ID',

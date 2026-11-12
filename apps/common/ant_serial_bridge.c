@@ -1184,8 +1184,16 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		break;
 
 	case ANTW_MESG_EVENT_FILTER_CONFIG_ID:
-		/* body: [filter_lsb, filter_msb] */
-		if (len >= 2) {
+		/* body: [filler, filter_lsb, filter_msb] (Rev 5.1 sec 9.5.2.28),
+		 * or the legacy [filter_lsb, filter_msb] with no filler. Three
+		 * bytes is always the spec form; two is kept because the
+		 * committed conformance transcripts send it.
+		 */
+		if (len >= 3) {
+			uint16_t filter = (uint16_t)body[1] |
+					  ((uint16_t)body[2] << 8);
+			err = antr_event_filtering_set(filter);
+		} else if (len == 2) {
 			uint16_t filter = (uint16_t)body[0] |
 					  ((uint16_t)body[1] << 8);
 			err = antr_event_filtering_set(filter);
