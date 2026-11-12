@@ -272,19 +272,11 @@ Considered and left out (decided 2026-11-08): renaming the ANTW_* aliases to
 RADIANT_WIRE_* (about 1,300 changed lines to remove one generated header), and
 making tools/ant_health.py reject other versions (see item 2).
 
-## 1. [DONE 2026-11-11, one hardware check open] Turn off the version-1 bridge storage migration
-`CONFIG_BRIDGE_MIGRATE_VERSION_1` no longer defaults to y. On an nRF54L15
-Matter build (thread.conf;matter.conf) it is unset in .config and nm shows no
-`MigrateDataVersion1`, with CHIP and the bridge still linked. Still open: confirm
-on hardware that a bound sensor's row survives a reboot.
+## 1. [DONE 2026-11-11] Turn off the version-1 bridge storage migration
 
 ## 2. [DONE before 2026-11-11] Version comments contradict the pinned-at-1 rule
-Already corrected (920eddb and later). `gen_ant_wire.py --check` is clean.
 
 ## 3. [DONE 2026-11-11] Make backends state max_addr_groups explicitly
-`radiant_sched_init()` returns `RADIANT_RADIO_EINVAL` on a 0 cap; both fallbacks
-are gone. ztest `test_init_refuses_zero_max_addr_groups`; native_sim twister
-4351/4351.
 
 ## 4. [FIRMWARE, bench, DEFERRED] Move nRF52/53 to USB_NEXT
 Two USB device classes are maintained because the legacy one has hours on it
@@ -312,16 +304,8 @@ channels need.
   USB_DEVICE_STACK.
 
 ## 5. [DONE 2026-11-11] Delete compatibility shims with no remaining user
-`RADIANT_BACKEND_MPSL`, `ant_sens.run_ladder()` and `EVENT_MARKER` are gone
-(ant_disc_phase.py used it too and was switched). run_ztest_hw.ps1 defaults to
-v3.4.0. Python tests 985/985 and `gen_ant_wire.py --check` pass, with no new
-ruff findings. Not done: a DK ztest run without `-NcsVersion`, because the
-nRF5340 DK was holding the Android trace image.
 
 ## 6. [DONE 2026-11-11] Remove the finished bisection switches
-The four symbols and their branches are deleted, and p4-coexistence-bugs.md now
-describes NO_SESSION as history. The Pro Micro (nRF) and nRF54L15 gate.conf
-(MPSL) images build.
 
 ## 7. [REPO, LOW] Move radiant/spike out of the source tree
 Six directories, about 7,300 lines, built by no CI job and mostly documented for
