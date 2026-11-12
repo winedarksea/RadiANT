@@ -67,7 +67,8 @@ min_scenarios: 14
 # 4419 with outbound burst retries: four transfer cases in each unit scenario.
 # 4427 with the slot-opener acknowledgement window and its retry timing.
 # 4435 with slave broadcast TX: two api cases in each of the four api scenarios.
-min_testcases: 4435
+# 4451 with stale-acknowledgement retries: four transfer cases in each unit scenario.
+min_testcases: 4451
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -82,9 +83,9 @@ min_testcases: 4435
 # above. The earlier values were nRF5340 DK counts minus about 1%, plus static
 # counts. A floor equal to the observed count still fails only when coverage
 # goes down, which is the event it exists to catch.
-min_cases.radiant.unit: 1010
-min_cases.radiant.unit.sec_modes: 1010
-min_cases.radiant.unit.no_pairing: 958
+min_cases.radiant.unit: 1014
+min_cases.radiant.unit.sec_modes: 1014
+min_cases.radiant.unit.no_pairing: 962
 min_cases.radiant.api: 74
 min_cases.radiant.api.sec: 77
 min_cases.radiant.api.sec_host: 90
@@ -97,5 +98,5 @@ min_cases.radiant.backend: 8
 min_cases.hrm_ble.sim_sched: 4
 min_cases.treadmill.pages: 20
 min_cases.treadmill.hr_rx: 3
-min_cases.radiant.unit.ack_faults: 1017
+min_cases.radiant.unit.ack_faults: 1021
 min_cases.trainer.model: 14

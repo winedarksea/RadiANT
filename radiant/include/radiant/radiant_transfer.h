@@ -322,7 +322,11 @@ extern "C" {
  * arrived: RADIANT_TRANSFER_PACKET_US after the attempt it repeats, or, for
  * the first attempt of a master's slot opener, OPENER_REPLY_US + 1550 us. A
  * slave's packet 0 waits for the master's next reply window instead
- * (ops->retry_t_sync). BAD_ACK is never retried.
+ * (ops->retry_t_sync). A stale acknowledgement - the receiver repeating its
+ * answer to the previous packet (radiant_transfer_ack_is_stale()) - counts as
+ * a miss and is retried the same way; both of A2's failures in
+ * archive/benchmarks/2026-11-11-burst-retry-ab/ were one of these, ended as
+ * BAD_ACK. Any other wrong reply is BAD_ACK and never retried.
  *
  * MPSL builds: a retry is a fresh transmit 3110 us after the missed one,
  * outside any grant the data packet reserved (its follow-on covers only the
@@ -398,6 +402,18 @@ uint8_t radiant_transfer_reply_ctrl(uint8_t data_ctrl);
  * measured pairs this predicate is exactly radiant_ctrl_reply_for().
  */
 bool radiant_transfer_ack_matches(uint8_t data_ctrl, uint8_t ack_ctrl);
+
+/*
+ * Is `ack_ctrl` the receiver repeating its acknowledgement of the PREVIOUS
+ * packet - "I still expect the packet you just sent"? A legal non-final
+ * exchange acknowledgement whose bit 4 EQUALS the data's, where a real
+ * acknowledgement complements it. Seen on air 2026-11-11 from a Garmin USB-m
+ * slave that missed a burst packet: 0x82 answered by 0xC2, 0x92 by 0xD2, each
+ * then repeated about every 3140 us
+ * (archive/benchmarks/2026-11-11-burst-retry-ab/, A2's two failures). The
+ * sender treats it as a missed acknowledgement and retries.
+ */
+bool radiant_transfer_ack_is_stale(uint8_t data_ctrl, uint8_t ack_ctrl);
 
 /* On-air packets in a host block: 1, 2 or 3. Returns 0 for any length that is
  * not 8, 16 or 24. */
@@ -650,6 +666,10 @@ struct radiant_transfer_stats {
 	uint32_t rx_only_unacked;
 	/* Burst packets retransmitted after a missed acknowledgement. */
 	uint32_t retries;
+	/* Acknowledgements of the previous packet heard in place of one for the
+	 * packet in flight (radiant_transfer_ack_is_stale()), each handled as a
+	 * missed acknowledgement. */
+	uint32_t stale_acks;
 #if defined(CONFIG_RADIANT_ACK_FAULTS)
 	/* A reply_plan offset that put the acknowledgement before the radio
 	 * could arm it. No ACK went out - an early one would be a fault the

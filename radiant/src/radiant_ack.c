@@ -114,6 +114,26 @@ bool radiant_transfer_ack_matches(uint8_t data_ctrl, uint8_t ack_ctrl)
 	return true;
 }
 
+bool radiant_transfer_ack_is_stale(uint8_t data_ctrl, uint8_t ack_ctrl)
+{
+	if (!radiant_ctrl_low_ok(data_ctrl) || !radiant_ctrl_low_ok(ack_ctrl)) {
+		return false;
+	}
+	if (!radiant_ctrl_is_exchange(data_ctrl) || !radiant_ctrl_is_exchange(ack_ctrl)) {
+		return false;
+	}
+	if (radiant_ctrl_is_ack(data_ctrl) || !radiant_ctrl_is_ack(ack_ctrl)) {
+		return false;
+	}
+	/* The receiver's acknowledgement of the PREVIOUS packet: never final,
+	 * since nothing follows a final one, and b4 still names the packet in
+	 * flight as the one it expects. */
+	if (radiant_ctrl_is_last(ack_ctrl)) {
+		return false;
+	}
+	return radiant_ctrl_seq(data_ctrl) == radiant_ctrl_seq(ack_ctrl);
+}
+
 uint8_t radiant_transfer_packets_in_block(uint8_t block_len)
 {
 	if (block_len == 0u || block_len > RADIANT_TRANSFER_BLOCK_MAX) {

@@ -216,6 +216,11 @@ reads.
   §5.4.3); a slave's first packet waits for the master's next slot. A
   single-packet burst and acknowledged data are not retried, as the spec says.
   Not on MPSL builds, where multi-packet bursts do not run yet.
+- **A burst survives the receiver missing a packet.** A receiver that misses a
+  burst packet repeats its acknowledgement of the previous one (a Garmin
+  answered `0x82` with `0xC2`). RadiANT treated that as a bad acknowledgement
+  and failed the burst without retrying. It now retries as it would after an
+  empty window. Both failures in the 2026-11-11 retry A/B were this.
 - **Advanced burst no longer advertises frequency hopping.** The capabilities
   form of `0x78` claimed it, but nothing in RadiANT hops. The supported-modes
   byte is now `0x00`.

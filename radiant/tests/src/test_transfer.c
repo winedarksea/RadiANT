@@ -1302,6 +1302,196 @@ ZTEST(transfer, test_a_slaves_packet_0_is_not_retried_without_a_slot_to_aim_at)
 	end_of_test();
 }
 
+/* ---------------------------------------------------------------------------
+ * Stale acknowledgements: the receiver repeating its answer to the previous
+ * packet because it missed this one. Captured 2026-11-11 from a Garmin USB-m:
+ * 0x82 answered by 0xC2, 0x92 by 0xD2 (archive/benchmarks/
+ * 2026-11-11-burst-retry-ab/README.md, "A2's two failures").
+ * ---------------------------------------------------------------------------
+ */
+
+/* The stale answer to data byte `d`: a non-final acknowledgement whose
+ * sequence bit still names `d`'s packet. */
+static uint8_t stale_ack_for(uint8_t d)
+{
+	struct radiant_ctrl_fields f;
+
+	zassert_equal(0, radiant_ctrl_decode(d, &f));
+	f.ack = true;
+	f.last = false;
+	f.slot_opener = false;
+	return radiant_ctrl_encode(&f);
+}
+
+/* Air `ctrl` into the reply window that is open now. */
+static void air_reply_ctrl(uint8_t ctrl)
+{
+	const struct fake_radio_arm *rx = last_arm_of(FAKE_RADIO_ARM_RX);
+	uint8_t frame[AIR_LEN];
+
+	zassert_not_null(rx, "no reply window was opened");
+	(void)build_peer_frame(frame, ctrl, peer_payload);
+	zassert_equal(RADIANT_RADIO_OK_RC,
+		      fake_radio_air_frame(rx->t_open +
+					   (radiant_time_t)RADIANT_TRANSFER_ACK_GUARD_US,
+					   frame, AIR_LEN));
+}
+
+ZTEST(transfer, test_the_stale_acknowledgement_predicate)
+{
+	/* The two captured cases. */
+	zassert_true(radiant_transfer_ack_is_stale(0x82u, 0xC2u));
+	zassert_true(radiant_transfer_ack_is_stale(0x92u, 0xD2u));
+	/* A last packet answered with the previous, non-final ack. */
+	zassert_true(radiant_transfer_ack_is_stale(0xA2u, 0xC2u));
+	zassert_true(radiant_transfer_ack_is_stale(0xB2u, 0xD2u));
+
+	/* The real acknowledgements are not stale, and nothing is both. */
+	zassert_false(radiant_transfer_ack_is_stale(0x82u, 0xD2u));
+	zassert_false(radiant_transfer_ack_is_stale(0x92u, 0xC2u));
+	zassert_false(radiant_transfer_ack_is_stale(0xA2u, 0xF2u));
+	zassert_false(radiant_transfer_ack_is_stale(0xB2u, 0xE2u));
+	/* A FINAL acknowledgement with the same sequence bit is not a repeat
+	 * of anything this sender could have been answered for. */
+	zassert_false(radiant_transfer_ack_is_stale(0xA2u, 0xE2u));
+	zassert_false(radiant_transfer_ack_is_stale(0xB2u, 0xF2u));
+	/* Data echoed, a broadcast, an ack answered to an ack. */
+	zassert_false(radiant_transfer_ack_is_stale(0x82u, 0x82u));
+	zassert_false(radiant_transfer_ack_is_stale(0x82u, RADIANT_CTRL_BROADCAST));
+	zassert_false(radiant_transfer_ack_is_stale(0xC2u, 0xC2u));
+	/* Illegal low bits on either side. */
+	zassert_false(radiant_transfer_ack_is_stale(0x83u, 0xC2u));
+	zassert_false(radiant_transfer_ack_is_stale(0x82u, 0xC3u));
+}
+
+/* One stale acknowledgement: the packet goes out again, same control byte, one
+ * packet time later, and the transfer completes. */
+ZTEST(transfer, test_a_stale_acknowledgement_is_retried_and_the_transfer_completes)
+{
+	const struct fake_radio_arm *tx[8];
+	const struct radiant_transfer_stats *st;
+	uint32_t n_tx;
+
+	reset_blocks();
+	queue_block(0u, 16u, RADIANT_TRANSFER_SEG_START | RADIANT_TRANSFER_SEG_END,
+		    0x30u);
+	zassert_true(feed_next_block());
+
+	run_one_packet_exchange();            /* packet 0 acknowledged */
+	zassert_true(fake_radio_step());       /* packet 1 transmits */
+	zassert_equal(RADIANT_TRANSFER_STATE_WAIT_ACK, radiant_transfer_state(&xfer));
+	air_reply_ctrl(stale_ack_for(last_arm_of(FAKE_RADIO_ARM_TX)->body[BODY_CTRL]));
+	zassert_true(fake_radio_step(), "the stale acknowledgement never arrived");
+	zassert_equal(RADIANT_TRANSFER_STATE_TX_DATA, radiant_transfer_state(&xfer),
+		      "a stale acknowledgement was not retried");
+	zassert_equal(0u, n_ev, "the transfer ended on a stale acknowledgement");
+
+	zassert_true(fake_radio_step());       /* the retry transmits */
+	air_the_ack();
+	zassert_true(fake_radio_step());
+
+	zassert_equal(1u, n_ev);
+	zassert_equal(RADIANT_TRANSFER_EV_TX_COMPLETED, evlog[0].ev);
+	zassert_equal(2u, evlog[0].packets);
+	st = radiant_transfer_stats(&xfer);
+	zassert_equal(1u, st->stale_acks);
+	zassert_equal(1u, st->retries);
+
+	n_tx = collect_tx_arms(tx, ARRAY_SIZE(tx));
+	zassert_equal(3u, n_tx);
+	zassert_equal(tx[1]->body[BODY_CTRL], tx[2]->body[BODY_CTRL],
+		      "the retry moved the sequence bit");
+	zassert_equal(tx[1]->t_sync_at + (radiant_time_t)RADIANT_TRANSFER_PACKET_US,
+		      tx[2]->t_sync_at);
+
+	end_of_test();
+}
+
+/* Stale every time: the first attempt and five retries, then one TX_FAILED as
+ * BAD_ACK (the cause the last answer gave), and the block back exactly once. */
+ZTEST(transfer, test_six_stale_acknowledgements_fail_once_as_bad_ack)
+{
+	const struct radiant_transfer_stats *st;
+	const struct fake_radio_arm *tx[12];
+	uint32_t i;
+	uint32_t arms_before;
+
+	reset_blocks();
+	queue_block(0u, 16u, RADIANT_TRANSFER_SEG_START | RADIANT_TRANSFER_SEG_END,
+		    0x30u);
+	zassert_true(feed_next_block());
+	run_one_packet_exchange();
+
+	for (i = 0u; i <= RADIANT_TRANSFER_TX_RETRIES_MAX; i++) {
+		zassert_true(fake_radio_step(), "attempt %u never transmitted",
+			     (unsigned)i);
+		zassert_equal(RADIANT_TRANSFER_STATE_WAIT_ACK,
+			      radiant_transfer_state(&xfer));
+		air_reply_ctrl(stale_ack_for(
+			last_arm_of(FAKE_RADIO_ARM_TX)->body[BODY_CTRL]));
+		zassert_true(fake_radio_step());
+	}
+
+	zassert_equal(RADIANT_TRANSFER_STATE_IDLE, radiant_transfer_state(&xfer));
+	zassert_equal(1u, n_ev);
+	zassert_equal(RADIANT_TRANSFER_EV_TX_FAILED, evlog[0].ev);
+	zassert_equal(RADIANT_TRANSFER_FAIL_BAD_ACK, evlog[0].fail);
+	zassert_equal_ptr(blocks[0], evlog[0].block);
+
+	st = radiant_transfer_stats(&xfer);
+	zassert_equal(1u, st->blocks_released);
+	zassert_equal(RADIANT_TRANSFER_TX_RETRIES_MAX, st->retries);
+	zassert_equal(RADIANT_TRANSFER_TX_RETRIES_MAX + 1u, st->stale_acks);
+	zassert_equal(1u + 1u + RADIANT_TRANSFER_TX_RETRIES_MAX,
+		      collect_tx_arms(tx, ARRAY_SIZE(tx)));
+
+	arms_before = fake_radio_arm_count();
+	fake_radio_advance(50000u);
+	zassert_equal(arms_before, fake_radio_arm_count(),
+		      "the sender kept transmitting after TX_FAILED");
+	end_of_test();
+}
+
+/* A transfer that may not retry - a one-packet burst, acknowledged data - ends
+ * on a stale answer as BAD_ACK, with nothing sent again. */
+ZTEST(transfer, test_a_stale_acknowledgement_of_a_single_packet_is_bad_ack)
+{
+	const struct radiant_transfer_stats *st;
+	uint8_t payload[RADIANT_TRANSFER_PKT_BYTES];
+	const struct fake_radio_arm *tx[4];
+
+	reset_blocks();
+	queue_block(0u, 8u, RADIANT_TRANSFER_SEG_START | RADIANT_TRANSFER_SEG_END,
+		    0x40u);
+	zassert_true(feed_next_block());
+	zassert_true(fake_radio_step());
+	air_reply_ctrl(stale_ack_for(last_arm_of(FAKE_RADIO_ARM_TX)->body[BODY_CTRL]));
+	zassert_true(fake_radio_step());
+	zassert_equal(1u, n_ev);
+	zassert_equal(RADIANT_TRANSFER_FAIL_BAD_ACK, evlog[0].fail);
+	zassert_equal(1u, collect_tx_arms(tx, ARRAY_SIZE(tx)),
+		      "a one-packet burst was retried");
+
+	memset(payload, 0x5Au, sizeof(payload));
+	zassert_equal(RADIANT_TRANSFER_OK,
+		      radiant_transfer_ack_data(&xfer, payload,
+					    RADIANT_TRANSFER_PKT_BYTES,
+					    RADIANT_TIME_NEVER));
+	commit();
+	zassert_true(fake_radio_step());
+	air_reply_ctrl(stale_ack_for(last_arm_of(FAKE_RADIO_ARM_TX)->body[BODY_CTRL]));
+	zassert_true(fake_radio_step());
+	zassert_equal(2u, n_ev);
+	zassert_equal(RADIANT_TRANSFER_FAIL_BAD_ACK, evlog[1].fail);
+	zassert_equal(2u, collect_tx_arms(tx, ARRAY_SIZE(tx)),
+		      "acknowledged data was retried");
+
+	st = radiant_transfer_stats(&xfer);
+	zassert_equal(0u, st->retries);
+	zassert_equal(2u, st->stale_acks);
+	end_of_test();
+}
+
 /* A burst aborted mid-flight, and the late terminal event that follows it. A
  * cancelled operation's terminal event still arrives (per HAL contract), so
  * the engine ends on that event, not the abort call, and must recognise a

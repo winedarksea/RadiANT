@@ -63,12 +63,27 @@ and the master stopped listening at +1810 us, and because the master
 re-anchored its period on every burst packet. Both are fixed in `ea9b3f1`;
 the captures are in `archive/captures/radio/` ("The master-burst captures").
 
+## A2's two failures (traced 2026-11-12)
+
+Both are the same thing: the Garmin missed a packet and repeated its
+acknowledgement of the previous one, and the master took that for a bad
+acknowledgement and gave up without retrying (`FAIL_BAD_ACK` was terminal).
+
+| Burst | Sniffer frames | Master sent | Garmin answered |
+|---|---|---|---|
+| `0x15` | n=7811..7816 | `82` (seq 0) | `C2` at +1544, then `C2` four more times ~3140 us apart |
+| `0x24` | n=8061..8066 | `92` (seq 1) | `D2` at +1588, then `D2` four more times |
+
+A real acknowledgement complements the sequence bit (`82` -> `D2`,
+`92` -> `C2`). These kept it, which is "I still expect the packet you just
+sent". The master sent nothing after either one, and the next frame on air is
+the master's next slot. Fixed on `fix/burst-retry-followups`: a stale
+acknowledgement (`radiant_transfer_ack_is_stale()`) is retried like an empty
+window.
+
 ## Not covered
 
 - MPSL builds. A retry falls outside the data packet's grant there, as
   multi-packet bursts do (TODO.md).
-- A2's two failures were not traced. Candidates: five misses in a row, or a
-  packet 0 the slave never heard. In that case the slave is still tracking,
-  and a retry 3.7 ms later is not in any window it opens.
 - Inbound bursts (RadiANT as the receiving slave). That is the deferred
   inbound-burst work in TODO.md.

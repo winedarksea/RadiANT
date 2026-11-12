@@ -802,6 +802,17 @@ void radiant_transfer_on_rx_event(struct radiant_transfer *t,
 		return;
 	}
 	if (!radiant_transfer_ack_matches(t->cur_ctrl, f.ctrl_byte)) {
+		/* The receiver repeating its answer to the previous packet: it
+		 * missed this one. A miss, not a protocol error - retried like
+		 * an empty window, and BAD_ACK only when no retry is allowed.
+		 * Ending the burst here was both of the 2026-11-11 A2 failures:
+		 * the Garmin kept repeating its stale answer, waiting. */
+		if (radiant_transfer_ack_is_stale(t->cur_ctrl, f.ctrl_byte)) {
+			t->stats.stale_acks++;
+			if (retry_packet(t)) {
+				return;
+			}
+		}
 		finish(t, RADIANT_TRANSFER_EV_TX_FAILED, RADIANT_TRANSFER_FAIL_BAD_ACK);
 		return;
 	}
