@@ -62,6 +62,12 @@ rsource "../common/Kconfig.activity"
 # sleeps.
 rsource "../common/Kconfig.heartbeat_led"
 
+# CONFIG_ANT_DONGLE_HEALTH_COUNTERS: the 0xF6 health counters, off by default
+# (see that file's own header). Sourced so ti_health.conf can turn them on: on
+# a LaunchXL whose log UART has nothing attached, 0xF6 over the ANT UART is
+# the one way to read SCHED_DENIED off a running image.
+rsource "../common/Kconfig.health"
+
 choice ANT_DONGLE_RADIO
 	prompt "ANT radio backend"
 	default ANT_DONGLE_RADIO_CORE

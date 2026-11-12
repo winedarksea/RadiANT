@@ -999,11 +999,55 @@ void *radiant_cc26xx_client(void)
  * ordinary STATUS_TIMEOUT. Refuse instead: EDENIED is a fact the caller can
  * act on, a silently-late window is not.
  */
+
+/*
+ * Every RF_scheduleCmd() refusal (RF_ALLOC_ERROR / RF_ScheduleStatusError,
+ * i.e. a negative handle) - the same events the caller turns into a
+ * synchronous RADIANT_RADIO_EDENIED. Non-static and volatile on purpose: it
+ * is meant to be found by symbol in the ELF and read over a debug probe on a
+ * board whose log UART has nothing attached (boards/cc26x2r1_launchxl.conf
+ * puts the log on DIO22/DIO24). A plain increment, so it costs nothing in the
+ * SWI/HWI context most arms are issued from.
+ */
+volatile uint32_t radiant_cc26xx_submit_refusals;
+
+/*
+ * The log line is emitted from the system work queue, never from the arm
+ * call itself: this application builds with CONFIG_LOG_MODE_IMMEDIATE (see
+ * boards/cc26x2r1_launchxl.conf), under which LOG_WRN formats and polls the
+ * UART out synchronously - milliseconds of interrupts-off time inside the RF
+ * driver's SWI, which is where the core arms an ACK reply from. k_work_submit
+ * is ISR-safe and coalesces while pending; the k_uptime check bounds it to
+ * one line per second however fast refusals arrive.
+ */
+static int64_t refusal_logged_ms = INT64_MIN / 2;
+
+static void refusal_log_work_fn(struct k_work *work)
+{
+	ARG_UNUSED(work);
+	LOG_WRN("RF_scheduleCmd refused %u arm(s) so far",
+		(unsigned int)radiant_cc26xx_submit_refusals);
+}
+
+static K_WORK_DEFINE(refusal_log_work, refusal_log_work_fn);
+
+static void note_submit_refusal(void)
+{
+	int64_t now = k_uptime_get();
+
+	radiant_cc26xx_submit_refusals++;
+	if (now - refusal_logged_ms >= 1000) {
+		refusal_logged_ms = now;
+		(void)k_work_submit(&refusal_log_work);
+	}
+}
+
 static RF_CmdHandle post_op(RF_Op *op, uint32_t start_rat, uint32_t end_rat,
 			     uint32_t activity, RF_Callback cb,
 			     RF_EventMask events)
 {
 	RF_ScheduleCmdParams sch;
+	RF_CmdHandle ch;
 
 	RF_ScheduleCmdParams_init(&sch);
 	sch.startTime = start_rat;
@@ -1013,7 +1057,12 @@ static RF_CmdHandle post_op(RF_Op *op, uint32_t start_rat, uint32_t end_rat,
 	sch.endType = RF_EndAbs;
 	sch.activityInfo = activity;
 
-	return RF_scheduleCmd(st.rf_handle, op, &sch, cb, events);
+	ch = RF_scheduleCmd(st.rf_handle, op, &sch, cb, events);
+	if (ch < 0) {
+		note_submit_refusal();
+	}
+
+	return ch;
 }
 #else
 static RF_CmdHandle post_op(RF_Op *op, uint32_t start_rat, uint32_t end_rat,
