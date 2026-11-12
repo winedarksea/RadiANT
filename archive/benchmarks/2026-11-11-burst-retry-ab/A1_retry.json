@@ -1,0 +1,19 @@
+{
+  "bursts": 100,
+  "packets": 8,
+  "tx_power": 0,
+  "master_dbm": -40,
+  "seconds": 50.04699999999957,
+  "outcomes": {
+    "COMPLETED": 100
+  },
+  "slave": {
+    "packets": 800,
+    "whole": 100,
+    "broken": 0,
+    "seq_breaks": 0,
+    "lengths": {
+      "8": 100
+    }
+  }
+}

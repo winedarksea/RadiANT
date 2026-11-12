@@ -1,0 +1,74 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+# Outbound burst retries: A/B/A, 2026-11-11
+
+Checked by: nothing automated. This is the bench evidence for the outbound
+burst retries on branch `fix/spec-rev51-gaps` (Rev 5.1 sec 5.4.3 / 9.5.5.3:
+retry each burst packet up to five times, then `EVENT_TRANSFER_TX_FAILED`).
+
+## Result
+
+| Leg | Image | Bursts failed | Slave got whole |
+|---|---|---|---|
+| A1 | retries (5) | **0 / 100** | 100 |
+| B | retries compiled to 0 | **47 / 100** | 56 |
+| A2 | retries (5) | **2 / 100** | 98 |
+
+Each burst is 8 packets. Without retries 47 % failed, which is what
+1-(1-p)^8 gives at p = 7.6 % per packet (a lost packet or a lost
+acknowledgement). With retries 0 and 2 failed, in the legs either side of it,
+so the room did not drift enough to explain the difference.
+
+The sniffer's control-byte counts show the retries doing the work. 100 bursts
+need exactly 100 `8A`, 300 `92`, 300 `82` and 100 `B2`:
+
+| Leg | `8A` | `92` | `82` | `B2` |
+|---|---|---|---|---|
+| A1 | 111 | 329 | 319 | 111 |
+| B | 100 | 232 | 216 | 56 |
+| A2 | 104 | 326 | 321 | 105 |
+
+In A1 that is about 70 repeated packets in 800 (`B3` histograms from the
+`.log.gz` files here, which also miss frames, so they are lower bounds). In B
+nothing repeats, and the counts fall off after the first lost packet of each
+burst.
+
+## Rig
+
+- **Master (dongle under test):** the Pro Micro (`EE6986854FD72803`),
+  `apps/dongle`, core backend, nRF radio, non-MPSL, built with
+  `scripts/build_all.ps1 -Only radiant_dongle_promicro.uf2` at NCS v3.4.0.
+  A legs: the tree of commit `ea9b3f1` (UF2 md5 `55201c2f1283...`). B leg: the
+  same tree with `RADIANT_TRANSFER_TX_RETRIES_MAX` set to `0u`, built in a
+  separate worktree (md5 `9bdb9529ec11...`). Flashed over USB with
+  `ant_probe.py --reboot-to-bootloader`.
+- **Slave (reference):** Garmin ANT USB-m (`006`), bidirectional slave.
+- **Sniffer:** `radiant/spike/promisc` on the nRF54L15 DK, console on its log
+  VCOM with DTR set.
+- **Command:**
+
+      python tools/ant_ack_pair.py --master-serial EE6986854FD72803 \
+          --slave-serial 006 --master-bursts 100 --burst-packets 8 \
+          --burst-gap 0.3 --burst-tx-power 0 --burst-master-dbm -40
+
+  Both ends at ANT power level 0, then the master alone at -40 dBm through
+  the custom-register escape. At level 0 alone the two sticks, about 30 cm
+  apart, lost nothing, and neither leg could have shown a difference.
+
+## Before this could run
+
+The first attempt failed every burst on the old image too. That was not
+retries: a RadiANT master's multi-packet burst had never completed on air,
+because the slave answers packet 0 on its slot-reply turnaround (+2209 us)
+and the master stopped listening at +1810 us, and because the master
+re-anchored its period on every burst packet. Both are fixed in `ea9b3f1`;
+the captures are in `archive/captures/radio/` ("The master-burst captures").
+
+## Not covered
+
+- MPSL builds. A retry falls outside the data packet's grant there, as
+  multi-packet bursts do (TODO.md).
+- A2's two failures were not traced. Candidates: five misses in a row, or a
+  packet 0 the slave never heard. In that case the slave is still tracking,
+  and a retry 3.7 ms later is not in any window it opens.
+- Inbound bursts (RadiANT as the receiving slave). That is the deferred
+  inbound-burst work in TODO.md.

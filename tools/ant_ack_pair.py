@@ -21,6 +21,17 @@ THE RIG. Two boards, both running apps/dongle, both host-controlled here:
     python tools/ant_ack_pair.py --master-port COM8 \
         --slave-serial 755972D7183A6183 --log-port COM7 --sends 8
 
+MULTI-PACKET BURSTS, MASTER TO SLAVE (`--master-bursts N`). The other
+direction: the MASTER originates N bursts of `--burst-packets` packets each and
+the slave acknowledges every packet. Built for the outbound-retry A/B (Rev 5.1
+sec 5.4.3): with no retries a P-packet burst fails with probability about
+1-(1-p)^P at per-packet loss p; with retries it should almost never fail. Put
+the dongle under test on the master end and a reference stick (the Garmin) on
+the slave end:
+
+    python tools/ant_ack_pair.py --master-serial EE6986854FD72803 \\
+        --slave-serial 006 --master-bursts 100 --burst-packets 8
+
 Exit status: 1 if either board fails to open/configure, or (`--lone-master`)
 if data arrives with no peer transmitting; 0 otherwise - outside
 `--lone-master` this is a diagnostic printout, not an automated gate.
@@ -219,6 +230,147 @@ def master_thread(dev, reader, counters: Counters, stop: threading.Event) -> Non
                 return
 
 
+def burst_header(seq: int, last: bool) -> int:
+    """The channel byte of a host burst packet: channel | seq << 5 | last."""
+    return CHANNEL | (seq << 5) | (0x80 if last else 0x00)
+
+
+def burst_packet_seq(i: int) -> int:
+    """Host sequence of packet i: 0 for the first, then 1, 2, 3, 1, 2, 3..."""
+    return 0 if i == 0 else ((i - 1) % 3) + 1
+
+
+def slave_burst_thread(reader, stats: dict, stop: threading.Event) -> None:
+    """Count what the slave hears of the master's bursts.
+
+    A burst counts as received whole when a packet flagged LAST arrives and
+    every packet since the last sequence-0 start was seen, in order, without
+    a gap. Duplicates (a retry the receiver already had) are the receiver's to
+    drop; a stick that passes one up shows here as a sequence break.
+    """
+    expect = None   # sequence of the next packet in the current burst
+    count = 0
+    while not stop.is_set():
+        result = reader.next_frame(time.monotonic() + 0.25)
+        if result is None:
+            continue
+        msg_id, body = result
+        if msg_id != MESG_BURST_DATA_ID or len(body) < 9:
+            continue
+        stats["packets"] += 1
+        seq = (body[0] >> 5) & 0x03
+        last = bool(body[0] & 0x80)
+        if seq == 0:
+            if expect is not None:
+                stats["broken"] += 1   # a new burst began before the last ended
+            expect, count = 1, 1
+        elif expect is not None and seq == expect:
+            expect = (seq % 3) + 1
+            count += 1
+        else:
+            stats["seq_breaks"] += 1
+            expect = None
+            continue
+        if last and expect is not None:
+            stats["whole"] += 1
+            stats["lengths"][count] = stats["lengths"].get(count, 0) + 1
+            expect = None
+
+
+def run_master_bursts(args, master, m_counts, slave, s_reader, stop,
+                      threads) -> int:
+    """--master-bursts: the master originates, the slave acknowledges."""
+    import json
+
+    if args.burst_tx_power is not None:
+        for dev in (master, slave):
+            dev.write(EP_OUT, frame(0x60, bytes([CHANNEL,
+                                                 args.burst_tx_power])))
+        print(f"  set power level {args.burst_tx_power} on both ends")
+        time.sleep(0.5)
+    if args.burst_master_dbm is not None:
+        from ant_sens import encode_power
+        level, custom = encode_power(args.burst_master_dbm, "nrf52840")
+        master.write(EP_OUT, frame(0x60, bytes([CHANNEL, level, custom])))
+        print(f"  set the master to {args.burst_master_dbm} dBm "
+              f"(level 0x{level:02X}, register 0x{custom:02X})")
+        time.sleep(0.5)
+
+    s_stats = {"packets": 0, "whole": 0, "broken": 0, "seq_breaks": 0,
+               "lengths": {}}
+    st = threading.Thread(target=slave_burst_thread,
+                          args=(s_reader, s_stats, stop), daemon=True)
+    st.start()
+    threads.append(st)
+
+    n_pkts = args.burst_packets
+    print(f"\nOriginating {args.master_bursts} bursts of {n_pkts} packets "
+          f"from the MASTER")
+    outcomes: dict[str, int] = {}
+    t0 = time.monotonic()
+    for b in range(args.master_bursts):
+        done_before = (m_counts.events.get(EVENT_TRANSFER_TX_COMPLETED, 0) +
+                       m_counts.events.get(EVENT_TRANSFER_TX_FAILED, 0))
+        ok_before = m_counts.events.get(EVENT_TRANSFER_TX_COMPLETED, 0)
+        for i in range(n_pkts):
+            payload = bytes([b & 0xFF, i, 0xA5, 0x5A, 0x01, 0x02, 0x03, 0x04])
+            master.write(EP_OUT, frame(
+                MESG_BURST_DATA_ID,
+                bytes([burst_header(burst_packet_seq(i), i == n_pkts - 1)]) +
+                payload))
+        end = time.monotonic() + 3.0 + 0.05 * n_pkts
+        got = "no terminal event"
+        while time.monotonic() < end:
+            done = (m_counts.events.get(EVENT_TRANSFER_TX_COMPLETED, 0) +
+                    m_counts.events.get(EVENT_TRANSFER_TX_FAILED, 0))
+            if done > done_before:
+                ok = m_counts.events.get(EVENT_TRANSFER_TX_COMPLETED, 0)
+                got = "COMPLETED" if ok > ok_before else "FAILED"
+                break
+            time.sleep(0.01)
+        outcomes[got] = outcomes.get(got, 0) + 1
+        if (b + 1) % 10 == 0 or got != "COMPLETED":
+            print(f"  {b + 1}/{args.master_bursts}: {got}  "
+                  f"(so far {outcomes})")
+        time.sleep(args.burst_gap)
+    elapsed = time.monotonic() - t0
+    time.sleep(1.0)
+    stop.set()
+    for t in threads:
+        t.join(timeout=3.0)
+
+    failed = outcomes.get("FAILED", 0) + outcomes.get("no terminal event", 0)
+    print("\n" + "=" * 68)
+    print(f"{args.master_bursts} bursts x {n_pkts} packets in {elapsed:.1f} s")
+    print("=" * 68)
+    print(f"  the master was told      {outcomes}")
+    print(f"  failure rate             {failed / args.master_bursts:.1%}")
+    print(f"  slave burst packets      {s_stats['packets']} "
+          f"(min {args.master_bursts * n_pkts} if every packet went once)")
+    print(f"  slave whole bursts       {s_stats['whole']}  "
+          f"lengths {s_stats['lengths']}")
+    print(f"  slave broken / seq gaps  {s_stats['broken']} / "
+          f"{s_stats['seq_breaks']}")
+    if args.json_bursts:
+        with open(args.json_bursts, "w", encoding="utf-8") as fh:
+            json.dump({"bursts": args.master_bursts, "packets": n_pkts,
+                       "tx_power": args.burst_tx_power,
+                       "master_dbm": args.burst_master_dbm,
+                       "seconds": elapsed, "outcomes": outcomes,
+                       "slave": {k: v for k, v in s_stats.items()}},
+                      fh, indent=2, default=str)
+        print(f"  wrote {args.json_bursts}")
+
+    for dev in (slave, master):
+        try:
+            dev.write(EP_OUT, frame(MESG_CLOSE_CHANNEL_ID, bytes([CHANNEL])))
+            time.sleep(0.2)
+            close_device(dev)
+        except Exception:  # noqa: BLE001
+            pass
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -265,7 +417,28 @@ def main() -> int:
     ap.add_argument('--json', dest='json_out', help='write a machine-readable bench report')
     ap.add_argument('--gate', action='store_true',
                     help='require >=300s, >=300 commands, >=99%% success and receive-loss gates')
+    ap.add_argument('--master-bursts', type=int, default=0,
+                    help='originate this many multi-packet bursts FROM THE '
+                         'MASTER to the slave, instead of acknowledged data '
+                         'from the slave (see the module docstring)')
+    ap.add_argument('--burst-packets', type=int, default=8,
+                    help='packets per burst in --master-bursts mode (default 8)')
+    ap.add_argument('--burst-gap', type=float, default=0.5,
+                    help='seconds between bursts in --master-bursts mode')
+    ap.add_argument('--json-bursts', help='write the --master-bursts result here')
+    ap.add_argument('--burst-tx-power', type=int, choices=range(5),
+                    help='--master-bursts: set this per-channel power level '
+                         '(0x60, 0 = lowest) on BOTH ends, to raise the '
+                         'per-packet loss enough for retries to matter')
+    ap.add_argument('--burst-master-dbm', type=int,
+                    help='--master-bursts: set the MASTER alone to this dBm '
+                         'through the custom-register escape (nRF52840 '
+                         'table in ant_sens.py), applied after '
+                         '--burst-tx-power')
     args = ap.parse_args()
+    if args.master_bursts and args.burst_packets < 2:
+        ap.error('--burst-packets must be at least 2 (one packet is '
+                 'acknowledged data, which is never retried)')
 
     if bool(args.master_port) == bool(args.master_serial):
         ap.error("pass exactly one of --master-port / --master-serial")
@@ -380,6 +553,10 @@ def main() -> int:
         stop.set()
         return 1
     print(f"  OK: tracking ({heard} broadcasts)")
+
+    if args.master_bursts:
+        return run_master_bursts(args, master, m_counts, slave, s_reader,
+                                 stop, threads)
 
     # Baseline: what the master's host sees per second with broadcast only.
     base_total, base_bcast, base_slots = (m_counts.total, m_counts.broadcast,

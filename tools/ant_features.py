@@ -498,7 +498,8 @@ def check_scan_mode(dev, reader, seconds: float) -> list[str]:
     assigned and configured it. Before 2026-11-11 RadiANT reassigned it as a
     wildcard slave on network 0 at RF 66 and heard nothing on the ANT+ band.
     Also checks lib config 0xE0 then 0x80 on the air: every broadcast must
-    carry only the 4-byte channel ID tail (flag 0x80, 13 bytes in all).
+    carry only the 4-byte channel ID tail (flag 0x80; 14 bytes with the
+    channel byte).
 
     This one puts a receiver on the air (receive only, nothing transmitted),
     which is why it is opt-in. It needs an ANT+ sensor in range to say more
@@ -544,11 +545,14 @@ def check_scan_mode(dev, reader, seconds: float) -> list[str]:
         msg_id, body = result
         if msg_id != MESG_BROADCAST_DATA_ID:
             continue
-        if len(body) == 13 and body[9] == LIB_CONFIG_DEVICE_ID_ONLY:
+        # [channel, d0..d7, flag 0x80, dev lo, dev hi, type, trans]: 14.
+        if len(body) == 14 and body[9] == LIB_CONFIG_DEVICE_ID_ONLY:
             key = (body[10] | (body[11] << 8), body[12])
             heard[key] = heard.get(key, 0) + 1
         else:
             wrong_tail += 1
+            if wrong_tail <= 3:
+                print(f"  !! broadcast without the 0x80 tail: {body.hex()}")
     for (number, dtype), count in sorted(heard.items()):
         print(f"  heard #{number} type {dtype & 0x7F}: {count} broadcasts")
     if wrong_tail:
