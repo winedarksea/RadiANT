@@ -1,0 +1,25 @@
+EE6986854FD72803 (RADIANT0.01B00): 1280 sightings in 299.9 s listening, 4.27/s, 67 open(s)
+          device   per s  heard/opens  median 1st  max 1st
+      52233:0x0B    2.09    67/67          0.44 s   3.75 s
+      52233:0x11    0.00     1/67               -   3.00 s
+      52233:0x7B    2.17    67/67          0.31 s   1.20 s
+  tracked 52233:0x0B: 993 received, 203 RX_FAIL, loss 16.97 %
+  tracked 52233:0x11: 953 received, 243 RX_FAIL, loss 20.32 %
+  events: ch1:0x08 x2, ch2:0x08 x1
+
+3D55F77818BE772A (RADIANT0.01B00): 143 sightings in 299.9 s listening, 0.48/s, 67 open(s)
+          device   per s  heard/opens  median 1st  max 1st
+      52233:0x0B    0.23    49/67          0.49 s   4.22 s
+      52233:0x11    0.01     3/67               -   4.00 s
+      52233:0x7B    0.24    53/67          0.44 s   3.69 s
+  tracked 52233:0x0B: 857 received, 335 RX_FAIL, loss 28.10 %
+  tracked 52233:0x11: 820 received, 338 RX_FAIL, loss 29.19 %
+  events: ch1:0x08 x2, ch2:0x08 x3
+
+006 (AJK2.05RAF): 594 sightings in 299.6 s listening, 1.98/s, 66 open(s)
+          device   per s  heard/opens  median 1st  max 1st
+      52233:0x7B    1.98    66/66          0.32 s   1.47 s
+  tracked 52233:0x0B: 658 received, 539 RX_FAIL, loss 45.03 %
+  tracked 52233:0x11: 627 received, 556 RX_FAIL, loss 47.00 %
+  events: ch1:0x08 x4, ch2:0x08 x5
+

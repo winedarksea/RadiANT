@@ -1,0 +1,52 @@
+Found 0FCF:1009  bcdDevice=0x0100
+  manufacturer: RadiANT Project
+  product:      RadiANT ANT+ compatible USB stick
+  serial:       EE6986854FD72803
+
+Opening ANT+ receive channels
+  . unsolicited 0x4E 021ad4d4995b9a9d20e009cc110520bc00432a
+  OK: extended messages
+  OK: ANT+ network key
+  OK: ch0 assign slave
+  OK: ch0 channel id
+  OK: ch0 radio frequency
+  OK: ch0 message period
+  OK: ch0 search timeout
+  OK: ch0 open
+  OK: channel 0 - bicycle power, standard page 0x10, pinned to #4660
+
+Listening for 40 s
+  ch0 21 pkts
+  ch0 40 pkts
+  ch0 59 pkts
+  ch0 80 pkts
+  ch0 100 pkts
+  ch0 120 pkts
+  ch0 141 pkts
+
+Closing
+  OK: close ch0
+  OK: unassign ch0
+
+=== power (device type 0x0B, 8182 ticks) ===
+  OK   packets                158 received, 161 expected over 40.0 s
+  FAIL loss                   1.87 % (limit 1.50 %, one packet = 0.62 %)
+  OK   jitter                 stddev 34.4 ms, max 500.0 ms (limit 124.8 ms, period 249.7 ms)
+  OK   accumulator continuity 0 violation(s)
+  FAIL loss (exact)           1.88 % - 3 of 160 message message(s) missing, counted from the transmitter's own event counter rather than a clock
+  OK   sensor liveness        the event counter advanced on 155 of 155 packet pairs
+  pages: 0x10 x156, 0x50 x1, 0x51 x1
+  timing: 2.81 ms off the 249.7 ms slot grid by the host clock, 0.029 ms by the radio's
+  signal: mean -50.9 dBm (min -56, max -42, n=158) - ANT tracks to about -90
+  wraps observed: none - this run did not reach a 16-bit accumulator wrap
+  attestation: clear - no key here, which is not the same as unprotected
+  power: mean 100.04 (min 97.00, max 103.00, n=156)
+  cadence: mean 79.94 (min 77.00, max 83.00, n=156)
+
+channel events: EVENT_RX_FAIL x3
+3 packet(s) missing, all of it reported by the radio as RX_FAIL, so it happened on the air.
+heard on channel 0: device #4660, type 0x0B
+
+wrote archive/benchmarks/2026-11-12-gate3/s7_B_rf66.json
+
+FAILED

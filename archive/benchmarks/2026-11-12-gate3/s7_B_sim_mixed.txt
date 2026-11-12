@@ -1,0 +1,19 @@
+
+Opening ANT+ master channels
+  OK: ANT+ network key
+  OK: ch0 assign master
+  OK: ch0 channel id
+  OK: ch0 radio frequency
+  OK: ch0 message period
+  OK: ch0 open
+  OK: channel 0 - power (page 0x10), device #4660 type 0x0B trans 5, 8182 ticks (4.00 Hz)
+
+Transmitting for 80 s (100 W, 80 rpm, +/-3, seed 1)
+
+Closing
+  OK: close ch0
+  OK: unassign ch0
+
+  channel 0: 321 messages (320 expected), 321 EVENT_TX
+
+PASS: every message was paced by EVENT_TX

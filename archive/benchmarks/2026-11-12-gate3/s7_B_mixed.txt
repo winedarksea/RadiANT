@@ -1,0 +1,80 @@
+Found 0FCF:1009  bcdDevice=0x0100
+  manufacturer: RadiANT Project
+  product:      RadiANT ANT+ compatible USB stick
+  serial:       EE6986854FD72803
+
+Opening ANT+ receive channels
+  OK: extended messages
+  OK: ANT+ network key
+  OK: ch0 assign slave
+  OK: ch0 channel id
+  OK: ch0 radio frequency
+  OK: ch0 message period
+  OK: ch0 search timeout
+  OK: ch0 open
+  OK: channel 0 - bicycle power, standard page 0x10, pinned to #52233
+  OK: ch1 assign slave
+  OK: ch1 channel id
+  OK: ch1 radio frequency
+  OK: ch1 message period
+  OK: ch1 search timeout
+  OK: ch1 open
+  OK: channel 1 - bicycle power, standard page 0x10, pinned to #4660
+
+Listening for 45 s
+  ch0 15 pkts, ch1 17 pkts
+  ch0 31 pkts, ch1 37 pkts
+  ch0 47 pkts, ch1 57 pkts
+  ch0 64 pkts, ch1 78 pkts
+  ch0 79 pkts, ch1 96 pkts
+  ch0 97 pkts, ch1 116 pkts
+  ch0 113 pkts, ch1 137 pkts
+  ch0 131 pkts, ch1 157 pkts
+
+Closing
+  OK: close ch0
+  OK: unassign ch0
+  OK: close ch1
+  OK: unassign ch1
+
+=== power (device type 0x0B, 8182 ticks) ===
+  OK   packets                147 received, 180 expected over 44.7 s
+  FAIL loss                   18.32 % (limit 1.50 %, one packet = 0.56 %)
+  FAIL jitter                 stddev 145.6 ms, max 1250.0 ms (limit 124.8 ms, period 249.7 ms)
+  OK   accumulator continuity 0 violation(s)
+  OK   sensor liveness        the event counter advanced on 33 of 141 packet pairs
+  pages: 0x10 x35, 0x11 x108, 0x50 x2, 0x51 x1, 0xF6 x1
+  timing: 2.58 ms off the 249.7 ms slot grid by the host clock, 0.010 ms by the radio's
+  signal: mean -68.2 dBm (min -69, max -67, n=147) - ANT tracks to about -90
+  wraps observed: event_count x1
+  attestation: clear - no key here, which is not the same as unprotected
+  power: mean 0.00 (min 0.00, max 0.00, n=35)
+  cadence: mean 0.00 (min 0.00, max 0.00, n=143)
+
+=== power (device type 0x0B, 8182 ticks) ===
+  OK   packets                173 received, 180 expected over 44.7 s
+  FAIL loss                   3.91 % (limit 1.50 %, one packet = 0.56 %)
+  OK   jitter                 stddev 56.4 ms, max 750.0 ms (limit 124.8 ms, period 249.7 ms)
+  OK   accumulator continuity 0 violation(s)
+  FAIL loss (exact)           3.91 % - 7 of 179 message message(s) missing, counted from the transmitter's own event counter rather than a clock
+  OK   sensor liveness        the event counter advanced on 170 of 170 packet pairs
+  pages: 0x10 x171, 0x50 x1, 0x51 x1
+  timing: 2.68 ms off the 249.7 ms slot grid by the host clock, 0.017 ms by the radio's
+  signal: mean -50.2 dBm (min -51, max -49, n=173) - ANT tracks to about -90
+  wraps observed: none - this run did not reach a 16-bit accumulator wrap
+  attestation: clear - no key here, which is not the same as unprotected
+  power: mean 100.03 (min 97.00, max 103.00, n=171)
+  cadence: mean 79.84 (min 77.00, max 83.00, n=171)
+
+channel events: EVENT_RX_FAIL x40
+40 packet(s) missing, all of it reported by the radio as RX_FAIL, so it happened on the air.
+heard on channel 0: device #52233, type 0x0B
+heard on channel 1: device #4660, type 0x0B
+
+per channel (exact loss, from the transmitters' own counters):
+  channel 0    power                    no exact figure - the event counter stood still, so it is not stepped per message
+  channel 1    power                    3.91 % (7 of 179 message message(s) missing)
+
+wrote archive/benchmarks/2026-11-12-gate3/s7_B_mixed.json
+
+FAILED

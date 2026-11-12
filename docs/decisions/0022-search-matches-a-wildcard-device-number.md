@@ -108,6 +108,24 @@ So the default stays **n**. Before it flips, gate 3 needs settling with a
 diagnostic build. The question is whether a search reception on a sibling
 channel of the same device delays a tracked slot.
 
+### Gate 3 on nRF, 2026-11-12
+
+Six alternating 300 s windows with 0xF7 page 7 (ADR 0023), the Pro Micro on A
+(off) or B (on) against an nRF52840 Dongle on A in every window as the
+same-SoC control (`archive/benchmarks/2026-11-12-gate3/`).
+
+- Tracked loss: B - A = **-0.23 pp** against the control, bound 2.16 pp.
+  No measurable cost.
+- Page 7: no tracked window opened late and none expired behind a scan
+  chunk on either image, so the suspected mechanism (search END interrupt
+  work overrunning the dispatch slack) was not seen.
+- But tracked slots opening just after the search heard the trainer's device
+  number were all missed, about 12 per window on B and 2 on A. The counter
+  matches on device number only, so it cannot tell a true sibling channel
+  from the tracked frame itself arriving before its window. The plan's rule
+  reads that as a mechanism, so the default stays **n** until the counter is
+  split by channel ID and a short rerun decides it.
+
 ### On TI (CC2652R), 2026-11-12
 
 Same decision on `radiant_radio_cc26xx.c` (c911f31). `CC26XX_HW_ADDR_LEN`

@@ -1,0 +1,134 @@
+{
+  "tool": "ant_diag.py",
+  "backend": "nrf",
+  "pages": {
+    "0": {
+      "page": 0,
+      "name": "api",
+      "backend": "nrf",
+      "unmeasured_flag": false,
+      "fields": {
+        "sched_dones": 9801,
+        "sched_missed": 0,
+        "sched_failed": 0,
+        "sched_denied": 0,
+        "slots_missed": 1569,
+        "slots_denied": 0,
+        "rx_sched_events": 3823,
+        "xfer_no_ack": 0
+      }
+    },
+    "1": {
+      "page": 1,
+      "name": "master_rx",
+      "backend": "nrf",
+      "unmeasured_flag": false,
+      "fields": {
+        "mrx_posted": 0,
+        "mrx_refused": 0,
+        "mrx_skipped": 0,
+        "turn_dropped": 0,
+        "mrx_done_ok": 0,
+        "mrx_done_missed": 0,
+        "mrx_done_other": 0,
+        "mrx_frames": 0
+      }
+    },
+    "2": {
+      "page": 2,
+      "name": "transfer",
+      "backend": "nrf",
+      "unmeasured_flag": true,
+      "fields": {
+        "cont_submits": 0,
+        "cont_late": 0,
+        "turn_min_us": null,
+        "turn_max_us": null,
+        "tx_expired": 0,
+        "tx_margin_min_us": null,
+        "sched_arm_rejected": 0,
+        "sched_missed": 0
+      }
+    },
+    "3": {
+      "page": 3,
+      "name": "backend_a",
+      "backend": "nrf",
+      "unmeasured_flag": true,
+      "fields": {
+        "rx_posted": 9931,
+        "rx_refused": 0,
+        "term_ok": 702,
+        "term_empty": 5528,
+        "term_error": 133,
+        "status_err": null,
+        "status_last": null,
+        "sync_entries": 4377
+      }
+    },
+    "4": {
+      "page": 4,
+      "name": "backend_b",
+      "backend": "nrf",
+      "unmeasured_flag": true,
+      "fields": {
+        "sw_addr_mismatch": 0,
+        "window_drops": null,
+        "crc_fail": 554,
+        "alt_sync_hits": null,
+        "rx_nok": null,
+        "rx_buf_full": null,
+        "drain_max_us": null,
+        "min_lead_us": null
+      }
+    },
+    "5": {
+      "page": 5,
+      "name": "search_a",
+      "backend": "nrf",
+      "unmeasured_flag": false,
+      "fields": {
+        "windows": 844,
+        "sets_advanced": 777,
+        "sweeps": 22,
+        "frames_ok": 118,
+        "crc_fail": 0,
+        "acquired": 4,
+        "scan_reports": 111,
+        "timeouts": 0
+      }
+    },
+    "6": {
+      "page": 6,
+      "name": "search_b",
+      "backend": "nrf",
+      "unmeasured_flag": true,
+      "fields": {
+        "cache_steers": 70,
+        "cache_acquires": 4,
+        "permit_rejected": 0,
+        "rssi_rejected": 0,
+        "decode_failed": 0,
+        "bad_filter_index": 0,
+        "late_events": 0,
+        "sets_advanced_uncovered": null
+      }
+    },
+    "7": {
+      "page": 7,
+      "name": "handoff",
+      "backend": "nrf",
+      "unmeasured_flag": false,
+      "fields": {
+        "srch_cut_close": 1,
+        "srch_cut_abort": 0,
+        "srch_end_near_close": 1,
+        "trk_open_late": 1,
+        "trk_open_late_max_us": 158,
+        "trk_missed_behind_scan": 0,
+        "trk_slots_after_sibling": 2,
+        "trk_miss_after_sibling": 2
+      }
+    }
+  }
+}

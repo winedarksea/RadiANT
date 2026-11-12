@@ -1,0 +1,71 @@
+
+Opening ANT+ master channels
+  . response ch=0 to 0x41 code=0
+  . response ch=1 to 0x01 code=2
+  . response ch=2 to 0x01 code=2
+  . unsolicited 0x4E 0111d4d400995b9a9de009cc0ba510016c00b06f
+  . response ch=2 to 0x01 code=2
+  . unsolicited 0x4E 0110ddff00b6da0000e009cc0ba510016d00a68f
+  . response ch=2 to 0x01 code=2
+  . unsolicited 0x4E 0111d4d400995b9a9de009cc0ba510016d009caf
+  . unsolicited 0x4E 021019c4b70000ff24e009cc110510016d0053cb
+  . unsolicited 0x4E 0111d4d400995b9a9de009cc0ba510016d0092cf
+  . unsolicited 0x4E 021ad4d4995b9a9d20e009cc110510016d0052eb
+  . unsolicited 0x4E 0111d4d400995b9a9de009cc0ba510016d0088ef
+  . response ch=2 to 0x01 code=2
+  . unsolicited 0x4E 0111d4d400995b9a9de009cc0ba510016d007f0f
+  . response ch=2 to 0x01 code=2
+  . unsolicited 0x4E 0110dfff00b6da0000e009cc0ba510016d00752f
+  . unsolicited 0x4E 021971ff7685000020e009cc110510016d004f4b
+  . response ch=1 to 0x01 code=2
+  . unsolicited 0x4E 021019c4b70000ff24e009cc110510016d004e6b
+  . response ch=1 to 0x01 code=2
+  . unsolicited 0x4E 021ad4d4995b9a9d20e009cc110510016c004d8b
+  . unsolicited 0x4E 0111d4d400995b9a9de009cc0ba510016c00578f
+  . response ch=2 to 0x01 code=2
+  . response ch=1 to 0x01 code=2
+  . response ch=2 to 0x01 code=2
+  . response ch=1 to 0x01 code=2
+  . unsolicited 0x4E 0211ffffdbff7f0020e009cc110510016d004beb
+  . unsolicited 0x4E 0111d4d400995b9a9de009cc0ba510016d003aef
+  . unsolicited 0x4E 021019c4b70000ff24e009cc110510016d004a0b
+  . response ch=1 to 0x01 code=2
+  . response ch=2 to 0x01 code=2
+  . response ch=1 to 0x01 code=2
+  . response ch=2 to 0x01 code=2
+  . unsolicited 0x4E 0111d4d400995b9a9de009cc0ba510016d001c4f
+  . unsolicited 0x4E 02197aff7685000020e009cc110510016d00476b
+  . response ch=1 to 0x01 code=2
+  . response ch=2 to 0x01 code=2
+  . unsolicited 0x4E 0111d4d400995b9a9de009cc0ba510016c00098f
+  . response ch=2 to 0x01 code=2
+  . response ch=1 to 0x01 code=2
+  . response ch=2 to 0x01 code=2
+  . unsolicited 0x4E 0111d4d400995b9a9de009cc0ba510016d00f5ce
+  . unsolicited 0x4E 021ad4d4995b9a9d20e009cc110510016d0043eb
+  . response ch=1 to 0x01 code=2
+  . response ch=2 to 0x01 code=2
+  . unsolicited 0x4E 0111d4d400995b9a9de009cc0ba510016d00e00e
+  . response ch=2 to 0x01 code=2
+  . unsolicited 0x4E 0110e3ff00b6da0000e009cc0ba510016d00d62e
+  . response ch=2 to 0x01 code=2
+  . unsolicited 0x4E 0111d4d400995b9a9de009cc0ba510016c00cc4e
+  . response ch=0 to 0x01 code=52
+  . unsolicited 0x4E 021ad4d4995b9a9d20e009cc110510016d00406b
+  OK: ANT+ network key
+  OK: ch0 assign master
+  OK: ch0 channel id
+  OK: ch0 radio frequency
+  OK: ch0 message period
+  OK: ch0 open
+  OK: channel 0 - power (page 0x10), device #4660 type 0x0B trans 5, 8182 ticks (4.00 Hz)
+
+Transmitting for 75 s (100 W, 80 rpm, +/-3, seed 1)
+
+Closing
+  OK: close ch0
+  OK: unassign ch0
+
+  channel 0: 301 messages (300 expected), 301 EVENT_TX
+
+PASS: every message was paced by EVENT_TX
