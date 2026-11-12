@@ -212,6 +212,10 @@ reads.
 
 ### Fixed
 
+- **A master skipped its next slot after every acknowledged message.** The
+  slave lost one broadcast per `0x4F` (Garmin `rx_fail` 100 per 100 messages
+  before, 6 after). Bursts were not affected.
+  `archive/benchmarks/2026-11-12-master-slot-skip-fix/`.
 - **cc26xx coex arms refused every op chained from an early-stopped window**
   (ACK replies, next burst packet): the cancelled window still held its
   reserved time. One refusal per acked reception before, none after.
