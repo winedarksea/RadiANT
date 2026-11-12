@@ -598,6 +598,7 @@ config RADIANT_NRF_SLIP_GUARD
 config RADIANT_SEARCH_SHORT_MATCH
 	bool "search every device number in one window (wildcard short match)"
 	depends on RADIANT_BACKEND_NRF || RADIANT_BACKEND_CC26XX
+	default y if RADIANT_BACKEND_CC26XX
 	default n
 	help
 	  ADR 0022. The sweep normally matches the 3-byte search address
@@ -622,10 +623,16 @@ config RADIANT_SEARCH_SHORT_MATCH
 	  address bytes are then compared in software (two otherwise). The
 	  sweep drops from 128 sets (~33 s per pass) to one, but tracking
 	  windows also lock onto more noise and foreign frames. The backend
-	  counts those in radiant_cc26xx_sw_addr_mismatch (a JTAG-readable
-	  global, counted with this on or off so A and B images compare).
+	  counts those in radiant_cc26xx_sw_addr_mismatch (a global, counted
+	  with this on or off so A and B images compare; a JTAG connect resets
+	  the part, so read it through the bench-only 0xF6 patch archived in
+	  archive/benchmarks/2026-11-12-ti-wildcard/).
 
-	  Default n until the A/B in ADR 0022 passes its gates.
+	  Default y on cc26xx since 2026-11-12: the A/B/A in ADR 0022 passed
+	  all four gates on a CC2652R (4.45 sightings/s against 0.52, tracked
+	  loss no worse, fewer software mismatches). Default n on nRF until
+	  its own gate 3 is settled. apps/dongle_ti/ti_long_match.conf builds
+	  the 24-bit A image.
 
 config RADIANT_NRF_SLIP_GUARD_RUN
 	int "alternating-run length at which an address gets the slip guard"

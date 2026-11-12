@@ -1039,11 +1039,12 @@ void *radiant_cc26xx_client(void)
 /*
  * Every RF_scheduleCmd() refusal (RF_ALLOC_ERROR / RF_ScheduleStatusError,
  * i.e. a negative handle) - the same events the caller turns into a
- * synchronous RADIANT_RADIO_EDENIED. Non-static and volatile on purpose: it
- * is meant to be found by symbol in the ELF and read over a debug probe on a
- * board whose log UART has nothing attached (boards/cc26x2r1_launchxl.conf
- * puts the log on DIO22/DIO24). A plain increment, so it costs nothing in the
- * SWI/HWI context most arms are issued from.
+ * synchronous RADIANT_RADIO_EDENIED. Non-static and volatile so it survives
+ * to the ELF, but a debug probe cannot read it after a run: a DSS connect
+ * resets the CC26x2 and SRAM restarts from zero. On the bench read the same
+ * events as the 0xF6 reply's sched_denied (CONFIG_ANT_DONGLE_HEALTH_COUNTERS,
+ * ti_health.conf), which is how the 2026-11-12 A/B counted them. A plain
+ * increment, so it costs nothing in the SWI/HWI context most arms come from.
  */
 volatile uint32_t radiant_cc26xx_submit_refusals;
 
@@ -1199,8 +1200,11 @@ static void deliver_tx_terminal(enum radiant_radio_status status)
  */
 
 /*
- * FALSE-SYNC COUNTERS, read over JTAG by symbol address (non-static and
- * volatile so neither the compiler nor the linker drops or caches them).
+ * FALSE-SYNC COUNTERS (non-static and volatile so neither the compiler nor
+ * the linker drops or caches them). NOT readable over JTAG after a run: a DSS
+ * connect resets the CC26x2 and SRAM restarts from zero (measured 2026-11-12
+ * on Zephyr's tick counter). Read them through the bench-only 0xF6 patch in
+ * archive/benchmarks/2026-11-12-ti-wildcard/diag_health.patch.
  *
  *   radiant_cc26xx_sync_frames       every received entry rx_drain() looked
  *                                    at: the hardware matched a sync word
