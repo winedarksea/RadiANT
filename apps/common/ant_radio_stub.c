@@ -227,7 +227,8 @@ antr_err_t antr_adv_burst_config_get(uint8_t request_type, uint8_t *config)
 		memset(config, 0,
 		       ANTW_MESG_CONFIG_ADV_BURST_REQ_CAPABILITIES_SIZE);
 		config[0] = ANTW_ADV_BURST_MODES_SIZE_24_BYTES;
-		config[1] = ANTW_ADV_BURST_MODES_FREQ_HOP;
+		/* No supported modes: the stub hops on nothing (2026-11-11). */
+		config[1] = 0;
 	}
 	return ANTW_RESPONSE_NO_ERROR;
 }

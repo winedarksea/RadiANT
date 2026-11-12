@@ -4013,7 +4013,10 @@ antr_err_t antr_adv_burst_config_get(uint8_t request_type, uint8_t *config)
 		memset(config, 0,
 		       ANTW_MESG_CONFIG_ADV_BURST_REQ_CAPABILITIES_SIZE);
 		config[0] = (uint8_t)ANTW_ADV_BURST_MODES_SIZE_24_BYTES;
-		config[1] = (uint8_t)ANTW_ADV_BURST_MODES_FREQ_HOP;
+		/* Supported modes: none. Frequency hopping was advertised here
+		 * until 2026-11-11, but nothing in RadiANT hops, so a host that
+		 * required it would have been told yes and got a fixed RF. */
+		config[1] = 0u;
 	}
 	return (antr_err_t)ANTW_RESPONSE_NO_ERROR;
 }

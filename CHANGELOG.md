@@ -198,6 +198,9 @@ reads.
 
 ### Fixed
 
+- **Advanced burst no longer advertises frequency hopping.** The capabilities
+  form of `0x78` claimed it, but nothing in RadiANT hops. The supported-modes
+  byte is now `0x00`.
 - **After a transfer, a master's next broadcast repeats the last packet it
   sent.** It used to go back to the host's previous broadcast page. Rev 5.1
   p.109 (and our own Spike B captures) show the master repeating the last
