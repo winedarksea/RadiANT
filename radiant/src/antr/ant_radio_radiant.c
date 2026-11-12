@@ -3853,7 +3853,20 @@ antr_err_t antr_channel_radio_freq_set(uint8_t channel, uint8_t freq)
 antr_err_t antr_channel_radio_tx_power_set(uint8_t channel, uint8_t level,
 					   uint8_t custom)
 {
-	return radiant_channel_tx_power_set(channel, level, custom);
+	antr_err_t rc;
+
+	k_mutex_lock(&api_lock, K_FOREVER);
+	rc = radiant_channel_tx_power_set(channel, level, custom);
+	/* The transfer engine read the power at open; an open channel's change
+	 * must reach its data, burst and ack packets too, not only broadcasts
+	 * (api_power_of() at each post). */
+	if (rc == RADIANT_CH_OK && api_xfer[channel].ready) {
+		(void)radiant_transfer_set_power(&api_xfer[channel],
+						 api_power_of(channel));
+	}
+	k_mutex_unlock(&api_lock);
+
+	return rc;
 }
 
 antr_err_t antr_channel_search_timeout_set(uint8_t channel, uint8_t timeout)

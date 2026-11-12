@@ -198,6 +198,13 @@ reads.
 
 ### Fixed
 
+- **A power change on an open channel reaches acknowledged data, bursts and
+  acknowledgements.** The transfer engine kept the power the channel opened
+  with, so `0x60` after open changed only the broadcasts. A host that set level
+  0 sent its acknowledged data ~25 dB hotter (sniffed). That asymmetry made a
+  weak return link look like a master that misses acknowledgements: with both
+  ends really at 0 dBm or more, master acked data fails 0-2 %
+  (`archive/benchmarks/2026-11-12-master-acked-power/`).
 - **A slave's broadcast reaches its master.** `MESG_BROADCAST_DATA` on a slave
   channel used to return success and transmit nothing. It now goes out once,
   in the master's next reply window (control byte `0x02`, +2190 µs, both
@@ -422,7 +429,5 @@ image includes it.
   reset the host-frame parser in bench testing (0 of 10); a bus reset or replug
   does.
 - MPSL builds cannot run multi-packet bursts.
-- A RadiANT master's acknowledged messages are reported failed 10-38 % of the
-  time although the slave receives nearly all of them: the master misses the
-  slave's acknowledgement on the slot-reply turnaround. Bursts hide it with
-  retries. Cause not yet found (TODO.md).
+- After each acknowledged message it sends, a RadiANT master skips its next
+  broadcast slot (TODO.md).

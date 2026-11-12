@@ -55,6 +55,7 @@
 #include <string.h>
 
 #include <radiant/radiant_transfer.h>
+#include <radiant/radiant_event.h>
 
 /* ---------------------------------------------------------------------------
  * Small helpers
@@ -868,6 +869,24 @@ enum radiant_transfer_state radiant_transfer_state(const struct radiant_transfer
 uint32_t radiant_transfer_op(const struct radiant_transfer *t)
 {
 	return (t == NULL) ? 0u : t->op;
+}
+
+int radiant_transfer_set_power(struct radiant_transfer *t,
+			       struct radiant_tx_power power)
+{
+	unsigned int key;
+
+	if (t == NULL) {
+		return RADIANT_TRANSFER_EINVAL;
+	}
+	/* arm_tx() reads cfg.power from the radio interrupt mid-transfer; the
+	 * struct is wider than one store, so a torn read could pair a new dbm
+	 * with an old use_raw. */
+	key = radiant_event_crit_enter();
+	t->cfg.power = power;
+	radiant_event_crit_exit(key);
+
+	return RADIANT_TRANSFER_OK;
 }
 
 bool radiant_transfer_is_idle(const struct radiant_transfer *t)

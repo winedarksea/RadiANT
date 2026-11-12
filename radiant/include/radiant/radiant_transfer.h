@@ -946,6 +946,20 @@ int radiant_transfer_arm_tx(struct radiant_transfer *t, uint8_t ctrl,
 			const uint8_t *payload, uint8_t payload_len,
 			radiant_time_t t_sync_at);
 
+/*
+ * Change the transmit power of every packet this engine sends from its next
+ * arm on: data, burst and acknowledgement packets alike. The owner calls it
+ * when the host changes an open channel's power. Without it the engine kept
+ * the power it read at init, so a host that set level 0 after open sent its
+ * broadcasts at level 0 and its acknowledged data, bursts and acks ~25 dB
+ * hotter (sniffed 2026-11-12). Safe against an arm from the radio interrupt;
+ * a packet already posted to the scheduler keeps the power it was armed with.
+ *
+ * Returns RADIANT_TRANSFER_OK or RADIANT_TRANSFER_EINVAL.
+ */
+int radiant_transfer_set_power(struct radiant_transfer *t,
+			       struct radiant_tx_power power);
+
 /* ---------------------------------------------------------------------------
  * Inspection
  * ---------------------------------------------------------------------------

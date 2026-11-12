@@ -18,6 +18,16 @@ Each burst is 8 packets. Without retries 47 % failed, which is what
 acknowledgement). With retries 0 and 2 failed, in the legs either side of it,
 so the room did not drift enough to explain the difference.
 
+**Correction (2026-11-12, `../2026-11-12-master-acked-power/`).** The
+-40 dBm never reached the burst packets. The transfer engine kept the power
+the channel opened with, and `0x60` after open changed only the broadcasts
+(fixed since). So the master's `82/8A/92/B2` went out at full power (-33 dBm
+at the sniffer against -81 for its `0A`), and the Garmin's acknowledgements
+were at its level 0. The per-packet losses here were mostly missed
+acknowledgements on the return path, not lost packets. The finding that
+retries recover them still stands; the "-40 dBm" placement description below
+does not.
+
 The sniffer's control-byte counts show the retries doing the work. 100 bursts
 need exactly 100 `8A`, 300 `92`, 300 `82` and 100 `B2`:
 

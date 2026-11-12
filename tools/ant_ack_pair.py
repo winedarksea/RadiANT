@@ -289,6 +289,10 @@ def slave_acked_thread(reader, stats: dict, stop: threading.Event) -> None:
     Each payload carries its transfer index in byte 0 (mod 256), so a message
     the slave passes up twice shows as a duplicate rather than as a second
     delivery.
+
+    Also counts the master's broadcasts the slave received and its RX_FAIL /
+    RX_FAIL_GO_TO_SEARCH events: without them a slave that lost the master
+    altogether looks the same as one that misses only acknowledged data.
     """
     last = None
     while not stop.is_set():
@@ -296,6 +300,16 @@ def slave_acked_thread(reader, stats: dict, stop: threading.Event) -> None:
         if result is None:
             continue
         msg_id, body = result
+        if msg_id == MESG_BROADCAST_DATA_ID:
+            stats["broadcasts"] = stats.get("broadcasts", 0) + 1
+            continue
+        if (msg_id == MESG_RESPONSE_EVENT_ID and len(body) >= 3 and
+                body[1] == MESG_EVENT_ID):
+            if body[2] == 0x02:
+                stats["rx_fail"] = stats.get("rx_fail", 0) + 1
+            elif body[2] == 0x08:
+                stats["go_to_search"] = stats.get("go_to_search", 0) + 1
+            continue
         if msg_id != MESG_ACKNOWLEDGED_DATA_ID or len(body) < 9:
             continue
         stats["packets"] += 1
@@ -324,6 +338,12 @@ def run_master_bursts(args, master, m_counts, slave, s_reader, stop,
         master.write(EP_OUT, frame(0x60, bytes([CHANNEL, level, custom])))
         print(f"  set the master to {args.burst_master_dbm} dBm "
               f"(level 0x{level:02X}, register 0x{custom:02X})")
+        time.sleep(0.5)
+    if args.burst_slave_tx_power is not None:
+        slave.write(EP_OUT, frame(0x60, bytes([CHANNEL,
+                                              args.burst_slave_tx_power])))
+        print(f"  set the slave alone to power level "
+              f"{args.burst_slave_tx_power}")
         time.sleep(0.5)
 
     acked = bool(args.master_acked)
@@ -394,6 +414,9 @@ def run_master_bursts(args, master, m_counts, slave, s_reader, stop,
         print(f"  slave acked messages     {s_stats['packets']} "
               f"({s_stats['whole']} distinct, {s_stats['duplicates']} "
               f"passed up twice)")
+        print(f"  slave heard broadcasts   {s_stats.get('broadcasts', 0)}  "
+              f"rx_fail {s_stats.get('rx_fail', 0)}  "
+              f"go_to_search {s_stats.get('go_to_search', 0)}")
     else:
         print(f"  slave burst packets      {s_stats['packets']} "
               f"(min {n_xfers * n_pkts} if every packet went once)")
@@ -407,6 +430,9 @@ def run_master_bursts(args, master, m_counts, slave, s_reader, stop,
                        "bursts": n_xfers, "packets": n_pkts,
                        "tx_power": args.burst_tx_power,
                        "master_dbm": args.burst_master_dbm,
+                       "slave_tx_power": (args.burst_tx_power
+                                          if args.burst_slave_tx_power is None
+                                          else args.burst_slave_tx_power),
                        "seconds": elapsed, "outcomes": outcomes,
                        "slave": {k: v for k, v in s_stats.items()}},
                       fh, indent=2, default=str)
@@ -464,7 +490,10 @@ def main() -> int:
     ap.add_argument('--interval', type=float, default=1.0,
                     help='minimum seconds between commands in the gated runner')
     ap.add_argument('--tx-power', type=int, choices=range(6), default=4,
-                    help='ANT power level for both gated endpoints (default 4: +4 dBm)')
+                    help='ANT power level for both gated endpoints (default 4: '
+                         '+4 dBm on RadiANT, boosted to the part ceiling; on a '
+                         'Garmin USB-m level 4 is its WEAKEST, about -20 dBm '
+                         '(measured 2026-11-12), so use 3 there)')
     ap.add_argument('--json', dest='json_out', help='write a machine-readable bench report')
     ap.add_argument('--gate', action='store_true',
                     help='require >=300s, >=300 commands, >=99%% success and receive-loss gates')
@@ -493,6 +522,12 @@ def main() -> int:
                          'through the custom-register escape (nRF52840 '
                          'table in ant_sens.py), applied after '
                          '--burst-tx-power')
+    ap.add_argument('--burst-slave-tx-power', type=int, choices=range(5),
+                    help='--master-bursts / --master-acked: set the SLAVE '
+                         'alone to this power level (0x60), applied after '
+                         '--burst-tx-power; tells a weak return path (the '
+                         'acknowledgements) from a weak forward one. A Garmin '
+                         'USB-m: 3 is 0 dBm, 0 and 4 are both about -20 dBm')
     args = ap.parse_args()
     if args.master_bursts and args.master_acked:
         ap.error('pass at most one of --master-bursts / --master-acked')

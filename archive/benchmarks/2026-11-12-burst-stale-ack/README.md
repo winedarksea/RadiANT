@@ -35,6 +35,14 @@ frame, and at about 2 % a rate comparison of 300 bursts would not resolve it.
 
 ## 2. Acknowledged data from the master: a separate defect, not fixed
 
+**Resolved the same day, `../2026-11-12-master-acked-power/`.** The misses
+follow the Garmin's transmit power (10 and 12 missed at -20 dBm, 0 and 0 at
+0 dBm, alternating legs), so it is the return link's budget, not the
+receiver. The slave's ~99 % below was not a like-for-like comparison: the
+master's `AA` went out at the open power, not at level 0, because the transfer
+engine ignored power set after open (fixed). The text below is kept as
+recorded.
+
 `--master-acked` sends one `0x4F` at a time from the master. On air that is
 `0xAA`, a one-packet transfer that opens the slot, answered on the slave's
 slot-reply turnaround and never retried.

@@ -690,6 +690,137 @@ ZTEST(api, test_a_master_originates_acknowledged_data_on_its_own_slot)
 }
 
 /*
+ * A POWER CHANGE AFTER OPEN REACHES EVERY PACKET, NOT ONLY BROADCASTS.
+ *
+ * The transfer engine copied the channel's power once, at open, and 0x60 on
+ * an open channel only changed what broadcasts read. A host that opened and
+ * then set level 0 (ant_ack_pair.py does exactly that) sent its broadcasts at
+ * -20 dBm and its acknowledged data, bursts and acknowledgements at the open
+ * power: sniffed 2026-11-12, 0x0A at -64..-70 dBm and the interleaved 0xAA at
+ * -34..-42. Every link test run that way was ~25 dB hotter on those packets
+ * than it claimed. Nothing here could see it: no test changed power after
+ * open, and the fake radio records the power of every arm.
+ */
+static void assert_tx_power(const struct fake_radio_arm *a, int8_t dbm,
+			    const char *what)
+{
+	zassert_not_null(a, "%s was not armed", what);
+	zassert_false(a->power.use_raw, "%s asked for a raw power", what);
+	zassert_equal(dbm, a->power.dbm,
+		      "%s went out at %d dBm, not the %d dBm the host set after "
+		      "open", what, (int)a->power.dbm, (int)dbm);
+}
+
+ZTEST(api, test_a_power_change_after_open_reaches_acked_data_and_acks)
+{
+	static const uint8_t ack_payload[8] = {
+		0x33u, 0xA5u, 0x5Au, 0x01u, 0x02u, 0x03u, 0x04u, 0x05u
+	};
+	uint8_t                      frame[AIR_LEN];
+	const struct fake_radio_arm *bc;
+	const struct fake_radio_arm *ack;
+	radiant_time_t               t_tx;
+
+	open_channel((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	(void)run_one_quiet_period();
+	/* The open power must differ from level 0, else this passes on the
+	 * bug. */
+	bc = last_tx_with_ctrl(RADIANT_CTRL_BROADCAST);
+	zassert_not_null(bc);
+	zassert_not_equal(-20, (int)bc->power.dbm,
+			  "setup: the channel opened at -20 dBm already");
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_radio_tx_power_set(
+			      CH, (uint8_t)ANTW_RADIO_TX_POWER_LVL_0, 0u));
+
+	/* The slave's acknowledged data, answered by the master's 0xF2. */
+	host_writes_broadcast();
+	t_tx = run_one_master_slot();
+	assert_tx_power(last_tx_with_ctrl(RADIANT_CTRL_BROADCAST), -20,
+			"the broadcast");
+	(void)build_peer_frame(frame, RADIANT_CTRL_BURST_LAST_SEQ0, peer_payload);
+	zassert_equal(RADIANT_RADIO_OK_RC,
+		      fake_radio_air_frame(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US,
+					   frame, AIR_LEN));
+	fake_radio_advance_to(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US +
+			      RADIANT_TRANSFER_REPLY_US + 10u);
+	assert_tx_power(last_tx_with_ctrl(RADIANT_CTRL_ACK_LAST_SEQ1), -20,
+			"the master's acknowledgement (0xF2)");
+	drain();
+
+	/* The master's own acknowledged data. */
+	(void)run_one_quiet_period();
+	t_tx = run_one_quiet_period();
+	fake_radio_advance_to(t_tx + (PERIOD_US / 2u));
+	drain();
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_acknowledge_message_tx(CH, 8u, ack_payload));
+	ack = last_tx_with_ctrl(RADIANT_CTRL_ACK_DATA_OPEN);
+	assert_tx_power(ack, -20, "the acknowledged data (0xAA)");
+
+	fake_radio_advance_to(ack->t_sync_at + RADIANT_TRANSFER_REPLY_US +
+			      RADIANT_TRANSFER_ACK_GUARD_US + 100u);
+	drain();
+
+	end_of_test();
+}
+
+ZTEST(api, test_a_power_change_after_open_reaches_burst_packets)
+{
+	uint8_t blk_a[8] = { 0xA0u, 0xA1u, 0xA2u, 0xA3u, 0xA4u, 0xA5u, 0xA6u, 0xA7u };
+	uint8_t blk_b[8] = { 0xB0u, 0xB1u, 0xB2u, 0xB3u, 0xB4u, 0xB5u, 0xB6u, 0xB7u };
+	uint8_t                      frame[AIR_LEN];
+	const struct fake_radio_arm *p0;
+	const struct fake_radio_arm *p1;
+	radiant_time_t               t_tx;
+
+	open_channel((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	(void)run_one_quiet_period();
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_radio_tx_power_set(
+			      CH, (uint8_t)ANTW_RADIO_TX_POWER_LVL_1, 0u));
+	(void)run_one_quiet_period();
+	t_tx = run_one_quiet_period();
+	assert_tx_power(last_tx_with_ctrl(RADIANT_CTRL_BROADCAST), -12,
+			"the broadcast");
+	fake_radio_advance_to(t_tx + (PERIOD_US / 2u));
+	drain();
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_burst_tx(CH, 8u, blk_a, ANTR_BURST_SEGMENT_START));
+	p0 = last_tx_with_ctrl(RADIANT_CTRL_BURST_OPEN_SEQ0);
+	assert_tx_power(p0, -12, "burst packet 0 (0x8A)");
+
+	(void)build_peer_frame(frame,
+			       radiant_transfer_reply_ctrl(RADIANT_CTRL_BURST_OPEN_SEQ0),
+			       peer_payload);
+	zassert_equal(RADIANT_RADIO_OK_RC,
+		      fake_radio_air_frame(p0->t_sync_at + 2209u,
+					   frame, AIR_LEN));
+	fake_radio_advance_to(p0->t_sync_at + 2209u + 200u);
+	drain();
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_burst_tx(CH, 8u, blk_b, ANTR_BURST_SEGMENT_END));
+	p1 = last_tx_with_ctrl(RADIANT_CTRL_BURST_LAST_SEQ1);
+	assert_tx_power(p1, -12, "burst packet 1 (0xB2)");
+
+	/* Nobody acknowledges packet 1; let the transfer fail and the channel
+	 * settle back onto its broadcasts. */
+	fake_radio_advance(PERIOD_US);
+	drain();
+	if (fake_radio_is_idle()) {
+		run_housekeeping();
+	}
+	p1 = last_tx_with_ctrl(RADIANT_CTRL_BROADCAST);
+	zassert_not_null(p1);
+	fake_radio_advance_to(p1->t_sync_at + RADIANT_TRANSFER_SLOT_REPLY_US +
+			      RADIANT_TRANSFER_ACK_GUARD_US + 10u);
+	end_of_test();
+}
+
+/*
  * AND IT MUST ANSWER BEFORE THE HOST HAS EVER WRITTEN A PAGE.
  *
  * api_xfer_broadcast() used to refuse whenever the channel's broadcast buffer

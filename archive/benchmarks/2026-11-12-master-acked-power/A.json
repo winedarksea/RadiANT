@@ -1,0 +1,18 @@
+{
+  "mode": "acked",
+  "bursts": 100,
+  "packets": 1,
+  "tx_power": 0,
+  "master_dbm": null,
+  "slave_tx_power": 0,
+  "seconds": 75.0,
+  "outcomes": {
+    "FAILED": 99,
+    "COMPLETED": 1
+  },
+  "slave": {
+    "packets": 1,
+    "whole": 1,
+    "duplicates": 0
+  }
+}
