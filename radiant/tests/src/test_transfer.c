@@ -1110,6 +1110,47 @@ ZTEST(transfer, test_one_missed_acknowledgement_is_retried_and_the_transfer_comp
 	end_of_test();
 }
 
+/* The retry is armed from the empty acknowledgement window's terminal, which
+ * a backend with a receive close hold delivers late. Here no fresh arm can
+ * reach the retry instant from that callback (a 1400 us lead against 1300 us
+ * of notice); only the in-grant lead inside the window's reserve can. Before
+ * the window reserved air the retry was reported MISSED and the burst failed:
+ * the CC26x2 bench's every failure (2026-11-12). */
+ZTEST(transfer, test_a_retry_is_armed_inside_the_ack_windows_reserve)
+{
+	const struct fake_radio_arm *tx[8];
+	uint32_t n_tx;
+
+	reset_blocks();
+	queue_block(0u, 16u, RADIANT_TRANSFER_SEG_START | RADIANT_TRANSFER_SEG_END,
+		    0x31u);
+	zassert_true(feed_next_block());
+	run_one_packet_exchange();
+
+	fake_radio_caps_mut()->min_arm_lead_us = 1400u;
+	fake_radio_caps_mut()->min_arm_lead_in_grant_us = 200u;
+
+	zassert_true(fake_radio_step());
+	zassert_equal(RADIANT_TRANSFER_STATE_WAIT_ACK, radiant_transfer_state(&xfer));
+	zassert_true(fake_radio_step(), "the empty window never closed");
+	zassert_equal(RADIANT_TRANSFER_STATE_TX_DATA, radiant_transfer_state(&xfer),
+		      "the retry was not armed");
+	zassert_equal(0u, n_ev, "the transfer ended at the first miss");
+
+	zassert_true(fake_radio_step(), "the retry never transmitted");
+	air_the_ack();
+	zassert_true(fake_radio_step());
+
+	zassert_equal(1u, n_ev);
+	zassert_equal(RADIANT_TRANSFER_EV_TX_COMPLETED, evlog[0].ev);
+	n_tx = collect_tx_arms(tx, ARRAY_SIZE(tx));
+	zassert_equal(3u, n_tx);
+	zassert_equal(tx[1]->t_sync_at + (radiant_time_t)RADIANT_TRANSFER_PACKET_US,
+		      tx[2]->t_sync_at, "the retry left its instant");
+
+	end_of_test();
+}
+
 /* A single-packet burst has no retries (Rev 5.1 sec 5.4.3), and neither does
  * acknowledged data, which is one. */
 ZTEST(transfer, test_a_single_packet_transfer_is_never_retried)
