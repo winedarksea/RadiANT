@@ -7,6 +7,7 @@
         --seconds 300 --json scan.json
     python tools/ant_scan_rate.py --serial EE6986854FD72803 --serial 006 \
         --seconds 300 --track 20329:0x0B --track 1458:0x78 --reopen 4.5
+    python tools/ant_scan_rate.py --port COM11 --baud 57600 --serial 006         --seconds 300 --reopen 4.5 --track 52233:0x11
 
 The instrument for discovery speed (the 2026-11-11 Zwift captures: RadiANT's
 scan reported about 0.3 sightings/s across five sensors, a Garmin stick
@@ -29,6 +30,13 @@ process), all starting their capture at the same wall-clock instant. The room
 at this bench drifts too much for a sequential A/B (memory: ant-bench-loss-
 floor), so a same-window reference such as the Garmin stick is what makes a
 rate mean anything. Results are merged into one report and one --json.
+
+A UART build (--port, with --baud, default 115200) joins that mode as one more
+child beside the --serial ones: --port COM11 --baud 57600 --serial 006 runs a
+board on COM11 and a USB stick in the same window, reported side by side. The
+port child is labelled by its port name. --baud applies to the port child only.
+Each child's JSON records `started_at` (its wall-clock capture start) and the
+merged JSON records the shared `start_at`, so a shared window can be checked.
 
 What this does NOT read: radiant_search_stats. They are not in the 0xF6
 health reply, and adding them there needs a layout decision (the coverage
@@ -369,13 +377,13 @@ def _version(dev, reader) -> str:
 
 def run_one(serial: str | None, port: str | None, seconds: float,
             tracks: list[Track], reopen: float | None,
-            start_at: float | None) -> dict:
+            start_at: float | None, baud: int = 115200) -> dict:
     """Run the whole window on one dongle and return its result dict."""
     from ant_probe import FrameReader, close_device, open_device, reset_stack
     from ant_scan import ANT_PLUS_KEY
     from ant_verify import extended_fields
 
-    dev = open_device(False, serial=serial, port=port)
+    dev = open_device(False, serial=serial, port=port, baud=baud)
     reader = FrameReader(dev)
     log = ScanLog()
     try:
@@ -400,6 +408,7 @@ def run_one(serial: str | None, port: str | None, seconds: float,
                                       time.monotonic() + start_at - time.time()))
 
         t0 = time.monotonic()
+        started_at = time.time()
         _open_scan(dev, reader)
         log.opens.append(time.monotonic() - t0)
         next_reopen = None if reopen is None else t0 + reopen
@@ -452,7 +461,8 @@ def run_one(serial: str | None, port: str | None, seconds: float,
             pass
     finally:
         close_device(dev)
-    return {"version": version, "summary": summarise(log),
+    return {"version": version, "started_at": started_at,
+            "summary": summarise(log),
             "raw": {"opens": log.opens, "closes": log.closes,
                     "sightings": log.sightings}}
 
@@ -461,8 +471,22 @@ def run_one(serial: str | None, port: str | None, seconds: float,
 # Entry point: one dongle in-process, several as child processes
 # ---------------------------------------------------------------------------
 
-def _child_args(args, serial: str, out: str, start_at: float) -> list[str]:
-    cmd = [sys.executable, os.path.abspath(__file__), "--serial", serial,
+def plan_children(serials: list[str], port: str | None,
+                  baud: int) -> list[tuple[str, list[str]]]:
+    """(label, device arguments) for each device in a same-window run.
+
+    The --serial dongles come first, in the order given, then the --port
+    child, labelled by its port name. --baud goes to the port child only.
+    """
+    plan = [(serial, ["--serial", serial]) for serial in serials]
+    if port is not None:
+        plan.append((port, ["--port", port, "--baud", str(baud)]))
+    return plan
+
+
+def _child_args(args, device_args: list[str], out: str,
+                start_at: float) -> list[str]:
+    cmd = [sys.executable, os.path.abspath(__file__), *device_args,
            "--seconds", str(args.seconds), "--child-json", out,
            "--start-at", repr(start_at)]
     for track in args.track:
@@ -479,7 +503,13 @@ def main() -> int:
     parser.add_argument("--serial", action="append", default=[],
                         help="a dongle whose USB serial ends with this. "
                              "Repeat for a same-window A/B")
-    parser.add_argument("--port", help="one UART build instead of USB")
+    parser.add_argument("--port", help="a UART build instead of USB. Alone it "
+                                       "is the single device; with --serial "
+                                       "it joins the same-window run as one "
+                                       "more child, labelled by this name")
+    parser.add_argument("--baud", type=int, default=115200,
+                        help="--port's baud rate (default 115200); not used "
+                             "by --serial dongles")
     parser.add_argument("--seconds", type=float, default=300.0)
     parser.add_argument("--track", type=parse_track, action="append",
                         default=[], metavar="DEVNUM:TYPE[:PERIOD]",
@@ -496,12 +526,14 @@ def main() -> int:
     if args.reopen is not None and args.reopen < 1.0:
         parser.error("--reopen below 1 s leaves no time to listen")
 
-    if args.child_json or len(args.serial) <= 1:
+    plan = plan_children(args.serial, args.port, args.baud)
+    start_at = None
+    if args.child_json or len(plan) <= 1:
         serial = args.serial[0] if args.serial else None
         name = serial or args.port or "dongle"
         try:
             result = run_one(serial, args.port, args.seconds, args.track,
-                             args.reopen, args.start_at)
+                             args.reopen, args.start_at, args.baud)
         except (RuntimeError, OSError) as exc:
             result = {"error": str(exc)}
         if args.child_json:
@@ -516,11 +548,11 @@ def main() -> int:
         results = {}
         with tempfile.TemporaryDirectory() as tmp:
             procs = []
-            for serial in args.serial:
+            for label, device_args in plan:
                 out = os.path.join(tmp, f"{len(procs)}.json")
                 log = open(os.path.join(tmp, f"{len(procs)}.log"), "w")
-                procs.append((serial, out, log, subprocess.Popen(
-                    _child_args(args, serial, out, start_at),
+                procs.append((label, out, log, subprocess.Popen(
+                    _child_args(args, device_args, out, start_at),
                     stdout=log, stderr=subprocess.STDOUT)))
             for serial, out, log, proc in procs:
                 proc.wait()
@@ -541,6 +573,7 @@ def main() -> int:
                        "seconds": args.seconds,
                        "reopen": args.reopen,
                        "track": [t.key for t in args.track],
+                       "start_at": start_at,
                        "dongles": results}, handle, indent=2)
     return 0 if all("error" not in r for r in results.values()) else 1
 
