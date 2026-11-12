@@ -45,8 +45,8 @@
 # reached through the ztest job's `-T app/apps/trainer/tests`).
 #
 # 2026-11-10: 14. radiant.backend, the nRF backend completion path against
-# register models.
-min_scenarios: 14
+# register models. 2026-11-12: 15, radiant.api.diag (ADR 0023).
+min_scenarios: 15
 
 # Total ztest cases twister executes, summed over every scenario. It equals the
 # sum of the per-scenario floors below, so the backstop and the floors cannot
@@ -70,7 +70,11 @@ min_scenarios: 14
 # 4451 with stale-acknowledgement retries: four transfer cases in each unit scenario.
 # 4455 with the repeated-opener window: one transfer case in each unit scenario.
 # 4463 with transfer TX power after open: two api cases in each api scenario.
-min_testcases: 4463
+# 4605 on ti/findings-2026-11-12 (Bluefin twister, 2026-11-12): the two
+# bidirectional-scan cases in each api scenario, two cc26xx-shaped
+# addr_split cases in each unit scenario, and the radiant.api.diag scenario
+# (ADR 0023; the api suite plus four 0xF7 cases).
+min_testcases: 4605
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -85,13 +89,15 @@ min_testcases: 4463
 # above. The earlier values were nRF5340 DK counts minus about 1%, plus static
 # counts. A floor equal to the observed count still fails only when coverage
 # goes down, which is the event it exists to catch.
-min_cases.radiant.unit: 1015
-min_cases.radiant.unit.sec_modes: 1015
-min_cases.radiant.unit.no_pairing: 963
-min_cases.radiant.api: 76
-min_cases.radiant.api.sec: 79
-min_cases.radiant.api.sec_host: 92
-min_cases.radiant.api.crc_repair: 77
+min_cases.radiant.unit: 1018
+min_cases.radiant.unit.sec_modes: 1018
+min_cases.radiant.unit.no_pairing: 966
+min_cases.radiant.api: 86
+min_cases.radiant.api.sec: 89
+min_cases.radiant.api.sec_host: 102
+min_cases.radiant.api.crc_repair: 87
+# radiant.api.diag (ADR 0023): the api suite with the 0xF7 counters on.
+min_cases.radiant.api.diag: 90
 # 32 since C5-1 (inline BLOCKED backs off the class that was refused). 38 with
 # the extension skip (ADR 0021).
 min_cases.radiant.gate: 75
@@ -100,5 +106,5 @@ min_cases.radiant.backend: 8
 min_cases.hrm_ble.sim_sched: 4
 min_cases.treadmill.pages: 20
 min_cases.treadmill.hr_rx: 3
-min_cases.radiant.unit.ack_faults: 1022
+min_cases.radiant.unit.ack_faults: 1025
 min_cases.trainer.model: 14
