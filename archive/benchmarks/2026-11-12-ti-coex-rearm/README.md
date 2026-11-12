@@ -48,11 +48,11 @@ their lead), `sched_failed`, and the other 0xF6 fields.
 
 | Name | Image |
 |---|---|
-| `A_patch` | arm 2, `ti_patch.conf` (`RF_postCmd`, the control) with `ti_health.conf` |
-| `B_gate` | arm 3, `ti_gate.conf` with `ti_health.conf`, at c125bb6 (refusals counted, not fixed) |
-| `Bfix_gate` | arm 3 at e82a0ea (own cancelled window treated as absent) |
-| `nolog` | arm 1 (core/cc26xx, no coexistence), `CONFIG_LOG=n`, health counters |
-| `final_deferred` | arm 1 at 5875bd9: deferred logging, short match on, health counters |
+| `A_patch` | arm 2 at c125bb6, `ti_patch.conf;ti_health.conf` (`RF_postCmd`, the control) |
+| `B_gate` | arm 3 at c125bb6, `ti_gate.conf;ti_health.conf` (refusals counted, not fixed) |
+| `Bfix_gate` | arm 3 at e82a0ea, `ti_gate.conf;ti_health.conf` (own cancelled window treated as absent) |
+| `nolog` | arm 1 at 9745aa1, health counters and `CONFIG_LOG=n` (scratch fragments), plus the uncommitted `../2026-11-12-ti-wildcard/diag_health.patch` |
+| `final_deferred` | arm 1 at 5875bd9, `ti_health.conf`: deferred logging, short match on |
 
 The first three, and the `s3_*` images of `../2026-11-12-ti-wildcard/`, carried
 the LaunchXL's then-default **immediate** logging. Build directories were
