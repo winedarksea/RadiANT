@@ -84,6 +84,8 @@ tests:
       # instrument test can prove it sees an unlocked call. radiant.api.sec
       # (assertions on, the default) is the one where a violation halts.
       - CONFIG_ASSERT=n
+      # irq_offload() reaches the ISR half of antr_api_lock_held().
+      - CONFIG_IRQ_OFFLOAD=y
 
   # The same application with CRC repair compiled in (default n everywhere
   # else). The first api-level scenario that ever runs the repair path - added

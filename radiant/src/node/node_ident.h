@@ -21,6 +21,20 @@
  * fingerprint (defeating ADR 0006's re-rollable identity) - and this is the
  * common case, since abandoned pairing windows never "complete". Enforced
  * structurally, not by comment - see node_ident_pair_scalar() below.
+ *
+ * THREAD SAFETY: node_ident_arm_sec(), _arm_compat(), _pair_begin(),
+ * _pair_pubkey(), _pair_scalar() and _pair_derive() reach either lock-checked
+ * radiant_sec entry points or the shared AES key schedule
+ * (radiant_sec_aes.c, not re-entrant). On a build that links
+ * ant_radio_radiant.c they must run under api_lock, which the RX pump also
+ * takes. Apps cannot take that lock (it is port-private), so the first caller
+ * adds a locked antr_* wrapper in radiant/src/antr/, following the antr_sec_*
+ * pattern in ant_sec_host.c: validate, lock, call a _locked body, unlock.
+ * No app calls these today.
+ *
+ * node_ident_boot() is the exception: it runs the AES schedule unlocked,
+ * which is safe only while no channel is keyed (the pump does no AES on an
+ * unkeyed channel). Keep it before any channel is secured.
  */
 
 #ifndef NODE_IDENT_H_
@@ -145,7 +159,8 @@ bool node_ident_wall_seconds(uint64_t *out);
  *
  * The existing API, called with a self-derived value. `us_into_epoch` is zero
  * at boot (the node just derived its epoch from the current power-up). Both
- * refuse before node_ident_boot() has succeeded.
+ * refuse before node_ident_boot() has succeeded. Need api_lock: see THREAD
+ * SAFETY at the top of this file.
  */
 int node_ident_arm_sec(uint8_t ch, uint16_t period_counts);
 int node_ident_arm_compat(uint8_t ch, uint64_t now_us, uint16_t period_counts);
@@ -209,7 +224,8 @@ void node_ident_pair_window_close(void);
  * persisted), derive, hand the scalar to radiant, enter pairing mode. Any
  * failure leaves the channel not pairing. Order is load-bearing and asserted
  * in the suite: counter is in NVM before radiant_sec_pair_set_scalar() (which
- * computes the public key) is called.
+ * computes the public key) is called. Needs api_lock: see THREAD SAFETY at
+ * the top of this file.
  */
 int node_ident_pair_begin(uint8_t ch, uint8_t timeout_s);
 

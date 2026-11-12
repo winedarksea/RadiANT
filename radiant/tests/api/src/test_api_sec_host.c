@@ -33,6 +33,9 @@
 
 #include <radiant/radiant_channel.h>
 #include <radiant/radiant_sec.h>
+#if defined(CONFIG_IRQ_OFFLOAD)
+#include <zephyr/irq_offload.h>
+#endif
 
 #define HOST_CH     0u
 #define HOST_DEVNUM 0x3A17u
@@ -400,6 +403,51 @@ ZTEST(api, test_sec_host_the_lock_check_sees_an_unlocked_call)
 
 	antr_api_lock_violations = base;
 }
+
+#if defined(CONFIG_IRQ_OFFLOAD)
+struct isr_probe_result {
+	bool held;
+	bool ran;
+};
+
+static void isr_probe(const void *arg)
+{
+	struct isr_probe_result *r = (struct isr_probe_result *)arg;
+
+	r->held = antr_api_lock_held();
+	radiant_sec_port_lock_check("isr_probe");
+	r->ran = true;
+}
+
+/* The ISR half of antr_api_lock_held(): an interrupt that lands while the
+ * test thread owns api_lock sees that thread as k_current_get(), so the
+ * owner check alone would pass it. Only the k_is_in_isr() term refuses it. */
+ZTEST(api, test_sec_host_the_lock_check_refuses_an_isr_inside_the_lock)
+{
+	struct isr_probe_result r = { 0 };
+	uint32_t                base = antr_api_lock_violations;
+
+	/* Same reason as the test above: with CONFIG_ASSERT the counted
+	 * violation halts the image. */
+	if (IS_ENABLED(CONFIG_ASSERT)) {
+		ztest_test_skip();
+	}
+
+	k_mutex_lock(&api_lock, K_FOREVER);
+	zassert_true(antr_api_lock_held());
+	irq_offload(isr_probe, &r);
+	k_mutex_unlock(&api_lock);
+
+	zassert_true(r.ran, "irq_offload did not run the probe");
+	zassert_false(r.held,
+		      "an ISR interrupting the lock's owner counted as holding "
+		      "api_lock");
+	zassert_equal(base + 1u, antr_api_lock_violations,
+		      "a radiant_sec check from an ISR was not counted");
+
+	antr_api_lock_violations = base;
+}
+#endif /* CONFIG_IRQ_OFFLOAD */
 
 #if defined(CONFIG_RADIANT_SEC_PAIRING_X25519)
 /*
