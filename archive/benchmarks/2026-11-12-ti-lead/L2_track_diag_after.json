@@ -1,0 +1,118 @@
+{
+  "tool": "ant_diag.py",
+  "backend": "cc26xx",
+  "pages": {
+    "0": {
+      "page": 0,
+      "name": "api",
+      "backend": "cc26xx",
+      "unmeasured_flag": false,
+      "fields": {
+        "sched_dones": 5611,
+        "sched_missed": 1,
+        "sched_failed": 0,
+        "sched_denied": 0,
+        "slots_missed": 323,
+        "slots_denied": 0,
+        "rx_sched_events": 5201,
+        "xfer_no_ack": 1
+      }
+    },
+    "1": {
+      "page": 1,
+      "name": "master_rx",
+      "backend": "cc26xx",
+      "unmeasured_flag": false,
+      "fields": {
+        "mrx_posted": 325,
+        "mrx_refused": 0,
+        "mrx_skipped": 0,
+        "turn_dropped": 0,
+        "mrx_done_ok": 325,
+        "mrx_done_missed": 0,
+        "mrx_done_other": 0,
+        "mrx_frames": 0
+      }
+    },
+    "2": {
+      "page": 2,
+      "name": "transfer",
+      "backend": "cc26xx",
+      "unmeasured_flag": true,
+      "fields": {
+        "cont_submits": 1044,
+        "cont_late": 0,
+        "turn_min_us": null,
+        "turn_max_us": null,
+        "tx_expired": 0,
+        "tx_margin_min_us": 187,
+        "sched_arm_rejected": 0,
+        "sched_missed": 1
+      }
+    },
+    "3": {
+      "page": 3,
+      "name": "backend_a",
+      "backend": "cc26xx",
+      "unmeasured_flag": false,
+      "fields": {
+        "rx_posted": 6321,
+        "rx_refused": 0,
+        "term_ok": 4437,
+        "term_empty": 1881,
+        "term_error": 2,
+        "status_err": 0,
+        "status_last": 0,
+        "sync_entries": 6283
+      }
+    },
+    "4": {
+      "page": 4,
+      "name": "backend_b",
+      "backend": "cc26xx",
+      "unmeasured_flag": false,
+      "fields": {
+        "sw_addr_mismatch": 32,
+        "window_drops": 13,
+        "crc_fail": 1037,
+        "alt_sync_hits": 445,
+        "rx_nok": 0,
+        "rx_buf_full": 0,
+        "drain_max_us": 452,
+        "min_lead_us": 297
+      }
+    },
+    "5": {
+      "page": 5,
+      "name": "search_a",
+      "backend": "cc26xx",
+      "unmeasured_flag": false,
+      "fields": {
+        "windows": 775,
+        "sets_advanced": 775,
+        "sweeps": 771,
+        "frames_ok": 1873,
+        "crc_fail": 0,
+        "acquired": 4,
+        "scan_reports": 1868,
+        "timeouts": 0
+      }
+    },
+    "6": {
+      "page": 6,
+      "name": "search_b",
+      "backend": "cc26xx",
+      "unmeasured_flag": true,
+      "fields": {
+        "cache_steers": 4,
+        "cache_acquires": 3,
+        "permit_rejected": 0,
+        "rssi_rejected": 0,
+        "decode_failed": 0,
+        "bad_filter_index": 0,
+        "late_events": 0,
+        "sets_advanced_uncovered": null
+      }
+    }
+  }
+}

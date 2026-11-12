@@ -1,0 +1,84 @@
+Using COM4 at 115200 baud (UART transport)
+
+Opening ANT+ master channels
+  OK: ANT+ network key
+  OK: ch0 assign master
+  OK: ch0 channel id
+  OK: ch0 radio frequency
+  OK: ch0 message period
+  OK: ch0 open
+  OK: channel 0 - power (page 0x10), device #4243 type 0x0B trans 5, 8182 ticks (4.00 Hz)
+
+Transmitting for 330 s (100 W, 80 rpm, +/-3, seed 1)
+  ch0 20 msgs
+  ch0 40 msgs
+  ch0 62 msgs
+  ch0 82 msgs
+  ch0 103 msgs
+  ch0 123 msgs
+  ch0 144 msgs
+  ch0 164 msgs
+  ch0 184 msgs
+  ch0 205 msgs
+  ch0 225 msgs
+  ch0 246 msgs
+  ch0 266 msgs
+  ch0 286 msgs
+  ch0 307 msgs
+  ch0 327 msgs
+  ch0 347 msgs
+  ch0 368 msgs
+  ch0 388 msgs
+  ch0 409 msgs
+  ch0 429 msgs
+  ch0 450 msgs
+  ch0 470 msgs
+  ch0 490 msgs
+  ch0 511 msgs
+  ch0 531 msgs
+  ch0 552 msgs
+  ch0 572 msgs
+  ch0 592 msgs
+  ch0 613 msgs
+  ch0 633 msgs
+  ch0 654 msgs
+  ch0 674 msgs
+  ch0 695 msgs
+  ch0 715 msgs
+  ch0 735 msgs
+  ch0 756 msgs
+  ch0 776 msgs
+  ch0 797 msgs
+  ch0 817 msgs
+  ch0 837 msgs
+  ch0 858 msgs
+  ch0 878 msgs
+  ch0 899 msgs
+  ch0 919 msgs
+  ch0 939 msgs
+  ch0 960 msgs
+  ch0 980 msgs
+  ch0 1001 msgs
+  ch0 1021 msgs
+  ch0 1041 msgs
+  ch0 1062 msgs
+  ch0 1082 msgs
+  ch0 1103 msgs
+  ch0 1123 msgs
+  ch0 1143 msgs
+  ch0 1164 msgs
+  ch0 1184 msgs
+  ch0 1205 msgs
+  ch0 1225 msgs
+  ch0 1245 msgs
+  ch0 1266 msgs
+  ch0 1286 msgs
+  ch0 1307 msgs
+
+Closing
+  OK: close ch0
+  OK: unassign ch0
+
+  channel 0: 1321 messages (1322 expected), 1321 EVENT_TX
+
+PASS: every message was paced by EVENT_TX

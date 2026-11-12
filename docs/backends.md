@@ -545,14 +545,25 @@ inferred, not counted: the margin is nearly constant (-21 to -27 µs over three
 images and four runs), which fits this fixed path and not callback jitter, but
 no counter yet separates an expired retry from an expired first attempt.
 
-That measurement points at `caps.min_arm_lead_in_grant_us`. A retry or a
-chained packet armed from inside the radio callback, within the previous
-operation's reserve, is budgeted the in-grant lead. The non-coex cc26xx
-leaves that at 0 (the same as 600), while its hard floor is 150 µs
-(`ARM_FLOOR_US`). Setting it lower is a lead change, so it waits for the
-plan's gate: 6 x 300 s alternating tracked-loss legs. Lowering
-`MIN_ARM_LEAD_US` itself is a separate, later option, set from the measured
-`min_lead_us` above.
+**Fixed the same day (e042a10).** Two parts, because either alone does
+nothing:
+
+- The acknowledgement window now reserves `NEXT_PACKET_US` (1550 µs) past
+  its close (`arm_ack_window()`), which covers the retry and the next packet.
+  Before, it reserved nothing, so `in_reserve()` was false for both and they
+  were always budgeted the fresh-arm lead, whatever the caps said.
+- The non-coex cc26xx declares `min_arm_lead_in_grant_us` = 400 µs
+  (`IN_GRANT_LEAD_US`, between the 150 µs `ARM_FLOOR_US` and the 600 µs
+  `MIN_ARM_LEAD_US`). The RF core is awake and nothing arbitrates, so a
+  callback arm into reserved air doesn't owe the cold-arm cost.
+
+Alternating A/B against a Garmin slave
+(`archive/benchmarks/2026-11-12-ti-lead/`): expired transmits 10 → 0, failed
+bursts 11/450 → 7/450 (same sign in all three pairs), worst margin -25 µs →
++188 µs. Tracked loss did not regress, and an nRF master's bursts were 18/300
+either way. The bursts that still fail are five unanswered retries, the same
+class and rate as an nRF master in the same room. Lowering `MIN_ARM_LEAD_US`
+itself remains a separate option, set from the measured `min_lead_us` above.
 
 Under `CONFIG_RADIANT_BACKEND_CC26XX_COEX` the lead is ~1414 µs, so neither a
 chained packet (ack + 1550) nor its retry can ever be armed in time from the
