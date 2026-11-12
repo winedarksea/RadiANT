@@ -32,6 +32,12 @@ the slave end:
     python tools/ant_ack_pair.py --master-serial EE6986854FD72803 \\
         --slave-serial 006 --master-bursts 100 --burst-packets 8
 
+ACKNOWLEDGED DATA, MASTER TO SLAVE (`--master-acked N`). The same, one
+acknowledged message (0x4F) at a time. On air it is a one-packet burst that
+opens the master's slot (0xAA), answered on the slave's slot-reply
+turnaround, and it is never retried, so about p of them fail at per-packet
+loss p. The slave's count flags a message passed up twice.
+
 Exit status: 1 if either board fails to open/configure, or (`--lone-master`)
 if data arrives with no peer transmitting; 0 otherwise - outside
 `--lone-master` this is a diagnostic printout, not an automated gate.
@@ -277,9 +283,33 @@ def slave_burst_thread(reader, stats: dict, stop: threading.Event) -> None:
             expect = None
 
 
+def slave_acked_thread(reader, stats: dict, stop: threading.Event) -> None:
+    """Count what the slave hears of the master's acknowledged messages.
+
+    Each payload carries its transfer index in byte 0 (mod 256), so a message
+    the slave passes up twice shows as a duplicate rather than as a second
+    delivery.
+    """
+    last = None
+    while not stop.is_set():
+        result = reader.next_frame(time.monotonic() + 0.25)
+        if result is None:
+            continue
+        msg_id, body = result
+        if msg_id != MESG_ACKNOWLEDGED_DATA_ID or len(body) < 9:
+            continue
+        stats["packets"] += 1
+        if body[1] == last:
+            stats["duplicates"] += 1
+        else:
+            stats["whole"] += 1
+        last = body[1]
+
+
 def run_master_bursts(args, master, m_counts, slave, s_reader, stop,
                       threads) -> int:
-    """--master-bursts: the master originates, the slave acknowledges."""
+    """--master-bursts / --master-acked: the master originates, the slave
+    acknowledges."""
     import json
 
     if args.burst_tx_power is not None:
@@ -296,23 +326,38 @@ def run_master_bursts(args, master, m_counts, slave, s_reader, stop,
               f"(level 0x{level:02X}, register 0x{custom:02X})")
         time.sleep(0.5)
 
-    s_stats = {"packets": 0, "whole": 0, "broken": 0, "seq_breaks": 0,
-               "lengths": {}}
-    st = threading.Thread(target=slave_burst_thread,
+    acked = bool(args.master_acked)
+    if acked:
+        n_xfers, n_pkts, kind = args.master_acked, 1, "acknowledged messages"
+        s_stats = {"packets": 0, "whole": 0, "duplicates": 0}
+        target = slave_acked_thread
+    else:
+        n_xfers, n_pkts, kind = args.master_bursts, args.burst_packets, "bursts"
+        s_stats = {"packets": 0, "whole": 0, "broken": 0, "seq_breaks": 0,
+                   "lengths": {}}
+        target = slave_burst_thread
+    st = threading.Thread(target=target,
                           args=(s_reader, s_stats, stop), daemon=True)
     st.start()
     threads.append(st)
 
-    n_pkts = args.burst_packets
-    print(f"\nOriginating {args.master_bursts} bursts of {n_pkts} packets "
-          f"from the MASTER")
+    if acked:
+        print(f"\nOriginating {n_xfers} acknowledged messages from the MASTER")
+    else:
+        print(f"\nOriginating {n_xfers} bursts of {n_pkts} packets "
+              f"from the MASTER")
     outcomes: dict[str, int] = {}
     t0 = time.monotonic()
-    for b in range(args.master_bursts):
+    for b in range(n_xfers):
         done_before = (m_counts.events.get(EVENT_TRANSFER_TX_COMPLETED, 0) +
                        m_counts.events.get(EVENT_TRANSFER_TX_FAILED, 0))
         ok_before = m_counts.events.get(EVENT_TRANSFER_TX_COMPLETED, 0)
-        for i in range(n_pkts):
+        if acked:
+            master.write(EP_OUT, frame(
+                MESG_ACKNOWLEDGED_DATA_ID,
+                bytes([CHANNEL, b & 0xFF, 0xAC, 0xA5, 0x5A, 0x01, 0x02, 0x03,
+                       0x04])))
+        for i in range(0 if acked else n_pkts):
             payload = bytes([b & 0xFF, i, 0xA5, 0x5A, 0x01, 0x02, 0x03, 0x04])
             master.write(EP_OUT, frame(
                 MESG_BURST_DATA_ID,
@@ -330,7 +375,7 @@ def run_master_bursts(args, master, m_counts, slave, s_reader, stop,
             time.sleep(0.01)
         outcomes[got] = outcomes.get(got, 0) + 1
         if (b + 1) % 10 == 0 or got != "COMPLETED":
-            print(f"  {b + 1}/{args.master_bursts}: {got}  "
+            print(f"  {b + 1}/{n_xfers}: {got}  "
                   f"(so far {outcomes})")
         time.sleep(args.burst_gap)
     elapsed = time.monotonic() - t0
@@ -341,19 +386,25 @@ def run_master_bursts(args, master, m_counts, slave, s_reader, stop,
 
     failed = outcomes.get("FAILED", 0) + outcomes.get("no terminal event", 0)
     print("\n" + "=" * 68)
-    print(f"{args.master_bursts} bursts x {n_pkts} packets in {elapsed:.1f} s")
+    print(f"{n_xfers} {kind} x {n_pkts} packets in {elapsed:.1f} s")
     print("=" * 68)
     print(f"  the master was told      {outcomes}")
-    print(f"  failure rate             {failed / args.master_bursts:.1%}")
-    print(f"  slave burst packets      {s_stats['packets']} "
-          f"(min {args.master_bursts * n_pkts} if every packet went once)")
-    print(f"  slave whole bursts       {s_stats['whole']}  "
-          f"lengths {s_stats['lengths']}")
-    print(f"  slave broken / seq gaps  {s_stats['broken']} / "
-          f"{s_stats['seq_breaks']}")
+    print(f"  failure rate             {failed / n_xfers:.1%}")
+    if acked:
+        print(f"  slave acked messages     {s_stats['packets']} "
+              f"({s_stats['whole']} distinct, {s_stats['duplicates']} "
+              f"passed up twice)")
+    else:
+        print(f"  slave burst packets      {s_stats['packets']} "
+              f"(min {n_xfers * n_pkts} if every packet went once)")
+        print(f"  slave whole bursts       {s_stats['whole']}  "
+              f"lengths {s_stats['lengths']}")
+        print(f"  slave broken / seq gaps  {s_stats['broken']} / "
+              f"{s_stats['seq_breaks']}")
     if args.json_bursts:
         with open(args.json_bursts, "w", encoding="utf-8") as fh:
-            json.dump({"bursts": args.master_bursts, "packets": n_pkts,
+            json.dump({"mode": "acked" if acked else "bursts",
+                       "bursts": n_xfers, "packets": n_pkts,
                        "tx_power": args.burst_tx_power,
                        "master_dbm": args.burst_master_dbm,
                        "seconds": elapsed, "outcomes": outcomes,
@@ -425,7 +476,14 @@ def main() -> int:
                     help='packets per burst in --master-bursts mode (default 8)')
     ap.add_argument('--burst-gap', type=float, default=0.5,
                     help='seconds between bursts in --master-bursts mode')
-    ap.add_argument('--json-bursts', help='write the --master-bursts result here')
+    ap.add_argument('--master-acked', type=int, default=0,
+                    help='originate this many ACKNOWLEDGED messages (0x4F) '
+                         'FROM THE MASTER, one at a time; uses the '
+                         '--burst-* power and output options. Acknowledged '
+                         'data is never retried, so at per-packet loss p '
+                         'about p of them fail')
+    ap.add_argument('--json-bursts',
+                    help='write the --master-bursts / --master-acked result here')
     ap.add_argument('--burst-tx-power', type=int, choices=range(5),
                     help='--master-bursts: set this per-channel power level '
                          '(0x60, 0 = lowest) on BOTH ends, to raise the '
@@ -436,6 +494,8 @@ def main() -> int:
                          'table in ant_sens.py), applied after '
                          '--burst-tx-power')
     args = ap.parse_args()
+    if args.master_bursts and args.master_acked:
+        ap.error('pass at most one of --master-bursts / --master-acked')
     if args.master_bursts and args.burst_packets < 2:
         ap.error('--burst-packets must be at least 2 (one packet is '
                  'acknowledged data, which is never retried)')
@@ -554,7 +614,7 @@ def main() -> int:
         return 1
     print(f"  OK: tracking ({heard} broadcasts)")
 
-    if args.master_bursts:
+    if args.master_bursts or args.master_acked:
         return run_master_bursts(args, master, m_counts, slave, s_reader,
                                  stop, threads)
 
