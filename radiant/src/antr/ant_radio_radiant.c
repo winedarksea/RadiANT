@@ -4859,12 +4859,20 @@ const struct radiant_api_stats *radiant_api_stats_get(void)
 antr_err_t antr_diag_page(uint8_t page, uint8_t *out)
 {
 	uint32_t v[RADIANT_DIAG_FIELDS];
-	uint8_t backend = RADIANT_DIAG_BACKEND_NULL;
+	struct radiant_radio_diag rd;
+	uint8_t backend;
 	const struct radiant_diag_core *dc = radiant_diag_core_get();
 
 	if (out == NULL || page >= RADIANT_DIAG_PAGES) {
 		return (antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED;
 	}
+
+	/* Every page names its backend, so the hook runs for every page; it is
+	 * a copy of a few words under irq_lock(). */
+	for (size_t i = 0; i < ARRAY_SIZE(rd.v); i++) {
+		rd.v[i] = RADIANT_DIAG_NOT_MEASURED;
+	}
+	backend = radiant_radio_diag_get(&rd);
 
 	switch (page) {
 	case RADIANT_DIAG_PAGE_API:
@@ -4903,14 +4911,9 @@ antr_err_t antr_diag_page(uint8_t page, uint8_t *out)
 	}
 	case RADIANT_DIAG_PAGE_BACKEND_A:
 	case RADIANT_DIAG_PAGE_BACKEND_B: {
-		struct radiant_radio_diag rd;
 		size_t base = (page == RADIANT_DIAG_PAGE_BACKEND_A)
 				      ? 0u : RADIANT_DIAG_FIELDS;
 
-		for (size_t i = 0; i < ARRAY_SIZE(rd.v); i++) {
-			rd.v[i] = RADIANT_DIAG_NOT_MEASURED;
-		}
-		backend = radiant_radio_diag_get(&rd);
 		memcpy(v, &rd.v[base], sizeof(v));
 		break;
 	}
