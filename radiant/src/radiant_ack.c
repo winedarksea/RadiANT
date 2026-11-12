@@ -2,7 +2,7 @@
 /*
  * radiant_ack.c - the control byte of an acknowledged exchange, in both directions.
  *
- * Provenance: clean-room. Written from docs/spike-b-part2-results.md - the
+ * Provenance: clean-room. Written from docs/spike-b-results.md - the
  * six-field control byte, its eleven measured values, the four measured
  * data/acknowledgement pairs and the 1.55 ms turnaround - together with
  * docs/ant-radio-link.md, radiant/include/radiant/radiant_frame.h and

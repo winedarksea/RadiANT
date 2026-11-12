@@ -56,7 +56,7 @@
  * mode some other format will need), borrowing ANT's 5-byte address/10-byte
  * body sizes for convenience and declaring a length at body[1] that ANT does
  * not have. Byte 3 of an ANT body is actually a 6-field CONTROL byte
- * (docs/spike-b-part2-results.md); a backend that mapped tracking onto
+ * (docs/spike-b-results.md); a backend that mapped tracking onto
  * RADIANT_LEN_FROM_BODY (nRF PCNF0.LFLEN=8) would read an acknowledged
  * frame's 0xAA as LENGTH=170, overrun MAXLEN, and silently drop everything
  * but broadcasts - and no length field can parse this byte at all (0x0A's

@@ -8,7 +8,7 @@
  * the permitted error codes), from the free ANT Message Protocol and Usage
  * Rev 5.1 (D00000652) for the channel-status byte layout and the 32768 Hz
  * period unit, and from this bench's own measurements in
- * docs/ant-radio-link.md and docs/spike-b-part2-results.md - specifically the
+ * docs/ant-radio-link.md and docs/spike-b-results.md - specifically the
  * master's one-period open-to-first-transmission delay, the 249,696.4 us slot
  * period and the acknowledged-exchange turnarounds that set the period floor.
  * Nothing here derives from sdk-ant, from libant.a, from disassembly of any
@@ -408,7 +408,9 @@ static void chan_begin_close(uint8_t channel, struct chan *c)
 
 /* The absolute instant a searching channel gives up, or RADIANT_TIME_NEVER.
  *
- * Low priority runs after high priority expires, so the budget is the sum.
+ * Low priority runs first and hands over to high priority when it expires
+ * (Rev 5.1 section 9.5.2.15), so the budget is the sum either way round; HP=0
+ * leaves an LP-only search.
  * Either byte set to 255 makes the whole search infinite. Both zero makes the
  * deadline the instant the search began, so the next tick closes the channel -
  * better than a channel that sits in SEARCHING forever with both timeouts

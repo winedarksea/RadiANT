@@ -587,24 +587,29 @@
  * meaning of the fifth byte is unknown, so this firmware always sends 0x00
  * there. It answers only when antr_serial_number_get() does, and otherwise
  * refuses with INVALID_MESSAGE, exactly like 0x61. It sits in the AP2-era
- * 0xC0-0xC7 block described under radiant_messages, and is the only id in
- * that block this file pins, because it is the only one seen on the wire.
- * [observed captures/zwift-20261111-193805.pcap (request a4024d00c62d, reply
- * a405c6069f520000ac)]
+ * 0xC0-0xC7 block described under radiant_messages; it is the only id in that
+ * block seen on the wire (0xC5 and 0xC7 are pinned from the public document,
+ * and neither is bridged). [observed captures/zwift-20261111-193805.pcap
+ * (request a4024d00c62d, reply a405c6069f520000ac)]
  */
 #define RADIANT_WIRE_MESG_SERIAL_NUM_EXT_ID                  0xC6
 
 /*
- * RADIANT_WIRE_MESG_SLEEP_ID is UNRESOLVED. Put the device into its low-power
- * sleep state. Implied by the ANT_DLL export ANT_SleepMessage, which Zwift
- * resolves. Same 0xC0 block and the same lack of corroboration as
- * MESG_RSSI_SEARCH_THRESHOLD_ID; no number is recorded. The Wave 2 shim found
- * the name referenced in sdk-ant but never defined - the only occurrence is
- * inside a commented-out dispatch arm - so there is no value to recover there
- * either. Recover it once the value is known, in protocol/ant_wire.yaml, and
- * regenerate; see the unresolved table in docs/ant-serial-protocol.md. [host-
- * api + verify:sdk-ant-shim]
+ * [filler]. Put the device into its deep-sleep state. Implied by the ANT_DLL
+ * export ANT_SleepMessage, which Zwift resolves; the id is from the public
+ * message protocol document. Not bridged: a USB dongle has no SLEEP/MSGRDY
+ * line to wake it again. [ANT Message Protocol and Usage Rev 5.1 sec 9.5.4.6
+ * + verify:sdk-ant-shim]
  */
+#define RADIANT_WIRE_MESG_SLEEP_ID                           0xC5
+
+/*
+ * [string number 0..3, characters...]. Rewrites a USB descriptor string (0 =
+ * VID/PID, 1 manufacturer, 2 product, 3 serial) on devices that store them.
+ * Not bridged: the descriptors here are fixed at build time. [ANT Message
+ * Protocol and Usage Rev 5.1 sec 9.5.2.37]
+ */
+#define RADIANT_WIRE_MESG_SET_USB_DESCRIPTOR_STRING_ID       0xC7
 
 /* ------------------------------------------------------------------------
  * Reply sizes

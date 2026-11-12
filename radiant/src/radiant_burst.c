@@ -3,7 +3,7 @@
  * radiant_burst.c - the originator's stop-and-wait state machine, and the block
  * ownership that goes with it.
  *
- * Provenance: clean-room. Written from docs/spike-b-part2-results.md (the
+ * Provenance: clean-room. Written from docs/spike-b-results.md (the
  * one-bit sequence, the strict data/acknowledgement alternation, the 1567/1559
  * and 1546/1550 us intervals, and the fragmentation of a 24-byte host block
  * into three eight-byte on-air packets), from the buffer-ownership obligations
@@ -696,7 +696,7 @@ void radiant_transfer_on_rx_event(struct radiant_transfer *t,
 	case RADIANT_RADIO_STATUS_TIMEOUT:
 		/* The reply window closed empty. NOT RETRIED: what a sender does
 		 * when an ack goes missing was never measured (untested item 5,
-		 * docs/spike-b-part2-results.md) - only the receiver's retry
+		 * docs/spike-b-results.md) - only the receiver's retry
 		 * behaviour was, and that's implemented in radiant_ack.c.
 		 * Inventing a sender-side retry here would be unevidenced. */
 		finish(t, RADIANT_TRANSFER_EV_TX_FAILED, RADIANT_TRANSFER_FAIL_NO_ACK);

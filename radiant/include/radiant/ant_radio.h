@@ -425,9 +425,10 @@ antr_err_t antr_channel_radio_tx_power_set(uint8_t channel, uint8_t level,
  * Set the high-priority search timeout, in 2.5 second increments.
  *
  * 0 disables high-priority search entirely; 255 means "search forever". The
- * ANT default is 10 (25 s). High-priority search blocks other channels'
- * traffic while it runs, which is what the low-priority variant below exists
- * to avoid.
+ * ANT default is 10 (25 s). On ANT, high-priority search may interrupt other
+ * open channels, which is what the low-priority variant below exists to
+ * avoid. RadiANT schedules both modes the same way: the two timeouts only add
+ * up to one search budget (see radiant_channel.c).
  *
  * Returns 0, ANTW_INVALID_MESSAGE (channel out of range) or
  * ANTW_CHANNEL_IN_WRONG_STATE (unassigned).
@@ -439,7 +440,8 @@ antr_err_t antr_channel_search_timeout_set(uint8_t channel, uint8_t timeout);
  *
  * Low-priority search yields to any other channel that wants the radio, so it
  * can run indefinitely without starving a live session. 0 disables it; 255 is
- * infinite. Runs after the high-priority timeout expires.
+ * infinite. Runs first; when it expires the search switches to high priority
+ * for the high-priority timeout (Rev 5.1 section 9.5.2.15).
  *
  * Returns 0, ANTW_INVALID_MESSAGE (channel out of range) or
  * ANTW_CHANNEL_IN_WRONG_STATE (unassigned).
@@ -700,8 +702,9 @@ antr_err_t antr_active_search_sharing_cycles_get(uint8_t channel,
  * The list is only consulted once antr_id_list_config() has given it a size.
  *
  * Returns 0, ANTW_INVALID_MESSAGE (channel out of range),
- * ANTW_CHANNEL_IN_WRONG_STATE (open) or ANTW_INVALID_LIST_ID (index beyond
- * what the backend supports).
+ * ANTW_CHANNEL_IN_WRONG_STATE (unassigned) or ANTW_INVALID_LIST_ID (index
+ * beyond what the backend supports). An open channel is fine: a retail ANT
+ * USB-m accepts the list while searching, and Android rewrites it then.
  */
 antr_err_t antr_id_list_add(uint8_t channel, const uint8_t *device_id,
 			    uint8_t index);
@@ -709,14 +712,14 @@ antr_err_t antr_id_list_add(uint8_t channel, const uint8_t *device_id,
 /**
  * Activate a channel's device ID list.
  *
- * @param channel   An assigned, closed channel.
+ * @param channel   An assigned channel, open or closed.
  * @param size      Number of entries to honour; 0 turns the list off.
  * @param inc_exc   0 for an inclusion list (acquire only these), 1 for an
  *                  exclusion list (acquire anything but these).
  *
  * Returns 0, ANTW_INVALID_MESSAGE (channel out of range),
- * ANTW_CHANNEL_IN_WRONG_STATE (open) or ANTW_INVALID_LIST_ID (size beyond what
- * the backend supports).
+ * ANTW_CHANNEL_IN_WRONG_STATE (unassigned) or ANTW_INVALID_LIST_ID (size
+ * beyond what the backend supports).
  */
 antr_err_t antr_id_list_config(uint8_t channel, uint8_t size,
 			       uint8_t inc_exc);

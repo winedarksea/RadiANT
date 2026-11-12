@@ -345,8 +345,9 @@ constant.
 | `0x8C` | `ANTW_MESG_PENDING_TRANSMIT_CLEAR_ID` | both | 2 | yes | `MESG_RESPONSE_EVENT_ID` | [channel] to clear, [channel, pending] on request. A Nordic extension: not in Rev 5.1, and no witness inside this repository - the id was recovered by the Wave 2 shim and is BUILD_ASSERTed in src/ant_radio_sdk_ant.c. Note that the *request* form of this id replies with MESG_PENDING_TRANSMIT_GET_SIZE bytes, which is a separate constant from MESG_PENDING_TRANSMIT_CLEAR's own 1-byte command payload. | sdk-ant-shim + verify:sdk-ant-shim |
 | `0xAE` | `ANTW_MESG_SERIAL_ERROR_ID` | d2h | 1 | no | - | Serial-layer error: bad checksum, bad length, or a frame that arrived too slowly. This firmware drops malformed frames silently instead - recorded so a host-side parser can name the byte. | rev5.1 sec 7.4 + verify:sdk-ant-shim |
 | **unresolved** | `ANTW_MESG_RSSI_SEARCH_THRESHOLD_ID` | h2d | 2 | no | - | Proximity search threshold expressed in RSSI rather than in the proximity bins MESG_PROX_SEARCH_CONFIG (0x71) uses. Implied by the ANT_DLL export ANT_RSSI_SetSearchThreshold. Believed to sit in the 0xC0 block of AP2-era extension messages, but no value in that block is corroborated by anything in this repository - the whole host-callable API in archive/host-api/ant_dll_exports.json tops out at 0x7B - so no number is recorded here. The Wave 2 shim looked and came back empty as well: sdk-ant v2.1.0 defines no such id anywhere in its headers or sources, so this stays unresolved rather than merely unverified. | host-api + verify:sdk-ant-shim |
-| `0xC6` | `ANTW_MESG_SERIAL_NUM_EXT_ID` | d2h | 5 | yes | - | Requestable with MESG_REQUEST. A real Garmin stick answers it with the same 4-byte little-endian serial as MESG_GET_SERIAL_NUM followed by one 0x00 byte, and Zwift asks for it right after asking for 0x61. The name is this project's own and describes only the observed shape. It is deliberately not a vendor header name, because no header was consulted (ADR 0002), and the meaning of the fifth byte is unknown, so this firmware always sends 0x00 there. It answers only when antr_serial_number_get() does, and otherwise refuses with INVALID_MESSAGE, exactly like 0x61. It sits in the AP2-era 0xC0-0xC7 block described under radiant_messages, and is the only id in that block this file pins, because it is the only one seen on the wire. | observed captures/zwift-20261111-193805.pcap (request a4024d00c62d, reply a405c6069f520000ac) |
-| **unresolved** | `ANTW_MESG_SLEEP_ID` | h2d | 1 | no | - | Put the device into its low-power sleep state. Implied by the ANT_DLL export ANT_SleepMessage, which Zwift resolves. Same 0xC0 block and the same lack of corroboration as MESG_RSSI_SEARCH_THRESHOLD_ID; no number is recorded. The Wave 2 shim found the name referenced in sdk-ant but never defined - the only occurrence is inside a commented-out dispatch arm - so there is no value to recover there either. | host-api + verify:sdk-ant-shim |
+| `0xC6` | `ANTW_MESG_SERIAL_NUM_EXT_ID` | d2h | 5 | yes | - | Requestable with MESG_REQUEST. A real Garmin stick answers it with the same 4-byte little-endian serial as MESG_GET_SERIAL_NUM followed by one 0x00 byte, and Zwift asks for it right after asking for 0x61. The name is this project's own and describes only the observed shape. It is deliberately not a vendor header name, because no header was consulted (ADR 0002), and the meaning of the fifth byte is unknown, so this firmware always sends 0x00 there. It answers only when antr_serial_number_get() does, and otherwise refuses with INVALID_MESSAGE, exactly like 0x61. It sits in the AP2-era 0xC0-0xC7 block described under radiant_messages; it is the only id in that block seen on the wire (0xC5 and 0xC7 are pinned from the public document, and neither is bridged). | observed captures/zwift-20261111-193805.pcap (request a4024d00c62d, reply a405c6069f520000ac) |
+| `0xC5` | `ANTW_MESG_SLEEP_ID` | h2d | 1 | no | - | [filler]. Put the device into its deep-sleep state. Implied by the ANT_DLL export ANT_SleepMessage, which Zwift resolves; the id is from the public message protocol document. Not bridged: a USB dongle has no SLEEP/MSGRDY line to wake it again. | ANT Message Protocol and Usage Rev 5.1 sec 9.5.4.6 + verify:sdk-ant-shim |
+| `0xC7` | `ANTW_MESG_SET_USB_DESCRIPTOR_STRING_ID` | h2d | 1..32 | no | - | [string number 0..3, characters...]. Rewrites a USB descriptor string (0 = VID/PID, 1 manufacturer, 2 product, 3 serial) on devices that store them. Not bridged: the descriptors here are fixed at build time. | ANT Message Protocol and Usage Rev 5.1 sec 9.5.2.37 |
 
 ## Request and response share an id
 
@@ -729,7 +730,7 @@ The first allocation reasoned that nothing at or above `0xC0` appears in the bri
 Every witness available was checked:
 
 - `src/ant_serial_bridge.c` `dispatch()` and `handle_request()` — highest id `0xC6`.
-- Every `MESG_*` definition in `tools/ant_wire.py` — highest `0xC6`.
+- Every `MESG_*` definition in `tools/ant_wire.py` — highest `0xC7`.
 - `archive/host-api/ant_dll_exports.json`, taken from the real PE export directory of `ANT_DLL.dll` — 36 distinct message ids, highest `0x7B`. The entire host-callable ANT API tops out there.
 - The capabilities reply — carries no id space at all, so nothing in it can collide.
 - Rev 5.1's message table — highest ids known are the encryption block `0x7D`–`0x7F`, active search sharing `0x81`, NVM crypto key ops around `0x83`, the serial-layer `0xAE`–`0xAF` and port-IO `0xB4`–`0xB5` messages, and an AP2-era extension block around `0xC0`–`0xC7` (RSSI search threshold, sleep, Garmin ESN, USB info). `0xC6` in that block is now pinned by observation (a real stick answers a request for it), which leaves the range claim intact.
@@ -759,14 +760,15 @@ These are used at a visible site in this repository but their numeric value is n
 | Constant | Section | Blocks | Why it is unresolved | Provenance |
 |---|---|---|---|---|
 | `MESG_RSSI_SEARCH_THRESHOLD_ID` | messages | nothing - not bridged | Proximity search threshold expressed in RSSI rather than in the proximity bins MESG_PROX_SEARCH_CONFIG (0x71) uses. Implied by the ANT_DLL export ANT_RSSI_SetSearchThreshold. Believed to sit in the 0xC0 block of AP2-era extension messages, but no value in that block is corroborated by anything in this repository - the whole host-callable API in archive/host-api/ant_dll_exports.json tops out at 0x7B - so no number is recorded here. The Wave 2 shim looked and came back empty as well: sdk-ant v2.1.0 defines no such id anywhere in its headers or sources, so this stays unresolved rather than merely unverified. | host-api + verify:sdk-ant-shim |
-| `MESG_SLEEP_ID` | messages | nothing - not bridged | Put the device into its low-power sleep state. Implied by the ANT_DLL export ANT_SleepMessage, which Zwift resolves. Same 0xC0 block and the same lack of corroboration as MESG_RSSI_SEARCH_THRESHOLD_ID; no number is recorded. The Wave 2 shim found the name referenced in sdk-ant but never defined - the only occurrence is inside a commented-out dispatch arm - so there is no value to recover there either. | host-api + verify:sdk-ant-shim |
 
 ## Provenance summary
 
-230 constants in total. 74 carry a `verify: sdk-ant-shim` flag, meaning no file in this repository witnesses the value and the Wave 2 shim's `BUILD_ASSERT` block is what confirms it. 2 of those are unresolved outright.
+231 constants in total. 74 carry a `verify: sdk-ant-shim` flag, meaning no file in this repository witnesses the value and the Wave 2 shim's `BUILD_ASSERT` block is what confirms it. 1 of those are unresolved outright.
 
 | Source | Constants |
 |---|---|
+| ANT Message Protocol and Usage Rev 5.1 sec 9.5.2.37 | 1 |
+| ANT Message Protocol and Usage Rev 5.1 sec 9.5.4.6 | 1 |
 | K4 (docs/radiant-security.md sec 3 and 9) | 1 |
 | K4 (docs/radiant-security.md sec 3.2 and 9) | 1 |
 | K4 (docs/radiant-security.md sec 3.4 and 9) | 1 |
@@ -783,7 +785,7 @@ These are used at a visible site in this repository but their numeric value is n
 | bridge, tools | 33 |
 | bridge, tools (ant_probe) | 3 |
 | bridge, tools (ant_wire.MESG_EVENT_ID) | 1 |
-| host-api | 2 |
+| host-api | 1 |
 | inferred | 7 |
 | observed | 3 |
 | observed captures/zwift-20261111-193805.pcap (request a4024d00c62d, reply a405c6069f520000ac) | 1 |

@@ -391,7 +391,7 @@ struct radiant_event_rx {
 	 * header is [last<<7 | seq<<5 | channel], seq field 2 bits wide.
 	 * This is a serial-layer counter, NOT the on-air sequence bit,
 	 * which is a single alternating bit with no wider form
-	 * (docs/spike-b-part2-results.md). radiant_burst.c owns the
+	 * (docs/spike-b-results.md). radiant_burst.c owns the
 	 * mapping; this module only places the bits.
 	 */
 	uint8_t burst_seq;

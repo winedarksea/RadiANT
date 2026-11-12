@@ -26,7 +26,7 @@
  *      Resolved: byte 3 is a 6-field CONTROL byte, not a length. L0 only
  *      worked because this spike only ever heard broadcasts - L1 is the
  *      required form for receive and transmit alike. See
- *      docs/spike-b-results.md and docs/spike-b-part2-results.md.
+ *      docs/spike-b-results.md.
  *   C  Search config: 3-byte on-air address [A6 C5 devnum_lo] + 12-byte
  *      static body, putting devnum_hi/device type/trans type in RAM so they
  *      can be read rather than merely matched (makes the pass criterion

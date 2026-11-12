@@ -921,28 +921,37 @@ messages:
            is unknown, so this firmware always sends 0x00 there. It answers
            only when antr_serial_number_get() does, and otherwise refuses with
            INVALID_MESSAGE, exactly like 0x61. It sits in the AP2-era
-           0xC0-0xC7 block described under radiant_messages, and is the only
-           id in that block this file pins, because it is the only one seen on
-           the wire."
+           0xC0-0xC7 block described under radiant_messages; it is the only id
+           in that block seen on the wire (0xC5 and 0xC7 are pinned from the
+           public document, and neither is bridged)."
     source: "observed captures/zwift-20261111-193805.pcap (request a4024d00c62d,
              reply a405c6069f520000ac)"
 
   - name: MESG_SLEEP_ID
-    id: null
+    id: 0xC5
     direction: h2d
     payload_len: 1
     bridged: false
-    desc: "Put the device into its low-power sleep state. Implied by the
-           ANT_DLL export ANT_SleepMessage, which Zwift resolves. Same 0xC0
-           block and the same lack of corroboration as
-           MESG_RSSI_SEARCH_THRESHOLD_ID; no number is recorded. The Wave 2
-           shim found the name referenced in sdk-ant but never defined - the
-           only occurrence is inside a commented-out dispatch arm - so there is
-           no value to recover there either."
-    source: host-api
+    desc: "[filler]. Put the device into its deep-sleep state. Implied by the
+           ANT_DLL export ANT_SleepMessage, which Zwift resolves; the id is
+           from the public message protocol document. Not bridged: a USB
+           dongle has no SLEEP/MSGRDY line to wake it again."
+    source: "ANT Message Protocol and Usage Rev 5.1 sec 9.5.4.6"
     host_api: ANT_SleepMessage
     blocks: "nothing - not bridged"
     verify: sdk-ant-shim
+
+  - name: MESG_SET_USB_DESCRIPTOR_STRING_ID
+    id: 0xC7
+    direction: h2d
+    payload_len: "1..32"
+    bridged: false
+    desc: "[string number 0..3, characters...]. Rewrites a USB descriptor
+           string (0 = VID/PID, 1 manufacturer, 2 product, 3 serial) on
+           devices that store them. Not bridged: the descriptors here are
+           fixed at build time."
+    source: "ANT Message Protocol and Usage Rev 5.1 sec 9.5.2.37"
+    blocks: "nothing - not bridged"
 
 # ---------------------------------------------------------------------------
 # Reply sizes
@@ -1880,10 +1889,10 @@ capabilities:
 #
 # 0xF1-0xF5 is therefore chosen: one clear of sdk-ant's 0xF0, 0x11 clear of the
 # top of the extended-id block, and 0x2A clear of the top of the AP2-era block.
-# Honest limit on the Rev 5.1 bullet: it is recall of the public message table,
-# not a citation - which is why 0xC0-0xC7 is left as a *range* claim and why
-# MESG_RSSI_SEARCH_THRESHOLD_ID and MESG_SLEEP_ID carry `value: null` rather
-# than a number. The sdk-ant bullet is a direct reading and is the one that
+# The Rev 5.1 bullet was first written from recall; on 2026-11-11 the public
+# PDF was read, which pinned MESG_SLEEP_ID at 0xC5 (sec 9.5.4.6) and Set USB
+# Descriptor String at 0xC7 (sec 9.5.2.37). MESG_RSSI_SEARCH_THRESHOLD_ID still
+# carries `value: null`, since nothing read so far gives its number. The sdk-ant bullet is a direct reading and is the one that
 # moved these ids. 0xF1-0xF5 is also not confusable with SYNC (0xA4/0xA5) by a
 # resynchronising parser, which 0xA4 itself would be.
 

@@ -7,7 +7,7 @@
  * also qualify? - NOT SETTLED", the question this exists to answer),
  * radiant/include/radiant/radiant_radio_hal.h and radiant_frame.h
  * (backend contract, ANT+ network address, CRC params), docs/ant-radio-link.md
- * and docs/spike-b-part2-results.md (tracking frame geometry, what byte 3 is),
+ * and docs/spike-b-results.md (tracking frame geometry, what byte 3 is),
  * and this repo's own radiant/spike/rx_raw/src/main.c for the shape of a
  * bench program. Nothing derives from sdk-ant, libant.a, or an
  * ANT+ profile document. See docs/decisions/0002-clean-room-policy.md.
@@ -88,7 +88,7 @@ BUILD_ASSERT(!IS_ENABLED(CONFIG_BT),
 
 #define DEVICE_TYPE      0x60u   /* the RadiANT telemetry envelope's type */
 #define TRANS_TYPE       0x05u
-#define CONTROL_BYTE     0x0Au   /* a broadcast, per docs/spike-b-part2-results.md */
+#define CONTROL_BYTE     0x0Au   /* a broadcast, per docs/spike-b-results.md */
 
 #define DEVNUM_A         0x60A0u /* the control - a stock dongle SHOULD see this */
 #define DEVNUM_B         0x60B0u /* the experiment - it should NEVER see this */

@@ -4,7 +4,7 @@
  * next, and at which absolute microsecond it is armed.
  *
  * Provenance: clean-room, from radiant_radio_hal.h, docs/ant-radio-link.md,
- * docs/spike-a-results.md, docs/spike-b-part2-results.md, and the free ANT
+ * docs/spike-a-results.md, docs/spike-b-results.md, and the free ANT
  * Message Protocol and Usage Rev 5.1 (D00000652). Nothing here derives from
  * sdk-ant, libant.a, or any ANT+ device profile document. See
  * docs/decisions/0002-clean-room-policy.md.
@@ -149,7 +149,7 @@ extern "C" {
  * The widest a merged receive window may grow. Merging takes the union of
  * overlapping windows, which needs a bound: this one, from the bench - a
  * master's broadcast is answered 2186-2191 us later
- * (docs/spike-b-part2-results.md), the tightest deadline in the link layer.
+ * (docs/spike-b-results.md), the tightest deadline in the link layer.
  * Real masters hold slot phase to well inside +/-25 us, so this cap is
  * generous and rarely reached.
  *

@@ -4,7 +4,7 @@
  *
  * Clean-room: written from radiant_radio_hal.h and radiant_sched.h against the
  * mock in tests/fake_radio.c; the two bounded constants come from the bench
- * measurements in docs/ant-radio-link.md and docs/spike-b-part2-results.md.
+ * measurements in docs/ant-radio-link.md and docs/spike-b-results.md.
  * See docs/decisions/0002-clean-room-policy.md.
  *
  * Shape: a table of 32 slots, each holding at most one intent, and pass() -
@@ -1953,7 +1953,7 @@ static bool could_join_armed(const struct sched_slot *sl, radiant_time_t earlies
  *
  *   - A TRANSMIT INSIDE/JUST AFTER THE ARMED WINDOW: the turnaround, and the
  *     reason preemption exists - a tracking channel that hears acknowledged
- *     data owes an 8-byte reply ~1.55 ms later (docs/spike-b-part2-results.md),
+ *     data owes an 8-byte reply ~1.55 ms later (docs/spike-b-results.md),
  *     the tightest deadline in the link layer, requested from inside the
  *     still-armed window's own receive callback. Waiting would mean arming
  *     inside min_arm_lead_us, which backends refuse.

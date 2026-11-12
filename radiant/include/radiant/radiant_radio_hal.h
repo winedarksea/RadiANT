@@ -198,7 +198,7 @@ enum radiant_len_mode {
 	 *
 	 * NO ANT FORMAT USES THIS MODE. Byte 3 of an ANT frame is a control
 	 * byte (low five bits: 10 on broadcast, 2 in-slot, both 8 payload
-	 * bytes), not a length byte (docs/spike-b-part2-results.md); a backend
+	 * bytes), not a length byte (docs/spike-b-results.md); a backend
 	 * that maps ANT tracking onto this mode (nRF PCNF0.LFLEN=8) silently
 	 * drops every acknowledged/burst frame. RADIANT_FRAME_CFG_LR (ADR 0007)
 	 * is the one format that legitimately uses it: its length byte is

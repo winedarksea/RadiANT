@@ -4,7 +4,7 @@
  *
  * Provenance: clean-room. Written from docs/ant-radio-link.md,
  * docs/spike-a-results.md, docs/spike-b-results.md and
- * docs/spike-b-part2-results.md (the control byte, its eleven measured values
+ * docs/spike-b-results.md (the control byte, its eleven measured values
  * and the six-field structure behind them; part 2 supersedes part 1 wherever
  * they differ), from radiant/include/radiant/radiant_radio_hal.h, and from
  * public nRF52840/nRF54L15 product specifications for the reasoning about the

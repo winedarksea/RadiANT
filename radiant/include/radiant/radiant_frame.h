@@ -5,7 +5,7 @@
  * Provenance: clean-room, from docs/ant-radio-link.md (frame layout, CRC
  * parameters, the two packet configurations, address-packing rules),
  * docs/spike-a-results.md, docs/spike-b-results.md and
- * docs/spike-b-part2-results.md (supersedes part 1 on the control byte; the
+ * docs/spike-b-results.md (supersedes part 1 on the control byte; the
  * six-field model below), with public nRF52840/nRF54L15 product
  * specifications behind the reasoning about why the two configurations
  * differ. See docs/decisions/0002-clean-room-policy.md.
@@ -411,7 +411,7 @@ uint32_t radiant_frame_tail_us(const struct radiant_pkt_format *fmt);
  *
  * SIX INDEPENDENT FIELDS, not a type field and a length. Measured across
  * four runs and 2,354 CRC-valid frames on 2026-08-09 with three radios on
- * the air at once (docs/spike-b-part2-results.md), consistent with all 750
+ * the air at once (docs/spike-b-results.md), consistent with all 750
  * frames of part 1:
  *
  *      bit    7      6      5      4      3     2 1 0

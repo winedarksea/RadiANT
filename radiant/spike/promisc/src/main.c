@@ -472,7 +472,7 @@ static void print_rec(const struct rec *r)
 		 * non-standard payload length. (It used to name a predicted
 		 * 0x9A advanced-burst encoding; that prediction was withdrawn
 		 * with the length reading of byte 3 - see
-		 * docs/spike-b-part2-results.md. Every longframe either part
+		 * docs/spike-b-results.md. Every longframe either part
 		 * of Spike B printed has been an ordinary bit error.) */
 		n_longframe++;
 	}

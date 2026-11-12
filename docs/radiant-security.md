@@ -1245,7 +1245,7 @@ to stay safe.
 This does not apply to the design as specified above: the X25519 exchange runs
 over one channel's own acknowledged/burst path with no cross-channel resource
 today, so there is nothing to serialise and nothing to leak. It applies only if
-a future revision adds one. See `docs/sdk-ant-comparison.md` item 7.
+a future revision adds one.
 
 ---
 

@@ -438,19 +438,24 @@ MESG_SERIAL_ERROR_ID = 0xAE
 # the fifth byte is unknown, so this firmware always sends 0x00 there. It
 # answers only when antr_serial_number_get() does, and otherwise refuses with
 # INVALID_MESSAGE, exactly like 0x61. It sits in the AP2-era 0xC0-0xC7 block
-# described under radiant_messages, and is the only id in that block this file
-# pins, because it is the only one seen on the wire. [observed
-# captures/zwift-20261111-193805.pcap (request a4024d00c62d, reply
-# a405c6069f520000ac)]
+# described under radiant_messages; it is the only id in that block seen on the
+# wire (0xC5 and 0xC7 are pinned from the public document, and neither is
+# bridged). [observed captures/zwift-20261111-193805.pcap (request
+# a4024d00c62d, reply a405c6069f520000ac)]
 MESG_SERIAL_NUM_EXT_ID = 0xC6
 
-# MESG_SLEEP_ID: UNRESOLVED. Put the device into its low-power sleep state.
-# Implied by the ANT_DLL export ANT_SleepMessage, which Zwift resolves. Same
-# 0xC0 block and the same lack of corroboration as
-# MESG_RSSI_SEARCH_THRESHOLD_ID; no number is recorded. The Wave 2 shim found
-# the name referenced in sdk-ant but never defined - the only occurrence is
-# inside a commented-out dispatch arm - so there is no value to recover there
-# either. [host-api + verify:sdk-ant-shim]
+# [filler]. Put the device into its deep-sleep state. Implied by the ANT_DLL
+# export ANT_SleepMessage, which Zwift resolves; the id is from the public
+# message protocol document. Not bridged: a USB dongle has no SLEEP/MSGRDY line
+# to wake it again. [ANT Message Protocol and Usage Rev 5.1 sec 9.5.4.6 +
+# verify:sdk-ant-shim]
+MESG_SLEEP_ID = 0xC5
+
+# [string number 0..3, characters...]. Rewrites a USB descriptor string (0 =
+# VID/PID, 1 manufacturer, 2 product, 3 serial) on devices that store them. Not
+# bridged: the descriptors here are fixed at build time. [ANT Message Protocol
+# and Usage Rev 5.1 sec 9.5.2.37]
+MESG_SET_USB_DESCRIPTOR_STRING_ID = 0xC7
 
 # ---------------------------------------------------------------------------
 # Reply sizes
@@ -1845,7 +1850,22 @@ MESSAGES = {
         "direction": 'd2h',
         "payload_len": 5,
         "bridged": True,
-        "desc": "Requestable with MESG_REQUEST. A real Garmin stick answers it with the same 4-byte little-endian serial as MESG_GET_SERIAL_NUM followed by one 0x00 byte, and Zwift asks for it right after asking for 0x61. The name is this project's own and describes only the observed shape. It is deliberately not a vendor header name, because no header was consulted (ADR 0002), and the meaning of the fifth byte is unknown, so this firmware always sends 0x00 there. It answers only when antr_serial_number_get() does, and otherwise refuses with INVALID_MESSAGE, exactly like 0x61. It sits in the AP2-era 0xC0-0xC7 block described under radiant_messages, and is the only id in that block this file pins, because it is the only one seen on the wire.",
+        "desc": "Requestable with MESG_REQUEST. A real Garmin stick answers it with the same 4-byte little-endian serial as MESG_GET_SERIAL_NUM followed by one 0x00 byte, and Zwift asks for it right after asking for 0x61. The name is this project's own and describes only the observed shape. It is deliberately not a vendor header name, because no header was consulted (ADR 0002), and the meaning of the fifth byte is unknown, so this firmware always sends 0x00 there. It answers only when antr_serial_number_get() does, and otherwise refuses with INVALID_MESSAGE, exactly like 0x61. It sits in the AP2-era 0xC0-0xC7 block described under radiant_messages; it is the only id in that block seen on the wire (0xC5 and 0xC7 are pinned from the public document, and neither is bridged).",
+    },
+    0xC5: {
+        "name": 'MESG_SLEEP_ID',
+        "direction": 'h2d',
+        "payload_len": 1,
+        "bridged": False,
+        "host_api": 'ANT_SleepMessage',
+        "desc": '[filler]. Put the device into its deep-sleep state. Implied by the ANT_DLL export ANT_SleepMessage, which Zwift resolves; the id is from the public message protocol document. Not bridged: a USB dongle has no SLEEP/MSGRDY line to wake it again.',
+    },
+    0xC7: {
+        "name": 'MESG_SET_USB_DESCRIPTOR_STRING_ID',
+        "direction": 'h2d',
+        "payload_len": '1..32',
+        "bridged": False,
+        "desc": '[string number 0..3, characters...]. Rewrites a USB descriptor string (0 = VID/PID, 1 manufacturer, 2 product, 3 serial) on devices that store them. Not bridged: the descriptors here are fixed at build time.',
     },
 }
 
@@ -2122,7 +2142,6 @@ OBSERVED_CAPABILITIES = bytes.fromhex('080800b23200fd8d0f')
 # Constants whose value is not recoverable without sdk-ant. Name -> why.
 UNRESOLVED = {
     'MESG_RSSI_SEARCH_THRESHOLD_ID': 'Proximity search threshold expressed in RSSI rather than in the proximity bins MESG_PROX_SEARCH_CONFIG (0x71) uses. Implied by the ANT_DLL export ANT_RSSI_SetSearchThreshold. Believed to sit in the 0xC0 block of AP2-era extension messages, but no value in that block is corroborated by anything in this repository - the whole host-callable API in archive/host-api/ant_dll_exports.json tops out at 0x7B - so no number is recorded here. The Wave 2 shim looked and came back empty as well: sdk-ant v2.1.0 defines no such id anywhere in its headers or sources, so this stays unresolved rather than merely unverified.',
-    'MESG_SLEEP_ID': 'Put the device into its low-power sleep state. Implied by the ANT_DLL export ANT_SleepMessage, which Zwift resolves. Same 0xC0 block and the same lack of corroboration as MESG_RSSI_SEARCH_THRESHOLD_ID; no number is recorded. The Wave 2 shim found the name referenced in sdk-ant but never defined - the only occurrence is inside a commented-out dispatch arm - so there is no value to recover there either.',
 }
 
 # Constants with no witness in this repository. The Wave 2 shim asserts them.

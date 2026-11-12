@@ -3,7 +3,7 @@
  *
  * Provenance: original clean-room work. Written against radiant_sched.h,
  * radiant_radio_hal.h, fake_radio.h and the measurements in
- * docs/spike-a-results.md and docs/spike-b-part2-results.md. Nothing here
+ * docs/spike-a-results.md and docs/spike-b-results.md. Nothing here
  * derives from sdk-ant, libant.a, or any ANT+ profile document.
  *
  * Tests for the radio schedule. radiant_sched.c is pure logic over
@@ -1637,7 +1637,7 @@ ZTEST(radiant_sched, test_a_window_is_truncated_to_clear_a_transmit_deadline)
  * A reply that falls due inside an armed window takes the radio. This is the
  * turnaround, the tightest deadline in the link layer: a tracking channel
  * that hears acknowledged data owes a full 8-byte reply ~1.55 ms later
- * (docs/spike-b-part2-results.md). The request arrives from inside the
+ * (docs/spike-b-results.md). The request arrives from inside the
  * receive callback of the still-armed window, so only preemption can serve
  * it, and it also produces a late ABORTED terminal (with no fault injection)
  * that the scheduler must recognise rather than mistake for the transmit's end.

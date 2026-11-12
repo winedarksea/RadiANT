@@ -7,7 +7,7 @@
  * (semantics, ordering, permitted error codes), the ANT Message Protocol and
  * Usage Rev 5.1 (D00000652) for the channel-status byte layout and the
  * 32768 Hz period unit, and bench measurements in docs/ant-radio-link.md and
- * docs/spike-b-part2-results.md (open-to-first-transmission delay, slot
+ * docs/spike-b-results.md (open-to-first-transmission delay, slot
  * period/jitter). See docs/decisions/0002-clean-room-policy.md.
  *
  * This layer has no radio and no scheduler in it. It owns: each of the 32
@@ -547,7 +547,7 @@ radiant_channel_err_t radiant_channel_freq_hop_table_get(uint8_t channel,
  * search geometry. sdk-ant names exactly two legal values (316 default,
  * 97 fast) and forbids custom ones, so only those two are accepted rather
  * than storing an arbitrary uint16_t that could never mean anything. See
- * docs/sdk-ant-comparison.md item 2.
+ * the antr_* mapping in docs/sdk-ant-contract.md.
  * Returns OK, INVALID_MESSAGE, WRONG_STATE (unassigned) or INVALID_PARAM
  * (neither DEFAULT nor FAST).
  */
@@ -565,7 +565,7 @@ radiant_channel_err_t radiant_channel_search_waveform_get(uint8_t channel,
  * nothing enforces is the trap docs/gotchas.md warns against - a host would
  * believe distant sensors are filtered when none are. So only 0 (off) is
  * accepted; any non-zero threshold is refused rather than silently dropped.
- * See docs/sdk-ant-comparison.md item 2.
+ * See the antr_* mapping in docs/sdk-ant-contract.md.
  * Returns OK, INVALID_MESSAGE, WRONG_STATE or INVALID_PARAM (threshold > 10,
  * or any non-zero threshold).
  */

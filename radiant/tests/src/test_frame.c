@@ -3,7 +3,7 @@
  *
  * Provenance: original work. Every expected value here comes from
  * docs/ant-radio-link.md, docs/spike-a-results.md, docs/spike-b-results.md
- * or docs/spike-b-part2-results.md, and the capture logs those cite
+ * or docs/spike-b-results.md, and the capture logs those cite
  * (archive/captures/radio/2026-08-09-nrf54l15-run*.log,
  * archive/captures/radio/2026-08-09-spike-b-*.log and
  * archive/captures/radio/2026-08-09-spike-b2-*.log) - not from running
@@ -97,7 +97,7 @@ static const uint8_t spike_b_payload[8] = {
 };
 
 /* ---------------------------------------------------------------------------
- * The eleven control bytes, from docs/spike-b-part2-results.md's table and
+ * The eleven control bytes, from docs/spike-b-results.md's table and
  * the analyser's decode of archive/captures/radio/2026-08-09-spike-b2-run{0,A,B,C}.log.
  *
  * Written as fields AND as the hex byte the capture shows, derived

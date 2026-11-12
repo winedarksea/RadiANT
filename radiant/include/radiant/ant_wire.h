@@ -201,6 +201,10 @@
 
 #define ANTW_MESG_SERIAL_NUM_EXT_ID                          RADIANT_WIRE_MESG_SERIAL_NUM_EXT_ID
 
+#define ANTW_MESG_SLEEP_ID                                   RADIANT_WIRE_MESG_SLEEP_ID
+
+#define ANTW_MESG_SET_USB_DESCRIPTOR_STRING_ID               RADIANT_WIRE_MESG_SET_USB_DESCRIPTOR_STRING_ID
+
 /* ------------------------------------------------------------------------
  * Reply sizes
  * The LEN byte the bridge puts on each reply it composes itself. Where a

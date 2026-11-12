@@ -3,7 +3,7 @@
  *
  * Provenance: original clean-room work, written against radiant_transfer.h,
  * radiant_frame.h, fake_radio.h, and the measurements in
- * docs/spike-b-part2-results.md - every control byte, microsecond, and packet
+ * docs/spike-b-results.md - every control byte, microsecond, and packet
  * count asserted below is quoted from that document or its capture logs.
  * Nothing here derives from sdk-ant, libant.a, or any ANT+
  * device profile document.

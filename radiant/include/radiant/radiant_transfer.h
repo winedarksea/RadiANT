@@ -2,7 +2,7 @@
 /*
  * radiant_transfer.h - acknowledged data and burst: the one engine both of them are.
  *
- * Provenance: clean-room, from docs/spike-b-part2-results.md (control byte,
+ * Provenance: clean-room, from docs/spike-b-results.md (control byte,
  * the four measured data/ack pairs, every us figure below),
  * docs/spike-b-results.md, docs/ant-radio-link.md, radiant_frame.h,
  * radiant_radio_hal.h, and the buffer-ownership obligations B1-B5 in
@@ -19,7 +19,7 @@
  *
  * The sequence is ONE BIT, so this is stop-and-wait: no three-bit burst
  * sequence exists in an ANT frame. Bit 4 alternates per on-air packet and
- * nothing else moves until the final packet sets bit 5 (docs/spike-b-part2-
+ * nothing else moves until the final packet sets bit 5 (docs/spike-b-
  * results.md: 19 bursts, sequence bit never disagreed with packet index). A
  * one-bit sequence cannot express a window; a future design assuming a
  * sliding window (including the serial protocol's own two-bit burst-header
@@ -209,7 +209,7 @@ extern "C" {
 /* ---------------------------------------------------------------------------
  * Timing - all `[measured]`, all software timestamps
  *
- * From docs/spike-b-part2-results.md, runs A and B, ADDRESS interrupt to
+ * From docs/spike-b-results.md, runs A and B, ADDRESS interrupt to
  * ADDRESS interrupt:
  *
  *   master broadcast -> slave's reply      n=7  2186 us sd 8   / n=12 2191 sd 8

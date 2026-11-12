@@ -152,7 +152,7 @@ def enable_adv_burst(dev, reader, size_code: int = ADV_BURST_MODES_SIZE_24_BYTES
     A payload other than 8 bytes is the only way to give bits 2:0 of the
     control byte a measured meaning. It originally tested a 0x1A/0x9A length
     prediction; both are withdrawn (byte 3 is a control byte - see
-    docs/spike-b-part2-results.md), but the run is still worth doing.
+    docs/spike-b-results.md), but the run is still worth doing.
 
     Body layout: [filler, enable, rf payload size, required modes, 0, 0,
     optional modes, 0, 0] - see protocol/ant_wire.yaml, MESG_CONFIG_ADV_BURST.
