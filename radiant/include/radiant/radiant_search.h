@@ -558,6 +558,8 @@ struct radiant_search {
 	/* The round-robin cursor wrapped since the last retune decision: a pass
 	 * has just finished. See retune_at_boundary(). */
 	bool     pass_done;
+	/* The configured frequency; restored when no searcher declares one. */
+	uint8_t  home_rf;
 
 	struct radiant_search_chan chans[RADIANT_SEARCH_MAX_CHANNELS];
 	struct radiant_search_seen seen[RADIANT_SEARCH_SEEN_ENTRIES];
