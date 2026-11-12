@@ -422,3 +422,7 @@ image includes it.
   reset the host-frame parser in bench testing (0 of 10); a bus reset or replug
   does.
 - MPSL builds cannot run multi-packet bursts.
+- A RadiANT master's acknowledged messages are reported failed 10-38 % of the
+  time although the slave receives nearly all of them: the master misses the
+  slave's acknowledgement on the slot-reply turnaround. Bursts hide it with
+  retries. Cause not yet found (TODO.md).
