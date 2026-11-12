@@ -56,6 +56,7 @@
 
 #include <radiant/radiant_transfer.h>
 #include <radiant/radiant_event.h>
+#include <radiant/radiant_diag.h>
 
 /* ---------------------------------------------------------------------------
  * Small helpers
@@ -73,6 +74,9 @@ static void reset_transfer(struct radiant_transfer *t)
 	t->pkt_in_block = 0u;
 	t->block_released = false;
 	t->own_block = false;
+	t->staged = NULL;
+	t->staged_len = 0u;
+	t->staged_seg = 0u;
 	t->pkt_index = 0u;
 	t->pkt_acked = 0u;
 	t->cur_ctrl = 0u;
@@ -84,32 +88,38 @@ static void reset_transfer(struct radiant_transfer *t)
 /* Hand the block back and ask for the next one. State moves to WAIT_BLOCK
  * *before* done() runs, because done() is where the bridge frees its
  * semaphore and a submit call can arrive re-entrantly from inside it. */
-static void release_next(struct radiant_transfer *t)
+static void release_block(struct radiant_transfer *t, uint8_t *block,
+			  uint8_t len)
 {
 	struct radiant_transfer_result r;
 	const struct radiant_transfer_ops *ops = t->cfg.ops;
 	void *ctx = t->cfg.ctx;
 
-	if (!t->own_block || t->block_released || t->block == NULL) {
-		return;
-	}
-
 	memset(&r, 0, sizeof(r));
 	r.ev = RADIANT_TRANSFER_EV_NEXT_BLOCK;
-	r.block = t->block;
-	r.block_len = t->block_len;
+	r.block = block;
+	r.block_len = len;
 	r.fail = RADIANT_TRANSFER_FAIL_NONE;
 	r.packets = t->pkt_acked;
-
-	t->block_released = true;
-	/* Null it too, not just flag it: B1 says the buffer isn't valid after
-	 * the releasing event, so nothing here should be readable by accident. */
-	t->block = NULL;
 	t->stats.blocks_released++;
 
 	if (ops != NULL && ops->done != NULL) {
 		ops->done(ctx, &r);
 	}
+}
+
+static void release_next(struct radiant_transfer *t)
+{
+	uint8_t *block = t->block;
+
+	if (!t->own_block || t->block_released || block == NULL) {
+		return;
+	}
+	t->block_released = true;
+	/* Null it too, not just flag it: B1 says the buffer isn't valid after
+	 * the releasing event, so nothing here should be readable by accident. */
+	t->block = NULL;
+	release_block(t, block, t->block_len);
 }
 
 /* End the transfer, exactly once, releasing whatever is still held. */
@@ -129,6 +139,14 @@ static void finish(struct radiant_transfer *t, enum radiant_transfer_event ev,
 		r.block = t->block;
 		r.block_len = t->block_len;
 		t->block_released = true;
+		t->stats.blocks_released++;
+	}
+	/* A block staged behind the one in flight goes back with the same
+	 * terminal: one event ends the transfer, and each pointer is still
+	 * carried by exactly one done() call. */
+	if (t->staged != NULL) {
+		r.staged_block = t->staged;
+		r.staged_len = t->staged_len;
 		t->stats.blocks_released++;
 	}
 
@@ -519,8 +537,36 @@ int radiant_transfer_submit(struct radiant_transfer *t, uint8_t *block, uint8_t 
 		}
 		starting = false;
 		index = t->pkt_index;
+	} else if ((t->state == RADIANT_TRANSFER_STATE_TX_DATA ||
+		    t->state == RADIANT_TRANSFER_STATE_WAIT_ACK) &&
+		   t->own_block && owned && t->staged == NULL &&
+		   (t->block_seg & RADIANT_TRANSFER_SEG_END) == 0u &&
+		   (segment & RADIANT_TRANSFER_SEG_START) == 0u) {
+		/*
+		 * PRE-STAGED CONTINUATION. A burst block that arrives while the
+		 * one before it is still on the air is held here, and advance()
+		 * sends its first packet from the acknowledgement's own callback
+		 * at ack t_sync + NEXT_PACKET_US. Without it every block boundary
+		 * waited for NEXT_BLOCK to travel radio callback -> event thread
+		 * -> bridge -> this call, which on the cc26xx (600 us arm lead)
+		 * did not fit inside 1550 us and lost every chained packet
+		 * (2026-11-12 bench). Never behind an END block: that block is
+		 * the transfer's last, so nothing may follow it.
+		 *
+		 * Nothing is armed here, so nothing can fail: the block is the
+		 * engine's from this return until it is released by NEXT_BLOCK
+		 * or by the transfer's terminal event (B1-B5).
+		 */
+		t->staged = block;
+		t->staged_len = len;
+		t->staged_seg = segment;
+		t->stats.blocks_accepted++;
+		t->stats.blocks_staged++;
+		RADIANT_DIAG_INC(cont_submits);
+		return RADIANT_TRANSFER_OK;
 	} else {
-		/* Mid-packet. The host must wait for NEXT_BLOCK; this is the
+		/* Mid-packet with a block already staged, or behind the END
+		 * block. The host must wait for NEXT_BLOCK; this is the
 		 * ANTW_TRANSFER_IN_PROGRESS the bridge already expects. */
 		return RADIANT_TRANSFER_EBUSY;
 	}
@@ -548,7 +594,16 @@ int radiant_transfer_submit(struct radiant_transfer *t, uint8_t *block, uint8_t 
 				      (radiant_time_t)t->min_lead_us +
 				      (radiant_time_t)RADIANT_TRANSFER_ARM_SLACK_US;
 
+		RADIANT_DIAG_INC(cont_submits);
+		/* Host turnaround: the acknowledgement that asked for this
+		 * block (next_t_sync - NEXT_PACKET_US) to its arrival here. */
+		if (t->next_t_sync != RADIANT_TIME_NEVER) {
+			RADIANT_DIAG_TURN(radiant_radio_now() -
+					  (t->next_t_sync -
+					   (radiant_time_t)RADIANT_TRANSFER_NEXT_PACKET_US));
+		}
 		if (when < earliest) {
+			RADIANT_DIAG_INC(cont_late);
 			when = earliest;
 		}
 	}
@@ -685,6 +740,37 @@ static void advance(struct radiant_transfer *t, radiant_time_t ack_t_sync)
 	t->stats.packets_sent++;
 	t->pkt_index++;
 	t->pkt_in_block++;
+
+	if (t->pkt_in_block >= t->n_pkt_in_block && t->staged != NULL) {
+		/* The block is spent and the next one is already here: chain it
+		 * from this callback, then hand the spent one back. Arm first,
+		 * so a re-entrant submit from done() finds TX_DATA and stages
+		 * behind the new block rather than racing it. */
+		uint8_t *spent = t->block;
+		uint8_t spent_len = t->block_len;
+
+		t->block = t->staged;
+		t->block_len = t->staged_len;
+		t->block_seg = t->staged_seg;
+		t->n_pkt_in_block = radiant_transfer_packets_in_block(t->staged_len);
+		t->pkt_in_block = 0u;
+		t->block_released = false;
+		t->staged = NULL;
+		t->staged_len = 0u;
+		t->staged_seg = 0u;
+		t->next_t_sync = ack_t_sync +
+				 (radiant_time_t)RADIANT_TRANSFER_NEXT_PACKET_US;
+
+		last = ((t->block_seg & RADIANT_TRANSFER_SEG_END) != 0u) &&
+		       (t->n_pkt_in_block == 1u);
+		rc = try_send(t, t->pkt_index, last, t->block, t->next_t_sync);
+		release_block(t, spent, spent_len);
+		if (rc != RADIANT_TRANSFER_OK) {
+			finish(t, RADIANT_TRANSFER_EV_TX_FAILED,
+			       RADIANT_TRANSFER_FAIL_RADIO);
+		}
+		return;
+	}
 
 	if (t->pkt_in_block >= t->n_pkt_in_block) {
 		/* The block is spent. State first, then release: done() frees

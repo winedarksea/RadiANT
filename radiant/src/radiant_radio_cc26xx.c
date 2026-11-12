@@ -60,6 +60,10 @@
 #include <ti/drivers/rf/RF.h>
 
 #include <radiant/radiant_radio_hal.h>
+
+#include <radiant/radiant_diag.h>
+
+#include "radiant_addr_split.h"
 /* RADIANT_CC26XX_PRIO_* is used unconditionally below (post_op()'s non-coex
  * arm ignores the value but every call site still computes it); the
  * accessor it also declares, radiant_cc26xx_client(), is defined only under
@@ -518,14 +522,18 @@ static RF_Mode rf_mode = {
  * ---------------------------------------------------------------------------
  */
 #define RX_CRC_BYTES      2u
-#if defined(CONFIG_RADIANT_SEARCH_SHORT_MATCH)
-/* A 5-byte tracking address over a 2-byte sync word leaves THREE address
- * bytes in the payload. Sizes rx_data's rows, rx_cmd.maxPktLen's ceiling
- * and tx_buf below. */
-#define RX_SW_ADDR_MAX    (RADIANT_RADIO_ADDR_MAX - CC26XX_HW_ADDR_LEN)   /* 3 */
-#else
-#define RX_SW_ADDR_MAX    (RADIANT_RADIO_ADDR_MAX - 4u)   /* 1 */
-#endif
+/* Address bytes the sync-word matcher leaves in the payload for the longest
+ * address the HAL permits: 3 with the 2-byte sync word
+ * (CONFIG_RADIANT_SEARCH_SHORT_MATCH), 2 with the 3-byte one. Sizes rx_data's
+ * rows, rx_cmd.maxPktLen's ceiling and tx_buf below. Until 2026-11-12 the
+ * long-match branch subtracted 4, not the 3 the matcher takes, which left
+ * tx_buf and the rows one byte short at body_len RADIANT_RADIO_BODY_MAX
+ * (unreachable with ANT's 8-byte body; radiant_radio_tx() and
+ * radiant_radio_rx() now refuse an oversize frame anyway). */
+#define RX_SW_ADDR_MAX    (RADIANT_RADIO_ADDR_MAX - CC26XX_HW_ADDR_LEN)
+BUILD_ASSERT(CC26XX_HW_ADDR_LEN >= 2u &&
+	     CC26XX_HW_ADDR_LEN <= RADIANT_RADIO_ADDR_MAX,
+	     "the sync-word matcher takes 2..ADDR_MAX address bytes");
 #define RX_PAYLOAD_MAX    (RX_SW_ADDR_MAX + RADIANT_RADIO_BODY_MAX + RX_CRC_BYTES)
 #define RX_APPEND_BYTES   (1u /* RSSI */ + 4u /* RAT */ + 1u /* status */)
 #define RX_BUF_BYTES      (RX_PAYLOAD_MAX + RX_APPEND_BYTES)
@@ -548,6 +556,35 @@ static RF_Mode rf_mode = {
 static uint8_t rx_data[RX_ENTRIES][RX_ROW_BYTES] __aligned(4);
 static dataQueue_t rx_queue;
 static rfc_propRxOutput_t rx_output;
+
+/*
+ * The 0xF7 backend page (ADR 0023), CONFIG_RADIANT_DIAG_COUNTERS only. Every
+ * CC_DIAG() site below is an empty statement without it. rx_output is cleared
+ * at each arm, so its counts are folded into rxo_* first (and the window still
+ * running is added at read time).
+ */
+#if defined(CONFIG_RADIANT_DIAG_COUNTERS)
+static struct {
+	uint32_t rx_posted, rx_refused;
+	uint32_t term_ok, term_empty, term_error;
+	uint32_t status_err, status_last;
+	uint32_t window_drops, crc_fail, alt_sync_hits;
+	uint32_t rxo_nok, rxo_buf_full;
+	uint32_t drain_max_us;
+	uint32_t min_lead_us;
+	uint32_t win_frames;   /* OK frames in the window now open */
+	bool     lead_seen;
+} cc_diag;
+#define CC_DIAG(...) do { __VA_ARGS__; } while (0)
+
+static void cc_diag_fold_rx_output(void)
+{
+	cc_diag.rxo_nok += (uint32_t)rx_output.nRxNok + rx_output.nRxIgnored;
+	cc_diag.rxo_buf_full += rx_output.nRxBufFull;
+}
+#else
+#define CC_DIAG(...) do { } while (0)
+#endif
 
 /*
  * The read cursor is software's, not rx_queue.pCurrEntry: that field is
@@ -621,6 +658,11 @@ static volatile rfc_CMD_PROP_RX_ADV_t rx_cmd = {
 
 /* Address bytes the matcher could not reach, then body, then CRC. */
 static uint8_t tx_buf[RX_SW_ADDR_MAX + RADIANT_RADIO_BODY_MAX + RX_CRC_BYTES];
+/* What goes out is exactly what a receiving row holds before its appended
+ * status bytes: radiant_radio_tx()'s size guard and radiant_radio_rx()'s
+ * maxPktLen guard compare against the same number. */
+BUILD_ASSERT(sizeof(tx_buf) == RX_PAYLOAD_MAX,
+	     "tx_buf and the receive rows must be sized from one figure");
 
 static volatile rfc_CMD_PROP_TX_ADV_t tx_cmd = {
 	.commandNo = CMD_PROP_TX_ADV,
@@ -1169,6 +1211,18 @@ static void deliver_rx_terminal(enum radiant_radio_status status)
 	st.delivered_terminal = true;
 	st.kind = OP_NONE;
 
+	/* A window that heard a frame is OK however it ended: one that heard
+	 * a master's or slave's packet is usually ABORTED by the reply the
+	 * core arms from inside the frame callback (measured 2026-11-12: every
+	 * heard turnaround ended that way). */
+	CC_DIAG(if (cc_diag.win_frames != 0u) {
+			cc_diag.term_ok++;
+		} else if (status == RADIANT_RADIO_STATUS_TIMEOUT) {
+			cc_diag.term_empty++;
+		} else {
+			cc_diag.term_error++;
+		});
+
 	if (st.cbs != NULL && st.cbs->rx != NULL) {
 		st.cbs->rx(&evt, st.user);
 	}
@@ -1254,43 +1308,22 @@ static void rx_queue_init(void)
  */
 static int rx_match(uint8_t sync_id, const uint8_t *payload)
 {
-	for (uint8_t i = 0; i < st.n_filters; i++) {
-		const struct radiant_rx_filter *f = &st.filters[i];
-
-		if (st.sync_group[sync_id] < 0) {
-			return -1;
-		}
-		/* Same sync word? Compare the hardware-matched prefix against
-		 * the filter that sync word was programmed from. */
-		if (memcmp(f->addr, st.filters[st.sync_group[sync_id]].addr,
-			   st.hw_addr_len) != 0) {
-			continue;
-		}
-		/*
-		 * A wild_last filter (ADR 0022) accepts any final byte, so only
-		 * the software bytes before it are compared - the same rule as
-		 * radiant_addr_split_match() on the nRF, lowest index first,
-		 * exact and wild filters on equal terms. radiant_radio_rx()
-		 * refused any wild filter whose last byte the hardware would
-		 * have matched, so sw_addr_len is at least 1 here.
-		 */
-		if (IS_ENABLED(CONFIG_RADIANT_SEARCH_SHORT_MATCH) &&
-		    f->wild_last) {
-			if (st.sw_addr_len != 0u &&
-			    memcmp(&f->addr[st.hw_addr_len], payload,
-				   st.sw_addr_len - 1u) == 0) {
-				return (int)i;
-			}
-			continue;
-		}
-		if (st.sw_addr_len == 0u ||
-		    memcmp(&f->addr[st.hw_addr_len], payload,
-			   st.sw_addr_len) == 0) {
-			return (int)i;
-		}
+	/*
+	 * radiant_addr_split_match() is the nRF backend's finishing match too
+	 * (ADR 0019), so both backends attribute a frame by one rule - lowest
+	 * index first, exact and wild_last filters on equal terms - and
+	 * radiant/tests/src/test_addr_split.c covers this path. The sync word
+	 * that fired names the filter it was programmed from (sync_group); any
+	 * filter with the same hw_addr_len leading bytes is a candidate.
+	 * radiant_radio_rx() refused any wild filter whose last byte the
+	 * hardware would have matched, so sw_addr_len is at least 1 for one.
+	 */
+	if (sync_id >= ARRAY_SIZE(st.sync_group) || st.sync_group[sync_id] < 0) {
+		return -1;
 	}
-
-	return -1;
+	return radiant_addr_split_match(st.filters, st.n_filters,
+					st.hw_addr_len, st.sw_addr_len,
+					(uint8_t)st.sync_group[sync_id], payload);
 }
 
 /*
@@ -1324,11 +1357,11 @@ static radiant_time_t rx_t_sync(uint32_t rat)
 	irq_unlock(key);
 
 	return (radiant_time_t)(folded / RAT_TICKS_PER_US) +
-	       (radiant_time_t)(st.sw_addr_len * BYTE_US) +
+	       (radiant_time_t)radiant_addr_split_t_sync_us(st.sw_addr_len) +
 	       (radiant_time_t)T_SYNC_CAL_US;
 }
 
-static void rx_drain(void)
+static void rx_drain_entries(void)
 {
 	for (;;) {
 		rfc_dataEntryGeneral_t *e =
@@ -1353,7 +1386,7 @@ static void rx_drain(void)
 		memcpy(&rat, &p[payload_len + 1u], sizeof(rat));
 		memcpy(&status, &p[payload_len + 5u], sizeof(status));
 
-		body = &p[st.sw_addr_len];
+		body = radiant_addr_split_body(p, st.sw_addr_len);
 
 		memset(&evt, 0, sizeof(evt));
 		evt.op = st.op_id;
@@ -1366,6 +1399,12 @@ static void rx_drain(void)
 
 		idx = rx_match(status.status.syncWordId, p);
 		radiant_cc26xx_sync_frames++;
+		/* The decoy (one group: syncWord1 is syncWord0 with a byte
+		 * inverted, see radiant_radio_rx()) is meant never to fire. */
+		CC_DIAG(if (status.status.syncWordId == 1u &&
+			    st.sync_group[1] == st.sync_group[0]) {
+				cc_diag.alt_sync_hits++;
+			});
 
 		/* No per-frame tracing here deliberately: a LOG_DBG per frame
 		 * would block in the RF driver's callback context and, on the
@@ -1392,8 +1431,9 @@ static void rx_drain(void)
 		 * picks it on the nRF. Set on CRC failures too, as there.
 		 */
 		if (IS_ENABLED(CONFIG_RADIANT_SEARCH_SHORT_MATCH) &&
-		    st.filters[idx].wild_last && st.sw_addr_len != 0u) {
-			evt.wild_value = p[st.sw_addr_len - 1u];
+		    st.filters[idx].wild_last) {
+			evt.wild_value = radiant_addr_split_wild_value(
+				p, st.sw_addr_len);
 		}
 
 		/*
@@ -1406,6 +1446,7 @@ static void rx_drain(void)
 		 * and address airtime.
 		 */
 		if (evt.t_sync < st.t_open || evt.t_sync > st.t_close) {
+			CC_DIAG(cc_diag.window_drops++);
 			goto next;
 		}
 
@@ -1440,6 +1481,7 @@ static void rx_drain(void)
 			evt.crc_rx = want;
 
 				if (got != want) {
+				CC_DIAG(cc_diag.crc_fail++);
 				if ((st.flags & RADIANT_RX_REPORT_CRC_FAIL) == 0u) {
 					goto next;
 				}
@@ -1477,12 +1519,17 @@ static void rx_drain(void)
 			st.kind = OP_NONE;
 			st.retired_handle = st.cmd_handle;
 			RF_cancelCmd(st.rf_handle, st.cmd_handle, 0);
+			/* This frame is the window's terminal too. */
+			CC_DIAG(cc_diag.win_frames++; cc_diag.term_ok++);
 			if (st.cbs != NULL && st.cbs->rx != NULL) {
 				st.cbs->rx(&evt, st.user);
 			}
 			return;
 		}
 
+		CC_DIAG(if (evt.status == RADIANT_RADIO_STATUS_OK) {
+				cc_diag.win_frames++;
+			});
 		if (st.cbs != NULL && st.cbs->rx != NULL) {
 			st.cbs->rx(&evt, st.user);
 		}
@@ -1491,6 +1538,24 @@ next:
 		e->status = DATA_ENTRY_PENDING;
 		rx_read = (uint8_t)((rx_read + 1u) % RX_ENTRIES);
 	}
+}
+
+/* rx_drain_entries(), timed for the 0xF7 backend page: the longest drain is
+ * part of the turnaround a chained transmit has to fit inside. */
+static void rx_drain(void)
+{
+#if defined(CONFIG_RADIANT_DIAG_COUNTERS)
+	uint32_t t0 = rat_raw();
+	uint32_t us;
+
+	rx_drain_entries();
+	us = (rat_raw() - t0) / RAT_TICKS_PER_US;
+	if (us > cc_diag.drain_max_us) {
+		cc_diag.drain_max_us = us;
+	}
+#else
+	rx_drain_entries();
+#endif
 }
 
 #define TERMINAL_EVENTS (RF_EventLastCmdDone | RF_EventCmdAborted | \
@@ -1541,10 +1606,12 @@ static void rf_callback(RF_Handle h, RF_CmdHandle ch, RF_EventMask events)
 	 * ERROR_PAST_START.
 	 */
 	if (st.kind == OP_RX && rx_cmd.status >= 0x3800u) {
+		CC_DIAG(cc_diag.status_err++; cc_diag.status_last = rx_cmd.status);
 		LOG_WRN("rx cmd ended status=0x%04x (start=%u end=%u sw0=%08x)",
 			rx_cmd.status, rx_cmd.startTime, rx_cmd.endTime,
 			rx_cmd.syncWord0);
 	} else if (st.kind == OP_TX && tx_cmd.status >= 0x3800u) {
+		CC_DIAG(cc_diag.status_err++; cc_diag.status_last = tx_cmd.status);
 		LOG_WRN("tx cmd ended status=0x%04x (start=%u)",
 			tx_cmd.status, tx_cmd.startTime);
 	}
@@ -1743,6 +1810,16 @@ static int arm_common(const struct radiant_pkt_format *fmt, radiant_time_t at)
 	if (at == RADIANT_TIME_NEVER) {
 		return RADIANT_RADIO_EINVAL;
 	}
+	CC_DIAG({
+		radiant_time_t now = now_us();
+		uint32_t lead = (at > now) ? (uint32_t)MIN(at - now, UINT32_MAX - 1u)
+					   : 0u;
+
+		if (!cc_diag.lead_seen || lead < cc_diag.min_lead_us) {
+			cc_diag.min_lead_us = lead;
+			cc_diag.lead_seen = true;
+		}
+	});
 	if (at < now_us() + ARM_FLOOR_US) {
 		return RADIANT_RADIO_ETIME;
 	}
@@ -1750,7 +1827,7 @@ static int arm_common(const struct radiant_pkt_format *fmt, radiant_time_t at)
 	return RADIANT_RADIO_OK_RC;
 }
 
-int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
+static int rx_arm(const struct radiant_rx_req *req, uint32_t *op)
 {
 	uint32_t start_rat;
 	uint32_t end_rat;
@@ -1786,11 +1863,19 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 		 * 2-byte one would have the "wild" byte matched exactly in the
 		 * sync word, which is a different window than was asked for.
 		 */
-		if (IS_ENABLED(CONFIG_RADIANT_SEARCH_SHORT_MATCH) &&
-		    req->filters[i].wild_last &&
-		    req->filters[i].addr_len <= caps.addr_len_hw_max) {
+		if (req->filters[i].wild_last &&
+		    (!IS_ENABLED(CONFIG_RADIANT_SEARCH_SHORT_MATCH) ||
+		     req->filters[i].addr_len <= caps.addr_len_hw_max)) {
 			return RADIANT_RADIO_ENOTSUP;
 		}
+	}
+	/* rx_data's rows are sized for RX_PAYLOAD_MAX; a longer frame would be
+	 * cut by maxPktLen and then read past its row by rx_drain(). */
+	if ((uint32_t)(req->fmt->addr_len -
+		       MIN(req->fmt->addr_len, caps.addr_len_hw_max)) +
+	    req->fmt->body_len +
+	    (req->fmt->crc.width_bits ? RX_CRC_BYTES : 0u) > RX_PAYLOAD_MAX) {
+		return RADIANT_RADIO_ENOTSUP;
 	}
 
 	st.fmt = *req->fmt;
@@ -1902,6 +1987,7 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 	rx_cmd.endTime = end_rat;
 
 	rx_queue_init();
+	CC_DIAG(cc_diag_fold_rx_output(); cc_diag.win_frames = 0u);
 	memset(&rx_output, 0, sizeof(rx_output));
 
 	st.kind = OP_RX;
@@ -1951,6 +2037,18 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 	return RADIANT_RADIO_OK_RC;
 }
 
+int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
+{
+	int rc = rx_arm(req, op);
+
+	CC_DIAG(if (rc == RADIANT_RADIO_OK_RC) {
+			cc_diag.rx_posted++;
+		} else {
+			cc_diag.rx_refused++;
+		});
+	return rc;
+}
+
 int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 {
 	uint8_t hw_len;
@@ -1970,6 +2068,13 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 	if (req->addr_len != req->fmt->addr_len ||
 	    req->body_len != req->fmt->body_len) {
 		return RADIANT_RADIO_EINVAL;
+	}
+	/* tx_buf holds the software address bytes, the body and the CRC. */
+	if ((uint32_t)(req->fmt->addr_len -
+		       MIN(req->fmt->addr_len, caps.addr_len_hw_max)) +
+	    req->body_len +
+	    (req->fmt->crc.width_bits ? RX_CRC_BYTES : 0u) > sizeof(tx_buf)) {
+		return RADIANT_RADIO_ENOTSUP;
 	}
 
 	hw_len = MIN(req->fmt->addr_len, caps.addr_len_hw_max);
@@ -2102,3 +2207,34 @@ int radiant_radio_abort(void)
 
 	return RADIANT_RADIO_OK_RC;
 }
+
+#if defined(CONFIG_RADIANT_DIAG_COUNTERS)
+uint8_t radiant_radio_diag_get(struct radiant_radio_diag *out)
+{
+	unsigned int key = irq_lock();
+
+	out->v[RADIANT_RADIO_DIAG_RX_POSTED] = cc_diag.rx_posted;
+	out->v[RADIANT_RADIO_DIAG_RX_REFUSED] = cc_diag.rx_refused;
+	out->v[RADIANT_RADIO_DIAG_TERM_OK] = cc_diag.term_ok;
+	out->v[RADIANT_RADIO_DIAG_TERM_EMPTY] = cc_diag.term_empty;
+	out->v[RADIANT_RADIO_DIAG_TERM_ERROR] = cc_diag.term_error;
+	out->v[RADIANT_RADIO_DIAG_STATUS_ERR] = cc_diag.status_err;
+	out->v[RADIANT_RADIO_DIAG_STATUS_LAST] = cc_diag.status_last;
+	out->v[RADIANT_RADIO_DIAG_SYNC_ENTRIES] = radiant_cc26xx_sync_frames;
+	out->v[RADIANT_RADIO_DIAG_SW_ADDR_MISMATCH] = radiant_cc26xx_sw_addr_mismatch;
+	out->v[RADIANT_RADIO_DIAG_WINDOW_DROPS] = cc_diag.window_drops;
+	out->v[RADIANT_RADIO_DIAG_CRC_FAIL] = cc_diag.crc_fail;
+	out->v[RADIANT_RADIO_DIAG_ALT_SYNC_HITS] = cc_diag.alt_sync_hits;
+	/* The window still running is not folded yet. */
+	out->v[RADIANT_RADIO_DIAG_RX_NOK] = cc_diag.rxo_nok +
+		(uint32_t)rx_output.nRxNok + rx_output.nRxIgnored;
+	out->v[RADIANT_RADIO_DIAG_RX_BUF_FULL] = cc_diag.rxo_buf_full +
+		rx_output.nRxBufFull;
+	out->v[RADIANT_RADIO_DIAG_DRAIN_MAX_US] = cc_diag.drain_max_us;
+	out->v[RADIANT_RADIO_DIAG_MIN_LEAD_US] = cc_diag.lead_seen
+		? cc_diag.min_lead_us : RADIANT_DIAG_NOT_MEASURED;
+	irq_unlock(key);
+
+	return RADIANT_DIAG_BACKEND_CC26XX;
+}
+#endif /* CONFIG_RADIANT_DIAG_COUNTERS */

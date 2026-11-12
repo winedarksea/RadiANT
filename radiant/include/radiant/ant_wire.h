@@ -659,7 +659,7 @@
 /* ------------------------------------------------------------------------
  * RadiANT extension messages - NOT ANT protocol
  * Ours, not Garmin's: not in Rev 5.1, not answered by any ANT device.
- * 0xF7-0xFA is reserved for the rest of the family. Semantics live in
+ * 0xF8-0xFA is reserved for the rest of the family. Semantics live in
  * docs/radiant-security.md; only the numbering is decided in the YAML.
  * These were first proposed at 0xE0-0xE4 and moved: sdk-ant defines
  * MESG_EXT_ID_0 .. MESG_EXT_ID_4 as exactly 0xE0-0xE4, an extended-
@@ -680,5 +680,7 @@
 #define ANTW_MESG_RADIANT_PAIRING_ID                         RADIANT_WIRE_MESG_RADIANT_PAIRING_ID
 
 #define ANTW_MESG_RADIANT_HEALTH_ID                          RADIANT_WIRE_MESG_RADIANT_HEALTH_ID
+
+#define ANTW_MESG_RADIANT_DIAG_ID                            RADIANT_WIRE_MESG_RADIANT_DIAG_ID
 
 #endif /* ANT_WIRE_H_ */

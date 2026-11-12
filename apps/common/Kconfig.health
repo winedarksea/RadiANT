@@ -5,6 +5,16 @@
 # Kconfig.dongle_main beside it. apps/hrm_ble does not source it: a node has no
 # serial host to request 0xF6 from, so the counters would have no way out.
 
+config ANT_DONGLE_DIAG
+	bool "Answer MESG_RADIANT_DIAG (0xF7) diagnostic pages"
+	depends on ANT_DONGLE_HEALTH_COUNTERS
+	select RADIANT_DIAG_COUNTERS
+	help
+	  The request-only diagnostic pages of ADR 0023: the api, master
+	  turnaround, burst continuation, backend and search counters, read
+	  with tools/ant_diag.py. A bench option, off by default; it changes
+	  nothing a host sees unless the host sends MESG_REQUEST for 0xF7.
+
 config ANT_DONGLE_HEALTH_COUNTERS
 	bool "Count what the dongle threw away, readable as MESG_RADIANT_HEALTH (0xF6)"
 	select RADIANT_SEARCH_COVERAGE if RADIANT_BACKEND_NRF_GATE_MPSL

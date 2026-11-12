@@ -247,9 +247,11 @@ def run(args, *, phase_hook=None):
                 report['completed' if body[2] == w.EVENT_TRANSFER_TX_COMPLETED else 'failed'] += 1
 
     try:
-        for port, serial in ((args.master_port, args.master_serial),
-                             (args.slave_port, args.slave_serial)):
-            dev = open_device(True, port=port, serial=serial, baud=args.master_baud)
+        for port, serial, baud in (
+                (args.master_port, args.master_serial, args.master_baud),
+                (args.slave_port, args.slave_serial,
+                 getattr(args, 'slave_baud', None) or args.master_baud)):
+            dev = open_device(True, port=port, serial=serial, baud=baud)
             devices.append(dev)
             reader = FrameReader(dev, timeout_ms=reader_timeout_ms(dev))
             readers.append(reader)

@@ -93,6 +93,23 @@
 
 #include "radiant_radio_nrf_gate.h"
 #include "radiant_addr_split.h"
+#include <radiant/radiant_diag.h>
+
+/*
+ * The 0xF7 backend page (ADR 0023), CONFIG_RADIANT_DIAG_COUNTERS only; every
+ * NRF_DIAG() site is an empty statement without it. This backend fills the
+ * fields it can see without new register reads; the rest read "not measured".
+ */
+#if defined(CONFIG_RADIANT_DIAG_COUNTERS)
+static struct {
+	uint32_t rx_posted, rx_refused;
+	uint32_t term_ok, term_empty, term_error;
+	uint32_t frames, sw_mismatch, crc_fail;
+} nrf_diag;
+#define NRF_DIAG(...) do { __VA_ARGS__; } while (0)
+#else
+#define NRF_DIAG(...) do { } while (0)
+#endif
 
 /* Whether a completion raised inside an MPSL timeslot signal callback has to be
  * queued for the trampoline instead of run there. See the long note above
@@ -3388,7 +3405,21 @@ int radiant_radio_book(const struct radiant_rx_req *rx,
 }
 #endif
 
+static int rx_arm(const struct radiant_rx_req *req, uint32_t *op);
+
 int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
+{
+	int rc = rx_arm(req, op);
+
+	NRF_DIAG(if (rc == RADIANT_RADIO_OK_RC) {
+			nrf_diag.rx_posted++;
+		} else {
+			nrf_diag.rx_refused++;
+		});
+	return rc;
+}
+
+static int rx_arm(const struct radiant_rx_req *req, uint32_t *op)
 {
 	unsigned int key;
 	enum gate_rc g;
@@ -4626,6 +4657,15 @@ static void deliver_terminal(enum radiant_radio_status st)
 #if defined(CONFIG_RADIANT_NRF_RX_DIAG)
 		rx_diag_window_end(st != RADIANT_RADIO_STATUS_TIMEOUT);
 #endif
+		/* "OK" is a window that heard any frame, however it ended (a
+		 * reply armed from the frame callback aborts it). */
+		NRF_DIAG(if (radiant_op.rx_any) {
+				nrf_diag.term_ok++;
+			} else if (st == RADIANT_RADIO_STATUS_TIMEOUT) {
+				nrf_diag.term_empty++;
+			} else {
+				nrf_diag.term_error++;
+			});
 		memset(&evt, 0, sizeof(evt));
 		evt.op = radiant_op.id;
 		evt.status = st;
@@ -4884,6 +4924,12 @@ static void radio_isr(const void *arg)
 			 * level rather than the band's - so it must not
 			 * contribute a noise sample either way. */
 			radiant_op.rx_any = true;
+			NRF_DIAG(nrf_diag.frames++;
+				 if (fidx < 0 && radiant_op.sw_addr_len != 0u) {
+					 nrf_diag.sw_mismatch++;
+				 } else if (fidx >= 0 && !crc_ok) {
+					 nrf_diag.crc_fail++;
+				 });
 			if (fidx >= 0 && (crc_ok || radiant_op.report_crc_fail)) {
 				memset(&evt, 0, sizeof(evt));
 				evt.op = radiant_op.id;
@@ -5041,4 +5087,21 @@ static void radio_isr(const void *arg)
 	}
 }
 
+#if defined(CONFIG_RADIANT_DIAG_COUNTERS)
+uint8_t radiant_radio_diag_get(struct radiant_radio_diag *out)
+{
+	unsigned int key = irq_lock();
 
+	out->v[RADIANT_RADIO_DIAG_RX_POSTED] = nrf_diag.rx_posted;
+	out->v[RADIANT_RADIO_DIAG_RX_REFUSED] = nrf_diag.rx_refused;
+	out->v[RADIANT_RADIO_DIAG_TERM_OK] = nrf_diag.term_ok;
+	out->v[RADIANT_RADIO_DIAG_TERM_EMPTY] = nrf_diag.term_empty;
+	out->v[RADIANT_RADIO_DIAG_TERM_ERROR] = nrf_diag.term_error;
+	out->v[RADIANT_RADIO_DIAG_SYNC_ENTRIES] = nrf_diag.frames;
+	out->v[RADIANT_RADIO_DIAG_SW_ADDR_MISMATCH] = nrf_diag.sw_mismatch;
+	out->v[RADIANT_RADIO_DIAG_CRC_FAIL] = nrf_diag.crc_fail;
+	irq_unlock(key);
+
+	return RADIANT_DIAG_BACKEND_NRF;
+}
+#endif /* CONFIG_RADIANT_DIAG_COUNTERS */

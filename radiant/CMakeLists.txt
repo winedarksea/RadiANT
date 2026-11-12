@@ -72,6 +72,10 @@ zephyr_library_sources(
   src/radiant_noise.c
 )
 
+# The 0xF7 diagnostic counters' storage (ADR 0023). Their call sites are macros
+# that compile to nothing without the symbol.
+zephyr_library_sources_ifdef(CONFIG_RADIANT_DIAG_COUNTERS src/radiant_diag.c)
+
 # Single-bit CRC repair. Compiled unconditionally rather than behind its own
 # Kconfig symbol, and the ~1 KB it costs is worth what it buys: the unit-test
 # application can exercise the arithmetic whether or not a given build turns
@@ -347,9 +351,6 @@ elseif(CONFIG_RADIANT_BACKEND_CC26XX)
   endif()
 elseif(CONFIG_RADIANT_BACKEND_NRF)
   zephyr_library_sources(src/radiant_radio_nrf.c)
-  # The software half of a shortened TRACKING address match (ADR 0019). Pure,
-  # so radiant/tests links it too without the backend.
-  zephyr_library_sources(src/radiant_addr_split.c)
   # Who owns the RADIO. A seam inside the backend rather than a second backend
   # beside it - see src/radiant_radio_nrf_gate.h for why the file is not split.
   # Exactly one of these is ever compiled.
@@ -371,4 +372,12 @@ elseif(CONFIG_RADIANT_BACKEND_NRF)
   # one nobody reads, and it would bury the null-backend warning above. The
   # calibration caveats it carried live in the 'what is measured and what is
   # not' header of src/radiant_radio_nrf.c and in README.md.
+endif()
+
+# The software half of a shortened address match: ADR 0019 tracking on the
+# nRF, and the bytes the cc26xx sync-word matcher cannot reach. Both backends
+# finish a match with radiant_addr_split_match(), so a frame is attributed by
+# one rule. Pure, so radiant/tests links it too without either backend.
+if(CONFIG_RADIANT_BACKEND_NRF OR CONFIG_RADIANT_BACKEND_CC26XX)
+  zephyr_library_sources(src/radiant_addr_split.c)
 endif()

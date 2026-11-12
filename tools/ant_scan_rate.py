@@ -314,10 +314,15 @@ def _must(dev, reader, msg_id: int, payload: bytes, what: str) -> None:
                            f"{'no answer' if code is None else f'code {code}'}")
 
 
-def _open_scan(dev, reader) -> None:
+# The two slave types a scan channel can be assigned as. 0x40 is what Zwift
+# sends; 0x00 is what this tool always sent before --scan-type existed.
+SCAN_TYPES = (CHANNEL_TYPE_SLAVE, 0x40)
+
+
+def _open_scan(dev, reader, scan_type: int = CHANNEL_TYPE_SLAVE) -> None:
     ch = SCAN_CHANNEL
     _must(dev, reader, MESG_ASSIGN_CHANNEL_ID,
-          bytes([ch, CHANNEL_TYPE_SLAVE, 0x00, EXT_PARAM_ALWAYS_SEARCH]),
+          bytes([ch, scan_type, 0x00, EXT_PARAM_ALWAYS_SEARCH]),
           "assign background scan")
     _must(dev, reader, MESG_CHANNEL_ID_ID, bytes([ch, 0, 0, 0, 0]),
           "wildcard channel id")
@@ -377,7 +382,8 @@ def _version(dev, reader) -> str:
 
 def run_one(serial: str | None, port: str | None, seconds: float,
             tracks: list[Track], reopen: float | None,
-            start_at: float | None, baud: int = 115200) -> dict:
+            start_at: float | None, baud: int = 115200,
+            scan_type: int = CHANNEL_TYPE_SLAVE) -> dict:
     """Run the whole window on one dongle and return its result dict."""
     from ant_probe import FrameReader, close_device, open_device, reset_stack
     from ant_scan import ANT_PLUS_KEY
@@ -409,7 +415,7 @@ def run_one(serial: str | None, port: str | None, seconds: float,
 
         t0 = time.monotonic()
         started_at = time.time()
-        _open_scan(dev, reader)
+        _open_scan(dev, reader, scan_type)
         log.opens.append(time.monotonic() - t0)
         next_reopen = None if reopen is None else t0 + reopen
         deadline = t0 + seconds
@@ -421,7 +427,7 @@ def run_one(serial: str | None, port: str | None, seconds: float,
             if next_reopen is not None and now >= next_reopen:
                 log.closes.append(now - t0)
                 _close_scan(dev, reader)
-                _open_scan(dev, reader)
+                _open_scan(dev, reader, scan_type)
                 log.opens.append(time.monotonic() - t0)
                 next_reopen = time.monotonic() + reopen
             wait_until = min(deadline, next_reopen or deadline, now + 0.5)
@@ -494,6 +500,7 @@ def _child_args(args, device_args: list[str], out: str,
                 f"{track.device_number}:{track.device_type}:{track.period}"]
     if args.reopen is not None:
         cmd += ["--reopen", str(args.reopen)]
+    cmd += ["--scan-type", f"0x{args.scan_type:02X}"]
     return cmd
 
 
@@ -518,6 +525,12 @@ def main() -> int:
     parser.add_argument("--reopen", type=float, metavar="S",
                         help="close/unassign/reassign/reopen the scan every S "
                              "seconds (Zwift: ~4.5)")
+    parser.add_argument("--scan-type", type=lambda t: int(t, 0),
+                        choices=SCAN_TYPES, default=CHANNEL_TYPE_SLAVE,
+                        metavar="{0x00,0x40}",
+                        help="the scan channel's type: 0x00 bidirectional "
+                             "slave (default, as every run before "
+                             "2026-11-12) or 0x40 receive-only (Zwift's)")
     parser.add_argument("--json", help="write the merged result here")
     parser.add_argument("--start-at", type=float, help=argparse.SUPPRESS)
     parser.add_argument("--child-json", help=argparse.SUPPRESS)
@@ -533,7 +546,8 @@ def main() -> int:
         name = serial or args.port or "dongle"
         try:
             result = run_one(serial, args.port, args.seconds, args.track,
-                             args.reopen, args.start_at, args.baud)
+                             args.reopen, args.start_at, args.baud,
+                             args.scan_type)
         except (RuntimeError, OSError) as exc:
             result = {"error": str(exc)}
         if args.child_json:
@@ -572,6 +586,7 @@ def main() -> int:
             json.dump({"tool": "ant_scan_rate.py",
                        "seconds": args.seconds,
                        "reopen": args.reopen,
+                       "scan_type": args.scan_type,
                        "track": [t.key for t in args.track],
                        "start_at": start_at,
                        "dongles": results}, handle, indent=2)

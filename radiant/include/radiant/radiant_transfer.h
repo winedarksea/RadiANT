@@ -48,7 +48,10 @@
  * Buffer ownership - the expensive part. src/ant_radio.h states obligations
  * B1-B5; short form: the bridge holds ONE 24-byte block behind a binary
  * semaphore, released only on
- * EVENT_TRANSFER_NEXT_DATA_BLOCK/_TX_COMPLETED/_TX_FAILED. Miss the first
+ * EVENT_TRANSFER_NEXT_DATA_BLOCK/_TX_COMPLETED/_TX_FAILED. (Since 2026-11-12
+ * the bridge holds TWO: the engine accepts one continuation staged behind the
+ * block in flight - see radiant_transfer_submit() - so a block boundary no
+ * longer waits for the host's round trip.) Miss the first
  * once and a host burst stalls 1000 ms per packet before a plausible-looking
  * error. This module expresses those three events as radiant_transfer_event
  * and guarantees: EXACTLY ONE radiant_transfer_ops::done() CALL CARRIES ANY
@@ -56,8 +59,9 @@
  * block is released with RADIANT_TRANSFER_EV_NEXT_BLOCK when its final
  * packet's acknowledgement arrives - the last moment the old block could
  * still be needed; releasing earlier (at copy-into-frame-buffer time) would
- * buy one turnaround of pipelining but let the engine hold two blocks at
- * once, which B1 forbids. A failed submit call releases nothing and raises
+ * buy one turnaround of pipelining. The pipelining the 600 us cc26xx arm lead
+ * turned out to need is had instead by STAGING the next block (the engine
+ * holds two, each released exactly once), not by releasing early. A failed submit call releases nothing and raises
  * no event (B2) - why radiant_transfer_submit() arms the radio before
  * recording the block as accepted, not after.
  *
@@ -494,6 +498,15 @@ struct radiant_transfer_result {
 	 */
 	uint8_t *block;
 	uint8_t  block_len;
+	/*
+	 * A second block released by the same event: the continuation staged
+	 * behind the block in flight (radiant_transfer_submit()). Only ever
+	 * non-NULL on RADIANT_TRANSFER_EV_TX_FAILED, since nothing is staged
+	 * behind an END block. Counts toward the one-done()-per-pointer rule
+	 * exactly as `block` does.
+	 */
+	uint8_t *staged_block;
+	uint8_t  staged_len;
 	enum radiant_transfer_fail fail;   /* NONE unless ev is TX_FAILED */
 	uint32_t packets;              /* on-air packets acknowledged */
 };
@@ -643,7 +656,8 @@ enum radiant_transfer_state {
 struct radiant_transfer_stats {
 	uint32_t packets_sent;       /* data packets acknowledged */
 	uint32_t blocks_accepted;    /* submit calls that returned OK */
-	uint32_t blocks_released;    /* done() calls carrying a block pointer */
+	uint32_t blocks_released;    /* block pointers handed back by done() */
+	uint32_t blocks_staged;      /* of the accepted, staged behind another */
 	uint32_t transfers_ok;
 	uint32_t transfers_failed;
 	uint32_t acks_sent;          /* acknowledgements put on the air */
@@ -707,6 +721,13 @@ struct radiant_transfer {
 	uint8_t  pkt_in_block;
 	bool     block_released;
 	bool     own_block;   /* false for acknowledged data, which is copied */
+
+	/* The next burst block, accepted while the block above is still on the
+	 * air and chained by advance() from the acknowledgement's callback.
+	 * NULL when none is staged. Never behind an END block. */
+	uint8_t *staged;
+	uint8_t  staged_len;
+	uint8_t  staged_seg;
 
 	/* Acknowledged data lives here, so that "a one-packet burst" is
 	 * literally what the engine runs and not a second code path. */
@@ -800,7 +821,15 @@ int radiant_transfer_init(struct radiant_transfer *t, const struct radiant_trans
  * Returns RADIANT_TRANSFER_OK, or:
  *   EINVAL   null, a block length that is not 8/16/24, unknown segment bits
  *   ESTATE   radiant_transfer_init() has not run
- *   EBUSY    a transfer is mid-packet; the host must wait for NEXT_BLOCK
+ *   EBUSY    a transfer is mid-packet and already holds a staged block, or
+ *            the block in flight is the transfer's END; the host must wait
+ *            for NEXT_BLOCK
+ *
+ * A continuation submitted while the block before it is still on the air is
+ * STAGED, not refused: the engine then holds two blocks, and advance() sends
+ * the staged one's first packet from the acknowledgement callback at
+ * ack t_sync + RADIANT_TRANSFER_NEXT_PACKET_US. A staged block is released by
+ * its own NEXT_BLOCK, or by the terminal event as result.staged_block.
  *   ESEQ     START on a continuation, or a continuation with no transfer open
  *   EIO      the radio refused the transmit
  */

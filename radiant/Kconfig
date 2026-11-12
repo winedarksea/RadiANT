@@ -1474,6 +1474,22 @@ config RADIANT_SEARCH_COVERAGE
 	  cursor on a new frequency and the mask goes with it, because a phase
 	  heard on one frequency is not covered on another.
 
+config RADIANT_DIAG_COUNTERS
+	bool "diagnostic counters for MESG_RADIANT_DIAG (0xF7)"
+	default n
+	help
+	  The counters behind the request-only 0xF7 diagnostic message
+	  (docs/decisions/0023-radiant-diag-message.md): a master's turnaround
+	  window, a burst's next-block timing, transmit slots that expired in
+	  the scheduler, and the backend page radiant_radio_diag_get() fills.
+	  The always-on api, scheduler and search stats are reported beside
+	  them.
+
+	  OFF BY DEFAULT for the zero-cost CI job: with it off every counter
+	  site is an empty macro and nothing extra is linked. On, it costs a
+	  few dozen u32 increments on the radio paths and changes nothing a
+	  host sees unless the host asks.
+
 config RADIANT_SEARCH_PHASE_DIAG
 	bool "log every search frame's phase and each chunk's phase bins"
 	depends on RADIANT_ANTR_API

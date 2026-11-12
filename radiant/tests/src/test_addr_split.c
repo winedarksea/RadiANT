@@ -450,3 +450,53 @@ ZTEST(radiant_addr_split, test_wild_filter_is_never_repaired)
 						0x1234u, RADIANT_CRC_INIT, body),
 		      -1);
 }
+
+/*
+ * The cc26xx backend's shape (shared since 2026-11-12): a 2-byte sync word
+ * over a 5-byte tracking address leaves THREE bytes to software, and the hint
+ * is the filter the firing sync word was programmed from. Two sensors that
+ * share [A6 C5] share one sync word, so either hint must reach either filter.
+ */
+ZTEST(radiant_addr_split, test_two_byte_sync_word_three_software_bytes)
+{
+	struct radiant_rx_filter f[2];
+	static const uint8_t to1[] = { 0x59, 0xF0, 0x0B };   /* #61529, type 11 */
+	static const uint8_t to0[] = { 0x51, 0xCB, 0x78 };   /* #52049, type 120 */
+	static const uint8_t near[] = { 0x59, 0xF0, 0x0C };  /* type differs */
+
+	mk(&f[0], 52049u, 0x78u);
+	mk(&f[1], 61529u, 0x0Bu);
+	for (uint8_t hint = 0; hint < 2u; hint++) {
+		zassert_equal(radiant_addr_split_match(f, 2u, 2u, 3u, hint, to1), 1,
+			      "hint %u", hint);
+		zassert_equal(radiant_addr_split_match(f, 2u, 2u, 3u, hint, to0), 0,
+			      "hint %u", hint);
+		zassert_equal(radiant_addr_split_match(f, 2u, 2u, 3u, hint, near),
+			      -1, "hint %u", hint);
+	}
+}
+
+/*
+ * A wild_last search filter beside an exact one on the same 2-byte sync word
+ * (the cc26xx short match, ADR 0022): the exact filter wins only at its own
+ * index order, and the wild one takes every other devnum_lo.
+ */
+ZTEST(radiant_addr_split, test_wild_and_exact_share_a_sync_word)
+{
+	struct radiant_rx_filter f[2];
+	static const uint8_t h09[] = { 0x09 };
+	static const uint8_t h7e[] = { 0x7E };
+
+	memset(f, 0, sizeof(f));
+	f[0].addr[0] = 0xA6;
+	f[0].addr[1] = 0xC5;
+	f[0].addr[2] = 0x09;
+	f[0].addr_len = 3u;
+	mk_wild(&f[1]);
+
+	zassert_equal(radiant_addr_split_match(f, 2u, 2u, 1u, 0u, h09), 0);
+	zassert_equal(radiant_addr_split_match(f, 2u, 2u, 1u, 1u, h09), 0,
+		      "lowest index first, whichever filter the hint names");
+	zassert_equal(radiant_addr_split_match(f, 2u, 2u, 1u, 0u, h7e), 1);
+	zassert_equal(radiant_addr_split_wild_value(h7e, 1u), 0x7Eu);
+}

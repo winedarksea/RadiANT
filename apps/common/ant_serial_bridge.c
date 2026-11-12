@@ -39,6 +39,9 @@
 
 #include "ant_activity.h"
 #include "ant_health.h"
+#if defined(CONFIG_ANT_DONGLE_DIAG)
+#include <radiant/radiant_diag.h>
+#endif
 #include "ant_radio.h"
 #include "ant_reset_cause.h"
 #include "ant_serial_bridge.h"
@@ -384,6 +387,21 @@ static void handle_request(const uint8_t *body, uint8_t len)
 		break;
 	}
 #endif
+#if defined(CONFIG_ANT_DONGLE_DIAG)
+	case ANTW_MESG_RADIANT_DIAG_ID:
+		/*
+		 * Request-only, like 0xF6 beside it, and for the same reason:
+		 * a host that never asks sees an unchanged byte stream. The
+		 * channel byte is the PAGE (ADR 0023), not a channel; every
+		 * page is device-wide.
+		 */
+		err = antr_diag_page(ch, payload);
+		if (err == (antr_err_t)ANTW_RESPONSE_NO_ERROR) {
+			send_message(ANTW_MESG_RADIANT_DIAG_ID, payload,
+				     (uint8_t)RADIANT_DIAG_BODY_LEN);
+		}
+		break;
+#endif
 
 	case ANTW_MESG_CAPABILITIES_ID: {
 		err = antr_capabilities_get(payload);
@@ -669,14 +687,114 @@ static void handle_request(const uint8_t *body, uint8_t len)
  * handler, which has to hand the block back.
  */
 
-static uint8_t burst_block[ANTW_ADV_BURST_BLOCK_MAX];
-static K_SEM_DEFINE(burst_block_free, 1, 1);
-/* The channel holding burst_block, or -1: only that channel's transfer events
- * may hand the block back. Any channel's TX_COMPLETED/FAILED used to free it,
- * so an acked completion elsewhere let the next packet overwrite a block the
- * engine was still sending.
+/*
+ * TWO BUFFERS ON THE RADIANT CORE, ONE ELSEWHERE. The RadiANT transfer engine
+ * accepts the next block while the one before it is still on the air and
+ * chains it from the acknowledgement's own callback (radiant_transfer_submit(),
+ * "pre-staged continuation"). With one buffer every block boundary waited for
+ * NEXT_DATA_BLOCK to come back through this thread, which on the cc26xx did
+ * not fit inside the 1550 us gap and lost every chained packet (2026-11-12).
+ * The sdk-ant and stub backends make no such promise, so they keep one.
+ *
+ * Each buffer has an owner channel (+1; 0 is free) and an issue number. Only
+ * the owner's transfer events hand a buffer back: NEXT_DATA_BLOCK the oldest
+ * it holds (the engine always finishes blocks in order), TX_COMPLETED/FAILED
+ * every one it holds (a failed transfer also returns the staged block). Any
+ * channel's TX_COMPLETED/FAILED used to free the block, so an acked
+ * completion elsewhere let the next packet overwrite a block the engine was
+ * still sending; the owner check keeps that fixed.
  */
-static atomic_t burst_block_owner = ATOMIC_INIT(-1);
+#if defined(CONFIG_RADIANT_ANTR_API)
+#define BURST_BUFS 2
+#else
+#define BURST_BUFS 1
+#endif
+static uint8_t burst_block[BURST_BUFS][ANTW_ADV_BURST_BLOCK_MAX];
+static K_SEM_DEFINE(burst_block_free, BURST_BUFS, BURST_BUFS);
+static struct k_spinlock burst_lock;
+static uint8_t  burst_owner[BURST_BUFS];   /* channel + 1, or 0 when free */
+static uint32_t burst_issue[BURST_BUFS];
+static uint32_t burst_issue_next;
+
+/* After a successful k_sem_take(): claim a free buffer for `ch`. */
+static int burst_buf_claim(uint8_t ch)
+{
+	k_spinlock_key_t key = k_spin_lock(&burst_lock);
+	int idx = -1;
+
+	for (int i = 0; i < BURST_BUFS; i++) {
+		if (burst_owner[i] == 0u) {
+			burst_owner[i] = (uint8_t)(ch + 1u);
+			burst_issue[i] = burst_issue_next++;
+			idx = i;
+			break;
+		}
+	}
+	k_spin_unlock(&burst_lock, key);
+	return idx;
+}
+
+static void burst_buf_drop(int idx)
+{
+	k_spinlock_key_t key = k_spin_lock(&burst_lock);
+
+	burst_owner[idx] = 0u;
+	k_spin_unlock(&burst_lock, key);
+	k_sem_give(&burst_block_free);
+}
+
+/* NEXT_DATA_BLOCK on `ch`: the oldest buffer it holds is finished with. */
+static void burst_buf_release_oldest(uint8_t ch)
+{
+	k_spinlock_key_t key = k_spin_lock(&burst_lock);
+	int idx = -1;
+
+	for (int i = 0; i < BURST_BUFS; i++) {
+		if (burst_owner[i] == (uint8_t)(ch + 1u) &&
+		    (idx < 0 ||
+		     (int32_t)(burst_issue[i] - burst_issue[idx]) < 0)) {
+			idx = i;
+		}
+	}
+	if (idx >= 0) {
+		burst_owner[idx] = 0u;
+	}
+	k_spin_unlock(&burst_lock, key);
+	if (idx >= 0) {
+		k_sem_give(&burst_block_free);
+	}
+}
+
+/* TX_COMPLETED/FAILED on `ch`: every buffer it holds comes back. */
+static void burst_buf_release_all(uint8_t ch)
+{
+	k_spinlock_key_t key = k_spin_lock(&burst_lock);
+	int n = 0;
+
+	for (int i = 0; i < BURST_BUFS; i++) {
+		if (burst_owner[i] == (uint8_t)(ch + 1u)) {
+			burst_owner[i] = 0u;
+			n++;
+		}
+	}
+	k_spin_unlock(&burst_lock, key);
+	while (n-- > 0) {
+		k_sem_give(&burst_block_free);
+	}
+}
+
+/* A stack reset: every buffer is free again, whoever held it. */
+static void burst_buf_reset(void)
+{
+	k_spinlock_key_t key = k_spin_lock(&burst_lock);
+
+	memset(burst_owner, 0, sizeof(burst_owner));
+	k_spin_unlock(&burst_lock, key);
+	k_sem_reset(&burst_block_free);
+	for (int i = 0; i < BURST_BUFS; i++) {
+		k_sem_give(&burst_block_free);
+	}
+}
 
 /* ── What the host did to the stack ───────────────────────────────────────── */
 
@@ -768,11 +886,9 @@ static void handle_system_reset(void)
 	 * is set. The semaphore is
 	 * ours, not the stack's, so nothing else restores it - left taken,
 	 * every later burst packet stalls 1000 ms and fails with
-	 * TRANSFER_IN_PROGRESS until the board is power-cycled. Giving an
-	 * already-free slot is a no-op (limit 1).
+	 * TRANSFER_IN_PROGRESS until the board is power-cycled.
 	 */
-	atomic_set(&burst_block_owner, -1);
-	k_sem_give(&burst_block_free);
+	burst_buf_reset();
 
 	/* Let the resulting channel-closed events land and be discarded before
 	 * the host is told the stack is up again. Real sticks are unresponsive
@@ -824,16 +940,22 @@ static void handle_burst(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		return;
 	}
 
-	memcpy(burst_block, &body[1], size);
-	/* Before antr_burst_tx() accepts, so it is in place ahead of any event
-	 * for this block. */
-	atomic_set(&burst_block_owner, ch);
+	/* Claimed before antr_burst_tx() accepts, so the owner is in place
+	 * ahead of any event for this block. The semaphore counts free
+	 * buffers, so a claim after a successful take always finds one. */
+	int idx = burst_buf_claim(ch);
 
-	antr_err_t err = antr_burst_tx(ch, size, burst_block, segment);
+	if (idx < 0) {
+		k_sem_give(&burst_block_free);
+		send_response(ch, msg_id, ANTW_TRANSFER_IN_PROGRESS);
+		return;
+	}
+	memcpy(burst_block[idx], &body[1], size);
+
+	antr_err_t err = antr_burst_tx(ch, size, burst_block[idx], segment);
 
 	if (err) {
-		atomic_set(&burst_block_owner, -1);
-		k_sem_give(&burst_block_free);
+		burst_buf_drop(idx);
 		send_response(ch, msg_id, err);
 	}
 
@@ -1773,10 +1895,7 @@ void antr_on_message(const struct antr_msg *msg)
 	    msg_data[1] == ANTW_MESG_EVENT_ID) {
 		switch (msg_data[2]) {
 		case ANTW_EVENT_TRANSFER_NEXT_DATA_BLOCK:
-			if (atomic_get(&burst_block_owner) ==
-			    (atomic_val_t)msg_data[0]) {
-				k_sem_give(&burst_block_free);
-			}
+			burst_buf_release_oldest(msg_data[0]);
 			/* Internal flow control for the buffer handover above.
 			 * A real stick frames bursts itself and never puts this
 			 * on the wire, so neither do we.
@@ -1786,10 +1905,7 @@ void antr_on_message(const struct antr_msg *msg)
 		case ANTW_EVENT_TRANSFER_TX_FAILED:
 			/* Only the burst's own channel, and only once: an acked
 			 * completion elsewhere must not free a block in flight. */
-			if (atomic_cas(&burst_block_owner,
-				       (atomic_val_t)msg_data[0], -1)) {
-				k_sem_give(&burst_block_free);
-			}
+			burst_buf_release_all(msg_data[0]);
 			/* The buffer is released; now honour the host's event
 			 * filter (bit code-1, MESG_EVENT_FILTER_CONFIG). The
 			 * radiant core hands these two on even when filtered,

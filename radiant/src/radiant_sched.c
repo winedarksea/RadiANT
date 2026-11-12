@@ -60,6 +60,7 @@
 #include <string.h>
 
 #include <radiant/radiant_chanmap.h>
+#include <radiant/radiant_diag.h>
 #include <radiant/radiant_frame.h>
 #include <radiant/radiant_noise.h>
 #include <radiant/radiant_radio_hal.h>
@@ -2493,6 +2494,12 @@ static enum step pass_step(radiant_time_t now)
 			 * actually happened. */
 			expired = sl->t_start <
 				  slot_earliest(sl, earliest) + phy_lead(sl->fmt);
+			RADIANT_DIAG_TX_MARGIN((int64_t)sl->t_start -
+					       (int64_t)(slot_earliest(sl, earliest) +
+							 phy_lead(sl->fmt)));
+			if (expired) {
+				RADIANT_DIAG_INC(tx_expired);
+			}
 		} else {
 			/* A receive window whose open has passed is still worth
 			 * arming for the rest of its span, so only the close

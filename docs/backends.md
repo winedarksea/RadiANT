@@ -508,6 +508,57 @@ The airtime half is derivable from the format and the scheduler computes it
 (`radiant_frame_tail_us()`). Anything a backend holds *beyond* the frame is
 `caps.rx_close_hold_us`, and the CC26x2 declares 508 µs of it.
 
+### CC26x2 measured timing and the burst-retry deadline (2026-11-12)
+
+How the numbers below were taken, for any backend: build with
+`CONFIG_RADIANT_DIAG_COUNTERS` (on a dongle, `CONFIG_ANT_DONGLE_DIAG`) and read
+the 0xF7 pages with `tools/ant_diag.py` before and after a workload ([ADR
+0023](decisions/0023-radiant-diag-message.md)). Page 4's `min_lead_us` is the
+smallest `at - now` any arm call reached the backend with. Page 2's
+`tx_margin_min_us` is the smallest `t_start - earliest` `pass_step()` saw for
+a transmit slot: negative means a transmit it reported MISSED, and by how
+much. The nRF backend's 168/328 µs leads are measured a different way
+(component sums, see the caps table) and have not been read through 0xF7 yet.
+
+On the LaunchXL (non-coex, short match, `archive/benchmarks/2026-11-12-ti-
+findings/`):
+
+- `min_lead_us` was 955-1015 µs across every workload. No arm reached the
+  backend inside the 600 µs `MIN_ARM_LEAD_US`.
+- A host burst block reaches the engine 520-544 µs after the acknowledgement
+  that asked for it (page 2 turnaround, 1600 continuations). It was never late.
+- Every failed master burst against a Garmin slave was a transmit
+  `pass_step()` reported MISSED, worst margin -21 to -27 µs, on both the
+  host-block and the in-block (callback) path.
+
+**Why -21 µs: most likely the retry deadline.** A burst packet whose acknowledgement is
+missed is resent at data t_sync + REPLY_US + NEXT_PACKET_US = +3110 µs
+(`retry_packet()`). The acknowledgement window closes at +1810, but the CC26x2
+keeps listening `rx_close_hold_us` (508 µs) past that, so the TIMEOUT terminal
+the retry is armed from arrives at about +2300 plus callback latency. That
+leaves roughly 600 µs before +3110, the same as `MIN_ARM_LEAD_US`, so the retry
+lands either side of the budget, and when it misses the transfer fails with no
+second chance. The nRF (168-328 µs lead, no close hold) has a millisecond of
+room at the same point. So on this radio a burst's failure rate tracks the
+room's acknowledgement-miss rate, where the nRF's retries absorb it. This is
+inferred, not counted: the margin is nearly constant (-21 to -27 µs over three
+images and four runs), which fits this fixed path and not callback jitter, but
+no counter yet separates an expired retry from an expired first attempt.
+
+That measurement points at `caps.min_arm_lead_in_grant_us`. A retry or a
+chained packet armed from inside the radio callback, within the previous
+operation's reserve, is budgeted the in-grant lead. The non-coex cc26xx
+leaves that at 0 (the same as 600), while its hard floor is 150 µs
+(`ARM_FLOOR_US`). Setting it lower is a lead change, so it waits for the
+plan's gate: 6 x 300 s alternating tracked-loss legs. Lowering
+`MIN_ARM_LEAD_US` itself is a separate, later option, set from the measured
+`min_lead_us` above.
+
+Under `CONFIG_RADIANT_BACKEND_CC26XX_COEX` the lead is ~1414 µs, so neither a
+chained packet (ack + 1550) nor its retry can ever be armed in time from the
+callback: master bursts cannot chain under coex at all. There is no 802.15.4
+peer on this bench to measure what that costs a real coexisting build.
+
 ### TI coexistence
 
 Selected by `CONFIG_RADIANT_BACKEND_CC26XX_COEX`, off by default. See

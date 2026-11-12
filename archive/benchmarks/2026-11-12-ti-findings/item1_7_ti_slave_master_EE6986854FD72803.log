@@ -1,0 +1,163 @@
+
+Opening the MASTER (the receiver)
+Found 0FCF:1009  bcdDevice=0x0100
+  manufacturer: RadiANT Project
+  product:      RadiANT ANT+ compatible USB stick
+  serial:       EE6986854FD72803
+
+Configuring master
+  . unsolicited 0x4E 001019ffff00000024e0173a110520d40065d2
+  OK: extended messages
+  OK: network key
+  OK: assign channel type 0x10
+  OK: channel id #14871 type 17
+  OK: radio frequency 2457 MHz
+  OK: message period 8192
+  OK: infinite search timeout
+  OK: open channel
+
+Letting the master reach the air
+
+Opening the SLAVE (the originator)
+Using COM11 at 57600 baud (UART transport)
+
+Configuring slave
+  OK: extended messages
+  OK: network key
+  OK: assign channel type 0x00
+  OK: channel id #14871 type 17
+  OK: radio frequency 2457 MHz
+  OK: message period 8192
+  OK: infinite search timeout
+  OK: open channel
+
+Waiting up to 20 s for the slave to track
+  OK: tracking (4 broadcasts)
+
+BASELINE, broadcast only, 5.0 s at the master's host:
+  total=40 broadcasts=0 slots(EVENT_TX)=20
+
+Originating 100 acknowledged packets
+  1/100: FAILED
+  2/100: FAILED
+  3/100: FAILED
+  4/100: FAILED
+  5/100: FAILED
+  6/100: FAILED
+  7/100: FAILED
+  8/100: FAILED
+  9/100: FAILED
+  10/100: FAILED
+  11/100: FAILED
+  12/100: FAILED
+  13/100: FAILED
+  14/100: FAILED
+  15/100: FAILED
+  16/100: FAILED
+  17/100: FAILED
+  18/100: FAILED
+  19/100: FAILED
+  20/100: FAILED
+  21/100: FAILED
+  22/100: FAILED
+  23/100: FAILED
+  24/100: FAILED
+  25/100: FAILED
+  26/100: FAILED
+  27/100: FAILED
+  28/100: FAILED
+  29/100: FAILED
+  30/100: FAILED
+  31/100: FAILED
+  32/100: FAILED
+  33/100: FAILED
+  34/100: FAILED
+  35/100: FAILED
+  36/100: FAILED
+  37/100: FAILED
+  38/100: FAILED
+  39/100: FAILED
+  40/100: FAILED
+  41/100: FAILED
+  42/100: FAILED
+  43/100: FAILED
+  44/100: FAILED
+  45/100: FAILED
+  46/100: FAILED
+  47/100: FAILED
+  48/100: FAILED
+  49/100: FAILED
+  50/100: FAILED
+  51/100: FAILED
+  52/100: FAILED
+  53/100: FAILED
+  54/100: FAILED
+  55/100: FAILED
+  56/100: FAILED
+  57/100: FAILED
+  58/100: FAILED
+  59/100: FAILED
+  60/100: FAILED
+  61/100: FAILED
+  62/100: FAILED
+  63/100: FAILED
+  64/100: FAILED
+  65/100: FAILED
+  66/100: FAILED
+  67/100: FAILED
+  68/100: FAILED
+  69/100: FAILED
+  70/100: FAILED
+  71/100: FAILED
+  72/100: FAILED
+  73/100: FAILED
+  74/100: FAILED
+  75/100: FAILED
+  76/100: FAILED
+  77/100: FAILED
+  78/100: FAILED
+  79/100: FAILED
+  80/100: FAILED
+  81/100: FAILED
+  82/100: FAILED
+  83/100: FAILED
+  84/100: FAILED
+  85/100: FAILED
+  86/100: FAILED
+  87/100: FAILED
+  88/100: FAILED
+  89/100: FAILED
+  90/100: FAILED
+  91/100: FAILED
+  92/100: FAILED
+  93/100: FAILED
+  94/100: FAILED
+  95/100: FAILED
+  96/100: FAILED
+  97/100: FAILED
+  98/100: FAILED
+  99/100: FAILED
+  100/100: FAILED
+
+Settling 5 s with NOTHING being sent
+
+====================================================================
+THE MASTER'S HOST, over 79.7 s covering 100 sends
+====================================================================
+  total host messages      651   (8.2/s)
+  acknowledged received    14   (expected 100)
+  broadcasts received      0
+  slots transmitted        339
+  events                   {'0x3': 389}
+
+  the originator was told  {'FAILED': 100}
+
+  amplification            0.1x per acknowledged packet
+
+--------------------------------------------------------------------
+AFTER THE LAST SEND, 5.0 s with the host sending nothing
+--------------------------------------------------------------------
+  acknowledged received    0   (0.0/s)
+  total host messages      41
+
+  => nothing arrives once the sends stop.

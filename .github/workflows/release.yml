@@ -828,6 +828,19 @@ jobs:
             radiant_backend: cc26xx
             fetch_hal_ti: "true"
             assert_symbol: CONFIG_RADIANT_BACKEND_CC26XX=y
+          # The 3-byte sync-word match (short match off). It sizes the cc26xx
+          # receive rows and tx_buf from a different branch than the default
+          # image, and that branch held a one-byte overflow nobody compiled
+          # until 2026-11-12. Kept so it never goes unbuilt again.
+          - name: "dongle_ti: cc26xx, long match"
+            app: apps/dongle_ti
+            board: cc26x2r1_launchxl
+            radiant_backend: cc26xx
+            fetch_hal_ti: "true"
+            extra_conf: ti_long_match.conf
+            assert_symbol: CONFIG_RADIANT_BACKEND_CC26XX=y
+            assert_config: |
+              # CONFIG_RADIANT_SEARCH_SHORT_MATCH is not set
 
     steps:
       - name: Checkout application
