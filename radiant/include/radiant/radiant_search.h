@@ -134,6 +134,20 @@ extern "C" {
 #endif
 
 /*
+ * Saved round-robin cursors, one per frequency the sweep has left part-way
+ * through a pass. A move of frequency parks the cursor it leaves and resumes
+ * the cursor of the frequency it goes to, so a host cycling keyed frequencies
+ * faster than a pass still has every set of each frequency visited within
+ * n_sets windows ON THAT FREQUENCY. Four covers ANT's realistic mix (57, 66,
+ * and a private network or two); with more frequencies in play than this the
+ * oldest parked cursor is dropped and that frequency restarts its pass, which
+ * is the behaviour before this table existed. See retune_at_boundary().
+ */
+#ifndef RADIANT_SEARCH_RF_CURSORS
+#define RADIANT_SEARCH_RF_CURSORS 4
+#endif
+
+/*
  * THE FIRST REVISIT GAP, in round-robin sets. An ACQUIRE channel that knows
  * which set holds its device (it named the device number, or the seen cache
  * did) is not steered once and then left to the round robin: its set is
@@ -564,6 +578,13 @@ struct radiant_search {
 	bool     pass_done;
 	/* The configured frequency; restored when no searcher declares one. */
 	uint8_t  home_rf;
+	/* Cursors parked by a move of frequency, oldest first; rf_plus1 0 is a
+	 * free entry. The current frequency's cursor is next_set, never here.
+	 * See RADIANT_SEARCH_RF_CURSORS. */
+	struct {
+		uint8_t  rf_plus1;
+		uint16_t next_set;
+	} rf_cursor[RADIANT_SEARCH_RF_CURSORS];
 
 	struct radiant_search_chan chans[RADIANT_SEARCH_MAX_CHANNELS];
 	struct radiant_search_seen seen[RADIANT_SEARCH_SEEN_ENTRIES];
@@ -858,9 +879,14 @@ void radiant_search_seen_note_rf(struct radiant_search *s,
  *    and the seen cache both);
  *  - the sweep follows it. When every declared channel agrees, the sweep
  *    retunes to that frequency as soon as the window being selected would be
- *    heard by nobody, restarting the pass so it is complete on the new
- *    frequency. When they disagree, the sweep stays for whole passes and
+ *    heard by nobody. When they disagree, the sweep stays for whole passes and
  *    alternates between the wanted frequencies, never in the middle of one.
+ *
+ * Each frequency keeps its own round-robin cursor: a move parks the one it
+ * leaves and resumes the one it goes to (RADIANT_SEARCH_RF_CURSORS). So the
+ * guarantee is per frequency - every set is visited within n_sets windows
+ * ON THAT FREQUENCY, however the host interleaves them. With a wildcard
+ * backend (ADR 0022) there is one set and nothing to resume.
  *
  * The retune happens inside radiant_search_window(), between windows, so it
  * never touches a window in flight and never drops a searching channel

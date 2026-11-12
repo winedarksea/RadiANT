@@ -267,6 +267,91 @@ ZTEST(radiant_search_rf, test_mixed_frequencies_alternate_whole_passes)
 	zassert_ok(radiant_search_end(&g_s, 1u));
 }
 
+/*
+ * A host cycling keyed frequencies faster than a pass: the only searcher ends
+ * and a new one begins on the other frequency every half pass. Each frequency
+ * must still visit every set within its first n_sets windows on it. When a
+ * retune restarted the cursor, each frequency repeated the first half of its
+ * pass forever and the second half was never heard.
+ */
+ZTEST(radiant_search_rf, test_a_frequency_resumes_its_own_cursor_after_a_retune)
+{
+	bool seen[2][256];
+	uint16_t windows_on[2] = { 0u, 0u };
+	uint16_t n;
+	uint16_t half;
+
+	bring_up();
+	memset(seen, 0, sizeof(seen));
+	n = radiant_search_sets(&g_s);
+	zassert_true(n <= 256u);
+	half = (n > 1u) ? (uint16_t)(n / 2u) : 1u;
+
+	for (uint16_t round = 0u; round < 4u; round++) {
+		uint8_t rf = (round % 2u == 0u) ? RF_A : RF_B;
+		uint8_t k = (round % 2u == 0u) ? 0u : 1u;
+
+		begin(0u, rf);
+		for (uint16_t i = 0u; i < half; i++) {
+			zassert_equal(RADIANT_SEARCH_OK, win_open());
+			zassert_equal(rf, g_w.rf_index, "round %u window %u on RF %u",
+				      (unsigned int)round, (unsigned int)i,
+				      (unsigned int)g_w.rf_index);
+			if (windows_on[k] < n) {
+				seen[k][g_w.set_index] = true;
+			}
+			windows_on[k]++;
+			win_run();
+		}
+		zassert_ok(radiant_search_end(&g_s, 0u));
+	}
+
+	for (uint8_t k = 0u; k < 2u; k++) {
+		for (uint16_t set = 0u; set < n; set++) {
+			zassert_true(seen[k][set],
+				     "RF %u: set %u not visited in its first %u windows",
+				     (unsigned int)(k == 0u ? RF_A : RF_B),
+				     (unsigned int)set, (unsigned int)n);
+		}
+	}
+}
+
+/* More frequencies than RADIANT_SEARCH_RF_CURSORS: the oldest parked cursor
+ * of a frequency nobody declares is dropped (that frequency restarts at set
+ * 0), and the others still resume. */
+ZTEST(radiant_search_rf, test_a_full_cursor_table_drops_the_oldest_undeclared)
+{
+	const uint8_t first = 40u;
+
+	bring_up();
+	if (radiant_search_sets(&g_s) < 4u) {
+		ztest_test_skip(); /* one set: nothing to resume */
+	}
+	/* RADIANT_SEARCH_RF_CURSORS + 2 frequencies, two windows each: every
+	 * one is left at set 2. */
+	for (uint8_t f = 0u; f < (uint8_t)(RADIANT_SEARCH_RF_CURSORS + 2u); f++) {
+		begin(0u, (uint8_t)(first + f));
+		for (uint8_t i = 0u; i < 2u; i++) {
+			zassert_equal(RADIANT_SEARCH_OK, win_open());
+			zassert_equal(i, g_w.set_index);
+			win_run();
+		}
+		zassert_ok(radiant_search_end(&g_s, 0u));
+	}
+
+	begin(0u, (uint8_t)(first + 1u));
+	zassert_equal(RADIANT_SEARCH_OK, win_open());
+	zassert_equal(2u, g_w.set_index, "a parked cursor was not resumed");
+	win_run();
+	zassert_ok(radiant_search_end(&g_s, 0u));
+
+	begin(0u, first);
+	zassert_equal(RADIANT_SEARCH_OK, win_open());
+	zassert_equal(0u, g_w.set_index, "the oldest cursor should have been dropped");
+	win_run();
+	zassert_ok(radiant_search_end(&g_s, 0u));
+}
+
 /* When the last searcher on the current frequency leaves, the sweep moves on
  * at once rather than finishing a pass nobody can hear. */
 ZTEST(radiant_search_rf, test_the_sweep_leaves_a_frequency_nobody_searches)

@@ -608,8 +608,83 @@ uint8_t radiant_search_rf_get(const struct radiant_search *s)
  *    next declared one above the current (wrapping), so each gets a whole
  *    pass in turn. Never mid-pass: one frequency per pass keeps "certain
  *    within one sweep" true for each of them.
- * A move restarts the cursor so the new frequency gets a complete pass.
+ * A move parks the cursor of the frequency it leaves and resumes the one it
+ * goes to (rf_cursor_swap()), so a frequency visited in pieces still has
+ * every set covered within n_sets windows on it.
  */
+static bool rf_declared(const struct radiant_search *s, uint8_t rf_plus1)
+{
+	for (uint8_t c = 0; c < (uint8_t)RADIANT_SEARCH_MAX_CHANNELS; c++) {
+		if (s->chans[c].active && s->chans[c].rf_plus1 == rf_plus1) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static void rf_cursor_drop(struct radiant_search *s, uint8_t i)
+{
+	for (; i + 1u < (uint8_t)RADIANT_SEARCH_RF_CURSORS; i++) {
+		s->rf_cursor[i] = s->rf_cursor[i + 1u];
+	}
+	s->rf_cursor[RADIANT_SEARCH_RF_CURSORS - 1u].rf_plus1 = 0u;
+	s->rf_cursor[RADIANT_SEARCH_RF_CURSORS - 1u].next_set = 0u;
+}
+
+/*
+ * Park next_set for the frequency being left and take up the target's.
+ *
+ * Only ever called at a set boundary (from retune_at_boundary()), so the
+ * parked cursor always names a set not yet visited in that frequency's pass.
+ * A cursor at 0 is a pass just finished (or never started) and is not worth
+ * a slot. When the table is full the entry dropped is one for a frequency no
+ * active channel declares, else the oldest; that frequency then starts its
+ * next pass from set 0, as every frequency did before cursors were kept.
+ * pass_done is not touched: it is still set when a resumed cursor wraps.
+ */
+static void rf_cursor_swap(struct radiant_search *s, uint8_t from_rf, uint8_t to_rf)
+{
+	uint8_t from = (uint8_t)(from_rf + 1u);
+	uint8_t to = (uint8_t)(to_rf + 1u);
+	uint16_t resume = 0u;
+	uint8_t i;
+
+	for (i = 0u; i < (uint8_t)RADIANT_SEARCH_RF_CURSORS; i++) {
+		if (s->rf_cursor[i].rf_plus1 == to) {
+			resume = s->rf_cursor[i].next_set;
+			rf_cursor_drop(s, i);
+			break;
+		}
+	}
+
+	if (s->next_set != 0u && s->next_set < s->n_sets) {
+		uint8_t free_at = (uint8_t)RADIANT_SEARCH_RF_CURSORS;
+
+		for (i = 0u; i < (uint8_t)RADIANT_SEARCH_RF_CURSORS; i++) {
+			if (s->rf_cursor[i].rf_plus1 == 0u) {
+				free_at = i;
+				break;
+			}
+		}
+		if (free_at == (uint8_t)RADIANT_SEARCH_RF_CURSORS) {
+			uint8_t victim = 0u; /* the oldest */
+
+			for (i = 0u; i < (uint8_t)RADIANT_SEARCH_RF_CURSORS; i++) {
+				if (!rf_declared(s, s->rf_cursor[i].rf_plus1)) {
+					victim = i;
+					break;
+				}
+			}
+			rf_cursor_drop(s, victim);
+			free_at = (uint8_t)(RADIANT_SEARCH_RF_CURSORS - 1u);
+		}
+		s->rf_cursor[free_at].rf_plus1 = from;
+		s->rf_cursor[free_at].next_set = s->next_set;
+	}
+
+	s->next_set = (resume < s->n_sets) ? resume : 0u;
+}
+
 static void retune_at_boundary(struct radiant_search *s)
 {
 	int n = 0;
@@ -666,8 +741,8 @@ static void retune_at_boundary(struct radiant_search *s)
 
 	s->pass_done = false;
 	if (target != (int)s->cfg.rf_index) {
+		rf_cursor_swap(s, s->cfg.rf_index, (uint8_t)target);
 		s->cfg.rf_index = (uint8_t)target;
-		s->next_set = 0u;
 	}
 }
 
