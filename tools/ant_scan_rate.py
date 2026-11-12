@@ -38,9 +38,11 @@ port child is labelled by its port name. --baud applies to the port child only.
 Each child's JSON records `started_at` (its wall-clock capture start) and the
 merged JSON records the shared `start_at`, so a shared window can be checked.
 
-What this does NOT read: radiant_search_stats. They are not in the 0xF6
-health reply, and adding them there needs a layout decision (the coverage
-field at [30..31] is conditional). The host-side numbers here are the gates.
+What this does NOT read: radiant_search_stats. They are on 0xF7 diagnostic
+pages 5-6 (ADR 0023): read them with tools/ant_diag.py --pages 5-6 AFTER the
+window only, never as a before/after diff, because radiant_search_init()
+zeroes them on every stack reset and key set (which this tool's --reopen
+causes). The host-side numbers here are the gates.
 
 Exit status: 0 when every dongle completed its window; 1 on a setup failure.
 """

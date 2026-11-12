@@ -2,9 +2,26 @@ MPSL bursts: multi-packet bursts still can't run on MPSL builds. That's a scope 
 
 Discovery short match (ADR 0022), left open 2026-11-11:
 - Gate 3 is not settled. `CONFIG_RADIANT_SEARCH_SHORT_MATCH` puts discovery at parity with the Garmin (12.2 against 12.6 sightings/s), but the tracked-loss comparison drowned in the room's drift (`archive/benchmarks/2026-11-11-scan-rate/README.md`). Next step: a diagnostic build counting tracked slots that start while a search reception is in flight (the trainer's sibling channels share its device number), then a quiet-room interleaved A/B. Flip the nRF default only after that.
-- `radiant_search_stats` over the host: the 0xF6 coverage field at [30..31] is conditional and "never padded", so appending search counters after it needs a layout decision (always emit coverage, or a new request-only message).
+- [x] `radiant_search_stats` over the host: done by ADR 0023 (c5320f4), 0xF7 pages 5-6. Read them after a window only: `radiant_search_init()` zeroes them on every stack reset and key set.
 - The two waste fixes (ADR 0022 "Not done here"): closed for TI, where the short match is now on by default and one set makes them moot. On nRF they matter only while the short match is off, so they ride on the gate-3 decision above; no scheduler "window is live" query is built.
-- The final Zwift capture with both workstreams flashed (user-run): every sensor listed within ~1 s, 0x61/0xC6 answered, reset -> NETWORK_KEY against 42-94 s (RadiANT history) and 9.2 s (Garmin).
+- Deferred to the Zwift follow-up testing: the final Zwift capture with both workstreams flashed (user-run): every sensor listed within ~1 s, 0x61/0xC6 answered, reset -> NETWORK_KEY against 42-94 s (RadiANT history) and 9.2 s (Garmin).
+
+Discovery (ztest only, not on air; bench checks in the release review):
+- Retune restarts the cursor, so a host cycling keyed frequencies faster than a
+  pass truncates each pass and coverage becomes probabilistic.
+- In a mixed-frequency session a steer or revisit queued while the sweep is on the
+  other frequency wastes a dwell and doubles that channel's backoff.
+- [x] When only undeclared channels remain, the sweep stays on the last declared
+  frequency: fixed in afe3be2 (`home_rf`), test
+  `test_the_sweep_returns_home_when_the_last_declared_search_ends`.
+- The ENOENT clear of `pass_done` is unreachable through the API, so a declared
+  channel acquired in the last set of a pass delays a later mixed session by up to
+  a pass.
+- A chunk reclaimed by A9-3 is credited as a full listen in the sweep accounting.
+- Never verified on air: a slave on a non-57 frequency acquiring its master; mixed
+  57/66 passes. (A real Zwift session on these images is deferred to the Zwift
+  follow-up testing.)
+
 
 ## TI CC2652R, open after the 2026-11-12 bench (evidence `archive/benchmarks/2026-11-12-ti-findings/` and `2026-11-12-ti-lead/`):
 - TI cannot receive the Pro Micro clone `EE6986854FD72803`: as a simulated sensor TI lost 87.5 % of its frames, the Garmin 0.34 %, and TI lost 5.4 % of the nRF54L15 DK's. Guess: the clone's carrier offset against TI's RX bandwidth. Measure the offset, then decide whether TI's RX bandwidth should be wider. Until then, never use the clone as a TI radio peer.
