@@ -63,8 +63,11 @@
  *
  * What is NOT here, because it was not measured (marked again at the code
  * that would have used each):
- *   1. SENDER-SIDE RETRY. Never captured, so an empty reply window fails the
- *      transfer with RADIANT_TRANSFER_FAIL_NO_ACK and does not retransmit.
+ *   1. SENDER-SIDE RETRY - now implemented from the public spec, not from a
+ *      capture: Rev 5.1 sec 5.4.3 / 9.5.5.3 retry each burst packet up to
+ *      RADIANT_TRANSFER_TX_RETRIES_MAX times before EVENT_TRANSFER_TX_FAILED,
+ *      and a single-packet burst (acknowledged data included) not at all.
+ *      See RADIANT_TRANSFER_TX_RETRIES_MAX for what is and is not retried.
  *   2. ACKNOWLEDGING A SLOT OPENER. radiant_ctrl_reply_for() answers
  *      0x8A/0xAA with 0xD2/0xF2 (bit 3 clear), so radiant_transfer_on_data()
  *      acknowledges them like any other data packet. stats.unackable_openers
@@ -296,6 +299,25 @@ extern "C" {
 	((uint32_t)RADIANT_TRANSFER_REPLY_ATTEMPTS_MAX * \
 	 (uint32_t)RADIANT_TRANSFER_REPLY_RETRY_US)
 
+/*
+ * Retries of one outbound burst packet whose acknowledgement did not arrive,
+ * not counting the first attempt (Rev 5.1 sec 5.4.3 and 9.5.5.3: "up to 5
+ * times", then EVENT_TRANSFER_TX_FAILED). Only a transfer of more than one
+ * packet whose blocks the engine owns is retried: a single-packet burst has
+ * no retries by the same text, and acknowledged data is one packet. The
+ * retry reuses the packet's control byte, so the sequence bit does not move,
+ * and goes out RADIANT_TRANSFER_PACKET_US after the attempt it repeats -
+ * except a slave's packet 0, which waits for the master's next reply window
+ * (ops->retry_t_sync). BAD_ACK is never retried.
+ *
+ * MPSL builds: a retry is a fresh transmit 3110 us after the missed one,
+ * outside any grant the data packet reserved (its follow-on covers only the
+ * acknowledgement window), the same reason multi-packet bursts do not run
+ * on MPSL at all yet (TODO.md). There a retry that cannot be armed fails the
+ * transfer with NO_ACK, as before retries existed.
+ */
+#define RADIANT_TRANSFER_TX_RETRIES_MAX  5u
+
 /* Added to caps.min_arm_lead_us when a caller says "as soon as possible"
  * (RADIANT_TIME_NEVER). Small, because the point of the arm-lead figure is that it
  * is already the whole cost of getting a frame out. */
@@ -411,8 +433,9 @@ enum radiant_transfer_event {
 
 enum radiant_transfer_fail {
 	RADIANT_TRANSFER_FAIL_NONE = 0,
-	/* The reply window closed with nothing in it. NOT retried - see gap 1
-	 * in the header comment. */
+	/* The reply window closed with nothing in it, after the retries a
+	 * multi-packet burst gets (none for a single packet) - see
+	 * RADIANT_TRANSFER_TX_RETRIES_MAX. */
 	RADIANT_TRANSFER_FAIL_NO_ACK,
 	/* Something CRC-valid answered inside the window and it was not an
 	 * acknowledgement of the packet we sent. */
@@ -480,7 +503,7 @@ struct radiant_transfer_ops {
 
 	/* Optional. One received data packet of an inbound acknowledged
 	 * message or burst, already acknowledged on the air by the time this
-	 * runs. `last` is bit 5, which is what tells an inbound burst apart
+	 * runs (never acknowledged at all on a cfg.rx_only engine). `last` is bit 5, which is what tells an inbound burst apart
 	 * from acknowledged data at the layer that cares. */
 	void (*rx_data)(void *ctx, const uint8_t *payload, uint8_t len,
 			bool last);
@@ -494,6 +517,15 @@ struct radiant_transfer_ops {
 	 */
 	bool (*broadcast_payload)(void *ctx,
 				  uint8_t out[RADIANT_TRANSFER_PKT_BYTES]);
+
+	/*
+	 * Optional. Where a retry of a SLAVE's packet 0 goes: the master only
+	 * listens in the reply window of its own next slot (slot + 2190 us),
+	 * not 3110 us after the missed attempt. Returns RADIANT_TIME_NEVER if
+	 * there is no slot to project, and then packet 0 is not retried. NULL
+	 * means the same. Radio interrupt context.
+	 */
+	radiant_time_t (*retry_t_sync)(void *ctx);
 
 #if defined(CONFIG_RADIANT_ACK_FAULTS)
 	/*
@@ -602,6 +634,8 @@ struct radiant_transfer_stats {
 	/* Inbound data packets delivered on a SLAVE_RX_ONLY channel and left
 	 * unacknowledged, because that channel type never transmits. */
 	uint32_t rx_only_unacked;
+	/* Burst packets retransmitted after a missed acknowledgement. */
+	uint32_t retries;
 #if defined(CONFIG_RADIANT_ACK_FAULTS)
 	/* A reply_plan offset that put the acknowledgement before the radio
 	 * could arm it. No ACK went out - an early one would be a fault the
@@ -645,6 +679,11 @@ struct radiant_transfer {
 	uint32_t   pkt_acked;      /* packets of THIS transfer acknowledged */
 	uint8_t    cur_ctrl;       /* control byte of the packet in flight */
 	radiant_time_t next_t_sync;    /* when the next packet is due */
+	/* The t_sync the packet in flight actually achieved, from its TX event:
+	 * the anchor a retry is placed from. Not the TIMEOUT's time, which is
+	 * "now", ~1.8 ms later. */
+	radiant_time_t data_t_sync;
+	uint8_t    retries;        /* of the packet in flight; 0 on a new one */
 
 	/* The acknowledger's side. */
 	uint8_t reply_ctrl;
@@ -887,6 +926,10 @@ const struct radiant_transfer_stats *radiant_transfer_stats(const struct radiant
  * the last packet sent in the master's next broadcast (Rev 5.1 p.109).
  */
 const uint8_t *radiant_transfer_cur_payload(const struct radiant_transfer *t);
+/* How many times the packet in flight has been retried; 0 for its first
+ * attempt and whenever no outbound packet is in flight. Lets the owner tell
+ * a retry's TX event from a packet's first one (a retry is not a slot). */
+uint8_t radiant_transfer_cur_retries(const struct radiant_transfer *t);
 
 #ifdef __cplusplus
 }

@@ -26,12 +26,12 @@ test as absent, twice, while that board was transmitting perfectly. --device is
 mandatory for exactly that reason - see docs/treadmill-reference-design.md
 SS7.4.
 
-THE RETRY IS HERE AND DELIBERATELY NOT IN THE FIRMWARE. radiant_burst.c fails an
-unacknowledged transfer once and does not retry, which is an evidence-based
-decision recorded in that file: inventing a sender-side retry would put an
-unmeasured frame on the air at an unmeasured instant. A controller retrying its
-own command on a later slot is a different thing entirely - it is what a real
-head unit does - and it belongs in the controller. --attempts bounds it.
+THE RETRY IS HERE, NOT IN THE FIRMWARE. An FE-C command is acknowledged data:
+one packet, and Rev 5.1 (sec 5.4.3) gives a single-packet transfer no retries,
+so radiant_burst.c fails it once (it retries only the packets of a multi-packet
+burst). A controller retrying its own command on a later slot is a different
+thing entirely - it is what a real head unit does - and it belongs in the
+controller. --attempts bounds it.
 
 WHAT A FAILURE HERE MEANS. An acknowledged transfer from a slave has to land in
 the master's reply window, ~2190 us after the master's own transmission and only
@@ -194,8 +194,9 @@ def main() -> int:
                              "machine you do not own")
     parser.add_argument("--attempts", type=int, default=3,
                         help="bounded retries on successive periods (default: "
-                             "3). The retry is here and not in radiant_burst.c "
-                             "on purpose - see the module docstring")
+                             "3). Acknowledged data gets no firmware retry "
+                             "(Rev 5.1), so it is here - see the module "
+                             "docstring")
     parser.add_argument("--acquire-seconds", type=float, default=15.0,
                         help="how long to wait for the channel to track "
                              "before commanding (default: 15)")

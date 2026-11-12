@@ -198,6 +198,13 @@ reads.
 
 ### Fixed
 
+- **Burst packets are retried.** A multi-packet burst used to fail at the
+  first missed acknowledgement, so in a room with a few percent loss most long
+  bursts failed. Each packet is now retried up to five times with the same
+  sequence bit, 3110 µs apart, before `EVENT_TRANSFER_TX_FAILED` (Rev 5.1
+  §5.4.3); a slave's first packet waits for the master's next slot. A
+  single-packet burst and acknowledged data are not retried, as the spec says.
+  Not on MPSL builds, where multi-packet bursts do not run yet.
 - **Advanced burst no longer advertises frequency hopping.** The capabilities
   form of `0x78` claimed it, but nothing in RadiANT hops. The supported-modes
   byte is now `0x00`.

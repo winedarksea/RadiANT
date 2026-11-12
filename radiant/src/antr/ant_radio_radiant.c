@@ -740,8 +740,9 @@ static enum radiant_radio_status api_done_to_status(enum radiant_sched_done why)
 		 * FAILED is the only answer the consumers (transfer engine,
 		 * radiant_channel_on_terminal()) can act on: a denied ack reply
 		 * missed the peer's receive window, and radiant_transfer.h's
-		 * retransmit path is deliberately unwired, so the transfer must
-		 * end. The denial itself is not lost - api_stats.sched_denied is
+		 * acknowledger-side retransmit path is deliberately unwired, so
+		 * the transfer must end. (The originator's burst retry runs only
+		 * on an empty window, TIMEOUT, never on a denial.) The denial itself is not lost - api_stats.sched_denied is
 		 * incremented from `why` at the top of api_sched_done(), so this
 		 * lossy mapping is compensated exactly once, there.
 		 */
@@ -1120,10 +1121,25 @@ antr_err_t antr_reply_stats_get(uint8_t channel, struct antr_reply_stats *out)
 }
 #endif /* CONFIG_RADIANT_ACK_FAULTS */
 
+static radiant_time_t api_xfer_t_sync_for(uint8_t ch);
+
+/* Where a slave's burst packet 0 is retried: the master's next reply window,
+ * the same projection the first attempt used (radiant_transfer_ops). */
+static radiant_time_t api_xfer_retry_t_sync(void *ctx)
+{
+	uint8_t ch = (uint8_t)(uintptr_t)ctx;
+
+	if (!api_ch_valid(ch)) {
+		return RADIANT_TIME_NEVER;
+	}
+	return api_xfer_t_sync_for(ch);
+}
+
 static const struct radiant_transfer_ops api_xfer_ops = {
 	.done = api_xfer_done,
 	.rx_data = api_xfer_rx_data,
 	.broadcast_payload = api_xfer_broadcast,
+	.retry_t_sync = api_xfer_retry_t_sync,
 #if defined(CONFIG_RADIANT_ACK_FAULTS)
 	.reply_plan = api_xfer_reply_plan,
 #endif
@@ -2444,8 +2460,13 @@ static void api_sched_tx(uint8_t ch, const struct radiant_tx_event *evt, void *u
 				radiant_transfer_cur_payload(&api_xfer[ch]);
 
 			/* Originating data occupies this master's slot just as a
-			 * broadcast does; resuming must not repost the expired slot. */
-			radiant_channel_on_slot(ch, evt->t_sync);
+			 * broadcast does; resuming must not repost the expired slot.
+			 * A retry is not a slot: it goes out 3110 us after the
+			 * attempt it repeats, and re-anchoring on it would walk the
+			 * master's grid by that much per missed acknowledgement. */
+			if (radiant_transfer_cur_retries(&api_xfer[ch]) == 0u) {
+				radiant_channel_on_slot(ch, evt->t_sync);
+			}
 			if (sent != NULL) {
 				memcpy(api_ch[ch].last_tx, sent,
 				       RADIANT_TRANSFER_PKT_BYTES);
@@ -2506,10 +2527,10 @@ static void api_feed_xfer_terminal(uint8_t ch, enum radiant_radio_status st)
 
 		memset(&e, 0, sizeof(e));
 		e.op = RADIANT_TRANSFER_OP_EXTERNAL;
-		/* A window closing empty is RADIANT_RADIO_STATUS_TIMEOUT, which
-		 * the engine reads as FAIL_NO_ACK and does not retry - inventing
-		 * a retry would put an unmeasured frame on the air at an
-		 * unmeasured instant. */
+		/* A window closing empty is RADIANT_RADIO_STATUS_TIMEOUT: the
+		 * engine retries a multi-packet burst's packet (Rev 5.1 sec
+		 * 5.4.3, up to RADIANT_TRANSFER_TX_RETRIES_MAX) and otherwise
+		 * fails with FAIL_NO_ACK. Any other status fails outright. */
 		e.status = st;
 		e.t_sync = radiant_radio_now();
 		radiant_transfer_on_rx_event(&api_xfer[ch], &e);

@@ -26,7 +26,9 @@
  *                               no:  more packets in this block?
  *                                      yes: arm the next, +1550        TX_DATA
  *                                      no:  NEXT_BLOCK              WAIT_BLOCK
- *   window closed empty    -> TX_FAILED / NO_ACK. NOT retried.         IDLE
+ *   window closed empty    -> multi-packet burst, retries left:
+ *                               re-arm the same packet, same ctrl   TX_DATA
+ *                             otherwise TX_FAILED / NO_ACK          IDLE
  *
  * Every arm after the first happens inside a completion callback, in radio
  * interrupt context - the only path that meets these intervals, because the
@@ -74,6 +76,8 @@ static void reset_transfer(struct radiant_transfer *t)
 	t->pkt_acked = 0u;
 	t->cur_ctrl = 0u;
 	t->next_t_sync = RADIANT_TIME_NEVER;
+	t->data_t_sync = RADIANT_TIME_NEVER;
+	t->retries = 0u;
 }
 
 /* Hand the block back and ask for the next one. State moves to WAIT_BLOCK
@@ -273,7 +277,64 @@ static int try_send(struct radiant_transfer *t, uint32_t index, bool last,
 
 	t->cur_ctrl = ctrl;
 	t->state = RADIANT_TRANSFER_STATE_TX_DATA;
+	/* A new packet: its retries start from zero. A retry does not come
+	 * through here (retry_packet() re-arms directly), so this is exactly
+	 * "per packet", not per attempt. */
+	t->retries = 0u;
+	t->data_t_sync = RADIANT_TIME_NEVER;
 	return RADIANT_TRANSFER_OK;
+}
+
+/*
+ * The acknowledgement window closed empty. Re-arm the same packet if Rev 5.1
+ * sec 5.4.3 / 9.5.5.3 allows a retry here; see RADIANT_TRANSFER_TX_RETRIES_MAX
+ * for the rules. Returns false when the caller must fail the transfer.
+ */
+static bool retry_packet(struct radiant_transfer *t)
+{
+	radiant_time_t at;
+
+	if (!t->own_block || t->block == NULL ||
+	    t->pkt_in_block >= t->n_pkt_in_block ||
+	    t->retries >= (uint8_t)RADIANT_TRANSFER_TX_RETRIES_MAX ||
+	    t->data_t_sync == RADIANT_TIME_NEVER) {
+		return false;
+	}
+	/* A single-packet burst: first packet and last packet at once. */
+	if (t->pkt_index == 0u && radiant_ctrl_is_last(t->cur_ctrl)) {
+		return false;
+	}
+
+	if (!t->cfg.slot_opener && t->pkt_index == 0u) {
+		/* A slave's packet 0 rides the master's reply window, which
+		 * only opens again on the master's next slot. */
+		if (t->cfg.ops == NULL || t->cfg.ops->retry_t_sync == NULL) {
+			return false;
+		}
+		at = t->cfg.ops->retry_t_sync(t->cfg.ctx);
+		if (at == RADIANT_TIME_NEVER) {
+			return false;
+		}
+	} else {
+		at = t->data_t_sync + (radiant_time_t)RADIANT_TRANSFER_PACKET_US;
+	}
+
+	/* cur_ctrl, not a fresh radiant_transfer_ctrl(): the sequence bit
+	 * must not move, or the receiver takes the repeat for the next
+	 * packet. Not try_send(), which would zero the retry count. */
+	if (radiant_transfer_arm_tx(t, t->cur_ctrl,
+				    &t->block[(size_t)t->pkt_in_block *
+					      RADIANT_TRANSFER_PKT_BYTES],
+				    RADIANT_TRANSFER_PKT_BYTES, at) !=
+	    RADIANT_TRANSFER_OK) {
+		return false;
+	}
+
+	t->retries++;
+	t->stats.retries++;
+	t->data_t_sync = RADIANT_TIME_NEVER;
+	t->state = RADIANT_TRANSFER_STATE_TX_DATA;
+	return true;
 }
 
 /* ---------------------------------------------------------------------------
@@ -653,7 +714,8 @@ void radiant_transfer_on_tx_event(struct radiant_transfer *t,
 	/* Anchored on the t_sync the backend actually achieved, not the one
 	 * requested - on a backend that can't schedule exactly, anchoring on
 	 * the request would put the window after an instant that never
-	 * happened. */
+	 * happened. Kept for a retry, which is placed from the same instant. */
+	t->data_t_sync = e->t_sync;
 	if (arm_ack_window(t, e->t_sync) != RADIANT_TRANSFER_OK) {
 		finish(t, RADIANT_TRANSFER_EV_TX_FAILED, RADIANT_TRANSFER_FAIL_RADIO);
 		return;
@@ -694,12 +756,15 @@ void radiant_transfer_on_rx_event(struct radiant_transfer *t,
 		 * there is nothing to do but wait. */
 		return;
 	case RADIANT_RADIO_STATUS_TIMEOUT:
-		/* The reply window closed empty. NOT RETRIED: what a sender does
-		 * when an ack goes missing was never measured (untested item 5,
-		 * docs/spike-b-results.md) - only the receiver's retry
-		 * behaviour was, and that's implemented in radiant_ack.c.
-		 * Inventing a sender-side retry here would be unevidenced. */
-		finish(t, RADIANT_TRANSFER_EV_TX_FAILED, RADIANT_TRANSFER_FAIL_NO_ACK);
+		/* The reply window closed empty. Never captured from the
+		 * sender's side (docs/spike-b-results.md, untested item 5), so
+		 * the rule is the public spec's: a multi-packet burst retries
+		 * the packet up to five times (Rev 5.1 sec 5.4.3, 9.5.5.3),
+		 * then fails. See retry_packet(). */
+		if (!retry_packet(t)) {
+			finish(t, RADIANT_TRANSFER_EV_TX_FAILED,
+			       RADIANT_TRANSFER_FAIL_NO_ACK);
+		}
 		return;
 	default:
 		finish(t, RADIANT_TRANSFER_EV_TX_FAILED, RADIANT_TRANSFER_FAIL_RADIO);
@@ -764,4 +829,13 @@ const uint8_t *radiant_transfer_cur_payload(const struct radiant_transfer *t)
 	}
 
 	return &t->block[(size_t)t->pkt_in_block * RADIANT_TRANSFER_PKT_BYTES];
+}
+
+uint8_t radiant_transfer_cur_retries(const struct radiant_transfer *t)
+{
+	if (t == NULL || (t->state != RADIANT_TRANSFER_STATE_TX_DATA &&
+			  t->state != RADIANT_TRANSFER_STATE_WAIT_ACK)) {
+		return 0u;
+	}
+	return t->retries;
 }

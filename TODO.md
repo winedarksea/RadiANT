@@ -18,6 +18,14 @@ FE-C coverage (deferred from the 2026-11-11 Zwift-capture plan, one item):
 - Burst on an open slave channel is untested; MPSL doesn't support multi-packet burst.
 - Stale docs: `docs/testing.md:296` has an ERG label on a 0x33 test; `docs/device-profiles.md:1459` says `ant_pages` has no FE-C; `docs/decisions/0001...:19-25` records a Tier 3 pass with no FE-C trace in the repo; `docs/zwift-fec-validation.md` is still "Hardware acceptance: FAIL" at 98.33 %.
 
+Inbound and multi-packet burst work (deferred from the Rev 5.1 review, fix/spec-rev51-gaps, 2026-11-11). Outbound retries landed there (`RADIANT_TRANSFER_TX_RETRIES_MAX`, radiant/src/radiant_burst.c `retry_packet()`); these did not:
+1. Inbound continuation window. Today an inbound burst advances one packet per tracked slot (radiant/tests/api/src/test_api.c, `test_an_inbound_burst_numbers_packets_0_1_2_3_1_2_3`), because nothing opens a receive window for the next packet. Needs a `WAIT_NEXT` state and a window at ack t_sync + 1550 +/- 250 us (radiant_transfer.h, the note on `RADIANT_TRANSFER_REPLY_RETRY_US`).
+2. Duplicate filtering on receive. A repeat (same sequence bit that `reply_ctrl` expects complemented, within about one packet time of `reply_t_sync`) must be re-acknowledged but not delivered again. Needed as soon as peers retry, which our own sender now does.
+3. EVENT_TRANSFER_RX_FAILED (0x04): post it from the abandoned-burst watchdog (radiant/src/antr/ant_radio_radiant.c, `in_last_valid` in `api_watchdogs_locked()`), from a broadcast arriving mid-burst, on close, and on drop-to-search. Only after item 1, or it fires on every slow-channel burst.
+4. Multi-packet bursts on MPSL builds (the "MPSL bursts" line at the top of this file). Retries share the problem: a retry at +3110 us is outside the data packet's grant, and on MPSL it fails the transfer with NO_ACK as before.
+5. Advanced burst: true 16/24-byte packets on air (today a 24-byte block goes out as three 8-byte packets), the retry-extension byte (`api_adv_burst[10]`, stored and never read), and the stall count / retry defaults (sdk-ant reads back stall 3210).
+6. Optional: EVENT_TRANSFER_TX_START (0x0A).
+
 # Module packaging follow-ups
 
 Remaining steps to make `radiant/` an installable, listed Zephyr module. The

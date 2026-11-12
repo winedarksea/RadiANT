@@ -64,7 +64,8 @@ min_scenarios: 14
 # each of the four api scenarios (RX-only slave, burst refusal by type, the two
 # last-payload repeats, adv burst capabilities, plus one earlier unraised), and
 # the unit scenarios' +8 that landed with ADR 0022 and the 0x61/0xC6 work.
-min_testcases: 4403
+# 4419 with outbound burst retries: four transfer cases in each unit scenario.
+min_testcases: 4419
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -79,9 +80,9 @@ min_testcases: 4403
 # above. The earlier values were nRF5340 DK counts minus about 1%, plus static
 # counts. A floor equal to the observed count still fails only when coverage
 # goes down, which is the event it exists to catch.
-min_cases.radiant.unit: 1004
-min_cases.radiant.unit.sec_modes: 1004
-min_cases.radiant.unit.no_pairing: 952
+min_cases.radiant.unit: 1008
+min_cases.radiant.unit.sec_modes: 1008
+min_cases.radiant.unit.no_pairing: 956
 min_cases.radiant.api: 72
 min_cases.radiant.api.sec: 75
 min_cases.radiant.api.sec_host: 88
@@ -94,5 +95,5 @@ min_cases.radiant.backend: 8
 min_cases.hrm_ble.sim_sched: 4
 min_cases.treadmill.pages: 20
 min_cases.treadmill.hr_rx: 3
-min_cases.radiant.unit.ack_faults: 1011
+min_cases.radiant.unit.ack_faults: 1015
 min_cases.trainer.model: 14

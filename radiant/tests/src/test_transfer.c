@@ -969,13 +969,39 @@ ZTEST(transfer, test_a_rejected_block_is_never_released)
 	end_of_test();
 }
 
-/* A missing acknowledgement fails the transfer once, releases the block in
- * hand, and does NOT retry. Untested item 5 of the spike (no measured
- * behaviour exists); this pins the decision so a retry, if added, is
- * deliberate. */
-ZTEST(transfer, test_a_missing_acknowledgement_fails_once_and_releases_the_block)
+/* Every accepted transmit's arm record, oldest first. */
+static uint32_t collect_tx_arms(const struct fake_radio_arm **out, uint32_t cap)
+{
+	uint32_t n = fake_radio_arm_count();
+	uint32_t found = 0u;
+	uint32_t i;
+
+	for (i = 0u; i < n && found < cap; i++) {
+		const struct fake_radio_arm *a = fake_radio_arm(i);
+
+		if (a == NULL || a->kind != FAKE_RADIO_ARM_TX ||
+		    a->rc != RADIANT_RADIO_OK_RC) {
+			continue;
+		}
+		out[found++] = a;
+	}
+	return found;
+}
+
+/*
+ * Rev 5.1 sec 5.4.3 / 9.5.5.3: a burst packet whose acknowledgement goes
+ * missing is retried, up to five times, then EVENT_TRANSFER_TX_FAILED. Six
+ * misses of packet 1: the same packet goes out six times with the same control
+ * byte, 3110 us apart, the transfer fails once with NO_ACK, and the block in
+ * hand comes back exactly once. (Before 2026-11-11 this test pinned "fails at
+ * the first miss, never retried".)
+ */
+ZTEST(transfer, test_six_missed_acknowledgements_fail_once_and_release_the_block)
 {
 	const struct radiant_transfer_stats *st;
+	const struct fake_radio_arm *tx[12];
+	uint32_t n_tx;
+	uint32_t i;
 	uint32_t arms_before;
 
 	reset_blocks();
@@ -1002,13 +1028,189 @@ ZTEST(transfer, test_a_missing_acknowledgement_fails_once_and_releases_the_block
 	zassert_equal(2u, st->blocks_accepted);
 	zassert_equal(2u, st->blocks_released);
 	zassert_equal(1u, st->transfers_failed);
+	zassert_equal(RADIANT_TRANSFER_TX_RETRIES_MAX, st->retries);
 
-	/* No retransmission of the unacknowledged packet. */
+	/* Packet 0 once, then packet 1 six times: same ctrl, same payload,
+	 * one packet time apart. */
+	n_tx = collect_tx_arms(tx, ARRAY_SIZE(tx));
+	zassert_equal(1u + 1u + RADIANT_TRANSFER_TX_RETRIES_MAX, n_tx,
+		      "expected 7 transmits, got %u", (unsigned)n_tx);
+	for (i = 2u; i < n_tx; i++) {
+		zassert_equal(tx[1]->body[BODY_CTRL], tx[i]->body[BODY_CTRL],
+			      "retry %u moved the control byte", (unsigned)(i - 1u));
+		zassert_mem_equal(&tx[1]->body[BODY_D0], &tx[i]->body[BODY_D0],
+				  RADIANT_TRANSFER_PKT_BYTES);
+		zassert_equal(tx[i - 1u]->t_sync_at +
+				      (radiant_time_t)RADIANT_TRANSFER_PACKET_US,
+			      tx[i]->t_sync_at,
+			      "retry %u is not one packet time after the attempt "
+			      "it repeats", (unsigned)(i - 1u));
+	}
+
+	/* And nothing after the failure. */
 	arms_before = fake_radio_arm_count();
 	fake_radio_advance(50000u);
 	zassert_equal(arms_before, fake_radio_arm_count(),
-		      "the sender retried an unacknowledged packet; that behaviour "
-		      "has never been measured");
+		      "the sender kept transmitting after TX_FAILED");
+
+	end_of_test();
+}
+
+/* One missed acknowledgement: the retry goes out with the same control byte
+ * 3110 us after the miss, it is acknowledged, and the transfer completes. */
+ZTEST(transfer, test_one_missed_acknowledgement_is_retried_and_the_transfer_completes)
+{
+	const struct fake_radio_arm *tx[8];
+	const struct fake_radio_arm *rx;
+	uint32_t n_tx;
+
+	reset_blocks();
+	queue_block(0u, 16u, RADIANT_TRANSFER_SEG_START | RADIANT_TRANSFER_SEG_END,
+		    0x30u);
+	zassert_true(feed_next_block());
+
+	/* Packet 0 acknowledged. */
+	run_one_packet_exchange();
+	/* Packet 1: transmit, then let its window close empty. */
+	zassert_true(fake_radio_step());
+	zassert_equal(RADIANT_TRANSFER_STATE_WAIT_ACK, radiant_transfer_state(&xfer));
+	zassert_true(fake_radio_step(), "the empty window never closed");
+	zassert_equal(RADIANT_TRANSFER_STATE_TX_DATA, radiant_transfer_state(&xfer),
+		      "a missed acknowledgement on packet 1 was not retried");
+	zassert_equal(0u, n_ev, "the transfer ended at the first miss");
+
+	/* The retry transmits and is acknowledged. */
+	zassert_true(fake_radio_step());
+	rx = last_arm_of(FAKE_RADIO_ARM_RX);
+	zassert_not_null(rx);
+	air_the_ack();
+	zassert_true(fake_radio_step());
+
+	zassert_equal(1u, n_ev);
+	zassert_equal(RADIANT_TRANSFER_EV_TX_COMPLETED, evlog[0].ev);
+	zassert_equal(2u, evlog[0].packets);
+	zassert_equal(1u, radiant_transfer_stats(&xfer)->retries);
+
+	n_tx = collect_tx_arms(tx, ARRAY_SIZE(tx));
+	zassert_equal(3u, n_tx);
+	zassert_equal(tx[1]->body[BODY_CTRL], tx[2]->body[BODY_CTRL],
+		      "the retry moved the sequence bit");
+	zassert_equal(tx[1]->t_sync_at + (radiant_time_t)RADIANT_TRANSFER_PACKET_US,
+		      tx[2]->t_sync_at);
+
+	end_of_test();
+}
+
+/* A single-packet burst has no retries (Rev 5.1 sec 5.4.3), and neither does
+ * acknowledged data, which is one. */
+ZTEST(transfer, test_a_single_packet_transfer_is_never_retried)
+{
+	uint8_t payload[RADIANT_TRANSFER_PKT_BYTES];
+	const struct fake_radio_arm *tx[4];
+
+	reset_blocks();
+	queue_block(0u, 8u, RADIANT_TRANSFER_SEG_START | RADIANT_TRANSFER_SEG_END,
+		    0x40u);
+	acks_to_air = 0u;
+	zassert_true(feed_next_block());
+	drive();
+	zassert_equal(1u, n_ev);
+	zassert_equal(RADIANT_TRANSFER_FAIL_NO_ACK, evlog[0].fail);
+	zassert_equal(1u, collect_tx_arms(tx, ARRAY_SIZE(tx)),
+		      "a one-packet burst was retried");
+
+	memset(payload, 0x5Au, sizeof(payload));
+	zassert_equal(RADIANT_TRANSFER_OK,
+		      radiant_transfer_ack_data(&xfer, payload,
+					    RADIANT_TRANSFER_PKT_BYTES,
+					    RADIANT_TIME_NEVER));
+	commit();
+	drive();
+	zassert_equal(2u, n_ev);
+	zassert_equal(RADIANT_TRANSFER_FAIL_NO_ACK, evlog[1].fail);
+	zassert_equal(2u, collect_tx_arms(tx, ARRAY_SIZE(tx)),
+		      "acknowledged data was retried");
+	zassert_equal(0u, radiant_transfer_stats(&xfer)->retries);
+
+	end_of_test();
+}
+
+/* A slave's packet 0 is retried on the master's next reply window, which the
+ * owner projects (ops->retry_t_sync), not 3110 us after the miss: the master
+ * only listens at its own slot + 2190 us. Without the hook it is not retried
+ * at all. */
+static radiant_time_t retry_slot_at;
+static uint32_t       retry_slot_asked;
+
+static radiant_time_t on_retry_t_sync(void *ctx)
+{
+	ARG_UNUSED(ctx);
+	retry_slot_asked++;
+	return retry_slot_at;
+}
+
+static const struct radiant_transfer_ops ops_with_retry_slot = {
+	.done = on_done,
+	.rx_data = on_rx_data,
+	.broadcast_payload = on_broadcast_payload,
+	.retry_t_sync = on_retry_t_sync,
+};
+
+ZTEST(transfer, test_a_slaves_packet_0_is_retried_on_the_next_slot)
+{
+	struct radiant_transfer_cfg c;
+	const struct fake_radio_arm *tx[4];
+	radiant_time_t first;
+
+	make_cfg(&c, false, CH_XFER);
+	c.ops = &ops_with_retry_slot;
+	zassert_equal(RADIANT_TRANSFER_OK, radiant_transfer_init(&xfer, &c));
+	retry_slot_asked = 0u;
+
+	reset_blocks();
+	queue_block(0u, 16u, RADIANT_TRANSFER_SEG_START | RADIANT_TRANSFER_SEG_END,
+		    0x50u);
+	zassert_true(feed_next_block());
+
+	zassert_true(fake_radio_step(), "packet 0 never transmitted");
+	first = last_arm_of(FAKE_RADIO_ARM_TX)->t_sync_at;
+	/* One 4 Hz period later, the master's next reply window. */
+	retry_slot_at = first + 249696u;
+	zassert_true(fake_radio_step(), "the empty window never closed");
+	zassert_equal(1u, retry_slot_asked);
+	zassert_equal(RADIANT_TRANSFER_STATE_TX_DATA, radiant_transfer_state(&xfer));
+
+	zassert_true(fake_radio_step());
+	zassert_equal(2u, collect_tx_arms(tx, ARRAY_SIZE(tx)));
+	zassert_equal(retry_slot_at, tx[1]->t_sync_at,
+		      "a slave's packet 0 retry must wait for the master's next "
+		      "reply window");
+	zassert_equal(tx[0]->body[BODY_CTRL], tx[1]->body[BODY_CTRL]);
+
+	/* Let it run out. The next miss asks for the same instant, now in the
+	 * past; however the scheduler refuses it (at arm time, NO_ACK, or as a
+	 * missed slot, RADIO), the transfer ends exactly once. */
+	acks_to_air = 0u;
+	drive();
+	zassert_equal(1u, n_ev);
+	zassert_equal(RADIANT_TRANSFER_EV_TX_FAILED, evlog[0].ev);
+	end_of_test();
+}
+
+ZTEST(transfer, test_a_slaves_packet_0_is_not_retried_without_a_slot_to_aim_at)
+{
+	const struct fake_radio_arm *tx[4];
+
+	/* The default ops have no retry_t_sync. */
+	reset_blocks();
+	queue_block(0u, 16u, RADIANT_TRANSFER_SEG_START | RADIANT_TRANSFER_SEG_END,
+		    0x50u);
+	acks_to_air = 0u;
+	zassert_true(feed_next_block());
+	drive();
+	zassert_equal(1u, n_ev);
+	zassert_equal(RADIANT_TRANSFER_FAIL_NO_ACK, evlog[0].fail);
+	zassert_equal(1u, collect_tx_arms(tx, ARRAY_SIZE(tx)));
 
 	end_of_test();
 }
