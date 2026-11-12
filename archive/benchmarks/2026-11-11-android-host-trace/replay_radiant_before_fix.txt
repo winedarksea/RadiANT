@@ -1,0 +1,45 @@
+Found 0FCF:1009  bcdDevice=0x0100
+  manufacturer: RadiANT Project
+  product:      RadiANT ANT+ compatible USB stick
+  serial:       EE6986854FD72803
+reset                    H> 4A 00                             <D 0x6F 20
+netkey 1                 H> 46 01 b9 a5 21 fb bd 72 c3 45     <D 0x40 01 46 00
+req version              H> 4D 00 3e                          <D 0x3E 52 41 44 49 41 4e 54 30 2e 30 31 42 30 30 00 00 00 00 00 00
+req caps                 H> 4D 00 54                          <D 0x54 20 03 00 b2 26 00 05 00 01
+adv burst cfg            H> 78 00 01 03 00 00 00 01 00 00     <D 0x40 00 78 00
+evbuf enable             H> 74 00 00 ff ff c8 00              <D 0x40 00 74 28
+evbuf disable            H> 74 00 00 00 00 00 00              <D 0x40 00 74 28
+req status               H> 4D 00 52                          <D 0x52 00 00
+assign                   H> 42 00 00 01 00                    <D 0x40 00 42 00
+hp search 0              H> 44 00 00                          <D 0x40 00 44 00
+lp search 6              H> 63 00 06                          <D 0x40 00 63 00
+prox                     H> 71 00 00 00 00 00                 <D 0x40 00 71 00
+search prio 7            H> 75 00 07                          <D 0x40 00 75 00
+idlist excl 0            H> 5A 00 00 01                       <D 0x40 00 5a 00
+libcfg 0x40              H> 6E 00 40                          <D 0x40 00 6e 00
+chan id wild             H> 51 00 00 00 00 00                 <D 0x40 00 51 00
+rf 57                    H> 45 00 39                          <D 0x40 00 45 00
+period 8192              H> 43 00 00 20                       <D 0x40 00 43 00
+prox                     H> 71 00 00 00 00 00                 <D 0x40 00 71 00
+lp search 4              H> 63 00 04                          <D 0x40 00 63 00
+hp search 0              H> 44 00 00                          <D 0x40 00 44 00
+open                     H> 4B 00                             <D 0x40 00 4b 00; 0x4E 00 11 e6 e6 00 be c3 0b fd 40 20 b9 00; 0x4E 00 11 e6 e6 00 be c3 0b fd 40 20 b9 00
+   ~ unsolicited 0x40 00 01 02
+   ~ unsolicited 0x40 00 01 02
+   ~ unsolicited 0x40 00 01 02
+   ~ unsolicited 0x40 00 01 02
+   ~ unsolicited 0x40 00 01 02
+   ~ unsolicited 0x40 00 01 02
+   ~ unsolicited 0x40 00 01 02
+   ~ unsolicited 0x40 00 01 08
+   ~ unsolicited 0x4E 00 02 20 dd 00 df 61 e6 ae 40 20 b9 00
+idlist incl 0 (OPEN)     H> 5A 00 00 00                       <D 0x40 00 5a 15; 0x40 00 01 02; 0x40 00 01 02
+idlist add (OPEN)        H> 59 00 34 12 78 01 00              <D 0x40 00 59 15; 0x40 00 01 02; 0x40 00 01 02
+idlist excl 1 (OPEN)     H> 5A 00 01 01                       <D 0x40 00 5a 15; 0x40 00 01 02; 0x40 00 01 02
+req status               H> 4D 00 52                          <D 0x52 00 07; 0x40 00 01 02; 0x40 00 01 08
+req evbuf cfg            H> 4D 00 74                          <D 0x40 00 4d 28; 0x4E 00 11 e6 e6 00 be c3 0b fd 40 20 b9 00; 0x4E 00 10 fc ff 00 d6 5a 00 00 40 20 b9 00; 0x40 00 01 02
+close                    H> 4C 00                             <D 0x40 00 4c 00; 0x40 00 01 07
+unassign                 H> 41 00                             <D 0x40 00 41 00
+libcfg 0                 H> 6E 00 00                          <D 0x40 00 6e 00
+evbuf disable            H> 74 00 00 00 00 00 00              <D 0x40 00 74 28
+reset                    H> 4A 00                             <D 0x6F 20

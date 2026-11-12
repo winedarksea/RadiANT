@@ -550,6 +550,18 @@ config ANT_DONGLE_BCD_DEVICE
 	  bring-up a fresh bcdDevice is the cheapest way to make Windows look
 	  again. Leave at 0x0000 to keep Zephyr's default.
 
+config ANT_DONGLE_HOST_TRACE
+	bool "Log every host frame, both directions"
+	depends on LOG
+	help
+	  One INF line per ANT serial frame on the bridge: "H>" for each
+	  checksum-valid frame from the host, "<D" for each frame sent back.
+	  Network-key and RadiANT key/pairing payloads are masked. For seeing
+	  what an unfamiliar host sends (the Android ANT USB Service) on a
+	  board with a console, such as the nRF5340 DK's app core
+	  (host_trace.conf). Bench only: it slows the bridge by a UART line per
+	  frame.
+
 config ANT_DONGLE_FLASH_LOG
 	bool "Capture the log to flash, readable back over UF2"
 	depends on LOG && FLASH

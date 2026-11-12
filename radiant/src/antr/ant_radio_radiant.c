@@ -329,7 +329,10 @@ struct api_chan {
 	bool    sec_pay_valid;
 #endif
 
-	uint8_t id_list[API_ID_LIST_MAX][API_ID_LIST_BYTES];
+	/* One word per entry, wire order [devnum_lsb, devnum_msb, device_type,
+	 * trans_type] in its bytes, so antr_id_list_add() can replace an entry
+	 * with a single store while the channel is open - see there. */
+	uint32_t id_list[API_ID_LIST_MAX];
 	uint8_t id_list_size;
 	bool    id_list_exclude;
 
@@ -751,39 +754,50 @@ static enum radiant_radio_status api_done_to_status(enum radiant_sched_done why)
  *
  * Runs in the radio interrupt (offer time) and in thread context (steer
  * time): read-only, bounded by the list size.
+ *
+ * The list may be rewritten while the channel is open (a retail stick allows
+ * it, and the Android ANT+ stack depends on it - see antr_id_list_config()),
+ * so on an MPSL build this can preempt a writer from a zero-latency interrupt
+ * that no lock reaches. Each field is therefore read exactly once, and the
+ * writers order their stores so that any prefix of them is a list that was
+ * either the old one, switched off, or the new one.
  */
 static bool api_id_list_permits(uint8_t ch, const struct radiant_channel_id *id)
 {
 	const struct api_chan *c = &api_ch[ch];
+	uint8_t n = *(const volatile uint8_t *)&c->id_list_size;
 	uint8_t i;
 	bool    hit = false;
 
-	if (c->id_list_size == 0u) {
+	if (n == 0u) {
 		return true;
 	}
+	if (n > API_ID_LIST_MAX) {
+		n = API_ID_LIST_MAX;
+	}
 
-	for (i = 0u; i < c->id_list_size; i++) {
-		uint16_t dn = (uint16_t)((uint16_t)c->id_list[i][0] |
-					 ((uint16_t)c->id_list[i][1] << 8));
+	for (i = 0u; i < n; i++) {
+		uint32_t w = *(const volatile uint32_t *)&c->id_list[i];
+		const uint8_t *e = (const uint8_t *)&w;
+		uint16_t dn = (uint16_t)((uint16_t)e[0] | ((uint16_t)e[1] << 8));
 
 		/* Zero is the wildcard in each field, as with a channel ID. */
 		if (dn != 0u && dn != id->device_number) {
 			continue;
 		}
-		if (c->id_list[i][2] != 0u &&
-		    (uint8_t)(c->id_list[i][2] & RADIANT_DEVICE_TYPE_MASK) !=
+		if (e[2] != 0u &&
+		    (uint8_t)(e[2] & RADIANT_DEVICE_TYPE_MASK) !=
 			    (uint8_t)(id->device_type & RADIANT_DEVICE_TYPE_MASK)) {
 			continue;
 		}
-		if (c->id_list[i][3] != 0u &&
-		    c->id_list[i][3] != id->trans_type) {
+		if (e[3] != 0u && e[3] != id->trans_type) {
 			continue;
 		}
 		hit = true;
 		break;
 	}
 
-	return c->id_list_exclude ? !hit : hit;
+	return *(const volatile bool *)&c->id_list_exclude ? !hit : hit;
 }
 
 /* ---------------------------------------------------------------------------
@@ -3763,33 +3777,69 @@ antr_err_t antr_id_list_add(uint8_t channel, const uint8_t *device_id,
 	if (device_id == NULL) {
 		return (antr_err_t)ANTW_INVALID_MESSAGE;
 	}
-	if (radiant_channel_is_open(channel)) {
-		return (antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE;
-	}
+	/* No open-channel refusal: see antr_id_list_config(). */
 	if (index >= API_ID_LIST_MAX) {
 		return (antr_err_t)ANTW_INVALID_LIST_ID;
 	}
 
 	/* Wire order: [devnum_lsb, devnum_msb, device_type, trans_type],
-	 * copied before this returns. */
-	memcpy(api_ch[channel].id_list[index], device_id, API_ID_LIST_BYTES);
+	 * copied before this returns. One aligned word store, so a radio
+	 * interrupt that preempts this sees the old entry or the new one,
+	 * never half of each. */
+	uint32_t w;
+
+	BUILD_ASSERT(API_ID_LIST_BYTES == sizeof(w));
+	memcpy(&w, device_id, sizeof(w));
+	k_mutex_lock(&api_lock, K_FOREVER);
+	*(volatile uint32_t *)&api_ch[channel].id_list[index] = w;
+	k_mutex_unlock(&api_lock);
 	return (antr_err_t)ANTW_RESPONSE_NO_ERROR;
 }
 
 antr_err_t antr_id_list_config(uint8_t channel, uint8_t size, uint8_t inc_exc)
 {
+	struct api_chan *c;
+	bool exclude = (inc_exc != 0u);
+
 	if (!api_ch_valid(channel)) {
 		return (antr_err_t)ANTW_INVALID_MESSAGE;
-	}
-	if (radiant_channel_is_open(channel)) {
-		return (antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE;
 	}
 	if (size > API_ID_LIST_MAX) {
 		return (antr_err_t)ANTW_INVALID_LIST_ID;
 	}
 
-	api_ch[channel].id_list_size = size;
-	api_ch[channel].id_list_exclude = (inc_exc != 0u);
+	/*
+	 * Accepted on an OPEN channel too. This used to answer
+	 * CHANNEL_IN_WRONG_STATE there. The Android ANT stack opens a wildcard
+	 * search on an empty exclusion list and rewrites the list about 5 s in
+	 * with the channel still searching (nRF5340 DK host trace, 2026-11-11).
+	 * A retail ANT USB-m answers RESPONSE_NO_ERROR to both 0x5A and 0x59
+	 * on an open, searching channel (the same sequence replayed against the
+	 * Garmin stick), and Rev 5.1 sec 9.5.2.10/12 states no channel-state
+	 * condition. NOT the cause of the close/reset/reconnect cycle Android
+	 * runs every ~12 s on a stick that finds nothing: the retest with this
+	 * fix showed the same cycle, the close now following an accepted 0x5A.
+	 * The list is consulted only at steer, offer and acquire time, so a
+	 * change reaches the next search decision and leaves a channel already
+	 * tracking alone.
+	 *
+	 * Store order, for api_id_list_permits() in a radio interrupt that
+	 * preempts this: when the include/exclude sense flips, the list is
+	 * switched off (size 0) first and back on last, so no reader pairs the
+	 * old entries with the new sense. Off for those few instructions admits
+	 * anything, which an exclusion list could regret for one offer at most;
+	 * api_search_acquired() re-checks against the finished list.
+	 */
+	c = &api_ch[channel];
+	k_mutex_lock(&api_lock, K_FOREVER);
+	if (c->id_list_exclude != exclude) {
+		*(volatile uint8_t *)&c->id_list_size = 0u;
+		compiler_barrier();
+		*(volatile bool *)&c->id_list_exclude = exclude;
+		compiler_barrier();
+	}
+	*(volatile uint8_t *)&c->id_list_size = size;
+	k_mutex_unlock(&api_lock);
 	return (antr_err_t)ANTW_RESPONSE_NO_ERROR;
 }
 

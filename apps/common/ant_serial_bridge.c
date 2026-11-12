@@ -81,6 +81,57 @@ static struct k_thread bridge_thread_data;
  */
 static atomic_t reset_in_progress;
 
+/* ── Host trace (CONFIG_ANT_DONGLE_HOST_TRACE) ─────────────────────────────── */
+
+/*
+ * One log line per whole frame, both directions: "H>" host to dongle, "<D"
+ * dongle to host. For learning what an unfamiliar host (the Android ANT USB
+ * Service, say) sends on a board with a console, where no USB capture of the
+ * host side is possible. Off by default and never in a release: at 115200 baud
+ * a line costs ~5 ms of log time.
+ *
+ * Key material is masked, not dropped, so the frame shape stays visible:
+ * a network key (0x46) keeps its network number, and RadiANT's key and pairing
+ * messages keep only their header.
+ */
+#ifdef CONFIG_ANT_DONGLE_HOST_TRACE
+static void trace_frame(const char *dir, const uint8_t *f, size_t n)
+{
+	static const char hex[] = "0123456789abcdef";
+	char line[3 * ANTW_MAX_FRAME_SIZE + 1];
+	size_t redact_from = n;
+	size_t o = 0;
+
+	if (n >= 3) {
+		if (f[2] == ANTW_MESG_NETWORK_KEY_ID) {
+			redact_from = 4;	/* SYNC LEN ID net# */
+		}
+#ifdef CONFIG_RADIANT_SEC_HOST_MESSAGES
+		if (f[2] == ANTW_MESG_RADIANT_SET_KEY_ID
+#ifdef CONFIG_RADIANT_SEC_PAIRING_X25519
+		    || f[2] == ANTW_MESG_RADIANT_PAIRING_ID
+#endif
+		) {
+			redact_from = 3;
+		}
+#endif
+	}
+
+	for (size_t i = 0; i < n && i < ANTW_MAX_FRAME_SIZE; i++) {
+		bool mask = i >= redact_from && i + 1 < n;	/* keep checksum */
+
+		line[o++] = mask ? 'x' : hex[f[i] >> 4];
+		line[o++] = mask ? 'x' : hex[f[i] & 0xF];
+		line[o++] = ' ';
+	}
+	line[o ? o - 1 : 0] = '\0';
+	LOG_INF("%s %s", dir, line);
+}
+#define TRACE_TX(buf, n) trace_frame("<D", (buf), (n))
+#else
+#define TRACE_TX(buf, n) do { } while (0)
+#endif
+
 /* ── Frame helpers ─────────────────────────────────────────────────────────── */
 
 /* Build and transmit an ANTW_MESG_RESPONSE_EVENT_ID (0x40) reply. */
@@ -94,6 +145,7 @@ static void send_response(uint8_t ch, uint8_t msg_id, uint8_t code)
 	buf[4] = msg_id;
 	buf[5] = code;
 	buf[6] = buf[0] ^ buf[1] ^ buf[2] ^ buf[3] ^ buf[4] ^ buf[5];
+	TRACE_TX(buf, sizeof(buf));
 	usb_ant_send(buf, sizeof(buf));
 }
 
@@ -145,6 +197,7 @@ static void send_startup(uint8_t reason)
 	buf[2] = ANTW_MESG_STARTUP_MESG_ID;    /* 0x6F */
 	buf[3] = reason;
 	buf[4] = buf[0] ^ buf[1] ^ buf[2] ^ buf[3];
+	TRACE_TX(buf, sizeof(buf));
 	usb_ant_send(buf, sizeof(buf));
 }
 
@@ -200,6 +253,7 @@ static void send_message(uint8_t msg_id, const uint8_t *payload, uint8_t len)
 	}
 
 	buf[3 + len] = xor;
+	TRACE_TX(buf, len + 4U);
 	usb_ant_send(buf, len + 4U);
 }
 
@@ -1448,6 +1502,20 @@ static void process_byte(uint8_t b)
 
 	case S_CSUM:
 		if (b == parser.running_xor) {
+#ifdef CONFIG_ANT_DONGLE_HOST_TRACE
+			{
+				uint8_t f[ANTW_MAX_FRAME_SIZE];
+				uint8_t bl = MIN(parser.msg_len,
+						 (uint8_t)sizeof(parser.msg_body));
+
+				f[0] = ANTW_SYNC_TX;
+				f[1] = parser.msg_len;
+				f[2] = parser.msg_id;
+				memcpy(&f[3], parser.msg_body, bl);
+				f[3 + bl] = b;
+				trace_frame("H>", f, 4U + bl);
+			}
+#endif
 			dispatch(parser.msg_id, parser.msg_body,
 				 MIN(parser.msg_len,
 				     (uint8_t)sizeof(parser.msg_body)));
@@ -1737,6 +1805,7 @@ void antr_on_message(const struct antr_msg *msg)
 	}
 	buf[3 + msg_len] = xor;
 
+	TRACE_TX(buf, (size_t)(4 + msg_len));
 	int ret = usb_ant_send_async(buf, (size_t)(4 + msg_len));
 	if (ret) {
 		LOG_WRN("Dropped ANT event 0x%02X due to USB TX backlog: %d",

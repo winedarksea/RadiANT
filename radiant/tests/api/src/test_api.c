@@ -1679,6 +1679,80 @@ ZTEST(api, test_a_plain_wildcard_slave_still_acquires_and_tracks)
 }
 
 /*
+ * The inclusion/exclusion list is configurable on an OPEN channel, and a list
+ * written there governs the search already running.
+ *
+ * The Android ANT stack opens a wildcard search with an empty exclusion list
+ * and rewrites the list about 5 s later with the channel still searching
+ * (nRF5340 DK host trace, 2026-11-11). Both 0x59 and 0x5A used to answer
+ * CHANNEL_IN_WRONG_STATE on an open channel; a retail ANT USB-m accepts both
+ * there.
+ *
+ * Inclusion list of one entry, "any heart rate monitor", written after the
+ * open: a power meter answering first must be passed over and the HRM behind
+ * it in the same window acquired.
+ */
+ZTEST(api, test_the_id_list_is_configurable_on_an_open_channel)
+{
+	static const uint8_t any_hrm[4] = { 0x00u, 0x00u, 0x78u, 0x00u };
+	const struct fake_radio_arm *w;
+	uint16_t                     dev_pwr;
+	uint16_t                     dev_hrm;
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_network_address_set(0u, ant_plus_key));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_lib_config_set((uint8_t)ANTW_LIB_CONFIG_ALL_EXT_FIELDS));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_assign(CH,
+					  (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
+					  0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_id_set(CH, 0u, 0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_period_set(CH, RADIANT_CHANNEL_PERIOD_ANT_PLUS));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_radio_freq_set(CH, RF_INDEX));
+	/* Android's own opening move: an empty exclusion list. */
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_id_list_config(CH, 0u, 1u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR, antr_channel_open(CH));
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_id_list_add(CH, any_hrm, 0u),
+		      "0x59 on an open channel must be accepted, as a retail "
+		      "stick does");
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_id_list_config(CH, 1u, 0u),
+		      "0x5A on an open channel must be accepted, as a retail "
+		      "stick does; Android sends it to a searching channel");
+	zassert_equal((antr_err_t)ANTW_INVALID_LIST_ID,
+		      antr_id_list_config(CH, 5u, 0u),
+		      "the size bound still applies on an open channel");
+
+	w = armed_search_window();
+	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &dev_pwr);
+	air_device(w, 1u, 0x0600u, 0x78u, 5000u, &dev_hrm);
+	fake_radio_advance_to(w->t_close + 1u);
+	drain();
+
+	zassert_equal(0u, count_bcast_from(dev_pwr),
+		      "the power meter is not on the inclusion list written "
+		      "after the open, and was delivered anyway");
+	zassert_true(count_bcast_from(dev_hrm) >= 1u,
+		     "the HRM is on the list and was not delivered");
+	{
+		struct radiant_channel_id id;
+
+		zassert_equal(RADIANT_CH_OK, radiant_channel_id_get(CH, &id));
+		zassert_equal(dev_hrm, id.device_number,
+			      "the channel acquired something the list excludes");
+	}
+
+	end_of_test();
+}
+
+/*
  * A search timeout landing between radiant_channel_tick() and the pump's
  * radiant_search_end() must not strand the sweep carrier (review 2026-10-31,
  * A4-1 / O1 SF-2). The tick parks the carrier in CLOSING; if its chunk ends
