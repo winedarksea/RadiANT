@@ -308,6 +308,15 @@ static int arm_ack_window(struct radiant_transfer *t, radiant_time_t t_data_sync
 	 * won't stop early. Costs receive current but doesn't change behaviour -
 	 * the ack is recognised by its control byte, not by being alone. */
 	req.stop_on_first = true;
+	/* The reserve runs on to where whatever follows this window goes: the
+	 * next packet at ack t_sync + NEXT_PACKET_US, or, if the window closes
+	 * empty, the retry at the same instant (retry_packet(): data t_sync +
+	 * reply + NEXT_PACKET_US, i.e. t_close - ACK_GUARD_US + NEXT_PACKET_US).
+	 * Without it both were armed at a fresh reservation's lead, and on a
+	 * backend whose window ends late (the CC26x2 holds 508 us past t_close,
+	 * caps.rx_close_hold_us) the retry missed that lead by ~20 us and the
+	 * transfer failed (archive/benchmarks/2026-11-12-ti-findings/). */
+	req.follow_on_us = RADIANT_TRANSFER_NEXT_PACKET_US;
 
 	rc = radiant_sched_request_rx(t->cfg.channel, &req);
 	if (rc != RADIANT_RADIO_OK_RC) {

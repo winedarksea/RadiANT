@@ -1,0 +1,23 @@
+{
+  "mode": "bursts",
+  "bursts": 150,
+  "packets": 8,
+  "block": 8,
+  "tx_power": 3,
+  "master_dbm": null,
+  "slave_tx_power": 3,
+  "seconds": 112.53099999999904,
+  "outcomes": {
+    "COMPLETED": 145,
+    "FAILED": 5
+  },
+  "slave": {
+    "packets": 1179,
+    "whole": 145,
+    "broken": 4,
+    "seq_breaks": 0,
+    "lengths": {
+      "8": 145
+    }
+  }
+}

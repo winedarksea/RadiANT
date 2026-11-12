@@ -511,6 +511,19 @@ static RF_Mode rf_mode = {
  */
 #define ARM_FLOOR_US           150
 
+/*
+ * IN_GRANT_LEAD_US - caps.min_arm_lead_in_grant_us on the non-coex build: the
+ * lead for an operation armed from inside a radio callback into the air the
+ * previous operation reserved (follow_on_us). The RF core is already awake
+ * and nothing arbitrates, so what the 600 us covers for a cold arm (waking the
+ * command processor) is not owed. Halfway between ARM_FLOOR_US and
+ * MIN_ARM_LEAD_US, leaving the measured ~55 us of scheduler-to-backend latency
+ * well clear of the floor. Set from the 2026-11-12 bench: every failed master
+ * burst was a retry armed ~575 us ahead against the 600 us lead
+ * (docs/backends.md, "CC26x2 measured timing").
+ */
+#define IN_GRANT_LEAD_US       400
+
 /* ---------------------------------------------------------------------------
  * Receive buffers
  *
@@ -946,11 +959,9 @@ static const struct radiant_radio_caps caps = {
 	 * here because this initialiser runs before that patch.
 	 */
 	.min_arm_lead_us = MIN_ARM_LEAD_US,
-	/* Zero: this backend OWNS the radio, so the in-grant lead is the same
-	 * lead. The two come apart only under an arbiter - see
-	 * radiant_radio_enable() for the coex value and why 600 is honest
-	 * there. */
-	.min_arm_lead_in_grant_us = 0,
+	/* See IN_GRANT_LEAD_US. Patched to 600 under coex in
+	 * radiant_radio_enable(), which explains why 600 is honest there. */
+	.min_arm_lead_in_grant_us = IN_GRANT_LEAD_US,
 	/*
 	 * The surplus this backend really does hold: rx_start() ends the window
 	 * at t_close + BYTE_US + RX_END_SLOP_US, and that slop is not optional
