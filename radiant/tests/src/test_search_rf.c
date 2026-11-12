@@ -352,6 +352,78 @@ ZTEST(radiant_search_rf, test_a_full_cursor_table_drops_the_oldest_undeclared)
 	zassert_ok(radiant_search_end(&g_s, 0u));
 }
 
+/*
+ * A steer queued for the other frequency waits for it. Channel 0 is on 66 and
+ * names a device; channel 1 on 57 searches for anything, so the sweep starts
+ * with a whole pass on 57. That pass must be pure round robin: taking the
+ * steer there spends a dwell on a set nobody on 57 asked for, and ticking
+ * channel 0's revisits there doubles its backoff for visits that never
+ * happened. After the retune, the first 66 window is the steered set.
+ */
+ZTEST(radiant_search_rf, test_a_steer_for_the_other_frequency_waits_for_it)
+{
+	const uint16_t devnum = 0x0A09u;
+	const struct radiant_search_id_filter want_dev = { devnum, 0u, 0u };
+	uint16_t n;
+	uint16_t steer_set;
+
+	bring_up();
+	zassert_ok(radiant_search_begin_rf(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE,
+					   &want_dev, radiant_radio_now(),
+					   RADIANT_SEARCH_TIMEOUT_NONE, RF_B));
+	begin(1u, RF_A);
+	n = radiant_search_sets(&g_s);
+	steer_set = radiant_search_set_for_devnum(&g_s, devnum);
+	zassert_equal(1u, g_s.n_steer, "the named device was not queued");
+
+	for (uint16_t i = 0u; i < n; i++) {
+		zassert_equal(RADIANT_SEARCH_OK, win_open());
+		zassert_equal(RF_A, g_w.rf_index);
+		zassert_equal(i, g_w.set_index,
+			      "57 window %u took set %u: a 66 steer was spent on 57",
+			      (unsigned int)i, (unsigned int)g_w.set_index);
+		zassert_false(g_w.from_cache);
+		win_run();
+	}
+	zassert_equal(0u, radiant_search_get_stats(&g_s)->cache_steers,
+		      "a steer was taken during the 57 pass");
+	zassert_equal(RADIANT_SEARCH_REVISIT_FIRST, g_s.chans[0].revisit_gap,
+		      "channel 0's backoff grew to %u while the sweep was on 57",
+		      (unsigned int)g_s.chans[0].revisit_gap);
+	zassert_equal(1u, g_s.n_steer, "the 66 steer was lost");
+
+	zassert_equal(RADIANT_SEARCH_OK, win_open());
+	zassert_equal(RF_B, g_w.rf_index, "the pass on 57 did not hand over to 66");
+	zassert_equal(steer_set, g_w.set_index, "the first 66 window was not the steer");
+	zassert_true(g_w.from_cache);
+	zassert_equal(1u, radiant_search_get_stats(&g_s)->cache_steers);
+	win_run();
+
+	zassert_ok(radiant_search_end(&g_s, 0u));
+	zassert_ok(radiant_search_end(&g_s, 1u));
+}
+
+/* A steer for a frequency nobody declares any more is dropped at the next
+ * boundary, so the queue is bounded by what is still wanted. */
+ZTEST(radiant_search_rf, test_a_steer_for_an_abandoned_frequency_is_dropped)
+{
+	const struct radiant_search_id_filter want_dev = { 0x0A09u, 0u, 0u };
+
+	bring_up();
+	begin(1u, RF_A);
+	zassert_ok(radiant_search_begin_rf(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE,
+					   &want_dev, radiant_radio_now(),
+					   RADIANT_SEARCH_TIMEOUT_NONE, RF_B));
+	zassert_equal(1u, g_s.n_steer);
+	zassert_ok(radiant_search_end(&g_s, 0u));
+
+	zassert_equal(RADIANT_SEARCH_OK, win_open());
+	zassert_equal(0u, g_s.n_steer, "a steer for RF %u outlived its channel", RF_B);
+	zassert_false(g_w.from_cache);
+	win_run();
+	zassert_ok(radiant_search_end(&g_s, 1u));
+}
+
 /* When the last searcher on the current frequency leaves, the sweep moves on
  * at once rather than finishing a pass nobody can hear. */
 ZTEST(radiant_search_rf, test_the_sweep_leaves_a_frequency_nobody_searches)

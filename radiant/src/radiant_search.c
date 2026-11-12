@@ -177,16 +177,17 @@ static void build_set(struct radiant_search *s, uint16_t set)
 #endif
 }
 
-/* Queue a set ahead of the round-robin cursor. Duplicates are dropped: two
- * channels re-acquiring the same sensor shouldn't make the sweep listen to
- * that set twice while every other set waits. */
-static void push_steer(struct radiant_search *s, uint16_t set)
+/* Queue a set ahead of the round-robin cursor, for the frequency rf_plus1
+ * (0 = any). Duplicates are dropped: two channels re-acquiring the same
+ * sensor shouldn't make the sweep listen to that set twice while every other
+ * set waits. */
+static void push_steer(struct radiant_search *s, uint16_t set, uint8_t rf_plus1)
 {
 	if (set >= s->n_sets) {
 		return;
 	}
 	for (uint8_t i = 0; i < s->n_steer; i++) {
-		if (s->steer[i] == set) {
+		if (s->steer[i] == set && s->steer_rf[i] == rf_plus1) {
 			return;
 		}
 	}
@@ -194,7 +195,23 @@ static void push_steer(struct radiant_search *s, uint16_t set)
 		return;
 	}
 	s->steer[s->n_steer] = set;
+	s->steer_rf[s->n_steer] = rf_plus1;
 	s->n_steer++;
+}
+
+/* Would a steer for rf_plus1 be heard on the frequency the sweep is on? */
+static bool steer_rf_here(const struct radiant_search *s, uint8_t rf_plus1)
+{
+	return rf_plus1 == 0u || (uint8_t)(rf_plus1 - 1u) == s->cfg.rf_index;
+}
+
+static void steer_drop(struct radiant_search *s, uint8_t i)
+{
+	for (; i + 1u < s->n_steer; i++) {
+		s->steer[i] = s->steer[i + 1u];
+		s->steer_rf[i] = s->steer_rf[i + 1u];
+	}
+	s->n_steer--;
 }
 
 /*
@@ -214,6 +231,11 @@ static void push_steer(struct radiant_search *s, uint16_t set)
  * If the answer changes after begin (the caller's list grew), a revisit costs
  * at most one dwell per sweep once backed off, and the offer loop still
  * withholds the device, so nothing is wrongly acquired.
+ *
+ * A channel declared on another frequency is skipped outright: a round-robin
+ * set on this frequency is neither a visit to its set nor a missed one, so
+ * its countdown does not move and its gap does not double while the sweep is
+ * elsewhere.
  */
 static void tick_revisits(struct radiant_search *s, uint16_t set)
 {
@@ -224,6 +246,9 @@ static void tick_revisits(struct radiant_search *s, uint16_t set)
 		    ch->steer_set == RADIANT_SEARCH_SETS_NONE) {
 			continue;
 		}
+		if (!steer_rf_here(s, ch->rf_plus1)) {
+			continue;
+		}
 		if (ch->steer_set == set) {
 			ch->revisit_left = ch->revisit_gap;
 			continue;
@@ -232,7 +257,7 @@ static void tick_revisits(struct radiant_search *s, uint16_t set)
 			ch->revisit_left--;
 		}
 		if (ch->revisit_left == 0u) {
-			push_steer(s, ch->steer_set);
+			push_steer(s, ch->steer_set, ch->rf_plus1);
 			if (ch->revisit_gap < s->n_sets) {
 				ch->revisit_gap = (uint16_t)(ch->revisit_gap * 2u);
 				if (ch->revisit_gap > s->n_sets) {
@@ -244,17 +269,43 @@ static void tick_revisits(struct radiant_search *s, uint16_t set)
 	}
 }
 
+/*
+ * The first steer this frequency can use, or none. Entries for another
+ * frequency stay queued, in order, for when the sweep gets there; taking one
+ * here would spend a dwell listening for a device on a frequency it is not
+ * on. Every other entry for the same set that this visit also satisfies goes
+ * with it, so an "any" steer and a same-frequency one cost one dwell, not two.
+ */
+static bool take_steer(struct radiant_search *s, uint16_t *set)
+{
+	uint8_t i;
+
+	for (i = 0u; i < s->n_steer; i++) {
+		if (steer_rf_here(s, s->steer_rf[i])) {
+			break;
+		}
+	}
+	if (i == s->n_steer) {
+		return false;
+	}
+	*set = s->steer[i];
+	steer_drop(s, i);
+	while (i < s->n_steer) {
+		if (s->steer[i] == *set && steer_rf_here(s, s->steer_rf[i])) {
+			steer_drop(s, i);
+		} else {
+			i++;
+		}
+	}
+	return true;
+}
+
 static void select_next_set(struct radiant_search *s)
 {
 	uint16_t set;
 	bool steered = false;
 
-	if (s->n_steer > 0u) {
-		set = s->steer[0];
-		for (uint8_t i = 1; i < s->n_steer; i++) {
-			s->steer[i - 1u] = s->steer[i];
-		}
-		s->n_steer--;
+	if (take_steer(s, &set)) {
 		steered = true;
 		s->stats.cache_steers++;
 	} else {
@@ -560,7 +611,7 @@ static int begin_common(struct radiant_search *s, uint8_t channel,
 		}
 	}
 	if (ch->steer_set != RADIANT_SEARCH_SETS_NONE) {
-		push_steer(s, ch->steer_set);
+		push_steer(s, ch->steer_set, rf_plus1);
 	}
 
 	/* And keep coming back, for ACQUIRE only: one steered dwell holds
@@ -692,6 +743,18 @@ static void retune_at_boundary(struct radiant_search *s)
 	int above = -1;
 	bool cur_wanted = false;
 	int target;
+	uint8_t i = 0u;
+
+	/* A steer for a frequency nobody declares any more will never be
+	 * taken (take_steer() skips it everywhere else), so it goes: the queue
+	 * stays bounded by what is still wanted. */
+	while (i < s->n_steer) {
+		if (s->steer_rf[i] != 0u && !rf_declared(s, s->steer_rf[i])) {
+			steer_drop(s, i);
+		} else {
+			i++;
+		}
+	}
 
 	for (uint8_t c = 0; c < (uint8_t)RADIANT_SEARCH_MAX_CHANNELS; c++) {
 		const struct radiant_search_chan *ch = &s->chans[c];

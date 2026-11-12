@@ -572,6 +572,10 @@ struct radiant_search {
 	/* Round-robin cursor, and the cache's queue-jumpers ahead of it. */
 	uint16_t next_set;
 	uint16_t steer[RADIANT_SEARCH_STEER_ENTRIES];
+	/* The frequency each steer is for, as the requesting channel's
+	 * rf_plus1; 0 = any (an undeclared channel). An entry for another
+	 * frequency waits in the queue until the sweep is there. */
+	uint8_t  steer_rf[RADIANT_SEARCH_STEER_ENTRIES];
 	uint8_t  n_steer;
 	/* The round-robin cursor wrapped since the last retune decision: a pass
 	 * has just finished. See retune_at_boundary(). */
