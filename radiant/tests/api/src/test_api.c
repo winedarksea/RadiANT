@@ -2421,7 +2421,17 @@ static void expect_mid_search_key_reaches_the_sweep(uint8_t network)
 			 "after the ANT+ key was installed mid-search",
 			 (unsigned int)network);
 
-	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &dev);
+	/* sweep_window_on() steps time, so the window may be part-way
+	 * through: air the device ahead of now, not ahead of t_open. */
+	{
+		radiant_time_t now = radiant_radio_now();
+		uint32_t at = (uint32_t)((now > w->t_open ? now - w->t_open : 0u) +
+					 1000u);
+
+		zassert_true(w->t_open + at + 1000u < w->t_close,
+			     "setup: too little of the window is left to air in");
+		air_device(w, 0u, 0x0500u, 0x0Bu, at, &dev);
+	}
 	fake_radio_advance_to(w->t_close + 1u);
 	drain();
 	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH),
