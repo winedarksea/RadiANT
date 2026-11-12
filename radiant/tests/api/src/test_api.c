@@ -690,6 +690,174 @@ ZTEST(api, test_a_master_originates_acknowledged_data_on_its_own_slot)
 }
 
 /*
+ * A MASTER KEEPS ITS GRID AFTER ACKNOWLEDGED DATA AND BURSTS.
+ *
+ * Sniffed 2026-11-12 (archive/benchmarks/2026-11-12-master-acked-power/
+ * README.md section 5): after every 0xAA a RadiANT master sent, its next
+ * frame came two periods later, 100 of 100, and the Garmin slave logged one
+ * RX_FAIL per message, whether the transfer completed or failed.
+ *
+ * The test above never saw it because it never let the next broadcast slot be
+ * posted before the 0xAA write. On hardware it always is: the host writes its
+ * broadcast on EVENT_TX and the 50 ms pump runs. The transfer then replaces
+ * that pending MASTER_TX in the scheduler, which drops a replaced request
+ * without a done(). The api binding still said "unheard MASTER_TX", so the
+ * 0xAA's own done() was counted as a missed slot and pushed the clock a
+ * second period.
+ */
+
+/* Two quiet periods, then the host's broadcast write that posts the next
+ * slot - the state a real host leaves behind. Returns the last slot. */
+static radiant_time_t master_with_next_slot_posted(void)
+{
+	radiant_time_t t_tx;
+
+	open_channel((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	(void)run_one_quiet_period();
+	t_tx = run_one_quiet_period();
+	fake_radio_advance_to(t_tx + (PERIOD_US / 2u));
+	drain();
+	host_writes_broadcast();
+	zassert_true(radiant_sched_pending(CH),
+		     "setup: the host's write did not post the next slot");
+	return t_tx;
+}
+
+/* After a transfer whose packet 0 went out at `slot`, the master's next
+ * broadcast must be one period later, with no slot counted missed. */
+static void assert_next_broadcast_on_grid(radiant_time_t slot,
+					  uint32_t missed0)
+{
+	const struct fake_radio_arm *next;
+
+	drain();
+	if (fake_radio_is_idle()) {
+		run_housekeeping();
+	}
+	next = last_tx_with_ctrl(RADIANT_CTRL_BROADCAST);
+	zassert_not_null(next);
+	zassert_true(next->t_sync_at > slot,
+		     "no broadcast slot was armed after the transfer");
+	zassert_equal(slot + PERIOD_US, next->t_sync_at,
+		      "the next broadcast is %d us after the transfer's slot, "
+		      "not one period (%u): the master skipped a slot "
+		      "(slots_missed +%u)",
+		      (int)(next->t_sync_at - slot), (unsigned)PERIOD_US,
+		      (unsigned)(radiant_api_stats_get()->slots_missed -
+				 missed0));
+	zassert_equal(missed0, radiant_api_stats_get()->slots_missed,
+		      "a transmitted transfer slot was counted missed");
+
+	fake_radio_advance_to(next->t_sync_at + RADIANT_TRANSFER_SLOT_REPLY_US +
+			      RADIANT_TRANSFER_ACK_GUARD_US + 10u);
+}
+
+static void master_acked_data_keeps_grid(bool slave_answers)
+{
+	static const uint8_t ack_payload[8] = {
+		0x33u, 0xA5u, 0x5Au, 0x01u, 0x02u, 0x03u, 0x04u, 0x05u
+	};
+	uint8_t                      frame[AIR_LEN];
+	const struct fake_radio_arm *ack;
+	radiant_time_t               t_tx;
+	radiant_time_t               slot;
+	uint32_t                     missed0;
+
+	t_tx = master_with_next_slot_posted();
+	missed0 = radiant_api_stats_get()->slots_missed;
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_acknowledge_message_tx(CH, 8u, ack_payload));
+	ack = last_tx_with_ctrl(RADIANT_CTRL_ACK_DATA_OPEN);
+	zassert_not_null(ack, "no 0xAA was armed");
+	slot = ack->t_sync_at;
+	zassert_equal(t_tx + PERIOD_US, slot,
+		      "the 0xAA did not take the slot the broadcast held");
+
+	if (slave_answers) {
+		(void)build_peer_frame(
+			frame,
+			radiant_transfer_reply_ctrl(RADIANT_CTRL_ACK_DATA_OPEN),
+			peer_payload);
+		zassert_equal(RADIANT_RADIO_OK_RC,
+			      fake_radio_air_frame(
+				      slot + RADIANT_TRANSFER_OPENER_REPLY_US,
+				      frame, AIR_LEN));
+	}
+	fake_radio_advance_to(slot + RADIANT_TRANSFER_SLOT_REPLY_US +
+			      RADIANT_TRANSFER_ACK_GUARD_US + 100u);
+	drain();
+	zassert_equal(slave_answers ? 1u : 0u,
+		      count_channel_events(CH,
+					   ANTW_EVENT_TRANSFER_TX_COMPLETED),
+		      "the transfer's outcome was not the one this case set up");
+
+	assert_next_broadcast_on_grid(slot, missed0);
+	end_of_test();
+}
+
+ZTEST(api, test_a_master_keeps_its_grid_after_acknowledged_data)
+{
+	master_acked_data_keeps_grid(true);
+}
+
+ZTEST(api, test_a_master_keeps_its_grid_after_unacknowledged_acked_data)
+{
+	master_acked_data_keeps_grid(false);
+}
+
+ZTEST(api, test_a_master_keeps_its_grid_after_a_burst)
+{
+	uint8_t blk_a[8] = { 0xA0u, 0xA1u, 0xA2u, 0xA3u, 0xA4u, 0xA5u, 0xA6u, 0xA7u };
+	uint8_t blk_b[8] = { 0xB0u, 0xB1u, 0xB2u, 0xB3u, 0xB4u, 0xB5u, 0xB6u, 0xB7u };
+	uint8_t                      frame[AIR_LEN];
+	const struct fake_radio_arm *p0;
+	const struct fake_radio_arm *p1;
+	radiant_time_t               t_tx;
+	uint32_t                     missed0;
+
+	t_tx = master_with_next_slot_posted();
+	missed0 = radiant_api_stats_get()->slots_missed;
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_burst_tx(CH, 8u, blk_a, ANTR_BURST_SEGMENT_START));
+	p0 = last_tx_with_ctrl(RADIANT_CTRL_BURST_OPEN_SEQ0);
+	zassert_not_null(p0, "burst packet 0 was not armed");
+	zassert_equal(t_tx + PERIOD_US, p0->t_sync_at,
+		      "burst packet 0 did not take the slot the broadcast held");
+
+	(void)build_peer_frame(frame,
+			       radiant_transfer_reply_ctrl(RADIANT_CTRL_BURST_OPEN_SEQ0),
+			       peer_payload);
+	zassert_equal(RADIANT_RADIO_OK_RC,
+		      fake_radio_air_frame(p0->t_sync_at + 2209u,
+					   frame, AIR_LEN));
+	fake_radio_advance_to(p0->t_sync_at + 2209u + 200u);
+	drain();
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_burst_tx(CH, 8u, blk_b, ANTR_BURST_SEGMENT_END));
+	p1 = last_tx_with_ctrl(RADIANT_CTRL_BURST_LAST_SEQ1);
+	zassert_not_null(p1, "burst packet 1 was not armed");
+
+	(void)build_peer_frame(frame,
+			       radiant_transfer_reply_ctrl(RADIANT_CTRL_BURST_LAST_SEQ1),
+			       peer_payload);
+	zassert_equal(RADIANT_RADIO_OK_RC,
+		      fake_radio_air_frame(p1->t_sync_at + RADIANT_TRANSFER_REPLY_US,
+					   frame, AIR_LEN));
+	fake_radio_advance_to(p1->t_sync_at + RADIANT_TRANSFER_REPLY_US +
+			      RADIANT_TRANSFER_ACK_GUARD_US + 100u);
+	drain();
+	zassert_equal(1u, count_channel_events(CH,
+					       ANTW_EVENT_TRANSFER_TX_COMPLETED),
+		      "the burst did not complete");
+
+	assert_next_broadcast_on_grid(p0->t_sync_at, missed0);
+	end_of_test();
+}
+
+/*
  * A POWER CHANGE AFTER OPEN REACHES EVERY PACKET, NOT ONLY BROADCASTS.
  *
  * The transfer engine copied the channel's power once, at open, and 0x60 on

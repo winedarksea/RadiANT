@@ -23,9 +23,6 @@ Discovery short match (ADR 0022), left open 2026-11-11:
 - Burst on an open slave channel is untested; MPSL doesn't support multi-packet burst.
 - Stale docs: `docs/testing.md:296` has an ERG label on a 0x33 test; `docs/device-profiles.md:1459` says `ant_pages` has no FE-C; `docs/decisions/0001...:19-25` records a Tier 3 pass with no FE-C trace in the repo; `docs/zwift-fec-validation.md` is still "Hardware acceptance: FAIL" at 98.33 %.
 
-## A master skips its slot after each acknowledged message (found 2026-11-12, open):
-After every `0xAA` a RadiANT master sends, its next frame on air comes two periods later, not one: 100 of 100 in one run, and the Garmin slave logs one `RX_FAIL` per message. Every other gap is one period. Seen on the Pro Micro (non-MPSL), whether the transfer completed or failed. The api suite's fake radio does not reproduce it: after a completed `AA` it arms the next broadcast one period later. So it needs on-air instrumentation: log the next slot's post time and its `rc` after the transfer's terminal event. Check bursts too. Evidence and repro: archive/benchmarks/2026-11-12-master-acked-power/README.md, section 5 (`--master-acked 100 --burst-tx-power 4 --burst-slave-tx-power 3`, sniffer on the L15).
-
 ## RadiANT vs Garmin as receivers at equal input (opened 2026-11-12):
 The master's acknowledgement misses (closed 2026-11-12) were the link budget: 10-12 % missed with the Garmin at -20 dBm, 0 % at 0 dBm, in alternating legs. Still not known: whether a RadiANT receiver needs more signal than the Garmin's. Compare the two with `tools/ant_sens.py` at equal input. Related: the weak-signal residual after SLIP_GUARD (ADR 0019). Bench note: the Garmin's `0x60` level 4 is its weakest level, not +4 dBm; use level 3 for 0 dBm. (We don't need an exact match, that's not our goal, ours should be as sensitive or better)
 

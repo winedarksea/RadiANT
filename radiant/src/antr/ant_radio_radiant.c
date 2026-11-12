@@ -657,6 +657,35 @@ static void api_bind_accepted(uint8_t ch, enum api_slot_kind kind)
 	radiant_channel_bind_op(ch, api_ch[ch].op);
 }
 
+/*
+ * A host-originated transfer (acknowledged data, a burst's START block) has
+ * just taken over this channel's slot. Whatever the binding said - usually
+ * the next MASTER_TX the pump or the host's broadcast write already posted -
+ * no longer describes what the scheduler holds: radiant_sched_request_tx()
+ * replaces a pending request silently (drop_slot(), no done() for an
+ * unstarted one), and the transfer's own operation then ends in a done() that
+ * the old binding would claim.
+ *
+ * Measured 2026-11-12: when the slave acknowledged the 0xAA, the engine
+ * finished inside the RX callback, so by the time the operation's done()
+ * arrived the engine was idle and the stale "unheard MASTER_TX" branch of
+ * api_sched_done() counted the slot missed and advanced the clock a second
+ * period - the master's next broadcast came two periods after the 0xAA, every
+ * time (archive/benchmarks/2026-11-12-master-acked-power/README.md, section
+ * 5). A secured slave's 0xAA takes its TRACK_RX slot the same way, and would
+ * have counted a false miss and raised RX_FAIL.
+ *
+ * Only the kind is cleared. `op` stays, so a close that arrives during the
+ * transfer still completes on the engine's terminal through
+ * radiant_channel_on_terminal(op). Called under the event crit section, from
+ * the submit that STARTED the transfer only - later burst blocks run on the
+ * engine's own requests, which never carry a binding.
+ */
+static void api_xfer_superseded(uint8_t ch)
+{
+	api_ch[ch].slot_kind = (uint8_t)API_SLOT_NONE;
+}
+
 static void api_bind_rejected(uint8_t ch)
 {
 	api_ch[ch].op = 0u;
@@ -2842,6 +2871,14 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 		   !api_ch[ch].slot_heard) {
 		/*
 		 * A master's slot that didn't go out - the clock must move.
+		 *
+		 * Trusts that the binding still describes the request this
+		 * done() ends. A host-originated transfer breaks that (its
+		 * submit replaces the posted slot without a done()), which is
+		 * why api_xfer_superseded() clears the kind when one starts:
+		 * without it a completed 0xAA landed here and the master
+		 * skipped a slot after every acknowledged message.
+		 *
 		 * t_next only advances on a completed transmit, so leaving it
 		 * in the past would make the pump re-post the same dead
 		 * instant forever, refused synchronously each time: a hot
@@ -4406,6 +4443,9 @@ antr_err_t antr_acknowledge_message_tx(uint8_t channel, uint8_t size,
 	}
 	rc = radiant_transfer_ack_data(&api_xfer[channel], data, size,
 				   api_xfer_t_sync_for(channel));
+	if (rc == RADIANT_TRANSFER_OK) {
+		api_xfer_superseded(channel);
+	}
 	radiant_event_crit_exit(key);
 	err = api_xfer_err(rc);
 	if (rc == RADIANT_TRANSFER_OK) {
@@ -4421,6 +4461,7 @@ antr_err_t antr_burst_tx(uint8_t channel, uint16_t size, uint8_t *data,
 {
 	antr_err_t err;
 	int        rc;
+	bool       was_idle;
 
 	if (!api_ch_valid(channel) || data == NULL) {
 		return (antr_err_t)ANTW_INVALID_MESSAGE;
@@ -4470,11 +4511,15 @@ antr_err_t antr_burst_tx(uint8_t channel, uint16_t size, uint8_t *data,
 		return (antr_err_t)ANTW_TRANSFER_IN_PROGRESS;
 	}
 	api_xfer_refresh_id(channel);
+	was_idle = radiant_transfer_is_idle(&api_xfer[channel]);
 	rc = radiant_transfer_burst_block(&api_xfer[channel], data, (uint8_t)size,
 				      segment,
 				      (segment & ANTR_BURST_SEGMENT_START) != 0u
 					      ? api_xfer_t_sync_for(channel)
 					      : RADIANT_TIME_NEVER);
+	if (rc == RADIANT_TRANSFER_OK && was_idle) {
+		api_xfer_superseded(channel);
+	}
 	radiant_event_crit_exit(key);
 	err = api_xfer_err(rc);
 	if (rc == RADIANT_TRANSFER_OK) {

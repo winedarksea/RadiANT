@@ -95,7 +95,8 @@ one. D': 100 of 100 `AA` followed by a gap of 2 periods, every `0A -> 0A` and
 `0A -> AA` gap is 1 period. The Garmin's ~100 `rx_fail` per leg of 100
 messages is that missing slot. The api suite's fake radio does not reproduce
 it (a probe armed the next broadcast at +249 695 µs after a completed `AA`).
-Open in TODO.md.
+Fixed the same day; see `../2026-11-12-master-slot-skip-fix/README.md`. The
+probe missed it because it never let the next slot be posted before the `AA`.
 
 ## Rig
 
