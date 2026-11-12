@@ -2,10 +2,10 @@
   "tool": "ant_conformance.py",
   "format": "antser-v1",
   "antser_path": "archive\\captures\\serial\\conformance-nrf-radiant.antser",
-  "sha256": "d123adff589c6d8a96908ef683b5c5d9b0a2cd7a8c7ac97f3aa6ff28eeff8ed3",
-  "cases": 284,
-  "records": 1273,
-  "replies": 613,
+  "sha256": "077192e9dc4a3cc2b50454a99996236b4be8d4f3e4d2078b8b1f232cf495eb13",
+  "cases": 286,
+  "records": 1281,
+  "replies": 617,
   "messages_exercised": 48,
   "silent_cases": [],
   "unexpected_replies": [],
@@ -1344,7 +1344,7 @@
     {
       "name": "4d-request-capabilities-0/valid",
       "records": 4,
-      "sha256": "03d7b377080f20301ef897a53e546c88590fcd6d1f188f62f6e8230b69d82312"
+      "sha256": "c7dbf5363ac412f93c1ffe0915601f2c9633bceca7b7a29361b1a0fb9ca536c7"
     },
     {
       "name": "4d-request-version-0/valid",
@@ -1435,6 +1435,16 @@
       "name": "4d-request-encrypt-enable-3/valid",
       "records": 4,
       "sha256": "35266e48bed7ba62ac14b140ed9e87643c4637ade05e22af431c1fa7dcfcf748"
+    },
+    {
+      "name": "4d-request-get-serial-num-0/valid",
+      "records": 4,
+      "sha256": "53b8dac6b710872dc1ca685e50fcba2645d5b7b31165c6661bc561e142dbe9b0"
+    },
+    {
+      "name": "4d-request-serial-num-ext-0/valid",
+      "records": 4,
+      "sha256": "75d789b7a734537bef567b2b1c6ecb1e5eac3c5d600b8127c49a050b56a72b64"
     },
     {
       "name": "4d-request-invalid-0/valid",

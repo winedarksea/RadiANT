@@ -318,7 +318,7 @@ constant.
 | `0x5E` | `ANTW_MESG_EXT_ACKNOWLEDGED_DATA_ID` | both | 13 | no | - | Legacy extended acknowledged data. See MESG_EXT_BROADCAST_DATA_ID. | rev5.1 sec 9.5, host-api |
 | `0x5F` | `ANTW_MESG_EXT_BURST_DATA_ID` | both | 13 | no | - | Legacy extended burst data. See MESG_EXT_BROADCAST_DATA_ID. | rev5.1 sec 9.5, host-api |
 | `0x60` | `ANTW_MESG_CHANNEL_RADIO_TX_POWER_ID` | h2d | 2 | yes | `MESG_RESPONSE_EVENT_ID` | [channel, level] or [channel, level, custom]. Per-channel transmit power. Only takes on an assigned channel, so the bridge holds the requested level and reapplies it after each successful assign. The third byte is an extension of this firmware's and is read only when the level carries RADIO_TX_POWER_LVL_CUSTOM: that level names a raw radio register value and there is nowhere else on the wire to put one, so without it the custom level silently means register 0. No retail stick sends three bytes and none needs to - a two-byte message means exactly what it always did. | bridge, readme |
-| `0x61` | `ANTW_MESG_GET_SERIAL_NUM_ID` | h2d |  | no | - | Read the device serial number. Not bridged. | rev5.1 sec 9.5 + verify:sdk-ant-shim |
+| `0x61` | `ANTW_MESG_GET_SERIAL_NUM_ID` | both |  | yes | - | The device serial number. Asked for with MESG_REQUEST and answered with this id carrying a 4-byte little-endian serial. Zwift asks for it right after its SYSTEM_RESET. A bare 0x61 frame sent as a command does nothing and is answered INVALID_MESSAGE, as the conformance transcripts pin. The serial comes from antr_serial_number_get(). A backend that has none (sdk-ant) refuses the request with INVALID_MESSAGE and does not set CAPABILITIES_SERIAL_NUMBER_ENABLED. REQUEST REPLY, a different shape from the command above: 4 bytes (ANTW_MESG_SERIAL_NUM_SIZE), selected by nothing - there is only one shape. One shape. The Garmin stick's reply in that capture is a40461069f52000a, i.e. LEN 4 and serial 0x00529F06 sent low byte first. | rev5.1 sec 9.5, observed captures/zwift-20261111-193805.pcap + verify:sdk-ant-shim |
 | `0x63` | `ANTW_MESG_SET_LP_SEARCH_TIMEOUT_ID` | h2d | 2 | yes | `MESG_RESPONSE_EVENT_ID` | [channel, timeout]. Low-priority search timeout, in 2.5 s increments. | bridge |
 | `0x65` | `ANTW_MESG_SERIAL_NUM_SET_CHANNEL_ID_ID` | h2d | 3 | no | - | Set the channel's device number from the device's own serial number. Implied by the ANT_DLL export ANT_SetSerialNumChannelId, which the archive's export table left unmapped. Not bridged. Both neighbours in the id sequence are confirmed by that same export table (0x63 ANT_SetLowPriorityChannelSearchTimeout, 0x66 ANT_RxExtMesgsEnable), which is the corroboration this value rests on. | rev5.1 sec 9.5 + verify:sdk-ant-shim |
 | `0x66` | `ANTW_MESG_RX_EXT_MESGS_ENABLE_ID` | h2d | 2 | yes | `MESG_RESPONSE_EVENT_ID` | [filler, enable]. The older, narrower way of asking for the channel id on every received message; the bridge maps it onto lib config bit MESG_OUT_INC_DEVICE_ID. Hosts still send it instead of 0x6E, and without it every broadcast arrives anonymous. | bridge |
@@ -345,6 +345,7 @@ constant.
 | `0x8C` | `ANTW_MESG_PENDING_TRANSMIT_CLEAR_ID` | both | 2 | yes | `MESG_RESPONSE_EVENT_ID` | [channel] to clear, [channel, pending] on request. A Nordic extension: not in Rev 5.1, and no witness inside this repository - the id was recovered by the Wave 2 shim and is BUILD_ASSERTed in src/ant_radio_sdk_ant.c. Note that the *request* form of this id replies with MESG_PENDING_TRANSMIT_GET_SIZE bytes, which is a separate constant from MESG_PENDING_TRANSMIT_CLEAR's own 1-byte command payload. | sdk-ant-shim + verify:sdk-ant-shim |
 | `0xAE` | `ANTW_MESG_SERIAL_ERROR_ID` | d2h | 1 | no | - | Serial-layer error: bad checksum, bad length, or a frame that arrived too slowly. This firmware drops malformed frames silently instead - recorded so a host-side parser can name the byte. | rev5.1 sec 7.4 + verify:sdk-ant-shim |
 | **unresolved** | `ANTW_MESG_RSSI_SEARCH_THRESHOLD_ID` | h2d | 2 | no | - | Proximity search threshold expressed in RSSI rather than in the proximity bins MESG_PROX_SEARCH_CONFIG (0x71) uses. Implied by the ANT_DLL export ANT_RSSI_SetSearchThreshold. Believed to sit in the 0xC0 block of AP2-era extension messages, but no value in that block is corroborated by anything in this repository - the whole host-callable API in archive/host-api/ant_dll_exports.json tops out at 0x7B - so no number is recorded here. The Wave 2 shim looked and came back empty as well: sdk-ant v2.1.0 defines no such id anywhere in its headers or sources, so this stays unresolved rather than merely unverified. | host-api + verify:sdk-ant-shim |
+| `0xC6` | `ANTW_MESG_SERIAL_NUM_EXT_ID` | d2h | 5 | yes | - | Requestable with MESG_REQUEST. A real Garmin stick answers it with the same 4-byte little-endian serial as MESG_GET_SERIAL_NUM followed by one 0x00 byte, and Zwift asks for it right after asking for 0x61. The name is this project's own and describes only the observed shape. It is deliberately not a vendor header name, because no header was consulted (ADR 0002), and the meaning of the fifth byte is unknown, so this firmware always sends 0x00 there. It answers only when antr_serial_number_get() does, and otherwise refuses with INVALID_MESSAGE, exactly like 0x61. It sits in the AP2-era 0xC0-0xC7 block described under radiant_messages, and is the only id in that block this file pins, because it is the only one seen on the wire. | observed captures/zwift-20261111-193805.pcap (request a4024d00c62d, reply a405c6069f520000ac) |
 | **unresolved** | `ANTW_MESG_SLEEP_ID` | h2d | 1 | no | - | Put the device into its low-power sleep state. Implied by the ANT_DLL export ANT_SleepMessage, which Zwift resolves. Same 0xC0 block and the same lack of corroboration as MESG_RSSI_SEARCH_THRESHOLD_ID; no number is recorded. The Wave 2 shim found the name referenced in sdk-ant but never defined - the only occurrence is inside a commented-out dispatch arm - so there is no value to recover there either. | host-api + verify:sdk-ant-shim |
 
 ## Request and response share an id
@@ -359,6 +360,7 @@ The `selector` column is the part worth reading twice, because it is the differe
 
 | ID | Name | Command | Selector | Reply | Length | Size constant |
 |---|---|---|---|---|---|---|
+| `0x61` | `ANTW_MESG_GET_SERIAL_NUM_ID` |  | `none` | - | 4 | `ANTW_MESG_SERIAL_NUM_SIZE` |
 | `0x78` | `ANTW_MESG_CONFIG_ADV_BURST_ID` | 9..12 | `request_index` | `0x00` | 4 | `ANTW_MESG_CONFIG_ADV_BURST_REQ_CAPABILITIES_SIZE` |
 |  |  |  |  | `0x01` | 10 | `ANTW_MESG_CONFIG_ADV_BURST_REQ_CONFIG_SIZE` |
 | `0x79` | `ANTW_MESG_EVENT_FILTER_CONFIG_ID` | 2..3 | `none` | - | 3 | `ANTW_MESG_EVENT_FILTER_CONFIG_REQ_SIZE` |
@@ -375,6 +377,8 @@ Every length above is *named*, not written: it resolves to an entry in **Reply s
 | `ANTW_MESG_RESPONSE_EVENT_SIZE` | 3 | [channel, message id, code]. | bridge |
 | `ANTW_MESG_STARTUP_MESG_SIZE` | 1 | [reason]. | bridge |
 | `ANTW_MESG_CAPABILITIES_SIZE` | 9 | Nine bytes, confirmed by the observed reply 080800b23200fd8d0f. | observed |
+| `ANTW_MESG_SERIAL_NUM_SIZE` | 4 | [serial, 4 bytes little-endian], the reply to a request for 0x61. Confirmed by a real Garmin stick's reply a40461069f52000a in captures/zwift-20261111-193805.pcap. | observed |
+| `ANTW_MESG_SERIAL_NUM_EXT_SIZE` | 5 | [serial, 4 bytes little-endian, 0x00], the reply to a request for 0xC6. Confirmed by the same stick's a405c6069f520000ac. | observed |
 | `ANTW_MESG_VERSION_SIZE` | 20 | Null-padded version string. src/ant_radio_stub.c calls it a 20-byte payload; nothing in this repository shows the reply on the wire. | stub + verify:sdk-ant-shim |
 | `ANTW_MESG_CHANNEL_STATUS_SIZE` | 2 | [channel, status]. | inferred + verify:sdk-ant-shim |
 | `ANTW_MESG_CHANNEL_ID_SIZE` | 5 | [channel, number lo, number hi, device type, transmission type]. | bridge |
@@ -724,11 +728,11 @@ The first allocation reasoned that nothing at or above `0xC0` appears in the bri
 
 Every witness available was checked:
 
-- `src/ant_serial_bridge.c` `dispatch()` and `handle_request()` — highest id `0x8C`.
-- Every `MESG_*` definition in `tools/ant_wire.py` — highest `0xAE`.
+- `src/ant_serial_bridge.c` `dispatch()` and `handle_request()` — highest id `0xC6`.
+- Every `MESG_*` definition in `tools/ant_wire.py` — highest `0xC6`.
 - `archive/host-api/ant_dll_exports.json`, taken from the real PE export directory of `ANT_DLL.dll` — 36 distinct message ids, highest `0x7B`. The entire host-callable ANT API tops out there.
 - The capabilities reply — carries no id space at all, so nothing in it can collide.
-- Rev 5.1's message table — highest ids known are the encryption block `0x7D`–`0x7F`, active search sharing `0x81`, NVM crypto key ops around `0x83`, the serial-layer `0xAE`–`0xAF` and port-IO `0xB4`–`0xB5` messages, and an AP2-era extension block around `0xC0`–`0xC7` (RSSI search threshold, sleep, Garmin ESN, USB info).
+- Rev 5.1's message table — highest ids known are the encryption block `0x7D`–`0x7F`, active search sharing `0x81`, NVM crypto key ops around `0x83`, the serial-layer `0xAE`–`0xAF` and port-IO `0xB4`–`0xB5` messages, and an AP2-era extension block around `0xC0`–`0xC7` (RSSI search threshold, sleep, Garmin ESN, USB info). `0xC6` in that block is now pinned by observation (a real stick answers a request for it), which leaves the range claim intact.
 - **sdk-ant itself**, read by the one agent permitted to open it — the extended-id block `MESG_EXT_ID_0` … `MESG_EXT_ID_4` at `0xE0`–`0xE4`, and `MESG_DEBUG_ID` at `0xF0`. Nothing else at or above `0xC8`, and nothing at all in `0xF1`–`0xFA`. This is the witness the first allocation could not consult, and it is the one that moved these ids.
 
 **`0xF1`–`0xF5` is therefore the allocation**, one clear of sdk-ant's `0xF0`, `0x11` clear of the top of the extended-id block and `0x2A` clear of the top of the AP2-era block. The honest limit is on the Rev 5.1 bullet: it is recall of the public message table rather than a citation, which is exactly why the `0xC0` block is stated as a *range* and why `MESG_RSSI_SEARCH_THRESHOLD_ID` and `MESG_SLEEP_ID` carry no value in this file. `0xF1`–`0xF5` is also not confusable with SYNC (`0xA4`/`0xA5`) by a resynchronising parser — which an id of `0xA4` genuinely would be.
@@ -759,7 +763,7 @@ These are used at a visible site in this repository but their numeric value is n
 
 ## Provenance summary
 
-227 constants in total. 74 carry a `verify: sdk-ant-shim` flag, meaning no file in this repository witnesses the value and the Wave 2 shim's `BUILD_ASSERT` block is what confirms it. 2 of those are unresolved outright.
+230 constants in total. 74 carry a `verify: sdk-ant-shim` flag, meaning no file in this repository witnesses the value and the Wave 2 shim's `BUILD_ASSERT` block is what confirms it. 2 of those are unresolved outright.
 
 | Source | Constants |
 |---|---|
@@ -781,15 +785,17 @@ These are used at a visible site in this repository but their numeric value is n
 | bridge, tools (ant_wire.MESG_EVENT_ID) | 1 |
 | host-api | 2 |
 | inferred | 7 |
-| observed | 1 |
+| observed | 3 |
+| observed captures/zwift-20261111-193805.pcap (request a4024d00c62d, reply a405c6069f520000ac) | 1 |
 | readme | 4 |
 | readme, tools | 1 |
 | rev5.1 sec 5.2.1 | 7 |
 | rev5.1 sec 7.1 | 1 |
 | rev5.1 sec 7.4 | 1 |
 | rev5.1 sec 9.3 | 1 |
-| rev5.1 sec 9.5 | 4 |
+| rev5.1 sec 9.5 | 3 |
 | rev5.1 sec 9.5, host-api | 5 |
+| rev5.1 sec 9.5, observed captures/zwift-20261111-193805.pcap | 1 |
 | rev5.1 sec 9.5.2.9 | 1 |
 | rev5.1 sec 9.5.6 | 14 |
 | rev5.1 sec 9.5.7.1 | 4 |

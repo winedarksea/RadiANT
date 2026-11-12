@@ -98,12 +98,9 @@ antr_err_t antr_capabilities_get(uint8_t *capabilities)
 	capabilities[0] = STUB_MAX_CHANNELS;  /* max ANT channels */
 	capabilities[1] = STUB_MAX_NETWORKS;  /* max networks */
 	capabilities[2] = 0x00;               /* standard options */
-	/* No ANTW_CAPABILITIES_SERIAL_NUMBER_ENABLED: MESG_GET_SERIAL_NUM
-	 * (0x61) is unbridged in every backend and answers INVALID_MESSAGE, so
-	 * claiming a readable serial number is a false advertisement. Dropped
-	 * from ant_radio_radiant.c for the same reason - see the long comment
-	 * there; a real host (Zwift) does ask for it. */
+	/* antr_serial_number_get() below always answers, so the bit is true. */
 	capabilities[3] = ANTW_CAPABILITIES_NETWORK_ENABLED |
+			  ANTW_CAPABILITIES_SERIAL_NUMBER_ENABLED |
 			  ANTW_CAPABILITIES_PER_CHANNEL_TX_POWER_ENABLED |
 			  ANTW_CAPABILITIES_LOW_PRIORITY_SEARCH_ENABLED;
 	capabilities[4] = ANTW_CAPABILITIES_EXT_MESSAGE_ENABLED |
@@ -130,6 +127,18 @@ antr_err_t antr_version_get(uint8_t *version)
 {
 	memset(version, 0, ANTW_MESG_VERSION_SIZE);
 	memcpy(version, stub_version, sizeof(stub_version));
+	return ANTW_RESPONSE_NO_ERROR;
+}
+
+/* Pinned rather than read from hwinfo, so that a stub image answers the same
+ * bytes on every board and a stub transcript does not depend on which board
+ * recorded it. The value spells "STUB" when read as big-endian ASCII.
+ */
+#define STUB_SERIAL_NUMBER 0x53545542u
+
+antr_err_t antr_serial_number_get(uint32_t *serial)
+{
+	*serial = STUB_SERIAL_NUMBER;
 	return ANTW_RESPONSE_NO_ERROR;
 }
 

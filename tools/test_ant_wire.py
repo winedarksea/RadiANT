@@ -94,6 +94,19 @@ GOLDEN = [
        "observed: real reply from this firmware; "
        "docs/ant-serial-protocol.md and ant_wire.OBSERVED_CAPABILITIES"),
 
+    # -- serial number replies, from a real Garmin stick -------------------
+    # captures/zwift-20261111-193805.pcap, typed from decode_pcap.py --raw
+    # (t=0.002 s, right after Zwift's SYSTEM_RESET). Software nobody here
+    # wrote, so these pin the LEN bytes the bridge now composes. Worked:
+    #   A4^04=A0  A0^61=C1  C1^06=C7  C7^9F=58  58^52=0A  0A^00=0A
+    _v("serial number reply (0x61), Garmin", "<", "a40461069f52000a",
+       0x61, [0x06, 0x9F, 0x52, 0x00],
+       "observed: captures/zwift-20261111-193805.pcap, Garmin USB stick"),
+    #   A4^05=A1  A1^C6=67  67^06=61  61^9F=FE  FE^52=AC  AC^00=AC  AC^00=AC
+    _v("serial number reply (0xC6), Garmin", "<", "a405c6069f520000ac",
+       0xC6, [0x06, 0x9F, 0x52, 0x00, 0x00],
+       "observed: captures/zwift-20261111-193805.pcap, Garmin USB stick"),
+
     # -- system reset -------------------------------------------------------
     # archive/captures/serial/README.md's worked `.antser` example:
     #   A4 ^ 01 = A5   A5 ^ 4A = EF
@@ -345,6 +358,33 @@ class TestObservedCapabilities(unittest.TestCase):
             w.CAPABILITIES_OFFSET_ADVANCED_OPTIONS_2]
         self.assertEqual(byte4 & w.CAPABILITIES_SCAN_MODE_ENABLED, 0)
         self.assertEqual(byte4 & w.CAPABILITIES_LED_ENABLED, 0)
+
+
+class TestObservedSerialNumber(unittest.TestCase):
+    """The 0x61/0xC6 reply sizes the bridge sends, against a real stick."""
+
+    def test_the_declared_sizes_match_the_garmin_frames(self):
+        sn = bytes.fromhex("a40461069f52000a")
+        ext = bytes.fromhex("a405c6069f520000ac")
+        self.assertEqual(sn[1], w.MESG_SERIAL_NUM_SIZE)
+        self.assertEqual(ext[1], w.MESG_SERIAL_NUM_EXT_SIZE)
+        # 0xC6 carries the same serial as 0x61 plus one trailing zero.
+        self.assertEqual(ext[3:7], sn[3:7])
+        self.assertEqual(ext[7], 0x00)
+
+    def test_the_request_reply_shape_is_recorded_for_0x61(self):
+        info = w.MESSAGES[w.MESG_GET_SERIAL_NUM_ID]
+        self.assertTrue(info["bridged"])
+        shapes = info["reply_len"]["shapes"]
+        self.assertEqual([s["len"] for s in shapes], [w.MESG_SERIAL_NUM_SIZE])
+        # The command stays zero-length, so the conformance cases built
+        # from payload_len are unchanged.
+        self.assertEqual(info["payload_len"], 0)
+
+    def test_0xc6_is_a_reply_only_message(self):
+        info = w.MESSAGES[w.MESG_SERIAL_NUM_EXT_ID]
+        self.assertEqual(info["direction"], "d2h")
+        self.assertEqual(info["payload_len"], w.MESG_SERIAL_NUM_EXT_SIZE)
 
 
 class TestRoundTrip(unittest.TestCase):

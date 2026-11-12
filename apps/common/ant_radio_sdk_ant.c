@@ -369,6 +369,16 @@ antr_err_t antr_version_get(uint8_t *version)
 	return wire_err(ant_version_get(version));
 }
 
+antr_err_t antr_serial_number_get(uint32_t *serial)
+{
+	/* No sdk-ant counterpart, and the reference stack does not advertise
+	 * CAPABILITIES_SERIAL_NUMBER_ENABLED, so refusing keeps this backend's
+	 * conformance transcript byte-identical to the one recorded from it.
+	 */
+	ARG_UNUSED(serial);
+	return ANTW_INVALID_MESSAGE;
+}
+
 antr_err_t antr_channel_status_get(uint8_t channel, uint8_t *status)
 {
 	return wire_err(ant_channel_status_get(channel, status));

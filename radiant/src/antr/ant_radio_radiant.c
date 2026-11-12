@@ -56,6 +56,10 @@
 
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/sys/byteorder.h>
+#if defined(CONFIG_HWINFO)
+#include <zephyr/drivers/hwinfo.h>
+#endif
 
 /* First, and see the note above. */
 #include <radiant/ant_wire.h>
@@ -4346,33 +4350,28 @@ antr_err_t antr_capabilities_get(uint8_t *capabilities)
 	capabilities[ANTW_CAPABILITIES_OFFSET_STANDARD_OPTIONS] = 0x00u;
 
 	/*
-	 * ANTW_CAPABILITIES_SERIAL_NUMBER_ENABLED is DELIBERATELY NOT SET, and
-	 * removing it is a bug fix rather than a reduction.
+	 * ANTW_CAPABILITIES_SERIAL_NUMBER_ENABLED ("the device has a readable
+	 * serial number") is set only when antr_serial_number_get() really
+	 * answers, so the bit and the request can never disagree. Advertising a
+	 * capability whose request answers INVALID_MESSAGE is the trap
+	 * docs/gotchas.md names, and that is why the bit was dropped until 0x61
+	 * was implemented.
 	 *
-	 * The bit means "the device has a readable serial number", and
-	 * MESG_GET_SERIAL_NUM (0x61) is not bridged - it is answered
-	 * ANTW_INVALID_MESSAGE, pinned that way for every backend in
-	 * the archive/captures/serial .antser files (case 61-get-serial-num/valid, reply
-	 * a40340006128ae). Advertising a capability that answers INVALID_MESSAGE
-	 * is the exact trap docs/gotchas.md names, and it is not hypothetical
-	 * here: a live capture of real Zwift shows it requesting 0x61 during
-	 * startup and being refused (captures/zwift-20260818-144612.pcap,
-	 * `a4024d00618a` at t=0, answered `a40340004d2882`).
-	 *
-	 * The sdk_ant backend - the reference this one is A/B'd against - does
-	 * NOT set this bit either: its recorded capabilities advanced-options
-	 * byte is 0xb2 against radiant's 0xba, and 0x08 is the whole difference.
-	 * So this was radiant claiming something the stack it emulates never
-	 * claimed.
-	 *
-	 * Setting it back requires implementing 0x61 first, and that needs the
-	 * reply's LEN byte, which is recorded NOWHERE in this tree (K1: the
-	 * yaml's payload_len 0 describes the request). Guessing a length for a
-	 * message the dongle originates is the thing ant_serial_bridge.c's
-	 * advanced-burst arm already refuses to do.
+	 * The reply's LEN byte (4) is now pinned by observation and is no
+	 * longer a guess. A real Garmin stick answers `a40461069f52000a` in
+	 * captures/zwift-20261111-193805.pcap, and Zwift asks for 0x61 and 0xC6
+	 * right after its SYSTEM_RESET. The sdk_ant reference does not set the
+	 * bit (its advanced-options byte is 0xb2), so this byte now differs
+	 * from it by exactly 0x08, deliberately.
 	 */
+	uint32_t serial;
+	uint8_t serial_bit =
+		(antr_serial_number_get(&serial) == ANTW_RESPONSE_NO_ERROR) ?
+			(uint8_t)ANTW_CAPABILITIES_SERIAL_NUMBER_ENABLED : 0u;
+
 	capabilities[ANTW_CAPABILITIES_OFFSET_ADVANCED_OPTIONS] =
-		(uint8_t)(ANTW_CAPABILITIES_NETWORK_ENABLED |
+		(uint8_t)(serial_bit |
+			  ANTW_CAPABILITIES_NETWORK_ENABLED |
 			  ANTW_CAPABILITIES_PER_CHANNEL_TX_POWER_ENABLED |
 			  ANTW_CAPABILITIES_LOW_PRIORITY_SEARCH_ENABLED |
 			  /* The device ID list really is honoured - consulted
@@ -4430,6 +4429,31 @@ antr_err_t antr_version_get(uint8_t *version)
 	memset(version, 0, ANTW_MESG_VERSION_SIZE);
 	memcpy(version, api_version, sizeof(api_version));
 	return (antr_err_t)ANTW_RESPONSE_NO_ERROR;
+}
+
+antr_err_t antr_serial_number_get(uint32_t *serial)
+{
+	if (serial == NULL) {
+		return (antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED;
+	}
+#if defined(CONFIG_HWINFO)
+	/*
+	 * The last four bytes of the hwinfo device ID, read as big-endian. On
+	 * nRF the ID is FICR DEVICEID[1]:DEVICEID[0], byte-swapped so that it
+	 * prints as the USB iSerial string, so this is DEVICEID[0], the last
+	 * eight hex digits of iSerial, and a host can cross-check the two.
+	 * Zephyr's hwinfo API is only linked when CONFIG_HWINFO is set, hence
+	 * the #if (same as apps/common/ant_reset_cause.c).
+	 */
+	uint8_t id[8];
+	ssize_t n = hwinfo_get_device_id(id, sizeof(id));
+
+	if (n >= 4) {
+		*serial = sys_get_be32(&id[n - 4]);
+		return (antr_err_t)ANTW_RESPONSE_NO_ERROR;
+	}
+#endif
+	return (antr_err_t)ANTW_INVALID_MESSAGE;
 }
 
 antr_err_t antr_channel_status_get(uint8_t channel, uint8_t *status)

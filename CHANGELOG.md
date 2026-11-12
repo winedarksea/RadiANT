@@ -13,6 +13,15 @@ reads.
 
 ### Added
 
+- **The dongle reports a serial number.** `MESG_REQUEST` for `0x61` answers
+  with a 4-byte little-endian serial, and `0xC6` answers with the same serial
+  plus one `0x00`. Both shapes are copied from a real Garmin stick's replies
+  (`captures/zwift-20261111-193805.pcap`). Zwift asks for both right after its
+  reset, and RadiANT used to refuse them. On nRF the serial is the last eight
+  hex digits of the USB iSerial. `ANTW_CAPABILITIES_SERIAL_NUMBER_ENABLED` is
+  advertised again, but only when the backend really answers, so the
+  capabilities reply goes from `...b2...` back to `...ba...`. The sdk-ant
+  backend still refuses both. `tools/ant_probe.py` checks the replies.
 - **RadiANT is usable from other firmware.** The `antr_*` API and its runtime
   moved into the `radiant` module behind `CONFIG_RADIANT_ANTR_API`, with
   heart-rate receiver and transmitter samples in `radiant/samples/` and two

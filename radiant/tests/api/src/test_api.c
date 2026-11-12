@@ -2541,6 +2541,41 @@ ZTEST(api, test_capabilities_claim_only_what_is_implemented)
 }
 
 /*
+ * The serial-number bit and the request it advertises can never disagree.
+ * Advertising a capability whose request answers INVALID_MESSAGE is the trap
+ * docs/gotchas.md names, and Zwift does ask for 0x61. This image's hwinfo may
+ * or may not provide a device ID, so the assertion is the agreement itself
+ * plus, when there is a serial, that it is stable across calls.
+ */
+ZTEST(api, test_serial_number_bit_matches_the_request)
+{
+	uint8_t caps[ANTW_MESG_CAPABILITIES_SIZE];
+	uint32_t first = 0u;
+	uint32_t again = 0u;
+	antr_err_t err = antr_serial_number_get(&first);
+	bool advertised;
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR, antr_capabilities_get(caps));
+	advertised = (caps[ANTW_CAPABILITIES_OFFSET_ADVANCED_OPTIONS] &
+		      ANTW_CAPABILITIES_SERIAL_NUMBER_ENABLED) != 0u;
+
+	if (err == (antr_err_t)ANTW_RESPONSE_NO_ERROR) {
+		zassert_true(advertised, "serial answers but the bit is clear");
+		zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+			      antr_serial_number_get(&again));
+		zassert_equal(first, again, "serial changed: 0x%08x -> 0x%08x",
+			      first, again);
+	} else {
+		zassert_equal((antr_err_t)ANTW_INVALID_MESSAGE, err,
+			      "a refusal must be INVALID_MESSAGE, got %d", err);
+		zassert_false(advertised, "bit set but the serial is refused");
+	}
+
+	zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
+		      antr_serial_number_get(NULL));
+}
+
+/*
  * ONE SENSOR GOING AWAY MUST NOT COST THE OTHER ITS SLOTS.
  *
  * The sibling test above guards the SWEEP against starvation. Its only

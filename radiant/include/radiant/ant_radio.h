@@ -943,6 +943,25 @@ antr_err_t antr_capabilities_get(uint8_t *capabilities);
 antr_err_t antr_version_get(uint8_t *version);
 
 /**
+ * Read the device serial number, the value MESG_REQUEST for 0x61 (and 0xC6)
+ * reports.
+ *
+ * @param serial  Out: the serial as a host-order integer. The bridge sends it
+ *                little-endian.
+ *
+ * A backend that reports one must report the same value every time, and
+ * should derive it from something the host can cross-check. The radiant
+ * backend uses the last four bytes of the hwinfo device ID, which on nRF are
+ * the last eight hex digits of the USB iSerial string. A backend with no
+ * serial returns ANTW_INVALID_MESSAGE. The bridge then refuses the request in
+ * the same way, and antr_capabilities_get() must not set
+ * ANTW_CAPABILITIES_SERIAL_NUMBER_ENABLED.
+ *
+ * Returns 0 or ANTW_INVALID_MESSAGE.
+ */
+antr_err_t antr_serial_number_get(uint32_t *serial);
+
+/**
  * Read a channel's state.
  *
  * @param channel  Any channel number.

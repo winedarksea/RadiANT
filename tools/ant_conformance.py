@@ -281,9 +281,36 @@ REQUESTABLE: tuple[tuple[int, int, str], ...] = (
     (wire.MESG_ENCRYPT_ENABLE_ID, 3,
      "not a defined info type: the reply-size switch must map it to "
      "INVALID_MESSAGE rather than send a zero-length reply"),
+    # Zwift asks for both right after SYSTEM_RESET. The serial is per board,
+    # so compare_records() masks it (see SERIAL_REPLY_IDS).
+    (wire.MESG_GET_SERIAL_NUM_ID, 0,
+     "4-byte little-endian serial; the bytes differ per board and are masked "
+     "in --compare"),
+    (wire.MESG_SERIAL_NUM_EXT_ID, 0,
+     "the same serial plus one 0x00, as a real Garmin stick answers"),
     (wire.MESG_INVALID_ID, 0,
      "no such message: the default arm of handle_request()"),
 )
+
+# Replies whose payload is the board's own serial number. Two boards running
+# the same firmware answer them with different bytes, so --compare treats
+# the serial and the checksum as don't-care and compares the rest (SYNC, LEN,
+# id and any trailing bytes). The transcript itself still records the real
+# bytes, so its hash stays a record of what that board sent.
+SERIAL_REPLY_IDS = frozenset({wire.MESG_GET_SERIAL_NUM_ID,
+                              wire.MESG_SERIAL_NUM_EXT_ID})
+SERIAL_BYTES = 4
+
+
+def _comparable(direction: str, data: bytes) -> bytes:
+    """`data` with any board-specific serial number zeroed for comparison."""
+    if (direction == DONGLE_TO_HOST and len(data) >= 3 + SERIAL_BYTES + 1
+            and data[2] in SERIAL_REPLY_IDS):
+        masked = bytearray(data)
+        masked[3:3 + SERIAL_BYTES] = bytes(SERIAL_BYTES)
+        masked[-1] = 0
+        return bytes(masked)
+    return data
 
 # Messages whose numeric id this repository still doesn't know, so no case can
 # be built. Recorded rather than dropped, so the JSON summary shows the hole.
@@ -588,7 +615,8 @@ def compare_records(a: list[Record], b: list[Record]) -> list[Difference]:
         right = b[index] if index < len(b) else None
         if left is not None and right is not None:
             same = (left.direction == right.direction
-                    and left.data == right.data
+                    and _comparable(left.direction, left.data)
+                    == _comparable(right.direction, right.data)
                     and left.case == right.case)
             if same:
                 continue

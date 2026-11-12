@@ -31,6 +31,7 @@
 #include <string.h>
 #include <zephyr/kernel.h>
 #include <zephyr/sys/atomic.h>
+#include <zephyr/sys/byteorder.h>
 #include <zephyr/sys/ring_buffer.h>
 #include <zephyr/logging/log.h>
 
@@ -416,6 +417,34 @@ static void handle_request(const uint8_t *body, uint8_t len)
 		break;
 	}
 
+	case ANTW_MESG_GET_SERIAL_NUM_ID:
+	case ANTW_MESG_SERIAL_NUM_EXT_ID: {
+		/*
+		 * Both answered with the same 4-byte little-endian serial. 0xC6
+		 * appends one 0x00, the byte a real Garmin stick sends there and
+		 * whose meaning is unknown (protocol/ant_wire.yaml). Zwift asks
+		 * for both right after its SYSTEM_RESET. A backend with no serial
+		 * (sdk-ant) returns INVALID_MESSAGE, which reaches the host as it
+		 * did before either arm existed. The channel byte is ignored,
+		 * since a serial number is device-wide.
+		 */
+		uint32_t serial;
+
+		err = antr_serial_number_get(&serial);
+		if (!err) {
+			sys_put_le32(serial, payload);
+			if (req_id == ANTW_MESG_GET_SERIAL_NUM_ID) {
+				send_message(ANTW_MESG_GET_SERIAL_NUM_ID, payload,
+					     ANTW_MESG_SERIAL_NUM_SIZE);
+			} else {
+				payload[4] = 0x00u;
+				send_message(ANTW_MESG_SERIAL_NUM_EXT_ID, payload,
+					     ANTW_MESG_SERIAL_NUM_EXT_SIZE);
+			}
+		}
+		break;
+	}
+
 	case ANTW_MESG_VERSION_ID: {
 		err = antr_version_get(payload);
 		if (!err) {
@@ -469,7 +498,6 @@ static void handle_request(const uint8_t *body, uint8_t len)
 		break;
 	}
 
-#ifdef ANTW_MESG_CHANNEL_CRC_MODE_ID
 	case ANTW_MESG_CHANNEL_CRC_MODE_ID: {
 		payload[0] = ch;
 		err = antr_channel_radio_crc_mode_get(ch, &payload[1]);
@@ -479,20 +507,6 @@ static void handle_request(const uint8_t *body, uint8_t len)
 		}
 		break;
 	}
-#else
-	/*
-	 * K1: unresolved, see protocol/ant_wire.yaml.
-	 *
-	 * The message id of MESG_CHANNEL_CRC_MODE is a Nordic extension that
-	 * appears nowhere in this repository and is not in Rev 5.1, so there is
-	 * no ANTW_ constant to dispatch on and the read is left unimplemented:
-	 * a request for it falls through to the default arm and is answered
-	 * ANTW_INVALID_MESSAGE. antr_channel_radio_crc_mode_get() is unchanged
-	 * and still declared - only the wire id is missing. When
-	 * src/ant_radio_sdk_ant.c recovers the value and it lands in
-	 * protocol/ant_wire.yaml, this arm compiles back in with no edit.
-	 */
-#endif
 
 	case ANTW_MESG_SET_SEARCH_CH_PRIORITY_ID: {
 		payload[0] = ch;
@@ -504,7 +518,6 @@ static void handle_request(const uint8_t *body, uint8_t len)
 		break;
 	}
 
-#ifdef ANTW_MESG_PENDING_TRANSMIT_CLEAR_ID
 	case ANTW_MESG_PENDING_TRANSMIT_CLEAR_ID: {
 		payload[0] = ch;
 		err = antr_pending_transmit_get(ch, &payload[1]);
@@ -514,17 +527,6 @@ static void handle_request(const uint8_t *body, uint8_t len)
 		}
 		break;
 	}
-#else
-	/*
-	 * K1: unresolved, see protocol/ant_wire.yaml.
-	 *
-	 * Same situation as the CRC mode above - the reply size
-	 * (ANTW_MESG_PENDING_TRANSMIT_GET_SIZE) is known, the message id is
-	 * not, and there is nothing legitimate to dispatch on. The read is left
-	 * unimplemented rather than guessed; antr_pending_transmit_get() is
-	 * still declared and gains its caller back the moment the id resolves.
-	 */
-#endif
 
 #ifdef CONFIG_RADIANT_SEC_HOST_MESSAGES
 	case ANTW_MESG_RADIANT_SEC_STATUS_ID: {
@@ -581,32 +583,9 @@ static void handle_request(const uint8_t *body, uint8_t len)
 		 * set to", not a channel, and the two replies are different
 		 * lengths.
 		 */
-#ifdef ANTW_MESG_CONFIG_ADV_BURST_REQ_CAPABILITIES_SIZE
 		uint8_t reply_len =
 			ch ? ANTW_MESG_CONFIG_ADV_BURST_REQ_CONFIG_SIZE :
 			     ANTW_MESG_CONFIG_ADV_BURST_REQ_CAPABILITIES_SIZE;
-#else
-		/*
-		 * K1: unresolved, see protocol/ant_wire.yaml.
-		 *
-		 * The advanced-burst *capabilities* reply's LEN byte has no
-		 * recorded value, and unlike the ids above it has no
-		 * legitimate substitute either: it goes on the wire in a
-		 * direction this dongle originates, so a guessed length is a
-		 * wrong length in front of a host rather than a message we
-		 * decline. The configuration form (index 1) is unaffected and
-		 * still answers; the capabilities form is refused with
-		 * ANTW_INVALID_MESSAGE until src/ant_radio_sdk_ant.c recovers
-		 * the value.
-		 */
-		uint8_t reply_len =
-			ch ? ANTW_MESG_CONFIG_ADV_BURST_REQ_CONFIG_SIZE : 0;
-#endif
-
-		if (reply_len == 0) {
-			err = ANTW_INVALID_MESSAGE;
-			break;
-		}
 
 		err = antr_adv_burst_config_get(ch, payload);
 		if (!err) {
@@ -1131,21 +1110,12 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		}
 		break;
 
-#ifdef ANTW_MESG_CHANNEL_CRC_MODE_ID
 	case ANTW_MESG_CHANNEL_CRC_MODE_ID:
 		/* body: [filler, mode] */
 		if (len >= 2) {
 			err = antr_channel_radio_crc_mode_set(body[0], body[1]);
 		}
 		break;
-#else
-	/*
-	 * K1: unresolved, see protocol/ant_wire.yaml. See the matching note in
-	 * handle_request() - the id is a Nordic extension with no recorded
-	 * value, so the write is left unimplemented and the message is answered
-	 * ANTW_INVALID_MESSAGE by the default arm below.
-	 */
-#endif
 
 	case ANTW_MESG_ID_LIST_ADD_ID:
 		/* body: [ch, dev_lsb, dev_msb, dev_type, trans_type, index] */
@@ -1340,24 +1310,13 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 #endif /* CONFIG_RADIANT_SEC_PAIRING_X25519 */
 #endif /* CONFIG_RADIANT_SEC_HOST_MESSAGES */
 
-#ifdef ANTW_MESG_ECS_ENABLE_ID
 	case ANTW_MESG_ECS_ENABLE_ID:
 		/* body: [filler, enable] */
 		if (len >= 2) {
 			err = antr_enhanced_channel_spacing_enable(body[1]);
 		}
 		break;
-#else
-	/*
-	 * K1: unresolved, see protocol/ant_wire.yaml. Enhanced channel spacing
-	 * is a Nordic extension whose message id appears nowhere in this
-	 * repository and is not in Rev 5.1, so there is nothing to dispatch on.
-	 * antr_enhanced_channel_spacing_enable() stays in the contract and
-	 * regains its caller when src/ant_radio_sdk_ant.c recovers the id.
-	 */
-#endif
 
-#ifdef ANTW_MESG_PENDING_TRANSMIT_CLEAR_ID
 	case ANTW_MESG_PENDING_TRANSMIT_CLEAR_ID:
 		/* body: [ch] */
 		if (len >= 1) {
@@ -1366,12 +1325,6 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 			err = antr_pending_transmit_clear(body[0], &cleared);
 		}
 		break;
-#else
-	/*
-	 * K1: unresolved, see protocol/ant_wire.yaml. Same id as the read arm
-	 * in handle_request(); neither is dispatchable until it resolves.
-	 */
-#endif
 
 	case ANTW_MESG_REQUEST_ID:
 		handle_request(body, len);

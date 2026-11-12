@@ -234,8 +234,18 @@ MESG_EXT_BURST_DATA_ID = 0x5F
 # to - a two-byte message means exactly what it always did. [bridge, readme]
 MESG_CHANNEL_RADIO_TX_POWER_ID = 0x60
 
-# Read the device serial number. Not bridged. [rev5.1 sec 9.5 + verify:sdk-ant-
-# shim]
+# The device serial number. Asked for with MESG_REQUEST and answered with this
+# id carrying a 4-byte little-endian serial. Zwift asks for it right after its
+# SYSTEM_RESET. A bare 0x61 frame sent as a command does nothing and is
+# answered INVALID_MESSAGE, as the conformance transcripts pin. The serial
+# comes from antr_serial_number_get(). A backend that has none (sdk-ant)
+# refuses the request with INVALID_MESSAGE and does not set
+# CAPABILITIES_SERIAL_NUMBER_ENABLED. REQUEST REPLY, a different shape from the
+# command above: 4 bytes (MESG_SERIAL_NUM_SIZE), selected by nothing - there is
+# only one shape. One shape. The Garmin stick's reply in that capture is
+# a40461069f52000a, i.e. LEN 4 and serial 0x00529F06 sent low byte first.
+# [rev5.1 sec 9.5, observed captures/zwift-20261111-193805.pcap + verify:sdk-
+# ant-shim]
 MESG_GET_SERIAL_NUM_ID = 0x61
 
 # [channel, timeout]. Low-priority search timeout, in 2.5 s increments.
@@ -412,6 +422,20 @@ MESG_SERIAL_ERROR_ID = 0xAE
 # so this stays unresolved rather than merely unverified. [host-api +
 # verify:sdk-ant-shim]
 
+# Requestable with MESG_REQUEST. A real Garmin stick answers it with the same
+# 4-byte little-endian serial as MESG_GET_SERIAL_NUM followed by one 0x00 byte,
+# and Zwift asks for it right after asking for 0x61. The name is this project's
+# own and describes only the observed shape. It is deliberately not a vendor
+# header name, because no header was consulted (ADR 0002), and the meaning of
+# the fifth byte is unknown, so this firmware always sends 0x00 there. It
+# answers only when antr_serial_number_get() does, and otherwise refuses with
+# INVALID_MESSAGE, exactly like 0x61. It sits in the AP2-era 0xC0-0xC7 block
+# described under radiant_messages, and is the only id in that block this file
+# pins, because it is the only one seen on the wire. [observed
+# captures/zwift-20261111-193805.pcap (request a4024d00c62d, reply
+# a405c6069f520000ac)]
+MESG_SERIAL_NUM_EXT_ID = 0xC6
+
 # MESG_SLEEP_ID: UNRESOLVED. Put the device into its low-power sleep state.
 # Implied by the ANT_DLL export ANT_SleepMessage, which Zwift resolves. Same
 # 0xC0 block and the same lack of corroboration as
@@ -432,6 +456,15 @@ MESG_STARTUP_MESG_SIZE = 1
 
 # Nine bytes, confirmed by the observed reply 080800b23200fd8d0f. [observed]
 MESG_CAPABILITIES_SIZE = 9
+
+# [serial, 4 bytes little-endian], the reply to a request for 0x61. Confirmed
+# by a real Garmin stick's reply a40461069f52000a in
+# captures/zwift-20261111-193805.pcap. [observed]
+MESG_SERIAL_NUM_SIZE = 4
+
+# [serial, 4 bytes little-endian, 0x00], the reply to a request for 0xC6.
+# Confirmed by the same stick's a405c6069f520000ac. [observed]
+MESG_SERIAL_NUM_EXT_SIZE = 5
 
 # Null-padded version string. src/ant_radio_stub.c calls it a 20-byte payload;
 # nothing in this repository shows the reply on the wire. [stub + verify:sdk-
@@ -1569,10 +1602,18 @@ MESSAGES = {
     },
     0x61: {
         "name": 'MESG_GET_SERIAL_NUM_ID',
-        "direction": 'h2d',
+        "direction": 'both',
         "payload_len": 0,
-        "bridged": False,
-        "desc": 'Read the device serial number. Not bridged.',
+        "bridged": True,
+        "reply_len": {
+            "selector": 'none',
+            "desc": "One shape. The Garmin stick's reply in that capture is a40461069f52000a, i.e. LEN 4 and serial 0x00529F06 sent low byte first.",
+            "shapes": (
+                {"when": None, "len": 4, "size": 'MESG_SERIAL_NUM_SIZE',
+                 "desc": '[serial lo .. serial hi], 4 bytes, little-endian.'},
+            ),
+        },
+        "desc": 'The device serial number. Asked for with MESG_REQUEST and answered with this id carrying a 4-byte little-endian serial. Zwift asks for it right after its SYSTEM_RESET. A bare 0x61 frame sent as a command does nothing and is answered INVALID_MESSAGE, as the conformance transcripts pin. The serial comes from antr_serial_number_get(). A backend that has none (sdk-ant) refuses the request with INVALID_MESSAGE and does not set CAPABILITIES_SERIAL_NUMBER_ENABLED.',
     },
     0x63: {
         "name": 'MESG_SET_LP_SEARCH_TIMEOUT_ID',
@@ -1790,6 +1831,13 @@ MESSAGES = {
         "payload_len": 1,
         "bridged": False,
         "desc": 'Serial-layer error: bad checksum, bad length, or a frame that arrived too slowly. This firmware drops malformed frames silently instead - recorded so a host-side parser can name the byte.',
+    },
+    0xC6: {
+        "name": 'MESG_SERIAL_NUM_EXT_ID',
+        "direction": 'd2h',
+        "payload_len": 5,
+        "bridged": True,
+        "desc": "Requestable with MESG_REQUEST. A real Garmin stick answers it with the same 4-byte little-endian serial as MESG_GET_SERIAL_NUM followed by one 0x00 byte, and Zwift asks for it right after asking for 0x61. The name is this project's own and describes only the observed shape. It is deliberately not a vendor header name, because no header was consulted (ADR 0002), and the meaning of the fifth byte is unknown, so this firmware always sends 0x00 there. It answers only when antr_serial_number_get() does, and otherwise refuses with INVALID_MESSAGE, exactly like 0x61. It sits in the AP2-era 0xC0-0xC7 block described under radiant_messages, and is the only id in that block this file pins, because it is the only one seen on the wire.",
     },
 }
 

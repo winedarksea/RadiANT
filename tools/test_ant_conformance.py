@@ -281,6 +281,37 @@ class Comparison(unittest.TestCase):
         self.assertEqual(len(diffs), 1)
         self.assertEqual(diffs[0].case, a[index].case)
 
+    def test_a_different_serial_number_is_not_a_difference(self):
+        # Two boards, same firmware: only the serial (and so the checksum)
+        # differs, and --compare must not call that a regression.
+        case = "4d-request-get-serial-num-0/valid"
+        for msg_id, tail in ((wire.MESG_GET_SERIAL_NUM_ID, b""),
+                             (wire.MESG_SERIAL_NUM_EXT_ID, b"\x00")):
+            with self.subTest(msg_id=hex(msg_id)):
+                a = [ant_trace.Record(None, "<", wire.frame(
+                    msg_id, bytes.fromhex("069f5200") + tail), case)]
+                b = [ant_trace.Record(None, "<", wire.frame(
+                    msg_id, bytes.fromhex("0328d74f") + tail), case)]
+                self.assertEqual(conf.compare_records(a, b), [])
+
+    def test_the_serial_mask_still_sees_a_wrong_length_or_tail(self):
+        case = "4d-request-serial-num-ext-0/valid"
+        a = [ant_trace.Record(None, "<", wire.frame(
+            wire.MESG_SERIAL_NUM_EXT_ID, bytes.fromhex("069f520000")), case)]
+        for other in (bytes.fromhex("069f520001"), bytes.fromhex("069f5200")):
+            with self.subTest(other=other.hex()):
+                b = [ant_trace.Record(None, "<", wire.frame(
+                    wire.MESG_SERIAL_NUM_EXT_ID, other), case)]
+                self.assertEqual(len(conf.compare_records(a, b)), 1)
+
+    def test_the_serial_mask_ignores_the_host_direction(self):
+        case = "x"
+        a = [ant_trace.Record(None, ">", wire.frame(
+            wire.MESG_GET_SERIAL_NUM_ID, bytes.fromhex("069f5200")), case)]
+        b = [ant_trace.Record(None, ">", wire.frame(
+            wire.MESG_GET_SERIAL_NUM_ID, bytes.fromhex("0328d74f")), case)]
+        self.assertEqual(len(conf.compare_records(a, b)), 1)
+
     def test_a_missing_reply_shows_up_as_a_run_of_differences(self):
         a = self.records()
         b = [r for i, r in enumerate(a) if i != 3]

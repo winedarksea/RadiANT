@@ -2,7 +2,14 @@ TI coexistence builds: the reviewer thinks TI's scheduler may refuse the command
 MPSL bursts: multi-packet bursts still can't run on MPSL builds. That's a scope gap, not a regression; Zwift uses acknowledged messages.
 Weak tests: the scheduler half is fixed (`reserve_from_done_case()` in radiant/tests/src/test_sched.c, with cancel and reset recorded there as equivalent mutants); the gate-test half is MPSL and still open.
 Tool footgun: fixed 2026-11-08. ant_ack_gate.py exits non-zero on any quality failure with or without --gate; the 300 s / 300 command sufficiency reason fails only under --gate.
-cc26xx conformance transcript: owed. Release review item 2 changed advanced_options_3 from 0xD5 to 0x05, so `conformance-cc26xx.antser` is stale until re-recorded on a CC2652.
+cc26xx conformance transcript: owed. Release review item 2 changed advanced_options_3 from 0xD5 to 0x05, so `conformance-cc26xx.antser` is stale until re-recorded on a CC2652. Since 2026-11-11 (serial-number replies) it is staler. On a re-record expect: (a) the capabilities reply's byte 3 to go `0xb2` -> `0xba` (SERIAL_NUMBER_ENABLED) on top of byte 6 `0xd5` -> `0x05`; (b) two new cases before `4d-request-invalid-0`, `4d-request-get-serial-num-0/valid` (`a404 61 <4 serial bytes> cs`) and `4d-request-serial-num-ext-0/valid` (`a405 c6 <4 serial bytes> 00 cs`), with the serial being the low 4 bytes of the CC2652's IEEE MAC; (c) every record after them shifted, because `--compare` is positional. `--compare` masks the serial bytes, so after the re-record the two radiant transcripts should compare equal again. The TI hwinfo path is build-checked only.
+
+FE-C coverage (deferred from the 2026-11-11 Zwift-capture plan, one item):
+- `tools/ant_fec_control.py`: the page-70 count byte is shifted (:152-156), and the incline is read at [3..4] instead of [4..5] (:171).
+- Sim (`profile_fec_tx.c`, `apps/trainer`): refuses page 55 on request; ignores the page-70 "reply acknowledged" bit and the transmission count; sends page 71 in reply to a page 70, which needs checking against the spec.
+- Never run on air: 0x31 ERG, 0x30 and 0x32; page 70 -> 54/55/71 round trips; acked replies from the master; Zwift against the sim; a commercial trainer's page 71.
+- Burst on an open slave channel is untested; MPSL doesn't support multi-packet burst.
+- Stale docs: `docs/testing.md:296` has an ERG label on a 0x33 test; `docs/device-profiles.md:1459` says `ant_pages` has no FE-C; `docs/decisions/0001...:19-25` records a Tier 3 pass with no FE-C trace in the repo; `docs/zwift-fec-validation.md` is still "Hardware acceptance: FAIL" at 98.33 %.
 
 # Module packaging follow-ups
 

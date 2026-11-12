@@ -4,14 +4,14 @@ Checked by: `tools/test_ant_golden.py`, which replays every `.antser` here in
 the CI `host-tests` job and re-hashes it against the summary of the same
 basename in `archive/benchmarks/`.
 
-**Status (2026-11-09): three conformance transcripts, all hashed. The two
-radiant ones differ in one record until cc26xx is re-recorded on a CC2652 (see
-"The nRF re-record, 2026-11-09").**
+**Status (2026-11-11): three conformance transcripts, all hashed. The two
+radiant ones differ until cc26xx is re-recorded on a CC2652 (see "The nRF
+re-record, 2026-11-11", and TODO.md for the expected diff).**
 
 | File | Recorded from | Summary in `archive/benchmarks/`? |
 |---|---|---|
 | `conformance-cc26xx.antser` | CC2652P dongle over COM15, re-recorded 2026-08-21 | **yes** — `conformance-cc26xx.json`, added the same day |
-| `conformance-nrf-radiant.antser` | nRF54L15 DK, `apps/dongle` over UART, re-recorded 2026-11-09 (originally an nRF52840) | **yes** — `conformance-nrf-radiant.json`, added the same day |
+| `conformance-nrf-radiant.antser` | Pro Micro (nRF52840, `EE6986854FD72803`), `apps/dongle` over USB, re-recorded 2026-11-11 (before that the nRF54L15 DK over UART, originally an nRF52840) | **yes** — `conformance-nrf-radiant.json`, added the same day |
 | `conformance-sdk-ant.antser` | the sdk-ant build (the Tier 1 reference) | yes |
 
 **The hash check silently skips a transcript that has no summary.**
@@ -65,6 +65,22 @@ diff against the 2026-11-06 file is one record, the capabilities reply:
 `conformance-cc26xx.antser` still has `0xd5` and needs a CC2652 to re-record, so
 a `--compare` of the two radiant transcripts reports this one record until then.
 The 2026-11-06 statement that the two hashes match describes that date only.
+
+**The nRF re-record, 2026-11-11.** Re-recorded on the Pro Micro over USB after
+the bridge started answering `MESG_REQUEST` for `0x61` and `0xC6` with the
+board's serial number. Two recordings hash identically
+(`077192e9…eb13`). The diff against the 2026-11-09 L15/UART file is:
+
+    4d-request-capabilities-0:  < a40954200300b226000500014a -> < a40954200300ba260005000142
+    + 4d-request-get-serial-num-0/valid   < a404610328d74f72      (serial 0x4FD72803)
+    + 4d-request-serial-num-ext-0/valid   < a405c60328d74f00d4
+    and every record after those two shifted, because --compare is positional
+
+Every case before them is byte-identical, so the nRF52840 over USB and the
+nRF54L15 over UART still answer the same bytes. The serial bytes are the
+board's own, so this transcript's hash is specific to this Pro Micro. `--compare`
+masks the serial (and the checksum) of 0x61/0xC6 replies, so two boards still
+compare equal.
 
 Where [`../radio/`](../radio/) records what went over the air, this records
 what went over USB: the `0xA4`-framed serial protocol, byte for byte, in both

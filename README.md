@@ -82,7 +82,7 @@ pip install pyusb
 python tools/ant_probe.py
 ```
 
-Expected output: `PASS: reset -> startup -> capabilities -> version`.
+Expected output: `PASS: reset -> startup -> capabilities -> version -> serial`.
 
 Then open your app of choice and pair a sensor as you would with any ANT+
 stick. To confirm the radio itself is hearing sensors, see

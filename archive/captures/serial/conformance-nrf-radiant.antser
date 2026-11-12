@@ -1,7 +1,7 @@
 # ant serial capture v1: <seconds|-> <dir> <framed message, hex>
 # tools/ant_conformance.py - Tier 1 frame conformance
 # timestamps are suppressed on purpose: the acceptance criterion is a byte diff of two of these files
-# 284 cases, 1273 records
+# 286 cases, 1281 records
 # case 41-unassign-channel/valid
 - > a4014a00ef
 - < a4016f20ea
@@ -1428,7 +1428,7 @@
 - > a4014a00ef
 - < a4016f20ea
 - > a4024d0054bf
-- < a40954200300b226000500014a
+- < a40954200300ba260005000142
 # case 4d-request-version-0/valid
 - > a4014a00ef
 - < a4016f20ea
@@ -1519,6 +1519,16 @@
 - < a4016f20ea
 - > a4024d037d95
 - < a40340034d339a
+# case 4d-request-get-serial-num-0/valid
+- > a4014a00ef
+- < a4016f20ea
+- > a4024d00618a
+- < a404610328d74f72
+# case 4d-request-serial-num-ext-0/valid
+- > a4014a00ef
+- < a4016f20ea
+- > a4024d00c62d
+- < a405c60328d74f00d4
 # case 4d-request-invalid-0/valid
 - > a4014a00ef
 - < a4016f20ea

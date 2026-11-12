@@ -827,6 +827,17 @@ That per-unit serial is what `--serial` selects between when two boards
 enumerate as the same `0FCF:1009`, which is every two-board bench run in
 [`testing.md`](testing.md).
 
+The ANT-level serial is a different value: the one `MESG_REQUEST` for `0x61`
+returns (four bytes, little-endian), and `0xC6` returns the same plus a `0x00`.
+The radiant backend's `antr_serial_number_get()` takes the last four bytes of
+the same HWINFO ID, so on nRF it equals the **last eight hex digits** of the
+USB serial. `tools/ant_probe.py` checks that. On the CC26xx, HWINFO returns
+the IEEE MAC, so the value is its low four bytes. Both reply shapes come from
+a real Garmin stick (`captures/zwift-20261111-193805.pcap`). Zwift asks for
+both right after its reset. The sdk-ant backend has no serial to give, so it
+refuses both and keeps `CAPABILITIES_SERIAL_NUMBER_ENABLED` clear. The stub
+returns the fixed value `0x53545542` ("STUB").
+
 ---
 
 ## Build targets

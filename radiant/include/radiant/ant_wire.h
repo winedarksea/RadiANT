@@ -199,6 +199,8 @@
 
 #define ANTW_MESG_SERIAL_ERROR_ID                            RADIANT_WIRE_MESG_SERIAL_ERROR_ID
 
+#define ANTW_MESG_SERIAL_NUM_EXT_ID                          RADIANT_WIRE_MESG_SERIAL_NUM_EXT_ID
+
 /* ------------------------------------------------------------------------
  * Reply sizes
  * The LEN byte the bridge puts on each reply it composes itself. Where a
@@ -212,6 +214,10 @@
 #define ANTW_MESG_STARTUP_MESG_SIZE                          RADIANT_WIRE_MESG_STARTUP_MESG_SIZE
 
 #define ANTW_MESG_CAPABILITIES_SIZE                          RADIANT_WIRE_MESG_CAPABILITIES_SIZE
+
+#define ANTW_MESG_SERIAL_NUM_SIZE                            RADIANT_WIRE_MESG_SERIAL_NUM_SIZE
+
+#define ANTW_MESG_SERIAL_NUM_EXT_SIZE                        RADIANT_WIRE_MESG_SERIAL_NUM_EXT_SIZE
 
 #define ANTW_MESG_VERSION_SIZE                               RADIANT_WIRE_MESG_VERSION_SIZE
 

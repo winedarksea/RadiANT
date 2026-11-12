@@ -45,7 +45,11 @@ sys.path.insert(0, __file__.rsplit("\\", 1)[0].rsplit("/", 1)[0])
 # exists only to dodge a preprocessor collision with sdk-ant's own macros;
 # Python has module namespaces and needs no such thing.
 from ant_wire import (  # noqa: E402
+    CAPABILITIES_OFFSET_ADVANCED_OPTIONS,
+    CAPABILITIES_SERIAL_NUMBER_ENABLED,
     MESG_CAPABILITIES_ID,
+    MESG_GET_SERIAL_NUM_ID,
+    MESG_SERIAL_NUM_EXT_ID,
     MESG_REQUEST_ID,
     MESG_RESPONSE_EVENT_ID,
     MESG_STARTUP_MESG_ID,
@@ -422,6 +426,57 @@ UF2_REBOOT_BREQUEST = 0x57
 UF2_REBOOT_WVALUE = 0x5546  # "UF"
 
 
+def check_serial_number(dev, reader: FrameReader, timeout_s: float,
+                        advertised: bool) -> list[str]:
+    """Ask for 0x61 and 0xC6 and check them against each other.
+
+    A device that does not advertise CAPABILITIES_SERIAL_NUMBER_ENABLED may
+    refuse both, and that is not a failure (sdk-ant does). A device that
+    advertises the bit must answer both with one serial, and 0xC6's trailing
+    byte must be zero. On a USB device the serial is also compared with the
+    tail of the iSerial string, where the radiant backend derives it from.
+    That comparison is only reported, never failed, because another stack
+    may use a different source.
+    """
+    replies = {}
+    wait = timeout_s if advertised else min(timeout_s, 1.0)
+    for msg_id in (MESG_GET_SERIAL_NUM_ID, MESG_SERIAL_NUM_EXT_ID):
+        dev.write(EP_OUT, frame(MESG_REQUEST_ID, bytes([0x00, msg_id])))
+        replies[msg_id] = expect(reader, msg_id, wait)
+
+    sn = replies[MESG_GET_SERIAL_NUM_ID]
+    ext = replies[MESG_SERIAL_NUM_EXT_ID]
+    if sn is None and ext is None:
+        if advertised:
+            print("  FAIL: capability bit set but neither request answered")
+            return ["serial"]
+        print("  OK: not advertised and not answered")
+        return []
+
+    problems = []
+    if sn is None or len(sn) != 4:
+        problems.append(f"0x61 reply {sn.hex() if sn else None}")
+    if ext is None or len(ext) != 5:
+        problems.append(f"0xC6 reply {ext.hex() if ext else None}")
+    elif sn is not None and (ext[:4] != sn or ext[4] != 0):
+        problems.append(f"0xC6 {ext.hex()} does not match 0x61 {sn.hex()}")
+    if not advertised:
+        problems.append("answered, but the capability bit is not set")
+    if problems:
+        for problem in problems:
+            print(f"  FAIL: {problem}")
+        return ["serial"]
+
+    value = int.from_bytes(sn, "little")
+    print(f"  OK: serial 0x{value:08X} ({value}), 0xC6 agrees")
+    usb_serial = _serial_of(dev) if hasattr(dev, "iSerialNumber") else None
+    if usb_serial:
+        tail = usb_serial[-8:].upper()
+        verdict = "matches" if tail == f"{value:08X}" else "differs from"
+        print(f"      {verdict} the USB iSerial tail {tail}")
+    return []
+
+
 def reboot_to_bootloader(dev) -> int:
     """Ask the dongle to reboot into its UF2 bootloader. 0 if it accepted."""
     if isinstance(dev, SerialDevice):
@@ -476,8 +531,9 @@ def main() -> int:
     reader = FrameReader(dev)
 
     failures = []
+    serial_advertised = False
 
-    print("\n[1/3] reset")
+    print("\n[1/4] reset")
     dev.write(EP_OUT, frame(MESG_SYSTEM_RESET_ID, b"\x00"))
     payload = expect(reader, MESG_STARTUP_MESG_ID, args.timeout)
     if payload is None:
@@ -497,7 +553,7 @@ def main() -> int:
     # same way it does for a real stick. If this ever needs a re-open, the
     # firmware is rebooting when it should not be.
 
-    print("\n[2/3] request capabilities")
+    print("\n[2/4] request capabilities")
     dev.write(EP_OUT, frame(MESG_REQUEST_ID, bytes([0x00, MESG_CAPABILITIES_ID])))
     payload = expect(reader, MESG_CAPABILITIES_ID, args.timeout)
     if payload is None or len(payload) < 2:
@@ -506,8 +562,12 @@ def main() -> int:
     else:
         print(f"  OK: {payload.hex()}")
         print(f"      max channels: {payload[0]}, max networks: {payload[1]}")
+        if len(payload) > CAPABILITIES_OFFSET_ADVANCED_OPTIONS:
+            serial_advertised = bool(
+                payload[CAPABILITIES_OFFSET_ADVANCED_OPTIONS]
+                & CAPABILITIES_SERIAL_NUMBER_ENABLED)
 
-    print("\n[3/3] request version")
+    print("\n[3/4] request version")
     dev.write(EP_OUT, frame(MESG_REQUEST_ID, bytes([0x00, MESG_VERSION_ID])))
     payload = expect(reader, MESG_VERSION_ID, args.timeout)
     if payload is None:
@@ -519,13 +579,17 @@ def main() -> int:
         if text.startswith("STUB"):
             print("      (this is a stub build — the ANT radio is not present)")
 
+    print("\n[4/4] request serial number (0x61, 0xC6)")
+    failures.extend(check_serial_number(dev, reader, args.timeout,
+                                        serial_advertised))
+
     close_device(dev)
 
     print()
     if failures:
         print(f"FAILED: {', '.join(failures)}")
         return 1
-    print("PASS: reset -> startup -> capabilities -> version")
+    print("PASS: reset -> startup -> capabilities -> version -> serial")
     return 0
 
 

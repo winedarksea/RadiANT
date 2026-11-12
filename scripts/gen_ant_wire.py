@@ -1192,9 +1192,11 @@ def render_doc_region(spec: dict) -> str:
     add(
         "- Rev 5.1's message table — highest ids known are the encryption block "
         "`0x7D`–`0x7F`, active search sharing `0x81`, NVM crypto key ops around "
-        "`0x83`, the serial-layer `0x%02X`–`0xAF` and port-IO `0xB4`–`0xB5` "
+        "`0x83`, the serial-layer `0xAE`–`0xAF` and port-IO `0xB4`–`0xB5` "
         "messages, and an AP2-era extension block around `0xC0`–`0xC7` (RSSI "
-        "search threshold, sleep, Garmin ESN, USB info)." % known_max
+        "search threshold, sleep, Garmin ESN, USB info). `0xC6` in that block "
+        "is now pinned by observation (a real stick answers a request for it), "
+        "which leaves the range claim intact."
     )
     add(
         "- **sdk-ant itself**, read by the one agent permitted to open it — "

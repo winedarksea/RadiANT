@@ -525,12 +525,26 @@ messages:
 
   - name: MESG_GET_SERIAL_NUM_ID
     id: 0x61
-    direction: h2d
+    direction: both
     payload_len: 0
-    bridged: false
-    desc: "Read the device serial number. Not bridged."
-    source: "rev5.1 sec 9.5"
+    bridged: true
+    desc: "The device serial number. Asked for with MESG_REQUEST and answered
+           with this id carrying a 4-byte little-endian serial. Zwift asks for
+           it right after its SYSTEM_RESET. A bare 0x61 frame sent as a command
+           does nothing and is answered INVALID_MESSAGE, as the conformance
+           transcripts pin. The serial comes from antr_serial_number_get(). A
+           backend that has none (sdk-ant) refuses the request with
+           INVALID_MESSAGE and does not set CAPABILITIES_SERIAL_NUMBER_ENABLED."
+    source: "rev5.1 sec 9.5, observed captures/zwift-20261111-193805.pcap"
     verify: sdk-ant-shim
+    reply_len:
+      selector: none
+      desc: "One shape. The Garmin stick's reply in that capture is
+             a40461069f52000a, i.e. LEN 4 and serial 0x00529F06 sent low byte
+             first."
+      shapes:
+        - size: MESG_SERIAL_NUM_SIZE
+          desc: "[serial lo .. serial hi], 4 bytes, little-endian."
 
   - name: MESG_SET_LP_SEARCH_TIMEOUT_ID
     id: 0x63
@@ -884,6 +898,26 @@ messages:
     blocks: "nothing - not bridged"
     verify: sdk-ant-shim
 
+  - name: MESG_SERIAL_NUM_EXT_ID
+    id: 0xC6
+    direction: d2h
+    payload_len: 5
+    bridged: true
+    desc: "Requestable with MESG_REQUEST. A real Garmin stick answers it with
+           the same 4-byte little-endian serial as MESG_GET_SERIAL_NUM followed
+           by one 0x00 byte, and Zwift asks for it right after asking for
+           0x61. The name is this project's own and describes only the observed
+           shape. It is deliberately not a vendor header name, because no
+           header was consulted (ADR 0002), and the meaning of the fifth byte
+           is unknown, so this firmware always sends 0x00 there. It answers
+           only when antr_serial_number_get() does, and otherwise refuses with
+           INVALID_MESSAGE, exactly like 0x61. It sits in the AP2-era
+           0xC0-0xC7 block described under radiant_messages, and is the only
+           id in that block this file pins, because it is the only one seen on
+           the wire."
+    source: "observed captures/zwift-20261111-193805.pcap (request a4024d00c62d,
+             reply a405c6069f520000ac)"
+
   - name: MESG_SLEEP_ID
     id: null
     direction: h2d
@@ -924,6 +958,17 @@ message_sizes:
     - name: MESG_CAPABILITIES_SIZE
       value: 9
       desc: "Nine bytes, confirmed by the observed reply 080800b23200fd8d0f."
+      source: observed
+    - name: MESG_SERIAL_NUM_SIZE
+      value: 4
+      desc: "[serial, 4 bytes little-endian], the reply to a request for 0x61.
+             Confirmed by a real Garmin stick's reply a40461069f52000a in
+             captures/zwift-20261111-193805.pcap."
+      source: observed
+    - name: MESG_SERIAL_NUM_EXT_SIZE
+      value: 5
+      desc: "[serial, 4 bytes little-endian, 0x00], the reply to a request for
+             0xC6. Confirmed by the same stick's a405c6069f520000ac."
       source: observed
     - name: MESG_VERSION_SIZE
       value: 20
