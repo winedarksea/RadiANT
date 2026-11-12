@@ -62,10 +62,10 @@ rsource "../common/Kconfig.activity"
 # sleeps.
 rsource "../common/Kconfig.heartbeat_led"
 
-# CONFIG_ANT_DONGLE_HEALTH_COUNTERS: the 0xF6 reply, off by default as in
-# apps/dongle. Over this UART tx_drops, tx_high_water and rx_backpressure are
-# structurally zero (tools/ant_health.py says so); the scheduler counters are
-# what this board can report.
+# CONFIG_ANT_DONGLE_HEALTH_COUNTERS: the 0xF6 health counters, off by default
+# (see that file's own header). Sourced so ti_health.conf can turn them on: on
+# a LaunchXL whose log UART has nothing attached, 0xF6 over the ANT UART is
+# the one way to read SCHED_DENIED off a running image.
 rsource "../common/Kconfig.health"
 
 choice ANT_DONGLE_RADIO
