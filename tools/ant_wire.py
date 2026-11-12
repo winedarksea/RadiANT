@@ -282,9 +282,11 @@ MESG_ENABLE_LED_FLASH_ID = 0x68
 # [rev5.1 sec 9.5 + verify:sdk-ant-shim]
 MESG_XTAL_ENABLE_ID = 0x6D
 
-# [filler, config bits]. Turns the extended output fields on. Zero means clear
+# [filler, config bits]. Sets the extended output fields to exactly these bits,
+# replacing the previous value (so 0xE0 then 0x80 leaves 0x80). Zero clears
 # everything - there is no separate clear message on the wire. 0xE0 is channel
-# id + RSSI + RX timestamp; 0x80 is device id only. [bridge, tools]
+# id + RSSI + RX timestamp; 0x80 is device id only. An unknown bit is refused
+# with no side effect. [bridge, tools]
 MESG_ANTLIB_CONFIG_ID = 0x6E
 
 # [reason]. Sent once after the stack has reset. A host that does not see this
@@ -1665,7 +1667,7 @@ MESSAGES = {
         "direction": 'both',
         "payload_len": 2,
         "bridged": True,
-        "desc": '[filler, config bits]. Turns the extended output fields on. Zero means clear everything - there is no separate clear message on the wire. 0xE0 is channel id + RSSI + RX timestamp; 0x80 is device id only.',
+        "desc": '[filler, config bits]. Sets the extended output fields to exactly these bits, replacing the previous value (so 0xE0 then 0x80 leaves 0x80). Zero clears everything - there is no separate clear message on the wire. 0xE0 is channel id + RSSI + RX timestamp; 0x80 is device id only. An unknown bit is refused with no side effect.',
     },
     0x6F: {
         "name": 'MESG_STARTUP_MESG_ID',

@@ -198,6 +198,10 @@ reads.
 
 ### Fixed
 
+- **Lib Config (`0x6E`) replaces the previous value.** It used to OR the new
+  bits in, so a host that went from `0xE0` to `0x80` kept receiving RSSI and
+  timestamps it had not asked for, and mis-parsed every message. Zero still
+  clears everything; an unknown bit is still refused with no side effect.
 - **Event Filter (`0x79`) takes the spec's filler byte.** The command is
   `[filler, lo, hi]` (Rev 5.1 §9.5.2.28); RadiANT read a 3-byte command as
   `[lo, hi, ...]` and set the wrong filter. The legacy 2-byte `[lo, hi]` form

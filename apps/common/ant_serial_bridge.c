@@ -1095,14 +1095,27 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 	}
 
 	case ANTW_MESG_ANTLIB_CONFIG_ID:
-		/* body: [filler, config_bits]. Zero means "clear everything",
-		 * which is how hosts drop the extended-message flags between
-		 * sessions; there is no separate clear message on the wire.
+		/* body: [filler, config_bits]. The value replaces the previous
+		 * one: 0xE0 then 0x80 leaves 0x80, as on any other ANT device.
+		 * Zero clears everything, which is how hosts drop the
+		 * extended-message flags between sessions. The core API stays
+		 * additive (0x66 and the apps rely on that), so the bridge sets
+		 * the new bits first - antr_lib_config_set() refuses an unknown
+		 * bit with no side effect - and only then clears the rest.
 		 */
 		if (len >= 2) {
-			err = body[1] ?
-			      antr_lib_config_set(body[1]) :
-			      antr_lib_config_clear(ANTW_LIB_CONFIG_MASK_ALL);
+			if (body[1] == 0U) {
+				err = antr_lib_config_clear(
+					ANTW_LIB_CONFIG_MASK_ALL);
+			} else {
+				uint8_t drop = (uint8_t)(ANTW_LIB_CONFIG_MASK_ALL &
+							 ~body[1]);
+
+				err = antr_lib_config_set(body[1]);
+				if (!err && drop != 0U) {
+					err = antr_lib_config_clear(drop);
+				}
+			}
 		}
 		break;
 

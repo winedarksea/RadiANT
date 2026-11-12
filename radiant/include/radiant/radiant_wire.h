@@ -391,9 +391,11 @@
 #define RADIANT_WIRE_MESG_XTAL_ENABLE_ID                     0x6D
 
 /*
- * [filler, config bits]. Turns the extended output fields on. Zero means
- * clear everything - there is no separate clear message on the wire. 0xE0 is
- * channel id + RSSI + RX timestamp; 0x80 is device id only. [bridge, tools]
+ * [filler, config bits]. Sets the extended output fields to exactly these
+ * bits, replacing the previous value (so 0xE0 then 0x80 leaves 0x80). Zero
+ * clears everything - there is no separate clear message on the wire. 0xE0 is
+ * channel id + RSSI + RX timestamp; 0x80 is device id only. An unknown bit is
+ * refused with no side effect. [bridge, tools]
  */
 #define RADIANT_WIRE_MESG_ANTLIB_CONFIG_ID                   0x6E
 
