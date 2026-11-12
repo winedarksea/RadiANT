@@ -664,9 +664,8 @@ struct radiant_radio_caps {
 	 * dnh] differs per sensor) holds only TWO channels on nRF, not eight.
 	 * Equals max_filters on RAIL, where every filter is independent.
 	 *
-	 * 0 means "no constraint" (scheduler treats it as max_filters) for
-	 * backward compatibility; a backend with the constraint that doesn't
-	 * report it just gets a stream of RADIANT_RADIO_ENOTSUP instead.
+	 * Required: radiant_sched_init() refuses a backend that leaves it 0. A
+	 * backend with no group constraint sets it equal to max_filters.
 	 */
 	uint8_t max_addr_groups;
 

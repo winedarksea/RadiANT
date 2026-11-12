@@ -287,7 +287,7 @@ constant.
 | ID | Name | dir | len | br | Reply | Meaning | Provenance |
 |---|---|---|---|---|---|---|---|
 | `0x00` | `ANTW_MESG_INVALID_ID` | marker |  | no | - | Reserved: never a valid message id. | rev5.1 sec 9.3 + verify:sdk-ant-shim |
-| `0x01` | `ANTW_MESG_EVENT_ID` | marker |  | yes | - | Not a frame. Byte 1 of a RESPONSE_EVENT payload is 0x01 when the message is an unsolicited channel event rather than a reply to a command; the event code is byte 2. | bridge, tools (ant_session.EVENT_MARKER) |
+| `0x01` | `ANTW_MESG_EVENT_ID` | marker |  | yes | - | Not a frame. Byte 1 of a RESPONSE_EVENT payload is 0x01 when the message is an unsolicited channel event rather than a reply to a command; the event code is byte 2. | bridge, tools (ant_wire.MESG_EVENT_ID) |
 | `0x3E` | `ANTW_MESG_VERSION_ID` | d2h | 20 | yes | - | Null-padded ASCII version string, MESG_VERSION_SIZE bytes. Requested with MESG_REQUEST. A stub build answers STUB0.01B00, which is deliberately not a real ANT version string. | tools |
 | `0x40` | `ANTW_MESG_RESPONSE_EVENT_ID` | d2h | 3 | yes | - | [channel, message id or 0x01, code]. Every command gets one, and every channel event arrives as one with 0x01 in the middle byte. | bridge |
 | `0x41` | `ANTW_MESG_UNASSIGN_CHANNEL_ID` | h2d | 1 | yes | `MESG_RESPONSE_EVENT_ID` | [channel]. Refused with CHANNEL_IN_WRONG_STATE until the channel has actually closed - a close is asynchronous. | tools |
@@ -778,7 +778,7 @@ These are used at a visible site in this repository but their numeric value is n
 | bridge, stub | 1 |
 | bridge, tools | 33 |
 | bridge, tools (ant_probe) | 3 |
-| bridge, tools (ant_session.EVENT_MARKER) | 1 |
+| bridge, tools (ant_wire.MESG_EVENT_ID) | 1 |
 | host-api | 2 |
 | inferred | 7 |
 | observed | 1 |

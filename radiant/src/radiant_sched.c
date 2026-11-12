@@ -324,7 +324,7 @@ static uint8_t max_filters(void)
  * channel: without this check, ADR 0005's "32 sensors do not cost 32
  * windows" was false on nRF - the scheduler merged 8 tracked channels into a
  * window the backend refused with RADIANT_RADIO_ENOTSUP, charged to whichever
- * channel happened to lead. Zero means no group constraint.
+ * channel happened to lead. radiant_sched_init() refuses a zero.
  */
 static uint8_t max_addr_groups(void)
 {
@@ -334,9 +334,6 @@ static uint8_t max_addr_groups(void)
 		return 1u;
 	}
 	mg = s.caps->max_addr_groups;
-	if (mg == 0u) {
-		return max_filters();
-	}
 	if (mg > RADIANT_SCHED_MAX_FILTERS) {
 		mg = RADIANT_SCHED_MAX_FILTERS;
 	}
@@ -2916,6 +2913,14 @@ int radiant_sched_init(const struct radiant_sched_cbs *cbs, void *user)
 	s.caps = radiant_radio_caps_get();
 	if (s.caps == NULL) {
 		return RADIANT_RADIO_EIO;
+	}
+	/* Every backend must state its address-group limit (equal to
+	 * max_filters when it has none). Treating 0 as "no limit" would hide a
+	 * backend that forgot it until the first merged window came back
+	 * RADIANT_RADIO_ENOTSUP. */
+	if (s.caps->max_addr_groups == 0u) {
+		s.caps = NULL;
+		return RADIANT_RADIO_EINVAL;
 	}
 	if (cbs != NULL) {
 		s.cbs = *cbs;

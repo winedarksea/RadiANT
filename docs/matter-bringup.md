@@ -592,7 +592,7 @@ different and more informative answer than `n`.
 | `CONFIG_BRIDGE_MAX_DYNAMIC_ENDPOINTS_NUMBER` | **16** | — | — | ABSENT |
 | `CONFIG_BRIDGE_MAX_BRIDGED_DEVICES_NUMBER` / `_PER_PROVIDER` | 16 / 2 | — | — | ABSENT |
 | `CONFIG_BRIDGE_AGGREGATOR_ENDPOINT_ID` | **1** | — | — | ABSENT |
-| `CONFIG_BRIDGE_MIGRATE_VERSION_1` | y | — | — | ABSENT |
+| `CONFIG_BRIDGE_MIGRATE_VERSION_1` | **not set** (was y) | — | — | ABSENT |
 | `CONFIG_BRIDGED_DEVICE_BT` | **ABSENT** (menu not vendored) | — | — | ABSENT |
 | `CONFIG_NCS_SAMPLE_MATTER_PERSISTENT_STORAGE` | y | — | — | ABSENT |
 | `CONFIG_CHIP_ENABLE_READ_CLIENT` | y | — | — | ABSENT |

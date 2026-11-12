@@ -53,6 +53,7 @@ sys.path.insert(0, str(TOOLS))
 
 import ant_sim  # noqa: E402
 from ant_probe import FrameReader, open_device, reset_stack  # noqa: E402
+from ant_wire import MESG_EVENT_ID  # noqa: E402
 
 PY = sys.executable
 PERIOD_S = 8070 / 32768.0
@@ -355,7 +356,7 @@ class Master:
                     and body[1] == ant_sim.MESG_CHANNEL_MESG_PERIOD_ID):
                 self.period_resp = body[2]
             if (mid == ant_sim.MESG_RESPONSE_EVENT_ID and len(body) >= 3
-                    and body[0] == 0 and body[1] == ant_sim.EVENT_MARKER
+                    and body[0] == 0 and body[1] == MESG_EVENT_ID
                     and body[2] == ant_sim.EVENT_TX):
                 self.times.append(time.perf_counter())
                 with self.wlock:

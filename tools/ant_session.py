@@ -53,8 +53,8 @@ from ant_scan import (  # noqa: E402
 # here. See tools/ant_wire.py and protocol/ant_wire.yaml.
 #
 # MESG_EVENT_ID is the value body[1] of a 0x40 message carries when it is a
-# channel event rather than a reply to a command - what this file used to call
-# EVENT_MARKER, and what src/ant_wire.h calls ANTW_MESG_EVENT_ID.
+# channel event rather than a reply to a command (ANTW_MESG_EVENT_ID in
+# src/ant_wire.h).
 #
 # EVENT_CODES_BY_VALUE names events using the protocol's own names
 # (EVENT_RX_FAIL, not RX_FAIL), matching firmware, header and spec.
@@ -86,12 +86,6 @@ from ant_wire import (  # noqa: E402,F401
     MESG_RESPONSE_EVENT_ID,
     MESG_UNASSIGN_CHANNEL_ID,
 )
-
-# tools/ant_sim.py imports this name from here and belongs to another agent, so
-# it cannot be updated in the same wave. It is a plain alias for the generated
-# constant, not a second definition - there is still exactly one value. Delete
-# it once ant_sim.py imports MESG_EVENT_ID directly.
-EVENT_MARKER = MESG_EVENT_ID
 
 # The profiles Zwift pairs against, with the message period each one
 # broadcasts at, in 1/32768 s counts. A slave still hears a sensor whose

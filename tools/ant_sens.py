@@ -95,6 +95,7 @@ from ant_session import wait_for_close  # noqa: E402
 from ant_wire import (  # noqa: E402
     MESG_CHANNEL_RADIO_TX_POWER_ID,
     MESG_CLOSE_CHANNEL_ID,
+    MESG_EVENT_ID,
     MESG_NETWORK_KEY_ID,
     MESG_UNASSIGN_CHANNEL_ID,
     RADIO_TX_POWER_LVL_CUSTOM,
@@ -510,7 +511,7 @@ class MasterDriver(threading.Thread):
             if result is not None:
                 msg_id, body = result
                 if (msg_id == ant_sim.MESG_RESPONSE_EVENT_ID and len(body) >= 3
-                        and body[1] == ant_sim.EVENT_MARKER
+                        and body[1] == MESG_EVENT_ID
                         and body[2] == ant_sim.EVENT_TX
                         and body[0] == self.sensor.channel):
                     self.events += 1
@@ -707,15 +708,6 @@ def run_ladder_multi(receivers: list[tuple[str, object, object]], channel: int,
                       f"({step['loss_basis']}), {step['packets']} packets"
                       + (f", RSSI {rssi:.1f} dBm" if rssi is not None else ""))
     return steps
-
-
-def run_ladder(rx_dev, rx_reader, channel: int, profile: str, rungs: list[int],
-               part: str | None, seconds: float, settle: float,
-               master: MasterDriver, verbose: bool) -> list[dict]:
-    """The single-receiver ladder, kept for callers of the old signature."""
-    return run_ladder_multi([("rx", rx_dev, rx_reader)], channel, profile,
-                            rungs, part, seconds, settle, master,
-                            verbose)["rx"]
 
 
 def derive(steps: list[dict], target_pct: float) -> dict:

@@ -2420,11 +2420,6 @@ int gate_init(void)
 	 */
 	g.end_margin_us = END_MARGIN_EXTEND_US;
 
-	if (IS_ENABLED(CONFIG_RADIANT_GATE_MPSL_NO_SESSION)) {
-		/* Bisection aid, off by default. See the Kconfig help. */
-		LOG_WRN("gate: session NOT opened (diagnostic build)");
-		return RADIANT_RADIO_OK_RC;
-	}
 	/*
 	 * The queue before the trampoline, and the trampoline before the
 	 * session: the moment a session is open a grant can arrive, every

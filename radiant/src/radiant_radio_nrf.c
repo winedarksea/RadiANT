@@ -2420,14 +2420,10 @@ int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 
 	/* The RADIO needs the crystal, not the internal oscillator: a 1 Mbps
 	 * GFSK link will not hold bit sync on HFINT. Blocking call. */
-	if (!IS_ENABLED(CONFIG_RADIANT_NRF_NO_HFXO_HOLD)) {
-		err = clock_control_on(clk, CLOCK_CONTROL_NRF_SUBSYS_HF);
-		if (err < 0) {
-			LOG_ERR("HFXO did not start (%d)", err);
-			return RADIANT_RADIO_EIO;
-		}
-	} else {
-		LOG_WRN("HFXO hold skipped (diagnostic build)");
+	err = clock_control_on(clk, CLOCK_CONTROL_NRF_SUBSYS_HF);
+	if (err < 0) {
+		LOG_ERR("HFXO did not start (%d)", err);
+		return RADIANT_RADIO_EIO;
 	}
 
 #if defined(NRF54L_ERRATA_20_PRESENT)
@@ -2497,11 +2493,6 @@ int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 	 */
 	/* Nothing borrowed yet; see radio_ep_reg() and the borrow loop below. */
 	radio_ep_contended = 0U;
-	if (IS_ENABLED(CONFIG_RADIANT_NRF_NO_GPPI)) {
-		LOG_WRN("(D)PPI allocation skipped (diagnostic build): this "
-			"radio cannot transmit or receive");
-		goto gppi_done;
-	}
 
 	/*
 	 * One allocation per statement, with the name in the error. Four of
@@ -2668,8 +2659,6 @@ int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 #endif
 	}
 
-gppi_done:
-
 	/*
 	 * Both RADIO interrupt lines on nRF54L, not one: that part splits
 	 * RADIO's interrupt over RADIO_0 and RADIO_1, and connecting the wrong
@@ -2796,11 +2785,7 @@ int radiant_radio_enable(void)
 	 * this call may stay while the IRQ_CONNECT() in init had to go: this
 	 * only enables a line MPSL already registered, per mpsl.rst.
 	 */
-	if (!IS_ENABLED(CONFIG_RADIANT_NRF_NO_RADIO0_IRQ)) {
-		irq_enable(RADIANT_RADIO_IRQn);
-	} else {
-		LOG_WRN("RADIO_0 NVIC line left to MPSL (diagnostic build)");
-	}
+	irq_enable(RADIANT_RADIO_IRQn);
 #else
 	nrf_radio_int_enable(NRF_RADIO, NRF_RADIO_INT_END_MASK |
 					NRF_RADIO_INT_DISABLED_MASK);

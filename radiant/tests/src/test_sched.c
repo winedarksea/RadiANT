@@ -728,6 +728,24 @@ ZTEST(radiant_sched, test_an_off_57_window_never_joins_the_merged_one)
 }
 
 /*
+ * A backend that leaves caps.max_addr_groups at 0 is refused at init, not
+ * discovered later as RADIANT_RADIO_ENOTSUP on the first merged window. There
+ * is no "0 means no limit" fallback: a backend with no group constraint states
+ * max_addr_groups == max_filters.
+ */
+ZTEST(radiant_sched, test_init_refuses_zero_max_addr_groups)
+{
+	fake_radio_caps_mut()->max_addr_groups = 0u;
+	zassert_equal(RADIANT_RADIO_EINVAL, radiant_sched_init(&test_cbs, NULL),
+		      "init accepted a backend with no address-group limit");
+
+	/* The same caps with the field stated are accepted. */
+	fake_radio_caps_mut()->max_addr_groups =
+		fake_radio_caps_mut()->max_filters;
+	zassert_ok(radiant_sched_init(&test_cbs, NULL));
+}
+
+/*
  * THE MERGE IS BOUNDED BY caps.max_addr_groups, NOT caps.max_filters, ON THE
  * TRACKING FORMAT - confusing the two is the defect this test pins.
  *

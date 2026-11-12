@@ -68,10 +68,10 @@ from ant_scan import (  # noqa: E402
     command,
 )
 from ant_session import (  # noqa: E402
-    EVENT_MARKER,
     MESG_UNASSIGN_CHANNEL_ID,
     wait_for_close,
 )
+from ant_wire import MESG_EVENT_ID  # noqa: E402
 
 CHANNEL_TYPE_MASTER = 0x10
 EVENT_TX = 3
@@ -1134,7 +1134,7 @@ def run(dev, reader, sensors: list[Sensor], seconds: float,
         if result is not None:
             msg_id, body = result
             if (msg_id == MESG_RESPONSE_EVENT_ID and len(body) >= 3
-                    and body[1] == EVENT_MARKER and body[2] == EVENT_TX
+                    and body[1] == MESG_EVENT_ID and body[2] == EVENT_TX
                     and body[0] in by_channel):
                 stats[body[0]]["events"] += 1
                 send(by_channel[body[0]])

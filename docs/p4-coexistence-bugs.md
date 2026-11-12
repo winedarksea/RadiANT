@@ -438,9 +438,10 @@ margin problem that the investigation exposed.
 
 ### The bisection: it IS radiant's arbitrated path, and nothing else
 
-`CONFIG_RADIANT_GATE_MPSL_NO_SESSION=y` is the gate's own documented bisection
-aid: the gate builds and boots, the RADIO is initialised, the HFXO request is
-taken - but no timeslot session is ever opened, so **nothing of radiant's ever
+This used `CONFIG_RADIANT_GATE_MPSL_NO_SESSION=y`, a bisection switch that was
+removed once the investigation closed (git history keeps it). With it the gate
+built and booted, the RADIO was initialised and the HFXO request was taken, but
+no timeslot session was ever opened, so **nothing of radiant's ever
 runs in the zero-latency context** while CHIP, the SoftDevice Controller,
 OpenThread and the same RAM are all untouched. Same board, same recipe plus
 that one symbol: 1 boot, 0 lockups, alive continuously for 9 min 52 s with

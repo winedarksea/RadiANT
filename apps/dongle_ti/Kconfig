@@ -9,26 +9,11 @@ choice ANT_DONGLE_TRANSPORT
 	prompt "Transport carrying the ANT serial protocol"
 	default ANT_DONGLE_TRANSPORT_UART
 	help
-	  Which of apps/common/usb_ant_class.c, apps/common/usb_ant_class_next.c
-	  and apps/common/ant_uart_transport.c is compiled. See
-	  apps/common/ant_transport.h for the common interface.
-
-	  UART is the only real answer on this silicon: the CC13x2/CC26x2 has no
-	  USB device peripheral at all, so DT_HAS_NORDIC_NRF_USBD_ENABLED and
-	  DT_HAS_SNPS_DWC2_ENABLED are never true here. The other two options
-	  are kept in the choice (rather than deleted) only so this application's
-	  Kconfig tree has the same shape as apps/dongle's and
-	  apps/dongle_thread's - selecting either on this board simply fails to
-	  configure, the same way asking for a USB stack Zephyr has no driver
-	  for always does.
-
-config ANT_DONGLE_TRANSPORT_USB_LEGACY
-	bool "USB, legacy device stack"
-	depends on DT_HAS_NORDIC_NRF_USBD_ENABLED
-
-config ANT_DONGLE_TRANSPORT_USB_NEXT
-	bool "USB, new device stack (USBD/UDC)"
-	depends on DT_HAS_NORDIC_NRF_USBD_ENABLED || DT_HAS_SNPS_DWC2_ENABLED
+	  UART is the only transport here: the CC13x2/CC26x2 has no USB device
+	  peripheral, so apps/common/ant_uart_transport.c is the one compiled.
+	  The symbol name matches apps/dongle's, so apps/common/sources.cmake
+	  selects it the same way. See apps/common/ant_transport.h for the
+	  common interface.
 
 config ANT_DONGLE_TRANSPORT_UART
 	bool "Plain UART"
@@ -40,12 +25,6 @@ config ANT_DONGLE_TRANSPORT_UART
 	  carries the log, and why they are never the same one.
 
 endchoice
-
-config USB_DEVICE_STACK
-	default y if ANT_DONGLE_TRANSPORT_USB_LEGACY
-
-config USB_DEVICE_STACK_NEXT
-	default y if ANT_DONGLE_TRANSPORT_USB_NEXT
 
 config UART_INTERRUPT_DRIVEN
 	default y if ANT_DONGLE_TRANSPORT_UART
@@ -92,8 +71,8 @@ choice ANT_DONGLE_RADIO
 	  UNLIKE EVERY OTHER APPLICATION IN THIS REPOSITORY, "sdk_ant" is not a
 	  real option here: sdk-ant is Nordic's proprietary radio stack, built
 	  against Nordic silicon, and this board's radio is TI's RF core. The
-	  option still exists in the choice for the same Kconfig-tree-shape
-	  reason ANT_DONGLE_TRANSPORT_USB_LEGACY does above; selecting it here
+	  option still exists so the choice has the same shape as the other
+	  applications' copies of it; selecting it here
 	  produces a build with no radiant module and no sdk-ant module either,
 	  which fails at the antr_* link rather than doing anything useful.
 

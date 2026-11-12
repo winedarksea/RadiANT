@@ -93,7 +93,7 @@ MESG_INVALID_ID = 0x00
 
 # Not a frame. Byte 1 of a RESPONSE_EVENT payload is 0x01 when the message is
 # an unsolicited channel event rather than a reply to a command; the event code
-# is byte 2. [bridge, tools (ant_session.EVENT_MARKER)]
+# is byte 2. [bridge, tools (ant_wire.MESG_EVENT_ID)]
 MESG_EVENT_ID = 0x01
 
 # Null-padded ASCII version string, MESG_VERSION_SIZE bytes. Requested with

@@ -2305,15 +2305,6 @@ static uint8_t count_addr_groups(const struct radiant_rx_filter *filters,
 	return groups;
 }
 
-/* Zero means "no group constraint", matching how the core reads the field, so
- * a hand-built caps block that forgets it gets permissive behaviour rather
- * than a mysterious ENOTSUP. */
-static uint8_t effective_addr_groups(void)
-{
-	return (g.caps.max_addr_groups == 0u) ? g.caps.max_filters
-					      : g.caps.max_addr_groups;
-}
-
 int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 {
 	struct fake_radio_arm *rec;
@@ -2385,7 +2376,7 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 		 * than the hardware would certify the bug it exists to catch.
 		 */
 		if (count_addr_groups(req->filters, req->n_filters) >
-		    effective_addr_groups()) {
+		    g.caps.max_addr_groups) {
 			rc = RADIANT_RADIO_ENOTSUP;
 		}
 	}

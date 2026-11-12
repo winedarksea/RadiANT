@@ -56,20 +56,18 @@
     J-Link device name for the target core.
 
 .PARAMETER NcsVersion
-    NCS version whose zephyr tree builds the suite.
+    NCS version whose zephyr tree builds the suite. Defaults to v3.4.0, as
+    scripts\env.ps1 does. The two must match: a mismatch fails with a
+    Zephyr-SDK error that reads like a broken toolchain.
 
 .PARAMETER SkipBuild
     Flash and run whatever is already in the build directory.
 
 .EXAMPLE
-    . .\scripts\env.ps1 -NcsVersion v3.4.0
-    .\scripts\run_ztest_hw.ps1                                  -NcsVersion v3.4.0
-    .\scripts\run_ztest_hw.ps1 -App radiant\tests\api  -NcsVersion v3.4.0
-    .\scripts\run_ztest_hw.ps1 -App radiant\tests\gate -NcsVersion v3.4.0
-
-    -NcsVersion is not optional on anything built against v3.4.0: the default
-    below is v3.2.4, and the mismatch surfaces as a Zephyr-SDK error that reads
-    exactly like a broken toolchain.
+    . .\scripts\env.ps1
+    .\scripts\run_ztest_hw.ps1
+    .\scripts\run_ztest_hw.ps1 -App radiant\tests\api
+    .\scripts\run_ztest_hw.ps1 -App radiant\tests\gate
 
 .NOTES
     Finding the port and the probe serial:
@@ -89,7 +87,7 @@ param(
     [string]$Port       = 'COM9',
     [string]$Serial     = '1050006310',
     [string]$Device     = 'nRF5340_xxAA_APP',
-    [string]$NcsVersion = 'v3.2.4',
+    [string]$NcsVersion = 'v3.4.0',
     [string]$BuildDir   = '',
     # How long to listen for the run to finish. docs/radiant-security.md
     # section 11.3's epoch-recovery cost table (50/1 000/65 536 CMAC ops) is
