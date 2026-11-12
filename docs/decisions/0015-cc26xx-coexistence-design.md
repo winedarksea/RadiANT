@@ -309,7 +309,7 @@ success on fixed arm 3 "within noise of arm 2". Arm 2, the control, completed
 nothing either, for two defects that predate this work and were found the same
 day:
 
-1. **Immediate-mode logging.** `boards/cc26x2r1_launchxl.conf` set
+1. **Immediate-mode logging.** `apps/dongle_ti/boards/cc26x2r1_launchxl.conf` set
    `CONFIG_LOG_MODE_IMMEDIATE=y` at INF onto uart1 (DIO22/24, nothing
    attached). That stalled the ANT UART and the radio together: every image
    above shows about 250 `host_csum` and about 2650 `host_desync` in the 120 s
