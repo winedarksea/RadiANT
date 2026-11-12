@@ -1,8 +1,9 @@
 # 0022 — On nRF, the search can match every device number in one window: [A6 C5] in hardware, devnum_lo received as data
 
-- **Status:** proposed. Built behind `CONFIG_RADIANT_SEARCH_SHORT_MATCH`
-  (default n), ztest-verified, A/B/A on air below. It becomes the nRF default
-  only when the gates in [Gates](#gates) pass.
+- **Status:** proposed. Built behind `CONFIG_RADIANT_SEARCH_SHORT_MATCH`,
+  ztest-verified, A/B/A on air below. Default **y on cc26xx** since 2026-11-12
+  (the TI A/B/A passed all four gates). Default **n on nRF** until its own
+  gates in [Gates](#gates) pass.
 - **Date:** 2026-11-11
 - **Supersedes:** the "search format is permanent by design and is not touched"
   note in `radiant/src/radiant_addr_split.h` (ADR 0019's scope line), and the
@@ -14,7 +15,8 @@
   (`radiant/include/radiant/radiant_radio_hal.h`),
   `radiant/src/radiant_addr_split.[ch]`, `radiant/src/radiant_radio_nrf.c`
   (caps, the END branch of the ISR), `radiant/src/radiant_search.c`
-  (`init`, `build_set`, `handle_ok`, `set_for_devnum`).
+  (`init`, `build_set`, `handle_ok`, `set_for_devnum`); on TI,
+  `radiant/src/radiant_radio_cc26xx.c` (`rx_match()`, `rx_drain()`, caps).
 
 > **Provenance.** Clean-room. Written from this project's source and its own
 > bench measurements. Nothing here derives from sdk-ant, `libant.a` or any
@@ -49,8 +51,9 @@ device number.
 - **HAL.** `radiant_rx_filter.wild_last` asks a backend to accept any value in
   the last address byte; `radiant_rx_event.wild_value` reports the byte it
   received. A backend opts in with `caps.filter_wildcard_dev`, which the nRF
-  backend sets under `CONFIG_RADIANT_SEARCH_SHORT_MATCH`. No other backend sets
-  it, and the fake radio honours `wild_last` only when its caps claim it.
+  backend sets under `CONFIG_RADIANT_SEARCH_SHORT_MATCH`, and so does the
+  cc26xx backend (see "On TI" below). No other backend sets it, and the fake
+  radio honours `wild_last` only when its caps claim it.
 - **`radiant_addr_split`.** A window carrying a `wild_last` filter matches
   `addr_len - 1` bytes in hardware on 1 M (never fewer than 2), the compare
   skips the wild byte, and a wild filter is never slip-repaired (there is no
@@ -105,10 +108,58 @@ So the default stays **n**. Before it flips, gate 3 needs settling with a
 diagnostic build. The question is whether a search reception on a sibling
 channel of the same device delays a tracked slot.
 
+### On TI (CC2652R), 2026-11-12
+
+Same decision on `radiant_radio_cc26xx.c` (c911f31). `CC26XX_HW_ADDR_LEN`
+(2 with the symbol, 3 without) drives `formatConf.nSwBits` (16 or 24),
+`caps.addr_len_hw_max` and `caps.filter_wildcard_dev`. `rx_match()` skips a
+`wild_last` filter's last byte; `rx_drain()` sets `evt.wild_value` and feeds
+the received byte into the **software** CRC. This backend folds the CRC in
+software, so without that every wildcard frame would fail it. A `wild_last`
+filter whose last byte would fall inside the hardware prefix is refused
+`ENOTSUP`, and the decoy sync word becomes `0x59C5`. native_sim twister at
+c911f31: 14/14 scenarios, 4463/4463 cases, `check_test_counts` OK.
+
+**The 16 bits apply to tracking as well.** `nSwBits` is consumed by
+`RF_open()` and cannot change per window, so the sync word is `[A6 C5]` for
+every operation, tracking windows included; their remaining three address bytes
+are compared in software (two before). Unlike nRF, where tracking windows are
+untouched, a TI tracked channel pays the noise cost too. That is why gate 3
+below matters more here.
+
+Bench: `ant_scan_rate.py --port COM11 --baud 57600 --serial 006 --seconds 300
+--reopen 4.5 --track 52233:0x11`, the TI and Garmin USB-m `006` in the same
+window, against trainer #52233. Images carried the 0xF6 health counters and
+were built with immediate logging, both arms alike (see the benchmark README).
+The false-sync counters were read through the bench-only `diag_health.patch`,
+mod 65536.
+
+| window | TI /s | TI median 1st 0x0B / 0x7B | TI tracked loss | Garmin /s | Garmin tracked loss | TI - Garmin | sync frames / sw mismatches |
+|---|---|---|---|---|---|---|---|
+| A1 24-bit (128 sets) | 0.52 | 0.84 / 0.91 s | 34.94 % | 4.82 | 53.80 % | -18.9 pp | 1110 / 42 |
+| B 16-bit (1 set) | 4.45 | 0.30 / 0.39 s | 23.07 % | 4.58 | 58.44 % | -35.4 pp | 3149 / 14 |
+| A2 24-bit | 0.52 | 0.59 / 0.74 s | 26.30 % | 6.78 | 38.65 % | -12.4 pp | 1196 / 31 |
+
+Per device in B: 0x0B 2.98/s and 0x7B 1.47/s (Garmin 3.04 and 1.54). Host
+events: B none; A1 `ch1:0x08` x2, A2 x1.
+
+| Gate | Result on TI |
+|---|---|
+| 1. Each 4 Hz sensor >= 1 sighting/s | **Pass.** 2.98 and 1.47/s. Off: 0.52/s in total. |
+| 2. Median first sighting < 0.5 s | **Pass.** 0.30 and 0.39 s. Off: 0.59-0.91 s. |
+| 3. Tracked loss within the baseline | **Pass.** 23.07 % against 34.94 % and 26.30 %; against the same-window Garmin, -35.4 pp against -18.9 and -12.4. The two A windows differ by 8.6 pp between themselves, so read this as "no worse", not "better". The Garmin's own 39-58 % is its scan channel colliding with its tracked one. |
+| 4. Noise counted, no new host events | **Pass.** 14 software-address mismatches against 42 and 31, and no host event in B. |
+
+Not run: `tools/ab_gates.toml`'s acquisition gate (needs `ant_verify` T1
+sittings). Raw results: `archive/benchmarks/2026-11-12-ti-wildcard/`.
+
+**Decision.** The default is **y on cc26xx** (5875bd9). nRF stays **n** until
+its own gate 3 is settled. `apps/dongle_ti/ti_long_match.conf` builds the
+24-bit A image.
+
 ## Not done here
 
-- **TI** (`nSwBits=16`, 128 sets today) is a follow-up. The CC26xx backend
-  does not set the cap, so it is build-only and unchanged.
+- **TI** is done: see "On TI" above.
 - **Slipped `devnum_lo`.** A device whose `devnum_lo` starts `010` extends the
   alternating run of `C5` past the hardware match boundary, so its frames can
   arrive with one bit deleted in the wild byte. The repair cannot fix those (no
@@ -121,5 +172,8 @@ channel of the same device delays a tracked slot.
   The first is not waste: a SCAN steer produces a report of the last-seen
   device. The second can't tell, under an arbiter, a granted window from one
   still waiting, so it would reopen the over-credit trap
-  `CONFIG_RADIANT_SEARCH_DENIAL_ESCAPE` documents. With one set, neither
-  matters on nRF; both matter on TI's 128 sets.
+  `CONFIG_RADIANT_SEARCH_DENIAL_ESCAPE` documents. With one set neither
+  matters, and TI has one set by default since 2026-11-12, so the item is
+  **closed for TI**. On nRF it matters only while the short match is off (32
+  sets), and that default waits on nRF gate 3 anyway. No scheduler "window is
+  live" query is built.

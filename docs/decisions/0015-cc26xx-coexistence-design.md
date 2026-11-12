@@ -253,6 +253,82 @@ swap costs nothing measurable on this PHY. `RADIANT_BACKEND_CC26XX_
 MULTI_PATCH` can be relied on without re-measuring every constant in
 `radiant_radio_cc26xx.c` - the risk table's "falsified first" item is closed.
 
+## Result (2026-11-12): the re-arm refusal, reproduced and fixed
+
+The reviewer's suspicion (the TODO line "TI coexistence builds") was right.
+Measured on a CC2652R LaunchXL, ANT on COM11 at 57600; raw results in
+`archive/benchmarks/2026-11-12-ti-coex-rearm/`.
+
+**Mechanism.** `rx_drain()` stops a STOP_ON_FIRST window with `RF_cancelCmd`
+and the core then arms the next operation from the receive callback: the ACK
+reply, the next burst packet. `RF_cancelCmd` leaves the window as `pCmdBg`
+until the CPE0 "done" interrupt, which shares the RF SWI's NVIC level and so
+cannot run first. `RF_defaultSubmitPolicy` then calls `RF_verifyGap` against
+the cancelled window's `endTime` (its end plus `follow_on_us`, the reservation
+made for exactly this reply). With `RF_AllowDelayNone` the new op is refused
+and `RF_scheduleCmd` returns an error, which the caller turns into a
+synchronous `EDENIED`.
+
+**Counting.** The LaunchXL's log pins are unattached and a DSS (JTAG) connect
+resets the part (Zephyr `curr_tick` read 0 right after connect and about 30876
+ticks a second later), so a counter in SRAM cannot be read from outside.
+Refusals were read as the 0xF6 reply's `sched_denied` (`tools/ant_health.py`)
+before and after each workload; c125bb6 counts them and gives `dongle_ti` the
+health counters (`ti_health.conf`). Rig: the TI as master, the Pro Micro
+`EE6986854FD72803` as a bidirectional slave originating acked data,
+`ant_ack_pair.py --master-port COM11 --master-baud 57600 --slave-serial
+EE6986854FD72803 --seconds 120` (8 acked sends), then the same with
+`--master-bursts 20 --burst-packets 8`. The images below all carried
+immediate logging, the default then.
+
+| image | acked received at TI | `sched_denied` | ACK completed | bursts | `sched_missed` after bursts |
+|---|---|---|---|---|---|
+| A: arm 2, `ti_patch` (`RF_postCmd`, the control) | 5/8 | 0 | 0/8 | 0/20 whole, 16 of 160 packets at the slave | 16 |
+| B: arm 3, `ti_gate`, unfixed (c125bb6) | 8/8 | **8** | 0/8 | 0/20, 14 packets | 14 |
+| B': arm 3, fixed (e82a0ea) | 7/8 | **0** | 0/8 | 0/20, 14 packets | 14 |
+
+Exactly one refusal per acked reception on arm 3, none on the control, none
+after the fix: the theory reproduces and e82a0ea removes it.
+
+**The fix (e82a0ea), two hooks.** The submit hook treats an OWN `pCmdBg` or
+`pCmdFg` whose `pastifg` already holds Aborted, Stopped or Cancelled as absent:
+NULL goes to both `any_foreign_overlap` and `RF_defaultSubmitPolicy`, which
+handles NULL (`RF_verifyGap` then sees nothing before the new op, and
+`pastTrig = 1` starts it when the abort completes). A live own command and
+every foreign one keep full protection. The execute hook companion change:
+`AbortOngoing` is returned only for a FOREIGN running command. Once the new
+arm is queued behind our own aborting window, `AbortOngoing` would call
+`RF_abortCmd(flush = true, preempt = true)`, whose flush discards our own
+just-queued op as Cancelled|Preempted, turning the synchronous refusal into an
+asynchronous DENIED. This only reinterprets our own cancelled window; it does
+not change how the neighbour is scheduled, so the fence below still holds.
+Arm 4 (`ti_coex`) still builds and links at both commits.
+
+**The success bar could not be judged.** The plan asked for ACK and burst
+success on fixed arm 3 "within noise of arm 2". Arm 2, the control, completed
+nothing either, for two defects that predate this work and were found the same
+day:
+
+1. **Immediate-mode logging.** `boards/cc26x2r1_launchxl.conf` set
+   `CONFIG_LOG_MODE_IMMEDIATE=y` at INF onto uart1 (DIO22/24, nothing
+   attached). That stalled the ANT UART and the radio together: every image
+   above shows about 250 `host_csum` and about 2650 `host_desync` in the 120 s
+   ack phase, 100 % staged broadcast payload loss and 0/8 ACKs. With
+   `CONFIG_LOG=n` (`nolog.*`): `host_csum` 0, `host_desync` 0, payload loss
+   0.8 %, ACK 4 completed of 4 received (of 8 sent). The default image after
+   5875bd9, deferred logging (`final_deferred.*`): `host_csum` 0, payload loss
+   0.2 %, ACK 2 of 2 received. So every acked message the TI receives is now
+   ACKed. Immediate logging moved to `ti_bringup.conf`.
+2. **Burst chaining fails on every arm and image,** nolog and final included:
+   the slave gets about one packet per burst and `sched_missed` rises by one
+   per burst (20 for 20). The chained packet's arm misses its lead
+   (`MIN_ARM_LEAD_US` 600 in `radiant_radio_cc26xx.c`, "seeded, not measured"
+   in `docs/backends.md`).
+
+Both are open as TODO items: the TI hears only 2-5 of the slave's 8 acked
+packets, and burst chaining. A coexistence comparison of arms 2 and 3 needs
+those cleared first.
+
 ## What this fences for the next reader
 
 Do not fold the patch symbol and the hook symbol into one - arm 2 needs to

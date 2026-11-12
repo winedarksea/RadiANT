@@ -13,6 +13,13 @@ reads.
 
 ### Added
 
+- **cc26xx wildcard search, on by default** (`CONFIG_RADIANT_SEARCH_SHORT_MATCH`,
+  ADR 0022). The CC2652R sweeps one set instead of 128: 4.45 sightings/s
+  against 0.52, median first sighting 0.30 s against 0.84 s, tracked loss no
+  worse. The 16-bit match applies to tracking windows too.
+  `apps/dongle_ti/ti_long_match.conf` builds the 24-bit image.
+- **`tools/ant_scan_rate.py --port/--baud`** adds a UART board (the TI) as a
+  same-window child beside USB dongles.
 - **The dongle reports a serial number.** `MESG_REQUEST` for `0x61` answers
   with a 4-byte little-endian serial, and `0xC6` answers with the same serial
   plus one `0x00`. Both shapes are copied from a real Garmin stick's replies
@@ -97,6 +104,9 @@ reads.
   and `api.test_a_channel_that_drops_to_search_does_not_starve_one_still_tracking`.
 
 ### Changed
+
+- **`apps/dongle_ti` can build the 0xF6 health counters** (`ti_health.conf`),
+  the one way to read `sched_denied` off a LaunchXL whose log pins are unattached.
 
 - **`conformance-cc26xx.antser` re-recorded on a CC2652R LaunchXL (2026-11-12)**
   and compares equal to the nRF transcript again. It was the first hardware
@@ -201,6 +211,13 @@ reads.
   `docs/radiant-bridge.md` §7.4.2 cites, with SHA-256s.
 
 ### Fixed
+
+- **cc26xx coex arms refused every op chained from an early-stopped window**
+  (ACK replies, next burst packet): the cancelled window still held its
+  reserved time. One refusal per acked reception before, none after.
+- **LaunchXL immediate logging corrupted the ANT UART and lost ACK replies**
+  (~250 checksum failures per 120 s, 0/8 ACKs). The board file now logs
+  deferred; `ti_bringup.conf` turns immediate back on.
 
 - **A power change on an open channel reaches acknowledged data, bursts and
   acknowledgements.** The transfer engine kept the power the channel opened

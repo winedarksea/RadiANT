@@ -1,4 +1,3 @@
-TI coexistence builds: the reviewer thinks TI's scheduler may refuse the command re-armed right after an early-stopped receive window, because the cancelled window still holds its reserved time. That needs a CC2652 on the bench.
 MPSL bursts: multi-packet bursts still can't run on MPSL builds. That's a scope gap, not a regression; Zwift uses acknowledged messages.
 Weak tests: the scheduler half is fixed (`reserve_from_done_case()` in radiant/tests/src/test_sched.c, with cancel and reset recorded there as equivalent mutants); the gate-test half is MPSL and still open.
 Tool footgun: fixed 2026-11-08. ant_ack_gate.py exits non-zero on any quality failure with or without --gate; the 300 s / 300 command sufficiency reason fails only under --gate.
@@ -6,9 +5,16 @@ Tool footgun: fixed 2026-11-08. ant_ack_gate.py exits non-zero on any quality fa
 Discovery short match (ADR 0022), left open 2026-11-11:
 - Gate 3 is not settled. `CONFIG_RADIANT_SEARCH_SHORT_MATCH` puts discovery at parity with the Garmin (12.2 against 12.6 sightings/s), but the tracked-loss comparison drowned in the room's drift (`archive/benchmarks/2026-11-11-scan-rate/README.md`). Next step: a diagnostic build counting tracked slots that start while a search reception is in flight (the trainer's sibling channels share its device number), then a quiet-room interleaved A/B. Flip the nRF default only after that.
 - `radiant_search_stats` over the host: the 0xF6 coverage field at [30..31] is conditional and "never padded", so appending search counters after it needs a layout decision (always emit coverage, or a new request-only message).
-- TI wildcard (`nSwBits=16`): the CC26xx backend does not set `filter_wildcard_dev`; 128 sets there. Build-only until a CC2652 is on the bench.
-- The two waste fixes not made (ADR 0022 "Not done here") matter on TI's 128 sets: crediting an in-flight chunk on close needs a scheduler "window is live" query first.
+- The two waste fixes (ADR 0022 "Not done here"): closed for TI, where the short match is now on by default and one set makes them moot. On nRF they matter only while the short match is off, so they ride on the gate-3 decision above; no scheduler "window is live" query is built.
 - The final Zwift capture with both workstreams flashed (user-run): every sensor listed within ~1 s, 0x61/0xC6 answered, reset -> NETWORK_KEY against 42-94 s (RadiANT history) and 9.2 s (Garmin).
+
+## TI CC2652R findings (2026-11-12 bench, open):
+- Acked reception: the TI master hears only 2-5 of the Pro Micro slave's 8 acked packets in 120 s (4/8 with logging off, 2/8 on the default image); every one it hears is ACKed. Evidence: `archive/benchmarks/2026-11-12-ti-coex-rearm/` (`nolog.*`, `final_deferred.*`). Cause not found.
+- Burst chaining: 0/20 bursts complete on every TI image, the slave gets about one packet per burst, and 0xF6 `sched_missed` rises by one per burst. The chained packet's arm misses its lead (`MIN_ARM_LEAD_US` 600 in `radiant_radio_cc26xx.c`, "seeded, not measured" in `docs/backends.md`). Measure the turnaround and set the lead from it.
+- Latent buffer bug with the short match OFF (`ti_long_match.conf`): `RX_SW_ADDR_MAX` is `ADDR_MAX - 4` = 1, but a 5-byte address leaves 2 software bytes, so `tx_buf` overflows by one at body_len 40 (ANT bodies are 8, so it cannot trigger today). Fix: `ADDR_MAX - CC26XX_HW_ADDR_LEN` in both images.
+- Decoy sync word `0x59C5` (the cc26xx backend's decoy for the second sync word) doubles the 16-bit match's noise exposure; driverlib suggests `syncWord1 = 0` disables the alternate. Untested.
+- The Pro Micro `EE6986854FD72803` reports 0 sightings in `ant_scan_rate.py` (45 s, alone or beside the Garmin), while `ant_scan.py` on it hears all three #52233 channels (9 broadcasts in 20 s). Unexplained.
+- Not run: `tools/ab_gates.toml`'s acquisition gate for the TI short match (needs `ant_verify` T1 sittings).
 
 ## FE-C coverage (deferred from the 2026-11-11 Zwift-capture plan, one item):
 - `tools/ant_fec_control.py`: the page-70 count byte is shifted (:152-156), and the incline is read at [3..4] instead of [4..5] (:171).
