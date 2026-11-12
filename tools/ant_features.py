@@ -20,7 +20,8 @@ Two things nothing else here checks:
     python tools/ant_features.py
     python tools/ant_features.py --port COM8      # a UART build
 
-Nothing here opens a channel or puts anything on the air. Exit status is 0 when
+Nothing here opens a channel or puts anything on the air, except
+`--scan-mode`, which opens a receive-only scan for a few seconds. Exit status is 0 when
 every implemented feature round-trips and every mismatch is a known one in
 KNOWN_GAPS.
 """
@@ -51,6 +52,7 @@ from ant_probe import (  # noqa: E402
     open_device,
     reset_stack,
 )
+from ant_scan import ANT_PLUS_FREQ, ANT_PLUS_KEY  # noqa: E402
 from ant_wire import (  # noqa: E402,F401
     ADV_BURST_MODE_DISABLE,
     ADV_BURST_MODE_ENABLE,
@@ -73,8 +75,17 @@ from ant_wire import (  # noqa: E402,F401
     MESG_CONFIG_ADV_BURST_ID,
     MESG_ENCRYPT_ENABLE_ID,
     MESG_EVENT_BUFFERING_CONFIG_ID,
+    LIB_CONFIG_ALL_EXT_FIELDS,
+    LIB_CONFIG_DEVICE_ID_ONLY,
+    MESG_ANTLIB_CONFIG_ID,
+    MESG_ASSIGN_CHANNEL_ID,
+    MESG_BROADCAST_DATA_ID,
+    MESG_CHANNEL_ID_ID,
+    MESG_CHANNEL_RADIO_FREQ_ID,
     MESG_EVENT_FILTER_CONFIG_ID,
     MESG_HIGH_DUTY_SEARCH_MODE_ID,
+    MESG_NETWORK_KEY_ID,
+    MESG_OPEN_RX_SCAN_MODE_ID,
     MESG_REQUEST_ID,
     MESG_RESPONSE_EVENT_ID,
     MESG_SDU_CONFIG_ID,
@@ -272,7 +283,8 @@ def check_coverage(dev, reader, adv3: int, by_message=None) -> list[str]:
                                   ADV_BURST_MODES_SIZE_24_BYTES,
                                   0, 0, 0, 0, 0, 0])),
         "event buffering": (MESG_EVENT_BUFFERING_CONFIG_ID, bytes(6)),
-        "event filtering": (MESG_EVENT_FILTER_CONFIG_ID, bytes([0x00, 0x00])),
+        # [filler, lo, hi], Rev 5.1 sec 9.5.2.28.
+        "event filtering": (MESG_EVENT_FILTER_CONFIG_ID, bytes([0x00, 0x00, 0x00])),
         "high duty search": (MESG_HIGH_DUTY_SEARCH_MODE_ID, bytes([0x00, 0x00])),
         "selective data updates": (MESG_SDU_CONFIG_ID,
                                    bytes([0x00, INVALID_SDU_MASK])),
@@ -281,7 +293,7 @@ def check_coverage(dev, reader, adv3: int, by_message=None) -> list[str]:
     }
 
     problems = []
-    print(f"\n[2/6] advertised capabilities vs bridged messages "
+    print(f"\n[2/7] advertised capabilities vs bridged messages "
           f"(advanced options 3 = 0x{adv3:02X})")
 
     for bit, name in ADV3_BITS:
@@ -323,7 +335,7 @@ def check_coverage(dev, reader, adv3: int, by_message=None) -> list[str]:
 
 def check_adv_burst(dev, reader) -> list[str]:
     """Set an advanced burst configuration and read it back."""
-    print("\n[3/6] advanced burst round trip (0x78)")
+    print("\n[3/7] advanced burst round trip (0x78)")
     problems = []
 
     caps = request(dev, reader, 0, MESG_CONFIG_ADV_BURST_ID)
@@ -365,7 +377,7 @@ def check_adv_burst(dev, reader) -> list[str]:
 
 def check_sdu(dev, reader) -> list[str]:
     """Set two selective-data-update masks and read both back."""
-    print("\n[4/6] selective data update round trip (0x7B, 0x7A)")
+    print("\n[4/7] selective data update round trip (0x7B, 0x7A)")
     problems = []
 
     masks = {
@@ -420,11 +432,15 @@ def check_sdu(dev, reader) -> list[str]:
 
 def check_event_filter(dev, reader) -> list[str]:
     """Set an event filter and read it back."""
-    print("\n[5/6] event filter round trip (0x79)")
+    print("\n[5/7] event filter round trip (0x79)")
 
+    # The spec form, [filler, lo, hi] (Rev 5.1 sec 9.5.2.28). Until
+    # 2026-11-11 this sent [lo, hi]; a Garmin USB-m read that as filler 0x06
+    # and answered 0000f1 on readback. RadiANT still takes the two-byte form
+    # (the committed transcripts send it), so only the Garmin could tell.
     wanted = 0x0006
     code = command(dev, reader, MESG_EVENT_FILTER_CONFIG_ID,
-                   bytes([wanted & 0xFF, wanted >> 8]))
+                   bytes([0x00, wanted & 0xFF, wanted >> 8]))
     if code != RESPONSE_NO_ERROR:
         print(f"  FAIL: filter refused, code {code}")
         return ["event filter: set refused"]
@@ -441,7 +457,111 @@ def check_event_filter(dev, reader) -> list[str]:
         print(f"  OK: filter 0x{wanted:04X} set and read back")
 
     # Filtering nothing is the default; leave it that way.
-    command(dev, reader, MESG_EVENT_FILTER_CONFIG_ID, bytes([0x00, 0x00]))
+    command(dev, reader, MESG_EVENT_FILTER_CONFIG_ID, bytes([0x00, 0x00, 0x00]))
+    return problems
+
+
+def check_lib_config(dev, reader) -> list[str]:
+    """Set lib config 0xE0 then 0x80 and read back 0x80, not 0xE0.
+
+    MESG_ANTLIB_CONFIG sets the value; it does not OR into it. Until
+    2026-11-11 RadiANT accumulated, so a host that narrowed 0xE0 to 0x80
+    kept getting RSSI and timestamps it had not asked for.
+    """
+    print("\n[6/7] lib config replaces, not accumulates (0x6E)")
+    problems = []
+    for value in (LIB_CONFIG_ALL_EXT_FIELDS, LIB_CONFIG_DEVICE_ID_ONLY):
+        code = command(dev, reader, MESG_ANTLIB_CONFIG_ID, bytes([0x00, value]))
+        if code != RESPONSE_NO_ERROR:
+            print(f"  FAIL: lib config 0x{value:02X} refused, code {code}")
+            problems.append("lib config: set refused")
+            break
+    else:
+        got = request(dev, reader, 0, MESG_ANTLIB_CONFIG_ID)
+        if isinstance(got, (int, type(None))):
+            # Not every stick answers a request for 0x6E; the on-air check
+            # in --scan-mode covers those.
+            print(f"  -- lib config not requestable ({got})")
+        elif len(got) < 2 or got[1] != LIB_CONFIG_DEVICE_ID_ONLY:
+            print(f"  FAIL: 0xE0 then 0x80 read back {got.hex()}, want 0x80")
+            problems.append("lib config: accumulates instead of replacing")
+        else:
+            print("  OK: 0xE0 then 0x80 reads back 0x80")
+    command(dev, reader, MESG_ANTLIB_CONFIG_ID, bytes([0x00, 0x00]))
+    return problems
+
+
+def check_scan_mode(dev, reader, seconds: float) -> list[str]:
+    """Open Rx Scan Mode (0x5B) on a configured channel 0, then read it back.
+
+    Rev 5.1 sec 9.5.4.5: scan mode opens channel 0 as the host already
+    assigned and configured it. Before 2026-11-11 RadiANT reassigned it as a
+    wildcard slave on network 0 at RF 66 and heard nothing on the ANT+ band.
+    Also checks lib config 0xE0 then 0x80 on the air: every broadcast must
+    carry only the 4-byte channel ID tail (flag 0x80, 13 bytes in all).
+
+    This one puts a receiver on the air (receive only, nothing transmitted),
+    which is why it is opt-in. It needs an ANT+ sensor in range to say more
+    than "the readback held".
+    """
+    print(f"\n[scan] Open Rx Scan Mode keeps channel 0's setup (0x5B), "
+          f"{seconds:.0f} s")
+    problems = []
+    setup = [
+        (MESG_NETWORK_KEY_ID, bytes([0]) + ANT_PLUS_KEY, "network key"),
+        (MESG_ASSIGN_CHANNEL_ID, bytes([0, 0x00, 0x00]), "assign channel 0"),
+        (MESG_CHANNEL_ID_ID, bytes([0, 0, 0, 0, 0]), "wildcard channel id"),
+        (MESG_CHANNEL_RADIO_FREQ_ID, bytes([0, ANT_PLUS_FREQ]), "RF 57"),
+        (MESG_ANTLIB_CONFIG_ID, bytes([0x00, LIB_CONFIG_ALL_EXT_FIELDS]),
+         "lib config 0xE0"),
+        (MESG_ANTLIB_CONFIG_ID, bytes([0x00, LIB_CONFIG_DEVICE_ID_ONLY]),
+         "lib config 0x80"),
+        (MESG_OPEN_RX_SCAN_MODE_ID, bytes([0x00]), "open rx scan mode"),
+    ]
+    for msg_id, payload, name in setup:
+        code = command(dev, reader, msg_id, payload)
+        if code != RESPONSE_NO_ERROR:
+            print(f"  FAIL: {name} refused, code {code}")
+            reset_stack(dev, reader)
+            return [f"scan mode: {name} refused"]
+
+    got = request(dev, reader, 0, MESG_CHANNEL_RADIO_FREQ_ID)
+    if isinstance(got, (int, type(None))) or len(got) < 2:
+        print(f"  -- RF not requestable ({got})")
+    elif got[1] != ANT_PLUS_FREQ:
+        print(f"  FAIL: channel 0 RF reads back {got[1]}, set {ANT_PLUS_FREQ}")
+        problems.append("scan mode: channel 0 RF not kept")
+    else:
+        print(f"  OK: channel 0 RF reads back {ANT_PLUS_FREQ} in scan mode")
+
+    heard = {}
+    wrong_tail = 0
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        result = reader.next_frame(min(deadline, time.monotonic() + 1.0))
+        if result is None:
+            continue
+        msg_id, body = result
+        if msg_id != MESG_BROADCAST_DATA_ID:
+            continue
+        if len(body) == 13 and body[9] == LIB_CONFIG_DEVICE_ID_ONLY:
+            key = (body[10] | (body[11] << 8), body[12])
+            heard[key] = heard.get(key, 0) + 1
+        else:
+            wrong_tail += 1
+    for (number, dtype), count in sorted(heard.items()):
+        print(f"  heard #{number} type {dtype & 0x7F}: {count} broadcasts")
+    if wrong_tail:
+        print(f"  FAIL: {wrong_tail} broadcasts without exactly the 0x80 tail")
+        problems.append("scan mode: lib config 0x80 not honoured on the air")
+    elif not heard:
+        print("  -- nothing heard (no ANT+ sensor in range?)")
+    else:
+        print(f"  OK: {len(heard)} sensor(s), every broadcast carries only "
+              "the channel ID")
+
+    # Scan mode owns the radio until a reset; leave the stick as found.
+    reset_stack(dev, reader)
     return problems
 
 
@@ -451,7 +571,7 @@ def check_encryption(dev, reader) -> list[str]:
     Read side is always bridged; writes are behind CONFIG_ANT_DONGLE_ENCRYPTION
     and off in a shipping image, so absent writes is a result, not a failure.
     """
-    print("\n[6/6] encryption (0x7D–0x7F)")
+    print("\n[7/7] encryption (0x7D–0x7F)")
 
     got = request(dev, reader, ENCRYPTION_INFO_GET_SUPPORTED_MODE,
                   MESG_ENCRYPT_ENABLE_ID)
@@ -546,7 +666,7 @@ def check_radiant_security(dev, reader) -> list[str]:
     Structured to leave the device as found: 0xF1 with no switches is last,
     since a probe leaving a channel transforming would corrupt later tests.
     """
-    print("\n[7/7] RadiANT security (0xF1-0xF4)")
+    print("\n[sec] RadiANT security (0xF1-0xF4)")
 
     ch = 0
 
@@ -654,6 +774,12 @@ def main() -> int:
                         help="also probe the RadiANT security messages "
                              "(0xF1-0xF4). Off by default: a stock ANT stick "
                              "answers INVALID_MESSAGE to all four")
+    parser.add_argument("--scan-mode", action="store_true",
+                        help="also check Open Rx Scan Mode (0x5B) keeps "
+                             "channel 0's RF and that lib config 0x80 "
+                             "replaces 0xE0 on the air. Puts a receiver on "
+                             "the air; wants an ANT+ sensor in range")
+    parser.add_argument("--scan-seconds", type=float, default=15.0)
     parser.add_argument("-q", "--quiet", action="store_true")
     args = parser.parse_args()
 
@@ -661,7 +787,7 @@ def main() -> int:
                       baud=args.baud)
     reader = FrameReader(dev)
 
-    print("\n[1/6] reset and capabilities")
+    print("\n[1/7] reset and capabilities")
     if not reset_stack(dev, reader):
         print("  FAIL: no startup message after reset")
         close_device(dev)
@@ -687,7 +813,10 @@ def main() -> int:
     problems += check_adv_burst(dev, reader)
     problems += check_sdu(dev, reader)
     problems += check_event_filter(dev, reader)
+    problems += check_lib_config(dev, reader)
     problems += check_encryption(dev, reader)
+    if args.scan_mode:
+        problems += check_scan_mode(dev, reader, args.scan_seconds)
     if args.radiant_security:
         problems += check_radiant_security(dev, reader)
 
