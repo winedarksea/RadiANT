@@ -461,8 +461,15 @@ uint32_t radiant_frame_tail_us(const struct radiant_pkt_format *fmt);
 /* Slot openers - part 1's three values, the only ones a master was ever
  * seen to send. Run C isolated the difference: same hardware, stack, script
  * and payload, only the channel role changed, and 0x82 -> 0x8A, 0xA2 -> 0xAA. */
-#define RADIANT_CTRL_BROADCAST         0x0Au /* the ONLY encoding with b7 = 0 */
+#define RADIANT_CTRL_BROADCAST         0x0Au /* a master's broadcast */
 #define RADIANT_CTRL_BURST_OPEN_SEQ0   0x8Au /* burst packet, seq 0, not last */
+
+/* A SLAVE's broadcast back to its master: 0x0A with bit 3 clear, in the
+ * master's reply window, +2176..+2215 us after the master's frame. Captured
+ * 2026-11-11 from a Garmin USB-m slave
+ * (archive/captures/radio/2026-11-11-slave-broadcast-garmin.log, ten host
+ * writes, ten frames, each once). The other b7 = 0 value on the air. */
+#define RADIANT_CTRL_SLAVE_BROADCAST   0x02u
 #define RADIANT_CTRL_ACK_DATA_OPEN     0xAAu /* acknowledged data == a one-packet
 					  * burst: seq 0, LAST. Part 1 saw this
 					  * and refused to call it burst-last;

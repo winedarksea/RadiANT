@@ -111,10 +111,12 @@ uint16_t radiant_crc16(uint16_t seed, const uint8_t *data, size_t len)
  * ---------------------------------------------------------------------------
  */
 
-/* The eleven values measured on air, in ascending order
- * (archive/captures/radio/2026-08-09-spike-b2-run{0,A,B,C}.log). Nothing may
- * be added here that has not been captured. */
+/* The twelve values measured on air, in ascending order
+ * (archive/captures/radio/2026-08-09-spike-b2-run{0,A,B,C}.log, and 0x02 from
+ * 2026-11-11-slave-broadcast-garmin.log). Nothing may be added here that has
+ * not been captured. */
 static const uint8_t ctrl_observed[] = {
+	RADIANT_CTRL_SLAVE_BROADCAST, /* 0x02 */
 	RADIANT_CTRL_BROADCAST,       /* 0x0A */
 	RADIANT_CTRL_BURST_SEQ0,      /* 0x82 */
 	RADIANT_CTRL_BURST_OPEN_SEQ0, /* 0x8A */
@@ -131,7 +133,8 @@ static const uint8_t ctrl_observed[] = {
 /* Every measured value has 010 in bits 2:0 - 0 exceptions in 2,354 CRC-valid
  * frames in part 2 and 750 in part 1. A row that breaks this changes an
  * invariant the whole decode path rests on, so the build should catch it. */
-_Static_assert((RADIANT_CTRL_BROADCAST & RADIANT_CTRL_LOW_MASK) == RADIANT_CTRL_LOW_VALUE &&
+_Static_assert((RADIANT_CTRL_SLAVE_BROADCAST & RADIANT_CTRL_LOW_MASK) == RADIANT_CTRL_LOW_VALUE &&
+		       (RADIANT_CTRL_BROADCAST & RADIANT_CTRL_LOW_MASK) == RADIANT_CTRL_LOW_VALUE &&
 		       (RADIANT_CTRL_BURST_SEQ0 & RADIANT_CTRL_LOW_MASK) == RADIANT_CTRL_LOW_VALUE &&
 		       (RADIANT_CTRL_BURST_OPEN_SEQ0 & RADIANT_CTRL_LOW_MASK) == RADIANT_CTRL_LOW_VALUE &&
 		       (RADIANT_CTRL_BURST_SEQ1 & RADIANT_CTRL_LOW_MASK) == RADIANT_CTRL_LOW_VALUE &&
@@ -190,10 +193,13 @@ static const struct {
  * two openers that can actually be originated are listed, so an unmeasured
  * eighth data byte still returns 0 rather than being handed a plausible reply.
  *
- * Falsifiable, and the way to falsify it is cheap: sniff a commercial master
- * sending acknowledged data to a slave that answers, and read bit 3 of the
- * reply. Until then this is the reading that lets the two RadiANT ends of a
- * link talk to each other at all.
+ * Falsifiable, and the way to falsify it is cheap: sniff a master sending
+ * a slot-opening packet to a slave that answers, and read bit 3 of the reply.
+ * DONE 2026-11-11 for 0x8A: a Garmin USB-m slave answered a RadiANT master's
+ * 0x8A with 0xD2, bit 3 clear, every time
+ * (archive/captures/radio/2026-11-11-master-burst-*.log) - and at +2209 us,
+ * the slave's slot turnaround, which is RADIANT_TRANSFER_OPENER_REPLY_US.
+ * 0xAA -> 0xF2 is still the inference.
  */
 static const struct {
 	uint8_t data;
@@ -295,8 +301,9 @@ enum radiant_msg_type radiant_frame_msg_type(uint8_t ctrl_byte)
 
 	if (!radiant_ctrl_is_exchange(ctrl_byte)) {
 		/* b7 = 0 occurred only with b6 = b5 = 0 across all 3,104
-		 * CRC-valid frames: the only broadcast encoding is 0x0A, and
-		 * anything else with b7 clear is untransmitted. */
+		 * CRC-valid frames: a broadcast is 0x0A from a master or 0x02
+		 * from a slave (2026-11-11), and anything else with b7 clear
+		 * is untransmitted. */
 		if (radiant_ctrl_is_ack(ctrl_byte) || radiant_ctrl_is_last(ctrl_byte)) {
 			return RADIANT_MSG_UNKNOWN;
 		}

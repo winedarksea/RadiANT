@@ -46,6 +46,8 @@ that does not run is not a record of anything.
 | `2026-11-11-master-burst-garmin-ack.log` | A RadiANT master's burst to a Garmin USB-m slave, before the fix: the Garmin answers `0x8A` at +2209 / +2218 µs, outside the master's window. See *The master-burst captures* below |
 | `2026-11-11-master-burst-grid-walk.log` | The same with the window fixed: the burst completes, then the master's grid has moved +6.87 ms |
 | `2026-11-11-master-burst-fixed.log` | Both fixes: three 3-packet bursts complete, grid unmoved, the next broadcasts repeat the last burst packet |
+| `2026-11-11-slave-broadcast-garmin.log` | A Garmin USB-m SLAVE sending broadcast data to a RadiANT master: control byte `0x02`, +2176..+2215 µs after the master's frame. See *The slave-broadcast captures* below |
+| `2026-11-11-slave-broadcast-radiant.log` | The same with RadiANT as the slave and the Garmin as master, after the implementation: `0x02` at +2160..+2191 µs |
 
 **The four-profile `.antcap` set still needs a bench session — see *What to
 record* below.**
@@ -167,6 +169,23 @@ promisc README.
 - `...-fixed.log`: only packet 0's first attempt anchors the slot. Three bursts
   complete, broadcasts stay on the `...21831` grid, and each post-burst
   broadcast carries the burst's last packet (Rev 5.1 p.109).
+
+## The slave-broadcast captures (2026-11-11)
+
+Same sniffer and console setup as the master-burst captures above. A
+scratch script configured both sticks on device 14871 / type 0x11 / trans 5,
+period 8192, then wrote ten broadcasts to the SLAVE's channel 0.6 s apart,
+each marked `5B nn A5 5A 01 02 03 04` so a frame traces back to one write.
+
+- `...-garmin.log` (the gate for implementing it): master the Pro Micro, slave
+  the Garmin. Ten writes, ten frames with `B3=02`, each once, in the master's
+  next slot at **+2176..+2215 µs** after the master's own frame (mean about
+  2200, the same reply window as acknowledged data). The RadiANT master
+  already delivered all ten to its host.
+- `...-radiant.log`: roles swapped, the Pro Micro running
+  `api_post_slave_bcast()` (the commit after this capture). Ten writes, ten
+  `0x02` frames, each once, at
+  **+2160..+2191 µs**; the Garmin master delivered all ten.
 
 ## The format
 

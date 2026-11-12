@@ -114,6 +114,9 @@ struct ctrl_case {
 };
 
 static const struct ctrl_case ctrl_cases[] = {
+	/* A slave's broadcast to its master (2026-11-11 Garmin capture). */
+	{ 0x02u, { false, false, false, false, false },
+	  RADIANT_MSG_BROADCAST,    "slave broadcast" },
 	/* Slot openers - part 1's three values, and run C's control. */
 	{ 0x0Au, { false, false, false, false, true },
 	  RADIANT_MSG_BROADCAST,    "broadcast" },
@@ -1116,14 +1119,17 @@ ZTEST(radiant_frame, test_flat_parse_ignores_everything_but_bits_2_0)
  * ---------------------------------------------------------------------------
  */
 
-/* The table test: all eleven values that have been on the air, against the
+/* The table test: all values that have been on the air, against the
  * six-field decode. The two columns of ctrl_cases[] were derived
  * independently (hex from the logs' B3= column, fields from part 2's bit
- * table), so this asserts the field model reproduces the air. */
+ * table), so this asserts the field model reproduces the air. Eleven from
+ * Spike B; the twelfth, 0x02, is a slave's broadcast captured 2026-11-11
+ * (archive/captures/radio/2026-11-11-slave-broadcast-garmin.log). The test
+ * keeps its name so the case count stays comparable. */
 ZTEST(radiant_frame, test_eleven_measured_control_bytes)
 {
-	zassert_equal(ARRAY_SIZE(ctrl_cases), 11u,
-		      "eleven values were measured; a twelfth needs a capture "
+	zassert_equal(ARRAY_SIZE(ctrl_cases), 12u,
+		      "twelve values were measured; a thirteenth needs a capture "
 		      "behind it");
 
 	for (size_t i = 0; i < ARRAY_SIZE(ctrl_cases); i++) {
