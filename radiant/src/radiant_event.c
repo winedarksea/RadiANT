@@ -483,6 +483,14 @@ int radiant_event_post_rx(const struct radiant_event_rx *rx)
 	 * Nothing below this point reads a clock - a grep that finds a call to
 	 * the HAL's current-time function in this file has found a bug. */
 	s.t_sync = rx->hal->t_sync;
+	/* Rev 5.1 section 7.1.1: only the first message of a received burst
+	 * carries extended data. A continuation (burst sequence 1..3) goes up
+	 * bare, whatever the lib config says; a single-packet acknowledged
+	 * message and a burst's packet 0 keep their tail. */
+	if (rx->msg_id == (uint8_t)RADIANT_WIRE_MESG_BURST_DATA_ID &&
+	    rx->burst_seq != 0u) {
+		return enqueue(&s, false);
+	}
 	s.flags = (uint8_t)(SLOT_EXT | SLOT_HAS_TS);
 	if (rx->hal->t_sync_exact) {
 		s.flags = (uint8_t)(s.flags | SLOT_TS_EXACT);

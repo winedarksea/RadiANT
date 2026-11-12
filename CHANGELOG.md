@@ -198,6 +198,10 @@ reads.
 
 ### Fixed
 
+- **Only the first packet of a received burst carries extended data.** With
+  lib config on, every burst packet carried the channel ID tail; Rev 5.1 §7.1.1
+  puts it on the first message only, and a host parsing by the spec misread
+  the rest. Single-packet acknowledged data keeps its tail.
 - **A receive-only slave (channel type `0x40`) never transmits.** It used to
   acknowledge inbound acknowledged and burst data like a normal slave. It now
   delivers the data and leaves it unacknowledged, and `antr_burst_tx()` refuses
