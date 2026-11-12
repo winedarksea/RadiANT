@@ -1211,12 +1211,14 @@ static void deliver_rx_terminal(enum radiant_radio_status status)
 	st.delivered_terminal = true;
 	st.kind = OP_NONE;
 
-	CC_DIAG(if (status == RADIANT_RADIO_STATUS_TIMEOUT) {
-			if (cc_diag.win_frames != 0u) {
-				cc_diag.term_ok++;
-			} else {
-				cc_diag.term_empty++;
-			}
+	/* A window that heard a frame is OK however it ended: one that heard
+	 * a master's or slave's packet is usually ABORTED by the reply the
+	 * core arms from inside the frame callback (measured 2026-11-12: every
+	 * heard turnaround ended that way). */
+	CC_DIAG(if (cc_diag.win_frames != 0u) {
+			cc_diag.term_ok++;
+		} else if (status == RADIANT_RADIO_STATUS_TIMEOUT) {
+			cc_diag.term_empty++;
 		} else {
 			cc_diag.term_error++;
 		});

@@ -66,9 +66,9 @@ enum radiant_radio_diag_idx {
 	/* page 3 */
 	RADIANT_RADIO_DIAG_RX_POSTED = 0,  /* radiant_radio_rx() accepted */
 	RADIANT_RADIO_DIAG_RX_REFUSED,     /* radiant_radio_rx() refused */
-	RADIANT_RADIO_DIAG_TERM_OK,        /* RX terminals reported OK */
-	RADIANT_RADIO_DIAG_TERM_EMPTY,     /* RX terminals with nothing heard */
-	RADIANT_RADIO_DIAG_TERM_ERROR,     /* RX terminals with any other status */
+	RADIANT_RADIO_DIAG_TERM_OK,        /* RX windows that heard a frame */
+	RADIANT_RADIO_DIAG_TERM_EMPTY,     /* ran to close, nothing heard */
+	RADIANT_RADIO_DIAG_TERM_ERROR,     /* ended otherwise, nothing heard */
 	RADIANT_RADIO_DIAG_STATUS_ERR,     /* radio command finished in error */
 	RADIANT_RADIO_DIAG_STATUS_LAST,    /* the last such status, raw */
 	RADIANT_RADIO_DIAG_SYNC_ENTRIES,   /* frames the hardware matched */

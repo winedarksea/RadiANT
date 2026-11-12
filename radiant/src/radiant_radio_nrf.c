@@ -4657,13 +4657,14 @@ static void deliver_terminal(enum radiant_radio_status st)
 #if defined(CONFIG_RADIANT_NRF_RX_DIAG)
 		rx_diag_window_end(st != RADIANT_RADIO_STATUS_TIMEOUT);
 #endif
-		/* On this backend "OK" is a window that heard any frame. */
-		NRF_DIAG(if (st != RADIANT_RADIO_STATUS_TIMEOUT) {
-				nrf_diag.term_error++;
-			} else if (radiant_op.rx_any) {
+		/* "OK" is a window that heard any frame, however it ended (a
+		 * reply armed from the frame callback aborts it). */
+		NRF_DIAG(if (radiant_op.rx_any) {
 				nrf_diag.term_ok++;
-			} else {
+			} else if (st == RADIANT_RADIO_STATUS_TIMEOUT) {
 				nrf_diag.term_empty++;
+			} else {
+				nrf_diag.term_error++;
 			});
 		memset(&evt, 0, sizeof(evt));
 		evt.op = radiant_op.id;
