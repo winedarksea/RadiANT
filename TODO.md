@@ -159,48 +159,11 @@ not the transmitter. 120 s windows at -31..-48 dBm, one pinned power channel:
 - Done when RadiANT loss on #54100 is within the Wilson CI of the Garmin's,
   with a 0.5 pp margin.
 
-## 3. [CLASSIFIED 2026-11-07: PROBE side, not firmware; trigger unknown] 54L15 receiver's VCOM died mid-window
-**Soak:** 1 drop in 10 × 300 s windows (window 3, 204 s), with the same
-error. All three checks say it is not the firmware:
-- no reboot STARTUP arrived;
-- the console kept running with continuous uptime and every channel still
-  tracking;
-- the console VCOM on the same probe (MI_02) never failed.
-
-The probe did not re-enumerate (LastArrivalDate unchanged), and the port came
-back by itself within about 2 minutes.
-**Suspect ruled out (as far as the data goes):** the error comes from
-SetCommState, and `SerialDevice.read` reconfigured the port on every read. A
-bare reconfigure flood died once in 46 s, but then ran 180 s and 600 s clean.
-That is 1 death in about 17 minutes, which fits the soak's own rate of about
-one per 50 minutes. The trigger is unknown and looks random in time.
-`SerialDevice.read` now sets the timeout only on change, as hygiene, not as a
-fix. Partial JSON keeps a dead window's data. Low priority unless it starts
-costing runs; if it does, try another USB port or hub first.
-Evidence: archive/benchmarks/2026-11-07-vcom-soak/README.md.
-
-(Original notes follow.)
-- In the rerun's round A multi window (rerun/A_multi_1_54L15.log), pyserial
-  raised "PermissionError(13, 'A device attached to the system is not
-  functioning')" on the J-Link OB VCOM partway through.
-- This could be the probe's VCOM or a firmware fault or reset on the 54L15.
-  Nothing yet tells them apart.
-- Task: repeat 300 s four-channel windows with the 54L15 receiving, and
-  capture its log VCOM (it needs DTR) to see whether the firmware faulted.
+## 3. [CLASSIFIED 2026-11-07: PROBE side, not firmware; trigger unknown] 54L15 receiver's VCOM died mid-window. Evidence: archive/benchmarks/2026-11-07-vcom-soak/README.md
 
 ## 4. [DONE 2026-11-08] ant_sens reports spurious loss on short event_counter rungs
 
 ## 6. [DONE 2026-11-08] Re-run ant_features against the Garmin
-**Done:** sections 1-4 and 6 pass. Section 5 read the event filter back as
-`0000f1` after setting 0x0006 (archive/benchmarks/2026-11-08-todo-clearance/README.md).
-**Explained 2026-11-11:** the tool sent `[06 00]`, and the command is
-`[filler, lo, hi]` (Rev 5.1 sec 9.5.2.28), so the Garmin took 0x06 as the
-filler. With the 3-byte form the Garmin sets and reads back 0x0006, and
-RadiANT now takes that form too (fix/spec-rev51-gaps). The run also
-leaves the Garmin configured: reset it before using it as a reference.
-- The 7-byte capabilities fix landed 2026-11-07 (`capabilities_usable()`,
-  tested with the Garmin's real reply `080800ba3600df`). The tool itself has
-  not been re-run on the Garmin; do it when the stick is plugged in.
 
 # Open issues from the 2026-11-07 extensions and security review
 
@@ -216,31 +179,6 @@ run.
 ## 3. [DONE 2026-11-07] Version the 0xF4 status reply
 
 ## 4. [DECIDED 2026-11-07, implemented with item 2] The epoch in descriptor frame 1
-**Decided (user):** the third option. With a transform on, frame 1 bytes
-[4..7] carry the epoch only when it is coarse real time (0xF3 flag bit 0), zero
-otherwise. The authentication frame's MAC always binds the real epoch, so a
-keyed receiver recovers it by trial-verifying forward from the last epoch it
-knew (`PROFILE_TLM_AUTH_EPOCH_SPAN` = 16); the 48-bit tag is the check, so no
-hint field. Removes the boot-counter fingerprint from sealed hostless nodes.
-**Left open, recorded:** a command-only node (command page, no transform) has
-no auth frame and keeps broadcasting a non-zero epoch (radiant-security.md
-7.1). Evidence: the two shared vectors differ only in frame 1 and the tag;
-test_the_epoch_search_is_forward_only_and_bounded in both suites.
-
-(Original notes follow.)
-- radiant-telemetry.md section 6 frame 1 bytes [4..7] broadcast the epoch in
-  the clear (profile_telemetry.c:391). It is zero on air today only because
-  no transform can be announced; item 2 makes it non-zero.
-- On a hostless node the epoch is the boot counter (ADR 0009). ADR 0008
-  removed the epoch from the compat beacon and the handoff page for exactly
-  that reason: a slowly incrementing number defeats identity Tier 2. The same
-  field here does the same thing to a 0x60 node.
-- Options:
-  - keep it, and accept the fingerprint for 0x60 (document it in 7.1);
-  - replace it with the compat key-group hint, trunc24(CMAC(K_id, epoch)),
-    and recover the epoch by forward search as section 11.3 does;
-  - carry it only when the epoch is coarse real time (0xF3 already has that
-    flag), zero otherwise.
 
 ## 5. [DONE 2026-11-07] Provisioning so identity Tier 0 actually runs
 
@@ -277,11 +215,6 @@ test_the_epoch_search_is_forward_only_and_bounded in both suites.
 ## 15. [DONE 2026-11-08] Telemetry section 6 overstates when unsecured byte [1] advances
 
 # Open issues from the 2026-11-08 release review (HEAD b89a112)
-
-Items 1-4 were confirmed by reading the code at this HEAD. The reviewer also ran
-compiled probes for 2 and 4. Nothing here has been run on hardware. The
-review's other two findings are already fixed (9ab6bc9, 971e38c); what is left
-of the second is item 1 of the section above.
 
 ## 1. [DONE 2026-11-08] Discovery assumes network 0 and frequency 57
 
