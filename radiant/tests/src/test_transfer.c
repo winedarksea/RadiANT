@@ -1197,6 +1197,93 @@ ZTEST(transfer, test_a_slaves_packet_0_is_retried_on_the_next_slot)
 	end_of_test();
 }
 
+/*
+ * A master's packet 0 (0x8A) is answered on the slave's SLOT-reply turnaround,
+ * not the burst one: a Garmin USB-m answered at +2209 and +2218 us
+ * (archive/captures/radio/2026-11-11-master-burst-garmin-ack.log). The window
+ * used to close at +1810, so no master-originated burst ever completed on air.
+ * The next packet is placed from the acknowledgement actually heard.
+ */
+ZTEST(transfer, test_a_masters_packet_0_is_acknowledged_on_the_slot_turnaround)
+{
+	struct radiant_transfer_cfg c;
+	const struct fake_radio_arm *tx[4];
+	const struct fake_radio_arm *rx;
+	uint8_t frame[AIR_LEN];
+	radiant_time_t t0;
+
+	make_cfg(&c, true, CH_XFER);
+	zassert_equal(RADIANT_TRANSFER_OK, radiant_transfer_init(&xfer, &c));
+	reset_blocks();
+	queue_block(0u, 16u, RADIANT_TRANSFER_SEG_START | RADIANT_TRANSFER_SEG_END,
+		    0x20u);
+	zassert_true(feed_next_block());
+
+	zassert_true(fake_radio_step());
+	t0 = last_arm_of(FAKE_RADIO_ARM_TX)->t_sync_at;
+	zassert_equal(RADIANT_CTRL_BURST_OPEN_SEQ0,
+		      last_arm_of(FAKE_RADIO_ARM_TX)->body[BODY_CTRL]);
+	rx = last_arm_of(FAKE_RADIO_ARM_RX);
+	zassert_true(rx->t_close >= t0 + 2209u,
+		     "the window closes at +%u us, before a real slave answers",
+		     (unsigned)(rx->t_close - t0));
+
+	(void)build_peer_frame(frame, radiant_ctrl_reply_for(RADIANT_CTRL_BURST_OPEN_SEQ0),
+			       peer_payload);
+	zassert_equal(RADIANT_RADIO_OK_RC,
+		      fake_radio_air_frame(t0 + 2209u, frame, AIR_LEN));
+	zassert_true(fake_radio_step());
+	zassert_equal(RADIANT_TRANSFER_STATE_TX_DATA, radiant_transfer_state(&xfer),
+		      "the +2209 us acknowledgement was not accepted");
+	zassert_true(fake_radio_step());
+	zassert_equal(2u, collect_tx_arms(tx, ARRAY_SIZE(tx)));
+	zassert_equal(t0 + 2209u + (radiant_time_t)RADIANT_TRANSFER_NEXT_PACKET_US,
+		      tx[1]->t_sync_at,
+		      "packet 1 must follow the acknowledgement heard by 1550 us");
+
+	air_the_ack();
+	zassert_true(fake_radio_step());
+	zassert_equal(1u, n_ev);
+	zassert_equal(RADIANT_TRANSFER_EV_TX_COMPLETED, evlog[0].ev);
+	end_of_test();
+}
+
+/* A master's packet 0 that hears nothing is retried where its packet 1 would
+ * have gone: slot turnaround + 1550 us. Later repeats meet a receiver already
+ * in the burst, so they step by the burst packet time. */
+ZTEST(transfer, test_a_masters_packet_0_retry_follows_the_slot_turnaround)
+{
+	struct radiant_transfer_cfg c;
+	const struct fake_radio_arm *tx[4];
+
+	make_cfg(&c, true, CH_XFER);
+	zassert_equal(RADIANT_TRANSFER_OK, radiant_transfer_init(&xfer, &c));
+	reset_blocks();
+	queue_block(0u, 16u, RADIANT_TRANSFER_SEG_START | RADIANT_TRANSFER_SEG_END,
+		    0x20u);
+	zassert_true(feed_next_block());
+
+	zassert_true(fake_radio_step());   /* packet 0 */
+	zassert_true(fake_radio_step());   /* its window, empty */
+	zassert_true(fake_radio_step());   /* retry 1 */
+	zassert_true(fake_radio_step());   /* its window, empty */
+	zassert_true(fake_radio_step());   /* retry 2 */
+	zassert_equal(3u, collect_tx_arms(tx, ARRAY_SIZE(tx)));
+	zassert_equal(tx[0]->t_sync_at +
+			      (radiant_time_t)RADIANT_TRANSFER_OPENER_REPLY_US +
+			      (radiant_time_t)RADIANT_TRANSFER_NEXT_PACKET_US,
+		      tx[1]->t_sync_at);
+	zassert_equal(tx[1]->t_sync_at + (radiant_time_t)RADIANT_TRANSFER_PACKET_US,
+		      tx[2]->t_sync_at);
+	zassert_equal(tx[0]->body[BODY_CTRL], tx[2]->body[BODY_CTRL]);
+
+	acks_to_air = 0u;
+	drive();
+	zassert_equal(1u, n_ev);
+	zassert_equal(RADIANT_TRANSFER_FAIL_NO_ACK, evlog[0].fail);
+	end_of_test();
+}
+
 ZTEST(transfer, test_a_slaves_packet_0_is_not_retried_without_a_slot_to_aim_at)
 {
 	const struct fake_radio_arm *tx[4];

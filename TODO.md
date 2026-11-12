@@ -14,7 +14,7 @@ Discovery short match (ADR 0022), left open 2026-11-11:
 FE-C coverage (deferred from the 2026-11-11 Zwift-capture plan, one item):
 - `tools/ant_fec_control.py`: the page-70 count byte is shifted (:152-156), and the incline is read at [3..4] instead of [4..5] (:171).
 - Sim (`profile_fec_tx.c`, `apps/trainer`): refuses page 55 on request; ignores the page-70 "reply acknowledged" bit and the transmission count; sends page 71 in reply to a page 70, which needs checking against the spec.
-- Never run on air: 0x31 ERG, 0x30 and 0x32; page 70 -> 54/55/71 round trips; acked replies from the master; Zwift against the sim; a commercial trainer's page 71.
+- Never run on air: 0x31 ERG, 0x30 and 0x32; page 70 -> 54/55/71 round trips; acked replies from the master; Zwift against the sim; a commercial trainer's page 71. (Master-originated bursts DO run on air since 2026-11-11, against a Garmin slave - they never had before, see archive/captures/radio/README.md, "The master-burst captures". Master acked data takes the same path but has not been run on air by itself.)
 - Burst on an open slave channel is untested; MPSL doesn't support multi-packet burst.
 - Stale docs: `docs/testing.md:296` has an ERG label on a 0x33 test; `docs/device-profiles.md:1459` says `ant_pages` has no FE-C; `docs/decisions/0001...:19-25` records a Tier 3 pass with no FE-C trace in the repo; `docs/zwift-fec-validation.md` is still "Hardware acceptance: FAIL" at 98.33 %.
 
@@ -184,8 +184,12 @@ Evidence: archive/benchmarks/2026-11-07-vcom-soak/README.md.
 ## 4. [DONE 2026-11-08] ant_sens reports spurious loss on short event_counter rungs
 
 ## 6. [DONE 2026-11-08] Re-run ant_features against the Garmin
-**Done:** sections 1-4 and 6 pass. Section 5 reads the event filter back as
-`0000f1` after setting 0x0006, not investigated (archive/benchmarks/2026-11-08-todo-clearance/README.md). The run also
+**Done:** sections 1-4 and 6 pass. Section 5 read the event filter back as
+`0000f1` after setting 0x0006 (archive/benchmarks/2026-11-08-todo-clearance/README.md).
+**Explained 2026-11-11:** the tool sent `[06 00]`, and the command is
+`[filler, lo, hi]` (Rev 5.1 sec 9.5.2.28), so the Garmin took 0x06 as the
+filler. With the 3-byte form the Garmin sets and reads back 0x0006, and
+RadiANT now takes that form too (fix/spec-rev51-gaps). The run also
 leaves the Garmin configured: reset it before using it as a reference.
 - The 7-byte capabilities fix landed 2026-11-07 (`capabilities_usable()`,
   tested with the Garmin's real reply `080800ba3600df`). The tool itself has

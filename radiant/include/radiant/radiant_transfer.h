@@ -240,6 +240,18 @@ extern "C" {
  * exchange, which this module does not choose for itself. */
 #define RADIANT_TRANSFER_SLOT_REPLY_US   2190u
 
+/*
+ * And the same turnaround answers a SLOT-OPENING data packet (0x8A, 0xAA - a
+ * master's packet 0), measured 2026-11-11 with a Garmin USB-m slave: 0x8A ->
+ * its 0xD2 at +2209 and +2218 us, never at +1560
+ * (archive/captures/radio/2026-11-11-master-burst-garmin-ack.log). A slave
+ * answers a frame on its slot the way it answers a broadcast. Once in a
+ * burst it answers at RADIANT_TRANSFER_REPLY_US like any receiver, and a
+ * repeated opener could meet either, so the acknowledgement window of a
+ * slot-opening packet spans both offsets (radiant_burst.c arm_ack_window()).
+ */
+#define RADIANT_TRANSFER_OPENER_REPLY_US RADIANT_TRANSFER_SLOT_REPLY_US
+
 /* One burst packet, end to end: 1560 + 1550 = 3110, against the 3113 us the
  * analyser reports for a running burst. Eight payload bytes per 3.11 ms is
  * about 20.6 kbit/s, which is what an ANT burst is worth on this link. */
@@ -306,8 +318,10 @@ extern "C" {
  * packet whose blocks the engine owns is retried: a single-packet burst has
  * no retries by the same text, and acknowledged data is one packet. The
  * retry reuses the packet's control byte, so the sequence bit does not move,
- * and goes out RADIANT_TRANSFER_PACKET_US after the attempt it repeats -
- * except a slave's packet 0, which waits for the master's next reply window
+ * and goes where the next packet would have gone had the acknowledgement
+ * arrived: RADIANT_TRANSFER_PACKET_US after the attempt it repeats, or, for
+ * the first attempt of a master's slot opener, OPENER_REPLY_US + 1550 us. A
+ * slave's packet 0 waits for the master's next reply window instead
  * (ops->retry_t_sync). BAD_ACK is never retried.
  *
  * MPSL builds: a retry is a fresh transmit 3110 us after the missed one,
@@ -926,10 +940,16 @@ const struct radiant_transfer_stats *radiant_transfer_stats(const struct radiant
  * the last packet sent in the master's next broadcast (Rev 5.1 p.109).
  */
 const uint8_t *radiant_transfer_cur_payload(const struct radiant_transfer *t);
-/* How many times the packet in flight has been retried; 0 for its first
- * attempt and whenever no outbound packet is in flight. Lets the owner tell
- * a retry's TX event from a packet's first one (a retry is not a slot). */
-uint8_t radiant_transfer_cur_retries(const struct radiant_transfer *t);
+/*
+ * True when the outbound packet in flight is the first attempt of a
+ * slot-opening packet (a master's packet 0) - the only data transmit that
+ * occupies the channel's slot. Continuation packets and retries go out
+ * thousands of microseconds after the slot, and a master that re-anchored
+ * its period on them walked its whole grid by the burst's length: measured
+ * 2026-11-11, +6.87 ms after one 3-packet burst, and the Garmin slave
+ * tracking it dropped to search.
+ */
+bool radiant_transfer_cur_is_slot(const struct radiant_transfer *t);
 
 #ifdef __cplusplus
 }

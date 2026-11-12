@@ -1,0 +1,37 @@
+P n=150 dr=0 q=0 t=0292259329 dt=+187647886 OK m=5 rssi=-37 dn=14871 ty=11! tt=5 B3=0A pl=0000000000000000 crc=9339 air=97
+P n=151 dr=0 q=0 t=0292509328 dt= +249999 OK m=5 rssi=-37 dn=14871 ty=11! tt=5 B3=0A pl=1019FFFF00000024 crc=D8CC air=97
+P n=153 dr=0 q=0 t=0292759328 dt= +250000 OK m=5 rssi=-37 dn=14871 ty=11! tt=5 B3=0A pl=1019FFFF00000024 crc=D8CC air=112
+P n=154 dr=0 q=0 t=0293009328 dt= +250000 OK m=5 rssi=-38 dn=14871 ty=11! tt=5 B3=0A pl=1019FFFF00000024 crc=D8CC air=97
+P n=155 dr=0 q=0 t=0293259328 dt= +250000 OK m=5 rssi=-37 dn=14871 ty=11! tt=5 B3=0A pl=1019FFFF00000024 crc=D8CC air=97
+P n=156 dr=0 q=0 t=0293509327 dt= +249999 OK m=5 rssi=-37 dn=14871 ty=11! tt=5 B3=0A pl=1019FFFF00000024 crc=D8CC air=97
+P n=157 dr=0 q=0 t=0293759327 dt= +250000 OK m=5 rssi=-37 dn=14871 ty=11! tt=5 B3=0A pl=1019FFFF00000024 crc=D8CC air=97
+P n=158 dr=0 q=0 t=0294009327 dt= +250000 OK m=5 rssi=-37 dn=14871 ty=11! tt=5 B3=0A pl=1019FFFF00000024 crc=D8CC air=97
+P n=159 dr=0 q=0 t=0294259327 dt= +250000 OK m=5 rssi=-37 dn=14871 ty=11! tt=5 B3=0A pl=1019FFFF00000024 crc=D8CC air=97
+P n=160 dr=0 q=0 t=0294509326 dt= +249999 OK m=5 rssi=-38 dn=14871 ty=11! tt=5 B3=0A pl=1019FFFF00000024 crc=D8CC air=97
+P n=161 dr=0 q=0 t=0294759326 dt= +250000 OK m=5 rssi=-37 dn=14871 ty=11! tt=5 B3=0A pl=1019FFFF00000024 crc=D8CC air=97
+P n=162 dr=0 q=0 t=0295009326 dt= +250000 OK m=5 rssi=-37 dn=14871 ty=11! tt=5 B3=0A pl=1019FFFF00000024 crc=D8CC air=97
+P n=163 dr=0 q=0 t=0295259326 dt= +250000 OK m=5 rssi=-38 dn=14871 ty=11! tt=5 B3=8A pl=0000000000000000 crc=2C8B air=97
+P n=164 dr=0 q=1 t=0295261509 dt=   +2183 OK m=5 rssi=-45 dn=14871 ty=11! tt=5 B3=D2 pl=0000515B7DBFFB02 crc=83EE air=111
+P n=165 dr=0 q=2 t=0295263058 dt=   +1549 OK m=5 rssi=-37 dn=14871 ty=11! tt=5 B3=92 pl=0001000000000000 crc=EEEB air=112
+P n=166 dr=0 q=3 t=0295264614 dt=   +1556 OK m=5 rssi=-44 dn=14871 ty=11! tt=5 B3=C2 pl=0000515B7DBFFB02 crc=D010 air=112
+P n=167 dr=0 q=4 t=0295266164 dt=   +1550 OK m=5 rssi=-37 dn=14871 ty=11! tt=5 B3=A2 pl=0002000000000000 crc=C26B air=112
+P n=168 dr=0 q=5 t=0295267712 dt=   +1548 OK m=5 rssi=-45 dn=14871 ty=11! tt=5 B3=F2 pl=0000515B7DBFFB02 crc=2412 air=112
+P n=169 dr=0 q=0 t=0295516192 dt= +248480 OK m=5 rssi=-37 dn=14871 ty=11! tt=5 B3=0A pl=0002000000000000 crc=F3DA air=84
+S t=0295528315 ours=85 foreign=0 longframe=0 oddtype=85 crc_ok=85 crc_err=84 addr=169 end=169 dropped=0  B3: 0A=36 8A=3 92=1 A2=1 C2=1 D2=42 F2=1
+P n=170 dr=0 q=0 t=0295766192 dt= +250000 OK m=5 rssi=-37 dn=14871 ty=11! tt=5 B3=0A pl=0002000000000000 crc=F3DA air=84
+P n=171 dr=0 q=0 t=0296016192 dt= +250000 OK m=5 rssi=-37 dn=14871 ty=11! tt=5 B3=0A pl=0002000000000000 crc=F3DA air=84
+P n=172 dr=0 q=0 t=0296266192 dt= +250000 OK m=5 rssi=-37 dn=14871 ty=11! tt=5 B3=0A pl=0002000000000000 crc=F3DA air=83
+P n=173 dr=0 q=0 t=0296516178 dt= +249986 OK m=5 rssi=-37 dn=14871 ty=11! tt=5 B3=0A pl=0002000000000000 crc=F3DA air=97
+P n=174 dr=0 q=0 t=0296766192 dt= +250014 OK m=5 rssi=-37 dn=14871 ty=11! tt=5 B3=8A pl=0100000000000000 crc=6B58 air=83
+P n=175 dr=0 q=1 t=0296769902 dt=   +3710 OK m=5 rssi=-37 dn=14871 ty=11! tt=5 B3=8A pl=0100000000000000 crc=6B58 air=112
+P n=176 dr=0 q=2 t=0296773011 dt=   +3109 OK m=5 rssi=-37 dn=14871 ty=11! tt=5 B3=8A pl=0100000000000000 crc=6B58 air=112
+P n=177 dr=0 q=3 t=0296776120 dt=   +3109 OK m=5 rssi=-37 dn=14871 ty=11! tt=5 B3=8A pl=0100000000000000 crc=6B58 air=112
+P n=178 dr=0 q=3 t=0296779229 dt=   +3109 OK m=5 rssi=-37 dn=14871 ty=11! tt=5 B3=8A pl=0100000000000000 crc=6B58 air=112
+P n=179 dr=0 q=4 t=0296782338 dt=   +3109 OK m=5 rssi=-37 dn=14871 ty=11! tt=5 B3=8A pl=0100000000000000 crc=6B58 air=112
+P n=180 dr=0 q=0 t=0297016192 dt= +233854 OK m=5 rssi=-37 dn=14871 ty=11! tt=5 B3=0A pl=0100000000000000 crc=D4EA air=82
+P n=181 dr=0 q=0 t=0297266177 dt= +249985 OK m=5 rssi=-37 dn=14871 ty=11! tt=5 B3=0A pl=0100000000000000 crc=D4EA air=97
+P n=182 dr=0 q=0 t=0297516192 dt= +250015 OK m=5 rssi=-37 dn=14871 ty=11! tt=5 B3=0A pl=0100000000000000 crc=D4EA air=82
+P n=183 dr=0 q=0 t=0297766192 dt= +250000 OK m=5 rssi=-37 dn=14871 ty=11! tt=5 B3=0A pl=0100000000000000 crc=D4EA air=82
+P n=184 dr=0 q=0 t=0298016192 dt= +250000 OK m=5 rssi=-37 dn=14871 ty=11! tt=5 B3=0A pl=0100000000000000 crc=D4EA air=81
+P n=186 dr=0 q=0 t=0298266176 dt= +249984 OK m=5 rssi=-37 dn=14871 ty=11! tt=5 B3=0A pl=0100000000000000 crc=D4EA air=97
+S t=0310516005 ours=101 foreign=0 longframe=0 oddtype=101 crc_ok=101 crc_err=90 addr=191 end=191 dropped=0  B3: 0A=46 8A=9 92=1 A2=1 C2=1 D2=42 F2=1

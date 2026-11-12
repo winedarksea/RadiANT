@@ -196,7 +196,11 @@ int radiant_transfer_arm_tx(struct radiant_transfer *t, uint8_t ctrl,
 	 * that is never opened. The control byte decides, since it is what
 	 * says on the air whether anything answers. */
 	if (!radiant_ctrl_is_ack(ctrl)) {
-		req.follow_on_us = RADIANT_TRANSFER_REPLY_US +
+		/* A slot opener's window runs out to the slave's slot-reply
+		 * turnaround (arm_ack_window()), so its reserve does too. */
+		req.follow_on_us = (radiant_ctrl_is_slot_opener(ctrl) ?
+				    RADIANT_TRANSFER_OPENER_REPLY_US :
+				    RADIANT_TRANSFER_REPLY_US) +
 			RADIANT_TRANSFER_ACK_GUARD_US + radiant_frame_tail_us(t->fmt);
 	}
 
@@ -241,7 +245,16 @@ static int arm_ack_window(struct radiant_transfer *t, radiant_time_t t_data_sync
 	req.n_filters = 1u;
 	req.t_open = t_data_sync + (radiant_time_t)RADIANT_TRANSFER_REPLY_US -
 		     (radiant_time_t)RADIANT_TRANSFER_ACK_GUARD_US;
-	req.t_close = t_data_sync + (radiant_time_t)RADIANT_TRANSFER_REPLY_US +
+	/* A slot-opening packet is answered on the slave's slot-reply
+	 * turnaround, ~2190 us, the first time; a burst receiver answers at
+	 * ~1560. The window spans both (RADIANT_TRANSFER_OPENER_REPLY_US).
+	 * Until 2026-11-11 it closed at +1810 and a Garmin's +2209 answer to
+	 * a master's 0x8A was never heard: no master-originated burst or
+	 * acknowledged message had ever completed on air. */
+	req.t_close = t_data_sync +
+		      (radiant_time_t)(radiant_ctrl_is_slot_opener(t->cur_ctrl) ?
+				       RADIANT_TRANSFER_OPENER_REPLY_US :
+				       RADIANT_TRANSFER_REPLY_US) +
 		      (radiant_time_t)RADIANT_TRANSFER_ACK_GUARD_US;
 	/* A request, not a guarantee: the HAL forbids STOP_ON_FIRST on a merged
 	 * window, so a reply window sharing hardware with a tracked channel
@@ -316,7 +329,18 @@ static bool retry_packet(struct radiant_transfer *t)
 			return false;
 		}
 	} else {
-		at = t->data_t_sync + (radiant_time_t)RADIANT_TRANSFER_PACKET_US;
+		/* Where the next packet would have gone had the acknowledgement
+		 * arrived: its expected instant + 1550 us. A first-attempt slot
+		 * opener is answered at the slave's slot turnaround; a repeat,
+		 * by a receiver already in the burst, at the burst turnaround. */
+		radiant_time_t reply =
+			(radiant_ctrl_is_slot_opener(t->cur_ctrl) &&
+			 t->retries == 0u) ?
+				(radiant_time_t)RADIANT_TRANSFER_OPENER_REPLY_US :
+				(radiant_time_t)RADIANT_TRANSFER_REPLY_US;
+
+		at = t->data_t_sync + reply +
+		     (radiant_time_t)RADIANT_TRANSFER_NEXT_PACKET_US;
 	}
 
 	/* cur_ctrl, not a fresh radiant_transfer_ctrl(): the sequence bit
@@ -831,11 +855,8 @@ const uint8_t *radiant_transfer_cur_payload(const struct radiant_transfer *t)
 	return &t->block[(size_t)t->pkt_in_block * RADIANT_TRANSFER_PKT_BYTES];
 }
 
-uint8_t radiant_transfer_cur_retries(const struct radiant_transfer *t)
+bool radiant_transfer_cur_is_slot(const struct radiant_transfer *t)
 {
-	if (t == NULL || (t->state != RADIANT_TRANSFER_STATE_TX_DATA &&
-			  t->state != RADIANT_TRANSFER_STATE_WAIT_ACK)) {
-		return 0u;
-	}
-	return t->retries;
+	return t != NULL && t->state == RADIANT_TRANSFER_STATE_TX_DATA &&
+	       t->retries == 0u && radiant_ctrl_is_slot_opener(t->cur_ctrl);
 }

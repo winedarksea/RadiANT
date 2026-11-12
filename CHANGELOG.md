@@ -198,6 +198,12 @@ reads.
 
 ### Fixed
 
+- **A RadiANT master's bursts and acknowledged messages complete on air.**
+  None ever had: a slave answers a master's slot-opening packet on its
+  slot-reply turnaround (~2190 µs, a Garmin at +2209 µs), and the master only
+  listened until +1810 µs. And every burst packet re-anchored the master's
+  period, moving its broadcasts by the burst's length until the slave lost it.
+  Both fixed and checked with a sniffer against a Garmin USB-m.
 - **Burst packets are retried.** A multi-packet burst used to fail at the
   first missed acknowledgement, so in a room with a few percent loss most long
   bursts failed. Each packet is now retried up to five times with the same

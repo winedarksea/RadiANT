@@ -2461,10 +2461,11 @@ static void api_sched_tx(uint8_t ch, const struct radiant_tx_event *evt, void *u
 
 			/* Originating data occupies this master's slot just as a
 			 * broadcast does; resuming must not repost the expired slot.
-			 * A retry is not a slot: it goes out 3110 us after the
-			 * attempt it repeats, and re-anchoring on it would walk the
-			 * master's grid by that much per missed acknowledgement. */
-			if (radiant_transfer_cur_retries(&api_xfer[ch]) == 0u) {
+			 * Only packet 0's first attempt is that slot. Re-anchoring
+			 * on continuation packets and retries walked the master's
+			 * grid by the length of every burst (+6.87 ms after three
+			 * packets, measured), and a real slave lost it. */
+			if (radiant_transfer_cur_is_slot(&api_xfer[ch])) {
 				radiant_channel_on_slot(ch, evt->t_sync);
 			}
 			if (sent != NULL) {

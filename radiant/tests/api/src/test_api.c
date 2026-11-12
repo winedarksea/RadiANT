@@ -4532,8 +4532,9 @@ ZTEST(api, test_the_master_repeats_its_last_acknowledged_payload_until_the_host_
 	ack = last_tx_with_ctrl(RADIANT_CTRL_ACK_DATA_OPEN);
 	zassert_not_null(ack, "no acknowledged-data packet was armed");
 
-	/* Nothing answers: the transfer fails and the engine goes idle. */
-	fake_radio_advance_to(ack->t_sync_at + RADIANT_TRANSFER_REPLY_US +
+	/* Nothing answers: the transfer fails and the engine goes idle. A
+	 * slot opener's window runs to the slave's slot-reply turnaround. */
+	fake_radio_advance_to(ack->t_sync_at + RADIANT_TRANSFER_OPENER_REPLY_US +
 			      RADIANT_TRANSFER_ACK_GUARD_US + 100u);
 	drain();
 	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED));
@@ -4587,16 +4588,20 @@ ZTEST(api, test_the_master_repeats_the_last_burst_packet_it_sent)
 	p0 = last_tx_with_ctrl(RADIANT_CTRL_BURST_OPEN_SEQ0);
 	zassert_not_null(p0, "burst packet 0 was not armed");
 
-	/* The slave acknowledges packet 0. */
+	/* The slave acknowledges packet 0 where a real one does: on its
+	 * slot-reply turnaround, +2209 us for a Garmin USB-m (2026-11-11),
+	 * not the +1560 a burst receiver uses. */
 	(void)build_peer_frame(frame,
 			       radiant_transfer_reply_ctrl(RADIANT_CTRL_BURST_OPEN_SEQ0),
 			       peer_payload);
 	zassert_equal(RADIANT_RADIO_OK_RC,
-		      fake_radio_air_frame(p0->t_sync_at +
-					   RADIANT_TRANSFER_REPLY_US,
+		      fake_radio_air_frame(p0->t_sync_at + 2209u,
 					   frame, AIR_LEN));
-	fake_radio_advance_to(p0->t_sync_at + RADIANT_TRANSFER_REPLY_US + 200u);
+	fake_radio_advance_to(p0->t_sync_at + 2209u + 200u);
 	drain();
+	zassert_equal(0u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED),
+		      "a slot-opening packet's acknowledgement at +2209 us was "
+		      "not heard");
 
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
 		      antr_burst_tx(CH, 8u, blk_b, ANTR_BURST_SEGMENT_END),
@@ -4618,6 +4623,13 @@ ZTEST(api, test_the_master_repeats_the_last_burst_packet_it_sent)
 	zassert_mem_equal(&next->body[BODY_D0], blk_b, 8u,
 			  "the next broadcast did not repeat the last burst "
 			  "packet");
+	/* And on the master's own grid: packet 0 was the slot, packet 1 and
+	 * its retries were not. Re-anchoring on them walked the grid by the
+	 * burst's length and a real slave lost the master (2026-11-11). */
+	zassert_equal(0u, (uint32_t)((next->t_sync_at - p0->t_sync_at) %
+				     PERIOD_US),
+		      "the burst moved the master's slot grid by %u us",
+		      (unsigned)((next->t_sync_at - p0->t_sync_at) % PERIOD_US));
 
 	fake_radio_advance_to(next->t_sync_at + RADIANT_TRANSFER_SLOT_REPLY_US +
 			      RADIANT_TRANSFER_ACK_GUARD_US + 10u);

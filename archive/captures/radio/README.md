@@ -43,6 +43,9 @@ that does not run is not a record of anything.
 | `2026-08-09-spike-b2-runA-burst-seq.log` | Part 2, the burst sequence walk: bursts of 1, 2, 3, 9 and 17 packets, complete |
 | `2026-08-09-spike-b2-runB-burst-seq-advburst.log` | Part 2, the same plus advanced burst — bursts up to 51 on-air packets |
 | `2026-08-09-spike-b2-runC-master-control.log` | Part 2, the master/slave control: the same board, script and payload with only the channel role changed |
+| `2026-11-11-master-burst-garmin-ack.log` | A RadiANT master's burst to a Garmin USB-m slave, before the fix: the Garmin answers `0x8A` at +2209 / +2218 µs, outside the master's window. See *The master-burst captures* below |
+| `2026-11-11-master-burst-grid-walk.log` | The same with the window fixed: the burst completes, then the master's grid has moved +6.87 ms |
+| `2026-11-11-master-burst-fixed.log` | Both fixes: three 3-packet bursts complete, grid unmoved, the next broadcasts repeat the last burst packet |
 
 **The four-profile `.antcap` set still needs a bench session — see *What to
 record* below.**
@@ -137,6 +140,33 @@ Two things worth knowing before quoting these logs:
 
 Together they are about 292 KB, which puts `archive/` at **2.72 MB** against
 its 10 MB budget.
+
+## The master-burst captures (2026-11-11)
+
+Recorded by `radiant/spike/promisc` on the **nRF54L15 DK** (log VCOM, DTR on),
+built at NCS v3.2.4 as that README describes. Master: the Pro Micro running
+`apps/dongle` (core/nRF, non-MPSL), device 14871 / type 0x11 / trans 5,
+period 8192, driven by a scratch script that sends 3-packet host bursts (the
+same traffic as `tools/ant_ack_pair.py --master-bursts`). Slave: the Garmin
+USB-m, a bidirectional slave (0x00) on the same channel ID. The captures start
+mid-run, so there is no `[cfg]` banner; the configuration is the one in the
+promisc README.
+
+- `...-garmin-ack.log`, firmware abe9412: every burst's packet 0 (`B3=8A`) is
+  answered with `0xD2` at **+2209 and +2218 µs** - the slave's slot-reply
+  turnaround (Spike B measured 2186/2191 for a reply to a broadcast), not the
+  1560 µs data-to-ack interval of a running burst. The master's window closed
+  at +1810, so it never heard the answer and failed the transfer; the Garmin
+  then repeats its `0xD2` 21 times at ~3.13 ms waiting for packet 1, the same
+  receiver behaviour Spike B part 2's `run0` recorded. No master-originated
+  burst or acknowledged message had completed on air before this.
+- `...-grid-walk.log`, window widened: `8A D2 92 C2 A2 F2` completes, then the
+  next broadcast is at last packet + one period (+6.87 ms off the grid),
+  because every data packet re-anchored the master's slot. The Garmin drops to
+  search and the next burst is never answered.
+- `...-fixed.log`: only packet 0's first attempt anchors the slot. Three bursts
+  complete, broadcasts stay on the `...21831` grid, and each post-burst
+  broadcast carries the burst's last packet (Rev 5.1 p.109).
 
 ## The format
 
