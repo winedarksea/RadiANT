@@ -72,36 +72,46 @@ usability work (samples, `antr_*` in the module, stock Zephyr support) is done.
 
 # Discovery issues from the 2026-11-09 review of the last 35 commits
 
-Reviewed through `86233e8`; both issues affect the discovery changes in
-`2079575`. Verified by code inspection; C tests and hardware validation pending.
+Reviewed through `86233e8`. The two discovery issues affect `2079575`. All
+three defects below were fixed on 2026-11-12 with regression tests; each test
+fails with its source fix reverted (native_sim twister, Bluefin).
 
-- [ ] **P2: Restore the configured discovery frequency when the last declared search ends.**
-  A keyed off-57 search retunes the shared sweep. If that channel acquires or
-  closes while a keyless scan remains active, `retune_at_boundary()`'s
-  no-declared-frequency branch leaves the sweep on the off-57 frequency
-  indefinitely, so the keyless scan misses normal ANT+ traffic on RF 57.
-  Preserve the configured default separately from the current sweep frequency
-  and restore it when no declared searches remain. Add a regression test for
-  an off-57 keyed search ending while a keyless scan continues.
-  Code: `radiant/src/radiant_search.c`, `retune_at_boundary()` (around line 606).
+- [x] **P2: Restore the configured discovery frequency when the last declared search ends.**
+  Fixed in `afe3be2`. A keyed off-57 search retuned the shared sweep, and when
+  it ended with a keyless scan still running, `retune_at_boundary()` left the
+  sweep on the off-57 frequency until reset. The search instance now keeps its
+  configured frequency (`home_rf`) and returns to it at the next set boundary
+  once no searcher declares one.
+  Test: `test_the_sweep_returns_home_when_the_last_declared_search_ends`.
 
-- [ ] **P2: Apply a first nonzero-network key installed during an active search.**
-  If searches are active when the first valid key is installed on network 1
-  or higher, `antr_network_address_set()` skips sweep reinitialization without
-  recording pending work. Discovery keeps using the zero address. Closing all
-  searches and retrying the same key still fails because `first_key` is now
-  false; recovery requires a network-0 key or reset. Record the pending address
-  change independently of active search membership and apply it safely between
-  windows. Add regression coverage for installation during an active search
-  and for closing searches and retrying the key. The analogous late-key
-  limitation on network 0 predates this review range.
-  Code: `radiant/src/antr/ant_radio_radiant.c`, `antr_network_address_set()` (around line 3712).
+- [x] **P2: Apply a first key installed during an active search.**
+  Fixed in `0ec058d` (test timing fix `64c05e0`). `antr_network_address_set()`
+  re-initialised the sweep only with nobody searching and recorded nothing
+  otherwise, so the sweep stayed on the zero address until reset. Also covers
+  the older network-0 variant. A network's first valid key now always
+  re-initialises the sweep: at once when no carrier is in flight (then pumping,
+  so every SEARCHING channel rejoins keyed or keyless afresh), otherwise through
+  the existing deferred re-init. Tests: `test_a_first_key_on_network_{0,1}_installed_mid_search_reaches_the_sweep`,
+  `test_closing_and_retrying_the_key_keeps_the_ant_plus_sweep`,
+  `test_a_slave_keyed_mid_search_declares_its_frequency`. Optional on-air check
+  not yet run: open a wildcard slave on network 1 before the key, then key it
+  and confirm a real sensor is found without a reset.
 
-New slave-broadcast path can lose a queued update.
-It snapshots payload A for transmission about 2.19 ms after the master’s frame. If the host writes B before A finishes, the completion callback clears bcast_pending even though B was never sent. Introduced for slaves by 2898720; the older master path has similar bookkeeping. This is a code-inspection finding, not an on-air reproduction, and has limited relevance to ordinary receive-only Zwift channels. Fix with a payload generation counter so completion only clears the write actually transmitted. See [snapshot (line 1275)](/C:/Users/Colin/ant_dongle/radiant/src/antr/ant_radio_radiant.c:1275) and [completion (line 2565)](/C:/Users/Colin/ant_dongle/radiant/src/antr/ant_radio_radiant.c:2565).
+- [x] **Slave broadcast could lose a queued update.**
+  Fixed in `58c9209`. A host write landing between the reply's payload snapshot
+  and its completion was dropped, because the completion cleared
+  `bcast_pending` unconditionally. A per-channel write generation now lets a
+  completion clear pending only for the write it carried. Masters always sent
+  the newer write on the next slot; only their `antr_pending_transmit_get()`
+  readback was wrong. Test: `test_a_slave_broadcast_written_mid_reply_still_goes_out`.
 
-Burst retries can compete with sensor reception—but only during requested bursts.
-326c496 adds up to five retries per packet. Those introduce additional timed transmissions, and the scheduler allows transmissions to truncate overlapping receive windows. Other-channel packet loss is a plausible risk, not a measured regression. Ordinary broadcasts and single-packet acknowledged messages do not enter this retry path. Before extending burst support, benchmark simultaneous HR/power/cadence reception under lossy burst traffic. See [retry scheduling (line 335)](/C:/Users/Colin/ant_dongle/radiant/src/radiant_burst.c:335).
+- [ ] **Before extending burst support: benchmark HR/power/cadence RX under lossy burst traffic.**
+  Not a defect. `326c496` adds up to five retries per burst packet, and the
+  scheduler lets transmissions truncate overlapping receive windows, so
+  other-channel loss during a requested burst is a plausible risk, not a
+  measured regression. Ordinary broadcasts and single-packet acknowledged
+  messages never enter this path. Needs the bench. Code:
+  `radiant/src/radiant_burst.c`, retry scheduling (around line 335).
 
 
 # Open issues from the 2026-11-07 RadiANT vs Garmin ANT USB-m comparison

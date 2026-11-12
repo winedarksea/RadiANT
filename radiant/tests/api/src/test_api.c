@@ -2368,6 +2368,136 @@ ZTEST(api, test_a_key_on_network_1_only_moves_the_sweep_to_the_ant_plus_address)
 	end_of_test();
 }
 
+/*
+ * Review 2026-11-09: the first key installed while a channel searches. The
+ * install used to re-initialise the sweep only with nobody searching, and
+ * recorded nothing otherwise; the next install of the same key was then no
+ * longer "first", so the sweep stayed on the all-zero address until reset.
+ * Any host that keys after opening (a second app on a shared Android stack)
+ * found nothing.
+ */
+
+/* The live sweep window, once one is armed with the given address and RF,
+ * within `limit_us` of virtual time; NULL if none ever was. */
+static const struct fake_radio_arm *sweep_window_on(uint8_t a0, uint8_t a1,
+						    uint8_t rf,
+						    uint32_t limit_us)
+{
+	uint32_t waited = 0u;
+
+	for (;;) {
+		const struct fake_radio_arm *w = last_arm_of(FAKE_RADIO_ARM_RX);
+
+		if (w != NULL && !w->terminated && w->n_filters >= 2u &&
+		    w->filters[0].addr[0] == a0 && w->filters[0].addr[1] == a1 &&
+		    w->rf_index == rf) {
+			return w;
+		}
+		if (waited >= limit_us) {
+			return NULL;
+		}
+		run_virtual_us(10000u);
+		waited += 10000u;
+	}
+}
+
+static void expect_mid_search_key_reaches_the_sweep(uint8_t network)
+{
+	const struct fake_radio_arm *w;
+	uint16_t                     dev;
+
+	open_wildcard_slave(CH, network, (uint8_t)RF_INDEX);
+	w = armed_search_window();
+	zassert_true(w->filters[0].addr[0] == 0u && w->filters[0].addr[1] == 0u,
+		     "setup: a keyless sweep did not run on the zero address "
+		     "(%02x %02x)", w->filters[0].addr[0], w->filters[0].addr[1]);
+	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(CH));
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_network_address_set(network, ant_plus_key));
+
+	w = sweep_window_on(0xA6u, 0xC5u, (uint8_t)RF_INDEX, 2000000u);
+	zassert_not_null(w, "network %u: the sweep never left the zero address "
+			 "after the ANT+ key was installed mid-search",
+			 (unsigned int)network);
+
+	/* sweep_window_on() steps time, so the window may be part-way
+	 * through: air the device ahead of now, not ahead of t_open. */
+	{
+		radiant_time_t now = radiant_radio_now();
+		uint32_t at = (uint32_t)((now > w->t_open ? now - w->t_open : 0u) +
+					 1000u);
+
+		zassert_true(w->t_open + at + 1000u < w->t_close,
+			     "setup: too little of the window is left to air in");
+		air_device(w, 0u, 0x0500u, 0x0Bu, at, &dev);
+	}
+	fake_radio_advance_to(w->t_close + 1u);
+	drain();
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH),
+		      "network %u: a real ANT+ device was not acquired - state %d",
+		      (unsigned int)network, (int)radiant_channel_state_get(CH));
+}
+
+ZTEST(api, test_a_first_key_on_network_1_installed_mid_search_reaches_the_sweep)
+{
+	expect_mid_search_key_reaches_the_sweep(1u);
+	end_of_test();
+}
+
+ZTEST(api, test_a_first_key_on_network_0_installed_mid_search_reaches_the_sweep)
+{
+	expect_mid_search_key_reaches_the_sweep(0u);
+	end_of_test();
+}
+
+/* After the mid-search install, a re-sent key and a fresh channel keep the
+ * ANT+ sweep: the re-send is a no-op, not a step back. */
+ZTEST(api, test_closing_and_retrying_the_key_keeps_the_ant_plus_sweep)
+{
+	const struct fake_radio_arm *w;
+
+	expect_mid_search_key_reaches_the_sweep(1u);
+	(void)antr_channel_close(CH);
+	fake_radio_advance(1000u);
+	drain();
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_network_address_set(1u, ant_plus_key));
+	open_wildcard_slave(1u, 1u, (uint8_t)RF_INDEX);
+	w = armed_search_window();
+	zassert_true(w->filters[0].addr[0] == 0xA6u && w->filters[0].addr[1] == 0xC5u,
+		     "the sweep is on %02x %02x after a re-sent key",
+		     w->filters[0].addr[0], w->filters[0].addr[1]);
+
+	(void)antr_channel_close(1u);
+	fake_radio_advance(1000u);
+	drain();
+	end_of_test();
+}
+
+/* A slave on 66 opened before its network had a key searches keyless, which
+ * declares no frequency, so the sweep stays on 57. Once the key arrives the
+ * channel is keyed and must declare 66, or it never hears its master. */
+ZTEST(api, test_a_slave_keyed_mid_search_declares_its_frequency)
+{
+	const struct fake_radio_arm *w;
+
+	open_wildcard_slave(CH, 1u, 66u);
+	w = armed_search_window();
+	zassert_equal((uint8_t)RF_INDEX, w->rf_index,
+		      "setup: a keyless slave on 66 moved the sweep to RF %u",
+		      (unsigned int)w->rf_index);
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_network_address_set(1u, ant_plus_key));
+
+	w = sweep_window_on(0xA6u, 0xC5u, 66u, 2000000u);
+	zassert_not_null(w, "the slave keyed mid-search never moved the sweep "
+			 "to its RF 66");
+	end_of_test();
+}
+
 /* Network 0 keeps precedence: a key on network 1 first, then network 0, leaves
  * the sweep on the ANT+ address either way (both are the same key here, so the
  * assertion is that the second install does not break it). */
@@ -5015,6 +5145,95 @@ ZTEST(api, test_a_slave_broadcast_goes_out_once_in_the_masters_reply_window)
 	zassert_equal(1u, count_tx_with_ctrl(RADIANT_CTRL_SLAVE_BROADCAST),
 		      "one host write went out more than once");
 	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TX));
+
+	end_of_test();
+}
+
+/*
+ * Review 2026-11-09: a write that lands between the reply's snapshot and its
+ * completion. The completion used to clear bcast_pending whatever had been
+ * written since, so the second write was silently dropped: never sent, and
+ * antr_pending_transmit_get() said nothing was waiting.
+ */
+ZTEST(api, test_a_slave_broadcast_written_mid_reply_still_goes_out)
+{
+	static const uint8_t page_a[8] = {
+		0x5Bu, 0x00u, 0xA5u, 0x5Au, 0x01u, 0x02u, 0x03u, 0x04u
+	};
+	static const uint8_t page_b[8] = {
+		0x5Bu, 0x01u, 0xB6u, 0x6Bu, 0x05u, 0x06u, 0x07u, 0x08u
+	};
+	uint8_t                      buf[8];
+	uint16_t                     dev;
+	const struct fake_radio_arm *w;
+	const struct fake_radio_arm *tx;
+	radiant_time_t               t_master;
+	uint8_t                      pending = 0xFFu;
+
+	open_and_acquire_slave_of_type((uint8_t)ANTW_CHANNEL_TYPE_SLAVE, &dev);
+	run_housekeeping();
+
+	memcpy(buf, page_a, sizeof(buf));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_broadcast_message_tx(CH, 8u, buf));
+	drain();
+	n_msg = 0u;
+
+	if (fake_radio_is_idle()) {
+		run_housekeeping();
+	}
+	w = last_arm_of(FAKE_RADIO_ARM_RX);
+	zassert_not_null(w, "no tracked window armed");
+	zassert_false(w->terminated);
+	t_master = w->t_open + ((w->t_close - w->t_open) / 2u);
+	air_tracked_frame(w, dev);
+
+	/* The master's frame is received and the reply posted with A, but the
+	 * reply has not gone out yet. */
+	fake_radio_advance_to(t_master + 1000u);
+	drain();
+	tx = last_tx_with_ctrl(RADIANT_CTRL_SLAVE_BROADCAST);
+	zassert_not_null(tx, "setup: the reply was not posted on reception");
+	zassert_false(tx->terminated, "setup: the reply already went out");
+	zassert_true(t_master + 1000u < tx->t_sync_at,
+		     "setup: the reply is not still ahead");
+
+	/* B, in that gap. */
+	memcpy(buf, page_b, sizeof(buf));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_broadcast_message_tx(CH, 8u, buf));
+	drain();
+
+	fake_radio_advance_to(t_master + RADIANT_TRANSFER_SLOT_REPLY_US + 1000u);
+	drain();
+	tx = last_tx_with_ctrl(RADIANT_CTRL_SLAVE_BROADCAST);
+	zassert_not_null(tx);
+	zassert_mem_equal(&tx->body[BODY_D0], page_a, 8u,
+			  "the reply in flight did not carry A");
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TX));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_pending_transmit_get(CH, &pending));
+	zassert_equal(1u, pending,
+		      "B was cleared by A's completion: it will never go out");
+
+	/* The next master frame carries B. */
+	if (fake_radio_is_idle()) {
+		run_housekeeping();
+	}
+	w = last_arm_of(FAKE_RADIO_ARM_RX);
+	zassert_not_null(w);
+	air_tracked_frame(w, dev);
+	fake_radio_advance_to(w->t_close + RADIANT_TRANSFER_SLOT_REPLY_US + 1000u);
+	drain();
+	zassert_equal(2u, count_tx_with_ctrl(RADIANT_CTRL_SLAVE_BROADCAST),
+		      "B never went out");
+	tx = last_tx_with_ctrl(RADIANT_CTRL_SLAVE_BROADCAST);
+	zassert_mem_equal(&tx->body[BODY_D0], page_b, 8u,
+			  "the second reply did not carry B");
+	zassert_equal(2u, count_channel_events(CH, ANTW_EVENT_TX));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_pending_transmit_get(CH, &pending));
+	zassert_equal(0u, pending, "B is still pending after it went out");
 
 	end_of_test();
 }

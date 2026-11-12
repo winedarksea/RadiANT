@@ -371,6 +371,7 @@ int radiant_search_init(struct radiant_search *s, const struct radiant_search_cf
 	s->n_sets = s->wildcard
 			    ? 1u
 			    : (uint16_t)((RADIANT_SEARCH_LO_VALUES + nf - 1u) / nf);
+	s->home_rf = cfg->rf_index;
 	s->inited = true;
 
 	return RADIANT_SEARCH_OK;
@@ -579,7 +580,7 @@ uint8_t radiant_search_rf_get(const struct radiant_search *s)
  * only with no window in flight and only at a set boundary, so it can neither
  * disturb an armed window nor cut a set's dwell short.
  *
- *  - No channel declared a frequency: nothing to follow, never retune.
+ *  - No channel declared a frequency: return to the configured one.
  *  - Nobody declared the current frequency: this pass would be heard by no
  *    one, so move now to the lowest declared one.
  *  - Several frequencies declared and a pass has just completed: move to the
@@ -627,12 +628,13 @@ static void retune_at_boundary(struct radiant_search *s)
 	}
 
 	if (n == 0) {
-		/* Nothing declared a frequency, so no pass decision is owed; a
-		 * wrap flagged now must not leak into a later mixed session. */
-		s->pass_done = false;
-		return;
-	}
-	if (!cur_wanted) {
+		/* Nothing declared a frequency, so no pass decision is owed
+		 * (the tail clears a wrap flagged now, so it cannot leak into a
+		 * later mixed session). Go home: a sweep left on the frequency
+		 * of a keyed search that has ended would be heard by none of
+		 * the keyless searchers still running. */
+		target = (int)s->home_rf;
+	} else if (!cur_wanted) {
 		target = lowest;
 	} else if (n > 1 && s->pass_done) {
 		target = (above >= 0) ? above : lowest;

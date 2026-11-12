@@ -284,6 +284,29 @@ ZTEST(radiant_search_rf, test_the_sweep_leaves_a_frequency_nobody_searches)
 	zassert_ok(radiant_search_end(&g_s, 0u));
 }
 
+/* Review 2026-11-09: a keyless scan on channel 1 and a keyed search on 66 on
+ * channel 0. When the keyed search ends, nobody declares a frequency any more,
+ * and the sweep must go back to 57 for the scan. It used to stay on 66 until
+ * reset, deaf to every 57 device the scan was looking for. */
+ZTEST(radiant_search_rf, test_the_sweep_returns_home_when_the_last_declared_search_ends)
+{
+	uint8_t rf[64];
+	uint16_t n;
+
+	bring_up();
+	zassert_ok(radiant_search_begin(&g_s, 1u, RADIANT_SEARCH_MODE_SCAN, &want_any,
+					radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+	begin(0u, RF_B);
+	n = radiant_search_sets(&g_s);
+	run_pass(rf, n);
+	expect_pass_on(rf, n, RF_B, "while the 66 search runs");
+	zassert_ok(radiant_search_end(&g_s, 0u));
+	run_pass(rf, n);
+	expect_pass_on(rf, n, RF_A, "after the 66 search ended");
+	zassert_equal(RF_A, radiant_search_rf_get(&g_s));
+	zassert_ok(radiant_search_end(&g_s, 1u));
+}
+
 /* Offer filtering, live. Channel 0 (first in channel order, so it would take
  * the frame) is on 66; channel 1 on 57. The sweep is on 57, so a device heard
  * there is channel 1's and must not be offered to channel 0. */
