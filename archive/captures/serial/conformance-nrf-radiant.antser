@@ -1,7 +1,7 @@
 # ant serial capture v1: <seconds|-> <dir> <framed message, hex>
 # tools/ant_conformance.py - Tier 1 frame conformance
 # timestamps are suppressed on purpose: the acceptance criterion is a byte diff of two of these files
-# 286 cases, 1281 records
+# 296 cases, 1319 records
 # case 41-unassign-channel/valid
 - > a4014a00ef
 - < a4016f20ea
@@ -1424,6 +1424,54 @@
 - > a4014a00ef
 - < a4016f20ea
 - > a4028c00002b
+# case c5-sleep/valid
+- > a4014a00ef
+- < a4016f20ea
+- > a401c50060
+- < a4034000c5280a
+# case c5-sleep/malformed-short
+- > a4014a00ef
+- < a4016f20ea
+- > a400c561
+- < a4034000c5280a
+# case c5-sleep/malformed-long
+- > a4014a00ef
+- < a4016f20ea
+- > a402c5000063
+- < a4034000c5280a
+# case c5-sleep/malformed-oob-index
+- > a4014a00ef
+- < a4016f20ea
+- > a401c5ff9f
+- < a40340ffc528f5
+# case c5-sleep/malformed-checksum
+- > a4014a00ef
+- < a4016f20ea
+- > a401c50061
+# case c7-set-usb-descriptor-string/valid
+- > a4014a00ef
+- < a4016f20ea
+- > a401c70062
+- < a4034000c72808
+# case c7-set-usb-descriptor-string/malformed-short
+- > a4014a00ef
+- < a4016f20ea
+- > a400c763
+- < a4034000c72808
+# case c7-set-usb-descriptor-string/malformed-long
+- > a4014a00ef
+- < a4016f20ea
+- > a421c700000000000000000000000000000000000000000000000000000000000000000042
+- < a4034000c72808
+# case c7-set-usb-descriptor-string/malformed-oob-index
+- > a4014a00ef
+- < a4016f20ea
+- > a401c7ff9d
+- < a40340ffc728f7
+# case c7-set-usb-descriptor-string/malformed-checksum
+- > a4014a00ef
+- < a4016f20ea
+- > a401c70063
 # case 4d-request-capabilities-0/valid
 - > a4014a00ef
 - < a4016f20ea
@@ -1488,7 +1536,7 @@
 - > a4014a00ef
 - < a4016f20ea
 - > a4024d007893
-- < a4047803010000da
+- < a4047803000000db
 # case 4d-request-config-adv-burst-1/valid
 - > a4014a00ef
 - < a4016f20ea

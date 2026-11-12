@@ -2,11 +2,11 @@
   "tool": "ant_conformance.py",
   "format": "antser-v1",
   "antser_path": "archive\\captures\\serial\\conformance-nrf-radiant.antser",
-  "sha256": "077192e9dc4a3cc2b50454a99996236b4be8d4f3e4d2078b8b1f232cf495eb13",
-  "cases": 286,
-  "records": 1281,
-  "replies": 617,
-  "messages_exercised": 48,
+  "sha256": "3104ad795da0e6c7fd511ecd3eedc65d36c2f1f489eea2f9229d6b109ee5fe0c",
+  "cases": 296,
+  "records": 1319,
+  "replies": 635,
+  "messages_exercised": 50,
   "silent_cases": [],
   "unexpected_replies": [],
   "skipped": [
@@ -25,10 +25,6 @@
     {
       "what": "MESG_RSSI_SEARCH_THRESHOLD_ID",
       "why": "numeric id unresolved without sdk-ant: Proximity search threshold expressed in RSSI rather than in the proximity bins MESG_PROX_SEARCH_CONFIG (0x71) uses. Implied by the ANT_DLL export ANT_RSSI_SetSearchThreshold. Believed to sit in the 0xC0 block of AP2-era extension messages, but no value in that block is corroborated by anything in this repository - the whole host-callable API in archive/host-api/ant_dll_exports.json tops out at 0x7B - so no number is recorded here. The Wave 2 shim looked and came back empty as well: sdk-ant v2.1.0 defines no such id anywhere in its headers or sources, so this stays unresolved rather than merely unverified."
-    },
-    {
-      "what": "MESG_SLEEP_ID",
-      "why": "numeric id unresolved without sdk-ant: Put the device into its low-power sleep state. Implied by the ANT_DLL export ANT_SleepMessage, which Zwift resolves. Same 0xC0 block and the same lack of corroboration as MESG_RSSI_SEARCH_THRESHOLD_ID; no number is recorded. The Wave 2 shim found the name referenced in sdk-ant but never defined - the only occurrence is inside a commented-out dispatch arm - so there is no value to recover there either."
     },
     {
       "what": "MESG_RADIANT_EPOCH_ID",
@@ -1342,6 +1338,56 @@
       "sha256": "cde9af9f03b996ff72aa5c152a0e65f123db92ab670893adb74a6ab90921b12e"
     },
     {
+      "name": "c5-sleep/valid",
+      "records": 4,
+      "sha256": "cee3baf0daf2a126e76ab049a2be6de8f019fa10ef887063d7ef3ba418234e29"
+    },
+    {
+      "name": "c5-sleep/malformed-short",
+      "records": 4,
+      "sha256": "d9cabec9b9faebb0b53fef1fdf0914bc23f31d627d92f0dadbb116e71b7730ec"
+    },
+    {
+      "name": "c5-sleep/malformed-long",
+      "records": 4,
+      "sha256": "9f4ae8c2d6e7b3fb06c67568db60cbc57e344329c148c7d2ec2fabda6539f387"
+    },
+    {
+      "name": "c5-sleep/malformed-oob-index",
+      "records": 4,
+      "sha256": "4d0d96746e28f3e313db3ac76842d8234c073591f40e6e073b71787206fdeb3d"
+    },
+    {
+      "name": "c5-sleep/malformed-checksum",
+      "records": 3,
+      "sha256": "af482019223236dc88386c7664895ee6519435bbd29279eeec813a114a269924"
+    },
+    {
+      "name": "c7-set-usb-descriptor-string/valid",
+      "records": 4,
+      "sha256": "b1e6cab69d937e1dee36f2cf8d3269d39bfa9a4767bfb60c9853d2c844b9719d"
+    },
+    {
+      "name": "c7-set-usb-descriptor-string/malformed-short",
+      "records": 4,
+      "sha256": "ba0c1ae1580a95bd039e91017296bba09cde4eb90551c4d1f79291516b27933d"
+    },
+    {
+      "name": "c7-set-usb-descriptor-string/malformed-long",
+      "records": 4,
+      "sha256": "af053503d871799b6b486d9e2d7465f5bc13e4b1f9334a1f5d5fee935272d789"
+    },
+    {
+      "name": "c7-set-usb-descriptor-string/malformed-oob-index",
+      "records": 4,
+      "sha256": "4cba4ea23daff98d93d5f65f2e1c5b9a51805b1bcc2e58c8dafa048efd3f1bbc"
+    },
+    {
+      "name": "c7-set-usb-descriptor-string/malformed-checksum",
+      "records": 3,
+      "sha256": "10eb8ff944ec873014ede70e5c97f3d8558a0693cdf25a0c573021349a2614b9"
+    },
+    {
       "name": "4d-request-capabilities-0/valid",
       "records": 4,
       "sha256": "c7dbf5363ac412f93c1ffe0915601f2c9633bceca7b7a29361b1a0fb9ca536c7"
@@ -1404,7 +1450,7 @@
     {
       "name": "4d-request-config-adv-burst-0/valid",
       "records": 4,
-      "sha256": "c4b507ae0a1a3c07bb7630391e9cbaa00d4912f4aaf194cdf73e5477c61b9bc0"
+      "sha256": "b0a747812ed1da861cbaac345ca4a59cc90ab0efd6feb8d3c31b31ab72bf12dc"
     },
     {
       "name": "4d-request-config-adv-burst-1/valid",

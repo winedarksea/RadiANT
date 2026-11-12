@@ -82,6 +82,25 @@ board's own, so this transcript's hash is specific to this Pro Micro. `--compare
 masks the serial (and the checksum) of 0x61/0xC6 replies, so two boards still
 compare equal.
 
+**The nRF re-record, 2026-11-11 (later).** Re-recorded on the same Pro Micro
+over USB at the end of `fix/spec-rev51-gaps`. Three recordings, the last two
+from a clean start, hash identically (`3104ad79…fe0c`; the first carried a
+stale close-channel reply from the previous bench script and is discarded).
+The text diff against the earlier 2026-11-11 file is:
+
+    78-config-adv-burst/... capabilities:  < a4047803010000da -> < a4047803000000db
+    + ten cases c5-sleep/* and c7-set-usb-descriptor-string/*, each refused
+      with INVALID_MESSAGE (0x28)
+
+The first is advanced burst no longer advertising frequency hopping. The second
+is `protocol/ant_wire.yaml` pinning `MESG_SLEEP_ID` at 0xC5 and Set USB
+Descriptor String at 0xC7 from the public Rev 5.1 document: the case generator
+probes every id with a value, so the transcript now also shows that both are
+unbridged. Nothing else changed byte for byte. That includes 0x79 (its legacy
+2-byte form is what the cases send) and 0x6E (its replies are the same). `--compare`
+against the cc26xx transcript is positional, so it now also reports those
+ten inserted cases until cc26xx is re-recorded.
+
 Where [`../radio/`](../radio/) records what went over the air, this records
 what went over USB: the `0xA4`-framed serial protocol, byte for byte, in both
 directions. It is the layer `src/ant_serial_bridge.c` implements and
