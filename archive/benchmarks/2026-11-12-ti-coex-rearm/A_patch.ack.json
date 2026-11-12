@@ -1,0 +1,58 @@
+{
+  "recorded": "2026-11-12T16:37:43.062957+00:00",
+  "master": "COM11",
+  "slave": "EE6986854FD72803",
+  "slave_trans_type": 5,
+  "zwift_load": false,
+  "tx_power_level": 4,
+  "receive_measurement": "master EVENT_TX matched once to channel RX within 100 ms; staged payload gaps separate",
+  "seconds": 120.0,
+  "sent": 8,
+  "accepted": 8,
+  "completed": 0,
+  "failed": 8,
+  "terminal_events": 8,
+  "peer_received": 5,
+  "duplicate_commands": 0,
+  "unexpected_commands": 0,
+  "protocol_errors": 0,
+  "errors": [],
+  "receive": {
+    "0": {
+      "expected": 477,
+      "received": 476,
+      "missing": 1,
+      "loss_pct": 0.20964360587002095,
+      "unmatched_tx_events": [
+        {
+          "time_s": 89.0,
+          "staged_payload": "101968010000ff24"
+        }
+      ],
+      "staged_payload_missing": 477,
+      "staged_payload_loss_pct": 100.0,
+      "broadcasts_received": 480,
+      "rssi_dbm": {
+        "mean": -39.184890656063615,
+        "min": -41,
+        "max": -38
+      }
+    }
+  },
+  "events": {
+    "ch0.EVENT_RX_FAIL": 1,
+    "ch0.EVENT_TRANSFER_TX_FAILED": 8
+  },
+  "pending": 0,
+  "sufficiency_failures": [
+    "acceptance requires at least 300 seconds and 300 commands"
+  ],
+  "quality_failures": [
+    "acknowledged transfer success below 99%"
+  ],
+  "gate_failures": [
+    "acceptance requires at least 300 seconds and 300 commands",
+    "acknowledged transfer success below 99%"
+  ],
+  "pass": false
+}

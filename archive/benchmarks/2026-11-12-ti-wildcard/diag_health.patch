@@ -1,0 +1,18 @@
+diff --git a/apps/common/ant_health.c b/apps/common/ant_health.c
+index c0751a1..ce87b0b 100644
+--- a/apps/common/ant_health.c
++++ b/apps/common/ant_health.c
+@@ -160,6 +160,13 @@ size_t ant_health_fill(uint8_t *out, size_t cap)
+ 	 * backends that do not. Whichever wrote last wins, and both are the
+ 	 * same quantity, so there is nothing to reconcile.
+ 	 */
++	{ /* BENCH-ONLY DIAG 2026-11-12, never commit: cc26xx false-sync
++	   * counters in the two fields a UART build leaves at zero. */
++		extern volatile uint32_t radiant_cc26xx_sync_frames;
++		extern volatile uint32_t radiant_cc26xx_sw_addr_mismatch;
++		out[2] = (uint8_t)radiant_cc26xx_sync_frames; out[3] = (uint8_t)(radiant_cc26xx_sync_frames >> 8); /* mod 65536 */
++		out[8] = (uint8_t)radiant_cc26xx_sw_addr_mismatch; out[9] = (uint8_t)(radiant_cc26xx_sw_addr_mismatch >> 8);
++	}
+ 	if (ev != NULL && (uint32_t)ev->high_water > (uint32_t)out[5]) {
+ 		out[5] = (uint8_t)((ev->high_water > 0xFFu) ? 0xFFu
+ 							    : ev->high_water);
