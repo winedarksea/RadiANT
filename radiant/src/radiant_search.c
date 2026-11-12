@@ -507,6 +507,29 @@ static int begin_common(struct radiant_search *s, uint8_t channel,
 		return RADIANT_SEARCH_EINVAL;
 	}
 
+	/* A NEW SESSION STARTS WITH NO PASS OWED. When nobody else is
+	 * searching, any wrap flagged earlier belongs to a session that has
+	 * ended, by whatever route it ended: radiant_search_end(), an
+	 * acquisition in handle_ok(), or a timeout in radiant_search_tick().
+	 * Left set, the first boundary of a mixed session would leave its
+	 * first frequency at once instead of after a whole pass. Clearing it
+	 * here, the one door every session comes in by, covers all three; the
+	 * ENOENT clear in radiant_search_window() is not reachable through the
+	 * API, which asks for no window while nobody searches. */
+	{
+		bool others = false;
+
+		for (uint8_t c = 0; c < (uint8_t)RADIANT_SEARCH_MAX_CHANNELS; c++) {
+			if (c != channel && s->chans[c].active) {
+				others = true;
+				break;
+			}
+		}
+		if (!others) {
+			s->pass_done = false;
+		}
+	}
+
 	ch = &s->chans[channel];
 	ch->active = true;
 	ch->mode = mode;

@@ -386,6 +386,9 @@ static void expect_mixed_session_stays_for(uint16_t windows)
 	zassert_ok(radiant_search_end(&g_s, 1u));
 }
 
+/* No radiant_search_window() between the end and the next session: the API
+ * asks for no window while nobody searches, so the ENOENT path that used to
+ * clear the flag is never taken there. */
 ZTEST(radiant_search_rf, test_a_pass_that_ended_with_no_searchers_does_not_leak)
 {
 	uint8_t rf[64];
@@ -396,7 +399,38 @@ ZTEST(radiant_search_rf, test_a_pass_that_ended_with_no_searchers_does_not_leak)
 	n = radiant_search_sets(&g_s);
 	run_pass(rf, n); /* selecting the last set wraps the cursor */
 	zassert_ok(radiant_search_end(&g_s, 0u));
-	zassert_equal(RADIANT_SEARCH_ENOENT, win_open());
+
+	expect_mixed_session_stays_for(n);
+}
+
+/* The same wrap, but the session ends by ACQUISITION in the last set of the
+ * pass rather than by radiant_search_end(). */
+ZTEST(radiant_search_rf, test_a_pass_that_ended_by_acquisition_does_not_leak)
+{
+	uint8_t rf[64];
+	uint8_t frame[FAKE_RADIO_AIR_FRAME_MAX];
+	uint8_t len;
+	uint16_t n;
+	uint16_t lo = 0u;
+
+	bring_up();
+	begin(0u, RF_A);
+	n = radiant_search_sets(&g_s);
+	/* A device in the pass's last set, whatever the geometry. */
+	while (lo < 0x100u &&
+	       radiant_search_set_for_devnum(&g_s, (uint16_t)(0x0700u | lo)) != n - 1u) {
+		lo++;
+	}
+	zassert_true(lo < 0x100u, "no devnum_lo lands in set %u", (unsigned int)(n - 1u));
+
+	run_pass(rf, n - 1u);
+	zassert_equal(RADIANT_SEARCH_OK, win_open()); /* the last set: the cursor wraps */
+	zassert_equal(n - 1u, g_w.set_index);
+	len = fake_radio_build_ant_frame(frame, (uint16_t)(0x0700u | lo), 0x78u, 1u, payload8);
+	zassert_ok(fake_radio_air_frame(g_w.t_open + 1000u, frame, len));
+	win_run();
+	zassert_equal(1u, g_n_acq, "the device in the last set was not acquired");
+	zassert_equal(0u, radiant_search_n_searching(&g_s));
 
 	expect_mixed_session_stays_for(n);
 }
