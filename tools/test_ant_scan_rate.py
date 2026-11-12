@@ -77,6 +77,37 @@ class Median(unittest.TestCase):
         self.assertIsNone(sr.median_with_misses([]))
 
 
+class PlanChildren(unittest.TestCase):
+    def test_port_joins_the_serial_children_last(self):
+        self.assertEqual(
+            sr.plan_children(["006", "EE69"], "COM11", 57600),
+            [("006", ["--serial", "006"]),
+             ("EE69", ["--serial", "EE69"]),
+             ("COM11", ["--port", "COM11", "--baud", "57600"])])
+
+    def test_one_device_is_not_a_multi_run(self):
+        self.assertEqual(len(sr.plan_children([], "COM11", 115200)), 1)
+        self.assertEqual(len(sr.plan_children(["006"], None, 115200)), 1)
+        self.assertEqual(len(sr.plan_children([], None, 115200)), 0)
+
+    def test_baud_reaches_only_the_port_child(self):
+        for label, dev in sr.plan_children(["006"], "COM11", 57600):
+            self.assertEqual("--baud" in dev, label == "COM11")
+
+    def test_child_command_carries_the_shared_start_and_options(self):
+        args = argparse.Namespace(seconds=60.0, reopen=4.5,
+                                  track=[sr.parse_track("52233:0x11")])
+        cmd = sr._child_args(args, ["--port", "COM11", "--baud", "57600"],
+                             "out.json", 123.5)
+        tail = cmd[2:]
+        self.assertEqual(tail[:4], ["--port", "COM11", "--baud", "57600"])
+        self.assertIn("--start-at", tail)
+        self.assertEqual(tail[tail.index("--start-at") + 1], "123.5")
+        self.assertEqual(tail[tail.index("--track") + 1], "52233:17:8192")
+        self.assertEqual(tail[tail.index("--reopen") + 1], "4.5")
+        self.assertNotIn("--serial", tail)
+
+
 class Summarise(unittest.TestCase):
     def test_rate_is_per_listening_second_not_wall_second(self):
         log = sr.ScanLog(end=10.0, opens=[0.0, 6.0], closes=[4.0])
