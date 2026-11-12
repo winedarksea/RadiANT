@@ -22,6 +22,15 @@ reads.
   advertised again, but only when the backend really answers, so the
   capabilities reply goes from `...b2...` back to `...ba...`. The sdk-ant
   backend still refuses both. `tools/ant_probe.py` checks the replies.
+- **Opt-in wildcard search on nRF (`CONFIG_RADIANT_SEARCH_SHORT_MATCH`, default
+  n).** A search window matches only `[A6 C5]` in hardware and reads
+  `devnum_lo` from the frame. The sweep becomes one set rather than 32, and a
+  background scan reports devices at the Garmin stick's rate (12.2 against
+  12.6 sightings/s on a Pro Micro, against 1.0/s without it). It stays off by
+  default until its effect on tracked loss is settled. See ADR 0022.
+- **`tools/ant_scan_rate.py`** measures discovery speed: sightings/s, time to
+  first sighting after each scan open (with Zwift's reopen cadence), and
+  tracked-channel loss, on several dongles in one window.
 - **RadiANT is usable from other firmware.** The `antr_*` API and its runtime
   moved into the `radiant` module behind `CONFIG_RADIANT_ANTR_API`, with
   heart-rate receiver and transmitter samples in `radiant/samples/` and two
