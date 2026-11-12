@@ -300,6 +300,11 @@ struct api_chan {
 	/* Something arrived in the window that is now ending. What tells a
 	 * closed-empty window apart from one that heard its master. */
 	bool slot_heard;
+#if defined(CONFIG_RADIANT_DIAG_COUNTERS)
+	/* 0xF7 page 7: the tracked window now armed, and where it opened. */
+	bool           diag_armed;
+	radiant_time_t diag_t_open;
+#endif
 
 	/* The HAL requires a filter array to stay valid until the terminal
 	 * event, so it cannot be a stack local. */
@@ -2719,6 +2724,10 @@ static void api_sched_armed(uint8_t ch, radiant_time_t t_open, radiant_time_t t_
 	 */
 	if (api_ch[ch].slot_kind == (uint8_t)API_SLOT_TRACK_RX) {
 		api_ch[ch].track_repost = true;
+#if defined(CONFIG_RADIANT_DIAG_COUNTERS)
+		api_ch[ch].diag_armed = true;
+		api_ch[ch].diag_t_open = t_open;
+#endif
 	}
 	if (api_search_slot != ch ||
 	    api_ch[ch].slot_kind != (uint8_t)API_SLOT_SEARCH) {
@@ -2729,6 +2738,43 @@ static void api_sched_armed(uint8_t ch, radiant_time_t t_open, radiant_time_t t_
 	 * the module to trust our own routing instead. */
 	radiant_search_armed(&api_search, RADIANT_SEARCH_OP_EXTERNAL, t_open, t_close);
 }
+
+#if defined(CONFIG_RADIANT_DIAG_COUNTERS)
+/*
+ * 0xF7 page 7, fields 6-7: a tracked window that ran, opening within
+ * RADIANT_DIAG_SIBLING_US after the search heard the same device number - a
+ * sibling channel of the same device (a trainer's power and FE-C channels
+ * share one), which is the search reception most likely to have run up to
+ * the scan chunk's close just before this window. How many of those heard
+ * nothing, against the overall miss rate, says whether that hand-off costs
+ * tracked slots.
+ */
+static void api_diag_sibling(uint8_t ch, enum radiant_sched_done why)
+{
+	struct radiant_channel_id id;
+	radiant_time_t            t_open = api_ch[ch].diag_t_open;
+
+	if (!api_ch[ch].diag_armed) {
+		return;
+	}
+	api_ch[ch].diag_armed = false;
+	if (why == RADIANT_SCHED_DONE_MISSED || why == RADIANT_SCHED_DONE_DENIED) {
+		return; /* never ran */
+	}
+	if (!api_search.diag_last_valid || api_search.diag_last_t > t_open ||
+	    api_search.diag_last_t + RADIANT_DIAG_SIBLING_US <= t_open) {
+		return;
+	}
+	if (radiant_channel_id_get(ch, &id) != RADIANT_CH_OK ||
+	    id.device_number != api_search.diag_last_dev) {
+		return;
+	}
+	RADIANT_DIAG_INC(trk_slots_after_sibling);
+	if (!api_ch[ch].slot_heard) {
+		RADIANT_DIAG_INC(trk_miss_after_sibling);
+	}
+}
+#endif
 
 /* Context is not exclusively ISR: pass() may synchronously report a missed
  * arm from a thread, with radiant_event_crit_enter() held for the whole pass.
@@ -2775,6 +2821,11 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 		}
 	}
 
+#if defined(CONFIG_RADIANT_DIAG_COUNTERS)
+	if (api_ch[ch].slot_kind == (uint8_t)API_SLOT_TRACK_RX) {
+		api_diag_sibling(ch, why);
+	}
+#endif
 	if (api_ch[ch].slot_kind == (uint8_t)API_SLOT_SEARCH) {
 		/*
 		 * One scan chunk has ended. OK credits the whole chunk.
@@ -4917,6 +4968,14 @@ antr_err_t antr_diag_page(uint8_t page, uint8_t *out)
 		memcpy(v, &rd.v[base], sizeof(v));
 		break;
 	}
+	case RADIANT_DIAG_PAGE_HANDOFF:
+		memcpy(v, &rd.v[RADIANT_RADIO_DIAG_HANDOFF_BASE], 3u * sizeof(v[0]));
+		v[RADIANT_DIAG_HANDOFF_TRK_OPEN_LATE] = dc->trk_open_late;
+		v[RADIANT_DIAG_HANDOFF_TRK_OPEN_LATE_MAX_US] = dc->trk_open_late_max_us;
+		v[RADIANT_DIAG_HANDOFF_TRK_MISSED_BEHIND_SCAN] = dc->trk_missed_behind_scan;
+		v[RADIANT_DIAG_HANDOFF_TRK_SLOTS_AFTER_SIBLING] = dc->trk_slots_after_sibling;
+		v[RADIANT_DIAG_HANDOFF_TRK_MISS_AFTER_SIBLING] = dc->trk_miss_after_sibling;
+		break;
 	case RADIANT_DIAG_PAGE_SEARCH_A:
 	case RADIANT_DIAG_PAGE_SEARCH_B: {
 		const struct radiant_search_stats *st =

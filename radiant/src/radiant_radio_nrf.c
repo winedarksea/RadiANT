@@ -105,6 +105,10 @@ static struct {
 	uint32_t rx_posted, rx_refused;
 	uint32_t term_ok, term_empty, term_error;
 	uint32_t frames, sw_mismatch, crc_fail;
+	/* page 7: a search frame in flight (ADDRESS, no END) when the chunk's
+	 * hardware close or an abort took the receiver down; a search frame
+	 * whose END came within RADIANT_DIAG_SRCH_NEAR_CLOSE_US of that close. */
+	uint32_t srch_cut_close, srch_cut_abort, srch_end_near_close;
 } nrf_diag;
 #define NRF_DIAG(...) do { __VA_ARGS__; } while (0)
 #else
@@ -1002,6 +1006,12 @@ static struct {
 	bool               diag_end_noaddr;
 	bool               diag_cut;
 	radiant_time_t     diag_t_open;
+#endif
+#if defined(CONFIG_RADIANT_DIAG_COUNTERS)
+	/* 0xF7 page 7: this receive is a search window, and the instant its
+	 * hardware close compare fires (CC_CLOSE, tail included). */
+	bool               page7_search;
+	radiant_time_t     page7_close_at;
 #endif
 } radiant_op;
 
@@ -3273,6 +3283,16 @@ static int program_rx(const struct radiant_rx_req *req)
 			t_sync_cal(req->t_close,
 				   -t_sync_cal_rx_us(req->fmt->phy)) +
 			(radiant_time_t)tail);
+#if defined(CONFIG_RADIANT_DIAG_COUNTERS)
+		/* The search format is the only one with a 3-byte address
+		 * (radiant_frame.h), the same shape test the RX diag uses
+		 * for tracking's 5; this layer does not include the frame
+		 * module. */
+		radiant_op.page7_search = (req->fmt->addr_len == 3u);
+		radiant_op.page7_close_at =
+			t_sync_cal(req->t_close, -t_sync_cal_rx_us(req->fmt->phy)) +
+			(radiant_time_t)tail;
+#endif
 	}
 
 	/*
@@ -4432,6 +4452,11 @@ int radiant_radio_abort(void)
 	 * and stopping another stack's receiver mid-frame is how that presented.
 	 * See RADIO_IS_OURS(). */
 	if (RADIO_IS_OURS()) {
+		NRF_DIAG(if (radiant_op.kind == OP_RX && radiant_op.page7_search &&
+			     nrf_radio_event_check(NRF_RADIO, NRF_RADIO_EVENT_ADDRESS) &&
+			     !nrf_radio_event_check(NRF_RADIO, NRF_RADIO_EVENT_END)) {
+				nrf_diag.srch_cut_abort++;
+			});
 		nrf_radio_shorts_set(NRF_RADIO, 0);
 		nrf_radio_task_trigger(NRF_RADIO, NRF_RADIO_TASK_STOP);
 	}
@@ -4811,6 +4836,12 @@ static void radio_isr(const void *arg)
 			uint8_t logical = (uint8_t)(NRF_RADIO->RXMATCH &
 						    RADIO_RXMATCH_RXMATCH_Msk);
 
+			NRF_DIAG(if (radiant_op.page7_search &&
+				     radiant_radio_now() + RADIANT_DIAG_SRCH_NEAR_CLOSE_US >=
+					     radiant_op.page7_close_at) {
+					nrf_diag.srch_end_near_close++;
+				});
+
 			/*
 			 * Consumed here so the NEXT packet in this window is
 			 * judged on its own address match: END->START keeps the
@@ -5047,6 +5078,15 @@ static void radio_isr(const void *arg)
 		nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_DISABLED);
 
 		if (radiant_op.kind == OP_RX) {
+			/* Page 7: a search frame the close cut off mid-air. The
+			 * END branch above clears ADDRESS for every frame it
+			 * finished, so a set ADDRESS here is a frame with no
+			 * END. */
+			NRF_DIAG(if (radiant_op.page7_search &&
+				     nrf_radio_event_check(NRF_RADIO,
+							   NRF_RADIO_EVENT_ADDRESS)) {
+					nrf_diag.srch_cut_close++;
+				});
 #if defined(CONFIG_RADIANT_NRF_RX_DIAG)
 			/* An address matched whose END never came: the window
 			 * closed on top of a frame. */
@@ -5100,6 +5140,9 @@ uint8_t radiant_radio_diag_get(struct radiant_radio_diag *out)
 	out->v[RADIANT_RADIO_DIAG_SYNC_ENTRIES] = nrf_diag.frames;
 	out->v[RADIANT_RADIO_DIAG_SW_ADDR_MISMATCH] = nrf_diag.sw_mismatch;
 	out->v[RADIANT_RADIO_DIAG_CRC_FAIL] = nrf_diag.crc_fail;
+	out->v[RADIANT_RADIO_DIAG_SRCH_CUT_CLOSE] = nrf_diag.srch_cut_close;
+	out->v[RADIANT_RADIO_DIAG_SRCH_CUT_ABORT] = nrf_diag.srch_cut_abort;
+	out->v[RADIANT_RADIO_DIAG_SRCH_END_NEAR_CLOSE] = nrf_diag.srch_end_near_close;
 	irq_unlock(key);
 
 	return RADIANT_DIAG_BACKEND_NRF;

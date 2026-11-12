@@ -108,3 +108,20 @@ tests:
       - native_sim
     extra_configs:
       - CONFIG_RADIANT_ACK_FAULTS=y
+
+  # The same suites with the 0xF7 diagnostic counters COMPILED IN
+  # (CONFIG_RADIANT_DIAG_COUNTERS, ADR 0023). Page 7's scheduler counters
+  # (ADR 0022 gate 3) are counted inside radiant_sched.c, which only this
+  # application's test_sched.c drives directly; their cases exist only here.
+  # Every other case runs here too, which is what "the counters change no
+  # behaviour" means as a test. radiant.api.diag covers the pages themselves.
+  radiant.unit.diag:
+    timeout: 300
+    tags:
+      - radiant
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    extra_configs:
+      - CONFIG_RADIANT_DIAG_COUNTERS=y

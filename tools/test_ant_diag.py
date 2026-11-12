@@ -45,8 +45,8 @@ class Wire(unittest.TestCase):
         text = header_text()
         enum = re.findall(r"RADIANT_RADIO_DIAG_(\w+)(?: = 0)?,", text)
         enum = [e.lower() for e in enum if e != "COUNT"]
-        ours = d.PAGES[3][1] + d.PAGES[4][1]
-        self.assertEqual(len(enum), 16)
+        ours = d.PAGES[3][1] + d.PAGES[4][1] + d.PAGES[7][1][:3]
+        self.assertEqual(len(enum), 19)
         # The tool's names are the enum's, minus the prefix.
         self.assertEqual(ours, enum)
 

@@ -58,11 +58,17 @@ PAGES: dict[int, tuple[str, list[str]]] = {
     6: ("search_b", ["cache_steers", "cache_acquires", "permit_rejected",
                      "rssi_rejected", "decode_failed", "bad_filter_index",
                      "late_events", "sets_advanced_uncovered"]),
+    # ADR 0022 gate 3. The first three are the backend table's tail
+    # (radiant_radio_diag_idx after min_lead_us); 0xFFFFFFFF on TI and null.
+    7: ("handoff", ["srch_cut_close", "srch_cut_abort", "srch_end_near_close",
+                    "trk_open_late", "trk_open_late_max_us",
+                    "trk_missed_behind_scan", "trk_slots_after_sibling",
+                    "trk_miss_after_sibling"]),
 }
 # Fields that are a level (min/max/last), not a running count: a difference
 # means nothing, so --diff reports the later value.
 LEVELS = {"turn_min_us", "turn_max_us", "tx_margin_min_us", "status_last",
-          "drain_max_us", "min_lead_us"}
+          "drain_max_us", "min_lead_us", "trk_open_late_max_us"}
 SIGNED = {"tx_margin_min_us"}
 
 
@@ -130,8 +136,8 @@ def main() -> int:
     ap.add_argument("--serial", help="a USB dongle whose serial ends with this")
     ap.add_argument("--port", help="a UART build on this port (e.g. COM11)")
     ap.add_argument("--baud", type=int, default=115200)
-    ap.add_argument("--pages", default="0-6",
-                    help="pages to read, e.g. 0-6 or 1,2,4 (default all)")
+    ap.add_argument("--pages", default="0-7",
+                    help="pages to read, e.g. 0-7 or 1,2,4 (default all)")
     ap.add_argument("--json", help="also write the decoded pages here")
     ap.add_argument("--diff", nargs=2, metavar=("BEFORE", "AFTER"),
                     help="print AFTER - BEFORE from two --json files; no device")

@@ -1786,7 +1786,14 @@
  * arm lead in us); 5 and 6 radiant_search_stats (windows, sets advanced,
  * sweeps, frames OK, CRC fails, acquisitions, scan reports, timeouts; cache
  * steers, cache acquisitions, permit refusals, RSSI refusals, decode
- * failures, bad filter index, late events, sets advanced uncovered).
+ * failures, bad filter index, late events, sets advanced uncovered); 7 the
+ * search/track hand-off, ADR 0022 gate 3 (search frames in flight at a
+ * chunk's hardware close and at an abort, search frames ending within 300 us
+ * of the close - these three from the backend table, 0xFFFFFFFF where it
+ * cannot see them; bounded receive windows armed opening past their start,
+ * the largest such lateness in us, bounded windows expired while a scan chunk
+ * held the radio, tracked slots opening within 2 ms after the search heard
+ * the same device number, and of those the slots that heard nothing).
  * VERSIONING: pinned at 1; a field's meaning never changes and a new meaning
  * is a new page. docs/decisions/0023-radiant-diag-message.md has the
  * reasoning and radiant/include/radiant/radiant_diag.h the layout. [ADR 0023]

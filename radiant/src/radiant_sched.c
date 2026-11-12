@@ -196,6 +196,18 @@ static struct {
 	const struct radiant_radio_caps *caps;
 
 	struct sched_slot ch[RADIANT_SCHED_MAX_CHANNELS];
+#if defined(CONFIG_RADIANT_DIAG_COUNTERS)
+	/* 0xF7 page 7: bit c of diag_seen = channel c's bounded receive has
+	 * been looked at by a pass since it was posted; of diag_ahead = that
+	 * first pass found it still armable from its own start, so opening it
+	 * late afterwards is the scheduler's doing, not the poster's. Judged
+	 * in pass_step(), which already holds `now`: a radiant_radio_now() at
+	 * the post would be a HAL call inside every callback that re-posts.
+	 * Bitmaps here rather than slot fields, so the slot stays inside its
+	 * per-channel budget on 64-bit hosts. */
+	uint32_t diag_seen;
+	uint32_t diag_ahead;
+#endif
 
 	/* The live operation. armed_open/armed_end are the window it was armed
 	 * with, not what was requested; armed_fmt/armed_rf let "could this new
@@ -1644,6 +1656,16 @@ static enum step arm_rx_window(uint8_t leader, radiant_time_t earliest,
 		return arm_failed(leader, rc);
 	}
 
+#if defined(CONFIG_RADIANT_DIAG_COUNTERS)
+	/* 0xF7 page 7: a bounded window posted with time to spare, now armed
+	 * opening past its own start. The leader's own open, not the union's:
+	 * a member merged in earlier covers nothing of the leader's start. */
+	if (!lead->continuous && (s.diag_ahead & ((uint32_t)1u << leader)) != 0u &&
+	    lead_open > lead->t_start) {
+		RADIANT_DIAG_INC(trk_open_late);
+		RADIANT_DIAG_MAX(trk_open_late_max_us, lead_open - lead->t_start);
+	}
+#endif
 	s.armed_op = op;
 	s.armed_kind = (uint8_t)SLOT_RX;
 	s.armed_open = open;
@@ -2474,6 +2496,15 @@ static enum step pass_step(radiant_time_t now)
 		if (sl->kind == (uint8_t)SLOT_IDLE || sl->in_flight) {
 			continue;
 		}
+#if defined(CONFIG_RADIANT_DIAG_COUNTERS)
+		if (sl->kind == (uint8_t)SLOT_RX && !sl->continuous &&
+		    (s.diag_seen & ((uint32_t)1u << i)) == 0u) {
+			s.diag_seen |= (uint32_t)1u << i;
+			if (sl->t_start >= slot_earliest(sl, earliest) + phy_lead(sl->fmt)) {
+				s.diag_ahead |= (uint32_t)1u << i;
+			}
+		}
+#endif
 		if (sl->kind == (uint8_t)SLOT_ED) {
 			/* Never expires - said explicitly rather than falling
 			 * through: the receive branch below reads
@@ -2516,6 +2547,14 @@ static enum step pass_step(radiant_time_t now)
 						      phy_lead(sl->fmt);
 		}
 		if (expired) {
+#if defined(CONFIG_RADIANT_DIAG_COUNTERS)
+			/* 0xF7 page 7: a bounded receive that expired while a
+			 * scan chunk held the radio. */
+			if (sl->kind == (uint8_t)SLOT_RX && !sl->continuous &&
+			    s.armed_kind == (uint8_t)SLOT_RX && s.armed_continuous) {
+				RADIANT_DIAG_INC(trk_missed_behind_scan);
+			}
+#endif
 			slot_clear((uint8_t)i);
 			notify_done((uint8_t)i, RADIANT_SCHED_DONE_MISSED);
 			return STEP_RETRY;
@@ -3005,6 +3044,10 @@ int radiant_sched_request_rx(uint8_t ch, const struct radiant_sched_rx *req)
 	sl->follow_on_us = req->follow_on_us;
 	sl->t_start = req->t_open;
 	sl->t_end = req->t_close;
+#if defined(CONFIG_RADIANT_DIAG_COUNTERS)
+	s.diag_seen &= ~((uint32_t)1u << ch);
+	s.diag_ahead &= ~((uint32_t)1u << ch);
+#endif
 
 	s.dirty = true;
 	s.replan = true;

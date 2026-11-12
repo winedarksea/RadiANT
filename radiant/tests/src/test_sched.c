@@ -4282,3 +4282,101 @@ ZTEST(radiant_sched, test_d2_without_the_capability_the_schedule_is_masters)
 		      "a scheduler without caps.booking called radiant_radio_book()");
 }
 #endif /* CONFIG_RADIANT_SCHED_BOOKING */
+
+/* ---------------------------------------------------------------------------
+ * 0xF7 page 7 (ADR 0022 gate 3): the scheduler's three hand-off counters.
+ * Built by the radiant.unit.diag scenario only. The counters are never reset
+ * between suites, so every assertion is on a difference.
+ * ---------------------------------------------------------------------------
+ */
+#if defined(CONFIG_RADIANT_DIAG_COUNTERS)
+#include <radiant/radiant_diag.h>
+
+/* Channel 0's window ends; channel 1's, posted with time to spare, opens
+ * 5 ms later. With the first terminal `delay_us` late, the second is armed
+ * after its own start. */
+static void diag_two_windows(uint32_t delay_us)
+{
+	radiant_time_t t0;
+
+	bring_up();
+	fake_radio_set_rx_terminal_delay_us(delay_us);
+	t0 = radiant_radio_now();
+	post_track(0u, t0 + 10000u, t0 + 10200u);
+	post_track(1u, t0 + 15200u, t0 + 25200u);
+	zassert_ok(radiant_sched_tick());
+	fake_radio_advance_to(t0 + 30000u);
+	zassert_ok(radiant_sched_tick());
+	fake_radio_set_rx_terminal_delay_us(0u);
+	fake_radio_advance_to(t0 + 80000u);
+}
+
+ZTEST(radiant_sched, test_diag_a_window_armed_on_time_is_not_late)
+{
+	const struct radiant_diag_core *dc = radiant_diag_core_get();
+	uint32_t late0 = dc->trk_open_late;
+
+	diag_two_windows(0u);
+	zassert_equal(late0, dc->trk_open_late, "an on-time open counted late");
+	finish();
+}
+
+/* The gate-3 mechanism in miniature: the terminal before a tracked window
+ * runs long, and the tracked window is armed opening past its start. */
+ZTEST(radiant_sched, test_diag_a_late_terminal_makes_the_next_open_late)
+{
+	const struct radiant_diag_core *dc = radiant_diag_core_get();
+	uint32_t late0 = dc->trk_open_late;
+
+	diag_two_windows(8000u);
+	zassert_equal(late0 + 1u, dc->trk_open_late,
+		      "a window armed past its start was not counted");
+	zassert_true(dc->trk_open_late_max_us >= 2800u,
+		     "lateness %u us; the terminal came 3 ms after the start",
+		     dc->trk_open_late_max_us);
+	finish();
+}
+
+/* A window posted for "now" (an ack window, say) is clipped by the arming
+ * lead by construction; that is the poster's choice, not a late scheduler. */
+ZTEST(radiant_sched, test_diag_a_window_posted_for_now_is_not_late)
+{
+	const struct radiant_diag_core *dc = radiant_diag_core_get();
+	uint32_t late0 = dc->trk_open_late;
+	radiant_time_t t0;
+
+	bring_up();
+	t0 = radiant_radio_now();
+	post_track(0u, t0, t0 + 5000u);
+	zassert_ok(radiant_sched_tick());
+	fake_radio_advance_to(t0 + 10000u);
+	zassert_equal(late0, dc->trk_open_late);
+	finish();
+}
+
+/* A bounded receive that expires while a scan chunk holds the radio. */
+ZTEST(radiant_sched, test_diag_a_window_missed_behind_a_scan_chunk_is_counted)
+{
+	const struct radiant_diag_core *dc = radiant_diag_core_get();
+	uint32_t missed0 = dc->trk_missed_behind_scan;
+	struct radiant_sched_rx r;
+	radiant_time_t t0;
+
+	bring_up();
+	t0 = radiant_radio_now();
+	rx_req_init(&r, radiant_frame_format(RADIANT_FRAME_CFG_SEARCH), search_filter,
+		    8u, t0, RADIANT_TIME_NEVER);
+	r.chunk_us = 50000u;
+	zassert_ok(radiant_sched_request_rx(31u, &r));
+	zassert_ok(radiant_sched_tick());
+	zassert_equal(1u, fake_radio_arm_count());
+
+	/* Posted, then no pass until long after its close. */
+	post_track(0u, t0 + 2000u, t0 + 2200u);
+	fake_radio_advance_to(t0 + 10000u);
+	zassert_ok(radiant_sched_tick());
+	zassert_equal(missed0 + 1u, dc->trk_missed_behind_scan,
+		      "a window that expired behind a scan chunk was not counted");
+	finish();
+}
+#endif /* CONFIG_RADIANT_DIAG_COUNTERS */

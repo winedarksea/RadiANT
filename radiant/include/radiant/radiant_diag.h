@@ -5,12 +5,14 @@
  * Provenance: clean-room. Written from this project's own source and bench
  * measurements; see docs/decisions/0023-radiant-diag-message.md.
  *
- * WHAT THIS IS. Seven fixed pages of eight u32 counters each, read by a host
+ * WHAT THIS IS. Eight fixed pages of eight u32 counters each, read by a host
  * with MESG_REQUEST [page, 0xF7]. Pages 0, 5 and 6 are counters the core
  * already keeps (radiant_api_stats, radiant_search_stats). Pages 1 and 2 are
  * counted here, behind CONFIG_RADIANT_DIAG_COUNTERS. Pages 3 and 4 come from
  * the backend through radiant_radio_diag_get(), one generic table that every
- * backend fills with what it can measure.
+ * backend fills with what it can measure. Page 7 (ADR 0022 gate 3) is mixed:
+ * its first three fields come from that same backend table, the other five
+ * are counted here.
  *
  * ZERO COST WHEN OFF. Without CONFIG_RADIANT_DIAG_COUNTERS every RADIANT_DIAG_*
  * macro below is an empty statement that does not evaluate its arguments,
@@ -40,7 +42,36 @@ extern "C" {
 #define RADIANT_DIAG_PAGE_BACKEND_B  4u
 #define RADIANT_DIAG_PAGE_SEARCH_A   5u
 #define RADIANT_DIAG_PAGE_SEARCH_B   6u
-#define RADIANT_DIAG_PAGES           7u
+#define RADIANT_DIAG_PAGE_HANDOFF    7u
+#define RADIANT_DIAG_PAGES           8u
+
+/*
+ * Page 7, the search/track hand-off (ADR 0022 gate 3). Does a search
+ * reception running up to a scan chunk's close delay the tracked window armed
+ * after it? Fields 0-2 are the backend's (a search frame in flight when the
+ * chunk closed or was aborted; a search frame ending close to the chunk's
+ * close), 3-7 the core's (bounded receive windows opened late, the worst
+ * lateness, bounded windows expired while a scan chunk held the radio, and
+ * tracked slots that opened just after the search heard the same device
+ * number, with how many of those heard nothing).
+ */
+#define RADIANT_DIAG_HANDOFF_SRCH_CUT_CLOSE        0u
+#define RADIANT_DIAG_HANDOFF_SRCH_CUT_ABORT        1u
+#define RADIANT_DIAG_HANDOFF_SRCH_END_NEAR_CLOSE   2u
+#define RADIANT_DIAG_HANDOFF_TRK_OPEN_LATE         3u
+#define RADIANT_DIAG_HANDOFF_TRK_OPEN_LATE_MAX_US  4u
+#define RADIANT_DIAG_HANDOFF_TRK_MISSED_BEHIND_SCAN 5u
+#define RADIANT_DIAG_HANDOFF_TRK_SLOTS_AFTER_SIBLING 6u
+#define RADIANT_DIAG_HANDOFF_TRK_MISS_AFTER_SIBLING 7u
+
+/* A search frame ending this close to its chunk's hardware close counts as
+ * "near close" (field 2): its END interrupt chain then runs into the time
+ * the next arm needs. */
+#define RADIANT_DIAG_SRCH_NEAR_CLOSE_US 300u
+/* A tracked slot opening within this long after the search heard the same
+ * device number counts as "after a sibling" (field 6): the trainer's other
+ * channels share its device number. */
+#define RADIANT_DIAG_SIBLING_US 2000u
 
 /* Reply body: [0] page, [1] version, [2] flags, [3] backend id, eight u32 LE. */
 #define RADIANT_DIAG_FIELDS          8u
@@ -58,9 +89,10 @@ extern "C" {
 #define RADIANT_DIAG_BACKEND_FAKE    0xFFu
 
 /*
- * The backend table, pages 3 and 4 in this order. Every backend fills every
- * index it can measure and leaves the rest RADIANT_DIAG_NOT_MEASURED
- * (radiant_radio_diag_get()'s caller pre-fills them so).
+ * The backend table: pages 3 and 4 in this order, then page 7's first three
+ * fields. Every backend fills every index it can measure and leaves the rest
+ * RADIANT_DIAG_NOT_MEASURED (radiant_radio_diag_get()'s caller pre-fills them
+ * so).
  */
 enum radiant_radio_diag_idx {
 	/* page 3 */
@@ -81,8 +113,15 @@ enum radiant_radio_diag_idx {
 	RADIANT_RADIO_DIAG_RX_BUF_FULL,    /* hardware ran out of receive buffer */
 	RADIANT_RADIO_DIAG_DRAIN_MAX_US,   /* longest receive-callback drain */
 	RADIANT_RADIO_DIAG_MIN_LEAD_US,    /* smallest (at - now) seen at an arm */
+	/* page 7, fields 0-2 */
+	RADIANT_RADIO_DIAG_SRCH_CUT_CLOSE, /* search frame in flight at the close */
+	RADIANT_RADIO_DIAG_SRCH_CUT_ABORT, /* search frame in flight at an abort */
+	RADIANT_RADIO_DIAG_SRCH_END_NEAR_CLOSE, /* search END near the close */
 	RADIANT_RADIO_DIAG_COUNT
 };
+
+/* Where page 7's backend fields start in the table. */
+#define RADIANT_RADIO_DIAG_HANDOFF_BASE RADIANT_RADIO_DIAG_SRCH_CUT_CLOSE
 
 struct radiant_radio_diag {
 	uint32_t v[RADIANT_RADIO_DIAG_COUNT];
@@ -110,6 +149,13 @@ struct radiant_diag_core {
 	int32_t  tx_margin_min_us; /* smallest t_start - earliest seen there */
 	uint8_t  turn_seen;       /* turn_min_us is valid */
 	uint8_t  margin_seen;     /* tx_margin_min_us is valid */
+	/* page 7, fields 3-7 (radiant_sched.c and the API) */
+	uint32_t trk_open_late;   /* bounded RX armed opening past its t_start */
+	uint32_t trk_open_late_max_us; /* the largest such lateness */
+	uint32_t trk_missed_behind_scan; /* bounded RX expired, scan chunk armed */
+	uint32_t trk_slots_after_sibling; /* tracked slot just after the search
+					   * heard its device number */
+	uint32_t trk_miss_after_sibling;  /* of those, slots that heard nothing */
 };
 
 extern struct radiant_diag_core radiant_diag_core;
@@ -118,6 +164,7 @@ const struct radiant_diag_core *radiant_diag_core_get(void);
 void radiant_diag_core_reset(void);
 
 #define RADIANT_DIAG_INC(field) ((void)radiant_diag_core.field++)
+#define RADIANT_DIAG_MAX(field, us)                                           	do {                                                                  		uint32_t x__ = (uint32_t)(us);                                		if (x__ > radiant_diag_core.field) {                          			radiant_diag_core.field = x__;                        		}                                                             	} while (0)
 #define RADIANT_DIAG_TURN(us)                                                 \
 	do {                                                                  \
 		uint32_t d__ = (uint32_t)(us);                                \
@@ -150,6 +197,7 @@ uint8_t radiant_radio_diag_get(struct radiant_radio_diag *out);
 #else
 
 #define RADIANT_DIAG_INC(field)    do { } while (0)
+#define RADIANT_DIAG_MAX(field, us) do { } while (0)
 #define RADIANT_DIAG_TURN(us)      do { } while (0)
 #define RADIANT_DIAG_TX_MARGIN(us) do { } while (0)
 
