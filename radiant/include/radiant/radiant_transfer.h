@@ -256,6 +256,12 @@ extern "C" {
  * window only: all eleven repeats in the 2026-11-11 A/B were answered at
  * +1534..+1584 us, by a receiver that had heard the first attempt
  * (archive/benchmarks/2026-11-11-burst-retry-ab/).
+ *
+ * As the ACKNOWLEDGER (radiant_ack.c) we answer a master's 0x8A and 0xAA here
+ * too. 0xAA was answered at +1560 until 2026-11-13, when a Garmin master
+ * reported FAILED for all 50 of the acknowledged messages that our slave had
+ * received and answered at +1535..+1573 us
+ * (archive/captures/radio/2026-11-13-master-acked-garmin-to-radiant.log).
  */
 #define RADIANT_TRANSFER_OPENER_REPLY_US RADIANT_TRANSFER_SLOT_REPLY_US
 

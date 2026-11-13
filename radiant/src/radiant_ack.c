@@ -344,15 +344,16 @@ int radiant_transfer_on_data(struct radiant_transfer *t, const struct radiant_fr
 	}
 
 	reply_at = t_sync + (radiant_time_t)RADIANT_TRANSFER_REPLY_US;
-	/* A master's packet 0 of a multi-packet burst (0x8A, slot opener, not
-	 * LAST) is answered on the slave's slot-reply turnaround, the way a
-	 * Garmin slave answers it (+2209/+2218 us, 2026-11-11 capture; see
-	 * RADIANT_TRANSFER_OPENER_REPLY_US). Every later packet, and a repeat
-	 * of this one (the duplicate path above), is answered at REPLY_US.
-	 * 0xAA - acknowledged data - keeps REPLY_US: that path is unchanged
-	 * by design. */
-	if (radiant_ctrl_is_slot_opener(f->ctrl_byte) &&
-	    !radiant_ctrl_is_last(f->ctrl_byte)) {
+	/* A master's slot-opening packet - 0x8A (packet 0 of a burst) or 0xAA
+	 * (acknowledged data) - is answered on the slave's slot-reply
+	 * turnaround, the way a Garmin slave answers 0x8A (+2209/+2218 us,
+	 * 2026-11-11 capture; see RADIANT_TRANSFER_OPENER_REPLY_US). Every
+	 * later packet, and a repeat of packet 0 (the duplicate path above),
+	 * is answered at REPLY_US. 0xAA kept REPLY_US until 2026-11-13: a
+	 * Garmin master was told FAILED for 50/50 acknowledged messages that
+	 * this slave received and answered at +1535..+1573 us
+	 * (archive/captures/radio/2026-11-13-master-acked-garmin-to-radiant.log). */
+	if (radiant_ctrl_is_slot_opener(f->ctrl_byte)) {
 		reply_at = t_sync + (radiant_time_t)RADIANT_TRANSFER_OPENER_REPLY_US;
 	}
 

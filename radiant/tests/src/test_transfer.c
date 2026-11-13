@@ -2151,8 +2151,12 @@ ZTEST(transfer, test_a_slot_opening_packet_is_acknowledged)
 	zassert_equal(RADIANT_CTRL_ACK_LAST_SEQ1, tx->body[BODY_CTRL],
 		      "0xAA must be answered with 0xF2, got 0x%02X",
 		      tx->body[BODY_CTRL]);
-	zassert_equal(t_data + (radiant_time_t)RADIANT_TRANSFER_REPLY_US, tx->t_sync_at,
-		      "the reply must sit on the measured 1560 us turnaround");
+	/* A master's 0xAA opens its slot, so it is answered on the slot-reply
+	 * turnaround like 0x8A, not at 1560: a Garmin master failed every
+	 * acknowledged message answered at +1560 (2026-11-13 capture). */
+	zassert_equal(t_data + (radiant_time_t)RADIANT_TRANSFER_OPENER_REPLY_US,
+		      tx->t_sync_at,
+		      "0xAA must be answered on the slot-reply turnaround");
 
 	/* And the originator of that 0xAA must accept what we just sent, or the
 	 * two halves disagree and the transfer fails as FAIL_BAD_ACK instead. */
