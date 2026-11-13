@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
-"""Encode and decode the RadiANT security messages, 0xF1 to 0xF4.
+"""Encode and decode the RadiANT security messages, 0xF1 to 0xF5 and 0xF8.
 
 NOT ANT protocol. These are ours, answered by no ANT device, and their
 semantics live in docs/radiant-security.md; only the numbering was decided in
@@ -39,6 +39,7 @@ from ant_wire import (
     MESG_RADIANT_PAIRING_ID,
     MESG_RADIANT_SEC_CONFIG_ID,
     MESG_RADIANT_SEC_STATUS_ID,
+    MESG_RADIANT_SEC_VERDICT_ID,
     MESG_RADIANT_SET_KEY_ID,
     RADIANT_PAIR_ENTER,
     RADIANT_PAIR_EXCHANGE,
@@ -48,6 +49,7 @@ from ant_wire import (
 
 __all__ = [
     "SW_CONF", "SW_AUTH", "SW_DROP_UNVER", "SW_DESC_CONF",
+    "SW_VERDICT_EVENT",
     "VERDICT_CLEAR", "VERDICT_VERIFIED", "VERDICT_UNVERIFIED",
     "PAGE_LO_MIN", "PAGE_HI_MAX", "LEGAL_W", "KEY_BITS", "STATUS_LEN",
     "STATUS_VERSION", "SecStatus",
@@ -56,6 +58,7 @@ __all__ = [
     "encode_epoch", "decode_epoch",
     "decode_status", "encode_status",
     "switches_str", "verdict_str",
+    "VERDICT_LEN", "decode_verdict", "encode_verdict", "verdict_covers",
     "X25519_BYTES", "PAIR_TIMEOUT_DEFAULT_S",
     "encode_pair_enter", "encode_pair_leave", "encode_pair_scalar",
     "encode_pair_exchange", "decode_pair_reply", "fingerprint_str",
@@ -63,12 +66,13 @@ __all__ = [
 
 # 0xF1's switch bitmask. The same byte the firmware uses - radiant_sec.h's
 # RADIANT_SEC_SW_* are these values, asserted by BUILD_ASSERT in
-# radiant/src/radiant_sec_host.c so the two cannot drift apart quietly.
+# radiant/src/antr/ant_sec_host.c so the two cannot drift apart quietly.
 SW_CONF = 0x01        # X_CONF, confidentiality
 SW_AUTH = 0x02        # X_AUTH, authenticity
 SW_DROP_UNVER = 0x04  # drop an unverified window instead of delivering it
 SW_DESC_CONF = 0x08   # descriptor confidentiality - REFUSED in v1
-SW_KNOWN = 0x0F       # bits 7..4 are reserved and must be zero
+SW_VERDICT_EVENT = 0x10  # send 0xF8 per judged window; needs SW_AUTH
+SW_KNOWN = 0x1F       # bits 7..5 are reserved and must be zero
 
 VERDICT_CLEAR = 0
 VERDICT_VERIFIED = 1
@@ -120,9 +124,13 @@ def encode_config(channel: int, switches: int, w: int,
     _check_channel(channel)
     if switches & ~SW_KNOWN:
         raise ValueError(
-            f"switches 0x{switches:02X} sets a reserved bit; bits 7..4 must "
+            f"switches 0x{switches:02X} sets a reserved bit; bits 7..5 must "
             "be zero so a later switch is not silently ignored by a node too "
             "old to know it")
+    if switches & SW_VERDICT_EVENT and not switches & SW_AUTH:
+        raise ValueError(
+            "SW_VERDICT_EVENT without SW_AUTH: only X_AUTH has a verdict, and "
+            "the firmware refuses a promise of events that would never come")
     if w not in LEGAL_W:
         raise ValueError(
             f"W={w} is not one of {LEGAL_W}. W must divide 256 and 65536 or "
@@ -349,6 +357,8 @@ def switches_str(switches: int) -> str:
         names.append("drop-unverified")
     if switches & SW_DESC_CONF:
         names.append("descriptor-conf")
+    if switches & SW_VERDICT_EVENT:
+        names.append("verdict-event")
     if switches & ~SW_KNOWN:
         names.append(f"reserved:0x{switches & ~SW_KNOWN:02X}")
     return "|".join(names)
@@ -360,6 +370,60 @@ def verdict_str(verdict: int) -> str:
         VERDICT_VERIFIED: "verified",
         VERDICT_UNVERIFIED: "unverified",
     }.get(verdict, f"unknown:{verdict}")
+
+
+# ── 0xF8: one window's verdict ──────────────────────────────────────────────
+#
+# Sent unsolicited, but only on a channel whose 0xF1 set SW_VERDICT_EVENT. It
+# follows every packet it covers in the same queue, so a host that wants
+# per-packet trust holds each secured BROADCAST_DATA until its window's 0xF8
+# arrives - and treats one whose verdict never comes as unverified.
+
+VERDICT_LEN = 5
+
+
+def decode_verdict(body: bytes) -> dict:
+    """Body of MESG_RADIANT_SEC_VERDICT_ID: [ch, verdict, window_start LE, W].
+
+    A longer body decodes the fields named here (fields are only appended).
+    """
+    if len(body) < VERDICT_LEN:
+        raise ValueError(
+            f"0xF8 body is {len(body)} bytes, want at least {VERDICT_LEN}")
+    window_start, = struct.unpack_from("<H", body, 2)
+    return {
+        "channel": body[0],
+        "verdict": body[1],
+        "window_start": window_start,
+        "w": body[4],
+    }
+
+
+def encode_verdict(channel: int, verdict: int, window_start: int,
+                   w: int) -> bytes:
+    """The firmware's side, for tests and simulators."""
+    _check_channel(channel)
+    if verdict not in (VERDICT_VERIFIED, VERDICT_UNVERIFIED):
+        raise ValueError(f"0xF8 carries verified or unverified, not {verdict}")
+    if w not in LEGAL_W:
+        raise ValueError(f"W={w} is not one of {LEGAL_W}")
+    if not 0 <= window_start <= 0xFFFF or window_start % w:
+        raise ValueError(
+            f"window_start {window_start} is not a 16-bit multiple of W={w}")
+    return bytes([channel, verdict]) + struct.pack("<H", window_start) +         bytes([w])
+
+
+def verdict_covers(verdict: dict, payload: bytes) -> bool:
+    """Does this 0xF8 judge the secured page `payload` (8 bytes, as in
+    BROADCAST_DATA after the channel byte)?
+
+    Byte [1] of a secured page is the counter's low 8 bits, so the packet is
+    in the window when (byte1 - window_start) mod 256 < W - unambiguous
+    because W <= 8 and the event follows its packets within 2W periods.
+    """
+    if len(payload) < 2:
+        raise ValueError("a secured page has at least two bytes")
+    return ((payload[1] - verdict["window_start"]) & 0xFF) < verdict["w"]
 
 
 # ── 0xF5: pairing ───────────────────────────────────────────────────────────
@@ -454,3 +518,4 @@ MESG_SET_KEY = MESG_RADIANT_SET_KEY_ID
 MESG_EPOCH = MESG_RADIANT_EPOCH_ID
 MESG_STATUS = MESG_RADIANT_SEC_STATUS_ID
 MESG_PAIRING = MESG_RADIANT_PAIRING_ID
+MESG_VERDICT = MESG_RADIANT_SEC_VERDICT_ID

@@ -26,6 +26,7 @@ from ant_sec import (
     SW_CONF,
     SW_DESC_CONF,
     SW_DROP_UNVER,
+    SW_VERDICT_EVENT,
     VERDICT_UNVERIFIED,
     VERDICT_VERIFIED,
     SecStatus,
@@ -33,6 +34,7 @@ from ant_sec import (
     decode_epoch,
     decode_set_key,
     decode_status,
+    decode_verdict,
     encode_config,
     encode_epoch,
     encode_set_key,
@@ -77,9 +79,21 @@ class TestConfig(unittest.TestCase):
         # Refused rather than masked: masking would enable the switches this
         # version understands and silently drop the one it does not, which is
         # the worst of both answers.
-        for bit in (0x10, 0x20, 0x40, 0x80):
+        for bit in (0x20, 0x40, 0x80):
             with self.subTest(bit=bit), self.assertRaises(ValueError):
                 encode_config(0, SW_AUTH | bit, 2)
+
+    def test_the_verdict_event_bit_needs_x_auth(self):
+        # Bit 4 asks for 0xF8, and only X_AUTH has a verdict to send.
+        self.assertEqual(0x10, SW_VERDICT_EVENT)
+        body = encode_config(3, SW_AUTH | SW_VERDICT_EVENT, 2)
+        self.assertEqual(SW_AUTH | SW_VERDICT_EVENT,
+                         decode_config(body)["switches"])
+        encode_config(0, SW_AUTH | SW_DROP_UNVER | SW_VERDICT_EVENT, 4)
+        for switches in (SW_VERDICT_EVENT, SW_CONF | SW_VERDICT_EVENT,
+                         SW_DROP_UNVER | SW_VERDICT_EVENT):
+            with self.subTest(switches=switches),                     self.assertRaises(ValueError):
+                encode_config(0, switches, 2)
 
     def test_only_w_two_four_and_eight(self):
         for w in range(0, 17):
@@ -315,12 +329,65 @@ class TestHumanReadable(unittest.TestCase):
         self.assertEqual("X_AUTH", switches_str(SW_AUTH))
         self.assertEqual("X_CONF|X_AUTH", switches_str(SW_CONF | SW_AUTH))
         self.assertIn("reserved", switches_str(0x80))
+        self.assertEqual("X_AUTH|verdict-event",
+                         switches_str(SW_AUTH | SW_VERDICT_EVENT))
 
     def test_verdicts(self):
         self.assertEqual("clear", verdict_str(ant_sec.VERDICT_CLEAR))
         self.assertEqual("verified", verdict_str(VERDICT_VERIFIED))
         self.assertEqual("unverified", verdict_str(VERDICT_UNVERIFIED))
         self.assertIn("unknown", verdict_str(9))
+
+
+class TestVerdict(unittest.TestCase):
+    """0xF8. Mirrors radiant_sec_window_verdict() in ant_radio_radiant.c and
+    the bytes test_api_sec_host.c checks on the firmware side."""
+
+    def test_the_bytes_are_ch_verdict_start_le_w(self):
+        body = bytes([2, VERDICT_UNVERIFIED, 0x34, 0x12, 4])
+        self.assertEqual({"channel": 2, "verdict": VERDICT_UNVERIFIED,
+                          "window_start": 0x1234, "w": 4},
+                         decode_verdict(body))
+
+    def test_round_trip(self):
+        for w in LEGAL_W:
+            for start in (0, w, 0x10000 - w):
+                with self.subTest(w=w, start=start):
+                    body = ant_sec.encode_verdict(1, VERDICT_VERIFIED,
+                                                  start, w)
+                    self.assertEqual(ant_sec.VERDICT_LEN, len(body))
+                    v = decode_verdict(body)
+                    self.assertEqual((1, VERDICT_VERIFIED, start, w),
+                                     (v["channel"], v["verdict"],
+                                      v["window_start"], v["w"]))
+
+    def test_a_short_body_is_refused_and_a_long_one_decodes(self):
+        with self.assertRaises(ValueError):
+            decode_verdict(bytes(4))
+        self.assertEqual(0x0102, decode_verdict(
+            bytes([0, 1, 0x02, 0x01, 2, 0xEE]))["window_start"])
+
+    def test_the_encoder_refuses_what_firmware_never_sends(self):
+        with self.assertRaises(ValueError):
+            ant_sec.encode_verdict(0, ant_sec.VERDICT_CLEAR, 0, 2)
+        with self.assertRaises(ValueError):
+            ant_sec.encode_verdict(0, VERDICT_VERIFIED, 1, 2)
+        with self.assertRaises(ValueError):
+            ant_sec.encode_verdict(0, VERDICT_VERIFIED, 0, 3)
+
+    def test_a_packet_maps_to_its_window_by_byte_one(self):
+        # Window 0x01FC at W=4 covers counters 0x01FC..0x01FF. W divides 256,
+        # so a window never straddles a wrap of byte [1].
+        v = decode_verdict(ant_sec.encode_verdict(0, VERDICT_VERIFIED,
+                                                  0x01FC, 4))
+        for low in (0xFC, 0xFD, 0xFE, 0xFF):
+            with self.subTest(low=low):
+                self.assertTrue(ant_sec.verdict_covers(
+                    v, bytes([0x05, low, 0, 0, 0, 0, 0, 0])))
+        for low in (0xFB, 0x00, 0x7C):
+            with self.subTest(low=low):
+                self.assertFalse(ant_sec.verdict_covers(
+                    v, bytes([0x05, low, 0, 0, 0, 0, 0, 0])))
 
 
 class TestPairing(unittest.TestCase):
@@ -402,6 +469,7 @@ class TestMessageIds(unittest.TestCase):
         self.assertEqual(0xF3, ant_sec.MESG_EPOCH)
         self.assertEqual(0xF4, ant_sec.MESG_STATUS)
         self.assertEqual(0xF5, ant_sec.MESG_PAIRING)
+        self.assertEqual(0xF8, ant_sec.MESG_VERDICT)
 
 
 if __name__ == "__main__":
