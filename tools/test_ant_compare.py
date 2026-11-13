@@ -297,7 +297,8 @@ class TestVerdictRules(unittest.TestCase):
 
 
 def verify_json(missed: int, sent: int, dn: int, unaccounted: int = 0,
-                channels: int = 1, exact: bool = True) -> dict:
+                channels: int = 1, exact: bool = True,
+                exact_scope: str | None = None) -> dict:
     """A canned ant_verify --json document, cut down to what is read."""
     per, chans, idents = {}, [], {}
     for ch in range(channels):
@@ -307,6 +308,8 @@ def verify_json(missed: int, sent: int, dn: int, unaccounted: int = 0,
             "exact_missed": missed if exact else None,
             "exact_sent": sent if exact else None,
         }
+        if exact and exact_scope is not None:
+            per[str(ch)]["exact_scope"] = exact_scope
         chans.append({"channel": ch, "expected_packets": float(sent)})
         idents[str(ch)] = {"device_number": dn + ch, "device_type": 11}
     return {"derived": {"per_channel": per, "rssi_dbm_mean": -50.0},
@@ -315,8 +318,9 @@ def verify_json(missed: int, sent: int, dn: int, unaccounted: int = 0,
 
 
 def window(phase: str, rep: int, per_rx: dict[str, tuple[int, int]],
-           warnings=None) -> dict:
-    results = {rx: {"counts": ac.verify_counts(verify_json(m, s, 53000))}
+           warnings=None, exact_scope: str | None = None) -> dict:
+    results = {rx: {"counts": ac.verify_counts(
+                   verify_json(m, s, 53000, exact_scope=exact_scope))}
                for rx, (m, s) in per_rx.items()}
     return {"phase": phase, "round": "A", "rep": rep, "results": results,
             "warnings": warnings or []}
@@ -332,6 +336,17 @@ class TestChildJson(unittest.TestCase):
         c = ac.verify_counts(verify_json(3, 1200, 53000, exact=False))
         self.assertEqual(c["basis"], "wall_clock")
         self.assertEqual(c["missed"], 3)
+
+    def test_an_upper_bound_scope_is_labelled_not_exact(self):
+        # ant_verify scopes 0x60's figure "slot (upper bound)" when a
+        # host-driven master's refill counted a slot never sent.
+        c = ac.verify_counts(verify_json(3, 1200, 53000,
+                                         exact_scope="slot (upper bound)"))
+        self.assertEqual(c["basis"], "exact_upper_bound")
+        self.assertEqual(c["per_channel"]["0"]["basis"], "exact_upper_bound")
+        plain = ac.verify_counts(verify_json(3, 1200, 53000,
+                                             exact_scope="slot"))
+        self.assertEqual(plain["basis"], "exact")
 
     def test_multi_channel_pools_as_one_ratio(self):
         c = ac.verify_counts(verify_json(6, 1200, 53000, channels=4))
@@ -495,6 +510,26 @@ class TestSummary(unittest.TestCase):
             self.assertIn(heading, md)
         self.assertIn("0 dBm at most", md, "5340 ceiling caveat")
         self.assertIn("UART", md)
+
+    def test_an_upper_bound_window_marks_the_multi_table_and_caveats(self):
+        records = [
+            window("multi", 1, {"Garmin": (12, 1200), "Feather": (2, 1200)}),
+            window("multi", 2, {"Garmin": (14, 1200), "Feather": (3, 1200)},
+                   exact_scope="slot (upper bound)"),
+        ]
+        s = ac.build_summary(self.rig, records)
+        per = s["rounds"][0]["metrics"]["multi per profile"]
+        # One upper-bound window makes the pooled figure an upper bound.
+        self.assertEqual(per["Feather"]["power"]["basis"],
+                         "exact_upper_bound")
+        md = ac.render_markdown(self.rig, s, records)
+        self.assertIn("`ub` = exact counter, upper bound", md)
+        self.assertRegex(md, r"\| Feather \| [0-9.]+ ub")
+        self.assertTrue(any("upper bound" in c
+                            for c in ac.caveats(self.rig, records)))
+        exact_only = records[:1]
+        self.assertFalse(any("upper bound" in c
+                             for c in ac.caveats(self.rig, exact_only)))
 
     def test_records_upsert_by_key_and_survive_a_rerun(self):
         a = window("loss", 1, {"Garmin": (6, 1200)})

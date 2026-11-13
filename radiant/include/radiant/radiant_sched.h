@@ -520,8 +520,11 @@ struct radiant_sched_stats {
 				     * one long-range channel among 31 1M ones pays
 				     * this twice per period (out and back), which
 				     * is what says whether mixing PHYs is
-				     * affordable. Zero-cost on both nRF builds
-				     * (phy_switch_us == 0) but still counted. */
+				     * affordable. phy_switch_us is 0 on
+				     * single-PHY builds (cc26xx, null, nRF
+				     * without coded PHY); nRF with
+				     * CONFIG_RADIANT_PHY_LR_CODED charges a 20 us
+				     * bound. Counted either way. */
 	uint32_t armed_stale;       /* armed ops reclaimed because no terminal
 				     * came RADIANT_SCHED_ARMED_STALE_US past
 				     * their end. SHOULD STAY ZERO */

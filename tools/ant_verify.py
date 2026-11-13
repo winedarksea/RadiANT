@@ -1314,7 +1314,8 @@ class ChannelAnalyzer:
             sent = self.tlm_slot_span
             upper = self.tlm_slot_inflated > 0
             exact = {
-                "scope": "slot (upper bound)" if upper else "slot",
+                "scope": (f"slot {ap.LOSS_UPPER_BOUND_SUFFIX}" if upper
+                          else "slot"),
                 "missed": missed,
                 "sent": sent,
                 "loss_pct": 100.0 * missed / sent if sent else 0.0,
@@ -1789,6 +1790,11 @@ def loss_accounting(result: dict) -> dict | None:
     }
 
 
+# One place for the "(upper bound)" scope rule; ant_pages so that readers
+# without pyusb can share it.
+is_upper_bound = ap.is_upper_bound
+
+
 def _number(value) -> float | None:
     """A JSON number, or None where the tool has no answer.
 
@@ -1916,7 +1922,7 @@ def derive(result: dict) -> dict:
             entry["exact_missed"] = exact["missed"]
             entry["exact_sent"] = exact["sent"]
             entry["exact_scope"] = exact["scope"]
-            if exact["scope"].endswith("(upper bound)"):
+            if is_upper_bound(exact["scope"]):
                 upper_bound = True
             missed_total += exact["missed"]
             sent_total += exact["sent"]
@@ -2109,7 +2115,7 @@ def report(result: dict) -> None:
         print(f"heard on channel {channel}: device #{ident['device_number']}, "
               f"type 0x{ident['device_type']:02X}")
 
-    if any(str(e.get("exact_scope")).endswith("(upper bound)")
+    if any(is_upper_bound(e.get("exact_scope"))
            for e in result.get("derived", {}).get("per_channel", {}).values()):
         print("\nNOTE: loss (exact) is an UPPER BOUND for at least one "
               "channel (its slot counter outran the clock); the pooled "

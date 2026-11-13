@@ -21,7 +21,10 @@ Two things nothing else here checks:
     python tools/ant_features.py --port COM8      # a UART build
 
 Nothing here opens a channel or puts anything on the air, except
-`--scan-mode`, which opens a receive-only scan for a few seconds. Exit status is 0 when
+`--scan-mode`, which opens a receive-only scan for a few seconds, and
+`--burst-filter`, which opens a master for a few seconds and sends five
+one-packet bursts (filtered burst completions must still free the bridge's
+burst buffer). Exit status is 0 when
 every implemented feature round-trips and every mismatch is a known one in
 KNOWN_GAPS.
 """
@@ -53,12 +56,16 @@ from ant_probe import (  # noqa: E402
     reset_stack,
 )
 from ant_scan import ANT_PLUS_FREQ, ANT_PLUS_KEY  # noqa: E402
+from ant_session import wait_for_close  # noqa: E402
 from ant_wire import (  # noqa: E402,F401
     ADV_BURST_MODE_DISABLE,
     ADV_BURST_MODE_ENABLE,
     ADV_BURST_MODES_FREQ_HOP,
     ADV_BURST_MODES_SIZE_24_BYTES,
+    BURST_HEADER_CHANNEL_MASK,
+    BURST_HEADER_LAST,
     CHANNEL_IN_WRONG_STATE,
+    CHANNEL_TYPE_MASTER,
     ENCRYPTION_DISABLED_MODE,
     ENCRYPTION_INFO_GET_CRYPTO_ID,
     ENCRYPTION_INFO_GET_CUSTOM_USER_DATA,
@@ -68,6 +75,8 @@ from ant_wire import (  # noqa: E402,F401
     ENCRYPTION_INFO_SET_RNG_SEED,
     ENCRYPTION_KEY_SIZE,
     ENCRYPTION_USER_DATA_SIZE,
+    EVENT_TRANSFER_TX_COMPLETED,
+    EVENT_TRANSFER_TX_FAILED,
     INVALID_MESSAGE,
     INVALID_PARAMETER_PROVIDED,
     INVALID_SDU_MASK,
@@ -80,11 +89,17 @@ from ant_wire import (  # noqa: E402,F401
     MESG_ANTLIB_CONFIG_ID,
     MESG_ASSIGN_CHANNEL_ID,
     MESG_BROADCAST_DATA_ID,
+    MESG_BURST_DATA_ID,
     MESG_CHANNEL_ID_ID,
+    MESG_CHANNEL_MESG_PERIOD_ID,
     MESG_CHANNEL_RADIO_FREQ_ID,
+    MESG_CHANNEL_STATUS_ID,
+    MESG_CLOSE_CHANNEL_ID,
     MESG_EVENT_FILTER_CONFIG_ID,
+    MESG_EVENT_ID,
     MESG_HIGH_DUTY_SEARCH_MODE_ID,
     MESG_NETWORK_KEY_ID,
+    MESG_OPEN_CHANNEL_ID,
     MESG_OPEN_RX_SCAN_MODE_ID,
     MESG_REQUEST_ID,
     MESG_RESPONSE_EVENT_ID,
@@ -92,6 +107,7 @@ from ant_wire import (  # noqa: E402,F401
     MESG_SDU_SET_MASK_ID,
     MESG_SET_ENCRYPT_INFO_ID,
     MESG_SET_ENCRYPT_KEY_ID,
+    MESG_UNASSIGN_CHANNEL_ID,
     RESPONSE_NO_ERROR,
 )
 
@@ -461,6 +477,158 @@ def check_event_filter(dev, reader) -> list[str]:
     return problems
 
 
+# The burst-filter check's master. Not ANT+: network 0 (the public key), an RF
+# away from 57 and 66, and a device number nothing on the bench uses, so its
+# few seconds on the air land on nobody's loss figures.
+BURST_FILTER_CH = 0
+BURST_FILTER_RF = 70
+BURST_FILTER_DEVICE = 61234
+BURST_FILTER_PERIOD = 8192
+# The bridge's burst buffers (BURST_BUFS in apps/common/ant_serial_bridge.c,
+# 2 on antr builds). Two more bursts than buffers is the fewest that runs a
+# leaking bridge out and then shows the stall.
+BURST_FILTER_BUFS = 2
+# A leaked buffer stalls the dispatcher 1000 ms in k_sem_take() before it
+# answers TRANSFER_IN_PROGRESS; anything later than this is that stall.
+BURST_FILTER_LATE_S = 0.8
+# Bit N filters code N+1 (docs: ANT event filter provenance), so
+# TRANSFER_TX_COMPLETED (5) and TRANSFER_TX_FAILED (6) are bits 4 and 5.
+BURST_FILTER_MASK = ((1 << (EVENT_TRANSFER_TX_COMPLETED - 1))
+                     | (1 << (EVENT_TRANSFER_TX_FAILED - 1)))
+
+
+def _burst_and_status(dev, reader, ch: int, window: float) -> dict:
+    """Send a one-packet burst, then a channel status request behind it.
+
+    The bridge handles host messages in order, so the status reply cannot
+    overtake the burst: its latency is how long the burst held the
+    dispatcher, which is the 1000 ms stall when no buffer is free. Reads for
+    at least `window` seconds, and until the status reply arrives.
+    """
+    header = (ch & BURST_HEADER_CHANNEL_MASK) | BURST_HEADER_LAST
+    t0 = time.monotonic()
+    dev.write(EP_OUT, frame(MESG_BURST_DATA_ID, bytes([header]) + bytes(8)))
+    dev.write(EP_OUT, frame(MESG_REQUEST_ID,
+                            bytes([ch, MESG_CHANNEL_STATUS_ID])))
+    out = {"done": None, "done_s": None, "refused": [], "status_s": None}
+    end = t0 + window
+    hard_end = t0 + max(window, 3.0)
+    while True:
+        now = time.monotonic()
+        if now >= hard_end or (now >= end and out["status_s"] is not None):
+            return out
+        stop = end if out["status_s"] is not None else hard_end
+        result = reader.next_frame(min(stop, now + 0.2))
+        if result is None:
+            continue
+        got_id, body = result
+        t = time.monotonic() - t0
+        if got_id == MESG_CHANNEL_STATUS_ID and out["status_s"] is None:
+            out["status_s"] = t
+        elif got_id == MESG_RESPONSE_EVENT_ID and len(body) >= 3:
+            if body[1] == MESG_BURST_DATA_ID:
+                out["refused"].append(body[2])
+            elif (body[0] == ch and body[1] == MESG_EVENT_ID
+                    and body[2] in (EVENT_TRANSFER_TX_COMPLETED,
+                                    EVENT_TRANSFER_TX_FAILED)
+                    and out["done"] is None):
+                out["done"], out["done_s"] = body[2], t
+
+
+def check_burst_filter(dev, reader) -> list[str]:
+    """Filtered burst completions must still free the bridge's burst buffer.
+
+    antr_on_message() releases the buffer on TRANSFER_TX_COMPLETED/FAILED
+    and only then honours the host's event filter. Swap the two and every
+    filtered completion leaks a buffer: after BURST_BUFS bursts the next one
+    stalls 1000 ms and fails TRANSFER_IN_PROGRESS, and so does every one
+    after it until a reset. No ztest builds the bridge, so this is the check.
+
+    Opens a master and transmits (a one-packet burst with no slave fails,
+    which releases the buffer just the same), so it is opt-in.
+    """
+    print("\n[burst-filter] filtered burst completions still free the "
+          "burst buffer")
+    ch = BURST_FILTER_CH
+    setup = [
+        (MESG_ASSIGN_CHANNEL_ID, bytes([ch, CHANNEL_TYPE_MASTER, 0]),
+         "assign master"),
+        (MESG_CHANNEL_ID_ID, bytes([ch, BURST_FILTER_DEVICE & 0xFF,
+                                    BURST_FILTER_DEVICE >> 8, 1, 1]),
+         "channel id"),
+        (MESG_CHANNEL_MESG_PERIOD_ID, bytes([ch, BURST_FILTER_PERIOD & 0xFF,
+                                             BURST_FILTER_PERIOD >> 8]),
+         "period"),
+        (MESG_CHANNEL_RADIO_FREQ_ID, bytes([ch, BURST_FILTER_RF]), "RF"),
+        (MESG_OPEN_CHANNEL_ID, bytes([ch]), "open"),
+    ]
+    problems: list[str] = []
+    try:
+        for msg_id, payload, name in setup:
+            code = command(dev, reader, msg_id, payload)
+            if code != RESPONSE_NO_ERROR:
+                print(f"  FAIL: {name} refused, code {code}")
+                return [f"burst filter: {name} refused"]
+
+        # Control, filter 0: how long one burst takes to finish here sets
+        # the spacing below, so a healthy bridge always has its buffers back
+        # before the next burst.
+        control = _burst_and_status(dev, reader, ch, 5.0)
+        if control["refused"]:
+            print(f"  -- SKIP: unfiltered burst refused, codes "
+                  f"{control['refused']}")
+            return []
+        if control["done"] is None:
+            print("  -- SKIP: unfiltered burst never completed or failed, "
+                  "so there is no completion to filter")
+            return []
+        took = control["done_s"]
+        spacing = max(3.0 * took, 0.5)
+        print(f"  OK: unfiltered burst ended in event {control['done']} after "
+              f"{took * 1000:.0f} ms; filtered bursts {spacing * 1000:.0f} ms "
+              f"apart")
+
+        code = command(dev, reader, MESG_EVENT_FILTER_CONFIG_ID,
+                       bytes([0x00, BURST_FILTER_MASK & 0xFF,
+                              BURST_FILTER_MASK >> 8]))
+        if code != RESPONSE_NO_ERROR:
+            print(f"  FAIL: filter 0x{BURST_FILTER_MASK:04X} refused, "
+                  f"code {code}")
+            return ["burst filter: event filter refused"]
+
+        leaked_events = 0
+        for i in range(BURST_FILTER_BUFS + 2):
+            r = _burst_and_status(dev, reader, ch, spacing)
+            late = r["status_s"] is None or r["status_s"] > BURST_FILTER_LATE_S
+            status = ("no status reply" if r["status_s"] is None
+                      else f"status after {r['status_s'] * 1000:.0f} ms")
+            if r["done"] is not None:
+                leaked_events += 1
+            if r["refused"] or late:
+                print(f"  FAIL: burst {i + 1}: refused {r['refused']}, "
+                      f"{status} - a filtered completion kept its buffer")
+                problems.append(f"burst filter: burst {i + 1} stalled or "
+                                f"refused (buffer leaked)")
+            else:
+                print(f"  OK: burst {i + 1} accepted, {status}")
+        if leaked_events:
+            print(f"  FAIL: {leaked_events} filtered completion(s) reached "
+                  f"the host")
+            problems.append("burst filter: filtered completions delivered")
+        elif not problems:
+            print(f"  OK: {BURST_FILTER_BUFS + 2} filtered bursts, no stall, "
+                  f"no completion delivered")
+        return problems
+    finally:
+        command(dev, reader, MESG_EVENT_FILTER_CONFIG_ID,
+                bytes([0x00, 0x00, 0x00]))
+        if (command(dev, reader, MESG_CLOSE_CHANNEL_ID, bytes([ch]))
+                == RESPONSE_NO_ERROR and wait_for_close(reader, ch)):
+            command(dev, reader, MESG_UNASSIGN_CHANNEL_ID, bytes([ch]))
+        else:
+            reset_stack(dev, reader)
+
+
 def check_lib_config(dev, reader) -> list[str]:
     """Set lib config 0xE0 then 0x80 and read back 0x80, not 0xE0.
 
@@ -784,6 +952,11 @@ def main() -> int:
                              "replaces 0xE0 on the air. Puts a receiver on "
                              "the air; wants an ANT+ sensor in range")
     parser.add_argument("--scan-seconds", type=float, default=15.0)
+    parser.add_argument("--burst-filter", action="store_true",
+                        help="also check that filtered TRANSFER_TX_COMPLETED/"
+                             "FAILED still free the bridge's burst buffer. "
+                             "Opens a master (RF 70, network 0) and "
+                             "transmits for a few seconds")
     parser.add_argument("-q", "--quiet", action="store_true")
     args = parser.parse_args()
 
@@ -821,6 +994,8 @@ def main() -> int:
     problems += check_encryption(dev, reader)
     if args.scan_mode:
         problems += check_scan_mode(dev, reader, args.scan_seconds)
+    if args.burst_filter:
+        problems += check_burst_filter(dev, reader)
     if args.radiant_security:
         problems += check_radiant_security(dev, reader)
 

@@ -1463,7 +1463,10 @@ are worth stating because each is a decision rather than a detail:
    a `labelDirty` flag beside `reachableDirty` and pushes NodeLabel through the
    same batched path Reachable uses, then re-persists — which also repairs an
    endpoint *adopted* from a boot that used the old scheme, the case that would
-   otherwise keep hex names forever.
+   otherwise keep hex names forever. The cost is bounded and was left alone:
+   each adopted row's rename is one flash write, and a row can be renamed at
+   most 2 × the number of distinct adoption passes for its source. That is
+   per boot, and it does not recur.
 4. **`struct radiant_binding::label` keeps its meaning** — "what a human calls
    it". A non-empty label replaces the base name and the device number; the
    suffix still goes on, because a labelled strap is still five endpoints. A

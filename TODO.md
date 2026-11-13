@@ -313,16 +313,6 @@ MPSL (needs a soak beside BLE or Thread, which that clearance excluded):
   with `t_start <= now`, the ordering A14-1 replaced for receive. A compare just
   after the enable, before `now` is read, gives a false ETIME.
 
-Bridge and tools:
-- Filtered TX_COMPLETED / TX_FAILED are dropped by an early return in
-  `antr_on_message()` after the burst buffer is released. The bridge is in no ztest
-  app; order is release first, then drop.
-- Matter adoption renames and re-persists each adopted row's NodeLabel (one flash
-  write each); each row can be renamed up to 2 x the number of distinct adoption
-  passes for its source, bounded per boot and not recurring. Left unchanged.
-- `ant_compare.py:640` and `ant_sens.py:561` still show unlabelled 0x60 upper bounds.
-- `radiant_sched.h` still says "Zero-cost on both nRF builds".
-
 ## Device Testing Open Items
 
 Make continuous dual transmission the HR default (CONFIG_HRM_SUPPRESS_ANT_WHEN_CONNECTED=n). 

@@ -74,7 +74,8 @@ _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
 
 # ant_multi_verify imports nothing that needs a radio, so this module stays
-# importable (and testable) on a host without pyusb.
+# importable (and testable) on a host without pyusb. ant_pages likewise.
+import ant_pages as ap  # noqa: E402
 from ant_multi_verify import Target, parse_target, run_targets  # noqa: E402
 
 PHASES = ("identity", "loss", "multi", "acquire", "ladder", "acked", "usb")
@@ -618,13 +619,19 @@ def verdict_usb(rx: dict | None, ref: dict | None,
 # Reading child JSON
 # ---------------------------------------------------------------------------
 
+# Weakest last: pooling windows keeps the highest-ranked basis seen.
+_BASIS_RANK = {"exact": 0, "exact_upper_bound": 1, "wall_clock": 2}
+
+
 def verify_counts(data: dict | None) -> dict:
     """Loss counts out of one ant_verify JSON, exact where the transmitter's
     event counter allows it and wall-clock otherwise - labelled, because the
     two are different instruments.
 
     Returns {"missed", "sent", "basis", "per_channel": {...}} with missed/sent
-    None when nothing could be counted. Pooled over channels as one ratio
+    None when nothing could be counted. basis is "exact_upper_bound" where
+    ant_verify scoped the exact figure as an upper bound (0x60 with a host
+    refill that counted a slot never sent). Pooled over channels as one ratio
     (sum missed / sum sent), the same composition ant_verify.derive() uses.
     """
     if not data:
@@ -637,7 +644,10 @@ def verify_counts(data: dict | None) -> dict:
     out: dict[str, dict] = {}
     for key, entry in per.items():
         if entry.get("exact_sent"):
-            m, s, basis = entry["exact_missed"], entry["exact_sent"], "exact"
+            m, s = entry["exact_missed"], entry["exact_sent"]
+            basis = ("exact_upper_bound"
+                     if ap.is_upper_bound(entry.get("exact_scope"))
+                     else "exact")
         else:
             ch = channels.get(key, {})
             expected = ch.get("expected_packets")
@@ -808,7 +818,13 @@ def summarise_round(rig: Rig, rnd: Round, records: list[dict]) -> dict:
                         acc = pooled.setdefault(entry["profile"], [0, 0])
                         acc[0] += entry["missed"]
                         acc[1] += entry["sent"]
-                        bases[entry["profile"]] = entry["basis"]
+                        # Pooled over windows, so the label is the weakest
+                        # any window had: one upper-bound window makes the
+                        # pooled figure an upper bound too.
+                        prev = bases.get(entry["profile"])
+                        if (prev is None or _BASIS_RANK.get(entry["basis"], 0)
+                                > _BASIS_RANK.get(prev, 0)):
+                            bases[entry["profile"]] = entry["basis"]
                 per_profile[rx] = {
                     prof: {"loss_pct": 100.0 * m / s, "basis": bases[prof]}
                     for prof, (m, s) in pooled.items()}
@@ -954,6 +970,14 @@ def caveats(rig: Rig, records: list[dict]) -> list[str]:
                    "in the window alike, so the receiver-minus-reference gap "
                    "is unaffected; the absolute figures assume the "
                    "transmitter's crystal is exact.")
+    if any(b and "upper_bound" in b for b in bases):
+        out.append("Some exact loss figures are upper bounds: the 0x60 slot "
+                   "counter outran the clock (a host refill counted a slot "
+                   "that was never sent, and it reads as lost). The extra "
+                   "count is the transmitter's, so it is the same on every "
+                   "receiver in the window and the receiver-minus-reference "
+                   "gap is unaffected; the absolute figures are at most the "
+                   "true loss.")
     return out
 
 
@@ -1019,7 +1043,8 @@ def render_markdown(rig: Rig, summary: dict, records: list[dict]) -> str:
             for per in m["multi per profile"].values():
                 profs += [p for p in per if p not in profs]
             lines += ["### multi, loss % per profile (pooled over windows; "
-                      "`wc` = wall-clock basis, no exact counter)", "",
+                      "`wc` = wall-clock basis, no exact counter; "
+                      "`ub` = exact counter, upper bound)", "",
                       "| receiver | " + " | ".join(profs) + " |",
                       "|---|" + "---|" * len(profs)]
             for rx, per in m["multi per profile"].items():
@@ -1028,8 +1053,9 @@ def render_markdown(rig: Rig, summary: dict, records: list[dict]) -> str:
                     e = per.get(p)
                     cells.append("-" if e is None else
                                  _fmt(e["loss_pct"])
-                                 + (" wc" if e["basis"] == "wall_clock"
-                                    else ""))
+                                 + {"wall_clock": " wc",
+                                    "exact_upper_bound": " ub"}.get(
+                                        e["basis"], ""))
                 lines.append(f"| {rx} | " + " | ".join(cells) + " |")
             lines.append("")
         if "acquire" in m:

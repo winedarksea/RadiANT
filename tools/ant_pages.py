@@ -2558,6 +2558,20 @@ RADIANT_TLM_RF_INDEX_MAX = 124
 # docs/profile-registry.md records "per-node" and the checker skips it here.
 RADIANT_TLM_PERIOD_DEFAULT = 8182
 
+#: Suffix on an exact-loss scope ("slot (upper bound)") when 0x60's slot
+#: counter outran the clock: a host-driven master that refills twice in one
+#: period counts a slot that was never sent, and that slot reads as lost.
+LOSS_UPPER_BOUND_SUFFIX = "(upper bound)"
+
+
+def is_upper_bound(scope) -> bool:
+    """True when an ant_verify exact-loss scope is only an upper bound.
+
+    Here rather than in ant_verify so the pyusb-free readers (ant_compare)
+    match the suffix in the same place ant_verify writes it.
+    """
+    return isinstance(scope, str) and scope.endswith(LOSS_UPPER_BOUND_SUFFIX)
+
 # The profile device types: the SAME envelope with a pinned schema. A profile
 # adds a device type number and a required field set - no codec, no page
 # layout, no parser of its own. See docs/device-profiles.md sections 1 and 5.

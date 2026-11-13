@@ -535,6 +535,35 @@ class MasterDriver(threading.Thread):
 # The measurement
 # ---------------------------------------------------------------------------
 
+def rung_loss(summary: dict, sent: int) -> tuple[float, str]:
+    """(loss_pct, loss_basis) for one rung from an analyser summary.
+
+    The transmitter's event counter where the analyser could read it, with
+    "(upper bound)" carried through when ant_verify scoped it so; otherwise
+    the count this host handed the master; otherwise NaN.
+    """
+    exact = summary.get("exact_loss")
+    if exact is not None:
+        loss_pct = exact["loss_pct"]
+        # 0x60 with a host-driven master (--profile telemetry) can count a
+        # slot the master never sent: ant_verify scopes that figure as an
+        # upper bound, and the label has to carry it to the ladder.
+        basis = ("event_counter (upper bound)"
+                 if ap.is_upper_bound(exact.get("scope"))
+                 else "event_counter")
+    elif sent > 0:
+        # Past the knee. The receiver has too little of the stream left to read
+        # the transmitter's counter out of it, so the count this host handed the
+        # transmitter stands in - which is the same quantity by a shorter path,
+        # and only ever used where the answer is "most of it is gone".
+        loss_pct = 100.0 * max(0, sent - summary["packets"]) / sent
+        basis = "master_sent"
+    else:
+        loss_pct = float("nan")
+        basis = "none"
+    return loss_pct, basis
+
+
 def measure_rung(rx_dev, rx_reader, channel: int, profile: str, seconds: float,
                  master: MasterDriver, verbose: bool) -> dict:
     """One rung: listen, then let ant_verify.py say how much was lost.
@@ -557,20 +586,7 @@ def measure_rung(rx_dev, rx_reader, channel: int, profile: str, seconds: float,
     sent = master.sent - sent_before
     summary = analyzer.summary(100.0, 10.0, None)
 
-    exact = summary.get("exact_loss")
-    if exact is not None:
-        loss_pct = exact["loss_pct"]
-        basis = "event_counter"
-    elif sent > 0:
-        # Past the knee. The receiver has too little of the stream left to read
-        # the transmitter's counter out of it, so the count this host handed the
-        # transmitter stands in - which is the same quantity by a shorter path,
-        # and only ever used where the answer is "most of it is gone".
-        loss_pct = 100.0 * max(0, sent - summary["packets"]) / sent
-        basis = "master_sent"
-    else:
-        loss_pct = float("nan")
-        basis = "none"
+    loss_pct, basis = rung_loss(summary, sent)
 
     signal = summary.get("signal")
     fails = sum(count for name, count in extra.get("events", {}).items()

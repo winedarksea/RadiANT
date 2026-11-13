@@ -371,6 +371,29 @@ class _Args:
 
 
 @unittest.skipIf(ant_sens is None, "pyusb is not installed")
+class TestRungLossBasis(unittest.TestCase):
+    def test_exact_figure_reads_the_event_counter(self):
+        loss, basis = ant_sens.rung_loss(
+            {"exact_loss": {"loss_pct": 1.5, "scope": "slot"},
+             "packets": 100}, 120)
+        self.assertEqual((loss, basis), (1.5, "event_counter"))
+
+    def test_an_upper_bound_scope_is_carried_into_the_label(self):
+        # --profile telemetry drives a host-driven 0x60 master, whose
+        # refills can count a slot never sent.
+        loss, basis = ant_sens.rung_loss(
+            {"exact_loss": {"loss_pct": 2.0, "scope": "slot (upper bound)"},
+             "packets": 100}, 120)
+        self.assertEqual((loss, basis),
+                         (2.0, "event_counter (upper bound)"))
+
+    def test_past_the_knee_falls_back_to_the_master_count(self):
+        loss, basis = ant_sens.rung_loss({"exact_loss": None,
+                                          "packets": 30}, 120)
+        self.assertEqual((loss, basis), (75.0, "master_sent"))
+
+
+@unittest.skipIf(ant_sens is None, "pyusb is not installed")
 class TestSeveralReceivers(unittest.TestCase):
     def test_rx_parses_with_the_multi_verify_parser(self):
         t = ant_sens.parse_target("Feather=usb:755972D7183A6183")

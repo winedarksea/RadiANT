@@ -105,6 +105,13 @@ reads.
 
 ### Changed
 
+- **`ant_compare.py` and `ant_sens.py` mark 0x60 upper bounds.** When
+  `ant_verify` scopes a 0x60 figure as an upper bound (a host refill counted a
+  slot that was never sent), the loss basis now reads `exact_upper_bound` /
+  `event_counter (upper bound)` rather than plain exact. The compare report
+  shows `ub` in the multi table and adds a caveat. `ant_features.py
+  --burst-filter` checks that filtered burst completions still free the
+  bridge's burst buffer.
 - **`apps/dongle_ti` can build the 0xF6 health counters** (`ti_health.conf`),
   the one way to read `sched_denied` off a LaunchXL whose log pins are unattached.
 
