@@ -1,28 +1,8 @@
 MPSL bursts: multi-packet bursts still can't run on MPSL builds. That's a scope gap, not a regression; Zwift uses acknowledged messages.
 
 Discovery short match (ADR 0022), left open 2026-11-11:
-- [x] Gates 3 and 4 pass on nRF (2026-11-12, `archive/benchmarks/2026-11-12-gate3/`). Tracked loss B - A = -0.23 pp against the same-SoC dongle control (bound 2.16 pp), and page 7's hand-off counters (fields 3-5) stayed at zero. The "slot after the search heard the device number" counter was removed, not split: it only counts when the search hears a frame, so it grows with discovery and can't measure a cost (it read 100 % missed with the short match off too). Gate 4: about 10/s more noise matches on B, all dropped by the backend CRC, with no false devices and no new host events. All four gates pass. The nRF default flips to y after the Zwift capture below.
-- [x] `radiant_search_stats` over the host: done by ADR 0023 (c5320f4), 0xF7 pages 5-6. Read them after a window only: `radiant_search_init()` zeroes them on every stack reset and key set.
 - The two waste fixes (ADR 0022 "Not done here"): closed for TI, where the short match is now on by default and one set makes them moot. On nRF they matter only while the short match is off, which ends when the default flips after the Zwift capture; no scheduler "window is live" query is built.
 - Deferred to the Zwift follow-up testing: the final Zwift capture with both workstreams flashed (user-run): every sensor listed within ~1 s, 0x61/0xC6 answered, reset -> NETWORK_KEY against 42-94 s (RadiANT history) and 9.2 s (Garmin).
-
-Discovery (ztest only, not on air; bench checks in the release review):
-- [x] Retune restarts the cursor: fixed on fix/discovery-open-items (B1), each
-  frequency keeps its own cursor (`RADIANT_SEARCH_RF_CURSORS`).
-- [x] A steer or revisit queued for the other frequency wasted a dwell and doubled
-  the backoff: fixed (B2), steer entries carry their frequency.
-- [x] When only undeclared channels remain, the sweep stays on the last declared
-  frequency: fixed in afe3be2 (`home_rf`), test
-  `test_the_sweep_returns_home_when_the_last_declared_search_ends`.
-- [x] The ENOENT clear of `pass_done` was unreachable through the API: fixed
-  (B4), a new session clears it in `begin_common()`.
-- [x] A chunk reclaimed by A9-3 was credited as a full listen: fixed (B5), it
-  credits nothing and counts `reclaimed_chunks`.
-- [x] On air 2026-11-12 (`archive/benchmarks/2026-11-12-gate3/` step 7): a keyed
-  slave on RF 66 acquires a Garmin master (0.06 s), and a mixed 57/66 session
-  acquires both (0.06-0.09 s and 0.30-0.34 s), on both short-match images. Only
-  named-device channels were tried. A real Zwift session on these images is
-  deferred to the Zwift follow-up testing.
 
 
 ## TI CC2652R, open after the 2026-11-12 bench (evidence `archive/benchmarks/2026-11-12-ti-findings/` and `2026-11-12-ti-lead/`):
@@ -318,3 +298,7 @@ MPSL (needs a soak beside BLE or Thread, which that clearance excluded):
 Make continuous dual transmission the HR default (CONFIG_HRM_SUPPRESS_ANT_WHEN_CONNECTED=n). 
 
 Apple testing round 2
+
+Zwift pcap using an MPSL build dongle
+Zwift pcap using a TI build
+Zwift pcap using erg mode in Zwifts
