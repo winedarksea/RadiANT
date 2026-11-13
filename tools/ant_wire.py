@@ -1225,7 +1225,7 @@ CAPABILITIES_ID_MATCH_FIX_ON_SHARED_CHANNEL_RXBURST = 0x04
 
 # ---------------------------------------------------------------------------
 # RadiANT extension messages - NOT ANT protocol
-# Ours, not Garmin's: not in Rev 5.1, not answered by any ANT device. 0xF8-0xFA
+# Ours, not Garmin's: not in Rev 5.1, not answered by any ANT device. 0xF9-0xFA
 # is reserved for the rest of the family. Kept out of MESSAGES on purpose, so a
 # tool that walks the ANT protocol never sees them. These were first proposed
 # at 0xE0-0xE4 and moved, because sdk-ant's MESG_EXT_ID_0 .. MESG_EXT_ID_4
@@ -1237,13 +1237,15 @@ CAPABILITIES_ID_MATCH_FIX_ON_SHARED_CHANNEL_RXBURST = 0x04
 # bitmask - bit 0 X_CONF, bit 1 X_AUTH, bit 2 drop an unverified window instead
 # of delivering it (default 0, deliver), bit 3 encrypt the descriptor set
 # (REFUSED in v1 with ANTW_INVALID_PARAMETER_PROVIDED - the descriptor has no
-# counter and therefore no nonce), bits 7..4 reserved must be 0; [2] MAC window
-# W, the literal 2, 4 or 8 (W=1 is reserved for the reliable-command page); [3]
-# secured page range low and [4] high, both bounded to 0x01..0x1F so the
-# descriptor and the ANT+ common pages stay in the clear mechanically rather
-# than by memory. The two switches are independent, not a ladder: X_AUTH alone
-# is the most useful setting in the table. [K4 (docs/radiant-security.md sec 3
-# and 9)]
+# counter and therefore no nonce), bit 4 send one MESG_RADIANT_SEC_VERDICT
+# (0xF8) per judged window (valid only with bit 1, X_AUTH; refused with
+# ANTW_INVALID_PARAMETER_PROVIDED otherwise), bits 7..5 reserved must be 0; [2]
+# MAC window W, the literal 2, 4 or 8 (W=1 is reserved for the reliable-command
+# page); [3] secured page range low and [4] high, both bounded to 0x01..0x1F so
+# the descriptor and the ANT+ common pages stay in the clear mechanically
+# rather than by memory. The two switches are independent, not a ladder: X_AUTH
+# alone is the most useful setting in the table. [K4 (docs/radiant-security.md
+# sec 3 and 9)]
 MESG_RADIANT_SEC_CONFIG_ID = 0xF1
 
 # Install the one 16-byte root key for a channel. [0] channel; [1] key length
@@ -1283,11 +1285,11 @@ MESG_RADIANT_EPOCH_ID = 0xF3
 # throughout the beta, whatever is added, so a reader tells which fields exist
 # from the body length and treats the version as nothing more than a sanity
 # check. A reader refuses a body shorter than it needs, and decodes the fields
-# it knows from a longer body. This exists so a host that ignores the per-
-# message verdict flag still has an auditable stream: deliver-as-unverified
-# only means something if unverified cannot be silently treated as verified.
-# The enrolment counter is readable by a host on the node that did the
-# enrolment; other receivers cannot see it over the air. [K4 (docs/radiant-
+# it knows from a longer body. This exists so a host that does not take the
+# 0xF8 window-verdict events still has an auditable stream: deliver-as-
+# unverified only means something if unverified cannot be silently treated as
+# verified. The enrolment counter is readable by a host on the node that did
+# the enrolment; other receivers cannot see it over the air. [K4 (docs/radiant-
 # security.md sec 3.2 and 9)]
 MESG_RADIANT_SEC_STATUS_ID = 0xF4
 
@@ -1304,51 +1306,52 @@ MESG_RADIANT_SEC_STATUS_ID = 0xF4
 MESG_RADIANT_PAIRING_ID = 0xF5
 
 # What the dongle threw away, requested with MESG_REQUEST (0x4D). Request-only:
-# nothing is ever emitted unsolicited, so a host that never asks sees a byte
-# stream identical to a build without it. [0] structure version, 1; [1] flags,
-# bit 0 = at least one counter has saturated, so the whole set is a floor
-# rather than a total; [2..3] ANT events dropped because the USB TX queue was
-# full; [4] deepest that queue has been, in frames, out of ANT_TX_QUEUE_DEPTH;
-# [5] deepest the radio event queue has been, out of its own depth; [6..7]
-# event-queue overflow marks; [8..9] times bulk-OUT was left unarmed for host
-# backpressure; [10..11] frames refused for an unusable network key; [12..13]
-# scheduler windows missed; [14..15] failed; [16..17] denied by the arbiter;
-# [18..19] burst transfers that hit the 1000 ms back-pressure stall; [20..21]
-# search windows the pump declined to post WHILE a channel was still searching
-# and its slot was held for something else, which is discovery work outstanding
-# that could not get on the air; [22..23] bytes discarded by the host-frame
-# parser while hunting for SYNC (0xA4), i.e. framing lost outright; [24..25]
-# frames that reached a full, in-range XOR checksum and failed it - framed but
-# corrupt, kept apart from [22..23] on purpose (one points at a host out of
-# step, the other at a noisy link); [26..27] radio RX events whose channel op
-# was no longer the one that channel owned by the time they were processed;
-# [28..29] USB bulk-IN transfers that never completed within their timeout,
-# i.e. the host stopped polling. [30..31] OPTIONAL, sets_advanced_uncovered:
-# sets of the MPSL sweep that finished their dwell having listened to fewer
-# than all phases of the channel period, present only on a build with
-# CONFIG_RADIANT_SEARCH_COVERAGE (which an MPSL build enabling these health
-# counters takes on), where the body is 32 bytes. Every other build answers 30
-# bytes and this field is absent, because a build that cannot measure coverage
-# must not report 0 uncovered. UNLIKE the rest it clamps at 65535 WITHOUT
-# setting the flag in [1]: it climbs for as long as a search runs, and a flag
-# set by it would mark every other field a floor for the reason given below.
-# All the others are u16 LE and all saturate rather than wrap, which is what
-# the flag in [1] is for: it distinguishes 65535 from 65535-and-counting.
-# VERSIONING: fields are only ever added at the end and an offset is never
-# reused. The structure version stays 1 throughout the beta, whatever is added,
-# so a reader tells which fields exist from the body length and treats the
-# version as nothing more than a sanity check. A reader refuses a body shorter
-# than it needs, and decodes the fields it knows from a longer body. THE OTHER
-# HALF OF [20..21] IS DELIBERATELY ABSENT. A decline because NO channel was
-# searching is discovery having succeeded, not failed, and it is not loss - and
-# the pump runs about 31 times a second regardless, so such a field would climb
-# forever on an idle dongle and saturate in about 35 minutes. Measured on the
-# first hardware read of this reply: 231 within nine seconds of boot with no
-# channel ever opened. Since saturation sets the flag in [1], that one field
-# would have made every OTHER field on the board read as a floor. It was
-# carried by the SWEEP debug log line, which was retired with that instrument;
-# the reason this field is absent from the reply stands on its own. WHY THIS
-# EXISTS. tools/ab_gates.toml's unexplained_loss.max = 0 is a SITTING
+# 0xF6 is never emitted unsolicited, so a host that never asks sees a byte
+# stream identical to a build without it. (The one RadiANT message that is sent
+# unsolicited, 0xF8, is sent only to a host that opted in through 0xF1 bit 4.)
+# [0] structure version, 1; [1] flags, bit 0 = at least one counter has
+# saturated, so the whole set is a floor rather than a total; [2..3] ANT events
+# dropped because the USB TX queue was full; [4] deepest that queue has been,
+# in frames, out of ANT_TX_QUEUE_DEPTH; [5] deepest the radio event queue has
+# been, out of its own depth; [6..7] event-queue overflow marks; [8..9] times
+# bulk-OUT was left unarmed for host backpressure; [10..11] frames refused for
+# an unusable network key; [12..13] scheduler windows missed; [14..15] failed;
+# [16..17] denied by the arbiter; [18..19] burst transfers that hit the 1000 ms
+# back-pressure stall; [20..21] search windows the pump declined to post WHILE
+# a channel was still searching and its slot was held for something else, which
+# is discovery work outstanding that could not get on the air; [22..23] bytes
+# discarded by the host-frame parser while hunting for SYNC (0xA4), i.e.
+# framing lost outright; [24..25] frames that reached a full, in-range XOR
+# checksum and failed it - framed but corrupt, kept apart from [22..23] on
+# purpose (one points at a host out of step, the other at a noisy link);
+# [26..27] radio RX events whose channel op was no longer the one that channel
+# owned by the time they were processed; [28..29] USB bulk-IN transfers that
+# never completed within their timeout, i.e. the host stopped polling. [30..31]
+# OPTIONAL, sets_advanced_uncovered: sets of the MPSL sweep that finished their
+# dwell having listened to fewer than all phases of the channel period, present
+# only on a build with CONFIG_RADIANT_SEARCH_COVERAGE (which an MPSL build
+# enabling these health counters takes on), where the body is 32 bytes. Every
+# other build answers 30 bytes and this field is absent, because a build that
+# cannot measure coverage must not report 0 uncovered. UNLIKE the rest it
+# clamps at 65535 WITHOUT setting the flag in [1]: it climbs for as long as a
+# search runs, and a flag set by it would mark every other field a floor for
+# the reason given below. All the others are u16 LE and all saturate rather
+# than wrap, which is what the flag in [1] is for: it distinguishes 65535 from
+# 65535-and-counting. VERSIONING: fields are only ever added at the end and an
+# offset is never reused. The structure version stays 1 throughout the beta,
+# whatever is added, so a reader tells which fields exist from the body length
+# and treats the version as nothing more than a sanity check. A reader refuses
+# a body shorter than it needs, and decodes the fields it knows from a longer
+# body. THE OTHER HALF OF [20..21] IS DELIBERATELY ABSENT. A decline because NO
+# channel was searching is discovery having succeeded, not failed, and it is
+# not loss - and the pump runs about 31 times a second regardless, so such a
+# field would climb forever on an idle dongle and saturate in about 35 minutes.
+# Measured on the first hardware read of this reply: 231 within nine seconds of
+# boot with no channel ever opened. Since saturation sets the flag in [1], that
+# one field would have made every OTHER field on the board read as a floor. It
+# was carried by the SWEEP debug log line, which was retired with that
+# instrument; the reason this field is absent from the reply stands on its own.
+# WHY THIS EXISTS. tools/ab_gates.toml's unexplained_loss.max = 0 is a SITTING
 # INVALIDATOR rather than a gate: a hole with no RX_FAIL means the loss
 # happened on the host or inside the dongle, and loss_accounting() cannot tell
 # those two apart. A firmware-side witness splits that bucket. That check has
@@ -1396,6 +1399,26 @@ MESG_RADIANT_HEALTH_ID = 0xF6
 # message.md has the reasoning and radiant/include/radiant/radiant_diag.h the
 # layout. [ADR 0023]
 MESG_RADIANT_DIAG_ID = 0xF7
+
+# One window's verdict on a secured channel, sent unsolicited, but ONLY on a
+# channel whose 0xF1 set bit 4 (with X_AUTH); without that bit the byte stream
+# is identical to a build without this message. [0] channel; [1] verdict - 1
+# verified, 2 unverified (never 0: a window on an X_AUTH channel always has a
+# verdict); [2..3] window_start, the 16-bit counter of the window's first
+# packet (u16 LE); [4] W. The window covers counters window_start ..
+# window_start+W-1. A host maps each BROADCAST_DATA to its window by payload
+# byte [1], which on a secured page is the counter's low 8 bits: the packet
+# belongs to this window when (byte1 - window_start) mod 256 < W, unambiguous
+# since W <= 8. Sent after every packet it covers, in the same queue: under the
+# default deliver policy the window's packets arrived W to 2W-1 periods
+# earlier; under the drop policy (0xF1 bit 2) a verified window's held packets
+# are released immediately before it and an unverified window's never arrive.
+# Data delivery is unchanged by this bit. A host that wants per-packet trust
+# holds each packet until its window's 0xF8 arrives, and treats a packet whose
+# verdict never comes (a lost window, the last window before the node went
+# quiet, an event-queue overflow) as unverified. [Security review 2026-11-13
+# item 3 (docs/radiant-security.md sec 3.2 and 9)]
+MESG_RADIANT_SEC_VERDICT_ID = 0xF8
 
 # ---------------------------------------------------------------------------
 # Lookup tables
@@ -1916,7 +1939,7 @@ RADIANT_MESSAGES = {
         "name": 'MESG_RADIANT_SEC_CONFIG_ID',
         "direction": 'h2d',
         "payload_len": 5,
-        "desc": 'Configure the two payload transforms on one channel. [0] channel; [1] switch bitmask - bit 0 X_CONF, bit 1 X_AUTH, bit 2 drop an unverified window instead of delivering it (default 0, deliver), bit 3 encrypt the descriptor set (REFUSED in v1 with ANTW_INVALID_PARAMETER_PROVIDED - the descriptor has no counter and therefore no nonce), bits 7..4 reserved must be 0; [2] MAC window W, the literal 2, 4 or 8 (W=1 is reserved for the reliable-command page); [3] secured page range low and [4] high, both bounded to 0x01..0x1F so the descriptor and the ANT+ common pages stay in the clear mechanically rather than by memory. The two switches are independent, not a ladder: X_AUTH alone is the most useful setting in the table.',
+        "desc": 'Configure the two payload transforms on one channel. [0] channel; [1] switch bitmask - bit 0 X_CONF, bit 1 X_AUTH, bit 2 drop an unverified window instead of delivering it (default 0, deliver), bit 3 encrypt the descriptor set (REFUSED in v1 with ANTW_INVALID_PARAMETER_PROVIDED - the descriptor has no counter and therefore no nonce), bit 4 send one MESG_RADIANT_SEC_VERDICT (0xF8) per judged window (valid only with bit 1, X_AUTH; refused with ANTW_INVALID_PARAMETER_PROVIDED otherwise), bits 7..5 reserved must be 0; [2] MAC window W, the literal 2, 4 or 8 (W=1 is reserved for the reliable-command page); [3] secured page range low and [4] high, both bounded to 0x01..0x1F so the descriptor and the ANT+ common pages stay in the clear mechanically rather than by memory. The two switches are independent, not a ladder: X_AUTH alone is the most useful setting in the table.',
     },
     0xF2: {
         "name": 'MESG_RADIANT_SET_KEY_ID',
@@ -1934,7 +1957,7 @@ RADIANT_MESSAGES = {
         "name": 'MESG_RADIANT_SEC_STATUS_ID',
         "direction": 'd2h',
         "payload_len": 26,
-        "desc": 'Per-channel security state, requested with MESG_REQUEST (0x4D). [0] channel; [1] structure version, 1; [2] switches currently active, as in 0xF1; [3] W; [4] page range low; [5] high; [6..9] epoch (u32 LE); [10..11] the expected slot index, low 16 bits (u16 LE); [12..13] windows verified; [14..15] windows unverified; [16..17] non-broadcast frames dropped for carrying a secured-range page; [18..19] frames dropped as replay or time-inconsistent; [20..21] windows dropped by the deliver policy; [22] epoch advances since the key was installed (u8, saturating); [23] the most recent verdict - 0 clear, 1 verified, 2 unverified; [24..25] enrolments, the pairings on this channel that took (the 0xF5 host exchange and the over-air enrolment window alike; attempts that were refused are not counted). All counters are u16 LE and saturate rather than wrapping. An unkeyed channel answers zeros and a clear verdict, with the version still set. VERSIONING: fields are only ever added at the end and an offset is never reused. The structure version stays 1 throughout the beta, whatever is added, so a reader tells which fields exist from the body length and treats the version as nothing more than a sanity check. A reader refuses a body shorter than it needs, and decodes the fields it knows from a longer body. This exists so a host that ignores the per-message verdict flag still has an auditable stream: deliver-as-unverified only means something if unverified cannot be silently treated as verified. The enrolment counter is readable by a host on the node that did the enrolment; other receivers cannot see it over the air.',
+        "desc": 'Per-channel security state, requested with MESG_REQUEST (0x4D). [0] channel; [1] structure version, 1; [2] switches currently active, as in 0xF1; [3] W; [4] page range low; [5] high; [6..9] epoch (u32 LE); [10..11] the expected slot index, low 16 bits (u16 LE); [12..13] windows verified; [14..15] windows unverified; [16..17] non-broadcast frames dropped for carrying a secured-range page; [18..19] frames dropped as replay or time-inconsistent; [20..21] windows dropped by the deliver policy; [22] epoch advances since the key was installed (u8, saturating); [23] the most recent verdict - 0 clear, 1 verified, 2 unverified; [24..25] enrolments, the pairings on this channel that took (the 0xF5 host exchange and the over-air enrolment window alike; attempts that were refused are not counted). All counters are u16 LE and saturate rather than wrapping. An unkeyed channel answers zeros and a clear verdict, with the version still set. VERSIONING: fields are only ever added at the end and an offset is never reused. The structure version stays 1 throughout the beta, whatever is added, so a reader tells which fields exist from the body length and treats the version as nothing more than a sanity check. A reader refuses a body shorter than it needs, and decodes the fields it knows from a longer body. This exists so a host that does not take the 0xF8 window-verdict events still has an auditable stream: deliver-as-unverified only means something if unverified cannot be silently treated as verified. The enrolment counter is readable by a host on the node that did the enrolment; other receivers cannot see it over the air.',
     },
     0xF5: {
         "name": 'MESG_RADIANT_PAIRING_ID',
@@ -1946,7 +1969,7 @@ RADIANT_MESSAGES = {
         "name": 'MESG_RADIANT_HEALTH_ID',
         "direction": 'd2h',
         "payload_len": '30..32',
-        "desc": "What the dongle threw away, requested with MESG_REQUEST (0x4D). Request-only: nothing is ever emitted unsolicited, so a host that never asks sees a byte stream identical to a build without it. [0] structure version, 1; [1] flags, bit 0 = at least one counter has saturated, so the whole set is a floor rather than a total; [2..3] ANT events dropped because the USB TX queue was full; [4] deepest that queue has been, in frames, out of ANT_TX_QUEUE_DEPTH; [5] deepest the radio event queue has been, out of its own depth; [6..7] event-queue overflow marks; [8..9] times bulk-OUT was left unarmed for host backpressure; [10..11] frames refused for an unusable network key; [12..13] scheduler windows missed; [14..15] failed; [16..17] denied by the arbiter; [18..19] burst transfers that hit the 1000 ms back-pressure stall; [20..21] search windows the pump declined to post WHILE a channel was still searching and its slot was held for something else, which is discovery work outstanding that could not get on the air; [22..23] bytes discarded by the host-frame parser while hunting for SYNC (0xA4), i.e. framing lost outright; [24..25] frames that reached a full, in-range XOR checksum and failed it - framed but corrupt, kept apart from [22..23] on purpose (one points at a host out of step, the other at a noisy link); [26..27] radio RX events whose channel op was no longer the one that channel owned by the time they were processed; [28..29] USB bulk-IN transfers that never completed within their timeout, i.e. the host stopped polling. [30..31] OPTIONAL, sets_advanced_uncovered: sets of the MPSL sweep that finished their dwell having listened to fewer than all phases of the channel period, present only on a build with CONFIG_RADIANT_SEARCH_COVERAGE (which an MPSL build enabling these health counters takes on), where the body is 32 bytes. Every other build answers 30 bytes and this field is absent, because a build that cannot measure coverage must not report 0 uncovered. UNLIKE the rest it clamps at 65535 WITHOUT setting the flag in [1]: it climbs for as long as a search runs, and a flag set by it would mark every other field a floor for the reason given below. All the others are u16 LE and all saturate rather than wrap, which is what the flag in [1] is for: it distinguishes 65535 from 65535-and-counting. VERSIONING: fields are only ever added at the end and an offset is never reused. The structure version stays 1 throughout the beta, whatever is added, so a reader tells which fields exist from the body length and treats the version as nothing more than a sanity check. A reader refuses a body shorter than it needs, and decodes the fields it knows from a longer body. THE OTHER HALF OF [20..21] IS DELIBERATELY ABSENT. A decline because NO channel was searching is discovery having succeeded, not failed, and it is not loss - and the pump runs about 31 times a second regardless, so such a field would climb forever on an idle dongle and saturate in about 35 minutes. Measured on the first hardware read of this reply: 231 within nine seconds of boot with no channel ever opened. Since saturation sets the flag in [1], that one field would have made every OTHER field on the board read as a floor. It was carried by the SWEEP debug log line, which was retired with that instrument; the reason this field is absent from the reply stands on its own. WHY THIS EXISTS. tools/ab_gates.toml's unexplained_loss.max = 0 is a SITTING INVALIDATOR rather than a gate: a hole with no RX_FAIL means the loss happened on the host or inside the dongle, and loss_accounting() cannot tell those two apart. A firmware-side witness splits that bucket. That check has already caught 0.4 pp of imaginary loss once; a second source makes it sharper. And on a Feather - no debugger, the board most people flash - the LOG_WRN that is the only record of a drop today does not exist at all. DEPTHS 32 AND 64 ARE NOT THE ANSWER TO A NON-ZERO [2..3]. At 3103 msg/s a 64-byte frame arrives every ~322 us, so depth 32 is about 10 ms of buffer. If the host stops reading for longer than that, a deeper queue converts a drop into LATENCY - the wrong trade for a protocol whose whole value is a 0.345 ms p50.",
+        "desc": "What the dongle threw away, requested with MESG_REQUEST (0x4D). Request-only: 0xF6 is never emitted unsolicited, so a host that never asks sees a byte stream identical to a build without it. (The one RadiANT message that is sent unsolicited, 0xF8, is sent only to a host that opted in through 0xF1 bit 4.) [0] structure version, 1; [1] flags, bit 0 = at least one counter has saturated, so the whole set is a floor rather than a total; [2..3] ANT events dropped because the USB TX queue was full; [4] deepest that queue has been, in frames, out of ANT_TX_QUEUE_DEPTH; [5] deepest the radio event queue has been, out of its own depth; [6..7] event-queue overflow marks; [8..9] times bulk-OUT was left unarmed for host backpressure; [10..11] frames refused for an unusable network key; [12..13] scheduler windows missed; [14..15] failed; [16..17] denied by the arbiter; [18..19] burst transfers that hit the 1000 ms back-pressure stall; [20..21] search windows the pump declined to post WHILE a channel was still searching and its slot was held for something else, which is discovery work outstanding that could not get on the air; [22..23] bytes discarded by the host-frame parser while hunting for SYNC (0xA4), i.e. framing lost outright; [24..25] frames that reached a full, in-range XOR checksum and failed it - framed but corrupt, kept apart from [22..23] on purpose (one points at a host out of step, the other at a noisy link); [26..27] radio RX events whose channel op was no longer the one that channel owned by the time they were processed; [28..29] USB bulk-IN transfers that never completed within their timeout, i.e. the host stopped polling. [30..31] OPTIONAL, sets_advanced_uncovered: sets of the MPSL sweep that finished their dwell having listened to fewer than all phases of the channel period, present only on a build with CONFIG_RADIANT_SEARCH_COVERAGE (which an MPSL build enabling these health counters takes on), where the body is 32 bytes. Every other build answers 30 bytes and this field is absent, because a build that cannot measure coverage must not report 0 uncovered. UNLIKE the rest it clamps at 65535 WITHOUT setting the flag in [1]: it climbs for as long as a search runs, and a flag set by it would mark every other field a floor for the reason given below. All the others are u16 LE and all saturate rather than wrap, which is what the flag in [1] is for: it distinguishes 65535 from 65535-and-counting. VERSIONING: fields are only ever added at the end and an offset is never reused. The structure version stays 1 throughout the beta, whatever is added, so a reader tells which fields exist from the body length and treats the version as nothing more than a sanity check. A reader refuses a body shorter than it needs, and decodes the fields it knows from a longer body. THE OTHER HALF OF [20..21] IS DELIBERATELY ABSENT. A decline because NO channel was searching is discovery having succeeded, not failed, and it is not loss - and the pump runs about 31 times a second regardless, so such a field would climb forever on an idle dongle and saturate in about 35 minutes. Measured on the first hardware read of this reply: 231 within nine seconds of boot with no channel ever opened. Since saturation sets the flag in [1], that one field would have made every OTHER field on the board read as a floor. It was carried by the SWEEP debug log line, which was retired with that instrument; the reason this field is absent from the reply stands on its own. WHY THIS EXISTS. tools/ab_gates.toml's unexplained_loss.max = 0 is a SITTING INVALIDATOR rather than a gate: a hole with no RX_FAIL means the loss happened on the host or inside the dongle, and loss_accounting() cannot tell those two apart. A firmware-side witness splits that bucket. That check has already caught 0.4 pp of imaginary loss once; a second source makes it sharper. And on a Feather - no debugger, the board most people flash - the LOG_WRN that is the only record of a drop today does not exist at all. DEPTHS 32 AND 64 ARE NOT THE ANSWER TO A NON-ZERO [2..3]. At 3103 msg/s a 64-byte frame arrives every ~322 us, so depth 32 is about 10 ms of buffer. If the host stops reading for longer than that, a deeper queue converts a drop into LATENCY - the wrong trade for a protocol whose whole value is a 0.345 ms p50.",
     },
     0xF7: {
         "name": 'MESG_RADIANT_DIAG_ID',
@@ -1954,8 +1977,14 @@ RADIANT_MESSAGES = {
         "payload_len": 36,
         "desc": "Diagnostic counters, one page per request: MESG_REQUEST (0x4D) with the page number in the channel byte. Request-only and answered only by a build with CONFIG_RADIANT_DIAG_COUNTERS (on the dongles, CONFIG_ANT_DONGLE_DIAG); a page this build does not have answers INVALID_PARAMETER_PROVIDED. Every page has the same shape: [0] page; [1] structure version, 1; [2] flags, bit 0 = a field on this page reads 0xFFFFFFFF, i.e. not measured on this build or backend (never 0, which means zero); [3] backend id, 0 null, 1 nRF, 2 cc26xx, 0xFF the test fake; [4..35] eight u32 LE counters that WRAP rather than saturate - read a before/after pair and take the difference. Pages: 0 api (scheduler dones, missed, failed, denied; slots missed, denied; receive events; transfers failed for no ack); 1 a master's turnaround window (posted, refused, skipped, dropped because no longer tracking, done OK, done MISSED, done otherwise, frames heard in it); 2 burst continuation (blocks submitted, late, host turnaround min and max in us, transmit slots expired in the scheduler, the smallest transmit margin in us as an i32, scheduler arm refusals, scheduler misses); 3 and 4 the backend table (radiant_radio_diag_get(): RX posted, refused, terminals OK, empty, error, command-status errors, the last such status, hardware sync matches; software-address mismatches, window-test drops, CRC fails, decoy-sync hits, hardware not-OK/ignored, buffer-full, longest receive drain in us, smallest arm lead in us); 5 and 6 radiant_search_stats (windows, sets advanced, sweeps, frames OK, CRC fails, acquisitions, scan reports, timeouts; cache steers, cache acquisitions, permit refusals, RSSI refusals, decode failures, bad filter index, late events, sets advanced uncovered); 7 the search/track hand-off, ADR 0022 gate 3 (search frames in flight at a chunk's hardware close and at an abort, search frames ending within 300 us of the close - these three from the backend table, 0xFFFFFFFF where it cannot see them; bounded receive windows armed opening past their start, the largest such lateness in us, bounded windows expired while a scan chunk held the radio; fields 6-7 reserved, 0xFFFFFFFF). VERSIONING: pinned at 1; a field's meaning never changes and a new meaning is a new page. docs/decisions/0023-radiant-diag-message.md has the reasoning and radiant/include/radiant/radiant_diag.h the layout.",
     },
+    0xF8: {
+        "name": 'MESG_RADIANT_SEC_VERDICT_ID',
+        "direction": 'd2h',
+        "payload_len": 5,
+        "desc": "One window's verdict on a secured channel, sent unsolicited, but ONLY on a channel whose 0xF1 set bit 4 (with X_AUTH); without that bit the byte stream is identical to a build without this message. [0] channel; [1] verdict - 1 verified, 2 unverified (never 0: a window on an X_AUTH channel always has a verdict); [2..3] window_start, the 16-bit counter of the window's first packet (u16 LE); [4] W. The window covers counters window_start .. window_start+W-1. A host maps each BROADCAST_DATA to its window by payload byte [1], which on a secured page is the counter's low 8 bits: the packet belongs to this window when (byte1 - window_start) mod 256 < W, unambiguous since W <= 8. Sent after every packet it covers, in the same queue: under the default deliver policy the window's packets arrived W to 2W-1 periods earlier; under the drop policy (0xF1 bit 2) a verified window's held packets are released immediately before it and an unverified window's never arrive. Data delivery is unchanged by this bit. A host that wants per-packet trust holds each packet until its window's 0xF8 arrives, and treats a packet whose verdict never comes (a lost window, the last window before the node went quiet, an event-queue overflow) as unverified.",
+    },
 }
-RADIANT_RESERVED_RANGE = '0xF8-0xFA'
+RADIANT_RESERVED_RANGE = '0xF9-0xFA'
 
 MESSAGE_NAMES = {mid: info["name"] for mid, info in MESSAGES.items()}
 MESSAGE_IDS = {info["name"]: mid for mid, info in MESSAGES.items()}
