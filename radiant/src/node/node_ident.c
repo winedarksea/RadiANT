@@ -39,6 +39,15 @@ static struct {
 	bool     booted;
 	uint32_t boot_counter;
 	uint32_t epoch;
+	/* N, the next epoch nobody has used: what NODE_NVM_KEY_EPOCH holds, as
+	 * confirmed by the last write. Every channel this node arms carries a
+	 * ceiling of epoch_next - 1, so no epoch is used before N above it has
+	 * reached storage (docs/radiant-security.md 3.5). */
+	uint32_t epoch_next;
+	/* The channels node_ident_arm_sec()/_arm_compat() armed: the only ones
+	 * whose epoch advances this file follows. Bit per channel number. */
+	uint32_t sec_armed;
+	uint32_t compat_armed;
 	uint16_t devnum;
 	uint8_t  k_dev[NODE_IDENT_K_DEV_BYTES];
 	bool     have_k_dev;
@@ -59,6 +68,31 @@ static struct {
  * (new K_dev, new identity).
  */
 #define BOOT_COUNTER_MAX (0xFFFFFFFFu - RADIANT_SEC_EPOCH_HEADROOM - 1u)
+
+/* The highest epoch a boot may take: it reserves the two above it (E + 1 for
+ * the first wrap, E + 2 for the next boot), and both must stay under the limit
+ * radiant_sec_set_epoch() accepts. */
+#define EPOCH_BOOT_MAX (BOOT_COUNTER_MAX - 2u)
+
+/*
+ * The reservation's moving half. radiant_sec_epoch_advanced() (and the compat
+ * twin) run in the pump, mid-transform, so they only record the epoch and
+ * submit this work item; the item persists N = e + 2 and then raises every
+ * armed channel's ceiling to N - 1. Until it lands, a second wrap is withheld,
+ * which gives the write one whole wrap (~4.5 h at 4 Hz) to happen. A write
+ * that fails is retried; it never lowers N and never raises a ceiling first.
+ *
+ * Outside `s` because node_ident_reset() memsets `s` and must not memset a
+ * work item the queue may be holding.
+ */
+#define EPOCH_RETRY_MS 1000
+
+static struct k_spinlock ep_lock;
+static uint32_t          ep_pending;     /* highest epoch reported, under ep_lock */
+static bool              ep_have;        /* ep_pending is not yet persisted */
+
+static void epoch_work_fn(struct k_work *work);
+static K_WORK_DELAYABLE_DEFINE(ep_work, epoch_work_fn);
 
 static bool key_is_all_zero(const uint8_t *k, size_t len)
 {
@@ -145,6 +179,12 @@ int node_ident_provision(const uint8_t k_dev[NODE_IDENT_K_DEV_BYTES])
 		return rc;
 	}
 	rc = store_u32_confirmed(NODE_NVM_KEY_PAIR, 0u);
+	if (rc != NODE_IDENT_OK) {
+		return rc;
+	}
+	/* The epoch reservation belongs to the old key like the boot counter:
+	 * a new key starts its epochs afresh, so both go together. */
+	rc = store_u32_confirmed(NODE_NVM_KEY_EPOCH, 0u);
 	if (rc != NODE_IDENT_OK) {
 		return rc;
 	}
@@ -388,8 +428,39 @@ int node_ident_boot(void)
 		goto fail;
 	}
 
-	clock_valid = node_ident_wall_seconds(&wall);
-	s.epoch = node_ident_epoch_from(s.boot_counter, clock_valid, wall);
+	/*
+	 * The epoch: never below N, the next one nobody has used. N is what
+	 * makes a wrap's epoch (used with no boot in between) and a second boot
+	 * inside one wall-clock minute safe; the boot counter and the clock only
+	 * ever raise it. Then N = E + 2 lands in storage BEFORE E is handed out:
+	 * E + 1 is reserved for this session's first wrap, so a crash right after
+	 * that wrap still leaves the next boot above it. An older image's store
+	 * has no N record, and the boot counter alone is then the floor it always
+	 * was.
+	 */
+	{
+		uint32_t next;
+
+		rc = load_u32(NODE_NVM_KEY_EPOCH, &next, &present);
+		if (rc != NODE_IDENT_OK) {
+			goto fail;
+		}
+		clock_valid = node_ident_wall_seconds(&wall);
+		s.epoch = node_ident_epoch_from(s.boot_counter, clock_valid,
+						wall);
+		if (next > s.epoch) {
+			s.epoch = next;
+		}
+		if (s.epoch > EPOCH_BOOT_MAX) {
+			rc = NODE_IDENT_ESTATE;
+			goto fail;
+		}
+		rc = store_u32_confirmed(NODE_NVM_KEY_EPOCH, s.epoch + 2u);
+		if (rc != NODE_IDENT_OK) {
+			goto fail;
+		}
+		s.epoch_next = s.epoch + 2u;
+	}
 	s.booted = true;
 	return NODE_IDENT_OK;
 
@@ -468,17 +539,30 @@ int node_ident_devnum(uint16_t *out)
 
 /* ── Handing the epoch to radiant ────────────────────────────────────── */
 
+/* Bit for channel `ch` in sec_armed/compat_armed; 0 for a channel number the
+ * mask cannot hold, which then keeps its first ceiling and is never raised
+ * (fails closed at its second wrap). */
+static uint32_t ch_bit(uint8_t ch)
+{
+	return (ch < 32u) ? (1u << ch) : 0u;
+}
+
 int node_ident_arm_sec(uint8_t ch, uint16_t period_counts)
 {
 	if (!s.booted) {
 		return NODE_IDENT_ESTATE;
 	}
 	/* us_into_epoch = 0: the epoch was derived from this power-up, so the
-	 * node is at its start by construction. */
+	 * node is at its start by construction. The ceiling follows the epoch
+	 * (both under the caller's lock, and a wrap is hours away), so a
+	 * refused epoch leaves a live channel's ceiling alone. */
 	if (radiant_sec_set_epoch(ch, s.epoch, 0u, period_counts) !=
-	    RADIANT_SEC_OK) {
+		    RADIANT_SEC_OK ||
+	    radiant_sec_set_epoch_ceiling(ch, s.epoch_next - 1u) !=
+		    RADIANT_SEC_OK) {
 		return NODE_IDENT_EIO;
 	}
+	s.sec_armed |= ch_bit(ch);
 	return NODE_IDENT_OK;
 }
 
@@ -488,9 +572,108 @@ int node_ident_arm_compat(uint8_t ch, uint64_t now_us, uint16_t period_counts)
 		return NODE_IDENT_ESTATE;
 	}
 	if (radiant_sec_compat_set_epoch(ch, s.epoch, now_us, 0u,
-					 period_counts) != RADIANT_SEC_OK) {
+					 period_counts) != RADIANT_SEC_OK ||
+	    radiant_sec_compat_set_epoch_ceiling(ch, s.epoch_next - 1u) !=
+		    RADIANT_SEC_OK) {
 		return NODE_IDENT_EIO;
 	}
+	s.compat_armed |= ch_bit(ch);
+	return NODE_IDENT_OK;
+}
+
+/* ── Following the epoch through counter wraps ───────────────────────────── */
+
+/* Record an advance and let the work item persist it. Caller's context (the
+ * pump, mid-transform): no flash, no blocking, no radiant_sec call. */
+static void epoch_note(uint32_t armed, uint8_t ch, uint32_t epoch)
+{
+	k_spinlock_key_t key;
+
+	if (!s.booted || (armed & ch_bit(ch)) == 0u) {
+		return;
+	}
+	key = k_spin_lock(&ep_lock);
+	if (!ep_have || epoch > ep_pending) {
+		ep_pending = epoch;
+	}
+	ep_have = true;
+	k_spin_unlock(&ep_lock, key);
+	(void)k_work_reschedule(&ep_work, K_NO_WAIT);
+}
+
+void radiant_sec_epoch_advanced(uint8_t ch, uint32_t epoch)
+{
+	epoch_note(s.sec_armed, ch, epoch);
+}
+
+#if defined(CONFIG_RADIANT_SEC_COMPAT)
+void radiant_sec_compat_epoch_advanced(uint8_t ch, uint32_t epoch)
+{
+	epoch_note(s.compat_armed, ch, epoch);
+}
+#endif
+
+static void epoch_work_fn(struct k_work *work)
+{
+	k_spinlock_key_t key;
+	uint32_t         e;
+	uint32_t         m;
+	uint8_t          ch;
+	bool             have;
+
+	ARG_UNUSED(work);
+	key = k_spin_lock(&ep_lock);
+	e = ep_pending;
+	have = ep_have;
+	ep_have = false;
+	k_spin_unlock(&ep_lock, key);
+	if (!have || !s.booted) {
+		return;
+	}
+
+	/* Persist first: a ceiling raised before N is in storage would let a
+	 * wrap use an epoch the next boot could take again. Never lowers N. */
+	if (e <= EPOCH_BOOT_MAX && e + 2u > s.epoch_next) {
+		if (store_u32_confirmed(NODE_NVM_KEY_EPOCH, e + 2u) !=
+		    NODE_IDENT_OK) {
+			key = k_spin_lock(&ep_lock);
+			if (!ep_have || e > ep_pending) {
+				ep_pending = e;
+			}
+			ep_have = true;
+			k_spin_unlock(&ep_lock, key);
+			LOG_WRN("epoch %u not persisted; secured TX holds at "
+				"the next wrap until it is", (unsigned)e);
+			(void)k_work_reschedule(&ep_work,
+						K_MSEC(EPOCH_RETRY_MS));
+			return;
+		}
+		s.epoch_next = e + 2u;
+	}
+
+	for (ch = 0u, m = s.sec_armed; m != 0u; ch++, m >>= 1) {
+		if ((m & 1u) != 0u) {
+			(void)radiant_sec_set_epoch_ceiling(ch,
+							    s.epoch_next - 1u);
+		}
+	}
+	for (ch = 0u, m = s.compat_armed; m != 0u; ch++, m >>= 1) {
+		if ((m & 1u) != 0u) {
+			(void)radiant_sec_compat_set_epoch_ceiling(
+				ch, s.epoch_next - 1u);
+		}
+	}
+}
+
+int node_ident_epoch_next(uint32_t *out)
+{
+	if (out == NULL) {
+		return NODE_IDENT_EINVAL;
+	}
+	if (!s.booted) {
+		return NODE_IDENT_ESTATE;
+	}
+	*out = s.epoch_next;
 	return NODE_IDENT_OK;
 }
 
@@ -702,5 +885,15 @@ int node_ident_pair_pubkey(uint8_t ch,
 
 void node_ident_reset(void)
 {
+	k_spinlock_key_t key;
+
+	/* A queued persist belongs to the session being reset; on hardware a
+	 * reset is a reboot and nothing is queued. Cancelled, not flushed: the
+	 * next boot reserves above whatever it left. */
+	(void)k_work_cancel_delayable(&ep_work);
+	key = k_spin_lock(&ep_lock);
+	ep_have = false;
+	ep_pending = 0u;
+	k_spin_unlock(&ep_lock, key);
 	memset(&s, 0, sizeof(s));
 }

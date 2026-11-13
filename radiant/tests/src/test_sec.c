@@ -2025,3 +2025,103 @@ ZTEST(radiant_sec, test_release_and_reset_wipe_the_keys)
 	zassert_equal(RADIANT_SEC_ENOKEY,
 		      radiant_sec_set_epoch(RX_CH, 99u, 0u, TEST_PERIOD));
 }
+
+/* ── The epoch ceiling and the direction guard (review 2026-11-13) ──────── */
+
+static uint32_t tx_epoch_now(uint8_t ch)
+{
+	struct radiant_sec_state st;
+
+	radiant_sec_get_state(ch, &st);
+	return st.epoch;
+}
+
+/*
+ * Item 1: an epoch authority's reservation. A wrap past the ceiling is not
+ * taken - the secured page is WITHHELD (EAGAIN) while clear pages still go out
+ * - and nothing is spent: raise the ceiling and the very next slot advances
+ * and transmits, decodably. Unlike headroom exhaustion, which is permanent.
+ */
+ZTEST(radiant_sec, test_a_wrap_past_the_epoch_ceiling_is_withheld_until_it_is_raised)
+{
+	struct radiant_sec_stats st;
+	uint8_t                  pay[8];
+	uint8_t                  clear[8] = { 0x50u, 1, 2, 3, 4, 5, 6, 7 };
+	uint8_t                  clear_before[8];
+
+	key_both();
+	configure_both(RADIANT_SEC_SW_CONF, 2u);
+	epoch_both(7u);
+	zassert_ok(radiant_sec_set_epoch_ceiling(TX_CH, 7u));
+	zassert_equal(RADIANT_SEC_ENOKEY,
+		      radiant_sec_set_epoch_ceiling(5u, 7u),
+		      "a ceiling on a channel with no context");
+
+	tx_air(0u, pay);
+
+	/* A sparse sender's next slot is past the wrap: withheld, twice. */
+	memcpy(pay, conf_plain, 8u);
+	zassert_equal(RADIANT_SEC_EAGAIN,
+		      radiant_sec_tx_transform(TX_CH, pay, 8u,
+					       slot_t(65536u)));
+	memcpy(pay, conf_plain, 8u);
+	zassert_equal(RADIANT_SEC_EAGAIN,
+		      radiant_sec_tx_transform(TX_CH, pay, 8u,
+					       slot_t(65537u)));
+	zassert_equal(7u, tx_epoch_now(TX_CH), "the wrap went past the ceiling");
+	radiant_sec_get_stats(TX_CH, &st);
+	zassert_equal(0u, st.epoch_advances);
+
+	/* A clear page is not held back by a secured page's wrap. */
+	memcpy(clear_before, clear, sizeof(clear));
+	zassert_ok(radiant_sec_tx_transform(TX_CH, clear, 8u, slot_t(65537u)));
+	zassert_mem_equal(clear, clear_before, sizeof(clear));
+
+	/* Raised: the next slot advances and transmits, and a receiver with no
+	 * ceiling follows it to the same epoch. */
+	zassert_ok(radiant_sec_set_epoch_ceiling(TX_CH, 8u));
+	memcpy(pay, conf_plain, 8u);
+	zassert_ok(radiant_sec_tx_transform(TX_CH, pay, 8u, slot_t(65538u)),
+		   "TX did not resume once the ceiling was raised");
+	zassert_equal(8u, tx_epoch_now(TX_CH));
+	zassert_equal(2u, pay[1], "the counter is not slot 65538's");
+	ingest_at(pay, slot_t(65538u));
+	zassert_equal(1u, log_n_pkt);
+	zassert_mem_equal(&log_pkt[0].pay[2], &conf_plain[2], 5u,
+			  "the resumed slot did not decrypt at the receiver");
+
+	/* Not spent: the next wrap is withheld again, not refused for good. */
+	memcpy(pay, conf_plain, 8u);
+	zassert_equal(RADIANT_SEC_EAGAIN,
+		      radiant_sec_tx_transform(TX_CH, pay, 8u,
+					       slot_t(2u * 65536u)));
+	zassert_ok(radiant_sec_set_epoch_ceiling(TX_CH, 9u));
+	memcpy(pay, conf_plain, 8u);
+	zassert_ok(radiant_sec_tx_transform(TX_CH, pay, 8u,
+					    slot_t(2u * 65536u + 1u)));
+	zassert_equal(9u, tx_epoch_now(TX_CH));
+}
+
+/* A ceiling below a gap of several wraps holds them all, then takes them in
+ * one step once it allows the lot. */
+ZTEST(radiant_sec, test_a_multi_wrap_gap_waits_for_a_ceiling_that_covers_it)
+{
+	uint8_t pay[8];
+
+	key_both();
+	configure_both(RADIANT_SEC_SW_CONF, 2u);
+	epoch_both(7u);
+	zassert_ok(radiant_sec_set_epoch_ceiling(TX_CH, 8u));
+	tx_air(0u, pay);
+
+	memcpy(pay, conf_plain, 8u);
+	zassert_equal(RADIANT_SEC_EAGAIN,
+		      radiant_sec_tx_transform(TX_CH, pay, 8u,
+					       slot_t(3u * 65536u)));
+	zassert_equal(7u, tx_epoch_now(TX_CH));
+	zassert_ok(radiant_sec_set_epoch_ceiling(TX_CH, 10u));
+	memcpy(pay, conf_plain, 8u);
+	zassert_ok(radiant_sec_tx_transform(TX_CH, pay, 8u,
+					    slot_t(3u * 65536u + 1u)));
+	zassert_equal(10u, tx_epoch_now(TX_CH));
+}

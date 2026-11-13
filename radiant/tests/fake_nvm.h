@@ -38,6 +38,15 @@ void fake_nvm_reboot(void);
  * persist its counter must not enter the pairing window. */
 void fake_nvm_fail_stores(uint32_t n);
 
+/* The same, after letting the next `skip` stores succeed: fails one write in
+ * the middle of a sequence (the boot counter lands, the epoch reservation
+ * does not). */
+void fake_nvm_fail_stores_after(uint32_t skip, uint32_t n);
+
+/* Remove one record, as a store written by an older image that never had it
+ * would look. */
+void fake_nvm_forget(const char *key);
+
 /* Sever the store from the load: reported as written but is not. Exercises
  * node_ident.c's confirm-by-re-reading and catches a backend that returns
  * early from a queued write. */

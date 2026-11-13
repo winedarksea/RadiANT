@@ -27,6 +27,14 @@ never repeats is the host's obligation and it is the one thing in this design
 that firmware cannot enforce for itself - radiant_sec refuses a non-increasing
 epoch, but only against the value it currently holds, which a reset clears.
 A tool that invented epochs would make that look solved.
+
+A host that does issue epochs must persist the last epoch USED, not the last
+one it issued: a counter wrap moves the channel to epoch + 1 with no 0xF3, so
+the epoch to stay above is the one 0xF4 reports at [6..9], read before the
+session ends. A wall-clock host must also never issue the same minute twice
+(two boots inside one minute). The hostless node discharges this with a
+reservation persisted ahead of use (docs/radiant-security.md 3.5); a host that
+cannot read 0xF4 before power is lost needs the same kind of reservation.
 """
 
 from __future__ import annotations

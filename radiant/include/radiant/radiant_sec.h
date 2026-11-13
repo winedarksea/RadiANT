@@ -84,6 +84,10 @@ extern "C" {
  * here rather than beside its one user in radiant_sec_compat.h so a reader
  * checking a new code has one list to check against. */
 #define RADIANT_SEC_EREPLAY  -5
+/* Not now, later: a counter wrap would pass the epoch ceiling the epoch
+ * authority set (radiant_sec_set_epoch_ceiling()). Nothing is spent; the same
+ * call succeeds once the ceiling is raised. */
+#define RADIANT_SEC_EAGAIN   -6
 
 /*
  * An opaque key handle. NEVER a `const uint8_t key[16]` at a call site.
@@ -597,6 +601,20 @@ void radiant_sec_deliver(uint8_t ch, const uint8_t *pay, uint8_t len,
 void radiant_sec_window_verdict(uint8_t ch, uint16_t window_start,
 				enum radiant_sec_verdict verdict);
 
+/*
+ * The epoch on channel `ch` has just advanced to `epoch` at a counter wrap,
+ * on the TX path or the RX path. Weak and empty by default.
+ *
+ * This is how an epoch authority learns which epochs have been USED, which a
+ * wrap does without any 0xF3 (docs/radiant-security.md 3.5). RUNS IN THE
+ * CALLER'S CONTEXT - the pump, under the port's lock, in the middle of a
+ * transform - so an override must only DEFER work (record the epoch, submit a
+ * work item) and must not block, write flash or call back into radiant_sec.
+ * node_ident.c's override persists the next free epoch from a work item and
+ * then raises the ceiling below.
+ */
+void radiant_sec_epoch_advanced(uint8_t ch, uint32_t epoch);
+
 /* Lifecycle. No init call: the first SET_KEY allocates, unassign and reset
  * free. */
 int  radiant_sec_set_key(uint8_t ch, const uint8_t *root, size_t bits,
@@ -625,6 +643,26 @@ int  radiant_sec_configure(uint8_t ch, uint8_t switches, uint8_t w,
 
 int  radiant_sec_set_epoch(uint8_t ch, uint32_t epoch, uint64_t us_into_epoch,
 			   uint16_t period_counts);
+
+/*
+ * The highest epoch a counter wrap may advance this channel to. The default -
+ * a fresh context, and after release or reset - is no ceiling beyond the
+ * headroom limit above, so nothing changes unless an application sets one.
+ *
+ * A wrap that would pass the ceiling does not happen: secured TX is WITHHELD
+ * (radiant_sec_tx_transform() returns RADIANT_SEC_EAGAIN, the caller sends
+ * nothing secured) and resumes, by the full number of wraps owed, once the
+ * ceiling is raised. Unlike exhausting the headroom (permanent until a new
+ * epoch), nothing is spent. RX past the ceiling is dropped the same way.
+ *
+ * This is the epoch authority's reservation: it persists "next unused epoch"
+ * before raising the ceiling, so an epoch is never used that a reboot could
+ * issue again. Kept across radiant_sec_set_epoch() and set_key.
+ *
+ * Callable from any thread without the port's lock: it is one aligned 32-bit
+ * store, read once per wrap. Returns RADIANT_SEC_ENOKEY with no context.
+ */
+int  radiant_sec_set_epoch_ceiling(uint8_t ch, uint32_t max_epoch);
 
 /* The on-air device number, which is in the nonce. Separate from the
  * provisioning-time base device number in the KDF: on a Tier 2 node the first

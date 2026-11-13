@@ -428,12 +428,41 @@ just `X_CONF`:
 That rejection is only enforceable within a power cycle, because keys and state
 are wiped on reset. The obligation therefore sits with the **epoch authority** —
 the host, or the node application — and is normative: *persist the last epoch
-issued and never reissue it.* The recommended discharge, wherever a clock
-exists, is to define the epoch as **coarse real time**, minutes since a fixed
-RadiANT date: monotone for free, and it composes with the time-derived counter
-of section 3.1 because `0xF3` carries microseconds-into-epoch as well as the
-ordinal. Raw `0xF3` stays available for clockless hosts. NVM epoch ratcheting
-inside `radiant` is deferred.
+**used** and issue only epochs strictly greater than it.* "Used" is not
+"issued": a counter wrap (below) moves the channel to the next epoch with no
+`0xF3`, so the epoch to stay above is the one `0xF4` reports at `[6..9]`, wraps
+included. An authority that persisted only what it issued hands the next boot
+the epoch the last wrap already used, with the counter back at zero: the same
+keystream. The recommended discharge, wherever a clock exists, is to define the
+epoch as **coarse real time**, minutes since a fixed RadiANT date, and it
+composes with the time-derived counter of section 3.1 because `0xF3` carries
+microseconds-into-epoch as well as the ordinal. A clock alone is not enough:
+two boots inside the same minute read the same epoch, so a clocked authority
+still keeps the floor below. Raw `0xF3` stays available for clockless hosts.
+NVM epoch ratcheting inside `radiant` is deferred; `radiant` supplies the two
+mechanisms an authority needs instead.
+
+**The reservation scheme (the hostless node, `node_ident.c`).** The node
+persists `N`, the next epoch nobody has used, beside its boot counter. At boot
+it takes `E = max(N, boot counter, wall-clock minutes)`, persists `N = E + 2`
+with a confirmed write **before** `E` reaches `radiant`, and arms the channel
+with an **epoch ceiling** of `E + 1`
+(`radiant_sec_set_epoch_ceiling()`, and the compat equivalent). The first wrap
+therefore has an epoch already reserved for it, and a crash right after that
+wrap is covered: the next boot starts at `E + 2`. Each advance calls the weak
+hook `radiant_sec_epoch_advanced()` (TX and RX alike; compat has
+`radiant_sec_compat_epoch_advanced()`); the node's override only queues a work
+item, which persists `N = e + 2` and then raises the ceiling to `e + 1`. A wrap
+that would pass the ceiling is refused and secured TX is **withheld** until the
+ceiling is raised, then resumes; this is not the permanent `tx_spent` state
+that exhausting the headroom causes. The work item has one whole wrap to land,
+about 4.5 h at 4 Hz (at least 18 h on compat, 15 days at T = 20 s), and a
+write that never lands fails closed. The same floor stops a same-minute
+wall-clock reboot reusing an epoch. Epochs step by about 2 per boot, so
+forward searches (compat's, the descriptor's 16-epoch span) still find them;
+a scheme that spaced boots far apart, such as `boot_counter << 12`, would not.
+Flash cost: one extra write per boot and about one per wrap, about 5 a day at
+4 Hz continuous.
 
 **A counter wrap advances the epoch by 1, on both sides.** The 16-bit counter
 was sized against 128-second epochs, where it could not wrap. With the epoch

@@ -11,7 +11,7 @@
  * demand - as fake_radio.c is to the radio HAL.
  *
  * No allocation, no threads, fixed records. The record set is closed because
- * node_nvm.h's is: three names.
+ * node_nvm.h's is: four names.
  */
 
 #include <stdbool.h>
@@ -34,10 +34,12 @@ static struct rec parts[] = {
 	{ NODE_NVM_KEY_BOOT, { 0 }, 0u },
 	{ NODE_NVM_KEY_PAIR, { 0 }, 0u },
 	{ NODE_NVM_KEY_KDEV, { 0 }, 0u },
+	{ NODE_NVM_KEY_EPOCH, { 0 }, 0u },
 };
 
 static bool     initialised;
 static uint32_t fail_remaining;
+static uint32_t fail_skip;
 static uint32_t load_fail_remaining;
 static bool     swallow;
 static uint32_t stores;
@@ -62,6 +64,7 @@ void fake_nvm_wipe(void)
 	}
 	initialised = false;
 	fail_remaining = 0u;
+	fail_skip = 0u;
 	load_fail_remaining = 0u;
 	swallow = false;
 	stores = 0u;
@@ -76,6 +79,22 @@ void fake_nvm_reboot(void)
 void fake_nvm_fail_stores(uint32_t n)
 {
 	fail_remaining = n;
+}
+
+void fake_nvm_fail_stores_after(uint32_t skip, uint32_t n)
+{
+	fail_skip = skip;
+	fail_remaining = n;
+}
+
+void fake_nvm_forget(const char *key)
+{
+	struct rec *r = find(key);
+
+	if (r != NULL) {
+		memset(r->buf, 0, sizeof(r->buf));
+		r->len = 0u;
+	}
 }
 
 void fake_nvm_swallow_stores(bool on)
@@ -164,7 +183,9 @@ int node_nvm_store(const char *key, const void *val, size_t len)
 
 	stores++;
 
-	if (fail_remaining > 0u) {
+	if (fail_skip > 0u) {
+		fail_skip--;
+	} else if (fail_remaining > 0u) {
 		fail_remaining--;
 		return NODE_NVM_EIO;
 	}

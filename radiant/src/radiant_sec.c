@@ -71,6 +71,10 @@ struct sec_ctx {
 	 * forged expected+127 would blind the receiver for 32 s. */
 	uint16_t rx_floor;
 	uint32_t epoch;
+	/* The epoch ceiling, stored inverted so a zeroed context means "none"
+	 * (0xFFFFFFFF, i.e. only the headroom test) with no init code. See
+	 * radiant_sec_set_epoch_ceiling(). */
+	uint32_t ceil_inv;
 	/* epoch_anchor error, in us, implied by rx_prev's closing packet and
 	 * applied only if rx_prev verifies. rx_floor and this sit where they do
 	 * because both fill alignment holes on a 32-bit target, so the fix that
@@ -342,8 +346,15 @@ static int advance_epoch(struct sec_ctx *c, uint16_t by)
 	    by > 0xFFFFFFFFu - c->epoch) {
 		return RADIANT_SEC_EINVAL;
 	}
+	/* The authority's reservation (docs/radiant-security.md 3.5): not
+	 * past the ceiling, but not spent either - the caller withholds and
+	 * retries at the next slot. Overflow is excluded by the test above. */
+	if (c->epoch + by > ~c->ceil_inv) {
+		return RADIANT_SEC_EAGAIN;
+	}
 	c->epoch += by;
 	stat_bump(&c->stats.epoch_advances);
+	radiant_sec_epoch_advanced(c->ch, c->epoch);
 
 	/* Move the anchor with it so the phase stays continuous: 65536 packets
 	 * per wrap. */
@@ -378,6 +389,12 @@ __weak void radiant_sec_window_verdict(uint8_t ch, uint16_t window_start,
 	ARG_UNUSED(ch);
 	ARG_UNUSED(window_start);
 	ARG_UNUSED(verdict);
+}
+
+__weak void radiant_sec_epoch_advanced(uint8_t ch, uint32_t epoch)
+{
+	ARG_UNUSED(ch);
+	ARG_UNUSED(epoch);
 }
 
 /* ── Configuration ──────────────────────────────────────────────────────── */
@@ -553,6 +570,19 @@ int radiant_sec_set_epoch(uint8_t ch, uint32_t epoch, uint64_t us_into_epoch,
 	hold_reset(c);
 
 	return derive_keys(c);
+}
+
+int radiant_sec_set_epoch_ceiling(uint8_t ch, uint32_t max_epoch)
+{
+	/* No lock check: one aligned store the TX/RX paths read once per wrap,
+	 * so an epoch authority's work item may call this directly. */
+	struct sec_ctx *c = ctx_of(ch);
+
+	if (c == NULL) {
+		return RADIANT_SEC_ENOKEY;
+	}
+	c->ceil_inv = ~max_epoch;
+	return RADIANT_SEC_OK;
 }
 
 #if !defined(CONFIG_RADIANT_SEC_HAS_RNG)
@@ -891,11 +921,13 @@ int radiant_sec_tx_transform(uint8_t ch, uint8_t *pay, uint8_t len,
 		 * the receiver derives the same advance from time. If it cannot
 		 * advance (no headroom left), nothing secured goes out again
 		 * until a new epoch is installed - it used to carry on and reuse
-		 * the keystream (review 2026-10-31, D1-6(a)). */
-		if (advance_epoch(c, (uint16_t)((idx >> 16) - c->tx_wraps)) !=
-		    RADIANT_SEC_OK) {
-			c->tx_spent = true;
-			return RADIANT_SEC_EINVAL;
+		 * the keystream (review 2026-10-31, D1-6(a)). Past the epoch
+		 * ceiling is different: withheld, not spent, and this same
+		 * slot-by-slot retry advances once the authority raises it. */
+		rc = advance_epoch(c, (uint16_t)((idx >> 16) - c->tx_wraps));
+		if (rc != RADIANT_SEC_OK) {
+			c->tx_spent = rc != RADIANT_SEC_EAGAIN;
+			return rc;
 		}
 		c->tx_wraps = (uint16_t)(idx >> 16);
 		c->tx_prev_valid = false;

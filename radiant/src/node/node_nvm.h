@@ -5,8 +5,8 @@
  * Provenance: docs/decisions/0009-hostless-node-identity.md decision 7 (the
  * counters live in the node application, not in radiant).
  *
- * Three fixed-size records, written once per boot and once per pairing
- * window - small, but the seam earns its keep twice: radiant/tests/
+ * Four fixed-size records, written twice per boot, once per pairing window
+ * and about once per epoch counter wrap - small, but the seam earns its keep twice: radiant/tests/
  * fake_nvm.c implements it against RAM with an explicit reboot and an
  * injectable write failure (same rationale as fake_radio.c), and the shipping
  * backend is Zephyr settings over NVS (node_nvm_settings.c); a node with a
@@ -49,6 +49,10 @@ extern "C" {
 #define NODE_NVM_KEY_BOOT  "boot"   /* uint32_t, +1 at every boot */
 #define NODE_NVM_KEY_PAIR  "pair"   /* uint32_t, +1 per pairing window */
 #define NODE_NVM_KEY_KDEV  "kdev"   /* 16 bytes, written once (ADR 0020) */
+/* uint32_t, the next epoch nobody has used (docs/radiant-security.md 3.5):
+ * written at every boot and about once per counter wrap. Absent on a store
+ * from an older image, which reads as 0 - the boot counter is then the floor. */
+#define NODE_NVM_KEY_EPOCH "epn"
 
 /* Prepare the backend. Idempotent; node_ident_boot() calls it first. */
 int node_nvm_init(void);

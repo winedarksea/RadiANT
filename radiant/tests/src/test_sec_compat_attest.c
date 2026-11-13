@@ -1574,3 +1574,41 @@ ZTEST(sec_compat_stream, test_the_shape_of_a_misconfigured_channel)
 	zassert_equal(0, radiant_sec_compat_tx_attest(TX_CH, t_of(0u), body,
 						      sizeof(body)));
 }
+
+/*
+ * Review 2026-11-13 item 1, on the compat surface: an epoch ceiling. A Tier I
+ * wrap past it is refused with EAGAIN - the attestation page is withheld,
+ * nothing is spent - and the receiver, with no ceiling, still follows once the
+ * sender's ceiling is raised.
+ */
+ZTEST(sec_compat_stream, test_a_compat_wrap_past_the_ceiling_waits_for_it)
+{
+	struct radiant_sec_compat_stats st;
+	uint8_t                         body[RADIANT_SEC_COMPAT_BODY_BYTES];
+	uint8_t                         air[RADIANT_SEC_COMPAT_MSG_BYTES];
+	uint64_t                        t;
+
+	setup_pair(RADIANT_SEC_COMPAT_SW_TIER_I, RADIANT_SEC_COMPAT_SW_TIER_I,
+		   300u, 300u);
+	zassert_ok(radiant_sec_compat_set_epoch_ceiling(TX_CH, 300u));
+	zassert_equal(RADIANT_SEC_ENOKEY,
+		      radiant_sec_compat_set_epoch_ceiling(7u, 300u));
+
+	/* Interval 0xFFFF verifies; the next one is the wrap. */
+	t = tier1_page(T_ORIGIN, 0xFFFFu, 0u, air);
+	zassert_ok(deliver(air, t));
+	zassert_equal(RADIANT_SEC_EAGAIN,
+		      radiant_sec_compat_tx_attest(TX_CH,
+						   T_ORIGIN + 0x10000u * T_US,
+						   body, sizeof(body)),
+		      "a wrap went past the ceiling");
+	radiant_sec_compat_get_stats(TX_CH, &st);
+	zassert_equal(0u, st.epoch_advances);
+
+	zassert_ok(radiant_sec_compat_set_epoch_ceiling(TX_CH, 301u));
+	t = tier1_page(T_ORIGIN, 0x10000u, 1u, air);
+	zassert_ok(deliver(air, t),
+		   "the first page after the raised ceiling did not verify");
+	radiant_sec_compat_get_stats(TX_CH, &st);
+	zassert_equal(1u, st.epoch_advances);
+}

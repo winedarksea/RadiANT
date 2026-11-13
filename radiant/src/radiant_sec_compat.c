@@ -170,6 +170,9 @@ struct compat_ctx {
 	uint32_t base_epoch;
 	uint32_t wraps;
 	uint32_t epoch;
+	/* The epoch ceiling, inverted so zero means none (radiant_sec.c's
+	 * ceil_inv, same reason). */
+	uint32_t ceil_inv;
 	/* Where base_epoch began, in the caller's clock. Signed: a receiver
 	 * learns it from the air (rx_tier1), and a sensor up for days before
 	 * the receiver booted began before the receiver's clock's zero. */
@@ -340,13 +343,25 @@ static int apply_wraps(struct compat_ctx *c, uint32_t wraps)
 	    (uint64_t)0xFFFFFFFFu - RADIANT_SEC_EPOCH_HEADROOM) {
 		return RADIANT_SEC_EINVAL;
 	}
+	/* The authority's reservation (radiant-security.md 3.5): refused, not
+	 * spent; the next call retries. Overflow is excluded above. */
+	if (c->base_epoch + wraps > ~c->ceil_inv) {
+		return RADIANT_SEC_EAGAIN;
+	}
 	c->wraps = wraps;
 	c->epoch = c->base_epoch + wraps;
 	stat_bump(&c->stats.epoch_advances);
+	radiant_sec_compat_epoch_advanced(c->ch, c->epoch);
 	return derive_auth(c);
 }
 
-/* ── Weak delivery hook ─────────────────────────────────────────────────── */
+/* ── Weak delivery hooks ────────────────────────────────────────────────── */
+
+__weak void radiant_sec_compat_epoch_advanced(uint8_t ch, uint32_t epoch)
+{
+	(void)ch;
+	(void)epoch;
+}
 
 __weak void radiant_sec_compat_verdict(uint8_t ch, uint8_t sub, uint16_t counter,
 				       enum radiant_sec_verdict verdict)
@@ -516,6 +531,17 @@ int radiant_sec_compat_set_epoch(uint8_t ch, uint32_t epoch, uint64_t now_us,
 	c->last_verdict = RADIANT_SEC_VERDICT_CLEAR;
 
 	return derive_auth(c);
+}
+
+int radiant_sec_compat_set_epoch_ceiling(uint8_t ch, uint32_t max_epoch)
+{
+	struct compat_ctx *c = ctx_of(ch);
+
+	if (c == NULL) {
+		return RADIANT_SEC_ENOKEY;
+	}
+	c->ceil_inv = ~max_epoch;
+	return RADIANT_SEC_OK;
 }
 
 int radiant_sec_compat_set_devnum(uint8_t ch, uint16_t devnum)
