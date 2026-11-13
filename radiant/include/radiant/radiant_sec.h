@@ -457,14 +457,23 @@ int radiant_sec_kdf(const struct radiant_sec_key *root, const char *label,
 					  * 1 = drop it. Dropping means
 					  * holding every window until
 					  * its OWN verdict exists, which
-					  * costs W+1 to 2W packet
-					  * periods of latency (0.75-1.0 s
+					  * costs W to 2W-1 packet
+					  * periods of latency (0.5-0.75 s
 					  * at W=2, 4 Hz) - the detection
 					  * latency of
 					  * docs/radiant-security.md 7.5 */
 #define RADIANT_SEC_SW_DESC_CONF   0x08  /* descriptor encryption - REFUSED in
 					  * v1; the descriptor has no counter
 					  * and therefore no nonce */
+#define RADIANT_SEC_SW_VERDICT_EVENT 0x10 /* the host asked for one window-
+					  * verdict event (0xF8) per judged
+					  * window. Valid only with X_AUTH,
+					  * since nothing else has a verdict.
+					  * Nothing in this module acts on it:
+					  * it is stored, reported in 0xF4 and
+					  * handed to radiant_sec_window_
+					  * verdict(), whose port override
+					  * posts the event */
 
 /*
  * The verdict every secured RX delivery carries. D6's deliver-as-unverified
@@ -588,14 +597,22 @@ void radiant_sec_deliver(uint8_t ch, const uint8_t *pay, uint8_t len,
 
 /*
  * One window's verdict, emitted exactly once when the window that carries its
- * tag completes - so W+1 to 2W packets after the window itself, because the
- * tag lags one window (docs/radiant-security.md 3.2).
+ * tag completes - so W to 2W-1 packet periods after the window's packets, the
+ * last to the first, because the tag lags one window
+ * (docs/radiant-security.md 3.2).
  *
  * `window_start` is the 16-bit counter of the window's first packet, so a host
- * can tell which delivered packets the verdict refers to.
+ * can tell which delivered packets the verdict refers to. Called AFTER every
+ * radiant_sec_deliver() of the packets it covers, the drop policy's release
+ * included, so a port that queues both keeps the verdict behind its data.
+ *
+ * `w` and `switches` are the channel's, passed so a port can act on
+ * RADIANT_SEC_SW_VERDICT_EVENT without reading the context back. Scalars, per
+ * rule 2 above.
  */
 void radiant_sec_window_verdict(uint8_t ch, uint16_t window_start,
-				enum radiant_sec_verdict verdict);
+				enum radiant_sec_verdict verdict, uint8_t w,
+				uint8_t switches);
 
 /* Lifecycle. No init call: the first SET_KEY allocates, unassign and reset
  * free. */

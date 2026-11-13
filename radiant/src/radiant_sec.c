@@ -373,11 +373,14 @@ __weak void radiant_sec_deliver(uint8_t ch, const uint8_t *pay, uint8_t len,
 }
 
 __weak void radiant_sec_window_verdict(uint8_t ch, uint16_t window_start,
-				       enum radiant_sec_verdict verdict)
+				       enum radiant_sec_verdict verdict,
+				       uint8_t w, uint8_t switches)
 {
 	ARG_UNUSED(ch);
 	ARG_UNUSED(window_start);
 	ARG_UNUSED(verdict);
+	ARG_UNUSED(w);
+	ARG_UNUSED(switches);
 }
 
 /* ── Configuration ──────────────────────────────────────────────────────── */
@@ -462,7 +465,14 @@ int radiant_sec_configure(uint8_t ch, uint8_t switches, uint8_t w,
 		return RADIANT_SEC_ENOTSUP;
 	}
 	if ((switches & ~(uint8_t)(RADIANT_SEC_SW_CONF | RADIANT_SEC_SW_AUTH |
-				   RADIANT_SEC_SW_DROP_UNVER)) != 0u) {
+				   RADIANT_SEC_SW_DROP_UNVER |
+				   RADIANT_SEC_SW_VERDICT_EVENT)) != 0u) {
+		return RADIANT_SEC_EINVAL;
+	}
+	/* A verdict event without X_AUTH would be a promise of verdicts that
+	 * never come - a host reading silence as "nothing failed". */
+	if ((switches & RADIANT_SEC_SW_VERDICT_EVENT) != 0u &&
+	    (switches & RADIANT_SEC_SW_AUTH) == 0u) {
 		return RADIANT_SEC_EINVAL;
 	}
 	/* W in {2,4,8}. W must divide 256 and 65536 or the counter-derived
@@ -1111,11 +1121,14 @@ static void rx_close_window(struct sec_ctx *c, const struct sec_pkt *last,
 			stat_bump(&c->stats.windows_unverified);
 		}
 		c->last_verdict = verdict;
-		radiant_sec_window_verdict(c->ch, c->rx_prev_start, verdict);
 		if ((c->switches & RADIANT_SEC_SW_DROP_UNVER) != 0u) {
 			hold_flush(c, c->hold_cur ^ 1u, verdict,
 				   c->rx_prev_start);
 		}
+		/* After the release, so a port queueing both (the 0xF8 event)
+		 * puts the verdict behind the packets it covers. */
+		radiant_sec_window_verdict(c->ch, c->rx_prev_start, verdict,
+					   c->w, c->switches);
 	} else if ((c->switches & RADIANT_SEC_SW_DROP_UNVER) != 0u) {
 		/* The first window heard since a reset: there is no previous
 		 * window, so nothing to judge and the other buffer should be

@@ -7,8 +7,8 @@
  * between this module's return codes and the ANT serial protocol's.
  *
  * The switch bits are NOT translated on purpose: RADIANT_SEC_SW_CONF/AUTH/
- * DROP_UNVER/DESC_CONF are 0x01/0x02/0x04/0x08, matching 0xF1's bitmask
- * byte-for-byte. The BUILD_ASSERTs below keep them that way; a mapping table
+ * DROP_UNVER/DESC_CONF/VERDICT_EVENT are 0x01/0x02/0x04/0x08/0x10, matching
+ * 0xF1's bitmask byte-for-byte. The BUILD_ASSERTs below keep them that way; a mapping table
  * would be a second, driftable definition of the wire format.
  *
  * antr_sec_key_set() is write-only - no read arm for 0xF2 exists.
@@ -42,10 +42,15 @@ BUILD_ASSERT(RADIANT_SEC_SW_DROP_UNVER == 0x04,
 BUILD_ASSERT(RADIANT_SEC_SW_DESC_CONF == 0x08,
 	     "0xF1 bit 3 is descriptor confidentiality; the wire and the module "
 	     "must agree");
+BUILD_ASSERT(RADIANT_SEC_SW_VERDICT_EVENT == 0x10,
+	     "0xF1 bit 4 asks for the 0xF8 window-verdict event; the wire and "
+	     "the module must agree");
 
-/* Bits 7..4 are reserved and must be zero. Refusing them is what keeps a future
- * switch from being silently ignored by a node too old to know it. */
-#define SEC_SW_KNOWN_MASK 0x0Fu
+/* Bits 7..5 are reserved and must be zero. Refusing them is what keeps a future
+ * switch from being silently ignored by a node too old to know it. Bit 4
+ * without X_AUTH is refused by radiant_sec_configure(), which owns that rule
+ * for every caller, not only this one. */
+#define SEC_SW_KNOWN_MASK 0x1Fu
 
 /*
  * The module's codes, in the serial protocol's vocabulary.

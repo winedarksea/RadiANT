@@ -891,9 +891,10 @@ static void api_post_rx(uint8_t ch, uint8_t msg_id,
  * Event-thread context - posting to the same ISR-safe ring the decode path
  * uses is the easy direction.
  *
- * The verdict does not reach the wire here; it's recorded per channel and
- * reported through 0xF4, so unverified data can never be silently read as
- * verified.
+ * The verdict does not reach the wire here, so the data path, its bytes and its
+ * latency are the same whatever the channel asked for. It's recorded per
+ * channel and reported through 0xF4, and per window through the opt-in 0xF8
+ * event below.
  */
 void radiant_sec_deliver(uint8_t ch, const uint8_t *pay, uint8_t len,
 			 enum radiant_sec_verdict verdict, uint64_t t_sync)
@@ -924,6 +925,44 @@ void radiant_sec_deliver(uint8_t ch, const uint8_t *pay, uint8_t len,
 
 	api_post_rx(ch, (uint8_t)ANTW_MESG_BROADCAST_DATA_ID, &id, &hal, pay,
 		    len, 0u, false);
+}
+
+/*
+ * One window's verdict, as MESG_RADIANT_SEC_VERDICT (0xF8)
+ * [ch, verdict, window_start u16 LE, W] - only on a channel whose 0xF1 set
+ * RADIANT_SEC_SW_VERDICT_EVENT, so a host that never asked sees today's byte
+ * stream. Reached only from an X_AUTH window close, so an unsecured channel
+ * never gets here at all.
+ *
+ * Event-thread context under api_lock, inside the pump, like
+ * radiant_sec_deliver(): it posts to the same ring and never calls the bridge
+ * directly, which is what keeps the event behind the data it judges (the
+ * module calls this after delivering that data) and keeps the bridge outside
+ * api_lock. A full ring drops it like any data message; the host treats a
+ * verdict that never came as unverified.
+ */
+void radiant_sec_window_verdict(uint8_t ch, uint16_t window_start,
+				enum radiant_sec_verdict verdict, uint8_t w,
+				uint8_t switches)
+{
+	uint8_t body[5];
+
+	if ((switches & RADIANT_SEC_SW_VERDICT_EVENT) == 0u) {
+		return;
+	}
+	/* Same rule as the data: nothing for a channel the host was already
+	 * told is closed. */
+	if (!api_ch_valid(ch) || !radiant_channel_is_open(ch)) {
+		return;
+	}
+
+	body[0] = ch;
+	body[1] = (uint8_t)verdict;
+	body[2] = (uint8_t)window_start;
+	body[3] = (uint8_t)(window_start >> 8);
+	body[4] = w;
+	(void)radiant_event_post_raw((uint8_t)ANTW_MESG_RADIANT_SEC_VERDICT_ID,
+				     body, (uint8_t)sizeof(body));
 }
 #endif /* CONFIG_RADIANT_SEC */
 
