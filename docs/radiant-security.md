@@ -264,8 +264,10 @@ tag byte = tag_of_previous_window[ c mod W ]    where c is the packet's counter
 
 Consequences, stated rather than left to be discovered:
 
-- **Detection latency is W+1 to 2W packet periods**, not W. Section 7.5's table
-  carries the numbers.
+- **Detection latency is W to 2W-1 packet periods**, a range and not W.
+  Window *k*'s verdict exists when the last packet of window *k+1* arrives,
+  which is W periods after the last packet of *k* and 2W-1 after its first.
+  Section 7.5's table carries the numbers.
 - **The first window of an epoch is verified like any other**, by the tag the
   *next* window carries. What carries nothing is the first window's own tag
   bytes: they are zeros, because there is no window -1 for them to
@@ -274,7 +276,7 @@ Consequences, stated rather than left to be discovered:
   `unverified` (delivered so marked by default, held and never released under
   the drop policy), which is not evidence of an attack.
 - **Under the drop policy (`DROP_UNVER`) delivery latency equals detection
-  latency**, W+1 to 2W packet periods, because a packet cannot be released
+  latency**, W to 2W-1 packet periods, because a packet cannot be released
   before the verdict on its own window exists, and that verdict exists only
   once the next window has completed. Releasing a window on the verdict that
   happens to be computed when it closes - its predecessor's - delivers a
@@ -341,11 +343,38 @@ discarded.** Discarding costs W packets for every one lost — a 3.2% delivered-
 data loss at W=8 against a 0.4% floor — and hands an attacker a W-for-1 denial
 of service, where one injected frame destroys W legitimate ones. Delivering with
 a verdict costs nothing and keeps the choice with the receiver's application.
-The verdict surface is not optional and not ignorable: **every secured RX
-delivery carries `verified` / `unverified` / `clear`**, `0xF1` carries a
-per-channel drop-vs-deliver policy bit (default: deliver), and `0xF4` reports
-window verdict counters, so a host that ignores per-message flags still has an
-auditable stream.
+
+**The verdict reaches the host per window, not per message, and only if it
+asks.** A packet's verdict does not exist when the packet is delivered - it
+exists W to 2W-1 periods later - so a flag on the data message would have to
+either delay the data by that much or always read `unverified`. Instead:
+
+- The data path is unchanged. A secured `BROADCAST_DATA` is the same bytes, at
+  the same moment, as on a channel without the event, so it costs no latency.
+- `0xF1` bit 4 (`RADIANT_SEC_SW_VERDICT_EVENT`, valid only with `X_AUTH`) asks
+  for one `0xF8` message per judged window: `[channel, verdict, window_start
+  u16 LE, W]`, verdict 1 verified or 2 unverified. It is posted to the same
+  queue as the data, after every packet it covers (under the drop policy,
+  immediately after a verified window's release), so a host never sees the
+  verdict before the packets. A host maps each packet to its window by payload
+  byte `[1]`, the counter's low 8 bits: it belongs to the window when
+  `(byte1 - window_start) mod 256 < W`, unambiguous because W ≤ 8.
+- A host that wants per-packet trust holds each secured packet until its
+  window's `0xF8` arrives and treats one whose verdict never comes - a lost
+  window, the last window before the node went quiet, an event-queue overflow
+  - as unverified. A host that wants no latency at all uses the data at once
+  and the event as an alarm. Either way, a forged window is now visible as a
+  forged window rather than only as a counter.
+- Without bit 4 nothing is sent, and the byte stream is identical to a build
+  without the event.
+- `0xF1` bit 2 is the drop-vs-deliver policy (default: deliver), and `0xF4`
+  reports window verdict counters, so a host that takes no events still has an
+  auditable stream.
+
+This replaces an earlier promise that every secured delivery would carry its
+own verdict flag, which the implementation never did: the verdict was recorded
+and counted, and a forged secured page reached the host as an ordinary
+`BROADCAST_DATA` (security review 2026-11-13, item 3).
 
 **`X_AUTH` is not bypassable by message type.** The transform governs broadcast,
 and on a secured channel a *non-broadcast* frame — acknowledged data, a burst —
@@ -1016,13 +1045,17 @@ window unverifiable:
 
 | W | Tag length | Detection latency at 4 Hz | Unverifiable fraction against a 0.4% loss floor |
 |---|---|---|---|
-| 2 (default) | 16 bits | 0.75–1.0 s | ~0.8% |
-| 4 | 32 bits | 1.25–2.0 s | ~1.6% |
-| 8 | 64 bits | 2.25–4.0 s | ~3.2% |
+| 2 (default) | 16 bits | 0.5–0.75 s | ~0.8% |
+| 4 | 32 bits | 1.0–1.75 s | ~1.6% |
+| 8 | 64 bits | 2.0–3.75 s | ~3.2% |
 
 The latency is a range and not a single number because the tag lags one window
 (section 3.2): a forgery in window *k* is detected when window *k+1* completes,
-which is W+1 packets later for the last packet of *k* and 2W for the first.
+which is W packet periods after the last packet of *k* and 2W-1 after the
+first. (An earlier version of this table said W+1 to 2W, one period too many at
+both ends; window *k+1*'s last packet is counter *kW+2W-1*.) The same range is
+the drop policy's added delivery latency, and the delay before a `0xF8`
+window-verdict event (section 9) can follow the packets it judges.
 
 The amplification factor is **W**, and it is why the default is W=2 and why an
 unverifiable window is delivered rather than discarded (section 3.2). Discarding
@@ -1275,16 +1308,20 @@ records what the IDs are for. The allocation below is the one in the YAML.
 
 | ID | Name | Purpose |
 |---|---|---|
-| `0xF1` | `ANTW_MESG_RADIANT_SEC_CONFIG_ID` | Per-channel switch bitmask (`X_CONF`/`X_AUTH`), the MAC window W, the secured page range and the drop-vs-deliver policy bit |
+| `0xF1` | `ANTW_MESG_RADIANT_SEC_CONFIG_ID` | Per-channel switch bitmask (`X_CONF`/`X_AUTH`), the MAC window W, the secured page range, the drop-vs-deliver policy bit and the opt-in for `0xF8` (bit 4) |
 | `0xF2` | `ANTW_MESG_RADIANT_SET_KEY_ID` | Install the 16-byte `K_root` for a channel. Write-only |
 | `0xF3` | `ANTW_MESG_RADIANT_EPOCH_ID` | Set or read the epoch and its microsecond time anchor |
 | `0xF4` | `ANTW_MESG_RADIANT_SEC_STATUS_ID` | Read back (structure version at `[1]`): epoch, expected index, window verdict counters, drop counters, enrolments |
 | `0xF5` | `ANTW_MESG_RADIANT_PAIRING_ID` | Enter/leave pairing mode; carry the host-supplied scalar and the X25519 exchange |
 | `0xF6` | `ANTW_MESG_RADIANT_HEALTH_ID` | Not a security message: the dongle's health counters (structure version at `[0]`), allocated from the same RadiANT block |
-| `0xF7-0xFA` | reserved | The rest of the RadiANT family. Claim by PR against `docs/profile-registry.md` |
+| `0xF7` | `ANTW_MESG_RADIANT_DIAG_ID` | Not a security message: paged diagnostic counters (ADR 0023) |
+| `0xF8` | `ANTW_MESG_RADIANT_SEC_VERDICT_ID` | One window's verdict, `[channel, verdict, window_start u16 LE, W]`. Sent unsolicited, but only on a channel whose `0xF1` set bit 4; see section 3.2 |
+| `0xF9-0xFA` | reserved | The rest of the RadiANT family. Claim by PR against `docs/profile-registry.md` |
 
 `0xF1` bit 3 (descriptor encryption) returns `ANTW_INVALID_PARAMETER_PROVIDED`
-in v1; see section 5.2. A page range outside `0x01..0x1F` is refused the same
+in v1; see section 5.2. Bit 4 (the `0xF8` window-verdict event) without bit 1
+(`X_AUTH`) is refused the same way: only `X_AUTH` has a verdict, and accepting
+it would promise events that never come. Bits 7..5 are reserved and refused. A page range outside `0x01..0x1F` is refused the same
 way; see section 5.5. `0xF3` refuses an epoch less than or equal to the current
 one, and refuses epochs near `0xFFFFFFFF`; see section 3.5.
 
@@ -1328,8 +1365,8 @@ having been in host memory, because it has.
 ### `0xF4` is what makes deliver-as-unverified auditable
 
 Section 3.2's deliver-but-mark policy only means anything if unverified cannot
-be silently treated as verified. A host that ignores the per-message verdict
-flag can still read the window counters here, so the failure mode "everything
+be silently treated as verified. A host that does not take the `0xF8`
+window-verdict events can still read the window counters here, so the failure mode "everything
 looked fine because nothing was checking" is visible from outside the device.
 
 The counters saturate rather than wrapping. A wrapped counter would let a long
@@ -1341,7 +1378,8 @@ error. "No security on this channel" is a state a host must be able to read
 without treating an ordinary channel as a fault, and a host that learns to
 ignore one error learns to ignore them all.
 
-`tools/ant_sec.py` is the host-side encoder and decoder for all four, and
+`tools/ant_sec.py` is the host-side encoder and decoder for these and for
+`0xF8` (`decode_verdict()`, `verdict_covers()`), and
 `tools/ant_features.py --radiant-security` probes them against a real device —
 off by default, because a stock ANT stick answers `INVALID_MESSAGE` to all four
 and that noise is not informative.

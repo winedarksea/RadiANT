@@ -139,7 +139,7 @@ struct sec_ctx {
 	 * computes. ONE buffer was review D1-1: it released the closing
 	 * window on its predecessor's verdict, so a forged packet in any
 	 * window went out VERIFIED behind a genuine one. Delivery latency
-	 * under the policy is therefore W+1 to 2W packet periods, the same
+	 * under the policy is therefore W to 2W-1 packet periods, the same
 	 * as detection latency (docs/radiant-security.md 7.5).
 	 *
 	 * hold_start is the window each buffer belongs to, checked against

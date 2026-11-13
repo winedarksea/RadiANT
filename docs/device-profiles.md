@@ -1794,8 +1794,8 @@ So, normative:
   continuous injection per expected forged reading** — too short for a reading
   someone doses against. W = 4 is a 32-bit tag, 2^32 windows of 8 s, about
   **1,000 years** per expected forgery. The cost is latency: a window's tag
-  lags one window, so detection takes W+1 to 2W periods — **10–16 s** at W = 4
-  on a reading that changes every 5 minutes. W = 8 would cost 18–32 s and buy
+  lags one window, so detection takes W to 2W-1 periods — **8–14 s** at W = 4
+  on a reading that changes every 5 minutes. W = 8 would cost 16–30 s and buy
   nothing a 32-bit tag has not already bought here.
 - A receiver **must not display a reading it has not verified.** Not as a number
   with a warning icon, not greyed out — an unverified or unverifiable reading is

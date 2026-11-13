@@ -664,7 +664,7 @@ announces its downlink phase as encoded.
   The byte carries `tag_of_previous_window[counter mod W]`: **the tag lags one
   window**, because encrypt-then-MAC means a sender cannot know a window's tag
   until it has built the window's last packet. `docs/radiant-security.md`
-  section 3.2 states the consequences - detection latency is W+1 to 2W periods
+  section 3.2 states the consequences - detection latency is W to 2W-1 periods
   (and so is delivery latency under the drop policy), the first window of an
   epoch is verified by the next window's tag while its own tag bytes are zeros,
   and the last window before a node goes quiet is never verified.

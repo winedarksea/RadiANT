@@ -593,11 +593,12 @@ What the bench is for, and nothing else:
    address, so the prediction is *no measurable difference*; anything else means
    the event-thread crypto is displacing a slot, which is the one failure mode
    the mock's virtual clock cannot show.
-2. **Detection latency is W+1 to 2W packets, not W.** Corrupt one payload byte
-   in flight and count packets to the `unverified` verdict. The range is not
+2. **Detection latency is W to 2W-1 packets, not 0 to W-1.** Corrupt one
+   payload byte in flight and count packets from it to the `unverified`
+   verdict (the `0xF8` event, with `0xF1` bit 4 set). The range is not
    slop — encrypt-then-MAC means a window's tag cannot be known until its last
    packet is built, so the tag transmitted during window *k* authenticates *k-1*.
-   A measurement of exactly W would mean the lag is missing and the
+   A measurement under W would mean the lag is missing and the
    implementation is not what the spec describes.
 3. **A secured channel is invisible to everything that did not ask for it.**
    With a secured node transmitting alongside real ANT+ sensors, a shipping
