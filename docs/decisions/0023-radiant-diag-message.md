@@ -81,7 +81,7 @@ Claim **0xF7** from the reserved RadiANT block (0xF7-0xFA) as
 | 4 backend B | `radiant_radio_diag_get()` | sw-address mismatch | window-test drops | CRC fails | alternate-sync hits | RX not-OK/ignored | RX buffer full | drain latency max µs | min arm lead seen µs |
 | 5 search A | `radiant_search_stats` | windows | sets_advanced | sweeps | frames_ok | crc_fail | acquired | scan_reports | timeouts |
 | 6 search B | `radiant_search_stats` | cache_steers | cache_acquires | permit_rejected | rssi_rejected | decode_failed | bad_filter_index | late_events | sets_advanced_uncovered |
-| 7 search/track hand-off | `radiant_radio_diag_get()` [4..15], `radiant_sched.c` [16..27], api [28..35] | search frame cut by the chunk's close | search frame cut by an abort | search END within 300 µs of the close | bounded RX armed opening late | worst such lateness µs | bounded RX expired behind a scan chunk | tracked slots < 2 ms after the search heard their device number | of those, slots that heard nothing |
+| 7 search/track hand-off | `radiant_radio_diag_get()` [4..15], `radiant_sched.c` [16..27], reserved [28..35] | search frame cut by the chunk's close | search frame cut by an abort | search END within 300 µs of the close | bounded RX armed opening late | worst such lateness µs | bounded RX expired behind a scan chunk | reserved, `0xFFFFFFFF` | reserved, `0xFFFFFFFF` |
 
 `sets_advanced_uncovered` is `0xFFFFFFFF` without `CONFIG_RADIANT_SEARCH_COVERAGE`.
 
@@ -91,9 +91,19 @@ Its first three fields are the backend table's last three indices
 (`RADIANT_RADIO_DIAG_SRCH_*`) and read `0xFFFFFFFF` on cc26xx and null. "Late"
 counts only a bounded window the scheduler's first pass found still armable
 from its own start, so a window posted for "now" (an acknowledgement window)
-never counts. Unlike pages 5-6, every page-7 counter lives in a backend,
-scheduler or API static and survives `SYSTEM_RESET`, so a before/after diff is
-valid across `--reopen`.
+never counts. Unlike pages 5-6, every page-7 counter lives in a backend or
+scheduler static and survives `SYSTEM_RESET`, so a before/after diff is valid
+across `--reopen`.
+
+Fields 6-7 first counted tracked slots opening within 2 ms after the search
+heard the same device number, and how many of those missed. The gate-3 run
+(`archive/benchmarks/2026-11-12-gate3/`) showed that count cannot measure a
+hand-off cost. It only counts when the search hears a frame, which the short
+match does about nine times as often, and it read 100 % missed on the off image
+too. The fields were reserved before the page left the bench (never pushed or
+released), so no host depends on them. The gate-3 images in that archive still
+report the old meaning.
+
 "Turnaround" on page 2 is NEXT_BLOCK-to-submit: the time from the engine
 asking for the next block to the host block arriving.
 

@@ -5343,6 +5343,10 @@ ZTEST(api, test_diag_every_page_has_the_fixed_shape)
 	zassert_equal(IS_ENABLED(CONFIG_RADIANT_SEARCH_COVERAGE)
 			      ? 0u : RADIANT_DIAG_NOT_MEASURED,
 		      diag_u32(out, 7u));
+	/* Page 7's last two fields are reserved (see radiant_diag.h). */
+	zassert_ok(antr_diag_page(RADIANT_DIAG_PAGE_HANDOFF, out));
+	zassert_equal(RADIANT_DIAG_NOT_MEASURED, diag_u32(out, 6u));
+	zassert_equal(RADIANT_DIAG_NOT_MEASURED, diag_u32(out, 7u));
 	/* No page past the last, and no NULL buffer. */
 	zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
 		      antr_diag_page(RADIANT_DIAG_PAGES, out));
@@ -5443,96 +5447,4 @@ ZTEST(api, test_diag_a_delayed_continuation_is_counted_late)
 	drain();
 }
 
-/*
- * Page 7, fields 6-7: tracked slots that open just after the search heard the
- * same device number. Channel 0 tracks device A (type 0x0B). Channel 1 then
- * scans for A's device number with type 0x11 - a trainer's sibling channel -
- * so the sweep's first set is A's and the sibling, transmitting 1.8 ms before
- * each of A's frames, is heard by the search just before A's tracked window.
- * `a_talks` false keeps A silent, so those slots hear nothing.
- */
-static void diag_sibling_run(bool a_talks, uint32_t *after, uint32_t *miss)
-{
-	const struct radiant_diag_core *dc = radiant_diag_core_get();
-	const struct fake_radio_arm *w;
-	uint8_t                      out[RADIANT_DIAG_BODY_LEN];
-	uint16_t                     dev;
-	radiant_time_t               t_acq;
-
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
-		      antr_network_address_set(0u, ant_plus_key));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
-		      antr_channel_assign(CH, (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
-					  0u, 0u));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
-		      antr_channel_id_set(CH, 0u, 0u, 0u));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
-		      antr_channel_period_set(CH, RADIANT_CHANNEL_PERIOD_ANT_PLUS));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
-		      antr_channel_radio_freq_set(CH, RF_INDEX));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR, antr_channel_open(CH));
-	w = armed_search_window();
-	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &dev);
-	t_acq = w->t_open + 1000u;
-	fake_radio_advance_to(w->t_close + 1u);
-	drain();
-	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH),
-		      "setup: channel 0 did not acquire");
-
-	if (a_talks) {
-		air_repeating(dev, 0x0Bu, t_acq + PERIOD_US, 8u);
-	}
-	air_repeating(dev, 0x11u, t_acq + PERIOD_US - 1800u, 8u);
-
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
-		      antr_channel_assign(1u, (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
-					  0u, (uint8_t)ANTW_EXT_PARAM_ALWAYS_SEARCH));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
-		      antr_channel_id_set(1u, dev, 0x11u, 0u));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
-		      antr_channel_period_set(1u, RADIANT_CHANNEL_PERIOD_ANT_PLUS));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
-		      antr_channel_radio_freq_set(1u, RF_INDEX));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR, antr_channel_open(1u));
-
-	run_virtual_us(4u * PERIOD_US);
-	*after = dc->trk_slots_after_sibling;
-	*miss = dc->trk_miss_after_sibling;
-
-	zassert_ok(antr_diag_page(RADIANT_DIAG_PAGE_HANDOFF, out));
-	zassert_equal(RADIANT_DIAG_PAGE_HANDOFF, out[0]);
-	zassert_equal(*after, diag_u32(out, RADIANT_DIAG_HANDOFF_TRK_SLOTS_AFTER_SIBLING));
-	zassert_equal(*miss, diag_u32(out, RADIANT_DIAG_HANDOFF_TRK_MISS_AFTER_SIBLING));
-	/* The fake backend measures none of the backend fields. */
-	zassert_equal(RADIANT_DIAG_NOT_MEASURED,
-		      diag_u32(out, RADIANT_DIAG_HANDOFF_SRCH_CUT_CLOSE));
-	zassert_equal(RADIANT_DIAG_FLAG_UNMEASURED,
-		      out[2] & RADIANT_DIAG_FLAG_UNMEASURED);
-
-	(void)antr_channel_close(1u);
-	(void)antr_channel_close(CH);
-	fake_radio_advance(1000u);
-	drain();
-}
-
-ZTEST(api, test_diag_a_tracked_slot_after_its_sibling_is_counted)
-{
-	uint32_t after;
-	uint32_t miss;
-
-	diag_sibling_run(true, &after, &miss);
-	zassert_true(after >= 1u, "no tracked slot counted after its sibling");
-	zassert_equal(0u, miss, "%u of %u slots counted as misses; A talked in all",
-		      miss, after);
-}
-
-ZTEST(api, test_diag_a_silent_slot_after_its_sibling_is_a_miss)
-{
-	uint32_t after;
-	uint32_t miss;
-
-	diag_sibling_run(false, &after, &miss);
-	zassert_true(after >= 1u, "no tracked slot counted after its sibling");
-	zassert_true(miss >= 1u, "A was silent, yet no slot after a sibling missed");
-}
 #endif /* CONFIG_RADIANT_DIAG_COUNTERS */

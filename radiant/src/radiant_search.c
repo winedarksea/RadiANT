@@ -998,11 +998,6 @@ static void handle_ok(struct radiant_search *s, const struct radiant_rx_event *e
 
 	s->stats.frames_ok++;
 	radiant_search_seen_note_rf(s, &f.id, evt->t_sync, s->cfg.rf_index);
-#if defined(CONFIG_RADIANT_DIAG_COUNTERS)
-	s->diag_last_valid = true;
-	s->diag_last_dev = f.id.device_number;
-	s->diag_last_t = evt->t_sync;
-#endif
 #if defined(CONFIG_RADIANT_SEARCH_PHASE_DIAG)
 	for (uint8_t c = 0; c < (uint8_t)RADIANT_SEARCH_MAX_CHANNELS; c++) {
 		if (s->chans[c].active) {

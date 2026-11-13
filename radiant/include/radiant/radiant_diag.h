@@ -50,10 +50,16 @@ extern "C" {
  * reception running up to a scan chunk's close delay the tracked window armed
  * after it? Fields 0-2 are the backend's (a search frame in flight when the
  * chunk closed or was aborted; a search frame ending close to the chunk's
- * close), 3-7 the core's (bounded receive windows opened late, the worst
- * lateness, bounded windows expired while a scan chunk held the radio, and
- * tracked slots that opened just after the search heard the same device
- * number, with how many of those heard nothing).
+ * close), 3-5 the core's (bounded receive windows opened late, the worst
+ * lateness, and bounded windows expired while a scan chunk held the radio).
+ *
+ * Fields 6-7 are reserved and read RADIANT_DIAG_NOT_MEASURED. They held "a
+ * tracked slot opened just after the search heard the same device number, and
+ * how many of those missed". The 2026-11-12 gate-3 run showed that count
+ * cannot measure a hand-off cost: it only counts when the search HEARS a
+ * frame, which the short match does nine times as often, so it grows with
+ * discovery whatever made the slot miss (it read 100 % missed on the off
+ * image too).
  */
 #define RADIANT_DIAG_HANDOFF_SRCH_CUT_CLOSE        0u
 #define RADIANT_DIAG_HANDOFF_SRCH_CUT_ABORT        1u
@@ -61,17 +67,11 @@ extern "C" {
 #define RADIANT_DIAG_HANDOFF_TRK_OPEN_LATE         3u
 #define RADIANT_DIAG_HANDOFF_TRK_OPEN_LATE_MAX_US  4u
 #define RADIANT_DIAG_HANDOFF_TRK_MISSED_BEHIND_SCAN 5u
-#define RADIANT_DIAG_HANDOFF_TRK_SLOTS_AFTER_SIBLING 6u
-#define RADIANT_DIAG_HANDOFF_TRK_MISS_AFTER_SIBLING 7u
 
 /* A search frame ending this close to its chunk's hardware close counts as
  * "near close" (field 2): its END interrupt chain then runs into the time
  * the next arm needs. */
 #define RADIANT_DIAG_SRCH_NEAR_CLOSE_US 300u
-/* A tracked slot opening within this long after the search heard the same
- * device number counts as "after a sibling" (field 6): the trainer's other
- * channels share its device number. */
-#define RADIANT_DIAG_SIBLING_US 2000u
 
 /* Reply body: [0] page, [1] version, [2] flags, [3] backend id, eight u32 LE. */
 #define RADIANT_DIAG_FIELDS          8u
@@ -149,13 +149,10 @@ struct radiant_diag_core {
 	int32_t  tx_margin_min_us; /* smallest t_start - earliest seen there */
 	uint8_t  turn_seen;       /* turn_min_us is valid */
 	uint8_t  margin_seen;     /* tx_margin_min_us is valid */
-	/* page 7, fields 3-7 (radiant_sched.c and the API) */
+	/* page 7, fields 3-5 (radiant_sched.c) */
 	uint32_t trk_open_late;   /* bounded RX armed opening past its t_start */
 	uint32_t trk_open_late_max_us; /* the largest such lateness */
 	uint32_t trk_missed_behind_scan; /* bounded RX expired, scan chunk armed */
-	uint32_t trk_slots_after_sibling; /* tracked slot just after the search
-					   * heard its device number */
-	uint32_t trk_miss_after_sibling;  /* of those, slots that heard nothing */
 };
 
 extern struct radiant_diag_core radiant_diag_core;

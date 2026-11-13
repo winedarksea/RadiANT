@@ -2,8 +2,9 @@
 
 - **Status:** proposed. Built behind `CONFIG_RADIANT_SEARCH_SHORT_MATCH`,
   ztest-verified, A/B/A on air below. Default **y on cc26xx** since 2026-11-12
-  (the TI A/B/A passed all four gates). Default **n on nRF** until its own
-  gates in [Gates](#gates) pass.
+  (the TI A/B/A passed all four gates). Default **n on nRF**: its four gates
+  passed on 2026-11-12 ([Gate 3 on nRF](#gate-3-on-nrf-2026-11-12)), and the
+  Zwift capture is still to do.
 - **Date:** 2026-11-11
 - **Supersedes:** the "search format is permanent by design and is not touched"
   note in `radiant/src/radiant_addr_split.h` (ADR 0019's scope line), and the
@@ -119,12 +120,31 @@ same-SoC control (`archive/benchmarks/2026-11-12-gate3/`).
 - Page 7: no tracked window opened late and none expired behind a scan
   chunk on either image, so the suspected mechanism (search END interrupt
   work overrunning the dispatch slack) was not seen.
-- But tracked slots opening just after the search heard the trainer's device
-  number were all missed, about 12 per window on B and 2 on A. The counter
-  matches on device number only, so it cannot tell a true sibling channel
-  from the tracked frame itself arriving before its window. The plan's rule
-  reads that as a mechanism, so the default stays **n** until the counter is
-  split by channel ID and a short rerun decides it.
+- Tracked slots opening just after the search heard the trainer's device
+  number were all missed, about 12 per window on B and 2 on A. This was first
+  read as a possible mechanism. On review it is not evidence either way. The
+  counter only counts when the search hears a frame, which B does nine times
+  as often, so it grows with discovery whatever made the slot miss. It also
+  read 100 % missed on A, where the short match is off. Splitting it by
+  channel ID would not remove that bias, so the split was not built and page
+  7 fields 6-7 were reserved (ADR 0023). Fields 3-5 measure the mechanism
+  directly, and they stayed at zero.
+
+**Gate 3 on nRF: pass.** The same-window loss comparison is the gate's own
+measure, and it shows no cost.
+
+**Gate 4 on nRF: pass**, from the same run's 0xF7 pages 4-5 (Pro Micro, per
+300 s window). The backend's CRC failures, which are the noise matches,
+were 2925-2995 on B against 142-150 on A, about 10/s more. All were dropped
+before the search: the search's own `crc_fail` read 0 on both images. Every
+device sighted on B was also sighted by the dongle and the Garmin (#52233
+types 0x0B/0x7B, and #1458 in window 6), so no noise frame got past the CRC
+as a false device. The host saw the same event types on both images (channel
+event 0x08 only, 2-3 per window).
+
+All four gates now pass on nRF. The default stays **n** until the Zwift
+capture listed under [Gates](#gates) has been done, because that check needs
+a real Zwift session.
 
 ### On TI (CC2652R), 2026-11-12
 

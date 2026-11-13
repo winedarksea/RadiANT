@@ -1,9 +1,9 @@
 MPSL bursts: multi-packet bursts still can't run on MPSL builds. That's a scope gap, not a regression; Zwift uses acknowledged messages.
 
 Discovery short match (ADR 0022), left open 2026-11-11:
-- Gate 3 is not settled. `CONFIG_RADIANT_SEARCH_SHORT_MATCH` puts discovery at parity with the Garmin (12.2 against 12.6 sightings/s), but the tracked-loss comparison drowned in the room's drift (`archive/benchmarks/2026-11-11-scan-rate/README.md`). Run 2026-11-12 (`archive/benchmarks/2026-11-12-gate3/`): tracked loss passes (B - A = -0.23 pp against the same-SoC dongle control, bound 2.16 pp) and page 7's clipped-open/expiry counters stayed at zero, but every tracked slot opening < 2 ms after the search heard #52233 missed (12/window on B, 2 on A). Page 7 field 6 matches device number only, so it cannot tell a sibling channel from the tracked frame arriving before its window. Next: stamp the device type too, split field 6 into same-channel-ID and true-sibling, rerun three A/B pairs. nRF stays n until then.
+- [x] Gates 3 and 4 pass on nRF (2026-11-12, `archive/benchmarks/2026-11-12-gate3/`). Tracked loss B - A = -0.23 pp against the same-SoC dongle control (bound 2.16 pp), and page 7's hand-off counters (fields 3-5) stayed at zero. The "slot after the search heard the device number" counter was removed, not split: it only counts when the search hears a frame, so it grows with discovery and can't measure a cost (it read 100 % missed with the short match off too). Gate 4: about 10/s more noise matches on B, all dropped by the backend CRC, with no false devices and no new host events. All four gates pass. The nRF default flips to y after the Zwift capture below.
 - [x] `radiant_search_stats` over the host: done by ADR 0023 (c5320f4), 0xF7 pages 5-6. Read them after a window only: `radiant_search_init()` zeroes them on every stack reset and key set.
-- The two waste fixes (ADR 0022 "Not done here"): closed for TI, where the short match is now on by default and one set makes them moot. On nRF they matter only while the short match is off, so they ride on the gate-3 decision above; no scheduler "window is live" query is built.
+- The two waste fixes (ADR 0022 "Not done here"): closed for TI, where the short match is now on by default and one set makes them moot. On nRF they matter only while the short match is off, which ends when the default flips after the Zwift capture; no scheduler "window is live" query is built.
 - Deferred to the Zwift follow-up testing: the final Zwift capture with both workstreams flashed (user-run): every sensor listed within ~1 s, 0x61/0xC6 answered, reset -> NETWORK_KEY against 42-94 s (RadiANT history) and 9.2 s (Garmin).
 
 Discovery (ztest only, not on air; bench checks in the release review):
@@ -18,9 +18,11 @@ Discovery (ztest only, not on air; bench checks in the release review):
   (B4), a new session clears it in `begin_common()`.
 - [x] A chunk reclaimed by A9-3 was credited as a full listen: fixed (B5), it
   credits nothing and counts `reclaimed_chunks`.
-- Never verified on air: a slave on a non-57 frequency acquiring its master; mixed
-  57/66 passes. (A real Zwift session on these images is deferred to the Zwift
-  follow-up testing.)
+- [x] On air 2026-11-12 (`archive/benchmarks/2026-11-12-gate3/` step 7): a keyed
+  slave on RF 66 acquires a Garmin master (0.06 s), and a mixed 57/66 session
+  acquires both (0.06-0.09 s and 0.30-0.34 s), on both short-match images. Only
+  named-device channels were tried. A real Zwift session on these images is
+  deferred to the Zwift follow-up testing.
 
 
 ## TI CC2652R, open after the 2026-11-12 bench (evidence `archive/benchmarks/2026-11-12-ti-findings/` and `2026-11-12-ti-lead/`):

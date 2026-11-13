@@ -71,11 +71,44 @@ every case), counters 3-5 at zero, and no loss difference. About 10 extra
 counted misses per window is 0.4 % of the roughly 2400 tracked slots, inside
 the -0.23 pp loss result.
 
-So the decision follows the plan's "fail" branch until the counter can tell
-the two apart: **the nRF default stays n**, and A3 (the two waste fixes) stays
-open. The next step is small. Record the device type with the search stamp and
-split counter 6 into "same channel ID" (the tracked frame came early) and "true
-sibling" (another channel of the device), then rerun three A/B pairs.
+### Review the same day: gate 3 passes, and counters 6-7 were removed
+
+The planned follow-up was to split counter 6 by channel ID and rerun. It was
+not built, because the split cannot settle the question either. The counter
+only counts when the search hears a frame. B hears about nine times as many,
+so its count grows with discovery whatever made the slot miss. That stays
+true for "same channel ID" and "true sibling" alike. A third cause fits too:
+when two of the trainer's channels fall within 2 ms of each other, the
+trainer itself may delay or skip one frame. Every receiver would then miss it,
+and B only witnesses that more often. The 100 % miss rate on A, where the
+short match is off, already shows the miss does not come from the short
+match. What would show a hand-off cost is a higher tracked miss rate on B in
+the same window, which is the loss gate above. Fields 3-5 count the hand-off
+mechanism directly.
+
+So gate 3 **passes** on the loss result. Page 7 fields 6-7 are now reserved
+(`0xFFFFFFFF`, ADR 0023). The images used in this run still report them, under
+the old names in the JSON files here.
+
+### Gate 4 from the same data
+
+Pro Micro 0xF7 pages 4-5, per window (difference of the after and before dumps):
+
+| window | backend CRC fails | search crc_fail | search frames_ok | host events |
+|---|---|---|---|---|
+| w1 A | 146 | 0 | 154 | 0x08 x2 |
+| w2 B | 2959 | 0 | 1273 | 0x08 x2 |
+| w3 A | 142 | 0 | 147 | 0x08 x3 |
+| w4 B | 2925 | 0 | 1283 | 0x08 x3 |
+| w5 A | 150 | 0 | 163 | 0x08 x3 |
+| w6 B | 2995 | 0 | 2418 | 0x08 x2 |
+
+The short match lets about 10 more noise frames per second reach the CRC, and
+the backend drops every one of them. Every device B sighted was also sighted by
+the dongle and the Garmin (#52233 0x0B/0x7B, and #1458 0x78/0x7C in w6), so no
+false device got through. The host saw the same event type on both images.
+**Gate 4 passes.** With gates 1-2 from 2026-11-11, all four pass on nRF. The
+default stays n until the Zwift capture (ADR 0022 Gates) has been done.
 
 The dongle's diag read after windows 5 and 6 failed transiently, right after
 the scan closed. A later read succeeded, so its w5-w6 counters are folded into

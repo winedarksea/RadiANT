@@ -595,15 +595,6 @@ struct radiant_search {
 	uint8_t                seen_next;
 
 	struct radiant_search_stats stats;
-
-#if defined(CONFIG_RADIANT_DIAG_COUNTERS)
-	/* The last CRC-valid search frame's device number and t_sync, for the
-	 * 0xF7 page 7 sibling test (a tracked slot opening just after the
-	 * search heard its device number). */
-	bool           diag_last_valid;
-	uint16_t       diag_last_dev;
-	radiant_time_t diag_last_t;
-#endif
 };
 
 /* ---------------------------------------------------------------------------

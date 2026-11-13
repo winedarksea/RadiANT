@@ -62,8 +62,7 @@ PAGES: dict[int, tuple[str, list[str]]] = {
     # (radiant_radio_diag_idx after min_lead_us); 0xFFFFFFFF on TI and null.
     7: ("handoff", ["srch_cut_close", "srch_cut_abort", "srch_end_near_close",
                     "trk_open_late", "trk_open_late_max_us",
-                    "trk_missed_behind_scan", "trk_slots_after_sibling",
-                    "trk_miss_after_sibling"]),
+                    "trk_missed_behind_scan", "reserved6", "reserved7"]),
 }
 # Fields that are a level (min/max/last), not a running count: a difference
 # means nothing, so --diff reports the later value.

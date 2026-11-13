@@ -1792,11 +1792,10 @@
  * of the close - these three from the backend table, 0xFFFFFFFF where it
  * cannot see them; bounded receive windows armed opening past their start,
  * the largest such lateness in us, bounded windows expired while a scan chunk
- * held the radio, tracked slots opening within 2 ms after the search heard
- * the same device number, and of those the slots that heard nothing).
- * VERSIONING: pinned at 1; a field's meaning never changes and a new meaning
- * is a new page. docs/decisions/0023-radiant-diag-message.md has the
- * reasoning and radiant/include/radiant/radiant_diag.h the layout. [ADR 0023]
+ * held the radio; fields 6-7 reserved, 0xFFFFFFFF). VERSIONING: pinned at 1;
+ * a field's meaning never changes and a new meaning is a new page.
+ * docs/decisions/0023-radiant-diag-message.md has the reasoning and
+ * radiant/include/radiant/radiant_diag.h the layout. [ADR 0023]
  */
 #define RADIANT_WIRE_MESG_RADIANT_DIAG_ID                    0xF7
 
