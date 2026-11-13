@@ -1227,6 +1227,13 @@ static void api_xfer_inbound_ended(void *ctx)
 		   (radiant_time_t)radiant_channel_guard_us(ch) +
 		   (radiant_time_t)((caps != NULL) ? caps->min_arm_lead_us : 0u);
 	radiant_channel_catch_up(ch, earliest);
+	/* Stepping over periods widens the guard, which opens the window
+	 * earlier than the instant just checked: check again with the wide
+	 * guard, so the first window after the burst is still reachable. */
+	earliest = radiant_radio_now() +
+		   (radiant_time_t)radiant_channel_guard_us(ch) +
+		   (radiant_time_t)((caps != NULL) ? caps->min_arm_lead_us : 0u);
+	radiant_channel_catch_up(ch, earliest);
 	api_ch[ch].track_repost = true;
 }
 
@@ -1266,6 +1273,10 @@ static int api_xfer_setup(uint8_t ch)
 	cfg.rx_only = radiant_channel_type_get(ch) ==
 		      (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY;
 	cfg.channel = ch;
+	/* Kconfig's 0 is "no repeats"; the engine's 0 is "its default". */
+	cfg.in_ack_repeats = (CONFIG_RADIANT_INBOUND_ACK_REPEATS == 0) ?
+				     (uint8_t)RADIANT_TRANSFER_IN_ACK_REPEATS_NONE :
+				     (uint8_t)CONFIG_RADIANT_INBOUND_ACK_REPEATS;
 	cfg.ops = &api_xfer_ops;
 	cfg.ctx = (void *)(uintptr_t)ch;
 
@@ -1894,6 +1905,12 @@ BUILD_ASSERT(API_FOLLOW_ON_TRACK_US <= 4200u,
 	     "tracked follow-on exceeds the reviewed 4.2 ms grant budget");
 BUILD_ASSERT(API_FOLLOW_ON_TRACK_US <= UINT16_MAX,
 	     "tracked follow-on does not fit the HAL field");
+/* A master's slot-opening 0x8A heard in this window is acknowledged on the
+ * slot-reply turnaround (radiant_ack.c), later than any other reply: the
+ * reserve must reach that acknowledgement's end too. */
+BUILD_ASSERT(RADIANT_TRANSFER_OPENER_REPLY_US + API_FRAME_AIRTIME_US <=
+		     API_FOLLOW_ON_TRACK_US,
+	     "the tracked reserve does not cover an opener's acknowledgement");
 
 /*
  * The turnaround's own reserve, from its t_close: a slave's acknowledged data

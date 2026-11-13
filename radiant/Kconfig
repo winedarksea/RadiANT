@@ -1004,6 +1004,23 @@ config RADIANT_PHY_LR_CODED
 	  Default n. Turn it on only for a build that actually puts coded frames
 	  on the air, and expect to pay for it at several channels.
 
+config RADIANT_INBOUND_ACK_REPEATS
+	int "acknowledgement repeats before a stalled inbound burst fails"
+	default 5
+	range 0 20
+	help
+	  Inside a multi-packet burst sent TO this device, an empty window
+	  where the peer's next packet should have been repeats our last
+	  acknowledgement 3143 us after the previous one, so the peer retries
+	  into the window that follows. This is how many repeats are made in a
+	  row before the burst is reported as EVENT_TRANSFER_RX_FAILED.
+
+	  5 matches the peer's own limit: an originator retries a packet five
+	  times and then fails its transfer, so later repeats only hold the
+	  radio for a burst that is already over. 20 is the most ever measured
+	  from a reference stack (about 66 ms of radio per stalled burst). 0
+	  ends the burst on its first empty window.
+
 config RADIANT_ACK_FAULTS
 	bool "programmable acknowledgement faults (test instrument only; never in a dongle image)"
 	default n

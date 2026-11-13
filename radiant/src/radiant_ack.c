@@ -215,6 +215,44 @@ int radiant_transfer_ack_data(struct radiant_transfer *t, const uint8_t *payload
  * ---------------------------------------------------------------------------
  */
 
+#if defined(CONFIG_RADIANT_ACK_FAULTS)
+/*
+ * MUTE inside an inbound burst: "our acknowledgement was lost on the air".
+ * Everything a sent acknowledgement does except the transmit - the burst
+ * state, the saved reply a duplicate is answered with, delivery - and then
+ * the continuation window, anchored where the acknowledgement would have
+ * gone (the TX_REPLY branch's rule for a reply that never went out). Until
+ * this existed MUTE left a burst with nothing armed and no sequence bit
+ * recorded, so the peer's retry was delivered twice into silence. Standalone
+ * acknowledged data never comes here: it keeps "deliver, arm nothing".
+ */
+static int mute_in_burst(struct radiant_transfer *t, const struct radiant_frame *f,
+			 uint8_t reply, const uint8_t *payload, radiant_time_t reply_at)
+{
+	t->reply_ctrl = reply;
+	t->reply_attempts = 1u;
+	memcpy(t->reply_payload, payload, RADIANT_TRANSFER_PKT_BYTES);
+	t->in_ack_at = reply_at;
+	if (!radiant_ctrl_is_last(f->ctrl_byte)) {
+		t->in_burst = true;
+		t->in_last_acked = false;
+	} else {
+		t->in_last_acked = true;
+	}
+	t->in_data_ctrl = f->ctrl_byte;
+
+	/* Arms or ends the burst itself; either way nothing is left for the
+	 * caller to undo, so this is OK to it. */
+	(void)radiant_transfer_follow_reply(t, reply_at);
+
+	if (t->cfg.ops->rx_data != NULL) {
+		t->cfg.ops->rx_data(t->cfg.ctx, f->payload, f->payload_len,
+				    radiant_ctrl_is_last(f->ctrl_byte));
+	}
+	return RADIANT_TRANSFER_OK;
+}
+#endif
+
 int radiant_transfer_on_data(struct radiant_transfer *t, const struct radiant_frame *f,
 			 radiant_time_t t_sync)
 {
@@ -345,6 +383,10 @@ int radiant_transfer_on_data(struct radiant_transfer *t, const struct radiant_fr
 				t->stats.reply_plan_too_early++;
 				plan.action = RADIANT_REPLY_MUTE;
 			}
+		}
+		if (plan.action == RADIANT_REPLY_MUTE &&
+		    (!radiant_ctrl_is_last(f->ctrl_byte) || t->in_burst)) {
+			return mute_in_burst(t, f, reply, payload, reply_at);
 		}
 		if (plan.action != RADIANT_REPLY_ACK) {
 			if (t->cfg.ops->rx_data != NULL) {

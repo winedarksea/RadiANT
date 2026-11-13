@@ -1923,6 +1923,9 @@ ZTEST(transfer, test_received_acknowledged_data_is_answered_with_transfer_ack)
 static struct radiant_reply_plan plan_next;
 static uint32_t                  n_plan_calls;
 static radiant_time_t            plan_t_sync_seen;
+/* 0: plan_next applies to every packet. N: only to the Nth packet asked
+ * about (from 1); the rest are acknowledged normally. */
+static uint32_t                  plan_only_call;
 
 static void on_reply_plan(void *ctx, const struct radiant_frame *f,
 			  radiant_time_t t_sync, struct radiant_reply_plan *out)
@@ -1932,13 +1935,17 @@ static void on_reply_plan(void *ctx, const struct radiant_frame *f,
 
 	n_plan_calls++;
 	plan_t_sync_seen = t_sync;
-	*out = plan_next;
+	if (plan_only_call == 0u || n_plan_calls == plan_only_call) {
+		*out = plan_next;
+	}
 }
 
 static const struct radiant_transfer_ops ops_planned = {
 	.done = on_done,
 	.rx_data = on_rx_data,
 	.broadcast_payload = on_broadcast_payload,
+	.rx_failed = on_rx_failed,
+	.inbound_ended = on_inbound_ended,
 	.reply_plan = on_reply_plan,
 };
 
@@ -1950,6 +1957,7 @@ static void use_planned_ops(enum radiant_reply_action action, int32_t offset_us)
 	plan_next.offset_us = offset_us;
 	n_plan_calls = 0u;
 	plan_t_sync_seen = 0u;
+	plan_only_call = 0u;
 
 	make_cfg(&c, false, CH_XFER);
 	c.ops = &ops_planned;
@@ -2918,9 +2926,92 @@ ZTEST(transfer, test_a_duplicate_is_reacknowledged_and_not_delivered)
 	end_of_test();
 }
 
+/* Open a burst and let every continuation window close empty. Returns how
+ * many times the ACK was repeated before the engine gave up, after checking
+ * each repeat's placement and the single rx_failed at the end. */
+static uint32_t repeats_until_the_burst_fails(void)
+{
+	const struct fake_radio_arm *rx;
+	const struct fake_radio_arm *tx;
+	radiant_time_t prev;
+	uint32_t repeats = 0u;
+	uint32_t guard;
+
+	(void)inbound_open(inbound_ctrl(0u, false));
+
+	for (guard = 0u; guard < 64u; guard++) {
+		prev = send_armed_ack();
+		zassert_equal(RADIANT_TRANSFER_STATE_WAIT_NEXT,
+			      radiant_transfer_state(&xfer));
+		rx = last_arm_of(FAKE_RADIO_ARM_RX);
+		zassert_equal(prev + RADIANT_TRANSFER_NEXT_PACKET_US -
+				      RADIANT_TRANSFER_ACK_GUARD_US, rx->t_open,
+			      "window %u misplaced", repeats);
+		fake_radio_advance_to(rx->t_close + 1000u);
+		if (radiant_transfer_state(&xfer) == RADIANT_TRANSFER_STATE_IDLE) {
+			break;
+		}
+		zassert_equal(RADIANT_TRANSFER_STATE_TX_REPLY,
+			      radiant_transfer_state(&xfer));
+		tx = last_arm_of(FAKE_RADIO_ARM_TX);
+		zassert_equal(prev + RADIANT_TRANSFER_REPLY_RETRY_US, tx->t_sync_at,
+			      "repeat %u not at +3143", repeats);
+		zassert_equal(RADIANT_CTRL_ACK_SEQ1, tx->body[BODY_CTRL]);
+		repeats++;
+	}
+
+	zassert_equal(repeats, radiant_transfer_stats(&xfer)->ack_retransmits);
+	zassert_equal(1u, n_rx_failed);
+	zassert_equal(1u, n_inbound_ended);
+	zassert_equal(1u, n_rx_data);
+	zassert_equal(0u, n_ev);
+	return repeats;
+}
+
+static void reinit_with_repeats(uint8_t repeats)
+{
+	cfg_slave.in_ack_repeats = repeats;
+	zassert_equal(RADIANT_TRANSFER_OK, radiant_transfer_init(&xfer, &cfg_slave));
+}
+
+/* The default is the peer's own retry limit, five, not the measured twenty: a
+ * peer has given up by then, and every later repeat is ~3 ms of radio. */
+ZTEST(transfer, test_a_stalled_burst_repeats_the_ack_five_times_by_default)
+{
+	zassert_equal(RADIANT_TRANSFER_TX_RETRIES_MAX,
+		      RADIANT_TRANSFER_IN_ACK_REPEATS_DEFAULT);
+	zassert_equal(RADIANT_TRANSFER_IN_ACK_REPEATS_DEFAULT,
+		      repeats_until_the_burst_fails());
+	end_of_test();
+}
+
+ZTEST(transfer, test_the_ack_repeat_count_is_configurable)
+{
+	reinit_with_repeats(2u);
+	zassert_equal(2u, repeats_until_the_burst_fails());
+	end_of_test();
+}
+
+ZTEST(transfer, test_no_ack_repeats_ends_the_burst_on_the_first_empty_window)
+{
+	reinit_with_repeats((uint8_t)RADIANT_TRANSFER_IN_ACK_REPEATS_NONE);
+	zassert_equal(0u, repeats_until_the_burst_fails());
+	end_of_test();
+}
+
+/* The measured 21 attempts stay the ceiling, whatever is configured. */
+ZTEST(transfer, test_ack_repeats_never_pass_the_measured_ceiling)
+{
+	reinit_with_repeats(200u);
+	zassert_equal(RADIANT_TRANSFER_REPLY_ATTEMPTS_MAX - 1u,
+		      repeats_until_the_burst_fails());
+	end_of_test();
+}
+
 /* Nothing in the window: the saved ACK goes out again 3143 us after the last
  * one (run 0's measured repeat), and the next window follows it. Twenty
- * repeats, then the burst has failed - exactly one rx_failed. */
+ * repeats (the measured maximum, configured), then the burst has failed -
+ * exactly one rx_failed. */
 ZTEST(transfer, test_empty_windows_repeat_the_ack_then_fail_the_burst_once)
 {
 	const struct fake_radio_arm *rx;
@@ -2929,6 +3020,7 @@ ZTEST(transfer, test_empty_windows_repeat_the_ack_then_fail_the_burst_once)
 	uint32_t repeats = 0u;
 	uint32_t guard;
 
+	reinit_with_repeats((uint8_t)(RADIANT_TRANSFER_REPLY_ATTEMPTS_MAX - 1u));
 	(void)inbound_open(inbound_ctrl(0u, false));
 
 	for (guard = 0u; guard < 64u; guard++) {
@@ -3113,3 +3205,100 @@ ZTEST(transfer, test_cur_starts_burst_holds_for_one_transmit_per_burst)
 	drive();
 	end_of_test();
 }
+
+#if defined(CONFIG_RADIANT_ACK_FAULTS)
+/* ---------------------------------------------------------------------------
+ * The reply_plan seam inside an inbound burst
+ * ---------------------------------------------------------------------------
+ */
+
+/* MUTE on packet 1 is "our ACK was lost on the air": the packet is delivered
+ * and recorded, and the window for the peer's retry still opens where it would
+ * after a sent ACK. The retry is re-acknowledged and not delivered twice. */
+ZTEST(transfer, test_a_muted_burst_packet_is_reacknowledged_on_its_retry)
+{
+	const struct fake_radio_arm *rx;
+	const struct fake_radio_arm *tx;
+	radiant_time_t t1;
+	radiant_time_t t;
+
+	use_planned_ops(RADIANT_REPLY_MUTE, 0);
+	plan_only_call = 2u;
+
+	(void)inbound_open(inbound_ctrl(0u, false));
+	(void)send_armed_ack();
+	t1 = air_in_next_window(inbound_ctrl(1u, false), 1u);
+	fake_radio_advance_to(t1 + 100u);
+
+	zassert_equal(2u, n_rx_data, "the muted packet was not delivered");
+	zassert_equal(1u, fake_radio_stats()->arms_tx, "MUTE put an ACK on the air");
+	zassert_equal(RADIANT_TRANSFER_STATE_WAIT_NEXT, radiant_transfer_state(&xfer),
+		      "MUTE left the burst with no window for the retry");
+	rx = last_arm_of(FAKE_RADIO_ARM_RX);
+	zassert_equal(t1 + RADIANT_TRANSFER_REPLY_US + RADIANT_TRANSFER_NEXT_PACKET_US -
+			      RADIANT_TRANSFER_ACK_GUARD_US, rx->t_open,
+		      "the window is not where the lost ACK would have put it");
+
+	/* The peer's retry of packet 1: same sequence bit. */
+	t = air_in_next_window(inbound_ctrl(1u, false), 1u);
+	fake_radio_advance_to(t + 100u);
+	zassert_equal(RADIANT_TRANSFER_STATE_TX_REPLY, radiant_transfer_state(&xfer));
+	tx = last_arm_of(FAKE_RADIO_ARM_TX);
+	zassert_equal(t + RADIANT_TRANSFER_REPLY_US, tx->t_sync_at);
+	zassert_equal(radiant_ctrl_reply_for(inbound_ctrl(1u, false)),
+		      tx->body[BODY_CTRL]);
+	zassert_equal(2u, n_rx_data, "the retry was delivered a second time");
+	zassert_equal(1u, radiant_transfer_stats(&xfer)->rx_duplicates);
+
+	/* And the burst completes. */
+	(void)send_armed_ack();
+	t = air_in_next_window(inbound_ctrl(2u, true), 2u);
+	fake_radio_advance_to(t + 100u);
+	(void)send_armed_ack();
+	fake_radio_advance_to(radiant_radio_now() + 5000u);
+	zassert_equal(RADIANT_TRANSFER_STATE_IDLE, radiant_transfer_state(&xfer));
+	zassert_equal(3u, n_rx_data);
+	zassert_equal(0u, n_rx_failed);
+	end_of_test();
+}
+
+/* DEAF on packet 1 is "never heard": the window carries on as if empty, so
+ * its terminal repeats our ACK of packet 0, and the peer's retry of packet 1
+ * is delivered then. */
+ZTEST(transfer, test_a_deaf_burst_packet_is_delivered_on_its_retry)
+{
+	const struct fake_radio_arm *rx;
+	const struct fake_radio_arm *tx;
+	radiant_time_t ack0;
+	radiant_time_t t;
+
+	use_planned_ops(RADIANT_REPLY_DEAF, 0);
+	plan_only_call = 2u;
+
+	(void)inbound_open(inbound_ctrl(0u, false));
+	ack0 = send_armed_ack();
+	t = air_in_next_window(inbound_ctrl(1u, false), 1u);
+	rx = last_arm_of(FAKE_RADIO_ARM_RX);
+	fake_radio_advance_to(rx->t_close + 1000u);
+
+	zassert_equal(1u, n_rx_data, "a packet planned DEAF was delivered");
+	zassert_equal(RADIANT_TRANSFER_STATE_TX_REPLY, radiant_transfer_state(&xfer),
+		      "the window's terminal did not repeat the ACK");
+	tx = last_arm_of(FAKE_RADIO_ARM_TX);
+	zassert_equal(ack0 + RADIANT_TRANSFER_REPLY_RETRY_US, tx->t_sync_at);
+	zassert_equal(RADIANT_CTRL_ACK_SEQ1, tx->body[BODY_CTRL],
+		      "the repeat is not packet 0's ACK");
+
+	(void)send_armed_ack();
+	t = air_in_next_window(inbound_ctrl(1u, true), 1u);
+	fake_radio_advance_to(t + 100u);
+	zassert_equal(2u, n_rx_data, "the retry was not delivered");
+	tx = last_arm_of(FAKE_RADIO_ARM_TX);
+	zassert_equal(t + RADIANT_TRANSFER_REPLY_US, tx->t_sync_at);
+	(void)send_armed_ack();
+	fake_radio_advance_to(radiant_radio_now() + 5000u);
+	zassert_equal(RADIANT_TRANSFER_STATE_IDLE, radiant_transfer_state(&xfer));
+	zassert_equal(0u, n_rx_failed);
+	end_of_test();
+}
+#endif /* CONFIG_RADIANT_ACK_FAULTS */

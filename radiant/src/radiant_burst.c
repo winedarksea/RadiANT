@@ -38,7 +38,8 @@
  *   same sequence bit      -> on_data(): re-ACK, don't deliver      TX_REPLY
  *   window closed empty    -> after LAST: done                      IDLE
  *                             else repeat the ACK at +3143          TX_REPLY
- *                             (21 attempts, then rx_failed)         IDLE
+ *                             (cfg.in_ack_repeats, 5 by default,
+ *                             then rx_failed)                       IDLE
  *   broadcast in window    -> rx_failed unless LAST was acked; the
  *                             frame goes back to the owner          IDLE
  * Acknowledged data (LAST with no burst open) goes TX_REPLY -> IDLE, as it
@@ -355,6 +356,16 @@ static int arm_ack_window(struct radiant_transfer *t, radiant_time_t t_data_sync
  * the acknowledgement that packet will need: REPLY_US after the window's late
  * edge at the most, plus the frame.
  */
+/* That reserve also has to cover the ACK REPEAT a window that closes empty
+ * arms (on_next_window(): previous ACK + REPLY_RETRY_US). Measured from the
+ * window's t_close (ack + NEXT_PACKET_US + GUARD) it lands 3143 - 1800 =
+ * 1343 us later, inside the 1810 us reserved; a retuned constant that broke
+ * this would put every repeat outside the grant on an arbitrated build. */
+_Static_assert(RADIANT_TRANSFER_REPLY_RETRY_US <=
+		       RADIANT_TRANSFER_NEXT_PACKET_US + RADIANT_TRANSFER_ACK_GUARD_US +
+			       RADIANT_TRANSFER_REPLY_US + RADIANT_TRANSFER_ACK_GUARD_US,
+	       "the continuation window's reserve no longer covers the ACK repeat");
+
 static int arm_next_window(struct radiant_transfer *t, radiant_time_t ack_t_sync)
 {
 	struct radiant_sched_rx req;
@@ -393,6 +404,24 @@ static bool clear_inbound(struct radiant_transfer *t)
 	return unfinished;
 }
 
+/* cfg.in_ack_repeats resolved: 0 is the default, IN_ACK_REPEATS_NONE is none,
+ * and nothing passes the measured 21-attempt ceiling. */
+static uint8_t in_ack_repeats(const struct radiant_transfer *t)
+{
+	uint8_t r = t->cfg.in_ack_repeats;
+
+	if (r == 0u) {
+		return (uint8_t)RADIANT_TRANSFER_IN_ACK_REPEATS_DEFAULT;
+	}
+	if (r == (uint8_t)RADIANT_TRANSFER_IN_ACK_REPEATS_NONE) {
+		return 0u;
+	}
+	if (r > (uint8_t)(RADIANT_TRANSFER_REPLY_ATTEMPTS_MAX - 1u)) {
+		return (uint8_t)(RADIANT_TRANSFER_REPLY_ATTEMPTS_MAX - 1u);
+	}
+	return r;
+}
+
 static void report_rx_failed(struct radiant_transfer *t)
 {
 	t->stats.rx_failed++;
@@ -416,6 +445,19 @@ static void end_inbound(struct radiant_transfer *t)
 	if (t->cfg.ops != NULL && t->cfg.ops->inbound_ended != NULL) {
 		t->cfg.ops->inbound_ended(t->cfg.ctx);
 	}
+}
+
+int radiant_transfer_follow_reply(struct radiant_transfer *t,
+				  radiant_time_t anchor)
+{
+	t->op = 0u;
+	t->reply_t_sync = anchor;
+	if (arm_next_window(t, anchor) != RADIANT_TRANSFER_OK) {
+		end_inbound(t);
+		return RADIANT_TRANSFER_EIO;
+	}
+	t->state = RADIANT_TRANSFER_STATE_WAIT_NEXT;
+	return RADIANT_TRANSFER_OK;
 }
 
 /* Build and arm one data packet. Leaves the engine untouched on failure, so a
@@ -939,16 +981,10 @@ void radiant_transfer_on_tx_event(struct radiant_transfer *t,
 		radiant_time_t anchor = (e->status == RADIANT_RADIO_STATUS_OK) ?
 						e->t_sync : t->in_ack_at;
 
-		t->op = 0u;
-		t->reply_t_sync = anchor;
 		if (e->status == RADIANT_RADIO_STATUS_OK) {
 			t->stats.acks_sent++;
 		}
-		if (arm_next_window(t, anchor) != RADIANT_TRANSFER_OK) {
-			end_inbound(t);
-			return;
-		}
-		t->state = RADIANT_TRANSFER_STATE_WAIT_NEXT;
+		(void)radiant_transfer_follow_reply(t, anchor);
 		return;
 	}
 
@@ -1018,10 +1054,17 @@ static bool on_next_window(struct radiant_transfer *t,
 		 * acknowledgement was and its retry was too: repeat the saved
 		 * acknowledgement one measured retry interval after the last
 		 * (3143 us, run 0). The peer reads it as stale and retries into
-		 * the window that follows it. The repeat limits are
-		 * radiant_transfer_reply_retransmit()'s; when they run out the
-		 * burst has failed. */
+		 * the window that follows it. At most cfg.in_ack_repeats
+		 * repeats (in_ack_repeats()), inside
+		 * radiant_transfer_reply_retransmit()'s outer limits; when they
+		 * run out the burst has failed. */
 		if (t->in_last_acked) {
+			end_inbound(t);
+			return true;
+		}
+		/* reply_attempts counts the original too, so the repeats made
+		 * so far are reply_attempts - 1. */
+		if ((uint32_t)t->reply_attempts > (uint32_t)in_ack_repeats(t)) {
 			end_inbound(t);
 			return true;
 		}

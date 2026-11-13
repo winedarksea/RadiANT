@@ -74,6 +74,13 @@ _Static_assert(RADIANT_CH_STATE_COUNT <= 255, "state enum outgrew its uint8_t");
 #define CHF_ID_SET               0x01u /* radiant_channel_id_set() has been called */
 #define CHF_ACQUIRED             0x02u /* the acquired ID below is valid */
 #define CHF_CLOSING_FROM_TRACKING 0x04u /* what CLOSING is closing from */
+/* Bits 7:3: periods radiant_channel_catch_up() stepped over since the last
+ * slot heard (skip_get()/skip_set()). In flags, not a byte of its own,
+ * because struct chan sits at exactly its 72 B budget. Saturates at 31, far
+ * past where the guard's ceiling clamps it anyway. */
+#define CHF_SKIP_SHIFT           3u
+#define CHF_SKIP_MASK            0xF8u
+#define CHF_SKIP_MAX             31u
 
 struct chan {
 	/* The next instant this channel wants the radio, as a t_sync (the
@@ -292,6 +299,20 @@ static void guard_reset(struct chan *c)
 	c->lock_slots = 0u;
 }
 
+static uint32_t skip_get(const struct chan *c)
+{
+	return ((uint32_t)c->flags & CHF_SKIP_MASK) >> CHF_SKIP_SHIFT;
+}
+
+static void skip_set(struct chan *c, uint32_t n)
+{
+	if (n > CHF_SKIP_MAX) {
+		n = CHF_SKIP_MAX;
+	}
+	c->flags = (uint8_t)(((uint32_t)c->flags & ~CHF_SKIP_MASK) |
+			     (n << CHF_SKIP_SHIFT));
+}
+
 /* Fold one measured residual into the average. `err_us` is
  * |t_sync - predicted| for a slot whose PREVIOUS slot was also heard - slots
  * after a miss are excluded because their residual covers two or more
@@ -382,6 +403,7 @@ static void chan_finish_close(uint8_t channel, struct chan *c)
 	c->t_search_start = RADIANT_TIME_NEVER;
 	c->miss_count = 0u;
 	c->denied_count = 0u;
+	skip_set(c, 0u);
 	c->flags &= (uint8_t)~(CHF_ACQUIRED | CHF_CLOSING_FROM_TRACKING);
 
 	radiant_channel_event_out(channel, RADIANT_CH_EVENT_CHANNEL_CLOSED);
@@ -632,6 +654,7 @@ radiant_channel_err_t radiant_channel_open(uint8_t channel, uint16_t offset,
 
 	c->miss_count = 0u;
 	c->denied_count = 0u;
+	skip_set(c, 0u);
 	c->flags &= (uint8_t)~(CHF_ACQUIRED | CHF_CLOSING_FROM_TRACKING);
 
 	return RADIANT_CH_OK;
@@ -1357,8 +1380,14 @@ uint32_t radiant_channel_guard_us(uint8_t channel)
 	 * given the air, so a denial is charged at the same rate as a miss. The
 	 * sum is bounded - RX_FAIL_TO_SEARCH (8) and DENY_TO_SEARCH (16) each
 	 * promote to SEARCHING before their term can exceed the ceiling - and
-	 * the clamp below covers any interleaving of the two. */
-	guard += (uint32_t)(c->miss_count + c->denied_count) * drift;
+	 * the clamp below covers any interleaving of the two.
+	 *
+	 * A THIRD, SAME WEIGHT: periods radiant_channel_catch_up() stepped
+	 * over during an inbound burst were extrapolated with no fresh sync
+	 * too - the master was there, but nothing measured where. Unlike the
+	 * other two it is never evidence for SEARCHING; the clamp bounds it. */
+	guard += ((uint32_t)c->miss_count + (uint32_t)c->denied_count +
+		  skip_get(c)) * drift;
 
 	if (guard > guard_ceiling_us(c)) {
 		guard = guard_ceiling_us(c);
@@ -1550,7 +1579,7 @@ void radiant_channel_on_slot(uint8_t channel, radiant_time_t t_sync)
 	 * perfectly.
 	 */
 	if (c->miss_count == 0u && c->denied_count == 0u &&
-	    c->t_next != RADIANT_TIME_NEVER) {
+	    skip_get(c) == 0u && c->t_next != RADIANT_TIME_NEVER) {
 		guard_observe(c, (t_sync > c->t_next) ? (t_sync - c->t_next)
 						     : (c->t_next - t_sync));
 	}
@@ -1564,6 +1593,7 @@ void radiant_channel_on_slot(uint8_t channel, radiant_time_t t_sync)
 	/* A slot heard is a fresh sync, retiring every period of extrapolation
 	 * behind it - whichever counter charged it. */
 	c->denied_count = 0u;
+	skip_set(c, 0u);
 }
 
 void radiant_channel_on_acquired(uint8_t channel, const struct radiant_channel_id *id,
@@ -1593,6 +1623,7 @@ void radiant_channel_on_acquired(uint8_t channel, const struct radiant_channel_i
 	c->t_next = t_sync + period_us(c);
 	c->miss_count = 0u;
 	c->denied_count = 0u;
+	skip_set(c, 0u);
 	/* A newly acquired master is one nothing has been measured about; the
 	 * previous master's clock is not evidence about this one. */
 	guard_reset(c);
@@ -1660,6 +1691,7 @@ bool radiant_channel_on_slot_missed(uint8_t channel, radiant_time_t now)
 	c->flags &= (uint8_t)~CHF_ACQUIRED;
 	c->miss_count = 0u;
 	c->denied_count = 0u;
+	skip_set(c, 0u);
 	c->t_search_start = c->t_next;
 	c->search_credit = 0u;
 	/* An average built while the channel knew where the master was is not
@@ -1746,6 +1778,7 @@ void radiant_channel_catch_up(uint8_t channel, radiant_time_t earliest)
 {
 	struct chan *c;
 	radiant_time_t p;
+	radiant_time_t n;
 
 	if (!ch_valid(channel)) {
 		return;
@@ -1765,7 +1798,11 @@ void radiant_channel_catch_up(uint8_t channel, radiant_time_t earliest)
 		return;
 	}
 	/* Whole periods, in one step: the phase stays the master's. */
-	c->t_next += ((earliest - c->t_next + p - 1u) / p) * p;
+	n = (earliest - c->t_next + p - 1u) / p;
+	c->t_next += n * p;
+	/* Charged to the guard only (radiant_channel_guard_us()), never as a
+	 * miss: each period stepped over is one more of extrapolation. */
+	skip_set(c, skip_get(c) + (uint32_t)((n > CHF_SKIP_MAX) ? CHF_SKIP_MAX : n));
 }
 
 uint8_t radiant_channel_denied_count(uint8_t channel)

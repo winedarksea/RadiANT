@@ -294,11 +294,32 @@ extern "C" {
  * Run 0 measured a NON-FINAL 0xD2 repeat, never a final acknowledgement, so
  * a burst whose LAST was acknowledged ends on its first empty window rather
  * than repeating the final acknowledgement.
+ *
+ * How MANY repeats inside a burst is struct radiant_transfer_cfg's
+ * in_ack_repeats, by default RADIANT_TRANSFER_IN_ACK_REPEATS_DEFAULT (5), not
+ * the measured 20: a peer gives up after its own five retries, so repeats
+ * past five only hold the radio (~66 ms at 20) for a burst that is over.
+ * RADIANT_TRANSFER_REPLY_ATTEMPTS_MAX stays the outer ceiling.
  */
 #define RADIANT_TRANSFER_REPLY_RETRY_US  3143u
 /* ATTEMPTS, not retransmissions: the measured 21 is one original plus twenty
- * repeats, and counting it the other way is how a limit ends up one off. */
+ * repeats, and counting it the other way is how a limit ends up one off.
+ * Still the limit of radiant_transfer_reply_retransmit() (an idle engine's
+ * repeat of acknowledged data), and the ceiling in_ack_repeats is clamped to. */
 #define RADIANT_TRANSFER_REPLY_ATTEMPTS_MAX 21u
+
+/*
+ * Repeats of our acknowledgement inside a stalled inbound burst (empty
+ * continuation windows in a row, after the original) before the burst is
+ * declared failed. Named after the peer's limit: an originator retries a
+ * packet RADIANT_TRANSFER_TX_RETRIES_MAX times and then fails its transfer,
+ * so one repeat per retry it can still make is enough. Used when
+ * cfg.in_ack_repeats is 0.
+ */
+#define RADIANT_TRANSFER_IN_ACK_REPEATS_DEFAULT RADIANT_TRANSFER_TX_RETRIES_MAX
+/* cfg.in_ack_repeats value for "no repeats": the burst ends on its first
+ * empty window. Not 0, which a zeroed cfg means as "the default". */
+#define RADIANT_TRANSFER_IN_ACK_REPEATS_NONE 0xFFu
 
 /*
  * How long after the original acknowledgement a retransmission may still be
@@ -518,9 +539,14 @@ enum radiant_reply_action {
 	/* Acknowledge at t_sync + RADIANT_TRANSFER_REPLY_US + offset_us. */
 	RADIANT_REPLY_ACK = 0,
 	/* Deliver the payload (rx_data) and arm nothing: the command was
-	 * applied and its acknowledgement was lost. */
+	 * applied and its acknowledgement was lost. Inside an inbound burst
+	 * the engine still records the packet and opens the next window, as
+	 * after a sent acknowledgement, so the peer's retry is re-acknowledged
+	 * and not delivered twice. */
 	RADIANT_REPLY_MUTE,
-	/* Neither: the command was never heard. */
+	/* Neither: the command was never heard. Inside an inbound burst the
+	 * continuation window carries on as if it had stayed empty (its
+	 * terminal repeats the last acknowledgement). */
 	RADIANT_REPLY_DEAF
 };
 
@@ -640,6 +666,15 @@ struct radiant_transfer_cfg {
 	 * Defaults to false (zeroed cfg), which is every other channel type.
 	 */
 	bool rx_only;
+
+	/*
+	 * Repeats of our acknowledgement inside a stalled inbound burst before
+	 * it fails, RADIANT_TRANSFER_REPLY_RETRY_US apart. 0 means
+	 * RADIANT_TRANSFER_IN_ACK_REPEATS_DEFAULT; RADIANT_TRANSFER_IN_ACK_
+	 * REPEATS_NONE means none; anything above
+	 * RADIANT_TRANSFER_REPLY_ATTEMPTS_MAX - 1 is clamped to that.
+	 */
+	uint8_t in_ack_repeats;
 
 	const struct radiant_transfer_ops *ops;
 	void                          *ctx;
@@ -969,7 +1004,8 @@ int radiant_transfer_on_data(struct radiant_transfer *t, const struct radiant_fr
  * engine busy, or limit reached) or RADIANT_TRANSFER_EIO.
  *
  * IDLE only. Inside an inbound burst the engine repeats its acknowledgement
- * itself, from WAIT_NEXT, under the same limits.
+ * itself, from WAIT_NEXT, up to cfg.in_ack_repeats times and never past these
+ * limits.
  */
 int radiant_transfer_reply_retransmit(struct radiant_transfer *t, radiant_time_t t_sync_at);
 
@@ -1052,6 +1088,17 @@ int radiant_transfer_arm_tx(struct radiant_transfer *t, uint8_t ctrl,
  */
 int radiant_transfer_reply_repeat(struct radiant_transfer *t,
 				  radiant_time_t t_sync_at);
+
+/*
+ * Inside an inbound burst, after our acknowledgement went out (or should have,
+ * at `anchor`): arm the window for the peer's next packet and move to
+ * WAIT_NEXT. On failure the burst is ended (ops->rx_failed if unfinished,
+ * ops->inbound_ended) and EIO returned, so the caller has nothing to undo.
+ * Shared by the TX_REPLY completion (radiant_burst.c) and the fault seam's
+ * MUTE (radiant_ack.c, CONFIG_RADIANT_ACK_FAULTS).
+ */
+int radiant_transfer_follow_reply(struct radiant_transfer *t,
+				  radiant_time_t anchor);
 
 /*
  * Change the transmit power of every packet this engine sends from its next

@@ -2141,3 +2141,64 @@ ZTEST(radiant_channel, test_an_unrecognised_channel_type_is_accepted)
 
 	radio_clean();
 }
+
+/* An inbound burst longer than a period: the owner steps the slot clock over
+ * the periods it spent on the burst (radiant_channel_catch_up()). The master
+ * kept transmitting, so that is no miss - but nothing re-synced through those
+ * periods, so the guard must widen by one drift quantum per period stepped
+ * over, and come straight back once a slot is heard. Without it the first
+ * window after a long burst was the narrow one, sized for a single period of
+ * drift. */
+ZTEST(radiant_channel, test_guard_widens_for_periods_a_burst_stepped_over)
+{
+	radiant_time_t t0;
+	radiant_time_t next;
+	radiant_time_t period;
+	uint32_t narrow;
+	uint32_t resid;
+	uint8_t i;
+
+	up();
+	t0 = radiant_radio_now();
+	acquire_slave(1u, t0);
+	(void)clean_slots(1u, 64u, 3);
+
+	next = clean_slots(1u, 1u, 3);
+	period = radiant_channel_next_slot(1u) - next;
+	next = radiant_channel_next_slot(1u);
+	narrow = radiant_channel_guard_us(1u);
+	resid = radiant_channel_residual_us(1u);
+
+	/* A burst that ran three periods past the next slot. */
+	radiant_channel_catch_up(1u, next + 2u * period + 1u);
+	zassert_equal(next + 3u * period, radiant_channel_next_slot(1u),
+		      "stepped off the master's grid");
+	zassert_equal(narrow + 3u * RADIANT_CHANNEL_DRIFT_WORST_US,
+		      radiant_channel_guard_us(1u),
+		      "three periods stepped over, guard %u from %u",
+		      radiant_channel_guard_us(1u), narrow);
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(1u));
+
+	/* The slot after them is heard, but it was predicted across the
+	 * stepped-over periods, so it must not feed the clock estimator - a
+	 * 40 us error here is our extrapolation, not the master's clock. */
+	(void)clean_slots(1u, 1u, 40);
+	zassert_equal(resid, radiant_channel_residual_us(1u),
+		      "an extrapolated slot fed the estimator");
+	zassert_equal(narrow, radiant_channel_guard_us(1u),
+		      "a heard slot must retire the stepped-over periods");
+
+	/* Never search evidence: after another long burst the full RX_FAIL
+	 * budget is still there - seven misses stay TRACKING, as without it. */
+	next = radiant_channel_next_slot(1u);
+	radiant_channel_catch_up(1u, next + 20u * period);
+	for (i = 1u; i < RADIANT_CHANNEL_RX_FAIL_TO_SEARCH; i++) {
+		zassert_false(radiant_channel_on_slot_missed(1u, radiant_radio_now()),
+			      "miss %u promoted to search after a burst", i);
+	}
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(1u));
+
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()),
+		      NULL);
+	radio_clean();
+}

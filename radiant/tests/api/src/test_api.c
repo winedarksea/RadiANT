@@ -3568,11 +3568,24 @@ ZTEST(api, test_a_burst_longer_than_eight_periods_does_not_drop_to_search)
 	const uint32_t               n = 30u;
 	uint16_t                     dev;
 	uint32_t                     k;
+	uint32_t                     narrow;
 
 	open_and_acquire_slave_with_period(period, &dev);
 	/* The pump, without run_housekeeping()'s idle assertion: at this
 	 * period the first tracked window may already be armed. */
 	k_sleep(K_MSEC(3 * RADIANT_API_HOUSEKEEP_MS));
+	/* Lock the guard estimator on a clean master first, so the window
+	 * after the burst is the narrow one unless the burst widened it. */
+	for (k = 0u; k < 2u * RADIANT_CHANNEL_GUARD_LOCK_SLOTS; k++) {
+		const struct fake_radio_arm *w = await_tracked_window(dev);
+
+		air_tracked_frame(w, dev);
+		fake_radio_advance_to(w->t_close + 1u);
+		drain();
+	}
+	narrow = radiant_channel_guard_us(CH);
+	zassert_true(narrow < 150u,
+		     "setup: the guard did not narrow below 150 us (%u)", narrow);
 	memset(msglog, 0, sizeof(msglog));
 	n_msg = 0u;
 
@@ -3591,6 +3604,29 @@ ZTEST(api, test_a_burst_longer_than_eight_periods_does_not_drop_to_search)
 	zassert_true(radiant_channel_next_slot(CH) > radiant_radio_now(),
 		     "the slot clock was left in the past");
 
+	/* The periods the burst stepped over went unmeasured, so the first
+	 * window after it is wide: a master 150 us off the extrapolated grid
+	 * (outside the narrow guard) is still heard. */
+	{
+		const struct fake_radio_arm *w = await_tracked_window(dev);
+		radiant_time_t slot = w->t_open + ((w->t_close - w->t_open) / 2u);
+		uint8_t frame[FAKE_RADIO_AIR_FRAME_MAX];
+		uint8_t len = fake_radio_build_ant_frame(frame, dev, 0x0Bu, 5u,
+							 peer_payload);
+
+		zassert_true(w->t_close > slot + 150u,
+			     "the window after a long burst is still narrow "
+			     "(+/-%u us)", (unsigned)(w->t_close - slot));
+		zassert_equal(RADIANT_RADIO_OK_RC,
+			      fake_radio_air_frame(slot + 150u, frame, len));
+		fake_radio_advance_to(w->t_close + 1u);
+		drain();
+	}
+	zassert_equal(1u, count_bcast_on(CH),
+		      "a master 150 us off-grid after the burst was not heard");
+	zassert_equal(narrow, radiant_channel_guard_us(CH),
+		      "the guard did not come back after a heard slot");
+
 	/* And the master is heard again on its own grid. */
 	for (k = 0u; k < 2u; k++) {
 		const struct fake_radio_arm *w = await_tracked_window(dev);
@@ -3599,23 +3635,47 @@ ZTEST(api, test_a_burst_longer_than_eight_periods_does_not_drop_to_search)
 		fake_radio_advance_to(w->t_close + 1u);
 		drain();
 	}
-	zassert_equal(2u, count_bcast_on(CH),
+	zassert_equal(3u, count_bcast_on(CH),
 		      "the master's broadcasts after the burst were not heard");
 	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH));
 
 	end_of_test();
 }
 
-/* Sanity, not priority: a second, broadcast-only channel keeps tracking while
- * the first follows a burst. */
+/*
+ * A second, broadcast-only channel whose slot falls INSIDE the first channel's
+ * burst, by construction: channel 1 is acquired on a phase that puts its slot
+ * BURST_OVERLAP_US after channel 0's, and the burst opens on channel 0's slot.
+ * Contention is then certain, not a matter of where two acquisitions happened
+ * to land (the test this replaced never checked that they overlapped at all).
+ *
+ * The rule pinned: the burst's acknowledgements win. air_inbound_burst()
+ * asserts every ACK at its instant, so a tracked window that displaced one
+ * fails the test there. Channel 1 may lose the one overlapped slot, no more:
+ * it stays TRACKING and hears the two slots after it.
+ */
+#define BURST_OVERLAP_US \
+	(RADIANT_TRANSFER_OPENER_REPLY_US + 2u * RADIANT_TRANSFER_PACKET_US)
+
 ZTEST(api, test_a_second_channel_keeps_tracking_across_a_burst)
 {
-	const struct fake_radio_arm *w;
+	const struct fake_radio_arm *w = NULL;
+	const uint32_t               n = 9u;
 	uint16_t                     dev_a;
 	uint16_t                     dev_b;
-	uint32_t                     before;
+	radiant_time_t               g0;
+	radiant_time_t               t_b = 0u;
+	radiant_time_t               t0;
+	radiant_time_t               slot_b;
+	uint32_t                     tries;
+
+	zassert_true(BURST_OVERLAP_US + 1000u <
+			     RADIANT_TRANSFER_OPENER_REPLY_US +
+				     (n - 1u) * RADIANT_TRANSFER_PACKET_US,
+		     "setup: the overlap is not inside the burst");
 
 	open_and_acquire_slave_of_type((uint8_t)ANTW_CHANNEL_TYPE_SLAVE, &dev_a);
+	g0 = radiant_channel_next_slot(CH);
 
 	zassert_ok(antr_channel_assign(1u, (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
 				       0u, 0u));
@@ -3623,26 +3683,69 @@ ZTEST(api, test_a_second_channel_keeps_tracking_across_a_burst)
 	zassert_ok(antr_channel_period_set(1u, RADIANT_CHANNEL_PERIOD_ANT_PLUS));
 	zassert_ok(antr_channel_radio_freq_set(1u, RF_INDEX));
 	zassert_ok(antr_channel_open(1u));
-	w = armed_search_window();
-	air_device(w, 1u, 0x0600u, 0x0Bu, 1000u, &dev_b);
+
+	/* Find a search window holding an instant on channel 0's grid plus
+	 * the overlap; a channel acquired there has its slots on that phase. */
+	for (tries = 0u; tries < 256u; tries++) {
+		const struct fake_radio_arm *c = last_arm_of(FAKE_RADIO_ARM_RX);
+
+		if (c != NULL && !c->terminated && c->n_filters >= 2u &&
+		    c->t_open > radiant_radio_now()) {
+			radiant_time_t lo = c->t_open + 1000u;
+			radiant_time_t hi = c->t_close - 1000u;
+			radiant_time_t base = g0 + BURST_OVERLAP_US;
+
+			if (base < lo) {
+				base += ((lo - base + PERIOD_US - 1u) / PERIOD_US) *
+					PERIOD_US;
+			} else {
+				base -= ((base - lo) / PERIOD_US) * PERIOD_US;
+			}
+			if (hi > lo && base <= hi) {
+				w = c;
+				t_b = base;
+				break;
+			}
+		}
+		if (!fake_radio_step()) {
+			break;
+		}
+		drain();
+	}
+	zassert_not_null(w, "setup: no search window reaches the chosen phase");
+	air_device(w, 1u, 0x0600u, 0x0Bu, (uint32_t)(t_b - w->t_open), &dev_b);
 	fake_radio_advance_to(w->t_close + 1u);
 	drain();
 	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(1u),
 		      "setup: channel 1 did not acquire");
-	air_repeating(dev_b, 0x0Bu, w->t_open + 1000u + PERIOD_US, 12u);
+	air_repeating(dev_b, 0x0Bu, t_b + PERIOD_US, 16u);
 
-	(void)air_inbound_burst(dev_a, 9u, 9u);
-	fake_radio_advance(3000u);
-	drain();
-	zassert_equal(9u, count_msgs((uint8_t)ANTW_MESG_BURST_DATA_ID));
-
+	/* Start counting at channel 0's slot, so channel 1's slot a period
+	 * before the overlap is not in the count. */
+	(void)await_tracked_window(dev_a);
 	memset(msglog, 0, sizeof(msglog));
 	n_msg = 0u;
-	before = count_bcast_on(1u);
-	run_virtual_us(4u * (uint64_t)PERIOD_US);
-	zassert_true(count_bcast_on(1u) >= before + 3u,
-		     "channel 1 heard %u broadcasts in four periods after the "
-		     "burst", count_bcast_on(1u) - before);
+	t0 = air_inbound_burst(dev_a, n, n);
+	fake_radio_advance(3000u);
+	drain();
+
+	/* The overlap really happened: channel 1's slot is inside the burst. */
+	slot_b = t0 + BURST_OVERLAP_US;
+	zassert_equal(0u, (uint32_t)((slot_b - t_b) % PERIOD_US),
+		      "setup: channel 1's slot is not at the chosen phase");
+	zassert_equal(n, count_msgs((uint8_t)ANTW_MESG_BURST_DATA_ID),
+		      "the burst lost packets to the second channel");
+	zassert_equal(-1, index_of_channel_event(CH, ANTW_EVENT_TRANSFER_RX_FAILED));
+
+	/* Through the overlapped slot and the two after it. */
+	run_virtual_us((uint64_t)(slot_b + 2u * PERIOD_US + 5000u -
+				  radiant_radio_now()));
+	zassert_true(count_bcast_on(1u) >= 2u,
+		     "channel 1 heard %u of its three slots from the overlap on",
+		     count_bcast_on(1u));
+	zassert_true(count_channel_events(1u, ANTW_EVENT_RX_FAIL) <= 1u,
+		     "channel 1 lost %u slots to one burst",
+		     count_channel_events(1u, ANTW_EVENT_RX_FAIL));
 	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(1u));
 
 	(void)antr_channel_close(1u);
