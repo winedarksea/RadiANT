@@ -542,7 +542,10 @@ int radiant_sec_tx_transform(uint8_t ch, uint8_t *pay, uint8_t len,
  *   RADIANT_SEC_RX_DROP   refused and counted. A non-broadcast frame carrying
  *                         a secured-range page lands here, which is what stops
  *                         an injector skipping the MAC by sending acknowledged
- *                         data instead of a broadcast
+ *                         data instead of a broadcast; so does a secured-range
+ *                         broadcast heard on a MASTER channel, which no
+ *                         legitimate slave sends and which would otherwise
+ *                         reach the epoch the master transmits under
  */
 #define RADIANT_SEC_RX_PLAIN 0
 #define RADIANT_SEC_RX_DEFER 1
@@ -719,6 +722,15 @@ struct radiant_sec_stats {
 	uint32_t dropped_replay;
 	uint32_t dropped_policy;
 	uint32_t epoch_advances;
+	/*
+	 * Secured-range broadcasts refused because this channel TRANSMITS: heard
+	 * on a master channel (the pump also refuses, uncounted, anything queued
+	 * for a context whose TX has latched). A legitimate slave never sends one on a secured channel, so
+	 * each is a forgery or the master's own window reflected back - and
+	 * accepted, one could move the epoch the master transmits under
+	 * (docs/radiant-security.md 7.6).
+	 */
+	uint32_t dropped_direction;
 	/*
 	 * COMPLETED PAIRINGS ON THIS CHANNEL (docs/radiant-security.md 11.7) -
 	 * a security signal, not a diagnostic. Adding a receiver to a group

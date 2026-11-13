@@ -429,3 +429,152 @@ ZTEST(api, test_sec_an_unsecured_channel_reports_clear)
 		      radiant_sec_last_verdict(SEC_CH));
 	zassert_false(radiant_sec_channel_is_secured(SEC_CH));
 }
+
+#if defined(CONFIG_RADIANT_SEC)
+/*
+ * Review 2026-11-13 item 2: a secured MASTER refuses secured-range pages.
+ * Its RX shares the epoch and keys its TX uses, so a forged broadcast heard
+ * in its reply window - in the last 127 slots before a wrap, one with a chosen
+ * counter byte - used to advance that epoch for good, and its own windows
+ * reflected back verified. Now ingest drops them before the pump, counted in
+ * dropped_direction, while plain pages (slave replies) still reach the host.
+ *
+ * The fake clock cannot put a master 65 400 slots into an epoch (that is
+ * ~4.5 h of fake_radio time), so the near-wrap advance itself is asserted in
+ * test_sec.c; here the forged byte is expected + 127, the most an attacker can
+ * reach, and the assertions are that it never reaches the pump at all.
+ */
+
+uint32_t api_test_count_bcast(uint8_t ch, uint8_t page);
+
+static const uint8_t sec_dir_root[16] = {
+	0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+	0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+};
+
+/* A secured master that has transmitted (its TX latched); returns the instant
+ * of the slot whose reply window the tests speak into. */
+static radiant_time_t sec_dir_master(const struct fake_radio_arm **tx_out)
+{
+	const struct fake_radio_arm *tx;
+	int                          rc[4];
+
+	sec_open((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	k_mutex_lock(&api_lock, K_FOREVER);
+	rc[0] = radiant_sec_set_key(SEC_CH, sec_dir_root, 128, SEC_DEVNUM);
+	rc[1] = radiant_sec_set_devnum(SEC_CH, SEC_DEVNUM);
+	rc[2] = radiant_sec_configure(SEC_CH, RADIANT_SEC_SW_AUTH, 2u,
+				      RADIANT_SEC_PAGE_LO_DEFAULT,
+				      RADIANT_SEC_PAGE_HI_DEFAULT);
+	rc[3] = radiant_sec_set_epoch(SEC_CH, 1u, 0u, 8182u);
+	k_mutex_unlock(&api_lock);
+	for (int i = 0; i < 4; i++) {
+		zassert_equal(RADIANT_SEC_OK, rc[i], "setup step %d", i);
+	}
+	zassert_true(radiant_sec_channel_is_secured(SEC_CH));
+
+	sec_write();
+	sec_run_slot();
+	sec_write();
+	tx = sec_last_tx();
+	zassert_not_null(tx);
+	if (tx_out != NULL) {
+		*tx_out = tx;
+	}
+	return tx->t_sync_at;
+}
+
+/* A slave's broadcast with payload `pay`, aired in the master's reply window
+ * after slot `t_tx`, and the turnaround run out. */
+static void sec_dir_air(radiant_time_t t_tx, const uint8_t pay[8])
+{
+	uint8_t frame[SEC_AIR_LEN];
+
+	sec_build_peer_frame(frame, RADIANT_CTRL_SLAVE_BROADCAST);
+	memcpy(&frame[7], pay, 8u);
+	fake_radio_advance_to(t_tx + 1u);
+	zassert_equal(RADIANT_RADIO_OK_RC,
+		      fake_radio_air_frame(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US,
+					   frame, SEC_AIR_LEN));
+	fake_radio_advance_to(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US +
+			      RADIANT_TRANSFER_REPLY_US + 10u);
+}
+
+static void sec_dir_read(struct radiant_sec_stats *st,
+			 struct radiant_sec_state *state)
+{
+	k_mutex_lock(&api_lock, K_FOREVER);
+	radiant_sec_pump();
+	radiant_sec_get_stats(SEC_CH, st);
+	radiant_sec_get_state(SEC_CH, state);
+	k_mutex_unlock(&api_lock);
+}
+
+ZTEST(api, test_sec_a_master_refuses_a_forged_secured_page)
+{
+	struct radiant_sec_stats st;
+	struct radiant_sec_state state;
+	radiant_time_t           t_tx;
+	uint8_t                  forged[8] = { 0x05u, 0x00u, 1, 2, 3, 4, 5, 6 };
+
+	t_tx = sec_dir_master(NULL);
+	sec_dir_read(&st, &state);
+	/* expected + 127: the counter byte that resolves furthest ahead. */
+	forged[1] = (uint8_t)(state.expected_index + 127u);
+
+	sec_dir_air(t_tx, forged);
+	sec_dir_read(&st, &state);
+
+	zassert_equal(1u, st.dropped_direction,
+		      "the forged page was not refused as a master's RX");
+	zassert_equal(1u, state.epoch, "the forged page moved the epoch");
+	zassert_equal(0u, st.epoch_advances);
+	zassert_equal(0u, st.windows_verified + st.windows_unverified,
+		      "the forged page reached the window machinery");
+	zassert_equal(0u, api_test_count_bcast(SEC_CH, 0x05u),
+		      "the forged page reached the host");
+	sec_close();
+}
+
+ZTEST(api, test_sec_a_masters_own_window_reflected_back_is_not_delivered)
+{
+	const struct fake_radio_arm *tx;
+	struct radiant_sec_stats     st;
+	struct radiant_sec_state     state;
+	radiant_time_t               t_tx;
+	uint8_t                      own[8];
+
+	t_tx = sec_dir_master(&tx);
+	memcpy(own, &tx->body[SEC_BODY_D0], sizeof(own));
+	zassert_equal(sec_payload[0], own[0], "not a secured page");
+
+	/* The master's own bytes, played back into its own reply window. */
+	sec_dir_air(t_tx, own);
+	sec_dir_read(&st, &state);
+
+	zassert_equal(1u, st.dropped_direction);
+	zassert_equal(0u, st.windows_verified,
+		      "a reflected window verified at the master");
+	zassert_equal(0u, api_test_count_bcast(SEC_CH, own[0]),
+		      "the reflected page reached the host");
+	sec_close();
+}
+
+ZTEST(api, test_sec_a_plain_slave_broadcast_still_reaches_a_secured_master)
+{
+	struct radiant_sec_stats st;
+	struct radiant_sec_state state;
+	radiant_time_t           t_tx;
+	/* 0x50, a common page: outside every secured range. */
+	const uint8_t            plain[8] = { 0x50u, 0xFFu, 0xFFu, 1, 2, 3, 4, 5 };
+
+	t_tx = sec_dir_master(NULL);
+	sec_dir_air(t_tx, plain);
+	sec_dir_read(&st, &state);
+
+	zassert_equal(1u, api_test_count_bcast(SEC_CH, 0x50u),
+		      "a plain slave reply no longer reaches the host");
+	zassert_equal(0u, st.dropped_direction);
+	sec_close();
+}
+#endif /* CONFIG_RADIANT_SEC */

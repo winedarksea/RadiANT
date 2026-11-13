@@ -1014,6 +1014,16 @@ int radiant_sec_rx_ingest(uint8_t ch, const uint8_t *pay, uint8_t len,
 		stat_bump(&c->stats.dropped_non_broadcast);
 		return RADIANT_SEC_RX_DROP;
 	}
+	/* Review 2026-11-13 item 2: a master's RX shares the epoch and keys its
+	 * TX uses, and no legitimate slave sends a secured-range broadcast on
+	 * a secured channel. Taken, a forged one near a wrap advanced the
+	 * master's epoch for good, and the master's own windows reflected back
+	 * verified (the nonce carries no direction). Refused here, behind the
+	 * armed and range tests, so an unsecured channel pays nothing. */
+	if (radiant_channel_is_master(ch)) {
+		stat_bump(&c->stats.dropped_direction);
+		return RADIANT_SEC_RX_DROP;
+	}
 
 	key = k_spin_lock(&sec_q_lock);
 	if (sec_q_count == SEC_QUEUE_DEPTH) {
@@ -1223,7 +1233,10 @@ static void rx_process(struct sec_pkt *pkt)
 	uint16_t        epoch_delta = 0u;
 	uint16_t        start;
 
-	if (!ctx_armed(c) || pkt->len < SEC_PAGE_BYTES) {
+	/* tx_latched: defence in depth behind the master refusal at ingest
+	 * (which counts it) - nothing on the RX path may move the epoch of a
+	 * context that transmits. */
+	if (!ctx_armed(c) || pkt->len < SEC_PAGE_BYTES || c->tx_latched) {
 		return;
 	}
 

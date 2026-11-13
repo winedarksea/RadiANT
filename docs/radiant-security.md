@@ -1092,6 +1092,25 @@ The floor is cleared wherever the window state is (`0xF3`, configure, a
 `try_devnum` trial, a wrap). It costs 2 B per context, in an alignment hole, and
 doubles as the "has a verified window re-anchored yet" flag of section 3.1.
 
+**A master refuses secured pages.** A master's RX shares its context with its
+TX: the same epoch, the same keys. If it ran the RX path on a broadcast heard in
+its reply window, one forged packet in the last ~128 slots before a wrap would
+advance the shared epoch early, TX would advance again at its own wrap, and the
+master would sit one epoch ahead of every receiver until a new `0xF3`. A
+receiver heals from an early advance in about 32 s; a master would not. And the
+nonce carries no direction, so a master's own windows reflected back to it
+would verify. Both are closed the same way: a legitimate slave never sends a
+secured-range broadcast on a secured channel (the port keeps a slave's
+broadcast off one), so `radiant_sec_rx_ingest()` drops any secured-range
+broadcast heard on a master channel, before it is queued, and counts it in
+`0xF4`'s `dropped_direction` (`[26..27]`). Plain pages, the descriptor and the
+common pages still flow, so slave replies keep working, and an unsecured
+channel pays nothing extra: the check sits behind the armed and page-range
+tests. As defence in depth the pump refuses any context that has latched TX,
+so no RX path can move a transmitting context's epoch. Reflection is therefore
+closed by the master refusal, **not** by a direction bit in the nonce; the
+nonce layout is unchanged.
+
 What the floor and the verified-only anchor of section 3.1 still leave open,
 stated rather than fixed:
 
@@ -1101,7 +1120,8 @@ stated rather than fixed:
   UNVERIFIED (or dropped, under the policy) until its own wrap, at most about
   32 s, and the link heals by itself: there is no permanent desync. The only way
   to prevent it is to trial-verify under both epochs, which costs two KDFs per
-  forged packet. That is a compute DoS, which is worse.
+  forged packet. That is a compute DoS, which is worse. This is a
+  receiver-only limit: a master never runs secured RX at all (below).
 - **The first verified window after a reset** can still be a genuine window
   replayed up to 128 periods late. That is the existing slack, once per reset.
 - **Forged packets can still close or break an open window.** That is

@@ -849,7 +849,9 @@ def check_radiant_security(dev, reader) -> list[str]:
         print(f"  -- not compiled in (CONFIG_RADIANT_SEC_HOST_MESSAGES=n, "
               f"the shipping default); status request answered {got}")
         return []
-    if len(got) < ant_sec.STATUS_LEN:
+    # The oldest versioned layout is still accepted: the length says which
+    # fields a reply carries (the version stays 1 through the beta).
+    if len(got) < ant_sec.STATUS_LEN_V1_26:
         print(f"  FAIL: status reply is {len(got)} bytes, want "
               f"{ant_sec.STATUS_LEN}: {got.hex()}")
         return ["radiant security: status reply misframed"]
@@ -863,7 +865,9 @@ def check_radiant_security(dev, reader) -> list[str]:
           f"switches={ant_sec.switches_str(st.switches)} "
           f"W={st.w} pages=0x{st.page_lo:02X}..0x{st.page_hi:02X} "
           f"epoch={st.epoch} verdict={ant_sec.verdict_str(st.verdict)} "
-          f"enrolments={st.enrolments}")
+          f"enrolments={st.enrolments}"
+          + ("" if st.dropped_direction is None
+             else f" dropped_direction={st.dropped_direction}"))
 
     problems = []
 

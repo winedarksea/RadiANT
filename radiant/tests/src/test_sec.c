@@ -2125,3 +2125,39 @@ ZTEST(radiant_sec, test_a_multi_wrap_gap_waits_for_a_ceiling_that_covers_it)
 					    slot_t(3u * 65536u + 1u)));
 	zassert_equal(10u, tx_epoch_now(TX_CH));
 }
+
+/*
+ * Item 2, defence in depth: whatever reaches the pump for a context whose TX
+ * has latched is refused, so no RX path can move the epoch the
+ * channel transmits under. The forged page resolves past the wrap - taken, it
+ * would advance the shared epoch one wrap early.
+ */
+ZTEST(radiant_sec, test_the_pump_refuses_a_context_that_transmits)
+{
+	struct radiant_sec_stats st;
+	uint8_t                  pay[8];
+	uint8_t                  forged[8] = { TEST_PAGE, 0x00, 1, 2, 3, 4, 5, 6 };
+
+	key_both();
+	configure_both(RADIANT_SEC_SW_AUTH, 2u);
+	epoch_both(7u);
+	tx_air(0u, pay);
+
+	/* Channel 0 is not a radiant_channel master in this image, so ingest
+	 * takes it; the pump must not. */
+	zassert_equal(RADIANT_SEC_RX_DEFER,
+		      radiant_sec_rx_ingest(TX_CH, forged, 8u, true,
+					    slot_t(65536u - 1u)));
+	radiant_sec_pump();
+
+	zassert_equal(7u, tx_epoch_now(TX_CH),
+		      "an RX packet moved a transmitting context's epoch");
+	zassert_equal(0u, log_n_pkt, "a refused packet was delivered");
+	radiant_sec_get_stats(TX_CH, &st);
+	/* Uncounted here: the ingest-side master refusal is the counted one. */
+	zassert_equal(0u, st.epoch_advances);
+
+	/* And the receiver beside it is untouched by the guard. */
+	hop(1u, false, -1);
+	zassert_equal(1u, log_n_pkt);
+}

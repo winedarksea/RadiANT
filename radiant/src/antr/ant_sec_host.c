@@ -254,6 +254,9 @@ antr_err_t antr_sec_status_get(uint8_t channel, uint8_t *out, uint8_t out_len)
 	 * alike. An enrolment the owner did not perform is the attack this
 	 * exists to show. */
 	put_u16_sat(&out[24], stats.enrolments);
+	/* Secured-range broadcasts a master heard and refused (radiant-security.md
+	 * 7.6): forgeries, or its own windows reflected back. */
+	put_u16_sat(&out[26], stats.dropped_direction);
 
 	return (antr_err_t)ANTW_RESPONSE_NO_ERROR;
 }

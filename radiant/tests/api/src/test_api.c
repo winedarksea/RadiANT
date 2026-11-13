@@ -111,6 +111,27 @@ static uint32_t count_msgs(uint8_t id)
 	return n;
 }
 
+/* Host-facing BROADCAST_DATA on channel `ch` whose payload page byte is
+ * `page`. Not static: test_api_sec.c joins this suite and asks what reached
+ * the host. */
+uint32_t api_test_count_bcast(uint8_t ch, uint8_t page);
+
+uint32_t api_test_count_bcast(uint8_t ch, uint8_t page)
+{
+	uint32_t n = 0u;
+	uint32_t i;
+
+	(void)radiant_event_drain(0u);
+	for (i = 0u; i < n_msg && i < MSGLOG_MAX; i++) {
+		if (msglog[i].id == (uint8_t)ANTW_MESG_BROADCAST_DATA_ID &&
+		    msglog[i].len >= 2u && msglog[i].data[0] == ch &&
+		    msglog[i].data[1] == page) {
+			n++;
+		}
+	}
+	return n;
+}
+
 /* Unsolicited channel events, by code. MESG_RESPONSE_EVENT_ID carries both
  * command replies and channel events; byte 1 == MESG_EVENT_ID distinguishes
  * the two, else a "none raised" assertion would pass for the wrong reason. */
