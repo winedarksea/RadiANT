@@ -34,6 +34,68 @@ The master's acknowledgement misses (closed 2026-11-12) were the link budget: 10
 10. Open, seen on air 2026-11-13: an 0x8A from a Garmin master sometimes gets no answer at all (1/20 at normal power, three in a row in the lossy leg) while the sniffer hears it clearly. Also: a Garmin master does not retry a slot-opening 0x8A in the slot when its ACK is lost, so our ACK repeats after a lost opener ACK are always wasted (5 x 3.1 ms).
 Note: multi packet burst mode is a lower priority feature, and handling it should not significantly degrade the performance of primary functionality (ie reading and listening to a heart rate strap)
 
+# Open issues from the 2026-11-13 security review (HEAD 1df743a)
+
+Found by reading the code and checked a second time; nothing was built or run. The primitives (AES, CMAC, CTR, KDF, X25519, ct_equal, wipe) read clean. `security.conf` and compat are in no release image, so protocol changes here break no deployed device. "Latent" means no app calls the path yet (`node_ident_arm_sec`, `profile_enrol_*`, compat `recover_*`/`adopt_epoch` are reached only from tests). The plan file holding D1-D17 (`~/.claude/plans/make-a-plan-to-async-gem.md`) does not exist; D14-D17 were checked against the spec and code comments.
+
+## 1. [HIGH, latent for hostless nodes] A counter wrap uses the epoch the next boot will be issued
+- `advance_epoch()` (radiant/src/radiant_sec.c:333) moves a wrap to epoch+1, and a hostless node's epoch is its boot counter (radiant/src/node/node_ident.c:210). A node booted at epoch B that runs for 65 536 slots (~4.5 h at 4 Hz) transmits under B+1. Its next boot is issued B+1 again, with the counter back at 0: the same K_enc and the same nonces. That is the two-time pad D14 and D17 exist to stop.
+- A host issuing ordinal epochs has the same trap: section 3.5 says "persist the last epoch issued", but it has to be the last epoch *used* (the 0xF4 epoch). With a wall clock, two boots in the same minute return the same epoch, and `node_ident_arm_sec()` always passes `us_into_epoch = 0` (:478). No app overrides `node_ident_wall_seconds()` today.
+- Compat has the same shape through `apply_wraps()`.
+- Fix: give each boot a block of epochs (for example `boot_counter << 12`, with a headroom check), or persist the epoch on every wrap. Fix the section 3.5 wording too. Missing test: wrap, reboot, assert the epoch is not reused.
+
+## 2. [HIGH] One injected frame desynchronises a secured master for good
+- A master runs `radiant_sec_rx_ingest()` on broadcasts heard in its reply window (radiant/src/antr/ant_radio_radiant.c:2486), and RX shares `epoch` and the keys with TX. In the last ~128 slots before a wrap, a forged broadcast with a chosen counter byte makes `rx_process()` call `advance_epoch()` (radiant_sec.c:1201). TX still counts wraps from `tx_wraps`, so it advances again at the real wrap: the master ends on epoch+2 and its receivers on epoch+1, until the host sends a new 0xF3. Section 7.6 accepts the early advance because a receiver heals within 32 s; a master does not.
+- The same gap means nothing binds direction: a master's own windows reflected back to it verify.
+- Fix: refuse secured-range pages on a master channel (legitimate secured slaves never send them; ant_radio_radiant.c:1374 keeps a slave's broadcast off a secured channel), or put a direction bit in the nonce. Missing test: a master receives a secured page.
+
+## 3. [HIGH] The per-packet verdict never reaches the host
+- `radiant_sec_deliver()` discards the verdict (ARG_UNUSED, ant_radio_radiant.c:904), and nothing outside the tests overrides `radiant_sec_window_verdict()`. Under the default deliver policy, a forged secured-range broadcast reaches the host as an ordinary BROADCAST_DATA. The host only has the aggregate 0xF4 counters.
+- Section 3.2 says "every secured RX delivery carries verified / unverified / clear". As built, X_AUTH without DROP_UNVER detects forgery in aggregate but cannot reject a forged packet.
+- Fix: carry the verdict to the host (an extended-data flag or a window-verdict event), or make DROP_UNVER the default whenever X_AUTH is on.
+
+## 4. [HIGH, pairing is off by default] A computing MITM can make the six-digit fingerprints match
+- `pair_derive()` (radiant/src/radiant_sec_pair.c:138) has no commitment step. A MITM sees both real public keys and can grind its own key pair offline until the two six-digit fingerprints match. That is about 10^6 X25519 operations, seconds to a minute on a laptop, which fits inside the 60 s window. This applies to 0xF5 and to over-air enrolment.
+- The radiant_sec.h pairing block and section 7.4 say two different shared secrets "cannot be made to match". `test_a_man_in_the_middle_cannot_match_both_fingerprints` tests only a MITM that does not grind.
+- Fix: a commitment, as in BLE numeric comparison: one side sends H(pub) before it sees the peer's key. Or correct the documented claim.
+
+## 5. [MEDIUM] A keyed but unarmed channel fails open in both directions
+- When `ctx_armed()` is false, `radiant_sec_tx_transform()` returns OK without transforming and `rx_ingest()` returns PLAIN (radiant_sec.c:840, :970). `radiant_sec_set_key()` clears `epoch_set`, so re-keying or completing a pairing on a live channel sends secured-range pages in plaintext, and accepts them unauthenticated, until the next 0xF3. 0xF4 does not report the armed flag, so a host cannot see it.
+- Fix: once a context exists with switches set, withhold TX and drop RX of secured-range pages until the epoch is set. Report "armed" in 0xF4 by appending a field. Per the beta rule, ANTR_SEC_STATUS_VERSION stays at 1.
+
+## 6. [MEDIUM, latent] Over-air enrolment replaces the group root instead of delivering it
+- `radiant_sec_pair_peer()` installs the DH-derived key with `radiant_sec_set_key()` on the sensor's own channel (radiant_sec_pair.c:405). Section 11.7 says enrolment is additive and gives the new receiver the existing root. No code does that: test_profile_enrol.c:1325 keys the peer with `compat_root` by hand.
+- As written, anyone who answers an open window locks out every existing receiver, and item 5 applies to the live channel at the same moment.
+- Fix: wrap the existing root under the DH key and send it, leaving the sensor's root untouched.
+
+## 7. [MEDIUM, latent] Compat epoch recovery allows a rollback
+- `epoch_search()` probes 16 epochs backward and scans 0..65 536 absolute. `radiant_sec_compat_adopt_epoch()` (radiant/src/radiant_sec_compat.c:1468) has no monotonic check and clears the Tier I lock. The 24-bit hint is fixed per epoch, and boot-counter epochs always fall inside the scan. So a recorded beacon, plus recorded Tier I pages from any old session, rolls a receiver back and verifies.
+- Section 7.6 says the descriptor search runs forward only; the compat scan contradicts that for a receiver that already knows a newer epoch.
+- Fix: `adopt_epoch()` refuses `epoch < base_epoch` unless the caller passes an explicit re-provision flag, and the backward and scan paths require that flag.
+
+## 8. [MEDIUM, Tier II is off by default] Tier II windows have no replay floor
+- `rx_tier2()` resolves the 8-bit window index to the nearest of ±128 windows and keeps no high-water mark (radiant_sec_compat.c:948). A recorded window verifies again, any number of times, for about 4 minutes at N=8 and 4 Hz. The 16-bit index also rolls over inside an epoch (~36 h at N=8), when the same window verifies again.
+- Fix: a floor like Tier I's `rx_t1_last`, and either drive the epoch from the window index or carry more of it.
+
+## 9. [LOW] 0xF2 resets the epoch monotonicity gate
+- `radiant_sec_set_key()` clears `epoch_set` (radiant_sec.c:441), so a host can re-send the same key and then an older epoch, and both are accepted. D3 is only as strong as the host.
+- Fix: keep the epoch high-water mark across `set_key`, at least when the root is unchanged.
+
+## 10. [LOW] A go-private/return command is replayable within its interval
+- `cmd_tag()` uses the Tier I interval index as its counter, so a recorded command verifies again until the interval ends: 20 s by default, up to 3600 s. The 60 s rate limit does not cover a long T. Section 11.6 says a replay "into a later interval fails", which is true, but replay within the same interval is not stated.
+- Fix: keep a last-accepted (interval, op) floor in profile_private.c, or state the limit.
+
+## 11. [LOW] Non-broadcast traffic on a secured channel
+- The D15 drop examines only the first packet of an inbound transfer. Continuation packets go to the engine in WAIT_NEXT (ant_radio_radiant.c:2629) and reach the host through `api_xfer_rx_data()`, with no check (`radiant_burst.c` has no security code). They carry no page number, so the secured-range test cannot apply to them anyway.
+- Outbound acknowledged and burst data from a secured master (`antr_acknowledge_message_tx()`, `antr_burst_tx()`) goes on air in plaintext, untransformed.
+- Fix: refuse outbound acked or burst data on a secured channel unless the host opts in, and document that inbound non-broadcast data on a secured channel is unauthenticated.
+
+## 12. [LOW] Hardening and documentation
+- Dead-store wipes: `memset()` on secret locals that are never read again can be elided at -Os. node_ident.c:560 (half the pairing scalar in `tag`), :677 (the whole scalar), and the K_dev copies at :138 and :167. Use `radiant_sec_wipe()`.
+- radiant/src/radiant_sec_rng_psa.c:45 returns without zero-filling when `psa_crypto_init()` fails, while the entropy backend and the node_ident comments promise a zero-fill on failure. The one caller checks the return code, so this is a contract mismatch, not a live bug.
+- Pairing expiry is only checked lazily, on the next call, so an abandoned scalar stays in RAM until a pairing call or a reset. Have `radiant_sec_pair_service()` (already called from housekeeping) free expired contexts.
+- Section 7.5 says ~2.3 h to one verified forgery at W=2 and 4 Hz. One attempt per 2-packet window is 2^16 x 0.5 s, about 9.1 h. Recheck the figure.
+
 # Module packaging follow-ups
 
 Remaining steps to make `radiant/` an installable, listed Zephyr module. The
