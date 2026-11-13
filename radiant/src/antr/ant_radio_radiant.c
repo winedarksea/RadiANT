@@ -776,9 +776,9 @@ static enum radiant_radio_status api_done_to_status(enum radiant_sched_done why)
 		/*
 		 * FAILED is the only answer the consumers (transfer engine,
 		 * radiant_channel_on_terminal()) can act on: a denied ack reply
-		 * missed the peer's receive window, and radiant_transfer.h's
-		 * acknowledger-side retransmit path is deliberately unwired, so
-		 * the transfer must end. (The originator's burst retry runs only
+		 * missed the peer's receive window. Inside an inbound burst the
+		 * engine still opens the next window for the peer's retry; a
+		 * denied continuation window ends the burst (RX_FAILED). (The originator's burst retry runs only
 		 * on an empty window, TIMEOUT, never on a denial.) The denial itself is not lost - api_stats.sched_denied is
 		 * incremented from `why` at the top of api_sched_done(), so this
 		 * lossy mapping is compensated exactly once, there.
@@ -1172,11 +1172,71 @@ static radiant_time_t api_xfer_retry_t_sync(void *ctx)
 	return api_xfer_t_sync_for(ch);
 }
 
+/*
+ * An inbound burst the host has seen part of will never finish: tell it
+ * (EVENT_TRANSFER_RX_FAILED, 0x04) and start the next inbound message from
+ * sequence 0, so a later acknowledged message is labelled as one. Every
+ * path that ends an unfinished inbound burst comes here: the engine's own
+ * end (api_xfer_rx_failed()), close, the drop to search, and the
+ * abandoned-burst watchdog. Radio interrupt or thread context; O(1).
+ */
+static void api_inbound_failed(uint8_t ch)
+{
+	api_ch[ch].in_pkts = 0u;
+	api_ch[ch].in_last_valid = false;
+	api_stats.rx_bursts_failed++;
+	(void)radiant_event_post_channel_event(
+		ch, (uint8_t)ANTW_EVENT_TRANSFER_RX_FAILED);
+}
+
+/* The engine ended an inbound burst before its LAST was acknowledged. */
+static void api_xfer_rx_failed(void *ctx)
+{
+	uint8_t ch = (uint8_t)(uintptr_t)ctx;
+
+	if (!api_ch_valid(ch)) {
+		return;
+	}
+	api_inbound_failed(ch);
+}
+
+/*
+ * The engine ended an inbound burst and is IDLE again. For the whole burst the
+ * channel posted no tracked work (the pump and the terminal re-post both skip
+ * a busy engine), so it is owed its next window or slot now, from this same
+ * terminal - not from the 50 ms pump.
+ *
+ * And its slot clock may be stale: a burst longer than a period went by
+ * without a slot heard or sent, and the continuation packets deliberately
+ * never re-anchor it (a slave that did walked its clock by the burst length,
+ * the same fault the master grid walk had). Step it past the instants that
+ * are already gone, on its own grid, charging nothing - posting them would
+ * have counted a miss for each and sent a slave to search after a burst of
+ * eight periods, with its master transmitting the whole time.
+ */
+static void api_xfer_inbound_ended(void *ctx)
+{
+	uint8_t ch = (uint8_t)(uintptr_t)ctx;
+	const struct radiant_radio_caps *caps = radiant_radio_caps_get();
+	radiant_time_t earliest;
+
+	if (!api_ch_valid(ch)) {
+		return;
+	}
+	earliest = radiant_radio_now() +
+		   (radiant_time_t)radiant_channel_guard_us(ch) +
+		   (radiant_time_t)((caps != NULL) ? caps->min_arm_lead_us : 0u);
+	radiant_channel_catch_up(ch, earliest);
+	api_ch[ch].track_repost = true;
+}
+
 static const struct radiant_transfer_ops api_xfer_ops = {
 	.done = api_xfer_done,
 	.rx_data = api_xfer_rx_data,
 	.broadcast_payload = api_xfer_broadcast,
 	.retry_t_sync = api_xfer_retry_t_sync,
+	.rx_failed = api_xfer_rx_failed,
+	.inbound_ended = api_xfer_inbound_ended,
 #if defined(CONFIG_RADIANT_ACK_FAULTS)
 	.reply_plan = api_xfer_reply_plan,
 #endif
@@ -2540,7 +2600,20 @@ static void api_sched_rx(uint8_t ch, uint8_t filter_index,
 	 * that obsolete token, establishes ownership of the ACK window. */
 	if (radiant_transfer_state(&api_xfer[ch]) == RADIANT_TRANSFER_STATE_WAIT_ACK) {
 		api_stats.rx_to_xfer++;
-		radiant_transfer_on_rx_event(&api_xfer[ch], evt);
+		(void)radiant_transfer_on_rx_event(&api_xfer[ch], evt);
+		return;
+	}
+	/* An inbound burst's continuation window, the engine's own request on
+	 * the same terms. Its packets must NEVER reach api_tracked_frame(): on
+	 * a slave that re-anchors the slot clock (radiant_channel_on_slot()),
+	 * and every burst packet would walk it by 3.11 ms - the master grid
+	 * walk's twin. The one frame handed back is a broadcast, which ended
+	 * the burst and is an ordinary slot frame. */
+	if (radiant_transfer_state(&api_xfer[ch]) == RADIANT_TRANSFER_STATE_WAIT_NEXT) {
+		api_stats.rx_to_xfer++;
+		if (!radiant_transfer_on_rx_event(&api_xfer[ch], evt)) {
+			(void)api_tracked_frame(ch, evt, false);
+		}
 		return;
 	}
 	if (radiant_channel_op_owner(api_ch[ch].op) != (int)ch) {
@@ -2578,6 +2651,15 @@ static void api_sched_tx(uint8_t ch, const struct radiant_tx_event *evt, void *u
 	}
 
 	if (!radiant_transfer_is_idle(&api_xfer[ch])) {
+		/* EVENT_TRANSFER_TX_START (0x0A): the first packet of a
+		 * multi-packet burst is on the air. Asked before the engine
+		 * moves on, and true for one transmit per burst only - not for
+		 * acknowledged data, a one-packet burst or a retry. */
+		if (evt->status == RADIANT_RADIO_STATUS_OK &&
+		    radiant_transfer_cur_starts_burst(&api_xfer[ch])) {
+			(void)radiant_event_post_channel_event(
+				ch, (uint8_t)ANTW_EVENT_TRANSFER_TX_START);
+		}
 		if (radiant_channel_is_master(ch) &&
 		    radiant_transfer_state(&api_xfer[ch]) == RADIANT_TRANSFER_STATE_TX_DATA &&
 		    evt->status == RADIANT_RADIO_STATUS_OK) {
@@ -2669,7 +2751,8 @@ static void api_feed_xfer_terminal(uint8_t ch, enum radiant_radio_status st)
 		radiant_transfer_on_tx_event(&api_xfer[ch], &e);
 		break;
 	}
-	case RADIANT_TRANSFER_STATE_WAIT_ACK: {
+	case RADIANT_TRANSFER_STATE_WAIT_ACK:
+	case RADIANT_TRANSFER_STATE_WAIT_NEXT: {
 		struct radiant_rx_event e;
 
 		memset(&e, 0, sizeof(e));
@@ -2677,10 +2760,13 @@ static void api_feed_xfer_terminal(uint8_t ch, enum radiant_radio_status st)
 		/* A window closing empty is RADIANT_RADIO_STATUS_TIMEOUT: the
 		 * engine retries a multi-packet burst's packet (Rev 5.1 sec
 		 * 5.4.3, up to RADIANT_TRANSFER_TX_RETRIES_MAX) and otherwise
-		 * fails with FAIL_NO_ACK. Any other status fails outright. */
+		 * fails with FAIL_NO_ACK. Any other status fails outright. In
+		 * WAIT_NEXT (an inbound burst) TIMEOUT repeats our
+		 * acknowledgement or, after LAST, ends the burst; any other
+		 * status ends it. */
 		e.status = st;
 		e.t_sync = radiant_radio_now();
-		radiant_transfer_on_rx_event(&api_xfer[ch], &e);
+		(void)radiant_transfer_on_rx_event(&api_xfer[ch], &e);
 		break;
 	}
 	case RADIANT_TRANSFER_STATE_IDLE:
@@ -2992,6 +3078,10 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 			if (!radiant_channel_on_slot_missed(ch, now)) {
 				(void)radiant_event_post_channel_event(
 					ch, (uint8_t)ANTW_EVENT_RX_FAIL);
+			} else if (api_ch[ch].in_pkts != 0u) {
+				/* Back to search with an inbound burst
+				 * half-delivered: it cannot finish now. */
+				api_inbound_failed(ch);
 			}
 		}
 		/*
@@ -3188,6 +3278,7 @@ static bool api_xfer_awaits_radio(uint8_t ch)
 	case RADIANT_TRANSFER_STATE_TX_DATA:
 	case RADIANT_TRANSFER_STATE_TX_REPLY:
 	case RADIANT_TRANSFER_STATE_WAIT_ACK:
+	case RADIANT_TRANSFER_STATE_WAIT_NEXT:
 	case RADIANT_TRANSFER_STATE_ABORTING:
 		return true;
 	case RADIANT_TRANSFER_STATE_IDLE:
@@ -3245,13 +3336,24 @@ static void api_watchdogs_locked(radiant_time_t now)
 
 		/* in_pkts only clears on LAST, so a burst whose final packet is
 		 * missed leaves it non-zero forever, mislabeling later
-		 * acknowledged messages as burst data. */
+		 * acknowledged messages as burst data. A BACKSTOP now: the
+		 * engine follows an inbound burst and reports its end itself
+		 * (api_xfer_rx_failed()). What is left for this is a burst
+		 * the engine never followed - a SLAVE_RX_ONLY channel's, heard
+		 * one packet per tracked slot - and anything that ended without
+		 * telling us. Skipped while the engine is busy: an open burst
+		 * repeating its acknowledgement is not abandoned. */
 		if (c->in_pkts != 0u && c->in_last_valid &&
-		    (now - c->in_last) >= limit) {
+		    (now - c->in_last) >= limit &&
+		    radiant_transfer_is_idle(&api_xfer[ch])) {
 			LOG_DBG("ch=%u inbound transfer abandoned at seq %u",
 				(unsigned)ch, (unsigned)c->in_pkts);
-			c->in_pkts = 0u;
-			c->in_last_valid = false;
+			/* Against the radio callback that also resets it. */
+			key = radiant_event_crit_enter();
+			if (c->in_pkts != 0u) {
+				api_inbound_failed(ch);
+			}
+			radiant_event_crit_exit(key);
 		}
 	}
 }
@@ -3831,6 +3933,37 @@ antr_err_t antr_channel_close(uint8_t channel)
 	antr_err_t rc;
 
 	k_mutex_lock(&api_lock, K_FOREVER);
+
+	/*
+	 * An inbound burst open on the channel ends with it, and the host is
+	 * told so BEFORE CHANNEL_CLOSED: radiant_channel_close() raises that at
+	 * once when no tracked operation is bound, which is exactly the state
+	 * during a burst (the engine's requests are its own). Aborting the
+	 * engine here only changes its state - TX_REPLY and WAIT_NEXT never call
+	 * radiant_radio_abort() - and reports the burst through
+	 * api_xfer_rx_failed(); the armed request is cancelled below as always.
+	 * The second check covers a burst the engine was not following.
+	 */
+	if (api_ch_valid(channel) &&
+	    (radiant_channel_state_get(channel) == RADIANT_CH_STATE_SEARCHING ||
+	     radiant_channel_state_get(channel) == RADIANT_CH_STATE_TRACKING)) {
+		enum radiant_transfer_state xs =
+			radiant_transfer_state(&api_xfer[channel]);
+
+		if (xs == RADIANT_TRANSFER_STATE_TX_REPLY ||
+		    xs == RADIANT_TRANSFER_STATE_WAIT_NEXT) {
+			(void)radiant_transfer_abort(&api_xfer[channel]);
+		}
+		if (api_ch[channel].in_pkts != 0u) {
+			unsigned int key = radiant_event_crit_enter();
+
+			if (api_ch[channel].in_pkts != 0u) {
+				api_inbound_failed(channel);
+			}
+			radiant_event_crit_exit(key);
+		}
+	}
+
 	rc = radiant_channel_close(channel, radiant_radio_now());
 	if (rc == RADIANT_CH_OK) {
 		uint32_t op = api_ch[channel].op;
@@ -4301,8 +4434,13 @@ antr_err_t antr_broadcast_message_tx(uint8_t channel, uint8_t size,
 	unsigned int key = radiant_event_crit_enter();
 	enum radiant_transfer_state st = radiant_transfer_state(&api_xfer[channel]);
 
+	/* WAIT_NEXT is the same case as TX_REPLY: we are only acknowledging
+	 * an inbound burst, and each new packet's acknowledgement copies bcast
+	 * afresh, so a write here reaches the peer one packet later - what a
+	 * write mid-exchange always meant. */
 	if (st != RADIANT_TRANSFER_STATE_IDLE &&
-	    st != RADIANT_TRANSFER_STATE_TX_REPLY) {
+	    st != RADIANT_TRANSFER_STATE_TX_REPLY &&
+	    st != RADIANT_TRANSFER_STATE_WAIT_NEXT) {
 		radiant_event_crit_exit(key);
 		k_mutex_unlock(&api_lock);
 		return (antr_err_t)ANTW_TRANSFER_IN_PROGRESS;

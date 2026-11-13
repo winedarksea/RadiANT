@@ -30,6 +30,20 @@
  *                               re-arm the same packet, same ctrl   TX_DATA
  *                             otherwise TX_FAILED / NO_ACK          IDLE
  *
+ * And the acknowledger's half, for an inbound burst (radiant_ack.c arms the
+ * acknowledgement; this file follows the burst):
+ *   on_data(non-LAST)      -> arm the ACK at +1560                  TX_REPLY
+ *   ACK sent, burst open   -> window at ack + 1550 -/+250           WAIT_NEXT
+ *   next packet            -> on_data(): deliver, ACK               TX_REPLY
+ *   same sequence bit      -> on_data(): re-ACK, don't deliver      TX_REPLY
+ *   window closed empty    -> after LAST: done                      IDLE
+ *                             else repeat the ACK at +3143          TX_REPLY
+ *                             (21 attempts, then rx_failed)         IDLE
+ *   broadcast in window    -> rx_failed unless LAST was acked; the
+ *                             frame goes back to the owner          IDLE
+ * Acknowledged data (LAST with no burst open) goes TX_REPLY -> IDLE, as it
+ * always did.
+ *
  * Every arm after the first happens inside a completion callback, in radio
  * interrupt context - the only path that meets these intervals, because the
  * operation slot frees before the terminal callback runs so the next
@@ -265,27 +279,37 @@ int radiant_transfer_arm_tx(struct radiant_transfer *t, uint8_t ctrl,
 	return arm_tx(t, ctrl, payload, payload_len, t_sync_at, false);
 }
 
+/* What every window the engine opens shares: this channel's format, RF and
+ * address filter, and STOP_ON_FIRST, because exactly one frame is expected and
+ * stopping frees the operation slot so the answer can be armed from inside
+ * the same callback. A request, not a guarantee: the HAL forbids
+ * STOP_ON_FIRST on a merged window, so a window sharing hardware with a
+ * tracked channel won't stop early. That costs receive current but doesn't
+ * change behaviour - the frame is recognised by its control byte, not by
+ * being alone. */
+static void window_req_init(const struct radiant_transfer *t,
+			    struct radiant_sched_rx *req)
+{
+	memset(req, 0, sizeof(*req));
+	req->fmt = t->fmt;
+	req->rf_index = t->cfg.rf_index;
+	/* &t->filter, not a local: the HAL says the filter array must stay
+	 * valid until the terminal event, and the scheduler copies it into the
+	 * merged array only at the moment it arms. */
+	req->filters = &t->filter;
+	req->n_filters = 1u;
+	req->stop_on_first = true;
+}
+
 /* Open the window the acknowledgement is expected in, centred on the
  * measured 1560 us with a guard sized on the observed range rather than the
- * standard deviation. STOP_ON_FIRST because exactly one frame is expected
- * and it frees the operation slot immediately, letting the next data packet
- * arm from inside the same callback. */
+ * standard deviation. */
 static int arm_ack_window(struct radiant_transfer *t, radiant_time_t t_data_sync)
 {
 	struct radiant_sched_rx req;
 	int rc;
 
-	memset(&req, 0, sizeof(req));
-	req.fmt = t->fmt;
-	req.rf_index = t->cfg.rf_index;
-	/* &t->filter, not a local: the HAL says the filter array must stay
-	 * valid until the terminal event, and the scheduler copies it into the
-	 * merged array only at the moment it arms. */
-	/* &t->filter, not a local: must stay valid until the terminal event,
-	 * since the scheduler copies it into the merged array only when it
-	 * arms. */
-	req.filters = &t->filter;
-	req.n_filters = 1u;
+	window_req_init(t, &req);
 	req.t_open = t_data_sync + (radiant_time_t)RADIANT_TRANSFER_REPLY_US -
 		     (radiant_time_t)RADIANT_TRANSFER_ACK_GUARD_US;
 	/* A slot-opening packet is answered on the slave's slot-reply
@@ -303,11 +327,6 @@ static int arm_ack_window(struct radiant_transfer *t, radiant_time_t t_data_sync
 				       RADIANT_TRANSFER_OPENER_REPLY_US :
 				       RADIANT_TRANSFER_REPLY_US) +
 		      (radiant_time_t)RADIANT_TRANSFER_ACK_GUARD_US;
-	/* A request, not a guarantee: the HAL forbids STOP_ON_FIRST on a merged
-	 * window, so a reply window sharing hardware with a tracked channel
-	 * won't stop early. Costs receive current but doesn't change behaviour -
-	 * the ack is recognised by its control byte, not by being alone. */
-	req.stop_on_first = true;
 	/* The reserve runs on to where whatever follows this window goes: the
 	 * next packet at ack t_sync + NEXT_PACKET_US, or, if the window closes
 	 * empty, the retry at the same instant (retry_packet(): data t_sync +
@@ -325,6 +344,78 @@ static int arm_ack_window(struct radiant_transfer *t, radiant_time_t t_data_sync
 
 	t->op = RADIANT_TRANSFER_OP_EXTERNAL;
 	return RADIANT_TRANSFER_OK;
+}
+
+/*
+ * The acknowledger's twin of arm_ack_window(): inside an inbound burst, open
+ * the window the peer's next packet arrives in, ack t_sync + NEXT_PACKET_US
+ * (1546/1550 measured), guarded like the acknowledgement window. The same
+ * window catches the peer's retry of the packet just acknowledged, since a
+ * retry goes where the next packet would have gone. The reserve runs on to
+ * the acknowledgement that packet will need: REPLY_US after the window's late
+ * edge at the most, plus the frame.
+ */
+static int arm_next_window(struct radiant_transfer *t, radiant_time_t ack_t_sync)
+{
+	struct radiant_sched_rx req;
+	int rc;
+
+	window_req_init(t, &req);
+	req.t_open = ack_t_sync + (radiant_time_t)RADIANT_TRANSFER_NEXT_PACKET_US -
+		     (radiant_time_t)RADIANT_TRANSFER_ACK_GUARD_US;
+	req.t_close = ack_t_sync + (radiant_time_t)RADIANT_TRANSFER_NEXT_PACKET_US +
+		      (radiant_time_t)RADIANT_TRANSFER_ACK_GUARD_US;
+	req.follow_on_us = (uint16_t)(RADIANT_TRANSFER_REPLY_US +
+				      RADIANT_TRANSFER_ACK_GUARD_US +
+				      radiant_frame_tail_us(t->fmt));
+
+	rc = radiant_sched_request_rx(t->cfg.channel, &req);
+	if (rc != RADIANT_RADIO_OK_RC) {
+		return RADIANT_TRANSFER_EIO;
+	}
+
+	t->op = RADIANT_TRANSFER_OP_EXTERNAL;
+	return RADIANT_TRANSFER_OK;
+}
+
+/* Forget an inbound burst. Returns whether it ended before its LAST packet
+ * was acknowledged, which is what the owner reports as RX_FAILED. */
+static bool clear_inbound(struct radiant_transfer *t)
+{
+	bool unfinished = t->in_burst && !t->in_last_acked;
+
+	t->in_burst = false;
+	t->in_last_acked = false;
+	t->in_data_ctrl = 0u;
+	/* Nothing may repeat an acknowledgement of a burst that is over. */
+	t->reply_ctrl = 0u;
+	t->reply_attempts = 0u;
+	return unfinished;
+}
+
+static void report_rx_failed(struct radiant_transfer *t)
+{
+	t->stats.rx_failed++;
+	if (t->cfg.ops != NULL && t->cfg.ops->rx_failed != NULL) {
+		t->cfg.ops->rx_failed(t->cfg.ctx);
+	}
+}
+
+/* An inbound burst is over, completed or not: back to IDLE, RX_FAILED if it
+ * was unfinished, and let the owner post its tracked work again. State first,
+ * so an owner that posts from inbound_ended() finds the engine idle. */
+static void end_inbound(struct radiant_transfer *t)
+{
+	bool failed = clear_inbound(t);
+
+	t->op = 0u;
+	t->state = RADIANT_TRANSFER_STATE_IDLE;
+	if (failed) {
+		report_rx_failed(t);
+	}
+	if (t->cfg.ops != NULL && t->cfg.ops->inbound_ended != NULL) {
+		t->cfg.ops->inbound_ended(t->cfg.ctx);
+	}
 }
 
 /* Build and arm one data packet. Leaves the engine untouched on failure, so a
@@ -662,6 +753,13 @@ int radiant_transfer_abort(struct radiant_transfer *t)
 	case RADIANT_TRANSFER_STATE_ABORTING:
 		return RADIANT_TRANSFER_OK;
 	case RADIANT_TRANSFER_STATE_TX_REPLY:
+	case RADIANT_TRANSFER_STATE_WAIT_NEXT: {
+		/* WAIT_NEXT has the same shape: the armed window is the
+		 * caller's to cancel with its scheduler slot. An inbound burst
+		 * closed before its LAST was acknowledged is the one thing
+		 * this reports, as rx_failed - never a TX event. */
+		bool unfinished = clear_inbound(t);
+
 		/* Our acknowledgement of a peer's packet, not a transfer the
 		 * host started: no terminal event is owed (radiant_transfer.h,
 		 * "follows an accepted call"), and raising TX_FAILED here told
@@ -675,9 +773,11 @@ int radiant_transfer_abort(struct radiant_transfer *t)
 		 * on a closed channel is never right. */
 		t->op = 0u;
 		t->state = RADIANT_TRANSFER_STATE_IDLE;
-		t->reply_ctrl = 0u;
-		t->reply_attempts = 0u;
+		if (unfinished) {
+			report_rx_failed(t);
+		}
 		return RADIANT_TRANSFER_OK;
+	}
 	default:
 		break;
 	}
@@ -825,11 +925,37 @@ void radiant_transfer_on_tx_event(struct radiant_transfer *t,
 		return;
 	}
 
+	if (t->state == RADIANT_TRANSFER_STATE_TX_REPLY && t->in_burst) {
+		/* Our acknowledgement of a packet inside an inbound burst. The
+		 * peer's next packet - or its retry of this one, if our
+		 * acknowledgement was lost - is due NEXT_PACKET_US after it, so
+		 * the window for it is armed from right here. After the LAST
+		 * packet too, once, for the peer's retry of LAST.
+		 *
+		 * Anchored on the achieved t_sync when the reply went out, and
+		 * on the instant it was armed for when it did not (missed or
+		 * denied): the peer retries relative to where our reply should
+		 * have been, not to when we noticed it wasn't. */
+		radiant_time_t anchor = (e->status == RADIANT_RADIO_STATUS_OK) ?
+						e->t_sync : t->in_ack_at;
+
+		t->op = 0u;
+		t->reply_t_sync = anchor;
+		if (e->status == RADIANT_RADIO_STATUS_OK) {
+			t->stats.acks_sent++;
+		}
+		if (arm_next_window(t, anchor) != RADIANT_TRANSFER_OK) {
+			end_inbound(t);
+			return;
+		}
+		t->state = RADIANT_TRANSFER_STATE_WAIT_NEXT;
+		return;
+	}
+
 	if (t->state == RADIANT_TRANSFER_STATE_TX_REPLY) {
-		/* Our acknowledgement of somebody else's data packet. Nothing
-		 * follows it. A retransmission timer, if wired, belongs in
-		 * api_sched_done(), not radiant_sched.c (which owns no timer -
-		 * see gap 1 in radiant_transfer.h).
+		/* Our acknowledgement of acknowledged data - a LAST packet with
+		 * no inbound burst open. Nothing follows it, and this path is
+		 * byte for byte what it was before inbound bursts existed.
 		 *
 		 * reply_ctrl/reply_payload/reply_attempts deliberately survive
 		 * this transition since retransmission is defined on an idle
@@ -869,28 +995,103 @@ void radiant_transfer_on_tx_event(struct radiant_transfer *t,
 	t->state = RADIANT_TRANSFER_STATE_WAIT_ACK;
 }
 
-void radiant_transfer_on_rx_event(struct radiant_transfer *t,
+/*
+ * The inbound burst's continuation window. Returns false only for a broadcast,
+ * which ends the burst and is handed back to the owner as a tracked frame.
+ */
+static bool on_next_window(struct radiant_transfer *t,
+			   const struct radiant_rx_event *e)
+{
+	struct radiant_frame f;
+	enum radiant_msg_type mt;
+
+	switch (e->status) {
+	case RADIANT_RADIO_STATUS_OK:
+		break;
+	case RADIANT_RADIO_STATUS_CRC_FAIL:
+		/* Not asked for, as in WAIT_ACK; the window is still open. */
+		return true;
+	case RADIANT_RADIO_STATUS_TIMEOUT:
+		/* Nothing came. After LAST that is the burst completing: our
+		 * final acknowledgement was heard, so the peer has nothing to
+		 * retry. Otherwise the peer's packet was lost, or our
+		 * acknowledgement was and its retry was too: repeat the saved
+		 * acknowledgement one measured retry interval after the last
+		 * (3143 us, run 0). The peer reads it as stale and retries into
+		 * the window that follows it. The repeat limits are
+		 * radiant_transfer_reply_retransmit()'s; when they run out the
+		 * burst has failed. */
+		if (t->in_last_acked) {
+			end_inbound(t);
+			return true;
+		}
+		if (radiant_transfer_reply_repeat(
+			    t, t->reply_t_sync +
+				       (radiant_time_t)RADIANT_TRANSFER_REPLY_RETRY_US) !=
+		    RADIANT_TRANSFER_OK) {
+			end_inbound(t);
+		}
+		return true;
+	default:
+		/* FAILED, ABORTED: the window never ran or was taken away (a
+		 * denial on an arbitrated build lands here). The burst ends;
+		 * no worse than before inbound bursts were followed at all. */
+		end_inbound(t);
+		return true;
+	}
+
+	if (!decode_rx(t, e, &f)) {
+		/* Undecodable: as good as an empty window, which its terminal
+		 * will report next. */
+		return true;
+	}
+
+	mt = radiant_frame_msg_type(f.ctrl_byte);
+	if (mt == RADIANT_MSG_BURST_DATA || mt == RADIANT_MSG_BURST_LAST) {
+		/* The next packet, or a duplicate of the last: on_data() tells
+		 * them apart, arms the acknowledgement and moves to TX_REPLY. */
+		if (radiant_transfer_on_data(t, &f, e->t_sync) !=
+		    RADIANT_TRANSFER_OK) {
+			end_inbound(t);
+		}
+		return true;
+	}
+	if (mt == RADIANT_MSG_BROADCAST) {
+		/* The peer went back to broadcasting: it abandoned the burst
+		 * (or finished it, if LAST was acknowledged). The frame itself
+		 * is an ordinary slot frame, and the owner's to handle. */
+		end_inbound(t);
+		return false;
+	}
+	/* An acknowledgement or an unmeasured byte: nothing of ours. */
+	return true;
+}
+
+bool radiant_transfer_on_rx_event(struct radiant_transfer *t,
 			      const struct radiant_rx_event *e)
 {
 	struct radiant_frame f;
 
 	if (t == NULL || e == NULL || !t->ready) {
-		return;
+		return true;
 	}
 	/* See the note on the same test in radiant_transfer_on_tx_event(). */
 	if (t->op == 0u ||
 	    (t->op != RADIANT_TRANSFER_OP_EXTERNAL && e->op != t->op)) {
 		t->stats.late_events++;
-		return;
+		return true;
 	}
 
 	if (t->state == RADIANT_TRANSFER_STATE_ABORTING) {
 		finish(t, RADIANT_TRANSFER_EV_TX_FAILED, RADIANT_TRANSFER_FAIL_ABORTED);
-		return;
+		return true;
+	}
+	if (t->state == RADIANT_TRANSFER_STATE_WAIT_NEXT) {
+		return on_next_window(t, e);
 	}
 	if (t->state != RADIANT_TRANSFER_STATE_WAIT_ACK) {
 		t->stats.late_events++;
-		return;
+		return true;
 	}
 
 	switch (e->status) {
@@ -900,7 +1101,7 @@ void radiant_transfer_on_rx_event(struct radiant_transfer *t,
 		/* Non-terminal, and only delivered to a window that asked for
 		 * it - which this one does not. The window is still open, so
 		 * there is nothing to do but wait. */
-		return;
+		return true;
 	case RADIANT_RADIO_STATUS_TIMEOUT:
 		/* The reply window closed empty. Never captured from the
 		 * sender's side (docs/spike-b-results.md, untested item 5), so
@@ -911,17 +1112,17 @@ void radiant_transfer_on_rx_event(struct radiant_transfer *t,
 			finish(t, RADIANT_TRANSFER_EV_TX_FAILED,
 			       RADIANT_TRANSFER_FAIL_NO_ACK);
 		}
-		return;
+		return true;
 	default:
 		finish(t, RADIANT_TRANSFER_EV_TX_FAILED, RADIANT_TRANSFER_FAIL_RADIO);
-		return;
+		return true;
 	}
 
 	/* RADIANT_RX_STOP_ON_FIRST makes this event terminal, so the operation slot
 	 * is already free and the next packet can be armed from right here. */
 	if (!decode_rx(t, e, &f)) {
 		finish(t, RADIANT_TRANSFER_EV_TX_FAILED, RADIANT_TRANSFER_FAIL_BAD_ACK);
-		return;
+		return true;
 	}
 	if (!radiant_transfer_ack_matches(t->cur_ctrl, f.ctrl_byte)) {
 		/* The receiver repeating its answer to the previous packet: it
@@ -932,11 +1133,11 @@ void radiant_transfer_on_rx_event(struct radiant_transfer *t,
 		if (radiant_transfer_ack_is_stale(t->cur_ctrl, f.ctrl_byte)) {
 			t->stats.stale_acks++;
 			if (retry_packet(t)) {
-				return;
+				return true;
 			}
 		}
 		finish(t, RADIANT_TRANSFER_EV_TX_FAILED, RADIANT_TRANSFER_FAIL_BAD_ACK);
-		return;
+		return true;
 	}
 
 	if (radiant_ctrl_is_last(t->cur_ctrl)) {
@@ -945,10 +1146,11 @@ void radiant_transfer_on_rx_event(struct radiant_transfer *t,
 		t->pkt_acked++;
 		t->stats.packets_sent++;
 		finish(t, RADIANT_TRANSFER_EV_TX_COMPLETED, RADIANT_TRANSFER_FAIL_NONE);
-		return;
+		return true;
 	}
 
 	advance(t, e->t_sync);
+	return true;
 }
 
 /* ---------------------------------------------------------------------------
@@ -1010,4 +1212,13 @@ bool radiant_transfer_cur_is_slot(const struct radiant_transfer *t)
 {
 	return t != NULL && t->state == RADIANT_TRANSFER_STATE_TX_DATA &&
 	       t->retries == 0u && radiant_ctrl_is_slot_opener(t->cur_ctrl);
+}
+
+bool radiant_transfer_cur_starts_burst(const struct radiant_transfer *t)
+{
+	/* own_block rules out acknowledged data; !last on packet 0 rules out a
+	 * one-packet burst; retries == 0 makes it the first attempt only. */
+	return t != NULL && t->state == RADIANT_TRANSFER_STATE_TX_DATA &&
+	       t->pkt_index == 0u && t->retries == 0u && t->own_block &&
+	       !radiant_ctrl_is_last(t->cur_ctrl);
 }

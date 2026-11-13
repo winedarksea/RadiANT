@@ -137,10 +137,31 @@ static bool on_broadcast_payload(void *ctx, uint8_t out[RADIANT_TRANSFER_PKT_BYT
 	return true;
 }
 
+/* The inbound-burst ends: rx_failed is the owner's EVENT_TRANSFER_RX_FAILED,
+ * inbound_ended its cue to post tracked work again. */
+static uint32_t n_rx_failed;
+static uint32_t n_inbound_ended;
+static enum radiant_transfer_state state_at_inbound_ended;
+
+static void on_rx_failed(void *ctx)
+{
+	ARG_UNUSED(ctx);
+	n_rx_failed++;
+}
+
+static void on_inbound_ended(void *ctx)
+{
+	ARG_UNUSED(ctx);
+	n_inbound_ended++;
+	state_at_inbound_ended = radiant_transfer_state(&xfer);
+}
+
 static const struct radiant_transfer_ops ops = {
 	.done = on_done,
 	.rx_data = on_rx_data,
 	.broadcast_payload = on_broadcast_payload,
+	.rx_failed = on_rx_failed,
+	.inbound_ended = on_inbound_ended,
 };
 
 /* ---------------------------------------------------------------------------
@@ -222,7 +243,8 @@ static void sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 	}
 
 	switch (radiant_transfer_state(t)) {
-	case RADIANT_TRANSFER_STATE_WAIT_ACK: {
+	case RADIANT_TRANSFER_STATE_WAIT_ACK:
+	case RADIANT_TRANSFER_STATE_WAIT_NEXT: {
 		struct radiant_rx_event e;
 
 		memset(&e, 0, sizeof(e));
@@ -303,6 +325,9 @@ static void before(void *f)
 	memset(evlog, 0, sizeof(evlog));
 	n_ev = 0u;
 	n_rx_data = 0u;
+	n_rx_failed = 0u;
+	n_inbound_ended = 0u;
+	state_at_inbound_ended = RADIANT_TRANSFER_STATE_ABORTING;
 	rx_len = 0u;
 	rx_last = false;
 	bcast_available = true;
@@ -1839,9 +1864,13 @@ ZTEST(transfer, test_the_receive_path_meets_the_turnaround_deadline)
 	zassert_mem_equal(rx_payload, peer_payload, RADIANT_TRANSFER_PKT_BYTES);
 
 	fake_radio_advance_to(arm->t_sync_at + 1u);
-	zassert_equal(RADIANT_TRANSFER_STATE_IDLE, radiant_transfer_state(&xfer));
+	/* 0x82 is not LAST, so it opened an inbound burst: the window for the
+	 * next packet follows the acknowledgement. */
+	zassert_equal(RADIANT_TRANSFER_STATE_WAIT_NEXT, radiant_transfer_state(&xfer));
 	zassert_equal(1u, radiant_transfer_stats(&xfer)->acks_sent);
 
+	zassert_equal(RADIANT_TRANSFER_OK, radiant_transfer_abort(&xfer));
+	zassert_ok(radiant_sched_cancel(CH_XFER));
 	end_of_test();
 }
 
@@ -2162,6 +2191,9 @@ ZTEST(transfer, test_aborting_our_own_acknowledgement_raises_no_transfer_event)
 
 	zassert_equal(0u, n_ev, "the host was told a transfer it never started failed");
 	zassert_equal(0u, radiant_transfer_stats(&xfer)->transfers_failed, NULL);
+	/* 0x82 opened an inbound burst, and closing it is the one thing that
+	 * is reported: as RX_FAILED, never a transmit event. */
+	zassert_equal(1u, n_rx_failed, NULL);
 	zassert_equal(RADIANT_TRANSFER_STATE_IDLE, radiant_transfer_state(&xfer));
 	end_of_test();
 }
@@ -2195,6 +2227,11 @@ ZTEST(transfer, test_a_non_final_slot_opening_packet_is_acknowledged)
 		      "bit 5 is echoed: a non-final opener gets a non-final ack");
 
 	fake_radio_advance_to(tx->t_sync_at + 1u);
+	/* A non-final packet opened an inbound burst; close it the way
+	 * antr_channel_close() does. */
+	zassert_equal(RADIANT_TRANSFER_STATE_WAIT_NEXT, radiant_transfer_state(&xfer));
+	zassert_equal(RADIANT_TRANSFER_OK, radiant_transfer_abort(&xfer));
+	zassert_ok(radiant_sched_cancel(CH_XFER));
 	end_of_test();
 }
 
@@ -2234,7 +2271,7 @@ ZTEST(transfer, test_the_acknowledgement_retransmission_limit)
 	uint32_t i;
 
 	zassert_equal(RADIANT_TRANSFER_OK,
-		      radiant_transfer_ctrl_fields(0u, false, false, &fields));
+		      radiant_transfer_ctrl_fields(0u, true, false, &fields));
 	zassert_equal(RADIANT_FRAME_OK,
 		      radiant_frame_make(&in, &cfg_slave.id, &fields, peer_payload,
 				     RADIANT_TRANSFER_PKT_BYTES));
@@ -2257,7 +2294,7 @@ ZTEST(transfer, test_the_acknowledgement_retransmission_limit)
 		commit();
 		arm = last_arm_of(FAKE_RADIO_ARM_TX);
 		zassert_not_null(arm);
-		zassert_equal(RADIANT_CTRL_ACK_SEQ1, arm->body[BODY_CTRL],
+		zassert_equal(RADIANT_CTRL_ACK_LAST_SEQ1, arm->body[BODY_CTRL],
 			      "a repeat must be the identical frame");
 		zassert_equal(0u, arm->follow_on_us,
 			      "a repeated acknowledgement reserved follow-on air");
@@ -2286,7 +2323,7 @@ ZTEST(transfer, test_an_ancient_acknowledgement_is_not_retransmitted)
 	const struct fake_radio_arm *arm;
 
 	zassert_equal(RADIANT_TRANSFER_OK,
-		      radiant_transfer_ctrl_fields(0u, false, false, &fields));
+		      radiant_transfer_ctrl_fields(0u, true, false, &fields));
 	zassert_equal(RADIANT_FRAME_OK,
 		      radiant_frame_make(&in, &cfg_slave.id, &fields, peer_payload,
 				     RADIANT_TRANSFER_PKT_BYTES));
@@ -2668,5 +2705,407 @@ ZTEST(transfer, test_a_failed_transfer_releases_the_staged_block_once)
 	zassert_equal(2u, st->blocks_accepted);
 	zassert_equal(2u, st->blocks_released);
 	zassert_equal(1u, st->transfers_failed);
+	end_of_test();
+}
+
+/* ---------------------------------------------------------------------------
+ * Inbound multi-packet bursts: the acknowledger follows the burst
+ *
+ * Until 2026-11-12 the engine acknowledged an inbound burst packet and went
+ * IDLE, and nothing listened at ack t_sync + 1550 us where the peer's next
+ * packet arrives: a burst sent TO RadiANT never got past packet 0 on air.
+ * ---------------------------------------------------------------------------
+ */
+
+static void inbound_payload(uint32_t i, uint8_t out[RADIANT_TRANSFER_PKT_BYTES])
+{
+	uint8_t b;
+
+	for (b = 0u; b < RADIANT_TRANSFER_PKT_BYTES; b++) {
+		out[b] = (uint8_t)(0x40u + 8u * i + b);
+	}
+}
+
+/* Packet i of a master's burst (bit 3 on packet 0 only). */
+static uint8_t inbound_ctrl(uint32_t i, bool last)
+{
+	uint8_t c = 0u;
+
+	zassert_equal(RADIANT_TRANSFER_OK, radiant_transfer_ctrl(i, last, true, &c));
+	return c;
+}
+
+/* Packet 0 arrives on the owner's tracked window and is handed to
+ * radiant_transfer_on_data(), as api_tracked_frame() does. Returns its t_sync. */
+static radiant_time_t inbound_open(uint8_t ctrl0)
+{
+	struct radiant_ctrl_fields fields;
+	struct radiant_frame in;
+	uint8_t pay[RADIANT_TRANSFER_PKT_BYTES];
+	radiant_time_t t0 = radiant_radio_now() + 10000u;
+
+	inbound_payload(0u, pay);
+	zassert_equal(RADIANT_FRAME_OK, radiant_ctrl_decode(ctrl0, &fields));
+	zassert_equal(RADIANT_FRAME_OK,
+		      radiant_frame_make(&in, &cfg_slave.id, &fields, pay,
+					 RADIANT_TRANSFER_PKT_BYTES));
+	zassert_equal(RADIANT_TRANSFER_OK, radiant_transfer_on_data(&xfer, &in, t0));
+	commit();
+	return t0;
+}
+
+/* Air a frame with control byte `ctrl` carrying inbound packet i's payload at
+ * the centre of the window armed now - ack t_sync + 1550, where the peer's
+ * next packet (or its retry) goes. Returns that t_sync. */
+static radiant_time_t air_in_next_window(uint8_t ctrl, uint32_t i)
+{
+	const struct fake_radio_arm *rx = last_arm_of(FAKE_RADIO_ARM_RX);
+	uint8_t pay[RADIANT_TRANSFER_PKT_BYTES];
+	uint8_t frame[AIR_LEN];
+	radiant_time_t t;
+
+	zassert_not_null(rx, "no continuation window was opened");
+	inbound_payload(i, pay);
+	(void)build_peer_frame(frame, ctrl, pay);
+	t = rx->t_open + (radiant_time_t)RADIANT_TRANSFER_ACK_GUARD_US;
+	zassert_equal(RADIANT_RADIO_OK_RC, fake_radio_air_frame(t, frame, AIR_LEN));
+	return t;
+}
+
+/* Run the armed acknowledgement out; returns its t_sync. */
+static radiant_time_t send_armed_ack(void)
+{
+	const struct fake_radio_arm *tx = last_arm_of(FAKE_RADIO_ARM_TX);
+	radiant_time_t at;
+
+	zassert_not_null(tx, "no acknowledgement was armed");
+	zassert_true(radiant_ctrl_is_ack(tx->body[BODY_CTRL]),
+		     "the armed transmit is 0x%02X, not an acknowledgement",
+		     tx->body[BODY_CTRL]);
+	at = tx->t_sync_at;
+	fake_radio_advance_to(at + 1u);
+	return at;
+}
+
+/* Close an engine left mid-burst the way antr_channel_close() does. */
+static void close_like_the_owner(void)
+{
+	zassert_equal(RADIANT_TRANSFER_OK, radiant_transfer_abort(&xfer));
+	zassert_ok(radiant_sched_cancel(CH_XFER));
+}
+
+ZTEST(transfer, test_an_inbound_burst_is_followed_packet_by_packet)
+{
+	const uint8_t c[3] = { inbound_ctrl(0u, false), inbound_ctrl(1u, false),
+			       inbound_ctrl(2u, true) };
+	const struct fake_radio_arm *rx = NULL;
+	const struct fake_radio_arm *tx;
+	uint8_t pay[RADIANT_TRANSFER_PKT_BYTES];
+	radiant_time_t t_data = inbound_open(c[0]);
+	radiant_time_t ack;
+	uint32_t i;
+
+	zassert_equal(RADIANT_CTRL_BURST_OPEN_SEQ0, c[0]);
+	for (i = 0u; i < 3u; i++) {
+		tx = last_arm_of(FAKE_RADIO_ARM_TX);
+		zassert_not_null(tx);
+		zassert_equal(t_data + (radiant_time_t)RADIANT_TRANSFER_REPLY_US,
+			      tx->t_sync_at, "packet %u: ACK not at +1560", i);
+		zassert_equal(radiant_ctrl_reply_for(c[i]), tx->body[BODY_CTRL],
+			      "packet %u: acknowledged with 0x%02X", i,
+			      tx->body[BODY_CTRL]);
+		zassert_equal(i + 1u, n_rx_data, "packet %u not delivered once", i);
+		inbound_payload(i, pay);
+		zassert_mem_equal(rx_payload, pay, RADIANT_TRANSFER_PKT_BYTES,
+				  "packet %u delivered out of order", i);
+		zassert_equal(i == 2u, rx_last);
+
+		ack = send_armed_ack();
+		zassert_equal(RADIANT_TRANSFER_STATE_WAIT_NEXT,
+			      radiant_transfer_state(&xfer),
+			      "packet %u: no window after its ACK", i);
+		rx = last_arm_of(FAKE_RADIO_ARM_RX);
+		zassert_not_null(rx);
+		zassert_equal(ack + RADIANT_TRANSFER_NEXT_PACKET_US -
+				      RADIANT_TRANSFER_ACK_GUARD_US, rx->t_open);
+		zassert_equal(ack + RADIANT_TRANSFER_NEXT_PACKET_US +
+				      RADIANT_TRANSFER_ACK_GUARD_US, rx->t_close);
+		zassert_true(rx->follow_on_us >=
+				     RADIANT_TRANSFER_REPLY_US + RADIANT_TRANSFER_ACK_GUARD_US,
+			     "the window must reserve the ACK it may need");
+		if (i == 2u) {
+			break;
+		}
+		t_data = air_in_next_window(c[i + 1u], i + 1u);
+		fake_radio_advance_to(t_data + 100u);
+		zassert_equal(RADIANT_TRANSFER_STATE_TX_REPLY,
+			      radiant_transfer_state(&xfer));
+	}
+
+	/* One window after LAST, for a retry of LAST; it closes empty and the
+	 * burst is complete, with no repeat of the final ACK. */
+	fake_radio_advance_to(rx->t_close + 5000u);
+	zassert_equal(RADIANT_TRANSFER_STATE_IDLE, radiant_transfer_state(&xfer));
+	zassert_equal(3u, fake_radio_stats()->arms_tx, "an ACK was repeated after LAST");
+	zassert_equal(3u, radiant_transfer_stats(&xfer)->acks_sent);
+	zassert_equal(0u, n_rx_failed);
+	zassert_equal(1u, n_inbound_ended);
+	zassert_equal(RADIANT_TRANSFER_STATE_IDLE, state_at_inbound_ended,
+		      "the owner must find the engine idle when told to repost");
+	zassert_equal(0u, n_ev, "an inbound burst raised a transmit event");
+	end_of_test();
+}
+
+/* THE REGRESSION GUARD: standalone acknowledged data - a LAST packet with no
+ * burst open, which is how Zwift's FE-C commands arrive - arms nothing after
+ * its acknowledgement, exactly as before inbound bursts existed. */
+ZTEST(transfer, test_acknowledged_data_arms_no_window_after_its_ack)
+{
+	(void)inbound_open(RADIANT_CTRL_ACK_DATA_OPEN);
+	(void)send_armed_ack();
+
+	zassert_equal(RADIANT_TRANSFER_STATE_IDLE, radiant_transfer_state(&xfer));
+	zassert_equal(0u, fake_radio_stats()->arms_rx,
+		      "acknowledged data opened a receive window");
+	zassert_equal(1u, fake_radio_stats()->arms_tx);
+	zassert_equal(0u, n_inbound_ended, "acknowledged data is not a burst");
+	zassert_equal(0u, n_rx_failed);
+	end_of_test();
+}
+
+/* Our ACK was lost and the peer sent the same packet again: same sequence
+ * bit. It is answered with the very same ACK and not delivered twice. */
+ZTEST(transfer, test_a_duplicate_is_reacknowledged_and_not_delivered)
+{
+	const struct fake_radio_arm *tx;
+	uint8_t first_reply[RADIANT_RADIO_BODY_MAX];
+	radiant_time_t t;
+
+	(void)inbound_open(inbound_ctrl(0u, false));
+	memcpy(first_reply, last_arm_of(FAKE_RADIO_ARM_TX)->body, sizeof(first_reply));
+	(void)send_armed_ack();
+
+	/* The host writes a new broadcast meanwhile: a re-ACK still repeats
+	 * the ACK that was lost, byte for byte. */
+	bcast_payload[0] ^= 0xFFu;
+	t = air_in_next_window(inbound_ctrl(0u, false), 0u);
+	fake_radio_advance_to(t + 100u);
+	bcast_payload[0] ^= 0xFFu;
+
+	zassert_equal(RADIANT_TRANSFER_STATE_TX_REPLY, radiant_transfer_state(&xfer));
+	tx = last_arm_of(FAKE_RADIO_ARM_TX);
+	zassert_equal(t + RADIANT_TRANSFER_REPLY_US, tx->t_sync_at);
+	zassert_mem_equal(first_reply, tx->body, BODY_LEN, "the re-ACK differs");
+	zassert_equal(1u, n_rx_data, "the duplicate was delivered again");
+	zassert_equal(1u, radiant_transfer_stats(&xfer)->rx_duplicates);
+
+	(void)send_armed_ack();
+	zassert_equal(RADIANT_TRANSFER_STATE_WAIT_NEXT, radiant_transfer_state(&xfer));
+
+	/* And the next packet proper still goes up. */
+	t = air_in_next_window(inbound_ctrl(1u, true), 1u);
+	fake_radio_advance_to(t + 100u);
+	zassert_equal(2u, n_rx_data);
+	zassert_true(rx_last);
+	(void)send_armed_ack();
+	fake_radio_advance_to(radiant_radio_now() + 5000u);
+	zassert_equal(RADIANT_TRANSFER_STATE_IDLE, radiant_transfer_state(&xfer));
+	zassert_equal(0u, n_rx_failed);
+	end_of_test();
+}
+
+/* Nothing in the window: the saved ACK goes out again 3143 us after the last
+ * one (run 0's measured repeat), and the next window follows it. Twenty
+ * repeats, then the burst has failed - exactly one rx_failed. */
+ZTEST(transfer, test_empty_windows_repeat_the_ack_then_fail_the_burst_once)
+{
+	const struct fake_radio_arm *rx;
+	const struct fake_radio_arm *tx;
+	radiant_time_t prev;
+	uint32_t repeats = 0u;
+	uint32_t guard;
+
+	(void)inbound_open(inbound_ctrl(0u, false));
+
+	for (guard = 0u; guard < 64u; guard++) {
+		prev = send_armed_ack();
+		zassert_equal(RADIANT_TRANSFER_STATE_WAIT_NEXT,
+			      radiant_transfer_state(&xfer));
+		rx = last_arm_of(FAKE_RADIO_ARM_RX);
+		zassert_equal(prev + RADIANT_TRANSFER_NEXT_PACKET_US -
+				      RADIANT_TRANSFER_ACK_GUARD_US, rx->t_open,
+			      "window %u misplaced", repeats);
+		fake_radio_advance_to(rx->t_close + 1000u);
+		if (radiant_transfer_state(&xfer) == RADIANT_TRANSFER_STATE_IDLE) {
+			break;
+		}
+		zassert_equal(RADIANT_TRANSFER_STATE_TX_REPLY,
+			      radiant_transfer_state(&xfer));
+		tx = last_arm_of(FAKE_RADIO_ARM_TX);
+		zassert_equal(prev + RADIANT_TRANSFER_REPLY_RETRY_US, tx->t_sync_at,
+			      "repeat %u not at +3143", repeats);
+		zassert_equal(RADIANT_CTRL_ACK_SEQ1, tx->body[BODY_CTRL]);
+		repeats++;
+	}
+
+	zassert_equal(RADIANT_TRANSFER_REPLY_ATTEMPTS_MAX - 1u, repeats,
+		      "%u repeats; the measured limit is 21 attempts", repeats);
+	zassert_equal(RADIANT_TRANSFER_REPLY_ATTEMPTS_MAX - 1u,
+		      radiant_transfer_stats(&xfer)->ack_retransmits);
+	zassert_equal(1u, n_rx_failed);
+	zassert_equal(1u, n_inbound_ended);
+	zassert_equal(1u, n_rx_data);
+	zassert_equal(0u, n_ev);
+	end_of_test();
+}
+
+/* The peer went back to broadcasting mid-burst: it abandoned the burst. The
+ * engine reports it, goes IDLE, and hands the broadcast back unconsumed so the
+ * owner handles it as the slot frame it is. */
+static bool last_rx_consumed;
+
+static void sched_rx_recording(uint8_t ch, uint8_t filter_index,
+			       const struct radiant_rx_event *e, void *user)
+{
+	ARG_UNUSED(filter_index);
+	ARG_UNUSED(user);
+	if (ch == CH_XFER) {
+		last_rx_consumed = radiant_transfer_on_rx_event(&xfer, e);
+	}
+}
+
+static const struct radiant_sched_cbs sched_cbs_recording = {
+	.rx = sched_rx_recording,
+	.tx = sched_tx,
+	.done = sched_done,
+};
+
+ZTEST(transfer, test_a_broadcast_in_the_window_ends_the_burst_unconsumed)
+{
+	radiant_time_t t;
+
+	zassert_equal(RADIANT_RADIO_OK_RC, radiant_sched_init(&sched_cbs_recording, NULL));
+	last_rx_consumed = true;
+
+	(void)inbound_open(inbound_ctrl(0u, false));
+	(void)send_armed_ack();
+	t = air_in_next_window(RADIANT_CTRL_BROADCAST, 1u);
+	fake_radio_advance_to(t + 2000u);
+
+	zassert_false(last_rx_consumed, "the broadcast was swallowed");
+	zassert_equal(RADIANT_TRANSFER_STATE_IDLE, radiant_transfer_state(&xfer));
+	zassert_equal(1u, n_rx_failed);
+	zassert_equal(1u, n_inbound_ended);
+	zassert_equal(1u, n_rx_data, "a broadcast is not a burst packet");
+	end_of_test();
+}
+
+ZTEST(transfer, test_abort_mid_burst_reports_rx_failed_once)
+{
+	(void)inbound_open(inbound_ctrl(0u, false));
+	(void)send_armed_ack();
+	zassert_equal(RADIANT_TRANSFER_STATE_WAIT_NEXT, radiant_transfer_state(&xfer));
+
+	close_like_the_owner();
+	fake_radio_advance_to(radiant_radio_now() + 10000u);
+
+	zassert_equal(RADIANT_TRANSFER_STATE_IDLE, radiant_transfer_state(&xfer));
+	zassert_equal(1u, n_rx_failed);
+	zassert_equal(0u, n_inbound_ended, "abort's caller is tearing down");
+	zassert_equal(0u, n_ev, "the host never started a transfer");
+	end_of_test();
+}
+
+ZTEST(transfer, test_abort_after_last_reports_nothing)
+{
+	radiant_time_t t;
+
+	(void)inbound_open(inbound_ctrl(0u, false));
+	(void)send_armed_ack();
+	t = air_in_next_window(inbound_ctrl(1u, true), 1u);
+	fake_radio_advance_to(t + 100u);
+	(void)send_armed_ack();
+	zassert_equal(RADIANT_TRANSFER_STATE_WAIT_NEXT, radiant_transfer_state(&xfer),
+		      "setup: the window after LAST");
+
+	close_like_the_owner();
+	fake_radio_advance_to(radiant_radio_now() + 10000u);
+	zassert_equal(0u, n_rx_failed, "a completed burst is not a failed one");
+	zassert_equal(0u, n_ev);
+	end_of_test();
+}
+
+ZTEST(transfer, test_submit_while_following_a_burst_is_busy)
+{
+	uint8_t blk[RADIANT_TRANSFER_PKT_BYTES] = { 1u };
+
+	(void)inbound_open(inbound_ctrl(0u, false));
+	(void)send_armed_ack();
+	zassert_equal(RADIANT_TRANSFER_STATE_WAIT_NEXT, radiant_transfer_state(&xfer));
+
+	zassert_equal(RADIANT_TRANSFER_EBUSY,
+		      radiant_transfer_burst_block(&xfer, blk, sizeof(blk),
+						   RADIANT_TRANSFER_SEG_START |
+							   RADIANT_TRANSFER_SEG_END,
+						   RADIANT_TIME_NEVER));
+	zassert_equal(RADIANT_TRANSFER_EBUSY,
+		      radiant_transfer_ack_data(&xfer, blk, sizeof(blk),
+						RADIANT_TIME_NEVER));
+	zassert_equal(0u, n_ev, "a refused block raised an event");
+
+	close_like_the_owner();
+	end_of_test();
+}
+
+/* EVENT_TRANSFER_TX_START's predicate: the first attempt of packet 0 of a
+ * multi-packet burst, and nothing else. */
+ZTEST(transfer, test_cur_starts_burst_holds_for_one_transmit_per_burst)
+{
+	uint8_t one[RADIANT_TRANSFER_PKT_BYTES] = { 7u };
+	struct radiant_transfer_cfg master;
+
+	/* A two-packet burst: packet 0 yes, packet 1 no. */
+	reset_blocks();
+	queue_block(0u, 16u, RADIANT_TRANSFER_SEG_START | RADIANT_TRANSFER_SEG_END,
+		    0x10u);
+	zassert_true(feed_next_block());
+	zassert_true(radiant_transfer_cur_starts_burst(&xfer));
+	run_one_packet_exchange();
+	zassert_equal(RADIANT_TRANSFER_STATE_TX_DATA, radiant_transfer_state(&xfer));
+	zassert_false(radiant_transfer_cur_starts_burst(&xfer), "packet 1");
+	drive();
+	zassert_equal(RADIANT_TRANSFER_EV_TX_COMPLETED, evlog[n_ev - 1u].ev);
+
+	/* A one-packet burst. */
+	reset_blocks();
+	queue_block(0u, 8u, RADIANT_TRANSFER_SEG_START | RADIANT_TRANSFER_SEG_END,
+		    0x20u);
+	zassert_true(feed_next_block());
+	zassert_false(radiant_transfer_cur_starts_burst(&xfer), "one-packet burst");
+	drive();
+
+	/* Acknowledged data. */
+	zassert_equal(RADIANT_TRANSFER_OK,
+		      radiant_transfer_ack_data(&xfer, one, sizeof(one),
+						RADIANT_TIME_NEVER));
+	commit();
+	zassert_false(radiant_transfer_cur_starts_burst(&xfer), "acknowledged data");
+	reset_blocks();
+	drive();
+
+	/* A retry of packet 0 (a master's, which is retried on its own). */
+	make_cfg(&master, true, CH_XFER);
+	zassert_equal(RADIANT_TRANSFER_OK, radiant_transfer_init(&xfer, &master));
+	reset_blocks();
+	queue_block(0u, 16u, RADIANT_TRANSFER_SEG_START | RADIANT_TRANSFER_SEG_END,
+		    0x30u);
+	zassert_true(feed_next_block());
+	zassert_true(fake_radio_step(), "packet 0 never went out");
+	zassert_equal(RADIANT_TRANSFER_STATE_WAIT_ACK, radiant_transfer_state(&xfer));
+	zassert_true(fake_radio_step(), "the window never closed");
+	zassert_equal(RADIANT_TRANSFER_STATE_TX_DATA, radiant_transfer_state(&xfer),
+		      "setup: packet 0 was not retried");
+	zassert_false(radiant_transfer_cur_starts_burst(&xfer), "retry of packet 0");
+	drive();
 	end_of_test();
 }

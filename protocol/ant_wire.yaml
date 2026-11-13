@@ -1342,7 +1342,12 @@ constant_groups:
                 paces itself on this rather than on a host timer.",
          source: "tools (ant_session, ant_sim)"}
       - {name: EVENT_TRANSFER_RX_FAILED, value: 0x04,
-         desc: "An inbound burst did not complete.",
+         desc: "An inbound burst did not complete. RadiANT raises it once per
+                multi-packet burst that ends before its last packet was
+                acknowledged: the peer stopped or went back to broadcasting,
+                the acknowledgement repeats ran out, the channel closed (before
+                EVENT_CHANNEL_CLOSED) or dropped to search. Never for
+                acknowledged data.",
          source: "tools (ant_session)"}
       - {name: EVENT_TRANSFER_TX_COMPLETED, value: 0x05,
          desc: "Acknowledged data or a burst was acknowledged by the far end.
@@ -1364,7 +1369,10 @@ constant_groups:
          desc: "Two channels wanted the radio at the same instant.",
          source: "tools (ant_session)"}
       - {name: EVENT_TRANSFER_TX_START, value: 0x0A,
-         desc: "Progress, not an outcome - keep waiting.",
+         desc: "Progress, not an outcome - keep waiting. RadiANT raises it once
+                per outbound multi-packet burst, when packet 0 first goes on
+                the air; not for acknowledged data, a one-packet burst or a
+                retry.",
          source: "tools (ant_session)"}
       - {name: EVENT_RX_DATA_OVERFLOW, value: 0x0B,
          desc: "Data was blocked because the application is servicing events

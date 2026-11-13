@@ -283,19 +283,17 @@ extern "C" {
  * the 3113 a running burst takes is close enough to be the same timer and
  * far enough apart (1%) to record as two numbers.
  *
- * Implemented as radiant_transfer_reply_retransmit(), limit enforced here,
- * but this module does NOT own the timer - that would be a second scheduler.
- * radiant_sched.c owns no timer either (it arms absolute instants and lets
- * the backend hold them), so recovery is meant to be driven off a
- * housekeeping wake in api_sched_done().
+ * Used inside an inbound multi-packet burst (RADIANT_TRANSFER_STATE_WAIT_NEXT):
+ * when the window at ack t_sync + NEXT_PACKET_US closes empty, the saved
+ * acknowledgement goes out again this long after the previous one. The
+ * peer reads it as a stale acknowledgement (radiant_transfer_ack_is_stale())
+ * and retries into the window that follows it. The same limits bound it as
+ * bound radiant_transfer_reply_retransmit(). The timer is the window's own
+ * terminal event, so this module still owns no timer.
  *
- * NOT WIRED YET, deliberately: there's no production caller. Our own receive
- * window closes ~2.9 ms before a peer retry can arrive, so an
- * acknowledger-side retransmission today would put replies on air into a
- * link where the peer's own retries are already unhearable - run 0 measured
- * a NON-FINAL 0xD2 repeat, never a final acknowledgement. Wiring it needs a
- * WAIT_NEXT state and a window at ack t_sync + 1550 +/- 250 (inbound-burst
- * work).
+ * Run 0 measured a NON-FINAL 0xD2 repeat, never a final acknowledgement, so
+ * a burst whose LAST was acknowledged ends on its first empty window rather
+ * than repeating the final acknowledgement.
  */
 #define RADIANT_TRANSFER_REPLY_RETRY_US  3143u
 /* ATTEMPTS, not retransmissions: the measured 21 is one original plus twenty
@@ -573,6 +571,25 @@ struct radiant_transfer_ops {
 	 */
 	radiant_time_t (*retry_t_sync)(void *ctx);
 
+	/*
+	 * Optional. An inbound multi-packet burst ended before its LAST packet
+	 * was acknowledged: the peer stopped, broadcast instead, the
+	 * acknowledgement repeats ran out, or radiant_transfer_abort() closed
+	 * it. Called once per such burst, never for acknowledged data and never
+	 * for a burst that completed. The owner's EVENT_TRANSFER_RX_FAILED.
+	 * Radio interrupt context, O(1).
+	 */
+	void (*rx_failed)(void *ctx);
+
+	/*
+	 * Optional. An inbound multi-packet burst ended, completed or not, and
+	 * the engine is IDLE again: the owner's tracked work, which the engine
+	 * displaced for the whole burst, may be posted again. Not called by
+	 * radiant_transfer_abort(), whose caller is tearing the channel down.
+	 * Radio interrupt context, O(1).
+	 */
+	void (*inbound_ended)(void *ctx);
+
 #if defined(CONFIG_RADIANT_ACK_FAULTS)
 	/*
 	 * Optional, and a TEST INSTRUMENT ONLY - see CONFIG_RADIANT_ACK_FAULTS.
@@ -644,13 +661,22 @@ enum radiant_transfer_state {
 	 * send and holding a window open for a block that may never come is how
 	 * a stalled host turns into wasted receive current. */
 	RADIANT_TRANSFER_STATE_WAIT_BLOCK,
-	/* We are the acknowledger and our reply is armed or on the air. */
+	/* We are the acknowledger and our reply is armed or on the air. Inside
+	 * an inbound multi-packet burst it is followed by WAIT_NEXT; for
+	 * acknowledged data (a LAST packet with no burst open) by IDLE. */
 	RADIANT_TRANSFER_STATE_TX_REPLY,
 	/* radiant_transfer_abort() has been called and the terminal event of the
 	 * cancelled operation has not arrived yet. It always arrives - the HAL
 	 * guarantees it, and K5 measured the mock doing it without any fault
 	 * injection - so this state always ends. */
-	RADIANT_TRANSFER_STATE_ABORTING
+	RADIANT_TRANSFER_STATE_ABORTING,
+	/* An inbound multi-packet burst is open and our acknowledgement has
+	 * gone out: the window for the peer's next packet (or its retry of the
+	 * one just acknowledged) is armed at ack t_sync + NEXT_PACKET_US
+	 * +/- ACK_GUARD_US. Only reached once a non-LAST packet has been heard;
+	 * acknowledged data never enters it. A window also follows the LAST
+	 * packet's acknowledgement, once, for the peer's retry of LAST. */
+	RADIANT_TRANSFER_STATE_WAIT_NEXT
 };
 
 struct radiant_transfer_stats {
@@ -687,6 +713,13 @@ struct radiant_transfer_stats {
 	 * packet in flight (radiant_transfer_ack_is_stale()), each handled as a
 	 * missed acknowledgement. */
 	uint32_t stale_acks;
+	/* Inbound burst packets heard again with the sequence bit of the packet
+	 * last delivered: the peer missed our acknowledgement. Re-acknowledged,
+	 * not delivered twice. */
+	uint32_t rx_duplicates;
+	/* Inbound multi-packet bursts that ended before LAST was acknowledged
+	 * (one per ops->rx_failed call). */
+	uint32_t rx_failed;
 #if defined(CONFIG_RADIANT_ACK_FAULTS)
 	/* A reply_plan offset that put the acknowledgement before the radio
 	 * could arm it. No ACK went out - an early one would be a fault the
@@ -751,6 +784,20 @@ struct radiant_transfer {
 	 * retransmission can be refused for being ancient rather than merely
 	 * over the attempt limit. See RADIANT_TRANSFER_REPLY_VALID_US. */
 	radiant_time_t reply_t_sync;
+
+	/* An inbound multi-packet burst: open (a non-LAST packet was heard and
+	 * acknowledged), and whether its LAST packet has been acknowledged.
+	 * Both false for acknowledged data, which therefore runs exactly the
+	 * path it ran before inbound bursts existed. */
+	bool       in_burst;
+	bool       in_last_acked;
+	/* Control byte of the last inbound packet DELIVERED: its sequence bit
+	 * is what tells a duplicate from the next packet. */
+	uint8_t    in_data_ctrl;
+	/* The t_sync our acknowledgement in flight was armed for, used to place
+	 * the next window when the transmit reports no achieved t_sync (a
+	 * missed or denied reply). */
+	radiant_time_t in_ack_at;
 
 	/* The frame currently on the air. The HAL DMAs out of this, so it must
 	 * outlive the arm call and must not be a stack buffer. */
@@ -889,6 +936,16 @@ int radiant_transfer_abort(struct radiant_transfer *t);
  * caller's payload handling is the one way to miss a deadline that has no error
  * code attached to it.
  *
+ * Accepted in IDLE and, for the burst's own continuation window, in
+ * WAIT_NEXT (reached through radiant_transfer_on_rx_event()). A non-LAST
+ * packet opens an inbound burst; a LAST packet with no burst open is
+ * acknowledged data and leaves the engine IDLE after its reply, exactly as
+ * before inbound bursts existed. While a burst is open, a packet with the
+ * sequence bit of the one last delivered is a duplicate: re-acknowledged with
+ * the saved reply, not delivered (stats.rx_duplicates). A slave's retry of
+ * packet 0 a period later cannot be told from a new message and is not
+ * deduplicated.
+ *
  * Returns RADIANT_TRANSFER_OK, or:
  *   EINVAL   null, or a control byte that is not a data packet
  *   ESTATE   not initialised, engine busy, or no broadcast payload (gap 3)
@@ -910,6 +967,9 @@ int radiant_transfer_on_data(struct radiant_transfer *t, const struct radiant_fr
  *
  * Returns RADIANT_TRANSFER_OK, RADIANT_TRANSFER_ESTATE (nothing to repeat,
  * engine busy, or limit reached) or RADIANT_TRANSFER_EIO.
+ *
+ * IDLE only. Inside an inbound burst the engine repeats its acknowledgement
+ * itself, from WAIT_NEXT, under the same limits.
  */
 int radiant_transfer_reply_retransmit(struct radiant_transfer *t, radiant_time_t t_sync_at);
 
@@ -935,7 +995,14 @@ int radiant_transfer_reply_retransmit(struct radiant_transfer *t, radiant_time_t
  */
 void radiant_transfer_on_tx_event(struct radiant_transfer *t,
 			      const struct radiant_tx_event *e);
-void radiant_transfer_on_rx_event(struct radiant_transfer *t,
+/*
+ * Returns true when the engine consumed the event. False only in WAIT_NEXT,
+ * for a CRC-valid BROADCAST in the continuation window: the peer abandoned
+ * the burst (ops->rx_failed unless LAST was acknowledged), the engine is
+ * IDLE again, and the frame is the owner's to handle as an ordinary tracked
+ * frame. Every other caller may ignore the value.
+ */
+bool radiant_transfer_on_rx_event(struct radiant_transfer *t,
 			      const struct radiant_rx_event *e);
 
 /* ---------------------------------------------------------------------------
@@ -974,6 +1041,17 @@ void radiant_transfer_on_rx_event(struct radiant_transfer *t,
 int radiant_transfer_arm_tx(struct radiant_transfer *t, uint8_t ctrl,
 			const uint8_t *payload, uint8_t payload_len,
 			radiant_time_t t_sync_at);
+
+/*
+ * Arm the saved acknowledgement again at t_sync_at, under
+ * RADIANT_TRANSFER_REPLY_ATTEMPTS_MAX and RADIANT_TRANSFER_REPLY_VALID_US, and
+ * move to TX_REPLY. The core of radiant_transfer_reply_retransmit() without
+ * its IDLE check, so that WAIT_NEXT (radiant_burst.c) can repeat from inside
+ * the burst. Returns RADIANT_TRANSFER_OK, ESTATE (nothing saved, limit
+ * reached, or stale - the saved reply is then dropped) or EIO.
+ */
+int radiant_transfer_reply_repeat(struct radiant_transfer *t,
+				  radiant_time_t t_sync_at);
 
 /*
  * Change the transmit power of every packet this engine sends from its next
@@ -1016,6 +1094,15 @@ const uint8_t *radiant_transfer_cur_payload(const struct radiant_transfer *t);
  * tracking it dropped to search.
  */
 bool radiant_transfer_cur_is_slot(const struct radiant_transfer *t);
+/*
+ * True when the outbound packet in flight is the first attempt of packet 0
+ * of a MULTI-packet burst whose blocks the engine owns - the transmit the
+ * owner reports as EVENT_TRANSFER_TX_START. False for acknowledged data, a
+ * one-packet burst (docs/ant-radio-link.md: no TX_START for those), a retry
+ * of packet 0, and any later packet, so it holds for exactly one transmit
+ * per burst.
+ */
+bool radiant_transfer_cur_starts_burst(const struct radiant_transfer *t);
 
 #ifdef __cplusplus
 }

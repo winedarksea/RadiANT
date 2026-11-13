@@ -828,6 +828,19 @@ bool radiant_channel_on_slot_missed(uint8_t channel, radiant_time_t now);
  */
 bool radiant_channel_on_slot_denied(uint8_t channel, radiant_time_t now);
 
+/*
+ * The channel spent its slots on something that was not a slot: an inbound
+ * burst, whose packets the owner must not re-anchor on and during which it
+ * posts no tracked work. Steps the slot clock forward by whole periods until
+ * t_next is at or after `earliest`, on the channel's own grid, charging
+ * NOTHING - neither a miss nor a denial, since the peer was there the whole
+ * time. Without it a burst longer than a period left t_next in the past, and
+ * every stale instant would be posted, missed and counted until the channel
+ * went to search. No-op on a channel that is not SEARCHING or TRACKING, or
+ * whose t_next is already late enough.
+ */
+void radiant_channel_catch_up(uint8_t channel, radiant_time_t earliest);
+
 /* Consecutive denials on this channel since the last slot it heard. Zero on a
  * backend that owns the radio; readable so that a bench run can attribute a
  * widened guard to the arbiter rather than to the master's clock. */

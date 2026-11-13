@@ -230,10 +230,13 @@ int radiant_transfer_on_data(struct radiant_transfer *t, const struct radiant_fr
 	if (!t->ready) {
 		return RADIANT_TRANSFER_ESTATE;
 	}
-	if (t->state != RADIANT_TRANSFER_STATE_IDLE) {
+	if (t->state != RADIANT_TRANSFER_STATE_IDLE &&
+	    t->state != RADIANT_TRANSFER_STATE_WAIT_NEXT) {
 		/* Either we are mid-transfer as the originator, or the previous
 		 * acknowledgement has not left yet. Neither can be answered
-		 * with the radio we do not have. */
+		 * with the radio we do not have. WAIT_NEXT is the inbound
+		 * burst's own continuation window, routed here by
+		 * radiant_transfer_on_rx_event(). */
 		return RADIANT_TRANSFER_ESTATE;
 	}
 	if (f->payload_len != RADIANT_TRANSFER_PKT_BYTES) {
@@ -268,6 +271,28 @@ int radiant_transfer_on_data(struct radiant_transfer *t, const struct radiant_fr
 					    f->payload_len,
 					    radiant_ctrl_is_last(f->ctrl_byte));
 		}
+		return RADIANT_TRANSFER_OK;
+	}
+
+	/* A DUPLICATE: the peer missed our acknowledgement and sent the same
+	 * packet again, so the sequence bit has not moved. Answer it with the
+	 * acknowledgement it missed - the saved one, byte for byte - and do not
+	 * deliver it a second time. Only inside an open burst: a LAST packet
+	 * with no burst open is acknowledged data, and a slave's retry of
+	 * packet 0 a period later is indistinguishable on air from a new
+	 * message, so neither is deduplicated. No time test: the burst's own
+	 * state machine ends the burst, and with it this comparison. */
+	if (t->in_burst && t->reply_ctrl != 0u &&
+	    radiant_ctrl_seq(f->ctrl_byte) == radiant_ctrl_seq(t->in_data_ctrl)) {
+		reply_at = t_sync + (radiant_time_t)RADIANT_TRANSFER_REPLY_US;
+		rc = radiant_transfer_arm_tx(t, t->reply_ctrl, t->reply_payload,
+					     RADIANT_TRANSFER_PKT_BYTES, reply_at);
+		if (rc != RADIANT_TRANSFER_OK) {
+			return rc;
+		}
+		t->state = RADIANT_TRANSFER_STATE_TX_REPLY;
+		t->in_ack_at = reply_at;
+		t->stats.rx_duplicates++;
 		return RADIANT_TRANSFER_OK;
 	}
 
@@ -335,6 +360,20 @@ int radiant_transfer_on_data(struct radiant_transfer *t, const struct radiant_fr
 	t->reply_ctrl = reply;
 	t->reply_attempts = 1u; /* attempt one of at most REPLY_ATTEMPTS_MAX */
 	memcpy(t->reply_payload, payload, RADIANT_TRANSFER_PKT_BYTES);
+	t->in_ack_at = reply_at;
+
+	/* A non-LAST packet opens (or continues) an inbound burst, and its
+	 * acknowledgement will be followed by a window for the next packet. A
+	 * LAST packet closes an open burst; with none open it is acknowledged
+	 * data and none of this applies - the design rule that keeps that path
+	 * exactly as it was. */
+	if (!radiant_ctrl_is_last(f->ctrl_byte)) {
+		t->in_burst = true;
+		t->in_last_acked = false;
+	} else if (t->in_burst) {
+		t->in_last_acked = true;
+	}
+	t->in_data_ctrl = f->ctrl_byte;
 
 	if (t->cfg.ops->rx_data != NULL) {
 		t->cfg.ops->rx_data(t->cfg.ctx, f->payload, f->payload_len,
@@ -346,13 +385,22 @@ int radiant_transfer_on_data(struct radiant_transfer *t, const struct radiant_fr
 
 int radiant_transfer_reply_retransmit(struct radiant_transfer *t, radiant_time_t t_sync_at)
 {
-	int rc;
-
 	if (t == NULL) {
 		return RADIANT_TRANSFER_EINVAL;
 	}
 	if (!t->ready || t->state != RADIANT_TRANSFER_STATE_IDLE) {
 		return RADIANT_TRANSFER_ESTATE;
+	}
+	return radiant_transfer_reply_repeat(t, t_sync_at);
+}
+
+int radiant_transfer_reply_repeat(struct radiant_transfer *t,
+				  radiant_time_t t_sync_at)
+{
+	int rc;
+
+	if (t == NULL) {
+		return RADIANT_TRANSFER_EINVAL;
 	}
 	if (t->reply_ctrl == 0u) {
 		return RADIANT_TRANSFER_ESTATE;
@@ -386,5 +434,6 @@ int radiant_transfer_reply_retransmit(struct radiant_transfer *t, radiant_time_t
 	t->reply_attempts++;
 	t->stats.ack_retransmits++;
 	t->state = RADIANT_TRANSFER_STATE_TX_REPLY;
+	t->in_ack_at = t_sync_at;
 	return RADIANT_TRANSFER_OK;
 }

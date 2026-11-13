@@ -1742,6 +1742,32 @@ bool radiant_channel_on_slot_denied(uint8_t channel, radiant_time_t now)
 	return radiant_channel_on_slot_missed(channel, now);
 }
 
+void radiant_channel_catch_up(uint8_t channel, radiant_time_t earliest)
+{
+	struct chan *c;
+	radiant_time_t p;
+
+	if (!ch_valid(channel)) {
+		return;
+	}
+
+	c = &channels[channel];
+	if (c->state != RADIANT_CH_STATE_SEARCHING &&
+	    c->state != RADIANT_CH_STATE_TRACKING) {
+		return;
+	}
+	if (c->t_next == RADIANT_TIME_NEVER || c->t_next >= earliest) {
+		return;
+	}
+
+	p = (radiant_time_t)period_us(c);
+	if (p == 0u) {
+		return;
+	}
+	/* Whole periods, in one step: the phase stays the master's. */
+	c->t_next += ((earliest - c->t_next + p - 1u) / p) * p;
+}
+
 uint8_t radiant_channel_denied_count(uint8_t channel)
 {
 	if (!ch_valid(channel)) {

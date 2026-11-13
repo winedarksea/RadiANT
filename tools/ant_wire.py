@@ -787,7 +787,11 @@ EVENT_RX_FAIL = 0x02
 # this rather than on a host timer. [tools (ant_session, ant_sim)]
 EVENT_TX = 0x03
 
-# An inbound burst did not complete. [tools (ant_session)]
+# An inbound burst did not complete. RadiANT raises it once per multi-packet
+# burst that ends before its last packet was acknowledged: the peer stopped or
+# went back to broadcasting, the acknowledgement repeats ran out, the channel
+# closed (before EVENT_CHANNEL_CLOSED) or dropped to search. Never for
+# acknowledged data. [tools (ant_session)]
 EVENT_TRANSFER_RX_FAILED = 0x04
 
 # Acknowledged data or a burst was acknowledged by the far end. Also releases
@@ -809,7 +813,9 @@ EVENT_RX_FAIL_GO_TO_SEARCH = 0x08
 # Two channels wanted the radio at the same instant. [tools (ant_session)]
 EVENT_CHANNEL_COLLISION = 0x09
 
-# Progress, not an outcome - keep waiting. [tools (ant_session)]
+# Progress, not an outcome - keep waiting. RadiANT raises it once per outbound
+# multi-packet burst, when packet 0 first goes on the air; not for acknowledged
+# data, a one-packet burst or a retry. [tools (ant_session)]
 EVENT_TRANSFER_TX_START = 0x0A
 
 # Data was blocked because the application is servicing events too slowly to

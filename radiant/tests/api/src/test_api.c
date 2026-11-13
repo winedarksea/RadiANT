@@ -133,6 +133,8 @@ static uint32_t count_channel_events(uint8_t ch, uint8_t code)
 	return n;
 }
 
+static int index_of_channel_event(uint8_t ch, uint8_t code);
+
 /* ---------------------------------------------------------------------------
  * Fixture
  * ---------------------------------------------------------------------------
@@ -799,6 +801,8 @@ static void master_acked_data_keeps_grid(bool slave_answers)
 		      count_channel_events(CH,
 					   ANTW_EVENT_TRANSFER_TX_COMPLETED),
 		      "the transfer's outcome was not the one this case set up");
+	zassert_equal(0u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_START),
+		      "acknowledged data raised EVENT_TRANSFER_TX_START");
 
 	assert_next_broadcast_on_grid(slot, missed0);
 	end_of_test();
@@ -860,6 +864,15 @@ ZTEST(api, test_a_master_keeps_its_grid_after_a_burst)
 	zassert_equal(1u, count_channel_events(CH,
 					       ANTW_EVENT_TRANSFER_TX_COMPLETED),
 		      "the burst did not complete");
+	/* EVENT_TRANSFER_TX_START (0x0A): once, for packet 0, before the
+	 * completion. */
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_START),
+		      "a two-packet burst raised %u TX_START",
+		      count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_START));
+	zassert_true(index_of_channel_event(CH, ANTW_EVENT_TRANSFER_TX_START) <
+			     index_of_channel_event(CH,
+						    ANTW_EVENT_TRANSFER_TX_COMPLETED),
+		     "TX_START came after TX_COMPLETED");
 
 	assert_next_broadcast_on_grid(p0->t_sync_at, missed0);
 	end_of_test();
@@ -3236,7 +3249,12 @@ ZTEST(api, test_a_tracking_slave_reports_one_message_per_acknowledged_packet)
  * packet COUNT masked to two bits, so packet 5 read 0 again.
  *
  * One packet per tracked window: the host-facing sequence depends only on
- * the order of rx_data() calls, not on the burst's on-air spacing.
+ * the order of rx_data() calls, not on the burst's on-air spacing. On a
+ * SLAVE_RX_ONLY channel, which acknowledges nothing and so never follows a
+ * burst: an acknowledging channel now follows it and, given one packet per
+ * period, ends it as abandoned after its repeated acknowledgements run out
+ * (test_a_burst_the_peer_abandons_raises_rx_failed_once). Air spacing is
+ * test_an_inbound_burst_at_air_spacing_is_delivered_whole.
  */
 ZTEST(api, test_an_inbound_burst_numbers_packets_0_1_2_3_1_2_3)
 {
@@ -3248,7 +3266,8 @@ ZTEST(api, test_an_inbound_burst_numbers_packets_0_1_2_3_1_2_3)
 	uint32_t                     i;
 	uint32_t                     k = 0u;
 
-	open_and_acquire_slave_of_type((uint8_t)ANTW_CHANNEL_TYPE_SLAVE, &dev);
+	open_and_acquire_slave_of_type((uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
+				       &dev);
 	run_housekeeping();
 
 	for (i = 0u; i < 9u; i++) {
@@ -3312,6 +3331,461 @@ ZTEST(api, test_an_inbound_burst_numbers_packets_0_1_2_3_1_2_3)
 	}
 	zassert_equal(9u, k);
 
+	end_of_test();
+}
+
+/* ---------------------------------------------------------------------------
+ * Inbound bursts at real air spacing (TODO items 1-3)
+ *
+ * The test above airs one packet per tracked slot, which no originator does:
+ * a real one sends each packet 1550 us after the acknowledgement of the one
+ * before, inside one period. Until 2026-11-12 RadiANT acknowledged packet 0
+ * and stopped listening, so a burst sent to it never got past packet 0.
+ * ---------------------------------------------------------------------------
+ */
+
+/* Index of the first channel event `code` on `ch` in the log, or -1. */
+static int index_of_channel_event(uint8_t ch, uint8_t code)
+{
+	uint32_t i;
+
+	for (i = 0u; i < n_msg && i < MSGLOG_MAX; i++) {
+		if (msglog[i].id == (uint8_t)ANTW_MESG_RESPONSE_EVENT_ID &&
+		    msglog[i].len >= 3u && msglog[i].data[0] == ch &&
+		    msglog[i].data[1] == (uint8_t)ANTW_MESG_EVENT_ID &&
+		    msglog[i].data[2] == code) {
+			return (int)i;
+		}
+	}
+	return -1;
+}
+
+/* The armed, not yet run, receive window filtering on `dev`. */
+static const struct fake_radio_arm *armed_rx_for(uint16_t dev)
+{
+	uint32_t n = fake_radio_arm_count();
+
+	while (n > 0u) {
+		const struct fake_radio_arm *a = fake_radio_arm(--n);
+
+		if (a == NULL || a->kind != FAKE_RADIO_ARM_RX ||
+		    a->rc != RADIANT_RADIO_OK_RC || a->n_filters != 1u) {
+			continue;
+		}
+		if (a->filters[0].addr[2] == (uint8_t)(dev & 0xFFu) &&
+		    a->filters[0].addr[3] == (uint8_t)(dev >> 8)) {
+			return a;
+		}
+	}
+	return NULL;
+}
+
+/* Step the mock until a receive window for `dev` is armed and has not opened
+ * yet, so a frame can be put at its centre. With two channels the scheduler
+ * arms whichever is due first, so "the last RX" is not enough. */
+static const struct fake_radio_arm *await_tracked_window(uint16_t dev)
+{
+	uint32_t guard;
+
+	for (guard = 0u; guard < 64u; guard++) {
+		const struct fake_radio_arm *w = armed_rx_for(dev);
+
+		if (w != NULL && !w->terminated && w->t_open > radiant_radio_now()) {
+			return w;
+		}
+		if (!fake_radio_step()) {
+			break;
+		}
+		drain();
+	}
+	zassert_unreachable("no tracked window for device %u was armed",
+			    (unsigned)dev);
+	return NULL;
+}
+
+/*
+ * A burst of `n` packets from the tracked master `dev`, aired the way a real
+ * originator spaces it: packet 0 at the centre of the tracked window armed
+ * now, every later packet RADIANT_TRANSFER_NEXT_PACKET_US after RadiANT's
+ * acknowledgement of the one before. Only the first `send` go on the air, so
+ * send < n is a peer that stops mid-burst. Each acknowledgement is checked at
+ * +1560 with the right control byte. Returns packet 0's t_sync.
+ */
+static radiant_time_t air_inbound_burst(uint16_t dev, uint32_t n, uint32_t send)
+{
+	const struct fake_radio_arm *w = await_tracked_window(dev);
+	uint8_t                      frame[AIR_LEN];
+	uint8_t                      pay[8];
+	radiant_time_t               t;
+	radiant_time_t               t0;
+	uint32_t                     i;
+
+	t0 = w->t_open + ((w->t_close - w->t_open) / 2u);
+	t = t0;
+
+	for (i = 0u; i < send; i++) {
+		const struct fake_radio_arm *tx;
+		uint8_t                      ctrl = 0u;
+
+		zassert_equal(RADIANT_TRANSFER_OK,
+			      radiant_transfer_ctrl(i, i + 1u == n, true, &ctrl));
+		memset(pay, 0, sizeof(pay));
+		pay[0] = (uint8_t)i;
+		pay[7] = 0xA5u;
+		(void)build_peer_frame_for(frame, dev, ctrl, pay);
+		zassert_equal(RADIANT_RADIO_OK_RC,
+			      fake_radio_air_frame(t, frame, AIR_LEN));
+		fake_radio_advance_to(t + 100u);
+
+		tx = last_arm_of(FAKE_RADIO_ARM_TX);
+		zassert_not_null(tx, "packet %u was not acknowledged", i);
+		zassert_equal(t + RADIANT_TRANSFER_REPLY_US, tx->t_sync_at,
+			      "packet %u: no acknowledgement at +1560", i);
+		zassert_equal(radiant_ctrl_reply_for(ctrl), tx->body[BODY_CTRL],
+			      "packet %u (0x%02X) acknowledged with 0x%02X", i,
+			      ctrl, tx->body[BODY_CTRL]);
+		fake_radio_advance_to(tx->t_sync_at + 1u);
+		t = tx->t_sync_at + RADIANT_TRANSFER_NEXT_PACKET_US;
+	}
+	return t0;
+}
+
+ZTEST(api, test_an_inbound_burst_at_air_spacing_is_delivered_whole)
+{
+	static const uint8_t want_seq[9] = { 0u, 1u, 2u, 3u, 1u, 2u, 3u, 1u, 2u };
+	const struct fake_radio_arm *w;
+	uint16_t                     dev;
+	radiant_time_t               t0;
+	uint32_t                     acks0;
+	uint32_t                     acks = 0u;
+	uint32_t                     i;
+	uint32_t                     k = 0u;
+
+	open_and_acquire_slave_of_type((uint8_t)ANTW_CHANNEL_TYPE_SLAVE, &dev);
+	run_housekeeping();
+	memset(msglog, 0, sizeof(msglog));
+	n_msg = 0u;
+	acks0 = fake_radio_stats()->arms_tx;
+
+	t0 = air_inbound_burst(dev, 9u, 9u);
+	acks = fake_radio_stats()->arms_tx - acks0;
+	/* The window after LAST closes empty: the burst is complete. */
+	fake_radio_advance(3000u);
+	drain();
+
+	zassert_equal(9u, acks, "%u acknowledgements for nine packets", acks);
+	zassert_equal(9u, count_msgs((uint8_t)ANTW_MESG_BURST_DATA_ID),
+		      "%u of nine burst packets reached the host",
+		      (unsigned)count_msgs((uint8_t)ANTW_MESG_BURST_DATA_ID));
+	for (i = 0u; i < n_msg && i < MSGLOG_MAX; i++) {
+		uint8_t b0;
+
+		if (msglog[i].id != (uint8_t)ANTW_MESG_BURST_DATA_ID) {
+			continue;
+		}
+		b0 = msglog[i].data[0];
+		zassert_equal(want_seq[k],
+			      (uint8_t)((b0 >> ANTW_BURST_HEADER_SEQ_SHIFT) &
+					ANTW_BURST_HEADER_SEQ_MASK),
+			      "packet %u carried the wrong host sequence", k);
+		zassert_equal(k == 8u, (b0 & ANTW_BURST_HEADER_LAST) != 0u,
+			      "packet %u: LAST flag wrong", k);
+		zassert_equal((uint8_t)k, msglog[i].data[1],
+			      "packet %u delivered out of order", k);
+		if (k == 0u) {
+			zassert_true(msglog[i].len > 9u,
+				     "burst packet 0 lost its extended data");
+		} else {
+			zassert_equal(9u, msglog[i].len,
+				      "only packet 0 may carry extended data");
+		}
+		k++;
+	}
+	zassert_equal(-1, index_of_channel_event(CH, ANTW_EVENT_TRANSFER_RX_FAILED),
+		      "a complete burst was reported failed");
+
+	/* The slot clock stays anchored on packet 0, the one frame that was
+	 * in the master's slot. Re-anchoring on each continuation packet
+	 * walked it by 3.11 ms a packet. */
+	zassert_equal(t0 + PERIOD_US, radiant_channel_next_slot(CH),
+		      "the continuation packets moved the slot clock by %d us",
+		      (int)(radiant_channel_next_slot(CH) - (t0 + PERIOD_US)));
+
+	/* And the next tracked window is armed already, from the burst's own
+	 * terminal - not left for the 50 ms pump. No run_housekeeping() here. */
+	zassert_true(radiant_sched_pending(CH),
+		     "the burst ended and left the channel with nothing posted");
+	w = armed_rx_for(dev);
+	zassert_not_null(w);
+	zassert_false(w->terminated);
+	zassert_true(w->t_open < t0 + PERIOD_US && w->t_close > t0 + PERIOD_US,
+		     "the window after the burst is not on the slot");
+
+	end_of_test();
+}
+
+/* A slave acquired on a channel period of `period` counts. */
+static void open_and_acquire_slave_with_period(uint16_t period, uint16_t *out_dev)
+{
+	const struct fake_radio_arm *w;
+
+	zassert_ok(antr_network_address_set(0u, ant_plus_key));
+	zassert_ok(antr_lib_config_set((uint8_t)ANTW_LIB_CONFIG_ALL_EXT_FIELDS));
+	zassert_ok(antr_channel_assign(CH, (uint8_t)ANTW_CHANNEL_TYPE_SLAVE, 0u, 0u));
+	zassert_ok(antr_channel_id_set(CH, 0u, 0u, 0u));
+	zassert_ok(antr_channel_period_set(CH, period));
+	zassert_ok(antr_channel_radio_freq_set(CH, RF_INDEX));
+	zassert_ok(antr_channel_open(CH));
+
+	/* Heard near the END of the search window: the first predicted slot
+	 * is one period after this frame, and at the shortest period it would
+	 * otherwise already be behind the window's close. */
+	w = armed_search_window();
+	air_device(w, 0u, 0x0500u, 0x0Bu,
+		   (uint32_t)(w->t_close - w->t_open) - 1000u, out_dev);
+	fake_radio_advance_to(w->t_close + 1u);
+	drain();
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH),
+		      "setup: the channel did not acquire");
+}
+
+/*
+ * A burst longer than eight periods. Nothing is posted for the channel while
+ * the engine follows it, so the slot clock is many periods stale when it ends;
+ * posting those instants would count a miss for each and send the channel to
+ * search with its master transmitting the whole time. The shortest legal
+ * period keeps the burst short enough for the mock's logs.
+ */
+ZTEST(api, test_a_burst_longer_than_eight_periods_does_not_drop_to_search)
+{
+	const uint16_t               period = (uint16_t)RADIANT_CHANNEL_PERIOD_MIN_COUNTS;
+	const uint32_t               period_us = radiant_channel_counts_to_us(period);
+	const uint32_t               n = 30u;
+	uint16_t                     dev;
+	uint32_t                     k;
+
+	open_and_acquire_slave_with_period(period, &dev);
+	/* The pump, without run_housekeeping()'s idle assertion: at this
+	 * period the first tracked window may already be armed. */
+	k_sleep(K_MSEC(3 * RADIANT_API_HOUSEKEEP_MS));
+	memset(msglog, 0, sizeof(msglog));
+	n_msg = 0u;
+
+	zassert_true((uint64_t)n * RADIANT_TRANSFER_PACKET_US > 8u * (uint64_t)period_us,
+		     "setup: the burst is not longer than eight periods");
+	(void)air_inbound_burst(dev, n, n);
+	fake_radio_advance(3000u);
+	drain();
+
+	zassert_equal(n, count_msgs((uint8_t)ANTW_MESG_BURST_DATA_ID));
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH),
+		      "a long burst sent the channel back to search");
+	zassert_equal(0u, count_channel_events(CH, ANTW_EVENT_RX_FAIL_GO_TO_SEARCH));
+	zassert_equal(0u, count_channel_events(CH, ANTW_EVENT_RX_FAIL),
+		      "periods spent in a burst were counted as missed slots");
+	zassert_true(radiant_channel_next_slot(CH) > radiant_radio_now(),
+		     "the slot clock was left in the past");
+
+	/* And the master is heard again on its own grid. */
+	for (k = 0u; k < 2u; k++) {
+		const struct fake_radio_arm *w = await_tracked_window(dev);
+
+		air_tracked_frame(w, dev);
+		fake_radio_advance_to(w->t_close + 1u);
+		drain();
+	}
+	zassert_equal(2u, count_bcast_on(CH),
+		      "the master's broadcasts after the burst were not heard");
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH));
+
+	end_of_test();
+}
+
+/* Sanity, not priority: a second, broadcast-only channel keeps tracking while
+ * the first follows a burst. */
+ZTEST(api, test_a_second_channel_keeps_tracking_across_a_burst)
+{
+	const struct fake_radio_arm *w;
+	uint16_t                     dev_a;
+	uint16_t                     dev_b;
+	uint32_t                     before;
+
+	open_and_acquire_slave_of_type((uint8_t)ANTW_CHANNEL_TYPE_SLAVE, &dev_a);
+
+	zassert_ok(antr_channel_assign(1u, (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
+				       0u, 0u));
+	zassert_ok(antr_channel_id_set(1u, 0u, 0u, 0u));
+	zassert_ok(antr_channel_period_set(1u, RADIANT_CHANNEL_PERIOD_ANT_PLUS));
+	zassert_ok(antr_channel_radio_freq_set(1u, RF_INDEX));
+	zassert_ok(antr_channel_open(1u));
+	w = armed_search_window();
+	air_device(w, 1u, 0x0600u, 0x0Bu, 1000u, &dev_b);
+	fake_radio_advance_to(w->t_close + 1u);
+	drain();
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(1u),
+		      "setup: channel 1 did not acquire");
+	air_repeating(dev_b, 0x0Bu, w->t_open + 1000u + PERIOD_US, 12u);
+
+	(void)air_inbound_burst(dev_a, 9u, 9u);
+	fake_radio_advance(3000u);
+	drain();
+	zassert_equal(9u, count_msgs((uint8_t)ANTW_MESG_BURST_DATA_ID));
+
+	memset(msglog, 0, sizeof(msglog));
+	n_msg = 0u;
+	before = count_bcast_on(1u);
+	run_virtual_us(4u * (uint64_t)PERIOD_US);
+	zassert_true(count_bcast_on(1u) >= before + 3u,
+		     "channel 1 heard %u broadcasts in four periods after the "
+		     "burst", count_bcast_on(1u) - before);
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(1u));
+
+	(void)antr_channel_close(1u);
+	end_of_test();
+}
+
+/* The peer stops mid-burst: exactly one EVENT_TRANSFER_RX_FAILED, and the
+ * next acknowledged message is labelled as one, not as burst packet 4. */
+ZTEST(api, test_a_burst_the_peer_abandons_raises_rx_failed_once)
+{
+	const struct fake_radio_arm *w;
+	uint8_t                      frame[AIR_LEN];
+	radiant_time_t               t;
+	uint16_t                     dev;
+
+	open_and_acquire_slave_of_type((uint8_t)ANTW_CHANNEL_TYPE_SLAVE, &dev);
+	run_housekeeping();
+	memset(msglog, 0, sizeof(msglog));
+	n_msg = 0u;
+
+	(void)air_inbound_burst(dev, 9u, 3u);
+	/* Twenty repeated acknowledgements, ~66 ms, then the burst is over. */
+	fake_radio_advance(100000u);
+	drain();
+
+	zassert_equal(3u, count_msgs((uint8_t)ANTW_MESG_BURST_DATA_ID));
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_RX_FAILED),
+		      "an abandoned burst must raise RX_FAILED exactly once");
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH));
+
+	w = await_tracked_window(dev);
+	t = w->t_open + ((w->t_close - w->t_open) / 2u);
+	(void)build_peer_frame_for(frame, dev, RADIANT_CTRL_BURST_LAST_SEQ0,
+				   peer_payload);
+	zassert_ok(fake_radio_air_frame(t, frame, AIR_LEN));
+	fake_radio_advance_to(t + RADIANT_TRANSFER_REPLY_US + 1000u);
+	drain();
+	zassert_equal(1u, count_msgs((uint8_t)ANTW_MESG_ACKNOWLEDGED_DATA_ID),
+		      "the next acknowledged message was labelled burst data");
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_RX_FAILED));
+
+	end_of_test();
+}
+
+/* Closing mid-burst: RX_FAILED, then CHANNEL_CLOSED, once each. */
+ZTEST(api, test_closing_mid_burst_reports_rx_failed_before_channel_closed)
+{
+	uint16_t dev;
+	int      i_failed;
+	int      i_closed;
+
+	open_and_acquire_slave_of_type((uint8_t)ANTW_CHANNEL_TYPE_SLAVE, &dev);
+	run_housekeeping();
+	memset(msglog, 0, sizeof(msglog));
+	n_msg = 0u;
+
+	(void)air_inbound_burst(dev, 9u, 2u);
+	zassert_ok(antr_channel_close(CH));
+	fake_radio_advance(1000u);
+	drain();
+
+	i_failed = index_of_channel_event(CH, ANTW_EVENT_TRANSFER_RX_FAILED);
+	i_closed = index_of_channel_event(CH, ANTW_EVENT_CHANNEL_CLOSED);
+	zassert_true(i_failed >= 0, "closing mid-burst raised no RX_FAILED");
+	zassert_true(i_closed >= 0, "the close never completed");
+	zassert_true(i_failed < i_closed,
+		     "RX_FAILED came after CHANNEL_CLOSED (%d, %d)", i_failed,
+		     i_closed);
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_RX_FAILED));
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_CHANNEL_CLOSED));
+
+	end_of_test();
+}
+
+/* A slave's burst into our master's turnaround window: followed to the end,
+ * and the master's grid is untouched by it. */
+ZTEST(api, test_a_master_follows_a_slave_originated_burst)
+{
+	uint8_t                      frame[AIR_LEN];
+	uint8_t                      pay[8] = { 0u };
+	radiant_time_t               t_tx;
+	radiant_time_t               t;
+	uint32_t                     missed0;
+	uint32_t                     i;
+
+	open_channel((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	(void)run_one_quiet_period();
+	host_writes_broadcast();
+	t_tx = run_one_master_slot();
+	missed0 = radiant_api_stats_get()->slots_missed;
+	memset(msglog, 0, sizeof(msglog));
+	n_msg = 0u;
+
+	t = t_tx + RADIANT_TRANSFER_SLOT_REPLY_US;
+	for (i = 0u; i < 4u; i++) {
+		const struct fake_radio_arm *tx;
+		uint8_t                      ctrl = 0u;
+
+		/* A slave opens no slot: 0x82, 0x92, 0x82, 0xB2. */
+		zassert_equal(RADIANT_TRANSFER_OK,
+			      radiant_transfer_ctrl(i, i == 3u, false, &ctrl));
+		pay[0] = (uint8_t)i;
+		(void)build_peer_frame(frame, ctrl, pay);
+		zassert_ok(fake_radio_air_frame(t, frame, AIR_LEN));
+		fake_radio_advance_to(t + 100u);
+		tx = last_arm_of(FAKE_RADIO_ARM_TX);
+		zassert_not_null(tx);
+		zassert_equal(t + RADIANT_TRANSFER_REPLY_US, tx->t_sync_at,
+			      "packet %u: no acknowledgement at +1560", i);
+		zassert_equal(radiant_ctrl_reply_for(ctrl), tx->body[BODY_CTRL]);
+		fake_radio_advance_to(tx->t_sync_at + 1u);
+		t = tx->t_sync_at + RADIANT_TRANSFER_NEXT_PACKET_US;
+	}
+	fake_radio_advance_to(t + 2000u);
+	drain();
+
+	zassert_equal(4u, count_msgs((uint8_t)ANTW_MESG_BURST_DATA_ID));
+	zassert_equal(0u, count_channel_events(CH, ANTW_EVENT_TRANSFER_RX_FAILED));
+	zassert_true(radiant_sched_pending(CH),
+		     "the master's next slot was not posted when the burst ended");
+	assert_next_broadcast_on_grid(t_tx, missed0);
+	end_of_test();
+}
+
+/* EVENT_TRANSFER_TX_START is not raised for a one-packet burst
+ * (docs/ant-radio-link.md), only for a multi-packet one. */
+ZTEST(api, test_a_one_packet_burst_raises_no_tx_start)
+{
+	uint8_t                      blk[8] = { 0xC1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u };
+	uint8_t                      frame[AIR_LEN];
+	const struct fake_radio_arm *p0;
+
+	(void)master_with_next_slot_posted();
+	zassert_ok(antr_burst_tx(CH, 8u, blk,
+				 ANTR_BURST_SEGMENT_START | ANTR_BURST_SEGMENT_END));
+	p0 = last_tx_with_ctrl(RADIANT_CTRL_ACK_DATA_OPEN);
+	zassert_not_null(p0, "the one-packet burst was not armed");
+	(void)build_peer_frame(frame,
+			       radiant_transfer_reply_ctrl(RADIANT_CTRL_ACK_DATA_OPEN),
+			       peer_payload);
+	zassert_ok(fake_radio_air_frame(p0->t_sync_at + RADIANT_TRANSFER_OPENER_REPLY_US,
+					frame, AIR_LEN));
+	fake_radio_advance_to(p0->t_sync_at + RADIANT_TRANSFER_SLOT_REPLY_US +
+			      RADIANT_TRANSFER_ACK_GUARD_US + 100u);
+	drain();
+
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_COMPLETED));
+	zassert_equal(0u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_START));
 	end_of_test();
 }
 
@@ -4282,10 +4756,16 @@ ZTEST(api, test_the_second_acknowledged_data_is_reported_as_acknowledged_data)
 		      "the truncated burst's first packet was not reported as "
 		      "burst data");
 
-	/* The peer never sends the last packet. A deadline's worth of the
-	 * radio's clock, and housekeeping abandons the inbound transfer. */
+	/* The peer never sends the next packet. The master follows the burst,
+	 * repeats its acknowledgement twenty times (~66 ms) and then reports
+	 * the burst failed: once, and in_pkts starts again from 0. The
+	 * abandoned-burst watchdog behind it must not report it a second
+	 * time. */
 	fake_radio_advance(((uint64_t)RADIANT_API_XFER_WATCHDOG_MS * 1000u) + 1000u);
 	k_sleep(K_MSEC(3 * RADIANT_API_HOUSEKEEP_MS));
+	drain();
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_RX_FAILED),
+		      "the truncated burst must raise RX_FAILED exactly once");
 
 	host_writes_broadcast();
 	t_tx = run_one_master_slot();
@@ -4300,6 +4780,7 @@ ZTEST(api, test_the_second_acknowledged_data_is_reported_as_acknowledged_data)
 	zassert_equal(3u, count_msgs((uint8_t)ANTW_MESG_ACKNOWLEDGED_DATA_ID),
 		      "an acknowledged message after a truncated burst was "
 		      "still reported as burst data");
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_RX_FAILED));
 
 	end_of_test();
 }

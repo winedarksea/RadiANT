@@ -179,6 +179,8 @@ struct radiant_api_stats {
 	 * See api_post_slave_bcast(). */
 	uint32_t slave_bcast_posted;
 	uint32_t slave_bcast_sent;
+	/* Inbound bursts reported to the host as EVENT_TRANSFER_RX_FAILED. */
+	uint32_t rx_bursts_failed;
 };
 
 const struct radiant_api_stats *radiant_api_stats_get(void);
