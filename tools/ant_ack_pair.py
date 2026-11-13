@@ -286,6 +286,11 @@ def slave_burst_thread(reader, stats: dict, stop: threading.Event) -> None:
         if result is None:
             continue
         msg_id, body = result
+        if (msg_id == MESG_RESPONSE_EVENT_ID and len(body) >= 3 and
+                body[1] == MESG_EVENT_ID and body[2] == 0x04):
+            # EVENT_TRANSFER_RX_FAILED: the receiver gave up on a burst.
+            stats["rx_failed"] = stats.get("rx_failed", 0) + 1
+            continue
         if msg_id != MESG_BURST_DATA_ID or len(body) < 9:
             continue
         stats["packets"] += 1
@@ -456,6 +461,7 @@ def run_master_bursts(args, master, m_counts, slave, s_reader, stop,
               f"lengths {s_stats['lengths']}")
         print(f"  slave broken / seq gaps  {s_stats['broken']} / "
               f"{s_stats['seq_breaks']}")
+        print(f"  slave RX_FAILED events   {s_stats.get('rx_failed', 0)}")
     if args.json_bursts:
         with open(args.json_bursts, "w", encoding="utf-8") as fh:
             json.dump({"mode": "acked" if acked else "bursts",

@@ -2809,8 +2809,12 @@ ZTEST(transfer, test_an_inbound_burst_is_followed_packet_by_packet)
 	for (i = 0u; i < 3u; i++) {
 		tx = last_arm_of(FAKE_RADIO_ARM_TX);
 		zassert_not_null(tx);
-		zassert_equal(t_data + (radiant_time_t)RADIANT_TRANSFER_REPLY_US,
-			      tx->t_sync_at, "packet %u: ACK not at +1560", i);
+		/* Packet 0 opens the master's slot and is answered on the
+		 * slot-reply turnaround; the rest at the burst one. */
+		zassert_equal(t_data + (radiant_time_t)(i == 0u ?
+					RADIANT_TRANSFER_OPENER_REPLY_US :
+					RADIANT_TRANSFER_REPLY_US),
+			      tx->t_sync_at, "packet %u: ACK misplaced", i);
 		zassert_equal(radiant_ctrl_reply_for(c[i]), tx->body[BODY_CTRL],
 			      "packet %u: acknowledged with 0x%02X", i,
 			      tx->body[BODY_CTRL]);

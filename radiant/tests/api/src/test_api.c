@@ -3409,7 +3409,8 @@ static const struct fake_radio_arm *await_tracked_window(uint16_t dev)
  * now, every later packet RADIANT_TRANSFER_NEXT_PACKET_US after RadiANT's
  * acknowledgement of the one before. Only the first `send` go on the air, so
  * send < n is a peer that stops mid-burst. Each acknowledgement is checked at
- * +1560 with the right control byte. Returns packet 0's t_sync.
+ * +1560 (+2190 for packet 0, which opens the slot) with the right control
+ * byte. Returns packet 0's t_sync.
  */
 static radiant_time_t air_inbound_burst(uint16_t dev, uint32_t n, uint32_t send)
 {
@@ -3439,8 +3440,12 @@ static radiant_time_t air_inbound_burst(uint16_t dev, uint32_t n, uint32_t send)
 
 		tx = last_arm_of(FAKE_RADIO_ARM_TX);
 		zassert_not_null(tx, "packet %u was not acknowledged", i);
-		zassert_equal(t + RADIANT_TRANSFER_REPLY_US, tx->t_sync_at,
-			      "packet %u: no acknowledgement at +1560", i);
+		/* 0x8A opens the master's slot: answered on the slot-reply
+		 * turnaround, as a Garmin slave answers it. */
+		zassert_equal(t + (i == 0u ? RADIANT_TRANSFER_OPENER_REPLY_US
+					   : RADIANT_TRANSFER_REPLY_US),
+			      tx->t_sync_at,
+			      "packet %u: acknowledgement misplaced", i);
 		zassert_equal(radiant_ctrl_reply_for(ctrl), tx->body[BODY_CTRL],
 			      "packet %u (0x%02X) acknowledged with 0x%02X", i,
 			      ctrl, tx->body[BODY_CTRL]);
