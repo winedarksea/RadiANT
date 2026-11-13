@@ -2083,7 +2083,23 @@ jobs:
           # own Kconfig symbol - so they get their own budget rather than
           # hiding inside a bigger one. Measured 2812 B of text, which is a
           # field arithmetic implementation and a Montgomery ladder.
-          check "pairing text" "$(( pair_text - on_text ))" 3584
+          #
+          # 3584 -> 4096 (2026-11-13), a security fix's price, measured with
+          # this recipe at NCS v3.4.0: 3364 B at f02125a, 3748 B with the
+          # pairing commitment (security review 2026-11-13, item 4: the old
+          # two-move fingerprint let a MITM grind key pairs until both ends
+          # showed the same six digits). The +384 B is the commit/reveal:
+          #     216  pair_finish                  expand + install
+          #     180  radiant_sec_pair_peer_nonce  opens the commitment
+          #     128  radiant_sec_pair_set_nonce   the responder's f4
+          #     106  cmac_parts                   the one CMAC helper
+          #      66  radiant_sec_pair_peer_commit
+          #     260  antr_sec_pair                three more 0xF5 sub-commands
+          # against the removed pair_derive and the old one-shot pair_peer.
+          # Trimmed from 3824 B (a length table in antr_sec_pair, one wipe,
+          # one finish path per role) before the ceiling moved; 4096 is the
+          # next multiple of 512, leaving 348 B.
+          check "pairing text" "$(( pair_text - on_text ))" 4096
 
           # ── The compat attestation layer ─────────────────────────────────
           #

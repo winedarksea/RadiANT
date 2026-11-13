@@ -1039,11 +1039,22 @@ BURST_HEADER_LAST = 0x80
 # ---------------------------------------------------------------------------
 # RadiANT pairing sub-commands
 # Byte [1] of MESG_RADIANT_PAIRING (0xF5). NOT ANT protocol - ours. Sub-
-# commands rather than four message ids because they are one conversation with
-# an order: enter, supply a scalar, exchange, leave. Separate ids would let a
-# host skip a step and get a state error it could not localise. The reply
-# echoes the sub-command in the same byte, because a public key and a
-# fingerprint are both 'some bytes after a channel byte' otherwise.
+# commands rather than seven message ids because they are one conversation with
+# an order: enter, supply a scalar, exchange keys, commit to and reveal nonces,
+# leave. Separate ids would let a host skip a step and get a state error it
+# could not localise; here an out-of-order sub-command is refused with
+# ANTW_INVALID_PARAMETER_PROVIDED and changes nothing. The reply echoes the
+# sub-command in the same byte, because a public key, a commitment and a
+# fingerprint are all 'some bytes after a channel byte' otherwise. Host
+# sequence, A = initiator, B = responder, each host driving its own end and
+# carrying the values in brackets over the air: both ENTER, SCALAR (-> own
+# key), [keys cross], EXCHANGE. Then B: NONCE(role 1, Nb) -> Cb, [Cb to A]. A:
+# NONCE(role 0, Na), PEER_COMMIT(Cb), and only then [Na to B]. B:
+# PEER_NONCE(Na) -> fp, and only then [Nb to A]. A: PEER_NONCE(Nb) -> fp, or a
+# refusal if Nb does not open Cb, which wipes A's exchange. Both humans compare
+# the two fps. A must not send Na before PEER_COMMIT has been answered, and B
+# must not send Nb before its PEER_NONCE: the two waits are the protocol
+# (docs/radiant-security.md sec 7.4).
 # ---------------------------------------------------------------------------
 
 # Leave pairing mode and wipe the exchange state, including any scalar the host
@@ -1064,12 +1075,37 @@ RADIANT_PAIR_ENTER = 0x01
 # 7.4 and 8)]
 RADIANT_PAIR_SCALAR = 0x02
 
-# Complete the exchange against the peer's 32-byte public key at [2..33]. The
-# reply carries the six-digit comparison fingerprint as a u24 LE from [2]. A
-# small-order peer key is refused: the result becomes a root key, so accepting
-# one would let anyone able to inject a packet fix the group key to a value
-# they already know. [K4 (docs/radiant-security.md sec 7.4 and 8)]
+# The Diffie-Hellman half, against the peer's 32-byte public key at [2..33].
+# The reply is [channel, 0x03] and nothing else: no key is installed and no
+# fingerprint exists until the nonces have crossed (0x04-0x06). Spends the
+# scalar, so a retry is refused. A small-order peer key is refused with the
+# scalar left usable: the result becomes a root key, so accepting one would let
+# anyone able to inject a packet fix the group key to a value they already
+# know. [K4 (docs/radiant-security.md sec 7.4 and 8)]
 RADIANT_PAIR_EXCHANGE = 0x03
+
+# Supply this end's role at [2] (0 initiator A, 1 responder B) and its 16-byte
+# nonce at [3..18], from the host's CSPRNG like the scalar. After EXCHANGE,
+# once. A responder's reply carries its commitment Cb = CMAC_Nb(PKb || PKa ||
+# 0x00) at [2..17], which the host sends to A; an initiator's reply is
+# [channel, 0x04]. [Security review 2026-11-13 item 4 (docs/radiant-security.md
+# sec 7.4)]
+RADIANT_PAIR_NONCE = 0x04
+
+# Initiator only: the responder's 16-byte commitment Cb at [2..17], after
+# NONCE. A's host reveals Na over the air only after this has been answered.
+# [Security review 2026-11-13 item 4 (docs/radiant-security.md sec 7.4)]
+RADIANT_PAIR_PEER_COMMIT = 0x05
+
+# The peer's 16-byte nonce at [2..17]. On the initiator it must open the
+# commitment from PEER_COMMIT; if it does not, the exchange is wiped and the
+# reply is ANTW_INVALID_PARAMETER_PROVIDED. Then the root key is derived from
+# the DH result, both public keys and both nonces, and installed, and the reply
+# carries the six-digit comparison fingerprint (CMAC_Na(PKa || PKb || Nb) mod
+# 2^32 mod 10^6) as a u24 LE from [2]. A responder reveals Nb only after this
+# answers. [Security review 2026-11-13 item 4 (docs/radiant-security.md sec
+# 7.4)]
+RADIANT_PAIR_PEER_NONCE = 0x06
 
 # ---------------------------------------------------------------------------
 # Capabilities reply (MESG_CAPABILITIES)
@@ -1291,12 +1327,19 @@ MESG_RADIANT_EPOCH_ID = 0xF3
 # security.md sec 3.2 and 9)]
 MESG_RADIANT_SEC_STATUS_ID = 0xF4
 
-# Drive the in-the-clear pairing exchange. [0] channel; [1] sub-command - 0x00
-# leave pairing mode, 0x01 enter it with a timeout in seconds at [2] (0 means
-# the 60 s default), 0x02 supply the host's 32-byte X25519 scalar at [2..33],
-# 0x03 begin the exchange. The reply echoes the sub-command at [1] and carries
-# the local public key or the comparison fingerprint from [3]. THE SCALAR COMES
-# FROM THE HOST because no dongle image turns on a radiant_sec_rng() backend
+# Drive the in-the-clear pairing exchange. [0] channel; [1] sub-command; the
+# argument starts at [2] - 0x00 leave pairing mode, 0x01 enter it with a
+# timeout in seconds at [2] (0 means the 60 s default), 0x02 the host's 32-byte
+# X25519 scalar at [2..33], 0x03 the peer's 32-byte public key at [2..33] (DH
+# only, nothing installed), 0x04 role at [2] and this end's 16-byte nonce at
+# [3..18], 0x05 the responder's 16-byte commitment at [2..17], 0x06 the peer's
+# 16-byte nonce at [2..17]. The reply echoes the channel and sub-command at
+# [0..1] and carries, from [2], the local public key (0x02), the responder's
+# commitment (0x04 as responder) or the comparison fingerprint as a u24 LE
+# (0x06). The fingerprint exists only after a commit/reveal of nonces, so a man
+# in the middle cannot grind key pairs until both ends show the same digits;
+# the sequence is under the radiant_pairing enum. THE SCALAR COMES FROM THE
+# HOST because no dongle image turns on a radiant_sec_rng() backend
 # (CONFIG_RADIANT_SEC_RNG_PSA or _ENTROPY, which node builds use for ADR 0020);
 # the honest consequence is that a host-less node cannot pair this way. Pairing
 # in the clear is structural rather than an oversight - see docs/radiant-
@@ -1940,7 +1983,7 @@ RADIANT_MESSAGES = {
         "name": 'MESG_RADIANT_PAIRING_ID',
         "direction": 'both',
         "payload_len": '2..34',
-        "desc": "Drive the in-the-clear pairing exchange. [0] channel; [1] sub-command - 0x00 leave pairing mode, 0x01 enter it with a timeout in seconds at [2] (0 means the 60 s default), 0x02 supply the host's 32-byte X25519 scalar at [2..33], 0x03 begin the exchange. The reply echoes the sub-command at [1] and carries the local public key or the comparison fingerprint from [3]. THE SCALAR COMES FROM THE HOST because no dongle image turns on a radiant_sec_rng() backend (CONFIG_RADIANT_SEC_RNG_PSA or _ENTROPY, which node builds use for ADR 0020); the honest consequence is that a host-less node cannot pair this way. Pairing in the clear is structural rather than an oversight - see docs/radiant-security.md section 7.4.",
+        "desc": "Drive the in-the-clear pairing exchange. [0] channel; [1] sub-command; the argument starts at [2] - 0x00 leave pairing mode, 0x01 enter it with a timeout in seconds at [2] (0 means the 60 s default), 0x02 the host's 32-byte X25519 scalar at [2..33], 0x03 the peer's 32-byte public key at [2..33] (DH only, nothing installed), 0x04 role at [2] and this end's 16-byte nonce at [3..18], 0x05 the responder's 16-byte commitment at [2..17], 0x06 the peer's 16-byte nonce at [2..17]. The reply echoes the channel and sub-command at [0..1] and carries, from [2], the local public key (0x02), the responder's commitment (0x04 as responder) or the comparison fingerprint as a u24 LE (0x06). The fingerprint exists only after a commit/reveal of nonces, so a man in the middle cannot grind key pairs until both ends show the same digits; the sequence is under the radiant_pairing enum. THE SCALAR COMES FROM THE HOST because no dongle image turns on a radiant_sec_rng() backend (CONFIG_RADIANT_SEC_RNG_PSA or _ENTROPY, which node builds use for ADR 0020); the honest consequence is that a host-less node cannot pair this way. Pairing in the clear is structural rather than an oversight - see docs/radiant-security.md section 7.4.",
     },
     0xF6: {
         "name": 'MESG_RADIANT_HEALTH_ID',
@@ -2121,6 +2164,9 @@ RADIANT_PAIRING = {
     'RADIANT_PAIR_ENTER': 0x01,
     'RADIANT_PAIR_SCALAR': 0x02,
     'RADIANT_PAIR_EXCHANGE': 0x03,
+    'RADIANT_PAIR_NONCE': 0x04,
+    'RADIANT_PAIR_PEER_COMMIT': 0x05,
+    'RADIANT_PAIR_PEER_NONCE': 0x06,
 }
 RADIANT_PAIRING_BY_VALUE = {value: name for name, value in RADIANT_PAIRING.items()}
 

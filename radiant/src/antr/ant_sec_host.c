@@ -260,12 +260,36 @@ antr_err_t antr_sec_status_get(uint8_t channel, uint8_t *out, uint8_t out_len)
 
 #if defined(CONFIG_RADIANT_SEC_PAIRING_X25519)
 
+/* The wire's role byte is the core's role constant, so it passes straight
+ * through. */
+BUILD_ASSERT(RADIANT_SEC_PAIR_INITIATOR == 0u &&
+	     RADIANT_SEC_PAIR_RESPONDER == 1u,
+	     "0xF5 NONCE carries role 0 = initiator, 1 = responder");
+
 /*
- * 0xF5, the pairing exchange. Sub-commands rather than four message IDs,
+ * 0xF5, the pairing exchange. Sub-commands rather than seven message IDs,
  * since they are one conversation with an order: enter, supply a scalar,
- * exchange, leave. The reply echoes the sub-command at [1] so a host can
- * tell which one answered.
+ * exchange keys, commit to and reveal nonces, leave. The order is enforced
+ * by radiant_sec_pair.c, not here. The reply echoes the sub-command at [1]
+ * so a host can tell which one answered.
+ *
+ * There is no sub-command that installs a key without the commit/reveal:
+ * radiant_sec_pair_peer_uncommitted() is over-air enrolment's and is not
+ * reachable from the host, so the grindable path is not a downgrade option.
  */
+/* Each sub-command's minimum argument length, indexed by sub-command. One
+ * table rather than a check per case: the pairing build has its own size
+ * budget (release.yml, "pairing text"). */
+static const uint8_t pair_arg_min[] = {
+	[ANTW_RADIANT_PAIR_LEAVE]       = 0u,
+	[ANTW_RADIANT_PAIR_ENTER]       = 0u,   /* the timeout is optional */
+	[ANTW_RADIANT_PAIR_SCALAR]      = RADIANT_SEC_X25519_BYTES,
+	[ANTW_RADIANT_PAIR_EXCHANGE]    = RADIANT_SEC_X25519_BYTES,
+	[ANTW_RADIANT_PAIR_NONCE]       = 1u + RADIANT_SEC_PAIR_NONCE_BYTES,
+	[ANTW_RADIANT_PAIR_PEER_COMMIT] = RADIANT_SEC_BLOCK_BYTES,
+	[ANTW_RADIANT_PAIR_PEER_NONCE]  = RADIANT_SEC_PAIR_NONCE_BYTES,
+};
+
 static antr_err_t sec_pair_locked(uint8_t channel, uint8_t subcmd,
 				  const uint8_t *arg, uint8_t arg_len,
 				  uint8_t *reply, uint8_t reply_cap,
@@ -274,8 +298,17 @@ static antr_err_t sec_pair_locked(uint8_t channel, uint8_t subcmd,
 	uint32_t fp = 0u;
 	int      rc;
 
+	/* The reply buffer must hold the largest answer (SCALAR's key), so no
+	 * sub-command can fail for want of room after it has changed state. */
 	if (channel >= (uint8_t)RADIANT_CHANNEL_COUNT || reply == NULL ||
-	    reply_len == NULL || reply_cap < 2u) {
+	    reply_len == NULL || reply_cap < 2u + RADIANT_SEC_X25519_BYTES) {
+		return (antr_err_t)ANTW_INVALID_MESSAGE;
+	}
+	if (subcmd >= ARRAY_SIZE(pair_arg_min)) {
+		return (antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED;
+	}
+	if (arg_len < pair_arg_min[subcmd] ||
+	    (pair_arg_min[subcmd] != 0u && arg == NULL)) {
 		return (antr_err_t)ANTW_INVALID_MESSAGE;
 	}
 
@@ -286,7 +319,8 @@ static antr_err_t sec_pair_locked(uint8_t channel, uint8_t subcmd,
 	switch (subcmd) {
 	case ANTW_RADIANT_PAIR_LEAVE:
 		radiant_sec_pair_leave(channel);
-		return (antr_err_t)ANTW_RESPONSE_NO_ERROR;
+		rc = RADIANT_SEC_OK;
+		break;
 
 	case ANTW_RADIANT_PAIR_ENTER:
 		/* arg[0] is the timeout in seconds; 0 means the default, never
@@ -296,50 +330,50 @@ static antr_err_t sec_pair_locked(uint8_t channel, uint8_t subcmd,
 					    (arg != NULL && arg_len >= 1u)
 						    ? arg[0]
 						    : 0u);
-		return sec_err(rc);
+		break;
 
 	case ANTW_RADIANT_PAIR_SCALAR:
-		if (arg == NULL || arg_len < RADIANT_SEC_X25519_BYTES) {
-			return (antr_err_t)ANTW_INVALID_MESSAGE;
-		}
-		rc = radiant_sec_pair_set_scalar(channel, arg);
-		if (rc != RADIANT_SEC_OK) {
-			return sec_err(rc);
-		}
 		/* Answer with the public key it produced, which is what has to
 		 * go on the air next. */
-		if (reply_cap < 2u + RADIANT_SEC_X25519_BYTES) {
-			return (antr_err_t)ANTW_INVALID_MESSAGE;
+		rc = radiant_sec_pair_set_scalar(channel, arg);
+		if (rc == RADIANT_SEC_OK) {
+			rc = radiant_sec_pair_local_pubkey(channel, &reply[2]);
+			*reply_len = (uint8_t)(2u + RADIANT_SEC_X25519_BYTES);
 		}
-		rc = radiant_sec_pair_local_pubkey(channel, &reply[2]);
-		if (rc != RADIANT_SEC_OK) {
-			return sec_err(rc);
-		}
-		*reply_len = (uint8_t)(2u + RADIANT_SEC_X25519_BYTES);
-		return (antr_err_t)ANTW_RESPONSE_NO_ERROR;
+		break;
 
 	case ANTW_RADIANT_PAIR_EXCHANGE:
-		if (arg == NULL || arg_len < RADIANT_SEC_X25519_BYTES) {
-			return (antr_err_t)ANTW_INVALID_MESSAGE;
+		/* DH only: no key, no fingerprint until the nonces cross. */
+		rc = radiant_sec_pair_peer(channel, arg);
+		break;
+
+	case ANTW_RADIANT_PAIR_NONCE:
+		/* [role, nonce16]. A responder answers with its commitment,
+		 * which is what goes on the air next. */
+		rc = radiant_sec_pair_set_nonce(channel, arg[0], &arg[1],
+						&reply[2]);
+		if (arg[0] == RADIANT_SEC_PAIR_RESPONDER) {
+			*reply_len = (uint8_t)(2u + RADIANT_SEC_BLOCK_BYTES);
 		}
-		rc = radiant_sec_pair_peer(channel, arg, &fp);
-		if (rc != RADIANT_SEC_OK) {
-			return sec_err(rc);
-		}
-		if (reply_cap < 5u) {
-			return (antr_err_t)ANTW_INVALID_MESSAGE;
-		}
+		break;
+
+	case ANTW_RADIANT_PAIR_PEER_COMMIT:
+		rc = radiant_sec_pair_peer_commit(channel, arg);
+		break;
+
+	default: /* ANTW_RADIANT_PAIR_PEER_NONCE */
+		rc = radiant_sec_pair_peer_nonce(channel, arg, &fp);
 		/* The comparison fingerprint, six digits in a u24 LE: the only
 		 * defence against a MITM, and only if a human compares it. */
-		reply[2] = (uint8_t)(fp & 0xFFu);
-		reply[3] = (uint8_t)((fp >> 8) & 0xFFu);
-		reply[4] = (uint8_t)((fp >> 16) & 0xFFu);
+		reply[2] = (uint8_t)fp;
+		reply[3] = (uint8_t)(fp >> 8);
+		reply[4] = (uint8_t)(fp >> 16);
 		*reply_len = 5u;
-		return (antr_err_t)ANTW_RESPONSE_NO_ERROR;
-
-	default:
-		return (antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED;
+		break;
 	}
+	/* The bridge sends the reply only on success, so a refused
+	 * sub-command's reply_len is never read. */
+	return sec_err(rc);
 }
 
 /* The X25519 exchange (0xF5 EXCHANGE, and SCALAR for the public key) holds

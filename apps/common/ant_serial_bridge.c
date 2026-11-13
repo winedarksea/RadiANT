@@ -1478,7 +1478,8 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 #ifdef CONFIG_RADIANT_SEC_PAIRING_X25519
 	case ANTW_MESG_RADIANT_PAIRING_ID: {
 		/* body: [ch, subcmd, arg...]. Reply is a 0xF5 of its own, not a
-		 * response code, since three of the four sub-commands reply. */
+		 * response code, since the key, commitment and fingerprint
+		 * sub-commands carry data back. */
 		uint8_t reply[2 + 32];
 		uint8_t reply_len = 0u;
 

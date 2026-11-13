@@ -542,12 +542,23 @@
 /* ------------------------------------------------------------------------
  * RadiANT pairing sub-commands
  * Byte [1] of MESG_RADIANT_PAIRING (0xF5). NOT ANT protocol - ours. Sub-
- * commands rather than four message ids because they are one conversation
- * with an order: enter, supply a scalar, exchange, leave. Separate ids
- * would let a host skip a step and get a state error it could not
- * localise. The reply echoes the sub-command in the same byte, because a
- * public key and a fingerprint are both 'some bytes after a channel byte'
- * otherwise.
+ * commands rather than seven message ids because they are one conversation
+ * with an order: enter, supply a scalar, exchange keys, commit to and
+ * reveal nonces, leave. Separate ids would let a host skip a step and get
+ * a state error it could not localise; here an out-of-order sub-command is
+ * refused with ANTW_INVALID_PARAMETER_PROVIDED and changes nothing. The
+ * reply echoes the sub-command in the same byte, because a public key, a
+ * commitment and a fingerprint are all 'some bytes after a channel byte'
+ * otherwise. Host sequence, A = initiator, B = responder, each host
+ * driving its own end and carrying the values in brackets over the air:
+ * both ENTER, SCALAR (-> own key), [keys cross], EXCHANGE. Then B:
+ * NONCE(role 1, Nb) -> Cb, [Cb to A]. A: NONCE(role 0, Na),
+ * PEER_COMMIT(Cb), and only then [Na to B]. B: PEER_NONCE(Na) -> fp, and
+ * only then [Nb to A]. A: PEER_NONCE(Nb) -> fp, or a refusal if Nb does
+ * not open Cb, which wipes A's exchange. Both humans compare the two fps.
+ * A must not send Na before PEER_COMMIT has been answered, and B must not
+ * send Nb before its PEER_NONCE: the two waits are the protocol
+ * (docs/radiant-security.md sec 7.4).
  * ------------------------------------------------------------------------ */
 
 #define ANTW_RADIANT_PAIR_LEAVE                              RADIANT_WIRE_RADIANT_PAIR_LEAVE
@@ -557,6 +568,12 @@
 #define ANTW_RADIANT_PAIR_SCALAR                             RADIANT_WIRE_RADIANT_PAIR_SCALAR
 
 #define ANTW_RADIANT_PAIR_EXCHANGE                           RADIANT_WIRE_RADIANT_PAIR_EXCHANGE
+
+#define ANTW_RADIANT_PAIR_NONCE                              RADIANT_WIRE_RADIANT_PAIR_NONCE
+
+#define ANTW_RADIANT_PAIR_PEER_COMMIT                        RADIANT_WIRE_RADIANT_PAIR_PEER_COMMIT
+
+#define ANTW_RADIANT_PAIR_PEER_NONCE                         RADIANT_WIRE_RADIANT_PAIR_PEER_NONCE
 
 /* ------------------------------------------------------------------------
  * Capabilities reply (MESG_CAPABILITIES)

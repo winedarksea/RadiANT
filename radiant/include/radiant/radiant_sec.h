@@ -243,12 +243,37 @@ bool radiant_sec_x25519_is_degenerate(const uint8_t *shared);
  * PAIRING HAPPENS IN THE CLEAR - no prior secret, no out-of-band channel, so
  * an active attacker present during the exchange can MITM it. That's what an
  * anonymous key agreement is, mitigated by the fingerprint below: six digits
- * a human compares across two screens, which two different shared secrets
- * cannot be made to match.
+ * a human compares across two screens.
+ *
+ * Six digits over the public keys alone would NOT hold: a MITM sees both real
+ * keys before choosing its own and can grind key pairs offline (~10^6 X25519,
+ * seconds) until the two values agree (security review 2026-11-13, item 4).
+ * So the fingerprint also covers two nonces, and the responder commits to its
+ * nonce before it sees the initiator's (the shape of BLE numeric comparison):
+ *
+ *   keys cross        SCALAR / EXCHANGE: DH computed and held, nothing installed
+ *   B -> A            Cb = f4(PKb, PKa, Nb) = CMAC_Nb(PKb || PKa || 0x00)
+ *   A -> B            Na
+ *   B -> A            Nb; A checks Cb, and a mismatch wipes the exchange
+ *   both              fp = g2(PKa, PKb, Na, Nb)
+ *                        = (CMAC_Na(PKa || PKb || Nb) mod 2^32) mod 10^6
+ *   both              K_root = CMAC_PRK("RADIANT-pair-root\0" || PKa || PKb ||
+ *                              Na || Nb), PRK = CMAC_0(DH); installed now
+ *
+ * A man in the middle has fixed one nonce before it learns the other side's,
+ * so a completed MITM shows matching digits with probability 10^-6, and one
+ * pairing window allows one attempt. Nothing new on the node: three CMACs and
+ * no extra X25519. The host's price is one more round trip.
  *
  * Out-of-band pairing (QR code, typed key) remains the recommended path for
  * anything that matters - no attack surface during pairing at all.
  */
+
+/* Nonce length, and the two roles. A = initiator, B = responder; which end is
+ * which is the hosts' agreement, not something either node can discover. */
+#define RADIANT_SEC_PAIR_NONCE_BYTES 16
+#define RADIANT_SEC_PAIR_INITIATOR   0u
+#define RADIANT_SEC_PAIR_RESPONDER   1u
 
 /* A node in pairing mode accepts a key from whoever asks, so the mode is always
  * bounded. Zero from a host means this, not "forever". */
@@ -289,19 +314,51 @@ int  radiant_sec_pair_set_scalar(uint8_t ch, const uint8_t *scalar);
 int  radiant_sec_pair_local_pubkey(uint8_t ch, uint8_t *out);
 
 /*
- * Complete the exchange against the peer's public key: derive K_root, install
- * it, and produce the comparison fingerprint.
+ * The Diffie-Hellman half, against the peer's public key. Computes and keeps
+ * the (condensed) shared secret and spends the scalar. Installs NO key and
+ * yields no fingerprint: those wait for the nonces below.
  *
  * Refuses a small-order peer key. RFC 7748 leaves that optional for
  * Diffie-Hellman and it is mandatory here, because the result becomes a root
  * key - accepting it would let anyone able to inject one packet fix the group
- * key to a value they already know.
+ * key to a value they already know. A refusal leaves the scalar usable.
  */
-int  radiant_sec_pair_peer(uint8_t ch, const uint8_t *peer_pub,
-			   uint32_t *fingerprint);
+int  radiant_sec_pair_peer(uint8_t ch, const uint8_t *peer_pub);
 
-/* Six digits, 0..999999. Both ends compute the same value without needing to
- * agree on who initiated. */
+/*
+ * The commit/reveal half. Each call accepts exactly one step and refuses
+ * (RADIANT_SEC_EINVAL, state untouched) anything out of order:
+ *
+ *   initiator  set_nonce(INITIATOR, Na, NULL)  after radiant_sec_pair_peer()
+ *              peer_commit(Cb)                 before Na goes on the air
+ *              peer_nonce(Nb, &fp)             checks Cb, installs, fp
+ *   responder  set_nonce(RESPONDER, Nb, Cb)    Cb out; send it to A
+ *              peer_nonce(Na, &fp)             installs, fp; THEN reveal Nb
+ *
+ * Nonces are 16 bytes from the host's CSPRNG, for the same reason as the
+ * scalar. A commitment that does not open wipes the exchange and returns
+ * RADIANT_SEC_EBADMAC: nothing is installed and the window is spent.
+ */
+int  radiant_sec_pair_set_nonce(uint8_t ch, uint8_t role, const uint8_t *nonce,
+				uint8_t *commit_out);
+int  radiant_sec_pair_peer_commit(uint8_t ch, const uint8_t *commit);
+int  radiant_sec_pair_peer_nonce(uint8_t ch, const uint8_t *peer_nonce,
+				 uint32_t *fingerprint);
+
+/*
+ * OVER-AIR ENROLMENT ONLY, and deliberately not reachable from 0xF5: the DH
+ * and the install in one step, with no commitment (both nonces zero, the keys
+ * ordered by value in place of roles). It is UNAUTHENTICATED Diffie-Hellman.
+ * Its fingerprint is one-sided (a strap has no screen) and grindable - a MITM
+ * can search key pairs until the digits it shows match - so it is a
+ * consistency check between two honest ends, not a MITM defence. The bounded
+ * window, one pairing per window and the physical trigger are what stand
+ * between this and an attacker (docs/radiant-security.md sections 7.4, 11.7).
+ */
+int  radiant_sec_pair_peer_uncommitted(uint8_t ch, const uint8_t *peer_pub,
+				       uint32_t *fingerprint);
+
+/* Six digits, 0..999999, readable once a pairing has installed its key. */
 int  radiant_sec_pair_fingerprint(uint8_t ch, uint32_t *out);
 
 bool radiant_sec_pair_is_open(uint8_t ch);
@@ -688,9 +745,11 @@ struct radiant_sec_stats {
 	 * this counter must not also be silent: an enrolment the owner didn't
 	 * perform is the whole attack, and a climbing counter surfaces it.
 	 *
-	 * Bumped by radiant_sec_pair_peer() after the root key installs
-	 * (counts pairings that took, not attempts; a refused small-order
-	 * peer key leaves it alone), for both the 0xF5 host exchange and
+	 * Bumped by a pairing's install (radiant_sec_pair_peer_nonce(), or
+	 * radiant_sec_pair_peer_uncommitted() for enrolment) after the root
+	 * key installs (counts pairings that took, not attempts; a refused
+	 * small-order peer key or an unopened commitment leaves it alone),
+	 * for both the 0xF5 host exchange and
 	 * profile_enrol.c's over-air window - one event either way.
 	 */
 	uint32_t enrolments;

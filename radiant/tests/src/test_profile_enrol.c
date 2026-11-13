@@ -549,7 +549,7 @@ ZTEST(profile_enrol, test_a_second_receiver_joins_and_the_first_stream_holds)
 	/* ── Both ends reach the same six digits ────────────────────────── */
 	zassert_equal(0, profile_enrol_fingerprint(&pe, &node_fp));
 	zassert_equal(RADIANT_SEC_OK,
-		      radiant_sec_pair_peer(PEER_CH, air, &peer_fp));
+		      radiant_sec_pair_peer_uncommitted(PEER_CH, air, &peer_fp));
 	zassert_equal(node_fp, peer_fp,
 		      "the two ends computed different fingerprints, %u vs %u; "
 		      "the one-sided comparison this design admits to is at "
@@ -1313,7 +1313,7 @@ ZTEST(profile_enrol, test_a_private_node_gains_a_receiver_that_derives_it)
 				 &pe, frames[PROFILE_ENROL_FRAMES - 1u], 8u));
 	zassert_equal(0, profile_enrol_fingerprint(&pe, &node_fp));
 	zassert_equal(RADIANT_SEC_OK,
-		      radiant_sec_pair_peer(PEER_CH, air, &peer_fp));
+		      radiant_sec_pair_peer_uncommitted(PEER_CH, air, &peer_fp));
 	zassert_equal(node_fp, peer_fp,
 		      "the two ends derived different shared secrets");
 
