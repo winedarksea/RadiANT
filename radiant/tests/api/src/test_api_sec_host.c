@@ -32,6 +32,8 @@
 #include "ant_radio_radiant_priv.h"
 
 #include <radiant/radiant_channel.h>
+#include <radiant/radiant_event.h>
+#include <radiant/radiant_radio_hal.h>
 #include <radiant/radiant_sec.h>
 #if defined(CONFIG_IRQ_OFFLOAD)
 #include <zephyr/irq_offload.h>
@@ -142,7 +144,7 @@ ZTEST(api, test_sec_host_a_reserved_switch_bit_is_refused_not_masked)
 	 * switch would be told "yes" and get something weaker than it asked
 	 * for, which is the one answer a security surface must never give.
 	 */
-	for (bit = 0x10u; bit != 0u; bit = (uint8_t)(bit << 1)) {
+	for (bit = 0x20u; bit != 0u; bit = (uint8_t)(bit << 1)) {
 		zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
 			      antr_sec_config(HOST_CH,
 					      (uint8_t)(RADIANT_SEC_SW_AUTH |
@@ -340,6 +342,363 @@ ZTEST(api, test_sec_host_a_channel_out_of_range_is_refused_everywhere)
 		      antr_sec_epoch_set(bad, 0u, 1u, 0u));
 	zassert_equal((antr_err_t)ANTW_INVALID_MESSAGE,
 		      antr_sec_status_get(bad, st, sizeof(st)));
+}
+
+/* ── The 0xF8 window-verdict event (security review 2026-11-13, item 3) ── */
+
+/* test_api.c's record of everything antr_on_message() was handed. */
+uint32_t       api_msglog_count(void);
+const uint8_t *api_msglog_get(uint32_t i, uint8_t *id, uint8_t *len);
+
+#define VD_RX_CH   0u  /* the receiver, a real open slave channel */
+#define VD_TX_CH   1u  /* a sender: a radiant_sec context and nothing else */
+#define VD_EPOCH   0x00001234u
+#define VD_PAGE    0x05u
+#define VD_HOPS    6u  /* three windows at W=2: two judged, one waiting */
+#define VD_LOG_MAX 64u /* test_api.c's MSGLOG_MAX */
+
+static uint64_t vd_anchor;
+
+static uint64_t vd_slot_t(uint32_t i)
+{
+	return vd_anchor +
+	       (uint64_t)i * (uint64_t)radiant_channel_counts_to_us(
+				     RADIANT_CHANNEL_PERIOD_ANT_PLUS);
+}
+
+/*
+ * A receiver configured through the host surface (0xF2, 0xF1, 0xF3), and a
+ * sender keyed the same way directly in radiant_sec. The sender carries only
+ * the transform bits: VERDICT_EVENT and DROP_UNVER are receiver policy. Both
+ * epochs anchor at the same radiant_radio_now() - nothing moves the fake
+ * clock between them - so the sender's slot counter is the receiver's.
+ */
+static void vd_setup(uint8_t switches, uint8_t w)
+{
+	int rc[4];
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_network_address_set(0u, host_net_key));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_assign(
+			      VD_RX_CH,
+			      (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY, 0u,
+			      0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_id_set(VD_RX_CH, HOST_DEVNUM, HOST_DEVTYPE,
+					  HOST_TRANS));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_period_set(VD_RX_CH,
+					      RADIANT_CHANNEL_PERIOD_ANT_PLUS));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_radio_freq_set(VD_RX_CH, HOST_RF));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_open(VD_RX_CH));
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_key_set(VD_RX_CH, 128u, host_key));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_config(VD_RX_CH, switches, w, 0x01u, 0x0Fu));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_epoch_set(VD_RX_CH, 0u, VD_EPOCH, 0u));
+
+	k_mutex_lock(&api_lock, K_FOREVER);
+	rc[0] = radiant_sec_set_key(VD_TX_CH, host_key, 128, HOST_DEVNUM);
+	rc[1] = radiant_sec_set_devnum(VD_TX_CH, HOST_DEVNUM);
+	rc[2] = radiant_sec_configure(
+		VD_TX_CH,
+		(uint8_t)(switches & (RADIANT_SEC_SW_CONF | RADIANT_SEC_SW_AUTH)),
+		w, 0x01u, 0x0Fu);
+	rc[3] = radiant_sec_set_epoch(VD_TX_CH, VD_EPOCH, 0u,
+				      RADIANT_CHANNEL_PERIOD_ANT_PLUS);
+	vd_anchor = (uint64_t)radiant_radio_now();
+	k_mutex_unlock(&api_lock);
+	for (int i = 0; i < 4; i++) {
+		zassert_equal(RADIANT_SEC_OK, rc[i], "sender setup step %d", i);
+	}
+	(void)radiant_event_drain(0u);
+}
+
+static void vd_done(void)
+{
+	(void)radiant_event_drain(0u);
+	(void)antr_channel_close(VD_RX_CH);
+	(void)antr_channel_unassign(VD_RX_CH);
+	k_mutex_lock(&api_lock, K_FOREVER);
+	radiant_sec_channel_release(VD_TX_CH);
+	k_mutex_unlock(&api_lock);
+	(void)radiant_event_drain(0u);
+}
+
+/*
+ * Packet i: built by the sender for slot i, optionally with one data bit
+ * flipped on the way (an injector), ingested by the receiver as heard at slot
+ * i - the call the radio ISR makes - then pumped and drained as the event
+ * thread does. Returns how many BROADCAST_DATA that drain produced, so a test
+ * can show the data still arrives on its own packet, not on the verdict.
+ */
+static uint32_t vd_hop(uint32_t i, bool flip)
+{
+	uint8_t  air[8] = { VD_PAGE, 0xAAu, (uint8_t)i, 0x11u,
+			    0x22u,   0x33u, 0x44u,      0x55u };
+	uint32_t before = api_msglog_count();
+	uint32_t n_bd = 0u;
+	int      rc_tx;
+	int      rc_rx;
+
+	k_mutex_lock(&api_lock, K_FOREVER);
+	rc_tx = radiant_sec_tx_transform(VD_TX_CH, air, 8u, vd_slot_t(i));
+	if (flip) {
+		air[4] ^= 0x01u;
+	}
+	rc_rx = radiant_sec_rx_ingest(VD_RX_CH, air, 8u, true, vd_slot_t(i));
+	radiant_sec_pump();
+	k_mutex_unlock(&api_lock);
+	zassert_equal(RADIANT_SEC_OK, rc_tx, "the sender refused slot %u", i);
+	zassert_equal(RADIANT_SEC_RX_DEFER, rc_rx,
+		      "the receiver did not take secured packet %u", i);
+
+	(void)radiant_event_drain(0u);
+	for (uint32_t k = before; k < api_msglog_count(); k++) {
+		uint8_t id;
+		uint8_t len;
+
+		(void)api_msglog_get(k, &id, &len);
+		if (id == (uint8_t)ANTW_MESG_BROADCAST_DATA_ID) {
+			n_bd++;
+		}
+	}
+	return n_bd;
+}
+
+/* One expected message: a BROADCAST_DATA for counter `ctr`, or (verdict != 0)
+ * a 0xF8 for the window starting at `ctr`. */
+struct vd_want {
+	uint8_t verdict;
+	uint8_t ctr;
+};
+
+static void vd_expect(uint32_t from, const struct vd_want *want, uint32_t n,
+		      uint8_t w)
+{
+	uint32_t got = 0u;
+
+	zassert_true(api_msglog_count() < VD_LOG_MAX,
+		     "the message log overflowed");
+	for (uint32_t k = from; k < api_msglog_count(); k++) {
+		const uint8_t *d;
+		uint8_t        id;
+		uint8_t        len;
+
+		d = api_msglog_get(k, &id, &len);
+		if (id != (uint8_t)ANTW_MESG_BROADCAST_DATA_ID &&
+		    id != (uint8_t)ANTW_MESG_RADIANT_SEC_VERDICT_ID) {
+			continue;
+		}
+		zassert_true(got < n, "message %u: more than the %u expected",
+			     k, n);
+		if (want[got].verdict == 0u) {
+			zassert_equal((uint8_t)ANTW_MESG_BROADCAST_DATA_ID, id,
+				      "message %u: expected data for counter "
+				      "%u, got 0x%02X", got, want[got].ctr, id);
+			zassert_true(len >= 9u);
+			zassert_equal(VD_RX_CH, d[0]);
+			/* Payload byte [1], the counter's low byte: what a host
+			 * maps a packet to its window by. */
+			zassert_equal(want[got].ctr, d[2],
+				      "message %u: data for the wrong counter",
+				      got);
+		} else {
+			zassert_equal((uint8_t)ANTW_MESG_RADIANT_SEC_VERDICT_ID,
+				      id,
+				      "message %u: expected the verdict on "
+				      "window %u, got 0x%02X", got,
+				      want[got].ctr, id);
+			zassert_equal(5u, len, "0xF8 is five bytes");
+			zassert_equal(VD_RX_CH, d[0]);
+			zassert_equal(want[got].verdict, d[1],
+				      "window %u: wrong verdict",
+				      want[got].ctr);
+			zassert_equal(want[got].ctr, rd16(&d[2]),
+				      "window_start is not u16 LE at [2..3]");
+			zassert_equal(w, d[4], "W at [4]");
+		}
+		got++;
+	}
+	zassert_equal(n, got, "%u of %u expected messages arrived", got, n);
+}
+
+#define V_OK  ((uint8_t)RADIANT_SEC_VERDICT_VERIFIED)
+#define V_BAD ((uint8_t)RADIANT_SEC_VERDICT_UNVERIFIED)
+
+ZTEST(api, test_sec_host_a_good_window_sends_verified_after_its_packets)
+{
+	/*
+	 * Each packet still arrives on its own hop - the event adds a message,
+	 * it does not delay one. Window 0's verdict exists once window 1
+	 * (counters 2,3) has carried its tag, so it follows counter 3; window
+	 * 2's follows counter 5; window 4's tag is never sent here.
+	 */
+	static const struct vd_want want[] = {
+		{ 0u, 0u }, { 0u, 1u }, { 0u, 2u }, { 0u, 3u }, { V_OK, 0u },
+		{ 0u, 4u }, { 0u, 5u }, { V_OK, 2u },
+	};
+	uint32_t from;
+
+	vd_setup(RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_VERDICT_EVENT, 2u);
+	from = api_msglog_count();
+	for (uint32_t i = 0u; i < VD_HOPS; i++) {
+		zassert_equal(1u, vd_hop(i, false),
+			      "packet %u was not delivered on its own hop", i);
+	}
+	vd_expect(from, want, ARRAY_SIZE(want), 2u);
+	vd_done();
+}
+
+ZTEST(api, test_sec_host_a_flipped_bit_sends_unverified)
+{
+	/*
+	 * One data bit of counter 1 flipped in the air: the forged packet is
+	 * still delivered (the default policy), and the verdict that follows
+	 * says so. Window 2 is genuine and verifies on its own.
+	 */
+	static const struct vd_want want[] = {
+		{ 0u, 0u }, { 0u, 1u }, { 0u, 2u }, { 0u, 3u }, { V_BAD, 0u },
+		{ 0u, 4u }, { 0u, 5u }, { V_OK, 2u },
+	};
+	uint32_t from;
+
+	vd_setup(RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_VERDICT_EVENT, 2u);
+	from = api_msglog_count();
+	for (uint32_t i = 0u; i < VD_HOPS; i++) {
+		(void)vd_hop(i, i == 1u);
+	}
+	vd_expect(from, want, ARRAY_SIZE(want), 2u);
+	vd_done();
+}
+
+ZTEST(api, test_sec_host_the_drop_policy_releases_a_window_before_its_verdict)
+{
+	/* Held packets come out immediately before the event that releases
+	 * them; a forged window's never come out, only its verdict. Counter 3
+	 * is flipped, so window 2 fails and window 0 (whose tag bytes counter
+	 * 3 still carries intact) verifies. */
+	static const struct vd_want want[] = {
+		{ 0u, 0u }, { 0u, 1u }, { V_OK, 0u },
+		{ V_BAD, 2u },
+	};
+	uint32_t from;
+
+	vd_setup(RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_DROP_UNVER |
+			 RADIANT_SEC_SW_VERDICT_EVENT,
+		 2u);
+	from = api_msglog_count();
+	for (uint32_t i = 0u; i < VD_HOPS; i++) {
+		(void)vd_hop(i, i == 3u);
+	}
+	vd_expect(from, want, ARRAY_SIZE(want), 2u);
+	vd_done();
+}
+
+ZTEST(api, test_sec_host_without_the_bit_the_stream_is_unchanged)
+{
+	struct rec {
+		uint8_t id;
+		uint8_t len;
+		uint8_t d[ANTW_MAX_SIZE_VALUE];
+	};
+	static struct rec with[16];
+	uint32_t          n_with = 0u;
+	uint32_t          n_f8 = 0u;
+	uint32_t          n_without = 0u;
+	uint32_t          from;
+
+	/* With the bit: everything that is not a 0xF8, in order. */
+	vd_setup(RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_VERDICT_EVENT, 2u);
+	from = api_msglog_count();
+	for (uint32_t i = 0u; i < VD_HOPS; i++) {
+		(void)vd_hop(i, i == 1u);
+	}
+	for (uint32_t k = from; k < api_msglog_count(); k++) {
+		const uint8_t *d;
+		uint8_t        id;
+		uint8_t        len;
+
+		d = api_msglog_get(k, &id, &len);
+		if (id == (uint8_t)ANTW_MESG_RADIANT_SEC_VERDICT_ID) {
+			n_f8++;
+			continue;
+		}
+		zassert_true(n_with < ARRAY_SIZE(with));
+		with[n_with].id = id;
+		with[n_with].len = len;
+		memcpy(with[n_with].d, d, len);
+		n_with++;
+	}
+	zassert_equal(2u, n_f8, "setup: the opted-in run sent no events");
+	vd_done();
+
+	/* Without it, the same air at the same instants (fresh contexts, same
+	 * epoch, same anchor): the same messages, byte for byte, and no 0xF8. */
+	vd_setup(RADIANT_SEC_SW_AUTH, 2u);
+	from = api_msglog_count();
+	for (uint32_t i = 0u; i < VD_HOPS; i++) {
+		(void)vd_hop(i, i == 1u);
+	}
+	zassert_true(api_msglog_count() < VD_LOG_MAX,
+		     "the message log overflowed");
+	for (uint32_t k = from; k < api_msglog_count(); k++) {
+		const uint8_t *d;
+		uint8_t        id;
+		uint8_t        len;
+
+		d = api_msglog_get(k, &id, &len);
+		zassert_not_equal((uint8_t)ANTW_MESG_RADIANT_SEC_VERDICT_ID, id,
+				  "0xF8 sent to a host that never asked");
+		zassert_true(n_without < n_with, "more messages than with it");
+		zassert_equal(with[n_without].id, id, "message %u", n_without);
+		zassert_equal(with[n_without].len, len, "message %u",
+			      n_without);
+		zassert_mem_equal(with[n_without].d, d, len, "message %u",
+				  n_without);
+		n_without++;
+	}
+	zassert_equal(n_with, n_without, "messages missing without the bit");
+	zassert_equal(VD_HOPS, n_with, "one BROADCAST_DATA per packet");
+	vd_done();
+}
+
+ZTEST(api, test_sec_host_the_verdict_event_needs_x_auth)
+{
+	uint8_t st[ANTR_SEC_STATUS_LEN];
+
+	host_assign(true, true);
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_key_set(HOST_CH, 128u, host_key));
+
+	/* Only X_AUTH has a verdict. Accepting the bit without it would
+	 * promise events that never come, and a host would read the silence
+	 * as nothing having failed. */
+	zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
+		      antr_sec_config(HOST_CH, RADIANT_SEC_SW_VERDICT_EVENT,
+				      2u, 0x01u, 0x0Fu));
+	zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
+		      antr_sec_config(HOST_CH,
+				      RADIANT_SEC_SW_CONF |
+					      RADIANT_SEC_SW_VERDICT_EVENT,
+				      2u, 0x01u, 0x0Fu));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_config(HOST_CH,
+				      RADIANT_SEC_SW_AUTH |
+					      RADIANT_SEC_SW_VERDICT_EVENT,
+				      2u, 0x01u, 0x0Fu));
+
+	/* And the host can read back that it is on. */
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_status_get(HOST_CH, st, sizeof(st)));
+	zassert_equal(RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_VERDICT_EVENT,
+		      st[2]);
+	host_done();
 }
 
 #if defined(CONFIG_RADIANT_SEC_LOCK_CHECK)
