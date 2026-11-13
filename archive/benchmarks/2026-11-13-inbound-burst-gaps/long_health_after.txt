@@ -1,0 +1,30 @@
+Found 0FCF:1009  bcdDevice=0x0100
+  manufacturer: RadiANT Project
+  product:      RadiANT ANT+ compatible USB stick
+  serial:       EE6986854FD72803
+  . response ch=0 to 0x4C code=0
+MESG_RADIANT_HEALTH (0xF6), structure version 1
+
+  tx_drops                       9   ANT events dropped: USB TX queue full
+  tx_high_water                  4   deepest the USB TX queue has been (of 32)
+  event_high_water               1   deepest the radio event queue has been
+  event_overflows                0   event-queue overflow marks
+  rx_backpressure                0   times bulk-OUT was left unarmed
+  key_rejects                    0   frames refused for an unusable network key
+  sched_missed                   0   scheduler windows missed
+  sched_failed                   0   scheduler windows failed
+  sched_denied                   0   scheduler windows denied by the arbiter
+  burst_stalls                   0   burst transfers that hit the 1000 ms stall
+  sweep_busy                     0   search posts declined: searching channel busy
+  host_desync                    0   bytes discarded by the host parser hunting for SYNC
+  host_csum                      0   framed messages that failed the trailing XOR checksum
+  rx_not_owner                   0   radio RX events that arrived after their channel op moved on
+  tx_timeout                     4   USB bulk-IN transfers that timed out waiting on the host
+  sets_advanced_uncovered        -   not in this build (no coverage counter compiled in)
+
+  tx_drops is non-zero: those ANT events never reached the
+  host and produced no RX_FAIL, so they are invisible to
+  ant_verify.py's loss accounting. This is the number that
+  invalidates a sitting.
+  It is NOT a request to deepen the queue - see
+  ANT_TX_QUEUE_DEPTH in apps/common/usb_ant_class.c.

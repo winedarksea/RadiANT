@@ -48,6 +48,10 @@ that does not run is not a record of anything.
 | `2026-11-11-master-burst-fixed.log` | Both fixes: three 3-packet bursts complete, grid unmoved, the next broadcasts repeat the last burst packet |
 | `2026-11-11-slave-broadcast-garmin.log` | A Garmin USB-m SLAVE sending broadcast data to a RadiANT master: control byte `0x02`, +2176..+2215 µs after the master's frame. See *The slave-broadcast captures* below |
 | `2026-11-11-slave-broadcast-radiant.log` | The same with RadiANT as the slave and the Garmin as master, after the implementation: `0x02` at +2160..+2191 µs |
+| `2026-11-13-master-acked-garmin-to-radiant.log` | Garmin USB-m MASTER sending acknowledged data (`0xAA`) to a RadiANT slave that answers `0xF2` at +1535..+1573 µs: the Garmin failed all 50. See *The 2026-11-13 inbound captures* below |
+| `2026-11-13-master-acked-garmin-to-radiant-fixed.log` | The same with `0xAA` answered at +2160..+2169 µs: 96/100 completed |
+| `2026-11-13-inbound-burst-garmin-master.log` | 20 Garmin-master bursts of 8 to a RadiANT slave: 0x8A ACK offset, the master's next-packet spacing, its grid after each burst |
+| `2026-11-13-inbound-burst-garmin-master-lossy.log` | The same with the slave's ACKs at power level 0: how a Garmin master handles a lost ACK, and the 5-repeat default on air |
 
 **The four-profile `.antcap` set still needs a bench session — see *What to
 record* below.**
@@ -186,6 +190,25 @@ each marked `5B nn A5 5A 01 02 03 04` so a frame traces back to one write.
   `api_post_slave_bcast()` (the commit after this capture). Ten writes, ten
   `0x02` frames, each once, at
   **+2160..+2191 µs**; the Garmin master delivered all ten.
+
+## The 2026-11-13 inbound captures
+
+Same sniffer and console setup (L15 DK, `promisc`, log VCOM with DTR).
+Master: the Garmin USB-m. Slave: the Pro Micro on `fix/inbound-burst-gaps`.
+Driven by `tools/ant_ack_pair.py` (device 14871). Analysis and counts are in
+`archive/benchmarks/2026-11-13-inbound-burst-gaps/README.md`.
+
+- `...-master-acked-garmin-to-radiant.log`: every `B3=AA` is answered `F2` at
+  +1535..+1573 µs and the Garmin reports each one FAILED. This is what moved
+  `0xAA` to the slot-reply turnaround. The `...-fixed.log` shows the replies at
+  +2160..+2169 µs.
+- `...-inbound-burst-garmin-master.log`: 0x8A answered at +2165..+2183 µs. The
+  master's next packet comes +1486..+1608 µs after our ACK. Its first slot frame
+  after a burst is exactly one period after the 0x8A, so the grid is kept.
+- `...-lossy.log`: when an 0x8A's ACK is lost the Garmin master sends nothing
+  more in that slot (no in-slot retry of packet 0), and our `D2` repeats six
+  times in all, the original plus 5, at ~3142 µs. A lost mid-burst ACK is
+  retried ~3110-3140 µs after the previous attempt.
 
 ## The format
 
