@@ -150,6 +150,13 @@ prose should warn about and now does.
   frame the correlator locked onto demodulated and passed its CRC. So this is
   sync detection, not demodulation, and closing it further means MCE/RFE work
   (custom radio-core RAM patches), which is out of scope here.
+  **Superseded 2026-11-13:** the residual was the RX intermediate frequency,
+  not the part. tc901's `intFreq = 0x0800` (0.5 MHz) put the ~1.4 MHz-wide
+  ANT signal across DC, so loss depended on the transmitter's exact carrier
+  offset (25-87 % on one Pro Micro clone, 8-22 % on the nRF54L15 DK). At
+  `0x1000` (1.0 MHz, `CONFIG_RADIANT_CC26XX_INT_FREQ`) the same two
+  transmitters measure 0.0-0.6 %, flat across ±200 kHz of retuning, below a
+  same-window Garmin USB-m. See `archive/benchmarks/2026-11-13-ti-todo/`.
 * **Timing is not the problem** — the TI part is measurably *better* at it.
 
 ### The A/B/A sitting, 2026-08-13

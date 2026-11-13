@@ -323,7 +323,15 @@ static volatile rfc_CMD_PROP_RADIO_DIV_SETUP_PA_t setup_cmd = {
 	.txPower = 0x7217,             /* SmartRF's 2.4 GHz value, tc901 */
 	.pRegOverride = phy_overrides,
 	.centerFreq = 2400u + ANT_RF_INDEX_DEFAULT,
-	.intFreq = 0x0800,
+	/*
+	 * RX intermediate frequency, MHz in signed 4.12: 0x1000 = 1.0 MHz.
+	 * tc901's 0x0800 (0.5 MHz) put this ~1.4 MHz-wide signal across DC,
+	 * so a transmitter whose carrier sat at a particular offset from ours
+	 * lost 25-87 % of its frames while the Garmin heard it at 1-5 %
+	 * (archive/benchmarks/2026-11-13-ti-todo/). See CONFIG_RADIANT_CC26XX_
+	 * INT_FREQ's help for the measured table.
+	 */
+	.intFreq = CONFIG_RADIANT_CC26XX_INT_FREQ,
 	.loDivider = 0,                /* 0 = 2.4 GHz band; "DIV" is not a divider here */
 	/*
 	 * Stated rather than left to the initialiser's implicit zeroing. These
@@ -358,11 +366,24 @@ static const RF_TxPowerTable_Entry radiant_cc26xx_txp[] = {
 	RF_TxPowerTable_TERMINATION_ENTRY,
 };
 
+/*
+ * Bench-only carrier trim (CONFIG_RADIANT_CC26XX_FREQ_TRIM_KHZ, default 0).
+ * fractFreq is the fraction of 1 MHz in 1/65536 steps, so a negative trim
+ * borrows one MHz from frequency. With 0 both fields are what they were.
+ */
+#if defined(CONFIG_RADIANT_CC26XX_FREQ_TRIM_KHZ)
+#define FS_TRIM_KHZ CONFIG_RADIANT_CC26XX_FREQ_TRIM_KHZ
+#else
+#define FS_TRIM_KHZ 0
+#endif
+#define FS_TRIM_FRACT ((((FS_TRIM_KHZ) + 1000) * 65536 / 1000) % 65536)
+#define FS_TRIM_MHZ   ((FS_TRIM_KHZ) < 0 ? -1 : 0)
+
 static volatile rfc_CMD_FS_t fs_cmd = {
 	.commandNo = CMD_FS,
 	.condition.rule = COND_NEVER,
-	.frequency = 2400u + ANT_RF_INDEX_DEFAULT,
-	.fractFreq = 0,
+	.frequency = 2400u + ANT_RF_INDEX_DEFAULT + FS_TRIM_MHZ,
+	.fractFreq = FS_TRIM_FRACT,
 	.synthConf.bTxMode = 0,
 	.synthConf.refFreq = 0,
 };
@@ -1410,8 +1431,9 @@ static void rx_drain_entries(void)
 
 		idx = rx_match(status.status.syncWordId, p);
 		radiant_cc26xx_sync_frames++;
-		/* The decoy (one group: syncWord1 is syncWord0 with a byte
-		 * inverted, see radiant_radio_rx()) is meant never to fire. */
+		/* One group: syncWord1 is 0, so the second correlator is off
+		 * (see radiant_radio_rx()) and this should stay 0. A non-zero
+		 * count means the RF core reported syncWordId 1 anyway. */
 		CC_DIAG(if (status.status.syncWordId == 1u &&
 			    st.sync_group[1] == st.sync_group[0]) {
 				cc_diag.alt_sync_hits++;
@@ -1938,22 +1960,27 @@ static int rx_arm(const struct radiant_rx_req *req, uint32_t *op)
 					st.hw_addr_len);
 	if (st.sync_group[1] < 0) {
 		/*
-		 * ONE GROUP: syncWord1 MUST BE FAR AWAY, NOT EQUAL TO syncWord0.
-		 * Duplicating syncWord0 seems safe for a comparator, but this is
-		 * a CORRELATOR (caps.min_filter_hamming_bits): two identical
-		 * templates are zero bits apart, the worst point on the curve,
-		 * and it made every TRACKED window fail (454 EVENT_RX_FAIL
-		 * against one packet received). Instead, syncWord1 is syncWord0
-		 * with the top matched byte inverted - 8 bits away and a byte
-		 * no ANT frame carries (network address starts A6, this makes
-		 * it 59) - so it can't match anything real. sync_group[1] still
-		 * points at the same filter: since the decoy can't legitimately
-		 * fire, a reported syncWordId of 1 can only be misattribution of
-		 * the one filter this window has.
+		 * ONE GROUP: syncWord1 = 0, which turns the second correlator
+		 * OFF (driverlib rf_prop_cmd.h: "Alternative sync word if
+		 * non-zero").
+		 *
+		 * NEVER DUPLICATE syncWord0 here. This is a CORRELATOR
+		 * (caps.min_filter_hamming_bits): two identical templates are
+		 * zero bits apart, the worst point on the curve, and it made
+		 * every TRACKED window fail (454 EVENT_RX_FAIL against one
+		 * packet received).
+		 *
+		 * Until 2026-11-13 this was a decoy, syncWord0 with the top
+		 * matched byte inverted (0x59C5 under the short match). It was
+		 * meant never to fire and fired ~110 times a minute, every hit
+		 * a CRC failure. Alternating 300 s legs against it
+		 * (archive/benchmarks/2026-11-13-ti-todo/): CRC fails halved,
+		 * tracked loss unchanged against a same-window Garmin.
+		 * sync_group[1] still points at the same filter, so a stray
+		 * syncWordId of 1 stays attributed to the one filter.
 		 */
 		st.sync_group[1] = st.sync_group[0];
-		rx_cmd.syncWord1 = rx_cmd.syncWord0 ^
-				   ((uint32_t)0xFFu << (8u * (st.hw_addr_len - 1u)));
+		rx_cmd.syncWord1 = 0u;
 	} else {
 		rx_cmd.syncWord1 = sync_word_of(st.filters[st.sync_group[1]].addr,
 						st.hw_addr_len);

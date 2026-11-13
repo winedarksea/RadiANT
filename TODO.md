@@ -5,10 +5,10 @@ Discovery short match (ADR 0022), left open 2026-11-11:
 - Deferred to the Zwift follow-up testing: the final Zwift capture with both workstreams flashed (user-run): every sensor listed within ~1 s, 0x61/0xC6 answered, reset -> NETWORK_KEY against 42-94 s (RadiANT history) and 9.2 s (Garmin).
 
 
-## TI CC2652R, open after the 2026-11-12 bench (evidence `archive/benchmarks/2026-11-12-ti-findings/` and `2026-11-12-ti-lead/`):
-- TI cannot receive the Pro Micro clone `EE6986854FD72803`: as a simulated sensor TI lost 87.5 % of its frames, the Garmin 0.34 %, and TI lost 5.4 % of the nRF54L15 DK's. Guess: the clone's carrier offset against TI's RX bandwidth. Measure the offset, then decide whether TI's RX bandwidth should be wider. Until then, never use the clone as a TI radio peer.
-- Decoy sync word `0x59C5`: 0xF7 page 4 counts its hits (`alt_sync_hits`, 1-5 per leg against hundreds of windows). Not decided; the `syncWord1 = 0` A/B is 6 x 300 s alternating tracked-loss legs.
-- Not run: `tools/ab_gates.toml`'s acquisition gate for the TI short match (needs `ant_verify` T1 sittings; deferred until the decoy is decided).
+## TI CC2652R, open after the 2026-11-12 bench (evidence `archive/benchmarks/2026-11-12-ti-findings/` and `2026-11-12-ti-lead/`; items 1-3 closed 2026-11-13, `archive/benchmarks/2026-11-13-ti-todo/README.md`):
+- [x] TI cannot receive the Pro Micro clone: FIXED. The cause was TI's RX intermediate frequency (0.5 MHz put the signal across DC, so loss depended on the transmitter's exact carrier offset), not the clone or the RX bandwidth. `CONFIG_RADIANT_CC26XX_INT_FREQ` now defaults to 1.0 MHz: clone and L15 0.0-0.6 % on TI, flat across ±200 kHz, below the same-window Garmin. The clone is a valid TI peer again.
+- [x] Decoy sync word `0x59C5`: replaced by `syncWord1 = 0` (second correlator off). 6 x 300 s alternating legs: CRC fails halved, tracked loss unchanged against the Garmin.
+- [x] `tools/ab_gates.toml`'s acquisition gate for the TI short match: closed as superseded, not run. The gate is a ratio against sdk-ant, which cannot run on TI, and it is `required = false`; ADR 0022's TI section already compared first-sighting medians against the Garmin in the same window (0.30/0.39 s, gate 2 pass).
 - The burst ACK-window reserve (e042a10) is unmeasured on MPSL: the window now holds 1550 us more arbiter air and retries become armable in-grant. Under cc26xx coex the in-grant lead stays 600 us, so retries still cannot fit there.
 
 ## FE-C coverage (deferred from the 2026-11-11 Zwift-capture plan, one item):

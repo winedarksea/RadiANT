@@ -207,6 +207,37 @@ config RADIANT_CC26XX_RX_BW_CODE
 	  exact, so an invalid code is a runtime CMD_PROP_RADIO_DIV_SETUP
 	  failure (loud), not silently clamped.
 
+config RADIANT_CC26XX_INT_FREQ
+	hex "CMD_PROP_RADIO_DIV_SETUP.intFreq (MHz, signed 4.12), for a sweep"
+	default 0x1000
+	range 0x0 0x7FFF
+	depends on RADIANT_BACKEND_CC26XX
+	help
+	  RX intermediate frequency; 0x1000 = 1.0 MHz. The tc901 value 0x0800
+	  (0.5 MHz) put the ~1.4 MHz-wide ANT signal across DC. Measured
+	  2026-11-13 (archive/benchmarks/2026-11-13-ti-todo/), 120 s legs,
+	  Garmin USB-m in the same window, TI loss on a Pro Micro clone sim /
+	  an nRF54L15 DK sim:
+	    0x0800  42.8-51.5 % / 15.2-21.6 %
+	    0x0C00   0.0-0.2 %  /  0.4 %
+	    0x1000   0.0-0.2 %  /  0.2 %
+	  with no cost on a weak trainer (TI minus Garmin -3 to -5 pp at
+	  0x1000). At 0x0800 TI's loss depended sharply on the transmitter's
+	  exact carrier offset; widening rxBw to 100 also hid it but cost
+	  ~10 pp on the weak trainer.
+
+config RADIANT_CC26XX_FREQ_TRIM_KHZ
+	int "Synthesiser offset from the ANT+ channel in kHz, for a carrier-offset sweep"
+	default 0
+	range -500 500
+	depends on RADIANT_BACKEND_CC26XX
+	help
+	  Added to CMD_FS (frequency/fractFreq) at radio enable, so the
+	  receiver listens this far from 2457 MHz. Bench-only: retuning TI
+	  until its loss on a transmitter is lowest measures that
+	  transmitter's carrier offset relative to TI's own clock. 0 leaves
+	  the image byte-identical to a build without this symbol.
+
 config RADIANT_CC26XX_AA_FILTER
 	hex "Anti-aliasing filter bandwidth override (ADI_HALFREG_OVERRIDE), for a sweep"
 	default 0x5

@@ -1,0 +1,2390 @@
+{
+  "method": "tx_ladder",
+  "transmitter": "ant_sim_py",
+  "profile": "power",
+  "rf_channel": 57,
+  "seconds_per_step": 60.0,
+  "rungs": [
+    8,
+    7,
+    6,
+    5,
+    4,
+    3,
+    2,
+    1,
+    0,
+    -1,
+    -2,
+    -3,
+    -4,
+    -5,
+    -6,
+    -7,
+    -8,
+    -9,
+    -10,
+    -12,
+    -14,
+    -16,
+    -18,
+    -20,
+    -28
+  ],
+  "tx_part": "nrf54l15",
+  "ladders": [
+    {
+      "steps": [
+        {
+          "loss_pct": 9.12863070539419,
+          "loss_basis": "master_sent",
+          "packets": 219,
+          "master_sent": 241,
+          "rx_fail": 22,
+          "rssi_dbm_mean": -30.168949771689498,
+          "rssi_samples": 219,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 22
+          },
+          "tx_power_dbm": 8,
+          "tx_level": 128,
+          "tx_custom": 63
+        },
+        {
+          "loss_pct": 7.053941908713693,
+          "loss_basis": "master_sent",
+          "packets": 224,
+          "master_sent": 241,
+          "rx_fail": 16,
+          "rssi_dbm_mean": -31.111607142857142,
+          "rssi_samples": 224,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 16
+          },
+          "tx_power_dbm": 7,
+          "tx_level": 128,
+          "tx_custom": 57
+        },
+        {
+          "loss_pct": 10.416666666666666,
+          "loss_basis": "master_sent",
+          "packets": 215,
+          "master_sent": 240,
+          "rx_fail": 25,
+          "rssi_dbm_mean": -32.283720930232555,
+          "rssi_samples": 215,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 25
+          },
+          "tx_power_dbm": 6,
+          "tx_level": 128,
+          "tx_custom": 51
+        },
+        {
+          "loss_pct": 9.166666666666666,
+          "loss_basis": "master_sent",
+          "packets": 218,
+          "master_sent": 240,
+          "rx_fail": 23,
+          "rssi_dbm_mean": -33.03669724770642,
+          "rssi_samples": 218,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 23
+          },
+          "tx_power_dbm": 5,
+          "tx_level": 128,
+          "tx_custom": 45
+        },
+        {
+          "loss_pct": 7.8838174273858925,
+          "loss_basis": "master_sent",
+          "packets": 222,
+          "master_sent": 241,
+          "rx_fail": 19,
+          "rssi_dbm_mean": -34.049549549549546,
+          "rssi_samples": 222,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 19
+          },
+          "tx_power_dbm": 4,
+          "tx_level": 128,
+          "tx_custom": 40
+        },
+        {
+          "loss_pct": 6.639004149377594,
+          "loss_basis": "master_sent",
+          "packets": 225,
+          "master_sent": 241,
+          "rx_fail": 16,
+          "rssi_dbm_mean": -35.906666666666666,
+          "rssi_samples": 225,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 16
+          },
+          "tx_power_dbm": 3,
+          "tx_level": 128,
+          "tx_custom": 35
+        },
+        {
+          "loss_pct": 10.416666666666666,
+          "loss_basis": "master_sent",
+          "packets": 215,
+          "master_sent": 240,
+          "rx_fail": 26,
+          "rssi_dbm_mean": -36.06511627906977,
+          "rssi_samples": 215,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 26
+          },
+          "tx_power_dbm": 2,
+          "tx_level": 128,
+          "tx_custom": 31
+        },
+        {
+          "loss_pct": 4.564315352697095,
+          "loss_basis": "master_sent",
+          "packets": 230,
+          "master_sent": 241,
+          "rx_fail": 11,
+          "rssi_dbm_mean": -37.15652173913043,
+          "rssi_samples": 230,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 11
+          },
+          "tx_power_dbm": 1,
+          "tx_level": 128,
+          "tx_custom": 27
+        },
+        {
+          "loss_pct": 8.333333333333334,
+          "loss_basis": "master_sent",
+          "packets": 220,
+          "master_sent": 240,
+          "rx_fail": 21,
+          "rssi_dbm_mean": -38.877272727272725,
+          "rssi_samples": 220,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 21
+          },
+          "tx_power_dbm": 0,
+          "tx_level": 128,
+          "tx_custom": 24
+        },
+        {
+          "loss_pct": 5.0,
+          "loss_basis": "master_sent",
+          "packets": 228,
+          "master_sent": 240,
+          "rx_fail": 13,
+          "rssi_dbm_mean": -39.10087719298246,
+          "rssi_samples": 228,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 13
+          },
+          "tx_power_dbm": -1,
+          "tx_level": 128,
+          "tx_custom": 21
+        },
+        {
+          "loss_pct": 7.083333333333333,
+          "loss_basis": "master_sent",
+          "packets": 223,
+          "master_sent": 240,
+          "rx_fail": 18,
+          "rssi_dbm_mean": -40.0762331838565,
+          "rssi_samples": 223,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 18
+          },
+          "tx_power_dbm": -2,
+          "tx_level": 128,
+          "tx_custom": 19
+        },
+        {
+          "loss_pct": 8.75,
+          "loss_basis": "master_sent",
+          "packets": 219,
+          "master_sent": 240,
+          "rx_fail": 21,
+          "rssi_dbm_mean": -41.47488584474886,
+          "rssi_samples": 219,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 21
+          },
+          "tx_power_dbm": -3,
+          "tx_level": 128,
+          "tx_custom": 17
+        },
+        {
+          "loss_pct": 7.916666666666667,
+          "loss_basis": "master_sent",
+          "packets": 221,
+          "master_sent": 240,
+          "rx_fail": 20,
+          "rssi_dbm_mean": -42.036199095022624,
+          "rssi_samples": 221,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 20
+          },
+          "tx_power_dbm": -4,
+          "tx_level": 128,
+          "tx_custom": 15
+        },
+        {
+          "loss_pct": 6.666666666666667,
+          "loss_basis": "master_sent",
+          "packets": 224,
+          "master_sent": 240,
+          "rx_fail": 16,
+          "rssi_dbm_mean": -43.736607142857146,
+          "rssi_samples": 224,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 16
+          },
+          "tx_power_dbm": -5,
+          "tx_level": 128,
+          "tx_custom": 13
+        },
+        {
+          "loss_pct": 10.833333333333334,
+          "loss_basis": "master_sent",
+          "packets": 214,
+          "master_sent": 240,
+          "rx_fail": 26,
+          "rssi_dbm_mean": -45.08411214953271,
+          "rssi_samples": 214,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 26
+          },
+          "tx_power_dbm": -6,
+          "tx_level": 128,
+          "tx_custom": 11
+        },
+        {
+          "loss_pct": 8.75,
+          "loss_basis": "master_sent",
+          "packets": 219,
+          "master_sent": 240,
+          "rx_fail": 21,
+          "rssi_dbm_mean": -45.858447488584474,
+          "rssi_samples": 219,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 21
+          },
+          "tx_power_dbm": -7,
+          "tx_level": 128,
+          "tx_custom": 10
+        },
+        {
+          "loss_pct": 11.666666666666666,
+          "loss_basis": "master_sent",
+          "packets": 212,
+          "master_sent": 240,
+          "rx_fail": 28,
+          "rssi_dbm_mean": -47.04716981132076,
+          "rssi_samples": 212,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 28
+          },
+          "tx_power_dbm": -8,
+          "tx_level": 128,
+          "tx_custom": 9
+        },
+        {
+          "loss_pct": 14.583333333333334,
+          "loss_basis": "master_sent",
+          "packets": 205,
+          "master_sent": 240,
+          "rx_fail": 35,
+          "rssi_dbm_mean": -48.02439024390244,
+          "rssi_samples": 205,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 35
+          },
+          "tx_power_dbm": -9,
+          "tx_level": 128,
+          "tx_custom": 8
+        },
+        {
+          "loss_pct": 14.583333333333334,
+          "loss_basis": "master_sent",
+          "packets": 205,
+          "master_sent": 240,
+          "rx_fail": 35,
+          "rssi_dbm_mean": -49.078048780487805,
+          "rssi_samples": 205,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 35
+          },
+          "tx_power_dbm": -10,
+          "tx_level": 128,
+          "tx_custom": 7
+        },
+        {
+          "loss_pct": 7.5,
+          "loss_basis": "master_sent",
+          "packets": 222,
+          "master_sent": 240,
+          "rx_fail": 18,
+          "rssi_dbm_mean": -51.027027027027025,
+          "rssi_samples": 222,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 18
+          },
+          "tx_power_dbm": -12,
+          "tx_level": 128,
+          "tx_custom": 6
+        },
+        {
+          "loss_pct": 13.75,
+          "loss_basis": "master_sent",
+          "packets": 207,
+          "master_sent": 240,
+          "rx_fail": 33,
+          "rssi_dbm_mean": -52.46376811594203,
+          "rssi_samples": 207,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 33
+          },
+          "tx_power_dbm": -14,
+          "tx_level": 128,
+          "tx_custom": 5
+        },
+        {
+          "loss_pct": 11.25,
+          "loss_basis": "master_sent",
+          "packets": 213,
+          "master_sent": 240,
+          "rx_fail": 27,
+          "rssi_dbm_mean": -54.08450704225352,
+          "rssi_samples": 213,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 27
+          },
+          "tx_power_dbm": -16,
+          "tx_level": 128,
+          "tx_custom": 4
+        },
+        {
+          "loss_pct": 16.666666666666668,
+          "loss_basis": "master_sent",
+          "packets": 200,
+          "master_sent": 240,
+          "rx_fail": 41,
+          "rssi_dbm_mean": -57.005,
+          "rssi_samples": 200,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 41
+          },
+          "tx_power_dbm": -18,
+          "tx_level": 128,
+          "tx_custom": 3
+        },
+        {
+          "loss_pct": 10.416666666666666,
+          "loss_basis": "master_sent",
+          "packets": 215,
+          "master_sent": 240,
+          "rx_fail": 25,
+          "rssi_dbm_mean": -60.093023255813954,
+          "rssi_samples": 215,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 25
+          },
+          "tx_power_dbm": -20,
+          "tx_level": 128,
+          "tx_custom": 2
+        },
+        {
+          "loss_pct": 14.937759336099585,
+          "loss_basis": "master_sent",
+          "packets": 205,
+          "master_sent": 241,
+          "rx_fail": 36,
+          "rssi_dbm_mean": -66.06341463414634,
+          "rssi_samples": 205,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 36
+          },
+          "tx_power_dbm": -28,
+          "tx_level": 128,
+          "tx_custom": 1
+        }
+      ],
+      "loss5pct_tx_power_dbm": null,
+      "knee": {
+        "tx_power_dbm": null,
+        "reason": "the loudest rung (8 dBm) already loses 9.13 %, over the 5.0 % target - the link is broken before the ladder starts, so this measures the bench and not the receiver"
+      },
+      "rssi_slope": {
+        "slope": 1.024614618156656,
+        "n": 25,
+        "worst_residual_db": 1.169380630410508,
+        "reason": "least squares of mean RSSI against commanded transmit power"
+      },
+      "dial_trustworthy": true,
+      "dial_detail": "RSSI moved 1.02 dB per commanded dB over 25 rungs, worst rung 1.2 dB off the line, so the dial is real",
+      "loss5pct_rssi_dbm": null
+    }
+  ],
+  "steps": [
+    {
+      "tx_power_dbm": 8,
+      "loss_exact_pct": 9.12863070539419,
+      "loss_basis": "master_sent",
+      "packets": 219,
+      "rx_fail": 22,
+      "rssi_dbm_mean": -30.168949771689498
+    },
+    {
+      "tx_power_dbm": 7,
+      "loss_exact_pct": 7.053941908713693,
+      "loss_basis": "master_sent",
+      "packets": 224,
+      "rx_fail": 16,
+      "rssi_dbm_mean": -31.111607142857142
+    },
+    {
+      "tx_power_dbm": 6,
+      "loss_exact_pct": 10.416666666666666,
+      "loss_basis": "master_sent",
+      "packets": 215,
+      "rx_fail": 25,
+      "rssi_dbm_mean": -32.283720930232555
+    },
+    {
+      "tx_power_dbm": 5,
+      "loss_exact_pct": 9.166666666666666,
+      "loss_basis": "master_sent",
+      "packets": 218,
+      "rx_fail": 23,
+      "rssi_dbm_mean": -33.03669724770642
+    },
+    {
+      "tx_power_dbm": 4,
+      "loss_exact_pct": 7.8838174273858925,
+      "loss_basis": "master_sent",
+      "packets": 222,
+      "rx_fail": 19,
+      "rssi_dbm_mean": -34.049549549549546
+    },
+    {
+      "tx_power_dbm": 3,
+      "loss_exact_pct": 6.639004149377594,
+      "loss_basis": "master_sent",
+      "packets": 225,
+      "rx_fail": 16,
+      "rssi_dbm_mean": -35.906666666666666
+    },
+    {
+      "tx_power_dbm": 2,
+      "loss_exact_pct": 10.416666666666666,
+      "loss_basis": "master_sent",
+      "packets": 215,
+      "rx_fail": 26,
+      "rssi_dbm_mean": -36.06511627906977
+    },
+    {
+      "tx_power_dbm": 1,
+      "loss_exact_pct": 4.564315352697095,
+      "loss_basis": "master_sent",
+      "packets": 230,
+      "rx_fail": 11,
+      "rssi_dbm_mean": -37.15652173913043
+    },
+    {
+      "tx_power_dbm": 0,
+      "loss_exact_pct": 8.333333333333334,
+      "loss_basis": "master_sent",
+      "packets": 220,
+      "rx_fail": 21,
+      "rssi_dbm_mean": -38.877272727272725
+    },
+    {
+      "tx_power_dbm": -1,
+      "loss_exact_pct": 5.0,
+      "loss_basis": "master_sent",
+      "packets": 228,
+      "rx_fail": 13,
+      "rssi_dbm_mean": -39.10087719298246
+    },
+    {
+      "tx_power_dbm": -2,
+      "loss_exact_pct": 7.083333333333333,
+      "loss_basis": "master_sent",
+      "packets": 223,
+      "rx_fail": 18,
+      "rssi_dbm_mean": -40.0762331838565
+    },
+    {
+      "tx_power_dbm": -3,
+      "loss_exact_pct": 8.75,
+      "loss_basis": "master_sent",
+      "packets": 219,
+      "rx_fail": 21,
+      "rssi_dbm_mean": -41.47488584474886
+    },
+    {
+      "tx_power_dbm": -4,
+      "loss_exact_pct": 7.916666666666667,
+      "loss_basis": "master_sent",
+      "packets": 221,
+      "rx_fail": 20,
+      "rssi_dbm_mean": -42.036199095022624
+    },
+    {
+      "tx_power_dbm": -5,
+      "loss_exact_pct": 6.666666666666667,
+      "loss_basis": "master_sent",
+      "packets": 224,
+      "rx_fail": 16,
+      "rssi_dbm_mean": -43.736607142857146
+    },
+    {
+      "tx_power_dbm": -6,
+      "loss_exact_pct": 10.833333333333334,
+      "loss_basis": "master_sent",
+      "packets": 214,
+      "rx_fail": 26,
+      "rssi_dbm_mean": -45.08411214953271
+    },
+    {
+      "tx_power_dbm": -7,
+      "loss_exact_pct": 8.75,
+      "loss_basis": "master_sent",
+      "packets": 219,
+      "rx_fail": 21,
+      "rssi_dbm_mean": -45.858447488584474
+    },
+    {
+      "tx_power_dbm": -8,
+      "loss_exact_pct": 11.666666666666666,
+      "loss_basis": "master_sent",
+      "packets": 212,
+      "rx_fail": 28,
+      "rssi_dbm_mean": -47.04716981132076
+    },
+    {
+      "tx_power_dbm": -9,
+      "loss_exact_pct": 14.583333333333334,
+      "loss_basis": "master_sent",
+      "packets": 205,
+      "rx_fail": 35,
+      "rssi_dbm_mean": -48.02439024390244
+    },
+    {
+      "tx_power_dbm": -10,
+      "loss_exact_pct": 14.583333333333334,
+      "loss_basis": "master_sent",
+      "packets": 205,
+      "rx_fail": 35,
+      "rssi_dbm_mean": -49.078048780487805
+    },
+    {
+      "tx_power_dbm": -12,
+      "loss_exact_pct": 7.5,
+      "loss_basis": "master_sent",
+      "packets": 222,
+      "rx_fail": 18,
+      "rssi_dbm_mean": -51.027027027027025
+    },
+    {
+      "tx_power_dbm": -14,
+      "loss_exact_pct": 13.75,
+      "loss_basis": "master_sent",
+      "packets": 207,
+      "rx_fail": 33,
+      "rssi_dbm_mean": -52.46376811594203
+    },
+    {
+      "tx_power_dbm": -16,
+      "loss_exact_pct": 11.25,
+      "loss_basis": "master_sent",
+      "packets": 213,
+      "rx_fail": 27,
+      "rssi_dbm_mean": -54.08450704225352
+    },
+    {
+      "tx_power_dbm": -18,
+      "loss_exact_pct": 16.666666666666668,
+      "loss_basis": "master_sent",
+      "packets": 200,
+      "rx_fail": 41,
+      "rssi_dbm_mean": -57.005
+    },
+    {
+      "tx_power_dbm": -20,
+      "loss_exact_pct": 10.416666666666666,
+      "loss_basis": "master_sent",
+      "packets": 215,
+      "rx_fail": 25,
+      "rssi_dbm_mean": -60.093023255813954
+    },
+    {
+      "tx_power_dbm": -28,
+      "loss_exact_pct": 14.937759336099585,
+      "loss_basis": "master_sent",
+      "packets": 205,
+      "rx_fail": 36,
+      "rssi_dbm_mean": -66.06341463414634
+    }
+  ],
+  "loss5pct_tx_power_dbm": null,
+  "loss5pct_rssi_dbm": null,
+  "repeat_spread_db": null,
+  "receivers": {
+    "TI": {
+      "ladders": [
+        {
+          "steps": [
+            {
+              "loss_pct": 9.12863070539419,
+              "loss_basis": "master_sent",
+              "packets": 219,
+              "master_sent": 241,
+              "rx_fail": 22,
+              "rssi_dbm_mean": -30.168949771689498,
+              "rssi_samples": 219,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 22
+              },
+              "tx_power_dbm": 8,
+              "tx_level": 128,
+              "tx_custom": 63
+            },
+            {
+              "loss_pct": 7.053941908713693,
+              "loss_basis": "master_sent",
+              "packets": 224,
+              "master_sent": 241,
+              "rx_fail": 16,
+              "rssi_dbm_mean": -31.111607142857142,
+              "rssi_samples": 224,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 16
+              },
+              "tx_power_dbm": 7,
+              "tx_level": 128,
+              "tx_custom": 57
+            },
+            {
+              "loss_pct": 10.416666666666666,
+              "loss_basis": "master_sent",
+              "packets": 215,
+              "master_sent": 240,
+              "rx_fail": 25,
+              "rssi_dbm_mean": -32.283720930232555,
+              "rssi_samples": 215,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 25
+              },
+              "tx_power_dbm": 6,
+              "tx_level": 128,
+              "tx_custom": 51
+            },
+            {
+              "loss_pct": 9.166666666666666,
+              "loss_basis": "master_sent",
+              "packets": 218,
+              "master_sent": 240,
+              "rx_fail": 23,
+              "rssi_dbm_mean": -33.03669724770642,
+              "rssi_samples": 218,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 23
+              },
+              "tx_power_dbm": 5,
+              "tx_level": 128,
+              "tx_custom": 45
+            },
+            {
+              "loss_pct": 7.8838174273858925,
+              "loss_basis": "master_sent",
+              "packets": 222,
+              "master_sent": 241,
+              "rx_fail": 19,
+              "rssi_dbm_mean": -34.049549549549546,
+              "rssi_samples": 222,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 19
+              },
+              "tx_power_dbm": 4,
+              "tx_level": 128,
+              "tx_custom": 40
+            },
+            {
+              "loss_pct": 6.639004149377594,
+              "loss_basis": "master_sent",
+              "packets": 225,
+              "master_sent": 241,
+              "rx_fail": 16,
+              "rssi_dbm_mean": -35.906666666666666,
+              "rssi_samples": 225,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 16
+              },
+              "tx_power_dbm": 3,
+              "tx_level": 128,
+              "tx_custom": 35
+            },
+            {
+              "loss_pct": 10.416666666666666,
+              "loss_basis": "master_sent",
+              "packets": 215,
+              "master_sent": 240,
+              "rx_fail": 26,
+              "rssi_dbm_mean": -36.06511627906977,
+              "rssi_samples": 215,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 26
+              },
+              "tx_power_dbm": 2,
+              "tx_level": 128,
+              "tx_custom": 31
+            },
+            {
+              "loss_pct": 4.564315352697095,
+              "loss_basis": "master_sent",
+              "packets": 230,
+              "master_sent": 241,
+              "rx_fail": 11,
+              "rssi_dbm_mean": -37.15652173913043,
+              "rssi_samples": 230,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 11
+              },
+              "tx_power_dbm": 1,
+              "tx_level": 128,
+              "tx_custom": 27
+            },
+            {
+              "loss_pct": 8.333333333333334,
+              "loss_basis": "master_sent",
+              "packets": 220,
+              "master_sent": 240,
+              "rx_fail": 21,
+              "rssi_dbm_mean": -38.877272727272725,
+              "rssi_samples": 220,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 21
+              },
+              "tx_power_dbm": 0,
+              "tx_level": 128,
+              "tx_custom": 24
+            },
+            {
+              "loss_pct": 5.0,
+              "loss_basis": "master_sent",
+              "packets": 228,
+              "master_sent": 240,
+              "rx_fail": 13,
+              "rssi_dbm_mean": -39.10087719298246,
+              "rssi_samples": 228,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 13
+              },
+              "tx_power_dbm": -1,
+              "tx_level": 128,
+              "tx_custom": 21
+            },
+            {
+              "loss_pct": 7.083333333333333,
+              "loss_basis": "master_sent",
+              "packets": 223,
+              "master_sent": 240,
+              "rx_fail": 18,
+              "rssi_dbm_mean": -40.0762331838565,
+              "rssi_samples": 223,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 18
+              },
+              "tx_power_dbm": -2,
+              "tx_level": 128,
+              "tx_custom": 19
+            },
+            {
+              "loss_pct": 8.75,
+              "loss_basis": "master_sent",
+              "packets": 219,
+              "master_sent": 240,
+              "rx_fail": 21,
+              "rssi_dbm_mean": -41.47488584474886,
+              "rssi_samples": 219,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 21
+              },
+              "tx_power_dbm": -3,
+              "tx_level": 128,
+              "tx_custom": 17
+            },
+            {
+              "loss_pct": 7.916666666666667,
+              "loss_basis": "master_sent",
+              "packets": 221,
+              "master_sent": 240,
+              "rx_fail": 20,
+              "rssi_dbm_mean": -42.036199095022624,
+              "rssi_samples": 221,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 20
+              },
+              "tx_power_dbm": -4,
+              "tx_level": 128,
+              "tx_custom": 15
+            },
+            {
+              "loss_pct": 6.666666666666667,
+              "loss_basis": "master_sent",
+              "packets": 224,
+              "master_sent": 240,
+              "rx_fail": 16,
+              "rssi_dbm_mean": -43.736607142857146,
+              "rssi_samples": 224,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 16
+              },
+              "tx_power_dbm": -5,
+              "tx_level": 128,
+              "tx_custom": 13
+            },
+            {
+              "loss_pct": 10.833333333333334,
+              "loss_basis": "master_sent",
+              "packets": 214,
+              "master_sent": 240,
+              "rx_fail": 26,
+              "rssi_dbm_mean": -45.08411214953271,
+              "rssi_samples": 214,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 26
+              },
+              "tx_power_dbm": -6,
+              "tx_level": 128,
+              "tx_custom": 11
+            },
+            {
+              "loss_pct": 8.75,
+              "loss_basis": "master_sent",
+              "packets": 219,
+              "master_sent": 240,
+              "rx_fail": 21,
+              "rssi_dbm_mean": -45.858447488584474,
+              "rssi_samples": 219,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 21
+              },
+              "tx_power_dbm": -7,
+              "tx_level": 128,
+              "tx_custom": 10
+            },
+            {
+              "loss_pct": 11.666666666666666,
+              "loss_basis": "master_sent",
+              "packets": 212,
+              "master_sent": 240,
+              "rx_fail": 28,
+              "rssi_dbm_mean": -47.04716981132076,
+              "rssi_samples": 212,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 28
+              },
+              "tx_power_dbm": -8,
+              "tx_level": 128,
+              "tx_custom": 9
+            },
+            {
+              "loss_pct": 14.583333333333334,
+              "loss_basis": "master_sent",
+              "packets": 205,
+              "master_sent": 240,
+              "rx_fail": 35,
+              "rssi_dbm_mean": -48.02439024390244,
+              "rssi_samples": 205,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 35
+              },
+              "tx_power_dbm": -9,
+              "tx_level": 128,
+              "tx_custom": 8
+            },
+            {
+              "loss_pct": 14.583333333333334,
+              "loss_basis": "master_sent",
+              "packets": 205,
+              "master_sent": 240,
+              "rx_fail": 35,
+              "rssi_dbm_mean": -49.078048780487805,
+              "rssi_samples": 205,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 35
+              },
+              "tx_power_dbm": -10,
+              "tx_level": 128,
+              "tx_custom": 7
+            },
+            {
+              "loss_pct": 7.5,
+              "loss_basis": "master_sent",
+              "packets": 222,
+              "master_sent": 240,
+              "rx_fail": 18,
+              "rssi_dbm_mean": -51.027027027027025,
+              "rssi_samples": 222,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 18
+              },
+              "tx_power_dbm": -12,
+              "tx_level": 128,
+              "tx_custom": 6
+            },
+            {
+              "loss_pct": 13.75,
+              "loss_basis": "master_sent",
+              "packets": 207,
+              "master_sent": 240,
+              "rx_fail": 33,
+              "rssi_dbm_mean": -52.46376811594203,
+              "rssi_samples": 207,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 33
+              },
+              "tx_power_dbm": -14,
+              "tx_level": 128,
+              "tx_custom": 5
+            },
+            {
+              "loss_pct": 11.25,
+              "loss_basis": "master_sent",
+              "packets": 213,
+              "master_sent": 240,
+              "rx_fail": 27,
+              "rssi_dbm_mean": -54.08450704225352,
+              "rssi_samples": 213,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 27
+              },
+              "tx_power_dbm": -16,
+              "tx_level": 128,
+              "tx_custom": 4
+            },
+            {
+              "loss_pct": 16.666666666666668,
+              "loss_basis": "master_sent",
+              "packets": 200,
+              "master_sent": 240,
+              "rx_fail": 41,
+              "rssi_dbm_mean": -57.005,
+              "rssi_samples": 200,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 41
+              },
+              "tx_power_dbm": -18,
+              "tx_level": 128,
+              "tx_custom": 3
+            },
+            {
+              "loss_pct": 10.416666666666666,
+              "loss_basis": "master_sent",
+              "packets": 215,
+              "master_sent": 240,
+              "rx_fail": 25,
+              "rssi_dbm_mean": -60.093023255813954,
+              "rssi_samples": 215,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 25
+              },
+              "tx_power_dbm": -20,
+              "tx_level": 128,
+              "tx_custom": 2
+            },
+            {
+              "loss_pct": 14.937759336099585,
+              "loss_basis": "master_sent",
+              "packets": 205,
+              "master_sent": 241,
+              "rx_fail": 36,
+              "rssi_dbm_mean": -66.06341463414634,
+              "rssi_samples": 205,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 36
+              },
+              "tx_power_dbm": -28,
+              "tx_level": 128,
+              "tx_custom": 1
+            }
+          ],
+          "loss5pct_tx_power_dbm": null,
+          "knee": {
+            "tx_power_dbm": null,
+            "reason": "the loudest rung (8 dBm) already loses 9.13 %, over the 5.0 % target - the link is broken before the ladder starts, so this measures the bench and not the receiver"
+          },
+          "rssi_slope": {
+            "slope": 1.024614618156656,
+            "n": 25,
+            "worst_residual_db": 1.169380630410508,
+            "reason": "least squares of mean RSSI against commanded transmit power"
+          },
+          "dial_trustworthy": true,
+          "dial_detail": "RSSI moved 1.02 dB per commanded dB over 25 rungs, worst rung 1.2 dB off the line, so the dial is real",
+          "loss5pct_rssi_dbm": null
+        }
+      ],
+      "steps": [
+        {
+          "loss_pct": 9.12863070539419,
+          "loss_basis": "master_sent",
+          "packets": 219,
+          "master_sent": 241,
+          "rx_fail": 22,
+          "rssi_dbm_mean": -30.168949771689498,
+          "rssi_samples": 219,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 22
+          },
+          "tx_power_dbm": 8,
+          "tx_level": 128,
+          "tx_custom": 63
+        },
+        {
+          "loss_pct": 7.053941908713693,
+          "loss_basis": "master_sent",
+          "packets": 224,
+          "master_sent": 241,
+          "rx_fail": 16,
+          "rssi_dbm_mean": -31.111607142857142,
+          "rssi_samples": 224,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 16
+          },
+          "tx_power_dbm": 7,
+          "tx_level": 128,
+          "tx_custom": 57
+        },
+        {
+          "loss_pct": 10.416666666666666,
+          "loss_basis": "master_sent",
+          "packets": 215,
+          "master_sent": 240,
+          "rx_fail": 25,
+          "rssi_dbm_mean": -32.283720930232555,
+          "rssi_samples": 215,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 25
+          },
+          "tx_power_dbm": 6,
+          "tx_level": 128,
+          "tx_custom": 51
+        },
+        {
+          "loss_pct": 9.166666666666666,
+          "loss_basis": "master_sent",
+          "packets": 218,
+          "master_sent": 240,
+          "rx_fail": 23,
+          "rssi_dbm_mean": -33.03669724770642,
+          "rssi_samples": 218,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 23
+          },
+          "tx_power_dbm": 5,
+          "tx_level": 128,
+          "tx_custom": 45
+        },
+        {
+          "loss_pct": 7.8838174273858925,
+          "loss_basis": "master_sent",
+          "packets": 222,
+          "master_sent": 241,
+          "rx_fail": 19,
+          "rssi_dbm_mean": -34.049549549549546,
+          "rssi_samples": 222,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 19
+          },
+          "tx_power_dbm": 4,
+          "tx_level": 128,
+          "tx_custom": 40
+        },
+        {
+          "loss_pct": 6.639004149377594,
+          "loss_basis": "master_sent",
+          "packets": 225,
+          "master_sent": 241,
+          "rx_fail": 16,
+          "rssi_dbm_mean": -35.906666666666666,
+          "rssi_samples": 225,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 16
+          },
+          "tx_power_dbm": 3,
+          "tx_level": 128,
+          "tx_custom": 35
+        },
+        {
+          "loss_pct": 10.416666666666666,
+          "loss_basis": "master_sent",
+          "packets": 215,
+          "master_sent": 240,
+          "rx_fail": 26,
+          "rssi_dbm_mean": -36.06511627906977,
+          "rssi_samples": 215,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 26
+          },
+          "tx_power_dbm": 2,
+          "tx_level": 128,
+          "tx_custom": 31
+        },
+        {
+          "loss_pct": 4.564315352697095,
+          "loss_basis": "master_sent",
+          "packets": 230,
+          "master_sent": 241,
+          "rx_fail": 11,
+          "rssi_dbm_mean": -37.15652173913043,
+          "rssi_samples": 230,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 11
+          },
+          "tx_power_dbm": 1,
+          "tx_level": 128,
+          "tx_custom": 27
+        },
+        {
+          "loss_pct": 8.333333333333334,
+          "loss_basis": "master_sent",
+          "packets": 220,
+          "master_sent": 240,
+          "rx_fail": 21,
+          "rssi_dbm_mean": -38.877272727272725,
+          "rssi_samples": 220,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 21
+          },
+          "tx_power_dbm": 0,
+          "tx_level": 128,
+          "tx_custom": 24
+        },
+        {
+          "loss_pct": 5.0,
+          "loss_basis": "master_sent",
+          "packets": 228,
+          "master_sent": 240,
+          "rx_fail": 13,
+          "rssi_dbm_mean": -39.10087719298246,
+          "rssi_samples": 228,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 13
+          },
+          "tx_power_dbm": -1,
+          "tx_level": 128,
+          "tx_custom": 21
+        },
+        {
+          "loss_pct": 7.083333333333333,
+          "loss_basis": "master_sent",
+          "packets": 223,
+          "master_sent": 240,
+          "rx_fail": 18,
+          "rssi_dbm_mean": -40.0762331838565,
+          "rssi_samples": 223,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 18
+          },
+          "tx_power_dbm": -2,
+          "tx_level": 128,
+          "tx_custom": 19
+        },
+        {
+          "loss_pct": 8.75,
+          "loss_basis": "master_sent",
+          "packets": 219,
+          "master_sent": 240,
+          "rx_fail": 21,
+          "rssi_dbm_mean": -41.47488584474886,
+          "rssi_samples": 219,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 21
+          },
+          "tx_power_dbm": -3,
+          "tx_level": 128,
+          "tx_custom": 17
+        },
+        {
+          "loss_pct": 7.916666666666667,
+          "loss_basis": "master_sent",
+          "packets": 221,
+          "master_sent": 240,
+          "rx_fail": 20,
+          "rssi_dbm_mean": -42.036199095022624,
+          "rssi_samples": 221,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 20
+          },
+          "tx_power_dbm": -4,
+          "tx_level": 128,
+          "tx_custom": 15
+        },
+        {
+          "loss_pct": 6.666666666666667,
+          "loss_basis": "master_sent",
+          "packets": 224,
+          "master_sent": 240,
+          "rx_fail": 16,
+          "rssi_dbm_mean": -43.736607142857146,
+          "rssi_samples": 224,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 16
+          },
+          "tx_power_dbm": -5,
+          "tx_level": 128,
+          "tx_custom": 13
+        },
+        {
+          "loss_pct": 10.833333333333334,
+          "loss_basis": "master_sent",
+          "packets": 214,
+          "master_sent": 240,
+          "rx_fail": 26,
+          "rssi_dbm_mean": -45.08411214953271,
+          "rssi_samples": 214,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 26
+          },
+          "tx_power_dbm": -6,
+          "tx_level": 128,
+          "tx_custom": 11
+        },
+        {
+          "loss_pct": 8.75,
+          "loss_basis": "master_sent",
+          "packets": 219,
+          "master_sent": 240,
+          "rx_fail": 21,
+          "rssi_dbm_mean": -45.858447488584474,
+          "rssi_samples": 219,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 21
+          },
+          "tx_power_dbm": -7,
+          "tx_level": 128,
+          "tx_custom": 10
+        },
+        {
+          "loss_pct": 11.666666666666666,
+          "loss_basis": "master_sent",
+          "packets": 212,
+          "master_sent": 240,
+          "rx_fail": 28,
+          "rssi_dbm_mean": -47.04716981132076,
+          "rssi_samples": 212,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 28
+          },
+          "tx_power_dbm": -8,
+          "tx_level": 128,
+          "tx_custom": 9
+        },
+        {
+          "loss_pct": 14.583333333333334,
+          "loss_basis": "master_sent",
+          "packets": 205,
+          "master_sent": 240,
+          "rx_fail": 35,
+          "rssi_dbm_mean": -48.02439024390244,
+          "rssi_samples": 205,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 35
+          },
+          "tx_power_dbm": -9,
+          "tx_level": 128,
+          "tx_custom": 8
+        },
+        {
+          "loss_pct": 14.583333333333334,
+          "loss_basis": "master_sent",
+          "packets": 205,
+          "master_sent": 240,
+          "rx_fail": 35,
+          "rssi_dbm_mean": -49.078048780487805,
+          "rssi_samples": 205,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 35
+          },
+          "tx_power_dbm": -10,
+          "tx_level": 128,
+          "tx_custom": 7
+        },
+        {
+          "loss_pct": 7.5,
+          "loss_basis": "master_sent",
+          "packets": 222,
+          "master_sent": 240,
+          "rx_fail": 18,
+          "rssi_dbm_mean": -51.027027027027025,
+          "rssi_samples": 222,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 18
+          },
+          "tx_power_dbm": -12,
+          "tx_level": 128,
+          "tx_custom": 6
+        },
+        {
+          "loss_pct": 13.75,
+          "loss_basis": "master_sent",
+          "packets": 207,
+          "master_sent": 240,
+          "rx_fail": 33,
+          "rssi_dbm_mean": -52.46376811594203,
+          "rssi_samples": 207,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 33
+          },
+          "tx_power_dbm": -14,
+          "tx_level": 128,
+          "tx_custom": 5
+        },
+        {
+          "loss_pct": 11.25,
+          "loss_basis": "master_sent",
+          "packets": 213,
+          "master_sent": 240,
+          "rx_fail": 27,
+          "rssi_dbm_mean": -54.08450704225352,
+          "rssi_samples": 213,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 27
+          },
+          "tx_power_dbm": -16,
+          "tx_level": 128,
+          "tx_custom": 4
+        },
+        {
+          "loss_pct": 16.666666666666668,
+          "loss_basis": "master_sent",
+          "packets": 200,
+          "master_sent": 240,
+          "rx_fail": 41,
+          "rssi_dbm_mean": -57.005,
+          "rssi_samples": 200,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 41
+          },
+          "tx_power_dbm": -18,
+          "tx_level": 128,
+          "tx_custom": 3
+        },
+        {
+          "loss_pct": 10.416666666666666,
+          "loss_basis": "master_sent",
+          "packets": 215,
+          "master_sent": 240,
+          "rx_fail": 25,
+          "rssi_dbm_mean": -60.093023255813954,
+          "rssi_samples": 215,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 25
+          },
+          "tx_power_dbm": -20,
+          "tx_level": 128,
+          "tx_custom": 2
+        },
+        {
+          "loss_pct": 14.937759336099585,
+          "loss_basis": "master_sent",
+          "packets": 205,
+          "master_sent": 241,
+          "rx_fail": 36,
+          "rssi_dbm_mean": -66.06341463414634,
+          "rssi_samples": 205,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 36
+          },
+          "tx_power_dbm": -28,
+          "tx_level": 128,
+          "tx_custom": 1
+        }
+      ],
+      "knee": {
+        "tx_power_dbm": null,
+        "reason": "the loudest rung (8 dBm) already loses 9.13 %, over the 5.0 % target - the link is broken before the ladder starts, so this measures the bench and not the receiver"
+      },
+      "loss5pct_tx_power_dbm": null,
+      "loss5pct_rssi_dbm": null,
+      "rssi_reference": null,
+      "rssi_slope": {
+        "slope": 1.024614618156656,
+        "n": 25,
+        "worst_residual_db": 1.169380630410508,
+        "reason": "least squares of mean RSSI against commanded transmit power"
+      },
+      "dial_trustworthy": true,
+      "dial_detail": "RSSI moved 1.02 dB per commanded dB over 25 rungs, worst rung 1.2 dB off the line, so the dial is real",
+      "repeat_spread_db": null
+    },
+    "Garmin": {
+      "ladders": [
+        {
+          "steps": [
+            {
+              "loss_pct": 1.6597510373443984,
+              "loss_basis": "master_sent",
+              "packets": 237,
+              "master_sent": 241,
+              "rx_fail": 4,
+              "rssi_dbm_mean": null,
+              "rssi_samples": 0,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 4
+              },
+              "tx_power_dbm": 8,
+              "tx_level": 128,
+              "tx_custom": 63
+            },
+            {
+              "loss_pct": 2.074688796680498,
+              "loss_basis": "master_sent",
+              "packets": 236,
+              "master_sent": 241,
+              "rx_fail": 5,
+              "rssi_dbm_mean": null,
+              "rssi_samples": 0,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 5
+              },
+              "tx_power_dbm": 7,
+              "tx_level": 128,
+              "tx_custom": 57
+            },
+            {
+              "loss_pct": 2.074688796680498,
+              "loss_basis": "master_sent",
+              "packets": 236,
+              "master_sent": 241,
+              "rx_fail": 5,
+              "rssi_dbm_mean": null,
+              "rssi_samples": 0,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 5
+              },
+              "tx_power_dbm": 6,
+              "tx_level": 128,
+              "tx_custom": 51
+            },
+            {
+              "loss_pct": 2.5,
+              "loss_basis": "master_sent",
+              "packets": 234,
+              "master_sent": 240,
+              "rx_fail": 7,
+              "rssi_dbm_mean": null,
+              "rssi_samples": 0,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 7
+              },
+              "tx_power_dbm": 5,
+              "tx_level": 128,
+              "tx_custom": 45
+            },
+            {
+              "loss_pct": 3.7344398340248963,
+              "loss_basis": "master_sent",
+              "packets": 232,
+              "master_sent": 241,
+              "rx_fail": 9,
+              "rssi_dbm_mean": null,
+              "rssi_samples": 0,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 9
+              },
+              "tx_power_dbm": 4,
+              "tx_level": 128,
+              "tx_custom": 40
+            },
+            {
+              "loss_pct": 4.149377593360996,
+              "loss_basis": "master_sent",
+              "packets": 231,
+              "master_sent": 241,
+              "rx_fail": 10,
+              "rssi_dbm_mean": null,
+              "rssi_samples": 0,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 10
+              },
+              "tx_power_dbm": 3,
+              "tx_level": 128,
+              "tx_custom": 35
+            },
+            {
+              "loss_pct": 3.319502074688797,
+              "loss_basis": "master_sent",
+              "packets": 233,
+              "master_sent": 241,
+              "rx_fail": 8,
+              "rssi_dbm_mean": null,
+              "rssi_samples": 0,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 8
+              },
+              "tx_power_dbm": 2,
+              "tx_level": 128,
+              "tx_custom": 31
+            },
+            {
+              "loss_pct": 2.4896265560165975,
+              "loss_basis": "master_sent",
+              "packets": 235,
+              "master_sent": 241,
+              "rx_fail": 6,
+              "rssi_dbm_mean": null,
+              "rssi_samples": 0,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 6
+              },
+              "tx_power_dbm": 1,
+              "tx_level": 128,
+              "tx_custom": 27
+            },
+            {
+              "loss_pct": 2.5,
+              "loss_basis": "master_sent",
+              "packets": 234,
+              "master_sent": 240,
+              "rx_fail": 7,
+              "rssi_dbm_mean": null,
+              "rssi_samples": 0,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 7
+              },
+              "tx_power_dbm": 0,
+              "tx_level": 128,
+              "tx_custom": 24
+            },
+            {
+              "loss_pct": 5.416666666666667,
+              "loss_basis": "master_sent",
+              "packets": 227,
+              "master_sent": 240,
+              "rx_fail": 14,
+              "rssi_dbm_mean": null,
+              "rssi_samples": 0,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 14
+              },
+              "tx_power_dbm": -1,
+              "tx_level": 128,
+              "tx_custom": 21
+            },
+            {
+              "loss_pct": 4.583333333333333,
+              "loss_basis": "master_sent",
+              "packets": 229,
+              "master_sent": 240,
+              "rx_fail": 12,
+              "rssi_dbm_mean": null,
+              "rssi_samples": 0,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 12
+              },
+              "tx_power_dbm": -2,
+              "tx_level": 128,
+              "tx_custom": 19
+            },
+            {
+              "loss_pct": 3.7344398340248963,
+              "loss_basis": "master_sent",
+              "packets": 232,
+              "master_sent": 241,
+              "rx_fail": 9,
+              "rssi_dbm_mean": null,
+              "rssi_samples": 0,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 9
+              },
+              "tx_power_dbm": -3,
+              "tx_level": 128,
+              "tx_custom": 17
+            },
+            {
+              "loss_pct": 4.564315352697095,
+              "loss_basis": "master_sent",
+              "packets": 230,
+              "master_sent": 241,
+              "rx_fail": 11,
+              "rssi_dbm_mean": null,
+              "rssi_samples": 0,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 11
+              },
+              "tx_power_dbm": -4,
+              "tx_level": 128,
+              "tx_custom": 15
+            },
+            {
+              "loss_pct": 4.166666666666667,
+              "loss_basis": "master_sent",
+              "packets": 230,
+              "master_sent": 240,
+              "rx_fail": 11,
+              "rssi_dbm_mean": null,
+              "rssi_samples": 0,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 11
+              },
+              "tx_power_dbm": -5,
+              "tx_level": 128,
+              "tx_custom": 13
+            },
+            {
+              "loss_pct": 7.916666666666667,
+              "loss_basis": "master_sent",
+              "packets": 221,
+              "master_sent": 240,
+              "rx_fail": 20,
+              "rssi_dbm_mean": null,
+              "rssi_samples": 0,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 20
+              },
+              "tx_power_dbm": -6,
+              "tx_level": 128,
+              "tx_custom": 11
+            },
+            {
+              "loss_pct": 8.71369294605809,
+              "loss_basis": "master_sent",
+              "packets": 220,
+              "master_sent": 241,
+              "rx_fail": 21,
+              "rssi_dbm_mean": null,
+              "rssi_samples": 0,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 21
+              },
+              "tx_power_dbm": -7,
+              "tx_level": 128,
+              "tx_custom": 10
+            },
+            {
+              "loss_pct": 9.95850622406639,
+              "loss_basis": "master_sent",
+              "packets": 217,
+              "master_sent": 241,
+              "rx_fail": 24,
+              "rssi_dbm_mean": null,
+              "rssi_samples": 0,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 24
+              },
+              "tx_power_dbm": -8,
+              "tx_level": 128,
+              "tx_custom": 9
+            },
+            {
+              "loss_pct": 9.95850622406639,
+              "loss_basis": "master_sent",
+              "packets": 217,
+              "master_sent": 241,
+              "rx_fail": 24,
+              "rssi_dbm_mean": null,
+              "rssi_samples": 0,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 24
+              },
+              "tx_power_dbm": -9,
+              "tx_level": 128,
+              "tx_custom": 8
+            },
+            {
+              "loss_pct": 9.54356846473029,
+              "loss_basis": "master_sent",
+              "packets": 218,
+              "master_sent": 241,
+              "rx_fail": 23,
+              "rssi_dbm_mean": null,
+              "rssi_samples": 0,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 23
+              },
+              "tx_power_dbm": -10,
+              "tx_level": 128,
+              "tx_custom": 7
+            },
+            {
+              "loss_pct": 7.468879668049793,
+              "loss_basis": "master_sent",
+              "packets": 223,
+              "master_sent": 241,
+              "rx_fail": 18,
+              "rssi_dbm_mean": null,
+              "rssi_samples": 0,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 18
+              },
+              "tx_power_dbm": -12,
+              "tx_level": 128,
+              "tx_custom": 6
+            },
+            {
+              "loss_pct": 14.937759336099585,
+              "loss_basis": "master_sent",
+              "packets": 205,
+              "master_sent": 241,
+              "rx_fail": 36,
+              "rssi_dbm_mean": null,
+              "rssi_samples": 0,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 36
+              },
+              "tx_power_dbm": -14,
+              "tx_level": 128,
+              "tx_custom": 5
+            },
+            {
+              "loss_pct": 12.083333333333334,
+              "loss_basis": "master_sent",
+              "packets": 211,
+              "master_sent": 240,
+              "rx_fail": 30,
+              "rssi_dbm_mean": null,
+              "rssi_samples": 0,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 30
+              },
+              "tx_power_dbm": -16,
+              "tx_level": 128,
+              "tx_custom": 4
+            },
+            {
+              "loss_pct": 17.012448132780083,
+              "loss_basis": "master_sent",
+              "packets": 200,
+              "master_sent": 241,
+              "rx_fail": 41,
+              "rssi_dbm_mean": null,
+              "rssi_samples": 0,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 41
+              },
+              "tx_power_dbm": -18,
+              "tx_level": 128,
+              "tx_custom": 3
+            },
+            {
+              "loss_pct": 21.666666666666668,
+              "loss_basis": "master_sent",
+              "packets": 188,
+              "master_sent": 240,
+              "rx_fail": 53,
+              "rssi_dbm_mean": null,
+              "rssi_samples": 0,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 53
+              },
+              "tx_power_dbm": -20,
+              "tx_level": 128,
+              "tx_custom": 2
+            },
+            {
+              "loss_pct": 49.37759336099585,
+              "loss_basis": "master_sent",
+              "packets": 122,
+              "master_sent": 241,
+              "rx_fail": 119,
+              "rssi_dbm_mean": null,
+              "rssi_samples": 0,
+              "accumulator_violations": 0,
+              "events": {
+                "EVENT_RX_FAIL": 119
+              },
+              "tx_power_dbm": -28,
+              "tx_level": 128,
+              "tx_custom": 1
+            }
+          ],
+          "loss5pct_tx_power_dbm": -0.8571428571428571,
+          "knee": {
+            "tx_power_dbm": -0.8571428571428571,
+            "bracket_db": 1,
+            "bracket": [
+              0,
+              -1
+            ],
+            "bracket_loss_pct": [
+              2.5,
+              5.416666666666667
+            ],
+            "reason": "interpolated between the two rungs that bracket it"
+          },
+          "rssi_slope": {
+            "slope": null,
+            "n": 0,
+            "reason": "fewer than three rungs with usable RSSI below the knee"
+          },
+          "dial_trustworthy": false,
+          "dial_detail": "the transmit-power dial was never checked against measured RSSI (fewer than three rungs with usable RSSI below the knee), so nothing here knows whether the ladder moved the power it asked for",
+          "loss5pct_rssi_dbm": null
+        }
+      ],
+      "steps": [
+        {
+          "loss_pct": 1.6597510373443984,
+          "loss_basis": "master_sent",
+          "packets": 237,
+          "master_sent": 241,
+          "rx_fail": 4,
+          "rssi_dbm_mean": null,
+          "rssi_samples": 0,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 4
+          },
+          "tx_power_dbm": 8,
+          "tx_level": 128,
+          "tx_custom": 63
+        },
+        {
+          "loss_pct": 2.074688796680498,
+          "loss_basis": "master_sent",
+          "packets": 236,
+          "master_sent": 241,
+          "rx_fail": 5,
+          "rssi_dbm_mean": null,
+          "rssi_samples": 0,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 5
+          },
+          "tx_power_dbm": 7,
+          "tx_level": 128,
+          "tx_custom": 57
+        },
+        {
+          "loss_pct": 2.074688796680498,
+          "loss_basis": "master_sent",
+          "packets": 236,
+          "master_sent": 241,
+          "rx_fail": 5,
+          "rssi_dbm_mean": null,
+          "rssi_samples": 0,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 5
+          },
+          "tx_power_dbm": 6,
+          "tx_level": 128,
+          "tx_custom": 51
+        },
+        {
+          "loss_pct": 2.5,
+          "loss_basis": "master_sent",
+          "packets": 234,
+          "master_sent": 240,
+          "rx_fail": 7,
+          "rssi_dbm_mean": null,
+          "rssi_samples": 0,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 7
+          },
+          "tx_power_dbm": 5,
+          "tx_level": 128,
+          "tx_custom": 45
+        },
+        {
+          "loss_pct": 3.7344398340248963,
+          "loss_basis": "master_sent",
+          "packets": 232,
+          "master_sent": 241,
+          "rx_fail": 9,
+          "rssi_dbm_mean": null,
+          "rssi_samples": 0,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 9
+          },
+          "tx_power_dbm": 4,
+          "tx_level": 128,
+          "tx_custom": 40
+        },
+        {
+          "loss_pct": 4.149377593360996,
+          "loss_basis": "master_sent",
+          "packets": 231,
+          "master_sent": 241,
+          "rx_fail": 10,
+          "rssi_dbm_mean": null,
+          "rssi_samples": 0,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 10
+          },
+          "tx_power_dbm": 3,
+          "tx_level": 128,
+          "tx_custom": 35
+        },
+        {
+          "loss_pct": 3.319502074688797,
+          "loss_basis": "master_sent",
+          "packets": 233,
+          "master_sent": 241,
+          "rx_fail": 8,
+          "rssi_dbm_mean": null,
+          "rssi_samples": 0,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 8
+          },
+          "tx_power_dbm": 2,
+          "tx_level": 128,
+          "tx_custom": 31
+        },
+        {
+          "loss_pct": 2.4896265560165975,
+          "loss_basis": "master_sent",
+          "packets": 235,
+          "master_sent": 241,
+          "rx_fail": 6,
+          "rssi_dbm_mean": null,
+          "rssi_samples": 0,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 6
+          },
+          "tx_power_dbm": 1,
+          "tx_level": 128,
+          "tx_custom": 27
+        },
+        {
+          "loss_pct": 2.5,
+          "loss_basis": "master_sent",
+          "packets": 234,
+          "master_sent": 240,
+          "rx_fail": 7,
+          "rssi_dbm_mean": null,
+          "rssi_samples": 0,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 7
+          },
+          "tx_power_dbm": 0,
+          "tx_level": 128,
+          "tx_custom": 24
+        },
+        {
+          "loss_pct": 5.416666666666667,
+          "loss_basis": "master_sent",
+          "packets": 227,
+          "master_sent": 240,
+          "rx_fail": 14,
+          "rssi_dbm_mean": null,
+          "rssi_samples": 0,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 14
+          },
+          "tx_power_dbm": -1,
+          "tx_level": 128,
+          "tx_custom": 21
+        },
+        {
+          "loss_pct": 4.583333333333333,
+          "loss_basis": "master_sent",
+          "packets": 229,
+          "master_sent": 240,
+          "rx_fail": 12,
+          "rssi_dbm_mean": null,
+          "rssi_samples": 0,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 12
+          },
+          "tx_power_dbm": -2,
+          "tx_level": 128,
+          "tx_custom": 19
+        },
+        {
+          "loss_pct": 3.7344398340248963,
+          "loss_basis": "master_sent",
+          "packets": 232,
+          "master_sent": 241,
+          "rx_fail": 9,
+          "rssi_dbm_mean": null,
+          "rssi_samples": 0,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 9
+          },
+          "tx_power_dbm": -3,
+          "tx_level": 128,
+          "tx_custom": 17
+        },
+        {
+          "loss_pct": 4.564315352697095,
+          "loss_basis": "master_sent",
+          "packets": 230,
+          "master_sent": 241,
+          "rx_fail": 11,
+          "rssi_dbm_mean": null,
+          "rssi_samples": 0,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 11
+          },
+          "tx_power_dbm": -4,
+          "tx_level": 128,
+          "tx_custom": 15
+        },
+        {
+          "loss_pct": 4.166666666666667,
+          "loss_basis": "master_sent",
+          "packets": 230,
+          "master_sent": 240,
+          "rx_fail": 11,
+          "rssi_dbm_mean": null,
+          "rssi_samples": 0,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 11
+          },
+          "tx_power_dbm": -5,
+          "tx_level": 128,
+          "tx_custom": 13
+        },
+        {
+          "loss_pct": 7.916666666666667,
+          "loss_basis": "master_sent",
+          "packets": 221,
+          "master_sent": 240,
+          "rx_fail": 20,
+          "rssi_dbm_mean": null,
+          "rssi_samples": 0,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 20
+          },
+          "tx_power_dbm": -6,
+          "tx_level": 128,
+          "tx_custom": 11
+        },
+        {
+          "loss_pct": 8.71369294605809,
+          "loss_basis": "master_sent",
+          "packets": 220,
+          "master_sent": 241,
+          "rx_fail": 21,
+          "rssi_dbm_mean": null,
+          "rssi_samples": 0,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 21
+          },
+          "tx_power_dbm": -7,
+          "tx_level": 128,
+          "tx_custom": 10
+        },
+        {
+          "loss_pct": 9.95850622406639,
+          "loss_basis": "master_sent",
+          "packets": 217,
+          "master_sent": 241,
+          "rx_fail": 24,
+          "rssi_dbm_mean": null,
+          "rssi_samples": 0,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 24
+          },
+          "tx_power_dbm": -8,
+          "tx_level": 128,
+          "tx_custom": 9
+        },
+        {
+          "loss_pct": 9.95850622406639,
+          "loss_basis": "master_sent",
+          "packets": 217,
+          "master_sent": 241,
+          "rx_fail": 24,
+          "rssi_dbm_mean": null,
+          "rssi_samples": 0,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 24
+          },
+          "tx_power_dbm": -9,
+          "tx_level": 128,
+          "tx_custom": 8
+        },
+        {
+          "loss_pct": 9.54356846473029,
+          "loss_basis": "master_sent",
+          "packets": 218,
+          "master_sent": 241,
+          "rx_fail": 23,
+          "rssi_dbm_mean": null,
+          "rssi_samples": 0,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 23
+          },
+          "tx_power_dbm": -10,
+          "tx_level": 128,
+          "tx_custom": 7
+        },
+        {
+          "loss_pct": 7.468879668049793,
+          "loss_basis": "master_sent",
+          "packets": 223,
+          "master_sent": 241,
+          "rx_fail": 18,
+          "rssi_dbm_mean": null,
+          "rssi_samples": 0,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 18
+          },
+          "tx_power_dbm": -12,
+          "tx_level": 128,
+          "tx_custom": 6
+        },
+        {
+          "loss_pct": 14.937759336099585,
+          "loss_basis": "master_sent",
+          "packets": 205,
+          "master_sent": 241,
+          "rx_fail": 36,
+          "rssi_dbm_mean": null,
+          "rssi_samples": 0,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 36
+          },
+          "tx_power_dbm": -14,
+          "tx_level": 128,
+          "tx_custom": 5
+        },
+        {
+          "loss_pct": 12.083333333333334,
+          "loss_basis": "master_sent",
+          "packets": 211,
+          "master_sent": 240,
+          "rx_fail": 30,
+          "rssi_dbm_mean": null,
+          "rssi_samples": 0,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 30
+          },
+          "tx_power_dbm": -16,
+          "tx_level": 128,
+          "tx_custom": 4
+        },
+        {
+          "loss_pct": 17.012448132780083,
+          "loss_basis": "master_sent",
+          "packets": 200,
+          "master_sent": 241,
+          "rx_fail": 41,
+          "rssi_dbm_mean": null,
+          "rssi_samples": 0,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 41
+          },
+          "tx_power_dbm": -18,
+          "tx_level": 128,
+          "tx_custom": 3
+        },
+        {
+          "loss_pct": 21.666666666666668,
+          "loss_basis": "master_sent",
+          "packets": 188,
+          "master_sent": 240,
+          "rx_fail": 53,
+          "rssi_dbm_mean": null,
+          "rssi_samples": 0,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 53
+          },
+          "tx_power_dbm": -20,
+          "tx_level": 128,
+          "tx_custom": 2
+        },
+        {
+          "loss_pct": 49.37759336099585,
+          "loss_basis": "master_sent",
+          "packets": 122,
+          "master_sent": 241,
+          "rx_fail": 119,
+          "rssi_dbm_mean": null,
+          "rssi_samples": 0,
+          "accumulator_violations": 0,
+          "events": {
+            "EVENT_RX_FAIL": 119
+          },
+          "tx_power_dbm": -28,
+          "tx_level": 128,
+          "tx_custom": 1
+        }
+      ],
+      "knee": {
+        "tx_power_dbm": -0.8571428571428571,
+        "bracket_db": 1,
+        "bracket": [
+          0,
+          -1
+        ],
+        "bracket_loss_pct": [
+          2.5,
+          5.416666666666667
+        ],
+        "reason": "interpolated between the two rungs that bracket it"
+      },
+      "loss5pct_tx_power_dbm": -0.8571428571428571,
+      "loss5pct_rssi_dbm": null,
+      "rssi_reference": null,
+      "rssi_slope": {
+        "slope": null,
+        "n": 0,
+        "reason": "fewer than three rungs with usable RSSI below the knee"
+      },
+      "dial_trustworthy": false,
+      "dial_detail": "the transmit-power dial was never checked against measured RSSI (fewer than three rungs with usable RSSI below the knee), so nothing here knows whether the ladder moved the power it asked for",
+      "repeat_spread_db": null
+    }
+  },
+  "checks": [
+    {
+      "name": "knee reached [TI]",
+      "pass": false,
+      "detail": "the loudest rung (8 dBm) already loses 9.13 %, over the 5.0 % target - the link is broken before the ladder starts, so this measures the bench and not the receiver"
+    },
+    {
+      "name": "dial [TI]",
+      "pass": true,
+      "detail": "RSSI moved 1.02 dB per commanded dB over 25 rungs, worst rung 1.2 dB off the line, so the dial is real"
+    },
+    {
+      "name": "knee reached [Garmin]",
+      "pass": true,
+      "detail": "interpolated between the two rungs that bracket it"
+    },
+    {
+      "name": "dial [Garmin]",
+      "pass": false,
+      "detail": "the transmit-power dial was never checked against measured RSSI (fewer than three rungs with usable RSSI below the knee), so nothing here knows whether the ladder moved the power it asked for"
+    },
+    {
+      "name": "EVENT_TX pacing",
+      "pass": true,
+      "detail": "all 6250 messages paced by EVENT_TX"
+    }
+  ],
+  "pass": false,
+  "receiver_targets": {
+    "TI": "port:COM11",
+    "Garmin": "usb:006"
+  }
+}

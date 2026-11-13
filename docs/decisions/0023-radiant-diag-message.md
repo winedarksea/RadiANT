@@ -85,6 +85,13 @@ Claim **0xF7** from the reserved RadiANT block (0xF7-0xFA) as
 
 `sets_advanced_uncovered` is `0xFFFFFFFF` without `CONFIG_RADIANT_SEARCH_COVERAGE`.
 
+Page 4 "alternate-sync hits" on cc26xx counts `syncWordId == 1` in a window
+with one sync group. Until 2026-11-13 that second word was a decoy (`0x59C5`)
+and the field read ~110/min. Since then the one-group window sets
+`syncWord1 = 0`, which turns the second correlator off, so the field reads 0
+and a non-zero value is an anomaly. The meaning is unchanged, so page 4 stays
+at structure version 1. Evidence: `archive/benchmarks/2026-11-13-ti-todo/`.
+
 Page 7 was added on 2026-11-12 for ADR 0022's gate 3: does a search reception
 running up to a scan chunk's close delay the tracked window armed after it?
 Its first three fields are the backend table's last three indices

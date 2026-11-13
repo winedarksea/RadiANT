@@ -155,7 +155,8 @@ Same decision on `radiant_radio_cc26xx.c` (c911f31). `CC26XX_HW_ADDR_LEN`
 the received byte into the **software** CRC. This backend folds the CRC in
 software, so without that every wildcard frame would fail it. A `wild_last`
 filter whose last byte would fall inside the hardware prefix is refused
-`ENOTSUP`, and the decoy sync word becomes `0x59C5`. native_sim twister at
+`ENOTSUP`, and the decoy sync word becomes `0x59C5` (removed 2026-11-13: a
+one-group window now sets `syncWord1 = 0`, see ADR 0023's page 4 note). native_sim twister at
 c911f31: 14/14 scenarios, 4463/4463 cases, `check_test_counts` OK.
 
 **The 16 bits apply to tracking as well.** `nSwBits` is consumed by

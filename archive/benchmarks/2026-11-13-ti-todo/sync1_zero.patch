@@ -1,0 +1,12 @@
+--- a/radiant/src/radiant_radio_cc26xx.c
++++ b/radiant/src/radiant_radio_cc26xx.c
+@@ -1965,8 +1965,7 @@
+ 		 * the one filter this window has.
+ 		 */
+ 		st.sync_group[1] = st.sync_group[0];
+-		rx_cmd.syncWord1 = rx_cmd.syncWord0 ^
+-				   ((uint32_t)0xFFu << (8u * (st.hw_addr_len - 1u)));
++		rx_cmd.syncWord1 = 0; /* B: second correlator off (driverlib: "if non-zero") */
+ 	} else {
+ 		rx_cmd.syncWord1 = sync_word_of(st.filters[st.sync_group[1]].addr,
+ 						st.hw_addr_len);

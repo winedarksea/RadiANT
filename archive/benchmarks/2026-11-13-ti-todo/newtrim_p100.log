@@ -1,0 +1,17 @@
+006 (AJK2.05RAF): 1033 sightings in 120.1 s listening, 8.60/s, 1 open(s)
+          device   per s  heard/opens  median 1st  max 1st
+      52233:0x0B    5.89     1/1           0.22 s   0.22 s
+      52233:0x7B    2.72     1/1           0.19 s   0.19 s
+  tracked 4242:0x0B: 272 received, 26 RX_FAIL, loss 8.72 %
+  tracked 4243:0x0B: 280 received, 11 RX_FAIL, loss 3.78 %
+  tracked 52233:0x11: 206 received, 86 RX_FAIL, loss 29.45 %
+  events: ch1:0x09 x188, ch2:0x09 x189, ch3:0x09 x183
+
+COM11 (RADIANT0.01B00): 780 sightings in 120.0 s listening, 6.50/s, 1 open(s)
+          device   per s  heard/opens  median 1st  max 1st
+      52233:0x0B    4.32     1/1           0.20 s   0.20 s
+      52233:0x7B    2.17     1/1           0.17 s   0.17 s
+  tracked 4242:0x0B: 480 received, 1 RX_FAIL, loss 0.21 %
+  tracked 4243:0x0B: 477 received, 3 RX_FAIL, loss 0.62 %
+  tracked 52233:0x11: 348 received, 132 RX_FAIL, loss 27.50 %
+
