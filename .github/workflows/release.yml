@@ -2076,7 +2076,19 @@ jobs:
           # against 6116 at c4f893c, bss +0, so 20 B of text headroom is left
           # under the 6144 ceiling. 6128 / 6493 on the merged tree of
           # 2026-11-08 (+4 B text from the other packages). Ceilings unchanged.
-          check "security text" "$(( on_text - off_text ))" 6144
+          #
+          # 6144 -> 6656 FOR A SECURITY FIX, MEASURED (review 2026-11-13
+          # items 1 and 2, 2026-11-13, NCS v3.4.0, this recipe): 6112 / 6749
+          # at f02125a, 6184 / 6813 after (+72 / +64). Text: the epoch
+          # ceiling test and the epoch-advanced hook call in advance_epoch()
+          # (~24 B, plus the 2 B weak default), spent-vs-withheld in
+          # radiant_sec_tx_transform() (~6 B), the master refusal in
+          # radiant_sec_rx_ingest() (~22 B), the pump's tx_latched guard
+          # (~6 B), and 0xF4's new [26..27] field (~8 B). Bss: 4 B ceiling +
+          # 4 B dropped_direction per context, x 8. 32 B of text headroom
+          # was left at f02125a, so any fix lands over; the ceiling moves to
+          # the next multiple of 512, as every ceiling here is, leaving 472 B.
+          check "security text" "$(( on_text - off_text ))" 6656
           check "security bss"  "$(( on_bss  - off_bss  ))" 7168
 
           # X25519 and the pairing logic, on top of the above and under their

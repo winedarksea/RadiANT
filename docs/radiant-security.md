@@ -818,7 +818,9 @@ quietly edited: the breakdown above is a block cipher, two modes, a KDF, a
 windowing state machine and a serial surface, with no fat in it. The guess was
 low; the code is not bloated. The ceilings are now 6144 B of text and 6144 B of
 bss for the transforms (bss 7168 B since D1-1, keeping its 867 B of absolute
-headroom), and a separate 3584 B of text for pairing — measured
+headroom; text 6656 B since the epoch-reservation and master-refusal fixes of
+the 2026-11-13 review, measured at 6184 B against 6112 B before), and a
+separate 3584 B of text for pairing — measured
 figures with about 20% headroom, and the per-symbol breakdown above is what the
 next change gets compared against.
 
