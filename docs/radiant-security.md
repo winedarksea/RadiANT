@@ -789,8 +789,9 @@ quietly edited: the breakdown above is a block cipher, two modes, a KDF, a
 windowing state machine and a serial surface, with no fat in it. The guess was
 low; the code is not bloated. The ceilings are now 6144 B of text and 6144 B of
 bss for the transforms (bss 7168 B since D1-1, keeping its 867 B of absolute
-headroom), and a separate 3584 B of text for pairing — measured
-figures with about 20% headroom, and the per-symbol breakdown above is what the
+headroom), and a separate 3584 B of text for pairing (4096 B since the
+2026-11-13 nonce commitment, section 7.4: 3748 B measured, breakdown in
+`release.yml`) — measured figures with about 20% headroom, and the per-symbol breakdown above is what the
 next change gets compared against.
 
 **RAM is now asserted too, and never was before.** "Costs nothing when disabled"
@@ -945,14 +946,63 @@ issue.
 Key establishment is section 8. Two limits belong here:
 
 - The X25519 exchange is **unauthenticated Diffie-Hellman** during its one
-  window, and the mitigation is the usual short-fingerprint comparison. A
-  deployment that cannot display or confirm a fingerprint should use the
-  out-of-band path.
+  window, and the mitigation is a short-fingerprint comparison made binding by
+  a **nonce commitment** (below). A deployment that cannot display or confirm
+  a fingerprint should use the out-of-band path.
 - **`0xF5` carries a host-supplied 32-byte scalar**, because the only entropy
   source on nRF54L is `psa_rng`/CRACEN and reaching it drags in `nrf_security`
   on every build. The host has a real CSPRNG; the node does not need one. The
   honest consequence: **a host-less node cannot pair this way.** Documented,
   deferred, and not worked around with a weak on-node PRNG.
+
+**Amended 2026-11-13 — the fingerprint used to be grindable, and now carries a
+commitment.** Until this date the six digits were a function of the shared
+secret and the two public keys, and this section and `radiant_sec.h` said a man
+in the middle "holds two different shared secrets and cannot make both match".
+That was wrong for an attacker who computes. The MITM sees both real public
+keys before it has to send its own, so it can generate key pairs offline until
+the digits A will show equal the digits B will show: about 10^6 X25519
+operations, seconds to a minute on a laptop, inside the 60 s window (security
+review 2026-11-13, item 4). The old test only modelled a MITM that did not
+grind.
+
+The fix is the shape Bluetooth LE Secure Connections numeric comparison uses,
+built from AES-CMAC with no new primitive. A is the initiator, B the responder
+(the hosts decide which is which); `Na`, `Nb` are 16-byte nonces from each
+host's CSPRNG, carried over `0xF5` like the scalar:
+
+```
+1. keys cross        PKa, PKb. EXCHANGE computes and holds the DH result;
+                     it installs no key and shows no fingerprint.
+2. B -> A            Cb = f4(PKb, PKa, Nb) = CMAC_Nb(PKb || PKa || 0x00)
+3. A -> B            Na               (A sends it only after holding Cb)
+4. B -> A            Nb               (B sends it only after receiving Na);
+                     A checks f4(PKb, PKa, Nb) == Cb, and a mismatch wipes
+                     the exchange
+5. both show         fp = g2(PKa, PKb, Na, Nb)
+                        = (CMAC_Na(PKa || PKb || Nb) mod 2^32) mod 10^6
+6. both install      K_root = CMAC_PRK("RADIANT-pair-root\0" || PKa || PKb ||
+                     Na || Nb), PRK = CMAC_0(DH output)
+```
+
+**The bound.** Whoever is in the middle must fix one nonce before it learns the
+other side's: towards A it is bound by the commitment it sent before Na
+existed, and towards B it must reveal its own Na before B reveals Nb. Whichever
+order it runs the two halves in, the last value to enter one of the two
+fingerprints is a fresh nonce from an honest host, so the two six-digit values
+match with probability **10^-6 per attempt**, and the window (bounded, one
+pairing per window, and wiped on a commitment that does not open) allows **one
+attempt**. Grinding key pairs buys nothing: the keys are fixed before the
+nonces that decide the digits. `radiant/tests/src/test_sec_pair.c` keeps a
+nonce a laptop found in 31 s that *would* have made A show B's digits had M
+been free to choose it after seeing Na, and asserts A refuses it.
+
+The cost on the node is three AES-CMACs over at most eight blocks (about
+12 µs a block in software) and no extra X25519; the host pays one more round
+trip. The host sequence, byte by byte, is in `docs/ant-serial-protocol.md`
+under the pairing sub-commands. There is no `0xF5` sub-command that installs a
+key without the commit/reveal, so the old path is not available as a
+downgrade.
 
 **Amended 2026-08-11 — the deferral above is closed by
 `docs/decisions/0009-hostless-node-identity.md`.** A battery strap has no host,
@@ -969,8 +1019,17 @@ the other half of the same hole. Read ADR 0009 before re-arguing either.
 removing one, which section 11.7's over-air enrolment now makes concrete.** A
 hostless node can pair. It still has **no screen**, and the first bullet above
 assumed one on both ends: "the usual short-fingerprint comparison" is a human
-reading six digits off *two* displays and checking they match, and an attacker
-in the middle holds two different shared secrets and cannot make both match.
+reading six digits off *two* displays and checking they match.
+
+**And over-air enrolment has no commitment either** (amended 2026-11-13). The
+six-frame set of section 11.7.1 is one key each way with no room for the nonce
+round trip, so `profile_enrol.c` calls `radiant_sec_pair_peer_uncommitted()`,
+a separately named function that `0xF5` cannot reach. It is unauthenticated
+Diffie-Hellman, and its fingerprint (both nonces zero, the keys ordered by
+value) is a function of the two public keys only, so it is **grindable** by a
+MITM exactly as the old `0xF5` one was, on top of being one-sided. Read it as a
+check that two honest ends agree, not as a MITM defence. Redesigning enrolment
+is deferred with review item 6, which owes it a delivery redesign anyway.
 
 **A strap gives one side of that comparison and nothing on the other.** The
 receiver can show its six digits; there is nothing at the sensor for the user to
@@ -1979,12 +2038,29 @@ Four rules:
   is read by a host on the node that did the enrolment; other receivers cannot
   see it over the air. An enrolment the owner did not perform is the whole
   attack; making it silent would be the mistake.
-- **The screen-free fingerprint limit of section 7.4 applies unchanged and is
-  not solved here.** A strap with no display gives a one-sided fingerprint; the
-  mitigations are the bounded window, one pairing per window, a physical
-  trigger, and optionally reduced TX power. `closed` remains the recommendation
-  for anything that matters. Section 7.4's amendment of 2026-08-11 is the long
-  form and is not restated here so that there is one copy of it.
+- **Over-air enrolment is unauthenticated Diffie-Hellman, and its fingerprint
+  protects against nothing an attacker computes.** It is one-sided, because a
+  strap has no display, and it is **grindable**: the six-frame exchange has no
+  room for the nonce commit/reveal that `0xF5` pairing now carries (section
+  7.4, amended 2026-11-13), so enrolment goes through
+  `radiant_sec_pair_peer_uncommitted()`, whose six digits are a function of the
+  two public keys alone. A man in the middle who answers the window can search
+  key pairs offline (about 10^6 X25519, under a minute on a laptop) until the
+  receiver shows whatever digits it likes. That function is named for what it
+  is and the host's `0xF5` surface cannot reach it, so the weakness stays
+  confined to the over-air path.
+- **What does guard enrolment is everything around the exchange**: the bounded
+  window, one pairing per window, a physical trigger, the visible pairing-open
+  bit and enrolment counter (rule 3), and optionally reduced TX power so the
+  attacker has to be in the room. `closed` remains the recommendation for
+  anything that matters. Section 7.4's amendments are the long form and are not
+  restated here so that there is one copy of them.
+- **Enrolment as built is not yet additive.** The paragraph at the top of this
+  section describes the intent; today the DH-derived key replaces the sensor's
+  channel root rather than delivering the existing one (security review
+  2026-11-13, item 6). The redesign that fixes delivery is also where enrolment
+  gets an authenticated exchange; until then, treat an over-air window as a
+  re-key that any listener in range can win.
 
 Removal is not the mirror of addition — section 7.3.
 
@@ -2050,9 +2126,11 @@ arbitration belongs to the phase that adds the second.
 #### 11.7.2 The counter, and where a host can read it
 
 A completed enrolment increments `enrolments` in `struct radiant_sec_stats`,
-bumped inside `radiant_sec_pair_peer()` after the root key is installed — so it
-counts pairings that took rather than pairings that were attempted, and a
-refused small-order peer key leaves it alone. It counts the `0xF5` host exchange
+bumped inside the pairing install (reached from `radiant_sec_pair_peer_nonce()`
+for `0xF5` and `radiant_sec_pair_peer_uncommitted()` for this window) after the
+root key is installed — so it counts pairings that took rather than pairings
+that were attempted, and a refused small-order peer key or a commitment that
+does not open leaves it alone. It counts the `0xF5` host exchange
 and the over-air window alike, because from the group's point of view they are
 one event.
 
