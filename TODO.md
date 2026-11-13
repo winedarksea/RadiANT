@@ -85,50 +85,6 @@ usability work (samples, `antr_*` in the module, stock Zephyr support) is done.
   the target: it is limited to code a Zephyr subsystem, platform, driver or tool
   uses.
 
-# Discovery issues from the 2026-11-09 review of the last 35 commits
-
-Reviewed through `86233e8`. The two discovery issues affect `2079575`. All
-three defects below were fixed on 2026-11-12 with regression tests; each test
-fails with its source fix reverted (native_sim twister, Bluefin).
-
-- [x] **P2: Restore the configured discovery frequency when the last declared search ends.**
-  Fixed in `afe3be2`. A keyed off-57 search retuned the shared sweep, and when
-  it ended with a keyless scan still running, `retune_at_boundary()` left the
-  sweep on the off-57 frequency until reset. The search instance now keeps its
-  configured frequency (`home_rf`) and returns to it at the next set boundary
-  once no searcher declares one.
-  Test: `test_the_sweep_returns_home_when_the_last_declared_search_ends`.
-
-- [x] **P2: Apply a first key installed during an active search.**
-  Fixed in `0ec058d` (test timing fix `64c05e0`). `antr_network_address_set()`
-  re-initialised the sweep only with nobody searching and recorded nothing
-  otherwise, so the sweep stayed on the zero address until reset. Also covers
-  the older network-0 variant. A network's first valid key now always
-  re-initialises the sweep: at once when no carrier is in flight (then pumping,
-  so every SEARCHING channel rejoins keyed or keyless afresh), otherwise through
-  the existing deferred re-init. Tests: `test_a_first_key_on_network_{0,1}_installed_mid_search_reaches_the_sweep`,
-  `test_closing_and_retrying_the_key_keeps_the_ant_plus_sweep`,
-  `test_a_slave_keyed_mid_search_declares_its_frequency`. Optional on-air check
-  not yet run: open a wildcard slave on network 1 before the key, then key it
-  and confirm a real sensor is found without a reset.
-
-- [x] **Slave broadcast could lose a queued update.**
-  Fixed in `58c9209`. A host write landing between the reply's payload snapshot
-  and its completion was dropped, because the completion cleared
-  `bcast_pending` unconditionally. A per-channel write generation now lets a
-  completion clear pending only for the write it carried. Masters always sent
-  the newer write on the next slot; only their `antr_pending_transmit_get()`
-  readback was wrong. Test: `test_a_slave_broadcast_written_mid_reply_still_goes_out`.
-
-- [ ] **Before extending burst support: benchmark HR/power/cadence RX under lossy burst traffic.**
-  Not a defect. `326c496` adds up to five retries per burst packet, and the
-  scheduler lets transmissions truncate overlapping receive windows, so
-  other-channel loss during a requested burst is a plausible risk, not a
-  measured regression. Ordinary broadcasts and single-packet acknowledged
-  messages never enter this path. Needs the bench. Code:
-  `radiant/src/radiant_burst.c`, retry scheduling (around line 335).
-
-
 # Open issues from the 2026-11-07 RadiANT vs Garmin ANT USB-m comparison
 
 Evidence: archive/benchmarks/2026-11-07-garmin-compare/ (README there).
@@ -352,20 +308,6 @@ MPSL (needs a soak beside BLE or Thread, which that clearance excluded):
 - `program_tx()` writes CC_TXSTART before enabling `conn_start_tx` and re-checks
   with `t_start <= now`, the ordering A14-1 replaced for receive. A compare just
   after the enable, before `now` is read, gives a false ETIME.
-
-Discovery (ztest only, not on air; bench checks in the release review):
-- Retune restarts the cursor, so a host cycling keyed frequencies faster than a
-  pass truncates each pass and coverage becomes probabilistic.
-- In a mixed-frequency session a steer or revisit queued while the sweep is on the
-  other frequency wastes a dwell and doubles that channel's backoff.
-- When only undeclared channels remain, the sweep stays on the last declared
-  frequency: a keyless scan opened after a keyed RF 66 slave sits on 66.
-- The ENOENT clear of `pass_done` is unreachable through the API, so a declared
-  channel acquired in the last set of a pass delays a later mixed session by up to
-  a pass.
-- A chunk reclaimed by A9-3 is credited as a full listen in the sweep accounting.
-- Never verified on air: a slave on a non-57 frequency acquiring its master; mixed
-  57/66 passes; a real Zwift session on these images.
 
 Bridge and tools:
 - Filtered TX_COMPLETED / TX_FAILED are dropped by an early return in
