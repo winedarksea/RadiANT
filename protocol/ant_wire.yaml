@@ -2127,17 +2127,20 @@ radiant_messages:
     - name: MESG_RADIANT_SEC_VERDICT_ID
       id: 0xF8
       direction: d2h
-      payload_len: 6
+      payload_len: 7
       desc: "One window's verdict on a secured channel, sent unsolicited, but
              ONLY on a channel whose 0xF1 set bit 4 (with X_AUTH); without
              that bit the byte stream is identical to a build without this
              message. [0] channel; [1] verdict - 1 verified, 2 unverified
              (never 0; any other value is refused by a reader);
              [2..3] window_start, the 16-bit counter of the window's first
-             packet (u16 LE); [4] W, 2, 4 or 8; [5] seq, this channel's
-             verdict count mod 256: 0 for the first verdict after the
-             host's 0xF1, then one more per verdict, so a lost 0xF8 is a
-             gap (it may also jump across a channel close). VERSIONING: as
+             packet (u16 LE); [4] W, 2, 4 or 8; [5..6] seq (u16 LE), this
+             channel's verdict count: one more per verdict, never reset
+             while the channel keeps its key, and one more again whenever
+             the firmware throws away a window that was waiting for its
+             verdict (the host's 0xF1 or 0xF3, an epoch advance, a new
+             device-number candidate, a channel close or open), so any
+             verdict that will never come shows as a gap. VERSIONING: as
              0xF4, fields are only appended and a reader decodes the fields
              it knows from a longer body. The window covers counters
              window_start .. window_start+W-1. COVERAGE: a verdict covers
@@ -2164,14 +2167,21 @@ radiant_messages:
              pending unverified (on every channel for the two events) -
              settled BEFORE the 0xF8 that revealed a gap is applied, so a
              lost UNVERIFIED cannot be replaced by a later VERIFIED for the
-             same window_start; (3) a genuine verdict for window k
-             comes on the last packet of window k+1, so a packet pending
-             longer than 2W-1 channel periods (plus transport slack) is
-             unverified - the last window before a node goes quiet, an
-             epoch advance and a lost window all end this way; (4) pending
-             packets are dropped as unverified on CHANNEL_CLOSED, on the
-             host's own 0xF1 or 0xF3 for the channel, and on reset.
-             tools/ant_sec.py VerdictResolver implements this rule."
+             same window_start; (3) a genuine verdict for window k comes on
+             the last packet of window k+1, so a packet pending longer than
+             2W-1 channel periods (plus transport slack) is unverified, and
+             this deadline is checked before EVERY 0xF8 is applied - a host
+             that stops reading for longer than it settles everything it
+             held; (4) pending packets are settled unverified on
+             CHANNEL_CLOSED, on the host's own 0xF1 or 0xF3 for the channel,
+             and on reset, and so is everything pending when the first 0xF8
+             after any of these (or after the host starts listening)
+             arrives: that first verdict only sets the seq baseline and
+             binds nothing, because packets still in flight from before the
+             flush may be judged by no verdict at all. A host using 0xF8
+             must not filter EVENT_CHANNEL_CLOSED (0x07) with
+             MESG_EVENT_FILTER_CONFIG (0x79). tools/ant_sec.py
+             VerdictResolver implements this rule."
       source: "Security review 2026-11-13 item 3 (docs/radiant-security.md sec 3.2 and 9)"
 
 # ---------------------------------------------------------------------------
