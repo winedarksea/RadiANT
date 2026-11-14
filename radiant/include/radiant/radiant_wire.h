@@ -1897,9 +1897,15 @@
  * of the close - these three from the backend table, 0xFFFFFFFF where it
  * cannot see them; bounded receive windows armed opening past their start,
  * the largest such lateness in us, bounded windows expired while a scan chunk
- * held the radio; fields 6-7 reserved, 0xFFFFFFFF). VERSIONING: pinned at 1;
- * a field's meaning never changes and a new meaning is a new page.
- * docs/decisions/0023-radiant-diag-message.md has the reasoning and
+ * held the radio; fields 6-7 reserved, 0xFFFFFFFF); 8 timing, worst cases
+ * since boot except the two counts (frames in the longest receive drain,
+ * longest work on one receive entry with the core callback excluded, longest
+ * software CRC, longest synchronous receive callback - all in us, 0xFFFFFFFF
+ * on backends without a drain loop such as nRF; longest scheduler pass with
+ * interrupts off in us, most pass steps in one pass, passes over 100 us;
+ * receive drains over 250 us). VERSIONING: pinned at 1; a field's meaning
+ * never changes and a new meaning is a new page. docs/decisions/0023-radiant-
+ * diag-message.md has the reasoning and
  * radiant/include/radiant/radiant_diag.h the layout. [ADR 0023]
  */
 #define RADIANT_WIRE_MESG_RADIANT_DIAG_ID                    0xF7

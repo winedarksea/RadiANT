@@ -2110,6 +2110,22 @@ static void pass(void)
 #if defined(CONFIG_RADIANT_SCHED_BOOKING)
 	book_ahead(now);
 #endif
+#if defined(CONFIG_RADIANT_DIAG_COUNTERS)
+	{
+		/* 0xF7 page 8: the pass's interrupts-off span, measured from the
+		 * one `now` it planned with. A break leaves guard at the last
+		 * iteration's index; running out leaves it at the bound. */
+		const uint32_t limit = (2u * RADIANT_SCHED_MAX_CHANNELS) + 4u;
+		const uint32_t us = (uint32_t)(radiant_radio_now() - now);
+
+		RADIANT_DIAG_MAX(pass_max_us, us);
+		RADIANT_DIAG_MAX(pass_steps_max,
+				 (guard < limit) ? guard + 1u : limit);
+		if (us > RADIANT_DIAG_PASS_SLOW_US) {
+			RADIANT_DIAG_INC(pass_over_100us);
+		}
+	}
+#endif
 	s.dirty = false;
 	s.in_pass = false;
 	radiant_event_crit_exit(key);

@@ -3870,6 +3870,10 @@ uint8_t radiant_radio_diag_get(struct radiant_radio_diag *out)
 	out->v[RADIANT_RADIO_DIAG_SRCH_CUT_CLOSE] = nrf_diag.srch_cut_close;
 	out->v[RADIANT_RADIO_DIAG_SRCH_CUT_ABORT] = nrf_diag.srch_cut_abort;
 	out->v[RADIANT_RADIO_DIAG_SRCH_END_NEAR_CLOSE] = nrf_diag.srch_end_near_close;
+	/* Page 8's backend fields (drain frames/frame/CRC/callback time, slow
+	 * drains) stay RADIANT_DIAG_NOT_MEASURED: this backend trusts the
+	 * hardware CRC and delivers each frame from its own interrupt, with no
+	 * drain loop to time. */
 	irq_unlock(key);
 
 	return RADIANT_DIAG_BACKEND_NRF;

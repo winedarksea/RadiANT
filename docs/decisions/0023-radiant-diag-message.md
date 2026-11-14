@@ -82,6 +82,7 @@ Claim **0xF7** from the reserved RadiANT block (0xF7-0xFA) as
 | 5 search A | `radiant_search_stats` | windows | sets_advanced | sweeps | frames_ok | crc_fail | acquired | scan_reports | timeouts |
 | 6 search B | `radiant_search_stats` | cache_steers | cache_acquires | permit_rejected | rssi_rejected | decode_failed | bad_filter_index | late_events | sets_advanced_uncovered |
 | 7 search/track hand-off | `radiant_radio_diag_get()` [4..15], `radiant_sched.c` [16..27], reserved [28..35] | search frame cut by the chunk's close | search frame cut by an abort | search END within 300 µs of the close | bounded RX armed opening late | worst such lateness µs | bounded RX expired behind a scan chunk | reserved, `0xFFFFFFFF` | reserved, `0xFFFFFFFF` |
+| 8 timing | `radiant_radio_diag_get()` [4..19] and [32..35], `radiant_sched.c` [20..31] | frames in the longest drain | longest one-entry work µs (callback excluded) | longest software CRC µs | longest synchronous rx callback µs | longest scheduler pass µs (interrupts off) | most `pass_step()` iterations in one pass | passes over 100 µs | drains over 250 µs |
 
 `sets_advanced_uncovered` is `0xFFFFFFFF` without `CONFIG_RADIANT_SEARCH_COVERAGE`.
 
@@ -110,6 +111,18 @@ match does about nine times as often, and it read 100 % missed on the off image
 too. The fields were reserved before the page left the bench (never pushed or
 released), so no host depends on them. The gate-3 images in that archive still
 report the old meaning.
+
+Page 8 was added on 2026-11-13 to find where the cc26xx receive drain's
+~530 µs worst case goes (`archive/benchmarks/2026-11-12-ti-findings/`), and
+how long the scheduler's interrupts-off pass runs, before anything is
+optimized (`docs/performance-review-2026-11-13.md` finding 5). Every field
+except 6 and 7 is a worst case since boot: read the later value, a difference
+means nothing. Fields 0-3 and 7 come from the backend table's last five
+indices; cc26xx times them on the RAT, and the nRF backend reads
+`0xFFFFFFFF` (it trusts the hardware CRC and has no drain loop). Fields 4-6
+use `radiant_radio_now()` and are measured on both. A new page rather than
+page 7's reserved tail, which has two fields, not eight. Structure version
+stays 1.
 
 "Turnaround" on page 2 is NEXT_BLOCK-to-submit: the time from the engine
 asking for the next block to the host block arriving.

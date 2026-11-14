@@ -65,11 +65,18 @@ PAGES: dict[int, tuple[str, list[str]]] = {
     7: ("handoff", ["srch_cut_close", "srch_cut_abort", "srch_end_near_close",
                     "trk_open_late", "trk_open_late_max_us",
                     "trk_missed_behind_scan", "reserved6", "reserved7"]),
+    # 2026-11-13 timing page. Fields 0-3 and 7 are the backend table's tail
+    # after srch_end_near_close; 0xFFFFFFFF on nRF. 4-6 are the scheduler's.
+    8: ("timing", ["drain_max_frames", "frame_max_us", "crc_max_us",
+                   "rx_cb_max_us", "pass_max_us", "pass_steps_max",
+                   "pass_over_100us", "drain_over_250us"]),
 }
 # Fields that are a level (min/max/last), not a running count: a difference
 # means nothing, so --diff reports the later value.
 LEVELS = {"turn_min_us", "turn_max_us", "tx_margin_min_us", "status_last",
-          "drain_max_us", "min_lead_us", "trk_open_late_max_us"}
+          "drain_max_us", "min_lead_us", "trk_open_late_max_us",
+          "drain_max_frames", "frame_max_us", "crc_max_us", "rx_cb_max_us",
+          "pass_max_us", "pass_steps_max"}
 SIGNED = {"tx_margin_min_us"}
 
 
@@ -137,8 +144,10 @@ def main() -> int:
     ap.add_argument("--serial", help="a USB dongle whose serial ends with this")
     ap.add_argument("--port", help="a UART build on this port (e.g. COM11)")
     ap.add_argument("--baud", type=int, default=115200)
-    ap.add_argument("--pages", default="0-7",
-                    help="pages to read, e.g. 0-7 or 1,2,4 (default all)")
+    ap.add_argument("--pages", default="0-8",
+                    help="pages to read, e.g. 0-8 or 1,2,4 (default all). "
+                         "A page an older build lacks is skipped once an "
+                         "earlier page has answered")
     ap.add_argument("--json", help="also write the decoded pages here")
     ap.add_argument("--diff", nargs=2, metavar=("BEFORE", "AFTER"),
                     help="print AFTER - BEFORE from two --json files; no device")
@@ -165,6 +174,12 @@ def main() -> int:
     try:
         for page in wanted:
             body = request(dev, reader, page)
+            if body is None and pages:
+                # Answered before, so the build has 0xF7 but predates this
+                # page (page 8 arrived 2026-11-13).
+                print(f"page {page}: no 0xF7 reply; this build lacks the "
+                      "page, skipped.", file=sys.stderr)
+                continue
             if body is None:
                 print(f"page {page}: no 0xF7 reply. Built without "
                       "CONFIG_ANT_DONGLE_DIAG (off by default), or a page "

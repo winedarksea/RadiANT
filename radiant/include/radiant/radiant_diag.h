@@ -5,14 +5,15 @@
  * Provenance: clean-room. Written from this project's own source and bench
  * measurements; see docs/decisions/0023-radiant-diag-message.md.
  *
- * WHAT THIS IS. Eight fixed pages of eight u32 counters each, read by a host
+ * WHAT THIS IS. Nine fixed pages of eight u32 counters each, read by a host
  * with MESG_REQUEST [page, 0xF7]. Pages 0, 5 and 6 are counters the core
  * already keeps (radiant_api_stats, radiant_search_stats). Pages 1 and 2 are
  * counted here, behind CONFIG_RADIANT_DIAG_COUNTERS. Pages 3 and 4 come from
  * the backend through radiant_radio_diag_get(), one generic table that every
  * backend fills with what it can measure. Page 7 (ADR 0022 gate 3) is mixed:
  * its first three fields come from that same backend table, the other five
- * are counted here.
+ * are counted here. Page 8 (timing) is mixed the same way: receive-drain
+ * timings from the backend table, scheduler pass timings counted here.
  *
  * ZERO COST WHEN OFF. Without CONFIG_RADIANT_DIAG_COUNTERS every RADIANT_DIAG_*
  * macro below is an empty statement that does not evaluate its arguments,
@@ -43,7 +44,8 @@ extern "C" {
 #define RADIANT_DIAG_PAGE_SEARCH_A   5u
 #define RADIANT_DIAG_PAGE_SEARCH_B   6u
 #define RADIANT_DIAG_PAGE_HANDOFF    7u
-#define RADIANT_DIAG_PAGES           8u
+#define RADIANT_DIAG_PAGE_TIMING     8u
+#define RADIANT_DIAG_PAGES           9u
 
 /*
  * Page 7, the search/track hand-off (ADR 0022 gate 3). Does a search
@@ -68,6 +70,40 @@ extern "C" {
 #define RADIANT_DIAG_HANDOFF_TRK_OPEN_LATE_MAX_US  4u
 #define RADIANT_DIAG_HANDOFF_TRK_MISSED_BEHIND_SCAN 5u
 
+/*
+ * Page 8, timing (measurement only; 2026-11-13 performance review). Where a
+ * backend's receive drain and the scheduler's interrupts-off pass spend their
+ * time, as worst cases since boot ("level" fields: read the later value, a
+ * difference means nothing) plus two counts.
+ *
+ *   0 drain_max_frames  frames examined by the drain that set drain_max_us
+ *                       (page 4) - backend
+ *   1 frame_max_us      longest work on one receive entry, the core's rx
+ *                       callback excluded - backend
+ *   2 crc_max_us        longest software CRC over one frame - backend
+ *   3 rx_cb_max_us      longest synchronous core rx callback - backend
+ *   4 pass_max_us       longest scheduler pass (interrupts off) - core
+ *   5 pass_steps_max    most pass_step() iterations in one pass - core
+ *   6 pass_over_100us   passes longer than 100 us - core, count
+ *   7 drain_over_250us  receive drains longer than 250 us - backend, count
+ *
+ * cc26xx measures 0-3 and 7 on the RAT (0.25 us ticks, truncated to us); the
+ * nRF backend trusts its hardware CRC and has no drain loop, so they read
+ * RADIANT_DIAG_NOT_MEASURED there. 4-6 use radiant_radio_now() on both.
+ */
+#define RADIANT_DIAG_TIMING_DRAIN_MAX_FRAMES 0u
+#define RADIANT_DIAG_TIMING_FRAME_MAX_US     1u
+#define RADIANT_DIAG_TIMING_CRC_MAX_US       2u
+#define RADIANT_DIAG_TIMING_RX_CB_MAX_US     3u
+#define RADIANT_DIAG_TIMING_PASS_MAX_US      4u
+#define RADIANT_DIAG_TIMING_PASS_STEPS_MAX   5u
+#define RADIANT_DIAG_TIMING_PASS_OVER_100US  6u
+#define RADIANT_DIAG_TIMING_DRAIN_OVER_250US 7u
+
+/* Thresholds of the two page-8 counts. */
+#define RADIANT_DIAG_PASS_SLOW_US  100u
+#define RADIANT_DIAG_DRAIN_SLOW_US 250u
+
 /* A search frame ending this close to its chunk's hardware close counts as
  * "near close" (field 2): its END interrupt chain then runs into the time
  * the next arm needs. */
@@ -90,7 +126,7 @@ extern "C" {
 
 /*
  * The backend table: pages 3 and 4 in this order, then page 7's first three
- * fields. Every backend fills every index it can measure and leaves the rest
+ * fields, then page 8's backend fields (0-3, then 7). Every backend fills every index it can measure and leaves the rest
  * RADIANT_DIAG_NOT_MEASURED (radiant_radio_diag_get()'s caller pre-fills them
  * so).
  */
@@ -117,6 +153,12 @@ enum radiant_radio_diag_idx {
 	RADIANT_RADIO_DIAG_SRCH_CUT_CLOSE, /* search frame in flight at the close */
 	RADIANT_RADIO_DIAG_SRCH_CUT_ABORT, /* search frame in flight at an abort */
 	RADIANT_RADIO_DIAG_SRCH_END_NEAR_CLOSE, /* search END near the close */
+	/* page 8, fields 0-3 and 7 */
+	RADIANT_RADIO_DIAG_DRAIN_MAX_FRAMES, /* frames in the longest drain */
+	RADIANT_RADIO_DIAG_FRAME_MAX_US,   /* longest one-entry work, callback excluded */
+	RADIANT_RADIO_DIAG_CRC_MAX_US,     /* longest software CRC */
+	RADIANT_RADIO_DIAG_RX_CB_MAX_US,   /* longest synchronous rx callback */
+	RADIANT_RADIO_DIAG_DRAIN_OVER_250US, /* drains over RADIANT_DIAG_DRAIN_SLOW_US */
 	RADIANT_RADIO_DIAG_COUNT
 };
 
@@ -153,6 +195,10 @@ struct radiant_diag_core {
 	uint32_t trk_open_late;   /* bounded RX armed opening past its t_start */
 	uint32_t trk_open_late_max_us; /* the largest such lateness */
 	uint32_t trk_missed_behind_scan; /* bounded RX expired, scan chunk armed */
+	/* page 8, fields 4-6 (radiant_sched.c pass()) */
+	uint32_t pass_max_us;     /* longest pass, interrupts off */
+	uint32_t pass_steps_max;  /* most pass_step() iterations in one pass */
+	uint32_t pass_over_100us; /* passes over RADIANT_DIAG_PASS_SLOW_US */
 };
 
 extern struct radiant_diag_core radiant_diag_core;

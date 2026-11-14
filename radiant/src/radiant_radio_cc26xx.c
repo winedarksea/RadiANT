@@ -380,6 +380,9 @@ static struct {
 	uint32_t window_drops, crc_fail, alt_sync_hits;
 	uint32_t rxo_nok, rxo_buf_full;
 	uint32_t drain_max_us;
+	/* page 8 (timing) */
+	uint32_t drain_max_frames, frame_max_us, crc_max_us, rx_cb_max_us;
+	uint32_t drain_over_250us;
 	uint32_t min_lead_us;
 	uint32_t win_frames;   /* OK frames in the window now open */
 	bool     lead_seen;
@@ -1009,8 +1012,39 @@ static radiant_time_t rx_t_sync(uint32_t rat)
 	       (radiant_time_t)T_SYNC_CAL_US;
 }
 
-static void rx_drain_entries(void)
+/*
+ * 0xF7 page 8 timing, on the RAT like drain_max_us. Off, the clock reads 0 and
+ * the level macro only evaluates its argument, so the timing locals below
+ * compile away without unused-variable warnings.
+ */
+#if defined(CONFIG_RADIANT_DIAG_COUNTERS)
+static inline uint32_t cc_diag_t(void)
 {
+	return rat_raw();
+}
+
+static inline void cc_diag_level(uint32_t *field, uint32_t ticks)
+{
+	const uint32_t us = ticks / RAT_TICKS_PER_US;
+
+	if (us > *field) {
+		*field = us;
+	}
+}
+#define CC_DIAG_LEVEL(field, ticks) cc_diag_level(&cc_diag.field, (ticks))
+#else
+static inline uint32_t cc_diag_t(void)
+{
+	return 0u;
+}
+#define CC_DIAG_LEVEL(field, ticks) ((void)(ticks))
+#endif
+
+/* Returns the number of finished entries it examined. */
+static uint32_t rx_drain_entries(void)
+{
+	uint32_t frames = 0u;
+
 	for (;;) {
 		rfc_dataEntryGeneral_t *e =
 			(rfc_dataEntryGeneral_t *)rx_data[rx_read];
@@ -1022,10 +1056,14 @@ static void rx_drain_entries(void)
 		rfc_propRxStatus_t status;
 		struct radiant_rx_event evt;
 		int idx;
+		uint32_t t_entry;
+		uint32_t cb_ticks = 0u;
 
 		if (e == NULL || e->status != DATA_ENTRY_FINISHED) {
 			break;
 		}
+		frames++;
+		t_entry = cc_diag_t();
 
 		p = (const uint8_t *)(&e->data);
 		payload_len = (uint8_t)(st.sw_addr_len + st.fmt.body_len +
@@ -1101,7 +1139,12 @@ static void rx_drain_entries(void)
 			memcpy(&covered[n], body, st.fmt.body_len);
 			n += st.fmt.body_len;
 
-			got = crc_compute(&st.fmt.crc, covered, n);
+			{
+				const uint32_t t_crc = cc_diag_t();
+
+				got = crc_compute(&st.fmt.crc, covered, n);
+				CC_DIAG_LEVEL(crc_max_us, cc_diag_t() - t_crc);
+			}
 			want = ((uint32_t)body[st.fmt.body_len] << 8) |
 			       body[st.fmt.body_len + 1u];
 
@@ -1149,23 +1192,35 @@ static void rx_drain_entries(void)
 			RF_cancelCmd(st.rf_handle, st.cmd_handle, 0);
 			/* This frame is the window's terminal too. */
 			CC_DIAG(cc_diag.win_frames++; cc_diag.term_ok++);
+			CC_DIAG_LEVEL(frame_max_us, cc_diag_t() - t_entry);
 			if (st.cbs != NULL && st.cbs->rx != NULL) {
+				const uint32_t t_cb = cc_diag_t();
+
 				st.cbs->rx(&evt, st.user);
+				CC_DIAG_LEVEL(rx_cb_max_us, cc_diag_t() - t_cb);
 			}
-			return;
+			return frames;
 		}
 
 		CC_DIAG(if (evt.status == RADIANT_RADIO_STATUS_OK) {
 				cc_diag.win_frames++;
 			});
 		if (st.cbs != NULL && st.cbs->rx != NULL) {
+			const uint32_t t_cb = cc_diag_t();
+
 			st.cbs->rx(&evt, st.user);
+			cb_ticks = cc_diag_t() - t_cb;
+			CC_DIAG_LEVEL(rx_cb_max_us, cb_ticks);
 		}
 
 next:
+		/* This entry's own work, the core's callback excluded. */
+		CC_DIAG_LEVEL(frame_max_us, cc_diag_t() - t_entry - cb_ticks);
 		e->status = DATA_ENTRY_PENDING;
 		rx_read = (uint8_t)((rx_read + 1u) % RX_ENTRIES);
 	}
+
+	return frames;
 }
 
 /* rx_drain_entries() plus timing for the 0xF7 page. The drain is part of the
@@ -1175,14 +1230,19 @@ static void rx_drain(void)
 #if defined(CONFIG_RADIANT_DIAG_COUNTERS)
 	uint32_t t0 = rat_raw();
 	uint32_t us;
+	uint32_t frames;
 
-	rx_drain_entries();
+	frames = rx_drain_entries();
 	us = (rat_raw() - t0) / RAT_TICKS_PER_US;
 	if (us > cc_diag.drain_max_us) {
 		cc_diag.drain_max_us = us;
+		cc_diag.drain_max_frames = frames;
+	}
+	if (us > RADIANT_DIAG_DRAIN_SLOW_US) {
+		cc_diag.drain_over_250us++;
 	}
 #else
-	rx_drain_entries();
+	(void)rx_drain_entries();
 #endif
 }
 
@@ -1769,6 +1829,11 @@ uint8_t radiant_radio_diag_get(struct radiant_radio_diag *out)
 	out->v[RADIANT_RADIO_DIAG_DRAIN_MAX_US] = cc_diag.drain_max_us;
 	out->v[RADIANT_RADIO_DIAG_MIN_LEAD_US] = cc_diag.lead_seen
 		? cc_diag.min_lead_us : RADIANT_DIAG_NOT_MEASURED;
+	out->v[RADIANT_RADIO_DIAG_DRAIN_MAX_FRAMES] = cc_diag.drain_max_frames;
+	out->v[RADIANT_RADIO_DIAG_FRAME_MAX_US] = cc_diag.frame_max_us;
+	out->v[RADIANT_RADIO_DIAG_CRC_MAX_US] = cc_diag.crc_max_us;
+	out->v[RADIANT_RADIO_DIAG_RX_CB_MAX_US] = cc_diag.rx_cb_max_us;
+	out->v[RADIANT_RADIO_DIAG_DRAIN_OVER_250US] = cc_diag.drain_over_250us;
 	irq_unlock(key);
 
 	return RADIANT_DIAG_BACKEND_CC26XX;

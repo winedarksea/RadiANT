@@ -47,8 +47,10 @@ class Wire(unittest.TestCase):
         text = header_text()
         enum = re.findall(r"RADIANT_RADIO_DIAG_(\w+)(?: = 0)?,", text)
         enum = [e.lower() for e in enum if e != "COUNT"]
-        ours = d.PAGES[3][1] + d.PAGES[4][1] + d.PAGES[7][1][:3]
-        self.assertEqual(len(enum), 19)
+        timing = d.PAGES[8][1]
+        ours = (d.PAGES[3][1] + d.PAGES[4][1] + d.PAGES[7][1][:3]
+                + timing[:4] + timing[7:])
+        self.assertEqual(len(enum), 24)
         # The tool's names are the enum's, minus the prefix.
         self.assertEqual(ours, enum)
 
@@ -75,6 +77,22 @@ class Decode(unittest.TestCase):
         bad[1] = 2
         with self.assertRaises(ValueError):
             d.decode(bytes(bad))
+
+
+class Timing(unittest.TestCase):
+    def test_page_8_decodes_and_its_worst_cases_are_levels(self):
+        got = d.decode(body(8, [3, 120, 18, d.NOT_MEASURED, 90, 5, 2, 1],
+                            flags=1, backend=1))
+        self.assertEqual(got["name"], "timing")
+        self.assertIsNone(got["fields"]["rx_cb_max_us"])
+        a = {"8": d.decode(body(8, [3, 120, 18, 200, 90, 5, 2, 1]))}
+        b = {"8": d.decode(body(8, [4, 110, 18, 250, 95, 6, 7, 4]))}
+        out = d.diff(a, b)["8"]["fields"]
+        for level in ("drain_max_frames", "frame_max_us", "crc_max_us",
+                      "rx_cb_max_us", "pass_max_us", "pass_steps_max"):
+            self.assertEqual(out[level], b["8"]["fields"][level], level)
+        self.assertEqual(out["pass_over_100us"], 5)   # counts subtract
+        self.assertEqual(out["drain_over_250us"], 3)
 
 
 class Diff(unittest.TestCase):

@@ -5974,6 +5974,20 @@ ZTEST(api, test_diag_every_page_has_the_fixed_shape)
 	zassert_ok(antr_diag_page(RADIANT_DIAG_PAGE_HANDOFF, out));
 	zassert_equal(RADIANT_DIAG_NOT_MEASURED, diag_u32(out, 6u));
 	zassert_equal(RADIANT_DIAG_NOT_MEASURED, diag_u32(out, 7u));
+	/* Page 8's backend timing fields: the fake has no drain to time. */
+	zassert_ok(antr_diag_page(RADIANT_DIAG_PAGE_TIMING, out));
+	zassert_equal(RADIANT_DIAG_FLAG_UNMEASURED,
+		      out[2] & RADIANT_DIAG_FLAG_UNMEASURED);
+	zassert_equal(RADIANT_DIAG_NOT_MEASURED,
+		      diag_u32(out, RADIANT_DIAG_TIMING_DRAIN_MAX_FRAMES));
+	zassert_equal(RADIANT_DIAG_NOT_MEASURED,
+		      diag_u32(out, RADIANT_DIAG_TIMING_FRAME_MAX_US));
+	zassert_equal(RADIANT_DIAG_NOT_MEASURED,
+		      diag_u32(out, RADIANT_DIAG_TIMING_CRC_MAX_US));
+	zassert_equal(RADIANT_DIAG_NOT_MEASURED,
+		      diag_u32(out, RADIANT_DIAG_TIMING_RX_CB_MAX_US));
+	zassert_equal(RADIANT_DIAG_NOT_MEASURED,
+		      diag_u32(out, RADIANT_DIAG_TIMING_DRAIN_OVER_250US));
 	/* No page past the last, and no NULL buffer. */
 	zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
 		      antr_diag_page(RADIANT_DIAG_PAGES, out));
@@ -6002,6 +6016,30 @@ ZTEST(api, test_diag_counts_a_masters_turnaround_windows)
 	zassert_ok(antr_diag_page(RADIANT_DIAG_PAGE_MASTER_RX, out));
 	zassert_equal(dc->mrx_posted, diag_u32(out, 0u));
 	zassert_equal(dc->mrx_done_ok, diag_u32(out, 4u));
+	end_of_test();
+}
+
+/* Every scheduler pass is timed and its steps counted, and page 8 reports
+ * the core's three fields as they stand. */
+ZTEST(api, test_diag_times_the_scheduler_pass)
+{
+	const struct radiant_diag_core *dc = radiant_diag_core_get();
+	uint8_t out[RADIANT_DIAG_BODY_LEN];
+
+	(void)master_with_next_slot_posted();
+	(void)run_one_quiet_period();
+
+	zassert_true(dc->pass_steps_max >= 1u, "pass steps: %u",
+		     dc->pass_steps_max);
+	zassert_true(dc->pass_steps_max <= (2u * RADIANT_SCHED_MAX_CHANNELS) + 4u,
+		     "pass steps beyond the loop bound: %u", dc->pass_steps_max);
+	zassert_ok(antr_diag_page(RADIANT_DIAG_PAGE_TIMING, out));
+	zassert_equal(dc->pass_max_us,
+		      diag_u32(out, RADIANT_DIAG_TIMING_PASS_MAX_US));
+	zassert_equal(dc->pass_steps_max,
+		      diag_u32(out, RADIANT_DIAG_TIMING_PASS_STEPS_MAX));
+	zassert_equal(dc->pass_over_100us,
+		      diag_u32(out, RADIANT_DIAG_TIMING_PASS_OVER_100US));
 	end_of_test();
 }
 
