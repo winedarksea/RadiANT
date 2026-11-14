@@ -66,25 +66,30 @@ Items 1-4 DONE 2026-11-13, each through an independent review and re-review; ver
 - The radiant_sec.h pairing block and section 7.4 say two different shared secrets "cannot be made to match". `test_a_man_in_the_middle_cannot_match_both_fingerprints` tests only a MITM that does not grind.
 - Fix: a commitment, as in BLE numeric comparison: one side sends H(pub) before it sees the peer's key. Or correct the documented claim.
 
-## 5. [MEDIUM] A keyed but unarmed channel fails open in both directions
+## 5. [DONE 2026-11-13: 4d5d156, 55bf4c3, 4c12ebf] A keyed but unarmed channel fails open in both directions
+- Done: a keyed channel with no epoch (pending) withholds secured-range TX (RADIANT_SEC_EUNARMED) and drops secured-range RX (counted in dropped_policy); `is_secured` means keyed, so a pending master is posted by the pump and sends no plaintext ack. 0xF4 [30] holds state flags (bit 0 keyed, bit 1 armed), length 31, version 1. 4c12ebf: a withheld master skips the slots it let pass (it used to lag one period per pump, even for out-of-range pages and after 0xF3); this costs one clock read per master post in a security build. Security text 6848 B, ceiling 6656 -> 7168.
 - When `ctx_armed()` is false, `radiant_sec_tx_transform()` returns OK without transforming and `rx_ingest()` returns PLAIN (radiant_sec.c:840, :970). `radiant_sec_set_key()` clears `epoch_set`, so re-keying or completing a pairing on a live channel sends secured-range pages in plaintext, and accepts them unauthenticated, until the next 0xF3. 0xF4 does not report the armed flag, so a host cannot see it.
 - Fix: once a context exists with switches set, withhold TX and drop RX of secured-range pages until the epoch is set. Report "armed" in 0xF4 by appending a field. Per the beta rule, ANTR_SEC_STATUS_VERSION stays at 1.
 
-## 6. [MEDIUM, latent] Over-air enrolment replaces the group root instead of delivering it
+## 6. [DONE 2026-11-13: f330469, 4544e5c, 9be01e0] Over-air enrolment replaces the group root instead of delivering it
+- Done: the sensor wraps its existing root (compat first, else sec) under the pairwise DH key, CTR then trunc64 CMAC (domain 0x06), and sends it as 4 beacon frames for 3 passes after the window closes; its root is untouched. Receiver API `radiant_sec_pair_join()` + `radiant_sec_pair_accept_root()` (no app wiring yet). A rootless sensor installs the enrolment root and delivers that. The compat-only enrolment counter is `radiant_sec_compat_stats.enrolments` (not in 0xF4). Pairing text 3972 B / 4096.
 - `radiant_sec_pair_peer()` installs the DH-derived key with `radiant_sec_set_key()` on the sensor's own channel (radiant_sec_pair.c:405). Section 11.7 says enrolment is additive and gives the new receiver the existing root. No code does that: test_profile_enrol.c:1325 keys the peer with `compat_root` by hand.
 - As written, anyone who answers an open window locks out every existing receiver, and item 5 applies to the live channel at the same moment.
 - Fix: wrap the existing root under the DH key and send it, leaving the sensor's root untouched.
 
-## 7. [MEDIUM, latent] Compat epoch recovery allows a rollback
+## 7. [DONE 2026-11-13: c4cfe94] Compat epoch recovery allows a rollback
+- Done: `adopt_epoch()` refuses an epoch below the held one unless `RADIANT_SEC_COMPAT_ADOPT_REPROVISION`; the held epoch is a no-op that keeps the Tier I lock. Without the flag `recover_*` run only the forward phase from max(last_seen, held epoch) (65,537 probes, was 131,090). Scan bounds kept; comments now count epochs (each boot spends at least two).
 - `epoch_search()` probes 16 epochs backward and scans 0..65 536 absolute. `radiant_sec_compat_adopt_epoch()` (radiant/src/radiant_sec_compat.c:1468) has no monotonic check and clears the Tier I lock. The 24-bit hint is fixed per epoch, and boot-counter epochs always fall inside the scan. So a recorded beacon, plus recorded Tier I pages from any old session, rolls a receiver back and verifies.
 - Section 7.6 says the descriptor search runs forward only; the compat scan contradicts that for a receiver that already knows a newer epoch.
 - Fix: `adopt_epoch()` refuses `epoch < base_epoch` unless the caller passes an explicit re-provision flag, and the backward and scan paths require that flag.
 
-## 8. [MEDIUM, Tier II is off by default] Tier II windows have no replay floor
+## 8. [DONE 2026-11-13: e111889, e7024ce] Tier II windows have no replay floor
+- Done: the full 32-bit window index reaches the nonce ([10..11] carry the high half), and `rx_tier2()` refuses `window <= rx_t2_last` before the CMAC (`tier2_replays` stat); the floor rises only on VERIFIED and is cleared with the Tier I state. Compat object 4604 B with item 7, 4 B under the 4608 ceiling: the next compat change moves it. Left open: Tier II recovery works only from windows 0..65535; a sender that reconfigures mid-epoch can reuse a window index.
 - `rx_tier2()` resolves the 8-bit window index to the nearest of ±128 windows and keeps no high-water mark (radiant_sec_compat.c:948). A recorded window verifies again, any number of times, for about 4 minutes at N=8 and 4 Hz. The 16-bit index also rolls over inside an epoch (~36 h at N=8), when the same window verifies again.
 - Fix: a floor like Tier I's `rx_t1_last`, and either drive the epoch from the window index or carry more of it.
 
-## 9. [LOW] 0xF2 resets the epoch monotonicity gate
+## 9. [DONE 2026-11-13: 4d5d156] 0xF2 resets the epoch monotonicity gate
+- Done: `radiant_sec_set_key()` compares a key check value (CMAC(root, 0^16), cold path, not stored); the same root and devnum is a no-op that keeps the epoch, gate and ceiling, a different root clears them (pending, fail closed) and purges the queue. This also closes a re-send-the-node-root bypass of item 1's host-0xF3 refusal. Still open: `radiant_sec_compat_set_key()` resets the gate on a same-root call (same hole on the compat surface).
 - `radiant_sec_set_key()` clears `epoch_set` (radiant_sec.c:441), so a host can re-send the same key and then an older epoch, and both are accepted. D3 is only as strong as the host.
 - Fix: keep the epoch high-water mark across `set_key`, at least when the root is unchanged.
 
