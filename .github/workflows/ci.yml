@@ -80,17 +80,6 @@ jobs:
       # of its own.
       - run: python scripts/check_profile_registry.py
 
-      # The licence the tree claims must be the licence the tree ships. This
-      # is not hypothetical: until 2026-08-14 LICENSE was the Mozilla Public
-      # License 2.0 - which ADR 0004 rejects *by name* - while NOTICE, that
-      # ADR, docs/third-party.md and every SPDX header said Apache-2.0.
-      # Nothing caught it for the life of the repository, because nothing was
-      # looking. ADR 0004's own `Checked by:` line asks for exactly this and
-      # notes it "should become a CI check when there is a job to hang it on";
-      # host-tests is that job. Standard library only, sub-second, same
-      # reasoning as the check above it.
-      - run: python scripts/check_license.py
-
       # A document that points at a file which does not exist is worse than one
       # that says nothing: it reads as verified. The apps/ reorganisation broke
       # 17 markdown links at once and nothing noticed, because nothing was

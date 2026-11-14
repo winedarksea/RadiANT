@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+
 """Read the 0xF7 diagnostic pages (MESG_RADIANT_DIAG, ADR 0023).
 
     python tools/ant_diag.py --port COM11 --baud 57600 --json before.json
