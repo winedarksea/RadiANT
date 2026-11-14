@@ -55,13 +55,16 @@ extern "C" {
  * close), 3-5 the core's (bounded receive windows opened late, the worst
  * lateness, and bounded windows expired while a scan chunk held the radio).
  *
- * Fields 6-7 are reserved and read RADIANT_DIAG_NOT_MEASURED. They held "a
- * tracked slot opened just after the search heard the same device number, and
- * how many of those missed". The 2026-11-12 gate-3 run showed that count
- * cannot measure a hand-off cost: it only counts when the search HEARS a
- * frame, which the short match does nine times as often, so it grows with
- * discovery whatever made the slot miss (it read 100 % missed on the off
- * image too).
+ * Fields 6-7 are the backend's again: a transmit (6) and a receive window (7)
+ * whose start compare was written behind the counter, so the arm was refused
+ * ETIME at programming (the scheduler reports it MISSED). Expected 0 or single
+ * digits; a backend without such a check reads RADIANT_DIAG_NOT_MEASURED.
+ * Until 2026-11-14 they were reserved. Before that they held "a tracked slot
+ * opened just after the search heard the same device number, and how many of
+ * those missed". The 2026-11-12 gate-3 run showed that count cannot measure a
+ * hand-off cost: it only counts when the search HEARS a frame, which the short
+ * match does nine times as often, so it grows with discovery whatever made the
+ * slot miss (it read 100 % missed on the off image too).
  */
 #define RADIANT_DIAG_HANDOFF_SRCH_CUT_CLOSE        0u
 #define RADIANT_DIAG_HANDOFF_SRCH_CUT_ABORT        1u
@@ -69,6 +72,8 @@ extern "C" {
 #define RADIANT_DIAG_HANDOFF_TRK_OPEN_LATE         3u
 #define RADIANT_DIAG_HANDOFF_TRK_OPEN_LATE_MAX_US  4u
 #define RADIANT_DIAG_HANDOFF_TRK_MISSED_BEHIND_SCAN 5u
+#define RADIANT_DIAG_HANDOFF_TX_START_MISSED       6u
+#define RADIANT_DIAG_HANDOFF_RX_START_MISSED       7u
 
 /*
  * Page 8, timing (measurement only; 2026-11-13 performance review). Where a
@@ -126,7 +131,8 @@ extern "C" {
 
 /*
  * The backend table: pages 3 and 4 in this order, then page 7's first three
- * fields, then page 8's backend fields (0-3, then 7). Every backend fills every index it can measure and leaves the rest
+ * fields, then page 8's backend fields (0-3, then 7), then page 7's fields
+ * 6-7. Every backend fills every index it can measure and leaves the rest
  * RADIANT_DIAG_NOT_MEASURED (radiant_radio_diag_get()'s caller pre-fills them
  * so).
  */
@@ -159,6 +165,9 @@ enum radiant_radio_diag_idx {
 	RADIANT_RADIO_DIAG_CRC_MAX_US,     /* longest software CRC */
 	RADIANT_RADIO_DIAG_RX_CB_MAX_US,   /* longest synchronous rx callback */
 	RADIANT_RADIO_DIAG_DRAIN_OVER_250US, /* drains over RADIANT_DIAG_DRAIN_SLOW_US */
+	/* page 7, fields 6-7 */
+	RADIANT_RADIO_DIAG_TX_START_MISSED, /* transmit start compare behind the counter */
+	RADIANT_RADIO_DIAG_RX_START_MISSED, /* receive start compare behind the counter */
 	RADIANT_RADIO_DIAG_COUNT
 };
 

@@ -67,7 +67,8 @@ PAGES: dict[int, tuple[str, list[str]]] = {
     # (radiant_radio_diag_idx after min_lead_us); 0xFFFFFFFF on TI and null.
     7: ("handoff", ["srch_cut_close", "srch_cut_abort", "srch_end_near_close",
                     "trk_open_late", "trk_open_late_max_us",
-                    "trk_missed_behind_scan", "reserved6", "reserved7"]),
+                    "trk_missed_behind_scan", "tx_start_missed",
+                    "rx_start_missed"]),
     # 2026-11-13 timing page. Fields 0-3 and 7 are the backend table's tail
     # after srch_end_near_close; 0xFFFFFFFF on nRF. 4-6 are the scheduler's.
     8: ("timing", ["drain_max_frames", "frame_max_us", "crc_max_us",

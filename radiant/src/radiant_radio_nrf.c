@@ -65,10 +65,26 @@ static struct {
 	uint32_t frames, sw_mismatch, crc_fail;
 	/* Page 7: search frame cut by close or abort; END within RADIANT_DIAG_SRCH_NEAR_CLOSE_US of close. */
 	uint32_t srch_cut_close, srch_cut_abort, srch_end_near_close;
+	/* Page 7 fields 6-7: an arm's start compare written behind the counter (ETIME at programming). */
+	uint32_t tx_start_missed, rx_start_missed;
 } nrf_diag;
 #define NRF_DIAG(...) do { __VA_ARGS__; } while (0)
 #else
 #define NRF_DIAG(...) do { } while (0)
+#endif
+
+/*
+ * Bench diagnostic for the MPSL soak, logged by the gate's 5 s stats line
+ * (radiant_radio_nrf_gate_mpsl.c, "ARMDBG"): [0] a FAILED still owed for an
+ * in-grant programming failure, cleared by an abort; [1] grants released early
+ * on an in-grant ETIME; [2] transmit and [3] receive start compares written
+ * behind the counter. Compiled out of every other build.
+ */
+#if defined(CONFIG_RADIANT_GATE_MPSL_STATS_LOG)
+uint32_t radiant_arm_dbg[4];
+#define ARMDBG(i) (radiant_arm_dbg[(i)]++)
+#else
+#define ARMDBG(i) ((void)0)
 #endif
 
 /* Completions raised in an MPSL signal callback are queued, not run there (see core_cb_rx()). */
@@ -1340,8 +1356,19 @@ static int8_t rssi_sample_dbm(void)
 /*
  * A newly claimed operation is owed exactly one terminal event. A macro so the
  * three arm calls share it, beside `radiant_op.kind = OP_x` under the same irq_lock.
+ * Under the gate it also starts with no FAILED owed: gate_failed belongs to the
+ * operation whose grant failed, and no path may carry it into a new one (a
+ * claim needs the slot free, so the failed operation has had its terminal).
  */
+#if defined(CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL)
+#define CLAIM_TERMINAL()                                                       \
+	do {                                                                   \
+		radiant_op.terminal_sent = false;                              \
+		radiant_op.gate_failed = false;                                \
+	} while (0)
+#else
 #define CLAIM_TERMINAL() (radiant_op.terminal_sent = false)
+#endif
 
 /*
  * Not behind the GATE_MPSL #if: radiant_radio_enable()/disable() use these
@@ -2281,11 +2308,30 @@ fail:
  * Everything a transmit does to the peripheral, from the staged request. The
  * arm's body verbatim; see program_rx() for why it is a function.
  */
+/*
+ * A compare written behind the free-running counter never fires (until the 32-bit
+ * wrap, ~71 min). Nothing then reaches DISABLED either, so the operation would hold
+ * the scheduler's slot forever. program_rx() and program_tx() enable the start
+ * connection before writing the compare on channel cc, so "counter past start_cc
+ * with the event still clear" means the compare was written late. The capture
+ * comes first: read the other way round, a compare could fire unseen and a live
+ * operation would be called missed.
+ */
+static bool start_compare_missed(uint8_t cc, uint32_t start_cc)
+{
+	uint32_t now_cc = timer_capture(CC_NOW);
+
+	return (int32_t)(now_cc - start_cc) >= 0 &&
+	       !nrf_timer_event_check(TIMER_ADDR,
+				      nrf_timer_compare_event_get(cc));
+}
+
 static int program_tx(const struct radiant_tx_req *req)
 {
 	radiant_time_t now;
 	radiant_time_t t_start;
 	uint32_t lead;
+	uint32_t start_cc;
 	int rc;
 
 	rc = apply_format(req->fmt, req->rf_index, 0u, false);
@@ -2335,17 +2381,26 @@ static int program_tx(const struct radiant_tx_req *req)
 	nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_ADDRESS);
 	nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_DISABLED);
 
-	nrf_timer_cc_set(TIMER_ADDR, CC_TXSTART, clock_counter_at(t_start));
-	nrfx_gppi_conn_enable(radiant_op.conn_start_tx);
-
 	/*
-	 * Re-check after programming. If the counter has already passed the compare, the
-	 * compare never fires, and the operation holds the scheduler's one slot forever.
+	 * program_rx()'s order, for start_compare_missed(): park the compare (a stale
+	 * CC_TXSTART may sit just ahead of the counter), clear its event, enable the
+	 * connection, then write the real compare, so the only compare able to set the
+	 * event is this one. If the counter has already passed it, the compare never
+	 * fires and the operation would hold the scheduler's one slot forever. The
+	 * earlier order (compare, enable, then `t_start <= now`) could call a live
+	 * transmit late, or miss a compare that passed between the write and the enable.
 	 */
-	now = radiant_radio_now();
-	if (t_start <= now) {
+	start_cc = clock_counter_at(t_start);
+	nrf_timer_cc_set(TIMER_ADDR, CC_TXSTART, start_cc - 0x80000000u);
+	nrf_timer_event_clear(TIMER_ADDR, nrf_timer_compare_event_get(CC_TXSTART));
+	nrfx_gppi_conn_enable(radiant_op.conn_start_tx);
+	nrf_timer_cc_set(TIMER_ADDR, CC_TXSTART, start_cc);
+
+	if (start_compare_missed(CC_TXSTART, start_cc)) {
 		nrfx_gppi_conn_disable(radiant_op.conn_start_tx);
 		nrf_radio_shorts_set(NRF_RADIO, 0);
+		NRF_DIAG(nrf_diag.tx_start_missed++);
+		ARMDBG(2);
 		return RADIANT_RADIO_ETIME;
 	}
 
@@ -2357,23 +2412,6 @@ static int program_tx(const struct radiant_tx_req *req)
 }
 
 /* ---- Receive ---- */
-
-/*
- * A compare written behind the free-running counter never fires (until the 32-bit
- * wrap, ~71 min). Nothing then reaches DISABLED either, so the operation would hold
- * the scheduler's slot forever. program_rx() enables conn_start before writing the
- * compare, so "counter past start_cc with the event still clear" means the compare
- * was written late. The capture comes first: read the other way round, a compare
- * could fire unseen and a live window would be called missed.
- */
-static bool start_compare_missed(uint32_t start_cc)
-{
-	uint32_t now_cc = timer_capture(CC_NOW);
-
-	return (int32_t)(now_cc - start_cc) >= 0 &&
-	       !nrf_timer_event_check(TIMER_ADDR,
-				      nrf_timer_compare_event_get(CC_START));
-}
 
 /*
  * Everything a receive window does to the peripheral, from the staged request. Kept
@@ -2495,7 +2533,7 @@ static int program_rx(const struct radiant_rx_req *req)
 	}
 
 	/*
-	 * Order matters for start_compare_missed(). Park the compare first, since a stale
+	 * Order matters for start_compare_missed() (program_tx() follows it). Park the compare first, since a stale
 	 * CC_START may sit just ahead of the counter. Then clear the event and enable the
 	 * connection, so the only compare able to set the event is the real one. The
 	 * endpoints were wired at init; only the enable is per operation.
@@ -2510,13 +2548,15 @@ static int program_rx(const struct radiant_rx_req *req)
 	/* Receive only. Enabled and disabled with the others, so "which connections are live" has one answer. */
 	nrfx_gppi_conn_enable(radiant_op.conn_rssi);
 
-	if (start_compare_missed(start_cc)) {
+	if (start_compare_missed(CC_START, start_cc)) {
 		/* ETIME unwinds as in the early check: the scheduler reports MISSED and retries. */
 		nrfx_gppi_conn_disable(radiant_op.conn_start);
 		nrfx_gppi_conn_disable(radiant_op.conn_close);
 		nrfx_gppi_conn_disable(radiant_op.conn_rssi);
 		nrf_radio_shorts_set(NRF_RADIO, 0);
 		radiant_dbg_start_late++;
+		NRF_DIAG(nrf_diag.rx_start_missed++);
+		ARMDBG(3);
 		return RADIANT_RADIO_ETIME;
 	}
 
@@ -3122,8 +3162,18 @@ void radiant_nrf_gate_on_grant(void)
 		 * delivered here: this runs inside the grant's signal callback, and
 		 * a terminal here would run the completion callback, a scheduler
 		 * pass, and possibly another arm before this callback can return.
+		 *
+		 * The grant is released now, not held to its TIMER0 end: nothing is
+		 * programmed (the ETIME paths leave no connection enabled and no
+		 * SHORTS set), so its remaining air is the other stack's. SIGNAL_START
+		 * sees release_wanted and ends the timeslot at once; the hand-back
+		 * (radio_endpoints_attach(false)) runs from that path, and
+		 * end_housekeeping() has denied_work_fn() report FAILED from thread
+		 * context as before.
 		 */
 		radiant_op.gate_failed = true;
+		ARMDBG(1);
+		gate_release();
 	}
 }
 
@@ -3383,6 +3433,17 @@ int radiant_radio_abort(void)
 	/* A staged, unprogrammed operation has nothing to tear down. Clearing the flag under the lock stops a grant in flight from arming it. */
 	was_staged = radiant_staged.pending;
 	radiant_staged.pending = false;
+#if defined(CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL)
+	/*
+	 * A FAILED still owed for a grant whose programming failed belongs to this
+	 * operation, which ends ABORTED below. Left set, denied_work_fn() would
+	 * deliver it to whatever operation is armed next.
+	 */
+	if (radiant_op.gate_failed) {
+		radiant_op.gate_failed = false;
+		ARMDBG(0);
+	}
+#endif
 	irq_unlock(key);
 	/* Owed, not paid, when aborted from the core's own completion (see the grant handoff note). */
 	grant_release_after_core();
@@ -3870,6 +3931,8 @@ uint8_t radiant_radio_diag_get(struct radiant_radio_diag *out)
 	out->v[RADIANT_RADIO_DIAG_SRCH_CUT_CLOSE] = nrf_diag.srch_cut_close;
 	out->v[RADIANT_RADIO_DIAG_SRCH_CUT_ABORT] = nrf_diag.srch_cut_abort;
 	out->v[RADIANT_RADIO_DIAG_SRCH_END_NEAR_CLOSE] = nrf_diag.srch_end_near_close;
+	out->v[RADIANT_RADIO_DIAG_TX_START_MISSED] = nrf_diag.tx_start_missed;
+	out->v[RADIANT_RADIO_DIAG_RX_START_MISSED] = nrf_diag.rx_start_missed;
 	/* Page 8's backend fields (drain frames/frame/CRC/callback time, slow
 	 * drains) stay RADIANT_DIAG_NOT_MEASURED: this backend trusts the
 	 * hardware CRC and delivers each frame from its own interrupt, with no

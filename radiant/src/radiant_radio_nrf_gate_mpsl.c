@@ -1274,9 +1274,10 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		radiant_nrf_gate_on_grant();
 
 		if (g.release_wanted) {
-			/* Completed synchronously, or nothing was staged. A programming failure
-			 * (ETIME) does not come here: it sets radiant_op.gate_failed, the grant
-			 * runs to its TIMER0 end, and end_housekeeping() reports FAILED then. */
+			/* Completed synchronously, nothing was staged, or programming failed
+			 * (ETIME). A failure sets radiant_op.gate_failed and releases, so its
+			 * unused air goes back now rather than at the TIMER0 end (A14-1), and
+			 * end_housekeeping() has denied_work_fn() report FAILED. */
 			g.granted = false;
 			timer0_disarm();
 			end_housekeeping();
@@ -1726,6 +1727,7 @@ static void gate_stats_fn(struct k_work *w);
 static K_WORK_DELAYABLE_DEFINE(gate_stats_work, gate_stats_fn);
 
 extern uint32_t radiant_d2_dbg[8];
+extern uint32_t radiant_arm_dbg[4];
 
 static void gate_stats_fn(struct k_work *w)
 {
@@ -1762,6 +1764,9 @@ static void gate_stats_fn(struct k_work *w)
 		radiant_d2_dbg[0], radiant_d2_dbg[1], radiant_d2_dbg[2],
 		radiant_d2_dbg[3], radiant_d2_dbg[4], radiant_d2_dbg[5],
 		radiant_d2_dbg[6]);
+	LOG_INF("ARMDBG abort_clr=%u etime_rel=%u tx_miss=%u rx_miss=%u",
+		radiant_arm_dbg[0], radiant_arm_dbg[1], radiant_arm_dbg[2],
+		radiant_arm_dbg[3]);
 	LOG_INF("D2STAT pl=%u gr=%u bl=%u s0=%u/%u/%u s1=%u/%u/%u ext=%u/%u "
 		"near=%u eag=%u dl=%u",
 		stats.placed, stats.granted, stats.blocked, ss[0].n_placed,

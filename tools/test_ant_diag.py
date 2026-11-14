@@ -49,8 +49,8 @@ class Wire(unittest.TestCase):
         enum = [e.lower() for e in enum if e != "COUNT"]
         timing = d.PAGES[8][1]
         ours = (d.PAGES[3][1] + d.PAGES[4][1] + d.PAGES[7][1][:3]
-                + timing[:4] + timing[7:])
-        self.assertEqual(len(enum), 24)
+                + timing[:4] + timing[7:] + d.PAGES[7][1][6:])
+        self.assertEqual(len(enum), 26)
         # The tool's names are the enum's, minus the prefix.
         self.assertEqual(ours, enum)
 

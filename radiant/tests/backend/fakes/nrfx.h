@@ -91,13 +91,23 @@ typedef uint32_t nrfx_gppi_handle_t;
 #define RADIO_TXPOWER_TXPOWER_Pos7dBm  7
 #define RADIO_TXPOWER_TXPOWER_Pos8dBm  8
 
-/* The model a test drives. */
+/*
+ * The model a test drives. The TIMER counts only when software captures it:
+ * each capture advances the counter by counter_step (1 if 0) and then latches
+ * it, and a compare whose value the counter passed through on the way, (old,
+ * new], raises its event, as the real compare fires on reaching its value. A
+ * compare written at or behind the counter never fires. (D)PPI connections
+ * are bits in conn_on, by handle.
+ */
 struct fake_hw {
 	bool     event[FAKE_RADIO_EVENT_COUNT];
 	bool     crc_ok;
 	uint32_t shorts;
 	uint32_t counter;
+	uint32_t counter_step;
 	uint32_t cc[8];
+	bool     tev[8];
+	uint32_t conn_on;
 };
 extern struct fake_hw fake_hw;
 
@@ -126,11 +136,25 @@ static inline uint32_t nrf_radio_task_address_get(NRF_RADIO_Type *r, nrf_radio_t
 static inline nrf_timer_task_t nrf_timer_capture_task_get(uint8_t cc) { return (nrf_timer_task_t)cc; }
 static inline nrf_timer_event_t nrf_timer_compare_event_get(uint8_t cc) { return cc; }
 static inline void nrf_timer_task_trigger(NRF_TIMER_Type *t, nrf_timer_task_t task)
-{ (void)t; if ((int)task < 8) { fake_hw.cc[(int)task] = fake_hw.counter++; } }
+{
+	(void)t;
+	if ((int)task < 8) {
+		uint32_t old = fake_hw.counter;
+		uint32_t step = (fake_hw.counter_step != 0u) ? fake_hw.counter_step : 1u;
+
+		fake_hw.counter = old + step;
+		for (int c = 0; c < 8; c++) {
+			if ((uint32_t)(fake_hw.cc[c] - old - 1u) < step) {
+				fake_hw.tev[c] = true;
+			}
+		}
+		fake_hw.cc[(int)task] = fake_hw.counter;
+	}
+}
 static inline uint32_t nrf_timer_cc_get(NRF_TIMER_Type *t, uint8_t cc) { (void)t; return fake_hw.cc[cc]; }
 static inline void nrf_timer_cc_set(NRF_TIMER_Type *t, uint8_t cc, uint32_t v) { (void)t; fake_hw.cc[cc] = v; }
-static inline bool nrf_timer_event_check(NRF_TIMER_Type *t, nrf_timer_event_t e) { (void)t; (void)e; return false; }
-static inline void nrf_timer_event_clear(NRF_TIMER_Type *t, nrf_timer_event_t e) { (void)t; (void)e; }
+static inline bool nrf_timer_event_check(NRF_TIMER_Type *t, nrf_timer_event_t e) { (void)t; return fake_hw.tev[e]; }
+static inline void nrf_timer_event_clear(NRF_TIMER_Type *t, nrf_timer_event_t e) { (void)t; fake_hw.tev[e] = false; }
 static inline void nrf_timer_mode_set(NRF_TIMER_Type *t, nrf_timer_mode_t m) { (void)t; (void)m; }
 static inline void nrf_timer_bit_width_set(NRF_TIMER_Type *t, nrf_timer_bit_width_t w) { (void)t; (void)w; }
 static inline void nrf_timer_prescaler_set(NRF_TIMER_Type *t, uint32_t p) { (void)t; (void)p; }
@@ -148,7 +172,7 @@ static inline void NVIC_DisableIRQ(int n) { (void)n; }
 
 static inline int nrfx_gppi_conn_alloc(uint32_t e, uint32_t t, nrfx_gppi_handle_t *h)
 { (void)e; (void)t; *h = 1u; return 0; }
-static inline void nrfx_gppi_conn_enable(nrfx_gppi_handle_t h) { (void)h; }
-static inline void nrfx_gppi_conn_disable(nrfx_gppi_handle_t h) { (void)h; }
+static inline void nrfx_gppi_conn_enable(nrfx_gppi_handle_t h) { fake_hw.conn_on |= (1u << (h & 31u)); }
+static inline void nrfx_gppi_conn_disable(nrfx_gppi_handle_t h) { fake_hw.conn_on &= ~(1u << (h & 31u)); }
 
 #endif

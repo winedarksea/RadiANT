@@ -4186,8 +4186,10 @@ antr_err_t antr_diag_page(uint8_t page, uint8_t *out)
 		v[RADIANT_DIAG_HANDOFF_TRK_OPEN_LATE] = dc->trk_open_late;
 		v[RADIANT_DIAG_HANDOFF_TRK_OPEN_LATE_MAX_US] = dc->trk_open_late_max_us;
 		v[RADIANT_DIAG_HANDOFF_TRK_MISSED_BEHIND_SCAN] = dc->trk_missed_behind_scan;
-		v[6] = RADIANT_DIAG_NOT_MEASURED; /* reserved, see radiant_diag.h */
-		v[7] = RADIANT_DIAG_NOT_MEASURED;
+		v[RADIANT_DIAG_HANDOFF_TX_START_MISSED] =
+			rd.v[RADIANT_RADIO_DIAG_TX_START_MISSED];
+		v[RADIANT_DIAG_HANDOFF_RX_START_MISSED] =
+			rd.v[RADIANT_RADIO_DIAG_RX_START_MISSED];
 		break;
 	case RADIANT_DIAG_PAGE_TIMING:
 		v[RADIANT_DIAG_TIMING_DRAIN_MAX_FRAMES] =

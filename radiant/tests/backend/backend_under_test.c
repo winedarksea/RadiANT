@@ -36,6 +36,8 @@
 
 #include "../../src/radiant_radio_nrf.c"
 
+#include <radiant/radiant_frame.h>
+
 #include "backend_probe.h"
 
 NRF_RADIO_Type fake_radio_regs;
@@ -175,5 +177,69 @@ void backend_dispatch(void)
 }
 
 uint32_t backend_releases(void) { return fg.releases; }
+
+/* ---- Arm-time and in-grant failure paths (TODO "Left open by the 2026-11-08 clearance") ---- */
+
+#define BACKEND_CONN_TX 3u
+
+static uint8_t btx_body[RADIANT_RADIO_BODY_MAX];
+
+static void backend_late_tx_req(struct radiant_tx_req *req, uint32_t d_us)
+{
+	uint32_t lead;
+
+	memset(req, 0, sizeof(*req));
+	req->fmt = radiant_frame_format(RADIANT_FRAME_CFG_TRACKING);
+	req->addr_len = req->fmt->addr_len;
+	req->body = btx_body;
+	req->body_len = req->fmt->body_len;
+	lead = air_lead_us(req->fmt->phy, req->addr_len) + (uint32_t)T_SYNC_CAL_TX_US;
+	req->t_sync_at = radiant_radio_now() + (radiant_time_t)lead + d_us;
+}
+
+int backend_program_tx(uint32_t d_us, uint32_t step)
+{
+	struct radiant_tx_req req;
+
+	radiant_op.conn_start_tx = BACKEND_CONN_TX;
+	fake_hw.counter_step = step;
+	backend_late_tx_req(&req, d_us);
+	return program_tx(&req);
+}
+
+bool backend_tx_conn_live(void) { return (fake_hw.conn_on & (1u << BACKEND_CONN_TX)) != 0u; }
+uint32_t backend_shorts(void) { return fake_hw.shorts; }
+
+void backend_grant_late_tx(void)
+{
+	/* A transmit staged behind a grant that arrives after its t_sync. */
+	radiant_op.inited = true;
+	radiant_op.kind = OP_TX;
+	radiant_op.conn_start_tx = BACKEND_CONN_TX;
+	backend_late_tx_req(&radiant_staged.tx, 0u);
+	radiant_staged.tx.t_sync_at -= 1000u;
+	radiant_staged.pending = true;
+	radiant_nrf_gate_on_grant();
+}
+
+void backend_set_gate_failed(void) { radiant_op.gate_failed = true; }
+bool backend_gate_failed(void) { return radiant_op.gate_failed; }
+void backend_finish_failed(void) { radiant_nrf_gate_finish_failed(); }
+
+int backend_abort(void)
+{
+	radiant_op.inited = true;
+	return radiant_radio_abort();
+}
+
+/* The next operation takes the slot, as an arm would, but without
+ * CLAIM_TERMINAL(), so a test can tell which of the two cleared the flag. */
+void backend_take_slot_unclaimed(void)
+{
+	radiant_op.kind = OP_RX;
+	radiant_op.terminal_sent = false;
+}
+
+void backend_claim_terminal(void) { CLAIM_TERMINAL(); }
 bool     backend_grant_held(void) { return fg.held; }
 bool     backend_op_retired(void) { return radiant_op.kind == OP_NONE; }

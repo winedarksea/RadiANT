@@ -5970,7 +5970,8 @@ ZTEST(api, test_diag_every_page_has_the_fixed_shape)
 	zassert_equal(IS_ENABLED(CONFIG_RADIANT_SEARCH_COVERAGE)
 			      ? 0u : RADIANT_DIAG_NOT_MEASURED,
 		      diag_u32(out, 7u));
-	/* Page 7's last two fields are reserved (see radiant_diag.h). */
+	/* Page 7's last two fields are the backend's start-compare misses;
+	 * the fake backend measures none (see radiant_diag.h). */
 	zassert_ok(antr_diag_page(RADIANT_DIAG_PAGE_HANDOFF, out));
 	zassert_equal(RADIANT_DIAG_NOT_MEASURED, diag_u32(out, 6u));
 	zassert_equal(RADIANT_DIAG_NOT_MEASURED, diag_u32(out, 7u));
