@@ -1591,6 +1591,54 @@ ZTEST(sec_compat_stream, test_adopting_the_held_epoch_keeps_the_replay_floor)
 	zassert_equal(1u, st.tier1_verified);
 }
 
+ZTEST(sec_compat_stream, test_the_same_root_again_keeps_the_compat_epoch_gate)
+{
+	/* Item 9 on the compat surface: re-installing the root a channel holds
+	 * is a no-op, so it is no way to set an older epoch (a rollback) and
+	 * no gap in a locked stream. A different root closes the gate. */
+	static const uint8_t other_root[16] = {
+		0x0f, 0x1e, 0x2d, 0x3c, 0x4b, 0x5a, 0x69, 0x78,
+		0x87, 0x96, 0xa5, 0xb4, 0xc3, 0xd2, 0xe1, 0xf0,
+	};
+	struct radiant_sec_compat_stats st;
+	uint8_t                         air[RADIANT_SEC_COMPAT_MSG_BYTES];
+	uint8_t                         air2[RADIANT_SEC_COMPAT_MSG_BYTES];
+	uint64_t                        t;
+	uint64_t                        t2;
+
+	setup_pair(RADIANT_SEC_COMPAT_SW_TIER_I, RADIANT_SEC_COMPAT_SW_TIER_I,
+		   909u, 909u);
+	t = tier1_page(T_ORIGIN, 1u, 0u, air);
+	zassert_equal(RADIANT_SEC_OK, deliver(air, t));
+
+	zassert_ok(radiant_sec_compat_set_key(RX_CH, compat_root, 128,
+					      TEST_DEVNUM));
+	zassert_equal(RADIANT_SEC_EINVAL,
+		      radiant_sec_compat_set_epoch(RX_CH, 909u, T_ORIGIN, 0u,
+						   TEST_PERIOD));
+	zassert_equal(RADIANT_SEC_EINVAL,
+		      radiant_sec_compat_set_epoch(RX_CH, 908u, T_ORIGIN, 0u,
+						   TEST_PERIOD));
+	/* Still locked: the recorded page is still spent, the next verifies. */
+	zassert_equal(RADIANT_SEC_EREPLAY, deliver(air, t + PERIOD_US));
+	t2 = tier1_page(T_ORIGIN, 2u, 0u, air2);
+	zassert_equal(RADIANT_SEC_OK, deliver(air2, t2));
+	radiant_sec_compat_get_stats(RX_CH, &st);
+	zassert_equal(2u, st.tier1_verified);
+
+	/* A different base device number is a different key set. */
+	zassert_ok(radiant_sec_compat_set_key(RX_CH, compat_root, 128,
+					      TEST_DEVNUM + 1u));
+	zassert_ok(radiant_sec_compat_set_epoch(RX_CH, 5u, T_ORIGIN, 0u,
+						TEST_PERIOD));
+
+	/* A different root closes the gate: any epoch is accepted next. */
+	zassert_ok(radiant_sec_compat_set_key(RX_CH, other_root, 128,
+					      TEST_DEVNUM));
+	zassert_ok(radiant_sec_compat_set_epoch(RX_CH, 3u, T_ORIGIN, 0u,
+						TEST_PERIOD));
+}
+
 ZTEST(sec_compat_stream, test_a_search_that_matches_nothing_still_ends)
 {
 	/* The claim that makes every number above safe in a receiver's event

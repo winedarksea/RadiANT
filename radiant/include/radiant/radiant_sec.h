@@ -477,6 +477,16 @@ int  radiant_sec_key_import(struct radiant_sec_key *k, const uint8_t *raw,
 void radiant_sec_key_destroy(struct radiant_sec_key *k);
 
 /*
+ * INTERNAL, for the two set_key cold paths (radiant_sec.c and
+ * radiant_sec_compat.c): is `root` the key `held` already holds? Compared by
+ * key check value, CMAC(key, 0^16) under each, so an opaque handle works too;
+ * the value is never stored or reported. `*same` is written only on
+ * RADIANT_SEC_OK. Lives in radiant_sec.c.
+ */
+int  radiant_sec_key_same(const struct radiant_sec_key *held,
+			  const uint8_t *root, size_t bits, bool *same);
+
+/*
  * ── Level 2: modes. radiant_sec.c calls ONLY these. ────────────────────────
  */
 

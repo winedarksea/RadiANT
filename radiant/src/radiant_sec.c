@@ -451,14 +451,15 @@ __weak void radiant_sec_epoch_wanted(uint8_t ch, uint32_t epoch)
 static void q_purge(uint8_t ch);
 
 /*
- * Is `root` the root this context already holds? Compared by key check value,
+ * Is `root` the root `held` already holds? Compared by key check value,
  * CMAC(key, 0^16) under each, because a handle may be opaque (a hardware slot)
  * and its bytes cannot be read back. Never stored and never reported, so it
- * costs no RAM and discloses nothing; set_key's cold path only. The KDF's
- * messages start with the counter byte 0x01, so 0^16 is no KDF input.
+ * costs no RAM and discloses nothing; the set_key cold paths only (this
+ * file's and radiant_sec_compat.c's). The KDF's messages start with the
+ * counter byte 0x01, so 0^16 is no KDF input.
  */
-static int root_matches(const struct sec_ctx *c, const uint8_t *root,
-			size_t bits, bool *same)
+int radiant_sec_key_same(const struct radiant_sec_key *held,
+			 const uint8_t *root, size_t bits, bool *same)
 {
 	struct radiant_sec_key k;
 	uint8_t                zero[RADIANT_SEC_BLOCK_BYTES];
@@ -474,7 +475,7 @@ static int root_matches(const struct sec_ctx *c, const uint8_t *root,
 	rc = radiant_sec_cmac(&k, zero, sizeof(zero), kcv_new);
 	radiant_sec_key_destroy(&k);
 	if (rc == RADIANT_SEC_OK) {
-		rc = radiant_sec_cmac(&c->k_root, zero, sizeof(zero), kcv_old);
+		rc = radiant_sec_cmac(held, zero, sizeof(zero), kcv_old);
 	}
 	if (rc == RADIANT_SEC_OK) {
 		*same = radiant_sec_ct_equal(kcv_old, kcv_new, sizeof(kcv_new));
@@ -528,7 +529,7 @@ int radiant_sec_set_key(uint8_t ch, const uint8_t *root, size_t bits,
 		 * no-op - epoch, armed state, ceiling and windows kept - so it
 		 * is neither a gap nor a reset of D3's monotonicity gate. A
 		 * failed import or KCV leaves the context untouched. */
-		rc = root_matches(c, root, bits, &same);
+		rc = radiant_sec_key_same(&c->k_root, root, bits, &same);
 		if (rc != RADIANT_SEC_OK) {
 			return rc;
 		}
@@ -549,8 +550,8 @@ int radiant_sec_set_key(uint8_t ch, const uint8_t *root, size_t bits,
 			sec_of[ch] = 0xFFu;
 		} else {
 			/* The old root is gone and the new one did not take
-			 * (it imported a moment ago in root_matches()): no
-			 * root at all, so no context. */
+			 * (it imported a moment ago in radiant_sec_key_same()):
+			 * no root at all, so no context. */
 			radiant_sec_channel_release(ch);
 		}
 		return rc;

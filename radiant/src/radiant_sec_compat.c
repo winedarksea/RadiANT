@@ -441,6 +441,19 @@ int radiant_sec_compat_set_key(uint8_t ch, const uint8_t *root, size_t bits,
 		if (c == NULL) {
 			return RADIANT_SEC_ENOTSUP;
 		}
+	} else {
+		bool same = false;
+
+		/* The same root and base device number again is a no-op, as in
+		 * radiant_sec_set_key(): the epoch, the gate and the ceiling
+		 * stay, so a re-send is no way to set an older epoch. */
+		rc = radiant_sec_key_same(&c->k_root, root, bits, &same);
+		if (rc != RADIANT_SEC_OK) {
+			return rc;
+		}
+		if (same && base_devnum == c->base_devnum) {
+			return RADIANT_SEC_OK;
+		}
 	}
 
 	rc = radiant_sec_key_import(&c->k_root, root, bits);
