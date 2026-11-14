@@ -59,6 +59,7 @@ __all__ = [
     "decode_status", "encode_status",
     "switches_str", "verdict_str",
     "VERDICT_LEN", "decode_verdict", "encode_verdict", "verdict_covers",
+    "VerdictResolver",
     "X25519_BYTES", "PAIR_TIMEOUT_DEFAULT_S",
     "encode_pair_enter", "encode_pair_leave", "encode_pair_scalar",
     "encode_pair_exchange", "decode_pair_reply", "fingerprint_str",
@@ -375,32 +376,43 @@ def verdict_str(verdict: int) -> str:
 # ── 0xF8: one window's verdict ──────────────────────────────────────────────
 #
 # Sent unsolicited, but only on a channel whose 0xF1 set SW_VERDICT_EVENT. It
-# follows every packet it covers in the same queue, so a host that wants
-# per-packet trust holds each secured BROADCAST_DATA until its window's 0xF8
-# arrives - and treats one whose verdict never comes as unverified.
+# follows every packet it covers in the same queue. A verdict is only safe to
+# act on under the host rule in protocol/ant_wire.yaml (0xF8) and
+# docs/radiant-security.md 3.2, which VerdictResolver below implements: the
+# first covering verdict after a packet binds it, a sequence gap or a queue
+# overflow settles everything pending as unverified, and so does a deadline.
 
-VERDICT_LEN = 5
+VERDICT_LEN = 6
 
 
 def decode_verdict(body: bytes) -> dict:
-    """Body of MESG_RADIANT_SEC_VERDICT_ID: [ch, verdict, window_start LE, W].
+    """Body of MESG_RADIANT_SEC_VERDICT_ID:
+    [ch, verdict, window_start LE, W, seq].
 
     A longer body decodes the fields named here (fields are only appended).
+    A verdict other than verified/unverified, or a W the firmware cannot
+    have, is refused rather than guessed at.
     """
     if len(body) < VERDICT_LEN:
         raise ValueError(
             f"0xF8 body is {len(body)} bytes, want at least {VERDICT_LEN}")
+    if body[1] not in (VERDICT_VERIFIED, VERDICT_UNVERIFIED):
+        raise ValueError(f"0xF8 verdict {body[1]} is neither verified nor "
+                         "unverified")
+    if body[4] not in LEGAL_W:
+        raise ValueError(f"0xF8 W={body[4]} is not one of {LEGAL_W}")
     window_start, = struct.unpack_from("<H", body, 2)
     return {
         "channel": body[0],
         "verdict": body[1],
         "window_start": window_start,
         "w": body[4],
+        "seq": body[5],
     }
 
 
 def encode_verdict(channel: int, verdict: int, window_start: int,
-                   w: int) -> bytes:
+                   w: int, seq: int = 0) -> bytes:
     """The firmware's side, for tests and simulators."""
     _check_channel(channel)
     if verdict not in (VERDICT_VERIFIED, VERDICT_UNVERIFIED):
@@ -410,20 +422,113 @@ def encode_verdict(channel: int, verdict: int, window_start: int,
     if not 0 <= window_start <= 0xFFFF or window_start % w:
         raise ValueError(
             f"window_start {window_start} is not a 16-bit multiple of W={w}")
-    return bytes([channel, verdict]) + struct.pack("<H", window_start) +         bytes([w])
+    if not 0 <= seq <= 0xFF:
+        raise ValueError(f"seq {seq} does not fit in a byte")
+    return (bytes([channel, verdict]) + struct.pack("<H", window_start) +
+            bytes([w, seq]))
 
 
-def verdict_covers(verdict: dict, payload: bytes) -> bool:
-    """Does this 0xF8 judge the secured page `payload` (8 bytes, as in
-    BROADCAST_DATA after the channel byte)?
+def verdict_covers(verdict: dict, channel: int, payload: bytes,
+                   page_lo: int, page_hi: int) -> bool:
+    """Could this 0xF8 judge `payload` (8 bytes, BROADCAST_DATA after the
+    channel byte) received on `channel`?
 
-    Byte [1] of a secured page is the counter's low 8 bits, so the packet is
-    in the window when (byte1 - window_start) mod 256 < W - unambiguous
-    because W <= 8 and the event follows its packets within 2W periods.
+    Only a page inside the channel's secured range [page_lo, page_hi] (0xF4
+    [4..5]) on the SAME channel is ever judged: a page outside it reaches the
+    host in the clear and is never verified, whatever its byte [1] says.
+
+    For a covered page, byte [1] is the counter's low 8 bits, so it is in the
+    window when (byte1 - window_start) mod 256 < W, unambiguous since W <= 8.
+    "Could" because matching is necessary, not sufficient: only the FIRST
+    covering verdict after the packet is the packet's (VerdictResolver).
     """
     if len(payload) < 2:
         raise ValueError("a secured page has at least two bytes")
+    if channel != verdict["channel"]:
+        return False
+    if not page_lo <= payload[0] <= page_hi:
+        return False
     return ((payload[1] - verdict["window_start"]) & 0xFF) < verdict["w"]
+
+
+class VerdictResolver:
+    """The host rule for 0xF8, for one channel. Feed it what arrives, in order.
+
+    data(payload, t)        a BROADCAST_DATA on this channel, at time t (s);
+                            returns VERDICT_CLEAR at once for a page outside
+                            the secured range, else None (pending)
+    verdict(body)           a 0xF8 for this channel
+    overflow()              EVENT_QUE_OVERFLOW / EVENT_SERIAL_QUE_OVERFLOW, or
+                            a loss the transport reported
+    expire(now)             settle packets pending longer than the deadline
+    flush()                 CHANNEL_CLOSED, the host's own 0xF1/0xF3, reset
+
+    Each settled packet is appended to `.settled` as (payload, verdict). A
+    packet is settled exactly once: by the first covering verdict after it,
+    or as unverified by a gap, an overflow, the deadline or a flush.
+    """
+
+    def __init__(self, channel: int, w: int, period_s: float,
+                 page_lo: int = PAGE_LO_MIN, page_hi: int = 0x0F,
+                 slack_s: float = 0.25):
+        self.channel = channel
+        self.w = w
+        self.page_lo = page_lo
+        self.page_hi = page_hi
+        # A genuine verdict comes on the last packet of the NEXT window,
+        # at most 2W-1 periods after the packet.
+        self.deadline_s = (2 * w - 1) * period_s + slack_s
+        self.pending: list[tuple[bytes, float]] = []
+        self.settled: list[tuple[bytes, int]] = []
+        self.next_seq: int | None = None
+
+    def data(self, payload: bytes, t: float):
+        if not self.page_lo <= payload[0] <= self.page_hi:
+            self.settled.append((bytes(payload), VERDICT_CLEAR))
+            return VERDICT_CLEAR
+        self.pending.append((bytes(payload), t))
+        return None
+
+    def _settle_all(self, how: int) -> None:
+        for p, _ in self.pending:
+            self.settled.append((p, how))
+        self.pending = []
+
+    def verdict(self, body: bytes) -> None:
+        v = decode_verdict(body)
+        if v["channel"] != self.channel:
+            raise ValueError(f"0xF8 for channel {v['channel']} fed to the "
+                             f"resolver for {self.channel}")
+        if self.next_seq is not None and v["seq"] != self.next_seq:
+            # Lost verdicts: whatever they would have said, nothing pending
+            # may be resolved by a later one. Settled BEFORE this verdict.
+            self._settle_all(VERDICT_UNVERIFIED)
+        self.next_seq = (v["seq"] + 1) & 0xFF
+        keep = []
+        for p, t in self.pending:
+            if verdict_covers(v, self.channel, p, self.page_lo, self.page_hi):
+                self.settled.append((p, v["verdict"]))
+            else:
+                keep.append((p, t))
+        self.pending = keep
+
+    def overflow(self) -> None:
+        self._settle_all(VERDICT_UNVERIFIED)
+
+    def expire(self, now: float) -> None:
+        keep = []
+        for p, t in self.pending:
+            if now - t > self.deadline_s:
+                self.settled.append((p, VERDICT_UNVERIFIED))
+            else:
+                keep.append((p, t))
+        self.pending = keep
+
+    def flush(self) -> None:
+        self._settle_all(VERDICT_UNVERIFIED)
+        # The firmware restarts seq at the host's 0xF1; after a close it may
+        # jump. Either way the next verdict starts a fresh expectation.
+        self.next_seq = None
 
 
 # ── 0xF5: pairing ───────────────────────────────────────────────────────────
