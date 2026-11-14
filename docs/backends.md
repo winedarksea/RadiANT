@@ -553,7 +553,10 @@ nothing:
 - The acknowledgement window now reserves `NEXT_PACKET_US` (1550 µs) past
   its close (`arm_ack_window()`), which covers the retry and the next packet.
   Before, it reserved nothing, so `in_reserve()` was false for both and they
-  were always budgeted the fresh-arm lead, whatever the caps said.
+  were always budgeted the fresh-arm lead, whatever the caps said. Since
+  2026-11-14 a one-packet transfer's window (acknowledged data) reserves
+  nothing again: it has no next packet and is never retried, and under coex
+  the reserve extends the RF core's `endTime`, holding the other client's air.
 - The non-coex cc26xx declares `min_arm_lead_in_grant_us` = 400 µs
   (`IN_GRANT_LEAD_US`, between the 150 µs `ARM_FLOOR_US` and the 600 µs
   `MIN_ARM_LEAD_US`). The RF core is awake and nothing arbitrates, so a

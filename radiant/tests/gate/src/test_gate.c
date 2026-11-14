@@ -1266,6 +1266,10 @@ ZTEST(radiant_gate, test_a_follow_on_is_served_only_while_the_grant_is_held)
  * acknowledged message failed on MPSL builds. The window must be served, and
  * its follow-on clipped at grant_end.
  *
+ * Since 2026-11-14 a one-packet transfer's window (acknowledged data) carries
+ * no follow-on at all, since nothing can follow it; a multi-packet burst's
+ * still carries NEXT_PACKET_US, which is the case this test keeps.
+ *
  * Instants are the backend's (radiant_radio_tx()/radiant_radio_rx()): the
  * transmit's air runs to the CRC's last bit, a window's from t_open less the
  * address airtime to t_close plus the longest frame. One ANT frame after

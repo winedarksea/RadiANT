@@ -1154,6 +1154,82 @@ ZTEST(transfer, test_a_single_packet_transfer_is_never_retried)
 	end_of_test();
 }
 
+/* Transmit the armed data packet and return the acknowledgement window it
+ * opened, checked to be that window and not an older arm. */
+static const struct fake_radio_arm *ack_window_after_tx(void)
+{
+	const struct fake_radio_arm *tx;
+	const struct fake_radio_arm *rx;
+
+	zassert_true(fake_radio_step(), "the data packet never transmitted");
+	zassert_equal(RADIANT_TRANSFER_STATE_WAIT_ACK, radiant_transfer_state(&xfer));
+	tx = last_arm_of(FAKE_RADIO_ARM_TX);
+	rx = last_arm_of(FAKE_RADIO_ARM_RX);
+	zassert_not_null(tx);
+	zassert_not_null(rx);
+	zassert_true(rx->t_open > tx->t_sync_at, "no window after the data packet");
+	return rx;
+}
+
+/*
+ * The acknowledgement window's reserve (follow_on_us) is air for what follows
+ * it: the next packet, or a retry of this one. A one-packet transfer has
+ * neither (retry_packet() refuses it), so its window reserves nothing; an
+ * arbiter would otherwise hold 1550 us of the other stack's air per
+ * acknowledged message for nothing (on the CC26x2 under coex the RF core's end
+ * moves out by it). Every packet of a multi-packet burst keeps the reserve,
+ * the last one included, since it may still be retried.
+ */
+ZTEST(transfer, test_only_a_transfer_that_can_follow_up_reserves_air_after_its_window)
+{
+	uint8_t payload[RADIANT_TRANSFER_PKT_BYTES];
+
+	/* A one-packet burst. */
+	reset_blocks();
+	queue_block(0u, 8u, RADIANT_TRANSFER_SEG_START | RADIANT_TRANSFER_SEG_END,
+		    0x60u);
+	zassert_true(feed_next_block());
+	zassert_equal(0u, ack_window_after_tx()->follow_on_us,
+		      "a one-packet burst's window reserved air");
+	air_the_ack();
+	zassert_true(fake_radio_step());
+	zassert_equal(1u, n_ev);
+	zassert_equal(RADIANT_TRANSFER_EV_TX_COMPLETED, evlog[0].ev);
+
+	/* Acknowledged data, which is one. */
+	memset(payload, 0x6Bu, sizeof(payload));
+	zassert_equal(RADIANT_TRANSFER_OK,
+		      radiant_transfer_ack_data(&xfer, payload,
+					    RADIANT_TRANSFER_PKT_BYTES,
+					    RADIANT_TIME_NEVER));
+	commit();
+	zassert_equal(0u, ack_window_after_tx()->follow_on_us,
+		      "acknowledged data's window reserved air");
+	air_the_ack();
+	zassert_true(fake_radio_step());
+	zassert_equal(2u, n_ev);
+	zassert_equal(RADIANT_TRANSFER_EV_TX_COMPLETED, evlog[1].ev);
+
+	/* A two-packet burst: both windows keep it. */
+	reset_blocks();
+	queue_block(0u, 16u, RADIANT_TRANSFER_SEG_START | RADIANT_TRANSFER_SEG_END,
+		    0x70u);
+	zassert_true(feed_next_block());
+	zassert_equal(RADIANT_TRANSFER_NEXT_PACKET_US,
+		      ack_window_after_tx()->follow_on_us, "packet 0");
+	air_the_ack();
+	zassert_true(fake_radio_step());
+	zassert_equal(RADIANT_TRANSFER_NEXT_PACKET_US,
+		      ack_window_after_tx()->follow_on_us,
+		      "the last packet, which may still be retried");
+	air_the_ack();
+	zassert_true(fake_radio_step());
+	zassert_equal(3u, n_ev);
+	zassert_equal(RADIANT_TRANSFER_EV_TX_COMPLETED, evlog[2].ev);
+
+	end_of_test();
+}
+
 /* A slave's packet 0 is retried on the master's next reply window, which the
  * owner projects (ops->retry_t_sync), not 3110 us after the miss: the master
  * only listens at its own slot + 2190 us. Without the hook it is not retried

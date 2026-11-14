@@ -199,6 +199,15 @@ static bool answered_on_slot_turnaround(uint8_t ctrl, bool repeat)
 	return radiant_ctrl_is_slot_opener(ctrl) && !repeat;
 }
 
+/* The packet on the air is the transfer's first and last at once: a
+ * one-packet burst, or acknowledged data, which is one. Nothing follows its
+ * acknowledgement window - no next packet, and no retry (Rev 5.1 sec 5.4.3;
+ * retry_packet()). */
+static bool one_packet_transfer(const struct radiant_transfer *t)
+{
+	return t->pkt_index == 0u && radiant_ctrl_is_last(t->cur_ctrl);
+}
+
 static int arm_tx(struct radiant_transfer *t, uint8_t ctrl,
 		  const uint8_t *payload, uint8_t payload_len,
 		  radiant_time_t t_sync_at, bool repeat)
@@ -335,8 +344,14 @@ static int arm_ack_window(struct radiant_transfer *t, radiant_time_t t_data_sync
 	 * Without it both were armed at a fresh reservation's lead, and on a
 	 * backend whose window ends late (the CC26x2 holds 508 us past t_close,
 	 * caps.rx_close_hold_us) the retry missed that lead by ~20 us and the
-	 * transfer failed (archive/benchmarks/2026-11-12-ti-findings/). */
-	req.follow_on_us = RADIANT_TRANSFER_NEXT_PACKET_US;
+	 * transfer failed (archive/benchmarks/2026-11-12-ti-findings/).
+	 *
+	 * A one-packet transfer (acknowledged data) has neither, so it reserves
+	 * nothing: under an arbiter the reserve is the other stack's air (the
+	 * cc26xx coex build moves the RF core's end out by it; MPSL clips it at
+	 * the grant's end), held 1550 us per acknowledged message for nothing. */
+	req.follow_on_us = one_packet_transfer(t) ?
+			   0u : (uint16_t)RADIANT_TRANSFER_NEXT_PACKET_US;
 
 	rc = radiant_sched_request_rx(t->cfg.channel, &req);
 	if (rc != RADIANT_RADIO_OK_RC) {
@@ -502,8 +517,9 @@ static bool retry_packet(struct radiant_transfer *t)
 	    t->data_t_sync == RADIANT_TIME_NEVER) {
 		return false;
 	}
-	/* A single-packet burst: first packet and last packet at once. */
-	if (t->pkt_index == 0u && radiant_ctrl_is_last(t->cur_ctrl)) {
+	/* A single-packet burst: first packet and last packet at once. Its
+	 * window reserved no air for a retry (arm_ack_window()). */
+	if (one_packet_transfer(t)) {
 		return false;
 	}
 

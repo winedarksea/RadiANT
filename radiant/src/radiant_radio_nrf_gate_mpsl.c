@@ -2062,7 +2062,8 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 		 * grant; requiring the follow-on to fit refused the originator's ACK window
 		 * (follow-on NEXT_PACKET_US since e042a10, ~1.5 ms past the data packet's
 		 * grant) and every originated acknowledged message failed on MPSL builds.
-		 * Whatever is later armed into the clipped part (a retry, a burst's next
+		 * (A one-packet transfer's window carries no follow-on since 2026-11-14;
+		 * a multi-packet burst's still does.) Whatever is later armed into the clipped part (a retry, a burst's next
 		 * packet) is refused by this same test and fails as before e042a10.
 		 */
 		if (t_from >= now &&
