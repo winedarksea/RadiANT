@@ -209,8 +209,7 @@ static void compat_up(struct profile_compat *pc)
 	cfg.window = TEST_N;
 	cfg.mode = PROFILE_COMPAT_MODE_FIXED;
 
-	zassert_equal(0, profile_compat_init(pc, &cfg),
-		      "the compat client refused to initialise");
+	zassert_equal(0, profile_compat_init(pc, &cfg));
 }
 
 /* ── The two sensors ────────────────────────────────────────────────────── */
@@ -275,9 +274,7 @@ static void run_hr(struct profile_hr *hr, struct profile_compat *pc,
 		profile_hr_set_operating_time(hr, i / 4u);
 
 		kind = profile_hr_next(hr, now, body);
-		zassert_not_equal(PROFILE_SLOT_IDLE, kind,
-				  "slot %u went silent; a periodic ANT+ master "
-				  "has nothing to be silent about", i);
+		zassert_not_equal(PROFILE_SLOT_IDLE, kind, "slot %u", i);
 		log_put(body, kind);
 
 		if (pc != NULL) {
@@ -304,8 +301,7 @@ static void run_power(struct profile_power *pw, struct profile_compat *pc,
 		profile_power_event(pw, 200u, 80u);
 
 		kind = profile_power_next(pw, now, body);
-		zassert_not_equal(PROFILE_SLOT_IDLE, kind, "slot %u went silent",
-				  i);
+		zassert_not_equal(PROFILE_SLOT_IDLE, kind, "slot %u", i);
 		log_put(body, kind);
 
 		if (pc != NULL) {
@@ -351,15 +347,13 @@ ZTEST(profile_compat, test_hr_keeps_the_119_120_121_interleave)
 					 PROFILE_COMPAT_PAGE_MASK);
 
 		if ((i % PROFILE_TLM_CYCLE) == PROFILE_TLM_SLOT_PAGE_80) {
-			zassert_equal(PROFILE_COMMON_PAGE_80, page,
-				      "message %u should be page 80", i);
+			zassert_equal(PROFILE_COMMON_PAGE_80, page, "message %u", i);
 		} else if ((i % PROFILE_TLM_CYCLE) == PROFILE_TLM_SLOT_PAGE_81) {
-			zassert_equal(PROFILE_COMMON_PAGE_81, page,
-				      "message %u should be page 81", i);
+			zassert_equal(PROFILE_COMMON_PAGE_81, page, "message %u", i);
 		} else {
 			zassert_true(page != PROFILE_COMMON_PAGE_80 &&
 					     page != PROFILE_COMMON_PAGE_81,
-				     "a common page turned up at message %u", i);
+				     "message %u", i);
 		}
 	}
 }
@@ -389,9 +383,7 @@ ZTEST(profile_compat, test_hr_emits_no_page_outside_the_allocation)
 				   page == PROFILE_COMMON_PAGE_82;
 
 		zassert_true(ant_plus || profile_compat_is_compat_page(page),
-			     "message %u carries page 0x%02X, which is neither "
-			     "an ANT+ heart-rate page nor one of the two "
-			     "allocated compat numbers", i, page);
+			     "message %u page 0x%02X", i, page);
 	}
 
 	/* Every one of the profile's own pages appeared: a rotation stuck on
@@ -426,9 +418,7 @@ ZTEST(profile_compat, test_the_toggle_counts_transmitted_messages)
 		bool want = ((i / PROFILE_HR_TOGGLE_INTERVAL) & 1u) != 0u;
 		bool got = (log_buf[i].body[0] & PROFILE_HR_PAGE_TOGGLE) != 0u;
 
-		zassert_equal(want, got,
-			      "message %u carries toggle %d, expected %d", i,
-			      (int)got, (int)want);
+		zassert_equal(want, got, "message %u", i);
 	}
 }
 
@@ -462,13 +452,9 @@ ZTEST(profile_compat, test_the_beacon_is_one_frame_per_cycle_and_alternates)
 		index = (uint8_t)((b[1] >> 4) & 0x0Fu);
 		count = (uint8_t)((b[1] & 0x0Fu) + 1u);
 
-		zassert_equal(PROFILE_COMPAT_BEACON_FRAMES, count,
-			      "the beacon set is two frames in the steady "
-			      "state");
-		zassert_equal(expect_index, index,
-			      "beacon frames must alternate; message %u carries "
-			      "frame %u", i, index);
-		zassert_equal(0u, b[7], "beacon byte [7] is reserved");
+		zassert_equal(PROFILE_COMPAT_BEACON_FRAMES, count);
+		zassert_equal(expect_index, index, "message %u", i);
+		zassert_equal(0u, b[7]);
 		expect_index = (uint8_t)((expect_index + 1u) %
 					 PROFILE_COMPAT_BEACON_FRAMES);
 		seen++;
@@ -482,9 +468,7 @@ ZTEST(profile_compat, test_the_beacon_is_one_frame_per_cycle_and_alternates)
 	 * cycles (the first run of this suite did, which is why
 	 * profile_compat.c owes the frame instead of dropping it).
 	 */
-	zassert_equal(CYCLES, seen,
-		      "expected one beacon frame per cycle, got %u in %u cycles",
-		      seen, CYCLES);
+	zassert_equal(CYCLES, seen, "got %u in %u", seen, CYCLES);
 }
 
 /* ═══ The attestation half ═══════════════════════════════════════════════ */
@@ -512,13 +496,11 @@ ZTEST(profile_compat, test_tier1_pages_ride_the_stream_and_verify)
 	 * four intervals plus the one served at t = 0. The exact count is the
 	 * point - a Tier I page every slot would also verify, but at 100%
 	 * airtime instead of the 1.2% this tier is meant to cost. */
-	zassert_true(emitted >= 4u && emitted <= 6u,
-		     "expected ~5 Tier I pages in %u slots, got %u", SLOTS,
-		     emitted);
+	zassert_true(emitted >= 4u && emitted <= 6u, "slots %u got %u", SLOTS, emitted);
 
 	radiant_sec_compat_get_stats(RX_CH, &st);
 	zassert_equal(emitted, st.tier1_verified,
-		      "%u Tier I pages went out and %u verified", emitted,
+		      "%u sent, %u verified", emitted,
 		      st.tier1_verified);
 	zassert_equal(0u, st.tier1_unverified);
 	zassert_equal(RADIANT_SEC_VERDICT_VERIFIED,
@@ -548,8 +530,7 @@ ZTEST(profile_compat, test_a_strap_with_no_compat_layer_is_stock_ant_plus)
 					 PROFILE_COMPAT_PAGE_MASK);
 
 		zassert_false(profile_compat_is_compat_page(page),
-			      "message %u carries compat page 0x%02X on a node "
-			      "that has no compat layer", i, page);
+			      "message %u page 0x%02X", i, page);
 	}
 }
 
@@ -632,21 +613,17 @@ ZTEST(profile_compat, test_tier1_leaves_within_the_receivers_jitter_allowance)
 		profile_hr_set_operating_time(&hr, i / 4u);
 
 		kind = profile_hr_next(&hr, now, body);
-		zassert_not_equal(PROFILE_SLOT_IDLE, kind, "slot %u went silent",
-				  i);
+		zassert_not_equal(PROFILE_SLOT_IDLE, kind, "slot %u", i);
 
 		if (sub_of(body) == RADIANT_SEC_COMPAT_SUBTYPE_TIER_I) {
 			uint32_t k = (uint32_t)body[1] | ((uint32_t)body[2] << 8);
 			uint64_t start = T_ORIGIN + (uint64_t)k * t_us;
 			uint64_t slip;
 
-			zassert_true(now >= start,
-				     "interval %u's page left before it began", k);
+			zassert_true(now >= start, "interval %u", k);
 			slip = now - start;
 			zassert_true(slip <= 4u * period,
-				     "interval %u's Tier I page left %u us into "
-				     "it, past the receiver's 4-period jitter "
-				     "allowance", k, (uint32_t)slip);
+				     "interval %u slip %u", k, (uint32_t)slip);
 			if (slip > max_slip) {
 				max_slip = slip;
 			}
@@ -660,8 +637,7 @@ ZTEST(profile_compat, test_tier1_leaves_within_the_receivers_jitter_allowance)
 		rc = radiant_sec_compat_rx(RX_CH, sub_of(body), body, 8u,
 					   now + skew);
 		zassert_equal(RADIANT_SEC_OK, rc,
-			      "message %u (page 0x%02X) refused at the "
-			      "receiver: %d", i, body[0], rc);
+			      "message %u page 0x%02X: %d", i, body[0], rc);
 		if (sub_of(body) == RADIANT_SEC_COMPAT_SUBTYPE_TIER_II) {
 			windows++;
 		}
@@ -673,23 +649,21 @@ ZTEST(profile_compat, test_tier1_leaves_within_the_receivers_jitter_allowance)
 		 (uint32_t)max_slip, (uint32_t)(4u * period), st.tier2_verified,
 		 st.tier2_unverified);
 
-	zassert_true(pages >= 99u, "only %u Tier I pages", pages);
-	zassert_true(max_slip > period,
-		     "no Tier I page slipped a whole slot in %u intervals, so "
-		     "the scenario is not exercising the seam", pages);
+	zassert_true(pages >= 99u, "pages %u", pages);
+	zassert_true(max_slip > period, "intervals %u", pages);
 
 	zassert_equal(0u, st.tier1_replays,
-		      "%u genuine pages refused as late", st.tier1_replays);
-	zassert_equal(pages, st.tier1_verified, NULL);
+		      "%u late", st.tier1_replays);
+	zassert_equal(pages, st.tier1_verified);
 	/* Resolved against the phase Tier I taught the receiver: against the
 	 * five-day-wrong one it held before, no window could verify. And ALL of
 	 * them, not "more than not": with no packet lost, an unverified window
 	 * is a defect (before the owed-tag fix, 17 of 998 were). */
-	zassert_true(windows >= 900u, "only %u Tier II windows", windows);
+	zassert_true(windows >= 900u, "windows %u", windows);
 	zassert_equal(windows, st.tier2_verified,
-		      "Tier II windows: %u sent, %u verified, %u not", windows,
+		      "%u sent, %u ok, %u not", windows,
 		      st.tier2_verified, st.tier2_unverified);
-	zassert_equal(0u, st.tier2_unverified, NULL);
+	zassert_equal(0u, st.tier2_unverified);
 }
 
 /* ═══ Bicycle power, the other compat target ═════════════════════════════ */
@@ -721,10 +695,8 @@ ZTEST(profile_compat, test_power_keeps_the_interleave_and_its_own_pages)
 		 * number, so it is compared unmasked - a stray toggle bit would
 		 * make page 0x10 into page 0x90 and this is where that shows. */
 		zassert_true(ant_plus || profile_compat_is_compat_page(page),
-			     "message %u carries page 0x%02X", i, page);
-		zassert_false((page & PROFILE_COMPAT_PAGE_TOGGLE) != 0u,
-			      "message %u has bit 7 set on a device type with "
-			      "no page-change toggle", i);
+			     "message %u page 0x%02X", i, page);
+		zassert_false((page & PROFILE_COMPAT_PAGE_TOGGLE) != 0u, "message %u", i);
 
 		if ((i % PROFILE_TLM_CYCLE) == PROFILE_TLM_SLOT_PAGE_80) {
 			zassert_equal(PROFILE_COMMON_PAGE_80, page);

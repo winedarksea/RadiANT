@@ -210,7 +210,7 @@ static int slot_run(uint32_t slot, bool deliver, int corrupt_bit, uint8_t *air,
 	int      rc;
 
 	sub = radiant_sec_compat_tx_attest(TX_CH, t, body, sizeof(body));
-	zassert_true(sub >= 0, "the emit hook refused: %d", sub);
+	zassert_true(sub >= 0, "%d", sub);
 
 	if (sub > 0) {
 		pay[0] = (uint8_t)(PAGE_BASE | (uint8_t)sub);
@@ -268,7 +268,7 @@ static uint64_t tier1_from(uint64_t t, uint8_t *air)
 
 	for (i = 0u; i < 16u; i++, t += PERIOD_US) {
 		sub = radiant_sec_compat_tx_attest(TX_CH, t, body, sizeof(body));
-		zassert_true(sub >= 0, "the emit hook refused: %d", sub);
+		zassert_true(sub >= 0, "%d", sub);
 		if (sub > 0) {
 			air[0] = (uint8_t)(PAGE_BASE | (uint8_t)sub);
 			memcpy(&air[1], body, sizeof(body));
@@ -284,7 +284,7 @@ static uint64_t tier1_from(uint64_t t, uint8_t *air)
 			return t;
 		}
 	}
-	zassert_unreachable("no Tier I page in 16 consecutive slots");
+	zassert_unreachable("no Tier I page in 16 slots");
 	return 0u;
 }
 
@@ -345,29 +345,24 @@ ZTEST(sec_compat_stream, test_tier1_emits_at_T_and_verifies_on_receipt)
 	for (i = 0u; i < 500u; i++) {
 		if (slot_run(i, true, -1, NULL, &rx_rc) > 0) {
 			emitted++;
-			zassert_equal(RADIANT_SEC_OK, rx_rc,
-				      "a Tier I page did not verify ON RECEIPT, "
-				      "which is the only property this tier "
-				      "has");
+			zassert_equal(RADIANT_SEC_OK, rx_rc);
 		}
 	}
 
 	zassert_equal(7u, emitted,
-		      "expected one page per %u s interval over 500 slots, got "
-		      "%u", (unsigned)TEST_T_S, emitted);
+		      "%u", emitted);
 
 	/* The compatibility claim as arithmetic: 1.2% of slots keeps
 	 * authentication cheaper than the 1.65% ANT+ itself spends on common
 	 * pages 80/81. */
 	zassert_true(emitted * 100u <= 500u * 2u,
-		     "Tier I took %u of 500 slots; the claim is ~1.2%%",
-		     emitted);
+		     "%u", emitted);
 
 	radiant_sec_compat_get_stats(RX_CH, &st);
-	zassert_equal(emitted, st.tier1_verified, NULL);
-	zassert_equal(0u, st.tier1_unverified, NULL);
+	zassert_equal(emitted, st.tier1_verified);
+	zassert_equal(0u, st.tier1_unverified);
 	zassert_equal(emitted, verdicts(RADIANT_SEC_COMPAT_SUBTYPE_TIER_I,
-					RADIANT_SEC_VERDICT_VERIFIED), NULL);
+					RADIANT_SEC_VERDICT_VERIFIED));
 }
 
 ZTEST(sec_compat_stream, test_every_delivered_tier1_page_verifies_through_loss)
@@ -398,7 +393,7 @@ ZTEST(sec_compat_stream, test_every_delivered_tier1_page_verifies_through_loss)
 		drop = ((seed >> 16) % 100u) < 20u;
 
 		sub = radiant_sec_compat_tx_attest(TX_CH, t, body, sizeof(body));
-		zassert_true(sub >= 0, NULL);
+		zassert_true(sub >= 0);
 		if (sub > 0) {
 			pay[0] = (uint8_t)(PAGE_BASE | (uint8_t)sub);
 			memcpy(&pay[1], body, sizeof(body));
@@ -423,21 +418,16 @@ ZTEST(sec_compat_stream, test_every_delivered_tier1_page_verifies_through_loss)
 		zassert_equal(RADIANT_SEC_OK,
 			      radiant_sec_compat_rx(RX_CH, sub_of(pay), pay,
 						    sizeof(pay), t),
-			      "a delivered Tier I page failed to verify after "
-			      "%u surrounding packets were lost", lost);
+			      "lost %u", lost);
 	}
 
-	zassert_true(lost > 50u, "the loss model dropped almost nothing (%u)",
-		     lost);
-	zassert_equal(7u, emitted, NULL);
+	zassert_true(lost > 50u, "lost %u", lost);
+	zassert_equal(7u, emitted);
 
 	radiant_sec_compat_get_stats(RX_CH, &st);
 	zassert_equal(emitted, st.tier1_verified,
-		      "%u of %u delivered pages verified with %u packets lost "
-		      "around them", st.tier1_verified, emitted, lost);
-	zassert_equal(0u, st.tier1_unverified,
-		      "loss elsewhere unverified a Tier I page; the tag covers "
-		      "no payload and cannot depend on it");
+		      "%u of %u, lost %u", st.tier1_verified, emitted, lost);
+	zassert_equal(0u, st.tier1_unverified);
 }
 
 ZTEST(sec_compat_stream, test_a_replayed_tier1_page_is_rejected_by_the_counter)
@@ -458,25 +448,21 @@ ZTEST(sec_compat_stream, test_a_replayed_tier1_page_is_rejected_by_the_counter)
 		if (slot_run(i, true, -1, air, &rx_rc) > 0) {
 			memcpy(captured, air, sizeof(captured));
 			have = true;
-			zassert_equal(RADIANT_SEC_OK, rx_rc, NULL);
+			zassert_equal(RADIANT_SEC_OK, rx_rc);
 		}
 	}
-	zassert_true(have, "no Tier I page was emitted at all");
+	zassert_true(have);
 
 	/* The recording, replayed later. Its tag is perfectly valid - the
 	 * counter is what makes the replay worthless. */
 	zassert_equal(RADIANT_SEC_EREPLAY,
 		      radiant_sec_compat_rx(RX_CH, sub_of(captured), captured,
-					    sizeof(captured), t_of(300u)),
-		      "a replayed Tier I page was accepted");
+					    sizeof(captured), t_of(300u)));
 
 	radiant_sec_compat_get_stats(RX_CH, &st);
-	zassert_equal(1u, st.tier1_replays,
-		      "the replay must be counted, or it is invisible to a host");
-	zassert_equal(1u, st.tier1_verified,
-		      "the replay was counted as a fresh verification");
-	zassert_equal(0u, st.tier1_unverified,
-		      "a replay is not a forgery and must not be counted as one");
+	zassert_equal(1u, st.tier1_replays);
+	zassert_equal(1u, st.tier1_verified);
+	zassert_equal(0u, st.tier1_unverified);
 }
 
 ZTEST(sec_compat_stream, test_a_skipped_page_is_unverified_on_a_pinned_receiver)
@@ -496,9 +482,7 @@ ZTEST(sec_compat_stream, test_a_skipped_page_is_unverified_on_a_pinned_receiver)
 	/* Before anything has arrived, a pinned receiver is not entitled to
 	 * call the stream verified. */
 	zassert_equal(RADIANT_SEC_VERDICT_UNVERIFIED,
-		      radiant_sec_compat_stream_verdict(RX_CH, t_of(0u)),
-		      "a pinned receiver reported something other than "
-		      "UNVERIFIED before any attestation arrived");
+		      radiant_sec_compat_stream_verdict(RX_CH, t_of(0u)));
 
 	/* Deliver exactly one page, then skip every one after it. */
 	for (i = 0u; i < 200u; i++) {
@@ -512,13 +496,12 @@ ZTEST(sec_compat_stream, test_a_skipped_page_is_unverified_on_a_pinned_receiver)
 			emitted++;
 		}
 	}
-	zassert_true(emitted >= 3u, "not enough pages were emitted to skip one");
+	zassert_true(emitted >= 3u);
 
 	/* Inside the horizon: verified, and it is an IDENTITY claim. */
 	zassert_equal(RADIANT_SEC_VERDICT_VERIFIED,
 		      radiant_sec_compat_stream_verdict(RX_CH,
-							t_first_page + 1000u),
-		      NULL);
+							t_first_page + 1000u));
 
 	/* One interval of slack and no more: a single lost page at the ~0.4%
 	 * floor is ordinary, but two consecutive misses (~1.6e-5) are a
@@ -526,15 +509,12 @@ ZTEST(sec_compat_stream, test_a_skipped_page_is_unverified_on_a_pinned_receiver)
 	zassert_equal(RADIANT_SEC_VERDICT_VERIFIED,
 		      radiant_sec_compat_stream_verdict(
 			      RX_CH, t_first_page +
-					     (uint64_t)TEST_T_S * 1000000u + 1u),
-		      "one missing page unpinned the stream");
+					     (uint64_t)TEST_T_S * 1000000u + 1u));
 	zassert_equal(RADIANT_SEC_VERDICT_UNVERIFIED,
 		      radiant_sec_compat_stream_verdict(
 			      RX_CH, t_first_page +
 					     (uint64_t)RADIANT_SEC_COMPAT_STALE_INTERVALS *
-						     TEST_T_S * 1000000u),
-		      "a skipped attestation page read as anything but "
-		      "UNVERIFIED. CLEAR here would be the downgrade");
+						     TEST_T_S * 1000000u));
 
 	/* The other half of the claim: unpinned, the same silence is CLEAR, not
 	 * UNVERIFIED - otherwise the distinction is decorative. */
@@ -543,8 +523,7 @@ ZTEST(sec_compat_stream, test_a_skipped_page_is_unverified_on_a_pinned_receiver)
 						   RADIANT_SEC_COMPAT_SW_TIER_I,
 						   TEST_N, TEST_T_S));
 	zassert_equal(RADIANT_SEC_VERDICT_CLEAR,
-		      radiant_sec_compat_stream_verdict(RX_CH, t_of(400u)),
-		      NULL);
+		      radiant_sec_compat_stream_verdict(RX_CH, t_of(400u)));
 }
 
 /* ═══ Tier II, when enabled ══════════════════════════════════════════════ */
@@ -566,15 +545,14 @@ ZTEST(sec_compat_stream, test_an_n8_window_verifies)
 
 	radiant_sec_compat_get_stats(RX_CH, &st);
 	zassert_equal(3u, st.tier2_verified,
-		      "expected three verified windows, got %u verified and %u "
-		      "unverified", st.tier2_verified, st.tier2_unverified);
-	zassert_equal(0u, st.tier2_unverified, NULL);
+		      "verified %u, unverified %u", st.tier2_verified, st.tier2_unverified);
+	zassert_equal(0u, st.tier2_unverified);
 	zassert_equal(1u, verdicts_at(RADIANT_SEC_COMPAT_SUBTYPE_TIER_II, 0u,
-				      RADIANT_SEC_VERDICT_VERIFIED), NULL);
+				      RADIANT_SEC_VERDICT_VERIFIED));
 	zassert_equal(1u, verdicts_at(RADIANT_SEC_COMPAT_SUBTYPE_TIER_II, 1u,
-				      RADIANT_SEC_VERDICT_VERIFIED), NULL);
+				      RADIANT_SEC_VERDICT_VERIFIED));
 	zassert_equal(1u, verdicts_at(RADIANT_SEC_COMPAT_SUBTYPE_TIER_II, 2u,
-				      RADIANT_SEC_VERDICT_VERIFIED), NULL);
+				      RADIANT_SEC_VERDICT_VERIFIED));
 }
 
 /*
@@ -594,14 +572,12 @@ ZTEST(sec_compat_stream, test_a_tier2_only_pin_expires_when_tags_stop)
 		(void)slot_at(i, true);
 	}
 	zassert_equal(RADIANT_SEC_VERDICT_VERIFIED,
-		      radiant_sec_compat_stream_verdict(RX_CH, t_of(TEST_N)),
-		      "setup: the one window did not verify");
+		      radiant_sec_compat_stream_verdict(RX_CH, t_of(TEST_N)));
 	/* Nothing more arrives: two windows' worth of silence unpins it. */
 	zassert_equal(RADIANT_SEC_VERDICT_UNVERIFIED,
 		      radiant_sec_compat_stream_verdict(
 			      RX_CH, t_of(TEST_N - 1u +
-					  RADIANT_SEC_COMPAT_STALE_INTERVALS * TEST_N)),
-		      "a Tier-II-only pin stayed VERIFIED with no tag pages");
+					  RADIANT_SEC_COMPAT_STALE_INTERVALS * TEST_N)));
 }
 
 ZTEST(sec_compat_stream, test_a_flipped_bit_lands_once_at_the_attestation_page)
@@ -622,25 +598,21 @@ ZTEST(sec_compat_stream, test_a_flipped_bit_lands_once_at_the_attestation_page)
 				RADIANT_SEC_VERDICT_UNVERIFIED) +
 		       verdicts(RADIANT_SEC_COMPAT_SUBTYPE_TIER_II,
 				RADIANT_SEC_VERDICT_VERIFIED);
-	zassert_equal(0u, before_close,
-		      "a window verdict arrived before the window closed");
+	zassert_equal(0u, before_close);
 
 	(void)slot_at(7u, true);   /* the attestation page */
 
 	zassert_equal(1u, verdicts_at(RADIANT_SEC_COMPAT_SUBTYPE_TIER_II, 0u,
-				      RADIANT_SEC_VERDICT_UNVERIFIED),
-		      "the forged window was not reported unverified exactly "
-		      "once, at the page that carries its tag");
+				      RADIANT_SEC_VERDICT_UNVERIFIED));
 	zassert_equal(0u, verdicts_at(RADIANT_SEC_COMPAT_SUBTYPE_TIER_II, 0u,
-				      RADIANT_SEC_VERDICT_VERIFIED), NULL);
+				      RADIANT_SEC_VERDICT_VERIFIED));
 
 	/* And the damage is bounded to that window. */
 	for (i = 8u; i < 16u; i++) {
 		(void)slot_at(i, true);
 	}
 	zassert_equal(1u, verdicts_at(RADIANT_SEC_COMPAT_SUBTYPE_TIER_II, 1u,
-				      RADIANT_SEC_VERDICT_VERIFIED),
-		      "one forged packet poisoned the following window");
+				      RADIANT_SEC_VERDICT_VERIFIED));
 }
 
 ZTEST(sec_compat_stream, test_a_dropped_packet_costs_one_window_and_no_more)
@@ -657,18 +629,15 @@ ZTEST(sec_compat_stream, test_a_dropped_packet_costs_one_window_and_no_more)
 	}
 
 	zassert_equal(1u, verdicts_at(RADIANT_SEC_COMPAT_SUBTYPE_TIER_II, 0u,
-				      RADIANT_SEC_VERDICT_UNVERIFIED),
-		      "a window with a hole in it should be unverifiable");
+				      RADIANT_SEC_VERDICT_UNVERIFIED));
 	zassert_equal(1u, verdicts_at(RADIANT_SEC_COMPAT_SUBTYPE_TIER_II, 1u,
-				      RADIANT_SEC_VERDICT_VERIFIED),
-		      "THE NEXT WINDOW MUST RECOVER: one lost packet may not "
-		      "desynchronise every window after it");
+				      RADIANT_SEC_VERDICT_VERIFIED));
 	zassert_equal(1u, verdicts_at(RADIANT_SEC_COMPAT_SUBTYPE_TIER_II, 2u,
-				      RADIANT_SEC_VERDICT_VERIFIED), NULL);
+				      RADIANT_SEC_VERDICT_VERIFIED));
 
 	radiant_sec_compat_get_stats(RX_CH, &st);
-	zassert_equal(2u, st.tier2_verified, NULL);
-	zassert_equal(1u, st.tier2_unverified, NULL);
+	zassert_equal(2u, st.tier2_verified);
+	zassert_equal(1u, st.tier2_unverified);
 }
 
 /* ═══ Both tiers ═════════════════════════════════════════════════════════ */
@@ -695,17 +664,13 @@ ZTEST(sec_compat_stream, test_the_subtype_reaches_the_nonce_through_the_emit_pat
 	}
 	(void)slot_run(7u, false, -1, tier2_air, NULL);
 
-	zassert_equal(RADIANT_SEC_COMPAT_SUBTYPE_TIER_I, sub_of(tier1_air), NULL);
-	zassert_equal(RADIANT_SEC_COMPAT_SUBTYPE_TIER_II, sub_of(tier2_air),
-		      NULL);
-	zassert_equal(0u, (uint32_t)tier1_air[1] | ((uint32_t)tier1_air[2] << 8),
-		      "the Tier I counter should be 0 at the epoch anchor");
-	zassert_equal(0u, tier2_air[1], "the first window index should be 0");
+	zassert_equal(RADIANT_SEC_COMPAT_SUBTYPE_TIER_I, sub_of(tier1_air));
+	zassert_equal(RADIANT_SEC_COMPAT_SUBTYPE_TIER_II, sub_of(tier2_air));
+	zassert_equal(0u, (uint32_t)tier1_air[1] | ((uint32_t)tier1_air[2] << 8));
+	zassert_equal(0u, tier2_air[1]);
 
 	zassert_true(memcmp(&tier1_air[3], &tier2_air[2],
-			    RADIANT_SEC_COMPAT_TIER_I_TAG_BYTES) != 0,
-		     "one counter value, two subtypes, one tag: the subtype is "
-		     "not reaching the MAC'd block through the emit path");
+			    RADIANT_SEC_COMPAT_TIER_I_TAG_BYTES) != 0);
 
 	/* The substitution, attempted: a Tier II tag dressed as a Tier I page. */
 	forged[0] = PAGE_BASE | RADIANT_SEC_COMPAT_SUBTYPE_TIER_I;
@@ -714,15 +679,13 @@ ZTEST(sec_compat_stream, test_the_subtype_reaches_the_nonce_through_the_emit_pat
 	memcpy(&forged[3], &tier2_air[2], RADIANT_SEC_COMPAT_TIER_I_TAG_BYTES);
 	zassert_equal(RADIANT_SEC_EBADMAC,
 		      radiant_sec_compat_rx(RX_CH, sub_of(forged), forged,
-					    sizeof(forged), t_of(0u)),
-		      "a Tier II tag verified as a Tier I tag");
+					    sizeof(forged), t_of(0u)));
 
 	/* ...and the genuine page, over the same counter, does verify - so the
 	 * refusal above is about the subtype and not about the counter. */
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_compat_rx(RX_CH, sub_of(tier1_air), tier1_air,
-					    sizeof(tier1_air), t_of(0u)),
-		      NULL);
+					    sizeof(tier1_air), t_of(0u)));
 }
 
 /* ═══ Tier I's phase, at a receiver that never knew the sensor's anchor ══ */
@@ -762,16 +725,14 @@ ZTEST(sec_compat_stream, test_a_long_running_receiver_follows_a_freshly_booted_s
 		uint64_t t = tier1_page(booted, ks[i], 0u, air);
 
 		zassert_equal(RADIANT_SEC_OK, deliver(air, t),
-			      "interval %u of a freshly booted strap did not "
-			      "verify at a receiver up for nine days", ks[i]);
+			      "interval %u", ks[i]);
 	}
 
 	radiant_sec_compat_get_stats(RX_CH, &st);
 	zassert_equal(0u, st.epoch_advances,
-		      "a counter that never wrapped advanced the receiver's "
-		      "epoch %u time(s)", st.epoch_advances);
-	zassert_equal(ARRAY_SIZE(ks), st.tier1_verified, NULL);
-	zassert_equal(0u, st.tier1_unverified, NULL);
+		      "%u", st.epoch_advances);
+	zassert_equal(ARRAY_SIZE(ks), st.tier1_verified);
+	zassert_equal(0u, st.tier1_unverified);
 }
 
 ZTEST(sec_compat_stream, test_a_page_delivered_late_to_a_locked_receiver_is_refused)
@@ -790,40 +751,31 @@ ZTEST(sec_compat_stream, test_a_page_delivered_late_to_a_locked_receiver_is_refu
 	setup_pair(RADIANT_SEC_COMPAT_SW_TIER_I, pinned, 2024u, 2024u);
 
 	t = tier1_page(T_ORIGIN, 0u, 0u, air);
-	zassert_equal(RADIANT_SEC_OK, deliver(air, t),
-		      "setup: the first page did not verify");
+	zassert_equal(RADIANT_SEC_OK, deliver(air, t));
 
 	/* Page 1, jammed: it never arrives on time. */
 	t = tier1_page(T_ORIGIN, 1u, 0u, air);
-	zassert_equal(1u, counter_of(air), NULL);
+	zassert_equal(1u, counter_of(air));
 	t_late = t + T_US;
 
-	zassert_equal(RADIANT_SEC_EREPLAY, deliver(air, t_late),
-		      "page 1, delivered one interval late, was accepted by a "
-		      "receiver locked on page 0");
+	zassert_equal(RADIANT_SEC_EREPLAY, deliver(air, t_late));
 
 	radiant_sec_compat_get_stats(RX_CH, &st);
-	zassert_equal(1u, st.tier1_replays,
-		      "the late page must be counted, or it is invisible to a "
-		      "host");
-	zassert_equal(1u, st.tier1_verified, NULL);
-	zassert_equal(0u, st.tier1_unverified,
-		      "a late page is not a forgery and must not be counted as "
-		      "one");
+	zassert_equal(1u, st.tier1_replays);
+	zassert_equal(1u, st.tier1_verified);
+	zassert_equal(0u, st.tier1_unverified);
 	zassert_equal(0u, verdicts_at(RADIANT_SEC_COMPAT_SUBTYPE_TIER_I, 1u,
-				      RADIANT_SEC_VERDICT_VERIFIED),
-		      "counter 1 was reported VERIFIED");
+				      RADIANT_SEC_VERDICT_VERIFIED));
 
 	/* ...and it did not refresh the freshness anchor: with nothing genuine
 	 * heard since page 0, the pinned stream is past its horizon. */
 	zassert_equal(RADIANT_SEC_VERDICT_UNVERIFIED,
 		      radiant_sec_compat_stream_verdict(RX_CH,
-							rx_time(t_late) + 1u),
-		      "the late page kept a pinned stream VERIFIED");
+							rx_time(t_late) + 1u));
 
 	/* The lock survives the refusal: the next genuine page verifies. */
 	t = tier1_page(T_ORIGIN, 2u, 0u, air);
-	zassert_equal(RADIANT_SEC_OK, deliver(air, t), NULL);
+	zassert_equal(RADIANT_SEC_OK, deliver(air, t));
 }
 
 ZTEST(sec_compat_stream, test_a_receiver_booted_after_the_sensor_follows_it_through_a_wrap)
@@ -845,16 +797,14 @@ ZTEST(sec_compat_stream, test_a_receiver_booted_after_the_sensor_follows_it_thro
 		uint64_t t = tier1_page(T_ORIGIN, k, 0u, air);
 
 		zassert_equal(RADIANT_SEC_OK, deliver(air, t),
-			      "interval %u did not verify at a receiver booted "
-			      "nine days after the sensor", k);
+			      "interval %u", k);
 	}
 
 	radiant_sec_compat_get_stats(RX_CH, &st);
 	zassert_equal(1u, st.epoch_advances,
-		      "the strap wrapped once; the receiver advanced %u time(s)",
-		      st.epoch_advances);
-	zassert_equal(12u, st.tier1_verified, NULL);
-	zassert_equal(0u, st.tier1_replays, NULL);
+		      "%u", st.epoch_advances);
+	zassert_equal(12u, st.tier1_verified);
+	zassert_equal(0u, st.tier1_replays);
 }
 
 ZTEST(sec_compat_stream, test_first_contact_proves_the_epoch_and_not_freshness)
@@ -888,37 +838,29 @@ ZTEST(sec_compat_stream, test_first_contact_proves_the_epoch_and_not_freshness)
 	 * verifies, and the pinned stream reads VERIFIED. The documented
 	 * limit. */
 	t = T_ORIGIN + (uint64_t)k_now * T_US;
-	zassert_equal(RADIANT_SEC_OK, deliver(old0, t - PERIOD_US),
-		      "a fresh receiver refused a recording; if that is now "
-		      "possible, docs/radiant-security.md 7.6 and 11.4 understate "
-		      "the design");
+	zassert_equal(RADIANT_SEC_OK, deliver(old0, t - PERIOD_US));
 	zassert_equal(RADIANT_SEC_VERDICT_VERIFIED,
-		      radiant_sec_compat_stream_verdict(RX_CH, rx_time(t)), NULL);
+		      radiant_sec_compat_stream_verdict(RX_CH, rx_time(t)));
 
 	/* The genuine sensor heals it at once: a counter nobody could have
 	 * recorded pulls the phase three days earlier in one step. */
 	t = tier1_page(T_ORIGIN, k_now, 1u, air);
-	zassert_equal(RADIANT_SEC_OK, deliver(air, t),
-		      "the genuine page did not re-anchor a receiver whose first "
-		      "contact was a recording");
+	zassert_equal(RADIANT_SEC_OK, deliver(air, t));
 
 	/* After that an older recording is refused by the counter floor... */
-	zassert_equal(RADIANT_SEC_EREPLAY, deliver(old1, t + PERIOD_US),
-		      "a recording older than the lock was accepted");
+	zassert_equal(RADIANT_SEC_EREPLAY, deliver(old1, t + PERIOD_US));
 
 	/* ...and a late copy of the genuine page by the phase. */
 	t = tier1_page(T_ORIGIN, k_now + 1u, 0u, air);
-	zassert_equal(RADIANT_SEC_EREPLAY, deliver(air, t + T_US),
-		      "a genuine page delivered an interval late was accepted "
-		      "after the lock");
+	zassert_equal(RADIANT_SEC_EREPLAY, deliver(air, t + T_US));
 
 	t = tier1_page(T_ORIGIN, k_now + 2u, 0u, air);
-	zassert_equal(RADIANT_SEC_OK, deliver(air, t), NULL);
+	zassert_equal(RADIANT_SEC_OK, deliver(air, t));
 
 	radiant_sec_compat_get_stats(RX_CH, &st);
-	zassert_equal(3u, st.tier1_verified, NULL);
-	zassert_equal(2u, st.tier1_replays, NULL);
-	zassert_equal(0u, st.tier1_unverified, NULL);
+	zassert_equal(3u, st.tier1_verified);
+	zassert_equal(2u, st.tier1_replays);
+	zassert_equal(0u, st.tier1_unverified);
 }
 
 /*
@@ -943,7 +885,7 @@ static uint64_t boot_epoch_after_wrap(uint8_t rx_sw, int64_t phase_err_us,
 	setup_pair(RADIANT_SEC_COMPAT_SW_TIER_I, rx_sw, 500u, 499u);
 
 	t = tier1_page(T_ORIGIN, WRAPPED_K, 0u, air);
-	zassert_equal((uint16_t)(WRAPPED_K & 0xFFFFu), counter_of(air), NULL);
+	zassert_equal((uint16_t)(WRAPPED_K & 0xFFFFu), counter_of(air));
 
 	/* Its host learns the boot epoch, and how far into it the sensor is,
 	 * one period before the page. */
@@ -978,37 +920,30 @@ ZTEST(sec_compat_stream, test_a_boot_epoch_set_after_the_sensor_wrapped_still_lo
 		t = boot_epoch_after_wrap(pinned, errs[i], first);
 
 		zassert_equal(RADIANT_SEC_OK, deliver(first, t),
-			      "phase error %d us: a receiver set to the boot "
-			      "epoch after the sensor wrapped did not lock on its "
-			      "first page", (int)errs[i]);
+			      "%d us", (int)errs[i]);
 		zassert_equal(1u, verdicts_at(RADIANT_SEC_COMPAT_SUBTYPE_TIER_I,
-					      7u, RADIANT_SEC_VERDICT_VERIFIED),
-			      NULL);
+					      7u, RADIANT_SEC_VERDICT_VERIFIED));
 		zassert_equal(RADIANT_SEC_VERDICT_VERIFIED,
 			      radiant_sec_compat_stream_verdict(RX_CH,
-								rx_time(t)),
-			      NULL);
+								rx_time(t)));
 
 		/* Locked on the wrapped counter and the true phase: the next
 		 * pages resolve and verify through the ordinary path... */
 		for (k = WRAPPED_K + 1u; k <= WRAPPED_K + 3u; k++) {
 			t = tier1_page(T_ORIGIN, k, 0u, air);
 			zassert_equal(RADIANT_SEC_OK, deliver(air, t),
-				      "phase error %d us: interval 0x%x after the "
-				      "lock did not verify", (int)errs[i], k);
+				      "%d us, 0x%x", (int)errs[i], k);
 		}
 
 		/* ...and the first page, replayed now, is refused. */
-		zassert_equal(RADIANT_SEC_EREPLAY, deliver(first, t + PERIOD_US),
-			      NULL);
+		zassert_equal(RADIANT_SEC_EREPLAY, deliver(first, t + PERIOD_US));
 
 		radiant_sec_compat_get_stats(RX_CH, &st);
-		zassert_equal(4u, st.tier1_verified, NULL);
-		zassert_equal(0u, st.tier1_unverified, NULL);
-		zassert_equal(1u, st.tier1_replays, NULL);
+		zassert_equal(4u, st.tier1_verified);
+		zassert_equal(0u, st.tier1_unverified);
+		zassert_equal(1u, st.tier1_replays);
 		zassert_equal(1u, st.epoch_advances,
-			      "the sensor wrapped once; the receiver advanced %u "
-			      "time(s)", st.epoch_advances);
+			      "%u", st.epoch_advances);
 	}
 }
 
@@ -1038,15 +973,14 @@ ZTEST(sec_compat_stream, test_a_forged_first_page_fails_once_and_moves_nothing)
 	 * fallback derives its candidate key into a scratch one. */
 	memcpy(bad, air, sizeof(bad));
 	bad[5] ^= 0x10u;
-	zassert_equal(RADIANT_SEC_EBADMAC, deliver(bad, t), NULL);
+	zassert_equal(RADIANT_SEC_EBADMAC, deliver(bad, t));
 	radiant_sec_compat_get_stats(RX_CH, &st);
 	zassert_equal(1u, st.tier1_unverified,
-		      "one forged page was counted %u time(s)",
-		      st.tier1_unverified);
-	zassert_equal(0u, st.tier1_verified, NULL);
-	zassert_equal(0u, st.tier1_replays, NULL);
-	zassert_equal(0u, st.epoch_advances, NULL);
-	zassert_equal(1u, vlog_n, "one page, %u verdicts", vlog_n);
+		      "%u", st.tier1_unverified);
+	zassert_equal(0u, st.tier1_verified);
+	zassert_equal(0u, st.tier1_replays);
+	zassert_equal(0u, st.epoch_advances);
+	zassert_equal(1u, vlog_n, "%u", vlog_n);
 
 	/* Garbage carrying the Tier I page byte, at the same low bits. */
 	bad[0] = (uint8_t)(PAGE_BASE | RADIANT_SEC_COMPAT_SUBTYPE_TIER_I);
@@ -1057,48 +991,43 @@ ZTEST(sec_compat_stream, test_a_forged_first_page_fails_once_and_moves_nothing)
 	bad[5] = 0xBEu;
 	bad[6] = 0xEFu;
 	bad[7] = 0x5Au;
-	zassert_equal(RADIANT_SEC_EBADMAC, deliver(bad, t), NULL);
+	zassert_equal(RADIANT_SEC_EBADMAC, deliver(bad, t));
 	radiant_sec_compat_get_stats(RX_CH, &st);
-	zassert_equal(2u, st.tier1_unverified, NULL);
-	zassert_equal(0u, st.epoch_advances, NULL);
+	zassert_equal(2u, st.tier1_unverified);
+	zassert_equal(0u, st.epoch_advances);
 
 	/* A command at the receiver applies the wrap its anchor implies (held
 	 * wraps 1 now), so the first try is the one needing the scratch key and
 	 * a failed page must not leave wraps at 0. */
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_compat_cmd_tag(RX_CH, rx_time(t), cmd,
-						 sizeof(cmd), tag_a),
-		      NULL);
+						 sizeof(cmd), tag_a));
 	radiant_sec_compat_get_stats(RX_CH, &st);
-	zassert_equal(1u, st.epoch_advances, NULL);
+	zassert_equal(1u, st.epoch_advances);
 
-	zassert_equal(RADIANT_SEC_EBADMAC, deliver(bad, t), NULL);
+	zassert_equal(RADIANT_SEC_EBADMAC, deliver(bad, t));
 	radiant_sec_compat_get_stats(RX_CH, &st);
-	zassert_equal(3u, st.tier1_unverified, NULL);
+	zassert_equal(3u, st.tier1_unverified);
 	zassert_equal(1u, st.epoch_advances,
-		      "a page that failed both tries moved the epoch (%u "
-		      "advances)", st.epoch_advances);
+		      "%u", st.epoch_advances);
 
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_compat_cmd_tag(RX_CH, rx_time(t), cmd,
-						 sizeof(cmd), tag_b),
-		      NULL);
-	zassert_mem_equal(tag_a, tag_b, sizeof(tag_a),
-			  "the receiver's keys changed under a failed page");
+						 sizeof(cmd), tag_b));
+	zassert_mem_equal(tag_a, tag_b, sizeof(tag_a));
 	radiant_sec_compat_get_stats(RX_CH, &st);
-	zassert_equal(1u, st.epoch_advances, NULL);
+	zassert_equal(1u, st.epoch_advances);
 	zassert_equal(RADIANT_SEC_VERDICT_UNVERIFIED,
-		      radiant_sec_compat_stream_verdict(RX_CH, rx_time(t)),
-		      NULL);
+		      radiant_sec_compat_stream_verdict(RX_CH, rx_time(t)));
 
 	/* Nothing moved, so the genuine page still locks. */
-	zassert_equal(RADIANT_SEC_OK, deliver(air, t), NULL);
+	zassert_equal(RADIANT_SEC_OK, deliver(air, t));
 	radiant_sec_compat_get_stats(RX_CH, &st);
-	zassert_equal(1u, st.tier1_verified, NULL);
-	zassert_equal(3u, st.tier1_unverified, NULL);
-	zassert_equal(0u, st.tier1_replays, NULL);
-	zassert_equal(1u, st.epoch_advances, NULL);
-	zassert_equal(4u, vlog_n, NULL);
+	zassert_equal(1u, st.tier1_verified);
+	zassert_equal(3u, st.tier1_unverified);
+	zassert_equal(0u, st.tier1_replays);
+	zassert_equal(1u, st.epoch_advances);
+	zassert_equal(4u, vlog_n);
 }
 
 /* One slot the emit hook must not claim, to move the sender's message count. */
@@ -1108,8 +1037,7 @@ static void tx_filler(uint64_t t)
 	uint8_t pay[RADIANT_SEC_COMPAT_MSG_BYTES];
 
 	zassert_equal(0, radiant_sec_compat_tx_attest(TX_CH, t, body,
-						      sizeof(body)),
-		      "a filler slot was claimed");
+						      sizeof(body)));
 	memset(pay, 0x5A, sizeof(pay));
 	pay[0] = DATA_PAGE;
 	zassert_equal(RADIANT_SEC_OK,
@@ -1142,8 +1070,7 @@ static void drift_run(int32_t ppm)
 		rc = deliver(air, t);
 		if (rc != RADIANT_SEC_OK) {
 			zassert_equal(RADIANT_SEC_OK, rc,
-				      "interval %u (d = %u periods) refused at "
-				      "%d ppm: %d", k, k % 4u, ppm, rc);
+				      "%u (d %u) at %d ppm: %d", k, k % 4u, ppm, rc);
 		}
 	}
 
@@ -1156,17 +1083,16 @@ static void drift_run(int32_t ppm)
 		j++;
 	}
 	t = tier1_page(T_ORIGIN, k, 3u, air);
-	zassert_equal(T_ORIGIN + (uint64_t)k * T_US + 4u * PERIOD_US, t,
-		      "setup: the Tier II close did not pre-empt the page");
+	zassert_equal(T_ORIGIN + (uint64_t)k * T_US + 4u * PERIOD_US, t);
 	zassert_equal(RADIANT_SEC_OK, deliver(air, t),
-		      "a page pre-empted at d = 3 was refused at %d ppm", ppm);
+		      "%d ppm", ppm);
 
 	radiant_sec_compat_get_stats(RX_CH, &st);
 	zassert_equal(0u, st.tier1_replays,
-		      "%u genuine pages were refused as late at %d ppm",
+		      "%u at %d ppm",
 		      st.tier1_replays, ppm);
-	zassert_equal(pages + 1u, st.tier1_verified, NULL);
-	zassert_equal(0u, st.tier1_unverified, NULL);
+	zassert_equal(pages + 1u, st.tier1_verified);
+	zassert_equal(0u, st.tier1_unverified);
 }
 
 ZTEST(sec_compat_stream, test_a_receiver_running_fast_keeps_the_lock)
@@ -1194,7 +1120,7 @@ ZTEST(sec_compat_stream, test_a_new_interval_clears_the_phase_lock)
 		   6060u, 6060u);
 
 	t = tier1_page(T_ORIGIN, 100u, 0u, air);
-	zassert_equal(RADIANT_SEC_OK, deliver(air, t), "setup");
+	zassert_equal(RADIANT_SEC_OK, deliver(air, t));
 
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_compat_configure(TX_CH,
@@ -1206,17 +1132,14 @@ ZTEST(sec_compat_stream, test_a_new_interval_clears_the_phase_lock)
 						   TEST_N, 2u * TEST_T_S));
 
 	t = tier1_from(T_ORIGIN + 52u * 2u * T_US, air);
-	zassert_equal(52u, counter_of(air), NULL);
-	zassert_equal(RADIANT_SEC_OK, deliver(air, t),
-		      "the first page at the new T was judged against the old "
-		      "lock");
+	zassert_equal(52u, counter_of(air));
+	zassert_equal(RADIANT_SEC_OK, deliver(air, t));
 	t = tier1_from(T_ORIGIN + 53u * 2u * T_US, air);
-	zassert_equal(RADIANT_SEC_OK, deliver(air, t),
-		      "the receiver did not re-lock at the new T");
+	zassert_equal(RADIANT_SEC_OK, deliver(air, t));
 
 	radiant_sec_compat_get_stats(RX_CH, &st);
-	zassert_equal(0u, st.tier1_replays, NULL);
-	zassert_equal(3u, st.tier1_verified, NULL);
+	zassert_equal(0u, st.tier1_replays);
+	zassert_equal(3u, st.tier1_verified);
 }
 
 /* ═══ Occasional contact: recovering an epoch nobody broadcasts ══════════ */
@@ -1254,32 +1177,27 @@ static void recover_by_hint(uint32_t epoch, uint32_t staleness)
 	/* The beacon's key-group hint, as the sensor would put it on the air.
 	 * K_id is epoch-less, so both ends compute it from the same root. */
 	zassert_equal(RADIANT_SEC_OK,
-		      radiant_sec_compat_hint(TX_CH, epoch, hint), NULL);
+		      radiant_sec_compat_hint(TX_CH, epoch, hint));
 
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_compat_recover_hint(RX_CH, hint,
 						      epoch - staleness, &found,
 						      &ops, &path),
-		      "a receiver %u boots behind did not recover the epoch",
-		      staleness);
-	zassert_equal(epoch, found, "recovered epoch %u, wanted %u", found,
-		      epoch);
-	zassert_equal(RADIANT_SEC_COMPAT_PATH_FORWARD, path, NULL);
+		      "%u", staleness);
+	zassert_equal(epoch, found, "%u", found);
+	zassert_equal(RADIANT_SEC_COMPAT_PATH_FORWARD, path);
 
 	/* docs/radiant-security.md section 11.3's cost table: the search tries
 	 * `last_seen` itself first (the common case), so the op count is one
 	 * higher than the staleness. */
 	zassert_equal(staleness + 1u, ops,
-		      "%u boots behind cost %u operations, not %u", staleness,
-		      ops, staleness + 1u);
-	zassert_true(ops <= OPS_CEILING, NULL);
+		      "%u: %u ops", staleness, ops);
+	zassert_true(ops <= OPS_CEILING);
 
 	/* And the 48-bit confirmation. */
 	zassert_equal(RADIANT_SEC_OK,
-		      radiant_sec_compat_adopt_epoch(RX_CH, found), NULL);
-	zassert_true(window_verifies(0u),
-		     "the recovered epoch did not verify a window, so the "
-		     "recovery proved nothing");
+		      radiant_sec_compat_adopt_epoch(RX_CH, found));
+	zassert_true(window_verifies(0u));
 }
 
 ZTEST(sec_compat_stream, test_a_receiver_50_boots_behind_recovers_by_hint)
@@ -1315,44 +1233,38 @@ ZTEST(sec_compat_stream, test_a_hint_collision_is_settled_by_the_48_bit_tag)
 	 * otherwise leave this test passing while testing nothing. */
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_compat_hint(TX_CH, HINT_COLLISION_DECOY,
-					      decoy_hint), NULL);
+					      decoy_hint));
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_compat_hint(TX_CH, HINT_COLLISION_TRUE,
-					      true_hint), NULL);
-	zassert_mem_equal(decoy_hint, true_hint, sizeof(true_hint),
-			  "the pinned epochs no longer collide; this test is "
-			  "vacuous until a new pair is found");
-	zassert_true(HINT_COLLISION_DECOY < HINT_COLLISION_TRUE, NULL);
+					      true_hint));
+	zassert_mem_equal(decoy_hint, true_hint, sizeof(true_hint));
+	zassert_true(HINT_COLLISION_DECOY < HINT_COLLISION_TRUE);
 
 	/* The search stops at the collision, which is what 24 bits buys. */
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_compat_recover_hint(RX_CH, true_hint,
 						      last_seen, &found, &ops,
-						      &path), NULL);
-	zassert_equal(HINT_COLLISION_DECOY, found,
-		      "the forward search did not stop at the colliding epoch");
-	zassert_equal(6u, ops, NULL);
+						      &path));
+	zassert_equal(HINT_COLLISION_DECOY, found);
+	zassert_equal(6u, ops);
 
 	/* ...and the window refuses it. THE POINT: a hint match is not a
 	 * confirmation, and 40 or 48 bits cannot be survived by a 24-bit
 	 * collision. */
 	zassert_equal(RADIANT_SEC_OK,
-		      radiant_sec_compat_adopt_epoch(RX_CH, found), NULL);
-	zassert_false(window_verifies(0u),
-		      "a colliding epoch verified a window; the hint is being "
-		      "trusted as a confirmation");
+		      radiant_sec_compat_adopt_epoch(RX_CH, found));
+	zassert_false(window_verifies(0u));
 
 	/* The receiver resumes the search past the collision and finds the real
 	 * one, which is what makes a collision a delay rather than a failure. */
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_compat_recover_hint(RX_CH, true_hint,
 						      found + 1u, &found, &ops,
-						      &path), NULL);
-	zassert_equal(HINT_COLLISION_TRUE, found, NULL);
+						      &path));
+	zassert_equal(HINT_COLLISION_TRUE, found);
 	zassert_equal(RADIANT_SEC_OK,
-		      radiant_sec_compat_adopt_epoch(RX_CH, found), NULL);
-	zassert_true(window_verifies(2u * TEST_N),
-		     "the resumed search's epoch did not verify");
+		      radiant_sec_compat_adopt_epoch(RX_CH, found));
+	zassert_true(window_verifies(2u * TEST_N));
 }
 
 /* ── advertise = off: no hint to search against ─────────────────────────── */
@@ -1373,7 +1285,7 @@ static void recover_by_tier1_tag(uint32_t epoch, uint32_t staleness)
 	/* One Tier I page off the air, and nothing else known about the
 	 * sender. */
 	zassert_equal(RADIANT_SEC_COMPAT_SUBTYPE_TIER_I,
-		      slot_run(0u, false, -1, air, NULL), NULL);
+		      slot_run(0u, false, -1, air, NULL));
 	counter = (uint16_t)((uint32_t)air[1] | ((uint32_t)air[2] << 8));
 
 	zassert_equal(RADIANT_SEC_OK,
@@ -1381,17 +1293,15 @@ static void recover_by_tier1_tag(uint32_t epoch, uint32_t staleness)
 						       counter, &air[3],
 						       epoch - staleness, &found,
 						       &ops, &path),
-		      "the advertise-off path failed %u boots behind",
-		      staleness);
-	zassert_equal(epoch, found, NULL);
-	zassert_equal(RADIANT_SEC_COMPAT_PATH_FORWARD, path, NULL);
-	zassert_equal(staleness + 1u, ops, NULL);
-	zassert_true(ops <= OPS_CEILING, NULL);
+		      "%u", staleness);
+	zassert_equal(epoch, found);
+	zassert_equal(RADIANT_SEC_COMPAT_PATH_FORWARD, path);
+	zassert_equal(staleness + 1u, ops);
+	zassert_true(ops <= OPS_CEILING);
 
 	zassert_equal(RADIANT_SEC_OK,
-		      radiant_sec_compat_adopt_epoch(RX_CH, found), NULL);
-	zassert_true(window_verifies(1u),
-		     "the epoch recovered from a tag did not verify a window");
+		      radiant_sec_compat_adopt_epoch(RX_CH, found));
+	zassert_true(window_verifies(1u));
 }
 
 ZTEST(sec_compat_stream, test_advertise_off_recovers_50_boots_behind)
@@ -1428,17 +1338,17 @@ ZTEST(sec_compat_stream, test_advertise_off_recovers_against_a_window_tag)
 		(void)slot_run(i, false, -1, covered[i], NULL);
 	}
 	zassert_equal(RADIANT_SEC_COMPAT_SUBTYPE_TIER_II,
-		      slot_run(TEST_N - 1u, false, -1, air, NULL), NULL);
+		      slot_run(TEST_N - 1u, false, -1, air, NULL));
 
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_compat_recover_tier2(RX_CH, TEST_DEVNUM,
 						       air[1], &covered[0][0],
 						       TEST_N, &air[2],
 						       epoch - staleness, &found,
-						       &ops, &path), NULL);
-	zassert_equal(epoch, found, NULL);
-	zassert_equal(staleness + 1u, ops, NULL);
-	zassert_equal(RADIANT_SEC_COMPAT_PATH_FORWARD, path, NULL);
+						       &ops, &path));
+	zassert_equal(epoch, found);
+	zassert_equal(staleness + 1u, ops);
+	zassert_equal(RADIANT_SEC_COMPAT_PATH_FORWARD, path);
 }
 
 /* ── The re-provisioned sensor, and the bound ───────────────────────────── */
@@ -1459,30 +1369,24 @@ ZTEST(sec_compat_stream, test_a_re_provisioned_sensor_is_found_by_the_scan)
 	setup_pair(BOTH_TIERS, BOTH_TIERS, reset_to, last_seen);
 
 	zassert_equal(RADIANT_SEC_OK,
-		      radiant_sec_compat_hint(TX_CH, reset_to, hint), NULL);
+		      radiant_sec_compat_hint(TX_CH, reset_to, hint));
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_compat_recover_hint(RX_CH, hint, last_seen,
-						      &found, &ops, &path),
-		      NULL);
+						      &found, &ops, &path));
 
-	zassert_equal(reset_to, found, NULL);
-	zassert_equal(RADIANT_SEC_COMPAT_PATH_SCAN, path,
-		      "a re-provisioned sensor must be found by the bounded "
-		      "absolute scan, not by a forward search that ran on");
+	zassert_equal(reset_to, found);
+	zassert_equal(RADIANT_SEC_COMPAT_PATH_SCAN, path);
 	/* Forward exhausted, the small backward probe spent, and then found at
 	 * the fourth candidate of the scan. Spelled out rather than bounded
 	 * loosely, because the whole claim is that each phase has a ceiling. */
 	zassert_equal(RADIANT_SEC_COMPAT_EPOCH_FORWARD + 1u +
 			      RADIANT_SEC_COMPAT_EPOCH_BACKWARD + reset_to + 1u,
-		      ops, "the scan cost %u operations", ops);
-	zassert_true(ops <= OPS_CEILING, NULL);
+		      ops, "%u", ops);
+	zassert_true(ops <= OPS_CEILING);
 
 	zassert_equal(RADIANT_SEC_OK,
-		      radiant_sec_compat_adopt_epoch(RX_CH, found),
-		      "adopting a LOWER epoch was refused; a receiver is not "
-		      "the epoch authority and a re-provisioned sensor really "
-		      "is at a smaller one");
-	zassert_true(window_verifies(0u), NULL);
+		      radiant_sec_compat_adopt_epoch(RX_CH, found));
+	zassert_true(window_verifies(0u));
 }
 
 ZTEST(sec_compat_stream, test_a_search_that_matches_nothing_still_ends)
@@ -1505,17 +1409,14 @@ ZTEST(sec_compat_stream, test_a_search_that_matches_nothing_still_ends)
 	setup_pair(BOTH_TIERS, BOTH_TIERS, unreachable, 1u);
 
 	zassert_equal(RADIANT_SEC_OK,
-		      radiant_sec_compat_hint(TX_CH, unreachable, hint), NULL);
+		      radiant_sec_compat_hint(TX_CH, unreachable, hint));
 	zassert_equal(RADIANT_SEC_EBADMAC,
 		      radiant_sec_compat_recover_hint(RX_CH, hint, last_seen,
-						      &found, &ops, &path),
-		      "an epoch outside every bounded phase was somehow found");
-	zassert_equal(RADIANT_SEC_COMPAT_PATH_NONE, path, NULL);
+						      &found, &ops, &path));
+	zassert_equal(RADIANT_SEC_COMPAT_PATH_NONE, path);
 	zassert_equal(expect_ops, ops,
-		      "the exhausted search cost %u operations, not the %u four "
-		      "candidates below the top of the counter buys", ops,
-		      expect_ops);
-	zassert_true(ops <= OPS_CEILING, NULL);
+		      "%u vs %u", ops, expect_ops);
+	zassert_true(ops <= OPS_CEILING);
 }
 
 /* ── Refusals ───────────────────────────────────────────────────────────── */
@@ -1600,15 +1501,13 @@ ZTEST(sec_compat_stream, test_a_compat_wrap_past_the_ceiling_waits_for_it)
 	zassert_equal(RADIANT_SEC_EAGAIN,
 		      radiant_sec_compat_tx_attest(TX_CH,
 						   T_ORIGIN + 0x10000u * T_US,
-						   body, sizeof(body)),
-		      "a wrap went past the ceiling");
+						   body, sizeof(body)));
 	radiant_sec_compat_get_stats(TX_CH, &st);
 	zassert_equal(0u, st.epoch_advances);
 
 	zassert_ok(radiant_sec_compat_set_epoch_ceiling(TX_CH, 301u));
 	t = tier1_page(T_ORIGIN, 0x10000u, 1u, air);
-	zassert_ok(deliver(air, t),
-		   "the first page after the raised ceiling did not verify");
+	zassert_ok(deliver(air, t));
 	radiant_sec_compat_get_stats(TX_CH, &st);
 	zassert_equal(1u, st.epoch_advances);
 }
@@ -1626,8 +1525,7 @@ ZTEST(sec_compat_stream, test_a_transmitting_compat_context_refuses_rx)
 	t = tier1_page(T_ORIGIN, 3u, 0u, air);
 	zassert_equal(RADIANT_SEC_EINVAL,
 		      radiant_sec_compat_rx(TX_CH, sub_of(air), air,
-					    sizeof(air), t),
-		      "a transmitting context took its own page back");
+					    sizeof(air), t));
 	/* The receiver beside it still verifies. */
 	zassert_ok(deliver(air, t));
 }
@@ -1645,8 +1543,7 @@ ZTEST(sec_compat_stream, test_an_authority_armed_compat_context_refuses_rx)
 		   300u, 300u);
 	zassert_ok(radiant_sec_compat_set_epoch_ceiling(RX_CH, 301u));
 	t = tier1_page(T_ORIGIN, 0x10003u, 0u, air);
-	zassert_equal(RADIANT_SEC_EINVAL, deliver(air, t),
-		      "a ceilinged context took a compat page");
+	zassert_equal(RADIANT_SEC_EINVAL, deliver(air, t));
 	radiant_sec_compat_get_stats(RX_CH, &st);
 	zassert_equal(0u, st.epoch_advances);
 	zassert_equal(0u, st.tier1_verified + st.tier1_unverified);

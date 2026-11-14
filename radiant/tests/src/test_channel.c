@@ -186,30 +186,27 @@ static void before(void *fixture)
 
 static void up(void)
 {
-	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_init(&cbs, NULL),
-		      "radio init failed");
-	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_enable(), "radio enable failed");
+	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_init(&cbs, NULL));
+	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_enable());
 }
 
 /* The two end-of-test habits fake_radio.h asks for, in one call so no test can
  * forget half of them. */
 static void radio_clean(void)
 {
-	zassert_true(fake_radio_is_idle(), "radio left busy: %s",
-		     fake_radio_busy_reason());
-	zassert_equal(0u, fake_radio_viol_count(), "contract violation: %s",
+	zassert_true(fake_radio_is_idle(), "%s", fake_radio_busy_reason());
+	zassert_equal(0u, fake_radio_viol_count(), "%s",
 		      fake_radio_viol_name(fake_radio_viol(0)->code));
 }
 
 /* Assign + set an ID, the minimum a channel needs before it may be opened. */
 static void assign_and_id(uint8_t ch, uint8_t type)
 {
-	zassert_equal(RADIANT_CH_OK, radiant_channel_assign(ch, type, 0u, 0u),
-		      "assign(%u) failed", ch);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_assign(ch, type, 0u, 0u), "assign(%u)", ch);
 	zassert_equal(RADIANT_CH_OK,
 		      radiant_channel_id_set(ch, TEST_DEVNUM, TEST_DEVTYPE,
 					 TEST_TRANSTYPE),
-		      "id_set(%u) failed", ch);
+		      "id_set(%u)", ch);
 }
 
 /* Arm a receive window the way radiant_sched.c would, and bind it to the channel.
@@ -227,8 +224,8 @@ static uint32_t arm_rx_for(uint8_t ch, radiant_time_t t_open, radiant_time_t t_c
 	req.t_open = t_open;
 	req.t_close = t_close;
 
-	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_rx(&req, &op), "rx arm failed");
-	zassert_not_equal(0u, op, "op id was zero");
+	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_rx(&req, &op));
+	zassert_not_equal(0u, op);
 
 	radiant_channel_bind_op(ch, op);
 	return op;
@@ -246,26 +243,22 @@ ZTEST(radiant_channel, test_thirty_two_channels_and_nothing_beyond)
 	uint8_t status = 0xFFu;
 	uint8_t i;
 
-	zassert_equal(32u, RADIANT_CHANNEL_COUNT,
-		      "the burst header addresses 32 channels in five bits");
+	zassert_equal(32u, RADIANT_CHANNEL_COUNT);
 
 	for (i = 0u; i < RADIANT_CHANNEL_COUNT; i++) {
 		zassert_equal(RADIANT_CH_STATE_UNASSIGNED,
 			      radiant_channel_state_get(i),
-			      "channel %u did not start unassigned", i);
+			      "channel %u", i);
 		zassert_equal(RADIANT_CH_OK, radiant_channel_status_get(i, &status),
 			      "status_get(%u)", i);
-		zassert_equal(0x00u, status,
-			      "channel %u reported status 0x%02x, not 0", i,
-			      status);
+		zassert_equal(0x00u, status, "channel %u: 0x%02x", i, status);
 	}
 
 	/* One past the end, and the top of the byte. Both are a bad channel
 	 * NUMBER, which is INVALID_MESSAGE and never INVALID_PARAM. */
 	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE,
-		      radiant_channel_status_get(RADIANT_CHANNEL_COUNT, &status), NULL);
-	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE,
-		      radiant_channel_status_get(255u, &status), NULL);
+		      radiant_channel_status_get(RADIANT_CHANNEL_COUNT, &status));
+	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE, radiant_channel_status_get(255u, &status));
 
 	radio_clean();
 }
@@ -280,16 +273,13 @@ ZTEST(radiant_channel, test_period_conversion_is_the_measured_one)
 	 * a master inside a minute.
 	 */
 	zassert_equal(RADIANT_ANT_PLUS_PERIOD_US,
-		      radiant_channel_counts_to_us(RADIANT_CHANNEL_PERIOD_ANT_PLUS),
-		      "the ANT+ period is not %u us", RADIANT_ANT_PLUS_PERIOD_US);
-	zassert_equal(250000u, radiant_channel_counts_to_us(8192u), NULL);
-	zassert_equal(1000000u, radiant_channel_counts_to_us(32768u),
-		      "32768 counts is not one second");
-	zassert_equal(2500000u, radiant_channel_search_ticks_to_us(1u), NULL);
+		      radiant_channel_counts_to_us(RADIANT_CHANNEL_PERIOD_ANT_PLUS));
+	zassert_equal(250000u, radiant_channel_counts_to_us(8192u));
+	zassert_equal(1000000u, radiant_channel_counts_to_us(32768u));
+	zassert_equal(2500000u, radiant_channel_search_ticks_to_us(1u));
 	zassert_equal(25000000u,
 		      radiant_channel_search_ticks_to_us(
-			      RADIANT_CHANNEL_SEARCH_TIMEOUT_DEFAULT),
-		      "ANT's default search timeout is not 25 s");
+			      RADIANT_CHANNEL_SEARCH_TIMEOUT_DEFAULT));
 
 	radio_clean();
 }
@@ -308,50 +298,43 @@ ZTEST(radiant_channel, test_full_lifecycle_master)
 	t0 = radiant_radio_now();
 
 	/* UNASSIGNED -> ASSIGNED */
-	zassert_equal(RADIANT_CH_OK, radiant_channel_assign(0u, TYPE_MASTER, 0u, 0u),
-		      NULL);
-	zassert_equal(RADIANT_CH_STATE_ASSIGNED, radiant_channel_state_get(0u), NULL);
-	zassert_true(radiant_channel_is_master(0u), NULL);
-	zassert_false(radiant_channel_is_open(0u), NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_assign(0u, TYPE_MASTER, 0u, 0u));
+	zassert_equal(RADIANT_CH_STATE_ASSIGNED, radiant_channel_state_get(0u));
+	zassert_true(radiant_channel_is_master(0u));
+	zassert_false(radiant_channel_is_open(0u));
 
 	/* Configuration is legal here and only here. */
 	zassert_equal(RADIANT_CH_OK,
 		      radiant_channel_id_set(0u, TEST_DEVNUM, TEST_DEVTYPE,
-					 TEST_TRANSTYPE),
-		      NULL);
+					 TEST_TRANSTYPE));
 	zassert_equal(RADIANT_CH_OK,
-		      radiant_channel_period_set(0u, RADIANT_CHANNEL_PERIOD_ANT_PLUS),
-		      NULL);
-	zassert_equal(RADIANT_CH_OK,
-		      radiant_channel_rf_freq_set(0u, RADIANT_RF_INDEX_ANT_PLUS), NULL);
-	zassert_equal(RADIANT_CH_OK,
-		      radiant_channel_crc_mode_set(0u, RADIANT_CH_CRC_MODE_DEFAULT),
-		      NULL);
+		      radiant_channel_period_set(0u, RADIANT_CHANNEL_PERIOD_ANT_PLUS));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_rf_freq_set(0u, RADIANT_RF_INDEX_ANT_PLUS));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_crc_mode_set(0u, RADIANT_CH_CRC_MODE_DEFAULT));
 
-	zassert_equal(RADIANT_CH_OK, radiant_channel_status_get(0u, &status), NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_status_get(0u, &status));
 	zassert_equal((uint8_t)(TYPE_MASTER | RADIANT_CH_STATUS_ASSIGNED), status,
-		      "assigned master status was 0x%02x", status);
+		      "status 0x%02x", status);
 
 	/* ASSIGNED -> TRACKING. A master never searches. */
-	zassert_equal(RADIANT_CH_OK, radiant_channel_open(0u, 0u, t0), NULL);
-	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(0u), NULL);
-	zassert_true(radiant_channel_is_open(0u), NULL);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_status_get(0u, &status), NULL);
-	zassert_equal((uint8_t)(TYPE_MASTER | RADIANT_CH_STATUS_TRACKING), status,
-		      NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_open(0u, 0u, t0));
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(0u));
+	zassert_true(radiant_channel_is_open(0u));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_status_get(0u, &status));
+	zassert_equal((uint8_t)(TYPE_MASTER | RADIANT_CH_STATUS_TRACKING), status);
 
 	/* TRACKING -> ASSIGNED. No operation is bound, so the close completes
 	 * synchronously and the event is raised before close() returns. */
-	zassert_equal(RADIANT_CH_OK, radiant_channel_close(0u, t0), NULL);
-	zassert_equal(RADIANT_CH_STATE_ASSIGNED, radiant_channel_state_get(0u), NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(0u, t0));
+	zassert_equal(RADIANT_CH_STATE_ASSIGNED, radiant_channel_state_get(0u));
 	zassert_equal(1u, evt_count_of(0u, RADIANT_CH_EVENT_CHANNEL_CLOSED),
-		      "exactly one CHANNEL_CLOSED, got %u",
+		      "got %u",
 		      evt_count_of(0u, RADIANT_CH_EVENT_CHANNEL_CLOSED));
 
 	/* ASSIGNED -> UNASSIGNED */
-	zassert_equal(RADIANT_CH_OK, radiant_channel_unassign(0u), NULL);
-	zassert_equal(RADIANT_CH_STATE_UNASSIGNED, radiant_channel_state_get(0u), NULL);
-	zassert_false(radiant_channel_is_master(0u), NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_unassign(0u));
+	zassert_equal(RADIANT_CH_STATE_UNASSIGNED, radiant_channel_state_get(0u));
+	zassert_false(radiant_channel_is_master(0u));
 
 	radio_clean();
 }
@@ -367,23 +350,21 @@ ZTEST(radiant_channel, test_full_lifecycle_slave_searches_then_tracks)
 	t0 = radiant_radio_now();
 
 	/* A wildcard slave: every field zero is "match anything". */
-	zassert_equal(RADIANT_CH_OK, radiant_channel_assign(3u, TYPE_SLAVE, 0u, 0u),
-		      NULL);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_id_set(3u, 0u, 0u, 0u), NULL);
-	zassert_false(radiant_channel_is_master(3u), NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_assign(3u, TYPE_SLAVE, 0u, 0u));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_id_set(3u, 0u, 0u, 0u));
+	zassert_false(radiant_channel_is_master(3u));
 
 	/* ASSIGNED -> SEARCHING, with the first window now rather than one
 	 * period out: a searching slave has nothing to align to yet. */
-	zassert_equal(RADIANT_CH_OK, radiant_channel_open(3u, 0u, t0), NULL);
-	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(3u), NULL);
-	zassert_equal(t0, radiant_channel_next_slot(3u), NULL);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_status_get(3u, &status), NULL);
-	zassert_equal((uint8_t)(TYPE_SLAVE | RADIANT_CH_STATUS_SEARCHING), status,
-		      NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_open(3u, 0u, t0));
+	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(3u));
+	zassert_equal(t0, radiant_channel_next_slot(3u));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_status_get(3u, &status));
+	zassert_equal((uint8_t)(TYPE_SLAVE | RADIANT_CH_STATUS_SEARCHING), status);
 
 	/* The configured ID is still the wildcard while searching. */
-	zassert_equal(RADIANT_CH_OK, radiant_channel_id_get(3u, &id), NULL);
-	zassert_equal(0u, id.device_number, NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_id_get(3u, &id));
+	zassert_equal(0u, id.device_number);
 
 	/* SEARCHING -> TRACKING, resolving the wildcards. This is how a host
 	 * learns which sensor it found. */
@@ -392,24 +373,20 @@ ZTEST(radiant_channel, test_full_lifecycle_slave_searches_then_tracks)
 	acquired.trans_type = TEST_TRANSTYPE;
 	radiant_channel_on_acquired(3u, &acquired, t0 + 1234u);
 
-	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(3u), NULL);
-	zassert_equal(RADIANT_TIME_NEVER, radiant_channel_search_deadline(3u),
-		      "a tracking channel still has a search deadline");
-	zassert_equal(t0 + 1234u + RADIANT_ANT_PLUS_PERIOD_US,
-		      radiant_channel_next_slot(3u),
-		      "the slot clock did not re-anchor on the frame heard");
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(3u));
+	zassert_equal(RADIANT_TIME_NEVER, radiant_channel_search_deadline(3u));
+	zassert_equal(t0 + 1234u + RADIANT_ANT_PLUS_PERIOD_US, radiant_channel_next_slot(3u));
 
-	zassert_equal(RADIANT_CH_OK, radiant_channel_id_get(3u, &id), NULL);
-	zassert_equal(TEST_DEVNUM, id.device_number, NULL);
-	zassert_equal(TEST_DEVTYPE, id.device_type, NULL);
-	zassert_equal(TEST_TRANSTYPE, id.trans_type, NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_id_get(3u, &id));
+	zassert_equal(TEST_DEVNUM, id.device_number);
+	zassert_equal(TEST_DEVTYPE, id.device_type);
+	zassert_equal(TEST_TRANSTYPE, id.trans_type);
 
 	/* Closing discards the acquired ID: a reopened wildcard channel must
 	 * search again rather than silently narrow to last session's sensor. */
-	zassert_equal(RADIANT_CH_OK, radiant_channel_close(3u, t0), NULL);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_id_get(3u, &id), NULL);
-	zassert_equal(0u, id.device_number,
-		      "the acquired ID survived the close");
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(3u, t0));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_id_get(3u, &id));
+	zassert_equal(0u, id.device_number);
 
 	radio_clean();
 }
@@ -426,37 +403,34 @@ ZTEST(radiant_channel, test_tracking_returns_to_search_after_missed_slots)
 	t0 = radiant_radio_now();
 
 	assign_and_id(1u, TYPE_SLAVE);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_open(1u, 0u, t0), NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_open(1u, 0u, t0));
 	radiant_channel_on_acquired(1u, &acquired, t0);
 
 	expected = t0 + RADIANT_ANT_PLUS_PERIOD_US;
-	zassert_equal(expected, radiant_channel_next_slot(1u), NULL);
+	zassert_equal(expected, radiant_channel_next_slot(1u));
 
 	/* One short of the threshold: still tracking, and the phase has
 	 * advanced by exactly one period per miss rather than drifting with
 	 * the time the miss was noticed. */
 	for (i = 0u; i < RADIANT_CHANNEL_RX_FAIL_TO_SEARCH - 1u; i++) {
 		zassert_false(radiant_channel_on_slot_missed(1u, t0 + 999999u),
-			      "went to search after %u misses", i + 1u);
+			      "%u misses", i + 1u);
 		expected += RADIANT_ANT_PLUS_PERIOD_US;
-		zassert_equal(expected, radiant_channel_next_slot(1u),
-			      "phase drifted on miss %u", i + 1u);
+		zassert_equal(expected, radiant_channel_next_slot(1u), "miss %u", i + 1u);
 	}
-	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(1u), NULL);
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(1u));
 
 	/* The last one. */
-	zassert_true(radiant_channel_on_slot_missed(1u, t0 + 999999u), NULL);
-	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(1u), NULL);
-	zassert_equal(1u, evt_count_of(1u, RADIANT_CH_EVENT_RX_FAIL_GO_TO_SEARCH),
-		      NULL);
+	zassert_true(radiant_channel_on_slot_missed(1u, t0 + 999999u));
+	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(1u));
+	zassert_equal(1u, evt_count_of(1u, RADIANT_CH_EVENT_RX_FAIL_GO_TO_SEARCH));
 
 	/* A frame heard again re-anchors and clears the counter. */
 	radiant_channel_on_acquired(1u, &acquired, t0 + 5000000u);
-	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(1u), NULL);
-	zassert_equal(t0 + 5000000u + RADIANT_ANT_PLUS_PERIOD_US,
-		      radiant_channel_next_slot(1u), NULL);
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(1u));
+	zassert_equal(t0 + 5000000u + RADIANT_ANT_PLUS_PERIOD_US, radiant_channel_next_slot(1u));
 
-	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()), NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()));
 	radio_clean();
 }
 
@@ -497,17 +471,14 @@ ZTEST(radiant_channel, test_thirty_two_channels_are_independent)
 		zassert_equal(master ? RADIANT_CH_STATE_TRACKING
 				     : RADIANT_CH_STATE_SEARCHING,
 			      radiant_channel_state_get(i), "state(%u)", i);
-		zassert_equal(master, radiant_channel_is_master(i), "master(%u)",
-			      i);
+		zassert_equal(master, radiant_channel_is_master(i), "master(%u)", i);
 
-		zassert_equal(RADIANT_CH_OK, radiant_channel_id_get(i, &id), NULL);
-		zassert_equal((uint16_t)(1000u + i), id.device_number,
-			      "channel %u read back another channel's ID", i);
+		zassert_equal(RADIANT_CH_OK, radiant_channel_id_get(i, &id));
+		zassert_equal((uint16_t)(1000u + i), id.device_number, "channel %u", i);
 
-		zassert_equal(RADIANT_CH_OK, radiant_channel_period_get(i, &period),
-			      NULL);
+		zassert_equal(RADIANT_CH_OK, radiant_channel_period_get(i, &period));
 		zassert_equal((uint16_t)(RADIANT_CHANNEL_PERIOD_ANT_PLUS + i),
-			      period, "channel %u read back another period", i);
+			      period, "channel %u", i);
 
 		/* Slot clocks differ by construction: masters wait a period,
 		 * slaves do not. */
@@ -518,35 +489,30 @@ ZTEST(radiant_channel, test_thirty_two_channels_are_independent)
 	}
 
 	/* Closing one leaves the other 31 alone. */
-	zassert_equal(RADIANT_CH_OK, radiant_channel_close(7u, t0), NULL);
-	zassert_equal(RADIANT_CH_STATE_ASSIGNED, radiant_channel_state_get(7u), NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(7u, t0));
+	zassert_equal(RADIANT_CH_STATE_ASSIGNED, radiant_channel_state_get(7u));
 	for (i = 0u; i < RADIANT_CHANNEL_COUNT; i++) {
 		if (i == 7u) {
 			continue;
 		}
-		zassert_true(radiant_channel_is_open(i),
-			     "closing 7 disturbed channel %u", i);
+		zassert_true(radiant_channel_is_open(i), "channel %u", i);
 	}
 
 	for (i = 0u; i < RADIANT_CHANNEL_COUNT; i++) {
 		if (i != 7u) {
-			zassert_equal(RADIANT_CH_OK, radiant_channel_close(i, t0),
-				      "close(%u)", i);
+			zassert_equal(RADIANT_CH_OK, radiant_channel_close(i, t0), "close(%u)", i);
 		}
-		zassert_equal(RADIANT_CH_OK, radiant_channel_unassign(i),
-			      "unassign(%u)", i);
+		zassert_equal(RADIANT_CH_OK, radiant_channel_unassign(i), "unassign(%u)", i);
 	}
 
 	/* Exactly one CHANNEL_CLOSED per channel and not one more: a host
 	 * library that reopens on the event hangs if one is missed and reopens
 	 * twice if one is duplicated. */
-	zassert_equal((uint32_t)RADIANT_CHANNEL_COUNT, n_evts,
-		      "expected %u close events, got %u",
-		      (uint32_t)RADIANT_CHANNEL_COUNT, n_evts);
+	zassert_equal((uint32_t)RADIANT_CHANNEL_COUNT, n_evts, "got %u", n_evts);
 	for (i = 0u; i < RADIANT_CHANNEL_COUNT; i++) {
 		zassert_equal(1u,
 			      evt_count_of(i, RADIANT_CH_EVENT_CHANNEL_CLOSED),
-			      "channel %u close events", i);
+			      "channel %u", i);
 	}
 
 	radio_clean();
@@ -565,79 +531,54 @@ ZTEST(radiant_channel, test_illegal_lifecycle_transitions)
 	t0 = radiant_radio_now();
 
 	/* Nothing works on an unassigned channel except a query. */
-	zassert_equal(RADIANT_CH_ERR_WRONG_STATE, radiant_channel_unassign(0u),
-		      "unassign of an unassigned channel");
-	zassert_equal(RADIANT_CH_ERR_WRONG_STATE, radiant_channel_open(0u, 0u, t0),
-		      "open of an unassigned channel");
-	zassert_equal(RADIANT_CH_ERR_WRONG_STATE, radiant_channel_close(0u, t0),
-		      "close of an unassigned channel");
-	zassert_equal(RADIANT_CH_ERR_WRONG_STATE,
-		      radiant_channel_id_set(0u, 1u, 1u, 1u),
-		      "id_set on an unassigned channel");
-	zassert_equal(RADIANT_CH_ERR_WRONG_STATE,
-		      radiant_channel_tx_power_set(0u, 3u, 0u),
-		      "tx_power_set on an unassigned channel");
-	zassert_equal(RADIANT_CH_ERR_WRONG_STATE,
-		      radiant_channel_search_timeout_set(0u, 4u),
-		      "search_timeout_set on an unassigned channel");
+	zassert_equal(RADIANT_CH_ERR_WRONG_STATE, radiant_channel_unassign(0u));
+	zassert_equal(RADIANT_CH_ERR_WRONG_STATE, radiant_channel_open(0u, 0u, t0));
+	zassert_equal(RADIANT_CH_ERR_WRONG_STATE, radiant_channel_close(0u, t0));
+	zassert_equal(RADIANT_CH_ERR_WRONG_STATE, radiant_channel_id_set(0u, 1u, 1u, 1u));
+	zassert_equal(RADIANT_CH_ERR_WRONG_STATE, radiant_channel_tx_power_set(0u, 3u, 0u));
+	zassert_equal(RADIANT_CH_ERR_WRONG_STATE, radiant_channel_search_timeout_set(0u, 4u));
 
-	zassert_equal(RADIANT_CH_OK, radiant_channel_assign(0u, TYPE_MASTER, 0u, 0u),
-		      NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_assign(0u, TYPE_MASTER, 0u, 0u));
 
 	/* Assigning twice is WRONG_STATE, not a silent reconfiguration. */
-	zassert_equal(RADIANT_CH_ERR_WRONG_STATE,
-		      radiant_channel_assign(0u, TYPE_SLAVE, 0u, 0u), NULL);
-	zassert_true(radiant_channel_is_master(0u),
-		     "a refused assign changed the channel type");
+	zassert_equal(RADIANT_CH_ERR_WRONG_STATE, radiant_channel_assign(0u, TYPE_SLAVE, 0u, 0u));
+	zassert_true(radiant_channel_is_master(0u));
 
 	/* Open before the ID is set is its own code, and it is not
 	 * WRONG_STATE: the channel is in the right state, it is missing a
 	 * setting, and a host distinguishes the two. */
-	zassert_equal(RADIANT_CH_ERR_ID_NOT_SET, radiant_channel_open(0u, 0u, t0),
-		      NULL);
+	zassert_equal(RADIANT_CH_ERR_ID_NOT_SET, radiant_channel_open(0u, 0u, t0));
 
 	zassert_equal(RADIANT_CH_OK,
 		      radiant_channel_id_set(0u, TEST_DEVNUM, TEST_DEVTYPE,
-					 TEST_TRANSTYPE),
-		      NULL);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_open(0u, 0u, t0), NULL);
+					 TEST_TRANSTYPE));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_open(0u, 0u, t0));
 
 	/* Open twice. */
-	zassert_equal(RADIANT_CH_ERR_WRONG_STATE, radiant_channel_open(0u, 0u, t0),
-		      NULL);
+	zassert_equal(RADIANT_CH_ERR_WRONG_STATE, radiant_channel_open(0u, 0u, t0));
 
 	/* Unassigning an open channel is refused rather than obliged: closing
 	 * it here would swallow the CHANNEL_CLOSED the host is waiting on. */
-	zassert_equal(RADIANT_CH_ERR_WRONG_STATE, radiant_channel_unassign(0u), NULL);
-	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(0u), NULL);
-	zassert_equal(0u, evt_count_of(0u, RADIANT_CH_EVENT_CHANNEL_CLOSED),
-		      "a refused unassign raised a close event");
+	zassert_equal(RADIANT_CH_ERR_WRONG_STATE, radiant_channel_unassign(0u));
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(0u));
+	zassert_equal(0u, evt_count_of(0u, RADIANT_CH_EVENT_CHANNEL_CLOSED));
 
 	/* Everything that retunes the radio is refused while open. */
+	zassert_equal(RADIANT_CH_ERR_WRONG_STATE, radiant_channel_id_set(0u, 1u, 1u, 1u));
+	zassert_equal(RADIANT_CH_ERR_WRONG_STATE, radiant_channel_period_set(0u, 4096u));
+	zassert_equal(RADIANT_CH_ERR_WRONG_STATE, radiant_channel_rf_freq_set(0u, 57u));
+	zassert_equal(RADIANT_CH_ERR_WRONG_STATE, radiant_channel_crc_mode_set(0u, 0u));
 	zassert_equal(RADIANT_CH_ERR_WRONG_STATE,
-		      radiant_channel_id_set(0u, 1u, 1u, 1u), "id_set while open");
-	zassert_equal(RADIANT_CH_ERR_WRONG_STATE, radiant_channel_period_set(0u, 4096u),
-		      "period_set while open");
-	zassert_equal(RADIANT_CH_ERR_WRONG_STATE, radiant_channel_rf_freq_set(0u, 57u),
-		      "rf_freq_set while open");
-	zassert_equal(RADIANT_CH_ERR_WRONG_STATE, radiant_channel_crc_mode_set(0u, 0u),
-		      "crc_mode_set while open");
-	zassert_equal(RADIANT_CH_ERR_WRONG_STATE,
-		      radiant_channel_freq_hop_table_set(0u, 1u, 2u, 3u),
-		      "freq_hop_table_set while open");
+		      radiant_channel_freq_hop_table_set(0u, 1u, 2u, 3u));
 
 	/* What does NOT retune the radio stays legal while open. */
-	zassert_equal(RADIANT_CH_OK, radiant_channel_tx_power_set(0u, 4u, 0u),
-		      "tx_power_set while open should be legal");
-	zassert_equal(RADIANT_CH_OK, radiant_channel_search_timeout_set(0u, 12u),
-		      "search_timeout_set while open should be legal");
+	zassert_equal(RADIANT_CH_OK, radiant_channel_tx_power_set(0u, 4u, 0u));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_search_timeout_set(0u, 12u));
 
 	/* Close, then close again. */
-	zassert_equal(RADIANT_CH_OK, radiant_channel_close(0u, t0), NULL);
-	zassert_equal(RADIANT_CH_ERR_WRONG_STATE, radiant_channel_close(0u, t0),
-		      "a second close");
-	zassert_equal(1u, evt_count_of(0u, RADIANT_CH_EVENT_CHANNEL_CLOSED),
-		      "a refused close raised a second event");
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(0u, t0));
+	zassert_equal(RADIANT_CH_ERR_WRONG_STATE, radiant_channel_close(0u, t0));
+	zassert_equal(1u, evt_count_of(0u, RADIANT_CH_EVENT_CHANNEL_CLOSED));
 
 	radio_clean();
 }
@@ -659,63 +600,41 @@ ZTEST(radiant_channel, test_out_of_range_channel_is_invalid_message)
 	 * entry point rather than sampled.
 	 */
 	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE,
-		      radiant_channel_assign(bad, TYPE_MASTER, 0u, 0u), NULL);
-	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE, radiant_channel_unassign(bad),
-		      NULL);
-	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE, radiant_channel_open(bad, 0u, 0u),
-		      NULL);
-	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE, radiant_channel_close(bad, 0u),
-		      NULL);
+		      radiant_channel_assign(bad, TYPE_MASTER, 0u, 0u));
+	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE, radiant_channel_unassign(bad));
+	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE, radiant_channel_open(bad, 0u, 0u));
+	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE, radiant_channel_close(bad, 0u));
+	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE, radiant_channel_id_set(bad, 1u, 1u, 1u));
+	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE, radiant_channel_id_get(bad, &id));
+	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE, radiant_channel_period_set(bad, 8182u));
+	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE, radiant_channel_period_get(bad, &u16));
+	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE, radiant_channel_rf_freq_set(bad, 57u));
+	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE, radiant_channel_rf_freq_get(bad, &u8));
+	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE, radiant_channel_tx_power_set(bad, 3u, 0u));
+	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE, radiant_channel_tx_power_get(bad, &u8, &u8b));
+	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE, radiant_channel_search_timeout_set(bad, 10u));
 	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE,
-		      radiant_channel_id_set(bad, 1u, 1u, 1u), NULL);
-	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE, radiant_channel_id_get(bad, &id),
-		      NULL);
+		      radiant_channel_lp_search_timeout_set(bad, 10u));
+	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE, radiant_channel_crc_mode_set(bad, 0u));
+	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE, radiant_channel_crc_mode_get(bad, &u8));
 	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE,
-		      radiant_channel_period_set(bad, 8182u), NULL);
+		      radiant_channel_freq_hop_table_set(bad, 1u, 2u, 3u));
 	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE,
-		      radiant_channel_period_get(bad, &u16), NULL);
+		      radiant_channel_freq_hop_table_get(bad, table));
 	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE,
-		      radiant_channel_rf_freq_set(bad, 57u), NULL);
+		      radiant_channel_search_waveform_set(bad, 316u));
 	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE,
-		      radiant_channel_rf_freq_get(bad, &u8), NULL);
+		      radiant_channel_search_waveform_get(bad, &u16));
+	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE, radiant_channel_prox_search_set(bad, 1u, 0u));
 	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE,
-		      radiant_channel_tx_power_set(bad, 3u, 0u), NULL);
-	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE,
-		      radiant_channel_tx_power_get(bad, &u8, &u8b), NULL);
-	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE,
-		      radiant_channel_search_timeout_set(bad, 10u), NULL);
-	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE,
-		      radiant_channel_lp_search_timeout_set(bad, 10u), NULL);
-	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE,
-		      radiant_channel_crc_mode_set(bad, 0u), NULL);
-	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE,
-		      radiant_channel_crc_mode_get(bad, &u8), NULL);
-	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE,
-		      radiant_channel_freq_hop_table_set(bad, 1u, 2u, 3u), NULL);
-	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE,
-		      radiant_channel_freq_hop_table_get(bad, table), NULL);
-	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE,
-		      radiant_channel_search_waveform_set(bad, 316u), NULL);
-	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE,
-		      radiant_channel_search_waveform_get(bad, &u16), NULL);
-	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE,
-		      radiant_channel_prox_search_set(bad, 1u, 0u), NULL);
-	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE,
-		      radiant_channel_prox_search_get(bad, &u8, &u8b), NULL);
-	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE,
-		      radiant_channel_search_priority_set(bad, 1u), NULL);
-	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE,
-		      radiant_channel_search_priority_get(bad, &u8), NULL);
-	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE,
-		      radiant_channel_sharing_cycles_set(bad, 2u), NULL);
-	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE,
-		      radiant_channel_sharing_cycles_get(bad, &u8), NULL);
-	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE,
-		      radiant_channel_sdu_mask_config_set(bad, 0u), NULL);
-	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE,
-		      radiant_channel_sdu_mask_config_get(bad, &u8), NULL);
-	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE,
-		      radiant_channel_status_get(bad, &u8), NULL);
+		      radiant_channel_prox_search_get(bad, &u8, &u8b));
+	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE, radiant_channel_search_priority_set(bad, 1u));
+	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE, radiant_channel_search_priority_get(bad, &u8));
+	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE, radiant_channel_sharing_cycles_set(bad, 2u));
+	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE, radiant_channel_sharing_cycles_get(bad, &u8));
+	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE, radiant_channel_sdu_mask_config_set(bad, 0u));
+	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE, radiant_channel_sdu_mask_config_get(bad, &u8));
+	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE, radiant_channel_status_get(bad, &u8));
 
 	radio_clean();
 }
@@ -729,66 +648,55 @@ ZTEST(radiant_channel, test_bad_parameter_values_and_bad_network)
 	 * the host names. */
 	zassert_equal(RADIANT_CH_ERR_INVALID_NETWORK,
 		      radiant_channel_assign(0u, TYPE_MASTER,
-					 RADIANT_CHANNEL_NETWORK_COUNT, 0u),
-		      NULL);
+					 RADIANT_CHANNEL_NETWORK_COUNT, 0u));
 	zassert_equal(RADIANT_CH_ERR_INVALID_NETWORK,
-		      radiant_channel_assign(0u, TYPE_MASTER, 255u, 0u), NULL);
-	zassert_equal(RADIANT_CH_STATE_UNASSIGNED, radiant_channel_state_get(0u),
-		      "a refused assign left the channel assigned");
+		      radiant_channel_assign(0u, TYPE_MASTER, 255u, 0u));
+	zassert_equal(RADIANT_CH_STATE_UNASSIGNED, radiant_channel_state_get(0u));
 
 	for (i = 0u; i < RADIANT_CHANNEL_NETWORK_COUNT; i++) {
 		zassert_equal(RADIANT_CH_OK,
 			      radiant_channel_assign(i, TYPE_MASTER, i, 0u),
-			      "network %u should be assignable", i);
+			      "network %u", i);
 	}
 
 	/* Period: zero is not a period, and anything under the floor is a
 	 * schedule the radio can never keep. */
-	zassert_equal(RADIANT_CH_ERR_INVALID_PARAM, radiant_channel_period_set(0u, 0u),
-		      NULL);
+	zassert_equal(RADIANT_CH_ERR_INVALID_PARAM, radiant_channel_period_set(0u, 0u));
 	zassert_equal(RADIANT_CH_ERR_INVALID_PARAM,
 		      radiant_channel_period_set(
-			      0u, (uint16_t)(RADIANT_CHANNEL_PERIOD_MIN_COUNTS - 1u)),
-		      NULL);
+			      0u, (uint16_t)(RADIANT_CHANNEL_PERIOD_MIN_COUNTS - 1u)));
 	zassert_equal(RADIANT_CH_OK,
-		      radiant_channel_period_set(0u, RADIANT_CHANNEL_PERIOD_MIN_COUNTS),
-		      NULL);
+		      radiant_channel_period_set(0u, RADIANT_CHANNEL_PERIOD_MIN_COUNTS));
 	zassert_equal(RADIANT_CH_OK,
-		      radiant_channel_period_set(0u, RADIANT_CHANNEL_PERIOD_MAX_COUNTS),
-		      NULL);
+		      radiant_channel_period_set(0u, RADIANT_CHANNEL_PERIOD_MAX_COUNTS));
 
 	/* radiant_sched.c may raise the floor from caps, and may not lower it. */
 	radiant_channel_period_floor_set(1000u);
-	zassert_equal(RADIANT_CH_ERR_INVALID_PARAM,
-		      radiant_channel_period_set(0u, 999u), NULL);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_period_set(0u, 1000u), NULL);
+	zassert_equal(RADIANT_CH_ERR_INVALID_PARAM, radiant_channel_period_set(0u, 999u));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_period_set(0u, 1000u));
 	radiant_channel_period_floor_set(1u);
 	zassert_equal(RADIANT_CH_ERR_INVALID_PARAM,
 		      radiant_channel_period_set(
-			      0u, (uint16_t)(RADIANT_CHANNEL_PERIOD_MIN_COUNTS - 1u)),
-		      "the protocol floor was lowered");
+			      0u, (uint16_t)(RADIANT_CHANNEL_PERIOD_MIN_COUNTS - 1u)));
 
 	/* RF index: 0..124 means 2400..2524 MHz. */
-	zassert_equal(RADIANT_CH_OK, radiant_channel_rf_freq_set(0u, RADIANT_RF_INDEX_MAX),
-		      NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_rf_freq_set(0u, RADIANT_RF_INDEX_MAX));
 	zassert_equal(RADIANT_CH_ERR_INVALID_PARAM,
-		      radiant_channel_rf_freq_set(0u, RADIANT_RF_INDEX_MAX + 1u), NULL);
+		      radiant_channel_rf_freq_set(0u, RADIANT_RF_INDEX_MAX + 1u));
 
 	/* CRC: the supported set is exactly {default}. Accepting and ignoring
 	 * anything else gives a host a link that works and framing that does
 	 * not. */
-	zassert_equal(RADIANT_CH_ERR_INVALID_PARAM, radiant_channel_crc_mode_set(0u, 1u),
-		      NULL);
+	zassert_equal(RADIANT_CH_ERR_INVALID_PARAM, radiant_channel_crc_mode_set(0u, 1u));
 
 	/* Frequency-hop table: every entry is an RF index. */
 	zassert_equal(RADIANT_CH_OK,
 		      radiant_channel_freq_hop_table_set(0u, 0u, 57u,
-						     RADIANT_RF_INDEX_MAX),
-		      NULL);
+						     RADIANT_RF_INDEX_MAX));
 	zassert_equal(RADIANT_CH_ERR_INVALID_PARAM,
-		      radiant_channel_freq_hop_table_set(0u, 0u, 57u, 125u), NULL);
+		      radiant_channel_freq_hop_table_set(0u, 0u, 57u, 125u));
 	zassert_equal(RADIANT_CH_ERR_INVALID_PARAM,
-		      radiant_channel_freq_hop_table_set(0u, 125u, 57u, 1u), NULL);
+		      radiant_channel_freq_hop_table_set(0u, 125u, 57u, 1u));
 
 	/*
 	 * Search waveform: PERMANENT LIMITATION, same shape as CRC mode above.
@@ -799,11 +707,8 @@ ZTEST(radiant_channel, test_bad_parameter_values_and_bad_network)
 	 */
 	zassert_equal(RADIANT_CH_OK,
 		      radiant_channel_search_waveform_set(
-			      0u, RADIANT_CH_SEARCH_WAVEFORM_FAST),
-		      NULL);
-	zassert_equal(RADIANT_CH_ERR_INVALID_PARAM,
-		      radiant_channel_search_waveform_set(0u, 200u),
-		      "a custom waveform must be refused: nothing switches duty cycle");
+			      0u, RADIANT_CH_SEARCH_WAVEFORM_FAST));
+	zassert_equal(RADIANT_CH_ERR_INVALID_PARAM, radiant_channel_search_waveform_set(0u, 200u));
 
 	/*
 	 * Proximity: PERMANENT LIMITATION. Nothing reads prox_threshold back
@@ -811,25 +716,18 @@ ZTEST(radiant_channel, test_bad_parameter_values_and_bad_network)
 	 * (off) is accepted; every non-zero threshold is refused rather than
 	 * stored and silently never enforced.
 	 */
-	zassert_equal(RADIANT_CH_OK,
-		      radiant_channel_prox_search_set(0u, 0u, 0u),
-		      NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_prox_search_set(0u, 0u, 0u));
 	zassert_equal(RADIANT_CH_ERR_INVALID_PARAM,
 		      radiant_channel_prox_search_set(
-			      0u, RADIANT_CH_PROX_THRESHOLD_MAX, 0u),
-		      "a non-zero threshold must be refused: nothing enforces it");
+			      0u, RADIANT_CH_PROX_THRESHOLD_MAX, 0u));
 	zassert_equal(RADIANT_CH_ERR_INVALID_PARAM,
 		      radiant_channel_prox_search_set(
-			      0u, RADIANT_CH_PROX_THRESHOLD_MAX + 1u, 0u),
-		      NULL);
+			      0u, RADIANT_CH_PROX_THRESHOLD_MAX + 1u, 0u));
 
 	/* Transmit power: 0..5, or anything at all behind the custom bit. */
-	zassert_equal(RADIANT_CH_OK, radiant_channel_tx_power_set(0u, 5u, 0u), NULL);
-	zassert_equal(RADIANT_CH_ERR_INVALID_PARAM,
-		      radiant_channel_tx_power_set(0u, 6u, 0u), NULL);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_tx_power_set(0u, 0x80u, 0x42u),
-		      "the custom bit means `custom` is the value, so there is "
-		      "no level to range-check");
+	zassert_equal(RADIANT_CH_OK, radiant_channel_tx_power_set(0u, 5u, 0u));
+	zassert_equal(RADIANT_CH_ERR_INVALID_PARAM, radiant_channel_tx_power_set(0u, 6u, 0u));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_tx_power_set(0u, 0x80u, 0x42u));
 
 	radio_clean();
 }
@@ -855,31 +753,23 @@ ZTEST(radiant_channel, test_a_masters_missed_slot_advances_the_clock_and_nothing
 	t0 = radiant_radio_now();
 
 	assign_and_id(0u, TYPE_MASTER);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_open(0u, 0u, t0), NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_open(0u, 0u, t0));
 
 	/* Measured: the first slot is one period out, not zero. */
 	expected = t0 + RADIANT_ANT_PLUS_PERIOD_US;
-	zassert_equal(expected, radiant_channel_next_slot(0u), NULL);
+	zassert_equal(expected, radiant_channel_next_slot(0u));
 
 	/* Well past the threshold that would send a slave to search. */
 	for (i = 0u; i < (uint32_t)RADIANT_CHANNEL_RX_FAIL_TO_SEARCH + 4u; i++) {
-		zassert_false(radiant_channel_on_slot_missed(0u, t0 + 999999u),
-			      "a master was sent to search after %u missed "
-			      "transmits", i + 1u);
+		zassert_false(radiant_channel_on_slot_missed(0u, t0 + 999999u), "miss %u", i + 1u);
 
 		expected += RADIANT_ANT_PLUS_PERIOD_US;
-		zassert_equal(expected, radiant_channel_next_slot(0u),
-			      "a master's clock did not advance on missed "
-			      "transmit %u - the instant re-posted for ever is "
-			      "how the board wedges", i + 1u);
+		zassert_equal(expected, radiant_channel_next_slot(0u), "transmit %u", i + 1u);
 
-		zassert_equal(RADIANT_CH_STATE_TRACKING,
-			      radiant_channel_state_get(0u),
-			      "a master left TRACKING after a missed transmit");
+		zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(0u));
 	}
 
-	zassert_equal(0u, evt_count_of(0u, RADIANT_CH_EVENT_RX_FAIL_GO_TO_SEARCH),
-		      "a master raised a slave's search-fallback event");
+	zassert_equal(0u, evt_count_of(0u, RADIANT_CH_EVENT_RX_FAIL_GO_TO_SEARCH));
 
 	radio_clean();
 }
@@ -904,19 +794,16 @@ ZTEST(radiant_channel, test_master_first_transmission_is_one_period_not_zero)
 
 	assign_and_id(0u, TYPE_MASTER);
 	zassert_equal(RADIANT_CH_OK,
-		      radiant_channel_period_set(0u, RADIANT_CHANNEL_PERIOD_ANT_PLUS),
-		      NULL);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_open(0u, 0u, t_open), NULL);
+		      radiant_channel_period_set(0u, RADIANT_CHANNEL_PERIOD_ANT_PLUS));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_open(0u, 0u, t_open));
 
 	/* Measured, 8 of 8 runs (docs/ant-radio-link.md, "Master open-time"):
 	 * MESG_OPEN_CHANNEL to the first EVENT_TX is one full channel period.
 	 * A host expecting data immediately after opening a master waits one
 	 * slot; that is correct behaviour, not latency to optimise away. */
 	want = t_open + RADIANT_ANT_PLUS_PERIOD_US;
-	zassert_equal(want, radiant_channel_next_slot(0u),
-		      "a master's first slot was not one period out");
-	zassert_not_equal(t_open, radiant_channel_next_slot(0u),
-			  "a master transmitted the instant it was opened");
+	zassert_equal(want, radiant_channel_next_slot(0u));
+	zassert_not_equal(t_open, radiant_channel_next_slot(0u));
 
 	/* Now prove a backend accepts that decision, rather than only that the
 	 * arithmetic is right. This is what radiant_sched.c will do. */
@@ -932,29 +819,25 @@ ZTEST(radiant_channel, test_master_first_transmission_is_one_period_not_zero)
 	req.body = body;
 	req.body_len = (uint8_t)sizeof(body);
 	req.t_sync_at = radiant_channel_next_slot(0u);
-	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_tx(&req, &op), "tx arm failed");
+	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_tx(&req, &op));
 	radiant_channel_bind_op(0u, op);
 
 	arm = fake_radio_last_arm();
-	zassert_equal(FAKE_RADIO_ARM_TX, arm->kind, NULL);
-	zassert_equal(want, arm->t_sync_at,
-		      "the arm asked for the wrong instant");
-	zassert_mem_equal(arm->addr, track_filter.addr, RADIANT_FRAME_ADDR_LEN_TRACKING,
-			  "the master's frame did not carry its own channel ID");
+	zassert_equal(FAKE_RADIO_ARM_TX, arm->kind);
+	zassert_equal(want, arm->t_sync_at);
+	zassert_mem_equal(arm->addr, track_filter.addr, RADIANT_FRAME_ADDR_LEN_TRACKING);
 
 	fake_radio_advance_to(want + 1000u);
 
-	zassert_equal(1u, n_terminal, "expected exactly one terminal event");
-	zassert_equal(0u, n_terminal_stale, "the transmit event was stale");
-	zassert_equal(-1, radiant_channel_op_owner(op),
-		      "the terminal event did not release the binding");
+	zassert_equal(1u, n_terminal);
+	zassert_equal(0u, n_terminal_stale);
+	zassert_equal(-1, radiant_channel_op_owner(op));
 
 	/* The next slot is one period after the one that just went out. */
 	radiant_channel_on_slot(0u, want);
-	zassert_equal(want + RADIANT_ANT_PLUS_PERIOD_US, radiant_channel_next_slot(0u),
-		      NULL);
+	zassert_equal(want + RADIANT_ANT_PLUS_PERIOD_US, radiant_channel_next_slot(0u));
 
-	zassert_equal(RADIANT_CH_OK, radiant_channel_close(0u, radiant_radio_now()), NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(0u, radiant_radio_now()));
 	radio_clean();
 }
 
@@ -969,26 +852,23 @@ ZTEST(radiant_channel, test_open_offset_phases_on_top_of_the_period)
 	 * place of it - an offset of 0 meaning "transmit now" is falsified by
 	 * the open-time measurement above. */
 	assign_and_id(0u, TYPE_MASTER);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_open(0u, 4096u, t_open), NULL);
-	zassert_equal(t_open + 125000u + RADIANT_ANT_PLUS_PERIOD_US,
-		      radiant_channel_next_slot(0u),
-		      "4096 counts is 125 ms and must be added to the period");
+	zassert_equal(RADIANT_CH_OK, radiant_channel_open(0u, 4096u, t_open));
+	zassert_equal(t_open + 125000u + RADIANT_ANT_PLUS_PERIOD_US, radiant_channel_next_slot(0u));
 
 	/* Two masters phased half a period apart do not want the radio at the
 	 * same instant, which is the whole purpose of the parameter. */
 	assign_and_id(1u, TYPE_MASTER);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_open(1u, 0u, t_open), NULL);
-	zassert_not_equal(radiant_channel_next_slot(0u), radiant_channel_next_slot(1u),
-			  "the offset did not phase the two slots apart");
+	zassert_equal(RADIANT_CH_OK, radiant_channel_open(1u, 0u, t_open));
+	zassert_not_equal(radiant_channel_next_slot(0u), radiant_channel_next_slot(1u));
 
 	/* A slave's offset delays its first window and nothing else. */
 	assign_and_id(2u, TYPE_SLAVE);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_open(2u, 4096u, t_open), NULL);
-	zassert_equal(t_open + 125000u, radiant_channel_next_slot(2u), NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_open(2u, 4096u, t_open));
+	zassert_equal(t_open + 125000u, radiant_channel_next_slot(2u));
 
-	zassert_equal(RADIANT_CH_OK, radiant_channel_close(0u, t_open), NULL);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, t_open), NULL);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_close(2u, t_open), NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(0u, t_open));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, t_open));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(2u, t_open));
 	radio_clean();
 }
 
@@ -1000,31 +880,30 @@ ZTEST(radiant_channel, test_earliest_slot_picks_the_soonest_open_channel)
 	up();
 	t0 = radiant_radio_now();
 
-	zassert_equal(RADIANT_TIME_NEVER, radiant_channel_earliest_slot(&which),
-		      "an idle stack wants the radio");
+	zassert_equal(RADIANT_TIME_NEVER, radiant_channel_earliest_slot(&which));
 
 	assign_and_id(5u, TYPE_SLAVE);
 	assign_and_id(9u, TYPE_SLAVE);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_open(5u, 0u, t0 + 5000u), NULL);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_open(9u, 0u, t0 + 1000u), NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_open(5u, 0u, t0 + 5000u));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_open(9u, 0u, t0 + 1000u));
 
-	zassert_equal(t0 + 1000u, radiant_channel_earliest_slot(&which), NULL);
-	zassert_equal(9u, which, NULL);
+	zassert_equal(t0 + 1000u, radiant_channel_earliest_slot(&which));
+	zassert_equal(9u, which);
 
 	/* A CLOSING channel stops wanting the radio immediately, even though
 	 * its clock still holds a time - arming one more window for it would
 	 * produce the second in-flight operation that makes the close race
 	 * hard. */
 	(void)arm_rx_for(9u, t0 + 1000u, t0 + 2000u);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_close(9u, t0), NULL);
-	zassert_equal(RADIANT_CH_STATE_CLOSING, radiant_channel_state_get(9u), NULL);
-	zassert_equal(RADIANT_TIME_NEVER, radiant_channel_next_slot(9u), NULL);
-	zassert_equal(t0 + 5000u, radiant_channel_earliest_slot(&which), NULL);
-	zassert_equal(5u, which, NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(9u, t0));
+	zassert_equal(RADIANT_CH_STATE_CLOSING, radiant_channel_state_get(9u));
+	zassert_equal(RADIANT_TIME_NEVER, radiant_channel_next_slot(9u));
+	zassert_equal(t0 + 5000u, radiant_channel_earliest_slot(&which));
+	zassert_equal(5u, which);
 
-	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_abort(), NULL);
-	zassert_equal(RADIANT_CH_STATE_ASSIGNED, radiant_channel_state_get(9u), NULL);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_close(5u, t0), NULL);
+	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_abort());
+	zassert_equal(RADIANT_CH_STATE_ASSIGNED, radiant_channel_state_get(9u));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(5u, t0));
 	radio_clean();
 }
 
@@ -1042,39 +921,37 @@ ZTEST(radiant_channel, test_search_timeout_expiry_closes_the_channel)
 
 	assign_and_id(4u, TYPE_SLAVE);
 	/* One tick: 2.5 s. */
-	zassert_equal(RADIANT_CH_OK, radiant_channel_search_timeout_set(4u, 1u), NULL);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_lp_search_timeout_set(4u, 0u),
-		      NULL);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_open(4u, 0u, t0), NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_search_timeout_set(4u, 1u));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_lp_search_timeout_set(4u, 0u));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_open(4u, 0u, t0));
 
-	zassert_equal(t0 + 2500000u, radiant_channel_search_deadline(4u), NULL);
+	zassert_equal(t0 + 2500000u, radiant_channel_search_deadline(4u));
 
 	/* One microsecond short. */
-	zassert_equal(0u, radiant_channel_tick(t0 + 2499999u),
-		      "the search gave up early");
-	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(4u), NULL);
-	zassert_equal(0u, n_evts, "an event was raised before the deadline");
+	zassert_equal(0u, radiant_channel_tick(t0 + 2499999u));
+	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(4u));
+	zassert_equal(0u, n_evts);
 
 	/* And at it. Both events, in this order: a host library waits for
 	 * RX_SEARCH_TIMEOUT to know the search failed and for CHANNEL_CLOSED
 	 * to know it may unassign. */
-	zassert_equal(1u, radiant_channel_tick(t0 + 2500000u), NULL);
-	zassert_equal(2u, n_evts, "expected two events, got %u", n_evts);
-	zassert_equal(4u, evts[0].channel, NULL);
-	zassert_equal(RADIANT_CH_EVENT_RX_SEARCH_TIMEOUT, evts[0].code, NULL);
-	zassert_equal(4u, evts[1].channel, NULL);
-	zassert_equal(RADIANT_CH_EVENT_CHANNEL_CLOSED, evts[1].code, NULL);
+	zassert_equal(1u, radiant_channel_tick(t0 + 2500000u));
+	zassert_equal(2u, n_evts, "got %u", n_evts);
+	zassert_equal(4u, evts[0].channel);
+	zassert_equal(RADIANT_CH_EVENT_RX_SEARCH_TIMEOUT, evts[0].code);
+	zassert_equal(4u, evts[1].channel);
+	zassert_equal(RADIANT_CH_EVENT_CHANNEL_CLOSED, evts[1].code);
 
-	zassert_equal(RADIANT_CH_STATE_ASSIGNED, radiant_channel_state_get(4u), NULL);
-	zassert_equal(1u, radiant_channel_search_timeout_count(), NULL);
+	zassert_equal(RADIANT_CH_STATE_ASSIGNED, radiant_channel_state_get(4u));
+	zassert_equal(1u, radiant_channel_search_timeout_count());
 
 	/* And it does not fire again. */
-	zassert_equal(0u, radiant_channel_tick(t0 + 100000000u), NULL);
-	zassert_equal(2u, n_evts, NULL);
+	zassert_equal(0u, radiant_channel_tick(t0 + 100000000u));
+	zassert_equal(2u, n_evts);
 
 	/* A channel closed by a search timeout is unassignable, which is the
 	 * whole reason the close event is raised as well as the timeout. */
-	zassert_equal(RADIANT_CH_OK, radiant_channel_unassign(4u), NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_unassign(4u));
 
 	radio_clean();
 }
@@ -1087,40 +964,37 @@ ZTEST(radiant_channel, test_search_timeout_budget_is_high_plus_low_priority)
 	t0 = radiant_radio_now();
 
 	assign_and_id(0u, TYPE_SLAVE);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_search_timeout_set(0u, 2u), NULL);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_lp_search_timeout_set(0u, 3u),
-		      NULL);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_open(0u, 0u, t0), NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_search_timeout_set(0u, 2u));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_lp_search_timeout_set(0u, 3u));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_open(0u, 0u, t0));
 
 	/* Low priority runs after high priority expires, so the budget is the
 	 * sum: 5 ticks = 12.5 s. */
-	zassert_equal(t0 + 12500000u, radiant_channel_search_deadline(0u), NULL);
-	zassert_equal(0u, radiant_channel_tick(t0 + 12499999u), NULL);
-	zassert_equal(1u, radiant_channel_tick(t0 + 12500000u), NULL);
+	zassert_equal(t0 + 12500000u, radiant_channel_search_deadline(0u));
+	zassert_equal(0u, radiant_channel_tick(t0 + 12499999u));
+	zassert_equal(1u, radiant_channel_tick(t0 + 12500000u));
 
 	/* 255 on either byte is "search forever", and it is the one value that
 	 * is not a duration. */
 	assign_and_id(1u, TYPE_SLAVE);
 	zassert_equal(RADIANT_CH_OK,
 		      radiant_channel_search_timeout_set(
-			      1u, RADIANT_CHANNEL_SEARCH_INFINITE),
-		      NULL);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_open(1u, 0u, t0), NULL);
-	zassert_equal(RADIANT_TIME_NEVER, radiant_channel_search_deadline(1u), NULL);
-	zassert_equal(0u, radiant_channel_tick(t0 + 0xFFFFFFFFull), NULL);
-	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(1u), NULL);
+			      1u, RADIANT_CHANNEL_SEARCH_INFINITE));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_open(1u, 0u, t0));
+	zassert_equal(RADIANT_TIME_NEVER, radiant_channel_search_deadline(1u));
+	zassert_equal(0u, radiant_channel_tick(t0 + 0xFFFFFFFFull));
+	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(1u));
 
 	/* Both zero means the search has no budget at all and the next tick
 	 * closes it, rather than leaving the channel in SEARCHING forever. */
 	assign_and_id(2u, TYPE_SLAVE);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_search_timeout_set(2u, 0u), NULL);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_lp_search_timeout_set(2u, 0u),
-		      NULL);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_open(2u, 0u, t0), NULL);
-	zassert_equal(1u, radiant_channel_tick(t0), NULL);
-	zassert_equal(RADIANT_CH_STATE_ASSIGNED, radiant_channel_state_get(2u), NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_search_timeout_set(2u, 0u));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_lp_search_timeout_set(2u, 0u));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_open(2u, 0u, t0));
+	zassert_equal(1u, radiant_channel_tick(t0));
+	zassert_equal(RADIANT_CH_STATE_ASSIGNED, radiant_channel_state_get(2u));
 
-	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, t0), NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, t0));
 	radio_clean();
 }
 
@@ -1132,19 +1006,19 @@ ZTEST(radiant_channel, test_extending_a_timeout_mid_search_does_not_restart_it)
 	t0 = radiant_radio_now();
 
 	assign_and_id(0u, TYPE_SLAVE);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_search_timeout_set(0u, 2u), NULL);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_open(0u, 0u, t0), NULL);
-	zassert_equal(t0 + 5000000u, radiant_channel_search_deadline(0u), NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_search_timeout_set(0u, 2u));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_open(0u, 0u, t0));
+	zassert_equal(t0 + 5000000u, radiant_channel_search_deadline(0u));
 
 	/* Four seconds in, the host doubles the timeout. The deadline is
 	 * re-derived from when the search BEGAN, so the channel now gives up
 	 * at 10 s and not at 14 s. A restart would let a host that polls the
 	 * setting keep a channel searching forever without meaning to. */
-	zassert_equal(0u, radiant_channel_tick(t0 + 4000000u), NULL);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_search_timeout_set(0u, 4u), NULL);
-	zassert_equal(t0 + 10000000u, radiant_channel_search_deadline(0u), NULL);
-	zassert_equal(0u, radiant_channel_tick(t0 + 9999999u), NULL);
-	zassert_equal(1u, radiant_channel_tick(t0 + 10000000u), NULL);
+	zassert_equal(0u, radiant_channel_tick(t0 + 4000000u));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_search_timeout_set(0u, 4u));
+	zassert_equal(t0 + 10000000u, radiant_channel_search_deadline(0u));
+	zassert_equal(0u, radiant_channel_tick(t0 + 9999999u));
+	zassert_equal(1u, radiant_channel_tick(t0 + 10000000u));
 
 	radio_clean();
 }
@@ -1158,31 +1032,26 @@ ZTEST(radiant_channel, test_search_timeout_with_an_operation_in_flight_defers)
 	t0 = radiant_radio_now();
 
 	assign_and_id(0u, TYPE_SLAVE);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_search_timeout_set(0u, 1u), NULL);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_open(0u, 0u, t0), NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_search_timeout_set(0u, 1u));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_open(0u, 0u, t0));
 
 	op = arm_rx_for(0u, t0 + 1000u, t0 + 4000000u);
 
 	/* The deadline passes while the window is still open. */
 	fake_radio_advance_to(t0 + 2500000u);
-	zassert_equal(1u, radiant_channel_tick(radiant_radio_now()), NULL);
+	zassert_equal(1u, radiant_channel_tick(radiant_radio_now()));
 
 	/* RX_SEARCH_TIMEOUT now; CHANNEL_CLOSED when the operation ends. */
-	zassert_equal(RADIANT_CH_STATE_CLOSING, radiant_channel_state_get(0u), NULL);
-	zassert_equal(1u, evt_count_of(0u, RADIANT_CH_EVENT_RX_SEARCH_TIMEOUT),
-		      NULL);
-	zassert_equal(0u, evt_count_of(0u, RADIANT_CH_EVENT_CHANNEL_CLOSED),
-		      "the close completed while the radio still had the op");
-	zassert_equal(0, radiant_channel_op_owner(op),
-		      "the binding was dropped early");
+	zassert_equal(RADIANT_CH_STATE_CLOSING, radiant_channel_state_get(0u));
+	zassert_equal(1u, evt_count_of(0u, RADIANT_CH_EVENT_RX_SEARCH_TIMEOUT));
+	zassert_equal(0u, evt_count_of(0u, RADIANT_CH_EVENT_CHANNEL_CLOSED));
+	zassert_equal(0, radiant_channel_op_owner(op));
 
-	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_abort(), NULL);
+	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_abort());
 
-	zassert_equal(RADIANT_CH_STATE_ASSIGNED, radiant_channel_state_get(0u), NULL);
-	zassert_equal(1u, evt_count_of(0u, RADIANT_CH_EVENT_CHANNEL_CLOSED), NULL);
-	zassert_equal(0u, n_terminal_stale,
-		      "the aborted operation's terminal event was not "
-		      "attributed to the channel that owned it");
+	zassert_equal(RADIANT_CH_STATE_ASSIGNED, radiant_channel_state_get(0u));
+	zassert_equal(1u, evt_count_of(0u, RADIANT_CH_EVENT_CHANNEL_CLOSED));
+	zassert_equal(0u, n_terminal_stale);
 
 	radio_clean();
 }
@@ -1202,39 +1071,34 @@ ZTEST(radiant_channel, test_close_with_an_operation_in_flight)
 	t0 = radiant_radio_now();
 
 	assign_and_id(2u, TYPE_SLAVE);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_open(2u, 0u, t0), NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_open(2u, 0u, t0));
 	op = arm_rx_for(2u, t0 + 1000u, t0 + 500000u);
 
-	zassert_equal(RADIANT_CH_OK, radiant_channel_close(2u, t0), NULL);
-	zassert_equal(RADIANT_CH_STATE_CLOSING, radiant_channel_state_get(2u), NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(2u, t0));
+	zassert_equal(RADIANT_CH_STATE_CLOSING, radiant_channel_state_get(2u));
 
 	/* While CLOSING the channel reports the state it is leaving, not
 	 * ASSIGNED - reporting ASSIGNED would tell a host it may unassign a
 	 * channel that radiant_channel_unassign() then refuses. */
-	zassert_equal(RADIANT_CH_OK, radiant_channel_status_get(2u, &status), NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_status_get(2u, &status));
 	zassert_equal((uint8_t)(TYPE_SLAVE | RADIANT_CH_STATUS_SEARCHING), status,
-		      "a closing channel reported 0x%02x", status);
+		      "status 0x%02x", status);
 
-	zassert_equal(0u, evt_count_of(2u, RADIANT_CH_EVENT_CHANNEL_CLOSED),
-		      "the close completed before the operation ended");
-	zassert_equal(RADIANT_CH_ERR_WRONG_STATE, radiant_channel_unassign(2u),
-		      "a closing channel was unassignable");
-	zassert_equal(RADIANT_CH_ERR_WRONG_STATE, radiant_channel_open(2u, 0u, t0),
-		      "a closing channel was reopenable");
-	zassert_equal(RADIANT_CH_ERR_WRONG_STATE, radiant_channel_close(2u, t0),
-		      "a second close was accepted");
+	zassert_equal(0u, evt_count_of(2u, RADIANT_CH_EVENT_CHANNEL_CLOSED));
+	zassert_equal(RADIANT_CH_ERR_WRONG_STATE, radiant_channel_unassign(2u));
+	zassert_equal(RADIANT_CH_ERR_WRONG_STATE, radiant_channel_open(2u, 0u, t0));
+	zassert_equal(RADIANT_CH_ERR_WRONG_STATE, radiant_channel_close(2u, t0));
 
 	/* The abort delivers the terminal event before it returns (the HAL
 	 * guarantees it), and that event is what completes the close. */
-	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_abort(), NULL);
-	zassert_equal(1u, n_terminal, NULL);
-	zassert_equal(0u, n_terminal_stale, NULL);
+	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_abort());
+	zassert_equal(1u, n_terminal);
+	zassert_equal(0u, n_terminal_stale);
 
-	zassert_equal(RADIANT_CH_STATE_ASSIGNED, radiant_channel_state_get(2u), NULL);
-	zassert_equal(1u, evt_count_of(2u, RADIANT_CH_EVENT_CHANNEL_CLOSED),
-		      "exactly one CHANNEL_CLOSED per successful close");
-	zassert_equal(-1, radiant_channel_op_owner(op), NULL);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_unassign(2u), NULL);
+	zassert_equal(RADIANT_CH_STATE_ASSIGNED, radiant_channel_state_get(2u));
+	zassert_equal(1u, evt_count_of(2u, RADIANT_CH_EVENT_CHANNEL_CLOSED));
+	zassert_equal(-1, radiant_channel_op_owner(op));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_unassign(2u));
 
 	radio_clean();
 }
@@ -1249,45 +1113,40 @@ ZTEST(radiant_channel, test_late_terminal_event_after_reopen_is_stale)
 	t0 = radiant_radio_now();
 
 	assign_and_id(6u, TYPE_SLAVE);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_open(6u, 0u, t0), NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_open(6u, 0u, t0));
 	op_old = arm_rx_for(6u, t0 + 1000u, t0 + 500000u);
 
-	zassert_equal(RADIANT_CH_OK, radiant_channel_close(6u, t0), NULL);
-	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_abort(), NULL);
-	zassert_equal(RADIANT_CH_STATE_ASSIGNED, radiant_channel_state_get(6u), NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(6u, t0));
+	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_abort());
+	zassert_equal(RADIANT_CH_STATE_ASSIGNED, radiant_channel_state_get(6u));
 
 	/* Reopen immediately. This is the close-then-reopen race: the old
 	 * operation is gone, a new one is armed, and the two must never be
 	 * confused. */
-	zassert_equal(RADIANT_CH_OK, radiant_channel_open(6u, 0u, radiant_radio_now()),
-		      NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_open(6u, 0u, radiant_radio_now()));
 	op_new = arm_rx_for(6u, radiant_radio_now() + 1000u,
 			    radiant_radio_now() + 500000u);
-	zassert_not_equal(op_old, op_new, "the mock reused an op id");
-	zassert_equal(6, radiant_channel_op_owner(op_new), NULL);
+	zassert_not_equal(op_old, op_new);
+	zassert_equal(6, radiant_channel_op_owner(op_new));
 
 	/* Now the late event: on real hardware the frame was already in the
 	 * receiver's pipeline when the abort ran, so it arrives after the core
 	 * moved on. The mock never produces this unprompted. */
-	zassert_equal(0u, radiant_channel_stale_op_count(), NULL);
+	zassert_equal(0u, radiant_channel_stale_op_count());
 	zassert_equal(RADIANT_RADIO_OK_RC,
 		      fake_radio_inject_late_tx(op_old,
-						RADIANT_RADIO_STATUS_ABORTED),
-		      "late injection failed");
+						RADIANT_RADIO_STATUS_ABORTED));
 
-	zassert_equal(1u, radiant_channel_stale_op_count(),
-		      "the late event was not recognised as stale");
-	zassert_equal(1u, n_terminal_stale, NULL);
+	zassert_equal(1u, radiant_channel_stale_op_count());
+	zassert_equal(1u, n_terminal_stale);
 
 	/* And nothing about the live channel moved. */
-	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(6u), NULL);
-	zassert_equal(6, radiant_channel_op_owner(op_new),
-		      "a late event for a dead op released the live binding");
-	zassert_equal(1u, evt_count_of(6u, RADIANT_CH_EVENT_CHANNEL_CLOSED),
-		      "the late event raised a second close");
+	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(6u));
+	zassert_equal(6, radiant_channel_op_owner(op_new));
+	zassert_equal(1u, evt_count_of(6u, RADIANT_CH_EVENT_CHANNEL_CLOSED));
 
-	zassert_equal(RADIANT_CH_OK, radiant_channel_close(6u, radiant_radio_now()), NULL);
-	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_abort(), NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(6u, radiant_radio_now()));
+	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_abort());
 	radio_clean();
 }
 
@@ -1299,18 +1158,18 @@ ZTEST(radiant_channel, test_op_zero_never_owns_a_channel)
 	 * every event whose op failed to be recorded - which is exactly the
 	 * bug the op id exists to prevent, arriving through the back door.
 	 */
-	zassert_equal(-1, radiant_channel_op_owner(0u), NULL);
+	zassert_equal(-1, radiant_channel_op_owner(0u));
 
 	assign_and_id(0u, TYPE_SLAVE);
-	zassert_equal(-1, radiant_channel_op_owner(0u), NULL);
+	zassert_equal(-1, radiant_channel_op_owner(0u));
 
 	radiant_channel_bind_op(0u, 77u);
-	zassert_equal(0, radiant_channel_op_owner(77u), NULL);
-	zassert_equal(-1, radiant_channel_op_owner(0u), NULL);
+	zassert_equal(0, radiant_channel_op_owner(77u));
+	zassert_equal(-1, radiant_channel_op_owner(0u));
 
 	radiant_channel_bind_op(0u, 0u);
-	zassert_equal(-1, radiant_channel_op_owner(77u), NULL);
-	zassert_equal(-1, radiant_channel_op_owner(0u), NULL);
+	zassert_equal(-1, radiant_channel_op_owner(77u));
+	zassert_equal(-1, radiant_channel_op_owner(0u));
 
 	radio_clean();
 }
@@ -1338,8 +1197,7 @@ static radiant_time_t clean_slots(uint8_t ch, uint32_t n, int32_t err)
 	for (i = 0u; i < n; i++) {
 		radiant_time_t predicted = radiant_channel_next_slot(ch);
 
-		zassert_not_equal(RADIANT_TIME_NEVER, predicted,
-				  "channel left the air on slot %u", i);
+		zassert_not_equal(RADIANT_TIME_NEVER, predicted, "slot %u", i);
 		t_sync = (err >= 0) ? (predicted + (radiant_time_t)err)
 				    : (predicted - (radiant_time_t)(-err));
 		radiant_channel_on_slot(ch, t_sync);
@@ -1353,7 +1211,7 @@ static void acquire_slave(uint8_t ch, radiant_time_t t0)
 					   TEST_TRANSTYPE };
 
 	assign_and_id(ch, TYPE_SLAVE);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_open(ch, 0u, t0), NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_open(ch, 0u, t0));
 	radiant_channel_on_acquired(ch, &acquired, t0);
 }
 
@@ -1370,12 +1228,10 @@ ZTEST(radiant_channel, test_guard_converges_toward_the_floor_on_a_clean_master)
 	 * the residual this bench actually measures. */
 	(void)clean_slots(1u, 64u, 0);
 
-	zassert_equal(RADIANT_CHANNEL_GUARD_MIN_US, radiant_channel_guard_us(1u),
-		      "a perfect master should reach the floor and stop there");
-	zassert_equal(0u, radiant_channel_residual_us(1u), NULL);
+	zassert_equal(RADIANT_CHANNEL_GUARD_MIN_US, radiant_channel_guard_us(1u));
+	zassert_equal(0u, radiant_channel_residual_us(1u));
 
-	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()),
-		      NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()));
 	radio_clean();
 }
 
@@ -1394,17 +1250,14 @@ ZTEST(radiant_channel, test_guard_is_the_ceiling_until_the_estimator_has_locked)
 	for (i = 0u; i < RADIANT_CHANNEL_GUARD_LOCK_SLOTS; i++) {
 		zassert_equal(RADIANT_CHANNEL_GUARD_MAX_US,
 			      radiant_channel_guard_us(1u),
-			      "narrowed after only %u clean slot(s)", i);
-		zassert_equal(0u, radiant_channel_residual_us(1u),
-			      "reported a residual it is not yet entitled to");
+			      "%u clean", i);
+		zassert_equal(0u, radiant_channel_residual_us(1u));
 		(void)clean_slots(1u, 1u, 4);
 	}
 
-	zassert_true(radiant_channel_guard_us(1u) < RADIANT_CHANNEL_GUARD_MAX_US,
-		     "never narrowed at all");
+	zassert_true(radiant_channel_guard_us(1u) < RADIANT_CHANNEL_GUARD_MAX_US);
 
-	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()),
-		      NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()));
 	radio_clean();
 }
 
@@ -1418,8 +1271,7 @@ ZTEST(radiant_channel, test_guard_is_the_ceiling_immediately_after_acquisition)
 	t0 = radiant_radio_now();
 	acquire_slave(1u, t0);
 	(void)clean_slots(1u, 64u, 0);
-	zassert_equal(RADIANT_CHANNEL_GUARD_MIN_US, radiant_channel_guard_us(1u),
-		      NULL);
+	zassert_equal(RADIANT_CHANNEL_GUARD_MIN_US, radiant_channel_guard_us(1u));
 
 	/* A re-acquired channel may be looking at a different sensor entirely
 	 * (a wildcard ID), so the previous master's clock is not evidence about
@@ -1428,18 +1280,14 @@ ZTEST(radiant_channel, test_guard_is_the_ceiling_immediately_after_acquisition)
 	while (!radiant_channel_on_slot_missed(1u, radiant_radio_now())) {
 		/* until RX_FAIL_GO_TO_SEARCH */
 	}
-	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(1u),
-		      NULL);
-	zassert_equal(RADIANT_CHANNEL_GUARD_MAX_US, radiant_channel_guard_us(1u),
-		      "a searching channel is not entitled to a narrow window");
+	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(1u));
+	zassert_equal(RADIANT_CHANNEL_GUARD_MAX_US, radiant_channel_guard_us(1u));
 
 	radiant_channel_on_acquired(1u, &acquired, t0 + 9000000u);
-	zassert_equal(RADIANT_CHANNEL_GUARD_MAX_US, radiant_channel_guard_us(1u),
-		      "the estimator survived a re-acquisition");
-	zassert_equal(0u, radiant_channel_residual_us(1u), NULL);
+	zassert_equal(RADIANT_CHANNEL_GUARD_MAX_US, radiant_channel_guard_us(1u));
+	zassert_equal(0u, radiant_channel_residual_us(1u));
 
-	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()),
-		      NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()));
 	radio_clean();
 }
 
@@ -1455,27 +1303,25 @@ ZTEST(radiant_channel, test_guard_widens_by_one_drift_quantum_per_miss)
 	(void)clean_slots(1u, 64u, 0);
 
 	narrow = radiant_channel_guard_us(1u);
-	zassert_equal(RADIANT_CHANNEL_GUARD_MIN_US, narrow, NULL);
+	zassert_equal(RADIANT_CHANNEL_GUARD_MIN_US, narrow);
 
 	/* Each miss extrapolates the prediction one more period with no fresh
 	 * sync, so each is charged at the spec's worst case - a failing link
 	 * reopens the wide window on its own, one period at a time. */
 	for (i = 1u; i < RADIANT_CHANNEL_RX_FAIL_TO_SEARCH; i++) {
-		zassert_false(radiant_channel_on_slot_missed(1u, radiant_radio_now()),
-			      NULL);
+		zassert_false(radiant_channel_on_slot_missed(1u, radiant_radio_now()));
 		zassert_equal(narrow + (uint32_t)i * RADIANT_CHANNEL_DRIFT_WORST_US,
 			      radiant_channel_guard_us(1u),
-			      "guard after %u miss(es)", i);
+			      "%u miss", i);
 	}
 
 	/* And a slot heard again clears the miss count, so the guard comes
 	 * straight back down rather than staying wide until something resets
 	 * it. */
 	(void)clean_slots(1u, 1u, 0);
-	zassert_equal(narrow, radiant_channel_guard_us(1u), NULL);
+	zassert_equal(narrow, radiant_channel_guard_us(1u));
 
-	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()),
-		      NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()));
 	radio_clean();
 }
 
@@ -1494,21 +1340,15 @@ ZTEST(radiant_channel, test_a_master_at_the_full_tolerance_limit_is_still_caught
 	(void)clean_slots(1u, 64u, (int32_t)RADIANT_CHANNEL_DRIFT_WORST_US);
 
 	guard = radiant_channel_guard_us(1u);
-	zassert_true(guard > RADIANT_CHANNEL_DRIFT_WORST_US,
-		     "guard %u would not contain a spec-limit master", guard);
-	zassert_true(guard <= RADIANT_CHANNEL_GUARD_MAX_US, NULL);
-	zassert_within(RADIANT_CHANNEL_DRIFT_WORST_US,
-		       radiant_channel_residual_us(1u), 2u,
-		       "the estimator did not converge on the residual it was fed");
+	zassert_true(guard > RADIANT_CHANNEL_DRIFT_WORST_US);
+	zassert_true(guard <= RADIANT_CHANNEL_GUARD_MAX_US);
+	zassert_within(RADIANT_CHANNEL_DRIFT_WORST_US, radiant_channel_residual_us(1u), 2u);
 
 	/* The same master running early rather than late is the same error. */
 	(void)clean_slots(1u, 64u, -(int32_t)RADIANT_CHANNEL_DRIFT_WORST_US);
-	zassert_within(RADIANT_CHANNEL_DRIFT_WORST_US,
-		       radiant_channel_residual_us(1u), 2u,
-		       "a master running early was measured as a smaller error");
+	zassert_within(RADIANT_CHANNEL_DRIFT_WORST_US, radiant_channel_residual_us(1u), 2u);
 
-	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()),
-		      NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()));
 	radio_clean();
 }
 
@@ -1536,16 +1376,13 @@ ZTEST(radiant_channel, test_guard_never_goes_below_the_floor_for_any_residual)
 			(void)clean_slots(1u, 1u, adversarial[i]);
 			guard = radiant_channel_guard_us(1u);
 			zassert_true(guard >= RADIANT_CHANNEL_GUARD_MIN_US,
-				     "guard %u below the floor after residual %d",
-				     guard, adversarial[i]);
+				     "guard %u res %d", guard, adversarial[i]);
 			zassert_true(guard <= RADIANT_CHANNEL_GUARD_MAX_US,
-				     "guard %u above the ceiling after residual %d",
-				     guard, adversarial[i]);
+				     "guard %u res %d", guard, adversarial[i]);
 		}
 	}
 
-	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()),
-		      NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()));
 	radio_clean();
 }
 
@@ -1558,26 +1395,23 @@ ZTEST(radiant_channel, test_a_slot_after_a_miss_is_not_fed_to_the_estimator)
 	t0 = radiant_radio_now();
 	acquire_slave(1u, t0);
 	(void)clean_slots(1u, 64u, 0);
-	zassert_equal(0u, radiant_channel_residual_us(1u), NULL);
+	zassert_equal(0u, radiant_channel_residual_us(1u));
 
 	/* Miss four slots, then hear one 90 us off - four periods of drift, not
 	 * one. Averaging it in would size the window from link loss rather
 	 * than clock quality; the miss term already covers it at the spec bound. */
-	zassert_false(radiant_channel_on_slot_missed(1u, radiant_radio_now()), NULL);
-	zassert_false(radiant_channel_on_slot_missed(1u, radiant_radio_now()), NULL);
-	zassert_false(radiant_channel_on_slot_missed(1u, radiant_radio_now()), NULL);
-	zassert_false(radiant_channel_on_slot_missed(1u, radiant_radio_now()), NULL);
+	zassert_false(radiant_channel_on_slot_missed(1u, radiant_radio_now()));
+	zassert_false(radiant_channel_on_slot_missed(1u, radiant_radio_now()));
+	zassert_false(radiant_channel_on_slot_missed(1u, radiant_radio_now()));
+	zassert_false(radiant_channel_on_slot_missed(1u, radiant_radio_now()));
 
 	predicted = radiant_channel_next_slot(1u);
 	radiant_channel_on_slot(1u, predicted + 90u);
 
-	zassert_equal(0u, radiant_channel_residual_us(1u),
-		      "the estimator swallowed a multi-period residual");
-	zassert_equal(RADIANT_CHANNEL_GUARD_MIN_US, radiant_channel_guard_us(1u),
-		      NULL);
+	zassert_equal(0u, radiant_channel_residual_us(1u));
+	zassert_equal(RADIANT_CHANNEL_GUARD_MIN_US, radiant_channel_guard_us(1u));
 
-	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()),
-		      NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()));
 	radio_clean();
 }
 
@@ -1609,8 +1443,7 @@ ZTEST(radiant_channel, test_denied_slots_widen_the_guard_and_never_leave_trackin
 	t0 = radiant_radio_now();
 	acquire_slave(1u, t0);
 	(void)clean_slots(1u, 64u, 0);
-	zassert_equal(RADIANT_CHANNEL_GUARD_MIN_US, radiant_channel_guard_us(1u),
-		      NULL);
+	zassert_equal(RADIANT_CHANNEL_GUARD_MIN_US, radiant_channel_guard_us(1u));
 
 	/* Twelve denials is half again what RX_FAIL_TO_SEARCH allows in misses;
 	 * a channel treating the two alike would already be SEARCHING. The
@@ -1624,36 +1457,31 @@ ZTEST(radiant_channel, test_denied_slots_widen_the_guard_and_never_leave_trackin
 		uint32_t guard;
 
 		zassert_false(radiant_channel_on_slot_denied(1u, radiant_radio_now()),
-			      "denial %u took the channel off the air", i);
-		zassert_equal(RADIANT_CH_STATE_TRACKING,
-			      radiant_channel_state_get(1u), NULL);
-		zassert_equal((uint8_t)i, radiant_channel_denied_count(1u), NULL);
+			      "denial %u", i);
+		zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(1u));
+		zassert_equal((uint8_t)i, radiant_channel_denied_count(1u));
 
 		guard = radiant_channel_guard_us(1u);
-		zassert_equal(expect, guard, "guard after %u denial(s)", i);
-		zassert_true(guard >= prev, "the guard went backwards at %u", i);
+		zassert_equal(expect, guard, "denial %u", i);
+		zassert_true(guard >= prev, "slot %u", i);
 		prev = guard;
 	}
 
-	zassert_equal(RADIANT_CHANNEL_GUARD_MAX_US, prev,
-		      "twelve denials should reach the ceiling exactly");
+	zassert_equal(RADIANT_CHANNEL_GUARD_MAX_US, prev);
 
 	/* From the twelfth denial on it stays at the ceiling; the clamp is why
 	 * RADIANT_CHANNEL_DENY_TO_SEARCH is needed at all - past this point
 	 * extra denials accumulate disagreement the window no longer covers. */
 	for (; i < RADIANT_CHANNEL_DENY_TO_SEARCH; i++) {
 		zassert_false(radiant_channel_on_slot_denied(1u, radiant_radio_now()),
-			      "denial %u took the channel off the air", i);
-		zassert_equal(RADIANT_CHANNEL_GUARD_MAX_US,
-			      radiant_channel_guard_us(1u), NULL);
+			      "denial %u", i);
+		zassert_equal(RADIANT_CHANNEL_GUARD_MAX_US, radiant_channel_guard_us(1u));
 	}
 
 	/* No host ever heard about any of it. */
-	zassert_equal(0u, evt_count_of(1u, RADIANT_CH_EVENT_RX_FAIL_GO_TO_SEARCH),
-		      "a denial reached the host as a sensor failure");
+	zassert_equal(0u, evt_count_of(1u, RADIANT_CH_EVENT_RX_FAIL_GO_TO_SEARCH));
 
-	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()),
-		      NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()));
 	radio_clean();
 }
 
@@ -1672,23 +1500,16 @@ ZTEST(radiant_channel, test_a_denial_run_past_the_bound_does_go_back_to_search)
 	 * never fires; if it does, the arbiter is broken - which is why denials
 	 * are counted apart from misses. */
 	for (i = 1u; i < RADIANT_CHANNEL_DENY_TO_SEARCH; i++) {
-		zassert_false(radiant_channel_on_slot_denied(1u, radiant_radio_now()),
-			      NULL);
+		zassert_false(radiant_channel_on_slot_denied(1u, radiant_radio_now()));
 	}
 
-	zassert_true(radiant_channel_on_slot_denied(1u, radiant_radio_now()),
-		     "sixteen denials left the channel claiming to track");
-	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(1u),
-		      NULL);
-	zassert_equal(1u, evt_count_of(1u, RADIANT_CH_EVENT_RX_FAIL_GO_TO_SEARCH),
-		      "the one transition raised none or two events");
-	zassert_equal(0u, radiant_channel_denied_count(1u),
-		      "the denial counter survived the transition");
-	zassert_equal(RADIANT_CHANNEL_GUARD_MAX_US, radiant_channel_guard_us(1u),
-		      NULL);
+	zassert_true(radiant_channel_on_slot_denied(1u, radiant_radio_now()));
+	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(1u));
+	zassert_equal(1u, evt_count_of(1u, RADIANT_CH_EVENT_RX_FAIL_GO_TO_SEARCH));
+	zassert_equal(0u, radiant_channel_denied_count(1u));
+	zassert_equal(RADIANT_CHANNEL_GUARD_MAX_US, radiant_channel_guard_us(1u));
 
-	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()),
-		      NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()));
 	radio_clean();
 }
 
@@ -1702,7 +1523,7 @@ ZTEST(radiant_channel, test_a_slot_after_a_denial_run_is_not_fed_to_the_estimato
 	t0 = radiant_radio_now();
 	acquire_slave(1u, t0);
 	(void)clean_slots(1u, 64u, 0);
-	zassert_equal(0u, radiant_channel_residual_us(1u), NULL);
+	zassert_equal(0u, radiant_channel_residual_us(1u));
 
 	/* After a run of denials the prediction is extrapolated once per
 	 * denial, so the 260 us residual below is twenty periods of drift, not
@@ -1710,22 +1531,17 @@ ZTEST(radiant_channel, test_a_slot_after_a_denial_run_is_not_fed_to_the_estimato
 	 * decay it back over ~8 slots - a perfectly healthy link running
 	 * maximally wide for two seconds after every busy patch elsewhere. */
 	for (i = 0u; i < 10u; i++) {
-		zassert_false(radiant_channel_on_slot_denied(1u, radiant_radio_now()),
-			      NULL);
+		zassert_false(radiant_channel_on_slot_denied(1u, radiant_radio_now()));
 	}
 
 	predicted = radiant_channel_next_slot(1u);
 	radiant_channel_on_slot(1u, predicted + 260u);
 
-	zassert_equal(0u, radiant_channel_residual_us(1u),
-		      "the estimator swallowed a multi-period residual");
-	zassert_equal(0u, radiant_channel_denied_count(1u),
-		      "a slot heard did not retire the denial run");
-	zassert_equal(RADIANT_CHANNEL_GUARD_MIN_US, radiant_channel_guard_us(1u),
-		      "the guard stayed wide after the link came back");
+	zassert_equal(0u, radiant_channel_residual_us(1u));
+	zassert_equal(0u, radiant_channel_denied_count(1u));
+	zassert_equal(RADIANT_CHANNEL_GUARD_MIN_US, radiant_channel_guard_us(1u));
 
-	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()),
-		      NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()));
 	radio_clean();
 }
 
@@ -1741,28 +1557,25 @@ ZTEST(radiant_channel, test_denials_and_misses_are_charged_at_the_same_weight)
 	/* Interleaved: the two counters run at the same time and the guard is a
 	 * function of their sum, so charging only one would pass every
 	 * single-counter test above and still open too narrow here. */
-	zassert_false(radiant_channel_on_slot_denied(1u, radiant_radio_now()), NULL);
-	zassert_false(radiant_channel_on_slot_missed(1u, radiant_radio_now()), NULL);
-	zassert_false(radiant_channel_on_slot_denied(1u, radiant_radio_now()), NULL);
-	zassert_false(radiant_channel_on_slot_missed(1u, radiant_radio_now()), NULL);
+	zassert_false(radiant_channel_on_slot_denied(1u, radiant_radio_now()));
+	zassert_false(radiant_channel_on_slot_missed(1u, radiant_radio_now()));
+	zassert_false(radiant_channel_on_slot_denied(1u, radiant_radio_now()));
+	zassert_false(radiant_channel_on_slot_missed(1u, radiant_radio_now()));
 
 	zassert_equal(RADIANT_CHANNEL_GUARD_MIN_US +
 			      4u * RADIANT_CHANNEL_DRIFT_WORST_US,
-		      radiant_channel_guard_us(1u),
-		      "two misses and two denials are four periods of drift");
+		      radiant_channel_guard_us(1u));
 
 	/* And a master is untouched by either: it advances its slot and counts
 	 * nothing, because it has nothing to hear and nowhere to go back to. */
 	assign_and_id(2u, TYPE_MASTER);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_open(2u, 0u, t0), NULL);
-	zassert_false(radiant_channel_on_slot_denied(2u, radiant_radio_now()), NULL);
-	zassert_equal(0u, radiant_channel_denied_count(2u), NULL);
-	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(2u), NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_open(2u, 0u, t0));
+	zassert_false(radiant_channel_on_slot_denied(2u, radiant_radio_now()));
+	zassert_equal(0u, radiant_channel_denied_count(2u));
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(2u));
 
-	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()),
-		      NULL);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_close(2u, radiant_radio_now()),
-		      NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(2u, radiant_radio_now()));
 	radio_clean();
 }
 
@@ -1781,18 +1594,16 @@ ZTEST(radiant_channel, test_a_denied_slot_advances_the_clock_by_exactly_one_peri
 	 * never sets. */
 	before_slot = radiant_channel_next_slot(1u);
 	period = before_slot - t0;
-	zassert_true(period > 0u, NULL);
+	zassert_true(period > 0u);
 
 	/* Advances from the slot that was lost, not from `now` - the same rule
 	 * a miss keeps, since advancing from `now` would let scheduler latency
 	 * walk the phase away one late notification at a time. `now` is passed
 	 * far ahead here so an implementation that advanced from it would fail. */
-	zassert_false(radiant_channel_on_slot_denied(1u, t0 + 999999u), NULL);
-	zassert_equal(before_slot + period, radiant_channel_next_slot(1u),
-		      "a denied slot did not advance by exactly one period");
+	zassert_false(radiant_channel_on_slot_denied(1u, t0 + 999999u));
+	zassert_equal(before_slot + period, radiant_channel_next_slot(1u));
 
-	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()),
-		      NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()));
 	radio_clean();
 }
 
@@ -1804,21 +1615,17 @@ ZTEST(radiant_channel, test_the_guard_floor_can_be_raised_but_never_lowered)
 	t0 = radiant_radio_now();
 	acquire_slave(1u, t0);
 	(void)clean_slots(1u, 64u, 0);
-	zassert_equal(RADIANT_CHANNEL_GUARD_MIN_US, radiant_channel_guard_us(1u),
-		      NULL);
+	zassert_equal(RADIANT_CHANNEL_GUARD_MIN_US, radiant_channel_guard_us(1u));
 
 	radiant_channel_guard_floor_set(RADIANT_CHANNEL_GUARD_MIN_US + 60u);
-	zassert_equal(RADIANT_CHANNEL_GUARD_MIN_US + 60u,
-		      radiant_channel_guard_us(1u), NULL);
+	zassert_equal(RADIANT_CHANNEL_GUARD_MIN_US + 60u, radiant_channel_guard_us(1u));
 
 	/* A caller may not talk the core into a narrower window than its own
 	 * minimum, however politely it asks. */
 	radiant_channel_guard_floor_set(1u);
-	zassert_equal(RADIANT_CHANNEL_GUARD_MIN_US + 60u,
-		      radiant_channel_guard_us(1u), NULL);
+	zassert_equal(RADIANT_CHANNEL_GUARD_MIN_US + 60u, radiant_channel_guard_us(1u));
 	radiant_channel_guard_floor_set(0u);
-	zassert_equal(RADIANT_CHANNEL_GUARD_MIN_US + 60u,
-		      radiant_channel_guard_us(1u), NULL);
+	zassert_equal(RADIANT_CHANNEL_GUARD_MIN_US + 60u, radiant_channel_guard_us(1u));
 
 	/*
 	 * Pinning the floor at the ceiling switches the whole mechanism off,
@@ -1826,14 +1633,11 @@ ZTEST(radiant_channel, test_the_guard_floor_can_be_raised_but_never_lowered)
 	 * gets. No flag, no branch anywhere else.
 	 */
 	radiant_channel_guard_floor_set(RADIANT_CHANNEL_GUARD_MAX_US);
-	zassert_equal(RADIANT_CHANNEL_GUARD_MAX_US, radiant_channel_guard_us(1u),
-		      NULL);
+	zassert_equal(RADIANT_CHANNEL_GUARD_MAX_US, radiant_channel_guard_us(1u));
 	radiant_channel_guard_floor_set(0xFFFFu);
-	zassert_equal(RADIANT_CHANNEL_GUARD_MAX_US, radiant_channel_guard_us(1u),
-		      "the ceiling is a ceiling");
+	zassert_equal(RADIANT_CHANNEL_GUARD_MAX_US, radiant_channel_guard_us(1u));
 
-	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()),
-		      NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()));
 	radio_clean();
 }
 
@@ -1847,20 +1651,16 @@ ZTEST(radiant_channel, test_guard_is_the_ceiling_for_channels_with_no_estimator)
 	/* Out of range, unassigned, assigned-but-closed and searching. None of
 	 * them has heard a master, so none of them gets a narrow window. */
 	zassert_equal(RADIANT_CHANNEL_GUARD_MAX_US,
-		      radiant_channel_guard_us(RADIANT_CHANNEL_COUNT), NULL);
-	zassert_equal(0u, radiant_channel_residual_us(RADIANT_CHANNEL_COUNT), NULL);
-	zassert_equal(RADIANT_CHANNEL_GUARD_MAX_US, radiant_channel_guard_us(5u),
-		      NULL);
+		      radiant_channel_guard_us(RADIANT_CHANNEL_COUNT));
+	zassert_equal(0u, radiant_channel_residual_us(RADIANT_CHANNEL_COUNT));
+	zassert_equal(RADIANT_CHANNEL_GUARD_MAX_US, radiant_channel_guard_us(5u));
 
 	assign_and_id(5u, TYPE_SLAVE);
-	zassert_equal(RADIANT_CHANNEL_GUARD_MAX_US, radiant_channel_guard_us(5u),
-		      NULL);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_open(5u, 0u, t0), NULL);
-	zassert_equal(RADIANT_CHANNEL_GUARD_MAX_US, radiant_channel_guard_us(5u),
-		      NULL);
+	zassert_equal(RADIANT_CHANNEL_GUARD_MAX_US, radiant_channel_guard_us(5u));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_open(5u, 0u, t0));
+	zassert_equal(RADIANT_CHANNEL_GUARD_MAX_US, radiant_channel_guard_us(5u));
 
-	zassert_equal(RADIANT_CH_OK, radiant_channel_close(5u, radiant_radio_now()),
-		      NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(5u, radiant_radio_now()));
 	radio_clean();
 }
 
@@ -1881,17 +1681,13 @@ ZTEST(radiant_channel, test_each_channel_estimates_its_own_master)
 	(void)clean_slots(1u, 64u, 0);
 	(void)clean_slots(2u, 64u, 200);
 
-	zassert_equal(RADIANT_CHANNEL_GUARD_MIN_US, radiant_channel_guard_us(1u),
-		      NULL);
-	zassert_true(radiant_channel_guard_us(2u) > radiant_channel_guard_us(1u),
-		     "the sloppy master's channel did not get a wider window");
-	zassert_within(200u, radiant_channel_residual_us(2u), 8u, NULL);
-	zassert_equal(0u, radiant_channel_residual_us(1u), NULL);
+	zassert_equal(RADIANT_CHANNEL_GUARD_MIN_US, radiant_channel_guard_us(1u));
+	zassert_true(radiant_channel_guard_us(2u) > radiant_channel_guard_us(1u));
+	zassert_within(200u, radiant_channel_residual_us(2u), 8u);
+	zassert_equal(0u, radiant_channel_residual_us(1u));
 
-	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()),
-		      NULL);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_close(2u, radiant_radio_now()),
-		      NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(2u, radiant_radio_now()));
 	radio_clean();
 }
 
@@ -1911,7 +1707,7 @@ ZTEST(radiant_channel, test_stack_reset_closes_and_unassigns_everything)
 
 	for (i = 0u; i < 8u; i++) {
 		assign_and_id(i, (i & 1u) ? TYPE_MASTER : TYPE_SLAVE);
-		zassert_equal(RADIANT_CH_OK, radiant_channel_open(i, 0u, t0), NULL);
+		zassert_equal(RADIANT_CH_OK, radiant_channel_open(i, 0u, t0));
 	}
 	/* Channels 8 and 9 are assigned but never opened; they must be
 	 * unassigned by the reset without a close event, because they were
@@ -1923,9 +1719,7 @@ ZTEST(radiant_channel, test_stack_reset_closes_and_unassigns_everything)
 	n_evts = 0u;
 	radiant_channel_reset_all();
 
-	zassert_equal(8u, n_evts,
-		      "expected one CHANNEL_CLOSED per open channel, got %u",
-		      n_evts);
+	zassert_equal(8u, n_evts, "got %u", n_evts);
 	for (i = 0u; i < 8u; i++) {
 		zassert_equal(1u, evt_count_of(i, RADIANT_CH_EVENT_CHANNEL_CLOSED),
 			      "channel %u", i);
@@ -1934,10 +1728,8 @@ ZTEST(radiant_channel, test_stack_reset_closes_and_unassigns_everything)
 	for (i = 0u; i < RADIANT_CHANNEL_COUNT; i++) {
 		zassert_equal(RADIANT_CH_STATE_UNASSIGNED,
 			      radiant_channel_state_get(i), "channel %u", i);
-		zassert_equal(RADIANT_CH_OK, radiant_channel_status_get(i, &status),
-			      NULL);
-		zassert_equal(0x00u, status, "channel %u status 0x%02x", i,
-			      status);
+		zassert_equal(RADIANT_CH_OK, radiant_channel_status_get(i, &status));
+		zassert_equal(0x00u, status, "channel %u status 0x%02x", i, status);
 	}
 
 	radio_clean();
@@ -1952,23 +1744,22 @@ ZTEST(radiant_channel, test_reset_orphans_an_operation_and_the_event_is_stale)
 	t0 = radiant_radio_now();
 
 	assign_and_id(0u, TYPE_SLAVE);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_open(0u, 0u, t0), NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_open(0u, 0u, t0));
 	op = arm_rx_for(0u, t0 + 1000u, t0 + 500000u);
 
 	radiant_channel_reset_all();
-	zassert_equal(RADIANT_CH_STATE_UNASSIGNED, radiant_channel_state_get(0u), NULL);
-	zassert_equal(-1, radiant_channel_op_owner(op),
-		      "the reset left a binding behind");
+	zassert_equal(RADIANT_CH_STATE_UNASSIGNED, radiant_channel_state_get(0u));
+	zassert_equal(-1, radiant_channel_op_owner(op));
 
 	/*
 	 * radiant_sched.c is required to abort before resetting; this is what
 	 * happens when the terminal event lands afterwards. It is the same
 	 * path a late event takes, which is the point of having only one.
 	 */
-	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_abort(), NULL);
-	zassert_equal(1u, n_terminal, NULL);
-	zassert_equal(1u, n_terminal_stale, NULL);
-	zassert_equal(1u, radiant_channel_stale_op_count(), NULL);
+	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_abort());
+	zassert_equal(1u, n_terminal);
+	zassert_equal(1u, n_terminal_stale);
+	zassert_equal(1u, radiant_channel_stale_op_count());
 
 	radio_clean();
 }
@@ -1988,70 +1779,59 @@ ZTEST(radiant_channel, test_configuration_round_trips_and_defaults)
 	up();
 
 	/* Defaults, on a freshly assigned channel. */
-	zassert_equal(RADIANT_CH_OK, radiant_channel_assign(0u, TYPE_SLAVE, 0u, 0u),
-		      NULL);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_period_get(0u, &u16), NULL);
-	zassert_equal(RADIANT_CHANNEL_PERIOD_ANT_PLUS, u16,
-		      "the default period is not the measured ANT+ one");
-	zassert_equal(RADIANT_CH_OK, radiant_channel_rf_freq_get(0u, &a), NULL);
-	zassert_equal(66u, a,
-		      "the default RF index is not ANT's power-on 66; 57 would "
-		      "let a host that forgot to set it half-work");
-	zassert_equal(RADIANT_CH_OK, radiant_channel_search_waveform_get(0u, &u16),
-		      NULL);
-	zassert_equal(RADIANT_CH_SEARCH_WAVEFORM_DEFAULT, u16, NULL);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_sdu_mask_config_get(0u, &a), NULL);
-	zassert_equal(RADIANT_CH_SDU_MASK_OFF, a, NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_assign(0u, TYPE_SLAVE, 0u, 0u));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_period_get(0u, &u16));
+	zassert_equal(RADIANT_CHANNEL_PERIOD_ANT_PLUS, u16);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_rf_freq_get(0u, &a));
+	/* ANT's power-on RF index is 66; 57 would half-work a host that never set it. */
+	zassert_equal(66u, a);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_search_waveform_get(0u, &u16));
+	zassert_equal(RADIANT_CH_SEARCH_WAVEFORM_DEFAULT, u16);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_sdu_mask_config_get(0u, &a));
+	zassert_equal(RADIANT_CH_SDU_MASK_OFF, a);
 
 	/* Round-trips. tools/ant_features.py checks that the advisory ones
 	 * come back even where a backend merges windows and ignores them. Only
 	 * the two waveform values sdk-ant names round-trip - see the header. */
 	zassert_equal(RADIANT_CH_OK,
 		      radiant_channel_search_waveform_set(
-			      0u, RADIANT_CH_SEARCH_WAVEFORM_FAST),
-		      NULL);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_search_waveform_get(0u, &u16),
-		      NULL);
-	zassert_equal(RADIANT_CH_SEARCH_WAVEFORM_FAST, u16, NULL);
+			      0u, RADIANT_CH_SEARCH_WAVEFORM_FAST));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_search_waveform_get(0u, &u16));
+	zassert_equal(RADIANT_CH_SEARCH_WAVEFORM_FAST, u16);
 
-	zassert_equal(RADIANT_CH_OK, radiant_channel_sharing_cycles_set(0u, 7u), NULL);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_sharing_cycles_get(0u, &a), NULL);
-	zassert_equal(7u, a, NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_sharing_cycles_set(0u, 7u));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_sharing_cycles_get(0u, &a));
+	zassert_equal(7u, a);
 
 	/* Proximity only round-trips at threshold 0 - see the header. `custom`
 	 * still carries through unconditionally, which is what proves the
 	 * refusal above is about the threshold and not the whole call. */
-	zassert_equal(RADIANT_CH_OK, radiant_channel_prox_search_set(0u, 0u, 0x9Bu),
-		      NULL);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_prox_search_get(0u, &a, &b), NULL);
-	zassert_equal(0u, a, NULL);
-	zassert_equal(0x9Bu, b, NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_prox_search_set(0u, 0u, 0x9Bu));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_prox_search_get(0u, &a, &b));
+	zassert_equal(0u, a);
+	zassert_equal(0x9Bu, b);
 
 	/* Any non-zero priority normalises to 1: the contract documents 0 and
 	 * 1 and permits no INVALID_PARAMETER_PROVIDED here, so a 2 cannot be
 	 * refused with a code this call never returns. */
-	zassert_equal(RADIANT_CH_OK, radiant_channel_search_priority_set(0u, 2u), NULL);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_search_priority_get(0u, &a), NULL);
-	zassert_equal(1u, a, NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_search_priority_set(0u, 2u));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_search_priority_get(0u, &a));
+	zassert_equal(1u, a);
 
-	zassert_equal(RADIANT_CH_OK, radiant_channel_tx_power_set(0u, 0x80u, 0x33u),
-		      NULL);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_tx_power_get(0u, &a, &b), NULL);
-	zassert_equal(0x80u, a, NULL);
-	zassert_equal(0x33u, b, NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_tx_power_set(0u, 0x80u, 0x33u));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_tx_power_get(0u, &a, &b));
+	zassert_equal(0x80u, a);
+	zassert_equal(0x33u, b);
 
-	zassert_equal(RADIANT_CH_OK,
-		      radiant_channel_freq_hop_table_set(0u, 3u, 39u, 57u), NULL);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_freq_hop_table_get(0u, table),
-		      NULL);
-	zassert_equal(3u, table[0], NULL);
-	zassert_equal(39u, table[1], NULL);
-	zassert_equal(57u, table[2], NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_freq_hop_table_set(0u, 3u, 39u, 57u));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_freq_hop_table_get(0u, table));
+	zassert_equal(3u, table[0]);
+	zassert_equal(39u, table[1]);
+	zassert_equal(57u, table[2]);
 
-	zassert_equal(RADIANT_CH_OK, radiant_channel_sdu_mask_config_set(0u, 0x81u),
-		      NULL);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_sdu_mask_config_get(0u, &a), NULL);
-	zassert_equal(0x81u, a, NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_sdu_mask_config_set(0u, 0x81u));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_sdu_mask_config_get(0u, &a));
+	zassert_equal(0x81u, a);
 
 	/*
 	 * Assigning resets the configuration. A channel reassigned to a
@@ -2059,16 +1839,11 @@ ZTEST(radiant_channel, test_configuration_round_trips_and_defaults)
 	 * that opens without setting one silently tracks the previous sensor
 	 * instead of being told RADIANT_CH_ERR_ID_NOT_SET.
 	 */
-	zassert_equal(RADIANT_CH_OK, radiant_channel_unassign(0u), NULL);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_assign(0u, TYPE_MASTER, 1u, 0u),
-		      NULL);
-	zassert_equal(RADIANT_CH_ERR_ID_NOT_SET,
-		      radiant_channel_open(0u, 0u, radiant_radio_now()),
-		      "a reassigned channel inherited the previous ID");
-	zassert_equal(RADIANT_CH_OK, radiant_channel_search_waveform_get(0u, &u16),
-		      NULL);
-	zassert_equal(RADIANT_CH_SEARCH_WAVEFORM_DEFAULT, u16,
-		      "assign did not reset the configuration");
+	zassert_equal(RADIANT_CH_OK, radiant_channel_unassign(0u));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_assign(0u, TYPE_MASTER, 1u, 0u));
+	zassert_equal(RADIANT_CH_ERR_ID_NOT_SET, radiant_channel_open(0u, 0u, radiant_radio_now()));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_search_waveform_get(0u, &u16));
+	zassert_equal(RADIANT_CH_SEARCH_WAVEFORM_DEFAULT, u16);
 
 	radio_clean();
 }
@@ -2093,31 +1868,26 @@ ZTEST(radiant_channel, test_status_byte_carries_type_network_and_state)
 		uint8_t net = (uint8_t)(i % RADIANT_CHANNEL_NETWORK_COUNT);
 		bool master = (types[i] & RADIANT_CH_TYPE_MASTER_BIT) != 0u;
 
-		zassert_equal(RADIANT_CH_OK,
-			      radiant_channel_assign(i, types[i], net, 0u), NULL);
-		zassert_equal(RADIANT_CH_OK, radiant_channel_status_get(i, &status),
-			      NULL);
+		zassert_equal(RADIANT_CH_OK, radiant_channel_assign(i, types[i], net, 0u));
+		zassert_equal(RADIANT_CH_OK, radiant_channel_status_get(i, &status));
 		zassert_equal((uint8_t)(types[i] | (uint8_t)(net << 2) |
 					RADIANT_CH_STATUS_ASSIGNED),
-			      status, "assigned type 0x%02x net %u -> 0x%02x",
+			      status, "0x%02x %u -> 0x%02x",
 			      types[i], net, status);
 
 		zassert_equal(RADIANT_CH_OK,
 			      radiant_channel_id_set(i, TEST_DEVNUM, TEST_DEVTYPE,
-						 TEST_TRANSTYPE),
-			      NULL);
-		zassert_equal(RADIANT_CH_OK, radiant_channel_open(i, 0u, t0), NULL);
-		zassert_equal(RADIANT_CH_OK, radiant_channel_status_get(i, &status),
-			      NULL);
+						 TEST_TRANSTYPE));
+		zassert_equal(RADIANT_CH_OK, radiant_channel_open(i, 0u, t0));
+		zassert_equal(RADIANT_CH_OK, radiant_channel_status_get(i, &status));
 		zassert_equal((uint8_t)(types[i] | (uint8_t)(net << 2) |
 					(master ? RADIANT_CH_STATUS_TRACKING
 						: RADIANT_CH_STATUS_SEARCHING)),
-			      status, "open type 0x%02x -> 0x%02x", types[i],
+			      status, "0x%02x -> 0x%02x", types[i],
 			      status);
-		zassert_equal(master, radiant_channel_is_master(i),
-			      "type 0x%02x master bit", types[i]);
+		zassert_equal(master, radiant_channel_is_master(i), "type 0x%02x", types[i]);
 
-		zassert_equal(RADIANT_CH_OK, radiant_channel_close(i, t0), NULL);
+		zassert_equal(RADIANT_CH_OK, radiant_channel_close(i, t0));
 	}
 
 	radio_clean();
@@ -2132,12 +1902,10 @@ ZTEST(radiant_channel, test_an_unrecognised_channel_type_is_accepted)
 	 * channel number, and INVALID_PARAMETER_PROVIDED is not in the set). So
 	 * the type is carried verbatim, only bit 4 interpreted. */
 	up();
-	zassert_equal(RADIANT_CH_OK, radiant_channel_assign(0u, 0x70u, 0u, 0u), NULL);
-	zassert_equal(RADIANT_CH_OK, radiant_channel_status_get(0u, &status), NULL);
-	zassert_equal((uint8_t)(0x70u | RADIANT_CH_STATUS_ASSIGNED), status, NULL);
-	zassert_true(radiant_channel_is_master(0u),
-		     "bit 4 is the master bit whatever the rest of the byte "
-		     "says");
+	zassert_equal(RADIANT_CH_OK, radiant_channel_assign(0u, 0x70u, 0u, 0u));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_status_get(0u, &status));
+	zassert_equal((uint8_t)(0x70u | RADIANT_CH_STATUS_ASSIGNED), status);
+	zassert_true(radiant_channel_is_master(0u));
 
 	radio_clean();
 }
@@ -2171,11 +1939,10 @@ ZTEST(radiant_channel, test_guard_widens_for_periods_a_burst_stepped_over)
 
 	/* A burst that ran three periods past the next slot. */
 	radiant_channel_catch_up(1u, next + 2u * period + 1u);
-	zassert_equal(next + 3u * period, radiant_channel_next_slot(1u),
-		      "stepped off the master's grid");
+	zassert_equal(next + 3u * period, radiant_channel_next_slot(1u));
 	zassert_equal(narrow + 3u * RADIANT_CHANNEL_DRIFT_WORST_US,
 		      radiant_channel_guard_us(1u),
-		      "three periods stepped over, guard %u from %u",
+		      "guard %u from %u",
 		      radiant_channel_guard_us(1u), narrow);
 	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(1u));
 
@@ -2183,10 +1950,8 @@ ZTEST(radiant_channel, test_guard_widens_for_periods_a_burst_stepped_over)
 	 * stepped-over periods, so it must not feed the clock estimator - a
 	 * 40 us error here is our extrapolation, not the master's clock. */
 	(void)clean_slots(1u, 1u, 40);
-	zassert_equal(resid, radiant_channel_residual_us(1u),
-		      "an extrapolated slot fed the estimator");
-	zassert_equal(narrow, radiant_channel_guard_us(1u),
-		      "a heard slot must retire the stepped-over periods");
+	zassert_equal(resid, radiant_channel_residual_us(1u));
+	zassert_equal(narrow, radiant_channel_guard_us(1u));
 
 	/* Never search evidence: after another long burst the full RX_FAIL
 	 * budget is still there - seven misses stay TRACKING, as without it. */
@@ -2194,11 +1959,10 @@ ZTEST(radiant_channel, test_guard_widens_for_periods_a_burst_stepped_over)
 	radiant_channel_catch_up(1u, next + 20u * period);
 	for (i = 1u; i < RADIANT_CHANNEL_RX_FAIL_TO_SEARCH; i++) {
 		zassert_false(radiant_channel_on_slot_missed(1u, radiant_radio_now()),
-			      "miss %u promoted to search after a burst", i);
+			      "miss %u", i);
 	}
 	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(1u));
 
-	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()),
-		      NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()));
 	radio_clean();
 }

@@ -123,10 +123,10 @@ ZTEST(radiant_bridge, test_post_and_drain_delivers_in_order)
 	radiant_bridge_post(&a);
 	radiant_bridge_post(&b);
 
-	zassert_equal(radiant_bridge_drain(), 2u, "two samples queued");
-	zassert_equal(cap_n, 2u, "one capturing sink, two deliveries");
-	zassert_equal(cap_buf[0].raw, 100, "FIFO: oldest first");
-	zassert_equal(cap_buf[1].raw, 50, "FIFO: newest second");
+	zassert_equal(radiant_bridge_drain(), 2u);
+	zassert_equal(cap_n, 2u);
+	zassert_equal(cap_buf[0].raw, 100);
+	zassert_equal(cap_buf[1].raw, 50);
 	zassert_equal(radiant_bridge_stats_get()->posted, 2u, NULL);
 	zassert_equal(radiant_bridge_stats_get()->dropped, 0u, NULL);
 }
@@ -142,9 +142,8 @@ ZTEST(radiant_bridge, test_want_false_never_reaches_publish)
 
 	cap_want_reject = true;
 	radiant_bridge_post(&a);
-	zassert_equal(radiant_bridge_drain(), 1u,
-		     "drain() counts what left the ring, not what a sink accepted");
-	zassert_equal(cap_n, 1u, "second sample: want() declined it, publish() never ran");
+	zassert_equal(radiant_bridge_drain(), 1u);
+	zassert_equal(cap_n, 1u);
 }
 
 ZTEST(radiant_bridge, test_ring_drops_oldest_and_counts)
@@ -164,15 +163,13 @@ ZTEST(radiant_bridge, test_ring_drops_oldest_and_counts)
 	}
 
 	zassert_equal(radiant_bridge_stats_get()->posted, cap + 5u, NULL);
-	zassert_equal(radiant_bridge_stats_get()->dropped, 5u,
-		     "five posts past capacity, five drops");
+	zassert_equal(radiant_bridge_stats_get()->dropped, 5u);
 
 	radiant_bridge_drain();
 	/* The five OLDEST (raw 0..4) were evicted; the ring now holds
 	 * raw 5..(cap+4), oldest first. */
-	zassert_equal(cap_buf[0].raw, 5, "oldest surviving record is the sixth posted");
-	zassert_equal(cap_buf[cap - 1u].raw, (int64_t)(cap + 4u),
-		     "newest surviving record is the last posted");
+	zassert_equal(cap_buf[0].raw, 5);
+	zassert_equal(cap_buf[cap - 1u].raw, (int64_t)(cap + 4u));
 }
 
 ZTEST(radiant_bridge, test_drop_counter_self_publishes_once_per_change)
@@ -192,7 +189,7 @@ ZTEST(radiant_bridge, test_drop_counter_self_publishes_once_per_change)
 			saw_diag = true;
 		}
 	}
-	zassert_false(saw_diag, "nothing dropped yet: no diagnostics sample expected");
+	zassert_false(saw_diag);
 
 	/* Force one drop, then drain: exactly one diagnostics sample, value 1. */
 	cap_n = 0u;
@@ -206,21 +203,20 @@ ZTEST(radiant_bridge, test_drop_counter_self_publishes_once_per_change)
 	saw_diag = false;
 	for (i = 0u; i < cap_n; i++) {
 		if (cap_buf[i].source == RADIANT_BRIDGE_DIAG_SOURCE) {
-			zassert_false(saw_diag, "exactly one diagnostics sample per drain, not one per drop");
+			zassert_false(saw_diag);
 			saw_diag = true;
 			diag_value = (uint32_t)cap_buf[i].raw;
 		}
 	}
-	zassert_true(saw_diag, "one drop happened: a diagnostics sample must appear");
-	zassert_equal(diag_value, 1u, "the diagnostics sample carries the running total");
+	zassert_true(saw_diag);
+	zassert_equal(diag_value, 1u);
 
 	/* Drain again with nothing new dropped: no second diagnostics sample. */
 	cap_n = 0u;
 	radiant_bridge_post(&s);
 	radiant_bridge_drain();
 	for (i = 0u; i < cap_n; i++) {
-		zassert_not_equal(cap_buf[i].source, RADIANT_BRIDGE_DIAG_SOURCE,
-			       "drop count unchanged: no repeat diagnostics sample");
+		zassert_not_equal(cap_buf[i].source, RADIANT_BRIDGE_DIAG_SOURCE);
 	}
 }
 
@@ -252,14 +248,14 @@ ZTEST(radiant_bridge, test_hr_adapter_first_message_posts_only_instantaneous)
 	body(b, 0x00u, 1000u, 50u, 72u);
 
 	n = radiant_hr_adapter_decode(&a, 7u, b, 12345u);
-	zassert_equal(n, 1u, "first message: nothing to difference against yet");
+	zassert_equal(n, 1u);
 
 	radiant_bridge_drain();
 	zassert_equal(cap_n, 1u, NULL);
 	zassert_equal(cap_buf[0].field_type, RADIANT_FIELD_HEART_RATE, NULL);
 	zassert_equal(cap_buf[0].field_id, RADIANT_HR_FIELD_COMPUTED_BPM, NULL);
 	zassert_equal(cap_buf[0].raw, 72, NULL);
-	zassert_equal(cap_buf[0].source, 7u, "source is threaded through unchanged");
+	zassert_equal(cap_buf[0].source, 7u);
 }
 
 ZTEST(radiant_bridge, test_hr_adapter_second_message_posts_all_three)
@@ -278,7 +274,7 @@ ZTEST(radiant_bridge, test_hr_adapter_second_message_posts_all_three)
 	radiant_hr_adapter_decode(&a, 1u, b, 1000000u);
 	radiant_bridge_drain();
 
-	zassert_equal(cap_n, 3u, "second message: instantaneous + two accumulators");
+	zassert_equal(cap_n, 3u);
 
 	zassert_equal(cap_buf[0].field_id, RADIANT_HR_FIELD_COMPUTED_BPM, NULL);
 	zassert_equal(cap_buf[0].raw, 73, NULL);
@@ -286,12 +282,12 @@ ZTEST(radiant_bridge, test_hr_adapter_second_message_posts_all_three)
 	zassert_equal(cap_buf[1].field_id, RADIANT_HR_FIELD_BEAT_COUNT, NULL);
 	zassert_equal(cap_buf[1].field_type, RADIANT_FIELD_EVENT_COUNT, NULL);
 	zassert_true((cap_buf[1].flags & RADIANT_SAMPLE_ACCUMULATING) != 0u, NULL);
-	zassert_equal(cap_buf[1].raw, 1, "one beat since the first message");
+	zassert_equal(cap_buf[1].raw, 1);
 
 	zassert_equal(cap_buf[2].field_id, RADIANT_HR_FIELD_BEAT_TIME_MS, NULL);
 	zassert_equal(cap_buf[2].field_type, RADIANT_FIELD_DURATION, NULL);
-	zassert_equal(cap_buf[2].exp, -3, "milliseconds");
-	zassert_equal(cap_buf[2].raw, 1000, "1024/1024 s = exactly 1000 ms");
+	zassert_equal(cap_buf[2].exp, -3);
+	zassert_equal(cap_buf[2].raw, 1000);
 }
 
 ZTEST(radiant_bridge, test_hr_adapter_beat_count_wraps_at_u8)
@@ -311,7 +307,7 @@ ZTEST(radiant_bridge, test_hr_adapter_beat_count_wraps_at_u8)
 	radiant_hr_adapter_decode(&a, 1u, b, 1000u);
 	radiant_bridge_drain();
 
-	zassert_equal(cap_buf[1].raw, 4, "254 -> 2 across a u8 wrap is four beats");
+	zassert_equal(cap_buf[1].raw, 4);
 }
 
 ZTEST(radiant_bridge, test_hr_adapter_event_time_conversion_exact_across_wrap)
@@ -346,8 +342,7 @@ ZTEST(radiant_bridge, test_hr_adapter_event_time_conversion_exact_across_wrap)
 
 	/* The LAST publish carries the exact running total. */
 	zassert_equal(cap_buf[2].field_id, RADIANT_HR_FIELD_BEAT_TIME_MS, NULL);
-	zassert_equal(cap_buf[2].raw, 68359,
-		     "70000/1024 s truncated to ms, exact across a u16 wrap");
+	zassert_equal(cap_buf[2].raw, 68359);
 }
 
 static void *bridge_setup(void)

@@ -131,13 +131,11 @@ ZTEST(radiant_liveness, test_does_not_expire_before_three_periods)
 
 	post_hr(src, 0u, 70, 0u);
 
-	zassert_equal(tick(EXPIRY_US - 1u), 0u,
-		      "one microsecond under 3x the period: must not expire");
+	zassert_equal(tick(EXPIRY_US - 1u), 0u);
 	zassert_equal(cap_n, 0u, NULL);
 
 	/* Exactly at the threshold is still not past it. */
-	zassert_equal(tick(EXPIRY_US), 0u,
-		      "at 3x the period exactly: must not expire yet");
+	zassert_equal(tick(EXPIRY_US), 0u);
 	zassert_equal(cap_n, 0u, NULL);
 }
 
@@ -148,14 +146,12 @@ ZTEST(radiant_liveness, test_expires_once_and_carries_the_last_value)
 	post_hr(src, 0u, 70, 0u);
 	post_hr(src, 0u, 138, 200000u); /* the value that must survive */
 
-	zassert_equal(tick(200000u + EXPIRY_US + 1u), 1u,
-		      "past 3x the period: must expire");
+	zassert_equal(tick(200000u + EXPIRY_US + 1u), 1u);
 	zassert_equal(cap_n, 1u, NULL);
 	zassert_equal(cap_buf[0].source, src, NULL);
 	zassert_equal(cap_buf[0].field_id, 0u, NULL);
 	zassert_equal(cap_buf[0].field_type, RADIANT_FIELD_HEART_RATE, NULL);
-	zassert_equal(cap_buf[0].raw, 138,
-		      "the expiry must carry the last reading, not a zero");
+	zassert_equal(cap_buf[0].raw, 138);
 	zassert_true((cap_buf[0].flags & RADIANT_SAMPLE_STALE) != 0u, NULL);
 	/* Stamped when the expiry was decided, not when the value was heard -
 	 * otherwise a sink ordering its writes by t_us puts the expiry before
@@ -167,7 +163,7 @@ ZTEST(radiant_liveness, test_expires_once_and_carries_the_last_value)
 	 * a source that has stopped transmitting. */
 	zassert_equal(tick(10u * US_PER_S), 0u, NULL);
 	zassert_equal(tick(20u * US_PER_S), 0u, NULL);
-	zassert_equal(cap_n, 1u, "exactly one STALE record per quiet period");
+	zassert_equal(cap_n, 1u);
 }
 
 ZTEST(radiant_liveness, test_a_fresh_sample_rearms_the_edge)
@@ -180,8 +176,7 @@ ZTEST(radiant_liveness, test_a_fresh_sample_rearms_the_edge)
 
 	/* Back in range. */
 	post_hr(src, 0u, 72, 5u * US_PER_S);
-	zassert_equal(tick(5u * US_PER_S + EXPIRY_US - 1u), 0u,
-		      "freshly heard: must not still read stale");
+	zassert_equal(tick(5u * US_PER_S + EXPIRY_US - 1u), 0u);
 	zassert_equal(cap_n, 1u, NULL);
 
 	/* And gone again - which must be reported, not swallowed because it
@@ -198,14 +193,11 @@ ZTEST(radiant_liveness, test_a_binding_with_no_period_never_expires)
 
 	post_hr(src, 0u, 70, 0u);
 
-	zassert_equal(tick(60u * US_PER_S), 0u,
-		      "no period: no honest expiry exists, so none is invented");
+	zassert_equal(tick(60u * US_PER_S), 0u);
 	zassert_equal(cap_n, 0u, NULL);
 
 	st = radiant_liveness_stats_get();
-	zassert_true(st->no_period > 0u,
-		     "abstaining must be counted, or it is indistinguishable "
-		     "from working");
+	zassert_true(st->no_period > 0u);
 }
 
 ZTEST(radiant_liveness, test_period_scales_the_threshold)
@@ -216,8 +208,8 @@ ZTEST(radiant_liveness, test_period_scales_the_threshold)
 	uint32_t src = bound_source(1u, 32768u);
 
 	post_hr(src, 0u, 70, 0u);
-	zassert_equal(tick(3u * US_PER_S), 0u, "at 3 s exactly: not yet");
-	zassert_equal(tick(3u * US_PER_S + 1u), 1u, "past 3 s: expired");
+	zassert_equal(tick(3u * US_PER_S), 0u);
+	zassert_equal(tick(3u * US_PER_S + 1u), 1u);
 }
 
 ZTEST(radiant_liveness, test_unbinding_frees_the_row)
@@ -235,10 +227,8 @@ ZTEST(radiant_liveness, test_unbinding_frees_the_row)
 	/* A different device lands in the same table slot. It must not inherit
 	 * the previous occupant's 138 bpm. */
 	rebound = bound_source(2u, PERIOD_4HZ);
-	zassert_equal(rebound, src, "same slot, which is what makes this a test");
-	zassert_equal(tick(120u * US_PER_S), 0u,
-		      "a fresh binding that has never published has nothing to "
-		      "expire");
+	zassert_equal(rebound, src);
+	zassert_equal(tick(120u * US_PER_S), 0u);
 	zassert_equal(cap_n, 0u, NULL);
 }
 
@@ -255,7 +245,7 @@ ZTEST(radiant_liveness, test_an_extra_field_is_refused_not_evicted)
 
 	st = radiant_liveness_stats_get();
 	zassert_equal(st->tracked, RADIANT_LIVENESS_FIELDS_PER_SOURCE, NULL);
-	zassert_equal(st->no_slot, 1u, "the field past the last slot is refused and counted");
+	zassert_equal(st->no_slot, 1u);
 
 	/* The four that were accepted are all still watched - the refusal must
 	 * not have cost one of them its slot. */
@@ -286,11 +276,9 @@ ZTEST(radiant_liveness, test_a_page_rotation_is_not_a_sensor_going_away)
 
 	for (t = 0u; t <= 10u * US_PER_S; t += US_PER_S) {
 		post_hr(src, (uint8_t)((t / US_PER_S) % 2u), 70, t);
-		zassert_equal(tick(t + (US_PER_S / 2u)), 0u,
-			      "a rotating page is still traffic: the sensor has "
-			      "not gone anywhere");
+		zassert_equal(tick(t + (US_PER_S / 2u)), 0u);
 	}
-	zassert_equal(cap_n, 0u, "not one STALE record while it is transmitting");
+	zassert_equal(cap_n, 0u);
 
 	/*
 	 * And the guarantee the module exists for is unchanged: when the whole
@@ -298,8 +286,7 @@ ZTEST(radiant_liveness, test_a_page_rotation_is_not_a_sensor_going_away)
 	 * period the header promises - not just the one that happened to be
 	 * carried by the last page received.
 	 */
-	zassert_equal(tick(10u * US_PER_S + EXPIRY_US + 1u), 2u,
-		      "every tracked field of a source that went quiet");
+	zassert_equal(tick(10u * US_PER_S + EXPIRY_US + 1u), 2u);
 	zassert_equal(cap_n, 2u, NULL);
 }
 
@@ -344,9 +331,8 @@ ZTEST(radiant_liveness, test_derived_and_diagnostic_samples_are_never_tracked)
 	radiant_bridge_post(&s);
 	radiant_bridge_drain();
 
-	zassert_equal(0u, radiant_liveness_stats_get()->tracked,
-		      "a derived or out-of-table sample took a liveness row");
-	zassert_equal(0u, tick(10u * EXPIRY_US), "a STALE was posted for it");
+	zassert_equal(0u, radiant_liveness_stats_get()->tracked);
+	zassert_equal(0u, tick(10u * EXPIRY_US));
 }
 
 static void *liveness_setup(void)

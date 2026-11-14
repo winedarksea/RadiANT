@@ -48,9 +48,7 @@ ZTEST(rgb_led_curve, test_period_is_monotonic_non_increasing)
 	for (uint32_t rate = 0u; rate <= 60000u; rate += 37u) {
 		uint32_t got = ant_rgb_led_period_ms(rate);
 
-		zassert_true(got <= prev,
-			     "period rose at %u mpps: %u -> %u",
-			     rate, prev, got);
+		zassert_true(got <= prev, "rate %u: %u -> %u", rate, prev, got);
 		prev = got;
 	}
 }
@@ -58,30 +56,26 @@ ZTEST(rgb_led_curve, test_period_is_monotonic_non_increasing)
 /* Both ends clamp: no rate produces a period outside the curve. */
 ZTEST(rgb_led_curve, test_period_is_clamped_at_both_ends)
 {
-	zassert_equal(ant_rgb_led_period_ms(0u), 20000u,
-		      "idle rotation is not the documented 20 s");
+	zassert_equal(ant_rgb_led_period_ms(0u), 20000u);
 
 	/* Far beyond the last breakpoint, including a value that would
 	 * overflow a 32-bit intermediate if the interpolation ever ran here.
 	 */
-	zassert_equal(ant_rgb_led_period_ms(40000u), 750u, "floor moved");
-	zassert_equal(ant_rgb_led_period_ms(1000000u), 750u, "no high clamp");
-	zassert_equal(ant_rgb_led_period_ms(UINT32_MAX), 750u,
-		      "UINT32_MAX rate escaped the clamp");
+	zassert_equal(ant_rgb_led_period_ms(40000u), 750u);
+	zassert_equal(ant_rgb_led_period_ms(1000000u), 750u);
+	zassert_equal(ant_rgb_led_period_ms(UINT32_MAX), 750u);
 }
 
 /* The breakpoints are interpolated between, not stepped between. */
 ZTEST(rgb_led_curve, test_period_interpolates_between_breakpoints)
 {
 	/* Halfway from (0, 20000) to (4000, 8000) is 14000. */
-	zassert_equal(ant_rgb_led_period_ms(2000u), 14000u,
-		      "midpoint of the first segment is not interpolated");
+	zassert_equal(ant_rgb_led_period_ms(2000u), 14000u);
 
 	/* Strictly inside a segment, the value must differ from both ends. */
 	uint32_t mid = ant_rgb_led_period_ms(8000u);
 
-	zassert_true(mid < 8000u && mid > 2000u,
-		     "second segment not interpolated: got %u", mid);
+	zassert_true(mid < 8000u && mid > 2000u, "got %u", mid);
 }
 
 /*
@@ -92,8 +86,7 @@ ZTEST(rgb_led_curve, test_period_interpolates_between_breakpoints)
 ZTEST(rgb_led_curve, test_hue_step_never_rounds_to_zero)
 {
 	for (uint32_t tick = TICK_MIN; tick <= TICK_MAX; tick++) {
-		zassert_true(ant_rgb_led_hue_step(0u, tick) > 0u,
-			     "idle hue step is zero at tick %u ms", tick);
+		zassert_true(ant_rgb_led_hue_step(0u, tick) > 0u, "tick %u", tick);
 	}
 }
 
@@ -111,11 +104,8 @@ ZTEST(rgb_led_curve, test_hue_step_completes_a_rotation_in_the_period)
 		/* Integer truncation of the step always undershoots, never
 		 * overshoots; one tick of slack is the whole tolerance.
 		 */
-		zassert_true(travelled <= ANT_RGB_LED_HUE_Q_MAX,
-			     "rate %u overshoots a rotation", rates[i]);
-		zassert_true(travelled + step >= ANT_RGB_LED_HUE_Q_MAX,
-			     "rate %u undershoots by more than one tick",
-			     rates[i]);
+		zassert_true(travelled <= ANT_RGB_LED_HUE_Q_MAX, "rate %u", rates[i]);
+		zassert_true(travelled + step >= ANT_RGB_LED_HUE_Q_MAX, "rate %u", rates[i]);
 	}
 }
 
@@ -127,9 +117,7 @@ ZTEST(rgb_led_curve, test_hue_step_is_monotonic_non_decreasing)
 	for (uint32_t rate = 0u; rate <= 60000u; rate += 37u) {
 		uint32_t got = ant_rgb_led_hue_step(rate, TICK_DEFAULT);
 
-		zassert_true(got >= prev,
-			     "hue step fell at %u mpps: %u -> %u",
-			     rate, prev, got);
+		zassert_true(got >= prev, "rate %u: %u -> %u", rate, prev, got);
 		prev = got;
 	}
 }
@@ -160,8 +148,7 @@ ZTEST(rgb_led_curve, test_gap_at_idle_is_exactly_the_anchor)
 
 	for (size_t i = 0u; i < ARRAY_SIZE(anchors); i++) {
 		zassert_equal(ant_activity_gap_ms(0u, anchors[i]), anchors[i],
-			      "idle gap is not the anchor for %u",
-			      anchors[i]);
+			      "anchor %u", anchors[i]);
 	}
 }
 
@@ -177,8 +164,8 @@ ZTEST(rgb_led_curve, test_gap_is_monotonic_non_increasing)
 			uint32_t got = ant_activity_gap_ms(rate, anchors[i]);
 
 			zassert_true(got <= prev,
-				     "gap rose at %u mpps (anchor %u): %u -> %u",
-				     rate, anchors[i], prev, got);
+				     "anchor %u rate %u: %u -> %u",
+				     anchors[i], rate, prev, got);
 			prev = got;
 		}
 	}
@@ -196,12 +183,10 @@ ZTEST(rgb_led_curve, test_gap_never_returns_zero)
 	for (uint32_t anchor = GAP_MIN; anchor <= 200u; anchor++) {
 		for (uint32_t rate = 0u; rate <= 60000u; rate += 97u) {
 			zassert_true(ant_activity_gap_ms(rate, anchor) > 0u,
-				     "zero gap at %u mpps, anchor %u",
-				     rate, anchor);
+				     "rate %u anchor %u", rate, anchor);
 		}
 
-		zassert_true(ant_activity_gap_ms(UINT32_MAX, anchor) > 0u,
-			     "zero gap at UINT32_MAX, anchor %u", anchor);
+		zassert_true(ant_activity_gap_ms(UINT32_MAX, anchor) > 0u, "anchor %u", anchor);
 	}
 }
 
@@ -213,14 +198,10 @@ ZTEST(rgb_led_curve, test_gap_never_returns_zero)
  */
 ZTEST(rgb_led_curve, test_gap_matches_the_documented_shape)
 {
-	zassert_equal(ant_activity_gap_ms(4000u, GAP_DEFAULT), 1600u,
-		      "one sensor is not the documented 1.6 s");
-	zassert_equal(ant_activity_gap_ms(16000u, GAP_DEFAULT), 400u,
-		      "four sensors is not the documented 400 ms");
-	zassert_equal(ant_activity_gap_ms(40000u, GAP_DEFAULT), 150u,
-		      "the floor is not the documented 150 ms");
+	zassert_equal(ant_activity_gap_ms(4000u, GAP_DEFAULT), 1600u);
+	zassert_equal(ant_activity_gap_ms(16000u, GAP_DEFAULT), 400u);
+	zassert_equal(ant_activity_gap_ms(40000u, GAP_DEFAULT), 150u);
 
 	/* And the floor is a floor: no rate beyond it goes lower. */
-	zassert_equal(ant_activity_gap_ms(UINT32_MAX, GAP_DEFAULT), 150u,
-		      "UINT32_MAX rate escaped the floor");
+	zassert_equal(ant_activity_gap_ms(UINT32_MAX, GAP_DEFAULT), 150u);
 }

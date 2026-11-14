@@ -122,15 +122,11 @@ ZTEST(radiant_common_adapter, test_golden_vector_decodes_to_its_two_subfields)
 
 	zassert_equal(profile_common_decode_84(golden, &d), 0, NULL);
 
-	zassert_equal(d.slot[0].subpage, PROFILE_COMMON_SUBPAGE_TEMPERATURE,
-		      "section 6.13.1: the first subfield is temperature");
-	zassert_equal(d.slot[0].raw, PROFILE_COMMON_84_GOLDEN_TEMP_CENTI,
-		      "0x0A6B = 2667 = 26.67 degC, little-endian");
+	zassert_equal(d.slot[0].subpage, PROFILE_COMMON_SUBPAGE_TEMPERATURE);
+	zassert_equal(d.slot[0].raw, PROFILE_COMMON_84_GOLDEN_TEMP_CENTI);
 
-	zassert_equal(d.slot[1].subpage, PROFILE_COMMON_SUBPAGE_HUMIDITY,
-		      "section 6.13.1: the second subfield is humidity");
-	zassert_equal(d.slot[1].raw, PROFILE_COMMON_84_GOLDEN_HUMID_CENTI,
-		      "0x19EA = 6634 = 66.34 percent, little-endian");
+	zassert_equal(d.slot[1].subpage, PROFILE_COMMON_SUBPAGE_HUMIDITY);
+	zassert_equal(d.slot[1].raw, PROFILE_COMMON_84_GOLDEN_HUMID_CENTI);
 }
 
 ZTEST(radiant_common_adapter, test_decoder_rejects_a_body_that_is_not_page_84)
@@ -155,35 +151,28 @@ ZTEST(radiant_common_adapter, test_golden_vector_end_to_end_on_the_bus)
 	const struct radiant_sample *s;
 
 	radiant_common_adapter_init(&a);
-	zassert_equal(radiant_common_adapter_decode(&a, 3u, golden, 1234u), 2u,
-		      "both slots of the worked example are understood");
+	zassert_equal(radiant_common_adapter_decode(&a, 3u, golden, 1234u), 2u);
 	radiant_bridge_drain();
 
 	/* Temperature: EXACT. 26.67 degC is 299.82 K, and the vocabulary's
 	 * unit is kelvin, so raw = 2667 + 27315 at exp -2 with no rounding
 	 * anywhere. An assertion on 29982 is an assertion that nothing in the
 	 * path did floating point. */
-	CCAP_REQUIRE(s, RADIANT_COMMON_FIELD_TEMPERATURE,
-		     "subpage 1 posts a temperature");
+	CCAP_REQUIRE(s, RADIANT_COMMON_FIELD_TEMPERATURE, NULL);
 	zassert_equal(s->field_type, RADIANT_FIELD_TEMPERATURE, NULL);
 	zassert_equal(s->exp, -2, NULL);
-	zassert_equal(s->raw, 29982, "26.67 degC = 299.82 K, exactly");
+	zassert_equal(s->raw, 29982);
 	zassert_equal(s->source, 3u, NULL);
 	zassert_equal(s->t_us, 1234u, NULL);
-	zassert_equal(s->flags, RADIANT_SAMPLE_ROTATED,
-		      "instantaneous, not an accumulator - but ROTATED, because "
-		      "ANT+ interleaves a common page as rarely as one message "
-		      "in 121 and no expiry may be computed from the channel "
-		      "period for it");
+	/* A common page is 1 in 121 messages: ROTATED, never a channel-period expiry. */
+	zassert_equal(s->flags, RADIANT_SAMPLE_ROTATED);
 
 	/* Humidity: EXACT. 0.01 % is exp -2 on the wire value itself. */
-	CCAP_REQUIRE(s, RADIANT_COMMON_FIELD_HUMIDITY,
-		     "subpage 3 posts a humidity");
+	CCAP_REQUIRE(s, RADIANT_COMMON_FIELD_HUMIDITY, NULL);
 	zassert_equal(s->field_type, RADIANT_FIELD_HUMIDITY, NULL);
 	zassert_equal(s->exp, -2, NULL);
-	zassert_equal(s->raw, 6634, "66.34 %%, exactly");
-	zassert_equal(s->flags, RADIANT_SAMPLE_ROTATED,
-		      "not an accumulator, but off a common page");
+	zassert_equal(s->raw, 6634);
+	zassert_equal(s->flags, RADIANT_SAMPLE_ROTATED);
 }
 
 /* ---------------------------------------------------------------------------
@@ -214,8 +203,7 @@ ZTEST(radiant_common_adapter, test_page_84_on_a_power_meter_binding_gives_humidi
 					   &source), 0, NULL);
 	b = radiant_binding_get(source);
 	zassert_not_null(b, NULL);
-	zassert_equal(b->devtype, 0x0Bu,
-		      "the binding really is a power meter, not an env sensor");
+	zassert_equal(b->devtype, 0x0Bu);
 
 	radiant_common_adapter_init(&a);
 
@@ -227,18 +215,16 @@ ZTEST(radiant_common_adapter, test_page_84_on_a_power_meter_binding_gives_humidi
 		      NULL);
 	radiant_bridge_drain();
 
-	CCAP_REQUIRE(s, RADIANT_COMMON_FIELD_HUMIDITY,
-		     "a power meter's page 84 must still produce humidity");
+	CCAP_REQUIRE(s, RADIANT_COMMON_FIELD_HUMIDITY, NULL);
 	zassert_equal(s->field_type, RADIANT_FIELD_HUMIDITY, NULL);
-	zassert_equal(s->raw, 5000, "50.00 percent");
+	zassert_equal(s->raw, 5000);
 	zassert_equal(s->source, source, NULL);
 
 	/* And the field_id came out of the reserved common block, so it cannot
 	 * collide with whatever the power adapter writes onto the same source -
 	 * the two-producers-one-source case radiant_bridge.h describes. */
 	zassert_true(s->field_id >= RADIANT_FIELD_ID_COMMON_BASE &&
-		     s->field_id <= RADIANT_FIELD_ID_COMMON_MAX,
-		     "common fields live in 0x20-0x3F, clear of every profile");
+		     s->field_id <= RADIANT_FIELD_ID_COMMON_MAX);
 }
 
 /* ---------------------------------------------------------------------------
@@ -255,13 +241,11 @@ ZTEST(radiant_common_adapter, test_invalid_sentinel_in_slot_one_leaves_slot_two)
 	page84(body, PROFILE_COMMON_SUBPAGE_INVALID, 0xDEADu,
 	       PROFILE_COMMON_SUBPAGE_HUMIDITY, 6634u);
 
-	zassert_equal(radiant_common_adapter_decode(&a, 0u, body, 1u), 1u,
-		      "one slot declined, the other still decodes");
+	zassert_equal(radiant_common_adapter_decode(&a, 0u, body, 1u), 1u);
 	radiant_bridge_drain();
 	zassert_not_null(ccap_find(RADIANT_COMMON_FIELD_HUMIDITY), NULL);
 	zassert_equal(a.declined, 1u, NULL);
-	zassert_false(a.have_last[PROFILE_COMMON_SUBPAGE_TEMPERATURE],
-		      "a declined slot records nothing, whatever its data bytes");
+	zassert_false(a.have_last[PROFILE_COMMON_SUBPAGE_TEMPERATURE]);
 }
 
 ZTEST(radiant_common_adapter, test_invalid_sentinel_in_slot_two_leaves_slot_one)
@@ -291,8 +275,7 @@ ZTEST(radiant_common_adapter, test_reserved_subpage_is_declined_without_error)
 	page84(body, PROFILE_COMMON_SUBPAGE_RESERVED_FIRST, 0x1234u,
 	       PROFILE_COMMON_SUBPAGE_TEMPERATURE, 2667u);
 
-	zassert_equal(radiant_common_adapter_decode(&a, 0u, body, 1u), 1u,
-		      "the reserved slot declines, the temperature still posts");
+	zassert_equal(radiant_common_adapter_decode(&a, 0u, body, 1u), 1u);
 	radiant_bridge_drain();
 	zassert_not_null(ccap_find(RADIANT_COMMON_FIELD_TEMPERATURE), NULL);
 	zassert_equal(a.declined, 1u, NULL);
@@ -326,7 +309,7 @@ ZTEST(radiant_common_adapter, test_other_common_pages_post_nothing)
 		memset(body, 0xFFu, sizeof(body));
 		body[0] = page;
 		zassert_equal(radiant_common_adapter_decode(&a, 0u, body, 1u),
-			      0u, "page 0x%02x posted a sample", page);
+			      0u, "page 0x%02x", page);
 	}
 
 	zassert_equal(radiant_common_adapter_decode(&a, 0u, NULL, 1u), 0u, NULL);
@@ -346,14 +329,10 @@ ZTEST(radiant_common_adapter, test_common_page_range_boundaries)
 	 * off-by-ones are silent: one page low and every profile's page 0x3F
 	 * stops reaching its own decoder; one page high and rx_tap.c hands a
 	 * reserved page to the common path on every channel. */
-	zassert_false(radiant_common_adapter_is_common_page(0x3Fu),
-		      "0x3F is the last ANT+ device-type-specific page");
-	zassert_true(radiant_common_adapter_is_common_page(0x40u),
-		     "0x40 (64) is the first common page");
-	zassert_true(radiant_common_adapter_is_common_page(0x5Du),
-		     "0x5D (93) is the last common page");
-	zassert_false(radiant_common_adapter_is_common_page(0x5Eu),
-		      "0x5E (94) is the first reserved page");
+	zassert_false(radiant_common_adapter_is_common_page(0x3Fu));
+	zassert_true(radiant_common_adapter_is_common_page(0x40u));
+	zassert_true(radiant_common_adapter_is_common_page(0x5Du));
+	zassert_false(radiant_common_adapter_is_common_page(0x5Eu));
 
 	/* Spot checks well outside, so a broken comparison direction cannot
 	 * pass on the four boundaries alone. */
@@ -383,7 +362,7 @@ ZTEST(radiant_common_adapter, test_temperature_is_twos_complement_into_kelvin)
 	radiant_bridge_drain();
 
 	CCAP_REQUIRE(s, RADIANT_COMMON_FIELD_TEMPERATURE, NULL);
-	zassert_equal(s->raw, 26815, "-5.00 degC = 268.15 K");
+	zassert_equal(s->raw, 26815);
 }
 
 ZTEST(radiant_common_adapter, test_operating_temperature_limits_are_decoded_not_posted)
@@ -404,14 +383,11 @@ ZTEST(radiant_common_adapter, test_operating_temperature_limits_are_decoded_not_
 	radiant_common_adapter_init(&a);
 	page84(body, PROFILE_COMMON_SUBPAGE_TEMP_MIN, 0xF830u /* -20.00 degC */,
 	       PROFILE_COMMON_SUBPAGE_TEMP_MAX, 6000u /* +60.00 degC */);
-	zassert_equal(radiant_common_adapter_decode(&a, 0u, body, 1u), 0u,
-		      "a page carrying only the two limits posts nothing");
+	zassert_equal(radiant_common_adapter_decode(&a, 0u, body, 1u), 0u);
 	radiant_bridge_drain();
 
-	zassert_is_null(ccap_find(RADIANT_COMMON_FIELD_TEMP_MIN),
-			"subpage 7 must not reach the bus");
-	zassert_is_null(ccap_find(RADIANT_COMMON_FIELD_TEMP_MAX),
-			"subpage 8 must not reach the bus");
+	zassert_is_null(ccap_find(RADIANT_COMMON_FIELD_TEMP_MIN));
+	zassert_is_null(ccap_find(RADIANT_COMMON_FIELD_TEMP_MAX));
 
 	/* DECODED, though - the same "decoded, deliberately not posted" as
 	 * radiant_env_adapter.h's 24-hour low and high. last_raw keeps the wire
@@ -439,8 +415,7 @@ ZTEST(radiant_common_adapter, test_operating_temperature_limits_are_decoded_not_
 	radiant_common_adapter_init(&a);
 	page84(body, PROFILE_COMMON_SUBPAGE_TEMP_MIN, 0xF830u,
 	       PROFILE_COMMON_SUBPAGE_TEMPERATURE, 2667u);
-	zassert_equal(radiant_common_adapter_decode(&a, 0u, body, 1u), 1u,
-		      "the limit declines, the temperature still posts");
+	zassert_equal(radiant_common_adapter_decode(&a, 0u, body, 1u), 1u);
 	radiant_bridge_drain();
 	zassert_not_null(ccap_find(RADIANT_COMMON_FIELD_TEMPERATURE), NULL);
 	zassert_is_null(ccap_find(RADIANT_COMMON_FIELD_TEMP_MIN), NULL);
@@ -464,7 +439,7 @@ ZTEST(radiant_common_adapter, test_pressure_is_exact_at_exp_plus_one)
 
 	CCAP_REQUIRE(s, RADIANT_COMMON_FIELD_PRESSURE, NULL);
 	zassert_equal(s->field_type, RADIANT_FIELD_PRESSURE, NULL);
-	zassert_equal(s->exp, 1, "0.01 kPa = 10 Pa is an exponent, not a multiply");
+	zassert_equal(s->exp, 1);
 	zassert_equal(s->raw, 10132, NULL);
 
 	/* Table 6-17's stated maximum, 655.35 kPa, at the full u16. */
@@ -476,7 +451,7 @@ ZTEST(radiant_common_adapter, test_pressure_is_exact_at_exp_plus_one)
 	(void)radiant_common_adapter_decode(&a, 0u, body, 1u);
 	radiant_bridge_drain();
 	CCAP_REQUIRE(s, RADIANT_COMMON_FIELD_PRESSURE, NULL);
-	zassert_equal(s->raw, 65535, "655.35 kPa = 655350 Pa at exp 1");
+	zassert_equal(s->raw, 65535);
 }
 
 /* ---------------------------------------------------------------------------
@@ -510,17 +485,14 @@ static void wind_check(uint8_t subpage, uint8_t field_id, uint8_t field_type,
 	radiant_bridge_drain();
 
 	s = ccap_find(field_id);
-	zassert_not_null(s, "subpage %u must publish", subpage);
+	zassert_not_null(s, "subpage %u", subpage);
 	if (s == NULL) {
 		return;
 	}
 	zassert_equal(s->field_type, field_type, NULL);
 	zassert_equal(s->exp, -6, NULL);
-	zassert_equal(s->flags, RADIANT_SAMPLE_ROTATED,
-		      "instantaneous - the error does not compound, so section "
-		      "3.2's accumulator rule does not apply here - and ROTATED, "
-		      "which every field off a common page carries");
-	zassert_equal(s->raw, expect, "wire %u expected raw %lld, got %lld",
+	zassert_equal(s->flags, RADIANT_SAMPLE_ROTATED);
+	zassert_equal(s->raw, expect, "wire %u: %lld != %lld",
 		      wire, (long long)expect, (long long)s->raw);
 }
 
@@ -615,8 +587,7 @@ ZTEST(radiant_common_adapter, test_charging_cycles_difference_at_u16_wire_width)
 	 * the head of every sink's series. */
 	page84(body, PROFILE_COMMON_SUBPAGE_CHARGE_CYCLES, 65530u,
 	       PROFILE_COMMON_SUBPAGE_INVALID, 0u);
-	zassert_equal(radiant_common_adapter_decode(&a, 0u, body, 1u), 0u,
-		      "nothing to difference against yet");
+	zassert_equal(radiant_common_adapter_decode(&a, 0u, body, 1u), 0u);
 	radiant_bridge_drain();
 	zassert_is_null(ccap_find(RADIANT_COMMON_FIELD_CHARGE_CYCLES), NULL);
 
@@ -627,9 +598,7 @@ ZTEST(radiant_common_adapter, test_charging_cycles_difference_at_u16_wire_width)
 	radiant_bridge_drain();
 	CCAP_REQUIRE(s, RADIANT_COMMON_FIELD_CHARGE_CYCLES, NULL);
 	zassert_equal(s->field_type, RADIANT_FIELD_EVENT_COUNT, NULL);
-	zassert_equal(s->flags,
-		      RADIANT_SAMPLE_ACCUMULATING | RADIANT_SAMPLE_ROTATED,
-		      "an accumulator, and - like every common page - ROTATED");
+	zassert_equal(s->flags, RADIANT_SAMPLE_ACCUMULATING | RADIANT_SAMPLE_ROTATED);
 	zassert_equal(s->exp, 0, NULL);
 	zassert_equal(s->raw, 3, NULL);
 
@@ -656,9 +625,7 @@ ZTEST(radiant_common_adapter, test_charging_cycles_difference_at_u16_wire_width)
 	zassert_equal(radiant_common_adapter_decode(&a, 0u, body, 3u), 1u, NULL);
 	radiant_bridge_drain();
 	CCAP_REQUIRE(s, RADIANT_COMMON_FIELD_CHARGE_CYCLES, NULL);
-	zassert_equal(s->raw, 10,
-		      "65533 -> 4 wraps to +7 on top of the running total of 3, "
-		      "not -65529 and not a bare 7");
+	zassert_equal(s->raw, 10);
 }
 
 /* ---------------------------------------------------------------------------
@@ -688,9 +655,7 @@ ZTEST(radiant_common_adapter, test_last_seen_is_recorded_but_never_suppresses)
 	zassert_equal(a.last_raw[PROFILE_COMMON_SUBPAGE_TEMPERATURE], 2667u,
 		      NULL);
 
-	zassert_equal(radiant_common_adapter_decode(&a, 0u, body, 2u), 1u,
-		      "an identical reading posts again - the deadband lives in "
-		      "the Matter plane, not here");
+	zassert_equal(radiant_common_adapter_decode(&a, 0u, body, 2u), 1u);
 }
 
 ZTEST(radiant_common_adapter, test_init_clears_every_field)

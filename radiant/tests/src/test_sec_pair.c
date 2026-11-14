@@ -193,10 +193,8 @@ static void assert_root_is(uint8_t ch, uint16_t devnum, const uint8_t *root)
 	memcpy(want, plain, sizeof(want));
 	zassert_ok(radiant_sec_tx_transform(ch, got, 8u, t));
 	zassert_ok(radiant_sec_tx_transform(REF_CH, want, 8u, t));
-	zassert_false(memcmp(want, plain, sizeof(want)) == 0,
-		      "the reference transmitted in the clear: no check made");
-	zassert_mem_equal(want, got, sizeof(got),
-			  "the paired root is not radiant_crypto.py's");
+	zassert_false(memcmp(want, plain, sizeof(want)) == 0);
+	zassert_mem_equal(want, got, sizeof(got));
 	radiant_sec_channel_release(REF_CH);
 	(void)radiant_channel_unassign(REF_CH);
 }
@@ -220,22 +218,18 @@ ZTEST(sec_pair, test_two_ends_reach_the_same_fingerprint)
 	keys_cross(A_CH, scalar_a, B_CH, scalar_b);
 
 	/* Nothing is installed by the key exchange alone any more. */
-	zassert_false(has_key(A_CH), "EXCHANGE installed a key on A");
-	zassert_false(has_key(B_CH), "EXCHANGE installed a key on B");
+	zassert_false(has_key(A_CH));
+	zassert_false(has_key(B_CH));
 
 	zassert_ok(radiant_sec_pair_set_nonce(B_CH, RESP, nonce_b, cb));
-	zassert_mem_equal(VEC_CB, cb, sizeof(cb),
-			  "the commitment disagrees with radiant_crypto.py");
+	zassert_mem_equal(VEC_CB, cb, sizeof(cb));
 	zassert_ok(radiant_sec_pair_set_nonce(A_CH, INIT, nonce_a, NULL));
 	zassert_ok(radiant_sec_pair_peer_commit(A_CH, cb));
 	zassert_ok(radiant_sec_pair_peer_nonce(B_CH, nonce_a, &fp_b));
 	zassert_ok(radiant_sec_pair_peer_nonce(A_CH, nonce_b, &fp_a));
 
-	zassert_equal(fp_a, fp_b, "the two ends computed different "
-		      "fingerprints: %u vs %u", fp_a, fp_b);
-	zassert_equal(VEC_FP, fp_a,
-		      "the fingerprint disagrees with radiant_crypto.py: %u",
-		      fp_a);
+	zassert_equal(fp_a, fp_b, "%u vs %u", fp_a, fp_b);
+	zassert_equal(VEC_FP, fp_a, "%u", fp_a);
 	zassert_true(has_key(A_CH) && has_key(B_CH));
 	zassert_equal(1u, enrolments(A_CH));
 	zassert_equal(1u, enrolments(B_CH));
@@ -269,15 +263,13 @@ ZTEST(sec_pair, test_a_nonce_that_does_not_open_the_commitment_is_refused)
 
 	/* Nothing installed, nothing counted, and the exchange is gone: there
 	 * is no second guess, not even with the right nonce. */
-	zassert_false(has_key(A_CH), "a refused reveal installed a key");
+	zassert_false(has_key(A_CH));
 	zassert_equal(0u, enrolments(A_CH));
-	zassert_false(radiant_sec_pair_is_open(A_CH),
-		      "a commitment mismatch left the exchange open");
+	zassert_false(radiant_sec_pair_is_open(A_CH));
 	zassert_equal(RADIANT_SEC_EINVAL,
 		      radiant_sec_pair_fingerprint(A_CH, &fp));
 	zassert_equal(RADIANT_SEC_EINVAL,
-		      radiant_sec_pair_peer_nonce(A_CH, nonce_b, &fp),
-		      "the right nonce was accepted after a wrong one");
+		      radiant_sec_pair_peer_nonce(A_CH, nonce_b, &fp));
 }
 
 ZTEST(sec_pair, test_changing_either_nonce_changes_the_fingerprint)
@@ -306,10 +298,10 @@ ZTEST(sec_pair, test_changing_either_nonce_changes_the_fingerprint)
 	commit_reveal(A_CH, nonce_a, B_CH, nb2, &fp[2][0], &fp[2][1]);
 
 	for (int i = 0; i < 3; i++) {
-		zassert_equal(fp[i][0], fp[i][1], "run %d: ends disagree", i);
+		zassert_equal(fp[i][0], fp[i][1], "run %d", i);
 	}
-	zassert_not_equal(fp[0][0], fp[1][0], "Na is not in the fingerprint");
-	zassert_not_equal(fp[0][0], fp[2][0], "Nb is not in the fingerprint");
+	zassert_not_equal(fp[0][0], fp[1][0]);
+	zassert_not_equal(fp[0][0], fp[2][0]);
 }
 
 ZTEST(sec_pair, test_every_step_is_refused_out_of_order)
@@ -370,8 +362,7 @@ ZTEST(sec_pair, test_every_step_is_refused_out_of_order)
 	 * still completes. */
 	zassert_ok(radiant_sec_pair_peer_commit(A_CH, cb));
 	zassert_equal(RADIANT_SEC_EINVAL,
-		      radiant_sec_pair_peer_commit(A_CH, cb),
-		      "a second commitment replaced the first");
+		      radiant_sec_pair_peer_commit(A_CH, cb));
 	zassert_ok(radiant_sec_pair_peer_nonce(B_CH, nonce_a, &fp_b));
 	zassert_ok(radiant_sec_pair_peer_nonce(A_CH, nonce_b, &fp_a));
 	zassert_equal(fp_a, fp_b);
@@ -383,7 +374,7 @@ ZTEST(sec_pair, test_every_step_is_refused_out_of_order)
 		      radiant_sec_pair_peer_nonce(B_CH, nonce_a, &fp));
 	zassert_equal(RADIANT_SEC_EINVAL,
 		      radiant_sec_pair_set_nonce(A_CH, INIT, nonce_a, NULL));
-	zassert_equal(1u, enrolments(A_CH), "a refused step counted");
+	zassert_equal(1u, enrolments(A_CH));
 }
 
 /*
@@ -435,7 +426,7 @@ ZTEST(sec_pair, test_a_man_in_the_middle_cannot_match_both_fingerprints)
 	/* ── M and B, M as initiator: an honest-looking exchange ──────────── */
 	keys_cross(M2_CH, scalar_m, B_CH, scalar_b);
 	commit_reveal(M2_CH, nm_to_b, B_CH, nonce_b, &fp_mb, &fp_b);
-	zassert_equal(fp_b, fp_mb, "B and M did not agree with each other");
+	zassert_equal(fp_b, fp_mb);
 
 	/* ── A and M, M as responder: committed before Na exists ──────────── */
 	keys_cross(A_CH, scalar_a, M1_CH, scalar_m);
@@ -457,20 +448,15 @@ ZTEST(sec_pair, test_a_man_in_the_middle_cannot_match_both_fingerprints)
 		keys_cross(4u, scalar_a, 5u, scalar_m);
 		commit_reveal(4u, nonce_a, 5u, grind_nm, &fp_a_ground,
 			      &fp_m_ground);
-		zassert_equal(fp_b, fp_a_ground,
-			      "the precomputed grind no longer matches: the "
-			      "test lost its teeth (%u vs %u)", fp_b,
-			      fp_a_ground);
+		zassert_equal(fp_b, fp_a_ground, "%u vs %u", fp_b, fp_a_ground);
 	}
 
 	/* But M committed to nm_to_a before Na existed, and A holds it to
 	 * that: the ground nonce does not open the commitment. */
 	zassert_equal(RADIANT_SEC_EBADMAC,
-		      radiant_sec_pair_peer_nonce(A_CH, grind_nm, &fp),
-		      "A accepted a nonce chosen after its own was revealed");
+		      radiant_sec_pair_peer_nonce(A_CH, grind_nm, &fp));
 	zassert_false(has_key(A_CH));
-	zassert_false(radiant_sec_pair_is_open(A_CH),
-		      "the attempt left A's window open for another");
+	zassert_false(radiant_sec_pair_is_open(A_CH));
 
 	/* Revealing what it committed to is all M can do, and then the two
 	 * screens disagree. */
@@ -478,11 +464,8 @@ ZTEST(sec_pair, test_a_man_in_the_middle_cannot_match_both_fingerprints)
 	radiant_sec_pair_leave(M1_CH);
 	keys_cross(A_CH, scalar_a, M1_CH, scalar_m);
 	commit_reveal(A_CH, nonce_a, M1_CH, nm_to_a, &fp_a, &fp_ma);
-	zassert_equal(fp_a, fp_ma, "A and M did not agree with each other");
-	zassert_not_equal(fp_a, fp_b,
-			  "A and B computed the SAME fingerprint through a "
-			  "man in the middle; the comparison would show "
-			  "nothing and the whole mitigation is void");
+	zassert_equal(fp_a, fp_ma);
+	zassert_not_equal(fp_a, fp_b);
 }
 
 ZTEST(sec_pair, test_a_substituted_key_does_not_match)
@@ -512,8 +495,7 @@ ZTEST(sec_pair, test_a_substituted_key_does_not_match)
 	zassert_ok(radiant_sec_pair_peer_commit(A_CH, cb));
 	zassert_ok(radiant_sec_pair_peer_nonce(B_CH, nonce_a, &fp_b));
 	zassert_equal(RADIANT_SEC_EBADMAC,
-		      radiant_sec_pair_peer_nonce(A_CH, nonce_b, &fp_a),
-		      "a commitment bound to PKb opened against PKm");
+		      radiant_sec_pair_peer_nonce(A_CH, nonce_b, &fp_a));
 	zassert_false(has_key(A_CH));
 }
 
@@ -535,9 +517,7 @@ ZTEST(sec_pair, test_enrolment_pairs_through_the_uncommitted_path)
 	zassert_ok(radiant_sec_pair_peer_uncommitted(B_CH, pub_a, &fp_b));
 	zassert_equal(fp_a, fp_b);
 	assert_root_is(A_CH, A_DEVNUM, VEC_ROOT_UNCOMMITTED);
-	zassert_equal(VEC_FP_UNCOMMITTED, fp_a,
-		      "the uncommitted fingerprint disagrees with "
-		      "radiant_crypto.py: %u", fp_a);
+	zassert_equal(VEC_FP_UNCOMMITTED, fp_a, "%u", fp_a);
 	zassert_true(has_key(A_CH) && has_key(B_CH));
 	zassert_equal(1u, enrolments(A_CH));
 }
@@ -569,8 +549,7 @@ ZTEST(sec_pair, test_a_small_order_peer_key_is_refused)
 	zassert_false(has_key(A_CH));
 	give_id(B_CH, B_DEVNUM);
 	key_up(B_CH, scalar_b, pub_b);
-	zassert_ok(radiant_sec_pair_peer(A_CH, pub_b),
-		   "a refused small-order key spent the scalar");
+	zassert_ok(radiant_sec_pair_peer(A_CH, pub_b));
 }
 
 ZTEST(sec_pair, test_pairing_installs_a_key_both_ends_can_use)
@@ -675,9 +654,7 @@ ZTEST(sec_pair, test_loss_of_tracking_releases_the_exchange)
 	radiant_sec_pair_on_search(A_CH);
 	radiant_sec_pair_service();
 
-	zassert_false(radiant_sec_pair_is_open(A_CH),
-		      "pairing survived loss of tracking; there is no other "
-		      "event that would ever free it");
+	zassert_false(radiant_sec_pair_is_open(A_CH));
 	zassert_equal(RADIANT_SEC_EINVAL,
 		      radiant_sec_pair_local_pubkey(A_CH, pub));
 }
@@ -689,8 +666,7 @@ ZTEST(sec_pair, test_a_zero_timeout_means_the_default_not_forever)
 	 * open node, so 0 means the 60-second default instead. */
 	give_id(A_CH, A_DEVNUM);
 	zassert_equal(RADIANT_SEC_OK, radiant_sec_pair_enter(A_CH, 0u));
-	zassert_true(radiant_sec_pair_is_open(A_CH),
-		     "a zero timeout closed the window immediately");
+	zassert_true(radiant_sec_pair_is_open(A_CH));
 }
 
 ZTEST(sec_pair, test_the_fingerprint_is_readable_only_after_the_reveal)
@@ -736,11 +712,9 @@ ZTEST(sec_pair, test_an_exchange_spends_the_scalar)
 	zassert_ok(radiant_sec_pair_peer(A_CH, pub_b));
 
 	/* A host retry of EXCHANGE with the same peer key. */
-	zassert_equal(RADIANT_SEC_EINVAL, radiant_sec_pair_peer(A_CH, pub_b),
-		      "a second exchange ran on the spent scalar");
+	zassert_equal(RADIANT_SEC_EINVAL, radiant_sec_pair_peer(A_CH, pub_b));
 	zassert_equal(RADIANT_SEC_EINVAL,
-		      radiant_sec_pair_peer_uncommitted(A_CH, pub_b, &fp_a),
-		      "the uncommitted path ran on the spent scalar");
+		      radiant_sec_pair_peer_uncommitted(A_CH, pub_b, &fp_a));
 
 	/* The first exchange is intact and still completes. */
 	zassert_ok(radiant_sec_pair_peer(B_CH, pub_a));
@@ -754,8 +728,7 @@ ZTEST(sec_pair, test_an_exchange_spends_the_scalar)
 
 	/* And nothing re-keys the finished channel. */
 	zassert_equal(RADIANT_SEC_EINVAL, radiant_sec_pair_peer(A_CH, pub_b));
-	zassert_true(radiant_sec_channel_is_secured(A_CH),
-		     "the paired key was replaced");
+	zassert_true(radiant_sec_channel_is_secured(A_CH));
 }
 
 /*
@@ -772,8 +745,7 @@ ZTEST(sec_pair, test_a_channel_without_a_device_number_cannot_commit)
 	give_id(B_CH, 0u);
 	keys_cross(A_CH, scalar_a, B_CH, scalar_b);
 	zassert_equal(RADIANT_SEC_ENOKEY,
-		      radiant_sec_pair_set_nonce(B_CH, RESP, nonce_b, cb),
-		      "a commitment went out from a channel that cannot install");
+		      radiant_sec_pair_set_nonce(B_CH, RESP, nonce_b, cb));
 }
 
 ZTEST(sec_pair, test_a_failed_install_after_the_commitment_wipes_the_exchange)
@@ -799,8 +771,7 @@ ZTEST(sec_pair, test_a_failed_install_after_the_commitment_wipes_the_exchange)
 	memcpy(na2, nonce_a, sizeof(na2));
 	na2[3] ^= 0x10u;
 	zassert_equal(RADIANT_SEC_EINVAL,
-		      radiant_sec_pair_peer_nonce(B_CH, na2, &fp),
-		      "a responder took a second Na after a failed install");
+		      radiant_sec_pair_peer_nonce(B_CH, na2, &fp));
 	zassert_false(has_key(B_CH));
 }
 
@@ -844,11 +815,9 @@ ZTEST(sec_pair, test_re_entering_wipes_the_old_exchange)
 
 	zassert_ok(radiant_sec_pair_enter(B_CH, 60u));
 	zassert_equal(RADIANT_SEC_EINVAL,
-		      radiant_sec_pair_local_pubkey(B_CH, pub),
-		      "ENTER revived the old public key");
+		      radiant_sec_pair_local_pubkey(B_CH, pub));
 	zassert_equal(RADIANT_SEC_EINVAL,
-		      radiant_sec_pair_set_nonce(B_CH, RESP, nonce_b, cb),
-		      "ENTER revived the old DH result");
+		      radiant_sec_pair_set_nonce(B_CH, RESP, nonce_b, cb));
 }
 
 /* Review item 4: an abandoned window is freed by housekeeping, not only by
@@ -864,12 +833,10 @@ ZTEST(sec_pair, test_housekeeping_frees_an_expired_window)
 
 	/* local_pubkey does no lazy expiry, so it sees whether the context
 	 * (and the scalar in it) is still in RAM. */
-	zassert_ok(radiant_sec_pair_local_pubkey(A_CH, pub),
-		   "precondition: the expired context is still allocated");
+	zassert_ok(radiant_sec_pair_local_pubkey(A_CH, pub));
 	radiant_sec_pair_service();
 	zassert_equal(RADIANT_SEC_EINVAL,
-		      radiant_sec_pair_local_pubkey(A_CH, pub),
-		      "housekeeping left an expired window's secrets in RAM");
+		      radiant_sec_pair_local_pubkey(A_CH, pub));
 }
 
 /*
@@ -883,8 +850,7 @@ ZTEST(sec_pair, test_a_loss_recorded_before_enter_does_not_release_the_pairing)
 	radiant_sec_pair_on_search(A_CH);
 	zassert_ok(radiant_sec_pair_enter(A_CH, 60u));
 	radiant_sec_pair_service();
-	zassert_true(radiant_sec_pair_is_open(A_CH),
-		     "a loss from before ENTER released the new pairing");
+	zassert_true(radiant_sec_pair_is_open(A_CH));
 }
 
 #endif /* CONFIG_RADIANT_SEC_PAIRING_X25519 */

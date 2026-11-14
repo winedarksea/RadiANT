@@ -49,9 +49,8 @@ static const char *name_of(uint8_t devtype, uint16_t devnum, uint8_t subtype,
 	int n = radiant_naming_format(buf, sizeof(buf), devtype, devnum, subtype,
 				      label, field_type, field_id);
 
-	zassert_true(n >= 0, "formatter refused a valid buffer");
-	zassert_equal((size_t)n, strlen(buf),
-		      "the return value must be the length actually written");
+	zassert_true(n >= 0);
+	zassert_equal((size_t)n, strlen(buf));
 	return buf;
 }
 
@@ -69,11 +68,11 @@ static const char *occupancy_name(uint8_t devtype, uint16_t devnum, uint8_t subt
 ZTEST(radiant_naming, test_base_names_come_from_the_device_type)
 {
 	zassert_str_equal(name_of(DEVTYPE_HR, 8842u, 0u, NULL, RADIANT_FIELD_HEART_RATE, 0u),
-			  "Heart Rate 8842", NULL);
+			  "Heart Rate 8842");
 	zassert_str_equal(name_of(DEVTYPE_POWER, 17u, 0u, NULL, RADIANT_FIELD_ACTIVE_POWER, 0u),
-			  "Power 17", NULL);
+			  "Power 17");
 	zassert_str_equal(name_of(DEVTYPE_ENV, 4211u, 0u, NULL, RADIANT_FIELD_TEMPERATURE, 0u),
-			  "Environment 4211", NULL);
+			  "Environment 4211");
 }
 
 ZTEST(radiant_naming, test_an_unknown_device_type_still_gets_a_usable_name)
@@ -82,7 +81,7 @@ ZTEST(radiant_naming, test_an_unknown_device_type_still_gets_a_usable_name)
 	 * number is what tells two of them apart, and it is printed on the
 	 * sensor. */
 	zassert_str_equal(name_of(0x5Cu, 900u, 0u, NULL, RADIANT_FIELD_TEMPERATURE, 0u),
-			  "Sensor 900", NULL);
+			  "Sensor 900");
 }
 
 ZTEST(radiant_naming, test_the_primary_reading_carries_no_suffix)
@@ -97,9 +96,9 @@ ZTEST(radiant_naming, test_the_primary_reading_carries_no_suffix)
 	 * and a real trainer measured four collisions from exactly that. See
 	 * radiant_naming.c's suffix_names[] header. */
 	zassert_str_equal(name_of(DEVTYPE_HR, 8842u, 0u, NULL, RADIANT_FIELD_HEART_RATE, 0u),
-			  "Heart Rate 8842", NULL);
+			  "Heart Rate 8842");
 	zassert_str_equal(name_of(DEVTYPE_ENV, 4211u, 0u, NULL, RADIANT_FIELD_TEMPERATURE, 0u),
-			  "Environment 4211", NULL);
+			  "Environment 4211");
 }
 
 ZTEST(radiant_naming, test_a_field_with_no_row_is_still_given_a_unique_tail)
@@ -110,14 +109,13 @@ ZTEST(radiant_naming, test_a_field_with_no_row_is_still_given_a_unique_tail)
 	 * deliberately ugly: it is a legible name and a visible request to add a
 	 * row. */
 	zassert_str_equal(name_of(DEVTYPE_HR, 8842u, 0u, NULL, RADIANT_FIELD_TEMPERATURE, 10u),
-			  "Heart Rate 8842 #10", NULL);
+			  "Heart Rate 8842 #10");
 	zassert_str_equal(name_of(DEVTYPE_HR, 8842u, 0u, NULL, RADIANT_FIELD_VOLTAGE, 31u),
-			  "Heart Rate 8842 #31", NULL);
+			  "Heart Rate 8842 #31");
 
 	/* And it must differ from the primary, which is the whole point. */
 	zassert_true(strcmp(name_of(DEVTYPE_HR, 8842u, 0u, NULL, RADIANT_FIELD_TEMPERATURE, 10u),
-			    "Heart Rate 8842") != 0,
-		     "an unrowed field must never collide with the primary reading");
+			    "Heart Rate 8842") != 0);
 }
 
 ZTEST(radiant_naming, test_the_series_a_real_sensor_carries_all_get_their_own_name)
@@ -208,7 +206,7 @@ ZTEST(radiant_naming, test_the_series_a_real_sensor_carries_all_get_their_own_na
 		size_t total = sensors[s].n + ARRAY_SIZE(common);
 		size_t i;
 
-		zassert_true(total <= ARRAY_SIZE(names), "widen names[]");
+		zassert_true(total <= ARRAY_SIZE(names));
 
 		for (i = 0u; i < total; i++) {
 			const struct field *f = (i < sensors[s].n)
@@ -219,14 +217,13 @@ ZTEST(radiant_naming, test_the_series_a_real_sensor_carries_all_get_their_own_na
 						      sensors[s].subtype, NULL,
 						      f->type, f->id);
 
-			zassert_true(n > 0, "%s: field 0x%02x/0x%02x produced no name",
-				     sensors[s].what, f->type, f->id);
+			zassert_true(n > 0, "%s 0x%02x/0x%02x", sensors[s].what, f->type, f->id);
 		}
 
 		for (i = 0u; i < total; i++) {
 			for (size_t j = i + 1u; j < total; j++) {
 				zassert_true(strcmp(names[i], names[j]) != 0,
-					     "%s: two series both compose to \"%s\"",
+					     "%s \"%s\"",
 					     sensors[s].what, names[i]);
 			}
 		}
@@ -238,14 +235,12 @@ ZTEST(radiant_naming, test_the_series_a_real_sensor_carries_all_get_their_own_na
 ZTEST(radiant_naming, test_every_fec_subtype_has_its_own_name)
 {
 	zassert_str_equal(name_of(DEVTYPE_FEC, 51234u, FEC_TREADMILL, NULL, 0u, 0u),
-			  "Treadmill 51234", NULL);
-	zassert_str_equal(name_of(DEVTYPE_FEC, 1u, FEC_ELLIPTICAL, NULL, 0u, 0u),
-			  "Elliptical 1", NULL);
-	zassert_str_equal(name_of(DEVTYPE_FEC, 2u, FEC_ROWER, NULL, 0u, 0u), "Rower 2", NULL);
-	zassert_str_equal(name_of(DEVTYPE_FEC, 3u, FEC_CLIMBER, NULL, 0u, 0u), "Climber 3", NULL);
-	zassert_str_equal(name_of(DEVTYPE_FEC, 4u, FEC_SKI, NULL, 0u, 0u), "Ski Erg 4", NULL);
-	zassert_str_equal(name_of(DEVTYPE_FEC, 5u, FEC_TRAINER, NULL, 0u, 0u),
-			  "Indoor Bike 5", NULL);
+			  "Treadmill 51234");
+	zassert_str_equal(name_of(DEVTYPE_FEC, 1u, FEC_ELLIPTICAL, NULL, 0u, 0u), "Elliptical 1");
+	zassert_str_equal(name_of(DEVTYPE_FEC, 2u, FEC_ROWER, NULL, 0u, 0u), "Rower 2");
+	zassert_str_equal(name_of(DEVTYPE_FEC, 3u, FEC_CLIMBER, NULL, 0u, 0u), "Climber 3");
+	zassert_str_equal(name_of(DEVTYPE_FEC, 4u, FEC_SKI, NULL, 0u, 0u), "Ski Erg 4");
+	zassert_str_equal(name_of(DEVTYPE_FEC, 5u, FEC_TRAINER, NULL, 0u, 0u), "Indoor Bike 5");
 }
 
 ZTEST(radiant_naming, test_an_unlearned_or_unknown_subtype_is_generic)
@@ -254,14 +249,11 @@ ZTEST(radiant_naming, test_an_unlearned_or_unknown_subtype_is_generic)
 	 * is in for its first fraction of a second, and the reason the Matter
 	 * bridge carries a late-rename path at all. It must still produce a
 	 * usable name rather than an empty or hex one. */
-	zassert_str_equal(name_of(DEVTYPE_FEC, 51234u, 0u, NULL, 0u, 0u),
-			  "Fitness Equip 51234", NULL);
+	zassert_str_equal(name_of(DEVTYPE_FEC, 51234u, 0u, NULL, 0u, 0u), "Fitness Equip 51234");
 	/* 21 and 26 are not in Table 8-8. A future allocation must not be
 	 * guessed at. */
-	zassert_str_equal(name_of(DEVTYPE_FEC, 51234u, 21u, NULL, 0u, 0u),
-			  "Fitness Equip 51234", NULL);
-	zassert_str_equal(name_of(DEVTYPE_FEC, 51234u, 26u, NULL, 0u, 0u),
-			  "Fitness Equip 51234", NULL);
+	zassert_str_equal(name_of(DEVTYPE_FEC, 51234u, 21u, NULL, 0u, 0u), "Fitness Equip 51234");
+	zassert_str_equal(name_of(DEVTYPE_FEC, 51234u, 26u, NULL, 0u, 0u), "Fitness Equip 51234");
 }
 
 ZTEST(radiant_naming, test_the_subtype_is_ignored_off_fec)
@@ -270,7 +262,7 @@ ZTEST(radiant_naming, test_the_subtype_is_ignored_off_fec)
 	 * never carry an equipment type, and if one somehow arrived it must not
 	 * rename the strap to "Treadmill". */
 	zassert_str_equal(name_of(DEVTYPE_HR, 8842u, FEC_TREADMILL, NULL, 0u, 0u),
-			  "Heart Rate 8842", NULL);
+			  "Heart Rate 8842");
 }
 
 /* ── The suffixes ───────────────────────────────────────────────────────── */
@@ -281,16 +273,16 @@ ZTEST(radiant_naming, test_the_five_occupancy_booleans_are_distinguishable)
 	 * were "3f2a91c40e77b21205"-style hex, differing only in the last two
 	 * characters, on four endpoints of one identical Matter device type. */
 	zassert_str_equal(occupancy_name(DEVTYPE_HR, 8842u, 0u, RADIANT_RULE_FIELD_WORN),
-			  "Heart Rate 8842 Worn", NULL);
+			  "Heart Rate 8842 Worn");
 	zassert_str_equal(occupancy_name(DEVTYPE_HR, 8842u, 0u, RADIANT_RULE_FIELD_ACTIVE),
-			  "Heart Rate 8842 Active", NULL);
+			  "Heart Rate 8842 Active");
 	zassert_str_equal(occupancy_name(DEVTYPE_HR, 8842u, 0u, RADIANT_RULE_FIELD_AT_REST),
-			  "Heart Rate 8842 At Rest", NULL);
+			  "Heart Rate 8842 At Rest");
 	zassert_str_equal(occupancy_name(DEVTYPE_HR, 8842u, 0u, RADIANT_RULE_FIELD_ZONE2),
-			  "Heart Rate 8842 Zone 2", NULL);
+			  "Heart Rate 8842 Zone 2");
 	zassert_str_equal(occupancy_name(DEVTYPE_FEC, 51234u, FEC_TREADMILL,
 					 RADIANT_RULE_FIELD_EQUIPMENT_IN_USE),
-			  "Treadmill 51234 In Use", NULL);
+			  "Treadmill 51234 In Use");
 }
 
 ZTEST(radiant_naming, test_a_suffix_needs_both_halves_of_the_key)
@@ -300,7 +292,7 @@ ZTEST(radiant_naming, test_a_suffix_needs_both_halves_of_the_key)
 	 * alone would name a wattage series "Worn". */
 	zassert_str_equal(name_of(DEVTYPE_POWER, 17u, 0u, NULL, RADIANT_FIELD_ACTIVE_POWER,
 				  RADIANT_RULE_FIELD_WORN),
-			  "Power 17", NULL);
+			  "Power 17");
 }
 
 /* ── The label override ─────────────────────────────────────────────────── */
@@ -312,10 +304,10 @@ ZTEST(radiant_naming, test_a_label_replaces_the_base_name_and_the_number)
 	 * the suffix stays, because a labelled strap is still five endpoints. */
 	zassert_str_equal(name_of(DEVTYPE_HR, 8842u, 0u, "Chest Strap",
 				  RADIANT_FIELD_OCCUPANCY, RADIANT_RULE_FIELD_ZONE2),
-			  "Chest Strap Zone 2", NULL);
+			  "Chest Strap Zone 2");
 	zassert_str_equal(name_of(DEVTYPE_HR, 8842u, 0u, "Chest Strap",
 				  RADIANT_FIELD_HEART_RATE, 0u),
-			  "Chest Strap", NULL);
+			  "Chest Strap");
 }
 
 ZTEST(radiant_naming, test_an_empty_label_is_not_an_override)
@@ -324,10 +316,10 @@ ZTEST(radiant_naming, test_an_empty_label_is_not_an_override)
 	 * every binding in the tree has label[0] == '\0'. */
 	zassert_str_equal(name_of(DEVTYPE_HR, 8842u, 0u, "", RADIANT_FIELD_OCCUPANCY,
 				  RADIANT_RULE_FIELD_WORN),
-			  "Heart Rate 8842 Worn", NULL);
+			  "Heart Rate 8842 Worn");
 	zassert_str_equal(name_of(DEVTYPE_HR, 8842u, 0u, NULL, RADIANT_FIELD_OCCUPANCY,
 				  RADIANT_RULE_FIELD_WORN),
-			  "Heart Rate 8842 Worn", NULL);
+			  "Heart Rate 8842 Worn");
 }
 
 /* ── The budget ─────────────────────────────────────────────────────────── */
@@ -342,20 +334,17 @@ ZTEST(radiant_naming, test_the_worst_case_fits_with_its_suffix_intact)
 	const char *n = name_of(DEVTYPE_FEC, 65535u, 0u, NULL, RADIANT_FIELD_OCCUPANCY,
 				RADIANT_RULE_FIELD_AT_REST);
 
-	zassert_str_equal(n, "Fitness Equip 65535 At Rest", NULL);
-	zassert_true(strlen(n) < RADIANT_NAMING_MAX,
-		     "the composed name must fit Matter's kNodeLabelSize with its NUL");
-	zassert_not_null(strstr(n, "At Rest"),
-			 "the suffix is the half that disambiguates - it must never be the half truncated");
+	zassert_str_equal(n, "Fitness Equip 65535 At Rest");
+	zassert_true(strlen(n) < RADIANT_NAMING_MAX);
+	zassert_not_null(strstr(n, "At Rest"));
 
 	/* The longest suffix in the table is no longer "At Rest". Pair it with
 	 * the longest base and the widest device number - a combination no real
 	 * sensor produces, which is exactly why only the BUILD_ASSERT and this
 	 * case are watching it. */
 	n = name_of(DEVTYPE_FEC, 65535u, 0u, NULL, RADIANT_FIELD_PERCENTAGE, 0x06u);
-	zassert_str_equal(n, "Fitness Equip 65535 Vert Ratio", NULL);
-	zassert_true(strlen(n) < RADIANT_NAMING_MAX,
-		     "the widest base/suffix pair must still fit kNodeLabelSize");
+	zassert_str_equal(n, "Fitness Equip 65535 Vert Ratio");
+	zassert_true(strlen(n) < RADIANT_NAMING_MAX);
 }
 
 ZTEST(radiant_naming, test_a_labelled_sensor_keeps_its_suffix_at_the_worst_case)
@@ -367,8 +356,8 @@ ZTEST(radiant_naming, test_a_labelled_sensor_keeps_its_suffix_at_the_worst_case)
 	const char *n = name_of(DEVTYPE_HR, 8842u, 0u, "Fifteen Chars!!",
 				RADIANT_FIELD_PERCENTAGE, 0x06u);
 
-	zassert_str_equal(n, "Fifteen Chars!! Vert Ratio", NULL);
-	zassert_true(strlen(n) < RADIANT_NAMING_MAX, NULL);
+	zassert_str_equal(n, "Fifteen Chars!! Vert Ratio");
+	zassert_true(strlen(n) < RADIANT_NAMING_MAX);
 }
 
 ZTEST(radiant_naming, test_a_short_buffer_truncates_safely)
@@ -380,16 +369,16 @@ ZTEST(radiant_naming, test_a_short_buffer_truncates_safely)
 	/* The reported length must be what IS there, not what snprintf would
 	 * have written: Matter's SetNodeLabel() memcpy()s the length it is
 	 * given, so an over-reported one reads past the end of this buffer. */
-	zassert_equal(n, (int)(sizeof(small) - 1u), NULL);
-	zassert_equal(strlen(small), sizeof(small) - 1u, NULL);
+	zassert_equal(n, (int)(sizeof(small) - 1u));
+	zassert_equal(strlen(small), sizeof(small) - 1u);
 }
 
 ZTEST(radiant_naming, test_a_null_buffer_is_refused_rather_than_written)
 {
 	char one[1];
 
-	zassert_true(radiant_naming_format(NULL, 32u, DEVTYPE_HR, 1u, 0u, NULL, 0u, 0u) < 0, NULL);
-	zassert_true(radiant_naming_format(one, 0u, DEVTYPE_HR, 1u, 0u, NULL, 0u, 0u) < 0, NULL);
+	zassert_true(radiant_naming_format(NULL, 32u, DEVTYPE_HR, 1u, 0u, NULL, 0u, 0u) < 0);
+	zassert_true(radiant_naming_format(one, 0u, DEVTYPE_HR, 1u, 0u, NULL, 0u, 0u) < 0);
 }
 
 ZTEST_SUITE(radiant_naming, NULL, NULL, NULL, NULL, NULL);

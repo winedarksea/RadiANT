@@ -58,8 +58,7 @@ ZTEST(radiant_profile_sanity, test_a_realistic_power_reading_is_plausible)
 	uint8_t body[8];
 
 	power_body(body, 250u);
-	zassert_false(radiant_profile_sanity_implausible(BPWR, body, 8u),
-		      "250 W is an ordinary cyclist and must never be dropped");
+	zassert_false(radiant_profile_sanity_implausible(BPWR, body, 8u));
 }
 
 ZTEST(radiant_profile_sanity, test_a_track_sprint_is_still_plausible)
@@ -70,8 +69,7 @@ ZTEST(radiant_profile_sanity, test_a_track_sprint_is_still_plausible)
 	 * the threshold is 3000 W and not the originally proposed 1000 W:
 	 * a tighter threshold would drop exactly this reading. */
 	power_body(body, 2000u);
-	zassert_false(radiant_profile_sanity_implausible(BPWR, body, 8u),
-		      "a 2000 W sprint is real and must survive");
+	zassert_false(radiant_profile_sanity_implausible(BPWR, body, 8u));
 }
 
 ZTEST(radiant_profile_sanity, test_the_threshold_itself_is_still_plausible)
@@ -79,9 +77,7 @@ ZTEST(radiant_profile_sanity, test_the_threshold_itself_is_still_plausible)
 	uint8_t body[8];
 
 	power_body(body, RADIANT_PROFILE_SANITY_BPWR_MAX_WATTS);
-	zassert_false(radiant_profile_sanity_implausible(BPWR, body, 8u),
-		      "the boundary value itself must not be rejected - only "
-		      "values ABOVE it");
+	zassert_false(radiant_profile_sanity_implausible(BPWR, body, 8u));
 }
 
 ZTEST(radiant_profile_sanity, test_one_watt_over_the_threshold_is_implausible)
@@ -89,8 +85,7 @@ ZTEST(radiant_profile_sanity, test_one_watt_over_the_threshold_is_implausible)
 	uint8_t body[8];
 
 	power_body(body, RADIANT_PROFILE_SANITY_BPWR_MAX_WATTS + 1u);
-	zassert_true(radiant_profile_sanity_implausible(BPWR, body, 8u),
-		     "3001 W is not a bicycle");
+	zassert_true(radiant_profile_sanity_implausible(BPWR, body, 8u));
 }
 
 ZTEST(radiant_profile_sanity, test_the_not_reported_power_sentinel_is_plausible)
@@ -98,8 +93,7 @@ ZTEST(radiant_profile_sanity, test_the_not_reported_power_sentinel_is_plausible)
 	uint8_t body[8];
 
 	power_body(body, 0xFFFFu);
-	zassert_false(radiant_profile_sanity_implausible(BPWR, body, 8u),
-		      "0xFFFF means \"not reported\", not 65535 W");
+	zassert_false(radiant_profile_sanity_implausible(BPWR, body, 8u));
 }
 
 ZTEST(radiant_profile_sanity, test_a_power_page_this_module_does_not_check_is_plausible)
@@ -112,8 +106,7 @@ ZTEST(radiant_profile_sanity, test_a_power_page_this_module_does_not_check_is_pl
 	body[0] = 0x11u; /* wheel torque */
 	body[6] = 0xFFu;
 	body[7] = 0xFFu;
-	zassert_false(radiant_profile_sanity_implausible(BPWR, body, 8u),
-		      "this module has no opinion on a page it does not decode");
+	zassert_false(radiant_profile_sanity_implausible(BPWR, body, 8u));
 }
 
 /* ---------------------------------------------------------------------------
@@ -126,8 +119,7 @@ ZTEST(radiant_profile_sanity, test_a_realistic_heart_rate_is_plausible)
 	uint8_t body[8];
 
 	hr_body(body, 150u, 0u);
-	zassert_false(radiant_profile_sanity_implausible(HR, body, 8u),
-		      "150 bpm is an ordinary hard effort");
+	zassert_false(radiant_profile_sanity_implausible(HR, body, 8u));
 }
 
 ZTEST(radiant_profile_sanity, test_a_young_athletes_max_heart_rate_is_still_plausible)
@@ -138,8 +130,7 @@ ZTEST(radiant_profile_sanity, test_a_young_athletes_max_heart_rate_is_still_plau
 	 * threshold is 240 bpm and not the originally proposed 200: a
 	 * tighter threshold would drop exactly this reading. */
 	hr_body(body, 220u, 0u);
-	zassert_false(radiant_profile_sanity_implausible(HR, body, 8u),
-		      "220 bpm is a real, if extreme, human heart rate");
+	zassert_false(radiant_profile_sanity_implausible(HR, body, 8u));
 }
 
 ZTEST(radiant_profile_sanity, test_the_hr_threshold_itself_is_still_plausible)
@@ -147,8 +138,7 @@ ZTEST(radiant_profile_sanity, test_the_hr_threshold_itself_is_still_plausible)
 	uint8_t body[8];
 
 	hr_body(body, (uint8_t)RADIANT_PROFILE_SANITY_HR_MAX_BPM, 0u);
-	zassert_false(radiant_profile_sanity_implausible(HR, body, 8u),
-		      "the boundary value itself must not be rejected");
+	zassert_false(radiant_profile_sanity_implausible(HR, body, 8u));
 }
 
 ZTEST(radiant_profile_sanity, test_one_bpm_over_the_threshold_is_implausible)
@@ -156,8 +146,7 @@ ZTEST(radiant_profile_sanity, test_one_bpm_over_the_threshold_is_implausible)
 	uint8_t body[8];
 
 	hr_body(body, (uint8_t)(RADIANT_PROFILE_SANITY_HR_MAX_BPM + 1u), 0u);
-	zassert_true(radiant_profile_sanity_implausible(HR, body, 8u),
-		     "241 bpm belongs to no heart");
+	zassert_true(radiant_profile_sanity_implausible(HR, body, 8u));
 }
 
 ZTEST(radiant_profile_sanity, test_computed_heart_rate_is_checked_on_every_page_number)
@@ -167,9 +156,7 @@ ZTEST(radiant_profile_sanity, test_computed_heart_rate_is_checked_on_every_page_
 	/* Byte 7 is the computed heart rate on every HRM data page, not just
 	 * page 0 - unlike the power check, there is no page-number gate. */
 	hr_body(body, 250u, 4u);
-	zassert_true(radiant_profile_sanity_implausible(HR, body, 8u),
-		     "byte 7 is the computed heart rate regardless of page "
-		     "number");
+	zassert_true(radiant_profile_sanity_implausible(HR, body, 8u));
 }
 
 ZTEST(radiant_profile_sanity, test_the_not_reported_hr_sentinel_is_plausible)
@@ -177,8 +164,7 @@ ZTEST(radiant_profile_sanity, test_the_not_reported_hr_sentinel_is_plausible)
 	uint8_t body[8];
 
 	hr_body(body, 0xFFu, 0u);
-	zassert_false(radiant_profile_sanity_implausible(HR, body, 8u),
-		      "0xFF means \"not reported\", not 255 bpm");
+	zassert_false(radiant_profile_sanity_implausible(HR, body, 8u));
 }
 
 /* ---------------------------------------------------------------------------
@@ -191,9 +177,7 @@ ZTEST(radiant_profile_sanity, test_an_unknown_device_type_is_never_judged)
 	uint8_t body[8];
 
 	power_body(body, 0xFFFEu); /* absurd, but not a device type checked */
-	zassert_false(radiant_profile_sanity_implausible(0x7Fu, body, 8u),
-		      "a device type this module does not know must pass "
-		      "through unexamined, not be judged by the wrong rule");
+	zassert_false(radiant_profile_sanity_implausible(0x7Fu, body, 8u));
 }
 
 ZTEST(radiant_profile_sanity, test_the_pairing_bit_does_not_hide_the_device_type)
@@ -202,9 +186,7 @@ ZTEST(radiant_profile_sanity, test_the_pairing_bit_does_not_hide_the_device_type
 
 	power_body(body, RADIANT_PROFILE_SANITY_BPWR_MAX_WATTS + 1u);
 	zassert_true(radiant_profile_sanity_implausible(
-			     BPWR | RADIANT_DEVICE_TYPE_PAIRING_BIT, body, 8u),
-		     "the pairing bit must be masked off before the device "
-		     "type is matched");
+			     BPWR | RADIANT_DEVICE_TYPE_PAIRING_BIT, body, 8u));
 }
 
 ZTEST(radiant_profile_sanity, test_a_short_payload_is_never_judged)
@@ -212,11 +194,8 @@ ZTEST(radiant_profile_sanity, test_a_short_payload_is_never_judged)
 	uint8_t body[8];
 
 	power_body(body, RADIANT_PROFILE_SANITY_BPWR_MAX_WATTS + 1u);
-	zassert_false(radiant_profile_sanity_implausible(BPWR, body, 6u),
-		      "a payload too short to hold the field being checked "
-		      "must not be read out of bounds or judged on garbage");
-	zassert_false(radiant_profile_sanity_implausible(HR, body, 6u),
-		      "same, for heart rate's byte 7");
+	zassert_false(radiant_profile_sanity_implausible(BPWR, body, 6u));
+	zassert_false(radiant_profile_sanity_implausible(HR, body, 6u));
 }
 
 /* ---------------------------------------------------------------------------
@@ -243,15 +222,12 @@ ZTEST(radiant_profile_sanity, test_fec_speed_ceiling)
 
 	/* A brisk run, and the fastest treadmill anybody sells. */
 	fec_general_body(body, 3000u);
-	zassert_false(radiant_profile_sanity_implausible(FEC, body, 8u), NULL);
+	zassert_false(radiant_profile_sanity_implausible(FEC, body, 8u));
 	fec_general_body(body, RADIANT_PROFILE_SANITY_FEC_MAX_MM_S);
-	zassert_false(radiant_profile_sanity_implausible(FEC, body, 8u),
-		      "the ceiling itself is plausible; only above it is not");
+	zassert_false(radiant_profile_sanity_implausible(FEC, body, 8u));
 
 	fec_general_body(body, RADIANT_PROFILE_SANITY_FEC_MAX_MM_S + 1u);
-	zassert_true(radiant_profile_sanity_implausible(FEC, body, 8u),
-		     "30 m/s is 108 km/h - a bit flip in the high byte, not a "
-		     "belt speed");
+	zassert_true(radiant_profile_sanity_implausible(FEC, body, 8u));
 }
 
 ZTEST(radiant_profile_sanity, test_fec_speed_sentinel_is_not_an_overrun)
@@ -263,7 +239,7 @@ ZTEST(radiant_profile_sanity, test_fec_speed_sentinel_is_not_an_overrun)
 	 * speed - which is the whole reason the sentinel is excluded before
 	 * the range test rather than after. */
 	fec_general_body(body, 0xFFFFu);
-	zassert_false(radiant_profile_sanity_implausible(FEC, body, 8u), NULL);
+	zassert_false(radiant_profile_sanity_implausible(FEC, body, 8u));
 }
 
 ZTEST(radiant_profile_sanity, test_fec_pages_other_than_16_get_no_opinion)
@@ -276,25 +252,20 @@ ZTEST(radiant_profile_sanity, test_fec_pages_other_than_16_get_no_opinion)
 	 * land above the ceiling - which they will, every 256 units. */
 	fec_general_body(body, 0xF000u);
 	body[0] = 0x13u; /* Specific Treadmill Data */
-	zassert_false(radiant_profile_sanity_implausible(FEC, body, 8u),
-		      "only page 16 carries a speed at bytes 4-5");
+	zassert_false(radiant_profile_sanity_implausible(FEC, body, 8u));
 
 	body[0] = 0x11u; /* General Settings: bytes 4-5 are the incline */
-	zassert_false(radiant_profile_sanity_implausible(FEC, body, 8u),
-		      "an incline is signed and spans its whole encodable "
-		      "range, so there is nothing to reject");
+	zassert_false(radiant_profile_sanity_implausible(FEC, body, 8u));
 }
 
 ZTEST(radiant_profile_sanity, test_a_null_payload_is_never_judged)
 {
-	zassert_false(radiant_profile_sanity_implausible(BPWR, NULL, 8u),
-		      "a null payload must not be dereferenced");
+	zassert_false(radiant_profile_sanity_implausible(BPWR, NULL, 8u));
 }
 
 ZTEST(radiant_profile_sanity, test_a_zero_length_payload_is_never_judged)
 {
 	uint8_t body[8] = { 0 };
 
-	zassert_false(radiant_profile_sanity_implausible(BPWR, body, 0u),
-		      "zero declared length means nothing to judge");
+	zassert_false(radiant_profile_sanity_implausible(BPWR, body, 0u));
 }

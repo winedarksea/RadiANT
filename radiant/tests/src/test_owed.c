@@ -79,7 +79,7 @@ static int send_cb(void *ctx, uint64_t uuid)
 {
 	ARG_UNUSED(ctx);
 	n_calls++;
-	zassert_equal(lock_depth, 0, "send() must run with the owed lock dropped");
+	zassert_equal(lock_depth, 0);
 	if (add_during_send != 0u) {
 		(void)radiant_owed_add(&o, add_during_send);
 		add_during_send = 0u;
@@ -135,29 +135,29 @@ ZTEST(radiant_owed, test_release_a_bind_b_release_b_owes_both)
 	model_bind(0, 0u);	/* release B, still down */
 
 	n = model_drain(UINT32_MAX);	/* reconnect */
-	zassert_equal(n, 2u, "both offlines must go out, got %u", n);
-	zassert_true(has(offered, n_offered, A), "A's offline was lost");
-	zassert_true(has(offered, n_offered, B), "B's offline was lost");
-	zassert_false(radiant_owed_any(&o), "the drain must leave nothing");
-	zassert_equal(o.overflow, 0u, NULL);
+	zassert_equal(n, 2u, "got %u", n);
+	zassert_true(has(offered, n_offered, A));
+	zassert_true(has(offered, n_offered, B));
+	zassert_false(radiant_owed_any(&o));
+	zassert_equal(o.overflow, 0u);
 }
 
 ZTEST(radiant_owed, test_dedupe_same_uuid_released_twice)
 {
-	zassert_true(radiant_owed_add(&o, A), NULL);
-	zassert_true(radiant_owed_add(&o, A), NULL);
-	zassert_true(radiant_owed_add(&o, B), NULL);
-	zassert_true(radiant_owed_add(&o, A), NULL);
-	zassert_equal(slots_used(), 2u, "A must occupy one slot, not three");
+	zassert_true(radiant_owed_add(&o, A));
+	zassert_true(radiant_owed_add(&o, A));
+	zassert_true(radiant_owed_add(&o, B));
+	zassert_true(radiant_owed_add(&o, A));
+	zassert_equal(slots_used(), 2u);
 
 	/* And the capacity view of the same thing: duplicates must not eat slots. */
 	for (int i = 0; i < 40; i++) {
-		zassert_true(radiant_owed_add(&o, A), NULL);
+		zassert_true(radiant_owed_add(&o, A));
 	}
 	for (uint64_t u = 100u; u < 100u + RADIANT_OWED_MAX - 2u; u++) {
-		zassert_true(radiant_owed_add(&o, u), "duplicates ate the list");
+		zassert_true(radiant_owed_add(&o, u));
 	}
-	zassert_equal(o.overflow, 0u, "a duplicate is not an overflow");
+	zassert_equal(o.overflow, 0u);
 }
 
 ZTEST(radiant_owed, test_bind_cancels_a_match_on_another_source)
@@ -166,41 +166,41 @@ ZTEST(radiant_owed, test_bind_cancels_a_match_on_another_source)
 
 	memset(bound, 0, sizeof(bound));
 	/* Fill the first slots with others so A sits in a LATER slot. */
-	zassert_true(radiant_owed_add(&o, C), NULL);
-	zassert_true(radiant_owed_add(&o, 0xD0u), NULL);
+	zassert_true(radiant_owed_add(&o, C));
+	zassert_true(radiant_owed_add(&o, 0xD0u));
 	model_bind(2, A);
 	model_bind(2, 0u);	/* A released from source 2, owed, slot 2 */
 	model_bind(5, B);
 	model_bind(5, 0u);	/* B released from source 5, owed */
-	zassert_true(radiant_owed_at(&o, 0) != A && radiant_owed_at(&o, 1) != A, NULL);
+	zassert_true(radiant_owed_at(&o, 0) != A && radiant_owed_at(&o, 1) != A);
 	model_bind(6, A);	/* A re-pinned on a DIFFERENT source */
 
 	n = model_drain(UINT32_MAX);
-	zassert_equal(n, 3u, "C, 0xD0 and B are still owed, got %u", n);
-	zassert_false(has(offered, n_offered, A), "A's bind must have cancelled it");
-	zassert_true(has(offered, n_offered, B), NULL);
+	zassert_equal(n, 3u, "got %u", n);
+	zassert_false(has(offered, n_offered, A));
+	zassert_true(has(offered, n_offered, B));
 }
 
 ZTEST(radiant_owed, test_failed_send_keeps_the_uuid_and_later_slots_follow_the_sink)
 {
 	uint32_t n;
 
-	zassert_true(radiant_owed_add(&o, A), NULL);
-	zassert_true(radiant_owed_add(&o, B), NULL);
-	zassert_true(radiant_owed_add(&o, C), NULL);
+	zassert_true(radiant_owed_add(&o, A));
+	zassert_true(radiant_owed_add(&o, B));
+	zassert_true(radiant_owed_add(&o, C));
 
 	/* The second send fails (link drops); the third is refused too, as the
 	 * sink's send does once disconnected. Only A went out. */
 	n = model_drain(2u);
-	zassert_equal(n, 1u, NULL);
-	zassert_equal(n_calls, 3u, "every owed slot is still offered, so send() can refuse");
-	zassert_equal(slots_used(), 2u, "B and C must stay owed");
-	zassert_false(has(offered, n_offered, B) || has(offered, n_offered, C), NULL);
+	zassert_equal(n, 1u);
+	zassert_equal(n_calls, 3u);
+	zassert_equal(slots_used(), 2u);
+	zassert_false(has(offered, n_offered, B) || has(offered, n_offered, C));
 
 	/* Reconnected: the rest goes out. */
 	n = model_drain(UINT32_MAX);
-	zassert_equal(n, 2u, NULL);
-	zassert_false(radiant_owed_any(&o), NULL);
+	zassert_equal(n, 2u);
+	zassert_false(radiant_owed_any(&o));
 }
 
 ZTEST(radiant_owed, test_drain_clears_only_what_it_sent)
@@ -208,17 +208,17 @@ ZTEST(radiant_owed, test_drain_clears_only_what_it_sent)
 	/* Slot 0 empty, A in slot 1. B is added while A's publish is in flight
 	 * and lands in the hole at slot 0, behind the walk. Clearing "the
 	 * source's entry" (the old shape) would take B too. */
-	zassert_true(radiant_owed_add(&o, C), NULL);
-	zassert_true(radiant_owed_add(&o, A), NULL);
-	zassert_true(radiant_owed_cancel(&o, C), NULL);
+	zassert_true(radiant_owed_add(&o, C));
+	zassert_true(radiant_owed_add(&o, A));
+	zassert_true(radiant_owed_cancel(&o, C));
 
 	add_during_send = B;
-	zassert_equal(model_drain(UINT32_MAX), 1u, NULL);
-	zassert_equal(offered[0], A, NULL);
-	zassert_true(radiant_owed_any(&o), "B must survive A's clear");
-	zassert_equal(slots_used(), 1u, NULL);
-	zassert_equal(model_drain(UINT32_MAX), 1u, NULL);
-	zassert_equal(offered[0], B, NULL);
+	zassert_equal(model_drain(UINT32_MAX), 1u);
+	zassert_equal(offered[0], A);
+	zassert_true(radiant_owed_any(&o));
+	zassert_equal(slots_used(), 1u);
+	zassert_equal(model_drain(UINT32_MAX), 1u);
+	zassert_equal(offered[0], B);
 }
 
 ZTEST(radiant_owed, test_overflow_is_counted_and_nothing_else_is_lost)
@@ -228,35 +228,35 @@ ZTEST(radiant_owed, test_overflow_is_counted_and_nothing_else_is_lost)
 	for (u = 1u; u <= RADIANT_OWED_MAX; u++) {
 		zassert_true(radiant_owed_add(&o, u), "slot %llu", (unsigned long long)u);
 	}
-	zassert_equal(o.overflow, 0u, NULL);
+	zassert_equal(o.overflow, 0u);
 
-	zassert_false(radiant_owed_add(&o, 0x1000u), "a full list must refuse");
-	zassert_false(radiant_owed_add(&o, 0x1001u), NULL);
-	zassert_equal(o.overflow, 2u, NULL);
+	zassert_false(radiant_owed_add(&o, 0x1000u));
+	zassert_false(radiant_owed_add(&o, 0x1001u));
+	zassert_equal(o.overflow, 2u);
 
 	/* Every earlier entry is intact, and the refused ones are not there. */
 	for (u = 1u; u <= RADIANT_OWED_MAX; u++) {
-		zassert_true(radiant_owed_cancel(&o, u), "entry %llu lost", (unsigned long long)u);
+		zassert_true(radiant_owed_cancel(&o, u), "entry %llu", (unsigned long long)u);
 	}
-	zassert_false(radiant_owed_any(&o), "a refused uuid must not be stored");
+	zassert_false(radiant_owed_any(&o));
 
 	/* Room again after the drain. */
-	zassert_true(radiant_owed_add(&o, 0x1000u), NULL);
+	zassert_true(radiant_owed_add(&o, 0x1000u));
 }
 
 ZTEST(radiant_owed, test_capacity_covers_every_source_plus_one_predecessor)
 {
-	zassert_equal(RADIANT_OWED_MAX, 2u * RADIANT_BINDING_MAX, NULL);
-	zassert_false(radiant_owed_any(&o), NULL);
-	zassert_equal(radiant_owed_at(&o, RADIANT_OWED_MAX), 0u, "out of range reads empty");
+	zassert_equal(RADIANT_OWED_MAX, 2u * RADIANT_BINDING_MAX);
+	zassert_false(radiant_owed_any(&o));
+	zassert_equal(radiant_owed_at(&o, RADIANT_OWED_MAX), 0u);
 }
 
 ZTEST(radiant_owed, test_zero_uuid_and_missing_cancel_are_harmless)
 {
-	zassert_true(radiant_owed_add(&o, 0u), NULL);
-	zassert_false(radiant_owed_any(&o), "0 is the empty marker, never stored");
-	zassert_false(radiant_owed_cancel(&o, C), NULL);
-	zassert_false(radiant_owed_cancel(&o, 0u), NULL);
+	zassert_true(radiant_owed_add(&o, 0u));
+	zassert_false(radiant_owed_any(&o));
+	zassert_false(radiant_owed_cancel(&o, C));
+	zassert_false(radiant_owed_cancel(&o, 0u));
 }
 
 ZTEST_SUITE(radiant_owed, NULL, NULL, before, NULL, NULL);

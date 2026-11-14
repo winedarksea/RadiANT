@@ -97,7 +97,7 @@ ZTEST(sec_x25519, test_rfc7748_vector_one)
 
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_x25519(got, v1_scalar, v1_point));
-	zassert_mem_equal(got, v1_want, 32, "RFC 7748 5.2 vector 1");
+	zassert_mem_equal(got, v1_want, 32, "vector 1");
 }
 
 ZTEST(sec_x25519, test_rfc7748_vector_two)
@@ -106,7 +106,7 @@ ZTEST(sec_x25519, test_rfc7748_vector_two)
 
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_x25519(got, v2_scalar, v2_point));
-	zassert_mem_equal(got, v2_want, 32, "RFC 7748 5.2 vector 2");
+	zassert_mem_equal(got, v2_want, 32, "vector 2");
 }
 
 ZTEST(sec_x25519, test_the_base_point_produces_the_published_public_keys)
@@ -116,12 +116,12 @@ ZTEST(sec_x25519, test_the_base_point_produces_the_published_public_keys)
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_x25519(got, alice_sk,
 					 radiant_sec_x25519_basepoint));
-	zassert_mem_equal(got, alice_pk, 32, "Alice's public key");
+	zassert_mem_equal(got, alice_pk, 32, "alice pk");
 
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_x25519(got, bob_sk,
 					 radiant_sec_x25519_basepoint));
-	zassert_mem_equal(got, bob_pk, 32, "Bob's public key");
+	zassert_mem_equal(got, bob_pk, 32, "bob pk");
 }
 
 ZTEST(sec_x25519, test_both_sides_reach_the_same_secret)
@@ -137,8 +137,8 @@ ZTEST(sec_x25519, test_both_sides_reach_the_same_secret)
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_x25519(theirs, bob_sk, alice_pk));
 
-	zassert_mem_equal(mine, theirs, 32, "the two sides disagree");
-	zassert_mem_equal(mine, shared, 32, "RFC 7748 6.1 shared secret");
+	zassert_mem_equal(mine, theirs, 32);
+	zassert_mem_equal(mine, shared, 32);
 }
 
 ZTEST(sec_x25519, test_the_caller_s_scalar_is_not_rewritten)
@@ -152,8 +152,7 @@ ZTEST(sec_x25519, test_the_caller_s_scalar_is_not_rewritten)
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_x25519(out, scalar,
 					 radiant_sec_x25519_basepoint));
-	zassert_mem_equal(scalar, alice_sk, 32,
-			  "the scalar was clamped in place");
+	zassert_mem_equal(scalar, alice_sk, 32);
 }
 
 ZTEST(sec_x25519, test_the_high_bit_of_a_u_coordinate_is_ignored)
@@ -173,8 +172,7 @@ ZTEST(sec_x25519, test_the_high_bit_of_a_u_coordinate_is_ignored)
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_x25519(dirty, alice_sk, point));
 
-	zassert_mem_equal(clean, dirty, 32,
-			  "bit 255 of the u-coordinate changed the answer");
+	zassert_mem_equal(clean, dirty, 32);
 }
 
 ZTEST(sec_x25519, test_a_small_order_point_is_caught)
@@ -188,13 +186,11 @@ ZTEST(sec_x25519, test_a_small_order_point_is_caught)
 	 * here it's mandatory since the result becomes a root key. */
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_x25519(out, alice_sk, zero_point));
-	zassert_true(radiant_sec_x25519_is_degenerate(out),
-		     "u=0 was not recognised as degenerate");
+	zassert_true(radiant_sec_x25519_is_degenerate(out), "u=0");
 
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_x25519(out, alice_sk, one_point));
-	zassert_true(radiant_sec_x25519_is_degenerate(out),
-		     "u=1 was not recognised as degenerate");
+	zassert_true(radiant_sec_x25519_is_degenerate(out), "u=1");
 
 	/* And an honest secret is not flagged. */
 	zassert_equal(RADIANT_SEC_OK,
@@ -235,17 +231,14 @@ ZTEST(sec_x25519, test_one_ladder_costs_what_the_spec_says_it_costs)
 	ms = (k_uptime_get_32() - start) / 4u;
 
 	printk("x25519: %u ms per exchange\n", (unsigned)ms);
-	zassert_true(ms < 1000u,
-		     "one exchange took %u ms; the spec's stated cost and this "
-		     "implementation have diverged", (unsigned)ms);
+	zassert_true(ms < 1000u, "one exchange took %u ms", (unsigned)ms);
 }
 
 ZTEST(sec_x25519, test_the_caps_bit_says_it_is_here)
 {
 	/* A caller must test the cap, not the Kconfig symbol: "not built" and
 	 * "this backend cannot" are the same condition from above. */
-	zassert_true(radiant_sec_caps()->has_x25519,
-		     "X25519 is compiled in but the capability says otherwise");
+	zassert_true(radiant_sec_caps()->has_x25519);
 }
 
 #endif /* CONFIG_RADIANT_SEC_PAIRING_X25519 */

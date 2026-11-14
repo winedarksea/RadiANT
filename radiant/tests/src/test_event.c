@@ -98,10 +98,9 @@ void radiant_on_message(const struct radiant_msg *msg)
 {
 	uint8_t n;
 
-	zassert_not_null(msg, "radiant_on_message() called with a null message");
-	zassert_not_null(msg->data, "radiant_msg.data must never be null");
-	zassert_true(msg->len <= RADIANT_EVENT_MSG_MAX,
-		     "message longer than this module can build: %u", msg->len);
+	zassert_not_null(msg);
+	zassert_not_null(msg->data);
+	zassert_true(msg->len <= RADIANT_EVENT_MSG_MAX, "%u", msg->len);
 
 	if (n_recs < REC_MAX) {
 		n = msg->len;
@@ -301,7 +300,7 @@ static radiant_time_t run_one_rx(bool crc_bad, uint32_t flags)
 	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_rx(&req, &op));
 
 	fake_radio_advance_to(req.t_close + 1u);
-	zassert_equal(1u, cb_calls, "the window did not hear the frame");
+	zassert_equal(1u, cb_calls);
 
 	return t;
 }
@@ -375,17 +374,17 @@ ZTEST(radiant_event, test_ext_all_three_fields_in_order)
 				out, sizeof(out));
 
 	/* flag + 4 + 3 + 2 */
-	zassert_equal(10, n, "0xE0 must produce ten bytes, got %d", n);
+	zassert_equal(10, n, "got %d", n);
 
-	zassert_equal(0xE0u, out[0], "flag byte");
+	zassert_equal(0xE0u, out[0]);
 	/* Channel id: device number little endian, then type, then trans. */
 	zassert_equal(0x17u, out[1]);
 	zassert_equal(0x3Au, out[2]);
-	zassert_equal(0x8Bu, out[3], "the pairing bit must not be masked off");
+	zassert_equal(0x8Bu, out[3]);
 	zassert_equal(0x05u, out[4]);
 	/* RSSI: measurement type, value, threshold configuration. */
 	zassert_equal((uint8_t)RADIANT_WIRE_RSSI_MEASUREMENT_TYPE_DBM, out[5]);
-	zassert_equal(0xEFu, out[6], "-17 dBm as a signed byte");
+	zassert_equal(0xEFu, out[6]);
 	zassert_equal(0x00u, out[7]);
 	/* Receive timestamp, little endian: 1,000,000 us is 0x8000 ticks. */
 	zassert_equal(0x00u, out[8]);
@@ -427,8 +426,7 @@ ZTEST(radiant_event, test_ext_offsets_move_with_the_flags)
 	zassert_equal(6, n);
 	zassert_equal((uint8_t)(RADIANT_WIRE_EXT_FLAG_RSSI | RADIANT_WIRE_EXT_FLAG_RX_TIMESTAMP),
 		      out[0]);
-	zassert_equal((uint8_t)RADIANT_WIRE_RSSI_MEASUREMENT_TYPE_DBM, out[1],
-		      "RSSI must start where the channel id would have been");
+	zassert_equal((uint8_t)RADIANT_WIRE_RSSI_MEASUREMENT_TYPE_DBM, out[1]);
 	zassert_equal(0xEFu, out[2]);
 	zassert_equal(0x00u, out[3]);
 	zassert_equal(0x00u, out[4]);
@@ -468,8 +466,7 @@ ZTEST(radiant_event, test_inexact_timestamp_downgrades_rather_than_lies)
 	zassert_equal((uint8_t)(RADIANT_WIRE_EXT_FLAG_CHANNEL_ID | RADIANT_WIRE_EXT_FLAG_RSSI),
 		      out[0]);
 	zassert_equal(0u, out[0] & (uint8_t)RADIANT_WIRE_EXT_FLAG_RX_TIMESTAMP);
-	zassert_equal(1u, radiant_event_stats_get()->ts_suppressed,
-		      "a downgrade must be counted, not silent");
+	zassert_equal(1u, radiant_event_stats_get()->ts_suppressed);
 
 	/* A bench build may opt into the approximate value explicitly. */
 	radiant_event_set_ts_policy(RADIANT_EVENT_TS_BEST_EFFORT);
@@ -477,8 +474,7 @@ ZTEST(radiant_event, test_inexact_timestamp_downgrades_rather_than_lies)
 				out, sizeof(out));
 	zassert_equal(10, n);
 	zassert_equal(0xE0u, out[0]);
-	zassert_equal(1u, radiant_event_stats_get()->ts_suppressed,
-		      "the opt-in must not count as a downgrade");
+	zassert_equal(1u, radiant_event_stats_get()->ts_suppressed);
 }
 
 ZTEST(radiant_event, test_missing_rssi_downgrades_rather_than_reporting_zero)
@@ -524,8 +520,8 @@ ZTEST(radiant_event, test_rx_timestamp_survives_the_clock_moving)
 	t_air = run_one_rx(false, 0u);
 	zassert_equal(RADIANT_EVENT_OK, cb_rc);
 	zassert_equal(1u, radiant_event_queued());
-	zassert_equal(1u, n_wakeups, "a queued message must wake the drain");
-	zassert_equal(0u, n_recs, "nothing may be delivered from the ISR");
+	zassert_equal(1u, n_wakeups);
+	zassert_equal(0u, n_recs);
 
 	/* Between arrival and drain, a great deal of time. */
 	fake_radio_advance(1234567u);
@@ -542,13 +538,9 @@ ZTEST(radiant_event, test_rx_timestamp_survives_the_clock_moving)
 	reported = (uint16_t)(recs[0].data[17] |
 			      ((uint16_t)recs[0].data[18] << 8));
 
-	zassert_equal(radiant_event_rx_ticks(t_air), reported,
-		      "the reported timestamp is not the frame's t_sync");
-	zassert_equal(radiant_event_rx_ticks(cb_t_sync), reported,
-		      "the reported timestamp is not the one the HAL gave");
-	zassert_not_equal(at_drain, reported,
-			  "the timestamp moved with the clock - it was read at "
-			  "drain time instead of taken from t_sync");
+	zassert_equal(radiant_event_rx_ticks(t_air), reported);
+	zassert_equal(radiant_event_rx_ticks(cb_t_sync), reported);
+	zassert_not_equal(at_drain, reported);
 }
 
 /*
@@ -568,12 +560,11 @@ ZTEST(radiant_event, test_body_is_copied_in_the_callback_not_retained)
 	zassert_equal(1u, radiant_event_drain(0u));
 	zassert_equal(1u, n_recs);
 
-	zassert_equal(9u, recs[0].len, "no lib config, so no extended tail");
-	zassert_equal(0u, recs[0].data[0], "channel byte");
+	zassert_equal(9u, recs[0].len);
+	zassert_equal(0u, recs[0].data[0]);
 	for (i = 0u; i < (uint8_t)RADIANT_FRAME_PAYLOAD_STD; i++) {
 		zassert_equal(payload8[i], recs[0].data[1u + i],
-			      "payload byte %u is 0x%02X, not 0x%02X - the "
-			      "body was retained rather than copied",
+			      "byte %u: 0x%02X, not 0x%02X",
 			      i, recs[0].data[1u + i], payload8[i]);
 		zassert_not_equal(FAKE_RADIO_BODY_POISON, recs[0].data[1u + i]);
 	}
@@ -585,13 +576,12 @@ ZTEST(radiant_event, test_crc_failed_frame_produces_no_event)
 {
 	(void)run_one_rx(true, RADIANT_RX_REPORT_CRC_FAIL);
 
-	zassert_equal(RADIANT_EVENT_ECRC, cb_rc,
-		      "a CRC_FAIL event must be refused, not queued");
+	zassert_equal(RADIANT_EVENT_ECRC, cb_rc);
 	zassert_equal(0u, radiant_event_queued());
 	zassert_false(radiant_event_pending());
 	zassert_equal(0u, radiant_event_drain(0u));
 	zassert_equal(0u, n_recs);
-	zassert_equal(0u, n_wakeups, "a refusal must not wake the drain");
+	zassert_equal(0u, n_wakeups);
 	zassert_equal(1u, radiant_event_stats_get()->rejected_crc);
 	zassert_equal(0u, radiant_event_stats_get()->posted);
 }
@@ -673,8 +663,7 @@ ZTEST(radiant_event, test_thirty_two_channels_neither_overflow_nor_reorder)
 			     (int8_t)(-40 - (int8_t)ch));
 		payload[0] = ch;
 		rx = mk_rx(&hal, ch, payload);
-		zassert_equal(RADIANT_EVENT_OK, radiant_event_post_rx(&rx),
-			      "channel %u was refused", ch);
+		zassert_equal(RADIANT_EVENT_OK, radiant_event_post_rx(&rx), "channel %u", ch);
 	}
 
 	zassert_equal(32u, radiant_event_queued());
@@ -689,8 +678,7 @@ ZTEST(radiant_event, test_thirty_two_channels_neither_overflow_nor_reorder)
 		zassert_equal((uint8_t)RADIANT_WIRE_MESG_BROADCAST_DATA_ID,
 			      recs[i].id);
 		zassert_equal(9u, recs[i].len);
-		zassert_equal((uint8_t)i, recs[i].data[0],
-			      "message %u came out of order", i);
+		zassert_equal((uint8_t)i, recs[i].data[0], "message %u", i);
 		zassert_equal((uint8_t)i, recs[i].data[1]);
 	}
 
@@ -730,8 +718,7 @@ ZTEST(radiant_event, test_overflow_is_reported_never_silent)
 	}
 
 	zassert_equal(3u, radiant_event_stats_get()->dropped_full);
-	zassert_equal((uint32_t)DATA_CAP, n_wakeups,
-		      "a dropped message must not wake the drain");
+	zassert_equal((uint32_t)DATA_CAP, n_wakeups);
 	zassert_true(radiant_event_pending());
 
 	zassert_equal((uint32_t)DATA_CAP + 1u, radiant_event_drain(0u));
@@ -747,8 +734,7 @@ ZTEST(radiant_event, test_overflow_is_reported_never_silent)
 	/* Everything that was accepted still came out in order, and the three
 	 * that were refused are not among them. */
 	for (i = 0u; i < (uint32_t)DATA_CAP; i++) {
-		zassert_equal((uint8_t)i, recs[i + 1u].data[1],
-		              "queued message %u is missing or out of order", i);
+		zassert_equal((uint8_t)i, recs[i + 1u].data[1], "message %u", i);
 	}
 
 	zassert_false(radiant_event_pending());
@@ -781,32 +767,26 @@ ZTEST(radiant_event, test_a_full_ring_still_carries_ownership_events)
 			break;
 		}
 	}
-	zassert_equal((uint32_t)DATA_CAP, i,
-		      "received data took %u slots, the cap is %u", i,
-		      (unsigned int)DATA_CAP);
+	zassert_equal((uint32_t)DATA_CAP, i, "took %u", i);
 
-	zassert_equal(RADIANT_EVENT_OK, radiant_event_post_transfer_tx_failed(5u),
-		      "a TX_FAILED was dropped by data pressure");
+	zassert_equal(RADIANT_EVENT_OK, radiant_event_post_transfer_tx_failed(5u));
 	zassert_equal(RADIANT_EVENT_OK,
 		      radiant_event_post_channel_event(
-			      5u, (uint8_t)RADIANT_WIRE_EVENT_CHANNEL_CLOSED),
-		      "a CHANNEL_CLOSED was dropped by data pressure");
+			      5u, (uint8_t)RADIANT_WIRE_EVENT_CHANNEL_CLOSED));
 	zassert_equal(RADIANT_EVENT_OK, radiant_event_post_transfer_next_block(4u));
 	zassert_equal(RADIANT_EVENT_OK,
 		      radiant_event_post_transfer_tx_completed(4u));
 
 	zassert_equal(RADIANT_EVENT_ENOSPC,
 		      radiant_event_post_channel_event(
-			      5u, (uint8_t)RADIANT_WIRE_EVENT_RX_FAIL),
-		      "RX_FAIL must not use the reserve");
+			      5u, (uint8_t)RADIANT_WIRE_EVENT_RX_FAIL));
 	payload[0] = 0xFFu;
 	rx = mk_rx(&hal, 0u, payload);
 	zassert_equal(RADIANT_EVENT_ENOSPC, radiant_event_post_rx(&rx));
 
 	n = radiant_event_drain(0u);
 	zassert_equal((uint32_t)DATA_CAP + 4u + 1u, n);
-	zassert_equal((uint8_t)RADIANT_WIRE_EVENT_QUE_OVERFLOW, recs[0].data[2],
-		      "the overflow marker must still come first");
+	zassert_equal((uint8_t)RADIANT_WIRE_EVENT_QUE_OVERFLOW, recs[0].data[2]);
 	zassert_equal((uint8_t)RADIANT_WIRE_EVENT_TRANSFER_TX_FAILED,
 		      recs[n - 4u].data[2]);
 	zassert_equal((uint8_t)RADIANT_WIRE_EVENT_CHANNEL_CLOSED,
@@ -830,9 +810,7 @@ ZTEST(radiant_event, test_a_full_ring_still_carries_ownership_events)
 		zassert_equal(RADIANT_EVENT_OK,
 			      radiant_event_post_transfer_tx_failed(1u));
 	}
-	zassert_equal(RADIANT_EVENT_ENOSPC,
-		      radiant_event_post_transfer_tx_failed(1u),
-		      "the reserve is not bounded");
+	zassert_equal(RADIANT_EVENT_ENOSPC, radiant_event_post_transfer_tx_failed(1u));
 	(void)radiant_event_drain(0u);
 }
 
@@ -938,7 +916,7 @@ ZTEST(radiant_event, test_lib_config_is_additive_and_refuses_unknown_bits)
 
 	zassert_equal((radiant_msg_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      radiant_event_lib_config_get(&cfg));
-	zassert_equal(0u, cfg, "library configuration starts cleared");
+	zassert_equal(0u, cfg);
 
 	zassert_equal((radiant_msg_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      radiant_event_lib_config_set(
@@ -948,7 +926,7 @@ ZTEST(radiant_event, test_lib_config_is_additive_and_refuses_unknown_bits)
 			      (uint8_t)RADIANT_WIRE_LIB_CONFIG_MESG_OUT_INC_RSSI));
 	zassert_equal((radiant_msg_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      radiant_event_lib_config_get(&cfg));
-	zassert_equal(0xC0u, cfg, "setting one bit must not clear another");
+	zassert_equal(0xC0u, cfg);
 
 	/* A bit this module does not implement is refused outright, and
 	 * nothing is applied - a half-applied configuration is worse than an
@@ -1047,7 +1025,7 @@ ZTEST(radiant_event, test_a_default_filter_of_zero_passes_every_event)
 
 	zassert_equal((radiant_msg_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      radiant_event_filter_get(&f));
-	zassert_equal(0u, f, "the default filter is not 0");
+	zassert_equal(0u, f);
 
 	post_every_mapped_event();
 	zassert_equal(RADIANT_EVENT_OK,
@@ -1060,7 +1038,7 @@ ZTEST(radiant_event, test_a_default_filter_of_zero_passes_every_event)
 	zassert_equal((uint32_t)N_MAP + 2u, radiant_event_drain(0u));
 	for (size_t i = 0u; i < N_MAP; i++) {
 		zassert_equal(1u, delivered_code(filter_map[i].code),
-			      "event %u did not reach the host with no filter set",
+			      "event %u",
 			      (unsigned int)filter_map[i].code);
 	}
 	zassert_equal(0u, radiant_event_stats_get()->filtered);
@@ -1080,11 +1058,11 @@ ZTEST(radiant_event, test_each_filter_bit_suppresses_exactly_its_event)
 			      radiant_event_filter_set(filter_map[i].bit));
 		post_every_mapped_event();
 		zassert_equal((uint32_t)N_MAP - 1u, radiant_event_drain(0u),
-			      "bit 0x%04x filtered the wrong number of events",
+			      "bit 0x%04x",
 			      (unsigned int)filter_map[i].bit);
 		for (size_t j = 0u; j < N_MAP; j++) {
 			zassert_equal(i == j ? 0u : 1u, delivered_code(filter_map[j].code),
-				      "bit 0x%04x: event %u delivered %u time(s)",
+				      "bit 0x%04x ev %u x%u",
 				      (unsigned int)filter_map[i].bit,
 				      (unsigned int)filter_map[j].code,
 				      (unsigned int)delivered_code(filter_map[j].code));
@@ -1163,10 +1141,9 @@ ZTEST(radiant_event, test_a_filtered_event_is_still_counted_when_posted)
 	zassert_equal(4u, radiant_event_queued());
 
 	(void)radiant_event_drain(0u);
-	zassert_equal(0u, delivered_code((uint8_t)RADIANT_WIRE_EVENT_RX_FAIL),
-		      "the host received an RX_FAIL it filtered");
+	zassert_equal(0u, delivered_code((uint8_t)RADIANT_WIRE_EVENT_RX_FAIL));
 	zassert_equal(4u, st->filtered);
-	zassert_equal(0u, radiant_event_queued(), "a filtered event left on the ring");
+	zassert_equal(0u, radiant_event_queued());
 }
 
 /*
@@ -1195,7 +1172,7 @@ ZTEST(radiant_event, test_flush_discards_without_delivering)
 	zassert_equal(0u, radiant_event_queued());
 	zassert_false(radiant_event_pending());
 	zassert_equal(0u, radiant_event_drain(0u));
-	zassert_equal(0u, n_recs, "a flush must deliver nothing");
+	zassert_equal(0u, n_recs);
 	zassert_equal(2u, radiant_event_stats_get()->dropped_flush);
 
 	/* Library configuration goes back to zero with it. */
@@ -1257,8 +1234,7 @@ ZTEST(radiant_event, test_init_empties_the_ring)
 	zassert_false(radiant_event_pending());
 	zassert_equal(0u, radiant_event_drain(0u));
 	zassert_equal(0u, n_recs);
-	zassert_equal(0u, radiant_event_stats_get()->posted,
-		      "init clears the statistics as well as the ring");
+	zassert_equal(0u, radiant_event_stats_get()->posted);
 	zassert_equal((radiant_msg_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      radiant_event_lib_config_get(&cfg));
 	zassert_equal(0u, cfg);

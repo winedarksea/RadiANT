@@ -156,7 +156,7 @@ static int win_open(void)
 	req.t_close = g_w.t_close;
 	req.flags = g_w.flags;
 
-	zassert_ok(radiant_radio_rx(&req, &g_op), "arming the search failed");
+	zassert_ok(radiant_radio_rx(&req, &g_op));
 	radiant_search_armed(&g_s, g_op, req.t_open, req.t_close);
 	return RADIANT_SEARCH_OK;
 }
@@ -209,8 +209,7 @@ ZTEST(handoff, test_the_frames_are_byte_for_byte_what_the_python_encoder_emits)
 	uint8_t out[sizeof(CANON_BYTES)];
 
 	zassert_ok(profile_handoff_encode(&CANON, out));
-	zassert_mem_equal(out, CANON_BYTES, sizeof(CANON_BYTES),
-			  "the two implementations have drifted");
+	zassert_mem_equal(out, CANON_BYTES, sizeof(CANON_BYTES));
 }
 
 ZTEST(handoff, test_page_number_counter_and_frame_index)
@@ -343,9 +342,7 @@ ZTEST(handoff, test_the_page_has_no_room_for_an_epoch)
 	const uint32_t assigned = 16u + 7u + 8u + 1u   /* who  */
 				  + 16u + 13u + 3u;    /* when */
 
-	zassert_equal(2u * PROFILE_HANDOFF_AREA_BITS, assigned,
-		      "a field area with slack in it is a field area an epoch "
-		      "can be added to");
+	zassert_equal(2u * PROFILE_HANDOFF_AREA_BITS, assigned);
 	/* And the area genuinely ends where the tag space begins: four bytes,
 	 * not five. */
 	zassert_equal(32u, PROFILE_HANDOFF_AREA_BITS);
@@ -410,7 +407,7 @@ ZTEST(handoff, test_phase_resolution_stays_inside_the_guard_at_every_period)
 				back > phases[j] ? back - phases[j]
 						 : phases[j] - back);
 			zassert_true(err_us < RADIANT_CHANNEL_GUARD_MAX_US,
-				     "period %u phase %u: %u us of error",
+				     "period %u phase %u: %u us",
 				     period, phases[j], err_us);
 		}
 	}
@@ -518,7 +515,7 @@ static uint32_t sweep_acquire(void)
 
 	(void)pump(radiant_search_sets(&g_s) + 1u);
 
-	zassert_equal(1u, g_n_acquired, "the sweep did not acquire");
+	zassert_equal(1u, g_n_acquired);
 	zassert_equal(RADIANT_CH_STATE_TRACKING,
 		      radiant_channel_state_get(SWEEP_CH));
 	return g_windows_run;
@@ -627,14 +624,11 @@ ZTEST(handoff, test_a_handoff_lands_in_the_same_channel_state_a_sweep_does)
 	if (off > period_us / 2u) {
 		off = period_us - off;
 	}
-	zassert_true(off < RADIANT_CHANNEL_GUARD_MIN_US,
-		     "the handed-off slot clock is %u us from the swept one",
-		     (uint32_t)off);
+	zassert_true(off < RADIANT_CHANNEL_GUARD_MIN_US, "%u us", (uint32_t)off);
 
 	/* One period, not one sweep. */
 	zassert_true(next_handed > radiant_radio_now());
-	zassert_true(next_handed - radiant_radio_now() <= period_us,
-		     "a handoff must put the first slot within one period");
+	zassert_true(next_handed - radiant_radio_now() <= period_us);
 
 	end_of_test();
 }
@@ -696,19 +690,16 @@ ZTEST(handoff, test_a_handoff_acquires_faster_than_a_sweep_on_the_same_rig)
 
 	/* THE SWEEP IS SKIPPED, NOT SHORTENED. Zero windows, and no virtual
 	 * microsecond passed between asking and tracking. */
-	zassert_equal(0u, windows_handed,
-		      "a handoff must arm no search window at all");
-	zassert_equal(t_carrier, radiant_radio_now(),
-		      "a handoff must not have to wait for anything");
-	zassert_true(windows_swept > 1u,
-		     "the sweep half of this comparison did no sweeping");
+	zassert_equal(0u, windows_handed);
+	zassert_equal(t_carrier, radiant_radio_now());
+	zassert_true(windows_swept > 1u);
 
 	/* The gate itself. */
 	zassert_true(handoff_us < sweep_us,
-		     "handoff %u us is not faster than sweep %u us",
+		     "%u us vs %u us",
 		     (uint32_t)handoff_us, (uint32_t)sweep_us);
 	zassert_true(handoff_us <= radiant_channel_counts_to_us(NODE_PERIOD),
-		     "a handoff acquires within one period; this took %u us",
+		     "%u us",
 		     (uint32_t)handoff_us);
 
 	end_of_test();

@@ -167,15 +167,10 @@ static const struct radiant_ctrl_fields ctrl_burst_last_seq0 = {
 
 ZTEST(radiant_frame, test_crc_golden_vector)
 {
-	zassert_equal(radiant_crc16(RADIANT_CRC_INIT, golden15, sizeof(golden15)),
-		      GOLDEN_CRC,
-		      "CRC-16/CCITT-FALSE over the documented golden vector");
+	zassert_equal(radiant_crc16(RADIANT_CRC_INIT, golden15, sizeof(golden15)), GOLDEN_CRC);
 
 	/* And on the real frame, whose CRC the hardware also computed. */
-	zassert_equal(radiant_crc16(RADIANT_CRC_INIT, spike15, sizeof(spike15)),
-		      SPIKE_CRC,
-		      "software CRC disagrees with the one RADIO->RXCRC reported "
-		      "for the captured frame");
+	zassert_equal(radiant_crc16(RADIANT_CRC_INIT, spike15, sizeof(spike15)), SPIKE_CRC);
 }
 
 /*
@@ -193,15 +188,12 @@ ZTEST(radiant_frame, test_crc_over_message_plus_crc_is_zero)
 	buf[sizeof(golden15)] = (uint8_t)(GOLDEN_CRC >> 8);
 	buf[sizeof(golden15) + 1] = (uint8_t)(GOLDEN_CRC & 0xFFu);
 
-	zassert_equal(radiant_crc16(RADIANT_CRC_INIT, buf, sizeof(buf)), 0u,
-		      "message + its own CRC did not drive the register to zero");
+	zassert_equal(radiant_crc16(RADIANT_CRC_INIT, buf, sizeof(buf)), 0u);
 
 	/* The negative half, so the test can tell the two answers apart: one
 	 * flipped bit anywhere must stop it being zero. */
 	buf[7] ^= 0x01u;
-	zassert_not_equal(radiant_crc16(RADIANT_CRC_INIT, buf, sizeof(buf)), 0u,
-			  "a corrupted frame still recomputed to zero, so this "
-			  "check cannot detect corruption at all");
+	zassert_not_equal(radiant_crc16(RADIANT_CRC_INIT, buf, sizeof(buf)), 0u);
 }
 
 /*
@@ -216,26 +208,21 @@ ZTEST(radiant_frame, test_crc_chaining_constant)
 	static const uint8_t net[2] = { 0xA6, 0xC5 };
 
 	zassert_equal(radiant_crc16(RADIANT_CRC_INIT, net, sizeof(net)),
-		      RADIANT_CRC_AFTER_ANT_PLUS_NET,
-		      "the ANT+ network address no longer chains to 0x233E");
+		      RADIANT_CRC_AFTER_ANT_PLUS_NET);
 
 	zassert_equal(radiant_crc16(RADIANT_CRC_AFTER_ANT_PLUS_NET, &golden15[2],
 				sizeof(golden15) - 2u),
-		      GOLDEN_CRC,
-		      "chaining from 0x233E over the remaining 13 bytes did not "
-		      "reproduce the full-frame CRC");
+		      GOLDEN_CRC);
 
 	zassert_equal(radiant_crc16(RADIANT_CRC_AFTER_ANT_PLUS_NET, &spike15[2],
 				sizeof(spike15) - 2u),
-		      SPIKE_CRC, "chaining failed on the captured frame");
+		      SPIKE_CRC);
 }
 
 ZTEST(radiant_frame, test_crc_seed_and_empty_input)
 {
-	zassert_equal(radiant_crc16(RADIANT_CRC_INIT, golden15, 0), RADIANT_CRC_INIT,
-		      "zero bytes must leave the seed alone");
-	zassert_equal(radiant_crc16(0x1234u, NULL, 8), 0x1234u,
-		      "a null buffer must not be walked");
+	zassert_equal(radiant_crc16(RADIANT_CRC_INIT, golden15, 0), RADIANT_CRC_INIT);
+	zassert_equal(radiant_crc16(0x1234u, NULL, 8), 0x1234u);
 }
 
 /* ---------------------------------------------------------------------------
@@ -262,8 +249,7 @@ ZTEST(radiant_frame, test_rev8)
 	 * permutation - a nibble swap, a rotate - passes several of the cases
 	 * above and fails this. */
 	for (unsigned int b = 0; b < 256u; b++) {
-		zassert_equal(radiant_rev8(radiant_rev8((uint8_t)b)), (uint8_t)b,
-			      "rev8 is not its own inverse at 0x%02X", b);
+		zassert_equal(radiant_rev8(radiant_rev8((uint8_t)b)), (uint8_t)b, "0x%02X", b);
 	}
 }
 
@@ -276,10 +262,8 @@ ZTEST(radiant_frame, test_addr_pack_tracking)
 {
 	static const uint8_t addr[5] = { 0xA6, 0xC5, 0x17, 0x3A, 0x0B };
 
-	zassert_equal(radiant_addr_pack_leading(addr, sizeof(addr)), 0x5CE8A365u,
-		      "leading address word for A6 C5 17 3A 0B");
-	zassert_equal(radiant_addr_pack_trailing(addr, sizeof(addr)), 0xD0u,
-		      "trailing address byte is rev8(device type)");
+	zassert_equal(radiant_addr_pack_leading(addr, sizeof(addr)), 0x5CE8A365u);
+	zassert_equal(radiant_addr_pack_trailing(addr, sizeof(addr)), 0xD0u);
 }
 
 /*
@@ -296,18 +280,13 @@ ZTEST(radiant_frame, test_addr_pack_search_is_shifted_not_truncated)
 	static const uint8_t addr[3] = { 0xA6, 0xC5, 0x17 };
 	uint32_t lead = radiant_addr_pack_leading(addr, sizeof(addr));
 
-	zassert_equal(lead, 0xA3650000u,
-		      "the two surviving base bytes must sit in the high half");
-	zassert_not_equal(lead, 0x0000A365u,
-			  "this is the naive low-bytes truncation: it produces a "
-			  "receiver that fires on noise and validates nothing");
+	zassert_equal(lead, 0xA3650000u);
+	zassert_not_equal(lead, 0x0000A365u);
 
-	zassert_equal(radiant_addr_pack_trailing(addr, sizeof(addr)), 0xE8u,
-		      "trailing address byte is rev8(devnum_lo) in search");
+	zassert_equal(radiant_addr_pack_trailing(addr, sizeof(addr)), 0xE8u);
 
 	/* The same leading bytes, so the same relative order either way. */
-	zassert_equal(lead >> 16, 0xA365u,
-		      "shifting must not reorder the surviving bytes");
+	zassert_equal(lead >> 16, 0xA365u);
 }
 
 /*
@@ -324,15 +303,13 @@ ZTEST(radiant_frame, test_addr_pack_shift_collapses_at_full_length)
 			  ((uint32_t)radiant_rev8(0x22u) << 8) |
 			  (uint32_t)radiant_rev8(0x11u);
 
-	zassert_equal(radiant_addr_pack_leading(addr, sizeof(addr)), expect,
-		      "at four leading bytes the shift must vanish");
+	zassert_equal(radiant_addr_pack_leading(addr, sizeof(addr)), expect);
 
 	/* Three leading bytes: one byte of shift, nothing else moves. */
 	zassert_equal(radiant_addr_pack_leading(addr, 4u),
 		      (((uint32_t)radiant_rev8(0x33u) << 16) |
 		       ((uint32_t)radiant_rev8(0x22u) << 8) |
-		       (uint32_t)radiant_rev8(0x11u)) << 8,
-		      "a four-byte address shifts by exactly one byte");
+		       (uint32_t)radiant_rev8(0x11u)) << 8);
 }
 
 ZTEST(radiant_frame, test_addr_pack_rejects_bad_length)
@@ -368,10 +345,8 @@ ZTEST(radiant_frame, test_crc_coverage_is_15_in_both_configs)
 	zassert_equal(radiant_frame_body_len(RADIANT_FRAME_CFG_TRACKING, 8), 10, NULL);
 	zassert_equal(radiant_frame_body_len(RADIANT_FRAME_CFG_SEARCH, 8), 12, NULL);
 
-	zassert_equal(radiant_frame_covered_len(RADIANT_FRAME_CFG_TRACKING, 8), 15,
-		      "tracking no longer covers 15 bytes");
-	zassert_equal(radiant_frame_covered_len(RADIANT_FRAME_CFG_SEARCH, 8), 15,
-		      "search no longer covers 15 bytes");
+	zassert_equal(radiant_frame_covered_len(RADIANT_FRAME_CFG_TRACKING, 8), 15);
+	zassert_equal(radiant_frame_covered_len(RADIANT_FRAME_CFG_SEARCH, 8), 15);
 
 	/* The general form: 7 fixed bytes ahead of the payload, however the
 	 * split falls. Checked across every payload length so that the
@@ -379,14 +354,14 @@ ZTEST(radiant_frame, test_crc_coverage_is_15_in_both_configs)
 	for (uint8_t p = 0; p <= RADIANT_FRAME_PAYLOAD_MAX; p++) {
 		zassert_equal(radiant_frame_covered_len(RADIANT_FRAME_CFG_TRACKING, p),
 			      radiant_frame_covered_len(RADIANT_FRAME_CFG_SEARCH, p),
-			      "coverage diverged at payload length %u", p);
+			      "len %u", p);
 		zassert_equal(radiant_frame_covered_len(RADIANT_FRAME_CFG_TRACKING, p),
 			      7 + (int)p, NULL);
 	}
 
 	zassert_equal(radiant_frame_covered_len(RADIANT_FRAME_CFG_TRACKING,
 					    RADIANT_FRAME_PAYLOAD_MAX + 1u),
-		      RADIANT_FRAME_EINVAL, "an unrepresentable payload must fail");
+		      RADIANT_FRAME_EINVAL);
 	zassert_equal(radiant_frame_addr_len((enum radiant_frame_cfg)99),
 		      RADIANT_FRAME_EINVAL, NULL);
 }
@@ -410,40 +385,28 @@ ZTEST(radiant_frame, test_pkt_formats)
 	zassert_not_null(s, NULL);
 	zassert_is_null(radiant_frame_format((enum radiant_frame_cfg)99), NULL);
 
-	zassert_equal(t->phy, RADIANT_PHY_1M_GFSK,
-		      "an ANT+ compatibility channel may only use the 1M PHY");
+	zassert_equal(t->phy, RADIANT_PHY_1M_GFSK);
 	zassert_equal(s->phy, RADIANT_PHY_1M_GFSK, NULL);
 
 	zassert_equal(t->addr_len, 5, NULL);
-	zassert_equal(t->len_mode, RADIANT_LEN_FIXED,
-		      "tracking must be static-length: a length-from-body "
-		      "format becomes PCNF0.LFLEN=8, which reads an "
-		      "acknowledged frame's 0xAA as a 170-byte length and "
-		      "silently drops every frame above broadcast");
-	zassert_equal(t->body_len, 10, "trans type, control byte, 8 payload");
-	zassert_equal(t->max_body_len, 10,
-		      "a longer frame is not receivable and must not be "
-		      "advertised as if it were");
+	zassert_equal(t->len_mode, RADIANT_LEN_FIXED);
+	zassert_equal(t->body_len, 10);
+	zassert_equal(t->max_body_len, 10);
 
 	zassert_equal(s->addr_len, 3, NULL);
-	zassert_equal(s->len_mode, RADIANT_LEN_FIXED,
-		      "search has three bytes ahead of the control byte, so no "
-		      "S0|LENGTH|S1 layout can place a length field there "
-		      "either - it must be static");
+	/* Search has 3 bytes before the control byte: no S0|LENGTH|S1 layout fits. */
+	zassert_equal(s->len_mode, RADIANT_LEN_FIXED);
 	zassert_equal(s->body_len, 12, NULL);
 
 	/* Both describe the same CRC, which is the other half of the coverage
 	 * invariant: same polynomial, same seed, and covering the address. */
 	zassert_equal(t->crc.width_bits, 16, NULL);
-	zassert_equal(t->crc.poly, RADIANT_CRC_POLY,
-		      "normal form 0x1021, not the 0x11021 one register wants");
+	zassert_equal(t->crc.poly, RADIANT_CRC_POLY);  /* normal form 0x1021, not 0x11021 */
 	zassert_equal(t->crc.init, RADIANT_CRC_INIT, NULL);
 	zassert_equal(t->crc.xor_out, 0u, NULL);
 	zassert_false(t->crc.reflect_in, NULL);
 	zassert_false(t->crc.reflect_out, NULL);
-	zassert_true(t->crc.cover_addr,
-		     "ANT's CRC covers the on-air address; a format that says "
-		     "otherwise makes every backend compute the wrong 13 bytes");
+	zassert_true(t->crc.cover_addr);  /* ANT's CRC covers the on-air address */
 	/* Field by field rather than memcmp: struct padding is unspecified, and
 	 * a test that can fail on a compiler's choice of filler is worse than
 	 * no test. */
@@ -453,8 +416,7 @@ ZTEST(radiant_frame, test_pkt_formats)
 	zassert_equal(s->crc.xor_out, t->crc.xor_out, NULL);
 	zassert_equal(s->crc.reflect_in, t->crc.reflect_in, NULL);
 	zassert_equal(s->crc.reflect_out, t->crc.reflect_out, NULL);
-	zassert_equal(s->crc.cover_addr, t->crc.cover_addr,
-		      "the two configurations must agree on the CRC");
+	zassert_equal(s->crc.cover_addr, t->crc.cover_addr);
 }
 
 /* ---------------------------------------------------------------------------
@@ -472,8 +434,7 @@ ZTEST(radiant_frame, test_encode_tracking_bytes)
 	zassert_equal(radiant_frame_make(&f, &spike_id, &ctrl_broadcast,
 				     spike_payload, sizeof(spike_payload)),
 		      RADIANT_FRAME_OK, NULL);
-	zassert_equal(f.ctrl_byte, RADIANT_CTRL_BROADCAST,
-		      "a broadcast of 8 payload bytes is 0x0A on air");
+	zassert_equal(f.ctrl_byte, RADIANT_CTRL_BROADCAST);
 
 	zassert_equal(radiant_frame_encode(RADIANT_FRAME_CFG_TRACKING,
 				       radiant_net_addr_ant_plus, &f, &w),
@@ -490,18 +451,13 @@ ZTEST(radiant_frame, test_encode_tracking_bytes)
 	zassert_equal(w.crc, SPIKE_CRC, NULL);
 
 	n = radiant_frame_to_bytes(&w, flat, sizeof(flat));
-	zassert_equal(n, 17, "17 bytes follow the preamble");
-	zassert_mem_equal(flat, spike15, sizeof(spike15),
-			  "the encoded frame differs from the one Spike A "
-			  "captured off a real power meter");
-	zassert_equal(flat[15], 0x19u, "CRC goes out most significant byte first");
+	zassert_equal(n, 17);
+	zassert_mem_equal(flat, spike15, sizeof(spike15));
+	zassert_equal(flat[15], 0x19u);  /* CRC is sent MSB first */
 	zassert_equal(flat[16], 0x9Au, NULL);
 
 	/* The fixed-length relation a backend will actually program. */
-	zassert_equal(radiant_frame_format(RADIANT_FRAME_CFG_TRACKING)->body_len,
-		      w.body_len,
-		      "a STATLEN-programmed receiver must expect exactly the "
-		      "body this encoder produces");
+	zassert_equal(radiant_frame_format(RADIANT_FRAME_CFG_TRACKING)->body_len, w.body_len);
 }
 
 ZTEST(radiant_frame, test_encode_search_bytes)
@@ -561,15 +517,12 @@ ZTEST(radiant_frame, test_both_configs_put_the_same_bytes_on_air)
 				       radiant_net_addr_ant_plus, &f, &ws),
 		      RADIANT_FRAME_OK, NULL);
 
-	zassert_not_equal(wt.addr_len, ws.addr_len,
-			  "the two configurations must split the frame "
-			  "differently or this test proves nothing");
-	zassert_equal(wt.crc, ws.crc, "same 15 bytes, therefore same CRC");
+	zassert_not_equal(wt.addr_len, ws.addr_len);
+	zassert_equal(wt.crc, ws.crc);
 
 	zassert_equal(radiant_frame_to_bytes(&wt, flat_t, sizeof(flat_t)), 17, NULL);
 	zassert_equal(radiant_frame_to_bytes(&ws, flat_s, sizeof(flat_s)), 17, NULL);
-	zassert_mem_equal(flat_t, flat_s, 17,
-			  "tracking and search produced different on-air bytes");
+	zassert_mem_equal(flat_t, flat_s, 17);
 
 	/* And this particular frame is the documented golden vector, so the
 	 * CRC is pinned to a number from the document rather than to itself. */
@@ -588,7 +541,7 @@ static void roundtrip(enum radiant_frame_cfg cfg, const struct radiant_channel_i
 		      RADIANT_FRAME_OK, NULL);
 	zassert_equal(radiant_frame_encode(cfg, radiant_net_addr_ant_plus, &in, &w),
 		      RADIANT_FRAME_OK, NULL);
-	zassert_true(radiant_frame_crc_ok(&w), "encode produced a bad CRC");
+	zassert_true(radiant_frame_crc_ok(&w));
 	zassert_equal(radiant_frame_decode(cfg, &w, 0, &out), RADIANT_FRAME_OK, NULL);
 
 	zassert_equal(out.id.device_number, id->device_number, NULL);
@@ -686,16 +639,13 @@ ZTEST(radiant_frame, test_decode_captured_frame)
 		struct radiant_frame_wire w;
 		struct radiant_frame f;
 
-		zassert_equal(radiant_frame_from_bytes(cfgs[i], buf, sizeof(buf), &w),
-			      17, "the whole frame should have been consumed");
+		zassert_equal(radiant_frame_from_bytes(cfgs[i], buf, sizeof(buf), &w), 17);
 		zassert_equal(w.crc, SPIKE_CRC, NULL);
 		zassert_true(radiant_frame_crc_ok(&w), NULL);
 
 		zassert_equal(radiant_frame_decode(cfgs[i], &w, 0, &f),
 			      RADIANT_FRAME_OK, NULL);
-		zassert_equal(f.id.device_number, SPIKE_DEVNUM,
-			      "decoded device number does not match the ground "
-			      "truth tools/ant_scan.py reported");
+		zassert_equal(f.id.device_number, SPIKE_DEVNUM);
 		zassert_equal(f.id.device_type, SPIKE_DTYPE, NULL);
 		zassert_equal(f.id.trans_type, SPIKE_TTYPE, NULL);
 		zassert_equal(f.ctrl_byte, RADIANT_CTRL_BROADCAST, NULL);
@@ -735,9 +685,7 @@ ZTEST(radiant_frame, test_control_byte_low_bits_are_the_only_invariant)
 		zassert_equal(radiant_frame_encode(RADIANT_FRAME_CFG_TRACKING,
 					       radiant_net_addr_ant_plus, &f, &w),
 			      RADIANT_FRAME_OK,
-			      "encode rejected the measured control byte 0x%02X "
-			      "(%s); a check on bits 4:0 rejects eight of the "
-			      "eleven",
+			      "0x%02X (%s)",
 			      ctrl_cases[c].on_air, ctrl_cases[c].what);
 		zassert_equal(w.body[1], ctrl_cases[c].on_air, NULL);
 
@@ -745,7 +693,7 @@ ZTEST(radiant_frame, test_control_byte_low_bits_are_the_only_invariant)
 		zassert_equal(radiant_frame_decode(RADIANT_FRAME_CFG_TRACKING, &w, 0,
 					       &out),
 			      RADIANT_FRAME_OK,
-			      "decode rejected the measured control byte 0x%02X",
+			      "0x%02X",
 			      ctrl_cases[c].on_air);
 		zassert_equal(out.ctrl_byte, ctrl_cases[c].on_air, NULL);
 		zassert_equal(out.payload_len, 8u, NULL);
@@ -765,8 +713,7 @@ ZTEST(radiant_frame, test_control_byte_low_bits_are_the_only_invariant)
 		zassert_equal(radiant_frame_encode(RADIANT_FRAME_CFG_TRACKING,
 					       radiant_net_addr_ant_plus, &f, &w),
 			      RADIANT_FRAME_ECTRL,
-			      "encode accepted 0x%02X, whose bits 2:0 are not "
-			      "010", bad_low[i]);
+			      "0x%02X", bad_low[i]);
 	}
 
 	/* On the receive side the byte comes off the air, so this is a
@@ -780,10 +727,8 @@ ZTEST(radiant_frame, test_control_byte_low_bits_are_the_only_invariant)
 	w.body[1] = 0x0Cu;
 	w.crc = radiant_frame_crc(&w);
 	zassert_equal(radiant_frame_decode(RADIANT_FRAME_CFG_TRACKING, &w, 0, &out),
-		      RADIANT_FRAME_ECTRL,
-		      "decode accepted a control byte whose bits 2:0 are 100");
-	zassert_equal(radiant_frame_msg_type(0x0Cu), RADIANT_MSG_UNKNOWN,
-		      "bits 2:0 != 010 cannot be named");
+		      RADIANT_FRAME_ECTRL);
+	zassert_equal(radiant_frame_msg_type(0x0Cu), RADIANT_MSG_UNKNOWN);
 }
 
 /*
@@ -808,25 +753,17 @@ ZTEST(radiant_frame, test_unmeasured_flags_are_carried_not_rejected)
 	 * nothing has ever transmitted, with legal bits 2:0. */
 	f.ctrl_byte = (uint8_t)(0x60u | RADIANT_CTRL_SLOT | RADIANT_CTRL_LOW_VALUE);
 	zassert_equal(f.ctrl_byte, 0x6Au, NULL);
-	zassert_false(radiant_ctrl_observed(f.ctrl_byte),
-		      "0x6A has never been on the air and the table must say so");
+	zassert_false(radiant_ctrl_observed(f.ctrl_byte));
 
 	zassert_equal(radiant_frame_encode(RADIANT_FRAME_CFG_TRACKING,
 				       radiant_net_addr_ant_plus, &f, &w),
-		      RADIANT_FRAME_OK,
-		      "a bench experiment must be able to put a candidate "
-		      "encoding on the air without editing radiant_frame.c");
-	zassert_equal(w.body[1], 0x6Au, "the flags must reach the air exactly "
-					"as the caller set them");
+		      RADIANT_FRAME_OK);
+	zassert_equal(w.body[1], 0x6Au);
 
 	zassert_equal(radiant_frame_decode(RADIANT_FRAME_CFG_TRACKING, &w, 0, &out),
-		      RADIANT_FRAME_OK,
-		      "decode dispatches on the control byte; it must not "
-		      "validate it against the eleven known values");
+		      RADIANT_FRAME_OK);
 	zassert_equal(out.ctrl_byte, 0x6Au, NULL);
-	zassert_equal(radiant_frame_msg_type(out.ctrl_byte), RADIANT_MSG_UNKNOWN,
-		      "an unmeasured encoding must be named unknown, not "
-		      "guessed at");
+	zassert_equal(radiant_frame_msg_type(out.ctrl_byte), RADIANT_MSG_UNKNOWN);
 	zassert_equal(out.payload_len, 8, NULL);
 	zassert_mem_equal(out.payload, spike_payload, sizeof(spike_payload),
 			  NULL);
@@ -835,9 +772,7 @@ ZTEST(radiant_frame, test_unmeasured_flags_are_carried_not_rejected)
 	 * between "the model can express it" and "the air has carried it". */
 	zassert_equal(radiant_frame_make(&f, &spike_id, &bad, spike_payload,
 				     sizeof(spike_payload)),
-		      RADIANT_FRAME_EINVAL,
-		      "radiant_frame_make invented a control byte nothing has "
-		      "transmitted");
+		      RADIANT_FRAME_EINVAL);
 }
 
 ZTEST(radiant_frame, test_truncated_input_is_rejected)
@@ -857,7 +792,7 @@ ZTEST(radiant_frame, test_truncated_input_is_rejected)
 		zassert_equal(radiant_frame_from_bytes(RADIANT_FRAME_CFG_TRACKING, buf,
 						   n, &w),
 			      RADIANT_FRAME_ETRUNC,
-			      "a %zu-byte buffer was accepted as a 17-byte frame",
+			      "len %zu",
 			      n);
 	}
 	zassert_equal(radiant_frame_from_bytes(RADIANT_FRAME_CFG_TRACKING, buf, 17u, &w),
@@ -917,7 +852,7 @@ ZTEST(radiant_frame, test_decode_refuses_a_body_longer_than_the_payload_can_hold
 		zassert_equal(RADIANT_FRAME_EINVAL,
 			      radiant_frame_decode(RADIANT_FRAME_CFG_TRACKING, &w,
 						   RADIANT_FRAME_TRUSTED_CRC, &out),
-			      "body_len %u decoded", w.body_len);
+			      "body_len %u", w.body_len);
 		zassert_mem_equal(&out, &sentinel, sizeof(out), NULL);
 	}
 }
@@ -944,12 +879,8 @@ ZTEST(radiant_frame, test_crc_failure_is_reported_and_never_repaired)
 	memset(&sentinel, 0x5A, sizeof(sentinel));
 	memcpy(&out, &sentinel, sizeof(out));
 	zassert_equal(radiant_frame_decode(RADIANT_FRAME_CFG_TRACKING, &w, 0, &out),
-		      RADIANT_FRAME_ECRC,
-		      "a corrupted frame decoded successfully");
-	zassert_mem_equal(&out, &sentinel, sizeof(out),
-			  "decode wrote a partial result for a frame it "
-			  "rejected; a caller ignoring the return code would "
-			  "act on corrupt data");
+		      RADIANT_FRAME_ECRC);
+	zassert_mem_equal(&out, &sentinel, sizeof(out));
 
 	/* A wrong CRC value with an intact body is the same failure. */
 	zassert_equal(radiant_frame_encode(RADIANT_FRAME_CFG_TRACKING,
@@ -982,9 +913,7 @@ ZTEST(radiant_frame, test_trusted_crc_is_opt_out)
 	 * bytes never reached the core, so w.crc holds nothing. */
 	w.crc = 0u;
 	zassert_equal(radiant_frame_decode(RADIANT_FRAME_CFG_SEARCH, &w, 0, &out),
-		      RADIANT_FRAME_ECRC,
-		      "the default must verify, so a caller who forgets the "
-		      "flag fails safely");
+		      RADIANT_FRAME_ECRC);
 	zassert_equal(radiant_frame_decode(RADIANT_FRAME_CFG_SEARCH, &w,
 				       RADIANT_FRAME_TRUSTED_CRC, &out),
 		      RADIANT_FRAME_OK, NULL);
@@ -1008,14 +937,13 @@ ZTEST(radiant_frame, test_null_and_unknown_configuration_are_rejected)
 	zassert_equal(radiant_frame_make(&f, &spike_id, &ctrl_broadcast,
 				     spike_payload,
 				     (uint8_t)(RADIANT_FRAME_PAYLOAD_MAX + 1u)),
-		      RADIANT_FRAME_EINVAL, "an over-long payload must be refused");
+		      RADIANT_FRAME_EINVAL);
 
 	/* No field set, and no safe default to fall back on: a caller who meant
 	 * acknowledged data and silently got a broadcast would set no trainer
 	 * resistance and report no error. */
 	zassert_equal(radiant_frame_make(&f, &spike_id, NULL, spike_payload, 8),
-		      RADIANT_FRAME_EINVAL,
-		      "radiant_frame_make must refuse to invent a control byte");
+		      RADIANT_FRAME_EINVAL);
 
 	zassert_equal(radiant_frame_make(&f, &spike_id, &ctrl_broadcast,
 				     spike_payload, 8),
@@ -1079,10 +1007,7 @@ ZTEST(radiant_frame, test_flat_parse_ignores_everything_but_bits_2_0)
 
 		zassert_equal(radiant_frame_from_bytes(RADIANT_FRAME_CFG_TRACKING, buf,
 						   sizeof(buf), &w),
-			      17,
-			      "control byte 0x%02X was not parsed as a 17-byte "
-			      "frame; reading bits 4:0 as a length gets this "
-			      "right only for 0x0A", buf[6]);
+			      17, "0x%02X", buf[6]);
 		zassert_equal(w.body_len, 10u, NULL);
 		zassert_equal(radiant_frame_decode(RADIANT_FRAME_CFG_TRACKING, &w, 0, &f),
 			      RADIANT_FRAME_OK, NULL);
@@ -1107,9 +1032,7 @@ ZTEST(radiant_frame, test_flat_parse_ignores_everything_but_bits_2_0)
 			buf[6] = (uint8_t)(flag_sets[t] | low);
 			zassert_equal(radiant_frame_from_bytes(RADIANT_FRAME_CFG_TRACKING,
 							   buf, sizeof(buf), &w),
-				      RADIANT_FRAME_ECTRL,
-				      "control byte 0x%02X has bits 2:0 != 010 "
-				      "and was accepted", buf[6]);
+				      RADIANT_FRAME_ECTRL, "0x%02X", buf[6]);
 		}
 	}
 }
@@ -1128,9 +1051,7 @@ ZTEST(radiant_frame, test_flat_parse_ignores_everything_but_bits_2_0)
  * keeps its name so the case count stays comparable. */
 ZTEST(radiant_frame, test_eleven_measured_control_bytes)
 {
-	zassert_equal(ARRAY_SIZE(ctrl_cases), 12u,
-		      "twelve values were measured; a thirteenth needs a capture "
-		      "behind it");
+	zassert_equal(ARRAY_SIZE(ctrl_cases), 12u);
 
 	for (size_t i = 0; i < ARRAY_SIZE(ctrl_cases); i++) {
 		const struct ctrl_case *c = &ctrl_cases[i];
@@ -1138,7 +1059,7 @@ ZTEST(radiant_frame, test_eleven_measured_control_bytes)
 
 		/* Fields -> byte. */
 		zassert_equal(radiant_ctrl_encode(&c->f), c->on_air,
-			      "the field model does not produce 0x%02X (%s)",
+			      "0x%02X (%s)",
 			      c->on_air, c->what);
 
 		/* Byte -> fields, and it must be a genuine inverse rather than
@@ -1154,13 +1075,13 @@ ZTEST(radiant_frame, test_eleven_measured_control_bytes)
 			      c->on_air);
 
 		zassert_equal(radiant_frame_msg_type(c->on_air), c->type,
-			      "0x%02X (%s) decoded as the wrong message",
+			      "0x%02X (%s)",
 			      c->on_air, c->what);
 		zassert_true(radiant_ctrl_observed(c->on_air), NULL);
 
 		/* Measured on all 3,104 CRC-valid frames of both parts. */
 		zassert_true(radiant_ctrl_low_ok(c->on_air),
-			     "0x%02X does not carry 010 in bits 2:0", c->on_air);
+			     "0x%02X", c->on_air);
 	}
 
 	/* Measured: bits 7:5 never took 001, 010 or 011, so b7 = 0 occurred
@@ -1202,9 +1123,7 @@ ZTEST(radiant_frame, test_ack_data_is_a_one_packet_burst)
 	zassert_equal(open.ack, in_slot.ack, NULL);
 	zassert_equal(open.last, in_slot.last, NULL);
 	zassert_equal(open.seq, in_slot.seq, NULL);
-	zassert_not_equal(open.slot_opener, in_slot.slot_opener,
-			  "the slot bit is the ONLY thing separating 0xAA from "
-			  "0xA2; if it is not, run C's control proved nothing");
+	zassert_not_equal(open.slot_opener, in_slot.slot_opener);
 
 	/* Same message either way, and it is burst-last rather than a type of
 	 * its own. */
@@ -1218,9 +1137,7 @@ ZTEST(radiant_frame, test_ack_data_is_a_one_packet_burst)
 	zassert_equal(radiant_frame_msg_type(0x82u), RADIANT_MSG_BURST_DATA, NULL);
 
 	/* There is no RADIANT_MSG_ACKNOWLEDGED, and that absence is the finding. */
-	zassert_not_equal(radiant_frame_msg_type(0xA2u), RADIANT_MSG_BURST_ACK,
-			  "acknowledged DATA is not an acknowledgeMENT; b6 is "
-			  "what separates them");
+	zassert_not_equal(radiant_frame_msg_type(0xA2u), RADIANT_MSG_BURST_ACK);
 }
 
 /*
@@ -1246,18 +1163,15 @@ ZTEST(radiant_frame, test_reply_frame_relationship)
 		uint8_t r = radiant_ctrl_reply_for(d);
 
 		zassert_equal(r, pairs[i].reply,
-			      "0x%02X must be acknowledged with 0x%02X", d,
+			      "0x%02X -> 0x%02X", d,
 			      pairs[i].reply);
 
 		/* Stated as the three field relations as well as the byte, so a
 		 * table typo cannot pass both. */
-		zassert_true(radiant_ctrl_is_ack(r), "bit 6 must be set");
-		zassert_false(radiant_ctrl_is_ack(d), "a data packet has bit 6 clear");
-		zassert_equal(radiant_ctrl_is_last(r), radiant_ctrl_is_last(d),
-			      "bit 5 is echoed, not complemented");
-		zassert_not_equal(radiant_ctrl_seq(r), radiant_ctrl_seq(d),
-				  "bit 4 is complemented, not echoed - an ack "
-				  "carries the sequence bit it expects NEXT");
+		zassert_true(radiant_ctrl_is_ack(r));
+		zassert_false(radiant_ctrl_is_ack(d));
+		zassert_equal(radiant_ctrl_is_last(r), radiant_ctrl_is_last(d));
+		zassert_not_equal(radiant_ctrl_seq(r), radiant_ctrl_seq(d));
 		zassert_equal(radiant_ctrl_is_exchange(r), radiant_ctrl_is_exchange(d),
 			      NULL);
 		zassert_equal(radiant_ctrl_is_slot_opener(r),
@@ -1281,22 +1195,16 @@ ZTEST(radiant_frame, test_reply_frame_relationship)
 	 * is the single place that fails if a capture ever settles it the other
 	 * way.
 	 */
-	zassert_equal(radiant_ctrl_reply_for(0x8Au), 0xD2u,
-		      "a slot-opening burst packet is acknowledged like its "
-		      "in-slot twin, with bit 3 clear");
+	zassert_equal(radiant_ctrl_reply_for(0x8Au), 0xD2u);
 	zassert_equal(radiant_ctrl_reply_for(0xAAu), 0xF2u, NULL);
-	zassert_false(radiant_ctrl_is_slot_opener(radiant_ctrl_reply_for(0x8Au)),
-		      "no acknowledgement in any capture carries bit 3");
+	zassert_false(radiant_ctrl_is_slot_opener(radiant_ctrl_reply_for(0x8Au)));
 	zassert_false(radiant_ctrl_is_slot_opener(radiant_ctrl_reply_for(0xAAu)), NULL);
 
 	/* The inference is exactly two bytes wide. Everything else still
 	 * refuses, which is what keeps it from becoming "clear bit 3 and hope". */
-	zassert_equal(radiant_ctrl_reply_for(RADIANT_CTRL_BROADCAST), 0u,
-		      "a broadcast is not acknowledged");
-	zassert_equal(radiant_ctrl_reply_for(0xC2u), 0u,
-		      "an acknowledgement is not itself acknowledged");
-	zassert_equal(radiant_ctrl_reply_for(0x1Au), 0u,
-		      "0x1A was only ever a CRC-failed 0x0A");
+	zassert_equal(radiant_ctrl_reply_for(RADIANT_CTRL_BROADCAST), 0u);
+	zassert_equal(radiant_ctrl_reply_for(0xC2u), 0u);
+	zassert_equal(radiant_ctrl_reply_for(0x1Au), 0u);
 }
 
 /*
@@ -1320,9 +1228,7 @@ ZTEST(radiant_frame, test_same_payload_two_control_bytes)
 				     spike_b_payload, sizeof(spike_b_payload)),
 		      RADIANT_FRAME_OK, NULL);
 
-	zassert_equal(ack.payload_len, bcast.payload_len,
-		      "the two frames must carry the same number of payload "
-		      "bytes or this test proves nothing");
+	zassert_equal(ack.payload_len, bcast.payload_len);
 	zassert_equal(ack.ctrl_byte, 0xAAu, NULL);
 	zassert_equal(bcast.ctrl_byte, 0x0Au, NULL);
 
@@ -1344,27 +1250,18 @@ ZTEST(radiant_frame, test_same_payload_two_control_bytes)
 	for (size_t i = 0; i < 15u; i++) {
 		if (flat_ack[i] != flat_bcast[i]) {
 			differing++;
-			zassert_equal(i, 6u,
-				      "the two frames differ at byte %zu, but "
-				      "the capture shows them differing only "
-				      "in the control byte", i);
+			zassert_equal(i, 6u, "byte %zu", i);
 		}
 	}
-	zassert_equal(differing, 1u,
-		      "an acknowledged frame and a broadcast of the same "
-		      "payload must differ in exactly one covered byte");
+	zassert_equal(differing, 1u);
 	zassert_not_equal(w_ack.crc, w_bcast.crc, NULL);
 
 	/* And the receive side sorts them apart, which is the whole point:
 	 * both decode, both yield the same payload, and the message type is
 	 * what distinguishes them. */
 	zassert_equal(radiant_frame_decode(RADIANT_FRAME_CFG_TRACKING, &w_ack, 0, &out),
-		      RADIANT_FRAME_OK,
-		      "an acknowledged frame must decode - a receiver that "
-		      "drops these cannot set trainer resistance");
-	zassert_equal(radiant_frame_msg_type(out.ctrl_byte), RADIANT_MSG_BURST_LAST,
-		      "acknowledged data is burst-last on air; part 1 refused "
-		      "to say so and part 2's run C settled it");
+		      RADIANT_FRAME_OK);
+	zassert_equal(radiant_frame_msg_type(out.ctrl_byte), RADIANT_MSG_BURST_LAST);
 	zassert_mem_equal(out.payload, spike_b_payload,
 			  sizeof(spike_b_payload), NULL);
 
@@ -1392,25 +1289,22 @@ ZTEST(radiant_frame, test_a_slave_frame_is_not_rejected)
 
 	zassert_equal(radiant_frame_make(&f, &spike_id, &ctrl_burst_last_seq0,
 				     spike_b_payload, sizeof(spike_b_payload)),
-		      RADIANT_FRAME_OK,
-		      "an in-slot acknowledged-data frame was refused");
+		      RADIANT_FRAME_OK);
 	zassert_equal(f.ctrl_byte, 0xA2u, NULL);
 	zassert_false(radiant_ctrl_is_slot_opener(f.ctrl_byte), NULL);
-	zassert_equal((uint8_t)(f.ctrl_byte & 0x1Fu), 2u,
-		      "0xA2's low five bits read 2, and that is the number a "
-		      "length check would have wanted to be 10");
+	zassert_equal((uint8_t)(f.ctrl_byte & 0x1Fu), 2u);
 
 	zassert_equal(radiant_frame_encode(RADIANT_FRAME_CFG_TRACKING,
 				       radiant_net_addr_ant_plus, &f, &w),
-		      RADIANT_FRAME_OK, "encode rejected a valid slave frame");
+		      RADIANT_FRAME_OK);
 	zassert_equal(w.body[1], 0xA2u, NULL);
 	zassert_equal(radiant_frame_to_bytes(&w, flat, sizeof(flat)), 17, NULL);
 
 	zassert_equal(radiant_frame_from_bytes(RADIANT_FRAME_CFG_TRACKING, flat,
 					   sizeof(flat), &w),
-		      17, "the flat parser rejected a valid slave frame");
+		      17);
 	zassert_equal(radiant_frame_decode(RADIANT_FRAME_CFG_TRACKING, &w, 0, &out),
-		      RADIANT_FRAME_OK, "decode rejected a valid slave frame");
+		      RADIANT_FRAME_OK);
 	zassert_equal(out.ctrl_byte, 0xA2u, NULL);
 	zassert_equal(out.payload_len, 8u, NULL);
 	zassert_mem_equal(out.payload, spike_b_payload, sizeof(spike_b_payload),
@@ -1446,9 +1340,7 @@ ZTEST(radiant_frame, test_flat_parse_accepts_every_measured_control_byte)
 		zassert_equal(radiant_frame_from_bytes(RADIANT_FRAME_CFG_TRACKING, buf,
 						   sizeof(buf), &w),
 			      17,
-			      "control byte 0x%02X (%s) was not parsed as a "
-			      "17-byte frame; its low five bits read %u, and a "
-			      "parser expecting 10 drops it",
+			      "0x%02X (%s) low5 %u",
 			      ctrl_cases[i].on_air, ctrl_cases[i].what,
 			      (unsigned int)(ctrl_cases[i].on_air & 0x1Fu));
 		zassert_equal(w.body_len, 10u, NULL);
@@ -1500,12 +1392,8 @@ ZTEST(radiant_frame, test_long_payload_arithmetic_and_the_format_limit)
 	 * byte, because no bit of it depends on the payload length. Any
 	 * implementation that still derives a length here fails on this line.
 	 */
-	zassert_equal(f.ctrl_byte, f8.ctrl_byte,
-		      "the control byte moved when the payload length did; "
-		      "bits 4:0 are the slot bit, the sequence bit and 010, not "
-		      "a length");
-	zassert_equal(f.ctrl_byte, 0x8Au,
-		      "a slot-opening burst packet is 0x8A whatever it carries");
+	zassert_equal(f.ctrl_byte, f8.ctrl_byte);
+	zassert_equal(f.ctrl_byte, 0x8Au);
 	zassert_equal(radiant_frame_msg_type(f.ctrl_byte), RADIANT_MSG_BURST_DATA, NULL);
 
 	zassert_equal(radiant_frame_encode(RADIANT_FRAME_CFG_TRACKING,
@@ -1537,16 +1425,9 @@ ZTEST(radiant_frame, test_long_payload_arithmetic_and_the_format_limit)
 	 * static-length at the only payload size ever measured, and a format
 	 * that advertised more would have a backend arming a window for a
 	 * frame nothing transmits. */
-	zassert_equal(radiant_frame_format(RADIANT_FRAME_CFG_TRACKING)->max_body_len, 10,
-		      "tracking is STATLEN=10; a longer frame needs its own "
-		      "format and a measurement to justify it");
-	zassert_equal(radiant_frame_format(RADIANT_FRAME_CFG_SEARCH)->max_body_len, 12,
-		      "search cannot receive a longer-than-standard frame, and "
-		      "the format must keep saying so");
-	zassert_true(wt.body_len >
-			     radiant_frame_format(RADIANT_FRAME_CFG_TRACKING)->max_body_len,
-		     "this test only means something while the encoder can "
-		     "produce a body the hardware format refuses");
+	zassert_equal(radiant_frame_format(RADIANT_FRAME_CFG_TRACKING)->max_body_len, 10);
+	zassert_equal(radiant_frame_format(RADIANT_FRAME_CFG_SEARCH)->max_body_len, 12);
+	zassert_true(wt.body_len > radiant_frame_format(RADIANT_FRAME_CFG_TRACKING)->max_body_len);
 }
 
 /*

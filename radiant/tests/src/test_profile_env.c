@@ -139,8 +139,7 @@ ZTEST(profile_env, test_page1_builder_matches_the_hand_placed_vector)
 	uint8_t body[8];
 
 	build_page1(body, P1_EVENT_COUNT, 0x0FCBu, 0x0138u, 0x0929u);
-	zassert_mem_equal(body, page1, sizeof(page1),
-			  "the test's own packing disagrees with Table 6-4");
+	zassert_mem_equal(body, page1, sizeof(page1));
 }
 
 ZTEST(profile_env, test_page1_decode)
@@ -158,13 +157,12 @@ ZTEST(profile_env, test_page1_decode)
 	/* Low is byte [3] plus byte [4]'s HIGH nibble; high is byte [4]'s LOW
 	 * nibble plus byte [5]. Swapping the two shapes gives 0x8FC and 0x13F,
 	 * neither of which is either of these. */
-	zassert_equal(t.low_24h_deci, P1_LOW_DECI, "24-hour low, 0.1 degC");
-	zassert_equal(t.high_24h_deci, P1_HIGH_DECI, "24-hour high, 0.1 degC");
+	zassert_equal(t.low_24h_deci, P1_LOW_DECI);
+	zassert_equal(t.high_24h_deci, P1_HIGH_DECI);
 
 	/* And the current reading is a different SCALE as well as a different
 	 * width: 0.01 degC, not 0.1. */
-	zassert_equal(t.current_centi, P1_CURRENT_CENTI,
-		      "current temperature, 0.01 degC");
+	zassert_equal(t.current_centi, P1_CURRENT_CENTI);
 }
 
 ZTEST(profile_env, test_page1_rejects_the_wrong_page_number)
@@ -195,8 +193,8 @@ ZTEST(profile_env, test_24h_fields_at_both_signed_extremes)
 	zassert_equal(profile_env_decode_temperature(body, &t), 0);
 	zassert_true(t.low_24h_valid);
 	zassert_true(t.high_24h_valid);
-	zassert_equal(t.low_24h_deci, 2047, "0x7FF is +204.7 degC");
-	zassert_equal(t.high_24h_deci, 2047, "0x7FF is +204.7 degC");
+	zassert_equal(t.low_24h_deci, 2047);
+	zassert_equal(t.high_24h_deci, 2047);
 
 	/* 0x801 is the most negative LEGAL code: -204.7 degC. Without sign
 	 * extension from bit 11 it reads as +2049, which is a temperature and
@@ -205,15 +203,15 @@ ZTEST(profile_env, test_24h_fields_at_both_signed_extremes)
 	zassert_equal(profile_env_decode_temperature(body, &t), 0);
 	zassert_true(t.low_24h_valid);
 	zassert_true(t.high_24h_valid);
-	zassert_equal(t.low_24h_deci, -2047, "0x801 is -204.7 degC");
-	zassert_equal(t.high_24h_deci, -2047, "0x801 is -204.7 degC");
+	zassert_equal(t.low_24h_deci, -2047);
+	zassert_equal(t.high_24h_deci, -2047);
 
 	/* 0xFFF is -1, the smallest negative step, and the case a decoder that
 	 * masks to 12 bits without extending gets most spectacularly wrong. */
 	build_page1(body, 0u, 0x0FFFu, 0x0FFFu, 0u);
 	zassert_equal(profile_env_decode_temperature(body, &t), 0);
-	zassert_equal(t.low_24h_deci, -1, "0xFFF is -0.1 degC");
-	zassert_equal(t.high_24h_deci, -1, "0xFFF is -0.1 degC");
+	zassert_equal(t.low_24h_deci, -1);
+	zassert_equal(t.high_24h_deci, -1);
 }
 
 ZTEST(profile_env, test_24h_invalid_sentinel_is_not_a_temperature)
@@ -227,15 +225,15 @@ ZTEST(profile_env, test_24h_invalid_sentinel_is_not_a_temperature)
 	 * not invalidate the other. */
 	build_page1(body, 0u, PROFILE_ENV_INVALID_12, 0x0138u, 0u);
 	zassert_equal(profile_env_decode_temperature(body, &t), 0);
-	zassert_false(t.low_24h_valid, "0x800 in the low field is invalid");
-	zassert_true(t.high_24h_valid, "the high field is untouched by it");
+	zassert_false(t.low_24h_valid);
+	zassert_true(t.high_24h_valid);
 	zassert_equal(t.high_24h_deci, P1_HIGH_DECI);
 
 	build_page1(body, 0u, 0x0FCBu, PROFILE_ENV_INVALID_12, 0u);
 	zassert_equal(profile_env_decode_temperature(body, &t), 0);
 	zassert_true(t.low_24h_valid);
 	zassert_equal(t.low_24h_deci, P1_LOW_DECI);
-	zassert_false(t.high_24h_valid, "0x800 in the high field is invalid");
+	zassert_false(t.high_24h_valid);
 }
 
 ZTEST(profile_env, test_current_invalid_sentinel_is_a_different_width)
@@ -248,11 +246,11 @@ ZTEST(profile_env, test_current_invalid_sentinel_is_a_different_width)
 	 * and 0x8000 (-327.68 degC) as a reading. Both directions are checked. */
 	build_page1(body, 0u, 0x0000u, 0x0000u, PROFILE_ENV_INVALID_16);
 	zassert_equal(profile_env_decode_temperature(body, &t), 0);
-	zassert_false(t.current_valid, "0x8000 is invalid");
+	zassert_false(t.current_valid);
 
 	build_page1(body, 0u, 0x0000u, 0x0000u, 0x0800u);
 	zassert_equal(profile_env_decode_temperature(body, &t), 0);
-	zassert_true(t.current_valid, "0x0800 is +20.48 degC, a real reading");
+	zassert_true(t.current_valid);
 	zassert_equal(t.current_centi, 2048);
 
 	/* The most negative LEGAL current reading, one count above the
@@ -260,7 +258,7 @@ ZTEST(profile_env, test_current_invalid_sentinel_is_a_different_width)
 	build_page1(body, 0u, 0x0000u, 0x0000u, 0x8001u);
 	zassert_equal(profile_env_decode_temperature(body, &t), 0);
 	zassert_true(t.current_valid);
-	zassert_equal(t.current_centi, -32767, "0x8001 is -327.67 degC");
+	zassert_equal(t.current_centi, -32767);
 }
 
 /* ── Page 0x00 ─────────────────────────────────────────────────────────── */
@@ -274,15 +272,13 @@ ZTEST(profile_env, test_page0_capabilities)
 	/* The rate bits are the LOW pair even though Table 6-3 lists them
 	 * last, and 0b00 is the SLOW rate - it would be easy to assume the
 	 * zero value meant the profile's more common 4 Hz. It does not. */
-	zassert_equal(c.default_rate, PROFILE_ENV_RATE_0P5_HZ,
-		      "bits 1:0 = 0b00 is 0.5 Hz");
+	zassert_equal(c.default_rate, PROFILE_ENV_RATE_0P5_HZ);
 	zassert_equal(c.utc_time, PROFILE_ENV_TIME_SUPPORTED_SET);
 	zassert_equal(c.local_time, PROFILE_ENV_TIME_SUPPORTED_UNSET);
 
 	zassert_equal(c.supported_pages,
 		      PROFILE_ENV_SUPPORTED_PAGE_BIT(PROFILE_ENV_PAGE_CAPABILITIES) |
-		      PROFILE_ENV_SUPPORTED_PAGE_BIT(PROFILE_ENV_PAGE_TEMPERATURE),
-		      "bit position is the page number, u32 little-endian");
+		      PROFILE_ENV_SUPPORTED_PAGE_BIT(PROFILE_ENV_PAGE_TEMPERATURE));
 }
 
 ZTEST(profile_env, test_page0_the_other_rate_and_the_reserved_ones)
@@ -300,7 +296,7 @@ ZTEST(profile_env, test_page0_the_other_rate_and_the_reserved_ones)
 	 * folded into either real rate. */
 	body[3] = 0x03u;
 	zassert_equal(profile_env_decode_capabilities(body, &c), 0);
-	zassert_equal(c.default_rate, 3u, "a reserved rate stays visible");
+	zassert_equal(c.default_rate, 3u);
 }
 
 /*
@@ -312,9 +308,9 @@ ZTEST(profile_env, test_page0_the_other_rate_and_the_reserved_ones)
 ZTEST(profile_env, test_period_counts_for_each_declared_rate)
 {
 	zassert_equal(profile_env_period_counts(PROFILE_ENV_RATE_0P5_HZ),
-		      PROFILE_ENV_PERIOD_0P5_HZ, "65535 counts is 0.5 Hz");
+		      PROFILE_ENV_PERIOD_0P5_HZ);
 	zassert_equal(profile_env_period_counts(PROFILE_ENV_RATE_4_HZ),
-		      PROFILE_ENV_PERIOD_4_HZ, "8192 counts is 4 Hz");
+		      PROFILE_ENV_PERIOD_4_HZ);
 
 	/* 0 is what struct radiant_binding::period already means by "never
 	 * set", and what radiant_liveness.c already abstains on. */
@@ -352,10 +348,9 @@ ZTEST(profile_env, test_adapter_posts_temperature_in_kelvin_and_nothing_else)
 	zassert_not_null(s);
 	zassert_equal(s->field_type, RADIANT_FIELD_TEMPERATURE);
 	zassert_equal(s->exp, -2);
-	zassert_equal(s->flags, 0u, "an instantaneous reading, not accumulating");
+	zassert_equal(s->flags, 0u);
 	zassert_equal(s->t_us, 1000u);
-	zassert_equal(s->raw, P1_CURRENT_CENTI + RADIANT_ENV_KELVIN_OFFSET_CENTI,
-		      "23.45 degC is 296.60 K");
+	zassert_equal(s->raw, P1_CURRENT_CENTI + RADIANT_ENV_KELVIN_OFFSET_CENTI);
 
 	/* THE 24-HOUR STATISTICS ARE NOT ON THE BUS. They are decoded and kept
 	 * - a caller can read them - but publishing them would mint two more
@@ -365,8 +360,8 @@ ZTEST(profile_env, test_adapter_posts_temperature_in_kelvin_and_nothing_else)
 	zassert_is_null(captured(RADIANT_ENV_FIELD_LOW_24H));
 	zassert_is_null(captured(RADIANT_ENV_FIELD_HIGH_24H));
 	zassert_true(a.have_temperature);
-	zassert_equal(a.t.low_24h_deci, P1_LOW_DECI, "decoded, just not posted");
-	zassert_equal(a.t.high_24h_deci, P1_HIGH_DECI, "decoded, just not posted");
+	zassert_equal(a.t.low_24h_deci, P1_LOW_DECI);
+	zassert_equal(a.t.high_24h_deci, P1_HIGH_DECI);
 }
 
 ZTEST(profile_env, test_adapter_kelvin_offset_is_exact_at_zero_and_below)
@@ -386,7 +381,7 @@ ZTEST(profile_env, test_adapter_kelvin_offset_is_exact_at_zero_and_below)
 	zassert_equal(radiant_bridge_drain(), 1u);
 	s = captured(RADIANT_ENV_FIELD_TEMPERATURE);
 	zassert_not_null(s);
-	zassert_equal(s->raw, 27315, "0.00 degC is exactly 273.15 K");
+	zassert_equal(s->raw, 27315);
 	zassert_equal(s->exp, -2);
 
 	/* -40.00 degC = -4000 centi = 0xF060 on the wire. 233.15 K. This is
@@ -397,7 +392,7 @@ ZTEST(profile_env, test_adapter_kelvin_offset_is_exact_at_zero_and_below)
 	zassert_equal(radiant_bridge_drain(), 2u);
 	s = captured(RADIANT_ENV_FIELD_TEMPERATURE);
 	zassert_not_null(s);
-	zassert_equal(s->raw, 23315, "-40.00 degC is exactly 233.15 K");
+	zassert_equal(s->raw, 23315);
 }
 
 ZTEST(profile_env, test_adapter_does_not_publish_an_invalid_reading)
@@ -415,8 +410,7 @@ ZTEST(profile_env, test_adapter_does_not_publish_an_invalid_reading)
 	zassert_equal(radiant_env_adapter_decode(&a, ENV_SOURCE, body, 2000u), 1u);
 	zassert_equal(radiant_bridge_drain(), 1u);
 	zassert_equal(cap_n, 1u);
-	zassert_is_null(captured(RADIANT_ENV_FIELD_TEMPERATURE),
-			"273.15 K is not what 'no reading' means");
+	zassert_is_null(captured(RADIANT_ENV_FIELD_TEMPERATURE));
 	zassert_not_null(captured(RADIANT_ENV_FIELD_EVENT_COUNT));
 }
 
@@ -446,7 +440,7 @@ ZTEST(profile_env, test_adapter_event_count_wraps_in_eight_bits)
 	zassert_equal(s->field_type, RADIANT_FIELD_EVENT_COUNT);
 	zassert_equal(s->flags, RADIANT_SAMPLE_ACCUMULATING);
 	zassert_equal(s->exp, 0);
-	zassert_equal(s->raw, 5, "254 -> 3 is five events");
+	zassert_equal(s->raw, 5);
 	zassert_equal(a.prev_event_count, 0x03u);
 }
 

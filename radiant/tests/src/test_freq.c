@@ -132,7 +132,7 @@ ZTEST(profile_freq, test_selection_refuses_without_evidence_for_where_we_are)
 
 	zassert_equal(-ENODATA, profile_freq_select(PROFILE_FREQ_RF_HOME, ev,
 						    ARRAY_SIZE(ev), &out));
-	zassert_equal(0xFFu, out, "a refused selection wrote an answer anyway");
+	zassert_equal(0xFFu, out);
 }
 
 ZTEST(profile_freq, test_selection_picks_the_quietest_candidate_past_the_margin)
@@ -147,8 +147,7 @@ ZTEST(profile_freq, test_selection_picks_the_quietest_candidate_past_the_margin)
 
 	zassert_ok(profile_freq_select(PROFILE_FREQ_RF_HOME, ev, ARRAY_SIZE(ev),
 				       &out));
-	zassert_equal(PROFILE_FREQ_RF_MID, out,
-		      "the quietest candidate was not chosen");
+	zassert_equal(PROFILE_FREQ_RF_MID, out);
 }
 
 /*
@@ -205,10 +204,8 @@ ZTEST(profile_freq, test_selection_is_deterministic_under_a_tie)
 				       &out_a));
 	zassert_ok(profile_freq_select(PROFILE_FREQ_RF_HOME, b, ARRAY_SIZE(b),
 				       &out_b));
-	zassert_equal(out_a, out_b,
-		      "the same evidence in a different order chose differently");
-	zassert_equal(PROFILE_FREQ_RF_MID, out_a,
-		      "the tie-break is not the lower index");
+	zassert_equal(out_a, out_b);
+	zassert_equal(PROFILE_FREQ_RF_MID, out_a);
 }
 
 /*
@@ -259,8 +256,7 @@ ZTEST(profile_freq, test_the_announcement_round_trips_through_the_canon_bytes)
 	uint8_t countdown = 0u;
 
 	zassert_ok(profile_freq_encode(PROFILE_FREQ_RF_MID, 8u, body));
-	zassert_mem_equal(body, CANON_FREQ, sizeof(CANON_FREQ),
-			  "the announcement's bytes moved");
+	zassert_mem_equal(body, CANON_FREQ, sizeof(CANON_FREQ));
 
 	zassert_ok(profile_freq_decode(CANON_FREQ, sizeof(CANON_FREQ), &target,
 				       &countdown));
@@ -290,7 +286,7 @@ ZTEST(profile_freq, test_a_malformed_announcement_is_refused_rather_than_guessed
 		zassert_equal(-EPROTO,
 			      profile_freq_decode(body, sizeof(body), &target,
 						  &countdown),
-			      "reserved byte [%u] was ignored", i);
+			      "reserved [%u]", i);
 	}
 
 	/* A zero countdown names no message at all. */
@@ -369,8 +365,7 @@ ZTEST(profile_freq, test_a_node_that_never_moves_puts_nothing_extra_on_the_air)
 
 	for (uint32_t i = 0u; i < 500u; i++) {
 		memset(body, 0xAA, sizeof(body));
-		zassert_false(profile_freq_claim(0u, body, &pf),
-			      "a quiet node claimed slot %u", i);
+		zassert_false(profile_freq_claim(0u, body, &pf), "slot %u", i);
 		(void)profile_freq_sent(&pf, (uint64_t)i * 250000u);
 	}
 	zassert_equal(0u, pf.announcements);
@@ -395,14 +390,13 @@ ZTEST(profile_freq, test_the_countdown_terminates_rather_than_walking_away)
 
 	moved_at = run(&pf, NULL, 4u * PROFILE_FREQ_K_DEFAULT, 0u, 0u, NULL);
 
-	zassert_not_equal(0u, moved_at, "the node never moved");
+	zassert_not_equal(0u, moved_at);
 	/* Within one unit of K: the first announcement re-anchors by at most
 	 * PROFILE_FREQ_UNIT - 1 messages and nothing after it moves the target
 	 * further. */
-	zassert_true(moved_at >= PROFILE_FREQ_K_DEFAULT,
-		     "the node moved early, at message %u", moved_at);
+	zassert_true(moved_at >= PROFILE_FREQ_K_DEFAULT, "early at %u", moved_at);
 	zassert_true(moved_at <= PROFILE_FREQ_K_DEFAULT + PROFILE_FREQ_UNIT,
-		     "the countdown walked the move out to message %u", moved_at);
+		     "late at %u", moved_at);
 
 	zassert_equal(PROFILE_FREQ_RF_MID, profile_freq_rf_index(&pf));
 	zassert_true(profile_freq_off_home(&pf));
@@ -411,8 +405,7 @@ ZTEST(profile_freq, test_the_countdown_terminates_rather_than_walking_away)
 
 	/* Eight announcements at K = 64, one every eight messages, and the last
 	 * slot before the move is silent. */
-	zassert_true(pf.announcements >= 2u,
-		     "one announcement is not a countdown a receiver can join");
+	zassert_true(pf.announcements >= 2u);
 }
 
 /*
@@ -435,15 +428,12 @@ ZTEST(profile_freq, test_node_and_receiver_move_on_the_same_slot)
 	moved_at = run(&pf, &rx, 4u * PROFILE_FREQ_K_DEFAULT, 0u, 0u, &due_at);
 
 	zassert_not_equal(0u, moved_at);
-	zassert_not_equal(0u, due_at, "the receiver never became due");
-	zassert_equal(moved_at, due_at,
-		      "the node moved on message %u and the receiver on slot %u",
-		      moved_at, due_at);
+	zassert_not_equal(0u, due_at);
+	zassert_equal(moved_at, due_at, "node %u rx %u", moved_at, due_at);
 
 	zassert_ok(profile_freq_rx_target(&rx, &target));
 	zassert_equal(PROFILE_FREQ_RF_HIGH, target);
-	zassert_equal(profile_freq_rf_index(&pf), target,
-		      "the receiver retuned somewhere the node is not");
+	zassert_equal(profile_freq_rf_index(&pf), target);
 }
 
 /* A receiver that arrives part way through reads the remaining count out of the
@@ -464,10 +454,8 @@ ZTEST(profile_freq, test_a_receiver_joining_mid_countdown_lands_on_the_same_slot
 	moved_at = run(&pf, &late, 4u * PROFILE_FREQ_K_DEFAULT, 0u, 41u, &due_at);
 
 	zassert_not_equal(0u, moved_at);
-	zassert_equal(moved_at, due_at,
-		      "a late joiner retuned on slot %u, not %u", due_at,
-		      moved_at);
-	zassert_true(late.heard >= 1u, "the late joiner heard nothing");
+	zassert_equal(moved_at, due_at, "rx %u node %u", due_at, moved_at);
+	zassert_true(late.heard >= 1u);
 }
 
 /* A receiver counts SLOTS, not messages: the node's countdown is in
@@ -508,12 +496,9 @@ ZTEST(profile_freq, test_a_receiver_that_loses_most_of_the_countdown_is_still_on
 		}
 	}
 
-	zassert_equal(1u, rx.heard, "the test did not actually drop anything");
+	zassert_equal(1u, rx.heard);
 	zassert_not_equal(0u, moved_at);
-	zassert_equal(moved_at, due_at,
-		      "a receiver holding only the first copy retuned on slot "
-		      "%u, not %u",
-		      due_at, moved_at);
+	zassert_equal(moved_at, due_at, "rx %u node %u", due_at, moved_at);
 }
 
 /*
@@ -544,8 +529,7 @@ ZTEST(profile_freq, test_a_second_move_inside_the_rate_limit_is_refused)
 	 * instant from the module rather than recomputing it tests the rule,
 	 * not the test's own arithmetic. */
 	t = pf.last_move_us;
-	zassert_true(t < (uint64_t)(4u * PROFILE_FREQ_K_DEFAULT - 1u) * 250000u,
-		     "the floor was charged from the last message, not the move");
+	zassert_true(t < (uint64_t)(4u * PROFILE_FREQ_K_DEFAULT - 1u) * 250000u);
 
 	zassert_equal(-EAGAIN,
 		      profile_freq_begin(&pf, PROFILE_FREQ_RF_LOW, t + 1u));
@@ -624,7 +608,7 @@ ZTEST(profile_freq, test_the_descriptor_after_a_move_announces_index_and_flag)
 
 	/* Before: home, and the flag clear. */
 	n = profile_desc_encode(&d, frames, PROFILE_TLM_MAX_FRAMES);
-	zassert_true(n > 0, "a home descriptor was refused: %d", n);
+	zassert_true(n > 0, "home %d", n);
 	zassert_ok(profile_desc_decode(frames, (uint8_t)n, &back));
 	zassert_equal(PROFILE_TLM_RF_INDEX_DEFAULT, back.rf_index);
 	zassert_equal(0u, back.flags & PROFILE_TLM_FLAG_OFF_RF57);
@@ -632,17 +616,16 @@ ZTEST(profile_freq, test_the_descriptor_after_a_move_announces_index_and_flag)
 	/* After. */
 	zassert_ok(profile_freq_apply(&d, PROFILE_FREQ_RF_MID));
 	n = profile_desc_encode(&d, frames, PROFILE_TLM_MAX_FRAMES);
-	zassert_true(n > 0, "an off-57 descriptor was refused: %d", n);
+	zassert_true(n > 0, "off-57 %d", n);
 	zassert_ok(profile_desc_decode(frames, (uint8_t)n, &back));
 	zassert_equal(PROFILE_FREQ_RF_MID, back.rf_index);
-	zassert_not_equal(0u, back.flags & PROFILE_TLM_FLAG_OFF_RF57,
-			  "the off-57 flag did not follow the index");
+	zassert_not_equal(0u, back.flags & PROFILE_TLM_FLAG_OFF_RF57);
 
 	/* And back again, which is the case a caller writes by hand and gets
 	 * wrong: setting the index without clearing the flag. */
 	zassert_ok(profile_freq_apply(&d, PROFILE_TLM_RF_INDEX_DEFAULT));
 	n = profile_desc_encode(&d, frames, PROFILE_TLM_MAX_FRAMES);
-	zassert_true(n > 0, "the return to home was refused: %d", n);
+	zassert_true(n > 0, "home %d", n);
 	zassert_ok(profile_desc_decode(frames, (uint8_t)n, &back));
 	zassert_equal(0u, back.flags & PROFILE_TLM_FLAG_OFF_RF57);
 
@@ -667,14 +650,12 @@ ZTEST(profile_freq, test_the_retry_list_is_bounded_and_ends_at_home)
 	/* A receiver that never heard anything: the defaults, then home. */
 	n = profile_freq_reacquire_order(&rx, order, sizeof(order));
 	zassert_equal(PROFILE_FREQ_N_DEFAULTS + 1u, n);
-	zassert_equal(PROFILE_FREQ_RF_HOME, order[n - 1u],
-		      "the retry list does not end at RF 57");
+	zassert_equal(PROFILE_FREQ_RF_HOME, order[n - 1u]);
 
 	/* One that was told where the node went tries there first. */
 	(void)profile_freq_rx_slot(&rx, CANON_FREQ, sizeof(CANON_FREQ));
 	n = profile_freq_reacquire_order(&rx, order, sizeof(order));
-	zassert_equal(PROFILE_FREQ_RF_MID, order[0],
-		      "the announced target is not tried first");
+	zassert_equal(PROFILE_FREQ_RF_MID, order[0]);
 	zassert_true(n <= PROFILE_FREQ_REACQUIRE_MAX);
 	zassert_equal(PROFILE_FREQ_RF_HOME, order[n - 1u]);
 
@@ -682,8 +663,7 @@ ZTEST(profile_freq, test_the_retry_list_is_bounded_and_ends_at_home)
 	 * an entry listed twice is a window spent twice. */
 	for (uint8_t i = 0u; i < n; i++) {
 		for (uint8_t j = (uint8_t)(i + 1u); j < n; j++) {
-			zassert_not_equal(order[i], order[j],
-					  "RF %u appears twice", order[i]);
+			zassert_not_equal(order[i], order[j], "RF %u", order[i]);
 		}
 	}
 }
@@ -714,14 +694,12 @@ ZTEST(profile_freq, test_discovery_stays_on_rf_57_however_far_a_node_moves)
 	struct profile_freq pf;
 
 	radiant_search_cfg_default(&cfg);
-	zassert_equal(RADIANT_RF_INDEX_ANT_PLUS, cfg.rf_index,
-		      "the search default left RF 57");
+	zassert_equal(RADIANT_RF_INDEX_ANT_PLUS, cfg.rf_index);
 
 	zassert_ok(profile_freq_init(&pf, &fcfg));
 	zassert_ok(profile_freq_begin(&pf, PROFILE_FREQ_RF_HIGH, 0u));
 	(void)run(&pf, NULL, 4u * PROFILE_FREQ_K_DEFAULT, 0u, 0u, NULL);
-	zassert_equal(PROFILE_FREQ_RF_HIGH, profile_freq_rf_index(&pf),
-		      "the node did not actually move");
+	zassert_equal(PROFILE_FREQ_RF_HIGH, profile_freq_rf_index(&pf));
 
 	fake_radio_reset();
 	zassert_ok(radiant_search_init(&s, &cfg, NULL, NULL));
@@ -732,10 +710,8 @@ ZTEST(profile_freq, test_discovery_stays_on_rf_57_however_far_a_node_moves)
 
 	memset(&w, 0, sizeof(w));
 	zassert_ok(radiant_search_window(&s, radiant_radio_now() + 1000u, &w));
-	zassert_equal(RADIANT_RF_INDEX_ANT_PLUS, w.rf_index,
-		      "a search window was armed on RF %u", w.rf_index);
-	zassert_equal(radiant_frame_format(RADIANT_FRAME_CFG_SEARCH), w.fmt,
-		      "the sweep is no longer the three-byte search format");
+	zassert_equal(RADIANT_RF_INDEX_ANT_PLUS, w.rf_index, "RF %u", w.rf_index);
+	zassert_equal(radiant_frame_format(RADIANT_FRAME_CFG_SEARCH), w.fmt);
 
 	(void)radiant_search_end(&s, 0u);
 }

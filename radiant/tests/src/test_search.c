@@ -128,7 +128,7 @@ static bool on_permit(uint8_t channel, const struct radiant_channel_id *id, void
 
 static void deny(uint8_t channel, uint16_t device_number)
 {
-	zassert_true(g_permit.n_rules < DENY_MAX, "deny table full");
+	zassert_true(g_permit.n_rules < DENY_MAX);
 	g_permit.rule[g_permit.n_rules].channel = channel;
 	g_permit.rule[g_permit.n_rules].device_number = device_number;
 	g_permit.n_rules++;
@@ -170,8 +170,7 @@ static void bring_up_with(bool report_crc_fail, const struct radiant_search_cbs 
 	radiant_search_cfg_default(&cfg);
 	cfg.report_crc_fail = report_crc_fail;
 
-	zassert_ok(radiant_search_init(&g_s, &cfg, cbs, NULL),
-		   "radiant_search_init failed");
+	zassert_ok(radiant_search_init(&g_s, &cfg, cbs, NULL));
 	zassert_ok(radiant_radio_init(&radio_cbs, NULL));
 	zassert_ok(radiant_radio_enable());
 }
@@ -233,7 +232,7 @@ static int win_open(void)
 	req.t_close = g_w.t_close;
 	req.flags = g_w.flags;
 
-	zassert_ok(radiant_radio_rx(&req, &g_op), "arming the search window failed");
+	zassert_ok(radiant_radio_rx(&req, &g_op));
 	radiant_search_armed(&g_s, g_op, req.t_open, req.t_close);
 	return RADIANT_SEARCH_OK;
 }
@@ -304,8 +303,7 @@ ZTEST(radiant_search, test_sweep_geometry_nrf)
 	bring_up(false);
 
 	zassert_equal(8u, radiant_search_filters_per_window(&g_s));
-	zassert_equal(32u, radiant_search_sets(&g_s),
-		      "eight filters must cover 256 device-number low bytes in 32 sets");
+	zassert_equal(32u, radiant_search_sets(&g_s));
 	/* 32 x 260 ms = 8.32 s worst case, comfortably inside ANT's 25 s
 	 * default search timeout. */
 	zassert_equal(32ULL * RADIANT_SEARCH_DWELL_DEFAULT_US, radiant_search_sweep_us(&g_s));
@@ -319,9 +317,7 @@ ZTEST(radiant_search, test_sweep_geometry_rail)
 	bring_up(false);
 
 	zassert_equal(2u, radiant_search_filters_per_window(&g_s));
-	zassert_equal(128u, radiant_search_sets(&g_s),
-		      "two sync words must cover 256 low bytes in 128 sets - if this "
-		      "reads 32 then the sweep length is hardcoded");
+	zassert_equal(128u, radiant_search_sets(&g_s));
 	/* 33.3 s, which is OUTSIDE ANT's 25 s default timeout. That is a real
 	 * consequence of a two-filter radio and a fact a RAIL backend has to
 	 * answer for; it is asserted here so the number is on the record rather
@@ -345,8 +341,7 @@ ZTEST(radiant_search, test_wildcard_capability_is_one_set)
 
 	zassert_equal(1u, radiant_search_sets(&g_s));
 	zassert_equal(1u, radiant_search_filters_per_window(&g_s));
-	zassert_equal((uint64_t)g_s.cfg.dwell_us, radiant_search_sweep_us(&g_s),
-		      "the sweep is one dwell");
+	zassert_equal((uint64_t)g_s.cfg.dwell_us, radiant_search_sweep_us(&g_s));
 	zassert_equal(0u, radiant_search_set_for_devnum(&g_s, 0x1234u));
 	zassert_equal(0u, radiant_search_set_for_devnum(&g_s, 0x00FFu));
 
@@ -393,8 +388,7 @@ ZTEST(radiant_search, test_wildcard_scan_reports_every_device_in_one_dwell)
 	}
 	win_run();
 
-	zassert_equal(ARRAY_SIZE(devs), g_cap.n_acquired,
-		      "a SCAN reports every device it hears in the dwell");
+	zassert_equal(ARRAY_SIZE(devs), g_cap.n_acquired);
 	for (uint32_t k = 0; k < g_cap.n_acquired; k++) {
 		for (size_t i = 0; i < ARRAY_SIZE(devs); i++) {
 			if (g_cap.res[k].id.device_number == devs[i]) {
@@ -405,8 +399,7 @@ ZTEST(radiant_search, test_wildcard_scan_reports_every_device_in_one_dwell)
 		zassert_equal(0u, g_cap.res[k].filter_index);
 	}
 	for (size_t i = 0; i < ARRAY_SIZE(devs); i++) {
-		zassert_true(seen[i], "device 0x%04x not reported with its own number",
-			     devs[i]);
+		zassert_true(seen[i], "device 0x%04x", devs[i]);
 	}
 	/* Still a SCAN: it stays in the search. */
 	zassert_true(radiant_search_is_searching(&g_s, 0u));
@@ -457,8 +450,7 @@ ZTEST(radiant_search, test_wildcard_acquire_tie_break)
 	zassert_equal(0x0510u, g_cap.res[0].id.device_number);
 	zassert_equal(0u, g_cap.chan[1]);
 	zassert_equal(0x06F3u, g_cap.res[1].id.device_number);
-	zassert_true(radiant_search_is_searching(&g_s, 2u),
-		     "channel 2 is still searching: neither frame was its");
+	zassert_true(radiant_search_is_searching(&g_s, 2u));
 	zassert_ok(radiant_search_end(&g_s, 2u));
 	end_of_test();
 }
@@ -522,8 +514,7 @@ ZTEST(radiant_search, test_no_channel_means_no_window)
 	bring_up(false);
 
 	zassert_equal(RADIANT_SEARCH_ENOENT,
-		      radiant_search_window(&g_s, radiant_radio_now() + 1000u, &w),
-		      "an idle search must not ask for the radio");
+		      radiant_search_window(&g_s, radiant_radio_now() + 1000u, &w));
 	zassert_equal(0u, radiant_search_n_searching(&g_s));
 
 	end_of_test();
@@ -537,19 +528,14 @@ ZTEST(radiant_search, test_window_shape_and_filter_addresses)
 
 	zassert_equal(RADIANT_SEARCH_OK, win_open());
 
-	zassert_equal_ptr(radiant_frame_format(RADIANT_FRAME_CFG_SEARCH), g_w.fmt,
-			  "search must use the measured PCNF0=0 / BALEN=2 / "
-			  "STATLEN=12 geometry");
+	/* Search uses the measured PCNF0=0 / BALEN=2 / STATLEN=12 geometry. */
+	zassert_equal_ptr(radiant_frame_format(RADIANT_FRAME_CFG_SEARCH), g_w.fmt);
 	zassert_equal(RADIANT_RF_INDEX_ANT_PLUS, g_w.rf_index);
 	zassert_equal(8u, g_w.n_filters);
 	zassert_equal(0u, g_w.set_index);
 	zassert_false(g_w.from_cache);
-	zassert_equal(RADIANT_SEARCH_DWELL_DEFAULT_US, (uint32_t)(g_w.t_close - g_w.t_open),
-		      "dwell is one channel period; a shorter one loses the "
-		      "within-one-sweep guarantee for nothing");
-	zassert_equal(0u, g_w.flags & RADIANT_RX_STOP_ON_FIRST,
-		      "STOP_ON_FIRST on a search window would hand one channel an "
-		      "acquisition and cost every other channel the dwell");
+	zassert_equal(RADIANT_SEARCH_DWELL_DEFAULT_US, (uint32_t)(g_w.t_close - g_w.t_open));
+	zassert_equal(0u, g_w.flags & RADIANT_RX_STOP_ON_FIRST);
 
 	/* Set 0 is devnum_lo 0..7, each as the on-air address A6 C5 lo. */
 	for (uint8_t j = 0; j < g_w.n_filters; j++) {
@@ -572,7 +558,7 @@ ZTEST(radiant_search, test_window_shape_at_two_filters)
 				    radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
 
 	zassert_equal(RADIANT_SEARCH_OK, win_open());
-	zassert_equal(2u, g_w.n_filters, "the window must be sized by caps, not by 8");
+	zassert_equal(2u, g_w.n_filters);
 	zassert_equal(0u, g_w.filters[0].addr[2]);
 	zassert_equal(1u, g_w.filters[1].addr[2]);
 	win_run();
@@ -619,8 +605,7 @@ ZTEST(radiant_search, test_spread_pairs_when_the_matcher_needs_distance)
 	zassert_equal(RADIANT_SEARCH_OK, win_open());
 	zassert_equal(2u, g_w.n_filters);
 	zassert_equal(0x00u, g_w.filters[0].addr[2]);
-	zassert_equal(0xFFu, g_w.filters[1].addr[2],
-		      "set 0 must hold 0x00 and its complement, not 0x00 and 0x01");
+	zassert_equal(0xFFu, g_w.filters[1].addr[2]);
 	win_run();
 
 	zassert_equal(RADIANT_SEARCH_OK, win_open());
@@ -651,17 +636,13 @@ ZTEST(radiant_search, test_spread_pairs_still_cover_every_value_once)
 
 		seen[a]++;
 		seen[b]++;
-		zassert_true(popcount8((uint8_t)(a ^ b)) >= 4,
-			     "set %u pairs two addresses the matcher cannot split",
-			     (unsigned)set);
+		zassert_true(popcount8((uint8_t)(a ^ b)) >= 4, "set %u", (unsigned)set);
 	}
 
 	for (unsigned v = 0; v < 256u; v++) {
-		zassert_equal(1u, seen[v], "devnum_lo 0x%02X covered %u times",
-			      v, (unsigned)seen[v]);
+		zassert_equal(1u, seen[v], "0x%02X covered %u", v, (unsigned)seen[v]);
 		zassert_equal((uint16_t)((v < 0x80u) ? v : (v ^ 0xFFu)),
-			      radiant_search_set_for_devnum(&g_s, (uint16_t)v),
-			      "the set lookup must find the set that really holds it");
+			      radiant_search_set_for_devnum(&g_s, (uint16_t)v));
 	}
 
 	end_of_test();
@@ -734,16 +715,14 @@ ZTEST(radiant_search, test_acquires_within_one_sweep)
 
 	windows = pump(radiant_search_sets(&g_s) + 1u);
 
-	zassert_equal(1u, g_cap.n_acquired, "not acquired within one sweep");
-	zassert_true(windows <= radiant_search_sets(&g_s),
-		     "took %u windows for a %u-set sweep", windows,
-		     radiant_search_sets(&g_s));
+	zassert_equal(1u, g_cap.n_acquired);
+	zassert_true(windows <= radiant_search_sets(&g_s), "took %u windows", windows);
 	zassert_equal(3u, g_cap.chan[0]);
 	zassert_equal(WORST_CASE_DEVNUM, g_cap.res[0].id.device_number);
 	zassert_equal(WORST_CASE_DTYPE, g_cap.res[0].id.device_type);
 	zassert_equal(WORST_CASE_TTYPE, g_cap.res[0].id.trans_type);
 	zassert_equal(31u, g_cap.res[0].set_index);
-	zassert_equal(7u, g_cap.res[0].filter_index, "0xFF is slot 7 of set 31");
+	zassert_equal(7u, g_cap.res[0].filter_index);
 
 	/* The first broadcast comes with the channel ID, so the channel does not
 	 * have to wait another period for data it has already heard. */
@@ -790,7 +769,7 @@ ZTEST(radiant_search, test_acquires_at_two_filters)
 
 	zassert_equal(1u, g_cap.n_acquired);
 	zassert_equal(0x0302u, g_cap.res[0].id.device_number);
-	zassert_equal(1u, g_cap.res[0].set_index, "0x02 / 2 = set 1");
+	zassert_equal(1u, g_cap.res[0].set_index);
 	zassert_equal(0u, g_cap.res[0].filter_index);
 
 	end_of_test();
@@ -835,8 +814,7 @@ ZTEST(radiant_search, test_devnum_lo_from_filter_index_not_body)
 	win_run();
 
 	zassert_equal(1u, g_cap.n_acquired);
-	zassert_equal(0xBE03u, g_cap.res[0].id.device_number,
-		      "devnum_lo must come from filter_index, never from the body");
+	zassert_equal(0xBE03u, g_cap.res[0].id.device_number);
 	zassert_equal(3u, g_cap.res[0].filter_index);
 
 	end_of_test();
@@ -886,13 +864,9 @@ ZTEST(radiant_search, test_merged_window_uses_the_supplied_filter_index)
 	radiant_search_on_rx_indexed(&g_s, &evt, 6u);
 
 	zassert_equal(1u, g_cap.n_acquired);
-	zassert_equal(0xBE06u, g_cap.res[0].id.device_number,
-		      "the scheduler's remapped index must win");
-	zassert_not_equal(0xBE00u, g_cap.res[0].id.device_number,
-			  "reading evt->filter_index on a merged window recovers a "
-			  "real but wrong device number");
-	zassert_equal(0u, radiant_search_get_stats(&g_s)->late_events,
-		      "the EXTERNAL sentinel means the caller owns the routing");
+	zassert_equal(0xBE06u, g_cap.res[0].id.device_number);
+	zassert_not_equal(0xBE00u, g_cap.res[0].id.device_number);
+	zassert_equal(0u, radiant_search_get_stats(&g_s)->late_events);
 
 	radiant_search_on_done(&g_s, true, true, w.t_close);
 	end_of_test();
@@ -947,12 +921,7 @@ ZTEST(radiant_search, test_a_sweep_advances_even_when_every_window_is_cut_short)
 		zassert_ok(radiant_search_window(&g_s, earliest, &w));
 	}
 
-	zassert_not_equal(first_set, w.set_index,
-			  "the sweep never left set %u: a window that is cut "
-			  "short credits no dwell, so with a tracked channel "
-			  "taking the radio every period the sweep freezes and "
-			  "every device outside this set is undiscoverable",
-			  first_set);
+	zassert_not_equal(first_set, w.set_index, "stuck on set %u", first_set);
 	end_of_test();
 }
 
@@ -984,8 +953,7 @@ ZTEST(radiant_search, test_a_late_reported_end_credits_no_more_than_the_window)
 	radiant_search_on_done(&g_s, false, true,
 			       w.t_open + 20000u + RADIANT_SCHED_ARMED_STALE_US);
 
-	zassert_equal(before - 20000u, radiant_search_dwell_remaining(&g_s),
-		      "a late ended_at was credited past the window's close");
+	zassert_equal(before - 20000u, radiant_search_dwell_remaining(&g_s));
 	zassert_ok(radiant_search_end(&g_s, 0u));
 	end_of_test();
 }
@@ -1012,10 +980,7 @@ ZTEST(radiant_search, test_a_window_that_never_opened_credits_nothing)
 		radiant_search_on_done(&g_s, false, false, w.t_close);
 
 		zassert_ok(radiant_search_window(&g_s, earliest, &w));
-		zassert_equal(first_set, w.set_index,
-			      "a request that never reached the air credited "
-			      "dwell and skipped set %u",
-			      first_set);
+		zassert_equal(first_set, w.set_index, "skipped set %u", first_set);
 	}
 	end_of_test();
 }
@@ -1053,16 +1018,12 @@ ZTEST(radiant_search, test_noise_with_bad_crc_never_acquires)
 	(void)pump(4u);
 
 	st = radiant_search_get_stats(&g_s);
-	zassert_true(st->crc_fail > 0u, "the noise never reached the module");
+	zassert_true(st->crc_fail > 0u);
 	zassert_equal(0u, st->frames_ok);
 	zassert_equal(0u, st->acquired);
-	zassert_equal(0u, g_cap.n_acquired,
-		      "a CRC failure is evidence about the noise floor and about "
-		      "nothing else");
-	zassert_equal(0u, radiant_search_seen_count(&g_s, radiant_radio_now()),
-		      "noise must not populate the seen cache either");
-	zassert_true(radiant_search_is_searching(&g_s, 0u),
-		     "the channel must still be searching");
+	zassert_equal(0u, g_cap.n_acquired);
+	zassert_equal(0u, radiant_search_seen_count(&g_s, radiant_radio_now()));
+	zassert_true(radiant_search_is_searching(&g_s, 0u));
 
 	zassert_ok(radiant_search_end(&g_s, 0u));
 	end_of_test();
@@ -1087,8 +1048,7 @@ ZTEST(radiant_search, test_noise_is_suppressed_by_default)
 	st = radiant_search_get_stats(&g_s);
 	zassert_equal(0u, st->crc_fail);
 	zassert_equal(0u, g_cap.n_acquired);
-	zassert_true(fake_radio_stats()->crc_fail_suppressed > 0u,
-		     "the mock should have dropped them before the core saw them");
+	zassert_true(fake_radio_stats()->crc_fail_suppressed > 0u);
 
 	zassert_ok(radiant_search_end(&g_s, 0u));
 	end_of_test();
@@ -1166,11 +1126,9 @@ ZTEST(radiant_search, test_one_window_serves_several_channels)
 	zassert_ok(fake_radio_air_frame(g_w.t_open + 2000u, f_hrm, n_hrm));
 	win_run();
 
-	zassert_equal(2u, g_cap.n_acquired, "one window must serve both channels");
-	zassert_equal(arms_before, fake_radio_arm_count(),
-		      "serving two channels must not cost two windows");
-	zassert_equal(g_cap.at_window[0], g_cap.at_window[1],
-		      "both acquisitions must come from the same window");
+	zassert_equal(2u, g_cap.n_acquired);
+	zassert_equal(arms_before, fake_radio_arm_count());
+	zassert_equal(g_cap.at_window[0], g_cap.at_window[1]);
 
 	/* Each channel got its own sensor, matched on device type. */
 	zassert_equal(0u, g_cap.chan[0]);
@@ -1235,13 +1193,11 @@ ZTEST(radiant_search, test_a_frame_claims_only_one_wildcard_acquire_channel)
 	zassert_ok(fake_radio_air_frame(g_w.t_open + 1000u, frame, len));
 	win_run();
 
-	zassert_equal(1u, g_cap.n_acquired,
-		      "one frame must claim exactly one wildcard ACQUIRE channel");
-	zassert_equal(0u, g_cap.chan[0], "the first matching channel in order claims it");
+	zassert_equal(1u, g_cap.n_acquired);
+	zassert_equal(0u, g_cap.chan[0]);
 	zassert_equal(0x0703u, g_cap.res[0].id.device_number);
 
-	zassert_equal(1u, radiant_search_n_searching(&g_s),
-		      "the second wildcard channel must still be searching");
+	zassert_equal(1u, radiant_search_n_searching(&g_s));
 	zassert_false(radiant_search_is_searching(&g_s, 0u));
 	zassert_true(radiant_search_is_searching(&g_s, 1u));
 
@@ -1268,11 +1224,9 @@ ZTEST(radiant_search, test_pairing_bit_matches_and_survives)
 	zassert_ok(fake_radio_air_frame(g_w.t_open + 1000u, frame, len));
 	win_run();
 
-	zassert_equal(1u, g_cap.n_acquired,
-		      "a sensor in pairing mode must still be found");
+	zassert_equal(1u, g_cap.n_acquired);
 	zassert_equal((uint8_t)(0x0Bu | RADIANT_DEVICE_TYPE_PAIRING_BIT),
-		      g_cap.res[0].id.device_type,
-		      "and the pairing bit must reach the caller intact");
+		      g_cap.res[0].id.device_type);
 
 	end_of_test();
 }
@@ -1304,8 +1258,7 @@ ZTEST(radiant_search, test_seen_cache_reacquires_in_one_window)
 
 	zassert_equal(1u, g_cap.n_acquired);
 	zassert_equal(20u, g_cap.res[0].set_index);
-	zassert_true(first_windows >= 20u,
-		     "the cold search should have had to walk the sweep");
+	zassert_true(first_windows >= 20u);
 	zassert_false(g_cap.res[0].from_cache);
 	zassert_equal(1u, radiant_search_seen_count(&g_s, radiant_radio_now()));
 
@@ -1319,12 +1272,11 @@ ZTEST(radiant_search, test_seen_cache_reacquires_in_one_window)
 				    radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
 
 	zassert_equal(RADIANT_SEARCH_OK, win_open());
-	zassert_true(g_w.from_cache, "the cache should have steered this window");
+	zassert_true(g_w.from_cache);
 	zassert_equal(20u, g_w.set_index);
 	win_run();
 
-	zassert_equal(2u, g_cap.n_acquired,
-		      "re-acquisition should take one dwell, not half a sweep");
+	zassert_equal(2u, g_cap.n_acquired);
 	zassert_true(g_cap.res[1].from_cache);
 
 	st = radiant_search_get_stats(&g_s);
@@ -1345,7 +1297,7 @@ ZTEST(radiant_search, test_named_device_number_steers_directly)
 				    radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
 
 	zassert_equal(RADIANT_SEARCH_OK, win_open());
-	zassert_equal(20u, g_w.set_index, "0xA1 / 8 = 20");
+	zassert_equal(20u, g_w.set_index);
 	zassert_true(g_w.from_cache);
 	zassert_equal(0xA1u, g_w.filters[1].addr[2]);
 	win_run();
@@ -1410,7 +1362,7 @@ ZTEST(radiant_search, test_a_named_search_revisits_its_set_with_backoff)
 					radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
 
 	zassert_equal(RADIANT_SEARCH_OK, win_open());
-	zassert_equal(target, g_w.set_index, "the first window must be the steer");
+	zassert_equal(target, g_w.set_index);
 	zassert_true(g_w.from_cache);
 	win_run();
 
@@ -1420,16 +1372,13 @@ ZTEST(radiant_search, test_a_named_search_revisits_its_set_with_backoff)
 	n_gaps = revisit_gaps(target, (uint32_t)n_sets + ARRAY_SIZE(expect), gaps,
 			      ARRAY_SIZE(gaps), seen);
 	for (uint16_t k = 0u; k < n_sets; k++) {
-		zassert_true(seen[k], "set %u not covered within one sweep plus the "
-			     "revisits", k);
+		zassert_true(seen[k], "set %u uncovered", k);
 	}
 
-	zassert_true(n_gaps >= ARRAY_SIZE(expect),
-		     "%u revisits of set %u in a sweep; a named search steered "
-		     "once and then waited for the round robin", n_gaps, target);
+	zassert_true(n_gaps >= ARRAY_SIZE(expect), "%u revisits of set %u", n_gaps, target);
 	for (uint32_t i = 0u; i < ARRAY_SIZE(expect); i++) {
 		zassert_equal(expect[i], gaps[i],
-			      "revisit %u came after %u round-robin sets, expected %u",
+			      "revisit %u: %u sets, want %u",
 			      i, gaps[i], expect[i]);
 	}
 
@@ -1466,9 +1415,7 @@ ZTEST(radiant_search, test_a_named_search_that_misses_its_first_dwell_still_reac
 	}
 
 	zassert_equal(1u, g_cap.n_acquired);
-	zassert_true(windows <= 4u,
-		     "reacquired after %u windows; one lost packet on the steer "
-		     "should cost a revisit, not a sweep", windows);
+	zassert_true(windows <= 4u, "reacquired after %u windows", windows);
 
 	fake_radio_air_clear();
 	end_of_test();
@@ -1497,8 +1444,7 @@ ZTEST(radiant_search, test_a_seen_cache_search_also_revisits)
 	win_run();
 
 	n_gaps = revisit_gaps(target, 12u, gaps, ARRAY_SIZE(gaps), NULL);
-	zassert_true(n_gaps >= ARRAY_SIZE(expect),
-		     "%u revisits for a seen-cache search", n_gaps);
+	zassert_true(n_gaps >= ARRAY_SIZE(expect), "%u revisits", n_gaps);
 	for (uint32_t i = 0u; i < ARRAY_SIZE(expect); i++) {
 		zassert_equal(expect[i], gaps[i], "revisit %u after %u sets", i, gaps[i]);
 	}
@@ -1534,14 +1480,12 @@ ZTEST(radiant_search, test_revisits_stop_when_the_search_ends)
 	for (uint16_t i = 0u; i < n_sets; i++) {
 		zassert_equal(RADIANT_SEARCH_OK, win_open());
 		if (g_w.set_index == target) {
-			zassert_false(g_w.from_cache, "set %u was still steered after "
-				      "its channel left the search", target);
+			zassert_false(g_w.from_cache, "set %u steered", target);
 			visits++;
 		}
 		win_run();
 	}
-	zassert_equal(1u, visits, "one sweep should visit set %u exactly once",
-		      target);
+	zassert_equal(1u, visits, "visits to set %u", target);
 
 	zassert_ok(radiant_search_end(&g_s, 1u));
 	end_of_test();
@@ -1580,7 +1524,7 @@ ZTEST(radiant_search, test_seen_cache_expires_at_sixty_seconds)
 	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE, &want_pwr,
 				    radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
 	zassert_equal(RADIANT_SEARCH_OK, win_open());
-	zassert_false(g_w.from_cache, "a stale entry must not steer the sweep");
+	zassert_false(g_w.from_cache);
 	zassert_equal(0u, g_w.set_index);
 	win_run();
 
@@ -1602,8 +1546,7 @@ ZTEST(radiant_search, test_seen_cache_refreshes_in_place)
 	for (uint32_t i = 0; i < 64u; i++) {
 		radiant_search_seen_note(&g_s, &a, t + i * 1000u);
 	}
-	zassert_equal(2u, radiant_search_seen_count(&g_s, t + 64000u),
-		      "a chatty sensor must refresh its entry, not fill the ring");
+	zassert_equal(2u, radiant_search_seen_count(&g_s, t + 64000u));
 
 	end_of_test();
 }
@@ -1645,17 +1588,12 @@ ZTEST(radiant_search, test_a_refused_device_keeps_the_channel_searching_and_pass
 	zassert_ok(fake_radio_air_frame(g_w.t_open + 1000u, f_pinned, n_pinned));
 	win_run();
 
-	zassert_equal(1u, g_cap.n_acquired,
-		      "the device must still be acquired, by the channel that wants it");
-	zassert_equal(1u, g_cap.chan[0],
-		      "a refusal spent the frame's one ACQUIRE claim, so channel 1 "
-		      "lost a device it would have taken");
+	zassert_equal(1u, g_cap.n_acquired);
+	zassert_equal(1u, g_cap.chan[0]);
 	zassert_equal(0x0703u, g_cap.res[0].id.device_number);
-	zassert_true(radiant_search_is_searching(&g_s, 0u),
-		     "the refusing channel dropped out of the search - its next "
-		     "begin() steers straight back to the device it refused");
+	zassert_true(radiant_search_is_searching(&g_s, 0u));
 	zassert_false(radiant_search_is_searching(&g_s, 1u));
-	zassert_true(g_permit.n_denied >= 1u, "permit was never asked");
+	zassert_true(g_permit.n_denied >= 1u);
 
 	st = radiant_search_get_stats(&g_s);
 	zassert_equal(1u, st->permit_rejected);
@@ -1702,7 +1640,7 @@ ZTEST(radiant_search, test_a_scan_channel_is_not_offered_a_refused_device)
 	zassert_ok(fake_radio_air_frame(g_w.t_open + 90000u, f_a, n_a));
 	win_run();
 
-	zassert_equal(1u, g_cap.n_acquired, "only the permitted device is reported");
+	zassert_equal(1u, g_cap.n_acquired);
 	zassert_equal(0x0B05u, g_cap.res[0].id.device_number);
 	zassert_true(radiant_search_is_searching(&g_s, 0u));
 
@@ -1710,8 +1648,7 @@ ZTEST(radiant_search, test_a_scan_channel_is_not_offered_a_refused_device)
 	zassert_equal(3u, st->frames_ok);
 	zassert_equal(1u, st->scan_reports);
 	zassert_equal(2u, st->permit_rejected);
-	zassert_equal(2u, radiant_search_seen_count(&g_s, radiant_radio_now()),
-		      "a refused device must still reach the shared seen cache");
+	zassert_equal(2u, radiant_search_seen_count(&g_s, radiant_radio_now()));
 
 	zassert_ok(radiant_search_end(&g_s, 0u));
 	end_of_test();
@@ -1735,13 +1672,11 @@ ZTEST(radiant_search, test_begin_does_not_steer_to_a_refused_cached_device)
 
 	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE, &want_pwr,
 					radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
-	zassert_true(g_permit.n_denied >= 1u, "begin() never asked permit");
+	zassert_true(g_permit.n_denied >= 1u);
 
 	zassert_equal(RADIANT_SEARCH_OK, win_open());
-	zassert_false(g_w.from_cache,
-		      "the sweep was steered to set %u, which holds only a device "
-		      "this channel refuses", target);
-	zassert_equal(0u, g_w.set_index, "the round robin should simply start");
+	zassert_false(g_w.from_cache);
+	zassert_equal(0u, g_w.set_index);
 	win_run();
 
 	/* The public lookup is unfiltered and unchanged. */
@@ -1773,8 +1708,7 @@ ZTEST(radiant_search, test_begin_steers_to_the_newest_permitted_cached_device)
 
 	bring_up_with(false, &search_cbs_permit);
 	older_set = radiant_search_set_for_devnum(&g_s, older.device_number);
-	zassert_not_equal(older_set, radiant_search_set_for_devnum(&g_s, pinned.device_number),
-			  "the two devices must be in different sets to tell them apart");
+	zassert_not_equal(older_set, radiant_search_set_for_devnum(&g_s, pinned.device_number));
 
 	radiant_search_seen_note(&g_s, &older, radiant_radio_now());
 	fake_radio_advance(1000u);
@@ -1789,10 +1723,8 @@ ZTEST(radiant_search, test_begin_steers_to_the_newest_permitted_cached_device)
 	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE, &want_pwr,
 					radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
 	zassert_equal(RADIANT_SEARCH_OK, win_open());
-	zassert_true(g_w.from_cache, "a permitted cached device was there to steer to");
-	zassert_equal(older_set, g_w.set_index,
-		      "steered to set %u, not the permitted device's set %u",
-		      g_w.set_index, older_set);
+	zassert_true(g_w.from_cache);
+	zassert_equal(older_set, g_w.set_index, "set %u, want %u", g_w.set_index, older_set);
 	win_run();
 
 	zassert_ok(radiant_search_end(&g_s, 0u));
@@ -1864,10 +1796,8 @@ ZTEST(radiant_search, test_scan_mode_reports_every_frame_and_never_leaves)
 	zassert_ok(fake_radio_air_frame(g_w.t_open + 90000u, f_a, n_a));
 	win_run();
 
-	zassert_equal(3u, g_cap.n_acquired,
-		      "scan mode reports every matching frame, not the first");
-	zassert_true(radiant_search_is_searching(&g_s, 0u),
-		     "a scanning channel never leaves the search");
+	zassert_equal(3u, g_cap.n_acquired);
+	zassert_true(radiant_search_is_searching(&g_s, 0u));
 
 	st = radiant_search_get_stats(&g_s);
 	zassert_equal(3u, st->scan_reports);
@@ -1935,14 +1865,12 @@ ZTEST(radiant_search, test_truncated_windows_do_not_skip_a_set)
 	for (uint32_t i = 0; i < 4u; i++) {
 		zassert_equal(RADIANT_SEARCH_OK,
 			      win_open_truncated(RADIANT_SEARCH_DWELL_DEFAULT_US / 4u));
-		zassert_equal(0u, g_w.set_index,
-			      "window %u advanced the sweep on a short dwell", i);
+		zassert_equal(0u, g_w.set_index, "window %u", i);
 		win_run();
 	}
 
 	st = radiant_search_get_stats(&g_s);
-	zassert_equal(1u, st->sets_advanced,
-		      "four quarter windows are one dwell, not four sets");
+	zassert_equal(1u, st->sets_advanced);
 
 	/* The dwell is now fully credited, so the fifth window moves on. */
 	zassert_equal(RADIANT_SEARCH_OK, win_open());
@@ -1984,21 +1912,14 @@ ZTEST(radiant_search, test_a_sliver_of_remaining_dwell_finishes_the_set)
 	win_run();
 
 	owed = radiant_search_dwell_remaining(&g_s);
-	zassert_equal(0u, owed,
-		      "a %u us residue was offered as the next chunk's ceiling; "
-		      "too short to hear a 250 ms master and, once refused, "
-		      "never repaid", owed);
-	zassert_true(radiant_search_set_complete(&g_s),
-		     "the set is not finished but has nothing arm-worthy left - "
-		     "this is the state that pins the sweep on one set for ever");
+	zassert_equal(0u, owed, "residue %u us", owed);
+	zassert_true(radiant_search_set_complete(&g_s));
 
 	/* And the proof that it is not merely cosmetic: the sweep moves on, and
 	 * the fresh set restores a full-length chunk ceiling. */
 	zassert_equal(RADIANT_SEARCH_OK, win_open());
-	zassert_equal(1u, g_w.set_index, "the sweep did not advance");
-	zassert_equal(RADIANT_SEARCH_DWELL_DEFAULT_US,
-		      radiant_search_dwell_remaining(&g_s),
-		      "a fresh set must restore the full dwell ceiling");
+	zassert_equal(1u, g_w.set_index);
+	zassert_equal(RADIANT_SEARCH_DWELL_DEFAULT_US, radiant_search_dwell_remaining(&g_s));
 	win_run();
 
 	zassert_ok(radiant_search_end(&g_s, 0u));
@@ -2018,7 +1939,7 @@ ZTEST(radiant_search, test_aborted_window_credits_nothing)
 	zassert_ok(radiant_radio_abort());
 
 	zassert_equal(RADIANT_SEARCH_OK, win_open());
-	zassert_equal(0u, g_w.set_index, "an aborted window must not advance the sweep");
+	zassert_equal(0u, g_w.set_index);
 	win_run();
 
 	zassert_ok(radiant_search_end(&g_s, 0u));
@@ -2137,7 +2058,7 @@ ZTEST(radiant_search, test_late_event_never_acquires)
 	air.len = len;
 	zassert_ok(fake_radio_inject_late_rx(dead_op, &air, 3u));
 
-	zassert_equal(0u, g_cap.n_acquired, "a late event must not acquire");
+	zassert_equal(0u, g_cap.n_acquired);
 	zassert_equal(1u, radiant_search_get_stats(&g_s)->late_events);
 
 	zassert_ok(radiant_search_end(&g_s, 0u));
@@ -2235,8 +2156,7 @@ ZTEST(radiant_search, test_coverage_a_whole_dwell_leaves_nothing_uncovered)
 	coverage_begin();
 
 	coverage_chunk(COV_T0, RADIANT_SEARCH_DWELL_DEFAULT_US);
-	zassert_equal(COV_FULL, g_s.phase_mask,
-		      "260 ms of listening spans every phase of a 246 ms period");
+	zassert_equal(COV_FULL, g_s.phase_mask);
 
 	coverage_advance();
 	zassert_equal(0u, coverage_uncovered());
@@ -2261,18 +2181,14 @@ ZTEST(radiant_search, test_coverage_phase_locked_chunks_leave_a_hole_and_are_cou
 	coverage_chunk(COV_T0 + 144000u, 77000u);
 	coverage_chunk(COV_T0 + COV_P + 25000u, 94000u);
 
-	zassert_true(radiant_search_set_complete(&g_s),
-		     "265 ms of credit is more than one dwell");
-	zassert_equal(0u, g_s.phase_mask & (uint32_t)BIT_MASK(3),
-		      "the band after the tracked slot was never listened to");
+	zassert_true(radiant_search_set_complete(&g_s));
+	zassert_equal(0u, g_s.phase_mask & (uint32_t)BIT_MASK(3));
 	zassert_not_equal(COV_FULL, g_s.phase_mask);
-	zassert_equal(0u, coverage_uncovered(), "only counted when the set closes");
+	zassert_equal(0u, coverage_uncovered());
 
 	coverage_advance();
-	zassert_equal(1u, coverage_uncovered(),
-		      "a set that advanced with a hole was not counted");
-	zassert_equal(2u, radiant_search_get_stats(&g_s)->sets_advanced,
-		      "coverage must never change when a set advances");
+	zassert_equal(1u, coverage_uncovered());
+	zassert_equal(2u, radiant_search_get_stats(&g_s)->sets_advanced);
 	radiant_search_on_done(&g_s, false, false, 0u);
 	end_of_test();
 }
@@ -2292,10 +2208,8 @@ ZTEST(radiant_search, test_coverage_a_reclaimed_chunk_marks_no_phase)
 	radiant_search_on_done(&g_s, false, true,
 			       COV_T0 + len + RADIANT_SCHED_ARMED_STALE_US + 1u);
 
-	zassert_equal(0u, g_s.phase_mask, "a reclaimed chunk marked a phase");
-	zassert_equal(RADIANT_SEARCH_DWELL_DEFAULT_US,
-		      radiant_search_dwell_remaining(&g_s),
-		      "the reclaimed chunk was credited");
+	zassert_equal(0u, g_s.phase_mask);
+	zassert_equal(RADIANT_SEARCH_DWELL_DEFAULT_US, radiant_search_dwell_remaining(&g_s));
 	end_of_test();
 }
 
@@ -2313,7 +2227,7 @@ ZTEST(radiant_search, test_coverage_a_chunk_across_the_phase_wrap_marks_both_end
 	radiant_search_on_done(&g_s, true, true, open + 10000u);
 
 	zassert_equal((uint32_t)BIT(31) | (uint32_t)BIT(0), g_s.phase_mask,
-		      "wrap bins: 0x%08x", g_s.phase_mask);
+		      "0x%08x", g_s.phase_mask);
 	end_of_test();
 }
 
@@ -2354,18 +2268,16 @@ ZTEST(radiant_search, test_a_reclaimed_chunk_credits_no_dwell)
 	radiant_search_on_done(&g_s, false, true,
 			       t0 + len + RADIANT_SCHED_ARMED_STALE_US + 1u);
 
-	zassert_equal(0u, g_s.set_dwell_us, "the reclaimed chunk was credited %u us",
-		      g_s.set_dwell_us);
+	zassert_equal(0u, g_s.set_dwell_us, "%u us", g_s.set_dwell_us);
 	zassert_equal(1u, radiant_search_get_stats(&g_s)->reclaimed_chunks);
-	zassert_false(radiant_search_owns_op(&g_s, RADIANT_SEARCH_OP_EXTERNAL),
-		      "the chunk is finished all the same");
+	zassert_false(radiant_search_owns_op(&g_s, RADIANT_SEARCH_OP_EXTERNAL));
 
 	/* Control: an ordinary abort, reported at the cut, is still credited. */
 	zassert_ok(radiant_search_window(&g_s, t0 + 200000u, &w));
 	radiant_search_armed(&g_s, RADIANT_SEARCH_OP_EXTERNAL, t0 + 200000u,
 			     t0 + 200000u + len);
 	radiant_search_on_done(&g_s, false, true, t0 + 200000u + 20000u);
-	zassert_equal(20000u, g_s.set_dwell_us, "an ordinary abort lost its credit");
+	zassert_equal(20000u, g_s.set_dwell_us);
 	zassert_equal(1u, radiant_search_get_stats(&g_s)->reclaimed_chunks);
 
 	/* Control: a terminal a little past the close (lag, not a reclaim) is

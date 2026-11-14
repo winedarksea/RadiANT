@@ -53,29 +53,24 @@ ZTEST(lr, test_the_format_is_the_one_the_adr_describes)
 	const struct radiant_pkt_format *f =
 		radiant_frame_format(RADIANT_FRAME_CFG_LR);
 
-	zassert_not_null(f, "the long-range configuration has no format");
+	zassert_not_null(f);
 
-	zassert_equal(RADIANT_PHY_LR_CODED, f->phy,
-		      "the long-range format is not on the coded PHY");
+	zassert_equal(RADIANT_PHY_LR_CODED, f->phy);
 	/* Four, not five. The coded PHY's access address is a fixed 32 bits, so
 	 * this is the hardware's number rather than a preference - and it is one
 	 * more than search's three, which is where the false-trigger argument
 	 * comes from. */
-	zassert_equal(4, f->addr_len, "the long-range address is not 4 bytes");
-	zassert_equal(RADIANT_LEN_FROM_BODY, f->len_mode,
-		      "the long-range format is not length-from-body");
-	zassert_equal(0, f->len_offset, "the length byte moved off body[0]");
-	zassert_equal(1, f->len_bias,
-		      "the length no longer counts everything after itself");
-	zassert_equal(40, f->max_body_len,
-		      "the long-range body ceiling is not 40");
+	zassert_equal(4, f->addr_len);
+	zassert_equal(RADIANT_LEN_FROM_BODY, f->len_mode);
+	zassert_equal(0, f->len_offset);
+	zassert_equal(1, f->len_bias);
+	zassert_equal(40, f->max_body_len);
 
 	/* The buffer ceiling was raised FROM 32 for this and for nothing else.
 	 * If it ever drops back, the backend's DMA buffers are too small for the
 	 * longest frame this project can build, and the symptom is a truncation
 	 * the CRC turns into ordinary packet loss. */
-	zassert_true(f->max_body_len <= RADIANT_RADIO_BODY_MAX,
-		     "the long-range body no longer fits the HAL ceiling");
+	zassert_true(f->max_body_len <= RADIANT_RADIO_BODY_MAX);
 
 	/* The two ANT formats did not move. This is the whole compatibility
 	 * claim of the phase, asserted rather than assumed. */
@@ -84,11 +79,8 @@ ZTEST(lr, test_the_format_is_the_one_the_adr_describes)
 	zassert_equal(RADIANT_PHY_1M_GFSK,
 		      radiant_frame_format(RADIANT_FRAME_CFG_SEARCH)->phy, NULL);
 	zassert_equal(RADIANT_LEN_FIXED,
-		      radiant_frame_format(RADIANT_FRAME_CFG_TRACKING)->len_mode,
-		      "the ANT tracking format acquired a length field");
-	zassert_equal(RADIANT_LEN_FIXED,
-		      radiant_frame_format(RADIANT_FRAME_CFG_SEARCH)->len_mode,
-		      "the ANT search format acquired a length field");
+		      radiant_frame_format(RADIANT_FRAME_CFG_TRACKING)->len_mode);
+	zassert_equal(RADIANT_LEN_FIXED, radiant_frame_format(RADIANT_FRAME_CFG_SEARCH)->len_mode);
 }
 
 ZTEST(lr, test_the_address_is_a_whole_device_number)
@@ -103,21 +95,20 @@ ZTEST(lr, test_the_address_is_a_whole_device_number)
 
 	rc = radiant_frame_addr(RADIANT_FRAME_CFG_LR, radiant_net_addr_ant_plus,
 				&id, addr, sizeof(addr));
-	zassert_equal(4, rc, "the long-range address is not 4 bytes");
+	zassert_equal(4, rc);
 
 	zassert_equal(0xA6u, addr[0], NULL);
 	zassert_equal(0xC5u, addr[1], NULL);
 	/* Low byte first, exactly as the two ANT configurations do it. */
-	zassert_equal(0xEFu, addr[2], "devnum_lo is not the third byte");
-	zassert_equal(0xBEu, addr[3], "devnum_hi is not the fourth byte");
+	zassert_equal(0xEFu, addr[2]);
+	zassert_equal(0xBEu, addr[3]);
 
 	/*
 	 * THE DEVICE TYPE IS NOT IN THE ADDRESS, which is the difference from
 	 * tracking and the reason it is in the body. A test that only checked
 	 * the length would pass with the device type written over devnum_hi.
 	 */
-	zassert_equal(5, radiant_frame_addr_len(RADIANT_FRAME_CFG_TRACKING),
-		      "tracking's address changed");
+	zassert_equal(5, radiant_frame_addr_len(RADIANT_FRAME_CFG_TRACKING));
 }
 
 ZTEST(lr, test_the_airtime_reproduces_the_fec_block_table)
@@ -127,9 +118,7 @@ ZTEST(lr, test_the_airtime_reproduces_the_fec_block_table)
 	 *   (preamble 1 + address 5 + body 10 + CRC 2) * 8 us = 144 us
 	 * The ADR's table says ~150 us, which is this rounded.
 	 */
-	zassert_equal(144u,
-		      radiant_frame_airtime_us(RADIANT_FRAME_CFG_TRACKING, 8u),
-		      "the 1 M airtime is not preamble + address + body + CRC");
+	zassert_equal(144u, radiant_frame_airtime_us(RADIANT_FRAME_CFG_TRACKING, 8u));
 
 	/*
 	 * S=8, eight-byte payload: FEC block1 376us + body(12)+CRC(2)=14 bytes
@@ -137,8 +126,7 @@ ZTEST(lr, test_the_airtime_reproduces_the_fec_block_table)
 	 * three-byte header; this format's fourth byte is the length byte the
 	 * extension needs, accounting for the 64us difference.
 	 */
-	zassert_equal(1296u, radiant_frame_airtime_us(RADIANT_FRAME_CFG_LR, 8u),
-		      "the S=8 airtime does not match the FEC-block arithmetic");
+	zassert_equal(1296u, radiant_frame_airtime_us(RADIANT_FRAME_CFG_LR, 8u));
 
 	/* Every payload byte is 64 us and they compound - the sentence the duty
 	 * bound exists because of. */
@@ -149,8 +137,7 @@ ZTEST(lr, test_the_airtime_reproduces_the_fec_block_table)
 	 * 376 + 42*64 + 24 = 3088 us. */
 	zassert_equal(3088u,
 		      radiant_frame_airtime_us(RADIANT_FRAME_CFG_LR,
-					       RADIANT_FRAME_PAYLOAD_LR_MAX),
-		      "the longest long-range frame is not ~3.1 ms");
+					       RADIANT_FRAME_PAYLOAD_LR_MAX));
 
 	/* A payload the format cannot carry is 0, not a plausible number. */
 	zassert_equal(0u,
@@ -184,21 +171,19 @@ ZTEST(lr, test_the_body_round_trips_and_states_its_own_length)
 
 	rc = radiant_frame_lr_body(&id, RADIANT_CTRL_BROADCAST, payload,
 				   sizeof(payload), body, sizeof(body));
-	zassert_equal(4 + (int)sizeof(payload), rc,
-		      "the body is not header plus payload");
+	zassert_equal(4 + (int)sizeof(payload), rc);
 
 	/* The length byte counts everything after itself, which is the RADIO's
 	 * own convention and is what makes len_bias 1. */
-	zassert_equal((uint8_t)(rc - 1), body[0],
-		      "the length byte does not count everything after itself");
-	zassert_equal(0x60u, body[1], "the device type is not in the body");
+	zassert_equal((uint8_t)(rc - 1), body[0]);
+	zassert_equal(0x60u, body[1]);
 	zassert_equal(0x05u, body[2], NULL);
 	zassert_equal(RADIANT_CTRL_BROADCAST, body[3], NULL);
 
 	memset(&got, 0, sizeof(got));
 	rc = radiant_frame_lr_parse(body, (uint8_t)(4 + sizeof(payload)), &got,
 				    &ctrl, &pl, &pl_len);
-	zassert_equal(RADIANT_FRAME_OK, rc, "a well formed body did not parse");
+	zassert_equal(RADIANT_FRAME_OK, rc);
 	zassert_equal(0x60u, got.device_type, NULL);
 	zassert_equal(0x05u, got.trans_type, NULL);
 	zassert_equal(RADIANT_CTRL_BROADCAST, ctrl, NULL);
@@ -207,8 +192,7 @@ ZTEST(lr, test_the_body_round_trips_and_states_its_own_length)
 
 	/* The device number is not in the body - it's in the on-air address,
 	 * consumed by the matcher, same as devnum_lo in search. */
-	zassert_equal(0u, got.device_number,
-		      "the parser invented a device number");
+	zassert_equal(0u, got.device_number);
 }
 
 ZTEST(lr, test_a_length_that_disagrees_with_the_frame_is_refused)
@@ -221,25 +205,22 @@ ZTEST(lr, test_a_length_that_disagrees_with_the_frame_is_refused)
 
 	rc = radiant_frame_lr_body(&id, RADIANT_CTRL_BROADCAST, NULL, 0u, body,
 				   sizeof(body));
-	zassert_equal(4, rc, "a payload-free body is not just the header");
+	zassert_equal(4, rc);
 
 	/* Checked explicitly rather than left to the CRC: the CRC covers the
 	 * length byte, but "the CRC would have caught it" is only probabilistic
 	 * - the residual case is a read past the end of a backend's DMA buffer. */
 	body[0] = 30u; /* claims 31 body bytes; 4 were delivered */
 	zassert_equal(RADIANT_FRAME_ETRUNC,
-		      radiant_frame_lr_parse(body, 4u, NULL, NULL, NULL, NULL),
-		      "a length byte longer than the frame was believed");
+		      radiant_frame_lr_parse(body, 4u, NULL, NULL, NULL, NULL));
 
 	body[0] = 1u; /* claims 2; 4 delivered */
 	zassert_equal(RADIANT_FRAME_ETRUNC,
-		      radiant_frame_lr_parse(body, 4u, NULL, NULL, NULL, NULL),
-		      "a length byte shorter than the frame was believed");
+		      radiant_frame_lr_parse(body, 4u, NULL, NULL, NULL, NULL));
 
 	/* Shorter than the header cannot be a frame at all. */
 	zassert_equal(RADIANT_FRAME_ETRUNC,
-		      radiant_frame_lr_parse(body, 3u, NULL, NULL, NULL, NULL),
-		      NULL);
+		      radiant_frame_lr_parse(body, 3u, NULL, NULL, NULL, NULL));
 
 	/* An over-long payload is refused at composition, not truncated. */
 	{
@@ -248,8 +229,7 @@ ZTEST(lr, test_a_length_that_disagrees_with_the_frame_is_refused)
 		zassert_equal(RADIANT_FRAME_EINVAL,
 			      radiant_frame_lr_body(&id, RADIANT_CTRL_BROADCAST,
 						    big, sizeof(big), body,
-						    sizeof(body)),
-			      "an over-long payload was accepted");
+						    sizeof(body)));
 	}
 }
 
@@ -274,20 +254,16 @@ ZTEST(lr, test_the_ant_encoders_refuse_the_long_range_configuration)
 	 * belongs. No shared path exists on purpose. */
 	zassert_equal(RADIANT_FRAME_EINVAL,
 		      radiant_frame_encode(RADIANT_FRAME_CFG_LR,
-					   radiant_net_addr_ant_plus, &f, &w),
-		      "the ANT encoder accepted the long-range configuration");
+					   radiant_net_addr_ant_plus, &f, &w));
 
 	memset(&w, 0, sizeof(w));
 	w.addr_len = 4u;
 	w.body_len = 12u;
-	zassert_equal(RADIANT_FRAME_EINVAL,
-		      radiant_frame_decode(RADIANT_FRAME_CFG_LR, &w, 0u, &f),
-		      "the ANT decoder accepted the long-range configuration");
+	zassert_equal(RADIANT_FRAME_EINVAL, radiant_frame_decode(RADIANT_FRAME_CFG_LR, &w, 0u, &f));
 
 	zassert_equal(RADIANT_FRAME_EINVAL,
 		      radiant_frame_from_bytes(RADIANT_FRAME_CFG_LR, buf,
-					       sizeof(buf), &w),
-		      "the flat form accepted the long-range configuration");
+					       sizeof(buf), &w));
 }
 
 /* ---------------------------------------------------------------------------
@@ -323,12 +299,9 @@ ZTEST(lr, test_discovery_stays_on_one_megabit)
 	/* An LR node is found via its 1M descriptor or a sync handoff, never by
 	 * sweeping the coded PHY: a second swept PHY would double the sweep,
 	 * and "certain within one sweep" would quietly become "two". */
-	zassert_equal(RADIANT_PHY_1M_GFSK, win.fmt->phy,
-		      "the search sweep moved to the coded PHY");
-	zassert_equal(radiant_frame_format(RADIANT_FRAME_CFG_SEARCH), win.fmt,
-		      "the search sweep is not using the search format");
-	zassert_equal(RADIANT_RF_INDEX_ANT_PLUS, win.rf_index,
-		      "the search sweep moved off RF 57");
+	zassert_equal(RADIANT_PHY_1M_GFSK, win.fmt->phy);
+	zassert_equal(radiant_frame_format(RADIANT_FRAME_CFG_SEARCH), win.fmt);
+	zassert_equal(RADIANT_RF_INDEX_ANT_PLUS, win.rf_index);
 
 	/* And the sweep length is unchanged: 8 filters, 32 sets. */
 	zassert_equal(8u, radiant_search_filters_per_window(&s), NULL);
@@ -396,8 +369,7 @@ ZTEST(lr, test_a_window_inside_the_phy_switch_is_missed_not_skipped)
 	fake_radio_caps_preset_rail();
 	fake_radio_set_phys(fake_phys_1m_lr, fake_phys_1m_lr_count);
 	lead = fake_radio_caps_mut()->min_arm_lead_us;
-	zassert_true(fake_radio_caps_mut()->phy_switch_us > 100u,
-		     "this test needs a backend that pays for a switch");
+	zassert_true(fake_radio_caps_mut()->phy_switch_us > 100u);
 
 	zassert_ok(radiant_sched_init(NULL, NULL));
 	zassert_ok(radiant_radio_init(radiant_sched_radio_cbs(), NULL));
@@ -445,13 +417,10 @@ ZTEST(lr, test_a_window_inside_the_phy_switch_is_missed_not_skipped)
 
 	radiant_sched_tick();
 
-	zassert_equal(missed0 + 1u, radiant_sched_stats_get()->missed,
-		      "the window inside the PHY switch was not reported MISSED");
+	zassert_equal(missed0 + 1u, radiant_sched_stats_get()->missed);
 	rec = fake_radio_last_arm();
 	zassert_not_null(rec, NULL);
-	zassert_equal(n + 20000u, rec->t_open,
-		      "the pass ended idle instead of arming the next window "
-		      "(last arm opened at %u)", (unsigned)(rec->t_open - n));
+	zassert_equal(n + 20000u, rec->t_open, "last arm %u", (unsigned)(rec->t_open - n));
 	zassert_equal(RADIANT_PHY_LR_CODED, rec->fmt.phy, NULL);
 
 	(void)radiant_sched_cancel(0u);
@@ -478,8 +447,7 @@ ZTEST(lr, test_a_change_of_phy_is_budgeted_and_a_repeat_is_not)
 	fake_radio_set_phys(fake_phys_1m_lr, fake_phys_1m_lr_count);
 	lead = fake_radio_caps_mut()->min_arm_lead_us;
 	switch_us = fake_radio_caps_mut()->phy_switch_us;
-	zassert_true(switch_us > 0u,
-		     "this test needs a backend that pays for a switch");
+	zassert_true(switch_us > 0u);
 
 	zassert_ok(radiant_sched_init(NULL, NULL));
 	zassert_ok(radiant_radio_init(radiant_sched_radio_cbs(), NULL));
@@ -515,7 +483,7 @@ ZTEST(lr, test_a_change_of_phy_is_budgeted_and_a_repeat_is_not)
 	radiant_sched_tick();
 
 	rec = fake_radio_last_arm();
-	zassert_not_null(rec, "no receive window was armed");
+	zassert_not_null(rec);
 	zassert_equal(FAKE_RADIO_ARM_RX, rec->kind, NULL);
 	open_same = rec->t_open - rec->t_arm;
 	fake_radio_advance(200000u);
@@ -534,25 +502,21 @@ ZTEST(lr, test_a_change_of_phy_is_budgeted_and_a_repeat_is_not)
 	radiant_sched_tick();
 
 	rec = fake_radio_last_arm();
-	zassert_not_null(rec, "no coded window was armed");
+	zassert_not_null(rec);
 	zassert_equal(FAKE_RADIO_ARM_RX, rec->kind, NULL);
-	zassert_equal(RADIANT_PHY_LR_CODED, rec->fmt.phy,
-		      "the coded window was not armed on the coded PHY");
+	zassert_equal(RADIANT_PHY_LR_CODED, rec->fmt.phy);
 	open_switch = rec->t_open - rec->t_arm;
 
 	/* The assertion the field exists for: a window on a PHY the radio isn't
 	 * already configured for opens later by exactly phy_switch_us. Before
 	 * this phase the difference was zero - nothing read the field. */
 	zassert_equal(open_same + switch_us, open_switch,
-		      "a change of PHY was not budgeted: same %u, switched %u, "
-		      "lead %u, switch %u",
+		      "same %u switched %u lead %u switch %u",
 		      (unsigned int)open_same, (unsigned int)open_switch,
 		      lead, switch_us);
 
 	st = radiant_sched_stats_get();
-	zassert_true(st->phy_switches >= 2u,
-		     "the PHY switch was not counted (%u)",
-		     st->phy_switches);
+	zassert_true(st->phy_switches >= 2u, "switches %u", st->phy_switches);
 }
 
 /* ---------------------------------------------------------------------------
@@ -565,10 +529,8 @@ ZTEST(lr, test_the_duty_bound_refuses_at_the_boundary)
 	/* The vocabulary this phase inherits rather than redefines. */
 	zassert_equal(125u, profile_sched_coding_kbps(PROFILE_SCHED_CODING_S8),
 		      NULL);
-	zassert_true(profile_sched_coding_implemented(PROFILE_SCHED_CODING_S8),
-		     "S=8 is the rate this phase makes real and it is refused");
-	zassert_false(profile_sched_coding_implemented(PROFILE_SCHED_CODING_S2),
-		      "S=2 became implemented without a decision");
+	zassert_true(profile_sched_coding_implemented(PROFILE_SCHED_CODING_S8));
+	zassert_false(profile_sched_coding_implemented(PROFILE_SCHED_CODING_S2));
 
 	/* Frame airtime through the profile layer is the frame layer's, which
 	 * is the point of the delegation. */
@@ -590,19 +552,12 @@ ZTEST(lr, test_the_duty_bound_refuses_at_the_boundary)
 	 *   405 counts = 12359 us -> fits
 	 *   404 counts = 12329 us -> does not
 	 */
-	zassert_equal(0, profile_sched_duty_check(PROFILE_SCHED_CODING_S8, 405u,
-						  40u),
-		      "a frame at 24.98 %% of its period was refused");
-	zassert_equal(-EINVAL,
-		      profile_sched_duty_check(PROFILE_SCHED_CODING_S8, 404u,
-					       40u),
-		      "a frame over 25 %% of its period was accepted");
+	zassert_equal(0, profile_sched_duty_check(PROFILE_SCHED_CODING_S8, 405u, 40u));
+	zassert_equal(-EINVAL, profile_sched_duty_check(PROFILE_SCHED_CODING_S8, 404u, 40u));
 
 	/* The bound binds only where BOTH factors are present. At 4 Hz - the
 	 * ordinary case - a full-length coded frame is 1.2 % and passes. */
-	zassert_equal(0, profile_sched_duty_check(PROFILE_SCHED_CODING_S8, 8192u,
-						  40u),
-		      "a 40-byte frame at 4 Hz was refused");
+	zassert_equal(0, profile_sched_duty_check(PROFILE_SCHED_CODING_S8, 8192u, 40u));
 	/* And an eight-byte 1 M frame is never anywhere near it. */
 	zassert_equal(0, profile_sched_duty_check(PROFILE_SCHED_CODING_NONE,
 						  8192u, 10u),
@@ -611,9 +566,7 @@ ZTEST(lr, test_the_duty_bound_refuses_at_the_boundary)
 	/* A sparse node has no period, so the rule is skipped rather than
 	 * applied to zero (same as the drift bound with no announced clock) -
 	 * treating 0 as infinitely fast would refuse every asset tag. */
-	zassert_equal(0, profile_sched_duty_check(PROFILE_SCHED_CODING_S8, 0u,
-						  40u),
-		      "an asynchronous node was held to a period it has not got");
+	zassert_equal(0, profile_sched_duty_check(PROFILE_SCHED_CODING_S8, 0u, 40u));
 
 	/* A body the format cannot carry is an error, not a duty verdict. */
 	zassert_equal(-EINVAL,
@@ -669,7 +622,7 @@ ZTEST(lr, test_the_collapse_round_trips_through_the_unchanged_accumulator)
 	build_lr_descriptor(&d, 2u);
 
 	n_frames = profile_desc_encode(&d, frames, PROFILE_TLM_MAX_FRAMES);
-	zassert_equal(5, n_frames, "the set is not five frames");
+	zassert_equal(5, n_frames);
 
 	/* Four whole 8-byte frames fit in a 36-byte payload; five frames
 	 * therefore take two transmissions rather than five. */
@@ -677,7 +630,7 @@ ZTEST(lr, test_the_collapse_round_trips_through_the_unchanged_accumulator)
 		      profile_desc_frames_per_body(RADIANT_FRAME_PAYLOAD_LR_MAX),
 		      NULL);
 	bodies = profile_desc_long_count(&d, RADIANT_FRAME_PAYLOAD_LR_MAX);
-	zassert_equal(2, bodies, "five frames did not collapse into two wakes");
+	zassert_equal(2, bodies);
 
 	/* Makes the collapse invisible to a receiver: bytes feed the same
 	 * profile_desc_rx_feed() accumulator a 1M receiver always used, with
@@ -690,13 +643,12 @@ ZTEST(lr, test_the_collapse_round_trips_through_the_unchanged_accumulator)
 						    (uint8_t)i, payload,
 						    sizeof(payload));
 
-		zassert_true(len > 0, "payload %d did not build (%d)", i, len);
-		zassert_equal(0, len % PROFILE_TLM_FRAME_LEN,
-			      "a partial descriptor frame was packed");
+		zassert_true(len > 0, "payload %d: %d", i, len);
+		zassert_equal(0, len % PROFILE_TLM_FRAME_LEN);
 		rc = profile_desc_rx_feed_long(&rx, payload, (uint8_t)len);
-		zassert_true(rc >= 0, "feeding payload %d failed (%d)", i, rc);
+		zassert_true(rc >= 0, "payload %d: %d", i, rc);
 	}
-	zassert_equal(1, rc, "the set did not complete");
+	zassert_equal(1, rc);
 	zassert_true(profile_desc_rx_complete(&rx), NULL);
 
 	zassert_equal(0, profile_desc_rx_take(&rx, &got), NULL);
@@ -704,11 +656,8 @@ ZTEST(lr, test_the_collapse_round_trips_through_the_unchanged_accumulator)
 	zassert_equal(d.period, got.period, NULL);
 	zassert_equal(d.n_fields, got.n_fields, NULL);
 	zassert_equal(d.flags, got.flags, NULL);
-	zassert_equal(PROFILE_SCHED_CODING_S8, got.schedule.coding,
-		      "the coding rate did not survive the collapse");
-	zassert_mem_equal(d.fields, got.fields,
-			  sizeof(d.fields[0]) * d.n_fields,
-			  "the schema did not survive the collapse");
+	zassert_equal(PROFILE_SCHED_CODING_S8, got.schedule.coding);
+	zassert_mem_equal(d.fields, got.fields, sizeof(d.fields[0]) * d.n_fields);
 }
 
 ZTEST(lr, test_how_complete_the_collapse_actually_is)
@@ -728,18 +677,14 @@ ZTEST(lr, test_how_complete_the_collapse_actually_is)
 	d.flags = PROFILE_TLM_FLAG_LR_PHY;
 	d.has_schedule = true;
 	zassert_equal(3u, profile_desc_frame_count(&d), NULL);
-	zassert_equal(1, profile_desc_long_count(&d,
-						 RADIANT_FRAME_PAYLOAD_LR_MAX),
-		      "an asset tag did not collapse to one wake");
+	zassert_equal(1, profile_desc_long_count(&d, RADIANT_FRAME_PAYLOAD_LR_MAX));
 
 	/* Eight fields plus a schedule frame is eleven frames: three wakes, not
 	 * one. The plan said one; one would need a ~76-byte body, which at S=8
 	 * is ~5.4 ms of airtime. Three is a 73 % cut and is the honest number. */
 	build_lr_descriptor(&d, 8u);
 	zassert_equal(11u, profile_desc_frame_count(&d), NULL);
-	zassert_equal(3, profile_desc_long_count(&d,
-						 RADIANT_FRAME_PAYLOAD_LR_MAX),
-		      "the eight-field case is not three wakes");
+	zassert_equal(3, profile_desc_long_count(&d, RADIANT_FRAME_PAYLOAD_LR_MAX));
 }
 
 ZTEST(lr, test_a_collapse_is_refused_where_the_phy_does_not_hide_it)
@@ -758,15 +703,11 @@ ZTEST(lr, test_a_collapse_is_refused_where_the_phy_does_not_hide_it)
 	 * a frame every stock ANT receiver would try (and fail) to parse. */
 	d.flags &= (uint8_t)~PROFILE_TLM_FLAG_LR_PHY;
 	d.schedule.coding = PROFILE_SCHED_CODING_NONE;
-	zassert_equal(-EINVAL,
-		      profile_desc_long_check(&d,
-					      RADIANT_FRAME_PAYLOAD_LR_MAX),
-		      "a 1 M node was allowed to collapse its descriptor set");
+	zassert_equal(-EINVAL, profile_desc_long_check(&d, RADIANT_FRAME_PAYLOAD_LR_MAX));
 	zassert_equal(-EINVAL,
 		      profile_desc_long_payload(&d, frames, (uint8_t)n_frames,
 						RADIANT_FRAME_PAYLOAD_LR_MAX,
-						0u, payload, sizeof(payload)),
-		      "the refusal was skippable by asking for a payload");
+						0u, payload, sizeof(payload)));
 
 	/* A payload too small for one whole frame is a refusal, not a silent
 	 * fallback: a fallback would make a node's transmission shape depend on
@@ -782,9 +723,7 @@ ZTEST(lr, test_a_collapse_is_refused_where_the_phy_does_not_hide_it)
 
 		profile_desc_rx_init(&rx);
 		memset(payload, 0, sizeof(payload));
-		zassert_equal(-EPROTO,
-			      profile_desc_rx_feed_long(&rx, payload, 12u),
-			      "a partial descriptor frame was accepted");
+		zassert_equal(-EPROTO, profile_desc_rx_feed_long(&rx, payload, 12u));
 	}
 }
 

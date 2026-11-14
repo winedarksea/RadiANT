@@ -344,10 +344,7 @@ static void run_hr(struct profile_hr *hr, uint32_t first_slot, uint32_t slots)
 		profile_hr_set_operating_time(hr, n / 4u);
 
 		kind = profile_hr_next(hr, now, body);
-		zassert_not_equal(PROFILE_SLOT_IDLE, kind,
-				  "slot %u went silent while a pairing window "
-				  "was open; the first receiver's stream is not "
-				  "uninterrupted if the node stops talking", n);
+		zassert_not_equal(PROFILE_SLOT_IDLE, kind, "slot %u", n);
 		log_put(body, kind);
 
 		zassert_equal(RADIANT_SEC_OK,
@@ -505,8 +502,7 @@ ZTEST(profile_enrol, test_a_second_receiver_joins_and_the_first_stream_holds)
 	zassert_equal(0, profile_enrol_attach(&pe, &pc));
 
 	radiant_sec_get_stats(NODE_CH, &sstats);
-	zassert_equal(0u, sstats.enrolments,
-		      "the enrolment counter started non-zero");
+	zassert_equal(0u, sstats.enrolments);
 
 	/* The physical action. */
 	zassert_equal(0, profile_enrol_physical_action(&pe, T_ORIGIN));
@@ -515,20 +511,12 @@ ZTEST(profile_enrol, test_a_second_receiver_joins_and_the_first_stream_holds)
 	run_hr(&hr, 0u, SLOTS);
 
 	/* ── The window ran to the end of the run ───────────────────────── */
-	zassert_true(profile_enrol_is_open(&pe),
-		     "the window closed inside the run; the assertions below "
-		     "would then be about a node that had stopped pairing");
+	zassert_true(profile_enrol_is_open(&pe));
 
 	/* ── The key went on the air, in frames a stranger can assemble ── */
-	zassert_equal(0, pubkey_from_air(air),
-		      "the node's public key never completed on the air in %u "
-		      "slots; a 60-second window that cannot transmit 32 bytes "
-		      "is a window that cannot enrol anybody", SLOTS);
+	zassert_equal(0, pubkey_from_air(air), "no key in %u slots", SLOTS);
 	check_of(air, check);
-	zassert_mem_equal(check, &air[PROFILE_ENROL_PUBKEY_BYTES],
-			  PROFILE_ENROL_CHECK_BYTES,
-			  "the set check on the air does not match the key it "
-			  "covers");
+	zassert_mem_equal(check, &air[PROFILE_ENROL_PUBKEY_BYTES], PROFILE_ENROL_CHECK_BYTES);
 
 	/* ── The peer answers over acknowledged data ────────────────────── */
 	peer_up(peer_scalar, peer_pub);
@@ -537,12 +525,9 @@ ZTEST(profile_enrol, test_a_second_receiver_joins_and_the_first_stream_holds)
 	for (k = 0u; k < PROFILE_ENROL_FRAMES; k++) {
 		rc = profile_enrol_on_ack_data(&pe, frames[k], 8u);
 		if (k + 1u < PROFILE_ENROL_FRAMES) {
-			zassert_equal(0, rc,
-				      "frame %u completed the set early", k);
+			zassert_equal(0, rc, "frame %u", k);
 		} else {
-			zassert_equal(1, rc,
-				      "the sixth frame did not complete the "
-				      "enrolment (rc %d)", rc);
+			zassert_equal(1, rc, "rc %d", rc);
 		}
 	}
 
@@ -550,26 +535,18 @@ ZTEST(profile_enrol, test_a_second_receiver_joins_and_the_first_stream_holds)
 	zassert_equal(0, profile_enrol_fingerprint(&pe, &node_fp));
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_pair_peer_uncommitted(PEER_CH, air, &peer_fp));
-	zassert_equal(node_fp, peer_fp,
-		      "the two ends computed different fingerprints, %u vs %u; "
-		      "the one-sided comparison this design admits to is at "
-		      "least supposed to be a comparison", node_fp, peer_fp);
-	zassert_true(node_fp < 1000000u, "the fingerprint is not six digits");
+	zassert_equal(node_fp, peer_fp, "%u vs %u", node_fp, peer_fp);
+	zassert_true(node_fp < 1000000u);
 
 	/* ── The counter moved exactly once ─────────────────────────────── */
 	radiant_sec_get_stats(NODE_CH, &sstats);
-	zassert_equal(1u, sstats.enrolments,
-		      "expected exactly one enrolment on the node's channel, "
-		      "got %u", sstats.enrolments);
+	zassert_equal(1u, sstats.enrolments, "got %u", sstats.enrolments);
 
 	/* ── ONE PAIRING PER WINDOW ─────────────────────────────────────── */
-	zassert_false(profile_enrol_is_open(&pe),
-		      "the window survived a completed enrolment; one pairing "
-		      "per window is the mitigation, not a preference");
+	zassert_false(profile_enrol_is_open(&pe));
 	zassert_equal(-EINVAL, profile_enrol_on_ack_data(&pe, frames[0], 8u));
 	radiant_sec_get_stats(NODE_CH, &sstats);
-	zassert_equal(1u, sstats.enrolments, "a second answer moved the "
-		      "counter a second time");
+	zassert_equal(1u, sstats.enrolments);
 
 	/* ── AND THE FIRST RECEIVER'S STREAM WAS UNINTERRUPTED ──────────── */
 
@@ -579,12 +556,8 @@ ZTEST(profile_enrol, test_a_second_receiver_joins_and_the_first_stream_holds)
 	 * would fail this line first. */
 	tier1 = count_page(PROFILE_COMPAT_PAGE_ATTEST_I);
 	radiant_sec_compat_get_stats(WATCHER_CH, &st);
-	zassert_equal(tier1, st.tier1_verified,
-		      "%u Tier I pages went out during the window and %u "
-		      "verified", tier1, st.tier1_verified);
-	zassert_equal(0u, st.tier1_unverified,
-		      "%u Tier I windows failed to verify at the receiver that "
-		      "was already listening", st.tier1_unverified);
+	zassert_equal(tier1, st.tier1_verified, "%u vs %u", tier1, st.tier1_verified);
+	zassert_equal(0u, st.tier1_unverified, "%u unverified", st.tier1_unverified);
 	zassert_equal(RADIANT_SEC_VERDICT_VERIFIED,
 		      radiant_sec_compat_stream_verdict(
 			      WATCHER_CH,
@@ -606,9 +579,7 @@ ZTEST(profile_enrol, test_a_second_receiver_joins_and_the_first_stream_holds)
 
 		zassert_true(own || common ||
 				     profile_compat_is_compat_page(page),
-			     "slot %u carried page 0x%02x, which belongs to "
-			     "neither the profile nor the compat allocation",
-			     i, page);
+			     "slot %u page 0x%02x", i, page);
 		if (own) {
 			data_pages++;
 		}
@@ -617,10 +588,7 @@ ZTEST(profile_enrol, test_a_second_receiver_joins_and_the_first_stream_holds)
 	 * cost is bounded, not absent. The promoted beacon rate is one message
 	 * in eight, so at worst 7/8 of the run stays the sensor's own pages.
 	 * Below 3/4 would mean the window displaced more than it's allowed. */
-	zassert_true(data_pages * 4u >= SLOTS * 3u,
-		     "only %u of %u slots carried heart-rate data during the "
-		     "window; the promotion displaced more than 1 in 8",
-		     data_pages, SLOTS);
+	zassert_true(data_pages * 4u >= SLOTS * 3u, "%u of %u", data_pages, SLOTS);
 }
 
 /* ═══ The pairing-open bit, and the set that grows ═══════════════════════ */
@@ -658,17 +626,13 @@ ZTEST(profile_enrol, test_the_open_window_is_visible_to_existing_keyholders)
 			continue;
 		}
 		if ((b[1] >> 4) == 0u) {
-			zassert_equal(0u,
-				      b[2] & PROFILE_COMPAT_CAP_PAIRING_OPEN,
-				      "the pairing-open bit was set with no "
-				      "window open");
+			zassert_equal(0u, b[2] & PROFILE_COMPAT_CAP_PAIRING_OPEN);
 			seen_shut++;
 		}
 		zassert_equal((uint8_t)(PROFILE_COMPAT_BEACON_FRAMES - 1u),
-			      (uint8_t)(b[1] & 0x0Fu),
-			      "the steady-state set is not two frames");
+			      (uint8_t)(b[1] & 0x0Fu));
 	}
-	zassert_true(seen_shut > 0u, "no beacon frame 0 was emitted at all");
+	zassert_true(seen_shut > 0u);
 
 	/* During: the bit is set, and EVERY frame of the set says eight -
 	 * frames 0 and 1 included, which is the thing section 11.5 names as the
@@ -686,25 +650,16 @@ ZTEST(profile_enrol, test_the_open_window_is_visible_to_existing_keyholders)
 		}
 		zassert_equal((uint8_t)(ENROL_SET_COUNT - 1u),
 			      (uint8_t)(b[1] & 0x0Fu),
-			      "frame %u of the set did not restate the new "
-			      "count; a receiver that heard only frames 0 and "
-			      "1 would think no window was open",
-			      (unsigned)(b[1] >> 4));
+			      "frame %u", (unsigned)(b[1] >> 4));
 		seen_count8++;
 		if ((b[1] >> 4) == 0u) {
 			zassert_equal(PROFILE_COMPAT_CAP_PAIRING_OPEN,
-				      b[2] & PROFILE_COMPAT_CAP_PAIRING_OPEN,
-				      "the pairing-open bit was clear with a "
-				      "window open");
+				      b[2] & PROFILE_COMPAT_CAP_PAIRING_OPEN);
 			seen_open++;
 		}
 	}
-	zassert_true(seen_open > 0u, "beacon frame 0 never went out during the "
-		     "window, so the bit reached nobody");
-	zassert_true(seen_count8 >= PROFILE_ENROL_FRAMES,
-		     "only %u frames of the eight-frame set went out in one "
-		     "cycle; the promoted cadence is not promoting",
-		     seen_count8);
+	zassert_true(seen_open > 0u);
+	zassert_true(seen_count8 >= PROFILE_ENROL_FRAMES, "%u frames", seen_count8);
 
 	/* After: closed, and the beacon says so again. */
 	profile_enrol_close(&pe);
@@ -717,14 +672,9 @@ ZTEST(profile_enrol, test_the_open_window_is_visible_to_existing_keyholders)
 			continue;
 		}
 		zassert_equal((uint8_t)(PROFILE_COMPAT_BEACON_FRAMES - 1u),
-			      (uint8_t)(b[1] & 0x0Fu),
-			      "the set did not shrink back after the window "
-			      "closed");
+			      (uint8_t)(b[1] & 0x0Fu));
 		if ((b[1] >> 4) == 0u) {
-			zassert_equal(0u,
-				      b[2] & PROFILE_COMPAT_CAP_PAIRING_OPEN,
-				      "the pairing-open bit outlived the "
-				      "window");
+			zassert_equal(0u, b[2] & PROFILE_COMPAT_CAP_PAIRING_OPEN);
 		}
 	}
 }
@@ -745,8 +695,7 @@ ZTEST(profile_enrol, test_closed_refuses_both_ways_in)
 	zassert_equal(-EPERM, profile_enrol_physical_action(&pe, T_ORIGIN));
 	zassert_equal(-EPERM, profile_enrol_keyholder_request(&pe, T_ORIGIN));
 	zassert_false(profile_enrol_is_open(&pe));
-	zassert_equal(0u, profile_enrol_frame_count(&pe, T_ORIGIN),
-		      "a closed node offered enrolment frames");
+	zassert_equal(0u, profile_enrol_frame_count(&pe, T_ORIGIN));
 	zassert_equal(2u, pe.windows_refused);
 	zassert_equal(0u, pe.windows_opened);
 }
@@ -845,8 +794,7 @@ ZTEST(profile_enrol, test_the_window_closes_itself)
 	zassert_equal(0u, profile_enrol_frame_count(&pe,
 						    T_ORIGIN + 60ull * US_PER_S));
 	zassert_false(profile_enrol_is_open(&pe));
-	zassert_false(radiant_sec_pair_is_open(NODE_CH),
-		      "the window closed but the node stayed in pairing mode");
+	zassert_false(radiant_sec_pair_is_open(NODE_CH));
 	zassert_equal(1u, pe.windows_expired);
 	zassert_false(profile_enrol_frame(&pe, 0u, payload));
 }
@@ -885,8 +833,7 @@ ZTEST(profile_enrol, test_a_set_spliced_from_two_windows_is_refused)
 	}
 	zassert_equal(-EBADMSG,
 		      profile_enrol_on_ack_data(
-			      &pe, set_b[PROFILE_ENROL_FRAMES - 1u], 8u),
-		      "a key spliced from two windows was accepted");
+			      &pe, set_b[PROFILE_ENROL_FRAMES - 1u], 8u));
 
 	/* The accumulator started again and THE WINDOW STAYED OPEN - a torn
 	 * set is usually honest, and burning the window on it would make a
@@ -928,12 +875,10 @@ ZTEST(profile_enrol, test_an_injected_bad_key_does_not_burn_the_window)
 	zassert_equal(-EACCES,
 		      profile_enrol_on_ack_data(
 			      &pe, bad[PROFILE_ENROL_FRAMES - 1u], 8u));
-	zassert_true(profile_enrol_is_open(&pe),
-		     "one injected packet closed the window");
+	zassert_true(profile_enrol_is_open(&pe));
 
 	radiant_sec_get_stats(NODE_CH, &sstats);
-	zassert_equal(0u, sstats.enrolments,
-		      "a refused key was counted as an enrolment");
+	zassert_equal(0u, sstats.enrolments);
 
 	/* The real peer still gets in. */
 	peer_up(peer_scalar, pub);
@@ -1026,8 +971,7 @@ ZTEST(profile_enrol, test_enrolment_needs_no_beacon_at_all)
 	zassert_equal(PROFILE_ENROL_FRAMES,
 		      profile_enrol_frame_count(&pe, T_ORIGIN));
 	for (k = 0u; k < PROFILE_ENROL_FRAMES; k++) {
-		zassert_true(profile_enrol_frame(&pe, k, payload),
-			     "frame %u was not produced without a beacon", k);
+		zassert_true(profile_enrol_frame(&pe, k, payload), "frame %u", k);
 	}
 
 	peer_up(peer_scalar, pub);
@@ -1073,9 +1017,7 @@ ZTEST(profile_enrol, test_the_hostless_seam_advances_the_counter_first)
 	zassert_equal(NODE_IDENT_OK, node_ident_pair_counter(&before));
 	zassert_equal(0, profile_enrol_physical_action(&pe, T_ORIGIN));
 	zassert_equal(NODE_IDENT_OK, node_ident_pair_counter(&after));
-	zassert_equal(before + 1u, after,
-		      "the pair counter did not advance before the public key "
-		      "was available to transmit");
+	zassert_equal(before + 1u, after);
 
 	/* Abandoned - and the counter does NOT roll back. A burnt counter value
 	 * is the cheap half of the trade; reusing one is the expensive half. */
@@ -1083,9 +1025,7 @@ ZTEST(profile_enrol, test_the_hostless_seam_advances_the_counter_first)
 	zassert_equal(0, profile_enrol_physical_action(&pe,
 						       T_ORIGIN + 120ull * US_PER_S));
 	zassert_equal(NODE_IDENT_OK, node_ident_pair_counter(&second));
-	zassert_equal(after + 1u, second,
-		      "a second window reused the first window's counter, "
-		      "which is a repeated X25519 private key");
+	zassert_equal(after + 1u, second);
 
 	profile_enrol_close(&pe);
 	node_ident_reset();
@@ -1251,24 +1191,15 @@ ZTEST(profile_enrol, test_a_private_node_gains_a_receiver_that_derives_it)
 		 * none retuned, so there is nothing for it to notice. */
 		watcher_msgs++;
 		if (!is_frame) {
-			zassert_true(data_msgs > last_counter,
-				     "the first receiver's data counter went "
-				     "backwards at slot %u", i);
+			zassert_true(data_msgs > last_counter, "slot %u", i);
 			last_counter = data_msgs;
 		}
 	}
 
-	zassert_equal(PRIVATE_SLOTS, watcher_msgs,
-		      "the first receiver missed a slot across the window");
-	zassert_true(profile_enrol_is_open(&pe),
-		     "the window closed inside the run");
-	zassert_equal(1u, g_enter_calls,
-		      "the node changed channel during the enrolment; the whole "
-		      "claim is that a pairing window is ADDITIVE - no channel "
-		      "opened, closed or retuned");
-	zassert_true(profile_private_is_private(&pp),
-		     "the node left private mode to gain a receiver, which is "
-		     "the case section 11.7 rule one exists to make impossible");
+	zassert_equal(PRIVATE_SLOTS, watcher_msgs);
+	zassert_true(profile_enrol_is_open(&pe));
+	zassert_equal(1u, g_enter_calls);
+	zassert_true(profile_private_is_private(&pp));
 
 	/* ── The key went on the air, on the private channel ────────────── */
 	for (i = 0u; i < log_n && i < SLOTS; i++) {
@@ -1286,8 +1217,7 @@ ZTEST(profile_enrol, test_a_private_node_gains_a_receiver_that_derives_it)
 		       PROFILE_ENROL_FRAME_PAYLOAD);
 		have |= (uint8_t)(1u << idx);
 	}
-	zassert_equal((uint8_t)((1u << PROFILE_ENROL_FRAMES) - 1u), have,
-		      "the public key never completed on the private channel");
+	zassert_equal((uint8_t)((1u << PROFILE_ENROL_FRAMES) - 1u), have);
 
 	/* ── NOTHING ON THE AIR SAYS WHERE THE NODE IS ──────────────────── */
 	for (i = 0u; i < log_n && i < SLOTS; i++) {
@@ -1299,8 +1229,7 @@ ZTEST(profile_enrol, test_a_private_node_gains_a_receiver_that_derives_it)
 		 * The new receiver's derivation below is the only thing that
 		 * can have told it where the node is. */
 		zassert_not_equal(PROFILE_COMPAT_PAGE_BEACON,
-				  (uint8_t)(b[0] & PROFILE_COMPAT_PAGE_MASK),
-				  "a beacon page appeared on a private node");
+				  (uint8_t)(b[0] & PROFILE_COMPAT_PAGE_MASK));
 	}
 
 	/* ── The enrolment completes ────────────────────────────────────── */
@@ -1314,8 +1243,7 @@ ZTEST(profile_enrol, test_a_private_node_gains_a_receiver_that_derives_it)
 	zassert_equal(0, profile_enrol_fingerprint(&pe, &node_fp));
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_pair_peer_uncommitted(PEER_CH, air, &peer_fp));
-	zassert_equal(node_fp, peer_fp,
-		      "the two ends derived different shared secrets");
+	zassert_equal(node_fp, peer_fp);
 
 	radiant_sec_get_stats(NODE_CH, &sstats);
 	zassert_equal(1u, sstats.enrolments);
@@ -1335,9 +1263,7 @@ ZTEST(profile_enrol, test_a_private_node_gains_a_receiver_that_derives_it)
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_compat_locator(PEER_CH, TEST_EPOCH, 0u,
 						 &derived));
-	zassert_equal(g_private_devnum, derived,
-		      "the newly enrolled receiver derived 0x%04X and the node "
-		      "is on 0x%04X", derived, g_private_devnum);
+	zassert_equal(g_private_devnum, derived, "0x%04X vs 0x%04X", derived, g_private_devnum);
 	zassert_not_equal(0u, derived);
 	zassert_equal(profile_private_locator(&pp), derived);
 }
@@ -1393,16 +1319,11 @@ ZTEST(profile_enrol, test_a_countdown_refuses_a_window_and_is_refused_by_one)
 
 	zassert_equal(0, profile_private_init(&pp, &pcfg));
 	zassert_equal(0, profile_private_attach(&pp, &pc));
-	zassert_equal(0, profile_enrol_attach(&pe, &pc),
-		      "the beacon page must hold both clients: the exclusion is "
-		      "between two activities, not two registrations");
+	zassert_equal(0, profile_enrol_attach(&pe, &pc));
 
 	/* A window opens; the countdown is second and is refused. */
 	zassert_equal(0, profile_enrol_physical_action(&pe, T_ORIGIN));
-	zassert_true(profile_compat_client_busy(&pc, T_ORIGIN, &pp),
-		     "an open window does not show as busy, so a countdown "
-		     "would start straight into it and tear a public key in "
-		     "half");
+	zassert_true(profile_compat_client_busy(&pc, T_ORIGIN, &pp));
 	zassert_equal(-EBUSY, profile_private_physical_action(&pp, T_ORIGIN));
 	zassert_equal(PROFILE_PRIVATE_STATE_COMPAT,
 		      profile_private_state(&pp));
@@ -1416,10 +1337,7 @@ ZTEST(profile_enrol, test_a_countdown_refuses_a_window_and_is_refused_by_one)
 	zassert_equal(PROFILE_PRIVATE_FRAMES,
 		      profile_private_frame_count(&pp, T_ORIGIN));
 
-	zassert_equal(-EBUSY, profile_enrol_physical_action(&pe, T_ORIGIN),
-		      "a pairing window opened during a countdown; it would "
-		      "have burnt a pair counter, entered pairing mode and "
-		      "transmitted nothing");
+	zassert_equal(-EBUSY, profile_enrol_physical_action(&pe, T_ORIGIN));
 	zassert_false(profile_enrol_is_open(&pe));
 }
 

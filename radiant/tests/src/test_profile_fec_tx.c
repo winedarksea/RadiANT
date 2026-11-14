@@ -27,12 +27,10 @@ ZTEST(profile_fec_tx, test_grade_bias_at_all_three_landmarks)
 	 * flat, and the top. 0x4E20 is the one that matters in practice and
 	 * the other two are what catch a sign error that happens to be zero at
 	 * the middle. */
-	zassert_equal(profile_fec_grade_to_centi_pct(0x0000u, &valid), -20000,
-		      "raw 0 is -200.00 %%, not 0.00 %%");
+	zassert_equal(profile_fec_grade_to_centi_pct(0x0000u, &valid), -20000);
 	zassert_true(valid, NULL);
 
-	zassert_equal(profile_fec_grade_to_centi_pct(0x4E20u, &valid), 0,
-		      "0x4E20 is 20000 raw, which is exactly 0.00 %%");
+	zassert_equal(profile_fec_grade_to_centi_pct(0x4E20u, &valid), 0);
 	zassert_true(valid, NULL);
 
 	zassert_equal(profile_fec_grade_to_centi_pct(0x9C40u, &valid), 20000,
@@ -215,7 +213,7 @@ ZTEST(profile_fec_tx, test_general_page_sentinels_come_from_the_flags)
 	 * goes out unchanged; zeroing it here would be inventing a sentinel
 	 * the document does not have. */
 	zassert_equal(body[3], 255u, NULL);
-	zassert_equal(body[7] & (1u << 2), 0u, "capabilities bit 2 must be clear");
+	zassert_equal(body[7] & (1u << 2), 0u);
 
 	zassert_equal(profile_fec_decode_general(body, &out), 0, NULL);
 	zassert_false(out.speed_valid, NULL);
@@ -242,8 +240,7 @@ ZTEST(profile_fec_tx, test_fe_state_nibble_inside_a_nibble)
 	zassert_equal((body[7] >> 4) & 0x0Fu, 0x0Bu, NULL);
 
 	zassert_equal(profile_fec_decode_general(body, &out), 0, NULL);
-	zassert_equal(out.state, PROFILE_FEC_STATE_IN_USE,
-		      "the lap toggle must not leak into the state");
+	zassert_equal(out.state, PROFILE_FEC_STATE_IN_USE);
 	zassert_true(out.lap_toggle, NULL);
 
 	/* A caller handing in a state that does not fit three bits must not
@@ -376,8 +373,7 @@ ZTEST(profile_fec_tx, test_track_resistance_decodes_grade_and_keeps_byte_7)
 	zassert_equal(profile_fec_decode_track_resistance(body, &out), 0, NULL);
 	zassert_true(out.grade_valid, NULL);
 	zassert_equal(out.grade_centi_pct, 300, NULL);
-	zassert_equal(out.rolling_resistance, 0x41u,
-		      "byte 7 is decoded and must simply not be acted on");
+	zassert_equal(out.rolling_resistance, 0x41u);
 	zassert_true(out.rolling_resistance_valid, NULL);
 
 	/* The flat-ground sentinel. */
@@ -507,15 +503,11 @@ static void run_master(struct profile_fec_tx *tx, struct run_result *r)
 	for (uint32_t i = 0; i < RUN_MESSAGES; i++) {
 		enum profile_slot_kind kind = profile_fec_tx_next(tx, body);
 
-		zassert_not_equal(kind, PROFILE_SLOT_IDLE,
-				  "a master must fill every slot it is given");
+		zassert_not_equal(kind, PROFILE_SLOT_IDLE);
 		r->page[i] = body[0];
 
 		if (body[0] == PROFILE_COMMON_PAGE_80) {
-			zassert_equal(kind, PROFILE_SLOT_COMMON_80,
-				      "the client-claimed pair must be "
-				      "reported as a common slot, not as "
-				      "PROFILE_SLOT_CLIENT");
+			zassert_equal(kind, PROFILE_SLOT_COMMON_80);
 			if (r->n_common_80 < ARRAY_SIZE(r->common_80_at)) {
 				r->common_80_at[r->n_common_80] = i;
 			}
@@ -581,16 +573,9 @@ ZTEST(profile_fec_tx, test_interleave_meets_every_one_of_section_10_1s_rules)
 	init_master(&tx, false);
 	run_master(&tx, &r);
 
-	zassert_true(worst_gap(&r, PROFILE_FEC_PAGE_GENERAL) <=
-			     PROFILE_FEC_TX_MAX_GAP_16,
-		     "page 16 must appear at least once every 5 messages");
-	zassert_true(worst_gap(&r, PROFILE_FEC_PAGE_TREADMILL) <=
-			     PROFILE_FEC_TX_MAX_GAP_19,
-		     "the equipment-specific page must appear at least once "
-		     "every 5 messages");
-	zassert_true(worst_gap(&r, PROFILE_FEC_PAGE_SETTINGS) <=
-			     PROFILE_FEC_TX_MAX_GAP_SETTINGS,
-		     "page 17 must appear at least once every 20 messages");
+	zassert_true(worst_gap(&r, PROFILE_FEC_PAGE_GENERAL) <= PROFILE_FEC_TX_MAX_GAP_16);
+	zassert_true(worst_gap(&r, PROFILE_FEC_PAGE_TREADMILL) <= PROFILE_FEC_TX_MAX_GAP_19);
+	zassert_true(worst_gap(&r, PROFILE_FEC_PAGE_SETTINGS) <= PROFILE_FEC_TX_MAX_GAP_SETTINGS);
 
 	/* Page 16 twice consecutively, which is the other half of the first
 	 * rule and the half a "once every 5th" implementation would miss. */
@@ -616,22 +601,17 @@ ZTEST(profile_fec_tx, test_common_pages_are_consecutive_and_inside_66)
 	init_master(&tx, false);
 	run_master(&tx, &r);
 
-	zassert_true(r.n_common_80 >= 4u, "264 messages is four cycles of 65");
-	zassert_equal(r.n_common_80, r.n_common_81,
-		      "80 and 81 go out as a pair or not at all");
-	zassert_equal(r.consecutive_pairs, r.n_common_81,
-		      "SS10.1 requires the two to be CONSECUTIVE background "
-		      "pages, not merely both present");
+	zassert_true(r.n_common_80 >= 4u);
+	zassert_equal(r.n_common_80, r.n_common_81);
+	zassert_equal(r.consecutive_pairs, r.n_common_81);
 
 	for (uint32_t i = 1; i < r.n_common_80 &&
 			     i < ARRAY_SIZE(r.common_80_at); i++) {
 		uint32_t gap = r.common_80_at[i] - r.common_80_at[i - 1u];
 
 		zassert_equal(gap, PROFILE_FEC_TX_COMMON_INTERVAL, NULL);
-		zassert_true(gap <= 66u,
-			     "the pair is due at least every 66 messages, and "
-			     "profile_sched.c's own 121 is the wrong cadence "
-			     "for this profile");
+		/* Pair due at least every 66 messages; profile_sched.c's 121 is wrong here. */
+		zassert_true(gap <= 66u);
 	}
 }
 
@@ -688,14 +668,9 @@ ZTEST(profile_fec_tx, test_command_status_preempts_without_breaking_the_rules)
 		}
 	}
 
-	zassert_true(saw_status, "every answered command owes a page 71");
-	zassert_true(worst_gap(&r, PROFILE_FEC_PAGE_GENERAL) <=
-			     PROFILE_FEC_TX_MAX_GAP_16,
-		     "page 71 must never displace a page 16 slot");
-	zassert_true(worst_gap(&r, PROFILE_FEC_PAGE_TREADMILL) <=
-			     PROFILE_FEC_TX_MAX_GAP_19,
-		     "page 71 must never take the page 19 that keeps the "
-		     "5-message rule");
+	zassert_true(saw_status);
+	zassert_true(worst_gap(&r, PROFILE_FEC_PAGE_GENERAL) <= PROFILE_FEC_TX_MAX_GAP_16);
+	zassert_true(worst_gap(&r, PROFILE_FEC_PAGE_TREADMILL) <= PROFILE_FEC_TX_MAX_GAP_19);
 }
 
 ZTEST(profile_fec_tx, test_on_request_delivers_page_54_and_refuses_the_rest)
@@ -723,7 +698,7 @@ ZTEST(profile_fec_tx, test_on_request_delivers_page_54_and_refuses_the_rest)
 			zassert_equal(body[7], PROFILE_FEC_CAP_SIMULATION, NULL);
 		}
 	}
-	zassert_equal(seen, 2u, "requested twice, delivered twice");
+	zassert_equal(seen, 2u);
 }
 
 /* ---------------------------------------------------------------------------
@@ -841,8 +816,7 @@ ZTEST(profile_fec_tx, test_the_reported_incline_matches_the_commanded_grade)
 
 	zassert_true(cmd.grade_valid, NULL);
 	zassert_true(s.incline_valid, NULL);
-	zassert_equal(cmd.grade_centi_pct, s.incline_centi_pct,
-		      "the reported incline must equal the commanded grade");
+	zassert_equal(cmd.grade_centi_pct, s.incline_centi_pct);
 	zassert_equal(cmd.grade_centi_pct, 300, NULL);
 
 	/* And the bytes are NOT the same, which is the whole trap: 0x4F4C in
@@ -911,11 +885,10 @@ ZTEST(profile_fec_tx, test_trainer_power_sentinel_and_its_neighbour)
 	in.state = PROFILE_FEC_STATE_READY;
 
 	zassert_equal(profile_fec_encode_trainer(&in, body), 0, NULL);
-	zassert_equal(body[2], 0xFFu, "cadence sentinel");
+	zassert_equal(body[2], 0xFFu);
 	zassert_equal(body[5], 0xFFu, NULL);
-	zassert_equal(body[6] & 0x0Fu, 0x0Fu, "0xFFF, the cross-field sentinel");
-	zassert_equal(body[6] >> 4, 0x0Fu,
-		      "the status nibble rides beside it untouched");
+	zassert_equal(body[6] & 0x0Fu, 0x0Fu);
+	zassert_equal(body[6] >> 4, 0x0Fu);
 	zassert_equal(profile_fec_decode_trainer(body, &out), 0, NULL);
 	zassert_false(out.power_valid, NULL);
 	zassert_false(out.cadence_valid, NULL);
@@ -963,16 +936,11 @@ ZTEST(profile_fec_tx, test_trainer_schedule_sends_page_25_in_place_of_19)
 
 	/* SS10.1 with 25 where 19 was, and no 19 at all: a trainer sending a
 	 * treadmill page would be decoded as one by any head unit. */
-	zassert_equal(worst_gap(&r, PROFILE_FEC_PAGE_TREADMILL), RUN_MESSAGES,
-		      "a trainer must never send page 19");
-	zassert_true(worst_gap(&r, PROFILE_FEC_PAGE_TRAINER) <=
-			     PROFILE_FEC_TX_MAX_GAP_19,
-		     "page 25 at least once every 5 messages");
+	zassert_equal(worst_gap(&r, PROFILE_FEC_PAGE_TREADMILL), RUN_MESSAGES);
+	zassert_true(worst_gap(&r, PROFILE_FEC_PAGE_TRAINER) <= PROFILE_FEC_TX_MAX_GAP_19);
 	zassert_true(worst_gap(&r, PROFILE_FEC_PAGE_GENERAL) <=
 			     PROFILE_FEC_TX_MAX_GAP_16, NULL);
-	zassert_true(worst_gap(&r, PROFILE_FEC_PAGE_SETTINGS) <=
-			     PROFILE_FEC_TX_MAX_GAP_SETTINGS,
-		     "page 17 is mandatory on a trainer (SS10.1.2.6)");
+	zassert_true(worst_gap(&r, PROFILE_FEC_PAGE_SETTINGS) <= PROFILE_FEC_TX_MAX_GAP_SETTINGS);
 	zassert_equal(worst_gap(&r, PROFILE_FEC_PAGE_METABOLIC), RUN_MESSAGES,
 		      NULL);
 	zassert_equal(r.consecutive_pairs, r.n_common_81, NULL);
@@ -1021,8 +989,7 @@ ZTEST(profile_fec_tx, test_requests_for_17_50_51_are_served_and_others_refused)
 	for (size_t p = 0; p < ARRAY_SIZE(pages); p++) {
 		uint32_t seen = 0u;
 
-		zassert_equal(profile_fec_tx_request(&tx, pages[p], 1u), 0,
-			      "page %u must be servable on request", pages[p]);
+		zassert_equal(profile_fec_tx_request(&tx, pages[p], 1u), 0, "page %u", pages[p]);
 		for (uint32_t i = 0; i < 20u; i++) {
 			zassert_not_equal(profile_fec_tx_next(&tx, body),
 					  PROFILE_SLOT_IDLE, NULL);
@@ -1034,8 +1001,7 @@ ZTEST(profile_fec_tx, test_requests_for_17_50_51_are_served_and_others_refused)
 			seen++;
 			if (pages[p] == PROFILE_FEC_PAGE_WIND_RESISTANCE) {
 				zassert_equal(body[5], 51u, NULL);
-				zassert_equal(body[6], 117u,
-					      "-10 km/h is 117 after the bias");
+				zassert_equal(body[6], 117u);
 				zassert_equal(body[7], 100u, NULL);
 			} else if (pages[p] ==
 				   PROFILE_FEC_PAGE_TRACK_RESISTANCE) {
@@ -1047,20 +1013,17 @@ ZTEST(profile_fec_tx, test_requests_for_17_50_51_are_served_and_others_refused)
 		if (pages[p] == PROFILE_FEC_PAGE_SETTINGS) {
 			zassert_true(seen >= 1u, NULL);
 		} else {
-			zassert_equal(seen, 1u, "page %u: asked once, sent once",
-				      pages[p]);
+			zassert_equal(seen, 1u, "page %u", pages[p]);
 		}
 	}
 
-	zassert_equal(profile_fec_tx_request(&tx, PROFILE_FEC_PAGE_TRAINER, 1u),
-		      -ENOTSUP, "page 25 is in the rotation");
+	zassert_equal(profile_fec_tx_request(&tx, PROFILE_FEC_PAGE_TRAINER, 1u), -ENOTSUP);
 	zassert_equal(profile_fec_tx_request(&tx, PROFILE_FEC_PAGE_GENERAL, 1u),
 		      -ENOTSUP, NULL);
 	zassert_equal(profile_fec_tx_request(&tx, PROFILE_FEC_PAGE_USER_CONFIG,
 					     1u),
 		      -ENOTSUP, NULL);
-	zassert_equal(profile_fec_tx_request(&tx, 0x01u, 1u), -ENOTSUP,
-		      "calibration pages are out of scope");
+	zassert_equal(profile_fec_tx_request(&tx, 0x01u, 1u), -ENOTSUP);
 }
 
 ZTEST(profile_fec_tx, test_echo_pages_default_to_their_sentinels)
@@ -1096,7 +1059,7 @@ ZTEST(profile_fec_tx, test_wind_and_track_encoders_invert_their_decoders)
 	w_in.wind_speed_valid = true;
 	w_in.drafting_valid = false;
 	zassert_equal(profile_fec_encode_wind_resistance(&w_in, body), 0, NULL);
-	zassert_equal(body[6], 254u, "the strongest tailwind, NOT the sentinel");
+	zassert_equal(body[6], 254u);
 	zassert_equal(profile_fec_decode_wind_resistance(body, &w_out), 0, NULL);
 	zassert_equal(w_out.wind_speed_kph, 127, NULL);
 	zassert_true(w_out.wind_speed_valid, NULL);
@@ -1147,7 +1110,7 @@ ZTEST(profile_fec_tx, test_user_config_packs_the_bicycle_fields)
 	zassert_equal(body[0], PROFILE_FEC_PAGE_USER_CONFIG, NULL);
 	zassert_equal(body[1], 0x4Cu, NULL); /* 7500 = 0x1D4C */
 	zassert_equal(body[2], 0x1Du, NULL);
-	zassert_equal(body[3], 0xFFu, "reserved");
+	zassert_equal(body[3], 0xFFu);
 	/* 0x0C8: low nibble 8 into byte 4's HIGH nibble, beside offset 3. */
 	zassert_equal(body[4], 0x83u, NULL);
 	zassert_equal(body[5], 0x0Cu, NULL);
@@ -1195,11 +1158,11 @@ ZTEST(profile_fec_tx, test_user_config_sentinels_every_one)
 	zassert_equal(profile_fec_encode_user_config(&in, body), 0, NULL);
 	zassert_equal(body[1], 0xFFu, NULL);
 	zassert_equal(body[2], 0xFFu, NULL);
-	zassert_equal(body[4], 0xFFu, "offset 0xF and weight's low nibble 0xF");
+	zassert_equal(body[4], 0xFFu);
 	zassert_equal(body[5], 0xFFu, NULL);
 	zassert_equal(body[6], 0xFFu, NULL);
-	zassert_equal(body[7], 0x00u,
-		      "the gear ratio's sentinel is ZERO, not 0xFF");
+	/* The gear ratio's sentinel is zero, not 0xFF. */
+	zassert_equal(body[7], 0x00u);
 
 	zassert_equal(profile_fec_decode_user_config(body, &out), 0, NULL);
 	zassert_false(out.user_weight_valid, NULL);

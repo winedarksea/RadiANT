@@ -60,8 +60,8 @@ ZTEST(radiant_noise, test_percentiles_of_a_known_distribution)
 	zassert_true(radiant_noise_get(0u, &r), NULL);
 	zassert_equal(57u, r.rf_index, NULL);
 	zassert_equal(100u, r.samples, NULL);
-	zassert_equal(-99, r.floor_dbm, "floor was %d", (int)r.floor_dbm);
-	zassert_equal(-91, r.busy_dbm, "busy was %d", (int)r.busy_dbm);
+	zassert_equal(-99, r.floor_dbm, "floor %d", (int)r.floor_dbm);
+	zassert_equal(-91, r.busy_dbm, "busy %d", (int)r.busy_dbm);
 	zassert_equal(-99, r.min_dbm, NULL);
 	zassert_equal(-90, r.max_dbm, NULL);
 	zassert_equal(0u, r.below_range, NULL);
@@ -89,11 +89,9 @@ ZTEST(radiant_noise, test_a_quiet_band_and_a_busy_one_are_told_apart)
 	zassert_equal(2u, quiet.rf_index, NULL);
 	zassert_equal(57u, busy.rf_index, NULL);
 
-	zassert_equal(quiet.floor_dbm, busy.floor_dbm,
-		      "the same floor under both, since only the bursts differ");
+	zassert_equal(quiet.floor_dbm, busy.floor_dbm);
 	zassert_true(busy.busy_dbm - quiet.busy_dbm > 20,
-		      "the busy band's 90th percentile is only %d dB above the "
-		      "quiet one's", (int)(busy.busy_dbm - quiet.busy_dbm));
+		      "%d dB", (int)(busy.busy_dbm - quiet.busy_dbm));
 }
 
 ZTEST(radiant_noise, test_samples_outside_the_range_are_counted_at_the_edges)
@@ -130,8 +128,7 @@ ZTEST(radiant_noise, test_too_few_samples_is_no_answer_rather_than_a_bad_one)
 
 	for (i = 0u; i < RADIANT_NOISE_MIN_SAMPLES - 1u; i++) {
 		radiant_noise_note(57u, (int8_t)-93);
-		zassert_false(radiant_noise_get(0u, &r),
-			      "reported a percentile from %u sample(s)", i + 1u);
+		zassert_false(radiant_noise_get(0u, &r), "n=%u", i + 1u);
 	}
 	radiant_noise_note(57u, (int8_t)-93);
 	zassert_true(radiant_noise_get(0u, &r), NULL);
@@ -210,8 +207,7 @@ ZTEST(radiant_noise, test_clearing_keeps_the_frequency_and_drops_the_distributio
 	zassert_true(radiant_noise_get(0u, &r), NULL);
 
 	radiant_noise_clear(0u);
-	zassert_false(radiant_noise_get(0u, &r),
-		      "a cleared slot still reported a distribution");
+	zassert_false(radiant_noise_get(0u, &r));
 
 	/* The frequency has to survive: a slot that gave up its rf_index would
 	 * be reallocated to whichever frequency spoke next, and consecutive log
@@ -219,16 +215,15 @@ ZTEST(radiant_noise, test_clearing_keeps_the_frequency_and_drops_the_distributio
 	for (i = 0; i < 40; i++) {
 		radiant_noise_note(2u, (int8_t)-70);
 	}
-	zassert_true(radiant_noise_get(1u, &r),
-		     "the new frequency did not take a fresh slot");
+	zassert_true(radiant_noise_get(1u, &r));
 	zassert_equal(2u, r.rf_index, NULL);
 
 	for (i = 0; i < 40; i++) {
 		radiant_noise_note(57u, (int8_t)-70);
 	}
 	zassert_true(radiant_noise_get(0u, &r), NULL);
-	zassert_equal(57u, r.rf_index, "the cleared slot lost its frequency");
-	zassert_equal(-70, r.floor_dbm, "the cleared slot kept its old samples");
+	zassert_equal(57u, r.rf_index);
+	zassert_equal(-70, r.floor_dbm);
 }
 
 ZTEST(radiant_noise, test_bad_arguments)
@@ -315,7 +310,7 @@ static void run_window(bool with_frame)
 	}
 
 	fake_radio_advance_to(t0 + 300000u);
-	zassert_equal(1u, n_terminal, "expected exactly one terminal event");
+	zassert_equal(1u, n_terminal);
 }
 
 ZTEST(radiant_noise, test_an_empty_window_reports_the_floor)
@@ -327,9 +322,7 @@ ZTEST(radiant_noise, test_an_empty_window_reports_the_floor)
 
 	run_window(false);
 
-	zassert_true(last_has_noise,
-		     "a window that heard nothing reported no noise sample, "
-		     "which is the entire population this measures");
+	zassert_true(last_has_noise);
 	zassert_equal(-97, last_noise_dbm, NULL);
 	zassert_equal(0u, fake_radio_viol_count(), NULL);
 }
@@ -347,9 +340,7 @@ ZTEST(radiant_noise, test_a_window_that_received_a_packet_contributes_nothing)
 
 	run_window(true);
 
-	zassert_false(last_has_noise,
-		      "a window that received a frame contributed a noise "
-		      "sample; that sample is the transmitter's level");
+	zassert_false(last_has_noise);
 	zassert_equal(0u, fake_radio_viol_count(), NULL);
 }
 

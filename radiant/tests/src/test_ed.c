@@ -206,7 +206,7 @@ static void post_track(uint8_t ch, radiant_time_t t_open)
 	r.n_filters = 1u;
 	r.t_open = t_open;
 	r.t_close = t_open + (radiant_time_t)ED_WINDOW_US;
-	zassert_ok(radiant_sched_request_rx(ch, &r), "channel %u refused", ch);
+	zassert_ok(radiant_sched_request_rx(ch, &r), "channel %u", ch);
 }
 
 static void post_ed(uint8_t ch)
@@ -218,7 +218,7 @@ static void post_ed(uint8_t ch)
 	e.rf_index_hi = ED_RF_HI;
 	e.dwell_us = ED_DWELL_US;
 	e.chunk_us = ED_CHUNK_US;
-	zassert_ok(radiant_sched_request_ed(ch, &e), "ED request refused");
+	zassert_ok(radiant_sched_request_ed(ch, &e));
 }
 
 static void build_filters(void)
@@ -235,8 +235,7 @@ static void build_filters(void)
 		zassert_equal(5, radiant_frame_addr(RADIANT_FRAME_CFG_TRACKING,
 						    radiant_net_addr_ant_plus, &id,
 						    track_filter[i].addr,
-						    sizeof(track_filter[i].addr)),
-			      "tracking address length changed");
+						    sizeof(track_filter[i].addr)));
 		track_filter[i].addr_len = 5u;
 	}
 }
@@ -328,29 +327,23 @@ ZTEST(ed, test_hal_sweep_shape)
 	fake_radio_set_ed(4u, -70, -64);
 
 	raw_req(&r, 2u, 6u, 1000u);
-	zassert_ok(radiant_radio_ed(&r, &op), "ED arm refused");
-	zassert_not_equal(0u, op, "an accepted arm must return a non-zero op");
+	zassert_ok(radiant_radio_ed(&r, &op));
+	zassert_not_equal(0u, op);
 
 	fake_radio_advance(10u * 1000u);
 
-	zassert_equal(6u, raw.n, "five indices plus one terminal event");
+	zassert_equal(6u, raw.n);
 	for (i = 0u; i < 5u; i++) {
-		zassert_equal(RADIANT_RADIO_STATUS_OK, raw.ev[i].status,
-			      "event %u should be a measurement", i);
-		zassert_equal(2u + i, raw.ev[i].rf_index,
-			      "indices must be swept in ascending order");
-		zassert_equal(FAKE_RADIO_ED_SAMPLES, raw.ev[i].samples,
-			      "a measurement must report its sample count");
+		zassert_equal(RADIANT_RADIO_STATUS_OK, raw.ev[i].status, "event %u", i);
+		zassert_equal(2u + i, raw.ev[i].rf_index);
+		zassert_equal(FAKE_RADIO_ED_SAMPLES, raw.ev[i].samples, "event %u", i);
 	}
-	zassert_equal(-70, raw.ev[2].min_dbm, "RF 4's min did not reach the event");
-	zassert_equal(-64, raw.ev[2].mean_dbm, "RF 4's mean did not reach the event");
-	zassert_equal(FAKE_RADIO_ED_MIN_DBM, raw.ev[0].min_dbm,
-		      "an unset index should report the default");
+	zassert_equal(-70, raw.ev[2].min_dbm);
+	zassert_equal(-64, raw.ev[2].mean_dbm);
+	zassert_equal(FAKE_RADIO_ED_MIN_DBM, raw.ev[0].min_dbm);
 
-	zassert_equal(RADIANT_RADIO_STATUS_TIMEOUT, raw.ev[5].status,
-		      "a completed sweep ends with TIMEOUT, as a window does");
-	zassert_equal(0u, raw.ev[5].samples,
-		      "a terminal event carries no measurement");
+	zassert_equal(RADIANT_RADIO_STATUS_TIMEOUT, raw.ev[5].status);
+	zassert_equal(0u, raw.ev[5].samples);
 	zassert_true(fake_radio_is_idle(), "%s", fake_radio_busy_reason());
 	zassert_equal(0u, fake_radio_viol_count(), "%s",
 		      fake_radio_viol_name(fake_radio_viol(0)->code));
@@ -366,29 +359,24 @@ ZTEST(ed, test_hal_refusals)
 	raw_bring_up();
 
 	raw_req(&r, 6u, 2u, 1000u);
-	zassert_equal(RADIANT_RADIO_EINVAL, radiant_radio_ed(&r, &op),
-		      "a range running backwards must be refused");
+	zassert_equal(RADIANT_RADIO_EINVAL, radiant_radio_ed(&r, &op));
 	raw_req(&r, 2u, RADIANT_RF_INDEX_MAX + 1u, 1000u);
-	zassert_equal(RADIANT_RADIO_EINVAL, radiant_radio_ed(&r, &op),
-		      "an index above the HAL's ceiling must be refused");
+	zassert_equal(RADIANT_RADIO_EINVAL, radiant_radio_ed(&r, &op));
 	raw_req(&r, 2u, 6u, 0u);
-	zassert_equal(RADIANT_RADIO_EINVAL, radiant_radio_ed(&r, &op),
-		      "a zero dwell must be refused");
+	zassert_equal(RADIANT_RADIO_EINVAL, radiant_radio_ed(&r, &op));
 
 	raw_req(&r, 2u, 6u, 1000u);
 	r.t_start = radiant_radio_now();
-	zassert_equal(RADIANT_RADIO_ETIME, radiant_radio_ed(&r, &op),
-		      "an unreachable start must be refused, never run late");
+	zassert_equal(RADIANT_RADIO_ETIME, radiant_radio_ed(&r, &op));
 
 	raw_req(&r, 2u, 6u, 1000u);
 	zassert_ok(radiant_radio_ed(&r, &op));
 	raw_req(&r, 2u, 6u, 1000u);
-	zassert_equal(RADIANT_RADIO_EBUSY, radiant_radio_ed(&r, &op2),
-		      "a second operation while one is in flight is EBUSY");
-	zassert_equal(0u, op2, "a refused arm must not hand out an op id");
+	zassert_equal(RADIANT_RADIO_EBUSY, radiant_radio_ed(&r, &op2));
+	zassert_equal(0u, op2);
 
 	zassert_ok(radiant_radio_abort());
-	zassert_equal(1u, raw.n, "an aborted sweep still gets its terminal event");
+	zassert_equal(1u, raw.n);
 	zassert_equal(RADIANT_RADIO_STATUS_ABORTED, raw.ev[0].status);
 }
 
@@ -406,13 +394,11 @@ ZTEST(ed, test_hal_notsup_without_capability)
 
 	raw_bring_up();
 	fake_radio_caps_preset_rail();
-	zassert_false(radiant_radio_caps_get()->has_ed_scan,
-		      "the RAIL preset is the backend that does not have it");
+	zassert_false(radiant_radio_caps_get()->has_ed_scan);
 
 	raw_req(&r, 2u, 6u, 1000u);
-	zassert_equal(RADIANT_RADIO_ENOTSUP, radiant_radio_ed(&r, &op),
-		      "a backend without the capability must refuse ENOTSUP");
-	zassert_equal(0u, raw.n, "a refused arm produces no event at all");
+	zassert_equal(RADIANT_RADIO_ENOTSUP, radiant_radio_ed(&r, &op));
+	zassert_equal(0u, raw.n);
 
 	/* And the scheduler refuses at the door rather than parking a request no
 	 * pass could ever serve. */
@@ -421,11 +407,8 @@ ZTEST(ed, test_hal_notsup_without_capability)
 	memset(&e, 0, sizeof(e));
 	e.rf_index_lo = ED_RF_LO;
 	e.rf_index_hi = ED_RF_HI;
-	zassert_equal(RADIANT_RADIO_ENOTSUP,
-		      radiant_sched_request_ed(ED_CH, &e),
-		      "the scheduler must read caps.has_ed_scan, not try");
-	zassert_false(radiant_sched_pending(ED_CH),
-		      "a refused ED request must not occupy a slot");
+	zassert_equal(RADIANT_RADIO_ENOTSUP, radiant_sched_request_ed(ED_CH, &e));
+	zassert_false(radiant_sched_pending(ED_CH));
 }
 
 /* ---------------------------------------------------------------------------
@@ -452,13 +435,10 @@ ZTEST(ed, test_chanmap_shares_the_noise_binning)
 	for (i = 0u; i < RADIANT_CHANMAP_MIN_DWELLS; i++) {
 		radiant_chanmap_note(57u, -91, -88, FAKE_RADIO_ED_SAMPLES);
 	}
-	zassert_true(radiant_chanmap_get(57u, &rep), "RF 57 should be readable");
-	zassert_equal(radiant_noise_bin_dbm(radiant_noise_bin(-91)), rep.floor_dbm,
-		      "the floor is not on the noise histogram's scale");
-	zassert_equal(radiant_noise_bin_dbm(radiant_noise_bin(-88)), rep.busy_dbm,
-		      "the busy figure is not on the noise histogram's scale");
-	zassert_equal(radiant_noise_bin_dbm(radiant_noise_bin(-88)), rep.mean_dbm,
-		      "the mean of one value repeated is that value");
+	zassert_true(radiant_chanmap_get(57u, &rep));
+	zassert_equal(radiant_noise_bin_dbm(radiant_noise_bin(-91)), rep.floor_dbm);
+	zassert_equal(radiant_noise_bin_dbm(radiant_noise_bin(-88)), rep.busy_dbm);
+	zassert_equal(radiant_noise_bin_dbm(radiant_noise_bin(-88)), rep.mean_dbm);
 
 	/* Both walls, and both are the histogram's walls rather than this
 	 * module's own. A sample below the range clamps to the quiet end and one
@@ -470,10 +450,8 @@ ZTEST(ed, test_chanmap_shares_the_noise_binning)
 		radiant_chanmap_note(57u, -128, 0, FAKE_RADIO_ED_SAMPLES);
 	}
 	zassert_true(radiant_chanmap_get(57u, &rep));
-	zassert_equal(RADIANT_NOISE_DBM_MIN, rep.floor_dbm,
-		      "a sample below the range must clamp to the range's floor");
-	zassert_equal(RADIANT_NOISE_DBM_MAX, rep.busy_dbm,
-		      "a sample above the range must clamp to the range's top");
+	zassert_equal(RADIANT_NOISE_DBM_MIN, rep.floor_dbm);
+	zassert_equal(RADIANT_NOISE_DBM_MAX, rep.busy_dbm);
 }
 
 /* floor is the minimum of the minima, busy is the maximum of the means, and the
@@ -492,29 +470,26 @@ ZTEST(ed, test_chanmap_floor_busy_and_mean)
 	radiant_chanmap_note(26u, -94, -90, 16u);
 
 	zassert_true(radiant_chanmap_get(26u, &rep));
-	zassert_equal(4u, rep.dwells, "every dwell must be counted");
-	zassert_equal(-100, rep.floor_dbm, "the floor is the quietest minimum");
-	zassert_equal(-56, rep.busy_dbm, "the busy figure is the loudest mean");
+	zassert_equal(4u, rep.dwells);
+	zassert_equal(-100, rep.floor_dbm);
+	zassert_equal(-56, rep.busy_dbm);
 	/* (-96 + -56 + -86 + -90) / 4 = -82, computed in bins. */
-	zassert_equal(-82, rep.mean_dbm, "the mean of the four dwell means");
+	zassert_equal(-82, rep.mean_dbm);
 
 	/* Below the evidence threshold an index reports nothing at all, which is
 	 * a different answer from "measured and quiet" and has to be. */
 	radiant_chanmap_reset();
 	radiant_chanmap_note(26u, -100, -96, 16u);
-	zassert_false(radiant_chanmap_get(26u, &rep),
-		      "one dwell is not enough evidence to report");
+	zassert_false(radiant_chanmap_get(26u, &rep));
 
 	/* A dwell that measured nothing is dropped and counted, never folded in
 	 * as a quiet index - which is the direction this map must not lie in. */
 	radiant_chanmap_reset();
 	radiant_chanmap_note(26u, -100, -96, 0u);
 	zassert_false(radiant_chanmap_get(26u, &rep));
-	zassert_equal(1u, radiant_chanmap_dropped(),
-		      "a zero-sample dwell must be dropped and counted");
+	zassert_equal(1u, radiant_chanmap_dropped());
 	radiant_chanmap_note(RADIANT_RF_INDEX_MAX + 1u, -100, -96, 16u);
-	zassert_equal(2u, radiant_chanmap_dropped(),
-		      "an out-of-range index must be dropped and counted");
+	zassert_equal(2u, radiant_chanmap_dropped());
 }
 
 /* ---------------------------------------------------------------------------
@@ -581,9 +556,8 @@ ZTEST(ed, test_sched_ed_leaves_tracked_schedule_identical)
 	uint32_t i;
 
 	run_load(false, 6u);
-	zassert_true(log.n_armed > 0u, "the baseline load armed no windows");
-	zassert_true(log.n_armed <= ED_LOG_MAX,
-		     "the arm log overflowed; shorten the run");
+	zassert_true(log.n_armed > 0u);
+	zassert_true(log.n_armed <= ED_LOG_MAX);
 	baseline.n = log.n_armed;
 	memcpy(baseline.armed, log.armed, sizeof(baseline.armed));
 	memcpy(baseline.ok, log.done_ok, sizeof(baseline.ok));
@@ -594,35 +568,19 @@ ZTEST(ed, test_sched_ed_leaves_tracked_schedule_identical)
 	/* The feature was actually doing something during the second run.
 	 * Without this the test passes trivially on a build where ED never
 	 * armed, which is the one way an "unchanged" assertion can lie. */
-	zassert_true(log.n_dwell > 0u,
-		     "no ED dwell ran; the comparison would be vacuous");
-	zassert_true(radiant_sched_stats_get()->ed_chunks > 0u,
-		     "no ED chunk was armed");
+	zassert_true(log.n_dwell > 0u);
+	zassert_true(radiant_sched_stats_get()->ed_chunks > 0u);
 
-	zassert_equal(baseline.n, log.n_armed,
-		      "%u windows armed with ED, %u without", log.n_armed,
-		      baseline.n);
+	zassert_equal(baseline.n, log.n_armed, "%u vs %u", log.n_armed, baseline.n);
 	for (i = 0u; i < baseline.n; i++) {
-		zassert_equal(baseline.armed[i].ch, log.armed[i].ch,
-			      "arm %u went to channel %u with ED and %u without",
-			      i, log.armed[i].ch, baseline.armed[i].ch);
-		zassert_equal(baseline.armed[i].t_open, log.armed[i].t_open,
-			      "arm %u opened %lld us from where it did without ED",
-			      i,
-			      (long long)((int64_t)log.armed[i].t_open -
-					  (int64_t)baseline.armed[i].t_open));
-		zassert_equal(baseline.armed[i].t_close, log.armed[i].t_close,
-			      "arm %u closed at a different instant", i);
+		zassert_equal(baseline.armed[i].ch, log.armed[i].ch, "arm %u", i);
+		zassert_equal(baseline.armed[i].t_open, log.armed[i].t_open, "arm %u", i);
+		zassert_equal(baseline.armed[i].t_close, log.armed[i].t_close, "arm %u", i);
 	}
 	for (i = 0u; i < ED_TRACKED; i++) {
-		zassert_equal(baseline.ok[i], log.done_ok[i],
-			      "channel %u completed a different number of windows",
-			      i);
-		zassert_equal(baseline.missed[i], log.done_missed[i],
-			      "channel %u missed a different number of windows",
-			      i);
-		zassert_equal(0u, log.done_missed[i],
-			      "channel %u missed a window at all", i);
+		zassert_equal(baseline.ok[i], log.done_ok[i], "channel %u", i);
+		zassert_equal(baseline.missed[i], log.done_missed[i], "channel %u", i);
+		zassert_equal(0u, log.done_missed[i], "channel %u", i);
 	}
 }
 
@@ -659,39 +617,30 @@ ZTEST(ed, test_sched_ed_fills_gaps_and_the_map)
 		log.repost = false;
 	}
 
-	zassert_true(log.n_dwell >= RADIANT_CHANMAP_MIN_DWELLS,
-		     "only %u dwells ran in six periods of idle gap",
-		     log.n_dwell);
+	zassert_true(log.n_dwell >= RADIANT_CHANMAP_MIN_DWELLS, "%u dwells", log.n_dwell);
 	for (i = 0u; i < log.n_dwell && i < ED_LOG_MAX; i++) {
-		zassert_equal(ED_CH, log.dwell[i].ch,
-			      "a dwell was routed to the wrong channel");
+		zassert_equal(ED_CH, log.dwell[i].ch);
 		zassert_true(log.dwell[i].rf_index >= ED_RF_LO &&
 			     log.dwell[i].rf_index <= ED_RF_HI,
-			     "RF %u is outside the requested range",
-			     log.dwell[i].rf_index);
+			     "RF %u", log.dwell[i].rf_index);
 		if (log.dwell[i].rf_index == 4u) {
 			loud++;
 		}
 	}
-	zassert_true(loud > 0u, "the sweep never reached RF 4");
+	zassert_true(loud > 0u);
 
 	/* The sweep wrapped rather than stopping at the top of the range. */
-	zassert_true(log.n_dwell > (ED_RF_HI - ED_RF_LO + 1u),
-		     "the sweep did not wrap back to the bottom of its range");
+	zassert_true(log.n_dwell > (ED_RF_HI - ED_RF_LO + 1u));
 
-	zassert_true(radiant_chanmap_get(4u, &rep),
-		     "RF 4 was measured but is not in the map");
-	zassert_equal(radiant_noise_bin_dbm(radiant_noise_bin(-70)), rep.floor_dbm,
-		      "the map did not record what the dwell reported");
+	zassert_true(radiant_chanmap_get(4u, &rep));
+	zassert_equal(radiant_noise_bin_dbm(radiant_noise_bin(-70)), rep.floor_dbm);
 	zassert_equal(radiant_noise_bin_dbm(radiant_noise_bin(-62)), rep.busy_dbm);
 
 	if (radiant_chanmap_get(2u, &rep)) {
-		zassert_true(rep.busy_dbm < -62,
-			     "a quiet index reads as loud as the loud one");
+		zassert_true(rep.busy_dbm < -62);
 	}
 
-	zassert_equal(radiant_sched_stats_get()->ed_dwells, log.n_dwell,
-		      "the scheduler counted a different number of dwells");
+	zassert_equal(radiant_sched_stats_get()->ed_dwells, log.n_dwell);
 }
 
 /*
@@ -719,18 +668,14 @@ ZTEST(ed, test_sched_ed_merges_with_nothing_and_never_preempts)
 	log.repost = false;
 
 	for (i = 0u; i < log.n_armed && i < ED_LOG_MAX; i++) {
-		zassert_not_equal(ED_CH, log.armed[i].ch,
-				  "an ED slot joined a receive window");
+		zassert_not_equal(ED_CH, log.armed[i].ch);
 	}
-	zassert_equal(0u, log.done_missed[0],
-		      "the tracked channel missed a window to an ED chunk");
-	zassert_equal(0u, log.done_failed[ED_CH],
-		      "the ED request failed rather than yielding");
+	zassert_equal(0u, log.done_missed[0]);
+	zassert_equal(0u, log.done_failed[ED_CH]);
 	/* The ED request outlives its chunks, exactly as a background scan
 	 * outlives its own. */
-	zassert_true(radiant_sched_pending(ED_CH),
-		     "the ED request was consumed by a chunk");
-	zassert_true(log.done_ok[ED_CH] > 0u, "no ED chunk completed");
+	zassert_true(radiant_sched_pending(ED_CH));
+	zassert_true(log.done_ok[ED_CH] > 0u);
 }
 
 /*
@@ -776,16 +721,11 @@ ZTEST(ed, test_sched_ed_yields_to_the_background_scan)
 
 	fake_radio_advance_to(t0 + 2u * (radiant_time_t)ED_PERIOD_US);
 
-	zassert_equal(0u, log.n_dwell,
-		      "an ED chunk ran while a background scan wanted the radio");
-	zassert_equal(0u, radiant_sched_stats_get()->ed_chunks,
-		      "an ED chunk was armed under a scan");
-	zassert_true(radiant_sched_stats_get()->scan_chunks > 0u,
-		     "the scan did not run either; the test proves nothing");
-	zassert_true(radiant_sched_pending(ED_CH),
-		     "a starved ED request must survive rather than expire");
-	zassert_equal(0u, log.done_missed[ED_CH],
-		      "a starved ED request must not be reported as missed");
+	zassert_equal(0u, log.n_dwell);
+	zassert_equal(0u, radiant_sched_stats_get()->ed_chunks);
+	zassert_true(radiant_sched_stats_get()->scan_chunks > 0u);
+	zassert_true(radiant_sched_pending(ED_CH));
+	zassert_equal(0u, log.done_missed[ED_CH]);
 }
 
 /* An ED request has no deadline, so the expiry sweep must never touch it - the
@@ -800,10 +740,9 @@ ZTEST(ed, test_sched_ed_never_expires)
 	/* No other work at all, and a long time with the clock moving. */
 	fake_radio_advance(5u * (uint64_t)ED_PERIOD_US);
 
-	zassert_true(radiant_sched_pending(ED_CH), "the ED request was expired");
-	zassert_equal(0u, log.done_missed[ED_CH],
-		      "the ED request was reported MISSED");
-	zassert_true(log.n_dwell > 0u, "the ED request never measured anything");
+	zassert_true(radiant_sched_pending(ED_CH));
+	zassert_equal(0u, log.done_missed[ED_CH]);
+	zassert_true(log.n_dwell > 0u);
 }
 
 /*
@@ -824,34 +763,29 @@ ZTEST(ed, test_sched_ed_survives_a_denial)
 	zassert_ok(radiant_sched_tick());
 	fake_radio_advance((uint64_t)ED_PERIOD_US);
 	dwells_before = log.n_dwell;
-	zassert_true(dwells_before > 0u, "the ED request never got going");
+	zassert_true(dwells_before > 0u);
 
 	/* Accepted, then never granted. */
 	fake_radio_force_terminal_repeat(RADIANT_RADIO_STATUS_DENIED, 4u);
 	fake_radio_advance(4u * (uint64_t)ED_PERIOD_US);
 
-	zassert_true(radiant_sched_pending(ED_CH),
-		     "a denied chunk consumed the standing ED request");
-	zassert_equal(0u, log.done_missed[ED_CH], NULL);
-	zassert_equal(0u, log.done_failed[ED_CH],
-		      "a denial was reported as a backend fault");
-	zassert_true(log.done_denied[ED_CH] > 0u,
-		     "the denial was not reported to the owner at all");
+	zassert_true(radiant_sched_pending(ED_CH));
+	zassert_equal(0u, log.done_missed[ED_CH]);
+	zassert_equal(0u, log.done_failed[ED_CH]);
+	zassert_true(log.done_denied[ED_CH] > 0u);
 
 	/* Refused at the arm call - the synchronous EDENIED path. */
 	fake_radio_force_arm_repeat(RADIANT_RADIO_EDENIED, 4u);
 	fake_radio_advance(4u * (uint64_t)ED_PERIOD_US);
 
-	zassert_true(radiant_sched_pending(ED_CH),
-		     "a refused arm consumed the standing ED request");
+	zassert_true(radiant_sched_pending(ED_CH));
 
 	/* And when the air comes back, so does the sweep. Asserting the request
 	 * is still pending is not enough: it has to be armable again, which is
 	 * the property a cleared rf_cursor or a stuck in_flight flag would
 	 * break without touching the pending bit. */
 	fake_radio_advance(4u * (uint64_t)ED_PERIOD_US);
-	zassert_true(log.n_dwell > dwells_before,
-		     "the ED sweep never resumed after the arbiter let go");
+	zassert_true(log.n_dwell > dwells_before);
 	zassert_equal(0u, fake_radio_viol_count(), "%s",
 		      fake_radio_viol_name(fake_radio_viol(0)->code));
 }

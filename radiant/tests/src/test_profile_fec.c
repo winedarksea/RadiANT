@@ -65,9 +65,9 @@ ZTEST(profile_fec, test_general_page_fields)
 		      NULL);
 
 	zassert_equal(g.equipment_type, PROFILE_FEC_TYPE_TRAINER, NULL);
-	zassert_equal(g.elapsed_time_qs, 40u, "0.25 s units, not seconds");
+	zassert_equal(g.elapsed_time_qs, 40u);
 	zassert_equal(g.distance_m, 100u, NULL);
-	zassert_true(g.distance_valid, "capabilities bit 2 is set");
+	zassert_true(g.distance_valid);
 	zassert_equal(g.speed_mm_s, 5000u, NULL);
 	zassert_true(g.speed_valid, NULL);
 	zassert_false(g.speed_virtual, NULL);
@@ -106,8 +106,7 @@ ZTEST(profile_fec, test_lap_toggle_is_bit_3_of_the_state_nibble)
 	body[7] = 0xB5u;
 
 	zassert_equal(profile_fec_decode_general(body, &g), 0, NULL);
-	zassert_equal(g.state, PROFILE_FEC_STATE_IN_USE,
-		      "the lap toggle must not leak into the state");
+	zassert_equal(g.state, PROFILE_FEC_STATE_IN_USE);
 	zassert_true(g.lap_toggle, NULL);
 }
 
@@ -140,8 +139,7 @@ ZTEST(profile_fec, test_distance_is_gated_by_a_bit_not_a_sentinel)
 	body[7] = 0x31u;             /* caps 0x1: distance-enabled bit CLEAR */
 
 	zassert_equal(profile_fec_decode_general(body, &g), 0, NULL);
-	zassert_false(g.distance_valid,
-		      "capabilities bit 2 clear means byte 3 is meaningless");
+	zassert_false(g.distance_valid);
 
 	/* And the mirror image: 255 with the bit set is 255 metres, not
 	 * "absent". This is the reading a sentinel habit gets wrong. */
@@ -160,7 +158,7 @@ ZTEST(profile_fec, test_virtual_speed_is_a_flag_on_a_valid_reading)
 	body[7] = 0x3Du; /* caps 0xD = 0x5 | bit 3 (virtual speed) */
 
 	zassert_equal(profile_fec_decode_general(body, &g), 0, NULL);
-	zassert_true(g.speed_valid, "virtual speed is not invalid speed");
+	zassert_true(g.speed_valid);
 	zassert_true(g.speed_virtual, NULL);
 	zassert_equal(g.speed_mm_s, 5000u, NULL);
 }
@@ -174,8 +172,8 @@ ZTEST(profile_fec, test_trainer_page_fields)
 	zassert_equal(t.event_count, 7u, NULL);
 	zassert_equal(t.cadence_rpm, 85u, NULL);
 	zassert_true(t.cadence_valid, NULL);
-	zassert_equal(t.acc_power_w, 1000u, "bytes 3-4 LE, one earlier than 0x0B's");
-	zassert_equal(t.inst_power_w, 200u, "byte 5 + byte 6's LOW nibble");
+	zassert_equal(t.acc_power_w, 1000u);
+	zassert_equal(t.inst_power_w, 200u);
 	zassert_true(t.power_valid, NULL);
 	zassert_equal(t.trainer_status, 0u, NULL);
 	zassert_equal(t.flags, PROFILE_FEC_TARGET_POWER_OK, NULL);
@@ -198,7 +196,7 @@ ZTEST(profile_fec, test_trainer_power_uses_twelve_bits_across_two_bytes)
 
 	zassert_equal(profile_fec_decode_trainer(body, &t), 0, NULL);
 	zassert_equal(t.inst_power_w, 4094u, NULL);
-	zassert_true(t.power_valid, "4094 is not the sentinel; 4095 is");
+	zassert_true(t.power_valid);
 	zassert_equal(t.trainer_status,
 		      PROFILE_FEC_TRAINER_STATUS_POWER_CAL |
 			      PROFILE_FEC_TRAINER_STATUS_RESISTANCE_CAL,
@@ -219,8 +217,7 @@ ZTEST(profile_fec, test_invalid_instantaneous_power_condemns_the_accumulator)
 
 	zassert_equal(profile_fec_decode_trainer(body, &t), 0, NULL);
 	zassert_false(t.power_valid, NULL);
-	zassert_equal(t.acc_power_w, 1000u,
-		      "the raw value is still reported; power_valid is the gate");
+	zassert_equal(t.acc_power_w, 1000u);
 }
 
 ZTEST(profile_fec, test_trainer_cadence_sentinel)

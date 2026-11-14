@@ -69,11 +69,8 @@ static void before(void *fixture)
 	ARG_UNUSED(fixture);
 
 	fake_radio_reset();
-	zassert_true(radiant_crc_repair_init(),
-		     "the syndrome table is not a bijection - two single-bit "
-		     "errors share a syndrome, which CRC-16/CCITT over 136 bits "
-		     "cannot do, so the polynomial or the frame geometry has "
-		     "changed");
+	/* Single-bit syndromes collide only if the polynomial or frame geometry changed. */
+	zassert_true(radiant_crc_repair_init());
 }
 
 ZTEST_SUITE(radiant_crc_repair, NULL, NULL, before, NULL, NULL);
@@ -100,9 +97,7 @@ ZTEST(radiant_crc_repair, test_the_undamaged_frame_has_the_measured_crc)
 	 * wrong answer and would still pass. It goes first for that reason. */
 	crc = radiant_crc16(RADIANT_CRC_INIT, spike_addr, sizeof(spike_addr));
 	crc = radiant_crc16(crc, spike_body, BODY_LEN);
-	zassert_equal(SPIKE_CRC, crc,
-		      "expected the on-air CRC 0x%04X, computed 0x%04X",
-		      SPIKE_CRC, crc);
+	zassert_equal(SPIKE_CRC, crc, "on-air 0x%04X, computed 0x%04X", SPIKE_CRC, crc);
 }
 
 /* ---------------------------------------------------------------------------
@@ -132,11 +127,8 @@ ZTEST(radiant_crc_repair, test_every_body_bit_is_repaired_to_the_original)
 					sizeof(spike_addr), body, BODY_LEN,
 					SPIKE_CRC);
 
-		zassert_equal(RADIANT_CRC_REPAIR_BODY, rc,
-			      "bit %u was not recognised as a body error (rc=%d)",
-			      bit, rc);
-		zassert_mem_equal(body, spike_body, BODY_LEN,
-				  "bit %u was repaired to the wrong bytes", bit);
+		zassert_equal(RADIANT_CRC_REPAIR_BODY, rc, "bit %u rc=%d", bit, rc);
+		zassert_mem_equal(body, spike_body, BODY_LEN, "bit %u", bit);
 	}
 }
 
@@ -157,11 +149,8 @@ ZTEST(radiant_crc_repair, test_every_crc_bit_is_recognised_and_the_body_untouche
 					sizeof(spike_addr), body, BODY_LEN,
 					(uint32_t)(SPIKE_CRC ^ (1u << bit)));
 
-		zassert_equal(RADIANT_CRC_REPAIR_IN_CRC, rc,
-			      "CRC bit %u was not recognised (rc=%d)", bit, rc);
-		zassert_mem_equal(body, spike_body, BODY_LEN,
-				  "CRC bit %u: the body was modified when the "
-				  "damage was not in it", bit);
+		zassert_equal(RADIANT_CRC_REPAIR_IN_CRC, rc, "CRC bit %u rc=%d", bit, rc);
+		zassert_mem_equal(body, spike_body, BODY_LEN, "CRC bit %u", bit);
 	}
 }
 
@@ -245,8 +234,8 @@ ZTEST(radiant_crc_repair, test_a_syndrome_that_names_an_address_bit_writes_nothi
 					 sizeof(spike_addr), g.body, BODY_LEN,
 					 crc_sent), NULL);
 	for (i = 0u; i < sizeof(g.before); i++) {
-		zassert_equal(0xA5u, g.before[i], "wrote before the body");
-		zassert_equal(0xA5u, g.after[i], "wrote after the body");
+		zassert_equal(0xA5u, g.before[i]);
+		zassert_equal(0xA5u, g.after[i]);
 	}
 	zassert_mem_equal(g.body, spike_body, BODY_LEN, NULL);
 }
@@ -284,14 +273,11 @@ ZTEST(radiant_crc_repair, test_no_two_bit_error_is_ever_repaired)
 						spike_addr, sizeof(spike_addr),
 						body, BODY_LEN, SPIKE_CRC);
 
-			zassert_equal(RADIANT_CRC_REPAIR_ENONE, rc,
-				      "bits %u and %u were not refused (rc=%d) "
-				      "- the (x + 1) factor of the polynomial "
-				      "should make that impossible", a, b, rc);
+			zassert_equal(RADIANT_CRC_REPAIR_ENONE, rc, "bits %u,%u rc=%d", a, b, rc);
 		}
 	}
 
-	zassert_equal(3160u, pairs, "the loop did not cover what it claims");
+	zassert_equal(3160u, pairs);
 }
 
 ZTEST(radiant_crc_repair, test_the_syndrome_parity_rule_the_above_rests_on)
@@ -315,11 +301,7 @@ ZTEST(radiant_crc_repair, test_the_syndrome_parity_rule_the_above_rests_on)
 		for (i = 0u; i < 16u; i++) {
 			popcount += (unsigned int)((syndrome >> i) & 1u);
 		}
-		zassert_equal(1u, popcount & 1u,
-			      "bit %u has an even-popcount syndrome 0x%04X, so "
-			      "the polynomial has lost its (x + 1) factor and "
-			      "two-bit errors are no longer excluded", bit,
-			      syndrome);
+		zassert_equal(1u, popcount & 1u, "bit %u, syndrome 0x%04X", bit, syndrome);
 	}
 }
 
@@ -363,9 +345,7 @@ ZTEST(radiant_crc_repair, test_three_bit_errors_collide_at_the_predicted_rate)
 					sizeof(spike_addr), body, BODY_LEN,
 					SPIKE_CRC);
 
-				zassert_not_equal(RADIANT_CRC_REPAIR_EAGREE, rc,
-						  "three flipped bits computed "
-						  "to a matching CRC");
+				zassert_not_equal(RADIANT_CRC_REPAIR_EAGREE, rc);
 
 				if (rc == RADIANT_CRC_REPAIR_BODY ||
 				    rc == RADIANT_CRC_REPAIR_IN_CRC) {
@@ -379,23 +359,15 @@ ZTEST(radiant_crc_repair, test_three_bit_errors_collide_at_the_predicted_rate)
 		}
 	}
 
-	zassert_equal(0u, correct_repairs,
-		      "a three-bit error was repaired back to the original "
-		      "bytes, which no single flip can do - the test is wrong, "
-		      "not the code");
+	zassert_equal(0u, correct_repairs);
 
 	/* A wide band on purpose: checks the ORDER of the claimed rate, not its
 	 * distribution. Worse than 1 in 100 would mean the syndrome space is
 	 * smaller than argued; zero would mean the repair path was never
 	 * reached. */
-	zassert_true(false_repairs > 0u,
-		     "no three-bit error was falsely repaired in %u samples, "
-		     "which is not what the arithmetic predicts - the repair "
-		     "path is probably not being reached", triples / 8u);
-	zassert_true(false_repairs * 100u < (triples / 8u),
-		     "%u of %u three-bit errors falsely repaired - worse than "
-		     "1 in 100, so RADIANT_CRC_REPAIR's false-accept "
-		     "arithmetic is wrong", false_repairs, triples / 8u);
+	zassert_true(false_repairs > 0u, "%u samples", triples / 8u);
+	zassert_true(false_repairs * 100u < (triples / 8u), "%u of %u",
+		     false_repairs, triples / 8u);
 }
 
 ZTEST(radiant_crc_repair, test_a_wholly_corrupted_body_is_refused)
@@ -424,8 +396,7 @@ ZTEST(radiant_crc_repair, test_a_wholly_corrupted_body_is_refused)
 		}
 	}
 
-	zassert_true(refused >= 190u,
-		     "only %u of 200 scrambled bodies were refused", refused);
+	zassert_true(refused >= 190u, "%u of 200", refused);
 }
 
 /* ---------------------------------------------------------------------------
@@ -451,8 +422,7 @@ ZTEST(radiant_crc_repair, test_a_search_window_is_refused_by_the_module_itself)
 	zassert_equal(RADIANT_CRC_REPAIR_EINVAL,
 		      radiant_crc_repair(RADIANT_FRAME_CFG_SEARCH, spike_addr,
 					 RADIANT_FRAME_ADDR_LEN_SEARCH, body,
-					 BODY_LEN, SPIKE_CRC),
-		      "a search-format window was served a repair");
+					 BODY_LEN, SPIKE_CRC));
 
 	/* And the body was not touched on the way to being refused. */
 	flip(body, 3u);
@@ -527,11 +497,9 @@ ZTEST(radiant_crc_repair, test_the_table_has_no_duplicates_for_either_geometry)
 	 * over the whole range is one for both.
 	 */
 	zassert_true(RADIANT_FRAME_HDR_LEN_TRACKING + RADIANT_FRAME_PAYLOAD_STD
-			     <= RADIANT_FRAME_BODY_MAX,
-		     "the tracking geometry no longer fits the table's range");
+			     <= RADIANT_FRAME_BODY_MAX);
 	zassert_true(RADIANT_FRAME_HDR_LEN_SEARCH + RADIANT_FRAME_PAYLOAD_STD
-			     <= RADIANT_FRAME_BODY_MAX,
-		     "the search geometry no longer fits the table's range");
+			     <= RADIANT_FRAME_BODY_MAX);
 
 	for (i = 0u; i < (size_t)RADIANT_FRAME_BODY_MAX * 8u; i++) {
 		uint8_t vector[RADIANT_FRAME_BODY_MAX];
@@ -539,8 +507,7 @@ ZTEST(radiant_crc_repair, test_the_table_has_no_duplicates_for_either_geometry)
 		memset(vector, 0, sizeof(vector));
 		vector[0] = (uint8_t)(1u << (i % 8u));
 		syndromes[n] = radiant_crc16(0u, vector, (i / 8u) + 1u);
-		zassert_not_equal(0u, syndromes[n],
-				  "body bit %u is invisible to the CRC", i);
+		zassert_not_equal(0u, syndromes[n], "bit %u", i);
 		n++;
 	}
 	for (i = 0u; i < (size_t)RADIANT_FRAME_CRC_BYTES * 8u; i++) {
@@ -551,11 +518,7 @@ ZTEST(radiant_crc_repair, test_the_table_has_no_duplicates_for_either_geometry)
 
 	for (i = 0u; i < n; i++) {
 		for (j = i + 1u; j < n; j++) {
-			zassert_not_equal(syndromes[i], syndromes[j],
-					  "entries %u and %u share syndrome "
-					  "0x%04X, so a repair between them "
-					  "would be a coin toss", i, j,
-					  syndromes[i]);
+			zassert_not_equal(syndromes[i], syndromes[j], "entries %u, %u", i, j);
 		}
 	}
 }
@@ -576,12 +539,8 @@ ZTEST(radiant_crc_repair, test_an_absent_received_crc_cannot_produce_a_repair)
 	rc = radiant_crc_repair(RADIANT_FRAME_CFG_TRACKING, spike_addr,
 				sizeof(spike_addr), body, BODY_LEN, 0u);
 
-	zassert_equal(RADIANT_CRC_REPAIR_ENONE, rc,
-		      "a zero received CRC produced rc=%d rather than a "
-		      "refusal", rc);
-	zassert_mem_equal(body, spike_body, BODY_LEN,
-			  "an undamaged frame was modified on the strength of "
-			  "a CRC the backend never supplied");
+	zassert_equal(RADIANT_CRC_REPAIR_ENONE, rc, "rc=%d", rc);
+	zassert_mem_equal(body, spike_body, BODY_LEN);
 }
 
 /* ---------------------------------------------------------------------------
@@ -665,8 +624,8 @@ static void run_one_crc_fail(bool crc_rx_set)
 	zassert_equal(RADIANT_RADIO_OK_RC, fake_radio_air_add(&air), NULL);
 
 	fake_radio_advance_to(t0 + 600000u);
-	zassert_true(n_rx >= 1u, "no receive event at all");
-	zassert_equal(0u, fake_radio_viol_count(), "contract violation: %s",
+	zassert_true(n_rx >= 1u);
+	zassert_equal(0u, fake_radio_viol_count(), "%s",
 		      fake_radio_viol_name(fake_radio_viol(0)->code));
 }
 
@@ -675,8 +634,7 @@ ZTEST(radiant_crc_repair, test_a_backend_with_the_capability_hands_over_the_crc)
 	fake_radio_caps_preset_nrf();
 	run_one_crc_fail(true);
 
-	zassert_true(last_has_crc_rx,
-		     "the mock withheld a CRC the backend claims to keep");
+	zassert_true(last_has_crc_rx);
 	zassert_equal(SPIKE_CRC, last_crc_rx, NULL);
 }
 
@@ -690,13 +648,11 @@ ZTEST(radiant_crc_repair, test_a_backend_without_the_capability_hands_over_nothi
 	 * information in it at all.
 	 */
 	fake_radio_caps_preset_rail();
-	zassert_false(radiant_radio_caps_get()->has_rx_crc,
-		      "this test needs a backend without the capability");
+	zassert_false(radiant_radio_caps_get()->has_rx_crc);
 
 	run_one_crc_fail(true);
 
-	zassert_false(last_has_crc_rx,
-		      "a backend that keeps no received CRC reported one");
+	zassert_false(last_has_crc_rx);
 	zassert_equal(0u, last_crc_rx, NULL);
 }
 

@@ -275,9 +275,7 @@ static void step(void)
 		}
 		profile_hr_set_operating_time(&g_hr, g_stream / 4u);
 		kind = profile_hr_next(&g_hr, now, body);
-		zassert_not_equal(PROFILE_SLOT_IDLE, kind,
-				  "the strap went silent at message %u",
-				  g_stream);
+		zassert_not_equal(PROFILE_SLOT_IDLE, kind, "message %u", g_stream);
 
 		/* Is this one of the announcement's frames? Decided the way a
 		 * receiver decides it - from byte [0] and byte [1] - so the
@@ -387,7 +385,7 @@ static void run(uint32_t n)
 	uint32_t i;
 
 	for (i = 0u; i < n; i++) {
-		zassert_true(g_stream < MAX_STEPS, "ran off the end of the log");
+		zassert_true(g_stream < MAX_STEPS);
 		step();
 	}
 }
@@ -595,57 +593,41 @@ ZTEST(profile_private, test_three_keyed_receivers_follow_one_switch)
 
 	build_command(RX_A, PROFILE_PRIVATE_OP_GO_PRIVATE, at(g_stream), cmd);
 	zassert_equal(1, profile_private_on_command(&g_pp, at(g_stream), cmd,
-						    sizeof(cmd)),
-		      "an authenticated command from a paired keyholder was not "
-		      "accepted by a `command` node");
+						    sizeof(cmd)));
 	zassert_equal(PROFILE_PRIVATE_STATE_ANNOUNCING,
 		      profile_private_state(&g_pp));
 
 	run(96u);
 
 	/* ── The node went ──────────────────────────────────────────────── */
-	zassert_true(g_switched, "the countdown never expired");
+	zassert_true(g_switched);
 	zassert_equal(1u, g_enter_calls);
 	zassert_equal(PRIVATE_DEVICE_TYPE, g_entered_type);
 	zassert_equal(PRIVATE_PERIOD, g_entered_period);
-	zassert_equal(profile_private_locator(&g_pp), g_entered_devnum,
-		      "the node opened a channel on a number that is not its "
-		      "derived locator");
+	zassert_equal(profile_private_locator(&g_pp), g_entered_devnum);
 
 	/* ── ...and all three followed, on the same message ─────────────── */
 	for (i = 0u; i < FOLLOWERS; i++) {
-		zassert_true(g_f[i].saw_target,
-			     "receiver %u never learned where the node went", i);
-		zassert_true(g_f[i].announcements > 0u,
-			     "receiver %u verified no announcement", i);
-		zassert_equal(g_entered_devnum, g_f[i].target_devnum,
-			      "receiver %u followed to the wrong device number",
-			      i);
+		zassert_true(g_f[i].saw_target, "receiver %u", i);
+		zassert_true(g_f[i].announcements > 0u, "receiver %u", i);
+		zassert_equal(g_entered_devnum, g_f[i].target_devnum, "receiver %u", i);
 		zassert_equal(PRIVATE_DEVICE_TYPE, g_f[i].target_type);
 	}
-	zassert_equal(g_f[0].due_at, g_f[1].due_at,
-		      "the receiver that sent the command retuned on message %u "
-		      "and one that did not retuned on message %u; that is the "
-		      "1:N failure this feature is most likely to ship with",
-		      g_f[0].due_at, g_f[1].due_at);
-	zassert_equal(g_f[0].due_at, g_f[2].due_at,
-		      "receivers %u and %u retuned on different messages",
-		      0u, 2u);
+	zassert_equal(g_f[0].due_at, g_f[1].due_at, "%u vs %u", g_f[0].due_at, g_f[1].due_at);
+	zassert_equal(g_f[0].due_at, g_f[2].due_at);
 
 	/* ...and on the message the node itself left on: both act on the same
 	 * countdown expiry, so these are one number, not two that are close. */
-	zassert_equal(g_switch_msg, g_f[0].due_at,
-		      "the node left on message %u and its receivers retuned on "
-		      "message %u", g_switch_msg, g_f[0].due_at);
+	zassert_equal(g_switch_msg, g_f[0].due_at, "%u vs %u", g_switch_msg, g_f[0].due_at);
 
 	/* The countdown was as long as it said it was: K messages, less the at
 	 * most seven the re-anchoring gives up to land on the quantum. */
 	zassert_true(g_switch_msg >= 24u + PROFILE_PRIVATE_K_DEFAULT -
 					 PROFILE_PRIVATE_COUNTDOWN_UNIT,
-		     "the countdown was %u messages, K is %u",
+		     "%u of %u",
 		     g_switch_msg - 24u, PROFILE_PRIVATE_K_DEFAULT);
 	zassert_true(g_switch_msg <= 24u + PROFILE_PRIVATE_K_DEFAULT + 8u,
-		     "the countdown overran: %u messages against K = %u",
+		     "%u of %u",
 		     g_switch_msg - 24u, PROFILE_PRIVATE_K_DEFAULT);
 }
 
@@ -678,16 +660,9 @@ ZTEST(profile_private, test_a_receiver_joining_mid_countdown_follows)
 	run(96u);
 
 	zassert_true(g_switched);
-	zassert_true(g_f[2].saw_target,
-		     "the receiver that joined at message %u never followed",
-		     joined_at);
-	zassert_true(g_f[2].announcements > 0u,
-		     "the late joiner verified no announcement at all, so it "
-		     "cannot have read a remaining count");
-	zassert_equal(g_f[0].due_at, g_f[2].due_at,
-		      "the receiver that joined mid-countdown retuned on "
-		      "message %u and the ones that heard the whole countdown "
-		      "retuned on message %u", g_f[2].due_at, g_f[0].due_at);
+	zassert_true(g_f[2].saw_target, "joined %u", joined_at);
+	zassert_true(g_f[2].announcements > 0u);
+	zassert_equal(g_f[0].due_at, g_f[2].due_at, "%u vs %u", g_f[2].due_at, g_f[0].due_at);
 	zassert_equal(g_switch_msg, g_f[2].due_at);
 }
 
@@ -710,9 +685,7 @@ ZTEST(profile_private, test_the_locator_agrees_with_the_python_mirror)
 		zassert_equal(RADIANT_SEC_OK,
 			      radiant_sec_compat_locator(NODE_CH, TEST_EPOCH,
 							 attempt, &devnum));
-		zassert_equal(expected[attempt], devnum,
-			      "candidate %u is 0x%04X, the Python mirror says "
-			      "0x%04X", attempt, devnum, expected[attempt]);
+		zassert_equal(expected[attempt], devnum, "candidate %u: 0x%04X", attempt, devnum);
 	}
 
 	/* Every candidate a searching keyholder tries agrees, on the receiver's
@@ -741,8 +714,7 @@ ZTEST(profile_private, test_the_wildcard_is_excluded_and_the_suffix_takes_over)
 
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_compat_locator(NODE_CH, 1315u, 0u, &devnum));
-	zassert_equal(0x50E2u, devnum,
-		      "the excluded wildcard was not skipped: 0x%04X", devnum);
+	zassert_equal(0x50E2u, devnum, "got 0x%04X", devnum);
 	zassert_not_equal(RADIANT_SEC_COMPAT_LOCATOR_WILDCARD, devnum);
 
 	zassert_equal(RADIANT_SEC_OK,
@@ -772,9 +744,7 @@ ZTEST(profile_private, test_a_node_walks_the_candidates_on_a_collision)
 		zassert_equal(0, profile_private_next_locator(&g_pp));
 	}
 	rc = profile_private_next_locator(&g_pp);
-	zassert_equal(-ENOSPC, rc,
-		      "the walk is bounded at %u candidates",
-		      PROFILE_PRIVATE_LOCATOR_TRIES);
+	zassert_equal(-ENOSPC, rc);
 }
 
 ZTEST(profile_private, test_a_receiver_that_missed_the_announcement_reacquires)
@@ -795,19 +765,10 @@ ZTEST(profile_private, test_a_receiver_that_missed_the_announcement_reacquires)
 	run(160u);
 
 	zassert_true(g_switched);
-	zassert_equal(0u, g_f[2].announcements,
-		      "the receiver that was supposed to miss the announcement "
-		      "verified one");
-	zassert_true(g_f[2].saw_target,
-		     "a keyed receiver that missed the announcement never "
-		     "re-acquired; the derived locator is the whole reason the "
-		     "announcement is an optimisation rather than the "
-		     "mechanism");
-	zassert_equal(g_entered_devnum, g_f[2].target_devnum,
-		      "it re-acquired on the wrong number");
-	zassert_true(g_f[2].due_at > g_f[0].due_at,
-		     "re-acquiring by search should cost more than following an "
-		     "announcement, or the announcement is doing nothing");
+	zassert_equal(0u, g_f[2].announcements);
+	zassert_true(g_f[2].saw_target);
+	zassert_equal(g_entered_devnum, g_f[2].target_devnum);
+	zassert_true(g_f[2].due_at > g_f[0].due_at);
 }
 
 /* ═══ broadcast against silent, measured ═════════════════════════════════ */
@@ -838,7 +799,7 @@ ZTEST(profile_private, test_silent_says_nothing_and_everyone_still_reacquires)
 	zassert_true(g_switched);
 	for (i = 0u; i < FOLLOWERS; i++) {
 		zassert_not_equal(UINT32_MAX, g_f[i].first_private,
-				  "broadcast: receiver %u never re-acquired", i);
+				  "receiver %u", i);
 		broadcast_gap[i] = g_f[i].first_private - g_switch_msg;
 	}
 
@@ -850,9 +811,7 @@ ZTEST(profile_private, test_silent_says_nothing_and_everyone_still_reacquires)
 	run(16u);
 	build_command(RX_A, PROFILE_PRIVATE_OP_GO_PRIVATE, at(g_stream), cmd);
 	zassert_equal(1, profile_private_on_command(&g_pp, at(g_stream), cmd,
-						    sizeof(cmd)),
-		      "a silent node still takes the command; what changes is "
-		      "what it says about it");
+						    sizeof(cmd)));
 	/* SILENT MEANS NOW: there is no countdown to wait for, because a
 	 * countdown with nothing to carry it is a delay rather than a warning. */
 	zassert_equal(PROFILE_PRIVATE_STATE_PRIVATE,
@@ -860,14 +819,9 @@ ZTEST(profile_private, test_silent_says_nothing_and_everyone_still_reacquires)
 	run(200u);
 
 	for (i = 0u; i < FOLLOWERS; i++) {
-		zassert_true(g_f[i].saw_target,
-			     "silent: receiver %u never re-acquired", i);
-		zassert_equal(g_entered_devnum, g_f[i].target_devnum,
-			      "silent: receiver %u derived the wrong locator",
-			      i);
-		zassert_equal(0u, g_f[i].announcements,
-			      "silent: receiver %u verified an announcement, so "
-			      "one went on the air", i);
+		zassert_true(g_f[i].saw_target, "receiver %u", i);
+		zassert_equal(g_entered_devnum, g_f[i].target_devnum, "receiver %u", i);
+		zassert_equal(0u, g_f[i].announcements, "receiver %u", i);
 		zassert_not_equal(UINT32_MAX, g_f[i].first_private);
 		silent_gap[i] = g_f[i].first_private - g_switch_msg;
 	}
@@ -882,26 +836,19 @@ ZTEST(profile_private, test_silent_says_nothing_and_everyone_still_reacquires)
 			continue;
 		}
 		count = (uint8_t)((b[1] & 0x0Fu) + 1u);
-		zassert_not_equal(PROFILE_PRIVATE_SET_FRAMES, count,
-				  "message %u is a four-frame beacon set: the "
-				  "announcement went on the air on a silent "
-				  "node", i);
+		zassert_not_equal(PROFILE_PRIVATE_SET_FRAMES, count, "message %u", i);
 		if ((b[1] >> 4) == 0u) {
 			zassert_equal(0u,
 				      (uint8_t)(b[3] & PROFILE_COMPAT_PENDING_SWITCH),
-				      "message %u has the pending-switch bit "
-				      "set on a silent node", i);
+				      "message %u", i);
 		}
 		if ((b[1] >> 4) == 1u) {
 			zassert_equal(0u, b[2],
-				      "message %u carries a locator device type "
-				      "on a silent node", i);
+				      "message %u", i);
 			zassert_equal(0u, (uint8_t)(b[3] | b[4]),
-				      "message %u carries a locator device "
-				      "number on a silent node", i);
+				      "message %u", i);
 			zassert_equal(0u, (uint8_t)(b[5] | b[6]),
-				      "message %u carries a locator period on a "
-				      "silent node", i);
+				      "message %u", i);
 		}
 	}
 
@@ -922,14 +869,9 @@ ZTEST(profile_private, test_silent_says_nothing_and_everyone_still_reacquires)
 
 	for (i = 0u; i < FOLLOWERS; i++) {
 		zassert_true(silent_gap[i] > broadcast_gap[i],
-			     "silent cost receiver %u %u messages and broadcast "
-			     "cost it %u; silent buys unlinkability and PAYS IN "
-			     "AVAILABILITY, so if these are equal the "
-			     "measurement is wrong", i, silent_gap[i],
+			     "receiver %u %u vs %u", i, silent_gap[i],
 			     broadcast_gap[i]);
-		zassert_true(silent_gap[i] >= PROFILE_PRIVATE_SILENCE_MSGS,
-			     "the silent gap cannot be shorter than the silence "
-			     "the receiver has to observe first");
+		zassert_true(silent_gap[i] >= PROFILE_PRIVATE_SILENCE_MSGS);
 	}
 
 	/* The receiver that ASKED pays the same as the two that did not, in
@@ -987,23 +929,18 @@ ZTEST(profile_private, test_an_announcement_that_does_not_verify_is_ignored)
 	rx.verified = 0u;
 	frame_a[3] ^= 0x01u;
 	zassert_equal(0, profile_private_rx_message(&rx, frame_a, 8u, now));
+	/* Herding: a rewritten clear-text devnum must not move keyed receivers. */
 	zassert_equal(-EACCES,
-		      profile_private_rx_message(&rx, frame_b, 8u, now),
-		      "a herding attack: rewrite the device number in a frame "
-		      "that is in the clear and every keyed receiver in the "
-		      "room follows you instead");
+		      profile_private_rx_message(&rx, frame_b, 8u, now));
 	zassert_equal(1u, rx.rejected);
-	zassert_false(rx.armed,
-		      "an unverified announcement armed the receiver anyway");
+	zassert_false(rx.armed);
 	frame_a[3] ^= 0x01u;
 
 	/* ── One bit of the COUNTDOWN moved ─────────────────────────────── */
 	frame_a[7] ^= 0x01u;
 	zassert_equal(0, profile_private_rx_message(&rx, frame_a, 8u, now));
 	zassert_equal(-EACCES,
-		      profile_private_rx_message(&rx, frame_b, 8u, now),
-		      "moving the countdown desynchronises every receiver in "
-		      "the room from every other one");
+		      profile_private_rx_message(&rx, frame_b, 8u, now));
 	frame_a[7] ^= 0x01u;
 
 	/* ── One bit of the TAG ─────────────────────────────────────────── */
@@ -1018,9 +955,7 @@ ZTEST(profile_private, test_an_announcement_that_does_not_verify_is_ignored)
 	frame_b[1] = (uint8_t)((PROFILE_PRIVATE_SET_INDEX_B << 4) |
 			       (PROFILE_PRIVATE_SET_FRAMES - 1u));
 	frame_a[1] = (uint8_t)((PROFILE_PRIVATE_SET_INDEX_A << 4) | 7u);
-	zassert_equal(0, profile_private_rx_message(&rx, frame_a, 8u, now),
-		      "an eight-frame set is not an announcement and must not "
-		      "be read as one");
+	zassert_equal(0, profile_private_rx_message(&rx, frame_a, 8u, now));
 	frame_a[1] = (uint8_t)((PROFILE_PRIVATE_SET_INDEX_A << 4) |
 			       (PROFILE_PRIVATE_SET_FRAMES - 1u));
 
@@ -1072,10 +1007,7 @@ ZTEST(profile_private, test_a_replayed_announcement_fails_in_another_window)
 
 	zassert_equal(0, profile_private_rx_message(&rx, frame_a, 8u, later));
 	zassert_equal(-EACCES,
-		      profile_private_rx_message(&rx, frame_b, 8u, later),
-		      "an announcement recorded in one interval verified in "
-		      "another; a passive observer could then herd every keyed "
-		      "receiver in the room with yesterday's capture");
+		      profile_private_rx_message(&rx, frame_b, 8u, later));
 	zassert_equal(1u, rx.rejected);
 	zassert_false(rx.armed);
 }
@@ -1098,10 +1030,7 @@ ZTEST(profile_private, test_a_never_node_refuses_an_authenticated_command)
 		      profile_private_on_command(&g_pp, at(g_stream), cmd,
 						 sizeof(cmd)));
 	zassert_equal(1u, g_pp.refused_policy);
-	zassert_equal(0u, g_pp.refused_unauth,
-		      "the command was authentic; refusing it is a policy "
-		      "decision and counting it as an attack would tell an "
-		      "owner the wrong thing");
+	zassert_equal(0u, g_pp.refused_unauth);
 	zassert_equal(PROFILE_PRIVATE_STATE_COMPAT,
 		      profile_private_state(&g_pp));
 
@@ -1111,11 +1040,8 @@ ZTEST(profile_private, test_a_never_node_refuses_an_authenticated_command)
 	zassert_equal(2u, g_pp.refused_policy);
 
 	run(64u);
-	zassert_equal(0u, g_enter_calls, "a `never` node left the compat "
-					 "channel");
-	zassert_equal(0u, profile_private_locator(&g_pp),
-		      "a `never` node derived a locator; there is nowhere for "
-		      "it to go and the beacon must carry zeros");
+	zassert_equal(0u, g_enter_calls);
+	zassert_equal(0u, profile_private_locator(&g_pp));
 
 	/* ...and the beacon says so, in both fields, which must agree. */
 	zassert_equal(PROFILE_PRIVATE_NEVER,
@@ -1185,8 +1111,7 @@ ZTEST(profile_private, test_an_unauthenticated_request_can_never_switch_a_node)
 		      profile_private_state(&g_pp));
 
 	run(64u);
-	zassert_equal(0u, g_enter_calls,
-		      "an unauthenticated over-air request moved the node");
+	zassert_equal(0u, g_enter_calls);
 }
 
 ZTEST(profile_private, test_no_over_air_path_can_change_policy)
@@ -1211,18 +1136,17 @@ ZTEST(profile_private, test_no_over_air_path_can_change_policy)
 		zassert_equal(-EPROTO,
 			      profile_private_on_command(&g_pp, at(g_stream),
 							 cmd, sizeof(cmd)),
-			      "operation 0x%02X was consumed as something", op);
+			      "op 0x%02X", op);
 		zassert_equal(PROFILE_PRIVATE_COMMAND,
 			      profile_private_policy(&g_pp),
-			      "the policy moved on operation 0x%02X", op);
+			      "op 0x%02X", op);
 	}
 
 	/* Including the shapes a policy command would most plausibly take: an
 	 * operation byte carrying a policy value in its low bits. */
 	zassert_equal(PROFILE_PRIVATE_COMMAND, profile_private_policy(&g_pp));
 	zassert_false(profile_private_policy_from_nvm(&g_pp));
-	zassert_false(g_nvm_has,
-		      "something over the air wrote the policy record");
+	zassert_false(g_nvm_has);
 	zassert_true(g_pp.refused_malformed >= 253u);
 }
 
@@ -1280,10 +1204,7 @@ ZTEST(profile_private, test_policy_precedence_is_nvm_then_kconfig)
 	g_nvm_store_rc = -EIO;
 	zassert_equal(-EIO, profile_private_host_set_policy(&g_pp,
 							    PROFILE_PRIVATE_COMMAND));
-	zassert_equal(PROFILE_PRIVATE_PHYSICAL, profile_private_policy(&g_pp),
-		      "the running policy moved even though the record did "
-		      "not; a node whose policy depends on when it was last "
-		      "rebooted is the bug the precedence rule exists to stop");
+	zassert_equal(PROFILE_PRIVATE_PHYSICAL, profile_private_policy(&g_pp));
 	zassert_equal(PROFILE_PRIVATE_PHYSICAL, g_nvm_policy);
 	g_nvm_store_rc = 0;
 
@@ -1330,31 +1251,15 @@ ZTEST(profile_private, test_attest_off_refuses_every_policy_but_the_exemption)
 								      announce,
 								      false);
 
-			zassert_true(with,
-				     "policy %u announce %u is refused even "
-				     "WITH attestation", policy, announce);
+			zassert_true(with, "policy %u announce %u", policy, announce);
 
 			if (policy == PROFILE_PRIVATE_NEVER) {
-				zassert_true(without,
-					     "`never` needs no attestation: a "
-					     "plain ANT+ sensor is the setting "
-					     "most straps ship in");
+				zassert_true(without);
 			} else if (policy == PROFILE_PRIVATE_PHYSICAL &&
 				   announce == PROFILE_PRIVATE_SILENT) {
-				zassert_true(without,
-					     "physical + silent is THE "
-					     "exemption: nothing is announced, "
-					     "so there is nothing to forge, "
-					     "and there is no over-air trigger "
-					     "to authenticate");
+				zassert_true(without);
 			} else {
-				zassert_false(without,
-					      "policy %u announce %u was "
-					      "permitted with attestation off; "
-					      "a broadcast announcement needs "
-					      "its frame-B tag and a command "
-					      "trigger needs K_cmd",
-					      policy, announce);
+				zassert_false(without, "policy %u announce %u", policy, announce);
 			}
 
 			/* The runtime arm agrees with the predicate, value for
@@ -1365,16 +1270,11 @@ ZTEST(profile_private, test_attest_off_refuses_every_policy_but_the_exemption)
 			if (without) {
 				zassert_equal(0,
 					      profile_private_init(&g_pp, &cfg),
-					      "policy %u announce %u must build "
-					      "AND WORK with attestation off",
-					      policy, announce);
+					      "policy %u announce %u", policy, announce);
 			} else {
 				zassert_equal(-ENOTSUP,
 					      profile_private_init(&g_pp, &cfg),
-					      "policy %u announce %u was "
-					      "accepted at runtime with "
-					      "attestation off", policy,
-					      announce);
+					      "policy %u announce %u", policy, announce);
 			}
 		}
 	}
@@ -1400,9 +1300,7 @@ ZTEST(profile_private, test_the_exempted_combination_actually_switches)
 	run(8u);
 	zassert_equal(0, profile_private_physical_action(&g_pp, at(g_stream)));
 	zassert_equal(PROFILE_PRIVATE_STATE_PRIVATE,
-		      profile_private_state(&g_pp),
-		      "a silent switch happens at once: there is no countdown "
-		      "to wait for");
+		      profile_private_state(&g_pp));
 	zassert_equal(1u, g_enter_calls);
 	zassert_equal(profile_private_locator(&g_pp), g_entered_devnum);
 
@@ -1441,7 +1339,7 @@ ZTEST(profile_private, test_the_node_announces_the_return_and_reverts_on_timeout
 	run(96u);
 	zassert_true(g_switched);
 	for (i = 0u; i < FOLLOWERS; i++) {
-		zassert_true(g_f[i].saw_target, "receiver %u did not follow", i);
+		zassert_true(g_f[i].saw_target, "receiver %u", i);
 		/* Ready to hear the return: they are on the private channel
 		 * now, and the announcement comes from there. */
 		g_f[i].saw_target = false;
@@ -1452,30 +1350,21 @@ ZTEST(profile_private, test_the_node_announces_the_return_and_reverts_on_timeout
 	/* 60 s at ~4 Hz is ~244 messages; the countdown is another ~57. */
 	run(340u);
 
-	zassert_true(g_returned,
-		     "the bounded duration expired and the node stayed private");
+	zassert_true(g_returned);
 	zassert_equal(1u, g_pp.reverts_timeout);
 	zassert_equal(1u, g_leave_calls);
 	zassert_equal(PROFILE_PRIVATE_STATE_COMPAT,
 		      profile_private_state(&g_pp));
 
 	for (i = 0u; i < FOLLOWERS; i++) {
-		zassert_true(g_f[i].announcements > 0u,
-			     "receiver %u heard no RETURN announcement, so it "
-			     "would have sat on a dead channel until a timeout",
-			     i);
-		zassert_true(g_f[i].saw_target, "receiver %u did not come back",
-			     i);
+		zassert_true(g_f[i].announcements > 0u, "receiver %u", i);
+		zassert_true(g_f[i].saw_target, "receiver %u", i);
 		zassert_equal(NODE_DEVNUM, g_f[i].target_devnum,
-			      "the RETURN sent receiver %u to 0x%04X, not back "
-			      "to the compat channel", i,
+			      "receiver %u 0x%04X", i,
 			      g_f[i].target_devnum);
 		zassert_equal(PROFILE_HR_DEVICE_TYPE, g_f[i].target_type);
 		zassert_equal(PROFILE_PRIVATE_REASON_TIMEOUT,
-			      g_f[i].rx.target_reason,
-			      "the reason on the air is what lets a receiver "
-			      "say the node came back because its timer ran "
-			      "out rather than because somebody asked");
+			      g_f[i].rx.target_reason);
 	}
 	zassert_equal(g_f[0].due_at, g_f[1].due_at);
 	zassert_equal(g_f[0].due_at, g_f[2].due_at);
@@ -1505,15 +1394,9 @@ ZTEST(profile_private, test_a_power_cycle_reverts)
 	zassert_equal(0, profile_private_init(&g_pp, &cfg));
 
 	zassert_equal(PROFILE_PRIVATE_STATE_COMPAT,
-		      profile_private_state(&g_pp),
-		      "the node came back up private; a sensor that silently "
-		      "stays private is indistinguishable from a dead one, and "
-		      "this is the revert that has to work when nothing else "
-		      "did");
+		      profile_private_state(&g_pp));
 	zassert_false(profile_private_is_private(&g_pp));
-	zassert_equal(PROFILE_PRIVATE_PHYSICAL, profile_private_policy(&g_pp),
-		      "the POLICY must survive the reboot even though the "
-		      "state must not");
+	zassert_equal(PROFILE_PRIVATE_PHYSICAL, profile_private_policy(&g_pp));
 }
 
 ZTEST(profile_private, test_always_boots_straight_into_private)
@@ -1614,9 +1497,7 @@ ZTEST(profile_private, test_a_countdown_and_an_open_window_refuse_each_other)
 	other.frames = other_frame_count;
 	other.frame = other_frame;
 	other.user = &g_other_open;
-	zassert_equal(0, profile_compat_set_client(&g_pc, &other),
-		      "the beacon page must hold two clients: the exclusion is "
-		      "between two activities, not two registrations");
+	zassert_equal(0, profile_compat_set_client(&g_pc, &other));
 
 	g_other_open = true;
 	g_other_frames = 0u;
@@ -1633,9 +1514,7 @@ ZTEST(profile_private, test_a_countdown_and_an_open_window_refuse_each_other)
 	zassert_equal(2u, g_pp.refused_busy);
 
 	run(16u);
-	zassert_true(g_other_frames > 0u,
-		     "the other client's frames stopped going out, which is the "
-		     "damage the interlock exists to prevent");
+	zassert_true(g_other_frames > 0u);
 	zassert_equal(PROFILE_PRIVATE_STATE_COMPAT,
 		      profile_private_state(&g_pp));
 
@@ -1652,9 +1531,7 @@ ZTEST(profile_private, test_a_countdown_and_an_open_window_refuse_each_other)
 	 * client's side of this is asserted in test_profile_enrol.c against the
 	 * real module; here it is the seam's answer that matters. */
 	zassert_true(profile_compat_client_busy(&g_pc, at(g_stream),
-						&g_other_open),
-		     "a running countdown does not show as busy to the other "
-		     "client, so a window would open straight into it");
+						&g_other_open));
 }
 
 /* ═══ The beacon, while a switch is pending ══════════════════════════════ */
@@ -1714,14 +1591,9 @@ ZTEST(profile_private, test_the_beacon_carries_the_locator_and_the_pending_bit)
 		}
 	}
 
-	zassert_true(saw_four,
-		     "the beacon page's set never grew to four frames, so no "
-		     "announcement can have gone out");
-	zassert_true(saw_pending,
-		     "frame 0 never carried the pending-switch bit during a "
-		     "countdown");
-	zassert_true(saw_locator,
-		     "frame 1 never carried the locator");
+	zassert_true(saw_four);
+	zassert_true(saw_pending);
+	zassert_true(saw_locator);
 }
 
 #endif /* CONFIG_RADIANT_SEC_COMPAT */

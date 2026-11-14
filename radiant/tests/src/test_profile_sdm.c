@@ -49,8 +49,7 @@ ZTEST(profile_sdm, test_status_byte_packs_four_two_bit_fields)
 
 	profile_sdm_status_split(status, &location, &battery, &health,
 				 &use_state);
-	zassert_equal(location, PROFILE_SDM_LOC_OTHER,
-		      "a treadmill is not on anybody's shoe");
+	zassert_equal(location, PROFILE_SDM_LOC_OTHER);
 	zassert_equal(battery, PROFILE_SDM_BATTERY_NEW, NULL);
 	zassert_equal(health, PROFILE_SDM_HEALTH_OK, NULL);
 	zassert_equal(use_state, PROFILE_SDM_USE_ACTIVE, NULL);
@@ -95,8 +94,7 @@ ZTEST(profile_sdm, test_speed_splits_into_a_nibble_and_a_256th)
 		zassert_equal(profile_sdm_speed_split(mm, &int_mps, &frac_256),
 			      0, NULL);
 		back = profile_sdm_speed_mm_s(int_mps, frac_256);
-		zassert_true(back <= mm && (mm - back) <= 4u,
-			     "1/256 m/s is ~3.9 mm/s of resolution");
+		zassert_true(back <= mm && (mm - back) <= 4u);
 	}
 }
 
@@ -160,9 +158,7 @@ ZTEST(profile_sdm, test_reserved_bytes_are_zero_not_all_ones)
 	 * 22. 0xFF in any of these bytes would be a real reading. */
 	zassert_equal(body[1], 0x00u, NULL);
 	zassert_equal(body[2], 0x00u, NULL);
-	zassert_equal(body[6], 0x00u,
-		      "page 2 has no calories byte, and 'no calories' is zero "
-		      "here rather than a sentinel");
+	zassert_equal(body[6], 0x00u);
 }
 
 ZTEST(profile_sdm, test_pages_2_and_3_differ_in_exactly_one_byte)
@@ -208,7 +204,7 @@ ZTEST(profile_sdm, test_pages_2_and_3_differ_in_exactly_one_byte)
 
 	zassert_equal(profile_sdm_encode_supplementary(PROFILE_SDM_PAGE_DEFAULT,
 						       &in, base),
-		      -EINVAL, "the template is only pages 2 and 3");
+		      -EINVAL);
 }
 
 ZTEST(profile_sdm, test_summary_page_is_wider_than_page_1s_accumulators)
@@ -252,8 +248,7 @@ ZTEST(profile_sdm, test_capabilities_page_is_the_validity_convention)
 	zassert_equal(body[0], PROFILE_SDM_PAGE_CAPABILITIES, NULL);
 	zassert_equal(body[1], 0x17u, NULL);
 	for (size_t i = 2; i < 8u; i++) {
-		zassert_equal(body[i], 0x00u,
-			      "reserved is zero on this profile, not 0xFF");
+		zassert_equal(body[i], 0x00u);
 	}
 
 	zassert_equal(profile_sdm_decode_capabilities(body, &out), 0, NULL);
@@ -281,12 +276,9 @@ ZTEST(profile_sdm, test_accumulators_use_the_right_denominator_each)
 	zassert_equal(profile_sdm_decode_default(body, &page1), 0, NULL);
 
 	zassert_equal(page1.time_s, 42u, NULL);
-	zassert_equal(page1.time_frac_200, 100u,
-		      "time is 1/200 s: 0.5 s is 100, not 128 and not 8");
-	zassert_equal(page1.distance_m, 1234u % 256u,
-		      "the page 1 distance byte is meant to wrap at 256 m");
-	zassert_equal(page1.distance_frac_16, 8u,
-		      "distance is 1/16 m: 0.5 m is 8, not 100 and not 128");
+	zassert_equal(page1.time_frac_200, 100u);
+	zassert_equal(page1.distance_m, 1234u % 256u);
+	zassert_equal(page1.distance_frac_16, 8u);
 	zassert_equal(page1.strides, 999u % 256u, NULL);
 	zassert_equal(page1.latency_32, 4u, NULL);
 }
@@ -340,14 +332,11 @@ ZTEST(profile_sdm, test_interleave_is_1_1_x_x_with_a_consecutive_common_pair)
 	 * receiver differences. */
 	for (uint32_t i = 0; i < PROFILE_SDM_DATA_MESSAGES; i++) {
 		if ((i % PROFILE_SDM_GROUP_SLOTS) < 2u) {
-			zassert_equal(pages[i], PROFILE_SDM_PAGE_DEFAULT,
-				      "message %u of the cycle must be page 1",
-				      i);
+			zassert_equal(pages[i], PROFILE_SDM_PAGE_DEFAULT, "message %u", i);
 		} else {
 			zassert_true(pages[i] == PROFILE_SDM_PAGE_BASE ||
 					     pages[i] ==
-						     PROFILE_SDM_PAGE_CALORIES,
-				     "the X slots carry page 2 or page 3");
+						     PROFILE_SDM_PAGE_CALORIES);
 		}
 	}
 
@@ -357,15 +346,13 @@ ZTEST(profile_sdm, test_interleave_is_1_1_x_x_with_a_consecutive_common_pair)
 	zassert_equal(pages[PROFILE_SDM_DATA_MESSAGES + 1u],
 		      PROFILE_COMMON_PAGE_81, NULL);
 	zassert_equal(n_80, n_81, NULL);
-	zassert_equal(pairs, n_81, "the two must be CONSECUTIVE, not merely "
-				  "both present");
+	zassert_equal(pairs, n_81);
 	zassert_equal(n_80, SDM_RUN_MESSAGES / PROFILE_SDM_CYCLE, NULL);
 
 	/* Pages 2 and 3 share the X slots evenly, group by group. */
 	zassert_true(n_page2 > 0u && n_page3 > 0u, NULL);
 	zassert_true((n_page2 > n_page3 ? n_page2 - n_page3
-					: n_page3 - n_page2) <= 4u,
-		     "the alternation must not starve either page");
+					: n_page3 - n_page2) <= 4u);
 
 	/* And the phase survives the pair: message 66 starts a fresh group at
 	 * slot 0, not two slots into one. This is the assertion that fails if
@@ -392,25 +379,20 @@ ZTEST(profile_sdm, test_on_request_takes_the_second_x_slot_only)
 					  2u),
 		      0, NULL);
 	zassert_equal(profile_sdm_request(&sdm, PROFILE_SDM_PAGE_DEFAULT, 1u),
-		      -ENOTSUP,
-		      "page 1 is in the rotation; asking for it is answered by "
-		      "waiting");
+		      -ENOTSUP);
 
 	for (uint32_t i = 0; i < 16u; i++) {
 		(void)profile_sdm_next(&sdm, body);
 		if (body[0] == PROFILE_SDM_PAGE_CAPABILITIES) {
 			seen++;
-			zassert_equal(i % PROFILE_SDM_GROUP_SLOTS, 3u,
-				      "an on-request page takes the SECOND X "
-				      "slot, never a page 1 slot");
+			zassert_equal(i % PROFILE_SDM_GROUP_SLOTS, 3u);
 		} else if (body[0] == PROFILE_SDM_PAGE_DEFAULT) {
 			page1_seen++;
 		}
 	}
 
 	zassert_equal(seen, 2u, NULL);
-	zassert_equal(page1_seen, 8u,
-		      "four groups of two page 1s, undisturbed");
+	zassert_equal(page1_seen, 8u);
 }
 
 /*

@@ -193,10 +193,7 @@ static void tx_hop(uint32_t index, uint8_t air[8])
 /* Hand on-air bytes to the receiver as heard at `t_sync`, and run the pump. */
 static void ingest_at(const uint8_t air[8], uint64_t t_sync)
 {
-	zassert_equal(RADIANT_SEC_RX_DEFER,
-		      radiant_sec_rx_ingest(RX_CH, air, 8u, true, t_sync),
-		      "a secured-range broadcast must be taken by the "
-		      "transform, not delivered in ISR context");
+	zassert_equal(RADIANT_SEC_RX_DEFER, radiant_sec_rx_ingest(RX_CH, air, 8u, true, t_sync));
 	radiant_sec_pump();
 }
 
@@ -267,8 +264,7 @@ ZTEST(radiant_sec, test_nothing_transforms_until_the_epoch_advances)
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_tx_transform(TX_CH, pay, sizeof(pay),
 					       (uint64_t)radiant_radio_now()));
-	zassert_mem_equal(pay, before, sizeof(pay),
-			  "a transform ran before the epoch was set");
+	zassert_mem_equal(pay, before, sizeof(pay));
 
 	zassert_equal(RADIANT_SEC_RX_PLAIN,
 		      radiant_sec_rx_ingest(RX_CH, pay, sizeof(pay), true, 0u));
@@ -277,8 +273,7 @@ ZTEST(radiant_sec, test_nothing_transforms_until_the_epoch_advances)
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_tx_transform(TX_CH, pay, sizeof(pay),
 					       slot_t(0u)));
-	zassert_true(memcmp(pay, before, sizeof(pay)) != 0,
-		     "the transform is still inert after a fresh epoch");
+	zassert_true(memcmp(pay, before, sizeof(pay)) != 0);
 }
 
 ZTEST(radiant_sec, test_the_epoch_only_moves_forwards)
@@ -288,12 +283,8 @@ ZTEST(radiant_sec, test_the_epoch_only_moves_forwards)
 
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_set_epoch(TX_CH, 100u, 0u, TEST_PERIOD));
-	zassert_equal(RADIANT_SEC_EINVAL,
-		      radiant_sec_set_epoch(TX_CH, 100u, 0u, TEST_PERIOD),
-		      "the same epoch was accepted twice");
-	zassert_equal(RADIANT_SEC_EINVAL,
-		      radiant_sec_set_epoch(TX_CH, 99u, 0u, TEST_PERIOD),
-		      "an epoch went backwards");
+	zassert_equal(RADIANT_SEC_EINVAL, radiant_sec_set_epoch(TX_CH, 100u, 0u, TEST_PERIOD));
+	zassert_equal(RADIANT_SEC_EINVAL, radiant_sec_set_epoch(TX_CH, 99u, 0u, TEST_PERIOD));
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_set_epoch(TX_CH, 101u, 0u, TEST_PERIOD));
 
@@ -319,15 +310,10 @@ ZTEST(radiant_sec, test_a_window_verifies)
 		hop(i, false, -1);
 	}
 
-	zassert_equal(12u, log_n_pkt, "every packet must be delivered");
-	zassert_equal(1u, verdicts_for(0u, RADIANT_SEC_VERDICT_VERIFIED),
-		      "window 0 did not verify exactly once");
-	zassert_equal(1u, verdicts_for(4u, RADIANT_SEC_VERDICT_VERIFIED),
-		      "window 4 did not verify exactly once");
-	zassert_equal(2u, log_n_verdict,
-		      "expected exactly two window verdicts from three "
-		      "windows: the tag lags one window, so the last one is "
-		      "still waiting for a tag that has not been sent");
+	zassert_equal(12u, log_n_pkt);
+	zassert_equal(1u, verdicts_for(0u, RADIANT_SEC_VERDICT_VERIFIED));
+	zassert_equal(1u, verdicts_for(4u, RADIANT_SEC_VERDICT_VERIFIED));
+	zassert_equal(2u, log_n_verdict);
 }
 
 /*
@@ -353,13 +339,11 @@ static void span_case(uint8_t w, uint32_t span, bool verifies)
 	for (i = span; i < span + w; i++) {
 		hop(i, false, -1);
 	}
-	zassert_equal(1u, log_n_verdict, "W=%u span %u: %u verdicts", w, span,
-		      log_n_verdict);
+	zassert_equal(1u, log_n_verdict, "W=%u span %u", w, span);
 	zassert_equal(1u,
 		      verdicts_for(0u, verifies ? RADIANT_SEC_VERDICT_VERIFIED
-						: RADIANT_SEC_VERDICT_UNVERIFIED),
-		      "W=%u span %u: window 0 should be %s", w, span,
-		      verifies ? "VERIFIED" : "UNVERIFIED");
+					   : RADIANT_SEC_VERDICT_UNVERIFIED),
+		      "W=%u span %u", w, span);
 }
 
 ZTEST(radiant_sec, test_a_tag_may_ride_past_clear_windows_up_to_256)
@@ -393,11 +377,8 @@ ZTEST(radiant_sec, test_the_transform_owns_byte_one)
 		zassert_equal(RADIANT_SEC_OK,
 			      radiant_sec_tx_transform(TX_CH, pay, sizeof(pay),
 						       slot_t(i)));
-		zassert_equal(i, pay[1],
-			      "byte [1] must be the SLOT index. A host "
-			      "counter repeats across the retransmissions a "
-			      "master makes every slot, and a repeated counter "
-			      "under one (epoch, devnum) is keystream reuse");
+		/* Slot index, not a host counter: a repeated counter is keystream reuse. */
+		zassert_equal(i, pay[1]);
 	}
 }
 
@@ -414,10 +395,8 @@ ZTEST(radiant_sec, test_a_page_outside_the_range_is_untouched)
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_tx_transform(TX_CH, pay, sizeof(pay),
 					       slot_t(0u)));
-	zassert_mem_equal(pay, before, sizeof(pay),
-			  "the descriptor was transformed; it must stay in the "
-			  "clear or a protected node is indistinguishable from "
-			  "a dead one");
+	/* The descriptor stays clear, or a protected node looks dead. */
+	zassert_mem_equal(pay, before, sizeof(pay));
 
 	/* Same on the way in, including the common pages. */
 	pay[0] = 0x51u;   /* common page 81 */
@@ -458,13 +437,10 @@ ZTEST(radiant_sec, test_only_w_two_four_and_eight_are_accepted)
 					       0x01u, 0x0Fu);
 
 		if (w == 2u || w == 4u || w == 8u) {
-			zassert_equal(RADIANT_SEC_OK, rc, "W=%u refused", w);
+			zassert_equal(RADIANT_SEC_OK, rc, "W=%u", w);
 		} else {
-			zassert_equal(RADIANT_SEC_EINVAL, rc,
-				      "W=%u accepted. W must divide 256 and "
-				      "65536 or the counter-derived window "
-				      "stops resynchronising after a lost "
-				      "packet", w);
+			/* W must divide 256 and 65536 to resync after a loss. */
+			zassert_equal(RADIANT_SEC_EINVAL, rc, "W=%u", w);
 		}
 	}
 }
@@ -497,19 +473,15 @@ ZTEST(radiant_sec, test_a_flipped_bit_is_caught_once_one_window_later)
 		hop(i, false, (i == 1u) ? (2 * 8 + 3) : -1);
 	}
 
-	zassert_equal(1u, verdicts_for(0u, RADIANT_SEC_VERDICT_UNVERIFIED),
-		      "the forged window was not reported unverified exactly "
-		      "once");
+	zassert_equal(1u, verdicts_for(0u, RADIANT_SEC_VERDICT_UNVERIFIED));
 	zassert_equal(0u, verdicts_for(0u, RADIANT_SEC_VERDICT_VERIFIED));
 
 	/* And the damage is bounded to that window: the next one is clean. */
-	zassert_equal(1u, verdicts_for(4u, RADIANT_SEC_VERDICT_VERIFIED),
-		      "a single forged packet poisoned the following window");
+	zassert_equal(1u, verdicts_for(4u, RADIANT_SEC_VERDICT_VERIFIED));
 
 	/* D6: delivered and marked, not discarded - discarding would let one
 	 * injected frame cost W legitimate packets (a W-for-1 DoS). */
-	zassert_equal(12u, log_n_pkt,
-		      "packets were discarded rather than marked");
+	zassert_equal(12u, log_n_pkt);
 }
 
 ZTEST(radiant_sec, test_a_lost_packet_breaks_one_window_and_the_next_recovers)
@@ -526,13 +498,9 @@ ZTEST(radiant_sec, test_a_lost_packet_breaks_one_window_and_the_next_recovers)
 		hop(i, i == 2u, -1);
 	}
 
-	zassert_equal(1u, verdicts_for(0u, RADIANT_SEC_VERDICT_UNVERIFIED),
-		      "the window with a hole in it should be unverifiable");
-	zassert_equal(1u, verdicts_for(4u, RADIANT_SEC_VERDICT_VERIFIED),
-		      "THE WHOLE POINT OF DERIVING THE WINDOW FROM THE COUNTER: "
-		      "one lost packet must not desynchronise every window "
-		      "after it");
-	zassert_equal(11u, log_n_pkt, "the surviving packets were not delivered");
+	zassert_equal(1u, verdicts_for(0u, RADIANT_SEC_VERDICT_UNVERIFIED));
+	zassert_equal(1u, verdicts_for(4u, RADIANT_SEC_VERDICT_VERIFIED));
+	zassert_equal(11u, log_n_pkt);
 }
 
 ZTEST(radiant_sec, test_a_secured_page_as_acknowledged_data_is_dropped)
@@ -549,15 +517,13 @@ ZTEST(radiant_sec, test_a_secured_page_as_acknowledged_data_is_dropped)
 	 * this guard, a secured-range page sent as acknowledged data skips the
 	 * MAC entirely and is delivered as implicitly trusted. */
 	zassert_equal(RADIANT_SEC_RX_DROP,
-		      radiant_sec_rx_ingest(RX_CH, pay, sizeof(pay), false, 0u),
-		      "a non-broadcast secured-range page was not dropped");
+		      radiant_sec_rx_ingest(RX_CH, pay, sizeof(pay), false, 0u));
 
 	radiant_sec_pump();
-	zassert_equal(0u, log_n_pkt, "the dropped frame was delivered anyway");
+	zassert_equal(0u, log_n_pkt);
 
 	radiant_sec_get_stats(RX_CH, &st);
-	zassert_equal(1u, st.dropped_non_broadcast,
-		      "the drop must be counted, or it is invisible to a host");
+	zassert_equal(1u, st.dropped_non_broadcast);
 }
 
 ZTEST(radiant_sec, test_a_receiver_with_the_wrong_key_verifies_nothing)
@@ -577,8 +543,7 @@ ZTEST(radiant_sec, test_a_receiver_with_the_wrong_key_verifies_nothing)
 		hop(i, false, -1);
 	}
 
-	zassert_equal(0u, verdicts_for(0u, RADIANT_SEC_VERDICT_VERIFIED),
-		      "a window verified under the wrong key");
+	zassert_equal(0u, verdicts_for(0u, RADIANT_SEC_VERDICT_VERIFIED));
 	zassert_equal(1u, verdicts_for(0u, RADIANT_SEC_VERDICT_UNVERIFIED));
 }
 
@@ -635,8 +600,8 @@ ZTEST(radiant_sec, test_two_receivers_share_one_key_with_no_sensor_state)
 			ch2++;
 		}
 	}
-	zassert_equal(1u, ch1, "receiver 1 did not verify window 0");
-	zassert_equal(1u, ch2, "receiver 2 did not verify window 0");
+	zassert_equal(1u, ch1);
+	zassert_equal(1u, ch2);
 }
 
 /* ── The policy bit ─────────────────────────────────────────────────────── */
@@ -664,16 +629,11 @@ ZTEST(radiant_sec, test_the_drop_policy_holds_a_window_back)
 	 * 4's verdict, and dropped window 0 unjudged as "nothing authenticates
 	 * the first window" - wrong twice: window 4's tag authenticates window
 	 * 0, and window 8 had not been checked at all. */
-	zassert_equal(4u, log_n_pkt,
-		      "expected only the verified window to be released, got "
-		      "%u packets", log_n_pkt);
+	zassert_equal(4u, log_n_pkt, "%u packets", log_n_pkt);
 	for (i = 0; i < log_n_pkt && i < LOG_MAX; i++) {
-		zassert_equal(RADIANT_SEC_VERDICT_VERIFIED,
-			      log_pkt[i].verdict,
-			      "an unverified packet escaped the drop policy");
-		zassert_equal(4u + i, log_pkt[i].pay[2],
-			      "delivery %u was packet %u, expected window 4's "
-			      "packet %u", i, log_pkt[i].pay[2], 4u + i);
+		zassert_equal(RADIANT_SEC_VERDICT_VERIFIED, log_pkt[i].verdict);
+		zassert_equal(4u + i, log_pkt[i].pay[2], "delivery %u was packet %u", i,
+			      log_pkt[i].pay[2]);
 	}
 }
 
@@ -714,22 +674,14 @@ ZTEST(radiant_sec, test_the_drop_policy_never_releases_a_window_on_its_predecess
 		      "setup: the forged window 1 was not judged unverified");
 
 	for (i = 0; i < log_n_pkt && i < LOG_MAX; i++) {
-		zassert_not_equal(5u, log_pkt[i].pay[2],
-				  "the forged packet (hop 5, window 1) was "
-				  "delivered, marked %d - released on window 0's "
-				  "verdict before its own window's MAC was checked",
-				  (int)log_pkt[i].verdict);
-		zassert_equal(RADIANT_SEC_VERDICT_VERIFIED, log_pkt[i].verdict,
-			      "an unverified packet escaped the drop policy");
+		zassert_not_equal(5u, log_pkt[i].pay[2], "marked %d", (int)log_pkt[i].verdict);
+		zassert_equal(RADIANT_SEC_VERDICT_VERIFIED, log_pkt[i].verdict);
 	}
 
-	zassert_equal(ARRAY_SIZE(want), log_n_pkt,
-		      "expected windows 0 and 2 (8 packets), got %u packets",
-		      log_n_pkt);
+	zassert_equal(ARRAY_SIZE(want), log_n_pkt, "%u packets", log_n_pkt);
 	for (i = 0; i < ARRAY_SIZE(want); i++) {
-		zassert_equal(want[i], log_pkt[i].pay[2],
-			      "delivery %u was packet %u, expected %u", i,
-			      log_pkt[i].pay[2], want[i]);
+		zassert_equal(want[i], log_pkt[i].pay[2], "delivery %u was packet %u", i,
+			      log_pkt[i].pay[2]);
 	}
 }
 
@@ -774,11 +726,9 @@ ZTEST(radiant_sec, test_a_wrap_with_no_epoch_left_stops_tx_instead_of_reusing_a_
 		memcpy(pay, conf_plain, 8u);
 		rc = radiant_sec_tx_transform(TX_CH, pay, 8u, slot_t(i));
 	}
-	zassert_ok(rc, "a transform failed before the second wrap (i=%u)", i);
+	zassert_ok(rc, "i=%u", i);
 	memcpy(pay, conf_plain, 8u);
-	zassert_not_equal(RADIANT_SEC_OK,
-			  radiant_sec_tx_transform(TX_CH, pay, 8u, slot_t(i)),
-			  "TX continued with counter 0 under an epoch already used");
+	zassert_not_equal(RADIANT_SEC_OK, radiant_sec_tx_transform(TX_CH, pay, 8u, slot_t(i)));
 }
 
 /*
@@ -808,9 +758,7 @@ ZTEST(radiant_sec, test_release_drops_ciphertext_still_queued_for_the_pump)
 		      radiant_sec_set_epoch(RX_CH, 1u, 0u, TEST_PERIOD));
 
 	radiant_sec_pump();
-	zassert_equal(0u, log_n_pkt,
-		      "a frame queued for the released context was judged "
-		      "under the next one");
+	zassert_equal(0u, log_n_pkt);
 }
 
 /* D1-4: the constant-time compare is still an equality. Constant time itself
@@ -822,27 +770,24 @@ ZTEST(radiant_sec, test_ct_equal_is_equality)
 
 	memset(a, 0x5A, sizeof(a));
 	memcpy(b, a, sizeof(b));
-	zassert_true(radiant_sec_ct_equal(a, b, sizeof(a)), NULL);
-	zassert_true(radiant_sec_ct_equal(a, b, 0u), "n = 0 is equal");
+	zassert_true(radiant_sec_ct_equal(a, b, sizeof(a)));
+	zassert_true(radiant_sec_ct_equal(a, b, 0u));
 	b[0] ^= 0x01u;
-	zassert_false(radiant_sec_ct_equal(a, b, sizeof(a)), "byte 0 differs");
+	zassert_false(radiant_sec_ct_equal(a, b, sizeof(a)));
 	b[0] ^= 0x01u;
 	b[15] ^= 0x80u;
-	zassert_false(radiant_sec_ct_equal(a, b, sizeof(a)), "byte 15 differs");
+	zassert_false(radiant_sec_ct_equal(a, b, sizeof(a)));
 }
 
 /* D1-6(b): a failed key import must not leave an allocated, keyless context
  * behind - configure on it then answered OK where ENOKEY is owed. */
 ZTEST(radiant_sec, test_a_failed_import_leaves_no_keyless_context)
 {
-	zassert_not_equal(RADIANT_SEC_OK,
-			  radiant_sec_set_key(RX_CH, test_root, 64, TEST_DEVNUM),
-			  "setup: a 64-bit key was accepted");
+	zassert_not_equal(RADIANT_SEC_OK, radiant_sec_set_key(RX_CH, test_root, 64, TEST_DEVNUM));
 	zassert_equal(RADIANT_SEC_ENOKEY,
 		      radiant_sec_configure(RX_CH, RADIANT_SEC_SW_AUTH, 2u,
 					    RADIANT_SEC_PAGE_LO_DEFAULT,
-					    RADIANT_SEC_PAGE_HI_DEFAULT),
-		      "a failed import left a context that accepts configure");
+					    RADIANT_SEC_PAGE_HI_DEFAULT));
 }
 
 ZTEST(radiant_sec, test_confidentiality_hides_five_bytes_and_gives_them_back)
@@ -858,21 +803,16 @@ ZTEST(radiant_sec, test_confidentiality_hides_five_bytes_and_gives_them_back)
 	/* Page number and byte [1] (counter, needed to derive the keystream)
 	 * travel in the clear by construction; asserted here so a later
 	 * "encrypt everything" change can't silently break decoding. */
-	zassert_equal(TEST_PAGE, air[0],
-		      "the page number must stay readable or the receiver "
-		      "cannot tell which schema it is holding");
-	zassert_equal(0u, air[1], "byte [1] is the counter, in the clear");
-	zassert_true(memcmp(&air[2], &conf_plain[2], 5u) != 0,
-		     "the five data bytes went out as plaintext");
+	zassert_equal(TEST_PAGE, air[0]);
+	zassert_equal(0u, air[1]);
+	zassert_true(memcmp(&air[2], &conf_plain[2], 5u) != 0);
 
 	zassert_equal(RADIANT_SEC_RX_DEFER,
 		      radiant_sec_rx_ingest(RX_CH, air, 8u, true, sec_anchor));
 	radiant_sec_pump();
 
-	zassert_equal(1u, log_n_pkt, "the receiver delivered %u packets",
-		      log_n_pkt);
-	zassert_mem_equal(&log_pkt[0].pay[2], &conf_plain[2], 5u,
-			  "the receiver did not recover the plaintext");
+	zassert_equal(1u, log_n_pkt, "%u packets", log_n_pkt);
+	zassert_mem_equal(&log_pkt[0].pay[2], &conf_plain[2], 5u);
 	/* CLEAR, not VERIFIED: X_CONF alone hides the payload but authenticates
 	 * nothing; a stream any attacker can still forge. */
 	zassert_equal(RADIANT_SEC_VERDICT_CLEAR, log_pkt[0].verdict);
@@ -902,8 +842,7 @@ ZTEST(radiant_sec, test_conf_vectors_shared_with_python)
 	configure_both(RADIANT_SEC_SW_CONF, 2u);
 	epoch_both(7u);
 	tx_air(0u, air);
-	zassert_mem_equal(air, want_conf_only, 8u,
-			  "X_CONF alone: byte [7] must be ciphertext");
+	zassert_mem_equal(air, want_conf_only, 8u);
 
 	/* And the receiver gives byte [7] back, which the five-byte receiver
 	 * would have left as ciphertext. */
@@ -911,8 +850,7 @@ ZTEST(radiant_sec, test_conf_vectors_shared_with_python)
 		      radiant_sec_rx_ingest(RX_CH, air, 8u, true, sec_anchor));
 	radiant_sec_pump();
 	zassert_equal(1u, log_n_pkt);
-	zassert_equal(conf_plain[7], log_pkt[0].pay[7],
-		      "the receiver left byte [7] as ciphertext");
+	zassert_equal(conf_plain[7], log_pkt[0].pay[7]);
 	zassert_mem_equal(&log_pkt[0].pay[2], &conf_plain[2], 6u);
 
 	radiant_sec_channel_release(TX_CH);
@@ -921,9 +859,8 @@ ZTEST(radiant_sec, test_conf_vectors_shared_with_python)
 	configure_both(RADIANT_SEC_SW_CONF | RADIANT_SEC_SW_AUTH, 2u);
 	epoch_both(7u);
 	tx_air(0u, air);
-	zassert_mem_equal(air, want_with_auth, 7u,
-			  "X_CONF with X_AUTH: bytes [2..6] only");
-	zassert_equal(0x00u, air[7], "byte [7] is the tag byte, not ciphertext");
+	zassert_mem_equal(air, want_with_auth, 7u);
+	zassert_equal(0x00u, air[7]);
 }
 
 ZTEST(radiant_sec, test_the_same_plaintext_twice_is_two_different_ciphertexts)
@@ -944,9 +881,7 @@ ZTEST(radiant_sec, test_the_same_plaintext_twice_is_two_different_ciphertexts)
 
 	zassert_equal(0u, a[1]);
 	zassert_equal(1u, b[1]);
-	zassert_true(memcmp(&a[2], &b[2], 5u) != 0,
-		     "the same plaintext encrypted to the same ciphertext "
-		     "twice; the counter is not reaching the nonce");
+	zassert_true(memcmp(&a[2], &b[2], 5u) != 0);
 }
 
 ZTEST(radiant_sec, test_a_receiver_joining_mid_stream_decrypts_with_no_history)
@@ -973,9 +908,7 @@ ZTEST(radiant_sec, test_a_receiver_joining_mid_stream_decrypts_with_no_history)
 	radiant_sec_pump();
 
 	zassert_equal(1u, log_n_pkt);
-	zassert_mem_equal(&log_pkt[0].pay[2], &conf_plain[2], 5u,
-			  "a receiver that joined at packet 500 did not "
-			  "reconstruct the counter from time");
+	zassert_mem_equal(&log_pkt[0].pay[2], &conf_plain[2], 5u);
 }
 
 ZTEST(radiant_sec, test_a_receiver_with_the_wrong_key_recovers_no_plaintext)
@@ -1001,8 +934,7 @@ ZTEST(radiant_sec, test_a_receiver_with_the_wrong_key_recovers_no_plaintext)
 	radiant_sec_pump();
 
 	zassert_equal(1u, log_n_pkt);
-	zassert_true(memcmp(&log_pkt[0].pay[2], &conf_plain[2], 5u) != 0,
-		     "the wrong key recovered the plaintext");
+	zassert_true(memcmp(&log_pkt[0].pay[2], &conf_plain[2], 5u) != 0);
 }
 
 ZTEST(radiant_sec, test_the_counter_wrap_does_not_repeat_the_keystream)
@@ -1028,10 +960,8 @@ ZTEST(radiant_sec, test_the_counter_wrap_does_not_repeat_the_keystream)
 	}
 	tx_air(65536u, again);
 
-	zassert_equal(0u, again[1], "the counter did not return to zero");
-	zassert_true(memcmp(&first[2], &again[2], 5u) != 0,
-		     "counter 0 of the next cycle reused counter 0's keystream; "
-		     "the wrap did not advance the epoch");
+	zassert_equal(0u, again[1]);
+	zassert_true(memcmp(&first[2], &again[2], 5u) != 0);
 }
 
 /* ── Identity Tier 2: re-acquisition by key ─────────────────────────────── */
@@ -1068,9 +998,7 @@ ZTEST(radiant_sec, test_a_keyed_receiver_re_acquires_across_a_power_cycle)
 	 * only once the second has closed. */
 	tier2_window(TEST_DEVNUM, 0u, w);
 	tier2_window(TEST_DEVNUM, w, w);
-	zassert_true(verdicts_for(0u, RADIANT_SEC_VERDICT_VERIFIED) > 0u,
-		     "the link did not verify before the power cycle, so what "
-		     "follows would prove nothing");
+	zassert_true(verdicts_for(0u, RADIANT_SEC_VERDICT_VERIFIED) > 0u);
 
 	/* The power cycle: new on-air device number, same key, same epoch
 	 * re-anchored (permitted only because reboot cleared epoch_set; a real
@@ -1090,21 +1018,14 @@ ZTEST(radiant_sec, test_a_keyed_receiver_re_acquires_across_a_power_cycle)
 	 * heard a candidate, asks the one question that survives a re-roll. */
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_try_devnum(RX_CH, TIER2_NEW_DEVNUM));
-	zassert_equal(RADIANT_SEC_VERDICT_CLEAR,
-		      radiant_sec_last_verdict(RX_CH),
-		      "a fresh trial must start with no verdict, or the "
-		      "previous identity's answer is read as this one's");
+	zassert_equal(RADIANT_SEC_VERDICT_CLEAR, radiant_sec_last_verdict(RX_CH));
 
 	log_n_verdict = 0u;
 	tier2_window(TIER2_NEW_DEVNUM, 0u, w);
 	tier2_window(TIER2_NEW_DEVNUM, w, w);
 
-	zassert_equal(RADIANT_SEC_VERDICT_VERIFIED,
-		      radiant_sec_last_verdict(RX_CH),
-		      "a keyed receiver did not re-acquire the sensor across a "
-		      "power cycle; Tier 2 without this is just losing sensors");
-	zassert_true(verdicts_for(0u, RADIANT_SEC_VERDICT_VERIFIED) > 0u,
-		     "no window verified under the new device number");
+	zassert_equal(RADIANT_SEC_VERDICT_VERIFIED, radiant_sec_last_verdict(RX_CH));
+	zassert_true(verdicts_for(0u, RADIANT_SEC_VERDICT_VERIFIED) > 0u);
 }
 
 ZTEST(radiant_sec, test_a_candidate_that_is_not_ours_never_verifies)
@@ -1131,10 +1052,7 @@ ZTEST(radiant_sec, test_a_candidate_that_is_not_ours_never_verifies)
 	tier2_window(TIER2_NEW_DEVNUM, 0u, w);
 	tier2_window(TIER2_NEW_DEVNUM, w, w);
 
-	zassert_equal(RADIANT_SEC_VERDICT_UNVERIFIED,
-		      radiant_sec_last_verdict(RX_CH),
-		      "a node under a different root verified; the trial is "
-		      "answering 'yes' to everything");
+	zassert_equal(RADIANT_SEC_VERDICT_UNVERIFIED, radiant_sec_last_verdict(RX_CH));
 	zassert_equal(0u, verdicts_for(0u, RADIANT_SEC_VERDICT_VERIFIED));
 }
 
@@ -1174,11 +1092,9 @@ static void assert_no_marked_delivery(void)
 	uint32_t i;
 
 	for (i = 0; i < log_n_pkt && i < LOG_MAX; i++) {
-		zassert_equal(0x22u, log_pkt[i].pay[4],
-			      "delivery %u (packet %u) was held before a reset "
-			      "and came out after it", i, log_pkt[i].pay[2]);
-		zassert_equal(RADIANT_SEC_VERDICT_VERIFIED, log_pkt[i].verdict,
-			      "an unverified packet escaped the drop policy");
+		zassert_equal(0x22u, log_pkt[i].pay[4], "delivery %u (packet %u)", i,
+			      log_pkt[i].pay[2]);
+		zassert_equal(RADIANT_SEC_VERDICT_VERIFIED, log_pkt[i].verdict);
 	}
 }
 
@@ -1212,26 +1128,21 @@ ZTEST(radiant_sec, test_the_drop_policy_drops_the_window_before_a_lost_one)
 		hop(i, i >= 4u && i < 8u, -1);
 	}
 
-	zassert_equal(1u, verdicts_for(0u, RADIANT_SEC_VERDICT_UNVERIFIED),
-		      "window 0 was not judged unverified across the lost "
-		      "window");
-	zassert_equal(0u, verdicts_for(4u, RADIANT_SEC_VERDICT_VERIFIED) +
-			  verdicts_for(4u, RADIANT_SEC_VERDICT_UNVERIFIED),
-		      "a verdict was issued for a window never heard");
+	zassert_equal(1u, verdicts_for(0u, RADIANT_SEC_VERDICT_UNVERIFIED));
+	zassert_equal(0u,
+		      verdicts_for(4u, RADIANT_SEC_VERDICT_VERIFIED) +
+				      verdicts_for(4u, RADIANT_SEC_VERDICT_UNVERIFIED));
 	zassert_equal(1u, verdicts_for(8u, RADIANT_SEC_VERDICT_VERIFIED));
 	zassert_equal(1u, verdicts_for(12u, RADIANT_SEC_VERDICT_VERIFIED));
 
 	/* Windows 8 and 12 come out, in order; window 16 is still held. */
-	zassert_equal(8u, log_n_pkt, "expected 8..15 (8 packets), got %u",
-		      log_n_pkt);
+	zassert_equal(8u, log_n_pkt, "%u packets", log_n_pkt);
 	for (i = 0; i < log_n_pkt && i < LOG_MAX; i++) {
 		zassert_equal(RADIANT_SEC_VERDICT_VERIFIED, log_pkt[i].verdict);
-		zassert_equal(8u + i, log_pkt[i].pay[2],
-			      "delivery %u was packet %u, expected %u", i,
-			      log_pkt[i].pay[2], 8u + i);
+		zassert_equal(8u + i, log_pkt[i].pay[2], "delivery %u was packet %u", i,
+			      log_pkt[i].pay[2]);
 	}
-	zassert_equal(4u, dropped_policy_now(),
-		      "window 0's four packets were not counted as dropped");
+	zassert_equal(4u, dropped_policy_now());
 }
 
 /*
@@ -1252,21 +1163,17 @@ ZTEST(radiant_sec, test_held_packets_do_not_survive_set_epoch)
 
 	hop(0u, false, HOLD_MARK_BIT);
 	hop(1u, false, HOLD_MARK_BIT);
-	zassert_equal(0u, dropped_policy_now(), "setup: nothing dropped yet");
+	zassert_equal(0u, dropped_policy_now());
 
 	epoch_both(46u);
-	zassert_equal(2u, dropped_policy_now(),
-		      "the two held packets were not dropped and counted by "
-		      "the epoch change");
+	zassert_equal(2u, dropped_policy_now());
 
 	for (i = 0; i < 8u; i++) {
 		hop(i, false, -1);
 	}
 
 	assert_no_marked_delivery();
-	zassert_equal(4u, log_n_pkt,
-		      "expected epoch 46's window 0 alone (4 packets), got %u",
-		      log_n_pkt);
+	zassert_equal(4u, log_n_pkt, "%u packets", log_n_pkt);
 	zassert_equal(2u, dropped_policy_now());
 }
 
@@ -1304,24 +1211,18 @@ ZTEST(radiant_sec, test_held_packets_do_not_survive_try_devnum)
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_set_devnum(TX_CH, TIER2_NEW_DEVNUM));
 
-	zassert_equal(0u, dropped_policy_now(), "setup: nothing dropped yet");
+	zassert_equal(0u, dropped_policy_now());
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_try_devnum(RX_CH, TIER2_NEW_DEVNUM));
-	zassert_equal(2u, dropped_policy_now(),
-		      "the two held packets were not dropped and counted by "
-		      "the trial");
+	zassert_equal(2u, dropped_policy_now());
 
 	for (i = 0; i < 2u * w; i++) {
 		hop(i, false, -1);
 	}
 
 	assert_no_marked_delivery();
-	zassert_equal(4u, log_n_pkt,
-		      "expected the new identity's window 0 alone (4 "
-		      "packets), got %u", log_n_pkt);
-	zassert_equal(RADIANT_SEC_VERDICT_VERIFIED,
-		      radiant_sec_last_verdict(RX_CH),
-		      "setup: the new identity did not verify");
+	zassert_equal(4u, log_n_pkt, "%u packets", log_n_pkt);
+	zassert_equal(RADIANT_SEC_VERDICT_VERIFIED, radiant_sec_last_verdict(RX_CH));
 }
 
 /*
@@ -1362,37 +1263,28 @@ ZTEST(radiant_sec, test_held_packets_do_not_survive_an_epoch_advance_at_the_wrap
 								    period_us()));
 		radiant_sec_pump();
 	}
-	zassert_equal(0u, log_n_pkt, "setup: an open window was released");
-	zassert_equal(0u, dropped_policy_now(), "setup: nothing dropped yet");
+	zassert_equal(0u, log_n_pkt);
+	zassert_equal(0u, dropped_policy_now());
 
 	/* The sender's own wrap - epoch + 1, counter back to 0 - happens inside
 	 * this hop: slot 65536 is past the end of epoch 47. */
 	hop(65536u, false, -1);
-	zassert_equal(2u, dropped_policy_now(),
-		      "the receiver's epoch advance kept the old epoch's held "
-		      "packets");
+	zassert_equal(2u, dropped_policy_now());
 	{
 		struct radiant_sec_stats st;
 
 		radiant_sec_get_stats(RX_CH, &st);
-		zassert_equal(1u, st.epoch_advances,
-			      "setup: the receiver did not advance its epoch");
-		zassert_equal(0u, st.dropped_replay,
-			      "the packet that carried the epoch advance was "
-			      "refused as a replay, so window 0 of the new "
-			      "epoch can never verify");
+		zassert_equal(1u, st.epoch_advances);
+		zassert_equal(0u, st.dropped_replay);
 	}
 
 	for (i = 65537u; i < 65536u + 12u; i++) {
 		hop(i, false, -1);
 	}
 	assert_no_marked_delivery();
-	zassert_equal(1u, verdicts_for(0u, RADIANT_SEC_VERDICT_VERIFIED),
-		      "window 0 of the new epoch did not verify");
+	zassert_equal(1u, verdicts_for(0u, RADIANT_SEC_VERDICT_VERIFIED));
 	/* Windows 0 and 4 released; window 8 still waits for its verdict. */
-	zassert_equal(8u, log_n_pkt,
-		      "expected windows 0 and 4 of epoch 48 (8 packets), got %u",
-		      log_n_pkt);
+	zassert_equal(8u, log_n_pkt, "%u packets", log_n_pkt);
 }
 
 /* ── The clock against a keyless injector ───────────────────────────────── */
@@ -1479,11 +1371,9 @@ static void forged_drag_back(uint8_t switches)
 			hop(i, false, -1);
 		}
 	}
-	zassert_equal(1u, verdicts_for(0u, RADIANT_SEC_VERDICT_VERIFIED),
-		      "setup: window 0 never verified the first time");
+	zassert_equal(1u, verdicts_for(0u, RADIANT_SEC_VERDICT_VERIFIED));
 	before = rx_expected_at(t);
-	zassert_equal(now_i, before, "setup: the receiver's clock reads %u",
-		      before);
+	zassert_equal(now_i, before, "clock %u", before);
 
 	log_n_pkt = 0u;
 	log_n_verdict = 0u;
@@ -1498,21 +1388,15 @@ static void forged_drag_back(uint8_t switches)
 		forge(t, (uint8_t)((e > 127u) ? (e - 127u) : 0u));
 	}
 	e = rx_expected_at(t);
-	zassert_equal(before, e,
-		      "%u keyless forgeries moved the receiver's clock from %u "
-		      "to %u", i, before, e);
+	zassert_equal(before, e, "%u forgeries: %u -> %u", i, before, e);
 
 	/* Then replay the recorded windows, as if they were current. */
 	for (i = 0u; i < 32u; i++) {
 		ingest_at(rec[i], t + (uint64_t)i * period_us());
 	}
-	zassert_equal(0u, verified_count(),
-		      "a recorded window was replayed and judged VERIFIED: "
-		      "replay protection is gone");
+	zassert_equal(0u, verified_count());
 	if ((switches & RADIANT_SEC_SW_DROP_UNVER) != 0u) {
-		zassert_equal(0u, log_n_pkt,
-			      "the drop policy released %u replayed or forged "
-			      "packets", log_n_pkt);
+		zassert_equal(0u, log_n_pkt, "%u packets", log_n_pkt);
 	}
 }
 
@@ -1552,10 +1436,7 @@ ZTEST(radiant_sec, test_a_forged_walk_forward_cannot_advance_the_epoch)
 		forge(t, (uint8_t)(rx_expected_at(t) + 127u));
 	}
 	st = rx_stats();
-	zassert_equal(0u, st.epoch_advances,
-		      "keyless forgeries walked the receiver into the next "
-		      "epoch; the epoch is monotone, so the real sender is "
-		      "never verified again");
+	zassert_equal(0u, st.epoch_advances);
 
 	/* The real sender, carrying on. The close of window 300 judges the last
 	 * forged window; the closes of 304 and 308 judge 300 and 304. */
@@ -1564,8 +1445,7 @@ ZTEST(radiant_sec, test_a_forged_walk_forward_cannot_advance_the_epoch)
 		hop(i, false, -1);
 	}
 	st = rx_stats();
-	zassert_equal(verified + 2u, st.windows_verified,
-		      "the real sender no longer verifies after the forgeries");
+	zassert_equal(verified + 2u, st.windows_verified);
 	zassert_equal(RADIANT_SEC_VERDICT_VERIFIED,
 		      radiant_sec_last_verdict(RX_CH));
 }
@@ -1589,8 +1469,7 @@ static void verified_once(uint8_t switches)
 		tx_hop(i, rec[i]);
 		ingest_at(rec[i], sec_anchor + (uint64_t)i * period_us());
 	}
-	zassert_equal(1u, verdicts_for(8u, RADIANT_SEC_VERDICT_VERIFIED),
-		      "setup: window 8 did not verify");
+	zassert_equal(1u, verdicts_for(8u, RADIANT_SEC_VERDICT_VERIFIED));
 	replay_before = rx_stats().dropped_replay;
 
 	/* Window 8 and the window carrying its tag, again, 12 periods late. */
@@ -1598,17 +1477,15 @@ static void verified_once(uint8_t switches)
 		ingest_at(rec[i], sec_anchor + (uint64_t)(i + 12u) * period_us());
 	}
 
-	zassert_equal(1u, verdicts_for(8u, RADIANT_SEC_VERDICT_VERIFIED),
-		      "a replay of window 8 was judged VERIFIED a second time");
-	zassert_equal(replay_before + 8u, rx_stats().dropped_replay,
-		      "the replayed packets were not refused as replays");
+	zassert_equal(1u, verdicts_for(8u, RADIANT_SEC_VERDICT_VERIFIED));
+	zassert_equal(replay_before + 8u, rx_stats().dropped_replay);
 	if ((switches & RADIANT_SEC_SW_DROP_UNVER) != 0u) {
 		for (i = 0u; i < log_n_pkt && i < LOG_MAX; i++) {
 			if (log_pkt[i].pay[2] == 8u) {
 				n8++;
 			}
 		}
-		zassert_equal(1u, n8, "packet 8 was released %u times", n8);
+		zassert_equal(1u, n8, "%u times", n8);
 	}
 }
 
@@ -1646,11 +1523,9 @@ static void drift_case(int32_t ppm)
 		ingest_at(air, sec_anchor + (uint64_t)at);
 	}
 	st = rx_stats();
-	zassert_equal(0u, st.windows_unverified,
-		      "%d ppm: %u windows failed to verify", ppm,
-		      st.windows_unverified);
-	zassert_equal(30000u / 4u - 1u, st.windows_verified,
-		      "%d ppm: %u windows verified", ppm, st.windows_verified);
+	zassert_equal(0u, st.windows_unverified, "%d ppm: %u", ppm, st.windows_unverified);
+	zassert_equal(30000u / 4u - 1u, st.windows_verified, "%d ppm: %u", ppm,
+		      st.windows_verified);
 }
 
 ZTEST(radiant_sec, test_the_clock_still_follows_a_slow_sender)
@@ -1695,8 +1570,7 @@ ZTEST(radiant_sec, test_a_delayed_replay_cannot_grow_its_delay)
 		ingest_at(rec[i - 40u],
 			  sec_anchor + (uint64_t)(i + 100u) * period_us());
 	}
-	zassert_equal(verified + 10u, rx_stats().windows_verified,
-		      "setup: windows 36..72 did not verify 100 periods late");
+	zassert_equal(verified + 10u, rx_stats().windows_verified);
 
 	log_n_verdict = 0u;
 	for (i = 80u; i < 120u; i++) {
@@ -1706,11 +1580,8 @@ ZTEST(radiant_sec, test_a_delayed_replay_cannot_grow_its_delay)
 	/* Window 76 is the one exception, and not a hole: it was replayed in
 	 * the first batch, and its tag bytes ride in packets 80..83. */
 	for (i = 0u; i < log_n_verdict && i < LOG_MAX; i++) {
-		zassert_false(log_verdict[i].verdict ==
-					      RADIANT_SEC_VERDICT_VERIFIED &&
-				      log_verdict[i].window_start != 76u,
-			      "window %u verified 200 periods late: the clock "
-			      "followed the replay",
+		zassert_false(log_verdict[i].verdict == RADIANT_SEC_VERDICT_VERIFIED &&
+			      log_verdict[i].window_start != 76u, "window %u",
 			      log_verdict[i].window_start);
 	}
 }
@@ -1843,18 +1714,13 @@ static bool stream_case(uint8_t switches, uint8_t w,
 		air[6] = 0x44u;
 		air[7] = 0x55u;
 		zassert_equal(RADIANT_SEC_OK,
-			      radiant_sec_tx_transform(TX_CH, air, 8u,
-						       slot_t(slot)),
-			      "%s: slot %u refused", label, slot);
+			      radiant_sec_tx_transform(TX_CH, air, 8u, slot_t(slot)),
+			      "%s: slot %u", label, slot);
 		if (sk == STREAM_CLEAR) {
-			zassert_equal(0xAAu, air[1],
-				      "%s: clear slot %u was transformed", label,
-				      slot);
+			zassert_equal(0xAAu, air[1], "%s: slot %u", label, slot);
 			zassert_equal(RADIANT_SEC_RX_PLAIN,
-				      radiant_sec_rx_ingest(RX_CH, air, 8u, true,
-							    slot_t(slot)),
-				      "%s: clear slot %u was taken", label,
-				      slot);
+				      radiant_sec_rx_ingest(RX_CH, air, 8u, true, slot_t(slot)),
+				      "%s: slot %u", label, slot);
 		} else {
 			secured++;
 			ingest_at(air, slot_t(slot));
@@ -1947,7 +1813,7 @@ ZTEST(radiant_sec, test_clear_slots_inside_a_secured_stream_do_not_desync_the_co
 	ok &= stream_case(RADIANT_SEC_SW_AUTH, 4u, cycle_slot, "clear5");
 	ok &= stream_case(RADIANT_SEC_SW_AUTH, 8u, cycle_slot, "clear5");
 
-	zassert_true(ok, "a stream above failed; its FAIL lines say how");
+	zassert_true(ok);
 }
 
 ZTEST(radiant_sec, test_skipped_slots_do_not_desync_the_counter)
@@ -1958,7 +1824,7 @@ ZTEST(radiant_sec, test_skipped_slots_do_not_desync_the_counter)
 	ok &= stream_case(RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_CONF, 8u,
 			  skip_slot, "skip1in40");
 
-	zassert_true(ok, "a stream above failed; its FAIL lines say how");
+	zassert_true(ok);
 }
 
 /*
@@ -1982,9 +1848,7 @@ ZTEST(radiant_sec, test_slot_aligned_sparse_conf_survives_a_long_silence)
 
 	for (i = 0u; i < ARRAY_SIZE(slots); i++) {
 		tx_air(slots[i], air);
-		zassert_equal((uint8_t)slots[i], air[1],
-			      "slot %u went out with counter byte %u", slots[i],
-			      air[1]);
+		zassert_equal((uint8_t)slots[i], air[1], "slot %u counter %u", slots[i], air[1]);
 		ingest_at(air, slot_t(slots[i]));
 	}
 
@@ -1993,9 +1857,7 @@ ZTEST(radiant_sec, test_slot_aligned_sparse_conf_survives_a_long_silence)
 		      st.dropped_replay);
 	zassert_equal(ARRAY_SIZE(slots), log_n_pkt, "%u delivered", log_n_pkt);
 	for (i = 0u; i < ARRAY_SIZE(slots); i++) {
-		zassert_mem_equal(&log_pkt[i].pay[2], &conf_plain[2], 5u,
-				  "slot %u did not decrypt to the plaintext",
-				  slots[i]);
+		zassert_mem_equal(&log_pkt[i].pay[2], &conf_plain[2], 5u, "slot %u", slots[i]);
 	}
 }
 
@@ -2029,22 +1891,15 @@ ZTEST(radiant_sec, test_a_reposted_slot_reuses_its_bytes)
 		zassert_equal(RADIANT_SEC_OK,
 			      radiant_sec_tx_transform(TX_CH, again, 8u,
 						       slot_t(5u)));
-		zassert_mem_equal(first, again, 8u,
-				  "a re-posted slot built different bytes: a "
-				  "second ciphertext under slot 5's nonce");
+		zassert_mem_equal(first, again, 8u);
 		ingest_at(first, slot_t(5u));
 	}
 
-	zassert_equal(1u, verdicts_for(0u, RADIANT_SEC_VERDICT_VERIFIED),
-		      "setup: window 0 did not verify");
-	zassert_equal(1u, verdicts_for(4u, RADIANT_SEC_VERDICT_VERIFIED),
-		      "window 4, which holds the re-posted slot, did not "
-		      "verify: the re-post was absorbed into its MAC twice");
+	zassert_equal(1u, verdicts_for(0u, RADIANT_SEC_VERDICT_VERIFIED));
+	zassert_equal(1u, verdicts_for(4u, RADIANT_SEC_VERDICT_VERIFIED));
 
 	memcpy(air, conf_plain, sizeof(air));
-	zassert_not_equal(RADIANT_SEC_OK,
-			  radiant_sec_tx_transform(TX_CH, air, 8u, slot_t(10u)),
-			  "slot 10 was built again after slot 11");
+	zassert_not_equal(RADIANT_SEC_OK, radiant_sec_tx_transform(TX_CH, air, 8u, slot_t(10u)));
 }
 
 /* ── Lifecycle ──────────────────────────────────────────────────────────── */
@@ -2063,8 +1918,7 @@ ZTEST(radiant_sec, test_release_and_reset_wipe_the_keys)
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_tx_transform(TX_CH, pay, sizeof(pay),
 					       slot_t(0u)));
-	zassert_mem_equal(pay, before, sizeof(pay),
-			  "a released channel still transforms");
+	zassert_mem_equal(pay, before, sizeof(pay));
 
 	/* And configuring one with no key is a host sequencing error rather
 	 * than a state worth inventing a context for. */
@@ -2104,9 +1958,7 @@ ZTEST(radiant_sec, test_a_wrap_past_the_epoch_ceiling_is_withheld_until_it_is_ra
 	configure_both(RADIANT_SEC_SW_CONF, 2u);
 	epoch_both(7u);
 	zassert_ok(radiant_sec_set_epoch_ceiling(TX_CH, 7u));
-	zassert_equal(RADIANT_SEC_ENOKEY,
-		      radiant_sec_set_epoch_ceiling(5u, 7u),
-		      "a ceiling on a channel with no context");
+	zassert_equal(RADIANT_SEC_ENOKEY, radiant_sec_set_epoch_ceiling(5u, 7u));
 
 	tx_air(0u, pay);
 
@@ -2119,7 +1971,7 @@ ZTEST(radiant_sec, test_a_wrap_past_the_epoch_ceiling_is_withheld_until_it_is_ra
 	zassert_equal(RADIANT_SEC_EAGAIN,
 		      radiant_sec_tx_transform(TX_CH, pay, 8u,
 					       slot_t(65537u)));
-	zassert_equal(7u, tx_epoch_now(TX_CH), "the wrap went past the ceiling");
+	zassert_equal(7u, tx_epoch_now(TX_CH));
 	radiant_sec_get_stats(TX_CH, &st);
 	zassert_equal(0u, st.epoch_advances);
 
@@ -2132,14 +1984,12 @@ ZTEST(radiant_sec, test_a_wrap_past_the_epoch_ceiling_is_withheld_until_it_is_ra
 	 * ceiling follows it to the same epoch. */
 	zassert_ok(radiant_sec_set_epoch_ceiling(TX_CH, 8u));
 	memcpy(pay, conf_plain, 8u);
-	zassert_ok(radiant_sec_tx_transform(TX_CH, pay, 8u, slot_t(65538u)),
-		   "TX did not resume once the ceiling was raised");
+	zassert_ok(radiant_sec_tx_transform(TX_CH, pay, 8u, slot_t(65538u)));
 	zassert_equal(8u, tx_epoch_now(TX_CH));
-	zassert_equal(2u, pay[1], "the counter is not slot 65538's");
+	zassert_equal(2u, pay[1]);
 	ingest_at(pay, slot_t(65538u));
 	zassert_equal(1u, log_n_pkt);
-	zassert_mem_equal(&log_pkt[0].pay[2], &conf_plain[2], 5u,
-			  "the resumed slot did not decrypt at the receiver");
+	zassert_mem_equal(&log_pkt[0].pay[2], &conf_plain[2], 5u);
 
 	/* Not spent: the next wrap is withheld again, not refused for good. */
 	memcpy(pay, conf_plain, 8u);
@@ -2201,9 +2051,8 @@ ZTEST(radiant_sec, test_the_pump_refuses_a_context_that_transmits)
 					    slot_t(65536u - 1u)));
 	radiant_sec_pump();
 
-	zassert_equal(7u, tx_epoch_now(TX_CH),
-		      "an RX packet moved a transmitting context's epoch");
-	zassert_equal(0u, log_n_pkt, "a refused packet was delivered");
+	zassert_equal(7u, tx_epoch_now(TX_CH));
+	zassert_equal(0u, log_n_pkt);
 	radiant_sec_get_stats(TX_CH, &st);
 	/* Uncounted here: the ingest-side master refusal is the counted one. */
 	zassert_equal(0u, st.epoch_advances);
@@ -2229,8 +2078,7 @@ ZTEST(radiant_sec, test_a_followed_channel_refuses_set_epoch_and_a_raise_only_ra
 	zassert_ok(radiant_sec_raise_epoch_ceiling(TX_CH, 7u));
 	tx_air(0u, pay);
 	memcpy(pay, conf_plain, 8u);
-	zassert_ok(radiant_sec_tx_transform(TX_CH, pay, 8u, slot_t(65536u)),
-		   "a raise on an unfollowed channel capped it");
+	zassert_ok(radiant_sec_tx_transform(TX_CH, pay, 8u, slot_t(65536u)));
 
 	/* A ceiling, then a lower "raise": still the higher one. */
 	zassert_ok(radiant_sec_set_epoch_ceiling(TX_CH, 9u));
@@ -2263,8 +2111,6 @@ ZTEST(radiant_sec, test_a_followed_channel_refuses_set_epoch_and_a_raise_only_ra
 	sec_anchor = (uint64_t)radiant_radio_now();
 	tx_air(0u, pay);
 	memcpy(pay, conf_plain, 8u);
-	zassert_ok(radiant_sec_tx_transform(TX_CH, pay, 8u,
-					    slot_t(3u * 65536u)),
-		   "a ceiling survived a new root");
+	zassert_ok(radiant_sec_tx_transform(TX_CH, pay, 8u, slot_t(3u * 65536u)));
 	zassert_equal(203u, tx_epoch_now(TX_CH));
 }

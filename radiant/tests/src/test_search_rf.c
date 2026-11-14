@@ -163,8 +163,8 @@ ZTEST(radiant_search_rf, test_coverage_mask_resets_with_a_retune)
 	zassert_ok(radiant_search_end(&g_s, 0u));
 	begin(1u, 66u);
 	zassert_ok(radiant_search_window(&g_s, t0 + 8u * COV_P, &w));
-	zassert_equal(66u, w.rf_index, "the sweep did not retune");
-	zassert_equal(0u, g_s.phase_mask, "the mask did not reset on the retune");
+	zassert_equal(66u, w.rf_index);
+	zassert_equal(0u, g_s.phase_mask);
 	zassert_equal(1u, radiant_search_get_stats(&g_s)->sets_advanced_uncovered);
 	radiant_search_armed(&g_s, RADIANT_SEARCH_OP_EXTERNAL, t0 + 8u * COV_P + 125000u,
 			     t0 + 8u * COV_P + 125000u + 121000u);
@@ -177,8 +177,8 @@ ZTEST(radiant_search_rf, test_coverage_mask_resets_with_a_retune)
 	}
 	zassert_true(radiant_search_set_complete(&g_s));
 	zassert_ok(radiant_search_window(&g_s, t0 + 16u * COV_P, &w));
-	zassert_equal(2u, radiant_search_get_stats(&g_s)->sets_advanced_uncovered,
-		      "phases heard on 57 counted as covered on 66");
+	/* A phase heard on 57 is not coverage on 66. */
+	zassert_equal(2u, radiant_search_get_stats(&g_s)->sets_advanced_uncovered);
 	radiant_search_on_done(&g_s, false, false, 0u);
 }
 #endif /* CONFIG_RADIANT_SEARCH_COVERAGE */
@@ -195,7 +195,7 @@ static void run_pass(uint8_t *rf, uint16_t n_sets)
 static void expect_pass_on(const uint8_t *rf, uint16_t n, uint8_t want, const char *what)
 {
 	for (uint16_t i = 0u; i < n; i++) {
-		zassert_equal(want, rf[i], "%s: window %u armed on RF %u, want %u", what,
+		zassert_equal(want, rf[i], "%s: window %u on RF %u, want %u", what,
 			      (unsigned int)i, (unsigned int)rf[i], (unsigned int)want);
 	}
 }
@@ -309,7 +309,7 @@ ZTEST(radiant_search_rf, test_a_frequency_resumes_its_own_cursor_after_a_retune)
 	for (uint8_t k = 0u; k < 2u; k++) {
 		for (uint16_t set = 0u; set < n; set++) {
 			zassert_true(seen[k][set],
-				     "RF %u: set %u not visited in its first %u windows",
+				     "RF %u: set %u not visited in %u windows",
 				     (unsigned int)(k == 0u ? RF_A : RF_B),
 				     (unsigned int)set, (unsigned int)n);
 		}
@@ -341,13 +341,13 @@ ZTEST(radiant_search_rf, test_a_full_cursor_table_drops_the_oldest_undeclared)
 
 	begin(0u, (uint8_t)(first + 1u));
 	zassert_equal(RADIANT_SEARCH_OK, win_open());
-	zassert_equal(2u, g_w.set_index, "a parked cursor was not resumed");
+	zassert_equal(2u, g_w.set_index);
 	win_run();
 	zassert_ok(radiant_search_end(&g_s, 0u));
 
 	begin(0u, first);
 	zassert_equal(RADIANT_SEARCH_OK, win_open());
-	zassert_equal(0u, g_w.set_index, "the oldest cursor should have been dropped");
+	zassert_equal(0u, g_w.set_index);
 	win_run();
 	zassert_ok(radiant_search_end(&g_s, 0u));
 }
@@ -374,27 +374,26 @@ ZTEST(radiant_search_rf, test_a_steer_for_the_other_frequency_waits_for_it)
 	begin(1u, RF_A);
 	n = radiant_search_sets(&g_s);
 	steer_set = radiant_search_set_for_devnum(&g_s, devnum);
-	zassert_equal(1u, g_s.n_steer, "the named device was not queued");
+	zassert_equal(1u, g_s.n_steer);
 
 	for (uint16_t i = 0u; i < n; i++) {
 		zassert_equal(RADIANT_SEARCH_OK, win_open());
 		zassert_equal(RF_A, g_w.rf_index);
 		zassert_equal(i, g_w.set_index,
-			      "57 window %u took set %u: a 66 steer was spent on 57",
+			      "57 window %u took set %u",
 			      (unsigned int)i, (unsigned int)g_w.set_index);
 		zassert_false(g_w.from_cache);
 		win_run();
 	}
-	zassert_equal(0u, radiant_search_get_stats(&g_s)->cache_steers,
-		      "a steer was taken during the 57 pass");
+	zassert_equal(0u, radiant_search_get_stats(&g_s)->cache_steers);
 	zassert_equal(RADIANT_SEARCH_REVISIT_FIRST, g_s.chans[0].revisit_gap,
-		      "channel 0's backoff grew to %u while the sweep was on 57",
+		      "channel 0 backoff %u",
 		      (unsigned int)g_s.chans[0].revisit_gap);
-	zassert_equal(1u, g_s.n_steer, "the 66 steer was lost");
+	zassert_equal(1u, g_s.n_steer);
 
 	zassert_equal(RADIANT_SEARCH_OK, win_open());
-	zassert_equal(RF_B, g_w.rf_index, "the pass on 57 did not hand over to 66");
-	zassert_equal(steer_set, g_w.set_index, "the first 66 window was not the steer");
+	zassert_equal(RF_B, g_w.rf_index);
+	zassert_equal(steer_set, g_w.set_index);
 	zassert_true(g_w.from_cache);
 	zassert_equal(1u, radiant_search_get_stats(&g_s)->cache_steers);
 	win_run();
@@ -418,7 +417,7 @@ ZTEST(radiant_search_rf, test_a_steer_for_an_abandoned_frequency_is_dropped)
 	zassert_ok(radiant_search_end(&g_s, 0u));
 
 	zassert_equal(RADIANT_SEARCH_OK, win_open());
-	zassert_equal(0u, g_s.n_steer, "a steer for RF %u outlived its channel", RF_B);
+	zassert_equal(0u, g_s.n_steer);
 	zassert_false(g_w.from_cache);
 	win_run();
 	zassert_ok(radiant_search_end(&g_s, 1u));
@@ -482,10 +481,8 @@ ZTEST(radiant_search_rf, test_a_channel_is_offered_only_devices_heard_on_its_fre
 	zassert_ok(fake_radio_air_frame(g_w.t_open + 1000u, frame, len));
 	win_run();
 
-	zassert_equal(1u, g_n_acq, "the device was not acquired at all");
-	zassert_equal(1u, g_acq_chan[0],
-		      "channel %u took a device heard on RF %u; it listens on %u",
-		      (unsigned int)g_acq_chan[0], RF_A, RF_B);
+	zassert_equal(1u, g_n_acq);
+	zassert_equal(1u, g_acq_chan[0], "channel %u", (unsigned int)g_acq_chan[0]);
 	zassert_true(radiant_search_is_searching(&g_s, 0u));
 	zassert_false(radiant_search_is_searching(&g_s, 1u));
 	zassert_ok(radiant_search_end(&g_s, 0u));
@@ -509,7 +506,7 @@ ZTEST(radiant_search_rf, test_the_seen_cache_does_not_steer_across_frequencies)
 	zassert_ok(radiant_search_begin_rf(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE,
 					   &want_any, radiant_radio_now(),
 					   RADIANT_SEARCH_TIMEOUT_NONE, RF_A));
-	zassert_equal(1u, g_s.n_steer, "control: a same-frequency cache hit must steer");
+	zassert_equal(1u, g_s.n_steer);
 	steered = g_s.steer[0];
 	zassert_equal(radiant_search_set_for_devnum(&g_s, 0x0A09u), steered);
 	zassert_ok(radiant_search_end(&g_s, 0u));
@@ -519,8 +516,7 @@ ZTEST(radiant_search_rf, test_the_seen_cache_does_not_steer_across_frequencies)
 	zassert_ok(radiant_search_begin_rf(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE,
 					   &want_any, radiant_radio_now(),
 					   RADIANT_SEARCH_TIMEOUT_NONE, RF_B));
-	zassert_equal(0u, g_s.n_steer,
-		      "a device heard on RF %u steered a channel on RF %u", RF_A, RF_B);
+	zassert_equal(0u, g_s.n_steer);
 	zassert_ok(radiant_search_end(&g_s, 0u));
 }
 
@@ -586,7 +582,7 @@ ZTEST(radiant_search_rf, test_a_pass_that_ended_by_acquisition_does_not_leak)
 	len = fake_radio_build_ant_frame(frame, (uint16_t)(0x0700u | lo), 0x78u, 1u, payload8);
 	zassert_ok(fake_radio_air_frame(g_w.t_open + 1000u, frame, len));
 	win_run();
-	zassert_equal(1u, g_n_acq, "the device in the last set was not acquired");
+	zassert_equal(1u, g_n_acq);
 	zassert_equal(0u, radiant_search_n_searching(&g_s));
 
 	expect_mixed_session_stays_for(n);

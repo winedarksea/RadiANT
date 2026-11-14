@@ -194,11 +194,8 @@ ZTEST(schedule, test_the_clock_ladder_is_the_handoff_pages_and_not_a_second_one)
 	for (code = 0u; code < PROFILE_HANDOFF_CLK_COUNT; code++) {
 		uint8_t nibble = profile_sched_clk_nibble(code, true);
 
-		zassert_equal(PROFILE_SCHED_CLK_STATED | code, nibble,
-			      "the nibble is the stated bit and the 5b code");
-		zassert_equal(profile_handoff_clk_ppm(code),
-			      profile_sched_clk_ppm(nibble),
-			      "the descriptor invented a second ladder");
+		zassert_equal(PROFILE_SCHED_CLK_STATED | code, nibble);
+		zassert_equal(profile_handoff_clk_ppm(code), profile_sched_clk_ppm(nibble));
 	}
 
 	/*
@@ -249,8 +246,7 @@ ZTEST(schedule, test_the_block_is_byte_for_byte_what_the_python_encoder_emits)
 	uint8_t body[6];
 
 	zassert_ok(profile_sched_pack(&CANON_SCHED, false, 30u, body));
-	zassert_mem_equal(body, CANON_SCHED_BODY, sizeof(body),
-			  "the two implementations have drifted");
+	zassert_mem_equal(body, CANON_SCHED_BODY, sizeof(body));
 }
 
 ZTEST(schedule, test_an_all_defaulted_block_is_forty_eight_zero_bits)
@@ -261,8 +257,7 @@ ZTEST(schedule, test_an_all_defaulted_block_is_forty_eight_zero_bits)
 	uint8_t body[6];
 
 	zassert_ok(profile_sched_pack(&quiet, false, 0u, body));
-	zassert_mem_equal(body, zeros, sizeof(body),
-			  "a block that announces nothing put something on air");
+	zassert_mem_equal(body, zeros, sizeof(body));
 
 	/* And it decodes back to announcing nothing, rather than to 0 dBm -
 	 * which is why the power field is biased on the wire. */
@@ -390,7 +385,7 @@ ZTEST(schedule, test_tx_power_is_biased_so_that_zero_can_mean_silence)
 	s.tx_power_dbm = 0;
 	zassert_ok(profile_sched_pack(&s, false, 30u, body));
 	zassert_ok(profile_sched_unpack(body, false, 30u, &got));
-	zassert_equal(0, got.tx_power_dbm, "0 dBm decoded as silence");
+	zassert_equal(0, got.tx_power_dbm);
 
 	s.tx_power_dbm = PROFILE_SCHED_TX_POWER_UNSTATED;
 	zassert_ok(profile_sched_pack(&s, false, 30u, body));
@@ -425,8 +420,7 @@ ZTEST(schedule, test_a_window_the_node_does_not_open_carries_no_phase)
 	s = CANON_SCHED;
 	s.dl_interval = 32u; /* 1 s, which is 32768 counts */
 	s.dl_phase = 32768u;
-	zassert_equal(-EINVAL, profile_sched_pack(&s, false, 30u, body),
-		      "a phase at the interval boundary was accepted");
+	zassert_equal(-EINVAL, profile_sched_pack(&s, false, 30u, body));
 	s.dl_phase = 32767u;
 	zassert_ok(profile_sched_pack(&s, false, 30u, body));
 }
@@ -461,8 +455,7 @@ ZTEST(schedule, test_the_descriptor_set_is_byte_for_byte_what_python_emits)
 
 	canon_descriptor(&d);
 	zassert_equal(4, profile_desc_encode(&d, frames, PROFILE_TLM_MAX_FRAMES));
-	zassert_mem_equal(frames, CANON_DESC, sizeof(CANON_DESC),
-			  "the two implementations have drifted");
+	zassert_mem_equal(frames, CANON_DESC, sizeof(CANON_DESC));
 	zassert_equal(2, profile_desc_schedule_index(&d));
 }
 
@@ -483,9 +476,8 @@ ZTEST(schedule, test_a_node_that_announces_nothing_is_the_node_it_was_before)
 	 */
 	quiet_descriptor(&d);
 	n_without = profile_desc_encode(&d, without, PROFILE_TLM_MAX_FRAMES);
-	zassert_equal(3, n_without, "a quiet node grew a frame");
-	zassert_equal(0u, without[PROFILE_TLM_FRAME_LEN + 3] & 0x0Fu,
-		      "a quiet node put something in the extension nibble");
+	zassert_equal(3, n_without);
+	zassert_equal(0u, without[PROFILE_TLM_FRAME_LEN + 3] & 0x0Fu);
 	zassert_equal(-ENOENT, profile_desc_schedule_index(&d));
 
 	/* The field frames sit at index 2 exactly as they did. */
@@ -499,9 +491,7 @@ ZTEST(schedule, test_a_node_that_announces_nothing_is_the_node_it_was_before)
 	n_with = profile_desc_encode(&d, with, PROFILE_TLM_MAX_FRAMES);
 	zassert_equal(n_without, n_with);
 	with[PROFILE_TLM_FRAME_LEN + 3] &= 0xF0u;
-	zassert_mem_equal(with, without, (size_t)n_with * PROFILE_TLM_FRAME_LEN,
-			  "announcing a clock changed something other than the "
-			  "nibble it is announced in");
+	zassert_mem_equal(with, without, (size_t)n_with * PROFILE_TLM_FRAME_LEN);
 }
 
 ZTEST(schedule, test_the_set_round_trips_and_the_shape_is_derived)
@@ -543,10 +533,7 @@ ZTEST(schedule, test_a_ladder_code_with_nothing_stating_it_is_refused)
 
 	quiet_descriptor(&d);
 	d.clock_accuracy = PROFILE_HANDOFF_CLK_50PPM;
-	zassert_equal(-EINVAL,
-		      profile_desc_encode(&d, frames, PROFILE_TLM_MAX_FRAMES),
-		      "the caller and the wire would have disagreed about what "
-		      "this node announced");
+	zassert_equal(-EINVAL, profile_desc_encode(&d, frames, PROFILE_TLM_MAX_FRAMES));
 }
 
 /* ---------------------------------------------------------------------------
@@ -611,19 +598,17 @@ ZTEST(schedule, test_an_announcement_only_ever_widens)
 		guard = radiant_channel_guard_us(SCHED_CH);
 
 		zassert_true(guard >= baseline,
-			     "announcing %u ppm narrowed the guard from %u to %u",
+			     "%u ppm: %u -> %u",
 			     profile_handoff_clk_ppm(ladder[i]),
 			     (unsigned int)baseline, (unsigned int)guard);
-		zassert_true(guard >= previous,
-			     "the guard is not monotonic in the announcement");
+		zassert_true(guard >= previous);
 		previous = guard;
 	}
 
 	/* The worst rung has to be genuinely wider, or the field is decorative:
 	 * 550 ppm over a 1.98 s period is 1.09 ms, which no compiled-in ceiling
 	 * of 400 us can cover. */
-	zassert_true(previous > RADIANT_CHANNEL_GUARD_MAX_US,
-		     "500 ppm at a 2 s period still fits in the old ceiling");
+	zassert_true(previous > RADIANT_CHANNEL_GUARD_MAX_US);
 
 	/* And withdrawing the announcement puts it back exactly. */
 	zassert_equal(0u, profile_sched_apply_clock(SCHED_CH, 0x00u));
@@ -672,9 +657,7 @@ ZTEST(schedule, test_an_all_defaulted_block_changes_no_scheduler_decision)
 							    got.clock_accuracy,
 							    got.clock_stated)));
 
-	zassert_equal(radiant_channel_guard_us(QUIET_CH),
-		      radiant_channel_guard_us(SCHED_CH),
-		      "the unlocked guard moved");
+	zassert_equal(radiant_channel_guard_us(QUIET_CH), radiant_channel_guard_us(SCHED_CH));
 	zassert_equal(radiant_channel_next_slot(QUIET_CH),
 		      radiant_channel_next_slot(SCHED_CH));
 
@@ -684,10 +667,10 @@ ZTEST(schedule, test_an_all_defaulted_block_changes_no_scheduler_decision)
 	for (miss = 0u; miss < RADIANT_CHANNEL_RX_FAIL_TO_SEARCH - 1u; miss++) {
 		zassert_equal(radiant_channel_guard_us(QUIET_CH),
 			      radiant_channel_guard_us(SCHED_CH),
-			      "the guard moved at miss %u", miss);
+			      "miss %u", miss);
 		zassert_equal(radiant_channel_next_slot(QUIET_CH),
 			      radiant_channel_next_slot(SCHED_CH),
-			      "the slot clock moved at miss %u", miss);
+			      "miss %u", miss);
 		zassert_equal(radiant_channel_residual_us(QUIET_CH),
 			      radiant_channel_residual_us(SCHED_CH));
 
@@ -808,10 +791,8 @@ ZTEST(schedule, test_an_rc_clocked_master_is_lost_when_it_says_nothing)
 	 * code anywhere, and an estimator that can never lock because it is
 	 * never handed a clean slot to average.
 	 */
-	zassert_equal(0u, heard, "the old ceiling covered 300 ppm after all");
-	zassert_not_equal(RADIANT_CH_STATE_TRACKING,
-			  radiant_channel_state_get(SCHED_CH),
-			  "eight empty windows did not give up the channel");
+	zassert_equal(0u, heard);
+	zassert_not_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(SCHED_CH));
 	zassert_equal(0u, radiant_channel_residual_us(SCHED_CH));
 }
 
@@ -829,7 +810,7 @@ ZTEST(schedule, test_an_rc_clocked_master_is_held_when_it_announces_itself)
 			  profile_handoff_clk_ppm(PROFILE_HANDOFF_CLK_UNKNOWN),
 			  slots);
 
-	zassert_equal(slots, heard, "%u of %u slots were lost",
+	zassert_equal(slots, heard, "%u of %u lost",
 		      (unsigned int)(slots - heard), (unsigned int)slots);
 	zassert_equal(RADIANT_CH_STATE_TRACKING,
 		      radiant_channel_state_get(SCHED_CH));
@@ -840,11 +821,8 @@ ZTEST(schedule, test_an_rc_clocked_master_is_held_when_it_announces_itself)
 	 * the fix: the window is wide because the master said so, and it stays
 	 * wide because the measurement agrees.
 	 */
-	zassert_true(radiant_channel_residual_us(SCHED_CH) > 400u,
-		     "the residual should be the real 595 us, not the old bound");
-	zassert_true(radiant_channel_guard_us(SCHED_CH) >
-			     RADIANT_CHANNEL_GUARD_MAX_US,
-		     "the guard fell back inside the compiled-in ceiling");
+	zassert_true(radiant_channel_residual_us(SCHED_CH) > 400u);
+	zassert_true(radiant_channel_guard_us(SCHED_CH) > RADIANT_CHANNEL_GUARD_MAX_US);
 
 	zassert_equal(RADIANT_CH_OK,
 		      radiant_channel_close(SCHED_CH, radiant_radio_now()));

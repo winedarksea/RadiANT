@@ -204,10 +204,9 @@ ZTEST(node_ident, test_the_generated_identity_survives_a_power_cycle)
 		fake_nvm_reboot();
 		node_ident_reset();
 		zassert_equal(NODE_IDENT_OK, node_ident_boot());
-		zassert_equal(1u, fake_rng_draw_count(),
-			      "a later boot drew from the RNG again");
+		zassert_equal(1u, fake_rng_draw_count());
 		zassert_equal(NODE_IDENT_OK, node_ident_devnum(&d2));
-		zassert_equal(d1, d2, "the device number moved across a reboot");
+		zassert_equal(d1, d2);
 		zassert_equal(NODE_IDENT_OK, node_ident_boot_counter(&counter));
 		zassert_equal(expected, counter);
 	}
@@ -245,9 +244,8 @@ ZTEST(node_ident, test_a_k_dev_read_error_is_eio_and_never_reprovisions)
 	stores = fake_nvm_store_count();
 	fake_nvm_fail_loads(1u);
 	zassert_equal(NODE_IDENT_EIO, node_ident_boot());
-	zassert_equal(0u, fake_rng_draw_count(), "a read error drew a new key");
-	zassert_equal(stores, fake_nvm_store_count(),
-		      "a read error wrote to storage");
+	zassert_equal(0u, fake_rng_draw_count());
+	zassert_equal(stores, fake_nvm_store_count());
 	zassert_true(fake_nvm_peek(NODE_NVM_KEY_KDEV, stored, sizeof(stored)));
 	zassert_mem_equal(k_dev, stored, sizeof(stored));
 
@@ -267,8 +265,7 @@ ZTEST(node_ident, test_an_rng_failure_writes_nothing)
 	fake_rng_fail_next(1u);
 	zassert_equal(NODE_IDENT_ENOKEY, node_ident_boot());
 	zassert_equal(1u, fake_rng_draw_count());
-	zassert_equal(0u, fake_nvm_store_count(),
-		      "a failed draw reached storage");
+	zassert_equal(0u, fake_nvm_store_count());
 	zassert_false(node_ident_is_provisioned());
 	zassert_equal(NODE_IDENT_ESTATE, node_ident_epoch(&v));
 
@@ -286,8 +283,7 @@ ZTEST(node_ident, test_an_rng_that_returns_zeros_is_not_a_key)
 	 * is reported as the entropy failure it is, not as a bad argument. */
 	fake_rng_return_zeros(true);
 	zassert_equal(NODE_IDENT_ENOKEY, node_ident_boot());
-	zassert_equal(1u, fake_rng_draw_count(),
-		      "an all-zero draw was redrawn instead of refused");
+	zassert_equal(1u, fake_rng_draw_count());
 	zassert_equal(0u, fake_nvm_store_count());
 	zassert_false(node_ident_is_provisioned());
 }
@@ -312,8 +308,7 @@ ZTEST(node_ident, test_a_hard_to_receive_draw_is_redrawn_and_the_good_key_persis
 	zassert_equal(NODE_IDENT_OK, node_ident_boot());
 	zassert_equal(3u, fake_rng_draw_count());
 	zassert_true(fake_nvm_peek(NODE_NVM_KEY_KDEV, stored, sizeof(stored)));
-	zassert_mem_equal(good, stored, sizeof(stored),
-			  "the stored key is not the first good draw");
+	zassert_mem_equal(good, stored, sizeof(stored));
 	zassert_equal(NODE_IDENT_OK, node_ident_devnum(&devnum));
 	zassert_not_equal(37976u, devnum);
 	zassert_equal(13433u, devnum);
@@ -329,9 +324,8 @@ ZTEST(node_ident, test_an_all_zero_redraw_is_still_an_rng_failure)
 	fake_rng_force_next(hard_key, sizeof(hard_key));
 	fake_rng_force_next(zero_key, sizeof(zero_key));
 	zassert_equal(NODE_IDENT_ENOKEY, node_ident_boot());
-	zassert_equal(2u, fake_rng_draw_count(),
-		      "an all-zero redraw was drawn past");
-	zassert_equal(0u, fake_nvm_store_count(), "a zero key reached storage");
+	zassert_equal(2u, fake_rng_draw_count());
+	zassert_equal(0u, fake_nvm_store_count());
 	zassert_false(node_ident_is_provisioned());
 }
 
@@ -350,7 +344,7 @@ ZTEST(node_ident, test_sixteen_bad_draws_keep_the_last_rather_than_fail_the_boot
 		fake_rng_force_next(hard_key, sizeof(hard_key));
 	}
 	zassert_equal(NODE_IDENT_OK, node_ident_boot());
-	zassert_equal(16u, fake_rng_draw_count(), "the redraw is not bounded");
+	zassert_equal(16u, fake_rng_draw_count());
 	zassert_true(fake_nvm_peek(NODE_NVM_KEY_KDEV, stored, sizeof(stored)));
 	zassert_mem_equal(hard_key, stored, sizeof(stored));
 	zassert_equal(NODE_IDENT_OK, node_ident_devnum(&devnum));
@@ -432,7 +426,7 @@ ZTEST(node_ident, test_provisioning_zeroes_both_counters_with_the_key)
 	zassert_true(fake_nvm_peek_u32(NODE_NVM_KEY_PAIR, &v));
 	zassert_equal(0u, v);
 	zassert_true(fake_nvm_peek_u32(NODE_NVM_KEY_EPOCH, &v));
-	zassert_equal(0u, v, "the epoch reservation outlived its key");
+	zassert_equal(0u, v);
 
 	/* And the identity moved with it. */
 	uint16_t devnum;
@@ -461,8 +455,7 @@ ZTEST(node_ident, test_boot_counter_survives_a_power_cycle)
 		node_ident_reset();
 		zassert_equal(NODE_IDENT_OK, node_ident_boot());
 		zassert_equal(NODE_IDENT_OK, node_ident_boot_counter(&counter));
-		zassert_equal(expected, counter,
-			      "boot counter did not survive the power cycle");
+		zassert_equal(expected, counter);
 	}
 }
 
@@ -522,13 +515,11 @@ ZTEST(node_ident, test_two_writes_per_boot_and_one_per_pairing_window)
 	fake_nvm_reboot();
 	node_ident_reset();
 	zassert_equal(NODE_IDENT_OK, node_ident_boot());
-	zassert_equal(base + 2u, fake_nvm_store_count(),
-		      "a boot cost other than two writes");
+	zassert_equal(base + 2u, fake_nvm_store_count());
 
 	base = fake_nvm_store_count();
 	zassert_equal(NODE_IDENT_OK, node_ident_pair_window_open(NULL));
-	zassert_equal(base + 1u, fake_nvm_store_count(),
-		      "a pairing window cost more than one write");
+	zassert_equal(base + 1u, fake_nvm_store_count());
 
 	/* Deriving and closing cost nothing. */
 	uint8_t scalar[NODE_IDENT_PAIR_SCALAR_BYTES];
@@ -568,7 +559,7 @@ ZTEST(node_ident, test_epoch_steps_past_its_reservation_when_there_is_no_clock)
 	zassert_equal(NODE_IDENT_OK, node_ident_epoch(&epoch));
 	zassert_equal(NODE_IDENT_OK, node_ident_boot_counter(&counter));
 	zassert_equal(3u, epoch);
-	zassert_equal(2u, counter, "the boot counter changed meaning");
+	zassert_equal(2u, counter);
 }
 
 ZTEST(node_ident, test_a_store_without_an_epoch_record_boots_from_the_counter)
@@ -666,8 +657,7 @@ ZTEST(node_ident, test_core_still_refuses_an_epoch_that_went_backwards)
 
 	zassert_equal(NODE_IDENT_OK, node_ident_epoch(&epoch));
 	zassert_equal(1u, epoch);
-	zassert_equal(NODE_IDENT_EIO, node_ident_arm_sec(TEST_CH, TEST_PERIOD),
-		      "radiant accepted an epoch that moved backwards");
+	zassert_equal(NODE_IDENT_EIO, node_ident_arm_sec(TEST_CH, TEST_PERIOD));
 }
 
 /* ── Tier 0 identity ──────────────────────────────────────────────────────── */
@@ -678,9 +668,7 @@ ZTEST(node_ident, test_tier0_device_number_is_derived_from_k_dev)
 
 	provisioned_and_booted();
 	zassert_equal(NODE_IDENT_OK, node_ident_devnum(&devnum));
-	zassert_equal(VECTOR_DEVNUM, devnum,
-		      "the Tier 0 device number disagrees with "
-		      "tools/radiant_crypto.py");
+	zassert_equal(VECTOR_DEVNUM, devnum);
 
 	/* Derived rather than stored, so a power cycle cannot lose it. */
 	fake_nvm_reboot();
@@ -720,9 +708,7 @@ ZTEST(node_ident, test_pair_scalar_matches_the_python_vectors)
 	zassert_equal(NODE_IDENT_OK, node_ident_pair_window_open(&ctr));
 	zassert_equal(1u, ctr);
 	zassert_equal(NODE_IDENT_OK, node_ident_pair_scalar(scalar));
-	zassert_mem_equal(scalar_ctr1, scalar, sizeof(scalar),
-			  "scalar for pair_counter 1 disagrees with "
-			  "tools/radiant_crypto.py");
+	zassert_mem_equal(scalar_ctr1, scalar, sizeof(scalar));
 	node_ident_pair_window_close();
 
 	zassert_equal(NODE_IDENT_OK, node_ident_pair_window_open(&ctr));
@@ -752,8 +738,7 @@ ZTEST(node_ident, test_the_scalar_is_deterministic_and_the_counter_is_not)
 
 	zassert_equal(NODE_IDENT_OK,
 		      node_ident_pair_derive(k_dev, 5u, 1u, b));
-	zassert_true(memcmp(a, b, sizeof(a)) != 0,
-		     "two pair_counters produced the same private key");
+	zassert_true(memcmp(a, b, sizeof(a)) != 0);
 
 	/* The two halves are not the same block repeated, which is what
 	 * deriving 32 bytes from a 128-bit KDF would give. */
@@ -779,9 +764,7 @@ ZTEST(node_ident, test_the_counter_is_in_nvm_before_any_scalar_exists)
 	 * part, bypassing the layer under test, before any scalar has been
 	 * derived - the counter has already moved. */
 	zassert_true(fake_nvm_peek_u32(NODE_NVM_KEY_PAIR, &stored));
-	zassert_equal(1u, stored,
-		      "pair_counter had not been persisted before the scalar "
-		      "was available");
+	zassert_equal(1u, stored);
 
 	zassert_equal(NODE_IDENT_OK, node_ident_pair_scalar(scalar));
 }
@@ -840,11 +823,9 @@ ZTEST(node_ident, test_an_abandoned_window_burns_its_counter)
 	node_ident_pair_window_close();
 
 	zassert_equal(NODE_IDENT_OK, node_ident_pair_window_open(&ctr));
-	zassert_equal(2u, ctr, "an abandoned window reused its counter");
+	zassert_equal(2u, ctr);
 	zassert_equal(NODE_IDENT_OK, node_ident_pair_scalar(second));
-	zassert_true(memcmp(first, second, sizeof(first)) != 0,
-		     "a second pairing window produced the same private key, "
-		     "which is a stable cross-session identifier on the air");
+	zassert_true(memcmp(first, second, sizeof(first)) != 0);
 }
 
 ZTEST(node_ident, test_the_pair_counter_survives_a_power_cycle_too)
@@ -1063,19 +1044,16 @@ ZTEST(node_ident, test_a_wrap_then_a_reboot_never_reuses_an_epoch)
 
 	e0 = booted_and_armed();
 	zassert_ok(node_tx(0u));
-	zassert_ok(node_tx(65536u), "the first wrap is reserved and must go");
+	zassert_ok(node_tx(65536u));
 	zassert_equal(e0 + 1u, sec_epoch(TX_NODE_CH));
 
 	/* The hook fired on the TX advance: N moves to (E + 1) + 2. */
 	let_work_run();
-	zassert_equal(e0 + 3u, stored_next(),
-		      "the TX wrap's epoch was not persisted");
+	zassert_equal(e0 + 3u, stored_next());
 
 	node_reboot();
 	zassert_equal(NODE_IDENT_OK, node_ident_epoch(&e1));
-	zassert_true(e1 > e0 + 1u,
-		     "boot epoch %u reuses one a wrap already used (%u)",
-		     e1, e0 + 1u);
+	zassert_true(e1 > e0 + 1u, "epoch %u, wrap %u", e1, e0 + 1u);
 }
 
 ZTEST(node_ident, test_a_reboot_before_the_persist_runs_still_skips_the_wrap)
@@ -1098,7 +1076,7 @@ ZTEST(node_ident, test_a_reboot_before_the_persist_runs_still_skips_the_wrap)
 	zassert_equal(NODE_IDENT_OK, node_ident_epoch(&e1));
 	wq_release();
 	zassert_equal(e0 + 2u, e1);
-	zassert_true(e1 > e0 + 1u, "the wrap's epoch was issued again");
+	zassert_true(e1 > e0 + 1u);
 	/* The cancelled item never wrote a stale N over the new one. */
 	zassert_equal(e1 + 2u, stored_next());
 }
@@ -1119,10 +1097,8 @@ ZTEST(node_ident, test_the_second_wrap_waits_for_its_reservation)
 
 	writes = fake_nvm_store_count();
 	wq_release();
-	zassert_equal(writes + 1u, fake_nvm_store_count(),
-		      "a wrap cost other than one write");
-	zassert_ok(node_tx(2u * 65536u + 1u),
-		   "TX did not resume once the reservation landed");
+	zassert_equal(writes + 1u, fake_nvm_store_count());
+	zassert_ok(node_tx(2u * 65536u + 1u));
 	zassert_equal(e0 + 2u, sec_epoch(TX_NODE_CH));
 	let_work_run();
 	zassert_equal(e0 + 4u, stored_next());
@@ -1138,9 +1114,8 @@ ZTEST(node_ident, test_a_failed_persist_holds_the_ceiling_and_retries)
 	fake_nvm_fail_stores(1u);
 	zassert_ok(node_tx(65536u));
 	let_work_run();
-	zassert_equal(e0 + 2u, stored_next(), "a failed write moved N");
-	zassert_equal(RADIANT_SEC_EAGAIN, node_tx(2u * 65536u),
-		      "the ceiling went up without N in storage");
+	zassert_equal(e0 + 2u, stored_next());
+	zassert_equal(RADIANT_SEC_EAGAIN, node_tx(2u * 65536u));
 
 	/* The retry lands a second later. */
 	k_sleep(K_MSEC(1100));
@@ -1169,8 +1144,7 @@ ZTEST(node_ident, test_the_hook_follows_an_rx_advance_too)
 	radiant_sec_pump();
 	zassert_equal(e0 + 1u, sec_epoch(RX_NODE_CH));
 	let_work_run();
-	zassert_equal(e0 + 3u, stored_next(),
-		      "the RX wrap's epoch was not persisted");
+	zassert_equal(e0 + 3u, stored_next());
 }
 
 ZTEST(node_ident, test_a_channel_node_ident_did_not_arm_is_not_followed)
@@ -1207,7 +1181,7 @@ ZTEST(node_ident, test_two_boots_in_one_wall_clock_minute_get_two_epochs)
 	wall_s += 30ull;        /* same minute */
 	node_reboot();
 	zassert_equal(NODE_IDENT_OK, node_ident_epoch(&e1));
-	zassert_true(e1 > e0, "a same-minute reboot reused epoch %u", e0);
+	zassert_true(e1 > e0, "epoch %u", e0);
 	zassert_equal(e0 + 2u, e1);
 
 	/* A clock that later runs ahead still wins. */
@@ -1248,13 +1222,11 @@ ZTEST(node_ident, test_a_compat_wrap_is_reserved_and_followed)
 						  sizeof(body)) >= 0);
 	wq_hold();
 	zassert_true(radiant_sec_compat_tx_attest(TX_NODE_CH, t0 + wrap_us,
-						  body, sizeof(body)) > 0,
-		     "the reserved first compat wrap was refused");
+						  body, sizeof(body)) > 0);
 	zassert_equal(RADIANT_SEC_EAGAIN,
 		      radiant_sec_compat_tx_attest(TX_NODE_CH,
 						   t0 + 2u * wrap_us, body,
-						   sizeof(body)),
-		      "a second compat wrap ran ahead of its reservation");
+						   sizeof(body)));
 	wq_release();
 	zassert_equal(e0 + 3u, stored_next());
 	zassert_true(radiant_sec_compat_tx_attest(TX_NODE_CH,
@@ -1276,15 +1248,12 @@ ZTEST(node_ident, test_a_tx_gap_of_two_wraps_is_reserved_and_resumes)
 	e0 = booted_and_armed();
 	zassert_ok(node_tx(0u));
 
-	zassert_equal(RADIANT_SEC_EAGAIN, node_tx(2u * 65536u),
-		      "two wraps at once went past the reservation");
+	zassert_equal(RADIANT_SEC_EAGAIN, node_tx(2u * 65536u));
 	zassert_equal(e0, sec_epoch(TX_NODE_CH));
 	let_work_run();
-	zassert_equal(e0 + 3u, stored_next(),
-		      "the wanted epoch was not reserved");
+	zassert_equal(e0 + 3u, stored_next());
 
-	zassert_ok(node_tx(2u * 65536u + 1u),
-		   "TX stayed withheld after a two-wrap gap");
+	zassert_ok(node_tx(2u * 65536u + 1u));
 	zassert_equal(e0 + 2u, sec_epoch(TX_NODE_CH));
 	let_work_run();
 	zassert_equal(e0 + 4u, stored_next());
@@ -1318,8 +1287,8 @@ ZTEST(node_ident, test_every_arm_after_the_first_gets_a_fresh_epoch)
 	zassert_equal(NODE_IDENT_OK,
 		      node_ident_arm_sec(TX_NODE_CH, TEST_PERIOD));
 	e1 = sec_epoch(TX_NODE_CH);
-	zassert_true(e1 > e0 + 1u, "re-arm reused epoch %u (E %u)", e1, e0);
-	zassert_equal(e1 + 2u, stored_next(), "the fresh epoch was not reserved");
+	zassert_true(e1 > e0 + 1u, "epoch %u, E %u", e1, e0);
+	zassert_equal(e1 + 2u, stored_next());
 
 	/* Re-armed again without a release (it carries the node's ceiling). */
 	zassert_equal(NODE_IDENT_EAGAIN,
@@ -1338,8 +1307,7 @@ ZTEST(node_ident, test_every_arm_after_the_first_gets_a_fresh_epoch)
 	let_work_run();
 	zassert_equal(NODE_IDENT_OK,
 		      node_ident_arm_sec(RX_NODE_CH, TEST_PERIOD));
-	zassert_true(sec_epoch(RX_NODE_CH) > e2 + 1u,
-		     "a cross-channel arm under one root reused an epoch");
+	zassert_true(sec_epoch(RX_NODE_CH) > e2 + 1u);
 
 	zassert_equal(NODE_IDENT_EINVAL, node_ident_arm_sec(32u, TEST_PERIOD));
 
@@ -1365,8 +1333,7 @@ ZTEST(node_ident, test_a_host_epoch_on_a_followed_channel_is_refused)
 
 	zassert_equal(RADIANT_SEC_ESTATE,
 		      radiant_sec_set_epoch(TX_NODE_CH, 0x10000000u, 0u,
-					    TEST_PERIOD),
-		      "a host epoch replaced the node's on its own root");
+					    TEST_PERIOD));
 	zassert_equal(e0, sec_epoch(TX_NODE_CH));
 
 	/* A host that re-keys owns the channel, and the node lets go. */
@@ -1378,10 +1345,9 @@ ZTEST(node_ident, test_a_host_epoch_on_a_followed_channel_is_refused)
 	zassert_ok(radiant_sec_tx_transform(TX_NODE_CH, pay, 8u,
 					    node_slot_t(0u)));
 	zassert_ok(radiant_sec_tx_transform(TX_NODE_CH, pay, 8u,
-					    node_slot_t(3u * 65536u)),
-		   "the node still capped a channel the host re-keyed");
+					    node_slot_t(3u * 65536u)));
 	let_work_run();
-	zassert_equal(n0, stored_next(), "a host epoch drove the node's N");
+	zassert_equal(n0, stored_next());
 
 	node_reboot();
 	zassert_equal(NODE_IDENT_OK, node_ident_epoch(&e1));
@@ -1413,8 +1379,7 @@ ZTEST(node_ident, test_a_released_channel_is_not_capped_by_another_wrap)
 	zassert_ok(radiant_sec_tx_transform(RX_NODE_CH, pay, 8u,
 					    node_slot_t(0u)));
 	zassert_ok(radiant_sec_tx_transform(RX_NODE_CH, pay, 8u,
-					    node_slot_t(3u * 65536u)),
-		   "the work item capped a channel it no longer follows");
+					    node_slot_t(3u * 65536u)));
 	zassert_equal(5003u, sec_epoch(RX_NODE_CH));
 }
 
@@ -1439,11 +1404,10 @@ ZTEST(node_ident, test_a_failing_persist_backs_off)
 			      node_tx(2u * 65536u + (uint32_t)i));
 	}
 	zassert_true(fake_nvm_store_count() - stores <= 3u,
-		     "%u persist tries in 3.5 s",
+		     "%u tries in 3.5 s",
 		     fake_nvm_store_count() - stores);
 	fake_nvm_fail_stores(0u);
 	k_sleep(K_MSEC(4500));
 	/* N covers the second wrap the withheld slots wanted (e0 + 2). */
-	zassert_equal(e0 + 3u, stored_next(),
-		      "the persist never landed after storage recovered");
+	zassert_equal(e0 + 3u, stored_next());
 }

@@ -152,14 +152,12 @@ ZTEST(profiles, test_bit_packer_vectors)
 		memset(area, 0, sizeof(area));
 		zassert_ok(profile_bits_pack(area, 48u, cases[i].off,
 					     cases[i].width, cases[i].value),
-			   "case %u refused", (unsigned)i);
-		zassert_mem_equal(area, cases[i].expect, sizeof(area),
-				  "case %u packed wrong", (unsigned)i);
+			   "case %u", (unsigned)i);
+		zassert_mem_equal(area, cases[i].expect, sizeof(area), "case %u", (unsigned)i);
 
 		zassert_ok(profile_bits_unpack(area, 48u, cases[i].off,
 					       cases[i].width, &back));
-		zassert_equal(back, cases[i].value, "case %u did not round trip",
-			      (unsigned)i);
+		zassert_equal(back, cases[i].value, "case %u", (unsigned)i);
 	}
 }
 
@@ -225,7 +223,7 @@ ZTEST(profiles, test_descriptor_round_trip_and_frame_layout)
 
 	build_node_descriptor(&d);
 	n = profile_desc_encode(&d, frames, PROFILE_TLM_MAX_FRAMES);
-	zassert_equal(2 + (int)NODE_FIELDS, n, "frame count is 2 + field count");
+	zassert_equal(2 + (int)NODE_FIELDS, n);
 
 	/* Every frame claims page 0x00 and carries (index << 4) | (count - 1)
 	 * in byte [1] - a frame index, one of the two documented exceptions to
@@ -234,19 +232,16 @@ ZTEST(profiles, test_descriptor_round_trip_and_frame_layout)
 		const uint8_t *f = &frames[(size_t)i * PROFILE_TLM_FRAME_LEN];
 
 		zassert_equal(PROFILE_TLM_PAGE_DESCRIPTOR, f[0]);
-		zassert_equal((uint8_t)((i << 4) | (n - 1)), f[1],
-			      "frame %u index byte", i);
+		zassert_equal((uint8_t)((i << 4) | (n - 1)), f[1], "frame %u", i);
 	}
 
 	/* Frame 0, byte by byte. */
-	zassert_equal((uint8_t)((PROFILE_TLM_VERSION << 4) | NODE_FIELDS),
-		      frames[2], "version and field count share byte [2]");
+	zassert_equal((uint8_t)((PROFILE_TLM_VERSION << 4) | NODE_FIELDS), frames[2]);
 	zassert_equal(NODE_SCHEMA, frames[3]);
-	zassert_equal((uint8_t)(NODE_PERIOD & 0xFFu), frames[4],
-		      "period is little-endian");
+	zassert_equal((uint8_t)(NODE_PERIOD & 0xFFu), frames[4]);
 	zassert_equal((uint8_t)(NODE_PERIOD >> 8), frames[5]);
 	zassert_equal(PROFILE_TLM_RF_INDEX_DEFAULT, frames[6]);
-	zassert_equal(0u, frames[7], "no flag is set on a plain v1 node");
+	zassert_equal(0u, frames[7]);
 
 	zassert_ok(profile_desc_decode(frames, (uint8_t)n, &back));
 	zassert_equal(d.version, back.version);
@@ -257,7 +252,7 @@ ZTEST(profiles, test_descriptor_round_trip_and_frame_layout)
 	zassert_equal(d.epoch, back.epoch);
 	zassert_equal(d.n_fields, back.n_fields);
 	for (i = 0u; i < d.n_fields; i++) {
-		zassert_equal(d.fields[i].id, back.fields[i].id, "field %u id", i);
+		zassert_equal(d.fields[i].id, back.fields[i].id, "field %u", i);
 		zassert_equal(d.fields[i].type, back.fields[i].type);
 		zassert_equal(d.fields[i].accumulate, back.fields[i].accumulate);
 		zassert_equal(d.fields[i].is_signed, back.fields[i].is_signed);
@@ -305,8 +300,7 @@ ZTEST(profiles, test_every_reserved_field_is_zero)
 	for (i = 0u; i < d.n_fields; i++) {
 		const uint8_t *f = &frames[(size_t)(2u + i) * PROFILE_TLM_FRAME_LEN];
 
-		zassert_equal(0u, f[4] & 0x03u, "field %u encoding reserved bits",
-			      i);
+		zassert_equal(0u, f[4] & 0x03u, "field %u", i);
 	}
 }
 
@@ -348,8 +342,7 @@ ZTEST(profiles, test_the_encoder_refuses_a_malformed_schema)
 	zassert_equal(-EINVAL, profile_desc_encode(&d, frames,
 						   PROFILE_TLM_MAX_FRAMES));
 	d.flags |= PROFILE_TLM_FLAG_OFF_RF57;
-	zassert_true(profile_desc_encode(&d, frames, PROFILE_TLM_MAX_FRAMES) > 0,
-		     "agreeing about RF 80 is fine");
+	zassert_true(profile_desc_encode(&d, frames, PROFILE_TLM_MAX_FRAMES) > 0);
 
 	/* A sparse node with no heartbeat cannot be told from a dead one. */
 	build_node_descriptor(&d);
@@ -522,8 +515,7 @@ ZTEST(profiles, test_a_transform_needs_the_sealed_encoder)
 	d.authenticated = true;
 	zassert_true(profile_desc_may_decode_data(&d));
 	d.flags |= PROFILE_TLM_FLAG_RSVD_4;
-	zassert_false(profile_desc_may_decode_data(&d),
-		      "a reserved transform is refused even when verified");
+	zassert_false(profile_desc_may_decode_data(&d));
 	d.flags = 0u;
 	d.authenticated = false;
 	zassert_true(profile_desc_may_decode_data(&d));
@@ -541,15 +533,13 @@ ZTEST(profiles, test_the_sealed_frames_are_the_shared_vectors)
 	zassert_equal((int)AUTH_FRAMES,
 		      profile_desc_encode_auth(&d, &a, frames,
 					       PROFILE_TLM_MAX_FRAMES));
-	zassert_mem_equal(frames, AUTH_VECTOR_TIME, sizeof(AUTH_VECTOR_TIME),
-			  "the epoch_is_time vector");
+	zassert_mem_equal(frames, AUTH_VECTOR_TIME, sizeof(AUTH_VECTOR_TIME));
 
 	auth_init(&a, AUTH_EPOCH, false);
 	zassert_equal((int)AUTH_FRAMES,
 		      profile_desc_encode_auth(&d, &a, frames,
 					       PROFILE_TLM_MAX_FRAMES));
-	zassert_mem_equal(frames, AUTH_VECTOR_HIDDEN, sizeof(AUTH_VECTOR_HIDDEN),
-			  "the hidden-epoch vector");
+	zassert_mem_equal(frames, AUTH_VECTOR_HIDDEN, sizeof(AUTH_VECTOR_HIDDEN));
 
 	/* The descriptor's own epoch may be zero or the real one; frame 1
 	 * follows the item-4 rule either way. */
@@ -659,10 +649,9 @@ ZTEST(profiles, test_with_a_schedule_frame_it_is_index_2_and_auth_is_last)
 	zassert_equal(2, profile_desc_schedule_index(&d));
 	zassert_equal(8, profile_desc_encode_auth(&d, &a, frames,
 						  PROFILE_TLM_MAX_FRAMES));
-	zassert_mem_equal(&frames[2u * 8u + 2u], zeros, 6u,
-			  "the silent schedule frame at index 2");
-	zassert_equal(1u, frames[3u * 8u + 2u], "field 1 follows it");
-	zassert_equal(0x77u, frames[7u * 8u + 1u], "auth is frame 7 of 8");
+	zassert_mem_equal(&frames[2u * 8u + 2u], zeros, 6u);
+	zassert_equal(1u, frames[3u * 8u + 2u]);
+	zassert_equal(0x77u, frames[7u * 8u + 1u]);
 
 	profile_desc_rx_init(&rx);
 	for (i = 0u; i < 8u; i++) {
@@ -709,9 +698,7 @@ ZTEST(profiles, test_a_keyless_receiver_learns_the_node_but_not_its_data)
 	zassert_equal(AUTH_EPOCH, epoch);
 	zassert_true(back.authenticated);
 	zassert_true(profile_desc_may_decode_data(&back));
-	zassert_equal(0u, back.epoch,
-		      "the decoded epoch is what frame 1 said; the recovered "
-		      "one comes back separately");
+	zassert_equal(0u, back.epoch);
 	zassert_equal(4, profile_data_decode(&back, body, values, 4u, NULL));
 
 	/* A wrong key: -EBADMSG, but the node's identity is still there and
@@ -751,7 +738,7 @@ ZTEST(profiles, test_every_altered_body_byte_fails_verification)
 	for (v = 0u; v < ARRAY_SIZE(vectors); v++) {
 		memcpy(bad, vectors[v], sizeof(bad));
 		zassert_ok(profile_desc_auth_verify(bad, AUTH_FRAMES, &a),
-			   "vector %u verifies unaltered", (unsigned)v);
+			   "vector %u", (unsigned)v);
 
 		for (i = 0u; i < AUTH_FRAMES - 1u; i++) {
 			for (b = 2u; b < 8u; b++) {
@@ -843,8 +830,7 @@ ZTEST(profiles, test_altered_sets_fail_verification)
 	w = a;
 	w.devnum = AUTH_BASE_DEVNUM;
 	w.base_devnum = AUTH_DEVNUM;
-	zassert_equal(-EBADMSG, profile_desc_auth_verify(base, AUTH_FRAMES, &w),
-		      "the two device numbers swapped");
+	zassert_equal(-EBADMSG, profile_desc_auth_verify(base, AUTH_FRAMES, &w));
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_key_import(&auth_wrong_root, AUTH_WRONG_ROOT,
 					     128u));
@@ -1026,10 +1012,7 @@ ZTEST(profiles, test_a_reseal_mid_burst_never_yields_a_mixed_set)
 		}
 		if (profile_desc_rx_feed(&rx, body) == 1) {
 			epoch = 0u;
-			zassert_ok(profile_desc_rx_take_auth(&rx, &rxa,
-							     AUTH_EPOCH, &back,
-							     &epoch),
-				   "a complete set failed verification");
+			zassert_ok(profile_desc_rx_take_auth(&rx, &rxa, AUTH_EPOCH, &back, &epoch));
 			zassert_true(n_verified < ARRAY_SIZE(verified));
 			verified[n_verified++] = epoch;
 			profile_desc_rx_init(&rx);
@@ -1037,15 +1020,13 @@ ZTEST(profiles, test_a_reseal_mid_burst_never_yields_a_mixed_set)
 	}
 	zassert_true(resealed);
 	zassert_equal(2u, n_verified);
-	zassert_equal(AUTH_EPOCH + 1u, verified[0],
-		      "the interrupted burst restarted under e2");
+	zassert_equal(AUTH_EPOCH + 1u, verified[0]);
 	zassert_equal(AUTH_EPOCH + 1u, verified[1]);
 
 	/* Refusals: a plain set, and a reseal that changes the shape. */
 	cgm.n_fields = 3u;
 	zassert_equal(-EINVAL, profile_sched_reseal(&ps, &a1));
-	zassert_mem_equal(ps.frames, new_set, sizeof(new_set),
-			  "a refused reseal leaves the set as it was");
+	zassert_mem_equal(ps.frames, new_set, sizeof(new_set));
 	build_cgm_descriptor(&cgm, 0u);
 	memset(&cfg, 0, sizeof(cfg));
 	cfg.desc = &cgm;
@@ -1120,8 +1101,7 @@ ZTEST(profiles, test_the_extension_rule_shared_vectors)
 
 	/* Version 2: accepted, decoded by the v1 layout, version kept. */
 	set[2] = 0x24u;
-	zassert_ok(profile_desc_decode(set, 6u, &v2),
-		   "a layout-compatible version 2 node was rejected");
+	zassert_ok(profile_desc_decode(set, 6u, &v2));
 	zassert_equal(2u, v2.version);
 	zassert_equal(v1.n_fields, v2.n_fields);
 	zassert_equal(v1.schema_id, v2.schema_id);
@@ -1172,10 +1152,8 @@ ZTEST(profiles, test_the_set_assembles_out_of_order_and_through_holes)
 		int rc = profile_desc_rx_feed(&rx,
 			&frames[(size_t)i * PROFILE_TLM_FRAME_LEN]);
 
-		zassert_true(rc >= 0, "frame %d refused", i);
-		zassert_equal(i == 0 ? 1 : 0, rc,
-			      "the set completes exactly when the last hole "
-			      "fills, not before");
+		zassert_true(rc >= 0, "frame %d", i);
+		zassert_equal(i == 0 ? 1 : 0, rc);
 	}
 	zassert_ok(profile_desc_rx_take(&rx, &back));
 	zassert_equal(NODE_SCHEMA, back.schema_id);
@@ -1228,8 +1206,7 @@ ZTEST(profiles, test_a_new_schema_id_abandons_the_partial_set)
 	}
 	/* ...then frame 0 of the new one. */
 	zassert_equal(0, profile_desc_rx_feed(&rx, new_frames));
-	zassert_false(profile_desc_rx_complete(&rx),
-		      "the old frames must not count towards the new set");
+	zassert_false(profile_desc_rx_complete(&rx));
 	zassert_equal(1u, rx.resets);
 
 	for (i = 1u; i < (uint8_t)n; i++) {
@@ -1263,21 +1240,20 @@ ZTEST(profiles, test_data_pages_round_trip_including_the_signed_field)
 
 	zassert_equal(2, profile_data_encode(&d, 1u, 0x11u, in, NODE_FIELDS,
 					     body));
-	zassert_equal(1u, body[0], "byte [0] is the page number");
-	zassert_equal(0x11u, body[1], "byte [1] is the event counter");
+	zassert_equal(1u, body[0]);
+	zassert_equal(0x11u, body[1]);
 	zassert_equal(62u, body[2]);
 	zassert_equal(2, profile_data_decode(&d, body, out, NODE_FIELDS, &present));
-	zassert_equal(0x03u, present, "page 1 carries fields 0 and 1");
+	zassert_equal(0x03u, present);
 	zassert_equal(62, out[0]);
 	zassert_equal(29315, out[1]);
 
 	zassert_equal(2, profile_data_encode(&d, 2u, 0x12u, in, NODE_FIELDS,
 					     body));
 	zassert_equal(2, profile_data_decode(&d, body, out, NODE_FIELDS, &present));
-	zassert_equal(0x0Cu, present, "page 2 carries fields 2 and 3");
+	zassert_equal(0x0Cu, present);
 	zassert_equal((int64_t)0xFFFFFFF0ull, out[2]);
-	zassert_equal(-250, out[3], "a signed field is sign-extended in its "
-				    "own width, not widened before packing");
+	zassert_equal(-250, out[3]);
 
 	/* Bits the schema does not claim are zero. Page 2 uses bits 0..43, so
 	 * the last four bits of byte [7] are the node's to leave alone - and
@@ -1302,7 +1278,7 @@ ZTEST(profiles, test_an_accumulating_field_wraps_rather_than_saturating)
 	in[2] = 0x1000000FFull; /* 2^32 + 255 */
 	zassert_true(profile_data_encode(&d, 2u, 0u, in, NODE_FIELDS, body) > 0);
 	zassert_equal(2, profile_data_decode(&d, body, out, NODE_FIELDS, NULL));
-	zassert_equal(255, out[2], "the accumulator wrapped in 32 bits");
+	zassert_equal(255, out[2]);
 }
 
 /* ---------------------------------------------------------------------------
@@ -1405,9 +1381,7 @@ ZTEST(profiles, test_the_interleave_is_119_120_over_121)
 				zassert_equal(PROFILE_TLM_PAGE_DESCRIPTOR,
 					      body[0]);
 				zassert_equal((uint8_t)((slot << 4) | 5u),
-					      body[1],
-					      "descriptor frames arrive in "
-					      "index order");
+					      body[1]);
 			} else if (slot == PROFILE_TLM_SLOT_PAGE_80) {
 				zassert_equal(PROFILE_SLOT_COMMON_80, kind);
 				zassert_equal(0x50u, body[0]);
@@ -1450,17 +1424,16 @@ ZTEST(profiles, test_the_rotation_alternates_and_the_counter_is_the_slot_index)
 		enum profile_slot_kind kind;
 
 		zassert_equal((uint8_t)slot, profile_sched_counter(&ps),
-			      "the counter did not advance over slot %u",
+			      "slot %u",
 			      slot - 1u);
 		kind = profile_sched_next(&ps, body);
 		if (kind != PROFILE_SLOT_DATA) {
 			continue;
 		}
 		zassert_equal(expect_page, body[0],
-			      "the rotation runs the schema's pages ascending, "
 			      "slot %u", slot);
 		zassert_equal((uint8_t)slot, body[1],
-			      "byte [1] is not the slot index at slot %u", slot);
+			      "slot %u", slot);
 		expect_page = (uint8_t)(expect_page == 1u ? 2u : 1u);
 		n_data++;
 	}
@@ -1469,8 +1442,7 @@ ZTEST(profiles, test_the_rotation_alternates_and_the_counter_is_the_slot_index)
 	 * the assertion above checked the wrap for real rather than checking
 	 * arithmetic that never reached it. */
 	zassert_equal(3u * 113u, n_data);
-	zassert_true(3u * PROFILE_TLM_CYCLE > 256u,
-		     "the run was too short to cross the wrap");
+	zassert_true(3u * PROFILE_TLM_CYCLE > 256u);
 }
 
 /*
@@ -1523,7 +1495,7 @@ ZTEST(profiles, test_the_client_seam_takes_slots_but_never_the_cadence)
 
 		if (slot <= 5u) {
 			zassert_equal(PROFILE_SLOT_DESCRIPTOR, kind,
-				      "slot %u went to the client", slot);
+				      "slot %u", slot);
 		} else if (slot == PROFILE_TLM_SLOT_PAGE_80) {
 			zassert_equal(PROFILE_SLOT_COMMON_80, kind);
 		} else if (slot == PROFILE_TLM_SLOT_PAGE_81) {
@@ -1540,8 +1512,7 @@ ZTEST(profiles, test_the_client_seam_takes_slots_but_never_the_cadence)
 	/* Offered exactly the 113 data slots, and no others. */
 	zassert_equal(113u, client_offers);
 	zassert_equal(client_claims, claimed);
-	zassert_true(claimed > 30u, "the client took a real share of the "
-				    "rotation");
+	zassert_true(claimed > 30u);
 
 	/* Removing the client hands every slot straight back. */
 	zassert_ok(profile_sched_set_client(&ps, NULL));
@@ -1594,7 +1565,7 @@ ZTEST(profiles, test_a_client_with_no_descriptor_still_gets_the_interleave)
 			zassert_equal(PROFILE_SLOT_IDLE, kind, "slot %u", slot);
 		}
 	}
-	zassert_equal(119u, client_offers, "every slot but 119 and 120");
+	zassert_equal(119u, client_offers);
 }
 
 /* ---------------------------------------------------------------------------
@@ -1641,8 +1612,7 @@ ZTEST(profiles, test_a_sparse_node_is_silent_between_heartbeats)
 		}
 		transmissions++;
 		zassert_equal(PROFILE_SLOT_DESCRIPTOR, kind,
-			      "a quiet sparse node transmits nothing but its "
-			      "heartbeat, slot %u", slot);
+			      "slot %u", slot);
 		descriptor_frames++;
 	}
 
@@ -1696,7 +1666,7 @@ ZTEST(profiles, test_a_sparse_event_is_repeated_k_times)
 	/* Consecutive counters - the slot index, slots 16..18 - with identical
 	 * bodies, which is what tells the receiver they are repeats. The same
 	 * counter detects loss in periodic mode: one mechanism, two jobs. */
-	zassert_equal(16u, counters[0], "the counter is not the slot index");
+	zassert_equal(16u, counters[0]);
 	zassert_equal((uint8_t)(counters[0] + 1u), counters[1]);
 	zassert_equal((uint8_t)(counters[1] + 1u), counters[2]);
 
@@ -1759,8 +1729,7 @@ ZTEST(profiles, test_the_asset_tag_is_the_envelope_with_everything_off)
 			(void)profile_desc_rx_feed(&rx, body);
 		} else {
 			zassert_equal(PROFILE_SLOT_IDLE, kind,
-				      "a tag has no fields and therefore no "
-				      "data pages, slot %u", slot);
+				      "slot %u", slot);
 		}
 	}
 
@@ -1998,7 +1967,7 @@ ZTEST(profiles, test_gate_a_0x60_node_is_discovered_and_decoded_from_the_air)
 		tx.t_sync_at = t;
 
 		zassert_ok(radiant_sched_request_tx(0u, &tx),
-			   "slot %u refused", slot);
+			   "slot %u", slot);
 		zassert_ok(radiant_sched_tick());
 		fake_radio_advance_to(t + 1000u);
 
@@ -2006,12 +1975,9 @@ ZTEST(profiles, test_gate_a_0x60_node_is_discovered_and_decoded_from_the_air)
 	}
 
 	zassert_equal(GATE_SLOTS, gate_n_air);
-	zassert_equal(6u, descriptor_frames,
-		      "the window straddles a cycle boundary and carries the "
-		      "whole descriptor set");
+	zassert_equal(6u, descriptor_frames);
 	zassert_equal(2u, common_pages);
-	zassert_equal(GATE_SLOTS, fake_radio_stats()->ev_tx,
-		      "every slot reached the air");
+	zassert_equal(GATE_SLOTS, fake_radio_stats()->ev_tx);
 	zassert_equal(0u, fake_radio_stats()->arms_rejected);
 
 	radiant_sched_reset();
@@ -2072,24 +2038,21 @@ ZTEST(profiles, test_gate_a_0x60_node_is_discovered_and_decoded_from_the_air)
 	}
 
 	zassert_equal(gate_n_air, heard_n_frames,
-		      "every frame that went out was heard: %u of %u",
+		      "%u of %u",
 		      heard_n_frames, gate_n_air);
 
 	/* ------------------------------------------------------------------
 	 * The gate itself.
 	 * ------------------------------------------------------------------
 	 */
-	zassert_true(profile_desc_rx_complete(&heard_rx),
-		     "the descriptor set never assembled");
-	zassert_ok(profile_desc_rx_take(&heard_rx, &heard_desc),
-		   "the descriptor set did not decode");
+	zassert_true(profile_desc_rx_complete(&heard_rx));
+	zassert_ok(profile_desc_rx_take(&heard_rx, &heard_desc));
 	heard_have_schema = true;
 
 	/* Everything below was learned from page 0x00 and nothing else. */
 	zassert_equal(PROFILE_TLM_VERSION, heard_desc.version);
 	zassert_equal(NODE_SCHEMA, heard_desc.schema_id);
-	zassert_equal(NODE_PERIOD, heard_desc.period,
-		      "the receiver now knows how often to open a window");
+	zassert_equal(NODE_PERIOD, heard_desc.period);
 	zassert_equal(PROFILE_TLM_RF_INDEX_DEFAULT, heard_desc.rf_index);
 	zassert_equal(0u, heard_desc.flags);
 	zassert_true(profile_desc_may_decode_data(&heard_desc));
@@ -2100,15 +2063,14 @@ ZTEST(profiles, test_gate_a_0x60_node_is_discovered_and_decoded_from_the_air)
 	zassert_equal(PROFILE_TLM_TYPE_TEMPERATURE, heard_desc.fields[1].type);
 	zassert_equal(-2, heard_desc.fields[1].exponent);
 	zassert_equal(PROFILE_TLM_TYPE_ENERGY, heard_desc.fields[2].type);
-	zassert_true(heard_desc.fields[2].accumulate,
-		     "an accumulating class type must announce itself as one");
+	zassert_true(heard_desc.fields[2].accumulate);
 	zassert_equal(PROFILE_TLM_TYPE_ACTIVE_POWER, heard_desc.fields[3].type);
 	zassert_true(heard_desc.fields[3].is_signed);
 
 	/* And the data pages decode against that schema, to the numbers the
 	 * node packed - checked against gate_sent[] rather than a re-encode,
 	 * since a self-consistently wrong schema would still pass otherwise. */
-	zassert_true(heard_n_data >= 20u, "only %u data pages heard",
+	zassert_true(heard_n_data >= 20u, "data pages %u",
 		     heard_n_data);
 	for (i = 0u; i < heard_n_data; i++) {
 		int64_t got[NODE_FIELDS] = { 0 };
@@ -2118,18 +2080,18 @@ ZTEST(profiles, test_gate_a_0x60_node_is_discovered_and_decoded_from_the_air)
 
 		n = profile_data_decode(&heard_desc, heard_data[i].body, got,
 					heard_desc.n_fields, &present);
-		zassert_equal(2, n, "data page %u decoded %d fields", i, n);
+		zassert_equal(2, n, "page %u: %d", i, n);
 		zassert_equal(gate_sent[i].page, heard_data[i].body[0],
 			      "page %u", i);
 		zassert_equal(gate_sent[i].counter, heard_data[i].body[1],
-			      "counter of data page %u", i);
+			      "page %u", i);
 
 		for (f = 0u; f < NODE_FIELDS; f++) {
 			if ((present & (1u << f)) == 0u) {
 				continue;
 			}
 			zassert_equal(gate_sent[i].values[f], got[f],
-				      "data page %u field %u: %lld != %lld", i,
+				      "page %u field %u: %lld != %lld", i,
 				      f, (long long)got[f],
 				      (long long)gate_sent[i].values[f]);
 		}

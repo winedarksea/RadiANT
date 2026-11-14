@@ -174,8 +174,7 @@ ZTEST(radiant_power_adapter, test_pedal_differentiation_bit)
 	zassert_equal(profile_power_decode_std(body, &p), 0, NULL);
 	zassert_true(p.pedal_valid, NULL);
 	zassert_true(p.pedal_right_known, NULL);
-	zassert_equal(p.pedal_percent, 50u,
-		      "the differentiation bit must not leak into the percent");
+	zassert_equal(p.pedal_percent, 50u);
 }
 
 ZTEST(radiant_power_adapter, test_power_decoder_declines_other_pages)
@@ -185,8 +184,7 @@ ZTEST(radiant_power_adapter, test_power_decoder_declines_other_pages)
 
 	memcpy(body, power_std_200w, sizeof(body));
 	body[0] = PROFILE_POWER_PAGE_CRANK_TORQUE;
-	zassert_equal(profile_power_decode_std(body, &p), -EINVAL,
-		      "a torque page's bytes 4-7 are not watts");
+	zassert_equal(profile_power_decode_std(body, &p), -EINVAL);
 
 	zassert_equal(profile_power_decode_std(NULL, &p), -EINVAL, NULL);
 	zassert_equal(profile_power_decode_std(power_std_200w, NULL), -EINVAL,
@@ -225,7 +223,7 @@ ZTEST(radiant_power_adapter, test_first_call_posts_watts_only)
 	n = radiant_power_adapter_decode(&adapter, PWR_SOURCE, body, 0u);
 	radiant_bridge_drain();
 
-	zassert_equal(n, 1u, "no baseline yet: watts, and nothing to difference");
+	zassert_equal(n, 1u);
 	zassert_not_null(cap_field(RADIANT_POWER_FIELD_INST_POWER), NULL);
 	zassert_is_null(cap_field(RADIANT_POWER_FIELD_EVENT_COUNT), NULL);
 	zassert_is_null(cap_field(RADIANT_POWER_FIELD_ENERGY), NULL);
@@ -243,9 +241,9 @@ ZTEST(radiant_power_adapter, test_instantaneous_watts_are_exp_zero)
 	s = cap_field(RADIANT_POWER_FIELD_INST_POWER);
 	zassert_not_null(s, NULL);
 	zassert_equal(s->field_type, RADIANT_FIELD_ACTIVE_POWER, NULL);
-	zassert_equal(s->exp, 0, "watts are the vocabulary's own unit");
+	zassert_equal(s->exp, 0);
 	zassert_equal(s->raw, 250, NULL);
-	zassert_equal(s->flags, 0u, "instantaneous: not an accumulator");
+	zassert_equal(s->flags, 0u);
 }
 
 ZTEST(radiant_power_adapter, test_energy_is_the_time_integral)
@@ -263,14 +261,14 @@ ZTEST(radiant_power_adapter, test_energy_is_the_time_integral)
 	n = radiant_power_adapter_decode(&adapter, PWR_SOURCE, body,
 					 1u * US_PER_S);
 	radiant_bridge_drain();
-	zassert_equal(n, 3u, "watts, event count, energy");
+	zassert_equal(n, 3u);
 
 	s = cap_field(RADIANT_POWER_FIELD_ENERGY);
 	zassert_not_null(s, NULL);
 	zassert_equal(s->field_type, RADIANT_FIELD_ENERGY, NULL);
 	zassert_equal(s->flags, RADIANT_SAMPLE_ACCUMULATING, NULL);
-	zassert_equal(s->exp, -6, "microjoules, so nothing rounds in the adapter");
-	zassert_equal(s->raw, INT64_C(200000000), "200 W x 1 s = 200 J = 2e8 uJ");
+	zassert_equal(s->exp, -6);
+	zassert_equal(s->raw, INT64_C(200000000));
 
 	/* And it must NOT be the wire's accumulated-power field, which reads
 	 * 1000 in this vector and would be a plausible wrong answer. */
@@ -322,7 +320,7 @@ ZTEST(radiant_power_adapter, test_a_dropout_is_charged_nothing)
 
 	s = cap_field(RADIANT_POWER_FIELD_ENERGY);
 	zassert_not_null(s, NULL);
-	zassert_equal(s->raw, INT64_C(250000000), "the gap adds nothing");
+	zassert_equal(s->raw, INT64_C(250000000));
 
 	/* ...and the clock was re-based, so the next interval counts. */
 	power_body(body, 128u, 180u);
@@ -332,7 +330,7 @@ ZTEST(radiant_power_adapter, test_a_dropout_is_charged_nothing)
 
 	s = cap_field(RADIANT_POWER_FIELD_ENERGY);
 	zassert_not_null(s, NULL);
-	zassert_equal(s->raw, INT64_C(430000000), "250 J + 180 J");
+	zassert_equal(s->raw, INT64_C(430000000));
 }
 
 ZTEST(radiant_power_adapter, test_a_coast_does_not_advance_the_accumulator)
@@ -359,12 +357,11 @@ ZTEST(radiant_power_adapter, test_a_coast_does_not_advance_the_accumulator)
 
 	s = cap_field(RADIANT_POWER_FIELD_ENERGY);
 	zassert_not_null(s, NULL);
-	zassert_equal(s->raw, INT64_C(200000000),
-		      "0 W over any interval adds exactly nothing");
+	zassert_equal(s->raw, INT64_C(200000000));
 
 	s = cap_field(RADIANT_POWER_FIELD_EVENT_COUNT);
 	zassert_not_null(s, NULL);
-	zassert_equal(s->raw, INT64_C(2), "the sensor is still updating");
+	zassert_equal(s->raw, INT64_C(2));
 }
 
 ZTEST(radiant_power_adapter, test_event_count_wraps_at_its_own_u8_width)
@@ -397,7 +394,7 @@ ZTEST(radiant_power_adapter, test_event_count_wraps_at_its_own_u8_width)
 				     2u * US_PER_S);
 	radiant_bridge_drain();
 	s = cap_field(RADIANT_POWER_FIELD_EVENT_COUNT);
-	zassert_equal(s->raw, INT64_C(11), "a running total, not a per-message delta");
+	zassert_equal(s->raw, INT64_C(11));
 }
 
 ZTEST(radiant_power_adapter, test_adapter_ignores_pages_it_does_not_decode)
@@ -410,7 +407,7 @@ ZTEST(radiant_power_adapter, test_adapter_ignores_pages_it_does_not_decode)
 	n = radiant_power_adapter_decode(&adapter, PWR_SOURCE, body, 0u);
 	radiant_bridge_drain();
 	zassert_equal(n, 0u, NULL);
-	zassert_equal(pwr_cap_n, 0u, "a torque page must post nothing at all");
+	zassert_equal(pwr_cap_n, 0u);
 
 	/* And it must not have consumed the baseline, either: the next real
 	 * page 0x10 is still the first one this instance has seen. */
@@ -451,7 +448,7 @@ ZTEST(radiant_power_adapter, test_fec_general_page_posts_type_state_and_speed)
 
 	n = radiant_power_adapter_decode_fec(&adapter, PWR_SOURCE, body, 0u);
 	radiant_bridge_drain();
-	zassert_equal(n, 3u, "equipment type, state and speed");
+	zassert_equal(n, 3u);
 
 	/* Byte 1 is 0x19 = 25, PROFILE_FEC_TYPE_TREADMILL's neighbour
 	 * "trainer". Decoded since the codec landed and posted since
@@ -461,22 +458,18 @@ ZTEST(radiant_power_adapter, test_fec_general_page_posts_type_state_and_speed)
 	zassert_not_null(s, NULL);
 	zassert_equal(s->field_type, RADIANT_FIELD_ENUM_GENERIC, NULL);
 	zassert_equal(s->raw, 25, NULL);
-	zassert_equal(s->flags, RADIANT_SAMPLE_ROTATED,
-		      "an identity, but still a decoded fact - and it rides "
-		      "FE-C page 16, so it is ROTATED");
+	zassert_equal(s->flags, RADIANT_SAMPLE_ROTATED);
 
 	s = cap_field(RADIANT_POWER_FIELD_FEC_STATE);
 	zassert_not_null(s, NULL);
 	zassert_equal(s->field_type, RADIANT_FIELD_ENUM_GENERIC, NULL);
 	zassert_equal(s->raw, (int64_t)PROFILE_FEC_STATE_IN_USE, NULL);
-	zassert_equal(s->flags, RADIANT_SAMPLE_ROTATED,
-		      "a decoded measurement, not a rule's derived boolean - and "
-		      "ROTATED, because page 16 is one page of a rotation");
+	zassert_equal(s->flags, RADIANT_SAMPLE_ROTATED);
 
 	s = cap_field(RADIANT_POWER_FIELD_FEC_SPEED);
 	zassert_not_null(s, NULL);
 	zassert_equal(s->field_type, RADIANT_FIELD_SPEED, NULL);
-	zassert_equal(s->exp, -3, "0.001 m/s IS the raw at exp -3");
+	zassert_equal(s->exp, -3);
 	zassert_equal(s->raw, INT64_C(5000), NULL);
 
 	/* The general page carries no power and must not start the clock -
@@ -493,7 +486,7 @@ ZTEST(radiant_power_adapter, test_fec_trainer_page_integrates_the_same_way)
 	fec_trainer_body(body, 7u, 200u);
 	n = radiant_power_adapter_decode_fec(&adapter, PWR_SOURCE, body, 0u);
 	radiant_bridge_drain();
-	zassert_equal(n, 1u, "baseline call: watts only");
+	zassert_equal(n, 1u);
 
 	fec_trainer_body(body, 8u, 200u);
 	n = radiant_power_adapter_decode_fec(&adapter, PWR_SOURCE, body,
@@ -540,13 +533,10 @@ ZTEST(radiant_power_adapter, test_only_the_interleaved_pages_are_marked_rotated)
 
 	s = cap_field(RADIANT_POWER_FIELD_INST_POWER);
 	zassert_not_null(s, NULL);
-	zassert_true((s->flags & RADIANT_SAMPLE_ROTATED) != 0u,
-		     "FE-C page 25 is one page of a rotation");
+	zassert_true((s->flags & RADIANT_SAMPLE_ROTATED) != 0u);
 	s = cap_field(RADIANT_POWER_FIELD_ENERGY);
 	zassert_not_null(s, NULL);
-	zassert_equal(s->flags,
-		      RADIANT_SAMPLE_ACCUMULATING | RADIANT_SAMPLE_ROTATED,
-		      "an accumulator AND rotated - the two are independent");
+	zassert_equal(s->flags, RADIANT_SAMPLE_ACCUMULATING | RADIANT_SAMPLE_ROTATED);
 
 	/* Now the bicycle-power profile, same adapter, same three field ids. */
 	pwr_test_reset(NULL);
@@ -559,13 +549,10 @@ ZTEST(radiant_power_adapter, test_only_the_interleaved_pages_are_marked_rotated)
 
 	s = cap_field(RADIANT_POWER_FIELD_INST_POWER);
 	zassert_not_null(s, NULL);
-	zassert_equal(s->flags, 0u,
-		      "page 0x10 is on every message: NOT rotated, and its "
-		      "expiry from the channel period is correct");
+	zassert_equal(s->flags, 0u);
 	s = cap_field(RADIANT_POWER_FIELD_ENERGY);
 	zassert_not_null(s, NULL);
-	zassert_equal(s->flags, RADIANT_SAMPLE_ACCUMULATING,
-		      "accumulating, and nothing else");
+	zassert_equal(s->flags, RADIANT_SAMPLE_ACCUMULATING);
 }
 
 ZTEST(radiant_power_adapter, test_fec_invalid_power_posts_nothing_but_keeps_time)
@@ -601,8 +588,7 @@ ZTEST(radiant_power_adapter, test_fec_invalid_power_posts_nothing_but_keeps_time
 
 	s = cap_field(RADIANT_POWER_FIELD_ENERGY);
 	zassert_not_null(s, NULL);
-	zassert_equal(s->raw, INT64_C(200000000),
-		      "the unknown stretch is charged nothing, not restart watts");
+	zassert_equal(s->raw, INT64_C(200000000));
 
 	/* The two events that happened during it are not lost, though. */
 	s = cap_field(RADIANT_POWER_FIELD_EVENT_COUNT);
@@ -630,11 +616,8 @@ ZTEST(radiant_power_adapter, test_field_ids_are_inside_the_profile_block)
 	/* radiant_bridge.h reserves 0x20-0x3F for the common-page adapter,
 	 * which runs on this same source. A collision would silently merge two
 	 * different series in every sink's history. */
-	zassert_true(RADIANT_POWER_FIELD_FEC_HR < RADIANT_FIELD_ID_COMMON_BASE,
-		     "the highest id this adapter reserves is still a profile id");
-	zassert_equal(RADIANT_FIELD_ID_PROFILE_MAX + 1u,
-		      RADIANT_FIELD_ID_COMMON_BASE,
-		      "the two blocks must abut with no unowned gap");
+	zassert_true(RADIANT_POWER_FIELD_FEC_HR < RADIANT_FIELD_ID_COMMON_BASE);
+	zassert_equal(RADIANT_FIELD_ID_PROFILE_MAX + 1u, RADIANT_FIELD_ID_COMMON_BASE);
 }
 
 ZTEST_SUITE(radiant_power_adapter, NULL, NULL, pwr_test_reset, NULL, NULL);

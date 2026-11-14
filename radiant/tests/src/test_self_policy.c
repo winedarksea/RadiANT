@@ -45,7 +45,7 @@ ZTEST(self_policy, test_boot_applies_the_key_once)
 
 	radiant_self_key_init(&st);
 	zassert_equal(RADIANT_SELF_KEY_APPLY, key_poll(&st, 0u, 0u, false, false, &fresh));
-	zassert_true(fresh, "boot is a generation");
+	zassert_true(fresh);
 	zassert_equal(RADIANT_SELF_KEY_NONE, key_poll(&st, 0u, 0u, false, false, &fresh));
 	zassert_false(fresh);
 }
@@ -59,11 +59,9 @@ ZTEST(self_policy, test_a_host_reset_with_no_key_reapplies_ours_once)
 	radiant_self_key_init(&st);
 	(void)key_poll(&st, 0u, 0u, false, false, &fresh);
 
-	zassert_equal(RADIANT_SELF_KEY_APPLY, key_poll(&st, 1u, 0u, false, false, &fresh),
-		      "the reset wiped our key and the host wrote none");
-	zassert_true(fresh, "the caller must learn every channel was wiped");
-	zassert_equal(RADIANT_SELF_KEY_NONE, key_poll(&st, 1u, 0u, false, false, &fresh),
-		      "one action per generation");
+	zassert_equal(RADIANT_SELF_KEY_APPLY, key_poll(&st, 1u, 0u, false, false, &fresh));
+	zassert_true(fresh);
+	zassert_equal(RADIANT_SELF_KEY_NONE, key_poll(&st, 1u, 0u, false, false, &fresh));
 	zassert_false(fresh);
 
 	/* The host then writes the ANT+ key over ours: nothing to say. */
@@ -78,7 +76,7 @@ ZTEST(self_policy, test_a_host_that_wrote_the_ant_plus_key_is_left_alone)
 	radiant_self_key_init(&st);
 	(void)key_poll(&st, 0u, 0u, false, false, &fresh);
 	zassert_equal(RADIANT_SELF_KEY_NONE, key_poll(&st, 1u, 1u, true, true, &fresh));
-	zassert_true(fresh, "the channels still need re-establishing");
+	zassert_true(fresh);
 }
 
 ZTEST(self_policy, test_a_host_foreign_key_is_never_overwritten)
@@ -90,10 +88,8 @@ ZTEST(self_policy, test_a_host_foreign_key_is_never_overwritten)
 	(void)key_poll(&st, 0u, 0u, false, false, &fresh);
 
 	zassert_equal(RADIANT_SELF_KEY_HOST_FOREIGN,
-		      key_poll(&st, 1u, 1u, true, false, &fresh),
-		      "the host's own key must be reported, not replaced");
-	zassert_equal(RADIANT_SELF_KEY_NONE, key_poll(&st, 1u, 1u, true, false, &fresh),
-		      "said once, not once a second");
+		      key_poll(&st, 1u, 1u, true, false, &fresh));
+	zassert_equal(RADIANT_SELF_KEY_NONE, key_poll(&st, 1u, 1u, true, false, &fresh));
 }
 
 ZTEST(self_policy, test_a_foreign_key_written_after_ours_wins_and_is_reported)
@@ -107,7 +103,7 @@ ZTEST(self_policy, test_a_foreign_key_written_after_ours_wins_and_is_reported)
 
 	zassert_equal(RADIANT_SELF_KEY_HOST_FOREIGN,
 		      key_poll(&st, 1u, 1u, true, false, &fresh));
-	zassert_false(fresh, "a key write is not a reset");
+	zassert_false(fresh);
 	zassert_equal(RADIANT_SELF_KEY_NONE, key_poll(&st, 1u, 1u, true, false, &fresh));
 }
 
@@ -144,8 +140,7 @@ ZTEST(self_policy, test_an_unassigned_channel_is_reestablished)
 
 	in.owned = false;
 	in.bound = true;
-	zassert_equal(RADIANT_SELF_REESTABLISH, radiant_self_decide(&in),
-		      "a host reset left it unassigned: take it back");
+	zassert_equal(RADIANT_SELF_REESTABLISH, radiant_self_decide(&in));
 }
 
 ZTEST(self_policy, test_a_channel_the_host_took_is_never_touched)
@@ -154,13 +149,9 @@ ZTEST(self_policy, test_a_channel_the_host_took_is_never_touched)
 
 	in.owned = false;
 	in.window_open = true;
-	zassert_equal(RADIANT_SELF_NONE, radiant_self_decide(&in),
-		      "the host assigned this number after its reset; it is "
-		      "the host's channel now");
+	zassert_equal(RADIANT_SELF_NONE, radiant_self_decide(&in));
 	in.bound = true;
-	zassert_equal(RADIANT_SELF_RELEASE, radiant_self_decide(&in),
-		      "a binding that can no longer be served is released, "
-		      "and the channel still is not touched");
+	zassert_equal(RADIANT_SELF_RELEASE, radiant_self_decide(&in));
 }
 
 /* NEW-O6-1: a timeout or a dropout must never unbind a paired sensor. */
@@ -179,9 +170,7 @@ ZTEST(self_policy, test_a_pinned_channel_stays_pinned_through_any_dropout)
 			in.identity_matches = true;
 			in.window_open = (w != 0u);
 			zassert_equal(RADIANT_SELF_NONE, radiant_self_decide(&in),
-				      "radio %d window %u: a pinned channel "
-				      "searching for or tracking its sensor is "
-				      "left alone", (int)open_states[k], w);
+				      "radio %d window %u", (int)open_states[k], w);
 		}
 	}
 }
@@ -191,12 +180,9 @@ ZTEST(self_policy, test_a_closed_bound_channel_is_reopened_pinned)
 	struct radiant_self_chan_in in = chan(RADIANT_SELF_RADIO_ASSIGNED);
 
 	in.bound = true;
-	zassert_equal(RADIANT_SELF_PIN_REOPEN, radiant_self_decide(&in),
-		      "just bound, or re-established after a host reset");
+	zassert_equal(RADIANT_SELF_PIN_REOPEN, radiant_self_decide(&in));
 	in.open_pinned = true;
-	zassert_equal(RADIANT_SELF_PIN_REOPEN, radiant_self_decide(&in),
-		      "a pinned search that closed itself anyway is reopened, "
-		      "never unbound and rotated (NEW-O6-1)");
+	zassert_equal(RADIANT_SELF_PIN_REOPEN, radiant_self_decide(&in));
 	in.window_open = true;
 	in.open_discover = true;
 	zassert_equal(RADIANT_SELF_PIN_REOPEN, radiant_self_decide(&in));
@@ -222,8 +208,7 @@ ZTEST(self_policy, test_a_stranger_on_a_pinned_channel_is_repinned_not_unbound)
 	in.bound = true;
 	in.open_pinned = true;
 	in.identity_matches = false;
-	zassert_equal(RADIANT_SELF_PIN_REOPEN, radiant_self_decide(&in),
-		      "a mismatch closes and re-pins; the binding stays");
+	zassert_equal(RADIANT_SELF_PIN_REOPEN, radiant_self_decide(&in));
 }
 
 ZTEST(self_policy, test_a_closed_window_means_idle)
@@ -231,23 +216,17 @@ ZTEST(self_policy, test_a_closed_window_means_idle)
 	struct radiant_self_chan_in in;
 
 	in = chan(RADIANT_SELF_RADIO_ASSIGNED);
-	zassert_equal(RADIANT_SELF_NONE, radiant_self_decide(&in),
-		      "unbound and closed with no window: stay idle");
+	zassert_equal(RADIANT_SELF_NONE, radiant_self_decide(&in));
 	in.open_discover = true;
-	zassert_equal(RADIANT_SELF_NONE, radiant_self_decide(&in),
-		      "a discovery search that timed out after the window "
-		      "closed is not rotated back on");
+	zassert_equal(RADIANT_SELF_NONE, radiant_self_decide(&in));
 
 	in = chan(RADIANT_SELF_RADIO_SEARCHING);
 	in.open_discover = true;
-	zassert_equal(RADIANT_SELF_CLOSE_TO_IDLE, radiant_self_decide(&in),
-		      "the window closed mid-discovery");
+	zassert_equal(RADIANT_SELF_CLOSE_TO_IDLE, radiant_self_decide(&in));
 
 	in = chan(RADIANT_SELF_RADIO_TRACKING);
 	in.open_discover = true;
-	zassert_equal(RADIANT_SELF_CLOSE_TO_IDLE, radiant_self_decide(&in),
-		      "tracking something unbound with no window: it may not "
-		      "bind, so it may not hold the channel");
+	zassert_equal(RADIANT_SELF_CLOSE_TO_IDLE, radiant_self_decide(&in));
 }
 
 ZTEST(self_policy, test_an_open_window_discovers_and_binds)
@@ -259,9 +238,7 @@ ZTEST(self_policy, test_an_open_window_discovers_and_binds)
 	zassert_equal(RADIANT_SELF_DISCOVER_OPEN, radiant_self_decide(&in));
 
 	in.open_discover = true;
-	zassert_equal(RADIANT_SELF_ROTATE, radiant_self_decide(&in),
-		      "a discovery search that timed out moves to the next "
-		      "profile");
+	zassert_equal(RADIANT_SELF_ROTATE, radiant_self_decide(&in));
 
 	in = chan(RADIANT_SELF_RADIO_SEARCHING);
 	in.window_open = true;
@@ -318,16 +295,13 @@ ZTEST(self_policy, test_no_eviction_without_need_or_window_or_twice)
 	};
 
 	zassert_equal(RADIANT_SELF_EVICT_NONE,
-		      radiant_self_pick_evict(c, 2u, true, false, 100000u),
-		      "a free channel exists: nothing to make room for");
+		      radiant_self_pick_evict(c, 2u, true, false, 100000u));
 
 	c[1].bound = true;
 	zassert_equal(RADIANT_SELF_EVICT_NONE,
-		      radiant_self_pick_evict(c, 2u, false, false, 100000u),
-		      "no window, no new pairing to make room for");
+		      radiant_self_pick_evict(c, 2u, false, false, 100000u));
 	zassert_equal(RADIANT_SELF_EVICT_NONE,
-		      radiant_self_pick_evict(c, 2u, true, true, 100000u),
-		      "one press of the button frees one channel");
+		      radiant_self_pick_evict(c, 2u, true, true, 100000u));
 	zassert_equal(0u, radiant_self_pick_evict(c, 2u, true, false, 100000u));
 }
 
@@ -338,6 +312,5 @@ ZTEST(self_policy, test_eviction_orders_across_an_uptime_wrap)
 		{ .bound = true, .tracking = false, .last_tracking_ms = 0x00000800u },
 	};
 
-	zassert_equal(0u, radiant_self_pick_evict(c, 2u, true, false, 0x00001000u),
-		      "the one seen before the wrap has been absent longer");
+	zassert_equal(0u, radiant_self_pick_evict(c, 2u, true, false, 0x00001000u));
 }

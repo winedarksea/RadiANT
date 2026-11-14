@@ -43,8 +43,7 @@ static const uint8_t nist_message[64] = {
 
 static void import_or_fail(struct radiant_sec_key *k, const uint8_t *raw)
 {
-	zassert_equal(radiant_sec_key_import(k, raw, 128), RADIANT_SEC_OK,
-		      "a 128-bit import must succeed on every backend");
+	zassert_equal(radiant_sec_key_import(k, raw, 128), RADIANT_SEC_OK);
 }
 
 /* ── FIPS-197 ───────────────────────────────────────────────────────────── */
@@ -67,7 +66,7 @@ ZTEST(sec_aes, test_fips197_appendix_c1)
 	uint8_t got[16];
 
 	import_or_fail(&k, key);
-	zassert_equal(radiant_sec_aes_ecb(&k, plain, got), RADIANT_SEC_OK, NULL);
+	zassert_equal(radiant_sec_aes_ecb(&k, plain, got), RADIANT_SEC_OK);
 	zassert_mem_equal(got, want, 16, "FIPS-197 C.1");
 	radiant_sec_key_destroy(&k);
 }
@@ -86,8 +85,8 @@ ZTEST(sec_aes, test_fips197_appendix_b)
 	uint8_t got[16];
 
 	import_or_fail(&k, nist_key);
-	zassert_equal(radiant_sec_aes_ecb(&k, plain, got), RADIANT_SEC_OK, NULL);
-	zassert_mem_equal(got, want, 16, "FIPS-197 appendix B");
+	zassert_equal(radiant_sec_aes_ecb(&k, plain, got), RADIANT_SEC_OK);
+	zassert_mem_equal(got, want, 16, "FIPS-197 B");
 	radiant_sec_key_destroy(&k);
 }
 
@@ -115,11 +114,9 @@ ZTEST(sec_aes, test_rfc4493_vectors)
 	for (i = 0; i < ARRAY_SIZE(cases); i++) {
 		uint8_t got[16];
 
-		zassert_equal(radiant_sec_cmac(&k, nist_message, cases[i].len,
-					       got),
-			      RADIANT_SEC_OK, NULL);
-		zassert_mem_equal(got, cases[i].tag, 16,
-				  "RFC 4493 vector, message length %u",
+		zassert_equal(radiant_sec_cmac(&k, nist_message, cases[i].len, got),
+			      RADIANT_SEC_OK);
+		zassert_mem_equal(got, cases[i].tag, 16, "len %u",
 				  (unsigned)cases[i].len);
 	}
 	radiant_sec_key_destroy(&k);
@@ -138,28 +135,24 @@ ZTEST(sec_aes, test_cmac_incremental_matches_one_shot)
 		uint8_t want[16];
 		size_t split;
 
-		zassert_equal(radiant_sec_cmac(&k, nist_message, len, want),
-			      RADIANT_SEC_OK, NULL);
+		zassert_equal(radiant_sec_cmac(&k, nist_message, len, want), RADIANT_SEC_OK);
 
 		for (split = 0; split <= len; split++) {
 			struct radiant_sec_cmac_ctx ctx;
 			uint8_t got[16];
 
-			zassert_equal(radiant_sec_cmac_init(&ctx, &k),
-				      RADIANT_SEC_OK, NULL);
+			zassert_equal(radiant_sec_cmac_init(&ctx, &k), RADIANT_SEC_OK);
 			zassert_equal(radiant_sec_cmac_update(&ctx,
 							      nist_message,
 							      split),
-				      RADIANT_SEC_OK, NULL);
+				      RADIANT_SEC_OK);
 			zassert_equal(radiant_sec_cmac_update(&ctx,
 							      nist_message +
 							      split,
 							      len - split),
-				      RADIANT_SEC_OK, NULL);
-			zassert_equal(radiant_sec_cmac_final(&ctx, got),
-				      RADIANT_SEC_OK, NULL);
-			zassert_mem_equal(got, want, 16,
-					  "length %u split at %u",
+				      RADIANT_SEC_OK);
+			zassert_equal(radiant_sec_cmac_final(&ctx, got), RADIANT_SEC_OK);
+			zassert_mem_equal(got, want, 16, "len %u split %u",
 					  (unsigned)len, (unsigned)split);
 		}
 	}
@@ -177,16 +170,14 @@ ZTEST(sec_aes, test_cmac_byte_at_a_time)
 	size_t i;
 
 	import_or_fail(&k, nist_key);
-	zassert_equal(radiant_sec_cmac(&k, nist_message, 64, want),
-		      RADIANT_SEC_OK, NULL);
+	zassert_equal(radiant_sec_cmac(&k, nist_message, 64, want), RADIANT_SEC_OK);
 
-	zassert_equal(radiant_sec_cmac_init(&ctx, &k), RADIANT_SEC_OK, NULL);
+	zassert_equal(radiant_sec_cmac_init(&ctx, &k), RADIANT_SEC_OK);
 	for (i = 0; i < 64; i++) {
-		zassert_equal(radiant_sec_cmac_update(&ctx, nist_message + i, 1),
-			      RADIANT_SEC_OK, NULL);
+		zassert_equal(radiant_sec_cmac_update(&ctx, nist_message + i, 1), RADIANT_SEC_OK);
 	}
-	zassert_equal(radiant_sec_cmac_final(&ctx, got), RADIANT_SEC_OK, NULL);
-	zassert_mem_equal(got, want, 16, "byte-at-a-time CMAC");
+	zassert_equal(radiant_sec_cmac_final(&ctx, got), RADIANT_SEC_OK);
+	zassert_mem_equal(got, want, 16);
 	radiant_sec_key_destroy(&k);
 }
 
@@ -215,15 +206,13 @@ ZTEST(sec_aes, test_sp800_38a_ctr)
 
 	import_or_fail(&k, nist_key);
 	memcpy(buf, nist_message, sizeof(buf));
-	zassert_equal(radiant_sec_ctr_xor(&k, ctr_iv, buf, sizeof(buf)),
-		      RADIANT_SEC_OK, NULL);
+	zassert_equal(radiant_sec_ctr_xor(&k, ctr_iv, buf, sizeof(buf)), RADIANT_SEC_OK);
 	zassert_mem_equal(buf, ctr_cipher, sizeof(buf), "SP 800-38A F.5.1");
 
 	/* CTR is its own inverse, so one transform function serves both
 	 * directions in radiant_sec.c. */
-	zassert_equal(radiant_sec_ctr_xor(&k, ctr_iv, buf, sizeof(buf)),
-		      RADIANT_SEC_OK, NULL);
-	zassert_mem_equal(buf, nist_message, sizeof(buf), "CTR round trip");
+	zassert_equal(radiant_sec_ctr_xor(&k, ctr_iv, buf, sizeof(buf)), RADIANT_SEC_OK);
+	zassert_mem_equal(buf, nist_message, sizeof(buf));
 	radiant_sec_key_destroy(&k);
 }
 
@@ -237,9 +226,8 @@ ZTEST(sec_aes, test_ctr_five_bytes)
 
 	import_or_fail(&k, nist_key);
 	memcpy(buf, nist_message, sizeof(buf));
-	zassert_equal(radiant_sec_ctr_xor(&k, ctr_iv, buf, sizeof(buf)),
-		      RADIANT_SEC_OK, NULL);
-	zassert_mem_equal(buf, ctr_cipher, sizeof(buf), "partial CTR block");
+	zassert_equal(radiant_sec_ctr_xor(&k, ctr_iv, buf, sizeof(buf)), RADIANT_SEC_OK);
+	zassert_mem_equal(buf, ctr_cipher, sizeof(buf));
 	radiant_sec_key_destroy(&k);
 }
 
@@ -259,17 +247,14 @@ ZTEST(sec_aes, test_ctr_counter_carries_across_the_whole_block)
 	import_or_fail(&k, nist_key);
 	memset(ones, 0xff, sizeof(ones));
 	memset(zeros, 0, sizeof(zeros));
-	zassert_equal(radiant_sec_aes_ecb(&k, ones, block_a), RADIANT_SEC_OK,
-		      NULL);
-	zassert_equal(radiant_sec_aes_ecb(&k, zeros, block_b), RADIANT_SEC_OK,
-		      NULL);
+	zassert_equal(radiant_sec_aes_ecb(&k, ones, block_a), RADIANT_SEC_OK);
+	zassert_equal(radiant_sec_aes_ecb(&k, zeros, block_b), RADIANT_SEC_OK);
 
 	memset(stream, 0, sizeof(stream));
 	zassert_equal(radiant_sec_ctr_xor(&k, ones, stream, sizeof(stream)),
-		      RADIANT_SEC_OK, NULL);
-	zassert_mem_equal(stream, block_a, 16, "first keystream block");
-	zassert_mem_equal(stream + 16, block_b, 16,
-			  "the counter must carry into byte 0");
+		      RADIANT_SEC_OK);
+	zassert_mem_equal(stream, block_a, 16, "block 0");
+	zassert_mem_equal(stream + 16, block_b, 16, "block 1");
 	radiant_sec_key_destroy(&k);
 }
 
@@ -288,7 +273,7 @@ ZTEST(sec_aes, test_nonce_block_layout)
 
 	radiant_sec_nonce_block(got, 0x11223344u, 0xBEEFu, 0x0102u,
 				RADIANT_SEC_DOM_CTR);
-	zassert_mem_equal(got, want, 16, "docs/radiant-security.md 3.3");
+	zassert_mem_equal(got, want, 16);
 }
 
 ZTEST(sec_aes, test_domain_byte_separates_keystream_from_mac)
@@ -304,12 +289,12 @@ ZTEST(sec_aes, test_domain_byte_separates_keystream_from_mac)
 	radiant_sec_nonce_block(mac, 7, 0x1234, 9, RADIANT_SEC_DOM_SPREAD_MAC);
 	radiant_sec_nonce_block(desc, 7, 0x1234, 9, RADIANT_SEC_DOM_DESC_MAC);
 
-	zassert_true(memcmp(ctr, mac, 16) != 0, NULL);
-	zassert_true(memcmp(ctr, desc, 16) != 0, NULL);
-	zassert_true(memcmp(mac, desc, 16) != 0, NULL);
-	zassert_equal(ctr[8], 0x01, NULL);
-	zassert_equal(mac[8], 0x02, NULL);
-	zassert_equal(desc[8], 0x03, NULL);
+	zassert_true(memcmp(ctr, mac, 16) != 0);
+	zassert_true(memcmp(ctr, desc, 16) != 0);
+	zassert_true(memcmp(mac, desc, 16) != 0);
+	zassert_equal(ctr[8], 0x01);
+	zassert_equal(mac[8], 0x02);
+	zassert_equal(desc[8], 0x03);
 }
 
 ZTEST(sec_aes, test_kdf_vectors_shared_with_the_python_mirror)
@@ -347,10 +332,9 @@ ZTEST(sec_aes, test_kdf_vectors_shared_with_the_python_mirror)
 		zassert_equal(radiant_sec_kdf(&root, cases[i].label,
 					      cases[i].epoch, 0xBEEFu,
 					      &derived),
-			      RADIANT_SEC_OK, NULL);
-		zassert_mem_equal(derived.b, cases[i].want, 16,
-				  "KDF label %s disagrees with "
-				  "tools/radiant_crypto.py", cases[i].label);
+			      RADIANT_SEC_OK);
+		zassert_mem_equal(derived.b, cases[i].want, 16, "KDF label %s",
+				  cases[i].label);
 		radiant_sec_key_destroy(&derived);
 	}
 	radiant_sec_key_destroy(&root);
@@ -381,13 +365,12 @@ ZTEST(sec_aes, test_every_derived_key_differs)
 
 		zassert_equal(radiant_sec_kdf(&root, labels[i], epoch, 0x0101u,
 					      &derived[i]),
-			      RADIANT_SEC_OK, NULL);
+			      RADIANT_SEC_OK);
 	}
 	for (i = 0; i < 4; i++) {
 		for (j = i + 1; j < 4; j++) {
 			zassert_true(memcmp(derived[i].b, derived[j].b, 16) != 0,
-				     "labels %s and %s derive the same key",
-				     labels[i], labels[j]);
+				     "labels %s and %s", labels[i], labels[j]);
 		}
 	}
 	for (i = 0; i < 4; i++) {
@@ -407,10 +390,10 @@ ZTEST(sec_aes, test_base_devnum_separates_two_sensors_under_one_root)
 
 	import_or_fail(&root, root_raw);
 	zassert_equal(radiant_sec_kdf(&root, RADIANT_SEC_LABEL_ENC, 5, 1, &a),
-		      RADIANT_SEC_OK, NULL);
+		      RADIANT_SEC_OK);
 	zassert_equal(radiant_sec_kdf(&root, RADIANT_SEC_LABEL_ENC, 5, 2, &b),
-		      RADIANT_SEC_OK, NULL);
-	zassert_true(memcmp(a.b, b.b, 16) != 0, NULL);
+		      RADIANT_SEC_OK);
+	zassert_true(memcmp(a.b, b.b, 16) != 0);
 
 	radiant_sec_key_destroy(&a);
 	radiant_sec_key_destroy(&b);
@@ -426,12 +409,10 @@ ZTEST(sec_aes, test_epoch_rotates_the_derived_key)
 
 	import_or_fail(&root, root_raw);
 	zassert_equal(radiant_sec_kdf(&root, RADIANT_SEC_LABEL_ENC, 1, 7, &a),
-		      RADIANT_SEC_OK, NULL);
+		      RADIANT_SEC_OK);
 	zassert_equal(radiant_sec_kdf(&root, RADIANT_SEC_LABEL_ENC, 2, 7, &b),
-		      RADIANT_SEC_OK, NULL);
-	zassert_true(memcmp(a.b, b.b, 16) != 0,
-		     "the epoch is the key-rotation clock; if it does not "
-		     "rotate the key, a reboot's fresh epoch buys nothing");
+		      RADIANT_SEC_OK);
+	zassert_true(memcmp(a.b, b.b, 16) != 0);
 
 	radiant_sec_key_destroy(&a);
 	radiant_sec_key_destroy(&b);
@@ -444,22 +425,16 @@ ZTEST(sec_aes, test_caps_are_self_consistent)
 {
 	const struct radiant_sec_caps *caps = radiant_sec_caps();
 
-	zassert_not_null(caps, NULL);
-	zassert_not_null(caps->name, NULL);
-	zassert_true((caps->key_bits_mask & RADIANT_SEC_KEY_BITS_128) != 0,
-		     "every backend must do AES-128; the protocol is AES-128");
+	zassert_not_null(caps);
+	zassert_not_null(caps->name);
+	zassert_true((caps->key_bits_mask & RADIANT_SEC_KEY_BITS_128) != 0);
 
 #if defined(CONFIG_RADIANT_SEC_BACKEND_MODES)
-	zassert_true(caps->has_ctr,
-		     "a mode-level backend advertises the modes it provides, "
-		     "and radiant_sec.c decides what it can do from that "
-		     "rather than from a backend's name");
-	zassert_true(caps->has_cmac, NULL);
+	zassert_true(caps->has_ctr);
+	zassert_true(caps->has_cmac);
 #else
-	zassert_false(caps->has_ctr,
-		      "the software backend implements the block level; the "
-		      "portable layer provides the modes over it");
-	zassert_false(caps->has_cmac, NULL);
+	zassert_false(caps->has_ctr);
+	zassert_false(caps->has_cmac);
 #endif
 }
 
@@ -475,12 +450,10 @@ ZTEST(sec_aes, test_key_import_refuses_what_the_backend_cannot_do)
 	 * caller meant. */
 	if ((radiant_sec_caps()->key_bits_mask & RADIANT_SEC_KEY_BITS_256) == 0) {
 		zassert_equal(radiant_sec_key_import(&k, raw, 256),
-			      RADIANT_SEC_ENOTSUP, NULL);
+			      RADIANT_SEC_ENOTSUP);
 	}
-	zassert_equal(radiant_sec_key_import(&k, raw, 7), RADIANT_SEC_ENOTSUP,
-		      NULL);
-	zassert_equal(radiant_sec_key_import(NULL, raw, 128), RADIANT_SEC_EINVAL,
-		      NULL);
+	zassert_equal(radiant_sec_key_import(&k, raw, 7), RADIANT_SEC_ENOTSUP);
+	zassert_equal(radiant_sec_key_import(NULL, raw, 128), RADIANT_SEC_EINVAL);
 }
 
 ZTEST(sec_aes, test_an_empty_or_destroyed_key_is_refused)
@@ -492,16 +465,15 @@ ZTEST(sec_aes, test_an_empty_or_destroyed_key_is_refused)
 	uint8_t in[16] = { 0 };
 
 	memset(&k, 0, sizeof(k));
-	zassert_equal(radiant_sec_aes_ecb(&k, in, out), RADIANT_SEC_ENOKEY, NULL);
+	zassert_equal(radiant_sec_aes_ecb(&k, in, out), RADIANT_SEC_ENOKEY);
 	zassert_equal(radiant_sec_cmac(&k, in, sizeof(in), out),
-		      RADIANT_SEC_ENOKEY, NULL);
+		      RADIANT_SEC_ENOKEY);
 	zassert_equal(radiant_sec_ctr_xor(&k, in, out, sizeof(out)),
-		      RADIANT_SEC_ENOKEY, NULL);
+		      RADIANT_SEC_ENOKEY);
 
 	import_or_fail(&k, nist_key);
 	radiant_sec_key_destroy(&k);
-	zassert_equal(radiant_sec_aes_ecb(&k, in, out), RADIANT_SEC_ENOKEY,
-		      "a destroyed key must not still encrypt");
+	zassert_equal(radiant_sec_aes_ecb(&k, in, out), RADIANT_SEC_ENOKEY);
 }
 
 ZTEST(sec_aes, test_two_keys_do_not_alias_through_the_shared_schedule)
@@ -528,27 +500,24 @@ ZTEST(sec_aes, test_two_keys_do_not_alias_through_the_shared_schedule)
 	import_or_fail(&a, nist_key);
 	import_or_fail(&b, other_raw);
 
-	zassert_equal(radiant_sec_aes_ecb(&a, block, want_a), RADIANT_SEC_OK,
-		      NULL);
-	zassert_equal(radiant_sec_aes_ecb(&b, block, want_b), RADIANT_SEC_OK,
-		      NULL);
-	zassert_true(memcmp(want_a, want_b, 16) != 0, NULL);
+	zassert_equal(radiant_sec_aes_ecb(&a, block, want_a), RADIANT_SEC_OK);
+	zassert_equal(radiant_sec_aes_ecb(&b, block, want_b), RADIANT_SEC_OK);
+	zassert_true(memcmp(want_a, want_b, 16) != 0);
 
 	for (i = 0; i < 8; i++) {
 		zassert_equal(radiant_sec_aes_ecb(&a, block, got),
-			      RADIANT_SEC_OK, NULL);
-		zassert_mem_equal(got, want_a, 16, "key A after %u swaps", i);
+			      RADIANT_SEC_OK);
+		zassert_mem_equal(got, want_a, 16, "A after %u", i);
 		zassert_equal(radiant_sec_aes_ecb(&b, block, got),
-			      RADIANT_SEC_OK, NULL);
-		zassert_mem_equal(got, want_b, 16, "key B after %u swaps", i);
+			      RADIANT_SEC_OK);
+		zassert_mem_equal(got, want_b, 16, "B after %u", i);
 	}
 
 	/* And the recycled-address case the serial exists for. */
 	radiant_sec_key_destroy(&a);
 	import_or_fail(&a, other_raw);
-	zassert_equal(radiant_sec_aes_ecb(&a, block, got), RADIANT_SEC_OK, NULL);
-	zassert_mem_equal(got, want_b, 16,
-			  "a re-imported handle must use its new key");
+	zassert_equal(radiant_sec_aes_ecb(&a, block, got), RADIANT_SEC_OK);
+	zassert_mem_equal(got, want_b, 16);
 
 	radiant_sec_key_destroy(&a);
 	radiant_sec_key_destroy(&b);

@@ -88,8 +88,7 @@ static const uint8_t tier2_tag_n8_flipped[RADIANT_SEC_COMPAT_TIER_II_TAG_BYTES] 
 
 static void import_or_fail(struct radiant_sec_key *k, const uint8_t *raw)
 {
-	zassert_equal(radiant_sec_key_import(k, raw, 128), RADIANT_SEC_OK,
-		      "a 128-bit import must succeed on every backend");
+	zassert_equal(radiant_sec_key_import(k, raw, 128), RADIANT_SEC_OK);
 }
 
 /* ── The block ──────────────────────────────────────────────────────────── */
@@ -100,23 +99,19 @@ ZTEST(sec_compat, test_nonce_block_is_section_3_3_extended_at_position_9)
 
 	radiant_sec_compat_nonce_block(got, VEC_EPOCH, VEC_DEVNUM, VEC_COUNTER,
 				       RADIANT_SEC_COMPAT_SUBTYPE_TIER_I);
-	zassert_mem_equal(got, nonce_tier_i, 16,
-			  "the compat nonce disagrees with "
-			  "tools/radiant_crypto.py and with ADR 0008");
+	zassert_mem_equal(got, nonce_tier_i, 16);
 
 	/* The three facts the layout has to keep, spelled separately so a
 	 * failure says which one moved. */
-	zassert_equal(got[8], RADIANT_SEC_DOM_COMPAT_MAC,
-		      "the domain byte stays at position 8, where every other "
-		      "block in this protocol has it");
-	zassert_equal(got[9], RADIANT_SEC_COMPAT_SUBTYPE_TIER_I, NULL);
+	zassert_equal(got[8], RADIANT_SEC_DOM_COMPAT_MAC);
+	zassert_equal(got[9], RADIANT_SEC_COMPAT_SUBTYPE_TIER_I);
 	for (unsigned i = 10; i < 16; i++) {
-		zassert_equal(got[i], 0x00, "position %u must stay zero", i);
+		zassert_equal(got[i], 0x00, "position %u", i);
 	}
 
 	radiant_sec_compat_nonce_block(got, VEC_EPOCH, VEC_DEVNUM, VEC_COUNTER,
 				       RADIANT_SEC_COMPAT_SUBTYPE_TIER_II);
-	zassert_mem_equal(got, nonce_tier_ii, 16, NULL);
+	zassert_mem_equal(got, nonce_tier_ii, 16);
 }
 
 ZTEST(sec_compat, test_the_compat_domain_byte_is_its_own)
@@ -131,9 +126,8 @@ ZTEST(sec_compat, test_the_compat_domain_byte_is_its_own)
 				       RADIANT_SEC_COMPAT_SUBTYPE_TIER_I);
 	radiant_sec_nonce_block(spread, VEC_EPOCH, VEC_DEVNUM, VEC_COUNTER,
 				RADIANT_SEC_DOM_SPREAD_MAC);
-	zassert_true(memcmp(compat, spread, 16) != 0, NULL);
-	zassert_equal(RADIANT_SEC_DOM_COMPAT_MAC, 0x04,
-		      "ADR 0008 pins the value, not merely the name");
+	zassert_true(memcmp(compat, spread, 16) != 0);
+	zassert_equal(RADIANT_SEC_DOM_COMPAT_MAC, 0x04);  /* pinned by ADR 0008 */
 }
 
 ZTEST(sec_compat, test_the_subtype_reaches_the_mac_and_not_only_the_page)
@@ -152,28 +146,24 @@ ZTEST(sec_compat, test_the_subtype_reaches_the_mac_and_not_only_the_page)
 	radiant_sec_compat_nonce_block(block, VEC_EPOCH, VEC_DEVNUM,
 				       VEC_COUNTER,
 				       RADIANT_SEC_COMPAT_SUBTYPE_TIER_I);
-	zassert_equal(radiant_sec_cmac(&k, block, 16, got_i), RADIANT_SEC_OK,
-		      NULL);
+	zassert_equal(radiant_sec_cmac(&k, block, 16, got_i), RADIANT_SEC_OK);
 	radiant_sec_compat_nonce_block(block, VEC_EPOCH, VEC_DEVNUM,
 				       VEC_COUNTER,
 				       RADIANT_SEC_COMPAT_SUBTYPE_TIER_II);
-	zassert_equal(radiant_sec_cmac(&k, block, 16, got_ii), RADIANT_SEC_OK,
-		      NULL);
+	zassert_equal(radiant_sec_cmac(&k, block, 16, got_ii), RADIANT_SEC_OK);
 
-	zassert_mem_equal(got_i, full_tag_tier_i, 16, NULL);
-	zassert_mem_equal(got_ii, full_tag_tier_ii, 16, NULL);
-	zassert_true(memcmp(got_i, got_ii, 16) != 0,
-		     "one counter value, two subtypes, one tag - the subtype "
-		     "is not inside the MAC'd block");
+	zassert_mem_equal(got_i, full_tag_tier_i, 16);
+	zassert_mem_equal(got_ii, full_tag_tier_ii, 16);
+	zassert_true(memcmp(got_i, got_ii, 16) != 0);
 
 	/* And the third subtype, which nothing computes yet, is a third
 	 * block - pinned now so the value cannot be spent twice. */
 	radiant_sec_compat_nonce_block(announce, VEC_EPOCH, VEC_DEVNUM,
 				       VEC_COUNTER,
 				       RADIANT_SEC_COMPAT_SUBTYPE_ANNOUNCE);
-	zassert_equal(announce[9], 0x03, NULL);
-	zassert_true(memcmp(announce, nonce_tier_i, 16) != 0, NULL);
-	zassert_true(memcmp(announce, nonce_tier_ii, 16) != 0, NULL);
+	zassert_equal(announce[9], 0x03);
+	zassert_true(memcmp(announce, nonce_tier_i, 16) != 0);
+	zassert_true(memcmp(announce, nonce_tier_ii, 16) != 0);
 
 	radiant_sec_key_destroy(&k);
 }
@@ -191,11 +181,11 @@ ZTEST(sec_compat, test_an_illegal_subtype_writes_nothing)
 	memset(got, 0xa5, sizeof(got));
 	radiant_sec_compat_nonce_block(got, VEC_EPOCH, VEC_DEVNUM, VEC_COUNTER,
 				       0x00);
-	zassert_mem_equal(got, untouched, 16, NULL);
+	zassert_mem_equal(got, untouched, 16);
 
 	radiant_sec_compat_nonce_block(got, VEC_EPOCH, VEC_DEVNUM, VEC_COUNTER,
 				       0x10);
-	zassert_mem_equal(got, untouched, 16, NULL);
+	zassert_mem_equal(got, untouched, 16);
 }
 
 /* ── Tier I ─────────────────────────────────────────────────────────────── */
@@ -208,16 +198,14 @@ ZTEST(sec_compat, test_tier1_vector_shared_with_the_python_mirror)
 	import_or_fail(&k, k_auth_raw);
 	zassert_equal(radiant_sec_compat_tier1_tag(&k, VEC_EPOCH, VEC_DEVNUM,
 						   VEC_COUNTER, got),
-		      RADIANT_SEC_OK, NULL);
-	zassert_mem_equal(got, tier1_tag, sizeof(got),
-			  "Tier I disagrees with tools/radiant_crypto.py");
+		      RADIANT_SEC_OK);
+	zassert_mem_equal(got, tier1_tag, sizeof(got));
 
 	/* trunc40 is the first five bytes - the end matters, two implementations
 	 * could easily disagree here. */
-	zassert_mem_equal(got, full_tag_tier_i,
-			  RADIANT_SEC_COMPAT_TIER_I_TAG_BYTES, NULL);
-	zassert_equal(RADIANT_SEC_COMPAT_TIER_I_TAG_BYTES * 8, 40,
-		      "40 bits, not 48: the counter needs two in-page bytes");
+	zassert_mem_equal(got, full_tag_tier_i, RADIANT_SEC_COMPAT_TIER_I_TAG_BYTES);
+	/* 40 bits, not 48: the counter needs two in-page bytes. */
+	zassert_equal(RADIANT_SEC_COMPAT_TIER_I_TAG_BYTES * 8, 40);
 
 	radiant_sec_key_destroy(&k);
 }
@@ -234,27 +222,24 @@ ZTEST(sec_compat, test_tier1_covers_the_counter_the_devnum_and_the_epoch)
 	import_or_fail(&k, k_auth_raw);
 	zassert_equal(radiant_sec_compat_tier1_tag(&k, VEC_EPOCH, VEC_DEVNUM,
 						   VEC_COUNTER, base),
-		      RADIANT_SEC_OK, NULL);
+		      RADIANT_SEC_OK);
 
 	zassert_equal(radiant_sec_compat_tier1_tag(&k, VEC_EPOCH, VEC_DEVNUM,
 						   VEC_COUNTER + 1u, other),
-		      RADIANT_SEC_OK, NULL);
-	zassert_true(memcmp(base, other, sizeof(base)) != 0,
-		     "a replayed page with a fresh counter would verify");
+		      RADIANT_SEC_OK);
+	zassert_true(memcmp(base, other, sizeof(base)) != 0);
 
 	zassert_equal(radiant_sec_compat_tier1_tag(&k, VEC_EPOCH,
 						   VEC_DEVNUM ^ 1u,
 						   VEC_COUNTER, other),
-		      RADIANT_SEC_OK, NULL);
-	zassert_true(memcmp(base, other, sizeof(base)) != 0,
-		     "a colliding sensor is the mainstream threat; the device "
-		     "number has to be inside the tag");
+		      RADIANT_SEC_OK);
+	zassert_true(memcmp(base, other, sizeof(base)) != 0);
 
 	zassert_equal(radiant_sec_compat_tier1_tag(&k, VEC_EPOCH + 1u,
 						   VEC_DEVNUM, VEC_COUNTER,
 						   other),
-		      RADIANT_SEC_OK, NULL);
-	zassert_true(memcmp(base, other, sizeof(base)) != 0, NULL);
+		      RADIANT_SEC_OK);
+	zassert_true(memcmp(base, other, sizeof(base)) != 0);
 
 	radiant_sec_key_destroy(&k);
 }
@@ -274,13 +259,11 @@ ZTEST(sec_compat, test_tier1_is_key_bound)
 	import_or_fail(&b, other_raw);
 	zassert_equal(radiant_sec_compat_tier1_tag(&a, VEC_EPOCH, VEC_DEVNUM,
 						   VEC_COUNTER, tag_a),
-		      RADIANT_SEC_OK, NULL);
+		      RADIANT_SEC_OK);
 	zassert_equal(radiant_sec_compat_tier1_tag(&b, VEC_EPOCH, VEC_DEVNUM,
 						   VEC_COUNTER, tag_b),
-		      RADIANT_SEC_OK, NULL);
-	zassert_true(memcmp(tag_a, tag_b, sizeof(tag_a)) != 0,
-		     "the question the tier answers is 'from the holder of "
-		     "K_auth?'; two keys must not answer it the same way");
+		      RADIANT_SEC_OK);
+	zassert_true(memcmp(tag_a, tag_b, sizeof(tag_a)) != 0);
 
 	radiant_sec_key_destroy(&a);
 	radiant_sec_key_destroy(&b);
@@ -298,20 +281,16 @@ ZTEST(sec_compat, test_tier2_vectors_shared_with_the_python_mirror)
 	zassert_equal(radiant_sec_compat_tier2_tag(&k, VEC_EPOCH, VEC_DEVNUM,
 						   VEC_COUNTER,
 						   &window_msgs[0][0], 8, got),
-		      RADIANT_SEC_OK, NULL);
-	zassert_mem_equal(got, tier2_tag_n8, sizeof(got),
-			  "Tier II at N=8 disagrees with "
-			  "tools/radiant_crypto.py");
+		      RADIANT_SEC_OK);
+	zassert_mem_equal(got, tier2_tag_n8, sizeof(got), "N=8");
 
 	zassert_equal(radiant_sec_compat_tier2_tag(&k, VEC_EPOCH, VEC_DEVNUM,
 						   0x0007u,
 						   &window_msgs[0][0], 4, got),
-		      RADIANT_SEC_OK, NULL);
-	zassert_mem_equal(got, tier2_tag_n4, sizeof(got),
-			  "Tier II at N=4 disagrees with "
-			  "tools/radiant_crypto.py");
+		      RADIANT_SEC_OK);
+	zassert_mem_equal(got, tier2_tag_n4, sizeof(got), "N=4");
 
-	zassert_equal(RADIANT_SEC_COMPAT_TIER_II_TAG_BYTES * 8, 48, NULL);
+	zassert_equal(RADIANT_SEC_COMPAT_TIER_II_TAG_BYTES * 8, 48);
 	radiant_sec_key_destroy(&k);
 }
 
@@ -330,9 +309,9 @@ ZTEST(sec_compat, test_tier2_covers_every_byte_of_every_covered_message)
 	zassert_equal(radiant_sec_compat_tier2_tag(&k, VEC_EPOCH, VEC_DEVNUM,
 						   VEC_COUNTER, &msgs[0][0], 8,
 						   got),
-		      RADIANT_SEC_OK, NULL);
-	zassert_mem_equal(got, tier2_tag_n8_flipped, sizeof(got), NULL);
-	zassert_true(memcmp(got, tier2_tag_n8, sizeof(got)) != 0, NULL);
+		      RADIANT_SEC_OK);
+	zassert_mem_equal(got, tier2_tag_n8_flipped, sizeof(got));
+	zassert_true(memcmp(got, tier2_tag_n8, sizeof(got)) != 0);
 	radiant_sec_key_destroy(&k);
 }
 
@@ -354,18 +333,16 @@ ZTEST(sec_compat, test_tier2_covers_byte_zero_unlike_the_spread_tag)
 	zassert_equal(radiant_sec_compat_tier2_tag(&k, VEC_EPOCH, VEC_DEVNUM,
 						   VEC_COUNTER, &msgs[0][0], 8,
 						   first),
-		      RADIANT_SEC_OK, NULL);
-	zassert_true(memcmp(first, tier2_tag_n8, sizeof(first)) != 0,
-		     "byte [0] of a covered message is outside the MAC");
+		      RADIANT_SEC_OK);
+	zassert_true(memcmp(first, tier2_tag_n8, sizeof(first)) != 0, "byte [0]");
 
 	memcpy(msgs, window_msgs, sizeof(msgs));
 	msgs[3][7] ^= 0x80;
 	zassert_equal(radiant_sec_compat_tier2_tag(&k, VEC_EPOCH, VEC_DEVNUM,
 						   VEC_COUNTER, &msgs[0][0], 8,
 						   last),
-		      RADIANT_SEC_OK, NULL);
-	zassert_true(memcmp(last, tier2_tag_n8, sizeof(last)) != 0,
-		     "byte [7] of a covered message is outside the MAC");
+		      RADIANT_SEC_OK);
+	zassert_true(memcmp(last, tier2_tag_n8, sizeof(last)) != 0, "byte [7]");
 
 	radiant_sec_key_destroy(&k);
 }
@@ -386,8 +363,8 @@ ZTEST(sec_compat, test_tier2_message_order_is_transmission_order)
 	zassert_equal(radiant_sec_compat_tier2_tag(&k, VEC_EPOCH, VEC_DEVNUM,
 						   VEC_COUNTER, &msgs[0][0], 8,
 						   got),
-		      RADIANT_SEC_OK, NULL);
-	zassert_true(memcmp(got, tier2_tag_n8, sizeof(got)) != 0, NULL);
+		      RADIANT_SEC_OK);
+	zassert_true(memcmp(got, tier2_tag_n8, sizeof(got)) != 0);
 	radiant_sec_key_destroy(&k);
 }
 
@@ -401,14 +378,12 @@ ZTEST(sec_compat, test_tier2_window_index_is_inside_the_tag)
 	zassert_equal(radiant_sec_compat_tier2_tag(&k, VEC_EPOCH, VEC_DEVNUM,
 						   VEC_COUNTER,
 						   &window_msgs[0][0], 8, a),
-		      RADIANT_SEC_OK, NULL);
+		      RADIANT_SEC_OK);
 	zassert_equal(radiant_sec_compat_tier2_tag(&k, VEC_EPOCH, VEC_DEVNUM,
 						   VEC_COUNTER + 1u,
 						   &window_msgs[0][0], 8, b),
-		      RADIANT_SEC_OK, NULL);
-	zassert_true(memcmp(a, b, sizeof(a)) != 0,
-		     "identical windows at two indices must not share a tag, "
-		     "or a whole window replays");
+		      RADIANT_SEC_OK);
+	zassert_true(memcmp(a, b, sizeof(a)) != 0);
 	radiant_sec_key_destroy(&k);
 }
 
@@ -427,10 +402,7 @@ ZTEST(sec_compat, test_tier2_refuses_an_unenumerated_window)
 							   VEC_COUNTER,
 							   &window_msgs[0][0],
 							   illegal[i], got),
-			      RADIANT_SEC_EINVAL,
-			      "N = %u was accepted; N is the airtime cost, the "
-			      "latency and the amplification factor at once",
-			      illegal[i]);
+			      RADIANT_SEC_EINVAL, "N=%u", illegal[i]);
 	}
 
 	/* And every legal one is accepted, so the check above cannot pass by
@@ -446,7 +418,7 @@ ZTEST(sec_compat, test_tier2_refuses_an_unenumerated_window)
 					      &k, VEC_EPOCH, VEC_DEVNUM,
 					      VEC_COUNTER, &big[0][0],
 					      legal[i], got),
-				      RADIANT_SEC_OK, "N = %u", legal[i]);
+				      RADIANT_SEC_OK, "N=%u", legal[i]);
 		}
 	}
 	radiant_sec_key_destroy(&k);
@@ -461,30 +433,30 @@ ZTEST(sec_compat, test_a_missing_argument_or_key_is_refused)
 
 	zassert_equal(radiant_sec_compat_tier1_tag(NULL, VEC_EPOCH, VEC_DEVNUM,
 						   VEC_COUNTER, got),
-		      RADIANT_SEC_EINVAL, NULL);
+		      RADIANT_SEC_EINVAL);
 	zassert_equal(radiant_sec_compat_tier2_tag(NULL, VEC_EPOCH, VEC_DEVNUM,
 						   VEC_COUNTER,
 						   &window_msgs[0][0], 8, got),
-		      RADIANT_SEC_EINVAL, NULL);
+		      RADIANT_SEC_EINVAL);
 
 	import_or_fail(&k, k_auth_raw);
 	zassert_equal(radiant_sec_compat_tier1_tag(&k, VEC_EPOCH, VEC_DEVNUM,
 						   VEC_COUNTER, NULL),
-		      RADIANT_SEC_EINVAL, NULL);
+		      RADIANT_SEC_EINVAL);
 	zassert_equal(radiant_sec_compat_tier2_tag(&k, VEC_EPOCH, VEC_DEVNUM,
 						   VEC_COUNTER, NULL, 8, got),
-		      RADIANT_SEC_EINVAL, NULL);
+		      RADIANT_SEC_EINVAL);
 
 	/* An empty handle must not produce a tag under a zeroed key and call
 	 * it a result. */
 	radiant_sec_key_destroy(&k);
 	zassert_equal(radiant_sec_compat_tier1_tag(&k, VEC_EPOCH, VEC_DEVNUM,
 						   VEC_COUNTER, got),
-		      RADIANT_SEC_ENOKEY, NULL);
+		      RADIANT_SEC_ENOKEY);
 	zassert_equal(radiant_sec_compat_tier2_tag(&k, VEC_EPOCH, VEC_DEVNUM,
 						   VEC_COUNTER,
 						   &window_msgs[0][0], 8, got),
-		      RADIANT_SEC_ENOKEY, NULL);
+		      RADIANT_SEC_ENOKEY);
 }
 
 ZTEST_SUITE(sec_compat, NULL, NULL, NULL, NULL, NULL);

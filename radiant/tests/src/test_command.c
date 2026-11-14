@@ -263,8 +263,7 @@ ZTEST(command, test_the_short_tag_is_the_long_tags_prefix_and_the_rest_is_the_ga
 					&body_l[PROFILE_TLM_CMD_COVERED]));
 	body_l[PROFILE_TLM_CMD_COVERED + 2u] ^= 0x01u;
 	zassert_true(profile_cmd_tag_ok(&short_n, body_l,
-					&body_l[PROFILE_TLM_CMD_COVERED]),
-		     "the short width cannot see past its own two bytes");
+					&body_l[PROFILE_TLM_CMD_COVERED]));
 	zassert_false(profile_cmd_tag_ok(&long_n, body_l,
 					 &body_l[PROFILE_TLM_CMD_COVERED]));
 }
@@ -322,12 +321,12 @@ ZTEST(command, test_a_command_executes_once_however_many_times_it_arrives)
 	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
 						    sizeof(tag)) > 0);
 	zassert_equal(PROFILE_TLM_RESULT_ALREADY, a.result);
-	zassert_equal(0x1234u, a.value, "a repeat carries the stored value");
+	zassert_equal(0x1234u, a.value);
 
 	rc = profile_cmd_on_command(&n, body, sizeof(body), 3000u, ack, sizeof(ack));
 	zassert_equal((int)PROFILE_TLM_CMD_LEN_STD, rc);
 
-	zassert_equal(1u, g_exec_calls, "the effect ran exactly once");
+	zassert_equal(1u, g_exec_calls);
 	zassert_equal(1u, profile_cmd_stats(&n)->executed);
 	zassert_equal(2u, profile_cmd_stats(&n)->repeats);
 
@@ -360,8 +359,7 @@ ZTEST(command, test_a_rejection_repeats_as_a_rejection_and_never_as_already)
 	zassert_true(rc > 0);
 	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
 						    sizeof(tag)) > 0);
-	zassert_equal(PROFILE_TLM_RESULT_BAD_ARG, a.result,
-		      "a refused command is still refused, never 'already done'");
+	zassert_equal(PROFILE_TLM_RESULT_BAD_ARG, a.result);
 	zassert_equal(0u, profile_cmd_stats(&n)->executed);
 	zassert_equal(1u, profile_cmd_stats(&n)->rejected);
 }
@@ -381,13 +379,13 @@ ZTEST(command, test_a_bad_tag_changes_no_state_including_last_seq)
 	body[PROFILE_TLM_CMD_COVERED] ^= 0x80u; /* a wrong tag */
 
 	rc = profile_cmd_on_command(&n, body, sizeof(body), 1000u, ack, sizeof(ack));
-	zassert_true(rc > 0, "the first failure is answered, once");
+	zassert_true(rc > 0);
 	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
 						    sizeof(tag)) > 0);
 	zassert_equal(PROFILE_TLM_RESULT_BAD_TAG, a.result);
 
 	zassert_equal(0u, g_exec_calls);
-	zassert_false(n.seq_known, "a bad tag adopted nothing");
+	zassert_false(n.seq_known);
 	zassert_equal(0u, profile_cmd_stats(&n)->adopted);
 
 	/* Rule 4 still available: the first command that PASSES the tag check
@@ -451,12 +449,12 @@ ZTEST(command, test_the_accept_window_is_one_to_sixty_four_and_wraps)
 
 		if (cases[i].accept) {
 			zassert_equal(PROFILE_TLM_RESULT_OK, a.result,
-				      "case %u: %u -> %u should be inside", i,
+				      "case %u: %u -> %u", i,
 				      cases[i].first, cases[i].second);
 			zassert_equal(2u, g_exec_calls);
 		} else {
 			zassert_equal(PROFILE_TLM_RESULT_BAD_SEQ, a.result,
-				      "case %u: %u -> %u should be outside", i,
+				      "case %u: %u -> %u", i,
 				      cases[i].first, cases[i].second);
 			zassert_equal(1u, g_exec_calls);
 		}
@@ -537,8 +535,7 @@ ZTEST(command, test_a_command_captured_in_a_previous_epoch_never_verifies)
 	zassert_true(rc > 0);
 	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
 						    sizeof(tag)) > 0);
-	zassert_equal(PROFILE_TLM_RESULT_BAD_TAG, a.result,
-		      "this is what the epoch's four bytes buy a command-only node");
+	zassert_equal(PROFILE_TLM_RESULT_BAD_TAG, a.result);
 	zassert_equal(0u, g_exec_calls);
 	zassert_false(today.seq_known);
 
@@ -601,7 +598,7 @@ ZTEST(command, test_two_frames_sent_at_different_times_announce_the_same_window)
 	p2 = profile_sched_phase_for(&LIVE_SCHED, anchor, t2);
 	zassert_true(p1 >= 0);
 	zassert_true(p2 >= 0);
-	zassert_not_equal(p1, p2, "a retransmitted phase is the bug being fixed");
+	zassert_not_equal(p1, p2);
 
 	a.dl_phase = (uint16_t)p1;
 	b.dl_phase = (uint16_t)p2;
@@ -736,9 +733,8 @@ ZTEST(command, test_the_page_scheduler_rephases_the_schedule_frame_it_hands_out)
 		t += 250000u; /* a 4 Hz slot grid */
 	}
 
-	zassert_true(seen >= 2u, "the schedule frame went out twice");
-	zassert_not_equal(heard_1.dl_phase, heard_2.dl_phase,
-			  "a scheduler-driven node no longer repeats a stale phase");
+	zassert_true(seen >= 2u);
+	zassert_not_equal(heard_1.dl_phase, heard_2.dl_phase);
 
 	w1 = profile_sched_listen_at(&heard_1, carrier_1, 0u);
 	w2 = profile_sched_listen_at(&heard_2, carrier_2, 0u);
@@ -749,11 +745,9 @@ ZTEST(command, test_the_page_scheduler_rephases_the_schedule_frame_it_hands_out)
 	 * must land on the node's grid, anchor + n * interval. A node that
 	 * retransmitted a stale phase would put the second one anywhere.
 	 */
-	zassert_true(grid_error(w1, 5000000u) <= 31u, "w1=%llu off grid",
-		     (unsigned long long)w1);
-	zassert_true(grid_error(w2, 5000000u) <= 31u, "w2=%llu off grid",
-		     (unsigned long long)w2);
-	zassert_not_equal(w1, w2, "a cycle apart is a different window");
+	zassert_true(grid_error(w1, 5000000u) <= 31u, "w1=%llu", (unsigned long long)w1);
+	zassert_true(grid_error(w2, 5000000u) <= 31u, "w2=%llu", (unsigned long long)w2);
+	zassert_not_equal(w1, w2);
 
 	/* Every other field of the block survived the re-phase untouched. */
 	zassert_equal(LIVE_SCHED.dl_interval, heard_2.dl_interval);
@@ -891,7 +885,7 @@ ZTEST(command, test_a_response_slot_is_an_ordinary_bounded_receive_window)
 	zassert_ok(profile_cmd_arm_listen(&n, now));
 	zassert_ok(radiant_sched_tick());
 	zassert_equal(1u, profile_cmd_stats(&n)->windows);
-	zassert_equal(0u, n.expect_left, "an arm spends one expectation");
+	zassert_equal(0u, n.expect_left);
 
 	/* THE CLAIM THIS TEST EXISTS FOR: what reached the radio is an RX arm,
 	 * bounded, at the announced instant, for the announced dwell. No new
@@ -953,7 +947,7 @@ ZTEST(command, test_a_command_lands_in_the_slot_the_node_armed)
 
 	fake_radio_advance_to(open_at + DL_DWELL_US + 1000u);
 
-	zassert_equal(1u, g_rx_events, "the frame landed inside the armed window");
+	zassert_equal(1u, g_rx_events);
 	zassert_true(g_rx_have);
 	zassert_mem_equal(g_rx_payload, body, PROFILE_TLM_CMD_LEN_STD);
 	zassert_true(g_rx_t_sync >= open_at && g_rx_t_sync <= open_at + DL_DWELL_US);
@@ -968,7 +962,7 @@ ZTEST(command, test_a_command_lands_in_the_slot_the_node_armed)
 	/* SIMULATED latency, host request to node execution. Bounded by one
 	 * interval by construction; see the file comment on what this is not. */
 	zassert_true(g_rx_t_sync - t_request < DL_INTERVAL_US + DL_DWELL_US,
-		     "simulated latency %llu us exceeded one interval",
+		     "latency %llu",
 		     (unsigned long long)(g_rx_t_sync - t_request));
 
 	(void)radiant_sched_cancel(CMD_CH);
@@ -1004,7 +998,7 @@ ZTEST(command, test_simulated_latency_is_bounded_by_one_interval_and_averages_ha
 		uint64_t wait;
 
 		zassert_not_equal(RADIANT_TIME_NEVER, open_at);
-		zassert_true(open_at >= t_req, "a window is never in the past");
+		zassert_true(open_at >= t_req);
 		wait = (uint64_t)(open_at - t_req);
 
 		total += wait;
@@ -1016,10 +1010,8 @@ ZTEST(command, test_simulated_latency_is_bounded_by_one_interval_and_averages_ha
 	/* The bounded worst case: a request arriving just after a window waits
 	 * almost exactly one interval and never more - asserted here rather
 	 * than observed on the bench. */
-	zassert_true(worst < DL_INTERVAL_US, "simulated worst case %llu us",
-		     (unsigned long long)worst);
-	zassert_true(worst > (DL_INTERVAL_US - (DL_INTERVAL_US / 100u)),
-		     "the worst case should approach a full interval");
+	zassert_true(worst < DL_INTERVAL_US, "worst %llu", (unsigned long long)worst);
+	zassert_true(worst > (DL_INTERVAL_US - (DL_INTERVAL_US / 100u)));
 
 	/* THE MEAN. Uniform request arrivals over the interval give half of it,
 	 * to within the phase field's quantisation. */
@@ -1029,7 +1021,7 @@ ZTEST(command, test_simulated_latency_is_bounded_by_one_interval_and_averages_ha
 		uint64_t slack = want / 50u; /* 2 % */
 
 		zassert_true((mean > want ? mean - want : want - mean) < slack,
-			     "simulated mean %llu us against %llu us",
+			     "mean %llu want %llu",
 			     (unsigned long long)mean, (unsigned long long)want);
 	}
 }
@@ -1067,11 +1059,10 @@ ZTEST(command, test_a_missed_response_slot_costs_exactly_one_interval_and_no_mor
 		 * the arithmetic - a miss costing a whole extra interval would
 		 * be a thousand times this. */
 		zassert_true((latency > want ? latency - want : want - latency) <= 61u,
-			     "misses=%u simulated latency %llu us against %llu us",
+			     "misses=%u latency %llu want %llu",
 			     misses, (unsigned long long)latency,
 			     (unsigned long long)want);
-		zassert_true(grid_error(landed, anchor) <= 31u,
-			     "misses=%u landed off the node's grid", misses);
+		zassert_true(grid_error(landed, anchor) <= 31u, "misses=%u", misses);
 	}
 
 	/* And a retry is free at the protocol layer as well as the slot layer:
@@ -1110,8 +1101,7 @@ ZTEST(command, test_a_received_command_buys_the_windows_a_retry_needs)
 			    body, sizeof(body));
 	zassert_true(profile_cmd_on_command(&n, body, sizeof(body), 1000u, ack,
 					    sizeof(ack)) > 0);
-	zassert_equal(PROFILE_CMD_RETRY_WINDOWS, n.expect_left,
-		      "a command opens the window its own retry will need");
+	zassert_equal(PROFILE_CMD_RETRY_WINDOWS, n.expect_left);
 
 	/* And so does a duplicate, or a retry of the retry would find the node
 	 * deaf. */

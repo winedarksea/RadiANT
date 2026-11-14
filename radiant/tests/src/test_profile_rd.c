@@ -56,13 +56,13 @@ ZTEST(profile_rd, test_page_a_bit_placement)
 	zassert_equal(profile_rd_encode_a(&m, false, body), 0);
 
 	zassert_equal(body[0], PROFILE_RD_PAGE_A);
-	zassert_equal(body[1], 180, "integer strides per minute");
-	zassert_equal(body[2] & 0x1Fu, 8, "8/32 = 0.25 strides/min");
-	zassert_equal(body[2] & 0x80u, 0, "byte 2 bit 7 is reserved, set to 0");
+	zassert_equal(body[1], 180);
+	zassert_equal(body[2] & 0x1Fu, 8);
+	zassert_equal(body[2] & 0x80u, 0);
 
-	zassert_equal(body[3], 96, "vertical oscillation, whole millimetres");
-	zassert_equal(body[4] & 0x07u, 0, "96 needs none of the three high bits");
-	zassert_equal((body[4] >> 3) & 0x03u, 2, "0.5 mm = 2 quarters");
+	zassert_equal(body[3], 96);
+	zassert_equal(body[4] & 0x07u, 0);
+	zassert_equal((body[4] >> 3) & 0x03u, 2);
 
 	/* Ground contact time keeps its THREE LOW bits in byte [4] and its
 	 * eight high bits in byte [5] - the opposite of every other split
@@ -73,8 +73,8 @@ ZTEST(profile_rd, test_page_a_bit_placement)
 	/* Stance 143 quarters = 35 % remainder 3 (0b11), split across the byte
 	 * boundary LOW BIT FIRST. */
 	zassert_equal(body[6] & 0x7Fu, 35);
-	zassert_equal((body[6] >> 7) & 0x01u, 1, "fraction bit 0");
-	zassert_equal(body[7] & 0x01u, 1, "fraction bit 1");
+	zassert_equal((body[6] >> 7) & 0x01u, 1);
+	zassert_equal(body[7] & 0x01u, 1);
 	zassert_equal((body[7] >> 1) & 0x7Fu, RD_STEPS);
 }
 
@@ -129,7 +129,7 @@ ZTEST(profile_rd, test_invalid_is_zero_and_never_ff)
 	 * no 0xFF at all. */
 	for (i = 1; i < 8; i++) {
 		zassert_not_equal(body[i], 0xFFu,
-				  "byte %d carries the wrong sentinel", i);
+				  "byte %d", i);
 	}
 
 	memset(&got, 0, sizeof(got));
@@ -149,14 +149,14 @@ ZTEST(profile_rd, test_page_b_bit_placement)
 	zassert_equal(profile_rd_encode_b(&m, 0x1234u, body), 0);
 
 	zassert_equal(body[0], PROFILE_RD_PAGE_B);
-	zassert_equal(body[1] & 0x7Fu, 49, "whole percent of balance");
+	zassert_equal(body[1] & 0x7Fu, 49);
 	/* 1584 = 49*32 + 16, so the 5-bit fraction is 0b10000: bit 0 clear,
 	 * high four bits 0b1000. */
 	zassert_equal((body[1] >> 7) & 0x01u, 0);
 	zassert_equal(body[2] & 0x0Fu, 8);
 
-	zassert_equal((body[2] >> 4) & 0x0Fu, 7u & 0x0Fu, "ratio low nibble");
-	zassert_equal(body[3] & 0x07u, 7u >> 4, "ratio high bits");
+	zassert_equal((body[2] >> 4) & 0x0Fu, 7u & 0x0Fu);
+	zassert_equal(body[3] & 0x07u, 7u >> 4);
 	zassert_equal((body[3] >> 3) & 0x1Fu, RD_VERT_RATIO % 32u);
 
 	zassert_equal(body[4], RD_STEP_LEN_MM & 0xFFu);
@@ -164,7 +164,7 @@ ZTEST(profile_rd, test_page_b_bit_placement)
 	/* Page 0x01's two reserved bits are 0b11, where page 0x00's single
 	 * reserved bit is 0. Both transcribed; neither a typo. */
 	zassert_equal(body[5] & 0xC0u, 0xC0u);
-	zassert_equal(body[5] & 0x20u, 0, "right side up");
+	zassert_equal(body[5] & 0x20u, 0);
 
 	zassert_equal(body[6], 0x34u);
 	zassert_equal(body[7], 0x12u);
@@ -234,8 +234,7 @@ ZTEST(profile_rd, test_oversized_values_are_refused_not_masked)
 
 	memset(&m, 0, sizeof(m));
 	m.gct_ms = PROFILE_RD_GCT_MAX + 1u;
-	zassert_equal(profile_rd_encode_a(&m, false, body), -EINVAL,
-		      "a masked measurement is a plausible wrong number");
+	zassert_equal(profile_rd_encode_a(&m, false, body), -EINVAL);
 }
 
 /* ── Pages 0x10, 0x20, 0x4A ─────────────────────────────────────────────── */
@@ -400,7 +399,7 @@ ZTEST(profile_rd, test_rotation_alternates_the_two_main_pages)
 			} else if (body[0] == PROFILE_RD_PAGE_B) {
 				b++;
 			} else {
-				zassert_unreachable("page 0x%02X in a data slot",
+				zassert_unreachable("page 0x%02X",
 						    body[0]);
 			}
 		} else if (kind == PROFILE_SLOT_COMMON_80 ||
@@ -409,9 +408,9 @@ ZTEST(profile_rd, test_rotation_alternates_the_two_main_pages)
 		}
 	}
 
-	zassert_equal(common, 2, "pages 80 and 81, once each per cycle");
+	zassert_equal(common, 2);
 	zassert_equal(a + b, 119);
-	zassert_within(a, b, 1, "the two main pages alternate");
+	zassert_within(a, b, 1);
 }
 
 ZTEST(profile_rd, test_hr_rd_strap_reports_the_invalid_leader)
@@ -433,7 +432,7 @@ ZTEST(profile_rd, test_hr_rd_strap_reports_the_invalid_leader)
 			break;
 		}
 	}
-	zassert_equal(leader, PROFILE_RD_LEADER_HR_RD, "no page 0x01 in 8 slots");
+	zassert_equal(leader, PROFILE_RD_LEADER_HR_RD);
 
 	/* Session leadership on an HR-RD strap is settled by page 74 on the
 	 * heart-rate channel, so page 0x20 is refused here. */
@@ -448,9 +447,8 @@ ZTEST(profile_rd, test_session_leader_is_first_come)
 	zassert_equal(profile_rd_claim_leader(&rd, PROFILE_RD_LEADER_NONE),
 		      -EINVAL);
 	zassert_equal(profile_rd_claim_leader(&rd, 0x2A2Bu), 0);
-	zassert_equal(profile_rd_claim_leader(&rd, 0x2A2Bu), 0, "idempotent");
-	zassert_equal(profile_rd_claim_leader(&rd, 0x0102u), -EBUSY,
-		      "a sensor with a leader does not change leader on request");
+	zassert_equal(profile_rd_claim_leader(&rd, 0x2A2Bu), 0);
+	zassert_equal(profile_rd_claim_leader(&rd, 0x0102u), -EBUSY);
 }
 
 ZTEST(profile_rd, test_step_count_wraps_at_128)
@@ -461,7 +459,7 @@ ZTEST(profile_rd, test_step_count_wraps_at_128)
 	profile_rd_add_steps(&rd, 120u);
 	zassert_equal(rd.m.step_count, 120u);
 	profile_rd_add_steps(&rd, 10u);
-	zassert_equal(rd.m.step_count, 2u, "7 bits, and it is MEANT to wrap");
+	zassert_equal(rd.m.step_count, 2u);
 }
 
 ZTEST(profile_rd, test_back_channel_speed_is_applied)
@@ -498,24 +496,22 @@ ZTEST(profile_rd, test_adapter_publishes_the_six_mapped_metrics)
 	 * step delta - the same first-call rule as the heart-rate adapter. */
 	zassert_equal(profile_rd_encode_a(&m, false, body), 0);
 	n = radiant_rd_adapter_decode(&a, 1u, body, 1000u);
-	zassert_equal(n, 2u, "vertical oscillation and stance time");
+	zassert_equal(n, 2u);
 
 	m.step_count = (uint8_t)(RD_STEPS + 5u);
 	zassert_equal(profile_rd_encode_a(&m, false, body), 0);
 	n = radiant_rd_adapter_decode(&a, 1u, body, 2000u);
-	zassert_equal(n, 3u, "and now a step delta");
+	zassert_equal(n, 3u);
 
 	zassert_equal(profile_rd_encode_b(&m, PROFILE_RD_LEADER_NONE, body), 0);
 	n = radiant_rd_adapter_decode(&a, 1u, body, 3000u);
-	zassert_equal(n, 3u, "balance, vertical ratio, step length");
+	zassert_equal(n, 3u);
 
 	/* The two halves of the sensor's picture meet in the adapter, because
 	 * the two pages share no field at all. */
 	zassert_true(a.seen_a);
 	zassert_true(a.seen_b);
-	zassert_equal(a.m.gct_ms, RD_GCT_MS,
-		      "ground contact time is decoded even though it is not "
-		      "published - there is no vocabulary type for it yet");
+	zassert_equal(a.m.gct_ms, RD_GCT_MS);
 	zassert_equal(a.m.cadence_32, RD_CADENCE_32);
 }
 

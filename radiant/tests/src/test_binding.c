@@ -28,22 +28,22 @@ ZTEST(radiant_binding, test_bind_is_idempotent_by_key)
 {
 	uint32_t s1, s2;
 
-	zassert_equal(radiant_binding_bind(1234u, 0x78u, 1u, "strap", &s1), 0, NULL);
-	zassert_equal(radiant_binding_bind(1234u, 0x78u, 1u, "strap", &s2), 0, NULL);
-	zassert_equal(s1, s2, "same key must resolve to the same source");
+	zassert_equal(radiant_binding_bind(1234u, 0x78u, 1u, "strap", &s1), 0);
+	zassert_equal(radiant_binding_bind(1234u, 0x78u, 1u, "strap", &s2), 0);
+	zassert_equal(s1, s2);
 }
 
 ZTEST(radiant_binding, test_different_keys_get_different_sources)
 {
 	uint32_t s1, s2;
 
-	zassert_equal(radiant_binding_bind(1u, 0x78u, 1u, NULL, &s1), 0, NULL);
-	zassert_equal(radiant_binding_bind(2u, 0x78u, 1u, NULL, &s2), 0, NULL);
-	zassert_not_equal(s1, s2, NULL);
+	zassert_equal(radiant_binding_bind(1u, 0x78u, 1u, NULL, &s1), 0);
+	zassert_equal(radiant_binding_bind(2u, 0x78u, 1u, NULL, &s2), 0);
+	zassert_not_equal(s1, s2);
 
-	zassert_equal(radiant_binding_find(1u, 0x78u, 1u), s1, NULL);
-	zassert_equal(radiant_binding_find(2u, 0x78u, 1u), s2, NULL);
-	zassert_equal(radiant_binding_find(3u, 0x78u, 1u), RADIANT_BINDING_NONE, NULL);
+	zassert_equal(radiant_binding_find(1u, 0x78u, 1u), s1);
+	zassert_equal(radiant_binding_find(2u, 0x78u, 1u), s2);
+	zassert_equal(radiant_binding_find(3u, 0x78u, 1u), RADIANT_BINDING_NONE);
 }
 
 ZTEST(radiant_binding, test_table_full_refuses_new_key_not_existing_one)
@@ -56,17 +56,17 @@ ZTEST(radiant_binding, test_table_full_refuses_new_key_not_existing_one)
 	for (i = 0u; i < RADIANT_BINDING_MAX; i++) {
 		rc = radiant_binding_bind((uint16_t)(100u + i), 0x78u, 1u, NULL,
 					  &sources[i]);
-		zassert_equal(rc, 0, "table is not yet full at slot %u", i);
+		zassert_equal(rc, 0, "slot %u", i);
 	}
 
 	rc = radiant_binding_bind(9999u, 0x78u, 1u, NULL, &extra);
-	zassert_equal(rc, -ENOSPC, "table is full: a new key must be refused");
+	zassert_equal(rc, -ENOSPC);
 
 	/* An EXISTING key still resolves - fullness must not break lookups
 	 * of what is already bound. */
 	rc = radiant_binding_bind(100u, 0x78u, 1u, NULL, &extra);
-	zassert_equal(rc, 0, "an existing binding must resolve even when full");
-	zassert_equal(extra, sources[0], NULL);
+	zassert_equal(rc, 0);
+	zassert_equal(extra, sources[0]);
 }
 
 ZTEST(radiant_binding, test_uuid_is_nonzero_and_differs_across_bindings)
@@ -80,11 +80,10 @@ ZTEST(radiant_binding, test_uuid_is_nonzero_and_differs_across_bindings)
 	b1 = radiant_binding_get(s1);
 	b2 = radiant_binding_get(s2);
 
-	zassert_not_null(b1, NULL);
-	zassert_not_null(b2, NULL);
-	zassert_not_equal(b1->uuid, 0u, "a real binding must have a nonzero uuid");
-	zassert_not_equal(b1->uuid, b2->uuid,
-		       "two different bindings must not share a uuid");
+	zassert_not_null(b1);
+	zassert_not_null(b2);
+	zassert_not_equal(b1->uuid, 0u);
+	zassert_not_equal(b1->uuid, b2->uuid);
 }
 
 ZTEST(radiant_binding, test_unbind_then_rebind_is_a_new_identity)
@@ -97,15 +96,12 @@ ZTEST(radiant_binding, test_unbind_then_rebind_is_a_new_identity)
 	b = radiant_binding_get(source);
 	first_uuid = b->uuid;
 
-	zassert_equal(radiant_binding_unbind(source), 0, NULL);
-	zassert_is_null(radiant_binding_get(source),
-			"an unbound slot must not answer get()");
+	zassert_equal(radiant_binding_unbind(source), 0);
+	zassert_is_null(radiant_binding_get(source));
 
-	zassert_equal(radiant_binding_bind(42u, 0x78u, 1u, "new strap", &rebound), 0,
-		     NULL);
+	zassert_equal(radiant_binding_bind(42u, 0x78u, 1u, "new strap", &rebound), 0);
 	b = radiant_binding_get(rebound);
-	zassert_not_equal(b->uuid, first_uuid,
-		       "re-pairing the same key must not silently inherit the old uuid");
+	zassert_not_equal(b->uuid, first_uuid);
 }
 
 /* A heart-rate strap and a power meter can share a 16-bit device number; the
@@ -116,19 +112,18 @@ ZTEST(radiant_binding, test_the_key_is_all_three_fields)
 {
 	uint32_t hr, pwr, tt5;
 
-	zassert_equal(radiant_binding_bind(1234u, 0x78u, 1u, NULL, &hr), 0, NULL);
-	zassert_equal(radiant_binding_bind(1234u, 0x0Bu, 1u, NULL, &pwr), 0, NULL);
-	zassert_equal(radiant_binding_bind(1234u, 0x78u, 5u, NULL, &tt5), 0, NULL);
-	zassert_not_equal(hr, pwr, "devtype ignored");
-	zassert_not_equal(hr, tt5, "trans_type ignored");
-	zassert_not_equal(pwr, tt5, NULL);
-	zassert_equal(radiant_binding_find(1234u, 0x0Bu, 1u), pwr, NULL);
-	zassert_equal(radiant_binding_find(1234u, 0x78u, 5u), tt5, NULL);
+	zassert_equal(radiant_binding_bind(1234u, 0x78u, 1u, NULL, &hr), 0);
+	zassert_equal(radiant_binding_bind(1234u, 0x0Bu, 1u, NULL, &pwr), 0);
+	zassert_equal(radiant_binding_bind(1234u, 0x78u, 5u, NULL, &tt5), 0);
+	zassert_not_equal(hr, pwr);
+	zassert_not_equal(hr, tt5);
+	zassert_not_equal(pwr, tt5);
+	zassert_equal(radiant_binding_find(1234u, 0x0Bu, 1u), pwr);
+	zassert_equal(radiant_binding_find(1234u, 0x78u, 5u), tt5);
 
-	zassert_equal(-ENOENT, radiant_binding_set_period(RADIANT_BINDING_MAX, 8192u),
-		      NULL);
-	zassert_equal(0, radiant_binding_unbind(hr), NULL);
-	zassert_equal(-ENOENT, radiant_binding_set_period(hr, 8192u), NULL);
+	zassert_equal(-ENOENT, radiant_binding_set_period(RADIANT_BINDING_MAX, 8192u));
+	zassert_equal(0, radiant_binding_unbind(hr));
+	zassert_equal(-ENOENT, radiant_binding_set_period(hr, 8192u));
 }
 
 static void *binding_setup(void)
