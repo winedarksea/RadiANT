@@ -282,7 +282,7 @@ BUILD_ASSERT(RADIANT_SEC_PAIR_INITIATOR == 0u &&
  * budget (release.yml, "pairing text"). ENTER's timeout byte is optional. */
 static const uint8_t pair_arg_len[] = {
 	[ANTW_RADIANT_PAIR_LEAVE]       = 0u,
-	[ANTW_RADIANT_PAIR_ENTER]       = 1u,
+	[ANTW_RADIANT_PAIR_ENTER]       = 1u,  /* own path below: 0 or 1 byte */
 	[ANTW_RADIANT_PAIR_SCALAR]      = RADIANT_SEC_X25519_BYTES,
 	[ANTW_RADIANT_PAIR_EXCHANGE]    = RADIANT_SEC_X25519_BYTES,
 	[ANTW_RADIANT_PAIR_NONCE]       = 1u + RADIANT_SEC_PAIR_NONCE_BYTES,

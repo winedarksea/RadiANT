@@ -42,7 +42,9 @@
  * The key is live once PEER_NONCE answers, before the human compares. On a
  * mismatch or an abort the host must remove it: radiant_sec_pair_leave() does
  * NOT (it wipes the exchange only); radiant_sec_channel_release() does, which
- * over the serial protocol is closing and unassigning the channel (0x41).
+ * over the serial protocol is closing the channel and, after
+ * EVENT_CHANNEL_CLOSED, sending MESG_UNASSIGN_CHANNEL (0x41) and checking it
+ * answered NO_ERROR: an unassign sent before the close completes is refused.
  * And "B reveals Nb only after its PEER_NONCE" is the responder host's
  * obligation: the node never sees Nb leave, so it cannot enforce it.
  *
@@ -509,8 +511,9 @@ static int pair_finish(struct pair_ctx *c, const char *label,
 	int                       rc;
 
 	/* Device number read from the channel, not the wire, since it's bound
-	 * into the KDF (same reasoning as antr_sec_key_set()). Checked first,
-	 * so this refusal leaves the context exactly as it was. */
+	 * into the KDF (same reasoning as antr_sec_key_set()). Also checked at
+	 * set_nonce; if it fails here anyway (the ID changed since), the
+	 * callers free the context rather than leave a step to retry. */
 	if (devnum == 0u) {
 		return RADIANT_SEC_ENOKEY;
 	}

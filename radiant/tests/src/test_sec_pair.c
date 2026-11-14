@@ -759,11 +759,6 @@ ZTEST(sec_pair, test_an_exchange_spends_the_scalar)
 }
 
 /*
- * A loss of tracking is recorded on every RX_FAIL_GO_TO_SEARCH, pairing or
- * not, and waits for the next housekeeping pass. It must not release a pairing
- * entered after it.
- */
-/*
  * Review 2026-11-13 item 3: past the commitment nothing may fail retryably. A
  * responder left at its nonce step after a failed install would take a second
  * Na - an attacker's, if B's host had already leaked Nb - and show a chosen
@@ -877,6 +872,11 @@ ZTEST(sec_pair, test_housekeeping_frees_an_expired_window)
 		      "housekeeping left an expired window's secrets in RAM");
 }
 
+/*
+ * A loss of tracking is recorded on every RX_FAIL_GO_TO_SEARCH, pairing or
+ * not, and waits for the next housekeeping pass. It must not release a pairing
+ * entered after it.
+ */
 ZTEST(sec_pair, test_a_loss_recorded_before_enter_does_not_release_the_pairing)
 {
 	give_id(A_CH, A_DEVNUM);

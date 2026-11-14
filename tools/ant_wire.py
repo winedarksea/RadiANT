@@ -1067,13 +1067,15 @@ BURST_HEADER_LAST = 0x80
 # the two fps. A must not send Na before PEER_COMMIT has been answered, and B
 # must not send Nb before its PEER_NONCE: the two waits are the protocol
 # (docs/radiant-security.md sec 7.4). An abort or timeout at one end while the
-# other shows digits is a failed pairing: remove the installed key (close, then
-# MESG_UNASSIGN_CHANNEL) and start again. Argument lengths are exact; ENTER's
+# other shows digits is a failed pairing: remove the installed key (close the
+# channel; after EVENT_CHANNEL_CLOSED send MESG_UNASSIGN_CHANNEL and check it
+# answered NO_ERROR) and start again. Argument lengths are exact; ENTER's
 # timeout byte is optional.
 # ---------------------------------------------------------------------------
 
 # Leave pairing mode and wipe the exchange state, including any scalar the host
-# supplied. [K4 (docs/radiant-security.md sec 7.4 and 8)]
+# supplied. Does not remove a key PEER_NONCE installed; close the channel and
+# unassign it for that. [K4 (docs/radiant-security.md sec 7.4 and 8)]
 RADIANT_PAIR_LEAVE = 0x00
 
 # Enter pairing mode, timeout in seconds at [2]. Zero means the 60 s default
@@ -1121,11 +1123,13 @@ RADIANT_PAIR_PEER_COMMIT = 0x05
 # and both nonces, and installed, and the reply carries the six-digit
 # comparison fingerprint (CMAC_Na(PKa || PKb || Nb) mod 2^32 mod 10^6) as a u24
 # LE from [2]. The key is LIVE from this answer, before the humans compare; on
-# a mismatch, an abort or a timeout at either end, the host removes it by
-# closing and unassigning the channel (MESG_UNASSIGN_CHANNEL 0x41) - LEAVE
-# wipes the exchange but not the installed key. A responder's host reveals Nb
-# only after this answers; the node cannot enforce that. [Security review
-# 2026-11-13 item 4 (docs/radiant-security.md sec 7.4)]
+# a mismatch, an abort or a timeout at either end, the host removes it: close
+# the channel, and after EVENT_CHANNEL_CLOSED send MESG_UNASSIGN_CHANNEL (0x41)
+# and check it answered NO_ERROR - an unassign sent before the close completes
+# is refused and the key stays live. LEAVE wipes the exchange but not the
+# installed key. A responder's host reveals Nb only after this answers; the
+# node cannot enforce that. [Security review 2026-11-13 item 4 (docs/radiant-
+# security.md sec 7.4)]
 RADIANT_PAIR_PEER_NONCE = 0x06
 
 # ---------------------------------------------------------------------------

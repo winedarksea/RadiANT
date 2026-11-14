@@ -272,7 +272,9 @@ bool radiant_sec_x25519_is_degenerate(const uint8_t *shared);
  * On a mismatch or an abort the host must remove it explicitly:
  * radiant_sec_pair_leave() wipes the exchange but leaves the installed key;
  * radiant_sec_channel_release() removes it (over serial: close the channel,
- * then MESG_UNASSIGN_CHANNEL, 0x41).
+ * and after EVENT_CHANNEL_CLOSED send MESG_UNASSIGN_CHANNEL, 0x41, and check
+ * it answered NO_ERROR - sent before the close completes it is refused and
+ * the key stays live).
  *
  * Out-of-band pairing (QR code, typed key) remains the recommended path for
  * anything that matters - no attack surface during pairing at all.

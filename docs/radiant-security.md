@@ -999,7 +999,7 @@ after seeing Na, and asserts A refuses it.
 *Amended after review the same day: the bound is per attempt, not per
 window.* A rational MITM never reveals a wrong Nb, which would produce the
 distinct `RADIANT_PAIR_COMMIT_MISMATCH` refusal; it withholds Nb, A's window
-times out silently, and the user tries again. So three rules belong to the
+times out silently, and the user tries again. So four rules belong to the
 hosts, and the node cannot enforce any of them:
 
 - **An abort or timeout at one end while the other shows digits is a failed
@@ -1009,7 +1009,12 @@ hosts, and the node cannot enforce any of them:
   compares. On a mismatch, an abort or a timeout the host must remove it
   explicitly: `LEAVE` (`radiant_sec_pair_leave()`) wipes only the exchange.
   The key goes with `radiant_sec_channel_release()`, which over the serial
-  protocol is closing the channel and sending `MESG_UNASSIGN_CHANNEL` (`0x41`).
+  protocol is closing the channel and, after `EVENT_CHANNEL_CLOSED`, sending
+  `MESG_UNASSIGN_CHANNEL` (`0x41`) and checking it answered `NO_ERROR`. An
+  unassign sent before the close completes is refused, and the key stays live.
+- **A's host sends Na only after `PEER_COMMIT` has answered.** The node holds
+  Cb from then on, but it never sees Na leave, so it cannot stop A's host
+  revealing Na before the commitment is in place.
 - **B's host reveals Nb only after its own `PEER_NONCE` has answered.** Nb
   never passes through B's node on its way out, so B cannot hold it back.
 

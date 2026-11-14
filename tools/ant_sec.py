@@ -437,8 +437,10 @@ def encode_pair_exchange(channel: int, peer_pub: bytes) -> bytes:
 # `secrets.token_bytes(16)`, like the scalar.
 #
 # The key is live once PEER_NONCE answers, before the humans compare. On a
-# mismatch, an abort or a timeout at either end, remove it: close and unassign
-# the channel (MESG_UNASSIGN_CHANNEL, 0x41). LEAVE does not uninstall it. And
+# mismatch, an abort or a timeout at either end, remove it: close the channel,
+# and after EVENT_CHANNEL_CLOSED send MESG_UNASSIGN_CHANNEL (0x41) and check it
+# answered NO_ERROR (sent before the close completes it is refused and the key
+# stays live). LEAVE does not uninstall it. And
 # an abort at one end while the other shows digits is a FAILED pairing, never
 # one to retry until the digits match: the 10^-6 bound is per attempt.
 
