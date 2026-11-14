@@ -990,12 +990,33 @@ other side's: towards A it is bound by the commitment it sent before Na
 existed, and towards B it must reveal its own Na before B reveals Nb. Whichever
 order it runs the two halves in, the last value to enter one of the two
 fingerprints is a fresh nonce from an honest host, so the two six-digit values
-match with probability **10^-6 per attempt**, and the window (bounded, one
-pairing per window, and wiped on a commitment that does not open) allows **one
-attempt**. Grinding key pairs buys nothing: the keys are fixed before the
-nonces that decide the digits. `radiant/tests/src/test_sec_pair.c` keeps a
-nonce a laptop found in 31 s that *would* have made A show B's digits had M
-been free to choose it after seeing Na, and asserts A refuses it.
+match with probability **10^-6 per user-initiated pairing attempt**. Grinding
+key pairs buys nothing: the keys are fixed before the nonces that decide the
+digits. `radiant/tests/src/test_sec_pair.c` keeps a nonce a laptop found in
+31 s that *would* have made A show B's digits had M been free to choose it
+after seeing Na, and asserts A refuses it.
+
+*Amended after review the same day: the bound is per attempt, not per
+window.* A rational MITM never reveals a wrong Nb, which would produce the
+distinct `RADIANT_PAIR_COMMIT_MISMATCH` refusal; it withholds Nb, A's window
+times out silently, and the user tries again. So three rules belong to the
+hosts, and the node cannot enforce any of them:
+
+- **An abort or timeout at one end while the other shows digits is a failed
+  pairing.** It is never a cue to retry until the digits agree; every retry is
+  another 10^-6 draw.
+- **The key is live as soon as `PEER_NONCE` answers**, before the human
+  compares. On a mismatch, an abort or a timeout the host must remove it
+  explicitly: `LEAVE` (`radiant_sec_pair_leave()`) wipes only the exchange.
+  The key goes with `radiant_sec_channel_release()`, which over the serial
+  protocol is closing the channel and sending `MESG_UNASSIGN_CHANNEL` (`0x41`).
+- **B's host reveals Nb only after its own `PEER_NONCE` has answered.** Nb
+  never passes through B's node on its way out, so B cannot hold it back.
+
+The node closes what it can: an all-zero nonce is refused (it is enrolment's
+constant, and enrolment also has its own root label), `NONCE` is refused on a
+channel with no device number, and any failure after the commitment wipes the
+exchange so that a responder cannot be made to take a second Na.
 
 The cost on the node is three AES-CMACs over at most eight blocks (about
 12 µs a block in software) and no extra X25519; the host pays one more round
