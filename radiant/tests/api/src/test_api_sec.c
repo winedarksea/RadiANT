@@ -684,3 +684,75 @@ ZTEST(api, test_sec_a_plain_slave_broadcast_still_reaches_a_secured_master)
 	sec_close();
 }
 #endif /* CONFIG_RADIANT_SEC */
+
+/*
+ * Review 2026-11-13 item 11: a secured master refuses host acknowledged data
+ * and bursts, which would carry the host's plaintext beside the protected
+ * stream. A slave's acked data is its own traffic and still goes. Keyed and
+ * left pending (no epoch): keyed is what "secured" means.
+ */
+#if defined(CONFIG_RADIANT_SEC)
+static void sec_key_pending(void)
+{
+	int rc[3];
+
+	k_mutex_lock(&api_lock, K_FOREVER);
+	rc[0] = radiant_sec_set_key(SEC_CH, sec_dir_root, 128, SEC_DEVNUM);
+	rc[1] = radiant_sec_set_devnum(SEC_CH, SEC_DEVNUM);
+	rc[2] = radiant_sec_configure(SEC_CH, RADIANT_SEC_SW_CONF, 2u,
+				      RADIANT_SEC_PAGE_LO_DEFAULT,
+				      RADIANT_SEC_PAGE_HI_DEFAULT);
+	k_mutex_unlock(&api_lock);
+	for (int i = 0; i < 3; i++) {
+		zassert_equal(RADIANT_SEC_OK, rc[i], "key step %d", i);
+	}
+	zassert_true(radiant_sec_channel_is_secured(SEC_CH));
+}
+
+ZTEST(api, test_sec_a_keyed_master_refuses_acked_and_burst)
+{
+	static uint8_t blk[8] = { 0x10u, 1, 2, 3, 4, 5, 6, 7 };
+	uint32_t       arms;
+
+	sec_open((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	sec_key_pending();
+	arms = fake_radio_arm_count();
+
+	zassert_equal((antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE,
+		      antr_acknowledge_message_tx(SEC_CH, 8u, blk));
+	zassert_equal((antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE,
+		      antr_burst_tx(SEC_CH, 8u, blk,
+				    ANTR_BURST_SEGMENT_START |
+					    ANTR_BURST_SEGMENT_END));
+	zassert_equal(arms, fake_radio_arm_count(), "something was armed");
+	sec_close();
+}
+
+ZTEST(api, test_sec_a_keyed_slave_still_sends_acked_data)
+{
+	static const uint8_t blk[8] = { 0x46u, 0xFF, 0xFF, 0xFF, 0xFF, 1, 2, 1 };
+
+	sec_open((uint8_t)ANTW_CHANNEL_TYPE_SLAVE);
+	sec_key_pending();
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_acknowledge_message_tx(SEC_CH, 8u, blk));
+	sec_close();
+}
+#endif
+
+ZTEST(api, test_sec_an_unkeyed_master_still_sends_acked_and_burst)
+{
+	static uint8_t       burst_blk[8] = { 0x10u, 1, 2, 3, 4, 5, 6, 7 };
+	static const uint8_t ack_blk[8] = { 0x11u, 1, 2, 3, 4, 5, 6, 7 };
+
+	sec_open((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_burst_tx(SEC_CH, 8u, burst_blk,
+				    ANTR_BURST_SEGMENT_START |
+					    ANTR_BURST_SEGMENT_END));
+	sec_close();
+	sec_open((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_acknowledge_message_tx(SEC_CH, 8u, ack_blk));
+	sec_close();
+}

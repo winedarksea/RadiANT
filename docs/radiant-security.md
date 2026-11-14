@@ -446,6 +446,19 @@ delivered. Without that rule an injector simply sends a secured-range page as
 acknowledged data, skips the MAC machinery entirely, and is delivered as
 implicitly trusted data.
 
+**Non-broadcast traffic is otherwise outside the secured stream.** The rule
+above is the whole of it inbound: acknowledged data and bursts on a secured
+channel are not authenticated. A page outside the secured range passes through
+as ordinary data, and burst continuation packets carry no page number, so they
+are never checked at all. A host must treat both as unauthenticated. Outbound,
+a secured master refuses host acknowledged data and bursts
+(`antr_acknowledge_message_tx()` and `antr_burst_tx()` return
+`CHANNEL_IN_WRONG_STATE` and nothing goes on air), because sending the host's
+plaintext beside the protected stream would look like protected traffic and is
+not. A secured slave is not restricted: a receiver's acknowledged data (page
+requests, FE-C control) is its own traffic, not the secured stream (security
+review 2026-11-13, item 11).
+
 ### 3.3 The pinned block layouts
 
 Two implementations that differ here do not interoperate and the difference is
