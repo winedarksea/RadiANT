@@ -176,13 +176,15 @@ int node_ident_provision(const uint8_t k_dev[NODE_IDENT_K_DEV_BYTES])
 	}
 	if (node_nvm_load(NODE_NVM_KEY_KDEV, back,
 			  NODE_IDENT_K_DEV_BYTES) != NODE_NVM_OK) {
+		/* A failed read may still have filled part of it. */
+		radiant_sec_wipe(back, sizeof(back));
 		return NODE_IDENT_EIO;
 	}
 	if (memcmp(back, k_dev, NODE_IDENT_K_DEV_BYTES) != 0) {
-		memset(back, 0, sizeof(back));
+		radiant_sec_wipe(back, sizeof(back));
 		return NODE_IDENT_EIO;
 	}
-	memset(back, 0, sizeof(back));
+	radiant_sec_wipe(back, sizeof(back));
 
 	rc = store_u32_confirmed(NODE_NVM_KEY_BOOT, 0u);
 	if (rc != NODE_IDENT_OK) {
@@ -214,7 +216,7 @@ bool node_ident_is_provisioned(void)
 	}
 	ok = node_nvm_load(NODE_NVM_KEY_KDEV, k, sizeof(k)) == NODE_NVM_OK &&
 	     !key_is_all_zero(k, sizeof(k));
-	memset(k, 0, sizeof(k));
+	radiant_sec_wipe(k, sizeof(k));
 	return ok;
 }
 
@@ -863,8 +865,8 @@ int node_ident_pair_derive(const uint8_t k_dev[NODE_IDENT_K_DEV_BYTES],
 	}
 
 	radiant_sec_key_destroy(&root);
-	memset(tag, 0, sizeof(tag));
-	memset(block, 0, sizeof(block));
+	radiant_sec_wipe(tag, sizeof(tag));
+	radiant_sec_wipe(block, sizeof(block));
 	if (rc != RADIANT_SEC_OK) {
 		memset(out, 0, NODE_IDENT_PAIR_SCALAR_BYTES);
 		return NODE_IDENT_ENOTSUP;
@@ -980,7 +982,7 @@ int node_ident_pair_begin(uint8_t ch, uint8_t timeout_s)
 
 	/* 4. Install it; this is where the public key is computed. */
 	rc = radiant_sec_pair_set_scalar(ch, scalar);
-	memset(scalar, 0, sizeof(scalar));
+	radiant_sec_wipe(scalar, sizeof(scalar));
 	if (rc != RADIANT_SEC_OK) {
 		radiant_sec_pair_leave(ch);
 		node_ident_pair_window_close();
