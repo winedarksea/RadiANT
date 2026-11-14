@@ -556,10 +556,13 @@ int radiant_sec_set_key(uint8_t ch, const uint8_t *root, size_t bits,
 		}
 		return rc;
 	}
+	/* The on-air number restarts at the provisioning one with every root
+	 * that is installed, and only then: the same-root no-op above returns
+	 * first, so a Tier 2 receiver's trial number (radiant_sec_try_devnum())
+	 * survives an idempotent 0xF2. Until 2026-11-14 the 0xF2 adapter reset
+	 * it after every call, the no-op included. */
 	c->base_devnum = base_devnum;
-	if (c->devnum == 0u) {
-		c->devnum = base_devnum;
-	}
+	c->devnum = base_devnum;
 	/* A new root's epochs owe nothing to the old root's authority: the
 	 * ceiling (and the following) goes with it, and set_epoch is free. */
 	c->ceil_inv = 0;

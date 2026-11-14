@@ -714,6 +714,48 @@ ZTEST(api, test_sec_host_a_flipped_bit_sends_unverified)
 	vd_done();
 }
 
+/*
+ * Item 9's no-op rule reaches the on-air device number too. A Tier 2
+ * receiver has moved to a trial number (radiant_sec_try_devnum()) and is
+ * verifying windows under it; a 0xF2 re-sending the same root must leave that
+ * number alone. Until 2026-11-14 the adapter put it back to the provisioning
+ * number after every 0xF2, so every window after the re-send failed to verify.
+ * A different root still starts from the provisioning number (radiant_sec's
+ * own suite).
+ */
+#define VD_TRIAL_DEVNUM 0x51C4u
+
+ZTEST(api, test_sec_host_a_resent_key_keeps_a_tier2_trial_devnum)
+{
+	static const struct vd_want want[] = {
+		{ 0u, 0u }, { 0u, 1u }, { 0u, 2u }, { 0u, 3u }, { V_OK, 0u },
+		{ 0u, 4u }, { 0u, 5u }, { V_OK, 2u },
+		{ 0u, 6u }, { 0u, 7u }, { V_OK, 4u },
+	};
+	uint32_t from;
+	int      rc[2];
+
+	vd_setup(RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_VERDICT_EVENT, 2u);
+	k_mutex_lock(&api_lock, K_FOREVER);
+	rc[0] = radiant_sec_set_devnum(VD_TX_CH, VD_TRIAL_DEVNUM);
+	rc[1] = radiant_sec_try_devnum(VD_RX_CH, VD_TRIAL_DEVNUM);
+	k_mutex_unlock(&api_lock);
+	zassert_equal(RADIANT_SEC_OK, rc[0]);
+	zassert_equal(RADIANT_SEC_OK, rc[1]);
+
+	from = api_msglog_count();
+	for (uint32_t i = 0u; i < 4u; i++) {
+		(void)vd_hop(i, false);
+	}
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_key_set(VD_RX_CH, 128u, host_key));
+	for (uint32_t i = 4u; i < 8u; i++) {
+		(void)vd_hop(i, false);
+	}
+	vd_expect(from, want, ARRAY_SIZE(want), 2u);
+	vd_done();
+}
+
 ZTEST(api, test_sec_host_the_drop_policy_releases_a_window_before_its_verdict)
 {
 	/* Held packets come out immediately before the event that releases

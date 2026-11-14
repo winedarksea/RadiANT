@@ -138,7 +138,6 @@ static antr_err_t sec_key_set_locked(uint8_t channel, uint8_t bits,
 	 * since it can't be a provisioning identity.
 	 */
 	struct radiant_channel_id id;
-	int                       rc;
 
 	if (radiant_channel_id_get(channel, &id) != RADIANT_CH_OK) {
 		return (antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE;
@@ -147,16 +146,12 @@ static antr_err_t sec_key_set_locked(uint8_t channel, uint8_t bits,
 		return (antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE;
 	}
 
-	rc = radiant_sec_set_key(channel, key, (size_t)bits, id.device_number);
-	if (rc != RADIANT_SEC_OK) {
-		return sec_err(rc);
-	}
-
-	/* The on-air number starts equal to the provisioning one. A Tier 2
-	 * receiver moves it with radiant_sec_try_devnum() and never touches the
-	 * base. */
-	(void)radiant_sec_set_devnum(channel, id.device_number);
-	return (antr_err_t)ANTW_RESPONSE_NO_ERROR;
+	/* The on-air number starts equal to the provisioning one: set_key puts
+	 * it there whenever it installs a root. Not set here as well, since a
+	 * same-root re-send is a no-op (item 9) and must keep a Tier 2
+	 * receiver's trial number (radiant_sec_try_devnum()). */
+	return sec_err(radiant_sec_set_key(channel, key, (size_t)bits,
+					   id.device_number));
 }
 
 static antr_err_t sec_epoch_set_locked(uint8_t channel, uint8_t flags,

@@ -846,7 +846,8 @@ void radiant_sec_epoch_wanted(uint8_t ch, uint32_t epoch);
  *   SAME ROOT, same base_devnum: a no-op returning RADIANT_SEC_OK. The epoch,
  *     epoch_set (armed stays armed), the epoch ceiling (an authority keeps
  *     following the channel, so a host 0xF3 stays refused), the replay floor,
- *     the switches and the TX/RX window state are all kept. An idempotent
+ *     the switches, the on-air device number (a Tier 2 trial included) and
+ *     the TX/RX window state are all kept. An idempotent
  *     0xF2 re-send is therefore neither a gap in a live stream nor a reset of
  *     the epoch monotonicity gate: a same-root re-send followed by an older or
  *     equal epoch is still refused.
@@ -858,7 +859,9 @@ void radiant_sec_epoch_wanted(uint8_t ch, uint32_t epoch);
  *     epoch is accepted next: new keys mean no nonce under them was ever
  *     used), the ceiling is cleared (a new root owes the old authority
  *     nothing), and packets still queued for the pump under the old root are
- *     dropped. Switches, W, page range and the on-air device number stay.
+ *     dropped. Switches, W and page range stay; the on-air device number
+ *     restarts at base_devnum (as on a fresh context), ending any Tier 2
+ *     trial (radiant_sec_try_devnum()). The same-root no-op keeps it.
  *
  * A failed import leaves the existing context exactly as it was.
  */
