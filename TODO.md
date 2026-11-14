@@ -102,9 +102,9 @@ Items 1-4 DONE 2026-11-13, each through an independent review and re-review; ver
 - radiant/src/radiant_sec_rng_psa.c:45 returns without zero-filling when `psa_crypto_init()` fails, while the entropy backend and the node_ident comments promise a zero-fill on failure. The one caller checks the return code, so this is a contract mismatch, not a live bug.
 - [x] Pairing expiry is only checked lazily, on the next call, so an abandoned scalar stays in RAM until a pairing call or a reset. Done 2026-11-13 (33328d8): `radiant_sec_pair_service()` frees expired contexts.
 - Found while fixing items 1-4, open:
-  - The main ztest image no longer fits the nRF5340 DK. It ran only with `CONFIG_ASSERT_VERBOSE=n` and `CONFIG_ZTEST_ASSERT_VERBOSE=0`, and was already about 1.3 KB over on f02125a. Split the suite or pick a bigger target.
+  - [x] The main ztest image no longer fit the nRF5340 DK (41,756 B over at 5bc61b7; verbose assert text is ~590 KB of it). Done 2026-11-13 (4bab0ca): assert messages shortened, 970,084 B (92.5 %), 1076/1076 pass on the DK. Tests grew ~40 KB in one afternoon, so expect it to fill again; the agreed fallback is a DK-only `boards/nrf5340dk_nrf5340_cpuapp.conf` with `CONFIG_ZTEST_ASSERT_VERBOSE=0` (498 KB). New tests: keep assert messages to runtime values.
   - `scripts/run_ztest_hw.ps1` can capture two boots: the image runs between flash and go. A fixed copy, which waits 1 s and throws away that partial output before go, is in the 2026-11-13 session scratchpad and not committed.
-  - `test_matter.c` has a `-Wformat-extra-args` warning, which a -Werror build would fail on.
+  - [x] `test_matter.c` had a `-Wformat-extra-args` warning. Fixed in 4bab0ca.
 - Section 7.5 says ~2.3 h to one verified forgery at W=2 and 4 Hz. One attempt per 2-packet window is 2^16 x 0.5 s, about 9.1 h. Recheck the figure.
 
 # Module packaging follow-ups
@@ -368,7 +368,7 @@ MPSL (needs a soak beside BLE or Thread, which that clearance excluded):
 
 ## Device Testing Open Items
 
-Code size gates: trim the excess (ie comments, using Haiku with opus review)
+Code size gates: DK ztest image fixed 2026-11-13 (4bab0ca, see the security follow-ups above). Comments cost no flash; a readability trim of the five most-commented sources is e441d80.
 
 Make continuous dual transmission the HR default (CONFIG_HRM_SUPPRESS_ANT_WHEN_CONNECTED=n). 
 
