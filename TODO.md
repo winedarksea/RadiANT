@@ -4,17 +4,7 @@ Discovery short match (ADR 0022), left open 2026-11-11:
 - The two waste fixes (ADR 0022 "Not done here"): closed. The short match is on by default on TI (2026-11-12) and nRF (2026-11-13), and one set makes them moot; they matter only for `long_match.conf` images. No scheduler "window is live" query is built.
 - Zwift acceptance of the nRF default flip (user-run, not a precondition any more): every sensor listed within ~1 s while HR and trainer are tracked, 0x61/0xC6 answered, reset -> NETWORK_KEY against 42-94 s (RadiANT history) and 9.2 s (Garmin). If it passes, mark ADR 0022 accepted; if it fails, rebuild with `apps/dongle/long_match.conf` and investigate.
 
-Performance review 2026-11-13 (`docs/performance-review-2026-11-13.md`), open after the drain timing (`archive/benchmarks/2026-11-13-drain-timing/`, 0xF7 page 8):
-- Callback/pass split: TI's worst drain (~450 us, one frame) is ~346 us core rx callback, which includes a full scheduler pass (~214 us) arming from inside the drain. Deferring that re-arm is the largest lever.
-- Split `pass_step()` timing (slot-table scan vs the backend arm call) before choosing an active-slot bitmap: `pass_steps_max` is 1 on both backends and ~215 us on both CPUs, which points at the arm, not the scan.
-- TI CRC table: the bitwise CRC costs ~60 us per frame (not 15-20 us).
-- CRC repair dB gain (finding 3) still unmeasured; TI repair now works on air (`archive/benchmarks/2026-11-13-ti-crc-repair/`).
-
-## TI CC2652R, open after the 2026-11-12 bench (evidence `archive/benchmarks/2026-11-12-ti-findings/` and `2026-11-12-ti-lead/`; items 1-3 closed 2026-11-13, `archive/benchmarks/2026-11-13-ti-todo/README.md`):
-- [x] TI cannot receive the Pro Micro clone: FIXED. The cause was TI's RX intermediate frequency (0.5 MHz put the signal across DC, so loss depended on the transmitter's exact carrier offset), not the clone or the RX bandwidth. `CONFIG_RADIANT_CC26XX_INT_FREQ` now defaults to 1.0 MHz: clone and L15 0.0-0.6 % on TI, flat across ±200 kHz, below the same-window Garmin. The clone is a valid TI peer again.
-- [x] Decoy sync word `0x59C5`: replaced by `syncWord1 = 0` (second correlator off). 6 x 300 s alternating legs: CRC fails halved, tracked loss unchanged against the Garmin.
-- [x] `tools/ab_gates.toml`'s acquisition gate for the TI short match: closed as superseded, not run. The gate is a ratio against sdk-ant, which cannot run on TI, and it is `required = false`; ADR 0022's TI section already compared first-sighting medians against the Garmin in the same window (0.30/0.39 s, gate 2 pass).
-- [x] The burst ACK-window reserve (e042a10) on MPSL: measured 2026-11-14, and it was a live regression. The data packet's grant ends about where the ACK window closes, and the gate required the window's 1550 us follow-on to fit in it too, so every acknowledged message an MPSL build originated as a slave (Zwift's FE-C path) failed: L15 `gate.conf` against a Garmin 0/60 and 0/60, Garmin receiving 57 and 59. Fixed (8650411): an in-grant arm is served by its own air and its follow-on is clipped at the grant's end; 58/60 and 59/60, every received packet acknowledged. Retries still cannot run in-grant on MPSL (item 4 below). Master-originated acked data was not affected (60/60 on HEAD), by reading (review 2026-11-14): a listening master's slot is booked a period ahead (ADR 0021) with `API_FOLLOW_ON_MASTER_TX_US` (4550 us) of follow-on, and the transfer's AA replaces the posted MASTER_TX at the booked instant (`is_booked()`: same channel and open), so that grant already held the ACK window plus its 1550 us. An AA placed without a booking (booking off, or a booking MPSL refused) carries only the transfer's own reserve and would have failed on HEAD like the slave case; 8650411 covers it too. Single acknowledged messages never retry (`retry_packet()` refuses a one-packet transfer), so the ACK window's 1550 us follow-on is useless there; giving it 0 for a one-packet transfer would stop it holding arbiter air on cc26xx coex and keep `in_reserve()` honest (user decision, not done). `archive/benchmarks/2026-11-14-mpsl-ack-window/`. Under cc26xx coex the in-grant lead stays 600 us, so retries still cannot fit there either.
+## TI CC2652R, open after the 2026-11-12 bench (evidence `archive/benchmarks/2026-11-12-ti-findings/` and `2026-11-12-ti-lead/`; items closed 2026-11-13, `archive/benchmarks/2026-11-13-ti-todo/README.md`):
 
 ## FE-C coverage (deferred from the 2026-11-11 Zwift-capture plan, one item):
 - `tools/ant_fec_control.py`: the page-70 count byte is shifted (:152-156), and the incline is read at [3..4] instead of [4..5] (:171).
@@ -46,59 +36,22 @@ Found by reading the code and checked a second time; nothing was built or run. T
 Items 1-4 DONE 2026-11-13, each through an independent review and re-review; verified on the combined tree (DK main 1076, api sec_host 131 / sec 99 / plain 93, native_sim 5969/5969 in 16 scenarios, Python 1058). Size ceilings moved with sign-off: security text 6144 -> 6656 (6512 measured), pairing 3584 -> 4096 (3936); the security-off image is byte-identical in size to before.
 
 ## 1. [DONE 2026-11-13, merge 9bfb0c0: d463c01, caabace, 802ecc2] A counter wrap uses the epoch the next boot will be issued
-- Done: every epoch is reserved before use. N (next unused) is persisted as E+2 before E is used, the ceiling is E+1, and a wrap past it waits for the persist (`radiant_sec_epoch_wanted()` hook, compat twin). Every arm after the first in a boot takes a fresh reserved epoch. A host 0xF3 on a node-followed channel is refused unless the root is replaced. Persist retries back off up to 30 s.
-- Contract limit, not enforced: two channels transmitting at once under the same root and devnum can still meet on an epoch (node_ident.h says they must differ). No app does this today.
-- `advance_epoch()` (radiant/src/radiant_sec.c:333) moves a wrap to epoch+1, and a hostless node's epoch is its boot counter (radiant/src/node/node_ident.c:210). A node booted at epoch B that runs for 65 536 slots (~4.5 h at 4 Hz) transmits under B+1. Its next boot is issued B+1 again, with the counter back at 0: the same K_enc and the same nonces. That is the two-time pad D14 and D17 exist to stop.
-- A host issuing ordinal epochs has the same trap: section 3.5 says "persist the last epoch issued", but it has to be the last epoch *used* (the 0xF4 epoch). With a wall clock, two boots in the same minute return the same epoch, and `node_ident_arm_sec()` always passes `us_into_epoch = 0` (:478). No app overrides `node_ident_wall_seconds()` today.
-- Compat has the same shape through `apply_wraps()`.
-- Fix: give each boot a block of epochs (for example `boot_counter << 12`, with a headroom check), or persist the epoch on every wrap. Fix the section 3.5 wording too. Missing test: wrap, reboot, assert the epoch is not reused.
 
 ## 2. [DONE 2026-11-13, merge 9bfb0c0: 6106ca6] One injected frame desynchronises a secured master for good
-- Done: a secured master refuses secured-range broadcasts in `radiant_sec_rx_ingest()` (counted at 0xF4 [26..27]), and `rx_process()` refuses latched-TX contexts, so reflected windows no longer verify.
-- A master runs `radiant_sec_rx_ingest()` on broadcasts heard in its reply window (radiant/src/antr/ant_radio_radiant.c:2486), and RX shares `epoch` and the keys with TX. In the last ~128 slots before a wrap, a forged broadcast with a chosen counter byte makes `rx_process()` call `advance_epoch()` (radiant_sec.c:1201). TX still counts wraps from `tx_wraps`, so it advances again at the real wrap: the master ends on epoch+2 and its receivers on epoch+1, until the host sends a new 0xF3. Section 7.6 accepts the early advance because a receiver heals within 32 s; a master does not.
-- The same gap means nothing binds direction: a master's own windows reflected back to it verify.
-- Fix: refuse secured-range pages on a master channel (legitimate secured slaves never send them; ant_radio_radiant.c:1374 keeps a slave's broadcast off a secured channel), or put a direction bit in the nonce. Missing test: a master receives a secured page.
 
 ## 3. [DONE 2026-11-13, merge 1874e29, then 927cb75..d4b7bdd] The per-packet verdict never reaches the host
-- Done: opt-in 0xF8 window-verdict event (0xF1 bit 4, needs X_AUTH): `[ch, verdict, window_start u16, W, seq u16]`. seq is never reset and is spent on every discard. VERIFIED is given only when the closing window is after the judged one and under 256 counters on, and rx state restarts on open/close. The host rule (first covering verdict binds; a gap, overflow or deadline settles unverified; the first verdict after a flush is a baseline only) is in section 3.2 and `tools/ant_sec.py` `VerdictResolver`. Ring refusals are counted at 0xF4 [28..29]. Unsecured and non-opted-in streams are unchanged.
-- `radiant_sec_deliver()` discards the verdict (ARG_UNUSED, ant_radio_radiant.c:904), and nothing outside the tests overrides `radiant_sec_window_verdict()`. Under the default deliver policy, a forged secured-range broadcast reaches the host as an ordinary BROADCAST_DATA. The host only has the aggregate 0xF4 counters.
-- Section 3.2 says "every secured RX delivery carries verified / unverified / clear". As built, X_AUTH without DROP_UNVER detects forgery in aggregate but cannot reject a forged packet.
-- Fix: carry the verdict to the host (an extended-data flag or a window-verdict event), or make DROP_UNVER the default whenever X_AUTH is on.
 
 ## 4. [DONE 2026-11-13 for core pairing and 0xF5, merge 1a0031f: 164ff11..80b303c; over-air enrolment is documented only, see item 6] A computing MITM can make the six-digit fingerprints match
-- Done: LESC-style commit/reveal (0xF5 sub-commands 0x04-0x06): the responder commits to Nb before it sees Na, and the fingerprint covers both nonces. A reveal that fails its commitment answers response code 0xF5. A failure after the commitment wipes the exchange, and all-zero nonces are refused. The bound is 10^-6 per user-initiated attempt. Host obligations (reveal order, removing the key on mismatch via close, EVENT_CHANNEL_CLOSED, then unassign) are in section 7.4.
-- `pair_derive()` (radiant/src/radiant_sec_pair.c:138) has no commitment step. A MITM sees both real public keys and can grind its own key pair offline until the two six-digit fingerprints match. That is about 10^6 X25519 operations, seconds to a minute on a laptop, which fits inside the 60 s window. This applies to 0xF5 and to over-air enrolment.
-- The radiant_sec.h pairing block and section 7.4 say two different shared secrets "cannot be made to match". `test_a_man_in_the_middle_cannot_match_both_fingerprints` tests only a MITM that does not grind.
-- Fix: a commitment, as in BLE numeric comparison: one side sends H(pub) before it sees the peer's key. Or correct the documented claim.
 
 ## 5. [DONE 2026-11-13: 4d5d156, 55bf4c3, 4c12ebf, db761cc] A keyed but unarmed channel fails open in both directions
-- Done: a keyed channel with no epoch (pending) withholds secured-range TX (RADIANT_SEC_EUNARMED) and drops secured-range RX (counted in dropped_policy); `is_secured` means keyed, so a pending master is posted by the pump and sends no plaintext ack. 0xF4 [30] holds state flags (bit 0 keyed, bit 1 armed), length 31, version 1. 4c12ebf: a withheld master skips the slots it let pass (it used to lag one period per pump, even for out-of-range pages and after 0xF3). db761cc (review): the skip runs only when `sec_pay_valid` is false (last post withheld, or a keyed master's slot missed/denied), so a master transmitting normally pays one field compare, not a clock read. Security text 6896 B, ceiling 6656 -> 7168.
-- When `ctx_armed()` is false, `radiant_sec_tx_transform()` returns OK without transforming and `rx_ingest()` returns PLAIN (radiant_sec.c:840, :970). `radiant_sec_set_key()` clears `epoch_set`, so re-keying or completing a pairing on a live channel sends secured-range pages in plaintext, and accepts them unauthenticated, until the next 0xF3. 0xF4 does not report the armed flag, so a host cannot see it.
-- Fix: once a context exists with switches set, withhold TX and drop RX of secured-range pages until the epoch is set. Report "armed" in 0xF4 by appending a field. Per the beta rule, ANTR_SEC_STATUS_VERSION stays at 1.
 
 ## 6. [DONE 2026-11-13: f330469, 4544e5c, 9be01e0] Over-air enrolment replaces the group root instead of delivering it
-- Done: the sensor wraps its existing root (compat first, else sec) under the pairwise DH key, CTR then trunc64 CMAC (domain 0x06), and sends it as 4 beacon frames for 3 passes after the window closes; its root is untouched. Receiver API `radiant_sec_pair_join()` + `radiant_sec_pair_accept_root()` (no app wiring yet). A rootless sensor installs the enrolment root and delivers that. The compat-only enrolment counter is `radiant_sec_compat_stats.enrolments` (not in 0xF4). Pairing text 3972 B / 4096.
-- Consequence to confirm: whoever wins a window (a MITM included) now gets the group root, which also opens traffic recorded under it before the window, and enrolled receivers see nothing (section 11.7 says so). Replacing the root bounded that to future traffic at the cost of a lockout.
-- `radiant_sec_pair_peer()` installs the DH-derived key with `radiant_sec_set_key()` on the sensor's own channel (radiant_sec_pair.c:405). Section 11.7 says enrolment is additive and gives the new receiver the existing root. No code does that: test_profile_enrol.c:1325 keys the peer with `compat_root` by hand.
-- As written, anyone who answers an open window locks out every existing receiver, and item 5 applies to the live channel at the same moment.
-- Fix: wrap the existing root under the DH key and send it, leaving the sensor's root untouched.
 
 ## 7. [DONE 2026-11-13: c4cfe94] Compat epoch recovery allows a rollback
-- Done: `adopt_epoch()` refuses an epoch below the held one unless `RADIANT_SEC_COMPAT_ADOPT_REPROVISION`; the held epoch is a no-op that keeps the Tier I lock. Without the flag `recover_*` run only the forward phase from max(last_seen, held epoch) (65,537 probes, was 131,090). Scan bounds kept; comments now count epochs (each boot spends at least two).
-- `epoch_search()` probes 16 epochs backward and scans 0..65 536 absolute. `radiant_sec_compat_adopt_epoch()` (radiant/src/radiant_sec_compat.c:1468) has no monotonic check and clears the Tier I lock. The 24-bit hint is fixed per epoch, and boot-counter epochs always fall inside the scan. So a recorded beacon, plus recorded Tier I pages from any old session, rolls a receiver back and verifies.
-- Section 7.6 says the descriptor search runs forward only; the compat scan contradicts that for a receiver that already knows a newer epoch.
-- Fix: `adopt_epoch()` refuses `epoch < base_epoch` unless the caller passes an explicit re-provision flag, and the backward and scan paths require that flag.
 
 ## 8. [DONE 2026-11-13: e111889, e7024ce] Tier II windows have no replay floor
-- Done: the full 32-bit window index reaches the nonce ([10..11] carry the high half), and `rx_tier2()` refuses `window <= rx_t2_last` before the CMAC (`tier2_replays` stat); the floor rises only on VERIFIED and is cleared with the Tier I state. Compat object 4604 B with item 7, 4 B under the 4608 ceiling: the next compat change moves it. Left open: Tier II recovery works only from windows 0..65535; a sender that reconfigures mid-epoch can reuse a window index.
-- `rx_tier2()` resolves the 8-bit window index to the nearest of ±128 windows and keeps no high-water mark (radiant_sec_compat.c:948). A recorded window verifies again, any number of times, for about 4 minutes at N=8 and 4 Hz. The 16-bit index also rolls over inside an epoch (~36 h at N=8), when the same window verifies again.
-- Fix: a floor like Tier I's `rx_t1_last`, and either drive the epoch from the window index or carry more of it.
 
 ## 9. [DONE 2026-11-13: 4d5d156, 583a981] 0xF2 resets the epoch monotonicity gate
-- Done: `radiant_sec_set_key()` compares a key check value (CMAC(root, 0^16), cold path, not stored); the same root and devnum is a no-op that keeps the epoch, gate and ceiling, a different root clears them (pending, fail closed) and purges the queue. This also closes a re-send-the-node-root bypass of item 1's host-0xF3 refusal. 583a981: `radiant_sec_compat_set_key()` follows the same rule through the shared `radiant_sec_key_same()`; compat object 4656 B, ceiling 4608 -> 5120.
-- Not closed, by design: a host that swaps to another root (or devnum) and back resets the gate, since nothing remembers old roots across a re-key. A same-root 0xF2 still resets the on-air devnum to the base (`sec_key_set_locked()` calls `set_devnum`), which costs a Tier 2 receiver its trial devnum.
-- `radiant_sec_set_key()` clears `epoch_set` (radiant_sec.c:441), so a host can re-send the same key and then an older epoch, and both are accepted. D3 is only as strong as the host.
-- Fix: keep the epoch high-water mark across `set_key`, at least when the root is unchanged.
 
 ## 10. [LOW] A go-private/return command is replayable within its interval
 - `cmd_tag()` uses the Tier I interval index as its counter, so a recorded command verifies again until the interval ends: 20 s by default, up to 3600 s. The 60 s rate limit does not cover a long T. Section 11.6 says a replay "into a later interval fails", which is true, but replay within the same interval is not stated.
@@ -397,22 +350,8 @@ MPSL (needs a soak beside BLE or Thread, which that clearance excluded):
   The soak's skip path leaves only microseconds and its compares are far off,
   so this is a candidate, not an explanation: test it by disabling the four
   connections before the hand-back on every TIMER0/EXTEND_FAILED END.
-- [x] A14-1: an in-grant ETIME now releases the grant at once (546be4d);
-  FAILED is still reported from thread context. Backend ztest
-  (radiant/tests/backend, which does compile radiant_radio_nrf.c) red then
-  green. Soak counter `etime_rel` 0 in every leg.
-- [x] A pending `gate_failed` is cleared by `radiant_radio_abort()` and at every
-  claim (546be4d). Backend ztests red then green. `abort_clr` 0 in every leg.
-- [x] `program_tx()` now uses program_rx()'s order (park, clear event, enable,
-  write, capture-then-check) (546be4d). Backend ztest red then green. On air:
-  L15 direct and `gate.conf` masters against the Garmin, loss unchanged
-  (0.82/-0.01 % direct, 0.82/0.20 % gate, HEAD/fix), 0xF7 page 7
-  `tx_start_missed` 0. Direct builds +32 B flash.
-  `archive/benchmarks/2026-11-14-mpsl-tx-compare/`.
 
 ## Device Testing Open Items
-
-Code size gates: DK ztest image fixed 2026-11-13 (4bab0ca, see the security follow-ups above). Comments cost no flash; a readability trim of the five most-commented sources is e441d80.
 
 Make continuous dual transmission the HR default (CONFIG_HRM_SUPPRESS_ANT_WHEN_CONNECTED=n). 
 
