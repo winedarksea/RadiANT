@@ -1108,14 +1108,18 @@ static void rx_drain_entries(void)
 			evt.has_crc_rx = true;
 			evt.crc_rx = want;
 
-				if (got != want) {
+			if (got != want) {
 				CC_DIAG(cc_diag.crc_fail++);
 				if ((st.flags & RADIANT_RX_REPORT_CRC_FAIL) == 0u) {
 					goto next;
 				}
+				/*
+				 * Keep evt.body (the received, damaged bytes) and
+				 * crc_rx: CONFIG_RADIANT_CRC_REPAIR needs both. The
+				 * entry is released at next:, after the callback, so
+				 * the body lives as long as the HAL promises.
+				 */
 				evt.status = RADIANT_RADIO_STATUS_CRC_FAIL;
-				evt.body = NULL;
-				evt.body_len = 0;
 			} else {
 				evt.status = RADIANT_RADIO_STATUS_OK;
 				evt.has_crc_rx = false;
