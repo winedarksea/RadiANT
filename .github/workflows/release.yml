@@ -2090,7 +2090,8 @@ jobs:
           # 32 B of headroom could not hold any implementation of it. 6656 is
           # the next multiple of 512, as every ceiling here; it leaves 396 B,
           # less than the 512 B the rounding allows, so the next growth is
-          # still caught.
+          # still caught. 6308 / 6749 after the review follow-up (the 0xF8
+          # seq byte and the dropped-verdict counter, +48 / +0).
           check "security text" "$(( on_text - off_text ))" 6656
           check "security bss"  "$(( on_bss  - off_bss  ))" 7168
 
