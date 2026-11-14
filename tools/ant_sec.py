@@ -64,7 +64,7 @@ __all__ = [
     "SW_VERDICT_EVENT",
     "VERDICT_CLEAR", "VERDICT_VERIFIED", "VERDICT_UNVERIFIED",
     "PAGE_LO_MIN", "PAGE_HI_MAX", "LEGAL_W", "KEY_BITS", "STATUS_LEN",
-    "STATUS_LEN_V1_26",
+    "STATUS_LEN_V1_26", "STATE_KEYED", "STATE_ARMED",
     "STATUS_VERSION", "SecStatus",
     "encode_config", "decode_config",
     "encode_set_key", "decode_set_key",
@@ -115,9 +115,16 @@ KEY_BYTES = KEY_BITS // 8
 # version stays 1 through the beta; a reader tells the fields apart by length.
 # STATUS_LEN_V1_26 is the shortest body still accepted: the layout before
 # dropped_direction was appended at [26..27], which then decodes as None, as
-# verdict_events_dropped at [28..29] does from a body shorter than 30.
-STATUS_LEN = 30
+# verdict_events_dropped at [28..29] does from a body shorter than 30, and the
+# state flags at [30] from one shorter than 31.
+STATUS_LEN = 31
 STATUS_LEN_V1_26 = 26
+
+# 0xF4 [30], the state flags. Keyed without armed is PENDING: a new root with
+# no epoch yet, when the firmware withholds secured-range pages on TX and drops
+# them on RX rather than passing them in the clear.
+STATE_KEYED = 0x01
+STATE_ARMED = 0x02
 STATUS_VERSION = 1
 
 # The epoch headroom radiant_sec reserves so a counter wrap always has
@@ -281,6 +288,10 @@ class SecStatus:
     `verdict_events_dropped` counts 0xF8 window-verdict events the event
     queue refused - ring refusals only; a USB drop or a discarded window
     shows only as a 0xF8 seq gap. None when the body predates it (< 30).
+
+    `state_flags` is [30]: STATE_KEYED and STATE_ARMED. None when the body
+    predates it (< 31), and then `keyed`, `armed` and `pending` are None too:
+    an older body cannot tell an armed channel from a pending one.
     """
 
     channel: int
@@ -301,6 +312,30 @@ class SecStatus:
     enrolments: int
     dropped_direction: int | None = None
     verdict_events_dropped: int | None = None
+    state_flags: int | None = None
+
+    @property
+    def keyed(self) -> bool | None:
+        """A root installed and X_CONF or X_AUTH on; None if not reported."""
+        if self.state_flags is None:
+            return None
+        return bool(self.state_flags & STATE_KEYED)
+
+    @property
+    def armed(self) -> bool | None:
+        """Keyed and an epoch set, so the transforms run; None if not
+        reported."""
+        if self.state_flags is None:
+            return None
+        return bool(self.state_flags & STATE_ARMED)
+
+    @property
+    def pending(self) -> bool | None:
+        """Keyed but not armed: secured pages withheld and dropped until
+        0xF3. None if not reported."""
+        if self.state_flags is None:
+            return None
+        return bool(self.keyed) and not self.armed
 
     @property
     def secured(self) -> bool:
@@ -342,6 +377,7 @@ def decode_status(body: bytes) -> SecStatus:
     verdict_drops = None
     if len(body) >= 30:
         (verdict_drops,) = struct.unpack("<H", bytes(body[28:30]))
+    flags = body[30] if len(body) >= 31 else None
 
     return SecStatus(
         channel=body[0],
@@ -362,6 +398,7 @@ def decode_status(body: bytes) -> SecStatus:
         enrolments=enrolments,
         dropped_direction=direction,
         verdict_events_dropped=verdict_drops,
+        state_flags=flags,
     )
 
 
@@ -387,7 +424,8 @@ def encode_status(st: SecStatus) -> bytes:
             bytes([min(st.epoch_advances, 0xFF), st.verdict]) +
             struct.pack("<H", sat16(st.enrolments)) +
             struct.pack("<H", sat16(st.dropped_direction or 0)) +
-            struct.pack("<H", sat16(st.verdict_events_dropped or 0)))
+            struct.pack("<H", sat16(st.verdict_events_dropped or 0)) +
+            bytes([(st.state_flags or 0) & 0xFF]))
 
 
 # ── Human-readable ──────────────────────────────────────────────────────────

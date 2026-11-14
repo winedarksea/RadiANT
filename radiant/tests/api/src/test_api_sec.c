@@ -420,6 +420,112 @@ ZTEST(api, test_sec_a_denied_secured_master_slot_is_posted_by_the_pump_under_the
 }
 #endif
 
+#if defined(CONFIG_RADIANT_SEC)
+/* Did any transmit arm from `from` on carry `pay` as its payload? */
+static bool sec_tx_carried(uint32_t from, const uint8_t pay[8])
+{
+	for (uint32_t i = from; i < fake_radio_arm_count(); i++) {
+		const struct fake_radio_arm *a = fake_radio_arm(i);
+
+		if (a != NULL && a->kind == FAKE_RADIO_ARM_TX &&
+		    a->body_len >= SEC_BODY_LEN &&
+		    memcmp(&a->body[SEC_BODY_D0], pay, 8u) == 0) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/*
+ * Review 2026-11-13 item 5: a keyed master with no epoch (pending) used to put
+ * the host's secured page on the air in the clear, every slot, until 0xF3, and
+ * to acknowledge with the same plaintext buffer. Now its slots are withheld
+ * and it does not acknowledge from a buffer it never built; a page outside the
+ * secured range still goes out, and 0xF3 brings the transform in.
+ */
+ZTEST(api, test_sec_a_pending_master_sends_nothing_in_the_clear)
+{
+	static const uint8_t root[16] = {
+		0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+		0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+	};
+	static const uint8_t common[8] = { 0x50u, 0xFFu, 0xFFu, 1, 2, 3, 4, 5 };
+	const uint32_t period = (uint32_t)radiant_channel_counts_to_us(
+		RADIANT_CHANNEL_PERIOD_ANT_PLUS);
+	const struct fake_radio_arm *tx;
+	uint8_t                      frame[SEC_AIR_LEN];
+	uint8_t                      buf[8];
+	uint32_t                     mark;
+	radiant_time_t               t_tx;
+	int                          rc[3];
+
+	/* The slot armed at open, unkeyed; the host then writes a secured page
+	 * and keys the channel while that slot is still ahead. */
+	sec_open((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	tx = sec_last_tx();
+	zassert_not_null(tx);
+	t_tx = tx->t_sync_at;
+	sec_write();
+	k_mutex_lock(&api_lock, K_FOREVER);
+	rc[0] = radiant_sec_set_key(SEC_CH, root, 128, SEC_DEVNUM);
+	rc[1] = radiant_sec_set_devnum(SEC_CH, SEC_DEVNUM);
+	rc[2] = radiant_sec_configure(SEC_CH,
+				      RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_CONF,
+				      2u, RADIANT_SEC_PAGE_LO_DEFAULT,
+				      RADIANT_SEC_PAGE_HI_DEFAULT);
+	k_mutex_unlock(&api_lock);
+	for (int i = 0; i < 3; i++) {
+		zassert_equal(RADIANT_SEC_OK, rc[i], "step %d", i);
+	}
+	zassert_true(radiant_sec_channel_is_secured(SEC_CH));
+	mark = fake_radio_arm_count();
+
+	/* Acknowledged data in that slot's turnaround: the ack would carry the
+	 * plaintext buffer, so there is none. */
+	fake_radio_advance_to(t_tx + 1u);
+	sec_build_peer_frame(frame, RADIANT_CTRL_BURST_LAST_SEQ0);
+	zassert_equal(RADIANT_RADIO_OK_RC,
+		      fake_radio_air_frame(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US,
+					   frame, SEC_AIR_LEN));
+	fake_radio_advance_to(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US +
+			      RADIANT_TRANSFER_REPLY_US + 10u);
+	zassert_is_null(sec_last_tx_with_ctrl(RADIANT_CTRL_ACK_LAST_SEQ1),
+			"a pending master acknowledged");
+
+	/* Every later slot of the secured page is withheld. */
+	for (int i = 0; i < 6; i++) {
+		sec_write();
+		fake_radio_advance_to(radiant_radio_now() + period);
+	}
+	zassert_false(sec_tx_carried(mark, sec_payload),
+		      "a pending master sent its secured page in the clear");
+
+	/* Outside the secured range: travels as on any channel. */
+	memcpy(buf, common, sizeof(buf));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_broadcast_message_tx(SEC_CH, 8u, buf));
+	fake_radio_advance_to(radiant_radio_now() + 2u * period);
+	zassert_true(sec_tx_carried(mark, common),
+		     "a pending master withheld a common page");
+
+	/* 0xF3 arms it, and the secured page goes out transformed. */
+	k_mutex_lock(&api_lock, K_FOREVER);
+	rc[0] = radiant_sec_set_epoch(SEC_CH, 1u, 0u, 8182u);
+	k_mutex_unlock(&api_lock);
+	zassert_equal(RADIANT_SEC_OK, rc[0]);
+	for (int i = 0; i < 3; i++) {
+		sec_write();
+		fake_radio_advance_to(radiant_radio_now() + period);
+	}
+	tx = sec_last_tx();
+	zassert_not_null(tx);
+	zassert_equal(sec_payload[0], tx->body[SEC_BODY_D0]);
+	zassert_true(memcmp(&tx->body[SEC_BODY_D0 + 2u], &sec_payload[2],
+			    5u) != 0, "armed, but still in the clear");
+	sec_close();
+}
+#endif
+
 ZTEST(api, test_sec_an_unsecured_channel_reports_clear)
 {
 	/* "Clear" is the honest word for a channel with no transform on it, and

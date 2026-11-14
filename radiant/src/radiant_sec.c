@@ -62,7 +62,9 @@ struct sec_ctx {
 
 	/* D3/D17: no transform enables until the host advances the epoch after
 	 * a reset - a reboot restarting the counter under an unchanged epoch
-	 * is a two-time pad for X_CONF and a full replay against X_AUTH. */
+	 * is a two-time pad for X_CONF and a full replay against X_AUTH. While
+	 * it is false a keyed channel is PENDING and fails closed: secured-range
+	 * TX withheld, RX dropped. Only a different root clears it again. */
 	bool     epoch_set;
 	/* One past the newest VERIFIED window this epoch: a counter below it is
 	 * a replay (docs/radiant-security.md 7.6). 0 = nothing verified since
@@ -74,9 +76,10 @@ struct sec_ctx {
 	/* The epoch ceiling, stored inverted so a zeroed context means "none"
 	 * (0xFFFFFFFF, i.e. only the headroom test) with no init code. Nonzero
 	 * also means "an epoch authority follows this channel": only then do
-	 * the epoch hooks fire. While set, set_epoch is refused; set_key (a new
-	 * root) clears it. atomic_t for the authority's lock-free raise (a CAS);
-	 * every other access is a plain load or store. See
+	 * the epoch hooks fire. While set, set_epoch is refused; set_key with a
+	 * different root clears it (the same root is a no-op and keeps it).
+	 * atomic_t for the authority's lock-free raise (a CAS); every other
+	 * access is a plain load or store. See
 	 * radiant_sec_set_epoch_ceiling(). */
 	atomic_t ceil_inv;
 	/* epoch_anchor error, in us, implied by rx_prev's closing packet and
@@ -205,12 +208,20 @@ static struct sec_ctx *ctx_of(uint8_t ch)
 	return &sec[sec_of[ch]];
 }
 
-/* Is this channel transforming anything at all right now? Every hot-path entry
- * point asks this first, and it is deliberately three loads and a branch. */
+/* Keyed: a root and a switch that protects something. From here a secured-range
+ * page never travels in the clear, armed or not (review 2026-11-13 item 5).
+ * Every hot-path entry point asks this first: a few loads and a branch. */
+static bool ctx_keyed(const struct sec_ctx *c)
+{
+	return c != NULL && c->used &&
+	       (c->switches & (RADIANT_SEC_SW_CONF | RADIANT_SEC_SW_AUTH)) != 0u;
+}
+
+/* Armed: keyed and an epoch set, so the transforms run. Keyed and not armed is
+ * PENDING: secured-range TX withheld, RX dropped. */
 static bool ctx_armed(const struct sec_ctx *c)
 {
-	return c != NULL && c->used && c->epoch_set &&
-	       (c->switches & (RADIANT_SEC_SW_CONF | RADIANT_SEC_SW_AUTH)) != 0u;
+	return ctx_keyed(c) && c->epoch_set;
 }
 
 static bool page_secured(const struct sec_ctx *c, uint8_t page)
@@ -437,6 +448,42 @@ __weak void radiant_sec_epoch_wanted(uint8_t ch, uint32_t epoch)
 
 /* ── Configuration ──────────────────────────────────────────────────────── */
 
+static void q_purge(uint8_t ch);
+
+/*
+ * Is `root` the root this context already holds? Compared by key check value,
+ * CMAC(key, 0^16) under each, because a handle may be opaque (a hardware slot)
+ * and its bytes cannot be read back. Never stored and never reported, so it
+ * costs no RAM and discloses nothing; set_key's cold path only. The KDF's
+ * messages start with the counter byte 0x01, so 0^16 is no KDF input.
+ */
+static int root_matches(const struct sec_ctx *c, const uint8_t *root,
+			size_t bits, bool *same)
+{
+	struct radiant_sec_key k;
+	uint8_t                zero[RADIANT_SEC_BLOCK_BYTES];
+	uint8_t                kcv_old[RADIANT_SEC_BLOCK_BYTES];
+	uint8_t                kcv_new[RADIANT_SEC_BLOCK_BYTES];
+	int                    rc;
+
+	memset(zero, 0, sizeof(zero));
+	rc = radiant_sec_key_import(&k, root, bits);
+	if (rc != RADIANT_SEC_OK) {
+		return rc;
+	}
+	rc = radiant_sec_cmac(&k, zero, sizeof(zero), kcv_new);
+	radiant_sec_key_destroy(&k);
+	if (rc == RADIANT_SEC_OK) {
+		rc = radiant_sec_cmac(&c->k_root, zero, sizeof(zero), kcv_old);
+	}
+	if (rc == RADIANT_SEC_OK) {
+		*same = radiant_sec_ct_equal(kcv_old, kcv_new, sizeof(kcv_new));
+	}
+	radiant_sec_wipe(kcv_old, sizeof(kcv_old));
+	radiant_sec_wipe(kcv_new, sizeof(kcv_new));
+	return rc;
+}
+
 int radiant_sec_set_key(uint8_t ch, const uint8_t *root, size_t bits,
 			uint16_t base_devnum)
 {
@@ -474,6 +521,23 @@ int radiant_sec_set_key(uint8_t ch, const uint8_t *root, size_t bits,
 		}
 	}
 
+	if (!fresh) {
+		bool same = false;
+
+		/* Item 9: the same root again (an idempotent 0xF2 re-send) is a
+		 * no-op - epoch, armed state, ceiling and windows kept - so it
+		 * is neither a gap nor a reset of D3's monotonicity gate. A
+		 * failed import or KCV leaves the context untouched. */
+		rc = root_matches(c, root, bits, &same);
+		if (rc != RADIANT_SEC_OK) {
+			return rc;
+		}
+		if (same && base_devnum == c->base_devnum) {
+			return RADIANT_SEC_OK;
+		}
+		radiant_sec_key_destroy(&c->k_root);
+	}
+
 	rc = radiant_sec_key_import(&c->k_root, root, bits);
 	if (rc != RADIANT_SEC_OK) {
 		if (fresh) {
@@ -483,6 +547,11 @@ int radiant_sec_set_key(uint8_t ch, const uint8_t *root, size_t bits,
 			 * D1-6(b)). */
 			memset(c, 0, sizeof(*c));
 			sec_of[ch] = 0xFFu;
+		} else {
+			/* The old root is gone and the new one did not take
+			 * (it imported a moment ago in root_matches()): no
+			 * root at all, so no context. */
+			radiant_sec_channel_release(ch);
 		}
 		return rc;
 	}
@@ -494,11 +563,16 @@ int radiant_sec_set_key(uint8_t ch, const uint8_t *root, size_t bits,
 	 * ceiling (and the following) goes with it, and set_epoch is free. */
 	c->ceil_inv = 0;
 
-	/* A new root invalidates the epoch gate: a fresh start under an epoch
-	 * the previous key already used is exactly the state D3 forbids. */
+	/* A new root closes the epoch gate: the channel is PENDING (keyed, not
+	 * armed) and fails closed until set_epoch. Any epoch is accepted next,
+	 * which is safe because no nonce under the new keys was ever used. */
 	c->epoch_set = false;
 	radiant_sec_key_destroy(&c->k_enc);
 	radiant_sec_key_destroy(&c->k_auth);
+	if (!fresh) {
+		/* Ciphertext queued under the old root is not this key's. */
+		q_purge(ch);
+	}
 	return RADIANT_SEC_OK;
 }
 
@@ -859,6 +933,7 @@ void radiant_sec_get_state(uint8_t ch, struct radiant_sec_state *out)
 	out->epoch = c->epoch;
 	out->last_verdict = c->last_verdict;
 	out->secured = ctx_armed(c);
+	out->keyed = ctx_keyed(c);
 
 	if (c->epoch_set) {
 		/* Truncated to 16 bits because that is the counter's own width -
@@ -960,11 +1035,19 @@ int radiant_sec_tx_transform(uint8_t ch, uint8_t *pay, uint8_t len,
 	uint16_t        counter;
 	int             rc;
 
-	if (!ctx_armed(c) || pay == NULL || len < SEC_PAGE_BYTES) {
+	if (!ctx_keyed(c) || pay == NULL || len < SEC_PAGE_BYTES) {
 		/* An unsecured channel is posted from the scheduler's terminal
 		 * callback too and touches no shared state here, so it is not
 		 * held to the lock. */
 		return RADIANT_SEC_OK;
+	}
+	if (!c->epoch_set) {
+		/* PENDING (item 5): keyed, no epoch. A secured-range page is
+		 * withheld, never sent in the clear; the rest travel as on an
+		 * armed channel. Field reads only, so it needs no lock and is
+		 * the one extra branch an armed channel pays. */
+		return page_secured(c, pay[0]) ? RADIANT_SEC_EUNARMED
+					       : RADIANT_SEC_OK;
 	}
 	/* From here the call is a SECURED master's, and it reads and writes the
 	 * channel's window state and the shared AES schedule: thread context
@@ -1080,7 +1163,10 @@ int radiant_sec_tx_transform(uint8_t ch, uint8_t *pay, uint8_t len,
  * counter fixes it with no second nonce and no ISR crypto. */
 bool radiant_sec_channel_is_secured(uint8_t ch)
 {
-	return ctx_armed(ctx_of(ch));
+	/* Keyed, not armed: a pending channel keeps host plaintext off the air
+	 * exactly as an armed one does, and a pending master is posted by the
+	 * pump, not the scheduler's callback. */
+	return ctx_keyed(ctx_of(ch));
 }
 
 /* ── Receive ────────────────────────────────────────────────────────────── */
@@ -1092,7 +1178,7 @@ int radiant_sec_rx_ingest(uint8_t ch, const uint8_t *pay, uint8_t len,
 	k_spinlock_key_t key;
 	struct sec_pkt  *slot;
 
-	if (!ctx_armed(c) || pay == NULL || len == 0u) {
+	if (!ctx_keyed(c) || pay == NULL || len == 0u) {
 		return RADIANT_SEC_RX_PLAIN;
 	}
 	if (!page_secured(c, pay[0])) {
@@ -1115,6 +1201,13 @@ int radiant_sec_rx_ingest(uint8_t ch, const uint8_t *pay, uint8_t len,
 	 * armed and range tests, so an unsecured channel pays nothing. */
 	if (radiant_channel_is_master(ch)) {
 		stat_bump(&c->stats.dropped_direction);
+		return RADIANT_SEC_RX_DROP;
+	}
+	/* PENDING (item 5): keyed, no epoch, so nothing can be decrypted or
+	 * verified. Dropped, never delivered as if it were plain, and counted
+	 * in dropped_policy. One field test for an armed channel. */
+	if (!c->epoch_set) {
+		stat_bump(&c->stats.dropped_policy);
 		return RADIANT_SEC_RX_DROP;
 	}
 

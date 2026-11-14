@@ -333,7 +333,8 @@ int radiant_sec_compat_tier2_tag(const struct radiant_sec_key *k_auth,
  * the on-air one: on an identity Tier 2 node the second re-rolls at every boot
  * and the first does not.
  *
- * A new root closes the epoch gate, exactly as radiant_sec_set_key() does.
+ * Every call closes the epoch gate and clears the ceiling, the same root
+ * included (radiant_sec_set_key() keeps both when the root is unchanged).
  */
 int radiant_sec_compat_set_key(uint8_t ch, const uint8_t *root, size_t bits,
 			       uint16_t base_devnum);

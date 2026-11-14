@@ -1319,8 +1319,14 @@ ZTEST(node_ident, test_every_arm_after_the_first_gets_a_fresh_epoch)
 }
 
 /* Re-review M1: a host 0xF3 on a channel the node follows is refused (it
- * would run unreserved wraps under the node root). A new root ends the
- * following, and then that channel's wraps neither drive N nor get capped. */
+ * would run unreserved wraps under the node root). The node's root re-sent
+ * changes nothing; a different root ends the following, and then that
+ * channel's wraps neither drive N nor get capped. */
+static const uint8_t host_root[16] = {
+	0x0f, 0x1e, 0x2d, 0x3c, 0x4b, 0x5a, 0x69, 0x78,
+	0x87, 0x96, 0xa5, 0xb4, 0xc3, 0xd2, 0xe1, 0xf0,
+};
+
 ZTEST(node_ident, test_a_host_epoch_on_a_followed_channel_is_refused)
 {
 	uint8_t  pay[8] = { 0x05u, 0xAAu, 1, 2, 3, 4, 5, 6 };
@@ -1336,8 +1342,19 @@ ZTEST(node_ident, test_a_host_epoch_on_a_followed_channel_is_refused)
 					    TEST_PERIOD));
 	zassert_equal(e0, sec_epoch(TX_NODE_CH));
 
-	/* A host that re-keys owns the channel, and the node lets go. */
+	/* Re-sending the node's own root is a no-op (item 9): still followed,
+	 * still refused, still armed under e0. */
 	zassert_ok(radiant_sec_set_key(TX_NODE_CH, test_root, 128,
+				       VECTOR_DEVNUM));
+	zassert_equal(RADIANT_SEC_ESTATE,
+		      radiant_sec_set_epoch(TX_NODE_CH, 0x10000000u, 0u,
+					    TEST_PERIOD));
+	zassert_equal(e0, sec_epoch(TX_NODE_CH));
+	zassert_ok(node_tx(0u));
+
+	/* A host that replaces the root owns the channel, and the node lets
+	 * go. */
+	zassert_ok(radiant_sec_set_key(TX_NODE_CH, host_root, 128,
 				       VECTOR_DEVNUM));
 	zassert_ok(radiant_sec_set_epoch(TX_NODE_CH, 0x10000000u, 0u,
 					 TEST_PERIOD));

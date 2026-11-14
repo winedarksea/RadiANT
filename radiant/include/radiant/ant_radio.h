@@ -1181,10 +1181,18 @@ antr_err_t antr_sec_key_set(uint8_t channel, uint8_t bits, const uint8_t *key);
 antr_err_t antr_sec_epoch_set(uint8_t channel, uint8_t flags, uint32_t epoch,
 			      uint64_t us_into_epoch);
 
-/** 0xF4's payload length, in bytes. 30 since verdict_events_dropped was
- * appended at [28..29], after dropped_direction at [26..27]; 26- and 28-byte
- * replies are the same version without them. */
-#define ANTR_SEC_STATUS_LEN     30u
+/** 0xF4's payload length, in bytes. 31 since the state flags were appended at
+ * [30] (bit 0 keyed, bit 1 armed), after verdict_events_dropped at [28..29]
+ * and dropped_direction at [26..27]; 26-, 28- and 30-byte replies are the same
+ * version without them, and a reader of one cannot tell armed from pending. */
+#define ANTR_SEC_STATUS_LEN     31u
+
+/** 0xF4 [30] bit 0: a root is installed and X_CONF or X_AUTH is on. */
+#define ANTR_SEC_STATUS_KEYED   0x01u
+/** 0xF4 [30] bit 1: keyed and an epoch is set, so the transforms run. Keyed
+ * without it is PENDING: secured-range pages are withheld on TX and dropped
+ * on RX until 0xF3. */
+#define ANTR_SEC_STATUS_ARMED   0x02u
 
 /** 0xF4's structure version, carried at [1]. Fields are only ever appended and
  * an offset is never reused. It stays 1 throughout the beta, whatever is

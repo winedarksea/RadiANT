@@ -838,10 +838,20 @@ static bool api_xfer_broadcast(void *ctx, uint8_t out[RADIANT_TRANSFER_PKT_BYTES
 #if defined(CONFIG_RADIANT_SEC)
 	/* Secured channel: ack with the ciphertext already built for this
 	 * counter. Same nonce and plaintext, so no nonce reuse, and never the
-	 * host's plaintext. */
-	if (radiant_sec_channel_is_secured(ch) && api_ch[ch].sec_pay_valid) {
-		memcpy(out, api_ch[ch].sec_pay, RADIANT_TRANSFER_PKT_BYTES);
-		return true;
+	 * host's plaintext. A keyed master with nothing built - its last slot
+	 * withheld (pending with no epoch, past the ceiling, spent) - does not
+	 * acknowledge: the plaintext buffer would be the fail-open path. A
+	 * slave never builds sec_pay; its ack carries its own buffer, armed or
+	 * pending alike (TODO security item 11). */
+	if (radiant_sec_channel_is_secured(ch)) {
+		if (api_ch[ch].sec_pay_valid) {
+			memcpy(out, api_ch[ch].sec_pay,
+			       RADIANT_TRANSFER_PKT_BYTES);
+			return true;
+		}
+		if (radiant_channel_is_master(ch)) {
+			return false;
+		}
 	}
 #endif
 

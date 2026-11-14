@@ -108,10 +108,13 @@ ZTEST(sec_lock_hook, test_every_entry_point_asks_the_port_for_its_lock)
 	/* Only an ARMED channel's transform is held to the lock (an unsecured
 	 * channel is posted from the scheduler callback and touches nothing). */
 	buf[0] = 0x05u;
+	/* The same key again: a no-op, so the epoch (1) stands. */
 	zassert_equal(0, radiant_sec_set_key(0u, key, 128u, 0x1234u));
 	zassert_equal(0, radiant_sec_configure(0u, RADIANT_SEC_SW_CONF, 2u, 1u,
 					       15u));
-	zassert_equal(0, radiant_sec_set_epoch(0u, 1u, 0u, 8182u));
+	zassert_equal(RADIANT_SEC_EINVAL,
+		      radiant_sec_set_epoch(0u, 1u, 0u, 8182u));
+	zassert_equal(0, radiant_sec_set_epoch(0u, 2u, 0u, 8182u));
 	EXPECT_CHECKED(radiant_sec_tx_transform,
 		       radiant_sec_tx_transform(0u, buf, 8u, 0u));
 	EXPECT_CHECKED(radiant_sec_pump, radiant_sec_pump());
@@ -127,6 +130,28 @@ ZTEST(sec_lock_hook, test_every_entry_point_asks_the_port_for_its_lock)
 	EXPECT_CHECKED(radiant_sec_channel_release,
 		       radiant_sec_channel_release(0u));
 	EXPECT_CHECKED(radiant_sec_reset, radiant_sec_reset());
+}
+
+/*
+ * Item 5: a keyed channel with no epoch withholds a secured page from field
+ * reads alone, ahead of the lock check, so the refusal is safe wherever a
+ * transform is reached from (the scheduler callback included).
+ */
+ZTEST(sec_lock_hook, test_the_pending_refusal_needs_no_lock)
+{
+	uint8_t key[16] = {0};
+	uint8_t buf[8] = {0x05u, 0xAAu};
+
+	radiant_sec_reset();
+	zassert_equal(0, radiant_sec_set_key(1u, key, 128u, 0x1234u));
+	zassert_equal(0, radiant_sec_configure(1u, RADIANT_SEC_SW_AUTH, 2u, 1u,
+					       15u));
+	nseen = 0u;
+	zassert_equal(RADIANT_SEC_EUNARMED,
+		      radiant_sec_tx_transform(1u, buf, 8u, 0u));
+	zassert_false(was_seen("radiant_sec_tx_transform"));
+	zassert_equal(0xAAu, buf[1]);
+	radiant_sec_reset();
 }
 
 #if defined(CONFIG_RADIANT_SEC_PAIRING_X25519)

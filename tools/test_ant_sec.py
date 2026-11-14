@@ -207,7 +207,8 @@ class TestStatus(unittest.TestCase):
             windows_verified=100, windows_unverified=3,
             dropped_non_broadcast=1, dropped_replay=2, dropped_policy=0,
             epoch_advances=7, verdict=VERDICT_VERIFIED, enrolments=9,
-            dropped_direction=4, verdict_events_dropped=6)
+            dropped_direction=4, verdict_events_dropped=6,
+            state_flags=ant_sec.STATE_KEYED | ant_sec.STATE_ARMED)
         base.update(kw)
         return SecStatus(**base)
 
@@ -221,7 +222,7 @@ class TestStatus(unittest.TestCase):
         # Against bytes laid out by hand, from the 0xF4 description in
         # protocol/ant_wire.yaml. This is the test that would catch a field
         # inserted in the middle by a well-meaning edit.
-        body = bytearray(30)
+        body = bytearray(31)
         body[0] = 5           # channel
         body[1] = 1           # structure version
         body[2] = SW_CONF     # switches
@@ -240,6 +241,7 @@ class TestStatus(unittest.TestCase):
         body[24:26] = struct.pack("<H", 0x0201)  # enrolments
         body[26:28] = struct.pack("<H", 0x0403)  # dropped_direction
         body[28:30] = struct.pack("<H", 0x0605)  # verdict_events_dropped
+        body[30] = 0x01                          # state flags: keyed only
 
         st = decode_status(bytes(body))
         self.assertEqual(5, st.channel)
@@ -264,13 +266,19 @@ class TestStatus(unittest.TestCase):
         self.assertEqual(0x0605, st.verdict_events_dropped,
                          "verdict_events_dropped is not little-endian at "
                          "[28..29]")
+        self.assertEqual(0x01, st.state_flags)
+        self.assertTrue(st.keyed)
+        self.assertFalse(st.armed)
+        self.assertTrue(st.pending, "keyed without armed is pending")
 
-    def test_the_layout_is_30_bytes_at_version_1(self):
+    def test_the_layout_is_31_bytes_at_version_1(self):
         # Pinned literally, so a change to either constant has to be made on
         # purpose here as well as in ant_radio.h's ANTR_SEC_STATUS_LEN/_VERSION.
         # The version stays 1 through the beta; the length tells the fields.
-        self.assertEqual(30, STATUS_LEN)
+        self.assertEqual(31, STATUS_LEN)
         self.assertEqual(1, STATUS_VERSION)
+        self.assertEqual(0x01, ant_sec.STATE_KEYED)
+        self.assertEqual(0x02, ant_sec.STATE_ARMED)
 
     def test_a_26_byte_body_decodes_without_dropped_direction(self):
         # The layout before [26..27] was appended: same version, shorter.
@@ -278,12 +286,35 @@ class TestStatus(unittest.TestCase):
         st = decode_status(body)
         self.assertIsNone(st.dropped_direction)
         self.assertIsNone(st.verdict_events_dropped)
+        self.assertIsNone(st.state_flags)
+        self.assertIsNone(st.armed, "a 26-byte body cannot say armed")
         self.assertEqual(9, st.enrolments)
 
     def test_a_28_byte_body_decodes_without_verdict_events_dropped(self):
         st = decode_status(encode_status(self.sample())[:28])
         self.assertEqual(4, st.dropped_direction)
         self.assertIsNone(st.verdict_events_dropped)
+        self.assertIsNone(st.armed)
+
+    def test_a_30_byte_body_decodes_with_armed_unknown(self):
+        # The layout before the state flags at [30]: everything else decodes,
+        # and keyed/armed/pending are None rather than a guess.
+        st = decode_status(encode_status(self.sample())[:30])
+        self.assertEqual(6, st.verdict_events_dropped)
+        self.assertIsNone(st.state_flags)
+        self.assertIsNone(st.keyed)
+        self.assertIsNone(st.armed)
+        self.assertIsNone(st.pending)
+
+    def test_the_state_flags_tell_armed_from_pending(self):
+        armed = decode_status(encode_status(self.sample()))
+        self.assertTrue(armed.armed)
+        self.assertFalse(armed.pending)
+        pending = decode_status(encode_status(
+            self.sample(state_flags=ant_sec.STATE_KEYED)))
+        self.assertTrue(pending.keyed)
+        self.assertFalse(pending.armed)
+        self.assertTrue(pending.pending)
 
     def test_verdict_events_dropped_saturates_rather_than_wrapping(self):
         st = self.sample(verdict_events_dropped=70000)
@@ -345,6 +376,9 @@ class TestStatus(unittest.TestCase):
         body[1] = STATUS_VERSION
         st = decode_status(bytes(body))
         self.assertFalse(st.secured)
+        self.assertFalse(st.keyed)
+        self.assertFalse(st.armed)
+        self.assertFalse(st.pending)
         self.assertEqual(ant_sec.VERDICT_CLEAR, st.verdict)
         self.assertEqual(0, st.enrolments)
 

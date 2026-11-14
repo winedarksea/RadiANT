@@ -272,6 +272,13 @@ ZTEST(api, test_sec_host_status_reports_what_was_configured)
 		      antr_sec_config(HOST_CH,
 				      RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_CONF,
 				      4u, 0x02u, 0x1Fu));
+
+	/* Keyed, no epoch: pending, and the host can see it (item 5). */
+	memset(st, 0xEE, sizeof(st));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_status_get(HOST_CH, st, sizeof(st)));
+	zassert_equal(ANTR_SEC_STATUS_KEYED, st[30], "%u", st[30]);
+
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
 		      antr_sec_epoch_set(HOST_CH, 0u, 0x00ABCDEFu, 0u));
 
@@ -279,6 +286,8 @@ ZTEST(api, test_sec_host_status_reports_what_was_configured)
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
 		      antr_sec_status_get(HOST_CH, st, sizeof(st)));
 
+	zassert_equal(ANTR_SEC_STATUS_KEYED | ANTR_SEC_STATUS_ARMED, st[30],
+		      "%u", st[30]);
 	zassert_equal(HOST_CH, st[0]);
 	zassert_equal(1u, st[1], "0xF4 is not structure version 1");
 	zassert_equal(RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_CONF, st[2]);
@@ -314,6 +323,52 @@ ZTEST(api, test_sec_host_an_unkeyed_channel_reads_as_zeros_not_as_an_error)
 	zassert_equal(0u, st[2], "an unkeyed channel reports switches on");
 	zassert_equal((uint8_t)RADIANT_SEC_VERDICT_CLEAR, st[23]);
 	zassert_equal(0u, rd16(&st[24]));
+	zassert_equal(0u, st[30], "%u", st[30]);
+}
+
+/*
+ * Items 5 and 9 through the host surface: a 0xF2 re-sending the installed
+ * root changes nothing (still armed, same epoch, 0xF3 still monotone); a
+ * different root makes the channel pending until the next 0xF3, which may
+ * then go below the old epoch.
+ */
+ZTEST(api, test_sec_host_a_resent_key_keeps_the_channel_armed)
+{
+	static const uint8_t other_key[16] = {
+		0x0f, 0x1e, 0x2d, 0x3c, 0x4b, 0x5a, 0x69, 0x78,
+		0x87, 0x96, 0xa5, 0xb4, 0xc3, 0xd2, 0xe1, 0xf0,
+	};
+	uint8_t st[ANTR_SEC_STATUS_LEN];
+
+	host_assign(true, true);
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_key_set(HOST_CH, 128u, host_key));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_config(HOST_CH, RADIANT_SEC_SW_AUTH, 2u, 0x01u,
+				      0x0Fu));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_epoch_set(HOST_CH, 0u, 500u, 0u));
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_key_set(HOST_CH, 128u, host_key));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_status_get(HOST_CH, st, sizeof(st)));
+	zassert_equal(ANTR_SEC_STATUS_KEYED | ANTR_SEC_STATUS_ARMED, st[30]);
+	zassert_equal(500u, rd32(&st[6]));
+	zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
+		      antr_sec_epoch_set(HOST_CH, 0u, 499u, 0u));
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_key_set(HOST_CH, 128u, other_key));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_status_get(HOST_CH, st, sizeof(st)));
+	zassert_equal(ANTR_SEC_STATUS_KEYED, st[30], "%u", st[30]);
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_epoch_set(HOST_CH, 0u, 9u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_status_get(HOST_CH, st, sizeof(st)));
+	zassert_equal(ANTR_SEC_STATUS_KEYED | ANTR_SEC_STATUS_ARMED, st[30]);
+	host_done();
 }
 
 ZTEST(api, test_sec_host_a_short_status_buffer_is_refused)
@@ -920,7 +975,7 @@ ZTEST(api, test_sec_host_a_lost_verdict_is_counted_and_leaves_a_seq_gap)
 	{
 		uint8_t f4[ANTR_SEC_STATUS_LEN];
 
-		zassert_equal(30u, ANTR_SEC_STATUS_LEN);
+		zassert_equal(31u, ANTR_SEC_STATUS_LEN);
 		zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
 			      antr_sec_status_get(VD_RX_CH, f4, sizeof(f4)));
 		zassert_equal(1u, f4[1], "0xF4 stays structure version 1");

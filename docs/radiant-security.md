@@ -517,6 +517,34 @@ just `X_CONF`:
 > **No transform enables until the host has set an epoch with `0xF3`, and `0xF3`
 > rejects any epoch <= the current one.**
 
+**Until then the channel fails closed, not open.** A channel is *keyed* once it
+has a root (`0xF2`) and `X_CONF` or `X_AUTH` is switched on (`0xF1`), and
+*armed* once it is keyed and has an epoch. Keyed but not armed is *pending*,
+and a pending channel withholds every secured-range page it would transmit
+(`radiant_sec_tx_transform()` returns `RADIANT_SEC_EUNARMED` and the slot goes
+out with nothing in it) and drops every secured-range page it receives
+(counted in `0xF4` `dropped_policy`). Neither direction passes a secured page
+in the clear, and nothing is acknowledged from the host's plaintext buffer.
+Pages outside the secured range (the descriptor and the common pages) travel
+as they do on an armed channel. A host sees which state a channel is in at
+`0xF4` `[30]`: bit 0 keyed, bit 1 armed.
+
+The host sequence is therefore `0xF2`, `0xF1`, `0xF3`, and a channel opened
+before the `0xF3` stays silent on its secured pages until it arrives. Later
+`0xF2`s on a live channel do one of two things:
+
+- **The same root again** (compared by a key check value, `CMAC(root, 0^16)`,
+  computed only inside `set_key` and never stored or reported) **is a no-op.**
+  The channel stays armed under its epoch, its windows and replay floor stay,
+  and an epoch authority that follows it keeps following it. An idempotent
+  re-send is neither a gap in the stream nor a reset of the gate above: an
+  older or equal `0xF3` after it is still refused.
+- **A different root** (or the same root under a different channel device
+  number, which changes every derived key) **makes the channel pending** until
+  the next `0xF3`, drops anything still queued under the old root, and resets
+  the epoch gate, so that `0xF3` may carry any epoch. That is safe because no
+  nonce under the new keys has been used.
+
 That rejection is only enforceable within a power cycle, because keys and state
 are wiped on reset. The obligation therefore sits with the **epoch authority** —
 the host, or the node application — and is normative: *persist the last epoch
@@ -563,7 +591,9 @@ Three rules keep the following honest. While the node follows a channel (it
 carries a ceiling), `radiant` refuses anyone else's `set_epoch` there: a host
 `0xF3` under the node's root would run wraps nobody reserved, and the next boot
 could issue one of them again, so it is answered `CHANNEL_IN_WRONG_STATE`. A
-new root (`set_key`) or a release ends the following; the hooks then stop
+different root (`set_key`) or a release ends the following. Re-sending the
+node's own root does not: it is a no-op, so it is no way round the refusal.
+Once the following ends, the hooks stop
 firing there, and the work item only ever *raises* an existing ceiling (a
 compare-and-swap, so it cannot re-follow a channel a re-key just let go). Only
 the first arm of each kind in a boot gets `E`: every later arm, whether the
@@ -1535,9 +1565,9 @@ records what the IDs are for. The allocation below is the one in the YAML.
 | ID | Name | Purpose |
 |---|---|---|
 | `0xF1` | `ANTW_MESG_RADIANT_SEC_CONFIG_ID` | Per-channel switch bitmask (`X_CONF`/`X_AUTH`), the MAC window W, the secured page range, the drop-vs-deliver policy bit and the opt-in for `0xF8` (bit 4) |
-| `0xF2` | `ANTW_MESG_RADIANT_SET_KEY_ID` | Install the 16-byte `K_root` for a channel. Write-only |
+| `0xF2` | `ANTW_MESG_RADIANT_SET_KEY_ID` | Install the 16-byte `K_root` for a channel. Write-only. The root already installed is a no-op; a different one leaves the channel pending until `0xF3` (section 3.5) |
 | `0xF3` | `ANTW_MESG_RADIANT_EPOCH_ID` | Set or read the epoch and its microsecond time anchor |
-| `0xF4` | `ANTW_MESG_RADIANT_SEC_STATUS_ID` | Read back (structure version at `[1]`): epoch, expected index, window verdict counters, drop counters, enrolments |
+| `0xF4` | `ANTW_MESG_RADIANT_SEC_STATUS_ID` | Read back (structure version at `[1]`): epoch, expected index, window verdict counters, drop counters, enrolments, and at `[30]` whether the channel is keyed and armed |
 | `0xF5` | `ANTW_MESG_RADIANT_PAIRING_ID` | Enter/leave pairing mode; carry the host-supplied scalar and the X25519 exchange |
 | `0xF6` | `ANTW_MESG_RADIANT_HEALTH_ID` | Not a security message: the dongle's health counters (structure version at `[0]`), allocated from the same RadiANT block |
 | `0xF7` | `ANTW_MESG_RADIANT_DIAG_ID` | Not a security message: paged diagnostic counters (ADR 0023) |
@@ -1598,6 +1628,12 @@ looked fine because nothing was checking" is visible from outside the device.
 The counters saturate rather than wrapping. A wrapped counter would let a long
 noisy run look quiet, and quiet is precisely the reading these exist to
 disprove — a field at `0xFFFF` means *at least* that many.
+
+The state flags at `[30]` (bit 0 keyed, bit 1 armed) say whether a keyed
+channel is running or pending (section 3.5). A pending channel's link looks
+quiet from the counters alone, so without the flags a host could not tell
+"waiting for `0xF3`" from "the sensor went away". A 26-, 28- or 30-byte reply
+predates the field, and a reader of one cannot tell the two apart.
 
 An unkeyed channel answers with zeros and a `clear` verdict rather than an
 error. "No security on this channel" is a state a host must be able to read
@@ -2400,10 +2436,10 @@ one event.
 
 **A host reads it from the `0xF4` report, at `[24..25]`** (u16 LE, saturating
 rather than wrapping, like every other `0xF4` counter). `0xF4` carries a
-structure version at `[1]` for this reason: fields are only ever added at the
-end, an offset is never reused, and the version goes up whenever a field is
-added or a field's meaning changes, so a later field does not break a reader.
-Version 1 is the first to carry `enrolments`. On the device itself,
+structure version at `[1]`, and fields are only ever added at the end, so an
+offset is never reused and a later field does not break a reader. The version
+stays 1 throughout the beta whatever is added: a reader tells which fields a
+reply carries from its length. Version 1 is the first to carry `enrolments`. On the device itself,
 `radiant_sec_get_stats()` reads the same counter.
 
 **The reader is a host on the node that did the enrolment.** The counter is not

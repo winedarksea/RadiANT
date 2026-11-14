@@ -266,6 +266,10 @@ antr_err_t antr_sec_status_get(uint8_t channel, uint8_t *out, uint8_t out_len)
 	/* 0xF8 events the event ring refused. A USB drop and a window discard
 	 * show only as 0xF8 seq gaps, never here. */
 	put_u16_sat(&out[28], stats.verdict_events_dropped);
+	/* Armed or pending: a pending channel withholds and drops its secured
+	 * pages, and without this a host could not tell it from a quiet link. */
+	out[30] = (uint8_t)((state.keyed ? ANTR_SEC_STATUS_KEYED : 0u) |
+			    (state.secured ? ANTR_SEC_STATUS_ARMED : 0u));
 
 	return (antr_err_t)ANTW_RESPONSE_NO_ERROR;
 }

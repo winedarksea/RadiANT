@@ -1335,28 +1335,36 @@ MESG_RADIANT_EPOCH_ID = 0xF3
 # slot index, low 16 bits (u16 LE); [12..13] windows verified; [14..15] windows
 # unverified; [16..17] non-broadcast frames dropped for carrying a secured-
 # range page; [18..19] frames dropped as replay or time-inconsistent; [20..21]
-# windows dropped by the deliver policy; [22] epoch advances since the key was
-# installed (u8, saturating); [23] the most recent verdict - 0 clear, 1
-# verified, 2 unverified; [24..25] enrolments, the pairings on this channel
-# that took (the 0xF5 host exchange and the over-air enrolment window alike;
-# attempts that were refused are not counted); [26..27] secured-range
+# windows dropped by the deliver policy, plus secured-range pages dropped while
+# the channel is pending (bit 0 of [30] set, bit 1 clear); [22] epoch advances
+# since the key was installed (u8, saturating); [23] the most recent verdict -
+# 0 clear, 1 verified, 2 unverified; [24..25] enrolments, the pairings on this
+# channel that took (the 0xF5 host exchange and the over-air enrolment window
+# alike; attempts that were refused are not counted); [26..27] secured-range
 # broadcasts a master channel heard and refused (a legitimate slave never sends
 # one on a secured channel, so each is a forgery or the master's own window
 # reflected back; docs/radiant-security.md sec 7.6); [28..29] 0xF8 window-
 # verdict events the firmware's event queue refused (ring refusals only: a 0xF8
 # the USB bridge drops on backlog, and a window discarded before its verdict,
-# show only as 0xF8 seq gaps). All counters are u16 LE and saturate rather than
-# wrapping. An unkeyed channel answers zeros and a clear verdict, with the
-# version still set. VERSIONING: fields are only ever added at the end and an
-# offset is never reused. The structure version stays 1 throughout the beta,
-# whatever is added, so a reader tells which fields exist from the body length
-# and treats the version as nothing more than a sanity check. A reader refuses
-# a body shorter than it needs, and decodes the fields it knows from a longer
-# body. This exists so a host that does not take the 0xF8 window-verdict events
-# still has an auditable stream: deliver-as-unverified only means something if
-# unverified cannot be silently treated as verified. The enrolment counter is
-# readable by a host on the node that did the enrolment; other receivers cannot
-# see it over the air. [K4 (docs/radiant-security.md sec 3.2 and 9)]
+# show only as 0xF8 seq gaps); [30] state flags - bit 0 keyed (a root and
+# X_CONF or X_AUTH on), bit 1 armed (keyed and an epoch set); keyed without
+# armed is PENDING, after a 0xF2 that installed a new root and before the 0xF3
+# that follows it, and a pending channel withholds secured-range pages on TX
+# and drops them on RX rather than passing them in the clear (a 0xF2 re-sending
+# the root already installed changes nothing). A 26-, 28- or 30-byte body is
+# the same version without the later fields. All counters are u16 LE and
+# saturate rather than wrapping. An unkeyed channel answers zeros and a clear
+# verdict, with the version still set. VERSIONING: fields are only ever added
+# at the end and an offset is never reused. The structure version stays 1
+# throughout the beta, whatever is added, so a reader tells which fields exist
+# from the body length and treats the version as nothing more than a sanity
+# check. A reader refuses a body shorter than it needs, and decodes the fields
+# it knows from a longer body. This exists so a host that does not take the
+# 0xF8 window-verdict events still has an auditable stream: deliver-as-
+# unverified only means something if unverified cannot be silently treated as
+# verified. The enrolment counter is readable by a host on the node that did
+# the enrolment; other receivers cannot see it over the air. [K4 (docs/radiant-
+# security.md sec 3.2 and 9)]
 MESG_RADIANT_SEC_STATUS_ID = 0xF4
 
 # Drive the in-the-clear pairing exchange. [0] channel; [1] sub-command; the
@@ -2059,8 +2067,8 @@ RADIANT_MESSAGES = {
     0xF4: {
         "name": 'MESG_RADIANT_SEC_STATUS_ID',
         "direction": 'd2h',
-        "payload_len": 30,
-        "desc": "Per-channel security state, requested with MESG_REQUEST (0x4D). [0] channel; [1] structure version, 1; [2] switches currently active, as in 0xF1; [3] W; [4] page range low; [5] high; [6..9] epoch (u32 LE); [10..11] the expected slot index, low 16 bits (u16 LE); [12..13] windows verified; [14..15] windows unverified; [16..17] non-broadcast frames dropped for carrying a secured-range page; [18..19] frames dropped as replay or time-inconsistent; [20..21] windows dropped by the deliver policy; [22] epoch advances since the key was installed (u8, saturating); [23] the most recent verdict - 0 clear, 1 verified, 2 unverified; [24..25] enrolments, the pairings on this channel that took (the 0xF5 host exchange and the over-air enrolment window alike; attempts that were refused are not counted); [26..27] secured-range broadcasts a master channel heard and refused (a legitimate slave never sends one on a secured channel, so each is a forgery or the master's own window reflected back; docs/radiant-security.md sec 7.6); [28..29] 0xF8 window-verdict events the firmware's event queue refused (ring refusals only: a 0xF8 the USB bridge drops on backlog, and a window discarded before its verdict, show only as 0xF8 seq gaps). All counters are u16 LE and saturate rather than wrapping. An unkeyed channel answers zeros and a clear verdict, with the version still set. VERSIONING: fields are only ever added at the end and an offset is never reused. The structure version stays 1 throughout the beta, whatever is added, so a reader tells which fields exist from the body length and treats the version as nothing more than a sanity check. A reader refuses a body shorter than it needs, and decodes the fields it knows from a longer body. This exists so a host that does not take the 0xF8 window-verdict events still has an auditable stream: deliver-as-unverified only means something if unverified cannot be silently treated as verified. The enrolment counter is readable by a host on the node that did the enrolment; other receivers cannot see it over the air.",
+        "payload_len": 31,
+        "desc": "Per-channel security state, requested with MESG_REQUEST (0x4D). [0] channel; [1] structure version, 1; [2] switches currently active, as in 0xF1; [3] W; [4] page range low; [5] high; [6..9] epoch (u32 LE); [10..11] the expected slot index, low 16 bits (u16 LE); [12..13] windows verified; [14..15] windows unverified; [16..17] non-broadcast frames dropped for carrying a secured-range page; [18..19] frames dropped as replay or time-inconsistent; [20..21] windows dropped by the deliver policy, plus secured-range pages dropped while the channel is pending (bit 0 of [30] set, bit 1 clear); [22] epoch advances since the key was installed (u8, saturating); [23] the most recent verdict - 0 clear, 1 verified, 2 unverified; [24..25] enrolments, the pairings on this channel that took (the 0xF5 host exchange and the over-air enrolment window alike; attempts that were refused are not counted); [26..27] secured-range broadcasts a master channel heard and refused (a legitimate slave never sends one on a secured channel, so each is a forgery or the master's own window reflected back; docs/radiant-security.md sec 7.6); [28..29] 0xF8 window-verdict events the firmware's event queue refused (ring refusals only: a 0xF8 the USB bridge drops on backlog, and a window discarded before its verdict, show only as 0xF8 seq gaps); [30] state flags - bit 0 keyed (a root and X_CONF or X_AUTH on), bit 1 armed (keyed and an epoch set); keyed without armed is PENDING, after a 0xF2 that installed a new root and before the 0xF3 that follows it, and a pending channel withholds secured-range pages on TX and drops them on RX rather than passing them in the clear (a 0xF2 re-sending the root already installed changes nothing). A 26-, 28- or 30-byte body is the same version without the later fields. All counters are u16 LE and saturate rather than wrapping. An unkeyed channel answers zeros and a clear verdict, with the version still set. VERSIONING: fields are only ever added at the end and an offset is never reused. The structure version stays 1 throughout the beta, whatever is added, so a reader tells which fields exist from the body length and treats the version as nothing more than a sanity check. A reader refuses a body shorter than it needs, and decodes the fields it knows from a longer body. This exists so a host that does not take the 0xF8 window-verdict events still has an auditable stream: deliver-as-unverified only means something if unverified cannot be silently treated as verified. The enrolment counter is readable by a host on the node that did the enrolment; other receivers cannot see it over the air.",
     },
     0xF5: {
         "name": 'MESG_RADIANT_PAIRING_ID',

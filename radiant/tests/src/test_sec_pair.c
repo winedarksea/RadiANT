@@ -571,6 +571,14 @@ ZTEST(sec_pair, test_pairing_installs_a_key_both_ends_can_use)
 		      radiant_sec_configure(A_CH, RADIANT_SEC_SW_AUTH, 2u,
 					    RADIANT_SEC_PAGE_LO_DEFAULT,
 					    RADIANT_SEC_PAGE_HI_DEFAULT));
+	/* Keyed, no epoch yet: pending, and that fails closed (item 5). */
+	{
+		uint8_t pay[8] = { 0x05u, 0xAAu, 1, 2, 3, 4, 5, 6 };
+
+		zassert_true(radiant_sec_channel_is_secured(A_CH));
+		zassert_equal(RADIANT_SEC_EUNARMED,
+			      radiant_sec_tx_transform(A_CH, pay, 8u, 0u));
+	}
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_set_epoch(A_CH, 1u, 0u, 8182u));
 	zassert_true(radiant_sec_channel_is_secured(A_CH));

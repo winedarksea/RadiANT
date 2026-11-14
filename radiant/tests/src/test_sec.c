@@ -41,6 +41,12 @@ static const uint8_t test_root[16] = {
 	0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
 };
 
+/* A second root, for re-keying a live channel. */
+static const uint8_t other_root[16] = {
+	0x0f, 0x1e, 0x2d, 0x3c, 0x4b, 0x5a, 0x69, 0x78,
+	0x87, 0x96, 0xa5, 0xb4, 0xc3, 0xd2, 0xe1, 0xf0,
+};
+
 /* ── What the pump produced ─────────────────────────────────────────────── */
 
 #define LOG_MAX 64
@@ -259,17 +265,33 @@ ZTEST(radiant_sec, test_nothing_transforms_until_the_epoch_advances)
 	/* D3/D17: a reboot that restarts the counter under an unchanged epoch is
 	 * a two-time pad for X_CONF and a full replay against X_AUTH, so the
 	 * gate covers both switches and stays closed until a host sets an
-	 * epoch. */
+	 * epoch. Closed means closed (item 5): keyed and pending, a secured
+	 * page is withheld on TX and dropped on RX, never passed in the
+	 * clear. */
+	struct radiant_sec_stats st;
+	struct radiant_sec_state state;
+
 	memcpy(before, pay, sizeof(pay));
-	zassert_equal(RADIANT_SEC_OK,
+	zassert_equal(RADIANT_SEC_EUNARMED,
 		      radiant_sec_tx_transform(TX_CH, pay, sizeof(pay),
 					       (uint64_t)radiant_radio_now()));
 	zassert_mem_equal(pay, before, sizeof(pay));
 
-	zassert_equal(RADIANT_SEC_RX_PLAIN,
+	zassert_equal(RADIANT_SEC_RX_DROP,
 		      radiant_sec_rx_ingest(RX_CH, pay, sizeof(pay), true, 0u));
+	radiant_sec_pump();
+	zassert_equal(0u, log_n_pkt);
+	radiant_sec_get_stats(RX_CH, &st);
+	zassert_equal(1u, st.dropped_policy);
+
+	zassert_true(radiant_sec_channel_is_secured(TX_CH));
+	radiant_sec_get_state(TX_CH, &state);
+	zassert_true(state.keyed);
+	zassert_false(state.secured);
 
 	epoch_both(1000u);
+	radiant_sec_get_state(TX_CH, &state);
+	zassert_true(state.keyed && state.secured);
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_tx_transform(TX_CH, pay, sizeof(pay),
 					       slot_t(0u)));
@@ -291,6 +313,143 @@ ZTEST(radiant_sec, test_the_epoch_only_moves_forwards)
 	/* A wrap must always have headroom to advance into. */
 	zassert_equal(RADIANT_SEC_EINVAL,
 		      radiant_sec_set_epoch(TX_CH, 0xFFFFFFFFu, 0u, TEST_PERIOD));
+}
+
+/* Item 5: a different root on a live channel makes it PENDING - withheld and
+ * dropped, never clear - until the next epoch, which may be any epoch (new
+ * keys, no nonce under them used). Ciphertext queued under the old root dies
+ * with it. */
+ZTEST(radiant_sec, test_a_new_root_on_a_live_channel_fails_closed_until_0xf3)
+{
+	uint8_t                  pay[8] = { TEST_PAGE, 0xAA, 1, 2, 3, 4, 5, 6 };
+	uint8_t                  air[8];
+	struct radiant_sec_stats st;
+	struct radiant_sec_state state;
+	uint32_t                 i;
+
+	key_both();
+	configure_both(RADIANT_SEC_SW_AUTH, 4u);
+	epoch_both(7u);
+	for (i = 0u; i < 4u; i++) {
+		hop(i, false, -1);
+	}
+	tx_hop(4u, air);
+	zassert_equal(RADIANT_SEC_RX_DEFER,
+		      radiant_sec_rx_ingest(RX_CH, air, 8u, true, slot_t(4u)));
+
+	zassert_ok(radiant_sec_set_key(TX_CH, other_root, 128, TEST_DEVNUM));
+	zassert_ok(radiant_sec_set_key(RX_CH, other_root, 128, TEST_DEVNUM));
+	radiant_sec_pump();
+	zassert_equal(4u, log_n_pkt, "%u", log_n_pkt);
+
+	zassert_equal(RADIANT_SEC_EUNARMED,
+		      radiant_sec_tx_transform(TX_CH, pay, 8u, slot_t(5u)));
+	zassert_equal(0xAAu, pay[1]);
+	zassert_equal(RADIANT_SEC_RX_DROP,
+		      radiant_sec_rx_ingest(RX_CH, pay, 8u, true, slot_t(5u)));
+	radiant_sec_get_stats(RX_CH, &st);
+	zassert_equal(1u, st.dropped_policy);
+	radiant_sec_get_state(RX_CH, &state);
+	zassert_true(state.keyed);
+	zassert_false(state.secured);
+	zassert_true(radiant_sec_channel_is_secured(RX_CH));
+
+	/* Below the old epoch: accepted, the high-water mark went with the
+	 * old root. Then the new root runs. */
+	epoch_both(3u);
+	log_n_pkt = 0u;
+	log_n_verdict = 0u;
+	for (i = 0u; i < 8u; i++) {
+		hop(i, false, -1);
+	}
+	zassert_equal(8u, log_n_pkt);
+	zassert_equal(1u, verdicts_for(0u, RADIANT_SEC_VERDICT_VERIFIED));
+}
+
+/* Item 9: the same root again is a no-op - an idempotent 0xF2 re-send is not a
+ * gap. The stream carries on mid-window and every window verifies. */
+ZTEST(radiant_sec, test_the_same_root_again_keeps_the_channel_running)
+{
+	struct radiant_sec_state state;
+	uint32_t                 i;
+
+	key_both();
+	configure_both(RADIANT_SEC_SW_AUTH, 4u);
+	epoch_both(7u);
+	for (i = 0u; i < 6u; i++) {
+		hop(i, false, -1);
+	}
+
+	key_both();
+	radiant_sec_get_state(TX_CH, &state);
+	zassert_true(state.secured);
+	zassert_equal(7u, state.epoch);
+
+	for (i = 6u; i < 12u; i++) {
+		hop(i, false, -1);
+	}
+	zassert_equal(12u, log_n_pkt);
+	zassert_equal(1u, verdicts_for(0u, RADIANT_SEC_VERDICT_VERIFIED));
+	zassert_equal(1u, verdicts_for(4u, RADIANT_SEC_VERDICT_VERIFIED));
+	zassert_equal(0u, verdicts_for(4u, RADIANT_SEC_VERDICT_UNVERIFIED));
+}
+
+/* Item 9: re-sending the same root does not reset D3's gate, so the epoch
+ * still only moves forwards. A different base device number is a different
+ * key set (the KDF binds it), and that one does reset it. */
+ZTEST(radiant_sec, test_the_same_root_then_an_older_epoch_is_refused)
+{
+	key_both();
+	configure_both(RADIANT_SEC_SW_AUTH, 2u);
+	zassert_ok(radiant_sec_set_epoch(TX_CH, 100u, 0u, TEST_PERIOD));
+
+	zassert_ok(radiant_sec_set_key(TX_CH, test_root, 128, TEST_DEVNUM));
+	zassert_equal(RADIANT_SEC_EINVAL,
+		      radiant_sec_set_epoch(TX_CH, 100u, 0u, TEST_PERIOD));
+	zassert_equal(RADIANT_SEC_EINVAL,
+		      radiant_sec_set_epoch(TX_CH, 99u, 0u, TEST_PERIOD));
+	zassert_true(radiant_sec_channel_is_secured(TX_CH));
+
+	/* A bad key length on a live channel changes nothing either. */
+	zassert_not_equal(RADIANT_SEC_OK,
+			  radiant_sec_set_key(TX_CH, other_root, 64, TEST_DEVNUM));
+	zassert_equal(RADIANT_SEC_EINVAL,
+		      radiant_sec_set_epoch(TX_CH, 100u, 0u, TEST_PERIOD));
+
+	zassert_ok(radiant_sec_set_key(TX_CH, test_root, 128,
+				       TEST_DEVNUM + 1u));
+	zassert_ok(radiant_sec_set_epoch(TX_CH, 5u, 0u, TEST_PERIOD));
+}
+
+/* Pending covers the secured range only: the descriptor and the common pages
+ * travel as on an armed channel, and a key with no switch on is not keyed. */
+ZTEST(radiant_sec, test_an_out_of_range_page_is_still_plain_while_pending)
+{
+	uint8_t pay[8] = { 0x50u, 0xAA, 1, 2, 3, 4, 5, 6 };
+	uint8_t before[8];
+
+	memcpy(before, pay, sizeof(pay));
+	key_both();
+	zassert_ok(radiant_sec_tx_transform(TX_CH, pay, 8u, 0u));
+	pay[0] = TEST_PAGE;
+	before[0] = TEST_PAGE;
+	zassert_ok(radiant_sec_tx_transform(TX_CH, pay, 8u, 0u),
+		   "no switch on, but withheld");
+	zassert_false(radiant_sec_channel_is_secured(TX_CH));
+
+	configure_both(RADIANT_SEC_SW_CONF | RADIANT_SEC_SW_AUTH, 2u);
+	pay[0] = 0x50u;
+	before[0] = 0x50u;
+	zassert_ok(radiant_sec_tx_transform(TX_CH, pay, 8u, 0u));
+	pay[0] = 0x00u;
+	before[0] = 0x00u;
+	zassert_ok(radiant_sec_tx_transform(TX_CH, pay, 8u, 0u));
+	zassert_mem_equal(pay, before, 8u);
+	zassert_equal(RADIANT_SEC_RX_PLAIN,
+		      radiant_sec_rx_ingest(RX_CH, pay, 8u, true, 0u));
+	pay[0] = 0x51u;
+	zassert_equal(RADIANT_SEC_RX_PLAIN,
+		      radiant_sec_rx_ingest(RX_CH, pay, 8u, true, 0u));
 }
 
 /* ── The happy path ─────────────────────────────────────────────────────── */
@@ -2101,11 +2260,18 @@ ZTEST(radiant_sec, test_a_followed_channel_refuses_set_epoch_and_a_raise_only_ra
 	zassert_ok(radiant_sec_set_epoch_ceiling(TX_CH, UINT32_MAX));
 	zassert_ok(radiant_sec_set_epoch(TX_CH, 100u, 0u, TEST_PERIOD));
 
-	/* ...and so does a new root, and a raise does not bring it back. */
+	/* The same root again is a no-op (item 9): still followed, still
+	 * refused - re-sending the root is no way round the authority. */
 	zassert_ok(radiant_sec_set_epoch_ceiling(TX_CH, 100u));
 	zassert_equal(RADIANT_SEC_ESTATE,
 		      radiant_sec_set_epoch(TX_CH, 200u, 0u, TEST_PERIOD));
 	zassert_ok(radiant_sec_set_key(TX_CH, test_root, 128, TEST_DEVNUM));
+	zassert_equal(RADIANT_SEC_ESTATE,
+		      radiant_sec_set_epoch(TX_CH, 200u, 0u, TEST_PERIOD));
+
+	/* ...but a new root frees it, and a raise does not bring it back. */
+	zassert_ok(radiant_sec_set_key(TX_CH, other_root, 128,
+				       TEST_DEVNUM));
 	zassert_ok(radiant_sec_raise_epoch_ceiling(TX_CH, 300u));
 	zassert_ok(radiant_sec_set_epoch(TX_CH, 200u, 0u, TEST_PERIOD));
 	sec_anchor = (uint64_t)radiant_radio_now();

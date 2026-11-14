@@ -91,6 +91,11 @@ extern "C" {
 /* Refused in this state: radiant_sec_set_epoch() on a channel an epoch
  * authority follows (it carries a ceiling). */
 #define RADIANT_SEC_ESTATE   -7
+/* Keyed but not armed: the channel has a root and X_CONF or X_AUTH switched
+ * on, but no epoch yet (a fresh key, or a different root installed on a live
+ * channel). A secured-range page is withheld rather than sent in the clear;
+ * the same call succeeds once radiant_sec_set_epoch() arms the channel. */
+#define RADIANT_SEC_EUNARMED -8
 
 /*
  * An opaque key handle. NEVER a `const uint8_t key[16]` at a call site.
@@ -616,7 +621,11 @@ enum radiant_sec_verdict {
  *
  * Returns RADIANT_SEC_OK when the payload was transformed or deliberately left
  * alone, and a negative code when the channel is configured for something the
- * backend cannot do, the slot has passed, or the epoch is spent.
+ * backend cannot do, the slot has passed, or the epoch is spent. A keyed
+ * channel with no epoch yet answers a secured-range page with
+ * RADIANT_SEC_EUNARMED, before the lock check and touching no state: it fails
+ * closed, never open, and is safe from any context. The caller transmits
+ * nothing on any non-OK return.
  */
 int radiant_sec_tx_transform(uint8_t ch, uint8_t *pay, uint8_t len,
 			     uint64_t t_sync);
@@ -635,7 +644,10 @@ int radiant_sec_tx_transform(uint8_t ch, uint8_t *pay, uint8_t len,
  *                         data instead of a broadcast; so does a secured-range
  *                         broadcast heard on a MASTER channel, which no
  *                         legitimate slave sends and which would otherwise
- *                         reach the epoch the master transmits under
+ *                         reach the epoch the master transmits under; and so
+ *                         does a secured-range page on a keyed channel with
+ *                         no epoch yet (counted in dropped_policy), which
+ *                         nothing could authenticate or decrypt
  */
 #define RADIANT_SEC_RX_PLAIN 0
 #define RADIANT_SEC_RX_DEFER 1
@@ -737,8 +749,33 @@ void radiant_sec_epoch_advanced(uint8_t ch, uint32_t epoch);
  */
 void radiant_sec_epoch_wanted(uint8_t ch, uint32_t epoch);
 
-/* Lifecycle. No init call: the first SET_KEY allocates, unassign and reset
- * free. */
+/*
+ * Lifecycle. No init call: the first SET_KEY allocates, unassign and reset
+ * free.
+ *
+ * radiant_sec_set_key() on a channel that already has a context compares the
+ * new root with the installed one by key check value (CMAC(root, 0^16) under
+ * each, computed here on this cold path only and never stored or reported):
+ *
+ *   SAME ROOT, same base_devnum: a no-op returning RADIANT_SEC_OK. The epoch,
+ *     epoch_set (armed stays armed), the epoch ceiling (an authority keeps
+ *     following the channel, so a host 0xF3 stays refused), the replay floor,
+ *     the switches and the TX/RX window state are all kept. An idempotent
+ *     0xF2 re-send is therefore neither a gap in a live stream nor a reset of
+ *     the epoch monotonicity gate: a same-root re-send followed by an older or
+ *     equal epoch is still refused.
+ *   DIFFERENT ROOT (or a different base_devnum, which changes every derived
+ *     key): the new root replaces the old, epoch_set is cleared, so the
+ *     channel is PENDING - keyed but not armed, failing closed (secured-range
+ *     TX withheld with RADIANT_SEC_EUNARMED, RX dropped) - until the next
+ *     radiant_sec_set_epoch(). The epoch high-water mark resets with it (any
+ *     epoch is accepted next: new keys mean no nonce under them was ever
+ *     used), the ceiling is cleared (a new root owes the old authority
+ *     nothing), and packets still queued for the pump under the old root are
+ *     dropped. Switches, W, page range and the on-air device number stay.
+ *
+ * A failed import leaves the existing context exactly as it was.
+ */
 int  radiant_sec_set_key(uint8_t ch, const uint8_t *root, size_t bits,
 			 uint16_t base_devnum);
 int  radiant_sec_configure(uint8_t ch, uint8_t switches, uint8_t w,
@@ -783,8 +820,9 @@ int  radiant_sec_set_epoch(uint8_t ch, uint32_t epoch, uint64_t us_into_epoch,
  * before raising the ceiling, so an epoch is never used that a reboot could
  * issue again. While a ceiling is set, radiant_sec_set_epoch() is REFUSED
  * (RADIANT_SEC_ESTATE): a host 0xF3 under the authority's root would run
- * wraps nobody reserved. radiant_sec_set_key() clears it - a new root owes
- * the old authority nothing - and so does a call here with max_epoch
+ * wraps nobody reserved. radiant_sec_set_key() with a DIFFERENT root clears
+ * it - a new root owes the old authority nothing; the same root again is a
+ * no-op and keeps it - and so does a call here with max_epoch
  * 0xFFFFFFFF, which is how the authority itself re-epochs its channel
  * (clear, set_epoch, set the new ceiling).
  *
@@ -850,12 +888,16 @@ void radiant_sec_channel_release(uint8_t ch);
 void radiant_sec_reset(void);
 
 /*
- * Is this channel transforming right now? The acknowledgement path asks,
- * because api_xfer_broadcast() memcpys the plaintext host buffer onto the air
- * and under X_CONF that hands a passive listener the plaintext of the same
- * page. A secured channel answers with the ciphertext already built for the
- * current counter instead - same nonce, same plaintext, identical ciphertext,
- * no reuse and no ISR crypto.
+ * Is this channel KEYED - a root installed and X_CONF or X_AUTH switched on -
+ * whether or not an epoch has armed it yet? Every caller uses the answer to
+ * keep host plaintext off the air, so a pending channel must answer true: it
+ * fails closed like an armed one. The acknowledgement path asks, because
+ * api_xfer_broadcast() memcpys the plaintext host buffer onto the air and
+ * under X_CONF that hands a passive listener the plaintext of the same page.
+ * A secured channel answers with the ciphertext already built for the current
+ * counter instead - same nonce, same plaintext, identical ciphertext, no reuse
+ * and no ISR crypto - and a master with nothing built (withheld, or pending)
+ * does not acknowledge. Reads a few fields only, so safe from any context.
  */
 bool radiant_sec_channel_is_secured(uint8_t ch);
 
@@ -935,7 +977,11 @@ struct radiant_sec_state {
 	uint32_t                 epoch;
 	uint16_t                 expected_index;
 	enum radiant_sec_verdict last_verdict;
+	/* armed: keyed and an epoch set, so the transforms run. */
 	bool                     secured;
+	/* A root and X_CONF or X_AUTH: keyed && !secured is PENDING, where
+	 * secured-range pages are withheld and dropped (fail closed). */
+	bool                     keyed;
 };
 
 void radiant_sec_get_state(uint8_t ch, struct radiant_sec_state *out);

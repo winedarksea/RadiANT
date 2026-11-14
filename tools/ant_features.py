@@ -867,7 +867,10 @@ def check_radiant_security(dev, reader) -> list[str]:
           f"epoch={st.epoch} verdict={ant_sec.verdict_str(st.verdict)} "
           f"enrolments={st.enrolments}"
           + ("" if st.dropped_direction is None
-             else f" dropped_direction={st.dropped_direction}"))
+             else f" dropped_direction={st.dropped_direction}")
+          + ("" if st.state_flags is None
+             else " state=" + ("armed" if st.armed else
+                               "pending" if st.pending else "unkeyed")))
 
     problems = []
 
