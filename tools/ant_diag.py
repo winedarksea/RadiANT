@@ -23,12 +23,15 @@ import argparse
 import json
 import struct
 import sys
+import time
 
 sys.path.insert(0, __file__.rsplit("\\", 1)[0].rsplit("/", 1)[0])
 
 from ant_wire import (  # noqa: E402
     MESG_RADIANT_DIAG_ID,
     MESG_REQUEST_ID,
+    MESG_RESPONSE_EVENT_ID,
+    RESPONSE_NO_ERROR,
 )
 
 NOT_MEASURED = 0xFFFFFFFF
@@ -122,10 +125,67 @@ def diff(before: dict, after: dict) -> dict:
     return out
 
 
-def request(dev, reader, page: int) -> bytes | None:
-    from ant_probe import EP_OUT, expect, frame
+class Refused(Exception):
+    """The dongle answered the request with a response code instead of a page:
+    a build without this page (or without 0xF7 at all)."""
+
+    def __init__(self, code: int):
+        super().__init__(f"response code 0x{code:02X}")
+        self.code = code
+
+
+def request(dev, reader, page: int, timeout_s: float = 2.0) -> bytes | None:
+    """One page. Returns the body, None on a timeout, or raises Refused.
+
+    A refusal and a timeout are different facts: a refusal is the build
+    saying it lacks the page, a timeout is a reply lost on the way (libusb0
+    loses ~1 % of short reads near reply latency), so only the first may be
+    skipped."""
+    from ant_probe import EP_OUT, frame
     dev.write(EP_OUT, frame(MESG_REQUEST_ID, bytes([page, MESG_RADIANT_DIAG_ID])))
-    return expect(reader, MESG_RADIANT_DIAG_ID, 2.0)
+    deadline = time.monotonic() + timeout_s
+    while True:
+        got = reader.next_frame(deadline)
+        if got is None:
+            return None
+        msg_id, payload = got
+        if msg_id == MESG_RADIANT_DIAG_ID and len(payload) >= 1                 and payload[0] == page:
+            return bytes(payload)
+        if (msg_id == MESG_RESPONSE_EVENT_ID and len(payload) >= 3
+                and payload[0] == page and payload[1] == MESG_REQUEST_ID
+                and payload[2] != RESPONSE_NO_ERROR):
+            raise Refused(payload[2])
+
+
+def read_pages(dev, reader, wanted: list[int], retries: int = 1,
+               err=sys.stderr) -> dict[str, dict]:
+    """Read `wanted`. A page the build refuses is skipped once an earlier page
+    has answered (an older build without the newest page); a page that never
+    answers is retried, then fails the read, so a before/after pair never
+    silently misses a page. Raises RuntimeError on failure."""
+    pages: dict[str, dict] = {}
+    for page in wanted:
+        body = None
+        try:
+            for _ in range(retries + 1):
+                body = request(dev, reader, page)
+                if body is not None:
+                    break
+        except Refused as exc:
+            if pages:
+                print(f"page {page}: refused ({exc}); this build lacks the "
+                      "page, skipped.", file=err)
+                continue
+            raise RuntimeError(
+                f"page {page}: refused ({exc}). Built without "
+                "CONFIG_ANT_DONGLE_DIAG (off by default), or a page this "
+                "build lacks.") from exc
+        if body is None:
+            raise RuntimeError(
+                f"page {page}: no 0xF7 reply after {retries + 1} tries. A "
+                "lost reply, or a build without CONFIG_ANT_DONGLE_DIAG.")
+        pages[str(page)] = decode(body)
+    return pages
 
 
 def render(pages: dict) -> str:
@@ -146,8 +206,9 @@ def main() -> int:
     ap.add_argument("--baud", type=int, default=115200)
     ap.add_argument("--pages", default="0-8",
                     help="pages to read, e.g. 0-8 or 1,2,4 (default all). "
-                         "A page an older build lacks is skipped once an "
-                         "earlier page has answered")
+                         "A page an older build refuses is skipped once an "
+                         "earlier page has answered; a page that never "
+                         "answers fails the read")
     ap.add_argument("--json", help="also write the decoded pages here")
     ap.add_argument("--diff", nargs=2, metavar=("BEFORE", "AFTER"),
                     help="print AFTER - BEFORE from two --json files; no device")
@@ -169,27 +230,14 @@ def main() -> int:
     from ant_probe import FrameReader, close_device, open_device
     dev = open_device(True, serial=args.serial, port=args.port, baud=args.baud)
     reader = FrameReader(dev)
-    pages: dict[str, dict] = {}
-    backend = None
     try:
-        for page in wanted:
-            body = request(dev, reader, page)
-            if body is None and pages:
-                # Answered before, so the build has 0xF7 but predates this
-                # page (page 8 arrived 2026-11-13).
-                print(f"page {page}: no 0xF7 reply; this build lacks the "
-                      "page, skipped.", file=sys.stderr)
-                continue
-            if body is None:
-                print(f"page {page}: no 0xF7 reply. Built without "
-                      "CONFIG_ANT_DONGLE_DIAG (off by default), or a page "
-                      "this build lacks.", file=sys.stderr)
-                return 2
-            got = decode(body)
-            backend = got["backend"]
-            pages[str(page)] = got
+        pages = read_pages(dev, reader, wanted)
+    except RuntimeError as exc:
+        print(exc, file=sys.stderr)
+        return 2
     finally:
         close_device(dev)
+    backend = next(iter(pages.values()))["backend"] if pages else None
 
     print(f"MESG_RADIANT_DIAG (0xF7), backend {backend}")
     print(render(pages))

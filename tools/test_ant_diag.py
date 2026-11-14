@@ -95,6 +95,73 @@ class Timing(unittest.TestCase):
         self.assertEqual(out["drain_over_250us"], 3)
 
 
+class FakeDev:
+    def __init__(self):
+        self.writes = []
+
+    def write(self, ep, data):
+        self.writes.append(bytes(data))
+
+
+class FakeReader:
+    """Hands out scripted frames, one per next_frame() call. A None item, or
+    running out, is a timeout: the request waiting on it gets no reply."""
+
+    def __init__(self, script):
+        self.script = list(script)
+
+    def next_frame(self, deadline):
+        return self.script.pop(0) if self.script else None
+
+
+def page_reply(page):
+    return (d.MESG_RADIANT_DIAG_ID, body(page, [page] * 8))
+
+
+def refusal(page, code=0x33):
+    return (ant_wire.MESG_RESPONSE_EVENT_ID,
+            bytes([page, ant_wire.MESG_REQUEST_ID, code]))
+
+
+class ReadPages(unittest.TestCase):
+    """A refused page may be skipped; a lost reply may not."""
+
+    def run_script(self, script, wanted):
+        import io
+        dev, err = FakeDev(), io.StringIO()
+        pages = d.read_pages(dev, FakeReader(script), wanted, err=err)
+        return pages, dev, err
+
+    def test_older_build_refusing_page_8_is_skipped(self):
+        script = [page_reply(p) for p in range(8)] + [refusal(8)]
+        pages, dev, err = self.run_script(script, list(range(9)))
+        self.assertEqual(sorted(pages, key=int), [str(p) for p in range(8)])
+        self.assertIn("page 8: refused", err.getvalue())
+
+    def test_refusal_of_the_first_page_fails(self):
+        with self.assertRaises(RuntimeError):
+            self.run_script([refusal(0)], [0, 1])
+
+    def test_a_lost_reply_is_retried_not_skipped(self):
+        script = [page_reply(0), None, page_reply(1), page_reply(2)]
+        pages, dev, _ = self.run_script(script, [0, 1, 2])
+        self.assertEqual(sorted(pages, key=int), ["0", "1", "2"])
+        self.assertEqual(len(dev.writes), 4)   # page 1 asked twice
+
+    def test_a_page_that_never_answers_fails_the_read(self):
+        script = [page_reply(0), None, None]
+        with self.assertRaises(RuntimeError):
+            self.run_script(script, [0, 1])
+
+    def test_a_reply_for_another_page_or_message_is_ignored(self):
+        # A stale reply to page 0 and an unrelated response event arrive
+        # before page 1's own reply.
+        stale = page_reply(0)
+        other = (ant_wire.MESG_RESPONSE_EVENT_ID, bytes([1, 0x42, 0x15]))
+        got = d.request(FakeDev(), FakeReader([stale, other, page_reply(1)]), 1)
+        self.assertEqual(got[0], 1)
+
+
 class Diff(unittest.TestCase):
     def test_counters_subtract_mod_2_32_and_levels_do_not(self):
         a = {"2": d.decode(body(2, [0xFFFFFFF0, 0, 10, 900, 0, 5, 0, 0]))}
