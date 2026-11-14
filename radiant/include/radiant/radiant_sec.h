@@ -379,19 +379,88 @@ int  radiant_sec_pair_peer_nonce(uint8_t ch, const uint8_t *peer_nonce,
 				 uint32_t *fingerprint);
 
 /*
- * OVER-AIR ENROLMENT ONLY, and deliberately not reachable from 0xF5: the DH
- * and the install in one step, with no commitment (both nonces zero, the keys
- * ordered by value in place of roles). It is UNAUTHENTICATED Diffie-Hellman.
- * Its fingerprint is one-sided (a strap has no screen) and grindable - a MITM
- * can search key pairs until the digits it shows match - so it is a
- * consistency check between two honest ends, not a MITM defence. The bounded
- * window, one pairing per window and the physical trigger are what stand
- * between this and an attacker (docs/radiant-security.md sections 7.4, 11.7).
+ * ── Over-air enrolment: the group root, delivered ──────────────────────────
+ * OVER-AIR ENROLMENT ONLY, and deliberately not reachable from 0xF5. The DH
+ * has no commitment (both nonces zero, the keys ordered by value in place of
+ * roles): it is UNAUTHENTICATED Diffie-Hellman, its fingerprint is one-sided
+ * (a strap has no screen) and grindable - a MITM can search key pairs until
+ * the digits it shows match - so it is a consistency check between two honest
+ * ends, not a MITM defence. The bounded window, one pairing per window and the
+ * physical trigger are what stand between this and an attacker
+ * (docs/radiant-security.md sections 7.4, 11.7).
+ *
+ * The DH key is PAIRWISE and never becomes anybody's root. Enrolment is
+ * additive: the sensor sends its EXISTING group root, wrapped under keys only
+ * the two ends of this exchange hold, and the receiver installs that.
+ *
+ *   K_wrap  = CMAC_PRK("RADIANT-enrl-wrap\0" || PKlo || PKhi)
+ *   K_wrap' = CMAC_PRK("RADIANT-enrl-wmac\0" || PKlo || PKhi)
+ *   n       = nonce_block(0, 0, 0, RADIANT_SEC_DOM_ENROL_WRAP)
+ *   ct      = CTR(K_wrap, n, root)                        16 bytes
+ *   wrapped = ct || trunc64( CMAC(K_wrap', n || ct) )     24 bytes
+ *
+ * Both keys are fresh per exchange and each wraps one root, so the constant
+ * nonce is never reused under a key.
+ *
+ * SENSOR: radiant_sec_pair_peer_uncommitted() runs the DH and wraps the root
+ * the channel already holds - the compat context's if there is one, else the
+ * secured context's - into `wrapped`, and installs NOTHING: the root, the
+ * epoch and every receiver already keyed are untouched. Only a channel that
+ * holds no root at all gets one from the exchange (the enrolment root,
+ * CMAC_PRK("RADIANT-enrl-root\0" || PKlo || PKhi || 0^16 || 0^16), installed
+ * as a secured context), because there is nothing to deliver and nobody to
+ * lock out; that new root is then wrapped and delivered the same way.
+ * The enrolment counter is bumped in the stats of the context whose root went
+ * out: struct radiant_sec_stats, or struct radiant_sec_compat_stats on a
+ * compat channel, which is never given a secured context for it.
+ *
+ * RECEIVER: radiant_sec_pair_join() runs the DH against the sensor's public
+ * key and yields the same fingerprint, installing nothing. Then
+ * radiant_sec_pair_accept_root() checks the tag (in constant time), unwraps,
+ * and installs the root into the receiver channel's secured context
+ * (RADIANT_SEC_PAIR_INTO_SEC) or compat context (_INTO_COMPAT), bound to the
+ * channel's own device number - for a receiver, the sensor's - and bumps the
+ * same counter there. A tag that fails returns RADIANT_SEC_EBADMAC, installs
+ * nothing and leaves the join in place, so a forged or torn copy does not
+ * spend the enrolment and the next genuine copy is still accepted. The
+ * receiver enters pairing with a timeout covering the sensor's window AND its
+ * delivery, or the join expires before the root arrives.
+ *
+ * An installed root starts unarmed, like any set_key: the receiver sets the
+ * epoch (0xF3, or the compat epoch path) before it verifies anything.
  */
-int  radiant_sec_pair_peer_uncommitted(uint8_t ch, const uint8_t *peer_pub,
-				       uint32_t *fingerprint);
+#define RADIANT_SEC_PAIR_WRAP_TAG_BYTES 8
+#define RADIANT_SEC_PAIR_WRAPPED_BYTES \
+	(RADIANT_SEC_BLOCK_BYTES + RADIANT_SEC_PAIR_WRAP_TAG_BYTES)
+#define RADIANT_SEC_PAIR_INTO_SEC    0u
+#define RADIANT_SEC_PAIR_INTO_COMPAT 1u
 
-/* Six digits, 0..999999, readable once a pairing has installed its key. */
+int  radiant_sec_pair_peer_uncommitted(uint8_t ch, const uint8_t *peer_pub,
+				       uint8_t *wrapped, uint32_t *fingerprint);
+int  radiant_sec_pair_join(uint8_t ch, const uint8_t *sensor_pub,
+			   uint32_t *fingerprint);
+int  radiant_sec_pair_accept_root(uint8_t ch, const uint8_t *wrapped,
+				  uint8_t into);
+
+/*
+ * INTERNAL, for the modules that own a root (radiant_sec.c and
+ * radiant_sec_compat.c): `buf` holds the 16-byte root on entry and the
+ * 24-byte wrapped form above on return. Wiped on any failure, and
+ * RADIANT_SEC_ENOTSUP on a backend whose keys are opaque.
+ */
+int  radiant_sec_pair_seal(const struct radiant_sec_key *k_wrap,
+			   const struct radiant_sec_key *k_mac, uint8_t *buf);
+
+/*
+ * INTERNAL: radiant_sec.c's half of the sensor side - this channel's root,
+ * sealed into `out` (RADIANT_SEC_PAIR_WRAPPED_BYTES). The root itself never
+ * leaves the module. RADIANT_SEC_ENOKEY when the channel holds none.
+ */
+int  radiant_sec_wrap_root(uint8_t ch, const struct radiant_sec_key *k_wrap,
+			   const struct radiant_sec_key *k_mac, uint8_t *out);
+
+/* Six digits, 0..999999, readable once a pairing has installed its key (or,
+ * on a receiver, once radiant_sec_pair_join() has run). */
 int  radiant_sec_pair_fingerprint(uint8_t ch, uint32_t *out);
 
 bool radiant_sec_pair_is_open(uint8_t ch);
@@ -497,6 +566,10 @@ int radiant_sec_aes_ecb(const struct radiant_sec_key *k,
  * differ in body[0], the first covered byte, so it's already in the MAC input.
  */
 #define RADIANT_SEC_DOM_TLM_CMD    0x05
+
+/* Over-air enrolment's root wrap (the pairing block above): the one nonce
+ * block its CTR and its tag share, under two keys fresh per exchange. */
+#define RADIANT_SEC_DOM_ENROL_WRAP 0x06
 
 /*
  * nonce_block = epoch[4 LE] || devnum[2 LE] || counter[2 LE] || dom || 0x00 x7
@@ -928,12 +1001,15 @@ struct radiant_sec_stats {
 	 * this counter must not also be silent: an enrolment the owner didn't
 	 * perform is the whole attack, and a climbing counter surfaces it.
 	 *
-	 * Bumped by a pairing's install (radiant_sec_pair_peer_nonce(), or
-	 * radiant_sec_pair_peer_uncommitted() for enrolment) after the root
-	 * key installs (counts pairings that took, not attempts; a refused
-	 * small-order peer key or an unopened commitment leaves it alone),
-	 * for both the 0xF5 host exchange and
-	 * profile_enrol.c's over-air window - one event either way.
+	 * Counts pairings that took, not attempts (a refused small-order
+	 * peer key, an unopened commitment or a wrapped root whose tag fails
+	 * leaves it alone), for both the 0xF5 host exchange and
+	 * profile_enrol.c's over-air window - one event either way. Bumped by
+	 * radiant_sec_pair_peer_nonce() when its key installs; on enrolment,
+	 * by the sensor when it wraps this context's root for delivery
+	 * (radiant_sec_pair_peer_uncommitted()) and by the receiver when
+	 * radiant_sec_pair_accept_root() installs one here. A compat
+	 * context's root counts in struct radiant_sec_compat_stats instead.
 	 */
 	uint32_t enrolments;
 	/* 0xF8 window-verdict events the port could not queue: event-ring
@@ -950,8 +1026,7 @@ void radiant_sec_get_stats(uint8_t ch, struct radiant_sec_stats *out);
  * INTERNAL. radiant_sec_pair.c's hook into the counter above. Declared here
  * rather than a private header for the reason radiant_transfer.h gives for
  * radiant_transfer_arm_tx(): two translation units, one function, not worth
- * a third file. A no-op for a channel with no security context (can't
- * happen on this path, but written to survive being wrong about that).
+ * a third file. A no-op for a channel with no security context.
  */
 void radiant_sec_stat_enrolment(uint8_t ch);
 

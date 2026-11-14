@@ -903,5 +903,51 @@ class TestPairCommitReveal(unittest.TestCase):
         self.assertLessEqual(hits, 1)
 
 
+class TestEnrolRootDelivery(unittest.TestCase):
+    """Over-air enrolment's root wrap (radiant_sec.h, "the group root,
+    delivered"; security review 2026-11-13, item 6). Same keys as
+    TestPairCommitReveal. WRAPPED appears in test_sec_pair.c as VEC_WRAPPED:
+    the C sensor, holding ROOT, must put exactly these 24 bytes on the air.
+    """
+
+    PKA = TestPairCommitReveal.PKA
+    PKB = TestPairCommitReveal.PKB
+    SHARED = TestPairCommitReveal.SHARED
+    ROOT = bytes(range(16))
+    WRAPPED = bytes.fromhex(
+        "d143ed9537da9882caf0bdd2b690f3c06139175e49f3d3ff")
+
+    def test_the_wrap_vector(self):
+        self.assertEqual(self.WRAPPED, rc.pair_wrap_root(
+            self.SHARED, self.PKA, self.PKB, self.ROOT))
+
+    def test_both_ends_derive_the_same_wrap_keys(self):
+        # Ordered by value, like the enrolment root: no roles to agree on.
+        self.assertEqual(rc.pair_wrap_keys(self.SHARED, self.PKA, self.PKB),
+                         rc.pair_wrap_keys(self.SHARED, self.PKB, self.PKA))
+
+    def test_the_receiver_unwraps_the_sensor_root(self):
+        self.assertEqual(self.ROOT, rc.pair_unwrap_root(
+            self.SHARED, self.PKB, self.PKA, self.WRAPPED))
+
+    def test_any_flipped_bit_is_refused(self):
+        for i in range(rc.PAIR_WRAPPED_BYTES):
+            bad = bytearray(self.WRAPPED)
+            bad[i] ^= 0x01
+            self.assertIsNone(rc.pair_unwrap_root(
+                self.SHARED, self.PKA, self.PKB, bytes(bad)), i)
+
+    def test_another_shared_secret_does_not_unwrap(self):
+        # A man in the middle, or a second receiver, holds a different DH.
+        other = bytes(31) + b"\x01"
+        self.assertIsNone(rc.pair_unwrap_root(other, self.PKA, self.PKB,
+                                              self.WRAPPED))
+
+    def test_the_wrap_keys_are_not_the_enrolment_root(self):
+        root, _ = rc.pair_uncommitted(self.SHARED, self.PKA, self.PKB)
+        self.assertNotIn(root, rc.pair_wrap_keys(self.SHARED, self.PKA,
+                                                 self.PKB))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -42,6 +42,15 @@ _Static_assert(PROFILE_ENROL_SET_BYTES ==
 		       PROFILE_ENROL_PUBKEY_BYTES + PROFILE_ENROL_CHECK_BYTES,
 	       "six frames of six bytes is exactly a key plus its set check; "
 	       "a spare byte here is a byte nobody has decided the meaning of");
+_Static_assert(PROFILE_ENROL_WRAPPED_BYTES == RADIANT_SEC_PAIR_WRAPPED_BYTES &&
+		       PROFILE_ENROL_ROOT_FRAMES * PROFILE_ENROL_FRAME_PAYLOAD ==
+			       PROFILE_ENROL_WRAPPED_BYTES,
+	       "four frames of six bytes is exactly the wrapped root, with no "
+	       "spare byte");
+_Static_assert(PROFILE_ENROL_WRAPPED_BYTES <= PROFILE_ENROL_SET_BYTES &&
+		       PROFILE_ENROL_ROOT_FRAMES * PROFILE_ENROL_DELIVER_CYCLES <=
+			       255u,
+	       "the delivery reuses tx and counts in a byte");
 
 /* ── The set check ─────────────────────────────────────────────────────────
  * trunc32( CMAC(all-zero key, pubkey) ). Integrity, not authentication: it
@@ -94,6 +103,13 @@ static void window_close(struct profile_enrol *pe)
 	if (pe->compat != NULL) {
 		(void)profile_compat_set_pairing_open(pe->compat, false);
 	}
+}
+
+/* Stop delivering a wrapped root: on its last frame, or on an explicit close. */
+static void delivery_end(struct profile_enrol *pe)
+{
+	pe->deliver_left = 0u;
+	memset(pe->tx, 0, sizeof(pe->tx));
 }
 
 static int window_open(struct profile_enrol *pe, uint64_t now_us)
@@ -224,9 +240,10 @@ int profile_enrol_physical_action(struct profile_enrol *pe, uint64_t now_us)
 		pe->windows_refused++;
 		return -EPERM;
 	}
-	if (pe->open) {
+	if (pe->open || pe->deliver_left != 0u) {
 		/* One pairing per window; a second press must not extend the
-		 * first into an unbounded one. */
+		 * first into an unbounded one, nor cut short the delivery of
+		 * the root the last one earned. */
 		pe->windows_refused++;
 		return -EBUSY;
 	}
@@ -246,7 +263,7 @@ int profile_enrol_keyholder_request(struct profile_enrol *pe, uint64_t now_us)
 		pe->windows_refused++;
 		return -EPERM;
 	}
-	if (pe->open) {
+	if (pe->open || pe->deliver_left != 0u) {
 		pe->windows_refused++;
 		return -EBUSY;
 	}
@@ -270,6 +287,7 @@ void profile_enrol_close(struct profile_enrol *pe)
 {
 	if (pe != NULL && pe->armed) {
 		window_close(pe);
+		delivery_end(pe);
 	}
 }
 
@@ -305,22 +323,35 @@ uint8_t profile_enrol_frame_count(void *user, uint64_t now_us)
 	/* Expiry lives here so a node driven through profile_compat.c owes no
 	 * separate tick, and frame count and open state can't disagree. */
 	(void)profile_enrol_tick(pe, now_us);
-	return pe->open ? (uint8_t)PROFILE_ENROL_FRAMES : 0u;
+	if (pe->open) {
+		return (uint8_t)PROFILE_ENROL_FRAMES;
+	}
+	return (pe->deliver_left != 0u) ? (uint8_t)PROFILE_ENROL_ROOT_FRAMES
+					: 0u;
 }
 
 bool profile_enrol_frame(void *user, uint8_t i, uint8_t *payload)
 {
 	struct profile_enrol *pe = (struct profile_enrol *)user;
+	uint8_t               n;
 
-	if (pe == NULL || !pe->armed || !pe->open || payload == NULL) {
+	if (pe == NULL || !pe->armed || payload == NULL) {
 		return false;
 	}
-	if (i >= (uint8_t)PROFILE_ENROL_FRAMES) {
+	n = pe->open ? (uint8_t)PROFILE_ENROL_FRAMES
+		     : ((pe->deliver_left != 0u) ? (uint8_t)PROFILE_ENROL_ROOT_FRAMES
+						 : 0u);
+	if (i >= n) {
 		return false;
 	}
 	memcpy(payload, &pe->tx[(size_t)i * PROFILE_ENROL_FRAME_PAYLOAD],
 	       PROFILE_ENROL_FRAME_PAYLOAD);
 	pe->frames_sent++;
+	/* Bounded by frames handed out, not by time: a node that transmits
+	 * rarely still sends every frame the full number of times. */
+	if (!pe->open && --pe->deliver_left == 0u) {
+		delivery_end(pe);
+	}
 	return true;
 }
 
@@ -330,6 +361,7 @@ int profile_enrol_on_ack_data(struct profile_enrol *pe, const uint8_t *payload,
 			      uint8_t len)
 {
 	uint8_t  check[PROFILE_ENROL_CHECK_BYTES];
+	uint8_t  wrapped[PROFILE_ENROL_WRAPPED_BYTES];
 	uint8_t  index;
 	uint8_t  count;
 	uint32_t fp = 0u;
@@ -386,11 +418,13 @@ int profile_enrol_on_ack_data(struct profile_enrol *pe, const uint8_t *payload,
 	 * six-frame window for a nonce commit/reveal, so this is
 	 * unauthenticated DH with a one-sided, grindable fingerprint. What
 	 * guards it is the bounded window, one pairing per window and the
-	 * physical trigger (docs/radiant-security.md sections 7.4 and 11.7). */
-	rc = radiant_sec_pair_peer_uncommitted(pe->cfg.ch, pe->rx, &fp);
+	 * physical trigger (docs/radiant-security.md sections 7.4 and 11.7).
+	 * Its key wraps this node's root for the peer and replaces nothing. */
+	rc = radiant_sec_pair_peer_uncommitted(pe->cfg.ch, pe->rx, wrapped,
+					       &fp);
 	if (rc != RADIANT_SEC_OK) {
 		/* Mandatory refusal (e.g. a small-order point): the result
-		 * becomes a root key. One injected packet must not burn a
+		 * seals the root. One injected packet must not burn a
 		 * window the user opened, so only the accumulator resets. */
 		pe->rx_have = 0u;
 		memset(pe->rx, 0, sizeof(pe->rx));
@@ -404,8 +438,13 @@ int profile_enrol_on_ack_data(struct profile_enrol *pe, const uint8_t *payload,
 
 	/* One pairing per window: closing here rather than at timeout makes
 	 * that structural, so a second peer answering the same window finds
-	 * none. The fingerprint survives the close - it's this module's. */
+	 * none. The fingerprint survives the close - it's this module's. Then
+	 * the delivery: the set shrinks to the four frames of wrapped root,
+	 * which only the peer that just answered can open. */
 	window_close(pe);
+	memcpy(pe->tx, wrapped, sizeof(wrapped));
+	pe->deliver_left = (uint8_t)(PROFILE_ENROL_ROOT_FRAMES *
+				     PROFILE_ENROL_DELIVER_CYCLES);
 	return 1;
 }
 

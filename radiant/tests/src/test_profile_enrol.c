@@ -9,8 +9,11 @@
  * rather than by any announcement." Not all belong to this phase:
  *
  *   - Gains a second receiver: asserted here end to end, with the node's
- *     public key read back off the air and the peer's answer arriving as
- *     eight-byte acknowledged-data payloads.
+ *     public key read back off the air, the peer's answer arriving as
+ *     eight-byte acknowledged-data payloads, and the node's own root coming
+ *     back off the air wrapped, so the receiver verifies the stream with the
+ *     key the first receiver already had (security review 2026-11-13,
+ *     item 6: the exchange used to replace that root instead).
  *   - Uninterrupted across the whole window: asserted here over a full
  *     60-second window of a real heart-rate stream - no silent slot, no
  *     channel change, no page number outside the profile's own union, a
@@ -43,6 +46,7 @@
 #include <radiant/radiant_sec.h>
 #include <radiant/radiant_sec_compat.h>
 #include <radiant/radiant_channel.h>
+#include <radiant/radiant_radio_hal.h>
 
 #include "fake_radio.h"
 #include "fake_nvm.h"
@@ -437,6 +441,56 @@ static void peer_set(const uint8_t *peer_pub, uint8_t out[PROFILE_ENROL_FRAMES][
 	}
 }
 
+#define ROOT_SET_COUNT \
+	((uint8_t)(PROFILE_COMPAT_BEACON_FRAMES + PROFILE_ENROL_ROOT_FRAMES))
+
+/*
+ * Reassemble the wrapped root from the logged stream, as the new receiver does
+ * once the window has closed: the beacon set at six, frames 2..5. Nothing is
+ * read from the node's state.
+ */
+static int root_from_air(uint8_t *out24)
+{
+	uint8_t  have = 0u;
+	uint32_t i;
+
+	for (i = 0u; i < log_n && i < SLOTS; i++) {
+		const uint8_t *b = log_buf[i].body;
+		uint8_t        idx = (uint8_t)(b[1] >> 4);
+
+		if ((b[0] & PROFILE_COMPAT_PAGE_MASK) !=
+			    PROFILE_COMPAT_PAGE_BEACON ||
+		    (uint8_t)((b[1] & 0x0Fu) + 1u) != ROOT_SET_COUNT ||
+		    idx < PROFILE_COMPAT_BEACON_FRAMES) {
+			continue;
+		}
+		idx = (uint8_t)(idx - PROFILE_COMPAT_BEACON_FRAMES);
+		memcpy(&out24[(size_t)idx * PROFILE_ENROL_FRAME_PAYLOAD], &b[2],
+		       PROFILE_ENROL_FRAME_PAYLOAD);
+		have |= (uint8_t)(1u << idx);
+	}
+	return (have == (uint8_t)((1u << PROFILE_ENROL_ROOT_FRAMES) - 1u)) ? 0
+									   : -EAGAIN;
+}
+
+/* Feed the logged stretch that began at `first_slot` to another receiver, at
+ * the instants run_hr() sent it. */
+static void feed(uint8_t ch, uint32_t first_slot)
+{
+	uint64_t period = period_us(PROFILE_HR_PERIOD);
+	uint32_t i;
+
+	for (i = 0u; i < log_n && i < SLOTS; i++) {
+		const uint8_t *b = log_buf[i].body;
+
+		zassert_equal(RADIANT_SEC_OK,
+			      radiant_sec_compat_rx(
+				      ch, sub_of(b), b, 8u,
+				      T_ORIGIN + (uint64_t)(first_slot + i) *
+							 period));
+	}
+}
+
 /* Bring the new receiver's own pairing context up and produce its public key. */
 static void peer_up(const uint8_t *scalar, uint8_t *pub_out)
 {
@@ -472,12 +526,16 @@ ZTEST(profile_enrol, test_a_second_receiver_joins_and_the_first_stream_holds)
 	struct radiant_sec_stats sstats;
 	uint8_t                  air[PROFILE_ENROL_SET_BYTES];
 	uint8_t                  check[PROFILE_ENROL_CHECK_BYTES];
+	uint8_t                  wrapped[PROFILE_ENROL_WRAPPED_BYTES];
 	uint8_t                  peer_pub[32];
 	uint8_t                  frames[PROFILE_ENROL_FRAMES][8];
 	uint32_t                 node_fp = 0u;
 	uint32_t                 peer_fp = 0u;
 	uint32_t                 tier1;
+	uint32_t                 tier1_late;
 	uint32_t                 data_pages = 0u;
+	uint32_t                 delivered = 0u;
+	bool                     shrunk = false;
 	uint32_t                 i;
 	int                      rc;
 	uint8_t                  k;
@@ -491,7 +549,9 @@ ZTEST(profile_enrol, test_a_second_receiver_joins_and_the_first_stream_holds)
 	 * and no unverified window.
 	 */
 	give_id(NODE_CH, NODE_DEVNUM);
-	give_id(PEER_CH, PEER_DEVNUM);
+	/* The receiver tracks the node, so its channel carries the node's ID:
+	 * the device number the delivered root is bound to. */
+	give_id(PEER_CH, NODE_DEVNUM);
 	keys_up(PROFILE_HR_PERIOD);
 
 	hr_cfg_fill(&hcfg);
@@ -501,8 +561,8 @@ ZTEST(profile_enrol, test_a_second_receiver_joins_and_the_first_stream_holds)
 	enrol_up(&pe, PROFILE_ENROL_PHYSICAL, node_scalar);
 	zassert_equal(0, profile_enrol_attach(&pe, &pc));
 
-	radiant_sec_get_stats(NODE_CH, &sstats);
-	zassert_equal(0u, sstats.enrolments);
+	radiant_sec_compat_get_stats(NODE_CH, &st);
+	zassert_equal(0u, st.enrolments);
 
 	/* The physical action. */
 	zassert_equal(0, profile_enrol_physical_action(&pe, T_ORIGIN));
@@ -534,19 +594,27 @@ ZTEST(profile_enrol, test_a_second_receiver_joins_and_the_first_stream_holds)
 	/* ── Both ends reach the same six digits ────────────────────────── */
 	zassert_equal(0, profile_enrol_fingerprint(&pe, &node_fp));
 	zassert_equal(RADIANT_SEC_OK,
-		      radiant_sec_pair_peer_uncommitted(PEER_CH, air, &peer_fp));
+		      radiant_sec_pair_join(PEER_CH, air, &peer_fp));
 	zassert_equal(node_fp, peer_fp, "%u vs %u", node_fp, peer_fp);
 	zassert_true(node_fp < 1000000u);
 
-	/* ── The counter moved exactly once ─────────────────────────────── */
+	/* ── The counter moved exactly once, beside the root that went out ─
+	 * A compat-only node counts in its compat context, and no secured
+	 * context was created on it - to count, or to hold a DH root. */
+	radiant_sec_compat_get_stats(NODE_CH, &st);
+	zassert_equal(1u, st.enrolments, "got %u", st.enrolments);
 	radiant_sec_get_stats(NODE_CH, &sstats);
-	zassert_equal(1u, sstats.enrolments, "got %u", sstats.enrolments);
+	zassert_equal(0u, sstats.enrolments);
+	zassert_equal(RADIANT_SEC_ENOKEY,
+		      radiant_sec_configure(NODE_CH, RADIANT_SEC_SW_AUTH, 2u,
+					    RADIANT_SEC_PAGE_LO_DEFAULT,
+					    RADIANT_SEC_PAGE_HI_DEFAULT));
 
 	/* ── ONE PAIRING PER WINDOW ─────────────────────────────────────── */
 	zassert_false(profile_enrol_is_open(&pe));
 	zassert_equal(-EINVAL, profile_enrol_on_ack_data(&pe, frames[0], 8u));
-	radiant_sec_get_stats(NODE_CH, &sstats);
-	zassert_equal(1u, sstats.enrolments);
+	radiant_sec_compat_get_stats(NODE_CH, &st);
+	zassert_equal(1u, st.enrolments);
 
 	/* ── AND THE FIRST RECEIVER'S STREAM WAS UNINTERRUPTED ──────────── */
 
@@ -589,6 +657,63 @@ ZTEST(profile_enrol, test_a_second_receiver_joins_and_the_first_stream_holds)
 	 * in eight, so at worst 7/8 of the run stays the sensor's own pages.
 	 * Below 3/4 would mean the window displaced more than it's allowed. */
 	zassert_true(data_pages * 4u >= SLOTS * 3u, "%u of %u", data_pages, SLOTS);
+
+	/* ── THE DELIVERY: the next stretch carries the node's root, wrapped ─
+	 * Four frames, the set at six with the pairing bit down, for a bounded
+	 * number of passes; then the set is the plain beacon again. */
+	run_hr(&hr, SLOTS, SLOTS);
+	zassert_equal(0, root_from_air(wrapped), "no root in %u slots", SLOTS);
+	for (i = 0u; i < log_n && i < SLOTS; i++) {
+		const uint8_t *b = log_buf[i].body;
+		uint8_t        count = (uint8_t)((b[1] & 0x0Fu) + 1u);
+
+		if ((b[0] & PROFILE_COMPAT_PAGE_MASK) !=
+		    PROFILE_COMPAT_PAGE_BEACON) {
+			continue;
+		}
+		if (count == PROFILE_COMPAT_BEACON_FRAMES) {
+			shrunk = true;
+			continue;
+		}
+		/* Never the public key again, and never six after two. */
+		zassert_equal(ROOT_SET_COUNT, count, "slot %u", i);
+		zassert_false(shrunk, "slot %u", i);
+		if ((b[1] >> 4) == 0u) {
+			zassert_equal(0u, b[2] & PROFILE_COMPAT_CAP_PAIRING_OPEN);
+		}
+		if ((b[1] >> 4) >= PROFILE_COMPAT_BEACON_FRAMES) {
+			delivered++;
+		}
+	}
+	zassert_equal(PROFILE_ENROL_ROOT_FRAMES * PROFILE_ENROL_DELIVER_CYCLES,
+		      delivered, "%u", delivered);
+	zassert_equal(0u, profile_enrol_frame_count(&pe, T_ORIGIN));
+
+	/* The node's root never moved: the receiver that was already there
+	 * verified every Tier I window of both stretches. */
+	tier1_late = count_page(PROFILE_COMPAT_PAGE_ATTEST_I);
+	zassert_true(tier1_late > 0u);
+	radiant_sec_compat_get_stats(WATCHER_CH, &st);
+	zassert_equal(tier1 + tier1_late, st.tier1_verified, "%u",
+		      st.tier1_verified);
+	zassert_equal(0u, st.tier1_unverified);
+
+	/* ── The new receiver installs what was delivered - the node's own
+	 *    root - and verifies the same stream with it ────────────────── */
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_pair_accept_root(PEER_CH, wrapped,
+						   RADIANT_SEC_PAIR_INTO_COMPAT));
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_compat_configure(PEER_CH, RX_SWITCHES, TEST_N,
+						   TEST_T_S));
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_compat_set_epoch(PEER_CH, TEST_EPOCH, T_ORIGIN,
+						   0u, PROFILE_HR_PERIOD));
+	feed(PEER_CH, SLOTS);
+	radiant_sec_compat_get_stats(PEER_CH, &st);
+	zassert_equal(tier1_late, st.tier1_verified, "%u", st.tier1_verified);
+	zassert_equal(0u, st.tier1_unverified);
+	zassert_equal(1u, st.enrolments);
 }
 
 /* ═══ The pairing-open bit, and the set that grows ═══════════════════════ */
@@ -1056,6 +1181,176 @@ ZTEST(profile_enrol, test_init_refuses_a_configuration_that_cannot_work)
 	zassert_equal(-EINVAL, profile_enrol_init(&pe, NULL));
 }
 
+/* ═══ The delivery ═══════════════════════════════════════════════════════ */
+
+/* One window, start to finish, through the direct entry points (no beacon):
+ * the node's set as it went out, and the peer's answer. */
+static void window_completes(struct profile_enrol *pe, uint8_t *node_set)
+{
+	uint8_t pub[32];
+	uint8_t set[PROFILE_ENROL_FRAMES][8];
+	uint8_t k;
+
+	zassert_equal(0, profile_enrol_physical_action(pe, T_ORIGIN));
+	for (k = 0u; k < PROFILE_ENROL_FRAMES; k++) {
+		zassert_true(profile_enrol_frame(
+			pe, k, &node_set[(size_t)k * PROFILE_ENROL_FRAME_PAYLOAD]));
+	}
+	peer_up(peer_scalar, pub);
+	peer_set(pub, set);
+	for (k = 0u; k < PROFILE_ENROL_FRAMES - 1u; k++) {
+		zassert_equal(0, profile_enrol_on_ack_data(pe, set[k], 8u));
+	}
+	zassert_equal(1, profile_enrol_on_ack_data(
+				 pe, set[PROFILE_ENROL_FRAMES - 1u], 8u));
+}
+
+ZTEST(profile_enrol, test_the_delivery_is_bounded_and_holds_off_a_new_window)
+{
+	struct profile_enrol pe;
+	uint8_t              node_set[PROFILE_ENROL_SET_BYTES];
+	uint8_t              first[PROFILE_ENROL_WRAPPED_BYTES];
+	uint8_t              payload[8];
+	uint32_t             sent;
+	uint8_t              k;
+
+	give_id(NODE_CH, NODE_DEVNUM);
+	give_id(PEER_CH, NODE_DEVNUM);
+	enrol_up(&pe, PROFILE_ENROL_PHYSICAL, node_scalar);
+	window_completes(&pe, node_set);
+
+	/* Four frames, not a window: no public key, nothing open. */
+	zassert_false(profile_enrol_is_open(&pe));
+	zassert_equal(PROFILE_ENROL_ROOT_FRAMES,
+		      profile_enrol_frame_count(&pe, T_ORIGIN));
+	zassert_false(profile_enrol_frame(&pe, PROFILE_ENROL_ROOT_FRAMES,
+					  payload));
+
+	/* A press during the delivery would cut it short: refused. */
+	zassert_equal(-EBUSY, profile_enrol_physical_action(&pe, T_ORIGIN));
+
+	/* Every frame the stated number of times, the same bytes each pass,
+	 * then nothing. */
+	for (sent = 0u;
+	     sent < PROFILE_ENROL_ROOT_FRAMES * PROFILE_ENROL_DELIVER_CYCLES;
+	     sent++) {
+		k = (uint8_t)(sent % PROFILE_ENROL_ROOT_FRAMES);
+		zassert_equal(PROFILE_ENROL_ROOT_FRAMES,
+			      profile_enrol_frame_count(&pe, T_ORIGIN));
+		zassert_true(profile_enrol_frame(&pe, k, payload), "%u", sent);
+		if (sent < PROFILE_ENROL_ROOT_FRAMES) {
+			memcpy(&first[(size_t)k * PROFILE_ENROL_FRAME_PAYLOAD],
+			       payload, PROFILE_ENROL_FRAME_PAYLOAD);
+		} else {
+			zassert_mem_equal(
+				&first[(size_t)k * PROFILE_ENROL_FRAME_PAYLOAD],
+				payload, PROFILE_ENROL_FRAME_PAYLOAD);
+		}
+	}
+	zassert_equal(0u, profile_enrol_frame_count(&pe, T_ORIGIN));
+	zassert_false(profile_enrol_frame(&pe, 0u, payload));
+
+	/* What went out opens at the peer. */
+	zassert_equal(RADIANT_SEC_OK, radiant_sec_pair_join(PEER_CH, node_set,
+							     NULL));
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_pair_accept_root(PEER_CH, first,
+						   RADIANT_SEC_PAIR_INTO_SEC));
+
+	/* And the next window opens normally. */
+	zassert_equal(0, profile_enrol_physical_action(
+				 &pe, T_ORIGIN + 120ull * US_PER_S));
+	zassert_equal(PROFILE_ENROL_FRAMES,
+		      profile_enrol_frame_count(&pe,
+						T_ORIGIN + 120ull * US_PER_S));
+}
+
+ZTEST(profile_enrol, test_closing_ends_a_delivery)
+{
+	struct profile_enrol pe;
+	uint8_t              node_set[PROFILE_ENROL_SET_BYTES];
+	uint8_t              payload[8];
+
+	give_id(NODE_CH, NODE_DEVNUM);
+	give_id(PEER_CH, NODE_DEVNUM);
+	enrol_up(&pe, PROFILE_ENROL_PHYSICAL, node_scalar);
+	window_completes(&pe, node_set);
+	zassert_true(profile_enrol_frame(&pe, 0u, payload));
+
+	profile_enrol_close(&pe);
+	zassert_equal(0u, profile_enrol_frame_count(&pe, T_ORIGIN));
+	zassert_false(profile_enrol_frame(&pe, 0u, payload));
+	zassert_equal(0, profile_enrol_physical_action(&pe, T_ORIGIN));
+}
+
+ZTEST(profile_enrol, test_a_live_secured_root_survives_an_enrolment)
+{
+	struct profile_enrol     pe;
+	struct radiant_sec_stats sstats;
+	uint8_t                  node_set[PROFILE_ENROL_SET_BYTES];
+	uint8_t                  wrapped[PROFILE_ENROL_WRAPPED_BYTES];
+	uint8_t                  plain[8] = { RADIANT_SEC_PAGE_LO_DEFAULT, 0u,
+					      0x11u, 0x22u, 0x33u, 0x44u,
+					      0x55u, 0x66u };
+	uint8_t                  a[8];
+	uint8_t                  b[8];
+	uint64_t                 t;
+	uint8_t                  k;
+
+	/* A plain secured channel (no compat context), armed and running. The
+	 * enrolment must leave it so - no set_key, so its epoch gate is never
+	 * reset - and the receiver must end up with this same root. */
+	give_id(NODE_CH, NODE_DEVNUM);
+	give_id(PEER_CH, NODE_DEVNUM);
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_set_key(NODE_CH, compat_root, 128u,
+					  NODE_DEVNUM));
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_configure(NODE_CH, RADIANT_SEC_SW_CONF, 2u,
+					    RADIANT_SEC_PAGE_LO_DEFAULT,
+					    RADIANT_SEC_PAGE_HI_DEFAULT));
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_set_epoch(NODE_CH, 3u, 0u, 8182u));
+	zassert_true(radiant_sec_channel_is_secured(NODE_CH));
+
+	enrol_up(&pe, PROFILE_ENROL_PHYSICAL, node_scalar);
+	window_completes(&pe, node_set);
+	zassert_true(radiant_sec_channel_is_secured(NODE_CH));
+	radiant_sec_get_stats(NODE_CH, &sstats);
+	zassert_equal(1u, sstats.enrolments);
+
+	for (k = 0u; k < PROFILE_ENROL_ROOT_FRAMES; k++) {
+		zassert_true(profile_enrol_frame(
+			&pe, k, &wrapped[(size_t)k * PROFILE_ENROL_FRAME_PAYLOAD]));
+	}
+	zassert_equal(RADIANT_SEC_OK, radiant_sec_pair_join(PEER_CH, node_set,
+							     NULL));
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_pair_accept_root(PEER_CH, wrapped,
+						   RADIANT_SEC_PAIR_INTO_SEC));
+
+	/* Same root: under one epoch, device number and slot, the node and
+	 * the receiver encrypt a page to the same bytes. The epoch is set on
+	 * both explicitly; a freshly installed root is unarmed until then. */
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_configure(PEER_CH, RADIANT_SEC_SW_CONF, 2u,
+					    RADIANT_SEC_PAGE_LO_DEFAULT,
+					    RADIANT_SEC_PAGE_HI_DEFAULT));
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_set_epoch(NODE_CH, 7u, 0u, 8182u));
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_set_epoch(PEER_CH, 7u, 0u, 8182u));
+	t = (uint64_t)radiant_radio_now() + 3000000u;
+	memcpy(a, plain, sizeof(a));
+	memcpy(b, plain, sizeof(b));
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_tx_transform(NODE_CH, a, 8u, t));
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_tx_transform(PEER_CH, b, 8u, t));
+	zassert_false(memcmp(a, plain, sizeof(a)) == 0);
+	zassert_mem_equal(a, b, sizeof(a));
+}
+
 /* ═══ compat-C8: the clause C7 deferred ══════════════════════════════════ */
 
 #if defined(CONFIG_RADIANT_SEC_COMPAT)
@@ -1105,8 +1400,9 @@ ZTEST(profile_enrol, test_a_private_node_gains_a_receiver_that_derives_it)
 	struct profile_private     pp;
 	struct profile_private_cfg pcfg;
 	struct profile_enrol       pe;
-	struct radiant_sec_stats   sstats;
+	struct radiant_sec_compat_stats st;
 	uint8_t  air[PROFILE_ENROL_SET_BYTES];
+	uint8_t  wrapped[PROFILE_ENROL_WRAPPED_BYTES];
 	uint8_t  have = 0u;
 	uint8_t  peer_pub[32];
 	uint8_t  frames[PROFILE_ENROL_FRAMES][8];
@@ -1121,7 +1417,8 @@ ZTEST(profile_enrol, test_a_private_node_gains_a_receiver_that_derives_it)
 	uint8_t  k;
 
 	give_id(NODE_CH, NODE_DEVNUM);
-	give_id(PEER_CH, PEER_DEVNUM);
+	/* Tracking the node: the receiver's channel carries the node's ID. */
+	give_id(PEER_CH, NODE_DEVNUM);
 	keys_up(PROFILE_HR_PERIOD);
 	g_enter_calls = 0u;
 	g_private_devnum = 0u;
@@ -1242,24 +1539,59 @@ ZTEST(profile_enrol, test_a_private_node_gains_a_receiver_that_derives_it)
 				 &pe, frames[PROFILE_ENROL_FRAMES - 1u], 8u));
 	zassert_equal(0, profile_enrol_fingerprint(&pe, &node_fp));
 	zassert_equal(RADIANT_SEC_OK,
-		      radiant_sec_pair_peer_uncommitted(PEER_CH, air, &peer_fp));
+		      radiant_sec_pair_join(PEER_CH, air, &peer_fp));
 	zassert_equal(node_fp, peer_fp);
 
-	radiant_sec_get_stats(NODE_CH, &sstats);
-	zassert_equal(1u, sstats.enrolments);
+	radiant_sec_compat_get_stats(NODE_CH, &st);
+	zassert_equal(1u, st.enrolments);
+
+	/* ── The root follows on the same rotation, four frames wide ────── */
+	log_reset();
+	cursor = 0u;
+	for (i = 0u; i < PRIVATE_SLOTS; i++) {
+		uint64_t now = T_ORIGIN + (uint64_t)(PRIVATE_SLOTS + i) *
+						  period_us(PROFILE_HR_PERIOD);
+		uint8_t  n = profile_enrol_frame_count(&pe, now);
+		uint8_t  body[8];
+
+		if ((i % 8u) != 0u || n == 0u) {
+			continue;
+		}
+		zassert_equal(PROFILE_ENROL_ROOT_FRAMES, n);
+		body[0] = 0x40u;
+		body[1] = (uint8_t)((cursor << 4) | (n - 1u));
+		zassert_true(profile_enrol_frame(&pe, cursor, &body[2]));
+		cursor = (uint8_t)((cursor + 1u) % n);
+		log_put(body, PROFILE_SLOT_DATA);
+	}
+	zassert_equal(PROFILE_ENROL_ROOT_FRAMES * PROFILE_ENROL_DELIVER_CYCLES,
+		      log_n);
+	have = 0u;
+	for (i = 0u; i < log_n && i < SLOTS; i++) {
+		const uint8_t *b = log_buf[i].body;
+		uint8_t        idx = (uint8_t)(b[1] >> 4);
+
+		zassert_equal(PROFILE_ENROL_ROOT_FRAMES - 1u, b[1] & 0x0Fu);
+		memcpy(&wrapped[(size_t)idx * PROFILE_ENROL_FRAME_PAYLOAD],
+		       &b[2], PROFILE_ENROL_FRAME_PAYLOAD);
+		have |= (uint8_t)(1u << idx);
+	}
+	zassert_equal((uint8_t)((1u << PROFILE_ENROL_ROOT_FRAMES) - 1u), have);
 
 	/* ── ...AND THE NEW RECEIVER FINDS THE NODE BY DERIVING IT ──────── */
 	/*
 	 * A completed enrolment is exactly "this receiver now holds the group
-	 * root", so its compat context is keyed with that root - the same
-	 * operation a host-provisioned receiver performs, and the reason
-	 * enrolment is additive at all. From there it computes where the node
-	 * is with no announcement to have missed and no beacon to read - the
-	 * clause this test was written to pay.
+	 * root": its compat context is keyed with the root the node delivered,
+	 * not one handed to it here, and the reason enrolment is additive at
+	 * all. From there it computes where the node is with no announcement
+	 * to have missed and no beacon to read - the clause this test was
+	 * written to pay.
 	 */
 	zassert_equal(RADIANT_SEC_OK,
-		      radiant_sec_compat_set_key(PEER_CH, compat_root, 128,
-						 NODE_DEVNUM));
+		      radiant_sec_pair_accept_root(PEER_CH, wrapped,
+						   RADIANT_SEC_PAIR_INTO_COMPAT));
+	radiant_sec_compat_get_stats(PEER_CH, &st);
+	zassert_equal(1u, st.enrolments);
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_compat_locator(PEER_CH, TEST_EPOCH, 0u,
 						 &derived));

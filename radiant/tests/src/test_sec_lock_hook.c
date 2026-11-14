@@ -20,6 +20,7 @@
 
 #include <radiant/radiant_channel.h>
 #include <radiant/radiant_sec.h>
+#include <radiant/radiant_sec_compat.h>
 
 #include "fake_radio.h"
 
@@ -161,6 +162,7 @@ ZTEST(sec_lock_hook, test_every_pairing_entry_point_asks_the_port_for_its_lock)
 	uint8_t  pub[RADIANT_SEC_X25519_BYTES];
 	uint8_t  nonce[RADIANT_SEC_PAIR_NONCE_BYTES] = {2};
 	uint8_t  commit[RADIANT_SEC_BLOCK_BYTES];
+	uint8_t  wrapped[RADIANT_SEC_PAIR_WRAPPED_BYTES] = {0};
 	uint32_t fp;
 
 	EXPECT_CHECKED(radiant_sec_pair_enter, radiant_sec_pair_enter(0u, 5u));
@@ -177,7 +179,14 @@ ZTEST(sec_lock_hook, test_every_pairing_entry_point_asks_the_port_for_its_lock)
 	EXPECT_CHECKED(radiant_sec_pair_peer_nonce,
 		       radiant_sec_pair_peer_nonce(0u, nonce, &fp));
 	EXPECT_CHECKED(radiant_sec_pair_peer_uncommitted,
-		       radiant_sec_pair_peer_uncommitted(0u, pub, &fp));
+		       radiant_sec_pair_peer_uncommitted(0u, pub, wrapped, &fp));
+	EXPECT_CHECKED(radiant_sec_pair_join,
+		       radiant_sec_pair_join(0u, pub, &fp));
+	EXPECT_CHECKED(radiant_sec_pair_accept_root,
+		       radiant_sec_pair_accept_root(0u, wrapped,
+						    RADIANT_SEC_PAIR_INTO_SEC));
+	EXPECT_CHECKED(radiant_sec_wrap_root,
+		       radiant_sec_wrap_root(200u, NULL, NULL, wrapped));
 	EXPECT_CHECKED(radiant_sec_pair_fingerprint,
 		       radiant_sec_pair_fingerprint(0u, &fp));
 	EXPECT_CHECKED(radiant_sec_pair_leave, radiant_sec_pair_leave(0u));
@@ -211,11 +220,14 @@ ZTEST(sec_lock_hook, test_a_peer_lost_inside_the_exchange_does_not_corrupt_it)
 	};
 	uint8_t  pub_a[32];
 	uint8_t  pub_b[32];
+	uint8_t  w_a[RADIANT_SEC_PAIR_WRAPPED_BYTES];
+	uint8_t  w_b[RADIANT_SEC_PAIR_WRAPPED_BYTES];
 	uint32_t fp_a = 0;
 	uint32_t fp_b = 0;
 
 	radiant_sec_pair_reset();
 	radiant_sec_reset();
+	radiant_sec_compat_reset();
 	fake_radio_reset();
 	radiant_channel_init();
 	zassert_equal(RADIANT_CH_OK, radiant_channel_assign(0u, 0x10u, 0u, 0u));
@@ -235,9 +247,9 @@ ZTEST(sec_lock_hook, test_a_peer_lost_inside_the_exchange_does_not_corrupt_it)
 	 * uncommitted path is the one with the DH and the install in one call,
 	 * which is the window this covers; the committed path installs through
 	 * the same pair_finish(). */
-	zassert_equal(0, radiant_sec_pair_peer_uncommitted(1u, pub_a, &fp_b));
+	zassert_equal(0, radiant_sec_pair_peer_uncommitted(1u, pub_a, w_b, &fp_b));
 	lose_peer_on = 0;
-	zassert_equal(0, radiant_sec_pair_peer_uncommitted(0u, pub_b, &fp_a));
+	zassert_equal(0, radiant_sec_pair_peer_uncommitted(0u, pub_b, w_a, &fp_a));
 	zassert_equal(-1, lose_peer_on, "the loss was never injected");
 	zassert_equal(fp_b, fp_a,
 		      "a peer lost inside the exchange corrupted it: fingerprint "

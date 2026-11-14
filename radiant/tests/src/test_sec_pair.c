@@ -19,6 +19,7 @@
 #include <string.h>
 
 #include <radiant/radiant_sec.h>
+#include <radiant/radiant_sec_compat.h>
 #include <radiant/radiant_channel.h>
 #include <radiant/radiant_radio_hal.h>
 
@@ -92,11 +93,18 @@ static const uint8_t VEC_ROOT_UNCOMMITTED[16] = {
 
 #define REF_CH 6u   /* keyed directly with a Python-derived root */
 
+/* The wrapped root out of an enrolment whose output the test ignores. */
+static uint8_t w[RADIANT_SEC_PAIR_WRAPPED_BYTES];
+
 static void pair_before(void *f)
 {
 	ARG_UNUSED(f);
 	radiant_sec_pair_reset();
 	radiant_sec_reset();
+	/* A sensor delivers a compat root in preference to a secured one, so a
+	 * compat context another suite left on these channels would change
+	 * what an enrolment here sends. */
+	radiant_sec_compat_reset();
 
 	/* A pairing installs against the channel's own device number, so the
 	 * channel module has to be live even though nothing here touches the
@@ -499,27 +507,225 @@ ZTEST(sec_pair, test_a_substituted_key_does_not_match)
 	zassert_false(has_key(A_CH));
 }
 
+/* Over-air enrolment's two halves, sensor A and receiver B: A runs the DH and
+ * wraps its root into `wrapped`, B runs the DH and holds the wrap keys. */
+static void enrol(uint8_t *wrapped, uint32_t *fp_a, uint32_t *fp_b)
+{
+	uint8_t pub_a[32];
+	uint8_t pub_b[32];
+
+	key_up(A_CH, scalar_a, pub_a);
+	key_up(B_CH, scalar_b, pub_b);
+	zassert_ok(radiant_sec_pair_peer_uncommitted(A_CH, pub_b, wrapped,
+						     fp_a));
+	zassert_ok(radiant_sec_pair_join(B_CH, pub_a, fp_b));
+}
+
 ZTEST(sec_pair, test_enrolment_pairs_through_the_uncommitted_path)
 {
-	uint8_t  pub_a[32];
-	uint8_t  pub_b[32];
+	uint8_t  wrapped[RADIANT_SEC_PAIR_WRAPPED_BYTES];
+	uint32_t fp_a = 0u;
+	uint32_t fp_b = 1u;
+	uint32_t fp = 2u;
+
+	/* profile_enrol.c's path on a sensor that holds no root yet: there is
+	 * nothing to deliver and nobody to lock out, so the exchange's
+	 * enrolment root becomes A's first, and B receives that one wrapped.
+	 * Both ends agree, and the values are the ones radiant_crypto.py
+	 * computes for these keys - documented as grindable, kept consistent. */
+	give_id(A_CH, A_DEVNUM);
+	give_id(B_CH, B_DEVNUM);
+	enrol(wrapped, &fp_a, &fp_b);
+	zassert_equal(fp_a, fp_b);
+	zassert_equal(VEC_FP_UNCOMMITTED, fp_a, "%u", fp_a);
+	zassert_ok(radiant_sec_pair_fingerprint(B_CH, &fp));
+	zassert_equal(fp_a, fp);
+
+	/* The join installs nothing; the delivered root does. */
+	zassert_false(has_key(B_CH));
+	zassert_ok(radiant_sec_pair_accept_root(B_CH, wrapped,
+						RADIANT_SEC_PAIR_INTO_SEC));
+	assert_root_is(A_CH, A_DEVNUM, VEC_ROOT_UNCOMMITTED);
+	assert_root_is(B_CH, B_DEVNUM, VEC_ROOT_UNCOMMITTED);
+	zassert_equal(1u, enrolments(A_CH));
+	zassert_equal(1u, enrolments(B_CH));
+}
+
+/* The root A holds in the delivery tests, and the 24 bytes radiant_crypto.py
+ * wraps it to for these two keys (TestEnrolRootDelivery.WRAPPED). */
+static const uint8_t live_root[16] = {
+	0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+	0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+};
+static const uint8_t VEC_WRAPPED[RADIANT_SEC_PAIR_WRAPPED_BYTES] = {
+	0xd1, 0x43, 0xed, 0x95, 0x37, 0xda, 0x98, 0x82,
+	0xca, 0xf0, 0xbd, 0xd2, 0xb6, 0x90, 0xf3, 0xc0,
+	0x61, 0x39, 0x17, 0x5e, 0x49, 0xf3, 0xd3, 0xff,
+};
+
+/* A secured, armed channel holding live_root at epoch 3. */
+static void live_up(void)
+{
+	give_id(A_CH, A_DEVNUM);
+	zassert_ok(radiant_sec_set_key(A_CH, live_root, 128u, A_DEVNUM));
+	zassert_ok(radiant_sec_configure(A_CH, RADIANT_SEC_SW_AUTH, 2u,
+					 RADIANT_SEC_PAGE_LO_DEFAULT,
+					 RADIANT_SEC_PAGE_HI_DEFAULT));
+	zassert_ok(radiant_sec_set_epoch(A_CH, 3u, 0u, 8182u));
+	zassert_true(radiant_sec_channel_is_secured(A_CH));
+}
+
+/*
+ * Security review 2026-11-13, item 6: enrolment used to install the DH key as
+ * the sensor's root, locking out every receiver it already had. Now the live
+ * root is what goes out, sealed, and the channel never stops transmitting
+ * under it: still armed (no set_key ran, so its epoch gate was not touched),
+ * still the same root, and the receiver ends up holding that root.
+ */
+ZTEST(sec_pair, test_enrolment_delivers_the_live_root_and_leaves_it_running)
+{
+	uint8_t  wrapped[RADIANT_SEC_PAIR_WRAPPED_BYTES];
 	uint32_t fp_a = 0u;
 	uint32_t fp_b = 1u;
 
-	/* profile_enrol.c's path: DH and install in one call, no nonces. Both
-	 * ends agree, and the value is the one radiant_crypto.py computes for
-	 * these keys - documented as grindable, kept consistent. */
+	live_up();
+	give_id(B_CH, B_DEVNUM);
+	enrol(wrapped, &fp_a, &fp_b);
+	zassert_equal(fp_a, fp_b);
+	zassert_mem_equal(VEC_WRAPPED, wrapped, sizeof(wrapped));
+
+	zassert_true(radiant_sec_channel_is_secured(A_CH));
+	zassert_equal(1u, enrolments(A_CH));
+
+	zassert_ok(radiant_sec_pair_accept_root(B_CH, wrapped,
+						RADIANT_SEC_PAIR_INTO_SEC));
+	zassert_equal(1u, enrolments(B_CH));
+	/* assert_root_is() sets epoch 7 on both, explicitly: the receiver's
+	 * fresh root is unarmed until an epoch arrives, whatever set_key's
+	 * same-root rule. */
+	assert_root_is(B_CH, B_DEVNUM, live_root);
+	assert_root_is(A_CH, A_DEVNUM, live_root);
+}
+
+ZTEST(sec_pair, test_a_tampered_wrapped_root_installs_nothing)
+{
+	uint8_t  wrapped[RADIANT_SEC_PAIR_WRAPPED_BYTES];
+	uint8_t  bad[RADIANT_SEC_PAIR_WRAPPED_BYTES];
+	uint32_t fp_a = 0u;
+	uint32_t fp_b = 0u;
+	uint8_t  i;
+
+	/* Encrypt-then-MAC: one flipped bit anywhere, ciphertext or tag, and
+	 * nothing is decrypted or installed. The join survives each refusal,
+	 * so a forged copy does not cost the receiver the genuine one. */
+	live_up();
+	give_id(B_CH, B_DEVNUM);
+	enrol(wrapped, &fp_a, &fp_b);
+
+	for (i = 0u; i < sizeof(wrapped); i++) {
+		memcpy(bad, wrapped, sizeof(bad));
+		bad[i] ^= 0x01u;
+		zassert_equal(RADIANT_SEC_EBADMAC,
+			      radiant_sec_pair_accept_root(
+				      B_CH, bad, RADIANT_SEC_PAIR_INTO_SEC),
+			      "byte %u", i);
+		zassert_false(has_key(B_CH), "byte %u", i);
+	}
+	zassert_equal(0u, enrolments(B_CH));
+
+	zassert_ok(radiant_sec_pair_accept_root(B_CH, wrapped,
+						RADIANT_SEC_PAIR_INTO_SEC));
+	assert_root_is(B_CH, B_DEVNUM, live_root);
+
+	/* And the join is spent once a root is in. */
+	zassert_equal(RADIANT_SEC_EINVAL,
+		      radiant_sec_pair_accept_root(B_CH, wrapped,
+						   RADIANT_SEC_PAIR_INTO_SEC));
+}
+
+ZTEST(sec_pair, test_a_man_in_the_middle_cannot_unwrap_the_delivered_root)
+{
+	uint8_t  wrapped[RADIANT_SEC_PAIR_WRAPPED_BYTES];
+	uint8_t  pub_a[32];
+	uint8_t  pub_m[32];
+	uint32_t fp_a = 0u;
+	uint32_t fp_b = 0u;
+	uint32_t fp_m = 0u;
+
+	/* A listener that joined against A's public key with its own scalar -
+	 * a second receiver, or a man in the middle who lost the race - holds
+	 * a different DH, so different wrap keys: the root A delivered to B
+	 * is opaque to it. */
+	live_up();
+	give_id(B_CH, B_DEVNUM);
+	give_id(M1_CH, M_DEVNUM);
+	enrol(wrapped, &fp_a, &fp_b);
+	zassert_ok(radiant_sec_pair_local_pubkey(A_CH, pub_a));
+	key_up(M1_CH, scalar_m, pub_m);
+	zassert_ok(radiant_sec_pair_join(M1_CH, pub_a, &fp_m));
+	zassert_not_equal(fp_a, fp_m);
+
+	zassert_equal(RADIANT_SEC_EBADMAC,
+		      radiant_sec_pair_accept_root(M1_CH, wrapped,
+						   RADIANT_SEC_PAIR_INTO_SEC));
+	zassert_false(has_key(M1_CH));
+	zassert_ok(radiant_sec_pair_accept_root(B_CH, wrapped,
+						RADIANT_SEC_PAIR_INTO_SEC));
+}
+
+ZTEST(sec_pair, test_a_root_is_accepted_only_after_a_join)
+{
+	uint8_t  pub_a[32];
+	uint8_t  pub_b[32];
+	uint32_t fp = 0u;
+
 	give_id(A_CH, A_DEVNUM);
 	give_id(B_CH, B_DEVNUM);
+
+	/* No pairing context at all. */
+	zassert_equal(RADIANT_SEC_EINVAL,
+		      radiant_sec_pair_accept_root(B_CH, VEC_WRAPPED,
+						   RADIANT_SEC_PAIR_INTO_SEC));
+
+	/* A 0xF5-style exchange is not a join: its PRK must never open a
+	 * wrapped root, nor a join finish a commit/reveal. */
+	keys_cross(A_CH, scalar_a, B_CH, scalar_b);
+	zassert_equal(RADIANT_SEC_EINVAL,
+		      radiant_sec_pair_accept_root(B_CH, VEC_WRAPPED,
+						   RADIANT_SEC_PAIR_INTO_SEC));
+	zassert_equal(RADIANT_SEC_EINVAL,
+		      radiant_sec_pair_accept_root(B_CH, NULL,
+						   RADIANT_SEC_PAIR_INTO_SEC));
+
+	/* A join, then a target that does not exist. */
+	radiant_sec_pair_reset();
 	key_up(A_CH, scalar_a, pub_a);
 	key_up(B_CH, scalar_b, pub_b);
-	zassert_ok(radiant_sec_pair_peer_uncommitted(A_CH, pub_b, &fp_a));
-	zassert_ok(radiant_sec_pair_peer_uncommitted(B_CH, pub_a, &fp_b));
-	zassert_equal(fp_a, fp_b);
-	assert_root_is(A_CH, A_DEVNUM, VEC_ROOT_UNCOMMITTED);
-	zassert_equal(VEC_FP_UNCOMMITTED, fp_a, "%u", fp_a);
-	zassert_true(has_key(A_CH) && has_key(B_CH));
-	zassert_equal(1u, enrolments(A_CH));
+	zassert_ok(radiant_sec_pair_join(B_CH, pub_a, &fp));
+	zassert_equal(RADIANT_SEC_EINVAL,
+		      radiant_sec_pair_accept_root(B_CH, VEC_WRAPPED, 2u));
+	zassert_equal(RADIANT_SEC_EINVAL,
+		      radiant_sec_pair_set_nonce(B_CH, RESP, nonce_b, pub_b));
+	zassert_false(has_key(B_CH));
+}
+
+ZTEST(sec_pair, test_a_join_needs_a_device_number_before_it_spends_the_scalar)
+{
+	uint8_t  pub_a[32];
+	uint8_t  pub_b[32];
+	uint32_t fp = 0u;
+
+	give_id(A_CH, A_DEVNUM);
+	key_up(A_CH, scalar_a, pub_a);
+	zassert_ok(radiant_sec_pair_enter(B_CH, 60u));
+	zassert_ok(radiant_sec_pair_set_scalar(B_CH, scalar_b));
+	zassert_ok(radiant_sec_pair_local_pubkey(B_CH, pub_b));
+
+	/* B's channel has no ID: refused with the scalar still there. */
+	zassert_equal(RADIANT_SEC_ENOKEY,
+		      radiant_sec_pair_join(B_CH, pub_a, &fp));
+	give_id(B_CH, B_DEVNUM);
+	zassert_ok(radiant_sec_pair_join(B_CH, pub_a, &fp));
 }
 
 ZTEST(sec_pair, test_a_small_order_peer_key_is_refused)
@@ -541,7 +747,7 @@ ZTEST(sec_pair, test_a_small_order_peer_key_is_refused)
 	zassert_equal(RADIANT_SEC_EINVAL,
 		      radiant_sec_pair_peer(A_CH, one_point));
 	zassert_equal(RADIANT_SEC_EINVAL,
-		      radiant_sec_pair_peer_uncommitted(A_CH, zero_point, &fp));
+		      radiant_sec_pair_peer_uncommitted(A_CH, zero_point, w, &fp));
 
 	/* Nothing was installed by the attempts, and the scalar survived
 	 * them: one injected key does not burn the window. */
@@ -606,7 +812,7 @@ ZTEST(sec_pair, test_nothing_works_before_pairing_mode_is_entered)
 	zassert_equal(RADIANT_SEC_EINVAL,
 		      radiant_sec_pair_peer_nonce(A_CH, nonce_a, &fp));
 	zassert_equal(RADIANT_SEC_EINVAL,
-		      radiant_sec_pair_peer_uncommitted(A_CH, scalar_b, &fp));
+		      radiant_sec_pair_peer_uncommitted(A_CH, scalar_b, w, &fp));
 	zassert_false(radiant_sec_pair_is_open(A_CH));
 }
 
@@ -722,7 +928,7 @@ ZTEST(sec_pair, test_an_exchange_spends_the_scalar)
 	/* A host retry of EXCHANGE with the same peer key. */
 	zassert_equal(RADIANT_SEC_EINVAL, radiant_sec_pair_peer(A_CH, pub_b));
 	zassert_equal(RADIANT_SEC_EINVAL,
-		      radiant_sec_pair_peer_uncommitted(A_CH, pub_b, &fp_a));
+		      radiant_sec_pair_peer_uncommitted(A_CH, pub_b, w, &fp_a));
 
 	/* The first exchange is intact and still completes. */
 	zassert_ok(radiant_sec_pair_peer(B_CH, pub_a));

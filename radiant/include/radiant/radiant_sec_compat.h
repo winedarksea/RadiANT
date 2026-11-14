@@ -233,6 +233,11 @@ struct radiant_sec_compat_stats {
 	uint32_t epoch_recoveries;
 	uint32_t tier2_replays;     /* a window index at or below the last
 				     * verified one: Tier II's replay floor */
+	/* Over-air enrolments that delivered or installed THIS context's root
+	 * (docs/radiant-security.md 11.7.2): radiant_sec_stats' counter, kept
+	 * here so a compat-only node counts them without a secured context
+	 * being created to hold the number. */
+	uint32_t enrolments;
 };
 
 #if defined(CONFIG_RADIANT_SEC_COMPAT)
@@ -496,6 +501,21 @@ enum radiant_sec_verdict radiant_sec_compat_stream_verdict(uint8_t ch,
 
 void radiant_sec_compat_get_stats(uint8_t ch,
 				  struct radiant_sec_compat_stats *out);
+
+#if defined(CONFIG_RADIANT_SEC_PAIRING_X25519)
+/*
+ * INTERNAL, radiant_sec_pair.c's over-air enrolment (radiant_sec.h, "the group
+ * root, delivered"): this channel's compat root sealed into `out`
+ * (RADIANT_SEC_PAIR_WRAPPED_BYTES) without the root leaving this module, and
+ * the hook into stats.enrolments. RADIANT_SEC_ENOKEY when the channel has no
+ * compat root; the stat is a no-op without a context.
+ */
+int  radiant_sec_compat_wrap_root(uint8_t ch,
+				  const struct radiant_sec_key *k_wrap,
+				  const struct radiant_sec_key *k_mac,
+				  uint8_t *out);
+void radiant_sec_compat_stat_enrolment(uint8_t ch);
+#endif
 
 /*
  * ── Epoch recovery ─────────────────────────────────────────────────────────

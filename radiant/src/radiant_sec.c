@@ -879,13 +879,33 @@ void radiant_sec_stat_enrolment(uint8_t ch)
 	RADIANT_SEC_ASSERT_LOCKED();
 	struct sec_ctx *c = ctx_of(ch);
 
-	/* Silent for a channel with no context. Unreachable from the one
-	 * caller (which installs the key first), but a counter that faulted
+	/* Silent for a channel with no context. Unreachable from the callers
+	 * (each installs or wraps a key here first), but a counter that faulted
 	 * on an unkeyed channel would be worse than one that missed a tick. */
 	if (c != NULL) {
 		stat_bump(&c->stats.enrolments);
 	}
 }
+
+#if defined(CONFIG_RADIANT_SEC_PAIRING_X25519)
+int radiant_sec_wrap_root(uint8_t ch, const struct radiant_sec_key *k_wrap,
+			  const struct radiant_sec_key *k_mac, uint8_t *out)
+{
+	RADIANT_SEC_ASSERT_LOCKED();
+	const struct sec_ctx *c = ctx_of(ch);
+
+	/* Over-air enrolment delivers this root rather than replacing it, and
+	 * the sealing starts here because nothing else may read k_root. */
+	if (c == NULL || c->k_root.bits == 0u) {
+		return RADIANT_SEC_ENOKEY;
+	}
+	if (c->k_root.bits != 128u) {
+		return RADIANT_SEC_ENOTSUP;
+	}
+	memcpy(out, c->k_root.b, RADIANT_SEC_BLOCK_BYTES);
+	return radiant_sec_pair_seal(k_wrap, k_mac, out);
+}
+#endif
 
 void radiant_sec_stat_verdict_dropped(uint8_t ch)
 {

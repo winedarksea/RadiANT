@@ -659,6 +659,35 @@ void radiant_sec_compat_get_stats(uint8_t ch,
 	*out = c->stats;
 }
 
+#if defined(CONFIG_RADIANT_SEC_PAIRING_X25519)
+int radiant_sec_compat_wrap_root(uint8_t ch,
+				 const struct radiant_sec_key *k_wrap,
+				 const struct radiant_sec_key *k_mac,
+				 uint8_t *out)
+{
+	const struct compat_ctx *c = ctx_of(ch);
+
+	/* Enrolment delivers this root; it never replaces it. */
+	if (c == NULL || c->k_root.bits == 0u) {
+		return RADIANT_SEC_ENOKEY;
+	}
+	if (c->k_root.bits != 128u) {
+		return RADIANT_SEC_ENOTSUP;
+	}
+	memcpy(out, c->k_root.b, RADIANT_SEC_BLOCK_BYTES);
+	return radiant_sec_pair_seal(k_wrap, k_mac, out);
+}
+
+void radiant_sec_compat_stat_enrolment(uint8_t ch)
+{
+	struct compat_ctx *c = ctx_of(ch);
+
+	if (c != NULL) {
+		stat_bump(&c->stats.enrolments);
+	}
+}
+#endif
+
 enum radiant_sec_verdict radiant_sec_compat_last_verdict(uint8_t ch)
 {
 	const struct compat_ctx *c = ctx_of(ch);

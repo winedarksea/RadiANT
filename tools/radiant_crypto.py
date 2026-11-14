@@ -25,6 +25,8 @@ here.
 
 from __future__ import annotations
 
+import hmac
+
 # ── AES-128, encrypt only ───────────────────────────────────────────────────
 #
 # The same choice the C makes and for the same reason: CTR needs only the
@@ -768,10 +770,59 @@ def pair_root(shared: bytes, pka: bytes, pkb: bytes, na: bytes,
 
 
 def pair_uncommitted(shared: bytes, pub1: bytes, pub2: bytes) -> tuple:
-    """Over-air enrolment's (root, fingerprint): no commitment, both nonces
-    zero, the two keys ordered by value in place of roles. Grindable by a man
-    in the middle - see radiant_sec_pair_peer_uncommitted()."""
+    """Over-air enrolment's (enrolment root, fingerprint): no commitment, both
+    nonces zero, the two keys ordered by value in place of roles. Grindable by
+    a man in the middle - see radiant_sec_pair_peer_uncommitted(). The root is
+    installed only on a sensor channel that holds none; otherwise the sensor's
+    existing root is what is delivered (pair_wrap_root)."""
     lo, hi = sorted((bytes(pub1), bytes(pub2)))
     zero = bytes(PAIR_NONCE_BYTES)
     return (pair_root(shared, lo, hi, zero, zero, PAIR_LABEL_ENROL),
             pair_g2(lo, hi, zero, zero))
+
+
+# ── Over-air enrolment: the group root, delivered ──────────────────────────
+#
+# The mirror of radiant_sec_pair_seal() / radiant_sec_pair_accept_root()
+# (radiant_sec.h; docs/radiant-security.md 11.7). The DH key never becomes a
+# root: it wraps the sensor's existing one for the receiver.
+
+#: radiant_sec.h's RADIANT_SEC_DOM_ENROL_WRAP.
+DOM_ENROL_WRAP = 0x06
+PAIR_LABEL_WRAP = b"RADIANT-enrl-wrap\x00"
+PAIR_LABEL_WMAC = b"RADIANT-enrl-wmac\x00"
+PAIR_WRAP_TAG_BYTES = 8
+PAIR_WRAPPED_BYTES = 16 + PAIR_WRAP_TAG_BYTES
+
+
+def pair_wrap_keys(shared: bytes, pub1: bytes, pub2: bytes) -> tuple:
+    """(K_wrap, K_wrap'): CMAC_PRK(label || PKlo || PKhi), PRK = CMAC_0(DH)."""
+    lo, hi = sorted((bytes(pub1), bytes(pub2)))
+    prk = cmac(bytes(16), bytes(shared))
+    return (cmac(prk, PAIR_LABEL_WRAP + lo + hi),
+            cmac(prk, PAIR_LABEL_WMAC + lo + hi))
+
+
+def pair_wrap_root(shared: bytes, pub1: bytes, pub2: bytes,
+                   root: bytes) -> bytes:
+    """ct || trunc64(CMAC(K_wrap', n || ct)), ct = CTR(K_wrap, n, root)."""
+    if len(root) != 16:
+        raise ValueError(f"a root is 16 bytes, got {len(root)}")
+    k_wrap, k_mac = pair_wrap_keys(shared, pub1, pub2)
+    n = nonce_block(0, 0, 0, DOM_ENROL_WRAP)
+    ct = ctr_xor(k_wrap, n, bytes(root))
+    return ct + cmac(k_mac, n + ct)[:PAIR_WRAP_TAG_BYTES]
+
+
+def pair_unwrap_root(shared: bytes, pub1: bytes, pub2: bytes,
+                     wrapped: bytes):
+    """The root, or None when the tag does not verify (nothing to install)."""
+    if len(wrapped) != PAIR_WRAPPED_BYTES:
+        raise ValueError(f"a wrapped root is {PAIR_WRAPPED_BYTES} bytes, "
+                         f"got {len(wrapped)}")
+    k_wrap, k_mac = pair_wrap_keys(shared, pub1, pub2)
+    n = nonce_block(0, 0, 0, DOM_ENROL_WRAP)
+    ct, tag = bytes(wrapped[:16]), bytes(wrapped[16:])
+    if not hmac.compare_digest(cmac(k_mac, n + ct)[:PAIR_WRAP_TAG_BYTES], tag):
+        return None
+    return ctr_xor(k_wrap, n, ct)

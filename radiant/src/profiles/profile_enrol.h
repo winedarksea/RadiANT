@@ -23,6 +23,17 @@
  * flip. REMOVING a receiver is not symmetric: it means re-provisioning every
  * remaining one, since every keyholder holds the same root.
  *
+ * HOW THE ROOT GETS THERE: the window's X25519 exchange gives the node and the
+ * new receiver a PAIRWISE key, and the node uses it only to wrap the root it
+ * already holds (radiant_sec.h, "the group root, delivered"). The wrapped root
+ * then goes out in a short delivery phase after the window closes, and the
+ * receiver unwraps and installs it. The node's own root, epoch and stream do
+ * not change, so a receiver already listening keeps verifying throughout. A
+ * node that holds no root yet gets the exchange's enrolment root as its first
+ * and delivers that the same way. This module is the node's half; a receiver
+ * drives radiant_sec_pair_join() and radiant_sec_pair_accept_root() itself
+ * (test_profile_enrol.c plays one; no application wires one yet).
+ *
  * THE HONEST LIMIT THIS FILE DOES NOT SOLVE: pairing happens IN THE CLEAR
  * (no prior secret, no out-of-band channel), so an attacker present during
  * the window can be a man in the middle. radiant_sec_pair.c's six-digit
@@ -40,9 +51,11 @@
  * above 0x80 is expressible). So the public key rides the beacon page's own
  * frame set as SIX ADDITIONAL FRAMES: the set grows from two to eight for the
  * window's duration and every frame restates the new count (section 11.5's
- * convention). This file names no page number or frame index -
- * profile_compat.c owns bytes [0..1]; this file owns bytes [2..7] of six
- * frames, same split that keeps profile_hr.c free of a key.
+ * convention). The wrapped root follows as FOUR additional frames, the set
+ * at six, for PROFILE_ENROL_DELIVER_CYCLES passes of the set. This file names
+ * no page number or frame index - profile_compat.c owns bytes [0..1]; this
+ * file owns bytes [2..7] of its frames, same split that keeps profile_hr.c
+ * free of a key.
  *
  * "ON WHICHEVER CHANNEL THE NODE IS CURRENTLY ON" (section 11.7 rule one): a
  * private-mode node (device type 0x60) has no compat channel, so the frames
@@ -95,6 +108,31 @@ extern "C" {
 #define PROFILE_ENROL_CHECK_BYTES 4u
 #define PROFILE_ENROL_SET_BYTES \
 	(PROFILE_ENROL_FRAMES * PROFILE_ENROL_FRAME_PAYLOAD)
+
+/*
+ * The delivery: the 24-byte wrapped root (16 bytes of ciphertext and an 8-byte
+ * tag, RADIANT_SEC_PAIR_WRAPPED_BYTES) in four frames, 4 x 6 = 24 exactly, so
+ * again no spare byte. No set check: the tag already covers every byte, and a
+ * set spliced from two deliveries fails it.
+ *
+ * Told apart from the public key by the set's count, which is all a frame
+ * says about its set: a node with a beacon sends 2 + 6 = 8 frames during the
+ * window and 2 + 4 = 6 while delivering; a node without one sends 6, then 4.
+ * A receiver learns which kind of node it faces from the window (it cannot
+ * answer before it has the key), so the count it then waits for is
+ * unambiguous, and a set misread anyway fails its check (the set check or the
+ * tag) rather than installing anything.
+ *
+ * Sent for PROFILE_ENROL_DELIVER_CYCLES passes - each frame that many times -
+ * and then the set drops back to the plain beacon. Three, as the window's
+ * set goes out about three times: at the promoted 1-in-8 rate a six-frame set
+ * takes 48 messages, so delivery costs about 36 s of the 12.4% beacon rate at
+ * 4 Hz, paid only after an enrolment. There is no acknowledgement; a receiver
+ * that missed all three asks the user for another window.
+ */
+#define PROFILE_ENROL_WRAPPED_BYTES 24u
+#define PROFILE_ENROL_ROOT_FRAMES   4u
+#define PROFILE_ENROL_DELIVER_CYCLES 3u
 
 /*
  * The set check: the first four bytes of CMAC under an ALL-ZERO KEY over the
@@ -206,8 +244,11 @@ struct profile_enrol {
 	bool     ever_opened;
 	uint64_t last_open_us;
 
-	/* The outbound set: 32 bytes of public key then 4 of set check. */
+	/* The outbound set: 32 bytes of public key then 4 of set check while
+	 * the window is open; the 24-byte wrapped root while delivering. */
 	uint8_t tx[PROFILE_ENROL_SET_BYTES];
+	/* Delivery frames still to send, 0 when not delivering. */
+	uint8_t deliver_left;
 
 	/* The inbound set, and a bitmask of the frames of it seen so far. */
 	uint8_t  rx[PROFILE_ENROL_SET_BYTES];
@@ -216,8 +257,10 @@ struct profile_enrol {
 	uint32_t fingerprint;
 	bool     have_fp;
 
-	/* Counters. `enrolments` is this module's own view of the one in
-	 * struct radiant_sec_stats, which is the authority a host reads. */
+	/* Counters. `enrolments` is this module's own view of the one in the
+	 * stats of the context whose root was delivered (struct
+	 * radiant_sec_stats, or struct radiant_sec_compat_stats on a compat
+	 * channel), which is the authority. */
 	uint32_t windows_opened;
 	uint32_t windows_refused;
 	uint32_t windows_expired;
@@ -267,8 +310,9 @@ int profile_enrol_attach(struct profile_enrol *pe, struct profile_compat *pc);
  *
  * Returns 0, or:
  *   -EPERM   mode is `closed`
- *   -EBUSY   a window is already open; one pairing per window, and a second
- *            trigger does not extend the first
+ *   -EBUSY   a window is already open (one pairing per window, and a second
+ *            trigger does not extend the first), or the last one's root is
+ *            still being delivered
  *   -EINVAL  not initialised
  *   whatever open_pairing() refused with, in which case NO window is entered
  *            and the counter it may have burnt is not rolled back
@@ -281,7 +325,7 @@ int profile_enrol_physical_action(struct profile_enrol *pe, uint64_t now_us);
  *
  * Returns 0, or:
  *   -EPERM   mode is not `open-window`
- *   -EBUSY   a window is already open
+ *   -EBUSY   a window is already open, or a root is being delivered
  *   -EAGAIN  rate-limited: less than open_window_min_s since the last window
  *            opened. Counted in windows_refused, because a node being asked
  *            repeatedly is a node somebody is working on.
@@ -289,12 +333,13 @@ int profile_enrol_physical_action(struct profile_enrol *pe, uint64_t now_us);
 int profile_enrol_keyholder_request(struct profile_enrol *pe, uint64_t now_us);
 
 /* Close early - the user let go, the node is shutting down, a countdown needs
- * the frame indices. Idempotent. */
+ * the frame indices. Ends a delivery too. Idempotent. */
 void profile_enrol_close(struct profile_enrol *pe);
 
 /* True while the window is open. Does NOT expire it; profile_enrol_tick() and
  * the frame-count callback do, because expiry has a side effect (leaving
- * pairing mode) and a predicate that had one would be a trap. */
+ * pairing mode) and a predicate that had one would be a trap. False during
+ * the delivery that follows a completed window, which is not a window. */
 bool profile_enrol_is_open(const struct profile_enrol *pe);
 
 /*
@@ -309,13 +354,16 @@ bool profile_enrol_tick(struct profile_enrol *pe, uint64_t now_us);
 
 /* The frames. */
 
-/* PROFILE_ENROL_FRAMES while a window is open, 0 otherwise. Expires the window
- * first, so the frame count and the open state can never disagree. Signature
- * matches struct profile_compat_client. */
+/* PROFILE_ENROL_FRAMES while a window is open, PROFILE_ENROL_ROOT_FRAMES while
+ * a wrapped root is being delivered, 0 otherwise. Expires the window first, so
+ * the frame count and the open state can never disagree. Signature matches
+ * struct profile_compat_client. */
 uint8_t profile_enrol_frame_count(void *user, uint64_t now_us);
 
-/* Bytes [2..7] of frame `i`, 0 <= i < PROFILE_ENROL_FRAMES. False when no
- * window is open or `i` is out of range. Signature matches
+/* Bytes [2..7] of frame `i` of whichever set frame_count() last described:
+ * bytes 6i..6i+5 of the public-key set, or of the wrapped root. False when
+ * neither is on or `i` is out of range. Each delivery frame handed out counts
+ * against PROFILE_ENROL_DELIVER_CYCLES. Signature matches
  * struct profile_compat_client. */
 bool profile_enrol_frame(void *user, uint8_t i, uint8_t *payload);
 
@@ -343,16 +391,17 @@ bool profile_enrol_frame(void *user, uint8_t i, uint8_t *payload);
  * Repeats are idempotent: a frame that arrives twice overwrites itself.
  *
  * Returns 1 when this frame COMPLETED an enrolment (the shared secret is
- * derived, the root key is installed, the fingerprint is readable and the
- * window is closed), 0 when the set is still incomplete, or:
+ * derived, the node's existing root is wrapped under it and its delivery has
+ * started, the fingerprint is readable and the window is closed - and the
+ * node's own root is unchanged), 0 when the set is still incomplete, or:
  *   -EINVAL   null, a length that is not 8, or no window open
  *   -EPROTO   byte [1] cannot belong to a six-frame set
  *   -EBADMSG  the set check failed - the frames came from two different
  *             windows, or somebody rewrote one. The accumulator is reset and
  *             the window stays open.
  *   -EACCES   the key layer refused the peer's public key (e.g. a
- *             small-order point) - mandatory, since the result becomes a
- *             root key. Accumulator resets, window stays open: one injected
+ *             small-order point) - mandatory, since the result seals the
+ *             root. Accumulator resets, window stays open: one injected
  *             packet must not burn a window the user opened.
  *
  * radiant_sec's own return codes are not propagated: different numbering

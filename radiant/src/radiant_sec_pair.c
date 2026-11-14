@@ -49,9 +49,11 @@
  * obligation: the node never sees Nb leave, so it cannot enforce it.
  *
  * Over-air enrolment (profile_enrol.c) has no room for the commit/reveal round
- * trip and calls radiant_sec_pair_peer_uncommitted() instead, which the 0xF5
+ * trip and calls radiant_sec_pair_peer_uncommitted() (sensor) and
+ * radiant_sec_pair_join() / _accept_root() (receiver) instead, which the 0xF5
  * host surface does not reach: unauthenticated DH whose fingerprint is
- * one-sided and grindable. See that function.
+ * one-sided and grindable. Its DH key only wraps the sensor's existing root
+ * for delivery; it replaces nobody's. See radiant_sec.h.
  *
  * No exclusivity flag, deliberately: unlike sdk-ant's single global
  * "one channel negotiates at a time" lock, each channel's state here is its
@@ -68,6 +70,7 @@
 #include <zephyr/sys/atomic.h>
 
 #include <radiant/radiant_sec.h>
+#include <radiant/radiant_sec_compat.h>
 #include <radiant/radiant_channel.h>
 
 #define PAIR_MAX_CH CONFIG_RADIANT_SEC_MAX_CHANNELS
@@ -84,7 +87,13 @@
  * produce a committed-mode key even for equal inputs. Same length as
  * LABEL_ROOT, so pair_finish() takes either without a length. */
 #define LABEL_ENROL "RADIANT-enrl-root"
+/* Enrolment's pairwise wrap keys, encryption and tag (radiant_sec.h, "the
+ * group root, delivered"). */
+#define LABEL_WRAP  "RADIANT-enrl-wrap"
+#define LABEL_WMAC  "RADIANT-enrl-wmac"
 BUILD_ASSERT(sizeof(LABEL_ROOT) == sizeof(LABEL_ENROL));
+BUILD_ASSERT(sizeof(LABEL_WRAP) == sizeof(LABEL_ROOT) &&
+	     sizeof(LABEL_WMAC) == sizeof(LABEL_ROOT));
 
 /* Where one channel's pairing has got to. Every call names the one step it
  * accepts, so an out-of-order call is refused rather than interpreted. */
@@ -93,7 +102,9 @@ enum pair_step {
 	STEP_EXCHANGED, /* DH done, PRK held, scalar spent, nothing installed */
 	STEP_NONCE,     /* our nonce held (responder: commitment handed out) */
 	STEP_COMMITTED, /* initiator only: the responder's commitment held */
-	STEP_DONE,      /* key installed, fingerprint readable */
+	STEP_JOINED,    /* enrolment receiver: DH done, fp readable, PRK held
+			 * until the wrapped root opens */
+	STEP_DONE,      /* key installed or delivered, fingerprint readable */
 };
 
 struct pair_ctx {
@@ -660,38 +671,268 @@ int radiant_sec_pair_peer_nonce(uint8_t ch, const uint8_t *peer_nonce,
 	return rc;
 }
 
+/* ── Over-air enrolment ─────────────────────────────────────────────────── */
+
+static const uint8_t zero_nonce[NONCE_BYTES];
+
+/* No roles and no nonces: the keys ordered by value stand in for
+ * initiator/responder, so both ends compute the same thing without agreeing
+ * who started. */
+static void enrol_order(const struct pair_ctx *c, const uint8_t **lo,
+			const uint8_t **hi)
+{
+	bool local_low = memcmp(c->local_pub, c->k.peer_pub, PUB_BYTES) <= 0;
+
+	*lo = local_low ? c->local_pub : c->k.peer_pub;
+	*hi = local_low ? c->k.peer_pub : c->local_pub;
+}
+
+/* K_wrap and K_wrap' from the held PRK: pairwise, and unrelated to any root. */
+static int wrap_keys(const struct pair_ctx *c, struct radiant_sec_key *kw,
+		     struct radiant_sec_key *km)
+{
+	uint8_t        raw[RADIANT_SEC_BLOCK_BYTES];
+	const uint8_t *lo;
+	const uint8_t *hi;
+	struct cm_part parts[3];
+	int            rc;
+
+	enrol_order(c, &lo, &hi);
+	parts[0].p = (const uint8_t *)LABEL_WRAP;
+	parts[0].n = sizeof(LABEL_WRAP);
+	parts[1].p = lo;
+	parts[1].n = PUB_BYTES;
+	parts[2].p = hi;
+	parts[2].n = PUB_BYTES;
+	memset(kw, 0, sizeof(*kw));
+	memset(km, 0, sizeof(*km));
+	rc = cmac_parts(c->s.prk, parts, ARRAY_SIZE(parts), raw);
+	if (rc == RADIANT_SEC_OK) {
+		rc = radiant_sec_key_import(kw, raw, 128u);
+	}
+	parts[0].p = (const uint8_t *)LABEL_WMAC;
+	if (rc == RADIANT_SEC_OK) {
+		rc = cmac_parts(c->s.prk, parts, ARRAY_SIZE(parts), raw);
+	}
+	if (rc == RADIANT_SEC_OK) {
+		rc = radiant_sec_key_import(km, raw, 128u);
+	}
+	radiant_sec_wipe(raw, sizeof(raw));
+	return rc;
+}
+
+/* trunc64( CMAC(K_wrap', n || ct) ), into `tag` (a full block). */
+static int wrap_tag(const struct radiant_sec_key *km, const uint8_t *nb,
+		    const uint8_t *ct, uint8_t *tag)
+{
+	uint8_t msg[2u * RADIANT_SEC_BLOCK_BYTES];
+
+	memcpy(msg, nb, RADIANT_SEC_BLOCK_BYTES);
+	memcpy(&msg[RADIANT_SEC_BLOCK_BYTES], ct, RADIANT_SEC_BLOCK_BYTES);
+	return radiant_sec_cmac(km, msg, sizeof(msg), tag);
+}
+
+int radiant_sec_pair_seal(const struct radiant_sec_key *k_wrap,
+			  const struct radiant_sec_key *k_mac, uint8_t *buf)
+{
+	uint8_t nb[RADIANT_SEC_BLOCK_BYTES];
+	uint8_t tag[RADIANT_SEC_BLOCK_BYTES];
+	int     rc = RADIANT_SEC_ENOTSUP;
+
+	radiant_sec_nonce_block(nb, 0u, 0u, 0u, RADIANT_SEC_DOM_ENROL_WRAP);
+	/* An opaque backend's handle holds a slot index, not a root. */
+	if (!radiant_sec_caps()->key_is_opaque) {
+		rc = radiant_sec_ctr_xor(k_wrap, nb, buf,
+					 RADIANT_SEC_BLOCK_BYTES);
+	}
+	if (rc == RADIANT_SEC_OK) {
+		rc = wrap_tag(k_mac, nb, buf, tag);
+	}
+	if (rc == RADIANT_SEC_OK) {
+		memcpy(&buf[RADIANT_SEC_BLOCK_BYTES], tag,
+		       RADIANT_SEC_PAIR_WRAP_TAG_BYTES);
+	} else {
+		radiant_sec_wipe(buf, RADIANT_SEC_PAIR_WRAPPED_BYTES);
+	}
+	return rc;
+}
+
 int radiant_sec_pair_peer_uncommitted(uint8_t ch, const uint8_t *peer_pub,
-				      uint32_t *fingerprint)
+				      uint8_t *wrapped, uint32_t *fingerprint)
 {
 	RADIANT_SEC_ASSERT_LOCKED();
-	static const uint8_t zero_nonce[NONCE_BYTES];
-	struct pair_ctx     *c;
-	const uint8_t       *lo;
-	const uint8_t       *hi;
-	int                  rc;
+	struct radiant_sec_key kw;
+	struct radiant_sec_key km;
+	struct pair_ctx       *c;
+	const uint8_t         *lo;
+	const uint8_t         *hi;
+	bool                   compat = false;
+	int                    rc;
 
+	if (wrapped == NULL) {
+		return RADIANT_SEC_EINVAL;
+	}
 	rc = radiant_sec_pair_peer(ch, peer_pub);
 	if (rc != RADIANT_SEC_OK) {
 		return rc;
 	}
 	c = ctx_of(ch);
+	enrol_order(c, &lo, &hi);
 
-	/* No roles and no nonces: the keys ordered by value stand in for
-	 * initiator/responder, so both ends compute the same thing without
-	 * agreeing who started, and both nonces are the all-zero block. */
-	if (memcmp(c->local_pub, c->k.peer_pub, PUB_BYTES) <= 0) {
-		lo = c->local_pub;
-		hi = c->k.peer_pub;
-	} else {
-		lo = c->k.peer_pub;
-		hi = c->local_pub;
+	/* Deliver, never replace: the root this channel already holds goes out
+	 * sealed, and its keyholders, epoch and stream are untouched. */
+	rc = wrap_keys(c, &kw, &km);
+#if defined(CONFIG_RADIANT_SEC_COMPAT)
+	if (rc == RADIANT_SEC_OK) {
+		rc = radiant_sec_compat_wrap_root(ch, &kw, &km, wrapped);
+		compat = (rc != RADIANT_SEC_ENOKEY);
+		if (!compat) {
+			rc = RADIANT_SEC_OK;
+		}
 	}
-	rc = pair_finish(c, LABEL_ENROL, lo, hi, zero_nonce, zero_nonce,
-			 fingerprint);
+#endif
+	if (rc == RADIANT_SEC_OK && !compat) {
+		rc = radiant_sec_wrap_root(ch, &kw, &km, wrapped);
+	}
+
+	if (rc == RADIANT_SEC_ENOKEY) {
+		/* No root at all: nothing to deliver and nobody to lock out,
+		 * so the exchange establishes the first one (pair_finish()
+		 * counts it and computes the fingerprint), then delivers it. */
+		rc = pair_finish(c, LABEL_ENROL, lo, hi, zero_nonce,
+				 zero_nonce, fingerprint);
+		if (rc == RADIANT_SEC_OK) {
+			rc = radiant_sec_wrap_root(ch, &kw, &km, wrapped);
+		}
+	} else if (rc == RADIANT_SEC_OK) {
+		rc = pair_g2(lo, hi, zero_nonce, zero_nonce, &c->fingerprint);
+		if (rc == RADIANT_SEC_OK) {
+#if defined(CONFIG_RADIANT_SEC_COMPAT)
+			if (compat) {
+				radiant_sec_compat_stat_enrolment(ch);
+			} else
+#endif
+			{
+				radiant_sec_stat_enrolment(ch);
+			}
+			if (fingerprint != NULL) {
+				*fingerprint = c->fingerprint;
+			}
+			radiant_sec_wipe(&c->s, sizeof(c->s));
+			c->step = (uint8_t)STEP_DONE;
+		}
+	}
+	radiant_sec_key_destroy(&kw);
+	radiant_sec_key_destroy(&km);
 	if (rc != RADIANT_SEC_OK) {
 		/* The scalar is spent, so nothing usable is left, and a
 		 * half-finished context must not linger. */
+		radiant_sec_wipe(wrapped, RADIANT_SEC_PAIR_WRAPPED_BYTES);
 		ctx_free(c);
+	}
+	return rc;
+}
+
+int radiant_sec_pair_join(uint8_t ch, const uint8_t *sensor_pub,
+			  uint32_t *fingerprint)
+{
+	RADIANT_SEC_ASSERT_LOCKED();
+	struct pair_ctx *c;
+	const uint8_t   *lo;
+	const uint8_t   *hi;
+	int              rc;
+
+	/* The install binds the channel's device number; refuse before the
+	 * scalar is spent rather than after. */
+	if (pair_devnum(ch) == 0u) {
+		return RADIANT_SEC_ENOKEY;
+	}
+	rc = radiant_sec_pair_peer(ch, sensor_pub);
+	if (rc != RADIANT_SEC_OK) {
+		return rc;
+	}
+	c = ctx_of(ch);
+	enrol_order(c, &lo, &hi);
+	rc = pair_g2(lo, hi, zero_nonce, zero_nonce, &c->fingerprint);
+	if (rc != RADIANT_SEC_OK) {
+		ctx_free(c);
+		return rc;
+	}
+	if (fingerprint != NULL) {
+		*fingerprint = c->fingerprint;
+	}
+	c->step = (uint8_t)STEP_JOINED;
+	return RADIANT_SEC_OK;
+}
+
+int radiant_sec_pair_accept_root(uint8_t ch, const uint8_t *wrapped,
+				 uint8_t into)
+{
+	RADIANT_SEC_ASSERT_LOCKED();
+	struct radiant_sec_key kw;
+	struct radiant_sec_key km;
+	struct pair_ctx       *c;
+	uint8_t                nb[RADIANT_SEC_BLOCK_BYTES];
+	uint8_t                tag[RADIANT_SEC_BLOCK_BYTES];
+	uint8_t                root[RADIANT_SEC_BLOCK_BYTES];
+	uint16_t               devnum = pair_devnum(ch);
+	int                    rc;
+
+	if (wrapped == NULL || into > RADIANT_SEC_PAIR_INTO_COMPAT) {
+		return RADIANT_SEC_EINVAL;
+	}
+#if !defined(CONFIG_RADIANT_SEC_COMPAT)
+	if (into == RADIANT_SEC_PAIR_INTO_COMPAT) {
+		return RADIANT_SEC_ENOTSUP;
+	}
+#endif
+	c = ctx_live(ch);
+	if (c == NULL || c->step != (uint8_t)STEP_JOINED) {
+		return RADIANT_SEC_EINVAL;
+	}
+	if (devnum == 0u) {
+		return RADIANT_SEC_ENOKEY;
+	}
+
+	/* Encrypt-then-MAC, so the tag is checked before anything is
+	 * decrypted, and in constant time. A failure leaves the join intact:
+	 * one forged or torn copy must not cost the receiver its enrolment. */
+	rc = wrap_keys(c, &kw, &km);
+	radiant_sec_nonce_block(nb, 0u, 0u, 0u, RADIANT_SEC_DOM_ENROL_WRAP);
+	if (rc == RADIANT_SEC_OK) {
+		rc = wrap_tag(&km, nb, wrapped, tag);
+	}
+	if (rc == RADIANT_SEC_OK &&
+	    !radiant_sec_ct_equal(tag, &wrapped[RADIANT_SEC_BLOCK_BYTES],
+				  RADIANT_SEC_PAIR_WRAP_TAG_BYTES)) {
+		rc = RADIANT_SEC_EBADMAC;
+	}
+	if (rc == RADIANT_SEC_OK) {
+		memcpy(root, wrapped, sizeof(root));
+		rc = radiant_sec_ctr_xor(&kw, nb, root, sizeof(root));
+	}
+#if defined(CONFIG_RADIANT_SEC_COMPAT)
+	if (rc == RADIANT_SEC_OK && into == RADIANT_SEC_PAIR_INTO_COMPAT) {
+		rc = radiant_sec_compat_set_key(ch, root, 128u, devnum);
+		if (rc == RADIANT_SEC_OK) {
+			(void)radiant_sec_compat_set_devnum(ch, devnum);
+			radiant_sec_compat_stat_enrolment(ch);
+		}
+	} else
+#endif
+	if (rc == RADIANT_SEC_OK) {
+		rc = radiant_sec_set_key(ch, root, 128u, devnum);
+		if (rc == RADIANT_SEC_OK) {
+			(void)radiant_sec_set_devnum(ch, devnum);
+			radiant_sec_stat_enrolment(ch);
+		}
+	}
+	radiant_sec_wipe(root, sizeof(root));
+	radiant_sec_key_destroy(&kw);
+	radiant_sec_key_destroy(&km);
+	if (rc == RADIANT_SEC_OK) {
+		radiant_sec_wipe(&c->s, sizeof(c->s));
+		c->step = (uint8_t)STEP_DONE;
 	}
 	return rc;
 }
@@ -701,7 +942,7 @@ int radiant_sec_pair_fingerprint(uint8_t ch, uint32_t *out)
 	RADIANT_SEC_ASSERT_LOCKED();
 	const struct pair_ctx *c = ctx_of(ch);
 
-	if (c == NULL || out == NULL || c->step != (uint8_t)STEP_DONE) {
+	if (c == NULL || out == NULL || c->step < (uint8_t)STEP_JOINED) {
 		return RADIANT_SEC_EINVAL;
 	}
 	*out = c->fingerprint;
