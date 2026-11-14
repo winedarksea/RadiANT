@@ -120,10 +120,30 @@ struct fake_backend_counts {
 	 * often it published one. */
 	uint32_t elastic_lead_us;
 	uint32_t elastic_lead_sets;
+	/*
+	 * Assert 69:108: radiant_nrf_gate_radio_irq_unpend(). irq_unpend counts
+	 * calls; irq_unpend_cleared those that cleared a pending RADIO vector.
+	 * The model is the real backend's: it clears only if on_grant() took the
+	 * radio in this timeslot. The *_seq fields order the backend calls (one
+	 * counter across on_grant_end and irq_unpend), and unpend_abort_calls is
+	 * fake_radio_abort_calls() at the last unpend, so a test can prove the
+	 * clear came after the hand-back and after every abort.
+	 */
+	uint32_t irq_unpend;
+	uint32_t irq_unpend_cleared;
+	uint32_t grant_end_seq;
+	uint32_t unpend_seq;
+	uint32_t unpend_abort_calls;
 };
 
 void                              fake_backend_reset(void);
 const struct fake_backend_counts *fake_backend(void);
+
+/* The RADIO vector's NVIC pending bit, as the fake models it: set by a test
+ * (a RADIO event latched while a signal ran), cleared only by an unpend in a
+ * timeslot whose on_grant() took the radio. */
+void fake_backend_radio_irq_pend(void);
+bool fake_backend_radio_irq_pending(void);
 
 /* Make radiant_nrf_gate_on_grant() call gate_release() before it returns.
  * The real shape of an operation completing synchronously inside its own

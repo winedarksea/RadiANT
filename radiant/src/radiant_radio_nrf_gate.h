@@ -331,6 +331,17 @@ void radiant_nrf_gate_on_grant_end(void);
  */
 void radiant_nrf_gate_dppi_detach(void);
 
+/*
+ * Clear the NVIC pending state of the RADIO vector MPSL owns, if this timeslot's
+ * radiant_nrf_gate_on_grant() took the radio; returns whether it was pending. The
+ * gate calls it from the zero-latency signal context as the last radio act before
+ * returning ACTION_END, and nowhere else: a RADIO event latched while the timeslot
+ * was being ended would otherwise be taken by MPSL after the timeslot has closed,
+ * which asserts (69:108). One register read and one write. Defined by the
+ * arbitrated (MPSL) build only.
+ */
+bool radiant_nrf_gate_radio_irq_unpend(void);
+
 #ifdef __cplusplus
 }
 #endif

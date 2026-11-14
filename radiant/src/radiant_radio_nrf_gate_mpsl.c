@@ -558,6 +558,19 @@ static struct {
 	uint32_t rel_fixed_max;
 	uint32_t hold_last;
 	uint32_t hold_max;
+	/*
+	 * Assert 69:108 evidence. High-priority ACTION_ENDs returned (end_hi) and those
+	 * that found the RADIO vector pending when the gate cleared it (unpend), by the
+	 * signal that ended the timeslot: END_SRC_*. Each unpend is an assert avoided.
+	 */
+#define END_SRC_START     0u
+#define END_SRC_T0_SKIP   1u /* TIMER0 ext-skip (or the EL_FIXED arm's cut) */
+#define END_SRC_T0_OTHER  2u
+#define END_SRC_RADIO     3u
+#define END_SRC_EXT_FAIL  4u
+#define END_SRC_N         5u
+	uint32_t end_hi[END_SRC_N];
+	uint32_t unpend[END_SRC_N];
 #endif
 } stats;
 
@@ -1450,6 +1463,10 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 	/* Per-session return parameter; every branch writes through rv. */
 	mpsl_timeslot_signal_return_param_t *const rvp = &s->rv;
 	uint32_t zkey;
+#if defined(CONFIG_RADIANT_GATE_MPSL_STATS)
+	/* This TIMER0 signal ended its grant by the skip (evidence counters only). */
+	bool skip_end = false;
+#endif
 #define rv (*rvp)
 
 	if (high_prio_signal) {
@@ -1635,6 +1652,7 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		    g.granted_len_us < g.want_len_us) {
 			/* As EXTEND_FAILED below, without asking. See ext_skip. */
 			stats.ext_skipped++;
+			GSTAT(skip_end = true);
 			g.granted = false;
 			DPPI_DETACH_FIRST();
 			timer0_disarm();
@@ -1701,6 +1719,7 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		if (!g.release_wanted && !g.extendable &&
 		    g.granted_len_us < g.want_len_us) {
 			arm_stats.el_fixed_cut++;
+			GSTAT(skip_end = true);
 			g.granted = false;
 			DPPI_DETACH_FIRST();
 			timer0_disarm();
@@ -2044,6 +2063,41 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 				break;
 			}
 		}
+		/*
+		 * Assert 69:108. A RADIO event that fired while this signal ran (same priority,
+		 * so it could only pend) leaves MPSL's RADIO vector pending even after the
+		 * hand-back cleared our mask. MPSL takes it once ACTION_END has closed the
+		 * timeslot: a RADIO interrupt with no timeslot open, which asserts. Clear it
+		 * here, while the timeslot and its RADIO are still ours (mpsl_timeslot.h), and
+		 * after every hand-back and radiant_radio_abort() on the paths above: with our
+		 * mask cleared and the radio disabled nothing of ours can pend it again before
+		 * the return. Every high-priority END funnels through here; low-priority
+		 * signals never return END, and their hand-backs (BLOCKED, SESSION_IDLE,
+		 * SESSION_CLOSED, gate_shutdown()) must not clear it: the radio may already be
+		 * the other stack's. The backend clears only if this timeslot took the radio.
+		 */
+		if (high_prio_signal) {
+			const bool was_pending = radiant_nrf_gate_radio_irq_unpend();
+
+#if defined(CONFIG_RADIANT_GATE_MPSL_STATS)
+			{
+				const uint32_t src =
+					(signal == MPSL_TIMESLOT_SIGNAL_START) ? END_SRC_START
+					: (signal == MPSL_TIMESLOT_SIGNAL_RADIO) ? END_SRC_RADIO
+					: (signal == MPSL_TIMESLOT_SIGNAL_EXTEND_FAILED)
+						? END_SRC_EXT_FAIL
+					: skip_end ? END_SRC_T0_SKIP
+						   : END_SRC_T0_OTHER;
+
+				stats.end_hi[src]++;
+				if (was_pending) {
+					stats.unpend[src]++;
+				}
+			}
+#else
+			ARG_UNUSED(was_pending);
+#endif
+		}
 	}
 
 	TRACE_SIGNAL(si, signal, rv.callback_action);
@@ -2148,6 +2202,13 @@ static void gate_stats_fn(struct k_work *w)
 		stats.el_gr_by_notice[1], stats.el_gr_by_notice[2],
 		stats.el_gr_by_notice[3], stats.el_gr_by_notice[4],
 		stats.el_blk_deferred);
+	LOG_INF("UNPEND end start/t0skip/t0other/radio/extfail %u/%u/%u/%u/%u "
+		"pending %u/%u/%u/%u/%u",
+		stats.end_hi[END_SRC_START], stats.end_hi[END_SRC_T0_SKIP],
+		stats.end_hi[END_SRC_T0_OTHER], stats.end_hi[END_SRC_RADIO],
+		stats.end_hi[END_SRC_EXT_FAIL], stats.unpend[END_SRC_START],
+		stats.unpend[END_SRC_T0_SKIP], stats.unpend[END_SRC_T0_OTHER],
+		stats.unpend[END_SRC_RADIO], stats.unpend[END_SRC_EXT_FAIL]);
 #if defined(ARM_COUNTERS)
 	LOG_INF("ARM69 held_idle=%u held_gap=%u el_fixed_cut=%u dppi_first=%u",
 		arm_stats.held_idle, arm_stats.held_gap, arm_stats.el_fixed_cut,
@@ -3190,9 +3251,10 @@ static void diag_timer0(void)
 
 static void diag_radio(void)
 {
-	printk("    radio_state=%u radio_shorts=0x%08x",
+	printk("    radio_state=%u radio_shorts=0x%08x radio_intenset=0x%08x",
 	       (unsigned)nrf_radio_state_get(NRF_RADIO),
-	       (unsigned)nrf_radio_shorts_get(NRF_RADIO));
+	       (unsigned)nrf_radio_shorts_get(NRF_RADIO),
+	       (unsigned)nrf_radio_int_enable_check(NRF_RADIO, UINT32_MAX));
 #if defined(RADIO_SUBSCRIBE_TXEN_EN_Msk)
 	/* DPPI routing: whose channels the RADIO's endpoints point at right now. */
 	printk(" sub_rxen=0x%08x sub_txen=0x%08x sub_disable=0x%08x "
@@ -3246,6 +3308,14 @@ static void diag_gate_state(uint32_t now)
 		       (int)s->notice_us, (unsigned)s->n_placed,
 		       (unsigned)s->n_granted, (unsigned)s->n_blocked);
 	}
+	printk("    end_start=%u end_t0skip=%u end_t0other=%u end_radio=%u "
+	       "end_extfail=%u unpend_start=%u unpend_t0skip=%u unpend_t0other=%u "
+	       "unpend_radio=%u unpend_extfail=%u\n",
+	       stats.end_hi[END_SRC_START], stats.end_hi[END_SRC_T0_SKIP],
+	       stats.end_hi[END_SRC_T0_OTHER], stats.end_hi[END_SRC_RADIO],
+	       stats.end_hi[END_SRC_EXT_FAIL], stats.unpend[END_SRC_START],
+	       stats.unpend[END_SRC_T0_SKIP], stats.unpend[END_SRC_T0_OTHER],
+	       stats.unpend[END_SRC_RADIO], stats.unpend[END_SRC_EXT_FAIL]);
 	printk("    api_inflight=%u api_sess=%u api_last=%u api_rc=%d "
 	       "api_calls=%u since_api_in_us=%u since_api_out_us=%u "
 	       "(api: 0 none, 1 request, 2 session_open, 3 session_close)\n",
@@ -3291,9 +3361,16 @@ void mpsl_assert_handle(const char *const file, const uint32_t line)
 	const uint32_t  d_now = (uint32_t)radiant_radio_now();
 #endif
 	/*
-	 * The two signals that mean this file is wrong: OVERSTAYED (the end margin is too
-	 * small, the most likely field failure) and INVALID (an action returned from a
-	 * low-priority signal). The counters tell them apart; the assert site cannot.
+	 * Two signals that mean this file is wrong: OVERSTAYED (the end margin is too
+	 * small) and INVALID (an action returned from a low-priority signal). The counters
+	 * tell them apart; the assert site cannot.
+	 *
+	 * 69:108 is neither (over=0 invalid=0): it was observed in the RADIO_0 interrupt
+	 * (ipsr=RADIO), 18 us after on_signal() returned ACTION_END, with no timeslot
+	 * open - MPSL taking a RADIO interrupt that latched while our grant was being
+	 * ended. on_signal() now clears that pending state before every high-priority
+	 * END (radiant_nrf_gate_radio_irq_unpend()); the unpend_* counters below count
+	 * the asserts that avoided.
 	 */
 	/*
 	 * LOG_PANIC() first, or this handler is silent: printk goes through the log

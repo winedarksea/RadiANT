@@ -620,6 +620,10 @@ uint32_t                       fake_radio_event_count(void);
 const struct fake_radio_event *fake_radio_event(uint32_t index);
 const struct fake_radio_event *fake_radio_last_event(void);
 
+/* Every radiant_radio_abort() call since boot, whatever it found to abort.
+ * Monotonic (never reset), so read it as a difference. */
+uint32_t fake_radio_abort_calls(void);
+
 const struct fake_radio_stats *fake_radio_stats(void);
 
 uint32_t                          fake_radio_viol_count(void);
