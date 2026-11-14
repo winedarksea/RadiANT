@@ -1403,21 +1403,40 @@ MESG_RADIANT_DIAG_ID = 0xF7
 # One window's verdict on a secured channel, sent unsolicited, but ONLY on a
 # channel whose 0xF1 set bit 4 (with X_AUTH); without that bit the byte stream
 # is identical to a build without this message. [0] channel; [1] verdict - 1
-# verified, 2 unverified (never 0: a window on an X_AUTH channel always has a
-# verdict); [2..3] window_start, the 16-bit counter of the window's first
-# packet (u16 LE); [4] W. The window covers counters window_start ..
-# window_start+W-1. A host maps each BROADCAST_DATA to its window by payload
-# byte [1], which on a secured page is the counter's low 8 bits: the packet
-# belongs to this window when (byte1 - window_start) mod 256 < W, unambiguous
-# since W <= 8. Sent after every packet it covers, in the same queue: under the
-# default deliver policy the window's packets arrived W to 2W-1 periods
-# earlier; under the drop policy (0xF1 bit 2) a verified window's held packets
-# are released immediately before it and an unverified window's never arrive.
-# Data delivery is unchanged by this bit. A host that wants per-packet trust
-# holds each packet until its window's 0xF8 arrives, and treats a packet whose
-# verdict never comes (a lost window, the last window before the node went
-# quiet, an event-queue overflow) as unverified. [Security review 2026-11-13
-# item 3 (docs/radiant-security.md sec 3.2 and 9)]
+# verified, 2 unverified (never 0; any other value is refused by a reader);
+# [2..3] window_start, the 16-bit counter of the window's first packet (u16
+# LE); [4] W, 2, 4 or 8; [5] seq, this channel's verdict count mod 256: 0 for
+# the first verdict after the host's 0xF1, then one more per verdict, so a lost
+# 0xF8 is a gap (it may also jump across a channel close). VERSIONING: as 0xF4,
+# fields are only appended and a reader decodes the fields it knows from a
+# longer body. The window covers counters window_start .. window_start+W-1.
+# COVERAGE: a verdict covers only BROADCAST_DATA on the same channel whose page
+# byte [0] is inside the secured range (0xF4 [4..5]); a page outside it is
+# cleartext, never judged, whatever its byte [1]. A covered packet maps to the
+# window by payload byte [1], the counter's low 8 bits: (byte1 - window_start)
+# mod 256 < W, unambiguous since W <= 8. Sent after every packet it covers, in
+# the same queue; under the drop policy (0xF1 bit 2) a verified window's held
+# packets are released immediately before it. Data delivery is unchanged by
+# this bit. THE HOST RULE, which is what makes the event safe to act on: (1) a
+# packet is resolved by the FIRST covering 0xF8 that arrives after it, and is
+# never re-resolved by a later one - window_start values repeat and arrive out
+# of order (a forged packet with a past or future counter reopens or opens a
+# window, giving that window an UNVERIFIED and later, for the genuine packets,
+# possibly a VERIFIED; only the first one after a packet is that packet's); (2)
+# a seq gap, EVENT_QUE_OVERFLOW (0x35, sent as channel 0 but meaning every
+# channel, and it can arrive BEFORE packets queued ahead of the loss) or
+# EVENT_SERIAL_QUE_OVERFLOW (0x34), or any loss the host's own transport
+# reports makes every packet still pending unverified (on every channel for the
+# two events) - settled BEFORE the 0xF8 that revealed a gap is applied, so a
+# lost UNVERIFIED cannot be replaced by a later VERIFIED for the same
+# window_start; (3) a genuine verdict for window k comes on the last packet of
+# window k+1, so a packet pending longer than 2W-1 channel periods (plus
+# transport slack) is unverified - the last window before a node goes quiet, an
+# epoch advance and a lost window all end this way; (4) pending packets are
+# dropped as unverified on CHANNEL_CLOSED, on the host's own 0xF1 or 0xF3 for
+# the channel, and on reset. tools/ant_sec.py VerdictResolver implements this
+# rule. [Security review 2026-11-13 item 3 (docs/radiant-security.md sec 3.2
+# and 9)]
 MESG_RADIANT_SEC_VERDICT_ID = 0xF8
 
 # ---------------------------------------------------------------------------
@@ -1980,8 +1999,8 @@ RADIANT_MESSAGES = {
     0xF8: {
         "name": 'MESG_RADIANT_SEC_VERDICT_ID',
         "direction": 'd2h',
-        "payload_len": 5,
-        "desc": "One window's verdict on a secured channel, sent unsolicited, but ONLY on a channel whose 0xF1 set bit 4 (with X_AUTH); without that bit the byte stream is identical to a build without this message. [0] channel; [1] verdict - 1 verified, 2 unverified (never 0: a window on an X_AUTH channel always has a verdict); [2..3] window_start, the 16-bit counter of the window's first packet (u16 LE); [4] W. The window covers counters window_start .. window_start+W-1. A host maps each BROADCAST_DATA to its window by payload byte [1], which on a secured page is the counter's low 8 bits: the packet belongs to this window when (byte1 - window_start) mod 256 < W, unambiguous since W <= 8. Sent after every packet it covers, in the same queue: under the default deliver policy the window's packets arrived W to 2W-1 periods earlier; under the drop policy (0xF1 bit 2) a verified window's held packets are released immediately before it and an unverified window's never arrive. Data delivery is unchanged by this bit. A host that wants per-packet trust holds each packet until its window's 0xF8 arrives, and treats a packet whose verdict never comes (a lost window, the last window before the node went quiet, an event-queue overflow) as unverified.",
+        "payload_len": 6,
+        "desc": "One window's verdict on a secured channel, sent unsolicited, but ONLY on a channel whose 0xF1 set bit 4 (with X_AUTH); without that bit the byte stream is identical to a build without this message. [0] channel; [1] verdict - 1 verified, 2 unverified (never 0; any other value is refused by a reader); [2..3] window_start, the 16-bit counter of the window's first packet (u16 LE); [4] W, 2, 4 or 8; [5] seq, this channel's verdict count mod 256: 0 for the first verdict after the host's 0xF1, then one more per verdict, so a lost 0xF8 is a gap (it may also jump across a channel close). VERSIONING: as 0xF4, fields are only appended and a reader decodes the fields it knows from a longer body. The window covers counters window_start .. window_start+W-1. COVERAGE: a verdict covers only BROADCAST_DATA on the same channel whose page byte [0] is inside the secured range (0xF4 [4..5]); a page outside it is cleartext, never judged, whatever its byte [1]. A covered packet maps to the window by payload byte [1], the counter's low 8 bits: (byte1 - window_start) mod 256 < W, unambiguous since W <= 8. Sent after every packet it covers, in the same queue; under the drop policy (0xF1 bit 2) a verified window's held packets are released immediately before it. Data delivery is unchanged by this bit. THE HOST RULE, which is what makes the event safe to act on: (1) a packet is resolved by the FIRST covering 0xF8 that arrives after it, and is never re-resolved by a later one - window_start values repeat and arrive out of order (a forged packet with a past or future counter reopens or opens a window, giving that window an UNVERIFIED and later, for the genuine packets, possibly a VERIFIED; only the first one after a packet is that packet's); (2) a seq gap, EVENT_QUE_OVERFLOW (0x35, sent as channel 0 but meaning every channel, and it can arrive BEFORE packets queued ahead of the loss) or EVENT_SERIAL_QUE_OVERFLOW (0x34), or any loss the host's own transport reports makes every packet still pending unverified (on every channel for the two events) - settled BEFORE the 0xF8 that revealed a gap is applied, so a lost UNVERIFIED cannot be replaced by a later VERIFIED for the same window_start; (3) a genuine verdict for window k comes on the last packet of window k+1, so a packet pending longer than 2W-1 channel periods (plus transport slack) is unverified - the last window before a node goes quiet, an epoch advance and a lost window all end this way; (4) pending packets are dropped as unverified on CHANNEL_CLOSED, on the host's own 0xF1 or 0xF3 for the channel, and on reset. tools/ant_sec.py VerdictResolver implements this rule.",
     },
 }
 RADIANT_RESERVED_RANGE = '0xF9-0xFA'
