@@ -1342,19 +1342,21 @@ MESG_RADIANT_EPOCH_ID = 0xF3
 # attempts that were refused are not counted); [26..27] secured-range
 # broadcasts a master channel heard and refused (a legitimate slave never sends
 # one on a secured channel, so each is a forgery or the master's own window
-# reflected back; docs/radiant-security.md sec 7.6). All counters are u16 LE
-# and saturate rather than wrapping. An unkeyed channel answers zeros and a
-# clear verdict, with the version still set. VERSIONING: fields are only ever
-# added at the end and an offset is never reused. The structure version stays 1
-# throughout the beta, whatever is added, so a reader tells which fields exist
-# from the body length and treats the version as nothing more than a sanity
-# check. A reader refuses a body shorter than it needs, and decodes the fields
-# it knows from a longer body. This exists so a host that does not take the
-# 0xF8 window-verdict events still has an auditable stream: deliver-as-
-# unverified only means something if unverified cannot be silently treated as
-# verified. The enrolment counter is readable by a host on the node that did
-# the enrolment; other receivers cannot see it over the air. [K4 (docs/radiant-
-# security.md sec 3.2 and 9)]
+# reflected back; docs/radiant-security.md sec 7.6); [28..29] 0xF8 window-
+# verdict events the firmware's event queue refused (ring refusals only: a 0xF8
+# the USB bridge drops on backlog, and a window discarded before its verdict,
+# show only as 0xF8 seq gaps). All counters are u16 LE and saturate rather than
+# wrapping. An unkeyed channel answers zeros and a clear verdict, with the
+# version still set. VERSIONING: fields are only ever added at the end and an
+# offset is never reused. The structure version stays 1 throughout the beta,
+# whatever is added, so a reader tells which fields exist from the body length
+# and treats the version as nothing more than a sanity check. A reader refuses
+# a body shorter than it needs, and decodes the fields it knows from a longer
+# body. This exists so a host that does not take the 0xF8 window-verdict events
+# still has an auditable stream: deliver-as-unverified only means something if
+# unverified cannot be silently treated as verified. The enrolment counter is
+# readable by a host on the node that did the enrolment; other receivers cannot
+# see it over the air. [K4 (docs/radiant-security.md sec 3.2 and 9)]
 MESG_RADIANT_SEC_STATUS_ID = 0xF4
 
 # Drive the in-the-clear pairing exchange. [0] channel; [1] sub-command; the
@@ -1506,15 +1508,19 @@ MESG_RADIANT_DIAG_ID = 0xF7
 # comes on the last packet of window k+1, so a packet pending longer than 2W-1
 # channel periods (plus transport slack) is unverified, and this deadline is
 # checked before EVERY 0xF8 is applied - a host that stops reading for longer
-# than it settles everything it held; (4) pending packets are settled
-# unverified on CHANNEL_CLOSED, on the host's own 0xF1 or 0xF3 for the channel,
-# and on reset, and so is everything pending when the first 0xF8 after any of
-# these (or after the host starts listening) arrives: that first verdict only
-# sets the seq baseline and binds nothing, because packets still in flight from
-# before the flush may be judged by no verdict at all. A host using 0xF8 must
-# not filter EVENT_CHANNEL_CLOSED (0x07) with MESG_EVENT_FILTER_CONFIG (0x79).
-# tools/ant_sec.py VerdictResolver implements this rule. [Security review
-# 2026-11-13 item 3 (docs/radiant-security.md sec 3.2 and 9)]
+# than it settles everything it held. A genuine window just before a run of
+# clear-only windows is judged later than that (its tag rides on to the next
+# window with secured packets), so the deadline settles its packets unverified
+# first: fail-safe, genuine data marked unverified, never the reverse; (4)
+# pending packets are settled unverified on CHANNEL_CLOSED, on the host's own
+# 0xF1 or 0xF3 for the channel, and on reset, and so is everything pending when
+# the first 0xF8 after any of these (or after the host starts listening)
+# arrives: that first verdict only sets the seq baseline and binds nothing,
+# because packets still in flight from before the flush may be judged by no
+# verdict at all. A host using 0xF8 must not filter EVENT_CHANNEL_CLOSED (0x07)
+# with MESG_EVENT_FILTER_CONFIG (0x79). tools/ant_sec.py VerdictResolver
+# implements this rule. [Security review 2026-11-13 item 3 (docs/radiant-
+# security.md sec 3.2 and 9)]
 MESG_RADIANT_SEC_VERDICT_ID = 0xF8
 
 # ---------------------------------------------------------------------------
@@ -2053,8 +2059,8 @@ RADIANT_MESSAGES = {
     0xF4: {
         "name": 'MESG_RADIANT_SEC_STATUS_ID',
         "direction": 'd2h',
-        "payload_len": 28,
-        "desc": "Per-channel security state, requested with MESG_REQUEST (0x4D). [0] channel; [1] structure version, 1; [2] switches currently active, as in 0xF1; [3] W; [4] page range low; [5] high; [6..9] epoch (u32 LE); [10..11] the expected slot index, low 16 bits (u16 LE); [12..13] windows verified; [14..15] windows unverified; [16..17] non-broadcast frames dropped for carrying a secured-range page; [18..19] frames dropped as replay or time-inconsistent; [20..21] windows dropped by the deliver policy; [22] epoch advances since the key was installed (u8, saturating); [23] the most recent verdict - 0 clear, 1 verified, 2 unverified; [24..25] enrolments, the pairings on this channel that took (the 0xF5 host exchange and the over-air enrolment window alike; attempts that were refused are not counted); [26..27] secured-range broadcasts a master channel heard and refused (a legitimate slave never sends one on a secured channel, so each is a forgery or the master's own window reflected back; docs/radiant-security.md sec 7.6). All counters are u16 LE and saturate rather than wrapping. An unkeyed channel answers zeros and a clear verdict, with the version still set. VERSIONING: fields are only ever added at the end and an offset is never reused. The structure version stays 1 throughout the beta, whatever is added, so a reader tells which fields exist from the body length and treats the version as nothing more than a sanity check. A reader refuses a body shorter than it needs, and decodes the fields it knows from a longer body. This exists so a host that does not take the 0xF8 window-verdict events still has an auditable stream: deliver-as-unverified only means something if unverified cannot be silently treated as verified. The enrolment counter is readable by a host on the node that did the enrolment; other receivers cannot see it over the air.",
+        "payload_len": 30,
+        "desc": "Per-channel security state, requested with MESG_REQUEST (0x4D). [0] channel; [1] structure version, 1; [2] switches currently active, as in 0xF1; [3] W; [4] page range low; [5] high; [6..9] epoch (u32 LE); [10..11] the expected slot index, low 16 bits (u16 LE); [12..13] windows verified; [14..15] windows unverified; [16..17] non-broadcast frames dropped for carrying a secured-range page; [18..19] frames dropped as replay or time-inconsistent; [20..21] windows dropped by the deliver policy; [22] epoch advances since the key was installed (u8, saturating); [23] the most recent verdict - 0 clear, 1 verified, 2 unverified; [24..25] enrolments, the pairings on this channel that took (the 0xF5 host exchange and the over-air enrolment window alike; attempts that were refused are not counted); [26..27] secured-range broadcasts a master channel heard and refused (a legitimate slave never sends one on a secured channel, so each is a forgery or the master's own window reflected back; docs/radiant-security.md sec 7.6); [28..29] 0xF8 window-verdict events the firmware's event queue refused (ring refusals only: a 0xF8 the USB bridge drops on backlog, and a window discarded before its verdict, show only as 0xF8 seq gaps). All counters are u16 LE and saturate rather than wrapping. An unkeyed channel answers zeros and a clear verdict, with the version still set. VERSIONING: fields are only ever added at the end and an offset is never reused. The structure version stays 1 throughout the beta, whatever is added, so a reader tells which fields exist from the body length and treats the version as nothing more than a sanity check. A reader refuses a body shorter than it needs, and decodes the fields it knows from a longer body. This exists so a host that does not take the 0xF8 window-verdict events still has an auditable stream: deliver-as-unverified only means something if unverified cannot be silently treated as verified. The enrolment counter is readable by a host on the node that did the enrolment; other receivers cannot see it over the air.",
     },
     0xF5: {
         "name": 'MESG_RADIANT_PAIRING_ID',
@@ -2078,7 +2084,7 @@ RADIANT_MESSAGES = {
         "name": 'MESG_RADIANT_SEC_VERDICT_ID',
         "direction": 'd2h',
         "payload_len": 7,
-        "desc": "One window's verdict on a secured channel, sent unsolicited, but ONLY on a channel whose 0xF1 set bit 4 (with X_AUTH); without that bit the byte stream is identical to a build without this message. [0] channel; [1] verdict - 1 verified, 2 unverified (never 0; any other value is refused by a reader); [2..3] window_start, the 16-bit counter of the window's first packet (u16 LE); [4] W, 2, 4 or 8; [5..6] seq (u16 LE), this channel's verdict count: one more per verdict, never reset while the channel keeps its key, and one more again whenever the firmware throws away a window that was waiting for its verdict (the host's 0xF1 or 0xF3, an epoch advance, a new device-number candidate, a channel close or open), so any verdict that will never come shows as a gap. VERSIONING: as 0xF4, fields are only appended and a reader decodes the fields it knows from a longer body. The window covers counters window_start .. window_start+W-1. COVERAGE: a verdict covers only BROADCAST_DATA on the same channel whose page byte [0] is inside the secured range (0xF4 [4..5]); a page outside it is cleartext, never judged, whatever its byte [1]. A covered packet maps to the window by payload byte [1], the counter's low 8 bits: (byte1 - window_start) mod 256 < W, unambiguous since W <= 8. Sent after every packet it covers, in the same queue; under the drop policy (0xF1 bit 2) a verified window's held packets are released immediately before it. Data delivery is unchanged by this bit. THE HOST RULE, which is what makes the event safe to act on: (1) a packet is resolved by the FIRST covering 0xF8 that arrives after it, and is never re-resolved by a later one - window_start values repeat and arrive out of order (a forged packet with a past or future counter reopens or opens a window, giving that window an UNVERIFIED and later, for the genuine packets, possibly a VERIFIED; only the first one after a packet is that packet's); (2) a seq gap, EVENT_QUE_OVERFLOW (0x35, sent as channel 0 but meaning every channel, and it can arrive BEFORE packets queued ahead of the loss) or EVENT_SERIAL_QUE_OVERFLOW (0x34), or any loss the host's own transport reports makes every packet still pending unverified (on every channel for the two events) - settled BEFORE the 0xF8 that revealed a gap is applied, so a lost UNVERIFIED cannot be replaced by a later VERIFIED for the same window_start; (3) a genuine verdict for window k comes on the last packet of window k+1, so a packet pending longer than 2W-1 channel periods (plus transport slack) is unverified, and this deadline is checked before EVERY 0xF8 is applied - a host that stops reading for longer than it settles everything it held; (4) pending packets are settled unverified on CHANNEL_CLOSED, on the host's own 0xF1 or 0xF3 for the channel, and on reset, and so is everything pending when the first 0xF8 after any of these (or after the host starts listening) arrives: that first verdict only sets the seq baseline and binds nothing, because packets still in flight from before the flush may be judged by no verdict at all. A host using 0xF8 must not filter EVENT_CHANNEL_CLOSED (0x07) with MESG_EVENT_FILTER_CONFIG (0x79). tools/ant_sec.py VerdictResolver implements this rule.",
+        "desc": "One window's verdict on a secured channel, sent unsolicited, but ONLY on a channel whose 0xF1 set bit 4 (with X_AUTH); without that bit the byte stream is identical to a build without this message. [0] channel; [1] verdict - 1 verified, 2 unverified (never 0; any other value is refused by a reader); [2..3] window_start, the 16-bit counter of the window's first packet (u16 LE); [4] W, 2, 4 or 8; [5..6] seq (u16 LE), this channel's verdict count: one more per verdict, never reset while the channel keeps its key, and one more again whenever the firmware throws away a window that was waiting for its verdict (the host's 0xF1 or 0xF3, an epoch advance, a new device-number candidate, a channel close or open), so any verdict that will never come shows as a gap. VERSIONING: as 0xF4, fields are only appended and a reader decodes the fields it knows from a longer body. The window covers counters window_start .. window_start+W-1. COVERAGE: a verdict covers only BROADCAST_DATA on the same channel whose page byte [0] is inside the secured range (0xF4 [4..5]); a page outside it is cleartext, never judged, whatever its byte [1]. A covered packet maps to the window by payload byte [1], the counter's low 8 bits: (byte1 - window_start) mod 256 < W, unambiguous since W <= 8. Sent after every packet it covers, in the same queue; under the drop policy (0xF1 bit 2) a verified window's held packets are released immediately before it. Data delivery is unchanged by this bit. THE HOST RULE, which is what makes the event safe to act on: (1) a packet is resolved by the FIRST covering 0xF8 that arrives after it, and is never re-resolved by a later one - window_start values repeat and arrive out of order (a forged packet with a past or future counter reopens or opens a window, giving that window an UNVERIFIED and later, for the genuine packets, possibly a VERIFIED; only the first one after a packet is that packet's); (2) a seq gap, EVENT_QUE_OVERFLOW (0x35, sent as channel 0 but meaning every channel, and it can arrive BEFORE packets queued ahead of the loss) or EVENT_SERIAL_QUE_OVERFLOW (0x34), or any loss the host's own transport reports makes every packet still pending unverified (on every channel for the two events) - settled BEFORE the 0xF8 that revealed a gap is applied, so a lost UNVERIFIED cannot be replaced by a later VERIFIED for the same window_start; (3) a genuine verdict for window k comes on the last packet of window k+1, so a packet pending longer than 2W-1 channel periods (plus transport slack) is unverified, and this deadline is checked before EVERY 0xF8 is applied - a host that stops reading for longer than it settles everything it held. A genuine window just before a run of clear-only windows is judged later than that (its tag rides on to the next window with secured packets), so the deadline settles its packets unverified first: fail-safe, genuine data marked unverified, never the reverse; (4) pending packets are settled unverified on CHANNEL_CLOSED, on the host's own 0xF1 or 0xF3 for the channel, and on reset, and so is everything pending when the first 0xF8 after any of these (or after the host starts listening) arrives: that first verdict only sets the seq baseline and binds nothing, because packets still in flight from before the flush may be judged by no verdict at all. A host using 0xF8 must not filter EVENT_CHANNEL_CLOSED (0x07) with MESG_EVENT_FILTER_CONFIG (0x79). tools/ant_sec.py VerdictResolver implements this rule.",
     },
 }
 RADIANT_RESERVED_RANGE = '0xF9-0xFA'

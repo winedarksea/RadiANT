@@ -207,7 +207,7 @@ class TestStatus(unittest.TestCase):
             windows_verified=100, windows_unverified=3,
             dropped_non_broadcast=1, dropped_replay=2, dropped_policy=0,
             epoch_advances=7, verdict=VERDICT_VERIFIED, enrolments=9,
-            dropped_direction=4)
+            dropped_direction=4, verdict_events_dropped=6)
         base.update(kw)
         return SecStatus(**base)
 
@@ -221,7 +221,7 @@ class TestStatus(unittest.TestCase):
         # Against bytes laid out by hand, from the 0xF4 description in
         # protocol/ant_wire.yaml. This is the test that would catch a field
         # inserted in the middle by a well-meaning edit.
-        body = bytearray(28)
+        body = bytearray(30)
         body[0] = 5           # channel
         body[1] = 1           # structure version
         body[2] = SW_CONF     # switches
@@ -239,6 +239,7 @@ class TestStatus(unittest.TestCase):
         body[23] = VERDICT_UNVERIFIED
         body[24:26] = struct.pack("<H", 0x0201)  # enrolments
         body[26:28] = struct.pack("<H", 0x0403)  # dropped_direction
+        body[28:30] = struct.pack("<H", 0x0605)  # verdict_events_dropped
 
         st = decode_status(bytes(body))
         self.assertEqual(5, st.channel)
@@ -260,12 +261,15 @@ class TestStatus(unittest.TestCase):
                          "enrolments is not little-endian at [24..25]")
         self.assertEqual(0x0403, st.dropped_direction,
                          "dropped_direction is not little-endian at [26..27]")
+        self.assertEqual(0x0605, st.verdict_events_dropped,
+                         "verdict_events_dropped is not little-endian at "
+                         "[28..29]")
 
-    def test_the_layout_is_28_bytes_at_version_1(self):
+    def test_the_layout_is_30_bytes_at_version_1(self):
         # Pinned literally, so a change to either constant has to be made on
         # purpose here as well as in ant_radio.h's ANTR_SEC_STATUS_LEN/_VERSION.
         # The version stays 1 through the beta; the length tells the fields.
-        self.assertEqual(28, STATUS_LEN)
+        self.assertEqual(30, STATUS_LEN)
         self.assertEqual(1, STATUS_VERSION)
 
     def test_a_26_byte_body_decodes_without_dropped_direction(self):
@@ -273,7 +277,18 @@ class TestStatus(unittest.TestCase):
         body = encode_status(self.sample())[:26]
         st = decode_status(body)
         self.assertIsNone(st.dropped_direction)
+        self.assertIsNone(st.verdict_events_dropped)
         self.assertEqual(9, st.enrolments)
+
+    def test_a_28_byte_body_decodes_without_verdict_events_dropped(self):
+        st = decode_status(encode_status(self.sample())[:28])
+        self.assertEqual(4, st.dropped_direction)
+        self.assertIsNone(st.verdict_events_dropped)
+
+    def test_verdict_events_dropped_saturates_rather_than_wrapping(self):
+        st = self.sample(verdict_events_dropped=70000)
+        self.assertEqual(
+            0xFFFF, decode_status(encode_status(st)).verdict_events_dropped)
 
     def test_dropped_direction_saturates_rather_than_wrapping(self):
         st = self.sample(dropped_direction=70000)

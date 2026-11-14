@@ -2026,7 +2026,7 @@ radiant_messages:
     - name: MESG_RADIANT_SEC_STATUS_ID
       id: 0xF4
       direction: d2h
-      payload_len: 28
+      payload_len: 30
       desc: "Per-channel security state, requested with MESG_REQUEST (0x4D).
              [0] channel; [1] structure version, 1; [2] switches currently
              active, as in 0xF1; [3] W; [4] page range low; [5] high;
@@ -2043,7 +2043,11 @@ radiant_messages:
              [26..27] secured-range broadcasts a master channel heard and
              refused (a legitimate slave never sends one on a secured
              channel, so each is a forgery or the master's own window
-             reflected back; docs/radiant-security.md sec 7.6). All
+             reflected back; docs/radiant-security.md sec 7.6);
+             [28..29] 0xF8 window-verdict events the firmware's event queue
+             refused (ring refusals only: a 0xF8 the USB bridge drops on
+             backlog, and a window discarded before its verdict, show only
+             as 0xF8 seq gaps). All
              counters are u16 LE and saturate rather than wrapping. An
              unkeyed channel answers zeros and a clear verdict, with the
              version still set. VERSIONING: fields are only ever added at the
@@ -2251,7 +2255,11 @@ radiant_messages:
              2W-1 channel periods (plus transport slack) is unverified, and
              this deadline is checked before EVERY 0xF8 is applied - a host
              that stops reading for longer than it settles everything it
-             held; (4) pending packets are settled unverified on
+             held. A genuine window just before a run of clear-only windows
+             is judged later than that (its tag rides on to the next window
+             with secured packets), so the deadline settles its packets
+             unverified first: fail-safe, genuine data marked unverified,
+             never the reverse; (4) pending packets are settled unverified on
              CHANNEL_CLOSED, on the host's own 0xF1 or 0xF3 for the channel,
              and on reset, and so is everything pending when the first 0xF8
              after any of these (or after the host starts listening)

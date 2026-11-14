@@ -1754,18 +1754,21 @@
  * [26..27] secured-range broadcasts a master channel heard and refused (a
  * legitimate slave never sends one on a secured channel, so each is a forgery
  * or the master's own window reflected back; docs/radiant-security.md sec
- * 7.6). All counters are u16 LE and saturate rather than wrapping. An unkeyed
- * channel answers zeros and a clear verdict, with the version still set.
- * VERSIONING: fields are only ever added at the end and an offset is never
- * reused. The structure version stays 1 throughout the beta, whatever is
- * added, so a reader tells which fields exist from the body length and treats
- * the version as nothing more than a sanity check. A reader refuses a body
- * shorter than it needs, and decodes the fields it knows from a longer body.
- * This exists so a host that does not take the 0xF8 window-verdict events
- * still has an auditable stream: deliver-as-unverified only means something
- * if unverified cannot be silently treated as verified. The enrolment counter
- * is readable by a host on the node that did the enrolment; other receivers
- * cannot see it over the air. [K4 (docs/radiant-security.md sec 3.2 and 9)]
+ * 7.6); [28..29] 0xF8 window-verdict events the firmware's event queue
+ * refused (ring refusals only: a 0xF8 the USB bridge drops on backlog, and a
+ * window discarded before its verdict, show only as 0xF8 seq gaps). All
+ * counters are u16 LE and saturate rather than wrapping. An unkeyed channel
+ * answers zeros and a clear verdict, with the version still set. VERSIONING:
+ * fields are only ever added at the end and an offset is never reused. The
+ * structure version stays 1 throughout the beta, whatever is added, so a
+ * reader tells which fields exist from the body length and treats the version
+ * as nothing more than a sanity check. A reader refuses a body shorter than
+ * it needs, and decodes the fields it knows from a longer body. This exists
+ * so a host that does not take the 0xF8 window-verdict events still has an
+ * auditable stream: deliver-as-unverified only means something if unverified
+ * cannot be silently treated as verified. The enrolment counter is readable
+ * by a host on the node that did the enrolment; other receivers cannot see it
+ * over the air. [K4 (docs/radiant-security.md sec 3.2 and 9)]
  */
 #define RADIANT_WIRE_MESG_RADIANT_SEC_STATUS_ID              0xF4
 
@@ -1930,15 +1933,19 @@
  * packet of window k+1, so a packet pending longer than 2W-1 channel periods
  * (plus transport slack) is unverified, and this deadline is checked before
  * EVERY 0xF8 is applied - a host that stops reading for longer than it
- * settles everything it held; (4) pending packets are settled unverified on
- * CHANNEL_CLOSED, on the host's own 0xF1 or 0xF3 for the channel, and on
- * reset, and so is everything pending when the first 0xF8 after any of these
- * (or after the host starts listening) arrives: that first verdict only sets
- * the seq baseline and binds nothing, because packets still in flight from
- * before the flush may be judged by no verdict at all. A host using 0xF8 must
- * not filter EVENT_CHANNEL_CLOSED (0x07) with MESG_EVENT_FILTER_CONFIG
- * (0x79). tools/ant_sec.py VerdictResolver implements this rule. [Security
- * review 2026-11-13 item 3 (docs/radiant-security.md sec 3.2 and 9)]
+ * settles everything it held. A genuine window just before a run of clear-
+ * only windows is judged later than that (its tag rides on to the next window
+ * with secured packets), so the deadline settles its packets unverified
+ * first: fail-safe, genuine data marked unverified, never the reverse; (4)
+ * pending packets are settled unverified on CHANNEL_CLOSED, on the host's own
+ * 0xF1 or 0xF3 for the channel, and on reset, and so is everything pending
+ * when the first 0xF8 after any of these (or after the host starts listening)
+ * arrives: that first verdict only sets the seq baseline and binds nothing,
+ * because packets still in flight from before the flush may be judged by no
+ * verdict at all. A host using 0xF8 must not filter EVENT_CHANNEL_CLOSED
+ * (0x07) with MESG_EVENT_FILTER_CONFIG (0x79). tools/ant_sec.py
+ * VerdictResolver implements this rule. [Security review 2026-11-13 item 3
+ * (docs/radiant-security.md sec 3.2 and 9)]
  */
 #define RADIANT_WIRE_MESG_RADIANT_SEC_VERDICT_ID             0xF8
 

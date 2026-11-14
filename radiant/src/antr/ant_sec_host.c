@@ -263,6 +263,9 @@ antr_err_t antr_sec_status_get(uint8_t channel, uint8_t *out, uint8_t out_len)
 	/* Secured-range broadcasts a master heard and refused (radiant-security.md
 	 * 7.6): forgeries, or its own windows reflected back. */
 	put_u16_sat(&out[26], stats.dropped_direction);
+	/* 0xF8 events the event ring refused. A USB drop and a window discard
+	 * show only as 0xF8 seq gaps, never here. */
+	put_u16_sat(&out[28], stats.verdict_events_dropped);
 
 	return (antr_err_t)ANTW_RESPONSE_NO_ERROR;
 }

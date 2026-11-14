@@ -114,8 +114,9 @@ KEY_BYTES = KEY_BITS // 8
 # longer body or a higher version still decodes everything named here. The
 # version stays 1 through the beta; a reader tells the fields apart by length.
 # STATUS_LEN_V1_26 is the shortest body still accepted: the layout before
-# dropped_direction was appended at [26..27], which then decodes as None.
-STATUS_LEN = 28
+# dropped_direction was appended at [26..27], which then decodes as None, as
+# verdict_events_dropped at [28..29] does from a body shorter than 30.
+STATUS_LEN = 30
 STATUS_LEN_V1_26 = 26
 STATUS_VERSION = 1
 
@@ -276,6 +277,10 @@ class SecStatus:
     slave, so each one is a forgery or its own window reflected back
     (docs/radiant-security.md 7.6). None when the body predates the field
     (26 bytes).
+
+    `verdict_events_dropped` counts 0xF8 window-verdict events the event
+    queue refused - ring refusals only; a USB drop or a discarded window
+    shows only as a 0xF8 seq gap. None when the body predates it (< 30).
     """
 
     channel: int
@@ -295,6 +300,7 @@ class SecStatus:
     verdict: int
     enrolments: int
     dropped_direction: int | None = None
+    verdict_events_dropped: int | None = None
 
     @property
     def secured(self) -> bool:
@@ -333,6 +339,9 @@ def decode_status(body: bytes) -> SecStatus:
     direction = None
     if len(body) >= 28:
         (direction,) = struct.unpack("<H", bytes(body[26:28]))
+    verdict_drops = None
+    if len(body) >= 30:
+        (verdict_drops,) = struct.unpack("<H", bytes(body[28:30]))
 
     return SecStatus(
         channel=body[0],
@@ -352,6 +361,7 @@ def decode_status(body: bytes) -> SecStatus:
         verdict=body[23],
         enrolments=enrolments,
         dropped_direction=direction,
+        verdict_events_dropped=verdict_drops,
     )
 
 
@@ -376,7 +386,8 @@ def encode_status(st: SecStatus) -> bytes:
                         sat16(st.dropped_policy)) +
             bytes([min(st.epoch_advances, 0xFF), st.verdict]) +
             struct.pack("<H", sat16(st.enrolments)) +
-            struct.pack("<H", sat16(st.dropped_direction or 0)))
+            struct.pack("<H", sat16(st.dropped_direction or 0)) +
+            struct.pack("<H", sat16(st.verdict_events_dropped or 0)))
 
 
 # ── Human-readable ──────────────────────────────────────────────────────────
@@ -518,7 +529,9 @@ class VerdictResolver:
         self.page_lo = page_lo
         self.page_hi = page_hi
         # A genuine verdict comes on the last packet of the NEXT window,
-        # at most 2W-1 periods after the packet.
+        # at most 2W-1 periods after the packet - unless clear-only windows
+        # follow, when it comes later and this deadline has already settled
+        # the packets as unverified. That fails safe, so it stays simple.
         self.deadline_s = (2 * w - 1) * period_s + slack_s
         self.pending: list[tuple[bytes, float]] = []
         self.settled: list[tuple[bytes, int]] = []
