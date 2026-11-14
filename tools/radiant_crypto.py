@@ -716,3 +716,51 @@ def node_tier0_devnum(k_dev: bytes) -> int:
     """
     block = kdf(k_dev, LABEL_ID, 0, 0)
     return (int.from_bytes(block[:2], "little") % 65535) + 1
+
+
+# ── Pairing: the commit/reveal fingerprint and the root ────────────────────
+#
+# The mirror of radiant/src/radiant_sec_pair.c (docs/radiant-security.md
+# section 7.4; security review 2026-11-13, item 4). The X25519 itself is not
+# here - this module has no curve arithmetic - so pair_root() takes the DH
+# output as an argument. f4 and g2 take the shape of Bluetooth LE Secure
+# Connections numeric comparison, over AES-CMAC.
+#
+# A = initiator, B = responder. Public keys are the 32-byte little-endian
+# u-coordinates exactly as they cross the air; nonces are 16 bytes from the
+# hosts' CSPRNGs.
+
+PAIR_NONCE_BYTES = 16
+PAIR_LABEL_ROOT = b"RADIANT-pair-root\x00"   # sizeof() in C: the NUL is in
+
+
+def pair_f4(pkb: bytes, pka: bytes, nb: bytes) -> bytes:
+    """The responder's commitment Cb = CMAC_Nb(PKb || PKa || 0x00)."""
+    return cmac(nb, bytes(pkb) + bytes(pka) + b"\x00")
+
+
+def pair_g2(pka: bytes, pkb: bytes, na: bytes, nb: bytes) -> int:
+    """The six-digit fingerprint, (CMAC_Na(PKa || PKb || Nb) mod 2^32) mod 10^6.
+
+    "mod 2^32" of the tag read as a 128-bit big-endian integer: its last four
+    bytes, big-endian.
+    """
+    tag = cmac(na, bytes(pka) + bytes(pkb) + bytes(nb))
+    return int.from_bytes(tag[12:16], "big") % 1000000
+
+
+def pair_root(shared: bytes, pka: bytes, pkb: bytes, na: bytes,
+              nb: bytes) -> bytes:
+    """K_root = CMAC_PRK(label || PKa || PKb || Na || Nb), PRK = CMAC_0(DH)."""
+    prk = cmac(bytes(16), bytes(shared))
+    return cmac(prk, PAIR_LABEL_ROOT + bytes(pka) + bytes(pkb) + bytes(na)
+                + bytes(nb))
+
+
+def pair_uncommitted(shared: bytes, pub1: bytes, pub2: bytes) -> tuple:
+    """Over-air enrolment's (root, fingerprint): no commitment, both nonces
+    zero, the two keys ordered by value in place of roles. Grindable by a man
+    in the middle - see radiant_sec_pair_peer_uncommitted()."""
+    lo, hi = sorted((bytes(pub1), bytes(pub2)))
+    zero = bytes(PAIR_NONCE_BYTES)
+    return pair_root(shared, lo, hi, zero, zero), pair_g2(lo, hi, zero, zero)

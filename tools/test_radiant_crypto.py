@@ -804,5 +804,81 @@ class TestNodeIdentity(unittest.TestCase):
             rc.node_pair_block(3, 1, 1)
 
 
+
+class TestPairCommitReveal(unittest.TestCase):
+    """radiant_sec_pair.c's f4, g2 and root (docs/radiant-security.md 7.4).
+
+    The keys are RFC 7748 section 6.1's Alice (A, initiator) and Bob (B,
+    responder), whose scalars radiant/tests/src/test_sec_pair.c already uses,
+    so the C test can reach these public keys through the real exchange. The
+    commitment and fingerprint below appear there as literals: the C asserts
+    values this independent implementation produced.
+    """
+
+    PKA = bytes.fromhex(
+        "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a")
+    PKB = bytes.fromhex(
+        "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f")
+    SHARED = bytes.fromhex(
+        "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742")
+    NA = bytes(range(0x10, 0x20))
+    NB = bytes(range(0xA0, 0xB0))
+
+    # Shared with test_sec_pair.c (VEC_CB, VEC_FP, VEC_FP_UNCOMMITTED).
+    CB = bytes.fromhex("87ec01f617e1f4d983c7fd3e6ad6859b")
+    FP = 362706
+    FP_UNCOMMITTED = 172078
+    # Python-only: the root cannot be read back out of the C.
+    ROOT = bytes.fromhex("9a6957177a6ad242f7c3c144a0bc9c08")
+    ROOT_UNCOMMITTED = bytes.fromhex("411b4b07be8427ac8bc6ad572660e1bf")
+
+    def test_the_commitment_vector(self):
+        self.assertEqual(self.CB, rc.pair_f4(self.PKB, self.PKA, self.NB))
+
+    def test_the_fingerprint_vector(self):
+        self.assertEqual(self.FP,
+                         rc.pair_g2(self.PKA, self.PKB, self.NA, self.NB))
+
+    def test_the_root_vectors(self):
+        self.assertEqual(self.ROOT, rc.pair_root(self.SHARED, self.PKA,
+                                                 self.PKB, self.NA, self.NB))
+        self.assertEqual((self.ROOT_UNCOMMITTED, self.FP_UNCOMMITTED),
+                         rc.pair_uncommitted(self.SHARED, self.PKB, self.PKA))
+
+    def test_either_nonce_changes_the_fingerprint(self):
+        other = bytes(16)
+        self.assertNotEqual(self.FP,
+                            rc.pair_g2(self.PKA, self.PKB, other, self.NB))
+        self.assertNotEqual(self.FP,
+                            rc.pair_g2(self.PKA, self.PKB, self.NA, other))
+
+    def test_the_roles_are_not_interchangeable(self):
+        # The order is by role, not by value: the two ends must agree who is
+        # A, which is the hosts' business, and getting it wrong shows as a
+        # mismatch rather than as a silent agreement.
+        self.assertNotEqual(self.FP,
+                            rc.pair_g2(self.PKB, self.PKA, self.NA, self.NB))
+
+    def test_the_commitment_binds_the_nonce_and_both_keys(self):
+        self.assertNotEqual(self.CB, rc.pair_f4(self.PKB, self.PKA, self.NA))
+        self.assertNotEqual(self.CB, rc.pair_f4(self.PKA, self.PKB, self.NB))
+
+    def test_a_committed_attacker_cannot_steer_the_fingerprint(self):
+        # The grinding attacker, modelled: it fixed Nm (and its key) when it
+        # committed, and only then learns Na. Of every Nm it could have
+        # committed to, about one in a million lands on a chosen target - and
+        # it had to pick one before seeing Na. Here: for a fixed Na, how many
+        # of 2000 pre-committed nonces hit a fixed six-digit target? Expected
+        # 0.002; the assertion is the weak form, that the hit rate is nowhere
+        # near the 1.0 an attacker choosing Nm after Na would have.
+        target = rc.pair_g2(self.PKA, self.PKB, self.NA, self.NB)
+        hits = sum(
+            1 for i in range(2000)
+            if rc.pair_g2(self.PKA, self.PKB, self.NA,
+                          i.to_bytes(16, "little")) == target
+            and i.to_bytes(16, "little") != self.NB)
+        self.assertLessEqual(hits, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

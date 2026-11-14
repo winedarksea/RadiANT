@@ -356,20 +356,63 @@ class TestPairing(unittest.TestCase):
         self.assertEqual(0x02, got["subcmd"])
         self.assertEqual(pub, got["public_key"])
 
-    def test_an_exchange_reply_carries_a_u24_fingerprint(self):
+    def test_an_exchange_carries_the_peer_key_and_answers_nothing(self):
+        # DH only: the exchange installs nothing and has no fingerprint yet,
+        # so its reply is the bare echo (review 2026-11-13, item 4).
+        pub = bytes(range(32))
+        self.assertEqual(bytes([1, 0x03]) + pub,
+                         ant_sec.encode_pair_exchange(1, pub))
+        got = ant_sec.decode_pair_reply(bytes([1, 0x03]))
+        self.assertNotIn("fingerprint", got)
+
+    def test_a_nonce_carries_the_role_then_sixteen_bytes(self):
+        n = bytes(range(16))
+        self.assertEqual(bytes([2, 0x04, 0x01]) + n,
+                         ant_sec.encode_pair_nonce(
+                             2, ant_sec.PAIR_ROLE_RESPONDER, n))
+        self.assertEqual(bytes([2, 0x04, 0x00]) + n,
+                         ant_sec.encode_pair_nonce(
+                             2, ant_sec.PAIR_ROLE_INITIATOR, n))
+        with self.assertRaises(ValueError):
+            ant_sec.encode_pair_nonce(2, 2, n)
+        with self.assertRaises(ValueError):
+            ant_sec.encode_pair_nonce(2, 0, bytes(15))
+
+    def test_the_commit_and_peer_nonce_carry_sixteen_bytes(self):
+        c = bytes(range(16, 32))
+        self.assertEqual(bytes([0, 0x05]) + c,
+                         ant_sec.encode_pair_peer_commit(0, c))
+        self.assertEqual(bytes([0, 0x06]) + c,
+                         ant_sec.encode_pair_peer_nonce(0, c))
+        for enc in (ant_sec.encode_pair_peer_commit,
+                    ant_sec.encode_pair_peer_nonce):
+            with self.subTest(enc=enc.__name__):
+                with self.assertRaises(ValueError):
+                    enc(0, bytes(17))
+
+    def test_a_responders_nonce_reply_carries_the_commitment(self):
+        c = bytes(range(16))
+        got = ant_sec.decode_pair_reply(bytes([1, 0x04]) + c)
+        self.assertEqual(c, got["commit"])
+        # An initiator's is the bare echo.
+        self.assertNotIn("commit", ant_sec.decode_pair_reply(bytes([1, 0x04])))
+
+    def test_a_peer_nonce_reply_carries_a_u24_fingerprint(self):
         # 999999 = 0x0F423F, little-endian 3F 42 0F.
-        reply = bytes([0, 0x03, 0x3F, 0x42, 0x0F])
+        reply = bytes([0, 0x06, 0x3F, 0x42, 0x0F])
         got = ant_sec.decode_pair_reply(reply)
         self.assertEqual(999999, got["fingerprint"])
 
     def test_every_reply_says_which_sub_command_answered(self):
-        # A public key and a fingerprint are both "bytes after a channel byte",
-        # so a host reading a stream needs the echo to tell them apart.
-        for sub in (0x00, 0x01):
+        # A public key, a commitment and a fingerprint are all "bytes after a
+        # channel byte", so a host reading a stream needs the echo to tell
+        # them apart.
+        for sub in (0x00, 0x01, 0x03, 0x04, 0x05):
             with self.subTest(sub=sub):
                 got = ant_sec.decode_pair_reply(bytes([1, sub]))
                 self.assertEqual(sub, got["subcmd"])
                 self.assertNotIn("public_key", got)
+                self.assertNotIn("commit", got)
                 self.assertNotIn("fingerprint", got)
 
     def test_a_truncated_reply_is_refused(self):
@@ -378,7 +421,17 @@ class TestPairing(unittest.TestCase):
         with self.assertRaises(ValueError):
             ant_sec.decode_pair_reply(bytes([0, 0x02]) + bytes(31))
         with self.assertRaises(ValueError):
-            ant_sec.decode_pair_reply(bytes([0, 0x03, 0x11, 0x22]))
+            ant_sec.decode_pair_reply(bytes([0, 0x04]) + bytes(15))
+        with self.assertRaises(ValueError):
+            ant_sec.decode_pair_reply(bytes([0, 0x06, 0x11, 0x22]))
+
+    def test_the_sub_command_numbers_are_the_generated_ones(self):
+        import ant_wire
+        self.assertEqual((0x03, 0x04, 0x05, 0x06),
+                         (ant_wire.RADIANT_PAIR_EXCHANGE,
+                          ant_wire.RADIANT_PAIR_NONCE,
+                          ant_wire.RADIANT_PAIR_PEER_COMMIT,
+                          ant_wire.RADIANT_PAIR_PEER_NONCE))
 
     def test_the_fingerprint_is_zero_padded(self):
         # "042317" and "42317" are the same number, and a user comparing two

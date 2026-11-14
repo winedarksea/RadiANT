@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
-"""Encode and decode the RadiANT security messages, 0xF1 to 0xF4.
+"""Encode and decode the RadiANT security messages, 0xF1 to 0xF5.
 
 NOT ANT protocol. These are ours, answered by no ANT device, and their
 semantics live in docs/radiant-security.md; only the numbering was decided in
@@ -43,6 +43,9 @@ from ant_wire import (
     RADIANT_PAIR_ENTER,
     RADIANT_PAIR_EXCHANGE,
     RADIANT_PAIR_LEAVE,
+    RADIANT_PAIR_NONCE,
+    RADIANT_PAIR_PEER_COMMIT,
+    RADIANT_PAIR_PEER_NONCE,
     RADIANT_PAIR_SCALAR,
 )
 
@@ -56,9 +59,11 @@ __all__ = [
     "encode_epoch", "decode_epoch",
     "decode_status", "encode_status",
     "switches_str", "verdict_str",
-    "X25519_BYTES", "PAIR_TIMEOUT_DEFAULT_S",
+    "X25519_BYTES", "PAIR_TIMEOUT_DEFAULT_S", "PAIR_NONCE_BYTES",
+    "PAIR_COMMIT_BYTES", "PAIR_ROLE_INITIATOR", "PAIR_ROLE_RESPONDER",
     "encode_pair_enter", "encode_pair_leave", "encode_pair_scalar",
-    "encode_pair_exchange", "decode_pair_reply", "fingerprint_str",
+    "encode_pair_exchange", "encode_pair_nonce", "encode_pair_peer_commit",
+    "encode_pair_peer_nonce", "decode_pair_reply", "fingerprint_str",
 ]
 
 # 0xF1's switch bitmask. The same byte the firmware uses - radiant_sec.h's
@@ -404,6 +409,8 @@ def encode_pair_scalar(channel: int, scalar: bytes) -> bytes:
 
 
 def encode_pair_exchange(channel: int, peer_pub: bytes) -> bytes:
+    """The Diffie-Hellman half. Installs nothing and returns no fingerprint:
+    those wait for the nonce commit/reveal below."""
     _check_channel(channel)
     if len(peer_pub) != X25519_BYTES:
         raise ValueError(
@@ -411,12 +418,64 @@ def encode_pair_exchange(channel: int, peer_pub: bytes) -> bytes:
     return bytes([channel, RADIANT_PAIR_EXCHANGE]) + bytes(peer_pub)
 
 
+# The commit/reveal (docs/radiant-security.md section 7.4). Without it a man in
+# the middle grinds key pairs until both screens show the same six digits; with
+# it, one of the two nonces is always fixed before the other is known. The
+# host sequence, A = initiator and B = responder, each host driving its own end:
+#
+#   both  ENTER, SCALAR -> own key; [keys cross]; EXCHANGE(peer key)
+#   B     NONCE(RESPONDER, Nb) -> Cb;                  [Cb to A]
+#   A     NONCE(INITIATOR, Na); PEER_COMMIT(Cb);       [Na to B]
+#   B     PEER_NONCE(Na) -> fp;                        [Nb to A]
+#   A     PEER_NONCE(Nb) -> fp, or a refusal if Nb does not open Cb
+#
+# The two waits are the protocol: A sends Na only after PEER_COMMIT has been
+# answered, and B sends Nb only after its own PEER_NONCE. Nonces come from
+# `secrets.token_bytes(16)`, like the scalar.
+
+PAIR_NONCE_BYTES = 16
+PAIR_COMMIT_BYTES = 16
+PAIR_ROLE_INITIATOR = 0
+PAIR_ROLE_RESPONDER = 1
+
+
+def _check_nonce(what: str, value: bytes, want: int) -> None:
+    if len(value) != want:
+        raise ValueError(f"{what} is {len(value)} bytes, want {want}")
+
+
+def encode_pair_nonce(channel: int, role: int, nonce: bytes) -> bytes:
+    """This end's role and nonce. A responder's reply carries Cb."""
+    _check_channel(channel)
+    if role not in (PAIR_ROLE_INITIATOR, PAIR_ROLE_RESPONDER):
+        raise ValueError(f"role {role} is neither initiator (0) nor "
+                         "responder (1)")
+    _check_nonce("nonce", nonce, PAIR_NONCE_BYTES)
+    return bytes([channel, RADIANT_PAIR_NONCE, role]) + bytes(nonce)
+
+
+def encode_pair_peer_commit(channel: int, commit: bytes) -> bytes:
+    """Initiator only: the responder's commitment, before Na goes out."""
+    _check_channel(channel)
+    _check_nonce("commitment", commit, PAIR_COMMIT_BYTES)
+    return bytes([channel, RADIANT_PAIR_PEER_COMMIT]) + bytes(commit)
+
+
+def encode_pair_peer_nonce(channel: int, nonce: bytes) -> bytes:
+    """The peer's nonce. The reply carries the fingerprint."""
+    _check_channel(channel)
+    _check_nonce("nonce", nonce, PAIR_NONCE_BYTES)
+    return bytes([channel, RADIANT_PAIR_PEER_NONCE]) + bytes(nonce)
+
+
 def decode_pair_reply(body: bytes) -> dict:
     """Decode a 0xF5 reply.
 
     Every reply leads with [channel, sub-command], which is what lets a host
-    reading a stream of them tell which one answered: a public key and a
-    fingerprint are both "some bytes after a channel byte" otherwise.
+    reading a stream of them tell which one answered: a public key, a
+    commitment and a fingerprint are all "some bytes after a channel byte"
+    otherwise. A NONCE reply carries a commitment only from a responder, so
+    its length is what says which.
     """
     if len(body) < 2:
         raise ValueError(f"0xF5 reply is {len(body)} bytes, want at least 2")
@@ -427,9 +486,14 @@ def decode_pair_reply(body: bytes) -> dict:
         if len(body) < 2 + X25519_BYTES:
             raise ValueError("a scalar reply carries the 32-byte public key")
         out["public_key"] = bytes(body[2:2 + X25519_BYTES])
-    elif body[1] == RADIANT_PAIR_EXCHANGE:
+    elif body[1] == RADIANT_PAIR_NONCE and len(body) > 2:
+        if len(body) < 2 + PAIR_COMMIT_BYTES:
+            raise ValueError("a responder's nonce reply carries a 16-byte "
+                             "commitment")
+        out["commit"] = bytes(body[2:2 + PAIR_COMMIT_BYTES])
+    elif body[1] == RADIANT_PAIR_PEER_NONCE:
         if len(body) < 5:
-            raise ValueError("an exchange reply carries a u24 fingerprint")
+            raise ValueError("a peer-nonce reply carries a u24 fingerprint")
         out["fingerprint"] = (int(body[2]) | (int(body[3]) << 8) |
                               (int(body[4]) << 16))
     return out
