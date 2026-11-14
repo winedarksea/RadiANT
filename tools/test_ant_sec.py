@@ -344,10 +344,10 @@ class TestVerdict(unittest.TestCase):
     """0xF8. Mirrors radiant_sec_window_verdict() in ant_radio_radiant.c and
     the bytes test_api_sec_host.c checks on the firmware side."""
 
-    def test_the_bytes_are_ch_verdict_start_le_w_seq(self):
-        body = bytes([2, VERDICT_UNVERIFIED, 0x34, 0x12, 4, 7])
+    def test_the_bytes_are_ch_verdict_start_le_w_seq_le(self):
+        body = bytes([2, VERDICT_UNVERIFIED, 0x34, 0x12, 4, 0x07, 0x01])
         self.assertEqual({"channel": 2, "verdict": VERDICT_UNVERIFIED,
-                          "window_start": 0x1234, "w": 4, "seq": 7},
+                          "window_start": 0x1234, "w": 4, "seq": 0x0107},
                          decode_verdict(body))
 
     def test_round_trip(self):
@@ -355,27 +355,27 @@ class TestVerdict(unittest.TestCase):
             for start in (0, w, 0x10000 - w):
                 with self.subTest(w=w, start=start):
                     body = ant_sec.encode_verdict(1, VERDICT_VERIFIED,
-                                                  start, w, 255)
+                                                  start, w, 0xFFFF)
                     self.assertEqual(ant_sec.VERDICT_LEN, len(body))
                     v = decode_verdict(body)
-                    self.assertEqual((1, VERDICT_VERIFIED, start, w, 255),
+                    self.assertEqual((1, VERDICT_VERIFIED, start, w, 0xFFFF),
                                      (v["channel"], v["verdict"],
                                       v["window_start"], v["w"], v["seq"]))
 
     def test_a_short_body_is_refused_and_a_long_one_decodes(self):
         with self.assertRaises(ValueError):
-            decode_verdict(bytes([0, 1, 0, 0, 2]))
+            decode_verdict(bytes([0, 1, 0, 0, 2, 0]))
         self.assertEqual(0x0102, decode_verdict(
-            bytes([0, 1, 0x02, 0x01, 2, 0, 0xEE]))["window_start"])
+            bytes([0, 1, 0x02, 0x01, 2, 0, 0, 0xEE]))["window_start"])
 
     def test_the_decoder_refuses_what_firmware_never_sends(self):
         for verdict in (0, 3, 0xFF):
             with self.subTest(verdict=verdict), \
                     self.assertRaises(ValueError):
-                decode_verdict(bytes([0, verdict, 0, 0, 2, 0]))
+                decode_verdict(bytes([0, verdict, 0, 0, 2, 0, 0]))
         for w in (0, 1, 3, 16):
             with self.subTest(w=w), self.assertRaises(ValueError):
-                decode_verdict(bytes([0, 1, 0, 0, w, 0]))
+                decode_verdict(bytes([0, 1, 0, 0, w, 0, 0]))
 
     def test_the_encoder_refuses_what_firmware_never_sends(self):
         with self.assertRaises(ValueError):
@@ -385,7 +385,7 @@ class TestVerdict(unittest.TestCase):
         with self.assertRaises(ValueError):
             ant_sec.encode_verdict(0, VERDICT_VERIFIED, 0, 3)
         with self.assertRaises(ValueError):
-            ant_sec.encode_verdict(0, VERDICT_VERIFIED, 0, 2, 256)
+            ant_sec.encode_verdict(0, VERDICT_VERIFIED, 0, 2, 0x10000)
 
     def test_a_packet_maps_to_its_window_by_byte_one(self):
         # Window 0x01FC at W=4 covers counters 0x01FC..0x01FF. W divides 256,
@@ -423,86 +423,138 @@ def _f8(verdict: int, start: int, seq: int, w: int = 2) -> bytes:
 
 
 class TestVerdictResolver(unittest.TestCase):
-    """The host rule. Each case is one of review 2026-11-13's attacks on a
-    host that credited a packet with any matching VERIFIED."""
+    """The host rule. Each case is one of the review's attacks on a host that
+    credited a packet with any matching VERIFIED."""
 
     V, U = VERDICT_VERIFIED, VERDICT_UNVERIFIED
 
-    def resolver(self):
-        return ant_sec.VerdictResolver(0, w=2, period_s=0.25)
+    def resolver(self, baseline_seq=None):
+        """A resolver at 4 Hz, W=2 (deadline 0.75 s + 0.25 s slack). With
+        `baseline_seq`, it has already taken one verdict with that seq, as
+        a host that has been listening has."""
+        r = ant_sec.VerdictResolver(0, w=2, period_s=0.25, page_lo=0x01,
+                                    page_hi=0x0F)
+        if baseline_seq is not None:
+            r.verdict(_f8(self.V, 0x00FE, baseline_seq), 0.0)
+        return r
+
+    def test_the_page_range_is_not_optional(self):
+        with self.assertRaises(TypeError):
+            ant_sec.VerdictResolver(0, w=2, period_s=0.25)  # noqa
 
     def test_a_genuine_stream_verifies(self):
+        r = self.resolver(baseline_seq=9)
+        for c in range(4):
+            r.data(_page(c), c * 0.25)
+        r.verdict(_f8(self.V, 0, 10), 0.75)
+        self.assertEqual([(_page(0), self.V), (_page(1), self.V)], r.settled)
+        self.assertEqual(2, len(r.pending))
+
+    def test_the_first_verdict_after_a_start_binds_nothing(self):
         r = self.resolver()
         for c in range(4):
             r.data(_page(c), c * 0.25)
-        r.verdict(_f8(self.V, 0, 0))
-        self.assertEqual([(_page(0), self.V), (_page(1), self.V)], r.settled)
-        self.assertEqual(2, len(r.pending))
+        r.verdict(_f8(self.V, 0, 3), 0.75)
+        self.assertEqual([self.U] * 4, [v for _, v in r.settled])
+        r.data(_page(4), 1.0)
+        r.data(_page(5), 1.25)
+        r.verdict(_f8(self.V, 4, 4), 1.25)     # the baseline is set now
+        self.assertEqual([self.V, self.V], [v for _, v in r.settled[4:]])
+
+    def test_the_first_verdict_after_a_flush_binds_nothing(self):
+        # Review finding 2: a forged counter-4 page was pumped just before the
+        # host's 0xF3, which threw its window away, so no UNVERIFIED for it
+        # will ever come. It reaches the host after the flush; the first
+        # genuine verdict after the flush must not bind it - nor may the
+        # later VERIFIED(4) the genuine window earns.
+        r = self.resolver(baseline_seq=9)
+        r.flush()
+        forged = _page(4, tag=0xEE)
+        r.data(forged, 0.5)
+        for c in range(2, 6):
+            r.data(_page(c), c * 0.25)
+        r.verdict(_f8(self.V, 2, 12), 1.25)    # seq continuous: no gap
+        r.data(_page(6), 1.5)
+        r.data(_page(7), 1.75)
+        r.verdict(_f8(self.V, 4, 13), 1.75)
+        self.assertEqual([self.U], [v for p, v in r.settled if p == forged])
+
+    def test_the_deadline_applies_before_a_verdict(self):
+        # A packet older than 2W-1 periods plus slack can't be this verdict's:
+        # a host that stalled its reads settles it before applying anything.
+        r = self.resolver(baseline_seq=9)
+        stale = _page(0)
+        r.data(stale, 0.0)
+        r.verdict(_f8(self.V, 0, 10), 5.0)
+        self.assertEqual([(stale, self.U)], r.settled)
 
     def test_a_future_forgery_is_bound_to_the_first_verdict(self):
         # The firmware sequence for a forged counter-10 page among genuine
         # ones (test_api_sec_host.c): UNV(10) settles the forgery, and the
         # later VERIFIED(10) only reaches the genuine 10 and 11.
-        r = self.resolver()
+        r = self.resolver(baseline_seq=9)
         forged = _page(10, tag=0xEE)
         r.data(_page(0), 0)
         r.data(_page(1), 0.25)
         r.data(forged, 0.5)
-        r.verdict(_f8(self.U, 0, 0))
+        r.verdict(_f8(self.U, 0, 10), 0.5)
         r.data(_page(2), 0.5)
         r.data(_page(3), 0.75)
-        r.verdict(_f8(self.U, 10, 1))
+        r.verdict(_f8(self.U, 10, 11), 0.75)
         self.assertIn((forged, self.U), r.settled)
         for c in range(4, 12):
             r.data(_page(c), c * 0.25)
             if c % 2:
-                r.verdict(_f8(self.V, c - 3, 2 + (c - 5) // 2))
+                r.verdict(_f8(self.V, c - 3, 12 + (c - 5) // 2), c * 0.25)
         r.data(_page(12), 3.0)
         r.data(_page(13), 3.25)
-        r.verdict(_f8(self.V, 10, 6))
-        verdicts_of_forged = [v for p, v in r.settled if p == forged]
-        self.assertEqual([self.U], verdicts_of_forged)
+        r.verdict(_f8(self.V, 10, 16), 3.25)
+        self.assertEqual([self.U], [v for p, v in r.settled if p == forged])
         self.assertIn((_page(10), self.V), r.settled)
 
     def test_a_lost_unverified_is_not_replaced_by_a_later_verified(self):
-        # The forgery's UNV(10) (seq 1) is lost on the way; the next verdict
+        # The forgery's UNV(10) (seq 11) is lost on the way; the next verdict
         # reveals the gap, and everything pending - the forgery included -
         # settles unverified before VERIFIED(10) is applied.
-        r = self.resolver()
+        r = self.resolver(baseline_seq=9)
         forged = _page(10, tag=0xEE)
         r.data(forged, 0.5)
-        r.verdict(_f8(self.U, 0, 0))
+        r.verdict(_f8(self.U, 0, 10), 0.5)
         r.data(_page(10), 2.5)
         r.data(_page(11), 2.75)
-        r.verdict(_f8(self.V, 10, 2))       # seq 1 never arrived
+        r.verdict(_f8(self.V, 10, 12), 2.75)   # seq 11 never arrived
         self.assertEqual([self.U], [v for p, v in r.settled if p == forged])
         self.assertEqual(0, len(r.pending))
 
-    def test_an_overflow_settles_everything_pending(self):
-        r = self.resolver()
-        r.data(_page(10, tag=0xEE), 0.5)
-        r.overflow()
-        r.verdict(_f8(self.V, 10, 0))
-        self.assertEqual([self.U], [v for _, v in r.settled])
+    def test_an_overflow_settles_every_channel(self):
+        r0 = self.resolver(baseline_seq=9)
+        r1 = ant_sec.VerdictResolver(1, w=2, period_s=0.25, page_lo=0x01,
+                                     page_hi=0x0F)
+        r0.data(_page(10, tag=0xEE), 0.5)
+        r1.data(_page(3), 0.5)
+        ant_sec.overflow_all([r0, r1])
+        r0.verdict(_f8(self.V, 10, 10), 0.75)
+        self.assertEqual([self.U], [v for _, v in r0.settled])
+        self.assertEqual([self.U], [v for _, v in r1.settled])
 
     def test_a_late_reopen_gets_the_first_unverified(self):
         # A forged counter-0 page after window 0 closed reopens it: the
         # firmware sends UNV(0) twice. The first after each packet binds.
-        r = self.resolver()
+        r = self.resolver(baseline_seq=9)
         r.data(_page(0), 0)
         r.data(_page(1), 0.25)
         forged = _page(0, tag=0xEE)
         r.data(forged, 0.5)
-        r.verdict(_f8(self.U, 0, 0))
+        r.verdict(_f8(self.U, 0, 10), 0.5)
         r.data(_page(2), 0.5)
         r.data(_page(3), 0.75)
-        r.verdict(_f8(self.U, 0, 1))
-        self.assertEqual(3, len(r.settled))
+        r.verdict(_f8(self.U, 0, 11), 0.75)
+        self.assertEqual(3, len(r.settled) - 0)
         self.assertTrue(all(v == self.U for _, v in r.settled))
         self.assertEqual(2, len(r.pending))
 
     def test_a_verdict_that_never_comes_expires(self):
-        r = self.resolver()
+        r = self.resolver(baseline_seq=9)
         r.data(_page(4), 1.0)
         r.expire(1.0 + 0.75 + 0.2)          # inside 2W-1 periods + slack
         self.assertEqual(1, len(r.pending))
@@ -510,22 +562,11 @@ class TestVerdictResolver(unittest.TestCase):
         self.assertEqual([(_page(4), self.U)], r.settled)
 
     def test_a_cleartext_page_is_clear_not_pending(self):
-        r = self.resolver()
+        r = self.resolver(baseline_seq=9)
         self.assertEqual(ant_sec.VERDICT_CLEAR,
                          r.data(bytes([0x50, 0x00, 0, 0, 0, 0, 0, 0]), 0))
-        r.verdict(_f8(self.V, 0, 0))
+        r.verdict(_f8(self.V, 0, 10), 0.25)
         self.assertEqual([ant_sec.VERDICT_CLEAR], [v for _, v in r.settled])
-
-    def test_a_flush_settles_and_forgets_the_sequence(self):
-        r = self.resolver()
-        r.verdict(_f8(self.V, 0, 5))
-        r.data(_page(2), 0.5)
-        r.flush()
-        self.assertEqual([(_page(2), self.U)], r.settled)
-        r.data(_page(0), 0)
-        r.data(_page(1), 0.25)
-        r.verdict(_f8(self.V, 0, 0))        # seq restarted at 0xF1: no gap
-        self.assertEqual(self.V, r.settled[-1][1])
 
 
 class TestPairing(unittest.TestCase):

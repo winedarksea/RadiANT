@@ -59,7 +59,7 @@ __all__ = [
     "decode_status", "encode_status",
     "switches_str", "verdict_str",
     "VERDICT_LEN", "decode_verdict", "encode_verdict", "verdict_covers",
-    "VerdictResolver",
+    "VerdictResolver", "overflow_all",
     "X25519_BYTES", "PAIR_TIMEOUT_DEFAULT_S",
     "encode_pair_enter", "encode_pair_leave", "encode_pair_scalar",
     "encode_pair_exchange", "decode_pair_reply", "fingerprint_str",
@@ -379,15 +379,16 @@ def verdict_str(verdict: int) -> str:
 # follows every packet it covers in the same queue. A verdict is only safe to
 # act on under the host rule in protocol/ant_wire.yaml (0xF8) and
 # docs/radiant-security.md 3.2, which VerdictResolver below implements: the
-# first covering verdict after a packet binds it, a sequence gap or a queue
-# overflow settles everything pending as unverified, and so does a deadline.
+# first covering verdict after a packet binds it; a sequence gap, a queue
+# overflow or the deadline settles what is pending as unverified; and the
+# first verdict after a start or a flush binds nothing.
 
-VERDICT_LEN = 6
+VERDICT_LEN = 7
 
 
 def decode_verdict(body: bytes) -> dict:
     """Body of MESG_RADIANT_SEC_VERDICT_ID:
-    [ch, verdict, window_start LE, W, seq].
+    [ch, verdict, window_start LE, W, seq LE].
 
     A longer body decodes the fields named here (fields are only appended).
     A verdict other than verified/unverified, or a W the firmware cannot
@@ -402,12 +403,13 @@ def decode_verdict(body: bytes) -> dict:
     if body[4] not in LEGAL_W:
         raise ValueError(f"0xF8 W={body[4]} is not one of {LEGAL_W}")
     window_start, = struct.unpack_from("<H", body, 2)
+    seq, = struct.unpack_from("<H", body, 5)
     return {
         "channel": body[0],
         "verdict": body[1],
         "window_start": window_start,
         "w": body[4],
-        "seq": body[5],
+        "seq": seq,
     }
 
 
@@ -422,10 +424,10 @@ def encode_verdict(channel: int, verdict: int, window_start: int,
     if not 0 <= window_start <= 0xFFFF or window_start % w:
         raise ValueError(
             f"window_start {window_start} is not a 16-bit multiple of W={w}")
-    if not 0 <= seq <= 0xFF:
-        raise ValueError(f"seq {seq} does not fit in a byte")
+    if not 0 <= seq <= 0xFFFF:
+        raise ValueError(f"seq {seq} does not fit in 16 bits")
     return (bytes([channel, verdict]) + struct.pack("<H", window_start) +
-            bytes([w, seq]))
+            bytes([w]) + struct.pack("<H", seq))
 
 
 def verdict_covers(verdict: dict, channel: int, payload: bytes,
@@ -440,7 +442,8 @@ def verdict_covers(verdict: dict, channel: int, payload: bytes,
     For a covered page, byte [1] is the counter's low 8 bits, so it is in the
     window when (byte1 - window_start) mod 256 < W, unambiguous since W <= 8.
     "Could" because matching is necessary, not sufficient: only the FIRST
-    covering verdict after the packet is the packet's (VerdictResolver).
+    covering verdict after the packet is the packet's, and only when nothing
+    since says verdicts were lost (VerdictResolver).
     """
     if len(payload) < 2:
         raise ValueError("a secured page has at least two bytes")
@@ -457,20 +460,24 @@ class VerdictResolver:
     data(payload, t)        a BROADCAST_DATA on this channel, at time t (s);
                             returns VERDICT_CLEAR at once for a page outside
                             the secured range, else None (pending)
-    verdict(body)           a 0xF8 for this channel
+    verdict(body, now)      a 0xF8 for this channel, arriving at `now`; the
+                            deadline is applied first
     overflow()              EVENT_QUE_OVERFLOW / EVENT_SERIAL_QUE_OVERFLOW, or
-                            a loss the transport reported
+                            a loss the transport reported (overflow_all()
+                            feeds the events to every channel's resolver)
     expire(now)             settle packets pending longer than the deadline
     flush()                 CHANNEL_CLOSED, the host's own 0xF1/0xF3, reset
 
     Each settled packet is appended to `.settled` as (payload, verdict). A
     packet is settled exactly once: by the first covering verdict after it,
-    or as unverified by a gap, an overflow, the deadline or a flush.
+    or as unverified by a gap, an overflow, the deadline, a flush, or the
+    first verdict after a start or a flush - which only sets the seq
+    baseline, because a packet still in flight across the flush may be
+    judged by no verdict at all (the firmware threw its window away).
     """
 
     def __init__(self, channel: int, w: int, period_s: float,
-                 page_lo: int = PAGE_LO_MIN, page_hi: int = 0x0F,
-                 slack_s: float = 0.25):
+                 page_lo: int, page_hi: int, slack_s: float = 0.25):
         self.channel = channel
         self.w = w
         self.page_lo = page_lo
@@ -494,16 +501,21 @@ class VerdictResolver:
             self.settled.append((p, how))
         self.pending = []
 
-    def verdict(self, body: bytes) -> None:
+    def verdict(self, body: bytes, now: float) -> None:
         v = decode_verdict(body)
         if v["channel"] != self.channel:
             raise ValueError(f"0xF8 for channel {v['channel']} fed to the "
                              f"resolver for {self.channel}")
-        if self.next_seq is not None and v["seq"] != self.next_seq:
-            # Lost verdicts: whatever they would have said, nothing pending
-            # may be resolved by a later one. Settled BEFORE this verdict.
+        # A packet older than the deadline can't be this verdict's: a read
+        # stall longer than it settles everything held.
+        self.expire(now)
+        if self.next_seq is None or v["seq"] != self.next_seq:
+            # No baseline yet, or verdicts were lost: nothing pending may be
+            # resolved by this or any later verdict. Settled BEFORE it.
             self._settle_all(VERDICT_UNVERIFIED)
-        self.next_seq = (v["seq"] + 1) & 0xFF
+            self.next_seq = (v["seq"] + 1) & 0xFFFF
+            return
+        self.next_seq = (v["seq"] + 1) & 0xFFFF
         keep = []
         for p, t in self.pending:
             if verdict_covers(v, self.channel, p, self.page_lo, self.page_hi):
@@ -526,9 +538,15 @@ class VerdictResolver:
 
     def flush(self) -> None:
         self._settle_all(VERDICT_UNVERIFIED)
-        # The firmware restarts seq at the host's 0xF1; after a close it may
-        # jump. Either way the next verdict starts a fresh expectation.
+        # The next verdict only re-establishes the baseline.
         self.next_seq = None
+
+
+def overflow_all(resolvers) -> None:
+    """EVENT_QUE_OVERFLOW (0x35) or EVENT_SERIAL_QUE_OVERFLOW (0x34): sent as
+    channel 0, but the loss is the queue's, so it reaches every channel."""
+    for r in resolvers:
+        r.overflow()
 
 
 # ── 0xF5: pairing ───────────────────────────────────────────────────────────
