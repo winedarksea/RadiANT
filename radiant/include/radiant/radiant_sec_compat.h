@@ -354,8 +354,8 @@ int radiant_sec_compat_set_epoch(uint8_t ch, uint32_t epoch, uint64_t now_us,
 
 /*
  * The highest epoch a Tier I counter wrap may advance this channel to, as
- * radiant_sec_set_epoch_ceiling() for the spread MAC: none by default, kept
- * across set_epoch, cleared by release and reset. A wrap past it is refused
+ * radiant_sec_set_epoch_ceiling() for the spread MAC: none by default,
+ * cleared by set_epoch, release and reset. A wrap past it is refused
  * with RADIANT_SEC_EAGAIN - the attestation page is withheld, nothing is spent
  * - until the ceiling is raised. A compat wrap is >= 18 h (65 536 x T) and
  * would be a tag replay rather than a two-time pad, but the epoch authority's
@@ -364,11 +364,19 @@ int radiant_sec_compat_set_epoch(uint8_t ch, uint32_t epoch, uint64_t now_us,
 int radiant_sec_compat_set_epoch_ceiling(uint8_t ch, uint32_t max_epoch);
 
 /*
- * Every epoch advance apply_wraps() makes (TX and RX), with the new epoch.
- * Weak and empty by default. Runs in the caller's context: an override must
- * only defer work, exactly as radiant_sec_epoch_advanced().
+ * The compat twins of radiant_sec_epoch_advanced()/_wanted(): every epoch move
+ * on a channel that carries a ceiling (TX, and receiver-side moves on a
+ * context that has never transmitted - one that has refuses compat RX), and
+ * every move refused by the ceiling, with the epoch it wanted. Weak and empty
+ * by default. Caller's context: an override must only defer work.
+ *
+ * The ceiling is CLEARED by radiant_sec_compat_set_epoch(), as in
+ * radiant_sec.c; raise_epoch_ceiling() only raises an existing one and may be
+ * called without the caller's lock, for the same reason given there.
  */
 void radiant_sec_compat_epoch_advanced(uint8_t ch, uint32_t epoch);
+void radiant_sec_compat_epoch_wanted(uint8_t ch, uint32_t epoch);
+int radiant_sec_compat_raise_epoch_ceiling(uint8_t ch, uint32_t max_epoch);
 
 /* The on-air device number, which is in the nonce. */
 int radiant_sec_compat_set_devnum(uint8_t ch, uint16_t devnum);
@@ -688,6 +696,13 @@ static inline int radiant_sec_compat_set_epoch(uint8_t ch, uint32_t epoch,
 
 static inline int radiant_sec_compat_set_epoch_ceiling(uint8_t ch,
 							uint32_t max_epoch)
+{
+	(void)ch; (void)max_epoch;
+	return RADIANT_SEC_ENOTSUP;
+}
+
+static inline int radiant_sec_compat_raise_epoch_ceiling(uint8_t ch,
+							  uint32_t max_epoch)
 {
 	(void)ch; (void)max_epoch;
 	return RADIANT_SEC_ENOTSUP;

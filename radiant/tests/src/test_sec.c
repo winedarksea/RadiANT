@@ -2161,3 +2161,43 @@ ZTEST(radiant_sec, test_the_pump_refuses_a_context_that_transmits)
 	hop(1u, false, -1);
 	zassert_equal(1u, log_n_pkt);
 }
+
+/* Review follow-up: set_epoch ends an authority's following (its ceiling is
+ * cleared), and a raise never lowers a ceiling nor creates one. */
+ZTEST(radiant_sec, test_set_epoch_clears_the_ceiling_and_a_raise_only_raises)
+{
+	uint8_t pay[8];
+
+	key_both();
+	configure_both(RADIANT_SEC_SW_CONF, 2u);
+	epoch_both(7u);
+
+	/* No ceiling: a raise does not invent one. */
+	zassert_ok(radiant_sec_raise_epoch_ceiling(TX_CH, 7u));
+	tx_air(0u, pay);
+	memcpy(pay, conf_plain, 8u);
+	zassert_ok(radiant_sec_tx_transform(TX_CH, pay, 8u, slot_t(65536u)),
+		   "a raise on an unfollowed channel capped it");
+
+	/* A ceiling, then a lower "raise": still the higher one. */
+	zassert_ok(radiant_sec_set_epoch_ceiling(TX_CH, 9u));
+	zassert_ok(radiant_sec_raise_epoch_ceiling(TX_CH, 8u));
+	memcpy(pay, conf_plain, 8u);
+	zassert_ok(radiant_sec_tx_transform(TX_CH, pay, 8u,
+					    slot_t(2u * 65536u)));
+	zassert_equal(9u, tx_epoch_now(TX_CH));
+	memcpy(pay, conf_plain, 8u);
+	zassert_equal(RADIANT_SEC_EAGAIN,
+		      radiant_sec_tx_transform(TX_CH, pay, 8u,
+					       slot_t(3u * 65536u)));
+
+	/* Another party's set_epoch takes the channel over: no ceiling. */
+	zassert_ok(radiant_sec_set_epoch(TX_CH, 100u, 0u, TEST_PERIOD));
+	sec_anchor = (uint64_t)radiant_radio_now();
+	tx_air(0u, pay);
+	memcpy(pay, conf_plain, 8u);
+	zassert_ok(radiant_sec_tx_transform(TX_CH, pay, 8u,
+					    slot_t(3u * 65536u)),
+		   "a ceiling survived another party's set_epoch");
+	zassert_equal(103u, tx_epoch_now(TX_CH));
+}

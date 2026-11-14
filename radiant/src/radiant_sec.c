@@ -72,7 +72,9 @@ struct sec_ctx {
 	uint16_t rx_floor;
 	uint32_t epoch;
 	/* The epoch ceiling, stored inverted so a zeroed context means "none"
-	 * (0xFFFFFFFF, i.e. only the headroom test) with no init code. See
+	 * (0xFFFFFFFF, i.e. only the headroom test) with no init code. Nonzero
+	 * also means "an epoch authority follows this channel": only then do
+	 * the epoch hooks fire. Cleared by set_epoch. See
 	 * radiant_sec_set_epoch_ceiling(). */
 	uint32_t ceil_inv;
 	/* epoch_anchor error, in us, implied by rx_prev's closing packet and
@@ -348,13 +350,18 @@ static int advance_epoch(struct sec_ctx *c, uint16_t by)
 	}
 	/* The authority's reservation (docs/radiant-security.md 3.5): not
 	 * past the ceiling, but not spent either - the caller withholds and
-	 * retries at the next slot. Overflow is excluded by the test above. */
+	 * retries at the next slot. The authority is told which epoch is
+	 * wanted, so a catch-up of several wraps (a long silence) cannot wait
+	 * for an advance that never comes. Overflow is excluded above. */
 	if (c->epoch + by > ~c->ceil_inv) {
+		radiant_sec_epoch_wanted(c->ch, c->epoch + by);
 		return RADIANT_SEC_EAGAIN;
 	}
 	c->epoch += by;
 	stat_bump(&c->stats.epoch_advances);
-	radiant_sec_epoch_advanced(c->ch, c->epoch);
+	if (c->ceil_inv != 0u) {
+		radiant_sec_epoch_advanced(c->ch, c->epoch);
+	}
 
 	/* Move the anchor with it so the phase stays continuous: 65536 packets
 	 * per wrap. */
@@ -392,6 +399,12 @@ __weak void radiant_sec_window_verdict(uint8_t ch, uint16_t window_start,
 }
 
 __weak void radiant_sec_epoch_advanced(uint8_t ch, uint32_t epoch)
+{
+	ARG_UNUSED(ch);
+	ARG_UNUSED(epoch);
+}
+
+__weak void radiant_sec_epoch_wanted(uint8_t ch, uint32_t epoch)
 {
 	ARG_UNUSED(ch);
 	ARG_UNUSED(epoch);
@@ -554,6 +567,10 @@ int radiant_sec_set_epoch(uint8_t ch, uint32_t epoch, uint64_t us_into_epoch,
 	c->epoch_anchor = (now > us_into_epoch) ? (now - us_into_epoch) : 0u;
 	c->period_counts = period_counts;
 	c->epoch_set = true;
+	/* Whoever sets an epoch owns the channel's epochs from here: an
+	 * authority's ceiling (and its following) does not survive another
+	 * party's 0xF3. The authority sets a new one after its own call. */
+	c->ceil_inv = 0u;
 
 	/* Everything in flight belonged to the old epoch, the slot clock's
 	 * phase included: the next secured transform latches it afresh. */
@@ -574,14 +591,28 @@ int radiant_sec_set_epoch(uint8_t ch, uint32_t epoch, uint64_t us_into_epoch,
 
 int radiant_sec_set_epoch_ceiling(uint8_t ch, uint32_t max_epoch)
 {
-	/* No lock check: one aligned store the TX/RX paths read once per wrap,
-	 * so an epoch authority's work item may call this directly. */
+	RADIANT_SEC_ASSERT_LOCKED();
 	struct sec_ctx *c = ctx_of(ch);
 
 	if (c == NULL) {
 		return RADIANT_SEC_ENOKEY;
 	}
 	c->ceil_inv = ~max_epoch;
+	return RADIANT_SEC_OK;
+}
+
+int radiant_sec_raise_epoch_ceiling(uint8_t ch, uint32_t max_epoch)
+{
+	/* No lock check (see the header): one aligned store, and only ever
+	 * upward on a channel that already carries a ceiling. */
+	struct sec_ctx *c = ctx_of(ch);
+
+	if (c == NULL) {
+		return RADIANT_SEC_ENOKEY;
+	}
+	if (c->ceil_inv != 0u && ~max_epoch < c->ceil_inv) {
+		c->ceil_inv = ~max_epoch;
+	}
 	return RADIANT_SEC_OK;
 }
 

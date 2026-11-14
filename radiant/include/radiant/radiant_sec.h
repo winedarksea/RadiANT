@@ -618,6 +618,20 @@ void radiant_sec_window_verdict(uint8_t ch, uint16_t window_start,
  */
 void radiant_sec_epoch_advanced(uint8_t ch, uint32_t epoch);
 
+/*
+ * A wrap on channel `ch` wants to advance to `epoch` but the ceiling is lower,
+ * so the transform was withheld (or the RX packet dropped). Weak and empty by
+ * default; same context rule as above - DEFER ONLY. Called on every refused
+ * attempt, so once per slot while TX is withheld. Without it a catch-up of
+ * more than one wrap (a sender silent for over one wrap) would wait forever
+ * for an advance the authority never hears of. node_ident.c's override
+ * reserves `epoch` (persists N = epoch + 1) and then raises the ceiling to it.
+ *
+ * Both hooks fire ONLY for a channel that carries a ceiling (an authority is
+ * following it); a channel nobody follows calls neither.
+ */
+void radiant_sec_epoch_wanted(uint8_t ch, uint32_t epoch);
+
 /* Lifecycle. No init call: the first SET_KEY allocates, unassign and reset
  * free. */
 int  radiant_sec_set_key(uint8_t ch, const uint8_t *root, size_t bits,
@@ -654,18 +668,34 @@ int  radiant_sec_set_epoch(uint8_t ch, uint32_t epoch, uint64_t us_into_epoch,
  *
  * A wrap that would pass the ceiling does not happen: secured TX is WITHHELD
  * (radiant_sec_tx_transform() returns RADIANT_SEC_EAGAIN, the caller sends
- * nothing secured) and resumes, by the full number of wraps owed, once the
- * ceiling is raised. Unlike exhausting the headroom (permanent until a new
+ * nothing secured) and radiant_sec_epoch_wanted() names the epoch it needs.
+ * TX resumes, by the full number of wraps owed, at the first slot after the
+ * authority has raised the ceiling to at least that epoch - a raise to less
+ * keeps it withheld. Unlike exhausting the headroom (permanent until a new
  * epoch), nothing is spent. RX past the ceiling is dropped the same way.
  *
  * This is the epoch authority's reservation: it persists "next unused epoch"
  * before raising the ceiling, so an epoch is never used that a reboot could
- * issue again. Kept across radiant_sec_set_epoch() and set_key.
+ * issue again. CLEARED by radiant_sec_set_epoch() - whoever sets the epoch
+ * owns it, so a host 0xF3 on a followed channel ends the following; an
+ * authority sets its ceiling after its own set_epoch. Kept across set_key.
  *
- * Callable from any thread without the port's lock: it is one aligned 32-bit
- * store, read once per wrap. Returns RADIANT_SEC_ENOKEY with no context.
+ * Thread context, under the port's lock, like set_epoch. Returns
+ * RADIANT_SEC_ENOKEY with no context.
  */
 int  radiant_sec_set_epoch_ceiling(uint8_t ch, uint32_t max_epoch);
+
+/*
+ * Raise an existing ceiling; never lowers one, and does nothing on a channel
+ * with no ceiling (nobody follows it, or another party's set_epoch ended the
+ * following). For the authority's deferred work: callable WITHOUT the port's
+ * lock, being one aligned store read once per wrap. The one race - the
+ * channel released and its context re-allocated between the lookup and the
+ * store - lands on a context with no ceiling (a no-op) unless the authority
+ * itself re-armed it, and the authority only raises to epochs it has already
+ * reserved, so the race cannot let an unreserved epoch be used.
+ */
+int  radiant_sec_raise_epoch_ceiling(uint8_t ch, uint32_t max_epoch);
 
 /* The on-air device number, which is in the nonce. Separate from the
  * provisioning-time base device number in the KDF: on a Tier 2 node the first

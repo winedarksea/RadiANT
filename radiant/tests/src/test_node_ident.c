@@ -1262,3 +1262,147 @@ ZTEST(node_ident, test_a_compat_wrap_is_reserved_and_followed)
 						  sizeof(body)) > 0);
 }
 #endif
+
+/* ── Review follow-ups (2026-11-13) ──────────────────────────────────────── */
+
+/* Item 1: a sender silent for more than one wrap catches up by two at once.
+ * The ceiling (E + 1) refuses it; the _wanted hook reserves E + 2 and raises
+ * the ceiling, and TX resumes at the next slot instead of never. */
+ZTEST(node_ident, test_a_tx_gap_of_two_wraps_is_reserved_and_resumes)
+{
+	uint32_t e0;
+	uint32_t e1;
+
+	e0 = booted_and_armed();
+	zassert_ok(node_tx(0u));
+
+	zassert_equal(RADIANT_SEC_EAGAIN, node_tx(2u * 65536u),
+		      "two wraps at once went past the reservation");
+	zassert_equal(e0, sec_epoch(TX_NODE_CH));
+	let_work_run();
+	zassert_equal(e0 + 3u, stored_next(),
+		      "the wanted epoch was not reserved");
+
+	zassert_ok(node_tx(2u * 65536u + 1u),
+		   "TX stayed withheld after a two-wrap gap");
+	zassert_equal(e0 + 2u, sec_epoch(TX_NODE_CH));
+	let_work_run();
+	zassert_equal(e0 + 4u, stored_next());
+
+	/* And the next boot is above both epochs the gap used. */
+	node_reboot();
+	zassert_equal(NODE_IDENT_OK, node_ident_epoch(&e1));
+	zassert_equal(e0 + 4u, e1);
+}
+
+/* Item 2: one arm per channel per boot. A second arm would restart the slot
+ * counter at 0 under the same (root, E, devnum). */
+ZTEST(node_ident, test_a_channel_is_armed_once_per_boot)
+{
+	booted_and_armed();
+	zassert_equal(NODE_IDENT_ESTATE,
+		      node_ident_arm_sec(TX_NODE_CH, TEST_PERIOD),
+		      "a second arm in one boot was accepted");
+
+	/* Released and re-keyed: still refused this boot. */
+	radiant_sec_channel_release(TX_NODE_CH);
+	key_conf(TX_NODE_CH, RADIANT_SEC_SW_CONF);
+	zassert_equal(NODE_IDENT_ESTATE,
+		      node_ident_arm_sec(TX_NODE_CH, TEST_PERIOD));
+
+	/* Another channel, and the next boot, are fine. */
+	key_conf(RX_NODE_CH, RADIANT_SEC_SW_CONF);
+	zassert_equal(NODE_IDENT_OK,
+		      node_ident_arm_sec(RX_NODE_CH, TEST_PERIOD));
+	node_reboot();
+	key_conf(TX_NODE_CH, RADIANT_SEC_SW_CONF);
+	zassert_equal(NODE_IDENT_OK,
+		      node_ident_arm_sec(TX_NODE_CH, TEST_PERIOD));
+	zassert_equal(NODE_IDENT_EINVAL, node_ident_arm_sec(32u, TEST_PERIOD));
+}
+
+/* Item 3: a channel node_ident armed and someone else then re-epoched (a host
+ * 0xF3) is no longer followed: its wraps neither drive N nor get capped. */
+ZTEST(node_ident, test_another_partys_epoch_ends_the_following)
+{
+	uint8_t  pay[8] = { 0x05u, 0xAAu, 1, 2, 3, 4, 5, 6 };
+	uint32_t n0;
+	uint32_t e1;
+
+	booted_and_armed();
+	n0 = stored_next();
+
+	/* The host takes channel 0 over at a far higher epoch. */
+	zassert_ok(radiant_sec_set_epoch(TX_NODE_CH, 0x10000000u, 0u,
+					 TEST_PERIOD));
+	node_anchor = (uint64_t)radiant_radio_now();
+	zassert_ok(radiant_sec_tx_transform(TX_NODE_CH, pay, 8u,
+					    node_slot_t(0u)));
+	zassert_ok(radiant_sec_tx_transform(TX_NODE_CH, pay, 8u,
+					    node_slot_t(3u * 65536u)),
+		   "the node still capped a channel the host owns");
+	let_work_run();
+	zassert_equal(n0, stored_next(), "a host epoch drove the node's N");
+
+	/* So the next boot is not pushed out of range. */
+	node_reboot();
+	zassert_equal(NODE_IDENT_OK, node_ident_epoch(&e1));
+	zassert_equal(n0, e1);
+}
+
+/* Item 3 too: a released, host-re-keyed channel is not capped by the work
+ * item another armed channel's wrap queues. */
+ZTEST(node_ident, test_a_released_channel_is_not_capped_by_another_wrap)
+{
+	uint8_t pay[8] = { 0x05u, 0xAAu, 1, 2, 3, 4, 5, 6 };
+
+	booted_and_armed();
+	key_conf(RX_NODE_CH, RADIANT_SEC_SW_CONF);
+	zassert_equal(NODE_IDENT_OK,
+		      node_ident_arm_sec(RX_NODE_CH, TEST_PERIOD));
+
+	radiant_sec_channel_release(RX_NODE_CH);
+	key_conf(RX_NODE_CH, RADIANT_SEC_SW_CONF);
+	zassert_ok(radiant_sec_set_epoch(RX_NODE_CH, 5000u, 0u, TEST_PERIOD));
+
+	zassert_ok(node_tx(0u));
+	zassert_ok(node_tx(65536u));
+	let_work_run();     /* raises ceilings on every armed channel */
+
+	zassert_ok(radiant_sec_tx_transform(RX_NODE_CH, pay, 8u,
+					    node_slot_t(0u)));
+	zassert_ok(radiant_sec_tx_transform(RX_NODE_CH, pay, 8u,
+					    node_slot_t(3u * 65536u)),
+		   "the work item capped a channel it no longer follows");
+	zassert_equal(5003u, sec_epoch(RX_NODE_CH));
+}
+
+/* Item 6: a persist that keeps failing backs off rather than retrying every
+ * second; it still lands once storage recovers. */
+ZTEST(node_ident, test_a_failing_persist_backs_off)
+{
+	uint32_t e0;
+	uint32_t stores;
+
+	e0 = booted_and_armed();
+	zassert_ok(node_tx(0u));
+
+	fake_nvm_fail_stores(100u);
+	stores = fake_nvm_store_count();
+	zassert_ok(node_tx(65536u));
+	k_sleep(K_MSEC(3500));
+	/* Tries at ~0, 1, 3 s: three, not four. A withheld second wrap's
+	 * _wanted hooks must not cut the backoff short either. */
+	for (int i = 0; i < 5; i++) {
+		zassert_equal(RADIANT_SEC_EAGAIN,
+			      node_tx(2u * 65536u + (uint32_t)i));
+	}
+	zassert_true(fake_nvm_store_count() - stores <= 3u,
+		     "%u persist tries in 3.5 s",
+		     fake_nvm_store_count() - stores);
+	fake_nvm_fail_stores(0u);
+	k_sleep(K_MSEC(4500));
+	/* N covers the second wrap the withheld slots wanted (e0 + 2). */
+	zassert_equal(e0 + 3u, stored_next(),
+		      "the persist never landed after storage recovered");
+}

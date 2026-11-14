@@ -183,10 +183,25 @@ int node_ident_arm_compat(uint8_t ch, uint64_t now_us, uint16_t period_counts);
  *          withheld by radiant, not taken - the write has one whole wrap,
  *          ~4.5 h at 4 Hz, to land, and is retried every second if it fails.
  *
+ *   gap:   a sender silent for more than one wrap wants an epoch past the
+ *          ceiling; radiant_sec_epoch_wanted() reserves it the same way.
+ *
  * Epochs therefore step by about 2 per boot. One extra NVM write per boot and
- * about one per wrap. These overrides make node_ident.c the owner of both
- * hooks in any image that links it; only channels armed through
- * node_ident_arm_sec()/_arm_compat() are followed.
+ * about one per wrap. These overrides make node_ident.c the owner of the
+ * epoch hooks in any image that links it; only channels armed through
+ * node_ident_arm_sec()/_arm_compat() are followed, and only while radiant
+ * still holds their ceiling - another party's set_epoch on the channel (a host
+ * 0xF3, a release and re-key) ends the following.
+ *
+ * ONE ARM PER CHANNEL PER BOOT. A second node_ident_arm_sec() (or _compat) of
+ * the same channel in one boot is refused with NODE_IDENT_ESTATE: it would
+ * restart the counter under the same epoch. Channel numbers 32 and up are
+ * refused (EINVAL).
+ *
+ * EVERY CHANNEL ARMED IN ONE BOOT SHARES E. The nonce is epoch || devnum ||
+ * counter under a key derived from the root, so two channels armed in the same
+ * boot must differ in root key or in device number, or their keystreams
+ * collide.
  *
  * node_ident_epoch_next() reports N as last confirmed in storage.
  */

@@ -85,11 +85,15 @@ static struct {
  * Outside `s` because node_ident_reset() memsets `s` and must not memset a
  * work item the queue may be holding.
  */
-#define EPOCH_RETRY_MS 1000
+/* A failed persist retries with exponential backoff, 1 s doubling to 5 min,
+ * and logs once per failure run rather than once per try. */
+#define EPOCH_RETRY_MIN_MS 1000u
+#define EPOCH_RETRY_MAX_MS 300000u
 
 static struct k_spinlock ep_lock;
 static uint32_t          ep_pending;     /* highest epoch reported, under ep_lock */
 static bool              ep_have;        /* ep_pending is not yet persisted */
+static uint32_t          ep_retry_ms;    /* 0 = the last persist succeeded */
 
 static void epoch_work_fn(struct k_work *work);
 static K_WORK_DELAYABLE_DEFINE(ep_work, epoch_work_fn);
@@ -540,17 +544,36 @@ int node_ident_devnum(uint16_t *out)
 /* ── Handing the epoch to radiant ────────────────────────────────────── */
 
 /* Bit for channel `ch` in sec_armed/compat_armed; 0 for a channel number the
- * mask cannot hold, which then keeps its first ceiling and is never raised
- * (fails closed at its second wrap). */
+ * mask cannot hold, which the arm calls refuse. */
 static uint32_t ch_bit(uint8_t ch)
 {
 	return (ch < 32u) ? (1u << ch) : 0u;
 }
 
+/*
+ * One arm per channel per boot (review 2026-11-13 item 2). Every arm hands out
+ * this boot's E, and the slot counter restarts at 0 with it, so arming the
+ * same channel again - after an unassign, a release or a re-key - would run
+ * the counter a second time under the same (root, E, devnum): a two-time pad.
+ * The next boot has a fresh E. ESTATE, as for "not booted".
+ */
+static int arm_check(uint32_t armed, uint8_t ch)
+{
+	if (!s.booted || (armed & ch_bit(ch)) != 0u) {
+		return NODE_IDENT_ESTATE;
+	}
+	if (ch_bit(ch) == 0u) {
+		return NODE_IDENT_EINVAL;
+	}
+	return NODE_IDENT_OK;
+}
+
 int node_ident_arm_sec(uint8_t ch, uint16_t period_counts)
 {
-	if (!s.booted) {
-		return NODE_IDENT_ESTATE;
+	int rc = arm_check(s.sec_armed, ch);
+
+	if (rc != NODE_IDENT_OK) {
+		return rc;
 	}
 	/* us_into_epoch = 0: the epoch was derived from this power-up, so the
 	 * node is at its start by construction. The ceiling follows the epoch
@@ -568,8 +591,10 @@ int node_ident_arm_sec(uint8_t ch, uint16_t period_counts)
 
 int node_ident_arm_compat(uint8_t ch, uint64_t now_us, uint16_t period_counts)
 {
-	if (!s.booted) {
-		return NODE_IDENT_ESTATE;
+	int rc = arm_check(s.compat_armed, ch);
+
+	if (rc != NODE_IDENT_OK) {
+		return rc;
 	}
 	if (radiant_sec_compat_set_epoch(ch, s.epoch, now_us, 0u,
 					 period_counts) != RADIANT_SEC_OK ||
@@ -583,8 +608,14 @@ int node_ident_arm_compat(uint8_t ch, uint64_t now_us, uint16_t period_counts)
 
 /* ── Following the epoch through counter wraps ───────────────────────────── */
 
-/* Record an advance and let the work item persist it. Caller's context (the
- * pump, mid-transform): no flash, no blocking, no radiant_sec call. */
+/* Record that `epoch` has been used (or, from a _wanted hook, epoch + 1 is
+ * wanted - the same reservation, N = epoch + 2) and let the work item persist
+ * it. Caller's context (the pump, mid-transform): no flash, no blocking, no
+ * radiant_sec call. radiant calls the hooks only for a channel that still
+ * carries a ceiling, so a channel another party re-epoched or released is no
+ * longer followed (review item 3). k_work_schedule(), not reschedule: a
+ * _wanted hook fires every slot while TX is withheld, and must not cut a
+ * persist retry's backoff short. */
 static void epoch_note(uint32_t armed, uint8_t ch, uint32_t epoch)
 {
 	k_spinlock_key_t key;
@@ -598,7 +629,7 @@ static void epoch_note(uint32_t armed, uint8_t ch, uint32_t epoch)
 	}
 	ep_have = true;
 	k_spin_unlock(&ep_lock, key);
-	(void)k_work_reschedule(&ep_work, K_NO_WAIT);
+	(void)k_work_schedule(&ep_work, K_NO_WAIT);
 }
 
 void radiant_sec_epoch_advanced(uint8_t ch, uint32_t epoch)
@@ -606,10 +637,22 @@ void radiant_sec_epoch_advanced(uint8_t ch, uint32_t epoch)
 	epoch_note(s.sec_armed, ch, epoch);
 }
 
+/* A catch-up of several wraps (the sender was silent for more than one)
+ * wants an epoch past the ceiling; without this it would never advance. */
+void radiant_sec_epoch_wanted(uint8_t ch, uint32_t epoch)
+{
+	epoch_note(s.sec_armed, ch, epoch - 1u);
+}
+
 #if defined(CONFIG_RADIANT_SEC_COMPAT)
 void radiant_sec_compat_epoch_advanced(uint8_t ch, uint32_t epoch)
 {
 	epoch_note(s.compat_armed, ch, epoch);
+}
+
+void radiant_sec_compat_epoch_wanted(uint8_t ch, uint32_t epoch)
+{
+	epoch_note(s.compat_armed, ch, epoch - 1u);
 }
 #endif
 
@@ -642,24 +685,39 @@ static void epoch_work_fn(struct k_work *work)
 			}
 			ep_have = true;
 			k_spin_unlock(&ep_lock, key);
-			LOG_WRN("epoch %u not persisted; secured TX holds at "
-				"the next wrap until it is", (unsigned)e);
-			(void)k_work_reschedule(&ep_work,
-						K_MSEC(EPOCH_RETRY_MS));
+			if (ep_retry_ms == 0u) {
+				LOG_WRN("epoch %u not persisted; secured TX "
+					"holds at the next wrap until it is",
+					(unsigned)e);
+				ep_retry_ms = EPOCH_RETRY_MIN_MS;
+			} else if (ep_retry_ms < EPOCH_RETRY_MAX_MS / 2u) {
+				ep_retry_ms *= 2u;
+			} else {
+				ep_retry_ms = EPOCH_RETRY_MAX_MS;
+			}
+			(void)k_work_reschedule(&ep_work, K_MSEC(ep_retry_ms));
 			return;
+		}
+		if (ep_retry_ms != 0u) {
+			LOG_INF("epoch %u persisted after retries", (unsigned)e);
+			ep_retry_ms = 0u;
 		}
 		s.epoch_next = e + 2u;
 	}
 
+	/* Raise, never set: a channel whose ceiling another party's set_epoch
+	 * cleared (a host 0xF3, a release and re-key) is left alone rather
+	 * than capped under an epoch it never reserved. Lock-free by design;
+	 * see radiant_sec_raise_epoch_ceiling(). */
 	for (ch = 0u, m = s.sec_armed; m != 0u; ch++, m >>= 1) {
 		if ((m & 1u) != 0u) {
-			(void)radiant_sec_set_epoch_ceiling(ch,
-							    s.epoch_next - 1u);
+			(void)radiant_sec_raise_epoch_ceiling(
+				ch, s.epoch_next - 1u);
 		}
 	}
 	for (ch = 0u, m = s.compat_armed; m != 0u; ch++, m >>= 1) {
 		if ((m & 1u) != 0u) {
-			(void)radiant_sec_compat_set_epoch_ceiling(
+			(void)radiant_sec_compat_raise_epoch_ceiling(
 				ch, s.epoch_next - 1u);
 		}
 	}
@@ -890,10 +948,17 @@ void node_ident_reset(void)
 	/* A queued persist belongs to the session being reset; on hardware a
 	 * reset is a reboot and nothing is queued. Cancelled, not flushed: the
 	 * next boot reserves above whatever it left. */
-	(void)k_work_cancel_delayable(&ep_work);
+	{
+		struct k_work_sync sync;
+
+		/* _sync: a persist already running finishes (or is waited
+		 * out) before `s` is wiped under it. */
+		(void)k_work_cancel_delayable_sync(&ep_work, &sync);
+	}
 	key = k_spin_lock(&ep_lock);
 	ep_have = false;
 	ep_pending = 0u;
+	ep_retry_ms = 0u;
 	k_spin_unlock(&ep_lock, key);
 	memset(&s, 0, sizeof(s));
 }

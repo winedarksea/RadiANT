@@ -449,15 +449,30 @@ with a confirmed write **before** `E` reaches `radiant`, and arms the channel
 with an **epoch ceiling** of `E + 1`
 (`radiant_sec_set_epoch_ceiling()`, and the compat equivalent). The first wrap
 therefore has an epoch already reserved for it, and a crash right after that
-wrap is covered: the next boot starts at `E + 2`. Each advance calls the weak
-hook `radiant_sec_epoch_advanced()` (TX and RX alike; compat has
-`radiant_sec_compat_epoch_advanced()`); the node's override only queues a work
-item, which persists `N = e + 2` and then raises the ceiling to `e + 1`. A wrap
-that would pass the ceiling is refused and secured TX is **withheld** until the
-ceiling is raised, then resumes; this is not the permanent `tx_spent` state
-that exhausting the headroom causes. The work item has one whole wrap to land,
-about 4.5 h at 4 Hz (at least 18 h on compat, 15 days at T = 20 s), and a
-write that never lands fails closed. The same floor stops a same-minute
+wrap is covered: the next boot starts at `E + 2`. Each advance on a channel
+that carries a ceiling calls the weak hook `radiant_sec_epoch_advanced()` (on
+the spread-MAC surface, TX and RX alike; compat has
+`radiant_sec_compat_epoch_advanced()`, which fires on TX and on a receiver's
+epoch moves, and a compat context that has transmitted refuses compat RX
+outright, so a reflected Tier I page cannot move its epoch). The node's
+override only queues a work item, which persists `N = e + 2` and then raises
+the ceiling to `e + 1`. A wrap that would pass the ceiling is refused and
+secured TX is **withheld**; the refusal calls `radiant_sec_epoch_wanted()`
+(compat: `radiant_sec_compat_epoch_wanted()`) with the epoch it needs, so a
+catch-up of several wraps after a long silence is reserved the same way
+(`N = wanted + 1`, ceiling raised to it) and TX resumes at the next slot; this
+is not the permanent `tx_spent` state that exhausting the headroom causes. The
+work item has one whole wrap to land, about 4.5 h at 4 Hz (at least 18 h on
+compat, 15 days at T = 20 s), and a write that never lands fails closed
+(retried with backoff).
+
+Three rules keep the following honest. Whoever calls `set_epoch` owns the
+channel's epochs: it clears the ceiling, so a host `0xF3` or a release and
+re-key ends the node's following, its hooks stop firing there, and the work
+item only ever *raises* an existing ceiling. The node arms each channel once
+per boot: a second arm would restart the counter under the same epoch. And
+every channel armed in one boot shares `E`, so those channels must differ in
+root key or device number. The same floor stops a same-minute
 wall-clock reboot reusing an epoch. Epochs step by about 2 per boot, so
 forward searches (compat's, the descriptor's 16-epoch span) still find them;
 a scheme that spaced boots far apart, such as `boot_counter << 12`, would not.
