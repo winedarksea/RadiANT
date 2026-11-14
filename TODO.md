@@ -22,7 +22,7 @@ The master's acknowledgement misses (closed 2026-11-12) were the link budget: 10
 1. [x] Inbound continuation window: `RADIANT_TRANSFER_STATE_WAIT_NEXT`, a window at ack + 1550 +/- 250 us after each ACK of an open burst (and once after LAST). Empty windows repeat the ACK at +3143 us, 5 times by default since 2026-11-13 (`CONFIG_RADIANT_INBOUND_ACK_REPEATS`, 0..20; it was 21 attempts). On air, Garmin -> RadiANT: 96/100 and 98/100 bursts of 8 complete against a 97/100 control the other way (archive/benchmarks/2026-11-12-inbound-burst/). Needed a second fix found on air: a master's 0x8A is answered at +2190 (slot-reply turnaround), not +1560 - with +1560 every burst failed.
 2. [x] Duplicate filtering: same sequence bit as the last delivered packet -> re-ACK with the saved reply, not delivered (`stats.rx_duplicates`). A slave's packet-0 retry one period later is not deduplicated.
 3. [x] EVENT_TRANSFER_RX_FAILED (0x04): from the engine (peer stopped, broadcast mid-burst, ACK repeats exhausted), on close (before CHANNEL_CLOSED), on drop to search, and the watchdog as backstop.
-4. Multi-packet bursts on MPSL builds (the "MPSL bursts" line at the top of this file). Retries share the problem: a retry at +3110 us is outside the data packet's grant, and on MPSL it fails the transfer with NO_ACK as before. Inbound too, measured 2026-11-13: Garmin -> L15 `gate.conf`, 100/100 bursts failed with only packet 0 delivered (`archive/benchmarks/2026-11-13-inbound-burst-gaps/` section 1). Giving each ACK its own reserve does NOT fix it: the gate serves an in-grant arm only if that arm's own reserve also ends inside the current grant, and fixed-class grants never grow, so the whole chain must nest inside the first grant (tracked window + 4150 us). The fix, for both directions, is on-demand extension of fixed-class grants in `radiant_radio_nrf_gate_mpsl.c`, ending the burst when an extension is refused. Also belongs here, by the owner's decision of 2026-11-14: the scheduler/gate attribution of a retry or next packet refused after an in-grant ACK window (EDENIED from the gate instead of MISSED from the scheduler; "Left open by the 2026-11-08 clearance" below).
+4. Multi-packet bursts on MPSL builds (the "MPSL bursts" line at the top of this file). Retries share the problem: a retry at +3110 us is outside the data packet's grant, and on MPSL it fails the transfer with NO_ACK as before. Inbound too, measured 2026-11-13: Garmin -> L15 `gate.conf`, 100/100 bursts failed with only packet 0 delivered (`archive/benchmarks/2026-11-13-inbound-burst-gaps/` section 1). Giving each ACK its own reserve does NOT fix it: the gate serves an in-grant arm only if that arm's own reserve also ends inside the current grant, and fixed-class grants never grow, so the whole chain must nest inside the first grant (tracked window + 4150 us). The fix, for both directions, is on-demand extension of fixed-class grants in `radiant_radio_nrf_gate_mpsl.c`, ending the burst when an extension is refused. Also belongs here, by the owner's decision of 2026-11-14: the scheduler/gate attribution of a retry or next packet refused after an in-grant ACK window (EDENIED from the gate instead of MISSED from the scheduler; "Left open by the 2026-11-08 clearance" below). MPSL assert 69:108 was not the EXTEND machinery: it was a RADIO interrupt left pending at END (fixed 2026-11-14, 63b2a02; "Left open by the 2026-11-08 clearance" below), so `ACTION_EXTEND` is not implicated.
 5. Advanced burst: true 16/24-byte packets on air (today a 24-byte block goes out as three 8-byte packets), the retry-extension byte (`api_adv_burst[10]`, stored and never read), and the stall count / retry defaults (sdk-ant reads back stall 3210).
 6. [x] EVENT_TRANSFER_TX_START (0x0A): once per outbound multi-packet burst, not for acknowledged data or a one-packet burst.
 7. [x] 0xAA from a master is answered on the slot-reply turnaround (+2190) since 2026-11-13 (442d4f7). Sniffed first: at +1560 a Garmin master was told FAILED for 50/50 messages our slave had received; at +2190, 96/100 against a 99/100 control. Open: no non-RadiANT slave's 0xAA reply offset has been recorded; in the fixed leg the slave also counted rx_fail 8 and one go_to_search on broadcasts (control 2, 0), not investigated.
@@ -332,31 +332,103 @@ MPSL (needs a soak beside BLE or Thread, which that clearance excluded):
   Deferred there by the owner, 2026-11-14. Since e66ae02 a one-packet
   transfer's ACK window reserves nothing, so acknowledged data no longer
   reaches this path; only multi-packet bursts do.
-- MPSL assert 69:108 - NOW REPRODUCIBLE IN MINUTES, OPEN, 2026-11-14
-  (`archive/benchmarks/2026-11-14-mpsl-soak/`). L15 `thread.conf` beside an
-  attached OpenThread leader, one tracked + one searching channel: it fired in
-  every leg, 1.5-6.3 min after boot, on HEAD dd38b26 (3/3) and on the fix image
-  (4/4) alike, at 6-1143 failed extensions (2026-11-09: once in ~111,000). With
-  `long_match.conf` it still fired (14.6 and 7.6 min, against a 3.2 min mean with it on). Traces end on
-  TIMER0 returning END after a run of 10 ms first-bite scan grants with
-  extensions skipped; one ends EXTEND_FAILED -> END. What changed since 11-09:
-  short match on by default (2026-11-13) and the Pro Micro as master. Each one
-  halts the image for good (C5-3), so Thread/Matter MPSL images hang within
-  minutes. Next: bisect with the short match and the ext skip, try a no-Thread
-  `gate.conf` soak, and look up 69:108 with Nordic.
-  A lead from reading only (review 2026-11-14, unverified): beside OpenThread
-  the grant-boundary endpoint swap moves only PUBLISH_ADDRESS and
-  SUBSCRIBE_RXEN, so RADIO SUBSCRIBE_DISABLE/TXEN/RSSISTART stay wired to
-  radiant's DPPI channels between grants. EXTEND_FAILED and the ext-skip
-  TIMER0 path call `timer0_disarm()` (hand-back) BEFORE
-  `radiant_radio_abort()` disables the operation's connections, and a TIMER0
-  END that cuts a live operation (extendable grant whose last step is below
-  the extension minimum, or a fixed backstop) leaves them enabled until
-  denied_work_fn() delivers the terminal. A CC_CLOSE or CC_TXSTART compare
-  landing in that gap triggers DISABLE/TXEN on the 802.15.4 driver's radio.
-  The soak's skip path leaves only microseconds and its compares are far off,
-  so this is a candidate, not an explanation: test it by disabling the four
-  connections before the hand-back on every TIMER0/EXTEND_FAILED END.
+- [x] MPSL assert 69:108 - RESOLVED 2026-11-14 (63b2a02; hardening 1c8967b;
+  evidence `archive/benchmarks/2026-11-15-assert-69108/`). It had been
+  reproducible in minutes (`archive/benchmarks/2026-11-14-mpsl-soak/`): L15
+  `thread.conf` beside an attached OpenThread leader, one tracked and one
+  searching channel, 1.5-6.3 min after boot in every leg. Cause: MPSL took a
+  RADIO interrupt after our timeslot had ended. A RADIO END or DISABLED event
+  of the live receiver that fires while a TIMER0 (or RADIO) signal handler runs,
+  at the same priority, only pends RADIO_0 in the NVIC.
+  `radiant_nrf_gate_on_grant_end()` cleared our INTENSET bits and disabled the
+  radio but left the NVIC pending bit set; its comment assumed our own
+  `radio_isr()` would drop it. Under MPSL the vector is MPSL's, so after
+  `ACTION_END` closed the timeslot the latched interrupt was taken with no
+  timeslot open and MPSL asserted. A scan chunk ended by the ext-skip compare
+  cuts a live receiver every 10 ms, which is why the scan workload reproduced it;
+  the short match (more RADIO END events) raised the rate. It does not depend on
+  the booking design (ADR 0021) or on the ext skip.
+  Stage 1 dump (legs `base1`, `base2`, `ctrl3`; image built from abd6be7):
+  `ipsr=154 ctx=RADIO`, 18-19 us after the END returned from the ext-skip TIMER0
+  path, `ts_live=0`, radio disabled, SHORTS 0, every RADIO DPPI endpoint 0,
+  TIMER0 INTENSET 0, no MPSL API call in flight, HFXO tuned (`xo_stat=0x10001`,
+  no tune error). Asserts at 185 s, 224 s and 102 s after boot.
+  Fix: every high-priority `ACTION_END` in `on_signal()` now ends by calling
+  `radiant_nrf_gate_radio_irq_unpend()`, which clears the RADIO vector's NVIC
+  pending bit if this timeslot took the radio. It is not called on the
+  low-priority hand-backs (BLOCKED/CANCELLED, SESSION_IDLE, SESSION_CLOSED,
+  `gate_shutdown()`), where the radio may be another stack's. Nordic's 802.15.4
+  driver does the same at its hand-over (`nrf_802154_trx.c`). Test:
+  `radiant/tests/gate/src/test_gate_radio_unpend.c`, 10 cases, 6 of which fail
+  against the previous gate.
+  Confirmation (legs `fix1`-`fix3`, image `fix_63b2a02`, 30 min each, same
+  sitting as control `ctrl3`, which asserted at 102 s): 0 asserts and 0 reboots;
+  an END found the RADIO vector pending 14, 18 and 11 times per leg (UNPEND
+  counters: t0skip 13/14/11, extfail 1/4/0) out of about 65,560 grants per leg;
+  ch0 tracked loss DUT 0.357 / 0.358 / 0.288 % against Garmin 0.856 / 0.385 /
+  0.468 % in the same windows.
+  Hardening from the independent review (1c8967b; test
+  `radiant/tests/gate/src/test_gate_hardening.c`, 6 cases): low-priority
+  signals return a dedicated always-NONE struct instead of the per-session one
+  the zero-latency invocation writes; the "this slot took the radio" flag is
+  cleared at every SIGNAL_START; `timer0_disarm()` outside a high-priority
+  signal writes MPSL_TIMER0 only while a COMPARE0 interrupt we enabled is still
+  armed. The STATS-only `skip_left_min` capture, which wrote TIMER0 CC1 after the
+  hand-back, was removed (90ba241), and so were the bench arm switches added in
+  abd6be7. The Stage 1 instrumentation stays under
+  `CONFIG_RADIANT_GATE_MPSL_STATS`. Cost with STATS off: +56 B text for the fix,
+  +88 B for the hardening. Bluefin native_sim at 1c8967b: 16 scenarios, 6124
+  cases passed, `check_test_counts` OK, `radiant.gate` 93 cases.
+  Ruled out by the Stage 1 dump: HFXO/clock, API concurrency or locking, the
+  60 s calibration tick, the DPPI hand-back order, the STATS-only TIMER0 CC1
+  capture. The four earlier explanations (extension refusals, the skip, the
+  early release, the short match) were symptoms of the rate, not causes. Stage 2
+  of the plan (the arm table) was not run: Stage 1 named the mechanism.
+  Containment (leg `contain1`, `thread.conf;bridge.conf`, image before the fix,
+  `CONFIG_RESET_ON_FATAL_ERROR=y`): the assert fired once at 497 s and the board
+  cold-rebooted within about 1 s, no halt, and was attached to the Thread leader
+  again as the same child. Not shown: the time to re-attach, and ANT traffic
+  after the reboot (a host-driven dongle's channels are the host's to reopen,
+  and the runner did not reopen them). `thread.conf` alone still sets
+  `CONFIG_RESET_ON_FATAL_ERROR=n`, so a bare `thread.conf` build halts.
+  Nordic: a report draft is in the evidence directory
+  (`nordic-report-draft.md`); posting it is the owner's decision. DevZone thread
+  128550 reports the same `69, 108` from Nordic's ESB timeslot code.
+  Stage 4 acceptance in progress (2 h Thread soak, Matter, gate, coex, acked
+  data, Zwift image); results to be added.
+  Open items found on the way, not fixed here:
+  - [ ] DPPI hand-back order. Beside OpenThread the grant-boundary endpoint swap
+    moves only PUBLISH_ADDRESS and SUBSCRIBE_RXEN, so RADIO
+    SUBSCRIBE_DISABLE/TXEN/RSSISTART stay wired to radiant's DPPI channels
+    between grants. EXTEND_FAILED and the ext-skip TIMER0 path call
+    `timer0_disarm()` (hand-back) before `radiant_radio_abort()` disables the
+    operation's connections, and a TIMER0 END that cuts a live operation
+    (extendable grant whose last step is below the extension minimum, or a
+    fixed backstop) leaves them enabled until `denied_work_fn()` delivers the
+    terminal. A CC_CLOSE or CC_TXSTART compare landing in that gap would
+    trigger DISABLE/TXEN on the 802.15.4 driver's radio. Ruled out as the cause
+    of 69:108 (every RADIO DPPI endpoint read 0 at the assert); still a latent
+    hazard to the other stack's radio on the plain TIMER0 END that cuts a live
+    operation. Untested. A test: disable the four connections before the
+    hand-back on every TIMER0/EXTEND_FAILED END.
+  - [ ] In-grant `gate_acquire()` returns GATE_GRANTED unmasked and the caller
+    then programs the radio from SWI or a thread. A TIMER0 backstop END between
+    the two leaves `program_ed()` enabling RXREADY in INTENSET (only with
+    `CONFIG_RADIANT_ED_SCAN`, default n) or `program_rx()` writing
+    SHORTS/connections on a radio no longer ours. Improbable (end margin);
+    found by review, not observed.
+  - [ ] The symmetric case: a TIMER0 COMPARE0 that fires while a RADIO signal
+    returns END can leave TIMER10 pending after END. Not cleared on purpose
+    (MPSL uses other CCs on that timer). No TIMER-context assert has been seen.
+  - [ ] Latched RADIO EVENTS_* (END, ADDRESS, READY) are left set at hand-back.
+    Harmless beside the 802.15.4 driver (it resets the radio); unknown beside
+    the SoftDevice Controller.
+  - [ ] No retained record of an MPSL assert across the reboot. The reset-cause
+    line reads `0x00000002` after both a flash and the assert reboot, so it does
+    not identify an assert; `apps/common/diag_flash_log.c` is not built into
+    `apps/dongle_thread`, and flash writes from the assert context are unsafe
+    under MPSL. A `__noinit` RAM record read at the next boot was proposed and
+    not implemented.
 
 ## Device Testing Open Items
 
@@ -372,8 +444,11 @@ Zwift pcap using an MPSL build dongle (image ready 2026-11-14, user-run):
 - Host: `scripts\zwift_ant_shim.ps1 -Port COM4` (the L15's ANT VCOM), set
   `RADIANT_SHIM_LOG` to keep the shim's call log - it is the capture here,
   since USBPcap sees only the J-Link's CDC. Keep the L15 log VCOM (COM3, DTR)
-  captured too: an `MPSL ASSERT` line there means the board halted (69:108
-  above), not that Zwift lost the sensors.
+  captured too. The 69:108 cause is fixed (63b2a02, "MPSL assert 69:108"
+  above), so the image must be rebuilt from a tree that contains it. `gate.conf`
+  images reboot rather than halt on any MPSL assert (`CONFIG_RESET_ON_FATAL_ERROR=y`
+  from prj.conf), so a second boot banner on the log VCOM is the sign to look
+  for.
 - Confirm: FE-C acknowledged control completes (page 0x33 about every 1 s, 0x37
   every 30 s, TRANSFER_TX_COMPLETED rather than FAILED; the 2026-11-04 RadiANT USB
   capture had 23 % "master frame heard, no ACK"); every sensor listed within

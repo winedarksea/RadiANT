@@ -133,6 +133,35 @@
 > - **Stage B's BLE check reads "no regression"**, not a gain: slots heard 98.91 %
 >   against master's 99.10 % (F6).
 
+> **Correction, 2026-11-14, from the 69:108 investigation
+> ([evidence](../../archive/benchmarks/2026-11-15-assert-69108/README.md)).** The
+> assert's cause is found and fixed. It amends decision 3 and the earlier bullets
+> about 69:108 above.
+>
+> - **The cause was a RADIO interrupt left pending at END, not extension refusals,
+>   the skip or the early release.** A RADIO END or DISABLED event of the live
+>   receiver that fired while a TIMER0 (or RADIO) signal handler ran, at the same
+>   priority, only pended RADIO_0 in the NVIC. `radiant_nrf_gate_on_grant_end()`
+>   cleared our interrupt-enable bits and disabled the radio but left the pending
+>   bit set. Under MPSL the vector is MPSL's, so once `ACTION_END` closed the
+>   timeslot the latched interrupt was taken with no timeslot open. A scan chunk
+>   ended by the ext-skip compare cuts a live receiver every 10 ms, and the short
+>   match adds RADIO END events, so both raised the rate; neither is the cause.
+> - **It is independent of the booking design and of the ext skip.** The failing
+>   END in the Stage 1 dump came back from the ext-skip TIMER0 path, and on the
+>   fixed image the pending vector was found at ENDs from that path (13, 14 and 11
+>   per leg) and from EXTEND_FAILED (1, 4 and 0). The skip therefore does not
+>   prevent the assert, and the earlier clean runs with the skip or the early
+>   release are not evidence for either.
+> - **Fix and evidence.** 63b2a02: every high-priority `ACTION_END` clears the RADIO
+>   vector's pending bit if this timeslot took the radio (hardening in 1c8967b).
+>   Three 30 minute Thread legs on the fixed image: 0 asserts and 0 reboots, with 14,
+>   18 and 11 ENDs that found the vector pending, against a control leg on the old
+>   image in the same sitting that asserted at 102 s. The Stage 1 dump (`ipsr=154
+>   ctx=RADIO`, 18-19 us after the END, no timeslot live) is in the same directory.
+>   The 2 h soak and the other acceptance runs are in progress; their results are not
+>   in this note.
+
 ---
 
 ## Context
@@ -209,4 +238,5 @@ search.
 soak (an attached OpenThread leader, one tracked and one searching channel),
 1.5-14.6 minutes after boot, on master dd38b26 as often as on the branch under
 test, and with the short match off as well as on
-(`archive/benchmarks/2026-11-14-mpsl-soak/`). It is open in TODO.md.
+(`archive/benchmarks/2026-11-14-mpsl-soak/`). It was open in TODO.md; the cause
+is fixed (63b2a02, 2026-11-14), see the correction in the header above.

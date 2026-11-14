@@ -1,5 +1,7 @@
 # Phase 3 Stage A: building ADR 0021
 
+> **Update, 2026-11-14.** What causes `69:108`, listed below as unknown, was a RADIO interrupt left pending at END, independent of the skip and the early release; fixed in 63b2a02. See [ADR 0021](../decisions/0021-tracked-slots-are-booked-a-period-ahead.md) and [the evidence](../../archive/benchmarks/2026-11-15-assert-69108/README.md).
+
 Measured 2026-11-10 on the nRF54L15 DK (J-Link `1057737173`), branch
 `wip/adr18-impl`, NCS v3.4.0. Code at 8b357d7; the commit that carries this
 report changes comments and documents only. Design:

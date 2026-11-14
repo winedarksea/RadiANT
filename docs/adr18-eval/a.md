@@ -1,5 +1,7 @@
 # Phase 1, candidate (a): held grant plus bridging extension
 
+> **Update, 2026-11-14.** The MPSL assert `69:108` seen on (a) was a RADIO interrupt left pending at END, not the extension machinery; fixed in 63b2a02. See [ADR 0021](../decisions/0021-tracked-slots-are-booked-a-period-ahead.md) and [the evidence](../../archive/benchmarks/2026-11-15-assert-69108/README.md).
+
 Branch `wip/adr18-a`, based on master 237b7c4. Measured 2026-11-10 on the
 fixed rig. Nothing is merged, pushed or tagged. Raw logs are outside the
 repository: see [a-raw-logs.md](a-raw-logs.md). Commits: 8ac89d0, a979ba9,

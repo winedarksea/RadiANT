@@ -3,6 +3,39 @@
 Legs for finding what triggers or avoids assert 69:108 (see
 `archive/benchmarks/2026-11-14-mpsl-soak/README.md` for the first set). Each leg
 runs `soak_run.py` and ends at the first `MPSL ASSERT` line on the DUT console.
+The `start` column of `legs.tsv` and the console timestamps read 2026-11-14.
+
+## Result
+
+The assert is explained and fixed.
+
+- **Cause.** `MPSL ASSERT 69:108` is MPSL taking a RADIO interrupt after our
+  timeslot has ended. A RADIO END or DISABLED event of the live receiver that
+  fires while a TIMER0 (or RADIO) signal handler runs, at the same priority,
+  only pends RADIO_0 in the NVIC. `radiant_nrf_gate_on_grant_end()` cleared our
+  INTENSET bits and disabled the radio but left the NVIC pending bit set. Under
+  MPSL the vector is MPSL's, so after `ACTION_END` closed the timeslot the
+  latched interrupt was taken with no timeslot open. A scan chunk ended by the
+  ext-skip compare cuts a live receiver every 10 ms, which is why the scan
+  workload reproduced it; the short match (more RADIO END events) raised the
+  rate.
+- **Fix.** Commit 63b2a02: every high-priority `ACTION_END` in `on_signal()` now
+  ends by calling `radiant_nrf_gate_radio_irq_unpend()`, which clears the RADIO
+  vector's NVIC pending bit if this timeslot took the radio. It is not called on
+  the low-priority hand-backs (BLOCKED/CANCELLED, SESSION_IDLE, SESSION_CLOSED,
+  `gate_shutdown()`), where the radio may be another stack's. Nordic's 802.15.4
+  driver does the same at its hand-over (`nrf_802154_trx.c`). Test:
+  `radiant/tests/gate/src/test_gate_radio_unpend.c` (10 cases; 6 fail against the
+  previous gate). Hardening from the independent review is 1c8967b
+  (`radiant/tests/gate/src/test_gate_hardening.c`, 6 cases).
+- **Confirmed.** Legs `fix1`-`fix3` (image `fix_63b2a02`, 30 min each, same
+  sitting as control `ctrl3`, which asserted at 102 s): 0 asserts, 0 reboots. An
+  END found the RADIO vector pending 14, 18 and 11 times per leg out of about
+  65,560 grants per leg. Channel 0 tracked loss, DUT 0.357 / 0.358 / 0.288 %
+  against Garmin 0.856 / 0.385 / 0.468 % in the same windows.
+- **Not done.** Stage 2 of the plan (the arm table) was not run, because Stage 1
+  named the mechanism. The bench arm switches were added in abd6be7 and removed
+  unused in 90ba241.
 
 ## Rig
 
@@ -76,5 +109,90 @@ Offline check of the detection code against an existing capture (no hardware):
 
 ## Results
 
-| leg | image | result | placed | ext ok/fail | skip |
-|---|---|---|---|---|---|
+`legs.tsv` is the full record; this table lists the legs the conclusion rests
+on. Images: `baseline_abd6be7` is the pre-fix tree with the Stage 1
+instrumentation; `ship_thread_bridge_abd6be7` is the pre-fix `thread.conf;bridge.conf`
+image with `CONFIG_RESET_ON_FATAL_ERROR=y`; `fix_63b2a02` is the fix. "Pending
+RADIO vector cleared" is the sum of the `UNPEND` pending counters in the last
+`radiant_gate_mpsl: UNPEND` console line (t0skip + extfail, the other counters
+read 0), `-` for pre-fix images, which have no such counter.
+
+| leg | image | result | placed | ext ok/fail | skip | pending RADIO vector cleared |
+|---|---|---|---|---|---|---|
+| base1 | baseline_abd6be7 | assert at 185.0 s | 3582 | 0/144 | 2897 | - |
+| base2 | baseline_abd6be7 | assert at 223.9 s | 4986 | 0/198 | 4058 | - |
+| contain1 | ship_thread_bridge_abd6be7 | assert at 497.2 s, 1 reboot | 14970 | 0/597 | 12184 | - |
+| ctrl3 | baseline_abd6be7 | assert at 101.9 s | 507 | 0/21 | 389 | - |
+| fix1 | fix_63b2a02 | clean at 1900.0 s | 65570 | 0/2610 | 53308 | 14 (13 + 1) |
+| fix2 | fix_63b2a02 | clean at 1900.6 s | 65577 | 0/2613 | 53338 | 18 (14 + 4) |
+| fix3 | fix_63b2a02 | clean at 1900.1 s | 65583 | 0/2613 | 53321 | 11 (11 + 0) |
+
+The 1900 s of the clean legs is the 1800 s run plus boot and attach time.
+`soak_run.py` writes no DUT or Garmin packet counts for a leg that ends at an
+assert (the verify tools are terminated), which is why the pre-fix legs have
+none. The fix legs' loss figures are in `fix1-dut.log`/`-ref.log` and their
+`.json` files.
+
+## Stage 1 dump
+
+The pre-fix image (`baseline_abd6be7`, built from abd6be7) prints a dump at the
+assert. Legs `base1`, `base2` and `ctrl3` agree on the points below
+(`ipsr=154 ctx=RADIO`; `since_end_us` 18, 18 and 19; `ts_live=0`). Lines from
+`base1-console.log`, console timestamps removed, long lines cut at `...`:
+
+    *** MPSL ASSERT 69:108  placed=3582 granted=3565 blocked=16 ext=0/144 skip=2897 deadline=0
+        ipsr=154 ctx=RADIO control=0x0 msp=0x2001aaf0 psp=0x2001acc8 ret=0x00002397 thread=0x2000a5e8 thread_stack=0x2001abc8..0x2001ad08
+        xo_run=0x1 xo_stat=0x10001 ev_xostarted=1 ev_xotuned=1 ev_xotuneerror=0 ev_xotunefailed=0 ...
+        t0_intenset=0x00000000 t0_shorts=0x0 t0_ev_compare=0x0a t0_count=9293 (captured into CC1 after the reads)
+        radio_state=0 radio_shorts=0x00000000 sub_rxen=0x00000000 sub_txen=0x00000000 sub_disable=0x00000000 sub_rssistart=0x00000000 pub_address=0x00000000 pub_rxready=0x00000000
+        last_sess=0 since_start_us=9302 since_end_us=18 ts_live=0 live_sess=0 hw_held=0 ended=1 ...
+        api_inflight=0 api_sess=0 api_last=1 api_rc=0 api_calls=3584 since_api_in_us=25247 since_api_out_us=25234 ...
+        trace (sess:sig:act+dt_us; request entries sess:R:rc@notice_us+dt_us; oldest first): ... 0:R:0@15948+21 0:0:0+15975 0:1:2+9256 0:7:0+289 0:R:0@15948+21 0:0:0+15975 0:1:2+9256
+
+What it shows: the interrupt that asserts is a RADIO one (IPSR 154) taken 18-19 us
+after the END returned from the ext-skip TIMER0 path, with no timeslot live
+(`ts_live=0`), the radio disabled (`radio_state=0`, SHORTS 0), every RADIO DPPI
+endpoint 0, TIMER0 INTENSET 0, no MPSL API call in flight (`api_inflight=0`) and
+the HFXO tuned (`xo_stat=0x10001`, XOTUNED=1, no tune error). That excludes the
+HFXO/clock, API concurrency or locking, the 60 s calibration tick, the DPPI
+hand-back order and the STATS-only TIMER0 CC1 capture as causes of this assert.
+
+## Mapping `ret=` and `words=` addresses
+
+`ret=` and the `words=` entries are return addresses read off the stack. Map them
+against the `zephyr.elf` of the image that printed them (the `build` directory
+of the leg's image; the hash is in `legs.tsv`), with the toolchain's
+`arm-zephyr-eabi-addr2line -f -e zephyr.elf <addr>` and `arm-zephyr-eabi-nm -n`
+for the nearest symbol. An address that resolves to no symbol of ours is in a
+library: find the archive member in `zephyr.map` (the memory map lists each
+object under its archive) and stop there. Do not disassemble Nordic's binaries;
+their licence does not allow it.
+
+## Containment (leg `contain1`)
+
+Image: `thread.conf;bridge.conf` from the pre-fix tree, `CONFIG_RESET_ON_FATAL_ERROR=y`.
+The assert fired once, at 497 s. The console shows the assert dump at 12:47:45.972
+and a new `*** Booting` banner at 12:47:46.992: the board cold-rebooted within
+about 1 s and did not halt. The peer's child table after the run lists the same
+child (RLOC16 0x0402, extended MAC `2a3e66a0f4196d46`) as before the flash, so
+the board was attached to the Thread leader again.
+
+Not shown: the time to re-attach, and ANT traffic after the reboot (a
+host-driven dongle's channels are the host's to reopen, and the runner did not
+reopen them). The reset-cause line reads `0x00000002` after both a flash and
+the assert reboot, so it does not identify an assert. No record of the assert
+survives the reboot: `apps/common/diag_flash_log.c` is not built into
+`apps/dongle_thread`, and flash writes from the assert context are unsafe under
+MPSL. A `__noinit` RAM record read at the next boot was proposed and not
+implemented.
+
+## Stage 4 acceptance
+
+In progress, to be added: 2 h Thread soak, Matter, gate, coex, acknowledged data
+and the Zwift image.
+
+## Nordic
+
+`nordic-report-draft.md` is a report for DevZone thread 128550, which reports the
+same `69, 108` from Nordic's ESB timeslot code. It has not been posted; posting
+it is the owner's decision.
