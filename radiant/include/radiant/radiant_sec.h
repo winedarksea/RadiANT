@@ -88,6 +88,9 @@ extern "C" {
  * authority set (radiant_sec_set_epoch_ceiling()). Nothing is spent; the same
  * call succeeds once the ceiling is raised. */
 #define RADIANT_SEC_EAGAIN   -6
+/* Refused in this state: radiant_sec_set_epoch() on a channel an epoch
+ * authority follows (it carries a ceiling). */
+#define RADIANT_SEC_ESTATE   -7
 
 /*
  * An opaque key handle. NEVER a `const uint8_t key[16]` at a call site.
@@ -676,9 +679,12 @@ int  radiant_sec_set_epoch(uint8_t ch, uint32_t epoch, uint64_t us_into_epoch,
  *
  * This is the epoch authority's reservation: it persists "next unused epoch"
  * before raising the ceiling, so an epoch is never used that a reboot could
- * issue again. CLEARED by radiant_sec_set_epoch() - whoever sets the epoch
- * owns it, so a host 0xF3 on a followed channel ends the following; an
- * authority sets its ceiling after its own set_epoch. Kept across set_key.
+ * issue again. While a ceiling is set, radiant_sec_set_epoch() is REFUSED
+ * (RADIANT_SEC_ESTATE): a host 0xF3 under the authority's root would run
+ * wraps nobody reserved. radiant_sec_set_key() clears it - a new root owes
+ * the old authority nothing - and so does a call here with max_epoch
+ * 0xFFFFFFFF, which is how the authority itself re-epochs its channel
+ * (clear, set_epoch, set the new ceiling).
  *
  * Thread context, under the port's lock, like set_epoch. Returns
  * RADIANT_SEC_ENOKEY with no context.
@@ -687,13 +693,14 @@ int  radiant_sec_set_epoch_ceiling(uint8_t ch, uint32_t max_epoch);
 
 /*
  * Raise an existing ceiling; never lowers one, and does nothing on a channel
- * with no ceiling (nobody follows it, or another party's set_epoch ended the
- * following). For the authority's deferred work: callable WITHOUT the port's
- * lock, being one aligned store read once per wrap. The one race - the
- * channel released and its context re-allocated between the lookup and the
- * store - lands on a context with no ceiling (a no-op) unless the authority
- * itself re-armed it, and the authority only raises to epochs it has already
- * reserved, so the race cannot let an unreserved epoch be used.
+ * with no ceiling (nobody follows it, or a new root ended the following). For
+ * the authority's deferred work: callable WITHOUT the port's lock. The store
+ * is a compare-and-swap against the value tested, so a concurrent set_key
+ * clearing the ceiling is never overwritten (no re-following). The remaining
+ * race - the channel released and its context re-allocated between the lookup
+ * and the CAS - lands on a context with no ceiling (a no-op) unless the
+ * authority itself re-armed it, and the authority only raises to epochs it
+ * has already reserved, so it cannot let an unreserved epoch be used.
  */
 int  radiant_sec_raise_epoch_ceiling(uint8_t ch, uint32_t max_epoch);
 

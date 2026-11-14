@@ -460,19 +460,26 @@ the ceiling to `e + 1`. A wrap that would pass the ceiling is refused and
 secured TX is **withheld**; the refusal calls `radiant_sec_epoch_wanted()`
 (compat: `radiant_sec_compat_epoch_wanted()`) with the epoch it needs, so a
 catch-up of several wraps after a long silence is reserved the same way
-(`N = wanted + 1`, ceiling raised to it) and TX resumes at the next slot; this
+(`N = wanted + 1`, ceiling raised to it) and TX resumes at the first slot
+after the persist and the raise land; this
 is not the permanent `tx_spent` state that exhausting the headroom causes. The
 work item has one whole wrap to land, about 4.5 h at 4 Hz (at least 18 h on
 compat, 15 days at T = 20 s), and a write that never lands fails closed
-(retried with backoff).
+(retried with backoff, capped at 30 s).
 
-Three rules keep the following honest. Whoever calls `set_epoch` owns the
-channel's epochs: it clears the ceiling, so a host `0xF3` or a release and
-re-key ends the node's following, its hooks stop firing there, and the work
-item only ever *raises* an existing ceiling. The node arms each channel once
-per boot: a second arm would restart the counter under the same epoch. And
-every channel armed in one boot shares `E`, so those channels must differ in
-root key or device number. The same floor stops a same-minute
+Three rules keep the following honest. While the node follows a channel (it
+carries a ceiling), `radiant` refuses anyone else's `set_epoch` there: a host
+`0xF3` under the node's root would run wraps nobody reserved, and the next boot
+could issue one of them again, so it is answered `CHANNEL_IN_WRONG_STATE`. A
+new root (`set_key`) or a release ends the following; the hooks then stop
+firing there, and the work item only ever *raises* an existing ceiling (a
+compare-and-swap, so it cannot re-follow a channel a re-key just let go). Only
+the first arm of each kind in a boot gets `E`: every later arm, whether the
+same channel again or another under the same root, takes the next unused epoch
+once its reservation is durable, so no arm restarts the counter under an epoch
+already used. And channels transmitting at the same time must differ in root
+key or device number, because a wrap on one may reach an epoch a later arm
+took. The same floor stops a same-minute
 wall-clock reboot reusing an epoch. Epochs step by about 2 per boot, so
 forward searches (compat's, the descriptor's 16-epoch span) still find them;
 a scheme that spaced boots far apart, such as `boot_counter << 12`, would not.

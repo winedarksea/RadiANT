@@ -2162,9 +2162,11 @@ ZTEST(radiant_sec, test_the_pump_refuses_a_context_that_transmits)
 	zassert_equal(1u, log_n_pkt);
 }
 
-/* Review follow-up: set_epoch ends an authority's following (its ceiling is
- * cleared), and a raise never lowers a ceiling nor creates one. */
-ZTEST(radiant_sec, test_set_epoch_clears_the_ceiling_and_a_raise_only_raises)
+/* Re-review M1/L1: a channel an authority follows refuses anyone else's
+ * set_epoch (a host 0xF3 would run wraps nobody reserved); a new root, or the
+ * authority clearing its own ceiling, frees it. A raise never lowers a
+ * ceiling nor creates one. */
+ZTEST(radiant_sec, test_a_followed_channel_refuses_set_epoch_and_a_raise_only_raises)
 {
 	uint8_t pay[8];
 
@@ -2191,13 +2193,27 @@ ZTEST(radiant_sec, test_set_epoch_clears_the_ceiling_and_a_raise_only_raises)
 		      radiant_sec_tx_transform(TX_CH, pay, 8u,
 					       slot_t(3u * 65536u)));
 
-	/* Another party's set_epoch takes the channel over: no ceiling. */
+	/* A host epoch on the followed channel is refused, state untouched. */
+	zassert_equal(RADIANT_SEC_ESTATE,
+		      radiant_sec_set_epoch(TX_CH, 100u, 0u, TEST_PERIOD));
+	zassert_equal(9u, tx_epoch_now(TX_CH));
+
+	/* The authority clearing its own ceiling frees it... */
+	zassert_ok(radiant_sec_set_epoch_ceiling(TX_CH, UINT32_MAX));
 	zassert_ok(radiant_sec_set_epoch(TX_CH, 100u, 0u, TEST_PERIOD));
+
+	/* ...and so does a new root, and a raise does not bring it back. */
+	zassert_ok(radiant_sec_set_epoch_ceiling(TX_CH, 100u));
+	zassert_equal(RADIANT_SEC_ESTATE,
+		      radiant_sec_set_epoch(TX_CH, 200u, 0u, TEST_PERIOD));
+	zassert_ok(radiant_sec_set_key(TX_CH, test_root, 128, TEST_DEVNUM));
+	zassert_ok(radiant_sec_raise_epoch_ceiling(TX_CH, 300u));
+	zassert_ok(radiant_sec_set_epoch(TX_CH, 200u, 0u, TEST_PERIOD));
 	sec_anchor = (uint64_t)radiant_radio_now();
 	tx_air(0u, pay);
 	memcpy(pay, conf_plain, 8u);
 	zassert_ok(radiant_sec_tx_transform(TX_CH, pay, 8u,
 					    slot_t(3u * 65536u)),
-		   "a ceiling survived another party's set_epoch");
-	zassert_equal(103u, tx_epoch_now(TX_CH));
+		   "a ceiling survived a new root");
+	zassert_equal(203u, tx_epoch_now(TX_CH));
 }

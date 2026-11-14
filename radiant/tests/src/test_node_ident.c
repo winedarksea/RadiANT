@@ -1295,44 +1295,83 @@ ZTEST(node_ident, test_a_tx_gap_of_two_wraps_is_reserved_and_resumes)
 	zassert_equal(e0 + 4u, e1);
 }
 
-/* Item 2: one arm per channel per boot. A second arm would restart the slot
- * counter at 0 under the same (root, E, devnum). */
-ZTEST(node_ident, test_a_channel_is_armed_once_per_boot)
+/* Re-review M2: only the first arm in a boot gets E. A re-arm of the same
+ * channel, and an arm of another channel under the same root and device
+ * number after the first was released, each get a fresh epoch - after
+ * NODE_IDENT_EAGAIN until its reservation is durable - so no arm restarts the
+ * counter under an epoch an earlier arm used. */
+ZTEST(node_ident, test_every_arm_after_the_first_gets_a_fresh_epoch)
 {
-	booted_and_armed();
-	zassert_equal(NODE_IDENT_ESTATE,
-		      node_ident_arm_sec(TX_NODE_CH, TEST_PERIOD),
-		      "a second arm in one boot was accepted");
+	uint32_t e0;
+	uint32_t e1;
+	uint32_t e2;
 
-	/* Released and re-keyed: still refused this boot. */
+	e0 = booted_and_armed();
+	zassert_equal(e0, sec_epoch(TX_NODE_CH));
+
+	/* The same channel, re-keyed under the same root: EAGAIN, then F. */
 	radiant_sec_channel_release(TX_NODE_CH);
 	key_conf(TX_NODE_CH, RADIANT_SEC_SW_CONF);
-	zassert_equal(NODE_IDENT_ESTATE,
+	zassert_equal(NODE_IDENT_EAGAIN,
 		      node_ident_arm_sec(TX_NODE_CH, TEST_PERIOD));
+	let_work_run();
+	zassert_equal(NODE_IDENT_OK,
+		      node_ident_arm_sec(TX_NODE_CH, TEST_PERIOD));
+	e1 = sec_epoch(TX_NODE_CH);
+	zassert_true(e1 > e0 + 1u, "re-arm reused epoch %u (E %u)", e1, e0);
+	zassert_equal(e1 + 2u, stored_next(), "the fresh epoch was not reserved");
 
-	/* Another channel, and the next boot, are fine. */
+	/* Re-armed again without a release (it carries the node's ceiling). */
+	zassert_equal(NODE_IDENT_EAGAIN,
+		      node_ident_arm_sec(TX_NODE_CH, TEST_PERIOD));
+	let_work_run();
+	zassert_equal(NODE_IDENT_OK,
+		      node_ident_arm_sec(TX_NODE_CH, TEST_PERIOD));
+	e2 = sec_epoch(TX_NODE_CH);
+	zassert_true(e2 > e1 + 1u);
+
+	/* Another channel, same root and devnum, after a release. */
+	radiant_sec_channel_release(TX_NODE_CH);
 	key_conf(RX_NODE_CH, RADIANT_SEC_SW_CONF);
+	zassert_equal(NODE_IDENT_EAGAIN,
+		      node_ident_arm_sec(RX_NODE_CH, TEST_PERIOD));
+	let_work_run();
 	zassert_equal(NODE_IDENT_OK,
 		      node_ident_arm_sec(RX_NODE_CH, TEST_PERIOD));
-	node_reboot();
-	key_conf(TX_NODE_CH, RADIANT_SEC_SW_CONF);
-	zassert_equal(NODE_IDENT_OK,
-		      node_ident_arm_sec(TX_NODE_CH, TEST_PERIOD));
+	zassert_true(sec_epoch(RX_NODE_CH) > e2 + 1u,
+		     "a cross-channel arm under one root reused an epoch");
+
 	zassert_equal(NODE_IDENT_EINVAL, node_ident_arm_sec(32u, TEST_PERIOD));
+
+	/* The next boot is above every epoch this one handed out. */
+	e1 = sec_epoch(RX_NODE_CH);
+	node_reboot();
+	zassert_equal(NODE_IDENT_OK, node_ident_epoch(&e2));
+	zassert_true(e2 > e1 + 1u);
 }
 
-/* Item 3: a channel node_ident armed and someone else then re-epoched (a host
- * 0xF3) is no longer followed: its wraps neither drive N nor get capped. */
-ZTEST(node_ident, test_another_partys_epoch_ends_the_following)
+/* Re-review M1: a host 0xF3 on a channel the node follows is refused (it
+ * would run unreserved wraps under the node root). A new root ends the
+ * following, and then that channel's wraps neither drive N nor get capped. */
+ZTEST(node_ident, test_a_host_epoch_on_a_followed_channel_is_refused)
 {
 	uint8_t  pay[8] = { 0x05u, 0xAAu, 1, 2, 3, 4, 5, 6 };
+	uint32_t e0;
 	uint32_t n0;
 	uint32_t e1;
 
-	booted_and_armed();
+	e0 = booted_and_armed();
 	n0 = stored_next();
 
-	/* The host takes channel 0 over at a far higher epoch. */
+	zassert_equal(RADIANT_SEC_ESTATE,
+		      radiant_sec_set_epoch(TX_NODE_CH, 0x10000000u, 0u,
+					    TEST_PERIOD),
+		      "a host epoch replaced the node's on its own root");
+	zassert_equal(e0, sec_epoch(TX_NODE_CH));
+
+	/* A host that re-keys owns the channel, and the node lets go. */
+	zassert_ok(radiant_sec_set_key(TX_NODE_CH, test_root, 128,
+				       VECTOR_DEVNUM));
 	zassert_ok(radiant_sec_set_epoch(TX_NODE_CH, 0x10000000u, 0u,
 					 TEST_PERIOD));
 	node_anchor = (uint64_t)radiant_radio_now();
@@ -1340,11 +1379,10 @@ ZTEST(node_ident, test_another_partys_epoch_ends_the_following)
 					    node_slot_t(0u)));
 	zassert_ok(radiant_sec_tx_transform(TX_NODE_CH, pay, 8u,
 					    node_slot_t(3u * 65536u)),
-		   "the node still capped a channel the host owns");
+		   "the node still capped a channel the host re-keyed");
 	let_work_run();
 	zassert_equal(n0, stored_next(), "a host epoch drove the node's N");
 
-	/* So the next boot is not pushed out of range. */
 	node_reboot();
 	zassert_equal(NODE_IDENT_OK, node_ident_epoch(&e1));
 	zassert_equal(n0, e1);
@@ -1358,6 +1396,9 @@ ZTEST(node_ident, test_a_released_channel_is_not_capped_by_another_wrap)
 
 	booted_and_armed();
 	key_conf(RX_NODE_CH, RADIANT_SEC_SW_CONF);
+	zassert_equal(NODE_IDENT_EAGAIN,
+		      node_ident_arm_sec(RX_NODE_CH, TEST_PERIOD));
+	let_work_run();
 	zassert_equal(NODE_IDENT_OK,
 		      node_ident_arm_sec(RX_NODE_CH, TEST_PERIOD));
 

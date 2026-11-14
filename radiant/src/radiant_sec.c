@@ -74,9 +74,11 @@ struct sec_ctx {
 	/* The epoch ceiling, stored inverted so a zeroed context means "none"
 	 * (0xFFFFFFFF, i.e. only the headroom test) with no init code. Nonzero
 	 * also means "an epoch authority follows this channel": only then do
-	 * the epoch hooks fire. Cleared by set_epoch. See
+	 * the epoch hooks fire. While set, set_epoch is refused; set_key (a new
+	 * root) clears it. atomic_t for the authority's lock-free raise (a CAS);
+	 * every other access is a plain load or store. See
 	 * radiant_sec_set_epoch_ceiling(). */
-	uint32_t ceil_inv;
+	atomic_t ceil_inv;
 	/* epoch_anchor error, in us, implied by rx_prev's closing packet and
 	 * applied only if rx_prev verifies. rx_floor and this sit where they do
 	 * because both fill alignment holes on a 32-bit target, so the fix that
@@ -353,7 +355,7 @@ static int advance_epoch(struct sec_ctx *c, uint16_t by)
 	 * retries at the next slot. The authority is told which epoch is
 	 * wanted, so a catch-up of several wraps (a long silence) cannot wait
 	 * for an advance that never comes. Overflow is excluded above. */
-	if (c->epoch + by > ~c->ceil_inv) {
+	if (c->epoch + by > ~(uint32_t)c->ceil_inv) {
 		radiant_sec_epoch_wanted(c->ch, c->epoch + by);
 		return RADIANT_SEC_EAGAIN;
 	}
@@ -465,6 +467,9 @@ int radiant_sec_set_key(uint8_t ch, const uint8_t *root, size_t bits,
 	if (c->devnum == 0u) {
 		c->devnum = base_devnum;
 	}
+	/* A new root's epochs owe nothing to the old root's authority: the
+	 * ceiling (and the following) goes with it, and set_epoch is free. */
+	c->ceil_inv = 0;
 
 	/* A new root invalidates the epoch gate: a fresh start under an epoch
 	 * the previous key already used is exactly the state D3 forbids. */
@@ -551,6 +556,14 @@ int radiant_sec_set_epoch(uint8_t ch, uint32_t epoch, uint64_t us_into_epoch,
 	if (period_counts == 0u) {
 		return RADIANT_SEC_EINVAL;
 	}
+	/* An epoch authority follows this channel (review 2026-11-13 re-review
+	 * M1): an epoch from anyone else - a host 0xF3 under the same root -
+	 * would run wraps the authority never reserved, and its next boot
+	 * could issue one of them again. Refused until a new root (set_key) or
+	 * the authority itself clears the ceiling. */
+	if (c->ceil_inv != 0) {
+		return RADIANT_SEC_ESTATE;
+	}
 	/* Monotone - the whole of D3's enforceable half; the rest is a
 	 * normative obligation on the epoch authority since nothing here
 	 * survives a reset to check it. */
@@ -567,10 +580,6 @@ int radiant_sec_set_epoch(uint8_t ch, uint32_t epoch, uint64_t us_into_epoch,
 	c->epoch_anchor = (now > us_into_epoch) ? (now - us_into_epoch) : 0u;
 	c->period_counts = period_counts;
 	c->epoch_set = true;
-	/* Whoever sets an epoch owns the channel's epochs from here: an
-	 * authority's ceiling (and its following) does not survive another
-	 * party's 0xF3. The authority sets a new one after its own call. */
-	c->ceil_inv = 0u;
 
 	/* Everything in flight belonged to the old epoch, the slot clock's
 	 * phase included: the next secured transform latches it afresh. */
@@ -597,22 +606,27 @@ int radiant_sec_set_epoch_ceiling(uint8_t ch, uint32_t max_epoch)
 	if (c == NULL) {
 		return RADIANT_SEC_ENOKEY;
 	}
-	c->ceil_inv = ~max_epoch;
+	c->ceil_inv = (atomic_val_t)(uint32_t)~max_epoch;
 	return RADIANT_SEC_OK;
 }
 
 int radiant_sec_raise_epoch_ceiling(uint8_t ch, uint32_t max_epoch)
 {
-	/* No lock check (see the header): one aligned store, and only ever
-	 * upward on a channel that already carries a ceiling. */
+	/* No lock check (see the header). A CAS, so a set_key clearing the
+	 * ceiling between the test and the store is never undone. */
 	struct sec_ctx *c = ctx_of(ch);
+	atomic_val_t    old;
 
 	if (c == NULL) {
 		return RADIANT_SEC_ENOKEY;
 	}
-	if (c->ceil_inv != 0u && ~max_epoch < c->ceil_inv) {
-		c->ceil_inv = ~max_epoch;
-	}
+	do {
+		old = atomic_get(&c->ceil_inv);
+		if (old == 0 || (uint32_t)~max_epoch >= (uint32_t)old) {
+			return RADIANT_SEC_OK;
+		}
+	} while (!atomic_cas(&c->ceil_inv, old,
+			     (atomic_val_t)(uint32_t)~max_epoch));
 	return RADIANT_SEC_OK;
 }
 

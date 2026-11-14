@@ -48,6 +48,12 @@ static struct {
 	 * whose epoch advances this file follows. Bit per channel number. */
 	uint32_t sec_armed;
 	uint32_t compat_armed;
+	/* E goes to the first arm of each kind; every later arm in the boot
+	 * gets a fresh epoch, `arm_fresh`, once N above it is in storage
+	 * (0 = none requested). */
+	bool     sec_first_done;
+	bool     compat_first_done;
+	uint32_t arm_fresh;
 	uint16_t devnum;
 	uint8_t  k_dev[NODE_IDENT_K_DEV_BYTES];
 	bool     have_k_dev;
@@ -85,10 +91,10 @@ static struct {
  * Outside `s` because node_ident_reset() memsets `s` and must not memset a
  * work item the queue may be holding.
  */
-/* A failed persist retries with exponential backoff, 1 s doubling to 5 min,
+/* A failed persist retries with exponential backoff, 1 s doubling to 30 s,
  * and logs once per failure run rather than once per try. */
 #define EPOCH_RETRY_MIN_MS 1000u
-#define EPOCH_RETRY_MAX_MS 300000u
+#define EPOCH_RETRY_MAX_MS 30000u
 
 static struct k_spinlock ep_lock;
 static uint32_t          ep_pending;     /* highest epoch reported, under ep_lock */
@@ -488,6 +494,8 @@ const char *node_ident_strerror(int rc)
 		return "identity storage failed";
 	case NODE_IDENT_ESTATE:
 		return "boot counter exhausted, or identity not booted";
+	case NODE_IDENT_EAGAIN:
+		return "a fresh epoch is being reserved; retry the arm";
 	default:
 		return "unknown error";
 	}
@@ -550,58 +558,123 @@ static uint32_t ch_bit(uint8_t ch)
 	return (ch < 32u) ? (1u << ch) : 0u;
 }
 
-/*
- * One arm per channel per boot (review 2026-11-13 item 2). Every arm hands out
- * this boot's E, and the slot counter restarts at 0 with it, so arming the
- * same channel again - after an unassign, a release or a re-key - would run
- * the counter a second time under the same (root, E, devnum): a two-time pad.
- * The next boot has a fresh E. ESTATE, as for "not booted".
- */
-static int arm_check(uint32_t armed, uint8_t ch)
+/* Ask the work item to make N = epoch + 2 durable, then raise the ceilings.
+ * Safe from the pump (spinlock and a work submit only). */
+static void epoch_reserve(uint32_t epoch)
 {
-	if (!s.booted || (armed & ch_bit(ch)) != 0u) {
+	k_spinlock_key_t key = k_spin_lock(&ep_lock);
+
+	if (!ep_have || epoch > ep_pending) {
+		ep_pending = epoch;
+	}
+	ep_have = true;
+	k_spin_unlock(&ep_lock, key);
+	(void)k_work_schedule(&ep_work, K_NO_WAIT);
+}
+
+/*
+ * The epoch an arm may use (re-review 2026-11-13 M2). Every arm restarts the
+ * slot counter at 0, so two arms under one epoch with the same root and
+ * device number - the same channel re-armed after an unassign or re-key, or
+ * another channel armed under the node root once the first was released -
+ * would run the counter twice under one (root, epoch, devnum): a two-time pad.
+ * So E goes to the FIRST arm of each kind only; every later arm takes the next
+ * unused epoch F = N, and only once N = F + 2 is durable (F for it, F + 1 for
+ * its first wrap). Until then the arm returns NODE_IDENT_EAGAIN and the caller
+ * retries; the reservation is the same work item a wrap uses.
+ */
+static int arm_epoch(bool first_done, uint8_t ch, uint32_t *out)
+{
+	if (!s.booted) {
 		return NODE_IDENT_ESTATE;
 	}
 	if (ch_bit(ch) == 0u) {
 		return NODE_IDENT_EINVAL;
 	}
+	if (!first_done) {
+		*out = s.epoch;
+		return NODE_IDENT_OK;
+	}
+	if (s.arm_fresh == 0u) {
+		if (s.epoch_next > EPOCH_BOOT_MAX) {
+			return NODE_IDENT_ESTATE;
+		}
+		s.arm_fresh = s.epoch_next;
+	}
+	if (s.epoch_next < s.arm_fresh + 2u) {
+		epoch_reserve(s.arm_fresh);
+		return NODE_IDENT_EAGAIN;
+	}
+	*out = s.arm_fresh;
 	return NODE_IDENT_OK;
+}
+
+/* After a successful arm with `epoch`: a fresh epoch is spent. */
+static void arm_done(uint32_t epoch)
+{
+	if (s.arm_fresh != 0u && epoch == s.arm_fresh) {
+		s.arm_fresh = 0u;
+	}
 }
 
 int node_ident_arm_sec(uint8_t ch, uint16_t period_counts)
 {
-	int rc = arm_check(s.sec_armed, ch);
+	uint32_t e = 0u;
+	int      rc = arm_epoch(s.sec_first_done, ch, &e);
 
 	if (rc != NODE_IDENT_OK) {
 		return rc;
 	}
-	/* us_into_epoch = 0: the epoch was derived from this power-up, so the
-	 * node is at its start by construction. The ceiling follows the epoch
-	 * (both under the caller's lock, and a wrap is hours away), so a
-	 * refused epoch leaves a live channel's ceiling alone. */
-	if (radiant_sec_set_epoch(ch, s.epoch, 0u, period_counts) !=
-		    RADIANT_SEC_OK ||
+	/* us_into_epoch = 0: the epoch is this arm's own, so the node is at
+	 * its start by construction. A channel this node already follows
+	 * carries its ceiling, and radiant refuses set_epoch there (that is
+	 * what stops a host 0xF3); the node, being the authority, clears it
+	 * and re-sets it - restoring it if the epoch is refused anyway. */
+	rc = radiant_sec_set_epoch(ch, e, 0u, period_counts);
+	if (rc == RADIANT_SEC_ESTATE) {
+		(void)radiant_sec_set_epoch_ceiling(ch, UINT32_MAX);
+		rc = radiant_sec_set_epoch(ch, e, 0u, period_counts);
+		if (rc != RADIANT_SEC_OK) {
+			(void)radiant_sec_set_epoch_ceiling(ch,
+							    s.epoch_next - 1u);
+		}
+	}
+	if (rc != RADIANT_SEC_OK ||
 	    radiant_sec_set_epoch_ceiling(ch, s.epoch_next - 1u) !=
 		    RADIANT_SEC_OK) {
 		return NODE_IDENT_EIO;
 	}
+	s.sec_first_done = true;
+	arm_done(e);
 	s.sec_armed |= ch_bit(ch);
 	return NODE_IDENT_OK;
 }
 
 int node_ident_arm_compat(uint8_t ch, uint64_t now_us, uint16_t period_counts)
 {
-	int rc = arm_check(s.compat_armed, ch);
+	uint32_t e = 0u;
+	int      rc = arm_epoch(s.compat_first_done, ch, &e);
 
 	if (rc != NODE_IDENT_OK) {
 		return rc;
 	}
-	if (radiant_sec_compat_set_epoch(ch, s.epoch, now_us, 0u,
-					 period_counts) != RADIANT_SEC_OK ||
+	rc = radiant_sec_compat_set_epoch(ch, e, now_us, 0u, period_counts);
+	if (rc == RADIANT_SEC_ESTATE) {
+		(void)radiant_sec_compat_set_epoch_ceiling(ch, UINT32_MAX);
+		rc = radiant_sec_compat_set_epoch(ch, e, now_us, 0u,
+						  period_counts);
+		if (rc != RADIANT_SEC_OK) {
+			(void)radiant_sec_compat_set_epoch_ceiling(
+				ch, s.epoch_next - 1u);
+		}
+	}
+	if (rc != RADIANT_SEC_OK ||
 	    radiant_sec_compat_set_epoch_ceiling(ch, s.epoch_next - 1u) !=
 		    RADIANT_SEC_OK) {
 		return NODE_IDENT_EIO;
 	}
+	s.compat_first_done = true;
+	arm_done(e);
 	s.compat_armed |= ch_bit(ch);
 	return NODE_IDENT_OK;
 }
@@ -612,24 +685,16 @@ int node_ident_arm_compat(uint8_t ch, uint64_t now_us, uint16_t period_counts)
  * wanted - the same reservation, N = epoch + 2) and let the work item persist
  * it. Caller's context (the pump, mid-transform): no flash, no blocking, no
  * radiant_sec call. radiant calls the hooks only for a channel that still
- * carries a ceiling, so a channel another party re-epoched or released is no
- * longer followed (review item 3). k_work_schedule(), not reschedule: a
+ * carries a ceiling, so a channel re-keyed or released is no longer followed
+ * (review item 3). epoch_reserve() uses k_work_schedule(), not reschedule: a
  * _wanted hook fires every slot while TX is withheld, and must not cut a
  * persist retry's backoff short. */
 static void epoch_note(uint32_t armed, uint8_t ch, uint32_t epoch)
 {
-	k_spinlock_key_t key;
-
 	if (!s.booted || (armed & ch_bit(ch)) == 0u) {
 		return;
 	}
-	key = k_spin_lock(&ep_lock);
-	if (!ep_have || epoch > ep_pending) {
-		ep_pending = epoch;
-	}
-	ep_have = true;
-	k_spin_unlock(&ep_lock, key);
-	(void)k_work_schedule(&ep_work, K_NO_WAIT);
+	epoch_reserve(epoch);
 }
 
 void radiant_sec_epoch_advanced(uint8_t ch, uint32_t epoch)

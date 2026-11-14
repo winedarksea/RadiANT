@@ -354,8 +354,9 @@ int radiant_sec_compat_set_epoch(uint8_t ch, uint32_t epoch, uint64_t now_us,
 
 /*
  * The highest epoch a Tier I counter wrap may advance this channel to, as
- * radiant_sec_set_epoch_ceiling() for the spread MAC: none by default,
- * cleared by set_epoch, release and reset. A wrap past it is refused
+ * radiant_sec_set_epoch_ceiling() for the spread MAC: none by default; while
+ * set, radiant_sec_compat_set_epoch() is refused (RADIANT_SEC_ESTATE); cleared
+ * by set_key, release, reset, or max_epoch 0xFFFFFFFF. A wrap past it is refused
  * with RADIANT_SEC_EAGAIN - the attestation page is withheld, nothing is spent
  * - until the ceiling is raised. A compat wrap is >= 18 h (65 536 x T) and
  * would be a tag replay rather than a two-time pad, but the epoch authority's
@@ -370,9 +371,10 @@ int radiant_sec_compat_set_epoch_ceiling(uint8_t ch, uint32_t max_epoch);
  * every move refused by the ceiling, with the epoch it wanted. Weak and empty
  * by default. Caller's context: an override must only defer work.
  *
- * The ceiling is CLEARED by radiant_sec_compat_set_epoch(), as in
- * radiant_sec.c; raise_epoch_ceiling() only raises an existing one and may be
- * called without the caller's lock, for the same reason given there.
+ * As in radiant_sec.c: a ceiling makes set_epoch refuse, set_key clears it,
+ * and raise_epoch_ceiling() only raises an existing one (a compare-and-swap)
+ * and may be called without the caller's lock, for the reasons given there.
+ * A context carrying a ceiling refuses compat RX too.
  */
 void radiant_sec_compat_epoch_advanced(uint8_t ch, uint32_t epoch);
 void radiant_sec_compat_epoch_wanted(uint8_t ch, uint32_t epoch);

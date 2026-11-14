@@ -1632,9 +1632,10 @@ ZTEST(sec_compat_stream, test_a_transmitting_compat_context_refuses_rx)
 	zassert_ok(deliver(air, t));
 }
 
-/* Item 4 too: rx_tier1()'s own epoch move honours the ceiling. A receiver
- * with a ceiling below the sensor's wrapped epoch does not verify there. */
-ZTEST(sec_compat_stream, test_rx_tier1_honours_the_ceiling)
+/* Re-review L2: a context an authority armed for TX (it carries a ceiling)
+ * refuses compat RX even before its first transmission. (This is also why
+ * rx_tier1()'s own ceiling check cannot be reached from outside.) */
+ZTEST(sec_compat_stream, test_an_authority_armed_compat_context_refuses_rx)
 {
 	struct radiant_sec_compat_stats st;
 	uint8_t                         air[RADIANT_SEC_COMPAT_MSG_BYTES];
@@ -1642,12 +1643,15 @@ ZTEST(sec_compat_stream, test_rx_tier1_honours_the_ceiling)
 
 	setup_pair(RADIANT_SEC_COMPAT_SW_TIER_I, RADIANT_SEC_COMPAT_SW_TIER_I,
 		   300u, 300u);
-	zassert_ok(radiant_sec_compat_set_epoch_ceiling(RX_CH, 300u));
-	/* First contact after the sensor wrapped: the page is under 301. */
+	zassert_ok(radiant_sec_compat_set_epoch_ceiling(RX_CH, 301u));
 	t = tier1_page(T_ORIGIN, 0x10003u, 0u, air);
-	(void)deliver(air, t);
+	zassert_equal(RADIANT_SEC_EINVAL, deliver(air, t),
+		      "a ceilinged context took a compat page");
 	radiant_sec_compat_get_stats(RX_CH, &st);
-	zassert_equal(0u, st.epoch_advances,
-		      "rx_tier1 moved past the ceiling");
-	zassert_equal(0u, st.tier1_verified);
+	zassert_equal(0u, st.epoch_advances);
+	zassert_equal(0u, st.tier1_verified + st.tier1_unverified);
+
+	/* Cleared by its own authority, it receives again. */
+	zassert_ok(radiant_sec_compat_set_epoch_ceiling(RX_CH, UINT32_MAX));
+	zassert_ok(deliver(air, t));
 }
