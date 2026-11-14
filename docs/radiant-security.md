@@ -1373,7 +1373,10 @@ authentication frame narrows that and does not remove it. What it does, plainly:
 - **It stops a replayed descriptor only against a receiver that already knows
   a newer epoch.** The epoch search runs forward only, from the last epoch the
   receiver knew, and a frame-1 epoch below it is refused outright — so a
-  recording from an older epoch never verifies there.
+  recording from an older epoch never verifies there. The compat epoch search
+  (section 11.3) follows the same rule: it runs forward from the epoch the
+  receiver holds, and it searches below that epoch, or adopts a lower one, only
+  when the caller passes the re-provision flag.
 - **It does not stop a replay against a receiver that knows no epoch.** A
   descriptor recorded under an old epoch verifies, genuinely, at a receiver
   searching from that epoch or below. So **a captured old descriptor still
@@ -1800,24 +1803,57 @@ of date and neither able to ask the sensor anything — a garage-door opener.
 
 ```
 first contact    the epoch arrives in the pairing exchange, where a two-way channel exists
-later contact    the receiver stores last_seen_epoch per sensor and searches
-                 forward, computing trunc24( CMAC(K_id, e) ) for
-                 e = last_seen, last_seen + 1, ... until it matches the beacon hint
+later contact    the receiver searches forward from its floor, computing
+                 trunc24( CMAC(K_id, e) ) for e = floor, floor + 1, ... until it
+                 matches the beacon hint; floor = max(last_seen, held epoch)
 confirm          the first attestation window that verifies is a 40- or 48-bit
                  confirmation of the candidate; a 24-bit hint collision cannot survive it
-re-provision     bounded absolute scan from 0, plus a small backward probe. Bounded,
-                 never an unbounded loop
+re-provision     only when the caller says the sensor was re-provisioned: bounded
+                 absolute scan from 0, plus a small backward probe. Bounded, never
+                 an unbounded loop
 ```
 
 | Receiver is behind by | CMAC ops | Time on a Cortex-M4 with AES hardware |
 |---|---|---|
-| 50 boots (a season) | 50 | well under 1 ms |
-| 1 000 boots | 1 000 | ~3 ms |
-| 65 536 boots (absurd) | 65 536 | ~200 ms, one-off |
+| 50 epochs (a season) | 50 | well under 1 ms |
+| 1 000 epochs | 1 000 | ~3 ms |
+| 65 536 epochs (absurd) | 65 536 | ~200 ms, one-off |
 
 Ten sensors' keys multiply that by ten and it is still not a number anyone
 notices. It is cheaper than the beacon field it replaces, and it is a one-off
 cost at re-acquisition rather than a per-message one.
+
+**An epoch is not a boot.** A hostless node reserves the epoch after the one it
+uses (section 3.5), so each boot spends at least two epochs, plus one for each
+further arm and each counter wrap. The forward ceiling of 65 536 epochs is
+therefore about 32 000 boots. Re-provisioning clears the reservation along with
+the key, so a re-provisioned node starts again near epoch 0 and the absolute
+scan (0..65 536) finds it within a few candidates.
+
+**The search never moves a receiver backwards unless asked.** A recorded beacon
+and recorded Tier I pages from an old session are genuine: their hint and tags
+verify under the epoch they were sent in. A search that looked below the epoch
+the receiver holds would let that recording roll the receiver back, and the old
+pages would then verify again. So `radiant_sec_compat_recover_*` and
+`radiant_sec_compat_adopt_epoch` take a `flags` argument:
+
+- **Without `RADIANT_SEC_COMPAT_ADOPT_REPROVISION`** only the forward phase
+  runs. Once the channel holds an epoch, the search starts at
+  `max(last_seen, held epoch)`, where the held epoch is the set or adopted epoch
+  plus any wraps since. A miss costs 65 537 candidates. `adopt_epoch` refuses an
+  epoch below the held one, and an equal one is a no-op that keeps the Tier I
+  phase lock. A hint collision stays harmless: the forward search returns the
+  lowest match, so a decoy lies below the real epoch, and the search resumes
+  above the decoy.
+- **With the flag** the search runs all three phases from `last_seen` (forward,
+  then the 16-epoch backward probe, then the absolute scan), and `adopt_epoch`
+  takes any epoch. Use it only when the user says the sensor was re-provisioned,
+  for example after a forward search fails.
+
+**`last_seen` is the caller's.** The firmware keeps no per-sensor last-seen
+epoch. While the channel holds an epoch, that epoch is the floor, whatever
+`last_seen` says. A receiver that releases the channel or reboots has no floor
+until its host supplies one, and the limit in section 7.6 applies.
 
 **Two paths, and the second is the one that otherwise gets written and never
 exercised.** With `advertise = on` the receiver does a **forward search against
@@ -1867,8 +1903,11 @@ One self-contained page every `T` seconds, **decoupled from the data rate**:
   the second verified page on it also proves **bounded lateness**: a page that
   arrives more than about 2 s later than the phase the receiver has learned is
   refused. The first page
-  after first contact (a `set_epoch` or `adopt_epoch`) proves the epoch, not
-  freshness; section 7.6 says why no design can do better. Because nothing
+  after first contact (a `set_epoch` or an `adopt_epoch` that changes the epoch)
+  proves the epoch, not freshness; section 7.6 says why no design can do better.
+  An epoch below the one the receiver holds is never that first contact unless
+  the caller passes the re-provision flag (section 11.3), so an old session's
+  recording cannot reopen it. Because nothing
   outside the page is covered it is **verifiable on receipt**, and a lost packet
   anywhere else costs nothing. See section 7.7.
 - **`T` default 20 s, manufacturer-configurable.** At 4 Hz that is one page in

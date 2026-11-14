@@ -719,7 +719,7 @@ ZTEST(sec_compat_stream, test_a_long_running_receiver_follows_a_freshly_booted_s
 		      radiant_sec_compat_set_epoch(TX_CH, 1001u, booted, 0u,
 						   TEST_PERIOD));
 	zassert_equal(RADIANT_SEC_OK,
-		      radiant_sec_compat_adopt_epoch(RX_CH, 1001u));
+		      radiant_sec_compat_adopt_epoch(RX_CH, 1001u, 0u));
 
 	for (i = 0u; i < ARRAY_SIZE(ks); i++) {
 		uint64_t t = tier1_page(booted, ks[i], 0u, air);
@@ -1182,7 +1182,7 @@ static void recover_by_hint(uint32_t epoch, uint32_t staleness)
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_compat_recover_hint(RX_CH, hint,
 						      epoch - staleness, &found,
-						      &ops, &path),
+						      &ops, &path, 0u),
 		      "%u", staleness);
 	zassert_equal(epoch, found, "%u", found);
 	zassert_equal(RADIANT_SEC_COMPAT_PATH_FORWARD, path);
@@ -1196,7 +1196,7 @@ static void recover_by_hint(uint32_t epoch, uint32_t staleness)
 
 	/* And the 48-bit confirmation. */
 	zassert_equal(RADIANT_SEC_OK,
-		      radiant_sec_compat_adopt_epoch(RX_CH, found));
+		      radiant_sec_compat_adopt_epoch(RX_CH, found, 0u));
 	zassert_true(window_verifies(0u));
 }
 
@@ -1244,7 +1244,7 @@ ZTEST(sec_compat_stream, test_a_hint_collision_is_settled_by_the_48_bit_tag)
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_compat_recover_hint(RX_CH, true_hint,
 						      last_seen, &found, &ops,
-						      &path));
+						      &path, 0u));
 	zassert_equal(HINT_COLLISION_DECOY, found);
 	zassert_equal(6u, ops);
 
@@ -1252,7 +1252,7 @@ ZTEST(sec_compat_stream, test_a_hint_collision_is_settled_by_the_48_bit_tag)
 	 * confirmation, and 40 or 48 bits cannot be survived by a 24-bit
 	 * collision. */
 	zassert_equal(RADIANT_SEC_OK,
-		      radiant_sec_compat_adopt_epoch(RX_CH, found));
+		      radiant_sec_compat_adopt_epoch(RX_CH, found, 0u));
 	zassert_false(window_verifies(0u));
 
 	/* The receiver resumes the search past the collision and finds the real
@@ -1260,10 +1260,10 @@ ZTEST(sec_compat_stream, test_a_hint_collision_is_settled_by_the_48_bit_tag)
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_compat_recover_hint(RX_CH, true_hint,
 						      found + 1u, &found, &ops,
-						      &path));
+						      &path, 0u));
 	zassert_equal(HINT_COLLISION_TRUE, found);
 	zassert_equal(RADIANT_SEC_OK,
-		      radiant_sec_compat_adopt_epoch(RX_CH, found));
+		      radiant_sec_compat_adopt_epoch(RX_CH, found, 0u));
 	zassert_true(window_verifies(2u * TEST_N));
 }
 
@@ -1292,7 +1292,7 @@ static void recover_by_tier1_tag(uint32_t epoch, uint32_t staleness)
 		      radiant_sec_compat_recover_tier1(RX_CH, TEST_DEVNUM,
 						       counter, &air[3],
 						       epoch - staleness, &found,
-						       &ops, &path),
+						       &ops, &path, 0u),
 		      "%u", staleness);
 	zassert_equal(epoch, found);
 	zassert_equal(RADIANT_SEC_COMPAT_PATH_FORWARD, path);
@@ -1300,7 +1300,7 @@ static void recover_by_tier1_tag(uint32_t epoch, uint32_t staleness)
 	zassert_true(ops <= OPS_CEILING);
 
 	zassert_equal(RADIANT_SEC_OK,
-		      radiant_sec_compat_adopt_epoch(RX_CH, found));
+		      radiant_sec_compat_adopt_epoch(RX_CH, found, 0u));
 	zassert_true(window_verifies(1u));
 }
 
@@ -1345,7 +1345,7 @@ ZTEST(sec_compat_stream, test_advertise_off_recovers_against_a_window_tag)
 						       air[1], &covered[0][0],
 						       TEST_N, &air[2],
 						       epoch - staleness, &found,
-						       &ops, &path));
+						       &ops, &path, 0u));
 	zassert_equal(epoch, found);
 	zassert_equal(staleness + 1u, ops);
 	zassert_equal(RADIANT_SEC_COMPAT_PATH_FORWARD, path);
@@ -1372,7 +1372,8 @@ ZTEST(sec_compat_stream, test_a_re_provisioned_sensor_is_found_by_the_scan)
 		      radiant_sec_compat_hint(TX_CH, reset_to, hint));
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_compat_recover_hint(RX_CH, hint, last_seen,
-						      &found, &ops, &path));
+						      &found, &ops, &path,
+						      RADIANT_SEC_COMPAT_ADOPT_REPROVISION));
 
 	zassert_equal(reset_to, found);
 	zassert_equal(RADIANT_SEC_COMPAT_PATH_SCAN, path);
@@ -1384,9 +1385,89 @@ ZTEST(sec_compat_stream, test_a_re_provisioned_sensor_is_found_by_the_scan)
 		      ops, "%u", ops);
 	zassert_true(ops <= OPS_CEILING);
 
+	/* Lower than the held epoch: adopting it needs the flag too. */
+	zassert_equal(RADIANT_SEC_EINVAL,
+		      radiant_sec_compat_adopt_epoch(RX_CH, found, 0u));
 	zassert_equal(RADIANT_SEC_OK,
-		      radiant_sec_compat_adopt_epoch(RX_CH, found));
+		      radiant_sec_compat_adopt_epoch(RX_CH, found,
+						     RADIANT_SEC_COMPAT_ADOPT_REPROVISION));
 	zassert_true(window_verifies(0u));
+}
+
+ZTEST(sec_compat_stream, test_an_old_session_does_not_roll_a_receiver_back)
+{
+	/* The receiver followed the sensor to NEW. An attacker replays a
+	 * beacon and a Tier I page recorded at OLD: both genuine, both valid
+	 * under OLD's keys. Without the re-provision flag the search starts at
+	 * the held epoch, whatever last_seen the caller passes, and adopt
+	 * refuses OLD; so the old page never verifies. */
+	const uint32_t                  old_e = 1000u;
+	const uint32_t                  new_e = 1010u;
+	struct radiant_sec_compat_stats st;
+	uint8_t                         hint[RADIANT_SEC_COMPAT_HINT_BYTES];
+	uint8_t                         air[RADIANT_SEC_COMPAT_MSG_BYTES];
+	uint32_t                        found = 0xDEADu;
+	uint32_t                        ops = 0u;
+	uint8_t                         path = 0xFFu;
+	uint64_t                        t;
+
+	setup_pair(RADIANT_SEC_COMPAT_SW_TIER_I, RADIANT_SEC_COMPAT_SW_TIER_I,
+		   old_e, new_e);
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_compat_hint(TX_CH, old_e, hint));
+	t = tier1_page(T_ORIGIN, 1u, 0u, air);
+
+	zassert_equal(RADIANT_SEC_EBADMAC,
+		      radiant_sec_compat_recover_hint(RX_CH, hint, old_e,
+						      &found, &ops, &path, 0u));
+	zassert_equal(RADIANT_SEC_COMPAT_PATH_NONE, path);
+	zassert_equal(RADIANT_SEC_COMPAT_EPOCH_FORWARD + 1u, ops, "%u", ops);
+
+	zassert_equal(RADIANT_SEC_EINVAL,
+		      radiant_sec_compat_adopt_epoch(RX_CH, old_e, 0u));
+	zassert_equal(RADIANT_SEC_EINVAL,
+		      radiant_sec_compat_adopt_epoch(RX_CH, new_e + 1u, 0x80u));
+	zassert_equal(RADIANT_SEC_EBADMAC, deliver(air, t));
+	radiant_sec_compat_get_stats(RX_CH, &st);
+	zassert_equal(0u, st.tier1_verified);
+	zassert_equal(0u, st.epoch_recoveries);
+
+	/* The user says the sensor was re-provisioned: the backward probe
+	 * finds OLD, adopt takes it, and the page verifies. */
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_compat_recover_hint(RX_CH, hint, new_e,
+						      &found, &ops, &path,
+						      RADIANT_SEC_COMPAT_ADOPT_REPROVISION));
+	zassert_equal(old_e, found, "%u", found);
+	zassert_equal(RADIANT_SEC_COMPAT_PATH_BACKWARD, path);
+	zassert_equal(RADIANT_SEC_COMPAT_EPOCH_FORWARD + 1u + (new_e - old_e),
+		      ops, "%u", ops);
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_compat_adopt_epoch(RX_CH, old_e,
+						     RADIANT_SEC_COMPAT_ADOPT_REPROVISION));
+	zassert_equal(RADIANT_SEC_OK, deliver(air, t));
+}
+
+ZTEST(sec_compat_stream, test_adopting_the_held_epoch_keeps_the_replay_floor)
+{
+	/* An equal epoch is a no-op. If it cleared the Tier I state, a
+	 * recorded page would pass again as a first contact. */
+	struct radiant_sec_compat_stats st;
+	uint8_t                         air[RADIANT_SEC_COMPAT_MSG_BYTES];
+	uint64_t                        t;
+
+	setup_pair(RADIANT_SEC_COMPAT_SW_TIER_I, RADIANT_SEC_COMPAT_SW_TIER_I,
+		   909u, 909u);
+	t = tier1_page(T_ORIGIN, 1u, 0u, air);
+	zassert_equal(RADIANT_SEC_OK, deliver(air, t));
+
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_compat_adopt_epoch(RX_CH, 909u, 0u));
+	zassert_equal(RADIANT_SEC_EREPLAY, deliver(air, t + PERIOD_US));
+
+	radiant_sec_compat_get_stats(RX_CH, &st);
+	zassert_equal(1u, st.tier1_replays);
+	zassert_equal(1u, st.tier1_verified);
 }
 
 ZTEST(sec_compat_stream, test_a_search_that_matches_nothing_still_ends)
@@ -1396,7 +1477,8 @@ ZTEST(sec_compat_stream, test_a_search_that_matches_nothing_still_ends)
 	 * the counter's top, exercising the overflow guard (forward search must
 	 * stop at 0xFFFFFFFF, not wrap) at the cost of one scan instead of two.
 	 * The target epoch is unreachable by any phase, so the answer is a
-	 * bounded refusal. */
+	 * bounded refusal. Without the re-provision flag only the forward phase
+	 * runs; with it, the backward probe and the scan follow. */
 	const uint32_t last_seen = 0xFFFFFFFCu;
 	const uint32_t unreachable = 150000u;
 	const uint32_t expect_ops = 4u + RADIANT_SEC_COMPAT_EPOCH_BACKWARD +
@@ -1412,11 +1494,20 @@ ZTEST(sec_compat_stream, test_a_search_that_matches_nothing_still_ends)
 		      radiant_sec_compat_hint(TX_CH, unreachable, hint));
 	zassert_equal(RADIANT_SEC_EBADMAC,
 		      radiant_sec_compat_recover_hint(RX_CH, hint, last_seen,
-						      &found, &ops, &path));
+						      &found, &ops, &path, 0u));
+	zassert_equal(RADIANT_SEC_COMPAT_PATH_NONE, path);
+	zassert_equal(4u, ops, "%u", ops);
+
+	path = 0xFFu;
+	zassert_equal(RADIANT_SEC_EBADMAC,
+		      radiant_sec_compat_recover_hint(RX_CH, hint, last_seen,
+						      &found, &ops, &path,
+						      RADIANT_SEC_COMPAT_ADOPT_REPROVISION));
 	zassert_equal(RADIANT_SEC_COMPAT_PATH_NONE, path);
 	zassert_equal(expect_ops, ops,
 		      "%u vs %u", ops, expect_ops);
 	zassert_true(ops <= OPS_CEILING);
+	zassert_equal(0xDEADu, found);
 }
 
 /* ── Refusals ───────────────────────────────────────────────────────────── */

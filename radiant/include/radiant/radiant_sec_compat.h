@@ -178,20 +178,33 @@ extern "C" {
  * "search until it matches" against a re-provisioned sensor that never will
  * is an unbounded loop in a receiver's event thread.
  *
- *   FORWARD   65536, the "absurd" row of the cost table (11.3) - ~200 ms once
- *             on a Cortex-M4 with AES hardware. A sensor that's booted more
- *             often than that won't be found by trying 65537 either.
- *   BACKWARD  16: covers a receiver holding an unconfirmed candidate epoch,
- *             not a sensor gone backwards - that's the absolute scan.
- *   SCAN      65536 from zero: a re-provisioned strap is at a SMALL epoch, so
- *             this finds it in a handful of operations; the ceiling just
- *             bounds the failure case.
+ *   FORWARD   65536 epochs, the "absurd" row of the cost table (11.3) -
+ *             ~200 ms once on a Cortex-M4 with AES hardware. Counted in
+ *             epochs, not boots: a hostless node spends at least two epochs a
+ *             boot (it reserves the next one, radiant-security.md 3.5), plus
+ *             one per further arm and per wrap, so this is ~32 000 boots.
+ *   BACKWARD  16: covers a receiver holding an unconfirmed candidate epoch.
+ *   SCAN      65536 from zero: re-provisioning clears a node's epoch
+ *             reservation with its key, so a re-provisioned strap restarts
+ *             near zero and this finds it in a handful of operations; the
+ *             ceiling just bounds the failure case.
  *
- * Worst case: FORWARD + 1 + BACKWARD + SCAN + 1 operations.
+ * Only FORWARD runs unless the caller passes RADIANT_SEC_COMPAT_ADOPT_REPROVISION
+ * (below). It starts at the held epoch when that is above `last_seen`, so a
+ * recorded old beacon cannot lead a receiver back to the epoch it was sent in.
+ *
+ * Worst case: FORWARD + 1 operations; with the flag, FORWARD + 1 + BACKWARD +
+ * SCAN + 1.
  */
 #define RADIANT_SEC_COMPAT_EPOCH_FORWARD  65536u
 #define RADIANT_SEC_COMPAT_EPOCH_BACKWARD 16u
 #define RADIANT_SEC_COMPAT_EPOCH_SCAN     65536u
+
+/* The `flags` of the recover_* calls and adopt_epoch(). REPROVISION: the user
+ * says this sensor was re-provisioned, so its epoch may now be lower than the
+ * one the receiver holds. It unlocks the backward probe, the absolute scan and
+ * adopting a lower epoch. Any other bit is refused (RADIANT_SEC_EINVAL). */
+#define RADIANT_SEC_COMPAT_ADOPT_REPROVISION 0x01u
 
 /* Which phase answered. Reported rather than inferred: "recovered" and
  * "recovered by the absolute scan, so this sensor has been re-provisioned" are
@@ -345,9 +358,10 @@ int radiant_sec_compat_configure(uint8_t ch, uint8_t switches, uint8_t n,
  * anchor is authoritative and is never moved.
  *
  * Refuses a non-forward epoch and refuses one inside RADIANT_SEC_EPOCH_HEADROOM
- * of 0xFFFFFFFF, both for D3's reasons. The ONE route that may move an epoch
- * backwards is radiant_sec_compat_adopt_epoch() below, and it exists because a
- * re-provisioned sensor genuinely does.
+ * of 0xFFFFFFFF, both for D3's reasons. The only route that may move an epoch
+ * backwards is radiant_sec_compat_adopt_epoch() with
+ * RADIANT_SEC_COMPAT_ADOPT_REPROVISION, for a sensor the user says was
+ * re-provisioned.
  */
 int radiant_sec_compat_set_epoch(uint8_t ch, uint32_t epoch, uint64_t now_us,
 				 uint64_t us_into_epoch, uint16_t period_counts);
@@ -579,10 +593,18 @@ int radiant_sec_compat_cmd_verify(uint8_t ch, uint64_t t_sync,
  * beacon carried. One CMAC per candidate.
  *
  * `last_seen` is what this receiver recorded the last time it heard this
- * sensor. `*ops` is the number of candidate epochs examined, which is the
- * cost-table number plus one: the search tries `last_seen` ITSELF first,
- * because a sensor that has not rebooted since is the common case and not an
- * edge case. `*path` says which phase answered.
+ * sensor. The caller keeps it: this module stores no per-sensor history, so
+ * while the channel holds an epoch, that epoch is the floor and the forward
+ * search starts at max(last_seen, held epoch). `*ops` is the number of
+ * candidate epochs examined, which is the cost-table number plus one: the
+ * search tries its starting epoch ITSELF first, because a sensor that has not
+ * rebooted since is the common case and not an edge case. `*path` says which
+ * phase answered.
+ *
+ * `flags` 0 runs the forward phase only. RADIANT_SEC_COMPAT_ADOPT_REPROVISION
+ * runs all three from `last_seen` itself (forward, backward, scan), for a
+ * sensor the user says was re-provisioned; a failed forward search is the cue
+ * to ask. Without it a recorded beacon from an older epoch matches nothing.
  *
  * A HINT MATCH IS NOT A CONFIRMATION. Twenty-four bits collide about every 16
  * million epochs, so the caller adopts the candidate and then lets the first
@@ -596,7 +618,7 @@ int radiant_sec_compat_cmd_verify(uint8_t ch, uint64_t t_sync,
 int radiant_sec_compat_recover_hint(uint8_t ch,
 				    const uint8_t hint[RADIANT_SEC_COMPAT_HINT_BYTES],
 				    uint32_t last_seen, uint32_t *found,
-				    uint32_t *ops, uint8_t *path);
+				    uint32_t *ops, uint8_t *path, uint8_t flags);
 
 /*
  * PATH TWO, advertise = off: there is no hint to search against, so the
@@ -607,36 +629,42 @@ int radiant_sec_compat_recover_hint(uint8_t ch,
  * This is the path that otherwise gets written and never exercised, which is
  * why it is a first-class entry point rather than a note in the ADR. Tier I
  * costs one derivation and one block per candidate; the Tier II form below
- * costs N.
+ * costs N. `last_seen` and `flags` are as for recover_hint.
  */
 int radiant_sec_compat_recover_tier1(uint8_t ch, uint16_t devnum,
 				     uint16_t att_counter,
 				     const uint8_t tag[RADIANT_SEC_COMPAT_TIER_I_TAG_BYTES],
 				     uint32_t last_seen, uint32_t *found,
-				     uint32_t *ops, uint8_t *path);
+				     uint32_t *ops, uint8_t *path, uint8_t flags);
 
 int radiant_sec_compat_recover_tier2(uint8_t ch, uint16_t devnum,
 				     uint16_t window_index, const uint8_t *msgs,
 				     uint8_t n,
 				     const uint8_t tag[RADIANT_SEC_COMPAT_TIER_II_TAG_BYTES],
 				     uint32_t last_seen, uint32_t *found,
-				     uint32_t *ops, uint8_t *path);
+				     uint32_t *ops, uint8_t *path, uint8_t flags);
 
 /*
- * Take a recovered epoch, MOVING BACKWARDS IF THAT IS WHERE IT WENT.
+ * Take a recovered epoch. Forward only, unless the caller says the sensor
+ * was re-provisioned.
  *
- * The one entry point that may lower an epoch: D3's monotonicity rule binds
- * the epoch AUTHORITY (the sensor), not a receiver reading it off the air,
- * and a re-provisioned sensor genuinely is at a lower epoch. Refusing to
- * follow it would leave the receiver permanently deaf to a strap the user
- * just reset - a support call, not a security property.
+ * Refuses (RADIANT_SEC_EINVAL) an epoch below the held one - the set or
+ * adopted epoch plus its wraps - unless `flags` has
+ * RADIANT_SEC_COMPAT_ADOPT_REPROVISION. A recorded beacon and recorded Tier I
+ * pages from an old session are genuine under their own epoch, so a receiver
+ * that followed them back would verify them again: a rollback. D3 binds the
+ * sensor, the epoch authority; this rule is the receiver's half of it. A
+ * re-provisioned sensor really is at a lower epoch, and the flag is how the
+ * user's say-so lets the receiver follow it.
  *
- * Clears window state and the Tier I replay high-water mark, since a fresh
- * epoch has its own counter space and judging it against the old mark would
- * reject every page. It also clears the Tier I phase lock: a rebooted sensor
- * has a new phase, which the next verified Tier I page teaches the receiver.
+ * The held epoch itself is a no-op returning OK: the Tier I replay floor and
+ * phase lock stay. Any other accepted epoch clears window state and the Tier I
+ * replay high-water mark, since a fresh epoch has its own counter space and
+ * judging it against the old mark would reject every page. It also clears the
+ * Tier I phase lock: a rebooted sensor has a new phase, which the next
+ * verified Tier I page teaches the receiver.
  */
-int radiant_sec_compat_adopt_epoch(uint8_t ch, uint32_t epoch);
+int radiant_sec_compat_adopt_epoch(uint8_t ch, uint32_t epoch, uint8_t flags);
 
 #else  /* !CONFIG_RADIANT_SEC_COMPAT */
 
@@ -828,10 +856,10 @@ static inline int radiant_sec_compat_recover_hint(uint8_t ch,
 						  const uint8_t *hint,
 						  uint32_t last_seen,
 						  uint32_t *found, uint32_t *ops,
-						  uint8_t *path)
+						  uint8_t *path, uint8_t flags)
 {
 	(void)ch; (void)hint; (void)last_seen; (void)found; (void)ops;
-	(void)path;
+	(void)path; (void)flags;
 	return RADIANT_SEC_ENOTSUP;
 }
 
@@ -840,10 +868,11 @@ static inline int radiant_sec_compat_recover_tier1(uint8_t ch, uint16_t devnum,
 						   const uint8_t *tag,
 						   uint32_t last_seen,
 						   uint32_t *found,
-						   uint32_t *ops, uint8_t *path)
+						   uint32_t *ops, uint8_t *path,
+						   uint8_t flags)
 {
 	(void)ch; (void)devnum; (void)att_counter; (void)tag; (void)last_seen;
-	(void)found; (void)ops; (void)path;
+	(void)found; (void)ops; (void)path; (void)flags;
 	return RADIANT_SEC_ENOTSUP;
 }
 
@@ -853,16 +882,19 @@ static inline int radiant_sec_compat_recover_tier2(uint8_t ch, uint16_t devnum,
 						   const uint8_t *tag,
 						   uint32_t last_seen,
 						   uint32_t *found,
-						   uint32_t *ops, uint8_t *path)
+						   uint32_t *ops, uint8_t *path,
+						   uint8_t flags)
 {
 	(void)ch; (void)devnum; (void)window_index; (void)msgs; (void)n;
 	(void)tag; (void)last_seen; (void)found; (void)ops; (void)path;
+	(void)flags;
 	return RADIANT_SEC_ENOTSUP;
 }
 
-static inline int radiant_sec_compat_adopt_epoch(uint8_t ch, uint32_t epoch)
+static inline int radiant_sec_compat_adopt_epoch(uint8_t ch, uint32_t epoch,
+						 uint8_t flags)
 {
-	(void)ch; (void)epoch;
+	(void)ch; (void)epoch; (void)flags;
 	return RADIANT_SEC_ENOTSUP;
 }
 

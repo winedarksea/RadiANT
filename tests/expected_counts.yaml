@@ -81,7 +81,7 @@ min_scenarios: 16
 # discovery open items B1, B2, B4, B5), the radiant.unit.diag scenario (the
 # unit suite plus four page-7 scheduler cases) and two page-7 api cases. 5682
 # when those two api cases went with page 7 fields 6-7 (gate 3 follow-up).
-min_testcases: 5682
+min_testcases: 5692
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -96,9 +96,9 @@ min_testcases: 5682
 # above. The earlier values were nRF5340 DK counts minus about 1%, plus static
 # counts. A floor equal to the observed count still fails only when coverage
 # goes down, which is the event it exists to catch.
-min_cases.radiant.unit: 1029
-min_cases.radiant.unit.sec_modes: 1029
-min_cases.radiant.unit.no_pairing: 977
+min_cases.radiant.unit: 1031
+min_cases.radiant.unit.sec_modes: 1031
+min_cases.radiant.unit.no_pairing: 979
 min_cases.radiant.api: 86
 min_cases.radiant.api.sec: 89
 min_cases.radiant.api.sec_host: 102
@@ -113,7 +113,7 @@ min_cases.radiant.backend: 8
 min_cases.hrm_ble.sim_sched: 4
 min_cases.treadmill.pages: 20
 min_cases.treadmill.hr_rx: 3
-min_cases.radiant.unit.ack_faults: 1036
+min_cases.radiant.unit.ack_faults: 1038
 # radiant.unit.diag: the unit suites with CONFIG_RADIANT_DIAG_COUNTERS.
-min_cases.radiant.unit.diag: 1033
+min_cases.radiant.unit.diag: 1035
 min_cases.trainer.model: 14

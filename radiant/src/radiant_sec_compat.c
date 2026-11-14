@@ -1373,6 +1373,7 @@ struct epoch_probe {
 	uint16_t       counter;
 	uint8_t        n;
 	uint8_t        taglen;
+	uint8_t        flags;   /* RADIANT_SEC_COMPAT_ADOPT_* */
 };
 
 static bool probe_at(struct compat_ctx *c, const struct epoch_probe *p,
@@ -1417,17 +1418,26 @@ static bool probe_at(struct compat_ctx *c, const struct epoch_probe *p,
  * an absolute scan from 0 (the re-provisioned/reset-strap case). `ops`
  * counts across all three and every phase has a ceiling, so a failure costs
  * bounded time rather than a receiver that never comes back.
+ *
+ * Without REPROVISION only the forward phase runs, and from the held epoch
+ * when that is above last_seen: last_seen is the caller's, and the held
+ * epoch is the one floor this module has. Anything lower would let a
+ * recorded old beacon or old pages lead the receiver back to their epoch.
  */
 static int epoch_search(struct compat_ctx *c, const struct epoch_probe *p,
 			uint32_t last_seen, uint32_t *found, uint32_t *ops,
 			uint8_t *path)
 {
+	bool     reprov = (p->flags & RADIANT_SEC_COMPAT_ADOPT_REPROVISION) != 0u;
 	uint32_t n_ops = 0u;
 	uint32_t hit = 0u;
 	uint32_t i;
 	uint32_t e;
 
 	*path = RADIANT_SEC_COMPAT_PATH_NONE;
+	if (!reprov && c->epoch_set && c->epoch > last_seen) {
+		last_seen = c->epoch;
+	}
 
 	for (i = 0u; i <= RADIANT_SEC_COMPAT_EPOCH_FORWARD; i++) {
 		if (last_seen > 0xFFFFFFFFu - i) {
@@ -1440,6 +1450,9 @@ static int epoch_search(struct compat_ctx *c, const struct epoch_probe *p,
 			hit = e;
 			goto done;
 		}
+	}
+	if (!reprov) {
+		goto miss;
 	}
 	for (i = 1u; i <= RADIANT_SEC_COMPAT_EPOCH_BACKWARD && i <= last_seen;
 	     i++) {
@@ -1460,6 +1473,7 @@ static int epoch_search(struct compat_ctx *c, const struct epoch_probe *p,
 		}
 	}
 
+miss:
 	*ops = n_ops;
 	return RADIANT_SEC_EBADMAC;
 
@@ -1480,7 +1494,8 @@ static int recover(uint8_t ch, const struct epoch_probe *p, uint32_t last_seen,
 	if (c == NULL || !c->used) {
 		return RADIANT_SEC_ENOKEY;
 	}
-	if (found == NULL) {
+	if (found == NULL ||
+	    (p->flags & ~RADIANT_SEC_COMPAT_ADOPT_REPROVISION) != 0u) {
 		return RADIANT_SEC_EINVAL;
 	}
 	if (ops == NULL) {
@@ -1495,7 +1510,7 @@ static int recover(uint8_t ch, const struct epoch_probe *p, uint32_t last_seen,
 int radiant_sec_compat_recover_hint(uint8_t ch,
 				    const uint8_t hint[RADIANT_SEC_COMPAT_HINT_BYTES],
 				    uint32_t last_seen, uint32_t *found,
-				    uint32_t *ops, uint8_t *path)
+				    uint32_t *ops, uint8_t *path, uint8_t flags)
 {
 	struct epoch_probe p;
 
@@ -1504,6 +1519,7 @@ int radiant_sec_compat_recover_hint(uint8_t ch,
 	}
 	memset(&p, 0, sizeof(p));
 	p.hint = hint;
+	p.flags = flags;
 	return recover(ch, &p, last_seen, found, ops, path);
 }
 
@@ -1511,7 +1527,7 @@ int radiant_sec_compat_recover_tier1(uint8_t ch, uint16_t devnum,
 				     uint16_t att_counter,
 				     const uint8_t tag[RADIANT_SEC_COMPAT_TIER_I_TAG_BYTES],
 				     uint32_t last_seen, uint32_t *found,
-				     uint32_t *ops, uint8_t *path)
+				     uint32_t *ops, uint8_t *path, uint8_t flags)
 {
 	struct epoch_probe p;
 
@@ -1523,6 +1539,7 @@ int radiant_sec_compat_recover_tier1(uint8_t ch, uint16_t devnum,
 	p.devnum = devnum;
 	p.counter = att_counter;
 	p.taglen = RADIANT_SEC_COMPAT_TIER_I_TAG_BYTES;
+	p.flags = flags;
 	return recover(ch, &p, last_seen, found, ops, path);
 }
 
@@ -1531,7 +1548,7 @@ int radiant_sec_compat_recover_tier2(uint8_t ch, uint16_t devnum,
 				     uint8_t n,
 				     const uint8_t tag[RADIANT_SEC_COMPAT_TIER_II_TAG_BYTES],
 				     uint32_t last_seen, uint32_t *found,
-				     uint32_t *ops, uint8_t *path)
+				     uint32_t *ops, uint8_t *path, uint8_t flags)
 {
 	struct epoch_probe p;
 
@@ -1545,22 +1562,34 @@ int radiant_sec_compat_recover_tier2(uint8_t ch, uint16_t devnum,
 	p.devnum = devnum;
 	p.counter = window_index;
 	p.taglen = RADIANT_SEC_COMPAT_TIER_II_TAG_BYTES;
+	p.flags = flags;
 	return recover(ch, &p, last_seen, found, ops, path);
 }
 
-int radiant_sec_compat_adopt_epoch(uint8_t ch, uint32_t epoch)
+int radiant_sec_compat_adopt_epoch(uint8_t ch, uint32_t epoch, uint8_t flags)
 {
 	struct compat_ctx *c = ctx_of(ch);
 
 	if (c == NULL || !c->used) {
 		return RADIANT_SEC_ENOKEY;
 	}
-	if (!c->epoch_set) {
-		/* There is no anchor and no period yet, so there is nothing for
-		 * a recovered epoch to be a correction to. */
+	if (!c->epoch_set ||
+	    (flags & ~RADIANT_SEC_COMPAT_ADOPT_REPROVISION) != 0u) {
+		/* No epoch: there is no anchor and no period yet, so there is
+		 * nothing for a recovered epoch to be a correction to. */
 		return RADIANT_SEC_EINVAL;
 	}
 	if (epoch > 0xFFFFFFFFu - RADIANT_SEC_EPOCH_HEADROOM) {
+		return RADIANT_SEC_EINVAL;
+	}
+	/* The held epoch is the floor: old genuine pages verify below it, so
+	 * only the user's say-so (a re-provisioned sensor) may go under it.
+	 * The held epoch itself changes nothing and keeps the Tier I lock. */
+	if (epoch == c->epoch) {
+		return RADIANT_SEC_OK;
+	}
+	if (epoch < c->epoch &&
+	    (flags & RADIANT_SEC_COMPAT_ADOPT_REPROVISION) == 0u) {
 		return RADIANT_SEC_EINVAL;
 	}
 

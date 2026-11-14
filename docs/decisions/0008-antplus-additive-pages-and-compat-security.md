@@ -193,8 +193,11 @@ creates, in one list, are:
   before falling back to a wildcard search.
 - **The epoch-recovery procedure and its two paths:** forward search against the
   key-group hint when `advertise = on`; trial-verification of candidate epochs
-  against the attestation tag when `advertise = off`. Plus the bounded absolute
-  scan for a re-provisioned sensor.
+  against the attestation tag when `advertise = off`. The search runs forward
+  from the epoch the receiver holds, and a receiver never adopts a lower epoch on
+  its own, so a recorded old session cannot roll it back. The bounded backward
+  probe and absolute scan for a re-provisioned sensor, and adopting the lower
+  epoch they find, need an explicit re-provision flag from the caller.
 - **The private-mode state machine including the countdown:** COMPAT ->
   ANNOUNCING -> PRIVATE -> RETURNING -> COMPAT, `K in {16, 32, 64, 128}` with a
   default of 64 messages, the beacon promoted to 1 in 8 for the duration,
