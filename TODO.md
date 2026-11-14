@@ -38,23 +38,30 @@ Note: multi packet burst mode is a lower priority feature, and handling it shoul
 
 Found by reading the code and checked a second time; nothing was built or run. The primitives (AES, CMAC, CTR, KDF, X25519, ct_equal, wipe) read clean. `security.conf` and compat are in no release image, so protocol changes here break no deployed device. "Latent" means no app calls the path yet (`node_ident_arm_sec`, `profile_enrol_*`, compat `recover_*`/`adopt_epoch` are reached only from tests). The plan file holding D1-D17 (`~/.claude/plans/make-a-plan-to-async-gem.md`) does not exist; D14-D17 were checked against the spec and code comments.
 
-## 1. [HIGH, latent for hostless nodes] A counter wrap uses the epoch the next boot will be issued
+Items 1-4 DONE 2026-11-13, each through an independent review and re-review; verified on the combined tree (DK main 1076, api sec_host 131 / sec 99 / plain 93, native_sim 5969/5969 in 16 scenarios, Python 1058). Size ceilings moved with sign-off: security text 6144 -> 6656 (6512 measured), pairing 3584 -> 4096 (3936); the security-off image is byte-identical in size to before.
+
+## 1. [DONE 2026-11-13, merge 9bfb0c0: d463c01, caabace, 802ecc2] A counter wrap uses the epoch the next boot will be issued
+- Done: every epoch is reserved before use. N (next unused) is persisted as E+2 before E is used, the ceiling is E+1, and a wrap past it waits for the persist (`radiant_sec_epoch_wanted()` hook, compat twin). Every arm after the first in a boot takes a fresh reserved epoch. A host 0xF3 on a node-followed channel is refused unless the root is replaced. Persist retries back off up to 30 s.
+- Contract limit, not enforced: two channels transmitting at once under the same root and devnum can still meet on an epoch (node_ident.h says they must differ). No app does this today.
 - `advance_epoch()` (radiant/src/radiant_sec.c:333) moves a wrap to epoch+1, and a hostless node's epoch is its boot counter (radiant/src/node/node_ident.c:210). A node booted at epoch B that runs for 65 536 slots (~4.5 h at 4 Hz) transmits under B+1. Its next boot is issued B+1 again, with the counter back at 0: the same K_enc and the same nonces. That is the two-time pad D14 and D17 exist to stop.
 - A host issuing ordinal epochs has the same trap: section 3.5 says "persist the last epoch issued", but it has to be the last epoch *used* (the 0xF4 epoch). With a wall clock, two boots in the same minute return the same epoch, and `node_ident_arm_sec()` always passes `us_into_epoch = 0` (:478). No app overrides `node_ident_wall_seconds()` today.
 - Compat has the same shape through `apply_wraps()`.
 - Fix: give each boot a block of epochs (for example `boot_counter << 12`, with a headroom check), or persist the epoch on every wrap. Fix the section 3.5 wording too. Missing test: wrap, reboot, assert the epoch is not reused.
 
-## 2. [HIGH] One injected frame desynchronises a secured master for good
+## 2. [DONE 2026-11-13, merge 9bfb0c0: 6106ca6] One injected frame desynchronises a secured master for good
+- Done: a secured master refuses secured-range broadcasts in `radiant_sec_rx_ingest()` (counted at 0xF4 [26..27]), and `rx_process()` refuses latched-TX contexts, so reflected windows no longer verify.
 - A master runs `radiant_sec_rx_ingest()` on broadcasts heard in its reply window (radiant/src/antr/ant_radio_radiant.c:2486), and RX shares `epoch` and the keys with TX. In the last ~128 slots before a wrap, a forged broadcast with a chosen counter byte makes `rx_process()` call `advance_epoch()` (radiant_sec.c:1201). TX still counts wraps from `tx_wraps`, so it advances again at the real wrap: the master ends on epoch+2 and its receivers on epoch+1, until the host sends a new 0xF3. Section 7.6 accepts the early advance because a receiver heals within 32 s; a master does not.
 - The same gap means nothing binds direction: a master's own windows reflected back to it verify.
 - Fix: refuse secured-range pages on a master channel (legitimate secured slaves never send them; ant_radio_radiant.c:1374 keeps a slave's broadcast off a secured channel), or put a direction bit in the nonce. Missing test: a master receives a secured page.
 
-## 3. [HIGH] The per-packet verdict never reaches the host
+## 3. [DONE 2026-11-13, merge 1874e29, then 927cb75..d4b7bdd] The per-packet verdict never reaches the host
+- Done: opt-in 0xF8 window-verdict event (0xF1 bit 4, needs X_AUTH): `[ch, verdict, window_start u16, W, seq u16]`. seq is never reset and is spent on every discard. VERIFIED is given only when the closing window is after the judged one and under 256 counters on, and rx state restarts on open/close. The host rule (first covering verdict binds; a gap, overflow or deadline settles unverified; the first verdict after a flush is a baseline only) is in section 3.2 and `tools/ant_sec.py` `VerdictResolver`. Ring refusals are counted at 0xF4 [28..29]. Unsecured and non-opted-in streams are unchanged.
 - `radiant_sec_deliver()` discards the verdict (ARG_UNUSED, ant_radio_radiant.c:904), and nothing outside the tests overrides `radiant_sec_window_verdict()`. Under the default deliver policy, a forged secured-range broadcast reaches the host as an ordinary BROADCAST_DATA. The host only has the aggregate 0xF4 counters.
 - Section 3.2 says "every secured RX delivery carries verified / unverified / clear". As built, X_AUTH without DROP_UNVER detects forgery in aggregate but cannot reject a forged packet.
 - Fix: carry the verdict to the host (an extended-data flag or a window-verdict event), or make DROP_UNVER the default whenever X_AUTH is on.
 
-## 4. [HIGH, pairing is off by default] A computing MITM can make the six-digit fingerprints match
+## 4. [DONE 2026-11-13 for core pairing and 0xF5, merge 1a0031f: 164ff11..80b303c; over-air enrolment is documented only, see item 6] A computing MITM can make the six-digit fingerprints match
+- Done: LESC-style commit/reveal (0xF5 sub-commands 0x04-0x06): the responder commits to Nb before it sees Na, and the fingerprint covers both nonces. A reveal that fails its commitment answers response code 0xF5. A failure after the commitment wipes the exchange, and all-zero nonces are refused. The bound is 10^-6 per user-initiated attempt. Host obligations (reveal order, removing the key on mismatch via close, EVENT_CHANNEL_CLOSED, then unassign) are in section 7.4.
 - `pair_derive()` (radiant/src/radiant_sec_pair.c:138) has no commitment step. A MITM sees both real public keys and can grind its own key pair offline until the two six-digit fingerprints match. That is about 10^6 X25519 operations, seconds to a minute on a laptop, which fits inside the 60 s window. This applies to 0xF5 and to over-air enrolment.
 - The radiant_sec.h pairing block and section 7.4 say two different shared secrets "cannot be made to match". `test_a_man_in_the_middle_cannot_match_both_fingerprints` tests only a MITM that does not grind.
 - Fix: a commitment, as in BLE numeric comparison: one side sends H(pub) before it sees the peer's key. Or correct the documented claim.
@@ -93,7 +100,11 @@ Found by reading the code and checked a second time; nothing was built or run. T
 ## 12. [LOW] Hardening and documentation
 - Dead-store wipes: `memset()` on secret locals that are never read again can be elided at -Os. node_ident.c:560 (half the pairing scalar in `tag`), :677 (the whole scalar), and the K_dev copies at :138 and :167. Use `radiant_sec_wipe()`.
 - radiant/src/radiant_sec_rng_psa.c:45 returns without zero-filling when `psa_crypto_init()` fails, while the entropy backend and the node_ident comments promise a zero-fill on failure. The one caller checks the return code, so this is a contract mismatch, not a live bug.
-- Pairing expiry is only checked lazily, on the next call, so an abandoned scalar stays in RAM until a pairing call or a reset. Have `radiant_sec_pair_service()` (already called from housekeeping) free expired contexts.
+- [x] Pairing expiry is only checked lazily, on the next call, so an abandoned scalar stays in RAM until a pairing call or a reset. Done 2026-11-13 (33328d8): `radiant_sec_pair_service()` frees expired contexts.
+- Found while fixing items 1-4, open:
+  - The main ztest image no longer fits the nRF5340 DK. It ran only with `CONFIG_ASSERT_VERBOSE=n` and `CONFIG_ZTEST_ASSERT_VERBOSE=0`, and was already about 1.3 KB over on f02125a. Split the suite or pick a bigger target.
+  - `scripts/run_ztest_hw.ps1` can capture two boots: the image runs between flash and go. A fixed copy, which waits 1 s and throws away that partial output before go, is in the 2026-11-13 session scratchpad and not committed.
+  - `test_matter.c` has a `-Wformat-extra-args` warning, which a -Werror build would fail on.
 - Section 7.5 says ~2.3 h to one verified forgery at W=2 and 4 Hz. One attempt per 2-packet window is 2^16 x 0.5 s, about 9.1 h. Recheck the figure.
 
 # Module packaging follow-ups
