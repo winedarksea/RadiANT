@@ -1733,6 +1733,29 @@ static void api_post_master_tx(uint8_t ch)
 	if (t == RADIANT_TIME_NEVER) {
 		return;
 	}
+#if defined(CONFIG_RADIANT_SEC)
+	/*
+	 * A slot the transform withheld (pending, past the epoch ceiling, spent)
+	 * was never requested, so nothing completed it and the clock did not
+	 * move: t is then a slot already gone. Requested as it stands, the
+	 * scheduler refuses it, the MISSED terminal advances one period, and a
+	 * secured master is re-posted only by the next pump, so the master
+	 * caught up one period per pump and stayed silent meanwhile. Skip the
+	 * slots that have passed here instead. The pump runs at least every
+	 * RADIANT_API_HOUSEKEEP_MS, so this is one or two periods at most.
+	 */
+	{
+		radiant_time_t now = radiant_radio_now();
+
+		while (t != RADIANT_TIME_NEVER && t <= now) {
+			(void)radiant_channel_on_slot_missed(ch, now);
+			t = radiant_channel_next_slot(ch);
+		}
+		if (t == RADIANT_TIME_NEVER) {
+			return;
+		}
+	}
+#endif
 	if (radiant_channel_id_get(ch, &id) != RADIANT_CH_OK) {
 		return;
 	}

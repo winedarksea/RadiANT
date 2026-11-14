@@ -2109,7 +2109,7 @@ jobs:
           # items 5 and 9: a keyed channel with no epoch sent and accepted
           # secured pages in the clear, and a 0xF2 re-send reset the epoch
           # gate). Measured with this recipe at NCS v3.4.0: 6512 / 6877 at
-          # 76b47db, 6792 / 6877 after (+280 / +0):
+          # 76b47db, 6848 / 6877 after (+336 / +0):
           #    196  radiant_sec_set_key       same-root KCV compare (two
           #                                   CMACs, inlined root_matches),
           #                                   queue purge on a new root
@@ -2118,8 +2118,10 @@ jobs:
           #     16  antr_sec_status_get       0xF4 [30] state flags
           #     16  radiant_sec_get_state     keyed flag
           #     12  radiant_sec_rx_ingest     pending drop
+          #     56  api_post_master_tx        skip slots a withheld
+          #                                   master let pass
           # The per-packet path gains at most one branch; the bytes are the
-          # cold set_key path. 7168 is the next multiple of 512 (376 B left).
+          # cold set_key path. 7168 is the next multiple of 512 (320 B left).
           check "security text" "$(( on_text - off_text ))" 7168
           check "security bss"  "$(( on_bss  - off_bss  ))" 7168
 
