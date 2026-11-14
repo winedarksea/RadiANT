@@ -838,10 +838,11 @@ int  radiant_sec_set_devnum(uint8_t ch, uint16_t devnum);
 int  radiant_sec_try_devnum(uint8_t ch, uint16_t devnum);
 
 /*
- * The port's channel close and open: drop the receive window state (keeping
- * the replay floor), so a window left pending across a close can't be
- * judged by tag bytes that arrive after it. A no-op for a channel with no
- * security context.
+ * The port's channel close and open: drop the receive window state, the
+ * drop-policy holds and the channel's packets still queued for the pump
+ * (keeping the replay floor), so a window left pending across a close can't
+ * be judged by tag bytes that arrive after it. Any keyed channel, opted in
+ * to 0xF8 or not. A no-op for a channel with no security context.
  */
 void radiant_sec_rx_restart(uint8_t ch);
 

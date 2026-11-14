@@ -715,12 +715,35 @@ int radiant_sec_try_devnum(uint8_t ch, uint16_t devnum)
 	return RADIANT_SEC_OK;
 }
 
+/* Drop every queued packet for `ch`, keeping the order of the rest. */
+static void q_purge(uint8_t ch)
+{
+	k_spinlock_key_t key = k_spin_lock(&sec_q_lock);
+	uint16_t         i;
+	uint16_t         n = 0u;
+
+	for (i = 0u; i < sec_q_count; i++) {
+		struct sec_pkt *p = &sec_q[(sec_q_head + i) % SEC_QUEUE_DEPTH];
+
+		if (p->ch != ch) {
+			sec_q[(sec_q_head + n) % SEC_QUEUE_DEPTH] = *p;
+			n++;
+		}
+	}
+	sec_q_count = n;
+	k_spin_unlock(&sec_q_lock, key);
+}
+
 void radiant_sec_rx_restart(uint8_t ch)
 {
 	RADIANT_SEC_ASSERT_LOCKED();
 	struct sec_ctx *c = ctx_of(ch);
 
 	if (c != NULL) {
+		/* Packets heard before the close and not yet pumped would open
+		 * a window after the discard; the host has been told the
+		 * channel closed, so they are dropped with it. */
+		q_purge(ch);
 		rx_discard(c);
 	}
 }
@@ -734,26 +757,10 @@ void radiant_sec_channel_release(uint8_t ch)
 		return;
 	}
 
-	{
-		k_spinlock_key_t key = k_spin_lock(&sec_q_lock);
-		uint16_t         i;
-		uint16_t         n = 0u;
-
-		/* Queued ciphertext belongs to the context being released; left
-		 * here it is judged under whatever key this channel number gets
-		 * next (review 2026-10-31, A6-1). */
-		for (i = 0u; i < sec_q_count; i++) {
-			struct sec_pkt *p =
-				&sec_q[(sec_q_head + i) % SEC_QUEUE_DEPTH];
-
-			if (p->ch != ch) {
-				sec_q[(sec_q_head + n) % SEC_QUEUE_DEPTH] = *p;
-				n++;
-			}
-		}
-		sec_q_count = n;
-		k_spin_unlock(&sec_q_lock, key);
-	}
+	/* Queued ciphertext belongs to the context being released; left here
+	 * it is judged under whatever key this channel number gets next
+	 * (review 2026-10-31, A6-1). */
+	q_purge(ch);
 
 	radiant_sec_key_destroy(&c->k_root);
 	radiant_sec_key_destroy(&c->k_enc);

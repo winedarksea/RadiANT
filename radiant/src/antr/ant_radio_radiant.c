@@ -4037,8 +4037,9 @@ antr_err_t antr_channel_close(uint8_t channel)
 	if (rc == RADIANT_CH_OK) {
 		uint32_t op = api_ch[channel].op;
 
-		/* As at open, and here too so packets still queued for the pump
-		 * open no window that outlives the close. */
+		/* As at open, and here too: radiant_sec_rx_restart() also drops
+		 * this channel's packets still queued for the pump, so none of
+		 * them opens a window that outlives the close. */
 		radiant_sec_rx_restart(channel);
 
 		(void)radiant_transfer_abort(&api_xfer[channel]);
