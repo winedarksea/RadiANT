@@ -1,55 +1,31 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * ant_radio_radiant.c (was radiant/src/radiant_api.c, before radiant
- * stopped reaching outside itself for src/ant_radio.h) - integration layer:
- * src/ant_radio.h's antr_* entry points on top of the six radiant
- * modules, plus the seams none of them own.
+ * ant_radio_radiant.c - integration layer: src/ant_radio.h's antr_* entry points
+ * on top of the radiant modules, plus the seams none of them own.
  *
- * Provenance: clean-room, from src/ant_radio.h, docs/sdk-ant-contract.md,
- * src/ant_wire.h (generated from protocol/ant_wire.yaml), and the radiant
- * module headers. Nothing here derives from sdk-ant, libant.a, disassembly, or
- * any ANT+ device profile document.
- * See docs/decisions/0002-clean-room-policy.md.
+ * Clean-room: nothing here derives from sdk-ant, libant.a, disassembly, or ANT+
+ * profile documents. See docs/decisions/0002-clean-room-policy.md.
  *
- * Living outside radiant now, not inside it: this is the one file that
- * was always shaped by the seam above the module rather than by the module
- * itself - see CONFIG_RADIANT_ANTR_API in src/Kconfig.antr_api for why.
- * radiant_channel.h's own wire-code cross-check no longer depends on include
- * order the way it used to: it includes radiant's own radiant_wire.h
- * unconditionally now, rather than gating on whichever translation unit
- * happened to bring src/ant_wire.h into scope first (this one, always).
+ * This file owns the key -> address table, the SDU masks, the advanced burst
+ * config, encryption slots, per-channel device ID lists, one broadcast payload
+ * per channel, the event thread, and the surrogate operation ids that attribute
+ * terminal events to channels. Everything else forwards to the channel, sched,
+ * search, event and transfer modules.
  *
- * WHAT THIS FILE OWNS: the key -> address table (no ant_net.c; see below), the
- * SDU mask table, the advanced-burst config block and encryption slots (no
- * module models these), the per-channel device ID list (radiant_search.c has
- * none), one broadcast payload per channel, the event thread, and the
- * surrogate operation ids that let radiant_channel.c attribute a terminal
- * event to a channel when radiant_sched.c sits between it and the HAL.
- * Everything else is a forward to channel/sched/search/event/transfer.
+ * Posting is not committing: radiant_sched_request_rx()/_tx() change the plan
+ * and radiant_sched_tick() acts on it. Thread context posts everything and ticks
+ * once at the end of pump(), so overlapping windows can merge. Callbacks never
+ * tick. radiant_sched.c has no timer, so RADIANT_API_HOUSEKEEP_MS bounds how long
+ * a request refused with EBUSY or ESTATE waits for a retry.
  *
- * POSTING IS NOT COMMITTING: radiant_sched_request_rx()/_tx() change the plan;
- * radiant_sched_tick() acts on it. Thread context posts everything then ticks
- * ONCE at the end of pump() - arming on every post would let the first
- * channel's window commit before an overlapping second channel had a say, so
- * merged receive windows would never merge. Callbacks never call tick; the
- * scheduler commits on its own way out. radiant_sched.c owns no timer, so
- * RADIANT_API_HOUSEKEEP_MS bounds how long a request that lost an arm race
- * (EBUSY) or predates radio-enable (ESTATE) can sit unretried.
+ * radiant_event_drain() is thread context only and is never re-entered, so it
+ * never runs inside an antr_* call (antr_stack_reset() flushes instead). It runs
+ * on this file's event thread, woken by radiant_event_wakeup().
  *
- * radiant_event_drain() IS THREAD CONTEXT ONLY: the drain must never be
- * re-entered (docs/sdk-ant-contract.md forbids antr_on_message() recursing
- * from inside a bridge call), so it never runs inside an antr_* function - not
- * even antr_stack_reset(), which flushes instead of draining. It runs on this
- * file's own thread, woken by radiant_event_wakeup().
- *
- * THE PERMANENT LIMITATION: key -> address. There is no ant_net.c and never
- * will be - the derivation is not public and fitting it from samples is
- * reverse-engineering, which the clean-room policy rules out. The one-entry
- * table below (the published ANT+ pair) is the whole of it; anything else is
- * ANTW_INVALID_PARAMETER_PROVIDED. Every ANT+ profile and shipping sensor uses
- * that one key, so this costs nothing in practice. For A/B work: libant.a
- * computes the address, so a comparison must use the ANT+ key or it compares a
- * table against an algorithm.
+ * Permanent limitation: key -> address. The derivation is not public, so the
+ * one-entry table below (the ANT+ key) is the whole of it; any other key gets
+ * ANTW_INVALID_PARAMETER_PROVIDED. Every ANT+ profile uses that key. For A/B
+ * work, use the ANT+ key too, since libant.a computes the address.
  */
 
 #include <string.h>
@@ -61,7 +37,6 @@
 #include <zephyr/drivers/hwinfo.h>
 #endif
 
-/* First, and see the note above. */
 #include <radiant/ant_wire.h>
 #include <radiant/ant_health.h>
 #include <radiant/ant_radio.h>
@@ -84,20 +59,13 @@
 #include <radiant/radiant_sec.h>
 #include <radiant/radiant_transfer.h>
 
-/* CONFIG_RADIANT_LOG_LEVEL, not a hardcoded LOG_LEVEL_INF, so this module
- * can be turned up when it is the one misbehaving. */
+/* Uses CONFIG_RADIANT_LOG_LEVEL so this module can be raised when debugging. */
 LOG_MODULE_REGISTER(radiant_api, CONFIG_RADIANT_LOG_LEVEL);
 
 /*
- * RADIANT_TRANSFER_SEG_* were chosen equal to ANTR_BURST_SEGMENT_* so
- * antr_burst_tx() forwards the byte untouched; radiant_transfer.h can't check
- * this itself (compiles with no app header in scope), so the assert lives
- * here, the one TU with both headers.
- *
- * Already wrong once: ANTR_BURST_SEGMENT_END was assumed 0x04 until compared
- * against sdk-ant's 0x02. Forwarding the wrong value marks every burst's last
- * block as a middle block, so TRANSFER_TX_COMPLETED never arrives and each
- * transfer times out at 1000 ms - a two-second burst takes ten minutes.
+ * RADIANT_TRANSFER_SEG_* equal ANTR_BURST_SEGMENT_* so antr_burst_tx() forwards
+ * the byte unchanged. A wrong END value marks every burst's last block as a
+ * middle block, so each transfer times out at 1000 ms.
  */
 BUILD_ASSERT(RADIANT_TRANSFER_SEG_CONTINUE == ANTR_BURST_SEGMENT_CONTINUE,
 	     "burst segment drift: CONTINUE");
@@ -106,8 +74,8 @@ BUILD_ASSERT(RADIANT_TRANSFER_SEG_START == ANTR_BURST_SEGMENT_START,
 BUILD_ASSERT(RADIANT_TRANSFER_SEG_END == ANTR_BURST_SEGMENT_END,
 	     "burst segment drift: END");
 
-/* The channel ceiling has to agree in all three places that size an array from
- * it, and the wire's own limit is the burst header's low five bits. */
+/* The channel ceiling must agree everywhere it sizes an array. The wire limit
+ * is the burst header's low five bits. */
 BUILD_ASSERT(RADIANT_CHANNEL_COUNT == RADIANT_SCHED_MAX_CHANNELS,
 	     "channel count drift: radiant_channel vs radiant_sched");
 BUILD_ASSERT(RADIANT_CHANNEL_COUNT <= (RADIANT_SEARCH_MAX_CHANNELS),
@@ -123,38 +91,29 @@ BUILD_ASSERT(RADIANT_CHANNEL_COUNT == (ANTW_BURST_HEADER_CHANNEL_MASK + 1),
 #define API_CHANNELS ((uint8_t)RADIANT_CHANNEL_COUNT)
 #define API_NETWORKS ((uint8_t)RADIANT_CHANNEL_NETWORK_COUNT)
 
-/* Selective-data-update masks: four, matching src/ant_radio_stub.c and what
- * tools/ant_features.py round-trips against. */
+/* Four SDU masks, matching src/ant_radio_stub.c and tools/ant_features.py. */
 #define API_SDU_MASKS 4u
 
-/* Encryption key slots: same count as the stub, so an A/B diff doesn't flag it. */
+/* Four encryption key slots, as in the stub, so A/B diffs do not flag it. */
 #define API_CRYPTO_KEYS 4u
 #define API_CRYPTO_ID_SIZE                                                    \
 	(ANTW_MESG_CONFIG_ENCRYPT_REQ_CONFIG_ID_SIZE - ANTW_CHANNEL_NUM_SIZE)
 
-/* Device IDs one channel's inclusion/exclusion list may hold: four, what a
- * retail stick accepts; consulted once per acquisition so a linear scan is
- * free. Beyond this is ANTW_INVALID_LIST_ID. */
+/* Device IDs per inclusion/exclusion list: four, what a retail stick
+ * accepts. Beyond that: ANTW_INVALID_LIST_ID. */
 #define API_ID_LIST_MAX 4u
 #define API_ID_LIST_BYTES 4u /* [devnum_lo][devnum_hi][dtype][ttype] */
 
 /*
- * Half-width of a tracked channel's receive window, in microseconds.
- *
- * NO LONGER THE NUMBER USED - radiant_channel_guard_us() is (adaptive; see its
- * declaration). This constant is the spec's worst case over eight misses and
- * survives only as the ceiling and the answer when the estimator has nothing
- * to say (not tracking, just acquired, just sent back to search).
+ * Half-width of a tracked channel's receive window (us). Only the ceiling and the
+ * fallback when the estimator has nothing to say; radiant_channel_guard_us() is
+ * the adaptive value in use.
  */
 #define API_SLOT_GUARD_US RADIANT_CHANNEL_GUARD_MAX_US
 
 /*
- * Two invariants the guard rests on, checked not just claimed: (1) if
- * RX_FAIL_TO_SEARCH grows or the ceiling shrinks, a channel could silently
- * lose its window on the last miss before falling back to search; (2) the
- * adaptive guard's floor must cover one period of worst-case drift, or the
- * narrow path's per-miss charging leaves it weaker than the wide guard it
- * replaced.
+ * The guard's invariants: the ceiling must cover worst-case drift over every miss
+ * up to RX_FAIL_TO_SEARCH, and the adaptive floor must cover one drift period.
  */
 BUILD_ASSERT(RADIANT_CHANNEL_GUARD_MAX_US >=
 	     (uint32_t)RADIANT_CHANNEL_RX_FAIL_TO_SEARCH *
@@ -166,84 +125,44 @@ BUILD_ASSERT(RADIANT_CHANNEL_GUARD_MIN_US >= RADIANT_CHANNEL_DRIFT_WORST_US,
 	     "worst-case LF clock drift, so a narrowed window is weaker than "
 	     "the wide one it replaced");
 
-/*
- * Extended assignment bit for background scanning. Not in src/ant_wire.h -
- * protocol/ant_wire.yaml never named the extended-assignment bits, since
- * nothing acted on one until now. 0x01 is ANT Message Protocol and Usage
- * Rev 5.1's value for background scanning enable; kept here with an
- * unmistakable prefix rather than faked as generated.
- */
+/* Extended assignment bit for background scanning (ANT Message Protocol
+ * and Usage Rev 5.1). Hand-defined: not in the generated ant_wire.h. */
 #define API_EXT_ASSIGN_BACKGROUND_SCAN 0x01u
 
-/* Noise-floor log interval: 60 s is enough windows for a 10th percentile to
- * mean something, short enough to watch live while testing a USB port. */
+/* Noise-floor log interval: 60 s gives enough windows for a 10th percentile. */
 #define API_NOISE_REPORT_US 60000000u
 
 /*
- * Receive-path log interval. Shorter than the noise line's sixty seconds
- * because this one exists to give a RATE across a bench run that lasts tens of
- * seconds, and at 60 s a whole run produces a single line. Not shorter than
- * this: apps with a console run LOG_MODE_DEFERRED over a small buffer, and a
- * chatty periodic line there discards other messages rather than its own (see
- * the dropped boot banner in docs/treadmill-reference-design.md). Lower it to
- * ~2 s by hand when actually chasing something on a bench board.
+ * Receive-path rate log interval: short enough to give a rate over a bench run.
+ * Not shorter, since LOG_MODE_DEFERRED consoles drop other messages when a chatty
+ * line fills the buffer. Lower it by hand when chasing a bench problem.
  */
 #define API_RXPATH_REPORT_US 30000000u
 
 #if defined(CONFIG_RADIANT_CRC_REPAIR)
-/* CRC-repair counter log interval. 10 s rather than the noise line's 60 s: the
- * S3 sensitivity ladder holds each rung for well under a minute, and a counter
- * that reports once per 60 s can produce a whole rung with no line in it - which
- * reads identically to a rung where repair never engaged. */
+/* CRC-repair counter interval: 10 s, so every sensitivity rung shows a line. */
 #define API_CRC_REPORT_US 10000000u
 #endif
 
 /*
- * The event thread. 1280 B covers radiant_event_drain()'s frame plus pump()'s
- * slot-table arithmetic.
- *
- * PRIORITY 6, BELOW THE BRIDGE'S PARSER THREAD (5) - THE INEQUALITY IS THE
- * POINT. At priority 4 (above the parser) a captured bench sequence showed
- * EVENT_CHANNEL_CLOSED delivered before the RESPONSE to the close command that
- * caused it: antr_channel_close() completes inline on the parser thread, and
- * this thread, higher priority, preempted it before send_response() ran. Host
- * libraries read until they see their command's response and discard what
- * they pass, so the event was silently eaten, and the next unassign was
- * refused CHANNEL_IN_WRONG_STATE. Below the parser the ordering is structural:
- * a lower-priority thread can't run until the parser blocks on
- * k_sem_take(&ant_rx_sem), which only happens after it has dispatched and
- * replied. KEEP THIS GREATER THAN BRIDGE_PRIORITY (src/ant_serial_bridge.c) -
+ * Event thread: 1280 B covers radiant_event_drain()'s frame and pump()'s
+ * arithmetic. Priority 6 is below the bridge's parser thread (5), and the order
+ * is the point: a higher-priority event thread could preempt the parser between
+ * dispatching a command and sending its response, so the event would reach the
+ * host first. Keep it greater than BRIDGE_PRIORITY (src/ant_serial_bridge.c);
  * the BUILD_ASSERT below enforces it.
  */
 /*
- * +256 B when security transforms are compiled in: radiant_sec_pump()'s
- * deepest frame is a CMAC final (two 16-byte subkeys, block, tag under a
- * 16-byte nonce). Generous rather than exact - on this platform a stack
- * overrun surfaces as a wrong answer, not a fault, which is the worst failure
- * mode for a path deciding packet authenticity.
- */
-/*
- * +1024 B more under an arbitrated backend: the pump's deepest call
- * (post -> radiant_sched_tick() -> arm_rx_window() -> radiant_radio_rx())
- * continues into gate_acquire() and MPSL under the MPSL gate, versus a few
- * register writes on the direct backend. Measured: at 1280 the board faulted
- * "Stack overflow on CPU 0" in thread `radiant_event` on channel open (looked
- * like a wedge, was a fast reboot loop, since deferred logging needs a live
- * thread to flush). CONFIG_THREAD_NAME + CONFIG_LOG_MODE_IMMEDIATE is what
- * named the faulting thread.
+ * Stack sizing. Security transforms add 256 B for radiant_sec_pump()'s CMAC
+ * frame. Deliberately generous: an overrun here shows as a wrong answer, not a
+ * fault. An arbitrated backend adds 1024 B: the pump's call chain continues
+ * through the MPSL gate, and 1280 B overflowed on channel open.
  */
 #if defined(CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL)
 #define API_EVENT_STACK_GATE 1024
 #elif defined(CONFIG_RADIANT_BACKEND_CC26XX)
-/*
- * Same reason, second vendor: this thread's arm call costs whatever the
- * backend's arm costs, and CC26x2's RF_postCmd() (SimpleLink driver call,
- * queue walk, power-state negotiation, cross-processor doorbell) is far
- * deeper than the nRF's register writes. Measured the same way: first window
- * on this backend reset inside the completion path; the faulting thread
- * pointer (0x200025e8, "(unknown)" for lack of CONFIG_THREAD_NAME) resolved
- * via `nm -n -S zephyr.elf` to api_event_thread_data.
- */
+/* CC26x2's RF_postCmd() path is deeper still (queue walk, power
+ * negotiation), so the same stack size applies. */
 #define API_EVENT_STACK_GATE 1024
 #else
 #define API_EVENT_STACK_GATE 0
@@ -275,9 +194,7 @@ static const uint8_t api_ant_plus_key[8] = {
  * ---------------------------------------------------------------------------
  */
 
-/* What this channel's scheduler slot currently holds. The scheduler routes by
- * channel, so this is how a completion is attributed to the thing that asked
- * for it without keeping a second map. */
+/* What this channel's scheduler slot holds, so a completion can be attributed to its requester. */
 enum api_slot_kind {
 	API_SLOT_NONE = 0,
 	API_SLOT_TRACK_RX,  /* a tracked channel's predicted receive window */
@@ -287,50 +204,36 @@ enum api_slot_kind {
 };
 
 struct api_chan {
-	/*
-	 * The surrogate operation id bound into radiant_channel.c. It wants the
-	 * id radiant_radio_tx()/rx() returned so a late terminal event is
-	 * recognisable, but radiant_sched.c merges channels into one hardware
-	 * operation with no such id to hand over - so this file mints its own
-	 * non-zero token per accepted post, opaque, used only for attribution.
-	 */
+	/* Surrogate operation id for radiant_channel.c. radiant_sched.c merges
+	 * channels with no id of its own, so this file mints a non-zero token per
+	 * accepted post, used only for attribution. */
 	uint32_t op;
 
 	uint8_t slot_kind;
-	/* Something arrived in the window that is now ending. What tells a
-	 * closed-empty window apart from one that heard its master. */
+	/* Set when anything arrived in the window now ending. */
 	bool slot_heard;
 
-	/* The HAL requires a filter array to stay valid until the terminal
-	 * event, so it cannot be a stack local. */
+	/* The HAL keeps this filter array until the terminal event, so it
+	 * cannot be a stack local. */
 	struct radiant_rx_filter filter;
 
 	/* Likewise the transmit body: backends DMA straight out of it. */
 	uint8_t tx_body[RADIANT_FRAME_BODY_MAX];
 	uint8_t tx_body_len;
 
-	/* The channel's broadcast payload: what antr_broadcast_message_tx()
-	 * queues, and what an acknowledgement carries - every acknowledgement
-	 * ever captured carried the acknowledger's own broadcast buffer
-	 * (docs/spike-b-results.md). */
+	/* Broadcast payload: queued by antr_broadcast_message_tx(), and also
+	 * the acknowledgement payload. */
 	uint8_t bcast[ANTW_ANT_MAX_PAYLOAD_SIZE];
 	bool    bcast_valid;
 	bool    bcast_pending;
-	/* Which host write is pending, and which one the frame now going out
-	 * carries: bumped on every antr_broadcast_message_tx(), copied when a
-	 * frame's payload is snapshotted. A completion clears bcast_pending
-	 * only if no newer write landed between the two, or that write would
-	 * be lost (review 2026-11-09). */
+	/* Host write generation. bcast_gen_tx is the generation the frame in
+	 * flight carries. A completion clears bcast_pending only if no newer write
+	 * landed since, or that write is lost. */
 	uint8_t bcast_gen;
 	uint8_t bcast_gen_tx;
-	/* The last data packet this master put on the air, acknowledged or
-	 * burst, copied as plaintext from the engine's block (never from the
-	 * encoded tx_body). Rev 5.1 p.109: after a transfer the master's next
-	 * broadcast repeats the last packet sent, whatever its data type, so
-	 * api_post_master_tx() sends this while last_tx_newer is set. A host
-	 * broadcast write clears the flag and wins again. Kept apart from
-	 * bcast, which is also the acknowledgement payload and the readback
-	 * of what the host wrote. */
+	/* Last data packet this master sent, as plaintext. Rev 5.1 p.109: the
+	 * next broadcast repeats it after a transfer, until the host writes a
+	 * broadcast (which clears last_tx_newer). */
 	uint8_t last_tx[RADIANT_TRANSFER_PKT_BYTES];
 	bool    last_tx_newer;
 	/* A slave keeps receiving until a real master slot opens the exchange. */
@@ -339,64 +242,39 @@ struct api_chan {
 	radiant_time_t ack_deadline;
 
 #if defined(CONFIG_RADIANT_SEC)
-	/*
-	 * The current slot's transformed payload. Fixes a plaintext leak:
-	 * api_xfer_broadcast() would otherwise send `bcast` (host plaintext) as
-	 * an acknowledgement, handing a listener the plaintext of ciphertext it
-	 * just heard. Returning the ciphertext already built for this counter
-	 * fixes it with no second nonce. `bcast` itself is never mutated -
-	 * antr_broadcast_message_tx()'s readback must return what was written.
-	 */
+	/* The current slot's ciphertext, sent as the ack payload so host
+	 * plaintext never goes on the air. bcast is never modified: its readback
+	 * must return what was written. */
 	uint8_t sec_pay[ANTW_ANT_MAX_PAYLOAD_SIZE];
 	bool    sec_pay_valid;
 #endif
 
 	/* One word per entry, wire order [devnum_lsb, devnum_msb, device_type,
-	 * trans_type] in its bytes, so antr_id_list_add() can replace an entry
-	 * with a single store while the channel is open - see there. */
+	 * trans_type], so antr_id_list_add() can replace an entry with one store. */
 	uint32_t id_list[API_ID_LIST_MAX];
 	uint8_t id_list_size;
 	bool    id_list_exclude;
 
 	uint8_t crypto_mode;
 
-	/* The NEXT host-facing burst sequence number of the inbound transfer:
-	 * 0 = none in progress (the next packet is a first), 1-3 = mid-transfer.
-	 * Acknowledged data is byte-for-byte a one-packet burst, so this is how
-	 * the serial layer tells them apart: one packet ending LAST is the
-	 * former, anything longer is the latter. */
+	/* Next host-facing burst sequence number: 0 = no transfer in progress,
+	 * 1-3 = mid-transfer. Acknowledged data is a one-packet burst ending LAST. */
 	uint8_t in_pkts;
 
-	/*
-	 * The master turnaround, deferred from api_sched_tx() to
-	 * api_sched_done(). Posting it straight from the TX callback used to
-	 * reuse the slot the scheduler still held in flight, which silently ate
-	 * that same transmit's own done() (radiant_sched_request_rx() aborts the
-	 * still-armed slot, making the TX's end_armed() a no-op) - leaving
-	 * CLOSING channels stuck and radiant_radio_abort() firing on a live TX
-	 * ISR 4x/s. Deferring one callback costs nothing: same interrupt, t_sync
-	 * (the hardware ADDRESS-event capture) carried rather than recomputed,
-	 * and radiant_sched.c still commits on the way out of the same dispatch.
-	 */
+	/* Master turnaround, deferred from api_sched_tx() to api_sched_done().
+	 * Posting it from the TX callback reuses the slot still in flight and
+	 * swallows that TX's own done(). */
 	bool           turn_pending;
 
-	/* A tracked RX window is armed, so this channel owes the scheduler its
-	 * next one the moment it completes. Set at arm, cleared before the post,
-	 * bounding the re-post to depth one against a backend that refuses every
-	 * arm (see api_sched_done()). Named for its first use; it now also
-	 * carries a master's next TRANSMIT slot after a MISSED/DENIED
-	 * MASTER_TX, which is the same fact about the same slot in the other
-	 * direction. */
+	/* A tracked RX window is armed and the channel owes its next one on
+	 * completion. Bounds the re-post to depth one (see api_sched_done()). Also
+	 * set for a master's next TX slot after MISSED/DENIED MASTER_TX. */
 	bool           track_repost;
 	radiant_time_t turn_t_sync;
 
-	/*
-	 * Watchdog state (RADIANT_API_XFER_WATCHDOG_MS, api_housekeep()).
-	 * xfer_stuck_since: when the transfer engine was first seen non-idle
-	 * with nothing armed. in_last: last inbound packet's arrival. Both carry
-	 * a separate validity flag since zero is a legal radiant_radio_now()
-	 * reading.
-	 */
+	/* Watchdog state for api_housekeep(): xfer_stuck_since is when the engine
+	 * was first seen busy with nothing armed; in_last is the last inbound
+	 * packet. Each has a validity flag, since zero is a valid time. */
 	bool           xfer_stuck_valid;
 	radiant_time_t xfer_stuck_since;
 	bool           in_last_valid;
@@ -409,25 +287,9 @@ static struct radiant_search   api_search;
 
 static uint8_t api_net_addr[API_NETWORKS][RADIANT_NET_ADDR_LEN];
 
-/* Which entries of api_net_addr[] were actually installed by a host.
- *
- * An all-zero row is indistinguishable from a real address by inspection, and
- * that ambiguity was a silent bug rather than a theoretical one. Zwift sets
- * three network keys at startup and cycles channel 0 across networks 0, 1 and
- * 2 (measured - archive/host-api/2026-08-10-zwift-session-decoded.txt). Only
- * the ANT+ key is accepted here, so networks 1 and 2 kept all-zero addresses
- * while remaining perfectly *in range*: api_net_addr_for() only clamps
- * out-of-range numbers, so an assign to network 1 succeeded, the channel was
- * admitted to the sweep (which sweeps api_net_addr[0] unconditionally),
- * acquired, then tracked on a zero address and heard nothing at all. Two
- * thirds of the host's discovery attempts went into that hole with no error
- * anywhere - which is what made ANT+ discovery look roughly three times
- * slower than it is.
- *
- * A refusal at assign time is the same class of change as the nRF54L
- * synthesized-clock BUILD_ASSERT: convert a silence into a diagnosable error,
- * because the silence gets debugged forever and the error gets read once.
- */
+/* Which api_net_addr[] rows a host installed. An all-zero row looks like
+ * a real address, and a channel tracked on one hears nothing, so assign to
+ * an unset network is refused. Only the ANT+ key is accepted. */
 static bool api_net_valid[API_NETWORKS];
 
 /* [enable, rf payload size, required modes, 0, 0, optional modes, 0, 0,
@@ -442,38 +304,26 @@ static uint8_t api_crypto_key[API_CRYPTO_KEYS][ANTW_ENCRYPTION_KEY_SIZE];
 
 static uint32_t api_op_next = 1u;
 static uint8_t  api_search_slot = RADIANT_SCHED_CH_NONE;
-/* A network-0 key install deferred by a live sweep chunk (see
- * antr_network_address_set()); the next pump with no carrier applies it. */
+/* Network-0 key install deferred while a sweep chunk is live; applied by
+ * the next pump with no carrier. */
 static bool     api_search_reinit_pending;
 static bool     api_inited;
 
-/*
- * Whether this build repairs single-bit CRC errors, and whether the backend
- * supports it. Resolved once by api_crc_repair_setup() at antr_init() (all
- * three conditions - Kconfig, syndrome table validity, backend CRC support -
- * are fixed for the image's life). Read in two places that must agree:
- * api_post_track_rx() asks the backend to deliver CRC failures, api_sched_rx()
- * acts on them.
- */
+/* Single-bit CRC repair on this build and backend. Resolved once in
+ * antr_init() by api_crc_repair_setup(). api_post_track_rx() asks the backend
+ * for CRC failures; api_sched_rx() acts on them. */
 static bool api_crc_repair_on;
 
-/* Whether a repaired frame is also checked against radiant_profile_sanity.c
- * before delivery. Resolved alongside api_crc_repair_on; can only be true
- * when that is, since Kconfig makes PROFILE_SANITY depend on CRC_REPAIR. */
+/* Repaired frames are also checked by radiant_profile_sanity.c. Only true
+ * when api_crc_repair_on is. */
 static bool api_profile_sanity_on;
 
 static struct radiant_api_stats api_stats;
 
 /*
- * One mutex, held across every thread-context scheduling pass. The bridge's
- * parser thread and this file's event thread both post requests and call
- * radiant_sched_tick(); without this they'd interleave inside a module built
- * for one caller at a time. Taken only in thread context, around bounded
- * arithmetic - never around a drain, never where an interrupt could want it.
- *
- * Does NOT cover a radio callback's own scheduling pass (interrupt context,
- * can't take a mutex) - that serialisation lives in radiant_sched.c, which
- * saves/restores `in_pass` and runs slot-table writes with interrupts off.
+ * Serialises thread-context scheduling passes (the parser and event threads).
+ * Thread context only, around bounded work; never around a drain. Radio-callback
+ * passes are serialised in radiant_sched.c instead (in_pass, interrupts off).
  */
 K_MUTEX_DEFINE(api_lock);
 
@@ -501,33 +351,23 @@ void radiant_sec_port_lock_check(const char *who)
 }
 #endif
 
-/* Given once per queued message (possibly from the radio ISR), and once per
- * housekeeping interval by the take's timeout. */
+/* Given once per queued message (possibly from the radio ISR), and on each housekeeping timeout. */
 static K_SEM_DEFINE(api_event_sem, 0, 1);
 
-/*
- * Created in antr_init() rather than K_THREAD_DEFINE: the drain calls
- * antr_on_message(), which must never run before antr_init() returns 0, and a
- * statically started thread would be runnable before src/main.c calls us.
- * Same shape src/ant_serial_bridge.c uses for its own thread.
- */
+/* Created in antr_init(), not K_THREAD_DEFINE: the drain calls
+ * antr_on_message(), which must not run before antr_init() returns. */
 K_THREAD_STACK_DEFINE(api_event_stack, API_EVENT_STACK_SIZE);
 static struct k_thread api_event_thread_data;
 
 static void api_event_thread(void *a, void *b, void *c);
 static void api_pump_locked(void);
 
-/*
- * The three port hooks radiant_event.c declares but deliberately leaves
- * undefined, so a build that forgets one fails at link time rather than
- * shipping a silent data race. radiant_event.c is freestanding (no Zephyr
- * header) and cannot reach any of this itself.
- */
+/* Port hooks that radiant_event.c declares but leaves undefined, so a
+ * build that omits one fails to link. */
 
 unsigned int radiant_event_crit_enter(void)
 {
-	/* irq_lock(), not a mutex: the producer may be a radio ISR and must not
-	 * block; the section is a few instructions plus one copy. */
+	/* irq_lock(), not a mutex: the producer may be a radio ISR and must not block. */
 	return irq_lock();
 }
 
@@ -537,8 +377,8 @@ void radiant_event_crit_exit(unsigned int key)
 }
 
 #if defined(CONFIG_RADIANT_SWI)
-/* Runs from the trampoline's handler at an ordinary interrupt priority, which
- * is the whole point - see the wakeup below. */
+/* Runs at ordinary interrupt priority from the trampoline, which is what
+ * makes it safe to call from the wakeup. */
 static void event_wakeup_swi(uint32_t bits)
 {
 	ARG_UNUSED(bits);
@@ -548,55 +388,28 @@ static void event_wakeup_swi(uint32_t bits)
 
 void radiant_event_wakeup(void)
 {
-	/* O(1), ISR-safe, never calls back into radiant_event. Semaphore limit
-	 * of 1 collapses a burst of arrivals into one wake, which is fine since
-	 * the drain empties the whole queue anyway. */
+	/* O(1), ISR-safe, never calls back into radiant_event. The limit-1
+	 * semaphore collapses a burst of arrivals into one wake; the drain empties
+	 * the queue anyway. */
 #if defined(CONFIG_RADIANT_SWI)
 	/*
-	 * BUG 27, AND THIS IS THE CALL THAT MATTERED.
-	 *
-	 * "ISR-safe" above is true of an ordinary ISR and false of a
-	 * zero-latency one. Under the MPSL gate this function is reached from
-	 * MPSL's timeslot signal callback -
-	 *
-	 *   SIGNAL_RADIO -> radiant_nrf_gate_on_radio_irq() -> deliver_terminal()
-	 *     -> radiant_event_post_rx() -> here
-	 *
-	 * - and MPSL connects that vector with IRQ_ZERO_LATENCY, which runs
-	 * above every irq_lock() and every kernel spinlock. The event thread
-	 * below waits on this semaphore WITH A TIMEOUT (see api_event_thread's
-	 * k_sem_take(&api_event_sem, K_MSEC(RADIANT_API_HOUSEKEEP_MS))), so
-	 * giving it wakes a thread that has a timeout pending, and that runs
-	 * z_abort_timeout() on the kernel's timeout list from a context which
-	 * cannot hold its lock. Measured: sys_dlist_remove/sys_dlist_insert bus
-	 * faults with BFAR 0, "Fault during interrupt handling", and on a build
-	 * with the SoftDevice Controller a RESET_CPU_LOCKUP reboot loop.
-	 *
-	 * Fixing the gate's own kernel calls and not this one was measured to
-	 * make the fault rate WORSE, because this is the frequent caller - one
-	 * per received packet - and the gate's are not. So the pend goes here
-	 * first. See docs/p4-coexistence-bugs.md.
+	 * Under the MPSL gate this runs from MPSL's zero-latency signal callback, above
+	 * every irq_lock(). Giving the semaphore there wakes a thread whose timeout is
+	 * pending, and the kernel's timeout list is then touched from a context that
+	 * cannot hold its lock (bus faults, reboot loops). Pending the SWI defers the
+	 * give. See docs/p4-coexistence-bugs.md.
 	 */
 	radiant_swi_pend(RADIANT_SWI_EVENT_WAKEUP);
 #else
-	/* No MPSL gate, no zero-latency vector in the path: the direct backend's
-	 * radio interrupt is an ordinary one, where this is legal and cheaper. */
+	/* Ordinary radio interrupt here, so a direct semaphore give is legal and cheaper. */
 	k_sem_give(&api_event_sem);
 #endif
 }
 
 /*
- * The fourth port hook, and the one that used to not need one at all:
- * radiant_event.c called antr_on_message() directly until radiant
- * stopped reaching outside itself for src/ant_radio.h. Now it calls
- * radiant_on_message() (radiant/include/radiant/radiant_msg.h,
- * module-owned), and this is the one-line forward onto the real thing -
- * a field-for-field copy since struct radiant_msg and struct antr_msg are
- * layout-identical by construction. src/ant_serial_bridge.c stays the single
- * definition of antr_on_message() regardless of which radio backend is
- * compiled in, which is the point: the sdk_ant and stub backends call it
- * directly, and this file is the only thing that knows the core backend
- * reaches it through an extra hop.
+ * Port hook: radiant_event.c calls radiant_on_message(), which forwards field for
+ * field to antr_on_message(). The bridge stays the single definition of
+ * antr_on_message() for every backend; the two message structs are layout-identical.
  */
 void radiant_on_message(const struct radiant_msg *msg)
 {
@@ -609,27 +422,15 @@ void radiant_on_message(const struct radiant_msg *msg)
 	antr_on_message(&m);
 }
 
-/*
- * radiant_channel.c raises events through radiant_channel_event_out();
- * radiant_event.c spells the same operation radiant_event_post_channel_event().
- * The adapter lives here since neither module knows the other's name for it.
- * event_code is an ANTW_EVENT_* wire byte either way, so no mapping is
- * needed. May run in a radio callback (search timeout, close completing), so
- * it must not block - posting to the ring doesn't.
- */
+/* Adapter between radiant_channel.c and radiant_event.c, which name the
+ * same operation differently. event_code is an ANTW_EVENT_* byte in both.
+ * May run in a radio callback, so it must not block. */
 void radiant_channel_event_out(uint8_t channel, uint8_t event_code)
 {
 #if defined(CONFIG_RADIANT_SEC_PAIRING_X25519)
-	/*
-	 * Release-on-loss-of-tracking: a channel that starts pairing and then
-	 * loses its peer produces no completion or failure event -
-	 * RX_FAIL_GO_TO_SEARCH is the only transition that fires, so it's the
-	 * only place to free a half-finished exchange. Needed now, while
-	 * pairing state is per-channel: sdk-ant serialises key exchange
-	 * device-wide, so without this hook a lost peer would deadlock
-	 * negotiation for every channel, permanently (docs/radiant-security.md
-	 * 8.1).
-	 */
+	/* A peer lost mid-pairing raises only RX_FAIL_GO_TO_SEARCH, so the
+	 * half-finished exchange is freed here. Otherwise the device-wide key
+	 * exchange would deadlock every channel (docs/radiant-security.md 8.1). */
 	if (event_code == (uint8_t)ANTW_EVENT_RX_FAIL_GO_TO_SEARCH) {
 		radiant_sec_pair_on_search(channel);
 	}
@@ -666,28 +467,11 @@ static void api_bind_accepted(uint8_t ch, enum api_slot_kind kind)
 }
 
 /*
- * A host-originated transfer (acknowledged data, a burst's START block) has
- * just taken over this channel's slot. Whatever the binding said - usually
- * the next MASTER_TX the pump or the host's broadcast write already posted -
- * no longer describes what the scheduler holds: radiant_sched_request_tx()
- * replaces a pending request silently (drop_slot(), no done() for an
- * unstarted one), and the transfer's own operation then ends in a done() that
- * the old binding would claim.
- *
- * Measured 2026-11-12: when the slave acknowledged the 0xAA, the engine
- * finished inside the RX callback, so by the time the operation's done()
- * arrived the engine was idle and the stale "unheard MASTER_TX" branch of
- * api_sched_done() counted the slot missed and advanced the clock a second
- * period - the master's next broadcast came two periods after the 0xAA, every
- * time (archive/benchmarks/2026-11-12-master-acked-power/README.md, section
- * 5). A secured slave's 0xAA takes its TRACK_RX slot the same way, and would
- * have counted a false miss and raised RX_FAIL.
- *
- * Only the kind is cleared. `op` stays, so a close that arrives during the
- * transfer still completes on the engine's terminal through
- * radiant_channel_on_terminal(op). Called under the event crit section, from
- * the submit that STARTED the transfer only - later burst blocks run on the
- * engine's own requests, which never carry a binding.
+ * A host-originated transfer has taken this channel's slot, so the binding (usually
+ * a queued MASTER_TX) no longer describes the slot. Clear only the kind: `op`
+ * stays, so a close during the transfer still completes on the engine's terminal.
+ * Otherwise the transfer's done() is taken for a missed MASTER_TX and the clock
+ * advances an extra period. Called only from the submit that starts a transfer.
  */
 static void api_xfer_superseded(uint8_t ch)
 {
@@ -741,9 +525,7 @@ static struct radiant_tx_power api_power_of(uint8_t ch)
 	return p;
 }
 
-/* radiant_transfer's return codes onto the wire, per the mapping
- * radiant_transfer.h states - implemented here, the only place holding both
- * halves. */
+/* Maps radiant_transfer return codes to wire responses (mapping per radiant_transfer.h). */
 static antr_err_t api_xfer_err(int rc)
 {
 	switch (rc) {
@@ -774,14 +556,11 @@ static enum radiant_radio_status api_done_to_status(enum radiant_sched_done why)
 		return RADIANT_RADIO_STATUS_ABORTED;
 	case RADIANT_SCHED_DONE_DENIED:
 		/*
-		 * FAILED is the only answer the consumers (transfer engine,
-		 * radiant_channel_on_terminal()) can act on: a denied ack reply
-		 * missed the peer's receive window. Inside an inbound burst the
-		 * engine still opens the next window for the peer's retry; a
-		 * denied continuation window ends the burst (RX_FAILED). (The originator's burst retry runs only
-		 * on an empty window, TIMEOUT, never on a denial.) The denial itself is not lost - api_stats.sched_denied is
-		 * incremented from `why` at the top of api_sched_done(), so this
-		 * lossy mapping is compensated exactly once, there.
+		 * FAILED: a denied ack reply missed the peer's receive window. The engine
+		 * still opens the next window inside an inbound burst; a denied continuation
+		 * ends it (RX_FAILED). The originator's burst retry runs only on TIMEOUT,
+		 * never on a denial. The denial is counted in api_stats.sched_denied from
+		 * `why` at the top of api_sched_done(), so this lossy mapping loses nothing.
 		 */
 		return RADIANT_RADIO_STATUS_FAILED;
 	case RADIANT_SCHED_DONE_MISSED:
@@ -792,27 +571,15 @@ static enum radiant_radio_status api_done_to_status(enum radiant_sched_done why)
 }
 
 /*
- * The device ID list. radiant_search.c keeps no inclusion/exclusion list of
- * its own (only "what this channel is looking for"), so antr_id_list_add()/
- * _config() are implemented here, and actually consulted rather than stored
- * and ignored, since an accepted-but-unused list is worse than a refused one.
+ * Device ID inclusion/exclusion list, enforced through cbs.permit (api_search_permit()):
+ * at steer time, and at offer time before the frame's ACQUIRE claim, so a refused
+ * device neither costs a wildcard channel nor drops this channel from the search.
+ * A stored but unused list would be worse than a refused one, so it is enforced.
  *
- * radiant_search asks it through cbs.permit (api_search_permit() below) at
- * two points: at steer time in radiant_search_begin(), so the sweep is not
- * pointed at a cached device the list excludes, and at offer time, before the
- * frame's one ACQUIRE claim is taken, so a refused device neither costs
- * another wildcard channel that frame nor takes this channel out of the
- * search. api_search_acquired() checks again as a backstop.
- *
- * Runs in the radio interrupt (offer time) and in thread context (steer
- * time): read-only, bounded by the list size.
- *
- * The list may be rewritten while the channel is open (a retail stick allows
- * it, and the Android ANT+ stack depends on it - see antr_id_list_config()),
- * so on an MPSL build this can preempt a writer from a zero-latency interrupt
- * that no lock reaches. Each field is therefore read exactly once, and the
- * writers order their stores so that any prefix of them is a list that was
- * either the old one, switched off, or the new one.
+ * Runs in the radio interrupt and in thread context: read-only and bounded. The
+ * list may be rewritten while open, so on an MPSL build a zero-latency interrupt
+ * can preempt a writer. Each field is read once, and writers order their stores so
+ * any prefix is the old list, switched off, or the new one.
  */
 static bool api_id_list_permits(uint8_t ch, const struct radiant_channel_id *id)
 {
@@ -882,19 +649,12 @@ static void api_post_rx(uint8_t ch, uint8_t msg_id,
 
 #if defined(CONFIG_RADIANT_SEC)
 /*
- * Where radiant_sec_pump() puts a packet once it is plaintext. A direct call
- * displacing a weak definition, not a registered callback: an ops struct
- * would be a .data relocation the linker can't garbage-collect, defeating the
- * zero-cost size gate; it also lets radiant_sec.c link into the unit-test app,
- * which has no radiant_api.c.
+ * Where radiant_sec_pump() delivers plaintext. A direct call that overrides a weak
+ * definition: a registered ops struct would be a .data relocation the linker
+ * cannot discard, and the unit-test app has no radiant_api.c. Event-thread context.
  *
- * Event-thread context - posting to the same ISR-safe ring the decode path
- * uses is the easy direction.
- *
- * The verdict does not reach the wire here, so the data path, its bytes and its
- * latency are the same whatever the channel asked for. It's recorded per
- * channel and reported through 0xF4, and per window through the opt-in 0xF8
- * event below.
+ * The verdict does not reach the wire, so the data path is the same whatever the
+ * channel asked for. It is reported per channel via 0xF4 and per window via 0xF8.
  */
 void radiant_sec_deliver(uint8_t ch, const uint8_t *pay, uint8_t len,
 			 enum radiant_sec_verdict verdict, uint64_t t_sync)
@@ -910,8 +670,7 @@ void radiant_sec_deliver(uint8_t ch, const uint8_t *pay, uint8_t len,
 	if (radiant_channel_id_get(ch, &id) != RADIANT_CH_OK) {
 		return;
 	}
-	/* Ingested before a close, pumped after it: the host has already been
-	 * told CHANNEL_CLOSED, and data after that is a protocol violation. */
+	/* Data after CHANNEL_CLOSED is a protocol violation, so it is dropped. */
 	if (!radiant_channel_is_open(ch)) {
 		return;
 	}
@@ -919,8 +678,7 @@ void radiant_sec_deliver(uint8_t ch, const uint8_t *pay, uint8_t len,
 	memset(&hal, 0, sizeof(hal));
 	hal.status = RADIANT_RADIO_STATUS_OK;
 	hal.t_sync = (radiant_time_t)t_sync;
-	/* Carried through the queue rather than re-read, so the host sees the
-	 * radio's ADDRESS-event capture, not when the pump got to it. */
+	/* Carried from the radio's ADDRESS-event capture, not re-read when the pump runs. */
 	hal.t_sync_exact = true;
 
 	api_post_rx(ch, (uint8_t)ANTW_MESG_BROADCAST_DATA_ID, &id, &hal, pay,
@@ -928,20 +686,13 @@ void radiant_sec_deliver(uint8_t ch, const uint8_t *pay, uint8_t len,
 }
 
 /*
- * One window's verdict, as MESG_RADIANT_SEC_VERDICT (0xF8)
- * [ch, verdict, window_start u16 LE, W, seq u16 LE] - only on a channel whose
- * 0xF1 set
- * RADIANT_SEC_SW_VERDICT_EVENT, so a host that never asked sees today's byte
- * stream. Reached only from an X_AUTH window close, so an unsecured channel
- * never gets here at all.
- *
- * Event-thread context under api_lock, inside the pump, like
- * radiant_sec_deliver(): it posts to the same ring and never calls the bridge
- * directly, which is what keeps the event behind the data it judges (the
- * module calls this after delivering that data) and keeps the bridge outside
- * api_lock. A full ring drops it like any data message: counted
- * (verdict_events_dropped), and seen by the host as a gap in `seq`, which
- * makes it treat every packet it still holds as unverified.
+ * One window's verdict, MESG_RADIANT_SEC_VERDICT (0xF8):
+ * [ch, verdict, window_start u16 LE, W, seq u16 LE]. Sent only when the channel set
+ * RADIANT_SEC_SW_VERDICT_EVENT in 0xF1, and only from an X_AUTH window close.
+ * Event-thread context under api_lock. It posts to the same ring as the data, so
+ * it stays behind the data it judges. A full ring drops it (counted in
+ * verdict_events_dropped); the host sees the gap as a hole in seq and treats
+ * unverified packets as such.
  */
 void radiant_sec_window_verdict(uint8_t ch, uint16_t window_start,
 				enum radiant_sec_verdict verdict, uint8_t w,
@@ -952,8 +703,7 @@ void radiant_sec_window_verdict(uint8_t ch, uint16_t window_start,
 	if ((switches & RADIANT_SEC_SW_VERDICT_EVENT) == 0u) {
 		return;
 	}
-	/* Same rule as the data: nothing for a channel the host was already
-	 * told is closed. */
+	/* As for data: nothing after CHANNEL_CLOSED. */
 	if (!api_ch_valid(ch) || !radiant_channel_is_open(ch)) {
 		return;
 	}
@@ -974,10 +724,8 @@ void radiant_sec_window_verdict(uint8_t ch, uint16_t window_start,
 #endif /* CONFIG_RADIANT_SEC */
 
 /*
- * The transfer engine's calls back into us. All three may run in radio
- * interrupt context - the engine re-arms from inside its own completion
- * callbacks (1.55 ms turnaround leaves no other path) - so posting to the
- * event ring, ISR-safe, is the right shape here too.
+ * Transfer-engine callbacks. They may run in radio interrupt context (the engine
+ * re-arms from its own completions), so each one only posts to the ISR-safe event ring.
  */
 
 static void api_xfer_done(void *ctx, const struct radiant_transfer_result *r)
@@ -1002,11 +750,9 @@ static void api_xfer_done(void *ctx, const struct radiant_transfer_result *r)
 	}
 
 	/*
-	 * The buffer-ownership contract, B1-B5: the bridge holds one 24-byte
-	 * block behind a binary semaphore, released only here. Miss
-	 * NEXT_DATA_BLOCK once and a burst stalls 1000 ms per packet instead of
-	 * breaking outright. The engine guarantees exactly one done() per block
-	 * pointer; this just translates it.
+	 * Buffer contract: the bridge holds one 24-byte block behind a binary semaphore,
+	 * released only here. A missed NEXT_DATA_BLOCK stalls a burst 1000 ms per packet.
+	 * The engine guarantees one done() per block.
 	 */
 	switch (r->ev) {
 	case RADIANT_TRANSFER_EV_NEXT_BLOCK:
@@ -1041,34 +787,26 @@ static void api_xfer_rx_data(void *ctx, const uint8_t *payload, uint8_t len,
 		return;
 	}
 
-	/* 0 only on a transfer's first packet, then 1,2,3,1,2,3... - the rule
-	 * the bridge's own TX side (handle_burst) decodes. */
+	/* 0 on a transfer's first packet, then 1,2,3,1,2,3..., as handle_burst() decodes. */
 	seq = api_ch[ch].in_pkts;
 
-	/* One packet ending LAST is acknowledged data; anything longer is a
-	 * burst - the air can't tell them apart (Spike B part 2), so the
-	 * distinction is made here. */
+	/* One packet ending LAST is acknowledged data; longer runs are bursts.
+	 * The air cannot tell them apart, so it is decided here. */
 	if (last && api_ch[ch].in_pkts == 0u) {
 		msg_id = (uint8_t)ANTW_MESG_ACKNOWLEDGED_DATA_ID;
 	} else {
 		msg_id = (uint8_t)ANTW_MESG_BURST_DATA_ID;
 	}
 
-	/* Wraps 3 -> 1, never back to 0: a count would relabel packet 5 as a
-	 * new transfer, and a uint8_t count wraps to 0 at packet 257, which
-	 * labelled a LAST there as acknowledged data. */
+	/* Wraps 3 -> 1, never to 0: 0 means a new transfer, so a wrapped
+	 * counter would mislabel a LAST. */
 	api_ch[ch].in_pkts = last ? 0u : (uint8_t)((seq == 3u) ? 1u : (seq + 1u));
-	/* Abandoned-burst watchdog clock - covers the burst whose LAST never
-	 * arrives. See api_watchdogs_locked(). */
+	/* Feeds the abandoned-burst watchdog (api_watchdogs_locked()). */
 	api_ch[ch].in_last = radiant_radio_now();
 	api_ch[ch].in_last_valid = true;
 
-	/*
-	 * radiant_transfer_ops::rx_data carries no clock reading, so the HAL
-	 * event is synthesised with t_sync_exact false - which suppresses the
-	 * 0xE0 timestamp field rather than reporting a thread-context reading
-	 * as a radio-clock one.
-	 */
+	/* rx_data carries no clock reading, so t_sync_exact is false and the
+	 * 0xE0 timestamp is suppressed rather than faking a radio time. */
 	memset(&hal, 0, sizeof(hal));
 	hal.status = RADIANT_RADIO_STATUS_OK;
 	hal.t_sync = radiant_radio_now();
@@ -1086,49 +824,21 @@ static bool api_xfer_broadcast(void *ctx, uint8_t out[RADIANT_TRANSFER_PKT_BYTES
 	}
 
 	/*
-	 * AN UNWRITTEN BUFFER IS NOT A REASON TO REFUSE, and treating it as one
-	 * meant A SLAVE COULD NEVER ACKNOWLEDGE ANYTHING.
-	 *
-	 * The rule this enforced - "every acknowledgement ever captured carried
-	 * the acknowledger's own broadcast buffer" - is a statement about
-	 * CONTENT, and it is still obeyed below: the buffer is what goes out.
-	 * What was wrong was reading it as a precondition. api_ch[].bcast is
-	 * zeroed at init and at unassign, so an unwritten buffer is a valid
-	 * eight zero bytes, not an absence.
-	 *
-	 * The consequence of refusing was total and silent, and it is the
-	 * second half of why apps/treadmill's control loop never worked:
-	 *
-	 *   - a SLAVE has no reason to ever hold a broadcast buffer. No host
-	 *     writes broadcast data to a channel it opened to listen on, so
-	 *     bcast_valid was false for the whole life of the channel, so
-	 *     radiant_transfer_on_data() got ESTATE, so the slave never
-	 *     acknowledged, AND never passed the data up either (the refusal
-	 *     returns before ops->rx_data). The host saw nothing at all.
-	 *   - a MASTER was refused until its host had written a page, so an
-	 *     acknowledged command arriving before the first broadcast was
-	 *     dropped the same way.
-	 *
-	 * Measured 2026-08-17: a slave with a broadcast staged by hand
-	 * acknowledged normally and reported every packet; the identical slave
-	 * without one reported zero, with the master 150 of whose broadcasts it
-	 * was receiving perfectly. api_post_master_tx() already transmits an
-	 * unwritten buffer as zeros for the mirror-image reason (a master that
-	 * will not transmit until written deadlocks every host library), so
-	 * refusing here was also the odd one out.
+	 * An unwritten broadcast buffer is valid: it reads as eight zero bytes. Refusing
+	 * it meant a slave could never acknowledge anything, since no host writes
+	 * broadcast data to a listen-only channel. The engine then returned ESTATE and
+	 * dropped every acknowledged packet silently. The acknowledgement still carries
+	 * the channel's own buffer, whatever it holds (api_post_master_tx() sends zeros
+	 * for the same reason).
 	 */
 	if (!api_ch[ch].bcast_valid) {
 		api_stats.acks_from_unwritten_buffer++;
 	}
 
 #if defined(CONFIG_RADIANT_SEC)
-	/*
-	 * The plaintext leak, fixed in two lines: this used to memcpy the
-	 * host's plaintext onto the air as the ack payload, which under X_CONF
-	 * hands a listener the plaintext of ciphertext it just heard. The
-	 * ciphertext already built for the current counter is free and correct:
-	 * same nonce, same plaintext, identical ciphertext, no reuse.
-	 */
+	/* Secured channel: ack with the ciphertext already built for this
+	 * counter. Same nonce and plaintext, so no nonce reuse, and never the
+	 * host's plaintext. */
 	if (radiant_sec_channel_is_secured(ch) && api_ch[ch].sec_pay_valid) {
 		memcpy(out, api_ch[ch].sec_pay, RADIANT_TRANSFER_PKT_BYTES);
 		return true;
@@ -1141,12 +851,9 @@ static bool api_xfer_broadcast(void *ctx, uint8_t out[RADIANT_TRANSFER_PKT_BYTES
 
 #if defined(CONFIG_RADIANT_ACK_FAULTS)
 /*
- * The ACK fault instrument's forwarding (CONFIG_RADIANT_ACK_FAULTS; test
- * images only). Kept out of api_ch[] on purpose: that is cleared at unassign
- * and api_xfer[] at open, and a hook the application registered once must
- * survive both. Two plain stores from thread context against a read in the
- * radio ISR - the hook is set before the channel opens, which is the rule
- * antr_reply_plan_hook_set() documents.
+ * ACK fault instrument forwarding (CONFIG_RADIANT_ACK_FAULTS, test images only).
+ * Kept out of api_ch[], which is cleared on unassign, so the hook survives it.
+ * Set before the channel opens (see antr_reply_plan_hook_set()).
  */
 BUILD_ASSERT((int)ANTR_REPLY_ACK == (int)RADIANT_REPLY_ACK &&
 	     (int)ANTR_REPLY_MUTE == (int)RADIANT_REPLY_MUTE &&
@@ -1206,8 +913,7 @@ antr_err_t antr_reply_stats_get(uint8_t channel, struct antr_reply_stats *out)
 
 static radiant_time_t api_xfer_t_sync_for(uint8_t ch);
 
-/* Where a slave's burst packet 0 is retried: the master's next reply window,
- * the same projection the first attempt used (radiant_transfer_ops). */
+/* Retry point for a slave's burst packet 0: the master's next reply window. */
 static radiant_time_t api_xfer_retry_t_sync(void *ctx)
 {
 	uint8_t ch = (uint8_t)(uintptr_t)ctx;
@@ -1219,11 +925,9 @@ static radiant_time_t api_xfer_retry_t_sync(void *ctx)
 }
 
 /*
- * An inbound burst the host has seen part of will never finish: tell it
- * (EVENT_TRANSFER_RX_FAILED, 0x04) and start the next inbound message from
- * sequence 0, so a later acknowledged message is labelled as one. Every
- * path that ends an unfinished inbound burst comes here: the engine's own
- * end (api_xfer_rx_failed()), close, the drop to search, and the
+ * Ends an unfinished inbound burst: EVENT_TRANSFER_RX_FAILED (0x04) to the host, and
+ * numbering restarts at 0 so a later acknowledged message is labelled as such. Every
+ * path that ends a burst comes here: engine end, close, drop to search, and the
  * abandoned-burst watchdog. Radio interrupt or thread context; O(1).
  */
 static void api_inbound_failed(uint8_t ch)
@@ -1247,18 +951,11 @@ static void api_xfer_rx_failed(void *ctx)
 }
 
 /*
- * The engine ended an inbound burst and is IDLE again. For the whole burst the
- * channel posted no tracked work (the pump and the terminal re-post both skip
- * a busy engine), so it is owed its next window or slot now, from this same
- * terminal - not from the 50 ms pump.
- *
- * And its slot clock may be stale: a burst longer than a period went by
- * without a slot heard or sent, and the continuation packets deliberately
- * never re-anchor it (a slave that did walked its clock by the burst length,
- * the same fault the master grid walk had). Step it past the instants that
- * are already gone, on its own grid, charging nothing - posting them would
- * have counted a miss for each and sent a slave to search after a burst of
- * eight periods, with its master transmitting the whole time.
+ * The engine is idle after an inbound burst. The channel was owed no tracked work
+ * during the burst (the pump skips a busy engine), so its next window is armed now,
+ * from this terminal. Its slot clock may be stale, since continuation packets never
+ * re-anchor it. Step it past the instants already gone, charging nothing: posting
+ * them would count a miss for each and could send the slave to search.
  */
 static void api_xfer_inbound_ended(void *ctx)
 {
@@ -1273,9 +970,9 @@ static void api_xfer_inbound_ended(void *ctx)
 		   (radiant_time_t)radiant_channel_guard_us(ch) +
 		   (radiant_time_t)((caps != NULL) ? caps->min_arm_lead_us : 0u);
 	radiant_channel_catch_up(ch, earliest);
-	/* Stepping over periods widens the guard, which opens the window
-	 * earlier than the instant just checked: check again with the wide
-	 * guard, so the first window after the burst is still reachable. */
+	/* Stepping widens the guard, which can open the window before the
+	 * instant just checked. Recheck with the wide guard so the first window
+	 * after the burst stays reachable. */
 	earliest = radiant_radio_now() +
 		   (radiant_time_t)radiant_channel_guard_us(ch) +
 		   (radiant_time_t)((caps != NULL) ? caps->min_arm_lead_us : 0u);
@@ -1295,9 +992,9 @@ static const struct radiant_transfer_ops api_xfer_ops = {
 #endif
 };
 
-/* Configure one channel's engine. Deferred to open, not assign: the engine
- * reads the channel ID, the network address, the RF index and the power at
- * init, and none of them is settled until the host has finished configuring. */
+/* Configures one channel's engine at open, not assign: it reads the ID,
+ * network address, RF index and power at init, and the host may still be
+ * setting them. */
 static int api_xfer_setup(uint8_t ch)
 {
 	struct radiant_transfer_cfg cfg;
@@ -1312,14 +1009,13 @@ static int api_xfer_setup(uint8_t ch)
 	memcpy(cfg.net_addr, api_net_addr_for(ch), RADIANT_NET_ADDR_LEN);
 	cfg.rf_index = api_rf_of(ch);
 	cfg.power = api_power_of(ch);
-	/* No safe default for the slot bit: wrong either way (0x82 vs 0x8A, or
-	 * claiming a slot not owned) and invisible without a sniffer. Channel
-	 * type decides it. */
+	/* No safe default for the slot bit (0x82 vs 0x8A): wrong either way and
+	 * invisible without a sniffer. Channel type decides it. */
 	cfg.slot_opener = radiant_channel_is_master(ch);
 	cfg.rx_only = radiant_channel_type_get(ch) ==
 		      (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY;
 	cfg.channel = ch;
-	/* Kconfig's 0 is "no repeats"; the engine's 0 is "its default". */
+	/* Kconfig's 0 means no repeats; the engine's 0 means its default. */
 	cfg.in_ack_repeats = (CONFIG_RADIANT_INBOUND_ACK_REPEATS == 0) ?
 				     (uint8_t)RADIANT_TRANSFER_IN_ACK_REPEATS_NONE :
 				     (uint8_t)CONFIG_RADIANT_INBOUND_ACK_REPEATS;
@@ -1329,8 +1025,8 @@ static int api_xfer_setup(uint8_t ch)
 	return radiant_transfer_init(&api_xfer[ch], &cfg);
 }
 
-/* Acquisition resolves wildcards after open() copied the configured ID.
- * Update only an idle engine; never discard an owned burst block. */
+/* Acquisition resolves wildcards after open() copied the ID. Refresh only
+ * an idle engine, and never discard an owned burst block. */
 static void api_xfer_refresh_id(uint8_t ch)
 {
 	struct radiant_channel_id id;
@@ -1351,19 +1047,14 @@ static void api_xfer_refresh_id(uint8_t ch)
 	}
 }
 
-/* The master's frame has opened this slave's reply slot: send the pending
- * command now, from the frame, not from the window's terminal. A merged window
- * runs on to the union's close plus delivery delay, which can leave less than
- * an arm lead before sync + SLOT_REPLY_US. Posting replaces the channel's
- * in-flight request, so the scheduler aborts the window here, exactly as the
- * transfer engine's own ACK reply does from this callback; the transmit's
- * completion then retires the receive's op token. Radio interrupt context.
+/* Sends the pending command from the master's frame that opens this slave's reply
+ * slot, not from the window's terminal (a merged window can leave less than an arm
+ * lead before the slot). Posting aborts the window, as the engine's own ACK reply
+ * does; the transmit's completion retires the receive's op token. Radio interrupt context.
  *
- * Never on a secured channel: its MAC verdict lags the frame by a window, so
- * no opener is authenticated in time, and a clear page there carries no
- * authenticity at all. antr_acknowledge_message_tx() keeps a secured channel
- * off this path; the check here covers a channel secured after acceptance,
- * whose command the watchdog then fails. */
+ * Never on a secured channel: its MAC verdict lags a window, so the opener is not
+ * authenticated in time. antr_acknowledge_message_tx() keeps secured channels off
+ * this path; the check here covers a channel secured after acceptance. */
 static void api_ack_pending_send(uint8_t ch, radiant_time_t t_sync)
 {
 	struct api_chan *c = &api_ch[ch];
@@ -1386,24 +1077,12 @@ static void api_ack_pending_send(uint8_t ch, radiant_time_t t_sync)
 }
 
 /*
- * A slave's broadcast back to its master. Before this, antr_broadcast_message_
- * tx() returned success on a slave and nothing was ever transmitted: the pump
- * only posts receive windows for a slave.
- *
- * Measured 2026-11-11 from a Garmin USB-m slave
- * (archive/captures/radio/2026-11-11-slave-broadcast-garmin.log): control
- * byte 0x02 (RADIANT_CTRL_SLAVE_BROADCAST), +2176..+2215 us after the master's
- * frame - RADIANT_TRANSFER_SLOT_REPLY_US, the reply window acknowledged data
- * already uses - and each host write went out exactly once, on the next slot.
- *
- * Called from the receive callback of a master frame, like
- * api_ack_pending_send(), which takes priority. Bidirectional slaves only: an
- * RX-only slave never transmits, and a secured channel keeps the write
- * pending (its transform path is a master's). The tracked window's follow-on
- * reserve (API_FOLLOW_ON_TRACK_US) already covers the reply. A post the
- * scheduler refuses leaves bcast_pending set, so the next master frame tries
- * again. The completion is api_sched_tx(): EVENT_TX, bcast_pending cleared,
- * the slot clock left alone, tracking re-posted.
+ * Slave broadcast to the master: control byte 0x02 (RADIANT_CTRL_SLAVE_BROADCAST),
+ * sent RADIANT_TRANSFER_SLOT_REPLY_US after the master frame, once per host write
+ * (as a Garmin USB-m slave does). Called from a master frame's receive callback,
+ * after api_ack_pending_send(), which takes priority. Bidirectional slaves only; a
+ * secured channel keeps the write pending. A refused post leaves bcast_pending set,
+ * so the next master frame retries. Completion is api_sched_tx().
  */
 static void api_post_slave_bcast(uint8_t ch, radiant_time_t t_sync)
 {
@@ -1431,8 +1110,8 @@ static void api_post_slave_bcast(uint8_t ch, radiant_time_t t_sync)
 	api_ch[ch].bcast_gen_tx = api_ch[ch].bcast_gen;
 	radiant_event_crit_exit(key);
 
-	/* All flags clear: 0x02. radiant_frame_make() refuses it unless it is
-	 * in the captured table, which it now is. */
+	/* 0x02, all flags clear: radiant_frame_make() refuses control bytes
+	 * outside the captured table, and this one is in it. */
 	memset(&fields, 0, sizeof(fields));
 	if (radiant_frame_make(&f, &id, &fields, pay,
 			       RADIANT_FRAME_PAYLOAD_STD) != RADIANT_FRAME_OK ||
@@ -1461,9 +1140,9 @@ static void api_post_slave_bcast(uint8_t ch, radiant_time_t t_sync)
 	}
 }
 
-/* End an accepted, never-sent slave command with its one terminal event.
- * Every path that takes the channel off the air must come through here before
- * CHANNEL_CLOSED, or unassign wipes the command without an outcome. */
+/* Ends an accepted command that was never sent, with its one terminal
+ * event. Every path that takes the channel off air must come here before
+ * CHANNEL_CLOSED, or unassign drops the command with no outcome. */
 static void api_ack_pending_fail(uint8_t ch)
 {
 	unsigned int key = radiant_event_crit_enter();
@@ -1485,11 +1164,10 @@ static void api_search_cfg_build(struct radiant_search_cfg *cfg)
 	radiant_search_cfg_default(cfg);
 	uint8_t net = 0u;
 
-	/* The sweep runs on network 0's address, where nearly every host puts
-	 * the ANT+ key; copied rather than assumed. A host that installed the
-	 * key only on another network gets the lowest such network instead of
-	 * a sweep on the all-zero address that hears nothing. With no key
-	 * anywhere it stays on network 0, as it always did. */
+	/* Sweep on network 0's address, where nearly every host installs the
+	 * ANT+ key. If only another network has a key, sweep the lowest such
+	 * network instead of the all-zero address. With no key anywhere it stays
+	 * on network 0. */
 	if (!api_net_valid[0]) {
 		for (uint8_t n = 1u; n < API_NETWORKS; n++) {
 			if (api_net_valid[n]) {
@@ -1511,10 +1189,9 @@ uint32_t radiant_search_sets_uncovered_get(void)
 #endif
 
 #if defined(CONFIG_RADIANT_SEARCH_PHASE_DIAG)
-/* ADR 0018's bench diagnostic for tools/ant_disc_phase.py. Filled from the
- * radio interrupt, drained and logged from api_housekeep(). Phase is against
- * channel 0's tracked slot at the fixed heart-rate period; the harness
- * calibrates its host measurement against these. */
+/* ADR 0018 bench diagnostic for tools/ant_disc_phase.py: each frame's
+ * phase against channel 0's tracked slot (heart-rate period). Filled in the
+ * radio interrupt, logged from api_housekeep(). */
 #define PHASE_DIAG_PERIOD_US 246277u
 #define PHASE_DIAG_RING      32u
 #define PHASE_DIAG_BIN_US    10000u
@@ -1568,9 +1245,8 @@ void radiant_search_phase_diag_frame(const struct radiant_channel_id *id,
 	phase_diag_wr++;
 }
 
-/* Tally a scan chunk that ended: which 10 ms bins of the period it listened
- * through, whether it ran out or was displaced. Called before
- * radiant_search_on_done(), which clears the bounds this reads. */
+/* Tallies a finished scan chunk into 10 ms bins of the period. Call before
+ * radiant_search_on_done() clears the bounds. */
 static void phase_diag_chunk(enum radiant_sched_done why, radiant_time_t now)
 {
 	radiant_time_t o = api_search.t_open;
@@ -1643,24 +1319,15 @@ static void api_search_acquired(uint8_t channel,
 		return;
 	}
 
-	/* A BACKSTOP, not the gate: api_search_permit() already turned this
-	 * device down before radiant_search offered it, which is where a
-	 * refusal costs nothing. Reaching here with a refused device means the
-	 * permit wiring was lost; the channel has already left the search, so
-	 * this can only drop the frame. Offer-time refusals are counted in
-	 * radiant_search's stats.permit_rejected, not here. */
+	/* Backstop only: api_search_permit() refuses the device before it is
+	 * offered. Reaching here means that wiring was lost; the frame is dropped. */
 	if (!api_id_list_permits(channel, &r->id)) {
 		api_stats.id_list_rejects++;
 		return;
 	}
 
-	/*
-	 * SCAN mode never leaves - the point of a background scan. Converting
-	 * to tracking unconditionally here (as this used to do) ended the
-	 * search on the first device answered, since radiant_channel_on_acquired()
-	 * always moves the channel to TRACKING and the state check below then
-	 * treats that as done. Query the mode before anything below changes it.
-	 */
+	/* A scan never leaves its search. Query the mode before anything below
+	 * changes the channel state. */
 	is_scan = radiant_search_chan_mode(&api_search, channel) ==
 		  RADIANT_SEARCH_MODE_SCAN;
 
@@ -1670,12 +1337,9 @@ static void api_search_acquired(uint8_t channel,
 		api_stats.acquired++;
 	}
 
-	/*
-	 * ANT delivers the first broadcast with the channel ID on acquisition,
-	 * so the acquiring frame goes to the host here rather than wasting a
-	 * period asking again. The HAL event is synthesised from the search
-	 * result, which carries the decoded frame and timing but not the event.
-	 */
+	/* The acquiring frame is the first broadcast, so it goes to the host now
+	 * rather than a period later. The HAL event is built from the search
+	 * result. */
 	memset(&hal, 0, sizeof(hal));
 	hal.status = RADIANT_RADIO_STATUS_OK;
 	hal.t_sync = r->t_sync;
@@ -1686,30 +1350,23 @@ static void api_search_acquired(uint8_t channel,
 	api_post_rx(channel, (uint8_t)ANTW_MESG_BROADCAST_DATA_ID, &r->id, &hal,
 		    r->frame.payload, r->frame.payload_len, 0u, false);
 
-	/* ACQUIRE leaves the search and joins the tracked set. Scan mode never
-	 * leaves - is_scan skipped the state change above, so this stays
-	 * SEARCHING and radiant_search_end() is not called. */
+	/* ACQUIRE leaves the search; a scan stays SEARCHING, so radiant_search_end() is skipped. */
 	if (radiant_channel_state_get(channel) == RADIANT_CH_STATE_TRACKING) {
 		(void)radiant_search_end(&api_search, channel);
 	}
 }
 
-/*
- * Search timeout is owned by radiant_channel.c, not here: it has the
- * high/low-priority tick semantics the serial protocol defines and must raise
- * RX_SEARCH_TIMEOUT then CHANNEL_CLOSED in order. So every radiant_search_begin()
- * below passes RADIANT_SEARCH_TIMEOUT_NONE and this callback never fires - it's
- * registered anyway so a NULL entry doesn't hide whether it was wired up.
- */
+/* Search timeout is raised by radiant_channel.c, which orders
+ * RX_SEARCH_TIMEOUT before CHANNEL_CLOSED. Callers pass
+ * RADIANT_SEARCH_TIMEOUT_NONE, so this never fires. */
 static void api_search_timeout(uint8_t channel, void *user)
 {
 	(void)channel;
 	(void)user;
 }
 
-/* May this channel acquire this device? The device ID list, asked by
- * radiant_search before it spends anything on the answer. Radio interrupt or
- * thread; see api_id_list_permits(). */
+/* May this channel acquire this device? Asked by radiant_search before it
+ * spends anything on the answer. See api_id_list_permits(). */
 static bool api_search_permit(uint8_t channel, const struct radiant_channel_id *id,
 			      void *user)
 {
@@ -1758,16 +1415,10 @@ static void api_search_begin(uint8_t ch, radiant_time_t now)
 		       : RADIANT_SEARCH_MODE_ACQUIRE;
 
 	/*
-	 * A channel on a KEYED network declares its frequency: the sweep follows
-	 * it, and the channel is only offered devices heard there. A channel on a
-	 * keyless network declares nothing. The sweep hears only the ANT+
-	 * address, so a keyless channel's own RF says nothing about where ANT+
-	 * devices are: Zwift's keyless background scans sit on RF 71 (network 2)
-	 * and RF 53 (network 1) and rely on the sweep staying on 57 and handing
-	 * them what it hears there (RF 71: captures/zwift-20261018; RF 53:
-	 * captures/zwift-20260818 and -20260820). Declared, they
-	 * would drag the sweep to a frequency with no ANT+ devices on it and
-	 * refuse every frame heard on 57.
+	 * A channel on a keyed network declares its RF, and the sweep follows it. A
+	 * keyless channel declares nothing: the sweep hears only the ANT+ address, so
+	 * its RF says nothing about where ANT+ devices are. Declaring it would drag
+	 * the sweep off the frequency they are on.
 	 */
 	if (api_net_keyed(ch)) {
 		(void)radiant_search_begin_rf(&api_search, ch, mode, &want, now,
@@ -1785,17 +1436,10 @@ static void api_search_begin(uint8_t ch, radiant_time_t now)
  */
 
 /*
- * True while a radiant_sched_*() call that may invoke done() synchronously is
- * in progress. A refused arm completes inline, and posting the next request
- * from a completion is normally the intended low-jitter path - but against a
- * backend refusing every arm the two together are unbounded recursion:
- * post -> arm -> refused -> done() -> post -> ... api_search_slot can't guard
- * this itself since api_sched_done() clears it before the recursion.
- *
- * Found on the bench: opening one wildcard channel wedged the firmware on
- * both the nrf backend (every arm ETIME) and the null backend (every arm
- * ENOTSUP), stack walked to within 648 B of PSPLIM. A refused arm must leave
- * the retry to the next (rate-limited) pump.
+ * True while a radiant_sched_*() call that may complete synchronously is in
+ * progress. A refused arm completes inline, so posting from that completion would
+ * recurse without bound against a backend that refuses every arm. A refused arm
+ * leaves the retry to the next (rate-limited) pump.
  */
 static bool api_arming;
 static void api_post_search_window(radiant_time_t now)
@@ -1810,23 +1454,17 @@ static void api_post_search_window(radiant_time_t now)
 		return;
 	}
 
-	/* One sweep at a time - radiant_search.c holds exactly one window in
-	 * flight, which is what makes its filters[] pointer safe to hand
-	 * straight to the HAL. */
+	/* One sweep at a time: radiant_search.c holds one window in flight,
+	 * which keeps its filters[] pointer valid for the HAL. */
 	if (api_search_slot != RADIANT_SCHED_CH_NONE) {
 		return;
 	}
 
 	/*
-	 * One sweep serves every searching channel - the difference between
-	 * eight simultaneous searches taking ~8 s and ~64 s. The sweep rides a
-	 * searching channel's slot; any one will do, but it must actually be
-	 * free. Stopping at the first searching channel and giving up if its
-	 * slot was merely pending (busy for reasons unrelated to the sweep)
-	 * used to stall the whole sweep - skip a busy one and keep looking.
+	 * One sweep serves every searching channel, riding the first one whose slot is
+	 * free: a busy slot is skipped, not waited on. any_searching lets the 0xF6
+	 * SWEEP_BUSY note tell "none searching" from "one searching but busy".
 	 */
-	/* Read below by the 0xF6 health reply's SWEEP_BUSY note, which has to
-	 * tell "no channel is searching" from "one is and its slot is busy". */
 	bool any_searching = false;
 
 	for (ch = 0u; ch < API_CHANNELS; ch++) {
@@ -1839,9 +1477,8 @@ static void api_post_search_window(radiant_time_t now)
 		}
 	}
 	if (ch >= API_CHANNELS) {
-		/* Only the BUSY half. The idle half climbs forever on a dongle
-		 * with nothing open and would saturate the reply in about half
-		 * an hour - see ANT_HEALTH_SWEEP_BUSY. */
+		/* Only the BUSY half is noted: the idle half would climb forever and
+		 * saturate the reply. See ANT_HEALTH_SWEEP_BUSY. */
 		if (any_searching) {
 			ant_health_note(ANT_HEALTH_SWEEP_BUSY);
 		}
@@ -1855,35 +1492,14 @@ static void api_post_search_window(radiant_time_t now)
 	}
 
 	/*
-	 * The sweep is posted as a background scan (t_close = RADIANT_TIME_NEVER,
-	 * radiant_sched.c's continuous form), not a bounded window - this is the
-	 * fix for tracked-channel loss.
+	 * The sweep is a continuous background scan (t_close = RADIANT_TIME_NEVER), not
+	 * a bounded window. A bounded window holds the radio for its whole dwell, so a
+	 * tracked slave's window inside it is never armed and expires MISSED. The scan
+	 * is capped by the scheduler's limit and pauses for later bounded requests.
+	 * Do not compute a shorter limit here: a refused bounded post is a lost pass,
+	 * while a declined scan chunk is free and reconsidered next pass.
 	 *
-	 * A bounded sweep window always won arm_next()'s "whatever starts
-	 * first" and then held the radio for its whole dwell (arm_next() only
-	 * truncates a bounded RX for a TX, never for another RX), so a tracked
-	 * slave's window fell inside it, was never armed, and expired MISSED -
-	 * neither want_preempt() nor could_join_armed() could rescue it (the
-	 * fmt mismatch blocks merging). Measured against a -25 dBm master:
-	 * 0.02% loss tracking alone, 5.96% with a sweep also running, RX_FAIL
-	 * x693 in a 60 s eight-channel session.
-	 *
-	 * The continuous form fixes it because arm_next() already caps a scan
-	 * at s_limit = t_back(committed, lead) and want_preempt()/abort_armed()
-	 * let a later bounded request displace a running chunk without
-	 * consuming it, so the scan pauses and resumes in the gaps.
-	 *
-	 * Tried and rejected: computing the limit here from the earliest
-	 * tracked slot. Fixed the loss (RX_FAIL 590->115) but starved the
-	 * sweep - the earliest slot is nearly always imminent, so almost every
-	 * post was refused as too short and no device was found in 90 s. A
-	 * refused bounded post is a lost pass; a chunk the scheduler declines
-	 * to arm is free and reconsidered next pass. Only the scheduler can see
-	 * the transmits, so only it can make that call.
-	 *
-	 * chunk_us is the dwell still owed to the current SET (a ceiling, not a
-	 * period) - the gap is usually the real limit, and passing the whole
-	 * dwell keeps an idle dongle arming one full-period window as before.
+	 * chunk_us is the dwell still owed to the current set: a ceiling, not a period.
 	 */
 	memset(&req, 0, sizeof(req));
 	req.fmt = w.fmt;
@@ -1894,9 +1510,8 @@ static void api_post_search_window(radiant_time_t now)
 	req.t_close = RADIANT_TIME_NEVER;
 	req.chunk_us = (uint32_t)(w.t_close - w.t_open);
 	req.report_crc_fail = (w.flags & RADIANT_RX_REPORT_CRC_FAIL) != 0u;
-	/* Never RADIANT_RX_STOP_ON_FIRST on a search window: the HAL forbids it on
-	 * anything carrying more than one filter, and several masters may
-	 * transmit inside one dwell. */
+	/* Never STOP_ON_FIRST here: the HAL forbids it with more than one
+	 * filter, and several masters may transmit in one dwell. */
 	req.stop_on_first = false;
 
 	if (radiant_sched_request_rx(ch, &req) != RADIANT_RADIO_OK_RC) {
@@ -1906,54 +1521,44 @@ static void api_post_search_window(radiant_time_t now)
 
 	api_search_slot = ch;
 	api_bind_accepted(ch, API_SLOT_SEARCH);
-	/* radiant_search_armed() is NOT called here: a scan's chunk bounds are
-	 * decided by the scheduler from work this layer can't see, so crediting
-	 * dwell here would be a guess. api_sched_armed() does it instead, once
-	 * per chunk, with the shape actually granted. */
+	/* Not radiant_search_armed() here: the scheduler decides the chunk
+	 * bounds, so api_sched_armed() credits the dwell once per granted chunk. */
 }
 
 /*
- * The follow-on reserve: how much air an arbitrated backend must hold past an
- * operation's end for the reply the core may arm from its completion. See
- * struct radiant_rx_req::follow_on_us. Zero cost on a backend that owns the
- * radio outright.
- *
- * Derived here, the only file holding both radiant_transfer.h's turnaround
- * constants and radiant_sched.h's slot kinds - the backend can't compute it
- * without reading ANT semantics out of a format pointer, which
- * radiant_radio_hal.h forbids.
+ * Follow-on reserve: air an arbitrated backend must hold past an operation's end
+ * for the reply the core may arm from its completion (struct radiant_rx_req::
+ * follow_on_us). Zero cost on a backend that owns the radio outright. Derived
+ * here, the only file holding both the transfer turnaround constants and the slot kinds.
  */
 
 /*
- * One ANT+ frame on the air at 1 Mbit/s: 1 preamble + 5 address + 10 body +
- * 2 CRC = 18 B = 144 us, rounded up to 150. A compile-time budget rather than
- * radiant_frame_airtime_us() (exact but a function), needed for the
- * BUILD_ASSERT below; rounding errs toward over-reserving.
+ * One ANT+ frame at 1 Mbit/s: 1 preamble + 5 address + 10 body + 2 CRC = 18 B =
+ * 144 us, rounded up to 150. A compile-time budget for the BUILD_ASSERTs below;
+ * rounding errs toward over-reserving.
  */
 #define API_FRAME_AIRTIME_US 150u
 
 /*
- * A command can arrive after this RX is armed. Reserve the entire possible
- * slave data/ACK exchange even before one is queued; an empty window gives
- * the unused air back. This is a grant budget, not a wider receive window.
+ * A command can arrive after this RX is armed, so reserve the whole possible slave
+ * data and ACK exchange up front. An empty window returns the unused air. This is
+ * a grant budget, not a wider receive window.
  */
 #define API_FOLLOW_ON_TRACK_US (RADIANT_TRANSFER_SLOT_REPLY_US + \
 	RADIANT_TRANSFER_REPLY_US + RADIANT_TRANSFER_ACK_GUARD_US + API_FRAME_AIRTIME_US)
 
-/* Separate budgets: MERGE_SPAN caps the receive union, not the grant's
- * follow-on exchange. The slave-originated data + ACK needs 4150 us past
- * the latest receive sync. Keep an explicit 4200 us policy ceiling so a
- * timing change cannot silently expand every arbitrated receive grant.
- * Do not cast before checking: uint16_t truncation would hide overflow.
- * The direct backend ignores this field; no receive window is extended.
- * Merged requests take MAX, never SUM, of members' follow-on reserves. */
+/* Separate from MERGE_SPAN, which caps the receive union. The slave data
+ * and ACK exchange needs 4150 us past the latest receive sync; the 4200 us
+ * ceiling stops a timing change from silently growing every grant. Check
+ * before casting, since uint16_t truncation would hide overflow. Merged
+ * requests take MAX of the members' reserves, never SUM. */
 BUILD_ASSERT(API_FOLLOW_ON_TRACK_US <= 4200u,
 	     "tracked follow-on exceeds the reviewed 4.2 ms grant budget");
 BUILD_ASSERT(API_FOLLOW_ON_TRACK_US <= UINT16_MAX,
 	     "tracked follow-on does not fit the HAL field");
-/* A master's slot-opening 0x8A heard in this window is acknowledged on the
- * slot-reply turnaround (radiant_ack.c), later than any other reply: the
- * reserve must reach that acknowledgement's end too. */
+/* A master's slot-opening 0x8A is acknowledged on the slot-reply
+ * turnaround (radiant_ack.c), the latest reply, so the reserve must reach
+ * its end too. */
 BUILD_ASSERT(RADIANT_TRANSFER_OPENER_REPLY_US + API_FRAME_AIRTIME_US <=
 		     API_FOLLOW_ON_TRACK_US,
 	     "the tracked reserve does not cover an opener's acknowledgement");
@@ -1967,14 +1572,9 @@ BUILD_ASSERT(RADIANT_TRANSFER_OPENER_REPLY_US + API_FRAME_AIRTIME_US <=
 		    RADIANT_TRANSFER_ACK_GUARD_US + API_FRAME_AIRTIME_US))
 
 /*
- * A listening master's reserve: its slave's reply lands
- * RADIANT_TRANSFER_SLOT_REPLY_US after its own t_sync, and api_post_master_rx()
- * arms that turnaround from inside this transmit's completion - AND the
- * turnaround's own reserve, since an arbitrated backend serves the turnaround
- * from this transmit's grant only if everything the turnaround reserves fits
- * in it too. Covering just the turnaround (as this once did) lost every
- * turnaround on MPSL: the gate found its follow-on past the grant, fell back
- * to placing a fresh reservation 2 ms out, and refused it as too near.
+ * A listening master's reserve covers its slave's reply (RADIANT_TRANSFER_SLOT_REPLY_US
+ * after its own t_sync) and the turnaround's own reserve. An arbitrated backend serves
+ * the turnaround from this grant only if everything it reserves fits inside it.
  */
 #define API_FOLLOW_ON_MASTER_TX_US                                       \
 	((uint16_t)(RADIANT_TRANSFER_SLOT_REPLY_US +                     \
@@ -2016,27 +1616,21 @@ static void api_post_track_rx(uint8_t ch)
 	req.rf_index = api_rf_of(ch);
 	req.filters = &api_ch[ch].filter;
 	req.n_filters = 1u;
-	/* Per channel/slot, not a fixed constant: a measured master gets a
-	 * window sized to that measurement, one that's just acquired or missing
-	 * slots gets the wide default back automatically. Never above the old
-	 * constant. */
+	/* Per-channel window from the guard estimate; reverts to the wide
+	 * default when not tracking. */
 	guard = (radiant_time_t)radiant_channel_guard_us(ch);
 	req.t_open = (t > guard) ? (t - guard) : 0u;
 	req.t_close = t + guard;
-	/* Ask for CRC failures only when something uses them. Off by default: a
-	 * quiet room's ~1.4/s noise never crosses the HAL boundary. */
+	/* Request CRC failures only when repair uses them, so the noise floor
+	 * does not cross the HAL. */
 	req.report_crc_fail = api_crc_repair_on;
-	/* A request, not a guarantee - HAL forbids STOP_ON_FIRST on a merged
-	 * window and the scheduler drops it if this one ends up carrying more
-	 * than one channel. Worth asking: saves receive current and frees the
-	 * slot early on a window that stays single. */
+	/* A request, not a guarantee: the scheduler drops it if the window
+	 * merges. Worth asking, since it frees the slot early on a single-channel
+	 * window. */
 	req.stop_on_first = true;
-	/* Unconditional: any frame here may become a transmit 1.56 ms later
-	 * (api_sched_rx() -> api_tracked_frame() -> radiant_transfer_on_data()),
-	 * depending on a control byte not yet read. Reserve is given back the
-	 * moment an empty window closes. A SLAVE_RX_ONLY channel never
-	 * transmits (its engine delivers and arms nothing), so it reserves
-	 * nothing. */
+	/* Reserved unconditionally: any frame here may become a transmit 1.56 ms
+	 * later, depending on a control byte not yet read. An empty window gives
+	 * it back. SLAVE_RX_ONLY never transmits, so it reserves nothing. */
 	req.follow_on_us =
 		(radiant_channel_type_get(ch) ==
 		 (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY) ?
@@ -2050,20 +1644,12 @@ static void api_post_track_rx(uint8_t ch)
 }
 
 /*
- * A master has to listen, and until this existed it never did:
- * api_pump_locked() gave a TRACKING master only api_post_master_tx(), so it
- * never heard a slave's reply - no acknowledged data, no burst start,
- * indistinguishable from a link problem, and invisible from the host since
- * EVENT_TX fires the same either way.
- *
- * WHEN: RADIANT_TRANSFER_SLOT_REPLY_US (2190 us, measured) from the master's
- * t_sync to a slave's reply t_sync, guarded by RADIANT_TRANSFER_ACK_GUARD_US -
- * the same constant the transfer engine's own ack window uses.
- * WHAT: the same on-air address the master transmits, so a reply hardware-
- * matches by construction. Never STOP_ON_FIRST - a shared channel may have
- * more than one slave answering.
- * COST: ~500 us receive per 249.7 ms period (0.2% duty), unconditional
- * because a slave may start an exchange in any slot.
+ * A master listens for slave replies (acknowledged data, burst starts) in its slot
+ * turnaround. Without this window a master never hears a reply, and EVENT_TX looks
+ * the same either way. Window: RADIANT_TRANSFER_SLOT_REPLY_US (2190 us) after the
+ * master's t_sync, +/- RADIANT_TRANSFER_ACK_GUARD_US. Same on-air address as the
+ * master's TX. Never STOP_ON_FIRST, since several slaves may answer. Costs ~500 us
+ * of receive per period, unconditionally, since a slave may reply in any slot.
  */
 static void api_post_master_rx(uint8_t ch, radiant_time_t t_sync)
 {
@@ -2096,26 +1682,13 @@ static void api_post_master_rx(uint8_t ch, radiant_time_t t_sync)
 		      (radiant_time_t)RADIANT_TRANSFER_ACK_GUARD_US;
 	req.stop_on_first = false;
 	/*
-	 * THE SAME RESERVE THE TRACKED WINDOW TAKES, and for the identical
-	 * reason - this was missing until 2026-08-17 and it is the master half
-	 * of the acknowledged-data path.
-	 *
-	 * A slave's acknowledged-data packet arrives in THIS window and becomes
-	 * a transmit RADIANT_TRANSFER_REPLY_US later (api_sched_rx() ->
-	 * api_tracked_frame() -> radiant_transfer_on_data(), which arms the ack
-	 * before returning). Without follow_on_us the arbiter is told the air is
-	 * wanted only until t_close, so on an MPSL build the reply is asked for
-	 * outside the granted timeslot and never leaves: the slave has the
-	 * packet delivered, the master has the data, and the originator still
-	 * reports FAIL_NO_ACK. On a backend that owns the radio outright the
-	 * field is ignored by contract, so this costs nothing there.
-	 *
-	 * Its own constant, not API_FOLLOW_ON_TRACK_US (4150 us), which this
-	 * once reused: the reply is due REPLY_US after the DATA packet's t_sync,
-	 * anywhere up to this window's late edge, so REPLY_US + guard + one
-	 * frame from t_close covers it. The surplus was not free - the
-	 * transmit's reserve (API_FOLLOW_ON_MASTER_TX_US) must cover this one
-	 * for the turnaround to be served from the transmit's grant at all.
+	 * The same reserve the tracked window takes, for the same reason. A slave's
+	 * acknowledged-data packet arrives in this window and its reply goes out
+	 * RADIANT_TRANSFER_REPLY_US later. Without follow_on_us an arbitrated backend
+	 * grants air only to t_close, so the reply would never leave. This is a
+	 * separate constant from API_FOLLOW_ON_TRACK_US: the reply is due REPLY_US after
+	 * the data packet's t_sync, which is at most this window's late edge. The
+	 * transmit's reserve (API_FOLLOW_ON_MASTER_TX_US) must cover this one too.
 	 */
 	req.follow_on_us = API_FOLLOW_ON_MASTER_RX_US;
 
@@ -2128,9 +1701,7 @@ static void api_post_master_rx(uint8_t ch, radiant_time_t t_sync)
 	api_bind_accepted(ch, API_SLOT_MASTER_RX);
 }
 
-/* Bit 4 of the channel type is the master bit; 0x50 is MASTER_TX_ONLY, the
- * one master documented not to listen - hence asking the type rather than
- * radiant_channel_is_master(). */
+/* Bit 4 is the master bit, but MASTER_TX_ONLY (0x50) does not listen, so test the type. */
 static bool api_master_listens(uint8_t ch)
 {
 	uint8_t type = radiant_channel_type_get(ch);
@@ -2157,26 +1728,19 @@ static void api_post_master_tx(uint8_t ch)
 	}
 
 	/*
-	 * A master transmits from its first slot with or without host data.
-	 * Refusing to transmit until bcast_valid deadlocks every host library:
-	 * hosts pace writes off EVENT_TX, so a master that won't transmit until
-	 * written raises no EVENT_TX to write in response to. So an unwritten
-	 * buffer transmits as zeros (api_ch[].bcast is already zeroed at init
-	 * and unassign). api_xfer_broadcast() still refuses to acknowledge
-	 * without a valid payload - unlike a broadcast slot, every captured
-	 * acknowledgement carried real data, never zeros.
+	 * A master transmits from its first slot with or without host data. Refusing
+	 * until written would deadlock hosts, which pace writes off EVENT_TX, so an
+	 * unwritten buffer goes out as zeros.
 	 */
 
-	/* 0x0A: not exchange, not ack, not last, seq 0, slot opener - the only
-	 * encoding with bit 7 clear ever seen on the air. Built from fields so
-	 * radiant_frame_make() can refuse any other combination. */
+	/* 0x0A: slot opener, all other flags clear. Built from fields so
+	 * radiant_frame_make() refuses other combinations. */
 	memset(&fields, 0, sizeof(fields));
 	fields.slot_opener = true;
 
-	/* What goes out: the host's buffer, or the last transfer packet if one
-	 * went out since the host last wrote (Rev 5.1 p.109; see last_tx).
-	 * Copied under the event crit section because the TX callback writes
-	 * last_tx from radio context. */
+	/* The host's buffer, or the last transfer packet if one went out since
+	 * the host last wrote (see last_tx). Copied under the crit section: the
+	 * TX callback writes last_tx from radio context. */
 	{
 		unsigned int key = radiant_event_crit_enter();
 
@@ -2188,25 +1752,20 @@ static void api_post_master_tx(uint8_t ch)
 
 #if defined(CONFIG_RADIANT_SEC)
 	/*
-	 * The TX hook: thread context, under api_lock (api_pump_locked() is
-	 * the only caller for a secured master; the terminal callback does not
-	 * re-post one, see api_sched_done()), immediately before the frame is
-	 * built - the latest correct moment, since the TX body is DMA'd and
-	 * armed early. Transforms into a copy, never into
-	 * api_ch[ch].bcast, whose readback must stay the host's plaintext and
-	 * must not be re-encrypted on every retransmission.
+	 * TX hook, under api_lock, just before the frame is built (the TX body is DMA'd
+	 * when armed, so this is the latest correct point). Transform into a copy:
+	 * bcast's readback must stay the host's plaintext, and must not be re-encrypted
+	 * on each retransmission.
 	 */
 	memcpy(api_ch[ch].sec_pay, pay, sizeof(api_ch[ch].sec_pay));
 	api_ch[ch].sec_pay_valid = false;
-	/* `t` is this slot's instant: the counter is the slot index derived
-	 * from it, and a re-post of the same slot gets the same bytes. */
+	/* The counter derives from the slot instant t, so a re-post of the same
+	 * slot gets the same bytes. */
 	if (radiant_sec_tx_transform(ch, api_ch[ch].sec_pay,
 				     (uint8_t)sizeof(api_ch[ch].sec_pay),
 				     (uint64_t)t) != RADIANT_SEC_OK) {
-		/* A channel configured for something the backend cannot do
-		 * transmits nothing rather than transmitting it in the clear.
-		 * Failing open here would be a channel the host believes is
-		 * protected and is not. */
+		/* Transmit nothing rather than send in the clear: a channel the
+		 * host believes is protected must not fail open. */
 		return;
 	}
 	api_ch[ch].sec_pay_valid = radiant_sec_channel_is_secured(ch);
@@ -2229,8 +1788,7 @@ static void api_post_master_tx(uint8_t ch)
 		return;
 	}
 
-	/* Per-channel buffer, not a local: the HAL DMAs out of it until the
-	 * completion callback. */
+	/* Per-channel buffer: the HAL DMAs from it until the completion callback. */
 	memcpy(api_ch[ch].tx_body, w.body, w.body_len);
 	api_ch[ch].tx_body_len = w.body_len;
 
@@ -2247,9 +1805,7 @@ static void api_post_master_tx(uint8_t ch)
 	req.body = api_ch[ch].tx_body;
 	req.body_len = api_ch[ch].tx_body_len;
 	req.t_sync_at = t;
-	/* Only a listening master needs the reserve - a MASTER_TX_ONLY channel
-	 * arms no turnaround, so reserving for it would charge air for a window
-	 * never opened. */
+	/* Only a listening master needs the reserve: MASTER_TX_ONLY arms no turnaround. */
 	req.follow_on_us = api_master_listens(ch) ? API_FOLLOW_ON_MASTER_TX_US
 						  : 0u;
 
@@ -2273,10 +1829,8 @@ static void api_pump_locked(void)
 
 	now = radiant_radio_now();
 
-	/* A key install that found a chunk in flight. Before any key the sweep
-	 * runs on the all-zero address, so a deferral nothing applied later
-	 * kept it there until reset. With no carrier the re-init orphans
-	 * nothing, and any member it drops rejoins in the loop below. */
+	/* Apply a deferred network-0 key once no sweep chunk is in flight. The
+	 * re-init orphans nothing with no carrier; dropped members rejoin below. */
 	if (api_search_reinit_pending &&
 	    api_search_slot == RADIANT_SCHED_CH_NONE) {
 		struct radiant_search_cfg scfg;
@@ -2291,32 +1845,25 @@ static void api_pump_locked(void)
 		enum radiant_channel_state st = radiant_channel_state_get(ch);
 		bool searching = radiant_search_is_searching(&api_search, ch);
 
-		/* Keep the sweep's membership in step with the state machine.
-		 * A channel that fell back to SEARCHING after eight missed
-		 * slots rejoins here. Its device's set (named, or from the
-		 * seen cache) is steered at once and then revisited with
-		 * backoff, so one lost packet costs a revisit (~0.5 s) rather
-		 * than a whole sweep (8.3 s) - see
-		 * RADIANT_SEARCH_REVISIT_FIRST. */
+		/* Keep the sweep's membership in step with the state machine. A
+		 * channel that fell back to SEARCHING rejoins here, steered at once
+		 * and then revisited with backoff (RADIANT_SEARCH_REVISIT_FIRST). */
 		if (st == RADIANT_CH_STATE_SEARCHING) {
 			if (!searching) {
 				api_search_begin(ch, now);
 			}
 		} else if (searching) {
-			/* If this channel carried the sweep, api_search_slot
-			 * is left alone - radiant_search_end() doesn't touch
-			 * the window in flight, so it keeps serving other
-			 * searching channels until its own completion releases
-			 * the carrier. Clearing it here would let a second
-			 * sweep start while the first is still live. */
+			/* api_search_slot is left alone: the window in flight keeps
+			 * serving other searching channels until its own completion
+			 * releases it. Clearing it here would start a second live sweep. */
 			(void)radiant_search_end(&api_search, ch);
 		}
 
 		if (radiant_sched_pending(ch)) {
 			continue;
 		}
-		/* The transfer engine arms through the same slot, and it has
-		 * the tighter deadline: 1.55 ms against a 250 ms period. */
+		/* The transfer engine arms through the same slot, with the tighter
+		 * deadline (1.55 ms against a 250 ms period). */
 		if (!radiant_transfer_is_idle(&api_xfer[ch])) {
 			continue;
 		}
@@ -2333,8 +1880,7 @@ static void api_pump_locked(void)
 
 	api_post_search_window(now);
 
-	/* The one commit. See api_arming: an arm refused here completes
-	 * synchronously, and nothing it calls may post again. */
+	/* The one commit. An arm refused here completes synchronously; see api_arming. */
 	api_arming = true;
 	(void)radiant_sched_tick();
 	api_arming = false;
@@ -2348,7 +1894,7 @@ static void api_pump_locked(void)
  * ---------------------------------------------------------------------------
  */
 
-/* Decode a frame that arrived on a tracked window and do whatever it is. */
+/* Resolves the CRC-repair and profile-sanity switches once, at antr_init(). */
 static void api_crc_repair_setup(void)
 {
 	const struct radiant_radio_caps *caps = radiant_radio_caps_get();
@@ -2362,10 +1908,8 @@ static void api_crc_repair_setup(void)
 		return;
 	}
 	if (!radiant_crc_repair_init()) {
-		/* Two single-bit errors sharing a syndrome shouldn't happen
-		 * for CRC-16/CCITT over a frame this short; if it does, the
-		 * table is no longer a bijection and repairing would be a
-		 * coin toss. */
+		/* Single-bit errors sharing a syndrome should not occur for this
+		 * CRC on a frame this short. If they do, repair is unsafe. */
 		LOG_ERR("CRC repair table is not a bijection; repair disabled");
 		return;
 	}
@@ -2403,10 +1947,9 @@ static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 		return false;
 	}
 
-	/* Matched address bytes never reach RAM (that's what a hardware address
-	 * match means), so the wire frame's address half is regenerated from
-	 * the ID this window filtered on. RADIANT_FRAME_TRUSTED_CRC is correct
-	 * for every delivered event - status OK implies a verified CRC. */
+	/* Matched address bytes never reach RAM, so the address half is
+ * regenerated from the ID this window filtered on. Status OK implies a
+ * verified CRC. */
 	memset(&w, 0, sizeof(w));
 	n = radiant_frame_addr(RADIANT_FRAME_CFG_TRACKING, api_net_addr_for(ch), &id,
 			   w.addr, sizeof(w.addr));
@@ -2417,9 +1960,7 @@ static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 	memcpy(w.body, evt->body, evt->body_len);
 	w.body_len = evt->body_len;
 
-	/* Repair happens here, where address and body exist side by side (the
-	 * CRC covers both). radiant_crc_repair() re-checks the configuration
-	 * itself too; see its header for why. */
+	/* Repair runs here, where address and body are both present (the CRC covers both). */
 	if (crc_failed) {
 		rc = radiant_crc_repair(RADIANT_FRAME_CFG_TRACKING, w.addr,
 					w.addr_len, w.body, w.body_len,
@@ -2435,22 +1976,16 @@ static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 	if (radiant_frame_decode(RADIANT_FRAME_CFG_TRACKING, &w, RADIANT_FRAME_TRUSTED_CRC,
 			     &f) != RADIANT_FRAME_OK) {
 		if (crc_failed) {
-			/* Free refutation, worth counting separately: a
-			 * mis-repair landing in the control byte (8 of 80 body
-			 * bits, only 11 of 256 values ever seen) is rejected
-			 * here ~96% of the time by a check that already
-			 * existed for other reasons. */
+			/* A mis-repair in the control byte is usually rejected here by an
+			 * existing check. Counted separately. */
 			api_stats.crc_repair_refuted++;
 		}
 		return false;
 	}
 
-	/* Repaired frames are broadcasts only. Acknowledged/burst data would be
-	 * ACKed on air - ending the sender's own failure report on a payload
-	 * that may be a mis-repair - and the sender learns of an un-ACKed packet
-	 * and can resend, so repair has nothing to recover there. Same rule as
-	 * the !crc_failed gate on api_ack_pending_send() below: a repaired frame
-	 * never makes this node transmit. */
+	/* Repaired frames are broadcasts only: acknowledged or burst data would
+	 * be ACKed on air from a possible mis-repair. A repaired frame never
+	 * makes this node transmit. */
 	if (crc_failed &&
 	    radiant_frame_msg_type(f.ctrl_byte) != RADIANT_MSG_BROADCAST) {
 		api_stats.crc_repair_refuted++;
@@ -2458,13 +1993,9 @@ static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 	}
 
 	/*
-	 * Second free refutation, one the codec can't make: byte 0 of a tracked
-	 * body is the transmission type, which the address match can't prove
-	 * (it's in the body, not the matched address). A repaired frame whose
-	 * trans_type disagrees with the channel's landed on the wrong bit.
-	 * Applied to repaired frames only - a clean frame disagreeing here is a
-	 * fact about the air (shared channel, guessed trans_type), not evidence
-	 * of a bad repair.
+	 * Byte 0 of a tracked body is the transmission type, which the address match
+	 * cannot prove. For repaired frames only: a mismatch means a mis-repair. On a
+	 * clean frame it is a fact about the air, not evidence of a bad repair.
 	 */
 	if (crc_failed && id.trans_type != 0u &&
 	    f.payload_len > 0u && w.body[0] != id.trans_type) {
@@ -2475,11 +2006,9 @@ static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 	}
 
 	/*
-	 * Third refutation, the only one reading the payload: radiant_profile_sanity.c
-	 * flags power >3000 W or heart rate >240 bpm as physically impossible
-	 * for the two device types where a single frame decides it. crc_failed-
-	 * gated for the same reason as the two checks above - a clean frame
-	 * this implausible is a fact about the sensor, never dropped.
+	 * The only check reading the payload: radiant_profile_sanity.c rejects power
+	 * or heart rate that is physically impossible. Repaired frames only; a clean
+	 * implausible frame is a fact about the sensor and is never dropped.
 	 */
 	if (crc_failed && api_profile_sanity_on &&
 	    radiant_profile_sanity_implausible(id.device_type, f.payload,
@@ -2492,18 +2021,14 @@ static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 	}
 
 	if (crc_failed) {
-		/* Counted here, not at the repair, so this means "repaired AND
-		 * delivered" - never confused with a clean frame. */
+		/* Counted here, not at the repair: this means repaired AND delivered. */
 		api_stats.crc_repaired++;
 	}
 
 	/*
-	 * Slot clock re-anchored on the frame actually heard, centring the
-	 * window on the master rather than the moment the channel opened.
-	 * A master must not do either of these: it owns the slot grid, and the
-	 * frame it hears is a slave's reply 2.19 ms into its own period, so
-	 * re-anchoring would drag its phase forward every exchange. The seen
-	 * cache is likewise about masters found by searching, not slaves.
+	 * A slave re-anchors its slot clock on the frame heard. A master must not: it
+	 * owns the slot grid, and the frame it hears is a slave's reply 2.19 ms into
+	 * the period, so re-anchoring would drag its phase forward each exchange.
 	 */
 	if (!radiant_channel_is_master(ch)) {
 		radiant_channel_on_slot(ch, evt->t_sync);
@@ -2522,11 +2047,8 @@ static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 	case RADIANT_MSG_BROADCAST:
 #if defined(CONFIG_RADIANT_SEC)
 		/*
-		 * The RX policy guard: ISR context, classification only, zero
-		 * crypto - decides whether this packet belongs to the
-		 * transform path and if so queues eight bytes. XOR, CMAC and
-		 * verdict happen later in radiant_sec_pump(), which posts the
-		 * plaintext via radiant_sec_deliver() so ordering is preserved.
+		 * RX policy guard: classification only, no crypto, so it is safe in ISR context.
+		 * XOR, CMAC and verdict run later in radiant_sec_pump(), which keeps ordering.
 		 */
 		{
 			int sec = radiant_sec_rx_ingest(ch, f.payload,
@@ -2554,12 +2076,9 @@ static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 	case RADIANT_MSG_BURST_LAST:
 #if defined(CONFIG_RADIANT_SEC)
 		/*
-		 * D15. X_AUTH governs what a secured channel initiates, but
-		 * this switch also decodes acknowledged-data/burst, so without
-		 * this an injector could send a secured-range page as
-		 * acknowledged data and skip the MAC entirely. broadcast=false
-		 * routes a secured-range page to the drop arm; anything else
-		 * is PLAIN and proceeds untouched.
+		 * D15: this switch also decodes acknowledged data and bursts. Without this
+		 * check an injector could send a secured-range page as acknowledged data
+		 * and skip the MAC. Secured-range pages are dropped here.
 		 */
 		if (radiant_sec_rx_ingest(ch, f.payload, f.payload_len, false,
 					  (uint64_t)evt->t_sync) ==
@@ -2569,12 +2088,10 @@ static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 			break;
 		}
 #endif
-		/* The receive path that has to transmit: ~1.55 ms until the
-		 * peer expects a reply, so radiant_transfer_on_data() arms the
-		 * ack before handing the payload up - the host-facing message
-		 * is posted from api_xfer_rx_data() instead of here. */
-		/* Not inside the LOG_DBG argument list: an expression that only
-		 * runs when logging is on would be dead in a release build. */
+		/* radiant_transfer_on_data() arms the ack within 1.55 ms, before the
+		 * payload goes up. The host message is posted from api_xfer_rx_data(). */
+		/* Kept out of the LOG_DBG argument list: side effects there vanish
+		 * in release builds. */
 		api_stats.rx_on_data++;
 		rc = radiant_transfer_on_data(&api_xfer[ch], &f, evt->t_sync);
 		LOG_DBG("on_data rc=%d", rc);
@@ -2583,13 +2100,9 @@ static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 	case RADIANT_MSG_TRANSFER_ACK:
 	case RADIANT_MSG_UNKNOWN:
 	default:
-		/* An acknowledgement with no transfer of ours behind it, or a
-		 * flag combination nothing has measured. The frame layer names
-		 * it and declines to interpret it, and so does this.
-		 *
-		 * DELIBERATELY NO 0xF6 COUNTER HERE. This is not host-bound
-		 * loss - nothing the host was waiting for went missing - so
-		 * it is outside 0xF6's charter (see ant_health.h). */
+		/* An acknowledgement with no transfer behind it, or an unmeasured
+		 * flag combination. Not counted in 0xF6: nothing the host awaited
+		 * was lost. */
 		break;
 	}
 
@@ -2612,66 +2125,55 @@ static void api_sched_rx(uint8_t ch, uint8_t filter_index,
 	}
 
 	if (api_ch[ch].slot_kind == (uint8_t)API_SLOT_SEARCH) {
-		/* radiant_search_on_rx_indexed(), never the plain form: a merged
-		 * window's evt->filter_index indexes the merged array, and the
-		 * scheduler has already remapped it to this channel's filters. */
+		/* Use the indexed form: the scheduler has already remapped a merged
+		 * window's filter_index to this channel's filters. */
 		radiant_search_on_rx_indexed(&api_search, evt, filter_index);
 		return;
 	}
 
 	if (evt->status != RADIANT_RADIO_STATUS_OK) {
 		/*
-		 * CRC_FAIL: with eight filters armed, ~1.4/s in a quiet room
-		 * is just noise floor - except on a tracked window with
-		 * repair on, where a matched 5-byte address means this IS the
-		 * tracked sensor, likely one flipped bit from good. The three
-		 * checks below mirror what the repair module would apply.
+		 * CRC failures are noise floor (~1.4/s in a quiet room). On a tracked window
+		 * with repair on, a matched address means this is the tracked sensor, likely
+		 * one bit off, so the checks below mirror the repair module's.
 		 */
 		if (!api_crc_repair_on || !evt->has_crc_rx) {
 			return;
 		}
 		if (radiant_channel_op_owner(api_ch[ch].op) != (int)ch) {
-			/* The CRC-repair path's silent twin of the ownership
-			 * check further down - same condition, no LOG_DBG
-			 * here since this runs on a CRC_FAIL event rather
-			 * than a good one. */
+			/* Same condition as the ownership check below, without LOG_DBG:
+			 * this runs on CRC_FAIL events. */
 			ant_health_note(ANT_HEALTH_RX_NOT_OWNER);
 			return;
 		}
 		if (!radiant_transfer_is_idle(&api_xfer[ch])) {
-			/* Scope decision: a transfer in flight is arming an ack
-			 * inside a 1.55 ms turnaround, so it isn't offered
-			 * repaired frames - a burst already retries anyway. */
+			/* A transfer in flight is arming an ack within a 1.55 ms
+			 * turnaround, so it is not offered repaired frames. */
 			return;
 		}
 		if (api_tracked_frame(ch, evt, true)) {
-			/* The slot WAS heard - counting it as a miss would send
-			 * a working channel back to search. */
+			/* The slot was heard; counting it as a miss would send a working
+			 * channel back to search. */
 			api_ch[ch].slot_heard = true;
 		}
 		return;
 	}
 
 	/*
-	 * Ownership check before acting on a non-terminal event: is the
-	 * request this event belongs to still the one this channel owns?
-	 * evt->op is the HAL's id; radiant_channel.c holds the surrogate this
-	 * file minted, since radiant_sched.c sits between the HAL and it.
+	 * Ownership: the event must belong to the request the channel still owns.
+	 * evt->op is the HAL's id; radiant_channel.c holds the surrogate minted here.
+	 * The transfer engine posts its own requests, and scheduler routing (not the
+	 * retired tracking token) establishes ownership of the ACK window.
 	 */
-	/* The transfer engine posts its own scheduler requests. The preceding
-	 * TX's completion retired the tracking token; scheduler routing, not
-	 * that obsolete token, establishes ownership of the ACK window. */
 	if (radiant_transfer_state(&api_xfer[ch]) == RADIANT_TRANSFER_STATE_WAIT_ACK) {
 		api_stats.rx_to_xfer++;
 		(void)radiant_transfer_on_rx_event(&api_xfer[ch], evt);
 		return;
 	}
-	/* An inbound burst's continuation window, the engine's own request on
-	 * the same terms. Its packets must NEVER reach api_tracked_frame(): on
-	 * a slave that re-anchors the slot clock (radiant_channel_on_slot()),
-	 * and every burst packet would walk it by 3.11 ms - the master grid
-	 * walk's twin. The one frame handed back is a broadcast, which ended
-	 * the burst and is an ordinary slot frame. */
+	/* An inbound burst's continuation window. Its packets must never reach
+	 * api_tracked_frame(): that re-anchors a slave's slot clock, and each
+	 * burst packet would walk it by 3.11 ms. The one frame handed back is a
+	 * broadcast, which ends the burst. */
 	if (radiant_transfer_state(&api_xfer[ch]) == RADIANT_TRANSFER_STATE_WAIT_NEXT) {
 		api_stats.rx_to_xfer++;
 		if (!radiant_transfer_on_rx_event(&api_xfer[ch], evt)) {
@@ -2693,8 +2195,7 @@ static void api_sched_rx(uint8_t ch, uint8_t filter_index,
 
 	if (!radiant_transfer_is_idle(&api_xfer[ch])) {
 		/* A frame routed to a non-idle transfer never reaches
-		 * api_tracked_frame(), so a wedged engine looks like silence
-		 * from up here too. */
+		 * api_tracked_frame(), so a wedged engine looks like silence. */
 		LOG_DBG("rx to xfer ch=%u xfer=%d", (unsigned)ch,
 			(int)radiant_transfer_state(&api_xfer[ch]));
 		api_stats.rx_to_xfer++;
@@ -2714,10 +2215,9 @@ static void api_sched_tx(uint8_t ch, const struct radiant_tx_event *evt, void *u
 	}
 
 	if (!radiant_transfer_is_idle(&api_xfer[ch])) {
-		/* EVENT_TRANSFER_TX_START (0x0A): the first packet of a
-		 * multi-packet burst is on the air. Asked before the engine
-		 * moves on, and true for one transmit per burst only - not for
-		 * acknowledged data, a one-packet burst or a retry. */
+		/* EVENT_TRANSFER_TX_START (0x0A): the first packet of a multi-packet
+		 * burst. Not raised for acknowledged data, a one-packet burst or a
+		 * retry. */
 		if (evt->status == RADIANT_RADIO_STATUS_OK &&
 		    radiant_transfer_cur_starts_burst(&api_xfer[ch])) {
 			(void)radiant_event_post_channel_event(
@@ -2729,12 +2229,9 @@ static void api_sched_tx(uint8_t ch, const struct radiant_tx_event *evt, void *u
 			const uint8_t *sent =
 				radiant_transfer_cur_payload(&api_xfer[ch]);
 
-			/* Originating data occupies this master's slot just as a
-			 * broadcast does; resuming must not repost the expired slot.
-			 * Only packet 0's first attempt is that slot. Re-anchoring
-			 * on continuation packets and retries walked the master's
-			 * grid by the length of every burst (+6.87 ms after three
-			 * packets, measured), and a real slave lost it. */
+			/* Only packet 0's first attempt occupies the master's slot.
+			 * Re-anchoring on continuation packets or retries would walk the
+			 * grid by the burst length. */
 			if (radiant_transfer_cur_is_slot(&api_xfer[ch])) {
 				radiant_channel_on_slot(ch, evt->t_sync);
 			}
@@ -2820,13 +2317,10 @@ static void api_feed_xfer_terminal(uint8_t ch, enum radiant_radio_status st)
 
 		memset(&e, 0, sizeof(e));
 		e.op = RADIANT_TRANSFER_OP_EXTERNAL;
-		/* A window closing empty is RADIANT_RADIO_STATUS_TIMEOUT: the
-		 * engine retries a multi-packet burst's packet (Rev 5.1 sec
-		 * 5.4.3, up to RADIANT_TRANSFER_TX_RETRIES_MAX) and otherwise
-		 * fails with FAIL_NO_ACK. Any other status fails outright. In
-		 * WAIT_NEXT (an inbound burst) TIMEOUT repeats our
-		 * acknowledgement or, after LAST, ends the burst; any other
-		 * status ends it. */
+		/* An empty window is TIMEOUT: the engine retries a burst packet (Rev
+		 * 5.1 sec 5.4.3) and otherwise fails with FAIL_NO_ACK. In WAIT_NEXT,
+		 * TIMEOUT repeats our acknowledgement, or ends the burst after LAST;
+		 * any other status ends it. */
 		e.status = st;
 		e.t_sync = radiant_radio_now();
 		(void)radiant_transfer_on_rx_event(&api_xfer[ch], &e);
@@ -2840,11 +2334,9 @@ static void api_feed_xfer_terminal(uint8_t ch, enum radiant_radio_status st)
 }
 
 /*
- * A window carrying this channel has been armed, with the bounds it really
- * got. Only the sweep cares: its dwell is accounted in listening time, and
- * the scheduler arms scan chunks based on pending work (transmits included)
- * this layer can't see, so crediting the bounds api_post_search_window()
- * merely proposed would overcount.
+ * A window was armed with the bounds it really got. Only the sweep uses this: the
+ * scheduler arms scan chunks from pending work this layer cannot see, so the
+ * proposed bounds would overcount.
  */
 static void api_sched_armed(uint8_t ch, radiant_time_t t_open, radiant_time_t t_close,
 			void *user)
@@ -2854,17 +2346,9 @@ static void api_sched_armed(uint8_t ch, radiant_time_t t_open, radiant_time_t t_
 		return;
 	}
 	/*
-	 * A tracked window that really got armed owes its successor. Recorded
-	 * here rather than at post time so a refused arm - which never reaches
-	 * this callback - is not credited a successor from the arm side.
-	 *
-	 * IT IS NO LONGER THE ONLY PLACE THAT SETS THIS. A window that never
-	 * armed reaches api_sched_done() as MISSED or DENIED and sets the flag
-	 * there instead, because "the arm was refused" and "the channel has
-	 * stopped asking for windows" are different facts and only the first is
-	 * true - see that branch for why waiting for the 50 ms pump was a ~2 s
-	 * dropout. What this site still buys is that the flag is set from a
-	 * TERMINAL rather than from a post, which is what makes it bounded.
+	 * A tracked window that really got armed owes its successor. Set here, from a
+	 * terminal rather than a post, which keeps it bounded. A window that never
+	 * armed reaches api_sched_done() as MISSED or DENIED and sets the flag there.
 	 */
 	if (api_ch[ch].slot_kind == (uint8_t)API_SLOT_TRACK_RX) {
 		api_ch[ch].track_repost = true;
@@ -2873,18 +2357,14 @@ static void api_sched_armed(uint8_t ch, radiant_time_t t_open, radiant_time_t t_
 	    api_ch[ch].slot_kind != (uint8_t)API_SLOT_SEARCH) {
 		return;
 	}
-	/* RADIANT_SEARCH_OP_EXTERNAL: the scheduler merges channels into one
-	 * hardware operation, so there's no HAL op id to give; this token tells
-	 * the module to trust our own routing instead. */
+	/* RADIANT_SEARCH_OP_EXTERNAL: the scheduler merges channels, so there
+	 * is no HAL op id; the module trusts our routing. */
 	radiant_search_armed(&api_search, RADIANT_SEARCH_OP_EXTERNAL, t_open, t_close);
 }
 
-/* Context is not exclusively ISR: pass() may synchronously report a missed
- * arm from a thread, with radiant_event_crit_enter() held for the whole pass.
- * Cancel/request replacement also notify under that critical section. A
- * pending slave command is sent from the frame (api_ack_pending_send()), not
- * from here; host writers of ack_pending hold the same critical section that
- * excludes the radio callbacks. */
+/* Can run in thread context: pass() may report a missed arm synchronously,
+ * under the scheduler critical section. A pending slave command is sent
+ * from the frame (api_ack_pending_send()), not from here. */
 static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 {
 	enum radiant_radio_status st;
@@ -2926,15 +2406,10 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 
 	if (api_ch[ch].slot_kind == (uint8_t)API_SLOT_SEARCH) {
 		/*
-		 * One scan chunk has ended. OK credits the whole chunk.
-		 * ABORTED means a nearer deadline (tracked channel) took the
-		 * radio partway through, so credit what was actually listened
-		 * to - crediting zero here used to freeze the sweep on one set.
-		 * MISSED/FAILED/DENIED never opened, credit nothing.
-		 *
-		 * DENIED CREDITS ZERO ON PURPOSE. Under an arbiter the sweep is
-		 * the elastic consumer (ADR 0013) and gets refused hundreds of
-		 * times a sweep; crediting a chunk that never opened would
+		 * A scan chunk ended. OK credits the whole chunk; ABORTED (a nearer deadline
+		 * took the radio) credits the time actually listened; MISSED, FAILED and
+		 * DENIED credit nothing. DENIED credits zero on purpose: under an arbiter the
+		 * sweep is the elastic consumer (ADR 0013), and crediting unopened chunks would
 		 * advance the address set on a fraction of its real dwell.
 		 */
 #if defined(CONFIG_RADIANT_SEARCH_PHASE_DIAG)
@@ -2943,18 +2418,9 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 		radiant_search_on_done(&api_search, why == RADIANT_SCHED_DONE_OK,
 				   why == RADIANT_SCHED_DONE_ABORTED, now);
 		/*
-		 * A denied chunk credited zero dwell above (correct), but a
-		 * channel under a finite ACQUIRE timeout has a wall-clock
-		 * deadline that keeps counting regardless. Measured: a channel
-		 * armed 13 times, denied 12, simply stopped - not because the
-		 * device was absent but because refusals ate its listening
-		 * budget. RADIANT_API_HOUSEKEEP_MS (the actual retry pacing,
-		 * see api_event_thread()) is the right size for the extension.
-		 *
-		 * The deadline that actually fires is the CHANNEL layer's
-		 * (radiant_channel_tick()); api_search_begin() starts the
-		 * search module with no deadline of its own, so extending only
-		 * that one was a no-op and the measurement above stood.
+		 * A denied chunk gives zero dwell, but a channel's ACQUIRE deadline keeps
+		 * running, so each denial extends it by one housekeeping interval. The
+		 * deadline that fires is the channel layer's (radiant_channel_tick()).
 		 */
 		if (why == RADIANT_SCHED_DONE_DENIED) {
 			radiant_search_note_denied(&api_search,
@@ -2963,39 +2429,17 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 				now, RADIANT_API_HOUSEKEEP_MS * 1000u);
 		}
 		/*
-		 * A continuous request outlives its chunks (lets a displaced
-		 * scan resume), so the slot is still here - whether to keep it
-		 * is the whole of the sweep's throughput.
-		 *
-		 * Must drop when the SET finishes - the filters describe one
-		 * address set, only radiant_search_window() picks the next.
-		 * Must NOT drop merely because a chunk ended - that used to
-		 * round-trip every chunk through the event thread (most of
-		 * them, since a tracked channel ends one 4x/s). Measured on
-		 * nRF54L15, one channel tracking at 4 Hz: 38.5 housekeeping
-		 * passes/s but only 7.6 search windows, sets advancing at
-		 * 2.5/s vs nominal 3.85/s, full sweep 12.8 s instead of 8.3 s,
-		 * with preempt=0 missed=0 - nothing competing for the radio,
-		 * just idle waiting on the pump.
-		 *
-		 * Kept only when the chunk really ran - same bound as
-		 * turn_pending/track_repost, guarding the same unbounded-loop
-		 * risk as api_arming above. MISSED/FAILED drop the slot and
+		 * A continuous request outlives its chunks, so the slot is kept across them.
+		 * Dropping it at each chunk end would round-trip every chunk through the
+		 * event thread and slow the sweep. Drop it only when the set finishes, since
+		 * the filters describe one address set. MISSED and FAILED drop the slot and
 		 * let the rate-limited pump decide.
 		 */
 		if (api_search_slot == ch) {
 			/*
-			 * DENIED counts as "ran" here, unlike the dwell credit
-			 * above: it asks whether the scheduler may keep the
-			 * request and arm the next chunk on its own way out,
-			 * vs. being cancelled and re-posted by the pump.
-			 * radiant_sched.c's EDENIED path ends the pass on a
-			 * kept continuous request, so retry costs one refused
-			 * arm per pass, not a loop. Excluding DENIED here would
-			 * send every denied chunk through the same round trip
-			 * that measured 12.8 s vs 8.3 s per sweep - the
-			 * difference between surviving contention and
-			 * stalling under it.
+			 * DENIED counts as "ran" here, unlike the dwell credit: the scheduler may
+			 * keep the request and retry on its own way out. Its EDENIED path ends the
+			 * pass on a kept request, so a retry costs one refused arm per pass.
 			 */
 			bool ran = (why == RADIANT_SCHED_DONE_OK) ||
 				   (why == RADIANT_SCHED_DONE_ABORTED) ||
@@ -3009,73 +2453,39 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 			    radiant_search_is_searching(&api_search, ch) &&
 			    radiant_channel_state_get(ch) ==
 				    RADIANT_CH_STATE_SEARCHING) {
-				/* Re-bound below after the unconditional clear -
-				 * without slot_kind SEARCH the next armed()
-				 * wouldn't reach radiant_search_armed() and the
+				/* Re-bound below after the clear: without slot_kind SEARCH the
 				 * sweep would stop advancing. */
 				keep_search = true;
 
-				/*
-				 * Ceiling comes down with the budget: leaving
-				 * chunk_us at the whole original dwell lets
-				 * the set's last chunk overrun it. Measured:
-				 * 379 ms listened on a 260 ms budget, 46%
-				 * slower, invisible to any counter since every
-				 * chunk still ends DONE_OK honestly.
-				 */
+				/* Lower the ceiling to the remaining budget, or the set's last
+				 * chunk overruns it. */
 				(void)radiant_sched_rechunk(
 					ch,
 					radiant_search_dwell_remaining(&api_search));
 			} else {
-				/* Cancel is silent for this channel, so no
-				 * second done() arrives; the pump posts
-				 * whatever the sweep should hear next. */
+				/* Cancel is silent, so no second done() arrives; the pump posts
+				 * the next request. */
 				(void)radiant_sched_cancel(ch);
 				api_search_slot = RADIANT_SCHED_CH_NONE;
 			}
 		}
 	} else if (!radiant_transfer_is_idle(&api_xfer[ch]) &&
 		   !radiant_sched_pending(ch)) {
-		/* The engine hasn't re-posted, so this really is its
-		 * operation ending. If it HAS re-posted (the normal path,
-		 * arming the reply from inside the TX callback), the slot
-		 * holds the new request and this completion belongs to the
-		 * old one. */
+		/* If the engine has not re-posted, this completion ends its
+		 * operation. If it has, the slot holds the new request. */
 		api_feed_xfer_terminal(ch, st);
 	} else if (api_ch[ch].slot_kind == (uint8_t)API_SLOT_MASTER_RX) {
-		/*
-		 * A master's turnaround window closing, deliberately nothing
-		 * to do: must not touch the slot clock (already anchored by
-		 * its own transmit) and must not raise RX_FAIL (an empty
-		 * turnaround is the normal case 4x/s).
-		 */
+		/* A master's turnaround closing needs no action: the clock is already
+		 * anchored by its transmit, and an empty turnaround is normal, so
+		 * there is no RX_FAIL. */
 	} else if (api_ch[ch].slot_kind == (uint8_t)API_SLOT_MASTER_TX &&
 		   !api_ch[ch].slot_heard) {
 		/*
-		 * A master's slot that didn't go out - the clock must move.
-		 *
-		 * Trusts that the binding still describes the request this
-		 * done() ends. A host-originated transfer breaks that (its
-		 * submit replaces the posted slot without a done()), which is
-		 * why api_xfer_superseded() clears the kind when one starts:
-		 * without it a completed 0xAA landed here and the master
-		 * skipped a slot after every acknowledged message.
-		 *
-		 * t_next only advances on a completed transmit, so leaving it
-		 * in the past would make the pump re-post the same dead
-		 * instant forever, refused synchronously each time: a hot
-		 * loop with no fault and no host response.
-		 *
-		 * radiant_channel_on_slot_missed() advances by one period from
-		 * the missed slot, not from now, keeping the master's phase
-		 * its own; it counts no misses and never sends a master to
-		 * search.
-		 *
-		 * Keyed on slot_kind and !slot_heard, not on `why` - a DENIED
-		 * master TX lands here too and gets its clock advanced the
-		 * same way (test_denied_master_tx_does_not_wedge asserts this
-		 * directly). radiant_channel_on_slot_denied() does the same
-		 * arithmetic for the honest counter.
+		 * A master's slot that did not go out: the clock must move. This trusts that
+		 * the binding still describes this request, which is why
+		 * api_xfer_superseded() clears the kind when a host transfer takes the slot.
+		 * The clock advances from the missed slot, not from now, and a DENIED
+		 * transmit gets the same advance, with its own counter.
 		 */
 		if (why == RADIANT_SCHED_DONE_DENIED) {
 			api_stats.slots_denied++;
@@ -3085,53 +2495,20 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 			(void)radiant_channel_on_slot_missed(ch, now);
 		}
 		/*
-		 * AND THE MASTER OWES ITSELF THE NEXT SLOT, immediately - the
-		 * transmit-side twin of the tracked re-post below.
-		 *
-		 * Same hole, other direction: a MASTER_TX that never went out
-		 * left nothing posted, so the next slot came from the
-		 * RADIANT_API_HOUSEKEEP_MS pump (50 ms) rather than from here.
-		 * At the ANT+ period that is a fifth of a period of pure
-		 * scheduling latency added to a slot that was already lost, on
-		 * the leg this dongle exists to keep short - and once the pump
-		 * is late enough that arm_next() has committed the radio
-		 * elsewhere, the slot the clock advance just computed is missed
-		 * in its turn.
-		 *
-		 * BOUNDEDNESS, confirmed rather than assumed, and it transfers
-		 * verbatim from the tracked case: this branch is reached only
-		 * after one of the two clock advances immediately above, each
-		 * of which moves the master's t_next a FULL PERIOD past the
-		 * slot that died - and both advance from the missed slot, not
-		 * from `now`, so the advance cannot be swallowed by scheduler
-		 * latency. The re-posted slot is therefore strictly later in
-		 * time than the one it replaces, cannot produce another
-		 * immediate terminal, and the sequence advances rather than
-		 * spinning. api_arming still guards the other shape (a refused
-		 * arm completing inline), which is the one that can loop.
-		 *
-		 * The flag, not a direct api_post_master_tx() call, so this
-		 * goes through the single re-post block below with its
-		 * TRACKING / !pending / transfer-idle guards.
+		 * The master owes itself the next slot now, not after the 50 ms pump. The
+		 * re-post is bounded: the clock advanced a full period past the dead slot,
+		 * so the next slot is strictly later and cannot complete immediately.
+		 * The flag routes it through the re-post block below, which checks state.
 		 */
 		api_ch[ch].track_repost = true;
 	} else if (api_ch[ch].slot_kind == (uint8_t)API_SLOT_TRACK_RX &&
 		   !api_ch[ch].slot_heard) {
 		/*
-		 * A predicted window that ran and heard nothing. Clock
-		 * advances from the missed slot, not now, so scheduler latency
-		 * can't walk the phase away; after eight misses the channel
-		 * goes back to search and raises RX_FAIL_GO_TO_SEARCH itself.
-		 *
-		 * A DENIED window didn't run, so it advances through
-		 * radiant_channel_on_slot_denied() instead, which charges the
-		 * guard not the miss counter - contention in the other stack
-		 * must not drop a live sensor back to SEARCHING. No
-		 * RX_FAIL event either: that event says "nothing was there",
-		 * a denial says something about us, and a host (Zwift) acting
-		 * on it would tear down a channel that was never in trouble.
-		 * api_stats.sched_denied/slots_denied make the denial visible
-		 * instead.
+		 * A predicted window ran and heard nothing. The clock advances from the missed
+		 * slot, and after eight misses the channel returns to search
+		 * (RX_FAIL_GO_TO_SEARCH).
+		 * A DENIED window did not run: it charges the guard, not the miss counter, and
+		 * raises no RX_FAIL, since a denial says nothing about the sensor.
 		 */
 		if (why == RADIANT_SCHED_DONE_DENIED) {
 			api_stats.slots_denied++;
@@ -3148,36 +2525,10 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 			}
 		}
 		/*
-		 * AND THE CHANNEL OWES ITSELF THE NEXT WINDOW, immediately.
-		 *
-		 * api_sched_armed() sets track_repost only for a window that
-		 * really got armed, which is right for every terminal that
-		 * follows an arm - but a window reported MISSED or DENIED may
-		 * never have been armed at all, and then nothing here re-posted
-		 * anything. The channel waited for the RADIANT_API_HOUSEKEEP_MS
-		 * pump (50 ms), by which time arm_next() has committed the radio
-		 * to something up to a quarter of a second out and the window
-		 * this clock advance just computed is missed in its turn. Eight
-		 * of those is RX_FAIL_GO_TO_SEARCH: a ~2 s dropout that looks
-		 * exactly like an RF problem and is not one.
-		 *
-		 * BOUNDEDNESS, which this file demands for every post reachable
-		 * from a callback: unlike a refused arm, a MISSED or DENIED
-		 * terminal ALWAYS follows one of the clock advances just above,
-		 * each of which moves the slot a full period past the window
-		 * that died. So the re-posted window is strictly later than the
-		 * one it replaces and cannot produce another immediate terminal;
-		 * the sequence advances in time rather than spinning. api_arming
-		 * still guards the refusal path, which is the shape that can.
-		 *
-		 * The flag rather than a direct api_post_track_rx() call so this
-		 * goes through the single repost block below with its
-		 * TRACKING / !pending / transfer-idle guards - a channel that
-		 * this same callback is about to close or hand to the transfer
-		 * engine must not acquire a window behind it. (That block used
-		 * to carry a !master guard too; it now makes the same
-		 * master/slave split api_pump_locked() does, since the missed
-		 * MASTER_TX branch above sets this flag as well.)
+		 * The channel owes itself the next window now. A MISSED or DENIED window may
+		 * never have armed, so nothing else re-posts it. The re-post is bounded: the
+		 * clock advanced a full period, so the next window is strictly later. The
+		 * flag routes it through the repost block below, which checks state.
 		 */
 		api_ch[ch].track_repost = true;
 	}
@@ -3186,36 +2537,21 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 	api_ch[ch].op = 0u;
 	api_ch[ch].slot_kind = (uint8_t)API_SLOT_NONE;
 
-	/*
-	 * Every terminal event, including one bound to no channel: the HAL
-	 * guarantees a cancelled operation's terminal still arrives, so a close
-	 * that raced a window always produces one. A CLOSING channel completes
-	 * here and raises ANTW_EVENT_CHANNEL_CLOSED.
-	 */
+	/* Every terminal reaches here, even with no channel: the HAL always
+	 * delivers a cancelled operation's terminal. */
 	(void)radiant_channel_on_terminal(op, st, now);
 
-	/*
-	 * If the sweep's request is still in the scheduler's slot and its set
-	 * isn't finished, re-bind it: the scheduler arms the next chunk on the
-	 * way out of this same callback, and that arm needs slot_kind SEARCH to
-	 * credit the dwell. A fresh op id, since each chunk is a separate
-	 * operation and the terminal above already retired the previous one.
-	 */
+	/* Re-bind the sweep with a fresh op id: the scheduler arms the next
+	 * chunk on the way out, and that arm needs slot_kind SEARCH. */
 	if (keep_search) {
 		api_bind_accepted(ch, API_SLOT_SEARCH);
 	}
 
 	/*
-	 * Exception #1, bounded by construction: a listening master's
-	 * turnaround needs the t_sync its own transmit achieved (only
-	 * api_sched_tx() sees it) and has a 2.19 ms deadline, so it's posted
-	 * here rather than from api_sched_tx() itself, which would reuse a slot
-	 * still in flight and swallow this same completion (api_chan::turn_pending).
-	 * Not an api_arming-style unbounded loop: the flag is cleared before the
-	 * post and only set by a transmit that actually went out, so a refused
-	 * arm re-enters with it already false. The TRACKING check runs after
-	 * radiant_channel_on_terminal() so a channel that just closed doesn't get
-	 * a turnaround armed behind it.
+	 * A listening master's turnaround is posted here, not from api_sched_tx() (which
+	 * would reuse the slot still in flight). The flag is cleared before the post and
+	 * set only by a transmit that went out, so a refused arm cannot loop. The
+	 * TRACKING check runs after the terminal, so a channel just closed gets no turnaround.
 	 */
 	if (api_ch[ch].turn_pending) {
 		radiant_time_t t_sync = api_ch[ch].turn_t_sync;
@@ -3229,36 +2565,11 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 	}
 
 	/*
-	 * Exception #2, what keeps a background scan alive while anything is
-	 * tracked. arm_next() caps a scan chunk at t_back(committed, lead), but
-	 * only for work the scheduler can already see; left to the pump, a
-	 * tracked slave's next window is posted a moment later from the event
-	 * thread, and in that gap the scan gets armed with no end, then
-	 * want_preempt() tears it straight back down when the tracked window
-	 * arrives. Measured on nRF54L15, one channel tracking at 3 Hz: 109 scan
-	 * chunks armed unbounded vs 6 bounded, sets_advanced down from ~4/s to
-	 * 0.4/s, frames_ok frozen for 14 s - matches a Zwift capture where ch0
-	 * went silent for 40 s.
-	 *
-	 * Rejected fix: capping chunk_us in api_post_search_window() against
-	 * the soonest tracked slot - shortens the dwell even when correctly
-	 * bounded already, and fails test_the_scan_keeps_finding_devices_while_
-	 * another_channel_tracks (a 12 s device went unreported). The defect is
-	 * a missing fact, not an over-long chunk.
-	 *
-	 * Bounded the same way as turn_pending: set only by api_sched_armed() on
-	 * a window that really armed, or by a MISSED/DENIED terminal that has
-	 * just advanced the slot clock a full period; cleared before the post.
-	 *
-	 * BOTH DIRECTIONS NOW. The flag started life as the tracked slave's
-	 * re-post and the guard read !master, which silently made the transmit
-	 * side wait on the 50 ms pump. The two-way split below is
-	 * api_pump_locked()'s, spelled the same way and in the same order
-	 * (master -> api_post_master_tx(), slave -> api_post_track_rx()), so a
-	 * terminal's re-post and the pump's post can never disagree about what
-	 * a channel should be doing next. Nothing else changed: track_repost is
-	 * still only ever set on an API_SLOT_TRACK_RX or API_SLOT_MASTER_TX
-	 * slot, and those two kinds are exactly the two arms of this if.
+	 * Keeps a background scan bounded while anything is tracked. The scheduler caps a
+	 * scan chunk only for work it can already see, so the tracked window is re-posted
+	 * here rather than a moment later from the pump: otherwise a scan is armed with no
+	 * end and then preempted straight away. Re-post in both directions, in the same
+	 * order as api_pump_locked(), so the two posts never disagree.
 	 */
 	if (api_ch[ch].track_repost) {
 		api_ch[ch].track_repost = false;
@@ -3266,19 +2577,9 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 		    !radiant_sched_pending(ch) &&
 		    radiant_transfer_is_idle(&api_xfer[ch])) {
 			if (radiant_channel_is_master(ch)) {
-				/* A SECURED master is not re-posted from here:
-				 * this is the scheduler's terminal callback
-				 * (the radio ISR on a direct build, the SWI under
-				 * MPSL), and posting runs radiant_sec_tx_transform(),
-				 * which expands the one shared AES key schedule
-				 * under whatever thread holds it and does AES in the
-				 * scheduler's interrupts-off section. It falls
-				 * through to the wake below; the pump posts it under
-				 * api_lock, in thread context
-				 * (api_pump_locked() posts any TRACKING master with
-				 * nothing pending). Costs a secured master one pump
-				 * of latency per missed, denied or acknowledged slot,
-				 * which the 250 ms period absorbs. */
+				/* A secured master is not re-posted from this callback: the
+				 * transform runs the shared AES key schedule, so the pump posts
+				 * it in thread context under api_lock. */
 				if (!radiant_sec_channel_is_secured(ch)) {
 					api_post_master_tx(ch);
 				}
@@ -3289,29 +2590,10 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 	}
 
 	/*
-	 * Do NOT post anything else from here: against a backend that refuses
-	 * every arm, posting from a radio callback is an unbounded loop.
-	 * Everything but the transfer engine's one hard deadline waits for the
-	 * next pass.
-	 */
-
-	/*
-	 * A denial does not wake the event thread, or the whole dongle spins.
-	 * Every other completion gives the thread something to do; a denial
-	 * doesn't, and the refused request is deliberately still in the
-	 * scheduler's slot (`ran` above). Waking the thread would just pump,
-	 * post nothing, tick, get refused, and complete back into here.
-	 * Measured against an arbiter refusing every arm: 510,000 housekeeping
-	 * passes and 510,000 denials in 19 s, with the logging ring dropping
-	 * the very diagnostics that would explain why. api_arming doesn't cover
-	 * this shape (post -> arm -> refuse -> WAKE -> pump, not -> POST), so
-	 * the bound is here instead; housekeeping's own cadence still retries a
-	 * few times a second.
-	 *
-	 * Only when the slot was kept (keep_search): skipping the wake for
-	 * every denial regressed test_a_denied_master_transmit_does_not_wedge -
-	 * a denied master TX has its request consumed and needs the pump to
-	 * re-post it, so it still needs the wake.
+	 * Post nothing else from here: against a backend that refuses every arm, posting
+	 * from a radio callback is an unbounded loop. A kept sweep request on DENIED does
+	 * not wake the event thread either, or a refused arm would spin the pump forever.
+	 * A denied master TX is the exception, since its request was consumed.
 	 */
 	if (why == RADIANT_SCHED_DONE_DENIED && keep_search) {
 		return;
@@ -3332,9 +2614,8 @@ static const struct radiant_sched_cbs api_sched_cbs = {
  * ---------------------------------------------------------------------------
  */
 
-/* Is this transfer state one the radio is supposed to finish? WAIT_BLOCK is
- * not - it's waiting on the host, and terminating it here would release a
- * block the bridge still owns (forbidden by B1-B5). IDLE is not, trivially. */
+/* Is this a state the radio must finish? Not WAIT_BLOCK: it waits on the
+ * host, and terminating it would release a block the bridge still owns. */
 static bool api_xfer_awaits_radio(uint8_t ch)
 {
 	switch (radiant_transfer_state(&api_xfer[ch])) {
@@ -3352,10 +2633,9 @@ static bool api_xfer_awaits_radio(uint8_t ch)
 }
 
 /*
- * The two recovery watchdogs. Callers hold api_lock. Neither should ever fire
- * on a healthy link; they exist because the failures they cover are permanent
- * and silent - a transfer engine with no completion coming never leaves its
- * state, and the channel just goes quiet with no event, error, or log line.
+ * Recovery watchdogs, run under api_lock. They should never fire on a healthy link.
+ * They cover silent, permanent failures: a transfer with no completion coming, or an
+ * acknowledgement that never got its opener.
  */
 static void api_watchdogs_locked(radiant_time_t now)
 {
@@ -3378,8 +2658,7 @@ static void api_watchdogs_locked(radiant_time_t now)
 			api_ack_pending_fail(ch);
 		}
 
-		/* H2. Non-idle with nothing armed means no done() is coming -
-		 * api_feed_xfer_terminal() is only reachable from api_sched_done(). */
+		/* Non-idle with nothing armed means no done() is coming. */
 		if (api_xfer_awaits_radio(ch) && !radiant_sched_pending(ch)) {
 			if (!c->xfer_stuck_valid) {
 				c->xfer_stuck_valid = true;
@@ -3397,21 +2676,15 @@ static void api_watchdogs_locked(radiant_time_t now)
 			c->xfer_stuck_valid = false;
 		}
 
-		/* in_pkts only clears on LAST, so a burst whose final packet is
-		 * missed leaves it non-zero forever, mislabeling later
-		 * acknowledged messages as burst data. A BACKSTOP now: the
-		 * engine follows an inbound burst and reports its end itself
-		 * (api_xfer_rx_failed()). What is left for this is a burst
-		 * the engine never followed - a SLAVE_RX_ONLY channel's, heard
-		 * one packet per tracked slot - and anything that ended without
-		 * telling us. Skipped while the engine is busy: an open burst
-		 * repeating its acknowledgement is not abandoned. */
+		/* in_pkts clears only on LAST, so a burst that lost its LAST would
+		 * mislabel later messages. Backstop for bursts the engine did not
+		 * follow; skipped while the engine is busy. */
 		if (c->in_pkts != 0u && c->in_last_valid &&
 		    (now - c->in_last) >= limit &&
 		    radiant_transfer_is_idle(&api_xfer[ch])) {
 			LOG_DBG("ch=%u inbound transfer abandoned at seq %u",
 				(unsigned)ch, (unsigned)c->in_pkts);
-			/* Against the radio callback that also resets it. */
+			/* Re-check under the crit section: the radio callback also resets it. */
 			key = radiant_event_crit_enter();
 			if (c->in_pkts != 0u) {
 				api_inbound_failed(ch);
@@ -3428,43 +2701,33 @@ static void api_housekeep(void)
 	k_mutex_lock(&api_lock, K_FOREVER);
 	now = radiant_radio_now();
 
-	/* A search about to time out closes its channel. A pending slave
-	 * command fails first - the order antr_channel_close() gives - or the
-	 * unassign CHANNEL_CLOSED invites would wipe it with no outcome. */
+	/* A pending slave command fails before a timed-out search closes its
+	 * channel, or unassign would wipe it with no outcome. */
 	for (uint8_t ch = 0u; ch < API_CHANNELS; ch++) {
 		if (radiant_channel_search_deadline(ch) <= now) {
 			api_ack_pending_fail(ch);
 		}
 	}
 
-	/* Search deadlines. A SEARCHING channel past its deadline raises
-	 * RX_SEARCH_TIMEOUT and then closes, both, in that order. */
+	/* A SEARCHING channel past its deadline raises RX_SEARCH_TIMEOUT, then closes. */
 	(void)radiant_channel_tick(now);
 
-	/* Seen-cache expiry. The timeout half cannot fire - radiant_channel.c owns
-	 * the deadline; see api_search_timeout(). */
+	/* Seen-cache expiry. The timeout half never fires; see api_search_timeout(). */
 	radiant_search_tick(&api_search, now);
 
-	/* Before the pump, so a transfer this releases gets its channel's
-	 * broadcast slot posted again on the same pass rather than one
-	 * housekeeping interval later. */
+	/* Before the pump, so a transfer released here gets its slot re-posted in the same pass. */
 	api_watchdogs_locked(now);
 
 #if defined(CONFIG_RADIANT_SEC_PAIRING_X25519)
-	/* The release radiant_sec_pair_on_search() could not do in the radio
-	 * callback. */
+	/* The pairing release that radiant_sec_pair_on_search() cannot do from
+	 * the radio callback. */
 	radiant_sec_pair_service();
 #endif
 	api_pump_locked();
 	api_stats.housekeeps++;
 
-	/*
-	 * The noise floor, once per interval, per frequency. USB 3.0 broadband
-	 * noise desensing the receiver 10-20 dB is otherwise indistinguishable
-	 * from a flat sensor battery; this line makes it a measurement. INF not
-	 * DBG so it's readable on an ordinary bench log. Cleared after
-	 * reporting so each line describes its own interval.
-	 */
+	/* Noise floor per frequency, once per interval, at INF so it shows on a
+	 * bench log. Cleared after reporting, so each line covers its interval. */
 	{
 		static radiant_time_t noise_last;
 		uint8_t slot;
@@ -3491,26 +2754,16 @@ static void api_housekeep(void)
 		}
 	}
 
-	/*
-	 * THE RECEIVE PATH, one line per interval, and only when it moved - a
-	 * quiet dongle must not fill the console with zeros. Reports the four
-	 * stage counters plus what reached the host, so the hop that multiplies
-	 * is the one whose successor is larger than it. See the comment on
-	 * struct radiant_api_stats::rx_sched_events.
-	 */
+	/* Receive-path counters, one line per interval, only when they moved.
+	 * See struct radiant_api_stats::rx_sched_events. */
 	{
 		static radiant_time_t rxpath_last;
 		static uint32_t       rxpath_seen;
 
 		if (now - rxpath_last >= API_RXPATH_REPORT_US &&
 		    api_stats.rx_sched_events != rxpath_seen) {
-			/*
-			 * Reported as a DELTA over a measured interval, not as a
-			 * running total: the counters are cumulative since boot,
-			 * and a total spanning several bench runs reads as one
-			 * enormous flood no matter how quiet the current run is.
-			 * That very confusion cost a reading here already.
-			 */
+			/* Reported as a delta over the interval, since the counters are
+			 * cumulative since boot. */
 			uint32_t dt_ms = (uint32_t)((now - rxpath_last) / 1000u);
 
 			LOG_INF("rxpath/%ums sched=%u tracked=%u on_data=%u "
@@ -3540,23 +2793,9 @@ static void api_housekeep(void)
 
 #if defined(CONFIG_RADIANT_CRC_REPAIR)
 	/*
-	 * W5/F2: the CRC-repair counters, on a UART a person can read.
-	 *
-	 * This is a hard prerequisite of the S3 sensitivity A/B rather than a
-	 * convenience. That sitting compares the knee of a dB ladder with
-	 * repair on against the knee with it off, and its stated decision rule
-	 * demands `crc_repaired` be climbing AT the knee before a difference in
-	 * knees may be attributed to repair. Without a read path the honest
-	 * outcome of a null result is unreadable: "repair did nothing" and
-	 * "repair never engaged, so the run measured nothing" produce the same
-	 * two numbers, and only the first of those is a result.
-	 *
-	 * Cumulative, not per-interval - unlike the noise line above, which
-	 * clears. A rate is what matters here, and the sitting takes it as a
-	 * delta across a run, so clearing would fight the tool that reads it.
-	 *
-	 * Compiled out entirely with the feature, so the default image carries
-	 * neither the timestamp nor the call.
+	 * CRC-repair counters, logged on a UART. Cumulative, not cleared per interval:
+	 * a sensitivity run reads a rate as a delta across the run. A null result is
+	 * only readable if the counters show repair engaged.
 	 */
 	{
 		static radiant_time_t crc_last;
@@ -3585,29 +2824,20 @@ static void api_event_thread(void *a, void *b, void *c)
 	for (;;) {
 		uint32_t n;
 
-		/* Timeout drives housekeeping: radiant_sched.c owns no timer, so
-		 * a request that lost an arm race has nothing else to retry it. */
+		/* The timeout drives housekeeping: radiant_sched.c has no timer of its own. */
 		(void)k_sem_take(&api_event_sem, K_MSEC(RADIANT_API_HOUSEKEEP_MS));
 
-		/*
-		 * All RX crypto, run before the drain: the pump turns queued
-		 * ciphertext into posted plaintext, so a packet is in the ring
-		 * before the drain delivers it. UNDER api_lock, unlike the
-		 * drain: the parser thread outranks this one, and its unassign
-		 * and RESET_SYSTEM paths wipe the context the pump may be half
-		 * way through - a zeroed W is a divide-by-zero trap and a
-		 * reboot (review 2026-10-31, A6-1). Bounded crypto that posts
-		 * only to the ISR-safe ring, so no deadlock.
-		 */
+		/* RX crypto runs under api_lock before the drain, so packets are in
+		 * the ring when the drain delivers them. The lock keeps unassign from
+		 * wiping state mid-pump. */
 #if defined(CONFIG_RADIANT_SEC)
 		k_mutex_lock(&api_lock, K_FOREVER);
 		radiant_sec_pump();
 		k_mutex_unlock(&api_lock);
 #endif
 
-		/* Thread context only, deliberately outside api_lock: the drain
-		 * calls antr_on_message() (the bridge's), and holding a lock
-		 * across that is how a deadlock gets built. */
+		/* Drain outside api_lock: the drain calls antr_on_message(), and
+		 * holding a lock across that can deadlock. */
 		n = radiant_event_drain(0u);
 		if (n != 0u) {
 			api_stats.drains++;
@@ -3658,25 +2888,18 @@ antr_err_t antr_init(void)
 	struct radiant_search_cfg scfg;
 	int                   rc;
 
-	/* No other thread exists yet, but radiant_sec_reset() inside asserts
-	 * the lock (CONFIG_RADIANT_SEC_LOCK_CHECK), and the rule is simpler
-	 * with no exceptions. */
+	/* Taken although no other thread exists yet: radiant_sec_reset() asserts the lock. */
 	k_mutex_lock(&api_lock, K_FOREVER);
 	api_reset_state();
 	k_mutex_unlock(&api_lock);
 	memset(&api_stats, 0, sizeof(api_stats));
 
-	/*
-	 * Order matters; each step preconditions the next. radiant_event_init()
-	 * first, before the radio is enabled: posting before it returns is
-	 * RADIANT_EVENT_ESTATE, mirroring antr_on_message() never firing before
-	 * antr_init() returns 0.
-	 */
+	/* Order matters: the event ring must exist before the radio is enabled,
+	 * since an earlier post returns ESTATE. */
 	radiant_channel_init();
 	radiant_event_init();
 
-	/* The scheduler owns radio events (it's the only thing that arms), not
-	 * the radio lifecycle, which stays this file's. */
+	/* The scheduler owns radio events; the radio lifecycle stays in this file. */
 	rc = radiant_sched_init(&api_sched_cbs, NULL);
 	if (rc != RADIANT_RADIO_OK_RC) {
 		LOG_ERR("radiant_sched_init: %d", rc);
@@ -3695,12 +2918,9 @@ antr_err_t antr_init(void)
 	}
 
 	/*
-	 * The adaptive guard is only as good as its t_sync. When the HAL says
-	 * that's an inference rather than a hardware capture, the floor is
-	 * pinned at the ceiling and the mechanism switches itself off - no
-	 * narrowed window sized from a number that doesn't mean what it says.
-	 * Otherwise the floor is the core minimum, raised by two ticks of the
-	 * backend's own timebase granularity.
+	 * The adaptive guard needs a hardware t_sync. Without one, pin the floor at the
+	 * ceiling and switch the mechanism off. Otherwise the floor is the core minimum
+	 * plus two ticks of the backend's timebase.
 	 */
 	{
 		const struct radiant_radio_caps *caps = radiant_radio_caps_get();
@@ -3723,22 +2943,17 @@ antr_err_t antr_init(void)
 	api_search_cfg_build(&scfg);
 	rc = radiant_search_init(&api_search, &scfg, &api_search_cbs, NULL);
 	if (rc != RADIANT_SEARCH_OK) {
-		/* RADIANT_SEARCH_ENOTSUP: the backend advertises a wildcard
-		 * device-number filter that struct radiant_rx_filter has no
-		 * field for. Fail loudly rather than fake the capability. */
+		/* ENOTSUP: the backend advertises a wildcard device-number filter
+		 * that the rx filter cannot express. Fail rather than fake it. */
 		LOG_ERR("radiant_search_init: %d", rc);
 		return (antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED;
 	}
 
 	api_inited = true;
 #if defined(CONFIG_RADIANT_SWI)
-	/*
-	 * Claim the trampoline before the event thread exists, and so before
-	 * anything can post: radiant_swi_pend() drops silently until the line is
-	 * claimed, and that window must not overlap a live receiver. Failure is
-	 * fatal to arbitrated operation rather than cosmetic - every wakeup on
-	 * the completion path goes through it - so it is reported, not ignored.
-	 */
+	/* Claim the SWI trampoline before the event thread exists: pends are
+	 * dropped until it is claimed. Failure is fatal, since every wakeup goes
+	 * through it. */
 	{
 		int swi_rc = radiant_swi_register(RADIANT_SWI_EVENT_WAKEUP,
 						  event_wakeup_swi);
@@ -3770,9 +2985,8 @@ antr_err_t antr_stack_reset(void)
 
 	k_mutex_lock(&api_lock, K_FOREVER);
 
-	/* radiant_radio_abort() before radiant_channel_reset_all(): radiant_channel.c
-	 * can't abort an operation itself, so tearing its state down first
-	 * would leave the backend pointing at a channel that no longer exists. */
+	/* Abort the radio before resetting channels: the channel layer cannot
+	 * abort an operation itself. */
 	radiant_sched_reset();
 	(void)radiant_radio_abort();
 
@@ -3783,12 +2997,10 @@ antr_err_t antr_stack_reset(void)
 
 	radiant_channel_reset_all();
 
-	/* Discard the queue rather than draining it: draining here would call
-	 * antr_on_message() recursively from inside an antr_* call, which
-	 * docs/sdk-ant-contract.md forbids. The bridge's own discard window
-	 * absorbs any channel-closed events the reset raised. Reset also ends
-	 * pending ACK commands without a terminal event: the single-outcome
-	 * guarantee is scoped to an active stack session, never across reset. */
+	/* Discard, do not drain: draining would re-enter antr_on_message(),
+	 * which docs/sdk-ant-contract.md forbids. Pending ACK commands end
+	 * without a terminal event, since the single-outcome guarantee does not
+	 * span a reset. */
 	radiant_event_flush();
 
 	api_reset_state();
@@ -3815,51 +3027,13 @@ antr_err_t antr_channel_assign(uint8_t channel, uint8_t type, uint8_t network,
 	k_mutex_lock(&api_lock, K_FOREVER);
 
 	/*
-	 * An in-range network whose address was never installed is WARNED
-	 * ABOUT AND ACCEPTED. It used to be refused with
-	 * ANTW_INVALID_NETWORK_NUMBER, and that refusal - correct on its face -
-	 * was a worse bug than the silence it replaced.
-	 *
-	 * Measured on real hardware against real Zwift, 2026-08-18
-	 * (captures/zwift-20260818-144612.pcap, decoded with
-	 * tools/decode_pcap.py). Zwift installs three network keys at startup,
-	 * only the ANT+ one is accepted here, and it then cycles its wildcard
-	 * scan channel across networks 0, 1 and 2 every ~4-5 s:
-	 *
-	 *     t=21.0  ch0 background-scan assigned on network 0, opens, works
-	 *     t=24.7  power meter #20329 found and tracked on ch1
-	 *     t=26.0  Zwift closes and unassigns ch0 cleanly
-	 *     t=26.05 assign ch0 on NETWORK 1 -> ANTW_INVALID_NETWORK_NUMBER
-	 *     t=30+   CLOSE_CHANNEL 00 x5385 at ~40/s for the remaining 127 s,
-	 *             each answered CHANNEL_IN_WRONG_STATE, and no further
-	 *             ASSIGN or OPEN for the rest of the session
-	 *
-	 * Zwift has no recovery path for a failed assign: it spins on close
-	 * forever and never rebuilds the scan channel, so the session ends with
-	 * exactly one ANT+ device ever discovered and every other sensor
-	 * invisible. That is the "it only finds one device / the strap only
-	 * shows up over Bluetooth" report.
-	 *
-	 * Accepting is also the honest answer, not merely the tolerable one.
-	 * The sweep in radiant_search.c matches on api_net_addr[0]
-	 * unconditionally, so a background scan assigned to a keyless network
-	 * still reports ANT+ devices normally - Zwift's network 1 and 2 cycles
-	 * are productive, not wasted. Only a channel that leaves scan mode and
-	 * TRACKS pays for the zero address, by hearing nothing; Zwift assigns
-	 * its tracking channels to network 0, so it never does.
-	 *
-	 * The diagnostic that motivated the refusal is kept - LOG_WRN here plus
-	 * api_stats.key_rejects / ANT_HEALTH_KEY_REJECT at the point the key is
-	 * turned away. Both are visible to us without being fatal to the host,
-	 * which is the property the refusal lacked.
-	 *
-	 * RULE, learned the expensive way: returning a correct error to a host
-	 * that has no recovery path for it is a regression. Prefer a warning we
-	 * can read over an error the host cannot act on.
-	 *
-	 * The bounds test stays with radiant_channel_assign(), which already
-	 * answers it: an out-of-range network number is a different mistake and
-	 * is still refused there.
+	 * An in-range network with no installed key is accepted with a warning, not
+	 * refused: a refused assign leaves a host with no recovery path, and it can
+	 * spin on close forever. A background scan on a keyless network still reports
+	 * ANT+ devices, since the sweep uses the lowest keyed network's address. Only a
+	 * channel that tracks on the zero address hears nothing. Prefer a warning the
+	 * maintainer can read over an error the host cannot act on. Out-of-range network
+	 * numbers are still refused by radiant_channel_assign().
 	 */
 	if (network > 0u && network < API_NETWORKS && !api_net_valid[network]) {
 		LOG_WRN("ch%u assigned to network %u, which has no address "
@@ -3908,11 +3082,8 @@ antr_err_t antr_channel_unassign(uint8_t channel)
 }
 
 /*
- * A master is about to transmit an ID that nRF receivers find hard to hear: a
- * long alternating run in its on-air address (ADR 0019). Nothing is refused.
- * The number may be a real sensor's, a provisioned identity, or a test case.
- * This only tells whoever chose it, once per open, that another number would
- * be received more reliably.
+ * Warns once per open if a master's on-air address has a long alternating run,
+ * which nRF receivers can miss (ADR 0019). Nothing is refused.
  */
 static void api_warn_slip_prone_id(uint8_t ch)
 {
@@ -3936,10 +3107,8 @@ static void api_warn_slip_prone_id(uint8_t ch)
 	}
 }
 
-/* A slave on another frequency is legal and, on a keyed network, now served
- * (the sweep retunes to follow it, and a mixed session alternates passes
- * between its frequencies). A keyless network's channel never moves the sweep.
- * Say so once per open, so the longer discovery has a readable cause. */
+/* Warns once per open for a slave off RF 57. On a keyed network the sweep
+ * retunes to follow it; on a keyless one it stays put. */
 static void api_warn_off_57_slave(uint8_t ch)
 {
 	uint8_t rf = api_rf_of(ch);
@@ -4003,16 +3172,8 @@ antr_err_t antr_channel_close(uint8_t channel)
 
 	k_mutex_lock(&api_lock, K_FOREVER);
 
-	/*
-	 * An inbound burst open on the channel ends with it, and the host is
-	 * told so BEFORE CHANNEL_CLOSED: radiant_channel_close() raises that at
-	 * once when no tracked operation is bound, which is exactly the state
-	 * during a burst (the engine's requests are its own). Aborting the
-	 * engine here only changes its state - TX_REPLY and WAIT_NEXT never call
-	 * radiant_radio_abort() - and reports the burst through
-	 * api_xfer_rx_failed(); the armed request is cancelled below as always.
-	 * The second check covers a burst the engine was not following.
-	 */
+	/* An open inbound burst fails before CHANNEL_CLOSED, so the host hears
+	 * EVENT_TRANSFER_RX_FAILED first. */
 	if (api_ch_valid(channel) &&
 	    (radiant_channel_state_get(channel) == RADIANT_CH_STATE_SEARCHING ||
 	     radiant_channel_state_get(channel) == RADIANT_CH_STATE_TRACKING)) {
@@ -4037,35 +3198,26 @@ antr_err_t antr_channel_close(uint8_t channel)
 	if (rc == RADIANT_CH_OK) {
 		uint32_t op = api_ch[channel].op;
 
-		/* As at open, and here too: radiant_sec_rx_restart() also drops
-		 * this channel's packets still queued for the pump, so none of
-		 * them opens a window that outlives the close. */
+		/* Also drops this channel's packets queued for the pump, so none
+		 * opens a window after the close. */
 		radiant_sec_rx_restart(channel);
 
 		(void)radiant_transfer_abort(&api_xfer[channel]);
 		api_ack_pending_fail(channel);
 		(void)radiant_search_end(&api_search, channel);
 		if (api_search_slot == channel) {
-			/* This channel carried the sweep and its request is
-			 * about to be cancelled silently, so nothing else tells
-			 * radiant_search.c the window is over. Credit nothing,
-			 * so the same set is retried rather than skipped. */
+			/* This channel carried the sweep and its request is cancelled
+			 * silently. Credit nothing, so the same set is retried. */
 			radiant_search_on_done(&api_search, false, false, 0u);
 			api_search_slot = RADIANT_SCHED_CH_NONE;
 		}
 
-		/* radiant_sched_cancel() is silent for the channel it cancels,
-		 * so no done() arrives; feeding the terminal here is what
-		 * raises ANTW_EVENT_CHANNEL_CLOSED exactly once. */
+		/* Cancel is silent, so no done() arrives; the terminal below raises
+		 * ANTW_EVENT_CHANNEL_CLOSED exactly once. */
 		(void)radiant_sched_cancel(channel);
-		/* The same silence strands a transfer radiant_transfer_abort()
-		 * parked in ABORTING: its request was only queued, the global
-		 * abort above ended someone else's op (or nothing), and the
-		 * cancel just guaranteed no terminal will come. Finish it now so
-		 * its one TX_FAILED is posted inside this call - before the host
-		 * can unassign - instead of by the 500 ms watchdog. An armed
-		 * request already finished synchronously in the abort, so this
-		 * never double-reports (finish() resets to IDLE). */
+		/* Finish an ABORTING transfer now, so its TX_FAILED is posted before
+		 * the host can unassign. An armed request already finished in the
+		 * abort, so this never double-reports. */
 		if (radiant_transfer_state(&api_xfer[channel]) ==
 		    RADIANT_TRANSFER_STATE_ABORTING) {
 			api_feed_xfer_terminal(channel, RADIANT_RADIO_STATUS_ABORTED);
@@ -4085,14 +3237,8 @@ antr_err_t antr_channel_close(uint8_t channel)
 		api_pump_locked();
 
 #if defined(CONFIG_RADIANT_CRC_REPAIR)
-		/*
-		 * W5/F2's on-close half. The periodic line in api_housekeep()
-		 * can miss the end of a short rung by up to its interval, and
-		 * the last few seconds before a close are exactly the ones an
-		 * A/B rung is made of. Cumulative across all channels - the
-		 * stats struct has no per-channel breakdown - so read it as a
-		 * delta against the previous line, not as this channel's total.
-		 */
+		/* CRC-repair counters at close, so the last seconds before a close
+		 * are logged. Cumulative across channels: read as a delta. */
 		LOG_INF("crc at close ch=%u repaired=%u unrepairable=%u "
 			"refuted=%u implausible=%u",
 			(unsigned int)channel,
@@ -4136,9 +3282,7 @@ antr_err_t antr_channel_radio_tx_power_set(uint8_t channel, uint8_t level,
 
 	k_mutex_lock(&api_lock, K_FOREVER);
 	rc = radiant_channel_tx_power_set(channel, level, custom);
-	/* The transfer engine read the power at open; an open channel's change
-	 * must reach its data, burst and ack packets too, not only broadcasts
-	 * (api_power_of() at each post). */
+	/* The engine reads power at open; a change must reach its data and ack packets as well. */
 	if (rc == RADIANT_CH_OK && api_xfer[channel].ready) {
 		(void)radiant_transfer_set_power(&api_xfer[channel],
 						 api_power_of(channel));
@@ -4172,9 +3316,7 @@ antr_err_t antr_auto_freq_hop_table_set(uint8_t channel, uint8_t freq0,
 
 antr_err_t antr_enhanced_channel_spacing_enable(uint8_t enable)
 {
-	/* Device-wide, unmodeled by any module. Accepting enable == 0 (the
-	 * default state) is honest; accepting non-zero would be a host
-	 * believing it configured a spacing it did not get. */
+	/* Device-wide and unmodeled: only enable == 0 (the default) is honest to accept. */
 	return (enable == 0u) ? (antr_err_t)ANTW_RESPONSE_NO_ERROR
 			      : (antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED;
 }
@@ -4231,10 +3373,8 @@ antr_err_t antr_id_list_add(uint8_t channel, const uint8_t *device_id,
 		return (antr_err_t)ANTW_INVALID_LIST_ID;
 	}
 
-	/* Wire order: [devnum_lsb, devnum_msb, device_type, trans_type],
-	 * copied before this returns. One aligned word store, so a radio
-	 * interrupt that preempts this sees the old entry or the new one,
-	 * never half of each. */
+	/* One aligned word store, so an interrupt preempting this sees the old
+	 * entry or the new one. */
 	uint32_t w;
 
 	BUILD_ASSERT(API_ID_LIST_BYTES == sizeof(w));
@@ -4258,26 +3398,15 @@ antr_err_t antr_id_list_config(uint8_t channel, uint8_t size, uint8_t inc_exc)
 	}
 
 	/*
-	 * Accepted on an OPEN channel too. This used to answer
-	 * CHANNEL_IN_WRONG_STATE there. The Android ANT stack opens a wildcard
-	 * search on an empty exclusion list and rewrites the list about 5 s in
-	 * with the channel still searching (nRF5340 DK host trace, 2026-11-11).
-	 * A retail ANT USB-m answers RESPONSE_NO_ERROR to both 0x5A and 0x59
-	 * on an open, searching channel (the same sequence replayed against the
-	 * Garmin stick), and Rev 5.1 sec 9.5.2.10/12 states no channel-state
-	 * condition. NOT the cause of the close/reset/reconnect cycle Android
-	 * runs every ~12 s on a stick that finds nothing: the retest with this
-	 * fix showed the same cycle, the close now following an accepted 0x5A.
-	 * The list is consulted only at steer, offer and acquire time, so a
-	 * change reaches the next search decision and leaves a channel already
-	 * tracking alone.
+	 * Accepted on an open channel: the Android ANT stack rewrites its exclusion
+	 * list while searching, and a retail stick accepts this (Rev 5.1 sec
+	 * 9.5.2.10/12 sets no channel-state condition). The list is consulted only at
+	 * steer, offer and acquire time, so a change leaves a tracking channel alone.
 	 *
-	 * Store order, for api_id_list_permits() in a radio interrupt that
-	 * preempts this: when the include/exclude sense flips, the list is
-	 * switched off (size 0) first and back on last, so no reader pairs the
-	 * old entries with the new sense. Off for those few instructions admits
-	 * anything, which an exclusion list could regret for one offer at most;
-	 * api_search_acquired() re-checks against the finished list.
+	 * Store order matters for api_id_list_permits() in an interrupt: when the
+	 * include/exclude sense flips, the list is switched off first and back on last,
+	 * so no reader pairs old entries with the new sense. Off admits anything for
+	 * those few instructions; api_search_acquired() re-checks against the result.
 	 */
 	c = &api_ch[channel];
 	k_mutex_lock(&api_lock, K_FOREVER);
@@ -4306,13 +3435,8 @@ antr_err_t antr_network_address_set(uint8_t network, const uint8_t *key)
 		return (antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED;
 	}
 
-	/*
-	 * The whole table: the published ANT+ pair, and
-	 * ANTW_INVALID_PARAMETER_PROVIDED for anything else - not a to-do, see
-	 * the file header. May be extended by observing RF emissions from a
-	 * shipping master (licence position permitting), never by fitting the
-	 * function.
-	 */
+	/* Only the published ANT+ key is accepted; anything else is
+	 * ANTW_INVALID_PARAMETER_PROVIDED (see the file header). */
 	if (memcmp(key, api_ant_plus_key, sizeof(api_ant_plus_key)) != 0) {
 		api_stats.key_rejects++;
 		ant_health_note(ANT_HEALTH_KEY_REJECT);
@@ -4320,12 +3444,9 @@ antr_err_t antr_network_address_set(uint8_t network, const uint8_t *key)
 	}
 
 	k_mutex_lock(&api_lock, K_FOREVER);
-	/* Only a network's first valid key changes anything: it can move the
-	 * sweep's address (off the all-zero one, or to network 0's, which takes
-	 * precedence), and it turns that network's searching channels from
-	 * keyless to keyed (api_search_begin()). A re-sent key changes nothing.
-	 * Only the ANT+ key is accepted, so this is true at most once for each
-	 * network. */
+	/* Only a network's first valid key changes anything: it moves the
+	 * sweep's address and turns that network's channels from keyless to
+	 * keyed. */
 	bool newly = !api_net_valid[network];
 
 	api_net_addr[network][0] = RADIANT_NET_ADDR_ANT_PLUS_0;
@@ -4334,19 +3455,10 @@ antr_err_t antr_network_address_set(uint8_t network, const uint8_t *key)
 	 * and each failure path returns without reaching here. */
 	api_net_valid[network] = true;
 
-	/* The sweep's address is fixed at radiant_search_init(), so a newly
-	 * keyed network re-initialises it, searches or not. The re-init drops
-	 * every member; the pump's membership loop puts each SEARCHING channel
-	 * back at once, and api_search_begin() then picks keyed or keyless for
-	 * it afresh. The cost is the seen cache and the steering, once for each
-	 * network. Gating this on "nobody searching" (as it once was) lost the
-	 * key for good: a host that keys after opening a channel left the
-	 * sweep on the all-zero address until reset (review 2026-11-09).
-	 *
-	 * Never under a live carrier: re-initialising then orphans its
-	 * continuous request in that channel's slot, so that case is deferred
-	 * to the next pump with no carrier (api_search_reinit_pending).
-	 * Deferred, not dropped. */
+	/* The sweep's address is fixed at radiant_search_init(), so a newly keyed
+	 * network re-initialises it. Never under a live carrier, which would
+	 * orphan that request: the re-init waits for the next pump with no
+	 * carrier. */
 	if (newly) {
 		if (api_search_slot == RADIANT_SCHED_CH_NONE) {
 			struct radiant_search_cfg scfg;
@@ -4397,8 +3509,7 @@ antr_err_t antr_event_filtering_get(uint16_t *filter)
 
 antr_err_t antr_adv_burst_config_set(const uint8_t *config, uint8_t size)
 {
-	/* 8 is required, 11 is the whole thing; rejected rather than padded so
-	 * a bridge bug passing the wrong slice doesn't look correct. */
+	/* Size 8 minimum, 11 maximum. Reject rather than pad, so a bridge bug is visible. */
 	if (config == NULL || size < 8u || size > sizeof(api_adv_burst)) {
 		return (antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED;
 	}
@@ -4414,17 +3525,16 @@ antr_err_t antr_adv_burst_config_get(uint8_t request_type, uint8_t *config)
 		return (antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED;
 	}
 
-	/* Two different lengths; the caller's buffer is sized off request_type
-	 * alone, so writing the wrong one shifts a field by one, invisibly. */
+	/* Two lengths: the caller sizes its buffer from request_type alone, so
+	 * the wrong one shifts fields. */
 	if (request_type != 0u) {
 		memcpy(config, &api_adv_burst[1], sizeof(api_adv_burst) - 1u);
 	} else {
 		memset(config, 0,
 		       ANTW_MESG_CONFIG_ADV_BURST_REQ_CAPABILITIES_SIZE);
 		config[0] = (uint8_t)ANTW_ADV_BURST_MODES_SIZE_24_BYTES;
-		/* Supported modes: none. Frequency hopping was advertised here
-		 * until 2026-11-11, but nothing in RadiANT hops, so a host that
-		 * required it would have been told yes and got a fixed RF. */
+		/* Supported modes: none. Nothing hops, so advertising hopping would
+		 * mislead a host. */
 		config[1] = 0u;
 	}
 	return (antr_err_t)ANTW_RESPONSE_NO_ERROR;
@@ -4450,9 +3560,8 @@ antr_err_t antr_sdu_mask_get(uint8_t mask_index, uint8_t *mask)
 
 antr_err_t antr_sdu_mask_config(uint8_t channel, uint8_t mask_config)
 {
-	/* Two codes, one per argument, observable from the host: an
-	 * out-of-range channel is INVALID_MESSAGE, an out-of-range mask is
-	 * INVALID_PARAMETER_PROVIDED. Ack-data bit masked off before the check. */
+	/* A bad channel is INVALID_MESSAGE, a bad mask
+	 * INVALID_PARAMETER_PROVIDED. The ack-data bit is masked off first. */
 	if (!api_ch_valid(channel)) {
 		return (antr_err_t)ANTW_INVALID_MESSAGE;
 	}
@@ -4480,9 +3589,8 @@ antr_err_t antr_broadcast_message_tx(uint8_t channel, uint8_t size,
 	if (!radiant_channel_is_open(channel)) {
 		return (antr_err_t)ANTW_CHANNEL_NOT_OPENED;
 	}
-	/* A receive-only channel has no transmitter to queue for. Compare the
-	 * whole top nibble - masking only the master bit would make
-	 * MASTER_TX_ONLY (0x50) read as SLAVE_RX_ONLY (0x40). */
+	/* Compare the whole type nibble: masking only the master bit would read
+	 * MASTER_TX_ONLY (0x50) as SLAVE_RX_ONLY (0x40). */
 	if ((uint8_t)(radiant_channel_type_get(channel) &
 		      (uint8_t)RADIANT_CH_STATUS_TYPE_MASK) ==
 	    (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY) {
@@ -4491,27 +3599,16 @@ antr_err_t antr_broadcast_message_tx(uint8_t channel, uint8_t size,
 
 	k_mutex_lock(&api_lock, K_FOREVER);
 	/*
-	 * Refused only while a transfer THIS HOST started owns the channel.
-	 * TX_REPLY is us acknowledging a peer's packet, which the host never
-	 * asked for: a real ANT stick accepts the write, and refusing it here
-	 * lost about one host payload per 280 exchanges on a USB master (the
-	 * host's write on EVENT_TX lands inside the ~3.7 ms reply). Accepting is
-	 * safe because the reply's payload was copied out of bcast when the
-	 * frame arrived (radiant_transfer_on_data()) and its retransmits use
-	 * that copy; this write goes out on the next slot, which the pump only
-	 * posts once the engine is idle again.
-	 *
-	 * Under the event crit section, like antr_acknowledge_message_tx(): the
-	 * radio IRQ reads bcast through api_xfer_broadcast(), and a write it
-	 * preempted would hand the acknowledgement a torn payload.
+	 * Refused only while a transfer this host started owns the channel. A write
+	 * during TX_REPLY (acknowledging a peer) is accepted: the reply copied its
+	 * payload when the frame arrived, and this write goes out on the next slot.
+	 * Under the crit section, since the radio IRQ reads bcast.
 	 */
 	unsigned int key = radiant_event_crit_enter();
 	enum radiant_transfer_state st = radiant_transfer_state(&api_xfer[channel]);
 
-	/* WAIT_NEXT is the same case as TX_REPLY: we are only acknowledging
-	 * an inbound burst, and each new packet's acknowledgement copies bcast
-	 * afresh, so a write here reaches the peer one packet later - what a
-	 * write mid-exchange always meant. */
+	/* WAIT_NEXT is treated like TX_REPLY: each new packet's acknowledgement
+	 * copies bcast afresh. */
 	if (st != RADIANT_TRANSFER_STATE_IDLE &&
 	    st != RADIANT_TRANSFER_STATE_TX_REPLY &&
 	    st != RADIANT_TRANSFER_STATE_WAIT_NEXT) {
@@ -4520,9 +3617,8 @@ antr_err_t antr_broadcast_message_tx(uint8_t channel, uint8_t size,
 		return (antr_err_t)ANTW_TRANSFER_IN_PROGRESS;
 	}
 
-	/* Copied before this returns - unlike antr_burst_tx(), no ownership
-	 * transfer. One payload per slot: queueing a second before the slot
-	 * fires replaces the first. */
+	/* Copied before return. One payload per slot: a second write before the
+	 * slot fires replaces the first. */
 	memcpy(api_ch[channel].bcast, data, ANTW_ANT_MAX_PAYLOAD_SIZE);
 	api_ch[channel].bcast_valid = true;
 	api_ch[channel].bcast_pending = true;
@@ -4538,43 +3634,13 @@ antr_err_t antr_broadcast_message_tx(uint8_t channel, uint8_t size,
 }
 
 /*
- * THE TRANSMIT INSTANT OF AN ORIGINATED TRANSFER, and the two-session story of
- * getting it wrong. Written out because the first correction was reverted on a
- * bad measurement and the next reader needs to know why it is back.
- *
- * radiant_transfer.h states the contract at radiant_transfer_submit():
- *
- *   "A slave answering its master passes master_t_sync +
- *    RADIANT_TRANSFER_SLOT_REPLY_US; a master passes its own slot instant."
- *
- * Both call sites below passed RADIANT_TIME_NEVER, which radiant_burst.c
- * resolves to `radiant_radio_now() + min_lead_us + ARM_SLACK_US`: whenever the
- * host happened to ask, bearing no relation to the channel's grid. An ANT peer
- * only listens in a window a few hundred microseconds wide, so a packet placed
- * at an arbitrary phase of a 250 ms period is heard essentially never.
- *
- * THE FIRST ATTEMPT WAS REVERTED ON A MISREAD MEASUREMENT (2026-08-17,
- * docs/treadmill-reference-design.md SS7.7). An A/B of exactly this change
- * appeared to show the packet "arriving at the full channel rate in both
- * arms", concluding the transmit instant was irrelevant and the fault lay in
- * the return acknowledgement. The instrument was counting the receiving
- * master's OWN slots alongside inbound data, and ~219 in 55 s is 4 Hz - the
- * channel period, not a delivery rate. Re-run with the two counters separated:
- *
- *   master originates 20 acknowledged packets over 40 s, 160 of its own slots
- *   the slave hears 150 broadcasts from it  -> the link is fine
- *   the slave hears 0 acknowledged packets  -> it is not a lost ACK
- *   the sender fails 0-16 ms after queueing -> it transmitted, then heard
- *                                              nothing in its reply window
- *
- * A lost acknowledgement and an unheard data packet look identical from the
- * originator (both are FAIL_NO_ACK). They are only distinguishable from the
- * far end, which is why every earlier session went round this loop.
- *
- * So the instant is resolved from the channel's own grid. The cost the revert
- * was worried about - "up to one channel period of latency" - is real and is
- * the correct price: an acknowledged transfer is a slotted exchange, and there
- * is no such thing as sending one early.
+ * Transmit instant of an originated transfer, resolved from the channel's own grid.
+ * radiant_transfer_submit() takes a slave's reply instant as the master's t_sync plus
+ * RADIANT_TRANSFER_SLOT_REPLY_US, and a master's own slot instant. Passing
+ * RADIANT_TIME_NEVER put the packet at an arbitrary phase of the period, where a
+ * peer listening for a few hundred microseconds almost never hears it. The cost
+ * is up to one channel period of latency; an acknowledged transfer is a slotted
+ * exchange, so it cannot be sent early.
  */
 static radiant_time_t api_xfer_t_sync_for(uint8_t ch)
 {
@@ -4584,34 +3650,22 @@ static radiant_time_t api_xfer_t_sync_for(uint8_t ch)
 	uint16_t                         period_counts = 0u;
 	uint32_t                         lead;
 
-	/*
-	 * No grid to sit on - a channel that is not on air, or a master that
-	 * has not transmitted yet. RADIANT_TIME_NEVER keeps the old
-	 * "as soon as the backend can" behaviour, which is the honest answer
-	 * when there is no slot to align to rather than a silent failure.
-	 */
+	/* No grid to sit on (not on air, or a master that has not transmitted
+	 * yet): send as soon as the backend can. */
 	if (slot == RADIANT_TIME_NEVER) {
 		return RADIANT_TIME_NEVER;
 	}
 
-	/*
-	 * A slave transmits in the reply window its master opens, not on the
-	 * master's slot itself. radiant_channel_next_slot() gives a slave the
-	 * opening edge of its next receive window, i.e. the master's expected
-	 * t_sync, so the reply is that plus the measured 2190 us turnaround.
-	 */
+	/* A slave replies in its master's reply window: the master's expected
+	 * t_sync plus the 2190 us turnaround. */
 	if (!radiant_channel_is_master(ch)) {
 		slot += (radiant_time_t)RADIANT_TRANSFER_SLOT_REPLY_US;
 	}
 
 	/*
-	 * And it has to be far enough out to arm. The next slot can be
-	 * microseconds away when the host writes just after one, and
-	 * radiant_transfer_submit() does NOT clamp an explicitly requested
-	 * instant for a starting transfer - the scheduler would refuse it with
-	 * ETIME, which reaches the host as TRANSFER_IN_ERROR on a channel that
-	 * is working perfectly. One period later is the same phase, so slipping
-	 * costs a period and changes nothing else.
+	 * Far enough out to arm: radiant_transfer_submit() does not clamp an explicit
+	 * instant, and a refused one reaches the host as TRANSFER_IN_ERROR. Slipping a
+	 * period keeps the same phase, so it costs only latency.
 	 */
 	lead = (caps != NULL) ? (uint32_t)caps->min_arm_lead_us : 0u;
 	earliest = radiant_radio_now() + (radiant_time_t)lead +
@@ -4623,19 +3677,9 @@ static radiant_time_t api_xfer_t_sync_for(uint8_t ch)
 		radiant_time_t period = radiant_channel_counts_to_us(period_counts);
 		unsigned int   guard;
 
-		/*
-		 * A loop, not one addition: at a short period (4 Hz is the slow
-		 * case, some profiles run at 32 Hz) one period may still not
-		 * clear the arm lead.
-		 *
-		 * Explicitly bounded, because radiant_time_t is a wrapping
-		 * microsecond counter and `slot < earliest` is therefore not a
-		 * true ordering across the wrap - near it, the comparison can
-		 * stay true for thousands of additions. Sixteen periods is far
-		 * more than the two or three this can legitimately need, and
-		 * falling out of the loop leaves an instant the scheduler will
-		 * refuse honestly rather than one this function span for.
-		 */
+		/* A loop, since one period may not clear the arm lead at a short
+		 * period. Bounded: radiant_time_t wraps, so the comparison is not a
+		 * true ordering near the wrap. */
 		for (guard = 0u; guard < 16u && slot < earliest; guard++) {
 			slot += period;
 		}
@@ -4671,8 +3715,8 @@ antr_err_t antr_acknowledge_message_tx(uint8_t channel, uint8_t size,
 		return (antr_err_t)ANTW_TRANSFER_IN_PROGRESS;
 	}
 	api_xfer_refresh_id(channel);
-	/* A secured channel takes the projected slot below instead: see
-	 * api_ack_pending_send() for why no received frame may open it. */
+	/* A secured channel takes the projected slot below, never a received
+	 * frame (see api_ack_pending_send()). */
 	if (!radiant_channel_is_master(channel) && api_xfer[channel].ready &&
 	    !radiant_sec_channel_is_secured(channel)) {
 		uint16_t counts = 0u;
@@ -4719,18 +3763,16 @@ antr_err_t antr_burst_tx(uint8_t channel, uint16_t size, uint8_t *data,
 	if (size != 8u && size != 16u && size != 24u) {
 		return (antr_err_t)ANTW_INVALID_MESSAGE;
 	}
-	/* Until advanced burst is enabled, reject anything over 8 - a dongle
-	 * that accepts 24-byte blocks but can never send one is worse than one
-	 * that refuses them. api_adv_burst[0] is the enable byte. */
+	/* Refuse blocks over 8 bytes until advanced burst is enabled
+	 * (api_adv_burst[0]): accepting and never sending is worse. */
 	if (size > 8u && api_adv_burst[0] == 0u) {
 		return (antr_err_t)ANTW_INVALID_MESSAGE;
 	}
 	if (!radiant_channel_is_open(channel)) {
 		return (antr_err_t)ANTW_CHANNEL_NOT_OPENED;
 	}
-	/* Same refusal as antr_acknowledge_message_tx(): a SLAVE_RX_ONLY
-	 * channel never transmits, and a MASTER_TX_ONLY one never listens for
-	 * the acknowledgement every burst packet needs. */
+	/* As antr_acknowledge_message_tx(): SLAVE_RX_ONLY never transmits;
+	 * MASTER_TX_ONLY never listens for the acknowledgement. */
 	if (radiant_channel_type_get(channel) == ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY ||
 	    radiant_channel_type_get(channel) == ANTW_CHANNEL_TYPE_MASTER_TX_ONLY) {
 		return (antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE;
@@ -4738,21 +3780,11 @@ antr_err_t antr_burst_tx(uint8_t channel, uint16_t size, uint8_t *data,
 
 	k_mutex_lock(&api_lock, K_FOREVER);
 	/*
-	 * Segment byte forwarded untouched (the BUILD_ASSERTs at the top keep
-	 * RADIANT_TRANSFER_SEG_* == ANTR_BURST_SEGMENT_*). On any non-zero
-	 * return the engine owns nothing and raises no event for this block
-	 * (B2) - the bridge already released its semaphore synchronously, so
-	 * doing it again here would let the next host packet overwrite a
-	 * buffer the radio is still transmitting from (B5).
-	 *
-	 * The START block is slot-aligned for the same reason as
-	 * antr_acknowledge_message_tx() above; see the note there. Only the
-	 * START block - once a burst is running, every later packet is placed
-	 * by radiant_burst.c from the acknowledgement that preceded it
-	 * (ack t_sync + NEXT_PACKET_US), which is a tighter grid than this one
-	 * and must not be overridden. radiant_transfer_submit() ignores the
-	 * instant for a continuation anyway, but passing a slot here would be
-	 * misleading to read.
+	 * The segment byte is forwarded untouched. On a non-zero return the engine owns
+	 * nothing and raises no event for this block (B2), and the bridge has already
+	 * released its semaphore, so it must not be released again (B5). Only the START
+	 * block is slot-aligned. Later packets are placed by radiant_burst.c from the
+	 * preceding acknowledgement, a tighter grid that must not be overridden.
 	 */
 	unsigned int key = radiant_event_crit_enter();
 	if (api_ch[channel].ack_pending) {
@@ -4815,27 +3847,16 @@ antr_err_t antr_capabilities_get(uint8_t *capabilities)
 
 	memset(capabilities, 0, ANTW_MESG_CAPABILITIES_SIZE);
 
-	/* API_CHANNELS is what radiant_channel.c/radiant_sched.c/radiant_search.c are
-	 * all sized for (asserted at the top of this file) and the protocol's
-	 * own ceiling, since the burst header's channel field is five bits. */
+	/* API_CHANNELS matches the radiant modules' sizes (asserted at the top)
+	 * and the protocol ceiling (five bits in the burst header). */
 	capabilities[ANTW_CAPABILITIES_OFFSET_MAX_CHANNELS] = API_CHANNELS;
 	capabilities[ANTW_CAPABILITIES_OFFSET_MAX_NETWORKS] = API_NETWORKS;
 	capabilities[ANTW_CAPABILITIES_OFFSET_STANDARD_OPTIONS] = 0x00u;
 
 	/*
-	 * ANTW_CAPABILITIES_SERIAL_NUMBER_ENABLED ("the device has a readable
-	 * serial number") is set only when antr_serial_number_get() really
-	 * answers, so the bit and the request can never disagree. Advertising a
-	 * capability whose request answers INVALID_MESSAGE is the trap
-	 * docs/gotchas.md names, and that is why the bit was dropped until 0x61
-	 * was implemented.
-	 *
-	 * The reply's LEN byte (4) is now pinned by observation and is no
-	 * longer a guess. A real Garmin stick answers `a40461069f52000a` in
-	 * captures/zwift-20261111-193805.pcap, and Zwift asks for 0x61 and 0xC6
-	 * right after its SYSTEM_RESET. The sdk_ant reference does not set the
-	 * bit (its advanced-options byte is 0xb2), so this byte now differs
-	 * from it by exactly 0x08, deliberately.
+	 * The serial-number bit is set only when antr_serial_number_get() answers, so the
+	 * bit and the request cannot disagree. This byte differs from the sdk_ant
+	 * reference (0xb2) by exactly 0x08, on purpose.
 	 */
 	uint32_t serial;
 	uint8_t serial_bit =
@@ -4865,16 +3886,11 @@ antr_err_t antr_capabilities_get(uint8_t *capabilities)
 			  /* Honoured: radiant_event.c filters at delivery. */
 			  ANTW_CAPABILITIES_EVENT_FILTERING_ENABLED);
 	/*
-	 * Three bits this byte used to claim and does not: search sharing
-	 * (0x10), selective data update (0x40) and encrypted channel (0x80). The
-	 * first two only stored their configuration and the third described a
-	 * mode antr_crypto_channel_enable() refuses - "advertised and
-	 * unimplemented" (docs/gotchas.md), which strands a host that believes
-	 * the bit. The commands behind them are still accepted and stored: a
-	 * host with no recovery path for an error is worse off than one whose
-	 * setting quietly does nothing. The byte was 0xD5; it is 0x05, so it no
-	 * longer matches the sdk_ant reference (0xFD), and the recorded nRF and
-	 * cc26xx conformance transcripts are stale until re-recorded.
+	 * Search sharing (0x10), selective data update (0x40) and encryption (0x80)
+	 * are not advertised: the first two are stored but not applied, and the
+	 * third is refused by antr_crypto_channel_enable(). Their commands are still
+	 * accepted, since a host with no recovery path is worse off than one whose
+	 * setting quietly does nothing.
 	 */
 
 	capabilities[ANTW_CAPABILITIES_OFFSET_ADVANCED_OPTIONS_4] = 0x00u;
@@ -4887,8 +3903,7 @@ antr_err_t antr_capabilities_get(uint8_t *capabilities)
 	return (antr_err_t)ANTW_RESPONSE_NO_ERROR;
 }
 
-/* Identifiable from the host side with no debugger; deliberately not a string
- * claiming to be an AVN build it is not (the stub reports "STUB0.01B00"). */
+/* Identifies this build, not an AVN build (the stub reports "STUB0.01B00"). */
 static const char api_version[] = "RADIANT0.01B00";
 BUILD_ASSERT(sizeof(api_version) <= ANTW_MESG_VERSION_SIZE,
 	     "version string does not fit MESG_VERSION_ID");
@@ -4910,14 +3925,8 @@ antr_err_t antr_serial_number_get(uint32_t *serial)
 		return (antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED;
 	}
 #if defined(CONFIG_HWINFO)
-	/*
-	 * The last four bytes of the hwinfo device ID, read as big-endian. On
-	 * nRF the ID is FICR DEVICEID[1]:DEVICEID[0], byte-swapped so that it
-	 * prints as the USB iSerial string, so this is DEVICEID[0], the last
-	 * eight hex digits of iSerial, and a host can cross-check the two.
-	 * Zephyr's hwinfo API is only linked when CONFIG_HWINFO is set, hence
-	 * the #if (same as apps/common/ant_reset_cause.c).
-	 */
+	/* Last four bytes of the hwinfo device ID, big-endian. On nRF this
+	 * matches the last eight hex digits of the USB iSerial. */
 	uint8_t id[8];
 	ssize_t n = hwinfo_get_device_id(id, sizeof(id));
 
@@ -4973,11 +3982,8 @@ antr_err_t antr_channel_radio_crc_mode_get(uint8_t channel, uint8_t *mode)
 }
 
 /*
- * Encryption: these four exist because a backend stands in for libant.a,
- * which exports them regardless. They accept reads, hold writes, and refuse
- * to put a channel into an encrypted mode - ANT+'s AES-CTR is malleable and
- * unauthenticated. What replaces it is docs/radiant-security.md, outside this
- * contract.
+ * Encryption stubs: reads succeed, writes are held, and encrypted modes are refused.
+ * ANT+'s AES-CTR is malleable and unauthenticated; see docs/radiant-security.md.
  */
 
 antr_err_t antr_crypto_channel_enable(uint8_t channel, uint8_t enable,
@@ -5012,8 +4018,7 @@ antr_err_t antr_crypto_info_set(uint8_t type, const uint8_t *info)
 		return (antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED;
 	}
 
-	/* No length parameter: the callee reads a fixed count per type and the
-	 * caller (the bridge) bounds it. */
+	/* No length parameter: the bridge bounds the read per type. */
 	switch (type) {
 	case ANTW_ENCRYPTION_INFO_SET_CRYPTO_ID:
 		memcpy(api_crypto_id, info, sizeof(api_crypto_id));
@@ -5037,9 +4042,8 @@ antr_err_t antr_crypto_info_get(uint8_t type, uint8_t *info)
 		return (antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED;
 	}
 
-	/* Write exactly what the type accounts for: the caller's buffer is
-	 * sized for the largest reply including the bridge's own leading
-	 * info-type byte, so zeroing the whole thing would overrun it. */
+	/* Write only what the type covers: the caller's buffer is sized for the
+	 * largest reply, so zeroing it all could overrun. */
 	switch (type) {
 	case ANTW_ENCRYPTION_INFO_GET_SUPPORTED_MODE:
 		info[0] = (uint8_t)ANTW_MAX_SUPPORTED_ENCRYPTION_MODE;
@@ -5079,8 +4083,7 @@ antr_err_t antr_diag_page(uint8_t page, uint8_t *out)
 		return (antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED;
 	}
 
-	/* Every page names its backend, so the hook runs for every page; it is
-	 * a copy of a few words under irq_lock(). */
+	/* Every page names its backend, so this runs for each page. */
 	for (size_t i = 0; i < ARRAY_SIZE(rd.v); i++) {
 		rd.v[i] = RADIANT_DIAG_NOT_MEASURED;
 	}

@@ -2,44 +2,23 @@
 /*
  * radiant_radio_cc26xx.c - radiant_radio_hal.h on TI's CC13x2/CC26x2 RF core.
  *
- * Provenance: clean-room. Written against radiant_radio_hal.h, against
- * docs/ant-radio-link.md, against TI's public CC13x2/CC26x2 Technical
- * Reference Manual and driverlib headers, against the public SimpleLink RF
- * driver API, and against the PHY parameters measured by
- * radiant/spike/ti_phy on 2026-08-13. Nothing here derives from sdk-ant,
- * from libant.a, or from an ANT+ device profile document. See
- * docs/decisions/0002-clean-room-policy.md.
+ * Clean-room: written from the HAL header, docs/ant-radio-link.md, TI's public
+ * TRM and driverlib headers, and the radiant/spike/ti_phy measurements. Not
+ * derived from sdk-ant, libant.a or ANT+ profile documents (see
+ * docs/decisions/0002-clean-room-policy.md).
  *
- * Written against the HAL contract and the spike's measurements, deliberately
- * NOT against radiant_radio_nrf.c - the two radios disagree on most of what
- * matters here:
+ * Unlike radiant_radio_nrf.c:
+ *   - The RF core is a command processor: ops are posted to a doorbell and run
+ *     on a separate CPU, not driven by PPI and an ISR.
+ *   - Two independent sync words, so max_filters and max_addr_groups are 2.
+ *   - At most four address bytes are matched in hardware (nSwBits 8..32); the
+ *     rest are compared in software.
  *
- *   - The nRF RADIO is a register peripheral driven by PPI and an ISR. This
- *     is a COMMAND PROCESSOR: software posts an operation to a doorbell and a
- *     separate CPU in the RF core executes it, trigger programmed before the
- *     command is posted.
- *   - The nRF matcher has one shared BASE and eight prefixes. This has two
- *     fully independent sync words and nothing else, so max_filters and
- *     max_addr_groups are both 2.
- *   - The nRF matches all five bytes of a tracking address. This matches at
- *     most four (formatConf.nSwBits is 8..32), so the fifth arrives as a
- *     payload byte and the match finishes in software.
- *
- * THE NUMBERS THIS FILE RESTS ON:
- *
- *   MEASURED (spike/ti_phy on a LAUNCHXL-CC26X2R1, 2026-08-13):
- *     rxBw = 98 (1567.2 kHz), aaFilter = 0xB   40 of 40 frames CRC-valid,
- *                                              nRxNok = 0, ~-67 dBm
- *     RAT = 4.000 MHz                          4 000 244 ticks in 1 000 ms
- *     RAT free-runs across RF_close/RF_open    200 337 850 ticks over 5 cycles
- *     max_filters = 2, max_addr_groups = 2
- *     the matcher reaches 4 bytes    but this backend uses 3 - see
- *                                    setup_cmd.formatConf for why
- *
- *   SEEDED, NOT MEASURED: T_SYNC_CAL_US, TX_RAMP_UP_US, RX_RAMP_UP_US,
- *   MIN_ARM_LEAD_US, RX_TO_TX_US, TX_TO_RX_US - deliberately pessimistic
- *   where pessimism is safe (too large costs schedulable gap; too small looks
- *   like poor sensitivity). Only T_SYNC_CAL_US has no safe direction.
+ * Measured on LAUNCHXL-CC26X2R1: rxBw 98, aaFilter 0xB, 40/40 frames CRC-valid
+ * at about -67 dBm; RAT 4.000 MHz, free-running across RF_close/RF_open.
+ * Seeded, not measured: T_SYNC_CAL_US, TX_RAMP_UP_US, RX_RAMP_UP_US,
+ * MIN_ARM_LEAD_US, RX_TO_TX_US, TX_TO_RX_US. These are pessimistic where that
+ * is safe. T_SYNC_CAL_US has no safe direction.
  */
 
 #include <string.h>
@@ -64,124 +43,77 @@
 #include <radiant/radiant_diag.h>
 
 #include "radiant_addr_split.h"
-/* RADIANT_CC26XX_PRIO_* is used unconditionally below (post_op()'s non-coex
- * arm ignores the value but every call site still computes it); the
- * accessor it also declares, radiant_cc26xx_client(), is defined only under
- * coex and simply unused otherwise. */
+/* The RADIANT_CC26XX_PRIO_* values are used unconditionally; the accessor
+ * radiant_cc26xx_client() is defined only under coex. */
 #include "radiant_radio_cc26xx_arb.h"
 
 LOG_MODULE_REGISTER(radiant_cc26xx, CONFIG_RADIANT_LOG_LEVEL);
 
-/* ---------------------------------------------------------------------------
- * The PHY - every value measured by the spike or taken from SmartRF's own
- * settings database; nothing here is a guess.
- * ---------------------------------------------------------------------------
- */
+/* --- PHY constants: measured on the spike, or from SmartRF's settings --- */
 
 #define ANT_RF_INDEX_DEFAULT   57u
 #define RAT_HZ                 4000000u
 #define RAT_TICKS_PER_US       (RAT_HZ / 1000000u)   /* 4 */
 
-/* 1 Mbps: one on-air byte is 8 us. Used for every airtime calculation below,
- * and the reason none of them is a magic number. */
+/* 1 Mbps: one on-air byte is 8 us. All airtime arithmetic uses this. */
 #define BYTE_US                8u
 
-/* ANT's preamble is one byte and runs continuously into the first address bit
- * (docs/ant-radio-link.md). preamMode 2 - "same first bit in preamble and sync
- * word" - is what reproduces that; SmartRF's own settings use four bytes and
- * preamMode 0, which is right for their PHYs and silent on this one. */
+/* ANT's one-byte preamble runs straight into the first address bit, which
+ * preamMode 2 reproduces. SmartRF's four-byte preamble (preamMode 0) is wrong
+ * for ANT. */
 #define PREAMBLE_BYTES         1u
 
 /*
- * Anti-aliasing filter bandwidth, left at TI's tc901 value. Swept and found
- * not to matter once the settings that DO matter (AGC_REF_VALUE, deviation)
- * are right: 0x5 and 0xB scored 96%/93% of frames on the same run, within
- * run-to-run spread.
+ * Anti-aliasing filter bandwidth: TI's tc901 value. Not sensitive once
+ * AGC_REF_VALUE and the deviation are right (0x5 and 0xB scored 96% and 93%,
+ * within run-to-run spread).
  */
 #define AA_FILTER_OVERRIDE_INDEX 2
-/* CONFIG_RADIANT_CC26XX_AA_FILTER overrides this for a Phase C
- * paced-transmitter re-sweep; the Kconfig default is this same 0x5. */
+/* Overridable with CONFIG_RADIANT_CC26XX_AA_FILTER (Kconfig default 0x5). */
 #define AA_FILTER_VALUE          CONFIG_RADIANT_CC26XX_AA_FILTER
 
 /*
- * AGC reference level - tc901's default (0x22) is wrong for this PHY. It's
- * SmartRF's value for a 250 kbps / 530 kHz PHY, copied in without checking it
- * against a PHY 4x the rate and 3x the bandwidth. Measured against
- * tools/ant_sim.py at 4.0049 Hz / -47 dBm (% of frames sent that were
- * received):
- *
- *   0x22   37%, 47%, 47%
- *   0x2E   87%, 90%, 95%, 97%      <- TI's own default
- *   0x34   91%, 93%, 96%, 96%, 97%, 100%
- *   0x3A   87%, 93%
- *
- * 0x34 taken over TI's 0x2E because it led every round.
- *
- * CONFIG_RADIANT_CC26XX_AGC_REF overrides this; the Kconfig default is
- * this same 0x34.
- *
- * The paced-transmitter re-sweep (2026-08-14, 80 s per rung against
- * tools/ant_sim.py, full numbers in
- * archive/benchmarks/2026-08-13-radiant-cc26xx.json's
- * phase_c_rxbw_agc_resweep) confirms this value without improving on it:
- * 0x34 lost 1.57 % and 2.19 % on two runs of an unchanged rig, 0x3A lost
- * 1.56 % and 0x40 lost 1.25 % - all four inside the 0.62 pp the two baseline
- * runs differ by, so the axis is FLAT from 0x34 up. TI's own 0x2E lost 4.67 %,
- * nine times that noise.
- *
- * So do not "improve" this to 0x40 on the strength of one packet. What the
- * re-sweep closes is the possibility that the residual ~1.5-2 % loss is an
- * AGC mis-set: it is not, and the cause is still unidentified.
+ * AGC reference level. TI's tc901 default (0x22) is for a 250 kbps PHY, not
+ * this 1 Mbps one. Frame delivery at 4.0049 Hz / -47 dBm: 0x22 37-47%,
+ * 0x2E 87-97%, 0x34 91-100%, 0x3A 87-93%. The re-sweep found the axis flat
+ * from 0x34 up, so do not move it on one packet. Overridable with
+ * CONFIG_RADIANT_CC26XX_AGC_REF (Kconfig default 0x34).
  */
 #define AGC_REF_OVERRIDE_INDEX   3
 #define AGC_REF_VALUE            CONFIG_RADIANT_CC26XX_AGC_REF
 
 /*
- * RX filter bandwidth code. 98 = 1567.2 kHz. Earlier sweeps favored 96
- * (1092.5 kHz) while compensating for a wrong deviation (see
- * DEVIATION_UNITS); at 250 kHz deviation Carson's rule wants
- * 2*(250+500) = 1500 kHz, and 98 is the code above that. With deviation and
- * AGC fixed, 98 beats 96 (96% vs 93%) as the arithmetic predicts.
+ * RX filter bandwidth code. 98 = 1567.2 kHz, the first code above Carson's
+ * 2 * (250 + 500) = 1500 kHz for 250 kHz deviation. Re-sweeping found 98 a
+ * local optimum, with 97 and 99 both worse by several times the run-to-run
+ * noise.
  *
- * Percentages here are fractions of frames a known 4.0049 Hz transmitter
- * actually sent, not frames already detected - the latter denominator hides
- * a PHY that drops more than half of everything.
- *
- * CONFIG_RADIANT_CC26XX_RX_BW_CODE overrides this; the Kconfig default is
- * this same 98.
- *
- * The paced-transmitter re-sweep (2026-08-14; see AGC_REF_VALUE above for the
- * method and the noise figure) makes 98 a LOCAL OPTIMUM, which is more than
- * the reasoning above establishes on its own: it lost 1.57 % and 2.19 % on two
- * runs, while BOTH neighbours are worse by several times the 0.62 pp
- * run-to-run noise - 97 lost 3.10 % and 99 lost 5.59 %. Narrower and wider
- * both hurt, so this is a peak rather than a plateau edge.
+ * Delivery is measured as a fraction of frames the transmitter sent, not of
+ * frames detected. The detected-frame figure hides PHYs that drop most frames.
+ * Overridable with CONFIG_RADIANT_CC26XX_RX_BW_CODE (Kconfig default 98).
  */
 #define RX_BW_CODE               CONFIG_RADIANT_CC26XX_RX_BW_CODE
 
 /*
- * Deviation, in units of 250 Hz. docs/ant-radio-link.md gives ~170 kHz;
- * measured, 1000 units (250 kHz) is at least as good at every AGC level
- * tried, and matches modulation index 0.5 (250 kHz dev at 1 Mbps), same as a
- * BLE-shaped 1 Mbps GFSK link.
+ * Deviation, in units of 250 Hz. 1000 units (250 kHz) is at least as good as
+ * docs/ant-radio-link.md's ~170 kHz at every AGC level tried. It matches
+ * modulation index 0.5 at 1 Mbps.
  *
- * This is the deviation the DEMODULATOR expects, a receiver-side setting -
- * not a claim about what ANT transmits. If a future measurement pins ANT's
- * real deviation at 170 kHz, that argues for splitting the RX/TX fields
- * rather than reverting this one, since only the RX number is measured.
+ * This is the demodulator's expected deviation, a receiver-side setting, not a
+ * claim about what ANT transmits. If ANT's real deviation is measured at
+ * 170 kHz, split the RX and TX fields rather than reverting this one.
  */
 #define DEVIATION_UNITS          1000
 
 /*
- * Address bytes the sync-word matcher compares, for EVERY operation (see
- * setup_cmd.formatConf for why it cannot vary per window). 3 by default.
+ * Address bytes the sync-word matcher compares, for every operation (see
+ * setup_cmd.formatConf). 3 by default.
  *
- * CONFIG_RADIANT_SEARCH_SHORT_MATCH (ADR 0022) makes it 2, [A6 C5], so a
- * search window can take devnum_lo as the first payload byte and sweep every
- * device number in one set instead of 128. On this radio that is not free for
- * tracking: a 5-byte tracking address then has THREE bytes compared in
- * software, and the 16-bit sync word also fires on noise and on every other
- * sensor's frames. radiant_cc26xx_sw_addr_mismatch counts what that costs.
+ * CONFIG_RADIANT_SEARCH_SHORT_MATCH (ADR 0022) makes it 2, so a search window
+ * can take devnum_lo as payload and sweep all device numbers in one set. The
+ * cost is that tracking then compares three address bytes in software, and the
+ * shorter sync word also fires on noise and other sensors' frames.
+ * radiant_cc26xx_sw_addr_mismatch counts that cost.
  */
 #if defined(CONFIG_RADIANT_SEARCH_SHORT_MATCH)
 #define CC26XX_HW_ADDR_LEN       2u
@@ -190,16 +122,13 @@ LOG_MODULE_REGISTER(radiant_cc26xx, CONFIG_RADIANT_LOG_LEVEL);
 #endif
 
 static uint32_t phy_overrides[] = {
-	/* override_prop_common.json: "DC/DC regulator: In Tx, use
-	 * DCDCCTL5[3:0]=0x3 (DITHER_EN=0 and IPEAK=3)." */
+	/* override_prop_common.json: DC/DC dither off, IPEAK 3 in Tx. */
 	(uint32_t)0x00F388D3,
-	/* override_tc901.json: "Tx: Configure PA ramp time, PACTL2.RC=0x1" */
+	/* override_tc901.json: Tx PA ramp time, PACTL2.RC=0x1. */
 	ADI_2HALFREG_OVERRIDE(0, 16, 0x8, 0x8, 17, 0x1, 0x0),
-	/* override_tc901.json: anti-aliasing filter bandwidth. See
-	 * AA_FILTER_VALUE. */
+	/* override_tc901.json: anti-aliasing filter (AA_FILTER_VALUE). */
 	ADI_HALFREG_OVERRIDE(0, 61, 0xF, AA_FILTER_VALUE),
-	/* override_tc901.json: AGC reference level, overridden. See
-	 * AGC_REF_VALUE. */
+	/* override_tc901.json: AGC reference level (AGC_REF_VALUE). */
 	HW_REG_OVERRIDE(0x609C, AGC_REF_VALUE),
 	/* override_hposc.json */
 	HPOSC_OVERRIDE(0),
@@ -207,53 +136,17 @@ static uint32_t phy_overrides[] = {
 };
 
 /*
- * THE "_PA" STRUCT, ON EVERY PART, INCLUDING THE ONES WITHOUT A PA.
+ * Always the _PA layout, even on parts without a PA; do not make this
+ * conditional. TI's RF_decodeOverridePointers() reads pRegOverrideTxStd and
+ * pRegOverrideTx20 at runtime on CC2652P-class chips. A plain
+ * rfc_CMD_PROP_RADIO_DIV_SETUP_t there reads past the object and faults in
+ * RF_open(), while the identical binary runs on CC2652R. The _PA command number
+ * is the same, and the driver reads the tail only under that runtime check, so
+ * the layout is safe on non-PA parts.
  *
- * This is not a CC2652P-only concession and it must not be made conditional.
- * TI's RF driver decides which layout to read AT RUNTIME, from the silicon:
- *
- *   RFCC26X2_multiMode.c, RF_decodeOverridePointers()
- *     bool tx20FeatureAvailable = (ChipInfo_GetChipType() == CHIP_TYPE_CC1352P)
- *                              || (ChipInfo_GetChipType() == CHIP_TYPE_CC1352P7)
- *                              || (ChipInfo_GetChipType() == CHIP_TYPE_CC2652P);
- *
- * and when that is true it reads pRegOverrideTxStd and pRegOverrideTx20 out of
- * the setup command - fields that exist only in the _PA layout. Hand it the
- * plain rfc_CMD_PROP_RADIO_DIV_SETUP_t and it reads eight bytes off the end of
- * the object and dereferences whatever it finds.
- *
- * WHICH IS EXACTLY WHAT HAPPENED, and the shape of the bug is the point:
- *
- *   <inf> ant_dongle_ti: ANT+ Dongle (TI CC26x2) starting
- *   <err> os: ***** BUS FAULT *****
- *   <err> os:   Precise data bus error
- *   <err> os:   BFAR Address: 0xf388d3
- *   <err> os: Faulting instruction address (r15/pc): 0x0000f262
- *              -> NOROM_RFCOverrideSearch +0xc
- *              <- RF_decodeOverridePointers +0xdd
- *
- * The IDENTICAL BINARY is correct on a CC2652R and faults inside RF_open() on
- * a CC2652P, about five milliseconds into main(). Nothing in the build, the
- * devicetree or Kconfig distinguishes the two - so every LaunchXL run this
- * backend has ever had was correct by accident, and no amount of building or
- * testing on CC2652R silicon could have surfaced it.
- *
- * SAFE ON THE NON-PA PARTS, for two independent reasons. CMD_PROP_RADIO_DIV_-
- * SETUP_PA is #defined to CMD_PROP_RADIO_DIV_SETUP - the same command number,
- * 0x3807 - so the radio CPE parses the same fields and simply never looks at
- * the tail on a part that has no high-gain PA. And the driver only reads that
- * tail under the runtime check above.
- *
- * BOTH TAIL POINTERS STAY NULL, deliberately. They describe the two extra
- * override lists TI's PA-capable PHYs switch between, and this backend has no
- * high-PA path at all: every entry in radiant_cc26xx_txp below is
- * RF_TxPowerTable_DEFAULT_PA_ENTRY and .txPower is never RF_TX20_ENABLED, so
- * the driver's TX20 branches are unreachable. Every place it touches these two
- * pointers is explicitly NULL-guarded (RF_attachOverrides/RF_detachOverrides
- * document "does nothing if the extra overrides are NULL"), so NULL is a
- * supported value and not a gap. Populating them would mean measuring a
- * 20 dBm PHY on hardware whose antenna switch is not yet identified - see
- * boards/ti/cc2652p_dongle/cc2652p_dongle.dts.
+ * Both tail pointers stay NULL, which the driver guards. This backend has no
+ * high-PA path. Populating them needs a measured 20 dBm PHY and an identified
+ * antenna switch (boards/ti/cc2652p_dongle/cc2652p_dongle.dts).
  */
 static volatile rfc_CMD_PROP_RADIO_DIV_SETUP_PA_t setup_cmd = {
 	.commandNo = CMD_PROP_RADIO_DIV_SETUP,
@@ -275,41 +168,22 @@ static volatile rfc_CMD_PROP_RADIO_DIV_SETUP_PA_t setup_cmd = {
 	},
 	.formatConf = {
 		/*
-		 * FIXED AT 24 BITS FOR EVERY OPERATION.
+		 * Fixed for every operation. nSwBits is consumed by RF_open(), so it
+		 * cannot change under a live handle; writing it later changes RAM
+		 * only and the radio hears nothing. Search matches [A6 C5 devnum_lo]
+		 * and tracking matches [A6 C5 dnl dnh dtype]. Re-running the setup
+		 * per length is not possible from callback context, and 32 bits
+		 * exceeds the 3 bytes on air for search. So use the 3 bytes both
+		 * share and finish the rest in software. caps.addr_len_hw_max
+		 * reports the same figure.
 		 *
-		 * nSwBits lives in the SETUP command, consumed by RF_open() - it
-		 * cannot be rewritten under a live handle; assigning it between
-		 * operations changes RAM and nothing in the radio (measured: a
-		 * first draft did exactly that and silently heard nothing).
-		 *
-		 * ANT's two geometries need different match lengths: search
-		 * matches [A6 C5 devnum_lo], tracking matches
-		 * [A6 C5 dnl dnh dtype]. Re-running CMD_PROP_RADIO_DIV_SETUP per
-		 * length would need a setup->CMD_FS->op chain inside
-		 * min_arm_lead_us, from callback context where nothing may
-		 * block - not viable. Fixing nSwBits at 32 is impossible (the
-		 * search address is only 3 bytes on air). So it is fixed at 24,
-		 * the 3 bytes both geometries share, with the rest finished in
-		 * software - costing two extra compared bytes and some spurious
-		 * wake-ups on shared devnum_lo, for a backend with no
-		 * reconfiguration path in arm calls. caps.addr_len_hw_max
-		 * reports 3 accordingly (the HAL treats it as informational).
-		 *
-		 * 16 under CONFIG_RADIANT_SEARCH_SHORT_MATCH - see
-		 * CC26XX_HW_ADDR_LEN. Then search matches [A6 C5] and takes
-		 * devnum_lo in software, and tracking finishes three bytes.
+		 * With CONFIG_RADIANT_SEARCH_SHORT_MATCH this is 16 bits (see
+		 * CC26XX_HW_ADDR_LEN).
 		 */
 		.nSwBits = 8u * CC26XX_HW_ADDR_LEN,
 		.bBitReversal = 0,
-		/*
-		 * bMsbFirst = 1. docs/ant-radio-link.md's bit-reversal note is
-		 * specific to the nRF's address serialiser (LSBit-first address,
-		 * MSBit-first payload under ENDIAN=Big); the real invariant is
-		 * on-air order, and ANT is MSBit-first throughout. A radio that
-		 * serialises sync word and payload the same way needs no
-		 * reversal. Wrong here means silence, not a weak link - measured
-		 * correct by the spike.
-		 */
+		/* On-air order is MSB first throughout ANT. Wrong here means silence,
+		 * not a weak link. */
 		.bMsbFirst = 1,
 		.fecMode = 0,
 		.whitenMode = 0,       /* ANT does not whiten */
@@ -324,33 +198,21 @@ static volatile rfc_CMD_PROP_RADIO_DIV_SETUP_PA_t setup_cmd = {
 	.pRegOverride = phy_overrides,
 	.centerFreq = 2400u + ANT_RF_INDEX_DEFAULT,
 	/*
-	 * RX intermediate frequency, MHz in signed 4.12: 0x1000 = 1.0 MHz.
-	 * tc901's 0x0800 (0.5 MHz) put this ~1.4 MHz-wide signal across DC,
-	 * so a transmitter whose carrier sat at a particular offset from ours
-	 * lost 25-87 % of its frames while the Garmin heard it at 1-5 %
-	 * (archive/benchmarks/2026-11-13-ti-todo/). See CONFIG_RADIANT_CC26XX_
-	 * INT_FREQ's help for the measured table.
+	 * RX intermediate frequency, MHz in signed 4.12: 0x1000 = 1.0 MHz. The
+	 * tc901 value of 0.5 MHz put the ~1.4 MHz-wide signal across DC and lost
+	 * frames from some carrier offsets. See CONFIG_RADIANT_CC26XX_INT_FREQ.
 	 */
 	.intFreq = CONFIG_RADIANT_CC26XX_INT_FREQ,
-	.loDivider = 0,                /* 0 = 2.4 GHz band; "DIV" is not a divider here */
-	/*
-	 * Stated rather than left to the initialiser's implicit zeroing. These
-	 * two are the whole reason for the _PA layout above, and a reader who
-	 * finds the struct changed but no mention of them here would reasonably
-	 * wonder whether they had simply been forgotten.
-	 */
+	.loDivider = 0,                /* 0 = 2.4 GHz band */
+	/* NULL: no high-PA override lists (see the _PA layout above). */
 	.pRegOverrideTxStd = NULL,
 	.pRegOverrideTx20 = NULL,
 };
 
 /*
- * TX power table, 2.4 GHz band. Entries and rawValue provenance: Zephyr's
- * in-tree ieee802154_cc13xx_cc26xx.c:48-59 (Apache-2.0), not SmartRF Studio -
- * clean under docs/decisions/0002-clean-room-policy.md. The +5 dBm entry
- * reproduces setup_cmd.txPower's 0x7217 exactly:
- *   RF_TxPowerTable_DEFAULT_PA_ENTRY(23, 0, 0, 57)
- *     = 23 | (0<<6) | (0<<8) | (57<<9) = 0x7217
- * corroborating the value this backend already used as its one fixed point.
+ * TX power table, 2.4 GHz. Taken from Zephyr's ieee802154_cc13xx_cc26xx.c
+ * (Apache-2.0), not SmartRF Studio. The +5 dBm entry equals setup_cmd.txPower
+ * 0x7217: RF_TxPowerTable_DEFAULT_PA_ENTRY(23, 0, 0, 57).
  */
 static const RF_TxPowerTable_Entry radiant_cc26xx_txp[] = {
 	{ -20, RF_TxPowerTable_DEFAULT_PA_ENTRY(6, 3, 0, 2) },
@@ -366,11 +228,8 @@ static const RF_TxPowerTable_Entry radiant_cc26xx_txp[] = {
 	RF_TxPowerTable_TERMINATION_ENTRY,
 };
 
-/*
- * Bench-only carrier trim (CONFIG_RADIANT_CC26XX_FREQ_TRIM_KHZ, default 0).
- * fractFreq is the fraction of 1 MHz in 1/65536 steps, so a negative trim
- * borrows one MHz from frequency. With 0 both fields are what they were.
- */
+/* Bench-only carrier trim (CONFIG_RADIANT_CC26XX_FREQ_TRIM_KHZ). fractFreq is
+ * in 1/65536 of a MHz; a negative trim borrows one MHz. */
 #if defined(CONFIG_RADIANT_CC26XX_FREQ_TRIM_KHZ)
 #define FS_TRIM_KHZ CONFIG_RADIANT_CC26XX_FREQ_TRIM_KHZ
 #else
@@ -389,22 +248,12 @@ static volatile rfc_CMD_FS_t fs_cmd = {
 };
 
 /*
- * RF_MODE_PROPRIETARY_2_4 + rf_patch_cpe_prop is SmartRF's own 2.4 GHz
- * proprietary setting for this part, proven by the spike. That is the only
- * patch every PHY constant in this file was measured under.
- *
- * CONFIG_RADIANT_BACKEND_CC26XX_MULTI_PATCH swaps to RF_MODE_MULTIPLE +
- * rf_patch_cpe_multi_protocol, which Zephyr's 802.15.4 driver also opens
- * with. That match is mandatory, not tidy: RF_applyRfCorePatch applies
- * cpePatchFxn only at RF_PHY_BOOTUP_MODE and never re-applies it on a client
- * switch (RFCCpePatchReset() is an empty stub in driverlib/rfc.c), so
- * whichever patch is resident at power-up is what BOTH RF core clients run
- * under for the whole power cycle - two clients naming different patches is
- * a coin flip per power cycle. RF_MODE_MULTIPLE == RF_MODE_PROPRIETARY_2_4 ==
- * 0x00 on this family, so the patch function pointer is the entire change;
- * falsify its PHY cost with radiant/spike/ti_phy before relying on it.
- *
- * The RF core keeps a pointer to this, so it may not live on a stack.
+ * The patch is the one every PHY constant here was measured under. The
+ * MULTI_PATCH build uses the 802.15.4 patch (same mode value, different
+ * function). Both RF core clients must name the same patch: the patch
+ * resident at power-up is used for the whole power cycle, since it is never
+ * re-applied on a client switch. The RF core keeps a pointer to this, so it
+ * must not live on a stack.
  */
 static RF_Mode rf_mode = {
 #if defined(CONFIG_RADIANT_BACKEND_CC26XX_MULTI_PATCH)
@@ -416,154 +265,88 @@ static RF_Mode rf_mode = {
 #endif
 };
 
-/* ---------------------------------------------------------------------------
- * Timing constants that are SEEDED and must be measured in P3
- * ---------------------------------------------------------------------------
- */
+/* --- Timing: seeded values, not yet measured --- */
 
 /*
- * T_SYNC_CAL_US - correction from the hardware's captured timestamp to the
- * HAL's t_sync ("last bit of the on-air address at the antenna"). rx_t_sync()
- * adds airtime for the address bytes not in the sync word, then this
- * constant, which absorbs demodulator group delay, filter latency and
- * capture offset.
- *
- * ZERO IS A PLACEHOLDER, NOT A MEASUREMENT, AND HAS NO SAFE DIRECTION. A
- * constant error here cancels out of the period estimate - the drift PLL
- * still locks and nothing looks wrong - while every RX window silently shifts
- * and eats its guard on one side, changing yield by a few tenths of a percent
- * (near the bench's ~0.4% collision floor). Measuring it needs a wired
- * two-board trigger (one pulses GPIO on its own address-sent event, the other
- * captures the pulse on the timer it timestamps t_sync with); until then the
- * A/B `timing` gate against the nRF backend only bounds the error.
+ * Correction from the captured RAT timestamp to t_sync (last address bit at the
+ * antenna). Absorbs demodulator delay and capture offset. Zero is a placeholder
+ * with no safe direction: an error shifts every RX window and eats one side of
+ * its guard. Measuring it needs a wired two-board trigger. Until then the A/B
+ * timing gate against the nRF backend only bounds the error.
  */
 #define T_SYNC_CAL_US          0
 
 /*
- * Ramp-up and turnaround. Seeded from the CC26x2 datasheet's TX/RX turnaround
- * figures plus margin for the RF core's command dispatch, and deliberately
- * generous: too large costs schedulable gap and is visible as a scheduler
- * statistic, too small produces late windows that read as poor sensitivity.
+ * Ramp-up and turnaround, from the CC26x2 datasheet plus margin for command
+ * dispatch. Deliberately generous: too large costs schedulable gap, too small
+ * causes late windows.
  */
 #define TX_RAMP_UP_US          150
 #define RX_RAMP_UP_US          150
 
 /*
- * TX_TAIL_SLOP_US - fed to post_op() as the scheduler's endTime for every
- * transmit, coex or not (post_op()'s non-coex arm ignores the argument, but
- * the caller computes it unconditionally). Under coex, RF_verifyGap refuses to
- * place any command anywhere but the tail of the queue if its endType is
- * RF_EndNotSpecified (see post_op()), so a transmit needs a real endTime the
- * same way a receive window needs RX_END_SLOP_US above. Sized to cover the
- * address/body/CRC airtime past t_sync_at plus a margin comparable to
- * RX_END_SLOP_US - unmeasured (no paced two-board TX-side rig exists on this
- * bench), deliberately generous for the same reason MIN_ARM_LEAD_US is.
+ * The scheduler endTime for every transmit. Under coex a command with an
+ * unspecified end is placed only at the queue tail, so transmits need a real
+ * end time, as receives do (RX_END_SLOP_US). Covers the airtime past t_sync
+ * plus margin. Unmeasured.
  */
 #define TX_TAIL_SLOP_US        500
 
 #if defined(CONFIG_RADIANT_BACKEND_CC26XX_COEX)
 /*
- * caps.min_arm_lead_us under coex, in radiant_radio_enable(): MIN_ARM_LEAD_US
- * plus a phy-switch lead - nPhySwitchingDuration (500, RF_ClientConfig's
- * value for a client switch) plus a margin (314) covering the same dispatch
- * uncertainty ARM_FLOOR_US bounds on the non-coex path. What makes 600 (see
- * caps.min_arm_lead_in_grant_us in radiant_radio_enable()) an honest number
- * for min_arm_lead_in_grant_us is that RX's endTime now reserves
- * follow_on_us explicitly (radiant_radio_rx()) - the phy-switch lead is only
- * ever paid BETWEEN clients, never inside our own reserved span.
+ * caps.min_arm_lead_us under coex: MIN_ARM_LEAD_US plus the client phy-switch
+ * lead (nPhySwitchingDuration 500) plus a 314 us margin. Honest only because
+ * RX reserves follow_on_us in its endTime, so the phy-switch lead is paid
+ * between clients, never inside our own span.
  */
 #define CC26XX_COEX_PHY_SWITCH_LEAD_US 814
-/* A 100 ms sweep chunk is a 100 ms outage for the other client; bounded here
- * rather than left at 0 ("unbounded: nothing is arbitrating" becomes false
- * under coex). Not measured against a fairness target - a starting point. */
+/* Bounds a sweep chunk so it cannot block the other client for long. A
+ * starting point, not tuned against a fairness target. */
 #define CC26XX_COEX_MAX_WINDOW_US      20000
 #endif
 
 /*
- * EXTRA RECEIVE TIME AT THE LATE EDGE OF EVERY WINDOW.
+ * Extra receive time past t_close + BYTE_US. The end trigger stops sync
+ * search, not just reception, so ending exactly at the window edge loses the
+ * frame when it arrives late in the window. Measured loss: 79% with no slop,
+ * 8-9% with 500 or 2000 us. 500 is the bounded cost. A missed frame at the
+ * edge also loses the tracking anchor.
  *
- * The HAL's window is [t_open, t_close] in t_sync terms; ending exactly at
- * t_close + one byte is correct arithmetic but measured 79% loss:
- *
- *   end = t_close + BYTE_US            79.0% loss   (126 of 601 packets)
- *   end = t_close + BYTE_US +  500 us   8.3% loss   (551 of 601)
- *   end = t_close + BYTE_US + 2000 us   9.0% loss   (547 of 601)
- *
- * Frames weren't arriving late (543 of 554 landed 0-200us before t_close
- * once slop was added). The problem: endTrigger stops SYNC SEARCH, not just
- * reception. endType = 1 lets an already-started packet finish, but gives
- * the correlator no run-up to start one - and a tracked window is only
- * ~400us wide, so a to-the-microsecond end trigger leaves almost no armed
- * time at the edge where the frame is. Missing it there loses the ANCHOR,
- * not just one packet: the channel free-runs and misses several more after.
- *
- * 500 and 2000 measure the same, so 500 is the bounded cost - extra receive
- * current in exchange for a correlator running before the frame arrives.
- *
- * CONFIG_RADIANT_CC26XX_RX_END_SLOP_US overrides this (250/500/750); the
- * Kconfig default is this same 500.
+ * Overridable with CONFIG_RADIANT_CC26XX_RX_END_SLOP_US (Kconfig default 500).
  */
 #define RX_END_SLOP_US         CONFIG_RADIANT_CC26XX_RX_END_SLOP_US
 #define RX_TO_TX_US            250
 #define TX_TO_RX_US            250
 
 /*
- * MIN_ARM_LEAD_US - between radiant_radio_now() and the earliest instant an
- * arm call can still honour. Larger than the nRF backend's because an arm
- * here posts a command through a driver to a separate processor's doorbell,
- * not a register write - covers building the command, RF_postCmd's own
- * work, and the RF core waking its command processor.
+ * Minimum time between radiant_radio_now() and the earliest arm this backend
+ * can honour. Larger than the nRF value: an arm posts through the driver to
+ * another processor's doorbell.
  */
 #define MIN_ARM_LEAD_US        600
 
 /*
- * ARM_FLOOR_US - the lead below which an arm is REFUSED, distinct from the
- * lead the scheduler budgets for (min_arm_lead_us). Needed as two numbers:
- * radiant_sched.c aims at now + min_arm_lead_us, and the microseconds elapsed
- * between its decision and this function's clock read eat into that margin.
- * With one number, real arms landed ~55us short every time (measured:
- * "rx refused rc=-4 ... open=2573983 now=2573438", 545us of lead against a
- * 600us test) - clean empty scans with no counter moving. So min_arm_lead_us
- * stays the honest budgeting figure, and ARM_FLOOR_US is the true hardware
- * limit: below it the trigger is already past, and pastTrig = 1 makes that
- * start the window late rather than erroring. A window opened between the
- * floor and the advertised lead loses part of its head, and the frames missed
- * are counted as ordinary misses.
+ * Lead below which an arm is refused. This is the hardware limit. MIN_ARM_LEAD_US
+ * is the scheduler's budget, and the difference absorbs the ~55 us the
+ * scheduler spends between deciding and arming. Between the floor and the lead
+ * the window starts late (pastTrig) and loses its head.
  */
 #define ARM_FLOOR_US           150
 
 /*
- * IN_GRANT_LEAD_US - caps.min_arm_lead_in_grant_us on the non-coex build: the
- * lead for an operation armed from inside a radio callback into the air the
- * previous operation reserved (follow_on_us). The RF core is already awake
- * and nothing arbitrates, so what the 600 us covers for a cold arm (waking the
- * command processor) is not owed. Halfway between ARM_FLOOR_US and
- * MIN_ARM_LEAD_US, leaving the measured ~55 us of scheduler-to-backend latency
- * well clear of the floor. Set from the 2026-11-12 bench: every failed master
- * burst was a retry armed ~575 us ahead against the 600 us lead
- * (docs/backends.md, "CC26x2 measured timing").
+ * Lead for an operation armed from a radio callback into air the previous
+ * operation reserved (follow_on_us), on the non-coex build. The RF core is
+ * already awake, so the cold-arm wake cost is not owed. Roughly halfway
+ * between the floor and MIN_ARM_LEAD_US.
  */
 #define IN_GRANT_LEAD_US       400
 
-/* ---------------------------------------------------------------------------
- * Receive buffers
- *
- * Sized for the worst case the HAL permits, not for ANT: RADIANT_RADIO_BODY_MAX
- * plus the one address byte the hardware matcher can't reach plus two CRC
- * bytes plus the appended RSSI/timestamp/status - costs static RAM only.
- * FOUR ENTRIES: a merged window may deliver several frames back to back, and
- * the draining callback runs at RF driver priority, not the radio's.
- * ---------------------------------------------------------------------------
- */
+/* --- Receive buffers: sized for the worst case the HAL permits --- */
+
+/* Four entries: one merged window can deliver several frames back to back. */
 #define RX_CRC_BYTES      2u
-/* Address bytes the sync-word matcher leaves in the payload for the longest
- * address the HAL permits: 3 with the 2-byte sync word
- * (CONFIG_RADIANT_SEARCH_SHORT_MATCH), 2 with the 3-byte one. Sizes rx_data's
- * rows, rx_cmd.maxPktLen's ceiling and tx_buf below. Until 2026-11-12 the
- * long-match branch subtracted 4, not the 3 the matcher takes, which left
- * tx_buf and the rows one byte short at body_len RADIANT_RADIO_BODY_MAX
- * (unreachable with ANT's 8-byte body; radiant_radio_tx() and
- * radiant_radio_rx() now refuse an oversize frame anyway). */
+/* Address bytes left in the payload for the longest permitted address. Sizes
+ * the rows, rx_cmd.maxPktLen and tx_buf. */
 #define RX_SW_ADDR_MAX    (RADIANT_RADIO_ADDR_MAX - CC26XX_HW_ADDR_LEN)
 BUILD_ASSERT(CC26XX_HW_ADDR_LEN >= 2u &&
 	     CC26XX_HW_ADDR_LEN <= RADIANT_RADIO_ADDR_MAX,
@@ -574,16 +357,9 @@ BUILD_ASSERT(CC26XX_HW_ADDR_LEN >= 2u &&
 #define RX_ENTRIES        4
 
 /*
- * EVERY ENTRY 4-BYTE ALIGNED INDIVIDUALLY - __aligned(4) ON THE ARRAY ONLY
- * ALIGNS ROW 0.
- *
- * The RF core requires each rfc_dataEntryGeneral_t to be word aligned. Later
- * rows start at base + i*rowsize, so they're aligned only if rowsize is a
- * multiple of four; the natural row here is 33 bytes (rows 1..3 land on odd
- * addresses). Measured as total receive failure with no error: the RF core
- * filled entry 0 (nRxOk = 1, FINISHED), advanced to the misaligned entry 1,
- * and entry 0's frame was never delivered. ROUND_UP fixes it, at three bytes
- * per entry.
+ * Each row must be word aligned for the RF core. __aligned(4) on the array only
+ * aligns row 0, so the row size must be a multiple of four. A misaligned row
+ * fails receive silently.
  */
 #define RX_ROW_BYTES  ROUND_UP(sizeof(rfc_dataEntryGeneral_t) + RX_BUF_BYTES, 4)
 
@@ -592,10 +368,9 @@ static dataQueue_t rx_queue;
 static rfc_propRxOutput_t rx_output;
 
 /*
- * The 0xF7 backend page (ADR 0023), CONFIG_RADIANT_DIAG_COUNTERS only. Every
- * CC_DIAG() site below is an empty statement without it. rx_output is cleared
- * at each arm, so its counts are folded into rxo_* first (and the window still
- * running is added at read time).
+ * Diagnostic counters for the 0xF7 page (ADR 0023). CC_DIAG() is a no-op
+ * without CONFIG_RADIANT_DIAG_COUNTERS. rx_output is cleared on each arm, so
+ * its counts are folded into rxo_* first.
  */
 #if defined(CONFIG_RADIANT_DIAG_COUNTERS)
 static struct {
@@ -621,11 +396,8 @@ static void cc_diag_fold_rx_output(void)
 #endif
 
 /*
- * The read cursor is software's, not rx_queue.pCurrEntry: that field is
- * where the RF core will WRITE next and advances as it fills entries.
- * Draining from it reads the entry the radio is about to use (PENDING), so
- * the loop breaks immediately and the finished entry behind it is missed.
- * TI's own rfQueue helper keeps a separate read pointer for this reason.
+ * Software's read cursor. rx_queue.pCurrEntry is where the RF core writes next,
+ * so draining from it misses the finished entry behind it.
  */
 static uint8_t rx_read;
 
@@ -637,32 +409,19 @@ static volatile rfc_CMD_PROP_RX_ADV_t rx_cmd = {
 		.bRepeatOk = 1,     /* a merged window may catch several frames */
 		.bRepeatNok = 1,
 		/*
-		 * bUseCrc = 0: the CRC is verified in SOFTWARE, and that is a
-		 * capability statement rather than a shortcut - caps.crc_in_hw
-		 * is false and caps.has_rx_crc is true because of this line.
-		 *
-		 * The RF core's CRC engine cannot express ANT's: ANT's CRC
-		 * covers the on-air ADDRESS bytes as well as the body
-		 * (radiant_crc_cfg.cover_addr), and the sync-word matcher
-		 * consumes those bytes before the CRC engine ever sees them.
-		 *
-		 * The cost is CPU per frame and no hardware suppression of
-		 * noise-triggered matches. The benefit is that crc_rx is
-		 * available on every failure, so radiant_crc_repair.c's
-		 * single-bit repair works on this backend where a pass/fail
-		 * bit would have disabled it.
+		 * The CRC is verified in software. The RF core cannot express
+		 * ANT's CRC, which covers the on-air address bytes that the
+		 * sync-word matcher consumes first. Software CRC gives crc_rx on
+		 * every failure, which radiant_crc_repair.c needs. The cost is CPU
+		 * per frame.
 		 */
 		.bUseCrc = 0,
 		.bCrcIncSw = 0,
 		.bCrcIncHdr = 0,
 		/*
-		 * endType = 1: an end trigger that fires while a packet is
-		 * being received lets that packet finish. With 0 the frame
-		 * would be truncated, and a frame truncated by the window edge
-		 * is indistinguishable from a frame corrupted on the air - it
-		 * fails its CRC and is counted as loss. That would have put a
-		 * floor under the A/B loss_exact gate that no amount of RF work
-		 * could lift.
+		 * A packet in progress when the end trigger fires is allowed to
+		 * finish. Otherwise a frame cut by the window edge is counted as
+		 * a corrupted frame.
 		 */
 		.endType = 1,
 		.filterOp = 1,      /* mark, do not silently drop */
@@ -692,9 +451,8 @@ static volatile rfc_CMD_PROP_RX_ADV_t rx_cmd = {
 
 /* Address bytes the matcher could not reach, then body, then CRC. */
 static uint8_t tx_buf[RX_SW_ADDR_MAX + RADIANT_RADIO_BODY_MAX + RX_CRC_BYTES];
-/* What goes out is exactly what a receiving row holds before its appended
- * status bytes: radiant_radio_tx()'s size guard and radiant_radio_rx()'s
- * maxPktLen guard compare against the same number. */
+/* A transmitted packet is the same size as a received row before its status
+ * bytes, so the size guards in tx and rx use one figure. */
 BUILD_ASSERT(sizeof(tx_buf) == RX_PAYLOAD_MAX,
 	     "tx_buf and the receive rows must be sized from one figure");
 
@@ -714,10 +472,7 @@ static volatile rfc_CMD_PROP_TX_ADV_t tx_cmd = {
 	.pPkt = tx_buf,
 };
 
-/* ---------------------------------------------------------------------------
- * State
- * ---------------------------------------------------------------------------
- */
+/* --- State --- */
 
 enum op_kind {
 	OP_NONE = 0,
@@ -740,8 +495,8 @@ static struct {
 	uint32_t     op_id;
 	uint32_t     next_op_id;
 
-	/* The armed request, copied because the HAL only guarantees the
-	 * filters array outlives the operation - not the request struct. */
+	/* The armed request, copied: the HAL only guarantees the filters array
+	 * outlives the operation. */
 	struct radiant_pkt_format fmt;
 	struct radiant_rx_filter  filters[8];
 	uint8_t                   n_filters;
@@ -752,21 +507,19 @@ static struct {
 	uint32_t                  flags;
 	radiant_time_t            tx_t_sync;
 
-	/* Which filter each hardware sync word stands for, as an index into
-	 * filters[]; -1 when that sync word is unused. Only the first
-	 * hw_addr_len bytes are implied - software finishes the rest. */
+	/* Filter index per hardware sync word, or -1 if unused. */
 	int8_t                    sync_group[2];
 
-	/* 64-bit fold of the 32-bit RAT. See rat_now(). */
+	/* 64-bit fold of the 32-bit RAT. See rat_fold(). */
 	uint32_t                  rat_last;
 	uint64_t                  rat_hi;
 	int64_t                   rat_uptime_ref;
 
 	bool                      delivered_terminal;
 
-	/* A STOP_ON_FIRST window rx_drain() retired early. Its cancel still
-	 * calls back, by which time st may hold the next operation, so that
-	 * callback must not be read as this one's. NO_HANDLE when none. */
+	/* A window rx_drain() retired early. Its cancel callback arrives after
+	 * st may hold the next operation, so it must not be attributed to that
+	 * operation. NO_HANDLE when none. */
 	RF_CmdHandle              retired_handle;
 } st;
 
@@ -774,20 +527,13 @@ static struct {
 
 static struct k_timer rat_keepalive;
 
-/* ---------------------------------------------------------------------------
- * Time: folding a 32-bit 4 MHz counter into 64-bit microseconds
- *
- * The RAT wraps every 2^32 / 4e6 = 1073s (~18 min), and the HAL needs 64-bit
- * absolute microseconds the core can subtract freely. The fold (detect a step
- * backwards, add 2^32) is correct only if sampled more often than the wrap
- * period: radiant_radio_now() is called constantly in practice, but a k_timer
- * also forces a sample every 60s to cover a disabled radio, an idle dongle,
- * or a long USB stall.
- *
- * The spike measured the RAT free-running across RF_close()/RF_open()
- * (200,337,850 ticks over five power cycles, matching elapsed wall time),
- * so there's no epoch to re-establish on enable.
- * ---------------------------------------------------------------------------
+/* --- Time: folding the 32-bit 4 MHz RAT into 64-bit microseconds --- */
+
+/*
+ * The RAT wraps every 2^32 ticks (about 1073 s). The fold adds 2^32 on each
+ * backwards step, so it is correct only if sampled more often than the wrap.
+ * The 60 s keepalive timer guarantees that. The RAT free-runs across
+ * RF_close/RF_open, so no epoch is needed on enable.
  */
 
 static uint64_t rat_fold(uint32_t now32)
@@ -806,10 +552,8 @@ static uint32_t rat_raw(void)
 		return RF_getCurrentTime();
 	}
 
-	/* No RAT to read before RF_open / after RF_close, but the HAL still
-	 * needs a monotonic answer. A k_uptime-derived one is good enough here:
-	 * the only callers in that state are deciding whether it's worth
-	 * arming anything, not scheduling against it. */
+	/* With no RAT (before RF_open or after RF_close), use uptime. Callers in
+	 * that state only decide whether arming is worthwhile. */
 	return (uint32_t)((uint64_t)k_uptime_get() * 1000u * RAT_TICKS_PER_US);
 }
 
@@ -829,20 +573,13 @@ static void rat_keepalive_fn(struct k_timer *t)
 	(void)now_us();
 }
 
-/* The RAT tick a given absolute microsecond corresponds to, truncated to the
- * 32 bits a command's trigger field holds. */
+/* RAT tick for an absolute microsecond, truncated to the 32-bit trigger field. */
 static uint32_t us_to_rat(radiant_time_t t)
 {
 	return (uint32_t)((uint64_t)t * RAT_TICKS_PER_US);
 }
 
-/* ---------------------------------------------------------------------------
- * CRC - generic over struct radiant_crc_cfg rather than hardcoded to
- * CCITT-FALSE, since a hardcoded backend would silently transmit the wrong
- * CRC the moment a different format (e.g. the long-range format from ADR
- * 0007) arrived.
- * ---------------------------------------------------------------------------
- */
+/* --- CRC: generic over struct radiant_crc_cfg, not fixed to one polynomial --- */
 
 static uint32_t reflect(uint32_t v, uint8_t bits)
 {
@@ -887,18 +624,12 @@ static uint32_t crc_compute(const struct radiant_crc_cfg *cfg,
 	return (crc ^ cfg->xor_out) & mask;
 }
 
-/* ---------------------------------------------------------------------------
- * Capabilities
- * ---------------------------------------------------------------------------
- */
+/* --- Capabilities --- */
 
 static const enum radiant_phy phys[] = { RADIANT_PHY_1M_GFSK };
 
-/*
- * const in every build but coex, where radiant_radio_enable() patches
- * min_arm_lead_us / min_arm_lead_in_grant_us / max_window_us once the RF
- * core is open - see the three assignments there.
- */
+/* Non-const under coex only: radiant_radio_enable() patches three fields once
+ * the RF core is open. */
 #if defined(CONFIG_RADIANT_BACKEND_CC26XX_COEX)
 static struct radiant_radio_caps caps = {
 #else
@@ -907,61 +638,38 @@ static const struct radiant_radio_caps caps = {
 	.name = "cc26xx",
 
 	/*
-	 * TWO - A KNOWN PRODUCT REGRESSION. CMD_PROP_RX_ADV has only
-	 * syncWord0/syncWord1 vs the nRF's eight. radiant_search.c sweeps
-	 * max_filters addresses per window to cover all 256 devnum_lo values:
-	 * 32 sets at eight filters, 128 sets at two - breaking
-	 * ab_gates.toml's max_absolute_s = 5.0 by construction.
-	 *
-	 * Recorded and stated rather than tuned around.
+	 * Two sync words only, against the nRF's eight. The search sweep therefore
+	 * takes 32 sets at eight filters but 128 at two, which by construction
+	 * breaks ab_gates.toml's max_absolute_s = 5.0. Stated, not tuned around.
 	 */
 	.max_filters = 2,
 
 	/*
-	 * Equal to max_filters, unlike the nRF. Each sync word is a fully
-	 * independent 32-bit value with no shared-BASE constraint, so two
-	 * tracked channels with different device numbers CAN share a window -
-	 * the nRF's max_addr_groups = 2 comes from register layout, this one
-	 * just from there being two sync words. Same number, unrelated reason,
-	 * and tracking isn't the extra penalty here that it is on the nRF.
+	 * The sync words have no shared-BASE constraint, so two tracked channels
+	 * can share a window. The value matches the nRF's, for a different reason.
 	 */
 	.max_addr_groups = 2,
 
 	/*
-	 * FOUR BITS - the most expensive difference from the nRF. The two sync
-	 * words are matched by a correlator, not a comparator, so it can't
-	 * separate close templates. Measured at -47 dBm, 4.0049 fps, syncWord1
-	 * on the real address and syncWord0 a controlled distance away (out of
-	 * ~30 receivable frames per point):
-	 *
-	 *     1 bit apart    0 frames      4 bits apart   18 frames
-	 *     2 bits apart   3 frames      8 bits apart   20 frames
-	 *
-	 * A single sync word scores 21-24 on the same run, so 4 bits is where
-	 * the penalty stops mattering. Declared rather than worked around
-	 * because the backend doesn't choose the addresses it's handed: a search
-	 * sweep using consecutive devnum_lo values (1 bit apart, free on the
-	 * nRF) made this backend receive nothing all sweep, with no error.
+	 * Four bits. The sync words are matched by a correlator, which cannot
+	 * separate close templates. At -47 dBm, one bit apart delivered 0 frames,
+	 * two bits 3, four bits 18, and eight bits 20. A single sync word scored
+	 * 21-24. Consecutive devnum_lo values sit one bit apart, so a search sweep
+	 * over them received nothing.
 	 */
 	.min_filter_hamming_bits = 4,
 
 	/*
-	 * ADR 0022: one wild_last filter covers every devnum_lo - [A6 C5] in
-	 * the sync word, devnum_lo compared (not) in rx_match() and reported
-	 * from the payload. Only with the 2-byte sync word, so only under the
-	 * symbol; see CC26XX_HW_ADDR_LEN for what that costs tracking here.
+	 * ADR 0022: one wild_last filter covers every devnum_lo. The last address
+	 * byte is compared in software and reported from the payload. Only with
+	 * the 2-byte sync word.
 	 */
 	.filter_wildcard_dev = IS_ENABLED(CONFIG_RADIANT_SEARCH_SHORT_MATCH),
 
 	/*
-	 * THREE - less than the silicon can do, deliberately. formatConf.nSwBits
-	 * goes to 32 bits (4 bytes), but it lives in the setup command RF_open()
-	 * consumed, so serving ANT's two address lengths from one open handle
-	 * means fixing it at the 3 bytes they share (see setup_cmd.formatConf).
-	 * The 4th/5th on-air bytes on a tracked channel arrive as leading payload
-	 * bytes and are matched in software (rx_match()).
-	 *
-	 * TWO under CONFIG_RADIANT_SEARCH_SHORT_MATCH (CC26XX_HW_ADDR_LEN).
+	 * Three, not the silicon's four. nSwBits is fixed in the setup command
+	 * (see setup_cmd.formatConf). Fourth and fifth bytes are matched in
+	 * software. Two under CONFIG_RADIANT_SEARCH_SHORT_MATCH.
 	 */
 	.addr_len_hw_max = CC26XX_HW_ADDR_LEN,
 
@@ -974,44 +682,24 @@ static const struct radiant_radio_caps caps = {
 	.ramp_up_us = TX_RAMP_UP_US,
 	.rx_to_tx_us = RX_TO_TX_US,
 	.tx_to_rx_us = TX_TO_RX_US,
-	/*
-	 * Both patched upward in radiant_radio_enable() under coex - see the
-	 * CC26XX_COEX_PHY_SWITCH_LEAD_US comment. Left at the non-coex values
-	 * here because this initialiser runs before that patch.
-	 */
+	/* Patched upward under coex in radiant_radio_enable(). */
 	.min_arm_lead_us = MIN_ARM_LEAD_US,
-	/* See IN_GRANT_LEAD_US. Patched to 600 under coex in
-	 * radiant_radio_enable(), which explains why 600 is honest there. */
+	/* See IN_GRANT_LEAD_US. Patched to 600 under coex. */
 	.min_arm_lead_in_grant_us = IN_GRANT_LEAD_US,
 	/*
-	 * The surplus this backend really does hold: rx_start() ends the window
-	 * at t_close + BYTE_US + RX_END_SLOP_US, and that slop is not optional
-	 * padding - see RX_END_SLOP_US, where removing it measured 79 % loss
-	 * because endTrigger stops sync SEARCH rather than reception.
-	 *
-	 * So the receiver here is still on 508 us after t_close, four times the
-	 * frame tail radiant_sched.c derives from the format. Undeclared, the
-	 * scheduler truncates a background scan chunk to end 508 us INSIDE the
-	 * next tracked window's arm lead, and that window is armed too late to
-	 * hear anything. Slightly conservative on purpose: the scheduler adds
-	 * this to the frame tail rather than taking the larger of the two, so a
-	 * gap here reserves ~112 us more than the hardware needs - 0.05 % of an
-	 * ANT+ period, spent by the sweep, which ADR 0013 makes elastic.
+	 * The receiver stays on BYTE_US + RX_END_SLOP_US past t_close, a surplus the
+	 * scheduler must see. Undeclared, a background scan chunk would run into
+	 * the next tracked window's arm lead. This is slightly conservative.
 	 */
 	.rx_close_hold_us = (uint16_t)(BYTE_US + RX_END_SLOP_US),
 
-	.time_resolution_ns = 250,   /* RAT is 4 MHz - measured 4 000 244 ticks/s */
+	.time_resolution_ns = 250,   /* RAT is 4 MHz */
 
-	/* Unbounded outside coex: nothing is arbitrating. Patched to
-	 * CC26XX_COEX_MAX_WINDOW_US in radiant_radio_enable() under coex - a
-	 * 100 ms sweep chunk is a 100 ms outage for the other client once one
-	 * exists. */
+	/* Unbounded outside coex. Patched to CC26XX_COEX_MAX_WINDOW_US under coex. */
 	.max_window_us = 0,
 
-	/* Appended timestamp is a hardware RAT capture, not a software read.
-	 * Calibration (T_SYNC_CAL_US) is still outstanding, but that's a
-	 * constant offset, not a loss of hardware capture - reporting false
-	 * here would make radiant_event.c wrongly mark the timestamp approximate. */
+	/* The timestamp is a hardware RAT capture. T_SYNC_CAL_US is a constant
+	 * offset, not a loss of capture. */
 	.has_sync_timestamp = true,
 
 	.has_rssi = true,
@@ -1020,12 +708,9 @@ static const struct radiant_radio_caps caps = {
 	.crc_in_hw = false,          /* see rx_cmd.pktConf.bUseCrc */
 
 	/*
-	 * Served by apply_power() + radiant_cc26xx_txp[] from the TX arm path,
-	 * not by setup_cmd.txPower - that is fixed at RF_open() time (0x7217,
-	 * +5 dBm), so a range declared here without apply_power() would answer a
-	 * host's power request cheerfully and ignore it. Where measured dBm and
-	 * table dBm disagreed on the bench, the labels were corrected from the
-	 * bench measurement.
+	 * Served by apply_power() and radiant_cc26xx_txp[], not by setup_cmd.txPower
+	 * (fixed at RF_open()). Without apply_power() the range would be accepted
+	 * and ignored.
 	 */
 	.tx_power_min_dbm = -20,
 	.tx_power_max_dbm = 5,
@@ -1036,13 +721,9 @@ const struct radiant_radio_caps *radiant_radio_caps_get(void)
 	return &caps;
 }
 
-/* ---------------------------------------------------------------------------
- * Helpers
- * ---------------------------------------------------------------------------
- */
+/* --- Helpers --- */
 
-/* The first hw_len address bytes as the RF core wants them: first byte on the
- * air in the most significant position of the nSwBits used. */
+/* The first hw_len address bytes, first on air in the most significant position. */
 static uint32_t sync_word_of(const uint8_t *addr, uint8_t hw_len)
 {
 	uint32_t w = 0;
@@ -1055,11 +736,9 @@ static uint32_t sync_word_of(const uint8_t *addr, uint8_t hw_len)
 }
 
 /*
- * radiant_radio_hal.h: "A backend rounds to the nearest setting it has and
- * does not fail for an unreachable value." use_raw bypasses the table
- * entirely - RF_TxPowerTable_Value is a bitfield, not dBm, so a raw request
- * writes rawValue/paType straight through for bench work that needs a
- * setting off the table.
+ * Rounds to the nearest table entry; an unreachable value keeps the current
+ * power (as the HAL requires). use_raw writes rawValue and paType directly,
+ * for bench work off the table.
  */
 static void apply_power(const struct radiant_tx_power *p)
 {
@@ -1087,49 +766,32 @@ static void apply_power(const struct radiant_tx_power *p)
 }
 
 #if defined(CONFIG_RADIANT_BACKEND_CC26XX_COEX)
-/* radiant_radio_cc26xx_arb.c's only way to tell "ours" from "the
- * neighbour's" without including radiant_radio_hal.h - see that file's own
- * header. */
+/* Lets radiant_radio_cc26xx_arb.c tell this client from the neighbour's. */
 void *radiant_cc26xx_client(void)
 {
 	return (void *)st.rf_handle;
 }
 
 /*
- * post_op() - RF_scheduleCmd() under coex, RF_postCmd() otherwise. These two
- * variants are the whole of what CONFIG_RADIANT_BACKEND_CC26XX_COEX changes
- * about how a command reaches the RF core.
+ * post_op(): RF_scheduleCmd() under coex, RF_postCmd() otherwise.
  *
- * allowDelay = RF_AllowDelayNone is the single most important field here.
- * With allowDelay set, RF_howToSchedule's step 3 returns Tail and appends
- * our window behind whatever is running - on a shared core that can be an
- * infinite background RX, so the absolute start trigger is long past by the
- * time the queue reaches it, pastTrig = 1 opens it at an arbitrary instant,
- * every frame fails the t_open/t_close test, and the terminal is an
- * ordinary STATUS_TIMEOUT. Refuse instead: EDENIED is a fact the caller can
- * act on, a silently-late window is not.
+ * allowDelay must be RF_AllowDelayNone. Otherwise the window is appended
+ * behind a running background RX, starts late with pastTrig, and every frame
+ * fails the window test. Refusing (EDENIED) is better than a silently late
+ * window.
  */
 
 /*
- * Every RF_scheduleCmd() refusal (RF_ALLOC_ERROR / RF_ScheduleStatusError,
- * i.e. a negative handle) - the same events the caller turns into a
- * synchronous RADIANT_RADIO_EDENIED. Non-static and volatile so it survives
- * to the ELF, but a debug probe cannot read it after a run: a DSS connect
- * resets the CC26x2 and SRAM restarts from zero. On the bench read the same
- * events as the 0xF6 reply's sched_denied (CONFIG_ANT_DONGLE_HEALTH_COUNTERS,
- * ti_health.conf), which is how the 2026-11-12 A/B counted them. A plain
- * increment, so it costs nothing in the SWI/HWI context most arms come from.
+ * Count of RF_scheduleCmd() refusals, the same events that return
+ * RADIANT_RADIO_EDENIED. Read it through the 0xF6 health reply, since a
+ * debugger connect clears SRAM.
  */
 volatile uint32_t radiant_cc26xx_submit_refusals;
 
 /*
- * The log line is emitted from the system work queue, never from the arm
- * call itself: this application builds with CONFIG_LOG_MODE_IMMEDIATE (see
- * boards/cc26x2r1_launchxl.conf), under which LOG_WRN formats and polls the
- * UART out synchronously - milliseconds of interrupts-off time inside the RF
- * driver's SWI, which is where the core arms an ACK reply from. k_work_submit
- * is ISR-safe and coalesces while pending; the k_uptime check bounds it to
- * one line per second however fast refusals arrive.
+ * Logged from the system work queue, not from the arm call. The app uses
+ * CONFIG_LOG_MODE_IMMEDIATE, where LOG_WRN blocks on the UART with interrupts
+ * off inside the driver's SWI. Rate-limited to one line per second.
  */
 static int64_t refusal_logged_ms = INT64_MIN / 2;
 
@@ -1200,13 +862,9 @@ static bool fmt_supported(const struct radiant_pkt_format *fmt)
 		return false;
 	}
 	/*
-	 * RADIANT_LEN_FROM_BODY is refused rather than approximated. The RF
-	 * core can decode a length field (hdrConf.numLenBits), but only counted
-	 * from the first bit after the sync word - it can't express a length
-	 * field sitting after an address byte the matcher didn't consume (the
-	 * device type byte, on a 5-byte address). No ANT format needs this
-	 * mode; the long-range format does, but it's on a PHY this build
-	 * doesn't have either.
+	 * RADIANT_LEN_FROM_BODY is refused. The RF core counts a length field only
+	 * from the first bit after the sync word, so it cannot place one after an
+	 * unmatched address byte.
 	 */
 	if (fmt->len_mode != RADIANT_LEN_FIXED) {
 		return false;
@@ -1216,14 +874,8 @@ static bool fmt_supported(const struct radiant_pkt_format *fmt)
 	}
 	if (fmt->crc.width_bits != 0u &&
 	    (fmt->crc.width_bits != 16u || !fmt->crc.cover_addr)) {
-		/*
-		 * Only "no CRC" and "16-bit covering the address" are
-		 * expressible: the software path reassembles the covered bytes
-		 * from the filter's address plus payload, which is what
-		 * cover_addr means. A non-covering 16-bit CRC would be easy to
-		 * add but has never been asked for; refusing beats an untested
-		 * path.
-		 */
+		/* Only "no CRC" and "16-bit CRC covering the address" are supported.
+		 * Other CRCs have no tested path. */
 		return false;
 	}
 
@@ -1243,10 +895,8 @@ static void deliver_rx_terminal(enum radiant_radio_status status)
 	st.delivered_terminal = true;
 	st.kind = OP_NONE;
 
-	/* A window that heard a frame is OK however it ended: one that heard
-	 * a master's or slave's packet is usually ABORTED by the reply the
-	 * core arms from inside the frame callback (measured 2026-11-12: every
-	 * heard turnaround ended that way). */
+	/* A window that heard a frame counts as OK, even if the reply armed from
+	 * the frame callback aborted it. */
 	CC_DIAG(if (cc_diag.win_frames != 0u) {
 			cc_diag.term_ok++;
 		} else if (status == RADIANT_RADIO_STATUS_TIMEOUT) {
@@ -1280,31 +930,20 @@ static void deliver_tx_terminal(enum radiant_radio_status status)
 	}
 }
 
-/* ---------------------------------------------------------------------------
- * Receive
- * ---------------------------------------------------------------------------
- */
+/* --- Receive --- */
 
 /*
- * FALSE-SYNC COUNTERS (non-static and volatile so neither the compiler nor
- * the linker drops or caches them). NOT readable over JTAG after a run: a DSS
- * connect resets the CC26x2 and SRAM restarts from zero (measured 2026-11-12
- * on Zephyr's tick counter). Read them through the bench-only 0xF6 patch in
- * archive/benchmarks/2026-11-12-ti-wildcard/diag_health.patch.
+ * Diagnostic counters, volatile so they are not cached or dropped. A debugger
+ * connect clears SRAM, so read them through the 0xF6 health reply.
  *
- *   radiant_cc26xx_sync_frames       every received entry rx_drain() looked
- *                                    at: the hardware matched a sync word
- *   radiant_cc26xx_sw_addr_mismatch  of those, the ones whose software-
- *                                    compared address bytes matched no
- *                                    filter - noise or another sensor's frame
- *                                    that got past the shortened hardware
- *                                    match, each costing the receiver one
- *                                    frame's airtime
+ *   radiant_cc26xx_sync_frames       entries rx_drain() examined (hardware
+ *                                    matched a sync word)
+ *   radiant_cc26xx_sw_addr_mismatch  of those, the ones whose software-compared
+ *                                    address bytes matched no filter. Each
+ *                                    costs one frame of airtime.
  *
- * Counted with CONFIG_RADIANT_SEARCH_SHORT_MATCH on or off, so an A image
- * (24-bit sync) and a B image (16-bit) report the same quantity. No log line:
- * rx_drain() runs in the RF driver's callback, and the debug builds share the
- * UART with the ANT stream (see the note in rx_drain()).
+ * Counted the same way with or without CONFIG_RADIANT_SEARCH_SHORT_MATCH. No
+ * log line: rx_drain() runs in the driver callback.
  */
 volatile uint32_t radiant_cc26xx_sync_frames;
 volatile uint32_t radiant_cc26xx_sw_addr_mismatch;
@@ -1329,27 +968,13 @@ static void rx_queue_init(void)
 }
 
 /*
- * Which filter this frame is for, or -1. The hardware matched the first
- * hw_addr_len bytes and reports which sync word did it, narrowing the
- * answer to filters sharing that sync word; remaining address bytes are the
- * leading payload bytes, compared here to finish the match.
- *
- * The return value is the HAL's filter_index and the core depends on it for
- * IDENTITY: in wildcard search the third on-air byte is devnum_lo, so the
- * wrong index doesn't drop a frame, it attributes it to the wrong sensor.
+ * Index of the filter this frame belongs to, or -1. The hardware matched the
+ * first hw_addr_len bytes and reported the sync word. The rest are compared
+ * here, using the same rule as the nRF backend (ADR 0019). The index is part of
+ * the HAL contract: a wrong index attributes the frame to the wrong sensor.
  */
 static int rx_match(uint8_t sync_id, const uint8_t *payload)
 {
-	/*
-	 * radiant_addr_split_match() is the nRF backend's finishing match too
-	 * (ADR 0019), so both backends attribute a frame by one rule - lowest
-	 * index first, exact and wild_last filters on equal terms - and
-	 * radiant/tests/src/test_addr_split.c covers this path. The sync word
-	 * that fired names the filter it was programmed from (sync_group); any
-	 * filter with the same hw_addr_len leading bytes is a candidate.
-	 * radiant_radio_rx() refused any wild filter whose last byte the
-	 * hardware would have matched, so sw_addr_len is at least 1 for one.
-	 */
 	if (sync_id >= ARRAY_SIZE(st.sync_group) || st.sync_group[sync_id] < 0) {
 		return -1;
 	}
@@ -1359,12 +984,8 @@ static int rx_match(uint8_t sync_id, const uint8_t *payload)
 }
 
 /*
- * t_sync from the appended RAT capture. See T_SYNC_CAL_US for what is and is
- * not measured about this.
- *
- * The capture is taken at the sync-word event, which is after hw_addr_len
- * bytes of address; the HAL wants the end of ALL addr_len of them. The
- * difference is the software-matched bytes' airtime.
+ * t_sync from the appended RAT capture. The capture is taken at the sync-word
+ * event, so the software-matched address bytes' airtime is added.
  */
 static radiant_time_t rx_t_sync(uint32_t rat)
 {
@@ -1372,13 +993,8 @@ static radiant_time_t rx_t_sync(uint32_t rat)
 	unsigned int key = irq_lock();
 
 	/*
-	 * Fold the capture by its SIGNED DISTANCE FROM NOW, not by OR-ing it
-	 * into the current high word. The OR is wrong near a wrap: a capture
-	 * just before rollover would get the new high word and land 18
-	 * minutes in the future, silently dropping the frame outside
-	 * [t_open, t_close] twice an hour. The subtraction below is exact in
-	 * 32-bit two's complement for any capture within +-2^31 ticks
-	 * (+-9 min) of now, which every real capture is.
+	 * Fold by signed distance from now, not by OR-ing into the high word. The OR
+	 * puts a capture just before a wrap 18 minutes in the future.
 	 */
 	{
 		uint32_t now32 = rat_raw();
@@ -1431,37 +1047,23 @@ static void rx_drain_entries(void)
 
 		idx = rx_match(status.status.syncWordId, p);
 		radiant_cc26xx_sync_frames++;
-		/* One group: syncWord1 is 0, so the second correlator is off
-		 * (see radiant_radio_rx()) and this should stay 0. A non-zero
-		 * count means the RF core reported syncWordId 1 anyway. */
+		/* syncWord1 is 0 for one group, so this should stay 0. */
 		CC_DIAG(if (status.status.syncWordId == 1u &&
 			    st.sync_group[1] == st.sync_group[0]) {
 				cc_diag.alt_sync_hits++;
 			});
 
-		/* No per-frame tracing here deliberately: a LOG_DBG per frame
-		 * would block in the RF driver's callback context and, on the
-		 * diagnostic build sharing uart0 with the ANT stream, shred the
-		 * very broadcasts it is meant to help debug. The command-status
-		 * LOG_WRN in rf_callback() already covers "window armed, radio
-		 * ran, nothing came out". */
-
 		if (idx < 0) {
-			/* The hardware matched a sync word this window did put
-			 * on the air, but no filter's full address. That is the
-			 * ordinary outcome of matching four bytes where five
-			 * were asked for, and it is not an event - the core
-			 * never asked to hear this frame. */
+			/* Sync word matched, but no filter's full address did. This is
+			 * the normal result of a short hardware match, not an event. */
 			radiant_cc26xx_sw_addr_mismatch++;
 			goto next;
 		}
 
 		evt.filter_index = (uint8_t)idx;
 		/*
-		 * Wildcard search (ADR 0022): the final address byte the
-		 * hardware did not match and rx_match() did not compare - the
-		 * last software address byte, as radiant_addr_split_wild_value()
-		 * picks it on the nRF. Set on CRC failures too, as there.
+		 * Wildcard search (ADR 0022): the unmatched final address byte, as
+		 * radiant_addr_split_wild_value() picks it on the nRF.
 		 */
 		if (IS_ENABLED(CONFIG_RADIANT_SEARCH_SHORT_MATCH) &&
 		    st.filters[idx].wild_last) {
@@ -1470,13 +1072,9 @@ static void rx_drain_entries(void)
 		}
 
 		/*
-		 * Outside [t_open, t_close]. The RX command is started early
-		 * enough to hear a frame whose t_sync lands exactly on t_open
-		 * and ends late enough to finish one that lands on t_close, so
-		 * frames just outside the window are expected rather than
-		 * exceptional - and the HAL defines the window in t_sync terms,
-		 * so delivering them would widen every window by the preamble
-		 * and address airtime.
+		 * Outside [t_open, t_close]. The receiver is armed early and late, so
+		 * such frames are expected. The HAL defines the window in t_sync
+		 * terms, so they are dropped.
 		 */
 		if (evt.t_sync < st.t_open || evt.t_sync > st.t_close) {
 			CC_DIAG(cc_diag.window_drops++);
@@ -1490,15 +1088,12 @@ static void rx_drain_entries(void)
 			uint32_t want;
 			uint32_t got;
 
-			/* The matcher ate the leading address bytes, so put
-			 * them back from the filter that matched. */
+			/* Restore the leading address bytes the matcher consumed. */
 			memcpy(covered, st.filters[idx].addr, st.fmt.addr_len);
 			n = st.fmt.addr_len;
-			/* ...except a wild filter's last byte, which the filter
-			 * does not know: the CRC covers the byte that was on
-			 * the air (the nRF's hardware CRC does this by
-			 * construction). Without this every wildcard frame
-			 * would fail its CRC. */
+			/* A wild filter's last byte is not known to the filter, so use
+			 * the byte received on air. Otherwise every wildcard frame
+			 * fails its CRC. */
 			if (IS_ENABLED(CONFIG_RADIANT_SEARCH_SHORT_MATCH) &&
 			    st.filters[idx].wild_last) {
 				covered[n - 1u] = evt.wild_value;
@@ -1535,14 +1130,10 @@ static void rx_drain_entries(void)
 			uint8_t copy[RADIANT_RADIO_BODY_MAX];
 
 			/*
-			 * This event IS the terminal one, so the operation is
-			 * retired before the core sees it: the core chains the
-			 * next one (an ACK window's next data packet, 1.5 ms
-			 * out) from inside this callback, and an arm call that
-			 * still found OP_RX here was refused EBUSY with nothing
-			 * left to retry it. The entry is released and the
-			 * cancel issued first too, since that arm may reset the
-			 * receive queue and replace st.cmd_handle.
+			 * This frame ends the window. Retire the operation before the
+			 * callback, since the core may arm the next one from inside it.
+			 * Release the entry and cancel first, since that arm may reset
+			 * the queue and replace st.cmd_handle.
 			 */
 			memcpy(copy, body, st.fmt.body_len);
 			evt.body = copy;
@@ -1573,8 +1164,8 @@ next:
 	}
 }
 
-/* rx_drain_entries(), timed for the 0xF7 backend page: the longest drain is
- * part of the turnaround a chained transmit has to fit inside. */
+/* rx_drain_entries() plus timing for the 0xF7 page. The drain is part of the
+ * turnaround a chained transmit must fit inside. */
 static void rx_drain(void)
 {
 #if defined(CONFIG_RADIANT_DIAG_COUNTERS)
@@ -1595,10 +1186,9 @@ static void rx_drain(void)
 			 RF_EventCmdStopped | RF_EventCmdCancelled |   \
 			 RF_EventCmdPreempted)
 
-/* True for a callback of the window rx_drain() retired (see retired_handle).
- * Forgotten on the first terminal callback of any command: the driver calls
- * back in order, so the cancelled one's has come by then, and a stale value
- * can't outlive a handle wrap to swallow a live command's. */
+/* True for the callback of a window rx_drain() retired (see retired_handle).
+ * Cleared on the first terminal callback of any command, so it cannot outlive
+ * a handle wrap. */
 static bool retired_callback(RF_CmdHandle ch, RF_EventMask events)
 {
 	bool hit = (ch == st.retired_handle);
@@ -1619,24 +1209,18 @@ static void rf_callback(RF_Handle h, RF_CmdHandle ch, RF_EventMask events)
 
 	if ((events & RF_EventRxEntryDone) != 0) {
 		rx_drain();
-		/* rx_drain() may just have retired this very window, and its
-		 * callback armed the next operation into st. */
+		/* rx_drain() may have retired this window already. */
 		if (retired_callback(ch, events)) {
 			return;
 		}
 	}
 
 	/*
-	 * Log the command's own status word whenever it's not a success code.
-	 * Every way this backend can fail to hear a frame (rejected trigger,
-	 * unacceptable length, unprogrammed synthesiser) looks identical from
-	 * the driver's side - RF_EventLastCmdDone, no error, empty window,
-	 * scheduler quietly re-arms - and the RF core only distinguishes them
-	 * via this 16-bit field.
-	 *
-	 * PROP_DONE_OK is 0x3400, PROP_DONE_RXTIMEOUT 0x3401; 0x38xx is
-	 * PROP_ERROR_*, and 0x0800..0x08FF is a generic command error such as
-	 * ERROR_PAST_START.
+	 * Log the command status word on any error. Every way this backend can fail
+	 * to hear a frame looks like an empty window to the driver, and only this
+	 * 16-bit field tells them apart. 0x3400 is PROP_DONE_OK and 0x3401
+	 * PROP_DONE_RXTIMEOUT. 0x38xx is PROP_ERROR_*, and 0x0800..0x08FF is a
+	 * generic command error such as ERROR_PAST_START.
 	 */
 	if (st.kind == OP_RX && rx_cmd.status >= 0x3800u) {
 		CC_DIAG(cc_diag.status_err++; cc_diag.status_last = rx_cmd.status);
@@ -1654,20 +1238,13 @@ static void rf_callback(RF_Handle h, RF_CmdHandle ch, RF_EventMask events)
 	}
 
 	/*
-	 * Preempted, tested BEFORE Cancelled/Aborted: RF_abortCmd sets both
-	 * Cancelled and Preempted on a command our own execute hook aborted
-	 * (radiant_radio_cc26xx_arb.c), so the order picks which fact wins.
-	 * A preempted window listened to nothing - crediting it as ABORTED
-	 * (the same bucket radiant_radio_abort() uses) makes search
-	 * accounting read "credit what was actually listened to" on a window
-	 * that heard zero of it, which would make a coexistence loss figure
-	 * optimistic enough that the gate could never fail. DENIED is the
-	 * signal radiant_radio_hal.h defines for exactly this: a refusal
-	 * under arbitration is routine, not a fault.
+	 * Preempted is tested before Cancelled/Aborted, because RF_abortCmd sets
+	 * both flags when our own execute hook aborts a command. A preempted window
+	 * heard nothing, so it reports DENIED, not ABORTED. Under arbitration a
+	 * refusal is routine, not a fault.
 	 */
 	if (st.kind == OP_RX) {
-		/* Anything the command processor finished but the entry-done
-		 * event did not cover. */
+		/* Drain anything finished that the entry-done event did not cover. */
 		rx_drain();
 		if (retired_callback(ch, events)) {
 			return;
@@ -1686,10 +1263,7 @@ static void rf_callback(RF_Handle h, RF_CmdHandle ch, RF_EventMask events)
 	}
 }
 
-/* ---------------------------------------------------------------------------
- * Lifecycle
- * ---------------------------------------------------------------------------
- */
+/* --- Lifecycle --- */
 
 int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 {
@@ -1725,12 +1299,9 @@ int radiant_radio_enable(void)
 
 	RF_Params_init(&params);
 	/*
-	 * Keep the RF core powered between operations. nInactivityTimeout
-	 * defaults to 0, meaning "power down the moment the command queue
-	 * drains" - not "never power down" despite the name. Powering down
-	 * between windows costs ~1.5ms to recover, more than
-	 * caps.min_arm_lead_us, paid on exactly the windows a tracked channel
-	 * can't afford to miss. Easy trade on USB-powered hardware; would be
+	 * Keep the RF core powered between operations. Waking it costs about 1.5 ms,
+	 * more than min_arm_lead_us, which tracked windows cannot afford. The
+	 * default of 0 powers down as soon as the queue drains. Fine on USB power,
 	 * wrong on a coin cell.
 	 */
 	params.nInactivityTimeout = UINT32_MAX;
@@ -1743,16 +1314,9 @@ int radiant_radio_enable(void)
 	}
 
 	/*
-	 * Programme the synthesiser once here rather than per operation: every
-	 * ANT+ operation is on the same frequency, and paying FS time inside
-	 * every arm would eat into min_arm_lead_us.
-	 *
-	 * TEST THE BIT, NOT THE VALUE. RF_runCmd's returned RF_EventMask
-	 * routinely has more than one bit set on success; comparing the whole
-	 * mask against RF_EventLastCmdDone falsely reports a good CMD_FS as
-	 * failed, closing the handle and returning EIO from enable() - after
-	 * which the radio never reopens and the dongle reports a clean empty
-	 * scan forever.
+	 * Set the synthesiser once here, not per arm, since every ANT+ operation
+	 * uses the same frequency. Test the event bit, not the whole mask: a
+	 * successful RF_runCmd can return other bits as well.
 	 */
 	if ((RF_runCmd(st.rf_handle, (RF_Op *)&fs_cmd, RF_PriorityNormal,
 		       NULL, 0) & RF_EventLastCmdDone) == 0) {
@@ -1769,21 +1333,13 @@ int radiant_radio_enable(void)
 	st.retired_handle = NO_HANDLE;
 
 #if defined(CONFIG_RADIANT_BACKEND_CC26XX_COEX)
-	/*
-	 * Patch the three caps a shared RF core makes honest, now that the
-	 * client is open (caps is non-const only in this build - see its own
-	 * declaration comment).
-	 */
+	/* Patch the three caps that a shared RF core makes honest. */
 	caps.min_arm_lead_us = MIN_ARM_LEAD_US + CC26XX_COEX_PHY_SWITCH_LEAD_US;
 	/*
-	 * 600, not 0: radiant_burst.c treats 0 as "same as min_arm_lead_us"
-	 * and requires lead + 250 <= 1560 for ERG mode. With 0 the coex
-	 * build computes min_arm_lead_us (1414) + 250 > 1560 and
-	 * radiant_transfer_init() returns ENOTSUP - ERG mode silently off on
-	 * the entire TI coex build. What makes 600 TRUE rather than merely
-	 * convenient is that radiant_radio_rx()'s endTime now reserves
-	 * follow_on_us explicitly, so the phy-switch lead above is only ever
-	 * paid BETWEEN clients, never inside our own reserved span.
+	 * 600, not 0: radiant_burst.c reads 0 as "same as min_arm_lead_us", and
+	 * ERG mode needs lead + 250 <= 1560. With 0, min_arm_lead_us (1414) fails
+	 * that test, and ERG is silently refused. 600 is valid because RX reserves
+	 * follow_on_us, so the phy-switch lead is paid only between clients.
 	 */
 	caps.min_arm_lead_in_grant_us = 600;
 	caps.max_window_us = CC26XX_COEX_MAX_WINDOW_US;
@@ -1807,9 +1363,7 @@ int radiant_radio_disable(void)
 
 	(void)radiant_radio_abort();
 
-	/* Sample the RAT one last time so the fold survives the close: it keeps
-	 * running, but nothing will read it until the next enable, and a gap
-	 * longer than the wrap would lose an epoch. */
+	/* Sample the RAT once more so the fold survives the close. */
 	(void)now_us();
 
 	RF_close(st.rf_handle);
@@ -1824,10 +1378,7 @@ radiant_time_t radiant_radio_now(void)
 	return now_us();
 }
 
-/* ---------------------------------------------------------------------------
- * Arm
- * ---------------------------------------------------------------------------
- */
+/* --- Arm --- */
 
 static int arm_common(const struct radiant_pkt_format *fmt, radiant_time_t at)
 {
@@ -1890,20 +1441,15 @@ static int rx_arm(const struct radiant_rx_req *req, uint32_t *op)
 		if (req->filters[i].addr_len != req->fmt->addr_len) {
 			return RADIANT_RADIO_EINVAL;
 		}
-		/*
-		 * A wild_last filter needs its last byte left to software. With
-		 * the 2-byte sync word that is every address longer than 2; a
-		 * 2-byte one would have the "wild" byte matched exactly in the
-		 * sync word, which is a different window than was asked for.
-		 */
+		/* A wild_last filter needs its last byte left to software, so the
+		 * address must be longer than the hardware match. */
 		if (req->filters[i].wild_last &&
 		    (!IS_ENABLED(CONFIG_RADIANT_SEARCH_SHORT_MATCH) ||
 		     req->filters[i].addr_len <= caps.addr_len_hw_max)) {
 			return RADIANT_RADIO_ENOTSUP;
 		}
 	}
-	/* rx_data's rows are sized for RX_PAYLOAD_MAX; a longer frame would be
-	 * cut by maxPktLen and then read past its row by rx_drain(). */
+	/* A longer frame would overrun its row, so refuse it. */
 	if ((uint32_t)(req->fmt->addr_len -
 		       MIN(req->fmt->addr_len, caps.addr_len_hw_max)) +
 	    req->fmt->body_len +
@@ -1922,9 +1468,8 @@ static int rx_arm(const struct radiant_rx_req *req, uint32_t *op)
 	st.flags = req->flags;
 
 	/*
-	 * Assign the two hardware sync words. Filters sharing a hardware prefix
-	 * share a sync word - which is how a tracked window can hold two
-	 * channels that differ only in device type without spending both.
+	 * Assign the two hardware sync words. Filters sharing a prefix share one, so
+	 * two channels that differ only in device type fit in one window.
 	 */
 	st.sync_group[0] = -1;
 	st.sync_group[1] = -1;
@@ -1950,8 +1495,7 @@ static int rx_arm(const struct radiant_rx_req *req, uint32_t *op)
 			}
 		}
 		if (slot < 0) {
-			/* More than max_addr_groups distinct prefixes. The HAL
-			 * requires a refusal rather than a partial window. */
+			/* More than max_addr_groups prefixes: refuse, not a partial window. */
 			return RADIANT_RADIO_ENOTSUP;
 		}
 	}
@@ -1960,24 +1504,11 @@ static int rx_arm(const struct radiant_rx_req *req, uint32_t *op)
 					st.hw_addr_len);
 	if (st.sync_group[1] < 0) {
 		/*
-		 * ONE GROUP: syncWord1 = 0, which turns the second correlator
-		 * OFF (driverlib rf_prop_cmd.h: "Alternative sync word if
-		 * non-zero").
-		 *
-		 * NEVER DUPLICATE syncWord0 here. This is a CORRELATOR
-		 * (caps.min_filter_hamming_bits): two identical templates are
-		 * zero bits apart, the worst point on the curve, and it made
-		 * every TRACKED window fail (454 EVENT_RX_FAIL against one
-		 * packet received).
-		 *
-		 * Until 2026-11-13 this was a decoy, syncWord0 with the top
-		 * matched byte inverted (0x59C5 under the short match). It was
-		 * meant never to fire and fired ~110 times a minute, every hit
-		 * a CRC failure. Alternating 300 s legs against it
-		 * (archive/benchmarks/2026-11-13-ti-todo/): CRC fails halved,
-		 * tracked loss unchanged against a same-window Garmin.
-		 * sync_group[1] still points at the same filter, so a stray
-		 * syncWordId of 1 stays attributed to the one filter.
+		 * One group: syncWord1 = 0 turns the second correlator off (TI
+		 * rf_prop_cmd.h). Never copy syncWord0 here. The two templates would be
+		 * zero bits apart, the worst case for the correlator, and every tracked
+		 * window then failed. sync_group[1] still names the same filter, so a
+		 * stray syncWordId of 1 is attributed to it.
 		 */
 		st.sync_group[1] = st.sync_group[0];
 		rx_cmd.syncWord1 = 0u;
@@ -1989,33 +1520,25 @@ static int rx_arm(const struct radiant_rx_req *req, uint32_t *op)
 				      (st.fmt.crc.width_bits ? RX_CRC_BYTES : 0u));
 
 	/*
-	 * The receiver has to be listening before the PREAMBLE of a frame whose
-	 * t_sync lands exactly on t_open - the HAL is explicit that defining
-	 * the window on "when RX is enabled" instead would make the effective
-	 * edge depend on ramp-up and preamble length, which is a silent
-	 * per-backend bias.
+	 * Listen before the preamble of a frame whose t_sync is t_open. The window
+	 * is defined by t_sync, not by when RX is enabled, so ramp-up and preamble
+	 * length do not bias it.
 	 */
 	start_rat = us_to_rat(req->t_open -
 			      (radiant_time_t)((PREAMBLE_BYTES + st.fmt.addr_len) *
 					       BYTE_US) -
 			      (radiant_time_t)RX_RAMP_UP_US);
 	/*
-	 * ...and still listening when a frame whose t_sync lands exactly on
-	 * t_close arrives. endType = 1 lets that frame finish; this only has to
-	 * cover its address, not its body.
+	 * Still listening for a frame whose t_sync is t_close. It only needs to
+	 * cover the address, since endType = 1 lets the frame finish.
 	 */
 	end_rat = us_to_rat(req->t_close + (radiant_time_t)BYTE_US +
 			    (radiant_time_t)RX_END_SLOP_US);
 
 	/*
-	 * pastTrig = 1 on both triggers, not for convenience: with pastTrig = 0
-	 * a trigger time already passed is an ERROR (PROP_ERROR_PAR, reported
-	 * as plain RF_EventLastCmdDone) indistinguishable from a window that
-	 * listened and heard nothing - scheduler re-arms, misses again,
-	 * forever. A few microseconds late is ordinary here (command travels
-	 * through the driver to another processor's doorbell), so the right
-	 * response is to start now and lose the first microseconds, not
-	 * refuse the window.
+	 * pastTrig = 1 on both triggers. With 0, a time already passed is an error
+	 * that looks like an empty window, so the scheduler would re-arm forever.
+	 * A few microseconds late is normal, so start now and lose that head.
 	 */
 	rx_cmd.startTrigger.triggerType = TRIG_ABSTIME;
 	rx_cmd.startTrigger.pastTrig = 1;
@@ -2035,24 +1558,16 @@ static int rx_arm(const struct radiant_rx_req *req, uint32_t *op)
 	st.cmd_handle = post_op(
 		(RF_Op *)&rx_cmd, start_rat,
 		/*
-		 * The scheduler's own endTime, not rx_cmd.endTime: it reserves
-		 * follow_on_us on top of the hardware end trigger above, which
-		 * is what makes caps.min_arm_lead_in_grant_us = 600 true rather
-		 * than merely convenient (see radiant_radio_enable()). Any
-		 * tracked frame can become a transmit up to follow_on_us later
-		 * on a payload byte that doesn't exist yet when this request is
-		 * built, so the reservation is unconditional on every window -
-		 * and zero on a search window or ED sweep, per follow_on_us's
-		 * own contract.
+		 * The scheduler's endTime, which adds follow_on_us to the hardware end
+		 * trigger. A tracked frame may become a transmit up to follow_on_us
+		 * later, so the reservation applies to every window (zero for search
+		 * and ED sweeps).
 		 */
 		end_rat + us_to_rat(req->follow_on_us),
 		/*
-		 * Duration alone, the same rule radiant_radio_nrf_gate_mpsl.c's
-		 * call sites use and for the same reason (rule 1: a backend may
-		 * not know anything ANT-specific, but window LENGTH isn't ANT
-		 * knowledge). A tracked window is under a millisecond
-		 * (RADIANT_CHANNEL_GUARD_MAX_US bounds it at 400 us each way);
-		 * only a scan chunk or ED sweep runs tens of milliseconds.
+		 * Priority from window length alone, as radiant_radio_nrf_gate_mpsl.c
+		 * does. Tracked windows are under a millisecond. Only scan chunks and
+		 * ED sweeps run tens of milliseconds.
 		 */
 		((req->t_close - req->t_open) >= 10000u)
 			? RADIANT_CC26XX_PRIO_NORMAL
@@ -2063,10 +1578,7 @@ static int rx_arm(const struct radiant_rx_req *req, uint32_t *op)
 			RF_EventCmdCancelled | RF_EventCmdPreempted);
 	if (st.cmd_handle < 0) {
 		st.kind = OP_NONE;
-		/* Under arbitration a refusal is routine, not a fault - EDENIED
-		 * is the signal radiant_radio_hal.h defines for it, and it is
-		 * defined as a synchronous refusal in exactly this shape outside
-		 * coex too, where this path is RF_postCmd's own failure. */
+		/* A refusal is routine under arbitration, so report EDENIED. */
 		return RADIANT_RADIO_EDENIED;
 	}
 
@@ -2126,10 +1638,8 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 	apply_power(&req->power);
 
 	/*
-	 * Which bytes are "address" vs "body" is a receiver's split, not a
-	 * property of the air: transmitting with a 4-byte sync word and the
-	 * fifth address byte at the head of the packet produces exactly the
-	 * frame a 5-byte matcher expects.
+	 * The address/body split is the receiver's view, not a property of the air.
+	 * The fifth address byte goes at the head of the payload.
 	 */
 	memcpy(&tx_buf[n], &req->addr[hw_len], sw_len);
 	n += sw_len;
@@ -2154,17 +1664,12 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 	tx_cmd.syncWord = sync_word_of(req->addr, hw_len);
 	tx_cmd.pktLen = (uint16_t)n;
 	tx_cmd.startTrigger.triggerType = TRIG_ABSTIME;
-	/* See the note on rx_cmd's triggers: a start time a few microseconds in
-	 * the past must start the transmit, not refuse it. A late master frame
-	 * is worse than no frame, but "late" here is single-digit microseconds
-	 * against a 1.56 ms budget. */
+	/* As for rx_cmd: a start time a few microseconds in the past starts the
+	 * transmit rather than refusing it. */
 	tx_cmd.startTrigger.pastTrig = 1;
 	/*
-	 * Work backwards from the t_sync the core asked for, through the
-	 * address and preamble airtime and the transmitter's ramp-up, to the
-	 * instant the command must start. This is the whole of what makes a
-	 * master's period exact by construction rather than exact plus one
-	 * backend's ramp-up.
+	 * Start time = t_sync minus preamble, address and ramp-up airtime. This is
+	 * what makes the master's period exact.
 	 */
 	tx_cmd.startTime = us_to_rat(req->t_sync_at -
 				     (radiant_time_t)((PREAMBLE_BYTES +
@@ -2179,17 +1684,12 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 	st.cmd_handle = post_op(
 		(RF_Op *)&tx_cmd, tx_cmd.startTime,
 		/*
-		 * rfc_CMD_PROP_TX_ADV_t has no endTrigger/endTime of its own -
-		 * TX simply stops after pktLen bytes. This is scheduler
-		 * bookkeeping only (RF_ScheduleCmdParams, not the RF_Op), and
-		 * it exists so RF_verifyGap has something to place a neighbour
-		 * command AFTER instead of refusing outright - the same trap
-		 * as allowDelay, see post_op()'s own comment.
+		 * TX_ADV has no end trigger, so this end time is scheduler bookkeeping
+		 * only. It lets RF_verifyGap place a neighbour after this transmit.
 		 */
 		us_to_rat(req->t_sync_at + (radiant_time_t)(n * BYTE_US) +
 			  (radiant_time_t)TX_TAIL_SLOP_US),
-		/* Transmit is always the inviolate class - a queued master
-		 * frame or an ack reply, never the elastic sweep. */
+		/* Transmits are always high priority, never the elastic sweep class. */
 		RADIANT_CC26XX_PRIO_HIGH, rf_callback,
 		RF_EventLastCmdDone | RF_EventCmdAborted |
 			RF_EventCmdStopped | RF_EventCmdCancelled |
@@ -2210,11 +1710,8 @@ int radiant_radio_ed(const struct radiant_ed_req *req, uint32_t *op)
 	ARG_UNUSED(op);
 
 	/*
-	 * caps.has_ed_scan is false, so this is expected, not degraded. The
-	 * part could do it (CMD_PROP_CS, RSSI path), but a measurement whose
-	 * scale doesn't match rx_event.rssi_dbm/noise_dbm exactly is worse than
-	 * none - establishing "same corrections, same reference" on a new part
-	 * is a bench exercise, not a coding one.
+	 * Expected, since caps.has_ed_scan is false. The part could measure energy,
+	 * but a scale that does not match rssi_dbm and noise_dbm is worse than none.
 	 */
 	return RADIANT_RADIO_ENOTSUP;
 }
@@ -2226,13 +1723,10 @@ int radiant_radio_abort(void)
 	}
 
 	/*
-	 * The terminal is delivered here, synchronously, which is what the HAL
-	 * requires: "its terminal event is still delivered... before this
-	 * function's caller can observe the slot as free". RF_flushCmd is NOT
-	 * synchronous - it rings the doorbell and returns - so the driver's own
-	 * cancel callback may come after the core has armed its next operation
-	 * from the terminal below. Retired like rx_drain()'s early stop, so that
-	 * callback is not read as the new operation's.
+	 * Deliver the terminal event synchronously, as the HAL requires before the
+	 * slot is seen as free. RF_flushCmd is asynchronous, so its cancel callback
+	 * can arrive after the next operation is armed. Retire the handle, as
+	 * rx_drain() does, so that callback is not attributed to the new operation.
 	 */
 	st.retired_handle = st.cmd_handle;
 	RF_flushCmd(st.rf_handle, st.cmd_handle, 0);
