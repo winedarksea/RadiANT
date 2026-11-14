@@ -1,0 +1,9 @@
+COM11 (RADIANT0.01B00): 1614 sightings in 298.6 s listening, 5.40/s, 66 open(s)
+          device   per s  heard/opens  median 1st  max 1st
+      52233:0x0B    3.58    66/66          0.23 s   0.84 s
+      52233:0x11    0.01     2/66               -   2.23 s
+      52233:0x7B    1.82    66/66          0.31 s   1.69 s
+  tracked 14955:0x78: 1183 received, 7 RX_FAIL, loss 0.59 %
+  tracked 52233:0x11: 802 received, 379 RX_FAIL, loss 32.09 %
+  events: ch2:0x08 x1
+

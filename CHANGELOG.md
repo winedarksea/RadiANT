@@ -19,7 +19,22 @@ reads.
   0.5-1 to 4-12 sightings/s. The Zwift capture is the acceptance check;
   `apps/dongle/long_match.conf` builds the old 24-bit image.
 
+### Fixed
+
+- **CRC repair works on cc26xx.** The backend dropped the body of a
+  CRC-failed frame, so `CONFIG_RADIANT_CRC_REPAIR` could never repair on TI.
+  On air (300 s, `archive/benchmarks/2026-11-13-ti-crc-repair/`): 28 frames
+  repaired, 7 unrepairable, 0 refuted, and every delivered payload matched the
+  transmitter. Repair stays off by default.
+
 ### Added
+
+- **0xF7 page 8, timing** (ADR 0023): receive-drain parts on cc26xx (frames,
+  per-entry work, CRC, core callback, drains over 250 µs) and the scheduler
+  pass on both backends (worst µs, steps, passes over 100 µs). First reading:
+  TI's ~450 µs drain is one frame, ~346 µs of it the core callback (a full
+  scheduler pass included) and ~60 µs the bitwise CRC
+  (`archive/benchmarks/2026-11-13-drain-timing/`).
 
 - **cc26xx wildcard search, on by default** (`CONFIG_RADIANT_SEARCH_SHORT_MATCH`,
   ADR 0022). The CC2652R sweeps one set instead of 128: 4.45 sightings/s

@@ -1,0 +1,20 @@
+diff --git a/radiant/src/antr/ant_radio_radiant.c b/radiant/src/antr/ant_radio_radiant.c
+index 32e6399..78c3244 100644
+--- a/radiant/src/antr/ant_radio_radiant.c
++++ b/radiant/src/antr/ant_radio_radiant.c
+@@ -4150,10 +4150,11 @@ antr_err_t antr_diag_page(uint8_t page, uint8_t *out)
+ 		v[7] = api_stats.xfer_no_ack;
+ 		break;
+ 	case RADIANT_DIAG_PAGE_MASTER_RX:
+-		v[0] = dc->mrx_posted;
+-		v[1] = dc->mrx_refused;
+-		v[2] = dc->mrx_skipped;
+-		v[3] = dc->turn_dropped;
++		/* BENCH ONLY, never commit: CRC repair counters on page 1. */
++		v[0] = api_stats.crc_repaired;
++		v[1] = api_stats.crc_unrepairable;
++		v[2] = api_stats.crc_repair_refuted;
++		v[3] = api_stats.crc_repair_implausible;
+ 		v[4] = dc->mrx_done_ok;
+ 		v[5] = dc->mrx_done_missed;
+ 		v[6] = dc->mrx_done_other;

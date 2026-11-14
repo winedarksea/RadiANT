@@ -1,0 +1,10 @@
+  . unsolicited 0x4E 021019c4b70000ff24e009cc110520bb0044c2
+EE6986854FD72803 (RADIANT0.01B00): 1942 sightings in 299.7 s listening, 6.48/s, 67 open(s)
+          device   per s  heard/opens  median 1st  max 1st
+      14955:0x78    0.00     1/67               -   0.25 s
+      52233:0x0B    4.36    67/67          0.19 s   0.66 s
+      52233:0x11    0.00     1/67               -   0.27 s
+      52233:0x7B    2.11    67/67          0.30 s   0.86 s
+  tracked 14955:0x78: 1217 received, 1 RX_FAIL, loss 0.08 %
+  tracked 52233:0x11: 952 received, 247 RX_FAIL, loss 20.60 %
+

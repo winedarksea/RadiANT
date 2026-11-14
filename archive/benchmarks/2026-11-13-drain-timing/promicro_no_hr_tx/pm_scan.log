@@ -1,0 +1,10 @@
+EE6986854FD72803 (RADIANT0.01B00): 1450 sightings in 300.0 s listening, 4.83/s, 67 open(s)
+          device   per s  heard/opens  median 1st  max 1st
+      14955:0x78    0.00     1/67               -   0.02 s
+      52233:0x0B    3.22    67/67          0.09 s   0.88 s
+      52233:0x11    0.00     1/67               -   0.23 s
+      52233:0x7B    1.61    67/67          0.19 s   1.61 s
+  tracked 14955:0x78: 39 received, 7 RX_FAIL, loss 15.22 %
+  tracked 52233:0x11: 960 received, 239 RX_FAIL, loss 19.93 %
+  events: ch1:0x08 x1
+

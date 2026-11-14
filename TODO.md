@@ -4,6 +4,11 @@ Discovery short match (ADR 0022), left open 2026-11-11:
 - The two waste fixes (ADR 0022 "Not done here"): closed. The short match is on by default on TI (2026-11-12) and nRF (2026-11-13), and one set makes them moot; they matter only for `long_match.conf` images. No scheduler "window is live" query is built.
 - Zwift acceptance of the nRF default flip (user-run, not a precondition any more): every sensor listed within ~1 s while HR and trainer are tracked, 0x61/0xC6 answered, reset -> NETWORK_KEY against 42-94 s (RadiANT history) and 9.2 s (Garmin). If it passes, mark ADR 0022 accepted; if it fails, rebuild with `apps/dongle/long_match.conf` and investigate.
 
+Performance review 2026-11-13 (`docs/performance-review-2026-11-13.md`), open after the drain timing (`archive/benchmarks/2026-11-13-drain-timing/`, 0xF7 page 8):
+- Callback/pass split: TI's worst drain (~450 us, one frame) is ~346 us core rx callback, which includes a full scheduler pass (~214 us) arming from inside the drain. Deferring that re-arm is the largest lever.
+- Split `pass_step()` timing (slot-table scan vs the backend arm call) before choosing an active-slot bitmap: `pass_steps_max` is 1 on both backends and ~215 us on both CPUs, which points at the arm, not the scan.
+- TI CRC table: the bitwise CRC costs ~60 us per frame (not 15-20 us).
+- CRC repair dB gain (finding 3) still unmeasured; TI repair now works on air (`archive/benchmarks/2026-11-13-ti-crc-repair/`).
 
 ## TI CC2652R, open after the 2026-11-12 bench (evidence `archive/benchmarks/2026-11-12-ti-findings/` and `2026-11-12-ti-lead/`; items 1-3 closed 2026-11-13, `archive/benchmarks/2026-11-13-ti-todo/README.md`):
 - [x] TI cannot receive the Pro Micro clone: FIXED. The cause was TI's RX intermediate frequency (0.5 MHz put the signal across DC, so loss depended on the transmitter's exact carrier offset), not the clone or the RX bandwidth. `CONFIG_RADIANT_CC26XX_INT_FREQ` now defaults to 1.0 MHz: clone and L15 0.0-0.6 % on TI, flat across ±200 kHz, below the same-window Garmin. The clone is a valid TI peer again.

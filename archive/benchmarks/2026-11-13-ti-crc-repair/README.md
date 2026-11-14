@@ -1,0 +1,54 @@
+# TI CC2652R: CRC repair on air after the body fix, 2026-11-13
+
+Phase B of the plan acting on `docs/performance-review-2026-11-13.md` (finding
+2). Commit `b14a205` stopped the cc26xx backend clearing `evt.body` on a CRC
+failure, so `CONFIG_RADIANT_CRC_REPAIR` can now repair on TI. Before it,
+`api_tracked_frame()` refused every TI CRC_FAIL event for a NULL body.
+
+## Rig
+
+- Receiver: LAUNCHXL-CC26X2R1 on COM11 at 57600, an experimental image built
+  from `b14a205` with `ti_health.conf;ti_diag.conf;apps/dongle/crc_repair.conf`
+  (repair and profile sanity on), md5 `393C44B23FB0325743FC4FCB76E38F45`.
+- `crc_repair_page1.patch`: a bench-only patch, never committed. It puts the
+  four repair counters (`crc_repaired`, `crc_unrepairable`,
+  `crc_repair_refuted`, `crc_repair_implausible`) on 0xF7 page 1, fields 0-3.
+  `before.json` / `after.json` therefore read those under the page-1 names
+  `mrx_posted`, `mrx_refused`, `mrx_skipped` and `turn_dropped`.
+- Transmitter: the nRF54L15 DK's RadiANT UART dongle on COM4, driven as an
+  `ant_sim` power meter #14871 (0x3A17) through `crc_truth.py`. That script
+  reuses `tools/ant_sens.py`'s master driver at a fixed power rung. It records
+  every payload the master sent and checks each payload the TI delivered on a
+  slave channel pinned to that device number.
+- Rung: -28 dBm, the L15's lowest one-byte setting. RSSI at TI was -63 dBm,
+  so the link was not near TI's sensitivity knee. The CRC failures came from
+  the room, which was lossy as usual (the trainer reads ~30 % on every
+  receiver this week).
+
+## Result (300 s)
+
+| | |
+|---|---|
+| master sent | 1204 |
+| TI delivered | 1035 (14.0 % loss) |
+| delivered payloads never transmitted | **0** |
+| backend CRC fails (page 4) | 36 |
+| `crc_repaired` | **28** |
+| `crc_unrepairable` | 7 |
+| `crc_repair_refuted` | 0 |
+| `crc_repair_implausible` | 0 |
+
+PASS on the plan's criterion. Repair is engaged on TI (28 frames recovered,
+2.3 % of those sent), and every one of the 1035 delivered payloads matches a
+payload the transmitter sent, so none of the 28 was a mis-repair. 28 of 35
+tracked-window CRC failures were single-bit, which is the shape
+`radiant_crc_repair` exists for.
+
+This is not a sensitivity result. One rung at -63 dBm with room interference
+says nothing about a dB gain (finding 3 is still out of scope). Repair stays off
+by default.
+
+A 30 s scouting run at 0 dBm with the receiver on a wildcard device number
+locked onto the trainer #52233 (also device type 0x0B) and reported its
+payloads as "never transmitted". `crc_truth.py` pins the device number for
+that reason.
