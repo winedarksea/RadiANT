@@ -29,14 +29,14 @@ static const char *last_who;
 static unsigned    calls;
 
 /* Every announcement during one call, since an entry point may call others
- * (radiant_sec_pair_peer() installs a key). */
+ * (a pairing's last step installs a key). */
 #define SEEN_MAX 12u
 static const char *seen[SEEN_MAX];
 static unsigned    nseen;
 
 #if defined(CONFIG_RADIANT_SEC_PAIRING_X25519)
 /* When set, the hook plays the radio callback: the first time
- * radiant_sec_set_key() announces itself (inside radiant_sec_pair_peer(), after
+ * radiant_sec_set_key() announces itself (inside a pairing's install, after
  * its X25519 and before it is done with its own state) it reports loss of
  * tracking on this channel. -1 = off. */
 static int lose_peer_on;
@@ -131,6 +131,8 @@ ZTEST(sec_lock_hook, test_every_pairing_entry_point_asks_the_port_for_its_lock)
 {
 	uint8_t  scalar[RADIANT_SEC_X25519_BYTES] = {1};
 	uint8_t  pub[RADIANT_SEC_X25519_BYTES];
+	uint8_t  nonce[RADIANT_SEC_PAIR_NONCE_BYTES] = {2};
+	uint8_t  commit[RADIANT_SEC_BLOCK_BYTES];
 	uint32_t fp;
 
 	EXPECT_CHECKED(radiant_sec_pair_enter, radiant_sec_pair_enter(0u, 5u));
@@ -138,8 +140,16 @@ ZTEST(sec_lock_hook, test_every_pairing_entry_point_asks_the_port_for_its_lock)
 		       radiant_sec_pair_set_scalar(0u, scalar));
 	EXPECT_CHECKED(radiant_sec_pair_local_pubkey,
 		       radiant_sec_pair_local_pubkey(0u, pub));
-	EXPECT_CHECKED(radiant_sec_pair_peer,
-		       radiant_sec_pair_peer(0u, pub, &fp));
+	EXPECT_CHECKED(radiant_sec_pair_peer, radiant_sec_pair_peer(0u, pub));
+	EXPECT_CHECKED(radiant_sec_pair_set_nonce,
+		       radiant_sec_pair_set_nonce(0u, RADIANT_SEC_PAIR_RESPONDER,
+						  nonce, commit));
+	EXPECT_CHECKED(radiant_sec_pair_peer_commit,
+		       radiant_sec_pair_peer_commit(0u, commit));
+	EXPECT_CHECKED(radiant_sec_pair_peer_nonce,
+		       radiant_sec_pair_peer_nonce(0u, nonce, &fp));
+	EXPECT_CHECKED(radiant_sec_pair_peer_uncommitted,
+		       radiant_sec_pair_peer_uncommitted(0u, pub, &fp));
 	EXPECT_CHECKED(radiant_sec_pair_fingerprint,
 		       radiant_sec_pair_fingerprint(0u, &fp));
 	EXPECT_CHECKED(radiant_sec_pair_leave, radiant_sec_pair_leave(0u));
@@ -193,10 +203,13 @@ ZTEST(sec_lock_hook, test_a_peer_lost_inside_the_exchange_does_not_corrupt_it)
 	zassert_equal(0, radiant_sec_pair_local_pubkey(0u, pub_a));
 	zassert_equal(0, radiant_sec_pair_local_pubkey(1u, pub_b));
 
-	/* B finishes normally; A's peer is lost in the middle of its own. */
-	zassert_equal(0, radiant_sec_pair_peer(1u, pub_a, &fp_b));
+	/* B finishes normally; A's peer is lost in the middle of its own. The
+	 * uncommitted path is the one with the DH and the install in one call,
+	 * which is the window this covers; the committed path installs through
+	 * the same pair_finish(). */
+	zassert_equal(0, radiant_sec_pair_peer_uncommitted(1u, pub_a, &fp_b));
 	lose_peer_on = 0;
-	zassert_equal(0, radiant_sec_pair_peer(0u, pub_b, &fp_a));
+	zassert_equal(0, radiant_sec_pair_peer_uncommitted(0u, pub_b, &fp_a));
 	zassert_equal(-1, lose_peer_on, "the loss was never injected");
 	zassert_equal(fp_b, fp_a,
 		      "a peer lost inside the exchange corrupted it: fingerprint "

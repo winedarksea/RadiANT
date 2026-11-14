@@ -382,7 +382,12 @@ int profile_enrol_on_ack_data(struct profile_enrol *pe, const uint8_t *payload,
 		return -EBADMSG;
 	}
 
-	rc = radiant_sec_pair_peer(pe->cfg.ch, pe->rx, &fp);
+	/* The uncommitted path, on purpose and by name: there is no room in a
+	 * six-frame window for a nonce commit/reveal, so this is
+	 * unauthenticated DH with a one-sided, grindable fingerprint. What
+	 * guards it is the bounded window, one pairing per window and the
+	 * physical trigger (docs/radiant-security.md sections 7.4 and 11.7). */
+	rc = radiant_sec_pair_peer_uncommitted(pe->cfg.ch, pe->rx, &fp);
 	if (rc != RADIANT_SEC_OK) {
 		/* Mandatory refusal (e.g. a small-order point): the result
 		 * becomes a root key. One injected packet must not burn a

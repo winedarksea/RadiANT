@@ -608,8 +608,11 @@ What the bench is for, and nothing else:
    bytes an ANT+ profile defines. Use a RadiANT device type on a channel of its
    own, and do not log "Zwift shows garbage on the secured channel" as a defect.
 4. **The pairing fingerprint matches, and a wrong pairing does not.** Pair two
-   nodes over `0xF5` and confirm both ends print the same six digits. Then pair
-   against a third node and confirm the digits differ. The exchange succeeds
+   nodes over `0xF5` (the full sequence, nonce commit/reveal included, in
+   `docs/ant-serial-protocol.md`) and confirm both ends print the same six
+   digits. Then pair against a third node and confirm the digits differ, and
+   that a revealed nonce that does not open the commitment is refused. The
+   exchange succeeds
    either way — that is what an anonymous key agreement is — so the digits are
    the only observable that distinguishes a real pairing from a
    man-in-the-middle, and a bench run that never compares them has not tested

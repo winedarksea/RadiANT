@@ -450,65 +450,287 @@ ZTEST(api, test_sec_host_the_lock_check_refuses_an_isr_inside_the_lock)
 #endif /* CONFIG_IRQ_OFFLOAD */
 
 #if defined(CONFIG_RADIANT_SEC_PAIRING_X25519)
+
+/* RFC 7748 6.1's Alice (A, initiator) and Bob (B, responder), and the nonces
+ * and fingerprint tools/test_radiant_crypto.py pins (TestPairCommitReveal), so
+ * the host surface is checked against an independent implementation too. */
+static const uint8_t pair_sa[RADIANT_SEC_X25519_BYTES] = {
+	0x77, 0x07, 0x6d, 0x0a, 0x73, 0x18, 0xa5, 0x7d,
+	0x3c, 0x16, 0xc1, 0x72, 0x51, 0xb2, 0x66, 0x45,
+	0xdf, 0x4c, 0x2f, 0x87, 0xeb, 0xc0, 0x99, 0x2a,
+	0xb1, 0x77, 0xfb, 0xa5, 0x1d, 0xb9, 0x2c, 0x2a,
+};
+static const uint8_t pair_sb[RADIANT_SEC_X25519_BYTES] = {
+	0x5d, 0xab, 0x08, 0x7e, 0x62, 0x4a, 0x8a, 0x4b,
+	0x79, 0xe1, 0x7f, 0x8b, 0x83, 0x80, 0x0e, 0xe6,
+	0x6f, 0x3b, 0xb1, 0x29, 0x26, 0x18, 0xb6, 0xfd,
+	0x1c, 0x2f, 0x8b, 0x27, 0xff, 0x88, 0xe0, 0xeb,
+};
+/* [role, nonce] as 0xF5 NONCE carries them. */
+static const uint8_t pair_na_arg[1 + RADIANT_SEC_PAIR_NONCE_BYTES] = {
+	RADIANT_SEC_PAIR_INITIATOR,
+	0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+	0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+};
+static const uint8_t pair_nb_arg[1 + RADIANT_SEC_PAIR_NONCE_BYTES] = {
+	RADIANT_SEC_PAIR_RESPONDER,
+	0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7,
+	0xa8, 0xa9, 0xaa, 0xab, 0xac, 0xad, 0xae, 0xaf,
+};
+#define PAIR_VEC_FP 362706u
+
+#define PEER_CH     1u
+#define PEER_DEVNUM 0x51C4u
+
+static antr_err_t f5(uint8_t ch, uint8_t sub, const uint8_t *arg,
+		     uint8_t arg_len, uint8_t *reply, uint8_t *rlen)
+{
+	return antr_sec_pair(ch, sub, arg, arg_len, reply,
+			     2u + RADIANT_SEC_X25519_BYTES, rlen);
+}
+
+static uint32_t rd24(const uint8_t *p)
+{
+	return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16);
+}
+
+/* Both ends entered, keys made and crossed over 0xF5: what a host does before
+ * the nonces. HOST_CH is A, PEER_CH is B. */
+static void f5_keys_cross(void)
+{
+	uint8_t pub_a[RADIANT_SEC_X25519_BYTES];
+	uint8_t pub_b[RADIANT_SEC_X25519_BYTES];
+	uint8_t reply[2 + RADIANT_SEC_X25519_BYTES];
+	uint8_t rlen = 0u;
+
+	host_assign(true, true);
+	zassert_ok(antr_channel_assign(PEER_CH,
+				       (uint8_t)ANTW_CHANNEL_TYPE_MASTER, 0u,
+				       0u));
+	zassert_ok(antr_channel_id_set(PEER_CH, PEER_DEVNUM, HOST_DEVTYPE,
+				       HOST_TRANS));
+
+	zassert_ok(f5(HOST_CH, ANTW_RADIANT_PAIR_ENTER, NULL, 0u, reply, &rlen));
+	zassert_ok(f5(PEER_CH, ANTW_RADIANT_PAIR_ENTER, NULL, 0u, reply, &rlen));
+	zassert_ok(f5(HOST_CH, ANTW_RADIANT_PAIR_SCALAR, pair_sa,
+		      sizeof(pair_sa), reply, &rlen));
+	memcpy(pub_a, &reply[2], sizeof(pub_a));
+	zassert_ok(f5(PEER_CH, ANTW_RADIANT_PAIR_SCALAR, pair_sb,
+		      sizeof(pair_sb), reply, &rlen));
+	memcpy(pub_b, &reply[2], sizeof(pub_b));
+
+	/* DH only: the reply is the bare echo - no fingerprint exists yet,
+	 * which is what leaves no two-move path for a downgrade. */
+	zassert_ok(f5(HOST_CH, ANTW_RADIANT_PAIR_EXCHANGE, pub_b, sizeof(pub_b),
+		      reply, &rlen));
+	zassert_equal(2u, rlen, "EXCHANGE answered with a fingerprint");
+	zassert_ok(f5(PEER_CH, ANTW_RADIANT_PAIR_EXCHANGE, pub_a, sizeof(pub_a),
+		      reply, &rlen));
+	zassert_equal(2u, rlen);
+}
+
+static void f5_done(void)
+{
+	uint8_t reply[2 + RADIANT_SEC_X25519_BYTES];
+	uint8_t rlen = 0u;
+
+	(void)f5(HOST_CH, ANTW_RADIANT_PAIR_LEAVE, NULL, 0u, reply, &rlen);
+	(void)f5(PEER_CH, ANTW_RADIANT_PAIR_LEAVE, NULL, 0u, reply, &rlen);
+	(void)antr_channel_unassign(PEER_CH);
+	host_done();
+}
+
+static uint16_t enrolments_of(uint8_t ch)
+{
+	uint8_t st[ANTR_SEC_STATUS_LEN];
+
+	zassert_ok(antr_sec_status_get(ch, st, sizeof(st)));
+	return rd16(&st[24]);
+}
+
+/* The whole host sequence of docs/ant-serial-protocol.md, both ends. */
+ZTEST(api, test_sec_host_pairing_commits_before_it_reveals)
+{
+	uint8_t  reply[2 + RADIANT_SEC_X25519_BYTES];
+	uint8_t  cb[RADIANT_SEC_BLOCK_BYTES];
+	uint8_t  rlen = 0u;
+	uint32_t fp_a, fp_b;
+
+	f5_keys_cross();
+
+	/* B: NONCE as responder answers Cb, which B's host sends to A. */
+	zassert_ok(f5(PEER_CH, ANTW_RADIANT_PAIR_NONCE, pair_nb_arg,
+		      sizeof(pair_nb_arg), reply, &rlen));
+	zassert_equal(2u + RADIANT_SEC_BLOCK_BYTES, rlen);
+	zassert_equal(PEER_CH, reply[0]);
+	zassert_equal(ANTW_RADIANT_PAIR_NONCE, reply[1]);
+	memcpy(cb, &reply[2], sizeof(cb));
+
+	/* A: its own nonce (bare echo), then the commitment, then Na out. */
+	zassert_ok(f5(HOST_CH, ANTW_RADIANT_PAIR_NONCE, pair_na_arg,
+		      sizeof(pair_na_arg), reply, &rlen));
+	zassert_equal(2u, rlen, "an initiator's NONCE answered a commitment");
+	zassert_ok(f5(HOST_CH, ANTW_RADIANT_PAIR_PEER_COMMIT, cb, sizeof(cb),
+		      reply, &rlen));
+	zassert_equal(2u, rlen);
+
+	/* B finishes on Na, and only then reveals Nb. */
+	zassert_ok(f5(PEER_CH, ANTW_RADIANT_PAIR_PEER_NONCE, &pair_na_arg[1],
+		      RADIANT_SEC_PAIR_NONCE_BYTES, reply, &rlen));
+	zassert_equal(5u, rlen);
+	fp_b = rd24(&reply[2]);
+
+	/* A checks Nb against Cb and finishes. */
+	zassert_ok(f5(HOST_CH, ANTW_RADIANT_PAIR_PEER_NONCE, &pair_nb_arg[1],
+		      RADIANT_SEC_PAIR_NONCE_BYTES, reply, &rlen));
+	zassert_equal(5u, rlen);
+	fp_a = rd24(&reply[2]);
+
+	zassert_equal(fp_a, fp_b, "the two ends show different digits");
+	zassert_equal(PAIR_VEC_FP, fp_a,
+		      "0xF5's fingerprint disagrees with radiant_crypto.py");
+	zassert_equal(1u, enrolments_of(HOST_CH));
+	zassert_equal(1u, enrolments_of(PEER_CH));
+
+	f5_done();
+}
+
+ZTEST(api, test_sec_host_pairing_refuses_out_of_order_and_unopened_commitments)
+{
+	uint8_t reply[2 + RADIANT_SEC_X25519_BYTES];
+	uint8_t cb[RADIANT_SEC_BLOCK_BYTES] = { 0 };
+	uint8_t bad_nb[RADIANT_SEC_PAIR_NONCE_BYTES];
+	uint8_t rlen = 0u;
+
+	f5_keys_cross();
+
+	/* Short and long arguments are malformed, not out of order: lengths
+	 * are exact. */
+	{
+		uint8_t long_arg[2u + RADIANT_SEC_PAIR_NONCE_BYTES];
+
+		memcpy(long_arg, pair_nb_arg, sizeof(pair_nb_arg));
+		long_arg[sizeof(long_arg) - 1u] = 0x5Au;
+		zassert_equal((antr_err_t)ANTW_INVALID_MESSAGE,
+			      f5(PEER_CH, ANTW_RADIANT_PAIR_NONCE, long_arg,
+				 sizeof(long_arg), reply, &rlen));
+		zassert_equal((antr_err_t)ANTW_INVALID_MESSAGE,
+			      f5(HOST_CH, ANTW_RADIANT_PAIR_ENTER, long_arg, 2u,
+				 reply, &rlen));
+	}
+	zassert_equal((antr_err_t)ANTW_INVALID_MESSAGE,
+		      f5(PEER_CH, ANTW_RADIANT_PAIR_NONCE, pair_nb_arg,
+			 RADIANT_SEC_PAIR_NONCE_BYTES, reply, &rlen));
+	zassert_equal((antr_err_t)ANTW_INVALID_MESSAGE,
+		      f5(HOST_CH, ANTW_RADIANT_PAIR_PEER_COMMIT, cb,
+			 RADIANT_SEC_BLOCK_BYTES - 1u, reply, &rlen));
+	zassert_equal((antr_err_t)ANTW_INVALID_MESSAGE,
+		      f5(HOST_CH, ANTW_RADIANT_PAIR_PEER_NONCE, cb,
+			 RADIANT_SEC_PAIR_NONCE_BYTES - 1u, reply, &rlen));
+
+	zassert_ok(f5(PEER_CH, ANTW_RADIANT_PAIR_NONCE, pair_nb_arg,
+		      sizeof(pair_nb_arg), reply, &rlen));
+	memcpy(cb, &reply[2], sizeof(cb));
+	zassert_ok(f5(HOST_CH, ANTW_RADIANT_PAIR_NONCE, pair_na_arg,
+		      sizeof(pair_na_arg), reply, &rlen));
+
+	/* A reveal before the commitment, and a commitment to a responder. */
+	zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
+		      f5(HOST_CH, ANTW_RADIANT_PAIR_PEER_NONCE,
+			 &pair_nb_arg[1], RADIANT_SEC_PAIR_NONCE_BYTES, reply,
+			 &rlen));
+	zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
+		      f5(PEER_CH, ANTW_RADIANT_PAIR_PEER_COMMIT, cb,
+			 sizeof(cb), reply, &rlen));
+
+	/* A nonce that does not open the commitment: refused, nothing
+	 * installed or counted, and the exchange is gone. */
+	zassert_ok(f5(HOST_CH, ANTW_RADIANT_PAIR_PEER_COMMIT, cb, sizeof(cb),
+		      reply, &rlen));
+	memcpy(bad_nb, &pair_nb_arg[1], sizeof(bad_nb));
+	bad_nb[0] ^= 0x01u;
+	/* Its own code: the MITM signature must not read as the out-of-order
+	 * refusal above (review 2026-11-13). */
+	zassert_equal((antr_err_t)ANTW_RADIANT_PAIR_COMMIT_MISMATCH,
+		      f5(HOST_CH, ANTW_RADIANT_PAIR_PEER_NONCE, bad_nb,
+			 sizeof(bad_nb), reply, &rlen));
+	zassert_not_equal((antr_err_t)ANTW_RADIANT_PAIR_COMMIT_MISMATCH,
+			  (antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED);
+	zassert_equal(0u, enrolments_of(HOST_CH));
+	zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
+		      f5(HOST_CH, ANTW_RADIANT_PAIR_PEER_NONCE,
+			 &pair_nb_arg[1], RADIANT_SEC_PAIR_NONCE_BYTES, reply,
+			 &rlen),
+		      "the right nonce was accepted after a wrong one");
+
+	f5_done();
+}
+
 /*
  * How long a pairing command holds api_lock. Each X25519 is a full scalar
  * multiplication on this build's software implementation; the number printed
  * is the figure to read against the RX thread (which needs api_lock for the
- * pump and the scheduler). Asserts only that the exchange works under the
- * lock and takes under a second.
+ * pump and the scheduler). The commit/reveal adds only CMACs, so NONCE and
+ * PEER_NONCE are held to a few milliseconds: the commitment must not grow the
+ * hold materially.
  */
 ZTEST(api, test_sec_host_pairing_holds_api_lock_and_its_hold_time)
 {
-	static const uint8_t scalar[RADIANT_SEC_X25519_BYTES] = {
-		0x77, 0x07, 0x6d, 0x0a, 0x73, 0x18, 0xa5, 0x7d,
-		0x3c, 0x16, 0xc1, 0x72, 0x51, 0xb2, 0x66, 0x45,
-		0xdf, 0x4c, 0x2f, 0x87, 0xeb, 0xc0, 0x99, 0x2a,
-		0xb1, 0x77, 0xfb, 0xa5, 0x1d, 0xb9, 0x2c, 0x2a,
-	};
 	uint8_t  reply[2 + RADIANT_SEC_X25519_BYTES];
+	uint8_t  peer[RADIANT_SEC_X25519_BYTES];
 	uint8_t  rlen = 0u;
 	uint32_t base;
-	uint32_t t0, t_scalar, t_exchange;
+	uint32_t t0, t_scalar, t_exchange, t_nonce, t_reveal;
 
 	host_assign(true, true);
 	base = antr_api_lock_violations;
 
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
-		      antr_sec_pair(HOST_CH, ANTW_RADIANT_PAIR_ENTER, NULL, 0u,
-				    reply, sizeof(reply), &rlen));
+	zassert_ok(f5(HOST_CH, ANTW_RADIANT_PAIR_ENTER, NULL, 0u, reply, &rlen));
 	t0 = k_cycle_get_32();
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
-		      antr_sec_pair(HOST_CH, ANTW_RADIANT_PAIR_SCALAR, scalar,
-				    sizeof(scalar), reply, sizeof(reply),
-				    &rlen));
+	zassert_ok(f5(HOST_CH, ANTW_RADIANT_PAIR_SCALAR, pair_sa,
+		      sizeof(pair_sa), reply, &rlen));
 	t_scalar = k_cycle_get_32() - t0;
 	zassert_equal(2u + RADIANT_SEC_X25519_BYTES, rlen);
 
 	/* The peer's public key is the one just produced: a valid, non-
-	 * degenerate point, so the exchange runs to the end. */
-	uint8_t peer[RADIANT_SEC_X25519_BYTES];
-
+	 * degenerate point, so the exchange runs to the end. This end plays
+	 * the responder, and the "initiator's" nonce is just another value. */
 	memcpy(peer, &reply[2], sizeof(peer));
 	t0 = k_cycle_get_32();
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
-		      antr_sec_pair(HOST_CH, ANTW_RADIANT_PAIR_EXCHANGE, peer,
-				    sizeof(peer), reply, sizeof(reply), &rlen));
+	zassert_ok(f5(HOST_CH, ANTW_RADIANT_PAIR_EXCHANGE, peer, sizeof(peer),
+		      reply, &rlen));
 	t_exchange = k_cycle_get_32() - t0;
+
+	t0 = k_cycle_get_32();
+	zassert_ok(f5(HOST_CH, ANTW_RADIANT_PAIR_NONCE, pair_nb_arg,
+		      sizeof(pair_nb_arg), reply, &rlen));
+	t_nonce = k_cycle_get_32() - t0;
+
+	t0 = k_cycle_get_32();
+	zassert_ok(f5(HOST_CH, ANTW_RADIANT_PAIR_PEER_NONCE, &pair_na_arg[1],
+		      RADIANT_SEC_PAIR_NONCE_BYTES, reply, &rlen));
+	t_reveal = k_cycle_get_32() - t0;
+	zassert_equal(5u, rlen);
 
 	zassert_equal(base, antr_api_lock_violations,
 		      "a 0xF5 command reached radiant_sec without api_lock");
 
-	uint32_t us_scalar = (uint32_t)(((uint64_t)t_scalar * 1000000u) /
-					sys_clock_hw_cycles_per_sec());
-	uint32_t us_exchange = (uint32_t)(((uint64_t)t_exchange * 1000000u) /
-					  sys_clock_hw_cycles_per_sec());
+	uint64_t hz = sys_clock_hw_cycles_per_sec();
+	uint32_t us_scalar = (uint32_t)(((uint64_t)t_scalar * 1000000u) / hz);
+	uint32_t us_exchange =
+		(uint32_t)(((uint64_t)t_exchange * 1000000u) / hz);
+	uint32_t us_nonce = (uint32_t)(((uint64_t)t_nonce * 1000000u) / hz);
+	uint32_t us_reveal = (uint32_t)(((uint64_t)t_reveal * 1000000u) / hz);
 
-	printk("X25519 api_lock hold: SCALAR %u us, EXCHANGE %u us\n",
-	       us_scalar, us_exchange);
+	printk("X25519 api_lock hold: SCALAR %u us, EXCHANGE %u us, "
+	       "NONCE %u us, PEER_NONCE %u us\n",
+	       us_scalar, us_exchange, us_nonce, us_reveal);
 	zassert_true(us_scalar < 1000000u && us_exchange < 1000000u);
+	zassert_true(us_nonce < 5000u && us_reveal < 5000u,
+		     "the commit/reveal holds api_lock for milliseconds: "
+		     "NONCE %u us, PEER_NONCE %u us", us_nonce, us_reveal);
 
-	(void)antr_sec_pair(HOST_CH, ANTW_RADIANT_PAIR_LEAVE, NULL, 0u, reply,
-			    sizeof(reply), &rlen);
+	(void)f5(HOST_CH, ANTW_RADIANT_PAIR_LEAVE, NULL, 0u, reply, &rlen);
 	host_done();
 }
 #endif /* CONFIG_RADIANT_SEC_PAIRING_X25519 */
