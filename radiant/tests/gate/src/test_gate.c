@@ -38,6 +38,8 @@
 #include <mpsl_timeslot.h>
 #include <nrf_errno.h>
 
+#include <radiant/radiant_transfer.h>
+
 #include "radiant_radio_nrf_gate.h"
 
 #include "../../fake_radio.h"
@@ -1247,6 +1249,122 @@ ZTEST(radiant_gate, test_a_follow_on_is_served_only_while_the_grant_is_held)
 		      "released first, the follow-on must be refused too-near - "
 		      "if this passes, the handoff is no longer what serves it");
 
+	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_END,
+		      fake_mpsl_signal(MPSL_TIMESLOT_SIGNAL_TIMER0));
+	assert_invariant();
+}
+
+/*
+ * An originated acknowledged message on an MPSL build (TODO "ACK-window
+ * reserve on MPSL"). The data packet reserves REPLY + GUARD + frame tail
+ * (radiant_burst.c arm_tx()), so its grant ends about where the ACK window
+ * closes. Since e042a10 that window carries follow_on_us = NEXT_PACKET_US
+ * (arm_ack_window()), air for a next packet or retry that the data packet's
+ * grant never reserved. The window's own air fits the held grant; its
+ * follow-on does not, by ~1.5 ms. Requiring the follow-on to fit too sent the
+ * window to placement, which refused it as too near: every originated
+ * acknowledged message failed on MPSL builds. The window must be served, and
+ * its follow-on clipped at grant_end.
+ *
+ * Instants are the backend's (radiant_radio_tx()/radiant_radio_rx()): the
+ * transmit's air runs to the CRC's last bit, a window's from t_open less the
+ * address airtime to t_close plus the longest frame. One ANT frame after
+ * t_sync is 11 bytes at 8 us.
+ */
+#define ACKW_FRAME_US 88u   /* (9 body + 2 CRC) bytes x 8 us, after t_sync */
+#define ACKW_LEAD_US  40u   /* preamble + address airtime before t_sync */
+
+ZTEST(radiant_gate, test_an_ack_window_is_served_in_grant_with_its_follow_on_clipped)
+{
+	radiant_time_t sync = radiant_radio_now() + WIN_LEAD_US;
+	radiant_time_t tx_from = sync - 200u;
+	radiant_time_t tx_to = sync + ACKW_FRAME_US;
+	uint16_t tx_follow = (uint16_t)(RADIANT_TRANSFER_REPLY_US +
+					RADIANT_TRANSFER_ACK_GUARD_US +
+					ACKW_FRAME_US);
+	radiant_time_t win_from = sync + RADIANT_TRANSFER_REPLY_US -
+				  RADIANT_TRANSFER_ACK_GUARD_US - ACKW_LEAD_US;
+	radiant_time_t win_to = sync + RADIANT_TRANSFER_REPLY_US +
+				RADIANT_TRANSFER_ACK_GUARD_US + ACKW_FRAME_US;
+	uint32_t placed;
+
+	zassert_equal(GATE_PENDING,
+		      gate_acquire(GATE_OP_TX, tx_from, tx_to, tx_follow,
+				   RADIANT_GATE_PRIO_HIGH));
+	k_msleep(WORK_MS);
+	placed = fake_mpsl_requests();
+	/* START where the grant begins (t_from - HEAD), so grant_end is the
+	 * transmit's end plus its reserve plus the tail. */
+	fake_radio_advance_to(tx_from - 250u);
+	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_NONE,
+		      fake_mpsl_signal(MPSL_TIMESLOT_SIGNAL_START));
+	zassert_true(gate_held(), "a live grant was not reported held");
+
+	/* The transmit has completed; its callback arms the ACK window. */
+	fake_radio_advance_to(tx_to + 100u);
+	zassert_equal(GATE_GRANTED,
+		      gate_acquire(GATE_OP_RX, win_from, win_to,
+				   (uint16_t)RADIANT_TRANSFER_NEXT_PACKET_US,
+				   RADIANT_GATE_PRIO_HIGH),
+		      "an ACK window whose own air fits the held grant was not "
+		      "served from it (its follow-on must be clipped, not fit)");
+	zassert_equal(placed, fake_mpsl_requests(),
+		      "an in-grant ACK window placed a reservation");
+
+	fake_mpsl_timer0.counter = 2500u;
+	fake_mpsl_timer0.counter_step = 0u;
+	gate_release();
+	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_END,
+		      fake_mpsl_signal(MPSL_TIMESLOT_SIGNAL_TIMER0));
+	assert_invariant();
+}
+
+/*
+ * The other side of the clip: only the follow-on may run past grant_end. An
+ * arm that starts inside the grant but whose own window overruns it would use
+ * air nobody granted, so it is not served in-grant - it falls through to
+ * placement, which refuses it as too near.
+ */
+ZTEST(radiant_gate, test_an_arm_whose_own_window_overruns_the_grant_is_not_served_in_grant)
+{
+	radiant_time_t sync = radiant_radio_now() + WIN_LEAD_US;
+	radiant_time_t tx_from = sync - 200u;
+	radiant_time_t tx_to = sync + ACKW_FRAME_US;
+	uint16_t tx_follow = (uint16_t)(RADIANT_TRANSFER_REPLY_US +
+					RADIANT_TRANSFER_ACK_GUARD_US +
+					ACKW_FRAME_US);
+	/* grant_end = tx_to + tx_follow + TAIL_MARGIN_US (250). */
+	radiant_time_t grant_end = tx_to + tx_follow + 250u;
+	uint32_t placed;
+
+	zassert_equal(GATE_PENDING,
+		      gate_acquire(GATE_OP_TX, tx_from, tx_to, tx_follow,
+				   RADIANT_GATE_PRIO_HIGH));
+	k_msleep(WORK_MS);
+	placed = fake_mpsl_requests();
+	fake_radio_advance_to(tx_from - 250u);
+	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_NONE,
+		      fake_mpsl_signal(MPSL_TIMESLOT_SIGNAL_START));
+
+	fake_radio_advance_to(tx_to + 100u);
+	/* Its own air ends 1 us too late for the tail, with no follow-on. */
+	zassert_not_equal(GATE_GRANTED,
+			  gate_acquire(GATE_OP_RX, tx_to + 1000u,
+				       grant_end - 250u + 1u, 0u,
+				       RADIANT_GATE_PRIO_HIGH),
+			  "an arm overrunning grant_end was served in-grant");
+	zassert_equal(placed, fake_mpsl_requests(),
+		      "a too-near arm placed a reservation");
+	/* The same arm 1 us shorter fits exactly and is served. */
+	zassert_equal(GATE_GRANTED,
+		      gate_acquire(GATE_OP_RX, tx_to + 1000u,
+				   grant_end - 250u, 0u,
+				   RADIANT_GATE_PRIO_HIGH),
+		      "an arm ending exactly at the tail was not served");
+
+	fake_mpsl_timer0.counter = 2500u;
+	fake_mpsl_timer0.counter_step = 0u;
+	gate_release();
 	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_END,
 		      fake_mpsl_signal(MPSL_TIMESLOT_SIGNAL_TIMER0));
 	assert_invariant();

@@ -2046,15 +2046,22 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 	if (g.granted) {
 		stats.acq_in_grant++;
 		/*
-		 * A grant is already held. follow_on_us exists for this case: the
+		 * A grant is already held. This is what follow_on_us reserves: the
 		 * acknowledged-data reply is armed from the receive callback, 1.56 ms before it
-		 * must go out, too late to place a request. Serve it from the held air if it
-		 * fits. The window must also start inside the grant, not just end inside it.
+		 * must go out, too late to place a request. Serve it from the held air if its
+		 * own air fits: it must start no earlier than now and end, with the tail,
+		 * inside the grant.
+		 *
+		 * Its own follow_on_us is clipped at grant_end, not required to fit. A fixed
+		 * grant never grows, so a chain of follow-ons can never outlive the first
+		 * grant; requiring the follow-on to fit refused the originator's ACK window
+		 * (follow-on NEXT_PACKET_US since e042a10, ~1.5 ms past the data packet's
+		 * grant) and every originated acknowledged message failed on MPSL builds.
+		 * Whatever is later armed into the clipped part (a retry, a burst's next
+		 * packet) is refused by this same test and fails as before e042a10.
 		 */
 		if (t_from >= now &&
-		    t_to + (radiant_time_t)follow_on_us +
-				    (radiant_time_t)TAIL_MARGIN_US <=
-			    g.grant_end) {
+		    t_to + (radiant_time_t)TAIL_MARGIN_US <= g.grant_end) {
 			g.release_wanted = false;
 			if (prio == RADIANT_GATE_PRIO_HIGH) {
 				stats.hi_reserve++;

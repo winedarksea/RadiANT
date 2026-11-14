@@ -114,7 +114,11 @@ enum gate_op {
  * core may still need for one follow-on operation after this one ends. A
  * gate that reserves it MUST release it as soon as it knows the follow-on
  * isn't coming (see gate_release) - the difference between costing the other
- * stack's SCHEDULER and costing its AIR.
+ * stack's SCHEDULER and costing its AIR. A reservation is made only when a
+ * request is placed. An arm served from a grant already held (an in-grant
+ * follow-on) needs only its own air, t_from..t_to plus the tail, inside that
+ * grant; its follow_on_us is clipped at the grant's end, because a fixed grant
+ * never grows. A further follow-on into the clipped air is refused.
  *
  * prio is RADIANT_GATE_PRIO_*. It ranks our own requests against each other
  * and nothing else - do not add levels believing they outrank another stack.
