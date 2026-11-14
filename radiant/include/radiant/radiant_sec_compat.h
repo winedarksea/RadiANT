@@ -352,6 +352,34 @@ int radiant_sec_compat_configure(uint8_t ch, uint8_t switches, uint8_t n,
 int radiant_sec_compat_set_epoch(uint8_t ch, uint32_t epoch, uint64_t now_us,
 				 uint64_t us_into_epoch, uint16_t period_counts);
 
+/*
+ * The highest epoch a Tier I counter wrap may advance this channel to, as
+ * radiant_sec_set_epoch_ceiling() for the spread MAC: none by default; while
+ * set, radiant_sec_compat_set_epoch() is refused (RADIANT_SEC_ESTATE); cleared
+ * by set_key, release, reset, or max_epoch 0xFFFFFFFF. A wrap past it is refused
+ * with RADIANT_SEC_EAGAIN - the attestation page is withheld, nothing is spent
+ * - until the ceiling is raised. A compat wrap is >= 18 h (65 536 x T) and
+ * would be a tag replay rather than a two-time pad, but the epoch authority's
+ * reservation covers it the same way (docs/radiant-security.md 3.5).
+ */
+int radiant_sec_compat_set_epoch_ceiling(uint8_t ch, uint32_t max_epoch);
+
+/*
+ * The compat twins of radiant_sec_epoch_advanced()/_wanted(): every epoch move
+ * on a channel that carries a ceiling (TX, and receiver-side moves on a
+ * context that has never transmitted - one that has refuses compat RX), and
+ * every move refused by the ceiling, with the epoch it wanted. Weak and empty
+ * by default. Caller's context: an override must only defer work.
+ *
+ * As in radiant_sec.c: a ceiling makes set_epoch refuse, set_key clears it,
+ * and raise_epoch_ceiling() only raises an existing one (a compare-and-swap)
+ * and may be called without the caller's lock, for the reasons given there.
+ * A context carrying a ceiling refuses compat RX too.
+ */
+void radiant_sec_compat_epoch_advanced(uint8_t ch, uint32_t epoch);
+void radiant_sec_compat_epoch_wanted(uint8_t ch, uint32_t epoch);
+int radiant_sec_compat_raise_epoch_ceiling(uint8_t ch, uint32_t max_epoch);
+
 /* The on-air device number, which is in the nonce. */
 int radiant_sec_compat_set_devnum(uint8_t ch, uint16_t devnum);
 
@@ -665,6 +693,20 @@ static inline int radiant_sec_compat_set_epoch(uint8_t ch, uint32_t epoch,
 {
 	(void)ch; (void)epoch; (void)now_us; (void)us_into_epoch;
 	(void)period_counts;
+	return RADIANT_SEC_ENOTSUP;
+}
+
+static inline int radiant_sec_compat_set_epoch_ceiling(uint8_t ch,
+							uint32_t max_epoch)
+{
+	(void)ch; (void)max_epoch;
+	return RADIANT_SEC_ENOTSUP;
+}
+
+static inline int radiant_sec_compat_raise_epoch_ceiling(uint8_t ch,
+							  uint32_t max_epoch)
+{
+	(void)ch; (void)max_epoch;
 	return RADIANT_SEC_ENOTSUP;
 }
 

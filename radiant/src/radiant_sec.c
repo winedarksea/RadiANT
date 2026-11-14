@@ -71,6 +71,14 @@ struct sec_ctx {
 	 * forged expected+127 would blind the receiver for 32 s. */
 	uint16_t rx_floor;
 	uint32_t epoch;
+	/* The epoch ceiling, stored inverted so a zeroed context means "none"
+	 * (0xFFFFFFFF, i.e. only the headroom test) with no init code. Nonzero
+	 * also means "an epoch authority follows this channel": only then do
+	 * the epoch hooks fire. While set, set_epoch is refused; set_key (a new
+	 * root) clears it. atomic_t for the authority's lock-free raise (a CAS);
+	 * every other access is a plain load or store. See
+	 * radiant_sec_set_epoch_ceiling(). */
+	atomic_t ceil_inv;
 	/* epoch_anchor error, in us, implied by rx_prev's closing packet and
 	 * applied only if rx_prev verifies. rx_floor and this sit where they do
 	 * because both fill alignment holes on a 32-bit target, so the fix that
@@ -342,8 +350,20 @@ static int advance_epoch(struct sec_ctx *c, uint16_t by)
 	    by > 0xFFFFFFFFu - c->epoch) {
 		return RADIANT_SEC_EINVAL;
 	}
+	/* The authority's reservation (docs/radiant-security.md 3.5): not
+	 * past the ceiling, but not spent either - the caller withholds and
+	 * retries at the next slot. The authority is told which epoch is
+	 * wanted, so a catch-up of several wraps (a long silence) cannot wait
+	 * for an advance that never comes. Overflow is excluded above. */
+	if (c->epoch + by > ~(uint32_t)c->ceil_inv) {
+		radiant_sec_epoch_wanted(c->ch, c->epoch + by);
+		return RADIANT_SEC_EAGAIN;
+	}
 	c->epoch += by;
 	stat_bump(&c->stats.epoch_advances);
+	if (c->ceil_inv != 0u) {
+		radiant_sec_epoch_advanced(c->ch, c->epoch);
+	}
 
 	/* Move the anchor with it so the phase stays continuous: 65536 packets
 	 * per wrap. */
@@ -378,6 +398,18 @@ __weak void radiant_sec_window_verdict(uint8_t ch, uint16_t window_start,
 	ARG_UNUSED(ch);
 	ARG_UNUSED(window_start);
 	ARG_UNUSED(verdict);
+}
+
+__weak void radiant_sec_epoch_advanced(uint8_t ch, uint32_t epoch)
+{
+	ARG_UNUSED(ch);
+	ARG_UNUSED(epoch);
+}
+
+__weak void radiant_sec_epoch_wanted(uint8_t ch, uint32_t epoch)
+{
+	ARG_UNUSED(ch);
+	ARG_UNUSED(epoch);
 }
 
 /* ── Configuration ──────────────────────────────────────────────────────── */
@@ -435,6 +467,9 @@ int radiant_sec_set_key(uint8_t ch, const uint8_t *root, size_t bits,
 	if (c->devnum == 0u) {
 		c->devnum = base_devnum;
 	}
+	/* A new root's epochs owe nothing to the old root's authority: the
+	 * ceiling (and the following) goes with it, and set_epoch is free. */
+	c->ceil_inv = 0;
 
 	/* A new root invalidates the epoch gate: a fresh start under an epoch
 	 * the previous key already used is exactly the state D3 forbids. */
@@ -521,6 +556,14 @@ int radiant_sec_set_epoch(uint8_t ch, uint32_t epoch, uint64_t us_into_epoch,
 	if (period_counts == 0u) {
 		return RADIANT_SEC_EINVAL;
 	}
+	/* An epoch authority follows this channel (review 2026-11-13 re-review
+	 * M1): an epoch from anyone else - a host 0xF3 under the same root -
+	 * would run wraps the authority never reserved, and its next boot
+	 * could issue one of them again. Refused until a new root (set_key) or
+	 * the authority itself clears the ceiling. */
+	if (c->ceil_inv != 0) {
+		return RADIANT_SEC_ESTATE;
+	}
 	/* Monotone - the whole of D3's enforceable half; the rest is a
 	 * normative obligation on the epoch authority since nothing here
 	 * survives a reset to check it. */
@@ -553,6 +596,38 @@ int radiant_sec_set_epoch(uint8_t ch, uint32_t epoch, uint64_t us_into_epoch,
 	hold_reset(c);
 
 	return derive_keys(c);
+}
+
+int radiant_sec_set_epoch_ceiling(uint8_t ch, uint32_t max_epoch)
+{
+	RADIANT_SEC_ASSERT_LOCKED();
+	struct sec_ctx *c = ctx_of(ch);
+
+	if (c == NULL) {
+		return RADIANT_SEC_ENOKEY;
+	}
+	c->ceil_inv = (atomic_val_t)(uint32_t)~max_epoch;
+	return RADIANT_SEC_OK;
+}
+
+int radiant_sec_raise_epoch_ceiling(uint8_t ch, uint32_t max_epoch)
+{
+	/* No lock check (see the header). A CAS, so a set_key clearing the
+	 * ceiling between the test and the store is never undone. */
+	struct sec_ctx *c = ctx_of(ch);
+	atomic_val_t    old;
+
+	if (c == NULL) {
+		return RADIANT_SEC_ENOKEY;
+	}
+	do {
+		old = atomic_get(&c->ceil_inv);
+		if (old == 0 || (uint32_t)~max_epoch >= (uint32_t)old) {
+			return RADIANT_SEC_OK;
+		}
+	} while (!atomic_cas(&c->ceil_inv, old,
+			     (atomic_val_t)(uint32_t)~max_epoch));
+	return RADIANT_SEC_OK;
 }
 
 #if !defined(CONFIG_RADIANT_SEC_HAS_RNG)
@@ -891,11 +966,13 @@ int radiant_sec_tx_transform(uint8_t ch, uint8_t *pay, uint8_t len,
 		 * the receiver derives the same advance from time. If it cannot
 		 * advance (no headroom left), nothing secured goes out again
 		 * until a new epoch is installed - it used to carry on and reuse
-		 * the keystream (review 2026-10-31, D1-6(a)). */
-		if (advance_epoch(c, (uint16_t)((idx >> 16) - c->tx_wraps)) !=
-		    RADIANT_SEC_OK) {
-			c->tx_spent = true;
-			return RADIANT_SEC_EINVAL;
+		 * the keystream (review 2026-10-31, D1-6(a)). Past the epoch
+		 * ceiling is different: withheld, not spent, and this same
+		 * slot-by-slot retry advances once the authority raises it. */
+		rc = advance_epoch(c, (uint16_t)((idx >> 16) - c->tx_wraps));
+		if (rc != RADIANT_SEC_OK) {
+			c->tx_spent = rc != RADIANT_SEC_EAGAIN;
+			return rc;
 		}
 		c->tx_wraps = (uint16_t)(idx >> 16);
 		c->tx_prev_valid = false;
@@ -980,6 +1057,16 @@ int radiant_sec_rx_ingest(uint8_t ch, const uint8_t *pay, uint8_t len,
 	 * and counted here, in ISR context, with no crypto needed. */
 	if (!broadcast) {
 		stat_bump(&c->stats.dropped_non_broadcast);
+		return RADIANT_SEC_RX_DROP;
+	}
+	/* Review 2026-11-13 item 2: a master's RX shares the epoch and keys its
+	 * TX uses, and no legitimate slave sends a secured-range broadcast on
+	 * a secured channel. Taken, a forged one near a wrap advanced the
+	 * master's epoch for good, and the master's own windows reflected back
+	 * verified (the nonce carries no direction). Refused here, behind the
+	 * armed and range tests, so an unsecured channel pays nothing. */
+	if (radiant_channel_is_master(ch)) {
+		stat_bump(&c->stats.dropped_direction);
 		return RADIANT_SEC_RX_DROP;
 	}
 
@@ -1191,7 +1278,10 @@ static void rx_process(struct sec_pkt *pkt)
 	uint16_t        epoch_delta = 0u;
 	uint16_t        start;
 
-	if (!ctx_armed(c) || pkt->len < SEC_PAGE_BYTES) {
+	/* tx_latched: defence in depth behind the master refusal at ingest
+	 * (which counts it) - nothing on the RX path may move the epoch of a
+	 * context that transmits. */
+	if (!ctx_armed(c) || pkt->len < SEC_PAGE_BYTES || c->tx_latched) {
 		return;
 	}
 

@@ -7,17 +7,22 @@
  * settings over NVS in storage_partition - rather than a private format.
  *
  * The settings subtree-walk read path is the wrong shape/cost for a lookup
- * node_ident.c makes before every public key. So the three records are read
+ * node_ident.c makes before every public key. So the four records are read
  * once at init into a RAM cache, and node_nvm_load() answers from it. This
  * narrows what a load after store proves: it confirms the cache, not that the
  * flash sector reads back. The durability claim rests on settings_save_one()
  * returning 0 (committed, for the NVS backend); re-reading flash to verify
  * would cost a second write's worth of wear per pairing window.
  *
- * Wear: ADR 0009 promises writes once per boot, once per pairing window. A
- * strap used twice daily for ten years is ~7000 boot-counter writes, well
- * inside Nordic flash's 10k-cycle/page endurance with NVS levelling - this is
- * an argument, not a measurement; no board here runs this backend yet.
+ * Wear: ADR 0009 promised writes once per boot, once per pairing window. The
+ * epoch reservation (docs/radiant-security.md 3.5) adds one more per boot
+ * (the next-free-epoch record) and one per counter wrap: about one write
+ * every 4.5 h of continuous 4 Hz secured TX, ~5 a day. A strap used twice
+ * daily for ten years, two hours a ride, is ~14 600 boot writes plus well
+ * under one wrap write a day - NVS spreads them over the whole partition's
+ * sectors, so per-page cycles stay inside Nordic flash's 10k endurance for
+ * any partition of a few sectors or more. An argument, not a measurement; no
+ * board here runs this backend yet.
  */
 
 #include <errno.h>
@@ -48,12 +53,14 @@ struct record {
 
 static uint32_t cache_boot;
 static uint32_t cache_pair;
+static uint32_t cache_epoch;
 static uint8_t  cache_kdev[16];
 
 static struct record records[] = {
 	{ NODE_NVM_KEY_BOOT, &cache_boot, sizeof(cache_boot), false, false },
 	{ NODE_NVM_KEY_PAIR, &cache_pair, sizeof(cache_pair), false, false },
 	{ NODE_NVM_KEY_KDEV, cache_kdev,  sizeof(cache_kdev), false, false },
+	{ NODE_NVM_KEY_EPOCH, &cache_epoch, sizeof(cache_epoch), false, false },
 };
 
 static bool initialised;

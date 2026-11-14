@@ -27,6 +27,14 @@ never repeats is the host's obligation and it is the one thing in this design
 that firmware cannot enforce for itself - radiant_sec refuses a non-increasing
 epoch, but only against the value it currently holds, which a reset clears.
 A tool that invented epochs would make that look solved.
+
+A host that does issue epochs must persist the last epoch USED, not the last
+one it issued: a counter wrap moves the channel to epoch + 1 with no 0xF3, so
+the epoch to stay above is the one 0xF4 reports at [6..9], read before the
+session ends. A wall-clock host must also never issue the same minute twice
+(two boots inside one minute). The hostless node discharges this with a
+reservation persisted ahead of use (docs/radiant-security.md 3.5); a host that
+cannot read 0xF4 before power is lost needs the same kind of reservation.
 """
 
 from __future__ import annotations
@@ -50,6 +58,7 @@ __all__ = [
     "SW_CONF", "SW_AUTH", "SW_DROP_UNVER", "SW_DESC_CONF",
     "VERDICT_CLEAR", "VERDICT_VERIFIED", "VERDICT_UNVERIFIED",
     "PAGE_LO_MIN", "PAGE_HI_MAX", "LEGAL_W", "KEY_BITS", "STATUS_LEN",
+    "STATUS_LEN_V1_26",
     "STATUS_VERSION", "SecStatus",
     "encode_config", "decode_config",
     "encode_set_key", "decode_set_key",
@@ -90,8 +99,12 @@ KEY_BYTES = KEY_BITS // 8
 
 # 0xF4's length and the structure version this module writes and fully
 # understands. Fields are only ever appended and an offset is never reused, so a
-# longer body or a higher version still decodes everything named here.
-STATUS_LEN = 26
+# longer body or a higher version still decodes everything named here. The
+# version stays 1 through the beta; a reader tells the fields apart by length.
+# STATUS_LEN_V1_26 is the shortest body still accepted: the layout before
+# dropped_direction was appended at [26..27], which then decodes as None.
+STATUS_LEN = 28
+STATUS_LEN_V1_26 = 26
 STATUS_VERSION = 1
 
 # The epoch headroom radiant_sec reserves so a counter wrap always has
@@ -241,6 +254,12 @@ class SecStatus:
     not a diagnostic: an enrolment the owner did not perform is the attack. Only
     a host on the node that did the enrolment can read it; other receivers
     cannot see it over the air.
+
+    `dropped_direction` counts secured-range broadcasts a MASTER heard and
+    refused: a secured master never receives secured pages from a legitimate
+    slave, so each one is a forgery or its own window reflected back
+    (docs/radiant-security.md 7.6). None when the body predates the field
+    (26 bytes).
     """
 
     channel: int
@@ -259,6 +278,7 @@ class SecStatus:
     epoch_advances: int
     verdict: int
     enrolments: int
+    dropped_direction: int | None = None
 
     @property
     def secured(self) -> bool:
@@ -273,15 +293,18 @@ class SecStatus:
 def decode_status(body: bytes) -> SecStatus:
     """Decode a 0xF4 body.
 
-    Refuses a body shorter than STATUS_LEN. Decodes the known fields from a
-    longer body or a higher version, since fields are only ever appended.
+    Refuses a body shorter than STATUS_LEN_V1_26, the oldest versioned layout;
+    a 26-byte body decodes with dropped_direction None. Decodes the known
+    fields from a longer body or a higher version, since fields are only ever
+    appended.
     Refuses version 0: firmware always writes a version, even for an unkeyed
     channel, so a zero there means this layout is being applied to bytes that
     are not a versioned 0xF4 (such as the old 23-byte reply, whose [1] is the
     switch byte).
     """
-    if len(body) < STATUS_LEN:
-        raise ValueError(f"0xF4 body is {len(body)} bytes, want {STATUS_LEN}")
+    if len(body) < STATUS_LEN_V1_26:
+        raise ValueError(f"0xF4 body is {len(body)} bytes, want at least "
+                         f"{STATUS_LEN_V1_26}")
     if body[1] == 0:
         raise ValueError(
             "0xF4 structure version is 0; every versioned reply carries 1 or "
@@ -291,6 +314,9 @@ def decode_status(body: bytes) -> SecStatus:
     (verified, unverified, non_bcast, replay,
      policy) = struct.unpack("<HHHHH", bytes(body[12:22]))
     (enrolments,) = struct.unpack("<H", bytes(body[24:26]))
+    direction = None
+    if len(body) >= 28:
+        (direction,) = struct.unpack("<H", bytes(body[26:28]))
 
     return SecStatus(
         channel=body[0],
@@ -309,6 +335,7 @@ def decode_status(body: bytes) -> SecStatus:
         epoch_advances=body[22],
         verdict=body[23],
         enrolments=enrolments,
+        dropped_direction=direction,
     )
 
 
@@ -332,7 +359,8 @@ def encode_status(st: SecStatus) -> bytes:
                         sat16(st.dropped_replay),
                         sat16(st.dropped_policy)) +
             bytes([min(st.epoch_advances, 0xFF), st.verdict]) +
-            struct.pack("<H", sat16(st.enrolments)))
+            struct.pack("<H", sat16(st.enrolments)) +
+            struct.pack("<H", sat16(st.dropped_direction or 0)))
 
 
 # ── Human-readable ──────────────────────────────────────────────────────────

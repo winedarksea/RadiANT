@@ -22,6 +22,7 @@
 #include <stdint.h>
 #include <string.h>
 
+#include <zephyr/sys/atomic.h>
 #include <zephyr/toolchain.h>
 
 #include <radiant/radiant_sec_compat.h>
@@ -170,6 +171,9 @@ struct compat_ctx {
 	uint32_t base_epoch;
 	uint32_t wraps;
 	uint32_t epoch;
+	/* The epoch ceiling, inverted so zero means none (radiant_sec.c's
+	 * ceil_inv, same reasons and rules). */
+	atomic_t ceil_inv;
 	/* Where base_epoch began, in the caller's clock. Signed: a receiver
 	 * learns it from the air (rx_tier1), and a sensor up for days before
 	 * the receiver booted began before the receiver's clock's zero. */
@@ -331,22 +335,62 @@ static int derive_auth(struct compat_ctx *c)
  * reproducible even with no Tier II page ever heard. The Tier II window
  * index just rolls over inside an epoch instead.
  */
-static int apply_wraps(struct compat_ctx *c, uint32_t wraps)
+/* May the epoch move to base_epoch + wraps? EINVAL past the headroom; EAGAIN
+ * past the authority's ceiling (radiant-security.md 3.5: refused, not spent,
+ * and the authority is told which epoch is wanted). Overflow is excluded by
+ * the first test. Every epoch move in this file asks this first. */
+static int wraps_allowed(struct compat_ctx *c, uint32_t wraps)
 {
-	if (wraps == c->wraps) {
-		return RADIANT_SEC_OK;
-	}
 	if ((uint64_t)c->base_epoch + wraps >
 	    (uint64_t)0xFFFFFFFFu - RADIANT_SEC_EPOCH_HEADROOM) {
 		return RADIANT_SEC_EINVAL;
 	}
+	if (c->base_epoch + wraps > ~(uint32_t)c->ceil_inv) {
+		radiant_sec_compat_epoch_wanted(c->ch, c->base_epoch + wraps);
+		return RADIANT_SEC_EAGAIN;
+	}
+	return RADIANT_SEC_OK;
+}
+
+/* ...and the move itself, wherever it is made; K_auth is the caller's. */
+static void wraps_commit(struct compat_ctx *c, uint32_t wraps)
+{
 	c->wraps = wraps;
 	c->epoch = c->base_epoch + wraps;
 	stat_bump(&c->stats.epoch_advances);
+	if (c->ceil_inv != 0u) {
+		radiant_sec_compat_epoch_advanced(c->ch, c->epoch);
+	}
+}
+
+static int apply_wraps(struct compat_ctx *c, uint32_t wraps)
+{
+	int rc;
+
+	if (wraps == c->wraps) {
+		return RADIANT_SEC_OK;
+	}
+	rc = wraps_allowed(c, wraps);
+	if (rc != RADIANT_SEC_OK) {
+		return rc;
+	}
+	wraps_commit(c, wraps);
 	return derive_auth(c);
 }
 
-/* ── Weak delivery hook ─────────────────────────────────────────────────── */
+/* ── Weak delivery hooks ────────────────────────────────────────────────── */
+
+__weak void radiant_sec_compat_epoch_advanced(uint8_t ch, uint32_t epoch)
+{
+	(void)ch;
+	(void)epoch;
+}
+
+__weak void radiant_sec_compat_epoch_wanted(uint8_t ch, uint32_t epoch)
+{
+	(void)ch;
+	(void)epoch;
+}
 
 __weak void radiant_sec_compat_verdict(uint8_t ch, uint8_t sub, uint16_t counter,
 				       enum radiant_sec_verdict verdict)
@@ -418,8 +462,10 @@ int radiant_sec_compat_set_key(uint8_t ch, const uint8_t *root, size_t bits,
 	}
 
 	/* A new root is a fresh start, and a fresh start under an epoch the
-	 * previous key already used is the state D3 forbids. */
+	 * previous key already used is the state D3 forbids. The old root's
+	 * authority (its ceiling) goes with it. */
 	c->epoch_set = false;
+	c->ceil_inv = 0;
 	radiant_sec_key_destroy(&c->k_auth);
 	return RADIANT_SEC_OK;
 }
@@ -482,6 +528,9 @@ int radiant_sec_compat_set_epoch(uint8_t ch, uint32_t epoch, uint64_t now_us,
 	if (period_counts == 0u) {
 		return RADIANT_SEC_EINVAL;
 	}
+	if (c->ceil_inv != 0) {
+		return RADIANT_SEC_ESTATE;   /* an authority follows it */
+	}
 	if (c->epoch_set && epoch <= c->epoch) {
 		return RADIANT_SEC_EINVAL;
 	}
@@ -516,6 +565,35 @@ int radiant_sec_compat_set_epoch(uint8_t ch, uint32_t epoch, uint64_t now_us,
 	c->last_verdict = RADIANT_SEC_VERDICT_CLEAR;
 
 	return derive_auth(c);
+}
+
+int radiant_sec_compat_set_epoch_ceiling(uint8_t ch, uint32_t max_epoch)
+{
+	struct compat_ctx *c = ctx_of(ch);
+
+	if (c == NULL) {
+		return RADIANT_SEC_ENOKEY;
+	}
+	c->ceil_inv = (atomic_val_t)(uint32_t)~max_epoch;
+	return RADIANT_SEC_OK;
+}
+
+int radiant_sec_compat_raise_epoch_ceiling(uint8_t ch, uint32_t max_epoch)
+{
+	struct compat_ctx *c = ctx_of(ch);
+	atomic_val_t       old;
+
+	if (c == NULL) {
+		return RADIANT_SEC_ENOKEY;
+	}
+	do {
+		old = atomic_get(&c->ceil_inv);
+		if (old == 0 || (uint32_t)~max_epoch >= (uint32_t)old) {
+			return RADIANT_SEC_OK;
+		}
+	} while (!atomic_cas(&c->ceil_inv, old,
+			     (atomic_val_t)(uint32_t)~max_epoch));
+	return RADIANT_SEC_OK;
 }
 
 int radiant_sec_compat_set_devnum(uint8_t ch, uint16_t devnum)
@@ -868,8 +946,7 @@ static int rx_tier1(struct compat_ctx *c, const uint8_t *pay, uint64_t t_sync)
 		wraps = full >> 16;
 		k = &c->k_auth;
 		if (wraps != c->wraps) {
-			if ((uint64_t)c->base_epoch + wraps >
-			    (uint64_t)0xFFFFFFFFu - RADIANT_SEC_EPOCH_HEADROOM) {
+			if (wraps_allowed(c, wraps) != RADIANT_SEC_OK) {
 				break;
 			}
 			radiant_sec_key_destroy(&tmp);
@@ -897,9 +974,7 @@ static int rx_tier1(struct compat_ctx *c, const uint8_t *pay, uint64_t t_sync)
 		radiant_sec_key_destroy(&c->k_auth);
 		c->k_auth = tmp;
 		memset(&tmp, 0, sizeof(tmp));
-		c->wraps = wraps;
-		c->epoch = c->base_epoch + wraps;
-		stat_bump(&c->stats.epoch_advances);
+		wraps_commit(c, wraps);
 	}
 	radiant_sec_key_destroy(&tmp);
 	if (rc != RADIANT_SEC_OK) {
@@ -997,6 +1072,14 @@ int radiant_sec_compat_rx(uint8_t ch, uint8_t sub, const uint8_t *pay,
 		return RADIANT_SEC_EINVAL;
 	}
 	if (pay == NULL || len < COMPAT_MSG) {
+		return RADIANT_SEC_EINVAL;
+	}
+	/* A context that has transmitted does not receive (review 2026-11-13
+	 * item 4): rx_tier1() may move the epoch, backwards too on first
+	 * contact, and a reflected Tier I page would otherwise move the epoch
+	 * this channel attests under. The radiant_sec.c master refusal's
+	 * compat twin. */
+	if (c->tx_t1_any || c->tx_msgs != 0u || c->ceil_inv != 0) {
 		return RADIANT_SEC_EINVAL;
 	}
 

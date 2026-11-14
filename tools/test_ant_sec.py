@@ -191,7 +191,8 @@ class TestStatus(unittest.TestCase):
             epoch=0x00ABCDEF, expected_index=0x1234,
             windows_verified=100, windows_unverified=3,
             dropped_non_broadcast=1, dropped_replay=2, dropped_policy=0,
-            epoch_advances=7, verdict=VERDICT_VERIFIED, enrolments=9)
+            epoch_advances=7, verdict=VERDICT_VERIFIED, enrolments=9,
+            dropped_direction=4)
         base.update(kw)
         return SecStatus(**base)
 
@@ -205,7 +206,7 @@ class TestStatus(unittest.TestCase):
         # Against bytes laid out by hand, from the 0xF4 description in
         # protocol/ant_wire.yaml. This is the test that would catch a field
         # inserted in the middle by a well-meaning edit.
-        body = bytearray(26)
+        body = bytearray(28)
         body[0] = 5           # channel
         body[1] = 1           # structure version
         body[2] = SW_CONF     # switches
@@ -222,6 +223,7 @@ class TestStatus(unittest.TestCase):
         body[22] = 66
         body[23] = VERDICT_UNVERIFIED
         body[24:26] = struct.pack("<H", 0x0201)  # enrolments
+        body[26:28] = struct.pack("<H", 0x0403)  # dropped_direction
 
         st = decode_status(bytes(body))
         self.assertEqual(5, st.channel)
@@ -241,12 +243,27 @@ class TestStatus(unittest.TestCase):
         self.assertEqual(VERDICT_UNVERIFIED, st.verdict)
         self.assertEqual(0x0201, st.enrolments,
                          "enrolments is not little-endian at [24..25]")
+        self.assertEqual(0x0403, st.dropped_direction,
+                         "dropped_direction is not little-endian at [26..27]")
 
-    def test_the_layout_is_26_bytes_at_version_1(self):
+    def test_the_layout_is_28_bytes_at_version_1(self):
         # Pinned literally, so a change to either constant has to be made on
         # purpose here as well as in ant_radio.h's ANTR_SEC_STATUS_LEN/_VERSION.
-        self.assertEqual(26, STATUS_LEN)
+        # The version stays 1 through the beta; the length tells the fields.
+        self.assertEqual(28, STATUS_LEN)
         self.assertEqual(1, STATUS_VERSION)
+
+    def test_a_26_byte_body_decodes_without_dropped_direction(self):
+        # The layout before [26..27] was appended: same version, shorter.
+        body = encode_status(self.sample())[:26]
+        st = decode_status(body)
+        self.assertIsNone(st.dropped_direction)
+        self.assertEqual(9, st.enrolments)
+
+    def test_dropped_direction_saturates_rather_than_wrapping(self):
+        st = self.sample(dropped_direction=70000)
+        self.assertEqual(0xFFFF,
+                         decode_status(encode_status(st)).dropped_direction)
 
     def test_counters_saturate_rather_than_wrapping(self):
         # A wrapped counter would let a long noisy run look quiet, and "quiet"
@@ -287,7 +304,7 @@ class TestStatus(unittest.TestCase):
 
     def test_a_short_body_is_refused_rather_than_padded(self):
         with self.assertRaises(ValueError):
-            decode_status(bytes(STATUS_LEN - 1))
+            decode_status(bytes(25))
 
     def test_an_unkeyed_channel_reads_as_clear_not_as_an_error(self):
         # antr_sec_status_get() answers with zeros for a channel nobody keyed,

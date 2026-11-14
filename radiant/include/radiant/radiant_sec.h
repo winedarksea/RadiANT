@@ -84,6 +84,13 @@ extern "C" {
  * here rather than beside its one user in radiant_sec_compat.h so a reader
  * checking a new code has one list to check against. */
 #define RADIANT_SEC_EREPLAY  -5
+/* Not now, later: a counter wrap would pass the epoch ceiling the epoch
+ * authority set (radiant_sec_set_epoch_ceiling()). Nothing is spent; the same
+ * call succeeds once the ceiling is raised. */
+#define RADIANT_SEC_EAGAIN   -6
+/* Refused in this state: radiant_sec_set_epoch() on a channel an epoch
+ * authority follows (it carries a ceiling). */
+#define RADIANT_SEC_ESTATE   -7
 
 /*
  * An opaque key handle. NEVER a `const uint8_t key[16]` at a call site.
@@ -538,7 +545,10 @@ int radiant_sec_tx_transform(uint8_t ch, uint8_t *pay, uint8_t len,
  *   RADIANT_SEC_RX_DROP   refused and counted. A non-broadcast frame carrying
  *                         a secured-range page lands here, which is what stops
  *                         an injector skipping the MAC by sending acknowledged
- *                         data instead of a broadcast
+ *                         data instead of a broadcast; so does a secured-range
+ *                         broadcast heard on a MASTER channel, which no
+ *                         legitimate slave sends and which would otherwise
+ *                         reach the epoch the master transmits under
  */
 #define RADIANT_SEC_RX_PLAIN 0
 #define RADIANT_SEC_RX_DEFER 1
@@ -597,6 +607,34 @@ void radiant_sec_deliver(uint8_t ch, const uint8_t *pay, uint8_t len,
 void radiant_sec_window_verdict(uint8_t ch, uint16_t window_start,
 				enum radiant_sec_verdict verdict);
 
+/*
+ * The epoch on channel `ch` has just advanced to `epoch` at a counter wrap,
+ * on the TX path or the RX path. Weak and empty by default.
+ *
+ * This is how an epoch authority learns which epochs have been USED, which a
+ * wrap does without any 0xF3 (docs/radiant-security.md 3.5). RUNS IN THE
+ * CALLER'S CONTEXT - the pump, under the port's lock, in the middle of a
+ * transform - so an override must only DEFER work (record the epoch, submit a
+ * work item) and must not block, write flash or call back into radiant_sec.
+ * node_ident.c's override persists the next free epoch from a work item and
+ * then raises the ceiling below.
+ */
+void radiant_sec_epoch_advanced(uint8_t ch, uint32_t epoch);
+
+/*
+ * A wrap on channel `ch` wants to advance to `epoch` but the ceiling is lower,
+ * so the transform was withheld (or the RX packet dropped). Weak and empty by
+ * default; same context rule as above - DEFER ONLY. Called on every refused
+ * attempt, so once per slot while TX is withheld. Without it a catch-up of
+ * more than one wrap (a sender silent for over one wrap) would wait forever
+ * for an advance the authority never hears of. node_ident.c's override
+ * reserves `epoch` (persists N = epoch + 1) and then raises the ceiling to it.
+ *
+ * Both hooks fire ONLY for a channel that carries a ceiling (an authority is
+ * following it); a channel nobody follows calls neither.
+ */
+void radiant_sec_epoch_wanted(uint8_t ch, uint32_t epoch);
+
 /* Lifecycle. No init call: the first SET_KEY allocates, unassign and reset
  * free. */
 int  radiant_sec_set_key(uint8_t ch, const uint8_t *root, size_t bits,
@@ -625,6 +663,46 @@ int  radiant_sec_configure(uint8_t ch, uint8_t switches, uint8_t w,
 
 int  radiant_sec_set_epoch(uint8_t ch, uint32_t epoch, uint64_t us_into_epoch,
 			   uint16_t period_counts);
+
+/*
+ * The highest epoch a counter wrap may advance this channel to. The default -
+ * a fresh context, and after release or reset - is no ceiling beyond the
+ * headroom limit above, so nothing changes unless an application sets one.
+ *
+ * A wrap that would pass the ceiling does not happen: secured TX is WITHHELD
+ * (radiant_sec_tx_transform() returns RADIANT_SEC_EAGAIN, the caller sends
+ * nothing secured) and radiant_sec_epoch_wanted() names the epoch it needs.
+ * TX resumes, by the full number of wraps owed, at the first slot after the
+ * authority has raised the ceiling to at least that epoch - a raise to less
+ * keeps it withheld. Unlike exhausting the headroom (permanent until a new
+ * epoch), nothing is spent. RX past the ceiling is dropped the same way.
+ *
+ * This is the epoch authority's reservation: it persists "next unused epoch"
+ * before raising the ceiling, so an epoch is never used that a reboot could
+ * issue again. While a ceiling is set, radiant_sec_set_epoch() is REFUSED
+ * (RADIANT_SEC_ESTATE): a host 0xF3 under the authority's root would run
+ * wraps nobody reserved. radiant_sec_set_key() clears it - a new root owes
+ * the old authority nothing - and so does a call here with max_epoch
+ * 0xFFFFFFFF, which is how the authority itself re-epochs its channel
+ * (clear, set_epoch, set the new ceiling).
+ *
+ * Thread context, under the port's lock, like set_epoch. Returns
+ * RADIANT_SEC_ENOKEY with no context.
+ */
+int  radiant_sec_set_epoch_ceiling(uint8_t ch, uint32_t max_epoch);
+
+/*
+ * Raise an existing ceiling; never lowers one, and does nothing on a channel
+ * with no ceiling (nobody follows it, or a new root ended the following). For
+ * the authority's deferred work: callable WITHOUT the port's lock. The store
+ * is a compare-and-swap against the value tested, so a concurrent set_key
+ * clearing the ceiling is never overwritten (no re-following). The remaining
+ * race - the channel released and its context re-allocated between the lookup
+ * and the CAS - lands on a context with no ceiling (a no-op) unless the
+ * authority itself re-armed it, and the authority only raises to epochs it
+ * has already reserved, so it cannot let an unreserved epoch be used.
+ */
+int  radiant_sec_raise_epoch_ceiling(uint8_t ch, uint32_t max_epoch);
 
 /* The on-air device number, which is in the nonce. Separate from the
  * provisioning-time base device number in the KDF: on a Tier 2 node the first
@@ -681,6 +759,15 @@ struct radiant_sec_stats {
 	uint32_t dropped_replay;
 	uint32_t dropped_policy;
 	uint32_t epoch_advances;
+	/*
+	 * Secured-range broadcasts refused because this channel TRANSMITS: heard
+	 * on a master channel (the pump also refuses, uncounted, anything queued
+	 * for a context whose TX has latched). A legitimate slave never sends one on a secured channel, so
+	 * each is a forgery or the master's own window reflected back - and
+	 * accepted, one could move the epoch the master transmits under
+	 * (docs/radiant-security.md 7.6).
+	 */
+	uint32_t dropped_direction;
 	/*
 	 * COMPLETED PAIRINGS ON THIS CHANNEL (docs/radiant-security.md 11.7) -
 	 * a security signal, not a diagnostic. Adding a receiver to a group

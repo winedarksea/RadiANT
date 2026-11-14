@@ -62,6 +62,10 @@ extern "C" {
 #define NODE_IDENT_EIO      -4
 /* node_ident_boot() has not run, or ran and failed. */
 #define NODE_IDENT_ESTATE   -5
+/* Not yet: an arm after the first needs a fresh epoch, and its reservation is
+ * still on its way to storage. Retry (the work queue lands it in milliseconds
+ * when storage is healthy). */
+#define NODE_IDENT_EAGAIN   -6
 
 /*
  * ── Provisioning ───────────────────────────────────────────────────────────
@@ -164,6 +168,51 @@ bool node_ident_wall_seconds(uint64_t *out);
  */
 int node_ident_arm_sec(uint8_t ch, uint16_t period_counts);
 int node_ident_arm_compat(uint8_t ch, uint64_t now_us, uint16_t period_counts);
+
+/*
+ * ── The epoch reservation (docs/radiant-security.md 3.5) ──────────────────
+ *
+ * A counter wrap moves a channel to epoch + 1 with no boot in between, so the
+ * boot counter alone would hand the next power-up an epoch already used. The
+ * node therefore persists N, the next epoch nobody has used:
+ *
+ *   boot:  E = max(N, boot counter, wall minutes); persist N = E + 2 (confirmed)
+ *          before E is used. node_ident_epoch() is E.
+ *   arm:   the channel gets E and an epoch ceiling of N - 1 = E + 1, so the
+ *          first wrap is already reserved.
+ *   wrap:  radiant calls radiant_sec_epoch_advanced() (compat: the compat
+ *          twin); this file's override only queues a work item on the system
+ *          work queue, which persists N = e + 2 and then raises every armed
+ *          channel's ceiling to N - 1. A second wrap before that lands is
+ *          withheld by radiant, not taken - the write has one whole wrap,
+ *          ~4.5 h at 4 Hz, to land, and is retried every second if it fails.
+ *
+ *   gap:   a sender silent for more than one wrap wants an epoch past the
+ *          ceiling; radiant_sec_epoch_wanted() reserves it the same way.
+ *   re-arm: only the FIRST arm of each kind in a boot gets E. Every later
+ *          arm - the same channel again after an unassign or re-key, or
+ *          another channel - gets the next unused epoch F = N, and returns
+ *          NODE_IDENT_EAGAIN until N = F + 2 is in storage; the caller
+ *          retries. No arm ever restarts the counter under an epoch an
+ *          earlier arm in this boot used.
+ *
+ * Epochs therefore step by about 2 per boot. One extra NVM write per boot and
+ * about one per wrap. These overrides make node_ident.c the owner of the
+ * epoch hooks in any image that links it; only channels armed through
+ * node_ident_arm_sec()/_arm_compat() are followed, and only while radiant
+ * still holds their ceiling. While it does, radiant refuses anyone else's
+ * set_epoch on the channel (a host 0xF3 gets RADIANT_SEC_ESTATE, which the
+ * host adapter answers as CHANNEL_IN_WRONG_STATE); a new root (set_key) or a
+ * release ends the following. Channel numbers 32 and up are refused (EINVAL).
+ *
+ * LIVE CHANNELS MUST DIFFER IN ROOT OR DEVICE NUMBER. Arms get distinct
+ * epochs, but a wrap on one live channel may reach an epoch a later arm took,
+ * so two channels transmitting AT THE SAME TIME under the same root and device
+ * number can still collide. Releasing one before arming the other is safe.
+ *
+ * node_ident_epoch_next() reports N as last confirmed in storage.
+ */
+int node_ident_epoch_next(uint32_t *out);
 
 /*
  * ── Pairing ────────────────────────────────────────────────────────────────

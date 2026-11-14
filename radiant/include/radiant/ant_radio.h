@@ -1181,12 +1181,14 @@ antr_err_t antr_sec_key_set(uint8_t channel, uint8_t bits, const uint8_t *key);
 antr_err_t antr_sec_epoch_set(uint8_t channel, uint8_t flags, uint32_t epoch,
 			      uint64_t us_into_epoch);
 
-/** 0xF4's payload length, in bytes. */
-#define ANTR_SEC_STATUS_LEN     26u
+/** 0xF4's payload length, in bytes. 28 since dropped_direction was appended
+ * at [26..27]; a 26-byte reply is the same version without it. */
+#define ANTR_SEC_STATUS_LEN     28u
 
 /** 0xF4's structure version, carried at [1]. Fields are only ever appended and
- * an offset is never reused; this goes up whenever a field is added or a
- * field's meaning changes. */
+ * an offset is never reused. It stays 1 throughout the beta, whatever is
+ * appended: a reader tells which fields exist from the body length and treats
+ * the version as a sanity check. */
 #define ANTR_SEC_STATUS_VERSION 1u
 
 /**

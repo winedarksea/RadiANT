@@ -428,12 +428,63 @@ just `X_CONF`:
 That rejection is only enforceable within a power cycle, because keys and state
 are wiped on reset. The obligation therefore sits with the **epoch authority** —
 the host, or the node application — and is normative: *persist the last epoch
-issued and never reissue it.* The recommended discharge, wherever a clock
-exists, is to define the epoch as **coarse real time**, minutes since a fixed
-RadiANT date: monotone for free, and it composes with the time-derived counter
-of section 3.1 because `0xF3` carries microseconds-into-epoch as well as the
-ordinal. Raw `0xF3` stays available for clockless hosts. NVM epoch ratcheting
-inside `radiant` is deferred.
+**used** and issue only epochs strictly greater than it.* "Used" is not
+"issued": a counter wrap (below) moves the channel to the next epoch with no
+`0xF3`, so the epoch to stay above is the one `0xF4` reports at `[6..9]`, wraps
+included. An authority that persisted only what it issued hands the next boot
+the epoch the last wrap already used, with the counter back at zero: the same
+keystream. The recommended discharge, wherever a clock exists, is to define the
+epoch as **coarse real time**, minutes since a fixed RadiANT date, and it
+composes with the time-derived counter of section 3.1 because `0xF3` carries
+microseconds-into-epoch as well as the ordinal. A clock alone is not enough:
+two boots inside the same minute read the same epoch, so a clocked authority
+still keeps the floor below. Raw `0xF3` stays available for clockless hosts.
+NVM epoch ratcheting inside `radiant` is deferred; `radiant` supplies the two
+mechanisms an authority needs instead.
+
+**The reservation scheme (the hostless node, `node_ident.c`).** The node
+persists `N`, the next epoch nobody has used, beside its boot counter. At boot
+it takes `E = max(N, boot counter, wall-clock minutes)`, persists `N = E + 2`
+with a confirmed write **before** `E` reaches `radiant`, and arms the channel
+with an **epoch ceiling** of `E + 1`
+(`radiant_sec_set_epoch_ceiling()`, and the compat equivalent). The first wrap
+therefore has an epoch already reserved for it, and a crash right after that
+wrap is covered: the next boot starts at `E + 2`. Each advance on a channel
+that carries a ceiling calls the weak hook `radiant_sec_epoch_advanced()` (on
+the spread-MAC surface, TX and RX alike; compat has
+`radiant_sec_compat_epoch_advanced()`, which fires on TX and on a receiver's
+epoch moves, and a compat context that has transmitted refuses compat RX
+outright, so a reflected Tier I page cannot move its epoch). The node's
+override only queues a work item, which persists `N = e + 2` and then raises
+the ceiling to `e + 1`. A wrap that would pass the ceiling is refused and
+secured TX is **withheld**; the refusal calls `radiant_sec_epoch_wanted()`
+(compat: `radiant_sec_compat_epoch_wanted()`) with the epoch it needs, so a
+catch-up of several wraps after a long silence is reserved the same way
+(`N = wanted + 1`, ceiling raised to it) and TX resumes at the first slot
+after the persist and the raise land; this
+is not the permanent `tx_spent` state that exhausting the headroom causes. The
+work item has one whole wrap to land, about 4.5 h at 4 Hz (at least 18 h on
+compat, 15 days at T = 20 s), and a write that never lands fails closed
+(retried with backoff, capped at 30 s).
+
+Three rules keep the following honest. While the node follows a channel (it
+carries a ceiling), `radiant` refuses anyone else's `set_epoch` there: a host
+`0xF3` under the node's root would run wraps nobody reserved, and the next boot
+could issue one of them again, so it is answered `CHANNEL_IN_WRONG_STATE`. A
+new root (`set_key`) or a release ends the following; the hooks then stop
+firing there, and the work item only ever *raises* an existing ceiling (a
+compare-and-swap, so it cannot re-follow a channel a re-key just let go). Only
+the first arm of each kind in a boot gets `E`: every later arm, whether the
+same channel again or another under the same root, takes the next unused epoch
+once its reservation is durable, so no arm restarts the counter under an epoch
+already used. And channels transmitting at the same time must differ in root
+key or device number, because a wrap on one may reach an epoch a later arm
+took. The same floor stops a same-minute
+wall-clock reboot reusing an epoch. Epochs step by about 2 per boot, so
+forward searches (compat's, the descriptor's 16-epoch span) still find them;
+a scheme that spaced boots far apart, such as `boot_counter << 12`, would not.
+Flash cost: one extra write per boot and about one per wrap, about 5 a day at
+4 Hz continuous.
 
 **A counter wrap advances the epoch by 1, on both sides.** The 16-bit counter
 was sized against 128-second epochs, where it could not wrap. With the epoch
@@ -789,7 +840,9 @@ quietly edited: the breakdown above is a block cipher, two modes, a KDF, a
 windowing state machine and a serial surface, with no fat in it. The guess was
 low; the code is not bloated. The ceilings are now 6144 B of text and 6144 B of
 bss for the transforms (bss 7168 B since D1-1, keeping its 867 B of absolute
-headroom), and a separate 3584 B of text for pairing — measured
+headroom; text 6656 B since the epoch-reservation and master-refusal fixes of
+the 2026-11-13 review, measured at 6184 B against 6112 B before), and a
+separate 3584 B of text for pairing — measured
 figures with about 20% headroom, and the per-symbol breakdown above is what the
 next change gets compared against.
 
@@ -1063,6 +1116,25 @@ The floor is cleared wherever the window state is (`0xF3`, configure, a
 `try_devnum` trial, a wrap). It costs 2 B per context, in an alignment hole, and
 doubles as the "has a verified window re-anchored yet" flag of section 3.1.
 
+**A master refuses secured pages.** A master's RX shares its context with its
+TX: the same epoch, the same keys. If it ran the RX path on a broadcast heard in
+its reply window, one forged packet in the last ~128 slots before a wrap would
+advance the shared epoch early, TX would advance again at its own wrap, and the
+master would sit one epoch ahead of every receiver until a new `0xF3`. A
+receiver heals from an early advance in about 32 s; a master would not. And the
+nonce carries no direction, so a master's own windows reflected back to it
+would verify. Both are closed the same way: a legitimate slave never sends a
+secured-range broadcast on a secured channel (the port keeps a slave's
+broadcast off one), so `radiant_sec_rx_ingest()` drops any secured-range
+broadcast heard on a master channel, before it is queued, and counts it in
+`0xF4`'s `dropped_direction` (`[26..27]`). Plain pages, the descriptor and the
+common pages still flow, so slave replies keep working, and an unsecured
+channel pays nothing extra: the check sits behind the armed and page-range
+tests. As defence in depth the pump refuses any context that has latched TX,
+so no RX path can move a transmitting context's epoch. Reflection is therefore
+closed by the master refusal, **not** by a direction bit in the nonce; the
+nonce layout is unchanged.
+
 What the floor and the verified-only anchor of section 3.1 still leave open,
 stated rather than fixed:
 
@@ -1072,7 +1144,8 @@ stated rather than fixed:
   UNVERIFIED (or dropped, under the policy) until its own wrap, at most about
   32 s, and the link heals by itself: there is no permanent desync. The only way
   to prevent it is to trial-verify under both epochs, which costs two KDFs per
-  forged packet. That is a compute DoS, which is worse.
+  forged packet. That is a compute DoS, which is worse. This is a
+  receiver-only limit: a master never runs secured RX at all (below).
 - **The first verified window after a reset** can still be a genuine window
   replayed up to 128 periods late. That is the existing slack, once per reset.
 - **Forged packets can still close or break an open window.** That is

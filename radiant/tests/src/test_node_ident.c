@@ -24,7 +24,10 @@
 
 #include <string.h>
 
+#include <radiant/radiant_channel.h>
+#include <radiant/radiant_radio_hal.h>
 #include <radiant/radiant_sec.h>
+#include <radiant/radiant_sec_compat.h>
 
 #include "fake_nvm.h"
 #include "node_ident.h"
@@ -75,6 +78,17 @@ static const uint8_t test_root[16] = {
 	0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF,
 };
 
+/* The node's clock, for the same-minute reboot case. Strong, displacing
+ * node_ident.c's weak "no clock"; answers "no clock" unless a test sets it. */
+static bool     wall_valid;
+static uint64_t wall_s;
+
+bool node_ident_wall_seconds(uint64_t *out)
+{
+	*out = wall_s;
+	return wall_valid;
+}
+
 static void node_before(void *f)
 {
 	ARG_UNUSED(f);
@@ -82,8 +96,23 @@ static void node_before(void *f)
 #if defined(CONFIG_RADIANT_TEST_FAKE_RNG)
 	fake_rng_reset();
 #endif
+	wall_valid = false;
+	wall_s = 0u;
 	node_ident_reset();
 	radiant_sec_reset();
+	radiant_sec_compat_reset();
+}
+
+/* And after: node_ident.c owns radiant_sec_epoch_advanced() in this image, so
+ * a booted identity with an armed channel left behind would follow - and put
+ * ceilings on - the next suite's channels. node_ident_reset() never fails, so
+ * this after() cannot skip anything behind it. */
+static void node_after(void *f)
+{
+	ARG_UNUSED(f);
+	node_ident_reset();
+	radiant_sec_reset();
+	radiant_sec_compat_reset();
 }
 
 /* A factory-provisioned, powered-up node. Most tests start here. */
@@ -93,7 +122,7 @@ static void provisioned_and_booted(void)
 	zassert_equal(NODE_IDENT_OK, node_ident_boot());
 }
 
-ZTEST_SUITE(node_ident, NULL, NULL, node_before, NULL, NULL);
+ZTEST_SUITE(node_ident, NULL, NULL, node_before, node_after, NULL);
 
 /* ── Provisioning ─────────────────────────────────────────────────────────── */
 
@@ -402,6 +431,8 @@ ZTEST(node_ident, test_provisioning_zeroes_both_counters_with_the_key)
 	zassert_equal(0u, v);
 	zassert_true(fake_nvm_peek_u32(NODE_NVM_KEY_PAIR, &v));
 	zassert_equal(0u, v);
+	zassert_true(fake_nvm_peek_u32(NODE_NVM_KEY_EPOCH, &v));
+	zassert_equal(0u, v, "the epoch reservation outlived its key");
 
 	/* And the identity moved with it. */
 	uint16_t devnum;
@@ -476,11 +507,14 @@ ZTEST(node_ident, test_a_store_that_does_not_stick_is_caught_at_the_write)
 	zassert_equal(NODE_IDENT_ESTATE, node_ident_epoch(&v));
 }
 
-ZTEST(node_ident, test_one_write_per_boot_and_one_per_pairing_window)
+ZTEST(node_ident, test_two_writes_per_boot_and_one_per_pairing_window)
 {
 	/* ADR 0009's flash-wear argument is a write frequency - "once per boot,
 	 * once per pairing window" - and it is the whole reason this design was
-	 * acceptable where the per-epoch ratchet was not. So it is counted. */
+	 * acceptable where the per-epoch ratchet was not. So it is counted. The
+	 * epoch reservation (radiant-security.md 3.5) adds one write per boot,
+	 * the next free epoch, and one per counter wrap (counted below in the
+	 * reservation tests). */
 	provisioned_and_booted();
 
 	uint32_t base = fake_nvm_store_count();
@@ -488,8 +522,8 @@ ZTEST(node_ident, test_one_write_per_boot_and_one_per_pairing_window)
 	fake_nvm_reboot();
 	node_ident_reset();
 	zassert_equal(NODE_IDENT_OK, node_ident_boot());
-	zassert_equal(base + 1u, fake_nvm_store_count(),
-		      "a boot cost more than one write");
+	zassert_equal(base + 2u, fake_nvm_store_count(),
+		      "a boot cost other than two writes");
 
 	base = fake_nvm_store_count();
 	zassert_equal(NODE_IDENT_OK, node_ident_pair_window_open(NULL));
@@ -507,22 +541,51 @@ ZTEST(node_ident, test_one_write_per_boot_and_one_per_pairing_window)
 
 /* ── The epoch ────────────────────────────────────────────────────────────── */
 
-ZTEST(node_ident, test_epoch_is_the_boot_counter_when_there_is_no_clock)
+ZTEST(node_ident, test_epoch_steps_past_its_reservation_when_there_is_no_clock)
 {
 	uint32_t epoch;
 	uint32_t counter;
+	uint32_t next;
 
+	/* First boot of a fresh store: the boot counter is the floor. */
 	provisioned_and_booted();
 	zassert_equal(NODE_IDENT_OK, node_ident_epoch(&epoch));
 	zassert_equal(NODE_IDENT_OK, node_ident_boot_counter(&counter));
 	zassert_equal(counter, epoch);
 	zassert_equal(1u, epoch);
 
+	/* E + 1 is reserved for this session's first wrap, so N = E + 2 is in
+	 * storage before E is used, and the next boot starts there: epochs step
+	 * by two per boot, while the boot counter keeps counting boots. */
+	zassert_true(fake_nvm_peek_u32(NODE_NVM_KEY_EPOCH, &next));
+	zassert_equal(3u, next);
+	zassert_equal(NODE_IDENT_OK, node_ident_epoch_next(&next));
+	zassert_equal(3u, next);
+
 	fake_nvm_reboot();
 	node_ident_reset();
 	zassert_equal(NODE_IDENT_OK, node_ident_boot());
 	zassert_equal(NODE_IDENT_OK, node_ident_epoch(&epoch));
-	zassert_equal(2u, epoch);
+	zassert_equal(NODE_IDENT_OK, node_ident_boot_counter(&counter));
+	zassert_equal(3u, epoch);
+	zassert_equal(2u, counter, "the boot counter changed meaning");
+}
+
+ZTEST(node_ident, test_a_store_without_an_epoch_record_boots_from_the_counter)
+{
+	uint32_t epoch;
+	uint32_t v = 41u;
+
+	/* A store an older image wrote: boot counter, no N record. */
+	provisioned_and_booted();
+	zassert_equal(NODE_NVM_OK,
+		      node_nvm_store(NODE_NVM_KEY_BOOT, &v, sizeof(v)));
+	fake_nvm_forget(NODE_NVM_KEY_EPOCH);
+	fake_nvm_reboot();
+	node_ident_reset();
+	zassert_equal(NODE_IDENT_OK, node_ident_boot());
+	zassert_equal(NODE_IDENT_OK, node_ident_epoch(&epoch));
+	zassert_equal(42u, epoch);
 }
 
 ZTEST(node_ident, test_epoch_from_a_clock_is_coarse_real_time)
@@ -599,6 +662,7 @@ ZTEST(node_ident, test_core_still_refuses_an_epoch_that_went_backwards)
 	zassert_equal(NODE_IDENT_OK, node_ident_boot());
 
 	uint32_t epoch;
+
 
 	zassert_equal(NODE_IDENT_OK, node_ident_epoch(&epoch));
 	zassert_equal(1u, epoch);
@@ -893,3 +957,493 @@ ZTEST(node_ident, test_pair_begin_fails_closed_on_a_write_failure)
 }
 
 #endif /* CONFIG_RADIANT_SEC_PAIRING_X25519 */
+
+/* ── The epoch reservation (review 2026-11-13 item 1) ─────────────────────── */
+
+#define TX_NODE_CH 0u
+#define RX_NODE_CH 1u
+
+static uint64_t node_anchor;
+
+static uint64_t node_slot_t(uint32_t slot)
+{
+	return node_anchor +
+	       (uint64_t)slot * radiant_channel_counts_to_us(TEST_PERIOD);
+}
+
+static void key_conf(uint8_t ch, uint8_t switches)
+{
+	zassert_ok(radiant_sec_set_key(ch, test_root, 128, VECTOR_DEVNUM));
+	zassert_ok(radiant_sec_configure(ch, switches, 2u,
+					 RADIANT_SEC_PAGE_LO_DEFAULT,
+					 RADIANT_SEC_PAGE_HI_DEFAULT));
+}
+
+/* A booted node with channel 0 armed as its secured transmitter. */
+static uint32_t booted_and_armed(void)
+{
+	uint32_t epoch;
+
+	provisioned_and_booted();
+	key_conf(TX_NODE_CH, RADIANT_SEC_SW_CONF);
+	zassert_equal(NODE_IDENT_OK,
+		      node_ident_arm_sec(TX_NODE_CH, TEST_PERIOD));
+	node_anchor = (uint64_t)radiant_radio_now();
+	zassert_equal(NODE_IDENT_OK, node_ident_epoch(&epoch));
+	return epoch;
+}
+
+static int node_tx(uint32_t slot)
+{
+	uint8_t pay[8] = { 0x05u, 0xAAu, 1, 2, 3, 4, 5, 6 };
+
+	return radiant_sec_tx_transform(TX_NODE_CH, pay, sizeof(pay),
+					node_slot_t(slot));
+}
+
+static uint32_t sec_epoch(uint8_t ch)
+{
+	struct radiant_sec_state st;
+
+	radiant_sec_get_state(ch, &st);
+	return st.epoch;
+}
+
+static uint32_t stored_next(void)
+{
+	uint32_t v = 0u;
+
+	zassert_true(fake_nvm_peek_u32(NODE_NVM_KEY_EPOCH, &v));
+	return v;
+}
+
+/* Let the system work queue run node_ident's persist item. */
+static void let_work_run(void)
+{
+	k_sleep(K_MSEC(20));
+}
+
+/* Holds the system work queue, so a test can reboot "before the work item
+ * runs" deterministically rather than by racing it. */
+static K_SEM_DEFINE(wq_hold_sem, 0, 1);
+
+static void wq_hold_fn(struct k_work *work)
+{
+	ARG_UNUSED(work);
+	(void)k_sem_take(&wq_hold_sem, K_FOREVER);
+}
+
+static K_WORK_DEFINE(wq_hold_work, wq_hold_fn);
+
+static void wq_hold(void)
+{
+	k_sem_reset(&wq_hold_sem);
+	zassert_true(k_work_submit(&wq_hold_work) >= 0);
+	k_sleep(K_MSEC(2));     /* let it start and block */
+}
+
+static void wq_release(void)
+{
+	k_sem_give(&wq_hold_sem);
+	let_work_run();
+}
+
+static void node_reboot(void)
+{
+	fake_nvm_reboot();
+	node_ident_reset();
+	radiant_sec_reset();
+	zassert_equal(NODE_IDENT_OK, node_ident_boot());
+}
+
+ZTEST(node_ident, test_a_wrap_then_a_reboot_never_reuses_an_epoch)
+{
+	uint32_t e0;
+	uint32_t e1;
+
+	e0 = booted_and_armed();
+	zassert_ok(node_tx(0u));
+	zassert_ok(node_tx(65536u), "the first wrap is reserved and must go");
+	zassert_equal(e0 + 1u, sec_epoch(TX_NODE_CH));
+
+	/* The hook fired on the TX advance: N moves to (E + 1) + 2. */
+	let_work_run();
+	zassert_equal(e0 + 3u, stored_next(),
+		      "the TX wrap's epoch was not persisted");
+
+	node_reboot();
+	zassert_equal(NODE_IDENT_OK, node_ident_epoch(&e1));
+	zassert_true(e1 > e0 + 1u,
+		     "boot epoch %u reuses one a wrap already used (%u)",
+		     e1, e0 + 1u);
+}
+
+ZTEST(node_ident, test_a_reboot_before_the_persist_runs_still_skips_the_wrap)
+{
+	uint32_t e0;
+	uint32_t e1;
+
+	e0 = booted_and_armed();
+	zassert_ok(node_tx(0u));
+
+	wq_hold();
+	zassert_ok(node_tx(65536u));
+	zassert_equal(e0 + 1u, sec_epoch(TX_NODE_CH));
+	/* The wrap happened and nothing new reached storage yet... */
+	zassert_equal(e0 + 2u, stored_next());
+
+	/* ...and the power fails here. The boot-time reservation already
+	 * covered E + 1. */
+	node_reboot();
+	zassert_equal(NODE_IDENT_OK, node_ident_epoch(&e1));
+	wq_release();
+	zassert_equal(e0 + 2u, e1);
+	zassert_true(e1 > e0 + 1u, "the wrap's epoch was issued again");
+	/* The cancelled item never wrote a stale N over the new one. */
+	zassert_equal(e1 + 2u, stored_next());
+}
+
+ZTEST(node_ident, test_the_second_wrap_waits_for_its_reservation)
+{
+	uint32_t e0;
+	uint32_t writes;
+
+	e0 = booted_and_armed();
+	zassert_ok(node_tx(0u));
+
+	wq_hold();
+	zassert_ok(node_tx(65536u));
+	/* The second wrap's epoch is not reserved yet: withheld, not spent. */
+	zassert_equal(RADIANT_SEC_EAGAIN, node_tx(2u * 65536u));
+	zassert_equal(e0 + 1u, sec_epoch(TX_NODE_CH));
+
+	writes = fake_nvm_store_count();
+	wq_release();
+	zassert_equal(writes + 1u, fake_nvm_store_count(),
+		      "a wrap cost other than one write");
+	zassert_ok(node_tx(2u * 65536u + 1u),
+		   "TX did not resume once the reservation landed");
+	zassert_equal(e0 + 2u, sec_epoch(TX_NODE_CH));
+	let_work_run();
+	zassert_equal(e0 + 4u, stored_next());
+}
+
+ZTEST(node_ident, test_a_failed_persist_holds_the_ceiling_and_retries)
+{
+	uint32_t e0;
+
+	e0 = booted_and_armed();
+	zassert_ok(node_tx(0u));
+
+	fake_nvm_fail_stores(1u);
+	zassert_ok(node_tx(65536u));
+	let_work_run();
+	zassert_equal(e0 + 2u, stored_next(), "a failed write moved N");
+	zassert_equal(RADIANT_SEC_EAGAIN, node_tx(2u * 65536u),
+		      "the ceiling went up without N in storage");
+
+	/* The retry lands a second later. */
+	k_sleep(K_MSEC(1100));
+	zassert_equal(e0 + 3u, stored_next());
+	zassert_ok(node_tx(2u * 65536u + 1u));
+}
+
+ZTEST(node_ident, test_the_hook_follows_an_rx_advance_too)
+{
+	uint8_t  air[8] = { 0x05u, 0x00u, 1, 2, 3, 4, 5, 6 };
+	uint32_t e0;
+
+	/* The same node receiving: the RX path advances the epoch at a wrap
+	 * too, and that epoch is just as used. */
+	provisioned_and_booted();
+	key_conf(RX_NODE_CH, RADIANT_SEC_SW_AUTH);
+	zassert_equal(NODE_IDENT_OK,
+		      node_ident_arm_sec(RX_NODE_CH, TEST_PERIOD));
+	node_anchor = (uint64_t)radiant_radio_now();
+	zassert_equal(NODE_IDENT_OK, node_ident_epoch(&e0));
+
+	/* Counter 0 heard at slot 65536: one wrap. */
+	zassert_equal(RADIANT_SEC_RX_DEFER,
+		      radiant_sec_rx_ingest(RX_NODE_CH, air, 8u, true,
+					    node_slot_t(65536u)));
+	radiant_sec_pump();
+	zassert_equal(e0 + 1u, sec_epoch(RX_NODE_CH));
+	let_work_run();
+	zassert_equal(e0 + 3u, stored_next(),
+		      "the RX wrap's epoch was not persisted");
+}
+
+ZTEST(node_ident, test_a_channel_node_ident_did_not_arm_is_not_followed)
+{
+	uint8_t  pay[8] = { 0x05u, 0xAAu, 1, 2, 3, 4, 5, 6 };
+	uint32_t writes;
+
+	provisioned_and_booted();
+	key_conf(TX_NODE_CH, RADIANT_SEC_SW_CONF);
+	zassert_ok(radiant_sec_set_epoch(TX_NODE_CH, 100u, 0u, TEST_PERIOD));
+	node_anchor = (uint64_t)radiant_radio_now();
+	writes = fake_nvm_store_count();
+	zassert_ok(radiant_sec_tx_transform(TX_NODE_CH, pay, 8u,
+					    node_slot_t(0u)));
+	zassert_ok(radiant_sec_tx_transform(TX_NODE_CH, pay, 8u,
+					    node_slot_t(65536u)));
+	let_work_run();
+	zassert_equal(writes, fake_nvm_store_count());
+}
+
+ZTEST(node_ident, test_two_boots_in_one_wall_clock_minute_get_two_epochs)
+{
+	uint32_t e0;
+	uint32_t e1;
+
+	/* A clock 10 000 minutes past the base: the clock dominates the boot
+	 * counter, and both boots read the same minute. */
+	wall_valid = true;
+	wall_s = NODE_IDENT_EPOCH_BASE_S + 600000ull + 7ull;
+	provisioned_and_booted();
+	zassert_equal(NODE_IDENT_OK, node_ident_epoch(&e0));
+	zassert_equal(10000u, e0);
+
+	wall_s += 30ull;        /* same minute */
+	node_reboot();
+	zassert_equal(NODE_IDENT_OK, node_ident_epoch(&e1));
+	zassert_true(e1 > e0, "a same-minute reboot reused epoch %u", e0);
+	zassert_equal(e0 + 2u, e1);
+
+	/* A clock that later runs ahead still wins. */
+	wall_s += 3600ull;
+	node_reboot();
+	zassert_equal(NODE_IDENT_OK, node_ident_epoch(&e1));
+	zassert_equal(10060u, e1);
+}
+
+ZTEST(node_ident, test_an_epoch_reservation_that_cannot_persist_is_no_boot)
+{
+	uint32_t v;
+
+	zassert_equal(NODE_IDENT_OK, node_ident_provision(k_dev));
+	/* The boot counter write succeeds; the reservation's does not. */
+	fake_nvm_fail_stores_after(1u, 1u);
+	zassert_equal(NODE_IDENT_EIO, node_ident_boot());
+	zassert_equal(NODE_IDENT_ESTATE, node_ident_epoch(&v));
+}
+
+#if defined(CONFIG_RADIANT_SEC_COMPAT)
+ZTEST(node_ident, test_a_compat_wrap_is_reserved_and_followed)
+{
+	uint8_t  body[RADIANT_SEC_COMPAT_BODY_BYTES];
+	uint64_t t0 = 1000000u;
+	uint64_t wrap_us = 65536ull * RADIANT_SEC_COMPAT_T_DEFAULT_S *
+			   1000000ull;
+	uint32_t e0;
+
+	provisioned_and_booted();
+	zassert_equal(NODE_IDENT_OK, node_ident_epoch(&e0));
+	zassert_ok(radiant_sec_compat_set_key(TX_NODE_CH, test_root, 128,
+					      VECTOR_DEVNUM));
+	zassert_equal(NODE_IDENT_OK,
+		      node_ident_arm_compat(TX_NODE_CH, t0, TEST_PERIOD));
+
+	zassert_true(radiant_sec_compat_tx_attest(TX_NODE_CH, t0, body,
+						  sizeof(body)) >= 0);
+	wq_hold();
+	zassert_true(radiant_sec_compat_tx_attest(TX_NODE_CH, t0 + wrap_us,
+						  body, sizeof(body)) > 0,
+		     "the reserved first compat wrap was refused");
+	zassert_equal(RADIANT_SEC_EAGAIN,
+		      radiant_sec_compat_tx_attest(TX_NODE_CH,
+						   t0 + 2u * wrap_us, body,
+						   sizeof(body)),
+		      "a second compat wrap ran ahead of its reservation");
+	wq_release();
+	zassert_equal(e0 + 3u, stored_next());
+	zassert_true(radiant_sec_compat_tx_attest(TX_NODE_CH,
+						  t0 + 2u * wrap_us, body,
+						  sizeof(body)) > 0);
+}
+#endif
+
+/* ── Review follow-ups (2026-11-13) ──────────────────────────────────────── */
+
+/* Item 1: a sender silent for more than one wrap catches up by two at once.
+ * The ceiling (E + 1) refuses it; the _wanted hook reserves E + 2 and raises
+ * the ceiling, and TX resumes at the next slot instead of never. */
+ZTEST(node_ident, test_a_tx_gap_of_two_wraps_is_reserved_and_resumes)
+{
+	uint32_t e0;
+	uint32_t e1;
+
+	e0 = booted_and_armed();
+	zassert_ok(node_tx(0u));
+
+	zassert_equal(RADIANT_SEC_EAGAIN, node_tx(2u * 65536u),
+		      "two wraps at once went past the reservation");
+	zassert_equal(e0, sec_epoch(TX_NODE_CH));
+	let_work_run();
+	zassert_equal(e0 + 3u, stored_next(),
+		      "the wanted epoch was not reserved");
+
+	zassert_ok(node_tx(2u * 65536u + 1u),
+		   "TX stayed withheld after a two-wrap gap");
+	zassert_equal(e0 + 2u, sec_epoch(TX_NODE_CH));
+	let_work_run();
+	zassert_equal(e0 + 4u, stored_next());
+
+	/* And the next boot is above both epochs the gap used. */
+	node_reboot();
+	zassert_equal(NODE_IDENT_OK, node_ident_epoch(&e1));
+	zassert_equal(e0 + 4u, e1);
+}
+
+/* Re-review M2: only the first arm in a boot gets E. A re-arm of the same
+ * channel, and an arm of another channel under the same root and device
+ * number after the first was released, each get a fresh epoch - after
+ * NODE_IDENT_EAGAIN until its reservation is durable - so no arm restarts the
+ * counter under an epoch an earlier arm used. */
+ZTEST(node_ident, test_every_arm_after_the_first_gets_a_fresh_epoch)
+{
+	uint32_t e0;
+	uint32_t e1;
+	uint32_t e2;
+
+	e0 = booted_and_armed();
+	zassert_equal(e0, sec_epoch(TX_NODE_CH));
+
+	/* The same channel, re-keyed under the same root: EAGAIN, then F. */
+	radiant_sec_channel_release(TX_NODE_CH);
+	key_conf(TX_NODE_CH, RADIANT_SEC_SW_CONF);
+	zassert_equal(NODE_IDENT_EAGAIN,
+		      node_ident_arm_sec(TX_NODE_CH, TEST_PERIOD));
+	let_work_run();
+	zassert_equal(NODE_IDENT_OK,
+		      node_ident_arm_sec(TX_NODE_CH, TEST_PERIOD));
+	e1 = sec_epoch(TX_NODE_CH);
+	zassert_true(e1 > e0 + 1u, "re-arm reused epoch %u (E %u)", e1, e0);
+	zassert_equal(e1 + 2u, stored_next(), "the fresh epoch was not reserved");
+
+	/* Re-armed again without a release (it carries the node's ceiling). */
+	zassert_equal(NODE_IDENT_EAGAIN,
+		      node_ident_arm_sec(TX_NODE_CH, TEST_PERIOD));
+	let_work_run();
+	zassert_equal(NODE_IDENT_OK,
+		      node_ident_arm_sec(TX_NODE_CH, TEST_PERIOD));
+	e2 = sec_epoch(TX_NODE_CH);
+	zassert_true(e2 > e1 + 1u);
+
+	/* Another channel, same root and devnum, after a release. */
+	radiant_sec_channel_release(TX_NODE_CH);
+	key_conf(RX_NODE_CH, RADIANT_SEC_SW_CONF);
+	zassert_equal(NODE_IDENT_EAGAIN,
+		      node_ident_arm_sec(RX_NODE_CH, TEST_PERIOD));
+	let_work_run();
+	zassert_equal(NODE_IDENT_OK,
+		      node_ident_arm_sec(RX_NODE_CH, TEST_PERIOD));
+	zassert_true(sec_epoch(RX_NODE_CH) > e2 + 1u,
+		     "a cross-channel arm under one root reused an epoch");
+
+	zassert_equal(NODE_IDENT_EINVAL, node_ident_arm_sec(32u, TEST_PERIOD));
+
+	/* The next boot is above every epoch this one handed out. */
+	e1 = sec_epoch(RX_NODE_CH);
+	node_reboot();
+	zassert_equal(NODE_IDENT_OK, node_ident_epoch(&e2));
+	zassert_true(e2 > e1 + 1u);
+}
+
+/* Re-review M1: a host 0xF3 on a channel the node follows is refused (it
+ * would run unreserved wraps under the node root). A new root ends the
+ * following, and then that channel's wraps neither drive N nor get capped. */
+ZTEST(node_ident, test_a_host_epoch_on_a_followed_channel_is_refused)
+{
+	uint8_t  pay[8] = { 0x05u, 0xAAu, 1, 2, 3, 4, 5, 6 };
+	uint32_t e0;
+	uint32_t n0;
+	uint32_t e1;
+
+	e0 = booted_and_armed();
+	n0 = stored_next();
+
+	zassert_equal(RADIANT_SEC_ESTATE,
+		      radiant_sec_set_epoch(TX_NODE_CH, 0x10000000u, 0u,
+					    TEST_PERIOD),
+		      "a host epoch replaced the node's on its own root");
+	zassert_equal(e0, sec_epoch(TX_NODE_CH));
+
+	/* A host that re-keys owns the channel, and the node lets go. */
+	zassert_ok(radiant_sec_set_key(TX_NODE_CH, test_root, 128,
+				       VECTOR_DEVNUM));
+	zassert_ok(radiant_sec_set_epoch(TX_NODE_CH, 0x10000000u, 0u,
+					 TEST_PERIOD));
+	node_anchor = (uint64_t)radiant_radio_now();
+	zassert_ok(radiant_sec_tx_transform(TX_NODE_CH, pay, 8u,
+					    node_slot_t(0u)));
+	zassert_ok(radiant_sec_tx_transform(TX_NODE_CH, pay, 8u,
+					    node_slot_t(3u * 65536u)),
+		   "the node still capped a channel the host re-keyed");
+	let_work_run();
+	zassert_equal(n0, stored_next(), "a host epoch drove the node's N");
+
+	node_reboot();
+	zassert_equal(NODE_IDENT_OK, node_ident_epoch(&e1));
+	zassert_equal(n0, e1);
+}
+
+/* Item 3 too: a released, host-re-keyed channel is not capped by the work
+ * item another armed channel's wrap queues. */
+ZTEST(node_ident, test_a_released_channel_is_not_capped_by_another_wrap)
+{
+	uint8_t pay[8] = { 0x05u, 0xAAu, 1, 2, 3, 4, 5, 6 };
+
+	booted_and_armed();
+	key_conf(RX_NODE_CH, RADIANT_SEC_SW_CONF);
+	zassert_equal(NODE_IDENT_EAGAIN,
+		      node_ident_arm_sec(RX_NODE_CH, TEST_PERIOD));
+	let_work_run();
+	zassert_equal(NODE_IDENT_OK,
+		      node_ident_arm_sec(RX_NODE_CH, TEST_PERIOD));
+
+	radiant_sec_channel_release(RX_NODE_CH);
+	key_conf(RX_NODE_CH, RADIANT_SEC_SW_CONF);
+	zassert_ok(radiant_sec_set_epoch(RX_NODE_CH, 5000u, 0u, TEST_PERIOD));
+
+	zassert_ok(node_tx(0u));
+	zassert_ok(node_tx(65536u));
+	let_work_run();     /* raises ceilings on every armed channel */
+
+	zassert_ok(radiant_sec_tx_transform(RX_NODE_CH, pay, 8u,
+					    node_slot_t(0u)));
+	zassert_ok(radiant_sec_tx_transform(RX_NODE_CH, pay, 8u,
+					    node_slot_t(3u * 65536u)),
+		   "the work item capped a channel it no longer follows");
+	zassert_equal(5003u, sec_epoch(RX_NODE_CH));
+}
+
+/* Item 6: a persist that keeps failing backs off rather than retrying every
+ * second; it still lands once storage recovers. */
+ZTEST(node_ident, test_a_failing_persist_backs_off)
+{
+	uint32_t e0;
+	uint32_t stores;
+
+	e0 = booted_and_armed();
+	zassert_ok(node_tx(0u));
+
+	fake_nvm_fail_stores(100u);
+	stores = fake_nvm_store_count();
+	zassert_ok(node_tx(65536u));
+	k_sleep(K_MSEC(3500));
+	/* Tries at ~0, 1, 3 s: three, not four. A withheld second wrap's
+	 * _wanted hooks must not cut the backoff short either. */
+	for (int i = 0; i < 5; i++) {
+		zassert_equal(RADIANT_SEC_EAGAIN,
+			      node_tx(2u * 65536u + (uint32_t)i));
+	}
+	zassert_true(fake_nvm_store_count() - stores <= 3u,
+		     "%u persist tries in 3.5 s",
+		     fake_nvm_store_count() - stores);
+	fake_nvm_fail_stores(0u);
+	k_sleep(K_MSEC(4500));
+	/* N covers the second wrap the withheld slots wanted (e0 + 2). */
+	zassert_equal(e0 + 3u, stored_next(),
+		      "the persist never landed after storage recovered");
+}

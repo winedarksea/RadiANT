@@ -10,7 +10,9 @@
  *
  * Deliberately NOT in the list: radiant_sec_rx_ingest() (ISR context, no lock
  * is possible), radiant_sec_channel_is_secured() and radiant_sec_last_verdict()
- * (single-word reads). See CONFIG_RADIANT_SEC_LOCK_CHECK.
+ * (single-word reads), and radiant_sec_raise_epoch_ceiling() (a single-word,
+ * upward-only store an epoch authority makes from its own work item). See
+ * CONFIG_RADIANT_SEC_LOCK_CHECK.
  */
 
 #include <zephyr/ztest.h>

@@ -1678,19 +1678,22 @@
  * advances since the key was installed (u8, saturating); [23] the most recent
  * verdict - 0 clear, 1 verified, 2 unverified; [24..25] enrolments, the
  * pairings on this channel that took (the 0xF5 host exchange and the over-air
- * enrolment window alike; attempts that were refused are not counted). All
- * counters are u16 LE and saturate rather than wrapping. An unkeyed channel
- * answers zeros and a clear verdict, with the version still set. VERSIONING:
- * fields are only ever added at the end and an offset is never reused. The
- * structure version stays 1 throughout the beta, whatever is added, so a
- * reader tells which fields exist from the body length and treats the version
- * as nothing more than a sanity check. A reader refuses a body shorter than
- * it needs, and decodes the fields it knows from a longer body. This exists
- * so a host that ignores the per-message verdict flag still has an auditable
- * stream: deliver-as-unverified only means something if unverified cannot be
- * silently treated as verified. The enrolment counter is readable by a host
- * on the node that did the enrolment; other receivers cannot see it over the
- * air. [K4 (docs/radiant-security.md sec 3.2 and 9)]
+ * enrolment window alike; attempts that were refused are not counted);
+ * [26..27] secured-range broadcasts a master channel heard and refused (a
+ * legitimate slave never sends one on a secured channel, so each is a forgery
+ * or the master's own window reflected back; docs/radiant-security.md sec
+ * 7.6). All counters are u16 LE and saturate rather than wrapping. An unkeyed
+ * channel answers zeros and a clear verdict, with the version still set.
+ * VERSIONING: fields are only ever added at the end and an offset is never
+ * reused. The structure version stays 1 throughout the beta, whatever is
+ * added, so a reader tells which fields exist from the body length and treats
+ * the version as nothing more than a sanity check. A reader refuses a body
+ * shorter than it needs, and decodes the fields it knows from a longer body.
+ * This exists so a host that ignores the per-message verdict flag still has
+ * an auditable stream: deliver-as-unverified only means something if
+ * unverified cannot be silently treated as verified. The enrolment counter is
+ * readable by a host on the node that did the enrolment; other receivers
+ * cannot see it over the air. [K4 (docs/radiant-security.md sec 3.2 and 9)]
  */
 #define RADIANT_WIRE_MESG_RADIANT_SEC_STATUS_ID              0xF4
 
