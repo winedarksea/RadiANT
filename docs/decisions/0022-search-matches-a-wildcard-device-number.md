@@ -4,8 +4,10 @@
   ztest-verified, A/B/A on air below. Default **y on cc26xx** since 2026-11-12
   (the TI A/B/A passed all four gates). Default **y on nRF** since
   2026-11-13: its four gates passed on 2026-11-12
-  ([Gate 3 on nRF](#gate-3-on-nrf-2026-11-12)). Zwift acceptance pending;
-  `apps/dongle/long_match.conf` builds the 24-bit nRF image.
+  ([Gate 3 on nRF](#gate-3-on-nrf-2026-11-12)), and on every nRF image
+  (MPSL, Matter, nRF5340 net core, nRF54L15) by the owner's decision of
+  2026-11-14. Zwift acceptance pending; `apps/dongle/long_match.conf` builds
+  the 24-bit nRF image (no CI job, by decision).
 - **Date:** 2026-11-11
 - **Supersedes:** the "search format is permanent by design and is not touched"
   note in `radiant/src/radiant_addr_split.h` (ADR 0019's scope line), and the
@@ -147,6 +149,13 @@ All four gates now pass on nRF. The default stayed **n** at first, waiting
 on the Zwift capture listed under [Gates](#gates). On 2026-11-13 it flipped to
 **y** ahead of that capture, which became the acceptance check instead of a
 precondition (`apps/dongle/long_match.conf` is the fallback image).
+
+**Scope, decided 2026-11-14 by the project owner.** The default is **y on every
+nRF image**, not only the USB dongle the gates ran on: the MPSL builds
+(`gate.conf`, Thread, Matter), the nRF5340 network-core endpoint and the
+nRF54L15 images included, although none of those had a gate run of its own.
+No CI job builds `long_match.conf`; the owner declined one, so the fallback is
+built by hand when needed.
 
 ### On TI (CC2652R), 2026-11-12
 

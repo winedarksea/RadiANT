@@ -3,8 +3,10 @@ MPSL bursts: multi-packet bursts still can't run on MPSL builds. That's a scope 
 Discovery short match (ADR 0022), left open 2026-11-11:
 - The two waste fixes (ADR 0022 "Not done here"): closed. The short match is on by default on TI (2026-11-12) and nRF (2026-11-13), and one set makes them moot; they matter only for `long_match.conf` images. No scheduler "window is live" query is built.
 - Zwift acceptance of the nRF default flip (user-run, not a precondition any more): every sensor listed within ~1 s while HR and trainer are tracked, 0x61/0xC6 answered, reset -> NETWORK_KEY against 42-94 s (RadiANT history) and 9.2 s (Garmin). If it passes, mark ADR 0022 accepted; if it fails, rebuild with `apps/dongle/long_match.conf` and investigate.
+- Decided 2026-11-14 (owner): short match stays default y on EVERY nRF image (MPSL, Matter, nRF5340 net core, L15), none of which had its own gate run; no CI job for `long_match.conf` (declined).
 
 ## TI CC2652R, open after the 2026-11-12 bench (evidence `archive/benchmarks/2026-11-12-ti-findings/` and `2026-11-12-ti-lead/`; items closed 2026-11-13, `archive/benchmarks/2026-11-13-ti-todo/README.md`):
+- Rebuild the TI image before it ships: the one staged in `build\final_perf_6078d88\` predates e66ae02 (a one-packet transfer's ACK window now reserves no follow-on; host-tested only). Check acknowledged transfers on air with the rebuilt image (`tools/ant_ack_pair.py`, both roles) first.
 
 ## FE-C coverage (deferred from the 2026-11-11 Zwift-capture plan, one item):
 - `tools/ant_fec_control.py`: the page-70 count byte is shifted (:152-156), and the incline is read at [3..4] instead of [4..5] (:171).
@@ -20,7 +22,7 @@ The master's acknowledgement misses (closed 2026-11-12) were the link budget: 10
 1. [x] Inbound continuation window: `RADIANT_TRANSFER_STATE_WAIT_NEXT`, a window at ack + 1550 +/- 250 us after each ACK of an open burst (and once after LAST). Empty windows repeat the ACK at +3143 us, 5 times by default since 2026-11-13 (`CONFIG_RADIANT_INBOUND_ACK_REPEATS`, 0..20; it was 21 attempts). On air, Garmin -> RadiANT: 96/100 and 98/100 bursts of 8 complete against a 97/100 control the other way (archive/benchmarks/2026-11-12-inbound-burst/). Needed a second fix found on air: a master's 0x8A is answered at +2190 (slot-reply turnaround), not +1560 - with +1560 every burst failed.
 2. [x] Duplicate filtering: same sequence bit as the last delivered packet -> re-ACK with the saved reply, not delivered (`stats.rx_duplicates`). A slave's packet-0 retry one period later is not deduplicated.
 3. [x] EVENT_TRANSFER_RX_FAILED (0x04): from the engine (peer stopped, broadcast mid-burst, ACK repeats exhausted), on close (before CHANNEL_CLOSED), on drop to search, and the watchdog as backstop.
-4. Multi-packet bursts on MPSL builds (the "MPSL bursts" line at the top of this file). Retries share the problem: a retry at +3110 us is outside the data packet's grant, and on MPSL it fails the transfer with NO_ACK as before. Inbound too, measured 2026-11-13: Garmin -> L15 `gate.conf`, 100/100 bursts failed with only packet 0 delivered (`archive/benchmarks/2026-11-13-inbound-burst-gaps/` section 1). Giving each ACK its own reserve does NOT fix it: the gate serves an in-grant arm only if that arm's own reserve also ends inside the current grant, and fixed-class grants never grow, so the whole chain must nest inside the first grant (tracked window + 4150 us). The fix, for both directions, is on-demand extension of fixed-class grants in `radiant_radio_nrf_gate_mpsl.c`, ending the burst when an extension is refused.
+4. Multi-packet bursts on MPSL builds (the "MPSL bursts" line at the top of this file). Retries share the problem: a retry at +3110 us is outside the data packet's grant, and on MPSL it fails the transfer with NO_ACK as before. Inbound too, measured 2026-11-13: Garmin -> L15 `gate.conf`, 100/100 bursts failed with only packet 0 delivered (`archive/benchmarks/2026-11-13-inbound-burst-gaps/` section 1). Giving each ACK its own reserve does NOT fix it: the gate serves an in-grant arm only if that arm's own reserve also ends inside the current grant, and fixed-class grants never grow, so the whole chain must nest inside the first grant (tracked window + 4150 us). The fix, for both directions, is on-demand extension of fixed-class grants in `radiant_radio_nrf_gate_mpsl.c`, ending the burst when an extension is refused. Also belongs here, by the owner's decision of 2026-11-14: the scheduler/gate attribution of a retry or next packet refused after an in-grant ACK window (EDENIED from the gate instead of MISSED from the scheduler; "Left open by the 2026-11-08 clearance" below).
 5. Advanced burst: true 16/24-byte packets on air (today a 24-byte block goes out as three 8-byte packets), the retry-extension byte (`api_adv_burst[10]`, stored and never read), and the stall count / retry defaults (sdk-ant reads back stall 3210).
 6. [x] EVENT_TRANSFER_TX_START (0x0A): once per outbound multi-packet burst, not for acknowledged data or a one-packet burst.
 7. [x] 0xAA from a master is answered on the slot-reply turnaround (+2190) since 2026-11-13 (442d4f7). Sniffed first: at +1560 a Garmin master was told FAILED for 50/50 messages our slave had received; at +2190, 96/100 against a 99/100 control. Open: no non-RadiANT slave's 0xAA reply offset has been recorded; in the fixed leg the slave also counted rx_fail 8 and one go_to_search on broadcasts (control 2, 0), not investigated.
@@ -45,13 +47,13 @@ Items 1-4 DONE 2026-11-13, each through an independent review and re-review; ver
 
 ## 5. [DONE 2026-11-13: 4d5d156, 55bf4c3, 4c12ebf, db761cc] A keyed but unarmed channel fails open in both directions
 
-## 6. [DONE 2026-11-13: f330469, 4544e5c, 9be01e0] Over-air enrolment replaces the group root instead of delivering it
+## 6. [DONE 2026-11-13: f330469, 4544e5c, 9be01e0; additive design and its section 11.7 trade-off ACCEPTED by the owner 2026-11-14] Over-air enrolment replaces the group root instead of delivering it
 
 ## 7. [DONE 2026-11-13: c4cfe94] Compat epoch recovery allows a rollback
 
 ## 8. [DONE 2026-11-13: e111889, e7024ce] Tier II windows have no replay floor
 
-## 9. [DONE 2026-11-13: 4d5d156, 583a981] 0xF2 resets the epoch monotonicity gate
+## 9. [DONE 2026-11-13: 4d5d156, 583a981; same-root 0xF2 no longer resets a Tier 2 trial devnum, 2026-11-14: b657458] 0xF2 resets the epoch monotonicity gate
 
 ## 10. [LOW] A go-private/return command is replayable within its interval
 - `cmd_tag()` uses the Tier I interval index as its counter, so a recorded command verifies again until the interval ends: 20 s by default, up to 3600 s. The 60 s rate limit does not cover a long T. Section 11.6 says a replay "into a later interval fails", which is true, but replay within the same interval is not stated.
@@ -325,6 +327,9 @@ MPSL (needs a soak beside BLE or Thread, which that clearance excluded):
   e042a10; only the attribution blames the other stack. A fix needs a capability
   saying follow-ons do not chain (cc26xx extends its endTime, so clipping in the
   scheduler would be wrong there) and belongs with grant extension (item 4).
+  Deferred there by the owner, 2026-11-14. Since e66ae02 a one-packet
+  transfer's ACK window reserves nothing, so acknowledged data no longer
+  reaches this path; only multi-packet bursts do.
 - MPSL assert 69:108 - NOW REPRODUCIBLE IN MINUTES, OPEN, 2026-11-14
   (`archive/benchmarks/2026-11-14-mpsl-soak/`). L15 `thread.conf` beside an
   attached OpenThread leader, one tracked + one searching channel: it fired in

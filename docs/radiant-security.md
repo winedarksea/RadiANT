@@ -2375,7 +2375,9 @@ Four rules:
   traffic recorded under that root BEFORE the window, and the receivers
   already enrolled see nothing: the enrolment counter on the node is the only
   trace. Replacing the root at a window would bound that to future traffic,
-  at the price of locking out every receiver already enrolled. A node whose
+  at the price of locking out every receiver already enrolled. The project
+  owner accepted the additive design with this trade-off on 2026-11-14
+  (security review 2026-11-13, item 6). A node whose
   channel holds no root at all has nothing to deliver and nobody to lock out,
   so its first enrolment installs the exchange's enrolment root as its first
   and delivers that. Like any new root

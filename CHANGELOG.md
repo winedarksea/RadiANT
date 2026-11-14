@@ -17,9 +17,23 @@ reads.
   ADR 0022). All four nRF gates passed on 2026-11-12 (tracked loss -0.23 pp
   against the same-SoC control, bound 2.16 pp). Discovery goes from about
   0.5-1 to 4-12 sightings/s. The Zwift capture is the acceptance check;
-  `apps/dongle/long_match.conf` builds the old 24-bit image.
+  `apps/dongle/long_match.conf` builds the old 24-bit image. This covers every
+  nRF image, MPSL, Matter, nRF5340 net core and nRF54L15 included.
+
+- **Acknowledged data no longer reserves air after its acknowledgement
+  window.** Since e042a10 every window reserved 1550 µs for a next packet or
+  retry; a one-packet transfer has neither, and under an arbiter (cc26xx coex
+  `endTime`, MPSL) that held the other stack's air for nothing. Multi-packet
+  bursts keep the reserve. Host-tested only. The TI image staged in
+  `build/final_perf_6078d88/` predates this: rebuild it and check acknowledged
+  transfers on air before it ships.
 
 ### Fixed
+
+- **A same-root `0xF2` keeps a Tier 2 receiver's trial device number.** The
+  re-send was already a no-op for the epoch and gate, but the adapter still
+  reset the on-air device number to the provisioning one, so the receiver
+  stopped verifying until it tried again. A different root still resets it.
 
 - **CRC repair works on cc26xx.** The backend dropped the body of a
   CRC-failed frame, so `CONFIG_RADIANT_CRC_REPAIR` could never repair on TI.

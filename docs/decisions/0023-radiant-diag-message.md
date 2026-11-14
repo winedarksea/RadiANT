@@ -121,7 +121,7 @@ digits. A reserved field always read `0xFFFFFFFF` ("not measured"), so an older
 image reads as one without the check and a host needs no version test; the
 structure version stays 1 (beta). Taking a reserved field rather than opening a
 page is the one judgement call here; page 8 went the other way only because it
-needed eight fields.
+needed eight fields. The project owner kept this layout on 2026-11-14.
 
 Page 8 was added on 2026-11-13 to find where the cc26xx receive drain's
 ~530 µs worst case goes (`archive/benchmarks/2026-11-12-ti-findings/`), and

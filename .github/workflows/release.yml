@@ -2239,7 +2239,7 @@ jobs:
           # treats the root it already holds as a no-op (a KCV compare through
           # radiant_sec_key_same()), so a re-send cannot be followed by an
           # older epoch. +52 B, 4656 B measured. 5120 is the next multiple of
-          # 512, leaving 464 B.
+          # 512, leaving 464 B. Signed off by the project owner 2026-11-14.
           compat_text="$(sect_of text "${compat_elf}")"
           test -n "${compat_text}"
           check "compat text (linked)" "$(( compat_text - on_text ))" 288
