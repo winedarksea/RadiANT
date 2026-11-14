@@ -929,7 +929,8 @@ void radiant_sec_deliver(uint8_t ch, const uint8_t *pay, uint8_t len,
 
 /*
  * One window's verdict, as MESG_RADIANT_SEC_VERDICT (0xF8)
- * [ch, verdict, window_start u16 LE, W, seq] - only on a channel whose 0xF1 set
+ * [ch, verdict, window_start u16 LE, W, seq u16 LE] - only on a channel whose
+ * 0xF1 set
  * RADIANT_SEC_SW_VERDICT_EVENT, so a host that never asked sees today's byte
  * stream. Reached only from an X_AUTH window close, so an unsecured channel
  * never gets here at all.
@@ -944,9 +945,9 @@ void radiant_sec_deliver(uint8_t ch, const uint8_t *pay, uint8_t len,
  */
 void radiant_sec_window_verdict(uint8_t ch, uint16_t window_start,
 				enum radiant_sec_verdict verdict, uint8_t w,
-				uint8_t switches, uint8_t seq)
+				uint8_t switches, uint16_t seq)
 {
-	uint8_t body[6];
+	uint8_t body[7];
 
 	if ((switches & RADIANT_SEC_SW_VERDICT_EVENT) == 0u) {
 		return;
@@ -962,7 +963,8 @@ void radiant_sec_window_verdict(uint8_t ch, uint16_t window_start,
 	body[2] = (uint8_t)window_start;
 	body[3] = (uint8_t)(window_start >> 8);
 	body[4] = w;
-	body[5] = seq;
+	body[5] = (uint8_t)seq;
+	body[6] = (uint8_t)(seq >> 8);
 	if (radiant_event_post_raw((uint8_t)ANTW_MESG_RADIANT_SEC_VERDICT_ID,
 				   body, (uint8_t)sizeof(body)) !=
 	    RADIANT_EVENT_OK) {
@@ -3970,6 +3972,12 @@ antr_err_t antr_channel_open_with_offset(uint8_t channel, uint16_t offset)
 	if (rc == RADIANT_CH_OK) {
 		int trc = api_xfer_setup(channel);
 
+		/* A secured channel's receive windows start afresh, so one left
+		 * pending before a close can't be judged by tag bytes heard
+		 * after it (an alias 256 counters on). Nothing for any other
+		 * channel: no context, an immediate return. */
+		radiant_sec_rx_restart(channel);
+
 		api_warn_slip_prone_id(channel);
 		api_warn_off_57_slave(channel);
 
@@ -4028,6 +4036,10 @@ antr_err_t antr_channel_close(uint8_t channel)
 	rc = radiant_channel_close(channel, radiant_radio_now());
 	if (rc == RADIANT_CH_OK) {
 		uint32_t op = api_ch[channel].op;
+
+		/* As at open, and here too so packets still queued for the pump
+		 * open no window that outlives the close. */
+		radiant_sec_rx_restart(channel);
 
 		(void)radiant_transfer_abort(&api_xfer[channel]);
 		api_ack_pending_fail(channel);

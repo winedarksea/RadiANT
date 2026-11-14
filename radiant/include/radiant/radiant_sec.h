@@ -610,14 +610,16 @@ void radiant_sec_deliver(uint8_t ch, const uint8_t *pay, uint8_t len,
  * RADIANT_SEC_SW_VERDICT_EVENT without reading the context back. Scalars, per
  * rule 2 above.
  *
- * `seq` counts this channel's verdicts: 0 for the first after
- * radiant_sec_configure(), then one more per call, wrapping at 256. It is
- * made here, at the source, so a verdict lost anywhere downstream - a full
- * event ring, a USB backlog - shows the host a gap rather than nothing.
+ * `seq` counts this channel's verdicts, 16 bits, wrapping, from 0 when the
+ * context is created and never reset. Made here, at the source, so a verdict
+ * lost anywhere downstream - a full event ring, a USB backlog - shows the
+ * host a gap; and every discard of the receive window state (configure, a
+ * new epoch, an epoch advance, try_devnum, radiant_sec_rx_restart()) spends
+ * one, because the verdict that window was waiting for will never come.
  */
 void radiant_sec_window_verdict(uint8_t ch, uint16_t window_start,
 				enum radiant_sec_verdict verdict, uint8_t w,
-				uint8_t switches, uint8_t seq);
+				uint8_t switches, uint16_t seq);
 
 /* Lifecycle. No init call: the first SET_KEY allocates, unassign and reset
  * free. */
@@ -679,6 +681,14 @@ int  radiant_sec_set_devnum(uint8_t ch, uint16_t devnum);
  */
 int  radiant_sec_try_devnum(uint8_t ch, uint16_t devnum);
 
+/*
+ * The port's channel close and open: drop the receive window state (keeping
+ * the replay floor), so a window left pending across a close can't be
+ * judged by tag bytes that arrive after it. A no-op for a channel with no
+ * security context.
+ */
+void radiant_sec_rx_restart(uint8_t ch);
+
 void radiant_sec_channel_release(uint8_t ch);
 void radiant_sec_reset(void);
 
@@ -716,9 +726,11 @@ struct radiant_sec_stats {
 	 * profile_enrol.c's over-air window - one event either way.
 	 */
 	uint32_t enrolments;
-	/* 0xF8 window-verdict events the port could not queue (a full event
-	 * ring). The host sees the same loss as a gap in the event's sequence
-	 * number; this is the firmware's own count of it. */
+	/* 0xF8 window-verdict events the port could not queue: event-ring
+	 * refusals ONLY. The host sees these as gaps in the event's sequence
+	 * number, and also sees there what no counter here can - an event the
+	 * USB bridge dropped on backlog, and the seq spent on each discard of
+	 * the window state. */
 	uint32_t verdict_events_dropped;
 };
 
@@ -783,6 +795,11 @@ static inline int radiant_sec_rx_ingest(uint8_t ch, const uint8_t *p, uint8_t l,
 
 static inline void radiant_sec_pump(void)
 {
+}
+
+static inline void radiant_sec_rx_restart(uint8_t ch)
+{
+	(void)ch;
 }
 
 static inline void radiant_sec_channel_release(uint8_t ch)

@@ -94,7 +94,7 @@ void radiant_sec_deliver(uint8_t ch, const uint8_t *pay, uint8_t len,
 
 void radiant_sec_window_verdict(uint8_t ch, uint16_t window_start,
 				enum radiant_sec_verdict verdict, uint8_t w,
-				uint8_t switches, uint8_t seq)
+				uint8_t switches, uint16_t seq)
 {
 	ARG_UNUSED(w);
 	ARG_UNUSED(switches);

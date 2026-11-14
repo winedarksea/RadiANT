@@ -127,7 +127,7 @@ struct sec_ctx {
 	 * it was unverifiable rather than silently look verified. */
 	bool     rx_prev_seen;
 	bool     rx_prev_valid;
-	uint8_t  verdict_seq;    /* the next verdict's sequence number */
+	uint16_t verdict_seq;    /* the next verdict's sequence number */
 	uint16_t rx_prev_start;
 	uint8_t  rx_prev_tag[RADIANT_SEC_BLOCK_BYTES];
 
@@ -243,6 +243,24 @@ static void hold_reset(struct sec_ctx *c)
 		c->n_hold[b] = 0u;
 	}
 	c->hold_cur = 0u;
+}
+
+/*
+ * Throw the receive window state away: every site that does (configure, a
+ * new epoch, an epoch advance, a try_devnum candidate, a channel close or
+ * open) loses a window that was waiting for its verdict, and that verdict
+ * will never be sent. So one sequence number is spent here: the next 0xF8
+ * shows the host a gap, and a packet it still holds - a forgery among them -
+ * is settled unverified instead of being bound by a later window's verdict.
+ * The replay floor is each caller's business: a close keeps it.
+ */
+static void rx_discard(struct sec_ctx *c)
+{
+	c->rx_win_open = false;
+	c->rx_prev_valid = false;
+	c->rx_prev_seen = false;
+	hold_reset(c);
+	c->verdict_seq++;
 }
 
 /* The channel period in us. 0 only for period_counts 0 (no epoch yet). */
@@ -375,7 +393,7 @@ __weak void radiant_sec_deliver(uint8_t ch, const uint8_t *pay, uint8_t len,
 
 __weak void radiant_sec_window_verdict(uint8_t ch, uint16_t window_start,
 				       enum radiant_sec_verdict verdict,
-				       uint8_t w, uint8_t switches, uint8_t seq)
+				       uint8_t w, uint8_t switches, uint16_t seq)
 {
 	ARG_UNUSED(ch);
 	ARG_UNUSED(window_start);
@@ -506,20 +524,14 @@ int radiant_sec_configure(uint8_t ch, uint8_t switches, uint8_t w,
 	c->page_hi = page_hi;
 
 	/* Any window in flight is meaningless under a new W or a new range. */
-	c->rx_win_open = false;
-	c->rx_prev_valid = false;
-	c->rx_prev_seen = false;
+	rx_discard(c);
 	c->rx_floor = 0u;
 	c->tx_win_open = false;
 	c->tx_prev_valid = false;
-	/* A host that just sent 0xF1 has flushed what it held, so the event
-	 * sequence starts again with it. */
-	c->verdict_seq = 0u;
 	/* The slot clock's latch and the last-slot guard stay: neither the
 	 * epoch nor the period changes here, so a fresh latch could only move
 	 * the phase, and the guard is what stops one slot being built twice
 	 * under one nonce. */
-	hold_reset(c);
 	return RADIANT_SEC_OK;
 }
 
@@ -561,11 +573,8 @@ int radiant_sec_set_epoch(uint8_t ch, uint32_t epoch, uint64_t us_into_epoch,
 	c->tx_spent = false;
 	c->tx_win_open = false;
 	c->tx_prev_valid = false;
-	c->rx_win_open = false;
-	c->rx_prev_valid = false;
-	c->rx_prev_seen = false;
+	rx_discard(c);
 	c->rx_floor = 0u;
-	hold_reset(c);
 
 	return derive_keys(c);
 }
@@ -621,17 +630,24 @@ int radiant_sec_try_devnum(uint8_t ch, uint16_t devnum)
 	 * yet". The floor too: the nonce binds the device number, so the
 	 * previous candidate's verified windows say nothing about this one's
 	 * counter (a Tier 2 power cycle restarts it at 0). */
-	c->rx_win_open = false;
-	c->rx_prev_valid = false;
-	c->rx_prev_seen = false;
+	rx_discard(c);
 	c->rx_floor = 0u;
 	c->rx_absorbed = 0u;
 	c->rx_tag_have = 0u;
 	c->rx_broken = false;
-	hold_reset(c);
 	c->last_verdict = RADIANT_SEC_VERDICT_CLEAR;
 
 	return RADIANT_SEC_OK;
+}
+
+void radiant_sec_rx_restart(uint8_t ch)
+{
+	RADIANT_SEC_ASSERT_LOCKED();
+	struct sec_ctx *c = ctx_of(ch);
+
+	if (c != NULL) {
+		rx_discard(c);
+	}
 }
 
 void radiant_sec_channel_release(uint8_t ch)
@@ -1104,7 +1120,13 @@ static void rx_close_window(struct sec_ctx *c, const struct sec_pkt *last,
 	own_ok = last != NULL && !c->rx_broken && c->rx_absorbed == c->w;
 
 	if (c->rx_prev_seen) {
+		/* The tag bytes must come from the window right after the one
+		 * they judge. Any other closing window - a lost window, or one
+		 * 256 counters on, reached after a quiet gap with captured tag
+		 * bytes (review of fix/sec-verdict-event, finding 1) - judges
+		 * nothing: UNVERIFIED, for the event and the drop policy alike. */
 		if (c->rx_prev_valid && tag_full &&
+		    c->rx_win_start == (uint16_t)(c->rx_prev_start + c->w) &&
 		    radiant_sec_ct_equal(c->rx_prev_tag, c->rx_tag, c->w)) {
 			/* The previous window's closing packet is now known
 			 * to be the sender's - bytes, counter and all; only
@@ -1230,9 +1252,7 @@ static void rx_process(struct sec_pkt *pkt)
 		if (advance_epoch(c, epoch_delta) != RADIANT_SEC_OK) {
 			return;
 		}
-		c->rx_win_open = false;
-		c->rx_prev_valid = false;
-		c->rx_prev_seen = false;
+		rx_discard(c);
 		c->rx_floor = 0u;
 		/* `expected` was computed against the old epoch's anchor (~65536)
 		 * and the counter now counts from 0 again: compared as they
@@ -1249,8 +1269,8 @@ static void rx_process(struct sec_pkt *pkt)
 		 * last old-epoch window's tag would ride in new-epoch window 0,
 		 * which carries zeros (the sender clears its tag at the wrap),
 		 * and the window before it is still held only if that last
-		 * window's tag bytes never all arrived. */
-		hold_reset(c);
+		 * window's tag bytes never all arrived. (rx_discard() above
+		 * holds the hold reset.) */
 	}
 
 	/* D5's replay rejection; survives a receiver reboot in a way a
