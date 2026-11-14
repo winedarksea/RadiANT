@@ -143,9 +143,10 @@ types 0x0B/0x7B, and #1458 in window 6), so no noise frame got past the CRC
 as a false device. The host saw the same event types on both images (channel
 event 0x08 only, 2-3 per window).
 
-All four gates now pass on nRF. The default stays **n** until the Zwift
-capture listed under [Gates](#gates) has been done, because that check needs
-a real Zwift session.
+All four gates now pass on nRF. The default stayed **n** at first, waiting
+on the Zwift capture listed under [Gates](#gates). On 2026-11-13 it flipped to
+**y** ahead of that capture, which became the acceptance check instead of a
+precondition (`apps/dongle/long_match.conf` is the fallback image).
 
 ### On TI (CC2652R), 2026-11-12
 
@@ -214,6 +215,6 @@ its own gate 3 is settled. `apps/dongle_ti/ti_long_match.conf` builds the
   still waiting, so it would reopen the over-credit trap
   `CONFIG_RADIANT_SEARCH_DENIAL_ESCAPE` documents. With one set neither
   matters, and TI has one set by default since 2026-11-12, so the item is
-  **closed for TI**. On nRF it matters only while the short match is off (32
-  sets), and that default waits on nRF gate 3 anyway. No scheduler "window is
-  live" query is built.
+  **closed for TI**. nRF followed on 2026-11-13, so it is closed there too; it
+  matters only for a `long_match.conf` image (32 sets). No scheduler "window
+  is live" query is built.
