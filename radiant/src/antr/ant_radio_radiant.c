@@ -929,7 +929,7 @@ void radiant_sec_deliver(uint8_t ch, const uint8_t *pay, uint8_t len,
 
 /*
  * One window's verdict, as MESG_RADIANT_SEC_VERDICT (0xF8)
- * [ch, verdict, window_start u16 LE, W] - only on a channel whose 0xF1 set
+ * [ch, verdict, window_start u16 LE, W, seq] - only on a channel whose 0xF1 set
  * RADIANT_SEC_SW_VERDICT_EVENT, so a host that never asked sees today's byte
  * stream. Reached only from an X_AUTH window close, so an unsecured channel
  * never gets here at all.
@@ -938,14 +938,15 @@ void radiant_sec_deliver(uint8_t ch, const uint8_t *pay, uint8_t len,
  * radiant_sec_deliver(): it posts to the same ring and never calls the bridge
  * directly, which is what keeps the event behind the data it judges (the
  * module calls this after delivering that data) and keeps the bridge outside
- * api_lock. A full ring drops it like any data message; the host treats a
- * verdict that never came as unverified.
+ * api_lock. A full ring drops it like any data message: counted
+ * (verdict_events_dropped), and seen by the host as a gap in `seq`, which
+ * makes it treat every packet it still holds as unverified.
  */
 void radiant_sec_window_verdict(uint8_t ch, uint16_t window_start,
 				enum radiant_sec_verdict verdict, uint8_t w,
-				uint8_t switches)
+				uint8_t switches, uint8_t seq)
 {
-	uint8_t body[5];
+	uint8_t body[6];
 
 	if ((switches & RADIANT_SEC_SW_VERDICT_EVENT) == 0u) {
 		return;
@@ -961,8 +962,12 @@ void radiant_sec_window_verdict(uint8_t ch, uint16_t window_start,
 	body[2] = (uint8_t)window_start;
 	body[3] = (uint8_t)(window_start >> 8);
 	body[4] = w;
-	(void)radiant_event_post_raw((uint8_t)ANTW_MESG_RADIANT_SEC_VERDICT_ID,
-				     body, (uint8_t)sizeof(body));
+	body[5] = seq;
+	if (radiant_event_post_raw((uint8_t)ANTW_MESG_RADIANT_SEC_VERDICT_ID,
+				   body, (uint8_t)sizeof(body)) !=
+	    RADIANT_EVENT_OK) {
+		radiant_sec_stat_verdict_dropped(ch);
+	}
 }
 #endif /* CONFIG_RADIANT_SEC */
 

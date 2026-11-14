@@ -127,6 +127,7 @@ struct sec_ctx {
 	 * it was unverifiable rather than silently look verified. */
 	bool     rx_prev_seen;
 	bool     rx_prev_valid;
+	uint8_t  verdict_seq;    /* the next verdict's sequence number */
 	uint16_t rx_prev_start;
 	uint8_t  rx_prev_tag[RADIANT_SEC_BLOCK_BYTES];
 
@@ -374,13 +375,14 @@ __weak void radiant_sec_deliver(uint8_t ch, const uint8_t *pay, uint8_t len,
 
 __weak void radiant_sec_window_verdict(uint8_t ch, uint16_t window_start,
 				       enum radiant_sec_verdict verdict,
-				       uint8_t w, uint8_t switches)
+				       uint8_t w, uint8_t switches, uint8_t seq)
 {
 	ARG_UNUSED(ch);
 	ARG_UNUSED(window_start);
 	ARG_UNUSED(verdict);
 	ARG_UNUSED(w);
 	ARG_UNUSED(switches);
+	ARG_UNUSED(seq);
 }
 
 /* ── Configuration ──────────────────────────────────────────────────────── */
@@ -510,6 +512,9 @@ int radiant_sec_configure(uint8_t ch, uint8_t switches, uint8_t w,
 	c->rx_floor = 0u;
 	c->tx_win_open = false;
 	c->tx_prev_valid = false;
+	/* A host that just sent 0xF1 has flushed what it held, so the event
+	 * sequence starts again with it. */
+	c->verdict_seq = 0u;
 	/* The slot clock's latch and the last-slot guard stay: neither the
 	 * epoch nor the period changes here, so a fresh latch could only move
 	 * the phase, and the guard is what stops one slot being built twice
@@ -707,6 +712,16 @@ void radiant_sec_stat_enrolment(uint8_t ch)
 	 * on an unkeyed channel would be worse than one that missed a tick. */
 	if (c != NULL) {
 		stat_bump(&c->stats.enrolments);
+	}
+}
+
+void radiant_sec_stat_verdict_dropped(uint8_t ch)
+{
+	RADIANT_SEC_ASSERT_LOCKED();
+	struct sec_ctx *c = ctx_of(ch);
+
+	if (c != NULL) {
+		stat_bump(&c->stats.verdict_events_dropped);
 	}
 }
 
@@ -1128,7 +1143,7 @@ static void rx_close_window(struct sec_ctx *c, const struct sec_pkt *last,
 		/* After the release, so a port queueing both (the 0xF8 event)
 		 * puts the verdict behind the packets it covers. */
 		radiant_sec_window_verdict(c->ch, c->rx_prev_start, verdict,
-					   c->w, c->switches);
+					   c->w, c->switches, c->verdict_seq++);
 	} else if ((c->switches & RADIANT_SEC_SW_DROP_UNVER) != 0u) {
 		/* The first window heard since a reset: there is no previous
 		 * window, so nothing to judge and the other buffer should be

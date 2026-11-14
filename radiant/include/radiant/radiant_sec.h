@@ -609,10 +609,15 @@ void radiant_sec_deliver(uint8_t ch, const uint8_t *pay, uint8_t len,
  * `w` and `switches` are the channel's, passed so a port can act on
  * RADIANT_SEC_SW_VERDICT_EVENT without reading the context back. Scalars, per
  * rule 2 above.
+ *
+ * `seq` counts this channel's verdicts: 0 for the first after
+ * radiant_sec_configure(), then one more per call, wrapping at 256. It is
+ * made here, at the source, so a verdict lost anywhere downstream - a full
+ * event ring, a USB backlog - shows the host a gap rather than nothing.
  */
 void radiant_sec_window_verdict(uint8_t ch, uint16_t window_start,
 				enum radiant_sec_verdict verdict, uint8_t w,
-				uint8_t switches);
+				uint8_t switches, uint8_t seq);
 
 /* Lifecycle. No init call: the first SET_KEY allocates, unassign and reset
  * free. */
@@ -711,6 +716,10 @@ struct radiant_sec_stats {
 	 * profile_enrol.c's over-air window - one event either way.
 	 */
 	uint32_t enrolments;
+	/* 0xF8 window-verdict events the port could not queue (a full event
+	 * ring). The host sees the same loss as a gap in the event's sequence
+	 * number; this is the firmware's own count of it. */
+	uint32_t verdict_events_dropped;
 };
 
 void radiant_sec_get_stats(uint8_t ch, struct radiant_sec_stats *out);
@@ -723,6 +732,9 @@ void radiant_sec_get_stats(uint8_t ch, struct radiant_sec_stats *out);
  * happen on this path, but written to survive being wrong about that).
  */
 void radiant_sec_stat_enrolment(uint8_t ch);
+
+/* INTERNAL, the same shape: the port's hook into verdict_events_dropped. */
+void radiant_sec_stat_verdict_dropped(uint8_t ch);
 
 /*
  * The non-counter half of what 0xF4 reports: configuration and clock, now.

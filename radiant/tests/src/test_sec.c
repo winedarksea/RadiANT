@@ -94,10 +94,11 @@ void radiant_sec_deliver(uint8_t ch, const uint8_t *pay, uint8_t len,
 
 void radiant_sec_window_verdict(uint8_t ch, uint16_t window_start,
 				enum radiant_sec_verdict verdict, uint8_t w,
-				uint8_t switches)
+				uint8_t switches, uint8_t seq)
 {
 	ARG_UNUSED(w);
 	ARG_UNUSED(switches);
+	ARG_UNUSED(seq);
 	if (log_n_verdict < LOG_MAX) {
 		log_verdict[log_n_verdict].ch = ch;
 		log_verdict[log_n_verdict].window_start = window_start;
