@@ -94,7 +94,8 @@ Reviewed c4e1ef8..6128da5. Each fix has a test that failed first
 
 **Confirmed safe:** every follow-on is armed in the dispatch that the release settles
 after, so the early release keeps the grant for it. The skip's 750 us margin left at
-least 706 us (`skip_left_min`). The late-arm subtraction into the backstop does not
+least 706 us (`skip_left_min`, a bench counter since removed: its CAPTURE1 wrote
+MPSL_TIMER0 CC1 after the radio had been handed back; 69:108 cleanup, 2026-11-15). The late-arm subtraction into the backstop does not
 wrap for lateness under 20 ms; a test written for it passed before any fix and was
 dropped.
 
