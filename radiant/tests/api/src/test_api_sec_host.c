@@ -360,7 +360,7 @@ const uint8_t *api_msglog_get(uint32_t i, uint8_t *id, uint8_t *len);
 #define VD_PAGE    0x05u
 #define VD_HOPS    6u  /* three windows at W=2: two judged, one waiting */
 #define VD_LOG_MAX 64u /* test_api.c's MSGLOG_MAX */
-#define VD_F8_LEN  6u
+#define VD_F8_LEN  7u
 
 static uint64_t vd_anchor;
 
@@ -524,23 +524,33 @@ static void vd_forge(uint32_t i, uint8_t ctr)
 	(void)radiant_event_drain(0u);
 }
 
-/* One expected message: a BROADCAST_DATA whose byte [1] is `ctr`, or
- * (verdict != 0) a 0xF8 for the window starting at `ctr`. */
+/* One expected message: a BROADCAST_DATA whose byte [1] is `ctr`'s low byte,
+ * or (verdict != 0) a 0xF8 for the window starting at `ctr`, whose seq is
+ * `gap` more than one past the previous verdict's - the seq values the
+ * firmware spent on window discards in between. */
 struct vd_want {
-	uint8_t verdict;
-	uint8_t ctr;
+	uint8_t  verdict;
+	uint16_t ctr;
+	uint8_t  gap;
 };
+
+static uint16_t vd_seq(const uint8_t *d)
+{
+	return rd16(&d[5]);
+}
 
 /*
  * The data and 0xF8 messages for channel `rx` from log index `from` on must
- * be exactly `want`, and the 0xF8 seq must count 0, 1, 2... - the first
- * verdict after the host's 0xF1 is 0, and none is lost here.
+ * be exactly `want`. The first verdict's seq is the baseline (the context's
+ * own discards have spent some already); each later one must follow it as
+ * `gap` says.
  */
 static void vd_expect_ch(uint32_t from, uint8_t rx, const struct vd_want *want,
 			 uint32_t n, uint8_t w)
 {
 	uint32_t got = 0u;
-	uint8_t  seq = 0u;
+	bool     have_seq = false;
+	uint16_t seq = 0u;
 
 	zassert_true(api_msglog_count() < VD_LOG_MAX,
 		     "the message log overflowed");
@@ -564,7 +574,7 @@ static void vd_expect_ch(uint32_t from, uint8_t rx, const struct vd_want *want,
 			zassert_true(len >= 9u);
 			/* Payload byte [1], the counter's low byte: what a host
 			 * maps a packet to its window by. */
-			zassert_equal(want[got].ctr, d[2],
+			zassert_equal((uint8_t)want[got].ctr, d[2],
 				      "message %u: data for the wrong counter",
 				      got);
 		} else {
@@ -580,9 +590,14 @@ static void vd_expect_ch(uint32_t from, uint8_t rx, const struct vd_want *want,
 			zassert_equal(want[got].ctr, rd16(&d[2]),
 				      "window_start is not u16 LE at [2..3]");
 			zassert_equal(w, d[4], "W at [4]");
-			zassert_equal(seq, d[5], "message %u: seq %u, want %u",
-				      got, d[5], seq);
-			seq++;
+			if (have_seq) {
+				seq = (uint16_t)(seq + want[got].gap);
+				zassert_equal(seq, vd_seq(d),
+					      "message %u: seq %u, want %u", got,
+					      vd_seq(d), seq);
+			}
+			seq = (uint16_t)(vd_seq(d) + 1u);
+			have_seq = true;
 		}
 		got++;
 	}
@@ -885,9 +900,9 @@ ZTEST(api, test_sec_host_a_lost_verdict_is_counted_and_leaves_a_seq_gap)
 		}
 		zassert_equal(VD_F8_LEN, len);
 		if (prev >= 0) {
-			missing += (uint8_t)(d[5] - (uint8_t)prev - 1u);
+			missing += (uint16_t)(vd_seq(d) - (uint16_t)prev - 1u);
 		}
-		prev = d[5];
+		prev = (int)vd_seq(d);
 		n_f8++;
 	}
 
@@ -901,6 +916,168 @@ ZTEST(api, test_sec_host_a_lost_verdict_is_counted_and_leaves_a_seq_gap)
 		      "%u verdicts dropped but %u seq values missing",
 		      st.verdict_events_dropped, missing);
 	vd_done();
+}
+
+/* A forged secured-range page claiming counter `ctr` with tag byte `tag`,
+ * heard at slot i, pumped and drained. */
+static void vd_forge_tag(uint32_t i, uint16_t ctr, uint8_t tag)
+{
+	const uint8_t air[8] = { VD_PAGE, (uint8_t)ctr, 0xEEu, 0xEEu,
+				 0xEEu,   0xEEu,        0xEEu, tag };
+
+	zassert_equal(RADIANT_SEC_RX_DEFER, vd_ingest(VD_RX_CH, air, i),
+		      "the forged page was not taken");
+	(void)radiant_event_drain(0u);
+}
+
+/* What the sender put on air in slot i, without delivering it: an attacker's
+ * recording. */
+static void vd_capture(uint32_t i, uint8_t air[8])
+{
+	int rc;
+
+	memset(air, 0, 8u);
+	air[0] = VD_PAGE;
+	air[2] = (uint8_t)i;
+	k_mutex_lock(&api_lock, K_FOREVER);
+	rc = radiant_sec_tx_transform(VD_TX_CH, air, 8u, vd_slot_t(i));
+	k_mutex_unlock(&api_lock);
+	zassert_equal(RADIANT_SEC_OK, rc, "the sender refused slot %u", i);
+}
+
+/*
+ * Window 2 is genuine and waiting for its verdict when the channel goes
+ * quiet. 256 counters later (counters 258/259 share byte [1] with 2/3) the
+ * forger sends two pages carrying the tag bytes it recorded from genuine
+ * window 4 - which are exactly window 2's tag. The tag matches, but window
+ * 258 is not the window after window 2, so the verdict on 2 is UNVERIFIED:
+ * before the fix it was VERIFIED, right behind the forged pages, with no gap.
+ */
+ZTEST(api, test_sec_host_a_window_aliased_256_on_is_not_verified)
+{
+	static const struct vd_want want[] = {
+		{ 0u, 0u },   { 0u, 1u },   { 0u, 2u }, { 0u, 3u }, { V_OK, 0u },
+		{ 0u, 258u }, { 0u, 259u }, /* the forgeries */
+		{ V_BAD, 2u },
+	};
+	uint8_t  rec4[8];
+	uint8_t  rec5[8];
+	uint32_t from;
+
+	vd_setup(RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_VERDICT_EVENT, 2u);
+	from = api_msglog_count();
+	for (uint32_t i = 0u; i < 4u; i++) {
+		(void)vd_hop(i, false);
+	}
+	vd_capture(4u, rec4);
+	vd_capture(5u, rec5);
+	vd_forge_tag(258u, 258u, rec4[7]);
+	vd_forge_tag(259u, 259u, rec5[7]);
+	vd_expect(from, want, ARRAY_SIZE(want), 2u);
+	vd_done();
+}
+
+/*
+ * The same forgery after a host close and reopen instead of a quiet gap. The
+ * close and the open each discard the receive windows (and spend a seq), so
+ * window 2 is never judged at all; the forged window is judged UNVERIFIED by
+ * the genuine window after it, which then verifies on its own.
+ */
+ZTEST(api, test_sec_host_a_close_and_reopen_leaves_no_window_pending)
+{
+	static const struct vd_want want[] = {
+		{ 0u, 0u },   { 0u, 1u },   { 0u, 2u }, { 0u, 3u }, { V_OK, 0u },
+		{ 0u, 258u }, { 0u, 259u }, /* the forgeries */
+		{ 0u, 260u }, { 0u, 261u }, { V_BAD, 258u, 2u },
+		{ 0u, 262u }, { 0u, 263u }, { V_OK, 260u },
+	};
+	uint8_t  rec4[8];
+	uint8_t  rec5[8];
+	uint32_t from;
+
+	vd_setup(RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_VERDICT_EVENT, 2u);
+	from = api_msglog_count();
+	for (uint32_t i = 0u; i < 4u; i++) {
+		(void)vd_hop(i, false);
+	}
+	vd_capture(4u, rec4);
+	vd_capture(5u, rec5);
+	zassert_ok(antr_channel_close(VD_RX_CH));
+	fake_radio_advance(1000u);
+	(void)radiant_event_drain(0u);
+	zassert_true(vd_closed_at(from, VD_RX_CH) >= 0,
+		     "the close never completed");
+	zassert_ok(antr_channel_open(VD_RX_CH));
+	(void)radiant_event_drain(0u);
+
+	vd_forge_tag(258u, 258u, rec4[7]);
+	vd_forge_tag(259u, 259u, rec5[7]);
+	for (uint32_t i = 260u; i < 264u; i++) {
+		(void)vd_hop(i, false);
+	}
+	vd_expect(from, want, ARRAY_SIZE(want), 2u);
+	vd_done();
+}
+
+/*
+ * Review finding 2: a forged page already pumped when the host sends 0xF3
+ * (a new epoch) or 0xF1 loses its window there, so its UNVERIFIED never
+ * comes - and with the old firmware the next verdicts followed in an
+ * unbroken seq, so a host that took the first one after its flush as
+ * binding would credit the forgery with VERIFIED 6. The discard now spends
+ * a seq value: the first verdict after shows a gap of one.
+ */
+static void vd_stale_across(bool new_epoch)
+{
+	static const struct vd_want want[] = {
+		{ 0u, 0u }, { 0u, 1u }, { 0u, 2u }, { 0u, 3u }, { V_OK, 0u },
+		{ 0u, 6u }, /* the forgery, pumped before the host's command */
+		{ 0u, 4u }, { 0u, 5u }, { 0u, 6u }, { 0u, 7u }, { V_OK, 4u, 1u },
+		{ 0u, 8u }, { 0u, 9u }, { V_OK, 6u },
+	};
+	uint32_t from;
+
+	vd_setup(RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_VERDICT_EVENT, 2u);
+	from = api_msglog_count();
+	for (uint32_t i = 0u; i < 4u; i++) {
+		(void)vd_hop(i, false);
+	}
+	vd_forge_tag(4u, 6u, 0xEEu);
+
+	if (new_epoch) {
+		int rc;
+
+		zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+			      antr_sec_epoch_set(VD_RX_CH, 0u, VD_EPOCH + 1u,
+						 0u));
+		k_mutex_lock(&api_lock, K_FOREVER);
+		rc = radiant_sec_set_epoch(VD_TX_CH, VD_EPOCH + 1u, 0u,
+					   RADIANT_CHANNEL_PERIOD_ANT_PLUS);
+		k_mutex_unlock(&api_lock);
+		zassert_equal(RADIANT_SEC_OK, rc);
+	} else {
+		zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+			      antr_sec_config(VD_RX_CH,
+					      RADIANT_SEC_SW_AUTH |
+						      RADIANT_SEC_SW_VERDICT_EVENT,
+					      2u, 0x01u, 0x0Fu));
+	}
+
+	for (uint32_t i = 4u; i < 10u; i++) {
+		(void)vd_hop(i, false);
+	}
+	vd_expect(from, want, ARRAY_SIZE(want), 2u);
+	vd_done();
+}
+
+ZTEST(api, test_sec_host_a_stale_forgery_across_0xf3_leaves_a_seq_gap)
+{
+	vd_stale_across(true);
+}
+
+ZTEST(api, test_sec_host_a_stale_forgery_across_0xf1_leaves_a_seq_gap)
+{
+	vd_stale_across(false);
 }
 
 ZTEST(api, test_sec_host_without_the_bit_the_stream_is_unchanged)
