@@ -95,6 +95,9 @@ uint32_t fake_mpsl_accepted(void);   /* calls that returned 0 */
 const mpsl_timeslot_request_t *fake_mpsl_last_request(void);
 /* The extension length asked for by the last ACTION_EXTEND. */
 uint32_t fake_mpsl_last_extend_us(void);
+/* The struct the gate's callback returned for the last signal. MPSL reads it
+ * after the callback returns, so it must still hold the action then. */
+const mpsl_timeslot_signal_return_param_t *fake_mpsl_last_return(void);
 /* True between a START signal and the ACTION_END that answered one. */
 bool     fake_mpsl_in_timeslot(void);
 
@@ -131,6 +134,8 @@ struct fake_backend_counts {
 	 */
 	uint32_t irq_unpend;
 	uint32_t irq_unpend_cleared;
+	/* radiant_nrf_gate_on_slot_start() calls: one per SIGNAL_START. */
+	uint32_t slot_start;
 	uint32_t grant_end_seq;
 	uint32_t unpend_seq;
 	uint32_t unpend_abort_calls;

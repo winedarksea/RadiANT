@@ -331,6 +331,15 @@ void radiant_nrf_gate_on_grant_end(void);
  */
 bool radiant_nrf_gate_radio_irq_unpend(void);
 
+/*
+ * A timeslot has started (SIGNAL_START, before any path that may call
+ * radiant_nrf_gate_on_grant()). Forgets whether an earlier timeslot took the
+ * radio, so radiant_nrf_gate_radio_irq_unpend() answers for this one only, even
+ * after a timeslot that ended without a high-priority ACTION_END. One store,
+ * zero-latency safe. Defined by the arbitrated (MPSL) build only.
+ */
+void radiant_nrf_gate_on_slot_start(void);
+
 #ifdef __cplusplus
 }
 #endif

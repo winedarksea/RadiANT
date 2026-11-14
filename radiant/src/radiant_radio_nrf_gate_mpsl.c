@@ -367,6 +367,9 @@ static struct {
 	 * that session's SESSION_IDLE/CLOSED backstop. MPSL never runs two of our
 	 * timeslots at once, so the radio state below describes this one. */
 	volatile bool    ts_live;
+	/* A MPSL_TIMER0 COMPARE0 interrupt we enabled is still armed: set where it is
+	 * enabled (SIGNAL_START, gate_release()), cleared by timer0_disarm(). */
+	volatile bool    t0_armed;
 
 	/*
 	 * Last instant the radio may be busy under the grant we hold, not the timeslot
@@ -543,7 +546,8 @@ static struct {
 	/*
 	 * Assert 69:108 evidence. High-priority ACTION_ENDs returned (end_hi) and those
 	 * that found the RADIO vector pending when the gate cleared it (unpend), by the
-	 * signal that ended the timeslot: END_SRC_*. Each unpend is an assert avoided.
+	 * signal that ended the timeslot: END_SRC_*. Each unpend is inferred to be an
+	 * assert avoided (a pending vector at END is the observed precondition).
 	 */
 #define END_SRC_START     0u
 #define END_SRC_T0_SKIP   1u /* TIMER0 ext-skip (or the EL_FIXED arm's cut) */
@@ -1279,14 +1283,45 @@ static inline void gate_hand_back(void)
 }
 
 /*
+ * Set for the whole of a high-priority signal, so the backend can tell a
+ * zero-latency completion from an ordinary one (see gate_in_signal() in
+ * radiant_radio_nrf_gate.h). Not set for low-priority signals: the trampoline
+ * could preempt those, making a second producer for the backend's single-producer
+ * ring. A plain bool, since only the zero-latency callback writes it.
+ */
+static volatile bool in_signal;
+
+bool gate_in_signal(void)
+{
+	return in_signal;
+}
+
+/*
  * Disarms TIMER0 on every path that ends a grant. MPSL_TIMER0 belongs to MPSL. A
  * COMPARE0 left enabled re-enters forever on an event nothing clears: the board
  * stays alive and answers nothing, with no fault message.
+ *
+ * The registers are ours only inside our timeslot (mpsl_timeslot.h). A
+ * high-priority signal is inside it, so there they are written unconditionally.
+ * Elsewhere (the low-priority backstops SESSION_IDLE, SESSION_CLOSED and a late
+ * BLOCKED/CANCELLED, and gate_shutdown()) no timeslot of ours may be running and
+ * the timer may be MPSL's again, so they are written only while g.t0_armed says a
+ * COMPARE0 interrupt we enabled is still armed. That still covers the case the
+ * backstop exists for: gate_release() arms the compare and returns the radio, and
+ * if that compare is lost the flag is still set when SESSION_IDLE arrives. The
+ * test and the writes are masked against the zero-latency callback, so another
+ * session's START cannot arm its compare between them.
  */
 static inline void timer0_disarm(void)
 {
-	nrf_timer_int_disable(MPSL_TIMER0, NRF_TIMER_INT_COMPARE0_MASK);
-	nrf_timer_event_clear(MPSL_TIMER0, NRF_TIMER_EVENT_COMPARE0);
+	const uint32_t zkey = radiant_swi_zli_lock();
+
+	if (in_signal || g.t0_armed) {
+		nrf_timer_int_disable(MPSL_TIMER0, NRF_TIMER_INT_COMPARE0_MASK);
+		nrf_timer_event_clear(MPSL_TIMER0, NRF_TIMER_EVENT_COMPARE0);
+	}
+	g.t0_armed = false;
+	radiant_swi_zli_unlock(zkey);
 	/* Also returns the radio, so no path can forget to. Radio shorts left set
 	 * would fire on the SoftDevice Controller's own events. */
 	gate_hand_back();
@@ -1314,18 +1349,14 @@ static inline void submit_denial(void)
 }
 
 /*
- * Set for the whole of a high-priority signal, so the backend can tell a
- * zero-latency completion from an ordinary one (see gate_in_signal() in
- * radiant_radio_nrf_gate.h). Not set for low-priority signals: the trampoline
- * could preempt those, making a second producer for the backend's single-producer
- * ring. A plain bool, since only the zero-latency callback writes it.
+ * What every low-priority signal returns (BLOCKED, CANCELLED, SESSION_IDLE,
+ * SESSION_CLOSED, and the error signals): always ACTION_NONE. Not the session's
+ * own rv, which the zero-latency invocation for the same session writes: a
+ * low-priority invocation preempted after its last write would otherwise hand
+ * MPSL that invocation's END or EXTEND, and an action from a low-priority signal
+ * asserts (mpsl_timeslot.h). Only NONE is ever written here.
  */
-static volatile bool in_signal;
-
-bool gate_in_signal(void)
-{
-	return in_signal;
-}
+static mpsl_timeslot_signal_return_param_t rv_low_prio;
 
 static mpsl_timeslot_signal_return_param_t *on_signal(
 	mpsl_timeslot_session_id_t id, uint32_t signal)
@@ -1334,8 +1365,10 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		signal <= MPSL_TIMESLOT_SIGNAL_EXTEND_SUCCEEDED;
 	struct sess   *s = sess_of(id);
 	const uint8_t  si = sess_idx(s);
-	/* Per-session return parameter; every branch writes through rv. */
-	mpsl_timeslot_signal_return_param_t *const rvp = &s->rv;
+	/* Per-session return parameter for the high-priority signals (each branch
+	 * writes through rv); the shared always-NONE one for the rest. */
+	mpsl_timeslot_signal_return_param_t *const rvp =
+		high_prio_signal ? &s->rv : &rv_low_prio;
 	uint32_t zkey;
 #if defined(CONFIG_RADIANT_GATE_MPSL_STATS)
 	/* This TIMER0 signal ended its grant by the skip (evidence counters only). */
@@ -1355,6 +1388,9 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 
 	switch (signal) {
 	case MPSL_TIMESLOT_SIGNAL_START:
+		/* A new timeslot: nothing of it is the radio's yet (see
+		 * radiant_nrf_gate_radio_irq_unpend()). Before any path below. */
+		radiant_nrf_gate_on_slot_start();
 		stats.granted++;
 		GSTAT(s->n_granted++);
 		/* Answered: the session accepts a new request. See struct sess::mpsl_owes. */
@@ -1487,6 +1523,7 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		 * at once. Clear between cc_set and int_enable. gate_release() uses the same order.
 		 */
 		nrf_timer_event_clear(MPSL_TIMER0, NRF_TIMER_EVENT_COMPARE0);
+		g.t0_armed = true;
 		nrf_timer_int_enable(MPSL_TIMER0, NRF_TIMER_INT_COMPARE0_MASK);
 		break;
 
@@ -2787,6 +2824,7 @@ static void gate_release_masked(void)
 			nrf_timer_cc_set(MPSL_TIMER0, 0, want);
 			nrf_timer_event_clear(MPSL_TIMER0,
 					      NRF_TIMER_EVENT_COMPARE0);
+			g.t0_armed = true;
 			nrf_timer_int_enable(MPSL_TIMER0,
 					     NRF_TIMER_INT_COMPARE0_MASK);
 
@@ -2803,6 +2841,7 @@ static void gate_release_masked(void)
 		} else {
 			GSTAT(stats.rel_br_inside++);
 			/* Already inside the end margin: the armed compare is right, and moving it can only lose. */
+			g.t0_armed = true;
 			nrf_timer_int_enable(MPSL_TIMER0,
 					     NRF_TIMER_INT_COMPARE0_MASK);
 		}
@@ -3164,8 +3203,9 @@ void mpsl_assert_handle(const char *const file, const uint32_t line)
 	 * (ipsr=RADIO), 18 us after on_signal() returned ACTION_END, with no timeslot
 	 * open - MPSL taking a RADIO interrupt that latched while our grant was being
 	 * ended. on_signal() now clears that pending state before every high-priority
-	 * END (radiant_nrf_gate_radio_irq_unpend()); the unpend_* counters below count
-	 * the asserts that avoided.
+	 * END (radiant_nrf_gate_radio_irq_unpend()). The unpend_* counters below count
+	 * the ENDs that found the vector pending; each is inferred, not observed, to be
+	 * an assert avoided.
 	 */
 	/*
 	 * LOG_PANIC() first, or this handler is silent: printk goes through the log

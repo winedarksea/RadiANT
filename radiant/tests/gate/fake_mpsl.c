@@ -47,6 +47,8 @@ static struct {
 
 	bool     in_timeslot;
 	uint32_t last_extend_us;
+	/* The struct the last signal's callback returned. */
+	const mpsl_timeslot_signal_return_param_t *last_rv;
 
 	uint32_t viol_low_prio_action;
 	uint32_t viol_end_when_ended;
@@ -181,6 +183,7 @@ uint8_t fake_mpsl_signal_s(uint32_t sess, uint32_t signal)
 		m.viol_action_no_slot++;
 		return MPSL_TIMESLOT_SIGNAL_ACTION_NONE;
 	}
+	m.last_rv = p;
 	action = p->callback_action;
 	if (action == MPSL_TIMESLOT_SIGNAL_ACTION_EXTEND) {
 		m.last_extend_us = p->params.extend.length_us;
@@ -231,6 +234,7 @@ uint32_t fake_mpsl_requests(void)  { return m.requests; }
 uint32_t fake_mpsl_accepted(void)  { return m.accepted; }
 bool     fake_mpsl_in_timeslot(void) { return m.in_timeslot; }
 uint32_t fake_mpsl_last_extend_us(void) { return m.last_extend_us; }
+const mpsl_timeslot_signal_return_param_t *fake_mpsl_last_return(void) { return m.last_rv; }
 
 const mpsl_timeslot_request_t *fake_mpsl_last_request(void)
 {
@@ -270,6 +274,12 @@ void fake_backend_reset(void)
 	radio_irq_pending = false;
 	radio_lent_this_slot = false;
 	backend_seq = 0u;
+}
+
+void radiant_nrf_gate_on_slot_start(void)
+{
+	b.slot_start++;
+	radio_lent_this_slot = false;
 }
 
 void fake_backend_radio_irq_pend(void) { radio_irq_pending = true; }
