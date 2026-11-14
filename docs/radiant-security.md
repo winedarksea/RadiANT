@@ -1231,8 +1231,9 @@ a separately named function that `0xF5` cannot reach. It is unauthenticated
 Diffie-Hellman, and its fingerprint (both nonces zero, the keys ordered by
 value) is a function of the two public keys only, so it is **grindable** by a
 MITM exactly as the old `0xF5` one was, on top of being one-sided. Read it as a
-check that two honest ends agree, not as a MITM defence. Redesigning enrolment
-is deferred with review item 6, which owes it a delivery redesign anyway.
+check that two honest ends agree, not as a MITM defence. What a MITM wins this
+way is a copy of the group root (section 11.7: the exchange delivers the
+existing root rather than replacing it), not the existing receivers' place.
 
 **A strap gives one side of that comparison and nothing on the other.** The
 receiver can show its six digits; there is nothing at the sensor for the user to
@@ -1496,7 +1497,11 @@ lifecycle, the path that already had one scalar-reuse bug. On a slower core
 `test_sec_host_pairing_holds_api_lock_and_its_hold_time` before enabling
 `CONFIG_RADIANT_SEC_PAIRING_X25519`.
 
-**The sensor holds one key. Every authorized receiver gets a copy.**
+**The sensor holds one key. Every authorized receiver gets a copy.** Over-air
+enrolment (section 11.7) is how a copy is handed over without a host: the X25519
+key it agrees is pairwise and used only to wrap the sensor's existing root for
+that one receiver, so the sensor's key, and every copy already out, stay as
+they were.
 
 That single sentence is the structural difference from BLE, and it is the
 reason RadiANT can do what BLE cannot:
@@ -2333,11 +2338,12 @@ Four rules:
   depend on the `announce` setting at all.
 - **Enrolment is visible.** The pairing-open state is a beacon bit and a
   descriptor bit, which the receivers that already exist see over the air. A
-  completed enrolment also increments a counter in `struct radiant_sec_stats`,
-  which the `0xF4` report carries at `[24..25]` (section 11.7.2). That counter
-  is read by a host on the node that did the enrolment; other receivers cannot
-  see it over the air. An enrolment the owner did not perform is the whole
-  attack; making it silent would be the mistake.
+  completed enrolment also increments a counter beside the root it delivered:
+  `struct radiant_sec_stats`, which the `0xF4` report carries at `[24..25]`,
+  or `struct radiant_sec_compat_stats` on a compat channel (section 11.7.2).
+  That counter is read on the node that did the enrolment; other receivers
+  cannot see it over the air. An enrolment the owner did not perform is the
+  whole attack; making it silent would be the mistake.
 - **Over-air enrolment is unauthenticated Diffie-Hellman, and its fingerprint
   protects against nothing an attacker computes.** It is one-sided, because a
   strap has no display, and it is **grindable**: the six-frame exchange has no
@@ -2355,12 +2361,41 @@ Four rules:
   attacker has to be in the room. `closed` remains the recommendation for
   anything that matters. Section 7.4's amendments are the long form and are not
   restated here so that there is one copy of them.
-- **Enrolment as built is not yet additive.** The paragraph at the top of this
-  section describes the intent; today the DH-derived key replaces the sensor's
-  channel root rather than delivering the existing one (security review
-  2026-11-13, item 6). The redesign that fixes delivery is also where enrolment
-  gets an authenticated exchange; until then, treat an over-air window as a
-  re-key that any listener in range can win.
+- **The exchange delivers the root; it never replaces it.** The X25519 key the
+  window agrees is pairwise and becomes nobody's root: the node uses it only to
+  wrap the root its channel already holds (the compat context's on a compat or
+  private node, the secured context's otherwise) and sends that, in the frames
+  of section 11.7.1, after the window closes. The node's root, epoch and stream
+  are untouched, so a receiver already listening keeps verifying, and the
+  receiver that answered installs the same root those receivers hold. Whoever
+  wins a window - including a man in the middle - gains a copy of the root, not
+  the existing receivers' place; that is the reason the mitigations above
+  still matter. A node whose channel holds no root at all has nothing to
+  deliver and nobody to lock out, so its first enrolment installs the
+  exchange's enrolment root as its first and delivers that.
+
+The wrap, with `PKlo`/`PKhi` the two public keys ordered by value and `PRK` the
+condensed DH output (section 7.4):
+
+```
+K_wrap  = CMAC_PRK("RADIANT-enrl-wrap\0" || PKlo || PKhi)
+K_wrap' = CMAC_PRK("RADIANT-enrl-wmac\0" || PKlo || PKhi)
+n       = nonce_block(0, 0, 0, dom = 0x06)
+ct      = AES-CTR(K_wrap, n, root)                          16 bytes
+wrapped = ct || trunc64( CMAC(K_wrap', n || ct) )           24 bytes
+```
+
+Both keys are fresh per exchange and each seals one root, so the constant nonce
+is never reused under a key; domain byte `0x06` keeps the block apart from
+every other use of section 3.3's layout. The receiver checks the tag in
+constant time before it decrypts anything. A tag that fails installs nothing
+and leaves the receiver waiting for the next copy, so a forged or torn delivery
+does not cost it the enrolment. The receiver binds the root to its channel's
+device number (for a receiver, the node's) and must set the epoch before
+anything verifies, as after any key install. In the code: the node side is
+`radiant_sec_pair_peer_uncommitted()`, driven by `profile_enrol.c`; the
+receiver side is `radiant_sec_pair_join()` then
+`radiant_sec_pair_accept_root()`, which no application wires yet.
 
 Removal is not the mirror of addition — section 7.3.
 
@@ -2417,22 +2452,59 @@ rather than a key. Nothing new is built for this: `radiant_transfer_on_data()`
 already acknowledges an inbound packet inside the measured 1.55 ms turnaround
 and hands the payload up through `radiant_transfer_ops::rx_data`.
 
+**The root follows in four frames, once the window has closed.** Once the
+peer's set completes, the window closes (one pairing per window), the
+pairing-open bit drops, and the set shrinks to six:
+
+```
+frames 0, 1   the ordinary beacon, pairing-open bit clear, count 6: 0x05, 0x15
+frames 2..5   [1] = ((2 + k) << 4) | 0x05,  k = 0..3
+              [2..7]  bytes 6k .. 6k+5 of the 24-byte wrapped root
+```
+
+Four frames of six bytes is exactly the 24-byte wrapped root (11.7), so again
+there is no spare byte. There is no set check: the tag covers every byte, and a
+set spliced from two deliveries fails it. A node with `advertise = off` sends
+the four frames alone, count 4, indices 0..3. The block goes out three times
+(each frame three times, counted in frames sent rather than time), the same
+three passes the window's set gets; at the promoted rate a six-frame set takes
+48 messages, about 36 s of the 12.4% cost at 4 Hz, paid only after an
+enrolment. Then the set is the plain beacon again. Nothing acknowledges it; a
+receiver that missed every pass needs another window. A new window is refused
+while a delivery runs.
+
+**The count tells the two sets apart.** A node with a beacon sends 8 frames
+during the window and 6 while delivering; one without sends 6, then 4. A
+receiver learns which kind of node it faces from the window, since it cannot
+answer before it has the node's key, so the count it then waits for is
+unambiguous. A set misread anyway fails its own check, the set check or the
+tag, and installs nothing.
+
 **The interlock, recorded before it bites.** Layer C's SWITCH and RETURN frames
 are pinned at indices 2 and 3 (11.5), which is where the enrolment block also
-starts. A countdown and an enrolment window must not run at once, and whichever
-arrives second is refused. There is one client of that frame set today; the
-arbitration belongs to the phase that adds the second.
+starts. A countdown and an enrolment window (or its delivery) must not run at
+once, and whichever arrives second is refused. There is one client of that
+frame set today; the arbitration belongs to the phase that adds the second.
 
 #### 11.7.2 The counter, and where a host can read it
 
-A completed enrolment increments `enrolments` in `struct radiant_sec_stats`,
-bumped inside the pairing install (reached from `radiant_sec_pair_peer_nonce()`
-for `0xF5` and `radiant_sec_pair_peer_uncommitted()` for this window) after the
-root key is installed — so it counts pairings that took rather than pairings
-that were attempted, and a refused small-order peer key or a commitment that
-does not open leaves it alone. It counts the `0xF5` host exchange
-and the over-air window alike, because from the group's point of view they are
-one event.
+A completed enrolment increments `enrolments` in the stats of the context whose
+root it concerns. For `0xF5` that is `radiant_sec_pair_peer_nonce()` installing
+its key. For this window it is the node sealing its root for delivery
+(`radiant_sec_pair_peer_uncommitted()`, once the peer's key is accepted) and
+the receiver installing it (`radiant_sec_pair_accept_root()`). So it counts
+pairings that took rather than pairings that were attempted: a refused
+small-order peer key, a commitment that does not open, or a wrapped root whose
+tag fails leaves it alone. It counts the `0xF5` host exchange and the over-air
+window alike, because from the group's point of view they are one event.
+
+**Where it lives follows the root.** A secured channel's root counts in
+`struct radiant_sec_stats`. A compat channel's root, which is what a compat or
+private node delivers, counts in `struct radiant_sec_compat_stats`
+(`radiant_sec_compat_get_stats()`), so a compat-only node is never given a
+secured context just to hold the number. A node whose first root came from the
+window counts in `struct radiant_sec_stats`, because that is where the root
+went. The `0xF4` report described next carries only the first.
 
 **A host reads it from the `0xF4` report, at `[24..25]`** (u16 LE, saturating
 rather than wrapping, like every other `0xF4` counter). `0xF4` carries a
