@@ -384,7 +384,8 @@ either delay the data by that much or always read `unverified`. Instead:
      reports, settles every packet still pending as unverified. On a gap this
      happens *before* the `0xF8` that revealed the gap is applied, so a lost
      `unverified` cannot be replaced by a later `verified`. The firmware's
-     `verdict_events_dropped` counts event-ring refusals only; a `0xF8` the
+     `verdict_events_dropped` (`0xF4` `[28..29]`) counts event-ring
+     refusals only; a `0xF8` the
      USB bridge drops on backlog (with only a log line) and a discarded
      window show up nowhere but as `seq` gaps, so `seq` is the host's one
      reliable witness.
@@ -393,7 +394,13 @@ either delay the data by that much or always read `unverified`. Instead:
      that (plus transport slack) is unverified, and the deadline is checked
      before *every* `0xF8` is applied: a host that stops reading for longer
      than the deadline settles everything it held. The last window before a
-     node goes quiet ends this way.
+     node goes quiet ends this way. So does a genuine window just before a
+     run of clear-only windows: its tag rides on to the next window that
+     carries secured packets, so its verdict can come later than 2W-1
+     periods, and the deadline has already settled those packets as
+     unverified. That fails safe - genuine data marked unverified, never a
+     forgery marked verified - and costs about what the clear run already
+     costs (the table above).
   4. Pending packets are settled as unverified on `CHANNEL_CLOSED`, on the
      host's own `0xF1` or `0xF3` for the channel, and on reset - and so is
      whatever is pending when the **first** `0xF8` after any of these (or
@@ -413,8 +420,10 @@ either delay the data by that much or always read `unverified`. Instead:
   whose counter byte aliases the pending window 256 counters on, carrying the
   captured tag bytes of the window that followed it; the tag matched and the
   forged packets were followed at once by `verified`. A
-  channel close or open also discards a secured channel's receive windows
-  (keeping its replay floor), so a window can't stay pending across one.
+  channel close or open also discards the receive windows, the drop-policy
+  holds and the not-yet-pumped packets of every keyed channel - opted in to
+  `0xF8` or not - keeping its replay floor, so a window can't stay pending
+  across one.
 - A host that wants per-packet trust holds each covered packet until it is
   resolved; one that wants no latency uses the data at once and treats the
   event as an alarm. Either way, a forged window is now visible as a forged
