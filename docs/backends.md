@@ -344,7 +344,7 @@ the radio's own clock against 0.0120 ms). See
 | `max_filters` | Addresses matchable in one receive window. Sets the wildcard-sweep length | **8** (one base plus eight prefixes) | **2** (`syncWord0`, `syncWord1`, and nothing else) | **2** (two runtime sync words) |
 | `max_addr_groups` | Distinct values of `addr[0 .. addr_len-2]` matchable in one window. Sets how many *tracked* channels can share a merged window | **2** (BASE0 and BASE1) — and this is the bound on what merging can rescue: a merged window holds a **pair** of tracked device numbers, so three tracked channels piled inside one `min_arm_lead_us` still cost the third its window. See "the merge reach" below and [ADR 0016](decisions/0016-merge-reach-is-the-arm-lead.md) | **2** — but for the opposite reason: each sync word is fully independent, so this *equals* `max_filters` and the constraint never binds | **2** (two independent sync words) |
 | `min_filter_hamming_bits` | Minimum bit distance between two simultaneously-armed hardware addresses before the matcher can separate them | 0 (a comparator; no constraint) | **4** — measured, and the field exists because of this part. See below | 0 (unmeasured) |
-| `filter_wildcard_dev` | Can one filter match *any* device number? | false; true with `CONFIG_RADIANT_SEARCH_SHORT_MATCH` ([ADR 0022](decisions/0022-search-matches-a-wildcard-device-number.md)) | **true** by default (the short match is on for cc26xx since 2026-11-12); false with `apps/dongle_ti/ti_long_match.conf` | false |
+| `filter_wildcard_dev` | Can one filter match *any* device number? | **true** by default (`CONFIG_RADIANT_SEARCH_SHORT_MATCH`, on for nRF since 2026-11-13, [ADR 0022](decisions/0022-search-matches-a-wildcard-device-number.md)); false with `apps/dongle/long_match.conf` | **true** by default (the short match is on for cc26xx since 2026-11-12); false with `apps/dongle_ti/ti_long_match.conf` | false |
 | `addr_len_hw_max` | Longest address the hardware matcher itself handles. Informational — a shorter hardware match is completed in software, at the cost of more spurious wakeups and more receive current | 5 | **2** by default (`nSwBits` 16, the short match); **3** with `ti_long_match.conf` (`nSwBits` 24). The silicon reaches 4 (`nSwBits` is 8..32) but `nSwBits` lives in the setup command that `RF_open()` consumes and cannot be changed under a live handle, so it is fixed per build and applies to search and tracking alike | 4 |
 | `max_body_len` | Largest body (bytes between address and CRC), either direction | — | — | — |
 | `phys[]`, `n_phys`, `phy_switch_us` | PHYs this build supports, most-preferred first, and what switching between two of them costs the scheduler | one PHY (1 M) by default, and `phy_switch_us` is then 0 — there is nothing to switch to. `CONFIG_RADIANT_PHY_LR_CODED=y` adds the coded PHY and sets the switch cost to 20 µs, bounded not measured; the switch itself is a handful of register writes `apply_format()` already performs, so it is nearly free either way | one PHY; a switch would be a fresh `RF_open` | reloads a generated configuration |
@@ -400,8 +400,10 @@ eight simultaneous searches take ~64 s instead of ~8 s.
 Since [ADR 0022](decisions/0022-search-matches-a-wildcard-device-number.md)
 a backend can say otherwise: `radiant_rx_filter.wild_last` and
 `caps.filter_wildcard_dev` let one window match every device number, and the
-sweep is then one set. nRF opts in under `CONFIG_RADIANT_SEARCH_SHORT_MATCH`
-(default n); cc26xx does by default (2 hardware bytes, so 1 set instead of 128).
+sweep is then one set. Both nRF (1 set instead of 32) and cc26xx (2 hardware
+bytes, so 1 set instead of 128) do so by default under
+`CONFIG_RADIANT_SEARCH_SHORT_MATCH`; `long_match.conf` / `ti_long_match.conf`
+turn it off.
 
 **`max_addr_groups` is the one that was missing, and its absence was a live
 bug.** The nRF's eight logical addresses are not eight independent addresses:

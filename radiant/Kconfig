@@ -629,8 +629,7 @@ config RADIANT_NRF_SLIP_GUARD
 config RADIANT_SEARCH_SHORT_MATCH
 	bool "search every device number in one window (wildcard short match)"
 	depends on RADIANT_BACKEND_NRF || RADIANT_BACKEND_CC26XX
-	default y if RADIANT_BACKEND_CC26XX
-	default n
+	default y
 	help
 	  ADR 0022. The sweep normally matches the 3-byte search address
 	  [A6 C5 devnum_lo] with 8 hardware filters, so it steps through 32
@@ -661,9 +660,13 @@ config RADIANT_SEARCH_SHORT_MATCH
 
 	  Default y on cc26xx since 2026-11-12: the A/B/A in ADR 0022 passed
 	  all four gates on a CC2652R (4.45 sightings/s against 0.52, tracked
-	  loss no worse, fewer software mismatches). Default n on nRF until
-	  its own gate 3 is settled. apps/dongle_ti/ti_long_match.conf builds
-	  the 24-bit A image.
+	  loss no worse, fewer software mismatches). Default y on nRF since
+	  2026-11-13: gates 1-4 passed there too (gate 3, tracked loss, moved
+	  -0.23 pp against a 2.16 pp bound;
+	  archive/benchmarks/2026-11-12-gate3/). A Zwift capture is the
+	  acceptance check. apps/dongle/long_match.conf (nRF) and
+	  apps/dongle_ti/ti_long_match.conf (cc26xx) build the old 24-bit
+	  image.
 
 config RADIANT_NRF_SLIP_GUARD_RUN
 	int "alternating-run length at which an address gets the slip guard"

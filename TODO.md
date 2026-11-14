@@ -1,8 +1,8 @@
 MPSL bursts: multi-packet bursts still can't run on MPSL builds. That's a scope gap, not a regression; Zwift uses acknowledged messages.
 
 Discovery short match (ADR 0022), left open 2026-11-11:
-- The two waste fixes (ADR 0022 "Not done here"): closed for TI, where the short match is now on by default and one set makes them moot. On nRF they matter only while the short match is off, which ends when the default flips after the Zwift capture; no scheduler "window is live" query is built.
-- Deferred to the Zwift follow-up testing: the final Zwift capture with both workstreams flashed (user-run): every sensor listed within ~1 s, 0x61/0xC6 answered, reset -> NETWORK_KEY against 42-94 s (RadiANT history) and 9.2 s (Garmin).
+- The two waste fixes (ADR 0022 "Not done here"): closed. The short match is on by default on TI (2026-11-12) and nRF (2026-11-13), and one set makes them moot; they matter only for `long_match.conf` images. No scheduler "window is live" query is built.
+- Zwift acceptance of the nRF default flip (user-run, not a precondition any more): every sensor listed within ~1 s while HR and trainer are tracked, 0x61/0xC6 answered, reset -> NETWORK_KEY against 42-94 s (RadiANT history) and 9.2 s (Garmin). If it passes, mark ADR 0022 accepted; if it fails, rebuild with `apps/dongle/long_match.conf` and investigate.
 
 
 ## TI CC2652R, open after the 2026-11-12 bench (evidence `archive/benchmarks/2026-11-12-ti-findings/` and `2026-11-12-ti-lead/`; items 1-3 closed 2026-11-13, `archive/benchmarks/2026-11-13-ti-todo/README.md`):

@@ -2,9 +2,10 @@
 
 - **Status:** proposed. Built behind `CONFIG_RADIANT_SEARCH_SHORT_MATCH`,
   ztest-verified, A/B/A on air below. Default **y on cc26xx** since 2026-11-12
-  (the TI A/B/A passed all four gates). Default **n on nRF**: its four gates
-  passed on 2026-11-12 ([Gate 3 on nRF](#gate-3-on-nrf-2026-11-12)), and the
-  Zwift capture is still to do.
+  (the TI A/B/A passed all four gates). Default **y on nRF** since
+  2026-11-13: its four gates passed on 2026-11-12
+  ([Gate 3 on nRF](#gate-3-on-nrf-2026-11-12)). Zwift acceptance pending;
+  `apps/dongle/long_match.conf` builds the 24-bit nRF image.
 - **Date:** 2026-11-11
 - **Supersedes:** the "search format is permanent by design and is not touched"
   note in `radiant/src/radiant_addr_split.h` (ADR 0019's scope line), and the

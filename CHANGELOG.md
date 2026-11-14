@@ -11,6 +11,14 @@ reads.
 
 ## [Unreleased]
 
+### Changed
+
+- **nRF wildcard search is on by default** (`CONFIG_RADIANT_SEARCH_SHORT_MATCH`,
+  ADR 0022). All four nRF gates passed on 2026-11-12 (tracked loss -0.23 pp
+  against the same-SoC control, bound 2.16 pp). Discovery goes from about
+  0.5-1 to 4-12 sightings/s. The Zwift capture is the acceptance check;
+  `apps/dongle/long_match.conf` builds the old 24-bit image.
+
 ### Added
 
 - **cc26xx wildcard search, on by default** (`CONFIG_RADIANT_SEARCH_SHORT_MATCH`,
@@ -29,12 +37,12 @@ reads.
   advertised again, but only when the backend really answers, so the
   capabilities reply goes from `...b2...` back to `...ba...`. The sdk-ant
   backend still refuses both. `tools/ant_probe.py` checks the replies.
-- **Opt-in wildcard search on nRF (`CONFIG_RADIANT_SEARCH_SHORT_MATCH`, default
-  n).** A search window matches only `[A6 C5]` in hardware and reads
+- **Wildcard search on nRF (`CONFIG_RADIANT_SEARCH_SHORT_MATCH`).** A search
+  window matches only `[A6 C5]` in hardware and reads
   `devnum_lo` from the frame. The sweep becomes one set rather than 32, and a
   background scan reports devices at the Garmin stick's rate (12.2 against
-  12.6 sightings/s on a Pro Micro, against 1.0/s without it). It stays off by
-  default until its effect on tracked loss is settled. See ADR 0022.
+  12.6 sightings/s on a Pro Micro, against 1.0/s without it). Default y
+  since 2026-11-13 (see Changed). See ADR 0022.
 - **`tools/ant_scan_rate.py`** measures discovery speed: sightings/s, time to
   first sighting after each scan open (with Zwift's reopen cadence), and
   tracked-channel loss, on several dongles in one window.
