@@ -19,7 +19,8 @@
  * phase lock at a receiver whose clock is not the sensor's (false wrap, late
  * delivery, an anchor before the receiver's zero, the first-contact limit, a
  * boot epoch set after the sensor wrapped, a forged first page, drift, a new
- * T); Tier II window/flipped-bit/lost-packet; subtype separation
+ * T); Tier II window/flipped-bit/lost-packet, its replay floor and its
+ * 32-bit window index; subtype separation
  * through the emit path; epoch recovery by hint (50/1000/65536 boots stale,
  * hint collision, tag search with advertise off, backwards re-provision, and
  * a search that matches nothing but still terminates).
@@ -638,6 +639,126 @@ ZTEST(sec_compat_stream, test_a_dropped_packet_costs_one_window_and_no_more)
 	radiant_sec_compat_get_stats(RX_CH, &st);
 	zassert_equal(2u, st.tier2_verified);
 	zassert_equal(1u, st.tier2_unverified);
+}
+
+/* A recorded window (its N-1 covered messages and its tag page), delivered
+ * again from `slot` on; returns what the tag page got. */
+static int replay_window(uint8_t rec[][RADIANT_SEC_COMPAT_MSG_BYTES],
+			 uint32_t slot)
+{
+	int      rc = RADIANT_SEC_OK;
+	uint32_t i;
+
+	for (i = 0u; i < TEST_N; i++) {
+		rc = deliver(rec[i], t_of(slot + i));
+	}
+	return rc;
+}
+
+/*
+ * Tier II's replay floor (review 2026-11-13 item 8). The page carries 8 bits
+ * of the window index and a receiver resolves them to the nearest of +/-128
+ * windows, so time alone accepts a recording for 128 windows; the floor is
+ * what refuses it, before the CMAC and counted apart from a forgery.
+ */
+ZTEST(sec_compat_stream, test_a_replayed_tier2_window_is_refused_by_the_floor)
+{
+	struct radiant_sec_compat_stats st;
+	uint8_t                         rec[TEST_N][RADIANT_SEC_COMPAT_MSG_BYTES];
+	uint32_t                        i;
+
+	setup_pair(RADIANT_SEC_COMPAT_SW_TIER_II, RADIANT_SEC_COMPAT_SW_TIER_II,
+		   63u, 63u);
+	for (i = 0u; i < TEST_N; i++) {          /* window 0, recorded */
+		(void)slot_run(i, true, -1, rec[i], NULL);
+	}
+	for (i = TEST_N; i < 101u * TEST_N; i++) {  /* windows 1..100 */
+		(void)slot_at(i, true);
+	}
+
+	zassert_equal(RADIANT_SEC_EREPLAY, replay_window(rec, 101u * TEST_N));
+	radiant_sec_compat_get_stats(RX_CH, &st);
+	zassert_equal(101u, st.tier2_verified, "%u", st.tier2_verified);
+	zassert_equal(0u, st.tier2_unverified, "%u", st.tier2_unverified);
+	zassert_equal(1u, st.tier2_replays, "%u", st.tier2_replays);
+
+	/* The stream carries on past the refusal. */
+	for (i = 102u * TEST_N; i < 103u * TEST_N; i++) {
+		(void)slot_at(i, true);
+	}
+	radiant_sec_compat_get_stats(RX_CH, &st);
+	zassert_equal(102u, st.tier2_verified, "%u", st.tier2_verified);
+	zassert_equal(0u, st.tier2_unverified, "%u", st.tier2_unverified);
+}
+
+/*
+ * The window index is 32 bits in the nonce, so window 65536 is not window 0
+ * again inside one epoch (~36 h at N = 8 and 4 Hz). With a 16-bit index the
+ * recording of window 0 verified there; now it fails the tag, the genuine
+ * window verifies, and a replay of that is refused by the floor.
+ */
+ZTEST(sec_compat_stream, test_a_tier2_window_past_65535_verifies_once)
+{
+	const uint32_t                  s = 65536u * TEST_N;
+	struct radiant_sec_compat_stats st;
+	uint8_t                         first[TEST_N][RADIANT_SEC_COMPAT_MSG_BYTES];
+	uint8_t                         rec[TEST_N][RADIANT_SEC_COMPAT_MSG_BYTES];
+	uint32_t                        i;
+	int                             rc = RADIANT_SEC_EINVAL;
+
+	setup_pair(RADIANT_SEC_COMPAT_SW_TIER_II, RADIANT_SEC_COMPAT_SW_TIER_II,
+		   64u, 64u);
+	for (i = 0u; i < TEST_N; i++) {
+		(void)slot_run(i, false, -1, first[i], NULL);
+	}
+	for (i = TEST_N; i < s; i++) {    /* the sender runs; nothing heard */
+		(void)slot_at(i, false);
+	}
+
+	/* Window 0 where time resolves its index byte to 65536. */
+	zassert_equal(RADIANT_SEC_EBADMAC, replay_window(first, s - TEST_N));
+
+	for (i = 0u; i < TEST_N; i++) {          /* window 65536, genuine */
+		(void)slot_run(s + i, true, -1, rec[i], &rc);
+	}
+	zassert_equal(RADIANT_SEC_OK, rc, "%d", rc);
+	for (i = s + TEST_N; i < s + 2u * TEST_N; i++) {
+		(void)slot_at(i, true);
+	}
+	zassert_equal(RADIANT_SEC_EREPLAY,
+		      replay_window(rec, s + 2u * TEST_N));
+
+	radiant_sec_compat_get_stats(RX_CH, &st);
+	zassert_equal(2u, st.tier2_verified, "%u", st.tier2_verified);
+	zassert_equal(1u, st.tier2_unverified, "%u", st.tier2_unverified);
+	zassert_equal(1u, st.tier2_replays, "%u", st.tier2_replays);
+}
+
+/* A new epoch restarts the sender's window count at 0, so the floor goes with
+ * the old epoch: kept, it would refuse every window up to the old mark. */
+ZTEST(sec_compat_stream, test_a_new_epoch_starts_a_fresh_tier2_floor)
+{
+	struct radiant_sec_compat_stats st;
+	uint32_t                        i;
+
+	setup_pair(RADIANT_SEC_COMPAT_SW_TIER_II, RADIANT_SEC_COMPAT_SW_TIER_II,
+		   65u, 65u);
+	for (i = 0u; i < 3u * TEST_N; i++) {
+		(void)slot_at(i, true);
+	}
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_compat_set_epoch(TX_CH, 66u, t_of(3u * TEST_N),
+						   0u, TEST_PERIOD));
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_compat_set_epoch(RX_CH, 66u, t_of(3u * TEST_N),
+						   0u, TEST_PERIOD));
+	for (i = 3u * TEST_N; i < 4u * TEST_N; i++) {
+		(void)slot_at(i, true);
+	}
+
+	radiant_sec_compat_get_stats(RX_CH, &st);
+	zassert_equal(4u, st.tier2_verified, "%u", st.tier2_verified);
+	zassert_equal(0u, st.tier2_replays, "%u", st.tier2_replays);
 }
 
 /* ═══ Both tiers ═════════════════════════════════════════════════════════ */

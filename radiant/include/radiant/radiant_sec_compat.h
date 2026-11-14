@@ -223,30 +223,35 @@ extern "C" {
 struct radiant_sec_compat_stats {
 	uint32_t tier1_verified;
 	uint32_t tier1_unverified;
-	uint32_t tier1_replays;     /* a counter already seen. THE tier's whole
-				     * replay defence, so it is counted rather
-				     * than merely rejected */
+	uint32_t tier1_replays;     /* a counter already seen, or a page later
+				     * than the phase lock allows: Tier I's
+				     * replay refusals, counted rather than
+				     * merely rejected */
 	uint32_t tier2_verified;
 	uint32_t tier2_unverified;
 	uint32_t epoch_advances;    /* counter wraps, per D14 */
 	uint32_t epoch_recoveries;
+	uint32_t tier2_replays;     /* a window index at or below the last
+				     * verified one: Tier II's replay floor */
 };
 
 #if defined(CONFIG_RADIANT_SEC_COMPAT)
 
 /*
  * nonce_block = epoch[4 LE] || devnum[2 LE] || counter[2 LE]
- *               || RADIANT_SEC_DOM_COMPAT_MAC || sub || 0x00 x6
+ *               || RADIANT_SEC_DOM_COMPAT_MAC || sub
+ *               || counter_hi[2 LE] || 0x00 x4
  *
  * Section 3.3's block EXTENDED at position 9, not duplicated: the domain byte
- * stays where every other block in this protocol has it and positions 10..15
- * stay zero, so a reader comparing this against radiant_sec_nonce_block() sees
- * one added byte rather than a second layout to keep in step.
+ * stays where every other block in this protocol has it, so a reader comparing
+ * this against radiant_sec_nonce_block() sees the added bytes rather than a
+ * second layout to keep in step.
  *
- * `counter` is the attestation counter for Tier I and the window index for
- * Tier II. Both are 16 bits here and both are carried truncated in the page -
- * two bytes for Tier I, one for Tier II - so a receiver reconstructs the high
- * bits from time exactly as it already does for the data counter.
+ * `counter` is the attestation counter for Tier I (16 bits, so counter_hi is
+ * 0) and the window index for Tier II (32 bits, so the index never repeats
+ * inside an epoch). Both are carried truncated in the page - two bytes for
+ * Tier I, one for Tier II - so a receiver reconstructs the high bits from time
+ * exactly as it already does for the data counter.
  *
  * `sub` is a nibble in 1..15; out is left untouched for anything else, which is
  * the only refusal a void function can make and is why the tag entry points
@@ -254,7 +259,7 @@ struct radiant_sec_compat_stats {
  */
 void radiant_sec_compat_nonce_block(uint8_t out[RADIANT_SEC_BLOCK_BYTES],
 				    uint32_t epoch, uint16_t devnum,
-				    uint16_t counter, uint8_t sub);
+				    uint32_t counter, uint8_t sub);
 
 /*
  * Tier I - the identity attestation. trunc40( CMAC(K_auth, nonce_block) ).
@@ -287,12 +292,15 @@ int radiant_sec_compat_tier1_tag(const struct radiant_sec_key *k_auth,
  * A flat byte array and two scalars rather than an array of structs, per
  * radiant_sec.h's rule 2. The caller owns the buffer; nothing is retained.
  *
+ * `window_index` is the full index since the epoch anchor; all 32 bits reach
+ * the nonce.
+ *
  * Returns RADIANT_SEC_EINVAL for a null argument or an `n` outside
  * {4, 8, 16, 32}.
  */
 int radiant_sec_compat_tier2_tag(const struct radiant_sec_key *k_auth,
 				 uint32_t epoch, uint16_t devnum,
-				 uint16_t window_index, const uint8_t *msgs,
+				 uint32_t window_index, const uint8_t *msgs,
 				 uint8_t n,
 				 uint8_t out[RADIANT_SEC_COMPAT_TIER_II_TAG_BYTES]);
 
@@ -629,7 +637,9 @@ int radiant_sec_compat_recover_hint(uint8_t ch,
  * This is the path that otherwise gets written and never exercised, which is
  * why it is a first-class entry point rather than a note in the ADR. Tier I
  * costs one derivation and one block per candidate; the Tier II form below
- * costs N. `last_seen` and `flags` are as for recover_hint.
+ * costs N. `last_seen` and `flags` are as for recover_hint. The Tier II form
+ * takes a 16-bit window index, so it recovers from windows 0..65535 of an
+ * epoch only; past that, recover from a Tier I page.
  */
 int radiant_sec_compat_recover_tier1(uint8_t ch, uint16_t devnum,
 				     uint16_t att_counter,
@@ -675,7 +685,7 @@ int radiant_sec_compat_adopt_epoch(uint8_t ch, uint32_t epoch, uint8_t flags);
  */
 static inline void radiant_sec_compat_nonce_block(uint8_t *out, uint32_t epoch,
 						  uint16_t devnum,
-						  uint16_t counter, uint8_t sub)
+						  uint32_t counter, uint8_t sub)
 {
 	(void)out; (void)epoch; (void)devnum; (void)counter; (void)sub;
 }
@@ -691,7 +701,7 @@ static inline int radiant_sec_compat_tier1_tag(const struct radiant_sec_key *k,
 
 static inline int radiant_sec_compat_tier2_tag(const struct radiant_sec_key *k,
 					       uint32_t epoch, uint16_t devnum,
-					       uint16_t window_index,
+					       uint32_t window_index,
 					       const uint8_t *msgs, uint8_t n,
 					       uint8_t *out)
 {

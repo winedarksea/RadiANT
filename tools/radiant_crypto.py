@@ -381,20 +381,24 @@ def desc_auth_tag(k_root: bytes, epoch: int, devnum: int, base_devnum: int,
 
 def compat_nonce_block(epoch: int, devnum: int, counter: int,
                        sub: int) -> bytes:
-    """epoch[4 LE] || devnum[2 LE] || counter[2 LE] || 0x04 || sub || 0x00 x6.
+    """epoch[4 LE] || devnum[2 LE] || counter[2 LE] || 0x04 || sub
+    || counter_hi[2 LE] || 0x00 x4.
 
     Section 3.3's block extended at position 9, not duplicated: the domain
-    byte stays put, positions 10..15 stay zero, and the subtype lives inside
-    the MAC'd block rather than only in the page byte announcing it.
+    byte stays put and the subtype lives inside the MAC'd block rather than
+    only in the page byte announcing it.
 
-    `counter` is the attestation counter (Tier I) or window index (Tier II),
-    16-bit and carried truncated in the page - a receiver reconstructs the
-    high bits from time, as resolve_counter() does for the data counter.
+    `counter` is the attestation counter (Tier I, 16-bit) or the window index
+    (Tier II, 32-bit: its high half is `counter_hi`, so a window index never
+    repeats inside an epoch). Both are carried truncated in the page - a
+    receiver reconstructs the high bits from time, as resolve_counter() does
+    for the data counter. `counter_hi` is zero for every 16-bit counter.
     """
     if not 1 <= sub <= 0x0F:
         raise ValueError(f"the subtype is a nibble in 1..15, got {sub!r}")
+    counter &= 0xFFFFFFFF
     return nonce_block(epoch, devnum, counter, COMPAT_DOM)[:9] \
-        + bytes([sub]) + bytes(6)
+        + bytes([sub]) + (counter >> 16).to_bytes(2, "little") + bytes(4)
 
 
 def compat_tier1_tag(k_auth: bytes, epoch: int, devnum: int,
@@ -435,6 +439,10 @@ def compat_tier2_tag(k_auth: bytes, epoch: int, devnum: int,
     N-1, because a tag due on message 119 or 120 (which the firmware seam
     never offers) is owed past them. The MAC is the same construction over
     however many messages the window held.
+
+    `window_index` is the FULL 32-bit index since the epoch anchor; all of it
+    reaches the nonce (compat_nonce_block()), though only its low 8 bits go
+    on the air.
     """
     window = len(messages) + 1
     if late:

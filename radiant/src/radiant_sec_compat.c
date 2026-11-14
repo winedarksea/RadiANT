@@ -40,7 +40,7 @@ static bool window_is_legal(uint8_t n)
 
 void radiant_sec_compat_nonce_block(uint8_t out[RADIANT_SEC_BLOCK_BYTES],
 				    uint32_t epoch, uint16_t devnum,
-				    uint16_t counter, uint8_t sub)
+				    uint32_t counter, uint8_t sub)
 {
 	if (out == NULL || sub == 0u || sub > 0x0Fu) {
 		return;
@@ -48,9 +48,13 @@ void radiant_sec_compat_nonce_block(uint8_t out[RADIANT_SEC_BLOCK_BYTES],
 
 	/* Built by the shared helper and extended, not laid out again here -
 	 * two copies of a byte layout eventually drift. */
-	radiant_sec_nonce_block(out, epoch, devnum, counter,
+	radiant_sec_nonce_block(out, epoch, devnum, (uint16_t)counter,
 				RADIANT_SEC_DOM_COMPAT_MAC);
 	out[9] = sub;
+	/* The high half: zero for every 16-bit counter, Tier II's window index
+	 * past 65535 otherwise, so that index never repeats inside an epoch. */
+	out[10] = (uint8_t)(counter >> 16);
+	out[11] = (uint8_t)(counter >> 24);
 }
 
 /* One CMAC over a nonce block and the covered bytes, truncated to `taglen`: the
@@ -58,7 +62,7 @@ void radiant_sec_compat_nonce_block(uint8_t out[RADIANT_SEC_BLOCK_BYTES],
  * its window, the announcement and the command their message). One copy of the
  * pipeline rather than one per tag. */
 static int tagged(const struct radiant_sec_key *k, uint32_t epoch,
-		  uint16_t devnum, uint16_t counter, uint8_t sub,
+		  uint16_t devnum, uint32_t counter, uint8_t sub,
 		  const uint8_t *msg, size_t len, uint8_t *out, uint8_t taglen)
 {
 	struct radiant_sec_cmac_ctx ctx;
@@ -111,7 +115,7 @@ int radiant_sec_compat_tier1_tag(const struct radiant_sec_key *k_auth,
  * covered bytes are streamed through the CMAC, never copied, which is why
  * there is no buffer for them here. */
 static int tier2_mac(const struct radiant_sec_key *k_auth, uint32_t epoch,
-		     uint16_t devnum, uint16_t window_index,
+		     uint16_t devnum, uint32_t window_index,
 		     const uint8_t *msgs, uint8_t count,
 		     uint8_t out[RADIANT_SEC_COMPAT_TIER_II_TAG_BYTES])
 {
@@ -123,7 +127,7 @@ static int tier2_mac(const struct radiant_sec_key *k_auth, uint32_t epoch,
 
 int radiant_sec_compat_tier2_tag(const struct radiant_sec_key *k_auth,
 				 uint32_t epoch, uint16_t devnum,
-				 uint16_t window_index, const uint8_t *msgs,
+				 uint32_t window_index, const uint8_t *msgs,
 				 uint8_t n,
 				 uint8_t out[RADIANT_SEC_COMPAT_TIER_II_TAG_BYTES])
 {
@@ -204,6 +208,9 @@ struct compat_ctx {
 	bool     rx_t1_any;
 	bool     rx_t1_ok;              /* at least one Tier I page VERIFIED */
 	uint64_t rx_t1_us;              /* ...and when, for the staleness rule */
+	uint32_t rx_t2_last;            /* Tier II's floor: the last VERIFIED
+					 * window index, in full */
+	bool     rx_t2_any;
 	bool     rx_t2_ok;              /* the last Tier II window VERIFIED */
 	uint64_t rx_t2_us;              /* ...and when, for the staleness rule */
 
@@ -330,10 +337,10 @@ static int derive_auth(struct compat_ctx *c)
  * D14, on the compat surface: a counter wrap advances the epoch by one on
  * both sides and re-derives the keys.
  *
- * Only Tier I's counter drives the epoch: the nonce has one 16-bit counter
- * field, and Tier I's is purely a function of elapsed time, so it stays
- * reproducible even with no Tier II page ever heard. The Tier II window
- * index just rolls over inside an epoch instead.
+ * Only Tier I's counter drives the epoch: it is purely a function of elapsed
+ * time, so it stays reproducible even with no Tier II page ever heard. The
+ * Tier II window index is 32 bits in the nonce instead, so it neither drives
+ * the epoch nor repeats inside one.
  */
 /* May the epoch move to base_epoch + wraps? EINVAL past the headroom; EAGAIN
  * past the authority's ceiling (radiant-security.md 3.5: refused, not spent,
@@ -496,12 +503,16 @@ int radiant_sec_compat_configure(uint8_t ch, uint8_t switches, uint8_t n,
 
 	c->switches = switches;
 	if ((switches & RADIANT_SEC_COMPAT_SW_TIER_II) != 0u) {
+		if (n != c->n) {
+			c->rx_t2_any = false;   /* window indices change scale */
+		}
 		c->n = n;
 	}
 	if (t_s != c->t_s) {
 		/* A new T changes what both the Tier I counter and the learned
 		 * phase mean, so the lock goes with it and the next page
-		 * re-locks instead of being judged against the old one. */
+		 * re-locks instead of being judged against the old one. The
+		 * re-lock clears Tier II's floor (rx_tier1). */
 		c->rx_t1_any = false;
 		c->rx_t1_ok = false;
 	}
@@ -561,6 +572,7 @@ int radiant_sec_compat_set_epoch(uint8_t ch, uint32_t epoch, uint64_t now_us,
 	c->rx_overflow = false;
 	c->rx_t1_any = false;
 	c->rx_t1_ok = false;
+	c->rx_t2_any = false;
 	c->rx_t2_ok = false;
 	c->last_verdict = RADIANT_SEC_VERDICT_CLEAR;
 
@@ -731,9 +743,8 @@ int radiant_sec_compat_tx_attest(uint8_t ch, uint64_t now_us, uint8_t *body,
 	    c->tx_fill >= (uint8_t)(c->n - 1u)) {
 		uint32_t window = c->tx_msgs / c->n;
 
-		rc = tier2_mac(&c->k_auth, c->epoch, c->devnum,
-			       (uint16_t)(window & 0xFFFFu), c->tx_win,
-			       c->tx_fill, tag);
+		rc = tier2_mac(&c->k_auth, c->epoch, c->devnum, window,
+			       c->tx_win, c->tx_fill, tag);
 		if (rc != RADIANT_SEC_OK) {
 			return rc;
 		}
@@ -996,6 +1007,11 @@ static int rx_tier1(struct compat_ctx *c, const uint8_t *pay, uint64_t t_sync)
 			c->anchor_us += (err - jitter < slew) ? (err - jitter)
 							       : slew;
 		}
+		/* A first-contact lock may move the anchor later: the one
+		 * backward jump of msg_index, so Tier II's floor goes. */
+		if (!c->rx_t1_any) {
+			c->rx_t2_any = false;
+		}
 		c->rx_t1_last = full;
 		c->rx_t1_any = true;
 		c->rx_t1_ok = true;
@@ -1027,13 +1043,22 @@ static int rx_tier2(struct compat_ctx *c, const uint8_t *pay, uint64_t t_sync)
 		return rc;
 	}
 
+	/* The floor, as Tier I's: a window at or below the last verified one is
+	 * a replay, refused before the CMAC and counted apart from a forgery.
+	 * It still closes the window, so the next one starts clean. */
+	if (c->rx_t2_any && window <= c->rx_t2_last) {
+		stat_bump(&c->stats.tier2_replays);
+		c->rx_absorbed = 0u;
+		c->rx_overflow = false;
+		return RADIANT_SEC_EREPLAY;
+	}
+
 	/* Judged on what arrived; a hole is not a forgery. A window CMAC is
 	 * not self-synchronising under loss the way the spread tag is - the
 	 * reason this tier is off by default. */
 	if (!c->rx_overflow && c->rx_absorbed >= (uint8_t)(c->n - 1u)) {
-		rc = tier2_mac(&c->k_auth, c->epoch, c->devnum,
-			       (uint16_t)(window & 0xFFFFu), c->rx_win,
-			       c->rx_absorbed, tag);
+		rc = tier2_mac(&c->k_auth, c->epoch, c->devnum, window,
+			       c->rx_win, c->rx_absorbed, tag);
 		if (rc == RADIANT_SEC_OK &&
 		    radiant_sec_ct_equal(tag, &pay[2], sizeof(tag))) {
 			verdict = RADIANT_SEC_VERDICT_VERIFIED;
@@ -1043,6 +1068,8 @@ static int rx_tier2(struct compat_ctx *c, const uint8_t *pay, uint64_t t_sync)
 
 	if (verdict == RADIANT_SEC_VERDICT_VERIFIED) {
 		stat_bump(&c->stats.tier2_verified);
+		c->rx_t2_last = window;
+		c->rx_t2_any = true;
 	} else {
 		stat_bump(&c->stats.tier2_unverified);
 	}
@@ -1604,6 +1631,7 @@ int radiant_sec_compat_adopt_epoch(uint8_t ch, uint32_t epoch, uint8_t flags)
 	c->rx_overflow = false;
 	c->rx_t1_any = false;
 	c->rx_t1_ok = false;
+	c->rx_t2_any = false;
 	c->rx_t2_ok = false;
 	c->last_verdict = RADIANT_SEC_VERDICT_CLEAR;
 

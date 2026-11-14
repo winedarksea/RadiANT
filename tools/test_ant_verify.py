@@ -908,5 +908,71 @@ class TestCompatTierIILateWindow(unittest.TestCase):
                                  ant_verify.ATTEST_LOST)
 
 
+class TestCompatTierIIReplayFloor(unittest.TestCase):
+    """Tier II's replay floor and its 32-bit window index (radiant_sec_compat.c
+    rx_t2_last, review 2026-11-13 item 8)."""
+
+    ROOT = bytes(range(16))
+    EPOCH = 7
+    DEVNUM = 0x3A17
+    N = 8
+
+    def window(self, v, index: int) -> list:
+        """One window's covered messages and tag page, as the sensor sends it."""
+        msgs = [bytes([0x04, i, index & 0xFF, 0, 0, 0, 0, 0])
+                for i in range(self.N - 1)]
+        tag = ant_verify.rc.compat_tier2_tag(v.k_auth, self.EPOCH, self.DEVNUM,
+                                             index, msgs)
+        return msgs + [ant_verify.ap.encode_compat_attest_tier2(index, tag)]
+
+    @staticmethod
+    def feed(v, frames: list) -> str:
+        out = None
+        for f in frames:
+            out = v.feed(f)
+        return out
+
+    def test_a_replayed_window_is_refused_and_counted(self):
+        v = ant_verify.CompatVerifier(self.ROOT, self.EPOCH, self.DEVNUM,
+                                      window=self.N)
+        recorded = self.window(v, 0)
+        self.assertEqual(self.feed(v, recorded), ant_verify.ATTEST_VERIFIED)
+        for i in range(1, 4):
+            self.assertEqual(self.feed(v, self.window(v, i)),
+                             ant_verify.ATTEST_VERIFIED)
+        self.assertEqual(self.feed(v, recorded), ant_verify.ATTEST_UNVERIFIED)
+        tier2 = v.summary()["tier_ii"]
+        self.assertEqual(tier2["replays"], 1)
+        self.assertEqual(tier2["verified"], 4)
+        # The stream carries on past the refusal.
+        self.assertEqual(self.feed(v, self.window(v, 4)),
+                         ant_verify.ATTEST_VERIFIED)
+
+    def test_the_index_past_65535_reaches_the_nonce(self):
+        rc = ant_verify.rc
+        k_auth = rc.derive_keys(self.ROOT, self.EPOCH,
+                                self.DEVNUM)[rc.LABEL_AUTH]
+        msgs = [bytes(8)] * (self.N - 1)
+        self.assertNotEqual(
+            rc.compat_tier2_tag(k_auth, self.EPOCH, self.DEVNUM, 0x10005, msgs),
+            rc.compat_tier2_tag(k_auth, self.EPOCH, self.DEVNUM, 0x00005, msgs))
+        block = rc.compat_nonce_block(self.EPOCH, self.DEVNUM, 0x12345678,
+                                      rc.COMPAT_SUBTYPE_TIER_II)
+        self.assertEqual(block[6:8], bytes([0x78, 0x56]))
+        self.assertEqual(block[10:12], bytes([0x34, 0x12]))
+        self.assertEqual(block[12:], bytes(4))
+
+    def test_a_window_past_65535_verifies_and_its_replay_does_not(self):
+        v = ant_verify.CompatVerifier(self.ROOT, self.EPOCH, self.DEVNUM,
+                                      window=self.N)
+        v.windows_seen = 0x10000      # it has followed the stream this far
+        recorded = self.window(v, 0x10000)
+        self.assertEqual(self.feed(v, recorded), ant_verify.ATTEST_VERIFIED)
+        self.assertEqual(self.feed(v, self.window(v, 0x10001)),
+                         ant_verify.ATTEST_VERIFIED)
+        self.assertEqual(self.feed(v, recorded), ant_verify.ATTEST_UNVERIFIED)
+        self.assertEqual(v.summary()["tier_ii"]["replays"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

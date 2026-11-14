@@ -366,7 +366,10 @@ class CompatAttestation:
                                   self.window_index, self.pending)
         page = ap.encode_compat_attest_tier2(self.window_index, tag)
         self.pending = []
-        self.window_index = (self.window_index + 1) % ap.U16_WRAP
+        # Not reduced mod 65536: the full index reaches the nonce, so a
+        # window index never repeats inside an epoch (the firmware's
+        # tx_msgs / N, which nothing resets on a wrap).
+        self.window_index = (self.window_index + 1) & 0xFFFFFFFF
         self.tier2_sent += 1
         return page
 

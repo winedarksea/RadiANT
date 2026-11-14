@@ -188,6 +188,10 @@ class CompatVerifier:
 
         self.last_counter: int | None = None
         self.last_window_index: int | None = None
+        # The last VERIFIED window index: Tier II's replay floor, as
+        # rx_t2_last in radiant_sec_compat.c. Separate from last_window_index,
+        # which follows every tag page for the loss count.
+        self.t2_floor: int | None = None
         self.windows_seen = 0
         self.pending: list[bytes] = []
         self.announce_frame_a: bytes | None = None
@@ -292,12 +296,19 @@ class CompatVerifier:
         got = ap.decode_compat_attest_tier2(payload)
         covered, self.pending = self.pending, []
 
-        # The page carries the window index's LOW 8 BITS; the nonce takes 16,
-        # so the high half is reconstructed from the receiver's own count of
+        # The page carries the window index's LOW 8 BITS; the nonce takes all
+        # 32, so the rest is reconstructed from the receiver's own count of
         # windows, not read off the air. Skip this and the tags agree for 256
         # windows - about nine minutes at 4 Hz with N = 8 - then every one of
         # them fails, which looks exactly like an attack.
-        index, _ = rc.resolve_counter(self.windows_seen, got["window_index"])
+        low, high = rc.resolve_counter(self.windows_seen, got["window_index"])
+        index = low | (high << 16)
+        if self.t2_floor is not None and index <= self.t2_floor:
+            # A window already verified: refused before the tag, as the
+            # firmware does, and counted apart from a forgery.
+            self.tier2["replay"] += 1
+            self.tier2[ATTEST_UNVERIFIED] += 1
+            return ATTEST_UNVERIFIED
         if self.last_window_index is not None:
             missing = index - self.last_window_index - 1
             if missing > 0:
@@ -321,6 +332,7 @@ class CompatVerifier:
         expected = rc.compat_tier2_tag(self.k_auth, self.epoch, self.devnum,
                                        index, covered, late=True)
         if expected == got["tag"]:
+            self.t2_floor = index
             self.tier2[ATTEST_VERIFIED] += 1
             return ATTEST_VERIFIED
         self.tier2[ATTEST_UNVERIFIED] += 1
@@ -385,6 +397,7 @@ class CompatVerifier:
                 "verified": self.tier2[ATTEST_VERIFIED],
                 "unverified": self.tier2[ATTEST_UNVERIFIED],
                 "lost": self.tier2[ATTEST_LOST],
+                "replays": self.tier2["replay"],
             },
             "announce": {
                 "verified": self.announce_verified,

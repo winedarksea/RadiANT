@@ -454,6 +454,17 @@ class TestCompatAttestation(unittest.TestCase):
             "dc941a16d23e")
         self.assertEqual(rc.COMPAT_TIER_II_TAG_BITS, 48)
 
+    def test_tier2_index_past_65535_reaches_the_nonce(self):
+        # The window index is 32 bits in the nonce, its high half at 10..11,
+        # so 0x00010501 is not 0x0501 again. Pinned in test_sec_compat.c too.
+        block = rc.compat_nonce_block(self.EPOCH, self.DEVNUM, 0x00010501,
+                                      rc.COMPAT_SUBTYPE_TIER_II)
+        self.assertEqual(block.hex(), "44332211efbe01050402010000000000")
+        self.assertEqual(
+            rc.compat_tier2_tag(self.K_AUTH, self.EPOCH, self.DEVNUM,
+                                0x00010501, self.MSGS).hex(),
+            "855394ad814f")
+
     def test_tier2_covers_every_byte_of_every_covered_message(self):
         flipped = list(self.MSGS)
         flipped[-1] = bytes([flipped[-1][0], flipped[-1][1] ^ 0x01]) \

@@ -294,6 +294,35 @@ ZTEST(sec_compat, test_tier2_vectors_shared_with_the_python_mirror)
 	radiant_sec_key_destroy(&k);
 }
 
+/* The window index is 32 bits in the nonce: its high half at positions
+ * 10..11, so index 0x00010501 is not index 0x0501 again (review 2026-11-13
+ * item 8). The tag is pinned in tools/test_radiant_crypto.py too. */
+ZTEST(sec_compat, test_tier2_index_past_65535_reaches_the_nonce)
+{
+	static const uint8_t want[RADIANT_SEC_COMPAT_TIER_II_TAG_BYTES] = {
+		0x85, 0x53, 0x94, 0xad, 0x81, 0x4f,
+	};
+	struct radiant_sec_key k;
+	uint8_t                got[RADIANT_SEC_COMPAT_TIER_II_TAG_BYTES];
+	uint8_t                block[16];
+
+	radiant_sec_compat_nonce_block(block, VEC_EPOCH, VEC_DEVNUM,
+				       0x00010501u,
+				       RADIANT_SEC_COMPAT_SUBTYPE_TIER_II);
+	zassert_mem_equal(block, nonce_tier_ii, 10);
+	zassert_equal(block[10], 0x01);
+	zassert_equal(block[11], 0x00);
+
+	import_or_fail(&k, k_auth_raw);
+	zassert_equal(radiant_sec_compat_tier2_tag(&k, VEC_EPOCH, VEC_DEVNUM,
+						   0x00010501u,
+						   &window_msgs[0][0], 8, got),
+		      RADIANT_SEC_OK);
+	zassert_mem_equal(got, want, sizeof(got));
+	zassert_true(memcmp(got, tier2_tag_n8, sizeof(got)) != 0);
+	radiant_sec_key_destroy(&k);
+}
+
 ZTEST(sec_compat, test_tier2_covers_every_byte_of_every_covered_message)
 {
 	/* One flipped bit in the last covered message; the tag must move (and

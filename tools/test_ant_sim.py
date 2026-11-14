@@ -418,6 +418,22 @@ class TestTierTwoDataAttestation(unittest.TestCase):
         sensor = build_attested("power", window=self.WINDOW)
         return sensor, ant_sim.dry_run([sensor], seconds)
 
+    def test_the_window_index_does_not_roll_over_at_65536(self):
+        # The full index reaches the nonce, so window 65536 is not window 0
+        # again: the sim keeps counting, as the firmware's tx_msgs / N does.
+        sensor = build_attested("power", window=self.WINDOW)
+        compat = sensor.compat
+        compat.window_index = 0xFFFF
+        for _ in range(2):
+            compat.pending = [bytes(8)] * (self.WINDOW - 1)
+            page = compat.tier2_page()
+        self.assertEqual(compat.window_index, 0x10001)
+        self.assertEqual(page[1], 0x00)          # low 8 bits on the air
+        expected = __import__("radiant_crypto").compat_tier2_tag(
+            compat.k_auth, compat.epoch, compat.devnum, 0x10000,
+            [bytes(8)] * (self.WINDOW - 1))
+        self.assertEqual(page[2:], expected)
+
     def test_the_windows_verify(self):
         sensor, records = self.stream()
         summary = analyse_attested(sensor, records, window=self.WINDOW)

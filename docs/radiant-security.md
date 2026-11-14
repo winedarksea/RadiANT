@@ -1875,17 +1875,22 @@ answering a question nobody in the threat model asked.
 Both tiers share one domain byte and are separated by a subtype:
 
 ```
-nonce_block = epoch[4 LE] || devnum[2 LE] || att_counter[2 LE] || dom || sub || 0x00 x6
+nonce_block = epoch[4 LE] || devnum[2 LE] || counter[2 LE] || dom || sub
+              || counter_hi[2 LE] || 0x00 x4
                 dom = 0x01 CTR keystream | 0x02 spread MAC | 0x03 descriptor MAC
                     | 0x04 compat MAC
                 sub = 0x01 Tier I | 0x02 Tier II | 0x03 SWITCH/RETURN announcement
+                counter = att_counter (16 bits; counter_hi = 0), or the Tier II
+                          window index (32 bits; counter_hi is its high half)
 ```
 
 **The subtype is inside the nonce and not only in the page.** Without the domain
 byte a compat tag and a spread tag can coincide; without the subtype *in the
 MAC'd block*, a Tier I and a Tier II tag over the same counter value are
 distinguished only by a page byte an attacker chooses. Section 3.3's block is
-extended at position 9 rather than duplicated, and positions 10..15 stay zero.
+extended at position 9 rather than duplicated. Positions 10..11 carry the high
+half of a 32-bit counter, which only the Tier II window index has, and
+positions 12..15 stay zero.
 
 #### Tier I — identity attestation. Default on.
 
@@ -1970,6 +1975,24 @@ that genuinely fears injected values rather than colliding sensors:
   tag's own slot index over `N`, so it still resolves against the receiver's
   clock. Before this, 17 of 998 windows were lost with no packet lost
   (TODO security item 12, fixed 2026-11-08).
+- **The window index is 32 bits in the nonce and 8 on the air.** A sender's
+  index is its transmitted-message count since the epoch anchor over `N`, and
+  nothing resets that count on a counter wrap, so an (epoch, window index) pair
+  never repeats: 2^32 windows is over a century even at `N = 4` and 4 Hz. The
+  receiver resolves the full index from its clock, as the nearest of +/-128
+  windows to what time predicts, and all 32 bits enter the nonce (positions
+  6..7 and 10..11).
+- **Replay is closed by a floor.** A window index at or below the last verified
+  one is refused before the tag is computed. It is counted in `tier2_replays`,
+  not as a forgery, and gives no verdict; it still closes the window, so the next
+  one starts clean. Only a verified window raises the floor. `set_epoch`,
+  `adopt_epoch`, a configure that changes `N`, and the Tier I page that first
+  locks the phase (after either of the first two or a new `T`) clear it,
+  because each can move the receiver's index backwards (a first-contact lock
+  can move the anchor later). Until a window
+  verifies after one of those, a receiver accepts a recorded window, or a run of
+  them in order, from within the +/-128-window resolution: the same
+  first-contact limit as Tier I (section 7.6).
 - **`N in {4, 8, 16, 32}`, default 8 when enabled**, announced in the beacon.
 - **The honest regression:** a window CMAC is not self-synchronising under loss
   the way section 3.2's spread tag is, so any lost packet in the window makes it
@@ -2438,6 +2461,11 @@ unit, not a documentation question**.
 
 - **Injected values, unless Tier II is on.** Tier I proves who is speaking, not
   what they said. That is the threat model's answer, not an oversight.
+- **A recorded Tier II window at first contact.** Tier II's replay floor
+  (section 11.4) starts empty after `set_epoch`, `adopt_epoch`, a change of `N`,
+  or the first Tier I lock, so the first window a receiver verifies
+  after one of those may be a recording from the last +/-128 windows. Once one
+  window verifies, every window at or below it is refused.
 - **A watched switch. `Tier 2 unlinkability does not survive a switch that an
   observer watches`** — a passive observer present at the moment learns that
   compat device number X and private device number Y are the same node. It would
