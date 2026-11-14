@@ -1283,6 +1283,15 @@ ZTEST(profile_enrol, test_closing_ends_a_delivery)
 	zassert_equal(0, profile_enrol_physical_action(&pe, T_ORIGIN));
 }
 
+/* Armed: keyed and an epoch set, so the transforms run. */
+static bool sec_armed(uint8_t ch)
+{
+	struct radiant_sec_state st;
+
+	radiant_sec_get_state(ch, &st);
+	return st.secured;
+}
+
 ZTEST(profile_enrol, test_a_live_secured_root_survives_an_enrolment)
 {
 	struct profile_enrol     pe;
@@ -1311,11 +1320,11 @@ ZTEST(profile_enrol, test_a_live_secured_root_survives_an_enrolment)
 					    RADIANT_SEC_PAGE_HI_DEFAULT));
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_set_epoch(NODE_CH, 3u, 0u, 8182u));
-	zassert_true(radiant_sec_channel_is_secured(NODE_CH));
+	zassert_true(sec_armed(NODE_CH));
 
 	enrol_up(&pe, PROFILE_ENROL_PHYSICAL, node_scalar);
 	window_completes(&pe, node_set);
-	zassert_true(radiant_sec_channel_is_secured(NODE_CH));
+	zassert_true(sec_armed(NODE_CH));
 	radiant_sec_get_stats(NODE_CH, &sstats);
 	zassert_equal(1u, sstats.enrolments);
 
@@ -1330,12 +1339,17 @@ ZTEST(profile_enrol, test_a_live_secured_root_survives_an_enrolment)
 						   RADIANT_SEC_PAIR_INTO_SEC));
 
 	/* Same root: under one epoch, device number and slot, the node and
-	 * the receiver encrypt a page to the same bytes. The epoch is set on
-	 * both explicitly; a freshly installed root is unarmed until then. */
+	 * the receiver encrypt a page to the same bytes. A freshly installed
+	 * root fails closed until it has an epoch: the page is withheld. */
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_configure(PEER_CH, RADIANT_SEC_SW_CONF, 2u,
 					    RADIANT_SEC_PAGE_LO_DEFAULT,
 					    RADIANT_SEC_PAGE_HI_DEFAULT));
+	zassert_false(sec_armed(PEER_CH));
+	memcpy(b, plain, sizeof(b));
+	zassert_equal(RADIANT_SEC_EUNARMED,
+		      radiant_sec_tx_transform(PEER_CH, b, 8u,
+					       radiant_radio_now()));
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_set_epoch(NODE_CH, 7u, 0u, 8182u));
 	zassert_equal(RADIANT_SEC_OK,

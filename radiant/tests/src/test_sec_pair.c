@@ -507,6 +507,28 @@ ZTEST(sec_pair, test_a_substituted_key_does_not_match)
 	zassert_false(has_key(A_CH));
 }
 
+/* Armed (keyed and an epoch set): the transforms run. */
+static bool armed(uint8_t ch)
+{
+	struct radiant_sec_state st;
+
+	radiant_sec_get_state(ch, &st);
+	return st.secured;
+}
+
+/* Keyed but not armed: a secured-range page is withheld, not sent clear. */
+static void assert_pending(uint8_t ch)
+{
+	uint8_t pay[8] = { RADIANT_SEC_PAGE_LO_DEFAULT, 0u, 1u, 2u, 3u, 4u,
+			   5u, 6u };
+
+	zassert_true(has_key(ch));
+	zassert_false(armed(ch));
+	zassert_equal(RADIANT_SEC_EUNARMED,
+		      radiant_sec_tx_transform(ch, pay, 8u,
+					       radiant_radio_now()));
+}
+
 /* Over-air enrolment's two halves, sensor A and receiver B: A runs the DH and
  * wraps its root into `wrapped`, B runs the DH and holds the wrap keys. */
 static void enrol(uint8_t *wrapped, uint32_t *fp_a, uint32_t *fp_b)
@@ -541,10 +563,13 @@ ZTEST(sec_pair, test_enrolment_pairs_through_the_uncommitted_path)
 	zassert_ok(radiant_sec_pair_fingerprint(B_CH, &fp));
 	zassert_equal(fp_a, fp);
 
-	/* The join installs nothing; the delivered root does. */
+	/* The join installs nothing; the delivered root does. Both ends'
+	 * roots are new, so both are pending until an epoch arrives. */
 	zassert_false(has_key(B_CH));
 	zassert_ok(radiant_sec_pair_accept_root(B_CH, wrapped,
 						RADIANT_SEC_PAIR_INTO_SEC));
+	assert_pending(A_CH);
+	assert_pending(B_CH);
 	assert_root_is(A_CH, A_DEVNUM, VEC_ROOT_UNCOMMITTED);
 	assert_root_is(B_CH, B_DEVNUM, VEC_ROOT_UNCOMMITTED);
 	zassert_equal(1u, enrolments(A_CH));
@@ -572,7 +597,7 @@ static void live_up(void)
 					 RADIANT_SEC_PAGE_LO_DEFAULT,
 					 RADIANT_SEC_PAGE_HI_DEFAULT));
 	zassert_ok(radiant_sec_set_epoch(A_CH, 3u, 0u, 8182u));
-	zassert_true(radiant_sec_channel_is_secured(A_CH));
+	zassert_true(armed(A_CH));
 }
 
 /*
@@ -594,12 +619,15 @@ ZTEST(sec_pair, test_enrolment_delivers_the_live_root_and_leaves_it_running)
 	zassert_equal(fp_a, fp_b);
 	zassert_mem_equal(VEC_WRAPPED, wrapped, sizeof(wrapped));
 
-	zassert_true(radiant_sec_channel_is_secured(A_CH));
+	/* Still armed: nothing reset the sensor's epoch gate. */
+	zassert_true(armed(A_CH));
 	zassert_equal(1u, enrolments(A_CH));
 
 	zassert_ok(radiant_sec_pair_accept_root(B_CH, wrapped,
 						RADIANT_SEC_PAIR_INTO_SEC));
 	zassert_equal(1u, enrolments(B_CH));
+	/* The receiver's new root fails closed until it has an epoch. */
+	assert_pending(B_CH);
 	/* assert_root_is() sets epoch 7 on both, explicitly: the receiver's
 	 * fresh root is unarmed until an epoch arrives, whatever set_key's
 	 * same-root rule. */

@@ -2372,7 +2372,9 @@ Four rules:
   the existing receivers' place; that is the reason the mitigations above
   still matter. A node whose channel holds no root at all has nothing to
   deliver and nobody to lock out, so its first enrolment installs the
-  exchange's enrolment root as its first and delivers that.
+  exchange's enrolment root as its first and delivers that. Like any new root
+  it leaves that node pending (section 3.5: secured-range pages withheld and
+  dropped) until an epoch is set.
 
 The wrap, with `PKlo`/`PKhi` the two public keys ordered by value and `PRK` the
 condensed DH output (section 7.4):
@@ -2391,8 +2393,10 @@ every other use of section 3.3's layout. The receiver checks the tag in
 constant time before it decrypts anything. A tag that fails installs nothing
 and leaves the receiver waiting for the next copy, so a forged or torn delivery
 does not cost it the enrolment. The receiver binds the root to its channel's
-device number (for a receiver, the node's) and must set the epoch before
-anything verifies, as after any key install. In the code: the node side is
+device number (for a receiver, the node's) and is pending until its epoch is
+set, as after any key install: nothing secured goes out in the clear or is
+accepted unverified in between. Installing a root the receiver already holds
+is a no-op that keeps its epoch. In the code: the node side is
 `radiant_sec_pair_peer_uncommitted()`, driven by `profile_enrol.c`; the
 receiver side is `radiant_sec_pair_join()` then
 `radiant_sec_pair_accept_root()`, which no application wires yet.

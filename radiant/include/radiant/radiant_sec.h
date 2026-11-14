@@ -426,8 +426,11 @@ int  radiant_sec_pair_peer_nonce(uint8_t ch, const uint8_t *peer_nonce,
  * receiver enters pairing with a timeout covering the sensor's window AND its
  * delivery, or the join expires before the root arrives.
  *
- * An installed root starts unarmed, like any set_key: the receiver sets the
- * epoch (0xF3, or the compat epoch path) before it verifies anything.
+ * A root installed here - on the receiver, or as a rootless sensor's first -
+ * goes through set_key like any other, so a secured context fails closed
+ * until its epoch is set (0xF3, or the compat epoch path): secured-range TX
+ * withheld with RADIANT_SEC_EUNARMED and RX dropped once switches are on.
+ * Installing the root a receiver channel already holds is set_key's no-op.
  */
 #define RADIANT_SEC_PAIR_WRAP_TAG_BYTES 8
 #define RADIANT_SEC_PAIR_WRAPPED_BYTES \
