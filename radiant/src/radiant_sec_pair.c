@@ -33,8 +33,18 @@
  * Whoever sits in the middle has to fix one nonce before it learns the other
  * side's: towards the initiator it is bound by its commitment before Na
  * arrives, and towards the responder it must reveal its Na before Nb arrives.
- * So a completed MITM matches with probability 10^-6, and a window allows one
- * attempt.
+ * So a completed MITM shows matching digits with probability 10^-6 per
+ * user-initiated pairing attempt. Not "per window": an attacker who would
+ * lose simply withholds Nb, A times out, and the user tries again - so an
+ * abort or timeout on one end while the other shows digits is a FAILED
+ * pairing, never a cue to retry until it matches.
+ *
+ * The key is live once PEER_NONCE answers, before the human compares. On a
+ * mismatch or an abort the host must remove it: radiant_sec_pair_leave() does
+ * NOT (it wipes the exchange only); radiant_sec_channel_release() does, which
+ * over the serial protocol is closing and unassigning the channel (0x41).
+ * And "B reveals Nb only after its PEER_NONCE" is the responder host's
+ * obligation: the node never sees Nb leave, so it cannot enforce it.
  *
  * Over-air enrolment (profile_enrol.c) has no room for the commit/reveal round
  * trip and calls radiant_sec_pair_peer_uncommitted() instead, which the 0xF5
@@ -68,6 +78,11 @@
  * a screen are a function of public values only and cannot narrow the key
  * they attest to. */
 #define LABEL_ROOT "RADIANT-pair-root"
+/* Over-air enrolment's root, its own label so the uncommitted mode can never
+ * produce a committed-mode key even for equal inputs. Same length as
+ * LABEL_ROOT, so pair_finish() takes either without a length. */
+#define LABEL_ENROL "RADIANT-enrl-root"
+BUILD_ASSERT(sizeof(LABEL_ROOT) == sizeof(LABEL_ENROL));
 
 /* Where one channel's pairing has got to. Every call names the one step it
  * accepts, so an out-of-order call is refused rather than interpreted. */
@@ -279,6 +294,10 @@ int radiant_sec_pair_enter(uint8_t ch, uint8_t timeout_s)
 		(void)atomic_and(&pair_lost, ~(atomic_val_t)(1u << ch));
 	}
 
+	/* Always a fresh context: re-entering must not revive an old step
+	 * with its PRK, nonce or scalar still in it. */
+	ctx_free(ctx_of(ch));
+
 	struct pair_ctx *c = ctx_alloc(ch);
 
 	if (c == NULL) {
@@ -319,9 +338,17 @@ void radiant_sec_pair_on_search(uint8_t ch)
 
 void radiant_sec_pair_service(void)
 {
-	uint8_t ch;
+	uint32_t now = k_uptime_get_32();
+	uint8_t  ch;
 
 	RADIANT_SEC_ASSERT_LOCKED();
+	/* Expiry, eagerly: a window nobody touches again must not keep its
+	 * scalar, PRK and nonce in RAM until the next pairing call. */
+	for (ch = 0u; ch < (uint8_t)PAIR_MAX_CH; ch++) {
+		if (pair[ch].in_use && pair_expired(&pair[ch], now)) {
+			ctx_free(&pair[ch]);
+		}
+	}
 	if (atomic_get(&pair_lost) == 0) {
 		return;
 	}
@@ -440,19 +467,42 @@ out:
 	return rc;
 }
 
+/* The device number the key will be bound to, or 0 if the channel has none.
+ * Checked at the nonce step as well as at the install, so nothing after a
+ * commitment can fail in a way that leaves the step open for a retry. */
+static uint16_t pair_devnum(uint8_t ch)
+{
+	struct radiant_channel_id id;
+
+	if (radiant_channel_id_get(ch, &id) != RADIANT_CH_OK) {
+		return 0u;
+	}
+	return id.device_number;
+}
+
+/* An all-zero nonce is the uncommitted mode's constant, and a host that sends
+ * one has no random source; either way it is refused. */
+static bool nonce_is_zero(const uint8_t *n)
+{
+	static const uint8_t zero[NONCE_BYTES];
+
+	return radiant_sec_ct_equal(n, zero, NONCE_BYTES);
+}
+
 /*
  * Expand and install: the last step of both paths. `pka`, `pkb`, `na` and
  * `nb` are in protocol order (initiator first), whichever end this is.
  */
-static int pair_finish(struct pair_ctx *c, const uint8_t *pka,
-		       const uint8_t *pkb, const uint8_t *na,
-		       const uint8_t *nb, uint32_t *fingerprint)
+static int pair_finish(struct pair_ctx *c, const char *label,
+		       const uint8_t *pka, const uint8_t *pkb,
+		       const uint8_t *na, const uint8_t *nb,
+		       uint32_t *fingerprint)
 {
-	struct radiant_channel_id id;
+	uint16_t                  devnum = pair_devnum(c->ch);
 	uint8_t                   root[RADIANT_SEC_BLOCK_BYTES];
 	uint32_t                  fp = 0u;
 	const struct cm_part      parts[] = {
-		{ (const uint8_t *)LABEL_ROOT, sizeof(LABEL_ROOT) },
+		{ (const uint8_t *)label, sizeof(LABEL_ROOT) },
 		{ pka, PUB_BYTES }, { pkb, PUB_BYTES },
 		{ na, NONCE_BYTES }, { nb, NONCE_BYTES },
 	};
@@ -461,8 +511,7 @@ static int pair_finish(struct pair_ctx *c, const uint8_t *pka,
 	/* Device number read from the channel, not the wire, since it's bound
 	 * into the KDF (same reasoning as antr_sec_key_set()). Checked first,
 	 * so this refusal leaves the context exactly as it was. */
-	if (radiant_channel_id_get(c->ch, &id) != RADIANT_CH_OK ||
-	    id.device_number == 0u) {
+	if (devnum == 0u) {
 		return RADIANT_SEC_ENOKEY;
 	}
 
@@ -471,13 +520,13 @@ static int pair_finish(struct pair_ctx *c, const uint8_t *pka,
 		rc = cmac_parts(c->s.prk, parts, ARRAY_SIZE(parts), root);
 	}
 	if (rc == RADIANT_SEC_OK) {
-		rc = radiant_sec_set_key(c->ch, root, 128u, id.device_number);
+		rc = radiant_sec_set_key(c->ch, root, 128u, devnum);
 	}
 	radiant_sec_wipe(root, sizeof(root));
 	if (rc != RADIANT_SEC_OK) {
 		return rc;
 	}
-	(void)radiant_sec_set_devnum(c->ch, id.device_number);
+	(void)radiant_sec_set_devnum(c->ch, devnum);
 
 	/* Counted HERE rather than in the caller: this is the one place a
 	 * pairing has actually taken, so "exactly once per enrolment" is
@@ -507,7 +556,8 @@ int radiant_sec_pair_set_nonce(uint8_t ch, uint8_t role, const uint8_t *nonce,
 	BUILD_ASSERT(RADIANT_SEC_PAIR_INITIATOR == 0u &&
 		     RADIANT_SEC_PAIR_RESPONDER == 1u);
 	if (nonce == NULL || role > RADIANT_SEC_PAIR_RESPONDER ||
-	    (role == RADIANT_SEC_PAIR_RESPONDER && commit_out == NULL)) {
+	    (role == RADIANT_SEC_PAIR_RESPONDER && commit_out == NULL) ||
+	    nonce_is_zero(nonce)) {
 		return RADIANT_SEC_EINVAL;
 	}
 	/* After EXCHANGE, because the commitment covers the peer's key, and
@@ -515,6 +565,11 @@ int radiant_sec_pair_set_nonce(uint8_t ch, uint8_t role, const uint8_t *nonce,
 	c = ctx_live(ch);
 	if (c == NULL || c->step != (uint8_t)STEP_EXCHANGED) {
 		return RADIANT_SEC_EINVAL;
+	}
+	/* The install needs a device number; refuse now, with nothing
+	 * committed, rather than fail after the commitment is out. */
+	if (pair_devnum(ch) == 0u) {
+		return RADIANT_SEC_ENOKEY;
 	}
 
 	if (role == RADIANT_SEC_PAIR_RESPONDER) {
@@ -559,7 +614,7 @@ int radiant_sec_pair_peer_nonce(uint8_t ch, const uint8_t *peer_nonce,
 	bool             init;
 	int              rc;
 
-	if (peer_nonce == NULL) {
+	if (peer_nonce == NULL || nonce_is_zero(peer_nonce)) {
 		return RADIANT_SEC_EINVAL;
 	}
 	c = ctx_live(ch);
@@ -588,11 +643,18 @@ int radiant_sec_pair_peer_nonce(uint8_t ch, const uint8_t *peer_nonce,
 			ctx_free(c);
 			return RADIANT_SEC_EBADMAC;
 		}
-		return pair_finish(c, c->local_pub, c->k.peer_pub, c->s.nonce,
-				   peer_nonce, fingerprint);
+		rc = pair_finish(c, LABEL_ROOT, c->local_pub, c->k.peer_pub,
+				 c->s.nonce, peer_nonce, fingerprint);
+	} else {
+		rc = pair_finish(c, LABEL_ROOT, c->k.peer_pub, c->local_pub,
+				 peer_nonce, c->s.nonce, fingerprint);
 	}
-	return pair_finish(c, c->k.peer_pub, c->local_pub, peer_nonce,
-			   c->s.nonce, fingerprint);
+	/* Past the commitment nothing may fail retryably: a responder left at
+	 * its nonce step would take a second Na and show a chosen fp. */
+	if (rc != RADIANT_SEC_OK) {
+		ctx_free(c);
+	}
+	return rc;
 }
 
 int radiant_sec_pair_peer_uncommitted(uint8_t ch, const uint8_t *peer_pub,
@@ -621,7 +683,8 @@ int radiant_sec_pair_peer_uncommitted(uint8_t ch, const uint8_t *peer_pub,
 		lo = c->k.peer_pub;
 		hi = c->local_pub;
 	}
-	rc = pair_finish(c, lo, hi, zero_nonce, zero_nonce, fingerprint);
+	rc = pair_finish(c, LABEL_ENROL, lo, hi, zero_nonce, zero_nonce,
+			 fingerprint);
 	if (rc != RADIANT_SEC_OK) {
 		/* The scalar is spent, so nothing usable is left, and a
 		 * half-finished context must not linger. */

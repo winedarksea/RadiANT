@@ -910,6 +910,18 @@ EVENT_SERIAL_QUE_OVERFLOW = 0x34
 # verify:sdk-ant-shim]
 EVENT_QUE_OVERFLOW = 0x35
 
+# NOT ANT - ours, answering MESG_RADIANT_PAIRING (0xF5) only, and numbered
+# after it, far above every ANT response code this repository knows (the
+# highest is 0xAE). The initiator's PEER_NONCE revealed a nonce that does not
+# open the responder's commitment: the signature of a man in the middle that
+# tried to choose its nonce after seeing the initiator's. Kept apart from
+# INVALID_PARAMETER_PROVIDED, which an out-of-order sub-command gets, so a host
+# can tell an attack from a sequencing bug. The exchange has been wiped and
+# nothing installed; tell the user the pairing failed and do not retry
+# silently. [Security review 2026-11-13 item 4 (docs/radiant-security.md sec
+# 7.4)]
+RADIANT_PAIR_COMMIT_MISMATCH = 0xF5
+
 # ---------------------------------------------------------------------------
 # Advanced burst configuration
 # Fields of MESG_CONFIG_ADV_BURST.
@@ -1054,7 +1066,10 @@ BURST_HEADER_LAST = 0x80
 # refusal if Nb does not open Cb, which wipes A's exchange. Both humans compare
 # the two fps. A must not send Na before PEER_COMMIT has been answered, and B
 # must not send Nb before its PEER_NONCE: the two waits are the protocol
-# (docs/radiant-security.md sec 7.4).
+# (docs/radiant-security.md sec 7.4). An abort or timeout at one end while the
+# other shows digits is a failed pairing: remove the installed key (close, then
+# MESG_UNASSIGN_CHANNEL) and start again. Argument lengths are exact; ENTER's
+# timeout byte is optional.
 # ---------------------------------------------------------------------------
 
 # Leave pairing mode and wipe the exchange state, including any scalar the host
@@ -1085,11 +1100,12 @@ RADIANT_PAIR_SCALAR = 0x02
 RADIANT_PAIR_EXCHANGE = 0x03
 
 # Supply this end's role at [2] (0 initiator A, 1 responder B) and its 16-byte
-# nonce at [3..18], from the host's CSPRNG like the scalar. After EXCHANGE,
-# once. A responder's reply carries its commitment Cb = CMAC_Nb(PKb || PKa ||
-# 0x00) at [2..17], which the host sends to A; an initiator's reply is
-# [channel, 0x04]. [Security review 2026-11-13 item 4 (docs/radiant-security.md
-# sec 7.4)]
+# nonce at [3..18], from the host's CSPRNG like the scalar; all zeros is
+# refused. After EXCHANGE, once, and only on a channel with a device number
+# (else CHANNEL_IN_WRONG_STATE). A responder's reply carries its commitment Cb
+# = CMAC_Nb(PKb || PKa || 0x00) at [2..17], which the host sends to A; an
+# initiator's reply is [channel, 0x04]. [Security review 2026-11-13 item 4
+# (docs/radiant-security.md sec 7.4)]
 RADIANT_PAIR_NONCE = 0x04
 
 # Initiator only: the responder's 16-byte commitment Cb at [2..17], after
@@ -1099,12 +1115,17 @@ RADIANT_PAIR_PEER_COMMIT = 0x05
 
 # The peer's 16-byte nonce at [2..17]. On the initiator it must open the
 # commitment from PEER_COMMIT; if it does not, the exchange is wiped and the
-# reply is ANTW_INVALID_PARAMETER_PROVIDED. Then the root key is derived from
-# the DH result, both public keys and both nonces, and installed, and the reply
-# carries the six-digit comparison fingerprint (CMAC_Na(PKa || PKb || Nb) mod
-# 2^32 mod 10^6) as a u24 LE from [2]. A responder reveals Nb only after this
-# answers. [Security review 2026-11-13 item 4 (docs/radiant-security.md sec
-# 7.4)]
+# reply is ANTW_RADIANT_PAIR_COMMIT_MISMATCH (0xF5), distinct from the
+# INVALID_PARAMETER_PROVIDED an out-of-order call gets. An all-zero nonce is
+# refused. Then the root key is derived from the DH result, both public keys
+# and both nonces, and installed, and the reply carries the six-digit
+# comparison fingerprint (CMAC_Na(PKa || PKb || Nb) mod 2^32 mod 10^6) as a u24
+# LE from [2]. The key is LIVE from this answer, before the humans compare; on
+# a mismatch, an abort or a timeout at either end, the host removes it by
+# closing and unassigning the channel (MESG_UNASSIGN_CHANNEL 0x41) - LEAVE
+# wipes the exchange but not the installed key. A responder's host reveals Nb
+# only after this answers; the node cannot enforce that. [Security review
+# 2026-11-13 item 4 (docs/radiant-security.md sec 7.4)]
 RADIANT_PAIR_PEER_NONCE = 0x06
 
 # ---------------------------------------------------------------------------
@@ -2116,6 +2137,7 @@ RESPONSE_CODES = {
     'INVALID_PARAMETER_PROVIDED': 0x33,
     'EVENT_SERIAL_QUE_OVERFLOW': 0x34,
     'EVENT_QUE_OVERFLOW': 0x35,
+    'RADIANT_PAIR_COMMIT_MISMATCH': 0xF5,
 }
 RESPONSE_CODES_BY_VALUE = {value: name for name, value in RESPONSE_CODES.items()}
 

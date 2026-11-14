@@ -828,9 +828,12 @@ class TestPairCommitReveal(unittest.TestCase):
     CB = bytes.fromhex("87ec01f617e1f4d983c7fd3e6ad6859b")
     FP = 362706
     FP_UNCOMMITTED = 172078
-    # Python-only: the root cannot be read back out of the C.
+    # Also in test_sec_pair.c (VEC_ROOT, VEC_ROOT_UNCOMMITTED): the C keys a
+    # reference channel with each and proves the paired channel transforms a
+    # page to the same bytes, which is a root-key cross-check without reading
+    # the key back.
     ROOT = bytes.fromhex("9a6957177a6ad242f7c3c144a0bc9c08")
-    ROOT_UNCOMMITTED = bytes.fromhex("411b4b07be8427ac8bc6ad572660e1bf")
+    ROOT_UNCOMMITTED = bytes.fromhex("9546beb5ead0029c8691d9453473888b")
 
     def test_the_commitment_vector(self):
         self.assertEqual(self.CB, rc.pair_f4(self.PKB, self.PKA, self.NB))
@@ -844,6 +847,15 @@ class TestPairCommitReveal(unittest.TestCase):
                                                  self.PKB, self.NA, self.NB))
         self.assertEqual((self.ROOT_UNCOMMITTED, self.FP_UNCOMMITTED),
                          rc.pair_uncommitted(self.SHARED, self.PKB, self.PKA))
+
+    def test_the_two_modes_never_share_a_root(self):
+        # Review 2026-11-13: with Na = Nb = 0 the committed mode used to equal
+        # the uncommitted one. Zero nonces are now refused in committed mode
+        # AND enrolment has its own label, so equal inputs still differ.
+        lo, hi = sorted((self.PKA, self.PKB))
+        zero = bytes(16)
+        self.assertNotEqual(rc.pair_root(self.SHARED, lo, hi, zero, zero),
+                            rc.pair_uncommitted(self.SHARED, lo, hi)[0])
 
     def test_either_nonce_changes_the_fingerprint(self):
         other = bytes(16)

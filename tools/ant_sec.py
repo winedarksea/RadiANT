@@ -45,6 +45,7 @@ from ant_wire import (
     RADIANT_PAIR_LEAVE,
     RADIANT_PAIR_NONCE,
     RADIANT_PAIR_PEER_COMMIT,
+    RADIANT_PAIR_COMMIT_MISMATCH,
     RADIANT_PAIR_PEER_NONCE,
     RADIANT_PAIR_SCALAR,
 )
@@ -64,6 +65,7 @@ __all__ = [
     "encode_pair_enter", "encode_pair_leave", "encode_pair_scalar",
     "encode_pair_exchange", "encode_pair_nonce", "encode_pair_peer_commit",
     "encode_pair_peer_nonce", "decode_pair_reply", "fingerprint_str",
+    "PAIR_COMMIT_MISMATCH",
 ]
 
 # 0xF1's switch bitmask. The same byte the firmware uses - radiant_sec.h's
@@ -430,8 +432,15 @@ def encode_pair_exchange(channel: int, peer_pub: bytes) -> bytes:
 #   A     PEER_NONCE(Nb) -> fp, or a refusal if Nb does not open Cb
 #
 # The two waits are the protocol: A sends Na only after PEER_COMMIT has been
-# answered, and B sends Nb only after its own PEER_NONCE. Nonces come from
+# answered, and B sends Nb only after its own PEER_NONCE (the node cannot
+# enforce B's wait - Nb never passes through it). Nonces come from
 # `secrets.token_bytes(16)`, like the scalar.
+#
+# The key is live once PEER_NONCE answers, before the humans compare. On a
+# mismatch, an abort or a timeout at either end, remove it: close and unassign
+# the channel (MESG_UNASSIGN_CHANNEL, 0x41). LEAVE does not uninstall it. And
+# an abort at one end while the other shows digits is a FAILED pairing, never
+# one to retry until the digits match: the 10^-6 bound is per attempt.
 
 PAIR_NONCE_BYTES = 16
 PAIR_COMMIT_BYTES = 16
@@ -442,6 +451,17 @@ PAIR_ROLE_RESPONDER = 1
 def _check_nonce(what: str, value: bytes, want: int) -> None:
     if len(value) != want:
         raise ValueError(f"{what} is {len(value)} bytes, want {want}")
+    if what == "nonce" and not any(value):
+        # The device refuses it too: all zeros is enrolment's constant, and a
+        # host that produced one has no random source.
+        raise ValueError("an all-zero nonce is refused")
+
+
+#: The response code (not a reply body) when the initiator's PEER_NONCE does
+#: not open the responder's commitment: the man-in-the-middle signature, kept
+#: apart from INVALID_PARAMETER_PROVIDED (an out-of-order call). The exchange
+#: is wiped; the installed key, if any, is not - see the sequence above.
+PAIR_COMMIT_MISMATCH = RADIANT_PAIR_COMMIT_MISMATCH
 
 
 def encode_pair_nonce(channel: int, role: int, nonce: bytes) -> bytes:

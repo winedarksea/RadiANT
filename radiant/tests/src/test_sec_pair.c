@@ -20,6 +20,7 @@
 
 #include <radiant/radiant_sec.h>
 #include <radiant/radiant_channel.h>
+#include <radiant/radiant_radio_hal.h>
 
 #include "fake_radio.h"
 
@@ -76,6 +77,20 @@ static const uint8_t VEC_CB[16] = {
 /* Over-air enrolment's path for the same two keys: no nonces, keys by
  * value. */
 #define VEC_FP_UNCOMMITTED 172078u
+
+/* The roots tools/radiant_crypto.py derives for the same exchange (pair_root
+ * and pair_uncommitted). Not readable out of the C, so assert_root_is() keys a
+ * reference channel with each and compares what the two channels transmit. */
+static const uint8_t VEC_ROOT[16] = {
+	0x9a, 0x69, 0x57, 0x17, 0x7a, 0x6a, 0xd2, 0x42,
+	0xf7, 0xc3, 0xc1, 0x44, 0xa0, 0xbc, 0x9c, 0x08,
+};
+static const uint8_t VEC_ROOT_UNCOMMITTED[16] = {
+	0x95, 0x46, 0xbe, 0xb5, 0xea, 0xd0, 0x02, 0x9c,
+	0x86, 0x91, 0xd9, 0x45, 0x34, 0x73, 0x88, 0x8b,
+};
+
+#define REF_CH 6u   /* keyed directly with a Python-derived root */
 
 static void pair_before(void *f)
 {
@@ -147,6 +162,45 @@ static bool has_key(uint8_t ch)
 	       RADIANT_SEC_ENOKEY;
 }
 
+/*
+ * The paired channel holds exactly `root`: a reference channel keyed with it
+ * directly, under the same device number, epoch and slot, transmits the same
+ * ciphertext for the same page. X_CONF runs the whole hierarchy (KDF from the
+ * root, then CTR), so one differing root byte changes every output byte.
+ */
+static void assert_root_is(uint8_t ch, uint16_t devnum, const uint8_t *root)
+{
+	uint8_t  plain[8] = { RADIANT_SEC_PAGE_LO_DEFAULT, 0u, 0x11u, 0x22u,
+			      0x33u, 0x44u, 0x55u, 0x66u };
+	uint8_t  got[8];
+	uint8_t  want[8];
+	uint64_t t;
+
+	give_id(REF_CH, devnum);
+	zassert_ok(radiant_sec_set_key(REF_CH, root, 128u, devnum));
+	zassert_ok(radiant_sec_set_devnum(REF_CH, devnum));
+	zassert_ok(radiant_sec_configure(ch, RADIANT_SEC_SW_CONF, 2u,
+					 RADIANT_SEC_PAGE_LO_DEFAULT,
+					 RADIANT_SEC_PAGE_HI_DEFAULT));
+	zassert_ok(radiant_sec_configure(REF_CH, RADIANT_SEC_SW_CONF, 2u,
+					 RADIANT_SEC_PAGE_LO_DEFAULT,
+					 RADIANT_SEC_PAGE_HI_DEFAULT));
+	zassert_ok(radiant_sec_set_epoch(ch, 7u, 0u, 8182u));
+	zassert_ok(radiant_sec_set_epoch(REF_CH, 7u, 0u, 8182u));
+	t = (uint64_t)radiant_radio_now() + 3000000u;
+
+	memcpy(got, plain, sizeof(got));
+	memcpy(want, plain, sizeof(want));
+	zassert_ok(radiant_sec_tx_transform(ch, got, 8u, t));
+	zassert_ok(radiant_sec_tx_transform(REF_CH, want, 8u, t));
+	zassert_false(memcmp(want, plain, sizeof(want)) == 0,
+		      "the reference transmitted in the clear: no check made");
+	zassert_mem_equal(want, got, sizeof(got),
+			  "the paired root is not radiant_crypto.py's");
+	radiant_sec_channel_release(REF_CH);
+	(void)radiant_channel_unassign(REF_CH);
+}
+
 static uint32_t enrolments(uint8_t ch)
 {
 	struct radiant_sec_stats s;
@@ -185,6 +239,10 @@ ZTEST(sec_pair, test_two_ends_reach_the_same_fingerprint)
 	zassert_true(has_key(A_CH) && has_key(B_CH));
 	zassert_equal(1u, enrolments(A_CH));
 	zassert_equal(1u, enrolments(B_CH));
+
+	/* And the key both installed is the one Python derives. */
+	assert_root_is(A_CH, A_DEVNUM, VEC_ROOT);
+	assert_root_is(B_CH, B_DEVNUM, VEC_ROOT);
 }
 
 ZTEST(sec_pair, test_a_nonce_that_does_not_open_the_commitment_is_refused)
@@ -476,6 +534,7 @@ ZTEST(sec_pair, test_enrolment_pairs_through_the_uncommitted_path)
 	zassert_ok(radiant_sec_pair_peer_uncommitted(A_CH, pub_b, &fp_a));
 	zassert_ok(radiant_sec_pair_peer_uncommitted(B_CH, pub_a, &fp_b));
 	zassert_equal(fp_a, fp_b);
+	assert_root_is(A_CH, A_DEVNUM, VEC_ROOT_UNCOMMITTED);
 	zassert_equal(VEC_FP_UNCOMMITTED, fp_a,
 		      "the uncommitted fingerprint disagrees with "
 		      "radiant_crypto.py: %u", fp_a);
@@ -704,6 +763,120 @@ ZTEST(sec_pair, test_an_exchange_spends_the_scalar)
  * not, and waits for the next housekeeping pass. It must not release a pairing
  * entered after it.
  */
+/*
+ * Review 2026-11-13 item 3: past the commitment nothing may fail retryably. A
+ * responder left at its nonce step after a failed install would take a second
+ * Na - an attacker's, if B's host had already leaked Nb - and show a chosen
+ * fingerprint.
+ */
+ZTEST(sec_pair, test_a_channel_without_a_device_number_cannot_commit)
+{
+	uint8_t cb[16];
+
+	give_id(A_CH, A_DEVNUM);
+	give_id(B_CH, 0u);
+	keys_cross(A_CH, scalar_a, B_CH, scalar_b);
+	zassert_equal(RADIANT_SEC_ENOKEY,
+		      radiant_sec_pair_set_nonce(B_CH, RESP, nonce_b, cb),
+		      "a commitment went out from a channel that cannot install");
+}
+
+ZTEST(sec_pair, test_a_failed_install_after_the_commitment_wipes_the_exchange)
+{
+	uint8_t  cb[16];
+	uint8_t  na2[16];
+	uint32_t fp = 0u;
+
+	give_id(A_CH, A_DEVNUM);
+	give_id(B_CH, B_DEVNUM);
+	keys_cross(A_CH, scalar_a, B_CH, scalar_b);
+	zassert_ok(radiant_sec_pair_set_nonce(B_CH, RESP, nonce_b, cb));
+
+	/* The install fails after the commitment (here: the ID changed). */
+	zassert_equal(RADIANT_CH_OK,
+		      radiant_channel_id_set(B_CH, 0u, 0x0Bu, 0x05u));
+	zassert_equal(RADIANT_SEC_ENOKEY,
+		      radiant_sec_pair_peer_nonce(B_CH, nonce_a, &fp));
+
+	/* No second Na, not even after the ID is put back. */
+	zassert_equal(RADIANT_CH_OK,
+		      radiant_channel_id_set(B_CH, B_DEVNUM, 0x0Bu, 0x05u));
+	memcpy(na2, nonce_a, sizeof(na2));
+	na2[3] ^= 0x10u;
+	zassert_equal(RADIANT_SEC_EINVAL,
+		      radiant_sec_pair_peer_nonce(B_CH, na2, &fp),
+		      "a responder took a second Na after a failed install");
+	zassert_false(has_key(B_CH));
+}
+
+/* Review item 5: all zeros is enrolment's constant, never a committed nonce. */
+ZTEST(sec_pair, test_an_all_zero_nonce_is_refused)
+{
+	static const uint8_t zero[16];
+	uint8_t              cb[16];
+	uint32_t             fp_a = 0u;
+	uint32_t             fp_b = 1u;
+	uint32_t             fp = 0u;
+
+	give_id(A_CH, A_DEVNUM);
+	give_id(B_CH, B_DEVNUM);
+	keys_cross(A_CH, scalar_a, B_CH, scalar_b);
+	zassert_equal(RADIANT_SEC_EINVAL,
+		      radiant_sec_pair_set_nonce(B_CH, RESP, zero, cb));
+	zassert_equal(RADIANT_SEC_EINVAL,
+		      radiant_sec_pair_set_nonce(A_CH, INIT, zero, NULL));
+
+	zassert_ok(radiant_sec_pair_set_nonce(B_CH, RESP, nonce_b, cb));
+	zassert_ok(radiant_sec_pair_set_nonce(A_CH, INIT, nonce_a, NULL));
+	zassert_ok(radiant_sec_pair_peer_commit(A_CH, cb));
+	/* A zero reveal from the peer is refused without disturbing the step. */
+	zassert_equal(RADIANT_SEC_EINVAL,
+		      radiant_sec_pair_peer_nonce(B_CH, zero, &fp));
+	zassert_ok(radiant_sec_pair_peer_nonce(B_CH, nonce_a, &fp_b));
+	zassert_ok(radiant_sec_pair_peer_nonce(A_CH, nonce_b, &fp_a));
+	zassert_equal(fp_a, fp_b);
+}
+
+/* Review item 4: ENTER on a channel mid-exchange starts from nothing. */
+ZTEST(sec_pair, test_re_entering_wipes_the_old_exchange)
+{
+	uint8_t pub[32];
+	uint8_t cb[16];
+
+	give_id(A_CH, A_DEVNUM);
+	give_id(B_CH, B_DEVNUM);
+	keys_cross(A_CH, scalar_a, B_CH, scalar_b);
+
+	zassert_ok(radiant_sec_pair_enter(B_CH, 60u));
+	zassert_equal(RADIANT_SEC_EINVAL,
+		      radiant_sec_pair_local_pubkey(B_CH, pub),
+		      "ENTER revived the old public key");
+	zassert_equal(RADIANT_SEC_EINVAL,
+		      radiant_sec_pair_set_nonce(B_CH, RESP, nonce_b, cb),
+		      "ENTER revived the old DH result");
+}
+
+/* Review item 4: an abandoned window is freed by housekeeping, not only by
+ * the next pairing call. */
+ZTEST(sec_pair, test_housekeeping_frees_an_expired_window)
+{
+	uint8_t pub[32];
+
+	give_id(A_CH, A_DEVNUM);
+	zassert_ok(radiant_sec_pair_enter(A_CH, 1u));
+	zassert_ok(radiant_sec_pair_set_scalar(A_CH, scalar_a));
+	k_sleep(K_MSEC(1100));
+
+	/* local_pubkey does no lazy expiry, so it sees whether the context
+	 * (and the scalar in it) is still in RAM. */
+	zassert_ok(radiant_sec_pair_local_pubkey(A_CH, pub),
+		   "precondition: the expired context is still allocated");
+	radiant_sec_pair_service();
+	zassert_equal(RADIANT_SEC_EINVAL,
+		      radiant_sec_pair_local_pubkey(A_CH, pub),
+		      "housekeeping left an expired window's secrets in RAM");
+}
+
 ZTEST(sec_pair, test_a_loss_recorded_before_enter_does_not_release_the_pairing)
 {
 	give_id(A_CH, A_DEVNUM);

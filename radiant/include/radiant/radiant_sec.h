@@ -261,9 +261,18 @@ bool radiant_sec_x25519_is_degenerate(const uint8_t *shared);
  *                              Na || Nb), PRK = CMAC_0(DH); installed now
  *
  * A man in the middle has fixed one nonce before it learns the other side's,
- * so a completed MITM shows matching digits with probability 10^-6, and one
- * pairing window allows one attempt. Nothing new on the node: three CMACs and
- * no extra X25519. The host's price is one more round trip.
+ * so a completed MITM shows matching digits with probability 10^-6 per
+ * user-initiated pairing attempt. Not per window: a MITM that would lose just
+ * withholds its reveal and lets one end time out, so an abort or timeout on
+ * one end while the other shows digits must be treated as a FAILED pairing.
+ * Nothing new on the node: three CMACs and no extra X25519. The host's price
+ * is one more round trip.
+ *
+ * THE KEY IS LIVE AS SOON AS PEER_NONCE ANSWERS, before the human compares.
+ * On a mismatch or an abort the host must remove it explicitly:
+ * radiant_sec_pair_leave() wipes the exchange but leaves the installed key;
+ * radiant_sec_channel_release() removes it (over serial: close the channel,
+ * then MESG_UNASSIGN_CHANNEL, 0x41).
  *
  * Out-of-band pairing (QR code, typed key) remains the recommended path for
  * anything that matters - no attack surface during pairing at all.
@@ -279,6 +288,8 @@ bool radiant_sec_x25519_is_degenerate(const uint8_t *shared);
  * bounded. Zero from a host means this, not "forever". */
 #define RADIANT_SEC_PAIR_TIMEOUT_DEFAULT_S 60
 
+/* Entering always starts a fresh exchange: any earlier one on the channel,
+ * whatever its step, is wiped first. */
 int  radiant_sec_pair_enter(uint8_t ch, uint8_t timeout_s);
 void radiant_sec_pair_leave(uint8_t ch);
 
@@ -298,7 +309,9 @@ void radiant_sec_pair_on_search(uint8_t ch);
  * Releases what radiant_sec_pair_on_search() recorded. radiant_sec_pair_on_search()
  * runs in the radio callback and must not free pairing state a locked
  * radiant_sec_pair_peer() may be reading, so it only marks the channel; the
- * port calls this under its lock (housekeeping) to do the free.
+ * port calls this under its lock (housekeeping) to do the free. It also frees
+ * any exchange whose window has expired, so an abandoned scalar, PRK or nonce
+ * does not wait in RAM for the next pairing call.
  */
 void radiant_sec_pair_service(void);
 
@@ -335,9 +348,15 @@ int  radiant_sec_pair_peer(uint8_t ch, const uint8_t *peer_pub);
  *   responder  set_nonce(RESPONDER, Nb, Cb)    Cb out; send it to A
  *              peer_nonce(Na, &fp)             installs, fp; THEN reveal Nb
  *
+ * "THEN reveal Nb" is the responder HOST's obligation: Nb never passes
+ * through the node on its way out, so the node cannot enforce it.
+ *
  * Nonces are 16 bytes from the host's CSPRNG, for the same reason as the
- * scalar. A commitment that does not open wipes the exchange and returns
- * RADIANT_SEC_EBADMAC: nothing is installed and the window is spent.
+ * scalar; an all-zero nonce, ours or the peer's, is refused. set_nonce needs
+ * the channel's device number (RADIANT_SEC_ENOKEY otherwise), so nothing
+ * after the commitment can fail for want of it. Past that point any failure
+ * wipes the exchange: a commitment that does not open returns
+ * RADIANT_SEC_EBADMAC, nothing is installed and the attempt is spent.
  */
 int  radiant_sec_pair_set_nonce(uint8_t ch, uint8_t role, const uint8_t *nonce,
 				uint8_t *commit_out);

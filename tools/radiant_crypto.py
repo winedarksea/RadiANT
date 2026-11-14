@@ -732,6 +732,9 @@ def node_tier0_devnum(k_dev: bytes) -> int:
 
 PAIR_NONCE_BYTES = 16
 PAIR_LABEL_ROOT = b"RADIANT-pair-root\x00"   # sizeof() in C: the NUL is in
+#: Over-air enrolment's root label: its own, so the uncommitted mode can never
+#: produce a committed-mode key.
+PAIR_LABEL_ENROL = b"RADIANT-enrl-root\x00"
 
 
 def pair_f4(pkb: bytes, pka: bytes, nb: bytes) -> bytes:
@@ -750,11 +753,10 @@ def pair_g2(pka: bytes, pkb: bytes, na: bytes, nb: bytes) -> int:
 
 
 def pair_root(shared: bytes, pka: bytes, pkb: bytes, na: bytes,
-              nb: bytes) -> bytes:
+              nb: bytes, label: bytes = PAIR_LABEL_ROOT) -> bytes:
     """K_root = CMAC_PRK(label || PKa || PKb || Na || Nb), PRK = CMAC_0(DH)."""
     prk = cmac(bytes(16), bytes(shared))
-    return cmac(prk, PAIR_LABEL_ROOT + bytes(pka) + bytes(pkb) + bytes(na)
-                + bytes(nb))
+    return cmac(prk, label + bytes(pka) + bytes(pkb) + bytes(na) + bytes(nb))
 
 
 def pair_uncommitted(shared: bytes, pub1: bytes, pub2: bytes) -> tuple:
@@ -763,4 +765,5 @@ def pair_uncommitted(shared: bytes, pub1: bytes, pub2: bytes) -> tuple:
     in the middle - see radiant_sec_pair_peer_uncommitted()."""
     lo, hi = sorted((bytes(pub1), bytes(pub2)))
     zero = bytes(PAIR_NONCE_BYTES)
-    return pair_root(shared, lo, hi, zero, zero), pair_g2(lo, hi, zero, zero)
+    return (pair_root(shared, lo, hi, zero, zero, PAIR_LABEL_ENROL),
+            pair_g2(lo, hi, zero, zero))

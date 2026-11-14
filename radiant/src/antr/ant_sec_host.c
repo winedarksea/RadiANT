@@ -277,12 +277,12 @@ BUILD_ASSERT(RADIANT_SEC_PAIR_INITIATOR == 0u &&
  * radiant_sec_pair_peer_uncommitted() is over-air enrolment's and is not
  * reachable from the host, so the grindable path is not a downgrade option.
  */
-/* Each sub-command's minimum argument length, indexed by sub-command. One
+/* Each sub-command's exact argument length, indexed by sub-command. One
  * table rather than a check per case: the pairing build has its own size
- * budget (release.yml, "pairing text"). */
-static const uint8_t pair_arg_min[] = {
+ * budget (release.yml, "pairing text"). ENTER's timeout byte is optional. */
+static const uint8_t pair_arg_len[] = {
 	[ANTW_RADIANT_PAIR_LEAVE]       = 0u,
-	[ANTW_RADIANT_PAIR_ENTER]       = 0u,   /* the timeout is optional */
+	[ANTW_RADIANT_PAIR_ENTER]       = 1u,
 	[ANTW_RADIANT_PAIR_SCALAR]      = RADIANT_SEC_X25519_BYTES,
 	[ANTW_RADIANT_PAIR_EXCHANGE]    = RADIANT_SEC_X25519_BYTES,
 	[ANTW_RADIANT_PAIR_NONCE]       = 1u + RADIANT_SEC_PAIR_NONCE_BYTES,
@@ -304,11 +304,13 @@ static antr_err_t sec_pair_locked(uint8_t channel, uint8_t subcmd,
 	    reply_len == NULL || reply_cap < 2u + RADIANT_SEC_X25519_BYTES) {
 		return (antr_err_t)ANTW_INVALID_MESSAGE;
 	}
-	if (subcmd >= ARRAY_SIZE(pair_arg_min)) {
+	if (subcmd >= ARRAY_SIZE(pair_arg_len)) {
 		return (antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED;
 	}
-	if (arg_len < pair_arg_min[subcmd] ||
-	    (pair_arg_min[subcmd] != 0u && arg == NULL)) {
+	if (((subcmd == ANTW_RADIANT_PAIR_ENTER)
+		     ? (arg_len > 1u)
+		     : (arg_len != pair_arg_len[subcmd])) ||
+	    (arg_len != 0u && arg == NULL)) {
 		return (antr_err_t)ANTW_INVALID_MESSAGE;
 	}
 
@@ -371,8 +373,13 @@ static antr_err_t sec_pair_locked(uint8_t channel, uint8_t subcmd,
 		*reply_len = 5u;
 		break;
 	}
-	/* The bridge sends the reply only on success, so a refused
-	 * sub-command's reply_len is never read. */
+	/* A reveal that does not open the commitment is the man-in-the-middle
+	 * signature, so it gets a code of its own rather than the generic
+	 * refusal an out-of-order call gets. The bridge sends the reply only
+	 * on success, so a refused sub-command's reply_len is never read. */
+	if (rc == RADIANT_SEC_EBADMAC) {
+		return (antr_err_t)ANTW_RADIANT_PAIR_COMMIT_MISMATCH;
+	}
 	return sec_err(rc);
 }
 

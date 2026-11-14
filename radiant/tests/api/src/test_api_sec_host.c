@@ -604,7 +604,20 @@ ZTEST(api, test_sec_host_pairing_refuses_out_of_order_and_unopened_commitments)
 
 	f5_keys_cross();
 
-	/* Short arguments are malformed, not out of order. */
+	/* Short and long arguments are malformed, not out of order: lengths
+	 * are exact. */
+	{
+		uint8_t long_arg[2u + RADIANT_SEC_PAIR_NONCE_BYTES];
+
+		memcpy(long_arg, pair_nb_arg, sizeof(pair_nb_arg));
+		long_arg[sizeof(long_arg) - 1u] = 0x5Au;
+		zassert_equal((antr_err_t)ANTW_INVALID_MESSAGE,
+			      f5(PEER_CH, ANTW_RADIANT_PAIR_NONCE, long_arg,
+				 sizeof(long_arg), reply, &rlen));
+		zassert_equal((antr_err_t)ANTW_INVALID_MESSAGE,
+			      f5(HOST_CH, ANTW_RADIANT_PAIR_ENTER, long_arg, 2u,
+				 reply, &rlen));
+	}
 	zassert_equal((antr_err_t)ANTW_INVALID_MESSAGE,
 		      f5(PEER_CH, ANTW_RADIANT_PAIR_NONCE, pair_nb_arg,
 			 RADIANT_SEC_PAIR_NONCE_BYTES, reply, &rlen));
@@ -636,9 +649,13 @@ ZTEST(api, test_sec_host_pairing_refuses_out_of_order_and_unopened_commitments)
 		      reply, &rlen));
 	memcpy(bad_nb, &pair_nb_arg[1], sizeof(bad_nb));
 	bad_nb[0] ^= 0x01u;
-	zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
+	/* Its own code: the MITM signature must not read as the out-of-order
+	 * refusal above (review 2026-11-13). */
+	zassert_equal((antr_err_t)ANTW_RADIANT_PAIR_COMMIT_MISMATCH,
 		      f5(HOST_CH, ANTW_RADIANT_PAIR_PEER_NONCE, bad_nb,
 			 sizeof(bad_nb), reply, &rlen));
+	zassert_not_equal((antr_err_t)ANTW_RADIANT_PAIR_COMMIT_MISMATCH,
+			  (antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED);
 	zassert_equal(0u, enrolments_of(HOST_CH));
 	zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
 		      f5(HOST_CH, ANTW_RADIANT_PAIR_PEER_NONCE,

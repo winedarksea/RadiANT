@@ -433,6 +433,19 @@ class TestPairing(unittest.TestCase):
                           ant_wire.RADIANT_PAIR_PEER_COMMIT,
                           ant_wire.RADIANT_PAIR_PEER_NONCE))
 
+    def test_an_all_zero_nonce_is_refused(self):
+        # As the device refuses it: zeros are enrolment's constant.
+        with self.assertRaises(ValueError):
+            ant_sec.encode_pair_nonce(0, ant_sec.PAIR_ROLE_INITIATOR,
+                                      bytes(16))
+        with self.assertRaises(ValueError):
+            ant_sec.encode_pair_peer_nonce(0, bytes(16))
+
+    def test_a_commitment_mismatch_has_its_own_response_code(self):
+        # The MITM signature must not read as an out-of-order call (0x33).
+        self.assertEqual(0xF5, ant_sec.PAIR_COMMIT_MISMATCH)
+        self.assertNotEqual(0x33, ant_sec.PAIR_COMMIT_MISMATCH)
+
     def test_the_fingerprint_is_zero_padded(self):
         # "042317" and "42317" are the same number, and a user comparing two
         # screens is comparing strings. An unpadded fingerprint starting with a

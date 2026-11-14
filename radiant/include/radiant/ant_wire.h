@@ -463,6 +463,8 @@
 
 #define ANTW_EVENT_QUE_OVERFLOW                              RADIANT_WIRE_EVENT_QUE_OVERFLOW
 
+#define ANTW_RADIANT_PAIR_COMMIT_MISMATCH                    RADIANT_WIRE_RADIANT_PAIR_COMMIT_MISMATCH
+
 /* ------------------------------------------------------------------------
  * Advanced burst configuration
  * Fields of MESG_CONFIG_ADV_BURST.
@@ -558,7 +560,10 @@
  * not open Cb, which wipes A's exchange. Both humans compare the two fps.
  * A must not send Na before PEER_COMMIT has been answered, and B must not
  * send Nb before its PEER_NONCE: the two waits are the protocol
- * (docs/radiant-security.md sec 7.4).
+ * (docs/radiant-security.md sec 7.4). An abort or timeout at one end while
+ * the other shows digits is a failed pairing: remove the installed key
+ * (close, then MESG_UNASSIGN_CHANNEL) and start again. Argument lengths
+ * are exact; ENTER's timeout byte is optional.
  * ------------------------------------------------------------------------ */
 
 #define ANTW_RADIANT_PAIR_LEAVE                              RADIANT_WIRE_RADIANT_PAIR_LEAVE
