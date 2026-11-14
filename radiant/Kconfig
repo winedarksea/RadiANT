@@ -819,6 +819,121 @@ config RADIANT_GATE_MPSL_LEAD_SWEEP
 	  repeating, so what a stack refuses by notice can be read off the
 	  log. The lead policy is off while it runs. Bench only.
 
+# ---- Bench-only arm switches: investigation of MPSL assert 69:108 ----------
+#
+# Every symbol below is throwaway (ARM_DPPI_FIRST may stay as hardening) and
+# defaults to today's behaviour, so with all of them at their defaults the gate
+# compiles to the same code as without them. The image builder greps .config
+# for these exact names; do not rename.
+config RADIANT_GATE_MPSL_ARM_LOCK
+	bool "BENCH (69:108): call the MPSL timeslot API under MULTITHREADING_LOCK"
+	depends on RADIANT_BACKEND_NRF_GATE_MPSL && MULTITHREADING_LOCK
+	help
+	  Bench only, investigation of assert 69:108, to be removed.
+	  Wraps mpsl_timeslot_request(), mpsl_timeslot_session_open() and
+	  mpsl_timeslot_session_close() in MULTITHREADING_LOCK_ACQUIRE() /
+	  MULTITHREADING_LOCK_RELEASE(), as nrf/drivers/mpsl/flash_sync/
+	  flash_sync_mpsl.c does. Every call site runs in a thread (the
+	  gate's work queue, or the thread that runs antr_init()).
+
+config RADIANT_GATE_MPSL_ARM_REQ_DISCIPLINE
+	bool "BENCH (69:108): request only on an idle session, with a gap after END"
+	depends on RADIANT_BACKEND_NRF_GATE_MPSL
+	help
+	  Bench only, investigation of assert 69:108, to be removed.
+	  mpsl_timeslot_request() is never called on a session whose last
+	  request was answered by a START until that session's SESSION_IDLE
+	  has been seen (so -NRF_EAGAIN is never provoked; SESSION_IDLE places
+	  the held request), and never within RADIANT_GATE_MPSL_ARM_REQ_GAP_US
+	  of an ACTION_END returned on either session (the placement is
+	  retried from delayable work on the gate's own queue).
+
+config RADIANT_GATE_MPSL_ARM_REQ_GAP_US
+	int "BENCH (69:108): minimum time from ACTION_END to the next request (us)"
+	depends on RADIANT_GATE_MPSL_ARM_REQ_DISCIPLINE
+	default 400
+	range 0 20000
+	help
+	  Bench only, investigation of assert 69:108, to be removed.
+
+choice RADIANT_GATE_MPSL_ARM_ELASTIC
+	prompt "BENCH (69:108): elastic (scan chunk) grant handling"
+	depends on RADIANT_BACKEND_NRF_GATE_MPSL
+	default RADIANT_GATE_MPSL_ARM_EL_DEFAULT
+	help
+	  Bench only, investigation of assert 69:108, to be removed.
+
+config RADIANT_GATE_MPSL_ARM_EL_DEFAULT
+	bool "today's behaviour (extend, with the ext-skip after refusals)"
+
+config RADIANT_GATE_MPSL_ARM_EXT_ALWAYS
+	bool "never skip: every elastic grant asks to extend"
+	help
+	  Bench only, investigation of assert 69:108, to be removed.
+	  The ext-skip is disabled: g.no_extend is never set.
+
+config RADIANT_GATE_MPSL_ARM_EXT_NEVER
+	bool "never extend: every elastic grant ends at its first compare"
+	help
+	  Bench only, investigation of assert 69:108, to be removed.
+	  Every elastic grant is placed as during an ext-skip (fixed end
+	  margin, no_extend), so ACTION_EXTEND is never returned.
+
+config RADIANT_GATE_MPSL_ARM_EL_FIXED
+	bool "no elastic class: scan chunks are fixed first-bite grants"
+	help
+	  Bench only, investigation of assert 69:108, to be removed.
+	  Scan chunks are requested as ordinary non-extendable timeslots of
+	  the first-bite length, ended at the fixed class's compare
+	  (END_MARGIN_FIXED_US), which aborts the cut window.
+
+endchoice
+
+config RADIANT_GATE_MPSL_ARM_END_MARGIN_FIXED_US
+	int "BENCH (69:108): hand-back margin of the non-extendable class (us)"
+	# Unconditional for the reason PLACE_LEAD_US gives: radiant/tests/gate
+	# compiles the gate with BACKEND_NONE and must see the same number.
+	default 750
+	range 300 2000
+	help
+	  Bench only, investigation of assert 69:108, to be removed.
+	  Replaces the END_MARGIN_FIXED_US constant (750). At most
+	  END_MARGIN_EXTEND_US (2000): MAX_WINDOW_US is computed from the
+	  larger margin, so up to 2000 no request can exceed MPSL's maximum.
+	  Each us above 750 is a us less listening per ext-skip scan bite and
+	  a us more air reserved per tracked window, transmit and booking.
+
+config RADIANT_GATE_MPSL_ARM_NO_GUARANTEE
+	bool "BENCH (69:108): request timeslots with HFCLK_CFG_NO_GUARANTEE"
+	depends on RADIANT_BACKEND_NRF_GATE_MPSL
+	help
+	  Bench only, investigation of assert 69:108, to be removed.
+	  Every request asks for MPSL_TIMESLOT_HFCLK_CFG_NO_GUARANTEE instead
+	  of XTAL_GUARANTEED. Safe only because radiant_radio_init() holds an
+	  HFXO request (clock_control_on()) for the life of the image before
+	  any operation is programmed; the bootstrap timeslots placed earlier
+	  never touch the radio.
+
+config RADIANT_GATE_MPSL_ARM_DPPI_FIRST
+	bool "BENCH (69:108): detach the operation's (D)PPI before the hand-back"
+	depends on RADIANT_BACKEND_NRF_GATE_MPSL
+	help
+	  Bench only, investigation of assert 69:108 (may stay as hardening).
+	  On every TIMER0 END, ext-skip END and EXTEND_FAILED END, the
+	  operation's four RADIO (D)PPI connections (start RX, start TX,
+	  close, RSSI) are disabled before timer0_disarm() hands the radio
+	  back, instead of afterwards (radiant_radio_abort() or the deferred
+	  terminal).
+
+config RADIANT_GATE_MPSL_ARM_NO_T0_CAPTURE
+	bool "BENCH (69:108): no bench-counter CAPTURE on MPSL_TIMER0 in a signal"
+	depends on RADIANT_BACKEND_NRF_GATE_MPSL
+	help
+	  Bench only, investigation of assert 69:108, to be removed.
+	  Compiles out the RADIANT_GATE_MPSL_STATS block in the ext-skip
+	  TIMER0 path that triggers CAPTURE1 on MPSL_TIMER0 and overwrites CC1
+	  (skip_left_min) after timer0_disarm() has handed the radio back.
+
 # -------- The ISR stack, and it is a REQUIREMENT rather than a tuning knob --------
 #
 # MPSL delivers SIGNAL_START on the INTERRUPT STACK, and that is where the

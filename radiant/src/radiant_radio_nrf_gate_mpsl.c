@@ -154,7 +154,20 @@ BUILD_ASSERT(CONFIG_MPSL_TIMESLOT_SESSION_COUNT >= 1,
  * margin is an MPSL overstay assert (the board halts), not a dropped packet.
  */
 #define END_MARGIN_EXTEND_US 2000u
-#define END_MARGIN_FIXED_US  750u
+/* 750 unless the bench arm (assert 69:108) moves it; Kconfig caps it at 2000. */
+#define END_MARGIN_FIXED_US  ((uint32_t)CONFIG_RADIANT_GATE_MPSL_ARM_END_MARGIN_FIXED_US)
+
+/*
+ * HFCLK configuration of every request. NO_GUARANTEE is a bench arm (assert
+ * 69:108), safe only because radiant_radio_init() holds an HFXO request
+ * (clock_control_on()) for the life of the image before any operation is
+ * programmed; the bootstrap timeslots placed earlier never touch the radio.
+ */
+#if defined(CONFIG_RADIANT_GATE_MPSL_ARM_NO_GUARANTEE)
+#define GATE_HFCLK_CFG MPSL_TIMESLOT_HFCLK_CFG_NO_GUARANTEE
+#else
+#define GATE_HFCLK_CFG MPSL_TIMESLOT_HFCLK_CFG_XTAL_GUARANTEED
+#endif
 
 /*
  * How far ahead of the counter gate_release() places the compare that ends a
@@ -300,6 +313,10 @@ struct sess {
 	 * was already re-placed without it. */
 	uint16_t       book_tail_us;
 	bool           book_replaced;
+#if defined(CONFIG_RADIANT_GATE_MPSL_ARM_REQ_DISCIPLINE)
+	/* Bench arm (69:108): SESSION_IDLE seen since this session's last START. */
+	volatile bool  idle_seen;
+#endif
 };
 
 static struct sess ss[NSESS];
@@ -686,6 +703,57 @@ static inline void api_exit(int32_t rc)
 #endif
 
 /*
+ * Bench arm (assert 69:108): the timeslot API under MPSL's own mutex, as
+ * nrf/drivers/mpsl/flash_sync/flash_sync_mpsl.c calls it. A k_mutex, so thread
+ * context only, which every caller is: place_one() runs only from
+ * request_work_fn() on gate_wq (or its delayed twin below), session_open from
+ * gate_init() in the thread running antr_init(), session_close from
+ * gate_shutdown() on radiant_radio_init()'s failure path. A BLOCKED that MPSL
+ * delivers from inside mpsl_timeslot_request() reaches on_signal() with the
+ * lock held; that branch calls no MPSL API, and the mutex is recursive anyway.
+ */
+#if defined(CONFIG_RADIANT_GATE_MPSL_ARM_LOCK)
+#include <multithreading_lock.h>
+#define ARM_LOCK()                                                            \
+	do {                                                                  \
+		__ASSERT(!k_is_in_isr(), "ARM_LOCK from an ISR");             \
+		(void)MULTITHREADING_LOCK_ACQUIRE();                          \
+	} while (0)
+#define ARM_UNLOCK() MULTITHREADING_LOCK_RELEASE()
+#else
+#define ARM_LOCK()   do { } while (0)
+#define ARM_UNLOCK() do { } while (0)
+#endif
+
+/* Bench arm counters (assert 69:108): printed by the assert dump and the stats log. */
+#if defined(CONFIG_RADIANT_GATE_MPSL_ARM_REQ_DISCIPLINE) ||                  \
+	defined(CONFIG_RADIANT_GATE_MPSL_ARM_EL_FIXED) ||                    \
+	defined(CONFIG_RADIANT_GATE_MPSL_ARM_DPPI_FIRST)
+#define ARM_COUNTERS 1
+static struct {
+	uint32_t held_idle;    /* REQ_DISCIPLINE: request held for SESSION_IDLE */
+	uint32_t held_gap;     /* REQ_DISCIPLINE: request held for the END gap */
+	uint32_t el_fixed_cut; /* EL_FIXED: fixed first bite cut a longer chunk */
+	uint32_t dppi_first;   /* DPPI_FIRST: connections detached before hand-back */
+} arm_stats;
+#endif
+
+/*
+ * Bench arm (assert 69:108): take the operation's RADIO (D)PPI connections away
+ * before timer0_disarm() returns the radio, so no compare of ours can trigger a
+ * RADIO task on the next holder's radio. Register writes only (DPPIC CHENCLR).
+ */
+#if defined(CONFIG_RADIANT_GATE_MPSL_ARM_DPPI_FIRST)
+#define DPPI_DETACH_FIRST()                                                   \
+	do {                                                                  \
+		radiant_nrf_gate_dppi_detach();                               \
+		arm_stats.dppi_first++;                                       \
+	} while (0)
+#else
+#define DPPI_DETACH_FIRST() do { } while (0)
+#endif
+
+/*
  * The three MPSL timeslot API calls, in one place each, so the bench probes
  * (and any lock around them) cannot miss a call site. Every caller is a thread.
  */
@@ -697,7 +765,9 @@ static inline int32_t ts_request(struct sess *s)
 	int32_t rc;
 
 	API_ENTER(API_REQUEST, sess_idx(s));
+	ARM_LOCK();
 	rc = mpsl_timeslot_request(s->id, &s->req);
+	ARM_UNLOCK();
 	API_EXIT(rc);
 	return rc;
 }
@@ -707,8 +777,14 @@ static inline int32_t ts_session_open(struct sess *s)
 	int32_t rc;
 
 	API_ENTER(API_OPEN, sess_idx(s));
+	ARM_LOCK();
 	rc = mpsl_timeslot_session_open(on_signal, &s->id);
+	ARM_UNLOCK();
 	API_EXIT(rc);
+#if defined(CONFIG_RADIANT_GATE_MPSL_ARM_REQ_DISCIPLINE)
+	/* A new session has had no START: its first request may go at once. */
+	s->idle_seen = true;
+#endif
 	return rc;
 }
 
@@ -717,7 +793,9 @@ static inline int32_t ts_session_close(struct sess *s)
 	int32_t rc;
 
 	API_ENTER(API_CLOSE, sess_idx(s));
+	ARM_LOCK();
 	rc = mpsl_timeslot_session_close(s->id);
+	ARM_UNLOCK();
 	API_EXIT(rc);
 	return rc;
 }
@@ -1023,6 +1101,25 @@ static void request_work_fn(struct k_work *w)
 	}
 }
 
+#if defined(CONFIG_RADIANT_GATE_MPSL_ARM_REQ_DISCIPLINE)
+/*
+ * Bench arm (assert 69:108). Low 32 bits of radiant_radio_now() at the last
+ * ACTION_END returned on either session, written by on_signal(). One aligned
+ * word, so the thread reads it whole. A false hold needs the 71-minute wrap to
+ * land inside the gap; it costs one retry.
+ */
+static volatile uint32_t req_t_end32;
+static volatile bool     req_end_seen;
+
+/* The gap retry: the same pass request_work_fn() makes, on the same queue. */
+static void req_gap_fn(struct k_work *w)
+{
+	ARG_UNUSED(w);
+	request_work_fn(NULL);
+}
+static K_WORK_DELAYABLE_DEFINE(req_gap_work, req_gap_fn);
+#endif
+
 static void place_one(struct sess *s)
 {
 	int32_t rc;
@@ -1075,6 +1172,34 @@ static void place_one(struct sess *s)
 			radiant_nrf_gate_on_denied();
 		}
 		return;
+	}
+#endif
+#if defined(CONFIG_RADIANT_GATE_MPSL_ARM_REQ_DISCIPLINE)
+	/*
+	 * Bench arm (assert 69:108). want_place stays set on both holds. Rule 1: a
+	 * session that has had a START is asked again only after its SESSION_IDLE,
+	 * which re-pends placement (so -NRF_EAGAIN is never provoked). Rule 2: no
+	 * request within GAP_US of any returned ACTION_END; retried from delayable
+	 * work on this queue (thread context, so k_work is legal here). An END
+	 * landing between this test and the call is not excluded: masking the
+	 * zero-latency callback across an MPSL call is not an option.
+	 */
+	if (!s->idle_seen) {
+		arm_stats.held_idle++;
+		return;
+	}
+	if (req_end_seen) {
+		const uint32_t since =
+			(uint32_t)radiant_radio_now() - req_t_end32;
+
+		if (since < (uint32_t)CONFIG_RADIANT_GATE_MPSL_ARM_REQ_GAP_US) {
+			arm_stats.held_gap++;
+			(void)k_work_schedule_for_queue(
+				&gate_wq, &req_gap_work,
+				K_USEC(CONFIG_RADIANT_GATE_MPSL_ARM_REQ_GAP_US -
+				       since));
+			return;
+		}
 	}
 #endif
 
@@ -1167,7 +1292,7 @@ static void bootstrap_anchor(struct sess *s)
 	}
 	memset(&s->req, 0, sizeof(s->req));
 	s->req.request_type = MPSL_TIMESLOT_REQ_TYPE_EARLIEST;
-	s->req.params.earliest.hfclk = MPSL_TIMESLOT_HFCLK_CFG_XTAL_GUARANTEED;
+	s->req.params.earliest.hfclk = GATE_HFCLK_CFG;
 	s->req.params.earliest.priority = MPSL_TIMESLOT_PRIORITY_NORMAL;
 	s->req.params.earliest.length_us = MPSL_TIMESLOT_LENGTH_MIN_US;
 	s->req.params.earliest.timeout_us = BOOTSTRAP_TIMEOUT_US;
@@ -1346,6 +1471,9 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		s->blocked_run = 0u;
 		s->anchor = radiant_radio_now();
 		GSTAT(dbg.t_start = (uint32_t)s->anchor);
+#if defined(CONFIG_RADIANT_GATE_MPSL_ARM_REQ_DISCIPLINE)
+		s->idle_seen = false;
+#endif
 		s->anchor_valid = true;
 		/* Radio on loan from here until timer0_disarm() returns it. */
 		g.hw_held = true;
@@ -1508,11 +1636,17 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 			/* As EXTEND_FAILED below, without asking. See ext_skip. */
 			stats.ext_skipped++;
 			g.granted = false;
+			DPPI_DETACH_FIRST();
 			timer0_disarm();
 			(void)radiant_radio_abort();
 			end_housekeeping();
-#if defined(CONFIG_RADIANT_GATE_MPSL_STATS)
-			/* How much of the fixed end margin this path left. */
+#if defined(CONFIG_RADIANT_GATE_MPSL_STATS) &&                               \
+	!defined(CONFIG_RADIANT_GATE_MPSL_ARM_NO_T0_CAPTURE)
+			/*
+			 * How much of the fixed end margin this path left. NOTE: this runs
+			 * after timer0_disarm() handed the radio back and overwrites
+			 * MPSL_TIMER0 CC1; the NO_T0_CAPTURE bench arm compiles it out.
+			 */
 			{
 				uint32_t left;
 
@@ -1558,7 +1692,26 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 				break;
 			}
 		}
+#if defined(CONFIG_RADIANT_GATE_MPSL_ARM_EL_FIXED)
+		/*
+		 * Bench arm (69:108): a scan chunk granted only a fixed first bite.
+		 * Its window outlives the grant, so cut it as the ext-skip path does
+		 * rather than hand back a radio with the window still armed.
+		 */
+		if (!g.release_wanted && !g.extendable &&
+		    g.granted_len_us < g.want_len_us) {
+			arm_stats.el_fixed_cut++;
+			g.granted = false;
+			DPPI_DETACH_FIRST();
+			timer0_disarm();
+			(void)radiant_radio_abort();
+			end_housekeeping();
+			rv.callback_action = MPSL_TIMESLOT_SIGNAL_ACTION_END;
+			break;
+		}
+#endif
 		g.granted = false;
+		DPPI_DETACH_FIRST();
 		timer0_disarm();
 		/* See end_housekeeping(): the terminal is deferred, and only sent if nothing is coming. */
 		end_housekeeping();
@@ -1598,6 +1751,7 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 #endif
 		}
 		g.granted = false;
+		DPPI_DETACH_FIRST();
 		timer0_disarm();
 		(void)radiant_radio_abort();
 		/*
@@ -1771,6 +1925,10 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		 * the running timeslot, if any, is this session's.
 		 */
 		/* Masked: another session's START after this test would be torn down by the writes below. */
+#if defined(CONFIG_RADIANT_GATE_MPSL_ARM_REQ_DISCIPLINE)
+		/* Before the re-pends below, so the placement they trigger is not held. */
+		s->idle_seen = true;
+#endif
 		zkey = radiant_swi_zli_lock();
 		if (g.ts_live && g.live_sess != si) {
 			radiant_swi_zli_unlock(zkey);
@@ -1820,6 +1978,9 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		s->mpsl_owes = false;
 		s->want_place = false;
 		s->bootstrapping = false;
+#if defined(CONFIG_RADIANT_GATE_MPSL_ARM_REQ_DISCIPLINE)
+		s->idle_seen = true;
+#endif
 		if (s->role == ROLE_BOOK) {
 			s->book_failed = true;
 		} else {
@@ -1872,6 +2033,10 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		g.ended = true;
 		g.ts_live = false;
 		GSTAT(dbg.t_end = (uint32_t)radiant_radio_now());
+#if defined(CONFIG_RADIANT_GATE_MPSL_ARM_REQ_DISCIPLINE)
+		req_t_end32 = (uint32_t)radiant_radio_now();
+		req_end_seen = true;
+#endif
 		/* A placement held back for this timeslot (place_one()). */
 		for (uint32_t i = 0u; i < NSESS; i++) {
 			if (ss[i].wait_live) {
@@ -1983,6 +2148,11 @@ static void gate_stats_fn(struct k_work *w)
 		stats.el_gr_by_notice[1], stats.el_gr_by_notice[2],
 		stats.el_gr_by_notice[3], stats.el_gr_by_notice[4],
 		stats.el_blk_deferred);
+#if defined(ARM_COUNTERS)
+	LOG_INF("ARM69 held_idle=%u held_gap=%u el_fixed_cut=%u dppi_first=%u",
+		arm_stats.held_idle, arm_stats.held_gap, arm_stats.el_fixed_cut,
+		arm_stats.dppi_first);
+#endif
 	(void)k_work_reschedule_for_queue(&gate_wq, &gate_stats_work, K_SECONDS(5));
 }
 #endif
@@ -2199,10 +2369,20 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 	 * locals are staged into next_grant only after the early refusals, which must
 	 * leave next_grant untouched.
 	 */
-	const bool     extendable = (op != GATE_OP_TX) &&
+	const bool     elastic_op = (op != GATE_OP_TX) &&
 				(prio == RADIANT_GATE_PRIO_NORMAL);
-	/* An elastic grant placed during a skip will never ask to grow. */
-	const bool     no_extend = extendable && (ext_skip > 0u);
+	/* Bench arm EL_FIXED (69:108): no elastic class at all. */
+	const bool     extendable =
+		elastic_op && !IS_ENABLED(CONFIG_RADIANT_GATE_MPSL_ARM_EL_FIXED);
+	/*
+	 * An elastic grant placed during a skip will never ask to grow. Bench arms
+	 * (69:108): EXT_NEVER treats every elastic grant as skipped, EXT_ALWAYS none.
+	 */
+	const bool     no_extend =
+		extendable &&
+		(IS_ENABLED(CONFIG_RADIANT_GATE_MPSL_ARM_EXT_NEVER) ||
+		 (!IS_ENABLED(CONFIG_RADIANT_GATE_MPSL_ARM_EXT_ALWAYS) &&
+		  (ext_skip > 0u)));
 	const uint32_t end_margin_us = (extendable && !no_extend)
 					       ? END_MARGIN_EXTEND_US
 					       : END_MARGIN_FIXED_US;
@@ -2320,7 +2500,7 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 		/* Same class only: a chunk's booking grows and must not serve a tracked
 		 * window (ADR 0013 rule 1), and a chunk must not take a tracked booking. */
 		if (start >= b->r_start && end <= b->r_end &&
-		    b->ng.extendable == extendable) {
+		    b->ng.extendable == elastic_op) {
 			if (b->book_failed) {
 				b->book_failed = false;
 				b->role = ROLE_NONE;
@@ -2384,7 +2564,8 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 		uint32_t place_min = PLACE_MIN_US;
 
 #if defined(CONFIG_RADIANT_GATE_MPSL_D2)
-		if (extendable && d2_on) {
+		/* elastic_op, not extendable: the EL_FIXED arm keeps the scan's lead. */
+		if (elastic_op && d2_on) {
 			place_min = el_floor_us();
 		}
 #endif
@@ -2412,6 +2593,18 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 			  prio)) {
 		return GATE_DENIED;
 	}
+#if defined(CONFIG_RADIANT_GATE_MPSL_ARM_EL_FIXED)
+	/*
+	 * Bench arm (69:108): a scan chunk asks for one fixed first bite and never
+	 * grows. want_len_us keeps the whole chunk, so the TIMER0 compare can tell a
+	 * cut chunk from a whole one and abort it (see SIGNAL_TIMER0).
+	 */
+	if (elastic_op && s->ng.granted_len_us > elastic_initial_us) {
+		s->ng.granted_len_us = elastic_initial_us;
+		s->req.params.normal.length_us = elastic_initial_us;
+		GSTAT(s->ts_end = start + (radiant_time_t)elastic_initial_us);
+	}
+#endif
 
 	/*
 	 * Placed later from the work queue, not here: radiant_sched.c arms from the RADIO
@@ -2461,8 +2654,7 @@ static bool build_normal(struct sess *s, radiant_time_t start, radiant_time_t en
 	}
 	memset(rq, 0, sizeof(*rq));
 	rq->request_type = MPSL_TIMESLOT_REQ_TYPE_NORMAL;
-	rq->params.normal.hfclk =
-		MPSL_TIMESLOT_HFCLK_CFG_XTAL_GUARANTEED;
+	rq->params.normal.hfclk = GATE_HFCLK_CFG;
 	/* HIGH for tracked windows and transmits, NORMAL for elastic. This ranks only our own requests. */
 	rq->params.normal.priority =
 		(prio == RADIANT_GATE_PRIO_HIGH)
@@ -3119,6 +3311,33 @@ void mpsl_assert_handle(const char *const file, const uint32_t line)
 	       stats.last_signal, g.granted_len_us, g.want_len_us,
 	       (int)g.granted, (int)g.pending, (int)g.release_wanted,
 	       (int)g.extendable);
+#if defined(CONFIG_RADIANT_GATE_MPSL_ARM_LOCK) ||                            \
+	defined(CONFIG_RADIANT_GATE_MPSL_ARM_REQ_DISCIPLINE) ||              \
+	defined(CONFIG_RADIANT_GATE_MPSL_ARM_EXT_ALWAYS) ||                  \
+	defined(CONFIG_RADIANT_GATE_MPSL_ARM_EXT_NEVER) ||                   \
+	defined(CONFIG_RADIANT_GATE_MPSL_ARM_EL_FIXED) ||                    \
+	defined(CONFIG_RADIANT_GATE_MPSL_ARM_NO_GUARANTEE) ||                \
+	defined(CONFIG_RADIANT_GATE_MPSL_ARM_DPPI_FIRST) ||                  \
+	defined(CONFIG_RADIANT_GATE_MPSL_ARM_NO_T0_CAPTURE) ||               \
+	(CONFIG_RADIANT_GATE_MPSL_ARM_END_MARGIN_FIXED_US != 750)
+	/* Bench arms (assert 69:108) compiled into this image. */
+	printk("    arms=%s%s%s%s%s%s%s%s end_margin_fixed_us=%u\n",
+	       IS_ENABLED(CONFIG_RADIANT_GATE_MPSL_ARM_LOCK) ? "lock," : "",
+	       IS_ENABLED(CONFIG_RADIANT_GATE_MPSL_ARM_REQ_DISCIPLINE) ? "req," : "",
+	       IS_ENABLED(CONFIG_RADIANT_GATE_MPSL_ARM_EXT_ALWAYS) ? "ext_always," : "",
+	       IS_ENABLED(CONFIG_RADIANT_GATE_MPSL_ARM_EXT_NEVER) ? "ext_never," : "",
+	       IS_ENABLED(CONFIG_RADIANT_GATE_MPSL_ARM_EL_FIXED) ? "el_fixed," : "",
+	       IS_ENABLED(CONFIG_RADIANT_GATE_MPSL_ARM_NO_GUARANTEE) ? "no_guarantee," : "",
+	       IS_ENABLED(CONFIG_RADIANT_GATE_MPSL_ARM_DPPI_FIRST) ? "dppi_first," : "",
+	       IS_ENABLED(CONFIG_RADIANT_GATE_MPSL_ARM_NO_T0_CAPTURE) ? "no_t0_capture," : "",
+	       (unsigned)END_MARGIN_FIXED_US);
+#endif
+#if defined(ARM_COUNTERS)
+	printk("    arm_held_idle=%u arm_held_gap=%u arm_el_fixed_cut=%u "
+	       "arm_dppi_first=%u\n",
+	       arm_stats.held_idle, arm_stats.held_gap, arm_stats.el_fixed_cut,
+	       arm_stats.dppi_first);
+#endif
 #if defined(CONFIG_RADIANT_GATE_MPSL_STATS)
 	diag_context(d_ipsr, d_control, d_msp, d_psp, d_ret);
 	diag_clock();

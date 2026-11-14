@@ -3365,6 +3365,21 @@ void radiant_nrf_gate_on_grant_end(void)
 #endif
 }
 
+#if defined(CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL)
+void radiant_nrf_gate_dppi_detach(void)
+{
+	/*
+	 * The same four disables radiant_radio_abort() and deliver_terminal() make,
+	 * taken earlier. Our own DPPIC channels only (conn_sync, the always-live t_sync
+	 * capture, is left alone), so safe from any context and idempotent.
+	 */
+	nrfx_gppi_conn_disable(radiant_op.conn_start);
+	nrfx_gppi_conn_disable(radiant_op.conn_start_tx);
+	nrfx_gppi_conn_disable(radiant_op.conn_close);
+	nrfx_gppi_conn_disable(radiant_op.conn_rssi);
+}
+#endif
+
 #if defined(CONFIG_RADIANT_GATE_MPSL_D2)
 void radiant_nrf_gate_on_booking_due(void)
 {

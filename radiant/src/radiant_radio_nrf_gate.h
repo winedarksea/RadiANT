@@ -320,6 +320,17 @@ void radiant_nrf_gate_on_radio_irq(void);
  */
 void radiant_nrf_gate_on_grant_end(void);
 
+/*
+ * Disable the current operation's RADIO (D)PPI connections (start RX, start TX,
+ * close, RSSI) and nothing else: no RADIO register, no operation state, so the
+ * operation still gets its terminal by the usual path. Register writes only, so
+ * callable from the zero-latency signal context. The gate calls it before
+ * handing a grant back when CONFIG_RADIANT_GATE_MPSL_ARM_DPPI_FIRST is set, so
+ * no compare of ours can trigger a RADIO task once the radio is someone
+ * else's. Defined by the arbitrated (MPSL) build only.
+ */
+void radiant_nrf_gate_dppi_detach(void);
+
 #ifdef __cplusplus
 }
 #endif

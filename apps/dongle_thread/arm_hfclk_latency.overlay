@@ -1,0 +1,6 @@
+/* Bench only (assert 69:108): MPSL assumes 3000 us HFXO ramp-up (DT default 1650).
+ * This is what actually reaches mpsl_clock_hfclk_latency_set() on nRF54L15; see
+ * arm_hfclk_latency.conf. */
+&hfxo {
+	startup-time-us = <3000>;
+};
