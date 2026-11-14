@@ -353,18 +353,49 @@ either delay the data by that much or always read `unverified`. Instead:
   the same moment, as on a channel without the event, so it costs no latency.
 - `0xF1` bit 4 (`RADIANT_SEC_SW_VERDICT_EVENT`, valid only with `X_AUTH`) asks
   for one `0xF8` message per judged window: `[channel, verdict, window_start
-  u16 LE, W]`, verdict 1 verified or 2 unverified. It is posted to the same
-  queue as the data, after every packet it covers (under the drop policy,
-  immediately after a verified window's release), so a host never sees the
-  verdict before the packets. A host maps each packet to its window by payload
-  byte `[1]`, the counter's low 8 bits: it belongs to the window when
-  `(byte1 - window_start) mod 256 < W`, unambiguous because W ≤ 8.
-- A host that wants per-packet trust holds each secured packet until its
-  window's `0xF8` arrives and treats one whose verdict never comes - a lost
-  window, the last window before the node went quiet, an event-queue overflow
-  - as unverified. A host that wants no latency at all uses the data at once
-  and the event as an alarm. Either way, a forged window is now visible as a
-  forged window rather than only as a counter.
+  u16 LE, W, seq]`, verdict 1 verified or 2 unverified, and `seq` the
+  channel's verdict count mod 256 (0 for the first after the host's `0xF1`).
+  It is posted to the same queue as the data, after every packet it covers
+  (under the drop policy, immediately after a verified window's release).
+- **Only pages inside the secured range on the same channel are covered.** A
+  page outside `[page_lo, page_hi]` (`0xF4` `[4..5]`) is cleartext even on an
+  `X_AUTH` channel - it reaches the host as an ordinary `BROADCAST_DATA` and is
+  never absorbed - so its byte `[1]` means nothing, even when it matches a
+  verified window. A covered packet maps to its window by payload byte `[1]`,
+  the counter's low 8 bits: `(byte1 - window_start) mod 256 < W`, unambiguous
+  because W ≤ 8.
+- **Matching is not enough: a host must follow this rule** (implemented by
+  `VerdictResolver` in `tools/ant_sec.py`):
+  1. A packet is resolved by the **first** covering `0xF8` that arrives after
+     it, and is never re-resolved. `window_start` values repeat and arrive out
+     of order. The replay check admits counters up to ~127 *ahead*, so a forged
+     page claiming a future counter opens that window early: it is judged
+     `unverified` at once, and the same `window_start` can later be judged
+     `verified` for the genuine packets. A forged page claiming a window that
+     has closed but not yet been judged reopens it, and that window is judged
+     `unverified` twice. A host that took *any* matching verdict would credit
+     the forgery with the genuine one.
+  2. A gap in `seq`, an `EVENT_QUE_OVERFLOW` (`0x35`, sent as channel 0 and
+     able to arrive *before* packets queued ahead of the loss) or
+     `EVENT_SERIAL_QUE_OVERFLOW` (`0x34`), or a loss the host's transport
+     reports, settles every packet still pending as unverified. On a gap this
+     happens *before* the `0xF8` that revealed the gap is applied, so a lost
+     `unverified` cannot be replaced by a later `verified`. The firmware counts
+     each `0xF8` it could not queue (`verdict_events_dropped`), and the USB
+     bridge drops on backlog with only a log line, so `seq` is the host's one
+     reliable witness to both.
+  3. A genuine verdict for window *k* arrives with the last packet of window
+     *k+1*, at most 2W-1 periods after a packet. A packet still pending after
+     that (plus transport slack) is unverified. The last window before a node
+     goes quiet, an epoch advance and a `try_devnum` reset all end this way,
+     because each discards the window state and that window's verdict never
+     comes.
+  4. Pending packets are settled as unverified on `CHANNEL_CLOSED`, on the
+     host's own `0xF1` or `0xF3` for the channel, and on reset.
+- A host that wants per-packet trust holds each covered packet until it is
+  resolved; one that wants no latency uses the data at once and treats the
+  event as an alarm. Either way, a forged window is now visible as a forged
+  window rather than only as a counter.
 - Without bit 4 nothing is sent, and the byte stream is identical to a build
   without the event.
 - `0xF1` bit 2 is the drop-vs-deliver policy (default: deliver), and `0xF4`
@@ -1316,7 +1347,7 @@ records what the IDs are for. The allocation below is the one in the YAML.
 | `0xF5` | `ANTW_MESG_RADIANT_PAIRING_ID` | Enter/leave pairing mode; carry the host-supplied scalar and the X25519 exchange |
 | `0xF6` | `ANTW_MESG_RADIANT_HEALTH_ID` | Not a security message: the dongle's health counters (structure version at `[0]`), allocated from the same RadiANT block |
 | `0xF7` | `ANTW_MESG_RADIANT_DIAG_ID` | Not a security message: paged diagnostic counters (ADR 0023) |
-| `0xF8` | `ANTW_MESG_RADIANT_SEC_VERDICT_ID` | One window's verdict, `[channel, verdict, window_start u16 LE, W]`. Sent unsolicited, but only on a channel whose `0xF1` set bit 4; see section 3.2 |
+| `0xF8` | `ANTW_MESG_RADIANT_SEC_VERDICT_ID` | One window's verdict, `[channel, verdict, window_start u16 LE, W, seq]`. Sent unsolicited, but only on a channel whose `0xF1` set bit 4. Safe to act on only under the host rule in section 3.2 |
 | `0xF9-0xFA` | reserved | The rest of the RadiANT family. Claim by PR against `docs/profile-registry.md` |
 
 `0xF1` bit 3 (descriptor encryption) returns `ANTW_INVALID_PARAMETER_PROVIDED`
