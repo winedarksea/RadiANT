@@ -438,9 +438,10 @@ int radiant_event_post_channel_event(uint8_t channel, uint8_t code);
 
 /*
  * Queue an arbitrary message - the escape hatch for anything neither a data
- * message nor a channel event. Nothing in the firmware needs it today: the
- * bridge builds the startup message itself, so a backend must not also
- * raise one.
+ * message nor a channel event. Its one firmware user is the opt-in 0xF8
+ * window-verdict event (radiant_sec_window_verdict() in
+ * src/antr/ant_radio_radiant.c). The bridge builds the startup message
+ * itself, so a backend must not also raise one.
  *
  * body may be NULL only when len is 0. Returns RADIANT_EVENT_EINVAL for a
  * len above RADIANT_EVENT_BODY_MAX.

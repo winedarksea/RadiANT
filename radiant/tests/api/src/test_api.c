@@ -98,6 +98,23 @@ static void drain(void)
 	(void)radiant_event_drain(0u);
 }
 
+/* Read access for the suite's other files (test_api_sec_host.c), which see
+ * the same stream; declared there. Index i < api_msglog_count(), or NULL. */
+uint32_t api_msglog_count(void)
+{
+	return (n_msg < MSGLOG_MAX) ? n_msg : MSGLOG_MAX;
+}
+
+const uint8_t *api_msglog_get(uint32_t i, uint8_t *id, uint8_t *len)
+{
+	if (i >= api_msglog_count()) {
+		return NULL;
+	}
+	*id = msglog[i].id;
+	*len = msglog[i].len;
+	return msglog[i].data;
+}
+
 static uint32_t count_msgs(uint8_t id)
 {
 	uint32_t n = 0u;

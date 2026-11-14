@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
-"""Encode and decode the RadiANT security messages, 0xF1 to 0xF5.
+"""Encode and decode the RadiANT security messages, 0xF1 to 0xF5 and 0xF8.
 
 NOT ANT protocol. These are ours, answered by no ANT device, and their
 semantics live in docs/radiant-security.md; only the numbering was decided in
@@ -47,6 +47,7 @@ from ant_wire import (
     MESG_RADIANT_PAIRING_ID,
     MESG_RADIANT_SEC_CONFIG_ID,
     MESG_RADIANT_SEC_STATUS_ID,
+    MESG_RADIANT_SEC_VERDICT_ID,
     MESG_RADIANT_SET_KEY_ID,
     RADIANT_PAIR_ENTER,
     RADIANT_PAIR_EXCHANGE,
@@ -60,6 +61,7 @@ from ant_wire import (
 
 __all__ = [
     "SW_CONF", "SW_AUTH", "SW_DROP_UNVER", "SW_DESC_CONF",
+    "SW_VERDICT_EVENT",
     "VERDICT_CLEAR", "VERDICT_VERIFIED", "VERDICT_UNVERIFIED",
     "PAGE_LO_MIN", "PAGE_HI_MAX", "LEGAL_W", "KEY_BITS", "STATUS_LEN",
     "STATUS_LEN_V1_26",
@@ -69,6 +71,8 @@ __all__ = [
     "encode_epoch", "decode_epoch",
     "decode_status", "encode_status",
     "switches_str", "verdict_str",
+    "VERDICT_LEN", "decode_verdict", "encode_verdict", "verdict_covers",
+    "VerdictResolver", "overflow_all",
     "X25519_BYTES", "PAIR_TIMEOUT_DEFAULT_S", "PAIR_NONCE_BYTES",
     "PAIR_COMMIT_BYTES", "PAIR_ROLE_INITIATOR", "PAIR_ROLE_RESPONDER",
     "encode_pair_enter", "encode_pair_leave", "encode_pair_scalar",
@@ -79,12 +83,13 @@ __all__ = [
 
 # 0xF1's switch bitmask. The same byte the firmware uses - radiant_sec.h's
 # RADIANT_SEC_SW_* are these values, asserted by BUILD_ASSERT in
-# radiant/src/radiant_sec_host.c so the two cannot drift apart quietly.
+# radiant/src/antr/ant_sec_host.c so the two cannot drift apart quietly.
 SW_CONF = 0x01        # X_CONF, confidentiality
 SW_AUTH = 0x02        # X_AUTH, authenticity
 SW_DROP_UNVER = 0x04  # drop an unverified window instead of delivering it
 SW_DESC_CONF = 0x08   # descriptor confidentiality - REFUSED in v1
-SW_KNOWN = 0x0F       # bits 7..4 are reserved and must be zero
+SW_VERDICT_EVENT = 0x10  # send 0xF8 per judged window; needs SW_AUTH
+SW_KNOWN = 0x1F       # bits 7..5 are reserved and must be zero
 
 VERDICT_CLEAR = 0
 VERDICT_VERIFIED = 1
@@ -140,9 +145,13 @@ def encode_config(channel: int, switches: int, w: int,
     _check_channel(channel)
     if switches & ~SW_KNOWN:
         raise ValueError(
-            f"switches 0x{switches:02X} sets a reserved bit; bits 7..4 must "
+            f"switches 0x{switches:02X} sets a reserved bit; bits 7..5 must "
             "be zero so a later switch is not silently ignored by a node too "
             "old to know it")
+    if switches & SW_VERDICT_EVENT and not switches & SW_AUTH:
+        raise ValueError(
+            "SW_VERDICT_EVENT without SW_AUTH: only X_AUTH has a verdict, and "
+            "the firmware refuses a promise of events that would never come")
     if w not in LEGAL_W:
         raise ValueError(
             f"W={w} is not one of {LEGAL_W}. W must divide 256 and 65536 or "
@@ -384,6 +393,8 @@ def switches_str(switches: int) -> str:
         names.append("drop-unverified")
     if switches & SW_DESC_CONF:
         names.append("descriptor-conf")
+    if switches & SW_VERDICT_EVENT:
+        names.append("verdict-event")
     if switches & ~SW_KNOWN:
         names.append(f"reserved:0x{switches & ~SW_KNOWN:02X}")
     return "|".join(names)
@@ -395,6 +406,182 @@ def verdict_str(verdict: int) -> str:
         VERDICT_VERIFIED: "verified",
         VERDICT_UNVERIFIED: "unverified",
     }.get(verdict, f"unknown:{verdict}")
+
+
+# ── 0xF8: one window's verdict ──────────────────────────────────────────────
+#
+# Sent unsolicited, but only on a channel whose 0xF1 set SW_VERDICT_EVENT. It
+# follows every packet it covers in the same queue. A verdict is only safe to
+# act on under the host rule in protocol/ant_wire.yaml (0xF8) and
+# docs/radiant-security.md 3.2, which VerdictResolver below implements: the
+# first covering verdict after a packet binds it; a sequence gap, a queue
+# overflow or the deadline settles what is pending as unverified; and the
+# first verdict after a start or a flush binds nothing.
+
+VERDICT_LEN = 7
+
+
+def decode_verdict(body: bytes) -> dict:
+    """Body of MESG_RADIANT_SEC_VERDICT_ID:
+    [ch, verdict, window_start LE, W, seq LE].
+
+    A longer body decodes the fields named here (fields are only appended).
+    A verdict other than verified/unverified, or a W the firmware cannot
+    have, is refused rather than guessed at.
+    """
+    if len(body) < VERDICT_LEN:
+        raise ValueError(
+            f"0xF8 body is {len(body)} bytes, want at least {VERDICT_LEN}")
+    if body[1] not in (VERDICT_VERIFIED, VERDICT_UNVERIFIED):
+        raise ValueError(f"0xF8 verdict {body[1]} is neither verified nor "
+                         "unverified")
+    if body[4] not in LEGAL_W:
+        raise ValueError(f"0xF8 W={body[4]} is not one of {LEGAL_W}")
+    window_start, = struct.unpack_from("<H", body, 2)
+    seq, = struct.unpack_from("<H", body, 5)
+    return {
+        "channel": body[0],
+        "verdict": body[1],
+        "window_start": window_start,
+        "w": body[4],
+        "seq": seq,
+    }
+
+
+def encode_verdict(channel: int, verdict: int, window_start: int,
+                   w: int, seq: int = 0) -> bytes:
+    """The firmware's side, for tests and simulators."""
+    _check_channel(channel)
+    if verdict not in (VERDICT_VERIFIED, VERDICT_UNVERIFIED):
+        raise ValueError(f"0xF8 carries verified or unverified, not {verdict}")
+    if w not in LEGAL_W:
+        raise ValueError(f"W={w} is not one of {LEGAL_W}")
+    if not 0 <= window_start <= 0xFFFF or window_start % w:
+        raise ValueError(
+            f"window_start {window_start} is not a 16-bit multiple of W={w}")
+    if not 0 <= seq <= 0xFFFF:
+        raise ValueError(f"seq {seq} does not fit in 16 bits")
+    return (bytes([channel, verdict]) + struct.pack("<H", window_start) +
+            bytes([w]) + struct.pack("<H", seq))
+
+
+def verdict_covers(verdict: dict, channel: int, payload: bytes,
+                   page_lo: int, page_hi: int) -> bool:
+    """Could this 0xF8 judge `payload` (8 bytes, BROADCAST_DATA after the
+    channel byte) received on `channel`?
+
+    Only a page inside the channel's secured range [page_lo, page_hi] (0xF4
+    [4..5]) on the SAME channel is ever judged: a page outside it reaches the
+    host in the clear and is never verified, whatever its byte [1] says.
+
+    For a covered page, byte [1] is the counter's low 8 bits, so it is in the
+    window when (byte1 - window_start) mod 256 < W, unambiguous since W <= 8.
+    "Could" because matching is necessary, not sufficient: only the FIRST
+    covering verdict after the packet is the packet's, and only when nothing
+    since says verdicts were lost (VerdictResolver).
+    """
+    if len(payload) < 2:
+        raise ValueError("a secured page has at least two bytes")
+    if channel != verdict["channel"]:
+        return False
+    if not page_lo <= payload[0] <= page_hi:
+        return False
+    return ((payload[1] - verdict["window_start"]) & 0xFF) < verdict["w"]
+
+
+class VerdictResolver:
+    """The host rule for 0xF8, for one channel. Feed it what arrives, in order.
+
+    data(payload, t)        a BROADCAST_DATA on this channel, at time t (s);
+                            returns VERDICT_CLEAR at once for a page outside
+                            the secured range, else None (pending)
+    verdict(body, now)      a 0xF8 for this channel, arriving at `now`; the
+                            deadline is applied first
+    overflow()              EVENT_QUE_OVERFLOW / EVENT_SERIAL_QUE_OVERFLOW, or
+                            a loss the transport reported (overflow_all()
+                            feeds the events to every channel's resolver)
+    expire(now)             settle packets pending longer than the deadline
+    flush()                 CHANNEL_CLOSED, the host's own 0xF1/0xF3, reset
+
+    Each settled packet is appended to `.settled` as (payload, verdict). A
+    packet is settled exactly once: by the first covering verdict after it,
+    or as unverified by a gap, an overflow, the deadline, a flush, or the
+    first verdict after a start or a flush - which only sets the seq
+    baseline, because a packet still in flight across the flush may be
+    judged by no verdict at all (the firmware threw its window away).
+    """
+
+    def __init__(self, channel: int, w: int, period_s: float,
+                 page_lo: int, page_hi: int, slack_s: float = 0.25):
+        self.channel = channel
+        self.w = w
+        self.page_lo = page_lo
+        self.page_hi = page_hi
+        # A genuine verdict comes on the last packet of the NEXT window,
+        # at most 2W-1 periods after the packet.
+        self.deadline_s = (2 * w - 1) * period_s + slack_s
+        self.pending: list[tuple[bytes, float]] = []
+        self.settled: list[tuple[bytes, int]] = []
+        self.next_seq: int | None = None
+
+    def data(self, payload: bytes, t: float):
+        if not self.page_lo <= payload[0] <= self.page_hi:
+            self.settled.append((bytes(payload), VERDICT_CLEAR))
+            return VERDICT_CLEAR
+        self.pending.append((bytes(payload), t))
+        return None
+
+    def _settle_all(self, how: int) -> None:
+        for p, _ in self.pending:
+            self.settled.append((p, how))
+        self.pending = []
+
+    def verdict(self, body: bytes, now: float) -> None:
+        v = decode_verdict(body)
+        if v["channel"] != self.channel:
+            raise ValueError(f"0xF8 for channel {v['channel']} fed to the "
+                             f"resolver for {self.channel}")
+        # A packet older than the deadline can't be this verdict's: a read
+        # stall longer than it settles everything held.
+        self.expire(now)
+        if self.next_seq is None or v["seq"] != self.next_seq:
+            # No baseline yet, or verdicts were lost: nothing pending may be
+            # resolved by this or any later verdict. Settled BEFORE it.
+            self._settle_all(VERDICT_UNVERIFIED)
+            self.next_seq = (v["seq"] + 1) & 0xFFFF
+            return
+        self.next_seq = (v["seq"] + 1) & 0xFFFF
+        keep = []
+        for p, t in self.pending:
+            if verdict_covers(v, self.channel, p, self.page_lo, self.page_hi):
+                self.settled.append((p, v["verdict"]))
+            else:
+                keep.append((p, t))
+        self.pending = keep
+
+    def overflow(self) -> None:
+        self._settle_all(VERDICT_UNVERIFIED)
+
+    def expire(self, now: float) -> None:
+        keep = []
+        for p, t in self.pending:
+            if now - t > self.deadline_s:
+                self.settled.append((p, VERDICT_UNVERIFIED))
+            else:
+                keep.append((p, t))
+        self.pending = keep
+
+    def flush(self) -> None:
+        self._settle_all(VERDICT_UNVERIFIED)
+        # The next verdict only re-establishes the baseline.
+        self.next_seq = None
+
+
+def overflow_all(resolvers) -> None:
+    """EVENT_QUE_OVERFLOW (0x35) or EVENT_SERIAL_QUE_OVERFLOW (0x34): sent as
+    channel 0, but the loss is the queue's, so it reaches every channel."""
+    for r in resolvers:
+        r.overflow()
 
 
 # ── 0xF5: pairing ───────────────────────────────────────────────────────────
@@ -568,3 +755,4 @@ MESG_SET_KEY = MESG_RADIANT_SET_KEY_ID
 MESG_EPOCH = MESG_RADIANT_EPOCH_ID
 MESG_STATUS = MESG_RADIANT_SEC_STATUS_ID
 MESG_PAIRING = MESG_RADIANT_PAIRING_ID
+MESG_VERDICT = MESG_RADIANT_SEC_VERDICT_ID

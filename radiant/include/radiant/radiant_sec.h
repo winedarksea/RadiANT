@@ -542,14 +542,23 @@ int radiant_sec_kdf(const struct radiant_sec_key *root, const char *label,
 					  * 1 = drop it. Dropping means
 					  * holding every window until
 					  * its OWN verdict exists, which
-					  * costs W+1 to 2W packet
-					  * periods of latency (0.75-1.0 s
+					  * costs W to 2W-1 packet
+					  * periods of latency (0.5-0.75 s
 					  * at W=2, 4 Hz) - the detection
 					  * latency of
 					  * docs/radiant-security.md 7.5 */
 #define RADIANT_SEC_SW_DESC_CONF   0x08  /* descriptor encryption - REFUSED in
 					  * v1; the descriptor has no counter
 					  * and therefore no nonce */
+#define RADIANT_SEC_SW_VERDICT_EVENT 0x10 /* the host asked for one window-
+					  * verdict event (0xF8) per judged
+					  * window. Valid only with X_AUTH,
+					  * since nothing else has a verdict.
+					  * Nothing in this module acts on it:
+					  * it is stored, reported in 0xF4 and
+					  * handed to radiant_sec_window_
+					  * verdict(), whose port override
+					  * posts the event */
 
 /*
  * The verdict every secured RX delivery carries. D6's deliver-as-unverified
@@ -676,14 +685,29 @@ void radiant_sec_deliver(uint8_t ch, const uint8_t *pay, uint8_t len,
 
 /*
  * One window's verdict, emitted exactly once when the window that carries its
- * tag completes - so W+1 to 2W packets after the window itself, because the
- * tag lags one window (docs/radiant-security.md 3.2).
+ * tag completes - so W to 2W-1 packet periods after the window's packets, the
+ * last to the first, because the tag lags one window
+ * (docs/radiant-security.md 3.2).
  *
  * `window_start` is the 16-bit counter of the window's first packet, so a host
- * can tell which delivered packets the verdict refers to.
+ * can tell which delivered packets the verdict refers to. Called AFTER every
+ * radiant_sec_deliver() of the packets it covers, the drop policy's release
+ * included, so a port that queues both keeps the verdict behind its data.
+ *
+ * `w` and `switches` are the channel's, passed so a port can act on
+ * RADIANT_SEC_SW_VERDICT_EVENT without reading the context back. Scalars, per
+ * rule 2 above.
+ *
+ * `seq` counts this channel's verdicts, 16 bits, wrapping, from 0 when the
+ * context is created and never reset. Made here, at the source, so a verdict
+ * lost anywhere downstream - a full event ring, a USB backlog - shows the
+ * host a gap; and every discard of the receive window state (configure, a
+ * new epoch, an epoch advance, try_devnum, radiant_sec_rx_restart()) spends
+ * one, because the verdict that window was waiting for will never come.
  */
 void radiant_sec_window_verdict(uint8_t ch, uint16_t window_start,
-				enum radiant_sec_verdict verdict);
+				enum radiant_sec_verdict verdict, uint8_t w,
+				uint8_t switches, uint16_t seq);
 
 /*
  * The epoch on channel `ch` has just advanced to `epoch` at a counter wrap,
@@ -813,6 +837,14 @@ int  radiant_sec_set_devnum(uint8_t ch, uint16_t devnum);
  */
 int  radiant_sec_try_devnum(uint8_t ch, uint16_t devnum);
 
+/*
+ * The port's channel close and open: drop the receive window state (keeping
+ * the replay floor), so a window left pending across a close can't be
+ * judged by tag bytes that arrive after it. A no-op for a channel with no
+ * security context.
+ */
+void radiant_sec_rx_restart(uint8_t ch);
+
 void radiant_sec_channel_release(uint8_t ch);
 void radiant_sec_reset(void);
 
@@ -861,6 +893,12 @@ struct radiant_sec_stats {
 	 * profile_enrol.c's over-air window - one event either way.
 	 */
 	uint32_t enrolments;
+	/* 0xF8 window-verdict events the port could not queue: event-ring
+	 * refusals ONLY. The host sees these as gaps in the event's sequence
+	 * number, and also sees there what no counter here can - an event the
+	 * USB bridge dropped on backlog, and the seq spent on each discard of
+	 * the window state. */
+	uint32_t verdict_events_dropped;
 };
 
 void radiant_sec_get_stats(uint8_t ch, struct radiant_sec_stats *out);
@@ -873,6 +911,9 @@ void radiant_sec_get_stats(uint8_t ch, struct radiant_sec_stats *out);
  * happen on this path, but written to survive being wrong about that).
  */
 void radiant_sec_stat_enrolment(uint8_t ch);
+
+/* INTERNAL, the same shape: the port's hook into verdict_events_dropped. */
+void radiant_sec_stat_verdict_dropped(uint8_t ch);
 
 /*
  * The non-counter half of what 0xF4 reports: configuration and clock, now.
@@ -921,6 +962,11 @@ static inline int radiant_sec_rx_ingest(uint8_t ch, const uint8_t *p, uint8_t l,
 
 static inline void radiant_sec_pump(void)
 {
+}
+
+static inline void radiant_sec_rx_restart(uint8_t ch)
+{
+	(void)ch;
 }
 
 static inline void radiant_sec_channel_release(uint8_t ch)

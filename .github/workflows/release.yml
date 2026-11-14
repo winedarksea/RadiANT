@@ -2088,6 +2088,23 @@ jobs:
           # 4 B dropped_direction per context, x 8. 32 B of text headroom
           # was left at f02125a, so any fix lands over; the ceiling moves to
           # the next multiple of 512, as every ceiling here is, leaving 472 B.
+          # TEXT CEILING 6144 -> 6656 FOR A SECURITY FIX (review 2026-11-13,
+          # item 3: the window verdict never reached the host). Measured with
+          # this recipe at NCS v3.4.0: 6112 / 6749 at f02125a, 6260 / 6749
+          # with the opt-in 0xF8 window-verdict event (+148 / +0):
+          #     76  radiant_event_post_raw     first firmware user; its
+          #                                    body was inlined into
+          #                                    post_channel_event before
+          #     56  radiant_sec_window_verdict the port's 0xF8 poster
+          #     20  rx_close_window            two more hook arguments
+          #     -4  radiant_sec_configure
+          # 32 B of headroom could not hold any implementation of it. 6656 is
+          # the next multiple of 512, as every ceiling here; it leaves 396 B,
+          # less than the 512 B the rounding allows, so the next growth is
+          # still caught. 6308 / 6749 after the review follow-up (the 0xF8
+          # seq byte and the dropped-verdict counter, +48 / +0). 6372 / 6749
+          # after the re-review (adjacent-window check, 16-bit seq spent on
+          # discards, rx restart on channel open/close: +64 / +0).
           check "security text" "$(( on_text - off_text ))" 6656
           check "security bss"  "$(( on_bss  - off_bss  ))" 7168
 

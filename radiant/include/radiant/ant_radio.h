@@ -1204,8 +1204,9 @@ antr_err_t antr_sec_epoch_set(uint8_t channel, uint8_t flags, uint32_t epoch,
  * error: "no security on this channel" is a state a host must be able to read
  * without treating an ordinary channel as a fault.
  *
- * This is what makes deliver-as-unverified auditable. A host that ignores the
- * per-message verdict flag can still see that unverified windows happened, and
+ * This is what makes deliver-as-unverified auditable. A host that does not
+ * take the 0xF8 window-verdict events can still see that unverified windows
+ * happened, and
  * "deliver but mark" only means something if unverified cannot be silently
  * treated as verified.
  *
