@@ -1312,9 +1312,12 @@ a W-for-1 denial of service.
 
 **Forgery bound.** At the default W=2 the tag is **16 bits**, which is the same
 size the deferred reliable-command page's inline tag is called brute-forceable
-at. Per window, an attacker's chance of a *verified* forgery is about 2^-16;
-continuous injection at 4 Hz gives an expected time of roughly **2.3 hours** for
-one verified forged data window. At W=4 it is 2^-32, and at W=8 it is 2^-64.
+at. Per window, an attacker's chance of a *verified* forgery is about 2^-16.
+Injection gets one attempt per window, and a W=2 window at 4 Hz lasts 0.5 s, so
+the expected time to one verified forged data window is 2^16 x 0.5 s, roughly
+**9.1 hours** (about 4.5 hours at 8 Hz). An earlier version said 2.3 hours,
+which counted one attempt per packet at 8 Hz. At W=4 the chance is 2^-32, and at
+W=8 it is 2^-64.
 
 This is accepted under the casual-snooping bar, **for sensor data and not for
 commands** — and it is said out loud rather than left to be inferred from "a
