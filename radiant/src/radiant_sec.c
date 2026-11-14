@@ -1120,13 +1120,21 @@ static void rx_close_window(struct sec_ctx *c, const struct sec_pkt *last,
 	own_ok = last != NULL && !c->rx_broken && c->rx_absorbed == c->w;
 
 	if (c->rx_prev_seen) {
-		/* The tag bytes must come from the window right after the one
-		 * they judge. Any other closing window - a lost window, or one
-		 * 256 counters on, reached after a quiet gap with captured tag
-		 * bytes (review of fix/sec-verdict-event, finding 1) - judges
-		 * nothing: UNVERIFIED, for the event and the drop policy alike. */
-		if (c->rx_prev_valid && tag_full &&
-		    c->rx_win_start == (uint16_t)(c->rx_prev_start + c->w) &&
+		/* The closing window must lie AFTER the judged one and less
+		 * than 256 counters on. Usually it is the next window; a run of
+		 * windows that carried only clear pages is skipped by the
+		 * sender's tag (section 3.2), so adjacency can't be demanded.
+		 * But 256 on is where byte [1] repeats: a window left pending
+		 * across a quiet gap could be judged by forged pages aliasing
+		 * it 256 counters later, carrying the recorded tag bytes of the
+		 * window that followed it, and the host would bind the forgery
+		 * to the VERIFIED (review of fix/sec-verdict-event, finding 1).
+		 * A window at or behind the judged one is a reopen. Either is
+		 * UNVERIFIED, for the event and the drop policy alike. */
+		uint16_t span = (uint16_t)(c->rx_win_start - c->rx_prev_start);
+
+		if (c->rx_prev_valid && tag_full && span >= c->w &&
+		    span < 256u &&
 		    radiant_sec_ct_equal(c->rx_prev_tag, c->rx_tag, c->w)) {
 			/* The previous window's closing packet is now known
 			 * to be the sender's - bytes, counter and all; only

@@ -403,13 +403,16 @@ either delay the data by that much or always read `unverified`. Instead:
      `unverified` will ever come for it, and it may reach the host after the
      flush. A host using `0xF8` must not filter `EVENT_CHANNEL_CLOSED`
      (`0x07`) with `MESG_EVENT_FILTER_CONFIG` (`0x79`).
-- **The firmware judges a window only by the window right after it.** A window
-  whose tag bytes come from any other closing window is `unverified`, for the
-  event and the drop policy alike. Without that check, a window left pending
-  and a quiet gap of 128 periods or more let a forger send W packets whose
-  counter byte aliases the pending window 256 counters on, carrying the
-  captured tag bytes of the window that followed it; the closing window's tag
-  matched and the forged packets were followed at once by `verified`. A
+- **The firmware judges a window only by a closing window after it and less
+  than 256 counters on.** Normally that is the next window; windows that
+  carried only clear pages are skipped by the sender's tag (above), so
+  adjacency itself can't be required. A window judged by a closing window at
+  or behind it (a reopen), or 256 or more counters on, is `unverified`, for
+  the event and the drop policy alike. Without that check, a window left
+  pending and a quiet gap of 128 periods or more let a forger send W packets
+  whose counter byte aliases the pending window 256 counters on, carrying the
+  captured tag bytes of the window that followed it; the tag matched and the
+  forged packets were followed at once by `verified`. A
   channel close or open also discards a secured channel's receive windows
   (keeping its replay floor), so a window can't stay pending across one.
 - A host that wants per-packet trust holds each covered packet until it is
