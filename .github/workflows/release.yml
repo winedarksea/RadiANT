@@ -2201,8 +2201,18 @@ jobs:
           # 4608 is the next multiple of 512 above 4452, as every ceiling here
           # is a multiple of 512, and deliberately not another fifth: as the
           # bss paragraph above says, generous rounding hides the drift this
-          # step exists to catch. That leaves 348 B at 4260 B, so the next
+          # step exists to catch. That left 348 B at 4260 B, so the next
           # feature in this file arrives with its own measurement.
+          #
+          # By 76b47db the object had drifted to 4446 B (measured, cause not
+          # attributed), then the 2026-11-13 security
+          # review: +82 B for item 7 (recovery and adopt_epoch refuse to roll
+          # a receiver back without the re-provision flag: recover +38,
+          # adopt_epoch +20, the three recover_* wrappers +8 each) and +76 B
+          # for item 8 (the Tier II replay floor and the 32-bit window index
+          # in the nonce: compat_rx +52, configure +12, nonce_block +12).
+          # 4604 B measured together, 4 B under the ceiling: the next change
+          # to this file moves the ceiling, with its own measurement.
           compat_text="$(sect_of text "${compat_elf}")"
           test -n "${compat_text}"
           check "compat text (linked)" "$(( compat_text - on_text ))" 288
