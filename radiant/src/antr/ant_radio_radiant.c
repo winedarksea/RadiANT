@@ -1743,8 +1743,15 @@ static void api_post_master_tx(uint8_t ch)
 	 * caught up one period per pump and stayed silent meanwhile. Skip the
 	 * slots that have passed here instead. The pump runs at least every
 	 * RADIANT_API_HOUSEKEEP_MS, so this is one or two periods at most.
+	 *
+	 * Only when a slot may have gone by: sec_pay_valid is false when the
+	 * last post built nothing on a keyed channel (or the channel was not
+	 * keyed then), and the scheduler callback clears it when a keyed
+	 * master's slot is missed or denied, since that master too waits for
+	 * the pump. So a master transmitting normally pays one field compare
+	 * per slot here, not a clock read.
 	 */
-	{
+	if (!api_ch[ch].sec_pay_valid && radiant_sec_channel_is_secured(ch)) {
 		radiant_time_t now = radiant_radio_now();
 
 		while (t != RADIANT_TIME_NEVER && t <= now) {
@@ -2616,6 +2623,15 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 				if (!radiant_sec_channel_is_secured(ch)) {
 					api_post_master_tx(ch);
 				}
+#if defined(CONFIG_RADIANT_SEC)
+				else {
+					/* The slot passed unsent, so nothing is
+					 * built for the next one, and the pump's
+					 * post skips whatever else has passed by
+					 * then (api_post_master_tx()). */
+					api_ch[ch].sec_pay_valid = false;
+				}
+#endif
 			} else {
 				api_post_track_rx(ch);
 			}
