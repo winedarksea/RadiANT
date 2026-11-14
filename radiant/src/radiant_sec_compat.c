@@ -531,8 +531,14 @@ int radiant_sec_compat_configure(uint8_t ch, uint8_t switches, uint8_t n,
 	}
 	c->t_s = t_s;
 
-	/* Any window in flight was counted against a different N. */
-	c->tx_msgs = 0u;
+	/* Any window in flight was counted against a different N, so it is
+	 * dropped on both sides. tx_msgs is NOT: it counts messages since the
+	 * anchor, the same quantity a receiver reads off its clock
+	 * (msg_index), so it moves only with the epoch. Zeroed here, every
+	 * later tag carried a window index behind the receiver's - refused by
+	 * the replay floor, or resolved to the wrong window - until the next
+	 * epoch. The next tag after a reconfigure lands N messages on, so its
+	 * index is still above the floor. */
 	c->tx_closing = false;
 	c->tx_fill = 0u;
 	c->rx_absorbed = 0u;

@@ -761,6 +761,44 @@ ZTEST(sec_compat_stream, test_a_new_epoch_starts_a_fresh_tier2_floor)
 	zassert_equal(0u, st.tier2_replays, "%u", st.tier2_replays);
 }
 
+/* Re-sending the same configuration mid-window drops the window in flight on
+ * both sides, and nothing else: the sender's window index keeps following the
+ * clock, so the receiver's floor (kept, as it must be) does not refuse the
+ * genuine windows that follow. A sender that restarted its count at 0 here was
+ * refused by the floor until the next epoch. */
+ZTEST(sec_compat_stream, test_reapplying_the_configuration_keeps_tier2_verifying)
+{
+	const uint32_t                  at = 3u * TEST_N + 3u;
+	struct radiant_sec_compat_stats st;
+	uint32_t                        i;
+
+	setup_pair(RADIANT_SEC_COMPAT_SW_TIER_II, RADIANT_SEC_COMPAT_SW_TIER_II,
+		   67u, 67u);
+	for (i = 0u; i < at; i++) {               /* windows 0..2, then 3 open */
+		(void)slot_at(i, true);
+	}
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_compat_configure(TX_CH,
+						   RADIANT_SEC_COMPAT_SW_TIER_II,
+						   TEST_N, TEST_T_S));
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_compat_configure(RX_CH,
+						   RADIANT_SEC_COMPAT_SW_TIER_II,
+						   TEST_N, TEST_T_S));
+	/* Tags now close at at + N - 1 + kN: windows 4, 5 and 6. */
+	for (i = at; i < 7u * TEST_N; i++) {
+		(void)slot_at(i, true);
+	}
+
+	radiant_sec_compat_get_stats(RX_CH, &st);
+	zassert_equal(6u, st.tier2_verified, "verified %u, unverified %u",
+		      st.tier2_verified, st.tier2_unverified);
+	zassert_equal(0u, st.tier2_unverified, "%u", st.tier2_unverified);
+	zassert_equal(0u, st.tier2_replays, "%u", st.tier2_replays);
+	zassert_equal(1u, verdicts_at(RADIANT_SEC_COMPAT_SUBTYPE_TIER_II, 6u,
+				      RADIANT_SEC_VERDICT_VERIFIED));
+}
+
 /* ═══ Both tiers ═════════════════════════════════════════════════════════ */
 
 ZTEST(sec_compat_stream, test_the_subtype_reaches_the_nonce_through_the_emit_path)
