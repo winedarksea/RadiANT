@@ -353,9 +353,12 @@ either delay the data by that much or always read `unverified`. Instead:
   the same moment, as on a channel without the event, so it costs no latency.
 - `0xF1` bit 4 (`RADIANT_SEC_SW_VERDICT_EVENT`, valid only with `X_AUTH`) asks
   for one `0xF8` message per judged window: `[channel, verdict, window_start
-  u16 LE, W, seq]`, verdict 1 verified or 2 unverified, and `seq` the
-  channel's verdict count mod 256 (0 for the first after the host's `0xF1`).
-  It is posted to the same queue as the data, after every packet it covers
+  u16 LE, W, seq u16 LE]`, verdict 1 verified or 2 unverified. `seq` counts
+  the channel's verdicts and is never reset while the channel keeps its key;
+  every time the firmware throws away a window that was waiting for its
+  verdict (the host's `0xF1` or `0xF3`, an epoch advance, a `try_devnum`
+  candidate, a channel close or open) it spends one more, so a verdict that
+  will never come is a gap, not silence. It is posted to the same queue as the data, after every packet it covers
   (under the drop policy, immediately after a verified window's release).
 - **Only pages inside the secured range on the same channel are covered.** A
   page outside `[page_lo, page_hi]` (`0xF4` `[4..5]`) is cleartext even on an
@@ -380,18 +383,35 @@ either delay the data by that much or always read `unverified`. Instead:
      `EVENT_SERIAL_QUE_OVERFLOW` (`0x34`), or a loss the host's transport
      reports, settles every packet still pending as unverified. On a gap this
      happens *before* the `0xF8` that revealed the gap is applied, so a lost
-     `unverified` cannot be replaced by a later `verified`. The firmware counts
-     each `0xF8` it could not queue (`verdict_events_dropped`), and the USB
-     bridge drops on backlog with only a log line, so `seq` is the host's one
-     reliable witness to both.
+     `unverified` cannot be replaced by a later `verified`. The firmware's
+     `verdict_events_dropped` counts event-ring refusals only; a `0xF8` the
+     USB bridge drops on backlog (with only a log line) and a discarded
+     window show up nowhere but as `seq` gaps, so `seq` is the host's one
+     reliable witness.
   3. A genuine verdict for window *k* arrives with the last packet of window
      *k+1*, at most 2W-1 periods after a packet. A packet still pending after
-     that (plus transport slack) is unverified. The last window before a node
-     goes quiet, an epoch advance and a `try_devnum` reset all end this way,
-     because each discards the window state and that window's verdict never
-     comes.
+     that (plus transport slack) is unverified, and the deadline is checked
+     before *every* `0xF8` is applied: a host that stops reading for longer
+     than the deadline settles everything it held. The last window before a
+     node goes quiet ends this way.
   4. Pending packets are settled as unverified on `CHANNEL_CLOSED`, on the
-     host's own `0xF1` or `0xF3` for the channel, and on reset.
+     host's own `0xF1` or `0xF3` for the channel, and on reset - and so is
+     whatever is pending when the **first** `0xF8` after any of these (or
+     after the host starts listening) arrives. That verdict only sets the
+     `seq` baseline and binds nothing: a forged packet pumped just before the
+     host's `0xF3` lost its window when the firmware discarded it, so no
+     `unverified` will ever come for it, and it may reach the host after the
+     flush. A host using `0xF8` must not filter `EVENT_CHANNEL_CLOSED`
+     (`0x07`) with `MESG_EVENT_FILTER_CONFIG` (`0x79`).
+- **The firmware judges a window only by the window right after it.** A window
+  whose tag bytes come from any other closing window is `unverified`, for the
+  event and the drop policy alike. Without that check, a window left pending
+  and a quiet gap of 128 periods or more let a forger send W packets whose
+  counter byte aliases the pending window 256 counters on, carrying the
+  captured tag bytes of the window that followed it; the closing window's tag
+  matched and the forged packets were followed at once by `verified`. A
+  channel close or open also discards a secured channel's receive windows
+  (keeping its replay floor), so a window can't stay pending across one.
 - A host that wants per-packet trust holds each covered packet until it is
   resolved; one that wants no latency uses the data at once and treats the
   event as an alarm. Either way, a forged window is now visible as a forged
@@ -1347,7 +1367,7 @@ records what the IDs are for. The allocation below is the one in the YAML.
 | `0xF5` | `ANTW_MESG_RADIANT_PAIRING_ID` | Enter/leave pairing mode; carry the host-supplied scalar and the X25519 exchange |
 | `0xF6` | `ANTW_MESG_RADIANT_HEALTH_ID` | Not a security message: the dongle's health counters (structure version at `[0]`), allocated from the same RadiANT block |
 | `0xF7` | `ANTW_MESG_RADIANT_DIAG_ID` | Not a security message: paged diagnostic counters (ADR 0023) |
-| `0xF8` | `ANTW_MESG_RADIANT_SEC_VERDICT_ID` | One window's verdict, `[channel, verdict, window_start u16 LE, W, seq]`. Sent unsolicited, but only on a channel whose `0xF1` set bit 4. Safe to act on only under the host rule in section 3.2 |
+| `0xF8` | `ANTW_MESG_RADIANT_SEC_VERDICT_ID` | One window's verdict, `[channel, verdict, window_start u16 LE, W, seq u16 LE]`. Sent unsolicited, but only on a channel whose `0xF1` set bit 4. Safe to act on only under the host rule in section 3.2 |
 | `0xF9-0xFA` | reserved | The rest of the RadiANT family. Claim by PR against `docs/profile-registry.md` |
 
 `0xF1` bit 3 (descriptor encryption) returns `ANTW_INVALID_PARAMETER_PROVIDED`
