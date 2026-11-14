@@ -2209,8 +2209,11 @@ radiant_messages:
              these three from the backend table, 0xFFFFFFFF where it cannot
              see them; bounded receive windows armed opening past their
              start, the largest such lateness in us, bounded windows expired
-             while a scan chunk held the radio; fields 6-7 reserved,
-             0xFFFFFFFF); 8 timing, worst cases since boot except the two
+             while a scan chunk held the radio; transmits and receive
+             windows refused because their start compare was written behind
+             the counter, from the backend table, 0xFFFFFFFF on backends
+             without that check; reserved and 0xFFFFFFFF until 2026-11-14);
+             8 timing, worst cases since boot except the two
              counts (frames in the longest receive drain, longest work on
              one receive entry with the core callback excluded, longest
              software CRC, longest synchronous receive callback - all in us,

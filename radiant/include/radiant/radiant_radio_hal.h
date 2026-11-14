@@ -363,6 +363,13 @@ struct radiant_tx_req {
 	 * an arbitrated backend scheduling pressure, not air time, provided the
 	 * backend releases the reservation the moment it knows no follow-on is
 	 * coming - required, not optional.
+	 *
+	 * Not a promise in the other direction either: a follow-on served from
+	 * air already held has its own follow_on_us clipped to that air on a
+	 * backend whose grants cannot grow (the MPSL gate). A chain of
+	 * follow-ons then ends where the first operation's reserve ends, and an
+	 * arm past it is refused EDENIED although radiant_sched.c's in_reserve()
+	 * let it through at the in-grant lead.
 	 */
 	uint16_t                     follow_on_us;
 };

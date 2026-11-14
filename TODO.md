@@ -14,7 +14,7 @@ Performance review 2026-11-13 (`docs/performance-review-2026-11-13.md`), open af
 - [x] TI cannot receive the Pro Micro clone: FIXED. The cause was TI's RX intermediate frequency (0.5 MHz put the signal across DC, so loss depended on the transmitter's exact carrier offset), not the clone or the RX bandwidth. `CONFIG_RADIANT_CC26XX_INT_FREQ` now defaults to 1.0 MHz: clone and L15 0.0-0.6 % on TI, flat across ±200 kHz, below the same-window Garmin. The clone is a valid TI peer again.
 - [x] Decoy sync word `0x59C5`: replaced by `syncWord1 = 0` (second correlator off). 6 x 300 s alternating legs: CRC fails halved, tracked loss unchanged against the Garmin.
 - [x] `tools/ab_gates.toml`'s acquisition gate for the TI short match: closed as superseded, not run. The gate is a ratio against sdk-ant, which cannot run on TI, and it is `required = false`; ADR 0022's TI section already compared first-sighting medians against the Garmin in the same window (0.30/0.39 s, gate 2 pass).
-- [x] The burst ACK-window reserve (e042a10) on MPSL: measured 2026-11-14, and it was a live regression. The data packet's grant ends about where the ACK window closes, and the gate required the window's 1550 us follow-on to fit in it too, so every acknowledged message an MPSL build originated as a slave (Zwift's FE-C path) failed: L15 `gate.conf` against a Garmin 0/60 and 0/60, Garmin receiving 57 and 59. Fixed (8650411): an in-grant arm is served by its own air and its follow-on is clipped at the grant's end; 58/60 and 59/60, every received packet acknowledged. Retries still cannot run in-grant on MPSL (item 4 below). Master-originated acked data was not affected (60/60 on HEAD). `archive/benchmarks/2026-11-14-mpsl-ack-window/`. Under cc26xx coex the in-grant lead stays 600 us, so retries still cannot fit there either.
+- [x] The burst ACK-window reserve (e042a10) on MPSL: measured 2026-11-14, and it was a live regression. The data packet's grant ends about where the ACK window closes, and the gate required the window's 1550 us follow-on to fit in it too, so every acknowledged message an MPSL build originated as a slave (Zwift's FE-C path) failed: L15 `gate.conf` against a Garmin 0/60 and 0/60, Garmin receiving 57 and 59. Fixed (8650411): an in-grant arm is served by its own air and its follow-on is clipped at the grant's end; 58/60 and 59/60, every received packet acknowledged. Retries still cannot run in-grant on MPSL (item 4 below). Master-originated acked data was not affected (60/60 on HEAD), by reading (review 2026-11-14): a listening master's slot is booked a period ahead (ADR 0021) with `API_FOLLOW_ON_MASTER_TX_US` (4550 us) of follow-on, and the transfer's AA replaces the posted MASTER_TX at the booked instant (`is_booked()`: same channel and open), so that grant already held the ACK window plus its 1550 us. An AA placed without a booking (booking off, or a booking MPSL refused) carries only the transfer's own reserve and would have failed on HEAD like the slave case; 8650411 covers it too. Single acknowledged messages never retry (`retry_packet()` refuses a one-packet transfer), so the ACK window's 1550 us follow-on is useless there; giving it 0 for a one-packet transfer would stop it holding arbiter air on cc26xx coex and keep `in_reserve()` honest (user decision, not done). `archive/benchmarks/2026-11-14-mpsl-ack-window/`. Under cc26xx coex the in-grant lead stays 600 us, so retries still cannot fit there either.
 
 ## FE-C coverage (deferred from the 2026-11-11 Zwift-capture plan, one item):
 - `tools/ant_fec_control.py`: the page-70 count byte is shifted (:152-156), and the incline is read at [3..4] instead of [4..5] (:171).
@@ -362,6 +362,16 @@ There is also a broader issue: radiant-bridge.md already exceeds 2,000 lines and
 # Left open by the 2026-11-08 clearance
 
 MPSL (needs a soak beside BLE or Thread, which that clearance excluded):
+- The scheduler and the MPSL gate still disagree about a clipped follow-on
+  (review 2026-11-14 of 8650411). `in_reserve()` (radiant_sched.c) sets
+  `reserve_end` to the last operation's close + follow_on_us whether or not the
+  gate could hold it, so after an in-grant ACK window a retry or a burst's next
+  packet is armed at the in-grant lead and the gate refuses it EDENIED (counted
+  as `arm_denied`, `refused_too_near`, "gate: too near" printk x3) instead of the
+  scheduler reporting MISSED. The outcome (transfer fails) is the same as before
+  e042a10; only the attribution blames the other stack. A fix needs a capability
+  saying follow-ons do not chain (cc26xx extends its endTime, so clipping in the
+  scheduler would be wrong there) and belongs with grant extension (item 4).
 - MPSL assert 69:108 - NOW REPRODUCIBLE IN MINUTES, OPEN, 2026-11-14
   (`archive/benchmarks/2026-11-14-mpsl-soak/`). L15 `thread.conf` beside an
   attached OpenThread leader, one tracked + one searching channel: it fired in
@@ -374,6 +384,19 @@ MPSL (needs a soak beside BLE or Thread, which that clearance excluded):
   halts the image for good (C5-3), so Thread/Matter MPSL images hang within
   minutes. Next: bisect with the short match and the ext skip, try a no-Thread
   `gate.conf` soak, and look up 69:108 with Nordic.
+  A lead from reading only (review 2026-11-14, unverified): beside OpenThread
+  the grant-boundary endpoint swap moves only PUBLISH_ADDRESS and
+  SUBSCRIBE_RXEN, so RADIO SUBSCRIBE_DISABLE/TXEN/RSSISTART stay wired to
+  radiant's DPPI channels between grants. EXTEND_FAILED and the ext-skip
+  TIMER0 path call `timer0_disarm()` (hand-back) BEFORE
+  `radiant_radio_abort()` disables the operation's connections, and a TIMER0
+  END that cuts a live operation (extendable grant whose last step is below
+  the extension minimum, or a fixed backstop) leaves them enabled until
+  denied_work_fn() delivers the terminal. A CC_CLOSE or CC_TXSTART compare
+  landing in that gap triggers DISABLE/TXEN on the 802.15.4 driver's radio.
+  The soak's skip path leaves only microseconds and its compares are far off,
+  so this is a candidate, not an explanation: test it by disabling the four
+  connections before the hand-back on every TIMER0/EXTEND_FAILED END.
 - [x] A14-1: an in-grant ETIME now releases the grant at once (546be4d);
   FAILED is still reported from thread context. Backend ztest
   (radiant/tests/backend, which does compile radiant_radio_nrf.c) red then

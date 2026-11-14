@@ -81,7 +81,7 @@ Claim **0xF7** from the reserved RadiANT block (0xF7-0xFA) as
 | 4 backend B | `radiant_radio_diag_get()` | sw-address mismatch | window-test drops | CRC fails | alternate-sync hits | RX not-OK/ignored | RX buffer full | drain latency max µs | min arm lead seen µs |
 | 5 search A | `radiant_search_stats` | windows | sets_advanced | sweeps | frames_ok | crc_fail | acquired | scan_reports | timeouts |
 | 6 search B | `radiant_search_stats` | cache_steers | cache_acquires | permit_rejected | rssi_rejected | decode_failed | bad_filter_index | late_events | sets_advanced_uncovered |
-| 7 search/track hand-off | `radiant_radio_diag_get()` [4..15], `radiant_sched.c` [16..27], reserved [28..35] | search frame cut by the chunk's close | search frame cut by an abort | search END within 300 µs of the close | bounded RX armed opening late | worst such lateness µs | bounded RX expired behind a scan chunk | reserved, `0xFFFFFFFF` | reserved, `0xFFFFFFFF` |
+| 7 search/track hand-off | `radiant_radio_diag_get()` [4..15] and [28..35], `radiant_sched.c` [16..27] | search frame cut by the chunk's close | search frame cut by an abort | search END within 300 µs of the close | bounded RX armed opening late | worst such lateness µs | bounded RX expired behind a scan chunk | transmit refused: start compare behind the counter | receive window refused: start compare behind the counter |
 | 8 timing | `radiant_radio_diag_get()` [4..19] and [32..35], `radiant_sched.c` [20..31] | frames in the longest drain | longest one-entry work µs (callback excluded) | longest software CRC µs | longest synchronous rx callback µs | longest scheduler pass µs (interrupts off) | most `pass_step()` iterations in one pass | passes over 100 µs | drains over 250 µs |
 
 `sets_advanced_uncovered` is `0xFFFFFFFF` without `CONFIG_RADIANT_SEARCH_COVERAGE`.
@@ -111,6 +111,17 @@ match does about nine times as often, and it read 100 % missed on the off image
 too. The fields were reserved before the page left the bench (never pushed or
 released), so no host depends on them. The gate-3 images in that archive still
 report the old meaning.
+
+On 2026-11-14 fields 6-7 were given to the nRF backend (546be4d): a transmit
+(6) and a receive window (7) refused `ETIME` at programming because the start
+compare was written behind the counter (`start_compare_missed()`), which the
+scheduler reports as MISSED. They are the backend table's last two indices,
+after page 8's, and read `0xFFFFFFFF` on cc26xx and null. Expected 0 or single
+digits. A reserved field always read `0xFFFFFFFF` ("not measured"), so an older
+image reads as one without the check and a host needs no version test; the
+structure version stays 1 (beta). Taking a reserved field rather than opening a
+page is the one judgement call here; page 8 went the other way only because it
+needed eight fields.
 
 Page 8 was added on 2026-11-13 to find where the cc26xx receive drain's
 ~530 µs worst case goes (`archive/benchmarks/2026-11-12-ti-findings/`), and
