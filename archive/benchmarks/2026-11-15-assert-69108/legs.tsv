@@ -1,3 +1,8 @@
 leg	image	sha12	start	result	since_open_s	placed	granted	blocked	ext	skip	reboots	asserts
 base1	baseline_abd6be7	a66f3d851bd7	2026-11-14T12:27:40	assert at 185.0 s	97.987	3582	3565	16	0/144	2897	0	1
 base2	baseline_abd6be7	a66f3d851bd7	2026-11-14T12:31:30	assert at 223.9 s	136.827	4986	4969	16	0/198	4058	0	1
+contain1	ship_thread_bridge_abd6be7	96201075a65d	2026-11-14T12:39:18	assert at 497.2 s	410.088	14970	14953	16	0/597	12184	1	1
+ctrl3	baseline_abd6be7	a66f3d851bd7	2026-11-14T13:09:24	assert at 101.9 s	14.376	507	490	16	0/21	389	0	1
+fix1	fix_63b2a02	0a21db9687bb	2026-11-14T13:11:46	clean at 1900.0 s		65570	65554	16	0/2610	53308	0	0
+fix2	fix_63b2a02	0a21db9687bb	2026-11-14T13:44:08	clean at 1900.6 s		65577	65561	16	0/2613	53338	0	0
+fix3	fix_63b2a02	0a21db9687bb	2026-11-14T14:16:24	clean at 1900.1 s		65583	65567	16	0/2613	53321	0	0

@@ -1,0 +1,440 @@
+{
+  "hex": "C:\\wt_69108\\build\\a2_soak\\dongle_thread\\zephyr\\zephyr.hex",
+  "image_label": "baseline_abd6be7",
+  "image_sha256": "a66f3d851bd7312c0dfbc5762a1f098190c65cbd5cf72e7b42f95242e0a701d1",
+  "seconds": 1800,
+  "base": "C:\\wt_69108\\archive\\benchmarks\\2026-11-15-assert-69108\\ctrl3",
+  "start": "2026-11-14T13:09:24",
+  "flags": {
+    "no_peer": false,
+    "no_ref": false,
+    "no_search": false,
+    "no_master": false,
+    "no_flash": false,
+    "stop_on_reboot": false,
+    "continue_after_assert": false
+  },
+  "jlink": {
+    "device": "nRF54L15_M33",
+    "serial": "1057737173"
+  },
+  "tools": "C:\\wt_69108\\tools",
+  "flash_script": "C:\\wt_69108\\scripts\\flash_sim_jlink.ps1",
+  "flash_rc": 0,
+  "peer_after_boot": "== peer after boot wait 2026-11-14T13:10:48.845073\n$ ot state\not state\r\nleader\r\r\nDone\r\r\n\u001b[1;32muart:~$ \u001b[m\n$ ot child table\not child table\r\n| ID  | RLOC16 | Timeout    | Age        | LQ In | C_VN |R|D|N|Ver|CSL|QMsgCnt|Suprvsn| Extended MAC     |\r\r\n+-----+--------+------------+------------+-------+------+-+-+-+---+---+-------+-------+------------------+\r\r\n|   2 | 0x0402 |        240 |         76 |     3 |    1 |1|0|0|  5| 0 |     0 |     0 | 2a3e66a0f4196d46 |\r\r\n\r\r\nDone\r\r\n\u001b[1;32muart:~$ \u001b[m",
+  "dut_starts": [
+    "2026-11-14T13:11:02.158"
+  ],
+  "cap": "{'deaths': []}",
+  "console_lines": 252,
+  "first_console_line": "2026-11-14T13:09:34.666",
+  "first_line_is_banner": true,
+  "flash_done": "2026-11-14T13:09:33.820",
+  "dut_open": "2026-11-14T13:11:02.158",
+  "reboots": 0,
+  "reboot_times": [],
+  "reboot_since_boot_s": [],
+  "assert_count": 1,
+  "assert_times": [
+    "2026-11-14T13:11:16.534"
+  ],
+  "asserts": [
+    {
+      "time": "2026-11-14T13:11:16.534",
+      "since_boot_s": 101.867,
+      "since_flash_s": 102.714,
+      "since_open_s": 14.376,
+      "line_fields": {
+        "placed": 507,
+        "granted": 490,
+        "blocked": 16,
+        "ext": "0/21",
+        "skip": 389,
+        "deadline": 0
+      },
+      "fields": {
+        "placed": [
+          507,
+          263,
+          244
+        ],
+        "granted": [
+          490,
+          0,
+          246,
+          244
+        ],
+        "blocked": [
+          16,
+          16,
+          0
+        ],
+        "ext": "0/21",
+        "skip": 389,
+        "deadline": 0,
+        "over": 0,
+        "invalid": 0,
+        "unknown": 0,
+        "last_sig": 1,
+        "len": "10000/10241",
+        "pending": 0,
+        "rel": 0,
+        "ext_ok": 1,
+        "ipsr": 154,
+        "ctx": "RADIO",
+        "control": "0x0",
+        "msp": "0x2001aaf0",
+        "psp": "0x2001acc8",
+        "ret": "0x00002397",
+        "thread": "0x2000a5e8",
+        "thread_stack": "0x2001abc8..0x2001ad08",
+        "psp_frame_lr": "0x00038b0d",
+        "psp_frame_pc": "0x00030122",
+        "psp_frame_xpsr": "0x41000000",
+        "stack_sp": "0x2001aaf0",
+        "stack_top": "0x2001abc8",
+        "xo_run": "0x1",
+        "xo_stat": "0x10001",
+        "ev_xostarted": 1,
+        "ev_xotuned": 1,
+        "ev_xotuneerror": 0,
+        "ev_xotunefailed": 0,
+        "clk_intenset": "0x60",
+        "pll_stat": "0x10000",
+        "lf_src": "0x1",
+        "lf_run": "0x1",
+        "lf_stat": "0x10001",
+        "t0_intenset": "0x00000000",
+        "t0_shorts": "0x0",
+        "t0_ev_compare": "0x0a",
+        "t0_count": 9293,
+        "t0_cc0": 9250,
+        "t0_cc1": 9286,
+        "t0_cc2": 0,
+        "t0_cc3": 40,
+        "t0_cc4": 0,
+        "t0_cc5": 0,
+        "t0_cc6": 0,
+        "t0_cc7": 0,
+        "radio_state": 0,
+        "radio_shorts": "0x00000000",
+        "sub_rxen": "0x00000000",
+        "sub_txen": "0x00000000",
+        "sub_disable": "0x00000000",
+        "sub_rssistart": "0x00000000",
+        "pub_address": "0x00000000",
+        "pub_rxready": "0x00000000",
+        "last_sess": 1,
+        "since_start_us": 9303,
+        "since_end_us": 19,
+        "ts_live": 0,
+        "live_sess": 1,
+        "hw_held": 0,
+        "ended": 1,
+        "extendable": 1,
+        "no_extend": 1,
+        "end_margin_us": 750,
+        "op_sess": 1,
+        "deny_wanted": 1,
+        "ext_skip": 39,
+        "ext_fail_run": 0,
+        "elastic_initial_us": 10000,
+        "id": [
+          0,
+          1
+        ],
+        "open": [
+          1,
+          1
+        ],
+        "role": [
+          2,
+          0
+        ],
+        "owes": [
+          1,
+          0
+        ],
+        "want_place": [
+          0,
+          0
+        ],
+        "wait_live": [
+          0,
+          0
+        ],
+        "boot": [
+          0,
+          0
+        ],
+        "anchor_valid": [
+          1,
+          1
+        ],
+        "book_failed": [
+          0,
+          0
+        ],
+        "r_start_minus_now": [
+          -121152,
+          -156403
+        ],
+        "req_type": [
+          "normal",
+          "normal"
+        ],
+        "req_prio": [
+          0,
+          1
+        ],
+        "req_hfclk": [
+          0,
+          0
+        ],
+        "req_len": [
+          11590,
+          10000
+        ],
+        "req_dist_or_timeout": [
+          269357,
+          25542
+        ],
+        "notice_us": [
+          248886,
+          15952
+        ],
+        "api_inflight": 0,
+        "api_sess": 1,
+        "api_last": 1,
+        "api_rc": 0,
+        "api_calls": 509,
+        "since_api_in_us": 25251,
+        "since_api_out_us": 25238
+      },
+      "dump": [
+        "*** MPSL ASSERT 69:108  placed=507 granted=490 blocked=16 ext=0/21 skip=389 deadline=0",
+        "    over=0 invalid=0 unknown=0 last_sig=1 len=10000/10241 granted=0 pending=0 rel=0 ext_ok=1",
+        "    ipsr=154 ctx=RADIO control=0x0 msp=0x2001aaf0 psp=0x2001acc8 ret=0x00002397 thread=0x2000a5e8 thread_stack=0x2001abc8..0x2001ad08",
+        "    psp_frame_lr=0x00038b0d psp_frame_pc=0x00030122 psp_frame_xpsr=0x41000000",
+        "    stack_sp=0x2001aaf0 stack_top=0x2001abc8 words= +8:00002397 +44:00002801 +76:00002397 +84:000016cd +116:0000192d +140:00034207 +172:00002397 +184:00001701",
+        "    xo_run=0x1 xo_stat=0x10001 ev_xostarted=1 ev_xotuned=1 ev_xotuneerror=0 ev_xotunefailed=0 clk_intenset=0x60 pll_stat=0x10000 lf_src=0x1 lf_run=0x1 lf_stat=0x10001",
+        "    t0_intenset=0x00000000 t0_shorts=0x0 t0_ev_compare=0x0a t0_count=9293 (captured into CC1 after the reads)",
+        "    t0_cc0=9250 t0_cc1=9286 t0_cc2=0 t0_cc3=40 t0_cc4=0 t0_cc5=0 t0_cc6=0 t0_cc7=0",
+        "    radio_state=0 radio_shorts=0x00000000 sub_rxen=0x00000000 sub_txen=0x00000000 sub_disable=0x00000000 sub_rssistart=0x00000000 pub_address=0x00000000 pub_rxready=0x00000000",
+        "    last_sess=1 since_start_us=9303 since_end_us=19 ts_live=0 live_sess=1 hw_held=0 ended=1 extendable=1 no_extend=1 end_margin_us=750 op_sess=1 deny_wanted=1 ext_skip=39 ext_fail_run=0 elastic_initial_us=10000",
+        "    s0: id=0 open=1 role=2 owes=1 want_place=0 wait_live=0 boot=0 anchor_valid=1 book_failed=0 r_start_minus_now=-121152 req_type=normal req_prio=0 req_hfclk=0 req_len=11590 req_dist_or_timeout=269357 notice_us=248886 placed=263 granted=246 blocked=16",
+        "    s1: id=1 open=1 role=0 owes=0 want_place=0 wait_live=0 boot=0 anchor_valid=1 book_failed=0 r_start_minus_now=-156403 req_type=normal req_prio=1 req_hfclk=0 req_len=10000 req_dist_or_timeout=25542 notice_us=15952 placed=244 granted=244 blocked=0",
+        "    api_inflight=0 api_sess=1 api_last=1 api_rc=0 api_calls=509 since_api_in_us=25251 since_api_out_us=25238 (api: 0 none, 1 request, 2 session_open, 3 session_close)",
+        "    trace (sess:sig:act+dt_us; request entries sess:R:rc@notice_us+dt_us; oldest first): 1:R:0@15948+21 1:0:0+15975 1:1:2+9255 1:7:0+289 1:R:0@15948+21 1:0:0+15975 1:2:0+8413 1:1:2+842 1:7:0+289 1:R:0@15948+22 1:0:0+15975 1:1:2+9256 1:7:0+288 1:R:0@15948+21 1:0:0+15977 1:1:2+9255 1:7:0+289 1:R:0@15948+21 1:0:0+15976 1:1:2+9255 1:7:0+289 1:R:0@15948+21 1:0:0+15976 1:1:2+9255 1:7:0+289 1:R:0@15948+22 1:0:0+15975 1:1:2+9256 1:7:0+286 1:R:0@15952+21 1:0:0+15978 1:1:2+9256"
+      ]
+    }
+  ],
+  "last_stats": {
+    "placed": 443,
+    "granted": 426,
+    "blocked": 16,
+    "ext": "0/18",
+    "skip": 336
+  },
+  "end_since_boot_s": 108.188,
+  "end_since_flash_s": 109.034,
+  "assert_time": "2026-11-14T13:11:16.534",
+  "assert_since_boot_s": 101.867,
+  "assert_since_flash_s": 102.714,
+  "assert_since_open_s": 14.376,
+  "assert_fields": {
+    "placed": [
+      507,
+      263,
+      244
+    ],
+    "granted": [
+      490,
+      0,
+      246,
+      244
+    ],
+    "blocked": [
+      16,
+      16,
+      0
+    ],
+    "ext": "0/21",
+    "skip": 389,
+    "deadline": 0,
+    "over": 0,
+    "invalid": 0,
+    "unknown": 0,
+    "last_sig": 1,
+    "len": "10000/10241",
+    "pending": 0,
+    "rel": 0,
+    "ext_ok": 1,
+    "ipsr": 154,
+    "ctx": "RADIO",
+    "control": "0x0",
+    "msp": "0x2001aaf0",
+    "psp": "0x2001acc8",
+    "ret": "0x00002397",
+    "thread": "0x2000a5e8",
+    "thread_stack": "0x2001abc8..0x2001ad08",
+    "psp_frame_lr": "0x00038b0d",
+    "psp_frame_pc": "0x00030122",
+    "psp_frame_xpsr": "0x41000000",
+    "stack_sp": "0x2001aaf0",
+    "stack_top": "0x2001abc8",
+    "xo_run": "0x1",
+    "xo_stat": "0x10001",
+    "ev_xostarted": 1,
+    "ev_xotuned": 1,
+    "ev_xotuneerror": 0,
+    "ev_xotunefailed": 0,
+    "clk_intenset": "0x60",
+    "pll_stat": "0x10000",
+    "lf_src": "0x1",
+    "lf_run": "0x1",
+    "lf_stat": "0x10001",
+    "t0_intenset": "0x00000000",
+    "t0_shorts": "0x0",
+    "t0_ev_compare": "0x0a",
+    "t0_count": 9293,
+    "t0_cc0": 9250,
+    "t0_cc1": 9286,
+    "t0_cc2": 0,
+    "t0_cc3": 40,
+    "t0_cc4": 0,
+    "t0_cc5": 0,
+    "t0_cc6": 0,
+    "t0_cc7": 0,
+    "radio_state": 0,
+    "radio_shorts": "0x00000000",
+    "sub_rxen": "0x00000000",
+    "sub_txen": "0x00000000",
+    "sub_disable": "0x00000000",
+    "sub_rssistart": "0x00000000",
+    "pub_address": "0x00000000",
+    "pub_rxready": "0x00000000",
+    "last_sess": 1,
+    "since_start_us": 9303,
+    "since_end_us": 19,
+    "ts_live": 0,
+    "live_sess": 1,
+    "hw_held": 0,
+    "ended": 1,
+    "extendable": 1,
+    "no_extend": 1,
+    "end_margin_us": 750,
+    "op_sess": 1,
+    "deny_wanted": 1,
+    "ext_skip": 39,
+    "ext_fail_run": 0,
+    "elastic_initial_us": 10000,
+    "id": [
+      0,
+      1
+    ],
+    "open": [
+      1,
+      1
+    ],
+    "role": [
+      2,
+      0
+    ],
+    "owes": [
+      1,
+      0
+    ],
+    "want_place": [
+      0,
+      0
+    ],
+    "wait_live": [
+      0,
+      0
+    ],
+    "boot": [
+      0,
+      0
+    ],
+    "anchor_valid": [
+      1,
+      1
+    ],
+    "book_failed": [
+      0,
+      0
+    ],
+    "r_start_minus_now": [
+      -121152,
+      -156403
+    ],
+    "req_type": [
+      "normal",
+      "normal"
+    ],
+    "req_prio": [
+      0,
+      1
+    ],
+    "req_hfclk": [
+      0,
+      0
+    ],
+    "req_len": [
+      11590,
+      10000
+    ],
+    "req_dist_or_timeout": [
+      269357,
+      25542
+    ],
+    "notice_us": [
+      248886,
+      15952
+    ],
+    "api_inflight": 0,
+    "api_sess": 1,
+    "api_last": 1,
+    "api_rc": 0,
+    "api_calls": 509,
+    "since_api_in_us": 25251,
+    "since_api_out_us": 25238
+  },
+  "assert_dump": [
+    "*** MPSL ASSERT 69:108  placed=507 granted=490 blocked=16 ext=0/21 skip=389 deadline=0",
+    "    over=0 invalid=0 unknown=0 last_sig=1 len=10000/10241 granted=0 pending=0 rel=0 ext_ok=1",
+    "    ipsr=154 ctx=RADIO control=0x0 msp=0x2001aaf0 psp=0x2001acc8 ret=0x00002397 thread=0x2000a5e8 thread_stack=0x2001abc8..0x2001ad08",
+    "    psp_frame_lr=0x00038b0d psp_frame_pc=0x00030122 psp_frame_xpsr=0x41000000",
+    "    stack_sp=0x2001aaf0 stack_top=0x2001abc8 words= +8:00002397 +44:00002801 +76:00002397 +84:000016cd +116:0000192d +140:00034207 +172:00002397 +184:00001701",
+    "    xo_run=0x1 xo_stat=0x10001 ev_xostarted=1 ev_xotuned=1 ev_xotuneerror=0 ev_xotunefailed=0 clk_intenset=0x60 pll_stat=0x10000 lf_src=0x1 lf_run=0x1 lf_stat=0x10001",
+    "    t0_intenset=0x00000000 t0_shorts=0x0 t0_ev_compare=0x0a t0_count=9293 (captured into CC1 after the reads)",
+    "    t0_cc0=9250 t0_cc1=9286 t0_cc2=0 t0_cc3=40 t0_cc4=0 t0_cc5=0 t0_cc6=0 t0_cc7=0",
+    "    radio_state=0 radio_shorts=0x00000000 sub_rxen=0x00000000 sub_txen=0x00000000 sub_disable=0x00000000 sub_rssistart=0x00000000 pub_address=0x00000000 pub_rxready=0x00000000",
+    "    last_sess=1 since_start_us=9303 since_end_us=19 ts_live=0 live_sess=1 hw_held=0 ended=1 extendable=1 no_extend=1 end_margin_us=750 op_sess=1 deny_wanted=1 ext_skip=39 ext_fail_run=0 elastic_initial_us=10000",
+    "    s0: id=0 open=1 role=2 owes=1 want_place=0 wait_live=0 boot=0 anchor_valid=1 book_failed=0 r_start_minus_now=-121152 req_type=normal req_prio=0 req_hfclk=0 req_len=11590 req_dist_or_timeout=269357 notice_us=248886 placed=263 granted=246 blocked=16",
+    "    s1: id=1 open=1 role=0 owes=0 want_place=0 wait_live=0 boot=0 anchor_valid=1 book_failed=0 r_start_minus_now=-156403 req_type=normal req_prio=1 req_hfclk=0 req_len=10000 req_dist_or_timeout=25542 notice_us=15952 placed=244 granted=244 blocked=0",
+    "    api_inflight=0 api_sess=1 api_last=1 api_rc=0 api_calls=509 since_api_in_us=25251 since_api_out_us=25238 (api: 0 none, 1 request, 2 session_open, 3 session_close)",
+    "    trace (sess:sig:act+dt_us; request entries sess:R:rc@notice_us+dt_us; oldest first): 1:R:0@15948+21 1:0:0+15975 1:1:2+9255 1:7:0+289 1:R:0@15948+21 1:0:0+15975 1:2:0+8413 1:1:2+842 1:7:0+289 1:R:0@15948+22 1:0:0+15975 1:1:2+9256 1:7:0+288 1:R:0@15948+21 1:0:0+15977 1:1:2+9255 1:7:0+289 1:R:0@15948+21 1:0:0+15976 1:1:2+9255 1:7:0+289 1:R:0@15948+21 1:0:0+15976 1:1:2+9255 1:7:0+289 1:R:0@15948+22 1:0:0+15975 1:1:2+9256 1:7:0+286 1:R:0@15952+21 1:0:0+15978 1:1:2+9256"
+  ],
+  "dut_rc": null,
+  "ref_rc": null,
+  "ended_by": "assert",
+  "elapsed": 20.69596242904663,
+  "end": "2026-11-14T13:11:22",
+  "row": {
+    "leg": "ctrl3",
+    "image": "baseline_abd6be7",
+    "sha12": "a66f3d851bd7",
+    "start": "2026-11-14T13:09:24",
+    "result": "assert at 101.9 s",
+    "since_open_s": "14.376",
+    "placed": "507",
+    "granted": "490",
+    "blocked": "16",
+    "ext": "0/21",
+    "skip": "389",
+    "reboots": "0",
+    "asserts": "1"
+  }
+}

@@ -1,0 +1,1 @@
+0a21db9687bbd328f69d70272d6de4323c109acb8b09c86c877c395faf458dd7 */c/wt_69108/build/fix_soak/dongle_thread/zephyr/zephyr.hex

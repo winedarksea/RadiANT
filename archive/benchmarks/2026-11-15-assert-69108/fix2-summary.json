@@ -1,0 +1,70 @@
+{
+  "hex": "C:\\wt_69108\\build\\fix_soak\\dongle_thread\\zephyr\\zephyr.hex",
+  "image_label": "fix_63b2a02",
+  "image_sha256": "0a21db9687bbd328f69d70272d6de4323c109acb8b09c86c877c395faf458dd7",
+  "seconds": 1800,
+  "base": "C:\\wt_69108\\archive\\benchmarks\\2026-11-15-assert-69108\\fix2",
+  "start": "2026-11-14T13:44:08",
+  "flags": {
+    "no_peer": false,
+    "no_ref": false,
+    "no_search": false,
+    "no_master": false,
+    "no_flash": false,
+    "stop_on_reboot": false,
+    "continue_after_assert": false
+  },
+  "jlink": {
+    "device": "nRF54L15_M33",
+    "serial": "1057737173"
+  },
+  "tools": "C:\\wt_69108\\tools",
+  "flash_script": "C:\\wt_69108\\scripts\\flash_sim_jlink.ps1",
+  "flash_rc": 0,
+  "peer_after_boot": "== peer after boot wait 2026-11-14T13:45:31.217328\n$ ot state\not state\r\nleader\r\r\nDone\r\r\n\u001b[1;32muart:~$ \u001b[m\n$ ot child table\not child table\r\n| ID  | RLOC16 | Timeout    | Age        | LQ In | C_VN |R|D|N|Ver|CSL|QMsgCnt|Suprvsn| Extended MAC     |\r\r\n+-----+--------+------------+------------+-------+------+-+-+-+---+---+-------+-------+------------------+\r\r\n|   2 | 0x0402 |        240 |         76 |     3 |    1 |1|0|0|  5| 0 |     0 |     0 | 2a3e66a0f4196d46 |\r\r\n\r\r\nDone\r\r\n\u001b[1;32muart:~$ \u001b[m",
+  "dut_starts": [
+    "2026-11-14T13:45:44.350"
+  ],
+  "dut_segments": 0,
+  "cap": "{'deaths': []}",
+  "console_lines": 6267,
+  "first_console_line": "2026-11-14T13:44:17.265",
+  "first_line_is_banner": true,
+  "flash_done": "2026-11-14T13:44:16.203",
+  "dut_open": "2026-11-14T13:45:44.350",
+  "reboots": 0,
+  "reboot_times": [],
+  "reboot_since_boot_s": [],
+  "assert_count": 0,
+  "assert_times": [],
+  "asserts": [],
+  "last_stats": {
+    "placed": 65577,
+    "granted": 65561,
+    "blocked": 16,
+    "ext": "0/2613",
+    "skip": 53338
+  },
+  "end_since_boot_s": 1900.621,
+  "end_since_flash_s": 1901.683,
+  "dut_rc": 1,
+  "ref_rc": 0,
+  "ended_by": "duration",
+  "elapsed": 1813.5360147953033,
+  "end": "2026-11-14T14:15:57",
+  "row": {
+    "leg": "fix2",
+    "image": "fix_63b2a02",
+    "sha12": "0a21db9687bb",
+    "start": "2026-11-14T13:44:08",
+    "result": "clean at 1900.6 s",
+    "since_open_s": "",
+    "placed": "65577",
+    "granted": "65561",
+    "blocked": "16",
+    "ext": "0/2613",
+    "skip": "53338",
+    "reboots": "0",
+    "asserts": "0"
+  }
+}
