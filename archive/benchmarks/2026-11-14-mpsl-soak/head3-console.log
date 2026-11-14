@@ -1,0 +1,409 @@
+[2026-11-14T02:23:05.743107] [cap] opened COM3
+[2026-11-14T02:23:06.559] *** Booting nRF Connect SDK v3.4.0-99553055607b ***
+[2026-11-14T02:23:06.559] *** Using Zephyr OS v4.4.0-bf801e4e3d19 ***
+[2026-11-14T02:23:06.559] [00:57:42.221,118] [0m<inf> ant_dongle: reset cause 0x00000002[0m
+[2026-11-14T02:23:06.559] [00:57:42.221,122] [0m<inf> ant_dongle: settling 1000 ms for the bootloader[0m
+[2026-11-14T02:23:06.559] [00:57:43.221,200] [0m<inf> ant_dongle: ANT+ USB Dongle + Thread starting[0m
+[2026-11-14T02:23:06.559] [00:57:43.222,693] [0m<inf> radiant_swi: swi: trampoline on IRQ 29 at priority 1[0m
+[2026-11-14T02:23:06.559] [00:57:43.222,704] [0m<inf> radiant_gate_mpsl: gate: session_open rc=0, max_window=94200 us, place_lead=24000 us[0m
+[2026-11-14T02:23:06.559] [00:57:43.222,710] [0m<inf> radiant_gate_mpsl: gate: (d2) second session_open rc=0, scan lead 3000 us[0m
+[2026-11-14T02:23:06.559] [00:57:43.222,822] [1;33m<wrn> radiant_radio_nrf: RADIO PUBLISH_ADDRESS already taken by another stack (register value 0x80000005) - borrowing it for allocation and swapping it per grant[0m
+[2026-11-14T02:23:06.763] [00:57:43.222,833] [1;33m<wrn> radiant_radio_nrf: RADIO SUBSCRIBE_RXEN already taken by another stack (register value 0x80000017) - borrowing it for allocation and swapping it per grant[0m
+[2026-11-14T02:23:06.763] [00:57:43.222,894] [0m<inf> radiant_radio_nrf: RADIO PUBLISH_ADDRESS: ours=0x80000015, swapped in per grant (held at init by another stack: yes)[0m
+[2026-11-14T02:23:06.763] [00:57:43.222,919] [0m<inf> radiant_radio_nrf: RADIO PUBLISH_RXREADY: ours=0x80000011, swapped in per grant (held at init by another stack: no)[0m
+[2026-11-14T02:23:06.763] [00:57:43.222,943] [0m<inf> radiant_radio_nrf: RADIO SUBSCRIBE_RSSISTART: ours=0x80000011, swapped in per grant (held at init by another stack: no)[0m
+[2026-11-14T02:23:06.763] [00:57:43.222,967] [0m<inf> radiant_radio_nrf: RADIO SUBSCRIBE_RXEN: ours=0x80000014, swapped in per grant (held at init by another stack: yes)[0m
+[2026-11-14T02:23:06.763] [00:57:43.222,991] [0m<inf> radiant_radio_nrf: RADIO SUBSCRIBE_TXEN: ours=0x80000013, swapped in per grant (held at init by another stack: no)[0m
+[2026-11-14T02:23:06.763] [00:57:43.223,016] [0m<inf> radiant_radio_nrf: RADIO SUBSCRIBE_DISABLE: ours=0x80000012, swapped in per grant (held at init by another stack: no)[0m
+[2026-11-14T02:23:06.763] [00:57:43.223,023] [0m<inf> radiant_radio_nrf: 2 RADIO endpoints are shared with another stack and are swapped in and out with each grant - see radiant_nrf_gate_on_grant()[0m
+[2026-11-14T02:23:06.763] [00:57:43.229,552] [0m<inf> radiant_radio_nrf: timer @0x500ca000, 6517 us elapsed over a 1000 us wait[0m
+[2026-11-14T02:23:06.763] [00:57:43.229,595] [0m<inf> radiant_radio_nrf: die temperature at init: 2.75 degC[0m
+[2026-11-14T02:23:06.763] [00:57:43.229,818] [0m<inf> radiant_api: radiant up: 32 channels, 1 filters/window, 1 search sets[0m
+[2026-11-14T02:23:06.763] [00:57:43.229,823] [0m<inf> ant_dongle: antr_init ok[0m
+[2026-11-14T02:23:06.763] [00:57:43.229,888] [0m<inf> ant_dongle: usb_ant_class_init ok[0m
+[2026-11-14T02:23:06.763] [00:57:43.230,013] [0m<inf> ant_dongle: ant_serial_bridge_init ok[0m
+[2026-11-14T02:23:06.763] [00:57:43.230,017] [0m<inf> ant_dongle: enabling transport[0m
+[2026-11-14T02:23:06.763] [00:57:43.230,035] [0m<inf> ant_uart: ANT serial on uart@104000[0m
+[2026-11-14T02:23:06.763] [00:57:43.230,039] [0m<inf> ant_dongle: transport up[0m
+[2026-11-14T02:23:06.763] [00:57:43.230,099] [0m<inf> ant_bridge: ANT serial bridge thread started[0m
+[2026-11-14T02:23:12.684] [00:57:48.222,766] [0m<inf> radiant_gate_mpsl: D2SETTLE rel=0 keep=0 wait=0 none=0 now=0 imm=0 owed=0[0m
+[2026-11-14T02:23:12.684] [00:57:48.222,780] [0m<inf> radiant_gate_mpsl: D2STAT pl=2 gr=2 bl=0 s0=1/1/0 s1=1/1/0 ext=0/0 near=0 eag=0 dl=0[0m
+[2026-11-14T02:23:12.684] [00:57:48.222,793] [0m<inf> radiant_gate_mpsl: D2BOOK pl=0 hit=0 den=0 blk=0 unpl=0 mis=0 early=0 busy=0 near=0 orph=0 nosess=0 owed=0 | el=3000 [3000..3000] elblk=0 adj=0/0 | eo=0 en=0 hl=0 dfl=0 | sent ag=0 dl=0 bl=0 sup=0 | hi 0/0/0/0[0m
+[2026-11-14T02:23:12.684] [00:57:48.222,802] [0m<inf> radiant_gate_mpsl: D2REL fixed rel 0/0 us after start, hold 0/0 us (last/max) late_drop 0 | br ok=0 inside=0 restore=0 cap=0 est=0 | t0fix rel=0 bs=0 at=0 | ext_skipped=0[0m
+[2026-11-14T02:23:12.684] [00:57:48.222,811] [0m<inf> radiant_gate_mpsl: D2START n=0 err last/min/max 0/0/0 us | skip_left_min=0 | due saved=0 late=0 orphan=0 tail=0 repl=0 join=0 jdefer=0[0m
+[2026-11-14T02:23:12.684] [00:57:48.222,818] [0m<inf> radiant_gate_mpsl: D2EL blk by notice 0/0/0/0/0 gr 0/0/0/0/0 deferred-blk 0[0m
+[2026-11-14T02:23:12.684] [00:57:48.246,444] [0m<inf> radiant_api: TEMPDIAG chunks: ok=0 aborted=0 other=0 credited_ms=0 phase_bins=0x00000000 sets=0 ok_frames=0 acq=0 idrej=0 lost=0[0m
+[2026-11-14T02:23:17.596] [00:57:53.222,897] [0m<inf> radiant_gate_mpsl: D2SETTLE rel=0 keep=0 wait=0 none=0 now=0 imm=0 owed=0[0m
+[2026-11-14T02:23:17.596] [00:57:53.222,911] [0m<inf> radiant_gate_mpsl: D2STAT pl=2 gr=2 bl=0 s0=1/1/0 s1=1/1/0 ext=0/0 near=0 eag=0 dl=0[0m
+[2026-11-14T02:23:17.596] [00:57:53.222,924] [0m<inf> radiant_gate_mpsl: D2BOOK pl=0 hit=0 den=0 blk=0 unpl=0 mis=0 early=0 busy=0 near=0 orph=0 nosess=0 owed=0 | el=3000 [3000..3000] elblk=0 adj=0/0 | eo=0 en=0 hl=0 dfl=0 | sent ag=0 dl=0 bl=0 sup=0 | hi 0/0/0/0[0m
+[2026-11-14T02:23:17.596] [00:57:53.222,933] [0m<inf> radiant_gate_mpsl: D2REL fixed rel 0/0 us after start, hold 0/0 us (last/max) late_drop 0 | br ok=0 inside=0 restore=0 cap=0 est=0 | t0fix rel=0 bs=0 at=0 | ext_skipped=0[0m
+[2026-11-14T02:23:17.596] [00:57:53.222,941] [0m<inf> radiant_gate_mpsl: D2START n=0 err last/min/max 0/0/0 us | skip_left_min=0 | due saved=0 late=0 orphan=0 tail=0 repl=0 join=0 jdefer=0[0m
+[2026-11-14T02:23:17.596] [00:57:53.222,949] [0m<inf> radiant_gate_mpsl: D2EL blk by notice 0/0/0/0/0 gr 0/0/0/0/0 deferred-blk 0[0m
+[2026-11-14T02:23:17.596] [00:57:53.262,735] [0m<inf> radiant_api: TEMPDIAG chunks: ok=0 aborted=0 other=0 credited_ms=0 phase_bins=0x00000000 sets=0 ok_frames=0 acq=0 idrej=0 lost=0[0m
+[2026-11-14T02:23:22.529] [00:57:58.223,022] [0m<inf> radiant_gate_mpsl: D2SETTLE rel=0 keep=0 wait=0 none=0 now=0 imm=0 owed=0[0m
+[2026-11-14T02:23:22.529] [00:57:58.223,036] [0m<inf> radiant_gate_mpsl: D2STAT pl=2 gr=2 bl=0 s0=1/1/0 s1=1/1/0 ext=0/0 near=0 eag=0 dl=0[0m
+[2026-11-14T02:23:22.529] [00:57:58.223,049] [0m<inf> radiant_gate_mpsl: D2BOOK pl=0 hit=0 den=0 blk=0 unpl=0 mis=0 early=0 busy=0 near=0 orph=0 nosess=0 owed=0 | el=3000 [3000..3000] elblk=0 adj=0/0 | eo=0 en=0 hl=0 dfl=0 | sent ag=0 dl=0 bl=0 sup=0 | hi 0/0/0/0[0m
+[2026-11-14T02:23:22.735] [00:57:58.223,057] [0m<inf> radiant_gate_mpsl: D2REL fixed rel 0/0 us after start, hold 0/0 us (last/max) late_drop 0 | br ok=0 inside=0 restore=0 cap=0 est=0 | t0fix rel=0 bs=0 at=0 | ext_skipped=0[0m
+[2026-11-14T02:23:22.735] [00:57:58.223,066] [0m<inf> radiant_gate_mpsl: D2START n=0 err last/min/max 0/0/0 us | skip_left_min=0 | due saved=0 late=0 orphan=0 tail=0 repl=0 join=0 jdefer=0[0m
+[2026-11-14T02:23:22.735] [00:57:58.223,074] [0m<inf> radiant_gate_mpsl: D2EL blk by notice 0/0/0/0/0 gr 0/0/0/0/0 deferred-blk 0[0m
+[2026-11-14T02:23:22.735] [00:57:58.278,975] [0m<inf> radiant_api: TEMPDIAG chunks: ok=0 aborted=0 other=0 credited_ms=0 phase_bins=0x00000000 sets=0 ok_frames=0 acq=0 idrej=0 lost=0[0m
+[2026-11-14T02:23:27.672] [00:58:03.223,144] [0m<inf> radiant_gate_mpsl: D2SETTLE rel=0 keep=0 wait=0 none=0 now=0 imm=0 owed=0[0m
+[2026-11-14T02:23:27.672] [00:58:03.223,159] [0m<inf> radiant_gate_mpsl: D2STAT pl=2 gr=2 bl=0 s0=1/1/0 s1=1/1/0 ext=0/0 near=0 eag=0 dl=0[0m
+[2026-11-14T02:23:27.672] [00:58:03.223,172] [0m<inf> radiant_gate_mpsl: D2BOOK pl=0 hit=0 den=0 blk=0 unpl=0 mis=0 early=0 busy=0 near=0 orph=0 nosess=0 owed=0 | el=3000 [3000..3000] elblk=0 adj=0/0 | eo=0 en=0 hl=0 dfl=0 | sent ag=0 dl=0 bl=0 sup=0 | hi 0/0/0/0[0m
+[2026-11-14T02:23:27.672] [00:58:03.223,181] [0m<inf> radiant_gate_mpsl: D2REL fixed rel 0/0 us after start, hold 0/0 us (last/max) late_drop 0 | br ok=0 inside=0 restore=0 cap=0 est=0 | t0fix rel=0 bs=0 at=0 | ext_skipped=0[0m
+[2026-11-14T02:23:27.672] [00:58:03.223,189] [0m<inf> radiant_gate_mpsl: D2START n=0 err last/min/max 0/0/0 us | skip_left_min=0 | due saved=0 late=0 orphan=0 tail=0 repl=0 join=0 jdefer=0[0m
+[2026-11-14T02:23:27.672] [00:58:03.223,197] [0m<inf> radiant_gate_mpsl: D2EL blk by notice 0/0/0/0/0 gr 0/0/0/0/0 deferred-blk 0[0m
+[2026-11-14T02:23:27.672] [00:58:03.295,233] [0m<inf> radiant_api: TEMPDIAG chunks: ok=0 aborted=0 other=0 credited_ms=0 phase_bins=0x00000000 sets=0 ok_frames=0 acq=0 idrej=0 lost=0[0m
+[2026-11-14T02:23:32.620] [00:58:08.223,261] [0m<inf> radiant_gate_mpsl: D2SETTLE rel=0 keep=0 wait=0 none=0 now=0 imm=0 owed=0[0m
+[2026-11-14T02:23:32.620] [00:58:08.223,275] [0m<inf> radiant_gate_mpsl: D2STAT pl=2 gr=2 bl=0 s0=1/1/0 s1=1/1/0 ext=0/0 near=0 eag=0 dl=0[0m
+[2026-11-14T02:23:32.620] [00:58:08.223,288] [0m<inf> radiant_gate_mpsl: D2BOOK pl=0 hit=0 den=0 blk=0 unpl=0 mis=0 early=0 busy=0 near=0 orph=0 nosess=0 owed=0 | el=3000 [3000..3000] elblk=0 adj=0/0 | eo=0 en=0 hl=0 dfl=0 | sent ag=0 dl=0 bl=0 sup=0 | hi 0/0/0/0[0m
+[2026-11-14T02:23:32.620] [00:58:08.223,297] [0m<inf> radiant_gate_mpsl: D2REL fixed rel 0/0 us after start, hold 0/0 us (last/max) late_drop 0 | br ok=0 inside=0 restore=0 cap=0 est=0 | t0fix rel=0 bs=0 at=0 | ext_skipped=0[0m
+[2026-11-14T02:23:32.620] [00:58:08.223,305] [0m<inf> radiant_gate_mpsl: D2START n=0 err last/min/max 0/0/0 us | skip_left_min=0 | due saved=0 late=0 orphan=0 tail=0 repl=0 join=0 jdefer=0[0m
+[2026-11-14T02:23:32.620] [00:58:08.223,313] [0m<inf> radiant_gate_mpsl: D2EL blk by notice 0/0/0/0/0 gr 0/0/0/0/0 deferred-blk 0[0m
+[2026-11-14T02:23:32.620] [00:58:08.311,566] [0m<inf> radiant_api: TEMPDIAG chunks: ok=0 aborted=0 other=0 credited_ms=0 phase_bins=0x00000000 sets=0 ok_frames=0 acq=0 idrej=0 lost=0[0m
+[2026-11-14T02:23:37.561] [00:58:13.223,357] [0m<inf> radiant_gate_mpsl: D2SETTLE rel=0 keep=0 wait=0 none=0 now=0 imm=0 owed=0[0m
+[2026-11-14T02:23:37.561] [00:58:13.223,371] [0m<inf> radiant_gate_mpsl: D2STAT pl=2 gr=2 bl=0 s0=1/1/0 s1=1/1/0 ext=0/0 near=0 eag=0 dl=0[0m
+[2026-11-14T02:23:37.561] [00:58:13.223,386] [0m<inf> radiant_gate_mpsl: D2BOOK pl=0 hit=0 den=0 blk=0 unpl=0 mis=0 early=0 busy=0 near=0 orph=0 nosess=0 owed=0 | el=3000 [3000..3000] elblk=0 adj=0/0 | eo=0 en=0 hl=0 dfl=0 | sent ag=0 dl=0 bl=0 sup=0 | hi 0/0/0/0[0m
+[2026-11-14T02:23:37.561] [00:58:13.223,395] [0m<inf> radiant_gate_mpsl: D2REL fixed rel 0/0 us after start, hold 0/0 us (last/max) late_drop 0 | br ok=0 inside=0 restore=0 cap=0 est=0 | t0fix rel=0 bs=0 at=0 | ext_skipped=0[0m
+[2026-11-14T02:23:37.561] [00:58:13.223,403] [0m<inf> radiant_gate_mpsl: D2START n=0 err last/min/max 0/0/0 us | skip_left_min=0 | due saved=0 late=0 orphan=0 tail=0 repl=0 join=0 jdefer=0[0m
+[2026-11-14T02:23:37.561] [00:58:13.223,411] [0m<inf> radiant_gate_mpsl: D2EL blk by notice 0/0/0/0/0 gr 0/0/0/0/0 deferred-blk 0[0m
+[2026-11-14T02:23:37.765] [00:58:13.327,839] [0m<inf> radiant_api: TEMPDIAG chunks: ok=0 aborted=0 other=0 credited_ms=0 phase_bins=0x00000000 sets=0 ok_frames=0 acq=0 idrej=0 lost=0[0m
+[2026-11-14T02:23:42.504] [00:58:18.223,450] [0m<inf> radiant_gate_mpsl: D2SETTLE rel=0 keep=0 wait=0 none=0 now=0 imm=0 owed=0[0m
+[2026-11-14T02:23:42.504] [00:58:18.223,465] [0m<inf> radiant_gate_mpsl: D2STAT pl=2 gr=2 bl=0 s0=1/1/0 s1=1/1/0 ext=0/0 near=0 eag=0 dl=0[0m
+[2026-11-14T02:23:42.710] [00:58:18.223,478] [0m<inf> radiant_gate_mpsl: D2BOOK pl=0 hit=0 den=0 blk=0 unpl=0 mis=0 early=0 busy=0 near=0 orph=0 nosess=0 owed=0 | el=3000 [3000..3000] elblk=0 adj=0/0 | eo=0 en=0 hl=0 dfl=0 | sent ag=0 dl=0 bl=0 sup=0 | hi 0/0/0/0[0m
+[2026-11-14T02:23:42.710] [00:58:18.223,486] [0m<inf> radiant_gate_mpsl: D2REL fixed rel 0/0 us after start, hold 0/0 us (last/max) late_drop 0 | br ok=0 inside=0 restore=0 cap=0 est=0 | t0fix rel=0 bs=0 at=0 | ext_skipped=0[0m
+[2026-11-14T02:23:42.710] [00:58:18.223,495] [0m<inf> radiant_gate_mpsl: D2START n=0 err last/min/max 0/0/0 us | skip_left_min=0 | due saved=0 late=0 orphan=0 tail=0 repl=0 join=0 jdefer=0[0m
+[2026-11-14T02:23:42.710] [00:58:18.223,502] [0m<inf> radiant_gate_mpsl: D2EL blk by notice 0/0/0/0/0 gr 0/0/0/0/0 deferred-blk 0[0m
+[2026-11-14T02:23:42.710] [00:58:18.344,158] [0m<inf> radiant_api: TEMPDIAG chunks: ok=0 aborted=0 other=0 credited_ms=0 phase_bins=0x00000000 sets=0 ok_frames=0 acq=0 idrej=0 lost=0[0m
+[2026-11-14T02:23:47.650] [00:58:23.223,552] [0m<inf> radiant_gate_mpsl: D2SETTLE rel=0 keep=0 wait=0 none=0 now=0 imm=0 owed=0[0m
+[2026-11-14T02:23:47.650] [00:58:23.223,566] [0m<inf> radiant_gate_mpsl: D2STAT pl=2 gr=2 bl=0 s0=1/1/0 s1=1/1/0 ext=0/0 near=0 eag=0 dl=0[0m
+[2026-11-14T02:23:47.650] [00:58:23.223,579] [0m<inf> radiant_gate_mpsl: D2BOOK pl=0 hit=0 den=0 blk=0 unpl=0 mis=0 early=0 busy=0 near=0 orph=0 nosess=0 owed=0 | el=3000 [3000..3000] elblk=0 adj=0/0 | eo=0 en=0 hl=0 dfl=0 | sent ag=0 dl=0 bl=0 sup=0 | hi 0/0/0/0[0m
+[2026-11-14T02:23:47.650] [00:58:23.223,588] [0m<inf> radiant_gate_mpsl: D2REL fixed rel 0/0 us after start, hold 0/0 us (last/max) late_drop 0 | br ok=0 inside=0 restore=0 cap=0 est=0 | t0fix rel=0 bs=0 at=0 | ext_skipped=0[0m
+[2026-11-14T02:23:47.650] [00:58:23.223,596] [0m<inf> radiant_gate_mpsl: D2START n=0 err last/min/max 0/0/0 us | skip_left_min=0 | due saved=0 late=0 orphan=0 tail=0 repl=0 join=0 jdefer=0[0m
+[2026-11-14T02:23:47.650] [00:58:23.223,604] [0m<inf> radiant_gate_mpsl: D2EL blk by notice 0/0/0/0/0 gr 0/0/0/0/0 deferred-blk 0[0m
+[2026-11-14T02:23:47.650] [00:58:23.360,387] [0m<inf> radiant_api: TEMPDIAG chunks: ok=0 aborted=0 other=0 credited_ms=0 phase_bins=0x00000000 sets=0 ok_frames=0 acq=0 idrej=0 lost=0[0m
+[2026-11-14T02:23:52.588] [00:58:28.223,667] [0m<inf> radiant_gate_mpsl: D2SETTLE rel=0 keep=0 wait=0 none=0 now=0 imm=0 owed=0[0m
+[2026-11-14T02:23:52.588] [00:58:28.223,682] [0m<inf> radiant_gate_mpsl: D2STAT pl=2 gr=2 bl=0 s0=1/1/0 s1=1/1/0 ext=0/0 near=0 eag=0 dl=0[0m
+[2026-11-14T02:23:52.588] [00:58:28.223,695] [0m<inf> radiant_gate_mpsl: D2BOOK pl=0 hit=0 den=0 blk=0 unpl=0 mis=0 early=0 busy=0 near=0 orph=0 nosess=0 owed=0 | el=3000 [3000..3000] elblk=0 adj=0/0 | eo=0 en=0 hl=0 dfl=0 | sent ag=0 dl=0 bl=0 sup=0 | hi 0/0/0/0[0m
+[2026-11-14T02:23:52.588] [00:58:28.223,703] [0m<inf> radiant_gate_mpsl: D2REL fixed rel 0/0 us after start, hold 0/0 us (last/max) late_drop 0 | br ok=0 inside=0 restore=0 cap=0 est=0 | t0fix rel=0 bs=0 at=0 | ext_skipped=0[0m
+[2026-11-14T02:23:52.588] [00:58:28.223,712] [0m<inf> radiant_gate_mpsl: D2START n=0 err last/min/max 0/0/0 us | skip_left_min=0 | due saved=0 late=0 orphan=0 tail=0 repl=0 join=0 jdefer=0[0m
+[2026-11-14T02:23:52.588] [00:58:28.223,719] [0m<inf> radiant_gate_mpsl: D2EL blk by notice 0/0/0/0/0 gr 0/0/0/0/0 deferred-blk 0[0m
+[2026-11-14T02:23:52.588] [00:58:28.376,690] [0m<inf> radiant_api: TEMPDIAG chunks: ok=0 aborted=0 other=0 credited_ms=0 phase_bins=0x00000000 sets=0 ok_frames=0 acq=0 idrej=0 lost=0[0m
+[2026-11-14T02:23:57.539] [00:58:33.223,780] [0m<inf> radiant_gate_mpsl: D2SETTLE rel=0 keep=0 wait=0 none=0 now=0 imm=0 owed=0[0m
+[2026-11-14T02:23:57.539] [00:58:33.223,794] [0m<inf> radiant_gate_mpsl: D2STAT pl=2 gr=2 bl=0 s0=1/1/0 s1=1/1/0 ext=0/0 near=0 eag=0 dl=0[0m
+[2026-11-14T02:23:57.539] [00:58:33.223,807] [0m<inf> radiant_gate_mpsl: D2BOOK pl=0 hit=0 den=0 blk=0 unpl=0 mis=0 early=0 busy=0 near=0 orph=0 nosess=0 owed=0 | el=3000 [3000..3000] elblk=0 adj=0/0 | eo=0 en=0 hl=0 dfl=0 | sent ag=0 dl=0 bl=0 sup=0 | hi 0/0/0/0[0m
+[2026-11-14T02:23:57.539] [00:58:33.223,815] [0m<inf> radiant_gate_mpsl: D2REL fixed rel 0/0 us after start, hold 0/0 us (last/max) late_drop 0 | br ok=0 inside=0 restore=0 cap=0 est=0 | t0fix rel=0 bs=0 at=0 | ext_skipped=0[0m
+[2026-11-14T02:23:57.745] [00:58:33.223,824] [0m<inf> radiant_gate_mpsl: D2START n=0 err last/min/max 0/0/0 us | skip_left_min=0 | due saved=0 late=0 orphan=0 tail=0 repl=0 join=0 jdefer=0[0m
+[2026-11-14T02:23:57.745] [00:58:33.223,832] [0m<inf> radiant_gate_mpsl: D2EL blk by notice 0/0/0/0/0 gr 0/0/0/0/0 deferred-blk 0[0m
+[2026-11-14T02:23:57.745] [00:58:33.392,953] [0m<inf> radiant_api: TEMPDIAG chunks: ok=0 aborted=0 other=0 credited_ms=0 phase_bins=0x00000000 sets=0 ok_frames=0 acq=0 idrej=0 lost=0[0m
+[2026-11-14T02:24:02.505] [00:58:38.223,879] [0m<inf> radiant_gate_mpsl: D2SETTLE rel=0 keep=0 wait=0 none=0 now=0 imm=0 owed=0[0m
+[2026-11-14T02:24:02.505] [00:58:38.223,893] [0m<inf> radiant_gate_mpsl: D2STAT pl=2 gr=2 bl=0 s0=1/1/0 s1=1/1/0 ext=0/0 near=0 eag=0 dl=0[0m
+[2026-11-14T02:24:02.710] [00:58:38.223,906] [0m<inf> radiant_gate_mpsl: D2BOOK pl=0 hit=0 den=0 blk=0 unpl=0 mis=0 early=0 busy=0 near=0 orph=0 nosess=0 owed=0 | el=3000 [3000..3000] elblk=0 adj=0/0 | eo=0 en=0 hl=0 dfl=0 | sent ag=0 dl=0 bl=0 sup=0 | hi 0/0/0/0[0m
+[2026-11-14T02:24:02.710] [00:58:38.223,915] [0m<inf> radiant_gate_mpsl: D2REL fixed rel 0/0 us after start, hold 0/0 us (last/max) late_drop 0 | br ok=0 inside=0 restore=0 cap=0 est=0 | t0fix rel=0 bs=0 at=0 | ext_skipped=0[0m
+[2026-11-14T02:24:02.710] [00:58:38.223,923] [0m<inf> radiant_gate_mpsl: D2START n=0 err last/min/max 0/0/0 us | skip_left_min=0 | due saved=0 late=0 orphan=0 tail=0 repl=0 join=0 jdefer=0[0m
+[2026-11-14T02:24:02.710] [00:58:38.223,931] [0m<inf> radiant_gate_mpsl: D2EL blk by notice 0/0/0/0/0 gr 0/0/0/0/0 deferred-blk 0[0m
+[2026-11-14T02:24:02.710] [00:58:38.409,308] [0m<inf> radiant_api: TEMPDIAG chunks: ok=0 aborted=0 other=0 credited_ms=0 phase_bins=0x00000000 sets=0 ok_frames=0 acq=0 idrej=0 lost=0[0m
+[2026-11-14T02:24:07.674] [00:58:43.223,974] [0m<inf> radiant_gate_mpsl: D2SETTLE rel=0 keep=0 wait=0 none=0 now=0 imm=0 owed=0[0m
+[2026-11-14T02:24:07.674] [00:58:43.223,989] [0m<inf> radiant_gate_mpsl: D2STAT pl=2 gr=2 bl=0 s0=1/1/0 s1=1/1/0 ext=0/0 near=0 eag=0 dl=0[0m
+[2026-11-14T02:24:07.674] [00:58:43.224,002] [0m<inf> radiant_gate_mpsl: D2BOOK pl=0 hit=0 den=0 blk=0 unpl=0 mis=0 early=0 busy=0 near=0 orph=0 nosess=0 owed=0 | el=3000 [3000..3000] elblk=0 adj=0/0 | eo=0 en=0 hl=0 dfl=0 | sent ag=0 dl=0 bl=0 sup=0 | hi 0/0/0/0[0m
+[2026-11-14T02:24:07.674] [00:58:43.224,010] [0m<inf> radiant_gate_mpsl: D2REL fixed rel 0/0 us after start, hold 0/0 us (last/max) late_drop 0 | br ok=0 inside=0 restore=0 cap=0 est=0 | t0fix rel=0 bs=0 at=0 | ext_skipped=0[0m
+[2026-11-14T02:24:07.674] [00:58:43.224,019] [0m<inf> radiant_gate_mpsl: D2START n=0 err last/min/max 0/0/0 us | skip_left_min=0 | due saved=0 late=0 orphan=0 tail=0 repl=0 join=0 jdefer=0[0m
+[2026-11-14T02:24:07.674] [00:58:43.224,027] [0m<inf> radiant_gate_mpsl: D2EL blk by notice 0/0/0/0/0 gr 0/0/0/0/0 deferred-blk 0[0m
+[2026-11-14T02:24:07.674] [00:58:43.425,582] [0m<inf> radiant_api: TEMPDIAG chunks: ok=0 aborted=0 other=0 credited_ms=0 phase_bins=0x00000000 sets=0 ok_frames=0 acq=0 idrej=0 lost=0[0m
+[2026-11-14T02:24:12.642] [00:58:48.224,084] [0m<inf> radiant_gate_mpsl: D2SETTLE rel=0 keep=0 wait=0 none=0 now=0 imm=0 owed=0[0m
+[2026-11-14T02:24:12.642] [00:58:48.224,098] [0m<inf> radiant_gate_mpsl: D2STAT pl=2 gr=2 bl=0 s0=1/1/0 s1=1/1/0 ext=0/0 near=0 eag=0 dl=0[0m
+[2026-11-14T02:24:12.642] [00:58:48.224,121] [0m<inf> radiant_gate_mpsl: D2BOOK pl=0 hit=0 den=0 blk=0 unpl=0 mis=0 early=0 busy=0 near=0 orph=0 nosess=0 owed=0 | el=3000 [3000..3000] elblk=0 adj=0/0 | eo=0 en=0 hl=0 dfl=0 | sent ag=0 dl=0 bl=0 sup=0 | hi 0/0/0/0[0m
+[2026-11-14T02:24:12.642] [00:58:48.224,130] [0m<inf> radiant_gate_mpsl: D2REL fixed rel 0/0 us after start, hold 0/0 us (last/max) late_drop 0 | br ok=0 inside=0 restore=0 cap=0 est=0 | t0fix rel=0 bs=0 at=0 | ext_skipped=0[0m
+[2026-11-14T02:24:12.642] [00:58:48.224,139] [0m<inf> radiant_gate_mpsl: D2START n=0 err last/min/max 0/0/0 us | skip_left_min=0 | due saved=0 late=0 orphan=0 tail=0 repl=0 join=0 jdefer=0[0m
+[2026-11-14T02:24:12.642] [00:58:48.224,146] [0m<inf> radiant_gate_mpsl: D2EL blk by notice 0/0/0/0/0 gr 0/0/0/0/0 deferred-blk 0[0m
+[2026-11-14T02:24:12.642] [00:58:48.441,864] [0m<inf> radiant_api: TEMPDIAG chunks: ok=0 aborted=0 other=0 credited_ms=0 phase_bins=0x00000000 sets=0 ok_frames=0 acq=0 idrej=0 lost=0[0m
+[2026-11-14T02:24:17.615] [00:58:53.224,191] [0m<inf> radiant_gate_mpsl: D2SETTLE rel=0 keep=0 wait=0 none=0 now=0 imm=0 owed=0[0m
+[2026-11-14T02:24:17.615] [00:58:53.224,205] [0m<inf> radiant_gate_mpsl: D2STAT pl=2 gr=2 bl=0 s0=1/1/0 s1=1/1/0 ext=0/0 near=0 eag=0 dl=0[0m
+[2026-11-14T02:24:17.615] [00:58:53.224,218] [0m<inf> radiant_gate_mpsl: D2BOOK pl=0 hit=0 den=0 blk=0 unpl=0 mis=0 early=0 busy=0 near=0 orph=0 nosess=0 owed=0 | el=3000 [3000..3000] elblk=0 adj=0/0 | eo=0 en=0 hl=0 dfl=0 | sent ag=0 dl=0 bl=0 sup=0 | hi 0/0/0/0[0m
+[2026-11-14T02:24:17.615] [00:58:53.224,227] [0m<inf> radiant_gate_mpsl: D2REL fixed rel 0/0 us after start, hold 0/0 us (last/max) late_drop 0 | br ok=0 inside=0 restore=0 cap=0 est=0 | t0fix rel=0 bs=0 at=0 | ext_skipped=0[0m
+[2026-11-14T02:24:17.615] [00:58:53.224,235] [0m<inf> radiant_gate_mpsl: D2START n=0 err last/min/max 0/0/0 us | skip_left_min=0 | due saved=0 late=0 orphan=0 tail=0 repl=0 join=0 jdefer=0[0m
+[2026-11-14T02:24:17.615] [00:58:53.224,243] [0m<inf> radiant_gate_mpsl: D2EL blk by notice 0/0/0/0/0 gr 0/0/0/0/0 deferred-blk 0[0m
+[2026-11-14T02:24:17.615] [00:58:53.458,086] [0m<inf> radiant_api: TEMPDIAG chunks: ok=0 aborted=0 other=0 credited_ms=0 phase_bins=0x00000000 sets=0 ok_frames=0 acq=0 idrej=0 lost=0[0m
+[2026-11-14T02:24:22.574] [00:58:58.224,304] [0m<inf> radiant_gate_mpsl: D2SETTLE rel=0 keep=0 wait=0 none=0 now=0 imm=0 owed=0[0m
+[2026-11-14T02:24:22.574] [00:58:58.224,317] [0m<inf> radiant_gate_mpsl: D2STAT pl=2 gr=2 bl=0 s0=1/1/0 s1=1/1/0 ext=0/0 near=0 eag=0 dl=0[0m
+[2026-11-14T02:24:22.574] [00:58:58.224,330] [0m<inf> radiant_gate_mpsl: D2BOOK pl=0 hit=0 den=0 blk=0 unpl=0 mis=0 early=0 busy=0 near=0 orph=0 nosess=0 owed=0 | el=3000 [3000..3000] elblk=0 adj=0/0 | eo=0 en=0 hl=0 dfl=0 | sent ag=0 dl=0 bl=0 sup=0 | hi 0/0/0/0[0m
+[2026-11-14T02:24:22.574] [00:58:58.224,339] [0m<inf> radiant_gate_mpsl: D2REL fixed rel 0/0 us after start, hold 0/0 us (last/max) late_drop 0 | br ok=0 inside=0 restore=0 cap=0 est=0 | t0fix rel=0 bs=0 at=0 | ext_skipped=0[0m
+[2026-11-14T02:24:22.574] [00:58:58.224,348] [0m<inf> radiant_gate_mpsl: D2START n=0 err last/min/max 0/0/0 us | skip_left_min=0 | due saved=0 late=0 orphan=0 tail=0 repl=0 join=0 jdefer=0[0m
+[2026-11-14T02:24:22.574] [00:58:58.224,355] [0m<inf> radiant_gate_mpsl: D2EL blk by notice 0/0/0/0/0 gr 0/0/0/0/0 deferred-blk 0[0m
+[2026-11-14T02:24:22.574] [00:58:58.474,392] [0m<inf> radiant_api: TEMPDIAG chunks: ok=0 aborted=0 other=0 credited_ms=0 phase_bins=0x00000000 sets=0 ok_frames=0 acq=0 idrej=0 lost=0[0m
+[2026-11-14T02:24:27.522] [00:59:03.224,433] [0m<inf> radiant_gate_mpsl: D2SETTLE rel=0 keep=0 wait=0 none=0 now=0 imm=0 owed=0[0m
+[2026-11-14T02:24:27.522] [00:59:03.224,447] [0m<inf> radiant_gate_mpsl: D2STAT pl=2 gr=2 bl=0 s0=1/1/0 s1=1/1/0 ext=0/0 near=0 eag=0 dl=0[0m
+[2026-11-14T02:24:27.522] [00:59:03.224,460] [0m<inf> radiant_gate_mpsl: D2BOOK pl=0 hit=0 den=0 blk=0 unpl=0 mis=0 early=0 busy=0 near=0 orph=0 nosess=0 owed=0 | el=3000 [3000..3000] elblk=0 adj=0/0 | eo=0 en=0 hl=0 dfl=0 | sent ag=0 dl=0 bl=0 sup=0 | hi 0/0/0/0[0m
+[2026-11-14T02:24:27.726] [00:59:03.224,469] [0m<inf> radiant_gate_mpsl: D2REL fixed rel 0/0 us after start, hold 0/0 us (last/max) late_drop 0 | br ok=0 inside=0 restore=0 cap=0 est=0 | t0fix rel=0 bs=0 at=0 | ext_skipped=0[0m
+[2026-11-14T02:24:27.726] [00:59:03.224,477] [0m<inf> radiant_gate_mpsl: D2START n=0 err last/min/max 0/0/0 us | skip_left_min=0 | due saved=0 late=0 orphan=0 tail=0 repl=0 join=0 jdefer=0[0m
+[2026-11-14T02:24:27.726] [00:59:03.224,485] [0m<inf> radiant_gate_mpsl: D2EL blk by notice 0/0/0/0/0 gr 0/0/0/0/0 deferred-blk 0[0m
+[2026-11-14T02:24:27.726] [00:59:03.490,666] [0m<inf> radiant_api: TEMPDIAG chunks: ok=0 aborted=0 other=0 credited_ms=0 phase_bins=0x00000000 sets=0 ok_frames=0 acq=0 idrej=0 lost=0[0m
+[2026-11-14T02:24:32.491] [00:59:08.224,560] [0m<inf> radiant_gate_mpsl: D2SETTLE rel=0 keep=0 wait=0 none=0 now=0 imm=0 owed=0[0m
+[2026-11-14T02:24:32.694] [00:59:08.224,575] [0m<inf> radiant_gate_mpsl: D2STAT pl=2 gr=2 bl=0 s0=1/1/0 s1=1/1/0 ext=0/0 near=0 eag=0 dl=0[0m
+[2026-11-14T02:24:32.694] [00:59:08.224,588] [0m<inf> radiant_gate_mpsl: D2BOOK pl=0 hit=0 den=0 blk=0 unpl=0 mis=0 early=0 busy=0 near=0 orph=0 nosess=0 owed=0 | el=3000 [3000..3000] elblk=0 adj=0/0 | eo=0 en=0 hl=0 dfl=0 | sent ag=0 dl=0 bl=0 sup=0 | hi 0/0/0/0[0m
+[2026-11-14T02:24:32.694] [00:59:08.224,596] [0m<inf> radiant_gate_mpsl: D2REL fixed rel 0/0 us after start, hold 0/0 us (last/max) late_drop 0 | br ok=0 inside=0 restore=0 cap=0 est=0 | t0fix rel=0 bs=0 at=0 | ext_skipped=0[0m
+[2026-11-14T02:24:32.694] [00:59:08.224,605] [0m<inf> radiant_gate_mpsl: D2START n=0 err last/min/max 0/0/0 us | skip_left_min=0 | due saved=0 late=0 orphan=0 tail=0 repl=0 join=0 jdefer=0[0m
+[2026-11-14T02:24:32.694] [00:59:08.224,612] [0m<inf> radiant_gate_mpsl: D2EL blk by notice 0/0/0/0/0 gr 0/0/0/0/0 deferred-blk 0[0m
+[2026-11-14T02:24:32.694] [00:59:08.506,930] [0m<inf> radiant_api: TEMPDIAG chunks: ok=0 aborted=0 other=0 credited_ms=0 phase_bins=0x00000000 sets=0 ok_frames=0 acq=0 idrej=0 lost=0[0m
+[2026-11-14T02:24:35.985] [00:59:11.589,587] [0m<inf> radiant_api: rxpath/88364ms sched=1 tracked=0 on_data=0 up=0 posted=0 | xfer=0 dropped=0 tot=1[0m
+[2026-11-14T02:24:35.985] [00:59:11.589,599] [0m<inf> radiant_api: xfer failures: no_opener=0 no_ack=0 bad_ack=0 radio=0[0m
+[2026-11-14T02:24:35.985] [00:59:11.589,607] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=189766 set=0 claim=-1 nact=2 nmatch=0 ch0=2[0m
+[2026-11-14T02:24:35.985] [00:59:11.722,742] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=71569 set=0 claim=-1 nact=2 nmatch=0 ch0=2[0m
+[2026-11-14T02:24:35.985] [00:59:11.947,488] [0m<inf> radiant_api: TDIAG frame dev=2002 type=0x0b tt=5 ph=242859 set=0 claim=0 nact=2 nmatch=1 ch0=3[0m
+[2026-11-14T02:24:35.985] [00:59:12.088,426] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=135649 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:36.603] [00:59:12.715,560] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=5610 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:36.603] [00:59:12.715,573] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=12384 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:36.603] [00:59:12.841,890] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=136559 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:36.603] [00:59:13.088,287] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=136869 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:36.603] [00:59:13.209,192] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=1712 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:36.603] [00:59:13.224,737] [0m<inf> radiant_gate_mpsl: D2SETTLE rel=1 keep=5 wait=0 none=92 now=6 imm=170 owed=12[0m
+[2026-11-14T02:24:36.603] [00:59:13.224,747] [0m<inf> radiant_gate_mpsl: D2STAT pl=108 gr=90 bl=16 s0=80/67/12 s1=28/23/4 ext=0/6 near=0 eag=0 dl=0[0m
+[2026-11-14T02:24:36.603] [00:59:13.224,760] [0m<inf> radiant_gate_mpsl: D2BOOK pl=6 hit=5 den=0 blk=0 unpl=0 mis=0 early=0 busy=0 near=0 orph=0 nosess=0 owed=0 | el=16000 [3000..16000] elblk=16 adj=0/0 | eo=0 en=0 hl=0 dfl=0 | sent ag=2 dl=0 bl=16 sup=82 | hi 5/5/0/5[0m
+[2026-11-14T02:24:36.603] [00:59:13.224,768] [0m<inf> radiant_gate_mpsl: D2REL fixed rel 13989/19766 us after start, hold 0/0 us (last/max) late_drop 0 | br ok=7 inside=0 restore=0 cap=13994 est=13991 | t0fix rel=5 bs=0 at=14024 | ext_skipped=71[0m
+[2026-11-14T02:24:36.810] [00:59:13.224,777] [0m<inf> radiant_gate_mpsl: D2START n=5 err last/min/max -8/-45/-7 us | skip_left_min=712 | due saved=0 late=0 orphan=0 tail=5 repl=0 join=0 jdefer=0[0m
+[2026-11-14T02:24:36.810] [00:59:13.224,790] [0m<inf> radiant_gate_mpsl: D2EL blk by notice 0/0/16/0/0 gr 0/0/0/0/79 deferred-blk 0[0m
+[2026-11-14T02:24:37.840] [00:59:13.457,346] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=246040 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:37.840] [00:59:13.508,307] [0m<inf> radiant_api: TEMPDIAG chunks: ok=8 aborted=88 other=20 credited_ms=835 phase_bins=0x01fef7bf sets=4 ok_frames=10 acq=1 idrej=0 lost=0[0m
+[2026-11-14T02:24:37.840] [00:59:13.711,610] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=244090 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:37.840] [00:59:13.711,619] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=12402 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:37.840] [00:59:13.962,555] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=12404 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:37.840] [00:59:14.090,104] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=138105 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:37.840] [00:59:14.213,038] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=12409 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:37.840] [00:59:14.340,613] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137255 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:37.840] [00:59:14.439,971] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=241654 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:39.279] [00:59:14.837,717] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=139033 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:39.279] [00:59:14.937,244] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=237756 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:39.279] [00:59:15.338,612] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137270 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:39.279] [00:59:15.462,192] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=12427 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:39.279] [00:59:15.589,744] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=139959 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:40.511] [00:59:16.085,438] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137282 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:40.511] [00:59:16.460,232] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=12444 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:41.558] [00:59:17.333,433] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137301 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:41.558] [00:59:17.585,853] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137306 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:41.558] [00:59:17.909,961] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=214365 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:41.558] [00:59:18.083,786] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137312 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:41.558] [00:59:18.160,404] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=212416 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:41.558] [00:59:18.207,371] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=12472 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:41.558] [00:59:18.224,832] [0m<inf> radiant_gate_mpsl: D2SETTLE rel=1 keep=25 wait=0 none=295 now=31 imm=484 owed=57[0m
+[2026-11-14T02:24:41.763] [00:59:18.224,842] [0m<inf> radiant_gate_mpsl: D2STAT pl=290 gr=273 bl=16 s0=171/158/12 s1=119/115/4 ext=0/12 near=0 eag=0 dl=0[0m
+[2026-11-14T02:24:41.763] [00:59:18.224,855] [0m<inf> radiant_gate_mpsl: D2BOOK pl=26 hit=25 den=0 blk=0 unpl=0 mis=0 early=0 busy=0 near=0 orph=0 nosess=0 owed=0 | el=16000 [3000..16000] elblk=16 adj=0/0 | eo=0 en=0 hl=0 dfl=0 | sent ag=2 dl=0 bl=16 sup=264 | hi 25/25/0/25[0m
+[2026-11-14T02:24:41.763] [00:59:18.224,863] [0m<inf> radiant_gate_mpsl: D2REL fixed rel 17998/19766 us after start, hold 0/0 us (last/max) late_drop 0 | br ok=32 inside=0 restore=0 cap=18002 est=18000 | t0fix rel=25 bs=0 at=18032 | ext_skipped=222[0m
+[2026-11-14T02:24:41.763] [00:59:18.224,876] [0m<inf> radiant_gate_mpsl: D2START n=25 err last/min/max -33/-45/-7 us | skip_left_min=712 | due saved=0 late=0 orphan=0 tail=25 repl=0 join=0 jdefer=0[0m
+[2026-11-14T02:24:41.763] [00:59:18.224,884] [0m<inf> radiant_gate_mpsl: D2EL blk by notice 0/0/16/0/0 gr 0/0/0/0/242 deferred-blk 0[0m
+[2026-11-14T02:24:41.763] [00:59:18.334,956] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137317 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:42.798] [00:59:18.528,491] [0m<inf> radiant_api: TEMPDIAG chunks: ok=33 aborted=242 other=20 credited_ms=2556 phase_bins=0x01f6b7bd sets=11 ok_frames=31 acq=1 idrej=0 lost=0[0m
+[2026-11-14T02:24:43.007] [00:59:18.904,007] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=206569 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:43.007] [00:59:19.403,674] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=202670 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:44.245] [00:59:19.830,993] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137340 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:44.245] [00:59:20.705,761] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=12510 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:45.281] [00:59:20.884,399] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=190975 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:45.281] [00:59:21.329,480] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137364 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:45.281] [00:59:21.378,150] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=187076 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:45.281] [00:59:21.625,066] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=185128 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:45.281] [00:59:21.878,032] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=183178 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:46.327] [00:59:21.951,770] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=12530 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:46.327] [00:59:22.079,345] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137375 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:46.327] [00:59:22.202,881] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=12534 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:46.327] [00:59:22.330,433] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137380 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:46.327] [00:59:22.702,264] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=12542 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:46.946] [00:59:23.202,578] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=12549 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:46.946] [00:59:23.224,922] [0m<inf> radiant_gate_mpsl: D2SETTLE rel=1 keep=45 wait=0 none=493 now=56 imm=798 owed=102[0m
+[2026-11-14T02:24:46.946] [00:59:23.224,932] [0m<inf> radiant_gate_mpsl: D2STAT pl=472 gr=455 bl=16 s0=264/251/12 s1=208/204/4 ext=0/19 near=0 eag=0 dl=0[0m
+[2026-11-14T02:24:46.946] [00:59:23.224,945] [0m<inf> radiant_gate_mpsl: D2BOOK pl=46 hit=45 den=0 blk=0 unpl=0 mis=0 early=0 busy=0 near=0 orph=0 nosess=0 owed=0 | el=16000 [3000..16000] elblk=16 adj=0/0 | eo=0 en=0 hl=0 dfl=0 | sent ag=2 dl=0 bl=16 sup=446 | hi 45/45/0/45[0m
+[2026-11-14T02:24:46.946] [00:59:23.224,953] [0m<inf> radiant_gate_mpsl: D2REL fixed rel 19307/19766 us after start, hold 0/0 us (last/max) late_drop 0 | br ok=57 inside=0 restore=0 cap=19310 est=19308 | t0fix rel=45 bs=0 at=19341 | ext_skipped=372[0m
+[2026-11-14T02:24:46.946] [00:59:23.224,962] [0m<inf> radiant_gate_mpsl: D2START n=45 err last/min/max -36/-45/7 us | skip_left_min=712 | due saved=0 late=0 orphan=0 tail=45 repl=0 join=0 jdefer=0[0m
+[2026-11-14T02:24:46.946] [00:59:23.224,970] [0m<inf> radiant_gate_mpsl: D2EL blk by notice 0/0/16/0/0 gr 0/0/0/0/404 deferred-blk 0[0m
+[2026-11-14T02:24:46.946] [00:59:23.327,669] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137395 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:46.946] [00:59:23.451,422] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=12553 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:46.946] [00:59:23.553,459] [0m<inf> radiant_api: TEMPDIAG chunks: ok=59 aborted=403 other=20 credited_ms=4313 phase_bins=0x01feb7bd sets=17 ok_frames=48 acq=1 idrej=0 lost=0[0m
+[2026-11-14T02:24:47.155] [00:59:23.578,987] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137398 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:48.184] [00:59:23.827,283] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137403 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:48.184] [00:59:24.076,481] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137407 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:48.184] [00:59:24.575,283] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137415 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:48.184] [00:59:24.844,825] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=151394 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:49.430] [00:59:25.097,573] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=157838 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:49.430] [00:59:25.339,868] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=152012 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:49.430] [00:59:25.574,189] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137430 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:50.665] [00:59:26.321,266] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137443 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:50.665] [00:59:26.592,261] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=153559 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:50.665] [00:59:26.843,142] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=153869 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:50.665] [00:59:27.196,604] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=12612 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:50.665] [00:59:27.320,412] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137458 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:51.498] [00:59:27.572,239] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=138347 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:51.498] [00:59:27.696,285] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=12620 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:51.700] [00:59:27.823,861] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=136397 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:51.700] [00:59:28.069,090] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=134449 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:51.700] [00:59:28.094,363] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=155414 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:51.700] [00:59:28.196,695] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=12627 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:51.700] [00:59:28.225,018] [0m<inf> radiant_gate_mpsl: D2SETTLE rel=1 keep=65 wait=0 none=698 now=87 imm=1104 owed=153[0m
+[2026-11-14T02:24:51.700] [00:59:28.225,028] [0m<inf> radiant_gate_mpsl: D2STAT pl=656 gr=638 bl=16 s0=354/341/12 s1=302/297/4 ext=0/27 near=0 eag=0 dl=0[0m
+[2026-11-14T02:24:51.700] [00:59:28.225,041] [0m<inf> radiant_gate_mpsl: D2BOOK pl=66 hit=65 den=0 blk=0 unpl=0 mis=0 early=0 busy=0 near=0 orph=0 nosess=0 owed=0 | el=16000 [3000..16000] elblk=16 adj=0/0 | eo=0 en=0 hl=0 dfl=0 | sent ag=2 dl=0 bl=16 sup=630 | hi 65/65/0/65[0m
+[2026-11-14T02:24:51.700] [00:59:28.225,050] [0m<inf> radiant_gate_mpsl: D2REL fixed rel 19499/19766 us after start, hold 0/0 us (last/max) late_drop 0 | br ok=88 inside=0 restore=0 cap=19503 est=19500 | t0fix rel=65 bs=0 at=19533 | ext_skipped=517[0m
+[2026-11-14T02:24:51.700] [00:59:28.225,063] [0m<inf> radiant_gate_mpsl: D2START n=65 err last/min/max -8/-45/7 us | skip_left_min=712 | due saved=0 late=0 orphan=0 tail=65 repl=0 join=0 jdefer=0[0m
+[2026-11-14T02:24:51.700] [00:59:28.225,071] [0m<inf> radiant_gate_mpsl: D2EL blk by notice 0/0/16/0/0 gr 0/0/0/0/567 deferred-blk 0[0m
+[2026-11-14T02:24:52.928] [00:59:28.569,293] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=130550 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:52.928] [00:59:28.569,307] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137477 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:52.928] [00:59:28.569,317] [0m<inf> radiant_api: TEMPDIAG chunks: ok=90 aborted=556 other=20 credited_ms=6040 phase_bins=0x01fef7bd sets=24 ok_frames=69 acq=1 idrej=0 lost=0[0m
+[2026-11-14T02:24:52.928] [00:59:28.594,833] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=156032 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:52.928] [00:59:28.816,321] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=128600 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:52.928] [00:59:29.068,621] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137484 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:52.928] [00:59:29.320,560] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137487 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:52.928] [00:59:29.589,883] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=157268 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:54.169] [00:59:29.819,286] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137497 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:54.169] [00:59:29.844,828] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=157578 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:54.169] [00:59:30.090,244] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=157885 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:54.169] [00:59:30.192,611] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=12659 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:54.169] [00:59:30.320,161] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137504 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:54.169] [00:59:30.589,113] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=158503 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:54.169] [00:59:30.837,128] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=158813 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:55.223] [00:59:31.089,091] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=159121 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:55.223] [00:59:31.290,554] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=109109 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:55.223] [00:59:31.316,095] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137519 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:55.223] [00:59:31.341,637] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=159431 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:55.223] [00:59:31.441,933] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=12679 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:55.223] [00:59:31.542,699] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=107160 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:55.223] [00:59:31.568,240] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137524 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:55.223] [00:59:31.593,783] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=159741 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:55.223] [00:59:31.786,152] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=105210 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:55.223] [00:59:31.837,232] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=160050 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:55.223] [00:59:31.940,331] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=12686 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:56.468] [00:59:32.067,891] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137533 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:56.468] [00:59:32.093,437] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=160359 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:56.468] [00:59:32.315,978] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137535 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:56.468] [00:59:32.341,519] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=160668 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:56.468] [00:59:32.563,921] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137540 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:56.468] [00:59:32.588,867] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=160977 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:57.093] [00:59:33.225,125] [0m<inf> radiant_gate_mpsl: D2SETTLE rel=1 keep=85 wait=0 none=912 now=114 imm=1416 owed=201[0m
+[2026-11-14T02:24:57.093] [00:59:33.225,140] [0m<inf> radiant_gate_mpsl: D2STAT pl=840 gr=823 bl=16 s0=446/433/12 s1=394/390/4 ext=0/33 near=0 eag=0 dl=0[0m
+[2026-11-14T02:24:57.093] [00:59:33.225,153] [0m<inf> radiant_gate_mpsl: D2BOOK pl=86 hit=85 den=0 blk=0 unpl=0 mis=0 early=0 busy=0 near=0 orph=0 nosess=0 owed=0 | el=16000 [3000..16000] elblk=16 adj=0/0 | eo=0 en=0 hl=0 dfl=0 | sent ag=2 dl=0 bl=16 sup=814 | hi 85/85/0/85[0m
+[2026-11-14T02:24:57.093] [00:59:33.225,162] [0m<inf> radiant_gate_mpsl: D2REL fixed rel 11127/19766 us after start, hold 0/0 us (last/max) late_drop 0 | br ok=115 inside=0 restore=0 cap=11132 est=11128 | t0fix rel=85 bs=0 at=11162 | ext_skipped=668[0m
+[2026-11-14T02:24:57.300] [00:59:33.225,171] [0m<inf> radiant_gate_mpsl: D2START n=85 err last/min/max -7/-45/7 us | skip_left_min=712 | due saved=0 late=0 orphan=0 tail=85 repl=0 join=0 jdefer=0[0m
+[2026-11-14T02:24:57.300] [00:59:33.225,178] [0m<inf> radiant_gate_mpsl: D2EL blk by notice 0/0/16/0/0 gr 0/0/0/0/732 deferred-blk 0[0m
+[2026-11-14T02:24:57.300] [00:59:33.587,415] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=162213 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:57.300] [00:59:33.587,427] [0m<inf> radiant_api: TEMPDIAG chunks: ok=117 aborted=712 other=20 credited_ms=7760 phase_bins=0x01d6b7bd sets=31 ok_frames=99 acq=1 idrej=0 lost=0[0m
+[2026-11-14T02:24:57.300] [00:59:33.688,744] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=12714 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:57.300] [00:59:33.765,219] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=89618 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:58.533] [00:59:34.189,451] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=12722 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:58.533] [00:59:34.265,924] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=85719 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:58.533] [00:59:34.317,004] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137567 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:58.533] [00:59:34.342,544] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=163141 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:58.533] [00:59:34.436,629] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=12725 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:58.533] [00:59:34.513,127] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=83769 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:58.533] [00:59:34.589,746] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=163449 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:58.533] [00:59:34.758,152] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=81820 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:58.739] [00:59:35.007,956] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=79871 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:24:58.739] [00:59:35.256,598] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=77921 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:00.198] [00:59:35.813,300] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137591 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:00.198] [00:59:35.838,841] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=164994 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:00.198] [00:59:36.184,357] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=12753 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:00.198] [00:59:36.311,911] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137598 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:00.198] [00:59:36.337,430] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=165612 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:01.239] [00:59:36.935,051] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=12764 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:01.239] [00:59:36.985,985] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=64278 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:01.239] [00:59:37.062,603] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137609 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:01.239] [00:59:37.088,123] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=166540 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:01.439] [00:59:37.432,903] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=12773 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:01.439] [00:59:37.483,863] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=60379 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:01.439] [00:59:37.559,236] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137618 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:01.439] [00:59:37.933,622] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=12780 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:02.267] [00:59:38.061,208] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137625 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:02.267] [00:59:38.225,221] [0m<inf> radiant_gate_mpsl: D2SETTLE rel=1 keep=105 wait=0 none=1120 now=140 imm=1728 owed=247[0m
+[2026-11-14T02:25:02.267] [00:59:38.225,231] [0m<inf> radiant_gate_mpsl: D2STAT pl=1022 gr=1005 bl=16 s0=538/525/12 s1=484/480/4 ext=0/42 near=0 eag=0 dl=0[0m
+[2026-11-14T02:25:02.267] [00:59:38.225,244] [0m<inf> radiant_gate_mpsl: D2BOOK pl=106 hit=105 den=0 blk=0 unpl=0 mis=0 early=0 busy=0 near=0 orph=0 nosess=0 owed=0 | el=16000 [3000..16000] elblk=16 adj=0/0 | eo=0 en=0 hl=0 dfl=0 | sent ag=2 dl=0 bl=16 sup=996 | hi 105/105/0/105[0m
+[2026-11-14T02:25:02.267] [00:59:38.225,252] [0m<inf> radiant_gate_mpsl: D2REL fixed rel 14856/19766 us after start, hold 0/0 us (last/max) late_drop 0 | br ok=141 inside=0 restore=0 cap=14859 est=14857 | t0fix rel=105 bs=0 at=14890 | ext_skipped=815[0m
+[2026-11-14T02:25:02.267] [00:59:38.225,261] [0m<inf> radiant_gate_mpsl: D2START n=105 err last/min/max -35/-45/7 us | skip_left_min=712 | due saved=0 late=0 orphan=0 tail=105 repl=0 join=0 jdefer=0[0m
+[2026-11-14T02:25:02.267] [00:59:38.225,269] [0m<inf> radiant_gate_mpsl: D2EL blk by notice 0/0/16/0/0 gr 0/0/0/0/894 deferred-blk 0[0m
+[2026-11-14T02:25:02.267] [00:59:38.307,395] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137630 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:02.267] [00:59:38.632,750] [0m<inf> radiant_api: TEMPDIAG chunks: ok=144 aborted=869 other=20 credited_ms=9501 phase_bins=0x01f6f7bd sets=38 ok_frames=126 acq=1 idrej=0 lost=0[0m
+[2026-11-14T02:25:02.267] [00:59:38.807,609] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137638 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:03.700] [00:59:39.307,312] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137645 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:03.700] [00:59:39.807,708] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137653 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:03.700] [00:59:40.181,139] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=12815 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:03.700] [00:59:40.206,535] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=38938 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:03.700] [00:59:40.308,695] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137660 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:04.738] [00:59:40.430,910] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=12819 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:04.738] [00:59:40.456,331] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=36988 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:04.738] [00:59:40.558,487] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137665 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:04.738] [00:59:40.706,894] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=35039 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:04.738] [00:59:40.809,031] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137668 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:04.950] [00:59:41.203,171] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=31141 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:04.950] [00:59:41.305,327] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137676 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:04.950] [00:59:41.428,337] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=12834 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:05.995] [00:59:41.555,945] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137681 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:05.995] [00:59:41.631,623] [0m<inf> radiant_api: rxpath/30041ms sched=258 tracked=118 on_data=0 up=0 posted=119 | xfer=0 dropped=0 tot=259[0m
+[2026-11-14T02:25:05.995] [00:59:41.631,630] [0m<inf> radiant_api: xfer failures: no_opener=0 no_ack=0 bad_ack=0 radio=0[0m
+[2026-11-14T02:25:05.995] [00:59:41.699,520] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=27243 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:05.995] [00:59:42.056,003] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137688 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:05.995] [00:59:42.553,114] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137696 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:07.033] [00:59:43.225,312] [0m<inf> radiant_gate_mpsl: D2SETTLE rel=1 keep=125 wait=0 none=1319 now=168 imm=2032 owed=295[0m
+[2026-11-14T02:25:07.033] [00:59:43.225,328] [0m<inf> radiant_gate_mpsl: D2STAT pl=1202 gr=1185 bl=16 s0=627/614/12 s1=575/571/4 ext=0/48 near=0 eag=0 dl=0[0m
+[2026-11-14T02:25:07.033] [00:59:43.225,340] [0m<inf> radiant_gate_mpsl: D2BOOK pl=126 hit=125 den=0 blk=0 unpl=0 mis=0 early=0 busy=0 near=0 orph=0 nosess=0 owed=0 | el=16000 [3000..16000] elblk=16 adj=0/0 | eo=0 en=0 hl=0 dfl=0 | sent ag=2 dl=0 bl=16 sup=1176 | hi 125/125/0/125[0m
+[2026-11-14T02:25:07.033] [00:59:43.225,349] [0m<inf> radiant_gate_mpsl: D2REL fixed rel 16116/19766 us after start, hold 0/0 us (last/max) late_drop 0 | br ok=169 inside=0 restore=0 cap=16120 est=16117 | t0fix rel=125 bs=0 at=16150 | ext_skipped=961[0m
+[2026-11-14T02:25:07.033] [00:59:43.225,358] [0m<inf> radiant_gate_mpsl: D2START n=125 err last/min/max -8/-45/8 us | skip_left_min=712 | due saved=0 late=0 orphan=0 tail=125 repl=0 join=0 jdefer=0[0m
+[2026-11-14T02:25:07.033] [00:59:43.225,365] [0m<inf> radiant_gate_mpsl: D2EL blk by notice 0/0/16/0/0 gr 0/0/0/0/1054 deferred-blk 0[0m
+[2026-11-14T02:25:07.033] [00:59:43.251,485] [0m<inf> radiant_api: noise rf=57 n=117 floor=-105 busy=-88 min=-106 max=-70 clip=0/0 lost=0[0m
+[2026-11-14T02:25:07.033] [00:59:43.302,559] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137708 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:07.033] [00:59:43.552,403] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137711 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:07.241] [00:59:43.654,260] [0m<inf> radiant_api: TEMPDIAG chunks: ok=173 aborted=1023 other=20 credited_ms=11245 phase_bins=0x01d6f5bd sets=44 ok_frames=146 acq=1 idrej=0 lost=0[0m
+[2026-11-14T02:25:08.268] [00:59:43.841,586] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=174886 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:08.268] [00:59:43.926,437] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=9700 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:08.268] [00:59:44.053,990] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137720 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:08.268] [00:59:44.171,027] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=7751 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:08.268] [00:59:44.421,918] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=5802 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:08.268] [00:59:44.549,468] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137728 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:08.268] [00:59:44.670,440] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=3852 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:08.268] [00:59:44.917,162] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=1903 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:09.920] [00:59:45.550,513] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137743 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:09.920] [00:59:46.050,827] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137750 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:09.920] [00:59:46.298,860] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137755 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:09.920] [00:59:46.422,172] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=12918 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:09.920] [00:59:46.549,743] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137759 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:11.375] [00:59:47.093,103] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=178903 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:11.375] [00:59:47.144,147] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=233840 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:11.586] [00:59:47.171,122] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=12924 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:11.586] [00:59:47.298,671] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137770 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:11.586] [00:59:47.795,746] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137778 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:11.586] [00:59:48.091,930] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=180140 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:11.999] [00:59:48.225,413] [0m<inf> radiant_gate_mpsl: D2SETTLE rel=1 keep=145 wait=0 none=1524 now=195 imm=2346 owed=343[0m
+[2026-11-14T02:25:11.999] [00:59:48.225,427] [0m<inf> radiant_gate_mpsl: D2STAT pl=1387 gr=1369 bl=16 s0=718/705/12 s1=669/664/4 ext=0/57 near=0 eag=0 dl=0[0m
+[2026-11-14T02:25:11.999] [00:59:48.225,440] [0m<inf> radiant_gate_mpsl: D2BOOK pl=146 hit=145 den=0 blk=0 unpl=0 mis=0 early=0 busy=0 near=0 orph=0 nosess=0 owed=0 | el=16000 [3000..16000] elblk=16 adj=0/0 | eo=0 en=0 hl=0 dfl=0 | sent ag=2 dl=0 bl=16 sup=1361 | hi 145/145/0/145[0m
+[2026-11-14T02:25:11.999] [00:59:48.225,449] [0m<inf> radiant_gate_mpsl: D2REL fixed rel 19180/19766 us after start, hold 0/0 us (last/max) late_drop 0 | br ok=195 inside=1 restore=0 cap=19184 est=19181 | t0fix rel=145 bs=0 at=19214 | ext_skipped=1110[0m
+[2026-11-14T02:25:11.999] [00:59:48.225,457] [0m<inf> radiant_gate_mpsl: D2START n=145 err last/min/max -23/-45/8 us | skip_left_min=712 | due saved=0 late=0 orphan=0 tail=145 repl=0 join=0 jdefer=0[0m
+[2026-11-14T02:25:12.209] [00:59:48.225,465] [0m<inf> radiant_gate_mpsl: D2EL blk by notice 0/0/16/0/0 gr 0/0/0/0/1218 deferred-blk 0[0m
+[2026-11-14T02:25:12.209] [00:59:48.299,513] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137786 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:12.209] [00:59:48.544,600] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137789 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:12.209] [00:59:48.595,680] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=180758 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:12.209] [00:59:48.662,447] [0m<inf> radiant_api: TEMPDIAG chunks: ok=200 aborted=1178 other=20 credited_ms=12966 phase_bins=0x01d6f7bd sets=51 ok_frames=168 acq=1 idrej=0 lost=0[0m
+[2026-11-14T02:25:13.241] [00:59:48.841,132] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=181066 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:13.241] [00:59:49.091,997] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=181376 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:13.241] [00:59:49.294,814] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137801 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:13.241] [00:59:49.345,895] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=181684 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:13.241] [00:59:49.668,916] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=12964 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:13.241] [00:59:49.796,465] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137809 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:14.479] [00:59:50.092,008] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=182612 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:14.479] [00:59:50.117,548] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=210077 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:14.479] [00:59:50.341,893] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=182922 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:14.479] [00:59:50.367,433] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=208099 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:14.479] [00:59:50.589,323] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=183230 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:14.479] [00:59:50.796,438] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137825 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:14.479] [00:59:51.093,387] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=183848 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:15.711] [00:59:51.291,729] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137833 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:15.711] [00:59:51.418,269] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=12990 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:15.711] [00:59:51.545,819] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137836 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:16.732] [00:59:52.340,374] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=185394 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:16.732] [00:59:52.542,184] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=137852 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:16.732] [00:59:52.593,264] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=185703 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:16.732] [00:59:53.225,585] [0m<inf> radiant_gate_mpsl: D2SETTLE rel=1 keep=165 wait=0 none=1728 now=222 imm=2656 owed=390[0m
+[2026-11-14T02:25:16.732] [00:59:53.225,595] [0m<inf> radiant_gate_mpsl: D2STAT pl=1569 gr=1552 bl=16 s0=812/799/12 s1=757/753/4 ext=0/63 near=0 eag=0 dl=0[0m
+[2026-11-14T02:25:16.732] [00:59:53.225,608] [0m<inf> radiant_gate_mpsl: D2BOOK pl=166 hit=165 den=0 blk=0 unpl=0 mis=0 early=0 busy=0 near=0 orph=0 nosess=0 owed=0 | el=16000 [3000..16000] elblk=16 adj=0/0 | eo=0 en=0 hl=0 dfl=0 | sent ag=2 dl=0 bl=16 sup=1543 | hi 165/165/0/165[0m
+[2026-11-14T02:25:16.732] [00:59:53.225,616] [0m<inf> radiant_gate_mpsl: D2REL fixed rel 12122/19766 us after start, hold 0/0 us (last/max) late_drop 0 | br ok=222 inside=1 restore=0 cap=12127 est=12123 | t0fix rel=165 bs=0 at=12156 | ext_skipped=1259[0m
+[2026-11-14T02:25:16.732] [00:59:53.225,625] [0m<inf> radiant_gate_mpsl: D2START n=165 err last/min/max -9/-45/8 us | skip_left_min=712 | due saved=0 late=0 orphan=0 tail=165 repl=0 join=0 jdefer=0[0m
+[2026-11-14T02:25:16.732] [00:59:53.225,633] [0m<inf> radiant_gate_mpsl: D2EL blk by notice 0/0/16/0/0 gr 0/0/0/0/1381 deferred-blk 0[0m
+[2026-11-14T02:25:16.732] [00:59:53.337,417] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x7b tt=1 ph=184402 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:17.353] [00:59:53.663,962] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x0b tt=165 ph=13026 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:17.353] [00:59:53.663,979] [0m<inf> radiant_api: TEMPDIAG chunks: ok=227 aborted=1334 other=20 credited_ms=14692 phase_bins=0x01f6b7bd sets=58 ok_frames=189 acq=1 idrej=0 lost=0[0m
+[2026-11-14T02:25:17.353] [00:59:53.842,587] [0m<inf> radiant_api: TDIAG frame dev=52233 type=0x11 tt=5 ph=187247 set=0 claim=-1 nact=1 nmatch=0 ch0=3[0m
+[2026-11-14T02:25:17.353] 
+[2026-11-14T02:25:17.353] *** MPSL ASSERT 69:108  placed=1599 granted=1582 blocked=16 ext=0/64 skip=1285 deadline=0
+[2026-11-14T02:25:17.353]     over=0 invalid=0 unknown=0 last_sig=3 len=10000/96884 granted=0 pending=0 rel=0 ext_ok=1
+[2026-11-14T02:25:17.353]     trace (sig:act, oldest first): 7:0 0:0 1:2 7:0 0:0 1:2 7:0 0:0 1:2 7:0 0:0 1:2 7:0 0:0 1:1 3:2

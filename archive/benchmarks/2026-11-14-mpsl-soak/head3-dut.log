@@ -1,0 +1,57 @@
+
+Opening ANT+ receive channels
+  OK: extended messages
+  OK: ANT+ network key
+  OK: ch0 assign slave
+  OK: ch0 channel id
+  OK: ch0 radio frequency
+  OK: ch0 message period
+  OK: ch0 search timeout
+  OK: ch0 open
+  OK: channel 0 - bicycle power, standard page 0x10, pinned to #2002
+  OK: ch1 assign slave
+  OK: ch1 channel id
+  OK: ch1 radio frequency
+  OK: ch1 message period
+  OK: ch1 search timeout
+  OK: ch1 open
+  OK: channel 1 - bicycle power, standard page 0x10, pinned to #43210
+
+Listening for 420 s
+
+Closing
+  FAIL: close ch0 was not acknowledged
+  ! channel 0 never reported closed
+  FAIL: unassign ch0 was not acknowledged
+  FAIL: close ch1 was not acknowledged
+  ! channel 1 never reported closed
+  FAIL: unassign ch1 was not acknowledged
+
+=== power (device type 0x0B, 8182 ticks) ===
+  OK   packets                169 received, 169 expected over 41.9 s
+  OK   loss                   -0.03 % (limit 1.50 %, one packet = 0.59 %)
+  OK   jitter                 stddev 3.4 ms, max 266.0 ms (limit 124.8 ms, period 249.7 ms)
+  OK   accumulator continuity 0 violation(s)
+  OK   sensor liveness        the event counter advanced on 165 of 166 packet pairs
+  pages: 0x10 x167, 0x50 x1, 0x51 x1
+  timing: 3.39 ms off the 249.7 ms slot grid by the host clock, 0.013 ms by the radio's
+  signal: mean -33.0 dBm (min -33, max -33, n=169) - ANT tracks to about -90
+  wraps observed: none - this run did not reach a 16-bit accumulator wrap
+  attestation: clear - no key here, which is not the same as unprotected
+  power: mean 100.01 (min 97.00, max 103.00, n=167)
+  cadence: mean 79.85 (min 77.00, max 83.00, n=167)
+
+=== power (device type 0x0B, 8182 ticks) ===
+  FAIL packets                0 received, 0 expected over 0.0 s
+  OK   accumulator continuity 0 violation(s)
+  wraps observed: none - this run did not reach a 16-bit accumulator wrap
+  attestation: clear - no key here, which is not the same as unprotected
+heard on channel 0: device #2002, type 0x0B
+
+per channel (exact loss, from the transmitters' own counters):
+  channel 0    power                    no exact figure - the event counter stood still, so it is not stepped per message
+  channel 1    power                    no exact figure - no standard-power event counter was seen (a torque-only meter, or no page 0x10)
+
+wrote C:\wt_mpsl\archive\benchmarks\2026-11-14-mpsl-soak\head3-dut.json
+
+FAILED

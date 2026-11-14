@@ -204,3 +204,9 @@ this design: whether the scan tail survives, whether 69:108 stays away over a
 long soak, whether (d2)'s higher tracked loss under BLE is real, whether a live
 slot is lost to a late arm, and whether Thread's own traffic suffers during a
 search.
+
+69:108 did not stay away: on 2026-11-14 it fired in all nine legs of a Thread
+soak (an attached OpenThread leader, one tracked and one searching channel),
+1.5-14.6 minutes after boot, on master dd38b26 as often as on the branch under
+test, and with the short match off as well as on
+(`archive/benchmarks/2026-11-14-mpsl-soak/`). It is open in TODO.md.

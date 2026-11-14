@@ -1,0 +1,13 @@
+{
+  "hex": "C:/wt_mpslh/build/h_soak/dongle_thread/zephyr/zephyr.hex",
+  "seconds": 900,
+  "base": "C:/wt_mpsl/archive/benchmarks/2026-11-14-mpsl-soak/head1",
+  "start": "2026-11-14T01:42:34.650529",
+  "peer_after_boot": "== peer after boot wait 2026-11-14T01:43:56.830068\n$ ot state\not state\r\nleader\r\r\nDone\r\r\n\u001b[1;32muart:~$ \u001b[m\n$ ot child table\not child table\r\n| ID  | RLOC16 | Timeout    | Age        | LQ In | C_VN |R|D|N|Ver|CSL|QMsgCnt|Suprvsn| Extended MAC     |\r\r\n+-----+--------+------------+------------+-------+------+-+-+-+---+---+-------+-------+------------------+\r\r\n|   2 | 0xc002 |        240 |         75 |     3 |   57 |1|0|0|  5| 0 |     0 |     0 | 2a3e66a0f4196d46 |\r\r\n\r\r\nDone\r\r\n\u001b[1;32muart:~$ \u001b[m",
+  "dut_segments": 0,
+  "dut_rc": 1,
+  "ref_rc": 0,
+  "cap": "{'deaths': []}",
+  "elapsed": 927.6619448661804,
+  "end": "2026-11-14T01:59:37.572859"
+}

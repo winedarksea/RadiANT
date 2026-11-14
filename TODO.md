@@ -14,7 +14,7 @@ Performance review 2026-11-13 (`docs/performance-review-2026-11-13.md`), open af
 - [x] TI cannot receive the Pro Micro clone: FIXED. The cause was TI's RX intermediate frequency (0.5 MHz put the signal across DC, so loss depended on the transmitter's exact carrier offset), not the clone or the RX bandwidth. `CONFIG_RADIANT_CC26XX_INT_FREQ` now defaults to 1.0 MHz: clone and L15 0.0-0.6 % on TI, flat across ±200 kHz, below the same-window Garmin. The clone is a valid TI peer again.
 - [x] Decoy sync word `0x59C5`: replaced by `syncWord1 = 0` (second correlator off). 6 x 300 s alternating legs: CRC fails halved, tracked loss unchanged against the Garmin.
 - [x] `tools/ab_gates.toml`'s acquisition gate for the TI short match: closed as superseded, not run. The gate is a ratio against sdk-ant, which cannot run on TI, and it is `required = false`; ADR 0022's TI section already compared first-sighting medians against the Garmin in the same window (0.30/0.39 s, gate 2 pass).
-- The burst ACK-window reserve (e042a10) is unmeasured on MPSL: the window now holds 1550 us more arbiter air and retries become armable in-grant. Under cc26xx coex the in-grant lead stays 600 us, so retries still cannot fit there.
+- [x] The burst ACK-window reserve (e042a10) on MPSL: measured 2026-11-14, and it was a live regression. The data packet's grant ends about where the ACK window closes, and the gate required the window's 1550 us follow-on to fit in it too, so every acknowledged message an MPSL build originated as a slave (Zwift's FE-C path) failed: L15 `gate.conf` against a Garmin 0/60 and 0/60, Garmin receiving 57 and 59. Fixed (8650411): an in-grant arm is served by its own air and its follow-on is clipped at the grant's end; 58/60 and 59/60, every received packet acknowledged. Retries still cannot run in-grant on MPSL (item 4 below). Master-originated acked data was not affected (60/60 on HEAD). `archive/benchmarks/2026-11-14-mpsl-ack-window/`. Under cc26xx coex the in-grant lead stays 600 us, so retries still cannot fit there either.
 
 ## FE-C coverage (deferred from the 2026-11-11 Zwift-capture plan, one item):
 - `tools/ant_fec_control.py`: the page-70 count byte is shifted (:152-156), and the incline is read at [3..4] instead of [4..5] (:171).
@@ -362,21 +362,30 @@ There is also a broader issue: radiant-bridge.md already exceeds 2,000 lines and
 # Left open by the 2026-11-08 clearance
 
 MPSL (needs a soak beside BLE or Thread, which that clearance excluded):
-- MPSL assert 69:108, once in about 111,000 failed extensions on the L15 beside
-  an attached Thread peer (2026-11-09, docs/adr18-eval/phase-0a.md). It fired on
-  the CLOCK_LOCK arm about 5 min into a run and did not repeat in a further
-  30 min on the same image; the irq_lock arms saw none in 65,000. One event, so
-  neither arm is implicated. Last signal EXTEND_FAILED, returned END.
-- A14-1: on an MPSL grant, an ETIME from `program_rx()` is reported through
-  `gate_failed` only after the grant ends, so the grant is not released early and
-  its remaining air is wasted. Not fixed: no ztest reaches radiant_radio_nrf.c,
-  and a soak counter saw 0 on-grant ETIMEs in 87 min beside a Thread peer.
-- A pending `gate_failed` is not cleared by `radiant_radio_abort()`, so an abort
-  before `denied_work_fn` runs delivers FAILED to the next operation. Self-heals;
-  found by reading only. Not fixed, for the same two reasons (0 in the same soak).
-- `program_tx()` writes CC_TXSTART before enabling `conn_start_tx` and re-checks
-  with `t_start <= now`, the ordering A14-1 replaced for receive. A compare just
-  after the enable, before `now` is read, gives a false ETIME.
+- MPSL assert 69:108 - NOW REPRODUCIBLE IN MINUTES, OPEN, 2026-11-14
+  (`archive/benchmarks/2026-11-14-mpsl-soak/`). L15 `thread.conf` beside an
+  attached OpenThread leader, one tracked + one searching channel: it fired in
+  every leg, 1.5-6.3 min after boot, on HEAD dd38b26 (3/3) and on the fix image
+  (4/4) alike, at 6-1143 failed extensions (2026-11-09: once in ~111,000). With
+  `long_match.conf` it still fired (14.6 and 7.6 min, against a 3.2 min mean with it on). Traces end on
+  TIMER0 returning END after a run of 10 ms first-bite scan grants with
+  extensions skipped; one ends EXTEND_FAILED -> END. What changed since 11-09:
+  short match on by default (2026-11-13) and the Pro Micro as master. Each one
+  halts the image for good (C5-3), so Thread/Matter MPSL images hang within
+  minutes. Next: bisect with the short match and the ext skip, try a no-Thread
+  `gate.conf` soak, and look up 69:108 with Nordic.
+- [x] A14-1: an in-grant ETIME now releases the grant at once (546be4d);
+  FAILED is still reported from thread context. Backend ztest
+  (radiant/tests/backend, which does compile radiant_radio_nrf.c) red then
+  green. Soak counter `etime_rel` 0 in every leg.
+- [x] A pending `gate_failed` is cleared by `radiant_radio_abort()` and at every
+  claim (546be4d). Backend ztests red then green. `abort_clr` 0 in every leg.
+- [x] `program_tx()` now uses program_rx()'s order (park, clear event, enable,
+  write, capture-then-check) (546be4d). Backend ztest red then green. On air:
+  L15 direct and `gate.conf` masters against the Garmin, loss unchanged
+  (0.82/-0.01 % direct, 0.82/0.20 % gate, HEAD/fix), 0xF7 page 7
+  `tx_start_missed` 0. Direct builds +32 B flash.
+  `archive/benchmarks/2026-11-14-mpsl-tx-compare/`.
 
 ## Device Testing Open Items
 
@@ -386,7 +395,21 @@ Make continuous dual transmission the HR default (CONFIG_HRM_SUPPRESS_ANT_WHEN_C
 
 Apple testing round 2
 
-Zwift pcap using an MPSL build dongle
+Zwift pcap using an MPSL build dongle (image ready 2026-11-14, user-run):
+- Image: L15 DK `apps/dongle_thread` + `gate.conf;uart_57600.conf` +
+  `uart_57600.overlay` (Zwift's ANT_DLL opens the port at 57600); hex at
+  `build\zwift_mpsl\zephyr.hex` (gitignored, copied there 2026-11-14). Flash with
+  `scripts\flash_sim_jlink.ps1 -HexPath <hex> -Device nRF54L15_M33 -Serial 1057737173`.
+- Host: `scripts\zwift_ant_shim.ps1 -Port COM4` (the L15's ANT VCOM), set
+  `RADIANT_SHIM_LOG` to keep the shim's call log - it is the capture here,
+  since USBPcap sees only the J-Link's CDC. Keep the L15 log VCOM (COM3, DTR)
+  captured too: an `MPSL ASSERT` line there means the board halted (69:108
+  above), not that Zwift lost the sensors.
+- Confirm: FE-C acknowledged control completes (page 0x33 about every 1 s, 0x37
+  every 30 s, TRANSFER_TX_COMPLETED rather than FAILED; the 2026-11-04 RadiANT USB
+  capture had 23 % "master frame heard, no ACK"); every sensor listed within
+  ~1 s while HR and trainer are tracked; time from reset to NETWORK_KEY against
+  42-94 s (RadiANT history) and 9.2 s (Garmin).
 Zwift pcap using a TI build
 Zwift pcap using erg mode in Zwifts
 Zwift confirm the nRF wildcard matching (faster scan) works
