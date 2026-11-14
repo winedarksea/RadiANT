@@ -1,0 +1,22 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * The ANT UART at 57600 baud, for driving a UART build from Zwift through
+ * tools/zwift_shim (scripts/zwift_ant_shim.ps1 -Port COMn). Zwift's ANT_DLL
+ * opens the port with ANT_Init(..., 57600, ...) and the shim passes that rate
+ * straight to the COM port (SI_SetBaudRate), while this board's ANT UART
+ * otherwise runs at the devicetree default of 115200 - so without this the
+ * two ends disagree and Zwift sees no stick. Host tools then need
+ * --baud 57600.
+ *
+ *   west build ... -- "-DEXTRA_CONF_FILE=gate.conf;uart_57600.conf"
+ *       -DEXTRA_DTC_OVERLAY_FILE=uart_57600.overlay
+ *
+ * uart_57600.conf sets CONFIG_ANT_DONGLE_UART_BAUD to match; the transport
+ * refuses to build if the two disagree.
+ *
+ * nRF54L15 DK only (uart30 is its ant-uart, boards/nrf54l15dk_nrf54l15_cpuapp.overlay).
+ */
+
+&uart30 {
+	current-speed = <57600>;
+};
