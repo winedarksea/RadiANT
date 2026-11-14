@@ -2270,6 +2270,17 @@ data** exactly as an enrolment frame does:
 - **The counter is Tier I's, derived from time on both sides and carried
   nowhere.** A recorded command replayed into a later interval fails the tag.
   There is no counter field a sender could choose.
+- **A replay inside the same interval meets a per-operation floor.** The tag
+  binds only (epoch, interval, operation), so a recorded command verifies again
+  until its interval ends, and with `T` up to 3600 s the rate limit below does
+  not cover that: the owner sends go-private, then return two minutes later, and
+  a replayed go-private would mute the sensor again. The node keeps the tag of
+  the last *accepted* command for each operation and refuses a byte-identical
+  one (counted as `refused_replay`). The cost: the same operation cannot be
+  issued twice in one interval, because two genuine copies are the same bytes
+  as a replay. A retransmission while already in the target state is still
+  acknowledged as idempotent. The floor lives in RAM, so a re-arm without a
+  reboot (same epoch) clears it, as it clears the rate limit.
 - **There is no policy operation and its absence is deliberate.** An
   unrecognised operation is counted and dropped rather than reserved for a
   later meaning, so a well-tagged message shaped like a policy change changes

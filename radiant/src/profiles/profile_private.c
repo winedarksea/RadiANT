@@ -428,6 +428,7 @@ int profile_private_on_command(struct profile_private *pp, uint64_t now_us,
 {
 	uint64_t min_us;
 	uint8_t  op;
+	uint8_t  op_idx;
 	int      rc;
 
 	if (pp == NULL || !pp->armed || pay == NULL ||
@@ -484,7 +485,21 @@ int profile_private_on_command(struct profile_private *pp, uint64_t now_us,
 		return 0;
 	}
 
-	min_us = (uint64_t)(pp->cfg.cmd_min_s != 0u ? pp->cfg.cmd_min_s
+	/* The replay floor. The tag binds only (epoch, interval, op), so a
+	 * recorded command verifies again until its interval ends - up to an
+	 * hour, far past the rate limit below. A replay is byte-identical to
+	 * the last accepted command for its op; a genuine one from a later
+	 * interval or epoch is not. The tag is already verified and not
+	 * secret, so a plain memcmp. */
+	op_idx = (op == PROFILE_PRIVATE_OP_GO_PRIVATE) ? 0u : 1u;
+	if (pp->have_last_tag[op_idx] &&
+	    memcmp(pp->last_tag[op_idx], &pay[PROFILE_PRIVATE_CMD_COVERED],
+		   sizeof(pp->last_tag[op_idx])) == 0) {
+		pp->refused_replay++;
+		return -EALREADY;
+	}
+
+	min_us =(uint64_t)(pp->cfg.cmd_min_s != 0u ? pp->cfg.cmd_min_s
 						    : PROFILE_PRIVATE_CMD_MIN_S) *
 		 US_PER_S;
 	if (pp->ever_cmd && (now_us - pp->last_cmd_us) < min_us) {
@@ -502,6 +517,9 @@ int profile_private_on_command(struct profile_private *pp, uint64_t now_us,
 	 * cannot extend the floor. */
 	pp->last_cmd_us = now_us;
 	pp->ever_cmd = true;
+	memcpy(pp->last_tag[op_idx], &pay[PROFILE_PRIVATE_CMD_COVERED],
+	       sizeof(pp->last_tag[op_idx]));
+	pp->have_last_tag[op_idx] = true;
 	pp->commands_ok++;
 	return 1;
 }

@@ -20,7 +20,8 @@
  * receipt so every keyed receiver retunes on the same message. Per section
  * 11.5: frame B tags frame A's full eight transmitted bytes under K_auth
  * with Tier I's counter in the nonce (verifies on receipt, survives loss of
- * every other packet, a replay into another interval fails), so private
+ * every other packet, a replay into another interval fails; a replay
+ * inside the interval meets the per-op last-accepted floor), so private
  * mode requires a key - without a tag the announcement would be an
  * unauthenticated herding attack. The beacon rate rises to meet the
  * countdown (profile_compat.c's existing promotion to one frame in eight),
@@ -209,7 +210,10 @@ extern "C" {
  * Under K_cmd, not K_auth: every receiver holds K_auth to verify the node, and
  * if commands were signed with it any receiver could mute the sensor for every
  * other one. The nonce counter is Tier I's, derived from time on both sides
- * and carried nowhere, so a replay into a later interval fails.
+ * and carried nowhere, so a replay into a later interval fails. Inside one
+ * interval a command's bytes repeat exactly, so the node keeps the tag of the
+ * last accepted command per operation and refuses a match (-EALREADY): the
+ * same operation cannot be issued twice in one interval.
  */
 #define PROFILE_PRIVATE_CMD_LEN        8u
 #define PROFILE_PRIVATE_CMD_FRAME_BYTE 0x00u
@@ -322,6 +326,15 @@ struct profile_private {
 	uint64_t last_cmd_us;
 	bool     ever_cmd;
 
+	/* The tag of the last ACCEPTED command per operation ([0] GO_PRIVATE,
+	 * [1] RETURN). A command's tag binds only (epoch, interval, op), so a
+	 * recorded one verifies again until its interval ends; a replay is
+	 * byte-identical and matches here, a genuine command in a later
+	 * interval does not. RAM only: a re-arm clears it, as it clears
+	 * last_cmd_us. */
+	uint8_t  last_tag[2][RADIANT_SEC_COMPAT_CMD_TAG_BYTES];
+	bool     have_last_tag[2];
+
 	/* The last frame A that actually went on the air, as transmitted, and
 	 * whether frame B may therefore be built. */
 	uint8_t  frame_a[PROFILE_COMPAT_FRAME_LEN];
@@ -345,7 +358,8 @@ struct profile_private {
 	uint32_t refused_unauth;      /* the tag did not verify */
 	uint32_t refused_malformed;   /* including every unknown operation */
 	uint32_t refused_rate;
-	uint32_t refused_busy;        /* the interlock */
+	uint32_t refused_replay;      /* the last accepted tag for this op */
+	uint32_t refused_busy;       /* the interlock */
 	uint32_t reverts_timeout;
 	/* A transition the node itself could not perform (channel wouldn't
 	 * open/close). Counted apart from the refusals above, which are
@@ -450,6 +464,9 @@ int profile_private_physical_action(struct profile_private *pp, uint64_t now_us)
  *   -EPROTO  malformed, or an operation this file does not implement - there
  *            is no policy operation, so a policy-change-shaped message is
  *            counted and changes nothing
+ *   -EALREADY  a replay: the tag equals the last accepted command's for this
+ *            operation (counted). A retransmission while already in the
+ *            target state is idempotent instead: 0, not counted here.
  *   -EAGAIN  rate-limited
  *   -EBUSY   a countdown is already running, or the interlock refused it
  *   -EINVAL  null, or a length that is not eight
