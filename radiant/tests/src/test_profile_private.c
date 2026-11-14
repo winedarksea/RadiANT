@@ -1459,6 +1459,96 @@ ZTEST(profile_private, test_accepted_commands_are_rate_limited)
 	zassert_false(profile_private_is_private(&g_pp));
 }
 
+/* A command node with a one-second rate floor, so the replay floor is what a
+ * test meets rather than the rate limit. */
+static void replay_node_up(void)
+{
+	struct profile_private_cfg cfg;
+
+	keys_up();
+	hr_up();
+	compat_up(PROFILE_PRIVATE_COMMAND);
+	private_cfg_fill(&cfg, PROFILE_PRIVATE_COMMAND, PROFILE_PRIVATE_SILENT,
+			 PROFILE_PRIVATE_K_DEFAULT);
+	cfg.cmd_min_s = 1u;
+	zassert_equal(0, profile_private_init(&g_pp, &cfg));
+	zassert_equal(0, profile_private_attach(&g_pp, &g_pc));
+	followers_up();
+}
+
+ZTEST(profile_private, test_a_replay_inside_the_interval_is_refused)
+{
+	uint8_t  go[8];
+	uint8_t  ret[8];
+	uint64_t t;
+
+	/* The tag binds (epoch, interval, op) only, so a recorded GO_PRIVATE
+	 * verifies until its interval ends. The owner goes private and comes
+	 * back; a replayed GO must not mute the sensor again. */
+	replay_node_up();
+	run(8u);
+
+	t = at(g_stream);
+	build_command(RX_A, PROFILE_PRIVATE_OP_GO_PRIVATE, t, go);
+	zassert_equal(1, profile_private_on_command(&g_pp, t, go, sizeof(go)));
+	zassert_true(profile_private_is_private(&g_pp));
+
+	t += 2u * US_PER_S;
+	build_command(RX_A, PROFILE_PRIVATE_OP_RETURN, t, ret);
+	zassert_equal(1, profile_private_on_command(&g_pp, t, ret, sizeof(ret)));
+	zassert_false(profile_private_is_private(&g_pp));
+
+	t += 2u * US_PER_S;
+	zassert_equal(-EALREADY,
+		      profile_private_on_command(&g_pp, t, go, sizeof(go)));
+	zassert_equal(1u, g_pp.refused_replay);
+	zassert_equal(0u, g_pp.refused_rate);
+	zassert_equal(PROFILE_PRIVATE_STATE_COMPAT,
+		      profile_private_state(&g_pp));
+}
+
+ZTEST(profile_private, test_the_same_op_in_the_next_interval_is_accepted)
+{
+	uint8_t  cmd[8];
+	uint64_t t;
+
+	replay_node_up();
+	run(8u);
+
+	t = at(g_stream);
+	build_command(RX_A, PROFILE_PRIVATE_OP_GO_PRIVATE, t, cmd);
+	zassert_equal(1, profile_private_on_command(&g_pp, t, cmd, sizeof(cmd)));
+	t += 2u * US_PER_S;
+	build_command(RX_A, PROFILE_PRIVATE_OP_RETURN, t, cmd);
+	zassert_equal(1, profile_private_on_command(&g_pp, t, cmd, sizeof(cmd)));
+
+	/* A whole interval later the counter differs, so the bytes do. */
+	t += (uint64_t)TEST_T_S * US_PER_S;
+	build_command(RX_A, PROFILE_PRIVATE_OP_GO_PRIVATE, t, cmd);
+	zassert_equal(1, profile_private_on_command(&g_pp, t, cmd, sizeof(cmd)));
+	zassert_true(profile_private_is_private(&g_pp));
+	zassert_equal(0u, g_pp.refused_replay);
+}
+
+ZTEST(profile_private, test_a_retransmission_in_the_target_state_stays_idempotent)
+{
+	uint8_t  cmd[8];
+	uint64_t t;
+
+	/* The idempotent ack comes before the replay floor: a sender that
+	 * missed the ack and resends must still get one. */
+	replay_node_up();
+	run(8u);
+
+	t = at(g_stream);
+	build_command(RX_A, PROFILE_PRIVATE_OP_GO_PRIVATE, t, cmd);
+	zassert_equal(1, profile_private_on_command(&g_pp, t, cmd, sizeof(cmd)));
+	zassert_equal(0, profile_private_on_command(&g_pp, t + US_PER_S, cmd,
+						    sizeof(cmd)));
+	zassert_equal(0u, g_pp.refused_replay);
+	zassert_true(profile_private_is_private(&g_pp));
+}
+
 /* A stand-in for Layer D's window: a client of the same seam that says it is
  * contributing frames. The interlock is between two ACTIVITIES, and this is the
  * smallest honest one. */

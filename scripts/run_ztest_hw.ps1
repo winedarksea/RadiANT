@@ -209,6 +209,13 @@ if ($Dtr) {
     $serialPort.RtsEnable = $true
 }
 $serialPort.Open()
+# The image starts running as soon as the flash script quits, and the go script
+# below resets it again - that first, killed run used to be a second boot line
+# in the capture. Let it start, discard what it printed, then reset; anything
+# left before the one boot line is the tail of the killed run, never a SUITE
+# result.
+Start-Sleep -Milliseconds 1000
+$serialPort.DiscardInBuffer()
 try {
     & $jlink -NoGui 1 -SelectEmuBySN $Serial -CommanderScript $goScript > (Join-Path $tmp 'go.log')
 

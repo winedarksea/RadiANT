@@ -538,9 +538,11 @@ antr_err_t antr_broadcast_message_tx(uint8_t channel, uint8_t size,
  * @param data  Copied before this returns.
  *
  * Returns 0, ANTW_INVALID_MESSAGE (channel out of range, or bad size),
- * ANTW_CHANNEL_NOT_OPENED, ANTW_CHANNEL_IN_WRONG_STATE or
- * ANTW_TRANSFER_IN_PROGRESS (a previous acknowledged message or burst has not
- * finished).
+ * ANTW_CHANNEL_NOT_OPENED, ANTW_CHANNEL_IN_WRONG_STATE (a one-way channel,
+ * or a master keyed for RadiANT security - see docs/radiant-security.md
+ * section 3.2, "Non-broadcast traffic") or ANTW_TRANSFER_IN_PROGRESS (a
+ * previous acknowledged message or burst has not finished). Inbound acked
+ * data on a secured channel is not authenticated (same section).
  */
 antr_err_t antr_acknowledge_message_tx(uint8_t channel, uint8_t size,
 				       const uint8_t *data);
@@ -564,7 +566,10 @@ antr_err_t antr_acknowledge_message_tx(uint8_t channel, uint8_t size,
  * docs/sdk-ant-contract.md.
  *
  * Returns 0, ANTW_INVALID_MESSAGE (channel out of range, or a size that is not
- * 8/16/24), ANTW_CHANNEL_NOT_OPENED, ANTW_TRANSFER_IN_PROGRESS (a different
+ * 8/16/24), ANTW_CHANNEL_NOT_OPENED, ANTW_CHANNEL_IN_WRONG_STATE (a one-way
+ * channel, or a master keyed for RadiANT security; inbound bursts on a
+ * secured channel are not authenticated - docs/radiant-security.md section
+ * 3.2, "Non-broadcast traffic"), ANTW_TRANSFER_IN_PROGRESS (a different
  * transfer owns the channel, or this transfer has not consumed the previous
  * block), ANTW_TRANSFER_SEQUENCE_NUMBER_ERROR (a segment flag that does not
  * follow from the previous block) or ANTW_TRANSFER_IN_ERROR.

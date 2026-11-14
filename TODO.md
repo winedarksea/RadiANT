@@ -55,24 +55,26 @@ Items 1-4 DONE 2026-11-13, each through an independent review and re-review; ver
 
 ## 9. [DONE 2026-11-13: 4d5d156, 583a981; same-root 0xF2 no longer resets a Tier 2 trial devnum, 2026-11-14: b657458] 0xF2 resets the epoch monotonicity gate
 
-## 10. [LOW] A go-private/return command is replayable within its interval
+## 10. [DONE 2026-11-14: de2df63] A go-private/return command is replayable within its interval
 - `cmd_tag()` uses the Tier I interval index as its counter, so a recorded command verifies again until the interval ends: 20 s by default, up to 3600 s. The 60 s rate limit does not cover a long T. Section 11.6 says a replay "into a later interval fails", which is true, but replay within the same interval is not stated.
 - Fix: keep a last-accepted (interval, op) floor in profile_private.c, or state the limit.
+- Done: profile_private keeps the last accepted tag per op and refuses a byte-identical command (`-EALREADY`, `refused_replay`); the idempotent retransmission ack still comes first. Cost, stated in section 11.6: the same op cannot be issued twice in one interval.
 
-## 11. [LOW] Non-broadcast traffic on a secured channel
+## 11. [DONE 2026-11-14: 24cd0e3] Non-broadcast traffic on a secured channel
 - The D15 drop examines only the first packet of an inbound transfer. Continuation packets go to the engine in WAIT_NEXT (ant_radio_radiant.c:2629) and reach the host through `api_xfer_rx_data()`, with no check (`radiant_burst.c` has no security code). They carry no page number, so the secured-range test cannot apply to them anyway.
 - Outbound acknowledged and burst data from a secured master (`antr_acknowledge_message_tx()`, `antr_burst_tx()`) goes on air in plaintext, untransformed.
 - Fix: refuse outbound acked or burst data on a secured channel unless the host opts in, and document that inbound non-broadcast data on a secured channel is unauthenticated.
+- Done: a keyed master refuses both calls with `CHANNEL_IN_WRONG_STATE` and posts nothing; slaves are untouched. No host opt-in (nothing uses one; add it if a user appears). Inbound is documented in section 3.2, "Non-broadcast traffic".
 
-## 12. [LOW] Hardening and documentation
-- Dead-store wipes: `memset()` on secret locals that are never read again can be elided at -Os. node_ident.c:560 (half the pairing scalar in `tag`), :677 (the whole scalar), and the K_dev copies at :138 and :167. Use `radiant_sec_wipe()`.
-- radiant/src/radiant_sec_rng_psa.c:45 returns without zero-filling when `psa_crypto_init()` fails, while the entropy backend and the node_ident comments promise a zero-fill on failure. The one caller checks the return code, so this is a contract mismatch, not a live bug.
+## 12. [DONE 2026-11-14: 3b8e309, dff88e6, 501370a] Hardening and documentation
+- [x] Dead-store wipes: `memset()` on secret locals that are never read again can be elided at -Os. node_ident.c:560 (half the pairing scalar in `tag`), :677 (the whole scalar), and the K_dev copies at :138 and :167. Use `radiant_sec_wipe()`. Done 2026-11-14 (3b8e309), plus the read-back on the load-failure return.
+- [x] radiant/src/radiant_sec_rng_psa.c:45 returns without zero-filling when `psa_crypto_init()` fails, while the entropy backend and the node_ident comments promise a zero-fill on failure. The one caller checks the return code, so this is a contract mismatch, not a live bug. Done 2026-11-14 (3b8e309).
 - [x] Pairing expiry is only checked lazily, on the next call, so an abandoned scalar stays in RAM until a pairing call or a reset. Done 2026-11-13 (33328d8): `radiant_sec_pair_service()` frees expired contexts.
 - Found while fixing items 1-4, open:
   - [x] The main ztest image no longer fit the nRF5340 DK (41,756 B over at 5bc61b7; verbose assert text is ~590 KB of it). Done 2026-11-13 (4bab0ca): assert messages shortened, 970,084 B (92.5 %), 1076/1076 pass on the DK. Tests grew ~40 KB in one afternoon, so expect it to fill again; the agreed fallback is a DK-only `boards/nrf5340dk_nrf5340_cpuapp.conf` with `CONFIG_ZTEST_ASSERT_VERBOSE=0` (498 KB). New tests: keep assert messages to runtime values.
-  - `scripts/run_ztest_hw.ps1` can capture two boots: the image runs between flash and go. A fixed copy, which waits 1 s and throws away that partial output before go, is in the 2026-11-13 session scratchpad and not committed.
+  - [x] `scripts/run_ztest_hw.ps1` can capture two boots: the image runs between flash and go. A fixed copy, which waits 1 s and throws away that partial output before go, is in the 2026-11-13 session scratchpad and not committed. Done 2026-11-14 (dff88e6): one boot line on the DK.
   - [x] `test_matter.c` had a `-Wformat-extra-args` warning. Fixed in 4bab0ca.
-- Section 7.5 says ~2.3 h to one verified forgery at W=2 and 4 Hz. One attempt per 2-packet window is 2^16 x 0.5 s, about 9.1 h. Recheck the figure.
+- [x] Section 7.5 says ~2.3 h to one verified forgery at W=2 and 4 Hz. One attempt per 2-packet window is 2^16 x 0.5 s, about 9.1 h. Recheck the figure. Done 2026-11-14 (501370a): ~9.1 h at 4 Hz, ~4.5 h at 8 Hz.
 
 # Module packaging follow-ups
 

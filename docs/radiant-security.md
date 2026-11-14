@@ -446,6 +446,19 @@ delivered. Without that rule an injector simply sends a secured-range page as
 acknowledged data, skips the MAC machinery entirely, and is delivered as
 implicitly trusted data.
 
+**Non-broadcast traffic is otherwise outside the secured stream.** The rule
+above is the whole of it inbound: acknowledged data and bursts on a secured
+channel are not authenticated. A page outside the secured range passes through
+as ordinary data, and burst continuation packets carry no page number, so they
+are never checked at all. A host must treat both as unauthenticated. Outbound,
+a secured master refuses host acknowledged data and bursts
+(`antr_acknowledge_message_tx()` and `antr_burst_tx()` return
+`CHANNEL_IN_WRONG_STATE` and nothing goes on air), because sending the host's
+plaintext beside the protected stream would look like protected traffic and is
+not. A secured slave is not restricted: a receiver's acknowledged data (page
+requests, FE-C control) is its own traffic, not the secured stream (security
+review 2026-11-13, item 11).
+
 ### 3.3 The pinned block layouts
 
 Two implementations that differ here do not interoperate and the difference is
@@ -1299,9 +1312,12 @@ a W-for-1 denial of service.
 
 **Forgery bound.** At the default W=2 the tag is **16 bits**, which is the same
 size the deferred reliable-command page's inline tag is called brute-forceable
-at. Per window, an attacker's chance of a *verified* forgery is about 2^-16;
-continuous injection at 4 Hz gives an expected time of roughly **2.3 hours** for
-one verified forged data window. At W=4 it is 2^-32, and at W=8 it is 2^-64.
+at. Per window, an attacker's chance of a *verified* forgery is about 2^-16.
+Injection gets one attempt per window, and a W=2 window at 4 Hz lasts 0.5 s, so
+the expected time to one verified forged data window is 2^16 x 0.5 s, roughly
+**9.1 hours** (about 4.5 hours at 8 Hz). An earlier version said 2.3 hours,
+which counted one attempt per packet at 8 Hz. At W=4 the chance is 2^-32, and at
+W=8 it is 2^-64.
 
 This is accepted under the casual-snooping bar, **for sensor data and not for
 commands** — and it is said out loud rather than left to be inferred from "a
@@ -2270,6 +2286,17 @@ data** exactly as an enrolment frame does:
 - **The counter is Tier I's, derived from time on both sides and carried
   nowhere.** A recorded command replayed into a later interval fails the tag.
   There is no counter field a sender could choose.
+- **A replay inside the same interval meets a per-operation floor.** The tag
+  binds only (epoch, interval, operation), so a recorded command verifies again
+  until its interval ends, and with `T` up to 3600 s the rate limit below does
+  not cover that: the owner sends go-private, then return two minutes later, and
+  a replayed go-private would mute the sensor again. The node keeps the tag of
+  the last *accepted* command for each operation and refuses a byte-identical
+  one (counted as `refused_replay`). The cost: the same operation cannot be
+  issued twice in one interval, because two genuine copies are the same bytes
+  as a replay. A retransmission while already in the target state is still
+  acknowledged as idempotent. The floor lives in RAM, so a re-arm without a
+  reboot (same epoch) clears it, as it clears the rate limit.
 - **There is no policy operation and its absence is deliberate.** An
   unrecognised operation is counted and dropped rather than reserved for a
   later meaning, so a well-tagged message shaped like a policy change changes

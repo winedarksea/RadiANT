@@ -842,7 +842,8 @@ static bool api_xfer_broadcast(void *ctx, uint8_t out[RADIANT_TRANSFER_PKT_BYTES
 	 * withheld (pending with no epoch, past the ceiling, spent) - does not
 	 * acknowledge: the plaintext buffer would be the fail-open path. A
 	 * slave never builds sec_pay; its ack carries its own buffer, armed or
-	 * pending alike (TODO security item 11). */
+	 * pending alike: a receiver's traffic is not the secured stream
+	 * (docs/radiant-security.md section 3.2, "Non-broadcast traffic"). */
 	if (radiant_sec_channel_is_secured(ch)) {
 		if (api_ch[ch].sec_pay_valid) {
 			memcpy(out, api_ch[ch].sec_pay,
@@ -3737,6 +3738,20 @@ static radiant_time_t api_xfer_t_sync_for(uint8_t ch)
 	return slot;
 }
 
+#if defined(CONFIG_RADIANT_SEC)
+/*
+ * A keyed master refuses host acknowledged data and bursts: they would carry
+ * the host's plaintext on a channel whose broadcasts are protected, and look
+ * like part of that stream. A slave's acked data is its own traffic. No host
+ * opt-in exists (docs/radiant-security.md section 3.2). Caller holds api_lock.
+ */
+static bool api_sec_master_refuses(uint8_t ch)
+{
+	return radiant_channel_is_master(ch) &&
+	       radiant_sec_channel_is_secured(ch);
+}
+#endif
+
 antr_err_t antr_acknowledge_message_tx(uint8_t channel, uint8_t size,
 				       const uint8_t *data)
 {
@@ -3756,6 +3771,14 @@ antr_err_t antr_acknowledge_message_tx(uint8_t channel, uint8_t size,
 	}
 
 	k_mutex_lock(&api_lock, K_FOREVER);
+#if defined(CONFIG_RADIANT_SEC)
+	/* A secured master sends no host plaintext beside its protected
+	 * stream. Checked under api_lock, which serialises keying. */
+	if (api_sec_master_refuses(channel)) {
+		k_mutex_unlock(&api_lock);
+		return (antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE;
+	}
+#endif
 	unsigned int key = radiant_event_crit_enter();
 	if (api_ch[channel].ack_pending ||
 	    !radiant_transfer_is_idle(&api_xfer[channel])) {
@@ -3828,6 +3851,13 @@ antr_err_t antr_burst_tx(uint8_t channel, uint16_t size, uint8_t *data,
 	}
 
 	k_mutex_lock(&api_lock, K_FOREVER);
+#if defined(CONFIG_RADIANT_SEC)
+	/* As antr_acknowledge_message_tx(): every block, START or not. */
+	if (api_sec_master_refuses(channel)) {
+		k_mutex_unlock(&api_lock);
+		return (antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE;
+	}
+#endif
 	/*
 	 * The segment byte is forwarded untouched. On a non-zero return the engine owns
 	 * nothing and raises no event for this block (B2), and the bridge has already

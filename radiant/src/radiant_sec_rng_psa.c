@@ -43,6 +43,10 @@ int radiant_sec_rng(uint8_t *out, size_t len)
 
 	st = psa_crypto_init();
 	if (st != PSA_SUCCESS) {
+		/* The contract: zeroed on every failure, not only a failed draw. */
+		for (size_t i = 0u; i < len; i++) {
+			out[i] = 0u;
+		}
 		return RADIANT_SEC_ENOTSUP;
 	}
 
