@@ -538,7 +538,8 @@ before the `0xF3` stays silent on its secured pages until it arrives. Later
   The channel stays armed under its epoch, its windows and replay floor stay,
   and an epoch authority that follows it keeps following it. An idempotent
   re-send is neither a gap in the stream nor a reset of the gate above: an
-  older or equal `0xF3` after it is still refused.
+  older or equal `0xF3` after it is still refused. A compat channel's
+  `radiant_sec_compat_set_key()` follows the same rule.
 - **A different root** (or the same root under a different channel device
   number, which changes every derived key) **makes the channel pending** until
   the next `0xF3`, drops anything still queued under the old root, and resets
@@ -2370,9 +2371,14 @@ Four rules:
   receiver that answered installs the same root those receivers hold. Whoever
   wins a window - including a man in the middle - gains a copy of the root, not
   the existing receivers' place; that is the reason the mitigations above
-  still matter. A node whose channel holds no root at all has nothing to
-  deliver and nobody to lock out, so its first enrolment installs the
-  exchange's enrolment root as its first and delivers that. Like any new root
+  still matter. A copy of the root is every epoch's keys, so it also opens
+  traffic recorded under that root BEFORE the window, and the receivers
+  already enrolled see nothing: the enrolment counter on the node is the only
+  trace. Replacing the root at a window would bound that to future traffic,
+  at the price of locking out every receiver already enrolled. A node whose
+  channel holds no root at all has nothing to deliver and nobody to lock out,
+  so its first enrolment installs the exchange's enrolment root as its first
+  and delivers that. Like any new root
   it leaves that node pending (section 3.5: secured-range pages withheld and
   dropped) until an epoch is set.
 

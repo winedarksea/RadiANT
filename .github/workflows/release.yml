@@ -2120,8 +2120,13 @@ jobs:
           #     12  radiant_sec_rx_ingest     pending drop
           #     56  api_post_master_tx        skip slots a withheld
           #                                   master let pass
+          # 6896 / 6877 after the review of those commits (+48 / +0): the
+          # skip runs only after a withhold or a keyed master's missed slot
+          # (one field compare per post otherwise, instead of a clock read),
+          # and the KCV compare became radiant_sec_key_same(), shared with
+          # radiant_sec_compat_set_key().
           # The per-packet path gains at most one branch; the bytes are the
-          # cold set_key path. 7168 is the next multiple of 512 (320 B left).
+          # cold set_key path. 7168 is the next multiple of 512 (272 B left).
           check "security text" "$(( on_text - off_text ))" 7168
           check "security bss"  "$(( on_bss  - off_bss  ))" 7168
 
@@ -2228,8 +2233,13 @@ jobs:
           # adopt_epoch +20, the three recover_* wrappers +8 each) and +76 B
           # for item 8 (the Tier II replay floor and the 32-bit window index
           # in the nonce: compat_rx +52, configure +12, nonce_block +12).
-          # 4604 B measured together, 4 B under the ceiling: the next change
-          # to this file moves the ceiling, with its own measurement.
+          # 4604 B measured together, 4 B under the ceiling.
+          #
+          # 4608 -> 5120 for item 9 on the compat surface: compat set_key
+          # treats the root it already holds as a no-op (a KCV compare through
+          # radiant_sec_key_same()), so a re-send cannot be followed by an
+          # older epoch. +52 B, 4656 B measured. 5120 is the next multiple of
+          # 512, leaving 464 B.
           compat_text="$(sect_of text "${compat_elf}")"
           test -n "${compat_text}"
           check "compat text (linked)" "$(( compat_text - on_text ))" 288
@@ -2244,7 +2254,7 @@ jobs:
           else
             obj_text="$("${size}" -A "${compat_obj}" |
                           awk '$1 ~ /^\.text/ { total += $2 } END { print total+0 }')"
-            check "compat object text" "${obj_text}" 4608
+            check "compat object text" "${obj_text}" 5120
           fi
 
           # The check people forget, in the direction that catches a rename:
