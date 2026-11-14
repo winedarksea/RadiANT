@@ -357,6 +357,8 @@ MPSL (needs a soak beside BLE or Thread, which that clearance excluded):
 
 ## Device Testing Open Items
 
+Code size gates: trim the excess (ie comments, using Haiku with opus review)
+
 Make continuous dual transmission the HR default (CONFIG_HRM_SUPPRESS_ANT_WHEN_CONNECTED=n). 
 
 Apple testing round 2
@@ -364,3 +366,4 @@ Apple testing round 2
 Zwift pcap using an MPSL build dongle
 Zwift pcap using a TI build
 Zwift pcap using erg mode in Zwifts
+Zwift confirm the nRF wildcard matching (faster scan) works

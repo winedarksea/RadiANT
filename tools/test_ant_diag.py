@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for tools/ant_diag.py against the generated wire constants and the
 C header's page table."""
 from __future__ import annotations
