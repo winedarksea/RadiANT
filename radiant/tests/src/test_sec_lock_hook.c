@@ -121,6 +121,9 @@ ZTEST(sec_lock_hook, test_every_entry_point_asks_the_port_for_its_lock)
 		       radiant_sec_get_state(0u, &state));
 	EXPECT_CHECKED(radiant_sec_stat_enrolment,
 		       radiant_sec_stat_enrolment(0u));
+	EXPECT_CHECKED(radiant_sec_stat_verdict_dropped,
+		       radiant_sec_stat_verdict_dropped(0u));
+	EXPECT_CHECKED(radiant_sec_rx_restart, radiant_sec_rx_restart(0u));
 	EXPECT_CHECKED(radiant_sec_channel_release,
 		       radiant_sec_channel_release(0u));
 	EXPECT_CHECKED(radiant_sec_reset, radiant_sec_reset());

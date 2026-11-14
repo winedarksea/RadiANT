@@ -915,6 +915,19 @@ ZTEST(api, test_sec_host_a_lost_verdict_is_counted_and_leaves_a_seq_gap)
 	zassert_equal(st.verdict_events_dropped, missing,
 		      "%u verdicts dropped but %u seq values missing",
 		      st.verdict_events_dropped, missing);
+
+	/* And the host can read the same count at 0xF4 [28..29]. */
+	{
+		uint8_t f4[ANTR_SEC_STATUS_LEN];
+
+		zassert_equal(30u, ANTR_SEC_STATUS_LEN);
+		zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+			      antr_sec_status_get(VD_RX_CH, f4, sizeof(f4)));
+		zassert_equal(1u, f4[1], "0xF4 stays structure version 1");
+		zassert_equal(st.verdict_events_dropped, rd16(&f4[28]),
+			      "verdict_events_dropped is not u16 LE at "
+			      "[28..29]");
+	}
 	vd_done();
 }
 
@@ -1078,6 +1091,38 @@ ZTEST(api, test_sec_host_a_stale_forgery_across_0xf3_leaves_a_seq_gap)
 ZTEST(api, test_sec_host_a_stale_forgery_across_0xf1_leaves_a_seq_gap)
 {
 	vd_stale_across(false);
+}
+
+ZTEST(api, test_sec_host_a_tag_riding_past_clear_windows_still_verifies)
+{
+	/*
+	 * Slots 2..5 carry only clear pages (two of them heard, page 0x50,
+	 * RX_PLAIN), so windows 2 and 4 carry no secured packet and window 0's
+	 * tag rides on to window 6. Its VERIFIED comes after counter 7 - later
+	 * than 2W-1 periods, which a host's deadline settles as unverified
+	 * first (fail-safe) - and nothing but window 0's own packets is
+	 * covered by it.
+	 */
+	static const uint8_t clear[8] = { 0x50u, 0x00u, 1u, 2u, 3u, 4u, 5u,
+					  6u };
+	static const struct vd_want want[] = {
+		{ 0u, 0u }, { 0u, 1u },
+		{ 0u, 6u }, { 0u, 7u }, { V_OK, 0u },
+		{ 0u, 8u }, { 0u, 9u }, { V_OK, 6u },
+	};
+	uint32_t from;
+
+	vd_setup(RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_VERDICT_EVENT, 2u);
+	from = api_msglog_count();
+	(void)vd_hop(0u, false);
+	(void)vd_hop(1u, false);
+	zassert_equal(RADIANT_SEC_RX_PLAIN, vd_ingest(VD_RX_CH, clear, 2u));
+	zassert_equal(RADIANT_SEC_RX_PLAIN, vd_ingest(VD_RX_CH, clear, 4u));
+	for (uint32_t i = 6u; i < 10u; i++) {
+		(void)vd_hop(i, false);
+	}
+	vd_expect(from, want, ARRAY_SIZE(want), 2u);
+	vd_done();
 }
 
 ZTEST(api, test_sec_host_without_the_bit_the_stream_is_unchanged)

@@ -330,6 +330,53 @@ ZTEST(radiant_sec, test_a_window_verifies)
 		      "still waiting for a tag that has not been sent");
 }
 
+/*
+ * How far on the window carrying a tag may lie. The sender's tag rides past
+ * windows that carried only clear pages, so the judging window need not be
+ * the next one; but 256 counters on is where byte [1] repeats, so from there
+ * a forged window aliasing a pending one would bind a host to its verdict
+ * (review of fix/sec-verdict-event, finding 1). A genuine stream with that
+ * gap is refused too - fail-safe. One case: window 0, then the sender's next
+ * secured window `span` counters later.
+ */
+static void span_case(uint8_t w, uint32_t span, bool verifies)
+{
+	uint32_t i;
+
+	sec_before(NULL);
+	key_both();
+	configure_both(RADIANT_SEC_SW_AUTH, w);
+	epoch_both(7u);
+	for (i = 0u; i < w; i++) {
+		hop(i, false, -1);
+	}
+	for (i = span; i < span + w; i++) {
+		hop(i, false, -1);
+	}
+	zassert_equal(1u, log_n_verdict, "W=%u span %u: %u verdicts", w, span,
+		      log_n_verdict);
+	zassert_equal(1u,
+		      verdicts_for(0u, verifies ? RADIANT_SEC_VERDICT_VERIFIED
+						: RADIANT_SEC_VERDICT_UNVERIFIED),
+		      "W=%u span %u: window 0 should be %s", w, span,
+		      verifies ? "VERIFIED" : "UNVERIFIED");
+}
+
+ZTEST(radiant_sec, test_a_tag_may_ride_past_clear_windows_up_to_256)
+{
+	static const uint8_t ws[] = { 2u, 4u, 8u };
+
+	for (uint32_t k = 0u; k < ARRAY_SIZE(ws); k++) {
+		uint8_t w = ws[k];
+
+		span_case(w, w, true);               /* the next window */
+		span_case(w, 256u - w, true);        /* the last before byte [1]
+						      * repeats */
+		span_case(w, 256u, false);           /* the alias itself */
+		span_case(w, 256u + w, false);
+	}
+}
+
 ZTEST(radiant_sec, test_the_transform_owns_byte_one)
 {
 	uint8_t pay[8];
