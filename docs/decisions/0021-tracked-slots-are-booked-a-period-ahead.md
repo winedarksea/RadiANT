@@ -159,8 +159,9 @@
 >   18 and 11 ENDs that found the vector pending, against a control leg on the old
 >   image in the same sitting that asserted at 102 s. The Stage 1 dump (`ipsr=154
 >   ctx=RADIO`, 18-19 us after the END, no timeslot live) is in the same directory.
->   The 2 h soak and the other acceptance runs are in progress; their results are not
->   in this note.
+>   Acceptance on the 1c8967b images: a 2 h Thread soak (45 ENDs found the vector
+>   pending), 1 h gate-only, 1 h Matter and 30 min coex, all without an assert or a
+>   reboot. The coex leg carried no BLE load.
 
 ---
 

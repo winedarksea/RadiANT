@@ -394,8 +394,20 @@ MPSL (needs a soak beside BLE or Thread, which that clearance excluded):
   Nordic: a report draft is in the evidence directory
   (`nordic-report-draft.md`); posting it is the owner's decision. DevZone thread
   128550 reports the same `69, 108` from Nordic's ESB timeslot code.
-  Stage 4 acceptance in progress (2 h Thread soak, Matter, gate, coex, acked
-  data, Zwift image); results to be added.
+  Stage 4 acceptance (2026-11-14, images at 1c8967b): 2 h `thread.conf` soak, 1 h
+  gate-only, 1 h Matter, 30 min coex, all 0 asserts and 0 reboots; the 2 h leg
+  cleared 45 pending RADIO vectors and stayed attached. The image before the fix
+  asserted at 105 s in the same sitting. Table and caveats in the evidence
+  README. The Zwift image (`build\zwift_mpsl\zephyr.hex`) is on the L15.
+  Left from acceptance:
+  - [ ] The coex leg had no BLE load (`coex.conf` never calls `bt_enable`), so
+    the fix beside live BLE traffic is untested. Rebuild with `ble_load.conf`.
+  - [ ] Master-originated acked data on the gate image: 58/60 twice, against
+    60/60 on 2026-11-14 (two missed acks per run). No same-sitting run of the
+    image before the fix, so not attributed.
+  - [ ] 2 h Thread leg: DUT ch0 loss 1.87 % against the Garmin's 1.43 % in the
+    same window (DUT below the Garmin in the other three legs), and the child's
+    age read 210 s of a 240 s timeout at the end of the leg.
   Open items found on the way, not fixed here:
   - [ ] DPPI hand-back order. Beside OpenThread the grant-boundary endpoint swap
     moves only PUBLISH_ADDRESS and SUBSCRIBE_RXEN, so RADIO

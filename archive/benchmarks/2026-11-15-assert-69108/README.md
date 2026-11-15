@@ -188,8 +188,46 @@ implemented.
 
 ## Stage 4 acceptance
 
-In progress, to be added: 2 h Thread soak, Matter, gate, coex, acknowledged data
-and the Zwift image.
+Run 2026-11-14, 14:50 to 19:45, on the 1c8967b images (sha256 and `.config`
+lines in `image-configs.txt`). No assert and no reboot on any of them; the image
+from before the fix asserted at 105 s in the same sitting.
+
+| leg | image | duration | asserts | reboots | DUT ch0 loss | Garmin ch0 loss | ENDs that found RADIO pending |
+|---|---|---|---|---|---|---|---|
+| `ctrl4` | before the fix (`a2_soak`) | assert at 105 s | 1 | 0 | n/a | n/a | n/a |
+| `acc_thread` | `thread.conf` | 7200 s | 0 | 0 | 1.87 % (28294/28833) | 1.43 % (28423/28836) | 45 (44 ext-skip TIMER0, 1 EXTEND_FAILED) |
+| `acc_gate` | gate only | 3600 s | 0 | 0 | 0.54 % | 1.06 % | 0 |
+| `acc_matter` | Matter | 3600 s | 0 | 0 | 0.55 % | 3.26 % | not logged (WRN level) |
+| `acc_coex` | coex | 1800 s | 0 | 0 | 0.18 % | 1.69 % | 0 |
+
+- `acc_thread`: 262 440 timeslots placed, 16 blocked; the DUT stayed child 2
+  (RLOC16 0x0402) of the leader for the whole leg. The child's age read 210 s
+  (timeout 240 s) at the end of the leg, against 3 s at the end of the 30 minute
+  legs, and 21 s twenty minutes later. Not investigated.
+- `acc_thread` DUT loss is 0.37 points above the tool's 1.50 % limit and 0.44
+  points above the Garmin in the same window. The three other legs have the DUT
+  below the Garmin. The room floor is unstable, so this is not a verdict either
+  way.
+- `acc_gate` and `acc_coex` have no second stack on the radio, so their pending
+  count is zero by construction: they show no regression, not the fix at work.
+  **`acc_coex` carried no BLE load.** `coex.conf` links the SoftDevice Controller
+  but never calls `bt_enable` (`CONFIG_ANT_DONGLE_BLE_LOAD` is not set), so the
+  fix beside live BLE traffic is not tested. That needs a build with
+  `ble_load.conf`.
+- The runner's reboot count is not evidence for `acc_gate` and `acc_coex` (the
+  boot banner is printed before the capture opens); the application's start line
+  appears once in each console.
+- `acc_matter`: the image attached to the leader from stored settings and ran
+  the runner's ANT workload over the UART. It was not commissioned and BLE was
+  not advertising.
+- Acknowledged data on the gate image, 60 sends each, two runs per direction:
+  slave-originated 58/60 and 57/60 completed (reference 58-59/60);
+  master-originated 58/60 and 58/60 (reference 60/60 on 2026-11-14). The
+  master-originated shortfall is two missed acks per run; not investigated, and
+  no same-sitting run of the image before the fix exists to compare with.
+- Zwift image (`thread.conf` + UART 57600, no diag; sha256 `5f5ebfe4...64db41`,
+  copied to `build\zwift_mpsl\zephyr.hex`): `ant_probe` PASS, `ant_scan` found
+  the Pro Micro master. Left on the DUT.
 
 ## Nordic
 

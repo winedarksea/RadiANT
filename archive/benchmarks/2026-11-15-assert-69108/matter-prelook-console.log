@@ -1,0 +1,73 @@
+2026-11-14T18:02:15.529 *** Booting nRF Connect SDK v3.4.0-99553055607b ***
+2026-11-14T18:02:15.529 *** Using Zephyr OS v4.4.0-bf801e4e3d19 ***
+2026-11-14T18:02:15.529 [00:28:09.237,885] [0m<inf> ant_dongle: reset cause 0x00000002[0m
+2026-11-14T18:02:15.529 [00:28:09.237,891] [0m<inf> ant_dongle: settling 1000 ms for the bootloader[0m
+2026-11-14T18:02:15.529 [00:28:09.238,275] [0m<inf> bridge_pump: bridge: 4 sinks[0m
+2026-11-14T18:02:15.529 [00:28:10.237,969] [0m<inf> ant_dongle: ANT+ USB Dongle + Thread starting[0m
+2026-11-14T18:02:15.529 [00:28:10.239,621] [1;33m<wrn> radiant_radio_nrf: RADIO PUBLISH_ADDRESS already taken by another stack (register value 0x80000005) - borrowing it for allocation and swapping it per grant[0m
+2026-11-14T18:02:15.538 [00:28:10.239,634] [1;33m<wrn> radiant_radio_nrf: RADIO SUBSCRIBE_RXEN already taken by another stack (register value 0x80000017) - borrowing it for allocation and swapping it per grant[0m
+2026-11-14T18:02:15.538 [00:28:10.240,937] [0m<inf> ant_dongle: antr_init ok[0m
+2026-11-14T18:02:15.538 [00:28:10.240,942] [0m<inf> ant_dongle_thread: starting Matter application task[0m
+2026-11-14T18:02:15.538 [00:28:10.241,132] [0m<inf> ant_dongle: usb_ant_class_init ok[0m
+2026-11-14T18:02:15.538 [00:28:10.241,260] [0m<inf> ant_dongle: ant_serial_bridge_init ok[0m
+2026-11-14T18:02:15.538 [00:28:10.241,264] [0m<inf> ant_dongle: enabling transport[0m
+2026-11-14T18:02:15.538 [00:28:10.241,282] [0m<inf> ant_uart: ANT serial on uart@104000[0m
+2026-11-14T18:02:15.538 [00:28:10.241,287] [0m<inf> ant_dongle: transport up[0m
+2026-11-14T18:02:15.538 [00:28:10.241,364] [0m<inf> ant_bridge: ANT serial bridge thread started[0m
+2026-11-14T18:02:15.538 [00:28:10.249,651] [0m<inf> chip: [DL]BLE address: CB:EC:00:43:D8:70[0m
+2026-11-14T18:02:15.538 [00:28:10.252,647] [0m<inf> chip: [DL]CHIP task running[0m
+2026-11-14T18:02:15.538 [00:28:10.252,741] [0m<inf> app: Init CHIP stack[0m
+2026-11-14T18:02:15.538 [00:28:10.252,992] [0m<inf> chip: [DL]OpenThread started: OK[0m
+2026-11-14T18:02:15.538 [00:28:10.253,035] [0m<inf> chip: [DL]Setting OpenThread device type to MINIMAL END DEVICE[0m
+2026-11-14T18:02:15.749 [00:28:10.253,657] [0m<inf> chip: [SVR]Initializing subscription resumption storage...[0m
+2026-11-14T18:02:15.749 [00:28:10.264,003] [0m<inf> chip: [SVR]Server initializing...[0m
+2026-11-14T18:02:15.749 [00:28:10.264,314] [0m<inf> chip: [TS]Last Known Good Time: 2023-10-14T01:16:48[0m
+2026-11-14T18:02:15.749 [00:28:10.264,842] [0m<inf> chip: [DMG]AccessControl: initializing[0m
+2026-11-14T18:02:15.749 [00:28:10.264,877] [0m<inf> chip: [DMG]Examples::AccessControlDelegate::Init[0m
+2026-11-14T18:02:15.749 [00:28:10.264,919] [0m<inf> chip: [DMG]AccessControl: setting[0m
+2026-11-14T18:02:15.749 [00:28:10.264,956] [0m<inf> chip: [DMG]DefaultAclStorage: initializing[0m
+2026-11-14T18:02:15.749 [00:28:10.264,995] [0m<inf> chip: [DMG]DefaultAclStorage: 0 entries loaded[0m
+2026-11-14T18:02:15.749 [00:28:10.265,033] [0m<inf> chip: [SVR]WARNING: mTestEventTriggerDelegate is null[0m
+2026-11-14T18:02:15.749 [00:28:10.265,077] [0m<dbg> chip: LogV: [IN]UDP::Init bind&listen port=5540[0m
+2026-11-14T18:02:15.749 [00:28:10.265,296] [1;31m<err> chip: [IN]IPV6_PKTINFO failed: 109[0m
+2026-11-14T18:02:15.749 [00:28:10.265,403] [0m<dbg> chip: LogV: [IN]UDP::Init bound to port=5540[0m
+2026-11-14T18:02:15.749 [00:28:10.265,441] [0m<dbg> chip: LogV: [IN]BLEBase::Init - setting/overriding transport[0m
+2026-11-14T18:02:15.749 [00:28:10.265,473] [0m<dbg> chip: LogV: [IN]TransportMgr initialized[0m
+2026-11-14T18:02:15.749 [00:28:10.286,695] [0m<dbg> chip: LogV: [DL]Using Thread extended MAC for hostname.[0m
+2026-11-14T18:02:15.749 [00:28:10.294,682] [0m<inf> chip: [ZCL]Using ZAP configuration...[0m
+2026-11-14T18:02:15.749 [00:28:10.295,922] [0m<dbg> chip: LogV: [DL]Boot reason: 1[0m
+2026-11-14T18:02:15.749 [00:28:10.298,175] [0m<inf> chip: [DMG]AccessControlCluster: initializing[0m
+2026-11-14T18:02:15.749 [00:28:10.298,631] [0m<inf> chip: [DIS]Updating services using commissioning mode 0[0m
+2026-11-14T18:02:15.749 [00:28:10.298,689] [1;31m<err> chip: [DIS]Failed to remove advertised services: 3[0m
+2026-11-14T18:02:15.749 [00:28:10.298,732] [1;31m<err> chip: [DIS]Failed to finalize service update: 3[0m
+2026-11-14T18:02:15.749 [00:28:10.298,774] [0m<inf> chip: [IN]CASE Server enabling CASE session setups[0m
+2026-11-14T18:02:15.749 [00:28:10.299,047] [0m<dbg> chip: LogV: [IN]SecureSession[0x20017868]: Allocated Type:2 LSID:36828[0m
+2026-11-14T18:02:15.749 [00:28:10.299,100] [0m<inf> chip: [SVR]Joining Multicast groups[0m
+2026-11-14T18:02:15.749 [00:28:10.299,269] [0m<inf> chip: [SVR]Server Listening...[0m
+2026-11-14T18:02:15.749 [00:28:10.299,300] [0m<inf> chip: [DL]Device Configuration:[0m
+2026-11-14T18:02:15.749 [00:28:10.300,210] [0m<inf> chip: [DL]  Serial Number: 11223344556677889900[0m
+2026-11-14T18:02:15.749 [00:28:10.300,251] [0m<inf> chip: [DL]  Vendor Id: 65521 (0xFFF1)[0m
+2026-11-14T18:02:15.749 [00:28:10.300,291] [0m<inf> chip: [DL]  Product Id: 32768 (0x8000)[0m
+2026-11-14T18:02:15.749 [00:28:10.300,326] [0m<inf> chip: [DL]  Product Name: not-specified[0m
+2026-11-14T18:02:15.749 [00:28:10.301,232] [0m<inf> chip: [DL]  Hardware Version: 0[0m
+2026-11-14T18:02:15.749 [00:28:10.302,148] [0m<inf> chip: [DL]  Setup Pin Code (0 for UNKNOWN/ERROR): 20202021[0m
+2026-11-14T18:02:15.953 [00:28:10.303,081] [0m<inf> chip: [DL]  Setup Discriminator (0xFFFF for UNKNOWN/ERROR): 3840 (0xF00)[0m
+2026-11-14T18:02:15.953 [00:28:10.303,984] [0m<inf> chip: [DL]  Manufacturing Date: (not set)[0m
+2026-11-14T18:02:15.953 [00:28:10.304,025] [0m<inf> chip: [DL]  Device Type: 65535 (0xFFFF)[0m
+2026-11-14T18:02:15.953 [00:28:10.305,830] [0m<inf> chip: [SVR]SetupQRCode: [MT:Y.K9042C00KA0648G00][0m
+2026-11-14T18:02:15.953 [00:28:10.305,898] [0m<inf> chip: [SVR]Copy/paste the below URL in a browser to see the QR Code:[0m
+2026-11-14T18:02:15.953 [00:28:10.305,950] [0m<inf> chip: [SVR]https://project-chip.github.io/connectedhomeip/qrcode.html?data=MT%3AY.K9042C00KA0648G00[0m
+2026-11-14T18:02:15.953 [00:28:10.306,047] [0m<inf> chip: [SVR]Manual pairing code: [34970112332][0m
+2026-11-14T18:02:15.953 [00:28:10.306,106] [0m<inf> chip: [ZCL]Shuting down on/off server cluster on endpoint 2[0m
+2026-11-14T18:02:15.953 [00:28:10.307,917] [0m<inf> app: Initialize binding Handler[0m
+2026-11-14T18:02:15.953 [00:28:10.307,979] [0m<inf> chip: [SVR]Cannot load binding table: a0[0m
+2026-11-14T18:02:15.953 [00:28:10.307,986] [0m<inf> app: Binding Table size: [0]:[0m
+2026-11-14T18:02:15.953 [00:28:10.308,868] [0m<inf> app: matter: no bridged devices in storage[0m
+2026-11-14T18:02:15.953 [00:28:10.308,886] [0m<inf> app: matter: ANT bridge ready (16 endpoints max, aggregator on endpoint 1)[0m
+2026-11-14T18:02:15.953 [00:28:10.308,973] [0m<inf> app: Matter server started; ANT+ bridge is live[0m
+2026-11-14T18:02:15.953 [00:28:10.404,328] [0m<dbg> chip: LogV: [DL]OpenThread State Changed (Flags: 0x200002a4)[0m
+2026-11-14T18:02:15.953 [00:28:10.404,361] [0m<dbg> chip: LogV: [DL]   Device Role: CHILD[0m
+2026-11-14T18:02:15.953 [00:28:10.404,400] [0m<dbg> chip: LogV: [DL]   Partition Id: 0x22E19E44[0m
+2026-11-14T18:02:20.476 [00:28:14.237,912] [0m<inf> self_channels: self channels: 2, from channel 7 downward[0m
+2026-11-14T18:02:20.476 [00:28:14.237,947] [0m<inf> self_channels: pairing button ready[0m
+END (60 s)

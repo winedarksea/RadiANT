@@ -1,0 +1,156 @@
+{
+  "channels": [
+    {
+      "profile": "power",
+      "channel": 0,
+      "device_number": 2002,
+      "device_type": 11,
+      "exact_basis": {
+        "pairs": 13720,
+        "still": 33
+      },
+      "period_ticks": 8182,
+      "packets": 13948,
+      "elapsed_s": 3599.969000000001,
+      "expected_packets": 14418.475457345396,
+      "loss_pct": 3.263004183328655,
+      "time_to_first_packet_s": 0.09400000000096043,
+      "reacquire_s": null,
+      "jitter": {
+        "n": 13947,
+        "mean_s": 0.2581178031117804,
+        "stdev_s": 0.05042408340651446,
+        "max_s": 1.25,
+        "period_s": 0.24969482421875,
+        "radio_n": 13947,
+        "offgrid_host_s": 0.002737823767530641,
+        "offgrid_radio_s": 0.02862850774190058
+      },
+      "signal": null,
+      "pages": {
+        "0x10": 13721,
+        "0x50": 112,
+        "0x51": 115
+      },
+      "common_page_gaps": {
+        "count": 226,
+        "max": 223
+      },
+      "power": {
+        "n": 13721,
+        "mean": 100.01282705342176,
+        "min": 97.0,
+        "max": 103.0
+      },
+      "cadence": {
+        "n": 13721,
+        "mean": 79.98513227898842,
+        "min": 77.0,
+        "max": 83.0
+      },
+      "speed_mps": null,
+      "heart_rate_bpm": null,
+      "attestation": {
+        "verdict": "clear"
+      },
+      "accumulator_wraps": {
+        "event_count": 56,
+        "acc_power": 22
+      },
+      "telemetry": null,
+      "event_advances": 13687,
+      "event_comparisons": 13720,
+      "exact_loss": null,
+      "violations": {
+        "count": 0,
+        "first": []
+      },
+      "checks": [
+        {
+          "name": "packets",
+          "pass": true,
+          "detail": "13948 received, 14418 expected over 3600.0 s"
+        },
+        {
+          "name": "loss",
+          "pass": false,
+          "detail": "3.26 % (limit 1.50 %, one packet = 0.01 %)"
+        },
+        {
+          "name": "jitter",
+          "pass": true,
+          "detail": "stddev 50.4 ms, max 1250.0 ms (limit 124.8 ms, period 249.7 ms)"
+        },
+        {
+          "name": "accumulator continuity",
+          "pass": true,
+          "detail": "0 violation(s)"
+        },
+        {
+          "name": "sensor liveness",
+          "pass": true,
+          "detail": "the event counter advanced on 13687 of 13720 packet pairs"
+        },
+        {
+          "name": "common pages",
+          "pass": false,
+          "detail": "80 x112, 81 x115, worst gap 223 (limit 121)"
+        }
+      ],
+      "pass": false
+    }
+  ],
+  "events": {
+    "EVENT_RX_FAIL": 471
+  },
+  "identities": {
+    "0": {
+      "device_number": 2002,
+      "device_type": 11
+    }
+  },
+  "receiver_reboots": [],
+  "accounting": {
+    "missing": 470,
+    "radio_fails": 471,
+    "collisions": 0,
+    "unaccounted": 0,
+    "allowed_unaccounted": 118,
+    "verdict": "all of it reported by the radio as RX_FAIL, so it happened on the air",
+    "pass": true
+  },
+  "derived": {
+    "loss_pct": 3.263004183328655,
+    "loss_exact_pct": null,
+    "unexplained_loss": 0,
+    "accumulator_violations": 0,
+    "timing_offgrid_host_ms": 2.737823767530641,
+    "timing_offgrid_radio_ms": 28.62850774190058,
+    "rssi_dbm_mean": null,
+    "time_to_first_packet_s": 0.09400000000096043,
+    "reacquire_s": null,
+    "per_channel": {
+      "0": {
+        "channel": 0,
+        "profile": "power",
+        "device_number": 2002,
+        "device_type": 11,
+        "exact_pairs": 13720,
+        "exact_still": 33,
+        "packets": 13948,
+        "loss_pct": 3.263004183328655,
+        "loss_exact_pct": null,
+        "exact_missed": null,
+        "exact_sent": null,
+        "exact_scope": null,
+        "accumulator_violations": 0,
+        "timing_offgrid_host_ms": 2.737823767530641,
+        "timing_offgrid_radio_ms": 28.62850774190058,
+        "rssi_dbm_mean": null,
+        "time_to_first_packet_s": 0.09400000000096043,
+        "reacquire_s": null
+      }
+    }
+  },
+  "pass": false
+}

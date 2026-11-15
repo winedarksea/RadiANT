@@ -1,0 +1,85 @@
+{
+  "recorded": "2026-11-15T00:00:18.801099+00:00",
+  "master": "006",
+  "slave": "COM4",
+  "slave_trans_type": 5,
+  "zwift_load": false,
+  "tx_power_level": 3,
+  "receive_measurement": "master EVENT_TX matched once to channel RX within 100 ms; staged payload gaps separate",
+  "seconds": 90.0,
+  "sent": 60,
+  "accepted": 60,
+  "completed": 57,
+  "failed": 3,
+  "terminal_events": 60,
+  "peer_received": 57,
+  "duplicate_commands": 0,
+  "unexpected_commands": 0,
+  "protocol_errors": 0,
+  "errors": [],
+  "receive": {
+    "0": {
+      "expected": 357,
+      "received": 350,
+      "missing": 7,
+      "loss_pct": 1.9607843137254901,
+      "unmatched_tx_events": [
+        {
+          "time_s": 17.0,
+          "staged_payload": "101948000000ff24"
+        },
+        {
+          "time_s": 31.75,
+          "staged_payload": "101983000000ff24"
+        },
+        {
+          "time_s": 33.75,
+          "staged_payload": "10198b000000ff24"
+        },
+        {
+          "time_s": 42.25,
+          "staged_payload": "1019ad000000ff24"
+        },
+        {
+          "time_s": 53.0,
+          "staged_payload": "1019d8000000ff24"
+        },
+        {
+          "time_s": 61.25,
+          "staged_payload": "1019f9000000ff24"
+        },
+        {
+          "time_s": 64.5,
+          "staged_payload": "101906010000ff24"
+        }
+      ],
+      "staged_payload_missing": 7,
+      "staged_payload_loss_pct": 1.9607843137254901,
+      "broadcasts_received": 354,
+      "rssi_dbm": {
+        "mean": -48.885333333333335,
+        "min": -50,
+        "max": -45
+      }
+    }
+  },
+  "events": {
+    "ch0.EVENT_RX_FAIL": 8,
+    "ch0.EVENT_TRANSFER_TX_COMPLETED": 57,
+    "ch0.EVENT_TRANSFER_TX_FAILED": 3
+  },
+  "pending": 0,
+  "sufficiency_failures": [
+    "acceptance requires at least 300 seconds and 300 commands"
+  ],
+  "quality_failures": [
+    "acknowledged transfer success below 99%",
+    "channel 0 receive loss exceeds 1.5% or no stimulus"
+  ],
+  "gate_failures": [
+    "acceptance requires at least 300 seconds and 300 commands",
+    "acknowledged transfer success below 99%",
+    "channel 0 receive loss exceeds 1.5% or no stimulus"
+  ],
+  "pass": false
+}

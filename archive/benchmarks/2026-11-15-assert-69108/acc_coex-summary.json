@@ -1,0 +1,69 @@
+{
+  "hex": "C:\\wt_69108\\build\\v_coex\\dongle_thread\\zephyr\\zephyr.hex",
+  "image_label": "final_1c8967b_coex",
+  "image_sha256": "22b585cead2ef3f3ae67c5c336f718677ea774fba2008475e9f06b76b5207f9f",
+  "seconds": 1800,
+  "base": "C:\\wt_69108\\archive\\benchmarks\\2026-11-15-assert-69108\\acc_coex",
+  "start": "2026-11-14T19:05:33",
+  "flags": {
+    "no_peer": true,
+    "no_ref": false,
+    "no_search": false,
+    "no_master": false,
+    "no_flash": false,
+    "stop_on_reboot": false,
+    "continue_after_assert": true
+  },
+  "jlink": {
+    "device": "nRF54L15_M33",
+    "serial": "1057737173"
+  },
+  "tools": "C:\\wt_69108\\tools",
+  "flash_script": "C:\\wt_69108\\scripts\\flash_sim_jlink.ps1",
+  "flash_rc": 0,
+  "dut_starts": [
+    "2026-11-14T19:05:54.190"
+  ],
+  "dut_segments": 0,
+  "cap": "{'deaths': []}",
+  "console_lines": 11608,
+  "first_console_line": "2026-11-14T19:05:37.230",
+  "first_line_is_banner": false,
+  "flash_done": "2026-11-14T19:05:36.159",
+  "dut_open": "2026-11-14T19:05:54.190",
+  "reboots": 0,
+  "reboot_times": [],
+  "reboot_since_boot_s": [],
+  "assert_count": 0,
+  "assert_times": [],
+  "asserts": [],
+  "last_stats": {
+    "placed": 21627,
+    "granted": 21627,
+    "blocked": 0,
+    "ext": "736881/0",
+    "skip": 0
+  },
+  "end_since_boot_s": 1826.5,
+  "end_since_flash_s": 1827.571,
+  "dut_rc": 1,
+  "ref_rc": 1,
+  "ended_by": "duration",
+  "elapsed": 1809.5403456687927,
+  "end": "2026-11-14T19:36:03",
+  "row": {
+    "leg": "acc_coex",
+    "image": "final_1c8967b_coex",
+    "sha12": "22b585cead2e",
+    "start": "2026-11-14T19:05:33",
+    "result": "clean at 1826.5 s",
+    "since_open_s": "",
+    "placed": "21627",
+    "granted": "21627",
+    "blocked": "0",
+    "ext": "736881/0",
+    "skip": "0",
+    "reboots": "0",
+    "asserts": "0"
+  }
+}
