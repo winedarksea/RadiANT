@@ -330,8 +330,9 @@ struct profile_private {
 	 * [1] RETURN). A command's tag binds only (epoch, interval, op), so a
 	 * recorded one verifies again until its interval ends; a replay is
 	 * byte-identical and matches here, a genuine command in a later
-	 * interval does not. RAM only: a re-arm clears it, as it clears
-	 * last_cmd_us. */
+	 * interval does not. An announced command whose commit fails is
+	 * dropped from here (never took effect) but keeps last_cmd_us. RAM
+	 * only: a re-arm clears it, as it clears last_cmd_us. */
 	uint8_t  last_tag[2][RADIANT_SEC_COMPAT_CMD_TAG_BYTES];
 	bool     have_last_tag[2];
 
@@ -359,7 +360,7 @@ struct profile_private {
 	uint32_t refused_malformed;   /* including every unknown operation */
 	uint32_t refused_rate;
 	uint32_t refused_replay;      /* the last accepted tag for this op */
-	uint32_t refused_busy;       /* the interlock */
+	uint32_t refused_busy;        /* the interlock */
 	uint32_t reverts_timeout;
 	/* A transition the node itself could not perform (channel wouldn't
 	 * open/close). Counted apart from the refusals above, which are
