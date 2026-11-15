@@ -457,7 +457,13 @@ a secured master refuses host acknowledged data and bursts
 plaintext beside the protected stream would look like protected traffic and is
 not. A secured slave is not restricted: a receiver's acknowledged data (page
 requests, FE-C control) is its own traffic, not the secured stream (security
-review 2026-11-13, item 11).
+review 2026-11-13, item 11). The same holds in the other order: 0xF2
+(`antr_sec_key_set()`) returns `CHANNEL_IN_WRONG_STATE` on a master with host
+acknowledged data or a burst still in flight, which was accepted in the clear
+and would otherwise go out in the clear after the key landed; the host retries
+once the transfer completes. A key installed by pairing (section 7.4) is
+outside that check, since pairing runs its own acknowledged exchange on the
+channel (review 2026-11-14, item 4).
 
 ### 3.3 The pinned block layouts
 
