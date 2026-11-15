@@ -214,9 +214,15 @@ from before the fix asserted at 105 s in the same sitting.
   but never calls `bt_enable` (`CONFIG_ANT_DONGLE_BLE_LOAD` is not set), so the
   fix beside live BLE traffic is not tested. That needs a build with
   `ble_load.conf`.
-- The runner's reboot count is not evidence for `acc_gate` and `acc_coex` (the
-  boot banner is printed before the capture opens); the application's start line
-  appears once in each console.
+- No leg rebooted or lost its console. In `acc_gate` and `acc_coex` the boot
+  banner is printed before the capture opens, and neither console has any
+  `*** Booting` line, so no reboot happened during either leg (the
+  application's start line also appears once in each). No `*-console.log` in
+  this directory has a `[cap] PORT DIED` line. The runner as these legs ran it
+  counted only banners after the first, which would have missed a reboot in a
+  late-opened capture, and its port retry leaked the dead handle; both were
+  fixed in `soak_run.py` after these legs ran, and `--selftest` of the fixed
+  runner gives the same reboot count as before for every console here.
 - `acc_matter`: the image attached to the leader from stored settings and ran
   the runner's ANT workload over the UART. It was not commissioned and BLE was
   not advertising.
