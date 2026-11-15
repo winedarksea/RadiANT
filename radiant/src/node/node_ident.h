@@ -219,10 +219,10 @@ int node_ident_arm_compat(uint8_t ch, uint64_t now_us, uint16_t period_counts);
  * (review 2026-11-14 item 2). Keyed with no epoch yet does not count.
  * Channels that differ in root or number arm freely; the same channel
  * re-armed is the re-arm rule above. Releasing the other channel lets the arm
- * through: for radiant_sec that is unassign (antr_channel_unassign() ->
- * radiant_sec_channel_release()), not a close - a closed but assigned channel
- * keeps blocking; a compat context is released only by
- * radiant_sec_compat_channel_release(). A host replacing its root does too.
+ * through: that is unassign (antr_channel_unassign() releases both the
+ * radiant_sec and the compat context) or a SYSTEM_RESET, not a close - a
+ * closed but assigned channel keeps blocking. A host replacing its root does
+ * too.
  * Two device types on one root and one device number cannot both be live:
  * that would need the device type in the KDF or the nonce.
  *

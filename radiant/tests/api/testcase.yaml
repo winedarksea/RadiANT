@@ -80,6 +80,9 @@ tests:
       - CONFIG_RADIANT_SEC_HOST_MESSAGES=y
       - CONFIG_RADIANT_SEC_LOCK_CHECK=y
       - CONFIG_RADIANT_SEC_PAIRING_X25519=y
+      # Compat contexts must go with unassign and SYSTEM_RESET too
+      # (src/test_api_sec_compat.c, review 2026-11-15).
+      - CONFIG_RADIANT_SEC_COMPAT=y
       # Assertions OFF here, so the lock check COUNTS instead of halting and the
       # instrument test can prove it sees an unlocked call. radiant.api.sec
       # (assertions on, the default) is the one where a violation halts.
