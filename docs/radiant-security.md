@@ -457,7 +457,13 @@ a secured master refuses host acknowledged data and bursts
 plaintext beside the protected stream would look like protected traffic and is
 not. A secured slave is not restricted: a receiver's acknowledged data (page
 requests, FE-C control) is its own traffic, not the secured stream (security
-review 2026-11-13, item 11).
+review 2026-11-13, item 11). The same holds in the other order: 0xF2
+(`antr_sec_key_set()`) returns `CHANNEL_IN_WRONG_STATE` on a master with host
+acknowledged data or a burst still in flight, which was accepted in the clear
+and would otherwise go out in the clear after the key landed; the host retries
+once the transfer completes. A key installed by pairing (section 7.4) is
+outside that check, since pairing runs its own acknowledged exchange on the
+channel (review 2026-11-14, item 4).
 
 ### 3.3 The pinned block layouts
 
@@ -2070,6 +2076,20 @@ sensor, and unpinning is a deliberate user action.
 
 ### 11.5 Layer C — the private-mode switch
 
+**Implementation status (2026-11-14): library only, no shipped caller.** Layer C
+(the state machine below, the command path of §11.6 and its replay floor) is
+implemented in `radiant/src/profiles/profile_private.c` and covered by
+`radiant/tests/src/test_profile_private.c`, but no shipped image runs it.
+Nothing outside the tests calls `profile_private_attach()` or
+`profile_private_on_command()`. `apps/hrm_ble` links `profile_compat.c` but
+never attaches a compat client (`profile_hr_set_compat()` is never called), and
+no transmitting app lists `profile_private.c` in its sources. The bridge and
+Matter builds of `apps/dongle_thread` turn on `CONFIG_RADIANT_PROFILES`, so
+there the file is compiled into the radiant library but nothing references it,
+and the linker's section garbage collection drops it. What this section and
+§11.6 describe is the library's behaviour, not something a deployed node does
+today.
+
 Not an extra channel. **The node stops being an ANT+ sensor and becomes a
 RadiANT one.**
 
@@ -2286,7 +2306,8 @@ data** exactly as an enrolment frame does:
 - **The counter is Tier I's, derived from time on both sides and carried
   nowhere.** A recorded command replayed into a later interval fails the tag.
   There is no counter field a sender could choose.
-- **A replay inside the same interval meets a per-operation floor.** The tag
+- **A replay inside the same interval meets a per-operation floor** (in the
+  library; no shipped image calls it yet, see the status note in §11.5). The tag
   binds only (epoch, interval, operation), so a recorded command verifies again
   until its interval ends, and with `T` up to 3600 s the rate limit below does
   not cover that: the owner sends go-private, then return two minutes later, and
@@ -2295,8 +2316,11 @@ data** exactly as an enrolment frame does:
   one (counted as `refused_replay`). The cost: the same operation cannot be
   issued twice in one interval, because two genuine copies are the same bytes
   as a replay. A retransmission while already in the target state is still
-  acknowledged as idempotent. The floor lives in RAM, so a re-arm without a
-  reboot (same epoch) clears it, as it clears the rate limit.
+  acknowledged as idempotent. A transition that fails at commit (the countdown
+  ran out but the channel would not open or close) does not arm the floor, so
+  the owner can resend in the same interval; the rate limit still counts it.
+  The floor lives in RAM, so a re-arm without a reboot (same epoch) clears it,
+  as it clears the rate limit.
 - **There is no policy operation and its absence is deliberate.** An
   unrecognised operation is counted and dropped rather than reserved for a
   later meaning, so a well-tagged message shaped like a policy change changes

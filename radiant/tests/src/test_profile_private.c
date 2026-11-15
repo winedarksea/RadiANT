@@ -1507,6 +1507,78 @@ ZTEST(profile_private, test_a_replay_inside_the_interval_is_refused)
 		      profile_private_state(&g_pp));
 }
 
+ZTEST(profile_private, test_a_failed_announced_switch_does_not_arm_the_replay_floor)
+{
+	struct profile_private_cfg cfg;
+	uint8_t                    go[8];
+	uint64_t                   t0;
+	uint64_t                   t;
+
+	/* An announced command is accepted at once and committed only when its
+	 * countdown runs out. If the commit then fails, the command never took
+	 * effect, so its tag is not an accepted one: the owner's resend in the
+	 * same interval must reach the state machine, not -EALREADY. The rate
+	 * limit still stands, because the listeners paid for the countdown.
+	 *
+	 * K = 16 (~4 s at 4 Hz) and an 8 s rate floor keep the whole test inside
+	 * interval 0 (anchor T_ORIGIN, T = 20 s): accepted at ~2 s, failed at
+	 * ~6 s, resent at ~10 s. */
+	keys_up();
+	hr_up();
+	compat_up(PROFILE_PRIVATE_COMMAND);
+	private_cfg_fill(&cfg, PROFILE_PRIVATE_COMMAND,
+			 PROFILE_PRIVATE_BROADCAST, PROFILE_PRIVATE_K_MIN);
+	cfg.cmd_min_s = 8u;
+	zassert_equal(0, profile_private_init(&g_pp, &cfg));
+	zassert_equal(0, profile_private_attach(&g_pp, &g_pc));
+	followers_up();
+	run(8u);
+
+	g_enter_rc = -EIO;
+	t0 = at(g_stream);
+	build_command(RX_A, PROFILE_PRIVATE_OP_GO_PRIVATE, t0, go);
+	zassert_equal(1, profile_private_on_command(&g_pp, t0, go, sizeof(go)));
+	zassert_equal(PROFILE_PRIVATE_STATE_ANNOUNCING,
+		      profile_private_state(&g_pp));
+
+	/* The countdown runs out and the private channel will not open. */
+	run(24u);
+	zassert_equal(1u, g_pp.transitions_failed);
+	zassert_equal(0u, g_enter_calls);
+	zassert_equal(PROFILE_PRIVATE_STATE_COMPAT,
+		      profile_private_state(&g_pp));
+	zassert_true(at(g_stream) - t0 < (uint64_t)cfg.cmd_min_s * US_PER_S,
+		     "the countdown outlasted the rate floor");
+
+	/* Inside the rate floor the resend meets the rate limit, not the replay
+	 * floor: the failed command's tag is gone, its timestamp is not. */
+	g_enter_rc = 0;
+	t = at(g_stream);
+	zassert_equal(-EAGAIN,
+		      profile_private_on_command(&g_pp, t, go, sizeof(go)));
+	zassert_equal(1u, g_pp.refused_rate);
+	zassert_equal(0u, g_pp.refused_replay);
+
+	/* Past the rate floor, same interval, same bytes: accepted, and this
+	 * time the switch happens. The stream itself is moved on rather than
+	 * the command's clock, so the node never sees time run backwards. */
+	run(9u);
+	t = at(g_stream);
+	zassert_true(t - t0 >= (uint64_t)cfg.cmd_min_s * US_PER_S,
+		     "still inside the rate floor");
+	zassert_true(t - T_ORIGIN < (uint64_t)TEST_T_S * US_PER_S,
+		     "the resend left interval 0");
+	zassert_equal(1, profile_private_on_command(&g_pp, t, go, sizeof(go)));
+	zassert_equal(0u, g_pp.refused_replay);
+	zassert_equal(PROFILE_PRIVATE_STATE_ANNOUNCING,
+		      profile_private_state(&g_pp));
+
+	run(24u);
+	zassert_true(profile_private_is_private(&g_pp));
+	zassert_equal(1u, g_enter_calls);
+	zassert_equal(1u, g_pp.transitions_failed);
+}
+
 ZTEST(profile_private, test_the_same_op_in_the_next_interval_is_accepted)
 {
 	uint8_t  cmd[8];

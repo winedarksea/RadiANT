@@ -211,11 +211,25 @@ if ($Dtr) {
 $serialPort.Open()
 # The image starts running as soon as the flash script quits, and the go script
 # below resets it again - that first, killed run used to be a second boot line
-# in the capture. Let it start, discard what it printed, then reset; anything
-# left before the one boot line is the tail of the killed run, never a SUITE
-# result.
+# in the capture. Let it start, discard what it printed, then reset. The
+# discard is not what makes the verdict safe, though: if the killed run got
+# as far as its own PROJECT EXECUTION line before the discard, or kept
+# printing after it, that line would still be in the capture. Get-LastRun
+# below is what keeps it out of the verdict.
 Start-Sleep -Milliseconds 1000
 $serialPort.DiscardInBuffer()
+
+# Everything from the LAST boot banner on, or '' with no banner at all. Only
+# the run the go script started counts; whatever precedes its banner is the
+# tail of the run it killed, and a SUCCESSFUL line there would otherwise end
+# the wait loop and pass a run that never finished. No ztest conf in this
+# repo sets CONFIG_BOOT_BANNER=n, so a capture with no banner is a fault.
+function Get-LastRun([string]$s) {
+    $i = $s.LastIndexOf('*** Booting')
+    if ($i -lt 0) { return '' }
+    return $s.Substring($i)
+}
+
 try {
     & $jlink -NoGui 1 -SelectEmuBySN $Serial -CommanderScript $goScript > (Join-Path $tmp 'go.log')
 
@@ -223,7 +237,7 @@ try {
     $deadline = (Get-Date).AddSeconds($Seconds)
     while ((Get-Date) -lt $deadline) {
         [void]$sb.Append($serialPort.ReadExisting())
-        if ($sb.ToString() -match 'PROJECT EXECUTION (SUCCESSFUL|FAILED)') { break }
+        if ((Get-LastRun $sb.ToString()) -match 'PROJECT EXECUTION (SUCCESSFUL|FAILED)') { break }
         Start-Sleep -Milliseconds 200
     }
     $text = $sb.ToString()
@@ -231,6 +245,8 @@ try {
     $serialPort.Close()
 }
 
+# The full capture goes to the log, killed-run tail included; only the
+# verdict and the summary below are restricted to the last run.
 $log = Join-Path $out 'ztest-console.txt'
 [IO.File]::WriteAllText($log, $text)
 
@@ -240,13 +256,20 @@ if ($text.Length -eq 0) {
           "script's help."
 }
 
-$text -split "`r?`n" | Where-Object { $_ -match 'SUITE (PASS|FAIL)' } |
+$run = Get-LastRun $text
+if ($run.Length -eq 0) {
+    throw "no boot banner arrived on $Port ($($text.Length) bytes captured, " +
+          "none of them '*** Booting'); the reset run never started or its " +
+          "start was lost. Full capture: $log"
+}
+
+$run -split "`r?`n" | Where-Object { $_ -match 'SUITE (PASS|FAIL)' } |
     ForEach-Object { Write-Host $_.Trim() }
 
 # Every failure with the three lines before it, which is where ztest puts the
 # assertion text and the message. Without this the summary says which test
 # failed and nothing about why.
-$lines = $text -split "`r?`n"
+$lines = $run -split "`r?`n"
 for ($i = 0; $i -lt $lines.Count; $i++) {
     if ($lines[$i] -match '^\s*FAIL - test_') {
         Write-Host ''
@@ -258,7 +281,7 @@ for ($i = 0; $i -lt $lines.Count; $i++) {
 
 Write-Host "`nfull console log: $log"
 
-if ($text -match 'PROJECT EXECUTION SUCCESSFUL') {
+if ($run -match 'PROJECT EXECUTION SUCCESSFUL') {
     Write-Host "PROJECT EXECUTION SUCCESSFUL" -ForegroundColor Green
     exit 0
 }

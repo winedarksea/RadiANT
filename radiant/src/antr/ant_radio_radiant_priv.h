@@ -35,4 +35,10 @@ bool antr_api_lock_held(void);
 extern uint32_t antr_api_lock_violations;
 #endif
 
+#if defined(CONFIG_RADIANT_SEC_HOST_MESSAGES)
+/* True when `ch` is a master with host acked data or a burst block in
+ * flight; 0xF2 refuses to key such a channel. Caller holds api_lock. */
+bool antr_master_xfer_busy(uint8_t ch);
+#endif
+
 #endif /* ANT_RADIO_RADIANT_PRIV_H_ */

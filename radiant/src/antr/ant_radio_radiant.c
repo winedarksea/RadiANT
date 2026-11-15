@@ -3752,6 +3752,31 @@ static bool api_sec_master_refuses(uint8_t ch)
 }
 #endif
 
+#if defined(CONFIG_RADIANT_SEC_HOST_MESSAGES)
+/*
+ * The other half of api_sec_master_refuses(): a master with host acked data
+ * or a burst block already accepted must not be keyed by 0xF2, or that
+ * transfer goes out in plaintext on a channel the host now believes is
+ * protected. Reads the state antr_acknowledge_message_tx() refuses on, in the
+ * same crit section (the radio interrupt moves both). Caller holds api_lock,
+ * which serialises it against the acked and burst entry points.
+ */
+bool antr_master_xfer_busy(uint8_t ch)
+{
+	unsigned int key;
+	bool         busy;
+
+	if (!api_ch_valid(ch) || !radiant_channel_is_master(ch)) {
+		return false;
+	}
+	key = radiant_event_crit_enter();
+	busy = api_ch[ch].ack_pending ||
+	       !radiant_transfer_is_idle(&api_xfer[ch]);
+	radiant_event_crit_exit(key);
+	return busy;
+}
+#endif
+
 antr_err_t antr_acknowledge_message_tx(uint8_t channel, uint8_t size,
 				       const uint8_t *data)
 {

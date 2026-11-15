@@ -58,7 +58,7 @@ Items 1-4 DONE 2026-11-13, each through an independent review and re-review; ver
 ## 10. [DONE 2026-11-14: de2df63] A go-private/return command is replayable within its interval
 - `cmd_tag()` uses the Tier I interval index as its counter, so a recorded command verifies again until the interval ends: 20 s by default, up to 3600 s. The 60 s rate limit does not cover a long T. Section 11.6 says a replay "into a later interval fails", which is true, but replay within the same interval is not stated.
 - Fix: keep a last-accepted (interval, op) floor in profile_private.c, or state the limit.
-- Done: profile_private keeps the last accepted tag per op and refuses a byte-identical command (`-EALREADY`, `refused_replay`); the idempotent retransmission ack still comes first. Cost, stated in section 11.6: the same op cannot be issued twice in one interval.
+- Done: profile_private keeps the last accepted tag per op and refuses a byte-identical command (`-EALREADY`, `refused_replay`); the idempotent retransmission ack still comes first. Cost, stated in section 11.6: the same op cannot be issued twice in one interval. Library only; no shipped caller (section 11.5 status).
 
 ## 11. [DONE 2026-11-14: 24cd0e3] Non-broadcast traffic on a secured channel
 - The D15 drop examines only the first packet of an inbound transfer. Continuation packets go to the engine in WAIT_NEXT (ant_radio_radiant.c:2629) and reach the host through `api_xfer_rx_data()`, with no check (`radiant_burst.c` has no security code). They carry no page number, so the secured-range test cannot apply to them anyway.

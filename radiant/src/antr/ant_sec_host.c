@@ -145,6 +145,18 @@ static antr_err_t sec_key_set_locked(uint8_t channel, uint8_t bits,
 	if (id.device_number == 0u) {
 		return (antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE;
 	}
+	/*
+	 * A master with host acked data or a burst in flight is not keyed:
+	 * that transfer was accepted in the clear and would go out in the
+	 * clear on a channel the host now believes is protected. Retry once
+	 * the transfer completes. Slaves are unaffected, as for the acked and
+	 * burst refusals (section 3.2). Pairing installs its key through
+	 * radiant_sec_set_key() directly and is outside this check: it runs
+	 * its own acked exchange on the channel.
+	 */
+	if (antr_master_xfer_busy(channel)) {
+		return (antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE;
+	}
 
 	/* The on-air number starts equal to the provisioning one: set_key puts
 	 * it there whenever it installs a root. Not set here as well, since a
