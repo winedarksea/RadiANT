@@ -881,7 +881,7 @@ int node_ident_pair_derive(const uint8_t k_dev[NODE_IDENT_K_DEV_BYTES],
 	radiant_sec_wipe(tag, sizeof(tag));
 	radiant_sec_wipe(block, sizeof(block));
 	if (rc != RADIANT_SEC_OK) {
-		memset(out, 0, NODE_IDENT_PAIR_SCALAR_BYTES);
+		radiant_sec_wipe(out, NODE_IDENT_PAIR_SCALAR_BYTES);
 		return NODE_IDENT_ENOTSUP;
 	}
 	return NODE_IDENT_OK;
