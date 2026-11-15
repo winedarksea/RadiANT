@@ -423,12 +423,26 @@ int profile_enrol_on_ack_data(struct profile_enrol *pe, const uint8_t *payload,
 	rc = radiant_sec_pair_peer_uncommitted(pe->cfg.ch, pe->rx, wrapped,
 					       &fp);
 	if (rc != RADIANT_SEC_OK) {
-		/* Mandatory refusal (e.g. a small-order point): the result
-		 * seals the root. One injected packet must not burn a
-		 * window the user opened, so only the accumulator resets. */
 		pe->rx_have = 0u;
 		memset(pe->rx, 0, sizeof(pe->rx));
 		pe->rx_rejected++;
+		if (!radiant_sec_pair_is_open(pe->cfg.ch)) {
+			/* A step after the exchange failed (the wrap, the
+			 * fingerprint, a first root's install): the scalar is
+			 * spent and radiant_sec has freed the pairing context,
+			 * so nobody can be answered in this window any more.
+			 * It ends with the context rather than sit open until
+			 * it times out (review 2026-11-14, item 4). The peer's
+			 * bytes cannot make those steps fail - any key that
+			 * passed the exchange is as good as any other to them -
+			 * so no injected packet chooses this path. */
+			window_close(pe);
+			return -EIO;
+		}
+		/* Mandatory refusal before the exchange (e.g. a small-order
+		 * point): the result seals the root. Refused with the scalar
+		 * intact, and one injected packet must not burn a window the
+		 * user opened, so only the accumulator resets. */
 		return -EACCES;
 	}
 
