@@ -5,7 +5,7 @@
  * Provenance: clean-room. Written from this project's own source and bench
  * measurements; see docs/decisions/0023-radiant-diag-message.md.
  *
- * WHAT THIS IS. Nine fixed pages of eight u32 counters each, read by a host
+ * WHAT THIS IS. Eleven fixed pages of eight u32 counters each, read by a host
  * with MESG_REQUEST [page, 0xF7]. Pages 0, 5 and 6 are counters the core
  * already keeps (radiant_api_stats, radiant_search_stats). Pages 1 and 2 are
  * counted here, behind CONFIG_RADIANT_DIAG_COUNTERS. Pages 3 and 4 come from
@@ -14,6 +14,8 @@
  * its first three fields come from that same backend table, the other five
  * are counted here. Page 8 (timing) is mixed the same way: receive-drain
  * timings from the backend table, scheduler pass timings counted here.
+ * Pages 9 (pass breakdown) and 10 (receive integrity) are mixed the same way;
+ * their cycle-timed fields use the A0 cycle clock below.
  *
  * ZERO COST WHEN OFF. Without CONFIG_RADIANT_DIAG_COUNTERS every RADIANT_DIAG_*
  * macro below is an empty statement that does not evaluate its arguments,
@@ -45,7 +47,9 @@ extern "C" {
 #define RADIANT_DIAG_PAGE_SEARCH_B   6u
 #define RADIANT_DIAG_PAGE_HANDOFF    7u
 #define RADIANT_DIAG_PAGE_TIMING     8u
-#define RADIANT_DIAG_PAGES           9u
+#define RADIANT_DIAG_PAGE_PASS       9u
+#define RADIANT_DIAG_PAGE_RX_INTEGRITY 10u
+#define RADIANT_DIAG_PAGES           11u
 
 /*
  * Page 7, the search/track hand-off (ADR 0022 gate 3). Does a search
@@ -92,9 +96,11 @@ extern "C" {
  *   6 pass_over_100us   passes longer than 100 us - core, count
  *   7 drain_over_250us  receive drains longer than 250 us - backend, count
  *
- * cc26xx measures 0-3 and 7 on the RAT (0.25 us ticks, truncated to us); the
- * nRF backend trusts its hardware CRC and has no drain loop, so they read
- * RADIANT_DIAG_NOT_MEASURED there. 4-6 use radiant_radio_now() on both.
+ * cc26xx measures 0 and 7 on the RAT (0.25 us ticks, truncated to us) and,
+ * since 2026-11-15, 1-3 on the A0 cycle clock (same meaning, still us; a RAT
+ * read cost a few us per sample). The nRF backend trusts its hardware CRC and
+ * has no drain loop, so they read RADIANT_DIAG_NOT_MEASURED there. 4-6 use
+ * radiant_radio_now() on both.
  */
 #define RADIANT_DIAG_TIMING_DRAIN_MAX_FRAMES 0u
 #define RADIANT_DIAG_TIMING_FRAME_MAX_US     1u
@@ -104,6 +110,82 @@ extern "C" {
 #define RADIANT_DIAG_TIMING_PASS_STEPS_MAX   5u
 #define RADIANT_DIAG_TIMING_PASS_OVER_100US  6u
 #define RADIANT_DIAG_TIMING_DRAIN_OVER_250US 7u
+
+/*
+ * Page 9, pass breakdown (measurement only; 2026-11-15 performance review).
+ * Worst cases since boot except field 7 ("level" fields: read the later
+ * value, a difference means nothing).
+ *
+ *   0 sweep_max_us       expiry sweep (pass_step()'s slot loop), summed over
+ *                        one pass, notify_done() callbacks excluded - core
+ *   1 decide_max_us      the rest of pass_step() (stale/preempt test,
+ *                        arm_next(), notify_armed()), backend arm calls and
+ *                        notify_done() callbacks excluded, summed - core
+ *   2 arm_call_max_us    backend calls (radiant_radio_rx/tx/ed and
+ *                        abort_armed()'s radiant_radio_abort()) made by one
+ *                        pass, summed - core. A callback nested inside one
+ *                        counts here and in 3; 1 is the remainder, floored
+ *                        at 0
+ *   3 done_cb_max_us     notify_done() consumer callbacks within one pass,
+ *                        summed - core
+ *   4 book_max_us        book_ahead() - core; RADIANT_DIAG_NOT_MEASURED
+ *                        without CONFIG_RADIANT_SCHED_BOOKING
+ *   5 pass_to_arm_max_us the pass's `now` to the backend's own `now` at its
+ *                        early arm check, radio clock - backend. A max from
+ *                        0, no "no sample" value. An arm not made from a
+ *                        pass is not sampled, so MPSL builds (arms granted
+ *                        later are programmed with the stamp cleared) rarely
+ *                        sample it.
+ *   6 arm_slack_min_us   smallest t_open - (now' + air lead) at that check
+ *                        on an arm it accepted, i32, never negative (refused
+ *                        arms are field 7). RADIANT_DIAG_NO_SAMPLE until the
+ *                        first accepted arm - backend
+ *   7 early_etime        arms refused ETIME by that early check, rx + tx -
+ *                        backend, count
+ *
+ * 0-4 are on the A0 cycle clock and read RADIANT_DIAG_NOT_MEASURED where it
+ * does not run (native_sim, a core without DWT).
+ */
+#define RADIANT_DIAG_PASS_SWEEP_MAX_US       0u
+#define RADIANT_DIAG_PASS_DECIDE_MAX_US      1u
+#define RADIANT_DIAG_PASS_ARM_CALL_MAX_US    2u
+#define RADIANT_DIAG_PASS_DONE_CB_MAX_US     3u
+#define RADIANT_DIAG_PASS_BOOK_MAX_US        4u
+#define RADIANT_DIAG_PASS_TO_ARM_MAX_US      5u
+#define RADIANT_DIAG_PASS_ARM_SLACK_MIN_US   6u
+#define RADIANT_DIAG_PASS_EARLY_ETIME        7u
+
+/* Page 9 field 6 before its first sample. Not RADIANT_DIAG_NOT_MEASURED:
+ * the backend measures it, it has not seen an accepted arm yet. */
+#define RADIANT_DIAG_NO_SAMPLE 0x7FFFFFFFu
+
+/*
+ * Page 10, receive integrity (measurement only; 2026-11-15 review).
+ *
+ *   0 crc_repaired           radiant_api_stats, counts. RADIANT_DIAG_NOT_
+ *   1 crc_unrepairable       MEASURED without CONFIG_RADIANT_CRC_REPAIR
+ *   2 crc_repair_refuted
+ *   3 crc_repair_implausible
+ *   4 late_isr_drops         frames dropped by the nRF late-ISR guard - nRF,
+ *                            count; reads 0 until that guard exists
+ *   5 end_late_max_us        worst END-interrupt lateness, now - (CC_SYNC +
+ *                            software address, body and CRC airtime) - nRF.
+ *                            Blind past the next frame's ADDRESS (CC_SYNC is
+ *                            then that frame's): field 4 covers that regime
+ *   6 t_sync_max_us          longest rx_t_sync() - cc26xx, A0 clock
+ *   7 match_max_us           longest rx_match() plus the address/body copies
+ *                            of one receive entry - cc26xx, A0 clock
+ *
+ * 5-7 are levels. A backend without the field reads RADIANT_DIAG_NOT_MEASURED.
+ */
+#define RADIANT_DIAG_RXI_CRC_REPAIRED           0u
+#define RADIANT_DIAG_RXI_CRC_UNREPAIRABLE       1u
+#define RADIANT_DIAG_RXI_CRC_REPAIR_REFUTED     2u
+#define RADIANT_DIAG_RXI_CRC_REPAIR_IMPLAUSIBLE 3u
+#define RADIANT_DIAG_RXI_LATE_ISR_DROPS         4u
+#define RADIANT_DIAG_RXI_END_LATE_MAX_US        5u
+#define RADIANT_DIAG_RXI_T_SYNC_MAX_US          6u
+#define RADIANT_DIAG_RXI_MATCH_MAX_US           7u
 
 /* Thresholds of the two page-8 counts. */
 #define RADIANT_DIAG_PASS_SLOW_US  100u
@@ -132,7 +214,7 @@ extern "C" {
 /*
  * The backend table: pages 3 and 4 in this order, then page 7's first three
  * fields, then page 8's backend fields (0-3, then 7), then page 7's fields
- * 6-7. Every backend fills every index it can measure and leaves the rest
+ * 6-7, then page 9's fields 5-7, then page 10's fields 4-7. Every backend fills every index it can measure and leaves the rest
  * RADIANT_DIAG_NOT_MEASURED (radiant_radio_diag_get()'s caller pre-fills them
  * so).
  */
@@ -168,6 +250,15 @@ enum radiant_radio_diag_idx {
 	/* page 7, fields 6-7 */
 	RADIANT_RADIO_DIAG_TX_START_MISSED, /* transmit start compare behind the counter */
 	RADIANT_RADIO_DIAG_RX_START_MISSED, /* receive start compare behind the counter */
+	/* page 9, fields 5-7 */
+	RADIANT_RADIO_DIAG_PASS_TO_ARM_MAX_US, /* pass now -> backend now, worst */
+	RADIANT_RADIO_DIAG_ARM_SLACK_MIN_US, /* i32 slack at the early check */
+	RADIANT_RADIO_DIAG_EARLY_ETIME,    /* early-check ETIME refusals */
+	/* page 10, fields 4-7 */
+	RADIANT_RADIO_DIAG_LATE_ISR_DROPS, /* frames the late-ISR guard dropped */
+	RADIANT_RADIO_DIAG_END_LATE_MAX_US, /* worst END-interrupt lateness */
+	RADIANT_RADIO_DIAG_T_SYNC_MAX_US,  /* longest rx_t_sync() */
+	RADIANT_RADIO_DIAG_MATCH_MAX_US,   /* longest rx_match() plus copies */
 	RADIANT_RADIO_DIAG_COUNT
 };
 
@@ -208,6 +299,13 @@ struct radiant_diag_core {
 	uint32_t pass_max_us;     /* longest pass, interrupts off */
 	uint32_t pass_steps_max;  /* most pass_step() iterations in one pass */
 	uint32_t pass_over_100us; /* passes over RADIANT_DIAG_PASS_SLOW_US */
+	/* page 9, fields 0-4 (radiant_sched.c pass()), worst per-pass sums in
+	 * A0 cycles: converted when the page is read, so a pass never divides */
+	uint32_t pb_sweep_max_cyc;
+	uint32_t pb_decide_max_cyc;
+	uint32_t pb_arm_max_cyc;
+	uint32_t pb_done_max_cyc;
+	uint32_t pb_book_max_cyc;
 };
 
 extern struct radiant_diag_core radiant_diag_core;
@@ -238,6 +336,50 @@ void radiant_diag_core_reset(void);
 		}                                                             \
 		radiant_diag_core.margin_seen = 1u;                           \
 	} while (0)
+
+/*
+ * Page 9 field 5's stamp: the low 32 bits of the `now` (radio-clock us) of
+ * the scheduler pass whose arm call is in progress, or 0 when no pass is
+ * arming. 32 bits so one store writes it: the nRF MPSL signal handler, a
+ * zero-latency interrupt, can program an arm in the middle of a thread pass.
+ * The scheduler sets it around its radiant_radio_rx/tx/ed calls; a backend
+ * reads it at its early arm check and takes the unsigned 32-bit difference.
+ * A pass whose `now` has low bits 0 (once in 71 minutes) is not sampled.
+ */
+extern uint32_t radiant_diag_pass_now;
+
+/*
+ * A0, the cycle clock: the core's own cycle counter (DWT CYCCNT on a Cortex-M
+ * that has one), for spans too short for the radio clock. Every DWT access is
+ * here, so no caller needs an architecture test.
+ *
+ * A backend's radiant_radio_init() calls radiant_diag_cycles_init() with its
+ * core clock (a per-backend constant or SystemCoreClock - never
+ * sys_clock_hw_cycles_per_sec(), which is the 32 kHz RTC on nRF). It turns the
+ * counter on and checks that it advances across a short busy loop. Until then,
+ * on a target without the counter, or if it did not move,
+ * radiant_diag_cycles_to_us() returns RADIANT_DIAG_NOT_MEASURED for every span,
+ * and that is what the page reports.
+ *
+ * CYCCNT stops while the core sleeps: time only spans that cannot idle
+ * (interrupts off, or inside an ISR). It wraps every 67 s at 64 MHz, so a span
+ * is the unsigned difference of two reads.
+ */
+#if defined(CONFIG_CPU_CORTEX_M_HAS_DWT)
+/* DWT_CYCCNT, the architectural address on ARMv7-M and ARMv8-M Mainline. */
+#define RADIANT_DIAG_DWT_CYCCNT_ADDR 0xE0001004u
+static inline uint32_t radiant_diag_cycles(void)
+{
+	return *(volatile const uint32_t *)RADIANT_DIAG_DWT_CYCCNT_ADDR;
+}
+#else
+static inline uint32_t radiant_diag_cycles(void)
+{
+	return 0u;
+}
+#endif
+void radiant_diag_cycles_init(uint32_t core_hz);
+uint32_t radiant_diag_cycles_to_us(uint32_t cycles);
 
 /*
  * Backend hook. Each backend built with CONFIG_RADIANT_DIAG_COUNTERS defines

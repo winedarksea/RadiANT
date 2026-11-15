@@ -213,6 +213,61 @@ static struct {
 	struct radiant_sched_stats stats;
 } s;
 
+#if defined(CONFIG_RADIANT_DIAG_COUNTERS)
+/*
+ * 0xF7 page 9: one pass's spans on the A0 cycle clock (radiant_diag.h), summed
+ * over the pass and folded into radiant_diag_core's worst cases at its end.
+ * The pass runs with interrupts off, so the counter cannot stop for idle.
+ * Spans outside a pass land here too and are cleared by the next pass's start.
+ */
+static struct {
+	radiant_time_t now; /* the pass's now: page 9 field 5's stamp */
+	uint32_t steps;     /* every pass_step() */
+	uint32_t sweep;     /* its expiry sweeps */
+	uint32_t arm;       /* its backend arm calls */
+	uint32_t done;      /* its notify_done() callbacks */
+	uint32_t book;      /* book_ahead() */
+	bool     in_cb;     /* a notify_done() callback is running */
+} pb;
+#define PB_T0(v)         const uint32_t v = radiant_diag_cycles()
+#define PB_ADD(field, v) (pb.field += radiant_diag_cycles() - (v))
+/* A backend arm call: timed, and stamped with the pass's now when a pass makes it. */
+#define PB_ARM_CALL(stmt)                                              \
+	do {                                                           \
+		PB_T0(t_arm__);                                        \
+		radiant_diag_pass_now = s.in_pass ? (uint32_t)pb.now : 0u; \
+		stmt;                                                  \
+		radiant_diag_pass_now = 0u;                            \
+		PB_ADD(arm, t_arm__);                                  \
+	} while (0)
+/* Any other backend call made by a pass (abort): timed into the same field. */
+#define PB_BACKEND_CALL(stmt)                                          \
+	do {                                                           \
+		PB_T0(t_be__);                                         \
+		stmt;                                                  \
+		PB_ADD(arm, t_be__);                                   \
+	} while (0)
+/* A notify_done() callback: timed only within a pass, outermost only. */
+#define PB_DONE_CB(stmt)                                               \
+	do {                                                           \
+		if (!s.in_pass || pb.in_cb) {                          \
+			stmt;                                          \
+		} else {                                               \
+			PB_T0(t_cb__);                                 \
+			pb.in_cb = true;                               \
+			stmt;                                          \
+			pb.in_cb = false;                              \
+			PB_ADD(done, t_cb__);                          \
+		}                                                      \
+	} while (0)
+#else
+#define PB_T0(v)          ((void)0)
+#define PB_ADD(field, v)  ((void)0)
+#define PB_ARM_CALL(stmt) do { stmt; } while (0)
+#define PB_BACKEND_CALL(stmt) do { stmt; } while (0)
+#define PB_DONE_CB(stmt)  do { stmt; } while (0)
+#endif
+
 /* What one step of a pass concluded. */
 enum step {
 	STEP_DONE = 0, /* the schedule is settled; stop */
@@ -910,7 +965,7 @@ static void notify_done(uint8_t ch, enum radiant_sched_done why)
 		s.stats.denied++;
 	}
 	if (s.cbs.done != NULL) {
-		s.cbs.done(ch, why, s.user);
+		PB_DONE_CB(s.cbs.done(ch, why, s.user));
 	}
 }
 
@@ -1024,7 +1079,7 @@ static bool abort_armed(uint8_t skip_ch)
 	}
 #endif
 
-	(void)radiant_radio_abort();
+	PB_BACKEND_CALL((void)radiant_radio_abort());
 
 	for (i = 0u; i < n; i++) {
 		uint8_t            c = list[i];
@@ -1337,7 +1392,7 @@ static enum step arm_rx_window(uint8_t leader, radiant_time_t earliest,
 	 * reply, so reserving only the leader's would under-reserve. */
 	req.follow_on_us = follow_on;
 
-	rc = radiant_radio_rx(&req, &op);
+	PB_ARM_CALL(rc = radiant_radio_rx(&req, &op));
 	if (rc != RADIANT_RADIO_OK_RC) {
 		s.n_merged = 0u;
 		s.n_members = 0u;
@@ -1447,7 +1502,7 @@ static enum step arm_tx_op(uint8_t ch)
 	req.t_sync_at = sl->t_start;
 	req.follow_on_us = sl->follow_on_us;
 
-	rc = radiant_radio_tx(&req, &op);
+	PB_ARM_CALL(rc = radiant_radio_tx(&req, &op));
 	if (rc != RADIANT_RADIO_OK_RC) {
 		return arm_failed(ch, rc);
 	}
@@ -1543,7 +1598,7 @@ static enum step arm_ed_chunk(uint8_t ch, radiant_time_t earliest,
 	req.dwell_us = dwell;
 	req.t_start = open;
 
-	rc = radiant_radio_ed(&req, &op);
+	PB_ARM_CALL(rc = radiant_radio_ed(&req, &op));
 	if (rc != RADIANT_RADIO_OK_RC) {
 		return arm_failed(ch, rc);
 	}
@@ -1998,6 +2053,7 @@ static enum step pass_step(radiant_time_t now)
 {
 	const radiant_time_t earliest = now + arm_lead();
 	uint32_t         i;
+	PB_T0(t_sweep);
 
 	for (i = 0u; i < RADIANT_SCHED_MAX_CHANNELS; i++) {
 		struct sched_slot *sl = &s.ch[i];
@@ -2048,10 +2104,12 @@ static enum step pass_step(radiant_time_t now)
 			}
 #endif
 			slot_clear((uint8_t)i);
+			PB_ADD(sweep, t_sweep);
 			notify_done((uint8_t)i, RADIANT_SCHED_DONE_MISSED);
 			return STEP_RETRY;
 		}
 	}
+	PB_ADD(sweep, t_sweep);
 
 	if (s.armed_kind != (uint8_t)SLOT_IDLE) {
 		if (now > t_fwd(s.armed_end, RADIANT_SCHED_ARMED_STALE_US)) {
@@ -2092,6 +2150,10 @@ static void pass(void)
 	}
 	s.in_pass = true;
 	now = radiant_radio_now();
+#if defined(CONFIG_RADIANT_DIAG_COUNTERS)
+	memset(&pb, 0, sizeof(pb));
+	pb.now = now;
+#endif
 #if defined(CONFIG_RADIANT_SCHED_BOOKING)
 	bk_prune(now);
 #endif
@@ -2102,15 +2164,39 @@ static void pass(void)
 		enum step st;
 
 		s.dirty = false;
-		st = pass_step(now);
+		{
+			PB_T0(t_step);
+
+			st = pass_step(now);
+			PB_ADD(steps, t_step);
+		}
 		if (st != STEP_RETRY && !s.dirty) {
 			break;
 		}
 	}
 #if defined(CONFIG_RADIANT_SCHED_BOOKING)
-	book_ahead(now);
+	{
+		PB_T0(t_book);
+
+		book_ahead(now);
+		PB_ADD(book, t_book);
+	}
 #endif
 #if defined(CONFIG_RADIANT_DIAG_COUNTERS)
+	{
+		/* 0xF7 page 9: the pass's parts. Everything in pass_step() that is
+		 * not a sweep, an arm call or a callback is the arm decision; a
+		 * callback nested inside an arm call would count twice, so the
+		 * remainder saturates at 0 rather than wrapping. */
+		const uint32_t parts = pb.sweep + pb.arm + pb.done;
+
+		RADIANT_DIAG_MAX(pb_sweep_max_cyc, pb.sweep);
+		RADIANT_DIAG_MAX(pb_decide_max_cyc,
+				 (pb.steps > parts) ? pb.steps - parts : 0u);
+		RADIANT_DIAG_MAX(pb_arm_max_cyc, pb.arm);
+		RADIANT_DIAG_MAX(pb_done_max_cyc, pb.done);
+		RADIANT_DIAG_MAX(pb_book_max_cyc, pb.book);
+	}
 	{
 		/* 0xF7 page 8: the pass's interrupts-off span, measured from the
 		 * one `now` it planned with. A break leaves guard at the last

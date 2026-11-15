@@ -5996,6 +5996,60 @@ ZTEST(api, test_diag_every_page_has_the_fixed_shape)
 		      antr_diag_page(0u, NULL));
 }
 
+/* Pages 9 and 10 (2026-11-15): every field this build cannot measure says so.
+ * native_sim has no cycle counter, so the scheduler's cycle-timed fields read
+ * "not measured" even after passes ran, and the fake backend measures none of
+ * its fields. */
+ZTEST(api, test_diag_pass_and_rx_integrity_pages_say_what_is_unmeasured)
+{
+	uint8_t out[RADIANT_DIAG_BODY_LEN];
+
+	(void)master_with_next_slot_posted();
+	(void)run_one_quiet_period();
+
+	if (!IS_ENABLED(CONFIG_CPU_CORTEX_M_HAS_DWT)) {
+		/* A0 with no counter: "not measured", whatever the clock. */
+		radiant_diag_cycles_init(64000000u);
+		zassert_equal(RADIANT_DIAG_NOT_MEASURED,
+			      radiant_diag_cycles_to_us(640u));
+		zassert_ok(antr_diag_page(RADIANT_DIAG_PAGE_PASS, out));
+		for (unsigned int f = RADIANT_DIAG_PASS_SWEEP_MAX_US;
+		     f <= RADIANT_DIAG_PASS_BOOK_MAX_US; f++) {
+			zassert_equal(RADIANT_DIAG_NOT_MEASURED, diag_u32(out, f),
+				      "page 9 field %u", f);
+		}
+	}
+	zassert_ok(antr_diag_page(RADIANT_DIAG_PAGE_PASS, out));
+	zassert_equal(RADIANT_DIAG_FLAG_UNMEASURED,
+		      out[2] & RADIANT_DIAG_FLAG_UNMEASURED);
+	for (unsigned int f = RADIANT_DIAG_PASS_TO_ARM_MAX_US;
+	     f <= RADIANT_DIAG_PASS_EARLY_ETIME; f++) {
+		zassert_equal(RADIANT_DIAG_NOT_MEASURED, diag_u32(out, f),
+			      "page 9 field %u", f);
+	}
+
+	zassert_ok(antr_diag_page(RADIANT_DIAG_PAGE_RX_INTEGRITY, out));
+	if (IS_ENABLED(CONFIG_RADIANT_CRC_REPAIR)) {
+		const struct radiant_api_stats *as = radiant_api_stats_get();
+
+		zassert_equal(as->crc_repaired, diag_u32(out, 0u));
+		zassert_equal(as->crc_unrepairable, diag_u32(out, 1u));
+		zassert_equal(as->crc_repair_refuted, diag_u32(out, 2u));
+		zassert_equal(as->crc_repair_implausible, diag_u32(out, 3u));
+	} else {
+		for (unsigned int f = RADIANT_DIAG_RXI_CRC_REPAIRED;
+		     f <= RADIANT_DIAG_RXI_CRC_REPAIR_IMPLAUSIBLE; f++) {
+			zassert_equal(RADIANT_DIAG_NOT_MEASURED, diag_u32(out, f),
+				      "page 10 field %u", f);
+		}
+	}
+	for (unsigned int f = RADIANT_DIAG_RXI_LATE_ISR_DROPS;
+	     f <= RADIANT_DIAG_RXI_MATCH_MAX_US; f++) {
+		zassert_equal(RADIANT_DIAG_NOT_MEASURED, diag_u32(out, f),
+			      "page 10 field %u", f);
+	}
+}
+
 /* A listening master posts a turnaround after every slot it transmits, and
  * page 1 sees each one posted and each one end. */
 ZTEST(api, test_diag_counts_a_masters_turnaround_windows)

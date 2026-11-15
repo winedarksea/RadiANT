@@ -1905,10 +1905,20 @@
  * callback excluded, longest software CRC, longest synchronous receive
  * callback - all in us, 0xFFFFFFFF on backends without a drain loop such as
  * nRF; longest scheduler pass with interrupts off in us, most pass steps in
- * one pass, passes over 100 us; receive drains over 250 us). VERSIONING:
- * pinned at 1; a field's meaning never changes and a new meaning is a new
- * page. docs/decisions/0023-radiant-diag-message.md has the reasoning and
- * radiant/include/radiant/radiant_diag.h the layout. [ADR 0023]
+ * one pass, passes over 100 us; receive drains over 250 us); 9 pass
+ * breakdown, worst cases since boot except the last (per pass: expiry sweep,
+ * arm decision, backend arm calls, done callbacks, book_ahead - in us on the
+ * core's cycle counter, 0xFFFFFFFF where it does not run; the pass's now to
+ * the backend's now at its early arm check in us; the smallest slack at that
+ * check on an accepted arm in us as an i32, 0x7FFFFFFF until the first; arms
+ * that check refused ETIME); 10 receive integrity (CRC frames repaired,
+ * unrepairable, repairs refuted, repairs implausible - 0xFFFFFFFF without CRC
+ * repair; frames the nRF late-ISR guard dropped; worst nRF END-interrupt
+ * lateness in us; longest cc26xx rx_t_sync and longest match plus copies of
+ * one receive entry in us). VERSIONING: pinned at 1; a field's meaning never
+ * changes and a new meaning is a new page. docs/decisions/0023-radiant-diag-
+ * message.md has the reasoning and radiant/include/radiant/radiant_diag.h the
+ * layout. [ADR 0023]
  */
 #define RADIANT_WIRE_MESG_RADIANT_DIAG_ID                    0xF7
 

@@ -40,6 +40,8 @@ class Wire(unittest.TestCase):
         self.assertEqual(int(count.group(1)), len(d.PAGES))
         self.assertEqual(sorted(int(v) for v in nums), sorted(d.PAGES))
         self.assertIn("#define RADIANT_DIAG_FIELDS          8u", text)
+        no_sample = re.search(r"#define RADIANT_DIAG_NO_SAMPLE\s+(0x[0-9A-Fa-f]+)u", text)
+        self.assertEqual(int(no_sample.group(1), 16), d.NO_SAMPLE)
         for _name, fields in d.PAGES.values():
             self.assertEqual(len(fields), 8)
 
@@ -49,8 +51,9 @@ class Wire(unittest.TestCase):
         enum = [e.lower() for e in enum if e != "COUNT"]
         timing = d.PAGES[8][1]
         ours = (d.PAGES[3][1] + d.PAGES[4][1] + d.PAGES[7][1][:3]
-                + timing[:4] + timing[7:] + d.PAGES[7][1][6:])
-        self.assertEqual(len(enum), 26)
+                + timing[:4] + timing[7:] + d.PAGES[7][1][6:]
+                + d.PAGES[9][1][5:] + d.PAGES[10][1][4:])
+        self.assertEqual(len(enum), 33)
         # The tool's names are the enum's, minus the prefix.
         self.assertEqual(ours, enum)
 
@@ -72,7 +75,7 @@ class Decode(unittest.TestCase):
         with self.assertRaises(ValueError):
             d.decode(body(0, [0] * 8)[:20])
         with self.assertRaises(ValueError):
-            d.decode(body(9, [0] * 8))
+            d.decode(body(11, [0] * 8))
         bad = bytearray(body(0, [0] * 8))
         bad[1] = 2
         with self.assertRaises(ValueError):
@@ -93,6 +96,47 @@ class Timing(unittest.TestCase):
             self.assertEqual(out[level], b["8"]["fields"][level], level)
         self.assertEqual(out["pass_over_100us"], 5)   # counts subtract
         self.assertEqual(out["drain_over_250us"], 3)
+
+
+class PassBreakdown(unittest.TestCase):
+    def test_page_9_slack_is_signed_with_its_own_no_sample_sentinel(self):
+        got = d.decode(body(9, [12, 30, 25, 8, d.NOT_MEASURED, 180, 37, 0],
+                            flags=1, backend=1))
+        self.assertEqual(got["name"], "pass")
+        self.assertIsNone(got["fields"]["book_max_us"])   # not measured
+        self.assertEqual(got["fields"]["arm_slack_min_us"], 37)
+        fresh = d.decode(body(9, [0, 0, 0, 0, 0, 0, 0x7FFFFFFF, 0]))
+        self.assertEqual(fresh["fields"]["arm_slack_min_us"], "no_sample")
+        # 0x7FFFFFFF is a sentinel on the slack field only.
+        other = d.decode(body(9, [0x7FFFFFFF, 0, 0, 0, 0, 0, 1, 0]))
+        self.assertEqual(other["fields"]["sweep_max_us"], 0x7FFFFFFF)
+        # Read as an i32, like page 2's margin.
+        neg = d.decode(body(9, [0, 0, 0, 0, 0, 0, (-5) & 0xFFFFFFFF, 0]))
+        self.assertEqual(neg["fields"]["arm_slack_min_us"], -5)
+
+    def test_page_9_levels_report_the_later_value_and_etime_subtracts(self):
+        a = {"9": d.decode(body(9, [12, 30, 25, 8, 4, 180, 0x7FFFFFFF, 2]))}
+        b = {"9": d.decode(body(9, [11, 35, 20, 9, 4, 190, 21, 5]))}
+        out = d.diff(a, b)["9"]["fields"]
+        for level in ("sweep_max_us", "decide_max_us", "arm_call_max_us",
+                      "done_cb_max_us", "book_max_us", "pass_to_arm_max_us",
+                      "arm_slack_min_us"):
+            self.assertEqual(out[level], b["9"]["fields"][level], level)
+        self.assertEqual(out["early_etime"], 3)
+
+    def test_page_10_counts_subtract_and_its_timings_do_not(self):
+        a = {"10": d.decode(body(10, [5, 50, 1, 0, 0, 40, 9, 14]))}
+        b = {"10": d.decode(body(10, [28, 90, 2, 1, 0, 35, 12, 13]))}
+        got = d.diff(a, b)["10"]
+        self.assertEqual(got["name"], "rx_integrity")
+        out = got["fields"]
+        self.assertEqual(out["crc_repaired"], 23)
+        self.assertEqual(out["crc_unrepairable"], 40)
+        self.assertEqual(out["crc_repair_refuted"], 1)
+        self.assertEqual(out["crc_repair_implausible"], 1)
+        self.assertEqual(out["late_isr_drops"], 0)
+        for level in ("end_late_max_us", "t_sync_max_us", "match_max_us"):
+            self.assertEqual(out[level], b["10"]["fields"][level], level)
 
 
 class FakeDev:
