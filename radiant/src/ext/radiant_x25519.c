@@ -72,12 +72,6 @@ static void fe_copy(fe o, const fe a)
 }
 
 /*
- * Swap a and b when `swap` is 1, in the same instructions either way. Mask
- * is the negated flag (all-ones or all-zeros); nothing branches on `swap`,
- * because the ladder calls this once per scalar bit and a branch would leak
- * the scalar through timing.
- */
-/*
  * Wipe limbs the optimiser may not delete, as radiant_sec_wipe() does for
  * bytes. Limb-wide rather than byte-wide because fe_mul() calls it on every
  * product, about 2,800 times per exchange: eight times fewer stores than the
@@ -92,6 +86,12 @@ static void fe_wipe(int64_t *p, int n)
 	}
 }
 
+/*
+ * Swap a and b when `swap` is 1, in the same instructions either way. Mask
+ * is the negated flag (all-ones or all-zeros); nothing branches on `swap`,
+ * because the ladder calls this once per scalar bit and a branch would leak
+ * the scalar through timing.
+ */
 static void fe_cswap(fe a, fe b, int64_t swap)
 {
 	int64_t mask = -swap;
