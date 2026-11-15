@@ -763,6 +763,12 @@ ZTEST(api, test_sec_host_key_refused_while_master_acked_in_flight)
 	zassert_equal((antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE,
 		      antr_sec_key_set(SEC_CH, 128u, sec_dir_root),
 		      "a master was keyed with host acked data in flight");
+	/* No key went in, so 0xF1 has nothing to configure. is_secured()
+	 * alone would not show it: it needs the switches too (ctx_keyed()). */
+	zassert_not_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+			  antr_sec_config(SEC_CH, RADIANT_SEC_SW_AUTH, 2u,
+					  0x01u, 0x0Fu),
+			  "the refused key was installed anyway");
 	zassert_false(radiant_sec_channel_is_secured(SEC_CH));
 	sec_close();
 }
@@ -784,6 +790,10 @@ ZTEST(api, test_sec_host_key_refused_while_master_burst_in_flight)
 	zassert_equal((antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE,
 		      antr_sec_key_set(SEC_CH, 128u, sec_dir_root),
 		      "a master was keyed with a burst in flight");
+	zassert_not_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+			  antr_sec_config(SEC_CH, RADIANT_SEC_SW_AUTH, 2u,
+					  0x01u, 0x0Fu),
+			  "the refused key was installed anyway");
 	zassert_false(radiant_sec_channel_is_secured(SEC_CH));
 	sec_close();
 }
@@ -801,6 +811,11 @@ ZTEST(api, test_sec_host_slave_with_acked_in_flight_still_keys)
 
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
 		      antr_sec_key_set(SEC_CH, 128u, sec_dir_root));
+	/* Secured is key AND switches (ctx_keyed()), so configure before
+	 * asking; the key alone leaves is_secured() false. */
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_config(SEC_CH, RADIANT_SEC_SW_AUTH, 2u, 0x01u,
+				      0x0Fu));
 	zassert_true(radiant_sec_channel_is_secured(SEC_CH));
 	sec_close();
 }
