@@ -169,6 +169,8 @@ static inline int32_t nrf_temp_result_get(NRF_TEMP_Type *t) { (void)t; return 10
 static inline uint32_t NVIC_GetEnableIRQ(int n) { (void)n; return 0u; }
 static inline void NVIC_EnableIRQ(int n) { (void)n; }
 static inline void NVIC_DisableIRQ(int n) { (void)n; }
+static inline uint32_t NVIC_GetPendingIRQ(int n) { (void)n; return 0u; }
+static inline void NVIC_ClearPendingIRQ(int n) { (void)n; }
 
 static inline int nrfx_gppi_conn_alloc(uint32_t e, uint32_t t, nrfx_gppi_handle_t *h)
 { (void)e; (void)t; *h = 1u; return 0; }

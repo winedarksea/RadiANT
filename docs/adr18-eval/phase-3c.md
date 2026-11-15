@@ -1,5 +1,7 @@
 # Phase 3 Stage C: R1 pairs closer than the reply reserve
 
+> **Update, 2026-11-14.** The `69:108` assert listed below as open was a RADIO interrupt left pending at END; fixed in 63b2a02. See [ADR 0021](../decisions/0021-tracked-slots-are-booked-a-period-ahead.md) and [the evidence](../../archive/benchmarks/2026-11-15-assert-69108/README.md).
+
 Measured 2026-11-11 on the nRF54L15 DK (J-Link `1057737173`), branch
 `wip/adr18-impl`, NCS v3.4.0. Fixes a merge blocker found in Stage B
 ([phase-3b.md](phase-3b.md), item 2): an R1 pair closer than about 6 ms cost

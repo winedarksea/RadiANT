@@ -1456,6 +1456,14 @@ __maybe_unused static uint8_t  radio_ep_mine_mask;
 /* Whether RADIO_0_IRQn was NVIC-enabled at grant start, so it can be restored. */
 __maybe_unused static bool     radio_irq_was_enabled;
 
+/*
+ * This timeslot's on_grant() took the radio (set beside radio_on_loan, which the
+ * hand-back clears too early to serve here). Cleared at every SIGNAL_START by
+ * radiant_nrf_gate_on_slot_start() and consumed by
+ * radiant_nrf_gate_radio_irq_unpend() when the timeslot's ACTION_END is returned.
+ */
+__maybe_unused static volatile bool radio_lent_this_slot;
+
 /* This backend's half of the swap: the register values when our connections are attached. */
 __maybe_unused static struct {
 	uint32_t pub_address;
@@ -3102,6 +3110,7 @@ void radiant_nrf_gate_on_grant(void)
 	 */
 #if defined(CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL)
 	radio_on_loan = true;
+	radio_lent_this_slot = true;
 #endif
 	nrf_radio_int_enable(NRF_RADIO, NRF_RADIO_INT_END_MASK |
 					NRF_RADIO_INT_DISABLED_MASK);
@@ -3340,9 +3349,16 @@ void radiant_nrf_gate_on_grant_end(void)
 	radio_disable_now();
 
 	/*
-	 * The pending NVIC bit is not cleared: line 0 is MPSL's, and NVIC_ClearPendingIRQ()
-	 * could swallow a controller interrupt. A surviving pending bit enters radio_isr()
-	 * with kind == OP_NONE and is dropped.
+	 * The pending NVIC bit is NOT cleared here, but it is not harmless either. A RADIO
+	 * event (END, DISABLED) that fires while a TIMER0 or RADIO signal is running, at
+	 * the same priority, latches RADIO_0 pending, and clearing the mask above does not
+	 * unlatch it. Under MPSL the vector is MPSL's: taken after our ACTION_END has
+	 * closed the timeslot, it is a RADIO interrupt with no timeslot open, and MPSL
+	 * asserts 69:108 (observed: ipsr=RADIO_0, 18 us after END). So the gate clears it,
+	 * inside the timeslot, as the last radio act before ACTION_END
+	 * (radiant_nrf_gate_radio_irq_unpend()). Not here, because this also runs on the
+	 * low-priority hand-backs (BLOCKED, SESSION_IDLE, SESSION_CLOSED, gate_shutdown()),
+	 * where the radio may already be the other stack's and the bit its interrupt.
 	 */
 
 	/*
@@ -3364,6 +3380,36 @@ void radiant_nrf_gate_on_grant_end(void)
 	radio_on_loan = false;
 #endif
 }
+
+#if defined(CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL)
+void radiant_nrf_gate_on_slot_start(void)
+{
+	radio_lent_this_slot = false;
+}
+
+bool radiant_nrf_gate_radio_irq_unpend(void)
+{
+	bool was_pending;
+
+	/*
+	 * Only for a timeslot that took the radio. radio_lent_this_slot is cleared at
+	 * every SIGNAL_START (radiant_nrf_gate_on_slot_start()) and set only by this
+	 * timeslot's on_grant(), so it never carries over from a timeslot that ended
+	 * without our high-priority END. A bootstrap or orphan timeslot never enabled a
+	 * RADIO interrupt, so a pending bit then cannot be ours (the 802.15.4 driver
+	 * clears its own at hand-over, nrf_802154_trx.c, after nrf_radio_reset()). By now
+	 * on_grant_end() has cleared our INTENSET bits and disabled the radio, so no
+	 * source of ours can re-pend the line before ACTION_END is returned.
+	 */
+	if (!radio_lent_this_slot) {
+		return false;
+	}
+	radio_lent_this_slot = false;
+	was_pending = (NVIC_GetPendingIRQ(RADIANT_RADIO_IRQn) != 0U);
+	NVIC_ClearPendingIRQ(RADIANT_RADIO_IRQn);
+	return was_pending;
+}
+#endif
 
 #if defined(CONFIG_RADIANT_GATE_MPSL_D2)
 void radiant_nrf_gate_on_booking_due(void)

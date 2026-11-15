@@ -1,0 +1,236 @@
+# MPSL assert 69:108 bench legs, 2026-11-15
+
+Legs for finding what triggers or avoids assert 69:108 (see
+`archive/benchmarks/2026-11-14-mpsl-soak/README.md` for the first set). Each leg
+runs `soak_run.py` and ends at the first `MPSL ASSERT` line on the DUT console.
+The `start` column of `legs.tsv` and the console timestamps read 2026-11-14.
+
+## Result
+
+The assert is explained and fixed.
+
+- **Cause.** `MPSL ASSERT 69:108` is MPSL taking a RADIO interrupt after our
+  timeslot has ended. A RADIO END or DISABLED event of the live receiver that
+  fires while a TIMER0 (or RADIO) signal handler runs, at the same priority,
+  only pends RADIO_0 in the NVIC. `radiant_nrf_gate_on_grant_end()` cleared our
+  INTENSET bits and disabled the radio but left the NVIC pending bit set. Under
+  MPSL the vector is MPSL's, so after `ACTION_END` closed the timeslot the
+  latched interrupt was taken with no timeslot open. A scan chunk ended by the
+  ext-skip compare cuts a live receiver every 10 ms, which is why the scan
+  workload reproduced it; the short match (more RADIO END events) raised the
+  rate.
+- **Fix.** Commit 63b2a02: every high-priority `ACTION_END` in `on_signal()` now
+  ends by calling `radiant_nrf_gate_radio_irq_unpend()`, which clears the RADIO
+  vector's NVIC pending bit if this timeslot took the radio. It is not called on
+  the low-priority hand-backs (BLOCKED/CANCELLED, SESSION_IDLE, SESSION_CLOSED,
+  `gate_shutdown()`), where the radio may be another stack's. Nordic's 802.15.4
+  driver does the same at its hand-over (`nrf_802154_trx.c`). Test:
+  `radiant/tests/gate/src/test_gate_radio_unpend.c` (10 cases; 6 fail against the
+  previous gate). Hardening from the independent review is 1c8967b
+  (`radiant/tests/gate/src/test_gate_hardening.c`, 6 cases).
+- **Confirmed.** Legs `fix1`-`fix3` (image `fix_63b2a02`, 30 min each, same
+  sitting as control `ctrl3`, which asserted at 102 s): 0 asserts, 0 reboots. An
+  END found the RADIO vector pending 14, 18 and 11 times per leg out of about
+  65,560 grants per leg. Channel 0 tracked loss, DUT 0.357 / 0.358 / 0.288 %
+  against Garmin 0.856 / 0.385 / 0.468 % in the same windows.
+- **Not done.** Stage 2 of the plan (the arm table) was not run, because Stage 1
+  named the mechanism. The bench arm switches were added in abd6be7 and removed
+  unused in 90ba241.
+
+## Rig
+
+- DUT: nRF54L15 DK (J-Link 1057737173), ANT on COM4, log on COM3 (DTR).
+- Thread peer: nRF5340 DK running the NCS OpenThread CLI with `scripts/p4_peer.conf`
+  (`scripts/flash_p4_peer.ps1 -Port COM6`), `leader`; the DUT attached as a
+  child in every leg (`<leg>-peer.log`, child table after boot).
+- ANT master: Pro Micro `EE6986854FD72803` driven by `ant_sim.py --profile power
+  --device-number 2002` (its shipping image, not reflashed).
+- DUT channels: ch0 tracks #2002, ch1 searches an absent #43210 (sweep always
+  busy). Garmin `006` tracks #2002 as a same-window reference.
+- Runner: `soak_run.py` (adapted from `2026-11-14-mpsl-soak/soak_run.py`), one
+  flash per leg.
+
+## Running a leg
+
+Use the NCS toolchain interpreter (there is no system Python):
+`C:\ncs\toolchains\dcbdc366a1\opt\bin\python.exe`. `--tools` and `--flash-script`
+default to `<repo root>\tools` and `<repo root>\scripts\flash_sim_jlink.ps1`, the
+repo root being three directories above the script.
+
+Thread image (waits `--attach-wait` 75 s, checks the peer before/after):
+
+    python soak_run.py --base D:\out\2026-11-15-assert-69108\arm1_a --hex C:\path\zephyr.hex ^
+        --image-label arm1_lock --seconds 1800
+
+Image without Thread (`--no-peer`: no peer commands, waits `--boot-wait` 8 s):
+
+    python soak_run.py --base D:\out\2026-11-15-assert-69108\gate_a --hex C:\path\zephyr.hex ^
+        --image-label gate_baseline --no-peer --seconds 1800
+
+Per leg, files are written beside `--base`: `-console.log`, `-sim.log`,
+`-dut.log`/`.json`, `-ref.log`/`.json`, `-peer.log`, `-summary.json`. One row is
+also appended to `legs.tsv` in the same directory (header written when the file
+is new). Other switches: `--no-ref`, `--no-search` (DUT opens only ch0),
+`--no-master` (no ant_sim; the DUT still opens both channels unless
+`--no-search`), `--no-flash` (reuse the board's image; `--hex` is still
+recorded), `--stop-on-reboot`, `--continue-after-assert`, `--grace` (console
+seconds kept after the assert, default 3), `--image-label`, `--image-sha256`
+(default: sha256 of `--hex`), `--jlink-device`, `--jlink-serial`.
+
+Offline check of the detection code against an existing capture (no hardware):
+
+    python soak_run.py --selftest archive\benchmarks\2026-11-14-mpsl-soak\head1-console.log
+
+## How a leg is timed
+
+- `since_boot`: seconds from the first console line the capture received (the
+  `[cap]` host lines do not count) to the assert line. `since_flash` is from the
+  end of the flash step; `since_open` is from the start of the DUT
+  `ant_verify` process (channels opened). With `--no-flash` there is no reset,
+  so `since_boot` is from the first line seen after the capture started.
+- The Zephyr uptime printed in the log lines does not start at zero on a flash
+  (head1 boots at uptime 00:17:18), so it is not used.
+- A leg ends at the first assert, then keeps the console for `--grace` seconds
+  so the multi-line dump is captured, then terminates the DUT verify, the
+  reference verify and ant_sim. Children are also terminated on Ctrl-C, on a
+  flash failure and on any exception.
+- `reboots` counts `*** Booting` banners after the first one; the leg only ends
+  on a reboot with `--stop-on-reboot`. With `--continue-after-assert` every
+  assert is counted (`assert_count`, `asserts[]` in the summary) and the leg
+  runs the full duration.
+- `assert_fields` in the summary holds every `key=value` pair on the assert line
+  and the following dump lines (a repeated key becomes a list, e.g. `granted`
+  appears on both of today's lines). Dump lines that are periodic Zephyr
+  `<inf>`/`<dbg>` log lines are kept in `assert_dump` but not parsed for fields.
+- legs.tsv `placed granted blocked ext skip` come from the assert line when
+  there was an assert. For a clean leg they come from the last periodic gate
+  stats: `D2STAT` (`pl`, `gr`, `bl`, `ext`) and `ext_skipped` from `D2REL`; they
+  are empty if those lines were never seen. `ext` is `ok/fail`.
+
+## Results
+
+`legs.tsv` is the full record; this table lists the legs the conclusion rests
+on. Images: `baseline_abd6be7` is the pre-fix tree with the Stage 1
+instrumentation; `ship_thread_bridge_abd6be7` is the pre-fix `thread.conf;bridge.conf`
+image with `CONFIG_RESET_ON_FATAL_ERROR=y`; `fix_63b2a02` is the fix. "Pending
+RADIO vector cleared" is the sum of the `UNPEND` pending counters in the last
+`radiant_gate_mpsl: UNPEND` console line (t0skip + extfail, the other counters
+read 0), `-` for pre-fix images, which have no such counter.
+
+| leg | image | result | placed | ext ok/fail | skip | pending RADIO vector cleared |
+|---|---|---|---|---|---|---|
+| base1 | baseline_abd6be7 | assert at 185.0 s | 3582 | 0/144 | 2897 | - |
+| base2 | baseline_abd6be7 | assert at 223.9 s | 4986 | 0/198 | 4058 | - |
+| contain1 | ship_thread_bridge_abd6be7 | assert at 497.2 s, 1 reboot | 14970 | 0/597 | 12184 | - |
+| ctrl3 | baseline_abd6be7 | assert at 101.9 s | 507 | 0/21 | 389 | - |
+| fix1 | fix_63b2a02 | clean at 1900.0 s | 65570 | 0/2610 | 53308 | 14 (13 + 1) |
+| fix2 | fix_63b2a02 | clean at 1900.6 s | 65577 | 0/2613 | 53338 | 18 (14 + 4) |
+| fix3 | fix_63b2a02 | clean at 1900.1 s | 65583 | 0/2613 | 53321 | 11 (11 + 0) |
+
+The 1900 s of the clean legs is the 1800 s run plus boot and attach time.
+`soak_run.py` writes no DUT or Garmin packet counts for a leg that ends at an
+assert (the verify tools are terminated), which is why the pre-fix legs have
+none. The fix legs' loss figures are in `fix1-dut.log`/`-ref.log` and their
+`.json` files.
+
+## Stage 1 dump
+
+The pre-fix image (`baseline_abd6be7`, built from abd6be7) prints a dump at the
+assert. Legs `base1`, `base2` and `ctrl3` agree on the points below
+(`ipsr=154 ctx=RADIO`; `since_end_us` 18, 18 and 19; `ts_live=0`). Lines from
+`base1-console.log`, console timestamps removed, long lines cut at `...`:
+
+    *** MPSL ASSERT 69:108  placed=3582 granted=3565 blocked=16 ext=0/144 skip=2897 deadline=0
+        ipsr=154 ctx=RADIO control=0x0 msp=0x2001aaf0 psp=0x2001acc8 ret=0x00002397 thread=0x2000a5e8 thread_stack=0x2001abc8..0x2001ad08
+        xo_run=0x1 xo_stat=0x10001 ev_xostarted=1 ev_xotuned=1 ev_xotuneerror=0 ev_xotunefailed=0 ...
+        t0_intenset=0x00000000 t0_shorts=0x0 t0_ev_compare=0x0a t0_count=9293 (captured into CC1 after the reads)
+        radio_state=0 radio_shorts=0x00000000 sub_rxen=0x00000000 sub_txen=0x00000000 sub_disable=0x00000000 sub_rssistart=0x00000000 pub_address=0x00000000 pub_rxready=0x00000000
+        last_sess=0 since_start_us=9302 since_end_us=18 ts_live=0 live_sess=0 hw_held=0 ended=1 ...
+        api_inflight=0 api_sess=0 api_last=1 api_rc=0 api_calls=3584 since_api_in_us=25247 since_api_out_us=25234 ...
+        trace (sess:sig:act+dt_us; request entries sess:R:rc@notice_us+dt_us; oldest first): ... 0:R:0@15948+21 0:0:0+15975 0:1:2+9256 0:7:0+289 0:R:0@15948+21 0:0:0+15975 0:1:2+9256
+
+What it shows: the interrupt that asserts is a RADIO one (IPSR 154) taken 18-19 us
+after the END returned from the ext-skip TIMER0 path, with no timeslot live
+(`ts_live=0`), the radio disabled (`radio_state=0`, SHORTS 0), every RADIO DPPI
+endpoint 0, TIMER0 INTENSET 0, no MPSL API call in flight (`api_inflight=0`) and
+the HFXO tuned (`xo_stat=0x10001`, XOTUNED=1, no tune error). That excludes the
+HFXO/clock, API concurrency or locking, the 60 s calibration tick, the DPPI
+hand-back order and the STATS-only TIMER0 CC1 capture as causes of this assert.
+
+## Mapping `ret=` and `words=` addresses
+
+`ret=` and the `words=` entries are return addresses read off the stack. Map them
+against the `zephyr.elf` of the image that printed them (the `build` directory
+of the leg's image; the hash is in `legs.tsv`), with the toolchain's
+`arm-zephyr-eabi-addr2line -f -e zephyr.elf <addr>` and `arm-zephyr-eabi-nm -n`
+for the nearest symbol. An address that resolves to no symbol of ours is in a
+library: find the archive member in `zephyr.map` (the memory map lists each
+object under its archive) and stop there. Do not disassemble Nordic's binaries;
+their licence does not allow it.
+
+## Containment (leg `contain1`)
+
+Image: `thread.conf;bridge.conf` from the pre-fix tree, `CONFIG_RESET_ON_FATAL_ERROR=y`.
+The assert fired once, at 497 s. The console shows the assert dump at 12:47:45.972
+and a new `*** Booting` banner at 12:47:46.992: the board cold-rebooted within
+about 1 s and did not halt. The peer's child table after the run lists the same
+child (RLOC16 0x0402, extended MAC `2a3e66a0f4196d46`) as before the flash, so
+the board was attached to the Thread leader again.
+
+Not shown: the time to re-attach, and ANT traffic after the reboot (a
+host-driven dongle's channels are the host's to reopen, and the runner did not
+reopen them). The reset-cause line reads `0x00000002` after both a flash and
+the assert reboot, so it does not identify an assert. No record of the assert
+survives the reboot: `apps/common/diag_flash_log.c` is not built into
+`apps/dongle_thread`, and flash writes from the assert context are unsafe under
+MPSL. A `__noinit` RAM record read at the next boot was proposed and not
+implemented.
+
+## Stage 4 acceptance
+
+Run 2026-11-14, 14:50 to 19:45, on the 1c8967b images (sha256 and `.config`
+lines in `image-configs.txt`). No assert and no reboot on any of them; the image
+from before the fix asserted at 105 s in the same sitting.
+
+| leg | image | duration | asserts | reboots | DUT ch0 loss | Garmin ch0 loss | ENDs that found RADIO pending |
+|---|---|---|---|---|---|---|---|
+| `ctrl4` | before the fix (`a2_soak`) | assert at 105 s | 1 | 0 | n/a | n/a | n/a |
+| `acc_thread` | `thread.conf` | 7200 s | 0 | 0 | 1.87 % (28294/28833) | 1.43 % (28423/28836) | 45 (44 ext-skip TIMER0, 1 EXTEND_FAILED) |
+| `acc_gate` | gate only | 3600 s | 0 | 0 | 0.54 % | 1.06 % | 0 |
+| `acc_matter` | Matter | 3600 s | 0 | 0 | 0.55 % | 3.26 % | not logged (WRN level) |
+| `acc_coex` | coex | 1800 s | 0 | 0 | 0.18 % | 1.69 % | 0 |
+
+- `acc_thread`: 262 440 timeslots placed, 16 blocked; the DUT stayed child 2
+  (RLOC16 0x0402) of the leader for the whole leg. The child's age read 210 s
+  (timeout 240 s) at the end of the leg, against 3 s at the end of the 30 minute
+  legs, and 21 s twenty minutes later. Not investigated.
+- `acc_thread` DUT loss is 0.37 points above the tool's 1.50 % limit and 0.44
+  points above the Garmin in the same window. The three other legs have the DUT
+  below the Garmin. The room floor is unstable, so this is not a verdict either
+  way.
+- `acc_gate` and `acc_coex` have no second stack on the radio, so their pending
+  count is zero by construction: they show no regression, not the fix at work.
+  **`acc_coex` carried no BLE load.** `coex.conf` links the SoftDevice Controller
+  but never calls `bt_enable` (`CONFIG_ANT_DONGLE_BLE_LOAD` is not set), so the
+  fix beside live BLE traffic is not tested. That needs a build with
+  `ble_load.conf`.
+- The runner's reboot count is not evidence for `acc_gate` and `acc_coex` (the
+  boot banner is printed before the capture opens); the application's start line
+  appears once in each console.
+- `acc_matter`: the image attached to the leader from stored settings and ran
+  the runner's ANT workload over the UART. It was not commissioned and BLE was
+  not advertising.
+- Acknowledged data on the gate image, 60 sends each, two runs per direction:
+  slave-originated 58/60 and 57/60 completed (reference 58-59/60);
+  master-originated 58/60 and 58/60 (reference 60/60 on 2026-11-14). The
+  master-originated shortfall is two missed acks per run; not investigated, and
+  no same-sitting run of the image before the fix exists to compare with.
+- Zwift image (`thread.conf` + UART 57600, no diag; sha256 `5f5ebfe4...64db41`,
+  copied to `build\zwift_mpsl\zephyr.hex`): `ant_probe` PASS, `ant_scan` found
+  the Pro Micro master. Left on the DUT.
+
+## Nordic
+
+`nordic-report-draft.md` is a report for DevZone thread 128550, which reports the
+same `69, 108` from Nordic's ESB timeslot code. It has not been posted; posting
+it is the owner's decision.

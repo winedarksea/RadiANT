@@ -1,0 +1,19 @@
+Using COM4 at 57600 baud (UART transport)
+
+Opening a wildcard ANT+ receive channel
+  OK: extended messages
+  OK: network key
+  OK: assign channel (slave)
+  OK: wildcard channel id
+  OK: radio frequency 2457 MHz
+  OK: message period
+  OK: infinite search timeout
+  OK: open channel
+
+Listening for 25 s
+  found: #2002 - power meter
+
+Closing
+  OK: close channel
+
+Heard 13 broadcasts from 1 sensor(s)

@@ -2637,8 +2637,16 @@ refuse:
 	return rc;
 }
 
+static uint32_t abort_calls;
+
+uint32_t fake_radio_abort_calls(void)
+{
+	return abort_calls;
+}
+
 int radiant_radio_abort(void)
 {
+	abort_calls++;
 	isr_tick();
 
 	if (g.lc == LC_DOWN) {

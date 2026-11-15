@@ -1,5 +1,7 @@
 # ADR 0018 Phase 2: evaluation
 
+> **Update, 2026-11-14.** The statements below that the skip may protect against the `69:108` assert are superseded: it was a RADIO interrupt left pending at END, independent of the skip; fixed in 63b2a02. See [ADR 0021](../decisions/0021-tracked-slots-are-booked-a-period-ahead.md) and [the evidence](../../archive/benchmarks/2026-11-15-assert-69108/README.md).
+
 > **Corrections, 2026-11-10.** An independent design review changed the outcome
 > and found errors in this summary. The decision is in
 > [ADR 0021](../decisions/0021-tracked-slots-are-booked-a-period-ahead.md). The

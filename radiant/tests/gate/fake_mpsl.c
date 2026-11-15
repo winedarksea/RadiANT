@@ -12,6 +12,7 @@
 
 #include "fake_mpsl.h"
 #include "radiant_radio_nrf_gate.h"
+#include "../fake_radio.h"
 
 /* MPSL_TIMER0. Defined here rather than in the header so there is exactly one
  * of it, the same way MPSL owns exactly one. */
@@ -46,6 +47,8 @@ static struct {
 
 	bool     in_timeslot;
 	uint32_t last_extend_us;
+	/* The struct the last signal's callback returned. */
+	const mpsl_timeslot_signal_return_param_t *last_rv;
 
 	uint32_t viol_low_prio_action;
 	uint32_t viol_end_when_ended;
@@ -55,6 +58,10 @@ static struct {
 static struct fake_backend_counts b;
 static bool release_in_grant;
 static bool release_in_radio_irq;
+/* The RADIO vector model (see fake_backend_radio_irq_pend()). */
+static bool radio_irq_pending;
+static bool radio_lent_this_slot;
+static uint32_t backend_seq;
 
 /* ---------------------------------------------------------------------------
  * The MPSL entry points
@@ -176,6 +183,7 @@ uint8_t fake_mpsl_signal_s(uint32_t sess, uint32_t signal)
 		m.viol_action_no_slot++;
 		return MPSL_TIMESLOT_SIGNAL_ACTION_NONE;
 	}
+	m.last_rv = p;
 	action = p->callback_action;
 	if (action == MPSL_TIMESLOT_SIGNAL_ACTION_EXTEND) {
 		m.last_extend_us = p->params.extend.length_us;
@@ -226,6 +234,7 @@ uint32_t fake_mpsl_requests(void)  { return m.requests; }
 uint32_t fake_mpsl_accepted(void)  { return m.accepted; }
 bool     fake_mpsl_in_timeslot(void) { return m.in_timeslot; }
 uint32_t fake_mpsl_last_extend_us(void) { return m.last_extend_us; }
+const mpsl_timeslot_signal_return_param_t *fake_mpsl_last_return(void) { return m.last_rv; }
 
 const mpsl_timeslot_request_t *fake_mpsl_last_request(void)
 {
@@ -262,6 +271,36 @@ void fake_backend_reset(void)
 	memset(&b, 0, sizeof(b));
 	release_in_grant = false;
 	release_in_radio_irq = false;
+	radio_irq_pending = false;
+	radio_lent_this_slot = false;
+	backend_seq = 0u;
+}
+
+void radiant_nrf_gate_on_slot_start(void)
+{
+	b.slot_start++;
+	radio_lent_this_slot = false;
+}
+
+void fake_backend_radio_irq_pend(void) { radio_irq_pending = true; }
+bool fake_backend_radio_irq_pending(void) { return radio_irq_pending; }
+
+bool radiant_nrf_gate_radio_irq_unpend(void)
+{
+	bool was = false;
+
+	b.irq_unpend++;
+	b.unpend_seq = ++backend_seq;
+	b.unpend_abort_calls = fake_radio_abort_calls();
+	if (radio_lent_this_slot) {
+		radio_lent_this_slot = false;
+		was = radio_irq_pending;
+		if (radio_irq_pending) {
+			b.irq_unpend_cleared++;
+		}
+		radio_irq_pending = false;
+	}
+	return was;
 }
 
 const struct fake_backend_counts *fake_backend(void) { return &b; }
@@ -272,6 +311,8 @@ void fake_backend_release_in_radio_irq(bool on) { release_in_radio_irq = on; }
 void radiant_nrf_gate_on_grant(void)
 {
 	b.on_grant++;
+	/* The real backend takes the radio here (radio_on_loan). */
+	radio_lent_this_slot = true;
 	if (release_in_grant) {
 		gate_release();
 	}
@@ -298,6 +339,7 @@ void radiant_nrf_gate_on_radio_irq(void)
 void radiant_nrf_gate_on_grant_end(void)
 {
 	b.on_grant_end++;
+	b.grant_end_seq = ++backend_seq;
 }
 
 #if defined(CONFIG_RADIANT_GATE_MPSL_D2)

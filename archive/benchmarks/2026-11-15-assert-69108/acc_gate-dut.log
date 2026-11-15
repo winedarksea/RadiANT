@@ -1,0 +1,59 @@
+
+Opening ANT+ receive channels
+  OK: extended messages
+  OK: ANT+ network key
+  OK: ch0 assign slave
+  OK: ch0 channel id
+  OK: ch0 radio frequency
+  OK: ch0 message period
+  OK: ch0 search timeout
+  OK: ch0 open
+  OK: channel 0 - bicycle power, standard page 0x10, pinned to #2002
+  OK: ch1 assign slave
+  OK: ch1 channel id
+  OK: ch1 radio frequency
+  OK: ch1 message period
+  OK: ch1 search timeout
+  OK: ch1 open
+  OK: channel 1 - bicycle power, standard page 0x10, pinned to #43210
+
+Listening for 3600 s
+
+Closing
+  OK: close ch0
+  OK: unassign ch0
+  OK: close ch1
+  OK: unassign ch1
+
+=== power (device type 0x0B, 8182 ticks) ===
+  OK   packets                14341 received, 14419 expected over 3600.0 s
+  OK   loss                   0.54 % (limit 1.50 %, one packet = 0.01 %)
+  OK   jitter                 stddev 18.6 ms, max 500.0 ms (limit 124.8 ms, period 249.7 ms)
+  OK   accumulator continuity 0 violation(s)
+  OK   sensor liveness        the event counter advanced on 14059 of 14107 packet pairs
+  OK   common pages           80 x117, 81 x116, worst gap 120 (limit 121)
+  pages: 0x10 x14108, 0x50 x117, 0x51 x116
+  timing: 2.66 ms off the 249.7 ms slot grid by the host clock, 0.013 ms by the radio's
+  signal: mean -40.6 dBm (min -63, max -26, n=14341) - ANT tracks to about -90
+  wraps observed: acc_power x22, event_count x56
+  attestation: clear - no key here, which is not the same as unprotected
+  power: mean 100.01 (min 97.00, max 103.00, n=14108)
+  cadence: mean 79.99 (min 77.00, max 83.00, n=14108)
+
+=== power (device type 0x0B, 8182 ticks) ===
+  FAIL packets                0 received, 0 expected over 0.0 s
+  OK   accumulator continuity 0 violation(s)
+  wraps observed: none - this run did not reach a 16-bit accumulator wrap
+  attestation: clear - no key here, which is not the same as unprotected
+
+channel events: EVENT_RX_FAIL x70
+78 packet(s) missing, 70 of it reported as RX_FAIL; the other 8 went missing without the radio noticing.
+heard on channel 0: device #2002, type 0x0B
+
+per channel (exact loss, from the transmitters' own counters):
+  channel 0    power                    no exact figure - the event counter stood still, so it is not stepped per message
+  channel 1    power                    no exact figure - no standard-power event counter was seen (a torque-only meter, or no page 0x10)
+
+wrote C:\wt_69108\archive\benchmarks\2026-11-15-assert-69108\acc_gate-dut.json
+
+FAILED

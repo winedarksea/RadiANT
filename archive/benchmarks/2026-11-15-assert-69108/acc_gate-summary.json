@@ -1,0 +1,69 @@
+{
+  "hex": "C:\\wt_69108\\build\\v_gate\\dongle_thread\\zephyr\\zephyr.hex",
+  "image_label": "final_1c8967b_gate",
+  "image_sha256": "1beed1c90f74ae4922980ecbb0caf0f5e0d9b155c42d48793be5d23df2376a71",
+  "seconds": 3600,
+  "base": "C:\\wt_69108\\archive\\benchmarks\\2026-11-15-assert-69108\\acc_gate",
+  "start": "2026-11-14T16:55:54",
+  "flags": {
+    "no_peer": true,
+    "no_ref": false,
+    "no_search": false,
+    "no_master": false,
+    "no_flash": false,
+    "stop_on_reboot": false,
+    "continue_after_assert": true
+  },
+  "jlink": {
+    "device": "nRF54L15_M33",
+    "serial": "1057737173"
+  },
+  "tools": "C:\\wt_69108\\tools",
+  "flash_script": "C:\\wt_69108\\scripts\\flash_sim_jlink.ps1",
+  "flash_rc": 0,
+  "dut_starts": [
+    "2026-11-14T16:56:14.681"
+  ],
+  "dut_segments": 0,
+  "cap": "{'deaths': []}",
+  "console_lines": 25723,
+  "first_console_line": "2026-11-14T16:55:57.531",
+  "first_line_is_banner": false,
+  "flash_done": "2026-11-14T16:55:56.646",
+  "dut_open": "2026-11-14T16:56:14.681",
+  "reboots": 0,
+  "reboot_times": [],
+  "reboot_since_boot_s": [],
+  "assert_count": 0,
+  "assert_times": [],
+  "asserts": [],
+  "last_stats": {
+    "placed": 43246,
+    "granted": 43246,
+    "blocked": 0,
+    "ext": "1473258/0",
+    "skip": 0
+  },
+  "end_since_boot_s": 3626.708,
+  "end_since_flash_s": 3627.593,
+  "dut_rc": 1,
+  "ref_rc": 0,
+  "ended_by": "duration",
+  "elapsed": 3609.5589287281036,
+  "end": "2026-11-14T17:56:24",
+  "row": {
+    "leg": "acc_gate",
+    "image": "final_1c8967b_gate",
+    "sha12": "1beed1c90f74",
+    "start": "2026-11-14T16:55:54",
+    "result": "clean at 3626.7 s",
+    "since_open_s": "",
+    "placed": "43246",
+    "granted": "43246",
+    "blocked": "0",
+    "ext": "1473258/0",
+    "skip": "0",
+    "reboots": "0",
+    "asserts": "0"
+  }
+}

@@ -1,5 +1,7 @@
 # Phase 0a: C5-1, A13-1 and the two MPSL refusal-path defects
 
+> **Update, 2026-11-14.** The MPSL assert `69:108` recorded here as unresolved was a RADIO interrupt left pending at END; fixed in 63b2a02. See [ADR 0021](../decisions/0021-tracked-slots-are-booked-a-period-ahead.md) and [the evidence](../../archive/benchmarks/2026-11-15-assert-69108/README.md).
+
 Branch `wip/timing-triage`, based on master 7df6ada. Measured 2026-11-09.
 Nothing here is merged, pushed or tagged. Raw logs are outside the repo; see
 [phase-0a-raw-logs.md](phase-0a-raw-logs.md).

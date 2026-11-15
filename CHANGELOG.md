@@ -30,6 +30,15 @@ reads.
 
 ### Fixed
 
+- **MPSL builds (Thread, Matter, BLE coexistence, gate) no longer halt or
+  reboot with `MPSL ASSERT 69:108`.** A RADIO event that fired while a TIMER0
+  signal handler ran left the RADIO interrupt pending in the NVIC; after the
+  timeslot ended MPSL took it with no timeslot open. The gate now clears the
+  pending bit at every end of a timeslot that used the radio (63b2a02, plus
+  three hardenings in 1c8967b). On the nRF54L15 beside a Thread leader the
+  assert had fired within 1.5-6.3 minutes in every leg; three 30 minute legs and
+  a 2 h soak on the fixed image had none.
+
 - **A same-root `0xF2` keeps a Tier 2 receiver's trial device number.** The
   re-send was already a no-op for the epoch and gate, but the adapter still
   reset the on-air device number to the provisioning one, so the receiver

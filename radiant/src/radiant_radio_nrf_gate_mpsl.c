@@ -367,6 +367,9 @@ static struct {
 	 * that session's SESSION_IDLE/CLOSED backstop. MPSL never runs two of our
 	 * timeslots at once, so the radio state below describes this one. */
 	volatile bool    ts_live;
+	/* A MPSL_TIMER0 COMPARE0 interrupt we enabled is still armed: set where it is
+	 * enabled (SIGNAL_START, gate_release()), cleared by timer0_disarm(). */
+	volatile bool    t0_armed;
 
 	/*
 	 * Last instant the radio may be busy under the grant we hold, not the timeslot
@@ -524,7 +527,6 @@ static struct {
 	 * inside the end margin), rel_br_restore (lost the race, backstop restored). */
 	/* Fixed-grant TIMER0 signals: released by the core (t0_fix_rel) or the grant's
 	 * own backstop (t0_fix_backstop). */
-	uint32_t skip_left_min;
 	int32_t  start_err_last;
 	int32_t  start_err_min;
 	int32_t  start_err_max;
@@ -541,6 +543,20 @@ static struct {
 	uint32_t rel_fixed_max;
 	uint32_t hold_last;
 	uint32_t hold_max;
+	/*
+	 * Assert 69:108 evidence. High-priority ACTION_ENDs returned (end_hi) and those
+	 * that found the RADIO vector pending when the gate cleared it (unpend), by the
+	 * signal that ended the timeslot: END_SRC_*. Each unpend is inferred to be an
+	 * assert avoided (a pending vector at END is the observed precondition).
+	 */
+#define END_SRC_START     0u
+#define END_SRC_T0_SKIP   1u /* TIMER0 ext-skip (or the EL_FIXED arm's cut) */
+#define END_SRC_T0_OTHER  2u
+#define END_SRC_RADIO     3u
+#define END_SRC_EXT_FAIL  4u
+#define END_SRC_N         5u
+	uint32_t end_hi[END_SRC_N];
+	uint32_t unpend[END_SRC_N];
 #endif
 } stats;
 
@@ -556,6 +572,7 @@ static struct {
  * it measures. Each entry is the signal (high nibble) and the action returned
  * (low nibble: 0 NONE, 1 END, 2 EXTEND).
  */
+#if !defined(CONFIG_RADIANT_GATE_MPSL_STATS)
 #define TRACE_LEN 16u
 static uint8_t  trace[TRACE_LEN];
 static uint32_t trace_at;
@@ -565,6 +582,160 @@ static inline void trace_put(uint32_t signal, uint32_t action)
 	trace[trace_at % TRACE_LEN] =
 		(uint8_t)(((signal & 0xFu) << 4) | (action & 0xFu));
 	trace_at++;
+}
+#define TRACE_SIGNAL(si, signal, action) trace_put((signal), (action))
+#else
+/*
+ * Bench images (assert 69:108): a longer trace that also names the session and
+ * the time since the previous entry, and records each mpsl_timeslot_request()
+ * as a pseudo-entry (TRACE_REQ), so requests interleave with signals.
+ *
+ * Writers: on_signal() at high priority (zero-latency) and in MPSL's
+ * low-priority thread, and place_one() on the gate's queue. The index is taken
+ * and the entry written under radiant_swi_zli_lock(), which also masks the
+ * zero-latency callback, so no writer can tear another's index. The index is
+ * only ever used modulo TRACE_LEN, so even a lost entry cannot go out of range.
+ */
+#define TRACE_LEN     32u
+#define TRACE_REQ     0x80u /* hdr: a request pseudo-entry; low bits: session */
+#define TRACE_RC_WAIT 127   /* act of a request entry whose call has not returned */
+struct trace_ent {
+	uint8_t  hdr;   /* TRACE_REQ | session index */
+	uint8_t  sig;   /* signal (0 on a request entry) */
+	int8_t   act;   /* action returned; on a request entry the rc, saturated */
+	uint8_t  rsvd;
+	uint16_t dt_us; /* since the previous entry, saturating */
+	int16_t  aux;   /* request entry: notice (start - now) in 4 us units, saturating */
+};
+static struct trace_ent trace[TRACE_LEN];
+static uint32_t         trace_at;
+/* Low 32 bits of radiant_radio_now() at the last entry. */
+static uint32_t         trace_t_last;
+
+static uint32_t trace_write(uint8_t hdr, uint8_t sig, int8_t act, int16_t aux)
+{
+	const uint32_t zkey = radiant_swi_zli_lock();
+	const uint32_t now = (uint32_t)radiant_radio_now();
+	const uint32_t dt = now - trace_t_last;
+	const uint32_t at = trace_at;
+	struct trace_ent *const e = &trace[at % TRACE_LEN];
+
+	e->hdr = hdr;
+	e->sig = sig;
+	e->act = act;
+	e->rsvd = 0u;
+	e->dt_us = (dt > UINT16_MAX) ? UINT16_MAX : (uint16_t)dt;
+	e->aux = aux;
+	trace_t_last = now;
+	trace_at = at + 1u;
+	radiant_swi_zli_unlock(zkey);
+	return at;
+}
+
+static inline int8_t trace_sat8(int32_t v)
+{
+	return (int8_t)((v > 126) ? 126 : (v < -128) ? -128 : v);
+}
+
+static inline int16_t trace_sat16(int32_t v)
+{
+	return (int16_t)((v > INT16_MAX) ? INT16_MAX
+			 : (v < INT16_MIN) ? INT16_MIN : v);
+}
+
+/* Fill in a request entry's rc once the call returns, unless it was overwritten. */
+static inline void trace_req_rc(uint32_t at, int32_t rc)
+{
+	if ((uint32_t)(trace_at - at) < TRACE_LEN) {
+		trace[at % TRACE_LEN].act = trace_sat8(rc);
+	}
+}
+#define TRACE_SIGNAL(si, signal, action)                                     \
+	(void)trace_write((uint8_t)((si) & 0x7Fu), (uint8_t)(signal),        \
+			  (int8_t)(action), 0)
+
+/*
+ * Bench state the assert handler reads (assert 69:108). Low 32 bits of
+ * radiant_radio_now(); the handler takes differences, so a wrap every ~71 min
+ * costs nothing. Written by plain stores; a torn read only costs a diagnostic.
+ */
+#define API_NONE    0u
+#define API_REQUEST 1u
+#define API_OPEN    2u
+#define API_CLOSE   3u
+static struct {
+	volatile uint8_t  last_sess;  /* session of the last signal */
+	volatile uint32_t t_start;    /* last SIGNAL_START */
+	volatile uint32_t t_end;      /* last ACTION_END returned */
+	volatile uint8_t  api;        /* API_* in flight, or API_NONE */
+	volatile uint8_t  api_sess;
+	volatile uint8_t  api_last;   /* last API_* called */
+	volatile int32_t  api_rc;     /* its return code */
+	volatile uint32_t api_t_in;
+	volatile uint32_t api_t_out;
+	volatile uint32_t api_calls;
+} dbg;
+
+static inline void api_enter(uint8_t api, uint8_t si)
+{
+	dbg.api_sess = si;
+	dbg.api_last = api;
+	dbg.api_t_in = (uint32_t)radiant_radio_now();
+	dbg.api_calls++;
+	dbg.api = api;
+}
+
+static inline void api_exit(int32_t rc)
+{
+	dbg.api_rc = rc;
+	dbg.api_t_out = (uint32_t)radiant_radio_now();
+	dbg.api = API_NONE;
+}
+#endif /* CONFIG_RADIANT_GATE_MPSL_STATS */
+
+#if defined(CONFIG_RADIANT_GATE_MPSL_STATS)
+#define API_ENTER(api, si) api_enter((api), (si))
+#define API_EXIT(rc)       api_exit(rc)
+#else
+#define API_ENTER(api, si) do { } while (0)
+#define API_EXIT(rc)       do { } while (0)
+#endif
+
+/*
+ * The three MPSL timeslot API calls, in one place each, so the bench probes
+ * (and any lock around them) cannot miss a call site. Every caller is a thread.
+ */
+static mpsl_timeslot_signal_return_param_t *on_signal(
+	mpsl_timeslot_session_id_t id, uint32_t signal);
+
+static inline int32_t ts_request(struct sess *s)
+{
+	int32_t rc;
+
+	API_ENTER(API_REQUEST, sess_idx(s));
+	rc = mpsl_timeslot_request(s->id, &s->req);
+	API_EXIT(rc);
+	return rc;
+}
+
+static inline int32_t ts_session_open(struct sess *s)
+{
+	int32_t rc;
+
+	API_ENTER(API_OPEN, sess_idx(s));
+	rc = mpsl_timeslot_session_open(on_signal, &s->id);
+	API_EXIT(rc);
+	return rc;
+}
+
+static inline int32_t ts_session_close(struct sess *s)
+{
+	int32_t rc;
+
+	API_ENTER(API_CLOSE, sess_idx(s));
+	rc = mpsl_timeslot_session_close(s->id);
+	API_EXIT(rc);
+	return rc;
 }
 
 /*
@@ -935,7 +1106,19 @@ static void place_one(struct sess *s)
 	s->placed_high_prio = s->ng.high_prio;
 	s->notice_us = (int32_t)(int64_t)(s->r_start - radiant_radio_now());
 	s->mpsl_owes = true;
-	rc = mpsl_timeslot_request(s->id, &s->req);
+#if defined(CONFIG_RADIANT_GATE_MPSL_STATS)
+	{
+		/* Entered before the call: an answer delivered inline lands after it. */
+		const uint32_t tat = trace_write(
+			(uint8_t)(TRACE_REQ | sess_idx(s)), 0u, TRACE_RC_WAIT,
+			trace_sat16(s->notice_us / 4));
+
+		rc = ts_request(s);
+		trace_req_rc(tat, rc);
+	}
+#else
+	rc = ts_request(s);
+#endif
 	if (rc == 0) {
 		s->want_place = false;
 		if (!s->mpsl_owes) {
@@ -1100,14 +1283,45 @@ static inline void gate_hand_back(void)
 }
 
 /*
+ * Set for the whole of a high-priority signal, so the backend can tell a
+ * zero-latency completion from an ordinary one (see gate_in_signal() in
+ * radiant_radio_nrf_gate.h). Not set for low-priority signals: the trampoline
+ * could preempt those, making a second producer for the backend's single-producer
+ * ring. A plain bool, since only the zero-latency callback writes it.
+ */
+static volatile bool in_signal;
+
+bool gate_in_signal(void)
+{
+	return in_signal;
+}
+
+/*
  * Disarms TIMER0 on every path that ends a grant. MPSL_TIMER0 belongs to MPSL. A
  * COMPARE0 left enabled re-enters forever on an event nothing clears: the board
  * stays alive and answers nothing, with no fault message.
+ *
+ * The registers are ours only inside our timeslot (mpsl_timeslot.h). A
+ * high-priority signal is inside it, so there they are written unconditionally.
+ * Elsewhere (the low-priority backstops SESSION_IDLE, SESSION_CLOSED and a late
+ * BLOCKED/CANCELLED, and gate_shutdown()) no timeslot of ours may be running and
+ * the timer may be MPSL's again, so they are written only while g.t0_armed says a
+ * COMPARE0 interrupt we enabled is still armed. That still covers the case the
+ * backstop exists for: gate_release() arms the compare and returns the radio, and
+ * if that compare is lost the flag is still set when SESSION_IDLE arrives. The
+ * test and the writes are masked against the zero-latency callback, so another
+ * session's START cannot arm its compare between them.
  */
 static inline void timer0_disarm(void)
 {
-	nrf_timer_int_disable(MPSL_TIMER0, NRF_TIMER_INT_COMPARE0_MASK);
-	nrf_timer_event_clear(MPSL_TIMER0, NRF_TIMER_EVENT_COMPARE0);
+	const uint32_t zkey = radiant_swi_zli_lock();
+
+	if (in_signal || g.t0_armed) {
+		nrf_timer_int_disable(MPSL_TIMER0, NRF_TIMER_INT_COMPARE0_MASK);
+		nrf_timer_event_clear(MPSL_TIMER0, NRF_TIMER_EVENT_COMPARE0);
+	}
+	g.t0_armed = false;
+	radiant_swi_zli_unlock(zkey);
 	/* Also returns the radio, so no path can forget to. Radio shorts left set
 	 * would fire on the SoftDevice Controller's own events. */
 	gate_hand_back();
@@ -1135,18 +1349,14 @@ static inline void submit_denial(void)
 }
 
 /*
- * Set for the whole of a high-priority signal, so the backend can tell a
- * zero-latency completion from an ordinary one (see gate_in_signal() in
- * radiant_radio_nrf_gate.h). Not set for low-priority signals: the trampoline
- * could preempt those, making a second producer for the backend's single-producer
- * ring. A plain bool, since only the zero-latency callback writes it.
+ * What every low-priority signal returns (BLOCKED, CANCELLED, SESSION_IDLE,
+ * SESSION_CLOSED, and the error signals): always ACTION_NONE. Not the session's
+ * own rv, which the zero-latency invocation for the same session writes: a
+ * low-priority invocation preempted after its last write would otherwise hand
+ * MPSL that invocation's END or EXTEND, and an action from a low-priority signal
+ * asserts (mpsl_timeslot.h). Only NONE is ever written here.
  */
-static volatile bool in_signal;
-
-bool gate_in_signal(void)
-{
-	return in_signal;
-}
+static mpsl_timeslot_signal_return_param_t rv_low_prio;
 
 static mpsl_timeslot_signal_return_param_t *on_signal(
 	mpsl_timeslot_session_id_t id, uint32_t signal)
@@ -1155,9 +1365,15 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		signal <= MPSL_TIMESLOT_SIGNAL_EXTEND_SUCCEEDED;
 	struct sess   *s = sess_of(id);
 	const uint8_t  si = sess_idx(s);
-	/* Per-session return parameter; every branch writes through rv. */
-	mpsl_timeslot_signal_return_param_t *const rvp = &s->rv;
+	/* Per-session return parameter for the high-priority signals (each branch
+	 * writes through rv); the shared always-NONE one for the rest. */
+	mpsl_timeslot_signal_return_param_t *const rvp =
+		high_prio_signal ? &s->rv : &rv_low_prio;
 	uint32_t zkey;
+#if defined(CONFIG_RADIANT_GATE_MPSL_STATS)
+	/* This TIMER0 signal ended its grant by the skip (evidence counters only). */
+	bool skip_end = false;
+#endif
 #define rv (*rvp)
 
 	if (high_prio_signal) {
@@ -1168,15 +1384,20 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 	 * START then silence means the RADIO interrupt spins and never reaches here. */
 	rv.callback_action = MPSL_TIMESLOT_SIGNAL_ACTION_NONE;
 	stats.last_signal = signal;
+	GSTAT(dbg.last_sess = si);
 
 	switch (signal) {
 	case MPSL_TIMESLOT_SIGNAL_START:
+		/* A new timeslot: nothing of it is the radio's yet (see
+		 * radiant_nrf_gate_radio_irq_unpend()). Before any path below. */
+		radiant_nrf_gate_on_slot_start();
 		stats.granted++;
 		GSTAT(s->n_granted++);
 		/* Answered: the session accepts a new request. See struct sess::mpsl_owes. */
 		s->mpsl_owes = false;
 		s->blocked_run = 0u;
 		s->anchor = radiant_radio_now();
+		GSTAT(dbg.t_start = (uint32_t)s->anchor);
 		s->anchor_valid = true;
 		/* Radio on loan from here until timer0_disarm() returns it. */
 		g.hw_held = true;
@@ -1302,6 +1523,7 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		 * at once. Clear between cc_set and int_enable. gate_release() uses the same order.
 		 */
 		nrf_timer_event_clear(MPSL_TIMER0, NRF_TIMER_EVENT_COMPARE0);
+		g.t0_armed = true;
 		nrf_timer_int_enable(MPSL_TIMER0, NRF_TIMER_INT_COMPARE0_MASK);
 		break;
 
@@ -1338,25 +1560,16 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		    g.granted_len_us < g.want_len_us) {
 			/* As EXTEND_FAILED below, without asking. See ext_skip. */
 			stats.ext_skipped++;
+			GSTAT(skip_end = true);
 			g.granted = false;
 			timer0_disarm();
 			(void)radiant_radio_abort();
 			end_housekeeping();
-#if defined(CONFIG_RADIANT_GATE_MPSL_STATS)
-			/* How much of the fixed end margin this path left. */
-			{
-				uint32_t left;
-
-				nrf_timer_task_trigger(MPSL_TIMER0,
-						       NRF_TIMER_TASK_CAPTURE1);
-				left = g.granted_len_us -
-				       nrf_timer_cc_get(MPSL_TIMER0, 1);
-				if (stats.skip_left_min == 0u ||
-				    left < stats.skip_left_min) {
-					stats.skip_left_min = left;
-				}
-			}
-#endif
+			/*
+			 * Nothing more on MPSL_TIMER0 here: the radio is already handed back,
+			 * and a bench capture that once measured this path's margin overwrote
+			 * CC1 after the hand-back (removed in the 69:108 cleanup).
+			 */
 			rv.callback_action = MPSL_TIMESLOT_SIGNAL_ACTION_END;
 			break;
 		}
@@ -1702,6 +1915,7 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 	} else if (rv.callback_action == MPSL_TIMESLOT_SIGNAL_ACTION_END) {
 		g.ended = true;
 		g.ts_live = false;
+		GSTAT(dbg.t_end = (uint32_t)radiant_radio_now());
 		/* A placement held back for this timeslot (place_one()). */
 		for (uint32_t i = 0u; i < NSESS; i++) {
 			if (ss[i].wait_live) {
@@ -1709,9 +1923,44 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 				break;
 			}
 		}
+		/*
+		 * Assert 69:108. A RADIO event that fired while this signal ran (same priority,
+		 * so it could only pend) leaves MPSL's RADIO vector pending even after the
+		 * hand-back cleared our mask. MPSL takes it once ACTION_END has closed the
+		 * timeslot: a RADIO interrupt with no timeslot open, which asserts. Clear it
+		 * here, while the timeslot and its RADIO are still ours (mpsl_timeslot.h), and
+		 * after every hand-back and radiant_radio_abort() on the paths above: with our
+		 * mask cleared and the radio disabled nothing of ours can pend it again before
+		 * the return. Every high-priority END funnels through here; low-priority
+		 * signals never return END, and their hand-backs (BLOCKED, SESSION_IDLE,
+		 * SESSION_CLOSED, gate_shutdown()) must not clear it: the radio may already be
+		 * the other stack's. The backend clears only if this timeslot took the radio.
+		 */
+		if (high_prio_signal) {
+			const bool was_pending = radiant_nrf_gate_radio_irq_unpend();
+
+#if defined(CONFIG_RADIANT_GATE_MPSL_STATS)
+			{
+				const uint32_t src =
+					(signal == MPSL_TIMESLOT_SIGNAL_START) ? END_SRC_START
+					: (signal == MPSL_TIMESLOT_SIGNAL_RADIO) ? END_SRC_RADIO
+					: (signal == MPSL_TIMESLOT_SIGNAL_EXTEND_FAILED)
+						? END_SRC_EXT_FAIL
+					: skip_end ? END_SRC_T0_SKIP
+						   : END_SRC_T0_OTHER;
+
+				stats.end_hi[src]++;
+				if (was_pending) {
+					stats.unpend[src]++;
+				}
+			}
+#else
+			ARG_UNUSED(was_pending);
+#endif
+		}
 	}
 
-	trace_put(signal, rv.callback_action);
+	TRACE_SIGNAL(si, signal, rv.callback_action);
 	if (high_prio_signal) {
 		in_signal = false;
 	}
@@ -1796,11 +2045,10 @@ static void gate_stats_fn(struct k_work *w)
 		stats.rel_br_inside, stats.rel_br_restore, stats.rel_cap_last,
 		stats.rel_est_last, stats.t0_fix_rel, stats.t0_fix_backstop,
 		stats.t0_fix_at, stats.ext_skipped);
-	LOG_INF("D2START n=%u err last/min/max %d/%d/%d us | skip_left_min=%u | "
+	LOG_INF("D2START n=%u err last/min/max %d/%d/%d us | "
 		"due saved=%u late=%u orphan=%u tail=%u repl=%u join=%u jdefer=%u",
 		stats.start_err_n, (int)stats.start_err_last,
 		(int)stats.start_err_min, (int)stats.start_err_max,
-		stats.skip_left_min,
 		radiant_sched_stats_get()->book_saved,
 		radiant_sched_stats_get()->book_late,
 		radiant_sched_stats_get()->book_orphan,
@@ -1813,6 +2061,13 @@ static void gate_stats_fn(struct k_work *w)
 		stats.el_gr_by_notice[1], stats.el_gr_by_notice[2],
 		stats.el_gr_by_notice[3], stats.el_gr_by_notice[4],
 		stats.el_blk_deferred);
+	LOG_INF("UNPEND end start/t0skip/t0other/radio/extfail %u/%u/%u/%u/%u "
+		"pending %u/%u/%u/%u/%u",
+		stats.end_hi[END_SRC_START], stats.end_hi[END_SRC_T0_SKIP],
+		stats.end_hi[END_SRC_T0_OTHER], stats.end_hi[END_SRC_RADIO],
+		stats.end_hi[END_SRC_EXT_FAIL], stats.unpend[END_SRC_START],
+		stats.unpend[END_SRC_T0_SKIP], stats.unpend[END_SRC_T0_OTHER],
+		stats.unpend[END_SRC_RADIO], stats.unpend[END_SRC_EXT_FAIL]);
 	(void)k_work_reschedule_for_queue(&gate_wq, &gate_stats_work, K_SECONDS(5));
 }
 #endif
@@ -1867,7 +2122,7 @@ int gate_init(void)
 		}
 		swi_registered = true;
 	}
-	rc = mpsl_timeslot_session_open(on_signal, &ss[0].id);
+	rc = ts_session_open(&ss[0]);
 	LOG_INF("gate: session_open rc=%d, max_window=%u us, place_lead=%u us",
 		(int)rc, (unsigned)MAX_WINDOW_US, (unsigned)PLACE_LEAD_US);
 	if (rc != 0) {
@@ -1882,7 +2137,7 @@ int gate_init(void)
 	 * with caps.booking false, as an app that never raised
 	 * CONFIG_MPSL_TIMESLOT_SESSION_COUNT would.
 	 */
-	rc = mpsl_timeslot_session_open(on_signal, &ss[1].id);
+	rc = ts_session_open(&ss[1]);
 	LOG_INF("gate: (d2) second session_open rc=%d, scan lead %u us", (int)rc,
 		(unsigned)EL_LEAD_START_US);
 	if (rc == 0) {
@@ -1921,7 +2176,7 @@ void gate_shutdown(void)
 	}
 	for (uint32_t i = NSESS; i-- > 0u;) {
 		if (ss[i].open) {
-			(void)mpsl_timeslot_session_close(ss[i].id);
+			(void)ts_session_close(&ss[i]);
 		}
 		ss[i].open = false;
 		ss[i].anchor_valid = false;
@@ -2569,6 +2824,7 @@ static void gate_release_masked(void)
 			nrf_timer_cc_set(MPSL_TIMER0, 0, want);
 			nrf_timer_event_clear(MPSL_TIMER0,
 					      NRF_TIMER_EVENT_COMPARE0);
+			g.t0_armed = true;
 			nrf_timer_int_enable(MPSL_TIMER0,
 					     NRF_TIMER_INT_COMPARE0_MASK);
 
@@ -2585,6 +2841,7 @@ static void gate_release_masked(void)
 		} else {
 			GSTAT(stats.rel_br_inside++);
 			/* Already inside the end margin: the armed compare is right, and moving it can only lose. */
+			g.t0_armed = true;
 			nrf_timer_int_enable(MPSL_TIMER0,
 					     NRF_TIMER_INT_COMPARE0_MASK);
 		}
@@ -2607,13 +2864,348 @@ bool gate_extend(uint32_t us)
 	return false;
 }
 
+#if defined(CONFIG_MPSL_ASSERT_HANDLER) && defined(CONFIG_RADIANT_GATE_MPSL_STATS)
+/*
+ * Bench dump for assert 69:108. Everything here is a register or memory read and
+ * printk: it may run in MPSL's zero-latency context, so no kernel call that needs
+ * an SVC and no lock. Every line is "key=value" pairs under the *** MPSL ASSERT line.
+ */
+#include <zephyr/linker/linker-defs.h>
+#include <cmsis_core.h>
+#include <hal/nrf_radio.h>
+
+/* The ISR stack, to bound the MSP walk (declared as kernel_internal.h does). */
+K_KERNEL_PINNED_STACK_ARRAY_DECLARE(z_interrupt_stacks, CONFIG_MP_MAX_NUM_CPUS,
+				    CONFIG_ISR_STACK_SIZE);
+
+/* IRQ lines MPSL connects (nrf/subsys/mpsl/init/mpsl_init.c). */
+#if defined(CONFIG_SOC_COMPATIBLE_NRF54LX)
+#define DIAG_IRQ_MPSL_TIMER ((int32_t)TIMER10_IRQn)
+#define DIAG_IRQ_MPSL_RTC   ((int32_t)GRTC_3_IRQn)
+#define DIAG_IRQ_RADIO      ((int32_t)RADIO_0_IRQn)
+#define DIAG_IRQ_CLOCK      ((int32_t)CLOCK_POWER_IRQn)
+#elif defined(CONFIG_SOC_COMPATIBLE_NRF52X) || defined(CONFIG_SOC_COMPATIBLE_NRF53X)
+#define DIAG_IRQ_MPSL_TIMER ((int32_t)TIMER0_IRQn)
+#define DIAG_IRQ_MPSL_RTC   ((int32_t)RTC0_IRQn)
+#define DIAG_IRQ_RADIO      ((int32_t)RADIO_IRQn)
+#define DIAG_IRQ_CLOCK      ((int32_t)NRFX_IRQ_NUMBER_GET(NRF_CLOCK))
+#else
+#define DIAG_IRQ_MPSL_TIMER (-100)
+#define DIAG_IRQ_MPSL_RTC   (-100)
+#define DIAG_IRQ_RADIO      (-100)
+#define DIAG_IRQ_CLOCK      (-100)
+#endif
+
+/* Words walked up from the handler's stack pointer. */
+#define DIAG_STACK_WORDS 48u
+
+static const char *diag_ipsr_name(uint32_t ipsr)
+{
+	const int32_t irq = (int32_t)ipsr - 16;
+
+	if (ipsr == 0u) {
+		return "thread";
+	}
+	if (ipsr < 16u) {
+		return "sys_exception";
+	}
+	if (irq == DIAG_IRQ_MPSL_TIMER) {
+		return "MPSL_TIMER0";
+	}
+	if (irq == DIAG_IRQ_RADIO) {
+		return "RADIO";
+	}
+	if (irq == DIAG_IRQ_MPSL_RTC) {
+		return "MPSL_RTC_GRTC";
+	}
+	if (irq == DIAG_IRQ_CLOCK) {
+		return "CLOCK_POWER";
+	}
+#if defined(CONFIG_MPSL_LOW_PRIO_IRQN)
+	if (irq == CONFIG_MPSL_LOW_PRIO_IRQN) {
+		return "MPSL_LOW_PRIO_SWI";
+	}
+#endif
+#if defined(CONFIG_RADIANT_SWI_IRQN)
+	if (irq == CONFIG_RADIANT_SWI_IRQN) {
+		return "RADIANT_SWI";
+	}
+#endif
+	return "other_irq";
+}
+
+/*
+ * Walk up the stack from sp (never past top), printing only words that look like
+ * a return address (inside the image's text, Thumb bit set) or an EXC_RETURN
+ * (0xFFFFFFxx, marked X: an exception frame sits just above it). Resolve against
+ * build/.../zephyr/zephyr.map (or arm-zephyr-eabi-addr2line -f on zephyr.elf),
+ * clearing bit 0 first.
+ */
+static void diag_stack_walk(uintptr_t sp, uintptr_t top)
+{
+	const uintptr_t lo = (uintptr_t)__text_region_start;
+	const uintptr_t hi = (uintptr_t)__text_region_end;
+
+	printk("    stack_sp=0x%08x stack_top=0x%08x words=", (unsigned)sp,
+	       (unsigned)top);
+	for (uint32_t i = 0u; i < DIAG_STACK_WORDS; i++) {
+		const uintptr_t a = sp + 4u * i;
+		uint32_t        v;
+
+		if (a + 4u > top || a < sp) {
+			break;
+		}
+		v = *(const volatile uint32_t *)a;
+		if ((v & 1u) != 0u && (uintptr_t)(v & ~1u) >= lo &&
+		    (uintptr_t)(v & ~1u) < hi) {
+			printk(" +%u:%08x", (unsigned)(4u * i), (unsigned)v);
+		} else if ((v & 0xFFFFFF00u) == 0xFFFFFF00u) {
+			printk(" +%u:X%08x", (unsigned)(4u * i), (unsigned)v);
+		}
+	}
+	printk("\n");
+}
+
+/* Fallback bound when sp is outside the stack we expected: the end of SRAM. */
+static uintptr_t diag_ram_end(void)
+{
+	return (uintptr_t)CONFIG_SRAM_BASE_ADDRESS +
+	       (uintptr_t)CONFIG_SRAM_SIZE * 1024u;
+}
+
+static void diag_context(uint32_t ipsr, uint32_t control, uintptr_t msp,
+			 uintptr_t psp, uintptr_t ret)
+{
+	const struct k_thread *const t = k_current_get();
+#if defined(CONFIG_THREAD_STACK_INFO)
+	const uintptr_t tlo = (t != NULL) ? (uintptr_t)t->stack_info.start : 0u;
+	const uintptr_t thi = (t != NULL) ? tlo + (uintptr_t)t->stack_info.size : 0u;
+#else
+	const uintptr_t tlo = 0u;
+	const uintptr_t thi = 0u;
+#endif
+	const uintptr_t ilo = (uintptr_t)z_interrupt_stacks[0];
+	const uintptr_t ihi = (uintptr_t)z_interrupt_stacks[0] +
+			      sizeof(z_interrupt_stacks[0]);
+	/* Handler mode always runs on MSP; thread mode on PSP when CONTROL.SPSEL. */
+	const bool      on_psp = (ipsr == 0u) && ((control & 2u) != 0u);
+	const uintptr_t sp = on_psp ? psp : msp;
+	uintptr_t       top;
+
+	printk("    ipsr=%u ctx=%s control=0x%x msp=0x%08x psp=0x%08x ret=0x%08x "
+	       "thread=%p thread_stack=0x%08x..0x%08x\n",
+	       (unsigned)ipsr, diag_ipsr_name(ipsr), (unsigned)control,
+	       (unsigned)msp, (unsigned)psp, (unsigned)ret, (void *)t,
+	       (unsigned)tlo, (unsigned)thi);
+	/*
+	 * In handler mode, the hardware frame of the thread the outermost interrupt
+	 * preempted is at PSP (r0 r1 r2 r3 r12 lr pc xpsr). Nested interrupts' frames
+	 * are on MSP and show up in the walk below, after an X (EXC_RETURN) word.
+	 */
+	if (ipsr != 0u && psp >= tlo && psp + 32u <= thi) {
+		const volatile uint32_t *const f = (const volatile uint32_t *)psp;
+
+		printk("    psp_frame_lr=0x%08x psp_frame_pc=0x%08x "
+		       "psp_frame_xpsr=0x%08x\n",
+		       (unsigned)f[5], (unsigned)f[6], (unsigned)f[7]);
+	} else {
+		printk("    psp_frame=none\n");
+	}
+	if (on_psp) {
+		top = (sp >= tlo && sp < thi) ? thi : diag_ram_end();
+	} else {
+		top = (sp >= ilo && sp < ihi) ? ihi : diag_ram_end();
+	}
+	diag_stack_walk(sp, top);
+}
+
+static void diag_clock(void)
+{
+#if defined(CLOCK_XO_STAT_STATE_Msk)
+	/* nRF54L: HFXO under CLOCK.XO; tuning events. Reads only. */
+	printk("    xo_run=0x%x xo_stat=0x%x ev_xostarted=%u ev_xotuned=%u "
+	       "ev_xotuneerror=%u ev_xotunefailed=%u clk_intenset=0x%x "
+	       "pll_stat=0x%x lf_src=0x%x lf_run=0x%x lf_stat=0x%x\n",
+	       (unsigned)NRF_CLOCK->XO.RUN, (unsigned)NRF_CLOCK->XO.STAT,
+	       (unsigned)NRF_CLOCK->EVENTS_XOSTARTED,
+	       (unsigned)NRF_CLOCK->EVENTS_XOTUNED,
+	       (unsigned)NRF_CLOCK->EVENTS_XOTUNEERROR,
+	       (unsigned)NRF_CLOCK->EVENTS_XOTUNEFAILED,
+	       (unsigned)NRF_CLOCK->INTENSET, (unsigned)NRF_CLOCK->PLL.STAT,
+	       (unsigned)NRF_CLOCK->LFCLK.SRC, (unsigned)NRF_CLOCK->LFCLK.RUN,
+	       (unsigned)NRF_CLOCK->LFCLK.STAT);
+#elif defined(CLOCK_HFCLKSTAT_STATE_Msk)
+	/* nRF52/nRF53. */
+	printk("    hfclkrun=0x%x hfclkstat=0x%x ev_hfclkstarted=%u "
+	       "lfclkrun=0x%x lfclkstat=0x%x ev_lfclkstarted=%u "
+	       "clk_intenset=0x%x\n",
+	       (unsigned)NRF_CLOCK->HFCLKRUN, (unsigned)NRF_CLOCK->HFCLKSTAT,
+	       (unsigned)NRF_CLOCK->EVENTS_HFCLKSTARTED,
+	       (unsigned)NRF_CLOCK->LFCLKRUN, (unsigned)NRF_CLOCK->LFCLKSTAT,
+	       (unsigned)NRF_CLOCK->EVENTS_LFCLKSTARTED,
+	       (unsigned)NRF_CLOCK->INTENSET);
+#else
+	printk("    clock=unknown_soc\n");
+#endif
+}
+
+#define DIAG_T0_CC_N (sizeof(MPSL_TIMER0->CC) / sizeof(MPSL_TIMER0->CC[0]))
+
+/*
+ * MPSL_TIMER0 exactly as MPSL and the gate left it: every CC, every COMPARE event,
+ * INTENSET and SHORTS are read BEFORE this handler captures the counter into CC1,
+ * which it may do only because the system is going down.
+ */
+static void diag_timer0(void)
+{
+	uint32_t cc[DIAG_T0_CC_N];
+	uint32_t ev = 0u;
+	uint32_t inten = MPSL_TIMER0->INTENSET;
+	uint32_t shorts = MPSL_TIMER0->SHORTS;
+	uint32_t count;
+
+	for (uint32_t i = 0u; i < DIAG_T0_CC_N; i++) {
+		cc[i] = MPSL_TIMER0->CC[i];
+		if (MPSL_TIMER0->EVENTS_COMPARE[i] != 0u) {
+			ev |= 1u << i;
+		}
+	}
+	nrf_timer_task_trigger(MPSL_TIMER0, NRF_TIMER_TASK_CAPTURE1);
+	count = nrf_timer_cc_get(MPSL_TIMER0, NRF_TIMER_CC_CHANNEL1);
+
+	printk("    t0_intenset=0x%08x t0_shorts=0x%x t0_ev_compare=0x%02x "
+	       "t0_count=%u (captured into CC1 after the reads)\n",
+	       (unsigned)inten, (unsigned)shorts, (unsigned)ev, (unsigned)count);
+	printk("   ");
+	for (uint32_t i = 0u; i < DIAG_T0_CC_N; i++) {
+		printk(" t0_cc%u=%u", (unsigned)i, (unsigned)cc[i]);
+	}
+	printk("\n");
+}
+
+static void diag_radio(void)
+{
+	printk("    radio_state=%u radio_shorts=0x%08x radio_intenset=0x%08x",
+	       (unsigned)nrf_radio_state_get(NRF_RADIO),
+	       (unsigned)nrf_radio_shorts_get(NRF_RADIO),
+	       (unsigned)nrf_radio_int_enable_check(NRF_RADIO, UINT32_MAX));
+#if defined(RADIO_SUBSCRIBE_TXEN_EN_Msk)
+	/* DPPI routing: whose channels the RADIO's endpoints point at right now. */
+	printk(" sub_rxen=0x%08x sub_txen=0x%08x sub_disable=0x%08x "
+	       "sub_rssistart=0x%08x pub_address=0x%08x pub_rxready=0x%08x",
+	       (unsigned)NRF_RADIO->SUBSCRIBE_RXEN,
+	       (unsigned)NRF_RADIO->SUBSCRIBE_TXEN,
+	       (unsigned)NRF_RADIO->SUBSCRIBE_DISABLE,
+	       (unsigned)NRF_RADIO->SUBSCRIBE_RSSISTART,
+	       (unsigned)NRF_RADIO->PUBLISH_ADDRESS,
+	       (unsigned)NRF_RADIO->PUBLISH_RXREADY);
+#endif
+	printk("\n");
+}
+
+static void diag_gate_state(uint32_t now)
+{
+	printk("    last_sess=%u since_start_us=%u since_end_us=%u ts_live=%d "
+	       "live_sess=%u hw_held=%d ended=%d extendable=%d no_extend=%d "
+	       "end_margin_us=%u op_sess=%u deny_wanted=%d ext_skip=%u "
+	       "ext_fail_run=%u elastic_initial_us=%u\n",
+	       (unsigned)dbg.last_sess, (unsigned)(now - dbg.t_start),
+	       (unsigned)(now - dbg.t_end), (int)g.ts_live,
+	       (unsigned)g.live_sess, (int)g.hw_held, (int)g.ended,
+	       (int)g.extendable, (int)g.no_extend, (unsigned)g.end_margin_us,
+	       (unsigned)g.op_sess, (int)g.deny_wanted, (unsigned)ext_skip,
+	       (unsigned)ext_fail_run, (unsigned)elastic_initial_us);
+	for (uint32_t i = 0u; i < NSESS; i++) {
+		const struct sess *const s = &ss[i];
+		const bool earliest =
+			s->req.request_type == MPSL_TIMESLOT_REQ_TYPE_EARLIEST;
+
+		printk("    s%u: id=%u open=%d role=%u owes=%d want_place=%d "
+		       "wait_live=%d boot=%d anchor_valid=%d book_failed=%d "
+		       "r_start_minus_now=%d req_type=%s req_prio=%u req_hfclk=%u "
+		       "req_len=%u req_dist_or_timeout=%u notice_us=%d "
+		       "placed=%u granted=%u blocked=%u\n",
+		       (unsigned)i, (unsigned)s->id, (int)s->open,
+		       (unsigned)s->role, (int)s->mpsl_owes, (int)s->want_place,
+		       (int)s->wait_live, (int)s->bootstrapping,
+		       (int)s->anchor_valid, (int)s->book_failed,
+		       (int)(int64_t)(s->r_start - (radiant_time_t)radiant_radio_now()),
+		       earliest ? "earliest" : "normal",
+		       (unsigned)(earliest ? s->req.params.earliest.priority
+					   : s->req.params.normal.priority),
+		       (unsigned)(earliest ? s->req.params.earliest.hfclk
+					   : s->req.params.normal.hfclk),
+		       (unsigned)(earliest ? s->req.params.earliest.length_us
+					   : s->req.params.normal.length_us),
+		       (unsigned)(earliest ? s->req.params.earliest.timeout_us
+					   : s->req.params.normal.distance_us),
+		       (int)s->notice_us, (unsigned)s->n_placed,
+		       (unsigned)s->n_granted, (unsigned)s->n_blocked);
+	}
+	printk("    end_start=%u end_t0skip=%u end_t0other=%u end_radio=%u "
+	       "end_extfail=%u unpend_start=%u unpend_t0skip=%u unpend_t0other=%u "
+	       "unpend_radio=%u unpend_extfail=%u\n",
+	       stats.end_hi[END_SRC_START], stats.end_hi[END_SRC_T0_SKIP],
+	       stats.end_hi[END_SRC_T0_OTHER], stats.end_hi[END_SRC_RADIO],
+	       stats.end_hi[END_SRC_EXT_FAIL], stats.unpend[END_SRC_START],
+	       stats.unpend[END_SRC_T0_SKIP], stats.unpend[END_SRC_T0_OTHER],
+	       stats.unpend[END_SRC_RADIO], stats.unpend[END_SRC_EXT_FAIL]);
+	printk("    api_inflight=%u api_sess=%u api_last=%u api_rc=%d "
+	       "api_calls=%u since_api_in_us=%u since_api_out_us=%u "
+	       "(api: 0 none, 1 request, 2 session_open, 3 session_close)\n",
+	       (unsigned)dbg.api, (unsigned)dbg.api_sess,
+	       (unsigned)dbg.api_last, (int)dbg.api_rc,
+	       (unsigned)dbg.api_calls, (unsigned)(now - dbg.api_t_in),
+	       (unsigned)(now - dbg.api_t_out));
+}
+
+static void diag_trace(void)
+{
+	const uint32_t at = trace_at;
+	const uint32_t n = (at < TRACE_LEN) ? at : TRACE_LEN;
+
+	printk("    trace (sess:sig:act+dt_us; request entries "
+	       "sess:R:rc@notice_us+dt_us; oldest first):");
+	for (uint32_t k = 0u; k < n; k++) {
+		const struct trace_ent *const e = &trace[(at - n + k) % TRACE_LEN];
+
+		if ((e->hdr & TRACE_REQ) != 0u) {
+			printk(" %u:R:%d@%d+%u", (unsigned)(e->hdr & 0x7Fu),
+			       (int)e->act, (int)e->aux * 4, (unsigned)e->dt_us);
+		} else {
+			printk(" %u:%u:%d+%u", (unsigned)(e->hdr & 0x7Fu),
+			       (unsigned)e->sig, (int)e->act, (unsigned)e->dt_us);
+		}
+	}
+	printk("\n");
+}
+#endif /* CONFIG_MPSL_ASSERT_HANDLER && CONFIG_RADIANT_GATE_MPSL_STATS */
+
 #if defined(CONFIG_MPSL_ASSERT_HANDLER)
 void mpsl_assert_handle(const char *const file, const uint32_t line)
 {
+#if defined(CONFIG_RADIANT_GATE_MPSL_STATS)
+	/* Taken first, before anything below moves the stack or the registers. */
+	const uint32_t  d_ipsr = __get_IPSR();
+	const uint32_t  d_control = __get_CONTROL();
+	const uintptr_t d_msp = (uintptr_t)__get_MSP();
+	const uintptr_t d_psp = (uintptr_t)__get_PSP();
+	/* Inside m_assert_handler (mpsl_init.c), or libmpsl if that tail-called here. */
+	const uintptr_t d_ret = (uintptr_t)__builtin_return_address(0);
+	const uint32_t  d_now = (uint32_t)radiant_radio_now();
+#endif
 	/*
-	 * The two signals that mean this file is wrong: OVERSTAYED (the end margin is too
-	 * small, the most likely field failure) and INVALID (an action returned from a
-	 * low-priority signal). The counters tell them apart; the assert site cannot.
+	 * Two signals that mean this file is wrong: OVERSTAYED (the end margin is too
+	 * small) and INVALID (an action returned from a low-priority signal). The counters
+	 * tell them apart; the assert site cannot.
+	 *
+	 * 69:108 is neither (over=0 invalid=0): it was observed in the RADIO_0 interrupt
+	 * (ipsr=RADIO), 18 us after on_signal() returned ACTION_END, with no timeslot
+	 * open - MPSL taking a RADIO interrupt that latched while our grant was being
+	 * ended. on_signal() now clears that pending state before every high-priority
+	 * END (radiant_nrf_gate_radio_irq_unpend()). The unpend_* counters below count
+	 * the ENDs that found the vector pending; each is inferred, not observed, to be
+	 * an assert avoided.
 	 */
 	/*
 	 * LOG_PANIC() first, or this handler is silent: printk goes through the log
@@ -2631,6 +3223,14 @@ void mpsl_assert_handle(const char *const file, const uint32_t line)
 	       stats.last_signal, g.granted_len_us, g.want_len_us,
 	       (int)g.granted, (int)g.pending, (int)g.release_wanted,
 	       (int)g.extendable);
+#if defined(CONFIG_RADIANT_GATE_MPSL_STATS)
+	diag_context(d_ipsr, d_control, d_msp, d_psp, d_ret);
+	diag_clock();
+	diag_timer0();
+	diag_radio();
+	diag_gate_state(d_now);
+	diag_trace();
+#else
 	printk("    trace (sig:act, oldest first):");
 	for (uint32_t i = 0; i < TRACE_LEN; i++) {
 		uint32_t idx = (trace_at >= TRACE_LEN)
@@ -2643,6 +3243,7 @@ void mpsl_assert_handle(const char *const file, const uint32_t line)
 		printk(" %u:%u", trace[idx] >> 4, trace[idx] & 0xFu);
 	}
 	printk("\n");
+#endif
 	/*
 	 * Reboot on a shipping image, halt on a bench image (as apps/common/diag_flash_log.c
 	 * does). Not k_panic(): this can run in MPSL's zero-latency signal context, where an

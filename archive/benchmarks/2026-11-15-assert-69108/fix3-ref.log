@@ -1,0 +1,39 @@
+
+Opening ANT+ receive channels
+  OK: extended messages
+  OK: ANT+ network key
+  OK: ch0 assign slave
+  OK: ch0 channel id
+  OK: ch0 radio frequency
+  OK: ch0 message period
+  OK: ch0 search timeout
+  OK: ch0 open
+  OK: channel 0 - bicycle power, standard page 0x10, pinned to #2002
+
+Listening for 1800 s
+
+Closing
+  OK: close ch0
+  OK: unassign ch0
+
+=== power (device type 0x0B, 8182 ticks) ===
+  OK   packets                7176 received, 7210 expected over 1800.0 s
+  OK   loss                   0.47 % (limit 1.50 %, one packet = 0.01 %)
+  OK   jitter                 stddev 17.8 ms, max 750.0 ms (limit 124.8 ms, period 249.7 ms)
+  OK   accumulator continuity 0 violation(s)
+  OK   sensor liveness        the event counter advanced on 7031 of 7057 packet pairs
+  OK   common pages           80 x59, 81 x59, worst gap 120 (limit 121)
+  pages: 0x10 x7058, 0x50 x59, 0x51 x59
+  timing: 2.90 ms off the 249.7 ms slot grid by the host clock, 11.665 ms by the radio's
+  wraps observed: acc_power x11, event_count x28
+  attestation: clear - no key here, which is not the same as unprotected
+  power: mean 100.01 (min 97.00, max 103.00, n=7058)
+  cadence: mean 79.96 (min 77.00, max 83.00, n=7058)
+
+channel events: EVENT_RX_FAIL x34
+34 packet(s) missing, all of it reported by the radio as RX_FAIL, so it happened on the air.
+heard on channel 0: device #2002, type 0x0B
+
+wrote C:\wt_69108\archive\benchmarks\2026-11-15-assert-69108\fix3-ref.json
+
+PASS
