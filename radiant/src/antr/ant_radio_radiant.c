@@ -4397,6 +4397,49 @@ antr_err_t antr_diag_page(uint8_t page, uint8_t *out)
 		v[RADIANT_DIAG_TIMING_DRAIN_OVER_250US] =
 			rd.v[RADIANT_RADIO_DIAG_DRAIN_OVER_250US];
 		break;
+	case RADIANT_DIAG_PAGE_PASS:
+		/* 0-4: the scheduler's per-pass sums, converted from A0 cycles
+		 * here (RADIANT_DIAG_NOT_MEASURED where that clock does not run). */
+		v[RADIANT_DIAG_PASS_SWEEP_MAX_US] =
+			radiant_diag_cycles_to_us(dc->pb_sweep_max_cyc);
+		v[RADIANT_DIAG_PASS_DECIDE_MAX_US] =
+			radiant_diag_cycles_to_us(dc->pb_decide_max_cyc);
+		v[RADIANT_DIAG_PASS_ARM_CALL_MAX_US] =
+			radiant_diag_cycles_to_us(dc->pb_arm_max_cyc);
+		v[RADIANT_DIAG_PASS_DONE_CB_MAX_US] =
+			radiant_diag_cycles_to_us(dc->pb_done_max_cyc);
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+		v[RADIANT_DIAG_PASS_BOOK_MAX_US] =
+			radiant_diag_cycles_to_us(dc->pb_book_max_cyc);
+#else
+		v[RADIANT_DIAG_PASS_BOOK_MAX_US] = RADIANT_DIAG_NOT_MEASURED;
+#endif
+		v[RADIANT_DIAG_PASS_TO_ARM_MAX_US] =
+			rd.v[RADIANT_RADIO_DIAG_PASS_TO_ARM_MAX_US];
+		v[RADIANT_DIAG_PASS_ARM_SLACK_MIN_US] =
+			rd.v[RADIANT_RADIO_DIAG_ARM_SLACK_MIN_US];
+		v[RADIANT_DIAG_PASS_EARLY_ETIME] = rd.v[RADIANT_RADIO_DIAG_EARLY_ETIME];
+		break;
+	case RADIANT_DIAG_PAGE_RX_INTEGRITY:
+#if defined(CONFIG_RADIANT_CRC_REPAIR)
+		v[RADIANT_DIAG_RXI_CRC_REPAIRED] = api_stats.crc_repaired;
+		v[RADIANT_DIAG_RXI_CRC_UNREPAIRABLE] = api_stats.crc_unrepairable;
+		v[RADIANT_DIAG_RXI_CRC_REPAIR_REFUTED] = api_stats.crc_repair_refuted;
+		v[RADIANT_DIAG_RXI_CRC_REPAIR_IMPLAUSIBLE] =
+			api_stats.crc_repair_implausible;
+#else
+		v[RADIANT_DIAG_RXI_CRC_REPAIRED] = RADIANT_DIAG_NOT_MEASURED;
+		v[RADIANT_DIAG_RXI_CRC_UNREPAIRABLE] = RADIANT_DIAG_NOT_MEASURED;
+		v[RADIANT_DIAG_RXI_CRC_REPAIR_REFUTED] = RADIANT_DIAG_NOT_MEASURED;
+		v[RADIANT_DIAG_RXI_CRC_REPAIR_IMPLAUSIBLE] = RADIANT_DIAG_NOT_MEASURED;
+#endif
+		v[RADIANT_DIAG_RXI_LATE_ISR_DROPS] =
+			rd.v[RADIANT_RADIO_DIAG_LATE_ISR_DROPS];
+		v[RADIANT_DIAG_RXI_END_LATE_MAX_US] =
+			rd.v[RADIANT_RADIO_DIAG_END_LATE_MAX_US];
+		v[RADIANT_DIAG_RXI_T_SYNC_MAX_US] = rd.v[RADIANT_RADIO_DIAG_T_SYNC_MAX_US];
+		v[RADIANT_DIAG_RXI_MATCH_MAX_US] = rd.v[RADIANT_RADIO_DIAG_MATCH_MAX_US];
+		break;
 	case RADIANT_DIAG_PAGE_SEARCH_A:
 	case RADIANT_DIAG_PAGE_SEARCH_B: {
 		const struct radiant_search_stats *st =

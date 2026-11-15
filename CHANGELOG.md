@@ -63,6 +63,16 @@ reads.
 
 ### Added
 
+- **0xF7 pages 9 and 10** (ADR 0023, diagnostic builds only): page 9 splits
+  the scheduler pass (expiry sweep, arm decision, backend arm call, done
+  callbacks, `book_ahead()`), the pass-to-backend clock span `ARM_SETUP_US`
+  must cover, the smallest slack at the backend's early check, and that
+  check's ETIME refusals, which were counted nowhere. Page 10 carries the CRC
+  repair counters, the nRF END-interrupt lateness, and cc26xx's per-entry
+  `rx_t_sync()` and match times. The short spans use the core's cycle counter
+  (DWT); page 8's cc26xx per-entry timings move to it from the RAT. Not yet
+  read on air.
+
 - **0xF7 page 8, timing** (ADR 0023): receive-drain parts on cc26xx (frames,
   per-entry work, CRC, core callback, drains over 250 µs) and the scheduler
   pass on both backends (worst µs, steps, passes over 100 µs). First reading:

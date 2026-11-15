@@ -74,14 +74,35 @@ PAGES: dict[int, tuple[str, list[str]]] = {
     8: ("timing", ["drain_max_frames", "frame_max_us", "crc_max_us",
                    "rx_cb_max_us", "pass_max_us", "pass_steps_max",
                    "pass_over_100us", "drain_over_250us"]),
+    # 2026-11-15 pass breakdown. 0-4 are the scheduler's per-pass sums on the
+    # cycle clock (0xFFFFFFFF where it does not run, e.g. native_sim); 5-7 are
+    # the backend table's tail after rx_start_missed.
+    9: ("pass", ["sweep_max_us", "decide_max_us", "arm_call_max_us",
+                 "done_cb_max_us", "book_max_us", "pass_to_arm_max_us",
+                 "arm_slack_min_us", "early_etime"]),
+    # 2026-11-15 receive integrity. 0-3 are radiant_api_stats' CRC repair
+    # counters (0xFFFFFFFF without CONFIG_RADIANT_CRC_REPAIR); 4-7 the backend
+    # table's tail after early_etime (4-5 nRF, 6-7 cc26xx).
+    10: ("rx_integrity", ["crc_repaired", "crc_unrepairable",
+                          "crc_repair_refuted", "crc_repair_implausible",
+                          "late_isr_drops", "end_late_max_us",
+                          "t_sync_max_us", "match_max_us"]),
 }
 # Fields that are a level (min/max/last), not a running count: a difference
 # means nothing, so --diff reports the later value.
 LEVELS = {"turn_min_us", "turn_max_us", "tx_margin_min_us", "status_last",
           "drain_max_us", "min_lead_us", "trk_open_late_max_us",
           "drain_max_frames", "frame_max_us", "crc_max_us", "rx_cb_max_us",
-          "pass_max_us", "pass_steps_max"}
-SIGNED = {"tx_margin_min_us"}
+          "pass_max_us", "pass_steps_max",
+          "sweep_max_us", "decide_max_us", "arm_call_max_us",
+          "done_cb_max_us", "book_max_us", "pass_to_arm_max_us",
+          "arm_slack_min_us", "end_late_max_us", "t_sync_max_us",
+          "match_max_us"}
+SIGNED = {"tx_margin_min_us", "arm_slack_min_us"}
+# A measured level with no sample yet reads 0x7FFFFFFF (RADIANT_DIAG_NO_SAMPLE),
+# which is not 0xFFFFFFFF ("not measured"): decoded as the string "no_sample".
+NO_SAMPLE = 0x7FFFFFFF
+NO_SAMPLE_FIELDS = {"arm_slack_min_us"}
 
 
 def decode(body: bytes) -> dict:
@@ -101,6 +122,8 @@ def decode(body: bytes) -> dict:
     for field, v in zip(fields, values):
         if v == NOT_MEASURED:
             out["fields"][field] = None
+        elif field in NO_SAMPLE_FIELDS and v == NO_SAMPLE:
+            out["fields"][field] = "no_sample"
         elif field in SIGNED:
             out["fields"][field] = struct.unpack("<i", struct.pack("<I", v))[0]
         else:
@@ -205,8 +228,8 @@ def main() -> int:
     ap.add_argument("--serial", help="a USB dongle whose serial ends with this")
     ap.add_argument("--port", help="a UART build on this port (e.g. COM11)")
     ap.add_argument("--baud", type=int, default=115200)
-    ap.add_argument("--pages", default="0-8",
-                    help="pages to read, e.g. 0-8 or 1,2,4 (default all). "
+    ap.add_argument("--pages", default="0-10",
+                    help="pages to read, e.g. 0-10 or 1,2,4 (default all). "
                          "A page an older build refuses is skipped once an "
                          "earlier page has answered; a page that never "
                          "answers fails the read")

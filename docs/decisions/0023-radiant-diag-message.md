@@ -83,6 +83,8 @@ Claim **0xF7** from the reserved RadiANT block (0xF7-0xFA) as
 | 6 search B | `radiant_search_stats` | cache_steers | cache_acquires | permit_rejected | rssi_rejected | decode_failed | bad_filter_index | late_events | sets_advanced_uncovered |
 | 7 search/track hand-off | `radiant_radio_diag_get()` [4..15] and [28..35], `radiant_sched.c` [16..27] | search frame cut by the chunk's close | search frame cut by an abort | search END within 300 µs of the close | bounded RX armed opening late | worst such lateness µs | bounded RX expired behind a scan chunk | transmit refused: start compare behind the counter | receive window refused: start compare behind the counter |
 | 8 timing | `radiant_radio_diag_get()` [4..19] and [32..35], `radiant_sched.c` [20..31] | frames in the longest drain | longest one-entry work µs (callback excluded) | longest software CRC µs | longest synchronous rx callback µs | longest scheduler pass µs (interrupts off) | most `pass_step()` iterations in one pass | passes over 100 µs | drains over 250 µs |
+| 9 pass breakdown | `radiant_sched.c` [4..23], `radiant_radio_diag_get()` [24..35] | expiry sweep µs | arm decision µs (backend call and done callbacks excluded) | backend arm calls µs | `notify_done()` callbacks µs | `book_ahead()` µs | pass `now` → backend `now` µs | smallest early-check slack µs (i32, `0x7FFFFFFF` = no sample yet) | early-check ETIME refusals |
+| 10 receive integrity | `radiant_api_stats` [4..19], `radiant_radio_diag_get()` [20..35] | crc_repaired | crc_unrepairable | crc_repair_refuted | crc_repair_implausible | frames dropped by the late-ISR guard (nRF) | worst END-interrupt lateness µs (nRF) | longest `rx_t_sync()` µs (cc26xx) | longest `rx_match()` + copies µs (cc26xx) |
 
 `sets_advanced_uncovered` is `0xFFFFFFFF` without `CONFIG_RADIANT_SEARCH_COVERAGE`.
 
@@ -134,6 +136,58 @@ indices; cc26xx times them on the RAT, and the nRF backend reads
 use `radiant_radio_now()` and are measured on both. A new page rather than
 page 7's reserved tail, which has two fields, not eight. Structure version
 stays 1.
+
+**Amendment, 2026-11-15: pages 9 and 10, and a cycle clock.** The 2026-11-15
+performance review asked where the nRF52840's ~215 µs pass goes, how much of
+`ARM_SETUP_US` it leaves, and what the TI per-entry receive work is made of.
+Page 8 cannot answer: its pass time is one number, and the radio clocks are
+too coarse or too dear to time sub-spans (a cc26xx RAT read costs a few µs).
+So two new pages, by this ADR's rule that a new meaning is a new page, and one
+helper, the **A0 cycle clock** (`radiant_diag_cycles()` in `radiant_diag.h`):
+the core's DWT cycle counter, switched on by the backend's
+`radiant_radio_init()` with its core clock (`SystemCoreClock` on nRF, a
+48 MHz constant on cc26xx) and checked to advance. Where it does not run
+(native_sim, a core without DWT, a counter that did not move), every field
+timed with it reads `0xFFFFFFFF`. CYCCNT stops while the core sleeps, so only
+spans that cannot idle are timed with it (interrupts off, or an ISR).
+
+- **Page 9, pass breakdown.** Fields 0-4 are the scheduler's: per-pass sums of
+  the expiry sweep, the arm decision (the rest of `pass_step()`, including
+  `notify_armed()`), the backend arm calls, the `notify_done()` callbacks,
+  and `book_ahead()` (`0xFFFFFFFF` without `CONFIG_RADIANT_SCHED_BOOKING`),
+  each the worst since boot, in µs. The parts are disjoint; the decision is
+  what remains of `pass_step()` and saturates at 0. Fields 5-7 are the
+  backend's, at its early ETIME check: 5 is the pass's `now` to the backend's
+  own `now`, both `radiant_radio_now()` reads, so radio-clock µs; the
+  scheduler stamps it around its arm calls and an arm no pass made (a
+  deferred MPSL grant, a direct backend call) is not sampled. This is the
+  span `ARM_SETUP_US` must cover. 6 is the smallest slack at that check on an
+  accepted arm, `at − (now′ + lead)`, an i32 that is never negative because a
+  refused arm is counted in 7 instead; it reads `0x7FFFFFFF` until the first
+  accepted arm, a "no sample yet" value distinct from "not measured". 7
+  counts those refusals (receive and transmit), which until now the scheduler
+  folded into `arm_rejected`. cc26xx's `arm_common()` floor check is the same
+  kind of check and fills 5-7 too; null reads `0xFFFFFFFF`.
+- **Page 10, receive integrity.** Fields 0-3 are `radiant_api_stats`' CRC
+  repair counters (the `crc_repair_page1.patch` bench counters, done
+  properly), `0xFFFFFFFF` without `CONFIG_RADIANT_CRC_REPAIR`. Field 4 counts
+  frames the nRF late-ISR guard drops; the slot and its counter exist now and
+  read 0 until that guard lands (it is a count, so 0 is true, not
+  "unmeasured"). Field 5 is the worst nRF END-interrupt lateness,
+  `now − (CC_SYNC + software address, body and CRC airtime)`, coded PHY
+  skipped. Fields 6-7 are cc26xx's longest `rx_t_sync()` and longest
+  `rx_match()` plus the address/body copies of one receive entry, on the A0
+  clock. 4-5 read `0xFFFFFFFF` on cc26xx, 6-7 on nRF.
+- **Page 8 on cc26xx.** Fields 1-3 (per-entry work, CRC, core callback) move
+  from the RAT to the A0 clock. Their meaning (µs) is unchanged, so the page
+  keeps its number and version; readings taken before and after this change
+  differ by the RAT reads that used to sit inside the spans. `drain_max_us`
+  (page 4) stays on the RAT.
+
+Levels on both pages (every field except 9/7, 10/0-4) are worst cases since
+boot and must not be diffed; `tools/ant_diag.py --diff` reports the later
+value. Structure version stays 1 (beta), and an older image refuses pages 9-10
+with `INVALID_PARAMETER_PROVIDED`, which the reader skips.
 
 "Turnaround" on page 2 is NEXT_BLOCK-to-submit: the time from the engine
 asking for the next block to the host block arriving.

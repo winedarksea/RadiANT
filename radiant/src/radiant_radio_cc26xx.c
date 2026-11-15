@@ -333,6 +333,10 @@ static RF_Mode rf_mode = {
  */
 #define ARM_FLOOR_US           150
 
+/* The CC26x2's Cortex-M4F runs at 48 MHz; the A0 cycle clock converts with it
+ * (0xF7 pages 8-10, diagnostic builds only). */
+#define CC_CORE_HZ             48000000u
+
 /*
  * Lead for an operation armed from a radio callback into air the previous
  * operation reserved (follow_on_us), on the non-coex build. The RF core is
@@ -386,8 +390,46 @@ static struct {
 	uint32_t min_lead_us;
 	uint32_t win_frames;   /* OK frames in the window now open */
 	bool     lead_seen;
-} cc_diag;
+	/* page 9 fields 5-7: the early arm check (cc_diag_early()) */
+	uint32_t pass_to_arm_max_us, arm_slack_min_us, early_etime;
+	/* page 10 fields 6-7: one receive entry's rx_t_sync(), and its
+	 * rx_match() plus address/body copies, on the A0 clock */
+	uint32_t t_sync_max_us, match_max_us;
+} cc_diag = {
+	.arm_slack_min_us = RADIANT_DIAG_NO_SAMPLE,
+};
 #define CC_DIAG(...) do { __VA_ARGS__; } while (0)
+
+/*
+ * Page 9 fields 5-7 at arm_common()'s ETIME check, the same check as the nRF
+ * backend's: `now` is that check's clock read, `at` the instant checked
+ * against now + `floor`. Field 5 only for an arm a scheduler pass is making;
+ * a refused arm counts in field 7 and never in field 6.
+ */
+static void cc_diag_early(radiant_time_t now, radiant_time_t at, uint32_t floor)
+{
+	const radiant_time_t lim = now + (radiant_time_t)floor;
+
+	if (radiant_diag_pass_now != 0u && now >= radiant_diag_pass_now) {
+		const uint64_t d = now - radiant_diag_pass_now;
+		const uint32_t us = (d > UINT32_MAX - 1u) ? UINT32_MAX - 1u : (uint32_t)d;
+
+		if (us > cc_diag.pass_to_arm_max_us) {
+			cc_diag.pass_to_arm_max_us = us;
+		}
+	}
+	if (at < lim) {
+		cc_diag.early_etime++;
+	} else {
+		const uint64_t slack = at - lim;
+		const uint32_t s32 = (slack > RADIANT_DIAG_NO_SAMPLE - 1u)
+					     ? RADIANT_DIAG_NO_SAMPLE - 1u : (uint32_t)slack;
+
+		if (s32 < cc_diag.arm_slack_min_us) {
+			cc_diag.arm_slack_min_us = s32;
+		}
+	}
+}
 
 static void cc_diag_fold_rx_output(void)
 {
@@ -1013,19 +1055,25 @@ static radiant_time_t rx_t_sync(uint32_t rat)
 }
 
 /*
- * 0xF7 page 8 timing, on the RAT like drain_max_us. Off, the clock reads 0 and
- * the level macro only evaluates its argument, so the timing locals below
- * compile away without unused-variable warnings.
+ * 0xF7 page 8 and page 10 per-entry timing, on the A0 cycle clock
+ * (radiant_diag.h). Until 2026-11-15 page 8 used the RAT; each
+ * RF_getCurrentTime() read cost a few us and sat inside the spans it timed.
+ * drain_max_us (page 4) stays on the RAT. Where the cycle clock does not run,
+ * radiant_diag_cycles_to_us() answers RADIANT_DIAG_NOT_MEASURED, which wins
+ * the max, and radiant_radio_diag_get() reports the field so even before a
+ * sample. Off, the clock reads 0 and the level macro only evaluates its
+ * argument, so the timing locals below compile away without
+ * unused-variable warnings.
  */
 #if defined(CONFIG_RADIANT_DIAG_COUNTERS)
 static inline uint32_t cc_diag_t(void)
 {
-	return rat_raw();
+	return radiant_diag_cycles();
 }
 
-static inline void cc_diag_level(uint32_t *field, uint32_t ticks)
+static inline void cc_diag_level(uint32_t *field, uint32_t cycles)
 {
-	const uint32_t us = ticks / RAT_TICKS_PER_US;
+	const uint32_t us = radiant_diag_cycles_to_us(cycles);
 
 	if (us > *field) {
 		*field = us;
@@ -1058,6 +1106,7 @@ static uint32_t rx_drain_entries(void)
 		int idx;
 		uint32_t t_entry;
 		uint32_t cb_ticks = 0u;
+		uint32_t m_cyc;   /* page 10 field 7: rx_match() and the copies */
 
 		if (e == NULL || e->status != DATA_ENTRY_FINISHED) {
 			break;
@@ -1076,14 +1125,24 @@ static uint32_t rx_drain_entries(void)
 
 		memset(&evt, 0, sizeof(evt));
 		evt.op = st.op_id;
-		evt.t_sync = rx_t_sync(rat);
+		{
+			const uint32_t t_ts = cc_diag_t();
+
+			evt.t_sync = rx_t_sync(rat);
+			CC_DIAG_LEVEL(t_sync_max_us, cc_diag_t() - t_ts);
+		}
 		evt.t_sync_exact = true;
 		evt.body = body;
 		evt.body_len = st.fmt.body_len;
 		evt.has_rssi = true;
 		evt.rssi_dbm = (int8_t)rssi_raw;
 
-		idx = rx_match(status.status.syncWordId, p);
+		{
+			const uint32_t t_m = cc_diag_t();
+
+			idx = rx_match(status.status.syncWordId, p);
+			m_cyc = cc_diag_t() - t_m;
+		}
 		radiant_cc26xx_sync_frames++;
 		/* syncWord1 is 0 for one group, so this should stay 0. */
 		CC_DIAG(if (status.status.syncWordId == 1u &&
@@ -1125,6 +1184,7 @@ static uint32_t rx_drain_entries(void)
 			size_t n = 0;
 			uint32_t want;
 			uint32_t got;
+			const uint32_t t_cp = cc_diag_t();
 
 			/* Restore the leading address bytes the matcher consumed. */
 			memcpy(covered, st.filters[idx].addr, st.fmt.addr_len);
@@ -1138,6 +1198,7 @@ static uint32_t rx_drain_entries(void)
 			}
 			memcpy(&covered[n], body, st.fmt.body_len);
 			n += st.fmt.body_len;
+			m_cyc += cc_diag_t() - t_cp;
 
 			{
 				const uint32_t t_crc = cc_diag_t();
@@ -1182,7 +1243,13 @@ static uint32_t rx_drain_entries(void)
 			 * Release the entry and cancel first, since that arm may reset
 			 * the queue and replace st.cmd_handle.
 			 */
-			memcpy(copy, body, st.fmt.body_len);
+			{
+				const uint32_t t_cp = cc_diag_t();
+
+				memcpy(copy, body, st.fmt.body_len);
+				m_cyc += cc_diag_t() - t_cp;
+			}
+			CC_DIAG_LEVEL(match_max_us, m_cyc);
 			evt.body = copy;
 			e->status = DATA_ENTRY_PENDING;
 			rx_read = (uint8_t)((rx_read + 1u) % RX_ENTRIES);
@@ -1216,6 +1283,7 @@ static uint32_t rx_drain_entries(void)
 next:
 		/* This entry's own work, the core's callback excluded. */
 		CC_DIAG_LEVEL(frame_max_us, cc_diag_t() - t_entry - cb_ticks);
+		CC_DIAG_LEVEL(match_max_us, m_cyc);
 		e->status = DATA_ENTRY_PENDING;
 		rx_read = (uint8_t)((rx_read + 1u) % RX_ENTRIES);
 	}
@@ -1341,6 +1409,9 @@ int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 	st.next_op_id = 1;
 	st.retired_handle = NO_HANDLE;
 	st.inited = true;
+
+	/* 0xF7 pages 8-10: the A0 cycle clock, at this core's fixed clock. */
+	CC_DIAG(radiant_diag_cycles_init(CC_CORE_HZ));
 
 	rx_queue_init();
 
@@ -1468,9 +1539,21 @@ static int arm_common(const struct radiant_pkt_format *fmt, radiant_time_t at)
 			cc_diag.lead_seen = true;
 		}
 	});
+#if defined(CONFIG_RADIANT_DIAG_COUNTERS)
+	{
+		/* The same check, one clock read shared with page 9. */
+		const radiant_time_t now = now_us();
+
+		cc_diag_early(now, at, ARM_FLOOR_US);
+		if (at < now + ARM_FLOOR_US) {
+			return RADIANT_RADIO_ETIME;
+		}
+	}
+#else
 	if (at < now_us() + ARM_FLOOR_US) {
 		return RADIANT_RADIO_ETIME;
 	}
+#endif
 
 	return RADIANT_RADIO_OK_RC;
 }
@@ -1830,10 +1913,20 @@ uint8_t radiant_radio_diag_get(struct radiant_radio_diag *out)
 	out->v[RADIANT_RADIO_DIAG_MIN_LEAD_US] = cc_diag.lead_seen
 		? cc_diag.min_lead_us : RADIANT_DIAG_NOT_MEASURED;
 	out->v[RADIANT_RADIO_DIAG_DRAIN_MAX_FRAMES] = cc_diag.drain_max_frames;
-	out->v[RADIANT_RADIO_DIAG_FRAME_MAX_US] = cc_diag.frame_max_us;
-	out->v[RADIANT_RADIO_DIAG_CRC_MAX_US] = cc_diag.crc_max_us;
-	out->v[RADIANT_RADIO_DIAG_RX_CB_MAX_US] = cc_diag.rx_cb_max_us;
 	out->v[RADIANT_RADIO_DIAG_DRAIN_OVER_250US] = cc_diag.drain_over_250us;
+	out->v[RADIANT_RADIO_DIAG_PASS_TO_ARM_MAX_US] = cc_diag.pass_to_arm_max_us;
+	out->v[RADIANT_RADIO_DIAG_ARM_SLACK_MIN_US] = cc_diag.arm_slack_min_us;
+	out->v[RADIANT_RADIO_DIAG_EARLY_ETIME] = cc_diag.early_etime;
+	/* The A0-timed fields, only while that clock runs (a zero-cycle span
+	 * converts to "not measured" exactly when it does not). Page 10 fields
+	 * 4-5 are the nRF END interrupt's and stay "not measured" here. */
+	if (radiant_diag_cycles_to_us(0u) != RADIANT_DIAG_NOT_MEASURED) {
+		out->v[RADIANT_RADIO_DIAG_FRAME_MAX_US] = cc_diag.frame_max_us;
+		out->v[RADIANT_RADIO_DIAG_CRC_MAX_US] = cc_diag.crc_max_us;
+		out->v[RADIANT_RADIO_DIAG_RX_CB_MAX_US] = cc_diag.rx_cb_max_us;
+		out->v[RADIANT_RADIO_DIAG_T_SYNC_MAX_US] = cc_diag.t_sync_max_us;
+		out->v[RADIANT_RADIO_DIAG_MATCH_MAX_US] = cc_diag.match_max_us;
+	}
 	irq_unlock(key);
 
 	return RADIANT_DIAG_BACKEND_CC26XX;

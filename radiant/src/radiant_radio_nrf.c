@@ -67,8 +67,47 @@ static struct {
 	uint32_t srch_cut_close, srch_cut_abort, srch_end_near_close;
 	/* Page 7 fields 6-7: an arm's start compare written behind the counter (ETIME at programming). */
 	uint32_t tx_start_missed, rx_start_missed;
-} nrf_diag;
+	/* Page 9 fields 5-7: the early arm check (see nrf_diag_early()). */
+	uint32_t pass_to_arm_max_us, arm_slack_min_us, early_etime;
+	/* Page 10 fields 4-5. late_isr_drops is the late-ISR guard's count, 0
+	 * until that guard exists; the guard increments it with NRF_DIAG(). */
+	uint32_t late_isr_drops, end_late_max_us;
+} nrf_diag = {
+	.arm_slack_min_us = RADIANT_DIAG_NO_SAMPLE,
+};
 #define NRF_DIAG(...) do { __VA_ARGS__; } while (0)
+
+/*
+ * Page 9 fields 5-7, at a transmit's or receive window's early ETIME check:
+ * `now` is the backend's own clock read, `at` the instant checked and `lead`
+ * the air lead it must clear. Field 5 is sampled only for an arm a scheduler
+ * pass is making (radiant_diag_pass_now set). A refused arm counts in field 7
+ * and never in field 6, so field 6 is never negative.
+ */
+static void nrf_diag_early(radiant_time_t now, radiant_time_t at, uint32_t lead)
+{
+	const radiant_time_t floor = now + (radiant_time_t)lead;
+
+	if (radiant_diag_pass_now != 0u && now >= radiant_diag_pass_now) {
+		const uint64_t d = now - radiant_diag_pass_now;
+		const uint32_t us = (d > UINT32_MAX - 1u) ? UINT32_MAX - 1u : (uint32_t)d;
+
+		if (us > nrf_diag.pass_to_arm_max_us) {
+			nrf_diag.pass_to_arm_max_us = us;
+		}
+	}
+	if (at < floor) {
+		nrf_diag.early_etime++;
+	} else {
+		const uint64_t slack = at - floor;
+		const uint32_t s32 = (slack > RADIANT_DIAG_NO_SAMPLE - 1u)
+					     ? RADIANT_DIAG_NO_SAMPLE - 1u : (uint32_t)slack;
+
+		if (s32 < nrf_diag.arm_slack_min_us) {
+			nrf_diag.arm_slack_min_us = s32;
+		}
+	}
+}
 #else
 #define NRF_DIAG(...) do { } while (0)
 #endif
@@ -1803,6 +1842,9 @@ int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 		return RADIANT_RADIO_ESTATE;
 	}
 
+	/* 0xF7 pages 9-10: the A0 cycle clock, at this core's clock. */
+	NRF_DIAG(radiant_diag_cycles_init(SystemCoreClock));
+
 	/*
 	 * Gate first, before any peripheral is claimed. On an arbitrated build this
 	 * opens the session every later acquire needs. Claiming the RADIO and TIMER
@@ -2363,6 +2405,7 @@ static int program_tx(const struct radiant_tx_req *req)
 	t_start = req->t_sync_at - (radiant_time_t)lead;
 
 	now = radiant_radio_now();
+	NRF_DIAG(nrf_diag_early(now, req->t_sync_at, lead));
 	if (req->t_sync_at < now + lead) {
 		/* Never silently late: a late master frame lands in the next slot. */
 		return RADIANT_RADIO_ETIME;
@@ -2452,6 +2495,8 @@ static int program_rx(const struct radiant_rx_req *req)
 	 * address length really needs; the advertised figure is for the core's planning.
 	 */
 	now = radiant_radio_now();
+	NRF_DIAG(nrf_diag_early(now, req->t_open,
+				air_lead_us(req->fmt->phy, req->fmt->addr_len)));
 	if (req->t_open < now + air_lead_us(req->fmt->phy, req->fmt->addr_len)) {
 		/* Never silently late: a late window looks like a quiet sensor. */
 		return RADIANT_RADIO_ETIME;
@@ -3760,6 +3805,31 @@ static void radio_isr(const void *arg)
 					     radiant_op.page7_close_at) {
 					nrf_diag.srch_end_near_close++;
 				});
+			/*
+			 * Page 10 field 5: how late this END interrupt runs, against
+			 * the end of the frame CC_SYNC dates (the software address
+			 * bytes, the body and the 16-bit CRC after the capture). The
+			 * coded PHY's airtime is not bytes x 8 us, so it is skipped.
+			 */
+			NRF_DIAG(if (radiant_op.phy != RADIANT_PHY_LR_CODED) {
+					uint32_t n = radiant_op.body_len;
+					radiant_time_t t_end;
+					radiant_time_t t_now = radiant_radio_now();
+
+					if (radiant_op.len_from_body) {
+						n = MIN((uint32_t)radiant_rx_buf[0] + 1u, n);
+					}
+					t_end = clock_absolute(nrf_timer_cc_get(
+							TIMER_ADDR, CC_SYNC)) +
+						(radiant_time_t)(((uint32_t)radiant_op.sw_addr_len +
+								  n + 2u) * US_PER_BYTE);
+					if (t_now > t_end &&
+					    t_now - t_end > nrf_diag.end_late_max_us) {
+						nrf_diag.end_late_max_us =
+							(uint32_t)MIN(t_now - t_end,
+								      (radiant_time_t)UINT32_MAX - 1u);
+					}
+				});
 
 			/* Consumed so the next packet in this window is judged on its own match (END->START keeps the receiver armed). */
 			nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_ADDRESS);
@@ -3979,6 +4049,12 @@ uint8_t radiant_radio_diag_get(struct radiant_radio_diag *out)
 	out->v[RADIANT_RADIO_DIAG_SRCH_END_NEAR_CLOSE] = nrf_diag.srch_end_near_close;
 	out->v[RADIANT_RADIO_DIAG_TX_START_MISSED] = nrf_diag.tx_start_missed;
 	out->v[RADIANT_RADIO_DIAG_RX_START_MISSED] = nrf_diag.rx_start_missed;
+	out->v[RADIANT_RADIO_DIAG_PASS_TO_ARM_MAX_US] = nrf_diag.pass_to_arm_max_us;
+	out->v[RADIANT_RADIO_DIAG_ARM_SLACK_MIN_US] = nrf_diag.arm_slack_min_us;
+	out->v[RADIANT_RADIO_DIAG_EARLY_ETIME] = nrf_diag.early_etime;
+	out->v[RADIANT_RADIO_DIAG_LATE_ISR_DROPS] = nrf_diag.late_isr_drops;
+	out->v[RADIANT_RADIO_DIAG_END_LATE_MAX_US] = nrf_diag.end_late_max_us;
+	/* Page 10 fields 6-7 (cc26xx's per-entry split) stay "not measured". */
 	/* Page 8's backend fields (drain frames/frame/CRC/callback time, slow
 	 * drains) stay RADIANT_DIAG_NOT_MEASURED: this backend trusts the
 	 * hardware CRC and delivers each frame from its own interrupt, with no
