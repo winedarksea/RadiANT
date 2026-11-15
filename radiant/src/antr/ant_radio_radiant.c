@@ -1324,6 +1324,7 @@ static void api_search_acquired(uint8_t channel,
 {
 	struct radiant_rx_event hal;
 	bool                 is_scan;
+	bool                 post = true;
 
 	(void)user;
 	if (!api_ch_valid(channel) || r == NULL) {
@@ -1358,8 +1359,24 @@ static void api_search_acquired(uint8_t channel,
 	hal.has_rssi = r->has_rssi;
 	hal.rssi_dbm = r->rssi_dbm;
 
-	api_post_rx(channel, (uint8_t)ANTW_MESG_BROADCAST_DATA_ID, &r->id, &hal,
-		    r->frame.payload, r->frame.payload_len, 0u, false);
+#if defined(CONFIG_RADIANT_SEC)
+	/* The tracked broadcast's RX policy guard, before the frame goes up.
+	 * The acquiring frame, a re-acquiring one, and every frame a background
+	 * scan hears come only through here: posted as they stood, they reached
+	 * the host as ciphertext under X_CONF and with no verdict under X_AUTH
+	 * (review 2026-11-14, item 1). A deferred or dropped frame has still
+	 * acquired the channel above. */
+	if (radiant_sec_rx_ingest(channel, r->frame.payload,
+				  r->frame.payload_len, true,
+				  (uint64_t)r->t_sync) != RADIANT_SEC_RX_PLAIN) {
+		post = false;
+	}
+#endif
+	if (post) {
+		api_post_rx(channel, (uint8_t)ANTW_MESG_BROADCAST_DATA_ID,
+			    &r->id, &hal, r->frame.payload,
+			    r->frame.payload_len, 0u, false);
+	}
 
 	/* ACQUIRE leaves the search; a scan stays SEARCHING, so radiant_search_end() is skipped. */
 	if (radiant_channel_state_get(channel) == RADIANT_CH_STATE_TRACKING) {

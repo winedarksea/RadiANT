@@ -578,6 +578,32 @@ class TestVerdictResolver(unittest.TestCase):
         self.assertEqual([self.U], [v for p, v in r.settled if p == forged])
         self.assertIn((_page(10), self.V), r.settled)
 
+    def test_a_forged_reacquiring_frame_is_credited_only_without_the_hook(self):
+        # Review 2026-11-14 item 1, deliver policy. A host with a seq baseline
+        # sees the channel come back on a forged frame heard in slot 1 that
+        # claims counter 2, the next window's start; the genuine sender
+        # follows from slot 2. VERIFIED(2) or UNVERIFIED(2) arrives on packet
+        # 5, 1.0 s after the forgery: exactly the deadline, so not expired.
+        forged = _page(2, tag=0xEE)
+
+        def run(window_2_verdict):
+            r = self.resolver(baseline_seq=9)
+            r.data(forged, 0.25)
+            for c in range(2, 6):
+                r.data(_page(c), c * 0.25)
+            r.verdict(_f8(window_2_verdict, 2, 10), 1.25)
+            return [v for p, v in r.settled if p == forged]
+
+        # Before the fix the acquiring frame skipped radiant_sec_rx_ingest():
+        # it was in no firmware window, genuine window 2 verified, and that
+        # VERIFIED is the first covering verdict after the forgery.
+        self.assertEqual([self.V], run(self.V))
+        # Through the hook the forgery is absorbed into window 2, which then
+        # fails (test_api_sec_host.c,
+        # test_sec_host_a_forged_reacquiring_frame_is_not_credited): the
+        # resolver needs no change.
+        self.assertEqual([self.U], run(self.U))
+
     def test_a_lost_unverified_is_not_replaced_by_a_later_verified(self):
         # The forgery's UNV(10) (seq 11) is lost on the way; the next verdict
         # reveals the gap, and everything pending - the forgery included -

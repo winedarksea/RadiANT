@@ -444,7 +444,12 @@ and on a secured channel a *non-broadcast* frame — acknowledged data, a burst 
 carrying a page in the secured range is **dropped and counted**, never
 delivered. Without that rule an injector simply sends a secured-range page as
 acknowledged data, skips the MAC machinery entirely, and is delivered as
-implicitly trusted data.
+implicitly trusted data. Nor by how the frame was heard: the frame that
+acquires or re-acquires a channel from its search, and every frame a
+background-scan channel hears (a scan never leaves its search), take the same
+receive path as a tracked broadcast, so under `X_CONF` they arrive decrypted
+and under `X_AUTH` they are judged, and held under `DROP_UNVER`, like any other
+packet (security review 2026-11-14, item 1).
 
 **Non-broadcast traffic is otherwise outside the secured stream.** The rule
 above is the whole of it inbound: acknowledged data and bursts on a secured
