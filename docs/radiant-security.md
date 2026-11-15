@@ -558,7 +558,10 @@ before the `0xF3` stays silent on its secured pages until it arrives. Later
   and an epoch authority that follows it keeps following it. An idempotent
   re-send is neither a gap in the stream nor a reset of the gate above: an
   older or equal `0xF3` after it is still refused. A compat channel's
-  `radiant_sec_compat_set_key()` follows the same rule.
+  `radiant_sec_compat_set_key()` follows the same rule, including the
+  on-air device number restarting at the provisioning one with every root
+  actually installed, and an install that fails once the old root is
+  destroyed leaves the channel unkeyed rather than half on each root.
 - **A different root** (or the same root under a different channel device
   number, which changes every derived key) **makes the channel pending** until
   the next `0xF3`, drops anything still queued under the old root, and resets

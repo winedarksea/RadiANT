@@ -427,15 +427,18 @@ int profile_enrol_on_ack_data(struct profile_enrol *pe, const uint8_t *payload,
 		memset(pe->rx, 0, sizeof(pe->rx));
 		pe->rx_rejected++;
 		if (!radiant_sec_pair_is_open(pe->cfg.ch)) {
-			/* A step after the exchange failed (the wrap, the
-			 * fingerprint, a first root's install): the scalar is
-			 * spent and radiant_sec has freed the pairing context,
-			 * so nobody can be answered in this window any more.
-			 * It ends with the context rather than sit open until
-			 * it times out (review 2026-11-14, item 4). The peer's
-			 * bytes cannot make those steps fail - any key that
-			 * passed the exchange is as good as any other to them -
-			 * so no injected packet chooses this path. */
+			/* No pairing context any more, so nobody can be
+			 * answered in this window. Either a step after the
+			 * exchange failed (the wrap, the fingerprint, a first
+			 * root's install) and radiant_sec freed the context
+			 * with the spent scalar, or the context had already
+			 * ended before this frame (its timeout, or the node
+			 * left pairing). The window ends with the context
+			 * rather than sit open until its own timeout (review
+			 * 2026-11-14, item 4). The peer's bytes cannot cause
+			 * either - any key that passes the exchange is as good
+			 * as any other to the later steps - so no injected
+			 * packet chooses this path. */
 			window_close(pe);
 			return -EIO;
 		}
