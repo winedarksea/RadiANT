@@ -159,6 +159,9 @@ config RADIANT_BACKEND_CC26XX
 	#
 	depends on SOC_SERIES_CC13X2_CC26X2 || SOC_FAMILY_TI_SIMPLELINK
 	select CLOCK_CONTROL
+	# crc16_itu_t(), the RX/TX CRC fast path (subsys/crc/crc16_sw.c is
+	# compiled whole under CRC; CRC16_ITU_T only gates a hardware handler).
+	select CRC
 	help
 	  src/radiant_radio_cc26xx.c: the RF core through TI's RF driver, in
 	  proprietary (CMD_PROP_*) mode with a 1 Mbps 2-GFSK PHY built from a
