@@ -41,4 +41,12 @@ extern uint32_t antr_api_lock_violations;
 bool antr_master_xfer_busy(uint8_t ch);
 #endif
 
+#if defined(CONFIG_ZTEST)
+/* Test seams, ztest images only (review 2026-11-14, item 3). The first is
+ * weak, for a test to override; the second is the acknowledgement payload
+ * path, 8 bytes into `out`, false when the channel would not acknowledge. */
+void antr_test_master_tx_seam(uint8_t ch);
+bool antr_test_ack_payload(uint8_t ch, uint8_t out[8]);
+#endif
+
 #endif /* ANT_RADIO_RADIANT_PRIV_H_ */

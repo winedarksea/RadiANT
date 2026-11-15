@@ -860,6 +860,25 @@ static bool api_xfer_broadcast(void *ctx, uint8_t out[RADIANT_TRANSFER_PKT_BYTES
 	return true;
 }
 
+#if defined(CONFIG_ZTEST)
+/*
+ * Test seams, ztest images only (review 2026-11-14, item 3). The seam runs in
+ * api_post_master_tx() between taking the host's plaintext and publishing the
+ * secured copy the acknowledgement path sends; a test overrides it to stand in
+ * for an inbound acknowledged message landing there, and asks the ack payload
+ * path what it would send through antr_test_ack_payload().
+ */
+__weak void antr_test_master_tx_seam(uint8_t ch)
+{
+	ARG_UNUSED(ch);
+}
+
+bool antr_test_ack_payload(uint8_t ch, uint8_t out[RADIANT_TRANSFER_PKT_BYTES])
+{
+	return api_xfer_broadcast((void *)(uintptr_t)ch, out);
+}
+#endif
+
 #if defined(CONFIG_RADIANT_ACK_FAULTS)
 /*
  * ACK fault instrument forwarding (CONFIG_RADIANT_ACK_FAULTS, test images only).
@@ -1814,30 +1833,49 @@ static void api_post_master_tx(uint8_t ch)
 	 * when armed, so this is the latest correct point). Transform into a copy:
 	 * bcast's readback must stay the host's plaintext, and must not be re-encrypted
 	 * on each retransmission.
+	 *
+	 * The transform runs on the local copy, and sec_pay only ever takes a
+	 * finished ciphertext, under the crit section with its flag. The ack
+	 * payload path (api_xfer_broadcast(), the radio interrupt) sends sec_pay
+	 * whenever sec_pay_valid is set, and the previous slot left it set:
+	 * copying the plaintext into sec_pay before clearing the flag acked an
+	 * inbound message landing in between with the host's plaintext, and one
+	 * landing mid-copy with half of each (review 2026-11-14, item 3).
+	 *
+	 * The counter derives from the slot instant t, so a re-post of the same
+	 * slot gets the same bytes.
 	 */
-	memcpy(api_ch[ch].sec_pay, pay, sizeof(api_ch[ch].sec_pay));
-	api_ch[ch].sec_pay_valid = false;
-	/* The counter derives from the slot instant t, so a re-post of the same
-	 * slot gets the same bytes. */
-	if (radiant_sec_tx_transform(ch, api_ch[ch].sec_pay,
-				     (uint8_t)sizeof(api_ch[ch].sec_pay),
-				     (uint64_t)t) != RADIANT_SEC_OK) {
-		/* Transmit nothing rather than send in the clear: a channel the
-		 * host believes is protected must not fail open. */
-		return;
-	}
-	api_ch[ch].sec_pay_valid = radiant_sec_channel_is_secured(ch);
+	{
+		int          rc = radiant_sec_tx_transform(ch, pay,
+							   (uint8_t)sizeof(pay),
+							   (uint64_t)t);
+		bool         secured = radiant_sec_channel_is_secured(ch);
+		unsigned int key;
 
-	if (radiant_frame_make(&f, &id, &fields, api_ch[ch].sec_pay,
-			   RADIANT_FRAME_PAYLOAD_STD) != RADIANT_FRAME_OK) {
-		return;
+#if defined(CONFIG_ZTEST)
+		antr_test_master_tx_seam(ch);
+#endif
+		key = radiant_event_crit_enter();
+		if (rc == RADIANT_SEC_OK) {
+			memcpy(api_ch[ch].sec_pay, pay,
+			       sizeof(api_ch[ch].sec_pay));
+			api_ch[ch].sec_pay_valid = secured;
+		} else {
+			api_ch[ch].sec_pay_valid = false;
+		}
+		radiant_event_crit_exit(key);
+		if (rc != RADIANT_SEC_OK) {
+			/* Transmit nothing rather than send in the clear: a
+			 * channel the host believes is protected must not fail
+			 * open. */
+			return;
+		}
 	}
-#else
+#endif
 	if (radiant_frame_make(&f, &id, &fields, pay,
 			   RADIANT_FRAME_PAYLOAD_STD) != RADIANT_FRAME_OK) {
 		return;
 	}
-#endif
 	if (radiant_frame_encode(RADIANT_FRAME_CFG_TRACKING, api_net_addr_for(ch), &f,
 			     &w) != RADIANT_FRAME_OK) {
 		return;
