@@ -72,6 +72,21 @@ static void fe_copy(fe o, const fe a)
 }
 
 /*
+ * Wipe limbs the optimiser may not delete, as radiant_sec_wipe() does for
+ * bytes. Limb-wide rather than byte-wide because fe_mul() calls it on every
+ * product, about 2,800 times per exchange: eight times fewer stores than the
+ * byte loop for the same 248 bytes.
+ */
+static void fe_wipe(int64_t *p, int n)
+{
+	volatile int64_t *v = p;
+
+	while (n-- > 0) {
+		*v++ = 0;
+	}
+}
+
+/*
  * Swap a and b when `swap` is 1, in the same instructions either way. Mask
  * is the negated flag (all-ones or all-zeros); nothing branches on `swap`,
  * because the ladder calls this once per scalar bit and a branch would leak
@@ -113,6 +128,17 @@ static void fe_sub(fe o, const fe a, const fe b)
  * arithmetic (floors), which is correct for a signed limb's borrow. Top
  * limb's overflow wraps into limb 0 * 38, since 2^255 = 19 (mod p) so
  * 2^256 = 38.
+ *
+ * What stays in the limb is its low 16 bits, taken with a mask. It used to
+ * be `o[i] -= carry << 16`, and a borrow makes `carry` negative: a left
+ * shift of a negative value is undefined in ISO C (review 2026-11-14,
+ * item 4). The mask is the same value - the floored shift leaves exactly
+ * the residue mod 2^16 behind - and it is defined: int64_t is two's
+ * complement by definition (C11 7.20.1.1). It is also what GCC already
+ * compiled the shift to; `o[i] -= carry * 65536` was measured at 3.6 %
+ * more instructions per exchange on Cortex-M4 at -Os, since GCC does not
+ * fold the multiply into the mask. The right shift is implementation-
+ * defined, not undefined; GCC and Clang both define it as arithmetic.
  */
 static void fe_carry(fe o)
 {
@@ -121,11 +147,11 @@ static void fe_carry(fe o)
 
 	for (i = 0; i < FE_LIMBS - 1; i++) {
 		carry = o[i] >> 16;
-		o[i] -= carry << 16;
+		o[i] &= 0xFFFF;
 		o[i + 1] += carry;
 	}
 	carry = o[FE_LIMBS - 1] >> 16;
-	o[FE_LIMBS - 1] -= carry << 16;
+	o[FE_LIMBS - 1] &= 0xFFFF;
 	o[0] += 38 * carry;
 }
 
@@ -150,6 +176,9 @@ static void fe_mul(fe o, const fe a, const fe b)
 	for (i = 0; i < FE_LIMBS; i++) {
 		o[i] = t[i];
 	}
+	/* The product of two secrets, in the frame every later multiply
+	 * reuses but no caller can reach (review 2026-11-14, item 4). */
+	fe_wipe(t, 2 * FE_LIMBS - 1);
 	/* Twice: the first pass can leave limb 0 wide after the 38x fold. */
 	fe_carry(o);
 	fe_carry(o);
@@ -189,6 +218,7 @@ static void fe_invert(fe o, const fe a)
 		}
 	}
 	fe_copy(o, c);
+	fe_wipe(c, FE_LIMBS);
 }
 
 /*
@@ -243,6 +273,9 @@ static void fe_pack(uint8_t *out, const fe n)
 		out[2 * i] = (uint8_t)(t[i] & 0xFF);
 		out[2 * i + 1] = (uint8_t)((t[i] >> 8) & 0xFF);
 	}
+	/* t is the shared secret itself, m it or it minus p. */
+	fe_wipe(t, FE_LIMBS);
+	fe_wipe(m, FE_LIMBS);
 }
 
 int radiant_sec_x25519(uint8_t *out, const uint8_t *scalar, const uint8_t *point)
@@ -317,9 +350,13 @@ int radiant_sec_x25519(uint8_t *out, const uint8_t *scalar, const uint8_t *point
 	fe_mul(x2, x2, z2);
 	fe_pack(out, x2);
 
-	/* Wipe the clamped scalar and every intermediate: the ladder's working
-	 * state is as sensitive as the scalar itself. radiant_sec_wipe(), not
-	 * memset(): these are dead locals, and a plain memset() on a dead
+	/* Wipe the clamped scalar and every field-element intermediate: the
+	 * ladder's working state is as sensitive as the scalar itself. These
+	 * are the ladder's; fe_mul(), fe_invert() and fe_pack() wipe their own
+	 * scratch before returning (they did not until review 2026-11-14,
+	 * item 4). Not covered: scalar locals (the swap flag, a carry), which
+	 * live in registers or spill slots C cannot name. radiant_sec_wipe(),
+	 * not memset(): these are dead locals, and a plain memset() on a dead
 	 * local is a store GCC deletes at -Os. */
 	radiant_sec_wipe(k, sizeof(k));
 	radiant_sec_wipe(x1, sizeof(x1));

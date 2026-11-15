@@ -1017,6 +1017,66 @@ ZTEST(profile_enrol, test_an_injected_bad_key_does_not_burn_the_window)
 	zassert_equal(1u, sstats.enrolments);
 }
 
+ZTEST(profile_enrol, test_a_failed_wrap_ends_the_window_with_its_pairing)
+{
+	struct profile_enrol     pe;
+	uint8_t                  pub[32];
+	uint8_t                  first[PROFILE_ENROL_FRAMES][8];
+	uint8_t                  second[PROFILE_ENROL_FRAMES][8];
+	struct radiant_sec_stats sstats;
+	uint8_t                  k;
+	int                      rc;
+
+	/* A step AFTER the exchange fails. The node holds no root yet, so the
+	 * exchange has to establish one, and that binds the channel's device
+	 * number - which changed to none after the window opened. By then the
+	 * scalar is spent and radiant_sec has freed the pairing context, so
+	 * the window has nothing left to answer anyone with: it must end with
+	 * the context, not stay open refusing every later peer until it times
+	 * out (review 2026-11-14, item 4). */
+	give_id(NODE_CH, NODE_DEVNUM);
+	give_id(PEER_CH, PEER_DEVNUM);
+	enrol_up(&pe, PROFILE_ENROL_PHYSICAL, node_scalar);
+	zassert_equal(0, profile_enrol_physical_action(&pe, T_ORIGIN));
+	zassert_equal(RADIANT_CH_OK,
+		      radiant_channel_id_set(NODE_CH, 0u, PROFILE_HR_DEVICE_TYPE,
+					     0x01u));
+
+	peer_up(peer_scalar, pub);
+	peer_set(pub, first);
+	for (k = 0u; k < PROFILE_ENROL_FRAMES - 1u; k++) {
+		zassert_equal(0, profile_enrol_on_ack_data(&pe, first[k], 8u));
+	}
+	rc = profile_enrol_on_ack_data(&pe, first[PROFILE_ENROL_FRAMES - 1u],
+				       8u);
+	zassert_false(radiant_sec_pair_is_open(NODE_CH));
+	zassert_false(profile_enrol_is_open(&pe),
+		      "the window outlived its pairing context");
+	zassert_equal(-EIO, rc, "%d", rc);
+	radiant_sec_get_stats(NODE_CH, &sstats);
+	zassert_equal(0u, sstats.enrolments);
+
+	/* A second peer answering that window finds none... */
+	radiant_sec_pair_leave(PEER_CH);
+	peer_up(other_scalar, pub);
+	peer_set(pub, second);
+	zassert_equal(-EINVAL, profile_enrol_on_ack_data(&pe, second[0], 8u));
+
+	/* ...and the user's next press opens a window that works. */
+	zassert_equal(RADIANT_CH_OK,
+		      radiant_channel_id_set(NODE_CH, NODE_DEVNUM,
+					     PROFILE_HR_DEVICE_TYPE, 0x01u));
+	zassert_equal(0, profile_enrol_physical_action(&pe,
+						       T_ORIGIN + US_PER_S));
+	for (k = 0u; k < PROFILE_ENROL_FRAMES - 1u; k++) {
+		zassert_equal(0, profile_enrol_on_ack_data(&pe, second[k], 8u));
+	}
+	zassert_equal(1, profile_enrol_on_ack_data(
+				 &pe, second[PROFILE_ENROL_FRAMES - 1u], 8u));
+	radiant_sec_get_stats(NODE_CH, &sstats);
+	zassert_equal(1u, sstats.enrolments);
+}
+
 ZTEST(profile_enrol, test_repeated_frames_are_idempotent)
 {
 	struct profile_enrol pe;

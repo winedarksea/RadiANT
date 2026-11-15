@@ -403,6 +403,13 @@ bool profile_enrol_frame(void *user, uint8_t i, uint8_t *payload);
  *             small-order point) - mandatory, since the result seals the
  *             root. Accumulator resets, window stays open: one injected
  *             packet must not burn a window the user opened.
+ *   -EIO      the pairing context is gone, so the window closes with it and
+ *             the user opens a new one. Either the exchange ran and a later
+ *             step failed (sealing the root, the fingerprint, or installing a
+ *             first root - the peer's bytes cannot make any of them fail, and
+ *             the scalar is spent), or the context had already ended before
+ *             the sixth frame: radiant_sec's pairing timeout fired, or the
+ *             node left pairing through another path.
  *
  * radiant_sec's own return codes are not propagated: different numbering
  * (RADIANT_SEC_EINVAL is -1, which is -EPERM here) would make a mixed error

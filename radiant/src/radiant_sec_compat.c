@@ -410,6 +410,18 @@ __weak void radiant_sec_compat_verdict(uint8_t ch, uint8_t sub, uint16_t counter
 
 /* ── Configuration ──────────────────────────────────────────────────────── */
 
+#if defined(CONFIG_ZTEST)
+/* Test-only seam, in ztest images only: a failure returned here stands in for
+ * the K_id derivation failing in set_key (an opaque backend out of key slots),
+ * which the portable backend cannot do on demand. */
+int radiant_sec_compat_test_kid_fault(void);
+
+__weak int radiant_sec_compat_test_kid_fault(void)
+{
+	return RADIANT_SEC_OK;
+}
+#endif
+
 int radiant_sec_compat_set_key(uint8_t ch, const uint8_t *root, size_t bits,
 			       uint16_t base_devnum)
 {
@@ -454,6 +466,11 @@ int radiant_sec_compat_set_key(uint8_t ch, const uint8_t *root, size_t bits,
 		if (same && base_devnum == c->base_devnum) {
 			return RADIANT_SEC_OK;
 		}
+		/* The old root goes before the new one is imported over it,
+		 * as in radiant_sec_set_key(): destroying the handle also
+		 * wipes the cached AES schedule, which radiant_sec_key_same()
+		 * just left holding the old root's (review 2026-11-14). */
+		radiant_sec_key_destroy(&c->k_root);
 	}
 
 	rc = radiant_sec_key_import(&c->k_root, root, bits);
@@ -462,31 +479,50 @@ int radiant_sec_compat_set_key(uint8_t ch, const uint8_t *root, size_t bits,
 			/* Undo the allocation rather than leave a keyless,
 			 * used slot (review 2026-10-31, D1-6(b)/D2-7). */
 			memset(c, 0, sizeof(*c));
+		} else {
+			/* The old root is gone and the new one did not take
+			 * (it imported a moment ago in radiant_sec_key_same()):
+			 * no root at all, so no context. */
+			radiant_sec_compat_channel_release(ch);
 		}
 		return rc;
 	}
+	/* The on-air number restarts at the provisioning one with every root
+	 * installed, as in radiant_sec_set_key(); the same-root no-op above
+	 * returns first, so a trial number survives an idempotent re-send.
+	 * Until review 2026-11-14 a non-zero on-air number outlived the root. */
 	c->base_devnum = base_devnum;
-	if (c->devnum == 0u) {
-		c->devnum = base_devnum;
-	}
+	c->devnum = base_devnum;
+
+	/* A new root is a fresh start, and a fresh start under an epoch the
+	 * previous key already used is the state D3 forbids. The old root's
+	 * authority (its ceiling) goes with it. Done BEFORE the derivation
+	 * below, so nothing of the old root is live under the new one even
+	 * for a moment. */
+	c->epoch_set = false;
+	c->ceil_inv = 0;
+	radiant_sec_key_destroy(&c->k_auth);
 
 	/* K_id is epoch-less - the "id" label uses epoch 0 - so it is derived
 	 * once here and survives every wrap, every recovery and every adopted
 	 * epoch. That is what makes the hint search one CMAC per candidate
 	 * rather than one derivation plus one CMAC. */
 	radiant_sec_key_destroy(&c->k_id);
-	rc = radiant_sec_kdf(&c->k_root, RADIANT_SEC_LABEL_ID, 0u, base_devnum,
-			     &c->k_id);
+#if defined(CONFIG_ZTEST)
+	rc = radiant_sec_compat_test_kid_fault();
+	if (rc == RADIANT_SEC_OK)
+#endif
+	{
+		rc = radiant_sec_kdf(&c->k_root, RADIANT_SEC_LABEL_ID, 0u,
+				     base_devnum, &c->k_id);
+	}
 	if (rc != RADIANT_SEC_OK) {
+		/* A root with no K_id is half a context: the old root is
+		 * already gone, so leave none, as radiant_sec_set_key() does
+		 * when its import fails (review 2026-11-14, item 4). */
+		radiant_sec_compat_channel_release(ch);
 		return rc;
 	}
-
-	/* A new root is a fresh start, and a fresh start under an epoch the
-	 * previous key already used is the state D3 forbids. The old root's
-	 * authority (its ceiling) goes with it. */
-	c->epoch_set = false;
-	c->ceil_inv = 0;
-	radiant_sec_key_destroy(&c->k_auth);
 	return RADIANT_SEC_OK;
 }
 
@@ -1266,7 +1302,7 @@ static int locator_derive(const struct radiant_sec_key *k_id, uint32_t epoch,
 	if (rc == RADIANT_SEC_OK) {
 		*out = (uint16_t)((uint16_t)tag[0] | ((uint16_t)tag[1] << 8));
 	}
-	memset(tag, 0, sizeof(tag));
+	radiant_sec_wipe(tag, sizeof(tag));
 	return rc;
 }
 

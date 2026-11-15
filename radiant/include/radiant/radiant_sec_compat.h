@@ -342,8 +342,13 @@ int radiant_sec_compat_tier2_tag(const struct radiant_sec_key *k_auth,
  * base_devnum, is a no-op returning RADIANT_SEC_OK (compared by key check
  * value), keeping the epoch, the epoch gate, the ceiling and every window, so
  * a re-send cannot be followed by an older epoch. A different root closes the
- * epoch gate (any epoch is accepted next: new keys, no nonce used under them)
- * and clears the ceiling. A failed import changes nothing.
+ * epoch gate (any epoch is accepted next: new keys, no nonce used under them),
+ * clears the ceiling and restarts the on-air device number at `base_devnum`.
+ * A root the backend refuses changes nothing (radiant_sec_key_same() imports
+ * it first). Past that point the old root is destroyed before the new one is
+ * imported, so a later failure - the import itself on a backend that refuses
+ * it the second time, or the K_id derivation - leaves no context at all, and
+ * the next call is a fresh install.
  */
 int radiant_sec_compat_set_key(uint8_t ch, const uint8_t *root, size_t bits,
 			       uint16_t base_devnum);

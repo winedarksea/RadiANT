@@ -58,6 +58,13 @@ static const uint8_t compat_root[16] = {
 	0x87, 0x96, 0xa5, 0xb4, 0xc3, 0xd2, 0xe1, 0xf0,
 };
 
+/* A root that really differs from compat_root, for the cases where a different
+ * root has to be the only thing that changes. */
+static const uint8_t new_root[16] = {
+	0xa5, 0x5a, 0x01, 0x10, 0x22, 0x33, 0x44, 0x55,
+	0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
+};
+
 /* A genuine 24-bit hint collision under the key above, found offline by
  * birthday search. The test asserts it's a real collision first - simulating
  * one would test the search's failure path, not the claim that a hint match
@@ -316,9 +323,21 @@ static uint16_t counter_of(const uint8_t *air)
 	return (uint16_t)((uint32_t)air[1] | ((uint32_t)air[2] << 8));
 }
 
+/* radiant_sec_compat.c's ztest-only seam: what set_key's K_id derivation
+ * returns while this is not RADIANT_SEC_OK. */
+static int kid_fault;
+
+int radiant_sec_compat_test_kid_fault(void);
+
+int radiant_sec_compat_test_kid_fault(void)
+{
+	return kid_fault;
+}
+
 static void compat_before(void *f)
 {
 	ARG_UNUSED(f);
+	kid_fault = RADIANT_SEC_OK;
 	radiant_sec_compat_reset();
 	memset(vlog, 0, sizeof(vlog));
 	vlog_n = 0u;
@@ -1633,11 +1652,10 @@ ZTEST(sec_compat_stream, test_the_same_root_again_keeps_the_compat_epoch_gate)
 {
 	/* Item 9 on the compat surface: re-installing the root a channel holds
 	 * is a no-op, so it is no way to set an older epoch (a rollback) and
-	 * no gap in a locked stream. A different root closes the gate. */
-	static const uint8_t other_root[16] = {
-		0x0f, 0x1e, 0x2d, 0x3c, 0x4b, 0x5a, 0x69, 0x78,
-		0x87, 0x96, 0xa5, 0xb4, 0xc3, 0xd2, 0xe1, 0xf0,
-	};
+	 * no gap in a locked stream. A different base device number closes the
+	 * gate, and so does a different root on its own. (Until review
+	 * 2026-11-14 the "different root" step reused compat_root's bytes, so
+	 * it changed only the device number back.) */
 	struct radiant_sec_compat_stats st;
 	uint8_t                         air[RADIANT_SEC_COMPAT_MSG_BYTES];
 	uint8_t                         air2[RADIANT_SEC_COMPAT_MSG_BYTES];
@@ -1669,10 +1687,18 @@ ZTEST(sec_compat_stream, test_the_same_root_again_keeps_the_compat_epoch_gate)
 					      TEST_DEVNUM + 1u));
 	zassert_ok(radiant_sec_compat_set_epoch(RX_CH, 5u, T_ORIGIN, 0u,
 						TEST_PERIOD));
+	/* ...which is now the held set: sent again, it is a no-op. */
+	zassert_ok(radiant_sec_compat_set_key(RX_CH, compat_root, 128,
+					      TEST_DEVNUM + 1u));
+	zassert_equal(RADIANT_SEC_EINVAL,
+		      radiant_sec_compat_set_epoch(RX_CH, 4u, T_ORIGIN, 0u,
+						   TEST_PERIOD));
 
-	/* A different root closes the gate: any epoch is accepted next. */
-	zassert_ok(radiant_sec_compat_set_key(RX_CH, other_root, 128,
-					      TEST_DEVNUM));
+	/* A different root closes the gate on its own - the base device
+	 * number stays TEST_DEVNUM + 1 - so an epoch below the 5 just set is
+	 * accepted next. */
+	zassert_ok(radiant_sec_compat_set_key(RX_CH, new_root, 128,
+					      TEST_DEVNUM + 1u));
 	zassert_ok(radiant_sec_compat_set_epoch(RX_CH, 3u, T_ORIGIN, 0u,
 						TEST_PERIOD));
 }
@@ -1849,4 +1875,126 @@ ZTEST(sec_compat_stream, test_an_authority_armed_compat_context_refuses_rx)
 	/* Cleared by its own authority, it receives again. */
 	zassert_ok(radiant_sec_compat_set_epoch_ceiling(RX_CH, UINT32_MAX));
 	zassert_ok(deliver(air, t));
+}
+
+/* Review 2026-11-14 item 4: a different root on the compat surface restarts the
+ * on-air device number at the provisioning one, as radiant_sec_set_key() does.
+ * Before, a non-zero on-air number survived the change, so a context moved to
+ * another number (set_devnum, e.g. a Tier 2 receiver's trial) went on using it
+ * under the new root, where no peer keyed with that root expects it. */
+ZTEST(sec_compat_stream, test_a_new_root_restarts_the_on_air_device_number)
+{
+	uint8_t  air[RADIANT_SEC_COMPAT_MSG_BYTES];
+	uint64_t t;
+
+	zassert_ok(radiant_sec_compat_set_key(TX_CH, compat_root, 128,
+					      TEST_DEVNUM));
+	zassert_ok(radiant_sec_compat_set_devnum(TX_CH, TEST_DEVNUM + 7u));
+	zassert_ok(radiant_sec_compat_set_key(TX_CH, new_root, 128,
+					      TEST_DEVNUM));
+	zassert_ok(radiant_sec_compat_set_key(RX_CH, new_root, 128,
+					      TEST_DEVNUM));
+	zassert_ok(radiant_sec_compat_configure(TX_CH,
+						RADIANT_SEC_COMPAT_SW_TIER_I,
+						TEST_N, TEST_T_S));
+	zassert_ok(radiant_sec_compat_configure(RX_CH,
+						RADIANT_SEC_COMPAT_SW_TIER_I,
+						TEST_N, TEST_T_S));
+	zassert_ok(radiant_sec_compat_set_epoch(TX_CH, 5u, T_ORIGIN, 0u,
+						TEST_PERIOD));
+	zassert_ok(radiant_sec_compat_set_epoch(RX_CH, 5u, T_ORIGIN, 0u,
+						TEST_PERIOD));
+
+	t = tier1_page(T_ORIGIN, 1u, 0u, air);
+	zassert_equal(RADIANT_SEC_OK, deliver(air, t),
+		      "the new root's first page went out under the old "
+		      "on-air device number");
+}
+
+/* Review 2026-11-14 item 4: a K_id derivation that fails after the new root
+ * imported must not leave a half-replaced context - the new root in, K_id
+ * gone, and the old root's epoch gate and K_auth still live, still attesting.
+ * A failed install leaves no root at all, so no context, as a failed import
+ * does in radiant_sec_set_key(). */
+ZTEST(sec_compat_stream, test_a_failed_id_derivation_leaves_no_half_replaced_context)
+{
+	uint8_t  air[RADIANT_SEC_COMPAT_MSG_BYTES];
+	uint8_t  body[RADIANT_SEC_COMPAT_BODY_BYTES];
+	uint64_t t;
+	uint32_t i;
+	int      rc;
+
+	setup_pair(RADIANT_SEC_COMPAT_SW_TIER_I, RADIANT_SEC_COMPAT_SW_TIER_I,
+		   909u, 909u);
+	t = tier1_page(T_ORIGIN, 1u, 0u, air);
+	zassert_equal(RADIANT_SEC_OK, deliver(air, t));
+
+	kid_fault = RADIANT_SEC_ENOTSUP;
+	rc = radiant_sec_compat_set_key(TX_CH, new_root, 128, TEST_DEVNUM);
+	kid_fault = RADIANT_SEC_OK;
+	zassert_equal(RADIANT_SEC_ENOTSUP, rc, "%d", rc);
+
+	/* Nothing attests any more: not the old root's K_auth under its epoch
+	 * gate, and not the new root, which never finished installing. */
+	for (i = 0u; i < 16u; i++) {
+		zassert_equal(0,
+			      radiant_sec_compat_tx_attest(
+				      TX_CH, T_ORIGIN + 2u * T_US +
+						     (uint64_t)i * PERIOD_US,
+				      body, sizeof(body)),
+			      "a half-replaced context attested at slot %u", i);
+	}
+	zassert_equal(RADIANT_SEC_ENOKEY,
+		      radiant_sec_compat_set_epoch(TX_CH, 3u, T_ORIGIN, 0u,
+						   TEST_PERIOD));
+
+	/* A fresh slot that fails the same way is given back, not left keyed
+	 * without a K_id. */
+	kid_fault = RADIANT_SEC_ENOTSUP;
+	zassert_equal(RADIANT_SEC_ENOTSUP,
+		      radiant_sec_compat_set_key(TX_CH, new_root, 128,
+						 TEST_DEVNUM));
+	kid_fault = RADIANT_SEC_OK;
+	zassert_equal(RADIANT_SEC_ENOKEY,
+		      radiant_sec_compat_set_epoch(TX_CH, 3u, T_ORIGIN, 0u,
+						   TEST_PERIOD));
+
+	/* And the install works once the derivation does. */
+	zassert_ok(radiant_sec_compat_set_key(TX_CH, new_root, 128,
+					      TEST_DEVNUM));
+	zassert_ok(radiant_sec_compat_set_epoch(TX_CH, 3u, T_ORIGIN, 0u,
+						TEST_PERIOD));
+}
+
+/* Review 2026-11-14 follow-up: the other half of the on-air rule. The same root
+ * and base device number again is a no-op, so an on-air number the context was
+ * moved to (a Tier 2 receiver's trial) survives the re-send - only a root that
+ * is actually installed restarts it. */
+ZTEST(sec_compat_stream, test_the_same_root_again_keeps_a_moved_on_air_device_number)
+{
+	uint8_t  air[RADIANT_SEC_COMPAT_MSG_BYTES];
+	uint64_t t;
+
+	zassert_ok(radiant_sec_compat_set_key(TX_CH, compat_root, 128,
+					      TEST_DEVNUM));
+	zassert_ok(radiant_sec_compat_set_devnum(TX_CH, TEST_DEVNUM + 7u));
+	zassert_ok(radiant_sec_compat_set_key(TX_CH, compat_root, 128,
+					      TEST_DEVNUM));
+	zassert_ok(radiant_sec_compat_set_key(RX_CH, compat_root, 128,
+					      TEST_DEVNUM));
+	zassert_ok(radiant_sec_compat_set_devnum(RX_CH, TEST_DEVNUM + 7u));
+	zassert_ok(radiant_sec_compat_configure(TX_CH,
+						RADIANT_SEC_COMPAT_SW_TIER_I,
+						TEST_N, TEST_T_S));
+	zassert_ok(radiant_sec_compat_configure(RX_CH,
+						RADIANT_SEC_COMPAT_SW_TIER_I,
+						TEST_N, TEST_T_S));
+	zassert_ok(radiant_sec_compat_set_epoch(TX_CH, 5u, T_ORIGIN, 0u,
+						TEST_PERIOD));
+	zassert_ok(radiant_sec_compat_set_epoch(RX_CH, 5u, T_ORIGIN, 0u,
+						TEST_PERIOD));
+
+	t = tier1_page(T_ORIGIN, 1u, 0u, air);
+	zassert_equal(RADIANT_SEC_OK, deliver(air, t),
+		      "an idempotent re-send reset the moved on-air number");
 }
