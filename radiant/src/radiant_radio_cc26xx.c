@@ -25,6 +25,7 @@
 
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/sys/crc.h>
 
 #include <driverlib/rf_mailbox.h>
 #include <driverlib/rf_common_cmd.h>
@@ -641,7 +642,7 @@ static uint32_t reflect(uint32_t v, uint8_t bits)
 	return r;
 }
 
-static uint32_t crc_compute(const struct radiant_crc_cfg *cfg,
+static uint32_t crc_generic(const struct radiant_crc_cfg *cfg,
 			    const uint8_t *p, size_t n)
 {
 	const uint8_t width = cfg->width_bits;
@@ -669,6 +670,63 @@ static uint32_t crc_compute(const struct radiant_crc_cfg *cfg,
 	}
 
 	return (crc ^ cfg->xor_out) & mask;
+}
+
+/*
+ * ANT's CRC (CRC-16/CCITT-FALSE: poly 0x1021, MSB first, no reflection) is
+ * exactly what Zephyr's crc16_itu_t() computes: the seed is used as given and
+ * no final XOR is applied, so xor_out is ours to apply. It does a few
+ * shift/xor ops per byte where the loop above does eight conditional steps,
+ * which was ~60 us per RX frame and per TX arm on the 48 MHz M4F.
+ *
+ * Recomputed by crc_self_check() at each init (deterministic, so a failed
+ * check stays failed); kept outside st, which init memsets.
+ */
+static bool crc_fast_ok = true;
+
+static bool crc_is_ccitt16(const struct radiant_crc_cfg *cfg)
+{
+	return cfg->width_bits == 16u && cfg->poly == 0x1021u &&
+	       !cfg->reflect_in && !cfg->reflect_out;
+}
+
+static uint32_t crc_compute(const struct radiant_crc_cfg *cfg,
+			    const uint8_t *p, size_t n)
+{
+	if (crc_fast_ok && crc_is_ccitt16(cfg)) {
+		return (crc16_itu_t((uint16_t)cfg->init, p, n) ^ cfg->xor_out) &
+		       0xFFFFu;
+	}
+
+	return crc_generic(cfg, p, n);
+}
+
+/*
+ * One comparison at init, on radiant/spike/rx_raw's golden ANT frame (network
+ * bytes A6 C5 then device 0x1234, type 0x78, trans 0x01, then a payload).
+ * Both paths give 0x1B12. Should a library crc16_itu_t() ever disagree with
+ * the generic loop (a hardware CRC handler overriding the __weak software one,
+ * say), every frame would fail its CRC with nothing to say why - so say why,
+ * and fall back.
+ */
+static void crc_self_check(void)
+{
+	static const uint8_t golden[15] = {
+		0xA6, 0xC5, 0x34, 0x12, 0x78, 0x01, 0x0A,
+		0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+	};
+	static const struct radiant_crc_cfg ant = {
+		.width_bits = 16u, .poly = 0x1021u, .init = 0xFFFFu,
+	};
+	const uint32_t fast =
+		(uint32_t)crc16_itu_t((uint16_t)ant.init, golden, sizeof(golden));
+	const uint32_t slow = crc_generic(&ant, golden, sizeof(golden));
+
+	crc_fast_ok = (fast == slow);
+	if (!crc_fast_ok) {
+		LOG_ERR("crc16_itu_t gave 0x%04x, generic 0x%04x: using generic",
+			fast, slow);
+	}
 }
 
 /* --- Capabilities --- */
@@ -1415,6 +1473,7 @@ int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 	/* 0xF7 pages 8-10: the A0 cycle clock, at this core's fixed clock. */
 	CC_DIAG(radiant_diag_cycles_init(CC_CORE_HZ));
 
+	crc_self_check();
 	rx_queue_init();
 
 	k_timer_init(&rat_keepalive, rat_keepalive_fn, NULL);
