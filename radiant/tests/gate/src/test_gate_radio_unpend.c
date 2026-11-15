@@ -6,9 +6,14 @@
  *
  * The contract this suite pins:
  *   - every high-priority signal that returns ACTION_END calls
- *     radiant_nrf_gate_radio_irq_unpend() exactly once, after the radio was
- *     handed back (on_grant_end) and after every radiant_radio_abort() that
- *     signal made, so nothing radio-related follows it;
+ *     radiant_nrf_gate_radio_irq_unpend() exactly once, after every
+ *     radiant_radio_abort() that signal made, so nothing radio-related follows
+ *     it;
+ *   - by then this timeslot's radio has been handed back exactly once
+ *     (on_grant_end == on_grant), and that hand-back came before the clear.
+ *     The hand-back may be in the signal itself or earlier, in gate_release(),
+ *     which returns the radio at once and leaves the TIMER0 compare to end the
+ *     timeslot;
  *   - a timeslot whose on_grant() took the radio then has the vector cleared;
  *   - the low-priority hand-backs (BLOCKED, SESSION_IDLE, SESSION_CLOSED) and
  *     gate_shutdown() never call it: there the radio may already be the other
@@ -102,6 +107,17 @@ static void end_and_check(uint32_t signal, bool aborts, const char *what)
 	zassert_false(fake_backend_radio_irq_pending(),
 		      "%s left the RADIO vector pending for MPSL to take after "
 		      "the timeslot closed (assert 69:108)", what);
+	/*
+	 * The counters start at zero in before() and every earlier end_and_check()
+	 * left them equal, so equality here means this timeslot's radio was handed
+	 * back exactly once. Only then does grant_end_seq name this grant's
+	 * hand-back, and the ordering check below mean anything; without it a
+	 * stale or missing hand-back would pass.
+	 */
+	zassert_equal(fake_backend()->on_grant, fake_backend()->on_grant_end,
+		      "%s: this timeslot's radio was not handed back exactly once "
+		      "(on_grant %u, on_grant_end %u)", what,
+		      fake_backend()->on_grant, fake_backend()->on_grant_end);
 	zassert_true(fake_backend()->unpend_seq > fake_backend()->grant_end_seq,
 		     "%s cleared the vector before the radio was handed back", what);
 	zassert_equal(fake_radio_abort_calls(), fake_backend()->unpend_abort_calls,
