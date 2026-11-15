@@ -77,6 +77,21 @@ static void fe_copy(fe o, const fe a)
  * because the ladder calls this once per scalar bit and a branch would leak
  * the scalar through timing.
  */
+/*
+ * Wipe limbs the optimiser may not delete, as radiant_sec_wipe() does for
+ * bytes. Limb-wide rather than byte-wide because fe_mul() calls it on every
+ * product, about 2,800 times per exchange: eight times fewer stores than the
+ * byte loop for the same 248 bytes.
+ */
+static void fe_wipe(int64_t *p, int n)
+{
+	volatile int64_t *v = p;
+
+	while (n-- > 0) {
+		*v++ = 0;
+	}
+}
+
 static void fe_cswap(fe a, fe b, int64_t swap)
 {
 	int64_t mask = -swap;
@@ -161,6 +176,9 @@ static void fe_mul(fe o, const fe a, const fe b)
 	for (i = 0; i < FE_LIMBS; i++) {
 		o[i] = t[i];
 	}
+	/* The product of two secrets, in the frame every later multiply
+	 * reuses but no caller can reach (review 2026-11-14, item 4). */
+	fe_wipe(t, 2 * FE_LIMBS - 1);
 	/* Twice: the first pass can leave limb 0 wide after the 38x fold. */
 	fe_carry(o);
 	fe_carry(o);
@@ -200,6 +218,7 @@ static void fe_invert(fe o, const fe a)
 		}
 	}
 	fe_copy(o, c);
+	fe_wipe(c, FE_LIMBS);
 }
 
 /*
@@ -254,6 +273,9 @@ static void fe_pack(uint8_t *out, const fe n)
 		out[2 * i] = (uint8_t)(t[i] & 0xFF);
 		out[2 * i + 1] = (uint8_t)((t[i] >> 8) & 0xFF);
 	}
+	/* t is the shared secret itself, m it or it minus p. */
+	fe_wipe(t, FE_LIMBS);
+	fe_wipe(m, FE_LIMBS);
 }
 
 int radiant_sec_x25519(uint8_t *out, const uint8_t *scalar, const uint8_t *point)
@@ -328,9 +350,13 @@ int radiant_sec_x25519(uint8_t *out, const uint8_t *scalar, const uint8_t *point
 	fe_mul(x2, x2, z2);
 	fe_pack(out, x2);
 
-	/* Wipe the clamped scalar and every intermediate: the ladder's working
-	 * state is as sensitive as the scalar itself. radiant_sec_wipe(), not
-	 * memset(): these are dead locals, and a plain memset() on a dead
+	/* Wipe the clamped scalar and every field-element intermediate: the
+	 * ladder's working state is as sensitive as the scalar itself. These
+	 * are the ladder's; fe_mul(), fe_invert() and fe_pack() wipe their own
+	 * scratch before returning (they did not until review 2026-11-14,
+	 * item 4). Not covered: scalar locals (the swap flag, a carry), which
+	 * live in registers or spill slots C cannot name. radiant_sec_wipe(),
+	 * not memset(): these are dead locals, and a plain memset() on a dead
 	 * local is a store GCC deletes at -Os. */
 	radiant_sec_wipe(k, sizeof(k));
 	radiant_sec_wipe(x1, sizeof(x1));
