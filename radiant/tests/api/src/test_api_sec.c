@@ -740,6 +740,72 @@ ZTEST(api, test_sec_a_keyed_slave_still_sends_acked_data)
 }
 #endif
 
+/*
+ * Review 2026-11-14 item 4: the other order. Host acked data or a burst block
+ * accepted on a master BEFORE 0xF2 would go out in the clear after the key
+ * landed, so 0xF2 refuses to key a master with a transfer in flight. A
+ * slave's acked data is its own traffic and does not block its key. The
+ * second acked call in each test proves the transfer really is in flight
+ * (TRANSFER_IN_PROGRESS); without it a refusal could come from anything.
+ */
+#if defined(CONFIG_RADIANT_SEC_HOST_MESSAGES)
+ZTEST(api, test_sec_host_key_refused_while_master_acked_in_flight)
+{
+	static const uint8_t blk[8] = { 0x11u, 1, 2, 3, 4, 5, 6, 7 };
+
+	sec_open((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_acknowledge_message_tx(SEC_CH, 8u, blk));
+	zassert_equal((antr_err_t)ANTW_TRANSFER_IN_PROGRESS,
+		      antr_acknowledge_message_tx(SEC_CH, 8u, blk),
+		      "the acked transfer is not in flight");
+
+	zassert_equal((antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE,
+		      antr_sec_key_set(SEC_CH, 128u, sec_dir_root),
+		      "a master was keyed with host acked data in flight");
+	zassert_false(radiant_sec_channel_is_secured(SEC_CH));
+	sec_close();
+}
+
+ZTEST(api, test_sec_host_key_refused_while_master_burst_in_flight)
+{
+	static uint8_t       burst_blk[8] = { 0x10u, 1, 2, 3, 4, 5, 6, 7 };
+	static const uint8_t ack_blk[8] = { 0x11u, 1, 2, 3, 4, 5, 6, 7 };
+
+	sec_open((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_burst_tx(SEC_CH, 8u, burst_blk,
+				    ANTR_BURST_SEGMENT_START |
+					    ANTR_BURST_SEGMENT_END));
+	zassert_equal((antr_err_t)ANTW_TRANSFER_IN_PROGRESS,
+		      antr_acknowledge_message_tx(SEC_CH, 8u, ack_blk),
+		      "the burst is not in flight");
+
+	zassert_equal((antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE,
+		      antr_sec_key_set(SEC_CH, 128u, sec_dir_root),
+		      "a master was keyed with a burst in flight");
+	zassert_false(radiant_sec_channel_is_secured(SEC_CH));
+	sec_close();
+}
+
+ZTEST(api, test_sec_host_slave_with_acked_in_flight_still_keys)
+{
+	static const uint8_t blk[8] = { 0x46u, 0xFF, 0xFF, 0xFF, 0xFF, 1, 2, 1 };
+
+	sec_open((uint8_t)ANTW_CHANNEL_TYPE_SLAVE);
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_acknowledge_message_tx(SEC_CH, 8u, blk));
+	zassert_equal((antr_err_t)ANTW_TRANSFER_IN_PROGRESS,
+		      antr_acknowledge_message_tx(SEC_CH, 8u, blk),
+		      "the acked transfer is not in flight");
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_key_set(SEC_CH, 128u, sec_dir_root));
+	zassert_true(radiant_sec_channel_is_secured(SEC_CH));
+	sec_close();
+}
+#endif
+
 ZTEST(api, test_sec_an_unkeyed_master_still_sends_acked_and_burst)
 {
 	static uint8_t       burst_blk[8] = { 0x10u, 1, 2, 3, 4, 5, 6, 7 };
