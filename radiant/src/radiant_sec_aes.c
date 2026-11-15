@@ -256,10 +256,14 @@ void radiant_sec_key_destroy(struct radiant_sec_key *k)
 	}
 	if (sched_serial == k->serial) {
 		/* Do not leave a live schedule for a destroyed key. */
-		memset(sched, 0, sizeof(sched));
+		radiant_sec_wipe(sched, sizeof(sched));
 		sched_serial = 0u;
 	}
-	memset(k, 0, sizeof(*k));
+	/* radiant_sec_wipe(), not memset(): callers pass stack handles (the
+	 * root copy in radiant_sec_key_same(), cmac_parts()' PRK, k_cmd), and
+	 * once inlined or link-time optimised a memset() of a handle that is
+	 * never read again is a dead store (review 2026-11-14, item 4). */
+	radiant_sec_wipe(k, sizeof(*k));
 }
 
 /* ── Level 1: the block primitive. For backends, not for policy. ─────────── */
@@ -481,7 +485,9 @@ int radiant_sec_cmac_final(struct radiant_sec_cmac_ctx *c, uint8_t tag[16])
 	}
 	encrypt_block(last, tag);
 
-	memset(c, 0, sizeof(*c));
+	/* The chain and the buffered block are key-dependent; the context is
+	 * often a dead local by now (radiant_sec_cmac()), so not memset(). */
+	radiant_sec_wipe(c, sizeof(*c));
 	radiant_sec_wipe(k1, sizeof(k1));
 	radiant_sec_wipe(k2, sizeof(k2));
 	radiant_sec_wipe(last, sizeof(last));
