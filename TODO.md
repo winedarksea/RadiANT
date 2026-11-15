@@ -31,6 +31,38 @@ The master's acknowledgement misses (closed 2026-11-12) were the link budget: 10
 10. Open, seen on air 2026-11-13: an 0x8A from a Garmin master sometimes gets no answer at all (1/20 at normal power, three in a row in the lossy leg) while the sniffer hears it clearly. Also: a Garmin master does not retry a slot-opening 0x8A in the slot when its ACK is lost, so our ACK repeats after a lost opener ACK are always wasted (5 x 3.1 ms).
 Note: multi packet burst mode is a lower priority feature, and handling it should not significantly degrade the performance of primary functionality (ie reading and listening to a heart rate strap)
 
+# Open issues from the 2026-11-14 security review (HEAD 360e12f)
+
+Found by reading the code; nothing was built or run, so each item needs a test that reproduces it before the fix. The primitives, X25519, the spread-MAC receive logic, the pairing step order and both entropy backends read clean. D14 (counter wrap) and D16 (tag length) hold as documented, and D17 holds for a single channel (item 2). Not read: the plan file outside the repo, ADRs 0006/0008/0009/0020, profile_compat.c, profile_private.c lines 1-380, and most of the spec outside 3.2, 7.5 and 7.6. The Python crypto was not compared with the C byte for byte.
+
+## 1. [OPEN, HIGH] The search-acquisition frame skips the security hook
+- `api_search_acquired()` (ant_radio_radiant.c:1361) posts the acquiring frame to the host as `BROADCAST_DATA` without calling `radiant_sec_rx_ingest()`. The only ingest calls are on the tracked path (:2095, :2124).
+- X_CONF: every acquisition or re-acquisition hands the host one page of ciphertext as if it were plaintext.
+- X_AUTH with `DROP_UNVER`: a secured-range page reaches the host without being held for a verdict. An attacker who jams the link until the slave drops to search, then sends one frame on the channel's ID, gets it delivered. This is D15 by another door.
+- X_AUTH with the default deliver policy: the forged frame is in no firmware window, and `VerdictResolver` (tools/ant_sec.py:606) settles every pending packet whose byte [1] falls in a verdict's window, so a forged frame claiming an upcoming genuine window could be credited `verified`. The timing is tight against the resolver's deadline and is not demonstrated.
+- A background-scan channel never leaves the search (:1425), so every frame takes this path and a key on it does nothing.
+- Beside it: the receive window state is not discarded on `RX_FAIL_GO_TO_SEARCH` (only pairing is told, :435); test_api_sec_host.c has no acquisition case; section 3.2's "not bypassable by message type" does not mention search.
+- Fix: route the acquiring frame through `radiant_sec_rx_ingest()` like a tracked broadcast; refuse to key a background-scan channel, or run its frames through the same hook; discard the window state on go-to-search; add the test and the spec sentence.
+
+## 2. [OPEN, MEDIUM, latent] Two live channels under the node root can meet on one epoch
+- The epoch ceiling is one global `epoch_next - 1`, raised on every armed channel at once (node_ident.c:588-612, :779). Channel A is armed first at epoch E; channel B is armed later at F = E+2, which needs N = E+4 persisted. That persist raises A's ceiling to E+3, so A's second counter wrap lands on E+2, the epoch B started in.
+- With the same root and device number that is the two-time pad the M2 fix was written to stop. M2 covers a re-arm and an arm after release, not two channels alive together.
+- Needs A to run two wraps (about 9 h at 4 Hz). No caller of `node_ident_arm_sec()` was found under apps/, samples/ or radiant/src/.
+- Fix: give each armed channel its own reserved range, or refuse a second live arm of the same kind under one root.
+
+## 3. [OPEN, LOW] Plaintext can reach an acknowledgement through a two-statement race
+- `api_post_master_tx()` copies the host plaintext into `sec_pay` and only then clears `sec_pay_valid` (ant_radio_radiant.c:1801-1802). `api_xfer_broadcast()` runs in the radio interrupt and sends `sec_pay` whenever the flag is set (:848), so an inbound acknowledged message landing between the two statements is acked with plaintext. The compiler may also reorder the two stores.
+- The window is tiny, but the pump posts the next slot around when the reply window opens.
+- Fix: clear the flag first, inside `radiant_event_crit_enter()`, or transform a local and copy it in under the critical section.
+
+## 4. [OPEN, LOW] Hardening
+- [ ] `radiant_sec_key_destroy()` and `radiant_sec_cmac_final()` clear with `memset()` (radiant_sec_aes.c:262, :484), and several callers pass stack handles: the root copy in `radiant_sec_key_same()`, the PRK and nonce keys in `cmac_parts()`, `k_cmd`. No build sets `CONFIG_LTO`, so the stores survive today; with LTO or inlining they are dead stores. Use `radiant_sec_wipe()`.
+- [ ] radiant_x25519.c says every intermediate is wiped; the locals of `fe_mul()` (`t`), `fe_invert()` (`c`) and `fe_pack()` (`t`, `m`, which hold the shared secret) are not.
+- [ ] Plain `memset()` on tag or output buffers in `locator_derive()` (radiant_sec_compat.c:1252), `set_check()` (profile_enrol.c:81) and `node_ident_pair_derive()` (node_ident.c:871).
+- [ ] `radiant_sec_compat_set_key()` with a different root keeps the old on-air device number when it is non-zero (radiant_sec_compat.c:468-471), where `radiant_sec_set_key()` resets it to the base number. A failed `K_id` derivation after the import also leaves a half-replaced context.
+- [ ] `carry << 16` on a negative value is undefined in ISO C (radiant_x25519.c:123-128). GCC does the expected thing; fix or note before another compiler.
+- [ ] profile_enrol.c:423-432: if the exchange succeeds and the wrap fails, the pairing context is freed while the enrolment window stays open, so the window is dead until it times out.
+
 # Open issues from the 2026-11-13 security review (HEAD 1df743a)
 
 Found by reading the code and checked a second time; nothing was built or run. The primitives (AES, CMAC, CTR, KDF, X25519, ct_equal, wipe) read clean. `security.conf` and compat are in no release image, so protocol changes here break no deployed device. "Latent" means no app calls the path yet (`node_ident_arm_sec`, `profile_enrol_*`, compat `recover_*`/`adopt_epoch` are reached only from tests). The plan file holding D1-D17 (`~/.claude/plans/make-a-plan-to-async-gem.md`) does not exist; D14-D17 were checked against the spec and code comments.
