@@ -656,29 +656,29 @@ static void api_post_rx(uint8_t ch, uint8_t msg_id,
  * when the per-frame sender and RSSI are what a scan is for. Written in the
  * radio interrupt (api_search_acquired()), read in radiant_sec_deliver(),
  * matched on t_sync alone: one radio hears one frame per instant, and a frame
- * offered to two channels has the same sender on both. Only the device and
- * transmission types are kept: a keyed channel has a non-zero device number
- * (0xF2 refuses one without) and its search matches only that number. The
- * table is cleared with the stack; a cleared entry could match only a frame
- * heard at an instant whose low 32 bits are zero. Eight entries:
- * under the deliver policy a frame is released at the next pump, and under
- * DROP_UNVER a scan rarely completes a window at all (docs/radiant-security.md
- * 3.2). A frame that has fallen out goes up under the channel's ID, as before.
+ * offered to two channels has the same sender on both. The whole channel ID
+ * is kept: a key survives a close, and the closed channel may take a wildcard
+ * ID before it reopens, so the channel's own number says nothing. Nothing
+ * clears the table, with the stack or otherwise: a zeroed entry would itself
+ * match a frame heard at an instant whose low 32 bits are zero, and a stale
+ * one matches only the exact instant of the frame that wrote it. Eight
+ * entries: under the deliver policy a frame is released at the next pump, and
+ * under DROP_UNVER a scan rarely completes a window at all
+ * (docs/radiant-security.md 3.2). A frame that has fallen out goes up under
+ * the channel's ID, as before.
  * t_sync_exact stays true for every released frame, tracked or searched, as it
  * was: the backends capture t_sync at the ADDRESS event.
  */
 #define API_SEC_SEEN_N 8u
 
 static struct api_sec_seen {
-	uint32_t t_lo;
-	uint8_t  types[2]; /* device_type, trans_type */
-	uint8_t  rssi[2];  /* has_rssi, rssi_dbm */
+	uint32_t                  t_lo;
+	struct radiant_channel_id id;
+	uint8_t                   rssi[2]; /* has_rssi, rssi_dbm */
 } api_sec_seen[API_SEC_SEEN_N];
 static uint8_t api_sec_seen_next;
 
-/* Each pair is copied as one, so each must sit together at both ends. */
-BUILD_ASSERT(offsetof(struct radiant_channel_id, trans_type) ==
-	     offsetof(struct radiant_channel_id, device_type) + 1u);
+/* The RSSI pair is copied as one, so it must sit together at both ends. */
 BUILD_ASSERT(offsetof(struct radiant_search_result, rssi_dbm) ==
 	     offsetof(struct radiant_search_result, has_rssi) + 1u);
 BUILD_ASSERT(offsetof(struct radiant_rx_event, rssi_dbm) ==
@@ -718,15 +718,25 @@ void radiant_sec_deliver(uint8_t ch, const uint8_t *pay, uint8_t len,
 	/* Carried from the radio's ADDRESS-event capture, not re-read when the pump runs. */
 	hal.t_sync_exact = true;
 
-	/* A frame the search held: its own sender and RSSI. No crit
-	 * section: the interrupt rewrites an entry only eight held search frames
-	 * later, and this loop is a few dozen instructions. */
+	/* A frame the search held: its own sender and RSSI. Read without a
+	 * crit section while the radio interrupt may rewrite the entry; the
+	 * interrupt runs to completion, so an entry whose t_lo is the same
+	 * after the copy as before it was not rewritten in between. */
 	for (uint8_t i = 0u; i < API_SEC_SEEN_N; i++) {
 		const struct api_sec_seen *s = &api_sec_seen[i];
 
 		if (s->t_lo == (uint32_t)t_sync) {
-			memcpy(&id.device_type, s->types, 2u);
-			memcpy(&hal.has_rssi, s->rssi, 2u);
+			struct radiant_channel_id sid;
+			uint8_t                   rssi[2];
+
+			compiler_barrier();
+			sid = s->id;
+			memcpy(rssi, s->rssi, 2u);
+			compiler_barrier();
+			if (s->t_lo == (uint32_t)t_sync) {
+				id = sid;
+				memcpy(&hal.has_rssi, rssi, 2u);
+			}
 			break;
 		}
 	}
@@ -1451,7 +1461,7 @@ static void api_search_acquired(uint8_t channel,
 					      (API_SEC_SEEN_N - 1u)];
 
 			s->t_lo = (uint32_t)r->t_sync;
-			memcpy(s->types, &r->id.device_type, 2u);
+			s->id = r->id;
 			memcpy(s->rssi, &r->has_rssi, 2u);
 		}
 		if (sec != RADIANT_SEC_RX_PLAIN) {
@@ -3031,9 +3041,6 @@ static void api_reset_state(void)
 	uint8_t i;
 
 	memset(api_ch, 0, sizeof(api_ch));
-#if defined(CONFIG_RADIANT_SEC)
-	memset(api_sec_seen, 0, sizeof(api_sec_seen));
-#endif
 	memset(api_net_addr, 0, sizeof(api_net_addr));
 	memset(api_net_valid, 0, sizeof(api_net_valid));
 	memset(api_adv_burst, 0, sizeof(api_adv_burst));

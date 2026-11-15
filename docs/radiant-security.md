@@ -451,7 +451,11 @@ receive path as a tracked broadcast, by their own message type: an acquiring
 frame sent as acknowledged data falls under the rule above. Under `X_CONF`
 they arrive decrypted and under `X_AUTH` they are judged, and held under
 `DROP_UNVER`, like any other packet; a held frame is released with its own
-sender ID and RSSI (security review 2026-11-14, item 1).
+sender ID and RSSI (security review 2026-11-14, item 1). The firmware
+remembers the sender of only the last eight frames the search held: a frame
+released later than that goes up under the channel's own ID and without RSSI.
+At W of 5 or more under `DROP_UNVER` that is routine, since a window is
+released only after the next one completes.
 
 **What a key on a background scan gives.** A scan is not refused a key, but
 under `X_AUTH` it is of little use:
@@ -465,6 +469,10 @@ under `X_AUTH` it is of little use:
   device or transmission type, which the scan's wildcard admits) is absorbed
   into the sender's windows and breaks or closes them. That is a denial of
   service, not a forgery: nothing it sends verifies.
+- The key outlives a close, and a closed channel may be given a wildcard
+  device number before it reopens. A keyed scan with a wildcard device number
+  takes every device's secured-range pages into that one key and window
+  state.
 
 `X_CONF` alone works on a scan as on any channel: each page is decrypted on
 its own.

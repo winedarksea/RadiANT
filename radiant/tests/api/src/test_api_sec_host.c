@@ -1772,6 +1772,71 @@ static void acq_scan_setup(uint8_t switches)
 	(void)radiant_event_drain(0u);
 }
 
+/* The device number of the last BROADCAST_DATA on VD_RX_CH from log index
+ * `from` on with page `page` (lib config with the device ID), or 0xFFFF. */
+static uint16_t acq_bd_devnum(uint32_t from, uint8_t page)
+{
+	uint16_t dn = 0xFFFFu;
+
+	for (uint32_t k = from; k < api_msglog_count(); k++) {
+		uint8_t        id;
+		uint8_t        len;
+		const uint8_t *d = api_msglog_get(k, &id, &len);
+
+		if (id == (uint8_t)ANTW_MESG_BROADCAST_DATA_ID &&
+		    d[0] == VD_RX_CH && len >= 14u && d[1] == page) {
+			dn = (uint16_t)(d[10] | ((uint16_t)d[11] << 8));
+		}
+	}
+	return dn;
+}
+
+ZTEST(api, test_sec_host_a_rewildcarded_keyed_scan_keeps_the_sender_number)
+{
+	/*
+	 * Re-review of the released-frame fix, which kept only the device and
+	 * transmission types on the ground that a keyed channel has a non-zero
+	 * device number. It need not: the key survives a close, and a closed
+	 * channel takes a wildcard ID (0, 0, 0) before it reopens. The released
+	 * secured page then went up as device 0 while a clear page from the same
+	 * sender, posted at once, carried its number.
+	 */
+	static const uint8_t clear[8] = { 0x50u, 0x00u, 1u, 2u, 3u, 4u, 5u,
+					  6u };
+	const uint8_t        cfg = (uint8_t)ANTW_LIB_CONFIG_MESG_OUT_INC_DEVICE_ID;
+	radiant_time_t       t;
+	uint32_t             from;
+	uint16_t             dn_sec;
+	uint16_t             dn_clr;
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_lib_config_set(cfg));
+	acq_scan_setup(RADIANT_SEC_SW_CONF);
+	zassert_ok(antr_channel_close(VD_RX_CH));
+	acq_run_to(radiant_radio_now() + 20000u);
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_id_set(VD_RX_CH, 0u, 0u, 0u));
+	zassert_true(radiant_sec_channel_is_secured(VD_RX_CH),
+		     "setup: the key did not survive the close");
+	zassert_ok(antr_channel_open(VD_RX_CH));
+	acq_run_to(radiant_radio_now() + 2000u);
+
+	from = api_msglog_count();
+	t = acq_search_t();
+	(void)acq_air_genuine(t, 1u);
+	acq_air_raw(t + 50000u, clear);
+	acq_run_to(t + 60000u);
+	acq_settle();
+	dn_sec = acq_bd_devnum(from, VD_PAGE);
+	dn_clr = acq_bd_devnum(from, 0x50u);
+	(void)antr_lib_config_clear(cfg);
+	zassert_equal(HOST_DEVNUM, dn_clr, "setup: the clear page's number");
+	zassert_equal(dn_clr, dn_sec,
+		      "a released scan frame reported the channel's wildcard "
+		      "device number 0x%04x", dn_sec);
+	acq_done();
+}
+
 ZTEST(api, test_sec_host_a_released_scan_frame_keeps_its_sender_id)
 {
 	/*
@@ -1976,8 +2041,9 @@ ZTEST(api, test_sec_host_a_forged_reacquiring_frame_is_not_credited)
 	 * only clears the record), so frame 1 is heard inside the chunk and
 	 * dropped, and the host sees RX_FAIL after every acquiring frame
 	 * (recorded as an open TODO, not changed here). A genuine window missing
-	 * a packet fails on its own. So the forged packet is 5 or 6 periods older than the verdict,
-	 * past the resolver's 2W-1 periods + slack, and the check here leaves
+	 * a packet fails on its own. So the forged packet is 5 or 6 periods
+	 * older than the verdict, past the resolver's 2W-1 periods + slack, and
+	 * the check here leaves
 	 * the deadline out; tools/test_ant_sec.py has the in-deadline case.
 	 */
 	radiant_time_t t;
