@@ -627,6 +627,23 @@ int radiant_sec_compat_raise_epoch_ceiling(uint8_t ch, uint32_t max_epoch)
 	return RADIANT_SEC_OK;
 }
 
+bool radiant_sec_compat_live_twin(uint8_t ch)
+{
+	const struct compat_ctx *c = ctx_of(ch);
+	uint8_t                  i;
+
+	for (i = 0u; c != NULL && i < COMPAT_MAX_CH; i++) {
+		const struct compat_ctx *o = &compat[i];
+
+		if (o != c && o->used && (o->epoch_set || o->ceil_inv != 0) &&
+		    o->base_devnum == c->base_devnum &&
+		    radiant_sec_keys_match(&o->k_root, &c->k_root)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 int radiant_sec_compat_set_devnum(uint8_t ch, uint16_t devnum)
 {
 	struct compat_ctx *c = ctx_of(ch);

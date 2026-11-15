@@ -485,6 +485,25 @@ int radiant_sec_key_same(const struct radiant_sec_key *held,
 	return rc;
 }
 
+/* Two held keys, by key check value as above. An error answers true, so a
+ * caller that refuses on a match fails closed. */
+bool radiant_sec_keys_match(const struct radiant_sec_key *a,
+			    const struct radiant_sec_key *b)
+{
+	uint8_t zero[RADIANT_SEC_BLOCK_BYTES];
+	uint8_t kcv_a[RADIANT_SEC_BLOCK_BYTES];
+	uint8_t kcv_b[RADIANT_SEC_BLOCK_BYTES];
+	bool    match;
+
+	memset(zero, 0, sizeof(zero));
+	match = radiant_sec_cmac(a, zero, sizeof(zero), kcv_a) != RADIANT_SEC_OK ||
+		radiant_sec_cmac(b, zero, sizeof(zero), kcv_b) != RADIANT_SEC_OK ||
+		radiant_sec_ct_equal(kcv_a, kcv_b, sizeof(kcv_b));
+	radiant_sec_wipe(kcv_a, sizeof(kcv_a));
+	radiant_sec_wipe(kcv_b, sizeof(kcv_b));
+	return match;
+}
+
 int radiant_sec_set_key(uint8_t ch, const uint8_t *root, size_t bits,
 			uint16_t base_devnum)
 {
@@ -710,6 +729,27 @@ int radiant_sec_set_epoch_ceiling(uint8_t ch, uint32_t max_epoch)
 	}
 	c->ceil_inv = (atomic_val_t)(uint32_t)~max_epoch;
 	return RADIANT_SEC_OK;
+}
+
+bool radiant_sec_live_twin(uint8_t ch)
+{
+	RADIANT_SEC_ASSERT_LOCKED();
+	const struct sec_ctx *c = ctx_of(ch);
+	uint8_t               i;
+
+	/* No context: nothing to arm, and set_epoch answers ENOKEY. Running is
+	 * an epoch or a ceiling, followed or not: a host-epoched twin (no
+	 * ceiling) at the node's E collides with no wrap at all. */
+	for (i = 0u; c != NULL && i < SEC_MAX_CH; i++) {
+		const struct sec_ctx *o = &sec[i];
+
+		if (o != c && o->used && (o->epoch_set || o->ceil_inv != 0) &&
+		    o->base_devnum == c->base_devnum &&
+		    radiant_sec_keys_match(&o->k_root, &c->k_root)) {
+			return true;
+		}
+	}
+	return false;
 }
 
 int radiant_sec_raise_epoch_ceiling(uint8_t ch, uint32_t max_epoch)

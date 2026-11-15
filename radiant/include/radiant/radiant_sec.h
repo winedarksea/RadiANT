@@ -486,6 +486,12 @@ void radiant_sec_key_destroy(struct radiant_sec_key *k);
 int  radiant_sec_key_same(const struct radiant_sec_key *held,
 			  const uint8_t *root, size_t bits, bool *same);
 
+/* INTERNAL, for the two live-twin checks below and in radiant_sec_compat.c:
+ * do two held keys match, by the same key check value? Any error answers
+ * true, so a refusal on a match fails closed. Lives in radiant_sec.c. */
+bool radiant_sec_keys_match(const struct radiant_sec_key *a,
+			    const struct radiant_sec_key *b);
+
 /*
  * ── Level 2: modes. radiant_sec.c calls ONLY these. ────────────────────────
  */
@@ -932,6 +938,20 @@ int  radiant_sec_set_epoch_ceiling(uint8_t ch, uint32_t max_epoch);
  * has already reserved, so it cannot let an unreserved epoch be used.
  */
 int  radiant_sec_raise_epoch_ceiling(uint8_t ch, uint32_t max_epoch);
+
+/*
+ * For the epoch authority's arm: is ANOTHER channel running - an epoch set or
+ * a ceiling carried, followed by the authority or epoched by a host - under
+ * the same root, by key check value, and the same base device number as
+ * `ch`? Two such channels at once share (root, epoch, devnum) outright (a
+ * host epoch equal to the arm's) or through their wraps, a two-time pad
+ * (docs/radiant-security.md 3.5), so the authority refuses the arm. Keyed
+ * with no epoch yet does not count; a release (radiant_sec_channel_release(),
+ * which unassign calls - a close does not) or a different root ends it.
+ * False when `ch` has no context. Under the port's lock; cold path, two
+ * CMACs per candidate with a matching device number.
+ */
+bool radiant_sec_live_twin(uint8_t ch);
 
 /* The on-air device number, which is in the nonce. Separate from the
  * provisioning-time base device number in the KDF: on a Tier 2 node the first

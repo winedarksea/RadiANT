@@ -498,6 +498,8 @@ const char *node_ident_strerror(int rc)
 		return "boot counter exhausted, or identity not booted";
 	case NODE_IDENT_EAGAIN:
 		return "a fresh epoch is being reserved; retry the arm";
+	case NODE_IDENT_EBUSY:
+		return "another live channel has this root and device number";
 	default:
 		return "unknown error";
 	}
@@ -584,14 +586,23 @@ static void epoch_reserve(uint32_t epoch)
  * unused epoch F = N, and only once N = F + 2 is durable (F for it, F + 1 for
  * its first wrap). Until then the arm returns NODE_IDENT_EAGAIN and the caller
  * retries; the reservation is the same work item a wrap uses.
+ *
+ * Distinct arm epochs do not keep two LIVE channels apart: B armed at E + 2
+ * raises A's ceiling to E + 3 and A's second wrap lands on E + 2 (review
+ * 2026-11-14 item 2). So `twin` - another live channel of this kind under the
+ * same root and base device number, radiant's answer - refuses the arm before
+ * any epoch is reserved for it.
  */
-static int arm_epoch(bool first_done, uint8_t ch, uint32_t *out)
+static int arm_epoch(bool first_done, uint8_t ch, bool twin, uint32_t *out)
 {
 	if (!s.booted) {
 		return NODE_IDENT_ESTATE;
 	}
 	if (ch_bit(ch) == 0u) {
 		return NODE_IDENT_EINVAL;
+	}
+	if (twin) {
+		return NODE_IDENT_EBUSY;
 	}
 	if (!first_done) {
 		*out = s.epoch;
@@ -622,7 +633,8 @@ static void arm_done(uint32_t epoch)
 int node_ident_arm_sec(uint8_t ch, uint16_t period_counts)
 {
 	uint32_t e = 0u;
-	int      rc = arm_epoch(s.sec_first_done, ch, &e);
+	int      rc = arm_epoch(s.sec_first_done, ch, radiant_sec_live_twin(ch),
+				    &e);
 
 	if (rc != NODE_IDENT_OK) {
 		return rc;
@@ -655,7 +667,8 @@ int node_ident_arm_sec(uint8_t ch, uint16_t period_counts)
 int node_ident_arm_compat(uint8_t ch, uint64_t now_us, uint16_t period_counts)
 {
 	uint32_t e = 0u;
-	int      rc = arm_epoch(s.compat_first_done, ch, &e);
+	int      rc = arm_epoch(s.compat_first_done, ch,
+				    radiant_sec_compat_live_twin(ch), &e);
 
 	if (rc != NODE_IDENT_OK) {
 		return rc;
@@ -868,7 +881,7 @@ int node_ident_pair_derive(const uint8_t k_dev[NODE_IDENT_K_DEV_BYTES],
 	radiant_sec_wipe(tag, sizeof(tag));
 	radiant_sec_wipe(block, sizeof(block));
 	if (rc != RADIANT_SEC_OK) {
-		memset(out, 0, NODE_IDENT_PAIR_SCALAR_BYTES);
+		radiant_sec_wipe(out, NODE_IDENT_PAIR_SCALAR_BYTES);
 		return NODE_IDENT_ENOTSUP;
 	}
 	return NODE_IDENT_OK;
