@@ -94,6 +94,13 @@ static void cb_rx(const struct radiant_rx_event *evt, void *user)
 	ARG_UNUSED(user);
 	bp.rx_events++;
 	bp.last_rx_status = evt->status;
+	bp.last_rx_body_len = evt->body_len;
+	memset(bp.last_rx_body, 0, sizeof(bp.last_rx_body));
+	if (evt->body != NULL) {
+		memcpy(bp.last_rx_body, evt->body,
+		       MIN((size_t)evt->body_len, sizeof(bp.last_rx_body)));
+	}
+	bp.last_rx_crc_rx = evt->crc_rx;
 	arm_follow_on_if_asked();
 }
 
@@ -117,6 +124,8 @@ void backend_reset(void)
 	memset(&bp, 0, sizeof(bp));
 	memset(&radiant_op, 0, sizeof(radiant_op));
 	memset(&radiant_staged, 0, sizeof(radiant_staged));
+	memset(radiant_rx_buf, 0, sizeof(radiant_rx_buf));
+	memset(radiant_rx_snap, 0, sizeof(radiant_rx_snap));
 	grant_release_owed = false;
 	core_cb_head = 0u;
 	core_cb_tail = 0u;
@@ -150,13 +159,45 @@ static void signal_isr(void)
 	fg.in_signal = false;
 }
 
+/*
+ * A frame whose END interrupt runs on time: its ADDRESS captured CC_SYNC
+ * 1000 us ago, long enough for any frame to have ended, so the late-ISR guard
+ * sees one consistent snapshot.
+ */
 void backend_frame(bool crc_ok)
 {
+	backend_frame_at(crc_ok, 1000u);
+}
+
+/*
+ * A frame whose ADDRESS captured CC_SYNC `since_address_us` before the END
+ * interrupt runs. Below the frame's ADDRESS-to-END airtime, that capture can
+ * only be the next frame's: the interrupt ran late.
+ */
+void backend_frame_at(bool crc_ok, uint32_t since_address_us)
+{
 	fake_hw.crc_ok = crc_ok;
+	fake_hw.cc[CC_SYNC] = fake_hw.counter;
+	fake_hw.counter += since_address_us;
 	fake_hw.event[NRF_RADIO_EVENT_ADDRESS] = true;
 	fake_hw.event[NRF_RADIO_EVENT_END] = true;
 	signal_isr();
 }
+
+/* An END with EVENTS_ADDRESS left as it is, `advance_us` later. */
+void backend_end_only(uint32_t advance_us)
+{
+	fake_hw.counter += advance_us;
+	fake_hw.event[NRF_RADIO_EVENT_END] = true;
+	signal_isr();
+}
+
+uint8_t *backend_rx_dma_buf(void) { return radiant_rx_buf; }
+bool backend_addr_carry(void) { return radiant_op.addr_carry; }
+bool backend_rx_any(void) { return radiant_op.rx_any; }
+uint32_t backend_torn_air_us(void) { return rx_torn_air_us(); }
+void backend_set_sw_addr_len(uint8_t n) { radiant_op.sw_addr_len = n; }
+void backend_set_report_crc_fail(void) { radiant_op.report_crc_fail = true; }
 
 void backend_tx_end(void)
 {

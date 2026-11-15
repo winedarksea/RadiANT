@@ -55,6 +55,7 @@
 
 #include "radiant_radio_nrf_gate.h"
 #include "radiant_addr_split.h"
+#include "radiant_rx_torn.h"
 #include <radiant/radiant_diag.h>
 
 /* 0xF7 backend page (ADR 0023). Fields needing an extra register read stay "not measured". */
@@ -69,8 +70,9 @@ static struct {
 	uint32_t tx_start_missed, rx_start_missed;
 	/* Page 9 fields 5-7: the early arm check (see nrf_diag_early()). */
 	uint32_t pass_to_arm_max_us, arm_slack_min_us, early_etime;
-	/* Page 10 fields 4-5. late_isr_drops is the late-ISR guard's count, 0
-	 * until that guard exists; the guard increments it with NRF_DIAG(). */
+	/* Page 10 fields 4-5: frames the late-ISR guard dropped as torn (see
+	 * radiant_rx_torn() and the END branch), and the worst END-interrupt
+	 * lateness of a frame it accepted. */
 	uint32_t late_isr_drops, end_late_max_us;
 } nrf_diag = {
 	.arm_slack_min_us = RADIANT_DIAG_NO_SAMPLE,
@@ -682,6 +684,15 @@ static struct {
 	bool         rx_any;
 
 	/*
+	 * An ADDRESS the END branch cleared, or found already consumed, that
+	 * belongs to a frame still to END: the late-ISR guard's carry. The END
+	 * branch accepts it in place of EVENTS_ADDRESS for the next END, so that
+	 * frame is not discarded as "not a reception". Cleared at arm time and
+	 * consumed by the END it covers. See the case list in radio_isr().
+	 */
+	bool         addr_carry;
+
+	/*
 	 * The t_sync a transmit asked for, compared with the captured one to measure
 	 * TX timing error. A fixed lateness is invisible on broadcast but fatal for
 	 * acknowledged data, where the peer's window opens 1560 us after the packet.
@@ -766,8 +777,21 @@ static volatile int32_t  radiant_dbg_tx_err;
 /* Receive windows refused because CC_START landed behind the counter. Expected 0 or single digits. */
 static volatile uint32_t radiant_dbg_start_late;
 
-/* RADIO DMA buffer. Handed to the core as rx_event.body for one callback only. */
+/*
+ * RADIO DMA buffer. Never read after the END branch's snapshot: with END->START
+ * the receiver writes the next frame here as soon as its ADDRESS matches.
+ */
 static uint8_t radiant_rx_buf[RADIANT_RADIO_BODY_MAX + 4] __aligned(4);
+
+/*
+ * The END branch's copy of radiant_rx_buf (software address bytes plus body),
+ * taken between two CC_SYNC reads; see radio_isr(). Everything downstream of
+ * the snapshot reads this, and it is what rx_event.body points at (or into)
+ * for the one callback. Only the END branch writes it, and that branch does
+ * not nest, so it holds still for a direct callback; MPSL builds copy it
+ * again in core_cb_rx().
+ */
+static uint8_t radiant_rx_snap[sizeof(radiant_rx_buf)] __aligned(4);
 
 /* Transmit buffer. Copying the body costs little against the 80 us setup budget and guarantees EasyDMA-reachable, aligned memory. */
 static uint8_t radiant_tx_buf[RADIANT_RADIO_BODY_MAX + 4] __aligned(4);
@@ -840,7 +864,9 @@ static void rx_diag_window_end(bool aborted)
 	}
 }
 
-static void rx_diag_crc_fail(uint8_t logical, uint32_t rxcrc, int8_t rssi)
+/* `frame` is the END branch's snapshot, never the live DMA buffer. */
+static void rx_diag_crc_fail(uint8_t logical, uint32_t rxcrc, int8_t rssi,
+			     const uint8_t *frame)
 {
 	uint32_t slot = rx_diag.ring_w % RX_DIAG_RING;
 	/* Includes the software-matched address bytes (ADR 0019). */
@@ -852,7 +878,7 @@ static void rx_diag_crc_fail(uint8_t logical, uint32_t rxcrc, int8_t rssi)
 	rx_diag.ring[slot].rxmatch = logical;
 	rx_diag.ring[slot].rssi = rssi;
 	rx_diag.ring[slot].len = n;
-	memcpy(rx_diag.ring[slot].body, radiant_rx_buf, n);
+	memcpy(rx_diag.ring[slot].body, frame, n);
 	rx_diag.ring_w++;
 }
 
@@ -1382,9 +1408,11 @@ static void rssi_temp_work_handler(struct k_work *work)
  * rssi_dbm, noise_dbm and the ED levels on one scale, so the correction lives
  * here alone. The register holds a positive magnitude, hence the negation.
  */
-static int8_t rssi_sample_dbm(void)
+/* A RSSISAMPLE value in corrected dBm. Split from rssi_sample_dbm() so the
+ * END branch can convert the value it snapshotted with the frame. */
+static int8_t rssi_dbm_from(uint32_t rssisample)
 {
-	int8_t raw_dbm = (int8_t)(-(int32_t)(NRF_RADIO->RSSISAMPLE & 0x7Fu));
+	int8_t raw_dbm = (int8_t)(-(int32_t)(rssisample & 0x7Fu));
 
 #if RSSI_TEMP_CORR_PRESENT
 	/* raw_dbm - corr, not + corr. */
@@ -1392,6 +1420,11 @@ static int8_t rssi_sample_dbm(void)
 #else
 	return raw_dbm;
 #endif
+}
+
+static int8_t rssi_sample_dbm(void)
+{
+	return rssi_dbm_from(NRF_RADIO->RSSISAMPLE);
 }
 
 /* ---- Lifecycle ---- */
@@ -2524,6 +2557,7 @@ static int program_rx(const struct radiant_rx_req *req)
 	radiant_op.report_crc_fail = (req->flags & RADIANT_RX_REPORT_CRC_FAIL) != 0u;
 	radiant_op.terminal_sent   = false;
 	radiant_op.rx_any          = false;
+	radiant_op.addr_carry      = false;
 #if defined(CONFIG_RADIANT_NRF_RX_DIAG)
 	radiant_op.diag_track      = (req->fmt->addr_len == 5u &&
 				      req->fmt->phy == RADIANT_PHY_1M_GFSK);
@@ -3517,8 +3551,10 @@ int radiant_radio_abort(void)
 	nrfx_gppi_conn_disable(radiant_op.conn_rssi);
 	/* SHORTS and TASKS_STOP are touched only while a grant is held (see RADIO_IS_OURS()). */
 	if (RADIO_IS_OURS()) {
+		/* The late-ISR guard's carry is an ADDRESS it consumed for a frame still on air. */
 		NRF_DIAG(if (radiant_op.kind == OP_RX && radiant_op.page7_search &&
-			     nrf_radio_event_check(NRF_RADIO, NRF_RADIO_EVENT_ADDRESS) &&
+			     (radiant_op.addr_carry ||
+			      nrf_radio_event_check(NRF_RADIO, NRF_RADIO_EVENT_ADDRESS)) &&
 			     !nrf_radio_event_check(NRF_RADIO, NRF_RADIO_EVENT_END)) {
 				nrf_diag.srch_cut_abort++;
 			});
@@ -3724,6 +3760,36 @@ static void deliver_terminal(enum radiant_radio_status st)
 	}
 }
 
+/*
+ * Slack in the late-ISR guard's 1 M airtime. Both ends of `now - CC_SYNC` are
+ * 1 MHz counts, so the difference can read up to 1 us short of the real
+ * ADDRESS-to-END time, and the (D)PPI capture lands a fraction of a microsecond
+ * after the event. 2 us keeps an on-time interrupt from ever reading as torn
+ * (it already runs some microseconds after END). It is a reasoned figure, not
+ * a measurement: page 10 field 4 near 0 on the bench is its check.
+ */
+#define RX_TORN_SLACK_US 2u
+
+/*
+ * radiant_rx_torn()'s air_us for the receive in flight: the least time from a
+ * frame's ADDRESS capture to its END. On 1 M that is the software address
+ * bytes, the body and the CRC at 8 us a byte, less RX_TORN_SLACK_US. A
+ * length-from-body format (the coded PHY's) takes its shortest legal frame,
+ * the length byte alone, at 64 us a byte (S=8) with CI, TERM1 and TERM2 left
+ * out, so it is a lower bound there too. Computed from the latched operation,
+ * a few instructions, so the ISR reads no register for it.
+ */
+static uint32_t rx_torn_air_us(void)
+{
+	uint32_t body = radiant_op.len_from_body ? 1u : (uint32_t)radiant_op.body_len;
+	uint32_t bytes = (uint32_t)radiant_op.sw_addr_len + body + 2u;
+
+	if (radiant_op.phy == RADIANT_PHY_LR_CODED) {
+		return bytes * 64u;
+	}
+	return bytes * US_PER_BYTE - RX_TORN_SLACK_US;
+}
+
 static void radio_isr(const void *arg)
 {
 	ARG_UNUSED(arg);
@@ -3783,13 +3849,63 @@ static void radio_isr(const void *arg)
 			core_cb_tx(&evt);
 		}
 
+		/*
+		 * THE LATE-ISR GUARD. END->START keeps the receiver running, so the next
+		 * frame (N+1) is DMA'd into radiant_rx_buf as soon as its ADDRESS matches,
+		 * and that ADDRESS re-captures CC_SYNC. This interrupt can run late: on the
+		 * direct build a thread-context scheduler pass holds interrupts off for up
+		 * to ~215 us. So the buffer and every register the frame is judged by
+		 * (CC_SYNC, CRCSTATUS, RXCRC, RXMATCH, RSSISAMPLE) are read once, into
+		 * locals and radiant_rx_snap, between two CC_SYNC reads, and nothing below
+		 * the snapshot reads the buffer or those registers again.
+		 *
+		 * Where N+1's ADDRESS can land, and what each case does:
+		 *  (a) Before the first CC_SYNC read. CC_SYNC already dates N+1.
+		 *      - N+1 still on air: less than its ADDRESS-to-END airtime has
+		 *        passed since the capture, so radiant_rx_torn() says torn. N is
+		 *        dropped and counted, and the ADDRESS is carried for N+1's END.
+		 *      - N+1 ended after the END clear at the top of radio_isr(): END is
+		 *        raised again, which the check after the snapshot sees. The
+		 *        registers may have been read before that END, so the snapshot
+		 *        is retaken (rx_end_again) and N+1 is delivered from a
+		 *        consistent one.
+		 *      - N+1 ended before that clear: one END event for both frames, and
+		 *        buffer, registers and capture are all N+1's. N+1 is delivered
+		 *        and N is lost unseen, as before this guard; nothing can tell.
+		 *  (b) Between the two CC_SYNC reads (around the copy). The reads differ:
+		 *      torn, carried.
+		 *  (c) After the second read, before the ADDRESS clear. The copy ended
+		 *      before N+1's first byte could land (the DMA follows the ADDRESS),
+		 *      so the snapshot is N's and is delivered. The clear wipes N+1's
+		 *      ADDRESS, so it is carried: CC_SYNC read after the clear no longer
+		 *      equals the first read.
+		 *  (d) After the clear. EVENTS_ADDRESS stays set for N+1 by itself (the
+		 *      carry is also set if the capture landed before the third read).
+		 *      N+1's END sees an ADDRESS either way and consumes the carry.
+		 * The capture follows the ADDRESS event through (D)PPI by a cycle or two of
+		 * the 16 MHz clock. The END check sits between the clear and the third
+		 * CC_SYNC read, so an ADDRESS the clear wiped has had at least that long to
+		 * reach CC_SYNC.
+		 *
+		 * One residual: case (a) with N+1 inside its last RX_TORN_SLACK_US and its
+		 * END not yet raised at the check passes as N+1 with N's CRC registers. The
+		 * slack exists because a false tear would drop good frames on every
+		 * interrupt that runs on time.
+		 *
+		 * DISABLED (the window's close) is handled after this branch, as before. A
+		 * frame it cut off mid-air shows there as EVENTS_ADDRESS or the carry, and a
+		 * carried frame whose END never comes is forgotten at the next arm.
+		 */
+rx_end_again:
 		if (radiant_op.kind == OP_RX && !radiant_op.terminal_sent &&
+		    !radiant_op.addr_carry &&
 		    !nrf_radio_event_check(NRF_RADIO, NRF_RADIO_EVENT_ADDRESS)) {
 			/*
 			 * An END without an ADDRESS match in this window is not a reception. The body,
 			 * CRCSTATUS and the CC_SYNC capture all keep their previous values, so delivering
 			 * it would replay the last frame with a stale timestamp. ADDRESS is the right test:
 			 * it is cleared at arm time, raised by hardware on a sync-word match, and drives the capture.
+			 * The carry stands in for an ADDRESS the guard below consumed early.
 			 */
 			radiant_dbg_rx_no_addr++;
 #if defined(CONFIG_RADIANT_NRF_RX_DIAG)
@@ -3800,51 +3916,85 @@ static void radio_isr(const void *arg)
 #endif
 		} else if (radiant_op.kind == OP_RX && !radiant_op.terminal_sent) {
 			struct radiant_rx_event evt;
+			/* The snapshot: CC_SYNC first, then the registers, then the buffer. */
+			const uint32_t sync = nrf_timer_cc_get(TIMER_ADDR, CC_SYNC);
 			bool crc_ok = nrf_radio_crc_status_check(NRF_RADIO);
-			uint8_t logical = (uint8_t)(NRF_RADIO->RXMATCH &
-						    RADIO_RXMATCH_RXMATCH_Msk);
+			const uint32_t rxcrc = NRF_RADIO->RXCRC;
+			const uint32_t rssisample = NRF_RADIO->RSSISAMPLE;
+			const uint8_t logical = (uint8_t)(NRF_RADIO->RXMATCH &
+							  RADIO_RXMATCH_RXMATCH_Msk);
+			const size_t snap_len =
+				MIN((size_t)radiant_op.sw_addr_len + radiant_op.body_len,
+				    sizeof(radiant_rx_snap));
+			uint32_t t_snap;
+			bool torn;
+			bool end_again;
+
+			memcpy(radiant_rx_snap, radiant_rx_buf, snap_len);
+			{
+				const uint32_t sync_after =
+					nrf_timer_cc_get(TIMER_ADDR, CC_SYNC);
+
+				t_snap = timer_capture(CC_NOW);
+				torn = radiant_rx_torn(sync, sync_after, t_snap,
+						       rx_torn_air_us());
+			}
+
+			/* Consumed so the next packet in this window is judged on its own match (END->START keeps the receiver armed). */
+			radiant_op.addr_carry = false;
+			nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_ADDRESS);
+			end_again = nrf_radio_event_check(NRF_RADIO, NRF_RADIO_EVENT_END);
+			/* Cases (a), (b) and (c) above: an ADDRESS for a frame whose END is still to be handled. */
+			if (torn || end_again ||
+			    nrf_timer_cc_get(TIMER_ADDR, CC_SYNC) != sync) {
+				radiant_op.addr_carry = true;
+			}
+			if (torn) {
+				/* A window that heard something must not give a noise sample. */
+				radiant_op.rx_any = true;
+				NRF_DIAG(nrf_diag.late_isr_drops++);
+			}
+			if (end_again) {
+				/* Case (a), N+1 ended: take the snapshot again, from N+1's END. */
+				nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_END);
+				goto rx_end_again;
+			}
 
 			NRF_DIAG(if (radiant_op.page7_search &&
 				     radiant_radio_now() + RADIANT_DIAG_SRCH_NEAR_CLOSE_US >=
 					     radiant_op.page7_close_at) {
 					nrf_diag.srch_end_near_close++;
 				});
+			if (torn) {
+				goto rx_end_done;
+			}
+
 			/*
-			 * Page 10 field 5: how late this END interrupt runs, against
-			 * the end of the frame CC_SYNC dates (the software address
-			 * bytes, the body and the 16-bit CRC after the capture). The
-			 * coded PHY's airtime is not bytes x 8 us, so it is skipped.
-			 *
-			 * BLIND SPOT: CC_SYNC is read live. An ISR that runs after the
-			 * next frame's ADDRESS sees that frame's capture, t_now is not
-			 * past t_end, and nothing is recorded. So this covers only
-			 * lateness shorter than the gap to the next ADDRESS; the late-ISR
-			 * guard's torn count (page 10 field 4) covers the rest. The END
-			 * branch has not read the length byte yet at this point, so it
-			 * is read here from the live buffer, as the delivery below does.
+			 * Page 10 field 5: how late this END interrupt runs, against the end
+			 * of the frame the snapshot's CC_SYNC dates (the software address
+			 * bytes, the body and the 16-bit CRC after the capture), at the
+			 * snapshot's own counter read. The coded PHY's airtime is not
+			 * bytes x 8 us, so it is skipped. Only accepted frames are measured:
+			 * an interrupt late past the next frame's ADDRESS tears the snapshot
+			 * and is counted in field 4 instead, and one late past the next
+			 * frame's END (case (a), last bullet) sees that frame's capture. So
+			 * this covers lateness up to the gap to the next ADDRESS.
 			 */
 			NRF_DIAG(if (radiant_op.phy != RADIANT_PHY_LR_CODED) {
 					uint32_t n = radiant_op.body_len;
-					radiant_time_t t_end;
-					radiant_time_t t_now = radiant_radio_now();
+					int32_t late;
 
 					if (radiant_op.len_from_body) {
-						n = MIN((uint32_t)radiant_rx_buf[0] + 1u, n);
+						n = MIN((uint32_t)radiant_rx_snap[0] + 1u, n);
 					}
-					t_end = clock_absolute(nrf_timer_cc_get(
-							TIMER_ADDR, CC_SYNC)) +
-						(radiant_time_t)(((uint32_t)radiant_op.sw_addr_len +
-								  n + 2u) * US_PER_BYTE);
-					if (t_now > t_end &&
-					    t_now - t_end > nrf_diag.end_late_max_us) {
-						nrf_diag.end_late_max_us =
-							(uint32_t)MIN(t_now - t_end,
-								      (radiant_time_t)UINT32_MAX - 1u);
+					late = (int32_t)(t_snap -
+							 (sync + ((uint32_t)radiant_op.sw_addr_len +
+								  n + 2u) * US_PER_BYTE));
+					if (late > 0 &&
+					    (uint32_t)late > nrf_diag.end_late_max_us) {
+						nrf_diag.end_late_max_us = (uint32_t)late;
 					}
 				});
-
-			/* Consumed so the next packet in this window is judged on its own match (END->START keeps the receiver armed). */
-			nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_ADDRESS);
 
 			/*
 			 * Which of the caller's filters this frame belongs to. A full hardware match
@@ -3855,7 +4005,7 @@ static void radio_isr(const void *arg)
 			int fidx = (logical < ARRAY_SIZE(radiant_filter_slot))
 					   ? radiant_filter_slot[logical] : 0;
 
-			const uint8_t *body = radiant_rx_buf;
+			const uint8_t *body = radiant_rx_snap;
 
 			if (radiant_op.sw_addr_len != 0u) {
 				const uint8_t hint = (uint8_t)fidx;
@@ -3866,9 +4016,9 @@ static void radio_isr(const void *arg)
 				fidx = radiant_addr_split_match(
 					radiant_op.filters, radiant_op.n_filters,
 					hw_len, radiant_op.sw_addr_len, hint,
-					radiant_rx_buf);
+					radiant_rx_snap);
 				body = radiant_addr_split_body(
-					radiant_rx_buf, radiant_op.sw_addr_len);
+					radiant_rx_snap, radiant_op.sw_addr_len);
 				/*
 				 * Demodulator slip (ADR 0019): our frame with one bit deleted in its software-matched
 				 * bytes. Recovered only if the CRC over the reconstruction verifies, then delivered as OK.
@@ -3878,9 +4028,9 @@ static void radio_isr(const void *arg)
 						radiant_op.filters,
 						radiant_op.n_filters, hw_len,
 						radiant_op.sw_addr_len, hint,
-						radiant_rx_buf,
+						radiant_rx_snap,
 						radiant_op.body_len,
-						NRF_RADIO->RXCRC,
+						rxcrc,
 						radiant_op.crc_init,
 						radiant_repair_buf);
 					if (fidx >= 0) {
@@ -3906,13 +4056,13 @@ static void radio_isr(const void *arg)
 				/* Same ring as CRC failures, marked by RXCRC's top bit: another sensor, or our frame with corrupted address bytes. */
 				rx_diag_crc_fail(logical,
 						 (crc_ok ? 0x80000000u : 0x40000000u) |
-						 NRF_RADIO->RXCRC,
-						 rssi_sample_dbm());
+						 rxcrc,
+						 rssi_dbm_from(rssisample),
+						 radiant_rx_snap);
 			} else if (radiant_op.diag_track) {
 				if (crc_ok) {
 					int32_t off = (int32_t)(int64_t)(
-						clock_absolute(nrf_timer_cc_get(
-							TIMER_ADDR, CC_SYNC)) +
+						clock_absolute(sync) +
 						radiant_addr_split_t_sync_us(
 							radiant_op.sw_addr_len) -
 						radiant_op.diag_t_open);
@@ -3923,8 +4073,9 @@ static void radio_isr(const void *arg)
 				} else {
 					radiant_op.diag_crc = true;
 					rx_diag.fr_crc++;
-					rx_diag_crc_fail(logical, NRF_RADIO->RXCRC,
-							 rssi_sample_dbm());
+					rx_diag_crc_fail(logical, rxcrc,
+							 rssi_dbm_from(rssisample),
+							 radiant_rx_snap);
 				}
 			}
 #endif
@@ -3943,10 +4094,8 @@ static void radio_isr(const void *arg)
 						    : RADIANT_RADIO_STATUS_CRC_FAIL;
 
 				/* Hardware capture, moved to antenna reference with this operation's PHY calibration (the PHYs differ by 20 us). */
-				evt.t_sync = t_sync_cal(
-					clock_absolute(nrf_timer_cc_get(
-						TIMER_ADDR, CC_SYNC)),
-					t_sync_cal_rx_us(radiant_op.phy));
+				evt.t_sync = t_sync_cal(clock_absolute(sync),
+							t_sync_cal_rx_us(radiant_op.phy));
 				/* ADDRESS fired at the end of the short hardware address; t_sync is the end of the whole on-air address. */
 				evt.t_sync += (radiant_time_t)
 					radiant_addr_split_t_sync_us(
@@ -3958,7 +4107,7 @@ static void radio_isr(const void *arg)
 				if (radiant_op.filters[fidx].wild_last) {
 					evt.wild_value =
 						radiant_addr_split_wild_value(
-							radiant_rx_buf,
+							radiant_rx_snap,
 							radiant_op.sw_addr_len);
 				}
 				evt.body = body;
@@ -3969,7 +4118,7 @@ static void radio_isr(const void *arg)
 				 */
 				if (radiant_op.len_from_body) {
 					uint32_t n =
-						(uint32_t)radiant_rx_buf[0] + 1u;
+						(uint32_t)radiant_rx_snap[0] + 1u;
 
 					if (n > radiant_op.body_len) {
 						n = radiant_op.body_len;
@@ -3983,9 +4132,9 @@ static void radio_isr(const void *arg)
 				/* The received CRC, on failures only: the core forms the error syndrome from it. */
 				if (!crc_ok) {
 					evt.has_crc_rx = true;
-					evt.crc_rx = NRF_RADIO->RXCRC;
+					evt.crc_rx = rxcrc;
 				}
-				evt.rssi_dbm = rssi_sample_dbm();
+				evt.rssi_dbm = rssi_dbm_from(rssisample);
 
 				/* The first accepted frame ends a STOP_ON_FIRST window. A CRC failure reported for repair is not accepted. */
 				if (radiant_op.stop_on_first && crc_ok) {
@@ -4008,22 +4157,30 @@ static void radio_isr(const void *arg)
 				core_cb_rx(&evt);
 			}
 		}
+rx_end_done:
+		;
 	}
 
 	if (nrf_radio_event_check(NRF_RADIO, NRF_RADIO_EVENT_DISABLED)) {
 		nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_DISABLED);
 
 		if (radiant_op.kind == OP_RX) {
-			/* Page 7: a search frame cut off mid-air. The END branch clears ADDRESS for every finished frame. */
+			/*
+			 * Page 7: a search frame cut off mid-air. The END branch clears ADDRESS for every
+			 * finished frame, and carries one it consumed for a frame still on air (the
+			 * late-ISR guard), so either means an ADDRESS whose END never came.
+			 */
 			NRF_DIAG(if (radiant_op.page7_search &&
-				     nrf_radio_event_check(NRF_RADIO,
-							   NRF_RADIO_EVENT_ADDRESS)) {
+				     (radiant_op.addr_carry ||
+				      nrf_radio_event_check(NRF_RADIO,
+							    NRF_RADIO_EVENT_ADDRESS))) {
 					nrf_diag.srch_cut_close++;
 				});
 #if defined(CONFIG_RADIANT_NRF_RX_DIAG)
 			/* An address matched whose END never came: the window
 			 * closed on top of a frame. */
-			if (nrf_radio_event_check(NRF_RADIO,
+			if (radiant_op.addr_carry ||
+			    nrf_radio_event_check(NRF_RADIO,
 						  NRF_RADIO_EVENT_ADDRESS)) {
 				radiant_op.diag_cut = true;
 			}

@@ -180,14 +180,15 @@ spans that cannot idle are timed with it (interrupts off, or an ISR).
 - **Page 10, receive integrity.** Fields 0-3 are `radiant_api_stats`' CRC
   repair counters (the `crc_repair_page1.patch` bench counters, done
   properly), `0xFFFFFFFF` without `CONFIG_RADIANT_CRC_REPAIR`. Field 4 counts
-  frames the nRF late-ISR guard drops; the slot and its counter exist now and
-  read 0 until that guard lands (it is a count, so 0 is true, not
-  "unmeasured"). Field 5 is the worst nRF END-interrupt lateness,
-  `now − (CC_SYNC + software address, body and CRC airtime)`, coded PHY
-  skipped. It has a blind spot: CC_SYNC is read live, so an ISR that runs
-  after the next frame's ADDRESS sees that frame's capture and records
-  nothing. Field 5 therefore covers only lateness shorter than the gap to the
-  next ADDRESS; the late-ISR guard's torn count, field 4, covers the rest.
+  frames the nRF late-ISR guard drops: the END branch snapshots the buffer and
+  registers between two CC_SYNC reads, and a snapshot is torn if the reads
+  differ or the capture is younger than the frame's airtime (the next frame's
+  ADDRESS had already landed). Field 5 is the worst nRF END-interrupt
+  lateness, `now − (CC_SYNC + software address, body and CRC airtime)`, coded
+  PHY skipped, taken from the snapshot of a frame the guard accepted. An
+  interrupt late past the next frame's ADDRESS is a torn snapshot, counted in
+  field 4 and not in field 5, so field 5 covers only lateness shorter than the
+  gap to the next ADDRESS.
   Fields 6-7 are cc26xx's longest `rx_t_sync()` and longest
   `rx_match()` plus the address/body copies of one receive entry, on the A0
   clock. 4-5 read `0xFFFFFFFF` on cc26xx, 6-7 on nRF.
