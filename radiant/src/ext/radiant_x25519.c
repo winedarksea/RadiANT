@@ -113,6 +113,17 @@ static void fe_sub(fe o, const fe a, const fe b)
  * arithmetic (floors), which is correct for a signed limb's borrow. Top
  * limb's overflow wraps into limb 0 * 38, since 2^255 = 19 (mod p) so
  * 2^256 = 38.
+ *
+ * What stays in the limb is its low 16 bits, taken with a mask. It used to
+ * be `o[i] -= carry << 16`, and a borrow makes `carry` negative: a left
+ * shift of a negative value is undefined in ISO C (review 2026-11-14,
+ * item 4). The mask is the same value - the floored shift leaves exactly
+ * the residue mod 2^16 behind - and it is defined: int64_t is two's
+ * complement by definition (C11 7.20.1.1). It is also what GCC already
+ * compiled the shift to; `o[i] -= carry * 65536` was measured at 3.6 %
+ * more instructions per exchange on Cortex-M4 at -Os, since GCC does not
+ * fold the multiply into the mask. The right shift is implementation-
+ * defined, not undefined; GCC and Clang both define it as arithmetic.
  */
 static void fe_carry(fe o)
 {
@@ -121,11 +132,11 @@ static void fe_carry(fe o)
 
 	for (i = 0; i < FE_LIMBS - 1; i++) {
 		carry = o[i] >> 16;
-		o[i] -= carry << 16;
+		o[i] &= 0xFFFF;
 		o[i + 1] += carry;
 	}
 	carry = o[FE_LIMBS - 1] >> 16;
-	o[FE_LIMBS - 1] -= carry << 16;
+	o[FE_LIMBS - 1] &= 0xFFFF;
 	o[0] += 38 * carry;
 }
 
