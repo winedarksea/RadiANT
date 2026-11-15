@@ -410,9 +410,11 @@ static void cc_diag_early(radiant_time_t now, radiant_time_t at, uint32_t floor)
 {
 	const radiant_time_t lim = now + (radiant_time_t)floor;
 
-	if (radiant_diag_pass_now != 0u && now >= radiant_diag_pass_now) {
-		const uint64_t d = now - radiant_diag_pass_now;
-		const uint32_t us = (d > UINT32_MAX - 1u) ? UINT32_MAX - 1u : (uint32_t)d;
+	const uint32_t stamp = radiant_diag_pass_now;
+
+	if (stamp != 0u) {
+		/* Low 32 bits of the radio clock; the span is far below a wrap. */
+		const uint32_t us = (uint32_t)now - stamp;
 
 		if (us > cc_diag.pass_to_arm_max_us) {
 			cc_diag.pass_to_arm_max_us = us;

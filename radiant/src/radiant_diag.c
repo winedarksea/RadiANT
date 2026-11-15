@@ -13,7 +13,7 @@
 
 struct radiant_diag_core radiant_diag_core;
 
-uint64_t radiant_diag_pass_now;
+uint32_t radiant_diag_pass_now;
 
 /* A0: cycles per microsecond, or 0 while the cycle clock is not usable. */
 static uint32_t diag_cyc_per_us;

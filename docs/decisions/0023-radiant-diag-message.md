@@ -153,15 +153,24 @@ spans that cannot idle are timed with it (interrupts off, or an ISR).
 
 - **Page 9, pass breakdown.** Fields 0-4 are the scheduler's: per-pass sums of
   the expiry sweep, the arm decision (the rest of `pass_step()`, including
-  `notify_armed()`), the backend arm calls, the `notify_done()` callbacks,
-  and `book_ahead()` (`0xFFFFFFFF` without `CONFIG_RADIANT_SCHED_BOOKING`),
-  each the worst since boot, in µs. The parts are disjoint; the decision is
-  what remains of `pass_step()` and saturates at 0. Fields 5-7 are the
-  backend's, at its early ETIME check: 5 is the pass's `now` to the backend's
-  own `now`, both `radiant_radio_now()` reads, so radio-clock µs; the
-  scheduler stamps it around its arm calls and an arm no pass made (a
-  deferred MPSL grant, a direct backend call) is not sampled. This is the
-  span `ARM_SETUP_US` must cover. 6 is the smallest slack at that check on an
+  `notify_armed()`), the backend calls (the arm calls and `abort_armed()`'s
+  `radiant_radio_abort()`), the `notify_done()` callbacks, and
+  `book_ahead()` (`0xFFFFFFFF` without `CONFIG_RADIANT_SCHED_BOOKING`), each
+  the worst since boot, in µs. The sweep, backend calls and callbacks are
+  timed directly and the decision is what remains of `pass_step()`, floored
+  at 0. They are not strictly disjoint: a `notify_done()` callback nested
+  inside a backend call (an abort that delivers its terminal synchronously)
+  counts in both 2 and 3, and the floor keeps 1 from wrapping when that
+  happens. Fields 5-7 are the backend's, at its early ETIME check: 5 is the
+  pass's `now` to the backend's own `now`, both `radiant_radio_now()` reads,
+  so radio-clock µs; the scheduler stamps it (the low 32 bits, so one store
+  writes it even with the MPSL signal handler able to interrupt) around its
+  arm calls, and an arm no pass made (a deferred MPSL grant, a direct backend
+  call, anything in the MPSL signal handler) is not sampled. 5 is a max that
+  starts at 0, with no "no sample" value: on MPSL builds most arms are
+  granted later and programmed with the stamp cleared, so it is rarely
+  sampled there and a 0 means little. This is the span `ARM_SETUP_US` must
+  cover. 6 is the smallest slack at that check on an
   accepted arm, `at − (now′ + lead)`, an i32 that is never negative because a
   refused arm is counted in 7 instead; it reads `0x7FFFFFFF` until the first
   accepted arm, a "no sample yet" value distinct from "not measured". 7
@@ -175,7 +184,11 @@ spans that cannot idle are timed with it (interrupts off, or an ISR).
   read 0 until that guard lands (it is a count, so 0 is true, not
   "unmeasured"). Field 5 is the worst nRF END-interrupt lateness,
   `now − (CC_SYNC + software address, body and CRC airtime)`, coded PHY
-  skipped. Fields 6-7 are cc26xx's longest `rx_t_sync()` and longest
+  skipped. It has a blind spot: CC_SYNC is read live, so an ISR that runs
+  after the next frame's ADDRESS sees that frame's capture and records
+  nothing. Field 5 therefore covers only lateness shorter than the gap to the
+  next ADDRESS; the late-ISR guard's torn count, field 4, covers the rest.
+  Fields 6-7 are cc26xx's longest `rx_t_sync()` and longest
   `rx_match()` plus the address/body copies of one receive entry, on the A0
   clock. 4-5 read `0xFFFFFFFF` on cc26xx, 6-7 on nRF.
 - **Page 8 on cc26xx.** Fields 1-3 (per-entry work, CRC, core callback) move

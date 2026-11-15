@@ -81,16 +81,20 @@ static struct {
  * Page 9 fields 5-7, at a transmit's or receive window's early ETIME check:
  * `now` is the backend's own clock read, `at` the instant checked and `lead`
  * the air lead it must clear. Field 5 is sampled only for an arm a scheduler
- * pass is making (radiant_diag_pass_now set). A refused arm counts in field 7
- * and never in field 6, so field 6 is never negative.
+ * pass is making (radiant_diag_pass_now set), and never inside the MPSL
+ * signal handler: a stamp seen there belongs to whatever thread pass it
+ * interrupted. A refused arm counts in field 7 and never in field 6, so field
+ * 6 is never negative.
  */
 static void nrf_diag_early(radiant_time_t now, radiant_time_t at, uint32_t lead)
 {
 	const radiant_time_t floor = now + (radiant_time_t)lead;
+	const uint32_t stamp = radiant_diag_pass_now;
 
-	if (radiant_diag_pass_now != 0u && now >= radiant_diag_pass_now) {
-		const uint64_t d = now - radiant_diag_pass_now;
-		const uint32_t us = (d > UINT32_MAX - 1u) ? UINT32_MAX - 1u : (uint32_t)d;
+	if (stamp != 0u && !gate_in_signal()) {
+		/* Low 32 bits of the radio clock: a pass-to-arm span is far
+		 * below the 71-minute wrap, so the unsigned difference is it. */
+		const uint32_t us = (uint32_t)now - stamp;
 
 		if (us > nrf_diag.pass_to_arm_max_us) {
 			nrf_diag.pass_to_arm_max_us = us;
@@ -3810,6 +3814,14 @@ static void radio_isr(const void *arg)
 			 * the end of the frame CC_SYNC dates (the software address
 			 * bytes, the body and the 16-bit CRC after the capture). The
 			 * coded PHY's airtime is not bytes x 8 us, so it is skipped.
+			 *
+			 * BLIND SPOT: CC_SYNC is read live. An ISR that runs after the
+			 * next frame's ADDRESS sees that frame's capture, t_now is not
+			 * past t_end, and nothing is recorded. So this covers only
+			 * lateness shorter than the gap to the next ADDRESS; the late-ISR
+			 * guard's torn count (page 10 field 4) covers the rest. The END
+			 * branch has not read the length byte yet at this point, so it
+			 * is read here from the live buffer, as the delivery below does.
 			 */
 			NRF_DIAG(if (radiant_op.phy != RADIANT_PHY_LR_CODED) {
 					uint32_t n = radiant_op.body_len;

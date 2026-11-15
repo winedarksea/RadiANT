@@ -121,15 +121,21 @@ extern "C" {
  *   1 decide_max_us      the rest of pass_step() (stale/preempt test,
  *                        arm_next(), notify_armed()), backend arm calls and
  *                        notify_done() callbacks excluded, summed - core
- *   2 arm_call_max_us    backend arm calls (radiant_radio_rx/tx/ed) made by
- *                        one pass, summed - core
+ *   2 arm_call_max_us    backend calls (radiant_radio_rx/tx/ed and
+ *                        abort_armed()'s radiant_radio_abort()) made by one
+ *                        pass, summed - core. A callback nested inside one
+ *                        counts here and in 3; 1 is the remainder, floored
+ *                        at 0
  *   3 done_cb_max_us     notify_done() consumer callbacks within one pass,
  *                        summed - core
  *   4 book_max_us        book_ahead() - core; RADIANT_DIAG_NOT_MEASURED
  *                        without CONFIG_RADIANT_SCHED_BOOKING
  *   5 pass_to_arm_max_us the pass's `now` to the backend's own `now` at its
- *                        early arm check, radio clock - backend. An arm not
- *                        made from a pass is not sampled.
+ *                        early arm check, radio clock - backend. A max from
+ *                        0, no "no sample" value. An arm not made from a
+ *                        pass is not sampled, so MPSL builds (arms granted
+ *                        later are programmed with the stamp cleared) rarely
+ *                        sample it.
  *   6 arm_slack_min_us   smallest t_open - (now' + air lead) at that check
  *                        on an arm it accepted, i32, never negative (refused
  *                        arms are field 7). RADIANT_DIAG_NO_SAMPLE until the
@@ -163,7 +169,9 @@ extern "C" {
  *   4 late_isr_drops         frames dropped by the nRF late-ISR guard - nRF,
  *                            count; reads 0 until that guard exists
  *   5 end_late_max_us        worst END-interrupt lateness, now - (CC_SYNC +
- *                            software address, body and CRC airtime) - nRF
+ *                            software address, body and CRC airtime) - nRF.
+ *                            Blind past the next frame's ADDRESS (CC_SYNC is
+ *                            then that frame's): field 4 covers that regime
  *   6 t_sync_max_us          longest rx_t_sync() - cc26xx, A0 clock
  *   7 match_max_us           longest rx_match() plus the address/body copies
  *                            of one receive entry - cc26xx, A0 clock
@@ -330,11 +338,15 @@ void radiant_diag_core_reset(void);
 	} while (0)
 
 /*
- * Page 9 field 5's stamp: the `now` of the scheduler pass whose arm call is in
- * progress, or 0 when no pass is arming. The scheduler sets it around its
- * radiant_radio_rx/tx/ed calls; a backend reads it at its early arm check.
+ * Page 9 field 5's stamp: the low 32 bits of the `now` (radio-clock us) of
+ * the scheduler pass whose arm call is in progress, or 0 when no pass is
+ * arming. 32 bits so one store writes it: the nRF MPSL signal handler, a
+ * zero-latency interrupt, can program an arm in the middle of a thread pass.
+ * The scheduler sets it around its radiant_radio_rx/tx/ed calls; a backend
+ * reads it at its early arm check and takes the unsigned 32-bit difference.
+ * A pass whose `now` has low bits 0 (once in 71 minutes) is not sampled.
  */
-extern uint64_t radiant_diag_pass_now;
+extern uint32_t radiant_diag_pass_now;
 
 /*
  * A0, the cycle clock: the core's own cycle counter (DWT CYCCNT on a Cortex-M

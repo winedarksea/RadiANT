@@ -235,10 +235,17 @@ static struct {
 #define PB_ARM_CALL(stmt)                                              \
 	do {                                                           \
 		PB_T0(t_arm__);                                        \
-		radiant_diag_pass_now = s.in_pass ? pb.now : 0u;       \
+		radiant_diag_pass_now = s.in_pass ? (uint32_t)pb.now : 0u; \
 		stmt;                                                  \
 		radiant_diag_pass_now = 0u;                            \
 		PB_ADD(arm, t_arm__);                                  \
+	} while (0)
+/* Any other backend call made by a pass (abort): timed into the same field. */
+#define PB_BACKEND_CALL(stmt)                                          \
+	do {                                                           \
+		PB_T0(t_be__);                                         \
+		stmt;                                                  \
+		PB_ADD(arm, t_be__);                                   \
 	} while (0)
 /* A notify_done() callback: timed only within a pass, outermost only. */
 #define PB_DONE_CB(stmt)                                               \
@@ -257,6 +264,7 @@ static struct {
 #define PB_T0(v)          ((void)0)
 #define PB_ADD(field, v)  ((void)0)
 #define PB_ARM_CALL(stmt) do { stmt; } while (0)
+#define PB_BACKEND_CALL(stmt) do { stmt; } while (0)
 #define PB_DONE_CB(stmt)  do { stmt; } while (0)
 #endif
 
@@ -1071,7 +1079,7 @@ static bool abort_armed(uint8_t skip_ch)
 	}
 #endif
 
-	(void)radiant_radio_abort();
+	PB_BACKEND_CALL((void)radiant_radio_abort());
 
 	for (i = 0u; i < n; i++) {
 		uint8_t            c = list[i];
