@@ -679,7 +679,8 @@ static uint32_t crc_generic(const struct radiant_crc_cfg *cfg,
  * shift/xor ops per byte where the loop above does eight conditional steps,
  * which was ~60 us per RX frame and per TX arm on the 48 MHz M4F.
  *
- * Cleared, never set, by crc_self_check(): outside st, which init memsets.
+ * Recomputed by crc_self_check() at each init (deterministic, so a failed
+ * check stays failed); kept outside st, which init memsets.
  */
 static bool crc_fast_ok = true;
 
