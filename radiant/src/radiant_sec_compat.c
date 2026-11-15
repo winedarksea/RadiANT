@@ -466,6 +466,11 @@ int radiant_sec_compat_set_key(uint8_t ch, const uint8_t *root, size_t bits,
 		if (same && base_devnum == c->base_devnum) {
 			return RADIANT_SEC_OK;
 		}
+		/* The old root goes before the new one is imported over it,
+		 * as in radiant_sec_set_key(): destroying the handle also
+		 * wipes the cached AES schedule, which radiant_sec_key_same()
+		 * just left holding the old root's (review 2026-11-14). */
+		radiant_sec_key_destroy(&c->k_root);
 	}
 
 	rc = radiant_sec_key_import(&c->k_root, root, bits);
@@ -474,6 +479,11 @@ int radiant_sec_compat_set_key(uint8_t ch, const uint8_t *root, size_t bits,
 			/* Undo the allocation rather than leave a keyless,
 			 * used slot (review 2026-10-31, D1-6(b)/D2-7). */
 			memset(c, 0, sizeof(*c));
+		} else {
+			/* The old root is gone and the new one did not take
+			 * (it imported a moment ago in radiant_sec_key_same()):
+			 * no root at all, so no context. */
+			radiant_sec_compat_channel_release(ch);
 		}
 		return rc;
 	}
