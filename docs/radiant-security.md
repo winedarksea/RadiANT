@@ -588,16 +588,17 @@ before the `0xF3` stays silent on its secured pages until it arrives. Later
   The channel stays armed under its epoch, its windows and replay floor stay,
   and an epoch authority that follows it keeps following it. An idempotent
   re-send is neither a gap in the stream nor a reset of the gate above: an
-  older or equal `0xF3` after it is still refused. A compat channel's
-  `radiant_sec_compat_set_key()` follows the same rule, including the
-  on-air device number restarting at the provisioning one with every root
-  actually installed, and an install that fails once the old root is
-  destroyed leaves the channel unkeyed rather than half on each root.
+  older or equal `0xF3` after it is still refused.
 - **A different root** (or the same root under a different channel device
   number, which changes every derived key) **makes the channel pending** until
   the next `0xF3`, drops anything still queued under the old root, and resets
   the epoch gate, so that `0xF3` may carry any epoch. That is safe because no
   nonce under the new keys has been used.
+- **Compat** (`radiant_sec_compat_set_key()`) follows both rules. The on-air
+  device number restarts at the provisioning one with every root actually
+  installed (a same-root re-send keeps a moved one), and an install that fails
+  once the old root is destroyed leaves the channel unkeyed rather than half on
+  each root.
 
 That rejection is only enforceable within a power cycle, because keys and state
 are wiped on reset. The obligation therefore sits with the **epoch authority** —
@@ -667,8 +668,9 @@ secured sensors run at once. The conflict ends when the other channel is
 released, which for the spread MAC means unassigned
 (`antr_channel_unassign()` calls `radiant_sec_channel_release()`; a closed but
 still assigned channel keeps blocking), or when a host replaces its root. A
-compat context is released only by `radiant_sec_compat_channel_release()`. Two live channels under one root and
-one device number (two device types on one Tier 0 number, say) stay refused:
+compat context ends only by `radiant_sec_compat_channel_release()`, a set_key
+with another root, or a reset: unassign does not release it. Two live channels
+under one root and one device number (two device types on one Tier 0 number, say) stay refused:
 allowing them would need the device type in the key derivation or the nonce,
 which v1 does not have. The same floor stops a same-minute
 wall-clock reboot reusing an epoch. Epochs step by about 2 per boot, so

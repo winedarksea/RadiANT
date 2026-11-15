@@ -30,6 +30,17 @@ reads.
 
 ### Fixed
 
+- **Security (not in any release image): the 2026-11-14 review items 1-4.**
+  Acquiring and background-scan frames now go through the receive hook like
+  tracked ones, so an acquisition no longer hands the host ciphertext or an
+  unjudged forgery. A secured master can no longer acknowledge with plaintext.
+  `node_ident` refuses a second live arm under one root and one device number,
+  which could otherwise reach the other channel's epoch. Wipes that `-Os` had
+  elided are now `radiant_sec_wipe()`. Compat `set_key` resets the on-air
+  number and leaves no half-replaced context. A failed enrolment wrap closes
+  its window. Size gates unchanged, all under their ceilings (security text
+  7144/7168). Details and commits: TODO.md, 2026-11-14 review.
+
 - **MPSL builds (Thread, Matter, BLE coexistence, gate) no longer halt or
   reboot with `MPSL ASSERT 69:108`.** A RADIO event that fired while a TIMER0
   signal handler ran left the RADIO interrupt pending in the NVIC; after the

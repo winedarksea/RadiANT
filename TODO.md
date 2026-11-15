@@ -35,7 +35,10 @@ Note: multi packet burst mode is a lower priority feature, and handling it shoul
 
 Found by reading the code; nothing was built or run, so each item needs a test that reproduces it before the fix. The primitives, X25519, the spread-MAC receive logic, the pairing step order and both entropy backends read clean. D14 (counter wrap) and D16 (tag length) hold as documented, and D17 holds for a single channel (item 2). Not read: the plan file outside the repo, ADRs 0006/0008/0009/0020, profile_compat.c, profile_private.c lines 1-380, and most of the spec outside 3.2, 7.5 and 7.6. The Python crypto was not compared with the C byte for byte.
 
-## 1. [OPEN, HIGH] The search-acquisition frame skips the security hook
+Items 1-4 DONE 2026-11-14 (merges 13c501e, 825f5f6, 69dc718 on 3777766). Every functional fix has a test that failed first. Each branch had an independent review with a revert check and one re-review; the reviews found five more defects, all fixed (acked acquiring frame vs D15, released scan frames losing sender ID/RSSI and then reporting devnum 0, host-epoched twin invisible to the arm, compat same-root devnum untested). Combined tree: native_sim 6195/6195 in 16 scenarios (+63), Python 1078, DK api sec_host 153/153. Sizes, no ceiling moved: security text 7144/7168 (6992 on 3777766), security bss 6974/7168, pairing text 4048/4096, compat object 4770/5120; the security-off image is unchanged (84104). Still open from it: items 5-7 below.
+
+## 1. [DONE 2026-11-14: fecac17, 66bc189, 175a495] The search-acquisition frame skips the security hook
+- Done: `api_search_acquired()` runs every acquiring and scan frame through `radiant_sec_rx_ingest()` with its real message type, so it is judged like a tracked frame (owner: scan frames take the hook, a scan may be keyed). A released scan frame keeps its own sender ID and RSSI (an eight-entry table of held search frames; older ones go up under the channel ID). Go-to-search needed no discard: a forgery's window always closes UNVERIFIED (tests show it is neither released nor credited). What a key on a scan gives is in spec 3.2. Python `VerdictResolver` needed no change.
 - `api_search_acquired()` (ant_radio_radiant.c:1361) posts the acquiring frame to the host as `BROADCAST_DATA` without calling `radiant_sec_rx_ingest()`. The only ingest calls are on the tracked path (:2095, :2124).
 - X_CONF: every acquisition or re-acquisition hands the host one page of ciphertext as if it were plaintext.
 - X_AUTH with `DROP_UNVER`: a secured-range page reaches the host without being held for a verdict. An attacker who jams the link until the slave drops to search, then sends one frame on the channel's ID, gets it delivered. This is D15 by another door.
@@ -44,24 +47,41 @@ Found by reading the code; nothing was built or run, so each item needs a test t
 - Beside it: the receive window state is not discarded on `RX_FAIL_GO_TO_SEARCH` (only pairing is told, :435); test_api_sec_host.c has no acquisition case; section 3.2's "not bypassable by message type" does not mention search.
 - Fix: route the acquiring frame through `radiant_sec_rx_ingest()` like a tracked broadcast; refuse to key a background-scan channel, or run its frames through the same hook; discard the window state on go-to-search; add the test and the spec sentence.
 
-## 2. [OPEN, MEDIUM, latent] Two live channels under the node root can meet on one epoch
+## 2. [DONE 2026-11-14: 1a784e6, b4e0450] Two live channels under the node root can meet on one epoch
+- Done: `node_ident_arm_sec()`/`_arm_compat()` return `NODE_IDENT_EBUSY` while another channel of the same kind runs (epoch set or ceiling carried, by node or host) under the same root (key check value) and the same base device number. Different root or number stays allowed (owner: several secured sensors at once). Same root + number for two device types stays refused: item 5.
 - The epoch ceiling is one global `epoch_next - 1`, raised on every armed channel at once (node_ident.c:588-612, :779). Channel A is armed first at epoch E; channel B is armed later at F = E+2, which needs N = E+4 persisted. That persist raises A's ceiling to E+3, so A's second counter wrap lands on E+2, the epoch B started in.
 - With the same root and device number that is the two-time pad the M2 fix was written to stop. M2 covers a re-arm and an arm after release, not two channels alive together.
 - Needs A to run two wraps (about 9 h at 4 Hz). No caller of `node_ident_arm_sec()` was found under apps/, samples/ or radiant/src/.
 - Fix: give each armed channel its own reserved range, or refuse a second live arm of the same kind under one root.
 
-## 3. [OPEN, LOW] Plaintext can reach an acknowledgement through a two-statement race
+## 3. [DONE 2026-11-14: e8633a0] Plaintext can reach an acknowledgement through a two-statement race
+- Done: the payload is transformed in a local and published to `sec_pay` with `sec_pay_valid` inside one critical section, which also removes a torn copy. Shown with a ZTEST-only seam.
 - `api_post_master_tx()` copies the host plaintext into `sec_pay` and only then clears `sec_pay_valid` (ant_radio_radiant.c:1801-1802). `api_xfer_broadcast()` runs in the radio interrupt and sends `sec_pay` whenever the flag is set (:848), so an inbound acknowledged message landing between the two statements is acked with plaintext. The compiler may also reorder the two stores.
 - The window is tiny, but the pump posts the next slot around when the reply window opens.
 - Fix: clear the flag first, inside `radiant_event_crit_enter()`, or transform a local and copy it in under the critical section.
 
-## 4. [OPEN, LOW] Hardening
-- [ ] `radiant_sec_key_destroy()` and `radiant_sec_cmac_final()` clear with `memset()` (radiant_sec_aes.c:262, :484), and several callers pass stack handles: the root copy in `radiant_sec_key_same()`, the PRK and nonce keys in `cmac_parts()`, `k_cmd`. No build sets `CONFIG_LTO`, so the stores survive today; with LTO or inlining they are dead stores. Use `radiant_sec_wipe()`.
-- [ ] radiant_x25519.c says every intermediate is wiped; the locals of `fe_mul()` (`t`), `fe_invert()` (`c`) and `fe_pack()` (`t`, `m`, which hold the shared secret) are not.
-- [ ] Plain `memset()` on tag or output buffers in `locator_derive()` (radiant_sec_compat.c:1252), `set_check()` (profile_enrol.c:81) and `node_ident_pair_derive()` (node_ident.c:871).
-- [ ] `radiant_sec_compat_set_key()` with a different root keeps the old on-air device number when it is non-zero (radiant_sec_compat.c:468-471), where `radiant_sec_set_key()` resets it to the base number. A failed `K_id` derivation after the import also leaves a half-replaced context.
-- [ ] `carry << 16` on a negative value is undefined in ISO C (radiant_x25519.c:123-128). GCC does the expected thing; fix or note before another compiler.
-- [ ] profile_enrol.c:423-432: if the exchange succeeds and the wrap fails, the pairing context is freed while the enrolment window stays open, so the window is dead until it times out.
+## 4. [DONE 2026-11-14] Hardening
+Wipes evidenced by -Os disassembly (two old `memset`s had in fact been elided). 4a af3cbfe, 4b 5de4eab (+2.9 % instructions per X25519 exchange, QEMU count), 4c ef7a72d + e815686, 4d 3ce1ee6 + ff893f7 + 1f03366, 4e 4149fb3 (`&= 0xFFFF`, not the planned multiply: same value, code identical to before; the multiply cost 3.6 %), 4f 7baddc6 (the window closes with its pairing context, `-EIO`; an injected packet still cannot burn a window).
+- [x] `radiant_sec_key_destroy()` and `radiant_sec_cmac_final()` clear with `memset()` (radiant_sec_aes.c:262, :484), and several callers pass stack handles: the root copy in `radiant_sec_key_same()`, the PRK and nonce keys in `cmac_parts()`, `k_cmd`. No build sets `CONFIG_LTO`, so the stores survive today; with LTO or inlining they are dead stores. Use `radiant_sec_wipe()`.
+- [x] radiant_x25519.c says every intermediate is wiped; the locals of `fe_mul()` (`t`), `fe_invert()` (`c`) and `fe_pack()` (`t`, `m`, which hold the shared secret) are not.
+- [x] Plain `memset()` on tag or output buffers in `locator_derive()` (radiant_sec_compat.c:1252), `set_check()` (profile_enrol.c:81) and `node_ident_pair_derive()` (node_ident.c:871).
+- [x] `radiant_sec_compat_set_key()` with a different root keeps the old on-air device number when it is non-zero (radiant_sec_compat.c:468-471), where `radiant_sec_set_key()` resets it to the base number. A failed `K_id` derivation after the import also leaves a half-replaced context. (Also: the old root is now destroyed before the import, so its AES schedule does not outlive a failed install.)
+- [x] `carry << 16` on a negative value is undefined in ISO C (radiant_x25519.c:123-128). GCC does the expected thing; fix or note before another compiler.
+- [x] profile_enrol.c:423-432: if the exchange succeeds and the wrap fails, the pairing context is freed while the enrolment window stays open, so the window is dead until it times out.
+
+## 5. [OPEN, protocol, v2] Two live channels under one root and one device number
+- Item 2 refuses this (for example two device types on one Tier 0 number). Allowing it needs the device type in the key derivation or the nonce, which is a protocol change and not v1. Not built.
+- Related, judged safe in review: a spread-MAC channel and a compat channel under the same root and base number are not checked against each other. They share `K_auth` at one epoch, but the MAC domains differ (`DOM_COMPAT_MAC` vs `DOM_SPREAD_MAC`/`DOM_CTR`) and compat has no `K_enc`. Re-check if either MAC input format changes.
+
+## 6. [OPEN, LOW, core search, pre-existing] The search chunk keeps listening after its only channel acquires
+- Found in the item 1 review. The search RX chunk runs about one period plus 10 ms. When its only searching channel acquires, `radiant_search_end()` (radiant_search.c:630) clears just the channel record. The chunk runs on, hears frame 1, and drops it, and the first tracked RX is armed only when the chunk closes. The host sees `RX_FAIL` right after every acquiring `BROADCAST_DATA`. This is the same on 3777766 and with security off.
+- Security effect: the window holding slot 1 is always incomplete, so the first verdict after an acquisition is UNVERIFIED, and under `DROP_UNVER` the acquiring frame's own window is dropped. The new sec_host tests work around it (forgery at `(i+3) & ~1`).
+- Fix candidate: cut the chunk short, or hand the frame to the tracked path, when the last searching channel acquires. This changes discovery timing, so it needs the scan/sweep regression checks.
+
+## 7. [OPEN, LOW] Gaps left by the 2026-11-14 fixes
+- A fresh arm whose `radiant_sec_set_epoch()` fails inside `derive_keys()` is covered by item 2's rule (`epoch_set` counts), but untested: forcing it needs a KDF fault seam.
+- Compat `set_key` releases the context when a re-import fails after the old root is destroyed. The portable backend cannot reach that branch; an opaque backend can.
+- A keyed background scan under X_AUTH rarely completes a window, and all senders share one window state (spec 3.2). Accepted with the owner's decision to allow keyed scans. A per-sender window state would fix it, at RAM cost.
 
 # Open issues from the 2026-11-13 security review (HEAD 1df743a)
 
