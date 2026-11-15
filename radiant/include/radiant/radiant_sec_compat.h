@@ -412,6 +412,10 @@ void radiant_sec_compat_epoch_advanced(uint8_t ch, uint32_t epoch);
 void radiant_sec_compat_epoch_wanted(uint8_t ch, uint32_t epoch);
 int radiant_sec_compat_raise_epoch_ceiling(uint8_t ch, uint32_t max_epoch);
 
+/* radiant_sec_live_twin() over the compat contexts: another compat channel
+ * carrying a ceiling under the same root and base device number as `ch`. */
+bool radiant_sec_compat_live_twin(uint8_t ch);
+
 /* The on-air device number, which is in the nonce. */
 int radiant_sec_compat_set_devnum(uint8_t ch, uint16_t devnum);
 
@@ -771,6 +775,12 @@ static inline int radiant_sec_compat_raise_epoch_ceiling(uint8_t ch,
 {
 	(void)ch; (void)max_epoch;
 	return RADIANT_SEC_ENOTSUP;
+}
+
+static inline bool radiant_sec_compat_live_twin(uint8_t ch)
+{
+	(void)ch;
+	return false;
 }
 
 static inline int radiant_sec_compat_set_devnum(uint8_t ch, uint16_t devnum)

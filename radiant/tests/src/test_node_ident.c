@@ -376,7 +376,8 @@ ZTEST(node_ident, test_every_error_code_has_a_reason)
 {
 	static const int codes[] = {
 		NODE_IDENT_OK, NODE_IDENT_EINVAL, NODE_IDENT_ENOTSUP,
-		NODE_IDENT_ENOKEY, NODE_IDENT_EIO, NODE_IDENT_ESTATE, -99,
+		NODE_IDENT_ENOKEY, NODE_IDENT_EIO, NODE_IDENT_ESTATE,
+		NODE_IDENT_EAGAIN, NODE_IDENT_EBUSY, -99,
 	};
 
 	/* The apps print this on the fallback line; a NULL there is a fault
@@ -389,6 +390,8 @@ ZTEST(node_ident, test_every_error_code_has_a_reason)
 	}
 	zassert_true(strcmp(node_ident_strerror(NODE_IDENT_EIO),
 			    node_ident_strerror(NODE_IDENT_ENOKEY)) != 0);
+	zassert_true(strcmp(node_ident_strerror(NODE_IDENT_EBUSY),
+			    node_ident_strerror(-99)) != 0);
 }
 
 ZTEST(node_ident, test_an_all_zero_key_is_refused)
@@ -960,6 +963,15 @@ static void key_conf(uint8_t ch, uint8_t switches)
 					 RADIANT_SEC_PAGE_HI_DEFAULT));
 }
 
+/* key_conf() under a chosen root and base device number, X_CONF. */
+static void key_conf_as(uint8_t ch, const uint8_t *root, uint16_t devnum)
+{
+	zassert_ok(radiant_sec_set_key(ch, root, 128, devnum));
+	zassert_ok(radiant_sec_configure(ch, RADIANT_SEC_SW_CONF, 2u,
+					 RADIANT_SEC_PAGE_LO_DEFAULT,
+					 RADIANT_SEC_PAGE_HI_DEFAULT));
+}
+
 /* A booted node with channel 0 armed as its secured transmitter. */
 static uint32_t booted_and_armed(void)
 {
@@ -1378,7 +1390,9 @@ ZTEST(node_ident, test_a_released_channel_is_not_capped_by_another_wrap)
 	uint8_t pay[8] = { 0x05u, 0xAAu, 1, 2, 3, 4, 5, 6 };
 
 	booted_and_armed();
-	key_conf(RX_NODE_CH, RADIANT_SEC_SW_CONF);
+	/* Its own device number: two live channels under one root and number
+	 * are refused (item 2 below). */
+	key_conf_as(RX_NODE_CH, test_root, VECTOR_DEVNUM + 1u);
 	zassert_equal(NODE_IDENT_EAGAIN,
 		      node_ident_arm_sec(RX_NODE_CH, TEST_PERIOD));
 	let_work_run();
@@ -1428,3 +1442,144 @@ ZTEST(node_ident, test_a_failing_persist_backs_off)
 	/* N covers the second wrap the withheld slots wanted (e0 + 2). */
 	zassert_equal(e0 + 3u, stored_next());
 }
+
+/* ── Two live channels on one epoch (review 2026-11-14 item 2) ────────────── */
+
+/* An arm after the first waits once for its fresh epoch's reservation. */
+static int arm_sec_settled(uint8_t ch)
+{
+	int rc = node_ident_arm_sec(ch, TEST_PERIOD);
+
+	if (rc == NODE_IDENT_EAGAIN) {
+		let_work_run();
+		rc = node_ident_arm_sec(ch, TEST_PERIOD);
+	}
+	return rc;
+}
+
+#if defined(CONFIG_RADIANT_SEC_COMPAT)
+static int arm_compat_settled(uint8_t ch, uint64_t now_us)
+{
+	int rc = node_ident_arm_compat(ch, now_us, TEST_PERIOD);
+
+	if (rc == NODE_IDENT_EAGAIN) {
+		let_work_run();
+		rc = node_ident_arm_compat(ch, now_us, TEST_PERIOD);
+	}
+	return rc;
+}
+#endif
+
+/* B armed while A is live, same root and base device number: B takes
+ * F = E + 2, its reservation (N = E + 4) raises A's ceiling to E + 3, and A's
+ * second counter wrap lands on F - both channels then run the counter from 0
+ * under one (root, epoch, devnum), a two-time pad. So B's arm is refused. The
+ * branch shows the collision should an arm ever get through again. */
+ZTEST(node_ident, test_a_second_live_arm_under_one_root_and_devnum_is_refused)
+{
+	uint32_t e0;
+	int      rc;
+
+	e0 = booted_and_armed();
+	key_conf(RX_NODE_CH, RADIANT_SEC_SW_CONF);
+	rc = arm_sec_settled(RX_NODE_CH);
+	if (rc == NODE_IDENT_OK) {
+		uint32_t f = sec_epoch(RX_NODE_CH);
+
+		zassert_ok(node_tx(0u));
+		zassert_ok(node_tx(65536u));
+		let_work_run();
+		zassert_ok(node_tx(2u * 65536u));
+		zassert_not_equal(f, sec_epoch(TX_NODE_CH),
+				  "A (armed at %u) reached B's epoch %u after "
+				  "two wraps", e0, f);
+	}
+	zassert_equal(NODE_IDENT_EBUSY, rc, "arm B: %d", rc);
+
+	/* Nothing moved: A keeps E, B has no epoch, and no epoch was
+	 * reserved for the refused arm. */
+	zassert_equal(e0, sec_epoch(TX_NODE_CH));
+	zassert_equal(0u, sec_epoch(RX_NODE_CH));
+	zassert_equal(e0 + 2u, stored_next());
+	zassert_equal(NODE_IDENT_EBUSY,
+		      node_ident_arm_sec(RX_NODE_CH, TEST_PERIOD));
+}
+
+/* The owner's rule (2026-11-14): several secured sensors run at once, so only
+ * the real collision is refused. A different base device number or a
+ * different root is a different key, and the same channel re-armed is the
+ * M2 path (a fresh epoch), not a second live channel. */
+ZTEST(node_ident, test_live_arms_that_differ_in_root_or_devnum_are_allowed)
+{
+	uint32_t e0;
+
+	e0 = booted_and_armed();
+
+	key_conf_as(RX_NODE_CH, test_root, VECTOR_DEVNUM + 1u);
+	zassert_equal(NODE_IDENT_OK, arm_sec_settled(RX_NODE_CH));
+
+	key_conf_as(2u, host_root, VECTOR_DEVNUM);
+	zassert_equal(NODE_IDENT_OK, arm_sec_settled(2u));
+
+	/* A itself again, while all three are live. */
+	zassert_equal(NODE_IDENT_OK, arm_sec_settled(TX_NODE_CH));
+	zassert_true(sec_epoch(TX_NODE_CH) > e0 + 1u);
+
+	/* But a fourth under A's root and number still collides, past live
+	 * channels in the table that do not match. */
+	key_conf(3u, RADIANT_SEC_SW_CONF);
+	zassert_equal(NODE_IDENT_EBUSY, arm_sec_settled(3u));
+}
+
+/* "Live" is radiant still holding A's ceiling, not node_ident's armed bit:
+ * a host replacing A's root, or a release, ends it and B may arm. */
+ZTEST(node_ident, test_a_released_or_rekeyed_channel_no_longer_blocks_an_arm)
+{
+	booted_and_armed();
+	key_conf(RX_NODE_CH, RADIANT_SEC_SW_CONF);
+	zassert_equal(NODE_IDENT_EBUSY, arm_sec_settled(RX_NODE_CH));
+
+	/* A host takes A over with its own root: the node lets go. */
+	zassert_ok(radiant_sec_set_key(TX_NODE_CH, host_root, 128,
+				       VECTOR_DEVNUM));
+	zassert_equal(NODE_IDENT_OK, arm_sec_settled(RX_NODE_CH));
+
+	/* Now B is the live one; A back under the node root collides... */
+	key_conf(TX_NODE_CH, RADIANT_SEC_SW_CONF);
+	zassert_equal(NODE_IDENT_EBUSY, arm_sec_settled(TX_NODE_CH));
+
+	/* ...until B is released. */
+	radiant_sec_channel_release(RX_NODE_CH);
+	zassert_equal(NODE_IDENT_OK, arm_sec_settled(TX_NODE_CH));
+}
+
+#if defined(CONFIG_RADIANT_SEC_COMPAT)
+/* The compat twin: the same arm path, the same rule. */
+ZTEST(node_ident, test_a_second_live_compat_arm_under_one_root_and_devnum_is_refused)
+{
+	uint64_t t0 = 1000000u;
+
+	provisioned_and_booted();
+	zassert_ok(radiant_sec_compat_set_key(TX_NODE_CH, test_root, 128,
+					      VECTOR_DEVNUM));
+	zassert_equal(NODE_IDENT_OK, arm_compat_settled(TX_NODE_CH, t0));
+
+	zassert_ok(radiant_sec_compat_set_key(RX_NODE_CH, test_root, 128,
+					      VECTOR_DEVNUM));
+	zassert_equal(NODE_IDENT_EBUSY, arm_compat_settled(RX_NODE_CH, t0));
+
+	/* A different base device number is a different key: allowed. */
+	zassert_ok(radiant_sec_compat_set_key(RX_NODE_CH, test_root, 128,
+					      VECTOR_DEVNUM + 1u));
+	zassert_equal(NODE_IDENT_OK, arm_compat_settled(RX_NODE_CH, t0));
+
+	/* And A re-armed while B is live. */
+	zassert_equal(NODE_IDENT_OK, arm_compat_settled(TX_NODE_CH, t0));
+
+	/* A released: B's old identity may arm on a third channel. */
+	radiant_sec_compat_channel_release(TX_NODE_CH);
+	zassert_ok(radiant_sec_compat_set_key(2u, test_root, 128,
+					      VECTOR_DEVNUM));
+	zassert_equal(NODE_IDENT_OK, arm_compat_settled(2u, t0));
+}
+#endif

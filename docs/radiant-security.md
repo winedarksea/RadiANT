@@ -619,9 +619,19 @@ compare-and-swap, so it cannot re-follow a channel a re-key just let go). Only
 the first arm of each kind in a boot gets `E`: every later arm, whether the
 same channel again or another under the same root, takes the next unused epoch
 once its reservation is durable, so no arm restarts the counter under an epoch
-already used. And channels transmitting at the same time must differ in root
-key or device number, because a wrap on one may reach an epoch a later arm
-took. The same floor stops a same-minute
+already used. And channels live at the same time must differ in root key or
+base device number, because a wrap on one may reach an epoch a later arm took:
+with `A` armed at `E`, a later arm `B` takes `E + 2`, its reservation raises
+`A`'s ceiling to `E + 3`, and `A`'s second wrap lands on `E + 2`. The node
+enforces this (review 2026-11-14 item 2): an arm is refused
+(`NODE_IDENT_EBUSY`) while another channel of the same kind, one radiant still
+holds the node's ceiling for, has the same root (compared by key check value)
+and the same base device number. Channels that differ in either are allowed,
+so several secured sensors run at once; releasing the live channel, or a host
+replacing its root, ends the conflict. Two live channels under one root and
+one device number (two device types on one Tier 0 number, say) stay refused:
+allowing them would need the device type in the key derivation or the nonce,
+which v1 does not have. The same floor stops a same-minute
 wall-clock reboot reusing an epoch. Epochs step by about 2 per boot, so
 forward searches (compat's, the descriptor's 16-epoch span) still find them;
 a scheme that spaced boots far apart, such as `boot_counter << 12`, would not.
