@@ -230,8 +230,15 @@ function Get-LastRun([string]$s) {
     return $s.Substring($i)
 }
 
+# Get-LastRun does not close every gap: if the killed run's banner and its
+# PROJECT EXECUTION line both land after the discard, before the reset run's
+# banner is read, the wait ends on the killed run. That run is the image just
+# flashed, run to completion, so its verdict is still this image's verdict.
+# A go script that failed was never checked: it is a probe fault, reported as
+# itself rather than as whatever the console happened to show.
 try {
     & $jlink -NoGui 1 -SelectEmuBySN $Serial -CommanderScript $goScript > (Join-Path $tmp 'go.log')
+    if ($LASTEXITCODE -ne 0) { throw "JLink go (reset and run) failed; see $tmp\go.log" }
 
     $sb = New-Object System.Text.StringBuilder
     $deadline = (Get-Date).AddSeconds($Seconds)

@@ -57,6 +57,7 @@
 #endif
 #include <radiant/radiant_search.h>
 #include <radiant/radiant_sec.h>
+#include <radiant/radiant_sec_compat.h>
 #include <radiant/radiant_transfer.h>
 
 /* Uses CONFIG_RADIANT_LOG_LEVEL so this module can be raised when debugging. */
@@ -3054,8 +3055,10 @@ static void api_reset_state(void)
 	}
 
 	/* Keys are write-only and do not survive a reset, so epoch monotonicity
-	 * can only be enforced within one power cycle. */
+	 * can only be enforced within one power cycle. Compat contexts too: a
+	 * stale one would still count as a live twin to node_ident's arm. */
 	radiant_sec_reset();
+	radiant_sec_compat_reset();
 #if defined(CONFIG_RADIANT_SEC_PAIRING_X25519)
 	/* And every half-finished exchange, so no scalar is left in RAM behind
 	 * an unreachable state. */
@@ -3254,8 +3257,11 @@ antr_err_t antr_channel_unassign(uint8_t channel)
 		/* Backstop: the wipe below must not be a command's silent end. */
 		api_ack_pending_fail(channel);
 		/* Keys and derived values go with the channel, or they'd stay
-		 * installed on a number the host is free to reassign. */
+		 * installed on a number the host is free to reassign. Both
+		 * kinds: a stale compat context blocks node_ident's next arm
+		 * under the same root and number (EBUSY) until reboot. */
 		radiant_sec_channel_release(channel);
+		radiant_sec_compat_channel_release(channel);
 		memset(&api_ch[channel], 0, sizeof(api_ch[channel]));
 		memset(&api_xfer[channel], 0, sizeof(api_xfer[channel]));
 	}

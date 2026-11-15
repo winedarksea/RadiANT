@@ -83,6 +83,11 @@ Wipes evidenced by -Os disassembly (two old `memset`s had in fact been elided). 
 - Compat `set_key` releases the context when a re-import fails after the old root is destroyed. The portable backend cannot reach that branch; an opaque backend can.
 - A keyed background scan under X_AUTH rarely completes a window, and all senders share one window state (spec 3.2). Accepted with the owner's decision to allow keyed scans. A per-sender window state would fix it, at RAM cost.
 
+## 8. [OPEN, LOW, policy call] The twin guard runs only on a node arm (reviewer, 2026-11-15)
+- `NODE_IDENT_EBUSY` (item 2) is checked in `node_ident_arm_*` only. A host can key a second channel under the same root and base device number with 0xF2, then give it the same epoch with 0xF3, which is the (root, epoch, devnum) collision the guard prevents. `radiant_sec_set_key()`/`set_epoch()` do not run the check.
+- Open question for the owner: is the host trusted to choose distinct roots and epochs (as the docs imply, "a channel a host epoched at E collides"), or should 0xF2/0xF3 refuse a live twin? A refusal adds security text, and that gate has 24 B left (7144/7168).
+- Also from that review, judged not worth a change: an 0xF2 key can make the next broadcast slot repeat the last acked packet (`last_tx_newer` clears only on a host broadcast write). Those bytes went out in the clear before the key existed, and a repeat on a secured page is encrypted, so nothing new is exposed.
+
 # Open issues from the 2026-11-13 security review (HEAD 1df743a)
 
 Found by reading the code and checked a second time; nothing was built or run. The primitives (AES, CMAC, CTR, KDF, X25519, ct_equal, wipe) read clean. `security.conf` and compat are in no release image, so protocol changes here break no deployed device. "Latent" means no app calls the path yet (`node_ident_arm_sec`, `profile_enrol_*`, compat `recover_*`/`adopt_epoch` are reached only from tests). The plan file holding D1-D17 (`~/.claude/plans/make-a-plan-to-async-gem.md`) does not exist; D14-D17 were checked against the spec and code comments.

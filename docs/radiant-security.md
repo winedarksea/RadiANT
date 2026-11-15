@@ -665,11 +665,11 @@ ceiling carried, whoever set it) under the same root (compared by key check
 value) and the same base device number. A channel keyed with no epoch yet does
 not count. Channels that differ in root or number are allowed, so several
 secured sensors run at once. The conflict ends when the other channel is
-released, which for the spread MAC means unassigned
-(`antr_channel_unassign()` calls `radiant_sec_channel_release()`; a closed but
-still assigned channel keeps blocking), or when a host replaces its root. A
-compat context ends only by `radiant_sec_compat_channel_release()`, a set_key
-with another root, or a reset: unassign does not release it. Two live channels
+released, which means unassigned (`antr_channel_unassign()` calls
+`radiant_sec_channel_release()` and `radiant_sec_compat_channel_release()`; a
+closed but still assigned channel keeps blocking) or a SYSTEM_RESET (which
+calls `radiant_sec_reset()` and `radiant_sec_compat_reset()`), or when a host
+replaces its root. Two live channels
 under one root and one device number (two device types on one Tier 0 number, say) stay refused:
 allowing them would need the device type in the key derivation or the nonce,
 which v1 does not have. The same floor stops a same-minute
