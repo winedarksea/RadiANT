@@ -2070,6 +2070,20 @@ sensor, and unpinning is a deliberate user action.
 
 ### 11.5 Layer C — the private-mode switch
 
+**Implementation status (2026-11-14): library only, no shipped caller.** Layer C
+(the state machine below, the command path of §11.6 and its replay floor) is
+implemented in `radiant/src/profiles/profile_private.c` and covered by
+`radiant/tests/src/test_profile_private.c`, but no shipped image runs it.
+Nothing outside the tests calls `profile_private_attach()` or
+`profile_private_on_command()`. `apps/hrm_ble` links `profile_compat.c` but
+never attaches a compat client (`profile_hr_set_compat()` is never called), and
+no transmitting app lists `profile_private.c` in its sources. The bridge and
+Matter builds of `apps/dongle_thread` turn on `CONFIG_RADIANT_PROFILES`, so
+there the file is compiled into the radiant library but nothing references it,
+and the linker's section garbage collection drops it. What this section and
+§11.6 describe is the library's behaviour, not something a deployed node does
+today.
+
 Not an extra channel. **The node stops being an ANT+ sensor and becomes a
 RadiANT one.**
 
@@ -2286,7 +2300,8 @@ data** exactly as an enrolment frame does:
 - **The counter is Tier I's, derived from time on both sides and carried
   nowhere.** A recorded command replayed into a later interval fails the tag.
   There is no counter field a sender could choose.
-- **A replay inside the same interval meets a per-operation floor.** The tag
+- **A replay inside the same interval meets a per-operation floor** (in the
+  library; no shipped image calls it yet, see the status note in §11.5). The tag
   binds only (epoch, interval, operation), so a recorded command verifies again
   until its interval ends, and with `T` up to 3600 s the rate limit below does
   not cover that: the owner sends go-private, then return two minutes later, and
