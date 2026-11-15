@@ -524,6 +524,76 @@ ZTEST(api, test_sec_a_pending_master_sends_nothing_in_the_clear)
 			    5u) != 0, "armed, but still in the clear");
 	sec_close();
 }
+
+/*
+ * Review 2026-11-14, item 3. api_post_master_tx() copied the host's plaintext
+ * into sec_pay and only then cleared sec_pay_valid, which the previous slot
+ * had left set; the ack payload path (the radio interrupt) sends sec_pay
+ * whenever the flag is set. An inbound acknowledged message landing between
+ * the two statements was acked with the plaintext, and an ack landing during
+ * the copy could carry half of each. The seam stands in for that interrupt:
+ * the ztest-only hook between taking the plaintext and publishing the secured
+ * copy, where it asks the ack path what it would send.
+ */
+static bool    seam_armed;
+static bool    seam_called;
+static bool    seam_acks;
+static uint8_t seam_ack[8];
+
+void antr_test_master_tx_seam(uint8_t ch)
+{
+	if (!seam_armed || ch != SEC_CH) {
+		return;
+	}
+	seam_armed = false;
+	seam_called = true;
+	seam_acks = antr_test_ack_payload(ch, seam_ack);
+}
+
+ZTEST(api, test_sec_an_ack_during_the_master_post_never_carries_plaintext)
+{
+	static const uint8_t root[16] = {
+		0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+		0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+	};
+	const uint32_t period = (uint32_t)radiant_channel_counts_to_us(
+		RADIANT_CHANNEL_PERIOD_ANT_PLUS);
+	int            rc[4];
+
+	sec_open((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	k_mutex_lock(&api_lock, K_FOREVER);
+	rc[0] = radiant_sec_set_key(SEC_CH, root, 128, SEC_DEVNUM);
+	rc[1] = radiant_sec_set_devnum(SEC_CH, SEC_DEVNUM);
+	rc[2] = radiant_sec_configure(SEC_CH, RADIANT_SEC_SW_CONF, 2u,
+				      RADIANT_SEC_PAGE_LO_DEFAULT,
+				      RADIANT_SEC_PAGE_HI_DEFAULT);
+	rc[3] = radiant_sec_set_epoch(SEC_CH, 1u, 0u, 8182u);
+	k_mutex_unlock(&api_lock);
+	for (int i = 0; i < 4; i++) {
+		zassert_equal(RADIANT_SEC_OK, rc[i], "setup step %d", i);
+	}
+	zassert_true(radiant_sec_channel_is_secured(SEC_CH));
+
+	/* A slot built and sent, so sec_pay_valid is set going into the next
+	 * post, as it is on every slot of a master transmitting normally. */
+	(void)sec_slot_with_payload();
+
+	seam_called = false;
+	seam_armed = true;
+	for (int i = 0; i < 4 && !seam_called; i++) {
+		sec_write();
+		fake_radio_advance_to(radiant_radio_now() + period);
+	}
+	seam_armed = false;
+	zassert_true(seam_called, "setup: no master post ran the seam");
+	/* The previous slot's ciphertext is still the one published, so the
+	 * master does acknowledge - with that. */
+	zassert_true(seam_acks, "setup: the master would not acknowledge");
+	zassert_true(memcmp(seam_ack, sec_payload, sizeof(seam_ack)) != 0,
+		     "an acknowledgement during the master post carried the "
+		     "host's plaintext");
+	sec_close();
+}
 #endif
 
 ZTEST(api, test_sec_an_unsecured_channel_reports_clear)

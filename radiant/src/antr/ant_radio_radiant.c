@@ -649,6 +649,43 @@ static void api_post_rx(uint8_t ch, uint8_t msg_id,
 
 #if defined(CONFIG_RADIANT_SEC)
 /*
+ * The sender of each frame the search handed to the RX hook and the hook held.
+ * radiant_sec carries a held page with its t_sync only, and a background scan's
+ * channel ID wildcards the device and transmission types, so without this a
+ * released scan frame went up under the channel's wildcard ID with no RSSI,
+ * when the per-frame sender and RSSI are what a scan is for. Written in the
+ * radio interrupt (api_search_acquired()), read in radiant_sec_deliver(),
+ * matched on t_sync alone: one radio hears one frame per instant, and a frame
+ * offered to two channels has the same sender on both. The whole channel ID
+ * is kept: a key survives a close, and the closed channel may take a wildcard
+ * ID before it reopens, so the channel's own number says nothing. Nothing
+ * clears the table, with the stack or otherwise: a zeroed entry would itself
+ * match a frame heard at an instant whose low 32 bits are zero, and a stale
+ * one matches only the exact instant of the frame that wrote it. Eight
+ * entries: under the deliver policy a frame is released at the next pump, and
+ * under DROP_UNVER a scan rarely completes a window at all
+ * (docs/radiant-security.md 3.2). A frame that has fallen out goes up under
+ * the channel's ID, as before.
+ * t_sync_exact stays true for every released frame, tracked or searched, as it
+ * was: the backends capture t_sync at the ADDRESS event.
+ */
+#define API_SEC_SEEN_N 8u
+
+static struct api_sec_seen {
+	uint32_t                  t_lo;
+	struct radiant_channel_id id;
+	uint8_t                   rssi[2]; /* has_rssi, rssi_dbm */
+} api_sec_seen[API_SEC_SEEN_N];
+static uint8_t api_sec_seen_next;
+
+/* The RSSI pair is copied as one, so it must sit together at both ends. */
+BUILD_ASSERT(offsetof(struct radiant_search_result, rssi_dbm) ==
+	     offsetof(struct radiant_search_result, has_rssi) + 1u);
+BUILD_ASSERT(offsetof(struct radiant_rx_event, rssi_dbm) ==
+	     offsetof(struct radiant_rx_event, has_rssi) + 1u);
+BUILD_ASSERT((API_SEC_SEEN_N & (API_SEC_SEEN_N - 1u)) == 0u);
+
+/*
  * Where radiant_sec_pump() delivers plaintext. A direct call that overrides a weak
  * definition: a registered ops struct would be a .data relocation the linker
  * cannot discard, and the unit-test app has no radiant_api.c. Event-thread context.
@@ -680,6 +717,29 @@ void radiant_sec_deliver(uint8_t ch, const uint8_t *pay, uint8_t len,
 	hal.t_sync = (radiant_time_t)t_sync;
 	/* Carried from the radio's ADDRESS-event capture, not re-read when the pump runs. */
 	hal.t_sync_exact = true;
+
+	/* A frame the search held: its own sender and RSSI. Read without a
+	 * crit section while the radio interrupt may rewrite the entry; the
+	 * interrupt runs to completion, so an entry whose t_lo is the same
+	 * after the copy as before it was not rewritten in between. */
+	for (uint8_t i = 0u; i < API_SEC_SEEN_N; i++) {
+		const struct api_sec_seen *s = &api_sec_seen[i];
+
+		if (s->t_lo == (uint32_t)t_sync) {
+			struct radiant_channel_id sid;
+			uint8_t                   rssi[2];
+
+			compiler_barrier();
+			sid = s->id;
+			memcpy(rssi, s->rssi, 2u);
+			compiler_barrier();
+			if (s->t_lo == (uint32_t)t_sync) {
+				id = sid;
+				memcpy(&hal.has_rssi, rssi, 2u);
+			}
+			break;
+		}
+	}
 
 	api_post_rx(ch, (uint8_t)ANTW_MESG_BROADCAST_DATA_ID, &id, &hal, pay,
 		    len, 0u, false);
@@ -859,6 +919,25 @@ static bool api_xfer_broadcast(void *ctx, uint8_t out[RADIANT_TRANSFER_PKT_BYTES
 	memcpy(out, api_ch[ch].bcast, RADIANT_TRANSFER_PKT_BYTES);
 	return true;
 }
+
+#if defined(CONFIG_ZTEST)
+/*
+ * Test seams, ztest images only (review 2026-11-14, item 3). The seam runs in
+ * api_post_master_tx() between taking the host's plaintext and publishing the
+ * secured copy the acknowledgement path sends; a test overrides it to stand in
+ * for an inbound acknowledged message landing there, and asks the ack payload
+ * path what it would send through antr_test_ack_payload().
+ */
+__weak void antr_test_master_tx_seam(uint8_t ch)
+{
+	ARG_UNUSED(ch);
+}
+
+bool antr_test_ack_payload(uint8_t ch, uint8_t out[RADIANT_TRANSFER_PKT_BYTES])
+{
+	return api_xfer_broadcast((void *)(uintptr_t)ch, out);
+}
+#endif
 
 #if defined(CONFIG_RADIANT_ACK_FAULTS)
 /*
@@ -1324,6 +1403,7 @@ static void api_search_acquired(uint8_t channel,
 {
 	struct radiant_rx_event hal;
 	bool                 is_scan;
+	bool                 post = true;
 
 	(void)user;
 	if (!api_ch_valid(channel) || r == NULL) {
@@ -1358,8 +1438,42 @@ static void api_search_acquired(uint8_t channel,
 	hal.has_rssi = r->has_rssi;
 	hal.rssi_dbm = r->rssi_dbm;
 
-	api_post_rx(channel, (uint8_t)ANTW_MESG_BROADCAST_DATA_ID, &r->id, &hal,
-		    r->frame.payload, r->frame.payload_len, 0u, false);
+#if defined(CONFIG_RADIANT_SEC)
+	/* The tracked broadcast's RX policy guard, before the frame goes up.
+	 * The acquiring frame, a re-acquiring one, and every frame a background
+	 * scan hears come only through here: posted as they stood, they reached
+	 * the host as ciphertext under X_CONF and with no verdict under X_AUTH
+	 * (review 2026-11-14, item 1). The search acquires on acknowledged data
+	 * too, so the message type is passed as the tracked switch does: D15
+	 * drops a secured-range page that is not a broadcast. A deferred or
+	 * dropped frame has still acquired the channel above. */
+	{
+		int sec = radiant_sec_rx_ingest(
+			channel, r->frame.payload, r->frame.payload_len,
+			radiant_frame_msg_type(r->frame.ctrl_byte) ==
+				RADIANT_MSG_BROADCAST,
+			(uint64_t)r->t_sync);
+
+		if (sec == RADIANT_SEC_RX_DEFER) {
+			/* For radiant_sec_deliver(): who sent it. */
+			struct api_sec_seen *s =
+				&api_sec_seen[api_sec_seen_next++ &
+					      (API_SEC_SEEN_N - 1u)];
+
+			s->t_lo = (uint32_t)r->t_sync;
+			s->id = r->id;
+			memcpy(s->rssi, &r->has_rssi, 2u);
+		}
+		if (sec != RADIANT_SEC_RX_PLAIN) {
+			post = false;
+		}
+	}
+#endif
+	if (post) {
+		api_post_rx(channel, (uint8_t)ANTW_MESG_BROADCAST_DATA_ID,
+			    &r->id, &hal, r->frame.payload,
+			    r->frame.payload_len, 0u, false);
+	}
 
 	/* ACQUIRE leaves the search; a scan stays SEARCHING, so radiant_search_end() is skipped. */
 	if (radiant_channel_state_get(channel) == RADIANT_CH_STATE_TRACKING) {
@@ -1797,30 +1911,49 @@ static void api_post_master_tx(uint8_t ch)
 	 * when armed, so this is the latest correct point). Transform into a copy:
 	 * bcast's readback must stay the host's plaintext, and must not be re-encrypted
 	 * on each retransmission.
+	 *
+	 * The transform runs on the local copy, and sec_pay only ever takes a
+	 * finished ciphertext, under the crit section with its flag. The ack
+	 * payload path (api_xfer_broadcast(), the radio interrupt) sends sec_pay
+	 * whenever sec_pay_valid is set, and the previous slot left it set:
+	 * copying the plaintext into sec_pay before clearing the flag acked an
+	 * inbound message landing in between with the host's plaintext, and one
+	 * landing mid-copy with half of each (review 2026-11-14, item 3).
+	 *
+	 * The counter derives from the slot instant t, so a re-post of the same
+	 * slot gets the same bytes.
 	 */
-	memcpy(api_ch[ch].sec_pay, pay, sizeof(api_ch[ch].sec_pay));
-	api_ch[ch].sec_pay_valid = false;
-	/* The counter derives from the slot instant t, so a re-post of the same
-	 * slot gets the same bytes. */
-	if (radiant_sec_tx_transform(ch, api_ch[ch].sec_pay,
-				     (uint8_t)sizeof(api_ch[ch].sec_pay),
-				     (uint64_t)t) != RADIANT_SEC_OK) {
-		/* Transmit nothing rather than send in the clear: a channel the
-		 * host believes is protected must not fail open. */
-		return;
-	}
-	api_ch[ch].sec_pay_valid = radiant_sec_channel_is_secured(ch);
+	{
+		int          rc = radiant_sec_tx_transform(ch, pay,
+							   (uint8_t)sizeof(pay),
+							   (uint64_t)t);
+		bool         secured = radiant_sec_channel_is_secured(ch);
+		unsigned int key;
 
-	if (radiant_frame_make(&f, &id, &fields, api_ch[ch].sec_pay,
-			   RADIANT_FRAME_PAYLOAD_STD) != RADIANT_FRAME_OK) {
-		return;
+#if defined(CONFIG_ZTEST)
+		antr_test_master_tx_seam(ch);
+#endif
+		key = radiant_event_crit_enter();
+		if (rc == RADIANT_SEC_OK) {
+			memcpy(api_ch[ch].sec_pay, pay,
+			       sizeof(api_ch[ch].sec_pay));
+			api_ch[ch].sec_pay_valid = secured;
+		} else {
+			api_ch[ch].sec_pay_valid = false;
+		}
+		radiant_event_crit_exit(key);
+		if (rc != RADIANT_SEC_OK) {
+			/* Transmit nothing rather than send in the clear: a
+			 * channel the host believes is protected must not fail
+			 * open. */
+			return;
+		}
 	}
-#else
+#endif
 	if (radiant_frame_make(&f, &id, &fields, pay,
 			   RADIANT_FRAME_PAYLOAD_STD) != RADIANT_FRAME_OK) {
 		return;
 	}
-#endif
 	if (radiant_frame_encode(RADIANT_FRAME_CFG_TRACKING, api_net_addr_for(ch), &f,
 			     &w) != RADIANT_FRAME_OK) {
 		return;
