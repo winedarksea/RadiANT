@@ -1275,7 +1275,7 @@ static int locator_derive(const struct radiant_sec_key *k_id, uint32_t epoch,
 	if (rc == RADIANT_SEC_OK) {
 		*out = (uint16_t)((uint16_t)tag[0] | ((uint16_t)tag[1] << 8));
 	}
-	memset(tag, 0, sizeof(tag));
+	radiant_sec_wipe(tag, sizeof(tag));
 	return rc;
 }
 

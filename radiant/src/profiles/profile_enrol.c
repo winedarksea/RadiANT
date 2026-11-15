@@ -78,7 +78,7 @@ static int set_check(const uint8_t *pubkey, uint8_t *out)
 	}
 
 	memcpy(out, tag, PROFILE_ENROL_CHECK_BYTES);
-	memset(tag, 0, sizeof(tag));
+	radiant_sec_wipe(tag, sizeof(tag));
 	return 0;
 }
 
