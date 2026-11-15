@@ -212,14 +212,19 @@ int node_ident_arm_compat(uint8_t ch, uint64_t now_us, uint16_t period_counts);
  * LIVE CHANNELS MUST DIFFER IN ROOT OR BASE DEVICE NUMBER, AND THE ARM
  * ENFORCES IT. Arms get distinct epochs, but a wrap on one live channel may
  * reach an epoch a later arm took (A at E, B at E + 2, A's second wrap lands
- * on E + 2), so an arm returns NODE_IDENT_EBUSY while another channel of the
- * same kind that radiant still holds this node's ceiling for has the same root
- * (by key check value) and the same base device number (review 2026-11-14
- * item 2). Channels that differ in either arm freely; the same channel
- * re-armed is the re-arm rule above. Releasing the live channel, or a host
- * replacing its root, lets the other arm. Two device types on one root and
- * one device number cannot both be live: that would need the device type in
- * the KDF or the nonce.
+ * on E + 2), and a channel a host epoched at E collides with no wrap at all.
+ * So an arm returns NODE_IDENT_EBUSY while another channel of the same kind
+ * is running - an epoch set or this node's ceiling carried, whoever set it -
+ * under the same root (by key check value) and the same base device number
+ * (review 2026-11-14 item 2). Keyed with no epoch yet does not count.
+ * Channels that differ in root or number arm freely; the same channel
+ * re-armed is the re-arm rule above. Releasing the other channel lets the arm
+ * through: for radiant_sec that is unassign (antr_channel_unassign() ->
+ * radiant_sec_channel_release()), not a close - a closed but assigned channel
+ * keeps blocking; a compat context is released only by
+ * radiant_sec_compat_channel_release(). A host replacing its root does too.
+ * Two device types on one root and one device number cannot both be live:
+ * that would need the device type in the KDF or the nonce.
  *
  * node_ident_epoch_next() reports N as last confirmed in storage.
  */

@@ -940,13 +940,16 @@ int  radiant_sec_set_epoch_ceiling(uint8_t ch, uint32_t max_epoch);
 int  radiant_sec_raise_epoch_ceiling(uint8_t ch, uint32_t max_epoch);
 
 /*
- * For the epoch authority's arm: does ANOTHER channel that still carries a
- * ceiling (one the authority follows - a release or a different root ends
- * that) hold the same root, by key check value, and the same base device
- * number as `ch`? Two such channels live at once can meet on one epoch
- * through their wraps, a two-time pad (docs/radiant-security.md 3.5), so the
- * authority refuses the arm. False when `ch` has no context. Under the port's
- * lock; cold path, two CMACs per candidate with a matching device number.
+ * For the epoch authority's arm: is ANOTHER channel running - an epoch set or
+ * a ceiling carried, followed by the authority or epoched by a host - under
+ * the same root, by key check value, and the same base device number as
+ * `ch`? Two such channels at once share (root, epoch, devnum) outright (a
+ * host epoch equal to the arm's) or through their wraps, a two-time pad
+ * (docs/radiant-security.md 3.5), so the authority refuses the arm. Keyed
+ * with no epoch yet does not count; a release (radiant_sec_channel_release(),
+ * which unassign calls - a close does not) or a different root ends it.
+ * False when `ch` has no context. Under the port's lock; cold path, two
+ * CMACs per candidate with a matching device number.
  */
 bool radiant_sec_live_twin(uint8_t ch);
 

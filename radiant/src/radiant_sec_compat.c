@@ -635,7 +635,7 @@ bool radiant_sec_compat_live_twin(uint8_t ch)
 	for (i = 0u; c != NULL && i < COMPAT_MAX_CH; i++) {
 		const struct compat_ctx *o = &compat[i];
 
-		if (o != c && o->used && o->ceil_inv != 0 &&
+		if (o != c && o->used && (o->epoch_set || o->ceil_inv != 0) &&
 		    o->base_devnum == c->base_devnum &&
 		    radiant_sec_keys_match(&o->k_root, &c->k_root)) {
 			return true;

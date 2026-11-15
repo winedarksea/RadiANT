@@ -1531,8 +1531,8 @@ ZTEST(node_ident, test_live_arms_that_differ_in_root_or_devnum_are_allowed)
 	zassert_equal(NODE_IDENT_EBUSY, arm_sec_settled(3u));
 }
 
-/* "Live" is radiant still holding A's ceiling, not node_ident's armed bit:
- * a host replacing A's root, or a release, ends it and B may arm. */
+/* "Live" is radiant's state, not node_ident's armed bit: a host replacing
+ * A's root, or a release, ends it and B may arm. */
 ZTEST(node_ident, test_a_released_or_rekeyed_channel_no_longer_blocks_an_arm)
 {
 	booted_and_armed();
@@ -1583,3 +1583,57 @@ ZTEST(node_ident, test_a_second_live_compat_arm_under_one_root_and_devnum_is_ref
 	zassert_equal(NODE_IDENT_OK, arm_compat_settled(2u, t0));
 }
 #endif
+
+/* Reviewer finding 1: a twin the node does not follow. B keyed with the node
+ * root and number and given the node's own E by a host 0xF3 carries no
+ * ceiling, yet A armed at E beside it is the same (root, epoch, devnum) at
+ * once, no wrap needed. Any channel with an epoch counts, followed or not. */
+ZTEST(node_ident, test_a_host_epoched_twin_blocks_an_arm)
+{
+	uint32_t e0;
+	int      rc;
+
+	provisioned_and_booted();
+	zassert_equal(NODE_IDENT_OK, node_ident_epoch(&e0));
+	key_conf(RX_NODE_CH, RADIANT_SEC_SW_CONF);
+	zassert_ok(radiant_sec_set_epoch(RX_NODE_CH, e0, 0u, TEST_PERIOD));
+
+	key_conf(TX_NODE_CH, RADIANT_SEC_SW_CONF);
+	rc = arm_sec_settled(TX_NODE_CH);
+	if (rc == NODE_IDENT_OK) {
+		zassert_not_equal(sec_epoch(RX_NODE_CH), sec_epoch(TX_NODE_CH),
+				  "A armed at %u beside a host-epoched twin",
+				  sec_epoch(TX_NODE_CH));
+	}
+	zassert_equal(NODE_IDENT_EBUSY, rc, "arm A: %d", rc);
+
+	/* Keyed with no epoch yet is not running: no conflict. */
+	radiant_sec_channel_release(RX_NODE_CH);
+	key_conf(RX_NODE_CH, RADIANT_SEC_SW_CONF);
+	zassert_equal(NODE_IDENT_OK, arm_sec_settled(TX_NODE_CH));
+
+#if defined(CONFIG_RADIANT_SEC_COMPAT)
+	zassert_ok(radiant_sec_compat_set_key(RX_NODE_CH, test_root, 128,
+					      VECTOR_DEVNUM));
+	zassert_ok(radiant_sec_compat_set_epoch(RX_NODE_CH, e0, 1000000u, 0u,
+						TEST_PERIOD));
+	zassert_ok(radiant_sec_compat_set_key(TX_NODE_CH, test_root, 128,
+					      VECTOR_DEVNUM));
+	zassert_equal(NODE_IDENT_EBUSY, arm_compat_settled(TX_NODE_CH, 1000000u));
+#endif
+}
+
+/* Reviewer finding 3: a key check that cannot be computed answers "match",
+ * so the arm it guards is refused rather than let through. */
+ZTEST(node_ident, test_a_key_check_that_fails_counts_as_a_match)
+{
+	struct radiant_sec_key empty;
+	struct radiant_sec_key k;
+
+	memset(&empty, 0, sizeof(empty));
+	zassert_ok(radiant_sec_key_import(&k, test_root, 128));
+	zassert_true(radiant_sec_keys_match(&empty, &k));
+	zassert_true(radiant_sec_keys_match(&k, &empty));
+	zassert_true(radiant_sec_keys_match(&k, &k));
+	radiant_sec_key_destroy(&k);
+}

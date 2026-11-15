@@ -622,13 +622,18 @@ once its reservation is durable, so no arm restarts the counter under an epoch
 already used. And channels live at the same time must differ in root key or
 base device number, because a wrap on one may reach an epoch a later arm took:
 with `A` armed at `E`, a later arm `B` takes `E + 2`, its reservation raises
-`A`'s ceiling to `E + 3`, and `A`'s second wrap lands on `E + 2`. The node
-enforces this (review 2026-11-14 item 2): an arm is refused
-(`NODE_IDENT_EBUSY`) while another channel of the same kind, one radiant still
-holds the node's ceiling for, has the same root (compared by key check value)
-and the same base device number. Channels that differ in either are allowed,
-so several secured sensors run at once; releasing the live channel, or a host
-replacing its root, ends the conflict. Two live channels under one root and
+`A`'s ceiling to `E + 3`, and `A`'s second wrap lands on `E + 2`; a channel a
+host epoched at `E` collides with no wrap at all. The node enforces this
+(review 2026-11-14 item 2): an arm is refused (`NODE_IDENT_EBUSY`) while
+another channel of the same kind is running (an epoch set or the node's
+ceiling carried, whoever set it) under the same root (compared by key check
+value) and the same base device number. A channel keyed with no epoch yet does
+not count. Channels that differ in root or number are allowed, so several
+secured sensors run at once. The conflict ends when the other channel is
+released, which for the spread MAC means unassigned
+(`antr_channel_unassign()` calls `radiant_sec_channel_release()`; a closed but
+still assigned channel keeps blocking), or when a host replaces its root. A
+compat context is released only by `radiant_sec_compat_channel_release()`. Two live channels under one root and
 one device number (two device types on one Tier 0 number, say) stay refused:
 allowing them would need the device type in the key derivation or the nonce,
 which v1 does not have. The same floor stops a same-minute

@@ -737,11 +737,13 @@ bool radiant_sec_live_twin(uint8_t ch)
 	const struct sec_ctx *c = ctx_of(ch);
 	uint8_t               i;
 
-	/* No context: nothing to arm, and set_epoch answers ENOKEY. */
+	/* No context: nothing to arm, and set_epoch answers ENOKEY. Running is
+	 * an epoch or a ceiling, followed or not: a host-epoched twin (no
+	 * ceiling) at the node's E collides with no wrap at all. */
 	for (i = 0u; c != NULL && i < SEC_MAX_CH; i++) {
 		const struct sec_ctx *o = &sec[i];
 
-		if (o != c && o->used && o->ceil_inv != 0 &&
+		if (o != c && o->used && (o->epoch_set || o->ceil_inv != 0) &&
 		    o->base_devnum == c->base_devnum &&
 		    radiant_sec_keys_match(&o->k_root, &c->k_root)) {
 			return true;
