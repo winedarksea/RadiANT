@@ -1650,6 +1650,190 @@ ZTEST(api, test_sec_host_a_clear_acquiring_frame_still_arrives_at_once)
 	acq_done();
 }
 
+/* `pay` on the air at t as acknowledged data (control byte 0xAA) on the
+ * receiver's channel ID. The search acquires on it like on a broadcast. */
+static void acq_air_acked(radiant_time_t t, const uint8_t pay[8])
+{
+	uint8_t frame[FAKE_RADIO_AIR_FRAME_MAX];
+	uint8_t len = fake_radio_build_ant_frame(frame, HOST_DEVNUM,
+						 HOST_DEVTYPE, HOST_TRANS, pay);
+
+	frame[6] = 0xAAu;
+	zassert_equal(RADIANT_RADIO_OK_RC, fake_radio_air_frame(t, frame, len),
+		      "could not put the frame on the air");
+}
+
+ZTEST(api, test_sec_host_an_acked_acquiring_frame_follows_d15)
+{
+	/* Re-review of item 1: the acquiring frame was ingested as a broadcast
+	 * whatever its message type. D15 says a secured-range page sent as
+	 * acknowledged data is dropped and counted, never delivered; here it
+	 * acquired the channel and was delivered, unverified. */
+	static const uint8_t forged[8] = { VD_PAGE, 0x00u, 0xEEu, 0xEEu,
+					   0xEEu,   0xEEu, 0xEEu, 0xEEu };
+	struct radiant_sec_stats st0;
+	struct radiant_sec_stats st1;
+	struct acq_bd            n;
+	radiant_time_t           t;
+	uint32_t                 from;
+
+	vd_setup(RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_VERDICT_EVENT, 2u);
+	k_mutex_lock(&api_lock, K_FOREVER);
+	radiant_sec_get_stats(VD_RX_CH, &st0);
+	k_mutex_unlock(&api_lock);
+	from = api_msglog_count();
+	t = acq_search_t();
+	acq_air_acked(t, forged);
+	acq_run_to(t + 5000u);
+	zassert_equal(RADIANT_CH_STATE_TRACKING,
+		      radiant_channel_state_get(VD_RX_CH),
+		      "setup: the acked frame did not acquire the channel");
+	acq_settle();
+	k_mutex_lock(&api_lock, K_FOREVER);
+	radiant_sec_get_stats(VD_RX_CH, &st1);
+	k_mutex_unlock(&api_lock);
+	n = acq_count(from, VD_PAGE);
+	zassert_equal(0u, n.all,
+		      "an acknowledged-data secured-range acquiring frame was "
+		      "delivered, judged as a broadcast");
+	zassert_equal(st0.dropped_non_broadcast + 1u, st1.dropped_non_broadcast,
+		      "the frame was not counted as a dropped non-broadcast");
+	acq_done();
+}
+
+ZTEST(api, test_sec_host_an_acked_clear_acquiring_frame_still_arrives)
+{
+	/* The control: acknowledged data outside the secured range is not the
+	 * secured stream, and reaches the host as it did before the hook. */
+	static const uint8_t clear[8] = { 0x50u, 0x00u, 1u, 2u, 3u, 4u, 5u,
+					  6u };
+	struct acq_bd        n;
+	radiant_time_t       t;
+	uint32_t             from;
+
+	vd_setup(RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_DROP_UNVER, 2u);
+	from = api_msglog_count();
+	t = acq_search_t();
+	acq_air_acked(t, clear);
+	acq_run_to(t + 5000u);
+	zassert_equal(RADIANT_CH_STATE_TRACKING,
+		      radiant_channel_state_get(VD_RX_CH),
+		      "setup: the acked frame did not acquire the channel");
+	(void)radiant_event_drain(0u);
+	n = acq_count(from, 0x50u);
+	zassert_equal(1u, n.page,
+		      "a clear acked acquiring frame did not arrive at once");
+	zassert_equal(1u, n.all, "and nothing else did");
+	acq_done();
+}
+
+/* A keyed background scan whose channel ID wildcards the device and
+ * transmission types, as a scan does; the sender keyed as in
+ * vd_setup_pair(). */
+static void acq_scan_setup(uint8_t switches)
+{
+	int rc[4];
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_network_address_set(0u, host_net_key));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_assign(
+			      VD_RX_CH, (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
+			      0u, (uint8_t)ANTW_EXT_PARAM_ALWAYS_SEARCH));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_id_set(VD_RX_CH, HOST_DEVNUM, 0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_period_set(VD_RX_CH,
+					      RADIANT_CHANNEL_PERIOD_ANT_PLUS));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_radio_freq_set(VD_RX_CH, HOST_RF));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_open(VD_RX_CH));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_key_set(VD_RX_CH, 128u, host_key));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_config(VD_RX_CH, switches, 2u, 0x01u, 0x0Fu));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_epoch_set(VD_RX_CH, 0u, VD_EPOCH, 0u));
+	k_mutex_lock(&api_lock, K_FOREVER);
+	rc[0] = radiant_sec_set_key(VD_TX_CH, host_key, 128, HOST_DEVNUM);
+	rc[1] = radiant_sec_set_devnum(VD_TX_CH, HOST_DEVNUM);
+	rc[2] = radiant_sec_configure(
+		VD_TX_CH,
+		(uint8_t)(switches & (RADIANT_SEC_SW_CONF | RADIANT_SEC_SW_AUTH)),
+		2u, 0x01u, 0x0Fu);
+	rc[3] = radiant_sec_set_epoch(VD_TX_CH, VD_EPOCH, 0u,
+				      RADIANT_CHANNEL_PERIOD_ANT_PLUS);
+	vd_anchor = (uint64_t)radiant_radio_now();
+	k_mutex_unlock(&api_lock);
+	for (int i = 0; i < 4; i++) {
+		zassert_equal(RADIANT_SEC_OK, rc[i], "sender setup step %d", i);
+	}
+	(void)radiant_event_drain(0u);
+}
+
+ZTEST(api, test_sec_host_a_released_scan_frame_keeps_its_sender_id)
+{
+	/*
+	 * Re-review of item 1: a scan frame the hook holds is delivered later
+	 * by radiant_sec_deliver(), which named the channel's wildcard ID and
+	 * dropped the frame's RSSI. For a scan the sender's ID and RSSI on
+	 * each frame are the point. A clear page from the same sender, posted
+	 * at once, is the reference.
+	 */
+	static const uint8_t clear[8] = { 0x50u, 0x00u, 1u, 2u, 3u, 4u, 5u,
+					  6u };
+	const uint8_t        cfg = (uint8_t)(ANTW_LIB_CONFIG_MESG_OUT_INC_DEVICE_ID |
+					     ANTW_LIB_CONFIG_MESG_OUT_INC_RSSI);
+	const uint8_t       *sec = NULL;
+	const uint8_t       *clr = NULL;
+	uint8_t              len_sec = 0u;
+	uint8_t              len_clr = 0u;
+	radiant_time_t       t;
+	uint32_t             from;
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_lib_config_set(cfg));
+	acq_scan_setup(RADIANT_SEC_SW_CONF);
+	from = api_msglog_count();
+	t = acq_search_t();
+	(void)acq_air_genuine(t, 1u);
+	acq_air_raw(t + 50000u, clear);
+	acq_run_to(t + 60000u);
+	acq_settle();
+	for (uint32_t k = from; k < api_msglog_count(); k++) {
+		uint8_t        id;
+		uint8_t        len;
+		const uint8_t *d = api_msglog_get(k, &id, &len);
+
+		if (id != (uint8_t)ANTW_MESG_BROADCAST_DATA_ID ||
+		    d[0] != VD_RX_CH) {
+			continue;
+		}
+		if (d[1] == VD_PAGE) {
+			sec = d;
+			len_sec = len;
+		} else if (d[1] == 0x50u) {
+			clr = d;
+			len_clr = len;
+		}
+	}
+	(void)antr_lib_config_clear(cfg);
+	zassert_not_null(clr, "setup: the clear page did not arrive");
+	zassert_not_null(sec, "setup: the secured page was not released");
+	zassert_true(len_clr >= 17u && clr[12] == HOST_DEVTYPE,
+		     "setup: the clear page carries no sender ID and RSSI");
+	zassert_equal(len_clr, len_sec, "the released page's extension differs");
+	zassert_equal(clr[9], sec[9],
+		      "the released page's extension flags differ (RSSI lost)");
+	zassert_mem_equal(&clr[10], &sec[10], 4u,
+			  "a released scan frame carried the channel's wildcard "
+			  "ID, not the sender's");
+	zassert_equal(clr[15], sec[15],
+		      "a released scan frame lost the sender's RSSI");
+	acq_done();
+}
+
 /*
  * The review's side point: the receive window state is not discarded on
  * RX_FAIL_GO_TO_SEARCH. Four genuine packets, then a forgery in the next
@@ -1767,8 +1951,8 @@ ZTEST(api, test_sec_host_a_forgery_across_a_dropout_is_not_credited)
 					   RADIANT_SEC_SW_VERDICT_EVENT);
 	judged = acq_expect_not_credited(from, ctr,
 					 "the forgery across the dropout");
-	TC_PRINT("forgery at counter %u settled %s\n", ctr,
-		 judged ? "by a verdict or a gap" : "by the host deadline");
+	zassert_true(judged, "setup: no verdict or seq gap ever settled the "
+		     "forgery at counter %u, so nothing was checked", ctr);
 	acq_done();
 }
 
@@ -1785,10 +1969,14 @@ ZTEST(api, test_sec_host_a_forged_reacquiring_frame_is_not_credited)
 	 * acquisition the first verdict only sets the host's baseline, which is
 	 * why the tracked phase is needed.
 	 *
-	 * The window claimed is the one after the next slot: in this harness
-	 * the first tracked slot after an acquisition is always missed (it is
-	 * in both phases' logs), and a genuine window missing a packet fails on
-	 * its own. So the forged packet is 5 or 6 periods older than the verdict,
+	 * The window claimed is the one after the next slot. The first tracked
+	 * slot after an acquisition is always missed, and that is the core
+	 * search's behaviour, not the test harness's: the search RX chunk keeps
+	 * running after its only searching channel acquires (radiant_search_end()
+	 * only clears the record), so frame 1 is heard inside the chunk and
+	 * dropped, and the host sees RX_FAIL after every acquiring frame
+	 * (recorded as an open TODO, not changed here). A genuine window missing
+	 * a packet fails on its own. So the forged packet is 5 or 6 periods older than the verdict,
 	 * past the resolver's 2W-1 periods + slack, and the check here leaves
 	 * the deadline out; tools/test_ant_sec.py has the in-deadline case.
 	 */

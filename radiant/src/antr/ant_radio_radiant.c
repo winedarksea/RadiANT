@@ -649,6 +649,43 @@ static void api_post_rx(uint8_t ch, uint8_t msg_id,
 
 #if defined(CONFIG_RADIANT_SEC)
 /*
+ * The sender of each frame the search handed to the RX hook and the hook held.
+ * radiant_sec carries a held page with its t_sync only, and a background scan's
+ * channel ID wildcards the device and transmission types, so without this a
+ * released scan frame went up under the channel's wildcard ID with no RSSI,
+ * when the per-frame sender and RSSI are what a scan is for. Written in the
+ * radio interrupt (api_search_acquired()), read in radiant_sec_deliver(),
+ * matched on t_sync alone: one radio hears one frame per instant, and a frame
+ * offered to two channels has the same sender on both. Only the device and
+ * transmission types are kept: a keyed channel has a non-zero device number
+ * (0xF2 refuses one without) and its search matches only that number. The
+ * table is cleared with the stack; a cleared entry could match only a frame
+ * heard at an instant whose low 32 bits are zero. Eight entries:
+ * under the deliver policy a frame is released at the next pump, and under
+ * DROP_UNVER a scan rarely completes a window at all (docs/radiant-security.md
+ * 3.2). A frame that has fallen out goes up under the channel's ID, as before.
+ * t_sync_exact stays true for every released frame, tracked or searched, as it
+ * was: the backends capture t_sync at the ADDRESS event.
+ */
+#define API_SEC_SEEN_N 8u
+
+static struct api_sec_seen {
+	uint32_t t_lo;
+	uint8_t  types[2]; /* device_type, trans_type */
+	uint8_t  rssi[2];  /* has_rssi, rssi_dbm */
+} api_sec_seen[API_SEC_SEEN_N];
+static uint8_t api_sec_seen_next;
+
+/* Each pair is copied as one, so each must sit together at both ends. */
+BUILD_ASSERT(offsetof(struct radiant_channel_id, trans_type) ==
+	     offsetof(struct radiant_channel_id, device_type) + 1u);
+BUILD_ASSERT(offsetof(struct radiant_search_result, rssi_dbm) ==
+	     offsetof(struct radiant_search_result, has_rssi) + 1u);
+BUILD_ASSERT(offsetof(struct radiant_rx_event, rssi_dbm) ==
+	     offsetof(struct radiant_rx_event, has_rssi) + 1u);
+BUILD_ASSERT((API_SEC_SEEN_N & (API_SEC_SEEN_N - 1u)) == 0u);
+
+/*
  * Where radiant_sec_pump() delivers plaintext. A direct call that overrides a weak
  * definition: a registered ops struct would be a .data relocation the linker
  * cannot discard, and the unit-test app has no radiant_api.c. Event-thread context.
@@ -680,6 +717,19 @@ void radiant_sec_deliver(uint8_t ch, const uint8_t *pay, uint8_t len,
 	hal.t_sync = (radiant_time_t)t_sync;
 	/* Carried from the radio's ADDRESS-event capture, not re-read when the pump runs. */
 	hal.t_sync_exact = true;
+
+	/* A frame the search held: its own sender and RSSI. No crit
+	 * section: the interrupt rewrites an entry only eight held search frames
+	 * later, and this loop is a few dozen instructions. */
+	for (uint8_t i = 0u; i < API_SEC_SEEN_N; i++) {
+		const struct api_sec_seen *s = &api_sec_seen[i];
+
+		if (s->t_lo == (uint32_t)t_sync) {
+			memcpy(&id.device_type, s->types, 2u);
+			memcpy(&hal.has_rssi, s->rssi, 2u);
+			break;
+		}
+	}
 
 	api_post_rx(ch, (uint8_t)ANTW_MESG_BROADCAST_DATA_ID, &id, &hal, pay,
 		    len, 0u, false);
@@ -1383,12 +1433,30 @@ static void api_search_acquired(uint8_t channel,
 	 * The acquiring frame, a re-acquiring one, and every frame a background
 	 * scan hears come only through here: posted as they stood, they reached
 	 * the host as ciphertext under X_CONF and with no verdict under X_AUTH
-	 * (review 2026-11-14, item 1). A deferred or dropped frame has still
-	 * acquired the channel above. */
-	if (radiant_sec_rx_ingest(channel, r->frame.payload,
-				  r->frame.payload_len, true,
-				  (uint64_t)r->t_sync) != RADIANT_SEC_RX_PLAIN) {
-		post = false;
+	 * (review 2026-11-14, item 1). The search acquires on acknowledged data
+	 * too, so the message type is passed as the tracked switch does: D15
+	 * drops a secured-range page that is not a broadcast. A deferred or
+	 * dropped frame has still acquired the channel above. */
+	{
+		int sec = radiant_sec_rx_ingest(
+			channel, r->frame.payload, r->frame.payload_len,
+			radiant_frame_msg_type(r->frame.ctrl_byte) ==
+				RADIANT_MSG_BROADCAST,
+			(uint64_t)r->t_sync);
+
+		if (sec == RADIANT_SEC_RX_DEFER) {
+			/* For radiant_sec_deliver(): who sent it. */
+			struct api_sec_seen *s =
+				&api_sec_seen[api_sec_seen_next++ &
+					      (API_SEC_SEEN_N - 1u)];
+
+			s->t_lo = (uint32_t)r->t_sync;
+			memcpy(s->types, &r->id.device_type, 2u);
+			memcpy(s->rssi, &r->has_rssi, 2u);
+		}
+		if (sec != RADIANT_SEC_RX_PLAIN) {
+			post = false;
+		}
 	}
 #endif
 	if (post) {
@@ -2963,6 +3031,9 @@ static void api_reset_state(void)
 	uint8_t i;
 
 	memset(api_ch, 0, sizeof(api_ch));
+#if defined(CONFIG_RADIANT_SEC)
+	memset(api_sec_seen, 0, sizeof(api_sec_seen));
+#endif
 	memset(api_net_addr, 0, sizeof(api_net_addr));
 	memset(api_net_valid, 0, sizeof(api_net_valid));
 	memset(api_adv_burst, 0, sizeof(api_adv_burst));

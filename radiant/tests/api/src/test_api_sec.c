@@ -586,12 +586,12 @@ ZTEST(api, test_sec_an_ack_during_the_master_post_never_carries_plaintext)
 	}
 	seam_armed = false;
 	zassert_true(seam_called, "setup: no master post ran the seam");
-	if (seam_acks) {
-		zassert_true(memcmp(seam_ack, sec_payload, sizeof(seam_ack)) !=
-				     0,
-			     "an acknowledgement during the master post "
-			     "carried the host's plaintext");
-	}
+	/* The previous slot's ciphertext is still the one published, so the
+	 * master does acknowledge - with that. */
+	zassert_true(seam_acks, "setup: the master would not acknowledge");
+	zassert_true(memcmp(seam_ack, sec_payload, sizeof(seam_ack)) != 0,
+		     "an acknowledgement during the master post carried the "
+		     "host's plaintext");
 	sec_close();
 }
 #endif

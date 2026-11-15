@@ -447,9 +447,27 @@ acknowledged data, skips the MAC machinery entirely, and is delivered as
 implicitly trusted data. Nor by how the frame was heard: the frame that
 acquires or re-acquires a channel from its search, and every frame a
 background-scan channel hears (a scan never leaves its search), take the same
-receive path as a tracked broadcast, so under `X_CONF` they arrive decrypted
-and under `X_AUTH` they are judged, and held under `DROP_UNVER`, like any other
-packet (security review 2026-11-14, item 1).
+receive path as a tracked broadcast, by their own message type: an acquiring
+frame sent as acknowledged data falls under the rule above. Under `X_CONF`
+they arrive decrypted and under `X_AUTH` they are judged, and held under
+`DROP_UNVER`, like any other packet; a held frame is released with its own
+sender ID and RSSI (security review 2026-11-14, item 1).
+
+**What a key on a background scan gives.** A scan is not refused a key, but
+under `X_AUTH` it is of little use:
+
+- A scan rarely hears every packet of a window and the next one, so it rarely
+  completes a window. Under `DROP_UNVER` it delivers essentially nothing in the
+  secured range; under the deliver policy everything in the secured range is
+  unverified.
+- Every frame the scan hears shares the channel's one window state. Another
+  device's page in the secured range (the same device number, with a different
+  device or transmission type, which the scan's wildcard admits) is absorbed
+  into the sender's windows and breaks or closes them. That is a denial of
+  service, not a forgery: nothing it sends verifies.
+
+`X_CONF` alone works on a scan as on any channel: each page is decrypted on
+its own.
 
 **Non-broadcast traffic is otherwise outside the secured stream.** The rule
 above is the whole of it inbound: acknowledged data and bursts on a secured
