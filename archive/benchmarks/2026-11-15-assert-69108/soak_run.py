@@ -97,7 +97,11 @@ class ConsoleWatcher:
                         merge_fields(cur["fields"], parse_kv(clean))
             if BANNER_MARK in clean:
                 self.banners += 1
-                if self.banners > 1:
+                # The first banner is the flash's own boot only if the capture
+                # caught it as its first line.  A capture that opened late (the
+                # boot already printed) starts mid-run, so ANY banner it sees is
+                # a reboot - counting only banners after the first missed it.
+                if self.banners > 1 or not self.first_is_banner:
                     self.reboots.append(ts)
                     if self.stop_on_reboot:
                         self.stop_ev.set()
@@ -157,8 +161,12 @@ def sha256_file(path):
     return h.hexdigest()
 
 
-def make_row(leg, label, sha, start, wsum, ended_by=None):
-    """The one-line-per-leg legs.tsv row, from watcher.summarize()."""
+def make_row(leg, label, sha, start, wsum, ended_by=None, deaths=0):
+    """The one-line-per-leg legs.tsv row, from watcher.summarize().
+
+    deaths: how many times the console capture lost its port.  A leg with any
+    is marked in its result, so a console that went dark cannot read as
+    "clean" (no assert seen is not no assert happened)."""
     asserts = wsum["asserts"]
     if asserts:
         a = asserts[0]
@@ -183,6 +191,8 @@ def make_row(leg, label, sha, start, wsum, ended_by=None):
         st = wsum["last_stats"]
         vals = {k: st.get(k, "") for k in ("placed", "granted", "blocked", "ext", "skip")}
         since_open = ""
+    if deaths:
+        result += f" (console lost {deaths}×)"
     row = {"leg": leg, "image": label or "", "sha12": (sha or "")[:12], "start": start,
            "result": result, "since_open_s": "" if since_open is None else since_open,
            "reboots": wsum["reboots"], "asserts": wsum["assert_count"]}
@@ -201,6 +211,7 @@ def append_row(path, row):
 def selftest(path, args):
     w = ConsoleWatcher(args.continue_after_assert, args.stop_on_reboot, args.grace)
     last = None
+    deaths = 0
     with open(path, encoding="utf-8", errors="replace") as f:
         for raw in f:
             m = LINE_RE.match(raw.rstrip("\r\n"))
@@ -208,13 +219,15 @@ def selftest(path, args):
                 continue
             ts = datetime.datetime.fromisoformat(m.group(1))
             last = ts
+            if "[cap] PORT DIED" in m.group(2):
+                deaths += 1
             w.feed(ts, m.group(2))
     wsum = w.summarize(last)
     leg = os.path.basename(path).replace("-console.log", "")
-    row = make_row(leg, args.image_label, args.image_sha256, "", wsum)
+    row = make_row(leg, args.image_label, args.image_sha256, "", wsum, deaths=deaths)
     print("selftest:", path)
     print("console_lines", wsum["console_lines"], "first_console_line", wsum["first_console_line"],
-          "first_line_is_banner", wsum["first_line_is_banner"])
+          "first_line_is_banner", wsum["first_line_is_banner"], "| port_deaths", deaths)
     print("reboots", wsum["reboots"], wsum["reboot_times"], "| assert_count", wsum["assert_count"])
     for i, a in enumerate(wsum["asserts"]):
         sb = a["since_boot_s"]
@@ -244,6 +257,7 @@ class ResilientConsole:
         with open(self.path, "a", encoding="utf-8", errors="replace") as f:
             buf = b""
             while not self.stop_ev.is_set():
+                s = None
                 try:
                     s = serial.Serial(self.port, 115200, timeout=0.2)
                     s.dtr = True   # the log VCOM prints nothing without DTR
@@ -266,6 +280,14 @@ class ResilientConsole:
                             f.flush()
                     s.close()
                 except Exception as e:
+                    # Close the dead handle first: on Windows a COM port that is
+                    # still open in this process cannot be opened again, so every
+                    # retry would fail until the leg ended.
+                    if s is not None:
+                        try:
+                            s.close()
+                        except Exception:
+                            pass
                     self.deaths.append(datetime.datetime.now().isoformat())
                     f.write(f"[{datetime.datetime.now().isoformat()}] [cap] PORT DIED: {e!r}\n")
                     f.flush()
@@ -519,7 +541,9 @@ def main():
             except BaseException as e:
                 print(f"post-leg peer check failed: {e!r}", flush=True)
             cap = state.get("cap")
-            summ["cap"] = str(cap.stop()) if cap else None
+            capres = cap.stop() if cap else None
+            summ["cap"] = str(capres) if capres else None
+            deaths = len(capres["deaths"]) if capres else 0
             for fh in files:
                 try:
                     fh.close()
@@ -532,7 +556,8 @@ def main():
                         ended_by=state.get("ended_by"),
                         elapsed=(time.time() - state["t0"]) if "t0" in state else time.time() - tstart,
                         end=end.isoformat(timespec="seconds"))
-            row = make_row(os.path.basename(base), args.image_label, sha, start, wsum, state.get("ended_by"))
+            row = make_row(os.path.basename(base), args.image_label, sha, start, wsum, state.get("ended_by"),
+                           deaths=deaths)
             summ["row"] = row
             try:
                 with open(base + "-summary.json", "w", encoding="utf-8") as f:
