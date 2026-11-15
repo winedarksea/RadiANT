@@ -499,7 +499,7 @@ int profile_private_on_command(struct profile_private *pp, uint64_t now_us,
 		return -EALREADY;
 	}
 
-	min_us =(uint64_t)(pp->cfg.cmd_min_s != 0u ? pp->cfg.cmd_min_s
+	min_us = (uint64_t)(pp->cfg.cmd_min_s != 0u ? pp->cfg.cmd_min_s
 						    : PROFILE_PRIVATE_CMD_MIN_S) *
 		 US_PER_S;
 	if (pp->ever_cmd && (now_us - pp->last_cmd_us) < min_us) {
@@ -737,7 +737,17 @@ void profile_private_sent(void *user, const uint8_t *body)
 	}
 
 	if (announcing(pp) && pp->msgs >= pp->switch_at) {
-		(void)commit(pp, pp->state == PROFILE_PRIVATE_STATE_ANNOUNCING);
+		bool    to_private = pp->state == PROFILE_PRIVATE_STATE_ANNOUNCING;
+		uint8_t reason = pp->reason;
+
+		if (commit(pp, to_private) != 0 &&
+		    reason == PROFILE_PRIVATE_REASON_COMMAND) {
+			/* The command never took effect, so its tag is not an
+			 * accepted one: the owner's resend in the same interval
+			 * must not meet the replay floor. The rate limit stands,
+			 * since the listeners paid for the countdown. */
+			pp->have_last_tag[to_private ? 0u : 1u] = false;
+		}
 	}
 }
 

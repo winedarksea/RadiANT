@@ -2310,8 +2310,11 @@ data** exactly as an enrolment frame does:
   one (counted as `refused_replay`). The cost: the same operation cannot be
   issued twice in one interval, because two genuine copies are the same bytes
   as a replay. A retransmission while already in the target state is still
-  acknowledged as idempotent. The floor lives in RAM, so a re-arm without a
-  reboot (same epoch) clears it, as it clears the rate limit.
+  acknowledged as idempotent. A transition that fails at commit (the countdown
+  ran out but the channel would not open or close) does not arm the floor, so
+  the owner can resend in the same interval; the rate limit still counts it.
+  The floor lives in RAM, so a re-arm without a reboot (same epoch) clears it,
+  as it clears the rate limit.
 - **There is no policy operation and its absence is deliberate.** An
   unrecognised operation is counted and dropped rather than reserved for a
   later meaning, so a well-tagged message shaped like a policy change changes
