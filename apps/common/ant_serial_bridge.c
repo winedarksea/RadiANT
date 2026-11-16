@@ -1626,6 +1626,20 @@ static void process_byte(uint8_t b)
 			parser.running_xor = b;
 			break;		/* stay in S_LEN */
 		}
+		if (b > ANTW_MAX_SIZE_VALUE) {
+			/* No message is this long, so this frame lost a byte
+			 * (on a UART, a receiver overrun). Most often it was
+			 * the LEN itself, and b is the message id: taken as a
+			 * length it would swallow up to 255 bytes - the host's
+			 * next several commands, each resent and each eaten,
+			 * for as long as the host keeps the link quiet. Hunt
+			 * for the next SYNC instead; this byte is counted as
+			 * the S_SYNC hunt counts the rest of the frame. The
+			 * buffer would also truncate such a frame below. */
+			ant_health_note(ANT_HEALTH_HOST_DESYNC);
+			parser.state = S_SYNC;
+			break;
+		}
 		parser.msg_len = b;
 		parser.running_xor ^= b;
 		parser.body_idx = 0;

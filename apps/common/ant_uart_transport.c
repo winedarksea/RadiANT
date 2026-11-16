@@ -86,7 +86,136 @@ static K_SEM_DEFINE(tx_space_sem, 0, 1);
 static volatile bool transport_up;
 static volatile uint32_t rx_dropped;
 
+/* ── The CC13xx/CC26xx UART: hardware FIFO on ───────────────────────────────
+ *
+ * Zephyr's uart_cc13xx_cc26xx driver turns the UART's 32-byte FIFOs OFF
+ * ("character mode": a 1-byte holding register each way). At 57600 baud a
+ * byte lands every 174 us, so with the FIFO off any span of more than about
+ * one byte time in which this ISR cannot run overruns the receiver and
+ * silently loses a host byte. Under the C2 load (9 tracked channels and
+ * Zwift's 4.5 s scan reopen) that happened every few tens of seconds
+ * (archive/benchmarks/2026-11-16-ti-cmd-stall/): the UART's overrun flag
+ * counted one overrun per lost frame, 0xF6 host_csum and host_desync moved
+ * with it, and the host saw commands that were never answered.
+ *
+ * One lost byte costs more than one command. Lose a LEN byte and the message
+ * id is read as the length; lose a short message's last byte and the NEXT
+ * frame's SYNC is taken as its checksum. Either way the parser swallows the
+ * host's following command too - on the bench, the scan's UNASSIGN and then
+ * its ASSIGN, which the host resent and had refused with code 21 because the
+ * UNASSIGN never ran. process_byte()'s S_LEN bound in ant_serial_bridge.c
+ * limits that second-order damage; this removes the first-order loss.
+ *
+ * With the FIFO on, the receive interrupt fires at 8 bytes (or on the receive
+ * timeout, 32 bit periods after the last byte, for a shorter frame), and the
+ * ISR can be held off for 24 byte times - about 4 ms - before a byte is lost.
+ *
+ * Two of the driver's interrupt helpers are wrong in FIFO mode, so this ISR
+ * reads the hardware itself:
+ *   - irq_is_pending() looks at TX and RX only. A frame shorter than the RX
+ *     trigger level raises only the receive TIMEOUT interrupt; a loop gated
+ *     on is_pending() would never read it, never clear it, and re-enter
+ *     forever. Draining the FIFO until it is empty clears both.
+ *   - irq_tx_ready() is !UARTBusy(), "transmitter completely idle". In FIFO
+ *     mode the TX interrupt fires when the FIFO drains through its trigger
+ *     level, while the line is still busy: gated on idle, the ISR would
+ *     refuse to refill and return with the interrupt still raised, spinning
+ *     at priority 0 until the last bits left the shifter. Space in the FIFO
+ *     is the right test.
+ */
+#if DT_NODE_HAS_COMPAT(ANT_UART_NODE, ti_cc13xx_cc26xx_uart)
+#include <driverlib/uart.h>
+#define ANT_UART_TI_FIFO 1
+#define ANT_UART_BASE ((uint32_t)DT_REG_ADDR(ANT_UART_NODE))
+#endif
+
 /* ── UART interrupt handler ────────────────────────────────────────────────── */
+
+/* One FIFO read into the RX ring. Returns the number of bytes read. */
+static int rx_service(const struct device *dev)
+{
+	uint8_t chunk[32];
+	int n = uart_fifo_read(dev, chunk, sizeof(chunk));
+
+	if (n > 0) {
+		uint32_t put = ring_buf_put(&ant_rx_ring_buf, chunk, (uint32_t)n);
+
+		if (put < (uint32_t)n) {
+			rx_dropped += (uint32_t)n - put;
+		}
+
+		if (put > 0) {
+			k_sem_give(&ant_rx_sem);
+		}
+	}
+
+	return n;
+}
+
+/* Refill the TX FIFO from the ring, or turn the TX interrupt off once the ring
+ * is empty. */
+static void tx_service(const struct device *dev)
+{
+	uint8_t *data;
+	uint32_t claim = ring_buf_get_claim(&ant_uart_tx_ring, &data, 64);
+
+	if (claim == 0) {
+		ring_buf_get_finish(&ant_uart_tx_ring, 0);
+		uart_irq_tx_disable(dev);
+	} else {
+		int sent = uart_fifo_fill(dev, data, (int)claim);
+
+		ring_buf_get_finish(&ant_uart_tx_ring,
+				    sent > 0 ? (uint32_t)sent : 0);
+		k_sem_give(&tx_space_sem);
+	}
+}
+
+#if defined(ANT_UART_TI_FIFO)
+
+static void ant_uart_isr(const struct device *dev, void *user_data)
+{
+	ARG_UNUSED(user_data);
+
+	for (;;) {
+		bool worked = false;
+
+		/* Until the FIFO is empty: clears both RX and RX timeout. */
+		while (UARTCharsAvail(ANT_UART_BASE)) {
+			if (rx_service(dev) <= 0) {
+				break;
+			}
+			worked = true;
+		}
+
+		/* The TX interrupt is unmasked exactly while the ring may hold
+		 * data (ant_uart_write() unmasks after every put; tx_service()
+		 * masks it on an empty ring). A fill that reaches the trigger
+		 * level clears the TX interrupt; the loop stops at a full
+		 * FIFO. */
+		if ((HWREG(ANT_UART_BASE + UART_O_IMSC) & UART_INT_TX) &&
+		    UARTSpaceAvail(ANT_UART_BASE)) {
+			tx_service(dev);
+			worked = true;
+		}
+
+		if (!worked) {
+			break;
+		}
+	}
+}
+
+static void ant_uart_hw_fifo_enable(void)
+{
+	/* RX at 1/4 full (8 bytes): prompt for a burst, 24 bytes of slack
+	 * after it. TX at 1/2: refill with 16 bytes still queued. */
+	UARTFIFOLevelSet(ANT_UART_BASE, UART_FIFO_TX4_8, UART_FIFO_RX2_8);
+	UARTFIFOEnable(ANT_UART_BASE);
+	UARTIntClear(ANT_UART_BASE, UART_INT_RT);
+	UARTIntEnable(ANT_UART_BASE, UART_INT_RT);
+}
+
+#else /* !ANT_UART_TI_FIFO */
 
 static void ant_uart_isr(const struct device *dev, void *user_data)
 {
@@ -94,41 +223,20 @@ static void ant_uart_isr(const struct device *dev, void *user_data)
 
 	while (uart_irq_update(dev) && uart_irq_is_pending(dev)) {
 		if (uart_irq_rx_ready(dev)) {
-			uint8_t chunk[32];
-			int n = uart_fifo_read(dev, chunk, sizeof(chunk));
-
-			if (n > 0) {
-				uint32_t put = ring_buf_put(&ant_rx_ring_buf,
-							    chunk, (uint32_t)n);
-
-				if (put < (uint32_t)n) {
-					rx_dropped += (uint32_t)n - put;
-				}
-
-				if (put > 0) {
-					k_sem_give(&ant_rx_sem);
-				}
-			}
+			(void)rx_service(dev);
 		}
 
 		if (uart_irq_tx_ready(dev)) {
-			uint8_t *data;
-			uint32_t claim = ring_buf_get_claim(&ant_uart_tx_ring,
-							    &data, 64);
-
-			if (claim == 0) {
-				ring_buf_get_finish(&ant_uart_tx_ring, 0);
-				uart_irq_tx_disable(dev);
-			} else {
-				int sent = uart_fifo_fill(dev, data, (int)claim);
-
-				ring_buf_get_finish(&ant_uart_tx_ring,
-						    sent > 0 ? (uint32_t)sent : 0);
-				k_sem_give(&tx_space_sem);
-			}
+			tx_service(dev);
 		}
 	}
 }
+
+static inline void ant_uart_hw_fifo_enable(void)
+{
+}
+
+#endif /* ANT_UART_TI_FIFO */
 
 /* ── Transmit ──────────────────────────────────────────────────────────────── */
 
@@ -254,6 +362,8 @@ int ant_transport_enable(void)
 		return ret;
 	}
 
+	/* Before RX is unmasked; see the CC13xx/CC26xx note above. */
+	ant_uart_hw_fifo_enable();
 	uart_irq_rx_enable(ant_uart_dev);
 	transport_up = true;
 
