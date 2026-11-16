@@ -381,3 +381,30 @@ endif()
 if(CONFIG_RADIANT_BACKEND_NRF OR CONFIG_RADIANT_BACKEND_CC26XX)
   zephyr_library_sources(src/radiant_addr_split.c)
 endif()
+
+# ── -O2 for the hot files ───────────────────────────────────────────────────
+#
+# The scheduler pass, the antr runtime's radio callbacks and the backend's
+# ISRs are where the arm lead is spent (2026-11-15 performance plan, B3).
+# CONFIG_RADIANT_HOT_PATH_O2 compiles those files, and only those, at -O2.
+#
+# A source-file property, not zephyr_library_compile_options(), which would
+# reach every file in the library. It must be set here, in the directory that
+# called zephyr_library(): source properties are visible only to targets
+# created in the same directory, and from anywhere else this is silently
+# ignored. Per-source COMPILE_OPTIONS come after the target's and Zephyr's own
+# options on the compile line, so -O2 follows -Os and GCC uses the last one.
+# compile_commands.json is where to check it.
+if(CONFIG_RADIANT_HOT_PATH_O2)
+  set(radiant_hot_files src/radiant_sched.c)
+  if(CONFIG_RADIANT_ANTR_API)
+    list(APPEND radiant_hot_files src/antr/ant_radio_radiant.c)
+  endif()
+  if(CONFIG_RADIANT_BACKEND_NRF)
+    list(APPEND radiant_hot_files src/radiant_radio_nrf.c)
+  elseif(CONFIG_RADIANT_BACKEND_CC26XX)
+    list(APPEND radiant_hot_files src/radiant_radio_cc26xx.c)
+  endif()
+  set_source_files_properties(${radiant_hot_files}
+    PROPERTIES COMPILE_OPTIONS -O2)
+endif()

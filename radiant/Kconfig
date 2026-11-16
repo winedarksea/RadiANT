@@ -1544,6 +1544,26 @@ config RADIANT_DIAG_COUNTERS
 	  few dozen u32 increments on the radio paths and changes nothing a
 	  host sees unless the host asks.
 
+config RADIANT_HOT_PATH_O2
+	bool "compile the scheduler, the antr runtime and the radio backend at -O2"
+	default n
+	help
+	  Adds -O2 to the compile line of three files: radiant_sched.c,
+	  antr/ant_radio_radiant.c (when RADIANT_ANTR_API is on) and the
+	  active radio backend (radiant_radio_nrf.c or
+	  radiant_radio_cc26xx.c). Every other file keeps the build's own
+	  optimisation level, usually -Os. GCC uses the last -O on the line,
+	  and the per-file option comes after Zephyr's, so -O2 wins for those
+	  three files only. See radiant/CMakeLists.txt.
+
+	  These files hold the scheduler pass and the radio ISRs, whose time
+	  sets how much of the arm lead (ARM_SETUP_US on the nRF) a pass
+	  leaves. -O2 trades flash for that time.
+
+	  OFF BY DEFAULT until a load run measures it (2026-11-15 performance
+	  plan, step C2). Off, the image is byte-identical to a build without
+	  the symbol.
+
 config RADIANT_SEARCH_PHASE_DIAG
 	bool "log every search frame's phase and each chunk's phase bins"
 	depends on RADIANT_ANTR_API
