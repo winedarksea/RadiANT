@@ -354,7 +354,11 @@ def gate_conformance(cfg: dict, a: Baseline, b: Baseline,
     detail = ("transcripts hash the same"
               if identical else
               "transcripts differ; run tools/ant_conformance.py --compare to "
-              "see which cases")
+              "see which cases. A baseline recorded before an intentional "
+              "protocol change (ant_conformance.py INTENTIONAL_DIVERGENCES, "
+              "e.g. frame/malformed-oversize since 2026-11-16) always hashes "
+              "differently; pass --conformance-a/--conformance-b and --compare "
+              "allows that difference if it has the reviewed shape")
     if not identical and allowed:
         detail += " (allowances cannot be checked from hashes alone - pass "
         detail += "--conformance-a/--conformance-b)"

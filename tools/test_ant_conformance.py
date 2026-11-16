@@ -420,5 +420,76 @@ class Summary(unittest.TestCase):
                          {case.name for case in cases})
 
 
+
+class IntentionalDivergence(unittest.TestCase):
+    """frame/malformed-oversize may differ only by reply vs. no reply."""
+
+    CASE = f"frame/{conf.MALFORMED}-oversize"
+    NEXT = f"frame/{conf.MALFORMED}-sync"
+
+    def recs(self, case, *items):
+        return [ant_trace.Record(None, d, data, case) for d, data in items]
+
+    def old_new(self):
+        reset = wire.frame(wire.MESG_SYSTEM_RESET_ID, b"\x00")
+        startup = wire.frame(wire.MESG_STARTUP_MESG_ID, b" ")
+        oversize = wire.frame(wire.MESG_CHANNEL_RADIO_FREQ_ID,
+                              bytes(wire.MAX_SIZE_VALUE + 4))
+        reply = wire.frame(wire.MESG_RESPONSE_EVENT_ID,
+                           bytes([0, wire.MESG_CHANNEL_RADIO_FREQ_ID,
+                                  wire.RESPONSE_CODES["INVALID_MESSAGE"]]))
+        head = (("> ", reset), ("<", startup), (">", oversize))
+        head = tuple((d.strip(), f) for d, f in head)
+        old = self.recs(self.CASE, *head, ("<", reply))
+        new = self.recs(self.CASE, *head)
+        return old, new, reply
+
+    def test_a_missing_reply_is_the_allowed_shape(self):
+        old, new, _ = self.old_new()
+        self.assertTrue(conf.reply_only_difference(old, new))
+        self.assertTrue(conf.reply_only_difference(new, old))
+
+    def test_a_different_reply_is_not(self):
+        old, _, reply = self.old_new()
+        other = list(old)
+        other[-1] = ant_trace.Record(None, "<", wire.frame(
+            wire.MESG_RESPONSE_EVENT_ID, bytes([0, 0x45, 0x28])), self.CASE)
+        self.assertFalse(conf.reply_only_difference(old, other))
+
+    def test_a_different_host_frame_is_not(self):
+        old, new, _ = self.old_new()
+        changed = list(new)
+        changed[0] = ant_trace.Record(None, ">", wire.frame(
+            wire.MESG_SYSTEM_RESET_ID, b""), self.CASE)
+        self.assertFalse(conf.reply_only_difference(old, changed))
+
+    def compare(self, a, b):
+        with tempfile.TemporaryDirectory() as tmp:
+            pa, pb = os.path.join(tmp, "a.antser"), os.path.join(tmp, "b.antser")
+            ant_trace.write_antser(pa, a)
+            ant_trace.write_antser(pb, b)
+            with quiet():
+                return conf.compare(pa, pb, set())
+
+    def test_compare_allows_it_and_later_cases_stay_aligned(self):
+        old, new, _ = self.old_new()
+        tail = self.recs(self.NEXT, (">", wire.frame(
+            wire.MESG_SYSTEM_RESET_ID, b"\x00")))
+        result = self.compare(old + tail, new + tail)
+        self.assertEqual(result["differing_cases"], [self.CASE])
+        self.assertEqual(result["intentional_divergences"], [self.CASE])
+        self.assertTrue(result["pass"])
+
+    def test_another_difference_inside_the_case_still_fails(self):
+        old, new, _ = self.old_new()
+        changed = list(new)
+        changed[1] = ant_trace.Record(None, "<", wire.frame(
+            wire.MESG_STARTUP_MESG_ID, b""), self.CASE)
+        result = self.compare(old, changed)
+        self.assertEqual(result["unexpected_differing_cases"], [self.CASE])
+        self.assertEqual(result["intentional_divergences"], [])
+        self.assertFalse(result["pass"])
+
+
 if __name__ == "__main__":
     unittest.main()

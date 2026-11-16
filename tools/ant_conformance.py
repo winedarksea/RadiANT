@@ -91,9 +91,12 @@ MALFORMED = "malformed"
 # Cases whose answer changed ON PURPOSE after the reference transcripts in
 # archive/captures/serial/conformance-*.antser and
 # archive/benchmarks/conformance-*.json were recorded. Those files are the
-# record of what each firmware did then and are never edited; `--compare`
-# allows these cases to differ (and says so) instead, and tools/ab_gates.toml
-# lists them for the A/B gate. Each entry is a reviewed decision with its date
+# record of what each firmware did then and are never edited. `--compare`
+# allows ONE shape of difference in these cases, and says so: the host-to-
+# device records are identical, and the only difference is that one side has
+# dongle-to-host records after the case's last host frame (its reply) and the
+# other has none. Any other difference inside the case still fails (see
+# reply_only_difference()). Each entry is a reviewed decision with its date
 # and reason - not a place to quiet an unexplained difference.
 INTENTIONAL_DIVERGENCES = {
     "frame/malformed-oversize":
@@ -649,6 +652,33 @@ def compare_records(a: list[Record], b: list[Record]) -> list[Difference]:
     return diffs
 
 
+def _by_case(records: list[Record]) -> dict[str, list[Record]]:
+    """Records grouped by case, in first-seen order."""
+    out: dict[str, list[Record]] = {}
+    for record in records:
+        out.setdefault(record.case or "?", []).append(record)
+    return out
+
+
+def reply_only_difference(a: list[Record], b: list[Record]) -> bool:
+    """True when the one case's records differ ONLY in whether the frame under
+    test was answered: everything up to and including the last host-to-device
+    record matches, and after it one side has nothing and the other only
+    dongle-to-host records. The shape INTENTIONAL_DIVERGENCES allows."""
+    def split(records):
+        last = max((i for i, r in enumerate(records)
+                    if r.direction == HOST_TO_DONGLE), default=-1)
+        return records[:last + 1], records[last + 1:]
+
+    head_a, tail_a = split(a)
+    head_b, tail_b = split(b)
+    if not head_a or compare_records(head_a, head_b):
+        return False
+    if bool(tail_a) == bool(tail_b):
+        return False
+    return all(r.direction != HOST_TO_DONGLE for r in tail_a + tail_b)
+
+
 def _sha256(path: str) -> str:
     with open(path, "rb") as handle:
         return hashlib.sha256(handle.read()).hexdigest()
@@ -658,15 +688,28 @@ def compare(path_a: str, path_b: str, allowed: set[str],
             *, limit: int = 20) -> dict:
     """The Tier 1 gate, as a readable report rather than as `fc /b`.
 
-    INTENTIONAL_DIVERGENCES are always allowed, on top of `allowed`.
+    Compared case by case (positionally within a case), so a reply that one
+    side lacks does not shift every later case. A case in
+    INTENTIONAL_DIVERGENCES is allowed only when its difference is the
+    reply/no-reply shape reply_only_difference() accepts.
     """
-    allowed = set(allowed) | set(INTENTIONAL_DIVERGENCES)
+    allowed = set(allowed)
     sha_a, sha_b = _sha256(path_a), _sha256(path_b)
     identical = sha_a == sha_b
 
     records_a = ant_trace.read_antser_file(path_a)
     records_b = ant_trace.read_antser_file(path_b)
-    diffs = compare_records(records_a, records_b)
+    cases_a, cases_b = _by_case(records_a), _by_case(records_b)
+    diffs = []
+    intentional = set()
+    for case in list(cases_a) + [c for c in cases_b if c not in cases_a]:
+        a_case, b_case = cases_a.get(case, []), cases_b.get(case, [])
+        case_diffs = compare_records(a_case, b_case)
+        diffs.extend(case_diffs)
+        if (case_diffs and case in INTENTIONAL_DIVERGENCES
+                and reply_only_difference(a_case, b_case)):
+            intentional.add(case)
+    allowed |= intentional
     differing_cases = sorted({d.case for d in diffs})
     unexpected = [case for case in differing_cases if case not in allowed]
 
@@ -682,7 +725,7 @@ def compare(path_a: str, path_b: str, allowed: set[str],
               f"{len(differing_cases)} case(s)")
         for diff in diffs[:limit]:
             allow = (" (intentional divergence)"
-                     if diff.case in INTENTIONAL_DIVERGENCES
+                     if diff.case in intentional
                      else " (allowed)" if diff.case in allowed else "")
             print(f"\n  case {diff.case}{allow}, record {diff.index}")
             print(f"    A  {diff.a if diff.a is not None else '(end of file)'}")
@@ -701,7 +744,8 @@ def compare(path_a: str, path_b: str, allowed: set[str],
                 print(f"  {case}")
         else:
             print("\nPASS with allowances: every difference is in a case "
-                  "listed with --allow-differing-case")
+                  "listed with --allow-differing-case or is an intentional "
+                  "divergence (INTENTIONAL_DIVERGENCES)")
 
     return {
         "tool": "ant_conformance.py",
@@ -712,6 +756,7 @@ def compare(path_a: str, path_b: str, allowed: set[str],
         "differing_records": len(diffs),
         "differing_cases": differing_cases,
         "allowed_differing_cases": sorted(allowed),
+        "intentional_divergences": sorted(intentional),
         "unexpected_differing_cases": unexpected,
         "pass": identical or not unexpected,
     }

@@ -251,6 +251,24 @@ class Gates(unittest.TestCase):
         result = self.name(self.evaluate(conformance=override), "conformance")
         self.assertEqual(result.verdict, ant_ab.FAIL)
 
+    def test_a_hash_only_fail_points_at_intentional_divergences(self):
+        # An A/B against a baseline recorded before a reviewed protocol
+        # change fails Tier 1 on hashes alone; the detail says why.
+        def mutate(data):
+            data["conformance"]["sha256"] = SHA_B
+        result = self.name(self.evaluate(mutate), "conformance")
+        self.assertEqual(result.verdict, ant_ab.FAIL)
+        self.assertIn("INTENTIONAL_DIVERGENCES", result.detail)
+
+    def test_an_intentional_divergence_from_compare_passes(self):
+        override = {"byte_identical": False, "differing_records": 1,
+                    "differing_cases": ["frame/malformed-oversize"],
+                    "allowed_differing_cases": ["frame/malformed-oversize"],
+                    "intentional_divergences": ["frame/malformed-oversize"],
+                    "a": {"sha256": SHA_A}, "b": {"sha256": SHA_B}}
+        result = self.name(self.evaluate(conformance=override), "conformance")
+        self.assertEqual(result.verdict, ant_ab.PASS)
+
     # -- loss ---------------------------------------------------------------
 
     def test_loss_within_the_delta_passes(self):
