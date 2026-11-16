@@ -83,8 +83,10 @@ Claim **0xF7** from the reserved RadiANT block (0xF7-0xFA) as
 | 6 search B | `radiant_search_stats` | cache_steers | cache_acquires | permit_rejected | rssi_rejected | decode_failed | bad_filter_index | late_events | sets_advanced_uncovered |
 | 7 search/track hand-off | `radiant_radio_diag_get()` [4..15] and [28..35], `radiant_sched.c` [16..27] | search frame cut by the chunk's close | search frame cut by an abort | search END within 300 µs of the close | bounded RX armed opening late | worst such lateness µs | bounded RX expired behind a scan chunk | transmit refused: start compare behind the counter | receive window refused: start compare behind the counter |
 | 8 timing | `radiant_radio_diag_get()` [4..19] and [32..35], `radiant_sched.c` [20..31] | frames in the longest drain | longest one-entry work µs (callback excluded) | longest software CRC µs | longest synchronous rx callback µs | longest scheduler pass µs (interrupts off) | most `pass_step()` iterations in one pass | passes over 100 µs | drains over 250 µs |
-| 9 pass breakdown | `radiant_sched.c` [4..23], `radiant_radio_diag_get()` [24..35] | expiry sweep µs | arm decision µs (backend call and done callbacks excluded) | backend arm calls µs | `notify_done()` callbacks µs | `book_ahead()` µs | pass `now` → backend `now` µs | smallest early-check slack µs (i32, `0x7FFFFFFF` = no sample yet) | early-check ETIME refusals |
+| 9 pass breakdown | `radiant_sched.c` [4..23], `radiant_radio_diag_get()` [24..35] | expiry sweep µs | arm decision µs (backend call and done callbacks excluded) | backend arm calls µs | `notify_done()` callbacks µs, per scheduler entry (a pass, or a backend callback's body) | `book_ahead()` µs | pass `now` → backend `now` µs | smallest early-check slack µs (i32, `0x7FFFFFFF` = no sample yet) | early-check ETIME refusals |
 | 10 receive integrity | `radiant_api_stats` [4..19], `radiant_radio_diag_get()` [20..35] | crc_repaired | crc_unrepairable | crc_repair_refuted | crc_repair_implausible | frames dropped by the late-ISR guard (nRF) | worst END-interrupt lateness µs (nRF) | longest `rx_t_sync()` µs (cc26xx) | longest `rx_match()` + copies µs (cc26xx) |
+| 11 scheduler contention | `radiant_sched_stats` [4..27] and [32..35], `radiant_api_stats` [28..31] | windows_merged | preempted | replans | arm_rejected | tx_armed | stale_events | slots_collided (ADR 0024) | turn_yields (ADR 0024) |
+| 12 stale events by site | `radiant_sched.c` [4..23] | receive event with a frame, op retired | other receive event, op retired | frame with a filter index the window lacked | transmit event, op retired | energy-detect event, op retired (`0xFFFFFFFF` without `CONFIG_RADIANT_ED_SCAN`) | reserved | reserved | reserved |
 
 `sets_advanced_uncovered` is `0xFFFFFFFF` without `CONFIG_RADIANT_SEARCH_COVERAGE`.
 
@@ -204,6 +206,68 @@ Levels on both pages (every field except 9/7, 10/0-4) are worst cases since
 boot and must not be diffed; `tools/ant_diag.py --diff` reports the later
 value. Structure version stays 1 (beta), and an older image refuses pages 9-10
 with `INVALID_PARAMETER_PROVIDED`, which the reader skips.
+
+Page 11 (scheduler contention) was added with ADR 0024; that record has the
+reasoning. Its row is in the table above.
+
+**Amendment, 2026-11-16: page 9 field 3 measured per entry, and page 12.**
+
+- **Page 9 field 3 read 0 on hardware.** A backend callback entry
+  (`hal_rx()`, `hal_tx()`, `hal_ed()` in `radiant_sched.c`) not nested in a
+  pass sets `in_pass` for its body, so the `notify_done()` callbacks a
+  window's terminal delivers were timed into the per-pass sum. That body then
+  ends with `pass()`, whose first act is to clear the sum, and nothing had
+  reported it. Nearly every callback runs from that path, so the field held
+  only the rare callback made inside a pass (an expiry in the sweep, an
+  abort). Now such a body opens and closes its own sum, and the field is the
+  worst sum per **scheduler entry**: a pass, or a callback entry's body (the
+  pass that body ends with is a separate entry). Each callback counts in
+  exactly one entry, and nothing else changes. A callback made from thread
+  context outside any entry is still not timed: the ABORTED a co-member hears
+  when `drop_slot()` aborts an open window, from `radiant_sched_cancel()` or
+  from a `radiant_sched_request_rx/tx/ed()` that replaces an in-flight
+  request. (The same calls made from a consumer callback inside an entry are
+  nested in that callback's span and counted there.) The open and fold each
+  share a critical section with the entry's `in_pass` write, inside the same
+  diag-only macros, because on nRF MPSL `radiant_nrf_gate_on_denied()` calls
+  `hal_rx()` (DENIED) from a cooperative thread with interrupts on: an ISR
+  entry landing between the write and the open or fold would otherwise lose
+  its sum. Such a thread-context entry is the one span on this page that can
+  be preempted, so on MPSL its sum may include preempting ISR time, contrary
+  to the A0 rule that only spans that cannot idle are timed. Treat a field-3
+  maximum on an MPSL image as an upper bound.
+  The meaning sharpens from "within one pass" to "within one entry". The old
+  reading was an undercount, not a different quantity, so the field keeps its
+  index and the structure version stays 1. Fields 0, 1 and 4 had no such
+  loss: the sweep, the step remainder and `book_ahead()` exist only inside
+  `pass()`. Field 2 has a narrower one, left as it is because field 2 is
+  defined per pass: the scheduler makes arm calls only from a pass, but it
+  also times `abort_armed()`'s `radiant_radio_abort()`, and `drop_slot()`
+  calls `abort_armed()` outside a pass from `radiant_sched_cancel()` and from
+  `radiant_sched_request_rx/tx/ed()`. Such an abort is timed into the
+  per-pass sum and cleared unreported by the next pass. That includes an
+  abort a consumer callback makes inside a callback entry. None of these is a
+  pass, so none belongs in field 2.
+- **Page 12, stale events by site.** Page 11 field 5 counts every event the
+  scheduler drops as stale, and preemption makes those routine, so the total
+  cannot separate the routine case from a lost frame. Page 12 splits it by
+  where it was dropped: 0 a receive event carrying a frame (OK or CRC_FAIL)
+  for a retired operation, a frame heard and then dropped; 1 any other
+  receive event for a retired operation, mostly the ABORTED terminal every
+  preemption makes; 2 a frame for the armed window with a filter index the
+  window did not have; 3 a transmit event, and 4 an energy-detect event, for
+  a retired operation (4 reads `0xFFFFFFFF` without `CONFIG_RADIANT_ED_SCAN`).
+  Fields 0-4 add up to page 11 field 5, give or take a lost increment (the
+  counters are not atomic). The split is counted in `radiant_diag_core`, not
+  `radiant_sched_stats`, so an image without the diag counters is unchanged.
+  By this record's rule a new meaning needs a new page: page 11 is full. Fields
+  5-7 are reserved and read `0xFFFFFFFF`, so the page always sets the
+  "not measured" flag. An older image refuses page 12 and the reader skips it.
+- **Test hook.** On a target without a cycle counter (native_sim)
+  `radiant_diag_cycles()` now reads a variable, `radiant_diag_cycles_sim`, that
+  is always 0 unless a unit test advances it. `radiant_diag_cycles_to_us()`
+  still reads `0xFFFFFFFF` there, so no page changes. Without it, field 3's
+  fix could not be tested off hardware.
 
 "Turnaround" on page 2 is NEXT_BLOCK-to-submit: the time from the engine
 asking for the next block to the host block arriving.

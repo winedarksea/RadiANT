@@ -605,6 +605,14 @@ int fake_radio_inject_late_rx(uint32_t op, const struct fake_radio_air *f,
 			      uint8_t filter_index);
 int fake_radio_inject_late_tx(uint32_t op, enum radiant_radio_status status);
 
+/* End the operation armed now with this terminal status, delivered at once
+ * (synchronously, from the caller's context), as a backend that completes an
+ * operation while its caller is still running would. For driving a callback
+ * entry nested inside the core's own work, e.g. from the scheduler's armed()
+ * callback within a pass. RADIANT_RADIO_ESTATE from inside a mock callback;
+ * a no-op when nothing is armed. */
+int fake_radio_end_current(enum radiant_radio_status status);
+
 /* ---------------------------------------------------------------------------
  * What a test asserts on
  * ---------------------------------------------------------------------------

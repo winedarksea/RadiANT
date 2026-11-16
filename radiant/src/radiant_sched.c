@@ -234,7 +234,9 @@ static struct {
  * 0xF7 page 9: one pass's spans on the A0 cycle clock (radiant_diag.h), summed
  * over the pass and folded into radiant_diag_core's worst cases at its end.
  * The pass runs with interrupts off, so the counter cannot stop for idle.
- * Spans outside a pass land here too and are cleared by the next pass's start.
+ * Spans outside a pass land here too and are cleared by the next pass's start,
+ * except a backend callback entry's notify_done() sum, which the entry folds
+ * itself (PB_ENTRY_OPEN/PB_ENTRY_CLOSE).
  */
 static struct {
 	radiant_time_t now; /* the pass's now: page 9 field 5's stamp */
@@ -263,7 +265,8 @@ static struct {
 		stmt;                                                  \
 		PB_ADD(arm, t_be__);                                   \
 	} while (0)
-/* A notify_done() callback: timed only within a pass, outermost only. */
+/* A notify_done() callback: timed only under in_pass (a pass, or a backend
+ * callback entry's body), outermost only. */
 #define PB_DONE_CB(stmt)                                               \
 	do {                                                           \
 		if (!s.in_pass || pb.in_cb) {                          \
@@ -276,12 +279,47 @@ static struct {
 			PB_ADD(done, t_cb__);                          \
 		}                                                      \
 	} while (0)
+/*
+ * A backend callback entry (hal_rx/hal_tx/hal_ed) not nested in a pass sets
+ * in_pass for its own body, so its notify_done() callbacks are timed into
+ * pb.done outside any pass(). The pass it may end with clears pb first, so
+ * the entry opens and closes its own sum: page 9 field 3 is the worst per
+ * entry (a pass, or a callback entry's body), each callback counted in one.
+ *
+ * Each macro carries the entry's in_pass write (set) or restore (stmt), and
+ * runs it with the sum's open or fold under one critical section. An entry
+ * can arrive from a thread with interrupts on (the nRF MPSL gate's DENIED),
+ * and an ISR entry landing between the two would otherwise be wiped by the
+ * open or fold into a sum already reported. Without the diag counters each
+ * macro is just its statement.
+ */
+#define PB_ENTRY_OPEN(outer, stmt)                                     \
+	do {                                                           \
+		unsigned int k_pb__ = radiant_event_crit_enter();      \
+		if (outer) {                                           \
+			pb.done = 0u;                                  \
+		}                                                      \
+		stmt;                                                  \
+		radiant_event_crit_exit(k_pb__);                       \
+	} while (0)
+#define PB_ENTRY_CLOSE(outer, stmt)                                    \
+	do {                                                           \
+		unsigned int k_pb__ = radiant_event_crit_enter();      \
+		if (outer) {                                           \
+			RADIANT_DIAG_MAX(pb_done_max_cyc, pb.done);    \
+			pb.done = 0u;                                  \
+		}                                                      \
+		stmt;                                                  \
+		radiant_event_crit_exit(k_pb__);                       \
+	} while (0)
 #else
 #define PB_T0(v)          ((void)0)
 #define PB_ADD(field, v)  ((void)0)
 #define PB_ARM_CALL(stmt) do { stmt; } while (0)
 #define PB_BACKEND_CALL(stmt) do { stmt; } while (0)
 #define PB_DONE_CB(stmt)  do { stmt; } while (0)
+#define PB_ENTRY_OPEN(outer, stmt)  do { stmt; } while (0)
+#define PB_ENTRY_CLOSE(outer, stmt) do { stmt; } while (0)
 #endif
 
 /* What one step of a pass concluded. */
@@ -2350,6 +2388,7 @@ static void route_rx(const struct radiant_rx_event *evt)
 		/* A filter index the window did not have. Counted, not routed: that
 		 * would misattribute a frame. */
 		s.stats.stale_events++;
+		RADIANT_DIAG_INC(stale_rx_filter);
 		return;
 	}
 	if (s.cbs.rx != NULL) {
@@ -2373,11 +2412,21 @@ static void hal_rx(const struct radiant_rx_event *evt, void *user)
 		/* The terminal event of something already retired (every preemption
 		 * makes one). Not an error. */
 		s.stats.stale_events++;
+#if defined(CONFIG_RADIANT_DIAG_COUNTERS)
+		/* 0xF7 page 12: a frame heard for a retired operation, apart
+		 * from the routine terminals. */
+		if (evt->status == RADIANT_RADIO_STATUS_OK ||
+		    evt->status == RADIANT_RADIO_STATUS_CRC_FAIL) {
+			RADIANT_DIAG_INC(stale_rx_frame);
+		} else {
+			RADIANT_DIAG_INC(stale_rx_end);
+		}
+#endif
 		return;
 	}
 
 	was_in_pass = s.in_pass;
-	s.in_pass = true;
+	PB_ENTRY_OPEN(!was_in_pass, s.in_pass = true);
 	was_in_cb = s.in_radio_cb;
 	s.in_radio_cb = true;
 
@@ -2421,7 +2470,7 @@ static void hal_rx(const struct radiant_rx_event *evt, void *user)
 		break;
 	}
 
-	s.in_pass = was_in_pass;
+	PB_ENTRY_CLOSE(!was_in_pass, s.in_pass = was_in_pass);
 	/* Nested in a thread-context pass: the owning pass commits. It re-checks
 	 * s.dirty, so nothing is lost. */
 	if (!was_in_pass && (terminal || s.dirty)) {
@@ -2444,13 +2493,14 @@ static void hal_tx(const struct radiant_tx_event *evt, void *user)
 	if (s.armed_kind != (uint8_t)SLOT_TX || evt->op == 0u ||
 	    evt->op != s.armed_op) {
 		s.stats.stale_events++;
+		RADIANT_DIAG_INC(stale_tx);
 		return;
 	}
 
 	ch = (s.n_members > 0u) ? s.members[0] : RADIANT_SCHED_CH_NONE;
 
 	was_in_pass = s.in_pass;
-	s.in_pass = true;
+	PB_ENTRY_OPEN(!was_in_pass, s.in_pass = true);
 	was_in_cb = s.in_radio_cb;
 	s.in_radio_cb = true;
 	if (evt->status == RADIANT_RADIO_STATUS_OK && ch != RADIANT_SCHED_CH_NONE &&
@@ -2473,7 +2523,7 @@ static void hal_tx(const struct radiant_tx_event *evt, void *user)
 		end_armed(RADIANT_SCHED_DONE_FAILED);
 		break;
 	}
-	s.in_pass = was_in_pass;
+	PB_ENTRY_CLOSE(!was_in_pass, s.in_pass = was_in_pass);
 	if (!was_in_pass) {
 		pass();
 	}
@@ -2498,13 +2548,14 @@ static void hal_ed(const struct radiant_ed_event *evt, void *user)
 	if (s.armed_kind != (uint8_t)SLOT_ED || evt->op == 0u ||
 	    evt->op != s.armed_op) {
 		s.stats.stale_events++;
+		RADIANT_DIAG_INC(stale_ed);
 		return;
 	}
 
 	ch = (s.n_members > 0u) ? s.members[0] : RADIANT_SCHED_CH_NONE;
 
 	was_in_pass = s.in_pass;
-	s.in_pass = true;
+	PB_ENTRY_OPEN(!was_in_pass, s.in_pass = true);
 	was_in_cb = s.in_radio_cb;
 	s.in_radio_cb = true;
 
@@ -2554,7 +2605,7 @@ static void hal_ed(const struct radiant_ed_event *evt, void *user)
 		break;
 	}
 
-	s.in_pass = was_in_pass;
+	PB_ENTRY_CLOSE(!was_in_pass, s.in_pass = was_in_pass);
 	if (!was_in_pass && (terminal || s.dirty)) {
 		pass();
 	}

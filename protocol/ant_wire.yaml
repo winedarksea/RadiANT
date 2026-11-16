@@ -2235,7 +2235,12 @@ radiant_messages:
              merged, operations preempted, windows replanned, arm refusals
              other than busy, transmits armed, stale events; tracked slots
              the scheduler dropped and reported as EVENT_CHANNEL_COLLISION;
-             receives let go to alternate the loser, ADR 0024). VERSIONING: pinned at 1; a field's
+             receives let go to alternate the loser, ADR 0024); 12 page 11's
+             stale events by site (receive events carrying a frame for a
+             retired operation, other receive events for one, frames with a
+             filter index the window did not have, transmit events, energy
+             detect events - 0xFFFFFFFF without ED scan; three reserved,
+             0xFFFFFFFF). VERSIONING: pinned at 1; a field's
              meaning never changes and a new meaning is a new page.
              docs/decisions/0023-radiant-diag-message.md has the reasoning
              and radiant/include/radiant/radiant_diag.h the layout."

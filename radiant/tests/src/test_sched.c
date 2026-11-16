@@ -38,6 +38,9 @@
 #include <radiant/radiant_noise.h>
 #include <radiant/radiant_sched.h>
 #include <radiant/radiant_transfer.h>
+#if defined(CONFIG_RADIANT_DIAG_COUNTERS)
+#include <radiant/radiant_diag.h>
+#endif
 
 #include "../fake_radio.h"
 
@@ -175,6 +178,14 @@ static struct {
 	bool                    tx_from_done;
 	uint8_t                 tx_from_done_ch;
 	enum radiant_sched_done tx_from_done_why;
+
+	/* 0xF7 page 9 field 3: each done() advances the simulated cycle clock
+	 * this far (radiant.unit.diag on native_sim only). */
+	uint32_t done_cycles;
+	/* One-shot: from inside armed(), end the operation just armed with a
+	 * TIMEOUT delivered at once, so its callback entry runs nested in the
+	 * pass that armed it. */
+	bool end_in_armed;
 } log;
 
 static void rx_req_init(struct radiant_sched_rx *r, const struct radiant_pkt_format *fmt,
@@ -269,6 +280,9 @@ static void on_done(uint8_t ch, enum radiant_sched_done why, void *user)
 {
 	ARG_UNUSED(user);
 
+#if defined(CONFIG_RADIANT_DIAG_COUNTERS) && !defined(CONFIG_CPU_CORTEX_M_HAS_DWT)
+	radiant_diag_cycles_sim += log.done_cycles;
+#endif
 	if (log.n_done < TEST_LOG_MAX) {
 		log.done[log.n_done].ch = ch;
 		log.done[log.n_done].why = why;
@@ -336,6 +350,11 @@ static void on_armed(uint8_t ch, radiant_time_t t_open, radiant_time_t t_close,
 		log.armed[log.n_armed].t_close = t_close;
 	}
 	log.n_armed++;
+
+	if (log.end_in_armed) {
+		log.end_in_armed = false;
+		zassert_ok(fake_radio_end_current(RADIANT_RADIO_STATUS_TIMEOUT));
+	}
 }
 
 static const struct radiant_sched_cbs test_cbs = {
@@ -4243,6 +4262,171 @@ ZTEST(radiant_sched, test_diag_a_window_missed_behind_a_scan_chunk_is_counted)
 	fake_radio_advance_to(t0 + 10000u);
 	zassert_ok(radiant_sched_tick());
 	zassert_equal(missed0 + 1u, dc->trk_missed_behind_scan);
+	finish();
+}
+
+#if !defined(CONFIG_CPU_CORTEX_M_HAS_DWT)
+/*
+ * 0xF7 page 9 field 3 (2026-11-16): done() callbacks are summed per scheduler
+ * entry. Most run from a backend callback (a window's terminal), which set
+ * in_pass for its body; until the fix the pass that body ends with cleared
+ * the sum before anything reported it, so the field read 0 on hardware.
+ * Needs the simulated cycle clock, so not on a target with DWT.
+ */
+ZTEST(radiant_sched, test_diag_done_callbacks_are_summed_per_entry)
+{
+	const struct radiant_diag_core *dc = radiant_diag_core_get();
+	radiant_time_t t0;
+	radiant_time_t open;
+
+	bring_up();
+	radiant_diag_core_reset();
+	log.done_cycles = 1000u;
+	t0 = radiant_radio_now();
+	open = t0 + 100000u;
+
+	/* Two channels in one window: its terminal tells both, in one entry. */
+	post_track(0u, open, open + TEST_WINDOW_US);
+	post_track(1u, open, open + TEST_WINDOW_US);
+	zassert_ok(radiant_sched_tick());
+	zassert_equal(2u, fake_radio_arm(0u)->n_filters);
+	fake_radio_advance_to(open + TEST_WINDOW_US + 1000u);
+	zassert_equal(1u, log.ok_count[0]);
+	zassert_equal(1u, log.ok_count[1]);
+	zassert_equal(2000u, dc->pb_done_max_cyc);
+
+	/* A later entry with one callback neither adds to it nor replaces it. */
+	post_track(0u, open + 200000u, open + 200000u + TEST_WINDOW_US);
+	zassert_ok(radiant_sched_tick());
+	fake_radio_advance_to(open + 200000u + TEST_WINDOW_US + 1000u);
+	zassert_equal(2u, log.ok_count[0]);
+	zassert_equal(2000u, dc->pb_done_max_cyc);
+
+	/* A pass's own callback (an expiry in the sweep) still folds at the
+	 * pass's end. */
+	log.done_cycles = 5000u;
+	post_track(1u, open + 300000u, open + 300000u + TEST_WINDOW_US);
+	fake_radio_advance_to(open + 400000u);
+	zassert_ok(radiant_sched_tick());
+	zassert_equal(1u, log.missed_count[1]);
+	zassert_equal(5000u, dc->pb_done_max_cyc);
+
+	log.done_cycles = 0u;
+	finish();
+}
+
+/* A callback entry nested inside a pass (the backend completes the operation
+ * while the pass that armed it is still running) is not an entry of its own:
+ * its callback counts once, into the owning pass's sum. */
+ZTEST(radiant_sched, test_diag_a_nested_entrys_callback_counts_once_in_the_pass)
+{
+	const struct radiant_diag_core *dc = radiant_diag_core_get();
+	radiant_time_t open;
+
+	bring_up();
+	radiant_diag_core_reset();
+	log.done_cycles = 1000u;
+	open = radiant_radio_now() + 100000u;
+
+	post_track(0u, open, open + TEST_WINDOW_US);
+	log.end_in_armed = true;
+	zassert_ok(radiant_sched_tick());
+	zassert_false(log.end_in_armed, "armed() never ran");
+	zassert_equal(1u, log.ok_count[0]);
+	zassert_equal(1u, log.n_done);
+	/* Once: a nested entry that folded as well would still read 1000, but
+	 * one that also opened would read 0 and a double sum 2000. */
+	zassert_equal(1000u, dc->pb_done_max_cyc);
+
+	log.done_cycles = 0u;
+	finish();
+}
+#endif /* !CONFIG_CPU_CORTEX_M_HAS_DWT */
+
+static uint32_t diag_stale_sum(const struct radiant_diag_core *dc)
+{
+	return dc->stale_rx_frame + dc->stale_rx_end + dc->stale_rx_filter +
+	       dc->stale_tx + dc->stale_ed;
+}
+
+/* 0xF7 page 12: each stale-event site has its own counter, and the split adds
+ * up to radiant_sched_stats.stale_events (page 11 field 5). */
+ZTEST(radiant_sched, test_diag_stale_events_are_split_by_site)
+{
+	const struct radiant_diag_core *dc = radiant_diag_core_get();
+	struct fake_radio_air air;
+	radiant_time_t t0;
+	radiant_time_t open;
+	radiant_time_t close;
+	uint32_t op;
+	uint32_t frame0, filter0, tx0, sum0;
+	uint8_t frame[FAKE_RADIO_AIR_FRAME_MAX];
+	uint8_t n;
+
+	bring_up(); /* zeroes radiant_sched_stats */
+	frame0 = dc->stale_rx_frame;
+	filter0 = dc->stale_rx_filter;
+	tx0 = dc->stale_tx;
+	sum0 = diag_stale_sum(dc);
+	t0 = radiant_radio_now();
+	open = t0 + 100000u;
+	close = open + TEST_WINDOW_US;
+
+	post_track(0u, open, close);
+	zassert_ok(radiant_sched_tick());
+	op = fake_radio_arm(0u)->op;
+
+	n = fake_radio_build_ant_frame(frame, TEST_DEVNUM_BASE, TEST_DEV_TYPE,
+				       TEST_TRANS_TYPE, test_payload);
+	fake_radio_air_init(&air);
+	air.t_sync = open + 100u;
+	air.len = n;
+	memcpy(air.bytes, frame, n);
+
+	/* The live window, a filter index it never had. */
+	fake_radio_advance_to(open + 200u);
+	zassert_ok(fake_radio_inject_late_rx(op, &air, 5u));
+	zassert_equal(filter0 + 1u, dc->stale_rx_filter);
+	zassert_equal(0u, log.n_rx);
+
+	/* After its end: a frame, and a transmit event, for the dead op. */
+	fake_radio_advance_to(close + 1000u);
+	zassert_ok(fake_radio_inject_late_rx(op, &air, 0u));
+	zassert_ok(fake_radio_inject_late_tx(op, RADIANT_RADIO_STATUS_OK));
+	zassert_equal(frame0 + 1u, dc->stale_rx_frame);
+	zassert_equal(tx0 + 1u, dc->stale_tx);
+	zassert_equal(0u, log.n_rx);
+
+	zassert_equal(radiant_sched_stats_get()->stale_events,
+		      diag_stale_sum(dc) - sum0);
+	finish();
+}
+
+/* The routine stale event: a preemption's ABORTED terminal lands in rx_end. */
+ZTEST(radiant_sched, test_diag_a_preemptions_terminal_is_a_stale_rx_end)
+{
+	const struct radiant_diag_core *dc = radiant_diag_core_get();
+	struct radiant_sched_tx t;
+	radiant_time_t open;
+	uint32_t end0, sum0;
+
+	bring_up();
+	end0 = dc->stale_rx_end;
+	sum0 = diag_stale_sum(dc);
+	open = radiant_radio_now() + 100000u;
+
+	post_track(0u, open, open + 50000u);
+	zassert_ok(radiant_sched_tick());
+	fake_radio_advance_to(open + 1000u);
+	tx_req_init(&t, 2u, open + 20000u);
+	zassert_ok(radiant_sched_request_tx(2u, &t));
+	zassert_ok(radiant_sched_tick());
+	zassert_equal(1u, radiant_sched_stats_get()->preempted);
+	fake_radio_advance_to(t.t_sync_at + 10u);
+
+	zassert_equal(1u, radiant_sched_stats_get()->stale_events);
+	zassert_equal(end0 + 1u, dc->stale_rx_end);
+	zassert_equal(1u, diag_stale_sum(dc) - sum0);
 	finish();
 }
 #endif /* CONFIG_RADIANT_DIAG_COUNTERS */

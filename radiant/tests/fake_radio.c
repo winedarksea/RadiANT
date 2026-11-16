@@ -2790,6 +2790,15 @@ int fake_radio_inject_late_tx(uint32_t op, enum radiant_radio_status status)
 	return RADIANT_RADIO_OK_RC;
 }
 
+int fake_radio_end_current(enum radiant_radio_status status)
+{
+	if (reject_from_callback()) {
+		return RADIANT_RADIO_ESTATE;
+	}
+	end_op(status, g.now);
+	return RADIANT_RADIO_OK_RC;
+}
+
 /* ---------------------------------------------------------------------------
  * Idle
  * ---------------------------------------------------------------------------
