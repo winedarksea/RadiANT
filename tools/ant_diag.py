@@ -71,6 +71,8 @@ PAGES: dict[int, tuple[str, list[str]]] = {
                     "rx_start_missed"]),
     # 2026-11-13 timing page. Fields 0-3 and 7 are the backend table's tail
     # after srch_end_near_close; 0xFFFFFFFF on nRF. 4-6 are the scheduler's.
+    # crc_max_us on cc26xx is preemption-free from 2026-11-16 (ADR 0023);
+    # an older image's value includes preempting interrupts.
     8: ("timing", ["drain_max_frames", "frame_max_us", "crc_max_us",
                    "rx_cb_max_us", "pass_max_us", "pass_steps_max",
                    "pass_over_100us", "drain_over_250us"]),

@@ -269,6 +269,33 @@ reasoning. Its row is in the table above.
   still reads `0xFFFFFFFF` there, so no page changes. Without it, field 3's
   fix could not be tested off hardware.
 
+**Amendment, 2026-11-16: page 8 field 2 on cc26xx without preemption.**
+The cc26xx receive drain runs in the TI RF driver's callback, a software
+interrupt that `SwiP_zephyr.c` dispatches from the lowest-priority hardware
+interrupt, so every other interrupt (the RF core's, the system timer, the
+UART) can land inside a span it times. Field 2 read 70 µs before the
+`crc16_itu_t()` fast path and 32 and 19 µs after, for a CRC over one
+frame's address and body. Those readings held the CRC plus any interrupt that
+preempted it. The A0 rule above lets an ISR's span be timed, but this ISR is
+the lowest priority, so anything can preempt it.
+Now the diag build masks interrupts (`irq_lock()`) around the CRC computation
+and its two clock reads only. The CRC is a few microseconds, so the delay this
+adds to any other interrupt is the same, and only in a diag image. Without
+`CONFIG_RADIANT_DIAG_COUNTERS` nothing is masked, and the image is
+byte-identical.
+
+The field keeps its index, and the structure version stays 1. The field was
+always defined as the CRC computation time. The old reading overcounted the
+same quantity (the converse of page 9 field 3's undercount), so this is not a
+new meaning. Like the 2026-11-15 move from the RAT to the A0 clock, readings
+from before and after this change are not comparable. Treat an older image's
+value as an upper bound. The transmit CRC is still not timed. It runs in
+`radiant_radio_tx()`, which the scheduler calls only from a pass, with
+interrupts off, so its cost is already inside page 9 field 2 and nothing can
+preempt it. Page 8 fields 1 and 3 and page 10 fields 6-7 are timed in the same
+drain with interrupts on. They are still upper bounds that include
+preemption, apart from the CRC span inside field 1.
+
 "Turnaround" on page 2 is NEXT_BLOCK-to-submit: the time from the engine
 asking for the next block to the host block arriving.
 
