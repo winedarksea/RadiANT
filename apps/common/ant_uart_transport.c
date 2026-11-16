@@ -110,23 +110,33 @@ static volatile uint32_t rx_dropped;
  * timeout, 32 bit periods after the last byte, for a shorter frame), and the
  * ISR can be held off for 24 byte times - about 4 ms - before a byte is lost.
  *
- * Two of the driver's interrupt helpers are wrong in FIFO mode, so this ISR
- * reads the hardware itself:
- *   - irq_is_pending() looks at TX and RX only. A frame shorter than the RX
- *     trigger level raises only the receive TIMEOUT interrupt; a loop gated
- *     on is_pending() would never read it, never clear it, and re-enter
- *     forever. Draining the FIFO until it is empty clears both.
- *   - irq_tx_ready() is !UARTBusy(), "transmitter completely idle". In FIFO
- *     mode the TX interrupt fires when the FIFO drains through its trigger
- *     level, while the line is still busy: gated on idle, the ISR would
- *     refuse to refill and return with the interrupt still raised, spinning
- *     at priority 0 until the last bits left the shifter. Space in the FIFO
- *     is the right test.
+ * Why this ISR reads the hardware rather than the driver's helpers: the
+ * driver's irq_is_pending() looks at the TX and RX interrupts only. A frame
+ * shorter than the RX trigger level raises only the receive TIMEOUT
+ * interrupt; a loop gated on is_pending() would never read it, never clear
+ * it, and re-enter forever. Draining the FIFO until it is empty clears both.
+ *
+ * TX needs no workaround, but is tested directly too so the ISR does not
+ * depend on a helper whose meaning has changed between releases:
+ * irq_tx_ready() is the masked TX interrupt status in NCS v3.4.0's driver
+ * and was UARTSpaceAvail() in v3.2.4 (!UARTBusy() is irq_tx_complete()).
+ * "TX interrupt unmasked and space in the FIFO" is right under either.
+ *
+ * The driver's configure() disables the FIFO again, and its PM resume path
+ * calls configure(); the BUILD_ASSERT below keeps PM out of these images
+ * rather than re-enabling the FIFO from a PM hook.
  */
 #if DT_NODE_HAS_COMPAT(ANT_UART_NODE, ti_cc13xx_cc26xx_uart)
 #include <driverlib/uart.h>
 #define ANT_UART_TI_FIFO 1
 #define ANT_UART_BASE ((uint32_t)DT_REG_ADDR(ANT_UART_NODE))
+/* configure(), re-run by the driver on every PM wake from standby, turns the
+ * FIFO back off - and nothing here would notice, so the 1-byte receiver and
+ * its silent overruns would quietly return. */
+BUILD_ASSERT(!IS_ENABLED(CONFIG_PM) && !IS_ENABLED(CONFIG_PM_DEVICE),
+	     "The ANT UART's hardware FIFO is enabled once, at transport "
+	     "enable; the cc13xx_cc26xx driver disables it again on PM "
+	     "resume. Re-enable it from a PM hook before allowing PM.");
 #endif
 
 /* ── UART interrupt handler ────────────────────────────────────────────────── */
