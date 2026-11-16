@@ -526,3 +526,79 @@ Zwift pcap using an MPSL build dongle (image ready 2026-11-14, user-run):
 Zwift pcap using a TI build
 Zwift pcap using erg mode in Zwifts
 Zwift confirm the nRF wildcard matching (faster scan) works
+
+# From the 2026-11-15 Zwift captures (firmware 3b486c3)
+
+Captures `captures/zwift-20261115-*.pcap`, plus the shim log `captures/zwift-shim-ti-20261115.log`:
+- `214118`: TI over the shim.
+- `214722`: nRF52840 Dongle, MPSL gate.
+- `215313`: Pro Micro, including Lock Watts.
+- `215820`: Pro Micro, workout.
+- `220629`: Garmin USB-m, ERG, capture started mid-session.
+
+The trainer is a Wahoo Kicker #52233 on 2017 firmware; it never sends page 0x47. None of the faults below was visible in Zwift.
+
+## 1. [FIRMWARE, bench] The FE-C channel goes deaf when its slot crosses the power meter's
+Power #20329 has period 8182 and FE-C has 8192, so their slots line up every ~204 s. Each crossing costs FE-C most of its frames while power barely loses:
+- TI, 130–138 s: 82 % FE-C loss inside ±5 ms, and GO_TO_SEARCH.
+- Pro Micro (215313), 208–213 s: 13 of 21 FE-C slots lost, 8 of them in a row, then GO_TO_SEARCH and two failed commands.
+- Pro Micro (215820), 106–119 s: 33 % loss, against 18 % for the rest of the ride.
+
+FE-C lost every slot whenever power was 0.6–2.7 ms ahead of it. At 211.236 s (215313) both frames arrived 0.27 ms apart, so one window can catch both.
+
+The Garmin loses here too, and reports EVENT_CHANNEL_COLLISION. But the channel that carries commands should not always be the one that loses. The suspect is the merge, priority and preempt code in `arm_rx_window()` (radiant_sched.c, rules 3–5, `RADIANT_SCHED_MERGE_SPAN_MAX_US`). The MPSL Dongle shows a smaller version of the same thing: FE-C slots within 3 ms of another channel were heard 55–60 % of the time, against 82 % otherwise.
+
+- Reproduce with two simulated masters at 8182 and 8192 (apps/trainer). Run it on the Pro Micro, and on the TI built with `ti_diag.conf` so the 0xF7 counters are available.
+
+## 2. [FIRMWARE, LATENT] The TI dual-sync merge ignores min_filter_hamming_bits
+When two tracked windows merge into one dual-sync RX (radiant_sched.c → radiant_radio_cc26xx.c), nothing checks how far apart the two filters are. Only the search applies `caps.min_filter_hamming_bits` (radiant_search.c:416); the cc26xx value is 4. In the 2026-08-13 measurement, filters 1 bit apart left the radio deaf, and at 4 bits it heard about 60 %.
+
+Tonight's pair (#20329 against #52233) is 5 bits apart, so it was not hit. Roughly 1 % of random device pairs fall within 3 bits. The merge should refuse to combine filters that are closer than the capability allows.
+
+## 3. [FIRMWARE] A pending slave acked command outlives the channel's search
+`api_ack_pending_send()` (ant_radio_radiant.c) runs only from the tracked-frame path and requires TRACKING. While the channel searches, a command is held for the full 750 ms opener budget (`RADIANT_API_ACK_OPENER_PERIODS` 3) and only blocks the next command. On the MPSL ride all three page 0x37s were lost: the ones at 76.3 s and 136.4 s timed out, and the one at 106.3 s was refused with TRANSFER_IN_PROGRESS behind an expiring 0x33. Page 0x37 arrives 0.72–0.81 s after a 0x33, which the "750 ms < 1010 ms" reasoning does not cover.
+- Fail the pending command as soon as the channel leaves TRACKING.
+- Send it on the frame that reacquires the channel. `api_search_acquired()` never calls `api_ack_pending_send()`. In 215313, the master was heard at 213.486 s, within budget, but the command still expired at 213.536 s. That is 1 case in 213.
+
+## 4. [BENCH] The MPSL Dongle's FE-C collapse: confirm it is RF, then measure the MPSL cost
+On the Dongle only 20 of 222 FE-C commands completed; the Pro Micro managed 181 of 213 and 174 of 200. The Dongle heard the Kicker about 8 dB weaker (-75 against -67 dBm), on all of the Kicker's channels, while the other sensors were equal on both sticks. FE-C spent 61 % of the ride searching, and 174 of the 202 failures were opener timeouts.
+
+Two things remain open:
+- When the master frame was heard, 57 % of commands got no ACK back (26 of 46), against 11–13 % on the Pro Micro.
+- At equal RSSI, power lost 17 % on the Dongle against 9 % on the Pro Micro, and the scan heard other sensors at 57 % of the Pro Micro's rate. That fits the MPSL arm-lead deafness, but board and placement are confounded.
+
+There was no MPSL assert and no re-enumeration.
+- Put the PCA10059 on the Pro Micro's port, in the same position and orientation. Gate on Kicker RSSI near -67 dBm.
+- Then A/B the direct image against `gate.conf` in that position. Compare power loss, scan rate, FE-C reacquire time and the "heard, no ACK" rate.
+
+## 5. [FIRMWARE, LOW] STARTUP_MESG takes 53–59 ms after SYSTEM_RESET
+The Garmin answers in 1 ms. 53–59 ms sits right at the libusb0 short-read race, where a read near reply latency loses the frame (1.1 % at 50 ms). Find what delays the reply and shorten it.
+
+## 6. [TOOLS] Zwift shim logging
+- `shim_log` takes no lock, and `g_lock` is initialised but never used (dsi_siusbxp.c:20,145; shim_util.c:13-37). Because ANT_DLL's read and write threads both log, lines get glued together or come out blank.
+- The "COM11 absent" path does not log `GetLastError()` (dsi_siusbxp.c:93-98). All four later Zwift launches in this log saw "COM11 absent".
+- Zero-byte reads are not logged (dsi_siusbxp.c:181), and log lines carry no timestamps, so read latency cannot be measured.
+- Every byte is logged with an `fflush`; one session wrote 73,390 lines. Host turnaround is 12–17 ms, against 0–1 ms on native USB. That comes from ANT_DLL's USBXpress path, matters during setup only, and is not the dongle.
+
+## 7. [TOOLS] decode_pcap.py gaps
+- It counts a transfer as accepted only on RESPONSE_NO_ERROR, so a Garmin capture shows accepted=0 and unmatched=149. It also pairs a completion with a submit made before the capture started.
+- Loss counted from RX_FAIL understates real loss (Garmin FE-C: 78 % against 84 %), because search periods and collisions produce no RX_FAIL. Count slots from the RX timestamp instead (flag 0x20).
+- A capture started mid-session has no CHANNEL_PERIOD, so the period has to be supplied by hand.
+- FE-C payloads (0x31, 0x33, 0x19, 0x10) are not decoded, and the summary header is written into the `-o` file.
+- The "discarded bytes" are only Zwift padding every OUT transfer with `00 00`. Label them as padding.
+
+## 8. [FIRMWARE, LOW] No EVENT_CHANNEL_COLLISION
+The Garmin raises collision events when two of its own slots overlap, and a collided slot gets no RX_FAIL. RadiANT reports nothing from `radiant_channel_on_slot_denied()`; every miss shows up as an RX_FAIL. Zwift is unaffected, so this is parity only.
+
+Settled by these captures, nothing to do:
+- The 0x61 and 0xC6 replies work: reset to first NETWORK_KEY now takes 11–15 s, against 42–94 s before.
+- Keep accept-newest with the 3-period expiry. The Garmin refuses newer commands with `4f 1f`: 49 % of ERG targets were discarded, and its ACK success per attempt was 32 % against RadiANT's 89 %.
+- The trainer followed targets that were reported as TX_FAILED, on both the Garmin and the Pro Micro. Most failures are lost return ACKs.
+- Lock Watts is a short ERG window: page 0x31 for 5–25 s, then back to 0x33.
+- Kicker quirks:
+  - It never sends page 0x47.
+  - In ERG it reports modelled power.
+  - Cadence is always 0xFF.
+  - It reports 0 W on leaving ERG.
+  - It also broadcasts as power (type 0x0B, transmission type 0xA5) and speed (type 0x7B).
+- Power meter #20329 reads about 35 % below the trainer. It is probably not on the same bike.
