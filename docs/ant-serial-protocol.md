@@ -58,6 +58,25 @@ extended-data message writes its checksum one past the end of the buffer, from
 sdk-ant's work-queue thread. `src/usb_ant_class.c:30` and
 `src/usb_ant_class_next.c:55` both independently state the 42.
 
+**What the dongle's parser does with a damaged host frame** (since 2026-11-16,
+on every transport; UART and USB share `process_byte()` in
+`apps/common/ant_serial_bridge.c`):
+
+- **A LEN of 39-255 is dropped without an answer** and counted in 0xF6
+  `host_desync`. The parser hunts for the next SYNC. Before, it stored the first
+  38 payload bytes and dispatched a truncated frame, which was usually answered
+  INVALID_MESSAGE. No legal host frame is that long. On a UART the usual cause
+  is a lost LEN byte, which makes the message id the length (0x42 → 66 bytes):
+  the old parser then swallowed the host's next several commands and every
+  resend of them. `tools/ant_conformance.py` records this as an intentional
+  divergence for `frame/malformed-oversize`.
+- **A failed checksum byte of `0xA4` starts a new frame,** as a `0xA4` in the
+  LEN position already did. When a short frame loses a byte, the next frame's
+  SYNC arrives in the checksum position. That frame is now parsed rather than
+  hunted past.
+- 0xF6 `uart_rx_overruns` counts the receiver overruns that cause most such
+  damage on a UART transport (archive/benchmarks/2026-11-16-ti-cmd-stall/).
+
 ## The checksum rule, worked
 
 **The XOR covers every byte from SYNC through the last payload byte,

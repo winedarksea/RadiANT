@@ -11,7 +11,31 @@ reads.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The TI dongle stopped answering host commands under load.** With about 9
+  tracked channels, the CC26xx UART lost a host byte every few tens of seconds:
+  Zephyr's driver runs it with the FIFO off, so a 1-byte receiver overran
+  whenever its ISR was held off for more than about 170 µs. One lost byte could
+  stall the host for seconds to minutes, because the parser then swallowed the
+  following commands and their resends. Zwift's 4.5 s scan reopen hit it
+  within 5-40 s. The ANT UART now runs with the hardware FIFO on (about 4 ms
+  of tolerance). On the full C2 workload for 300 s: 0 unanswered commands,
+  against a stall at 26 s on the old image
+  (`archive/benchmarks/2026-11-16-ti-cmd-stall/`).
+
 ### Changed
+
+- **Damaged host frames are handled differently, on every transport.** A frame
+  with LEN 39-255 used to be answered: the parser dispatched it truncated,
+  usually as INVALID_MESSAGE. It is now dropped silently and counted in 0xF6
+  `host_desync`. A failed checksum byte of `0xA4` now starts the next frame. No
+  legal host frame is affected. See `docs/ant-serial-protocol.md`, framing.
+- **0xF6 is 34 bytes, with `uart_rx_overruns` at [32..33].** An optional field
+  this build or transport cannot measure (coverage without
+  `CONFIG_RADIANT_SEARCH_COVERAGE`, overruns on USB) now reads `0xFFFF` instead
+  of being left out. Measured counts clamp at 65534. The structure version
+  stays 1, and `tools/ant_health.py` treats `0xFFFF` as not measured.
 
 - **CRC repair is on in the shipping dongles** (`CONFIG_RADIANT_CRC_REPAIR`
   and `CONFIG_RADIANT_PROFILE_SANITY` in `apps/dongle/prj.conf` and
