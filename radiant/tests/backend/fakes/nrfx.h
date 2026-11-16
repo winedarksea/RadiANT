@@ -108,6 +108,19 @@ struct fake_hw {
 	uint32_t cc[8];
 	bool     tev[8];
 	uint32_t conn_on;
+	/*
+	 * The late-ISR guard's staging. Every read of CC 0 (CC_SYNC) counts in
+	 * cc0_reads, and if cc0_hook is set it runs with the new count BEFORE the
+	 * value is returned, so a test can move the capture, raise an event or
+	 * rewrite the DMA buffer at a chosen point in the END branch. Captures
+	 * into CC 3 (CC_NOW, the software clock read) count in cc3_captures, and
+	 * cc3_hook runs AFTER the value is latched, so it stages what happens
+	 * just after that clock read.
+	 */
+	uint32_t cc0_reads;
+	void   (*cc0_hook)(uint32_t nth_read);
+	uint32_t cc3_captures;
+	void   (*cc3_hook)(uint32_t nth_capture);
 };
 extern struct fake_hw fake_hw;
 
@@ -149,9 +162,25 @@ static inline void nrf_timer_task_trigger(NRF_TIMER_Type *t, nrf_timer_task_t ta
 			}
 		}
 		fake_hw.cc[(int)task] = fake_hw.counter;
+		if ((int)task == 3) {
+			fake_hw.cc3_captures++;
+			if (fake_hw.cc3_hook != NULL) {
+				fake_hw.cc3_hook(fake_hw.cc3_captures);
+			}
+		}
 	}
 }
-static inline uint32_t nrf_timer_cc_get(NRF_TIMER_Type *t, uint8_t cc) { (void)t; return fake_hw.cc[cc]; }
+static inline uint32_t nrf_timer_cc_get(NRF_TIMER_Type *t, uint8_t cc)
+{
+	(void)t;
+	if (cc == 0u) {
+		fake_hw.cc0_reads++;
+		if (fake_hw.cc0_hook != NULL) {
+			fake_hw.cc0_hook(fake_hw.cc0_reads);
+		}
+	}
+	return fake_hw.cc[cc];
+}
 static inline void nrf_timer_cc_set(NRF_TIMER_Type *t, uint8_t cc, uint32_t v) { (void)t; fake_hw.cc[cc] = v; }
 static inline bool nrf_timer_event_check(NRF_TIMER_Type *t, nrf_timer_event_t e) { (void)t; return fake_hw.tev[e]; }
 static inline void nrf_timer_event_clear(NRF_TIMER_Type *t, nrf_timer_event_t e) { (void)t; fake_hw.tev[e] = false; }

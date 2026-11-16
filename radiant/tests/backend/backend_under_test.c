@@ -18,6 +18,11 @@
 #define CONFIG_RADIANT_BACKEND_NRF_IRQ_PRIO 0
 #define CONFIG_RADIANT_NRF_TRACK_HW_ADDR_LEN 0
 #define CONFIG_SOC_COMPATIBLE_NRF54LX 1
+/* The 0xF7 counters, so a test can read page 10 field 4. Nothing here calls
+ * radiant_radio_init(), so the cycle-clock helpers it names are not needed. */
+#define CONFIG_RADIANT_DIAG_COUNTERS 1
+/* radiant_radio_init() names the core clock; nothing here calls it. */
+static const uint32_t SystemCoreClock = 64000000u;
 
 #undef DT_CHOSEN
 #undef DT_NODE_EXISTS
@@ -35,6 +40,9 @@
 #define IRQ_CONNECT(...)
 
 #include "../../src/radiant_radio_nrf.c"
+
+/* The scheduler's pass stamp (radiant_sched.c, not in this image). */
+uint32_t radiant_diag_pass_now;
 
 #include <radiant/radiant_frame.h>
 
@@ -94,6 +102,15 @@ static void cb_rx(const struct radiant_rx_event *evt, void *user)
 	ARG_UNUSED(user);
 	bp.rx_events++;
 	bp.last_rx_status = evt->status;
+	bp.last_rx_body_len = evt->body_len;
+	memset(bp.last_rx_body, 0, sizeof(bp.last_rx_body));
+	if (evt->body != NULL) {
+		memcpy(bp.last_rx_body, evt->body,
+		       MIN((size_t)evt->body_len, sizeof(bp.last_rx_body)));
+	}
+	bp.last_rx_crc_rx = evt->crc_rx;
+	bp.last_rx_filter_index = evt->filter_index;
+	bp.last_rx_rssi_dbm = evt->rssi_dbm;
 	arm_follow_on_if_asked();
 }
 
@@ -107,6 +124,7 @@ static void cb_tx(const struct radiant_tx_event *evt, void *user)
 
 static const struct radiant_radio_cbs bcbs = { .rx = cb_rx, .tx = cb_tx };
 static const struct radiant_rx_filter bfilt = { .addr_len = 5u };
+static const struct radiant_rx_filter bfilt2[2] = { { .addr_len = 5u }, { .addr_len = 5u } };
 
 struct backend_probe *backend_probe(void) { return &bp; }
 
@@ -117,6 +135,10 @@ void backend_reset(void)
 	memset(&bp, 0, sizeof(bp));
 	memset(&radiant_op, 0, sizeof(radiant_op));
 	memset(&radiant_staged, 0, sizeof(radiant_staged));
+	memset(radiant_rx_buf, 0, sizeof(radiant_rx_buf));
+	memset(radiant_rx_snap, 0, sizeof(radiant_rx_snap));
+	memset(&nrf_diag, 0, sizeof(nrf_diag));
+	memset(radiant_filter_slot, 0, sizeof(radiant_filter_slot));
 	grant_release_owed = false;
 	core_cb_head = 0u;
 	core_cb_tail = 0u;
@@ -150,12 +172,77 @@ static void signal_isr(void)
 	fg.in_signal = false;
 }
 
+/*
+ * A frame whose END interrupt runs on time: its ADDRESS captured CC_SYNC
+ * 1000 us ago, long enough for any frame to have ended, so the late-ISR guard
+ * sees one consistent snapshot.
+ */
 void backend_frame(bool crc_ok)
 {
+	backend_frame_at(crc_ok, 1000u);
+}
+
+/*
+ * A frame whose ADDRESS captured CC_SYNC `since_address_us` before the END
+ * interrupt runs. Below the frame's ADDRESS-to-END airtime, that capture can
+ * only be the next frame's: the interrupt ran late.
+ */
+void backend_frame_at(bool crc_ok, uint32_t since_address_us)
+{
 	fake_hw.crc_ok = crc_ok;
+	fake_hw.cc[CC_SYNC] = fake_hw.counter;
+	fake_hw.counter += since_address_us;
 	fake_hw.event[NRF_RADIO_EVENT_ADDRESS] = true;
 	fake_hw.event[NRF_RADIO_EVENT_END] = true;
 	signal_isr();
+}
+
+/* An END with EVENTS_ADDRESS left as it is, `advance_us` later. */
+void backend_end_only(uint32_t advance_us)
+{
+	fake_hw.counter += advance_us;
+	fake_hw.event[NRF_RADIO_EVENT_END] = true;
+	signal_isr();
+}
+
+uint8_t *backend_rx_dma_buf(void) { return radiant_rx_buf; }
+bool backend_addr_carry(void) { return radiant_op.addr_carry; }
+bool backend_rx_any(void) { return radiant_op.rx_any; }
+uint32_t backend_torn_air_us(void) { return rx_torn_air_us(); }
+void backend_set_sw_addr_len(uint8_t n) { radiant_op.sw_addr_len = n; }
+void backend_set_report_crc_fail(void) { radiant_op.report_crc_fail = true; }
+uint32_t backend_late_isr_drops(void) { return nrf_diag.late_isr_drops; }
+
+/* Two filters: logical address 0 is filter 0, logical address 3 is filter 1. */
+void backend_two_filters(void)
+{
+	radiant_op.filters = bfilt2;
+	radiant_op.n_filters = 2u;
+	memset(radiant_filter_slot, 0, sizeof(radiant_filter_slot));
+	radiant_filter_slot[3] = 1u;
+}
+
+/*
+ * A real re-arm: program_rx() on the tracking format, opening well ahead of
+ * the counter, then the slot taken as the arm call would (CLAIM_TERMINAL()).
+ */
+int backend_program_rx(void)
+{
+	struct radiant_rx_req req;
+	int rc;
+
+	memset(&req, 0, sizeof(req));
+	req.fmt = radiant_frame_format(RADIANT_FRAME_CFG_TRACKING);
+	req.filters = &bfilt;
+	req.n_filters = 1u;
+	req.t_open = radiant_radio_now() + 10000u;
+	req.t_close = req.t_open + 1000u;
+	rc = program_rx(&req);
+	if (rc == RADIANT_RADIO_OK_RC) {
+		radiant_op.kind = OP_RX;
+		CLAIM_TERMINAL();
+	}
+	return rc;
 }
 
 void backend_tx_end(void)

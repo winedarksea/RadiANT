@@ -166,12 +166,14 @@ extern "C" {
  *   1 crc_unrepairable       MEASURED without CONFIG_RADIANT_CRC_REPAIR
  *   2 crc_repair_refuted
  *   3 crc_repair_implausible
- *   4 late_isr_drops         frames dropped by the nRF late-ISR guard - nRF,
- *                            count; reads 0 until that guard exists
+ *   4 late_isr_drops         frames dropped by the nRF late-ISR guard (a torn
+ *                            END snapshot, or a frame lost because the next
+ *                            one ended while it was read) - nRF, count
  *   5 end_late_max_us        worst END-interrupt lateness, now - (CC_SYNC +
- *                            software address, body and CRC airtime) - nRF.
- *                            Blind past the next frame's ADDRESS (CC_SYNC is
- *                            then that frame's): field 4 covers that regime
+ *                            software address, body and CRC airtime) - nRF,
+ *                            from accepted snapshots only. Past the next
+ *                            frame's ADDRESS the snapshot is torn and lands
+ *                            in field 4 instead
  *   6 t_sync_max_us          longest rx_t_sync() - cc26xx, A0 clock
  *   7 match_max_us           longest rx_match() plus the address/body copies
  *                            of one receive entry - cc26xx, A0 clock
