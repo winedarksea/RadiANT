@@ -3800,8 +3800,12 @@ static uint32_t rx_torn_air_us(void)
 /*
  * The settle wait's bound. A capture that passed the time test is at least
  * airtime - RX_TORN_SLACK_US old, and the wait ends at airtime +
- * RX_TORN_SETTLE_US, so it never needs more than their sum; the bound only
- * stops a stuck clock from hanging the interrupt.
+ * RX_TORN_SETTLE_US, so it never needs more than their sum. The bound is
+ * measured on the same TIMER, so it is a ceiling on the wait, not a guard
+ * against a stalled clock (that TIMER never stops; radio_disable_now() relies
+ * on it the same way). The +RX_TORN_SETTLE_US end point assumes END follows
+ * the nominal airtime within ~1 us: a rising radiant_dbg_rx_no_addr under
+ * load is the sign it does not.
  */
 #define RX_TORN_WAIT_MAX_US (RX_TORN_SLACK_US + RX_TORN_SETTLE_US)
 BUILD_ASSERT(RX_TORN_WAIT_MAX_US <= 4u, "the settle wait runs in the RADIO ISR");
