@@ -42,6 +42,14 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/../common/ant_radio_backend.cmake")
 radiant_select_backend("${CMAKE_CURRENT_SOURCE_DIR}/../../radiant" "cc26xx" RADIANT_BACKEND_CONF)
 ant_select_radio("${CMAKE_CURRENT_SOURCE_DIR}" "" "${RADIANT_BACKEND_CONF}" ANT_RADIO_CONF)
 
+# prj.conf turns CRC repair on inside `if RADIANT`; on a stub or sdk_ant build
+# (CONFIG_RADIANT=n) restate both as n so configure does not warn. Same as
+# apps/dongle/CMakeLists.txt.
+if(NOT ANT_RADIO STREQUAL "core")
+  string(APPEND ANT_RADIO_CONF
+    "CONFIG_RADIANT_CRC_REPAIR=n\nCONFIG_RADIANT_PROFILE_SANITY=n\n")
+endif()
+
 # Write only on a change - see apps/dongle/CMakeLists.txt for the full
 # rationale.
 set(ANT_RADIO_CONF_FILE "${CMAKE_CURRENT_BINARY_DIR}/ant_radio_backend.conf")

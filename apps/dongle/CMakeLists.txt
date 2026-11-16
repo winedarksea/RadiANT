@@ -52,6 +52,16 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/../common/ant_radio_backend.cmake")
 radiant_select_backend("${CMAKE_CURRENT_SOURCE_DIR}/../../radiant" "nrf" RADIANT_BACKEND_CONF)
 ant_select_radio("${CMAKE_CURRENT_SOURCE_DIR}" "" "${RADIANT_BACKEND_CONF}" ANT_RADIO_CONF)
 
+# prj.conf turns CRC repair on, and both symbols live inside `if RADIANT`.
+# A stub or sdk_ant build has CONFIG_RADIANT=n, so Kconfig would warn "assigned
+# 'y' but got 'n'" for each on every configure. This fragment is merged last,
+# so restating them as n here matches what that build gets anyway and keeps
+# its configure quiet. Only this app's backend fragment, not the shared helper.
+if(NOT ANT_RADIO STREQUAL "core")
+  string(APPEND ANT_RADIO_CONF
+    "CONFIG_RADIANT_CRC_REPAIR=n\nCONFIG_RADIANT_PROFILE_SANITY=n\n")
+endif()
+
 # Write only on a change. Zephyr adds every merged fragment to
 # CMAKE_CONFIGURE_DEPENDS, so rewriting an identical file each configure
 # would hand ninja a freshly-stamped dependency of the configure step it just
