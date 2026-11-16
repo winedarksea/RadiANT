@@ -29,6 +29,8 @@ static const uint32_t SystemCoreClock = 64000000u;
  * invalidation; with it off every arm writes, which the other suites cover.
  */
 #define RADIANT_NRF_REG_SHADOW 1
+/* The ED sweep, so test_arm_cache.c can check that program_ed() invalidates the shadow. */
+#define CONFIG_RADIANT_ED_SCAN 1
 
 #undef DT_CHOSEN
 #undef DT_NODE_EXISTS
@@ -63,6 +65,7 @@ struct fake_hw fake_hw;
 static struct {
 	bool     held;
 	bool     in_signal;
+	bool     pending;   /* gate_acquire() answers GATE_PENDING (a staged arm) */
 	uint32_t releases;
 } fg;
 
@@ -80,7 +83,7 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from, radiant_time_t
 {
 	ARG_UNUSED(op); ARG_UNUSED(t_from); ARG_UNUSED(t_to);
 	ARG_UNUSED(follow_on_us); ARG_UNUSED(prio);
-	return GATE_GRANTED;
+	return fg.pending ? GATE_PENDING : GATE_GRANTED;
 }
 
 uint32_t radiant_swi_zli_lock(void) { return 0u; }
@@ -329,7 +332,7 @@ void backend_grant_late_tx(void)
 	radiant_staged.tx.t_sync_at -= 1000u;
 	(void)format_prepare_memo(radiant_staged.tx.fmt,
 				  radiant_staged.tx.rf_index, 0u,
-				  &radiant_staged.tx_fmt);
+				  &radiant_staged.tx_regs);
 	radiant_staged.pending = true;
 	radiant_nrf_gate_on_grant();
 }
@@ -427,3 +430,64 @@ void backend_disable_enable(void)
 }
 
 uint8_t backend_filter_slot(uint8_t logical) { return radiant_filter_slot[logical]; }
+
+/*
+ * The real rx_arm() deferred branch: the gate answers PENDING, so the request
+ * is copied into radiant_staged and nothing is programmed until
+ * backend_grant_staged().
+ */
+int backend_rx_staged(const struct radiant_rx_req *req)
+{
+	uint32_t op;
+	int rc;
+
+	radiant_op.inited = true;
+	radiant_op.enabled = true;
+	radiant_op.kind = OP_NONE;
+	fg.pending = true;
+	rc = radiant_radio_rx(req, &op);
+	fg.pending = false;
+	return rc;
+}
+
+/* The grant for a staged arm, then the slot freed. */
+int backend_grant_staged(void)
+{
+	int rc;
+
+	radiant_nrf_gate_on_grant();
+	rc = radiant_op.gate_failed ? RADIANT_RADIO_ETIME : RADIANT_RADIO_OK_RC;
+	radiant_op.kind = OP_NONE;
+	return rc;
+}
+
+/* What the ISR's split match and CRC repair will read for this window. */
+uint8_t  backend_op_filter_byte(uint8_t i, uint8_t b) { return radiant_op.filters[i].addr[b]; }
+uint8_t  backend_op_n_filters(void) { return radiant_op.n_filters; }
+uint16_t backend_op_crc_init(void) { return radiant_op.crc_init; }
+
+/* Whether the filter memo holds this request's set. Reads only: no LRU stamp moves. */
+bool backend_filt_memo_holds(const struct radiant_rx_req *req)
+{
+	for (uint8_t i = 0u; i < FILT_MEMO_N; i++) {
+		if (filt_memo[i].valid && filt_memo[i].n == req->n_filters &&
+		    filt_memo[i].addr_len == req->fmt->addr_len &&
+		    memcmp(filt_memo[i].key, req->filters,
+			   (size_t)req->n_filters * sizeof(struct radiant_rx_filter)) == 0) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/* An ED chunk programmed between two receives. */
+void backend_program_ed(void)
+{
+	struct radiant_ed_req ed = {
+		.rf_index_lo = 2u, .rf_index_hi = 80u, .dwell_us = 400u,
+		.t_start = radiant_radio_now() + 10000u,
+	};
+
+	program_ed(&ed);
+	radiant_op.kind = OP_NONE;
+}

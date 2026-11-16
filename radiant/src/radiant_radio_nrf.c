@@ -784,16 +784,24 @@ struct nrf_rx_prep {
 /*
  * The request an arm call validated but has not programmed yet. Copied, not
  * pointed to: arm_rx_window()'s stack local is gone before an arbitrated grant
- * arrives. The inner pointers keep the HAL lifetime; only the struct is copied.
+ * arrives. The tx body pointer keeps the HAL lifetime; the rest is copied.
  * One request is live at a time (HAL rule; MPSL rejects a second with -NRF_EAGAIN).
  * The register images the arm computed travel with it, so a grant programs
- * exactly what was validated.
+ * exactly what was validated. So do the format and filter CONTENTS: rx.fmt,
+ * rx.filters and tx.fmt are repointed at the copies below, so the radiant_op
+ * fields program_rx()/program_tx() fill at the grant, and the ISR's split match
+ * (radiant_op.filters), see the arm-time request even if the caller has since
+ * rewritten its arrays. Copied on the deferred path only: a direct arm programs
+ * in the same call. Costs 56 bytes of filters plus two formats of RAM.
  */
 static struct {
-	struct radiant_rx_req rx;
-	struct nrf_rx_prep    rx_prep;
-	struct radiant_tx_req tx;
-	struct nrf_fmt_regs   tx_fmt;
+	struct radiant_rx_req     rx;
+	struct nrf_rx_prep        rx_prep;
+	struct radiant_pkt_format rx_fmt;
+	struct radiant_rx_filter  rx_filters[8];
+	struct radiant_tx_req     tx;
+	struct nrf_fmt_regs       tx_regs;
+	struct radiant_pkt_format tx_fmt;
 #if defined(CONFIG_RADIANT_ED_SCAN)
 	struct radiant_ed_req ed;
 #endif
@@ -1191,6 +1199,15 @@ static int format_prepare(const struct radiant_pkt_format *fmt,
  *    nRF54L the 802.15.4 driver's nrf_radio_reset() can land inside our own
  *    timeslot (see radiant_nrf_gate_on_grant()), which no hook here can see.
  *    Nearly every arm there opens a new grant anyway, so it would rarely hit.
+ *
+ *    Also nRF52 only. The nRF52 RADIO keeps its registers until RADIO->POWER
+ *    or a reset, and nothing here touches POWER. On nRF54L and the nRF5340
+ *    network core, whether the RADIO keeps them across CPU idle, HFXO release
+ *    and automatic power-domain handling is unverified, and no bench could
+ *    check it. To widen it: show on that part that registers written before an
+ *    idle/HFXO-off period read back unchanged after it (or cite the datasheet
+ *    guarantee), then run a tracked-loss A/B with and without the shadow. The
+ *    memos are pure and stay on everywhere.
  *    A test may force it on by defining RADIANT_NRF_REG_SHADOW first.
  */
 #if !defined(RADIANT_NRF_REG_SHADOW)
@@ -1198,28 +1215,49 @@ static int format_prepare(const struct radiant_pkt_format *fmt,
 	defined(CONFIG_BT) || defined(CONFIG_NRF_802154_RADIO_DRIVER) ||        \
 	defined(CONFIG_IEEE802154)
 #define RADIANT_NRF_REG_SHADOW 0
-#else
+/* SOC_SERIES_NRF52X before Zephyr 4.4 (NCS v3.2.4), SOC_SERIES_NRF52 after. */
+#elif defined(CONFIG_SOC_SERIES_NRF52X) || defined(CONFIG_SOC_SERIES_NRF52)
 #define RADIANT_NRF_REG_SHADOW 1
+#else
+#define RADIANT_NRF_REG_SHADOW 0
 #endif
 #endif
 
 /*
- * Formats a memo holds. A Zwift-style load arms three in rotation: the search
- * format (scan chunks), tracking receive (short match) and tracking transmit
- * (sw_addr_len 0). Four leaves a spare; a miss costs the full check, not an error.
+ * Both memos evict the least recently used entry (stamp = arm counter, compared
+ * by age, so the 32-bit wrap is harmless). A miss is a full check, not an error.
+ *
+ * Formats: a Zwift-style load arms three in rotation, the search format (scan
+ * chunks), tracking receive (short match) and tracking transmit (sw_addr_len 0).
+ * Four (about 60 B each) keeps all three hot with a spare for a coded-PHY or a
+ * second tracking variant.
+ *
+ * Filter sets: the scan's set is constant and each tracked channel has its own,
+ * so the stream looks like S,A,S,B,C,S,D... LRU keeps S hot while at most N-1
+ * other sets arm between two scan chunks. N=3 (about 96 B each) covers two
+ * tracked windows back to back between chunks. The tracked sets mostly miss
+ * whatever N is (eight channels rotate through), so a bigger N buys little for
+ * its RAM.
+ *
+ * Concurrency: memo and shadow are touched only by the arm call that holds the
+ * operation slot (radiant_op.kind is claimed under irq_lock(), so a nested arm
+ * gets EBUSY before it reads them) and by program_*() for that operation. An
+ * abort from interrupt context during a thread arm is the existing radiant_op
+ * race class (it frees the slot under the arm); the abort never writes the memo.
  */
 #define FMT_MEMO_N  4u
-/* Filter sets. The scan's set is constant; each tracked channel has its own. */
-#define FILT_MEMO_N 2u
+#define FILT_MEMO_N 3u
+
+static uint32_t arm_memo_clock;
 
 static struct {
 	struct radiant_pkt_format key;
 	uint8_t                   rf_index;
 	uint8_t                   sw_addr_len;
 	bool                      valid;
+	uint32_t                  used;
 	struct nrf_fmt_regs       regs;
 } fmt_memo[FMT_MEMO_N];
-static uint8_t fmt_memo_next;
 
 /* Field by field: a struct copy carries padding, which memcmp() would compare. */
 static bool fmt_same(const struct radiant_pkt_format *a,
@@ -1251,15 +1289,27 @@ static int format_prepare_memo(const struct radiant_pkt_format *fmt,
 		if (fmt_memo[i].valid && fmt_memo[i].rf_index == rf_index &&
 		    fmt_memo[i].sw_addr_len == sw_addr_len &&
 		    fmt_same(&fmt_memo[i].key, fmt)) {
+			fmt_memo[i].used = ++arm_memo_clock;
 			*out = fmt_memo[i].regs;
 			return RADIANT_RADIO_OK_RC;
 		}
 	}
 	rc = format_prepare(fmt, rf_index, sw_addr_len, out);
 	if (rc == RADIANT_RADIO_OK_RC) {
-		uint8_t i = fmt_memo_next;
+		uint8_t i = 0u;
 
-		fmt_memo_next = (uint8_t)((i + 1u) % FMT_MEMO_N);
+		/* An unused entry first, else the least recently used. */
+		for (uint8_t j = 0u; j < FMT_MEMO_N; j++) {
+			if (!fmt_memo[j].valid) {
+				i = j;
+				break;
+			}
+			if ((uint32_t)(arm_memo_clock - fmt_memo[j].used) >
+			    (uint32_t)(arm_memo_clock - fmt_memo[i].used)) {
+				i = j;
+			}
+		}
+		fmt_memo[i].used = ++arm_memo_clock;
 		fmt_memo[i].key = *fmt;
 		fmt_memo[i].rf_index = rf_index;
 		fmt_memo[i].sw_addr_len = sw_addr_len;
@@ -1509,11 +1559,11 @@ static struct {
 	uint8_t                  addr_len;
 	bool                     phy_1m;
 	bool                     valid;
+	uint32_t                 used;
 	struct nrf_filt_regs     regs;
 	uint8_t                  slot[8];
 	uint8_t                  sw_addr_len;
 } filt_memo[FILT_MEMO_N];
-static uint8_t filt_memo_next;
 
 BUILD_ASSERT(sizeof(struct radiant_rx_filter) ==
 		     RADIANT_RADIO_ADDR_MAX + 2u,
@@ -1542,6 +1592,7 @@ static int filt_memo_find(const struct radiant_rx_req *req)
 		    memcmp(filt_memo[i].key, req->filters,
 			   (size_t)req->n_filters *
 				   sizeof(struct radiant_rx_filter)) == 0) {
+			filt_memo[i].used = ++arm_memo_clock;
 			return (int)i;
 		}
 	}
@@ -1551,9 +1602,20 @@ static int filt_memo_find(const struct radiant_rx_req *req)
 static void filt_memo_store(const struct radiant_rx_req *req,
 			    const struct nrf_rx_prep *prep)
 {
-	uint8_t i = filt_memo_next;
+	uint8_t i = 0u;
 
-	filt_memo_next = (uint8_t)((i + 1u) % FILT_MEMO_N);
+	/* An unused entry first, else the least recently used. */
+	for (uint8_t j = 0u; j < FILT_MEMO_N; j++) {
+		if (!filt_memo[j].valid) {
+			i = j;
+			break;
+		}
+		if ((uint32_t)(arm_memo_clock - filt_memo[j].used) >
+		    (uint32_t)(arm_memo_clock - filt_memo[i].used)) {
+			i = j;
+		}
+	}
+	filt_memo[i].used = ++arm_memo_clock;
 	memcpy(filt_memo[i].key, req->filters,
 	       (size_t)req->n_filters * sizeof(struct radiant_rx_filter));
 	filt_memo[i].n = req->n_filters;
@@ -1570,8 +1632,7 @@ __maybe_unused static void arm_memo_forget(void)
 {
 	memset(fmt_memo, 0, sizeof(fmt_memo));
 	memset(filt_memo, 0, sizeof(filt_memo));
-	fmt_memo_next = 0u;
-	filt_memo_next = 0u;
+	arm_memo_clock = 0u;
 }
 
 /*
@@ -2712,7 +2773,9 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 	if (g == GATE_PENDING) {
 		/* Copied only on the deferred path (see radiant_radio_rx()). The body must stay valid until completion. */
 		radiant_staged.tx = *req;
-		radiant_staged.tx_fmt = fmt_regs;
+		radiant_staged.tx_fmt = *req->fmt;
+		radiant_staged.tx.fmt = &radiant_staged.tx_fmt;
+		radiant_staged.tx_regs = fmt_regs;
 		radiant_staged.pending = true;
 #if defined(CONFIG_RADIANT_GATE_MPSL_D2)
 		d2_settle_now();
@@ -3177,6 +3240,14 @@ static int rx_arm(const struct radiant_rx_req *req, uint32_t *op)
 		 */
 		radiant_staged.rx = *req;
 		radiant_staged.rx_prep = prep;
+		/* The arm-time contents (see radiant_staged). n_filters <= caps.max_filters, checked by rx_prepare(). */
+		__ASSERT_NO_MSG(req->n_filters <=
+				ARRAY_SIZE(radiant_staged.rx_filters));
+		radiant_staged.rx_fmt = *req->fmt;
+		radiant_staged.rx.fmt = &radiant_staged.rx_fmt;
+		memcpy(radiant_staged.rx_filters, req->filters,
+		       (size_t)req->n_filters * sizeof(struct radiant_rx_filter));
+		radiant_staged.rx.filters = radiant_staged.rx_filters;
 		radiant_staged.pending = true;
 #if defined(CONFIG_RADIANT_GATE_MPSL_D2)
 		d2_settle_now();
@@ -3564,7 +3635,7 @@ void radiant_nrf_gate_on_grant(void)
 		rc = program_rx(&radiant_staged.rx, &radiant_staged.rx_prep);
 		break;
 	case OP_TX:
-		rc = program_tx(&radiant_staged.tx, &radiant_staged.tx_fmt);
+		rc = program_tx(&radiant_staged.tx, &radiant_staged.tx_regs);
 		break;
 #if defined(CONFIG_RADIANT_ED_SCAN)
 	case OP_ED:

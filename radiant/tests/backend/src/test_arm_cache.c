@@ -351,3 +351,106 @@ ZTEST(radiant_backend_arm_cache, test_a_refused_request_writes_nothing)
 	zassert_true(format_poisoned(), "a refused arm wrote the format");
 	zassert_true(filters_poisoned(), "a refused arm wrote the addresses");
 }
+
+/*
+ * A deferred (MPSL) arm through the real rx_arm() branch: the caller rewrites
+ * its format and filters between the arm and the grant. The grant programs the
+ * validated, arm-time request, and the ISR-facing fields (radiant_op.filters,
+ * crc_init) describe the same request as the registers.
+ */
+ZTEST(radiant_backend_arm_cache, test_a_staged_arm_programs_the_arm_time_request)
+{
+	struct radiant_rx_req req;
+	uint32_t prefix0, crcinit;
+	const uint8_t prefix_byte = filt_b[0].addr[4];
+
+	fmt_copy.crc.init = 0x4321u;
+	track_req(&req, filt_b, 1u);
+	req.fmt = &fmt_copy;
+	zassert_equal(RADIANT_RADIO_OK_RC, backend_rx(&req));
+	prefix0 = fake_radio_regs.PREFIX0;
+	crcinit = fake_radio_regs.CRCINIT;
+	backend_grant_end();   /* forget the shadow: the grant must write */
+
+	track_req(&req, filt_b, 1u);
+	req.fmt = &fmt_copy;
+	zassert_equal(RADIANT_RADIO_OK_RC, backend_rx_staged(&req));
+	poison();
+	filt_b[0].addr[4] = 0x7Eu;
+	fmt_copy.crc.init = 0x1111u;
+	zassert_equal(RADIANT_RADIO_OK_RC, backend_grant_staged());
+
+	zassert_equal(prefix0, fake_radio_regs.PREFIX0,
+		      "the grant programmed an address rewritten after the arm");
+	zassert_equal(crcinit, fake_radio_regs.CRCINIT,
+		      "the grant programmed a CRC init rewritten after the arm");
+	zassert_equal(1u, backend_op_n_filters());
+	zassert_equal(prefix_byte, backend_op_filter_byte(0u, 4u),
+		      "the ISR would match against a filter rewritten after the arm");
+	zassert_equal(0x4321u, backend_op_crc_init(),
+		      "the ISR would repair with a CRC init rewritten after the arm");
+}
+
+/* A filter-memo hit must not let an invalid format through: the format's code wins. */
+ZTEST(radiant_backend_arm_cache, test_a_filter_memo_hit_with_an_invalid_format_is_refused)
+{
+	struct radiant_rx_req req;
+
+	track_req(&req, filt_b, 1u);
+	zassert_equal(RADIANT_RADIO_OK_RC, backend_rx(&req));
+	zassert_true(backend_filt_memo_holds(&req));
+
+	fmt_copy.crc.poly = 0x8005u;   /* same addr_len and PHY, so the filter memo hits */
+	track_req(&req, filt_b, 1u);
+	req.fmt = &fmt_copy;
+	poison();
+	zassert_equal(RADIANT_RADIO_ENOTSUP, backend_rx(&req),
+		      "a memo hit on the filters let an invalid format through");
+	zassert_true(format_poisoned() && filters_poisoned(),
+		     "a refused arm wrote registers");
+}
+
+/*
+ * The Zwift-style stream: a constant scan set S between tracked sets that each
+ * arm once. LRU keeps S hot with up to two tracked sets between chunks; the
+ * round-robin it replaced evicted S on the third new set.
+ */
+ZTEST(radiant_backend_arm_cache, test_the_alternating_set_stays_in_the_filter_memo)
+{
+	static struct radiant_rx_filter tracked[6][1];
+	struct radiant_rx_req scan, req;
+
+	track_req(&scan, filt_a, 2u);
+	zassert_equal(RADIANT_RADIO_OK_RC, backend_rx(&scan));
+	for (uint8_t i = 0u; i < 6u; i++) {
+		set_addr(&tracked[i][0], (uint8_t)(0x40u + i), (uint8_t)(0x10u + i));
+		track_req(&req, tracked[i], 1u);
+		zassert_equal(RADIANT_RADIO_OK_RC, backend_rx(&req));
+		if ((i & 1u) == 1u) {
+			/* Two tracked sets back to back, then the scan again. */
+			zassert_true(backend_filt_memo_holds(&scan),
+				     "the scan set was evicted after tracked set %u", i);
+			track_req(&scan, filt_a, 2u);
+			zassert_equal(RADIANT_RADIO_OK_RC, backend_rx(&scan));
+		}
+	}
+	zassert_true(backend_filt_memo_holds(&scan), "the scan set was evicted");
+	track_req(&req, tracked[0], 1u);
+	zassert_false(backend_filt_memo_holds(&req), "the oldest tracked set was not evicted");
+}
+
+/* An ED chunk rewrites MODE, RXADDRESSES and FREQUENCY: the next receive writes everything. */
+ZTEST(radiant_backend_arm_cache, test_an_ed_sweep_makes_the_next_receive_rewrite_everything)
+{
+	struct radiant_rx_req req;
+
+	track_req(&req, filt_b, 1u);
+	zassert_equal(RADIANT_RADIO_OK_RC, backend_rx(&req));
+	backend_program_ed();
+	poison();
+	track_req(&req, filt_b, 1u);
+	zassert_equal(RADIANT_RADIO_OK_RC, backend_rx(&req));
+	zassert_true(format_rewritten(), "a receive after an ED sweep trusted the format");
+	zassert_true(filters_rewritten(), "a receive after an ED sweep trusted the addresses");
+	zassert_equal(2400u + RF_ANT, fake_radio_regs.FREQUENCY);
+}

@@ -59,5 +59,12 @@ int      backend_grant_rx(const struct radiant_rx_req *req);
 void     backend_grant_end(void);
 void     backend_disable_enable(void);
 uint8_t  backend_filter_slot(uint8_t logical);
+int      backend_rx_staged(const struct radiant_rx_req *req);
+int      backend_grant_staged(void);
+uint8_t  backend_op_filter_byte(uint8_t i, uint8_t b);
+uint8_t  backend_op_n_filters(void);
+uint16_t backend_op_crc_init(void);
+bool     backend_filt_memo_holds(const struct radiant_rx_req *req);
+void     backend_program_ed(void);
 
 #endif
