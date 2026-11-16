@@ -95,15 +95,24 @@ FIELDS = (
 # decodes.
 PAYLOAD_LEN = 30
 
-# Fields only some builds carry. (name, offset, width, description, what the
-# text output says when the body is too short to hold it.) The key is present
-# in the decoded dict only when the body is long enough: a build that cannot
-# measure it must not read as 0.
+# Fields only some builds or transports can measure. (name, offset, width,
+# description, what the text output says when it is not measured.) The key is
+# present in the decoded dict only when the body holds the field AND the field
+# is not NOT_MEASURED: a build that cannot measure it must not read as 0.
+# Since 2026-11-16 firmware always sends [30..33] and marks an unmeasured
+# field with NOT_MEASURED (real counts clamp one short of it); older firmware
+# left [30..31] out instead (30-byte body). Either way the key is absent.
 OPTIONAL_FIELDS = (
     ("sets_advanced_uncovered", 30, 2,
      "search sets that advanced without hearing every phase (MPSL builds)",
-     "not in this build (no coverage counter compiled in)"),
+     "not measured on this build (no coverage counter compiled in)"),
+    ("uart_rx_overruns", 32, 2,
+     "host bytes the UART receiver overran (UART transports)",
+     "not measured (USB transport, older firmware, or no driver support)"),
 )
+
+# radiant/include/radiant/ant_health.h's ANT_HEALTH_NOT_MEASURED.
+NOT_MEASURED = 0xFFFF
 
 
 def decode(payload: bytes) -> dict:
@@ -133,7 +142,9 @@ def decode(payload: bytes) -> dict:
         out[name] = int.from_bytes(payload[off:off + width], "little")
     for name, off, width, _desc, _absent in OPTIONAL_FIELDS:
         if len(payload) >= off + width:
-            out[name] = int.from_bytes(payload[off:off + width], "little")
+            value = int.from_bytes(payload[off:off + width], "little")
+            if value != NOT_MEASURED:
+                out[name] = value
     return out
 
 

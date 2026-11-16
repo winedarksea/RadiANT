@@ -33,6 +33,8 @@ static atomic_t counters[ANT_HEALTH_COUNT];
 static atomic_t depth_tx;
 static atomic_t depth_event;
 static atomic_t saturated;
+/* Bit per counter: set once the image declares it can measure it. */
+static atomic_t measured;
 
 void ant_health_note(enum ant_health_counter c)
 {
@@ -82,6 +84,13 @@ void ant_health_depth(uint8_t which, uint32_t used)
 			return;
 		}
 	} while (!atomic_cas(slot, seen, (atomic_val_t)used));
+}
+
+void ant_health_measured(enum ant_health_counter c)
+{
+	if ((unsigned int)c < (unsigned int)ANT_HEALTH_COUNT) {
+		atomic_set_bit(&measured, (int)c);
+	}
 }
 
 /* u16 little-endian, the byte order every multi-byte field in the ANT serial
@@ -165,23 +174,46 @@ size_t ant_health_fill(uint8_t *out, size_t cap)
 							    : ev->high_water);
 	}
 
-#if defined(CONFIG_RADIANT_SEARCH_COVERAGE)
-	/* [30..31] sets_advanced_uncovered. Clamped WITHOUT put_u16()'s flag:
+	/* [30..31] sets_advanced_uncovered, ANT_HEALTH_NOT_MEASURED without
+	 * CONFIG_RADIANT_SEARCH_COVERAGE. Clamped WITHOUT put_u16()'s flag:
 	 * this counter climbs for as long as a search runs, so one long-running
 	 * field would otherwise mark every other field in the reply as a
 	 * floor - the reason the idle sweep field was left out (see
-	 * ANT_HEALTH_SWEEP_BUSY). A counter that stops at 65535 says "at least
-	 * this many" on its own. */
+	 * ANT_HEALTH_SWEEP_BUSY). A counter that stops at
+	 * ANT_HEALTH_MEASURED_MAX says "at least this many" on its own. */
 	{
-		uint32_t n = radiant_search_sets_uncovered_get();
+		uint32_t n = ANT_HEALTH_NOT_MEASURED;
 
-		if (n > ANT_HEALTH_MAX) {
-			n = ANT_HEALTH_MAX;
-		}
+#if defined(CONFIG_RADIANT_SEARCH_COVERAGE)
+		n = MIN(radiant_search_sets_uncovered_get(),
+			(uint32_t)ANT_HEALTH_MEASURED_MAX);
+#endif
 		out[30] = (uint8_t)(n & 0xFFu);
 		out[31] = (uint8_t)((n >> 8) & 0xFFu);
 	}
-#endif
+
+	/* [32..33] UART receiver overruns, ANT_HEALTH_NOT_MEASURED unless the
+	 * transport declared it can see them (USB images never do). A real
+	 * count saturates like the rest - flag in [1] - but one short of the
+	 * sentinel. */
+	{
+		uint32_t n = ANT_HEALTH_NOT_MEASURED;
+
+		if (atomic_test_bit(&measured, ANT_HEALTH_UART_RX_OVERRUN)) {
+			n = (uint32_t)atomic_get(
+				&counters[ANT_HEALTH_UART_RX_OVERRUN]);
+			if (n > ANT_HEALTH_MEASURED_MAX) {
+				n = ANT_HEALTH_MEASURED_MAX;
+				atomic_set(&saturated, 1);
+			}
+		}
+		out[32] = (uint8_t)(n & 0xFFu);
+		out[33] = (uint8_t)((n >> 8) & 0xFFu);
+	}
+
+	/* [1] again: put_u16() and the clamp above can set the flag after
+	 * it was first written. */
+	out[1] = (atomic_get(&saturated) != 0) ? 0x01u : 0x00u;
 
 	return ANT_HEALTH_BODY_LEN;
 }

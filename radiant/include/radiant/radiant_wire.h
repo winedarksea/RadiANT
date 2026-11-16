@@ -1828,42 +1828,49 @@
  * completed within their timeout, i.e. the host stopped polling. [30..31]
  * OPTIONAL, sets_advanced_uncovered: sets of the MPSL sweep that finished
  * their dwell having listened to fewer than all phases of the channel period,
- * present only on a build with CONFIG_RADIANT_SEARCH_COVERAGE (which an MPSL
- * build enabling these health counters takes on), where the body is 32 bytes.
- * Every other build answers 30 bytes and this field is absent, because a
- * build that cannot measure coverage must not report 0 uncovered. UNLIKE the
- * rest it clamps at 65535 WITHOUT setting the flag in [1]: it climbs for as
- * long as a search runs, and a flag set by it would mark every other field a
- * floor for the reason given below. All the others are u16 LE and all
- * saturate rather than wrap, which is what the flag in [1] is for: it
- * distinguishes 65535 from 65535-and-counting. VERSIONING: fields are only
- * ever added at the end and an offset is never reused. The structure version
- * stays 1 throughout the beta, whatever is added, so a reader tells which
- * fields exist from the body length and treats the version as nothing more
- * than a sanity check. A reader refuses a body shorter than it needs, and
- * decodes the fields it knows from a longer body. THE OTHER HALF OF [20..21]
- * IS DELIBERATELY ABSENT. A decline because NO channel was searching is
- * discovery having succeeded, not failed, and it is not loss - and the pump
- * runs about 31 times a second regardless, so such a field would climb
- * forever on an idle dongle and saturate in about 35 minutes. Measured on the
- * first hardware read of this reply: 231 within nine seconds of boot with no
- * channel ever opened. Since saturation sets the flag in [1], that one field
- * would have made every OTHER field on the board read as a floor. It was
- * carried by the SWEEP debug log line, which was retired with that
- * instrument; the reason this field is absent from the reply stands on its
- * own. WHY THIS EXISTS. tools/ab_gates.toml's unexplained_loss.max = 0 is a
- * SITTING INVALIDATOR rather than a gate: a hole with no RX_FAIL means the
- * loss happened on the host or inside the dongle, and loss_accounting()
- * cannot tell those two apart. A firmware-side witness splits that bucket.
- * That check has already caught 0.4 pp of imaginary loss once; a second
- * source makes it sharper. And on a Feather - no debugger, the board most
- * people flash - the LOG_WRN that is the only record of a drop today does not
- * exist at all. DEPTHS 32 AND 64 ARE NOT THE ANSWER TO A NON-ZERO [2..3]. At
- * 3103 msg/s a 64-byte frame arrives every ~322 us, so depth 32 is about 10
- * ms of buffer. If the host stops reading for longer than that, a deeper
- * queue converts a drop into LATENCY - the wrong trade for a protocol whose
- * whole value is a 0.345 ms p50. [Phase 1.4; tools/ab_gates.toml
- * unexplained_loss]
+ * measured only on a build with CONFIG_RADIANT_SEARCH_COVERAGE (which an MPSL
+ * build enabling these health counters takes on). UNLIKE the rest it clamps
+ * at 65534 WITHOUT setting the flag in [1]: it climbs for as long as a search
+ * runs, and a flag set by it would mark every other field a floor for the
+ * reason given below. [32..33] OPTIONAL, uart_rx_overruns: host bytes the
+ * UART receiver overwrote before the transport read them (the driver reported
+ * UART_ERROR_OVERRUN), measured only on a UART transport whose driver reports
+ * overruns (cc13xx_cc26xx, nRF UARTE); each is a lost host byte, so
+ * host_desync/host_csum move with it. It saturates like the rest (flag in
+ * [1]) but at 65534. NOT MEASURED: an optional field this build or transport
+ * cannot measure reads 0xFFFF (never 0, which would claim none), and a
+ * measured count never reaches 0xFFFF. Firmware since 2026-11-16 always
+ * answers 34 bytes; earlier firmware answered 30 bytes, or 32 with coverage,
+ * leaving absent fields out instead. A reader treats an absent field and
+ * 0xFFFF alike. All the others are u16 LE and all saturate rather than wrap,
+ * which is what the flag in [1] is for: it distinguishes 65535 from
+ * 65535-and-counting. VERSIONING: fields are only ever added at the end and
+ * an offset is never reused. The structure version stays 1 throughout the
+ * beta, whatever is added, so a reader tells which fields exist from the body
+ * length and treats the version as nothing more than a sanity check. A reader
+ * refuses a body shorter than it needs, and decodes the fields it knows from
+ * a longer body. THE OTHER HALF OF [20..21] IS DELIBERATELY ABSENT. A decline
+ * because NO channel was searching is discovery having succeeded, not failed,
+ * and it is not loss - and the pump runs about 31 times a second regardless,
+ * so such a field would climb forever on an idle dongle and saturate in about
+ * 35 minutes. Measured on the first hardware read of this reply: 231 within
+ * nine seconds of boot with no channel ever opened. Since saturation sets the
+ * flag in [1], that one field would have made every OTHER field on the board
+ * read as a floor. It was carried by the SWEEP debug log line, which was
+ * retired with that instrument; the reason this field is absent from the
+ * reply stands on its own. WHY THIS EXISTS. tools/ab_gates.toml's
+ * unexplained_loss.max = 0 is a SITTING INVALIDATOR rather than a gate: a
+ * hole with no RX_FAIL means the loss happened on the host or inside the
+ * dongle, and loss_accounting() cannot tell those two apart. A firmware-side
+ * witness splits that bucket. That check has already caught 0.4 pp of
+ * imaginary loss once; a second source makes it sharper. And on a Feather -
+ * no debugger, the board most people flash - the LOG_WRN that is the only
+ * record of a drop today does not exist at all. DEPTHS 32 AND 64 ARE NOT THE
+ * ANSWER TO A NON-ZERO [2..3]. At 3103 msg/s a 64-byte frame arrives every
+ * ~322 us, so depth 32 is about 10 ms of buffer. If the host stops reading
+ * for longer than that, a deeper queue converts a drop into LATENCY - the
+ * wrong trade for a protocol whose whole value is a 0.345 ms p50. [Phase 1.4;
+ * tools/ab_gates.toml unexplained_loss]
  */
 #define RADIANT_WIRE_MESG_RADIANT_HEALTH_ID                  0xF6
 

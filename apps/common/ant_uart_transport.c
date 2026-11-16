@@ -141,6 +141,41 @@ BUILD_ASSERT(!IS_ENABLED(CONFIG_PM) && !IS_ENABLED(CONFIG_PM_DEVICE),
 
 /* ── UART interrupt handler ────────────────────────────────────────────────── */
 
+/* 0xF6 [32..33]: receiver overruns, read through the driver's err_check(),
+ * which on both UARTs this transport serves is one status-register read and
+ * clear (cc13xx_cc26xx: RSR, cleared through ECR; nRF UARTE: ERRORSRC).
+ * Called at the top of every ISR pass, so an overrun is counted on the pass
+ * after the byte it cost. Off with the health counters, so the shipping
+ * image does not change. */
+#if defined(CONFIG_ANT_DONGLE_HEALTH_COUNTERS)
+static bool rx_overrun_measured;
+
+static void note_rx_errors(const struct device *dev)
+{
+	if (rx_overrun_measured) {
+		int err = uart_err_check(dev);
+
+		if (err > 0 && (err & UART_ERROR_OVERRUN) != 0) {
+			ant_health_note(ANT_HEALTH_UART_RX_OVERRUN);
+		}
+	}
+}
+
+/* At enable: a driver without err_check() answers -ENOSYS, and its field
+ * stays "not measured" rather than reading as zero overruns. The probe also
+ * clears anything latched before the transport was up. */
+static void rx_overrun_probe(const struct device *dev)
+{
+	if (uart_err_check(dev) != -ENOSYS) {
+		rx_overrun_measured = true;
+		ant_health_measured(ANT_HEALTH_UART_RX_OVERRUN);
+	}
+}
+#else
+#define note_rx_errors(dev)   ((void)0)
+#define rx_overrun_probe(dev) ((void)0)
+#endif
+
 /* One FIFO read into the RX ring. Returns the number of bytes read. */
 static int rx_service(const struct device *dev)
 {
@@ -190,6 +225,8 @@ static void ant_uart_isr(const struct device *dev, void *user_data)
 	for (;;) {
 		bool worked = false;
 
+		note_rx_errors(dev);
+
 		/* Until the FIFO is empty: clears both RX and RX timeout. */
 		while (UARTCharsAvail(ANT_UART_BASE)) {
 			if (rx_service(dev) <= 0) {
@@ -232,6 +269,8 @@ static void ant_uart_isr(const struct device *dev, void *user_data)
 	ARG_UNUSED(user_data);
 
 	while (uart_irq_update(dev) && uart_irq_is_pending(dev)) {
+		note_rx_errors(dev);
+
 		if (uart_irq_rx_ready(dev)) {
 			(void)rx_service(dev);
 		}
@@ -374,6 +413,7 @@ int ant_transport_enable(void)
 
 	/* Before RX is unmasked; see the CC13xx/CC26xx note above. */
 	ant_uart_hw_fifo_enable();
+	rx_overrun_probe(ant_uart_dev);
 	uart_irq_rx_enable(ant_uart_dev);
 	transport_up = true;
 
