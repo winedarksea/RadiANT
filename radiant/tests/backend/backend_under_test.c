@@ -23,6 +23,14 @@
 #define CONFIG_RADIANT_DIAG_COUNTERS 1
 /* radiant_radio_init() names the core clock; nothing here calls it. */
 static const uint32_t SystemCoreClock = 64000000u;
+/*
+ * The register shadow (B4) is compiled out of every MPSL build, this one
+ * included. Forced on so test_arm_cache.c can check its skip decision and every
+ * invalidation; with it off every arm writes, which the other suites cover.
+ */
+#define RADIANT_NRF_REG_SHADOW 1
+/* The ED sweep, so test_arm_cache.c can check that program_ed() invalidates the shadow. */
+#define CONFIG_RADIANT_ED_SCAN 1
 
 #undef DT_CHOSEN
 #undef DT_NODE_EXISTS
@@ -57,6 +65,7 @@ struct fake_hw fake_hw;
 static struct {
 	bool     held;
 	bool     in_signal;
+	bool     pending;   /* gate_acquire() answers GATE_PENDING (a staged arm) */
 	uint32_t releases;
 } fg;
 
@@ -74,7 +83,7 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from, radiant_time_t
 {
 	ARG_UNUSED(op); ARG_UNUSED(t_from); ARG_UNUSED(t_to);
 	ARG_UNUSED(follow_on_us); ARG_UNUSED(prio);
-	return GATE_GRANTED;
+	return fg.pending ? GATE_PENDING : GATE_GRANTED;
 }
 
 uint32_t radiant_swi_zli_lock(void) { return 0u; }
@@ -139,6 +148,9 @@ void backend_reset(void)
 	memset(radiant_rx_snap, 0, sizeof(radiant_rx_snap));
 	memset(&nrf_diag, 0, sizeof(nrf_diag));
 	memset(radiant_filter_slot, 0, sizeof(radiant_filter_slot));
+	memset(&fake_radio_regs, 0, sizeof(fake_radio_regs));
+	reg_shadow_forget();
+	arm_memo_forget();
 	grant_release_owed = false;
 	core_cb_head = 0u;
 	core_cb_tail = 0u;
@@ -237,7 +249,14 @@ int backend_program_rx(void)
 	req.n_filters = 1u;
 	req.t_open = radiant_radio_now() + 10000u;
 	req.t_close = req.t_open + 1000u;
-	rc = program_rx(&req);
+	{
+		struct nrf_rx_prep prep;
+
+		rc = rx_prepare(&req, &prep);
+		if (rc == RADIANT_RADIO_OK_RC) {
+			rc = program_rx(&req, &prep);
+		}
+	}
 	if (rc == RADIANT_RADIO_OK_RC) {
 		radiant_op.kind = OP_RX;
 		CLAIM_TERMINAL();
@@ -287,11 +306,17 @@ static void backend_late_tx_req(struct radiant_tx_req *req, uint32_t d_us)
 int backend_program_tx(uint32_t d_us, uint32_t step)
 {
 	struct radiant_tx_req req;
+	struct nrf_fmt_regs fmt_regs;
+	int rc;
 
 	radiant_op.conn_start_tx = BACKEND_CONN_TX;
 	fake_hw.counter_step = step;
 	backend_late_tx_req(&req, d_us);
-	return program_tx(&req);
+	rc = format_prepare_memo(req.fmt, req.rf_index, 0u, &fmt_regs);
+	if (rc != RADIANT_RADIO_OK_RC) {
+		return rc;
+	}
+	return program_tx(&req, &fmt_regs);
 }
 
 bool backend_tx_conn_live(void) { return (fake_hw.conn_on & (1u << BACKEND_CONN_TX)) != 0u; }
@@ -305,6 +330,9 @@ void backend_grant_late_tx(void)
 	radiant_op.conn_start_tx = BACKEND_CONN_TX;
 	backend_late_tx_req(&radiant_staged.tx, 0u);
 	radiant_staged.tx.t_sync_at -= 1000u;
+	(void)format_prepare_memo(radiant_staged.tx.fmt,
+				  radiant_staged.tx.rf_index, 0u,
+				  &radiant_staged.tx_regs);
 	radiant_staged.pending = true;
 	radiant_nrf_gate_on_grant();
 }
@@ -330,3 +358,136 @@ void backend_take_slot_unclaimed(void)
 void backend_claim_terminal(void) { CLAIM_TERMINAL(); }
 bool     backend_grant_held(void) { return fg.held; }
 bool     backend_op_retired(void) { return radiant_op.kind == OP_NONE; }
+
+/* ---- The arm cache (B4): test_arm_cache.c ---- */
+
+/* An arm call as the scheduler makes it, then the slot freed for the next one. */
+int backend_rx(const struct radiant_rx_req *req)
+{
+	uint32_t op;
+	int rc;
+
+	radiant_op.inited = true;
+	radiant_op.enabled = true;
+	radiant_op.kind = OP_NONE;
+	rc = radiant_radio_rx(req, &op);
+	radiant_op.kind = OP_NONE;
+	return rc;
+}
+
+int backend_tx(const struct radiant_tx_req *req)
+{
+	uint32_t op;
+	int rc;
+
+	radiant_op.inited = true;
+	radiant_op.enabled = true;
+	radiant_op.kind = OP_NONE;
+	rc = radiant_radio_tx(req, &op);
+	radiant_op.kind = OP_NONE;
+	return rc;
+}
+
+/* A receive staged behind the gate and programmed by its grant. */
+int backend_grant_rx(const struct radiant_rx_req *req)
+{
+	int rc;
+
+	radiant_op.inited = true;
+	radiant_op.enabled = true;
+	rc = rx_prepare(req, &radiant_staged.rx_prep);
+	if (rc != RADIANT_RADIO_OK_RC) {
+		return rc;
+	}
+	radiant_staged.rx = *req;
+	radiant_staged.pending = true;
+	radiant_op.kind = OP_RX;
+	radiant_nrf_gate_on_grant();
+	rc = radiant_op.gate_failed ? RADIANT_RADIO_ETIME : RADIANT_RADIO_OK_RC;
+	radiant_op.kind = OP_NONE;
+	return rc;
+}
+
+/* The grant-end hook, as the gate calls it with the RADIO on loan. */
+void backend_grant_end(void)
+{
+	radio_on_loan = true;
+	radiant_nrf_gate_on_grant_end();
+	radio_on_loan = true;
+	fg.held = true;
+}
+
+/* Disable then enable, as a host reset does. */
+void backend_disable_enable(void)
+{
+	radiant_op.inited = true;
+	radiant_op.enabled = true;
+	radiant_op.kind = OP_NONE;
+	(void)radiant_radio_disable();
+	(void)radiant_radio_enable();
+	radio_on_loan = true;
+	fg.held = true;
+}
+
+uint8_t backend_filter_slot(uint8_t logical) { return radiant_filter_slot[logical]; }
+
+/*
+ * The real rx_arm() deferred branch: the gate answers PENDING, so the request
+ * is copied into radiant_staged and nothing is programmed until
+ * backend_grant_staged().
+ */
+int backend_rx_staged(const struct radiant_rx_req *req)
+{
+	uint32_t op;
+	int rc;
+
+	radiant_op.inited = true;
+	radiant_op.enabled = true;
+	radiant_op.kind = OP_NONE;
+	fg.pending = true;
+	rc = radiant_radio_rx(req, &op);
+	fg.pending = false;
+	return rc;
+}
+
+/* The grant for a staged arm, then the slot freed. */
+int backend_grant_staged(void)
+{
+	int rc;
+
+	radiant_nrf_gate_on_grant();
+	rc = radiant_op.gate_failed ? RADIANT_RADIO_ETIME : RADIANT_RADIO_OK_RC;
+	radiant_op.kind = OP_NONE;
+	return rc;
+}
+
+/* What the ISR's split match and CRC repair will read for this window. */
+uint8_t  backend_op_filter_byte(uint8_t i, uint8_t b) { return radiant_op.filters[i].addr[b]; }
+uint8_t  backend_op_n_filters(void) { return radiant_op.n_filters; }
+uint16_t backend_op_crc_init(void) { return radiant_op.crc_init; }
+
+/* Whether the filter memo holds this request's set. Reads only: no LRU stamp moves. */
+bool backend_filt_memo_holds(const struct radiant_rx_req *req)
+{
+	for (uint8_t i = 0u; i < FILT_MEMO_N; i++) {
+		if (filt_memo[i].valid && filt_memo[i].n == req->n_filters &&
+		    filt_memo[i].addr_len == req->fmt->addr_len &&
+		    memcmp(filt_memo[i].key, req->filters,
+			   (size_t)req->n_filters * sizeof(struct radiant_rx_filter)) == 0) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/* An ED chunk programmed between two receives. */
+void backend_program_ed(void)
+{
+	struct radiant_ed_req ed = {
+		.rf_index_lo = 2u, .rf_index_hi = 80u, .dwell_us = 400u,
+		.t_start = radiant_radio_now() + 10000u,
+	};
+
+	program_ed(&ed);
+	radiant_op.kind = OP_NONE;
+}

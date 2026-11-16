@@ -750,14 +750,58 @@ static struct {
 } radiant_op;
 
 /*
+ * Register images an arm call computes when it validates a request, so the
+ * request is validated once and programmed from the result (format_prepare(),
+ * filters_prepare()). All uint32_t, so memcmp() compares them without padding.
+ */
+struct nrf_fmt_regs {
+	uint32_t mode;
+	uint32_t frequency;
+	uint32_t pcnf0;
+	uint32_t pcnf1;
+	uint32_t crccnf;
+	uint32_t crcinit;
+};
+
+struct nrf_filt_regs {
+	uint32_t base0;
+	uint32_t base1;
+	uint32_t prefix0;
+	uint32_t prefix1;
+	uint32_t rxaddresses;
+};
+
+/* Everything a receive window programs that depends on its format and filters. */
+struct nrf_rx_prep {
+	struct nrf_fmt_regs  fmt;
+	struct nrf_filt_regs filt;
+	/* radiant_filter_slot[] for this filter set (logical address -> filters[] index). */
+	uint8_t              slot[8];
+	/* rx_sw_addr_len() for this request. */
+	uint8_t              sw_addr_len;
+};
+
+/*
  * The request an arm call validated but has not programmed yet. Copied, not
  * pointed to: arm_rx_window()'s stack local is gone before an arbitrated grant
- * arrives. The inner pointers keep the HAL lifetime; only the struct is copied.
+ * arrives. The tx body pointer keeps the HAL lifetime; the rest is copied.
  * One request is live at a time (HAL rule; MPSL rejects a second with -NRF_EAGAIN).
+ * The register images the arm computed travel with it, so a grant programs
+ * exactly what was validated. So do the format and filter CONTENTS: rx.fmt,
+ * rx.filters and tx.fmt are repointed at the copies below, so the radiant_op
+ * fields program_rx()/program_tx() fill at the grant, and the ISR's split match
+ * (radiant_op.filters), see the arm-time request even if the caller has since
+ * rewritten its arrays. Copied on the deferred path only: a direct arm programs
+ * in the same call. Costs 56 bytes of filters plus two formats of RAM.
  */
 static struct {
-	struct radiant_rx_req rx;
-	struct radiant_tx_req tx;
+	struct radiant_rx_req     rx;
+	struct nrf_rx_prep        rx_prep;
+	struct radiant_pkt_format rx_fmt;
+	struct radiant_rx_filter  rx_filters[8];
+	struct radiant_tx_req     tx;
+	struct nrf_fmt_regs       tx_regs;
+	struct radiant_pkt_format tx_fmt;
 #if defined(CONFIG_RADIANT_ED_SCAN)
 	struct radiant_ed_req ed;
 #endif
@@ -962,8 +1006,9 @@ static uint8_t rx_sw_addr_len(const struct radiant_rx_req *req)
  * of matching (always 0 on transmit). BALEN shrinks by that count and STATLEN
  * grows by it, so the bit stream and its CRC are unchanged.
  */
-static int apply_format(const struct radiant_pkt_format *fmt, uint8_t rf_index,
-			uint8_t sw_addr_len, bool dry_run)
+static int format_prepare(const struct radiant_pkt_format *fmt,
+			  uint8_t rf_index, uint8_t sw_addr_len,
+			  struct nrf_fmt_regs *out)
 {
 	bool lr;
 
@@ -1049,14 +1094,13 @@ static int apply_format(const struct radiant_pkt_format *fmt, uint8_t rf_index,
 	}
 
 	/*
-	 * Above is a pure function of the request; below touches the peripheral. This
-	 * lets an arm call answer EINVAL/ENOTSUP synchronously. One function with a
-	 * flag, not a separate check_format(), so the refusals cannot drift apart.
+	 * Everything above refuses; nothing below can. The whole function is a pure
+	 * function of its arguments and touches no register: it computes what
+	 * format_write() puts in the peripheral. An arm call runs it once, before the
+	 * gate is asked, so EINVAL/ENOTSUP are answered synchronously, and programs
+	 * from its result. One function, not a check plus a separate encoder, so the
+	 * refusals cannot drift away from what is written.
 	 */
-	if (dry_run) {
-		return RADIANT_RADIO_OK_RC;
-	}
-
 #if RADIANT_NRF_HAS_LR
 	if (lr) {
 		/*
@@ -1064,13 +1108,13 @@ static int apply_format(const struct radiant_pkt_format *fmt, uint8_t rf_index,
 		 * ~2.1x, not 4x, for ~3 dB. One rate keeps one format, one phy_switch_us
 		 * and one t_sync calibration (ADR 0007). LR125Kbit RX also accepts 500 kbit/s.
 		 */
-		nrf_radio_mode_set(NRF_RADIO, NRF_RADIO_MODE_BLE_LR125KBIT);
+		out->mode = (uint32_t)NRF_RADIO_MODE_BLE_LR125KBIT;
 	} else
 #endif
 	{
-		nrf_radio_mode_set(NRF_RADIO, NRF_RADIO_MODE_NRF_1MBIT);
+		out->mode = (uint32_t)NRF_RADIO_MODE_NRF_1MBIT;
 	}
-	nrf_radio_frequency_set(NRF_RADIO, (uint16_t)(2400u + rf_index));
+	out->frequency = 2400u + (uint32_t)rf_index;
 
 	if (lr) {
 		/*
@@ -1080,7 +1124,7 @@ static int apply_format(const struct radiant_pkt_format *fmt, uint8_t rf_index,
 		 * LFLEN=8 is the length field. S0LEN and S1LEN are 0, so the first body byte
 		 * on air is the length, which is why only len_offset 0 and len_bias 1 are accepted.
 		 */
-		NRF_RADIO->PCNF0 =
+		out->pcnf0 =
 			((uint32_t)RADIO_PCNF0_PLEN_LongRange
 				<< RADIO_PCNF0_PLEN_Pos) |
 			((uint32_t)2u << RADIO_PCNF0_CILEN_Pos) |
@@ -1091,7 +1135,7 @@ static int apply_format(const struct radiant_pkt_format *fmt, uint8_t rf_index,
 		 * MAXLEN is the format's max_body_len minus the length byte, not
 		 * sizeof(radiant_rx_buf), so a corrupted length cannot overfill the buffer.
 		 */
-		NRF_RADIO->PCNF1 =
+		out->pcnf1 =
 			((uint32_t)(fmt->max_body_len - 1u)
 				<< RADIO_PCNF1_MAXLEN_Pos) |
 			((uint32_t)0u                   << RADIO_PCNF1_STATLEN_Pos) |
@@ -1099,8 +1143,8 @@ static int apply_format(const struct radiant_pkt_format *fmt, uint8_t rf_index,
 			(RADIO_PCNF1_ENDIAN_Big         << RADIO_PCNF1_ENDIAN_Pos) |
 			(RADIO_PCNF1_WHITEEN_Disabled   << RADIO_PCNF1_WHITEEN_Pos);
 	} else {
-		NRF_RADIO->PCNF0 = 0u;
-		NRF_RADIO->PCNF1 =
+		out->pcnf0 = 0u;
+		out->pcnf1 =
 			((uint32_t)sizeof(radiant_rx_buf) << RADIO_PCNF1_MAXLEN_Pos) |
 			((uint32_t)(fmt->body_len + sw_addr_len)
 				<< RADIO_PCNF1_STATLEN_Pos) |
@@ -1111,16 +1155,220 @@ static int apply_format(const struct radiant_pkt_format *fmt, uint8_t rf_index,
 	}
 
 	/* cover_addr (core) and SKIPADDR (hardware) have opposite senses. Inverting them fails every CRC. */
-	NRF_RADIO->CRCCNF =
+	out->crccnf =
 		(RADIO_CRCCNF_LEN_Two << RADIO_CRCCNF_LEN_Pos) |
 		((uint32_t)(fmt->crc.cover_addr ? RADIO_CRCCNF_SKIPADDR_Include
 					       : RADIO_CRCCNF_SKIPADDR_Skip)
 			<< RADIO_CRCCNF_SKIPADDR_Pos);
-	NRF_RADIO->CRCPOLY = 0x11021u;
-	NRF_RADIO->CRCINIT = fmt->crc.init;
+	out->crcinit = fmt->crc.init;
 
 	/* PACKETPTR is set by the arm paths, not here: it depends on direction, and a transmit must not DMA from the receive buffer. */
 	return RADIANT_RADIO_OK_RC;
+}
+
+/*
+ * ---- Arm cache (perf plan 2026-11-15, B4) ----
+ *
+ * Two different things, kept apart on purpose:
+ *
+ * 1. Memos of the validation. format_prepare() and filters_prepare() (with
+ *    rx_sw_addr_len()) are pure functions of the request, so a request equal
+ *    field by field to one already accepted gets the same register images
+ *    without running them again. Keyed on CONTENT, never on the pointers: a
+ *    caller may rewrite a format or a filter array in place, and a pointer
+ *    match would then skip a refusal. A memo holds only accepted requests, so
+ *    every refusal still runs the full check and returns the same code. Nothing
+ *    the hardware does can make a memo stale, so it is on in every build.
+ *
+ * 2. A shadow of what the RADIO holds (RADIANT_NRF_REG_SHADOW). format_write()
+ *    and filters_write() skip the writes when the registers already hold the
+ *    computed values. This one CAN go stale, and stale is a deaf radio with no
+ *    error, so every other writer of MODE, FREQUENCY, PCNF0/1, CRCCNF, CRCPOLY,
+ *    CRCINIT, BASE0/1, PREFIX0/1 or RXADDRESSES invalidates it:
+ *      - apply_tx_address() (BASE0, PREFIX0.AP0): reg_shadow_forget_addr();
+ *      - program_ed() and ed_enter_index() (MODE, RXADDRESSES, FREQUENCY):
+ *        reg_shadow_forget() in program_ed(), before the first ED write;
+ *      - radiant_radio_init(), _enable() and _disable(): reg_shadow_forget();
+ *      - radiant_nrf_gate_on_grant() and _on_grant_end(): reg_shadow_forget(),
+ *        since the other stack owns the RADIO between grants.
+ *    Nothing else here writes them: abort and radio_disable_now() touch SHORTS
+ *    and tasks only, which leave the configuration registers alone, and the ISR
+ *    only reads. TXADDRESS, TXPOWER and PACKETPTR are written on every arm.
+ *    Compiled out wherever another radio user can exist (MPSL gate, MPSL, BT,
+ *    802.15.4). There the other stack owns the registers between grants, and on
+ *    nRF54L the 802.15.4 driver's nrf_radio_reset() can land inside our own
+ *    timeslot (see radiant_nrf_gate_on_grant()), which no hook here can see.
+ *    Nearly every arm there opens a new grant anyway, so it would rarely hit.
+ *
+ *    Also nRF52 only. The nRF52 RADIO keeps its registers until RADIO->POWER
+ *    or a reset, and nothing here touches POWER. On nRF54L and the nRF5340
+ *    network core, whether the RADIO keeps them across CPU idle, HFXO release
+ *    and automatic power-domain handling is unverified, and no bench could
+ *    check it. To widen it: show on that part that registers written before an
+ *    idle/HFXO-off period read back unchanged after it (or cite the datasheet
+ *    guarantee), then run a tracked-loss A/B with and without the shadow. The
+ *    memos are pure and stay on everywhere.
+ *    A test may force it on by defining RADIANT_NRF_REG_SHADOW first.
+ */
+#if !defined(RADIANT_NRF_REG_SHADOW)
+#if defined(CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL) || defined(CONFIG_MPSL) ||   \
+	defined(CONFIG_BT) || defined(CONFIG_NRF_802154_RADIO_DRIVER) ||        \
+	defined(CONFIG_IEEE802154)
+#define RADIANT_NRF_REG_SHADOW 0
+/* SOC_SERIES_NRF52X before Zephyr 4.4 (NCS v3.2.4), SOC_SERIES_NRF52 after. */
+#elif defined(CONFIG_SOC_SERIES_NRF52X) || defined(CONFIG_SOC_SERIES_NRF52)
+#define RADIANT_NRF_REG_SHADOW 1
+#else
+#define RADIANT_NRF_REG_SHADOW 0
+#endif
+#endif
+
+/*
+ * Both memos evict the least recently used entry (stamp = arm counter, compared
+ * by age, so the 32-bit wrap is harmless). A miss is a full check, not an error.
+ *
+ * Formats: a Zwift-style load arms three in rotation, the search format (scan
+ * chunks), tracking receive (short match) and tracking transmit (sw_addr_len 0).
+ * Four (about 60 B each) keeps all three hot with a spare for a coded-PHY or a
+ * second tracking variant.
+ *
+ * Filter sets: the scan's set is constant and each tracked channel has its own,
+ * so the stream looks like S,A,S,B,C,S,D... LRU keeps S hot while at most N-1
+ * other sets arm between two scan chunks. N=3 (about 96 B each) covers two
+ * tracked windows back to back between chunks. The tracked sets mostly miss
+ * whatever N is (eight channels rotate through), so a bigger N buys little for
+ * its RAM.
+ *
+ * Concurrency: memo and shadow are touched only by the arm call that holds the
+ * operation slot (radiant_op.kind is claimed under irq_lock(), so a nested arm
+ * gets EBUSY before it reads them) and by program_*() for that operation. An
+ * abort from interrupt context during a thread arm is the existing radiant_op
+ * race class (it frees the slot under the arm); the abort never writes the memo.
+ */
+#define FMT_MEMO_N  4u
+#define FILT_MEMO_N 3u
+
+static uint32_t arm_memo_clock;
+
+static struct {
+	struct radiant_pkt_format key;
+	uint8_t                   rf_index;
+	uint8_t                   sw_addr_len;
+	bool                      valid;
+	uint32_t                  used;
+	struct nrf_fmt_regs       regs;
+} fmt_memo[FMT_MEMO_N];
+
+/* Field by field: a struct copy carries padding, which memcmp() would compare. */
+static bool fmt_same(const struct radiant_pkt_format *a,
+		     const struct radiant_pkt_format *b)
+{
+	return a->phy == b->phy && a->addr_len == b->addr_len &&
+	       a->len_mode == b->len_mode && a->body_len == b->body_len &&
+	       a->len_offset == b->len_offset && a->len_bias == b->len_bias &&
+	       a->max_body_len == b->max_body_len &&
+	       a->crc.width_bits == b->crc.width_bits &&
+	       a->crc.poly == b->crc.poly && a->crc.init == b->crc.init &&
+	       a->crc.xor_out == b->crc.xor_out &&
+	       a->crc.reflect_in == b->crc.reflect_in &&
+	       a->crc.reflect_out == b->crc.reflect_out &&
+	       a->crc.cover_addr == b->crc.cover_addr;
+}
+
+/* format_prepare(), answered from the memo when this exact request was accepted before. */
+static int format_prepare_memo(const struct radiant_pkt_format *fmt,
+			       uint8_t rf_index, uint8_t sw_addr_len,
+			       struct nrf_fmt_regs *out)
+{
+	int rc;
+
+	if (fmt == NULL) {
+		return RADIANT_RADIO_EINVAL;
+	}
+	for (uint8_t i = 0u; i < FMT_MEMO_N; i++) {
+		if (fmt_memo[i].valid && fmt_memo[i].rf_index == rf_index &&
+		    fmt_memo[i].sw_addr_len == sw_addr_len &&
+		    fmt_same(&fmt_memo[i].key, fmt)) {
+			fmt_memo[i].used = ++arm_memo_clock;
+			*out = fmt_memo[i].regs;
+			return RADIANT_RADIO_OK_RC;
+		}
+	}
+	rc = format_prepare(fmt, rf_index, sw_addr_len, out);
+	if (rc == RADIANT_RADIO_OK_RC) {
+		uint8_t i = 0u;
+
+		/* An unused entry first, else the least recently used. */
+		for (uint8_t j = 0u; j < FMT_MEMO_N; j++) {
+			if (!fmt_memo[j].valid) {
+				i = j;
+				break;
+			}
+			if ((uint32_t)(arm_memo_clock - fmt_memo[j].used) >
+			    (uint32_t)(arm_memo_clock - fmt_memo[i].used)) {
+				i = j;
+			}
+		}
+		fmt_memo[i].used = ++arm_memo_clock;
+		fmt_memo[i].key = *fmt;
+		fmt_memo[i].rf_index = rf_index;
+		fmt_memo[i].sw_addr_len = sw_addr_len;
+		fmt_memo[i].regs = *out;
+		fmt_memo[i].valid = true;
+	}
+	return rc;
+}
+
+#if RADIANT_NRF_REG_SHADOW
+static struct {
+	bool                 fmt_valid;
+	bool                 filt_valid;
+	struct nrf_fmt_regs  fmt;
+	struct nrf_filt_regs filt;
+} reg_shadow;
+
+/* Something else wrote, or may have written, the RADIO's configuration. */
+static inline void reg_shadow_forget(void)
+{
+	reg_shadow.fmt_valid = false;
+	reg_shadow.filt_valid = false;
+}
+
+/* Something else wrote BASE0/PREFIX0 (a transmit address). */
+static inline void reg_shadow_forget_addr(void)
+{
+	reg_shadow.filt_valid = false;
+}
+#else
+static inline void reg_shadow_forget(void)
+{
+}
+
+static inline void reg_shadow_forget_addr(void)
+{
+}
+#endif
+
+/* Put a format_prepare() result in the peripheral, unless it is there already. */
+static void format_write(const struct nrf_fmt_regs *r)
+{
+#if RADIANT_NRF_REG_SHADOW
+	if (reg_shadow.fmt_valid &&
+	    memcmp(&reg_shadow.fmt, r, sizeof(*r)) == 0) {
+		return;
+	}
+#endif
+	nrf_radio_mode_set(NRF_RADIO, (nrf_radio_mode_t)r->mode);
+	nrf_radio_frequency_set(NRF_RADIO, (uint16_t)r->frequency);
+	NRF_RADIO->PCNF0   = r->pcnf0;
+	NRF_RADIO->PCNF1   = r->pcnf1;
+	NRF_RADIO->CRCCNF  = r->crccnf;
+	NRF_RADIO->CRCPOLY = 0x11021u;
+	NRF_RADIO->CRCINIT = r->crcinit;
+#if RADIANT_NRF_REG_SHADOW
+	reg_shadow.fmt = *r;
+	reg_shadow.fmt_valid = true;
+#endif
 }
 
 /*
@@ -1190,16 +1438,20 @@ static void apply_power(const struct radiant_tx_power *p)
  * header). Refusal is not negotiable: silently programming a subset would lose
  * frames undiagnosably.
  */
-/* Logical address -> index into the caller's filters[] (inverse map built in apply_filters()). */
+/* Logical address -> index into the caller's filters[] (inverse map built by filters_prepare(), installed by filters_write()). */
 static uint8_t radiant_filter_slot[8];
 
 /*
  * hw_len: leading bytes of each filter the hardware matches (addr_len, or fewer
  * under TRACK_HW_ADDR_LEN). Filters may pack to one hardware address; each still
  * takes its own logical address, and radiant_addr_split_match() picks the real one.
+ *
+ * Pure, like format_prepare(): it refuses or computes the register images and
+ * the slot map, and filters_write() installs them.
  */
-static int apply_filters(const struct radiant_rx_filter *filters, uint8_t n,
-			 uint8_t addr_len, uint8_t hw_len, bool dry_run)
+static int filters_prepare(const struct radiant_rx_filter *filters, uint8_t n,
+			   uint8_t addr_len, uint8_t hw_len,
+			   struct nrf_filt_regs *out, uint8_t slot_map[8])
 {
 	uint32_t base0 = 0, base1 = 0;
 	uint8_t  prefixes[8];
@@ -1268,21 +1520,17 @@ static int apply_filters(const struct radiant_rx_filter *filters, uint8_t n,
 		prefixes[0] = (uint8_t)~prefixes[1];
 	}
 
-	/* The packing loop above decides the filter-to-address mapping and can refuse the set, so a dry run skips only the writes below. */
-	if (dry_run) {
-		return RADIANT_RADIO_OK_RC;
-	}
-
-	NRF_RADIO->BASE0   = base0;
-	NRF_RADIO->BASE1   = base1;
-	NRF_RADIO->PREFIX0 = ((uint32_t)prefixes[0]) |
-			     ((uint32_t)prefixes[1] << 8) |
-			     ((uint32_t)prefixes[2] << 16) |
-			     ((uint32_t)prefixes[3] << 24);
-	NRF_RADIO->PREFIX1 = ((uint32_t)prefixes[4]) |
-			     ((uint32_t)prefixes[5] << 8) |
-			     ((uint32_t)prefixes[6] << 16) |
-			     ((uint32_t)prefixes[7] << 24);
+	/* The packing loop above decides the filter-to-address mapping and is the only part that can refuse the set. */
+	out->base0   = base0;
+	out->base1   = base1;
+	out->prefix0 = ((uint32_t)prefixes[0]) |
+		       ((uint32_t)prefixes[1] << 8) |
+		       ((uint32_t)prefixes[2] << 16) |
+		       ((uint32_t)prefixes[3] << 24);
+	out->prefix1 = ((uint32_t)prefixes[4]) |
+		       ((uint32_t)prefixes[5] << 8) |
+		       ((uint32_t)prefixes[6] << 16) |
+		       ((uint32_t)prefixes[7] << 24);
 
 	{
 		uint32_t mask = 0;
@@ -1290,14 +1538,157 @@ static int apply_filters(const struct radiant_rx_filter *filters, uint8_t n,
 		for (uint8_t i = 0; i < n; i++) {
 			mask |= (1u << slot_of[i]);
 		}
-		NRF_RADIO->RXADDRESSES = mask;
+		out->rxaddresses = mask;
 	}
 
-	/* rx_event.filter_index indexes the CALLER's filters[], not logical addresses: radiant_search.c recovers devnum_lo from it. */
+	/*
+	 * rx_event.filter_index indexes the CALLER's filters[], not logical addresses:
+	 * radiant_search.c recovers devnum_lo from it. Entries for logical addresses
+	 * the set does not enable are zero; RXMATCH can only name an enabled one.
+	 */
+	memset(slot_map, 0, 8u);
 	for (uint8_t i = 0; i < n; i++) {
-		radiant_filter_slot[slot_of[i]] = i;
+		slot_map[slot_of[i]] = i;
 	}
 	return RADIANT_RADIO_OK_RC;
+}
+
+static struct {
+	struct radiant_rx_filter key[8];
+	uint8_t                  n;
+	uint8_t                  addr_len;
+	bool                     phy_1m;
+	bool                     valid;
+	uint32_t                 used;
+	struct nrf_filt_regs     regs;
+	uint8_t                  slot[8];
+	uint8_t                  sw_addr_len;
+} filt_memo[FILT_MEMO_N];
+
+BUILD_ASSERT(sizeof(struct radiant_rx_filter) ==
+		     RADIANT_RADIO_ADDR_MAX + 2u,
+	     "filt_memo compares filters with memcmp(), which needs a "
+	     "radiant_rx_filter without padding");
+
+/*
+ * Find the filter half of a receive request in the memo: the slot map, the
+ * register images and rx_sw_addr_len(), which depend only on the filters, the
+ * address length and the PHY. Returns the entry, or -1 on a miss. Only accepted sets are stored,
+ * so a hit can never stand in for a refusal.
+ */
+static int filt_memo_find(const struct radiant_rx_req *req)
+{
+	const struct radiant_pkt_format *fmt = req->fmt;
+	const bool phy_1m = (fmt->phy == RADIANT_PHY_1M_GFSK);
+
+	if (req->filters == NULL || req->n_filters == 0u ||
+	    req->n_filters > ARRAY_SIZE(filt_memo[0].key)) {
+		return -1;
+	}
+	for (uint8_t i = 0u; i < FILT_MEMO_N; i++) {
+		if (filt_memo[i].valid && filt_memo[i].n == req->n_filters &&
+		    filt_memo[i].addr_len == fmt->addr_len &&
+		    filt_memo[i].phy_1m == phy_1m &&
+		    memcmp(filt_memo[i].key, req->filters,
+			   (size_t)req->n_filters *
+				   sizeof(struct radiant_rx_filter)) == 0) {
+			filt_memo[i].used = ++arm_memo_clock;
+			return (int)i;
+		}
+	}
+	return -1;
+}
+
+static void filt_memo_store(const struct radiant_rx_req *req,
+			    const struct nrf_rx_prep *prep)
+{
+	uint8_t i = 0u;
+
+	/* An unused entry first, else the least recently used. */
+	for (uint8_t j = 0u; j < FILT_MEMO_N; j++) {
+		if (!filt_memo[j].valid) {
+			i = j;
+			break;
+		}
+		if ((uint32_t)(arm_memo_clock - filt_memo[j].used) >
+		    (uint32_t)(arm_memo_clock - filt_memo[i].used)) {
+			i = j;
+		}
+	}
+	filt_memo[i].used = ++arm_memo_clock;
+	memcpy(filt_memo[i].key, req->filters,
+	       (size_t)req->n_filters * sizeof(struct radiant_rx_filter));
+	filt_memo[i].n = req->n_filters;
+	filt_memo[i].addr_len = req->fmt->addr_len;
+	filt_memo[i].phy_1m = (req->fmt->phy == RADIANT_PHY_1M_GFSK);
+	filt_memo[i].regs = prep->filt;
+	memcpy(filt_memo[i].slot, prep->slot, sizeof(filt_memo[i].slot));
+	filt_memo[i].sw_addr_len = prep->sw_addr_len;
+	filt_memo[i].valid = true;
+}
+
+/* Drop every memo entry. Never needed for correctness (they are pure); tests use it. */
+__maybe_unused static void arm_memo_forget(void)
+{
+	memset(fmt_memo, 0, sizeof(fmt_memo));
+	memset(filt_memo, 0, sizeof(filt_memo));
+	arm_memo_clock = 0u;
+}
+
+/*
+ * Everything a receive request needs validated, computed once per arm call.
+ * The refusal order is the one rx_arm() always had: format first, then
+ * filters. rx_sw_addr_len() runs before either check, as it always did (its
+ * result feeds both).
+ */
+static int rx_prepare(const struct radiant_rx_req *req, struct nrf_rx_prep *prep)
+{
+	int hit = filt_memo_find(req);
+	int rc;
+
+	if (hit >= 0) {
+		prep->sw_addr_len = filt_memo[hit].sw_addr_len;
+	} else {
+		prep->sw_addr_len = rx_sw_addr_len(req);
+	}
+	rc = format_prepare_memo(req->fmt, req->rf_index, prep->sw_addr_len,
+				 &prep->fmt);
+	if (rc != RADIANT_RADIO_OK_RC) {
+		return rc;
+	}
+	if (hit >= 0) {
+		prep->filt = filt_memo[hit].regs;
+		memcpy(prep->slot, filt_memo[hit].slot, sizeof(prep->slot));
+		return RADIANT_RADIO_OK_RC;
+	}
+	rc = filters_prepare(req->filters, req->n_filters, req->fmt->addr_len,
+			     (uint8_t)(req->fmt->addr_len - prep->sw_addr_len),
+			     &prep->filt, prep->slot);
+	if (rc == RADIANT_RADIO_OK_RC) {
+		filt_memo_store(req, prep);
+	}
+	return rc;
+}
+
+/* Install a filters_prepare() result: the slot map always, the registers unless they are there already. */
+static void filters_write(const struct nrf_filt_regs *r, const uint8_t slot_map[8])
+{
+	memcpy(radiant_filter_slot, slot_map, sizeof(radiant_filter_slot));
+#if RADIANT_NRF_REG_SHADOW
+	if (reg_shadow.filt_valid &&
+	    memcmp(&reg_shadow.filt, r, sizeof(*r)) == 0) {
+		return;
+	}
+#endif
+	NRF_RADIO->BASE0       = r->base0;
+	NRF_RADIO->BASE1       = r->base1;
+	NRF_RADIO->PREFIX0     = r->prefix0;
+	NRF_RADIO->PREFIX1     = r->prefix1;
+	NRF_RADIO->RXADDRESSES = r->rxaddresses;
+#if RADIANT_NRF_REG_SHADOW
+	reg_shadow.filt = *r;
+	reg_shadow.filt_valid = true;
+#endif
 }
 
 /*
@@ -1313,6 +1704,8 @@ static void apply_tx_address(const uint8_t *addr, uint8_t addr_len)
 
 	pack_address(addr, addr_len, &base, &prefix);
 
+	/* BASE0 and PREFIX0 are half of a receive filter set: the next receive rewrites them. */
+	reg_shadow_forget_addr();
 	NRF_RADIO->BASE0 = base;
 	NRF_RADIO->PREFIX0 = (NRF_RADIO->PREFIX0 & ~0xFFu) | (uint32_t)prefix;
 	nrf_radio_txaddress_set(NRF_RADIO, 0u);
@@ -1967,6 +2360,9 @@ int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 	radiant_clock.base = 0;
 	radiant_clock.last = 0;
 
+	/* Nothing this backend wrote is in the RADIO yet (see RADIANT_NRF_REG_SHADOW). */
+	reg_shadow_forget();
+
 	/*
 	 * Five connections, allocated once: ADDRESS -> capture (t_sync, always live),
 	 * the three window edges (enabled per operation), and RXREADY -> RSSISTART.
@@ -2221,6 +2617,8 @@ int radiant_radio_enable(void)
 		}
 	}
 #endif
+	/* Not needed by any path today (disable forgets too); kept so an enable never trusts what preceded it. */
+	reg_shadow_forget();
 	radiant_op.enabled = true;
 	return RADIANT_RADIO_OK_RC;
 }
@@ -2256,6 +2654,8 @@ int radiant_radio_disable(void)
 	} else {
 		nrf_radio_int_disable(NRF_RADIO, ~0u);
 	}
+	/* While disabled the RADIO is anyone's (a host could hand it to another user). */
+	reg_shadow_forget();
 	radiant_op.enabled = false;
 	return RADIANT_RADIO_OK_RC;
 }
@@ -2268,13 +2668,15 @@ int radiant_radio_disable(void)
  * a receive on another channel would send the previous device number. Both the mock
  * and radiant_sched_request_tx() refuse an addr_len that disagrees with the format.
  */
-static int program_tx(const struct radiant_tx_req *req);
+static int program_tx(const struct radiant_tx_req *req,
+		      const struct nrf_fmt_regs *fmt_regs);
 
 int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 {
 	unsigned int key;
 	enum gate_rc g;
 	int          rc;
+	struct nrf_fmt_regs fmt_regs;
 
 	if (op == NULL) {
 		return RADIANT_RADIO_EINVAL;
@@ -2309,7 +2711,8 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 	CLAIM_TERMINAL();
 	irq_unlock(key);
 
-	rc = apply_format(req->fmt, req->rf_index, 0u, true);
+	/* The only validation of the format: program_tx() writes what this computes. */
+	rc = format_prepare_memo(req->fmt, req->rf_index, 0u, &fmt_regs);
 	if (rc != RADIANT_RADIO_OK_RC) {
 		goto fail;
 	}
@@ -2370,6 +2773,9 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 	if (g == GATE_PENDING) {
 		/* Copied only on the deferred path (see radiant_radio_rx()). The body must stay valid until completion. */
 		radiant_staged.tx = *req;
+		radiant_staged.tx_fmt = *req->fmt;
+		radiant_staged.tx.fmt = &radiant_staged.tx_fmt;
+		radiant_staged.tx_regs = fmt_regs;
 		radiant_staged.pending = true;
 #if defined(CONFIG_RADIANT_GATE_MPSL_D2)
 		d2_settle_now();
@@ -2377,7 +2783,7 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 		return RADIANT_RADIO_OK_RC;
 	}
 
-	rc = program_tx(req);
+	rc = program_tx(req, &fmt_regs);
 	if (rc != RADIANT_RADIO_OK_RC) {
 		*op = 0u;
 		gate_release();
@@ -2413,18 +2819,16 @@ static bool start_compare_missed(uint8_t cc, uint32_t start_cc)
 				      nrf_timer_compare_event_get(cc));
 }
 
-static int program_tx(const struct radiant_tx_req *req)
+static int program_tx(const struct radiant_tx_req *req,
+		      const struct nrf_fmt_regs *fmt_regs)
 {
 	radiant_time_t now;
 	radiant_time_t t_start;
 	uint32_t lead;
 	uint32_t start_cc;
-	int rc;
 
-	rc = apply_format(req->fmt, req->rf_index, 0u, false);
-	if (rc != RADIANT_RADIO_OK_RC) {
-		return rc;
-	}
+	/* Validated by the arm call, which computed fmt_regs (format_prepare()). */
+	format_write(fmt_regs);
 	apply_tx_address(req->addr, req->addr_len);
 	apply_power(&req->power);
 
@@ -2502,27 +2906,21 @@ static int program_tx(const struct radiant_tx_req *req)
 /* ---- Receive ---- */
 
 /*
- * Everything a receive window does to the peripheral, from the staged request. Kept
- * apart from the arm call because of the gate. It can only fail with ETIME; every
- * other refusal is answered before the gate is consulted.
+ * Everything a receive window does to the peripheral, from the staged request and
+ * the register images its arm call computed (rx_prepare()). Kept apart from the
+ * arm call because of the gate. It can only fail with ETIME; every other refusal
+ * is answered before the gate is consulted, and is not re-checked here.
  */
-static int program_rx(const struct radiant_rx_req *req)
+static int program_rx(const struct radiant_rx_req *req,
+		      const struct nrf_rx_prep *prep)
 {
 	radiant_time_t now;
 	uint32_t start_cc, close_cc;
-	int rc;
 
-	const uint8_t sw_addr_len = rx_sw_addr_len(req);
+	const uint8_t sw_addr_len = prep->sw_addr_len;
 
-	rc = apply_format(req->fmt, req->rf_index, sw_addr_len, false);
-	if (rc != RADIANT_RADIO_OK_RC) {
-		return rc;
-	}
-	rc = apply_filters(req->filters, req->n_filters, req->fmt->addr_len,
-			   (uint8_t)(req->fmt->addr_len - sw_addr_len), false);
-	if (rc != RADIANT_RADIO_OK_RC) {
-		return rc;
-	}
+	format_write(&prep->fmt);
+	filters_write(&prep->filt, prep->slot);
 	NRF_RADIO->PACKETPTR = (uint32_t)(uintptr_t)radiant_rx_buf;
 
 	/*
@@ -2761,6 +3159,7 @@ static int rx_arm(const struct radiant_rx_req *req, uint32_t *op)
 	unsigned int key;
 	enum gate_rc g;
 	int rc;
+	struct nrf_rx_prep prep;
 
 	if (op == NULL) {
 		return RADIANT_RADIO_EINVAL;
@@ -2789,17 +3188,10 @@ static int rx_arm(const struct radiant_rx_req *req, uint32_t *op)
 
 	/*
 	 * Refusals that depend only on the request are answered here, before the gate is
-	 * asked or any register is written. The HAL requires them synchronously.
+	 * asked or any register is written. The HAL requires them synchronously. This
+	 * is the request's only validation: program_rx() writes what it computed.
 	 */
-	rc = apply_format(req->fmt, req->rf_index, rx_sw_addr_len(req),
-			  true);
-	if (rc != RADIANT_RADIO_OK_RC) {
-		goto fail;
-	}
-	rc = apply_filters(req->filters, req->n_filters, req->fmt->addr_len,
-			   (uint8_t)(req->fmt->addr_len -
-				     rx_sw_addr_len(req)),
-			   true);
+	rc = rx_prepare(req, &prep);
 	if (rc != RADIANT_RADIO_OK_RC) {
 		goto fail;
 	}
@@ -2847,6 +3239,15 @@ static int rx_arm(const struct radiant_rx_req *req, uint32_t *op)
 		 * scheduler and is gone once arm returns. Not copied on the granted path.
 		 */
 		radiant_staged.rx = *req;
+		radiant_staged.rx_prep = prep;
+		/* The arm-time contents (see radiant_staged). n_filters <= caps.max_filters, checked by rx_prepare(). */
+		__ASSERT_NO_MSG(req->n_filters <=
+				ARRAY_SIZE(radiant_staged.rx_filters));
+		radiant_staged.rx_fmt = *req->fmt;
+		radiant_staged.rx.fmt = &radiant_staged.rx_fmt;
+		memcpy(radiant_staged.rx_filters, req->filters,
+		       (size_t)req->n_filters * sizeof(struct radiant_rx_filter));
+		radiant_staged.rx.filters = radiant_staged.rx_filters;
 		radiant_staged.pending = true;
 #if defined(CONFIG_RADIANT_GATE_MPSL_D2)
 		d2_settle_now();
@@ -2854,7 +3255,7 @@ static int rx_arm(const struct radiant_rx_req *req, uint32_t *op)
 		return RADIANT_RADIO_OK_RC;
 	}
 
-	rc = program_rx(req);
+	rc = program_rx(req, &prep);
 	if (rc != RADIANT_RADIO_OK_RC) {
 		*op = 0u;
 		gate_release();
@@ -3113,6 +3514,8 @@ static void program_ed(const struct radiant_ed_req *req)
 	radiant_op.terminal_sent = false;
 	radiant_op.rx_any = false;
 
+	/* MODE, RXADDRESSES and (per index, ed_enter_index()) FREQUENCY change under the next receive's feet. */
+	reg_shadow_forget();
 	nrf_radio_mode_set(NRF_RADIO, NRF_RADIO_MODE_NRF_1MBIT);
 	/*
 	 * No logical address is enabled, so the matcher cannot fire: no ADDRESS, DMA or END.
@@ -3195,6 +3598,8 @@ void radiant_nrf_gate_on_grant(void)
 	radio_on_loan = true;
 	radio_lent_this_slot = true;
 #endif
+	/* The other stack had the RADIO until now: nothing in it is known (see RADIANT_NRF_REG_SHADOW). */
+	reg_shadow_forget();
 	nrf_radio_int_enable(NRF_RADIO, NRF_RADIO_INT_END_MASK |
 					NRF_RADIO_INT_DISABLED_MASK);
 
@@ -3227,10 +3632,10 @@ void radiant_nrf_gate_on_grant(void)
 
 	switch (radiant_op.kind) {
 	case OP_RX:
-		rc = program_rx(&radiant_staged.rx);
+		rc = program_rx(&radiant_staged.rx, &radiant_staged.rx_prep);
 		break;
 	case OP_TX:
-		rc = program_tx(&radiant_staged.tx);
+		rc = program_tx(&radiant_staged.tx, &radiant_staged.tx_regs);
 		break;
 #if defined(CONFIG_RADIANT_ED_SCAN)
 	case OP_ED:
@@ -3419,6 +3824,8 @@ void radiant_nrf_gate_on_grant_end(void)
 	nrf_radio_int_disable(NRF_RADIO, NRF_RADIO_INT_END_MASK |
 					 NRF_RADIO_INT_DISABLED_MASK |
 					 NRF_RADIO_INT_RXREADY_MASK);
+	/* The other stack has the RADIO from here (see RADIANT_NRF_REG_SHADOW). */
+	reg_shadow_forget();
 
 	/*
 	 * Hand the radio back idle, not merely quiet: the SoftDevice Controller picks it up
