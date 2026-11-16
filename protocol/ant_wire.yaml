@@ -2099,7 +2099,7 @@ radiant_messages:
     - name: MESG_RADIANT_HEALTH_ID
       id: 0xF6
       direction: d2h
-      payload_len: "30..32"
+      payload_len: "30..34"
       desc: "What the dongle threw away, requested with MESG_REQUEST (0x4D).
              Request-only: 0xF6 is never emitted unsolicited, so a host that
              never asks sees a byte stream identical to a build without it.
@@ -2129,14 +2129,25 @@ radiant_messages:
              timeout, i.e. the host stopped polling.
              [30..31] OPTIONAL, sets_advanced_uncovered: sets of the MPSL sweep
              that finished their dwell having listened to fewer than all phases
-             of the channel period, present only on a build with
+             of the channel period, measured only on a build with
              CONFIG_RADIANT_SEARCH_COVERAGE (which an MPSL build enabling these
-             health counters takes on), where the body is 32 bytes. Every
-             other build answers 30 bytes and this field is absent, because a
-             build that cannot measure coverage must not report 0 uncovered.
-             UNLIKE the rest it clamps at 65535 WITHOUT setting the flag in
-             [1]: it climbs for as long as a search runs, and a flag set by it
-             would mark every other field a floor for the reason given below.
+             health counters takes on). UNLIKE the rest it clamps at 65534
+             WITHOUT setting the flag in [1]: it climbs for as long as a search
+             runs, and a flag set by it would mark every other field a floor
+             for the reason given below. [32..33] OPTIONAL, uart_rx_overruns:
+             receiver-overrun events on a UART transport (the driver reported
+             UART_ERROR_OVERRUN), each at least one lost host byte. The
+             hardware flag is sticky until read, so it adds at most 1 per ISR
+             pass however many bytes were lost: a floor on lost bytes, not a
+             count. Measured only on a UART transport whose driver reports
+             overruns (cc13xx_cc26xx, nRF UARTE); host_desync/host_csum move
+             with it. It saturates like the rest (flag in [1]) but at 65534.
+             NOT MEASURED: an optional field this build or transport cannot
+             measure reads 0xFFFF (never 0, which would claim none), and a
+             measured count never reaches 0xFFFF. Firmware since 2026-11-16
+             always answers 34 bytes; earlier firmware answered 30 bytes, or
+             32 with coverage, leaving absent fields out instead. A reader
+             treats an absent field and 0xFFFF alike.
              All the others are u16 LE and all saturate rather than wrap, which is what
              the flag in [1] is for: it distinguishes 65535 from
              65535-and-counting. VERSIONING: fields are only ever added at the

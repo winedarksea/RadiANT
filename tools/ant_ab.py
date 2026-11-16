@@ -326,6 +326,10 @@ def gate_conformance(cfg: dict, a: Baseline, b: Baseline,
 
     if override is not None:
         identical = override["byte_identical"]
+        # ant_conformance.py --compare reports its INTENTIONAL_DIVERGENCES
+        # (reviewed protocol changes newer than the archived transcripts)
+        # in its own allowed list; they count here too.
+        allowed |= set(override.get("allowed_differing_cases", []))
         unexpected = [c for c in override.get("differing_cases", [])
                       if c not in allowed]
         verdict = PASS if (identical or not unexpected) else FAIL
@@ -350,7 +354,11 @@ def gate_conformance(cfg: dict, a: Baseline, b: Baseline,
     detail = ("transcripts hash the same"
               if identical else
               "transcripts differ; run tools/ant_conformance.py --compare to "
-              "see which cases")
+              "see which cases. A baseline recorded before an intentional "
+              "protocol change (ant_conformance.py INTENTIONAL_DIVERGENCES, "
+              "e.g. frame/malformed-oversize since 2026-11-16) always hashes "
+              "differently; pass --conformance-a/--conformance-b and --compare "
+              "allows that difference if it has the reviewed shape")
     if not identical and allowed:
         detail += " (allowances cannot be checked from hashes alone - pass "
         detail += "--conformance-a/--conformance-b)"

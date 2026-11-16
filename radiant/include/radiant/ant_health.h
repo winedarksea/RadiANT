@@ -114,6 +114,18 @@ enum ant_health_counter {
 	 * the host stopped polling. Counted where the timeout is detected;
 	 * W1 wires the USB_NEXT site, W6 adds the legacy stack's. */
 	ANT_HEALTH_TX_TIMEOUT,
+	/* A receiver-overrun event on the UART: the driver's uart_err_check()
+	 * reported UART_ERROR_OVERRUN, i.e. at least one host byte was
+	 * overwritten before the ISR read it. The flag (RSR.OE, ERRORSRC
+	 * OVERRUN) is sticky until read, so this adds at most 1 per ISR pass
+	 * however many bytes were lost in between: a floor on lost bytes,
+	 * not a count of them. The transport counts only after
+	 * ant_health_measured() said it can; until then [32..33] reads
+	 * ANT_HEALTH_NOT_MEASURED. Expect HOST_CSUM/HOST_DESYNC beside it. Added
+	 * 2026-11-16 for the TI command stall: the CC26xx UART ran with its
+	 * FIFO off and dropped a byte every few tens of seconds under load
+	 * (archive/benchmarks/2026-11-16-ti-cmd-stall/). */
+	ANT_HEALTH_UART_RX_OVERRUN,
 
 	ANT_HEALTH_COUNT
 };
@@ -129,14 +141,16 @@ enum ant_health_counter {
  * version at out[0] stays 1 throughout the beta. */
 #define ANT_HEALTH_PAYLOAD_LEN 30u
 
-/* What this build's ant_health_fill() writes: the minimum, or 32 bytes with
- * the optional coverage counter at [30..31]. Never padded with zero: a build
- * that cannot measure coverage must not report "0 uncovered". */
-#if defined(CONFIG_RADIANT_SEARCH_COVERAGE)
-#define ANT_HEALTH_BODY_LEN 32u
-#else
-#define ANT_HEALTH_BODY_LEN ANT_HEALTH_PAYLOAD_LEN
-#endif
+/* What ant_health_fill() writes: every field through [32..33]. The optional
+ * fields from [30] on read ANT_HEALTH_NOT_MEASURED where this build or
+ * transport cannot measure them - never 0, which would claim "none" - and
+ * clamp at ANT_HEALTH_MEASURED_MAX so a real count never reads as the
+ * sentinel. (Until 2026-11-16 a build without coverage answered 30 bytes
+ * and one with it 32; [32..33] needs [30..31] present, so the sentinel
+ * replaced the absence.) */
+#define ANT_HEALTH_BODY_LEN 34u
+#define ANT_HEALTH_NOT_MEASURED 0xFFFFu
+#define ANT_HEALTH_MEASURED_MAX 0xFFFEu
 
 #if defined(CONFIG_ANT_DONGLE_HEALTH_COUNTERS)
 
@@ -155,6 +169,12 @@ void ant_health_note(enum ant_health_counter c);
 /* Record a queue occupancy sample; keeps the maximum ever seen. */
 void ant_health_depth(uint8_t which, uint32_t used);
 
+/* Declare that this image can measure counter `c`, which turns its field
+ * from ANT_HEALTH_NOT_MEASURED into a count. Only the fields that have a
+ * not-measured state use it: today ANT_HEALTH_UART_RX_OVERRUN, called by
+ * the UART transport when its driver reports overruns. */
+void ant_health_measured(enum ant_health_counter c);
+
 /*
  * Render the 0xF6 payload. Returns bytes written, or 0 if `cap` is too small.
  * Pulls the event-queue figures from radiant_event_stats_get() at call time
@@ -172,6 +192,7 @@ size_t ant_health_fill(uint8_t *out, size_t cap);
  */
 #define ant_health_note(c)          ((void)0)
 #define ant_health_depth(w, used)   ((void)0)
+#define ant_health_measured(c)      ((void)0)
 #define ant_health_fill(out, cap)   ((size_t)0)
 
 #endif /* CONFIG_ANT_DONGLE_HEALTH_COUNTERS */

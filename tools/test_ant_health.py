@@ -98,11 +98,31 @@ class DecodeTest(unittest.TestCase):
         # without touching it, so a saturated reply keeps its own meaning.
         body = bytearray(_body(1, h.PAYLOAD_LEN + 2))
         body[1] = 0x01
-        body[30] = 0xFF
+        body[30] = 0xFE
         body[31] = 0xFF
         got = h.decode(bytes(body))
         self.assertTrue(got["saturated"])
-        self.assertEqual(65535, got["sets_advanced_uncovered"])
+        self.assertEqual(65534, got["sets_advanced_uncovered"])
+
+    def test_the_not_measured_sentinel_leaves_the_key_absent(self):
+        body = bytearray(_body(1, h.PAYLOAD_LEN + 4))
+        body[30:34] = bytes([0xFF] * 4)
+        got = h.decode(bytes(body))
+        self.assertNotIn("sets_advanced_uncovered", got)
+        self.assertNotIn("uart_rx_overruns", got)
+
+    def test_a_34_byte_body_decodes_uart_overruns(self):
+        body = bytearray(_body(1, h.PAYLOAD_LEN + 4))
+        body[30:32] = bytes([0xFF] * 2)
+        body[32] = 0x07
+        body[33] = 0x01
+        got = h.decode(bytes(body))
+        self.assertEqual(0x0107, got["uart_rx_overruns"])
+        self.assertNotIn("sets_advanced_uncovered", got)
+
+    def test_a_32_byte_body_has_no_overrun_key(self):
+        got = h.decode(_body(1, h.PAYLOAD_LEN + 2))
+        self.assertNotIn("uart_rx_overruns", got)
 
     def test_saturated_flag(self):
         body = bytearray(_body(1, h.PAYLOAD_LEN))

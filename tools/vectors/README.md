@@ -202,7 +202,13 @@ Four properties of that rule, each chosen against a concrete failure:
    message id does not admit — which is what makes them worth sending, since
    they test the bridge's error mapping rather than its framer. Only
    `malformed-checksum`, `-sync`, `-oversize` and `-partial-then-valid` are
-   defects visible at the framing level.
+   defects visible at the framing level. `-oversize` (LEN 42) has been
+   answered with silence since 2026-11-16: a LEN above `MAX_SIZE_VALUE` (38)
+   is taken as a lost byte, counted as `host_desync`, and the parser hunts for
+   the next SYNC. The archived `conformance-*.antser` transcripts predate that
+   and still show the old answer (a truncated dispatch); they are left as
+   recorded, and `ant_conformance.py` lists the case in
+   `INTENTIONAL_DIVERGENCES` so `--compare` allows the difference.
 3. **An unmodelled message id is still a hard failure in a real capture.** The
    waiver can only be claimed through a case marker, and a `Device0.txt`
    capture has none — Garmin's log does not name our test cases. So

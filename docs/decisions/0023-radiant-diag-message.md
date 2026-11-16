@@ -321,3 +321,30 @@ asking for the next block to the host block arriving.
   readers interfere.
 - 0xF6 keeps its layout. It is what `tools/ab_gates.toml`'s loss accounting
   reads, and a host acting on loss should not depend on a debug option.
+  (Amended 2026-11-16, below.)
+
+## Amendment 2026-11-16: 0xF6 gains a field and a sentinel
+
+Owner accepted in beta (fix/ti-cmd-stall). This partly reverses the 0xF6 lines
+above: the Context's "one of its fields is conditional" and the "without a
+variable body length" in decision 4.
+
+- **New field.** 0xF6 appends `uart_rx_overruns` at [32..33]: receiver-overrun
+  events on a UART transport, each at least one lost host byte. This is the
+  witness for the TI command stall
+  (archive/benchmarks/2026-11-16-ti-cmd-stall/).
+- **The optional field now has a sentinel.** [30..31] (coverage) used to be
+  present or absent, which gave a variable body length. [32..33] needs it
+  present, so every build now answers 34 bytes.
+  - An optional field the build or transport cannot measure reads `0xFFFF`
+    (`ANT_HEALTH_NOT_MEASURED`), the u16 form of this message's `0xFFFFFFFF`
+    rule.
+  - Real counts clamp at `0xFFFE`.
+- **Unchanged.** The structure version stays 1, the layout stays append-only,
+  and no offset is reused. Readers still refuse a body shorter than 30 bytes and
+  decode what they know from a longer one; they now also treat `0xFFFF` in an
+  optional field as absent.
+- **Not this message.** 0xF7 is unaffected.
+- **Mixed-version readers.** See CHANGELOG [Unreleased]. A v1.2.0 reader shows
+  65535 coverage on non-coverage builds; a new reader shows an old MPSL image's
+  saturated coverage as not measured.

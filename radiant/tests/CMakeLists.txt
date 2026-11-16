@@ -43,6 +43,11 @@ endif()
 if(NOT EXISTS "${RADIANT_TESTS_APPS_COMMON}/ant_health.c")
   list(REMOVE_ITEM suite_sources "${CMAKE_CURRENT_SOURCE_DIR}/src/test_ant_health.c")
 endif()
+# test_bridge_parser.c includes apps/common/ant_serial_bridge.c (parser only),
+# whose quoted includes resolve beside it and through the ant/ forwarders below.
+if(NOT EXISTS "${RADIANT_TESTS_APPS_COMMON}/ant_serial_bridge.c")
+  list(REMOVE_ITEM suite_sources "${CMAKE_CURRENT_SOURCE_DIR}/src/test_bridge_parser.c")
+endif()
 target_sources(app PRIVATE ${suite_sources})
 
 # ── The mock radio ──────────────────────────────────────────────────────────
