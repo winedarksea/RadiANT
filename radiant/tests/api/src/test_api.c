@@ -4322,6 +4322,99 @@ ZTEST(api, test_a_master_tx_only_channel_opens_no_turnaround)
 }
 
 /* ---------------------------------------------------------------------------
+ * Scheduler drops are collisions (owner decision 2026-11-15, TODO.md 8)
+ *
+ * A tracked window the scheduler itself dropped - never armed, or expired
+ * behind another channel's window - says nothing about the sensor. It is
+ * reported as EVENT_CHANNEL_COLLISION (0x09), as Garmin's stick reports it,
+ * and charged like a denial: the guard grows, the miss run does not.
+ * ---------------------------------------------------------------------------
+ */
+
+ZTEST(api, test_a_scheduler_dropped_slot_is_a_collision_not_an_rx_fail)
+{
+	const struct fake_radio_arm *tw;
+	uint16_t                     dev_a;
+	uint32_t                     collided0;
+
+	open_and_acquire_slave(&dev_a);
+	run_housekeeping();
+	tw = last_arm_of(FAKE_RADIO_ARM_RX);
+	zassert_not_null(tw, "setup: no tracked window was armed");
+
+	/* This window is heard, so the miss run is zero going in. Its
+	 * successor is refused and dies unarmed. */
+	air_tracked_frame(tw, dev_a);
+	fake_radio_force_arm_repeat(RADIANT_RADIO_EBUSY, 64u);
+	fake_radio_advance_to(tw->t_close + 1u);
+	drain();
+
+	memset(msglog, 0, sizeof(msglog));
+	n_msg = 0u;
+	collided0 = radiant_api_stats_get()->slots_collided;
+
+	api_kill_the_pending_window();
+	drain();
+
+	zassert_equal(collided0 + 1u, radiant_api_stats_get()->slots_collided,
+		      "the dropped window was not counted as a collision");
+	zassert_equal(1u, count_channel_events(CH,
+					       (uint8_t)ANTW_EVENT_CHANNEL_COLLISION),
+		      "no EVENT_CHANNEL_COLLISION for a slot the scheduler dropped");
+	zassert_equal(0u, count_channel_events(CH, (uint8_t)ANTW_EVENT_RX_FAIL),
+		      "a slot the scheduler dropped was reported as RX_FAIL, "
+		      "which tells the host its sensor went quiet");
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH));
+
+	end_of_test();
+}
+
+ZTEST(api, test_scheduler_collisions_never_send_a_channel_to_search)
+{
+	const struct fake_radio_arm *tw;
+	uint16_t                     dev_a;
+	uint32_t                     collided0;
+	uint32_t                     i;
+
+	open_and_acquire_slave(&dev_a);
+	run_housekeeping();
+	tw = last_arm_of(FAKE_RADIO_ARM_RX);
+	zassert_not_null(tw, "setup: no tracked window was armed");
+
+	air_tracked_frame(tw, dev_a);
+	fake_radio_force_arm_repeat(RADIANT_RADIO_EBUSY, 1000u);
+	fake_radio_advance_to(tw->t_close + 1u);
+	drain();
+
+	memset(msglog, 0, sizeof(msglog));
+	n_msg = 0u;
+	collided0 = radiant_api_stats_get()->slots_collided;
+
+	/* Ten periods, every window refused: past RX_FAIL_TO_SEARCH (8), short
+	 * of the denial bound (RADIANT_CHANNEL_DENY_TO_SEARCH, 16), which
+	 * collisions share because the guard is finite either way. */
+	for (i = 0u; i < 10u; i++) {
+		fake_radio_advance((uint64_t)PERIOD_US);
+		zassert_equal(RADIANT_RADIO_OK_RC, radiant_sched_tick());
+		drain();
+	}
+
+	zassert_true(radiant_api_stats_get()->slots_collided >= collided0 + 9u,
+		     "only %u collisions; the test never passed eight",
+		     radiant_api_stats_get()->slots_collided - collided0);
+	zassert_equal(0u, count_channel_events(CH, (uint8_t)ANTW_EVENT_RX_FAIL),
+		      "scheduler collisions raised RX_FAIL");
+	zassert_equal(0u,
+		      count_channel_events(CH,
+					   (uint8_t)ANTW_EVENT_RX_FAIL_GO_TO_SEARCH),
+		      "scheduler collisions sent a live channel to search");
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH));
+
+	fake_radio_force_arm_repeat(RADIANT_RADIO_OK_RC, 0u);
+	end_of_test();
+}
+
+/* ---------------------------------------------------------------------------
  * Denial - what the host must and must not be told
  * ---------------------------------------------------------------------------
  */
@@ -6168,3 +6261,344 @@ ZTEST(api, test_diag_a_delayed_continuation_is_counted_late)
 }
 
 #endif /* CONFIG_RADIANT_DIAG_COUNTERS */
+
+/* ---------------------------------------------------------------------------
+ * Two masters drifting through each other (TODO.md section 1, 2026-11-15)
+ *
+ * Every 2026-11-15 Zwift ride on RadiANT lost most of FE-C #52233's frames
+ * (period 8192) each time power #20329 (period 8182) drifted through it,
+ * once every ~204 s. Capture 215313 (Pro Micro, direct nRF): eight FE-C
+ * misses in a row while power was 0.57 to 2.67 ms AHEAD of it; only the
+ * later channel was hurt.
+ *
+ * This opens the two channels the way Zwift does (bidirectional slave,
+ * pinned ID, infinite search timeout), puts both masters on the air with
+ * their real periods, and records every FE-C and power slot against the
+ * phase between them across a -6 ms to +6 ms crossing.
+ * ---------------------------------------------------------------------------
+ */
+
+#define XING_CH_PWR    2u
+#define XING_CH_FEC    3u
+#define XING_DEV_PWR   20329u
+#define XING_DEV_FEC   52233u
+#define XING_PER_PWR   8182u
+#define XING_PER_FEC   8192u
+/* Periods run before the measured stretch: long enough for both pinned
+ * channels to be steered to and acquired. */
+#define XING_ACQ_SLOTS 16u
+/* 12 ms of relative drift at 305 us per period, plus margin. */
+#define XING_SLOTS     44u
+/* Power starts this far BEHIND FE-C when the measured stretch begins. */
+#define XING_D0_US     (-6000)
+
+enum xing_preset {
+	XING_NRF, /* direct nRF: lead 328, in-grant 328, 8 filters, 2 groups */
+	XING_TI,  /* CC26xx non-coex: lead 600, in-grant 400, 2 filters */
+};
+
+/* One run's shape. */
+struct xing_cfg {
+	const char      *name;
+	enum xing_preset p;
+	bool             cmd;       /* Zwift's 0x33 on FE-C every 4 periods */
+	uint32_t         term_us;   /* empty-window terminal lag */
+	uint32_t         frame_us;  /* received-frame event lag */
+	uint32_t         jitter_us; /* each master's t_sync wanders +/- this */
+	uint32_t         drop_mod;  /* FE-C airs nothing in 1 of drop_mod, 0 = never */
+};
+
+struct xing_slot {
+	int32_t d_us;     /* FE-C t_sync minus power t_sync: >0 = power ahead */
+	bool    aired;    /* FE-C's master transmitted this period */
+	bool    fec;      /* FE-C's frame reached the host */
+	bool    pwr;      /* power's frame reached the host */
+	uint8_t fec_fail; /* RX_FAIL on FE-C this period */
+	uint8_t missed;   /* RADIANT_SCHED_DONE_MISSED reports this period */
+	uint8_t merged;   /* merged windows armed this period */
+};
+
+struct xing_result {
+	struct xing_slot slot[XING_SLOTS];
+	uint32_t fec_missed;
+	uint32_t pwr_missed;
+	uint32_t fec_streak; /* longest run of aired-but-unheard FE-C slots */
+	uint32_t pwr_streak;
+	uint32_t fec_band;   /* FE-C misses with power 0..3 ms ahead */
+	uint32_t go_to_search;
+};
+
+static void xing_apply_preset(enum xing_preset p)
+{
+	struct radiant_radio_caps *c;
+
+	k_sched_lock();
+	fake_radio_caps_preset_nrf();
+	c = fake_radio_caps_mut();
+	if (p == XING_TI) {
+		c->min_arm_lead_us = 600u;
+		c->min_arm_lead_in_grant_us = 400u;
+		c->max_filters = 2u;
+		c->max_addr_groups = 2u;
+	} else {
+		c->min_arm_lead_us = 328u;
+		c->min_arm_lead_in_grant_us = 328u;
+		c->max_addr_groups = 2u;
+	}
+	k_sched_unlock();
+}
+
+static void xing_open(uint8_t ch, uint16_t dev, uint8_t dev_type, uint16_t period)
+{
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_assign(ch, (uint8_t)ANTW_CHANNEL_TYPE_SLAVE,
+					  0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_id_set(ch, dev, dev_type, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_period_set(ch, period));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_search_timeout_set(
+			      ch, RADIANT_CHANNEL_SEARCH_INFINITE));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_radio_freq_set(ch, RF_INDEX));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR, antr_channel_open(ch));
+}
+
+static void xing_run_to(radiant_time_t t)
+{
+	radiant_time_t now = radiant_radio_now();
+
+	if (t > now) {
+		run_virtual_us((uint64_t)(t - now));
+	}
+}
+
+/* Deterministic jitter in [-j, +j], different per master and period. */
+static int32_t xing_jitter(uint32_t j, uint32_t k, uint32_t salt)
+{
+	uint32_t x = (k + 1u) * 2654435761u ^ (salt * 40503u);
+
+	x ^= x >> 13;
+	x *= 0x5bd1e995u;
+	x ^= x >> 15;
+	if (j == 0u) {
+		return 0;
+	}
+	return (int32_t)(x % (2u * j + 1u)) - (int32_t)j;
+}
+
+static void xing_run(const struct xing_cfg *cfg, struct xing_result *r)
+{
+	const enum xing_preset p = cfg->p;
+	const bool             commands = cfg->cmd;
+	static const uint8_t cmd[8] = {
+		0x33u, 0xFFu, 0xFFu, 0xFFu, 0xFFu, 0xFFu, 0x00u, 0x00u
+	};
+	const uint32_t per_fec = radiant_channel_counts_to_us(XING_PER_FEC);
+	const uint32_t per_pwr = radiant_channel_counts_to_us(XING_PER_PWR);
+	uint8_t        frame[FAKE_RADIO_AIR_FRAME_MAX];
+	uint8_t        len;
+	radiant_time_t t_fec0;
+	radiant_time_t t_pwr0;
+	uint32_t       total = XING_ACQ_SLOTS + XING_SLOTS;
+	uint32_t       streak_f = 0u;
+	uint32_t       streak_p = 0u;
+	uint32_t       k;
+
+	memset(r, 0, sizeof(*r));
+	xing_apply_preset(p);
+	fake_radio_set_rx_terminal_delay_us(cfg->term_us);
+	fake_radio_set_rx_frame_delay_us(cfg->frame_us);
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_network_address_set(0u, ant_plus_key));
+	xing_open(XING_CH_PWR, XING_DEV_PWR, 0x0Bu, XING_PER_PWR);
+	xing_open(XING_CH_FEC, XING_DEV_FEC, 0x11u, XING_PER_FEC);
+
+	/*
+	 * d(k) = t_fec(k) - t_pwr(k) = (t_fec0 - t_pwr0) + (per_fec - per_pwr) k,
+	 * so power gains ~305 us a period on FE-C. Phase it to reach
+	 * XING_D0_US at the first measured slot.
+	 */
+	t_fec0 = radiant_radio_now() + 1000u;
+	t_pwr0 = (radiant_time_t)((int64_t)t_fec0 - XING_D0_US +
+				  (int64_t)(per_fec - per_pwr) * XING_ACQ_SLOTS);
+
+	len = fake_radio_build_ant_frame(frame, XING_DEV_FEC, 0x11u, 5u,
+					 peer_payload);
+	for (k = 0u; k < total + 2u; k++) {
+		/* Never drop during acquisition: setup must not depend on it. */
+		if (cfg->drop_mod != 0u && k >= XING_ACQ_SLOTS &&
+		    (k % cfg->drop_mod) == 0u) {
+			continue;
+		}
+		(void)fake_radio_air_frame(
+			(radiant_time_t)((int64_t)t_fec0 + (int64_t)k * per_fec +
+					 xing_jitter(cfg->jitter_us, k, 1u)),
+			frame, len);
+	}
+	len = fake_radio_build_ant_frame(frame, XING_DEV_PWR, 0x0Bu, 5u,
+					 peer_payload);
+	for (k = 0u; k < total + 2u; k++) {
+		(void)fake_radio_air_frame(
+			(radiant_time_t)((int64_t)t_pwr0 + (int64_t)k * per_pwr +
+					 xing_jitter(cfg->jitter_us, k, 2u)),
+			frame, len);
+	}
+
+	for (k = 0u; k < total; k++) {
+		/* Mid-period: both slots of period k are over, neither of k+1
+		 * has started (|d| <= 10 ms). */
+		radiant_time_t mid = t_fec0 + (radiant_time_t)k * per_fec +
+				     per_fec / 2u;
+		uint32_t missed0 = radiant_api_stats_get()->sched_missed;
+		uint32_t merged0 = radiant_sched_stats_get()->windows_merged;
+
+		memset(msglog, 0, sizeof(msglog));
+		n_msg = 0u;
+		xing_run_to(mid);
+		drain();
+
+		r->go_to_search += count_channel_events(
+			XING_CH_FEC, (uint8_t)ANTW_EVENT_RX_FAIL_GO_TO_SEARCH);
+		r->go_to_search += count_channel_events(
+			XING_CH_PWR, (uint8_t)ANTW_EVENT_RX_FAIL_GO_TO_SEARCH);
+
+		if (k == XING_ACQ_SLOTS - 1u) {
+			zassert_equal(RADIANT_CH_STATE_TRACKING,
+				      radiant_channel_state_get(XING_CH_FEC),
+				      "setup: FE-C never acquired");
+			zassert_equal(RADIANT_CH_STATE_TRACKING,
+				      radiant_channel_state_get(XING_CH_PWR),
+				      "setup: power never acquired");
+			r->go_to_search = 0u;
+		}
+		if (k >= XING_ACQ_SLOTS) {
+			struct xing_slot *sl = &r->slot[k - XING_ACQ_SLOTS];
+			radiant_time_t tf = t_fec0 + (radiant_time_t)k * per_fec;
+			radiant_time_t tp = t_pwr0 + (radiant_time_t)k * per_pwr;
+
+			sl->d_us = (int32_t)((int64_t)tf - (int64_t)tp);
+			sl->aired = cfg->drop_mod == 0u || (k % cfg->drop_mod) != 0u;
+			sl->fec = count_bcast_on(XING_CH_FEC) > 0u;
+			sl->pwr = count_bcast_on(XING_CH_PWR) > 0u;
+			sl->fec_fail = (uint8_t)count_channel_events(
+				XING_CH_FEC, (uint8_t)ANTW_EVENT_RX_FAIL);
+			sl->missed = (uint8_t)(radiant_api_stats_get()->sched_missed -
+					       missed0);
+			sl->merged = (uint8_t)(radiant_sched_stats_get()->windows_merged -
+					       merged0);
+			TC_PRINT("xing %s k=%2u d=%6d fec=%c pwr=%c "
+				 "fail=%u missed=%u merged=%u gF=%u gP=%u\n",
+				 cfg->name, k - XING_ACQ_SLOTS,
+				 sl->d_us, sl->fec ? 'H' : (sl->aired ? '.' : '-'),
+				 sl->pwr ? 'H' : '.', sl->fec_fail, sl->missed,
+				 sl->merged, radiant_channel_guard_us(XING_CH_FEC),
+				 radiant_channel_guard_us(XING_CH_PWR));
+
+			/* A slot the master never aired neither breaks nor
+			 * extends a run: it is the air's loss, not ours. */
+			if (sl->aired) {
+				streak_f = sl->fec ? 0u : streak_f + 1u;
+			}
+			streak_p = sl->pwr ? 0u : streak_p + 1u;
+			if (sl->aired && !sl->fec) {
+				r->fec_missed++;
+				if (sl->d_us >= 0 && sl->d_us <= 3000) {
+					r->fec_band++;
+				}
+			}
+			if (!sl->pwr) {
+				r->pwr_missed++;
+			}
+			if (streak_f > r->fec_streak) {
+				r->fec_streak = streak_f;
+			}
+			if (streak_p > r->pwr_streak) {
+				r->pwr_streak = streak_p;
+			}
+		}
+
+		/* Zwift's trainer command, from the host at mid-period. A
+		 * transfer still in flight refuses it, as on the wire. */
+		if (commands && (k % 4u) == 0u) {
+			(void)antr_acknowledge_message_tx(XING_CH_FEC, 8u, cmd);
+		}
+	}
+
+	(void)p;
+	TC_PRINT("xing %s: fec missed %u (band %u, streak %u), "
+		 "pwr missed %u (streak %u), go_to_search %u\n", cfg->name,
+		 r->fec_missed, r->fec_band,
+		 r->fec_streak, r->pwr_missed, r->pwr_streak, r->go_to_search);
+
+	(void)antr_channel_close(XING_CH_FEC);
+	(void)antr_channel_close(XING_CH_PWR);
+	fake_radio_air_clear();
+	fake_radio_advance(5000u);
+	drain();
+	fake_radio_set_rx_terminal_delay_us(0u);
+	fake_radio_set_rx_frame_delay_us(0u);
+
+	/* The same ending as the long runs above: a run this long fills the
+	 * arm log, which is the harness, not the firmware. */
+	zassert_true(fake_radio_is_idle(), "radio not idle: %s",
+		     fake_radio_busy_reason());
+	for (uint32_t i = 0u; i < fake_radio_viol_count() &&
+			      i < (uint32_t)FAKE_RADIO_VIOL_MAX; i++) {
+		enum fake_radio_viol code = fake_radio_viol(i)->code;
+
+		zassert_true(code == FAKE_RADIO_VIOL_LOG_FULL ||
+				     code == FAKE_RADIO_VIOL_NONE,
+			     "contract violation: %s",
+			     fake_radio_viol_name(code));
+	}
+}
+
+static void xing_reset_between_runs(void)
+{
+	(void)antr_stack_reset();
+	k_sched_lock();
+	fake_radio_reset();
+	(void)radiant_radio_init(radiant_sched_radio_cbs(), NULL);
+	(void)radiant_radio_enable();
+	k_sched_unlock();
+	memset(msglog, 0, sizeof(msglog));
+	n_msg = 0u;
+}
+
+ZTEST(api, test_two_masters_drifting_through_each_other)
+{
+	static struct xing_result r;
+	/* frame_us 250: the 15 bytes after the address (120 us) plus ISR and
+	 * pass latency. jitter 150: what the hardware guard estimate settles
+	 * at. drop 5: the ~18 % scattered FE-C loss of every Zwift ride. */
+	static const struct xing_cfg runs[] = {
+		{ "nrf",          XING_NRF, false, 0u,   0u,   0u,   0u },
+		{ "nrf+cmd",      XING_NRF, true,  0u,   0u,   0u,   0u },
+		{ "nrf+lat",      XING_NRF, true,  250u, 250u, 0u,   0u },
+		{ "nrf+lat+jit",  XING_NRF, true,  250u, 250u, 150u, 0u },
+		{ "nrf+all",      XING_NRF, true,  250u, 250u, 150u, 5u },
+		{ "ti",           XING_TI,  false, 0u,   0u,   0u,   0u },
+		{ "ti+cmd",       XING_TI,  true,  0u,   0u,   0u,   0u },
+		{ "ti+lat",       XING_TI,  true,  250u, 250u, 0u,   0u },
+		{ "ti+all",       XING_TI,  true,  250u, 250u, 150u, 5u },
+	};
+	uint32_t failures = 0u;
+
+	/* Every run is reported before any is asserted, so one failing
+	 * preset does not hide what the others did. */
+	for (size_t i = 0u; i < ARRAY_SIZE(runs); i++) {
+		if (i > 0u) {
+			xing_reset_between_runs();
+		}
+		xing_run(&runs[i], &r);
+		if (r.go_to_search != 0u || r.fec_streak > 1u || r.pwr_streak > 1u) {
+			failures |= 1u << i;
+		}
+	}
+	xing_reset_between_runs();
+	zassert_equal(0u, failures,
+		      "runs failing (bit = row of runs[]): 0x%03x", failures);
+}

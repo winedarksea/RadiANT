@@ -1198,6 +1198,72 @@ ZTEST(radiant_sched, test_three_tracked_slots_inside_one_lead_still_drop_the_thi
 }
 
 /* ---------------------------------------------------------------------------
+ * Loser alternation (ADR 0024)
+ * ---------------------------------------------------------------------------
+ */
+
+/*
+ * TWO SLOTS THAT CANNOT BOTH BE HEARD TAKE TURNS LOSING.
+ *
+ * Channel 1 sits 300 us after channel 0 on another RF channel, so the pair can
+ * neither merge (rule 1) nor be armed in sequence (300 us is inside the
+ * 328 us arm lead). Earliest-first served channel 0 every period and channel 1
+ * lost every one: eight in a row is RX_FAIL_GO_TO_SEARCH, a dropout made by
+ * scheduling alone. That is the 2026-11-15 FE-C shape (TODO.md section 1).
+ *
+ * The geometry is held fixed for twelve periods: the losses must strictly
+ * alternate, so neither channel ever loses two in a row, and the total cost
+ * stays one slot per period. Each period's frames are on the air, so a served
+ * window is a heard one.
+ */
+ZTEST(radiant_sched, test_two_unservable_slots_alternate_the_loser)
+{
+	const uint32_t periods = 12u;
+	int            last_loser = -1;
+	uint32_t       p;
+
+	bring_up();
+	fake_radio_caps_mut()->min_arm_lead_us = TEST_NRF52840_ARM_LEAD_US;
+
+	for (p = 0u; p < periods; p++) {
+		radiant_time_t          c0 = radiant_radio_now() + 100000u;
+		radiant_time_t          c1 = c0 + 300u;
+		struct radiant_sched_rx r;
+		uint32_t                m0 = log.missed_count[0];
+		uint32_t                m1 = log.missed_count[1];
+		int                     loser;
+
+		post_tracked_slot(0u, c0);
+		rx_req_init(&r, radiant_frame_format(RADIANT_FRAME_CFG_TRACKING),
+			    &track_filter[1], 1u,
+			    c1 - (radiant_time_t)TEST_TRACK_GUARD_US,
+			    c1 + (radiant_time_t)TEST_TRACK_GUARD_US);
+		r.rf_index = 26u;
+		zassert_ok(radiant_sched_request_rx(1u, &r));
+		air_frame_for(0u, c0);
+		zassert_ok(radiant_sched_tick());
+		fake_radio_advance_to(c1 + (radiant_time_t)TEST_TRACK_GUARD_US + 1000u);
+
+		zassert_equal(1u, (log.missed_count[0] - m0) + (log.missed_count[1] - m1),
+			      "period %u: %u + %u slots lost, expected exactly one",
+			      p, log.missed_count[0] - m0, log.missed_count[1] - m1);
+		loser = (log.missed_count[0] != m0) ? 0 : 1;
+		zassert_true(loser != last_loser,
+			     "period %u: channel %d lost two contended slots in a "
+			     "row; the loser must alternate", p, loser);
+		last_loser = loser;
+	}
+	zassert_equal(periods / 2u, log.missed_count[0]);
+	zassert_equal(periods / 2u, log.missed_count[1]);
+	zassert_true(radiant_sched_stats_get()->turn_yields >= (periods / 2u) - 1u,
+		     "%u yields", radiant_sched_stats_get()->turn_yields);
+
+	fake_radio_air_clear();
+	assert_every_window_bounded();
+	finish();
+}
+
+/* ---------------------------------------------------------------------------
  * Preemption of a window that has not opened
  * ---------------------------------------------------------------------------
  */
@@ -3408,9 +3474,12 @@ static void r1_measure(uint32_t offset_us, struct r1_result *out)
 	finish();
 }
 
-/* The characterization: today's behaviour. The "later slot lost every period"
- * shape from the 2026-10-31 review. R1_EXPECT is what the scheduler does today;
- * the chosen fix flips the two lines in between to strict. */
+/* The characterization: today's behaviour. Until ADR 0024 this was the "later
+ * slot lost every period" shape from the 2026-10-31 review. With loser
+ * alternation the later channel leads every other period and carries the
+ * earlier one in the same window, so the later loses about half its slots and
+ * never two in a row (never reaching RX_FAIL_TO_SEARCH). The booking path
+ * (ADR 0018 d2 R1, test_d2_r1_both_slots_are_kept) keeps both. */
 ZTEST(radiant_sched, test_r1_two_tracked_channels_inside_the_lead_today)
 {
 	static const struct {
@@ -3431,12 +3500,20 @@ ZTEST(radiant_sched, test_r1_two_tracked_channels_inside_the_lead_today)
 		TC_PRINT("r1-shape offset=%u us: ch0 ok=%u missed=%u ch1 ok=%u missed=%u "
 			 "arms=%u\n", cases[i].offset_us, r.ok[0], r.missed[0], r.ok[1],
 			 r.missed[1], r.arms);
-		zassert_equal(0u, r.missed[0]);
 		if (cases[i].later_served) {
+			zassert_equal(0u, r.missed[0]);
 			zassert_equal(0u, r.missed[1],
 				      "offset %u us, missed %u", cases[i].offset_us, r.missed[1]);
 		} else {
-			zassert_true(r.missed[1] >= 10u, "offset %u us", cases[i].offset_us);
+			/* Every other period the later channel leads and the
+			 * earlier merges in behind it (rule 4 caps only the close
+			 * side), so both are heard; in between, the earlier leads
+			 * and the later is lost. 12 periods: about 6 lost, all on
+			 * the later channel, never two in a row. Was >= 10. */
+			zassert_equal(0u, r.missed[0], "offset %u us", cases[i].offset_us);
+			zassert_true(r.missed[1] >= 5u && r.missed[1] <= 7u,
+				     "offset %u us: later channel lost %u of 12",
+				     cases[i].offset_us, r.missed[1]);
 		}
 	}
 }

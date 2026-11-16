@@ -75,7 +75,7 @@ class Decode(unittest.TestCase):
         with self.assertRaises(ValueError):
             d.decode(body(0, [0] * 8)[:20])
         with self.assertRaises(ValueError):
-            d.decode(body(11, [0] * 8))
+            d.decode(body(12, [0] * 8))
         bad = bytearray(body(0, [0] * 8))
         bad[1] = 2
         with self.assertRaises(ValueError):

@@ -494,6 +494,12 @@ void fake_radio_set_phys(const enum radiant_phy *phys, uint8_t n_phys);
  * widening its acceptance interval. Models airtime tail and ISR delivery. */
 void fake_radio_set_rx_terminal_delay_us(uint32_t delay);
 
+/* Deliver every received frame's event this far after its t_sync, without
+ * moving the t_sync it reports or its acceptance (judged on t_sync). Models
+ * the rest of the frame on air plus ISR latency: on hardware a
+ * STOP_ON_FIRST window ends at the frame's END, not its ADDRESS. Default 0. */
+void fake_radio_set_rx_frame_delay_us(uint32_t delay);
+
 /* A ready-made two-PHY list: 1 M first (required of any ANT+-compatible
  * backend), then the coded PHY. Both presets still default to 1 M alone;
  * combine with fake_radio_caps_preset_rail() to get two PHYs AND a non-zero

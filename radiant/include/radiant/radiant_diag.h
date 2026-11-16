@@ -49,7 +49,8 @@ extern "C" {
 #define RADIANT_DIAG_PAGE_TIMING     8u
 #define RADIANT_DIAG_PAGE_PASS       9u
 #define RADIANT_DIAG_PAGE_RX_INTEGRITY 10u
-#define RADIANT_DIAG_PAGES           11u
+#define RADIANT_DIAG_PAGE_SCHED      11u
+#define RADIANT_DIAG_PAGES           12u
 
 /*
  * Page 7, the search/track hand-off (ADR 0022 gate 3). Does a search
@@ -180,6 +181,33 @@ extern "C" {
  *
  * 5-7 are levels. A backend without the field reads RADIANT_DIAG_NOT_MEASURED.
  */
+/*
+ * Page 11, scheduler contention (2026-11-15, TODO.md section 1): the
+ * radiant_sched_stats that never reached the host, and the API's split of a
+ * lost tracked slot into its causes. All counts.
+ *
+ *   0 windows_merged   receive windows armed carrying more than one channel
+ *   1 preempted        running operations cut short for a nearer deadline
+ *   2 replans          windows rebuilt before opening
+ *   3 arm_rejected     arm calls refused other than EBUSY
+ *   4 tx_armed         accepted transmits
+ *   5 stale_events     events for an operation already retired
+ *   6 slots_collided   tracked slots the scheduler dropped (never armed,
+ *                      expired behind another window, or cut short):
+ *                      EVENT_CHANNEL_COLLISION, not RX_FAIL. Against page 0
+ *                      field 4 (slots_missed: armed, ran, heard nothing)
+ *   7 turn_yields      bounded receives let go so that one which lost the
+ *                      last contention could be served (ADR 0024)
+ */
+#define RADIANT_DIAG_SCHED_WINDOWS_MERGED 0u
+#define RADIANT_DIAG_SCHED_PREEMPTED      1u
+#define RADIANT_DIAG_SCHED_REPLANS        2u
+#define RADIANT_DIAG_SCHED_ARM_REJECTED   3u
+#define RADIANT_DIAG_SCHED_TX_ARMED       4u
+#define RADIANT_DIAG_SCHED_STALE_EVENTS   5u
+#define RADIANT_DIAG_SCHED_SLOTS_COLLIDED 6u
+#define RADIANT_DIAG_SCHED_TURN_YIELDS    7u
+
 #define RADIANT_DIAG_RXI_CRC_REPAIRED           0u
 #define RADIANT_DIAG_RXI_CRC_UNREPAIRABLE       1u
 #define RADIANT_DIAG_RXI_CRC_REPAIR_REFUTED     2u

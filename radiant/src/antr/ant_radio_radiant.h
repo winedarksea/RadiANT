@@ -130,7 +130,12 @@ struct radiant_api_stats {
 	/* Tracked or master slots lost to the arbiter. Against slots_missed:
 	 * loss that is ours versus loss that is the air's. */
 	uint32_t slots_denied;
-	uint32_t acquired;        /* search acquisitions accepted onto a channel */
+	/* Tracked slots the scheduler itself dropped (never armed, expired behind
+	 * another window, or cut short): reported as EVENT_CHANNEL_COLLISION and
+	 * never counted toward search. Against slots_missed: loss that is our
+	 * scheduling versus loss that is the air's. */
+	uint32_t slots_collided;
+	uint32_t acquired;       /* search acquisitions accepted onto a channel */
 	uint32_t id_list_rejects; /* acquisitions refused by a device ID list */
 	uint32_t key_rejects;     /* network keys not in the key -> address table */
 	/* Transfers the watchdog terminated (non-idle, nothing armed, no

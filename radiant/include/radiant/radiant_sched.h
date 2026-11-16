@@ -528,6 +528,10 @@ struct radiant_sched_stats {
 	uint32_t armed_stale;       /* armed ops reclaimed because no terminal
 				     * came RADIANT_SCHED_ARMED_STALE_US past
 				     * their end. SHOULD STAY ZERO */
+	uint32_t turn_yields;       /* ADR 0024: bounded receives let go so that
+				     * one which lost the last contention could
+				     * be served instead. Non-zero only while two
+				     * channels' slots cannot both be heard */
 #if defined(CONFIG_RADIANT_SCHED_BOOKING)
 	/* ADR 0018 (d2), only in booking builds: committed operations booked
 	 * with the backend, booking calls refused for want of a free session

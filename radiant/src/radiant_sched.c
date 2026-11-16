@@ -173,6 +173,22 @@ static struct {
 	 * starved by lower ones asking for the same instant. */
 	uint8_t cursor;
 
+	/*
+	 * Loser alternation (ADR 0024). Bit c: channel c's last bounded receive
+	 * was lost while another operation held the radio (expired behind it, or
+	 * cut short by it), and the channel has not been served since. Kept here,
+	 * not in struct sched_slot, because slot_clear() wipes the slot when the
+	 * request is consumed. turn_yield is the channel arm_next() let go so
+	 * that a flagged one could be served; want_preempt() must not hand the
+	 * radio straight back to it. RADIANT_SCHED_CH_NONE when no such choice
+	 * stands.
+	 */
+	uint32_t lost_mask;
+	uint8_t  turn_yield;
+	/* A bounded operation ended and the pass that follows has not finished:
+	 * a window that expires in that pass lost to it (note_lost()). */
+	bool     ended_bounded;
+
 	/* The PHY the radio is configured for, valid only while phy_known. Until
 	 * the first arm, every candidate is charged the switch cost (the
 	 * conservative choice). Updated only on a successful arm. */
@@ -990,6 +1006,20 @@ static void clear_armed(void)
 	s.armed_rf = 0u;
 	s.n_members = 0u;
 	s.n_merged = 0u;
+	s.turn_yield = RADIANT_SCHED_CH_NONE;
+}
+
+/* A bounded receive of channel c expired. It lost a contention if a bounded
+ * operation holds the radio, or has just ended and this is the pass after it
+ * (the usual case: the later window is unreachable by the time the earlier
+ * one's terminal arrives). Not behind a scan, which yields to tracked work. */
+static void note_lost(uint8_t c)
+{
+	if ((s.armed_kind != (uint8_t)SLOT_IDLE && !s.armed_continuous &&
+	     s.armed_kind != (uint8_t)SLOT_ED) ||
+	    s.ended_bounded) {
+		s.lost_mask |= (uint32_t)1u << c;
+	}
 }
 
 /* --- Ending an operation --- */
@@ -1008,6 +1038,9 @@ static void end_armed(enum radiant_sched_done why)
 	if (s.armed_kind == (uint8_t)SLOT_IDLE) {
 		return;
 	}
+	/* Cleared when the pass that follows ends (see note_lost()). */
+	s.ended_bounded = (s.armed_kind == (uint8_t)SLOT_TX) ||
+			  (s.armed_kind == (uint8_t)SLOT_RX && !s.armed_continuous);
 	memcpy(list, s.members, sizeof(list));
 	clear_armed();
 	/* The reserve outlives only a completed operation (see in_reserve()). */
@@ -1099,6 +1132,12 @@ static bool abort_armed(uint8_t skip_ch)
 				notify_done(c, RADIANT_SCHED_DONE_ABORTED);
 			}
 			continue;
+		}
+		/* An open bounded receive cut short for someone else lost the
+		 * contention (see s.lost_mask). note_lost() cannot be used: the
+		 * armed state is already cleared. */
+		if (c != skip_ch && sl->kind == (uint8_t)SLOT_RX) {
+			s.lost_mask |= (uint32_t)1u << c;
 		}
 		slot_clear(c);
 		if (c != skip_ch) {
@@ -1198,7 +1237,11 @@ static enum step arm_failed(uint8_t ch, int rc)
  *      armed in sequence (pass_step() reports them MISSED), so merging is the
  *      only way to hear both.
  *   4. The union is capped at RADIANT_SCHED_MERGE_SPAN_MAX_US, below the 2.19 ms
- *      master-to-slave turnaround. It bounds only what merging adds.
+ *      master-to-slave turnaround. It bounds only what merging adds after the
+ *      leader's open. A member opening BEFORE the leader extends the union back
+ *      within the reach: that is what lets a later leader chosen by loser
+ *      alternation (ADR 0024) still carry the earlier channel, which serves
+ *      both rather than one.
  *   5. At most caps.max_addr_groups device-number groups (2 on nRF).
  */
 static enum step arm_rx_window(uint8_t leader, radiant_time_t earliest,
@@ -1433,6 +1476,8 @@ static enum step arm_rx_window(uint8_t leader, radiant_time_t earliest,
 	s.replan = false;
 	for (i = 0u; i < s.n_members; i++) {
 		s.ch[s.members[i]].in_flight = true;
+		/* Served: its lost contention is paid back. */
+		s.lost_mask &= ~((uint32_t)1u << s.members[i]);
 	}
 
 	s.stats.windows_armed++;
@@ -1739,14 +1784,69 @@ static bool want_preempt(radiant_time_t earliest)
 		 * arm_next()'s early commitment would starve a re-posted window. The
 		 * replacement must start strictly earlier, so it cannot be displaced back.
 		 */
+		/* Not for the channel arm_next() let go to pay back a lost
+		 * contention: that choice would flip straight back. */
 		if (s.armed_kind == (uint8_t)SLOT_RX && !s.armed_continuous &&
 		    sl->kind == (uint8_t)SLOT_RX && !sl->continuous &&
+		    i != (uint32_t)s.turn_yield &&
 		    s.armed_open > earliest &&
 		    sl->t_start + phy_lead(sl->fmt) < s.armed_open) {
 			return true;
 		}
 	}
 	return false;
+}
+
+/*
+ * Loser alternation (ADR 0024). When two bounded receives cannot both be heard,
+ * earliest-first always serves the same one, and the other channel loses every
+ * contended slot until the geometry drifts apart: eight in a row is a search.
+ * So the earliest receive gives way to a later one that lost the last
+ * contention, provided serving the earliest first would leave the later one's
+ * expected sync (its window centre) behind the earliest's close plus the arm
+ * lead. Merging needs no test here: the flagged channel becomes the leader, and
+ * arm_rx_window() still merges the other into its window if the rules allow.
+ * Returns the channel to serve instead, or -1.
+ */
+static int turn_candidate(uint8_t first)
+{
+	const struct sched_slot *f = &s.ch[first];
+	const radiant_time_t     after = t_fwd(f->t_end, arm_lead());
+	int                      best = -1;
+	radiant_time_t           best_at = RADIANT_TIME_NEVER;
+
+	if ((s.lost_mask & ((uint32_t)1u << first)) != 0u) {
+		return -1;
+	}
+	for (uint32_t k = 0u; k < RADIANT_SCHED_MAX_CHANNELS; k++) {
+		const struct sched_slot *sl = &s.ch[k];
+		radiant_time_t           mid;
+
+		if (k == first || (s.lost_mask & ((uint32_t)1u << k)) == 0u ||
+		    sl->kind != (uint8_t)SLOT_RX || sl->continuous ||
+		    sl->in_flight) {
+			continue;
+		}
+		mid = sl->t_start + ((sl->t_end - sl->t_start) / 2u);
+		if (mid >= after || sl->t_start >= best_at) {
+			continue;
+		}
+		best = (int)k;
+		best_at = sl->t_start;
+	}
+	return best;
+}
+
+/* After an arm: record the channel let go by turn_candidate(), unless it merged
+ * into the window after all. */
+static void note_turn(uint8_t yield)
+{
+	if (yield == RADIANT_SCHED_CH_NONE ||
+	    s.armed_kind == (uint8_t)SLOT_IDLE || s.ch[yield].in_flight) {
+		return;
+	}
+	s.turn_yield = yield;
+	s.stats.turn_yields++;
 }
 
 /*
@@ -1768,7 +1868,11 @@ static enum step arm_next(radiant_time_t earliest)
 	radiant_time_t       ed_at = RADIANT_TIME_NEVER;
 	radiant_time_t       committed;
 	const struct radiant_pkt_format *committed_fmt;
+	uint8_t          yield = RADIANT_SCHED_CH_NONE;
 	uint32_t         k;
+
+	/* Nothing is armed when this runs, so no earlier choice stands. */
+	s.turn_yield = RADIANT_SCHED_CH_NONE;
 
 	for (k = 0u; k < RADIANT_SCHED_MAX_CHANNELS; k++) {
 		uint8_t                  c = (uint8_t)(((uint32_t)s.cursor + k) %
@@ -2005,6 +2109,19 @@ static enum step arm_next(radiant_time_t earliest)
 		}
 	}
 
+	/* Loser alternation (ADR 0024): the earliest bounded receive gives way to
+	 * one it would leave unhearable and that lost the last contention. */
+	if (rx_ch >= 0) {
+		const int alt = turn_candidate((uint8_t)rx_ch);
+
+		if (alt >= 0) {
+			yield = (uint8_t)rx_ch;
+			rx_ch = alt;
+			rx_at = t_max(s.ch[alt].t_start,
+				      slot_earliest(&s.ch[alt], earliest));
+		}
+	}
+
 	if (rx_ch >= 0 && (tx_ch < 0 || rx_at <= tx_at)) {
 		radiant_time_t limit = RADIANT_TIME_NEVER;
 		enum step  st;
@@ -2021,6 +2138,7 @@ static enum step arm_next(radiant_time_t earliest)
 		if (limit == RADIANT_TIME_NEVER || limit >= rx_at) {
 			st = arm_rx_leader((uint8_t)rx_ch, earliest, limit);
 			if (st != STEP_SKIP) {
+				note_turn(yield);
 				return st;
 			}
 		}
@@ -2035,6 +2153,7 @@ static enum step arm_next(radiant_time_t earliest)
 					     RADIANT_TIME_NEVER);
 
 		if (st != STEP_SKIP) {
+			note_turn(yield);
 			return st;
 		}
 	}
@@ -2103,6 +2222,9 @@ static enum step pass_step(radiant_time_t now)
 				RADIANT_DIAG_INC(trk_missed_behind_scan);
 			}
 #endif
+			if (sl->kind == (uint8_t)SLOT_RX && !sl->continuous) {
+				note_lost((uint8_t)i);
+			}
 			slot_clear((uint8_t)i);
 			PB_ADD(sweep, t_sweep);
 			notify_done((uint8_t)i, RADIANT_SCHED_DONE_MISSED);
@@ -2214,6 +2336,7 @@ static void pass(void)
 #endif
 	s.dirty = false;
 	s.in_pass = false;
+	s.ended_bounded = false;
 	radiant_event_crit_exit(key);
 }
 
@@ -2520,6 +2643,7 @@ int radiant_sched_init(const struct radiant_sched_cbs *cbs, void *user)
 		s.cbs = *cbs;
 	}
 	s.user = user;
+	s.turn_yield = RADIANT_SCHED_CH_NONE;
 	s.inited = true;
 	return RADIANT_RADIO_OK_RC;
 }
@@ -2536,6 +2660,8 @@ void radiant_sched_reset(void)
 	 * the abort above (or the session ending) returns the grant it described. */
 	s.reserve_end = 0u;
 	memset(s.ch, 0, sizeof(s.ch));
+	s.lost_mask = 0u;
+	s.turn_yield = RADIANT_SCHED_CH_NONE;
 	s.cursor = 0u;
 	s.dirty = false;
 	s.replan = false;
@@ -2710,6 +2836,8 @@ int radiant_sched_cancel(uint8_t ch)
 	 * instead is still the commit's job. */
 	key = radiant_event_crit_enter();
 	drop_slot(ch);
+	/* A cancelled channel owes nothing and is owed nothing. */
+	s.lost_mask &= ~((uint32_t)1u << ch);
 	s.dirty = true;
 	radiant_event_crit_exit(key);
 	return RADIANT_RADIO_OK_RC;

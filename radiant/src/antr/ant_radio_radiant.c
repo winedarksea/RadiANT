@@ -2684,10 +2684,22 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 		 * (RX_FAIL_GO_TO_SEARCH).
 		 * A DENIED window did not run: it charges the guard, not the miss counter, and
 		 * raises no RX_FAIL, since a denial says nothing about the sensor.
+		 * A MISSED or ABORTED window is the scheduler's own drop: it never armed, it
+		 * expired behind another channel's window, or another operation cut it short.
+		 * That says nothing about the sensor either, so it is a collision (owner
+		 * decision 2026-11-15, TODO.md section 8): the denial's accounting, plus
+		 * EVENT_CHANNEL_COLLISION in place of RX_FAIL, as Garmin reports it. Only a
+		 * window that ran to its close empty (DONE_OK) counts toward search.
 		 */
 		if (why == RADIANT_SCHED_DONE_DENIED) {
 			api_stats.slots_denied++;
 			(void)radiant_channel_on_slot_denied(ch, now);
+		} else if (why == RADIANT_SCHED_DONE_MISSED ||
+			   why == RADIANT_SCHED_DONE_ABORTED) {
+			api_stats.slots_collided++;
+			(void)radiant_channel_on_slot_denied(ch, now);
+			(void)radiant_event_post_channel_event(
+				ch, (uint8_t)ANTW_EVENT_CHANNEL_COLLISION);
 		} else {
 			api_stats.slots_missed++;
 			if (!radiant_channel_on_slot_missed(ch, now)) {
@@ -4440,6 +4452,19 @@ antr_err_t antr_diag_page(uint8_t page, uint8_t *out)
 		v[RADIANT_DIAG_RXI_T_SYNC_MAX_US] = rd.v[RADIANT_RADIO_DIAG_T_SYNC_MAX_US];
 		v[RADIANT_DIAG_RXI_MATCH_MAX_US] = rd.v[RADIANT_RADIO_DIAG_MATCH_MAX_US];
 		break;
+	case RADIANT_DIAG_PAGE_SCHED: {
+		const struct radiant_sched_stats *ss = radiant_sched_stats_get();
+
+		v[RADIANT_DIAG_SCHED_WINDOWS_MERGED] = ss->windows_merged;
+		v[RADIANT_DIAG_SCHED_PREEMPTED] = ss->preempted;
+		v[RADIANT_DIAG_SCHED_REPLANS] = ss->replans;
+		v[RADIANT_DIAG_SCHED_ARM_REJECTED] = ss->arm_rejected;
+		v[RADIANT_DIAG_SCHED_TX_ARMED] = ss->tx_armed;
+		v[RADIANT_DIAG_SCHED_STALE_EVENTS] = ss->stale_events;
+		v[RADIANT_DIAG_SCHED_SLOTS_COLLIDED] = api_stats.slots_collided;
+		v[RADIANT_DIAG_SCHED_TURN_YIELDS] = ss->turn_yields;
+		break;
+	}
 	case RADIANT_DIAG_PAGE_SEARCH_A:
 	case RADIANT_DIAG_PAGE_SEARCH_B: {
 		const struct radiant_search_stats *st =

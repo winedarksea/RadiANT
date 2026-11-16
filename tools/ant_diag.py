@@ -87,6 +87,10 @@ PAGES: dict[int, tuple[str, list[str]]] = {
                           "crc_repair_refuted", "crc_repair_implausible",
                           "late_isr_drops", "end_late_max_us",
                           "t_sync_max_us", "match_max_us"]),
+    # 2026-11-15 scheduler contention (TODO.md section 1). All counts.
+    11: ("sched", ["windows_merged", "preempted", "replans", "arm_rejected",
+                   "tx_armed", "stale_events", "slots_collided",
+                   "turn_yields"]),
 }
 # Fields that are a level (min/max/last), not a running count: a difference
 # means nothing, so --diff reports the later value.

@@ -154,6 +154,8 @@ struct fake_state {
 	 * caps.min_arm_lead_in_grant_us. See too_late(). */
 	radiant_time_t reserve_end;
 	uint32_t rx_terminal_delay_us;
+	/* Delivery lag of a received frame's event after its t_sync. */
+	uint32_t rx_frame_delay_us;
 	int8_t   default_rssi;
 
 	/* The noise floor this mock reports on a window that heard nothing.
@@ -1410,8 +1412,10 @@ static bool next_due(radiant_time_t *t_out, enum due_kind *kind_out,
 		if (!g.air[i].used || g.air[i].done) {
 			continue;
 		}
-		if (f->t_sync < g.now || f->t_sync < g.cur.t_open ||
-		    f->t_sync > g.cur.t_close) {
+		/* Acceptance is judged on t_sync; only the delivery is late
+		 * (fake_radio_set_rx_frame_delay_us()). */
+		if (f->t_sync + g.rx_frame_delay_us < g.now ||
+		    f->t_sync < g.cur.t_open || f->t_sync > g.cur.t_close) {
 			continue;
 		}
 		if (!air_matches(f, &fidx)) {
@@ -1426,7 +1430,7 @@ static bool next_due(radiant_time_t *t_out, enum due_kind *kind_out,
 	/* A frame whose t_sync is exactly t_close is inside the window, so it
 	 * is delivered before the window closes. */
 	if (best_i >= 0) {
-		*t_out = best;
+		*t_out = best + g.rx_frame_delay_us;
 		*kind_out = DUE_AIR;
 		*air_out = best_i;
 		return true;
@@ -2691,6 +2695,11 @@ void fake_radio_force_arm_repeat(int rc, uint32_t count)
 void fake_radio_set_rx_terminal_delay_us(uint32_t delay)
 {
 	g.rx_terminal_delay_us = delay;
+}
+
+void fake_radio_set_rx_frame_delay_us(uint32_t delay)
+{
+	g.rx_frame_delay_us = delay;
 }
 
 void fake_radio_force_terminal_repeat(enum radiant_radio_status status,
