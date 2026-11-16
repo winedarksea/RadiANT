@@ -471,6 +471,17 @@ tracked device numbers, so this rescues **pairs** — which is precisely the
 pairwise bad band — and a three-way pile-up inside one lead still drops the
 third. See [ADR 0016](decisions/0016-merge-reach-is-the-arm-lead.md).
 
+**When a pair cannot be served at all, the loser alternates** ([ADR 0024](decisions/0024-contended-slots-alternate-and-are-collisions.md)).
+A bounded receive that lost the last contention (expired behind another
+operation, or was cut short by one) is served ahead of an earlier window that
+would leave it unhearable, so neither channel loses two contended slots in a
+row. The scheduler's own drops (`DONE_MISSED`, `DONE_ABORTED`) reach the host as
+`EVENT_CHANNEL_COLLISION`, are charged like a denial and never count toward
+`RX_FAIL_GO_TO_SEARCH`. Rule 4 caps the union only past the leader's open, so
+when alternation makes the later channel the leader, the earlier one still
+merges in behind it and both are heard. 0xF7 page 11 counts `slots_collided` and
+`turn_yields`.
+
 `radiant/tests/fake_radio.c`'s `min_arm_lead_us` is mutable for exactly this
 reason: a preset with an unrealistic lead certifies the wrong geometry, which is
 the trap `max_addr_groups` fell into above.

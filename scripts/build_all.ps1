@@ -207,6 +207,9 @@ if ($Backend -eq 'core') {
         $targets += @{ dir='ti_launchxl';       board='cc26x2r1_launchxl'; artifact='radiant_dongle_cc26x2r1_launchxl.hex';       pkg='hex'; offset=0x0; transport='UART'; conf=$null;           release=$false; radiant='cc26xx'; baud=57600; modules=$halTiModule; app=$dongleTiApp }
         $targets += @{ dir='ti_launchxl_patch'; board='cc26x2r1_launchxl'; artifact='radiant_dongle_cc26x2r1_launchxl_patch.hex'; pkg='hex'; offset=0x0; transport='UART'; conf='ti_patch.conf'; release=$false; radiant='cc26xx'; baud=57600; modules=$halTiModule; app=$dongleTiApp }
         $targets += @{ dir='ti_launchxl_gate';  board='cc26x2r1_launchxl'; artifact='radiant_dongle_cc26x2r1_launchxl_gate.hex';  pkg='hex'; offset=0x0; transport='UART'; conf='ti_gate.conf';  release=$false; radiant='cc26xx'; baud=57600; modules=$halTiModule; app=$dongleTiApp }
+        # The 0xF7 bench image (page 11 for the FE-C crossing, TODO.md item 1):
+        # arm 1 plus the health and diagnostic counters, nothing else.
+        $targets += @{ dir='ti_launchxl_diag';  board='cc26x2r1_launchxl'; artifact='radiant_dongle_cc26x2r1_launchxl_diag.hex';  pkg='hex'; offset=0x0; transport='UART'; conf='ti_health.conf;ti_diag.conf'; release=$false; radiant='cc26xx'; baud=57600; modules=$halTiModule; app=$dongleTiApp; assert_config=@('CONFIG_ANT_DONGLE_DIAG=y', 'CONFIG_RADIANT_DIAG_COUNTERS=y') }
         $targets += @{ dir='ti_launchxl_coex';  board='cc26x2r1_launchxl'; artifact='radiant_dongle_cc26x2r1_launchxl_coex.hex';  pkg='hex'; offset=0x0; transport='UART'; conf='ti_coex.conf';  release=$false; radiant='cc26xx'; baud=57600; modules=$halTiModule; overlay='ti_coex.overlay'; app=$dongleTiApp }
     } else {
         Write-Host "cc26x2r1_launchxl: skipped, no hal_ti module at $HalTiDir" -ForegroundColor DarkYellow

@@ -538,7 +538,12 @@ Captures `captures/zwift-20261115-*.pcap`, plus the shim log `captures/zwift-shi
 
 The trainer is a Wahoo Kicker #52233 on 2017 firmware; it never sends page 0x47. None of the faults below was visible in Zwift.
 
-## 1. [FIRMWARE, bench] The FE-C channel goes deaf when its slot crosses the power meter's
+## 1. [PARTLY DONE 2026-11-16, branch fix/fec-slot-crossing, ADR 0024; cause OPEN, bench next] The FE-C channel goes deaf when its slot crosses the power meter's
+Done (ADR 0024): two slots that cannot both be heard now take turns losing (`turn_candidate()` in radiant_sched.c), and a slot the scheduler dropped is an EVENT_CHANNEL_COLLISION, not an RX_FAIL, and never counts toward search. So a crossing can no longer send FE-C to search on its own, whatever its cause. 0xF7 page 11 (scheduler contention) and `decode_pcap.py --phase A B` are in.
+
+Open: what makes the 0.57-2.67 ms band unservable. `test_two_masters_drifting_through_each_other` (radiant/tests/api) does not reproduce it on the nRF-direct or TI preset, with commands, frame latency, jitter or scattered loss; FE-C never loses two in a row there, before or after the change. So it is backend timing the fake does not model, or the real masters. Next: the two-master bench below, on the Pro Micro then the TI, reading page 11 and `--phase` across >= 4 crossings; then one Zwift ride (`decode_pcap.py --phase 3 2`, no 8-miss run, 0x33 completion at crossings equal to the rest of the ride). The booking path (MPSL) still books earliest-first.
+
+Original report:
 Power #20329 has period 8182 and FE-C has 8192, so their slots line up every ~204 s. Each crossing costs FE-C most of its frames while power barely loses:
 - TI, 130–138 s: 82 % FE-C loss inside ±5 ms, and GO_TO_SEARCH.
 - Pro Micro (215313), 208–213 s: 13 of 21 FE-C slots lost, 8 of them in a row, then GO_TO_SEARCH and two failed commands.
@@ -580,14 +585,14 @@ The Garmin answers in 1 ms. 53–59 ms sits right at the libusb0 short-read race
 - Zero-byte reads are not logged (dsi_siusbxp.c:181), and log lines carry no timestamps, so read latency cannot be measured.
 - Every byte is logged with an `fflush`; one session wrote 73,390 lines. Host turnaround is 12–17 ms, against 0–1 ms on native USB. That comes from ANT_DLL's USBXpress path, matters during setup only, and is not the dongle.
 
-## 7. [TOOLS] decode_pcap.py gaps
+## 7. [TOOLS] decode_pcap.py gaps (slot loss from the RX timestamp: DONE 2026-11-16, `--phase A B`)
 - It counts a transfer as accepted only on RESPONSE_NO_ERROR, so a Garmin capture shows accepted=0 and unmatched=149. It also pairs a completion with a submit made before the capture started.
 - Loss counted from RX_FAIL understates real loss (Garmin FE-C: 78 % against 84 %), because search periods and collisions produce no RX_FAIL. Count slots from the RX timestamp instead (flag 0x20).
 - A capture started mid-session has no CHANNEL_PERIOD, so the period has to be supplied by hand.
 - FE-C payloads (0x31, 0x33, 0x19, 0x10) are not decoded, and the summary header is written into the `-o` file.
 - The "discarded bytes" are only Zwift padding every OUT transfer with `00 00`. Label them as padding.
 
-## 8. [FIRMWARE, LOW] No EVENT_CHANNEL_COLLISION
+## 8. [DONE 2026-11-16, ADR 0024] No EVENT_CHANNEL_COLLISION
 The Garmin raises collision events when two of its own slots overlap, and a collided slot gets no RX_FAIL. RadiANT reports nothing from `radiant_channel_on_slot_denied()`; every miss shows up as an RX_FAIL. Zwift is unaffected, so this is parity only.
 
 Settled by these captures, nothing to do:
