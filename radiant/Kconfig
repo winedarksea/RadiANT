@@ -1134,9 +1134,17 @@ config RADIANT_CRC_REPAIR
 	  inert without one, because the received CRC is not in the body and a
 	  syndrome cannot be formed without it.
 
-	  Default n. Repaired frames are counted separately in
-	  radiant_api_stats.crc_repaired, so an A/B can see how many there were
-	  and never confuses one for a clean receive.
+	  Default n in the library: it needs a backend with caps.has_rx_crc,
+	  and an application turns it on knowingly. The shipping dongle apps
+	  do: apps/dongle/prj.conf (every nRF dongle image) and
+	  apps/dongle_ti/prj.conf set it, with RADIANT_PROFILE_SANITY, since
+	  the owner accepted the nRF bench gate on 2026-11-15 (22 repairs,
+	  0 mis-repairs; the cc26xx run on 2026-11-13 had 28 and 0).
+	  apps/dongle/crc_repair_off.conf builds a dongle without it, and
+	  apps/dongle/crc_repair.conf turns it on in another application.
+	  Repaired frames are counted separately in
+	  radiant_api_stats.crc_repaired (0xF7 page 10), so an A/B can see
+	  how many there were and never confuses one for a clean receive.
 
 config RADIANT_PROFILE_SANITY
 	bool "drop a repaired frame whose payload is not physically possible"
