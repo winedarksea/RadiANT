@@ -128,7 +128,10 @@ extern "C" {
  *                        abort_armed()'s radiant_radio_abort()) made by one
  *                        pass, summed - core. A callback nested inside one
  *                        counts here and in 3; 1 is the remainder, floored
- *                        at 0
+ *                        at 0. An abort made outside a pass (drop_slot()
+ *                        from radiant_sched_cancel() or radiant_sched_
+ *                        request_*(), including one a consumer callback
+ *                        makes inside a callback entry) is not counted
  *   3 done_cb_max_us     notify_done() consumer callbacks within one
  *                        scheduler entry, summed - core. An entry is a pass,
  *                        or the body of a backend callback (hal_rx/hal_tx/
@@ -136,8 +139,13 @@ extern "C" {
  *                        run; the pass such a body ends with is a separate
  *                        entry. Until 2026-11-16 only a pass's own callbacks
  *                        reached it, so it read 0 on hardware. A callback
- *                        from radiant_sched_cancel() (thread, no entry) is
- *                        not timed
+ *                        made from thread context outside any entry
+ *                        (radiant_sched_cancel(), or the abort in a
+ *                        radiant_sched_request_*() that replaces an
+ *                        in-flight request) is not timed. On nRF MPSL a
+ *                        DENIED entry runs from a thread with interrupts
+ *                        on, so its sum may include preempting ISR time,
+ *                        an exception to the A0 "cannot idle" rule below
  *   4 book_max_us        book_ahead() - core; RADIANT_DIAG_NOT_MEASURED
  *                        without CONFIG_RADIANT_SCHED_BOOKING
  *   5 pass_to_arm_max_us the pass's `now` to the backend's own `now` at its

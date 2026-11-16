@@ -182,6 +182,10 @@ static struct {
 	/* 0xF7 page 9 field 3: each done() advances the simulated cycle clock
 	 * this far (radiant.unit.diag on native_sim only). */
 	uint32_t done_cycles;
+	/* One-shot: from inside armed(), end the operation just armed with a
+	 * TIMEOUT delivered at once, so its callback entry runs nested in the
+	 * pass that armed it. */
+	bool end_in_armed;
 } log;
 
 static void rx_req_init(struct radiant_sched_rx *r, const struct radiant_pkt_format *fmt,
@@ -346,6 +350,11 @@ static void on_armed(uint8_t ch, radiant_time_t t_open, radiant_time_t t_close,
 		log.armed[log.n_armed].t_close = t_close;
 	}
 	log.n_armed++;
+
+	if (log.end_in_armed) {
+		log.end_in_armed = false;
+		zassert_ok(fake_radio_end_current(RADIANT_RADIO_STATUS_TIMEOUT));
+	}
 }
 
 static const struct radiant_sched_cbs test_cbs = {
@@ -4301,6 +4310,33 @@ ZTEST(radiant_sched, test_diag_done_callbacks_are_summed_per_entry)
 	zassert_ok(radiant_sched_tick());
 	zassert_equal(1u, log.missed_count[1]);
 	zassert_equal(5000u, dc->pb_done_max_cyc);
+
+	log.done_cycles = 0u;
+	finish();
+}
+
+/* A callback entry nested inside a pass (the backend completes the operation
+ * while the pass that armed it is still running) is not an entry of its own:
+ * its callback counts once, into the owning pass's sum. */
+ZTEST(radiant_sched, test_diag_a_nested_entrys_callback_counts_once_in_the_pass)
+{
+	const struct radiant_diag_core *dc = radiant_diag_core_get();
+	radiant_time_t open;
+
+	bring_up();
+	radiant_diag_core_reset();
+	log.done_cycles = 1000u;
+	open = radiant_radio_now() + 100000u;
+
+	post_track(0u, open, open + TEST_WINDOW_US);
+	log.end_in_armed = true;
+	zassert_ok(radiant_sched_tick());
+	zassert_false(log.end_in_armed, "armed() never ran");
+	zassert_equal(1u, log.ok_count[0]);
+	zassert_equal(1u, log.n_done);
+	/* Once: a nested entry that folded as well would still read 1000, but
+	 * one that also opened would read 0 and a double sum 2000. */
+	zassert_equal(1000u, dc->pb_done_max_cyc);
 
 	log.done_cycles = 0u;
 	finish();

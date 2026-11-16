@@ -222,15 +222,32 @@ reasoning. Its row is in the table above.
   abort). Now such a body opens and closes its own sum, and the field is the
   worst sum per **scheduler entry**: a pass, or a callback entry's body (the
   pass that body ends with is a separate entry). Each callback counts in
-  exactly one entry, and nothing else changes. A callback made by
-  `radiant_sched_cancel()` (thread context, not an entry) is still not timed.
+  exactly one entry, and nothing else changes. A callback made from thread
+  context outside any entry is still not timed: the ABORTED a co-member hears
+  when `drop_slot()` aborts an open window, from `radiant_sched_cancel()` or
+  from a `radiant_sched_request_rx/tx/ed()` that replaces an in-flight
+  request. (The same calls made from a consumer callback inside an entry are
+  nested in that callback's span and counted there.) The open and fold each
+  share a critical section with the entry's `in_pass` write, inside the same
+  diag-only macros, because on nRF MPSL `radiant_nrf_gate_on_denied()` calls
+  `hal_rx()` (DENIED) from a cooperative thread with interrupts on: an ISR
+  entry landing between the write and the open or fold would otherwise lose
+  its sum. Such a thread-context entry is the one span on this page that can
+  be preempted, so on MPSL its sum may include preempting ISR time, contrary
+  to the A0 rule that only spans that cannot idle are timed. Treat a field-3
+  maximum on an MPSL image as an upper bound.
   The meaning sharpens from "within one pass" to "within one entry". The old
   reading was an undercount, not a different quantity, so the field keeps its
-  index and the structure version stays 1. Fields 0, 1, 2 and 4 had no such
+  index and the structure version stays 1. Fields 0, 1 and 4 had no such
   loss: the sweep, the step remainder and `book_ahead()` exist only inside
-  `pass()`, and the scheduler makes backend arm calls only from a pass. The
-  one backend call outside a pass is `radiant_sched_cancel()`'s abort, which
-  is not a pass and was never meant to be counted.
+  `pass()`. Field 2 has a narrower one, left as it is because field 2 is
+  defined per pass: the scheduler makes arm calls only from a pass, but it
+  also times `abort_armed()`'s `radiant_radio_abort()`, and `drop_slot()`
+  calls `abort_armed()` outside a pass from `radiant_sched_cancel()` and from
+  `radiant_sched_request_rx/tx/ed()`. Such an abort is timed into the
+  per-pass sum and cleared unreported by the next pass. That includes an
+  abort a consumer callback makes inside a callback entry. None of these is a
+  pass, so none belongs in field 2.
 - **Page 12, stale events by site.** Page 11 field 5 counts every event the
   scheduler drops as stale, and preemption makes those routine, so the total
   cannot separate the routine case from a lost frame. Page 12 splits it by

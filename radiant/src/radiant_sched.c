@@ -285,19 +285,32 @@ static struct {
  * pb.done outside any pass(). The pass it may end with clears pb first, so
  * the entry opens and closes its own sum: page 9 field 3 is the worst per
  * entry (a pass, or a callback entry's body), each callback counted in one.
+ *
+ * Each macro carries the entry's in_pass write (set) or restore (stmt), and
+ * runs it with the sum's open or fold under one critical section. An entry
+ * can arrive from a thread with interrupts on (the nRF MPSL gate's DENIED),
+ * and an ISR entry landing between the two would otherwise be wiped by the
+ * open or fold into a sum already reported. Without the diag counters each
+ * macro is just its statement.
  */
-#define PB_ENTRY_OPEN(outer)                                           \
+#define PB_ENTRY_OPEN(outer, stmt)                                     \
 	do {                                                           \
+		unsigned int k_pb__ = radiant_event_crit_enter();      \
 		if (outer) {                                           \
 			pb.done = 0u;                                  \
 		}                                                      \
+		stmt;                                                  \
+		radiant_event_crit_exit(k_pb__);                       \
 	} while (0)
-#define PB_ENTRY_CLOSE(outer)                                          \
+#define PB_ENTRY_CLOSE(outer, stmt)                                    \
 	do {                                                           \
+		unsigned int k_pb__ = radiant_event_crit_enter();      \
 		if (outer) {                                           \
 			RADIANT_DIAG_MAX(pb_done_max_cyc, pb.done);    \
 			pb.done = 0u;                                  \
 		}                                                      \
+		stmt;                                                  \
+		radiant_event_crit_exit(k_pb__);                       \
 	} while (0)
 #else
 #define PB_T0(v)          ((void)0)
@@ -305,8 +318,8 @@ static struct {
 #define PB_ARM_CALL(stmt) do { stmt; } while (0)
 #define PB_BACKEND_CALL(stmt) do { stmt; } while (0)
 #define PB_DONE_CB(stmt)  do { stmt; } while (0)
-#define PB_ENTRY_OPEN(outer)  do { } while (0)
-#define PB_ENTRY_CLOSE(outer) do { } while (0)
+#define PB_ENTRY_OPEN(outer, stmt)  do { stmt; } while (0)
+#define PB_ENTRY_CLOSE(outer, stmt) do { stmt; } while (0)
 #endif
 
 /* What one step of a pass concluded. */
@@ -2413,8 +2426,7 @@ static void hal_rx(const struct radiant_rx_event *evt, void *user)
 	}
 
 	was_in_pass = s.in_pass;
-	s.in_pass = true;
-	PB_ENTRY_OPEN(!was_in_pass);
+	PB_ENTRY_OPEN(!was_in_pass, s.in_pass = true);
 	was_in_cb = s.in_radio_cb;
 	s.in_radio_cb = true;
 
@@ -2458,8 +2470,7 @@ static void hal_rx(const struct radiant_rx_event *evt, void *user)
 		break;
 	}
 
-	PB_ENTRY_CLOSE(!was_in_pass);
-	s.in_pass = was_in_pass;
+	PB_ENTRY_CLOSE(!was_in_pass, s.in_pass = was_in_pass);
 	/* Nested in a thread-context pass: the owning pass commits. It re-checks
 	 * s.dirty, so nothing is lost. */
 	if (!was_in_pass && (terminal || s.dirty)) {
@@ -2489,8 +2500,7 @@ static void hal_tx(const struct radiant_tx_event *evt, void *user)
 	ch = (s.n_members > 0u) ? s.members[0] : RADIANT_SCHED_CH_NONE;
 
 	was_in_pass = s.in_pass;
-	s.in_pass = true;
-	PB_ENTRY_OPEN(!was_in_pass);
+	PB_ENTRY_OPEN(!was_in_pass, s.in_pass = true);
 	was_in_cb = s.in_radio_cb;
 	s.in_radio_cb = true;
 	if (evt->status == RADIANT_RADIO_STATUS_OK && ch != RADIANT_SCHED_CH_NONE &&
@@ -2513,8 +2523,7 @@ static void hal_tx(const struct radiant_tx_event *evt, void *user)
 		end_armed(RADIANT_SCHED_DONE_FAILED);
 		break;
 	}
-	PB_ENTRY_CLOSE(!was_in_pass);
-	s.in_pass = was_in_pass;
+	PB_ENTRY_CLOSE(!was_in_pass, s.in_pass = was_in_pass);
 	if (!was_in_pass) {
 		pass();
 	}
@@ -2546,8 +2555,7 @@ static void hal_ed(const struct radiant_ed_event *evt, void *user)
 	ch = (s.n_members > 0u) ? s.members[0] : RADIANT_SCHED_CH_NONE;
 
 	was_in_pass = s.in_pass;
-	s.in_pass = true;
-	PB_ENTRY_OPEN(!was_in_pass);
+	PB_ENTRY_OPEN(!was_in_pass, s.in_pass = true);
 	was_in_cb = s.in_radio_cb;
 	s.in_radio_cb = true;
 
@@ -2597,8 +2605,7 @@ static void hal_ed(const struct radiant_ed_event *evt, void *user)
 		break;
 	}
 
-	PB_ENTRY_CLOSE(!was_in_pass);
-	s.in_pass = was_in_pass;
+	PB_ENTRY_CLOSE(!was_in_pass, s.in_pass = was_in_pass);
 	if (!was_in_pass && (terminal || s.dirty)) {
 		pass();
 	}
