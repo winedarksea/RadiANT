@@ -13,7 +13,7 @@
 typedef struct {
 	uint32_t BASE0, BASE1, PREFIX0, PREFIX1, PCNF0, PCNF1, CRCCNF, CRCPOLY,
 		 CRCINIT, PACKETPTR, RXADDRESSES, RSSISAMPLE, RXCRC, RXMATCH,
-		 TXPOWER;
+		 TXPOWER, MODE, FREQUENCY, TXADDRESS;
 } NRF_RADIO_Type;
 typedef struct { uint32_t unused; } NRF_TIMER_Type;
 typedef struct { uint32_t unused; } NRF_TEMP_Type;
@@ -136,9 +136,9 @@ static inline void nrf_radio_shorts_set(NRF_RADIO_Type *r, uint32_t m)
 { (void)r; fake_hw.shorts = m; }
 static inline void nrf_radio_int_enable(NRF_RADIO_Type *r, uint32_t m) { (void)r; (void)m; }
 static inline void nrf_radio_int_disable(NRF_RADIO_Type *r, uint32_t m) { (void)r; (void)m; }
-static inline void nrf_radio_mode_set(NRF_RADIO_Type *r, nrf_radio_mode_t m) { (void)r; (void)m; }
-static inline void nrf_radio_frequency_set(NRF_RADIO_Type *r, uint16_t f) { (void)r; (void)f; }
-static inline void nrf_radio_txaddress_set(NRF_RADIO_Type *r, uint8_t a) { (void)r; (void)a; }
+static inline void nrf_radio_mode_set(NRF_RADIO_Type *r, nrf_radio_mode_t m) { r->MODE = (uint32_t)m; }
+static inline void nrf_radio_frequency_set(NRF_RADIO_Type *r, uint16_t f) { r->FREQUENCY = f; }
+static inline void nrf_radio_txaddress_set(NRF_RADIO_Type *r, uint8_t a) { r->TXADDRESS = a; }
 static inline void nrf_radio_txpower_set(NRF_RADIO_Type *r, nrf_radio_txpower_t p) { (void)r; (void)p; }
 static inline void nrf_radio_fast_ramp_up_enable_set(NRF_RADIO_Type *r, bool e) { (void)r; (void)e; }
 static inline bool nrf_radio_fast_ramp_up_check(NRF_RADIO_Type *r) { (void)r; return true; }
