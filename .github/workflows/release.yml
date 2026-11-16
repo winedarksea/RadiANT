@@ -137,6 +137,9 @@ jobs:
               # must travel with it.
               CONFIG_RADIANT_CRC_REPAIR=y
               CONFIG_RADIANT_PROFILE_SANITY=y
+              # The hot files at -O2 (apps/dongle/prj.conf, owner ruling
+              # 2026-11-16, step C2: pass-to-arm 289 us at -Os, 255 at -O2).
+              CONFIG_RADIANT_HOT_PATH_O2=y
           - name: "core: nrf52840dongle"
             board: nrf52840dongle/nrf52840
             radio: core
@@ -151,6 +154,9 @@ jobs:
               # must travel with it.
               CONFIG_RADIANT_CRC_REPAIR=y
               CONFIG_RADIANT_PROFILE_SANITY=y
+              # The hot files at -O2 (apps/dongle/prj.conf, owner ruling
+              # 2026-11-16, step C2: pass-to-arm 289 us at -Os, 255 at -O2).
+              CONFIG_RADIANT_HOT_PATH_O2=y
           - name: "core: promicro"
             board: promicro_nrf52840/nrf52840/uf2
             radio: core
@@ -168,6 +174,9 @@ jobs:
               # must travel with it.
               CONFIG_RADIANT_CRC_REPAIR=y
               CONFIG_RADIANT_PROFILE_SANITY=y
+              # The hot files at -O2 (apps/dongle/prj.conf, owner ruling
+              # 2026-11-16, step C2: pass-to-arm 289 us at -Os, 255 at -O2).
+              CONFIG_RADIANT_HOT_PATH_O2=y
           # The Pro Micro sold without the 32.768 kHz crystal. Same image, a
           # synthesized low-frequency clock.
           - name: "core: promicro, synth clock"
@@ -188,6 +197,9 @@ jobs:
               # must travel with it.
               CONFIG_RADIANT_CRC_REPAIR=y
               CONFIG_RADIANT_PROFILE_SANITY=y
+              # The hot files at -O2 (apps/dongle/prj.conf, owner ruling
+              # 2026-11-16, step C2: pass-to-arm 289 us at -Os, 255 at -O2).
+              CONFIG_RADIANT_HOT_PATH_O2=y
           # ── Everything below is built to keep it compiling ────────────────
           #
           # Not a shipping image. The nRF54 targets can only use the new USB
@@ -856,6 +868,9 @@ jobs:
               # acceptance 2026-11-15), with its third refutation.
               CONFIG_RADIANT_CRC_REPAIR=y
               CONFIG_RADIANT_PROFILE_SANITY=y
+              # The hot files at -O2 (apps/dongle_ti/prj.conf, owner
+              # ruling 2026-11-16).
+              CONFIG_RADIANT_HOT_PATH_O2=y
           # The 3-byte sync-word match (short match off). It sizes the cc26xx
           # receive rows and tx_buf from a different branch than the default
           # image, and that branch held a one-byte overflow nobody compiled
@@ -869,6 +884,9 @@ jobs:
             assert_symbol: CONFIG_RADIANT_BACKEND_CC26XX=y
             assert_config: |
               # CONFIG_RADIANT_SEARCH_SHORT_MATCH is not set
+              # Library-default coverage for the cc26xx backend: the one
+              # cc26xx build at -Os (ti_long_match.conf turns O2 off).
+              # CONFIG_RADIANT_HOT_PATH_O2 is not set
 
     steps:
       - name: Checkout application
@@ -1713,6 +1731,15 @@ jobs:
             # stack changes with self-provisioning.
             absent:CONFIG_RADIANT_NODE_IDENT_SELF_PROVISION
             # CONFIG_RADIANT_SEC_RNG_ENTROPY is not set
+            # The library default for the -O2 hot path (radiant/Kconfig:
+            # default n), on both trainer rows: this expect block is
+            # job-level. Every dongle image turns it on since the owner
+            # ruling of 2026-11-16. Treadmill, hrm_ble and dongle_thread
+            # also build radiant_sched.c, the antr runtime and the nRF
+            # backend at -Os, but this is the job that asserts it, and
+            # pinning the simulator to -Os keeps it in the configuration
+            # its ACK window was characterised in.
+            # CONFIG_RADIANT_HOT_PATH_O2 is not set
 
   # The governing constraint of the security feature, as a job rather than as a
   # claim in a comment.
@@ -2155,7 +2182,24 @@ jobs:
           # radiant_sec_compat_set_key().
           # The per-packet path gains at most one branch; the bytes are the
           # cold set_key path. 7168 is the next multiple of 512 (272 B left).
-          check "security text" "$(( on_text - off_text ))" 7168
+          # TEXT CEILING 7168 -> 7680 FOR THE -O2 HOT PATH, NOT FOR SECURITY
+          # CODE (owner ruling 2026-11-16: CONFIG_RADIANT_HOT_PATH_O2 on in
+          # apps/dongle/prj.conf, so both builds here compile radiant_sched.c,
+          # antr/ant_radio_radiant.c and radiant_radio_nrf.c at -O2; the
+          # owner allowed this ceiling to move with it). Measured with this
+          # recipe at NCS v3.4.0: 7144 / 6974 at 3292198, 7304 / 6974 with
+          # O2 on (+160 / +0). No security source changed: the security
+          # hooks that live in ant_radio_radiant.c grow at -O2 -
+          #     56  radiant_sec_deliver
+          #     24  antr_acknowledge_message_tx
+          #     20  antr_burst_tx, radiant_sec_window_verdict (each)
+          #     16  api_post_master_tx, api_search_acquired,
+          #         api_event_thread, antr_master_xfer_busy (each)
+          #    -22  api_sec_master_refuses (inlined)
+          #      0  four others (+-4 each), net
+          # (the symbols sum to 162 B; the section moves 160 B, alignment).
+          # 7680 is the next multiple of 512 (376 B left).
+          check "security text" "$(( on_text - off_text ))" 7680
           check "security bss"  "$(( on_bss  - off_bss  ))" 7168
 
           # X25519 and the pairing logic, on top of the above and under their

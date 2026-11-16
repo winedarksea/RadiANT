@@ -1140,12 +1140,42 @@ static inline void cc_diag_level(uint32_t *field, uint32_t cycles)
 	}
 }
 #define CC_DIAG_LEVEL(field, ticks) cc_diag_level(&cc_diag.field, (ticks))
+
+/*
+ * crc_max_us (page 8 field 2) is the CRC computation alone. rx_drain() runs
+ * with interrupts on, so an ISR landing inside the span used to be counted as
+ * CRC time (70 us before the crc16_itu_t() fast path, 32 and 19 us after).
+ * The diag build masks interrupts for that span only: a few microseconds over
+ * at most RADIANT_RADIO_ADDR_MAX + RADIANT_RADIO_BODY_MAX bytes. Off, nothing
+ * is masked. The transmit CRC is not timed and needs no mask:
+ * radiant_radio_tx() is called only from a scheduler pass, which runs with
+ * interrupts off, and its CRC is inside page 9 field 2 (backend arm calls).
+ */
+static inline unsigned int cc_diag_lock(void)
+{
+	return irq_lock();
+}
+
+static inline void cc_diag_unlock(unsigned int key)
+{
+	irq_unlock(key);
+}
 #else
 static inline uint32_t cc_diag_t(void)
 {
 	return 0u;
 }
 #define CC_DIAG_LEVEL(field, ticks) ((void)(ticks))
+
+static inline unsigned int cc_diag_lock(void)
+{
+	return 0u;
+}
+
+static inline void cc_diag_unlock(unsigned int key)
+{
+	ARG_UNUSED(key);
+}
 #endif
 
 /* Returns the number of finished entries it examined. */
@@ -1261,10 +1291,15 @@ static uint32_t rx_drain_entries(void)
 			m_cyc += cc_diag_t() - t_cp;
 
 			{
+				/* Masked in the diag build only: see cc_diag_lock(). */
+				const unsigned int key = cc_diag_lock();
 				const uint32_t t_crc = cc_diag_t();
+				uint32_t crc_cyc;
 
 				got = crc_compute(&st.fmt.crc, covered, n);
-				CC_DIAG_LEVEL(crc_max_us, cc_diag_t() - t_crc);
+				crc_cyc = cc_diag_t() - t_crc;
+				cc_diag_unlock(key);
+				CC_DIAG_LEVEL(crc_max_us, crc_cyc);
 			}
 			want = ((uint32_t)body[st.fmt.body_len] << 8) |
 			       body[st.fmt.body_len + 1u];

@@ -410,8 +410,11 @@ struct radiant_rx_req {
 	const struct radiant_pkt_format *fmt;
 	uint8_t                      rf_index;
 	const struct radiant_rx_filter  *filters;   /* n_filters entries, core-owned,
-						 * must stay valid until the
-						 * terminal event */
+						 * must stay valid and unchanged
+						 * until the terminal event (a
+						 * backend may read them in its
+						 * ISR; nRF copies them on a
+						 * deferred arm) */
 	uint8_t                      n_filters; /* 1..caps.max_filters */
 	radiant_time_t                   t_open;    /* earliest acceptable t_sync */
 	radiant_time_t                   t_close;   /* latest acceptable t_sync */
