@@ -1725,7 +1725,20 @@ static void process_byte(uint8_t b)
 			memset(parser.msg_body, 0, sizeof(parser.msg_body));
 		}
 #endif
-		parser.state = S_SYNC;
+		if (b != parser.running_xor && b == ANTW_SYNC_TX) {
+			/* A failed checksum that is a SYNC: most often this frame
+			 * lost a byte and b is the NEXT frame's SYNC, read one
+			 * place early as the checksum. Re-seed on it, as S_LEN
+			 * does, rather than hunting past it and losing that
+			 * frame too. If b really was this frame's (corrupt)
+			 * checksum, the real next SYNC arrives as the LEN and
+			 * S_LEN re-seeds on that instead, at the cost of one
+			 * desync count. */
+			parser.running_xor = b;
+			parser.state = S_LEN;
+		} else {
+			parser.state = S_SYNC;
+		}
 		break;
 	}
 }
