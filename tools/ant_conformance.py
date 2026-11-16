@@ -88,6 +88,23 @@ EXCLUDED = {
 # checker (e.g. `frame/sync-in-payload` is unusual but well-formed).
 MALFORMED = "malformed"
 
+# Cases whose answer changed ON PURPOSE after the reference transcripts in
+# archive/captures/serial/conformance-*.antser and
+# archive/benchmarks/conformance-*.json were recorded. Those files are the
+# record of what each firmware did then and are never edited; `--compare`
+# allows these cases to differ (and says so) instead, and tools/ab_gates.toml
+# lists them for the A/B gate. Each entry is a reviewed decision with its date
+# and reason - not a place to quiet an unexplained difference.
+INTENTIONAL_DIVERGENCES = {
+    "frame/malformed-oversize":
+        "2026-11-16 (fix/ti-cmd-stall): a LEN above MAX_SIZE_VALUE (38) is "
+        "now dropped silently and counted as host_desync, on every transport. "
+        "The archived transcripts were recorded when the parser stored the "
+        "first 38 bytes and dispatched a truncated frame (answered "
+        "INVALID_MESSAGE). No legal host frame exceeds 38; the old behaviour "
+        "let one lost UART byte (the LEN) swallow the host's next commands.",
+}
+
 # The four-byte prefix of a message name, stripped for case names.
 _NAME_TRIM = ("MESG_", "_ID")
 
@@ -444,8 +461,11 @@ def _frame_cases() -> list[Case]:
         Case(f"frame/{MALFORMED}-oversize",
              (wire.frame(wire.MESG_CHANNEL_RADIO_FREQ_ID,
                          bytes(wire.MAX_SIZE_VALUE + 4)),),
-             "a payload longer than MAX_SIZE_VALUE: the parser stops storing "
-             "bytes but keeps counting them"),
+             "a LEN above MAX_SIZE_VALUE: no legal host frame is this long, so "
+             "the parser takes the LEN for a lost byte, counts host_desync and "
+             "hunts for the next SYNC; expect silence. Answered in the "
+             "archived transcripts - see INTENTIONAL_DIVERGENCES",
+             expect_reply=False),
         Case(f"frame/{MALFORMED}-sync",
              (bytes([wire.SYNC_RX]) + freq[1:],),
              "0xA5 is the bidirectional variant's SYNC and this dongle never "
@@ -636,7 +656,11 @@ def _sha256(path: str) -> str:
 
 def compare(path_a: str, path_b: str, allowed: set[str],
             *, limit: int = 20) -> dict:
-    """The Tier 1 gate, as a readable report rather than as `fc /b`."""
+    """The Tier 1 gate, as a readable report rather than as `fc /b`.
+
+    INTENTIONAL_DIVERGENCES are always allowed, on top of `allowed`.
+    """
+    allowed = set(allowed) | set(INTENTIONAL_DIVERGENCES)
     sha_a, sha_b = _sha256(path_a), _sha256(path_b)
     identical = sha_a == sha_b
 
@@ -657,7 +681,9 @@ def compare(path_a: str, path_b: str, allowed: set[str],
         print(f"\n{len(diffs)} differing record(s) across "
               f"{len(differing_cases)} case(s)")
         for diff in diffs[:limit]:
-            allow = " (allowed)" if diff.case in allowed else ""
+            allow = (" (intentional divergence)"
+                     if diff.case in INTENTIONAL_DIVERGENCES
+                     else " (allowed)" if diff.case in allowed else "")
             print(f"\n  case {diff.case}{allow}, record {diff.index}")
             print(f"    A  {diff.a if diff.a is not None else '(end of file)'}")
             print(f"    B  {diff.b if diff.b is not None else '(end of file)'}")

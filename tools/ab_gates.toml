@@ -138,6 +138,12 @@ require_byte_identical = true
 # MESG_VERSION returns the backend's own name, so sdk-ant and radiant cannot
 # answer it identically. Add it only when the first real A/B run needs it -
 # an allowance added speculatively excuses a difference nobody has looked at.
+#
+# Not listed here: tools/ant_conformance.py INTENTIONAL_DIVERGENCES, reviewed
+# protocol changes made after the archived reference transcripts were recorded
+# (frame/malformed-oversize, 2026-11-16: LEN > 38 is now dropped silently).
+# `--compare` always allows those and reports them in its JSON, which
+# gate_conformance() honours.
 allowed_differing_cases = []
 
 

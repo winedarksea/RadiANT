@@ -326,6 +326,10 @@ def gate_conformance(cfg: dict, a: Baseline, b: Baseline,
 
     if override is not None:
         identical = override["byte_identical"]
+        # ant_conformance.py --compare reports its INTENTIONAL_DIVERGENCES
+        # (reviewed protocol changes newer than the archived transcripts)
+        # in its own allowed list; they count here too.
+        allowed |= set(override.get("allowed_differing_cases", []))
         unexpected = [c for c in override.get("differing_cases", [])
                       if c not in allowed]
         verdict = PASS if (identical or not unexpected) else FAIL

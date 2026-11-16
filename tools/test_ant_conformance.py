@@ -204,6 +204,22 @@ class CaseGeneration(unittest.TestCase):
         self.assertIn("4d-request-encrypt-enable-2/valid", names)
         self.assertIn("4d-request-config-adv-burst-1/valid", names)
 
+    def test_oversize_expects_silence(self):
+        # 2026-11-16: a LEN above MAX_SIZE_VALUE is a lost byte to the
+        # parser and is dropped without an answer, on every transport.
+        case = next(c for c in self.cases
+                    if c.name == f"frame/{conf.MALFORMED}-oversize")
+        self.assertFalse(case.expect_reply)
+        self.assertGreater(case.frames[-1][1], wire.MAX_SIZE_VALUE)
+        # Declared as a divergence from the archived transcripts, which
+        # still hold the old (answered) behaviour.
+        self.assertIn(case.name, conf.INTENTIONAL_DIVERGENCES)
+
+    def test_intentional_divergences_name_real_cases(self):
+        names = {case.name for case in self.cases}
+        for name in conf.INTENTIONAL_DIVERGENCES:
+            self.assertIn(name, names)
+
     def test_frame_cases_come_last(self):
         # Two of them deliberately leave junk in the parser's input; the next
         # thing down the wire should be a reset, not another message case.
@@ -347,6 +363,21 @@ class Comparison(unittest.TestCase):
             self.assertFalse(result["pass"])
             self.assertEqual(result["unexpected_differing_cases"],
                              result["differing_cases"])
+
+            # An intentional divergence passes without being listed.
+            oversize = f"frame/{conf.MALFORMED}-oversize"
+            with quiet():
+                tagged = [ant_trace.Record(None, r.direction, r.data,
+                                           oversize) for r in records[:2]]
+                ant_trace.write_antser(path_a, tagged)
+                ant_trace.write_antser(path_b, tagged[:1])
+                result = conf.compare(path_a, path_b, set())
+            self.assertEqual(result["differing_cases"], [oversize])
+            self.assertTrue(result["pass"])
+            ant_trace.write_antser(path_a, records)
+            ant_trace.write_antser(path_b, changed)
+            with quiet():
+                result = conf.compare(path_a, path_b, set())
 
             # ... and must pass once that case is explicitly allowed to differ.
             allowed = set(result["differing_cases"])
