@@ -49,6 +49,14 @@
 
 LOG_MODULE_REGISTER(ant_bridge, LOG_LEVEL_INF);
 
+/*
+ * ANT_BRIDGE_PARSER_ONLY: radiant/tests/src/test_bridge_parser.c includes this
+ * file with that defined, which compiles the host-frame parser below and
+ * nothing else; the test supplies dispatch() and the health counter. Never
+ * defined in an image.
+ */
+#if !defined(ANT_BRIDGE_PARSER_ONLY)
+
 /* sdk-ant's Kconfig hangs this symbol off CONFIG_ANT, so on a radio-stub build
  * (CONFIG_ANT=n) it does not exist at all and the device-wide transmit power
  * fan-out below fails to compile. A core (radiant) build never defines it
@@ -1554,6 +1562,8 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 	send_response(ch, msg_id, err ? err : ANTW_RESPONSE_NO_ERROR);
 }
 
+#endif /* !ANT_BRIDGE_PARSER_ONLY */
+
 /* ── Frame parser state machine ─────────────────────────────────────────────── */
 
 enum parser_state {
@@ -1742,6 +1752,8 @@ static void process_byte(uint8_t b)
 		break;
 	}
 }
+
+#if !defined(ANT_BRIDGE_PARSER_ONLY)
 
 /* ── Bridge thread ─────────────────────────────────────────────────────────── */
 
@@ -2000,3 +2012,5 @@ int ant_serial_bridge_init(void)
 
 	return 0;
 }
+
+#endif /* !ANT_BRIDGE_PARSER_ONLY */
