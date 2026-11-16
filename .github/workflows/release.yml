@@ -884,6 +884,9 @@ jobs:
             assert_symbol: CONFIG_RADIANT_BACKEND_CC26XX=y
             assert_config: |
               # CONFIG_RADIANT_SEARCH_SHORT_MATCH is not set
+              # Library-default coverage for the cc26xx backend: the one
+              # cc26xx build at -Os (ti_long_match.conf turns O2 off).
+              # CONFIG_RADIANT_HOT_PATH_O2 is not set
 
     steps:
       - name: Checkout application
@@ -1729,9 +1732,13 @@ jobs:
             absent:CONFIG_RADIANT_NODE_IDENT_SELF_PROVISION
             # CONFIG_RADIANT_SEC_RNG_ENTROPY is not set
             # The library default for the -O2 hot path (radiant/Kconfig:
-            # default n). Every dongle image turns it on since the owner
-            # ruling of 2026-11-16, so this row is what keeps radiant_sched.c,
-            # the antr runtime and the nRF backend built at -Os.
+            # default n), on both trainer rows: this expect block is
+            # job-level. Every dongle image turns it on since the owner
+            # ruling of 2026-11-16. Treadmill, hrm_ble and dongle_thread
+            # also build radiant_sched.c, the antr runtime and the nRF
+            # backend at -Os, but this is the job that asserts it, and
+            # pinning the simulator to -Os keeps it in the configuration
+            # its ACK window was characterised in.
             # CONFIG_RADIANT_HOT_PATH_O2 is not set
 
   # The governing constraint of the security feature, as a job rather than as a

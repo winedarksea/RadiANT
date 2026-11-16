@@ -21,8 +21,12 @@ reads.
   time (0xF7 page 9 [5]) was 289 µs at -Os and 255 µs at -O2, against a
   240 µs budget (`archive/benchmarks/2026-11-16-pass-breakdown/`, one clean
   pair). Cost: +4864 B flash on the Pro Micro, +4468 B on the cc26xx
-  LaunchXL, RAM unchanged. The library default stays n, and the release
-  matrix's nRF52840 trainer row asserts it. The security text ceiling in
+  LaunchXL, RAM unchanged. The library default stays n. The release matrix
+  asserts it on both trainer rows (nRF52840 and nRF54L15), which also keeps
+  the simulator at the -Os its ACK window was characterised at, and on the
+  cc26xx long-match row (`ti_long_match.conf` sets it to n), the one cc26xx
+  build at -Os. Treadmill, hrm_ble and dongle_thread also build at -Os but
+  do not assert it. The security text ceiling in
   `release.yml` moved 7168 -> 7680 B, because the security hooks in the antr
   runtime grow at -O2 (7304 B measured); no security code changed.
 
