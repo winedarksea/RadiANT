@@ -75,7 +75,7 @@ class Decode(unittest.TestCase):
         with self.assertRaises(ValueError):
             d.decode(body(0, [0] * 8)[:20])
         with self.assertRaises(ValueError):
-            d.decode(body(12, [0] * 8))
+            d.decode(body(len(d.PAGES), [0] * 8))
         bad = bytearray(body(0, [0] * 8))
         bad[1] = 2
         with self.assertRaises(ValueError):
@@ -137,6 +137,32 @@ class PassBreakdown(unittest.TestCase):
         self.assertEqual(out["late_isr_drops"], 0)
         for level in ("end_late_max_us", "t_sync_max_us", "match_max_us"):
             self.assertEqual(out[level], b["10"]["fields"][level], level)
+
+
+class Stale(unittest.TestCase):
+    def test_page_12_names_match_the_header_indices(self):
+        text = header_text()
+        idx = dict((m.group(1).lower(), int(m.group(2))) for m in re.finditer(
+            r"#define RADIANT_DIAG_STALE_(\w+)\s+(\d+)u", text))
+        fields = d.PAGES[12][1]
+        self.assertEqual(len(idx), 5)
+        for name, i in idx.items():
+            self.assertEqual(fields[i], "stale_" + name)
+
+    def test_page_12_counts_subtract_and_reserved_read_none(self):
+        nm = d.NOT_MEASURED
+        a = {"12": d.decode(body(12, [1, 400, 0, 3, nm, nm, nm, nm],
+                                 flags=1, backend=1))}
+        b = {"12": d.decode(body(12, [4, 950, 2, 3, nm, nm, nm, nm],
+                                 flags=1, backend=1))}
+        self.assertEqual(a["12"]["name"], "stale")
+        self.assertIsNone(a["12"]["fields"]["stale_ed"])
+        self.assertIsNone(a["12"]["fields"]["reserved_7"])
+        out = d.diff(a, b)["12"]["fields"]
+        self.assertEqual(out["stale_rx_frame"], 3)
+        self.assertEqual(out["stale_rx_end"], 550)
+        self.assertEqual(out["stale_rx_filter_index"], 2)
+        self.assertEqual(out["stale_tx"], 0)
 
 
 class FakeDev:

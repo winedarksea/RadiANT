@@ -4465,6 +4465,20 @@ antr_err_t antr_diag_page(uint8_t page, uint8_t *out)
 		v[RADIANT_DIAG_SCHED_TURN_YIELDS] = ss->turn_yields;
 		break;
 	}
+	case RADIANT_DIAG_PAGE_STALE:
+		v[RADIANT_DIAG_STALE_RX_FRAME] = dc->stale_rx_frame;
+		v[RADIANT_DIAG_STALE_RX_END] = dc->stale_rx_end;
+		v[RADIANT_DIAG_STALE_RX_FILTER_INDEX] = dc->stale_rx_filter;
+		v[RADIANT_DIAG_STALE_TX] = dc->stale_tx;
+#if defined(CONFIG_RADIANT_ED_SCAN)
+		v[RADIANT_DIAG_STALE_ED] = dc->stale_ed;
+#else
+		v[RADIANT_DIAG_STALE_ED] = RADIANT_DIAG_NOT_MEASURED;
+#endif
+		v[5] = RADIANT_DIAG_NOT_MEASURED;
+		v[6] = RADIANT_DIAG_NOT_MEASURED;
+		v[7] = RADIANT_DIAG_NOT_MEASURED;
+		break;
 	case RADIANT_DIAG_PAGE_SEARCH_A:
 	case RADIANT_DIAG_PAGE_SEARCH_B: {
 		const struct radiant_search_stats *st =

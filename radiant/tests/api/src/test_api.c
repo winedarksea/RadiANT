@@ -6143,6 +6143,39 @@ ZTEST(api, test_diag_pass_and_rx_integrity_pages_say_what_is_unmeasured)
 	}
 }
 
+/* Page 12 (2026-11-16): the core's stale-event split as it stands. ED without
+ * CONFIG_RADIANT_ED_SCAN and the reserved tail read "not measured". That the
+ * split adds up to page 11 field 5 is test_sched.c's to show. */
+ZTEST(api, test_diag_stale_page_reports_the_split)
+{
+	const struct radiant_diag_core *dc = radiant_diag_core_get();
+	uint8_t out[RADIANT_DIAG_BODY_LEN];
+
+	(void)master_with_next_slot_posted();
+	(void)run_one_quiet_period();
+
+	zassert_ok(antr_diag_page(RADIANT_DIAG_PAGE_STALE, out));
+	zassert_equal(RADIANT_DIAG_FLAG_UNMEASURED,
+		      out[2] & RADIANT_DIAG_FLAG_UNMEASURED);
+	zassert_equal(dc->stale_rx_frame,
+		      diag_u32(out, RADIANT_DIAG_STALE_RX_FRAME));
+	zassert_equal(dc->stale_rx_end, diag_u32(out, RADIANT_DIAG_STALE_RX_END));
+	zassert_equal(dc->stale_rx_filter,
+		      diag_u32(out, RADIANT_DIAG_STALE_RX_FILTER_INDEX));
+	zassert_equal(dc->stale_tx, diag_u32(out, RADIANT_DIAG_STALE_TX));
+	if (IS_ENABLED(CONFIG_RADIANT_ED_SCAN)) {
+		zassert_equal(dc->stale_ed, diag_u32(out, RADIANT_DIAG_STALE_ED));
+	} else {
+		zassert_equal(RADIANT_DIAG_NOT_MEASURED,
+			      diag_u32(out, RADIANT_DIAG_STALE_ED));
+	}
+	for (unsigned int f = 5u; f < RADIANT_DIAG_FIELDS; f++) {
+		zassert_equal(RADIANT_DIAG_NOT_MEASURED, diag_u32(out, f),
+			      "page 12 field %u", f);
+	}
+	end_of_test();
+}
+
 /* A listening master posts a turnaround after every slot it transmits, and
  * page 1 sees each one posted and each one end. */
 ZTEST(api, test_diag_counts_a_masters_turnaround_windows)

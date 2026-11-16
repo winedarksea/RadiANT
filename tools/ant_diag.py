@@ -91,6 +91,12 @@ PAGES: dict[int, tuple[str, list[str]]] = {
     11: ("sched", ["windows_merged", "preempted", "replans", "arm_rejected",
                    "tx_armed", "stale_events", "slots_collided",
                    "turn_yields"]),
+    # 2026-11-16 page 11's stale_events by site; 0-4 sum to it. All counts.
+    # stale_ed is 0xFFFFFFFF without CONFIG_RADIANT_ED_SCAN; 5-7 reserved
+    # (always 0xFFFFFFFF until given a meaning).
+    12: ("stale", ["stale_rx_frame", "stale_rx_end", "stale_rx_filter_index",
+                   "stale_tx", "stale_ed", "reserved_5", "reserved_6",
+                   "reserved_7"]),
 }
 # Fields that are a level (min/max/last), not a running count: a difference
 # means nothing, so --diff reports the later value.
@@ -232,7 +238,7 @@ def main() -> int:
     ap.add_argument("--serial", help="a USB dongle whose serial ends with this")
     ap.add_argument("--port", help="a UART build on this port (e.g. COM11)")
     ap.add_argument("--baud", type=int, default=115200)
-    ap.add_argument("--pages", default="0-10",
+    ap.add_argument("--pages", default=f"0-{max(PAGES)}",
                     help="pages to read, e.g. 0-10 or 1,2,4 (default all). "
                          "A page an older build refuses is skipped once an "
                          "earlier page has answered; a page that never "

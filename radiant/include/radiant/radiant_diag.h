@@ -5,7 +5,7 @@
  * Provenance: clean-room. Written from this project's own source and bench
  * measurements; see docs/decisions/0023-radiant-diag-message.md.
  *
- * WHAT THIS IS. Eleven fixed pages of eight u32 counters each, read by a host
+ * WHAT THIS IS. Thirteen fixed pages of eight u32 counters each, read by a host
  * with MESG_REQUEST [page, 0xF7]. Pages 0, 5 and 6 are counters the core
  * already keeps (radiant_api_stats, radiant_search_stats). Pages 1 and 2 are
  * counted here, behind CONFIG_RADIANT_DIAG_COUNTERS. Pages 3 and 4 come from
@@ -15,7 +15,8 @@
  * are counted here. Page 8 (timing) is mixed the same way: receive-drain
  * timings from the backend table, scheduler pass timings counted here.
  * Pages 9 (pass breakdown) and 10 (receive integrity) are mixed the same way;
- * their cycle-timed fields use the A0 cycle clock below.
+ * their cycle-timed fields use the A0 cycle clock below. Pages 11 (scheduler
+ * contention) and 12 (stale events by site) are the core's.
  *
  * ZERO COST WHEN OFF. Without CONFIG_RADIANT_DIAG_COUNTERS every RADIANT_DIAG_*
  * macro below is an empty statement that does not evaluate its arguments,
@@ -50,7 +51,8 @@ extern "C" {
 #define RADIANT_DIAG_PAGE_PASS       9u
 #define RADIANT_DIAG_PAGE_RX_INTEGRITY 10u
 #define RADIANT_DIAG_PAGE_SCHED      11u
-#define RADIANT_DIAG_PAGES           12u
+#define RADIANT_DIAG_PAGE_STALE      12u
+#define RADIANT_DIAG_PAGES           13u
 
 /*
  * Page 7, the search/track hand-off (ADR 0022 gate 3). Does a search
@@ -127,8 +129,15 @@ extern "C" {
  *                        pass, summed - core. A callback nested inside one
  *                        counts here and in 3; 1 is the remainder, floored
  *                        at 0
- *   3 done_cb_max_us     notify_done() consumer callbacks within one pass,
- *                        summed - core
+ *   3 done_cb_max_us     notify_done() consumer callbacks within one
+ *                        scheduler entry, summed - core. An entry is a pass,
+ *                        or the body of a backend callback (hal_rx/hal_tx/
+ *                        hal_ed) not nested in a pass, where most callbacks
+ *                        run; the pass such a body ends with is a separate
+ *                        entry. Until 2026-11-16 only a pass's own callbacks
+ *                        reached it, so it read 0 on hardware. A callback
+ *                        from radiant_sched_cancel() (thread, no entry) is
+ *                        not timed
  *   4 book_max_us        book_ahead() - core; RADIANT_DIAG_NOT_MEASURED
  *                        without CONFIG_RADIANT_SCHED_BOOKING
  *   5 pass_to_arm_max_us the pass's `now` to the backend's own `now` at its
@@ -207,6 +216,28 @@ extern "C" {
 #define RADIANT_DIAG_SCHED_STALE_EVENTS   5u
 #define RADIANT_DIAG_SCHED_SLOTS_COLLIDED 6u
 #define RADIANT_DIAG_SCHED_TURN_YIELDS    7u
+
+/*
+ * Page 12, stale scheduler events by site (2026-11-16). Page 11 field 5 split
+ * by where radiant_sched.c dropped the event; 0-4 sum to it (up to a lost
+ * increment, see NOT ATOMIC). All counts, core.
+ *
+ *   0 rx_frame         a receive event carrying a frame (OK or CRC_FAIL) for
+ *                      an operation already retired: heard, then dropped
+ *   1 rx_end           any other receive event for a retired operation (the
+ *                      ABORTED terminal every preemption makes, mostly)
+ *   2 rx_filter_index  a frame for the armed window with a filter index the
+ *                      window did not have (route_rx())
+ *   3 tx               a transmit event for a retired operation
+ *   4 ed               an energy-detect event for a retired operation;
+ *                      RADIANT_DIAG_NOT_MEASURED without CONFIG_RADIANT_ED_SCAN
+ *   5-7                reserved, RADIANT_DIAG_NOT_MEASURED
+ */
+#define RADIANT_DIAG_STALE_RX_FRAME        0u
+#define RADIANT_DIAG_STALE_RX_END          1u
+#define RADIANT_DIAG_STALE_RX_FILTER_INDEX 2u
+#define RADIANT_DIAG_STALE_TX              3u
+#define RADIANT_DIAG_STALE_ED              4u
 
 #define RADIANT_DIAG_RXI_CRC_REPAIRED           0u
 #define RADIANT_DIAG_RXI_CRC_UNREPAIRABLE       1u
@@ -336,6 +367,12 @@ struct radiant_diag_core {
 	uint32_t pb_arm_max_cyc;
 	uint32_t pb_done_max_cyc;
 	uint32_t pb_book_max_cyc;
+	/* page 12, fields 0-4 (radiant_sched.c): stale events by site */
+	uint32_t stale_rx_frame;
+	uint32_t stale_rx_end;
+	uint32_t stale_rx_filter;
+	uint32_t stale_tx;
+	uint32_t stale_ed;
 };
 
 extern struct radiant_diag_core radiant_diag_core;
@@ -403,9 +440,13 @@ static inline uint32_t radiant_diag_cycles(void)
 	return *(volatile const uint32_t *)RADIANT_DIAG_DWT_CYCCNT_ADDR;
 }
 #else
+/* No cycle counter (native_sim): a plain variable, 0 unless a unit test
+ * advances it to drive the timed spans. radiant_diag_cycles_to_us() still
+ * reads RADIANT_DIAG_NOT_MEASURED here, so a page never reports it. */
+extern uint32_t radiant_diag_cycles_sim;
 static inline uint32_t radiant_diag_cycles(void)
 {
-	return 0u;
+	return radiant_diag_cycles_sim;
 }
 #endif
 void radiant_diag_cycles_init(uint32_t core_hz);
