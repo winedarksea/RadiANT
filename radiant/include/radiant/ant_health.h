@@ -114,11 +114,14 @@ enum ant_health_counter {
 	 * the host stopped polling. Counted where the timeout is detected;
 	 * W1 wires the USB_NEXT site, W6 adds the legacy stack's. */
 	ANT_HEALTH_TX_TIMEOUT,
-	/* A host byte the UART receiver overwrote before the ISR read it
-	 * (the driver's uart_err_check() reported UART_ERROR_OVERRUN). The
-	 * transport counts it only after ant_health_measured() said it can;
-	 * until then [32..33] reads ANT_HEALTH_NOT_MEASURED. Each one is a
-	 * lost host byte, so expect HOST_CSUM/HOST_DESYNC beside it. Added
+	/* A receiver-overrun event on the UART: the driver's uart_err_check()
+	 * reported UART_ERROR_OVERRUN, i.e. at least one host byte was
+	 * overwritten before the ISR read it. The flag (RSR.OE, ERRORSRC
+	 * OVERRUN) is sticky until read, so this adds at most 1 per ISR pass
+	 * however many bytes were lost in between: a floor on lost bytes,
+	 * not a count of them. The transport counts only after
+	 * ant_health_measured() said it can; until then [32..33] reads
+	 * ANT_HEALTH_NOT_MEASURED. Expect HOST_CSUM/HOST_DESYNC beside it. Added
 	 * 2026-11-16 for the TI command stall: the CC26xx UART ran with its
 	 * FIFO off and dropped a byte every few tens of seconds under load
 	 * (archive/benchmarks/2026-11-16-ti-cmd-stall/). */

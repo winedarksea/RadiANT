@@ -192,7 +192,8 @@ size_t ant_health_fill(uint8_t *out, size_t cap)
 		out[31] = (uint8_t)((n >> 8) & 0xFFu);
 	}
 
-	/* [32..33] UART receiver overruns, ANT_HEALTH_NOT_MEASURED unless the
+	/* [32..33] UART receiver-overrun events (at least one lost host byte
+	 * each; at most one per ISR pass), ANT_HEALTH_NOT_MEASURED unless the
 	 * transport declared it can see them (USB images never do). A real
 	 * count saturates like the rest - flag in [1] - but one short of the
 	 * sentinel. */

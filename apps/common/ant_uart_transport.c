@@ -141,11 +141,13 @@ BUILD_ASSERT(!IS_ENABLED(CONFIG_PM) && !IS_ENABLED(CONFIG_PM_DEVICE),
 
 /* ── UART interrupt handler ────────────────────────────────────────────────── */
 
-/* 0xF6 [32..33]: receiver overruns, read through the driver's err_check(),
- * which on both UARTs this transport serves is one status-register read and
- * clear (cc13xx_cc26xx: RSR, cleared through ECR; nRF UARTE: ERRORSRC).
- * Called at the top of every ISR pass, so an overrun is counted on the pass
- * after the byte it cost. Off with the health counters, so the shipping
+/* 0xF6 [32..33]: receiver-overrun events, read through the driver's
+ * err_check(), which on both UARTs this transport serves is one
+ * status-register read and clear (cc13xx_cc26xx: RSR, cleared through ECR;
+ * nRF UARTE: ERRORSRC). Called at the top of every ISR pass, so an overrun is
+ * counted on the pass after the byte it cost. The flag is sticky, so one
+ * pass counts one event however many bytes were lost before it: each event
+ * is at least one lost host byte. Off with the health counters, so the shipping
  * image does not change. */
 #if defined(CONFIG_ANT_DONGLE_HEALTH_COUNTERS)
 static bool rx_overrun_measured;

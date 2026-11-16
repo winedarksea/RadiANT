@@ -107,7 +107,7 @@ OPTIONAL_FIELDS = (
      "search sets that advanced without hearing every phase (MPSL builds)",
      "not measured on this build (no coverage counter compiled in)"),
     ("uart_rx_overruns", 32, 2,
-     "host bytes the UART receiver overran (UART transports)",
+     "UART receiver-overrun events, each >= 1 lost host byte (UART only)",
      "not measured (USB transport, older firmware, or no driver support)"),
 )
 
