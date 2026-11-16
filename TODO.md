@@ -606,4 +606,4 @@ Settled by these captures, nothing to do:
   - Cadence is always 0xFF.
   - It reports 0 W on leaving ERG.
   - It also broadcasts as power (type 0x0B, transmission type 0xA5) and speed (type 0x7B).
-- Power meter #20329 reads about 35 % below the trainer. It is probably not on the same bike.
+- Power meter #20329 reads about 35 % below the trainer. It is probably not on the same bike (actually it is, the trainer is really that inaccurate).
