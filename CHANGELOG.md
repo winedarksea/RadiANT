@@ -35,7 +35,15 @@ reads.
   this build or transport cannot measure (coverage without
   `CONFIG_RADIANT_SEARCH_COVERAGE`, overruns on USB) now reads `0xFFFF` instead
   of being left out. Measured counts clamp at 65534. The structure version
-  stays 1, and `tools/ant_health.py` treats `0xFFFF` as not measured.
+  stays 1, and `tools/ant_health.py` treats `0xFFFF` as not measured. Owner
+  accepted in beta; ADR 0023 carries the amendment. **Mixed versions misread one
+  field:**
+  - An older reader (released v1.2.0's `ant_health.py` decodes any body of 32
+    bytes or more as having coverage) reports `sets_advanced_uncovered = 65535`
+    on every non-coverage build (TI, USB, non-MPSL nRF). There it means "not
+    measured".
+  - A new reader shows an old MPSL image's saturated coverage (65535) as "not
+    measured".
 
 - **CRC repair is on in the shipping dongles** (`CONFIG_RADIANT_CRC_REPAIR`
   and `CONFIG_RADIANT_PROFILE_SANITY` in `apps/dongle/prj.conf` and
