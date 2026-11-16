@@ -13,6 +13,21 @@ reads.
 
 ### Changed
 
+- **CRC repair is on in the shipping dongles** (`CONFIG_RADIANT_CRC_REPAIR`
+  and `CONFIG_RADIANT_PROFILE_SANITY` in `apps/dongle/prj.conf` and
+  `apps/dongle_ti/prj.conf`). The owner accepted the nRF bench gate on
+  2026-11-15: on the Pro Micro, 22 frames repaired (11 at -28 dBm, 11 at
+  -20 dBm), 0 mis-repairs, and the 0xF7 page 10 counters reconcile with the
+  transmitter's log (`archive/benchmarks/2026-11-15-nrf-crc-repair/`). The
+  plan wanted 20 at one rung; the owner accepted the split. Only the Pro Micro
+  was gated, but `apps/dongle/prj.conf` covers every nRF dongle image (MPSL,
+  nRF5340 net core and nRF54L15 included), following the short-match ruling
+  of 2026-11-14. The cc26xx run is the 2026-11-13 entry below. The library
+  default stays n; `apps/dongle/crc_repair_off.conf` builds a dongle without
+  repair, and the release matrix's repair row now asserts that build. The
+  10 s and channel-close counter log lines moved to debug level; page 10 is
+  the read path.
+
 - **nRF wildcard search is on by default** (`CONFIG_RADIANT_SEARCH_SHORT_MATCH`,
   ADR 0022). All four nRF gates passed on 2026-11-12 (tracked loss -0.23 pp
   against the same-SoC control, bound 2.16 pp). Discovery goes from about

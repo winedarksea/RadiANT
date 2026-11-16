@@ -140,7 +140,14 @@ BUILD_ASSERT(RADIANT_CHANNEL_GUARD_MIN_US >= RADIANT_CHANNEL_DRIFT_WORST_US,
  */
 #define API_RXPATH_REPORT_US 30000000u
 
-#if defined(CONFIG_RADIANT_CRC_REPAIR)
+/*
+ * CRC-repair counter log: debug level only. Repair ships on in the dongle apps
+ * (owner acceptance, 2026-11-15) and 0xF7 page 10 is the read path for its
+ * counters. The periodic line and its timer exist only when this module is
+ * raised to DBG, so a shipping image carries neither.
+ */
+#if defined(CONFIG_RADIANT_CRC_REPAIR) && (CONFIG_RADIANT_LOG_LEVEL >= LOG_LEVEL_DBG)
+#define API_CRC_LOG 1
 /* CRC-repair counter interval: 10 s, so every sensitivity rung shows a line. */
 #define API_CRC_REPORT_US 10000000u
 #endif
@@ -2987,9 +2994,10 @@ static void api_housekeep(void)
 	phase_diag_housekeep(now);
 #endif
 
-#if defined(CONFIG_RADIANT_CRC_REPAIR)
+#if defined(API_CRC_LOG)
 	/*
-	 * CRC-repair counters, logged on a UART. Cumulative, not cleared per interval:
+	 * CRC-repair counters, logged at debug level (0xF7 page 10 is the read
+	 * path otherwise). Cumulative, not cleared per interval:
 	 * a sensitivity run reads a rate as a delta across the run. A null result is
 	 * only readable if the counters show repair engaged.
 	 */
@@ -2998,7 +3006,7 @@ static void api_housekeep(void)
 
 		if ((radiant_time_t)(now - crc_last) >= API_CRC_REPORT_US) {
 			crc_last = now;
-			LOG_INF("crc repaired=%u unrepairable=%u refuted=%u "
+			LOG_DBG("crc repaired=%u unrepairable=%u refuted=%u "
 				"implausible=%u",
 				(unsigned int)api_stats.crc_repaired,
 				(unsigned int)api_stats.crc_unrepairable,
@@ -3006,7 +3014,7 @@ static void api_housekeep(void)
 				(unsigned int)api_stats.crc_repair_implausible);
 		}
 	}
-#endif /* CONFIG_RADIANT_CRC_REPAIR */
+#endif /* API_CRC_LOG */
 
 	k_mutex_unlock(&api_lock);
 }
@@ -3439,8 +3447,9 @@ antr_err_t antr_channel_close(uint8_t channel)
 
 #if defined(CONFIG_RADIANT_CRC_REPAIR)
 		/* CRC-repair counters at close, so the last seconds before a close
-		 * are logged. Cumulative across channels: read as a delta. */
-		LOG_INF("crc at close ch=%u repaired=%u unrepairable=%u "
+		 * are logged. Cumulative across channels: read as a delta. Debug
+		 * level: 0xF7 page 10 is the read path on a shipping image. */
+		LOG_DBG("crc at close ch=%u repaired=%u unrepairable=%u "
 			"refuted=%u implausible=%u",
 			(unsigned int)channel,
 			(unsigned int)api_stats.crc_repaired,

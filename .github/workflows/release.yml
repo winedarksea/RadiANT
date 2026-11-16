@@ -132,6 +132,11 @@ jobs:
               # maskable priority-0 radio ISR - and the row must fail.
               CONFIG_WS2812_STRIP_SPI=y
               CONFIG_LED_STRIP=y
+              # CRC repair ships on (apps/dongle/prj.conf, owner acceptance
+              # 2026-11-15). PROFILE_SANITY is its third refutation and
+              # must travel with it.
+              CONFIG_RADIANT_CRC_REPAIR=y
+              CONFIG_RADIANT_PROFILE_SANITY=y
           - name: "core: nrf52840dongle"
             board: nrf52840dongle/nrf52840
             radio: core
@@ -140,6 +145,12 @@ jobs:
             package: dfu
             offset: "0x1000"
             release: true
+            assert_config: |
+              # CRC repair ships on (apps/dongle/prj.conf, owner acceptance
+              # 2026-11-15). PROFILE_SANITY is its third refutation and
+              # must travel with it.
+              CONFIG_RADIANT_CRC_REPAIR=y
+              CONFIG_RADIANT_PROFILE_SANITY=y
           - name: "core: promicro"
             board: promicro_nrf52840/nrf52840/uf2
             radio: core
@@ -152,6 +163,11 @@ jobs:
               # Most of these boards have no RESET button. Without this
               # every reflash means shorting RST to GND twice.
               CONFIG_ANT_DONGLE_UF2_REBOOT_REQUEST=y
+              # CRC repair ships on (apps/dongle/prj.conf, owner acceptance
+              # 2026-11-15). PROFILE_SANITY is its third refutation and
+              # must travel with it.
+              CONFIG_RADIANT_CRC_REPAIR=y
+              CONFIG_RADIANT_PROFILE_SANITY=y
           # The Pro Micro sold without the 32.768 kHz crystal. Same image, a
           # synthesized low-frequency clock.
           - name: "core: promicro, synth clock"
@@ -167,6 +183,11 @@ jobs:
               # Most of these boards have no RESET button. Without this
               # every reflash means shorting RST to GND twice.
               CONFIG_ANT_DONGLE_UF2_REBOOT_REQUEST=y
+              # CRC repair ships on (apps/dongle/prj.conf, owner acceptance
+              # 2026-11-15). PROFILE_SANITY is its third refutation and
+              # must travel with it.
+              CONFIG_RADIANT_CRC_REPAIR=y
+              CONFIG_RADIANT_PROFILE_SANITY=y
           # ── Everything below is built to keep it compiling ────────────────
           #
           # Not a shipping image. The nRF54 targets can only use the new USB
@@ -223,21 +244,23 @@ jobs:
           # file, so a legacy-only arm would leave the USB_NEXT half of them
           # unbuilt, which is how they came to be missing there in the first
           # place.
-          # C2. crc_repair.conf is the B leg of the S3 sensitivity A/B, and
-          # until this row it was a fragment with no build behind it - the
-          # exact hole the comment above records for encryption.conf.
-          - name: "core: feather, crc repair"
+          # C2, then turned round. crc_repair.conf was the B leg of the S3
+          # sensitivity A/B and this row its build. Since the owner accepted
+          # the nRF bench gate (2026-11-15) repair ships on from prj.conf and
+          # every shipping row above asserts it, so a repair-on row here would
+          # duplicate them. This row is now the repair-OFF dongle, so the
+          # library default (radiant/Kconfig: default n) keeps a build behind
+          # it - the hole the comment above records for encryption.conf.
+          - name: "core: feather, crc repair off"
             board: adafruit_feather_nrf52840/nrf52840/uf2
             radio: core
-            extra_conf: crc_repair.conf
+            extra_conf: crc_repair_off.conf
             transport: USB_LEGACY
             assert_config: |
-              CONFIG_RADIANT_CRC_REPAIR=y
-              # PROFILE_SANITY is the third refutation for a repaired frame;
-              # an A/B with repair on and sanity off cannot tell a caught
-              # mis-repair from an uncaught one, so the fragment sets both
-              # and this row is what keeps them together.
-              CONFIG_RADIANT_PROFILE_SANITY=y
+              # CONFIG_RADIANT_CRC_REPAIR is not set
+              # PROFILE_SANITY depends on repair, so with repair off it is
+              # invisible and Kconfig writes no line for it at all.
+              absent:CONFIG_RADIANT_PROFILE_SANITY
           - name: "core: feather, health counters"
             board: adafruit_feather_nrf52840/nrf52840/uf2
             radio: core
@@ -828,6 +851,11 @@ jobs:
             radiant_backend: cc26xx
             fetch_hal_ti: "true"
             assert_symbol: CONFIG_RADIANT_BACKEND_CC26XX=y
+            assert_config: |
+              # CRC repair ships on (apps/dongle_ti/prj.conf, owner
+              # acceptance 2026-11-15), with its third refutation.
+              CONFIG_RADIANT_CRC_REPAIR=y
+              CONFIG_RADIANT_PROFILE_SANITY=y
           # The 3-byte sync-word match (short match off). It sizes the cc26xx
           # receive rows and tx_buf from a different branch than the default
           # image, and that branch held a one-byte overflow nobody compiled
