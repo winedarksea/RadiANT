@@ -27,6 +27,15 @@ first bytes with --raw before trusting an address: ANT frames start a4.
 
 Usage:
     python tools/decode_pcap.py capture.pcap [-o decoded.txt] [--raw] [--summary]
+    python tools/decode_pcap.py capture.pcap --phase 3 2
+
+--phase A B prints, for every slot of channel A, whether its frame reached
+the host and where channel B's nearest frame sat relative to it, from the
+dongle's own receive timestamps (the 0x20 extended field, 32768 Hz), then a
+histogram of A's misses by that offset and the longest run of consecutive
+misses. Both channels must deliver timestamps (LIB_CONFIG 0x20, which Zwift
+sets). Periods come from the host's CHANNEL_PERIOD messages, default 8192.
+Offsets are B minus A: negative means B's frame came first.
 """
 
 from __future__ import annotations
@@ -381,6 +390,117 @@ def decode(path: Path, raw: bool = False, only_device: int | None = None):
     return header, lines
 
 
+EXT_DEVICE_ID = 0x80
+EXT_RSSI = 0x40
+EXT_TIMESTAMP = 0x20
+
+
+def rx_ticks(body: bytes):
+    """(channel, ticks) of a flagged BROADCAST_DATA body, or None without a
+    timestamp. Layout: ch, 8 payload, flag, then the flagged fields in the
+    order device id (4), RSSI (3), timestamp (2 LE)."""
+    if len(body) < 10:
+        return None
+    flag = body[9]
+    if not flag & EXT_TIMESTAMP:
+        return None
+    off = 10 + (4 if flag & EXT_DEVICE_ID else 0) + (3 if flag & EXT_RSSI else 0)
+    if len(body) < off + 2:
+        return None
+    return body[0] & 0x1F, body[off] | (body[off + 1] << 8)
+
+
+def phase(lines, ch_a: int, ch_b: int, bin_ms: float = 0.5):
+    """Per-slot table of channel A against channel B. Returns (rows, report):
+    rows are (host_time, heard, b_minus_a_ms) for each slot of A between its
+    first and last heard frame; report is a list of summary lines."""
+    periods = {}
+    events = []  # (host_time, channel, raw ticks)
+    for line in lines:
+        parts = line.split()
+        if len(parts) < 4 or parts[-1].startswith('[heuristic'):
+            continue
+        try:
+            t = float(parts[0])
+            body = bytes.fromhex(parts[3])
+        except ValueError:
+            continue
+        if parts[1] == 'host->dev' and parts[2] == 'CHANNEL_PERIOD' and len(body) >= 3:
+            periods[body[0] & 0x1F] = body[1] | (body[2] << 8)
+        elif parts[1] == 'dev->host' and parts[2] in ('BROADCAST_DATA',
+                                                       'ACKNOWLEDGED_DATA'):
+            got = rx_ticks(body)
+            if got is not None and got[0] in (ch_a, ch_b):
+                events.append((t, got[0], got[1]))
+    # One device counter for both channels: unwrap it once, in host order.
+    # A backwards step of more than ~0.9 s of ticks is a wrap.
+    tl = {ch_a: [], ch_b: []}
+    base, prev = 0, None
+    for t, ch, k in events:
+        if prev is not None and k < prev - 30000:
+            base += 65536
+        prev = k
+        tl[ch].append((t, base + k))
+    a, b = tl[ch_a], tl[ch_b]
+    if not a or not b:
+        return [], [f'phase: no timestamped frames on channel '
+                    f'{ch_a if not a else ch_b}']
+    per = periods.get(ch_a, 8192)
+    per_b = periods.get(ch_b, 8192)
+    k0 = a[0][1]
+    heard = {}
+    for t, k in a:
+        heard.setdefault(round((k - k0) / per), (t, k))
+    idx = sorted(heard)
+    rows = []
+    bk = [k for _, k in b]
+    j = 0
+    for n in range(idx[0], idx[-1] + 1):
+        if n in heard:
+            t, kf = heard[n][0], float(heard[n][1])
+        else:
+            lo = max(x for x in idx if x < n)
+            hi = min(x for x in idx if x > n)
+            ka, kb = heard[lo][1], heard[hi][1]
+            kf = ka + (kb - ka) * (n - lo) / (hi - lo)
+            t = heard[lo][0] + (n - lo) * per / 32768
+        while j + 1 < len(bk) and abs(bk[j + 1] - kf) <= abs(bk[j] - kf):
+            j += 1
+        # Folded into +/- half of B's period: when B missed the frame of this
+        # period, its nearest heard frame is a period away, but B drifts
+        # slowly, so that frame's phase is still where this one would be.
+        d = bk[j] - kf
+        d = (d + per_b / 2) % per_b - per_b / 2
+        rows.append((t, n in heard, d / 32.768))
+    misses = [r for r in rows if not r[1]]
+    run = best = 0
+    best_end = None
+    for i, r in enumerate(rows):
+        run = run + 1 if not r[1] else 0
+        if run > best:
+            best, best_end = run, i
+    report = [f'phase ch{ch_a} against ch{ch_b}: period {per}, '
+              f'{len(rows)} slots, {len(misses)} missed '
+              f'({100.0 * len(misses) / max(1, len(rows)):.1f} %)']
+    if best_end is not None and best > 0:
+        s = rows[best_end - best + 1]
+        e = rows[best_end]
+        report.append(f'longest miss run: {best} slots, {s[0]:.3f}-{e[0]:.3f} s, '
+                      f'offset {s[2]:+.2f} .. {e[2]:+.2f} ms')
+    bins: Counter[int] = Counter()
+    totals: Counter[int] = Counter()
+    for _, h, d in rows:
+        if abs(d) <= 10.0:
+            k = int(d // bin_ms)
+            totals[k] += 1
+            if not h:
+                bins[k] += 1
+    for k in sorted(totals):
+        report.append(f'  {k * bin_ms:+6.1f} .. {(k + 1) * bin_ms:+6.1f} ms: '
+                      f'{bins[k]:4d} / {totals[k]:4d} missed')
+    return rows, report
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("pcap", type=Path, help="capture from scripts/cap_zwift.ps1")
@@ -393,11 +513,18 @@ def main(argv=None) -> int:
                     help="decode only this USB device address. Note that one "
                          "dongle can appear under two addresses (see the "
                          "module docstring); default is all of them")
+    ap.add_argument("--phase", type=int, nargs=2, metavar=("A", "B"),
+                    help="per-slot heard/missed of channel A against channel "
+                         "B's offset, from the receive timestamps")
     args = ap.parse_args(argv)
 
     header, lines = decode(args.pcap, raw=args.raw, only_device=args.device)
 
-    if args.summary:
+    if args.phase:
+        rows, report = phase(lines, args.phase[0], args.phase[1])
+        out = report + [f"{t:10.3f}  {'HEARD' if h else 'miss '}  "
+                        f"b-minus-a {d:+8.2f} ms" for t, h, d in rows]
+    elif args.summary:
         counts: Counter[str] = Counter()
         for line in lines:
             parts = line.split()

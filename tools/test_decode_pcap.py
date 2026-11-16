@@ -158,6 +158,40 @@ class DecodeTests(unittest.TestCase):
                 self.assertEqual(dp.main([str(path), '--summary']), 0)
             self.assertIn('bad_checksum_candidates=1', out.getvalue())
 
+
+
+class PhaseTests(unittest.TestCase):
+    @staticmethod
+    def bcast(ch, ticks, t):
+        body = (bytes([ch]) + bytes(8) + bytes([0xE0]) + bytes(4) + bytes(3)
+                + bytes([ticks & 0xFF, (ticks >> 8) & 0xFF]))
+        return f'{t:10.3f}  dev->host  BROADCAST_DATA {body.hex()}'
+
+    def test_misses_are_placed_against_the_other_channels_offset(self):
+        lines = [f'{0:10.3f}  host->dev  CHANNEL_PERIOD 030020',
+                 f'{0:10.3f}  host->dev  CHANNEL_PERIOD 02f61f']
+        t = 1.0
+        for n in range(40):
+            ka = (1000 + n * 8192) & 0xFFFF
+            kb = (1000 + n * 8182 + 200) & 0xFFFF
+            # A goes quiet for three slots while B is ahead of it.
+            if not 25 <= n <= 27:
+                lines.append(self.bcast(3, ka, t))
+            lines.append(self.bcast(2, kb, t + 0.001))
+            t += 0.25
+        rows, report = dp.phase(lines, 3, 2)
+        self.assertEqual(len(rows), 40)
+        self.assertEqual([r[1] for r in rows].count(False), 3)
+        self.assertIn('longest miss run: 3 slots', '|'.join(report))
+        for _, heard, d in rows:
+            if not heard:
+                # B minus A at slot n is 200 - 10 n ticks: -1.5 to -2.2 ms.
+                self.assertTrue(-2.3 < d < -1.4, d)
+
+    def test_reports_a_channel_with_no_timestamps(self):
+        rows, report = dp.phase([self.bcast(3, 5, 1.0)], 3, 2)
+        self.assertEqual(rows, [])
+        self.assertIn('no timestamped frames on channel 2', report[0])
 
 if __name__ == '__main__':
     unittest.main()
