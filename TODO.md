@@ -8,6 +8,12 @@ Discovery short match (ADR 0022), left open 2026-11-11:
 ## TI CC2652R, open after the 2026-11-12 bench (evidence `archive/benchmarks/2026-11-12-ti-findings/` and `2026-11-12-ti-lead/`; items closed 2026-11-13, `archive/benchmarks/2026-11-13-ti-todo/README.md`):
 - Rebuild the TI image before it ships: the one staged in `build\final_perf_6078d88\` predates e66ae02 (a one-packet transfer's ACK window now reserves no follow-on; host-tested only). Check acknowledged transfers on air with the rebuilt image (`tools/ant_ack_pair.py`, both roles) first.
 
+## Open after the 2026-11-16 benches (filed on fix/ti-cmd-stall):
+- nRF: re-read `now` on STEP_RETRY after an early-ETIME refusal; the stale `now` makes the refusals cascade (`archive/benchmarks/2026-11-16-b4-pair/`).
+- nRF: `radiant_frame.c` (`rx_sw_addr_len` / `radiant_addr_alt_run` bit loop) is outside the O2 hot set, ~17 us per filter on a filter-memo miss.
+- TI and every backend: the scheduler's `pass()` masks interrupts for its whole body. TI 9-channel worst case 492 us, arm slack 19-26 us. Candidates: run done callbacks and event posting after the unlock; take `RF_scheduleCmd` out of the lock (`archive/benchmarks/2026-11-16-ti-cmd-stall/isr_blocker/`).
+- TI: Pro Micro -> TI link loses 8-13 % (other links 0.25-4 %), unexplained; not RX buffering and not the masked pass (`archive/benchmarks/2026-11-16-b4-pair/gate_extra/`).
+
 ## FE-C coverage (deferred from the 2026-11-11 Zwift-capture plan, one item):
 - `tools/ant_fec_control.py`: the page-70 count byte is shifted (:152-156), and the incline is read at [3..4] instead of [4..5] (:171).
 - Sim (`profile_fec_tx.c`, `apps/trainer`): refuses page 55 on request; ignores the page-70 "reply acknowledged" bit and the transmission count; sends page 71 in reply to a page 70, which needs checking against the spec.
