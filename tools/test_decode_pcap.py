@@ -158,7 +158,6 @@ class DecodeTests(unittest.TestCase):
                 self.assertEqual(dp.main([str(path), '--summary']), 0)
             self.assertIn('bad_checksum_candidates=1', out.getvalue())
 
-
 
 class PhaseTests(unittest.TestCase):
     @staticmethod
