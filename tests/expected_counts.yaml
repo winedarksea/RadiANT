@@ -90,7 +90,10 @@ min_scenarios: 16
 # profile_enrol cases in each of the four unit scenarios that build pairing.
 # 5777 (+5) with the compat same-root rule: one compat case in each of the
 # five unit scenarios.
-min_testcases: 5777
+# 5812 (+35) on fix/ti-cmd-stall (Bluefin twister, 2026-11-16): five
+# bridge_parser cases and two 0xF6 overrun-field cases in each of the five
+# unit scenarios.
+min_testcases: 5812
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -105,9 +108,9 @@ min_testcases: 5777
 # above. The earlier values were nRF5340 DK counts minus about 1%, plus static
 # counts. A floor equal to the observed count still fails only when coverage
 # goes down, which is the event it exists to catch.
-min_cases.radiant.unit: 1049
-min_cases.radiant.unit.sec_modes: 1049
-min_cases.radiant.unit.no_pairing: 989
+min_cases.radiant.unit: 1056
+min_cases.radiant.unit.sec_modes: 1056
+min_cases.radiant.unit.no_pairing: 996
 min_cases.radiant.api: 86
 min_cases.radiant.api.sec: 90
 min_cases.radiant.api.sec_host: 104
@@ -124,9 +127,9 @@ min_cases.radiant.backend: 8
 min_cases.hrm_ble.sim_sched: 4
 min_cases.treadmill.pages: 20
 min_cases.treadmill.hr_rx: 3
-min_cases.radiant.unit.ack_faults: 1056
+min_cases.radiant.unit.ack_faults: 1063
 # radiant.unit.diag: the unit suites with CONFIG_RADIANT_DIAG_COUNTERS.
 # 1127 (2026-11-16, Bluefin twister on fix/diag-page9-done-cb): the observed
 # count, including the four page-9/page-12 scheduler cases.
-min_cases.radiant.unit.diag: 1127
+min_cases.radiant.unit.diag: 1134
 min_cases.trainer.model: 14
