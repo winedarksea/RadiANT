@@ -398,7 +398,10 @@ EXT_TIMESTAMP = 0x20
 def rx_ticks(body: bytes):
     """(channel, ticks) of a flagged BROADCAST_DATA body, or None without a
     timestamp. Layout: ch, 8 payload, flag, then the flagged fields in the
-    order device id (4), RSSI (3), timestamp (2 LE)."""
+    order device id (4), RSSI (3), timestamp (2 LE). The timestamp is read
+    from the end: the Garmin USB-m sends one byte more than that layout
+    (20-byte body with all three flags), and its last two bytes are the
+    ticks (they track host time at 32768 Hz; the computed offset does not)."""
     if len(body) < 10:
         return None
     flag = body[9]
@@ -407,7 +410,7 @@ def rx_ticks(body: bytes):
     off = 10 + (4 if flag & EXT_DEVICE_ID else 0) + (3 if flag & EXT_RSSI else 0)
     if len(body) < off + 2:
         return None
-    return body[0] & 0x1F, body[off] | (body[off + 1] << 8)
+    return body[0] & 0x1F, body[-2] | (body[-1] << 8)
 
 
 def phase(lines, ch_a: int, ch_b: int, bin_ms: float = 0.5):
@@ -418,7 +421,7 @@ def phase(lines, ch_a: int, ch_b: int, bin_ms: float = 0.5):
     events = []  # (host_time, channel, raw ticks)
     for line in lines:
         parts = line.split()
-        if len(parts) < 4 or parts[-1].startswith('[heuristic'):
+        if len(parts) < 4 or line.endswith(HEURISTIC_MARK):
             continue
         try:
             t = float(parts[0])
@@ -433,14 +436,17 @@ def phase(lines, ch_a: int, ch_b: int, bin_ms: float = 0.5):
             if got is not None and got[0] in (ch_a, ch_b):
                 events.append((t, got[0], got[1]))
     # One device counter for both channels: unwrap it once, in host order.
-    # A backwards step of more than ~0.9 s of ticks is a wrap.
+    # The counter wraps every 2 s, so a gap with no frame on either channel
+    # can hide whole wraps; take the wrap count from elapsed host time (USB
+    # timestamp jitter is milliseconds, the ambiguity is a full second).
     tl = {ch_a: [], ch_b: []}
-    base, prev = 0, None
+    prev = None  # (host time, unwrapped ticks)
     for t, ch, k in events:
-        if prev is not None and k < prev - 30000:
-            base += 65536
-        prev = k
-        tl[ch].append((t, base + k))
+        if prev is not None:
+            expect = prev[1] + (t - prev[0]) * 32768
+            k += 65536 * round((expect - k) / 65536)
+        prev = (t, k)
+        tl[ch].append((t, k))
     a, b = tl[ch_a], tl[ch_b]
     if not a or not b:
         return [], [f'phase: no timestamped frames on channel '

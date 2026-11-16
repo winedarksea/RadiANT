@@ -187,6 +187,37 @@ class PhaseTests(unittest.TestCase):
                 # B minus A at slot n is 200 - 10 n ticks: -1.5 to -2.2 ms.
                 self.assertTrue(-2.3 < d < -1.4, d)
 
+    def test_wraps_inside_a_gap_on_both_channels_are_counted(self):
+        # Both channels silent for 4 s = exactly two counter wraps, so the raw
+        # timestamps either side of the gap are identical.
+        lines = []
+        for n, t in ((0, 1.0), (16, 5.0)):
+            lines.append(self.bcast(3, (1000 + n * 8192) & 0xFFFF, t))
+            lines.append(self.bcast(2, (1200 + n * 8192) & 0xFFFF, t + 0.001))
+        rows, report = dp.phase(lines, 3, 2)
+        self.assertEqual(len(rows), 17)
+        self.assertEqual([r[1] for r in rows].count(False), 15)
+
+    def test_heuristic_frames_do_not_count_as_heard(self):
+        lines = []
+        for n in range(5):
+            t = 1.0 + n * 0.25
+            line = self.bcast(3, 1000 + n * 8192, t)
+            if n == 2:
+                line += '  ' + dp.HEURISTIC_MARK
+            lines.append(line)
+            lines.append(self.bcast(2, 1200 + n * 8192, t + 0.001))
+        rows, _ = dp.phase(lines, 3, 2)
+        self.assertEqual([r[1] for r in rows], [True, True, False, True, True])
+
+    def test_garmin_timestamp_is_the_last_two_bytes(self):
+        # From captures/zwift-20261115-220629.pcap (Garmin USB-m): one byte
+        # longer than the flagged layout, ticks 0x3B62 at the very end.
+        body = bytes.fromhex('02103eb7418b60fa00e0694f0b0510006800623b')
+        self.assertEqual(dp.rx_ticks(body), (2, 0x3B62))
+        radiant = bytes.fromhex('000aff368234852852e0b205788120c0000698')
+        self.assertEqual(dp.rx_ticks(radiant), (0, 0x9806))
+
     def test_reports_a_channel_with_no_timestamps(self):
         rows, report = dp.phase([self.bcast(3, 5, 1.0)], 3, 2)
         self.assertEqual(rows, [])
