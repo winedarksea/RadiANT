@@ -183,7 +183,9 @@ spans that cannot idle are timed with it (interrupts off, or an ISR).
   frames the nRF late-ISR guard drops: the END branch snapshots the buffer and
   registers between two CC_SYNC reads, and a snapshot is torn if the reads
   differ or the capture is younger than the frame's airtime (the next frame's
-  ADDRESS had already landed). Field 5 is the worst nRF END-interrupt
+  ADDRESS had already landed). It also counts a frame lost because a second
+  frame ended while it was being read (END raised again during the snapshot:
+  the snapshot is retaken and only the later frame is delivered). Field 5 is the worst nRF END-interrupt
   lateness, `now − (CC_SYNC + software address, body and CRC airtime)`, coded
   PHY skipped, taken from the snapshot of a frame the guard accepted. An
   interrupt late past the next frame's ADDRESS is a torn snapshot, counted in

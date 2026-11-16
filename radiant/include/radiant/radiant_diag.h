@@ -167,7 +167,8 @@ extern "C" {
  *   2 crc_repair_refuted
  *   3 crc_repair_implausible
  *   4 late_isr_drops         frames dropped by the nRF late-ISR guard (a torn
- *                            END snapshot) - nRF, count
+ *                            END snapshot, or a frame lost because the next
+ *                            one ended while it was read) - nRF, count
  *   5 end_late_max_us        worst END-interrupt lateness, now - (CC_SYNC +
  *                            software address, body and CRC airtime) - nRF,
  *                            from accepted snapshots only. Past the next

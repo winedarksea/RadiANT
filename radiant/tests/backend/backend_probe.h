@@ -14,6 +14,8 @@ struct backend_probe {
 	uint8_t  last_rx_body[16];
 	uint8_t  last_rx_body_len;
 	uint32_t last_rx_crc_rx;
+	uint8_t  last_rx_filter_index;
+	int8_t   last_rx_rssi_dbm;
 };
 
 struct backend_probe *backend_probe(void);
@@ -29,6 +31,9 @@ bool     backend_rx_any(void);
 uint32_t backend_torn_air_us(void);
 void     backend_set_sw_addr_len(uint8_t n);
 void     backend_set_report_crc_fail(void);
+uint32_t backend_late_isr_drops(void);
+void     backend_two_filters(void);
+int      backend_program_rx(void);
 void     backend_tx_end(void);
 void     backend_window_close(void);
 void     backend_dispatch(void);

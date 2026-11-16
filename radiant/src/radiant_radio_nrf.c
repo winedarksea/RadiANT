@@ -3790,6 +3790,41 @@ static uint32_t rx_torn_air_us(void)
 	return bytes * US_PER_BYTE - RX_TORN_SLACK_US;
 }
 
+/*
+ * How long after its nominal ADDRESS-to-END airtime a 1 M frame's END is
+ * surely raised: 1 us for the quantisation of the two 1 MHz counts, 1 us for
+ * the radio's END after the last CRC bit. A reasoned figure, like the slack.
+ */
+#define RX_TORN_SETTLE_US 2u
+
+/*
+ * The settle wait's bound. A capture that passed the time test is at least
+ * airtime - RX_TORN_SLACK_US old, and the wait ends at airtime +
+ * RX_TORN_SETTLE_US, so it never needs more than their sum; the bound only
+ * stops a stuck clock from hanging the interrupt.
+ */
+#define RX_TORN_WAIT_MAX_US (RX_TORN_SLACK_US + RX_TORN_SETTLE_US)
+BUILD_ASSERT(RX_TORN_WAIT_MAX_US <= 4u, "the settle wait runs in the RADIO ISR");
+
+/*
+ * The late-ISR guard's settle wait (1 M only; see the END branch). A capture in
+ * the band [airtime - slack, airtime + settle) could be N's or N+1's in its
+ * last microseconds, so spin on the clock until the frame it dates must have
+ * raised END. An on-time interrupt usually starts past the band and does not
+ * spin at all.
+ */
+static void rx_torn_settle(uint32_t sync, uint32_t t_snap)
+{
+	const uint32_t settled = rx_torn_air_us() + RX_TORN_SLACK_US +
+				 RX_TORN_SETTLE_US;
+	uint32_t now = t_snap;
+
+	while ((uint32_t)(now - sync) < settled &&
+	       (uint32_t)(now - t_snap) < RX_TORN_WAIT_MAX_US) {
+		now = timer_capture(CC_NOW);
+	}
+}
+
 static void radio_isr(const void *arg)
 {
 	ARG_UNUSED(arg);
@@ -3859,38 +3894,49 @@ static void radio_isr(const void *arg)
 		 * locals and radiant_rx_snap, between two CC_SYNC reads, and nothing below
 		 * the snapshot reads the buffer or those registers again.
 		 *
-		 * Where N+1's ADDRESS can land, and what each case does:
-		 *  (a) Before the first CC_SYNC read. CC_SYNC already dates N+1.
-		 *      - N+1 still on air: less than its ADDRESS-to-END airtime has
+		 * Order: the ADDRESS test, then the ADDRESS clear, then CC_SYNC (read 1),
+		 * the registers, the copy, CC_SYNC (read 2), the clock, the torn test,
+		 * the settle wait, the END check. Where N+1's ADDRESS can land:
+		 *  (a) Before the clear (before entry, or between the test and the
+		 *      clear). The clear wipes its flag. Its capture has reached CC_SYNC
+		 *      by read 1, or at the latest by read 2: (D)PPI moves it within a
+		 *      cycle or two of the 16 MHz clock, and the register reads and the
+		 *      copy between the clear and read 2 take longer than that.
+		 *      - Capture in read 1, N+1 still on air: less than its airtime has
 		 *        passed since the capture, so radiant_rx_torn() says torn. N is
-		 *        dropped and counted, and the ADDRESS is carried for N+1's END.
+		 *        dropped and counted, and the ADDRESS is carried.
+		 *      - Capture only in read 2: the reads differ, torn, carried.
 		 *      - N+1 ended after the END clear at the top of radio_isr(): END is
-		 *        raised again, which the check after the snapshot sees. The
-		 *        registers may have been read before that END, so the snapshot
-		 *        is retaken (rx_end_again) and N+1 is delivered from a
-		 *        consistent one.
+		 *        raised again by the END check. The registers may predate that
+		 *        END, so the snapshot is retaken (rx_end_again, carried) and N+1
+		 *        is delivered from a consistent one; N is counted lost.
 		 *      - N+1 ended before that clear: one END event for both frames, and
 		 *        buffer, registers and capture are all N+1's. N+1 is delivered
 		 *        and N is lost unseen, as before this guard; nothing can tell.
-		 *  (b) Between the two CC_SYNC reads (around the copy). The reads differ:
-		 *      torn, carried.
-		 *  (c) After the second read, before the ADDRESS clear. The copy ended
-		 *      before N+1's first byte could land (the DMA follows the ADDRESS),
-		 *      so the snapshot is N's and is delivered. The clear wipes N+1's
-		 *      ADDRESS, so it is carried: CC_SYNC read after the clear no longer
-		 *      equals the first read.
-		 *  (d) After the clear. EVENTS_ADDRESS stays set for N+1 by itself (the
-		 *      carry is also set if the capture landed before the third read).
-		 *      N+1's END sees an ADDRESS either way and consumes the carry.
-		 * The capture follows the ADDRESS event through (D)PPI by a cycle or two of
-		 * the 16 MHz clock. The END check sits between the clear and the third
-		 * CC_SYNC read, so an ADDRESS the clear wiped has had at least that long to
-		 * reach CC_SYNC.
+		 *  (b) Between the clear and read 1. EVENTS_ADDRESS stays latched for
+		 *      N+1. Read 1 or read 2 holds its capture, so the snapshot is torn
+		 *      (conservatively: N+1's bytes may not have landed yet, but N's
+		 *      registers cannot be told from N+1's). The carry is set as well,
+		 *      which is redundant with the latched flag; N+1's END consumes both.
+		 *  (c) Between read 1 and read 2 (around the copy). The reads differ:
+		 *      torn. The flag is latched and the carry set.
+		 *  (d) After read 2. The copy ended before N+1's first byte could land
+		 *      (the DMA follows the ADDRESS by at least a byte time), so the
+		 *      snapshot is N's and is delivered. The flag stays latched for N+1;
+		 *      no carry is needed.
+		 * So no case depends on when the capture lands after the clear, and there
+		 * is no third CC_SYNC read.
 		 *
-		 * One residual: case (a) with N+1 inside its last RX_TORN_SLACK_US and its
-		 * END not yet raised at the check passes as N+1 with N's CRC registers. The
-		 * slack exists because a false tear would drop good frames on every
-		 * interrupt that runs on time.
+		 * The settle wait closes the one band the time test cannot judge: a
+		 * capture between airtime - RX_TORN_SLACK_US and airtime +
+		 * RX_TORN_SETTLE_US could be N's (an on-time interrupt) or N+1's in its
+		 * last microseconds, whose END is not yet raised and whose CRC registers
+		 * would then be N's. In that band only, the branch spins on the clock
+		 * until the frame the capture dates must have ended (at most
+		 * RX_TORN_WAIT_MAX_US) before the END check, so N+1 raises END and the
+		 * snapshot is retaken. 1 M only: a length-from-body (coded) frame has no
+		 * fixed airtime, so there the time test uses the shortest legal frame and
+		 * a longer N+1 still on air past it is the known residual.
 		 *
 		 * DISABLED (the window's close) is handled after this branch, as before. A
 		 * frame it cut off mid-air shows there as EVENTS_ADDRESS or the carry, and a
@@ -3916,13 +3962,11 @@ rx_end_again:
 #endif
 		} else if (radiant_op.kind == OP_RX && !radiant_op.terminal_sent) {
 			struct radiant_rx_event evt;
-			/* The snapshot: CC_SYNC first, then the registers, then the buffer. */
-			const uint32_t sync = nrf_timer_cc_get(TIMER_ADDR, CC_SYNC);
-			bool crc_ok = nrf_radio_crc_status_check(NRF_RADIO);
-			const uint32_t rxcrc = NRF_RADIO->RXCRC;
-			const uint32_t rssisample = NRF_RADIO->RSSISAMPLE;
-			const uint8_t logical = (uint8_t)(NRF_RADIO->RXMATCH &
-							  RADIO_RXMATCH_RXMATCH_Msk);
+			uint32_t sync;
+			bool crc_ok;
+			uint32_t rxcrc;
+			uint32_t rssisample;
+			uint8_t logical;
 			const size_t snap_len =
 				MIN((size_t)radiant_op.sw_addr_len + radiant_op.body_len,
 				    sizeof(radiant_rx_snap));
@@ -3930,6 +3974,16 @@ rx_end_again:
 			bool torn;
 			bool end_again;
 
+			/* Consumed first, so the next packet in this window is judged on its own match (END->START keeps the receiver armed). */
+			radiant_op.addr_carry = false;
+			nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_ADDRESS);
+
+			/* The snapshot: CC_SYNC first, then the registers, then the buffer. */
+			sync = nrf_timer_cc_get(TIMER_ADDR, CC_SYNC);
+			crc_ok = nrf_radio_crc_status_check(NRF_RADIO);
+			rxcrc = NRF_RADIO->RXCRC;
+			rssisample = NRF_RADIO->RSSISAMPLE;
+			logical = (uint8_t)(NRF_RADIO->RXMATCH & RADIO_RXMATCH_RXMATCH_Msk);
 			memcpy(radiant_rx_snap, radiant_rx_buf, snap_len);
 			{
 				const uint32_t sync_after =
@@ -3939,20 +3993,20 @@ rx_end_again:
 				torn = radiant_rx_torn(sync, sync_after, t_snap,
 						       rx_torn_air_us());
 			}
-
-			/* Consumed so the next packet in this window is judged on its own match (END->START keeps the receiver armed). */
-			radiant_op.addr_carry = false;
-			nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_ADDRESS);
+			if (!torn && radiant_op.phy != RADIANT_PHY_LR_CODED) {
+				rx_torn_settle(sync, t_snap);
+			}
 			end_again = nrf_radio_event_check(NRF_RADIO, NRF_RADIO_EVENT_END);
-			/* Cases (a), (b) and (c) above: an ADDRESS for a frame whose END is still to be handled. */
-			if (torn || end_again ||
-			    nrf_timer_cc_get(TIMER_ADDR, CC_SYNC) != sync) {
+
+			/* Cases (a), (b) and (c): an ADDRESS for a frame whose END is still to be handled. */
+			if (torn || end_again) {
 				radiant_op.addr_carry = true;
+				/* N is lost: torn, or a second frame ended while this one was read (case (a)). */
+				NRF_DIAG(nrf_diag.late_isr_drops++);
 			}
 			if (torn) {
 				/* A window that heard something must not give a noise sample. */
 				radiant_op.rx_any = true;
-				NRF_DIAG(nrf_diag.late_isr_drops++);
 			}
 			if (end_again) {
 				/* Case (a), N+1 ended: take the snapshot again, from N+1's END. */
