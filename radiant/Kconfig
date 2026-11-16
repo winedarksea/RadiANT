@@ -1568,9 +1568,13 @@ config RADIANT_HOT_PATH_O2
 	  sets how much of the arm lead (ARM_SETUP_US on the nRF) a pass
 	  leaves. -O2 trades flash for that time.
 
-	  OFF BY DEFAULT until a load run measures it (2026-11-15 performance
-	  plan, step C2). Off, the image is byte-identical to a build without
-	  the symbol.
+	  Default n in the library. Off, the image is byte-identical to a
+	  build without the symbol. The shipping dongle apps turn it on:
+	  apps/dongle/prj.conf (every nRF dongle image) and
+	  apps/dongle_ti/prj.conf, by owner ruling of 2026-11-16 after the
+	  step C2 load run (Pro Micro, worst pass-to-arm 289 us at -Os,
+	  255 us at -O2; +4864 B flash on the shipping Pro Micro image,
+	  RAM unchanged).
 
 config RADIANT_SEARCH_PHASE_DIAG
 	bool "log every search frame's phase and each chunk's phase bins"

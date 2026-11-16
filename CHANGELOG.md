@@ -13,6 +13,19 @@ reads.
 
 ### Changed
 
+- **The radio hot path is compiled at -O2 in the shipping dongles**
+  (`CONFIG_RADIANT_HOT_PATH_O2` in `apps/dongle/prj.conf` and
+  `apps/dongle_ti/prj.conf`, owner ruling 2026-11-16). `radiant_sched.c`,
+  the antr runtime and the active radio backend build at -O2; the rest of the
+  image stays at -Os. Under load on the Pro Micro the worst pass-to-arm CPU
+  time (0xF7 page 9 [5]) was 289 µs at -Os and 255 µs at -O2, against a
+  240 µs budget (`archive/benchmarks/2026-11-16-pass-breakdown/`, one clean
+  pair). Cost: +4864 B flash on the Pro Micro, +4468 B on the cc26xx
+  LaunchXL, RAM unchanged. The library default stays n, and the release
+  matrix's nRF52840 trainer row asserts it. The security text ceiling in
+  `release.yml` moved 7168 -> 7680 B, because the security hooks in the antr
+  runtime grow at -O2 (7304 B measured); no security code changed.
+
 - **CRC repair is on in the shipping dongles** (`CONFIG_RADIANT_CRC_REPAIR`
   and `CONFIG_RADIANT_PROFILE_SANITY` in `apps/dongle/prj.conf` and
   `apps/dongle_ti/prj.conf`). The owner accepted the nRF bench gate on
