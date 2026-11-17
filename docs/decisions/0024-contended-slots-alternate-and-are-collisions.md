@@ -114,6 +114,16 @@ model, or something about the real masters. The next step is the bench rig
 (plan step 3: `apps/trainer` at 8192 plus `ant_sim.py --profile power` at 8182)
 with the page 11 counters and `decode_pcap.py --phase`.
 
+**2026-11-17, simulated masters on hardware** (`archive/benchmarks/2026-11-17-fec-crossing/`):
+the trainer sim at 8192 and an `ant_sim.py` power master at 8182, 12 crossings,
+received by the Pro Micro and the TI (both diag) with a Garmin FE-C-only control.
+Neither dongle loses FE-C in the 0.57–2.67 ms band. The only in-band misses
+are within ±0.2 ms of power's frame, where the controls lose the same slot.
+`slots_collided` rises 1–3 per crossing and stays at 0 outside them. So against
+these masters the dongle has no band to explain; the remaining candidate is
+the real Kicker (or the real pair). The real-master run with FE-C-only
+controls is still to do.
+
 What this record guarantees regardless: whatever makes the pair unservable,
 the cost now alternates and is reported as a collision, so it can no longer
 send FE-C to search on its own.
