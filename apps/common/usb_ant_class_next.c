@@ -78,6 +78,13 @@ struct ant_tx_frame {
 };
 
 K_MSGQ_DEFINE(ant_tx_msgq, sizeof(struct ant_tx_frame), ANT_TX_QUEUE_DEPTH, 4);
+/* ant_transport_tx_fence(): the writer thread stores the sequence number of
+ * each zero-length marker it reaches in tx_fence_done, then gives the
+ * semaphore. Numbered so a marker left behind by a fence that timed out
+ * cannot release a later one early. One waiter, the bridge thread. */
+static K_SEM_DEFINE(tx_fence_sem, 0, 1);
+static atomic_t tx_fence_seq;
+static atomic_t tx_fence_done;
 K_THREAD_STACK_DEFINE(ant_tx_stack, ANT_TX_STACK_SIZE);
 static struct k_thread ant_tx_thread_data;
 static bool tx_thread_started;
@@ -545,6 +552,19 @@ static void ant_tx_thread_fn(void *p1, void *p2, void *p3)
 	while (1) {
 		k_msgq_get(&ant_tx_msgq, &frame, K_FOREVER);
 
+		/* ant_transport_tx_fence()'s marker: every frame queued
+		 * before it has been written or skipped. Checked ahead of
+		 * the transport-down skip, which must release the waiter
+		 * too. Nothing is written for it. */
+		if (frame.len == 0u) {
+			atomic_val_t seq;
+
+			memcpy(&seq, frame.data, sizeof(seq));
+			atomic_set(&tx_fence_done, seq);
+			k_sem_give(&tx_fence_sem);
+			continue;
+		}
+
 		if (!configured) {
 			continue;
 		}
@@ -694,6 +714,10 @@ int usb_ant_send_async(const uint8_t *buf, size_t len)
 		return -ENODEV;
 	}
 
+	if (len == 0u) {
+		/* Zero length is ant_transport_tx_fence()'s marker. */
+		return -EINVAL;
+	}
 	if (len > sizeof(frame.data)) {
 		return -EMSGSIZE;
 	}
@@ -714,6 +738,41 @@ int usb_ant_send_async(const uint8_t *buf, size_t len)
 	}
 
 	return rc;
+}
+
+int ant_transport_tx_fence(k_timeout_t timeout)
+{
+	/* Zero-length marker; see ant_transport.h. */
+	struct ant_tx_frame marker = { .len = 0u };
+	k_timepoint_t end = sys_timepoint_calc(timeout);
+	atomic_val_t seq;
+
+	if (!configured) {
+		/* The writer skips everything while down. */
+		return 0;
+	}
+
+	seq = atomic_inc(&tx_fence_seq) + 1;
+	memcpy(marker.data, &seq, sizeof(seq));
+
+	/* With a timeout, not K_NO_WAIT: after a burst of events the
+	 * queue may be full, and the marker must go behind them. */
+	if (k_msgq_put(&ant_tx_msgq, &marker,
+			sys_timepoint_timeout(end)) != 0) {
+		return -EAGAIN;
+	}
+
+	/* A purge (suspend, disconnect, deconfigure) can discard the
+	 * marker and strand this wait; the timeout ends it, and the
+	 * purge discarded the frames being waited for as well. */
+	while (atomic_get(&tx_fence_done) != seq) {
+		if (k_sem_take(&tx_fence_sem,
+			       sys_timepoint_timeout(end)) != 0) {
+			return -EAGAIN;
+		}
+	}
+
+	return 0;
 }
 
 void usb_ant_resume_rx(void)

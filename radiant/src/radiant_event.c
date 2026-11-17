@@ -769,6 +769,17 @@ uint32_t radiant_event_drain(uint32_t max_msgs)
 	return sent;
 }
 
+bool radiant_event_draining(void)
+{
+	unsigned int key;
+	bool         busy;
+
+	key = radiant_event_crit_enter();
+	busy = g.draining;
+	radiant_event_crit_exit(key);
+	return busy;
+}
+
 const struct radiant_event_stats *radiant_event_stats_get(void)
 {
 	return &g.stats;

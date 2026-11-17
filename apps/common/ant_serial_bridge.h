@@ -58,7 +58,8 @@ struct ant_bridge_host_state {
 	 * was wiped since the last look. */
 	uint32_t reset_gen;
 	/* A host SYSTEM_RESET is running right now. Set before the stack reset
-	 * wipes anything and cleared 50 ms after reset_gen is bumped, so a
+	 * wipes anything and cleared after reset_gen is bumped and the reset's
+	 * event and transmit fences have passed, just before the STARTUP, so a
 	 * snapshot that reads false was taken either wholly before a reset
 	 * began or after the one reset_gen counts had finished - never between
 	 * a wipe and its generation. Read in the same snapshot as reset_gen,

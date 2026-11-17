@@ -198,8 +198,9 @@ Traps this tool already handles, so don't work around them by hand:
   dropped silently.
 - **ant_compare and every tool here use a 1 s USB read, never a short one.**
   Under libusb-win32 a read timeout that lands as a frame arrives loses that
-  frame whole. STARTUP arrives 52 ms after SYSTEM_RESET, so a 50 ms read lost
-  it about 1 % of the time (TODO.md item 2). `tools/ant_reset_loop.py`
+  frame whole. STARTUP used to arrive 52 ms after SYSTEM_RESET, so a 50 ms read
+  lost it about 1 % of the time (TODO.md item 2). TODO item 5 cut that latency
+  to a few ms, but any reply can land on a short read's expiry. `tools/ant_reset_loop.py`
   measures this.
 - **Transmit power changed after 2026-11-07.** A RadiANT ant_sim master
   (which never sets power) runs at the part's maximum, which is now +8 dBm on

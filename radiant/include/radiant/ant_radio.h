@@ -239,10 +239,11 @@ antr_err_t antr_init(void);
  * Every channel is closed and unassigned, every network key is forgotten, and
  * library configuration returns to zero. Channel-closed events raised as a
  * side effect are still delivered through antr_on_message(); the bridge
- * discards them for a short window afterwards, because a real stick emits
+ * discards them until the startup message, because a real stick emits
  * nothing between the reset command and the startup message.
  *
- * Synchronous: when it returns, the stack is usable again.
+ * Synchronous: when it returns, the stack is usable again, and on RadiANT no
+ * message from before the reset is still on its way to antr_on_message().
  *
  * Returns 0. There is no failure case a host could act on.
  */
