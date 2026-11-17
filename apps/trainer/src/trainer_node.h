@@ -18,6 +18,10 @@ void trainer_node_set_rider(int32_t power_w, int32_t cadence_rpm);
 /* One status block: mode, road, rider, and what the model last produced. */
 void trainer_node_print(const struct shell *sh);
 
+/* Take the FE-C master off air for `ms`, then reopen it (from the system
+ * workqueue). Returns 0, -EBUSY while a silence is running, or -EIO. */
+int trainer_node_silence(uint32_t ms);
+
 /* Register the ACK fault hook on the FE-C channel. Call before the channel
  * opens. Returns 0 or -EIO. */
 int trainer_ackfault_attach(uint8_t channel);

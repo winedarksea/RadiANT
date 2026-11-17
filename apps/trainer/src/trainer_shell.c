@@ -389,3 +389,32 @@ static int cmd_rider(const struct shell *sh, size_t argc, char **argv)
 SHELL_CMD_ARG_REGISTER(rider, NULL,
 		       "rider [power=W] [cadence=RPM] - the simulated rider",
 		       cmd_rider, 1, 2);
+
+/* `silence <ms>`: the FE-C master goes off air, then comes back.
+ * 500 ms is two FE-C periods, the least that guarantees a close completes
+ * before the reopen. */
+static int cmd_silence(const struct shell *sh, size_t argc, char **argv)
+{
+	char *end = NULL;
+	long ms = strtol(argv[1], &end, 0);
+	int rc;
+
+	ARG_UNUSED(argc);
+	if (*end != '\0' || ms < 500 || ms > 60000) {
+		shell_error(sh, "silence is 500..60000 ms");
+		return -EINVAL;
+	}
+	rc = trainer_node_silence((uint32_t)ms);
+	if (rc == -EBUSY) {
+		shell_error(sh, "a silence is already running");
+	} else if (rc != 0) {
+		shell_error(sh, "the channel would not close");
+	} else {
+		shell_print(sh, "SILENCE %ld ms", ms);
+	}
+	return rc;
+}
+
+SHELL_CMD_ARG_REGISTER(silence, NULL,
+		       "silence <ms> - the FE-C master off air, then back",
+		       cmd_silence, 2, 0);

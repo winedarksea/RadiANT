@@ -254,6 +254,74 @@ def curve_lines(points: list[dict]) -> list[str]:
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
 
+GTS_NEAR_S = 0.050   # a TX_FAILED this soon after GO_TO_SEARCH is "at" it
+
+
+def judge_silence(events: list[tuple[float, str]]) -> dict:
+    """One silence cycle's events, in arrival order, as (t, kind) with kind
+    submit | refused | completed | failed | go_to_search | rx. TODO item 3's
+    bench check:
+
+    - every command pending at GO_TO_SEARCH fails within GTS_NEAR_S of it
+      (`failed_at_search` equals `pending_at_search`);
+    - nothing is refused while the master is away (from GO_TO_SEARCH to the
+      first broadcast after it);
+    - the first command submitted after that broadcast completes, and so does
+      any command still pending when it arrived (sent on the reacquiring
+      frame, or the next one).
+
+    Settles submits as decode_pcap's Ledger does: a refusal takes back the
+    newest submit, a terminal settles the oldest.
+    """
+    pending: list[dict] = []
+    out = {"gts": 0, "pending_at_search": 0, "failed_at_search": 0,
+           "refused_while_away": 0, "reacquired": False,
+           "pending_at_reacquire": 0, "pending_at_reacquire_completed": 0,
+           "first_after": None}
+    away = False
+    t_gts = None
+    for t, kind in events:
+        if kind == "submit":
+            pending.append({"t": t, "away": away, "at_reacq": False,
+                            "after": out["reacquired"] and not away})
+        elif kind == "refused":
+            if pending:
+                pending.pop()
+            if away:
+                out["refused_while_away"] += 1
+        elif kind in ("completed", "failed"):
+            if not pending:
+                continue
+            p = pending.pop(0)
+            if (kind == "failed" and t_gts is not None
+                    and t - t_gts <= GTS_NEAR_S and p.get("crossed")):
+                out["failed_at_search"] += 1
+            if p["at_reacq"] and kind == "completed":
+                out["pending_at_reacquire_completed"] += 1
+            if p["after"] and out["first_after"] is None:
+                out["first_after"] = kind
+        elif kind == "go_to_search":
+            out["gts"] += 1
+            away = True
+            t_gts = t
+            for p in pending:
+                p["crossed"] = True
+            out["pending_at_search"] += len(pending)
+        elif kind == "rx" and away:
+            away = False
+            out["reacquired"] = True
+            for p in pending:
+                p["at_reacq"] = True
+            out["pending_at_reacquire"] += len(pending)
+    out["pass"] = (out["gts"] >= 1 and out["reacquired"]
+                   and out["failed_at_search"] == out["pending_at_search"]
+                   and out["refused_while_away"] == 0
+                   and out["pending_at_reacquire_completed"]
+                   == out["pending_at_reacquire"]
+                   and out["first_after"] == "completed")
+    return out
+
+
 class SimShell:
     """apps/trainer's shell over its console VCOM."""
 
@@ -438,6 +506,86 @@ def run_point(sim: SimShell, dev, reader, setup: list[str], count: int,
             "rows": rows, "summary": summarize(rows)}
 
 
+def run_silence(sim: SimShell, dev, reader, silence_ms: int, cycles: int,
+                interval_s: float, second_s: float) -> list[dict]:
+    """TODO item 3 on the bench. Per cycle the sim goes off air for
+    `silence_ms` while the host keeps Zwift's pace: a command every
+    `interval_s`, and a second one `second_s` after each (the page 0x37 that
+    follows a 0x33). Writes do not wait for their outcome, so a refusal shows
+    as one. Returns one judge_silence() result per cycle, with its events."""
+    from ant_fec_control import CHANNEL
+    from ant_probe import EP_OUT, frame
+    from ant_wire import (EVENT_RX_FAIL_GO_TO_SEARCH,
+                          EVENT_TRANSFER_TX_COMPLETED,
+                          EVENT_TRANSFER_TX_FAILED, MESG_ACKNOWLEDGED_DATA_ID,
+                          MESG_BROADCAST_DATA_ID, MESG_EVENT_ID,
+                          MESG_RESPONSE_EVENT_ID)
+
+    results = []
+    index = 0
+    for cycle in range(cycles):
+        # 1 s settled, the silence, then long enough after it for the
+        # channel to reacquire (one sweep is up to ~8 s) and a few commands.
+        span = 1.0 + silence_ms / 1000.0 + 10.0
+        plan = []
+        t = 0.2
+        while t < span:
+            plan.append(t)
+            if t + second_s < span:
+                plan.append(t + second_s)
+            t += interval_s
+        plan.sort()
+        events: list[tuple[float, str]] = []
+        t0 = time.monotonic()
+        silenced = False
+        while True:
+            now = time.monotonic() - t0
+            if now >= span:
+                break
+            if not silenced and now >= 1.0:
+                sim.run(f"silence {silence_ms}")
+                silenced = True
+                continue
+            if plan and now >= plan[0]:
+                plan.pop(0)
+                dev.write(EP_OUT, frame(MESG_ACKNOWLEDGED_DATA_ID,
+                                        bytes([CHANNEL]) + page51_tagged(index)))
+                index += 1
+                events.append((now, "submit"))
+                continue
+            wake = min(plan[0] if plan else span, span)
+            r = reader.next_frame(t0 + min(wake, now + 0.05))
+            if r is None:
+                continue
+            msg_id, body = r
+            tr = time.monotonic() - t0
+            if not body or body[0] != CHANNEL:
+                continue
+            if msg_id == MESG_BROADCAST_DATA_ID:
+                events.append((tr, "rx"))
+            elif msg_id == MESG_RESPONSE_EVENT_ID and len(body) >= 3:
+                if body[1] == MESG_ACKNOWLEDGED_DATA_ID and body[2] != 0:
+                    events.append((tr, "refused"))
+                elif body[1] == MESG_EVENT_ID:
+                    kind = {EVENT_TRANSFER_TX_COMPLETED: "completed",
+                            EVENT_TRANSFER_TX_FAILED: "failed",
+                            EVENT_RX_FAIL_GO_TO_SEARCH: "go_to_search",
+                            }.get(body[2])
+                    if kind:
+                        events.append((tr, kind))
+        res = judge_silence(events)
+        res["cycle"] = cycle
+        res["events"] = events
+        results.append(res)
+        print(f"cycle {cycle}: " + " ".join(
+            f"{k}={res[k]}" for k in ("pass", "gts", "pending_at_search",
+                                      "failed_at_search", "refused_while_away",
+                                      "pending_at_reacquire",
+                                      "pending_at_reacquire_completed",
+                                      "first_after")))
+    return results
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -463,6 +611,16 @@ def main() -> int:
                     help="the lone-sim control: no originator, just wait and "
                          "require zero acked frames")
     ap.add_argument("--json", help="write every row and summary here")
+    ap.add_argument("--silence-ms", type=int,
+                    help="TODO item 3 check instead of a sweep: the sim goes "
+                         "off air this long (needs the trainer's `silence` "
+                         "command) while commands keep coming; see "
+                         "judge_silence()")
+    ap.add_argument("--silence-cycles", type=int, default=5,
+                    help="silences to run with --silence-ms (default 5)")
+    ap.add_argument("--second-after", type=float, default=0.75,
+                    help="with --silence-ms, a second command this long "
+                         "after each (default 0.75 s, Zwift's 0x37)")
     args = ap.parse_args()
 
     sim = SimShell(args.sim_port)
@@ -484,7 +642,20 @@ def main() -> int:
             ap.error("--serial or --port is required except with --lone-seconds")
         dev, reader = open_originator(args.device, args.serial, args.port)
 
-        base = [f"ackfault preset {args.preset}"]
+        if args.silence_ms is not None:
+            sim.run("ackfault preset ideal")
+            results = run_silence(sim, dev, reader, args.silence_ms,
+                                  args.silence_cycles, 1.01, args.second_after)
+            passed = sum(1 for r in results if r["pass"])
+            print(f"\nsilence: {passed} of {len(results)} cycles pass")
+            if args.json:
+                with open(args.json, "w", encoding="utf-8") as f:
+                    json.dump({"args": vars(args), "cycles": results}, f,
+                              indent=1)
+                print(f"wrote {args.json}")
+            return 0 if passed == len(results) else 1
+
+        base =[f"ackfault preset {args.preset}"]
         if args.set:
             base.append("ackfault set " + " ".join(args.set))
         offsets = parse_sweep(args.offset) if args.offset else [None]
