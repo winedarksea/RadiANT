@@ -13,6 +13,21 @@ reads.
 
 ### Fixed
 
+- **A slave that acquires its sensor now hears the next frame too.** When the
+  only searching channel acquired, the search kept listening for the rest of
+  its dwell. A sensor found early in a dwell then had its second frame dropped
+  (on the Pro Micro, about 2 % of acquisitions, reported as a channel
+  collision). Under `X_AUTH` that first window was UNVERIFIED, and `DROP_UNVER`
+  dropped the acquiring frame with it. The search now stops as soon as nobody
+  is searching: 0 of 150 acquisitions lost frame 1, against 3 of 150 before
+  (`archive/benchmarks/2026-11-16-item6-frame1/`). Discovery with other
+  channels still searching, and background scans, are unchanged.
+- **An `X_AUTH`-only channel whose key derivation failed kept transmitting.**
+  If deriving the epoch's keys failed, secured pages went out with no MAC
+  behind them. `X_CONF` already refused. Nothing secured now goes out until a
+  new epoch is set. Only an opaque key backend can fail there; the portable
+  one cannot.
+
 - **The TI dongle stopped answering host commands under load.** With about 9
   tracked channels, the CC26xx UART lost a host byte every few tens of seconds:
   Zephyr's driver runs it with the FIFO off, so a 1-byte receiver overran
