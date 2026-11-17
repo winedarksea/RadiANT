@@ -44,8 +44,13 @@ frames already queued before it, and nothing from before it may follow STARTUP:
   * --after-ms (default 300) keeps reading after STARTUP. No channel is open
     then, so ANY frame is a violation. On USB the window can stretch to one
     --read-timeout-ms, since a read that finds nothing blocks for that long.
-  * --jitter-s adds a random 0..N s read-dwell before each reset, so the reset
+  * --jitter-s adds a random 0..N s sleep before each reset, so the reset
     does not phase-lock to the master's traffic and sample one slot offset.
+    A sleep, NOT a read: a USB read blocks until the next frame arrives
+    whatever its deadline, so a read-dwell ends just after a broadcast, when
+    the event and transmit paths are idle. The first negative-control run
+    did exactly that and caught nothing. Frames that arrive during the sleep
+    wait in the device and are read before STARTUP, which is allowed.
 
     python tools/ant_reset_loop.py --serial EE6986854FD72803 --count 500 \\
         --traffic --device-number 54321 --jitter-s 0.5
@@ -266,8 +271,9 @@ def main() -> int:
                         help="read this long after STARTUP; any frame then "
                              "is a stale-frame violation (0 disables)")
     parser.add_argument("--jitter-s", type=float, default=0.0,
-                        help="random 0..N s read-dwell before each reset, so "
-                             "the reset does not phase-lock to the traffic")
+                        help="random 0..N s sleep (not a read) before each "
+                             "reset, so the reset does not phase-lock to the "
+                             "traffic")
     parser.add_argument("--seed", type=int, default=None,
                         help="seed for --jitter-s, for a repeatable run")
     parser.add_argument("--health", action="store_true",
@@ -309,7 +315,7 @@ def main() -> int:
             jitter = None
             if args.jitter_s > 0:
                 jitter = round(rng.uniform(0.0, args.jitter_s), 4)
-                heard = (heard or 0) + dwell(reader, jitter)
+                time.sleep(jitter)   # never a read; see the docstring
             t0 = time.perf_counter()
             dev.write(EP_OUT, frame(MESG_SYSTEM_RESET_ID, b"\x00"))
             row = {"i": i, **wait_startup(reader, t0, args.reset_timeout_s)}
