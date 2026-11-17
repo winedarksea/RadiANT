@@ -1,0 +1,35 @@
+﻿100/1000: 0 failed, 0 with violations
+200/1000: 0 failed, 0 with violations
+300/1000: 0 failed, 0 with violations
+400/1000: 0 failed, 0 with violations
+500/1000: 0 failed, 0 with violations
+600/1000: 0 failed, 0 with violations
+700/1000: 0 failed, 0 with violations
+800/1000: 0 failed, 0 with violations
+900/1000: 0 failed, 0 with violations
+1000/1000: 0 failed, 0 with violations
+{
+  "iterations": 1000,
+  "failures": 0,
+  "failed_iterations": [],
+  "failure_rate_pct": 0.0,
+  "failure_ci95_pct": [
+    0.0,
+    0.38267584855551234
+  ],
+  "read_timeout_ms": 1000,
+  "latency_ms": {
+    "p10": 52.6,
+    "p50": 52.663,
+    "p90": 57.844500000000004,
+    "p99": 73.15575,
+    "min": 52.529,
+    "max": 97.867
+  },
+  "within_one_read_timeout": 1000,
+  "violations_before": 0,
+  "violations_after": 0,
+  "violating_iterations": [],
+  "checksum_errors": 0,
+  "discarded_bytes": 0
+}

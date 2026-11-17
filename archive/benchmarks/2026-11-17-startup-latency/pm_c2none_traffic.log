@@ -1,0 +1,39 @@
+﻿  iteration 4: ORDER VIOLATION before=[] after=['0x4E']
+  iteration 29: ORDER VIOLATION before=[] after=['0x4E']
+100/600: 0 failed, 2 with violations
+200/600: 0 failed, 2 with violations
+300/600: 0 failed, 2 with violations
+  iteration 395: ORDER VIOLATION before=[] after=['0x4E']
+400/600: 0 failed, 3 with violations
+500/600: 0 failed, 3 with violations
+600/600: 0 failed, 3 with violations
+{
+  "iterations": 600,
+  "failures": 0,
+  "failed_iterations": [],
+  "failure_rate_pct": 0.0,
+  "failure_ci95_pct": [
+    0.0,
+    0.636170101370071
+  ],
+  "read_timeout_ms": 1000,
+  "latency_ms": {
+    "p10": 3.422,
+    "p50": 3.578,
+    "p90": 4.2177,
+    "p99": 5.4470099999999695,
+    "min": 3.339,
+    "max": 31.023
+  },
+  "within_one_read_timeout": 600,
+  "violations_before": 0,
+  "violations_after": 3,
+  "violating_iterations": [
+    4,
+    29,
+    395
+  ],
+  "checksum_errors": 0,
+  "discarded_bytes": 0,
+  "traffic_open_failures": 0
+}

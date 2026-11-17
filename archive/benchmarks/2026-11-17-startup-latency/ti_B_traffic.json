@@ -1,0 +1,6809 @@
+{
+  "recorded": "2026-11-17T22:05:42.986661+00:00",
+  "endpoint": "COM11",
+  "args": {
+    "serial": null,
+    "port": "COM11",
+    "baud": 57600,
+    "count": 500,
+    "read_timeout_ms": 1000,
+    "reset_timeout_s": 3.0,
+    "reopen": false,
+    "traffic": true,
+    "device_number": 54321,
+    "device_type": 11,
+    "period": 8182,
+    "dwell_s": 0.6,
+    "pause_s": 0.0,
+    "after_ms": 300,
+    "jitter_s": 0.5,
+    "seed": 1,
+    "health": false
+  },
+  "summary": {
+    "iterations": 500,
+    "failures": 0,
+    "failed_iterations": [],
+    "failure_rate_pct": 0.0,
+    "failure_ci95_pct": [
+      0.0,
+      0.7624340461552241
+    ],
+    "read_timeout_ms": 1000,
+    "latency_ms": {
+      "p10": 5.461,
+      "p50": 5.501,
+      "p90": 5.5950999999999995,
+      "p99": 6.08302,
+      "min": 5.321,
+      "max": 18.038
+    },
+    "within_one_read_timeout": 500,
+    "violations_before": 0,
+    "violations_after": 0,
+    "violating_iterations": [],
+    "checksum_errors": 0,
+    "discarded_bytes": 0,
+    "traffic_open_failures": 0
+  },
+  "rows": [
+    {
+      "i": 0,
+      "ok": true,
+      "latency_ms": 5.557,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x40"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0672
+    },
+    {
+      "i": 1,
+      "ok": true,
+      "latency_ms": 5.592,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4237
+    },
+    {
+      "i": 2,
+      "ok": true,
+      "latency_ms": 5.468,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.3819
+    },
+    {
+      "i": 3,
+      "ok": true,
+      "latency_ms": 5.48,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.1275
+    },
+    {
+      "i": 4,
+      "ok": true,
+      "latency_ms": 5.661,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2477
+    },
+    {
+      "i": 5,
+      "ok": true,
+      "latency_ms": 5.535,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2247
+    },
+    {
+      "i": 6,
+      "ok": true,
+      "latency_ms": 5.513,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3258
+    },
+    {
+      "i": 7,
+      "ok": true,
+      "latency_ms": 5.551,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3944
+    },
+    {
+      "i": 8,
+      "ok": true,
+      "latency_ms": 5.465,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.0469
+    },
+    {
+      "i": 9,
+      "ok": true,
+      "latency_ms": 5.457,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0142
+    },
+    {
+      "i": 10,
+      "ok": true,
+      "latency_ms": 5.46,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4179
+    },
+    {
+      "i": 11,
+      "ok": true,
+      "latency_ms": 5.472,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2164
+    },
+    {
+      "i": 12,
+      "ok": true,
+      "latency_ms": 5.499,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3811
+    },
+    {
+      "i": 13,
+      "ok": true,
+      "latency_ms": 5.427,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.0011
+    },
+    {
+      "i": 14,
+      "ok": true,
+      "latency_ms": 5.585,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2227
+    },
+    {
+      "i": 15,
+      "ok": true,
+      "latency_ms": 5.511,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3608
+    },
+    {
+      "i": 16,
+      "ok": true,
+      "latency_ms": 5.455,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.1144
+    },
+    {
+      "i": 17,
+      "ok": true,
+      "latency_ms": 5.497,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4726
+    },
+    {
+      "i": 18,
+      "ok": true,
+      "latency_ms": 5.535,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4507
+    },
+    {
+      "i": 19,
+      "ok": true,
+      "latency_ms": 5.483,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.0153
+    },
+    {
+      "i": 20,
+      "ok": true,
+      "latency_ms": 5.576,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0127
+    },
+    {
+      "i": 21,
+      "ok": true,
+      "latency_ms": 5.469,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2707
+    },
+    {
+      "i": 22,
+      "ok": true,
+      "latency_ms": 5.642,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4696
+    },
+    {
+      "i": 23,
+      "ok": true,
+      "latency_ms": 5.474,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1906
+    },
+    {
+      "i": 24,
+      "ok": true,
+      "latency_ms": 5.522,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.1083
+    },
+    {
+      "i": 25,
+      "ok": true,
+      "latency_ms": 5.486,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2111
+    },
+    {
+      "i": 26,
+      "ok": true,
+      "latency_ms": 5.433,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0145
+    },
+    {
+      "i": 27,
+      "ok": true,
+      "latency_ms": 5.582,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1108
+    },
+    {
+      "i": 28,
+      "ok": true,
+      "latency_ms": 5.588,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2189
+    },
+    {
+      "i": 29,
+      "ok": true,
+      "latency_ms": 5.321,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2479
+    },
+    {
+      "i": 30,
+      "ok": true,
+      "latency_ms": 5.526,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1165
+    },
+    {
+      "i": 31,
+      "ok": true,
+      "latency_ms": 5.486,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.1154
+    },
+    {
+      "i": 32,
+      "ok": true,
+      "latency_ms": 5.548,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.1094
+    },
+    {
+      "i": 33,
+      "ok": true,
+      "latency_ms": 5.483,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2298
+    },
+    {
+      "i": 34,
+      "ok": true,
+      "latency_ms": 5.493,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1449
+    },
+    {
+      "i": 35,
+      "ok": true,
+      "latency_ms": 5.469,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.0107
+    },
+    {
+      "i": 36,
+      "ok": true,
+      "latency_ms": 5.525,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4188
+    },
+    {
+      "i": 37,
+      "ok": true,
+      "latency_ms": 5.462,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2782
+    },
+    {
+      "i": 38,
+      "ok": true,
+      "latency_ms": 5.981,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3211
+    },
+    {
+      "i": 39,
+      "ok": true,
+      "latency_ms": 5.49,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.093
+    },
+    {
+      "i": 40,
+      "ok": true,
+      "latency_ms": 5.567,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4963
+    },
+    {
+      "i": 41,
+      "ok": true,
+      "latency_ms": 5.471,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.43
+    },
+    {
+      "i": 42,
+      "ok": true,
+      "latency_ms": 5.499,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.0604
+    },
+    {
+      "i": 43,
+      "ok": true,
+      "latency_ms": 5.518,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1663
+    },
+    {
+      "i": 44,
+      "ok": true,
+      "latency_ms": 5.459,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.3607
+    },
+    {
+      "i": 45,
+      "ok": true,
+      "latency_ms": 5.505,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.3556
+    },
+    {
+      "i": 46,
+      "ok": true,
+      "latency_ms": 5.468,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4682
+    },
+    {
+      "i": 47,
+      "ok": true,
+      "latency_ms": 5.589,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2111
+    },
+    {
+      "i": 48,
+      "ok": true,
+      "latency_ms": 5.566,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.415
+    },
+    {
+      "i": 49,
+      "ok": true,
+      "latency_ms": 18.038,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.3352
+    },
+    {
+      "i": 50,
+      "ok": true,
+      "latency_ms": 5.481,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1517
+    },
+    {
+      "i": 51,
+      "ok": true,
+      "latency_ms": 5.474,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2938
+    },
+    {
+      "i": 52,
+      "ok": true,
+      "latency_ms": 5.518,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4412
+    },
+    {
+      "i": 53,
+      "ok": true,
+      "latency_ms": 5.577,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4231
+    },
+    {
+      "i": 54,
+      "ok": true,
+      "latency_ms": 5.481,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x40",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2526
+    },
+    {
+      "i": 55,
+      "ok": true,
+      "latency_ms": 5.532,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2945
+    },
+    {
+      "i": 56,
+      "ok": true,
+      "latency_ms": 5.489,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0173
+    },
+    {
+      "i": 57,
+      "ok": true,
+      "latency_ms": 5.52,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1214
+    },
+    {
+      "i": 58,
+      "ok": true,
+      "latency_ms": 5.713,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.3987
+    },
+    {
+      "i": 59,
+      "ok": true,
+      "latency_ms": 5.494,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2072
+    },
+    {
+      "i": 60,
+      "ok": true,
+      "latency_ms": 5.471,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.0865
+    },
+    {
+      "i": 61,
+      "ok": true,
+      "latency_ms": 5.487,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2744
+    },
+    {
+      "i": 62,
+      "ok": true,
+      "latency_ms": 5.49,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3515
+    },
+    {
+      "i": 63,
+      "ok": true,
+      "latency_ms": 5.551,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3372
+    },
+    {
+      "i": 64,
+      "ok": true,
+      "latency_ms": 5.488,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1874
+    },
+    {
+      "i": 65,
+      "ok": true,
+      "latency_ms": 5.604,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2195
+    },
+    {
+      "i": 66,
+      "ok": true,
+      "latency_ms": 5.451,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2542
+    },
+    {
+      "i": 67,
+      "ok": true,
+      "latency_ms": 5.609,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3892
+    },
+    {
+      "i": 68,
+      "ok": true,
+      "latency_ms": 5.452,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2605
+    },
+    {
+      "i": 69,
+      "ok": true,
+      "latency_ms": 5.519,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1966
+    },
+    {
+      "i": 70,
+      "ok": true,
+      "latency_ms": 5.52,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2448
+    },
+    {
+      "i": 71,
+      "ok": true,
+      "latency_ms": 5.439,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0148
+    },
+    {
+      "i": 72,
+      "ok": true,
+      "latency_ms": 5.461,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0217
+    },
+    {
+      "i": 73,
+      "ok": true,
+      "latency_ms": 5.584,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3517
+    },
+    {
+      "i": 74,
+      "ok": true,
+      "latency_ms": 5.603,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4916
+    },
+    {
+      "i": 75,
+      "ok": true,
+      "latency_ms": 5.462,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2966
+    },
+    {
+      "i": 76,
+      "ok": true,
+      "latency_ms": 5.598,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1968
+    },
+    {
+      "i": 77,
+      "ok": true,
+      "latency_ms": 5.548,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.0852
+    },
+    {
+      "i": 78,
+      "ok": true,
+      "latency_ms": 5.413,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2511
+    },
+    {
+      "i": 79,
+      "ok": true,
+      "latency_ms": 5.532,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.491
+    },
+    {
+      "i": 80,
+      "ok": true,
+      "latency_ms": 5.512,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3853
+    },
+    {
+      "i": 81,
+      "ok": true,
+      "latency_ms": 5.589,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2698
+    },
+    {
+      "i": 82,
+      "ok": true,
+      "latency_ms": 5.534,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4301
+    },
+    {
+      "i": 83,
+      "ok": true,
+      "latency_ms": 5.525,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.1161
+    },
+    {
+      "i": 84,
+      "ok": true,
+      "latency_ms": 5.443,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2569
+    },
+    {
+      "i": 85,
+      "ok": true,
+      "latency_ms": 5.505,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4762
+    },
+    {
+      "i": 86,
+      "ok": true,
+      "latency_ms": 5.461,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2889
+    },
+    {
+      "i": 87,
+      "ok": true,
+      "latency_ms": 5.492,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2296
+    },
+    {
+      "i": 88,
+      "ok": true,
+      "latency_ms": 6.083,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1346
+    },
+    {
+      "i": 89,
+      "ok": true,
+      "latency_ms": 5.453,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.274
+    },
+    {
+      "i": 90,
+      "ok": true,
+      "latency_ms": 5.474,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4786
+    },
+    {
+      "i": 91,
+      "ok": true,
+      "latency_ms": 5.522,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0029
+    },
+    {
+      "i": 92,
+      "ok": true,
+      "latency_ms": 5.534,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3918
+    },
+    {
+      "i": 93,
+      "ok": true,
+      "latency_ms": 5.515,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4102
+    },
+    {
+      "i": 94,
+      "ok": true,
+      "latency_ms": 5.58,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4431
+    },
+    {
+      "i": 95,
+      "ok": true,
+      "latency_ms": 5.563,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.3703
+    },
+    {
+      "i": 96,
+      "ok": true,
+      "latency_ms": 5.45,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4046
+    },
+    {
+      "i": 97,
+      "ok": true,
+      "latency_ms": 5.497,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2593
+    },
+    {
+      "i": 98,
+      "ok": true,
+      "latency_ms": 5.494,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2807
+    },
+    {
+      "i": 99,
+      "ok": true,
+      "latency_ms": 5.487,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.213
+    },
+    {
+      "i": 100,
+      "ok": true,
+      "latency_ms": 5.507,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0281
+    },
+    {
+      "i": 101,
+      "ok": true,
+      "latency_ms": 5.525,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.435
+    },
+    {
+      "i": 102,
+      "ok": true,
+      "latency_ms": 5.595,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.285
+    },
+    {
+      "i": 103,
+      "ok": true,
+      "latency_ms": 5.475,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0999
+    },
+    {
+      "i": 104,
+      "ok": true,
+      "latency_ms": 5.49,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2524
+    },
+    {
+      "i": 105,
+      "ok": true,
+      "latency_ms": 6.085,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2425
+    },
+    {
+      "i": 106,
+      "ok": true,
+      "latency_ms": 5.504,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1784
+    },
+    {
+      "i": 107,
+      "ok": true,
+      "latency_ms": 5.497,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.173
+    },
+    {
+      "i": 108,
+      "ok": true,
+      "latency_ms": 5.481,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2692
+    },
+    {
+      "i": 109,
+      "ok": true,
+      "latency_ms": 5.453,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3117
+    },
+    {
+      "i": 110,
+      "ok": true,
+      "latency_ms": 5.537,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3062
+    },
+    {
+      "i": 111,
+      "ok": true,
+      "latency_ms": 5.62,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2291
+    },
+    {
+      "i": 112,
+      "ok": true,
+      "latency_ms": 5.415,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.014
+    },
+    {
+      "i": 113,
+      "ok": true,
+      "latency_ms": 5.488,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1148
+    },
+    {
+      "i": 114,
+      "ok": true,
+      "latency_ms": 5.477,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.0886
+    },
+    {
+      "i": 115,
+      "ok": true,
+      "latency_ms": 5.49,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2922
+    },
+    {
+      "i": 116,
+      "ok": true,
+      "latency_ms": 5.519,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4305
+    },
+    {
+      "i": 117,
+      "ok": true,
+      "latency_ms": 5.493,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.3992
+    },
+    {
+      "i": 118,
+      "ok": true,
+      "latency_ms": 5.491,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.3985
+    },
+    {
+      "i": 119,
+      "ok": true,
+      "latency_ms": 5.514,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4082
+    },
+    {
+      "i": 120,
+      "ok": true,
+      "latency_ms": 5.503,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.1276
+    },
+    {
+      "i": 121,
+      "ok": true,
+      "latency_ms": 5.533,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4209
+    },
+    {
+      "i": 122,
+      "ok": true,
+      "latency_ms": 5.633,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.3366
+    },
+    {
+      "i": 123,
+      "ok": true,
+      "latency_ms": 5.497,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0416
+    },
+    {
+      "i": 124,
+      "ok": true,
+      "latency_ms": 5.439,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0083
+    },
+    {
+      "i": 125,
+      "ok": true,
+      "latency_ms": 5.477,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0073
+    },
+    {
+      "i": 126,
+      "ok": true,
+      "latency_ms": 5.498,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3778
+    },
+    {
+      "i": 127,
+      "ok": true,
+      "latency_ms": 5.548,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.1248
+    },
+    {
+      "i": 128,
+      "ok": true,
+      "latency_ms": 5.473,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.0547
+    },
+    {
+      "i": 129,
+      "ok": true,
+      "latency_ms": 5.759,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x40"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3124
+    },
+    {
+      "i": 130,
+      "ok": true,
+      "latency_ms": 5.563,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1722
+    },
+    {
+      "i": 131,
+      "ok": true,
+      "latency_ms": 5.429,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.0348
+    },
+    {
+      "i": 132,
+      "ok": true,
+      "latency_ms": 5.473,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0798
+    },
+    {
+      "i": 133,
+      "ok": true,
+      "latency_ms": 5.476,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2637
+    },
+    {
+      "i": 134,
+      "ok": true,
+      "latency_ms": 5.631,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0841
+    },
+    {
+      "i": 135,
+      "ok": true,
+      "latency_ms": 5.484,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1365
+    },
+    {
+      "i": 136,
+      "ok": true,
+      "latency_ms": 5.864,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.3558
+    },
+    {
+      "i": 137,
+      "ok": true,
+      "latency_ms": 5.462,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2274
+    },
+    {
+      "i": 138,
+      "ok": true,
+      "latency_ms": 5.559,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.161
+    },
+    {
+      "i": 139,
+      "ok": true,
+      "latency_ms": 6.03,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2369
+    },
+    {
+      "i": 140,
+      "ok": true,
+      "latency_ms": 5.459,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0118
+    },
+    {
+      "i": 141,
+      "ok": true,
+      "latency_ms": 5.503,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1933
+    },
+    {
+      "i": 142,
+      "ok": true,
+      "latency_ms": 5.516,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2105
+    },
+    {
+      "i": 143,
+      "ok": true,
+      "latency_ms": 5.48,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.094
+    },
+    {
+      "i": 144,
+      "ok": true,
+      "latency_ms": 5.518,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0544
+    },
+    {
+      "i": 145,
+      "ok": true,
+      "latency_ms": 5.496,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4499
+    },
+    {
+      "i": 146,
+      "ok": true,
+      "latency_ms": 5.534,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2551
+    },
+    {
+      "i": 147,
+      "ok": true,
+      "latency_ms": 5.491,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1045
+    },
+    {
+      "i": 148,
+      "ok": true,
+      "latency_ms": 5.482,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.3028
+    },
+    {
+      "i": 149,
+      "ok": true,
+      "latency_ms": 5.682,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4085
+    },
+    {
+      "i": 150,
+      "ok": true,
+      "latency_ms": 5.441,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.0104
+    },
+    {
+      "i": 151,
+      "ok": true,
+      "latency_ms": 5.496,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0089
+    },
+    {
+      "i": 152,
+      "ok": true,
+      "latency_ms": 5.569,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0732
+    },
+    {
+      "i": 153,
+      "ok": true,
+      "latency_ms": 5.57,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3594
+    },
+    {
+      "i": 154,
+      "ok": true,
+      "latency_ms": 5.608,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0801
+    },
+    {
+      "i": 155,
+      "ok": true,
+      "latency_ms": 5.486,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3523
+    },
+    {
+      "i": 156,
+      "ok": true,
+      "latency_ms": 5.497,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3391
+    },
+    {
+      "i": 157,
+      "ok": true,
+      "latency_ms": 5.496,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2724
+    },
+    {
+      "i": 158,
+      "ok": true,
+      "latency_ms": 5.596,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1103
+    },
+    {
+      "i": 159,
+      "ok": true,
+      "latency_ms": 5.479,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4878
+    },
+    {
+      "i": 160,
+      "ok": true,
+      "latency_ms": 5.537,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3989
+    },
+    {
+      "i": 161,
+      "ok": true,
+      "latency_ms": 5.475,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2583
+    },
+    {
+      "i": 162,
+      "ok": true,
+      "latency_ms": 5.424,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1116
+    },
+    {
+      "i": 163,
+      "ok": true,
+      "latency_ms": 5.511,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3243
+    },
+    {
+      "i": 164,
+      "ok": true,
+      "latency_ms": 5.472,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1974
+    },
+    {
+      "i": 165,
+      "ok": true,
+      "latency_ms": 5.478,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2879
+    },
+    {
+      "i": 166,
+      "ok": true,
+      "latency_ms": 5.472,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1606
+    },
+    {
+      "i": 167,
+      "ok": true,
+      "latency_ms": 5.439,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.3155
+    },
+    {
+      "i": 168,
+      "ok": true,
+      "latency_ms": 5.482,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0294
+    },
+    {
+      "i": 169,
+      "ok": true,
+      "latency_ms": 5.501,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1493
+    },
+    {
+      "i": 170,
+      "ok": true,
+      "latency_ms": 5.504,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.484
+    },
+    {
+      "i": 171,
+      "ok": true,
+      "latency_ms": 5.492,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4378
+    },
+    {
+      "i": 172,
+      "ok": true,
+      "latency_ms": 5.584,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.1532
+    },
+    {
+      "i": 173,
+      "ok": true,
+      "latency_ms": 5.49,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x40",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4293
+    },
+    {
+      "i": 174,
+      "ok": true,
+      "latency_ms": 5.522,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.1552
+    },
+    {
+      "i": 175,
+      "ok": true,
+      "latency_ms": 5.494,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4696
+    },
+    {
+      "i": 176,
+      "ok": true,
+      "latency_ms": 5.463,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3719
+    },
+    {
+      "i": 177,
+      "ok": true,
+      "latency_ms": 5.481,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2081
+    },
+    {
+      "i": 178,
+      "ok": true,
+      "latency_ms": 5.501,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1262
+    },
+    {
+      "i": 179,
+      "ok": true,
+      "latency_ms": 5.463,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.0042
+    },
+    {
+      "i": 180,
+      "ok": true,
+      "latency_ms": 5.437,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4394
+    },
+    {
+      "i": 181,
+      "ok": true,
+      "latency_ms": 5.443,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x40"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.019
+    },
+    {
+      "i": 182,
+      "ok": true,
+      "latency_ms": 5.492,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4097
+    },
+    {
+      "i": 183,
+      "ok": true,
+      "latency_ms": 5.965,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4811
+    },
+    {
+      "i": 184,
+      "ok": true,
+      "latency_ms": 5.524,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2851
+    },
+    {
+      "i": 185,
+      "ok": true,
+      "latency_ms": 5.515,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0858
+    },
+    {
+      "i": 186,
+      "ok": true,
+      "latency_ms": 5.488,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4339
+    },
+    {
+      "i": 187,
+      "ok": true,
+      "latency_ms": 5.581,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4869
+    },
+    {
+      "i": 188,
+      "ok": true,
+      "latency_ms": 5.468,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.352
+    },
+    {
+      "i": 189,
+      "ok": true,
+      "latency_ms": 5.45,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2544
+    },
+    {
+      "i": 190,
+      "ok": true,
+      "latency_ms": 5.485,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.189
+    },
+    {
+      "i": 191,
+      "ok": true,
+      "latency_ms": 5.491,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.1735
+    },
+    {
+      "i": 192,
+      "ok": true,
+      "latency_ms": 5.516,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.1029
+    },
+    {
+      "i": 193,
+      "ok": true,
+      "latency_ms": 5.485,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3371
+    },
+    {
+      "i": 194,
+      "ok": true,
+      "latency_ms": 5.517,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2165
+    },
+    {
+      "i": 195,
+      "ok": true,
+      "latency_ms": 5.473,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0971
+    },
+    {
+      "i": 196,
+      "ok": true,
+      "latency_ms": 5.455,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0522
+    },
+    {
+      "i": 197,
+      "ok": true,
+      "latency_ms": 5.476,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.333
+    },
+    {
+      "i": 198,
+      "ok": true,
+      "latency_ms": 5.63,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.148
+    },
+    {
+      "i": 199,
+      "ok": true,
+      "latency_ms": 5.465,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2499
+    },
+    {
+      "i": 200,
+      "ok": true,
+      "latency_ms": 5.705,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 1,
+      "jitter_s": 0.1627
+    },
+    {
+      "i": 201,
+      "ok": true,
+      "latency_ms": 5.477,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4358
+    },
+    {
+      "i": 202,
+      "ok": true,
+      "latency_ms": 5.487,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4498
+    },
+    {
+      "i": 203,
+      "ok": true,
+      "latency_ms": 6.611,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.009
+    },
+    {
+      "i": 204,
+      "ok": true,
+      "latency_ms": 5.49,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1004
+    },
+    {
+      "i": 205,
+      "ok": true,
+      "latency_ms": 5.512,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1639
+    },
+    {
+      "i": 206,
+      "ok": true,
+      "latency_ms": 5.511,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x40",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4935
+    },
+    {
+      "i": 207,
+      "ok": true,
+      "latency_ms": 5.498,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3914
+    },
+    {
+      "i": 208,
+      "ok": true,
+      "latency_ms": 5.474,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.1695
+    },
+    {
+      "i": 209,
+      "ok": true,
+      "latency_ms": 5.485,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.1065
+    },
+    {
+      "i": 210,
+      "ok": true,
+      "latency_ms": 5.497,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3372
+    },
+    {
+      "i": 211,
+      "ok": true,
+      "latency_ms": 5.501,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4189
+    },
+    {
+      "i": 212,
+      "ok": true,
+      "latency_ms": 5.493,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4661
+    },
+    {
+      "i": 213,
+      "ok": true,
+      "latency_ms": 5.477,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1719
+    },
+    {
+      "i": 214,
+      "ok": true,
+      "latency_ms": 5.433,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4412
+    },
+    {
+      "i": 215,
+      "ok": true,
+      "latency_ms": 5.428,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.3436
+    },
+    {
+      "i": 216,
+      "ok": true,
+      "latency_ms": 5.522,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2422
+    },
+    {
+      "i": 217,
+      "ok": true,
+      "latency_ms": 5.482,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4928
+    },
+    {
+      "i": 218,
+      "ok": true,
+      "latency_ms": 5.483,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1173
+    },
+    {
+      "i": 219,
+      "ok": true,
+      "latency_ms": 5.473,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.3627
+    },
+    {
+      "i": 220,
+      "ok": true,
+      "latency_ms": 5.542,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.0423
+    },
+    {
+      "i": 221,
+      "ok": true,
+      "latency_ms": 5.54,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0848
+    },
+    {
+      "i": 222,
+      "ok": true,
+      "latency_ms": 5.496,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4555
+    },
+    {
+      "i": 223,
+      "ok": true,
+      "latency_ms": 5.535,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.1065
+    },
+    {
+      "i": 224,
+      "ok": true,
+      "latency_ms": 5.678,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3796
+    },
+    {
+      "i": 225,
+      "ok": true,
+      "latency_ms": 5.535,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.3001
+    },
+    {
+      "i": 226,
+      "ok": true,
+      "latency_ms": 5.463,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4206
+    },
+    {
+      "i": 227,
+      "ok": true,
+      "latency_ms": 5.507,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.1841
+    },
+    {
+      "i": 228,
+      "ok": true,
+      "latency_ms": 5.48,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.1701
+    },
+    {
+      "i": 229,
+      "ok": true,
+      "latency_ms": 5.672,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.1456
+    },
+    {
+      "i": 230,
+      "ok": true,
+      "latency_ms": 5.461,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4337
+    },
+    {
+      "i": 231,
+      "ok": true,
+      "latency_ms": 5.579,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.302
+    },
+    {
+      "i": 232,
+      "ok": true,
+      "latency_ms": 5.522,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4772
+    },
+    {
+      "i": 233,
+      "ok": true,
+      "latency_ms": 5.469,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4436
+    },
+    {
+      "i": 234,
+      "ok": true,
+      "latency_ms": 5.473,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.0677
+    },
+    {
+      "i": 235,
+      "ok": true,
+      "latency_ms": 5.598,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2756
+    },
+    {
+      "i": 236,
+      "ok": true,
+      "latency_ms": 5.571,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0521
+    },
+    {
+      "i": 237,
+      "ok": true,
+      "latency_ms": 5.543,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0196
+    },
+    {
+      "i": 238,
+      "ok": true,
+      "latency_ms": 5.447,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0366
+    },
+    {
+      "i": 239,
+      "ok": true,
+      "latency_ms": 5.504,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4331
+    },
+    {
+      "i": 240,
+      "ok": true,
+      "latency_ms": 5.53,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.3941
+    },
+    {
+      "i": 241,
+      "ok": true,
+      "latency_ms": 5.468,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4143
+    },
+    {
+      "i": 242,
+      "ok": true,
+      "latency_ms": 5.504,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.1704
+    },
+    {
+      "i": 243,
+      "ok": true,
+      "latency_ms": 5.451,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.3076
+    },
+    {
+      "i": 244,
+      "ok": true,
+      "latency_ms": 5.566,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.391
+    },
+    {
+      "i": 245,
+      "ok": true,
+      "latency_ms": 5.567,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.189
+    },
+    {
+      "i": 246,
+      "ok": true,
+      "latency_ms": 5.47,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2854
+    },
+    {
+      "i": 247,
+      "ok": true,
+      "latency_ms": 5.491,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1119
+    },
+    {
+      "i": 248,
+      "ok": true,
+      "latency_ms": 5.483,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0409
+    },
+    {
+      "i": 249,
+      "ok": true,
+      "latency_ms": 5.685,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1334
+    },
+    {
+      "i": 250,
+      "ok": true,
+      "latency_ms": 5.597,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4454
+    },
+    {
+      "i": 251,
+      "ok": true,
+      "latency_ms": 5.447,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2822
+    },
+    {
+      "i": 252,
+      "ok": true,
+      "latency_ms": 5.491,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4625
+    },
+    {
+      "i": 253,
+      "ok": true,
+      "latency_ms": 5.496,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2289
+    },
+    {
+      "i": 254,
+      "ok": true,
+      "latency_ms": 5.617,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1386
+    },
+    {
+      "i": 255,
+      "ok": true,
+      "latency_ms": 5.49,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.3935
+    },
+    {
+      "i": 256,
+      "ok": true,
+      "latency_ms": 5.526,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4139
+    },
+    {
+      "i": 257,
+      "ok": true,
+      "latency_ms": 5.455,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.0062
+    },
+    {
+      "i": 258,
+      "ok": true,
+      "latency_ms": 5.538,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3352
+    },
+    {
+      "i": 259,
+      "ok": true,
+      "latency_ms": 5.469,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0458
+    },
+    {
+      "i": 260,
+      "ok": true,
+      "latency_ms": 5.502,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0576
+    },
+    {
+      "i": 261,
+      "ok": true,
+      "latency_ms": 5.502,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4425
+    },
+    {
+      "i": 262,
+      "ok": true,
+      "latency_ms": 5.488,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.02
+    },
+    {
+      "i": 263,
+      "ok": true,
+      "latency_ms": 5.497,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1198
+    },
+    {
+      "i": 264,
+      "ok": true,
+      "latency_ms": 5.475,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4941
+    },
+    {
+      "i": 265,
+      "ok": true,
+      "latency_ms": 5.908,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2105
+    },
+    {
+      "i": 266,
+      "ok": true,
+      "latency_ms": 5.483,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.0578
+    },
+    {
+      "i": 267,
+      "ok": true,
+      "latency_ms": 5.552,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0837
+    },
+    {
+      "i": 268,
+      "ok": true,
+      "latency_ms": 5.507,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1207
+    },
+    {
+      "i": 269,
+      "ok": true,
+      "latency_ms": 5.49,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.372
+    },
+    {
+      "i": 270,
+      "ok": true,
+      "latency_ms": 5.465,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.0514
+    },
+    {
+      "i": 271,
+      "ok": true,
+      "latency_ms": 5.51,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4554
+    },
+    {
+      "i": 272,
+      "ok": true,
+      "latency_ms": 5.514,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.1891
+    },
+    {
+      "i": 273,
+      "ok": true,
+      "latency_ms": 5.689,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4851
+    },
+    {
+      "i": 274,
+      "ok": true,
+      "latency_ms": 5.5,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4546
+    },
+    {
+      "i": 275,
+      "ok": true,
+      "latency_ms": 5.521,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.147
+    },
+    {
+      "i": 276,
+      "ok": true,
+      "latency_ms": 5.671,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.1267
+    },
+    {
+      "i": 277,
+      "ok": true,
+      "latency_ms": 5.486,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2385
+    },
+    {
+      "i": 278,
+      "ok": true,
+      "latency_ms": 5.489,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0501
+    },
+    {
+      "i": 279,
+      "ok": true,
+      "latency_ms": 5.537,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.326
+    },
+    {
+      "i": 280,
+      "ok": true,
+      "latency_ms": 5.473,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0198
+    },
+    {
+      "i": 281,
+      "ok": true,
+      "latency_ms": 5.457,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0053
+    },
+    {
+      "i": 282,
+      "ok": true,
+      "latency_ms": 5.546,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4913
+    },
+    {
+      "i": 283,
+      "ok": true,
+      "latency_ms": 5.458,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1478
+    },
+    {
+      "i": 284,
+      "ok": true,
+      "latency_ms": 5.712,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2983
+    },
+    {
+      "i": 285,
+      "ok": true,
+      "latency_ms": 5.504,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2249
+    },
+    {
+      "i": 286,
+      "ok": true,
+      "latency_ms": 5.576,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1566
+    },
+    {
+      "i": 287,
+      "ok": true,
+      "latency_ms": 5.498,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.0315
+    },
+    {
+      "i": 288,
+      "ok": true,
+      "latency_ms": 5.475,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4567
+    },
+    {
+      "i": 289,
+      "ok": true,
+      "latency_ms": 5.519,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4849
+    },
+    {
+      "i": 290,
+      "ok": true,
+      "latency_ms": 5.471,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4849
+    },
+    {
+      "i": 291,
+      "ok": true,
+      "latency_ms": 5.472,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0557
+    },
+    {
+      "i": 292,
+      "ok": true,
+      "latency_ms": 5.518,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1076
+    },
+    {
+      "i": 293,
+      "ok": true,
+      "latency_ms": 5.559,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.3089
+    },
+    {
+      "i": 294,
+      "ok": true,
+      "latency_ms": 5.463,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.49
+    },
+    {
+      "i": 295,
+      "ok": true,
+      "latency_ms": 5.479,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2715
+    },
+    {
+      "i": 296,
+      "ok": true,
+      "latency_ms": 5.535,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3441
+    },
+    {
+      "i": 297,
+      "ok": true,
+      "latency_ms": 5.492,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3309
+    },
+    {
+      "i": 298,
+      "ok": true,
+      "latency_ms": 5.587,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1295
+    },
+    {
+      "i": 299,
+      "ok": true,
+      "latency_ms": 5.499,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2708
+    },
+    {
+      "i": 300,
+      "ok": true,
+      "latency_ms": 5.482,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1537
+    },
+    {
+      "i": 301,
+      "ok": true,
+      "latency_ms": 5.565,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.1232
+    },
+    {
+      "i": 302,
+      "ok": true,
+      "latency_ms": 5.47,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.0407
+    },
+    {
+      "i": 303,
+      "ok": true,
+      "latency_ms": 5.507,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1404
+    },
+    {
+      "i": 304,
+      "ok": true,
+      "latency_ms": 5.52,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4917
+    },
+    {
+      "i": 305,
+      "ok": true,
+      "latency_ms": 5.529,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.224
+    },
+    {
+      "i": 306,
+      "ok": true,
+      "latency_ms": 5.527,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.326
+    },
+    {
+      "i": 307,
+      "ok": true,
+      "latency_ms": 5.533,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3217
+    },
+    {
+      "i": 308,
+      "ok": true,
+      "latency_ms": 5.667,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4704
+    },
+    {
+      "i": 309,
+      "ok": true,
+      "latency_ms": 5.514,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1952
+    },
+    {
+      "i": 310,
+      "ok": true,
+      "latency_ms": 5.477,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.1534
+    },
+    {
+      "i": 311,
+      "ok": true,
+      "latency_ms": 5.46,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.1636
+    },
+    {
+      "i": 312,
+      "ok": true,
+      "latency_ms": 5.554,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.1584
+    },
+    {
+      "i": 313,
+      "ok": true,
+      "latency_ms": 5.555,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4236
+    },
+    {
+      "i": 314,
+      "ok": true,
+      "latency_ms": 5.503,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4468
+    },
+    {
+      "i": 315,
+      "ok": true,
+      "latency_ms": 5.456,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.1514
+    },
+    {
+      "i": 316,
+      "ok": true,
+      "latency_ms": 5.476,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.1672
+    },
+    {
+      "i": 317,
+      "ok": true,
+      "latency_ms": 5.489,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2721
+    },
+    {
+      "i": 318,
+      "ok": true,
+      "latency_ms": 5.523,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2895
+    },
+    {
+      "i": 319,
+      "ok": true,
+      "latency_ms": 5.609,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.298
+    },
+    {
+      "i": 320,
+      "ok": true,
+      "latency_ms": 5.523,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1225
+    },
+    {
+      "i": 321,
+      "ok": true,
+      "latency_ms": 5.567,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.0102
+    },
+    {
+      "i": 322,
+      "ok": true,
+      "latency_ms": 5.532,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1219
+    },
+    {
+      "i": 323,
+      "ok": true,
+      "latency_ms": 5.521,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.0362
+    },
+    {
+      "i": 324,
+      "ok": true,
+      "latency_ms": 5.484,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2756
+    },
+    {
+      "i": 325,
+      "ok": true,
+      "latency_ms": 5.555,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0355
+    },
+    {
+      "i": 326,
+      "ok": true,
+      "latency_ms": 5.478,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0376
+    },
+    {
+      "i": 327,
+      "ok": true,
+      "latency_ms": 5.524,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3177
+    },
+    {
+      "i": 328,
+      "ok": true,
+      "latency_ms": 5.567,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1454
+    },
+    {
+      "i": 329,
+      "ok": true,
+      "latency_ms": 5.567,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.3961
+    },
+    {
+      "i": 330,
+      "ok": true,
+      "latency_ms": 5.617,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2466
+    },
+    {
+      "i": 331,
+      "ok": true,
+      "latency_ms": 5.49,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4313
+    },
+    {
+      "i": 332,
+      "ok": true,
+      "latency_ms": 5.467,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.0771
+    },
+    {
+      "i": 333,
+      "ok": true,
+      "latency_ms": 5.428,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2507
+    },
+    {
+      "i": 334,
+      "ok": true,
+      "latency_ms": 5.488,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3975
+    },
+    {
+      "i": 335,
+      "ok": true,
+      "latency_ms": 5.533,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.0386
+    },
+    {
+      "i": 336,
+      "ok": true,
+      "latency_ms": 5.596,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4746
+    },
+    {
+      "i": 337,
+      "ok": true,
+      "latency_ms": 5.475,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0866
+    },
+    {
+      "i": 338,
+      "ok": true,
+      "latency_ms": 5.485,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3881
+    },
+    {
+      "i": 339,
+      "ok": true,
+      "latency_ms": 5.507,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4924
+    },
+    {
+      "i": 340,
+      "ok": true,
+      "latency_ms": 5.567,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4108
+    },
+    {
+      "i": 341,
+      "ok": true,
+      "latency_ms": 5.503,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.1599
+    },
+    {
+      "i": 342,
+      "ok": true,
+      "latency_ms": 5.472,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.0534
+    },
+    {
+      "i": 343,
+      "ok": true,
+      "latency_ms": 5.521,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2572
+    },
+    {
+      "i": 344,
+      "ok": true,
+      "latency_ms": 5.493,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4597
+    },
+    {
+      "i": 345,
+      "ok": true,
+      "latency_ms": 5.504,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.1467
+    },
+    {
+      "i": 346,
+      "ok": true,
+      "latency_ms": 5.587,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4469
+    },
+    {
+      "i": 347,
+      "ok": true,
+      "latency_ms": 5.51,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.0708
+    },
+    {
+      "i": 348,
+      "ok": true,
+      "latency_ms": 5.552,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4552
+    },
+    {
+      "i": 349,
+      "ok": true,
+      "latency_ms": 5.45,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.0159
+    },
+    {
+      "i": 350,
+      "ok": true,
+      "latency_ms": 5.518,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.158
+    },
+    {
+      "i": 351,
+      "ok": true,
+      "latency_ms": 5.584,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4515
+    },
+    {
+      "i": 352,
+      "ok": true,
+      "latency_ms": 5.581,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4019
+    },
+    {
+      "i": 353,
+      "ok": true,
+      "latency_ms": 5.548,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4536
+    },
+    {
+      "i": 354,
+      "ok": true,
+      "latency_ms": 5.494,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4204
+    },
+    {
+      "i": 355,
+      "ok": true,
+      "latency_ms": 5.489,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.3731
+    },
+    {
+      "i": 356,
+      "ok": true,
+      "latency_ms": 5.501,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.3448
+    },
+    {
+      "i": 357,
+      "ok": true,
+      "latency_ms": 5.51,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0891
+    },
+    {
+      "i": 358,
+      "ok": true,
+      "latency_ms": 5.456,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2163
+    },
+    {
+      "i": 359,
+      "ok": true,
+      "latency_ms": 5.453,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0789
+    },
+    {
+      "i": 360,
+      "ok": true,
+      "latency_ms": 5.505,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3574
+    },
+    {
+      "i": 361,
+      "ok": true,
+      "latency_ms": 5.51,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3339
+    },
+    {
+      "i": 362,
+      "ok": true,
+      "latency_ms": 5.478,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1263
+    },
+    {
+      "i": 363,
+      "ok": true,
+      "latency_ms": 5.464,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.0322
+    },
+    {
+      "i": 364,
+      "ok": true,
+      "latency_ms": 5.523,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4817
+    },
+    {
+      "i": 365,
+      "ok": true,
+      "latency_ms": 5.541,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4041
+    },
+    {
+      "i": 366,
+      "ok": true,
+      "latency_ms": 5.567,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2746
+    },
+    {
+      "i": 367,
+      "ok": true,
+      "latency_ms": 5.51,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2707
+    },
+    {
+      "i": 368,
+      "ok": true,
+      "latency_ms": 5.514,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4256
+    },
+    {
+      "i": 369,
+      "ok": true,
+      "latency_ms": 5.498,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2267
+    },
+    {
+      "i": 370,
+      "ok": true,
+      "latency_ms": 5.572,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1979
+    },
+    {
+      "i": 371,
+      "ok": true,
+      "latency_ms": 5.515,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.1693
+    },
+    {
+      "i": 372,
+      "ok": true,
+      "latency_ms": 5.473,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.129
+    },
+    {
+      "i": 373,
+      "ok": true,
+      "latency_ms": 5.498,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.0122
+    },
+    {
+      "i": 374,
+      "ok": true,
+      "latency_ms": 5.528,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3232
+    },
+    {
+      "i": 375,
+      "ok": true,
+      "latency_ms": 5.541,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2083
+    },
+    {
+      "i": 376,
+      "ok": true,
+      "latency_ms": 5.516,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2853
+    },
+    {
+      "i": 377,
+      "ok": true,
+      "latency_ms": 5.475,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0312
+    },
+    {
+      "i": 378,
+      "ok": true,
+      "latency_ms": 5.698,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1775
+    },
+    {
+      "i": 379,
+      "ok": true,
+      "latency_ms": 5.478,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.0691
+    },
+    {
+      "i": 380,
+      "ok": true,
+      "latency_ms": 5.523,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0626
+    },
+    {
+      "i": 381,
+      "ok": true,
+      "latency_ms": 5.503,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1296
+    },
+    {
+      "i": 382,
+      "ok": true,
+      "latency_ms": 5.499,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4145
+    },
+    {
+      "i": 383,
+      "ok": true,
+      "latency_ms": 5.527,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.1989
+    },
+    {
+      "i": 384,
+      "ok": true,
+      "latency_ms": 5.475,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2005
+    },
+    {
+      "i": 385,
+      "ok": true,
+      "latency_ms": 5.484,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.3062
+    },
+    {
+      "i": 386,
+      "ok": true,
+      "latency_ms": 5.507,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1168
+    },
+    {
+      "i": 387,
+      "ok": true,
+      "latency_ms": 5.445,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.0037
+    },
+    {
+      "i": 388,
+      "ok": true,
+      "latency_ms": 5.456,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2644
+    },
+    {
+      "i": 389,
+      "ok": true,
+      "latency_ms": 5.431,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2504
+    },
+    {
+      "i": 390,
+      "ok": true,
+      "latency_ms": 5.51,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3244
+    },
+    {
+      "i": 391,
+      "ok": true,
+      "latency_ms": 5.485,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2192
+    },
+    {
+      "i": 392,
+      "ok": true,
+      "latency_ms": 5.645,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3433
+    },
+    {
+      "i": 393,
+      "ok": true,
+      "latency_ms": 5.506,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3657
+    },
+    {
+      "i": 394,
+      "ok": true,
+      "latency_ms": 5.636,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.1192
+    },
+    {
+      "i": 395,
+      "ok": true,
+      "latency_ms": 5.558,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2475
+    },
+    {
+      "i": 396,
+      "ok": true,
+      "latency_ms": 5.535,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2394
+    },
+    {
+      "i": 397,
+      "ok": true,
+      "latency_ms": 5.476,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1125
+    },
+    {
+      "i": 398,
+      "ok": true,
+      "latency_ms": 5.499,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2061
+    },
+    {
+      "i": 399,
+      "ok": true,
+      "latency_ms": 5.488,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2802
+    },
+    {
+      "i": 400,
+      "ok": true,
+      "latency_ms": 5.468,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4535
+    },
+    {
+      "i": 401,
+      "ok": true,
+      "latency_ms": 5.524,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4589
+    },
+    {
+      "i": 402,
+      "ok": true,
+      "latency_ms": 5.48,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1376
+    },
+    {
+      "i": 403,
+      "ok": true,
+      "latency_ms": 5.502,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.3232
+    },
+    {
+      "i": 404,
+      "ok": true,
+      "latency_ms": 5.501,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0241
+    },
+    {
+      "i": 405,
+      "ok": true,
+      "latency_ms": 5.557,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0358
+    },
+    {
+      "i": 406,
+      "ok": true,
+      "latency_ms": 5.542,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2558
+    },
+    {
+      "i": 407,
+      "ok": true,
+      "latency_ms": 5.582,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4387
+    },
+    {
+      "i": 408,
+      "ok": true,
+      "latency_ms": 5.481,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.0797
+    },
+    {
+      "i": 409,
+      "ok": true,
+      "latency_ms": 5.483,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.383
+    },
+    {
+      "i": 410,
+      "ok": true,
+      "latency_ms": 5.614,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4415
+    },
+    {
+      "i": 411,
+      "ok": true,
+      "latency_ms": 5.486,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.1559
+    },
+    {
+      "i": 412,
+      "ok": true,
+      "latency_ms": 5.467,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.3463
+    },
+    {
+      "i": 413,
+      "ok": true,
+      "latency_ms": 5.473,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4245
+    },
+    {
+      "i": 414,
+      "ok": true,
+      "latency_ms": 5.477,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.1858
+    },
+    {
+      "i": 415,
+      "ok": true,
+      "latency_ms": 5.493,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.3506
+    },
+    {
+      "i": 416,
+      "ok": true,
+      "latency_ms": 5.491,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3682
+    },
+    {
+      "i": 417,
+      "ok": true,
+      "latency_ms": 5.477,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2973
+    },
+    {
+      "i": 418,
+      "ok": true,
+      "latency_ms": 5.488,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4281
+    },
+    {
+      "i": 419,
+      "ok": true,
+      "latency_ms": 5.477,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4483
+    },
+    {
+      "i": 420,
+      "ok": true,
+      "latency_ms": 5.617,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.48
+    },
+    {
+      "i": 421,
+      "ok": true,
+      "latency_ms": 5.484,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2856
+    },
+    {
+      "i": 422,
+      "ok": true,
+      "latency_ms": 5.641,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0881
+    },
+    {
+      "i": 423,
+      "ok": true,
+      "latency_ms": 5.581,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1253
+    },
+    {
+      "i": 424,
+      "ok": true,
+      "latency_ms": 5.549,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.1088
+    },
+    {
+      "i": 425,
+      "ok": true,
+      "latency_ms": 6.144,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2848
+    },
+    {
+      "i": 426,
+      "ok": true,
+      "latency_ms": 5.6,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3789
+    },
+    {
+      "i": 427,
+      "ok": true,
+      "latency_ms": 5.433,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.0261
+    },
+    {
+      "i": 428,
+      "ok": true,
+      "latency_ms": 5.504,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3408
+    },
+    {
+      "i": 429,
+      "ok": true,
+      "latency_ms": 5.5,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3586
+    },
+    {
+      "i": 430,
+      "ok": true,
+      "latency_ms": 5.504,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.174
+    },
+    {
+      "i": 431,
+      "ok": true,
+      "latency_ms": 5.594,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2575
+    },
+    {
+      "i": 432,
+      "ok": true,
+      "latency_ms": 5.489,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0824
+    },
+    {
+      "i": 433,
+      "ok": true,
+      "latency_ms": 5.479,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3649
+    },
+    {
+      "i": 434,
+      "ok": true,
+      "latency_ms": 5.546,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.0204
+    },
+    {
+      "i": 435,
+      "ok": true,
+      "latency_ms": 5.492,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4906
+    },
+    {
+      "i": 436,
+      "ok": true,
+      "latency_ms": 5.639,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.404
+    },
+    {
+      "i": 437,
+      "ok": true,
+      "latency_ms": 9.105,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.3142
+    },
+    {
+      "i": 438,
+      "ok": true,
+      "latency_ms": 5.465,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1338
+    },
+    {
+      "i": 439,
+      "ok": true,
+      "latency_ms": 5.553,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4564
+    },
+    {
+      "i": 440,
+      "ok": true,
+      "latency_ms": 5.49,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4797
+    },
+    {
+      "i": 441,
+      "ok": true,
+      "latency_ms": 5.511,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0696
+    },
+    {
+      "i": 442,
+      "ok": true,
+      "latency_ms": 5.501,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3879
+    },
+    {
+      "i": 443,
+      "ok": true,
+      "latency_ms": 5.496,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.421
+    },
+    {
+      "i": 444,
+      "ok": true,
+      "latency_ms": 5.501,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.3299
+    },
+    {
+      "i": 445,
+      "ok": true,
+      "latency_ms": 5.474,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3502
+    },
+    {
+      "i": 446,
+      "ok": true,
+      "latency_ms": 5.594,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2225
+    },
+    {
+      "i": 447,
+      "ok": true,
+      "latency_ms": 5.602,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4622
+    },
+    {
+      "i": 448,
+      "ok": true,
+      "latency_ms": 5.519,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4856
+    },
+    {
+      "i": 449,
+      "ok": true,
+      "latency_ms": 5.581,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1912
+    },
+    {
+      "i": 450,
+      "ok": true,
+      "latency_ms": 5.578,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4014
+    },
+    {
+      "i": 451,
+      "ok": true,
+      "latency_ms": 5.468,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2165
+    },
+    {
+      "i": 452,
+      "ok": true,
+      "latency_ms": 5.445,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0824
+    },
+    {
+      "i": 453,
+      "ok": true,
+      "latency_ms": 5.516,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1627
+    },
+    {
+      "i": 454,
+      "ok": true,
+      "latency_ms": 5.524,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.0632
+    },
+    {
+      "i": 455,
+      "ok": true,
+      "latency_ms": 5.504,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4544
+    },
+    {
+      "i": 456,
+      "ok": true,
+      "latency_ms": 5.506,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4797
+    },
+    {
+      "i": 457,
+      "ok": true,
+      "latency_ms": 5.579,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0596
+    },
+    {
+      "i": 458,
+      "ok": true,
+      "latency_ms": 5.499,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3003
+    },
+    {
+      "i": 459,
+      "ok": true,
+      "latency_ms": 5.555,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2041
+    },
+    {
+      "i": 460,
+      "ok": true,
+      "latency_ms": 5.564,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.059
+    },
+    {
+      "i": 461,
+      "ok": true,
+      "latency_ms": 5.526,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1477
+    },
+    {
+      "i": 462,
+      "ok": true,
+      "latency_ms": 5.546,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.1241
+    },
+    {
+      "i": 463,
+      "ok": true,
+      "latency_ms": 5.477,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.3748
+    },
+    {
+      "i": 464,
+      "ok": true,
+      "latency_ms": 5.418,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.002
+    },
+    {
+      "i": 465,
+      "ok": true,
+      "latency_ms": 5.541,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0949
+    },
+    {
+      "i": 466,
+      "ok": true,
+      "latency_ms": 5.509,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2194
+    },
+    {
+      "i": 467,
+      "ok": true,
+      "latency_ms": 5.516,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0105
+    },
+    {
+      "i": 468,
+      "ok": true,
+      "latency_ms": 5.498,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3138
+    },
+    {
+      "i": 469,
+      "ok": true,
+      "latency_ms": 5.488,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3028
+    },
+    {
+      "i": 470,
+      "ok": true,
+      "latency_ms": 5.473,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4177
+    },
+    {
+      "i": 471,
+      "ok": true,
+      "latency_ms": 5.483,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.1033
+    },
+    {
+      "i": 472,
+      "ok": true,
+      "latency_ms": 5.479,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1424
+    },
+    {
+      "i": 473,
+      "ok": true,
+      "latency_ms": 5.459,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2712
+    },
+    {
+      "i": 474,
+      "ok": true,
+      "latency_ms": 5.477,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1366
+    },
+    {
+      "i": 475,
+      "ok": true,
+      "latency_ms": 5.494,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2929
+    },
+    {
+      "i": 476,
+      "ok": true,
+      "latency_ms": 5.488,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1254
+    },
+    {
+      "i": 477,
+      "ok": true,
+      "latency_ms": 5.494,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.3418
+    },
+    {
+      "i": 478,
+      "ok": true,
+      "latency_ms": 5.549,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3955
+    },
+    {
+      "i": 479,
+      "ok": true,
+      "latency_ms": 5.502,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4043
+    },
+    {
+      "i": 480,
+      "ok": true,
+      "latency_ms": 5.612,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4868
+    },
+    {
+      "i": 481,
+      "ok": true,
+      "latency_ms": 5.574,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2727
+    },
+    {
+      "i": 482,
+      "ok": true,
+      "latency_ms": 5.539,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2454
+    },
+    {
+      "i": 483,
+      "ok": true,
+      "latency_ms": 5.523,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4278
+    },
+    {
+      "i": 484,
+      "ok": true,
+      "latency_ms": 5.506,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.3845
+    },
+    {
+      "i": 485,
+      "ok": true,
+      "latency_ms": 5.537,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2853
+    },
+    {
+      "i": 486,
+      "ok": true,
+      "latency_ms": 5.501,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1916
+    },
+    {
+      "i": 487,
+      "ok": true,
+      "latency_ms": 5.467,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.142
+    },
+    {
+      "i": 488,
+      "ok": true,
+      "latency_ms": 5.479,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.0541
+    },
+    {
+      "i": 489,
+      "ok": true,
+      "latency_ms": 5.485,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4038
+    },
+    {
+      "i": 490,
+      "ok": true,
+      "latency_ms": 5.478,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.059
+    },
+    {
+      "i": 491,
+      "ok": true,
+      "latency_ms": 5.561,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3736
+    },
+    {
+      "i": 492,
+      "ok": true,
+      "latency_ms": 5.467,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.2726
+    },
+    {
+      "i": 493,
+      "ok": true,
+      "latency_ms": 5.495,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.4825
+    },
+    {
+      "i": 494,
+      "ok": true,
+      "latency_ms": 5.516,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.3805
+    },
+    {
+      "i": 495,
+      "ok": true,
+      "latency_ms": 5.5,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 3,
+      "jitter_s": 0.4868
+    },
+    {
+      "i": 496,
+      "ok": true,
+      "latency_ms": 5.559,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.0683
+    },
+    {
+      "i": 497,
+      "ok": true,
+      "latency_ms": 5.43,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2502
+    },
+    {
+      "i": 498,
+      "ok": true,
+      "latency_ms": 5.56,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E",
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.2863
+    },
+    {
+      "i": 499,
+      "ok": true,
+      "latency_ms": 5.479,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x4E"
+      ],
+      "violations_before": [],
+      "frames_after": [],
+      "frames_dwell": 2,
+      "jitter_s": 0.1556
+    }
+  ]
+}

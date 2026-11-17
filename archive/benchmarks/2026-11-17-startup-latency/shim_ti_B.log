@@ -1,0 +1,27 @@
+12979.385212 t779104 usbxp === DSI_SiUSBXp_3_1 shim loaded: pid 752672, wall 2026-11-17T16:42:14.680006 local, log level 2 ===
+12979.385333 t779104 usbxp port COM11 (from RADIANT_ANT_COM)
+12979.385782 t779104 usbxp SI_GetNumDevices -> 1 (COM11)
+12979.385833 t779104 usbxp SI_GetProductString(dev=0, flags=3)
+12979.385894 t779104 usbxp SI_GetProductString(dev=0, flags=4)
+12979.385906 t779104 usbxp SI_GetProductString(dev=0, flags=0)
+12979.385921 t779104 usbxp SI_GetProductString(dev=0, flags=1)
+12979.478914 t779104 cp210x === DSI_CP210xManufacturing_3_1 shim loaded: pid 752672, wall 2026-11-17T16:42:14.774044 local, log level 2 ===
+12979.482580 t779104 usbxp opened \\.\COM11
+12979.482605 t779104 usbxp SI_Open(0) -> ok
+12979.482618 t779104 usbxp SI_SetTimeouts r=1000 w=3000
+12979.485808 t779104 usbxp SI_SetBaudRate 57600
+12979.485826 t779104 usbxp SI_SetLineControl 0x0800 (accepted, 8N1 kept)
+12979.485832 t779104 usbxp SI_SetFlowControl (accepted, none used)
+12979.485843 t779104 usbxp SI_FlushBuffers tx=1 rx=1
+12979.486260 t779104 usbxp SI_Write 7/7 in 0.096 ms id=0x4A: A4 01 4A 00 EF 00 00
+12979.491189 t780120 usbxp SI_Read 1/1 in 4.997 ms: A4
+12979.491338 t780120 usbxp SI_Read 1/1 in 0.098 ms: 01
+12979.491493 t780120 usbxp SI_Read 1/1 in 0.132 ms: 6F
+12979.491673 t780120 usbxp SI_Read 1/1 in 0.166 ms: 20
+12979.491837 t780120 usbxp SI_Read 1/1 in 0.152 ms: EA
+12980.512233 t780120 usbxp SI_Read 0/1 x2 over 1020.3 ms (timeouts)
+12981.514246 t780120 usbxp SI_Read 0/1 x1 over 1002.0 ms (timeouts)
+12981.514347 t779104 usbxp SI_SetFlowControl (accepted, none used)
+12981.514393 t779104 usbxp SI_FlushBuffers tx=1 rx=1
+12981.514897 t779104 usbxp closed port
+12981.514918 t779104 usbxp SI_Close
