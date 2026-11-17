@@ -13,6 +13,14 @@ reads.
 
 ### Fixed
 
+- **TI: two tracked channels no longer share a receive window the radio cannot
+  hear.** The CC26x2 tells sync words apart with a correlator, and two words
+  1-3 bits apart leave it deaf to both (0 of 30 frames at 1 bit). The search
+  already kept its pairs apart; merged tracking windows did not. The scheduler
+  now gives such a channel its own window. The default TI build was not exposed
+  with ANT+ sensors, because its hardware sync word is the ANT+ network address
+  every sensor shares. A `ti_long_match.conf` build was exposed for about a
+  third of sensor pairs (device numbers whose low bytes are 1-3 bits apart).
 - **A slave that acquires its sensor now hears the next frame too.** When the
   only searching channel acquired, the search kept listening for the rest of
   its dwell. A sensor found early in a dwell then had its second frame dropped

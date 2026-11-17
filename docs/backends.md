@@ -385,6 +385,23 @@ same word cannot match anything the window did not ask for. That is reasoning
 about a comparator. Two identical templates are zero bits apart, and it cost
 454 `EVENT_RX_FAIL` against one packet received.
 
+The tracked merge honours the field too (scheduler rule 6, 2026-11-16).
+`arm_rx_window()` will not put two filters in one window when their
+hardware-matched bytes are 1 to `min_filter_hamming_bits - 1` bits apart. The
+member gets its own window, or is reported MISSED, rather than leaving both
+deaf. Distance 0 (one shared sync word) still merges. The predicate,
+`radiant_rx_filters_separable()`, lives in the HAL header, so the scheduler,
+the test fake and the cc26xx `rx_arm()` (which refuses such a window with
+`ENOTSUP`) cannot disagree. Which builds the rule affects depends on how many
+address bytes the hardware matches:
+
+- **Default (short match, 2 bytes).** The sync word is the network address,
+  `A6 C5` on every ANT+ channel, so ANT+-only tracking never meets the rule.
+  It binds only on two networks whose addresses are 1-3 bits apart.
+- **`ti_long_match.conf` (3 bytes, `A6 C5 devlo`).** For any `devnum_lo`, 92
+  of the 256 possible partners (36 %) are 1-3 bits away. Those pairs no longer
+  share a window.
+
 `max_filters` is the one to read twice. There is no wildcard field in
 `struct radiant_rx_filter`, because no planned backend can express "any device
 number": the shortest on-air address the nRF RADIO will match is 3 bytes, so
