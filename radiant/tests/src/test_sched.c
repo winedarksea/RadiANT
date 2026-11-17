@@ -959,7 +959,9 @@ ZTEST(radiant_sched, test_rule6_is_mirrored_by_the_late_join)
 	caps_ti_like(3u);
 	set_track_devnum(0u, 0x1000u);
 	set_track_devnum(1u, 0x1001u); /* 1 bit from channel 0 */
-	set_track_devnum(2u, 0x100Fu); /* 4 bits from channel 0 */
+	/* 4 bits from channel 0 and 5 from channel 1: the rebuild may pick
+	 * either of those as leader, and channel 2 must fit both. */
+	set_track_devnum(2u, 0x101Eu);
 	bring_up();
 
 	open = radiant_radio_now() + 100000u;
@@ -980,9 +982,10 @@ ZTEST(radiant_sched, test_rule6_is_mirrored_by_the_late_join)
 	zassert_equal(2u, fake_radio_arm(1u)->n_filters);
 
 	fake_radio_advance_to(open + TEST_WINDOW_US + 1u);
-	zassert_equal(1u, log.ok_count[0]);
 	zassert_equal(1u, log.ok_count[2]);
-	zassert_equal(1u, log.missed_count[1]);
+	/* Channels 0 and 1 are never in one window: one is served, one missed. */
+	zassert_equal(1u, log.ok_count[0] + log.ok_count[1]);
+	zassert_equal(1u, log.missed_count[0] + log.missed_count[1]);
 
 	assert_every_window_bounded();
 	finish();
