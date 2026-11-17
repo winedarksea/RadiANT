@@ -99,6 +99,11 @@ PAGES: dict[int, tuple[str, list[str]]] = {
     12: ("stale", ["stale_rx_frame", "stale_rx_end", "stale_rx_filter_index",
                    "stale_tx", "stale_ed", "reserved_5", "reserved_6",
                    "reserved_7"]),
+    # 2026-11-17 transfer outcomes, radiant_api_stats (TODO item 3). All
+    # counts; 6-7 reserved (always 0xFFFFFFFF until given a meaning).
+    13: ("xfer", ["xfer_watchdogs", "xfer_no_opener", "xfer_lost_track",
+                  "xfer_reacquired", "xfer_bad_ack", "xfer_radio_failed",
+                  "reserved_6", "reserved_7"]),
 }
 # Fields that are a level (min/max/last), not a running count: a difference
 # means nothing, so --diff reports the later value.

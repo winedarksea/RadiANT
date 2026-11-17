@@ -369,6 +369,7 @@ static struct k_thread api_event_thread_data;
 
 static void api_event_thread(void *a, void *b, void *c);
 static void api_pump_locked(void);
+static void api_ack_pending_lost_track(uint8_t ch);
 
 /* Port hooks that radiant_event.c declares but leaves undefined, so a
  * build that omits one fails to link. */
@@ -444,6 +445,13 @@ void radiant_channel_event_out(uint8_t channel, uint8_t event_code)
 	}
 #endif
 	(void)radiant_event_post_channel_event(channel, event_code);
+	/* After the event, as the Garmin USB-m orders them (GO_TO_SEARCH, then
+	 * TX_FAILED about 1 ms later, 43 of 43 in the 2026-11-15 22:06 capture).
+	 * A searching channel can't open the command's slot, so holding it to
+	 * its deadline only refuses the host's next command (TODO item 3). */
+	if (event_code == (uint8_t)ANTW_EVENT_RX_FAIL_GO_TO_SEARCH) {
+		api_ack_pending_lost_track(channel);
+	}
 }
 
 /* ---------------------------------------------------------------------------
@@ -1252,6 +1260,25 @@ static void api_ack_pending_fail(uint8_t ch)
 	radiant_event_crit_exit(key);
 }
 
+/* The channel dropped to search with a command still waiting for its
+ * opener: fail it now rather than at its deadline. Only ack_pending: a
+ * transfer the engine already started ends through its own terminal, and
+ * bcast_pending simply waits. Radio callback context. */
+static void api_ack_pending_lost_track(uint8_t ch)
+{
+	unsigned int key;
+
+	if (!api_ch_valid(ch)) {
+		return;
+	}
+	key = radiant_event_crit_enter();
+	if (api_ch[ch].ack_pending) {
+		api_stats.xfer_pending_lost_track++;
+		api_ack_pending_fail(ch);
+	}
+	radiant_event_crit_exit(key);
+}
+
 /* ---------------------------------------------------------------------------
  * The search
  * ---------------------------------------------------------------------------
@@ -1491,6 +1518,32 @@ static void api_search_acquired(uint8_t channel,
 		 * posted nothing above, so wake the thread here too. */
 		if (api_search_slot == channel) {
 			radiant_event_wakeup();
+		}
+	}
+
+	/*
+	 * A command held while the channel searched gets the reacquiring frame
+	 * as its opener, as a tracked frame would give it (TODO item 3: in the
+	 * 2026-11-15 21:53 ride the master was heard 50 ms before the deadline
+	 * and the command still expired). After radiant_search_end(), so no
+	 * search bookkeeping for this channel follows the TX request.
+	 *
+	 * Not on the sweep's carrier: radiant_sched_request_tx() drops the
+	 * channel's slot without telling its owner, which there is the armed
+	 * scan chunk, so the search would lose its carrier silently. The
+	 * carrier's next tracked frame, a period later, sends the command if it
+	 * is still inside its deadline. api_ack_pending_send() checks the rest
+	 * (secured, TRACKING, idle engine, deadline).
+	 */
+	if (post && !is_scan && api_ch[channel].ack_pending &&
+	    api_search_slot != channel &&
+	    !radiant_channel_is_master(channel) &&
+	    radiant_frame_msg_type(r->frame.ctrl_byte) == RADIANT_MSG_BROADCAST &&
+	    r->t_sync_exact) {
+		api_ack_pending_send(channel, r->t_sync);
+		if (!api_ch[channel].ack_pending &&
+		    !radiant_transfer_is_idle(&api_xfer[channel])) {
+			api_stats.xfer_pending_reacquired++;
 		}
 	}
 }
@@ -3046,8 +3099,10 @@ static void api_housekeep(void)
 				(unsigned int)api_stats.rx_to_xfer,
 				(unsigned int)api_stats.rx_dropped,
 				(unsigned int)api_stats.rx_sched_events);
-			LOG_INF("xfer failures: no_opener=%u no_ack=%u bad_ack=%u radio=%u",
+			LOG_INF("xfer failures: no_opener=%u lost_track=%u no_ack=%u "
+				"bad_ack=%u radio=%u",
 				(unsigned int)api_stats.xfer_no_opener,
+				(unsigned int)api_stats.xfer_pending_lost_track,
 				(unsigned int)api_stats.xfer_no_ack,
 				(unsigned int)api_stats.xfer_bad_ack,
 				(unsigned int)api_stats.xfer_radio_failed);
@@ -4551,6 +4606,16 @@ antr_err_t antr_diag_page(uint8_t page, uint8_t *out)
 		v[RADIANT_DIAG_STALE_ED] = RADIANT_DIAG_NOT_MEASURED;
 #endif
 		v[5] = RADIANT_DIAG_NOT_MEASURED;
+		v[6] = RADIANT_DIAG_NOT_MEASURED;
+		v[7] = RADIANT_DIAG_NOT_MEASURED;
+		break;
+	case RADIANT_DIAG_PAGE_XFER:
+		v[RADIANT_DIAG_XFER_WATCHDOGS] = api_stats.xfer_watchdogs;
+		v[RADIANT_DIAG_XFER_NO_OPENER] = api_stats.xfer_no_opener;
+		v[RADIANT_DIAG_XFER_LOST_TRACK] = api_stats.xfer_pending_lost_track;
+		v[RADIANT_DIAG_XFER_REACQUIRED] = api_stats.xfer_pending_reacquired;
+		v[RADIANT_DIAG_XFER_BAD_ACK] = api_stats.xfer_bad_ack;
+		v[RADIANT_DIAG_XFER_RADIO_FAILED] = api_stats.xfer_radio_failed;
 		v[6] = RADIANT_DIAG_NOT_MEASURED;
 		v[7] = RADIANT_DIAG_NOT_MEASURED;
 		break;

@@ -87,6 +87,7 @@ Claim **0xF7** from the reserved RadiANT block (0xF7-0xFA) as
 | 10 receive integrity | `radiant_api_stats` [4..19], `radiant_radio_diag_get()` [20..35] | crc_repaired | crc_unrepairable | crc_repair_refuted | crc_repair_implausible | frames dropped by the late-ISR guard (nRF) | worst END-interrupt lateness µs (nRF) | longest `rx_t_sync()` µs (cc26xx) | longest `rx_match()` + copies µs (cc26xx) |
 | 11 scheduler contention | `radiant_sched_stats` [4..27] and [32..35], `radiant_api_stats` [28..31] | windows_merged | preempted | replans | arm_rejected | tx_armed | stale_events | slots_collided (ADR 0024) | turn_yields (ADR 0024) |
 | 12 stale events by site | `radiant_sched.c` [4..23] | receive event with a frame, op retired | other receive event, op retired | frame with a filter index the window lacked | transmit event, op retired | energy-detect event, op retired (`0xFFFFFFFF` without `CONFIG_RADIANT_ED_SCAN`) | reserved | reserved | reserved |
+| 13 transfer outcomes | `radiant_api_stats` [4..27] | transfers the watchdog terminated | held slave command expired while tracking, no opener | held slave command failed at RX_FAIL_GO_TO_SEARCH | held slave command sent from the reacquiring frame | failed on a wrong acknowledgement | engine or radio refused to start | reserved | reserved |
 
 `sets_advanced_uncovered` is `0xFFFFFFFF` without `CONFIG_RADIANT_SEARCH_COVERAGE`.
 
