@@ -5698,12 +5698,105 @@ ZTEST(api, test_fec_pending_not_sent_on_inexact_reacquiring_frame)
 }
 
 /*
- * On the sweep's carrier the reacquiring frame does not send the command
- * (the TX request would drop the armed scan chunk without telling the
- * search); the next tracked frame, a period later and inside the deadline,
- * does.
+ * The ride case: Zwift closes its scan channel once riding, so a dropped
+ * FE-C channel is the only one searching and carries the sweep itself. The
+ * reacquiring frame sends its held command (the bench on 2026-11-17 showed
+ * every such command expiring while the carrier was skipped), the search's
+ * hold on the slot is released with no done() lost, and the channel goes
+ * on tracking: a second command completes on a tracked frame.
  */
-ZTEST(api, test_fec_pending_on_the_carrier_waits_for_the_next_frame)
+ZTEST(api, test_fec_pending_on_the_lone_carrier_sent_on_reacquiring_frame)
+{
+	uint16_t number;
+	uint32_t sent;
+	const struct fake_radio_arm *tx;
+	radiant_time_t sync;
+
+	(void)fec_acquire(0u, true);
+	sent = radiant_api_stats_get()->xfer_pending_reacquired;
+	drop_to_search(CH);
+	zassert_ok(antr_acknowledge_message_tx(CH, 8u, peer_payload));
+	sync = air_in_sweep(RADIANT_CTRL_BROADCAST, 0u, &number);
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH),
+		      "setup: the channel did not reacquire");
+	tx = last_tx_with_ctrl(RADIANT_CTRL_BURST_LAST_SEQ0);
+	zassert_not_null(tx, "the lone carrier did not send from its "
+			 "reacquiring frame");
+	zassert_equal(sync + RADIANT_TRANSFER_SLOT_REPLY_US, tx->t_sync_at);
+	zassert_equal(sent + 1u, radiant_api_stats_get()->xfer_pending_reacquired);
+	ack_from_peer(number, tx);
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_COMPLETED));
+
+	/* Tracking resumed: the next window is a tracked one, and a second
+	 * command completes from it. */
+	k_sleep(K_MSEC(3 * RADIANT_API_HOUSEKEEP_MS));
+	zassert_true(radiant_sched_pending(CH), "tracking was not resumed");
+	zassert_ok(antr_acknowledge_message_tx(CH, 8u, peer_payload));
+	fec_exchange(number, RADIANT_CTRL_ACK_LAST_SEQ1, true);
+	zassert_equal(2u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_COMPLETED));
+	zassert_equal(0u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED));
+	end_of_test();
+	zassert_equal(0u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED));
+}
+
+/*
+ * A reacquiring frame delivered too late to arm its reply slot does not
+ * send: under the MPSL gate a search frame reached the callback ~23 ms after
+ * its sync and every such send expired in the scheduler (L15 bench
+ * 2026-11-17). The command is kept, the carrier keeps its chunk, and the
+ * next tracked frame sends it.
+ */
+ZTEST(api, test_fec_pending_not_sent_from_a_late_reacquiring_frame)
+{
+	uint16_t number;
+	uint32_t sent;
+	uint32_t arms;
+
+	(void)fec_acquire(0u, true);
+	sent = radiant_api_stats_get()->xfer_pending_reacquired;
+	drop_to_search(CH);
+	zassert_ok(antr_acknowledge_message_tx(CH, 8u, peer_payload));
+	arms = count_tx_with_ctrl(RADIANT_CTRL_BURST_LAST_SEQ0);
+	fake_radio_set_rx_frame_delay_us(RADIANT_TRANSFER_SLOT_REPLY_US);
+	(void)air_in_sweep(RADIANT_CTRL_BROADCAST, 0u, &number);
+	fake_radio_advance(1000u); /* past the delayed delivery */
+	fake_radio_set_rx_frame_delay_us(0u);
+	drain();
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH),
+		      "setup: the channel did not reacquire");
+	zassert_equal(arms, count_tx_with_ctrl(RADIANT_CTRL_BURST_LAST_SEQ0),
+		      "a send was armed from a frame past its reply slot");
+	zassert_equal(sent, radiant_api_stats_get()->xfer_pending_reacquired);
+	zassert_equal(0u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED),
+		      "the held command was spent on a slot it could not make");
+
+	/* The next tracked frame sends it. */
+	k_sleep(K_MSEC(3 * RADIANT_API_HOUSEKEEP_MS));
+	{
+		uint8_t frame[FAKE_RADIO_AIR_FRAME_MAX];
+		uint8_t n = fake_radio_build_ant_frame(frame, number, 0x11u, 5u,
+						       peer_payload);
+		radiant_time_t next = radiant_channel_next_slot(CH);
+		const struct fake_radio_arm *tx;
+
+		zassert_ok(fake_radio_air_frame(next, frame, n));
+		fake_radio_advance_to(next + RADIANT_TRANSFER_SLOT_REPLY_US + 100u);
+		tx = last_tx_with_ctrl(RADIANT_CTRL_BURST_LAST_SEQ0);
+		zassert_not_null(tx, "the next tracked frame did not send");
+		zassert_equal(next + RADIANT_TRANSFER_SLOT_REPLY_US, tx->t_sync_at);
+		ack_from_peer(number, tx);
+	}
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_COMPLETED));
+	zassert_equal(0u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED));
+	end_of_test();
+}
+
+/*
+ * A carrier whose chunk still serves another searching channel keeps it:
+ * the reacquiring frame does not send, and the next tracked frame, a period
+ * later and inside the deadline, does.
+ */
+ZTEST(api, test_fec_pending_on_a_shared_carrier_waits_for_the_next_frame)
 {
 	uint16_t number;
 	uint32_t sent;
@@ -5711,8 +5804,15 @@ ZTEST(api, test_fec_pending_on_the_carrier_waits_for_the_next_frame)
 	const struct fake_radio_arm *w;
 
 	(void)fec_acquire(0u, true);
+	/* A second slave that never finds its device keeps the sweep busy. */
+	zassert_ok(antr_channel_assign(FEC_CH, ANTW_CHANNEL_TYPE_SLAVE, 0u, 0u));
+	zassert_ok(antr_channel_id_set(FEC_CH, 0x7777u, 0x0Bu, 0u));
+	zassert_ok(antr_channel_period_set(FEC_CH, 8070u));
+	zassert_ok(antr_channel_radio_freq_set(FEC_CH, RF_INDEX));
+	zassert_ok(antr_channel_open(FEC_CH));
 	sent = radiant_api_stats_get()->xfer_pending_reacquired;
 	drop_to_search(CH);
+	next_sweep_chunk();
 	zassert_ok(antr_acknowledge_message_tx(CH, 8u, peer_payload));
 	arms = count_tx_with_ctrl(RADIANT_CTRL_BURST_LAST_SEQ0);
 	w = armed_search_window();
@@ -5720,17 +5820,31 @@ ZTEST(api, test_fec_pending_on_the_carrier_waits_for_the_next_frame)
 	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH),
 		      "setup: the channel did not reacquire");
 	zassert_equal(arms, count_tx_with_ctrl(RADIANT_CTRL_BURST_LAST_SEQ0),
-		      "the carrier sent from its reacquiring frame");
+		      "a shared carrier sent from its reacquiring frame");
 	zassert_equal(sent, radiant_api_stats_get()->xfer_pending_reacquired);
 
+	/* The next tracked frame. The armed receive may be FEC_CH's chunk, so
+	 * the master is aired at CH's projected slot, not fec_exchange()'s. */
 	fake_radio_advance_to(w->t_close + 1u);
 	drain();
-	if (fake_radio_is_idle()) {
-		run_housekeeping();
+	k_sleep(K_MSEC(3 * RADIANT_API_HOUSEKEEP_MS));
+	{
+		uint8_t frame[FAKE_RADIO_AIR_FRAME_MAX];
+		uint8_t n = fake_radio_build_ant_frame(frame, number, 0x11u, 5u,
+						       peer_payload);
+		radiant_time_t next = radiant_channel_next_slot(CH);
+		const struct fake_radio_arm *tx;
+
+		zassert_ok(fake_radio_air_frame(next, frame, n));
+		fake_radio_advance_to(next + RADIANT_TRANSFER_SLOT_REPLY_US + 100u);
+		tx = last_tx_with_ctrl(RADIANT_CTRL_BURST_LAST_SEQ0);
+		zassert_not_null(tx, "the next tracked frame did not send");
+		zassert_equal(next + RADIANT_TRANSFER_SLOT_REPLY_US, tx->t_sync_at);
+		ack_from_peer(number, tx);
 	}
-	fec_exchange(number, RADIANT_CTRL_ACK_LAST_SEQ1, true);
 	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_COMPLETED));
 	zassert_equal(0u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED));
+	close_fec_ch();
 	end_of_test();
 	zassert_equal(0u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED));
 }

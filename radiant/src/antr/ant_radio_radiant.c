@@ -370,6 +370,7 @@ static struct k_thread api_event_thread_data;
 static void api_event_thread(void *a, void *b, void *c);
 static void api_pump_locked(void);
 static void api_ack_pending_lost_track(uint8_t ch);
+static bool api_search_release_carrier(uint8_t ch);
 
 /* Port hooks that radiant_event.c declares but leaves undefined, so a
  * build that omits one fails to link. */
@@ -1161,15 +1162,21 @@ static void api_xfer_refresh_id(uint8_t ch)
  * Never on a secured channel: its MAC verdict lags a window, so the opener is not
  * authenticated in time. antr_acknowledge_message_tx() keeps secured channels off
  * this path; the check here covers a channel secured after acceptance. */
+static bool api_ack_pending_sendable(uint8_t ch)
+{
+	/* An expired command is the watchdog's to fail. */
+	return !radiant_sec_channel_is_secured(ch) &&
+	       radiant_channel_state_get(ch) == RADIANT_CH_STATE_TRACKING &&
+	       radiant_transfer_is_idle(&api_xfer[ch]) &&
+	       radiant_radio_now() < api_ch[ch].ack_deadline;
+}
+
 static void api_ack_pending_send(uint8_t ch, radiant_time_t t_sync)
 {
 	struct api_chan *c = &api_ch[ch];
 
-	if (radiant_sec_channel_is_secured(ch) ||
-	    radiant_channel_state_get(ch) != RADIANT_CH_STATE_TRACKING ||
-	    !radiant_transfer_is_idle(&api_xfer[ch]) ||
-	    radiant_radio_now() >= c->ack_deadline) {
-		return; /* the watchdog owns an expired command's failure */
+	if (!api_ack_pending_sendable(ch)) {
+		return;
 	}
 	api_xfer_refresh_id(ch);
 	c->ack_pending = false;
@@ -1528,18 +1535,29 @@ static void api_search_acquired(uint8_t channel,
 	 * and the command still expired). After radiant_search_end(), so no
 	 * search bookkeeping for this channel follows the TX request.
 	 *
-	 * Not on the sweep's carrier: radiant_sched_request_tx() drops the
-	 * channel's slot without telling its owner, which there is the armed
-	 * scan chunk, so the search would lose its carrier silently. The
-	 * carrier's next tracked frame, a period later, sends the command if it
-	 * is still inside its deadline. api_ack_pending_send() checks the rest
-	 * (secured, TRACKING, idle engine, deadline).
+	 * On the sweep's carrier, radiant_sched_request_tx() drops the armed
+	 * scan chunk without a done(), so api_search_release_carrier() ends
+	 * the search's hold first - only when nobody else is searching (the
+	 * ride case). Otherwise the carrier's next tracked frame, a period
+	 * later, sends the command if it is still inside its deadline.
+	 * Bench 2026-11-17: a lone FE-C channel IS the carrier, and skipping
+	 * it left every held command to expire.
+	 *
+	 * Only while the reply slot can still be armed. Under the MPSL gate a
+	 * search frame reaches this callback up to ~23 ms after its sync
+	 * (bench 2026-11-17, L15: 10 of 10 sends expired in the scheduler,
+	 * page 2 tx_margin_min_us -22607), and a send that cannot make its
+	 * slot fails the command; kept, it goes from the next tracked frame.
 	 */
 	if (post && !is_scan && api_ch[channel].ack_pending &&
-	    api_search_slot != channel &&
 	    !radiant_channel_is_master(channel) &&
 	    radiant_frame_msg_type(r->frame.ctrl_byte) == RADIANT_MSG_BROADCAST &&
-	    r->t_sync_exact) {
+	    r->t_sync_exact &&
+	    radiant_radio_now() +
+			    (radiant_time_t)radiant_radio_caps_get()->min_arm_lead_us <
+		    r->t_sync + (radiant_time_t)RADIANT_TRANSFER_SLOT_REPLY_US &&
+	    api_ack_pending_sendable(channel) &&
+	    api_search_release_carrier(channel)) {
 		api_ack_pending_send(channel, r->t_sync);
 		if (!api_ch[channel].ack_pending &&
 		    !radiant_transfer_is_idle(&api_xfer[channel])) {
@@ -1602,6 +1620,50 @@ static void api_search_cut_locked(void)
 	api_bind_rejected(c);
 	api_ch[c].slot_heard = false;
 	radiant_event_crit_exit(key);
+}
+
+/*
+ * Before a carrier that just reacquired sends its held command from the
+ * reacquiring frame (api_search_acquired()). The transmit request replaces
+ * the channel's slot, which aborts the armed scan chunk WITHOUT a done(), so
+ * the chunk's bookkeeping is ended here, as api_search_cut_locked() ends it,
+ * minus the cancel (the request is the cancel, and no arm happens from this
+ * callback). The kind is cleared so the transmit's done() reaches the
+ * transfer engine, not the search; `op` stays, as api_xfer_superseded()
+ * keeps it, so the transmit's completion retires the chunk's op.
+ *
+ * Only when nobody else is searching, which is the ride case (Zwift closes
+ * its scan channel once riding): with others searching the chunk still
+ * serves them, and the carrier sends from its next tracked frame instead.
+ * Returns whether the channel may transmit now (true for a non-carrier).
+ * Radio callback context.
+ */
+static bool api_search_release_carrier(uint8_t ch)
+{
+	unsigned int key;
+	uint8_t      o;
+	bool         ok = true;
+
+	key = radiant_event_crit_enter();
+	if (api_search_slot == ch) {
+		for (o = 0u; o < API_CHANNELS; o++) {
+			if (o != ch &&
+			    (radiant_search_is_searching(&api_search, o) ||
+			     radiant_channel_state_get(o) ==
+				     RADIANT_CH_STATE_SEARCHING)) {
+				ok = false;
+				break;
+			}
+		}
+		if (ok) {
+			radiant_search_on_done(&api_search, false, false, 0u);
+			api_search_slot = RADIANT_SCHED_CH_NONE;
+			api_xfer_superseded(ch);
+			api_ch[ch].slot_heard = false;
+		}
+	}
+	radiant_event_crit_exit(key);
+	return ok;
 }
 
 /* Search timeout is raised by radiant_channel.c, which orders
