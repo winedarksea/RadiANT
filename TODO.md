@@ -7,6 +7,8 @@ Discovery short match (ADR 0022), left open 2026-11-11:
 
 ## TI CC2652R, open after the 2026-11-12 bench (evidence `archive/benchmarks/2026-11-12-ti-findings/` and `2026-11-12-ti-lead/`; items closed 2026-11-13, `archive/benchmarks/2026-11-13-ti-todo/README.md`):
 - Rebuild the TI image before it ships: the one staged in `build\final_perf_6078d88\` predates e66ae02 (a one-packet transfer's ACK window now reserves no follow-on; host-tested only). Check acknowledged transfers on air with the rebuilt image (`tools/ant_ack_pair.py`, both roles) first.
+  - 2026-11-16: rebuilt from 497030a (a8960111) and checked on air against the Garmin (`archive/benchmarks/2026-11-16-ti-acked-rebuild/`). TI as master: acked origination 100/100, acked answer 100/100. TI as slave originating: 52, 88, 97, 6 of 100, against a Pro Micro control at 100, 99, 98. Not staged: blocked on the item below.
+- TI as a slave goes deaf to its master for stretches of seconds to a whole session. Inside a stretch almost every tracked window ends empty (`term_empty`) and every acked reply, though armed (`tx_armed`), is lost; outside one it matches the Pro Micro. Present in `ti2_o2.hex` (5584dea, before rule 6) too: 100, 0, 0, 47 of 100. Good versus dead is mostly decided per session, which suggests a phase or timing condition set at channel open. May be the same defect as the Pro Micro -> TI 8-13 % loss below. Repro: `ant_ack_pair.py --slave-port COM11 --slave-baud 57600 --master-serial 006 --sends 100`, three or four runs, with `ant_diag.py` before and after.
 
 ## Open after the 2026-11-16 benches (filed on fix/ti-cmd-stall):
 - nRF: re-read `now` on STEP_RETRY after an early-ETIME refusal; the stale `now` makes the refusals cascade (`archive/benchmarks/2026-11-16-b4-pair/`).
