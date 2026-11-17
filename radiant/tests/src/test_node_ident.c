@@ -89,9 +89,21 @@ bool node_ident_wall_seconds(uint64_t *out)
 	return wall_valid;
 }
 
+/* radiant_sec.c's ztest-only seam: what derive_keys() returns while this is
+ * not RADIANT_SEC_OK. */
+static int kdf_fault;
+
+int radiant_sec_test_kdf_fault(void);
+
+int radiant_sec_test_kdf_fault(void)
+{
+	return kdf_fault;
+}
+
 static void node_before(void *f)
 {
 	ARG_UNUSED(f);
+	kdf_fault = RADIANT_SEC_OK;
 	fake_nvm_wipe();
 #if defined(CONFIG_RADIANT_TEST_FAKE_RNG)
 	fake_rng_reset();
@@ -1621,6 +1633,55 @@ ZTEST(node_ident, test_a_host_epoched_twin_blocks_an_arm)
 					      VECTOR_DEVNUM));
 	zassert_equal(NODE_IDENT_EBUSY, arm_compat_settled(TX_NODE_CH, 1000000u));
 #endif
+}
+
+/*
+ * Review 2026-11-14 item 7: an arm whose key derivation fails inside
+ * radiant_sec_set_epoch(). The epoch is already installed when derive_keys()
+ * runs, so the channel stays live under item 2's rule (`epoch_set` counts)
+ * with its K_enc and K_auth destroyed. Three things must hold: the arm fails;
+ * a twin under the same root and number is still refused; and the channel puts
+ * no secured page on the air, neither plaintext nor a transform under the
+ * destroyed keys.
+ */
+static void kdf_fault_on_arm(uint8_t switches)
+{
+	int rc;
+
+	provisioned_and_booted();
+	key_conf(TX_NODE_CH, switches);
+	kdf_fault = RADIANT_SEC_ENOKEY;
+	rc = arm_sec_settled(TX_NODE_CH);
+	kdf_fault = RADIANT_SEC_OK;
+	zassert_equal(NODE_IDENT_EIO, rc, "an arm with no keys: %d", rc);
+
+	key_conf(RX_NODE_CH, switches);
+	zassert_equal(NODE_IDENT_EBUSY, arm_sec_settled(RX_NODE_CH),
+		      "the failed arm's channel no longer counts as live");
+
+	node_anchor = (uint64_t)radiant_radio_now();
+	for (uint32_t slot = 0u; slot < 4u; slot++) {
+		rc = node_tx(slot);
+		zassert_not_equal(RADIANT_SEC_OK, rc,
+				  "slot %u: a secured page went out on a channel "
+				  "whose keys were never derived",
+				  slot);
+	}
+}
+
+ZTEST(node_ident, test_a_failed_derive_on_arm_fails_closed_conf)
+{
+	kdf_fault_on_arm(RADIANT_SEC_SW_CONF);
+}
+
+ZTEST(node_ident, test_a_failed_derive_on_arm_fails_closed_auth)
+{
+	kdf_fault_on_arm(RADIANT_SEC_SW_AUTH);
+}
+
+ZTEST(node_ident, test_a_failed_derive_on_arm_fails_closed_conf_auth)
+{
+	kdf_fault_on_arm(RADIANT_SEC_SW_CONF | RADIANT_SEC_SW_AUTH);
 }
 
 /* Reviewer finding 3: a key check that cannot be computed answers "match",

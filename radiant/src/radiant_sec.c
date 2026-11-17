@@ -347,6 +347,18 @@ static uint16_t resolve_counter(uint32_t expected, uint8_t low,
 	return (uint16_t)(best & 0xFFFFu);
 }
 
+#if defined(CONFIG_ZTEST)
+/* Test-only seam, in ztest images only: a failure returned here stands in for
+ * the KDF failing in derive_keys() (an opaque backend out of key slots), which
+ * the portable backend cannot do on demand. Review 2026-11-14 item 7. */
+int radiant_sec_test_kdf_fault(void);
+
+__weak int radiant_sec_test_kdf_fault(void)
+{
+	return RADIANT_SEC_OK;
+}
+#endif
+
 /* Derive K_enc and K_auth for the context's current epoch. */
 static int derive_keys(struct sec_ctx *c)
 {
@@ -355,6 +367,12 @@ static int derive_keys(struct sec_ctx *c)
 	radiant_sec_key_destroy(&c->k_enc);
 	radiant_sec_key_destroy(&c->k_auth);
 
+#if defined(CONFIG_ZTEST)
+	rc = radiant_sec_test_kdf_fault();
+	if (rc != RADIANT_SEC_OK) {
+		return rc;
+	}
+#endif
 	rc = radiant_sec_kdf(&c->k_root, RADIANT_SEC_LABEL_ENC, c->epoch,
 			     c->base_devnum, &c->k_enc);
 	if (rc != RADIANT_SEC_OK) {
