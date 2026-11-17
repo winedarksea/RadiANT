@@ -1720,8 +1720,11 @@
  * in bits, 128 and nothing else in v1; [2..17] the key. Everything else -
  * K_enc, K_auth, K_id, K_cmd - is derived from it, so a pairing moves exactly
  * sixteen bytes. WRITE ONLY: there is no read arm anywhere, and MESG_REQUEST
- * for 0xF2 answers ANTW_INVALID_MESSAGE rather than a key. [K4 (docs/radiant-
- * security.md sec 3.4 and 9)]
+ * for 0xF2 answers ANTW_INVALID_MESSAGE rather than a key. NOT checked
+ * against other channels: the host gives each live channel a distinct root or
+ * base device number, or two channels given one epoch by 0xF3 share a
+ * keystream (docs/radiant-security.md sec 3.5). [K4 (docs/radiant-security.md
+ * sec 3.4 and 9)]
  */
 #define RADIANT_WIRE_MESG_RADIANT_SET_KEY_ID                 0xF2
 

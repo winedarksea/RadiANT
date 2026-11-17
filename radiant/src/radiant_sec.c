@@ -369,17 +369,24 @@ static int derive_keys(struct sec_ctx *c)
 
 #if defined(CONFIG_ZTEST)
 	rc = radiant_sec_test_kdf_fault();
-	if (rc != RADIANT_SEC_OK) {
-		return rc;
-	}
+	if (rc == RADIANT_SEC_OK)
 #endif
-	rc = radiant_sec_kdf(&c->k_root, RADIANT_SEC_LABEL_ENC, c->epoch,
-			     c->base_devnum, &c->k_enc);
-	if (rc != RADIANT_SEC_OK) {
-		return rc;
+	{
+		rc = radiant_sec_kdf(&c->k_root, RADIANT_SEC_LABEL_ENC,
+				     c->epoch, c->base_devnum, &c->k_enc);
 	}
-	return radiant_sec_kdf(&c->k_root, RADIANT_SEC_LABEL_AUTH, c->epoch,
-			       c->base_devnum, &c->k_auth);
+	if (rc == RADIANT_SEC_OK) {
+		rc = radiant_sec_kdf(&c->k_root, RADIANT_SEC_LABEL_AUTH,
+				     c->epoch, c->base_devnum, &c->k_auth);
+	}
+	if (rc != RADIANT_SEC_OK) {
+		/* No keys for this epoch: nothing secured goes out until a new
+		 * one (set_epoch clears this). X_CONF refused already, at the
+		 * empty K_enc; X_AUTH alone sent the page with no MAC behind
+		 * it (review 2026-11-14 item 7). */
+		c->tx_spent = true;
+	}
+	return rc;
 }
 
 /* D14: a counter wrap advances the epoch by 1 on both sides and re-derives

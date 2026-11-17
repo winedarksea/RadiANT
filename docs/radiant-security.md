@@ -600,6 +600,17 @@ before the `0xF3` stays silent on its secured pages until it arrives. Later
   once the old root is destroyed leaves the channel unkeyed rather than half on
   each root.
 
+**The host is the authority for the roots it installs** (owner, 2026-11-16).
+`0xF2` and `0xF3` do not check one channel against another. A host that keys
+two live channels with one root and one base device number and gives them the
+same epoch puts both on the same (root, epoch, device number), which is the
+two-time pad the node's arm guard exists to stop, and the firmware does not
+refuse it. Only a node arm is guarded (`NODE_IDENT_EBUSY`, section 3.5 below).
+The host supplies the root and the plaintext, so only a faulty host reaches
+this; a check would cost security text for no protection against an attacker.
+**A host must give every live channel a distinct root or a distinct base
+device number.**
+
 That rejection is only enforceable within a power cycle, because keys and state
 are wiped on reset. The obligation therefore sits with the **epoch authority** —
 the host, or the node application — and is normative: *persist the last epoch
@@ -1644,7 +1655,7 @@ records what the IDs are for. The allocation below is the one in the YAML.
 | ID | Name | Purpose |
 |---|---|---|
 | `0xF1` | `ANTW_MESG_RADIANT_SEC_CONFIG_ID` | Per-channel switch bitmask (`X_CONF`/`X_AUTH`), the MAC window W, the secured page range, the drop-vs-deliver policy bit and the opt-in for `0xF8` (bit 4) |
-| `0xF2` | `ANTW_MESG_RADIANT_SET_KEY_ID` | Install the 16-byte `K_root` for a channel. Write-only. The root already installed is a no-op; a different one leaves the channel pending until `0xF3` (section 3.5) |
+| `0xF2` | `ANTW_MESG_RADIANT_SET_KEY_ID` | Install the 16-byte `K_root` for a channel. Write-only. The root already installed is a no-op; a different one leaves the channel pending until `0xF3` (section 3.5). Not checked against other channels: the host gives each live channel a distinct root or base device number (section 3.5) |
 | `0xF3` | `ANTW_MESG_RADIANT_EPOCH_ID` | Set or read the epoch and its microsecond time anchor |
 | `0xF4` | `ANTW_MESG_RADIANT_SEC_STATUS_ID` | Read back (structure version at `[1]`): epoch, expected index, window verdict counters, drop counters, enrolments, and at `[30]` whether the channel is keyed and armed |
 | `0xF5` | `ANTW_MESG_RADIANT_PAIRING_ID` | Enter/leave pairing mode; carry the host-supplied scalar and the X25519 exchange |

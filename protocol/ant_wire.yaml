@@ -2005,7 +2005,10 @@ radiant_messages:
              key. Everything else - K_enc, K_auth, K_id, K_cmd - is derived
              from it, so a pairing moves exactly sixteen bytes. WRITE ONLY:
              there is no read arm anywhere, and MESG_REQUEST for 0xF2 answers
-             ANTW_INVALID_MESSAGE rather than a key."
+             ANTW_INVALID_MESSAGE rather than a key. NOT checked against other
+             channels: the host gives each live channel a distinct root or
+             base device number, or two channels given one epoch by 0xF3 share
+             a keystream (docs/radiant-security.md sec 3.5)."
       source: "K4 (docs/radiant-security.md sec 3.4 and 9)"
     - name: MESG_RADIANT_EPOCH_ID
       id: 0xF3
