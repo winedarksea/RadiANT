@@ -428,6 +428,39 @@ static uint8_t addr_groups_with(const struct radiant_rx_filter *add,
 	return groups;
 }
 
+/*
+ * Rules 5 and 6 together: may `add` join the merged set? The leader, the member
+ * loop and could_join_armed() all ask this one question, so they agree.
+ * Rule 6 is pairwise over at most 8 filters, so a linear scan is enough.
+ */
+static bool filters_fit(const struct radiant_rx_filter *add, uint8_t n_add)
+{
+	uint8_t i;
+	uint8_t j;
+
+	if (addr_groups_with(add, n_add) > max_addr_groups()) {
+		return false;
+	}
+	if (s.caps == NULL || s.caps->min_filter_hamming_bits <= 1u) {
+		return true;
+	}
+	for (i = 0u; i < n_add; i++) {
+		for (j = 0u; j < s.n_merged; j++) {
+			if (!radiant_rx_filters_separable(s.caps, &add[i],
+							  &s.merged[j])) {
+				return false;
+			}
+		}
+		for (j = 0u; j < i; j++) {
+			if (!radiant_rx_filters_separable(s.caps, &add[i],
+							  &add[j])) {
+				return false;
+			}
+		}
+	}
+	return true;
+}
+
 /* Slack budget: an arm within this distance of now() fails RADIANT_RADIO_ETIME,
  * so the scheduler subtracts it itself. */
 static radiant_time_t arm_lead(void)
@@ -1281,13 +1314,18 @@ static enum step arm_failed(uint8_t ch, int rc)
  *      alternation (ADR 0024) still carry the earlier channel, which serves
  *      both rather than one.
  *   5. At most caps.max_addr_groups device-number groups (2 on nRF).
+ *   6. No two distinct hardware-matched prefixes closer than
+ *      caps.min_filter_hamming_bits (radiant_rx_filters_separable()). A
+ *      correlator cannot separate close sync words and the window would hear
+ *      neither, so the member waits for its own window instead. Free on nRF
+ *      and RAIL (0); on a CC26x2 only reachable across networks or under
+ *      ti_long_match.conf, where the sync word includes devnum_lo.
  */
 static enum step arm_rx_window(uint8_t leader, radiant_time_t earliest,
 			       radiant_time_t limit)
 {
 	struct sched_slot   *lead = &s.ch[leader];
 	const uint8_t        mf = max_filters();
-	const uint8_t        mg = max_addr_groups();
 	/* Rule 3's reach, read once so all members use the caller's radius. */
 	const radiant_time_t reach = arm_lead();
 	struct radiant_rx_req    req;
@@ -1312,10 +1350,10 @@ static enum step arm_rx_window(uint8_t leader, radiant_time_t earliest,
 		return STEP_RETRY;
 	}
 
-	/* Group limit, checked separately: a leader can fit max_filters yet carry
-	 * two device numbers. */
+	/* Group limit (rule 5) and separation (rule 6), checked separately: a
+	 * leader can fit max_filters yet carry two device numbers. */
 	s.n_merged = 0u;
-	if (addr_groups_with(lead->filters, lead->n_filters) > mg) {
+	if (!filters_fit(lead->filters, lead->n_filters)) {
 		s.stats.arm_rejected++;
 		slot_clear(leader);
 		notify_done(leader, RADIANT_SCHED_DONE_FAILED);
@@ -1386,10 +1424,11 @@ static enum step arm_rx_window(uint8_t leader, radiant_time_t earliest,
 		    (uint32_t)s.n_merged + (uint32_t)m->n_filters > (uint32_t)mf) {
 			continue;
 		}
-		/* Rule 5: skip this member rather than refuse the window. The leader
-		 * and anything already merged stay armable; this channel gets its
-		 * own window later. */
-		if (addr_groups_with(m->filters, m->n_filters) > mg) {
+		/* Rules 5 and 6: skip this member rather than refuse the window. The
+		 * leader and anything already merged stay armable; this channel gets
+		 * its own window later, or is reported MISSED - honest capacity loss,
+		 * not a deaf merged window. */
+		if (!filters_fit(m->filters, m->n_filters)) {
 			continue;
 		}
 
@@ -1736,8 +1775,8 @@ static bool could_join_armed(const struct sched_slot *sl, radiant_time_t earlies
 		    (uint32_t)max_filters()) {
 		return false;
 	}
-	/* Rule 5, mirrored, so this agrees with the rebuild's own group test. */
-	if (addr_groups_with(sl->filters, sl->n_filters) > max_addr_groups()) {
+	/* Rules 5 and 6, mirrored, so this agrees with the rebuild's own test. */
+	if (!filters_fit(sl->filters, sl->n_filters)) {
 		return false;
 	}
 	/*

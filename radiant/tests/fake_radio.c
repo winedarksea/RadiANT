@@ -2413,6 +2413,27 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 		}
 	}
 	if (rc == RADIANT_RADIO_OK_RC) {
+		/*
+		 * The separation gate (caps.min_filter_hamming_bits). A CC26x2
+		 * correlator armed with two sync words 1-3 bits apart hears
+		 * neither, with no error at any layer. The cc26xx backend refuses
+		 * such a window with ENOTSUP, and so does this, so every suite
+		 * that sets the field guards scheduler rule 6 through finish().
+		 */
+		uint8_t j;
+
+		for (i = 0u; rc == RADIANT_RADIO_OK_RC && i < req->n_filters; i++) {
+			for (j = 0u; j < i; j++) {
+				if (!radiant_rx_filters_separable(&g.caps,
+								  &req->filters[i],
+								  &req->filters[j])) {
+					rc = RADIANT_RADIO_ENOTSUP;
+					break;
+				}
+			}
+		}
+	}
+	if (rc == RADIANT_RADIO_OK_RC) {
 		const uint32_t known = RADIANT_RX_STOP_ON_FIRST |
 #if defined(CONFIG_RADIANT_SCHED_BOOKING)
 				       RADIANT_RX_ELASTIC |
