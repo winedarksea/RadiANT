@@ -1486,7 +1486,69 @@ static void api_search_acquired(uint8_t channel,
 	/* ACQUIRE leaves the search; a scan stays SEARCHING, so radiant_search_end() is skipped. */
 	if (radiant_channel_state_get(channel) == RADIANT_CH_STATE_TRACKING) {
 		(void)radiant_search_end(&api_search, channel);
+		/* The carrier left the search: the pump may end the sweep chunk
+		 * (api_search_cut_locked()). A frame held for the security pump
+		 * posted nothing above, so wake the thread here too. */
+		if (api_search_slot == channel) {
+			radiant_event_wakeup();
+		}
 	}
+}
+
+/*
+ * End a sweep chunk that serves nobody (security review 2026-11-14, item 6).
+ *
+ * The sweep rides its carrier's slot. When the carrier acquires,
+ * radiant_search_end() clears only the search record: the chunk (the set's
+ * remaining dwell, up to about one period plus 14 ms) holds the slot, so the
+ * pump cannot post the channel's tracked window. A device acquired early in
+ * the dwell then has frame 1 land in the chunk, dropped with no searcher (on
+ * air about 2 % of acquisitions, seen as a collision; in the fake radio every
+ * one). Under X_AUTH that first window is UNVERIFIED.
+ *
+ * Cut only when the carrier is TRACKING and no channel is searching or
+ * SEARCHING: the chunk then hears nothing anyone wants, so discovery is
+ * untouched. A carrier that acquires while others search keeps today's chunk
+ * (TODO follow-up). A background scan never leaves its search, so a Zwift-style
+ * rig never reaches the cut.
+ *
+ * Thread context, under api_lock, not from the acquisition callback: on the
+ * TI backend an RX arm from inside the drain loop (the scheduler's pass after
+ * a cancel) resets the entry queue the loop is still walking. This is the
+ * release antr_channel_unassign() and antr_channel_close() make. The cancel is
+ * silent, so the binding is dropped here too: a channel left holding the
+ * chunk's op would park in CLOSING on its next close, waiting for a terminal
+ * the scheduler now discards as stale.
+ */
+static void api_search_cut_locked(void)
+{
+	unsigned int key;
+	uint8_t      c;
+	uint8_t      ch;
+
+	key = radiant_event_crit_enter();
+	c = api_search_slot;
+	if (c == RADIANT_SCHED_CH_NONE ||
+	    api_ch[c].slot_kind != (uint8_t)API_SLOT_SEARCH ||
+	    radiant_channel_state_get(c) != RADIANT_CH_STATE_TRACKING) {
+		radiant_event_crit_exit(key);
+		return;
+	}
+	for (ch = 0u; ch < API_CHANNELS; ch++) {
+		if (radiant_search_is_searching(&api_search, ch) ||
+		    radiant_channel_state_get(ch) == RADIANT_CH_STATE_SEARCHING) {
+			radiant_event_crit_exit(key);
+			return;
+		}
+	}
+	/* Credit nothing: nobody is searching, and the next search begins a
+	 * fresh set from api_search_begin(). */
+	radiant_search_on_done(&api_search, false, false, 0u);
+	(void)radiant_sched_cancel(c);
+	api_search_slot = RADIANT_SCHED_CH_NONE;
+	api_bind_rejected(c);
+	api_ch[c].slot_heard = false;
+	radiant_event_crit_exit(key);
 }
 
 /* Search timeout is raised by radiant_channel.c, which orders
@@ -2010,6 +2072,10 @@ static void api_pump_locked(void)
 	}
 
 	now = radiant_radio_now();
+
+	/* First, so a carrier that has just acquired gets its first tracked
+	 * window in this same pass (the loop below sees its slot free). */
+	api_search_cut_locked();
 
 	/* Apply a deferred network-0 key once no sweep chunk is in flight. The
 	 * re-init orphans nothing with no carrier; dropped members rejoin below. */

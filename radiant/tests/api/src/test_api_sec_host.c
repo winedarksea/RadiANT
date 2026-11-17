@@ -2034,17 +2034,12 @@ ZTEST(api, test_sec_host_a_forged_reacquiring_frame_is_not_credited)
 	 * acquisition the first verdict only sets the host's baseline, which is
 	 * why the tracked phase is needed.
 	 *
-	 * The window claimed is the one after the next slot. The first tracked
-	 * slot after an acquisition is always missed, and that is the core
-	 * search's behaviour, not the test harness's: the search RX chunk keeps
-	 * running after its only searching channel acquires (radiant_search_end()
-	 * only clears the record), so frame 1 is heard inside the chunk and
-	 * dropped, and the host sees RX_FAIL after every acquiring frame
-	 * (recorded as an open TODO, not changed here). A genuine window missing
-	 * a packet fails on its own. So the forged packet is 5 or 6 periods
-	 * older than the verdict, past the resolver's 2W-1 periods + slack, and
-	 * the check here leaves
-	 * the deadline out; tools/test_ant_sec.py has the in-deadline case.
+	 * The window claimed is the first one after the acquiring slot. It
+	 * holds slot i+1, which the channel hears since the sweep chunk ends
+	 * when its only searcher acquires (review 2026-11-14 item 6; until then
+	 * this claimed the window after, i+2 or i+3, because a window missing
+	 * frame 1 failed on its own). The check here leaves the resolver's
+	 * deadline out; tools/test_ant_sec.py has the in-deadline case.
 	 */
 	radiant_time_t t;
 	uint32_t       from;
@@ -2064,7 +2059,7 @@ ZTEST(api, test_sec_host_a_forged_reacquiring_frame_is_not_credited)
 
 	t = acq_search_t();
 	i = acq_index_at(t);
-	ctr = (i + 3u) & ~1u; /* a window start, i+2 or i+3, at W=2 */
+	ctr = (i + 2u) & ~1u; /* the next window start, i+1 or i+2, at W=2 */
 	acq_air_forged(t, ctr);
 	(void)acq_air_genuine(t + acq_period_us(), 6u);
 	acq_run_to(t + 6u * acq_period_us() + 5000u);
@@ -2075,6 +2070,74 @@ ZTEST(api, test_sec_host_a_forged_reacquiring_frame_is_not_credited)
 	zassert_true(acq_expect_not_credited(from, ctr,
 					     "the forged acquiring frame"),
 		     "setup: no verdict ever covered the forgery");
+	acq_done();
+}
+
+/*
+ * Review 2026-11-14, item 6. The window that opens on the acquiring frame
+ * verifies, so under DROP_UNVER the acquiring frame reaches the host.
+ *
+ * It did not while the sweep chunk outlived its only searcher: frame 1 fell
+ * into the chunk and was dropped, the first window was always UNVERIFIED, and
+ * DROP_UNVER then dropped the acquiring frame with it. The acquisition is put
+ * on an even slot so that the acquiring frame opens its W=2 window.
+ */
+ZTEST(api, test_sec_host_the_first_window_after_an_acquisition_verifies)
+{
+	struct acq_bd  n;
+	radiant_time_t t;
+	uint32_t       from;
+	uint32_t       i0;
+	bool           seen = false;
+
+	vd_setup(RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_DROP_UNVER |
+			 RADIANT_SEC_SW_VERDICT_EVENT,
+		 2u);
+	from = api_msglog_count();
+	/* Search on, silent, until the acquisition lands on a window start. */
+	for (uint32_t k = 0u; k < 40u && (acq_index_at(acq_search_t()) & 1u);
+	     k++) {
+		acq_run_to(radiant_radio_now() + 20000u);
+	}
+	t = acq_search_t();
+	zassert_equal(0u, acq_index_at(t) & 1u,
+		      "setup: no even slot inside a search window");
+
+	i0 = acq_air_genuine(t, 6u);
+	acq_run_to(t + 5u * acq_period_us() + 5000u);
+	zassert_equal(RADIANT_CH_STATE_TRACKING,
+		      radiant_channel_state_get(VD_RX_CH),
+		      "setup: the channel did not acquire");
+	acq_settle();
+
+	for (uint32_t k = from; k < api_msglog_count(); k++) {
+		const uint8_t *d;
+		uint8_t        id;
+		uint8_t        len;
+
+		d = api_msglog_get(k, &id, &len);
+		if (id != (uint8_t)ANTW_MESG_RADIANT_SEC_VERDICT_ID ||
+		    d[0] != VD_RX_CH || rd16(&d[2]) != (uint16_t)i0) {
+			continue;
+		}
+		seen = true;
+		zassert_equal(V_OK, d[1],
+			      "the window opened by the acquiring frame (%u) "
+			      "was not verified: verdict %u",
+			      i0, d[1]);
+	}
+	zassert_true(seen, "no verdict covered the acquiring frame's window "
+		     "(%u)", i0);
+
+	/* Windows i0 and i0+2 verified (each by the tag the next one carries);
+	 * i0+4 waits for a tag never sent. With frame 1 lost it was 2: the
+	 * acquiring window dropped whole and only i0+2's pair delivered. */
+	n = acq_count(from, VD_PAGE);
+	zassert_equal(4u, n.plain,
+		      "%u of the 4 genuine pages in verified windows reached the "
+		      "host under DROP_UNVER; the acquiring frame and frame 1 "
+		      "belong in a verified window",
+		      n.plain);
 	acq_done();
 }
 
