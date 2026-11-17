@@ -193,6 +193,29 @@ class Silence(unittest.TestCase):
         self.assertFalse(r["pass"])
         self.assertEqual(r["first_after"], "failed")
 
+    def test_a_refusal_after_the_reacquire_is_not_a_held_command(self):
+        # TI 2026-11-17 cycle 9: two submits together, the reacquiring
+        # frame, then the second one's refusal.
+        ev = [(2.5, "submit"), (3.0, "go_to_search"), (3.001, "failed"),
+              (3.8, "submit"), (3.8, "submit"), (3.85, "rx"),
+              (3.85, "refused"), (4.1, "completed"), (4.3, "submit"),
+              (4.6, "completed")]
+        r = s.judge_silence(ev)
+        self.assertEqual(r["pending_at_reacquire"], 1)
+        self.assertTrue(r["pass"], r)
+
+    def test_a_submit_racing_the_drop_is_a_search_submit(self):
+        # TI 2026-11-17 cycle 0: the earlier command expired before the
+        # drop; the submit logged 0 ms before GO_TO_SEARCH was held and sent
+        # on reacquire.
+        ev = [(2.0, "submit"), (2.797, "failed"), (3.0, "submit"),
+              (3.0, "go_to_search"), (3.469, "rx"), (3.484, "completed"),
+              (3.969, "submit"), (4.234, "completed")]
+        r = s.judge_silence(ev)
+        self.assertEqual(r["pending_at_search"], 0)
+        self.assertEqual(r["pending_at_reacquire"], 1)
+        self.assertTrue(r["pass"], r)
+
     def test_no_drop_to_search_is_not_a_pass(self):
         r = s.judge_silence([(0.2, "submit"), (0.5, "completed")])
         self.assertFalse(r["pass"])
