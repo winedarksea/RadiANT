@@ -103,14 +103,8 @@ PAGE_CMD_STATUS = 0x47        # 71
 # SS8.8's page 71 status byte. REJECTED (3) is what a machine answers when the
 # command is understood and refused - which is what the treadmill's
 # cross-transport ownership token uses when a BLE client holds control.
-CMD_STATUS = {
-    0: "PASS",
-    1: "FAIL",
-    2: "NOT_SUPPORTED",
-    3: "REJECTED",
-    4: "PENDING",
-    0xFF: "UNINITIALISED",
-}
+# One table, in ant_pages, shared with decode_pcap.py.
+from ant_pages import FEC_CMD_STATUS_NAMES as CMD_STATUS  # noqa: E402
 
 
 def command(dev, reader, msg_id: int, payload: bytes, name: str,

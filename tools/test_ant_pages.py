@@ -825,6 +825,41 @@ class TestFitnessEquipmentPages(unittest.TestCase):
         with self.assertRaises(ValueError):
             ap.encode_fec_request(0x10, tx_count=0x80)
 
+    def test_command_status_and_state_names(self):
+        # decode_pcap.py and ant_fec_control.py print these names; a status
+        # code without one would print as a bare number.
+        for code in (ap.FEC_CMD_STATUS_PASS, ap.FEC_CMD_STATUS_FAIL,
+                     ap.FEC_CMD_STATUS_NOT_SUPPORTED, ap.FEC_CMD_STATUS_REJECTED,
+                     ap.FEC_CMD_STATUS_PENDING, ap.FEC_CMD_STATUS_UNINITIALISED):
+            self.assertIn(code, ap.FEC_CMD_STATUS_NAMES)
+        self.assertEqual(ap.FEC_CMD_STATUS_NAMES[ap.FEC_CMD_STATUS_REJECTED],
+                         "REJECTED")
+        self.assertEqual(ap.FEC_STATE_NAMES[ap.FEC_STATE_IN_USE], "IN_USE")
+        raw = ap.encode_fec_cmd_status(ap.PAGE_FEC_TARGET_POWER, 3,
+                                       ap.FEC_CMD_STATUS_REJECTED,
+                                       ap.encode_fec_target_power(1000)[4:8])
+        got = ap.decode(raw, ap.FEC_DEVICE_TYPE)
+        self.assertEqual(got["last_command"], ap.PAGE_FEC_TARGET_POWER)
+        self.assertEqual(ap.FEC_CMD_STATUS_NAMES[got["status"]], "REJECTED")
+
+    def test_control_pages_round_trip_through_decode(self):
+        # Through decode(), as decode_pcap.py calls it, not the per-page
+        # decoders: the device-type dispatch is part of what is tested.
+        raw = ap.encode_fec_track_resistance(235, rolling_resistance=80)
+        got = ap.decode(raw, ap.FEC_DEVICE_TYPE)
+        self.assertEqual(got["grade_centi_pct"], 235)
+        self.assertEqual(got["rolling_resistance"], 80)
+        got = ap.decode(ap.encode_fec_target_power(1001), ap.FEC_DEVICE_TYPE)
+        self.assertEqual(got["power_quarter_w"], 1001)
+        got = ap.decode(ap.encode_fec_general(ap.FEC_TYPE_TRAINER, 40, 100,
+                                              8333, 150, ap.FEC_STATE_IN_USE,
+                                              hr_source=ap.FEC_HR_SRC_ANTPLUS),
+                        ap.FEC_DEVICE_TYPE)
+        self.assertEqual(got["equipment_type"], ap.FEC_TYPE_TRAINER)
+        self.assertEqual(got["speed_mm_s"], 8333)
+        self.assertEqual(got["heart_rate"], 150)
+        self.assertEqual(got["state"], ap.FEC_STATE_IN_USE)
+
     # Page 25, hand-packed: 0x5A3 W (1443) split across the nibble boundary
     # under trainer status 0x9, event 7, 90 rpm, accumulated 0x1234 W, flags
     # 0x2 and state IN_USE. Byte 6 is 0x95: status high, power's top nibble low.

@@ -105,6 +105,20 @@ reads.
   trades volume for detail; level 2 adds hex payloads. See
   `tools/zwift_shim/README.md`.
 
+- **`tools/decode_pcap.py` reports transfers and loss that hold on a Garmin
+  capture.** The transfer ledger counts the host's own ACKNOWLEDGED_DATA, so a
+  Garmin USB-m (which never sends RESPONSE_NO_ERROR for 0x4F) no longer shows
+  accepted=0. A capture that starts mid-session keeps the first transfer
+  outcome out of the totals (`presync`), and FE-C channels get a per-page line
+  (0x33 completion). New `slots=... loss=...` per channel from the receive
+  timestamps, beside RX_FAIL, which undercounts (Garmin FE-C: 84.3 % against
+  77.7 %). The period comes from `--period CH=N`, CHANNEL_PERIOD or the
+  timestamps, and says which. FE-C pages are decoded as a `[FE-C ...]`
+  suffix. With `-o`, the header goes to stdout and the file holds only the
+  body. Zwift's `00 00` OUT padding is `padding_bytes`, not `discarded_bytes`.
+  The summary's `transfers` line changed shape: `unmatched_terminal_events`
+  is now `unmatched`, shown only when non-zero.
+
 ### Fixed
 
 - **Security (not in any release image): the 2026-11-14 review items 1-4.**

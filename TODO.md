@@ -593,7 +593,8 @@ Done: one append-only `WriteFile` per line (no glued or blank lines, checked by 
 - Zero-byte reads are not logged (dsi_siusbxp.c:181), and log lines carry no timestamps, so read latency cannot be measured.
 - Every byte is logged with an `fflush`; one session wrote 73,390 lines. Host turnaround is 12–17 ms, against 0–1 ms on native USB. That comes from ANT_DLL's USBXpress path, matters during setup only, and is not the dongle.
 
-## 7. [TOOLS] decode_pcap.py gaps (slot loss from the RX timestamp: DONE 2026-11-16, `--phase A B`)
+## 7. [DONE 2026-11-16, branch tools/shim-log-and-decode-pcap] decode_pcap.py gaps (slot loss from the RX timestamp: DONE 2026-11-16, `--phase A B`)
+Done: the transfer ledger counts host submissions (Garmin 22:06 capture: submitted 291, accepted 149, refused 142, completed 34, failed 114, pending 1, presync 1), with `presync` for a mid-session start and a per-page line on FE-C channels (215313: 0x33 completion 84.9 %); `slots=... loss=...` from the RX timestamps beside RX_FAIL (Garmin FE-C 84.3 % against 77.7 %); period from `--period CH=N`, CHANNEL_PERIOD or inferred, source printed; FE-C pages decoded as a `[FE-C ...]` suffix; with `-o` the header goes to stdout; `padding_bytes`. `--phase 3 2` on 215313 is unchanged.
 - It counts a transfer as accepted only on RESPONSE_NO_ERROR, so a Garmin capture shows accepted=0 and unmatched=149. It also pairs a completion with a submit made before the capture started.
 - Loss counted from RX_FAIL understates real loss (Garmin FE-C: 78 % against 84 %), because search periods and collisions produce no RX_FAIL. Count slots from the RX timestamp instead (flag 0x20).
 - A capture started mid-session has no CHANNEL_PERIOD, so the period has to be supplied by hand.

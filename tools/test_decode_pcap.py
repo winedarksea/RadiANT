@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import ant_pages as ap
 import ant_wire as aw
 import decode_pcap as dp
 
@@ -17,10 +18,48 @@ def usb(payload, bus=1, device=7, endpoint=0x81, status=0, declared=None):
                        len(payload) if declared is None else declared) + payload
 
 
-def pcap(*packets, tail=b''):
+def pcap(*packets, tail=b'', times=None):
+    """Packets 1 ms apart from t=1 s, or at `times` (seconds) if given."""
     header = struct.pack('<IHHIIII', dp.PCAP_MAGIC_US, 2, 4, 0, 0, 65535, 249)
-    return header + b''.join(struct.pack('<IIII', 1, i * 1000, len(p), len(p)) + p
-                             for i, p in enumerate(packets)) + tail
+    if times is None:
+        times = [1 + i / 1000 for i in range(len(packets))]
+    out = b''
+    for t, p in zip(times, packets):
+        sec = int(t)
+        out += struct.pack('<IIII', sec, round((t - sec) * 1e6), len(p), len(p)) + p
+    return header + out + tail
+
+
+def host(msg_id, body):
+    """A host->dev bulk URB carrying one message."""
+    return usb(aw.frame(msg_id, bytes(body)), endpoint=0x01)
+
+
+def dev(msg_id, body):
+    return usb(aw.frame(msg_id, bytes(body)))
+
+
+def event(ch, code):
+    return dev(aw.MESG_RESPONSE_EVENT_ID, [ch, aw.MESG_EVENT_ID, code])
+
+
+def response(ch, ref, code):
+    return dev(aw.MESG_RESPONSE_EVENT_ID, [ch, ref, code])
+
+
+def rx(ch, ticks, payload=bytes(8), device_type=11, device_number=0x1234):
+    """A dev->host BROADCAST_DATA with device id, RSSI and timestamp."""
+    return dev(aw.MESG_BROADCAST_DATA_ID,
+               bytes([ch]) + payload + bytes([0xE0])
+               + bytes([device_number & 0xFF, device_number >> 8, device_type, 5])
+               + bytes(3) + bytes([ticks & 0xFF, (ticks >> 8) & 0xFF]))
+
+
+def run_main(args):
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        rc = dp.main([str(a) for a in args])
+    return rc, out.getvalue()
 
 
 class DecodeTests(unittest.TestCase):
@@ -137,17 +176,102 @@ class DecodeTests(unittest.TestCase):
         self.assertFalse(lines)
         self.assertIn('nonzero_usb_statuses=1', header)
 
+    ACK = aw.MESG_ACKNOWLEDGED_DATA_ID
+
+    def submit(self, ch=1, page=0x33):
+        return host(self.ACK, bytes([ch, page]) + bytes(7))
+
     def test_mid_session_and_pending_transfer_accounting(self):
-        def event(ref, code):
-            return usb(aw.frame(aw.MESG_RESPONSE_EVENT_ID, bytes([1, ref, code])))
+        # The first terminal event may settle a transfer submitted before the
+        # capture began: it is presync, and the ledger starts after it.
         header, _ = self.decode(pcap(
-            event(aw.MESG_EVENT_ID, aw.EVENT_TRANSFER_TX_FAILED),
-            event(aw.MESG_ACKNOWLEDGED_DATA_ID, 0),
-            event(aw.MESG_EVENT_ID, aw.EVENT_TRANSFER_TX_COMPLETED),
-            event(aw.MESG_ACKNOWLEDGED_DATA_ID, 0)))
-        self.assertIn('accepted=2 completed=1 failed=0 pending=1', header)
-        self.assertIn('unmatched_terminal_events=1', header)
+            event(1, aw.EVENT_TRANSFER_TX_FAILED),
+            self.submit(),
+            response(1, self.ACK, 0),
+            event(1, aw.EVENT_TRANSFER_TX_COMPLETED),
+            self.submit(),
+            response(1, self.ACK, 0)))
+        self.assertIn('transfers submitted=2 accepted=2 refused=0 completed=1 '
+                      'failed=0 pending=1 presync=1 confirmed=2', header)
+        self.assertNotIn('unmatched', header)
         self.assertIn('EVENT_TRANSFER_TX_FAILED=1', header)
+
+    def test_garmin_ledger_needs_no_response_no_error(self):
+        # The Garmin USB-m never answers a 0x4F with RESPONSE_NO_ERROR.
+        header, _ = self.decode(pcap(
+            host(aw.MESG_ASSIGN_CHANNEL_ID, [1, 0, 0]),
+            self.submit(),
+            event(1, aw.EVENT_TRANSFER_TX_COMPLETED)))
+        self.assertIn('transfers submitted=1 accepted=1 refused=0 completed=1 '
+                      'failed=0 pending=0 presync=0 confirmed=0', header)
+
+    def test_radiant_no_error_is_not_a_second_submission(self):
+        header, _ = self.decode(pcap(
+            host(aw.MESG_ASSIGN_CHANNEL_ID, [1, 0, 0]),
+            self.submit(),
+            response(1, self.ACK, aw.RESPONSE_NO_ERROR),
+            event(1, aw.EVENT_TRANSFER_TX_COMPLETED)))
+        self.assertIn('submitted=1 accepted=1 refused=0 completed=1 failed=0 '
+                      'pending=0 presync=0 confirmed=1', header)
+
+    def test_refusal_takes_back_the_newest_submission(self):
+        header, _ = self.decode(pcap(
+            host(aw.MESG_OPEN_CHANNEL_ID, [1]),
+            self.submit(page=0x31),
+            self.submit(page=0x33),
+            response(1, self.ACK, aw.TRANSFER_IN_PROGRESS),
+            event(1, aw.EVENT_TRANSFER_TX_FAILED)))
+        self.assertIn('submitted=2 accepted=1 refused=1 completed=0 failed=1 '
+                      'pending=0', header)
+
+    def test_assign_seen_means_no_presync(self):
+        header, _ = self.decode(pcap(
+            host(aw.MESG_ASSIGN_CHANNEL_ID, [1, 0, 0]),
+            event(1, aw.EVENT_TRANSFER_TX_COMPLETED)))
+        self.assertIn('presync=0', header)
+        self.assertIn('unmatched=1', header)
+
+    def test_fec_page_breakdown(self):
+        header, _ = self.decode(pcap(
+            host(aw.MESG_ASSIGN_CHANNEL_ID, [1, 0, 0]),
+            host(aw.MESG_CHANNEL_ID_ID, [1, 0, 0, ap.FEC_DEVICE_TYPE, 0]),
+            self.submit(page=0x33),
+            event(1, aw.EVENT_TRANSFER_TX_COMPLETED),
+            self.submit(page=0x33),
+            event(1, aw.EVENT_TRANSFER_TX_FAILED),
+            self.submit(page=0x31),
+            event(1, aw.EVENT_TRANSFER_TX_COMPLETED)))
+        self.assertIn('ch=1: FE-C page 0x31 submitted=1 accepted=1 refused=0 '
+                      'completed=1 failed=0 pending=0 completion=100.0 %', header)
+        self.assertIn('ch=1: FE-C page 0x33 submitted=2 accepted=2 refused=0 '
+                      'completed=1 failed=1 pending=0 completion=50.0 %', header)
+
+    def test_zero_tail_is_padding_not_discarded(self):
+        header, lines = self.decode(pcap(
+            usb(aw.frame(aw.MESG_SYSTEM_RESET_ID, b'\x00') + b'\x00\x00',
+                endpoint=0x01)))
+        self.assertEqual(len(lines), 1)
+        self.assertIn('discarded_bytes=0 padding_bytes=2', header)
+
+    def test_mixed_junk_is_still_discarded(self):
+        header, _ = self.decode(pcap(
+            usb(b'\x00\x01' + aw.frame(aw.MESG_STARTUP_MESG_ID, b'\x00'))))
+        self.assertIn('discarded_bytes=2 padding_bytes=0', header)
+
+    def test_out_file_holds_only_the_body(self):
+        f = aw.frame(aw.MESG_STARTUP_MESG_ID, b'\x00')
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'sample.pcap'
+            path.write_bytes(pcap(usb(f)))
+            out_file = Path(tmp) / 'out.txt'
+            rc, stdout = run_main([path, '-o', out_file])
+            body = out_file.read_text(encoding='utf-8')
+        self.assertEqual(rc, 0)
+        self.assertIn('devices seen', stdout)
+        self.assertIn('diagnostics:', stdout)
+        self.assertNotIn('devices seen', body)
+        self.assertNotIn('diagnostics:', body)
+        self.assertEqual(body.splitlines(), ['     0.000  dev->host  STARTUP_MESG 00'])
 
     def test_summary_contains_corruption_diagnostics(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -157,6 +281,129 @@ class DecodeTests(unittest.TestCase):
             with contextlib.redirect_stdout(out):
                 self.assertEqual(dp.main([str(path), '--summary']), 0)
             self.assertIn('bad_checksum_candidates=1', out.getvalue())
+
+
+class SlotLossTests(unittest.TestCase):
+    """The summary's slot-loss line, from the receive timestamps."""
+
+    def decode(self, packets, times, **kwargs):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'sample.pcap'
+            path.write_bytes(pcap(*packets, times=times))
+            header, lines = dp.decode(path, **kwargs)
+        return '\n'.join(header), lines
+
+    @staticmethod
+    def frames(slots, period, ch=1, t0=1.0):
+        """(packets, times) for a frame in each of `slots`."""
+        packets, times = [], []
+        for n in slots:
+            packets.append(rx(ch, (1000 + n * period) & 0xFFFF))
+            times.append(t0 + n * period / 32768)
+        return packets, times
+
+    def test_silent_slots_count_without_rx_fail(self):
+        pk, tm = self.frames([n for n in range(40) if not 10 <= n <= 12], 8192)
+        header, _ = self.decode([host(aw.MESG_CHANNEL_MESG_PERIOD_ID, [1, 0x00, 0x20])] + pk,
+                                [0.5] + tm)
+        self.assertIn('ch=1: slots=40 heard=37 loss=7.5 % (rx_fail=0, 0.0 %) '
+                      'longest_run=3 period 8192 (CHANNEL_PERIOD)', header)
+
+    def test_quiet_gap_longer_than_a_wrap(self):
+        # 8182 is not a divisor of 65536, so a wrong wrap count cannot hide.
+        slots = list(range(10)) + list(range(30, 40))
+        pk, tm = self.frames(slots, 8182)
+        header, _ = self.decode([host(aw.MESG_CHANNEL_MESG_PERIOD_ID, [1, 0xF6, 0x1F])] + pk,
+                                [0.5] + tm)
+        self.assertIn('ch=1: slots=40 heard=20 loss=50.0 %', header)
+        self.assertIn('longest_run=20', header)
+
+    def test_close_and_reopen_gap_is_not_counted(self):
+        pk, tm = self.frames(list(range(10)) + list(range(30, 40)), 8192)
+        gap = tm[9] + 0.5
+        packets = pk[:10] + [host(aw.MESG_CLOSE_CHANNEL_ID, [1]),
+                             host(aw.MESG_OPEN_CHANNEL_ID, [1])] + pk[10:]
+        times = tm[:10] + [gap, gap + 0.1] + tm[10:]
+        header, _ = self.decode(packets, times)
+        self.assertIn('ch=1: slots=20 heard=20 loss=0.0 %', header)
+
+    def test_period_inferred_without_channel_period(self):
+        pk, tm = self.frames([n for n in range(40) if n % 7 != 3], 8182)
+        header, _ = self.decode(pk, tm)
+        self.assertIn('period 8182 (inferred)', header)
+        self.assertIn('slots=40 heard=34', header)
+
+    def test_period_override_wins(self):
+        pk, tm = self.frames(range(20), 8182)
+        header, _ = self.decode([host(aw.MESG_CHANNEL_MESG_PERIOD_ID, [1, 0x00, 0x20])] + pk,
+                                [0.5] + tm, periods={1: 8182})
+        self.assertIn('period 8182 (--period)', header)
+        self.assertNotIn('warning', header)
+
+    def test_inferred_period_disagreeing_with_channel_period_warns(self):
+        pk, tm = self.frames(range(20), 8070)
+        header, _ = self.decode([host(aw.MESG_CHANNEL_MESG_PERIOD_ID, [1, 0x00, 0x20])] + pk,
+                                [0.5] + tm)
+        self.assertIn('warning: ch=1 inferred period 8070 differs from '
+                      'CHANNEL_PERIOD 8192 by more than 1 %', header)
+
+    def test_scan_channel_has_no_slot_loss(self):
+        packets = [rx(0, 1000 + n * 4000, device_number=n % 3 + 1) for n in range(10)]
+        header, _ = self.decode(packets, [1 + n * 0.12 for n in range(10)])
+        self.assertIn('ch=0: slots n/a (frames from 3 devices: a scan channel)', header)
+
+
+class FecTests(unittest.TestCase):
+    GRADE = ap.encode_fec_track_resistance(235, rolling_resistance=80)
+
+    def decode(self, data):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'sample.pcap'
+            path.write_bytes(data)
+            return dp.decode(path)
+
+    def test_track_resistance_on_a_fec_channel_is_annotated(self):
+        _, lines = self.decode(pcap(
+            host(aw.MESG_CHANNEL_ID_ID, [2, 0, 0, ap.FEC_DEVICE_TYPE | 0x80, 0]),
+            host(aw.MESG_ACKNOWLEDGED_DATA_ID, bytes([2]) + self.GRADE)))
+        self.assertTrue(lines[-1].endswith('  [FE-C 0x33 grade=+2.35% crr=0.0040]'),
+                        lines[-1])
+
+    def test_same_bytes_on_a_power_channel_are_not(self):
+        _, lines = self.decode(pcap(
+            host(aw.MESG_CHANNEL_ID_ID, [2, 0, 0, ap.BPWR_DEVICE_TYPE, 0]),
+            host(aw.MESG_ACKNOWLEDGED_DATA_ID, bytes([2]) + self.GRADE)))
+        self.assertNotIn('[FE-C', lines[-1])
+
+    def test_received_frame_identified_by_its_ext_device_id(self):
+        trainer = bytes([0x19, 0x07, 0x5A, 0x34, 0x12, 0xA3, 0x95, 0x32])
+        _, lines = self.decode(pcap(rx(3, 100, trainer, device_type=ap.FEC_DEVICE_TYPE),
+                                    rx(4, 200, trainer, device_type=ap.BPWR_DEVICE_TYPE)))
+        self.assertTrue(lines[0].endswith('[FE-C 0x19 ev=7 cad=90 accp=4660 '
+                                          'power=1443W status=0x9 state=IN_USE]'),
+                        lines[0])
+        self.assertNotIn('[FE-C', lines[1])
+
+    def test_annotations(self):
+        cases = {
+            ap.encode_fec_target_power(1001): '[FE-C 0x31 target=250.25W]',
+            ap.encode_fec_track_resistance(None): '[FE-C 0x33 grade=unset(flat) crr=default]',
+            ap.encode_fec_track_resistance(-150, 80): '[FE-C 0x33 grade=-1.50% crr=0.0040]',
+            ap.encode_fec_cmd_status(0x33, 9, ap.FEC_CMD_STATUS_REJECTED, b'\xff' * 4):
+                '[FE-C 0x47 last=0x33 seq=9 status=REJECTED]',
+            ap.encode_fec_general(ap.FEC_TYPE_TRAINER, 41, 120, 8333, None,
+                                  ap.FEC_STATE_READY):
+                '[FE-C 0x10 type=25 t=10.25s dist=120m speed=8.333m/s hr=- state=READY]',
+            bytes([0x50]) + bytes(7): '[FE-C 0x50]',
+        }
+        for payload, text in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(dp.fec_annotation(payload), text)
+
+    def test_annotation_does_not_disturb_phase_input(self):
+        line = PhaseTests.bcast(3, 1000, 1.0) + '  [FE-C 0x19 ev=1]'
+        timing = dp.timing_from_lines([line])
+        self.assertEqual(timing.frames()[3], [(1.0, 1000)])
 
 
 class PhaseTests(unittest.TestCase):

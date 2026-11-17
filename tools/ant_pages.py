@@ -1194,6 +1194,26 @@ FEC_CMD_STATUS_REJECTED = 3
 FEC_CMD_STATUS_PENDING = 4
 FEC_CMD_STATUS_UNINITIALISED = 0xFF
 
+# Page 71's status byte by name, for logs and decoders (ant_fec_control.py and
+# decode_pcap.py both print it). REJECTED is "understood and refused", which
+# is how a refused command is told apart from a lost one.
+FEC_CMD_STATUS_NAMES = {
+    FEC_CMD_STATUS_PASS: "PASS",
+    FEC_CMD_STATUS_FAIL: "FAIL",
+    FEC_CMD_STATUS_NOT_SUPPORTED: "NOT_SUPPORTED",
+    FEC_CMD_STATUS_REJECTED: "REJECTED",
+    FEC_CMD_STATUS_PENDING: "PENDING",
+    FEC_CMD_STATUS_UNINITIALISED: "UNINITIALISED",
+}
+
+# The FE state field (byte 7 bits 4..6 of pages 16, 19, 25 ...).
+FEC_STATE_NAMES = {
+    FEC_STATE_ASLEEP: "ASLEEP",
+    FEC_STATE_READY: "READY",
+    FEC_STATE_IN_USE: "IN_USE",
+    FEC_STATE_FINISHED: "FINISHED",
+}
+
 # Page 25 bytes 5 and 6's low nibble: 12-bit instantaneous power. 0xFFF
 # invalidates the accumulated power in bytes 3..4 as well (Table 8-25).
 FEC_INVALID_INST_POWER = 0x0FFF
