@@ -224,6 +224,30 @@ class DecodeTests(unittest.TestCase):
         self.assertIn('submitted=2 accepted=1 refused=1 completed=0 failed=1 '
                       'pending=0', header)
 
+    def test_submit_crossing_go_to_search_is_tagged(self):
+        # Garmin order: GO_TO_SEARCH, then the pending command's TX_FAILED.
+        # A refusal behind it is "behind crossed"; a submit made while
+        # searching and alive at the next broadcast is search/.../heard.
+        header, _ = self.decode(pcap(
+            host(aw.MESG_OPEN_CHANNEL_ID, [1]),
+            rx(1, 0),
+            self.submit(page=0x33),
+            event(1, aw.EVENT_RX_FAIL_GO_TO_SEARCH),
+            self.submit(page=0x37),
+            response(1, self.ACK, aw.TRANSFER_IN_PROGRESS),
+            event(1, aw.EVENT_TRANSFER_TX_FAILED),
+            self.submit(page=0x31),
+            rx(1, 8192),
+            event(1, aw.EVENT_TRANSFER_TX_COMPLETED)))
+        self.assertIn('ch=1: by_state track/crossed/unheard completed=0 failed=1 '
+                      'refused=0 pending=0', header)
+        self.assertIn('ch=1: by_state search/no_cross/unheard completed=0 failed=0 '
+                      'refused=1 pending=0', header)
+        self.assertIn('ch=1: by_state search/no_cross/heard completed=1 failed=0 '
+                      'refused=0 pending=0', header)
+        self.assertIn('ch=1: refused behind crossed=1', header)
+        self.assertIn('ch=1: gts order gts_then_failed=1', header)
+
     def test_assign_seen_means_no_presync(self):
         header, _ = self.decode(pcap(
             host(aw.MESG_ASSIGN_CHANNEL_ID, [1, 0, 0]),

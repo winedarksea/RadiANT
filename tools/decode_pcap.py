@@ -631,22 +631,67 @@ class Ledger:
     PAGE_COLUMNS = ('submitted', 'accepted', 'refused', 'completed', 'failed',
                     'pending')
 
+    # A gap this short between a TX_FAILED and a GO_TO_SEARCH counts as "at"
+    # the search transition, for the `gts order` line.
+    GTS_NEAR_S = 0.050
+
     def __init__(self, synced: bool = False):
         self.synced = synced
         self.fifo: deque[int | None] = deque()
+        # Parallel to `fifo`: the channel state each pending submit has seen,
+        # for the `by_state` breakdown (TODO item 3). The channel counts as
+        # SEARCHING from EVENT_RX_FAIL_GO_TO_SEARCH until its next
+        # BROADCAST_DATA.
+        self.meta: deque[dict] = deque()
         self.counts: Counter[str] = Counter()
         self.pages: dict[int | None, Counter] = {}
+        self.searching = False
+        self.by_state: dict[str, Counter] = {}
+        self.refused_behind: Counter[str] = Counter()
+        self.gts_order: Counter[str] = Counter()
+        self.last_gts: float | None = None
+        self.last_failed: float | None = None
+
+    @staticmethod
+    def state_key(m: dict) -> str:
+        return (('search' if m['searching'] else 'track') + '/'
+                + ('crossed' if m['crossed'] else 'no_cross') + '/'
+                + ('heard' if m['heard'] else 'unheard'))
+
+    def _state(self, m: dict, what: str) -> None:
+        self.by_state.setdefault(self.state_key(m), Counter())[what] += 1
+
+    def go_to_search(self, t: float = 0.0) -> None:
+        self.searching = True
+        for m in self.meta:
+            m['crossed'] = True
+        if self.last_failed is not None and t - self.last_failed <= self.GTS_NEAR_S:
+            self.gts_order['failed_then_gts'] += 1
+        self.last_gts = t
+
+    def broadcast(self, t: float = 0.0) -> None:
+        """A master frame on this channel: tracking again. A pending submit
+        made in search, or that crossed a GO_TO_SEARCH, was still alive when
+        the channel reacquired (`heard`)."""
+        if not self.searching:
+            return
+        self.searching = False
+        for m in self.meta:
+            if m['searching'] or m['crossed']:
+                m['heard'] = True
 
     def _page(self, page, what: str) -> None:
         self.pages.setdefault(page, Counter())[what] += 1
 
-    def submit(self, page) -> None:
+    def submit(self, page, t: float = 0.0) -> None:
         if not self.synced:
             self.counts['presync'] += 1
             return
         self.counts['submitted'] += 1
         self._page(page, 'submitted')
         self.fifo.append(page)
+        self.meta.append({'searching': self.searching, 'crossed': False,
+                          'heard': False, 't': t})
 
     def response(self, code: int) -> None:
         if not self.synced:
@@ -656,10 +701,23 @@ class Ledger:
         elif self.fifo:
             self.counts['refused'] += 1
             self._page(self.fifo.pop(), 'refused')
+            self._state(self.meta.pop(), 'refused')
+            # What the refused submit was stuck behind: the oldest pending one.
+            if self.meta:
+                b = self.meta[0]
+                self.refused_behind['crossed' if b['crossed'] else
+                                    'search_submit' if b['searching'] else
+                                    'tracking'] += 1
+            else:
+                self.refused_behind['nothing_pending'] += 1
         else:
             self.counts['unmatched'] += 1
 
-    def terminal(self, completed: bool) -> None:
+    def terminal(self, completed: bool, t: float = 0.0) -> None:
+        if not completed:
+            self.last_failed = t
+            if self.last_gts is not None and t - self.last_gts <= self.GTS_NEAR_S:
+                self.gts_order['gts_then_failed'] += 1
         if not self.synced:
             self.counts['presync'] += 1
             self.synced = True
@@ -668,6 +726,7 @@ class Ledger:
         if self.fifo:
             self.counts[outcome] += 1
             self._page(self.fifo.popleft(), outcome)
+            self._state(self.meta.popleft(), outcome)
         else:
             self.counts['unmatched'] += 1
 
@@ -676,7 +735,9 @@ class Ledger:
         while self.fifo:
             self.counts['pending'] += 1
             self._page(self.fifo.popleft(), 'pending')
+            self._state(self.meta.popleft(), 'pending')
         self.synced = True
+        self.searching = False
 
     def totals(self) -> Counter:
         c = Counter(self.counts)
@@ -691,6 +752,14 @@ class Ledger:
             c['pending'] += sum(1 for p in self.fifo if p == page)
             c['accepted'] = c['submitted'] - c['refused']
             out[page] = c
+        return out
+
+    STATE_COLUMNS = ('completed', 'failed', 'refused', 'pending')
+
+    def state_totals(self) -> dict:
+        out = {k: Counter(v) for k, v in self.by_state.items()}
+        for m in self.meta:
+            out.setdefault(self.state_key(m), Counter())['pending'] += 1
         return out
 
     def __bool__(self) -> bool:
@@ -802,17 +871,21 @@ def decode(path: Path, raw: bool = False, only_device: int | None = None,
                 if msg_id in LEDGER_SYNC_IDS:
                     ledger(key).synced = True
                 elif msg_id == ant_wire.MESG_ACKNOWLEDGED_DATA_ID:
-                    ledger(key).submit(body[1] if len(body) >= 2 else None)
+                    ledger(key).submit(body[1] if len(body) >= 2 else None, rel)
                 continue
             if msg_id == ant_wire.MESG_BROADCAST_DATA_ID:
                 channel_counts[key] += 1
+                ledger(key).broadcast(rel)
             if msg_id == ant_wire.MESG_RESPONSE_EVENT_ID and len(body) >= 3:
                 ref, code = body[1:3]
                 if ref == ant_wire.MESG_EVENT_ID:
                     events[(*key, code)] += 1
                     if code in (ant_wire.EVENT_TRANSFER_TX_COMPLETED,
                                 ant_wire.EVENT_TRANSFER_TX_FAILED):
-                        ledger(key).terminal(code == ant_wire.EVENT_TRANSFER_TX_COMPLETED)
+                        ledger(key).terminal(code == ant_wire.EVENT_TRANSFER_TX_COMPLETED,
+                                             rel)
+                    elif code == ant_wire.EVENT_RX_FAIL_GO_TO_SEARCH:
+                        ledger(key).go_to_search(rel)
                 else:
                     responses[(*key, ref, code)] += 1
                     if ref == ant_wire.MESG_ACKNOWLEDGED_DATA_ID:
@@ -902,6 +975,18 @@ def decode(path: Path, raw: bool = False, only_device: int | None = None,
                     f'bus={bus} device={device} ch={ch}: FE-C page {label} '
                     + ' '.join(f'{k}={pc[k]}' for k in Ledger.PAGE_COLUMNS)
                     + f' completion={100.0 * pc["completed"] / max(1, done):.1f} %')
+        # Channel state per submit (TODO item 3): submitted while tracking or
+        # searching / crossed a GO_TO_SEARCH while pending / a master frame
+        # heard after search while it was still pending.
+        for state, sc in sorted(led.state_totals().items()):
+            header.append(f'bus={bus} device={device} ch={ch}: by_state {state} '
+                          + ' '.join(f'{k}={sc[k]}' for k in Ledger.STATE_COLUMNS))
+        if led.refused_behind:
+            header.append(f'bus={bus} device={device} ch={ch}: refused behind '
+                          + ' '.join(f'{k}={v}' for k, v in sorted(led.refused_behind.items())))
+        if led.gts_order:
+            header.append(f'bus={bus} device={device} ch={ch}: gts order '
+                          + ' '.join(f'{k}={v}' for k, v in sorted(led.gts_order.items())))
     for (bus, device, ch, code), count in sorted(events.items()):
         header.append(f'bus={bus} device={device} ch={ch}: '
                       f'{event_names.get(code, f"EVENT_0x{code:02X}")}={count}')
