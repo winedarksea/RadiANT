@@ -332,7 +332,8 @@ static void button_init(void)
  * really happened AFTER. The snapshot taken here, after the assign returned,
  * gives that unless the reset was still running when it was taken:
  * reset_busy covers the whole of handle_system_reset() from before
- * antr_stack_reset() to 50 ms after the generation bump (ant_serial_bridge.h),
+ * antr_stack_reset() to after the generation bump and the reset's fences,
+ * just before the STARTUP goes out (ant_serial_bridge.h),
  * so an assign the wipe could have undone - or one landing between the wipe
  * and the bump, which would be recorded against the OLD generation and cleared
  * as the host's - is always seen busy. That case is put back to unassigned
@@ -341,9 +342,12 @@ static void button_init(void)
  * reset is busy the bridge thread is inside it and processes no host ASSIGN.
  *
  * What is left is an assign that returned before the reset began, followed by
- * the entire reset, its 50 ms tail and a host ASSIGN of this same channel, all
- * before the snapshot below - this thread pre-empted for over 50 ms between two
- * adjacent calls. That would be recorded as ours in the new generation. It is
+ * the entire reset, the host's round trip from STARTUP to its next command and
+ * a host ASSIGN of this same channel, all before the snapshot below - this
+ * thread pre-empted across the whole reset and that round trip between two
+ * adjacent calls. That would be recorded as ours in the new generation. The
+ * reset no longer ends in a fixed 50 ms sleep, so this needs the reset plus a
+ * host round trip rather than over 50 ms; accepted by the owner. It is
  * stated rather than fixed: nothing this side of the bridge can tell an assign
  * the wipe undid from one made after it.
  */

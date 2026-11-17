@@ -13,6 +13,17 @@ reads.
 
 ### Fixed
 
+- **SYSTEM_RESET is answered in a few milliseconds, not 52.** The bridge slept
+  50 ms before sending STARTUP, which put the reply on top of libusb-win32's
+  short-read race: a host reading with a 50 ms timeout lost 5 of 1000 STARTUPs.
+  The sleep is replaced by two fences that close the orderings it was hiding:
+  an event still inside the bridge, and events still queued for the transport.
+  `antr_stack_reset()` also waits for a delivery that had already left the ring.
+  Measured reset to STARTUP: Pro Micro 2.6 ms, L15 3.1 ms, TI 5.4 ms (each was
+  about 50 ms more), with 0 of 1000 lost at a 50 ms read and no stale frame
+  around any reset (`archive/benchmarks/2026-11-17-startup-latency/`). The
+  sdk-ant reference build keeps the sleep.
+
 - **TI: acknowledged data sent as a slave no longer fails for whole
   sessions.** The reply went on air about 105 us earlier than a real ANT slave
   answers, at the early edge of the master's reply window. A Garmin master's

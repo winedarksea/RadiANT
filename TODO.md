@@ -429,8 +429,14 @@ There was no MPSL assert and no re-enumeration.
 - Put the PCA10059 on the Pro Micro's port, in the same position and orientation. Gate on Kicker RSSI near -67 dBm.
 - Then A/B the direct image against `gate.conf` in that position. Compare power loss, scan rate, FE-C reacquire time and the "heard, no ACK" rate.
 
-## 5. [FIRMWARE, LOW] STARTUP_MESG takes 53–59 ms after SYSTEM_RESET
-The Garmin answers in 1 ms. 53–59 ms sits right at the libusb0 short-read race, where a read near reply latency loses the frame (1.1 % at 50 ms). Find what delays the reply and shorten it.
+## 5. [DONE 2026-11-17, branch fix/startup-latency] STARTUP_MESG takes 53–59 ms after SYSTEM_RESET
+The cause was `k_sleep(K_MSEC(50))` in `handle_system_reset()`. It is now replaced by an event-path fence, a transport TX fence (`ant_transport_tx_fence()`) and a drain wait in `antr_stack_reset()`. Reset to STARTUP p50, from A to B:
+- Pro Micro: 52.7 to 2.6 ms.
+- L15 MPSL: 53.2 to 3.1 ms.
+- TI: 55.4 to 5.4 ms.
+- Garmin, for reference: 0.66 ms.
+
+With 50 ms reads on the Pro Micro, A lost 5/1000 STARTUPs and B lost 0/1000. No board had an ordering violation, and negative controls show the tool catches both races. Evidence: `archive/benchmarks/2026-11-17-startup-latency/`.
 
 ## 6. [DONE 2026-11-16, branch tools/shim-log-and-decode-pcap] Zwift shim logging
 

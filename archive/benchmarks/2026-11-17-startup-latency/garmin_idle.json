@@ -1,0 +1,8086 @@
+{
+  "recorded": "2026-11-17T23:44:25.224117+00:00",
+  "endpoint": "006",
+  "args": {
+    "serial": "006",
+    "port": null,
+    "baud": 115200,
+    "count": 1000,
+    "read_timeout_ms": 1000,
+    "reset_timeout_s": 3.0,
+    "reopen": false,
+    "traffic": false,
+    "device_number": null,
+    "device_type": 11,
+    "period": 8182,
+    "dwell_s": 0.6,
+    "pause_s": 0.0,
+    "after_ms": 0,
+    "jitter_s": 0.0,
+    "seed": null,
+    "health": false
+  },
+  "summary": {
+    "iterations": 1000,
+    "failures": 0,
+    "failed_iterations": [],
+    "failure_rate_pct": 0.0,
+    "failure_ci95_pct": [
+      0.0,
+      0.38267584855551234
+    ],
+    "read_timeout_ms": 1000,
+    "latency_ms": {
+      "p10": 0.615,
+      "p50": 0.658,
+      "p90": 0.719,
+      "p99": 1.2383199999999996,
+      "min": 0.59,
+      "max": 4.912
+    },
+    "within_one_read_timeout": 1000,
+    "violations_before": 0,
+    "violations_after": 0,
+    "violating_iterations": [],
+    "checksum_errors": 0,
+    "discarded_bytes": 0
+  },
+  "rows": [
+    {
+      "i": 0,
+      "ok": true,
+      "latency_ms": 3.499,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [
+        "0x40",
+        "0x40",
+        "0x40",
+        "0x40",
+        "0x40",
+        "0x40",
+        "0x40",
+        "0x40",
+        "0x40",
+        "0x40",
+        "0x40",
+        "0x40",
+        "0x40",
+        "0x40",
+        "0x40",
+        "0x40",
+        "0x40",
+        "0x40",
+        "0x40",
+        "0x40",
+        "0x40",
+        "0x40",
+        "0x40",
+        "0x40",
+        "0x40",
+        "0x40",
+        "0x40",
+        "0x40",
+        "0x40",
+        "0x40",
+        "0x40",
+        "0x40",
+        "0x40",
+        "0x40",
+        "0x40"
+      ],
+      "violations_before": []
+    },
+    {
+      "i": 1,
+      "ok": true,
+      "latency_ms": 0.644,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 2,
+      "ok": true,
+      "latency_ms": 0.618,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 3,
+      "ok": true,
+      "latency_ms": 0.611,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 4,
+      "ok": true,
+      "latency_ms": 0.678,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 5,
+      "ok": true,
+      "latency_ms": 0.662,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 6,
+      "ok": true,
+      "latency_ms": 0.636,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 7,
+      "ok": true,
+      "latency_ms": 0.678,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 8,
+      "ok": true,
+      "latency_ms": 0.654,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 9,
+      "ok": true,
+      "latency_ms": 0.611,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 10,
+      "ok": true,
+      "latency_ms": 0.602,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 11,
+      "ok": true,
+      "latency_ms": 0.608,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 12,
+      "ok": true,
+      "latency_ms": 0.604,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 13,
+      "ok": true,
+      "latency_ms": 0.631,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 14,
+      "ok": true,
+      "latency_ms": 0.644,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 15,
+      "ok": true,
+      "latency_ms": 0.616,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 16,
+      "ok": true,
+      "latency_ms": 0.605,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 17,
+      "ok": true,
+      "latency_ms": 0.599,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 18,
+      "ok": true,
+      "latency_ms": 0.618,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 19,
+      "ok": true,
+      "latency_ms": 0.604,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 20,
+      "ok": true,
+      "latency_ms": 0.631,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 21,
+      "ok": true,
+      "latency_ms": 0.643,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 22,
+      "ok": true,
+      "latency_ms": 0.644,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 23,
+      "ok": true,
+      "latency_ms": 0.643,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 24,
+      "ok": true,
+      "latency_ms": 0.647,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 25,
+      "ok": true,
+      "latency_ms": 0.629,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 26,
+      "ok": true,
+      "latency_ms": 0.638,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 27,
+      "ok": true,
+      "latency_ms": 0.682,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 28,
+      "ok": true,
+      "latency_ms": 0.724,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 29,
+      "ok": true,
+      "latency_ms": 0.696,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 30,
+      "ok": true,
+      "latency_ms": 0.662,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 31,
+      "ok": true,
+      "latency_ms": 0.697,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 32,
+      "ok": true,
+      "latency_ms": 0.684,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 33,
+      "ok": true,
+      "latency_ms": 0.824,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 34,
+      "ok": true,
+      "latency_ms": 0.663,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 35,
+      "ok": true,
+      "latency_ms": 0.654,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 36,
+      "ok": true,
+      "latency_ms": 0.66,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 37,
+      "ok": true,
+      "latency_ms": 0.633,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 38,
+      "ok": true,
+      "latency_ms": 0.738,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 39,
+      "ok": true,
+      "latency_ms": 0.696,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 40,
+      "ok": true,
+      "latency_ms": 0.727,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 41,
+      "ok": true,
+      "latency_ms": 0.663,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 42,
+      "ok": true,
+      "latency_ms": 0.671,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 43,
+      "ok": true,
+      "latency_ms": 0.66,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 44,
+      "ok": true,
+      "latency_ms": 0.636,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 45,
+      "ok": true,
+      "latency_ms": 0.654,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 46,
+      "ok": true,
+      "latency_ms": 0.652,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 47,
+      "ok": true,
+      "latency_ms": 0.628,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 48,
+      "ok": true,
+      "latency_ms": 0.652,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 49,
+      "ok": true,
+      "latency_ms": 0.682,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 50,
+      "ok": true,
+      "latency_ms": 0.641,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 51,
+      "ok": true,
+      "latency_ms": 0.657,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 52,
+      "ok": true,
+      "latency_ms": 0.703,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 53,
+      "ok": true,
+      "latency_ms": 0.68,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 54,
+      "ok": true,
+      "latency_ms": 0.655,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 55,
+      "ok": true,
+      "latency_ms": 0.653,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 56,
+      "ok": true,
+      "latency_ms": 0.626,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 57,
+      "ok": true,
+      "latency_ms": 0.646,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 58,
+      "ok": true,
+      "latency_ms": 0.662,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 59,
+      "ok": true,
+      "latency_ms": 0.643,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 60,
+      "ok": true,
+      "latency_ms": 0.606,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 61,
+      "ok": true,
+      "latency_ms": 0.621,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 62,
+      "ok": true,
+      "latency_ms": 0.631,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 63,
+      "ok": true,
+      "latency_ms": 0.628,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 64,
+      "ok": true,
+      "latency_ms": 0.698,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 65,
+      "ok": true,
+      "latency_ms": 0.695,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 66,
+      "ok": true,
+      "latency_ms": 0.673,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 67,
+      "ok": true,
+      "latency_ms": 0.68,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 68,
+      "ok": true,
+      "latency_ms": 0.627,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 69,
+      "ok": true,
+      "latency_ms": 0.671,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 70,
+      "ok": true,
+      "latency_ms": 0.69,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 71,
+      "ok": true,
+      "latency_ms": 0.657,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 72,
+      "ok": true,
+      "latency_ms": 0.643,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 73,
+      "ok": true,
+      "latency_ms": 0.653,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 74,
+      "ok": true,
+      "latency_ms": 0.598,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 75,
+      "ok": true,
+      "latency_ms": 0.706,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 76,
+      "ok": true,
+      "latency_ms": 0.727,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 77,
+      "ok": true,
+      "latency_ms": 0.68,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 78,
+      "ok": true,
+      "latency_ms": 0.659,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 79,
+      "ok": true,
+      "latency_ms": 0.637,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 80,
+      "ok": true,
+      "latency_ms": 0.671,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 81,
+      "ok": true,
+      "latency_ms": 0.661,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 82,
+      "ok": true,
+      "latency_ms": 0.649,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 83,
+      "ok": true,
+      "latency_ms": 0.77,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 84,
+      "ok": true,
+      "latency_ms": 0.921,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 85,
+      "ok": true,
+      "latency_ms": 0.683,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 86,
+      "ok": true,
+      "latency_ms": 0.639,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 87,
+      "ok": true,
+      "latency_ms": 0.711,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 88,
+      "ok": true,
+      "latency_ms": 0.689,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 89,
+      "ok": true,
+      "latency_ms": 0.645,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 90,
+      "ok": true,
+      "latency_ms": 0.621,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 91,
+      "ok": true,
+      "latency_ms": 0.637,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 92,
+      "ok": true,
+      "latency_ms": 0.679,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 93,
+      "ok": true,
+      "latency_ms": 0.648,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 94,
+      "ok": true,
+      "latency_ms": 0.689,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 95,
+      "ok": true,
+      "latency_ms": 0.65,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 96,
+      "ok": true,
+      "latency_ms": 0.624,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 97,
+      "ok": true,
+      "latency_ms": 0.62,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 98,
+      "ok": true,
+      "latency_ms": 1.238,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 99,
+      "ok": true,
+      "latency_ms": 0.664,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 100,
+      "ok": true,
+      "latency_ms": 0.925,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 101,
+      "ok": true,
+      "latency_ms": 0.642,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 102,
+      "ok": true,
+      "latency_ms": 0.647,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 103,
+      "ok": true,
+      "latency_ms": 0.614,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 104,
+      "ok": true,
+      "latency_ms": 0.719,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 105,
+      "ok": true,
+      "latency_ms": 4.912,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 106,
+      "ok": true,
+      "latency_ms": 0.663,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 107,
+      "ok": true,
+      "latency_ms": 0.647,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 108,
+      "ok": true,
+      "latency_ms": 0.685,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 109,
+      "ok": true,
+      "latency_ms": 0.609,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 110,
+      "ok": true,
+      "latency_ms": 0.606,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 111,
+      "ok": true,
+      "latency_ms": 0.651,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 112,
+      "ok": true,
+      "latency_ms": 0.674,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 113,
+      "ok": true,
+      "latency_ms": 0.651,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 114,
+      "ok": true,
+      "latency_ms": 0.657,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 115,
+      "ok": true,
+      "latency_ms": 0.687,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 116,
+      "ok": true,
+      "latency_ms": 0.631,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 117,
+      "ok": true,
+      "latency_ms": 0.626,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 118,
+      "ok": true,
+      "latency_ms": 0.617,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 119,
+      "ok": true,
+      "latency_ms": 0.645,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 120,
+      "ok": true,
+      "latency_ms": 0.629,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 121,
+      "ok": true,
+      "latency_ms": 0.628,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 122,
+      "ok": true,
+      "latency_ms": 1.039,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 123,
+      "ok": true,
+      "latency_ms": 0.674,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 124,
+      "ok": true,
+      "latency_ms": 0.667,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 125,
+      "ok": true,
+      "latency_ms": 0.639,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 126,
+      "ok": true,
+      "latency_ms": 0.624,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 127,
+      "ok": true,
+      "latency_ms": 0.608,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 128,
+      "ok": true,
+      "latency_ms": 0.629,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 129,
+      "ok": true,
+      "latency_ms": 0.67,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 130,
+      "ok": true,
+      "latency_ms": 0.686,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 131,
+      "ok": true,
+      "latency_ms": 0.673,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 132,
+      "ok": true,
+      "latency_ms": 0.654,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 133,
+      "ok": true,
+      "latency_ms": 0.653,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 134,
+      "ok": true,
+      "latency_ms": 0.634,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 135,
+      "ok": true,
+      "latency_ms": 0.642,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 136,
+      "ok": true,
+      "latency_ms": 0.663,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 137,
+      "ok": true,
+      "latency_ms": 0.658,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 138,
+      "ok": true,
+      "latency_ms": 0.709,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 139,
+      "ok": true,
+      "latency_ms": 0.686,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 140,
+      "ok": true,
+      "latency_ms": 0.655,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 141,
+      "ok": true,
+      "latency_ms": 0.636,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 142,
+      "ok": true,
+      "latency_ms": 0.655,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 143,
+      "ok": true,
+      "latency_ms": 0.693,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 144,
+      "ok": true,
+      "latency_ms": 0.666,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 145,
+      "ok": true,
+      "latency_ms": 0.657,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 146,
+      "ok": true,
+      "latency_ms": 0.627,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 147,
+      "ok": true,
+      "latency_ms": 0.626,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 148,
+      "ok": true,
+      "latency_ms": 0.718,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 149,
+      "ok": true,
+      "latency_ms": 0.636,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 150,
+      "ok": true,
+      "latency_ms": 0.631,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 151,
+      "ok": true,
+      "latency_ms": 0.647,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 152,
+      "ok": true,
+      "latency_ms": 0.625,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 153,
+      "ok": true,
+      "latency_ms": 0.651,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 154,
+      "ok": true,
+      "latency_ms": 0.618,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 155,
+      "ok": true,
+      "latency_ms": 0.652,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 156,
+      "ok": true,
+      "latency_ms": 0.734,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 157,
+      "ok": true,
+      "latency_ms": 0.641,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 158,
+      "ok": true,
+      "latency_ms": 0.618,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 159,
+      "ok": true,
+      "latency_ms": 0.612,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 160,
+      "ok": true,
+      "latency_ms": 0.621,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 161,
+      "ok": true,
+      "latency_ms": 0.636,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 162,
+      "ok": true,
+      "latency_ms": 0.697,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 163,
+      "ok": true,
+      "latency_ms": 0.674,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 164,
+      "ok": true,
+      "latency_ms": 0.685,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 165,
+      "ok": true,
+      "latency_ms": 0.635,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 166,
+      "ok": true,
+      "latency_ms": 0.629,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 167,
+      "ok": true,
+      "latency_ms": 0.62,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 168,
+      "ok": true,
+      "latency_ms": 0.638,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 169,
+      "ok": true,
+      "latency_ms": 0.657,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 170,
+      "ok": true,
+      "latency_ms": 0.615,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 171,
+      "ok": true,
+      "latency_ms": 0.646,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 172,
+      "ok": true,
+      "latency_ms": 0.629,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 173,
+      "ok": true,
+      "latency_ms": 0.621,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 174,
+      "ok": true,
+      "latency_ms": 0.651,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 175,
+      "ok": true,
+      "latency_ms": 0.665,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 176,
+      "ok": true,
+      "latency_ms": 0.643,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 177,
+      "ok": true,
+      "latency_ms": 0.605,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 178,
+      "ok": true,
+      "latency_ms": 0.599,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 179,
+      "ok": true,
+      "latency_ms": 0.615,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 180,
+      "ok": true,
+      "latency_ms": 0.629,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 181,
+      "ok": true,
+      "latency_ms": 0.66,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 182,
+      "ok": true,
+      "latency_ms": 0.704,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 183,
+      "ok": true,
+      "latency_ms": 0.624,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 184,
+      "ok": true,
+      "latency_ms": 0.609,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 185,
+      "ok": true,
+      "latency_ms": 0.634,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 186,
+      "ok": true,
+      "latency_ms": 0.639,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 187,
+      "ok": true,
+      "latency_ms": 0.684,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 188,
+      "ok": true,
+      "latency_ms": 0.658,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 189,
+      "ok": true,
+      "latency_ms": 0.628,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 190,
+      "ok": true,
+      "latency_ms": 0.622,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 191,
+      "ok": true,
+      "latency_ms": 0.608,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 192,
+      "ok": true,
+      "latency_ms": 0.608,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 193,
+      "ok": true,
+      "latency_ms": 0.688,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 194,
+      "ok": true,
+      "latency_ms": 0.936,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 195,
+      "ok": true,
+      "latency_ms": 0.665,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 196,
+      "ok": true,
+      "latency_ms": 0.654,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 197,
+      "ok": true,
+      "latency_ms": 0.628,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 198,
+      "ok": true,
+      "latency_ms": 0.602,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 199,
+      "ok": true,
+      "latency_ms": 0.596,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 200,
+      "ok": true,
+      "latency_ms": 0.667,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 201,
+      "ok": true,
+      "latency_ms": 0.7,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 202,
+      "ok": true,
+      "latency_ms": 0.695,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 203,
+      "ok": true,
+      "latency_ms": 0.66,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 204,
+      "ok": true,
+      "latency_ms": 0.743,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 205,
+      "ok": true,
+      "latency_ms": 0.698,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 206,
+      "ok": true,
+      "latency_ms": 0.67,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 207,
+      "ok": true,
+      "latency_ms": 0.676,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 208,
+      "ok": true,
+      "latency_ms": 0.707,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 209,
+      "ok": true,
+      "latency_ms": 0.688,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 210,
+      "ok": true,
+      "latency_ms": 0.677,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 211,
+      "ok": true,
+      "latency_ms": 0.663,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 212,
+      "ok": true,
+      "latency_ms": 0.632,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 213,
+      "ok": true,
+      "latency_ms": 0.651,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 214,
+      "ok": true,
+      "latency_ms": 0.632,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 215,
+      "ok": true,
+      "latency_ms": 0.626,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 216,
+      "ok": true,
+      "latency_ms": 0.613,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 217,
+      "ok": true,
+      "latency_ms": 0.625,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 218,
+      "ok": true,
+      "latency_ms": 0.693,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 219,
+      "ok": true,
+      "latency_ms": 0.754,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 220,
+      "ok": true,
+      "latency_ms": 0.694,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 221,
+      "ok": true,
+      "latency_ms": 0.666,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 222,
+      "ok": true,
+      "latency_ms": 0.627,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 223,
+      "ok": true,
+      "latency_ms": 0.65,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 224,
+      "ok": true,
+      "latency_ms": 0.675,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 225,
+      "ok": true,
+      "latency_ms": 0.652,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 226,
+      "ok": true,
+      "latency_ms": 0.613,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 227,
+      "ok": true,
+      "latency_ms": 0.625,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 228,
+      "ok": true,
+      "latency_ms": 0.661,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 229,
+      "ok": true,
+      "latency_ms": 0.655,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 230,
+      "ok": true,
+      "latency_ms": 0.604,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 231,
+      "ok": true,
+      "latency_ms": 0.631,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 232,
+      "ok": true,
+      "latency_ms": 0.656,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 233,
+      "ok": true,
+      "latency_ms": 0.704,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 234,
+      "ok": true,
+      "latency_ms": 0.654,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 235,
+      "ok": true,
+      "latency_ms": 0.622,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 236,
+      "ok": true,
+      "latency_ms": 0.682,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 237,
+      "ok": true,
+      "latency_ms": 0.657,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 238,
+      "ok": true,
+      "latency_ms": 0.679,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 239,
+      "ok": true,
+      "latency_ms": 0.641,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 240,
+      "ok": true,
+      "latency_ms": 0.629,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 241,
+      "ok": true,
+      "latency_ms": 0.606,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 242,
+      "ok": true,
+      "latency_ms": 0.604,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 243,
+      "ok": true,
+      "latency_ms": 0.641,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 244,
+      "ok": true,
+      "latency_ms": 0.679,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 245,
+      "ok": true,
+      "latency_ms": 0.656,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 246,
+      "ok": true,
+      "latency_ms": 0.675,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 247,
+      "ok": true,
+      "latency_ms": 0.667,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 248,
+      "ok": true,
+      "latency_ms": 0.654,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 249,
+      "ok": true,
+      "latency_ms": 0.644,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 250,
+      "ok": true,
+      "latency_ms": 0.626,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 251,
+      "ok": true,
+      "latency_ms": 0.62,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 252,
+      "ok": true,
+      "latency_ms": 0.608,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 253,
+      "ok": true,
+      "latency_ms": 0.59,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 254,
+      "ok": true,
+      "latency_ms": 0.6,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 255,
+      "ok": true,
+      "latency_ms": 0.665,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 256,
+      "ok": true,
+      "latency_ms": 0.754,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 257,
+      "ok": true,
+      "latency_ms": 0.71,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 258,
+      "ok": true,
+      "latency_ms": 0.677,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 259,
+      "ok": true,
+      "latency_ms": 0.631,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 260,
+      "ok": true,
+      "latency_ms": 0.665,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 261,
+      "ok": true,
+      "latency_ms": 0.972,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 262,
+      "ok": true,
+      "latency_ms": 0.927,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 263,
+      "ok": true,
+      "latency_ms": 0.862,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 264,
+      "ok": true,
+      "latency_ms": 0.71,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 265,
+      "ok": true,
+      "latency_ms": 0.662,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 266,
+      "ok": true,
+      "latency_ms": 0.705,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 267,
+      "ok": true,
+      "latency_ms": 0.684,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 268,
+      "ok": true,
+      "latency_ms": 0.658,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 269,
+      "ok": true,
+      "latency_ms": 0.674,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 270,
+      "ok": true,
+      "latency_ms": 0.647,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 271,
+      "ok": true,
+      "latency_ms": 0.675,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 272,
+      "ok": true,
+      "latency_ms": 0.687,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 273,
+      "ok": true,
+      "latency_ms": 0.712,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 274,
+      "ok": true,
+      "latency_ms": 0.706,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 275,
+      "ok": true,
+      "latency_ms": 0.655,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 276,
+      "ok": true,
+      "latency_ms": 0.668,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 277,
+      "ok": true,
+      "latency_ms": 0.625,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 278,
+      "ok": true,
+      "latency_ms": 0.62,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 279,
+      "ok": true,
+      "latency_ms": 0.629,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 280,
+      "ok": true,
+      "latency_ms": 0.664,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 281,
+      "ok": true,
+      "latency_ms": 0.645,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 282,
+      "ok": true,
+      "latency_ms": 0.628,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 283,
+      "ok": true,
+      "latency_ms": 0.611,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 284,
+      "ok": true,
+      "latency_ms": 0.605,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 285,
+      "ok": true,
+      "latency_ms": 0.667,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 286,
+      "ok": true,
+      "latency_ms": 0.627,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 287,
+      "ok": true,
+      "latency_ms": 0.631,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 288,
+      "ok": true,
+      "latency_ms": 0.624,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 289,
+      "ok": true,
+      "latency_ms": 0.621,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 290,
+      "ok": true,
+      "latency_ms": 0.602,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 291,
+      "ok": true,
+      "latency_ms": 0.607,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 292,
+      "ok": true,
+      "latency_ms": 0.718,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 293,
+      "ok": true,
+      "latency_ms": 0.648,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 294,
+      "ok": true,
+      "latency_ms": 0.626,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 295,
+      "ok": true,
+      "latency_ms": 0.672,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 296,
+      "ok": true,
+      "latency_ms": 0.616,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 297,
+      "ok": true,
+      "latency_ms": 0.604,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 298,
+      "ok": true,
+      "latency_ms": 0.602,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 299,
+      "ok": true,
+      "latency_ms": 0.632,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 300,
+      "ok": true,
+      "latency_ms": 0.672,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 301,
+      "ok": true,
+      "latency_ms": 0.665,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 302,
+      "ok": true,
+      "latency_ms": 0.625,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 303,
+      "ok": true,
+      "latency_ms": 0.613,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 304,
+      "ok": true,
+      "latency_ms": 0.608,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 305,
+      "ok": true,
+      "latency_ms": 0.632,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 306,
+      "ok": true,
+      "latency_ms": 0.63,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 307,
+      "ok": true,
+      "latency_ms": 0.623,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 308,
+      "ok": true,
+      "latency_ms": 0.625,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 309,
+      "ok": true,
+      "latency_ms": 0.666,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 310,
+      "ok": true,
+      "latency_ms": 0.598,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 311,
+      "ok": true,
+      "latency_ms": 0.591,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 312,
+      "ok": true,
+      "latency_ms": 0.633,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 313,
+      "ok": true,
+      "latency_ms": 0.685,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 314,
+      "ok": true,
+      "latency_ms": 0.626,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 315,
+      "ok": true,
+      "latency_ms": 0.621,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 316,
+      "ok": true,
+      "latency_ms": 0.63,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 317,
+      "ok": true,
+      "latency_ms": 0.616,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 318,
+      "ok": true,
+      "latency_ms": 0.649,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 319,
+      "ok": true,
+      "latency_ms": 0.654,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 320,
+      "ok": true,
+      "latency_ms": 0.624,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 321,
+      "ok": true,
+      "latency_ms": 0.615,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 322,
+      "ok": true,
+      "latency_ms": 0.603,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 323,
+      "ok": true,
+      "latency_ms": 0.61,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 324,
+      "ok": true,
+      "latency_ms": 0.625,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 325,
+      "ok": true,
+      "latency_ms": 0.654,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 326,
+      "ok": true,
+      "latency_ms": 0.707,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 327,
+      "ok": true,
+      "latency_ms": 0.686,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 328,
+      "ok": true,
+      "latency_ms": 0.66,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 329,
+      "ok": true,
+      "latency_ms": 0.673,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 330,
+      "ok": true,
+      "latency_ms": 0.676,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 331,
+      "ok": true,
+      "latency_ms": 0.673,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 332,
+      "ok": true,
+      "latency_ms": 0.724,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 333,
+      "ok": true,
+      "latency_ms": 0.653,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 334,
+      "ok": true,
+      "latency_ms": 0.624,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 335,
+      "ok": true,
+      "latency_ms": 0.695,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 336,
+      "ok": true,
+      "latency_ms": 0.654,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 337,
+      "ok": true,
+      "latency_ms": 0.656,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 338,
+      "ok": true,
+      "latency_ms": 0.674,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 339,
+      "ok": true,
+      "latency_ms": 0.661,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 340,
+      "ok": true,
+      "latency_ms": 0.685,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 341,
+      "ok": true,
+      "latency_ms": 0.632,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 342,
+      "ok": true,
+      "latency_ms": 0.62,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 343,
+      "ok": true,
+      "latency_ms": 0.632,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 344,
+      "ok": true,
+      "latency_ms": 0.699,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 345,
+      "ok": true,
+      "latency_ms": 0.647,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 346,
+      "ok": true,
+      "latency_ms": 0.628,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 347,
+      "ok": true,
+      "latency_ms": 0.604,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 348,
+      "ok": true,
+      "latency_ms": 0.62,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 349,
+      "ok": true,
+      "latency_ms": 0.761,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 350,
+      "ok": true,
+      "latency_ms": 0.89,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 351,
+      "ok": true,
+      "latency_ms": 0.776,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 352,
+      "ok": true,
+      "latency_ms": 0.634,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 353,
+      "ok": true,
+      "latency_ms": 0.631,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 354,
+      "ok": true,
+      "latency_ms": 0.647,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 355,
+      "ok": true,
+      "latency_ms": 0.654,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 356,
+      "ok": true,
+      "latency_ms": 0.649,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 357,
+      "ok": true,
+      "latency_ms": 0.68,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 358,
+      "ok": true,
+      "latency_ms": 0.66,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 359,
+      "ok": true,
+      "latency_ms": 0.616,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 360,
+      "ok": true,
+      "latency_ms": 0.682,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 361,
+      "ok": true,
+      "latency_ms": 0.634,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 362,
+      "ok": true,
+      "latency_ms": 0.625,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 363,
+      "ok": true,
+      "latency_ms": 0.718,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 364,
+      "ok": true,
+      "latency_ms": 0.65,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 365,
+      "ok": true,
+      "latency_ms": 0.645,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 366,
+      "ok": true,
+      "latency_ms": 0.682,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 367,
+      "ok": true,
+      "latency_ms": 0.627,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 368,
+      "ok": true,
+      "latency_ms": 0.68,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 369,
+      "ok": true,
+      "latency_ms": 0.708,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 370,
+      "ok": true,
+      "latency_ms": 0.685,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 371,
+      "ok": true,
+      "latency_ms": 0.666,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 372,
+      "ok": true,
+      "latency_ms": 0.674,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 373,
+      "ok": true,
+      "latency_ms": 0.779,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 374,
+      "ok": true,
+      "latency_ms": 0.68,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 375,
+      "ok": true,
+      "latency_ms": 0.689,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 376,
+      "ok": true,
+      "latency_ms": 0.643,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 377,
+      "ok": true,
+      "latency_ms": 0.621,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 378,
+      "ok": true,
+      "latency_ms": 0.606,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 379,
+      "ok": true,
+      "latency_ms": 0.606,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 380,
+      "ok": true,
+      "latency_ms": 0.646,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 381,
+      "ok": true,
+      "latency_ms": 0.68,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 382,
+      "ok": true,
+      "latency_ms": 0.633,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 383,
+      "ok": true,
+      "latency_ms": 0.624,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 384,
+      "ok": true,
+      "latency_ms": 0.619,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 385,
+      "ok": true,
+      "latency_ms": 0.603,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 386,
+      "ok": true,
+      "latency_ms": 0.643,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 387,
+      "ok": true,
+      "latency_ms": 0.754,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 388,
+      "ok": true,
+      "latency_ms": 0.684,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 389,
+      "ok": true,
+      "latency_ms": 0.644,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 390,
+      "ok": true,
+      "latency_ms": 0.621,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 391,
+      "ok": true,
+      "latency_ms": 0.608,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 392,
+      "ok": true,
+      "latency_ms": 0.606,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 393,
+      "ok": true,
+      "latency_ms": 0.643,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 394,
+      "ok": true,
+      "latency_ms": 0.723,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 395,
+      "ok": true,
+      "latency_ms": 0.689,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 396,
+      "ok": true,
+      "latency_ms": 0.745,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 397,
+      "ok": true,
+      "latency_ms": 0.728,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 398,
+      "ok": true,
+      "latency_ms": 0.722,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 399,
+      "ok": true,
+      "latency_ms": 0.675,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 400,
+      "ok": true,
+      "latency_ms": 0.675,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 401,
+      "ok": true,
+      "latency_ms": 0.641,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 402,
+      "ok": true,
+      "latency_ms": 0.607,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 403,
+      "ok": true,
+      "latency_ms": 0.653,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 404,
+      "ok": true,
+      "latency_ms": 0.601,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 405,
+      "ok": true,
+      "latency_ms": 0.629,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 406,
+      "ok": true,
+      "latency_ms": 0.656,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 407,
+      "ok": true,
+      "latency_ms": 0.629,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 408,
+      "ok": true,
+      "latency_ms": 0.611,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 409,
+      "ok": true,
+      "latency_ms": 0.638,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 410,
+      "ok": true,
+      "latency_ms": 0.647,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 411,
+      "ok": true,
+      "latency_ms": 0.623,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 412,
+      "ok": true,
+      "latency_ms": 0.637,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 413,
+      "ok": true,
+      "latency_ms": 0.663,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 414,
+      "ok": true,
+      "latency_ms": 0.625,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 415,
+      "ok": true,
+      "latency_ms": 0.602,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 416,
+      "ok": true,
+      "latency_ms": 0.606,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 417,
+      "ok": true,
+      "latency_ms": 0.642,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 418,
+      "ok": true,
+      "latency_ms": 0.676,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 419,
+      "ok": true,
+      "latency_ms": 0.669,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 420,
+      "ok": true,
+      "latency_ms": 0.62,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 421,
+      "ok": true,
+      "latency_ms": 0.744,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 422,
+      "ok": true,
+      "latency_ms": 0.725,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 423,
+      "ok": true,
+      "latency_ms": 0.677,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 424,
+      "ok": true,
+      "latency_ms": 0.667,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 425,
+      "ok": true,
+      "latency_ms": 0.665,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 426,
+      "ok": true,
+      "latency_ms": 0.673,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 427,
+      "ok": true,
+      "latency_ms": 0.63,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 428,
+      "ok": true,
+      "latency_ms": 1.055,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 429,
+      "ok": true,
+      "latency_ms": 0.663,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 430,
+      "ok": true,
+      "latency_ms": 0.622,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 431,
+      "ok": true,
+      "latency_ms": 0.643,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 432,
+      "ok": true,
+      "latency_ms": 0.628,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 433,
+      "ok": true,
+      "latency_ms": 0.608,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 434,
+      "ok": true,
+      "latency_ms": 0.633,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 435,
+      "ok": true,
+      "latency_ms": 0.62,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 436,
+      "ok": true,
+      "latency_ms": 0.626,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 437,
+      "ok": true,
+      "latency_ms": 0.669,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 438,
+      "ok": true,
+      "latency_ms": 0.677,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 439,
+      "ok": true,
+      "latency_ms": 0.694,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 440,
+      "ok": true,
+      "latency_ms": 0.622,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 441,
+      "ok": true,
+      "latency_ms": 0.641,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 442,
+      "ok": true,
+      "latency_ms": 0.723,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 443,
+      "ok": true,
+      "latency_ms": 0.684,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 444,
+      "ok": true,
+      "latency_ms": 0.652,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 445,
+      "ok": true,
+      "latency_ms": 0.655,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 446,
+      "ok": true,
+      "latency_ms": 0.656,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 447,
+      "ok": true,
+      "latency_ms": 0.667,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 448,
+      "ok": true,
+      "latency_ms": 0.619,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 449,
+      "ok": true,
+      "latency_ms": 0.624,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 450,
+      "ok": true,
+      "latency_ms": 0.683,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 451,
+      "ok": true,
+      "latency_ms": 0.709,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 452,
+      "ok": true,
+      "latency_ms": 0.689,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 453,
+      "ok": true,
+      "latency_ms": 0.658,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 454,
+      "ok": true,
+      "latency_ms": 0.806,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 455,
+      "ok": true,
+      "latency_ms": 0.752,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 456,
+      "ok": true,
+      "latency_ms": 0.651,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 457,
+      "ok": true,
+      "latency_ms": 0.621,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 458,
+      "ok": true,
+      "latency_ms": 0.604,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 459,
+      "ok": true,
+      "latency_ms": 0.612,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 460,
+      "ok": true,
+      "latency_ms": 0.611,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 461,
+      "ok": true,
+      "latency_ms": 0.648,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 462,
+      "ok": true,
+      "latency_ms": 0.683,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 463,
+      "ok": true,
+      "latency_ms": 0.668,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 464,
+      "ok": true,
+      "latency_ms": 0.631,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 465,
+      "ok": true,
+      "latency_ms": 0.704,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 466,
+      "ok": true,
+      "latency_ms": 0.706,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 467,
+      "ok": true,
+      "latency_ms": 0.77,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 468,
+      "ok": true,
+      "latency_ms": 0.683,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 469,
+      "ok": true,
+      "latency_ms": 0.658,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 470,
+      "ok": true,
+      "latency_ms": 0.647,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 471,
+      "ok": true,
+      "latency_ms": 0.637,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 472,
+      "ok": true,
+      "latency_ms": 0.674,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 473,
+      "ok": true,
+      "latency_ms": 0.673,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 474,
+      "ok": true,
+      "latency_ms": 0.676,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 475,
+      "ok": true,
+      "latency_ms": 0.671,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 476,
+      "ok": true,
+      "latency_ms": 0.637,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 477,
+      "ok": true,
+      "latency_ms": 0.609,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 478,
+      "ok": true,
+      "latency_ms": 0.609,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 479,
+      "ok": true,
+      "latency_ms": 0.669,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 480,
+      "ok": true,
+      "latency_ms": 0.639,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 481,
+      "ok": true,
+      "latency_ms": 0.642,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 482,
+      "ok": true,
+      "latency_ms": 0.637,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 483,
+      "ok": true,
+      "latency_ms": 0.658,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 484,
+      "ok": true,
+      "latency_ms": 0.671,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 485,
+      "ok": true,
+      "latency_ms": 0.725,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 486,
+      "ok": true,
+      "latency_ms": 0.646,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 487,
+      "ok": true,
+      "latency_ms": 0.677,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 488,
+      "ok": true,
+      "latency_ms": 0.696,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 489,
+      "ok": true,
+      "latency_ms": 0.67,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 490,
+      "ok": true,
+      "latency_ms": 0.621,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 491,
+      "ok": true,
+      "latency_ms": 0.637,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 492,
+      "ok": true,
+      "latency_ms": 0.64,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 493,
+      "ok": true,
+      "latency_ms": 0.653,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 494,
+      "ok": true,
+      "latency_ms": 0.68,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 495,
+      "ok": true,
+      "latency_ms": 0.669,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 496,
+      "ok": true,
+      "latency_ms": 0.629,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 497,
+      "ok": true,
+      "latency_ms": 0.681,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 498,
+      "ok": true,
+      "latency_ms": 0.63,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 499,
+      "ok": true,
+      "latency_ms": 0.65,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 500,
+      "ok": true,
+      "latency_ms": 0.645,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 501,
+      "ok": true,
+      "latency_ms": 0.676,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 502,
+      "ok": true,
+      "latency_ms": 0.651,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 503,
+      "ok": true,
+      "latency_ms": 0.669,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 504,
+      "ok": true,
+      "latency_ms": 0.681,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 505,
+      "ok": true,
+      "latency_ms": 0.663,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 506,
+      "ok": true,
+      "latency_ms": 0.664,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 507,
+      "ok": true,
+      "latency_ms": 0.658,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 508,
+      "ok": true,
+      "latency_ms": 0.663,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 509,
+      "ok": true,
+      "latency_ms": 0.67,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 510,
+      "ok": true,
+      "latency_ms": 0.714,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 511,
+      "ok": true,
+      "latency_ms": 0.671,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 512,
+      "ok": true,
+      "latency_ms": 1.822,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 513,
+      "ok": true,
+      "latency_ms": 0.697,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 514,
+      "ok": true,
+      "latency_ms": 0.686,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 515,
+      "ok": true,
+      "latency_ms": 0.677,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 516,
+      "ok": true,
+      "latency_ms": 0.689,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 517,
+      "ok": true,
+      "latency_ms": 0.671,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 518,
+      "ok": true,
+      "latency_ms": 0.66,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 519,
+      "ok": true,
+      "latency_ms": 0.685,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 520,
+      "ok": true,
+      "latency_ms": 0.719,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 521,
+      "ok": true,
+      "latency_ms": 0.627,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 522,
+      "ok": true,
+      "latency_ms": 0.644,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 523,
+      "ok": true,
+      "latency_ms": 0.618,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 524,
+      "ok": true,
+      "latency_ms": 0.612,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 525,
+      "ok": true,
+      "latency_ms": 0.645,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 526,
+      "ok": true,
+      "latency_ms": 0.617,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 527,
+      "ok": true,
+      "latency_ms": 0.624,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 528,
+      "ok": true,
+      "latency_ms": 0.682,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 529,
+      "ok": true,
+      "latency_ms": 0.653,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 530,
+      "ok": true,
+      "latency_ms": 0.63,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 531,
+      "ok": true,
+      "latency_ms": 0.609,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 532,
+      "ok": true,
+      "latency_ms": 0.608,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 533,
+      "ok": true,
+      "latency_ms": 0.648,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 534,
+      "ok": true,
+      "latency_ms": 0.722,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 535,
+      "ok": true,
+      "latency_ms": 0.697,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 536,
+      "ok": true,
+      "latency_ms": 0.677,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 537,
+      "ok": true,
+      "latency_ms": 0.676,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 538,
+      "ok": true,
+      "latency_ms": 0.668,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 539,
+      "ok": true,
+      "latency_ms": 0.651,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 540,
+      "ok": true,
+      "latency_ms": 0.627,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 541,
+      "ok": true,
+      "latency_ms": 0.651,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 542,
+      "ok": true,
+      "latency_ms": 0.632,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 543,
+      "ok": true,
+      "latency_ms": 0.641,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 544,
+      "ok": true,
+      "latency_ms": 0.607,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 545,
+      "ok": true,
+      "latency_ms": 0.641,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 546,
+      "ok": true,
+      "latency_ms": 0.691,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 547,
+      "ok": true,
+      "latency_ms": 0.658,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 548,
+      "ok": true,
+      "latency_ms": 0.665,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 549,
+      "ok": true,
+      "latency_ms": 0.642,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 550,
+      "ok": true,
+      "latency_ms": 0.611,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 551,
+      "ok": true,
+      "latency_ms": 0.641,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 552,
+      "ok": true,
+      "latency_ms": 0.932,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 553,
+      "ok": true,
+      "latency_ms": 0.793,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 554,
+      "ok": true,
+      "latency_ms": 0.657,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 555,
+      "ok": true,
+      "latency_ms": 1.623,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 556,
+      "ok": true,
+      "latency_ms": 1.723,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 557,
+      "ok": true,
+      "latency_ms": 2.114,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 558,
+      "ok": true,
+      "latency_ms": 1.286,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 559,
+      "ok": true,
+      "latency_ms": 0.655,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 560,
+      "ok": true,
+      "latency_ms": 0.738,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 561,
+      "ok": true,
+      "latency_ms": 0.746,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 562,
+      "ok": true,
+      "latency_ms": 0.909,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 563,
+      "ok": true,
+      "latency_ms": 1.07,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 564,
+      "ok": true,
+      "latency_ms": 0.754,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 565,
+      "ok": true,
+      "latency_ms": 0.711,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 566,
+      "ok": true,
+      "latency_ms": 0.8,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 567,
+      "ok": true,
+      "latency_ms": 0.794,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 568,
+      "ok": true,
+      "latency_ms": 0.777,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 569,
+      "ok": true,
+      "latency_ms": 0.698,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 570,
+      "ok": true,
+      "latency_ms": 1.042,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 571,
+      "ok": true,
+      "latency_ms": 0.712,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 572,
+      "ok": true,
+      "latency_ms": 0.708,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 573,
+      "ok": true,
+      "latency_ms": 0.705,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 574,
+      "ok": true,
+      "latency_ms": 0.697,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 575,
+      "ok": true,
+      "latency_ms": 0.706,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 576,
+      "ok": true,
+      "latency_ms": 0.689,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 577,
+      "ok": true,
+      "latency_ms": 0.697,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 578,
+      "ok": true,
+      "latency_ms": 0.682,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 579,
+      "ok": true,
+      "latency_ms": 0.665,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 580,
+      "ok": true,
+      "latency_ms": 0.711,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 581,
+      "ok": true,
+      "latency_ms": 0.697,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 582,
+      "ok": true,
+      "latency_ms": 0.751,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 583,
+      "ok": true,
+      "latency_ms": 0.72,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 584,
+      "ok": true,
+      "latency_ms": 0.732,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 585,
+      "ok": true,
+      "latency_ms": 0.801,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 586,
+      "ok": true,
+      "latency_ms": 0.71,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 587,
+      "ok": true,
+      "latency_ms": 0.695,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 588,
+      "ok": true,
+      "latency_ms": 0.671,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 589,
+      "ok": true,
+      "latency_ms": 0.673,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 590,
+      "ok": true,
+      "latency_ms": 0.686,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 591,
+      "ok": true,
+      "latency_ms": 0.708,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 592,
+      "ok": true,
+      "latency_ms": 0.709,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 593,
+      "ok": true,
+      "latency_ms": 0.718,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 594,
+      "ok": true,
+      "latency_ms": 0.696,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 595,
+      "ok": true,
+      "latency_ms": 0.68,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 596,
+      "ok": true,
+      "latency_ms": 0.667,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 597,
+      "ok": true,
+      "latency_ms": 0.665,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 598,
+      "ok": true,
+      "latency_ms": 0.663,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 599,
+      "ok": true,
+      "latency_ms": 0.705,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 600,
+      "ok": true,
+      "latency_ms": 0.7,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 601,
+      "ok": true,
+      "latency_ms": 0.676,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 602,
+      "ok": true,
+      "latency_ms": 0.637,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 603,
+      "ok": true,
+      "latency_ms": 0.626,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 604,
+      "ok": true,
+      "latency_ms": 0.636,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 605,
+      "ok": true,
+      "latency_ms": 0.608,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 606,
+      "ok": true,
+      "latency_ms": 0.678,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 607,
+      "ok": true,
+      "latency_ms": 0.652,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 608,
+      "ok": true,
+      "latency_ms": 0.682,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 609,
+      "ok": true,
+      "latency_ms": 0.658,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 610,
+      "ok": true,
+      "latency_ms": 0.686,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 611,
+      "ok": true,
+      "latency_ms": 0.643,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 612,
+      "ok": true,
+      "latency_ms": 0.639,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 613,
+      "ok": true,
+      "latency_ms": 0.636,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 614,
+      "ok": true,
+      "latency_ms": 0.637,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 615,
+      "ok": true,
+      "latency_ms": 0.698,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 616,
+      "ok": true,
+      "latency_ms": 0.701,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 617,
+      "ok": true,
+      "latency_ms": 0.696,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 618,
+      "ok": true,
+      "latency_ms": 0.647,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 619,
+      "ok": true,
+      "latency_ms": 0.646,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 620,
+      "ok": true,
+      "latency_ms": 0.639,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 621,
+      "ok": true,
+      "latency_ms": 0.663,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 622,
+      "ok": true,
+      "latency_ms": 0.739,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 623,
+      "ok": true,
+      "latency_ms": 0.76,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 624,
+      "ok": true,
+      "latency_ms": 0.695,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 625,
+      "ok": true,
+      "latency_ms": 0.73,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 626,
+      "ok": true,
+      "latency_ms": 0.704,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 627,
+      "ok": true,
+      "latency_ms": 0.679,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 628,
+      "ok": true,
+      "latency_ms": 0.669,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 629,
+      "ok": true,
+      "latency_ms": 0.674,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 630,
+      "ok": true,
+      "latency_ms": 0.649,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 631,
+      "ok": true,
+      "latency_ms": 0.673,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 632,
+      "ok": true,
+      "latency_ms": 0.667,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 633,
+      "ok": true,
+      "latency_ms": 0.657,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 634,
+      "ok": true,
+      "latency_ms": 0.666,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 635,
+      "ok": true,
+      "latency_ms": 0.65,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 636,
+      "ok": true,
+      "latency_ms": 0.623,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 637,
+      "ok": true,
+      "latency_ms": 0.652,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 638,
+      "ok": true,
+      "latency_ms": 0.672,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 639,
+      "ok": true,
+      "latency_ms": 0.663,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 640,
+      "ok": true,
+      "latency_ms": 0.632,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 641,
+      "ok": true,
+      "latency_ms": 0.649,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 642,
+      "ok": true,
+      "latency_ms": 0.636,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 643,
+      "ok": true,
+      "latency_ms": 0.637,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 644,
+      "ok": true,
+      "latency_ms": 0.674,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 645,
+      "ok": true,
+      "latency_ms": 0.638,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 646,
+      "ok": true,
+      "latency_ms": 0.685,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 647,
+      "ok": true,
+      "latency_ms": 0.667,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 648,
+      "ok": true,
+      "latency_ms": 0.657,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 649,
+      "ok": true,
+      "latency_ms": 0.66,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 650,
+      "ok": true,
+      "latency_ms": 0.648,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 651,
+      "ok": true,
+      "latency_ms": 0.633,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 652,
+      "ok": true,
+      "latency_ms": 0.629,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 653,
+      "ok": true,
+      "latency_ms": 0.644,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 654,
+      "ok": true,
+      "latency_ms": 0.653,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 655,
+      "ok": true,
+      "latency_ms": 0.658,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 656,
+      "ok": true,
+      "latency_ms": 0.631,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 657,
+      "ok": true,
+      "latency_ms": 0.615,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 658,
+      "ok": true,
+      "latency_ms": 0.613,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 659,
+      "ok": true,
+      "latency_ms": 0.66,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 660,
+      "ok": true,
+      "latency_ms": 0.654,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 661,
+      "ok": true,
+      "latency_ms": 0.7,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 662,
+      "ok": true,
+      "latency_ms": 0.689,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 663,
+      "ok": true,
+      "latency_ms": 0.648,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 664,
+      "ok": true,
+      "latency_ms": 0.753,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 665,
+      "ok": true,
+      "latency_ms": 0.905,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 666,
+      "ok": true,
+      "latency_ms": 1.235,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 667,
+      "ok": true,
+      "latency_ms": 0.674,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 668,
+      "ok": true,
+      "latency_ms": 0.666,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 669,
+      "ok": true,
+      "latency_ms": 0.637,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 670,
+      "ok": true,
+      "latency_ms": 0.689,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 671,
+      "ok": true,
+      "latency_ms": 0.685,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 672,
+      "ok": true,
+      "latency_ms": 0.671,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 673,
+      "ok": true,
+      "latency_ms": 0.661,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 674,
+      "ok": true,
+      "latency_ms": 0.644,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 675,
+      "ok": true,
+      "latency_ms": 0.667,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 676,
+      "ok": true,
+      "latency_ms": 0.68,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 677,
+      "ok": true,
+      "latency_ms": 0.661,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 678,
+      "ok": true,
+      "latency_ms": 0.655,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 679,
+      "ok": true,
+      "latency_ms": 0.694,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 680,
+      "ok": true,
+      "latency_ms": 0.655,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 681,
+      "ok": true,
+      "latency_ms": 0.647,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 682,
+      "ok": true,
+      "latency_ms": 0.719,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 683,
+      "ok": true,
+      "latency_ms": 0.702,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 684,
+      "ok": true,
+      "latency_ms": 0.71,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 685,
+      "ok": true,
+      "latency_ms": 0.675,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 686,
+      "ok": true,
+      "latency_ms": 0.675,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 687,
+      "ok": true,
+      "latency_ms": 0.674,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 688,
+      "ok": true,
+      "latency_ms": 0.658,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 689,
+      "ok": true,
+      "latency_ms": 0.661,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 690,
+      "ok": true,
+      "latency_ms": 0.665,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 691,
+      "ok": true,
+      "latency_ms": 0.625,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 692,
+      "ok": true,
+      "latency_ms": 0.606,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 693,
+      "ok": true,
+      "latency_ms": 0.648,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 694,
+      "ok": true,
+      "latency_ms": 0.616,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 695,
+      "ok": true,
+      "latency_ms": 0.688,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 696,
+      "ok": true,
+      "latency_ms": 0.682,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 697,
+      "ok": true,
+      "latency_ms": 0.674,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 698,
+      "ok": true,
+      "latency_ms": 0.657,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 699,
+      "ok": true,
+      "latency_ms": 0.678,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 700,
+      "ok": true,
+      "latency_ms": 0.666,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 701,
+      "ok": true,
+      "latency_ms": 0.64,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 702,
+      "ok": true,
+      "latency_ms": 0.664,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 703,
+      "ok": true,
+      "latency_ms": 0.669,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 704,
+      "ok": true,
+      "latency_ms": 0.667,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 705,
+      "ok": true,
+      "latency_ms": 0.659,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 706,
+      "ok": true,
+      "latency_ms": 0.724,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 707,
+      "ok": true,
+      "latency_ms": 0.907,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 708,
+      "ok": true,
+      "latency_ms": 0.746,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 709,
+      "ok": true,
+      "latency_ms": 0.705,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 710,
+      "ok": true,
+      "latency_ms": 0.649,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 711,
+      "ok": true,
+      "latency_ms": 1.115,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 712,
+      "ok": true,
+      "latency_ms": 1.123,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 713,
+      "ok": true,
+      "latency_ms": 0.703,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 714,
+      "ok": true,
+      "latency_ms": 0.654,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 715,
+      "ok": true,
+      "latency_ms": 0.668,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 716,
+      "ok": true,
+      "latency_ms": 0.819,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 717,
+      "ok": true,
+      "latency_ms": 0.862,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 718,
+      "ok": true,
+      "latency_ms": 0.655,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 719,
+      "ok": true,
+      "latency_ms": 0.707,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 720,
+      "ok": true,
+      "latency_ms": 0.991,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 721,
+      "ok": true,
+      "latency_ms": 0.807,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 722,
+      "ok": true,
+      "latency_ms": 0.813,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 723,
+      "ok": true,
+      "latency_ms": 0.667,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 724,
+      "ok": true,
+      "latency_ms": 0.685,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 725,
+      "ok": true,
+      "latency_ms": 0.715,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 726,
+      "ok": true,
+      "latency_ms": 0.818,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 727,
+      "ok": true,
+      "latency_ms": 0.67,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 728,
+      "ok": true,
+      "latency_ms": 0.763,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 729,
+      "ok": true,
+      "latency_ms": 0.673,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 730,
+      "ok": true,
+      "latency_ms": 0.704,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 731,
+      "ok": true,
+      "latency_ms": 0.687,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 732,
+      "ok": true,
+      "latency_ms": 0.666,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 733,
+      "ok": true,
+      "latency_ms": 0.698,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 734,
+      "ok": true,
+      "latency_ms": 0.654,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 735,
+      "ok": true,
+      "latency_ms": 0.762,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 736,
+      "ok": true,
+      "latency_ms": 0.662,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 737,
+      "ok": true,
+      "latency_ms": 0.659,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 738,
+      "ok": true,
+      "latency_ms": 0.655,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 739,
+      "ok": true,
+      "latency_ms": 0.661,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 740,
+      "ok": true,
+      "latency_ms": 0.665,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 741,
+      "ok": true,
+      "latency_ms": 0.676,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 742,
+      "ok": true,
+      "latency_ms": 0.683,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 743,
+      "ok": true,
+      "latency_ms": 0.674,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 744,
+      "ok": true,
+      "latency_ms": 0.672,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 745,
+      "ok": true,
+      "latency_ms": 0.651,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 746,
+      "ok": true,
+      "latency_ms": 0.661,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 747,
+      "ok": true,
+      "latency_ms": 0.698,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 748,
+      "ok": true,
+      "latency_ms": 0.694,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 749,
+      "ok": true,
+      "latency_ms": 0.693,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 750,
+      "ok": true,
+      "latency_ms": 0.678,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 751,
+      "ok": true,
+      "latency_ms": 0.702,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 752,
+      "ok": true,
+      "latency_ms": 0.658,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 753,
+      "ok": true,
+      "latency_ms": 0.687,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 754,
+      "ok": true,
+      "latency_ms": 0.69,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 755,
+      "ok": true,
+      "latency_ms": 0.662,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 756,
+      "ok": true,
+      "latency_ms": 0.625,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 757,
+      "ok": true,
+      "latency_ms": 0.64,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 758,
+      "ok": true,
+      "latency_ms": 0.667,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 759,
+      "ok": true,
+      "latency_ms": 0.651,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 760,
+      "ok": true,
+      "latency_ms": 0.652,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 761,
+      "ok": true,
+      "latency_ms": 0.664,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 762,
+      "ok": true,
+      "latency_ms": 0.671,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 763,
+      "ok": true,
+      "latency_ms": 0.649,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 764,
+      "ok": true,
+      "latency_ms": 0.656,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 765,
+      "ok": true,
+      "latency_ms": 0.674,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 766,
+      "ok": true,
+      "latency_ms": 0.661,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 767,
+      "ok": true,
+      "latency_ms": 0.635,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 768,
+      "ok": true,
+      "latency_ms": 0.649,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 769,
+      "ok": true,
+      "latency_ms": 0.681,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 770,
+      "ok": true,
+      "latency_ms": 0.689,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 771,
+      "ok": true,
+      "latency_ms": 0.688,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 772,
+      "ok": true,
+      "latency_ms": 0.685,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 773,
+      "ok": true,
+      "latency_ms": 0.67,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 774,
+      "ok": true,
+      "latency_ms": 0.686,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 775,
+      "ok": true,
+      "latency_ms": 0.683,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 776,
+      "ok": true,
+      "latency_ms": 0.749,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 777,
+      "ok": true,
+      "latency_ms": 0.702,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 778,
+      "ok": true,
+      "latency_ms": 0.664,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 779,
+      "ok": true,
+      "latency_ms": 0.869,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 780,
+      "ok": true,
+      "latency_ms": 1.046,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 781,
+      "ok": true,
+      "latency_ms": 0.708,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 782,
+      "ok": true,
+      "latency_ms": 0.676,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 783,
+      "ok": true,
+      "latency_ms": 0.668,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 784,
+      "ok": true,
+      "latency_ms": 0.675,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 785,
+      "ok": true,
+      "latency_ms": 0.66,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 786,
+      "ok": true,
+      "latency_ms": 0.672,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 787,
+      "ok": true,
+      "latency_ms": 0.665,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 788,
+      "ok": true,
+      "latency_ms": 0.699,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 789,
+      "ok": true,
+      "latency_ms": 0.67,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 790,
+      "ok": true,
+      "latency_ms": 0.672,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 791,
+      "ok": true,
+      "latency_ms": 0.719,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 792,
+      "ok": true,
+      "latency_ms": 0.63,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 793,
+      "ok": true,
+      "latency_ms": 0.664,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 794,
+      "ok": true,
+      "latency_ms": 0.688,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 795,
+      "ok": true,
+      "latency_ms": 0.646,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 796,
+      "ok": true,
+      "latency_ms": 0.665,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 797,
+      "ok": true,
+      "latency_ms": 0.667,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 798,
+      "ok": true,
+      "latency_ms": 0.682,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 799,
+      "ok": true,
+      "latency_ms": 0.663,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 800,
+      "ok": true,
+      "latency_ms": 0.664,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 801,
+      "ok": true,
+      "latency_ms": 0.696,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 802,
+      "ok": true,
+      "latency_ms": 0.647,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 803,
+      "ok": true,
+      "latency_ms": 0.665,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 804,
+      "ok": true,
+      "latency_ms": 0.729,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 805,
+      "ok": true,
+      "latency_ms": 0.707,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 806,
+      "ok": true,
+      "latency_ms": 0.644,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 807,
+      "ok": true,
+      "latency_ms": 0.723,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 808,
+      "ok": true,
+      "latency_ms": 0.648,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 809,
+      "ok": true,
+      "latency_ms": 0.647,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 810,
+      "ok": true,
+      "latency_ms": 0.693,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 811,
+      "ok": true,
+      "latency_ms": 0.706,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 812,
+      "ok": true,
+      "latency_ms": 0.658,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 813,
+      "ok": true,
+      "latency_ms": 0.661,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 814,
+      "ok": true,
+      "latency_ms": 0.657,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 815,
+      "ok": true,
+      "latency_ms": 0.669,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 816,
+      "ok": true,
+      "latency_ms": 0.651,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 817,
+      "ok": true,
+      "latency_ms": 0.721,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 818,
+      "ok": true,
+      "latency_ms": 0.663,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 819,
+      "ok": true,
+      "latency_ms": 0.646,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 820,
+      "ok": true,
+      "latency_ms": 0.666,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 821,
+      "ok": true,
+      "latency_ms": 0.606,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 822,
+      "ok": true,
+      "latency_ms": 0.63,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 823,
+      "ok": true,
+      "latency_ms": 0.607,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 824,
+      "ok": true,
+      "latency_ms": 0.625,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 825,
+      "ok": true,
+      "latency_ms": 0.643,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 826,
+      "ok": true,
+      "latency_ms": 0.603,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 827,
+      "ok": true,
+      "latency_ms": 0.593,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 828,
+      "ok": true,
+      "latency_ms": 0.648,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 829,
+      "ok": true,
+      "latency_ms": 0.618,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 830,
+      "ok": true,
+      "latency_ms": 0.611,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 831,
+      "ok": true,
+      "latency_ms": 0.667,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 832,
+      "ok": true,
+      "latency_ms": 0.711,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 833,
+      "ok": true,
+      "latency_ms": 0.697,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 834,
+      "ok": true,
+      "latency_ms": 0.667,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 835,
+      "ok": true,
+      "latency_ms": 0.683,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 836,
+      "ok": true,
+      "latency_ms": 0.674,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 837,
+      "ok": true,
+      "latency_ms": 0.648,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 838,
+      "ok": true,
+      "latency_ms": 0.658,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 839,
+      "ok": true,
+      "latency_ms": 0.619,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 840,
+      "ok": true,
+      "latency_ms": 0.651,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 841,
+      "ok": true,
+      "latency_ms": 0.651,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 842,
+      "ok": true,
+      "latency_ms": 0.61,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 843,
+      "ok": true,
+      "latency_ms": 0.652,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 844,
+      "ok": true,
+      "latency_ms": 0.691,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 845,
+      "ok": true,
+      "latency_ms": 0.646,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 846,
+      "ok": true,
+      "latency_ms": 0.642,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 847,
+      "ok": true,
+      "latency_ms": 0.64,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 848,
+      "ok": true,
+      "latency_ms": 0.648,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 849,
+      "ok": true,
+      "latency_ms": 0.675,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 850,
+      "ok": true,
+      "latency_ms": 0.672,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 851,
+      "ok": true,
+      "latency_ms": 0.656,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 852,
+      "ok": true,
+      "latency_ms": 0.664,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 853,
+      "ok": true,
+      "latency_ms": 0.674,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 854,
+      "ok": true,
+      "latency_ms": 0.64,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 855,
+      "ok": true,
+      "latency_ms": 0.634,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 856,
+      "ok": true,
+      "latency_ms": 0.625,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 857,
+      "ok": true,
+      "latency_ms": 0.633,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 858,
+      "ok": true,
+      "latency_ms": 0.713,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 859,
+      "ok": true,
+      "latency_ms": 0.614,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 860,
+      "ok": true,
+      "latency_ms": 0.639,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 861,
+      "ok": true,
+      "latency_ms": 0.691,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 862,
+      "ok": true,
+      "latency_ms": 0.635,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 863,
+      "ok": true,
+      "latency_ms": 0.692,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 864,
+      "ok": true,
+      "latency_ms": 0.672,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 865,
+      "ok": true,
+      "latency_ms": 0.65,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 866,
+      "ok": true,
+      "latency_ms": 0.609,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 867,
+      "ok": true,
+      "latency_ms": 0.629,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 868,
+      "ok": true,
+      "latency_ms": 0.687,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 869,
+      "ok": true,
+      "latency_ms": 0.695,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 870,
+      "ok": true,
+      "latency_ms": 0.66,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 871,
+      "ok": true,
+      "latency_ms": 0.625,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 872,
+      "ok": true,
+      "latency_ms": 0.61,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 873,
+      "ok": true,
+      "latency_ms": 0.609,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 874,
+      "ok": true,
+      "latency_ms": 0.657,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 875,
+      "ok": true,
+      "latency_ms": 0.649,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 876,
+      "ok": true,
+      "latency_ms": 0.667,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 877,
+      "ok": true,
+      "latency_ms": 0.665,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 878,
+      "ok": true,
+      "latency_ms": 0.616,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 879,
+      "ok": true,
+      "latency_ms": 0.889,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 880,
+      "ok": true,
+      "latency_ms": 0.773,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 881,
+      "ok": true,
+      "latency_ms": 0.683,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 882,
+      "ok": true,
+      "latency_ms": 0.663,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 883,
+      "ok": true,
+      "latency_ms": 0.637,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 884,
+      "ok": true,
+      "latency_ms": 0.625,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 885,
+      "ok": true,
+      "latency_ms": 0.697,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 886,
+      "ok": true,
+      "latency_ms": 0.719,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 887,
+      "ok": true,
+      "latency_ms": 0.683,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 888,
+      "ok": true,
+      "latency_ms": 0.663,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 889,
+      "ok": true,
+      "latency_ms": 0.694,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 890,
+      "ok": true,
+      "latency_ms": 0.683,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 891,
+      "ok": true,
+      "latency_ms": 0.707,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 892,
+      "ok": true,
+      "latency_ms": 0.682,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 893,
+      "ok": true,
+      "latency_ms": 0.7,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 894,
+      "ok": true,
+      "latency_ms": 0.712,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 895,
+      "ok": true,
+      "latency_ms": 0.792,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 896,
+      "ok": true,
+      "latency_ms": 0.75,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 897,
+      "ok": true,
+      "latency_ms": 0.705,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 898,
+      "ok": true,
+      "latency_ms": 0.74,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 899,
+      "ok": true,
+      "latency_ms": 0.677,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 900,
+      "ok": true,
+      "latency_ms": 0.669,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 901,
+      "ok": true,
+      "latency_ms": 0.613,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 902,
+      "ok": true,
+      "latency_ms": 0.61,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 903,
+      "ok": true,
+      "latency_ms": 0.61,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 904,
+      "ok": true,
+      "latency_ms": 0.661,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 905,
+      "ok": true,
+      "latency_ms": 0.691,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 906,
+      "ok": true,
+      "latency_ms": 0.664,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 907,
+      "ok": true,
+      "latency_ms": 0.709,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 908,
+      "ok": true,
+      "latency_ms": 0.68,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 909,
+      "ok": true,
+      "latency_ms": 0.661,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 910,
+      "ok": true,
+      "latency_ms": 0.637,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 911,
+      "ok": true,
+      "latency_ms": 0.648,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 912,
+      "ok": true,
+      "latency_ms": 0.632,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 913,
+      "ok": true,
+      "latency_ms": 0.63,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 914,
+      "ok": true,
+      "latency_ms": 0.628,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 915,
+      "ok": true,
+      "latency_ms": 0.627,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 916,
+      "ok": true,
+      "latency_ms": 0.631,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 917,
+      "ok": true,
+      "latency_ms": 0.628,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 918,
+      "ok": true,
+      "latency_ms": 0.698,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 919,
+      "ok": true,
+      "latency_ms": 0.626,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 920,
+      "ok": true,
+      "latency_ms": 0.615,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 921,
+      "ok": true,
+      "latency_ms": 0.633,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 922,
+      "ok": true,
+      "latency_ms": 0.638,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 923,
+      "ok": true,
+      "latency_ms": 0.656,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 924,
+      "ok": true,
+      "latency_ms": 0.674,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 925,
+      "ok": true,
+      "latency_ms": 0.639,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 926,
+      "ok": true,
+      "latency_ms": 0.609,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 927,
+      "ok": true,
+      "latency_ms": 0.623,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 928,
+      "ok": true,
+      "latency_ms": 0.632,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 929,
+      "ok": true,
+      "latency_ms": 0.619,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 930,
+      "ok": true,
+      "latency_ms": 0.625,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 931,
+      "ok": true,
+      "latency_ms": 0.665,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 932,
+      "ok": true,
+      "latency_ms": 0.652,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 933,
+      "ok": true,
+      "latency_ms": 0.637,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 934,
+      "ok": true,
+      "latency_ms": 0.646,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 935,
+      "ok": true,
+      "latency_ms": 0.63,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 936,
+      "ok": true,
+      "latency_ms": 0.646,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 937,
+      "ok": true,
+      "latency_ms": 0.647,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 938,
+      "ok": true,
+      "latency_ms": 0.672,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 939,
+      "ok": true,
+      "latency_ms": 0.604,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 940,
+      "ok": true,
+      "latency_ms": 0.608,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 941,
+      "ok": true,
+      "latency_ms": 0.611,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 942,
+      "ok": true,
+      "latency_ms": 0.611,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 943,
+      "ok": true,
+      "latency_ms": 0.634,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 944,
+      "ok": true,
+      "latency_ms": 0.646,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 945,
+      "ok": true,
+      "latency_ms": 0.627,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 946,
+      "ok": true,
+      "latency_ms": 0.61,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 947,
+      "ok": true,
+      "latency_ms": 0.604,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 948,
+      "ok": true,
+      "latency_ms": 0.607,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 949,
+      "ok": true,
+      "latency_ms": 0.639,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 950,
+      "ok": true,
+      "latency_ms": 0.698,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 951,
+      "ok": true,
+      "latency_ms": 0.658,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 952,
+      "ok": true,
+      "latency_ms": 0.629,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 953,
+      "ok": true,
+      "latency_ms": 0.671,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 954,
+      "ok": true,
+      "latency_ms": 0.676,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 955,
+      "ok": true,
+      "latency_ms": 0.736,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 956,
+      "ok": true,
+      "latency_ms": 1.282,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 957,
+      "ok": true,
+      "latency_ms": 0.729,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 958,
+      "ok": true,
+      "latency_ms": 0.675,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 959,
+      "ok": true,
+      "latency_ms": 0.668,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 960,
+      "ok": true,
+      "latency_ms": 1.553,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 961,
+      "ok": true,
+      "latency_ms": 0.738,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 962,
+      "ok": true,
+      "latency_ms": 0.701,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 963,
+      "ok": true,
+      "latency_ms": 0.824,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 964,
+      "ok": true,
+      "latency_ms": 1.27,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 965,
+      "ok": true,
+      "latency_ms": 0.643,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 966,
+      "ok": true,
+      "latency_ms": 0.606,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 967,
+      "ok": true,
+      "latency_ms": 0.611,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 968,
+      "ok": true,
+      "latency_ms": 0.608,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 969,
+      "ok": true,
+      "latency_ms": 0.615,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 970,
+      "ok": true,
+      "latency_ms": 0.629,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 971,
+      "ok": true,
+      "latency_ms": 0.669,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 972,
+      "ok": true,
+      "latency_ms": 0.654,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 973,
+      "ok": true,
+      "latency_ms": 0.627,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 974,
+      "ok": true,
+      "latency_ms": 0.702,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 975,
+      "ok": true,
+      "latency_ms": 0.669,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 976,
+      "ok": true,
+      "latency_ms": 0.691,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 977,
+      "ok": true,
+      "latency_ms": 0.674,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 978,
+      "ok": true,
+      "latency_ms": 0.654,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 979,
+      "ok": true,
+      "latency_ms": 0.615,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 980,
+      "ok": true,
+      "latency_ms": 0.617,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 981,
+      "ok": true,
+      "latency_ms": 0.63,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 982,
+      "ok": true,
+      "latency_ms": 0.6,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 983,
+      "ok": true,
+      "latency_ms": 0.614,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 984,
+      "ok": true,
+      "latency_ms": 0.653,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 985,
+      "ok": true,
+      "latency_ms": 0.631,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 986,
+      "ok": true,
+      "latency_ms": 0.602,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 987,
+      "ok": true,
+      "latency_ms": 0.603,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 988,
+      "ok": true,
+      "latency_ms": 0.605,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 989,
+      "ok": true,
+      "latency_ms": 0.667,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 990,
+      "ok": true,
+      "latency_ms": 0.654,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 991,
+      "ok": true,
+      "latency_ms": 0.626,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 992,
+      "ok": true,
+      "latency_ms": 0.672,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 993,
+      "ok": true,
+      "latency_ms": 0.606,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 994,
+      "ok": true,
+      "latency_ms": 0.606,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 995,
+      "ok": true,
+      "latency_ms": 0.602,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 996,
+      "ok": true,
+      "latency_ms": 0.628,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 997,
+      "ok": true,
+      "latency_ms": 0.647,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 998,
+      "ok": true,
+      "latency_ms": 0.696,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    },
+    {
+      "i": 999,
+      "ok": true,
+      "latency_ms": 0.724,
+      "reason": "STARTUP_COMMAND_RESET",
+      "frames_before": [],
+      "violations_before": []
+    }
+  ]
+}

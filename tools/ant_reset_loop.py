@@ -6,8 +6,8 @@
 TODO.md item 2: in the 2026-11-07 Garmin comparison the nRF52840 Dongle once
 failed to answer SYSTEM_RESET within 3 s (1 of ~94 opens). The suspect is the
 host, not the firmware: ant_ack_gate.py read through FrameReader(timeout_ms=50),
-the firmware sends STARTUP ~50 ms after the reset (handle_system_reset()'s
-k_sleep), and under libusb-win32 a read timeout cancels the pending transfer -
+the firmware then sent STARTUP ~50 ms after the reset (handle_system_reset()'s
+k_sleep, removed by TODO item 5), and under libusb-win32 a read timeout cancels the pending transfer -
 a cancel that lands as a frame arrives loses that frame silently
 (ant_probe.READ_TIMEOUT_MS's comment). This tool separates the two:
 
@@ -34,15 +34,38 @@ should be on air) before each reset and dwells --dwell-s reading it, so the
 reset lands with broadcasts flowing - the shape the gate's reset sees when a
 previous tool left a channel up.
 
+TODO item 5 (STARTUP without the 50 ms sleep) adds the ordering checks. A
+reset must put nothing on the wire between SYSTEM_RESET and STARTUP except
+frames already queued before it, and nothing from before it may follow STARTUP:
+
+  * before STARTUP, an EVENT_CHANNEL_CLOSED is a violation. The reset raised
+    it, so it cannot have been queued earlier. Broadcasts and other events
+    are allowed: they can be older than the reset.
+  * --after-ms (default 300) keeps reading after STARTUP. No channel is open
+    then, so ANY frame is a violation. On USB the window can stretch to one
+    --read-timeout-ms, since a read that finds nothing blocks for that long.
+  * --jitter-s adds a random 0..N s sleep before each reset, so the reset
+    does not phase-lock to the master's traffic and sample one slot offset.
+    A sleep, NOT a read: a USB read blocks until the next frame arrives
+    whatever its deadline, so a read-dwell ends just after a broadcast, when
+    the event and transmit paths are idle. The first negative-control run
+    did exactly that and caught nothing. Frames that arrive during the sleep
+    wait in the device and are read before STARTUP, which is allowed.
+
+    python tools/ant_reset_loop.py --serial EE6986854FD72803 --count 500 \\
+        --traffic --device-number 54321 --jitter-s 0.5
+
 Prints one JSON document (and writes it to --json): per-iteration rows, the
-failure count with its Wilson 95 % interval, and STARTUP latency percentiles.
-Exit status 0 only if no iteration failed.
+failure count with its Wilson 95 % interval, STARTUP latency percentiles and
+the violation counts. Exit status 0 only if no iteration failed and nothing
+violated the ordering.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import random
 import sys
 import time
 from datetime import UTC, datetime
@@ -54,11 +77,13 @@ import ant_pages as ap  # noqa: E402
 from ant_compare import quantile, wilson  # noqa: E402
 from ant_wire import (  # noqa: E402
     CHANNEL_TYPE_SLAVE,
+    EVENT_CHANNEL_CLOSED,
     MESG_ASSIGN_CHANNEL_ID,
     MESG_CHANNEL_ID_ID,
     MESG_CHANNEL_MESG_PERIOD_ID,
     MESG_CHANNEL_RADIO_FREQ_ID,
     MESG_CHANNEL_SEARCH_TIMEOUT_ID,
+    MESG_EVENT_ID,
     MESG_NETWORK_KEY_ID,
     MESG_OPEN_CHANNEL_ID,
     MESG_RESPONSE_EVENT_ID,
@@ -74,12 +99,26 @@ CHANNEL = 0
 EP_OUT = 0x01
 
 
+def is_reset_event(msg_id: int, body: bytes) -> bool:
+    """True for a frame the reset itself must have raised, which therefore
+    cannot have been queued before it: EVENT_CHANNEL_CLOSED."""
+    return (msg_id == MESG_RESPONSE_EVENT_ID and len(body) >= 3
+            and body[1] == MESG_EVENT_ID and body[2] == EVENT_CHANNEL_CLOSED)
+
+
+def describe(msg_id: int, body: bytes) -> str:
+    if msg_id == MESG_RESPONSE_EVENT_ID and len(body) >= 3:
+        return f"0x40 ch{body[0]} 0x{body[1]:02X}:0x{body[2]:02X}"
+    return f"0x{msg_id:02X}"
+
+
 def wait_startup(reader, t0: float, timeout_s: float,
                  clock=time.perf_counter) -> dict:
     """Read until STARTUP or `timeout_s` after `t0`. Returns the iteration row
-    minus its index: ok, latency_ms (from the reset write), reason, and the
+    minus its index: ok, latency_ms (from the reset write), reason, the
     message ids that arrived first (a reset that lands with traffic flowing
-    should see broadcasts drain, then nothing, then STARTUP).
+    should see broadcasts drain, then nothing, then STARTUP), and
+    violations_before: those of them the reset raised (is_reset_event()).
 
     `t0` is on `clock`, which is perf_counter and not monotonic: on Windows
     time.monotonic() ticks every ~15.6 ms, which quantised the first 1000-reset
@@ -87,11 +126,12 @@ def wait_startup(reader, t0: float, timeout_s: float,
     The reader's deadline is monotonic, so it is converted here."""
     deadline = time.monotonic() + max(0.0, timeout_s - (clock() - t0))
     before: list[str] = []
+    bad: list[str] = []
     while True:
         got = reader.next_frame(deadline)
         if got is None:
             return {"ok": False, "latency_ms": None, "reason": None,
-                    "frames_before": before}
+                    "frames_before": before, "violations_before": bad}
         msg_id, body = got
         if msg_id == MESG_STARTUP_MESG_ID:
             reason = body[0] if body else None
@@ -99,8 +139,22 @@ def wait_startup(reader, t0: float, timeout_s: float,
                     "latency_ms": round((clock() - t0) * 1000.0, 3),
                     "reason": (STARTUP_REASONS_BY_VALUE.get(reason, reason)
                                if reason is not None else None),
-                    "frames_before": before}
+                    "frames_before": before, "violations_before": bad}
         before.append(f"0x{msg_id:02X}")
+        if is_reset_event(msg_id, body):
+            bad.append(describe(msg_id, body))
+
+
+def read_after(reader, seconds: float) -> list[str]:
+    """Read for `seconds` after STARTUP. No channel is open, so every frame
+    that arrives is stale: returns them all, described."""
+    end = time.monotonic() + seconds
+    got_any: list[str] = []
+    while True:
+        got = reader.next_frame(end)
+        if got is None:
+            return got_any
+        got_any.append(describe(*got))
 
 
 def _quiet_command(dev, reader, msg_id: int, payload: bytes,
@@ -146,6 +200,10 @@ def dwell(reader, seconds: float) -> int:
 def summarise(rows: list[dict], read_timeout_ms: int) -> dict:
     n = len(rows)
     failures = [r["i"] for r in rows if not r["ok"]]
+    v_before = sum(len(r.get("violations_before", ())) for r in rows)
+    v_after = sum(len(r.get("frames_after", ())) for r in rows)
+    v_iters = [r["i"] for r in rows
+               if r.get("violations_before") or r.get("frames_after")]
     lat = [r["latency_ms"] for r in rows if r["latency_ms"] is not None]
     ci = wilson(len(failures), n)
     pct = {f"p{int(q * 100)}": quantile(lat, q)
@@ -165,7 +223,16 @@ def summarise(rows: list[dict], read_timeout_ms: int) -> dict:
         # STARTUPs really did land in the window it was aiming at.
         "within_one_read_timeout": sum(1 for v in lat
                                        if v <= read_timeout_ms * 1.5),
+        # TODO item 5's ordering checks; see the module docstring.
+        "violations_before": v_before,
+        "violations_after": v_after,
+        "violating_iterations": v_iters,
     }
+
+
+def passed(summary: dict) -> bool:
+    return (summary["failures"] == 0 and summary["violations_before"] == 0
+            and summary["violations_after"] == 0)
 
 
 def _health(dev, reader) -> dict | None:
@@ -200,6 +267,15 @@ def main() -> int:
                         help="with --traffic, read this long before resetting")
     parser.add_argument("--pause-s", type=float, default=0.0,
                         help="idle gap between iterations")
+    parser.add_argument("--after-ms", type=int, default=300,
+                        help="read this long after STARTUP; any frame then "
+                             "is a stale-frame violation (0 disables)")
+    parser.add_argument("--jitter-s", type=float, default=0.0,
+                        help="random 0..N s sleep (not a read) before each "
+                             "reset, so the reset does not phase-lock to the "
+                             "traffic")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="seed for --jitter-s, for a repeatable run")
     parser.add_argument("--health", action="store_true",
                         help="snapshot 0xF6 before and after the loop")
     parser.add_argument("--json", default=None)
@@ -216,6 +292,7 @@ def main() -> int:
               "endpoint": args.port or args.serial,
               "args": {k: v for k, v in vars(args).items() if k != "json"}}
     rows: list[dict] = []
+    rng = random.Random(args.seed)
     traffic_failures = 0
     framing = [0, 0]    # checksum errors, discarded bytes, over every reader
     dev, reader = open_one()
@@ -235,19 +312,34 @@ def main() -> int:
                     heard = dwell(reader, args.dwell_s)
                 else:
                     traffic_failures += 1
+            jitter = None
+            if args.jitter_s > 0:
+                jitter = round(rng.uniform(0.0, args.jitter_s), 4)
+                time.sleep(jitter)   # never a read; see the docstring
             t0 = time.perf_counter()
             dev.write(EP_OUT, frame(MESG_SYSTEM_RESET_ID, b"\x00"))
             row = {"i": i, **wait_startup(reader, t0, args.reset_timeout_s)}
+            if row["ok"] and args.after_ms > 0:
+                row["frames_after"] = read_after(reader, args.after_ms / 1000.0)
             if heard is not None:
                 row["frames_dwell"] = heard
+            if jitter is not None:
+                row["jitter_s"] = jitter
             rows.append(row)
             if not row["ok"]:
                 print(f"  iteration {i}: NO STARTUP within "
                       f"{args.reset_timeout_s} s (before: "
                       f"{row['frames_before']})", flush=True)
+            if row["violations_before"] or row.get("frames_after"):
+                print(f"  iteration {i}: ORDER VIOLATION before="
+                      f"{row['violations_before']} after="
+                      f"{row.get('frames_after', [])}", flush=True)
             if (i + 1) % 100 == 0:
                 fails = sum(not r["ok"] for r in rows)
-                print(f"{i + 1}/{args.count}: {fails} failed", flush=True)
+                bad = sum(bool(r["violations_before"] or r.get("frames_after"))
+                          for r in rows)
+                print(f"{i + 1}/{args.count}: {fails} failed, {bad} with "
+                      f"violations", flush=True)
             if args.pause_s:
                 time.sleep(args.pause_s)
         if args.health:
@@ -267,7 +359,7 @@ def main() -> int:
     if args.json:
         Path(args.json).write_text(text + "\n", encoding="utf-8")
     print(json.dumps(report["summary"], indent=2))
-    return 0 if report["summary"]["failures"] == 0 else 1
+    return 0 if passed(report["summary"]) else 1
 
 
 if __name__ == "__main__":

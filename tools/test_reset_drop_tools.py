@@ -24,7 +24,11 @@ import ant_multi_verify as amv  # noqa: E402
 import ant_reset_loop as arl  # noqa: E402
 import console_capture as cc  # noqa: E402
 from ant_wire import (  # noqa: E402
+    EVENT_CHANNEL_CLOSED,
+    EVENT_RX_FAIL,
     MESG_BROADCAST_DATA_ID,
+    MESG_EVENT_ID,
+    MESG_RESPONSE_EVENT_ID,
     MESG_STARTUP_MESG_ID,
     STARTUP_WATCH_DOG_RESET,
 )
@@ -296,6 +300,76 @@ class TestResetLoop(unittest.TestCase):
                            for i in range(1000)], 1000)
         self.assertEqual(s["failures"], 0)
         self.assertLess(s["failure_ci95_pct"][1], 0.4)
+
+
+class TestResetLoopOrdering(unittest.TestCase):
+    """TODO item 5: what may and may not reach the host around a reset."""
+
+    CLOSED = (MESG_RESPONSE_EVENT_ID,
+              bytes([0, MESG_EVENT_ID, EVENT_CHANNEL_CLOSED]))
+    RX_FAIL = (MESG_RESPONSE_EVENT_ID, bytes([0, MESG_EVENT_ID, EVENT_RX_FAIL]))
+    STARTUP = (MESG_STARTUP_MESG_ID, bytes([0x20]))
+
+    def test_a_channel_closed_before_startup_is_a_violation(self):
+        # The reset raised it, so it cannot have been queued before it.
+        reader = FakeReader([(MESG_BROADCAST_DATA_ID, bytes(9)), self.CLOSED,
+                             self.STARTUP])
+        row = arl.wait_startup(reader, time.perf_counter(), 3.0)
+        self.assertTrue(row["ok"])
+        self.assertEqual(row["frames_before"], ["0x4E", "0x40"])
+        self.assertEqual(row["violations_before"], ["0x40 ch0 0x01:0x07"])
+
+    def test_broadcasts_and_older_events_before_startup_are_allowed(self):
+        # Both can have been queued before the reset arrived.
+        reader = FakeReader([(MESG_BROADCAST_DATA_ID, bytes(9)), self.RX_FAIL,
+                             (MESG_BROADCAST_DATA_ID, bytes(9)), self.STARTUP])
+        row = arl.wait_startup(reader, time.perf_counter(), 3.0)
+        self.assertTrue(row["ok"])
+        self.assertEqual(row["violations_before"], [])
+
+    def test_a_channel_response_that_is_not_an_event_is_not_a_violation(self):
+        # [ch, msg_id, code] with msg_id != MESG_EVENT_ID is a command reply.
+        reply = (MESG_RESPONSE_EVENT_ID, bytes([0, 0x4C, EVENT_CHANNEL_CLOSED]))
+        row = arl.wait_startup(FakeReader([reply, self.STARTUP]),
+                               time.perf_counter(), 3.0)
+        self.assertEqual(row["violations_before"], [])
+
+    def test_every_frame_after_startup_is_stale(self):
+        reader = FakeReader([(MESG_BROADCAST_DATA_ID, bytes(9)), self.CLOSED])
+        self.assertEqual(arl.read_after(reader, 0.05),
+                         ["0x4E", "0x40 ch0 0x01:0x07"])
+
+    def test_a_quiet_window_after_startup_is_clean(self):
+        self.assertEqual(arl.read_after(FakeReader([]), 0.01), [])
+
+    def test_violations_are_counted_and_fail_the_run(self):
+        rows = [{"i": 0, "ok": True, "latency_ms": 2.0,
+                 "violations_before": [], "frames_after": []},
+                {"i": 1, "ok": True, "latency_ms": 2.0,
+                 "violations_before": ["0x40 ch0 0x01:0x07"],
+                 "frames_after": []},
+                {"i": 2, "ok": True, "latency_ms": 2.0,
+                 "violations_before": [], "frames_after": ["0x4E", "0x4E"]}]
+        s = arl.summarise(rows, 1000)
+        self.assertEqual(s["failures"], 0)
+        self.assertEqual(s["violations_before"], 1)
+        self.assertEqual(s["violations_after"], 2)
+        self.assertEqual(s["violating_iterations"], [1, 2])
+        self.assertFalse(arl.passed(s))
+
+    def test_a_clean_run_passes_and_a_lost_startup_still_fails(self):
+        clean = [{"i": 0, "ok": True, "latency_ms": 2.0,
+                  "violations_before": [], "frames_after": []}]
+        self.assertTrue(arl.passed(arl.summarise(clean, 1000)))
+        lost = clean + [{"i": 1, "ok": False, "latency_ms": None,
+                         "violations_before": []}]
+        self.assertFalse(arl.passed(arl.summarise(lost, 1000)))
+
+    def test_rows_from_before_the_ordering_checks_still_summarise(self):
+        # Archived JSON rows carry neither field.
+        s = arl.summarise([{"i": 0, "ok": True, "latency_ms": 52.0}], 1000)
+        self.assertEqual((s["violations_before"], s["violations_after"]),
+                         (0, 0))
 
 
 if __name__ == "__main__":

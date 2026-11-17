@@ -359,7 +359,7 @@ void radiant_channel_init(void);
  * antr_stack_reset(): every channel closed and unassigned, synchronously.
  *
  * Channel-closed events raised as a side effect ARE delivered - the contract
- * requires it, and the bridge discards them for a short window afterwards
+ * requires it, and the bridge discards them until the startup message
  * (a real stick emits nothing between reset and the startup message).
  *
  * Any operation in flight is orphaned rather than waited on - this module

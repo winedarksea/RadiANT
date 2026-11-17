@@ -40,11 +40,13 @@ def reader_timeout_ms(dev) -> int:
 
     Never short on USB. Under libusb-win32 a read timeout cancels the pending
     bulk-IN transfer, and a cancel that lands as a frame arrives loses that
-    frame whole (ant_probe.READ_TIMEOUT_MS). The firmware answers SYSTEM_RESET
-    52 ms after it, so a 50 ms read parked reset_stack()'s wait right on the
-    STARTUP: measured 2026-11-07 on the nRF52840 Dongle, 11 of 1000 resets lost
-    their STARTUP at 50 ms, 10/1000 at 52 ms, 0/1000 at 1000 ms - the one "did
-    not reset" of the Garmin comparison (TODO.md item 2). The loops here poll
+    frame whole (ant_probe.READ_TIMEOUT_MS). Firmware before TODO item 5
+    answered SYSTEM_RESET 52 ms after it, so a 50 ms read parked
+    reset_stack()'s wait right on the STARTUP: measured 2026-11-07 on the
+    nRF52840 Dongle, 11 of 1000 resets lost their STARTUP at 50 ms, 10/1000 at
+    52 ms, 0/1000 at 1000 ms - the one "did not reset" of the Garmin comparison
+    (TODO.md item 2). Current firmware answers within a few ms, but any reply
+    latency can land on a short read's expiry, so the rule stands. The loops here poll
     with 50-100 ms deadlines, but on USB every slave channel and the master's
     EVENT_TX stream keep data arriving well inside 1 s, so a 1 s read returns
     long before it times out; the worst case is a send or stop check up to 1 s

@@ -183,6 +183,9 @@ BUILD_ASSERT(RADIANT_CHANNEL_GUARD_MIN_US >= RADIANT_CHANNEL_DRIFT_WORST_US,
 #endif
 #define API_EVENT_PRIORITY   6
 
+/* antr_stack_reset()'s bound on waiting for an in-progress delivery. */
+#define API_RESET_DRAIN_WAIT_MS 10
+
 BUILD_ASSERT(API_EVENT_PRIORITY > ANTR_HOST_THREAD_PRIORITY,
 	     "the radiant event thread must be LOWER priority than the "
 	     "thread the bridge makes antr_* calls on, or an event raised "
@@ -3398,6 +3401,30 @@ antr_err_t antr_stack_reset(void)
 	(void)radiant_search_init(&api_search, &scfg, &api_search_cbs, NULL);
 
 	k_mutex_unlock(&api_lock);
+
+	/*
+	 * The flush emptied the ring, but the event thread may already have
+	 * taken a message off it and not yet delivered it: the caller pre-empts
+	 * that thread, and the drain delivers outside any lock. Wait for that
+	 * drain to finish, so that when this returns no message from before the
+	 * reset is still on its way to antr_on_message(). The bridge drops what
+	 * arrives meanwhile, since it has its reset flag set. Outside api_lock,
+	 * because the delivery may take it. Never on the event thread itself,
+	 * which would wait for itself. Bounded so a wedged delivery cannot hang
+	 * the reset; that drain is normally one message from done.
+	 */
+	if (k_current_get() != &api_event_thread_data) {
+		k_timepoint_t end = sys_timepoint_calc(K_MSEC(API_RESET_DRAIN_WAIT_MS));
+
+		while (radiant_event_draining()) {
+			if (sys_timepoint_expired(end)) {
+				LOG_WRN("stack reset: event delivery busy after %d ms",
+					API_RESET_DRAIN_WAIT_MS);
+				break;
+			}
+			k_sleep(K_TICKS(1));
+		}
+	}
 
 	/* "Returns 0. There is no failure case a host could act on." */
 	return (antr_err_t)ANTW_RESPONSE_NO_ERROR;

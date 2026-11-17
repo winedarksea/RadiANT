@@ -93,6 +93,19 @@ static struct k_thread bridge_thread_data;
  */
 static atomic_t reset_in_progress;
 
+/* How many antr_on_message() calls are past the activity hooks and not yet
+ * returned. handle_system_reset() waits for it to reach zero; see there.
+ * An atomic and not a lock, so antr_on_message() stays legal from any context
+ * a backend calls it from.
+ */
+static atomic_t evt_inflight;
+
+/* handle_system_reset()'s bounds on the two fences. Both are far above what
+ * either takes when nothing is wrong, and exist only so a wedged event path
+ * or host cannot hang the reset. */
+#define RESET_EVT_FENCE_MS 10
+#define RESET_TX_FENCE_MS  100
+
 /* ── Host trace (CONFIG_ANT_DONGLE_HOST_TRACE) ─────────────────────────────── */
 
 /*
@@ -847,15 +860,16 @@ void ant_serial_bridge_host_state(uint8_t net, struct ant_bridge_host_state *out
 	out->reset_gen = host_reset_gen;
 	/*
 	 * reset_in_progress is not written under this lock (handle_system_reset()
-	 * sets it before antr_stack_reset() and clears it 50 ms after
-	 * host_state_note_reset() bumps the generation), so the ORDER of these
-	 * two reads is what makes them agree: generation first, flag second.
-	 * Read that way, a flag of 0 next to an old generation means the reset
-	 * had not begun when the flag was read, and a flag of 0 next to a new
-	 * generation means the reset that bumped it had finished; the only way
-	 * to get either pair wrong is to sit between the two reads for the
-	 * whole 50 ms tail. On a single core the lock makes the pair atomic
-	 * anyway; the order is for the reader on another one.
+	 * sets it before antr_stack_reset() and clears it after
+	 * host_state_note_reset() bumps the generation and the reset's fences
+	 * have passed), so the ORDER of these two reads is what makes them
+	 * agree: generation first, flag second. Read that way, a flag of 0 next
+	 * to an old generation means the reset had not begun when the flag was
+	 * read, and a flag of 0 next to a new generation means the reset that
+	 * bumped it had finished; the only way to get either pair wrong is to
+	 * sit between the two reads for the whole of the reset's tail. On a
+	 * single core the lock makes the pair atomic anyway; the order is for
+	 * the reader on another one.
 	 */
 	out->reset_busy = atomic_get(&reset_in_progress) != 0;
 	if (net < ANT_BRIDGE_HOST_NETWORKS) {
@@ -898,11 +912,58 @@ static void handle_system_reset(void)
 	 */
 	burst_buf_reset();
 
-	/* Let the resulting channel-closed events land and be discarded before
-	 * the host is told the stack is up again. Real sticks are unresponsive
-	 * for rather longer than this.
+	/*
+	 * Nothing may reach the host between the reset and the STARTUP that
+	 * follows except frames already queued before it, and nothing from
+	 * before the reset may follow the STARTUP. antr_stack_reset() is
+	 * synchronous on RadiANT: its channel-closed events have been raised,
+	 * the event ring flushed, and any delivery that had already left the
+	 * ring has returned. Two orderings are still open, and the two fences
+	 * close them.
+	 *
+	 * 1. An event inside antr_on_message() that passed its
+	 *    reset_in_progress check before the flag was set and is not yet
+	 *    queued. This thread pre-empts the event thread, so that frame
+	 *    could be queued after the STARTUP. The flag was set above, before
+	 *    evt_inflight is read here; antr_on_message() bumps evt_inflight
+	 *    before it reads the flag. Atomics are sequentially consistent, so
+	 *    either this loop sees the call and waits for it, or the call sees
+	 *    the flag and drops its frame. The sleep lets the lower-priority
+	 *    event thread run to the end of the call.
+	 */
+	{
+		k_timepoint_t end = sys_timepoint_calc(K_MSEC(RESET_EVT_FENCE_MS));
+
+		while (atomic_get(&evt_inflight) != 0) {
+			if (sys_timepoint_expired(end)) {
+				LOG_WRN("reset: event path still busy after %d ms",
+					RESET_EVT_FENCE_MS);
+				break;
+			}
+			k_sleep(K_TICKS(1));
+		}
+	}
+
+	/*
+	 * 2. Events queued for the transport's writer thread before the reset.
+	 *    The STARTUP is a direct write, so it would overtake them. Those
+	 *    frames are older than the reset and the host may have them; they
+	 *    go out first, and nothing older follows the STARTUP.
+	 */
+	if (ant_transport_tx_fence(K_MSEC(RESET_TX_FENCE_MS)) != 0) {
+		LOG_WRN("reset: transmit queue not drained in %d ms",
+			RESET_TX_FENCE_MS);
+	}
+
+#if defined(CONFIG_ANT_DONGLE_RADIO_SDK_ANT)
+	/* The sdk-ant backend, kept as the A/B reference, raises its
+	 * channel-closed events asynchronously after ant_stack_reset()
+	 * returns, so nothing above can see them coming. Give them time to
+	 * land and be discarded. Real sticks are unresponsive for rather
+	 * longer than this.
 	 */
 	k_sleep(K_MSEC(50));
+#endif
 	atomic_set(&reset_in_progress, 0);
 }
 
@@ -1784,7 +1845,7 @@ static void bridge_thread_fn(void *p1, void *p2, void *p3)
 	 * immediately before processing the byte whose index equals it. Reset
 	 * on noticing instead and a bridge that was blocked when the host
 	 * reset - handle_burst()'s wait for the block, up to 1000 ms, or
-	 * handle_system_reset()'s 50 ms tail - would come back to old bytes
+	 * handle_system_reset()'s fences - would come back to old bytes
 	 * still queued, reset on the first of them, re-parse an old
 	 * half-frame from its own SYNC, and eat the new session's SYNC
 	 * exactly as before the fix.
@@ -1897,6 +1958,8 @@ static void bridge_thread_fn(void *p1, void *p2, void *p3)
 void ant_dongle_rx_tap(const struct antr_msg *msg);
 #endif
 
+static void on_message_forward(const struct antr_msg *msg);
+
 void antr_on_message(const struct antr_msg *msg)
 {
 #if defined(CONFIG_ANT_DONGLE_RX_TAP)
@@ -1915,6 +1978,19 @@ void antr_on_message(const struct antr_msg *msg)
 	 */
 	ant_activity_note_msg(msg->id);
 
+	/* Counted around the whole forwarding path, so every early return in it
+	 * is covered; handle_system_reset()'s first fence waits on this. The
+	 * increment comes before on_message_forward() reads reset_in_progress,
+	 * and that order is what the fence relies on. */
+	atomic_inc(&evt_inflight);
+	on_message_forward(msg);
+	atomic_dec(&evt_inflight);
+}
+
+/* antr_on_message()'s body past the hooks: the reset check, burst buffer
+ * handover, event filter and the frame for the host. */
+static void on_message_forward(const struct antr_msg *msg)
+{
 	/*
 	 * Wire format: [0xA4][LEN][ID][channel+payload...][XOR checksum]
 	 * Total size  = LEN + 4 bytes.

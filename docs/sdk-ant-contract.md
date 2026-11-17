@@ -300,7 +300,7 @@ UNASSIGNED --antr_channel_assign()--> ASSIGNED --antr_channel_open*()--> SEARCHI
   is the reason.
 - **`antr_stack_reset()` is synchronous and total**: every channel closed and unassigned, every
   key forgotten, library configuration back to zero. Channel-closed events raised as a side effect
-  are still delivered; the bridge discards them for 50 ms afterwards, because a real stick emits
+  are still delivered; the bridge discards them until the startup message, because a real stick emits
   nothing between the reset command and the startup message.
 - **Advanced burst must be enabled before `antr_burst_tx()` accepts a 16- or 24-byte block.**
   Until then, reject anything over 8 — a dongle that takes 24-byte blocks and can never send one

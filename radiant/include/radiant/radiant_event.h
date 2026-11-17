@@ -232,8 +232,8 @@ void radiant_event_init(void);
  * library configuration and event filter, without delivering anything.
  *
  * Discarding, not draining, is correct: a real stick emits nothing between
- * reset and the startup message (the bridge discards inbound events for
- * 50 ms for that reason), and draining here would recursively call
+ * reset and the startup message (the bridge discards inbound events until
+ * the startup message for that reason), and draining here would recursively call
  * radiant_on_message() from inside an antr_* call, which
  * docs/sdk-ant-contract.md forbids. Discards counted in
  * radiant_event_stats.dropped_flush; stats themselves are not cleared, so a
@@ -499,6 +499,18 @@ bool radiant_event_pending(void);
  * the head rather than in position so a busy ring can't starve the report.
  */
 uint32_t radiant_event_drain(uint32_t max_msgs);
+
+/*
+ * True while a radiant_event_drain() call is running, from before it takes
+ * its first message off the ring until after the last delivery returns.
+ *
+ * For antr_stack_reset(). radiant_event_flush() empties the ring, but a drain
+ * may already hold a message it took off before the flush and not yet have
+ * handed it to radiant_on_message(). Once this has been seen false after the
+ * flush, no message from before the flush is still on its way; a drain that
+ * starts later finds only what was posted after it.
+ */
+bool radiant_event_draining(void);
 
 /* ---------------------------------------------------------------------------
  * Statistics

@@ -25,8 +25,8 @@
  *
  * The names below are the ones usb_ant_class.c already exported, kept exactly
  * as they were so that file did not have to be touched to gain a sibling -
- * all but ant_transport_session(), added later, which every one of the three
- * defines.
+ * all but ant_transport_session() and ant_transport_tx_fence(), added later,
+ * which every one of the three defines.
  */
 
 #ifndef ANT_TRANSPORT_H_
@@ -60,8 +60,37 @@ int usb_ant_send(const uint8_t *buf, size_t len);
  *
  * For callers that must not block - specifically ant_evt_handler(), which runs
  * on sdk-ant's work queue and whose stack is not ours to spend.
+ *
+ * A zero-length frame is refused with -EINVAL: that length is reserved for
+ * ant_transport_tx_fence()'s marker.
  */
 int usb_ant_send_async(const uint8_t *buf, size_t len);
+
+/**
+ * Wait until every frame usb_ant_send_async() queued before this call has
+ * been written or dropped.
+ *
+ * Exists for SYSTEM_RESET. The STARTUP goes out through usb_ant_send(), a
+ * direct write, while events go through the queue and a separate writer
+ * thread, so without this a pre-reset event still queued would reach the host
+ * after the STARTUP. Once this returns 0 the writer has finished its last
+ * pre-fence frame under the same transmit mutex usb_ant_send() takes, so a
+ * usb_ant_send() that follows is ordered after all of them: the queue is FIFO
+ * with one consumer.
+ *
+ * Works by queueing a numbered zero-length marker behind those frames. The
+ * writer thread records the number when it reaches the marker, writes
+ * nothing, and wakes the caller. Returns 0 at once when the transport is
+ * down, since nothing queued is written then.
+ *
+ * ONE caller only, the bridge thread: the wake-up semaphore holds one waiter.
+ *
+ * Returns 0, or -EAGAIN if the marker could not be queued or reached within
+ * @p timeout. That includes a purge (USB suspend, disconnect, deconfigure)
+ * discarding the marker. The purge also discards every frame the caller was
+ * waiting for, so the caller may go on either way.
+ */
+int ant_transport_tx_fence(k_timeout_t timeout);
 
 /**
  * Re-arm reception after the bridge has made room in ant_rx_ring_buf.
