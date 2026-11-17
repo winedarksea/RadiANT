@@ -1,0 +1,337 @@
+{
+ "args": {
+  "sim_port": "COM3",
+  "device": 4244,
+  "serial": "4FD72803",
+  "port": null,
+  "preset": "ideal",
+  "set": [],
+  "offset": null,
+  "count": 20,
+  "interval": 1.0,
+  "lone_seconds": null,
+  "json": "archive/benchmarks/2026-11-17-ack-pending-search/pm_baseline.json",
+  "silence_ms": null,
+  "silence_cycles": 5,
+  "second_after": 0.75
+ },
+ "points": [
+  {
+   "setup": [
+    "ackfault preset ideal"
+   ],
+   "dump_complete": true,
+   "dump_lost": 0,
+   "sim_too_early": 0,
+   "page71_seen": 15,
+   "page71_advanced": 18,
+   "sim_applied": 19,
+   "rows": [
+    {
+     "index": 0,
+     "tag": 18000,
+     "outcome": "TRANSFER_TX_COMPLETED",
+     "sim": [
+      {
+       "act": "ack",
+       "cause": "none",
+       "off": 0,
+       "tx": 1,
+       "seq": 0
+      }
+     ],
+     "verdict": "ok"
+    },
+    {
+     "index": 1,
+     "tag": 18001,
+     "outcome": "TRANSFER_TX_COMPLETED",
+     "sim": [
+      {
+       "act": "ack",
+       "cause": "none",
+       "off": 0,
+       "tx": 1,
+       "seq": 1
+      }
+     ],
+     "verdict": "ok"
+    },
+    {
+     "index": 2,
+     "tag": 18002,
+     "outcome": "TRANSFER_TX_COMPLETED",
+     "sim": [
+      {
+       "act": "ack",
+       "cause": "none",
+       "off": 0,
+       "tx": 1,
+       "seq": 2
+      }
+     ],
+     "verdict": "ok"
+    },
+    {
+     "index": 3,
+     "tag": 18003,
+     "outcome": "TRANSFER_TX_COMPLETED",
+     "sim": [
+      {
+       "act": "ack",
+       "cause": "none",
+       "off": 0,
+       "tx": 1,
+       "seq": 3
+      }
+     ],
+     "verdict": "ok"
+    },
+    {
+     "index": 4,
+     "tag": 18004,
+     "outcome": "TRANSFER_TX_COMPLETED",
+     "sim": [
+      {
+       "act": "ack",
+       "cause": "none",
+       "off": 0,
+       "tx": 1,
+       "seq": 4
+      }
+     ],
+     "verdict": "ok"
+    },
+    {
+     "index": 5,
+     "tag": 18005,
+     "outcome": "TRANSFER_TX_COMPLETED",
+     "sim": [
+      {
+       "act": "ack",
+       "cause": "none",
+       "off": 0,
+       "tx": 1,
+       "seq": 5
+      }
+     ],
+     "verdict": "ok"
+    },
+    {
+     "index": 6,
+     "tag": 18006,
+     "outcome": "TRANSFER_TX_COMPLETED",
+     "sim": [
+      {
+       "act": "ack",
+       "cause": "none",
+       "off": 0,
+       "tx": 1,
+       "seq": 6
+      }
+     ],
+     "verdict": "ok"
+    },
+    {
+     "index": 7,
+     "tag": 18007,
+     "outcome": "TRANSFER_TX_COMPLETED",
+     "sim": [
+      {
+       "act": "ack",
+       "cause": "none",
+       "off": 0,
+       "tx": 1,
+       "seq": 7
+      }
+     ],
+     "verdict": "ok"
+    },
+    {
+     "index": 8,
+     "tag": 18008,
+     "outcome": "TRANSFER_TX_COMPLETED",
+     "sim": [
+      {
+       "act": "ack",
+       "cause": "none",
+       "off": 0,
+       "tx": 1,
+       "seq": 8
+      }
+     ],
+     "verdict": "ok"
+    },
+    {
+     "index": 9,
+     "tag": 18009,
+     "outcome": "TRANSFER_TX_COMPLETED",
+     "sim": [
+      {
+       "act": "ack",
+       "cause": "none",
+       "off": 0,
+       "tx": 1,
+       "seq": 9
+      }
+     ],
+     "verdict": "ok"
+    },
+    {
+     "index": 10,
+     "tag": 18010,
+     "outcome": "TRANSFER_TX_COMPLETED",
+     "sim": [
+      {
+       "act": "ack",
+       "cause": "none",
+       "off": 0,
+       "tx": 1,
+       "seq": 10
+      }
+     ],
+     "verdict": "ok"
+    },
+    {
+     "index": 11,
+     "tag": 18011,
+     "outcome": "TRANSFER_TX_COMPLETED",
+     "sim": [
+      {
+       "act": "ack",
+       "cause": "none",
+       "off": 0,
+       "tx": 1,
+       "seq": 11
+      }
+     ],
+     "verdict": "ok"
+    },
+    {
+     "index": 12,
+     "tag": 18012,
+     "outcome": "TRANSFER_TX_COMPLETED",
+     "sim": [
+      {
+       "act": "ack",
+       "cause": "none",
+       "off": 0,
+       "tx": 1,
+       "seq": 12
+      }
+     ],
+     "verdict": "ok"
+    },
+    {
+     "index": 13,
+     "tag": 18013,
+     "outcome": "TRANSFER_TX_FAILED",
+     "sim": [],
+     "verdict": "not_heard"
+    },
+    {
+     "index": 14,
+     "tag": 18014,
+     "outcome": "TRANSFER_TX_COMPLETED",
+     "sim": [
+      {
+       "act": "ack",
+       "cause": "none",
+       "off": 0,
+       "tx": 1,
+       "seq": 13
+      }
+     ],
+     "verdict": "ok"
+    },
+    {
+     "index": 15,
+     "tag": 18015,
+     "outcome": "TRANSFER_TX_COMPLETED",
+     "sim": [
+      {
+       "act": "ack",
+       "cause": "none",
+       "off": 0,
+       "tx": 1,
+       "seq": 14
+      }
+     ],
+     "verdict": "ok"
+    },
+    {
+     "index": 16,
+     "tag": 18016,
+     "outcome": "TRANSFER_TX_COMPLETED",
+     "sim": [
+      {
+       "act": "ack",
+       "cause": "none",
+       "off": 0,
+       "tx": 1,
+       "seq": 15
+      }
+     ],
+     "verdict": "ok"
+    },
+    {
+     "index": 17,
+     "tag": 18017,
+     "outcome": "TRANSFER_TX_COMPLETED",
+     "sim": [
+      {
+       "act": "ack",
+       "cause": "none",
+       "off": 0,
+       "tx": 1,
+       "seq": 16
+      }
+     ],
+     "verdict": "ok"
+    },
+    {
+     "index": 18,
+     "tag": 18018,
+     "outcome": "TRANSFER_TX_COMPLETED",
+     "sim": [
+      {
+       "act": "ack",
+       "cause": "none",
+       "off": 0,
+       "tx": 1,
+       "seq": 17
+      }
+     ],
+     "verdict": "ok"
+    },
+    {
+     "index": 19,
+     "tag": 18019,
+     "outcome": "TRANSFER_TX_COMPLETED",
+     "sim": [
+      {
+       "act": "ack",
+       "cause": "none",
+       "off": 0,
+       "tx": 1,
+       "seq": 18
+      }
+     ],
+     "verdict": "ok"
+    }
+   ],
+   "summary": {
+    "ok": 19,
+    "window_missed": 0,
+    "sim_no_tx": 0,
+    "expected": 0,
+    "not_heard": 1,
+    "IMPOSSIBLE": 0,
+    "originator_error": 0,
+    "n": 20,
+    "window_miss_rate": 0.0
+   },
+   "offset_us": 0
+  }
+ ]
+}
