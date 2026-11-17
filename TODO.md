@@ -5,12 +5,6 @@ Discovery short match (ADR 0022), left open 2026-11-11:
 - Zwift acceptance of the nRF default flip (user-run, not a precondition any more): every sensor listed within ~1 s while HR and trainer are tracked, 0x61/0xC6 answered, reset -> NETWORK_KEY against 42-94 s (RadiANT history) and 9.2 s (Garmin). If it passes, mark ADR 0022 accepted; if it fails, rebuild with `apps/dongle/long_match.conf` and investigate.
 - Decided 2026-11-14 (owner): short match stays default y on EVERY nRF image (MPSL, Matter, nRF5340 net core, L15), none of which had its own gate run; no CI job for `long_match.conf` (declined).
 
-## TI CC2652R, open after the 2026-11-12 bench (evidence `archive/benchmarks/2026-11-12-ti-findings/` and `2026-11-12-ti-lead/`; items closed 2026-11-13, `archive/benchmarks/2026-11-13-ti-todo/README.md`):
-- Rebuild the TI image before it ships: the one staged in `build\final_perf_6078d88\` predates e66ae02 (a one-packet transfer's ACK window now reserves no follow-on; host-tested only). Check acknowledged transfers on air with the rebuilt image (`tools/ant_ack_pair.py`, both roles) first.
-  - 2026-11-16: rebuilt from 497030a (a8960111) and checked on air against the Garmin (`archive/benchmarks/2026-11-16-ti-acked-rebuild/`). TI as master: acked origination 100/100, acked answer 100/100. TI as slave originating: 52, 88, 97, 6 of 100, against a Pro Micro control at 100, 99, 98. Not staged: blocked on the item below.
-  - 2026-11-16 late: unblocked by the reply-timing fix (94ec6a8). All three acked arms are within the Pro Micro control on air (`archive/benchmarks/2026-11-16-ti-reply-timing/`, local). Images in `build\ti_reply_fix_94ec6a8\`: shipping 355d3d45, diag a63489c5. Staging into `build\final_*` is the owner's call.
-- [DONE 2026-11-16, branch fix/ti-reply-timing] TI as a slave lost every acked reply for stretches of seconds to a whole session (100, 0, 0, 47 of 100 on `ti2_o2.hex` too). Cause, from an L15 promisc sniff: the TI's reply went on air at +2085 us after the master's frame, about 105 us ahead of a real slave (Garmin +2203, nRF backend +2174), byte-identical in good and dead sessions. A Garmin master's reply window wanders about 80 us with its own slot timing (its ACK lands +3720..+3800), so its early edge drifted across the TI's reply. The earlier reading of the counters was wrong: the empty windows were the ACK windows, and the master's broadcasts were heard every slot. Fix: `CONFIG_RADIANT_CC26XX_TX_TIME_CAL_US` = 100 moves every TI transmit 100 us later, so the reply now lands at +2189 and no receive window moves. With it: 98, 99, 100, 100, 93, 94 against a Pro Micro control of 91, 90 in the same window. The 100 us is the measured sum of the RX timestamp error (`T_SYNC_CAL_US`) and the TX start error; one clock cannot split it, and only the RX half would move tracked windows. Splitting it could still explain the Pro Micro -> TI 8-13 % loss below.
-
 ## Open after the 2026-11-16 benches (filed on fix/ti-cmd-stall):
 - nRF: re-read `now` on STEP_RETRY after an early-ETIME refusal; the stale `now` makes the refusals cascade (`archive/benchmarks/2026-11-16-b4-pair/`).
 - nRF: `radiant_frame.c` (`rx_sw_addr_len` / `radiant_addr_alt_run` bit loop) is outside the O2 hot set, ~17 us per filter on a filter-memo miss.
@@ -142,54 +136,7 @@ Raw per-window logs are gitignored but still on disk on the bench PC.
   - Feather flashes are rationed. Reflash the nRF52840 Dongle over DFU.
 - Only one agent may use the bench at a time.
 
-## 1. [DONE 2026-11-07, one open follow-up] Receive loss that depends on the device number
-**Fixed** by `CONFIG_RADIANT_NRF_SLIP_GUARD` (ADR 0019). Cause: the nRF demodulator
-drops one bit in an alternating run of 9 or more bits in or just after the
-hardware-matched address. A/B/A on #54100 with the Garmin receiving: 54L15
-2.08 → 0.17 → 2.33 %, Garmin 0.17/0.17/0.33 %. That passes the Done gate below.
-Evidence: archive/benchmarks/2026-11-07-devnum-rx-loss/README.md.
-Follow-up: at -50..-60 dBm guarded boards still lose 0.2-1.25 % on runs of
-8-12, including the unguarded run-8 #54058 on the 5340. Measure at a controlled
-level, and consider `SLIP_GUARD_RUN=8`. Tried 2026-11-08 (archive/benchmarks/2026-11-08-todo-clearance/README.md):
-loss was bimodal, 0.3 % to 48 % for the same image and level, so run 8 could
-not be separated from run 9. Default stays 9; this needs shielding or an
-attenuator.
-Feather (755972D7183A6183) still runs the stock image, so reflash it with the
-fix when convenient.
-
-(Original notes follow.)
-RadiANT receivers lose 1.5-3 % of packets from device #54100 and 0 % from
-#54900. The Garmin stick loses 0-0.2 % throughout. The loss follows the number,
-not the transmitter. 120 s windows at -31..-48 dBm, one pinned power channel:
-
-| step | TX    | dev #  | Feather | Dongle | DK RX         | Garmin |
-|------|-------|--------|---------|--------|---------------|--------|
-| 1    | 54L15 | 54100  | 1.65    | 1.85   | 2.50 (5340)   | 0.00   |
-| 2    | 54L15 | 54900  | 0.00    | 0.00   | 0.00 (5340)   | 0.20   |
-| 3    | 54L15 | 54100  | 2.92    | 2.71   | 3.12 (5340)   | 0.21   |
-| 4    | 5340  | 54100  | 2.29    | 1.46   | 2.49 (54L15)  | 0.00   |
-
-- The radio reports every lost packet as EVENT_RX_FAIL. Two chip families
-  (52840, 5340 net core, 54L15) show the same loss.
-- Numbers that were clean: 53000 (0xCF08), 53030 (0xCF26), 54130 (0xD372),
-  54900 (0xD674). The bad one is 54100 (0xD354). 54130 shares the high byte
-  and is clean, so suspect the low byte (0x54 = 01010100).
-- **Status 2026-11-07: mechanism found, fix built, result not yet recorded.**
-  - Mechanism (measured): the nRF `Nrf_1Mbit` demodulator drops one bit in an
-    alternating run of about 9+ bits inside the hardware-matched address or
-    just after it. Evidence and rig: archive/benchmarks/2026-11-07-devnum-rx-loss/.
-  - Fix: docs/decisions/0019-tracking-matches-a-short-address.md. At-risk
-    numbers get a 2-byte hardware match plus a CRC-checked one-bit repair
-    (`CONFIG_RADIANT_NRF_SLIP_GUARD`); every other number keeps the full match.
-  - All of it is uncommitted: ADR 0019, radiant_addr_split.[ch] and its ztest,
-    apps/dongle/rxdiag.conf, and edits to radiant_radio_nrf.c, radiant/Kconfig
-    and both CMakeLists.
-  - ADR 0019 says "measured on air", but its Result section is empty and the
-    archive README stops at Phase 4.
-- Task: run and record Phase 5 (A/B/A on #54100 against the Garmin), fill in
-  ADR 0019's Result, then commit.
-- Done when RadiANT loss on #54100 is within the Wilson CI of the Garmin's,
-  with a 0.5 pp margin.
+## 1. [DONE 2026-11-07] Receive loss that depends on the device number
 
 ## 3. [CLASSIFIED 2026-11-07: PROBE side, not firmware; trigger unknown] 54L15 receiver's VCOM died mid-window. Evidence: archive/benchmarks/2026-11-07-vcom-soak/README.md
 
@@ -468,41 +415,8 @@ The Garmin loses here too, and reports EVENT_CHANNEL_COLLISION. But the channel 
 - Reproduce with two simulated masters at 8182 and 8192 (apps/trainer). Run it on the Pro Micro, and on the TI built with `ti_diag.conf` so the 0xF7 counters are available.
 
 ## 2. [DONE 2026-11-16, branch fix/ti-sync-separation] The TI dual-sync merge ignores min_filter_hamming_bits
-Fixed: merge rule 6 in `arm_rx_window()`, through `radiant_rx_filters_separable()` (radiant_radio_hal.h), which the scheduler, the fake radio and cc26xx `rx_arm()` (ENOTSUP backstop) all share. A member closer than the capability gets its own window or is reported MISSED. Six sched cases.
 
-The original premise was wrong. The TI hardware matches only the first `addr_len_hw_max` address bytes, so the distance that matters is over those bytes, not over the device number:
-- Default build (short match, 2 bytes): the sync word is the network address, `A6 C5` for every ANT+ channel. ANT+-only use was never exposed; only two networks whose addresses are 1-3 bits apart were.
-- `ti_long_match.conf` (3 bytes, `A6 C5 devlo`): for any devlo, 92 of the 256 possible partners (36 %) are 1-3 bits away, not about 1 %. #20329 (lo 0x69) and #52233 (lo 0x09) are 2 bits apart there. It was not hit because the TI ran a short-match build; the 5-bit figure was the full 16-bit device number.
-
-## 3. [FIXED 2026-11-17, bench PASS on Pro Micro and TI, MPSL partial (budget question below); Zwift acceptance open] A pending slave acked command outlives the channel's search
-Landed:
-- The held command fails at RX_FAIL_GO_TO_SEARCH, after the event, as the Garmin orders them (GO_TO_SEARCH then TX_FAILED about 1 ms later, 43 of 43 in 220629). `radiant_channel_event_out()` → `api_ack_pending_lost_track()`. Counter `xfer_pending_lost_track`.
-- A command held while searching is sent from the reacquiring frame (`api_search_acquired()`). Counter `xfer_pending_reacquired`. The Garmin never sends on the reacquiring frame (its earliest completion is 2 periods after reacquire), so this goes past Garmin parity.
-  - On the sweep's carrier, `api_search_release_carrier()` ends the search's hold on the slot first (the TX request drops the armed chunk without a done()), but only when nobody else searches. That is the ride case: Zwift closes its scan channel once riding, so a lost FE-C channel is the carrier. The first cut skipped the carrier entirely, and on the bench every held command then expired.
-  - Only while the reply slot can still be armed. Under the MPSL gate a search frame reaches the callback up to ~23 ms after its sync; 10 of 10 such sends expired in the scheduler and burned the command (L15 page 2 `tx_margin_min_us` -22607). The held command now waits for the next tracked frame instead.
-- Both counters, with `xfer_no_opener`, `xfer_watchdogs`, `xfer_bad_ack` and `xfer_radio_failed`, are on a new 0xF7 page 13 ("xfer"; `ant_diag.py --pages 13`).
-- Decision point: keep holding a command submitted while searching. The Garmin accepts and holds them too (19 accepted during search in 220629, 6 completed after reacquire, none failed at submit).
-
-Step 0 evidence (`decode_pcap.py` `by_state` lines; "crossed" = pending across a GO_TO_SEARCH, "heard" = a master frame reacquired the channel while it was still pending):
-- 214722 (MPSL): 9 crossed (all failed: 7 unheard, 2 heard), 134 submitted while searching (7 heard, 127 never heard before the deadline). The one refusal (the 0x37 at 106.3 s) was behind a 0x33 submitted while searching, so the first fix does not reach it; the second does if the master comes back inside the budget.
-- 215313: 1 crossed and heard (the 213.486 s case). 215820: none.
-- So the first fix removes up to 9 late failures and their blocking; the second can recover up to 9 commands (7 + 2) on the MPSL ride and 1 on 215313.
-
-Bench 2026-11-17 (`archive/benchmarks/2026-11-17-ack-pending-search/`, `fec_ack_sweep.py --silence-ms 2100`, trainer `silence` or a second stick via `--master-serial/--master-port`):
-- Pro Micro (final image, TI as master): 10/10 cycles. 6/6 commands pending across the drop failed at GO_TO_SEARCH; 6/6 held through search completed.
-- TI (final image, Pro Micro as master): 9/10, the miss an on-air ACK loss; 7/7 and 8/8. With the trainer as master, 10/10.
-- L15 MPSL: 5/5 failed at GO_TO_SEARCH, but only 4/9 held commands completed. The reacquiring frame always arrives too late to answer under MPSL, so the command needs the next tracked frame. It often lands 10-30 ms past the 3-period deadline, most of which the command spent in search where no opener was possible.
-- Bench traps: a 2500 ms silence (a whole number of FE-C periods) phase-locks the master's return to the deadline and every held command expires; the tool now jitters the silence length and start. Host-side ordering puts a submit that raced GO_TO_SEARCH or the reacquiring frame on the wrong side; `judge_silence()` allows 50 ms.
-
-Open:
-- OWNER QUESTION: should a command submitted while searching (or crossing reacquire) get its 3-period budget from reacquire instead of from submit? It would save most of the MPSL losses above; item 8 settled "accept newest, 3-period expiry" without this case. Not changed.
-- Why MPSL delivers search frames ~23 ms late (scan chunk results at grant end?) - would let MPSL answer the reacquiring frame too.
-- One Zwift ride each on the Pro Micro and the MPSL image, read with the `by_state` lines.
-
-Original report:
-`api_ack_pending_send()` (ant_radio_radiant.c) runs only from the tracked-frame path and requires TRACKING. While the channel searches, a command is held for the full 750 ms opener budget (`RADIANT_API_ACK_OPENER_PERIODS` 3) and only blocks the next command. On the MPSL ride all three page 0x37s were lost: the ones at 76.3 s and 136.4 s timed out, and the one at 106.3 s was refused with TRANSFER_IN_PROGRESS behind an expiring 0x33. Page 0x37 arrives 0.72–0.81 s after a 0x33, which the "750 ms < 1010 ms" reasoning does not cover.
-- Fail the pending command as soon as the channel leaves TRACKING.
-- Send it on the frame that reacquires the channel. `api_search_acquired()` never calls `api_ack_pending_send()`. In 215313, the master was heard at 213.486 s, within budget, but the command still expired at 213.536 s. That is 1 case in 213.
+## 3. [FIXED 2026-11-17, bench PASS on Pro Micro and TI; Zwift acceptance open] A pending slave acked command outlives the channel's search
 
 ## 4. [BENCH] The MPSL Dongle's FE-C collapse: confirm it is RF, then measure the MPSL cost
 On the Dongle only 20 of 222 FE-C commands completed; the Pro Micro managed 181 of 213 and 174 of 200. The Dongle heard the Kicker about 8 dB weaker (-75 against -67 dBm), on all of the Kicker's channels, while the other sensors were equal on both sticks. FE-C spent 61 % of the ride searching, and 174 of the 202 failures were opener timeouts.
@@ -519,12 +433,6 @@ There was no MPSL assert and no re-enumeration.
 The Garmin answers in 1 ms. 53–59 ms sits right at the libusb0 short-read race, where a read near reply latency loses the frame (1.1 % at 50 ms). Find what delays the reply and shorten it.
 
 ## 6. [DONE 2026-11-16, branch tools/shim-log-and-decode-pcap] Zwift shim logging
-Done: one append-only `WriteFile` per line (no glued or blank lines, checked by `tools/zwift_shim/test_shim_log.py` under 8 threads and both DLLs); a QPC timestamp, thread id and DLL tag on every line; `err=N` and the port's source on "absent"; timed reads and writes with folded empty-read runs; `RADIANT_SHIM_LOG_LEVEL` 0/1/2 (`scripts/zwift_ant_shim.ps1 -LogLevel`). Checked with `tools/ant_zwift_visible.py --dll <scratch copy of ANT_DLL beside the new shims>` against the TI on COM11 (PASS), not yet in a Zwift ride.
-- OPEN, found by the new log on that run: **the shim's writes wait for the reader thread's `ReadFile`.** `SI_Write 7/7 in 4025.630 ms id=0x4A`: the SYSTEM_RESET sat behind four 1 s read timeouts. Both run on one synchronous (non-overlapped) handle, and Windows serialises synchronous I/O on a file object. During a ride the read returns ~10 ms after each burst of bytes, which fits the 12-17 ms turnaround below better than "ANT_DLL's USBXpress path". Fix to try: open the port `FILE_FLAG_OVERLAPPED` and wait on per-call events in `SI_Read` / `SI_Write`; confirm with the `in N ms` of the writes. STARTUP_MESG came 56 ms after the write (item 5).
-- `shim_log` takes no lock, and `g_lock` is initialised but never used (dsi_siusbxp.c:20,145; shim_util.c:13-37). Because ANT_DLL's read and write threads both log, lines get glued together or come out blank.
-- The "COM11 absent" path does not log `GetLastError()` (dsi_siusbxp.c:93-98). All four later Zwift launches in this log saw "COM11 absent".
-- Zero-byte reads are not logged (dsi_siusbxp.c:181), and log lines carry no timestamps, so read latency cannot be measured.
-- Every byte is logged with an `fflush`; one session wrote 73,390 lines. Host turnaround is 12–17 ms, against 0–1 ms on native USB. That comes from ANT_DLL's USBXpress path, matters during setup only, and is not the dongle.
 
 ## 7. [DONE 2026-11-16, branch tools/shim-log-and-decode-pcap] decode_pcap.py gaps (slot loss from the RX timestamp: DONE 2026-11-16, `--phase A B`)
 
