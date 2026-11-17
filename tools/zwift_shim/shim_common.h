@@ -42,7 +42,33 @@
 #define SI_RETURN_VID           0x03
 #define SI_RETURN_PID           0x04
 
+/* Each DLL defines its own short tag ("usbxp", "cp210x"); every log line
+ * carries it after the timestamp and thread id. */
+extern const char shim_dll_tag[];
+
+/* One atomic line per call (see shim_util.c). Always written when
+ * RADIANT_SHIM_LOG is set, so it is the level-0 path: setup, identity,
+ * errors. Gate anything chattier on shim_log_on(). */
 void shim_log(const char *fmt, ...);
+void shim_log_loaded(const char *dll);
+
+/* RADIANT_SHIM_LOG_LEVEL, read once (default 1):
+ *   0  setup/identity calls, errors, the "absent" reason
+ *   1  + timed I/O lines (SI_Read/SI_Write, empty-read runs)
+ *   2  + hex payload of every read and write, and SI_CheckRXQueue */
+int shim_log_level(void);
+int shim_log_on(int level);          /* logging enabled at least at `level` */
+
+/* Hex dump of a payload into a per-thread buffer, for level-2 lines. */
+const char *shim_hex(const void *p, DWORD n);
+
+/* "FILE_NOT_FOUND: not present" etc., for the GetLastError() of a port open. */
+const char *shim_err_name(DWORD err);
+
+/* QPC ticks and the milliseconds between two of them. */
+LONGLONG shim_ticks(void);
+double shim_ms(LONGLONG from, LONGLONG to);
+
 const char *shim_port(void);
 
 #endif /* SHIM_COMMON_H */

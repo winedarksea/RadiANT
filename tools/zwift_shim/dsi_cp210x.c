@@ -12,6 +12,8 @@
 #include "shim_common.h"
 #include <string.h>
 
+const char shim_dll_tag[] = "cp210x";
+
 static void copy_out(LPVOID dst, LPBYTE plen, const char *s, BOOL ascii)
 {
     size_t n = strlen(s);
@@ -94,6 +96,6 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID reserved)
 {
     (void)h; (void)reserved;
     if (reason == DLL_PROCESS_ATTACH)
-        shim_log("=== DSI_CP210xManufacturing_3_1 shim loaded ===");
+        shim_log_loaded("DSI_CP210xManufacturing_3_1");
     return TRUE;
 }

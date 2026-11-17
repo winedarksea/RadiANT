@@ -41,6 +41,13 @@
     Force a COM port (e.g. COM15). By default the shim finds the CP2102N's port
     from the registry at run time, so a renumbered port keeps working.
 
+.PARAMETER LogLevel
+    Pin RADIANT_SHIM_LOG_LEVEL (0, 1 or 2) for your user, as -Port pins the
+    port. Only matters when RADIANT_SHIM_LOG names a log file. 0 = setup,
+    identity and errors only (long rides); 1 = also timed reads and writes
+    (default); 2 = also the hex of every read and write and SI_CheckRXQueue.
+    See tools/zwift_shim/README.md.
+
 .PARAMETER Uninstall
     Remove the two DLLs and stop.
 
@@ -58,6 +65,8 @@
 param(
     [string]$ZwiftDir = 'C:\Program Files (x86)\Zwift',
     [string]$Port,
+    [ValidateSet('0', '1', '2')]
+    [string]$LogLevel,
     [switch]$Uninstall,
     [switch]$BuildOnly
 )
@@ -148,6 +157,10 @@ if ($Port) {
     Write-Host "pinned RADIANT_ANT_COM=$Port for your user." -ForegroundColor Green
 } else {
     Write-Host 'COM port will be discovered from the registry at run time.' -ForegroundColor DarkGray
+}
+if ($LogLevel) {
+    [Environment]::SetEnvironmentVariable('RADIANT_SHIM_LOG_LEVEL', $LogLevel, 'User')
+    Write-Host "pinned RADIANT_SHIM_LOG_LEVEL=$LogLevel for your user." -ForegroundColor Green
 }
 
 Write-Host ''

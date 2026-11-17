@@ -9,16 +9,53 @@
  * small and why it needs no driver, no elevation and no change to the dongle.
  *
  * Every entry point logs, because the point of the first run is to learn
- * exactly which of these ANT_DLL actually calls and in what order.
+ * exactly which of these ANT_DLL actually calls and in what order. Reads and
+ * writes are timed with QPC (log level 1), so host turnaround is the gap
+ * between an SI_Write line and the next non-empty SI_Read line.
  */
 #include "shim_common.h"
 #include <stdarg.h>
 
+const char shim_dll_tag[] = "usbxp";
+
 static HANDLE g_port = INVALID_HANDLE_VALUE;
 static DWORD g_read_timeout = 1000;
 static DWORD g_write_timeout = 1000;
-static CRITICAL_SECTION g_lock;
-static int g_lock_ready = 0;
+
+/* Empty reads come in floods (one per read timeout while the radio is quiet),
+ * so each thread folds a run of them into one line, emitted when the run ends
+ * or once a second while it lasts. Per-thread because ANT_DLL reads and
+ * writes from different threads, and a run belongs to the thread reading. */
+static __declspec(thread) DWORD t_zero_n;
+static __declspec(thread) DWORD t_zero_req;
+static __declspec(thread) double t_zero_ms;
+static __declspec(thread) LONGLONG t_zero_start;
+
+static void flush_zero_run(void)
+{
+    if (!t_zero_n)
+        return;
+    if (shim_log_on(1))
+        shim_log("SI_Read 0/%lu x%lu over %.1f ms (timeouts)",
+                 t_zero_req, t_zero_n, t_zero_ms);
+    t_zero_n = 0;
+    t_zero_ms = 0;
+}
+
+/* "id=0x4E" or "id=0x4F,0x46" for each 0xA4-framed message in the buffer.
+ * The sync byte is always 0xA4, so logging the first byte says nothing. */
+static void ant_ids(const unsigned char *b, DWORD n, char *out, size_t cap)
+{
+    DWORD i = 0;
+    size_t o = 0;
+    out[0] = '\0';
+    while (i + 2 < n && b[i] == 0xA4 && o + 8 < cap) {
+        o += sprintf_s(out + o, cap - o, "%s0x%02X", o ? "," : "id=", b[i + 2]);
+        i += (DWORD)b[i + 1] + 4;   /* sync, len, id, payload, checksum */
+    }
+    if (!o && n)
+        sprintf_s(out, cap, "first=0x%02X (not 0xA4-framed)", b[0]);
+}
 
 /* A handle value ANT_DLL can hold that is obviously ours and never a real
  * kernel handle it might accidentally pass elsewhere. */
@@ -37,7 +74,8 @@ static int open_port(void)
     g_port = CreateFileA(path, GENERIC_READ | GENERIC_WRITE, 0, NULL,
                          OPEN_EXISTING, 0, NULL);
     if (g_port == INVALID_HANDLE_VALUE) {
-        shim_log("open %s FAILED err=%lu", path, GetLastError());
+        DWORD err = GetLastError();
+        shim_log("open %s FAILED err=%lu %s", path, err, shim_err_name(err));
         return 0;
     }
 
@@ -87,20 +125,24 @@ __declspec(dllexport) DWORD WINAPI SI_GetNumDevices(LPDWORD lpdwNumDevices)
 {
     char path[64];
     HANDLE h;
+    DWORD err;
     sprintf_s(path, sizeof(path), "\\\\.\\%s", shim_port());
     /* Report a device only if the port is really there, so ANT_DLL fails the
      * way it would with no stick plugged in rather than opening a ghost. */
     h = CreateFileA(path, GENERIC_READ | GENERIC_WRITE, 0, NULL,
                     OPEN_EXISTING, 0, NULL);
+    err = GetLastError();
     if (h == INVALID_HANDLE_VALUE && g_port == INVALID_HANDLE_VALUE) {
         if (lpdwNumDevices) *lpdwNumDevices = 0;
-        shim_log("SI_GetNumDevices -> 0 (%s absent)", shim_port());
+        shim_log("SI_GetNumDevices -> 0 (%s absent, err=%lu %s)", shim_port(),
+                 err, shim_err_name(err));
         return SI_SUCCESS;
     }
     if (h != INVALID_HANDLE_VALUE)
         CloseHandle(h);
     if (lpdwNumDevices) *lpdwNumDevices = 1;
-    shim_log("SI_GetNumDevices -> 1 (%s)", shim_port());
+    shim_log("SI_GetNumDevices -> 1 (%s%s)", shim_port(),
+             h == INVALID_HANDLE_VALUE ? ", already open here" : "");
     return SI_SUCCESS;
 }
 
@@ -142,10 +184,6 @@ __declspec(dllexport) DWORD WINAPI SI_Open(DWORD dwDevice, HANDLE *cyHandle)
 {
     if (!cyHandle || dwDevice != 0)
         return SI_DEVICE_NOT_FOUND;
-    if (!g_lock_ready) {
-        InitializeCriticalSection(&g_lock);
-        g_lock_ready = 1;
-    }
     if (!open_port()) {
         shim_log("SI_Open -> DEVICE_NOT_FOUND");
         return SI_DEVICE_NOT_FOUND;
@@ -158,6 +196,7 @@ __declspec(dllexport) DWORD WINAPI SI_Open(DWORD dwDevice, HANDLE *cyHandle)
 __declspec(dllexport) DWORD WINAPI SI_Close(HANDLE cyHandle)
 {
     (void)cyHandle;
+    flush_zero_run();
     close_port();
     shim_log("SI_Close");
     return SI_SUCCESS;
@@ -169,17 +208,40 @@ __declspec(dllexport) DWORD WINAPI SI_Read(HANDLE cyHandle, LPVOID lpBuffer,
                                            OVERLAPPED *o)
 {
     DWORD got = 0;
+    LONGLONG t0, t1;
+    BOOL ok;
     (void)cyHandle; (void)o;
     if (lpdwBytesReturned) *lpdwBytesReturned = 0;
     if (g_port == INVALID_HANDLE_VALUE || !lpBuffer)
         return SI_INVALID_HANDLE;
-    if (!ReadFile(g_port, lpBuffer, dwBytesToRead, &got, NULL)) {
-        shim_log("SI_Read err=%lu", GetLastError());
+    t0 = shim_ticks();
+    ok = ReadFile(g_port, lpBuffer, dwBytesToRead, &got, NULL);
+    t1 = shim_ticks();
+    if (!ok) {
+        DWORD err = GetLastError();
+        flush_zero_run();
+        shim_log("SI_Read err=%lu %s after %.3f ms", err, shim_err_name(err),
+                 shim_ms(t0, t1));
         return SI_READ_ERROR;
     }
     if (lpdwBytesReturned) *lpdwBytesReturned = got;
-    if (got)
-        shim_log("SI_Read %lu/%lu", got, dwBytesToRead);
+    if (!got) {
+        if (!t_zero_n)
+            t_zero_start = t0;
+        t_zero_n++;
+        t_zero_req = dwBytesToRead;
+        t_zero_ms += shim_ms(t0, t1);
+        if (shim_ms(t_zero_start, t1) >= 1000.0)
+            flush_zero_run();
+        return SI_SUCCESS;
+    }
+    flush_zero_run();
+    if (shim_log_on(2))
+        shim_log("SI_Read %lu/%lu in %.3f ms: %s", got, dwBytesToRead,
+                 shim_ms(t0, t1), shim_hex(lpBuffer, got));
+    else if (shim_log_on(1))
+        shim_log("SI_Read %lu/%lu in %.3f ms", got, dwBytesToRead,
+                 shim_ms(t0, t1));
     return SI_SUCCESS;
 }
 
@@ -189,17 +251,30 @@ __declspec(dllexport) DWORD WINAPI SI_Write(HANDLE cyHandle, LPVOID lpBuffer,
                                             OVERLAPPED *o)
 {
     DWORD put = 0;
+    LONGLONG t0, t1;
+    BOOL ok;
+    char ids[64];
     (void)cyHandle; (void)o;
     if (lpdwBytesWritten) *lpdwBytesWritten = 0;
     if (g_port == INVALID_HANDLE_VALUE || !lpBuffer)
         return SI_INVALID_HANDLE;
-    if (!WriteFile(g_port, lpBuffer, dwBytesToWrite, &put, NULL)) {
-        shim_log("SI_Write err=%lu", GetLastError());
+    t0 = shim_ticks();
+    ok = WriteFile(g_port, lpBuffer, dwBytesToWrite, &put, NULL);
+    t1 = shim_ticks();
+    ant_ids((const unsigned char *)lpBuffer, dwBytesToWrite, ids, sizeof(ids));
+    if (!ok) {
+        DWORD err = GetLastError();
+        shim_log("SI_Write err=%lu %s after %.3f ms %s", err,
+                 shim_err_name(err), shim_ms(t0, t1), ids);
         return SI_WRITE_ERROR;
     }
     if (lpdwBytesWritten) *lpdwBytesWritten = put;
-    shim_log("SI_Write %lu/%lu (first byte 0x%02X)", put, dwBytesToWrite,
-             dwBytesToWrite ? ((unsigned char *)lpBuffer)[0] : 0);
+    if (shim_log_on(2))
+        shim_log("SI_Write %lu/%lu in %.3f ms %s: %s", put, dwBytesToWrite,
+                 shim_ms(t0, t1), ids, shim_hex(lpBuffer, dwBytesToWrite));
+    else if (shim_log_on(1))
+        shim_log("SI_Write %lu/%lu in %.3f ms %s", put, dwBytesToWrite,
+                 shim_ms(t0, t1), ids);
     return SI_SUCCESS;
 }
 
@@ -214,10 +289,15 @@ __declspec(dllexport) DWORD WINAPI SI_CheckRXQueue(HANDLE cyHandle,
     if (lpdwQueueStatus) *lpdwQueueStatus = 0;
     if (g_port == INVALID_HANDLE_VALUE)
         return SI_INVALID_HANDLE;
-    if (!ClearCommError(g_port, &errs, &st))
+    if (!ClearCommError(g_port, &errs, &st)) {
+        DWORD err = GetLastError();
+        shim_log("SI_CheckRXQueue err=%lu %s", err, shim_err_name(err));
         return SI_READ_ERROR;
+    }
     if (lpdwNumBytesInQueue) *lpdwNumBytesInQueue = st.cbInQue;
     if (lpdwQueueStatus) *lpdwQueueStatus = st.cbInQue ? 1 : 0;
+    if (shim_log_on(2))
+        shim_log("SI_CheckRXQueue -> %lu (comm errors 0x%lX)", st.cbInQue, errs);
     return SI_SUCCESS;
 }
 
@@ -315,9 +395,14 @@ __declspec(dllexport) DWORD WINAPI SI_GetDriverVersion(DWORD *hi, DWORD *lo)
 BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID reserved)
 {
     (void)h; (void)reserved;
-    if (reason == DLL_PROCESS_ATTACH)
-        shim_log("=== DSI_SiUSBXp_3_1 shim loaded, port %s ===", shim_port());
-    else if (reason == DLL_PROCESS_DETACH)
+    if (reason == DLL_PROCESS_ATTACH) {
+        shim_log_loaded("DSI_SiUSBXp_3_1");
+        shim_port();                /* logs where the port came from */
+    } else if (reason == DLL_THREAD_DETACH) {
+        flush_zero_run();
+    } else if (reason == DLL_PROCESS_DETACH) {
+        flush_zero_run();
         close_port();
+    }
     return TRUE;
 }

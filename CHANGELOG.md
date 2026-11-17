@@ -93,6 +93,18 @@ reads.
   `build/final_perf_6078d88/` predates this: rebuild it and check acknowledged
   transfers on air before it ships.
 
+- **The Zwift shim's log (`RADIANT_SHIM_LOG`) can be trusted line by line.**
+  Each line is one append-only `WriteFile`, so ANT_DLL's read and write
+  threads, and the two shim DLLs, no longer glue or blank each other's lines.
+  Every line carries a QPC timestamp (1 µs), the thread id and the DLL; the
+  load line adds wall-clock time and PID. Reads and writes log how long they
+  blocked and the ANT message ids written; runs of empty reads fold into one
+  line a second. "COMn absent" now gives the reason (`err=2` not present,
+  `err=5` held by another process) and where the port name came from.
+  `RADIANT_SHIM_LOG_LEVEL` 0/1/2 (`scripts/zwift_ant_shim.ps1 -LogLevel`)
+  trades volume for detail; level 2 adds hex payloads. See
+  `tools/zwift_shim/README.md`.
+
 ### Fixed
 
 - **Security (not in any release image): the 2026-11-14 review items 1-4.**

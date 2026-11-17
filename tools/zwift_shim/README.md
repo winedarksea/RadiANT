@@ -77,3 +77,49 @@ at run time, so a renumbered port keeps working. `RADIANT_ANT_COM` overrides it
 (`scripts/zwift_ant_shim.ps1 -Port COM15` pins it for your user).
 `RADIANT_SHIM_LOG` names a file to log every call to — that log is how the
 call sequence above was established, and it is off unless the variable is set.
+
+### The log
+
+`RADIANT_SHIM_LOG_LEVEL` sets how much goes in
+(`scripts/zwift_ant_shim.ps1 -LogLevel N` pins it for your user):
+
+| level | logs |
+|---|---|
+| `0` | setup and identity calls, errors, and why the port is absent. Use it for long rides. |
+| `1` (default) | level 0, plus one timed line per non-empty read and per write, and runs of empty reads folded into one line |
+| `2` | level 1, plus the hex of every read and write, and `SI_CheckRXQueue` calls, so the log can be re-framed like a pcap |
+
+Every line has the same prefix:
+
+    12345.678901 t4321 usbxp SI_Write 13/13 in 0.081 ms id=0x4F
+    12345.689410 t5120 usbxp SI_Read 7/64 in 10.204 ms
+    12346.702113 t5120 usbxp SI_Read 0/64 x37 over 1003.2 ms (timeouts)
+
+* **QPC seconds since boot**, 1 µs resolution. Both DLLs read the same clock,
+  so their lines sort into one timeline. The `=== … loaded ===` line also gives
+  the wall-clock time and PID, for lining the log up with a pcap or Zwift's log.
+* **`t<id>`**: the calling thread. ANT_DLL reads on one thread and writes on
+  another.
+* **`usbxp` / `cp210x`**: which of the two DLLs wrote the line.
+
+Each line goes out as one append-only `WriteFile`, so lines from the two
+threads and the two DLLs cannot glue together or blank each other, and nothing
+is lost if the process dies.
+
+Reading it:
+
+* **Host turnaround** is the gap between an `SI_Write` line and the next
+  non-empty `SI_Read` line. For example, from the `SYSTEM_RESET` write
+  (`id=0x4A`) to the read carrying `STARTUP_MESG`.
+* **`in N ms`** is how long the call blocked. A read returns about 10 ms after
+  its last byte (the inter-byte timeout), so a non-empty read shows that much
+  on top of the wait for data.
+* **`id=`** lists the ANT message id of each `0xA4` frame in a write.
+* **`absent, err=N`** on `SI_GetNumDevices` says why the port could not be
+  opened: `2` not present, `5` held by another process (close `ant_scan` and
+  friends), `31` device error. The line before it says where the port name
+  came from: `RADIANT_ANT_COM`, the registry, or the `COM15` fallback.
+
+`tools/zwift_shim/test_shim_log.py` checks the line format under 8 threads
+calling both DLLs at once. Build first with
+`scripts/zwift_ant_shim.ps1 -BuildOnly`.

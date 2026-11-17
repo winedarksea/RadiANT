@@ -585,7 +585,9 @@ There was no MPSL assert and no re-enumeration.
 ## 5. [FIRMWARE, LOW] STARTUP_MESG takes 53–59 ms after SYSTEM_RESET
 The Garmin answers in 1 ms. 53–59 ms sits right at the libusb0 short-read race, where a read near reply latency loses the frame (1.1 % at 50 ms). Find what delays the reply and shorten it.
 
-## 6. [TOOLS] Zwift shim logging
+## 6. [DONE 2026-11-16, branch tools/shim-log-and-decode-pcap] Zwift shim logging
+Done: one append-only `WriteFile` per line (no glued or blank lines, checked by `tools/zwift_shim/test_shim_log.py` under 8 threads and both DLLs); a QPC timestamp, thread id and DLL tag on every line; `err=N` and the port's source on "absent"; timed reads and writes with folded empty-read runs; `RADIANT_SHIM_LOG_LEVEL` 0/1/2 (`scripts/zwift_ant_shim.ps1 -LogLevel`). Checked with `tools/ant_zwift_visible.py --dll <scratch copy of ANT_DLL beside the new shims>` against the TI on COM11 (PASS), not yet in a Zwift ride.
+- OPEN, found by the new log on that run: **the shim's writes wait for the reader thread's `ReadFile`.** `SI_Write 7/7 in 4025.630 ms id=0x4A`: the SYSTEM_RESET sat behind four 1 s read timeouts. Both run on one synchronous (non-overlapped) handle, and Windows serialises synchronous I/O on a file object. During a ride the read returns ~10 ms after each burst of bytes, which fits the 12-17 ms turnaround below better than "ANT_DLL's USBXpress path". Fix to try: open the port `FILE_FLAG_OVERLAPPED` and wait on per-call events in `SI_Read` / `SI_Write`; confirm with the `in N ms` of the writes. STARTUP_MESG came 56 ms after the write (item 5).
 - `shim_log` takes no lock, and `g_lock` is initialised but never used (dsi_siusbxp.c:20,145; shim_util.c:13-37). Because ANT_DLL's read and write threads both log, lines get glued together or come out blank.
 - The "COM11 absent" path does not log `GetLastError()` (dsi_siusbxp.c:93-98). All four later Zwift launches in this log saw "COM11 absent".
 - Zero-byte reads are not logged (dsi_siusbxp.c:181), and log lines carry no timestamps, so read latency cannot be measured.
