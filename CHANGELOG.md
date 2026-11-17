@@ -13,6 +13,14 @@ reads.
 
 ### Fixed
 
+- **TI: acknowledged data sent as a slave no longer fails for whole
+  sessions.** The reply went on air about 105 us earlier than a real ANT slave
+  answers, at the early edge of the master's reply window. A Garmin master's
+  window wanders with its own timing, so the TI's acknowledged messages failed
+  for stretches of seconds to entire sessions and worked the rest of the time.
+  Every TI transmit now starts 100 us later
+  (`CONFIG_RADIANT_CC26XX_TX_TIME_CAL_US`), measured on air with a sniffer.
+
 - **TI: two tracked channels no longer share a receive window the radio cannot
   hear.** The CC26x2 tells sync words apart with a correlator, and two words
   1-3 bits apart leave it deaf to both (0 of 30 frames at 1 bit). The search

@@ -19,6 +19,11 @@
  * Seeded, not measured: T_SYNC_CAL_US, TX_RAMP_UP_US, RX_RAMP_UP_US,
  * MIN_ARM_LEAD_US, RX_TO_TX_US, TX_TO_RX_US. These are pessimistic where that
  * is safe. T_SYNC_CAL_US has no safe direction.
+ *
+ * Measured on air, not inside the part: T_SYNC_CAL_US + TX start error together
+ * put an RX->TX turnaround about 100 us early (slave reply at +2085 us against
+ * +2190). CONFIG_RADIANT_CC26XX_TX_TIME_CAL_US corrects the sum on the transmit
+ * side only, so receive windows do not move. A single clock cannot split the sum.
  */
 
 #include <string.h>
@@ -1932,7 +1937,8 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 				     (radiant_time_t)((PREAMBLE_BYTES +
 						       req->fmt->addr_len) *
 						      BYTE_US) -
-				     (radiant_time_t)TX_RAMP_UP_US);
+				     (radiant_time_t)TX_RAMP_UP_US +
+				     (radiant_time_t)CONFIG_RADIANT_CC26XX_TX_TIME_CAL_US);
 
 	st.kind = OP_TX;
 	st.op_id = st.next_op_id++;
@@ -1945,7 +1951,8 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 		 * only. It lets RF_verifyGap place a neighbour after this transmit.
 		 */
 		us_to_rat(req->t_sync_at + (radiant_time_t)(n * BYTE_US) +
-			  (radiant_time_t)TX_TAIL_SLOP_US),
+			  (radiant_time_t)TX_TAIL_SLOP_US +
+			  (radiant_time_t)CONFIG_RADIANT_CC26XX_TX_TIME_CAL_US),
 		/* Transmits are always high priority, never the elastic sweep class. */
 		RADIANT_CC26XX_PRIO_HIGH, rf_callback,
 		RF_EventLastCmdDone | RF_EventCmdAborted |
