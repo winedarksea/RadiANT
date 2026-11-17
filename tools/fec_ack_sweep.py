@@ -254,6 +254,82 @@ def curve_lines(points: list[dict]) -> list[str]:
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
 
+GTS_NEAR_S = 0.050   # a TX_FAILED this soon after GO_TO_SEARCH is "at" it
+
+
+def judge_silence(events: list[tuple[float, str]]) -> dict:
+    """One silence cycle's events, in arrival order, as (t, kind) with kind
+    submit | refused | completed | failed | go_to_search | rx. TODO item 3's
+    bench check:
+
+    - every command pending at GO_TO_SEARCH fails within GTS_NEAR_S of it
+      (`failed_at_search` equals `pending_at_search`);
+    - nothing is refused while the master is away (from GO_TO_SEARCH to the
+      first broadcast after it);
+    - the first command submitted after that broadcast completes, and so does
+      any command still pending when it arrived (sent on the reacquiring
+      frame, or the next one).
+
+    Settles submits as decode_pcap's Ledger does: a refusal takes back the
+    newest submit, a terminal settles the oldest.
+    """
+    pending: list[dict] = []
+    out = {"gts": 0, "pending_at_search": 0, "failed_at_search": 0,
+           "refused_while_away": 0, "reacquired": False,
+           "pending_at_reacquire": 0, "pending_at_reacquire_completed": 0,
+           "first_after": None}
+    away = False
+    t_gts = None
+    for t, kind in events:
+        if kind == "submit":
+            pending.append({"t": t, "away": away, "at_reacq": False,
+                            "after": out["reacquired"] and not away})
+        elif kind == "refused":
+            # A refusal can arrive after the reacquiring frame for a submit
+            # made before it; it was never held, so it leaves that count.
+            if pending and pending.pop()["at_reacq"]:
+                out["pending_at_reacquire"] -= 1
+            if away:
+                out["refused_while_away"] += 1
+        elif kind in ("completed", "failed"):
+            if not pending:
+                continue
+            p = pending.pop(0)
+            if (kind == "failed" and t_gts is not None
+                    and t - t_gts <= GTS_NEAR_S and p.get("crossed")):
+                out["failed_at_search"] += 1
+            if p["at_reacq"] and kind == "completed":
+                out["pending_at_reacquire_completed"] += 1
+            if p["after"] and out["first_after"] is None:
+                out["first_after"] = kind
+        elif kind == "go_to_search":
+            out["gts"] += 1
+            away = True
+            t_gts = t
+            for p in pending:
+                # A submit logged just before the event is a host-side race:
+                # it reached the dongle after the drop, so it is a search
+                # submit, held rather than failed (TI and L15, 2026-11-17).
+                if t - p["t"] <= GTS_NEAR_S:
+                    p["away"] = True
+                    continue
+                p["crossed"] = True
+                out["pending_at_search"] += 1
+        elif kind == "rx" and away:
+            away = False
+            out["reacquired"] = True
+            for p in pending:
+                p["at_reacq"] = True
+            out["pending_at_reacquire"] += len(pending)
+    out["pass"] = (out["gts"] >= 1 and out["reacquired"]
+                   and out["failed_at_search"] == out["pending_at_search"]
+                   and out["refused_while_away"] == 0
+                   and out["pending_at_reacquire_completed"]
+                   == out["pending_at_reacquire"]
+                   and out["first_after"] == "completed")
+    return out
+
+
 class SimShell:
     """apps/trainer's shell over its console VCOM."""
 
@@ -296,7 +372,8 @@ class SimShell:
         self.ser.close()
 
 
-def open_originator(device: int, serial: str | None, port: str | None):
+def open_originator(device: int, serial: str | None, port: str | None,
+                    baud: int = 115200):
     """A pinned bidirectional FE-C slave on the dongle under test, tracking."""
     from ant_fec_control import (ANT_PLUS_FREQ, ANT_PLUS_KEY, CHANNEL,
                                  FEC_DEVICE_TYPE, FEC_PERIOD, FEC_TRANS_TYPE,
@@ -309,7 +386,7 @@ def open_originator(device: int, serial: str | None, port: str | None):
                           MESG_CHANNEL_SEARCH_TIMEOUT_ID, MESG_NETWORK_KEY_ID,
                           MESG_OPEN_CHANNEL_ID)
 
-    dev = open_device(True, serial=serial, port=port)
+    dev = open_device(True, serial=serial, port=port, baud=baud)
     reader = FrameReader(dev)
     if not reset_stack(dev, reader):
         raise RuntimeError("originator: no startup message after reset")
@@ -438,15 +515,192 @@ def run_point(sim: SimShell, dev, reader, setup: list[str], count: int,
             "rows": rows, "summary": summarize(rows)}
 
 
+class AntMasterSim:
+    """A second ANT stick as a plain FE-C master, in place of apps/trainer,
+    for --silence-ms when the dongle under test needs the board the trainer
+    lives on (the nRF54L15 DK carries both the trainer and the MPSL image).
+
+    Understands `silence <ms>` (close the master channel, reopen it after
+    <ms>) and accepts every other command as a no-op, so it has no ACK
+    faults, ring or page 71: the --silence-ms judge needs none of them. A
+    RadiANT or Garmin master acknowledges acked data by itself. A thread
+    reads the stick's events, so its queue never backs up."""
+
+    CH = 0
+
+    def __init__(self, device: int, serial: str | None, port: str | None,
+                 baud: int = 115200):
+        import threading
+        from ant_fec_control import (ANT_PLUS_FREQ, ANT_PLUS_KEY,
+                                     FEC_DEVICE_TYPE, FEC_PERIOD,
+                                     FEC_TRANS_TYPE, command)
+        from ant_probe import FrameReader, open_device, reset_stack
+        from ant_wire import (MESG_ASSIGN_CHANNEL_ID, MESG_BROADCAST_DATA_ID,
+                              MESG_CHANNEL_ID_ID, MESG_CHANNEL_MESG_PERIOD_ID,
+                              MESG_CHANNEL_RADIO_FREQ_ID, MESG_NETWORK_KEY_ID,
+                              MESG_OPEN_CHANNEL_ID)
+
+        self.dev = open_device(True, serial=serial, port=port, baud=baud)
+        self.reader = FrameReader(self.dev)
+        if not reset_stack(self.dev, self.reader):
+            raise RuntimeError("master: no startup message after reset")
+        ch = self.CH
+        # Page 16, general FE data: equipment type trainer (25).
+        page16 = bytes([0x10, 25, 0, 0, 0, 0, 0xFF, 0x24])
+        for msg_id, payload, name in (
+                (MESG_NETWORK_KEY_ID, bytes([0]) + ANT_PLUS_KEY, "master key"),
+                (MESG_ASSIGN_CHANNEL_ID, bytes([ch, 0x10, 0x00]), "master assign"),
+                (MESG_CHANNEL_ID_ID, bytes([ch, device & 0xFF, device >> 8,
+                                            FEC_DEVICE_TYPE, FEC_TRANS_TYPE]),
+                 f"master id #{device}"),
+                (MESG_CHANNEL_RADIO_FREQ_ID, bytes([ch, ANT_PLUS_FREQ]), "master rf"),
+                (MESG_CHANNEL_MESG_PERIOD_ID,
+                 bytes([ch, FEC_PERIOD & 0xFF, FEC_PERIOD >> 8]), "master period"),
+                (MESG_OPEN_CHANNEL_ID, bytes([ch]), "master open")):
+            if not command(self.dev, self.reader, msg_id, payload, name):
+                raise RuntimeError(f"master: {name} refused")
+        self._send(MESG_BROADCAST_DATA_ID, bytes([ch]) + page16)
+        self._stop = False
+        self._timer = None
+        self._thread = threading.Thread(target=self._drain, daemon=True)
+        self._thread.start()
+
+    def _send(self, msg_id: int, payload: bytes) -> None:
+        from ant_probe import EP_OUT, frame
+        self.dev.write(EP_OUT, frame(msg_id, payload))
+
+    def _drain(self) -> None:
+        while not self._stop:
+            self.reader.next_frame(time.monotonic() + 0.2)
+
+    def _reopen(self) -> None:
+        from ant_wire import MESG_OPEN_CHANNEL_ID
+        self._send(MESG_OPEN_CHANNEL_ID, bytes([self.CH]))
+
+    def run(self, cmd: str) -> str:
+        import threading
+        from ant_wire import MESG_CLOSE_CHANNEL_ID
+        if cmd.startswith("silence "):
+            ms = int(cmd.split()[1])
+            self._send(MESG_CLOSE_CHANNEL_ID, bytes([self.CH]))
+            self._timer = threading.Timer(ms / 1000.0, self._reopen)
+            self._timer.start()
+            return f"SILENCE {ms} ms"
+        return ""
+
+    def close(self) -> None:
+        if self._timer:
+            self._timer.join()
+        self._stop = True
+        self._thread.join(timeout=1.0)
+
+
+def run_silence(sim: SimShell, dev, reader, silence_ms: int, cycles: int,
+                interval_s: float, second_s: float,
+                jitter_ms: int = 250) -> list[dict]:
+    """TODO item 3 on the bench. Per cycle the sim goes off air for
+    `silence_ms` while the host keeps Zwift's pace: a command every
+    `interval_s`, and a second one `second_s` after each (the page 0x37 that
+    follows a 0x33). Writes do not wait for their outcome, so a refusal shows
+    as one. Returns one judge_silence() result per cycle, with its events.
+
+    Each silence is lengthened by a random 0..jitter_ms. A whole number of
+    FE-C periods (2500 ms) phase-locks the master's return to the held
+    command's 3-period deadline: on 2026-11-17 every cycle reacquired exactly
+    at the deadline and the command expired, which looked like a firmware
+    fault (memory note bench-reopen-phase-lock)."""
+    import random
+    from ant_fec_control import CHANNEL
+    from ant_probe import EP_OUT, frame
+    from ant_wire import (EVENT_RX_FAIL_GO_TO_SEARCH,
+                          EVENT_TRANSFER_TX_COMPLETED,
+                          EVENT_TRANSFER_TX_FAILED, MESG_ACKNOWLEDGED_DATA_ID,
+                          MESG_BROADCAST_DATA_ID, MESG_EVENT_ID,
+                          MESG_RESPONSE_EVENT_ID)
+
+    results = []
+    index = 0
+    for cycle in range(cycles):
+        # 1 s settled, the silence, then long enough after it for the
+        # channel to reacquire (one sweep is up to ~8 s) and a few commands.
+        this_ms = silence_ms + (random.randrange(jitter_ms) if jitter_ms else 0)
+        # The start moves too, so the drop to search falls at a different
+        # point of the command cadence each cycle: with a fixed start the
+        # MPSL image never had a command pending at GO_TO_SEARCH.
+        start = 1.0 + (random.random() if jitter_ms else 0.0)
+        span = start + this_ms / 1000.0 + 10.0
+        plan = []
+        t = 0.2
+        while t < span:
+            plan.append(t)
+            if t + second_s < span:
+                plan.append(t + second_s)
+            t += interval_s
+        plan.sort()
+        events: list[tuple[float, str]] = []
+        t0 = time.monotonic()
+        silenced = False
+        while True:
+            now = time.monotonic() - t0
+            if now >= span:
+                break
+            if not silenced and now >= start:
+                sim.run(f"silence {this_ms}")
+                silenced = True
+                continue
+            if plan and now >= plan[0]:
+                plan.pop(0)
+                dev.write(EP_OUT, frame(MESG_ACKNOWLEDGED_DATA_ID,
+                                        bytes([CHANNEL]) + page51_tagged(index)))
+                index += 1
+                events.append((now, "submit"))
+                continue
+            wake = min(plan[0] if plan else span, span)
+            r = reader.next_frame(t0 + min(wake, now + 0.05))
+            if r is None:
+                continue
+            msg_id, body = r
+            tr = time.monotonic() - t0
+            if not body or body[0] != CHANNEL:
+                continue
+            if msg_id == MESG_BROADCAST_DATA_ID:
+                events.append((tr, "rx"))
+            elif msg_id == MESG_RESPONSE_EVENT_ID and len(body) >= 3:
+                if body[1] == MESG_ACKNOWLEDGED_DATA_ID and body[2] != 0:
+                    events.append((tr, "refused"))
+                elif body[1] == MESG_EVENT_ID:
+                    kind = {EVENT_TRANSFER_TX_COMPLETED: "completed",
+                            EVENT_TRANSFER_TX_FAILED: "failed",
+                            EVENT_RX_FAIL_GO_TO_SEARCH: "go_to_search",
+                            }.get(body[2])
+                    if kind:
+                        events.append((tr, kind))
+        res = judge_silence(events)
+        res["cycle"] = cycle
+        res["silence_ms"] = this_ms
+        res["events"] = events
+        results.append(res)
+        print(f"cycle {cycle} ({this_ms} ms): " + " ".join(
+            f"{k}={res[k]}" for k in ("pass", "gts", "pending_at_search",
+                                      "failed_at_search", "refused_while_away",
+                                      "pending_at_reacquire",
+                                      "pending_at_reacquire_completed",
+                                      "first_after")))
+    return results
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--sim-port", required=True,
+    ap.add_argument("--sim-port",
                     help="apps/trainer's console VCOM (find it at run time)")
     ap.add_argument("--device", type=int, default=4244,
                     help="the sim's ANT device number (default 4244)")
     ap.add_argument("--serial", help="dongle under test, by USB serial suffix")
     ap.add_argument("--port", help="dongle under test on a UART instead")
+    ap.add_argument("--baud", type=int, default=115200,
+                    help="with --port (57600 for the TI LaunchXL and the "
+                         "L15 Zwift images)")
     ap.add_argument("--preset", default="ideal",
                     help="sim preset for a single run, or the base of a sweep")
     ap.add_argument("--set", action="append", default=[], metavar="K=V",
@@ -463,9 +717,39 @@ def main() -> int:
                     help="the lone-sim control: no originator, just wait and "
                          "require zero acked frames")
     ap.add_argument("--json", help="write every row and summary here")
+    ap.add_argument("--silence-ms", type=int,
+                    help="TODO item 3 check instead of a sweep: the sim goes "
+                         "off air this long (needs the trainer's `silence` "
+                         "command) while commands keep coming; see "
+                         "judge_silence()")
+    ap.add_argument("--silence-cycles", type=int, default=5,
+                    help="silences to run with --silence-ms (default 5)")
+    ap.add_argument("--silence-jitter", type=int, default=250,
+                    help="with --silence-ms, lengthen each silence by a "
+                         "random 0..N ms (default 250, one FE-C period) so it "
+                         "cannot phase-lock to the command deadline; 0 = off")
+    ap.add_argument("--master-serial",
+                    help="with --silence-ms: a second ANT stick (USB serial "
+                         "suffix) as a plain FE-C master instead of "
+                         "apps/trainer; see AntMasterSim")
+    ap.add_argument("--master-port",
+                    help="the same, for a UART stick")
+    ap.add_argument("--master-baud", type=int, default=115200)
+    ap.add_argument("--second-after", type=float, default=0.75,
+                    help="with --silence-ms, a second command this long "
+                         "after each (default 0.75 s, Zwift's 0x37)")
     args = ap.parse_args()
 
-    sim = SimShell(args.sim_port)
+    if args.master_serial or args.master_port:
+        if args.silence_ms is None:
+            ap.error("--master-serial/--master-port need --silence-ms")
+        sim = AntMasterSim(args.device, args.master_serial, args.master_port,
+                           args.master_baud)
+    elif args.sim_port:
+        sim = SimShell(args.sim_port)
+    else:
+        ap.error("--sim-port, or --master-serial/--master-port with "
+                 "--silence-ms")
     try:
         if args.lone_seconds is not None:
             sim.run("ackfault preset ideal")
@@ -482,9 +766,24 @@ def main() -> int:
 
         if args.serial is None and args.port is None:
             ap.error("--serial or --port is required except with --lone-seconds")
-        dev, reader = open_originator(args.device, args.serial, args.port)
+        dev, reader = open_originator(args.device, args.serial, args.port,
+                                      args.baud)
 
-        base = [f"ackfault preset {args.preset}"]
+        if args.silence_ms is not None:
+            sim.run("ackfault preset ideal")
+            results = run_silence(sim, dev, reader, args.silence_ms,
+                                  args.silence_cycles, 1.01, args.second_after,
+                                  args.silence_jitter)
+            passed = sum(1 for r in results if r["pass"])
+            print(f"\nsilence: {passed} of {len(results)} cycles pass")
+            if args.json:
+                with open(args.json, "w", encoding="utf-8") as f:
+                    json.dump({"args": vars(args), "cycles": results}, f,
+                              indent=1)
+                print(f"wrote {args.json}")
+            return 0 if passed == len(results) else 1
+
+        base =[f"ackfault preset {args.preset}"]
         if args.set:
             base.append("ackfault set " + " ".join(args.set))
         offsets = parse_sweep(args.offset) if args.offset else [None]

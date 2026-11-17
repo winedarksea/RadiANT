@@ -165,6 +165,31 @@ class Stale(unittest.TestCase):
         self.assertEqual(out["stale_tx"], 0)
 
 
+class Xfer(unittest.TestCase):
+    def test_page_13_names_match_the_header_indices(self):
+        text = header_text()
+        idx = dict((m.group(1).lower(), int(m.group(2))) for m in re.finditer(
+            r"#define RADIANT_DIAG_XFER_(\w+)\s+(\d+)u", text))
+        fields = d.PAGES[13][1]
+        self.assertEqual(len(idx), 6)
+        for name, i in idx.items():
+            self.assertEqual(fields[i], "xfer_" + name)
+
+    def test_page_13_counts_subtract(self):
+        nm = d.NOT_MEASURED
+        a = {"13": d.decode(body(13, [0, 2, 1, 0, 0, 0, nm, nm],
+                                 flags=1, backend=1))}
+        b = {"13": d.decode(body(13, [0, 2, 4, 3, 1, 0, nm, nm],
+                                 flags=1, backend=1))}
+        self.assertEqual(a["13"]["name"], "xfer")
+        self.assertIsNone(a["13"]["fields"]["reserved_7"])
+        out = d.diff(a, b)["13"]["fields"]
+        self.assertEqual(out["xfer_no_opener"], 0)
+        self.assertEqual(out["xfer_lost_track"], 3)
+        self.assertEqual(out["xfer_reacquired"], 3)
+        self.assertEqual(out["xfer_bad_ack"], 1)
+
+
 class FakeDev:
     def __init__(self):
         self.writes = []

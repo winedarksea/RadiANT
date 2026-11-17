@@ -474,7 +474,32 @@ The original premise was wrong. The TI hardware matches only the first `addr_len
 - Default build (short match, 2 bytes): the sync word is the network address, `A6 C5` for every ANT+ channel. ANT+-only use was never exposed; only two networks whose addresses are 1-3 bits apart were.
 - `ti_long_match.conf` (3 bytes, `A6 C5 devlo`): for any devlo, 92 of the 256 possible partners (36 %) are 1-3 bits away, not about 1 %. #20329 (lo 0x69) and #52233 (lo 0x09) are 2 bits apart there. It was not hit because the TI ran a short-match build; the 5-bit figure was the full 16-bit device number.
 
-## 3. [FIRMWARE] A pending slave acked command outlives the channel's search
+## 3. [FIXED 2026-11-17, bench PASS on Pro Micro and TI, MPSL partial (budget question below); Zwift acceptance open] A pending slave acked command outlives the channel's search
+Landed:
+- The held command fails at RX_FAIL_GO_TO_SEARCH, after the event, as the Garmin orders them (GO_TO_SEARCH then TX_FAILED about 1 ms later, 43 of 43 in 220629). `radiant_channel_event_out()` → `api_ack_pending_lost_track()`. Counter `xfer_pending_lost_track`.
+- A command held while searching is sent from the reacquiring frame (`api_search_acquired()`). Counter `xfer_pending_reacquired`. The Garmin never sends on the reacquiring frame (its earliest completion is 2 periods after reacquire), so this goes past Garmin parity.
+  - On the sweep's carrier, `api_search_release_carrier()` ends the search's hold on the slot first (the TX request drops the armed chunk without a done()), but only when nobody else searches. That is the ride case: Zwift closes its scan channel once riding, so a lost FE-C channel is the carrier. The first cut skipped the carrier entirely, and on the bench every held command then expired.
+  - Only while the reply slot can still be armed. Under the MPSL gate a search frame reaches the callback up to ~23 ms after its sync; 10 of 10 such sends expired in the scheduler and burned the command (L15 page 2 `tx_margin_min_us` -22607). The held command now waits for the next tracked frame instead.
+- Both counters, with `xfer_no_opener`, `xfer_watchdogs`, `xfer_bad_ack` and `xfer_radio_failed`, are on a new 0xF7 page 13 ("xfer"; `ant_diag.py --pages 13`).
+- Decision point: keep holding a command submitted while searching. The Garmin accepts and holds them too (19 accepted during search in 220629, 6 completed after reacquire, none failed at submit).
+
+Step 0 evidence (`decode_pcap.py` `by_state` lines; "crossed" = pending across a GO_TO_SEARCH, "heard" = a master frame reacquired the channel while it was still pending):
+- 214722 (MPSL): 9 crossed (all failed: 7 unheard, 2 heard), 134 submitted while searching (7 heard, 127 never heard before the deadline). The one refusal (the 0x37 at 106.3 s) was behind a 0x33 submitted while searching, so the first fix does not reach it; the second does if the master comes back inside the budget.
+- 215313: 1 crossed and heard (the 213.486 s case). 215820: none.
+- So the first fix removes up to 9 late failures and their blocking; the second can recover up to 9 commands (7 + 2) on the MPSL ride and 1 on 215313.
+
+Bench 2026-11-17 (`archive/benchmarks/2026-11-17-ack-pending-search/`, `fec_ack_sweep.py --silence-ms 2100`, trainer `silence` or a second stick via `--master-serial/--master-port`):
+- Pro Micro (final image, TI as master): 10/10 cycles. 6/6 commands pending across the drop failed at GO_TO_SEARCH; 6/6 held through search completed.
+- TI (final image, Pro Micro as master): 9/10, the miss an on-air ACK loss; 7/7 and 8/8. With the trainer as master, 10/10.
+- L15 MPSL: 5/5 failed at GO_TO_SEARCH, but only 4/9 held commands completed. The reacquiring frame always arrives too late to answer under MPSL, so the command needs the next tracked frame. It often lands 10-30 ms past the 3-period deadline, most of which the command spent in search where no opener was possible.
+- Bench traps: a 2500 ms silence (a whole number of FE-C periods) phase-locks the master's return to the deadline and every held command expires; the tool now jitters the silence length and start. Host-side ordering puts a submit that raced GO_TO_SEARCH or the reacquiring frame on the wrong side; `judge_silence()` allows 50 ms.
+
+Open:
+- OWNER QUESTION: should a command submitted while searching (or crossing reacquire) get its 3-period budget from reacquire instead of from submit? It would save most of the MPSL losses above; item 8 settled "accept newest, 3-period expiry" without this case. Not changed.
+- Why MPSL delivers search frames ~23 ms late (scan chunk results at grant end?) - would let MPSL answer the reacquiring frame too.
+- One Zwift ride each on the Pro Micro and the MPSL image, read with the `by_state` lines.
+
+Original report:
 `api_ack_pending_send()` (ant_radio_radiant.c) runs only from the tracked-frame path and requires TRACKING. While the channel searches, a command is held for the full 750 ms opener budget (`RADIANT_API_ACK_OPENER_PERIODS` 3) and only blocks the next command. On the MPSL ride all three page 0x37s were lost: the ones at 76.3 s and 136.4 s timed out, and the one at 106.3 s was refused with TRANSFER_IN_PROGRESS behind an expiring 0x33. Page 0x37 arrives 0.72–0.81 s after a 0x33, which the "750 ms < 1010 ms" reasoning does not cover.
 - Fail the pending command as soon as the channel leaves TRACKING.
 - Send it on the frame that reacquires the channel. `api_search_acquired()` never calls `api_ack_pending_send()`. In 215313, the master was heard at 213.486 s, within budget, but the command still expired at 213.536 s. That is 1 case in 213.

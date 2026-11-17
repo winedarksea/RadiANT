@@ -5,7 +5,7 @@
  * Provenance: clean-room. Written from this project's own source and bench
  * measurements; see docs/decisions/0023-radiant-diag-message.md.
  *
- * WHAT THIS IS. Thirteen fixed pages of eight u32 counters each, read by a host
+ * WHAT THIS IS. Fourteen fixed pages of eight u32 counters each, read by a host
  * with MESG_REQUEST [page, 0xF7]. Pages 0, 5 and 6 are counters the core
  * already keeps (radiant_api_stats, radiant_search_stats). Pages 1 and 2 are
  * counted here, behind CONFIG_RADIANT_DIAG_COUNTERS. Pages 3 and 4 come from
@@ -16,7 +16,8 @@
  * timings from the backend table, scheduler pass timings counted here.
  * Pages 9 (pass breakdown) and 10 (receive integrity) are mixed the same way;
  * their cycle-timed fields use the A0 cycle clock below. Pages 11 (scheduler
- * contention) and 12 (stale events by site) are the core's.
+ * contention) and 12 (stale events by site) are the core's. Page 13
+ * (slave acknowledged-data outcomes) is radiant_api_stats.
  *
  * ZERO COST WHEN OFF. Without CONFIG_RADIANT_DIAG_COUNTERS every RADIANT_DIAG_*
  * macro below is an empty statement that does not evaluate its arguments,
@@ -52,7 +53,8 @@ extern "C" {
 #define RADIANT_DIAG_PAGE_RX_INTEGRITY 10u
 #define RADIANT_DIAG_PAGE_SCHED      11u
 #define RADIANT_DIAG_PAGE_STALE      12u
-#define RADIANT_DIAG_PAGES           13u
+#define RADIANT_DIAG_PAGE_XFER       13u
+#define RADIANT_DIAG_PAGES           14u
 
 /*
  * Page 7, the search/track hand-off (ADR 0022 gate 3). Does a search
@@ -246,6 +248,28 @@ extern "C" {
 #define RADIANT_DIAG_STALE_RX_FILTER_INDEX 2u
 #define RADIANT_DIAG_STALE_TX              3u
 #define RADIANT_DIAG_STALE_ED              4u
+
+/*
+ * Page 13, transfer outcomes (2026-11-17, TODO item 3). radiant_api_stats'
+ * transfer counters that page 0 has no room for. All counts.
+ *
+ *   0 watchdogs          transfers the watchdog terminated (never normal)
+ *   1 no_opener          a slave's held command expired, still tracking,
+ *                        with no master frame to open its slot
+ *   2 lost_track         a slave's held command failed because its channel
+ *                        dropped to search (RX_FAIL_GO_TO_SEARCH)
+ *   3 reacquired         a slave's held command sent from the frame that
+ *                        reacquired its channel
+ *   4 bad_ack            transfers failed on a wrong acknowledgement
+ *   5 radio_failed       transfers the engine or radio refused to start
+ *   6-7                  reserved, RADIANT_DIAG_NOT_MEASURED
+ */
+#define RADIANT_DIAG_XFER_WATCHDOGS    0u
+#define RADIANT_DIAG_XFER_NO_OPENER    1u
+#define RADIANT_DIAG_XFER_LOST_TRACK   2u
+#define RADIANT_DIAG_XFER_REACQUIRED   3u
+#define RADIANT_DIAG_XFER_BAD_ACK      4u
+#define RADIANT_DIAG_XFER_RADIO_FAILED 5u
 
 #define RADIANT_DIAG_RXI_CRC_REPAIRED           0u
 #define RADIANT_DIAG_RXI_CRC_UNREPAIRABLE       1u

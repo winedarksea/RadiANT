@@ -344,6 +344,12 @@ reads.
   failing with no opener. Against a trainer losing ~53 % of packets, 26 % of
   grade commands expired with two slots; three is the ceiling, a fourth would
   land on Zwift's next command.
+- **A pending acknowledged command no longer outlives the channel's search.**
+  When a slave channel drops to search, its waiting command fails right away
+  (after RX_FAIL_GO_TO_SEARCH, as a Garmin USB-m orders them) instead of
+  blocking the host's next command until the deadline. A command submitted
+  while the channel searches is sent from the frame that reacquires it. New
+  0xF7 page 13 counts both, beside the other transfer outcomes.
 - **A named device is revisited during search.** An acquiring channel with a
   known set is re-steered after 1, 2, 4 … round-robin sets, so one lost packet
   costs 0.25–2 s to recover instead of a whole 8 s sweep. Scan channels get no

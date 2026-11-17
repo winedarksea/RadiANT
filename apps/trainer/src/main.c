@@ -76,6 +76,10 @@ static atomic_t rider_cadence_req = ATOMIC_INIT(-1);
 static void model_tick_fn(struct k_work *w);
 static K_WORK_DELAYABLE_DEFINE(model_tick, model_tick_fn);
 
+/* `silence <ms>`: the FE-C master stops transmitting, then comes back. */
+static void silence_end_fn(struct k_work *w);
+static K_WORK_DELAYABLE_DEFINE(silence_end, silence_end_fn);
+
 /* ── Model -> pages ─────────────────────────────────────────────────────── */
 
 static void publish(void)
@@ -318,6 +322,43 @@ void antr_on_message(const struct antr_msg *msg)
 	    msg->len >= 9u && msg->data[0] == FEC_CHANNEL) {
 		queue_control_page(&msg->data[1]);
 	}
+}
+
+/*
+ * The master goes off air for `ms` and comes back on the same channel ID: the
+ * dongle under test runs out its misses, drops to search, and reacquires
+ * (TODO item 3, the bench half). Close, then reopen from the workqueue; the
+ * broadcast buffer is reloaded so the first frame back carries a page.
+ */
+static void silence_end_fn(struct k_work *w)
+{
+	antr_err_t rc;
+
+	ARG_UNUSED(w);
+	rc = antr_channel_open(FEC_CHANNEL);
+	if (rc != ANTW_RESPONSE_NO_ERROR) {
+		LOG_ERR("silence: reopen refused: %d", (int)rc);
+		return;
+	}
+	load_fec_page();
+	LOG_INF("silence over: transmitting again");
+}
+
+int trainer_node_silence(uint32_t ms)
+{
+	antr_err_t rc;
+
+	if (k_work_delayable_is_pending(&silence_end)) {
+		return -EBUSY;
+	}
+	rc = antr_channel_close(FEC_CHANNEL);
+	if (rc != ANTW_RESPONSE_NO_ERROR) {
+		LOG_ERR("silence: close refused: %d", (int)rc);
+		return -EIO;
+	}
+	(void)k_work_schedule(&silence_end, K_MSEC(ms));
+	LOG_INF("silence: off air for %u ms", (unsigned)ms);
+	return 0;
 }
 
 static int ant_master_start(uint8_t channel, uint16_t devnum)
