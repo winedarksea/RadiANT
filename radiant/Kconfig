@@ -241,6 +241,23 @@ config RADIANT_CC26XX_FREQ_TRIM_KHZ
 	  transmitter's carrier offset relative to TI's own clock. 0 leaves
 	  the image byte-identical to a build without this symbol.
 
+config RADIANT_CC26XX_TX_TIME_CAL_US
+	int "Delay added to every transmit's start time, in microseconds"
+	default 100
+	range -300 300
+	depends on RADIANT_BACKEND_CC26XX
+	help
+	  Moves every transmit later on air by this much without moving any
+	  receive window. Sniffed 2026-11-16 (L15 promisc): with 0, the TI's
+	  slave reply went on air at +2085 us after the master's frame,
+	  against +2174 for the nRF backend and +2203 for a Garmin USB-m
+	  slave. A Garmin master's reply window wanders about 80 us with its
+	  own slot timing, so it accepted that reply for whole sessions and
+	  then refused it for whole sessions (acked sends 100, 41, 0 of 100).
+	  At 100 the reply lands at +2189 and the stretches are gone.
+	  It is the measured sum of the RX timestamp and TX start errors;
+	  change it only with a sniffer on the air.
+
 config RADIANT_CC26XX_AA_FILTER
 	hex "Anti-aliasing filter bandwidth override (ADI_HALFREG_OVERRIDE), for a sweep"
 	default 0x5
