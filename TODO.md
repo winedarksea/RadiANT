@@ -39,51 +39,19 @@ Note: multi packet burst mode is a lower priority feature, and handling it shoul
 
 # Open issues from the 2026-11-14 security review (HEAD 360e12f)
 
-Found by reading the code; nothing was built or run, so each item needs a test that reproduces it before the fix. The primitives, X25519, the spread-MAC receive logic, the pairing step order and both entropy backends read clean. D14 (counter wrap) and D16 (tag length) hold as documented, and D17 holds for a single channel (item 2). Not read: the plan file outside the repo, ADRs 0006/0008/0009/0020, profile_compat.c, profile_private.c lines 1-380, and most of the spec outside 3.2, 7.5 and 7.6. The Python crypto was not compared with the C byte for byte.
-
-Items 1-4 DONE 2026-11-14 (merges 13c501e, 825f5f6, 69dc718 on 3777766). Every functional fix has a test that failed first. Each branch had an independent review with a revert check and one re-review; the reviews found five more defects, all fixed (acked acquiring frame vs D15, released scan frames losing sender ID/RSSI and then reporting devnum 0, host-epoched twin invisible to the arm, compat same-root devnum untested). Combined tree: native_sim 6195/6195 in 16 scenarios (+63), Python 1078, DK api sec_host 153/153. Sizes, no ceiling moved: security text 7144/7168 (6992 on 3777766), security bss 6974/7168, pairing text 4048/4096, compat object 4770/5120; the security-off image is unchanged (84104). Still open from it: item 5 (v2) and item 9 (item 6's follow-up) below. Items 6-8 closed 2026-11-16: 6 and 7a fixed, each with a test that failed first; 7b deferred to an opaque backend; 7c and 8 accepted.
-
 ## 1. [DONE 2026-11-14: fecac17, 66bc189, 175a495] The search-acquisition frame skips the security hook
-- Done: `api_search_acquired()` runs every acquiring and scan frame through `radiant_sec_rx_ingest()` with its real message type, so it is judged like a tracked frame (owner: scan frames take the hook, a scan may be keyed). A released scan frame keeps its own sender ID and RSSI (an eight-entry table of held search frames; older ones go up under the channel ID). Go-to-search needed no discard: a forgery's window always closes UNVERIFIED (tests show it is neither released nor credited). What a key on a scan gives is in spec 3.2. Python `VerdictResolver` needed no change.
-- `api_search_acquired()` (ant_radio_radiant.c:1361) posts the acquiring frame to the host as `BROADCAST_DATA` without calling `radiant_sec_rx_ingest()`. The only ingest calls are on the tracked path (:2095, :2124).
-- X_CONF: every acquisition or re-acquisition hands the host one page of ciphertext as if it were plaintext.
-- X_AUTH with `DROP_UNVER`: a secured-range page reaches the host without being held for a verdict. An attacker who jams the link until the slave drops to search, then sends one frame on the channel's ID, gets it delivered. This is D15 by another door.
-- X_AUTH with the default deliver policy: the forged frame is in no firmware window, and `VerdictResolver` (tools/ant_sec.py:606) settles every pending packet whose byte [1] falls in a verdict's window, so a forged frame claiming an upcoming genuine window could be credited `verified`. The timing is tight against the resolver's deadline and is not demonstrated.
-- A background-scan channel never leaves the search (:1425), so every frame takes this path and a key on it does nothing.
-- Beside it: the receive window state is not discarded on `RX_FAIL_GO_TO_SEARCH` (only pairing is told, :435); test_api_sec_host.c has no acquisition case; section 3.2's "not bypassable by message type" does not mention search.
-- Fix: route the acquiring frame through `radiant_sec_rx_ingest()` like a tracked broadcast; refuse to key a background-scan channel, or run its frames through the same hook; discard the window state on go-to-search; add the test and the spec sentence.
 
 ## 2. [DONE 2026-11-14: 1a784e6, b4e0450] Two live channels under the node root can meet on one epoch
-- Done: `node_ident_arm_sec()`/`_arm_compat()` return `NODE_IDENT_EBUSY` while another channel of the same kind runs (epoch set or ceiling carried, by node or host) under the same root (key check value) and the same base device number. Different root or number stays allowed (owner: several secured sensors at once). Same root + number for two device types stays refused: item 5.
-- The epoch ceiling is one global `epoch_next - 1`, raised on every armed channel at once (node_ident.c:588-612, :779). Channel A is armed first at epoch E; channel B is armed later at F = E+2, which needs N = E+4 persisted. That persist raises A's ceiling to E+3, so A's second counter wrap lands on E+2, the epoch B started in.
-- With the same root and device number that is the two-time pad the M2 fix was written to stop. M2 covers a re-arm and an arm after release, not two channels alive together.
-- Needs A to run two wraps (about 9 h at 4 Hz). No caller of `node_ident_arm_sec()` was found under apps/, samples/ or radiant/src/.
-- Fix: give each armed channel its own reserved range, or refuse a second live arm of the same kind under one root.
 
 ## 3. [DONE 2026-11-14: e8633a0] Plaintext can reach an acknowledgement through a two-statement race
-- Done: the payload is transformed in a local and published to `sec_pay` with `sec_pay_valid` inside one critical section, which also removes a torn copy. Shown with a ZTEST-only seam.
-- `api_post_master_tx()` copies the host plaintext into `sec_pay` and only then clears `sec_pay_valid` (ant_radio_radiant.c:1801-1802). `api_xfer_broadcast()` runs in the radio interrupt and sends `sec_pay` whenever the flag is set (:848), so an inbound acknowledged message landing between the two statements is acked with plaintext. The compiler may also reorder the two stores.
-- The window is tiny, but the pump posts the next slot around when the reply window opens.
-- Fix: clear the flag first, inside `radiant_event_crit_enter()`, or transform a local and copy it in under the critical section.
 
 ## 4. [DONE 2026-11-14] Hardening
-Wipes evidenced by -Os disassembly (two old `memset`s had in fact been elided). 4a af3cbfe, 4b 5de4eab (+2.9 % instructions per X25519 exchange, QEMU count), 4c ef7a72d + e815686, 4d 3ce1ee6 + ff893f7 + 1f03366, 4e 4149fb3 (`&= 0xFFFF`, not the planned multiply: same value, code identical to before; the multiply cost 3.6 %), 4f 7baddc6 (the window closes with its pairing context, `-EIO`; an injected packet still cannot burn a window).
-- [x] `radiant_sec_key_destroy()` and `radiant_sec_cmac_final()` clear with `memset()` (radiant_sec_aes.c:262, :484), and several callers pass stack handles: the root copy in `radiant_sec_key_same()`, the PRK and nonce keys in `cmac_parts()`, `k_cmd`. No build sets `CONFIG_LTO`, so the stores survive today; with LTO or inlining they are dead stores. Use `radiant_sec_wipe()`.
-- [x] radiant_x25519.c says every intermediate is wiped; the locals of `fe_mul()` (`t`), `fe_invert()` (`c`) and `fe_pack()` (`t`, `m`, which hold the shared secret) are not.
-- [x] Plain `memset()` on tag or output buffers in `locator_derive()` (radiant_sec_compat.c:1252), `set_check()` (profile_enrol.c:81) and `node_ident_pair_derive()` (node_ident.c:871).
-- [x] `radiant_sec_compat_set_key()` with a different root keeps the old on-air device number when it is non-zero (radiant_sec_compat.c:468-471), where `radiant_sec_set_key()` resets it to the base number. A failed `K_id` derivation after the import also leaves a half-replaced context. (Also: the old root is now destroyed before the import, so its AES schedule does not outlive a failed install.)
-- [x] `carry << 16` on a negative value is undefined in ISO C (radiant_x25519.c:123-128). GCC does the expected thing; fix or note before another compiler.
-- [x] profile_enrol.c:423-432: if the exchange succeeds and the wrap fails, the pairing context is freed while the enrolment window stays open, so the window is dead until it times out.
 
 ## 5. [OPEN, protocol, v2] Two live channels under one root and one device number
 - Item 2 refuses this (for example two device types on one Tier 0 number). Allowing it needs the device type in the key derivation or the nonce, which is a protocol change and not v1. Not built.
 - Related, judged safe in review: a spread-MAC channel and a compat channel under the same root and base number are not checked against each other. They share `K_auth` at one epoch, but the MAC domains differ (`DOM_COMPAT_MAC` vs `DOM_SPREAD_MAC`/`DOM_CTR`) and compat has no `K_enc`. Re-check if either MAC input format changes.
 
 ## 6. [DONE 2026-11-16: 2cf4a2a] The search chunk keeps listening after its only channel acquires
-- Done: `api_search_cut_locked()` (ant_radio_radiant.c) cancels the chunk from the pump when the carrier is TRACKING and no channel is searching or SEARCHING, and `api_search_acquired()` wakes the event thread so the pump runs well before frame 1. It runs in thread context, not the acquisition callback: on TI an RX arm from inside the drain loop (the scheduler's pass after a cancel) resets the entry queue the loop is still walking. No collateral abort is possible: the scheduler never merges a bounded window with a continuous one (`m->continuous != lead->continuous`), so the chunk has no other members. A carrier acquiring while others search, and every background scan, keep the old behaviour (item 9). Tests: `test_a_lone_searcher_hears_its_sensors_next_frame_after_acquiring` and `test_sec_host_the_first_window_after_an_acquisition_verifies` fail with the fix reverted; the control `test_the_sweep_keeps_running_while_another_channel_still_searches` passes both ways. The sec_host workaround (forgery at `(i+3) & ~1`) is gone: the reacquire forgery claims the window right after the acquiring slot again. On air (`archive/benchmarks/2026-11-16-item6-frame1/`): the item's "every acquisition" holds only in the fake radio. On hardware, frame 1 is lost only when the device is acquired in the first ~14 ms of a set's 260 ms dwell, so about 2 % of acquisitions on the Pro Micro (3/150, as EVENT_CHANNEL_COLLISION), and 0/150 with the fix. L15 MPSL cannot reach that phase; there the frame-1 loss was 8/600 with the fix against 3/300 for a master control, room noise. Sizes (NCS v3.4.0, feather): security-off text +204 B (91296 -> 91500, -O2 hot path), security text unchanged (7308 -> 7312, alignment).
-- Found in the item 1 review. The search RX chunk runs about one period plus 10 ms. When its only searching channel acquires, `radiant_search_end()` (radiant_search.c:630) clears just the channel record. The chunk runs on, hears frame 1, and drops it, and the first tracked RX is armed only when the chunk closes. The host sees `RX_FAIL` right after every acquiring `BROADCAST_DATA`. This is the same on 3777766 and with security off.
-- Security effect: the window holding slot 1 is always incomplete, so the first verdict after an acquisition is UNVERIFIED, and under `DROP_UNVER` the acquiring frame's own window is dropped. The new sec_host tests work around it (forgery at `(i+3) & ~1`).
-- Fix candidate: cut the chunk short, or hand the frame to the tracked path, when the last searching channel acquires. This changes discovery timing, so it needs the scan/sweep regression checks.
 
 ## 7. [CLOSED 2026-11-16: 7a fixed (6bb8a1d), 7b deferred, 7c accepted] Gaps left by the 2026-11-14 fixes
 - 7a [DONE]: A fresh arm whose `radiant_sec_set_epoch()` fails inside `derive_keys()` is covered by item 2's rule (`epoch_set` counts), but untested: forcing it needs a KDF fault seam. Done: `radiant_sec_test_kdf_fault()`, a `CONFIG_ZTEST`-only weak seam in `derive_keys()` (the compat `kid_fault` pattern). The new node_ident tests found a real gap: the arm failed and the twin stayed refused, but under X_AUTH alone the channel kept sending secured pages with no MAC behind them (X_CONF already refused at the empty `K_enc`). A failed derive now sets `tx_spent`, which `set_epoch()` clears on the next epoch. The auth variant failed before the fix. Sizes: security text 7308 -> 7316 of 7680; the security-off image is unchanged (91296).
@@ -91,19 +59,11 @@ Wipes evidenced by -Os disassembly (two old `memset`s had in fact been elided). 
 - 7c [ACCEPTED]: A keyed background scan under X_AUTH rarely completes a window, and all senders share one window state (spec 3.2). Accepted with the owner's decision to allow keyed scans. A per-sender window state would fix it, at RAM cost.
 
 ## 8. [CLOSED 2026-11-16, owner: host trusted, documented (6bb8a1d)] The twin guard runs only on a node arm (reviewer, 2026-11-15)
-- Owner 2026-11-16: the host is trusted. It supplies the root and the plaintext, so only a buggy host reaches this. Documented in docs/radiant-security.md 3.5 (after the 0xF2 rules), its command table, and the 0xF2 description in protocol/ant_wire.yaml. No firmware change.
-- `NODE_IDENT_EBUSY` (item 2) is checked in `node_ident_arm_*` only. A host can key a second channel under the same root and base device number with 0xF2, then give it the same epoch with 0xF3, which is the (root, epoch, devnum) collision the guard prevents. `radiant_sec_set_key()`/`set_epoch()` do not run the check.
-- Open question for the owner: is the host trusted to choose distinct roots and epochs (as the docs imply, "a channel a host epoched at E collides"), or should 0xF2/0xF3 refuse a live twin? A refusal adds security text, and that gate has 24 B left (7144/7168).
-- Also from that review, judged not worth a change: an 0xF2 key can make the next broadcast slot repeat the last acked packet (`last_tx_newer` clears only on a host broadcast write). Those bytes went out in the clear before the key existed, and a repeat on a secured page is encrypted, so nothing new is exposed.
 
 ## 9. [OPEN, LOW, core search, follow-up to item 6] A carrier that acquires while other channels search loses frame 1
 - Item 6 cuts the sweep chunk only when nobody else searches. When the carrier acquires while another channel is still searching, the chunk keeps the carrier's slot until it ends (about one period plus 10 ms), so the carrier's frame 1 can still be dropped (when acquired early in a dwell, item 6's bench) and that first window is then UNVERIFIED under X_AUTH. Cutting there would cost the other searchers a re-arm gap. The fix candidate is moving the sweep to another searching channel's slot (a carrier handover) without a gap. It needs the scan/sweep regression checks. Background-scan rigs (the Zwift model) never hit this, because a scan channel never acquires and pinned channels are never the carrier.
 
 # Open issues from the 2026-11-13 security review (HEAD 1df743a)
-
-Found by reading the code and checked a second time; nothing was built or run. The primitives (AES, CMAC, CTR, KDF, X25519, ct_equal, wipe) read clean. `security.conf` and compat are in no release image, so protocol changes here break no deployed device. "Latent" means no app calls the path yet (`node_ident_arm_sec`, `profile_enrol_*`, compat `recover_*`/`adopt_epoch` are reached only from tests). The plan file holding D1-D17 (`~/.claude/plans/make-a-plan-to-async-gem.md`) does not exist; D14-D17 were checked against the spec and code comments.
-
-Items 1-4 DONE 2026-11-13, each through an independent review and re-review; verified on the combined tree (DK main 1076, api sec_host 131 / sec 99 / plain 93, native_sim 5969/5969 in 16 scenarios, Python 1058). Size ceilings moved with sign-off: security text 6144 -> 6656 (6512 measured), pairing 3584 -> 4096 (3936); the security-off image is byte-identical in size to before.
 
 ## 1. [DONE 2026-11-13, merge 9bfb0c0: d463c01, caabace, 802ecc2] A counter wrap uses the epoch the next boot will be issued
 
@@ -124,25 +84,10 @@ Items 1-4 DONE 2026-11-13, each through an independent review and re-review; ver
 ## 9. [DONE 2026-11-13: 4d5d156, 583a981; same-root 0xF2 no longer resets a Tier 2 trial devnum, 2026-11-14: b657458] 0xF2 resets the epoch monotonicity gate
 
 ## 10. [DONE 2026-11-14: de2df63] A go-private/return command is replayable within its interval
-- `cmd_tag()` uses the Tier I interval index as its counter, so a recorded command verifies again until the interval ends: 20 s by default, up to 3600 s. The 60 s rate limit does not cover a long T. Section 11.6 says a replay "into a later interval fails", which is true, but replay within the same interval is not stated.
-- Fix: keep a last-accepted (interval, op) floor in profile_private.c, or state the limit.
-- Done: profile_private keeps the last accepted tag per op and refuses a byte-identical command (`-EALREADY`, `refused_replay`); the idempotent retransmission ack still comes first. Cost, stated in section 11.6: the same op cannot be issued twice in one interval. Library only; no shipped caller (section 11.5 status).
 
 ## 11. [DONE 2026-11-14: 24cd0e3] Non-broadcast traffic on a secured channel
-- The D15 drop examines only the first packet of an inbound transfer. Continuation packets go to the engine in WAIT_NEXT (ant_radio_radiant.c:2629) and reach the host through `api_xfer_rx_data()`, with no check (`radiant_burst.c` has no security code). They carry no page number, so the secured-range test cannot apply to them anyway.
-- Outbound acknowledged and burst data from a secured master (`antr_acknowledge_message_tx()`, `antr_burst_tx()`) goes on air in plaintext, untransformed.
-- Fix: refuse outbound acked or burst data on a secured channel unless the host opts in, and document that inbound non-broadcast data on a secured channel is unauthenticated.
-- Done: a keyed master refuses both calls with `CHANNEL_IN_WRONG_STATE` and posts nothing; slaves are untouched. No host opt-in (nothing uses one; add it if a user appears). Inbound is documented in section 3.2, "Non-broadcast traffic".
 
 ## 12. [DONE 2026-11-14: 3b8e309, dff88e6, 501370a] Hardening and documentation
-- [x] Dead-store wipes: `memset()` on secret locals that are never read again can be elided at -Os. node_ident.c:560 (half the pairing scalar in `tag`), :677 (the whole scalar), and the K_dev copies at :138 and :167. Use `radiant_sec_wipe()`. Done 2026-11-14 (3b8e309), plus the read-back on the load-failure return.
-- [x] radiant/src/radiant_sec_rng_psa.c:45 returns without zero-filling when `psa_crypto_init()` fails, while the entropy backend and the node_ident comments promise a zero-fill on failure. The one caller checks the return code, so this is a contract mismatch, not a live bug. Done 2026-11-14 (3b8e309).
-- [x] Pairing expiry is only checked lazily, on the next call, so an abandoned scalar stays in RAM until a pairing call or a reset. Done 2026-11-13 (33328d8): `radiant_sec_pair_service()` frees expired contexts.
-- Found while fixing items 1-4, open:
-  - [x] The main ztest image no longer fit the nRF5340 DK (41,756 B over at 5bc61b7; verbose assert text is ~590 KB of it). Done 2026-11-13 (4bab0ca): assert messages shortened, 970,084 B (92.5 %), 1076/1076 pass on the DK. Tests grew ~40 KB in one afternoon, so expect it to fill again; the agreed fallback is a DK-only `boards/nrf5340dk_nrf5340_cpuapp.conf` with `CONFIG_ZTEST_ASSERT_VERBOSE=0` (498 KB). New tests: keep assert messages to runtime values.
-  - [x] `scripts/run_ztest_hw.ps1` can capture two boots: the image runs between flash and go. A fixed copy, which waits 1 s and throws away that partial output before go, is in the 2026-11-13 session scratchpad and not committed. Done 2026-11-14 (dff88e6): one boot line on the DK.
-  - [x] `test_matter.c` had a `-Wformat-extra-args` warning. Fixed in 4bab0ca.
-- [x] Section 7.5 says ~2.3 h to one verified forgery at W=2 and 4 Hz. One attempt per 2-packet window is 2^16 x 0.5 s, about 9.1 h. Recheck the figure. Done 2026-11-14 (501370a): ~9.1 h at 4 Hz, ~4.5 h at 8 Hz.
 
 # Module packaging follow-ups
 
@@ -251,11 +196,6 @@ not the transmitter. 120 s windows at -31..-48 dBm, one pinned power channel:
 
 # Open issues from the 2026-11-07 extensions and security review
 
-Items 1-9 need no bench; items 10 and 11 do. `security.conf` and the compat
-layer are in no release image, so every protocol change below breaks no
-deployed host or node. Findings were verified by reading the code; nothing was
-run.
-
 ## 1. [CLOSED 2026-11-08, accepted limits] What the Tier I phase lock does not cover
 
 ## 2. [DONE 2026-11-07] Implement the descriptor authentication frame
@@ -329,29 +269,6 @@ making tools/ant_health.py reject other versions (see item 2).
 ## 3. [DONE 2026-11-11] Make backends state max_addr_groups explicitly
 
 ## 4. [FIRMWARE, bench, DEFERRED] Move nRF52/53 to USB_NEXT
-Two USB device classes are maintained because the legacy one has hours on it
-against Zwift (apps/dongle/next.conf:11). The legacy stack is on borrowed time:
-`USB_DEVICE_STACK` does `select DEPRECATED` in NCS v3.4.0
-(zephyr/subsys/usb/device/Kconfig:10). nRF54 boards already have no choice.
-
-Measured on a Feather (docs/backends.md:784): USB_NEXT costs 9.8 KB more flash
-and saves 1.6 KB RAM, with 27 % lower throughput that is still 75x what eight
-channels need.
-- Before switching, on the Pro Micro, compare USB_NEXT with legacy:
-  - a real Zwift session (no Zwift testing of USB_NEXT is recorded);
-  - a byte compare of the descriptors, including endpoint order, because
-    positional hosts depend on it;
-  - ant_probe, ant_scan and bench_usb_stall.py with `next.conf;health.conf`;
-  - USB reboot to bootloader.
-- Then remove apps/common/usb_ant_class.c (745 lines), the USB_LEGACY Kconfig
-  option in apps/dongle and apps/dongle_thread, and next.conf. Update the
-  transports in release.yml, build_all.ps1 and sample.yaml, the board confs, and
-  docs/backends.md.
-- (Done 2026-11-11: the USB transport options and stack defaults are gone from
-  apps/dongle_ti/Kconfig; the TI image still builds.)
-- Check that the 9.8 KB still fits the Matter builds on nRF52840.
-- Done when the checks above match legacy and no release image selects
-  USB_DEVICE_STACK.
 
 ## 5. [DONE 2026-11-11] Delete compatibility shims with no remaining user
 
@@ -516,28 +433,6 @@ Make continuous dual transmission the HR default (CONFIG_HRM_SUPPRESS_ANT_WHEN_C
 
 Apple testing round 2
 
-Zwift pcap using an MPSL build dongle (image ready 2026-11-14, user-run):
-- Image: L15 DK `apps/dongle_thread` + `gate.conf;uart_57600.conf` +
-  `uart_57600.overlay` (Zwift's ANT_DLL opens the port at 57600); hex at
-  `build\zwift_mpsl\zephyr.hex` (gitignored, copied there 2026-11-14). Flash with
-  `scripts\flash_sim_jlink.ps1 -HexPath <hex> -Device nRF54L15_M33 -Serial 1057737173`.
-- Host: `scripts\zwift_ant_shim.ps1 -Port COM4` (the L15's ANT VCOM), set
-  `RADIANT_SHIM_LOG` to keep the shim's call log - it is the capture here,
-  since USBPcap sees only the J-Link's CDC. Keep the L15 log VCOM (COM3, DTR)
-  captured too. The 69:108 cause is fixed (63b2a02, "MPSL assert 69:108"
-  above), so the image must be rebuilt from a tree that contains it. `gate.conf`
-  images reboot rather than halt on any MPSL assert (`CONFIG_RESET_ON_FATAL_ERROR=y`
-  from prj.conf), so a second boot banner on the log VCOM is the sign to look
-  for.
-- Confirm: FE-C acknowledged control completes (page 0x33 about every 1 s, 0x37
-  every 30 s, TRANSFER_TX_COMPLETED rather than FAILED; the 2026-11-04 RadiANT USB
-  capture had 23 % "master frame heard, no ACK"); every sensor listed within
-  ~1 s while HR and trainer are tracked; time from reset to NETWORK_KEY against
-  42-94 s (RadiANT history) and 9.2 s (Garmin).
-Zwift pcap using a TI build
-Zwift pcap using erg mode in Zwifts
-Zwift confirm the nRF wildcard matching (faster scan) works
-
 # From the 2026-11-15 Zwift captures (firmware 3b486c3)
 
 Captures `captures/zwift-20261115-*.pcap`, plus the shim log `captures/zwift-shim-ti-20261115.log`:
@@ -599,15 +494,8 @@ Done: one append-only `WriteFile` per line (no glued or blank lines, checked by 
 - Every byte is logged with an `fflush`; one session wrote 73,390 lines. Host turnaround is 12–17 ms, against 0–1 ms on native USB. That comes from ANT_DLL's USBXpress path, matters during setup only, and is not the dongle.
 
 ## 7. [DONE 2026-11-16, branch tools/shim-log-and-decode-pcap] decode_pcap.py gaps (slot loss from the RX timestamp: DONE 2026-11-16, `--phase A B`)
-Done: the transfer ledger counts host submissions (Garmin 22:06 capture: submitted 291, accepted 149, refused 142, completed 34, failed 114, pending 1, presync 1), with `presync` for a mid-session start and a per-page line on FE-C channels (215313: 0x33 completion 84.9 %); `slots=... loss=...` from the RX timestamps beside RX_FAIL (Garmin FE-C 84.3 % against 77.7 %); period from `--period CH=N`, CHANNEL_PERIOD or inferred, source printed; FE-C pages decoded as a `[FE-C ...]` suffix; with `-o` the header goes to stdout; `padding_bytes`. `--phase 3 2` on 215313 is unchanged.
-- It counts a transfer as accepted only on RESPONSE_NO_ERROR, so a Garmin capture shows accepted=0 and unmatched=149. It also pairs a completion with a submit made before the capture started.
-- Loss counted from RX_FAIL understates real loss (Garmin FE-C: 78 % against 84 %), because search periods and collisions produce no RX_FAIL. Count slots from the RX timestamp instead (flag 0x20).
-- A capture started mid-session has no CHANNEL_PERIOD, so the period has to be supplied by hand.
-- FE-C payloads (0x31, 0x33, 0x19, 0x10) are not decoded, and the summary header is written into the `-o` file.
-- The "discarded bytes" are only Zwift padding every OUT transfer with `00 00`. Label them as padding.
 
 ## 8. [DONE 2026-11-16, ADR 0024] No EVENT_CHANNEL_COLLISION
-The Garmin raises collision events when two of its own slots overlap, and a collided slot gets no RX_FAIL. RadiANT reports nothing from `radiant_channel_on_slot_denied()`; every miss shows up as an RX_FAIL. Zwift is unaffected, so this is parity only.
 
 Settled by these captures, nothing to do:
 - The 0x61 and 0xC6 replies work: reset to first NETWORK_KEY now takes 11–15 s, against 42–94 s before.
@@ -621,3 +509,5 @@ Settled by these captures, nothing to do:
   - It reports 0 W on leaving ERG.
   - It also broadcasts as power (type 0x0B, transmission type 0xA5) and speed (type 0x7B).
 - Power meter #20329 reads about 35 % below the trainer. It is probably not on the same bike (actually it is, the trainer is really that inaccurate).
+
+Make sure there is an RGB activity version of the feather, and the other version then is no LEDs at all (quiet mode)
