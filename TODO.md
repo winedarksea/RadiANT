@@ -461,10 +461,12 @@ The Garmin loses here too, and reports EVENT_CHANNEL_COLLISION. But the channel 
 
 - Reproduce with two simulated masters at 8182 and 8192 (apps/trainer). Run it on the Pro Micro, and on the TI built with `ti_diag.conf` so the 0xF7 counters are available.
 
-## 2. [FIRMWARE, LATENT] The TI dual-sync merge ignores min_filter_hamming_bits
-When two tracked windows merge into one dual-sync RX (radiant_sched.c → radiant_radio_cc26xx.c), nothing checks how far apart the two filters are. Only the search applies `caps.min_filter_hamming_bits` (radiant_search.c:416); the cc26xx value is 4. In the 2026-08-13 measurement, filters 1 bit apart left the radio deaf, and at 4 bits it heard about 60 %.
+## 2. [DONE 2026-11-16, branch fix/ti-sync-separation] The TI dual-sync merge ignores min_filter_hamming_bits
+Fixed: merge rule 6 in `arm_rx_window()`, through `radiant_rx_filters_separable()` (radiant_radio_hal.h), which the scheduler, the fake radio and cc26xx `rx_arm()` (ENOTSUP backstop) all share. A member closer than the capability gets its own window or is reported MISSED. Six sched cases.
 
-Tonight's pair (#20329 against #52233) is 5 bits apart, so it was not hit. Roughly 1 % of random device pairs fall within 3 bits. The merge should refuse to combine filters that are closer than the capability allows.
+The original premise was wrong. The TI hardware matches only the first `addr_len_hw_max` address bytes, so the distance that matters is over those bytes, not over the device number:
+- Default build (short match, 2 bytes): the sync word is the network address, `A6 C5` for every ANT+ channel. ANT+-only use was never exposed; only two networks whose addresses are 1-3 bits apart were.
+- `ti_long_match.conf` (3 bytes, `A6 C5 devlo`): for any devlo, 92 of the 256 possible partners (36 %) are 1-3 bits away, not about 1 %. #20329 (lo 0x69) and #52233 (lo 0x09) are 2 bits apart there. It was not hit because the TI ran a short-match build; the 5-bit figure was the full 16-bit device number.
 
 ## 3. [FIRMWARE] A pending slave acked command outlives the channel's search
 `api_ack_pending_send()` (ant_radio_radiant.c) runs only from the tracked-frame path and requires TRACKING. While the channel searches, a command is held for the full 750 ms opener budget (`RADIANT_API_ACK_OPENER_PERIODS` 3) and only blocks the next command. On the MPSL ride all three page 0x37s were lost: the ones at 76.3 s and 136.4 s timed out, and the one at 106.3 s was refused with TRANSFER_IN_PROGRESS behind an expiring 0x33. Page 0x37 arrives 0.72–0.81 s after a 0x33, which the "750 ms < 1010 ms" reasoning does not cover.

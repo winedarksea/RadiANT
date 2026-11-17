@@ -896,6 +896,48 @@ struct radiant_radio_caps {
 #endif
 };
 
+/*
+ * Can two filters be armed in one receive window on this backend? The test for
+ * caps.min_filter_hamming_bits, shared by radiant_sched.c (merge rule 6), the
+ * test fake radio and the cc26xx backend, so the three cannot drift apart.
+ *
+ * Compares only the bytes the hardware matcher sees: the first
+ * MIN(addr_len, addr_len_hw_max), less a wild_last byte, which software
+ * matches. Distance 0 is fine: both filters share one sync word, which is the
+ * normal ANT+ case (every channel's network address is A6 C5). Distance
+ * 1 .. min-1 is not, because a correlator cannot tell the two templates apart
+ * and the window hears neither (measured on a CC26x2: 1 bit apart, 0 of 30).
+ *
+ * Free where it does not apply: min 0 or 1 (nRF, RAIL, null) returns at once.
+ * Filters of different lengths are never in one window (rule 1), so they
+ * count as separable here and the format check refuses them elsewhere.
+ */
+static inline bool radiant_rx_filters_separable(const struct radiant_radio_caps *c,
+						const struct radiant_rx_filter *a,
+						const struct radiant_rx_filter *b)
+{
+	uint8_t  hw;
+	uint32_t d = 0u;
+	uint8_t  i;
+
+	if (c->min_filter_hamming_bits <= 1u || a->addr_len != b->addr_len) {
+		return true;
+	}
+	hw = (a->addr_len < c->addr_len_hw_max) ? a->addr_len : c->addr_len_hw_max;
+	if ((a->wild_last || b->wild_last) && hw == a->addr_len && hw > 0u) {
+		hw--;
+	}
+	for (i = 0u; i < hw; i++) {
+		uint8_t x = (uint8_t)(a->addr[i] ^ b->addr[i]);
+
+		while (x != 0u) {
+			x &= (uint8_t)(x - 1u);
+			d++;
+		}
+	}
+	return d == 0u || d >= c->min_filter_hamming_bits;
+}
+
 /* ---------------------------------------------------------------------------
  * API
  *

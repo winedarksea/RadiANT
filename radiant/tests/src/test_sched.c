@@ -855,6 +855,181 @@ ZTEST(radiant_sched, test_merging_is_bounded_by_max_filters_at_two)
 	finish();
 }
 
+/* ---------------------------------------------------------------------------
+ * Rule 6: sync-word separation (caps.min_filter_hamming_bits)
+ *
+ * A CC26x2 correlator armed with two sync words 1-3 bits apart hears neither
+ * (2026-08-13 bench: 0/30 frames at 1 bit, 18/30 at 4). The fake radio refuses
+ * such a window with ENOTSUP, so finish() is the guard in every test below.
+ * ---------------------------------------------------------------------------
+ */
+
+/* Re-address channel ch's tracking filter. From the frame layer, as
+ * build_filters() does, so the byte order cannot disagree. */
+static void set_track_devnum(uint8_t ch, uint16_t devnum)
+{
+	struct radiant_channel_id id = {
+		.device_number = devnum,
+		.device_type = TEST_DEV_TYPE,
+		.trans_type = TEST_TRANS_TYPE,
+	};
+
+	zassert_equal(5, radiant_frame_addr(RADIANT_FRAME_CFG_TRACKING,
+					    radiant_net_addr_ant_plus, &id,
+					    track_filter[ch].addr,
+					    sizeof(track_filter[ch].addr)));
+	track_filter[ch].addr_len = 5u;
+}
+
+/* TI-like geometry: two sync words, 4 bits of separation, and hw_len bytes
+ * matched in hardware (3 = ti_long_match.conf, [A6 C5 devlo]; 2 = default). */
+static void caps_ti_like(uint8_t hw_len)
+{
+	fake_radio_caps_preset_rail();
+	fake_radio_caps_mut()->min_filter_hamming_bits = 4u;
+	fake_radio_caps_mut()->addr_len_hw_max = hw_len;
+}
+
+/* Two coincident tracked windows whose hardware prefixes merge or not. */
+static void two_coincident(uint16_t dev0, uint16_t dev1, uint8_t hw_len,
+			   uint8_t want_filters)
+{
+	radiant_time_t open;
+
+	caps_ti_like(hw_len);
+	set_track_devnum(0u, dev0);
+	set_track_devnum(1u, dev1);
+	bring_up();
+
+	open = radiant_radio_now() + 100000u;
+	post_track(0u, open, open + TEST_WINDOW_US);
+	post_track(1u, open, open + TEST_WINDOW_US);
+	zassert_ok(radiant_sched_tick());
+
+	zassert_equal(1u, fake_radio_arm_count());
+	zassert_equal(RADIANT_RADIO_OK_RC, fake_radio_arm(0u)->rc);
+	zassert_equal(want_filters, fake_radio_arm(0u)->n_filters,
+		      "%u filters", fake_radio_arm(0u)->n_filters);
+
+	fake_radio_advance_to(open + TEST_WINDOW_US + 1u);
+	zassert_equal(1u, log.ok_count[0]);
+	if (want_filters == 2u) {
+		zassert_equal(1u, log.ok_count[1]);
+	} else {
+		/* Honest capacity loss, not a deaf merged window. */
+		zassert_equal(1u, log.missed_count[1]);
+	}
+
+	assert_every_window_bounded();
+	finish();
+}
+
+/* devnum_lo 0x00 and 0x01, one bit apart under long match: never merged. */
+ZTEST(radiant_sched, test_rule6_close_sync_words_are_not_merged)
+{
+	two_coincident(0x1000u, 0x1001u, 3u, 1u);
+}
+
+/* devnum_lo 0x00 and 0x0F, four bits apart: merged. */
+ZTEST(radiant_sched, test_rule6_four_bits_apart_merge)
+{
+	two_coincident(0x1000u, 0x100Fu, 3u, 2u);
+}
+
+/* Same devnum_lo, different devnum_hi: one shared sync word (distance 0), the
+ * high byte matched in software. Must keep merging. */
+ZTEST(radiant_sched, test_rule6_shared_sync_word_merges)
+{
+	two_coincident(0x1000u, 0x2000u, 3u, 2u);
+}
+
+/* The default TI build (short match): the sync word is the network address,
+ * shared by every ANT+ channel, so consecutive device numbers still merge. */
+ZTEST(radiant_sched, test_rule6_short_match_loses_no_merges)
+{
+	two_coincident(0x1000u, 0x1001u, 2u, 2u);
+}
+
+/* could_join_armed() mirrors rule 6: a close channel posted after the window
+ * armed does not trigger a rebuild; a separable one does. */
+ZTEST(radiant_sched, test_rule6_is_mirrored_by_the_late_join)
+{
+	radiant_time_t open;
+
+	caps_ti_like(3u);
+	set_track_devnum(0u, 0x1000u);
+	set_track_devnum(1u, 0x1001u); /* 1 bit from channel 0 */
+	/* 4 bits from channel 0 and 5 from channel 1: the rebuild may pick
+	 * either of those as leader, and channel 2 must fit both. */
+	set_track_devnum(2u, 0x101Eu);
+	bring_up();
+
+	open = radiant_radio_now() + 100000u;
+	post_track(0u, open, open + TEST_WINDOW_US);
+	zassert_ok(radiant_sched_tick());
+	zassert_equal(1u, fake_radio_arm_count());
+
+	post_track(1u, open, open + TEST_WINDOW_US);
+	zassert_ok(radiant_sched_tick());
+	zassert_equal(1u, fake_radio_arm_count(), "close channel rebuilt");
+	zassert_equal(0u, radiant_sched_stats_get()->replans);
+
+	post_track(2u, open, open + TEST_WINDOW_US);
+	zassert_ok(radiant_sched_tick());
+	zassert_equal(2u, fake_radio_arm_count());
+	zassert_equal(1u, radiant_sched_stats_get()->replans);
+	zassert_equal(RADIANT_RADIO_OK_RC, fake_radio_arm(1u)->rc);
+	zassert_equal(2u, fake_radio_arm(1u)->n_filters);
+
+	fake_radio_advance_to(open + TEST_WINDOW_US + 1u);
+	zassert_equal(1u, log.ok_count[2]);
+	/* Channels 0 and 1 are never in one window: one is served, one missed. */
+	zassert_equal(1u, log.ok_count[0] + log.ok_count[1]);
+	zassert_equal(1u, log.missed_count[0] + log.missed_count[1]);
+
+	assert_every_window_bounded();
+	finish();
+}
+
+/* The shared predicate itself, at the boundaries. */
+ZTEST(radiant_sched, test_rule6_separable_boundaries)
+{
+	struct radiant_radio_caps c = { 0 };
+	struct radiant_rx_filter  a = { .addr = { 0xA6, 0xC5, 0x00, 0x10, 0x78 },
+					.addr_len = 5u };
+	struct radiant_rx_filter  b = a;
+
+	c.min_filter_hamming_bits = 4u;
+	c.addr_len_hw_max = 3u;
+
+	zassert_true(radiant_rx_filters_separable(&c, &a, &b), "d = 0");
+	b.addr[2] = 0x01u;
+	zassert_false(radiant_rx_filters_separable(&c, &a, &b), "d = 1");
+	b.addr[2] = 0x07u;
+	zassert_false(radiant_rx_filters_separable(&c, &a, &b), "d = 3");
+	b.addr[2] = 0x0Fu;
+	zassert_true(radiant_rx_filters_separable(&c, &a, &b), "d = 4");
+
+	/* Bytes past the hardware match do not count. */
+	b = a;
+	b.addr[3] = 0x11u;
+	zassert_true(radiant_rx_filters_separable(&c, &a, &b), "sw byte");
+
+	/* A wild_last byte is software-matched even inside addr_len_hw_max. */
+	a.addr_len = 3u;
+	b = a;
+	a.wild_last = true;
+	b.addr[2] = 0x01u;
+	zassert_true(radiant_rx_filters_separable(&c, &a, &b), "wild_last");
+
+	/* No constraint at min 0 or 1. */
+	a.wild_last = false;
+	c.min_filter_hamming_bits = 0u;
+	zassert_true(radiant_rx_filters_separable(&c, &a, &b), "min 0");
+	c.min_filter_hamming_bits = 1u;
+	zassert_true(radiant_rx_filters_separable(&c, &a, &b), "min 1");
+}
+
 /* A request for more addresses than the backend has matchers is reported once
  * and consumed, not retried forever - the scheduler must not loop on a
  * request the backend will refuse every time, a livelock inside a radio ISR

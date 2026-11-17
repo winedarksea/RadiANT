@@ -1692,6 +1692,20 @@ static int rx_arm(const struct radiant_rx_req *req, uint32_t *op)
 			return RADIANT_RADIO_ENOTSUP;
 		}
 	}
+	/*
+	 * Two sync words 1-3 bits apart leave the correlator deaf to both, with no
+	 * error anywhere (caps.min_filter_hamming_bits). The scheduler's rule 6
+	 * never asks for that; refuse it loudly if anything does, before st is
+	 * touched. Pairs sharing a sync word are distance 0 and pass.
+	 */
+	for (uint8_t i = 1; i < req->n_filters; i++) {
+		for (uint8_t j = 0; j < i; j++) {
+			if (!radiant_rx_filters_separable(&caps, &req->filters[i],
+							  &req->filters[j])) {
+				return RADIANT_RADIO_ENOTSUP;
+			}
+		}
+	}
 	/* A longer frame would overrun its row, so refuse it. */
 	if ((uint32_t)(req->fmt->addr_len -
 		       MIN(req->fmt->addr_len, caps.addr_len_hw_max)) +
