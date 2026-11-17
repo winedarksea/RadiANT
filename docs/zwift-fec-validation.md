@@ -67,6 +67,12 @@ while retaining configured wildcards for later acquisition. Slave commands wait
 for an actually received master slot; one copied pending command per channel
 prevents overlap. The wait expires after the greater of 500 ms and three channel
 periods (`RADIANT_API_ACK_OPENER_PERIODS`). Tracking resumes after completion or failure.
+Since 2026-11-17 the wait also ends when the channel drops to search: the
+command fails right after RX_FAIL_GO_TO_SEARCH (the Garmin USB-m's order),
+because a searching channel can't open its slot. A command submitted while
+the channel searches is still held, and the frame that reacquires the channel
+opens its slot, except on the sweep's carrier, whose next tracked frame does.
+0xF7 page 13 counts `xfer_lost_track` and `xfer_reacquired`.
 
 It was two periods until 2026-11-03. In `captures/zwift-20261103-174817.pcap`,
 against a trainer losing ~53% of its FE-C packets, 38 of 146 grade commands
@@ -134,6 +140,15 @@ an early frame in a ~1.8 ms union, and the command failed without transmitting
 from the frame replaces the channel's in-flight request, so the scheduler aborts
 the window then, exactly as the engine's own ACK reply does from that callback.
 The cost is the rest of that window for any merged neighbour, once per command.
+
+The frame that reacquires a searching channel hands off the same way, from
+`api_search_acquired()`, when the frame is a broadcast with an exact timestamp
+and the channel is not a background scan
+(`test_fec_pending_sent_on_reacquiring_frame` and its negatives). On the
+sweep's carrier it does not: posting there would drop the armed scan chunk
+without telling the search, which would lose its carrier. The carrier sends
+from its next tracked frame, still inside the three-period budget
+(`test_fec_pending_on_the_carrier_waits_for_the_next_frame`).
 
 The handoff runs after the security policy guard and never on a secured
 channel. A secured-range broadcast is only queued for verification, and its MAC
