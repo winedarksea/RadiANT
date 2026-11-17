@@ -2070,6 +2070,124 @@ ZTEST(api, test_a_plain_wildcard_slave_still_acquires_and_tracks)
 }
 
 /*
+ * Security review 2026-11-14, item 6. A slave searching alone acquires, and its
+ * sensor's next frame, one period later, must reach the host.
+ *
+ * It used not to: radiant_search_end() cleared only the search record, the
+ * sweep chunk (one period plus 10 ms) kept the carrier's slot, so the pump could
+ * not post the tracked window. Frame 1 fell inside the chunk and was dropped
+ * with no searcher, and the host saw RX_FAIL after every acquiring
+ * BROADCAST_DATA. Under X_AUTH the first window was then always UNVERIFIED.
+ *
+ * Virtual time stands still while the test sleeps, so the event thread's pump
+ * runs between the acquisition and frame 1, as on hardware, where it runs a
+ * period ahead of the frame.
+ */
+static void open_wildcard_slave(uint8_t ch, uint8_t network, uint8_t rf);
+
+ZTEST(api, test_a_lone_searcher_hears_its_sensors_next_frame_after_acquiring)
+{
+	const struct fake_radio_arm *w;
+	uint16_t                     dev;
+	radiant_time_t               t_acq;
+	uint8_t                      frame[FAKE_RADIO_AIR_FRAME_MAX];
+	uint8_t                      len;
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_network_address_set(0u, ant_plus_key));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_lib_config_set((uint8_t)ANTW_LIB_CONFIG_ALL_EXT_FIELDS));
+	open_wildcard_slave(CH, 0u, RF_INDEX);
+
+	w = armed_search_window();
+	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &dev);
+	t_acq = w->t_open + 1000u;
+	fake_radio_advance_to(t_acq + 500u);
+	drain();
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH),
+		      "setup: the channel did not acquire");
+	zassert_true(t_acq + PERIOD_US < w->t_close,
+		     "setup: frame 1 must fall inside the sweep chunk, or this "
+		     "test measures nothing");
+
+	/* The event thread's pump, with virtual time frozen. */
+	k_sleep(K_MSEC(3 * RADIANT_API_HOUSEKEEP_MS));
+
+	zassert_true(w->terminated,
+		     "the sweep chunk kept listening after its only searcher "
+		     "acquired: it holds the carrier's slot, so the tracked "
+		     "window for frame 1 cannot be posted");
+
+	len = fake_radio_build_ant_frame(frame, dev, 0x0Bu, 5u, peer_payload);
+	zassert_equal(RADIANT_RADIO_OK_RC,
+		      fake_radio_air_frame(t_acq + PERIOD_US, frame, len),
+		      "could not put frame 1 on the air");
+	fake_radio_advance_to(t_acq + PERIOD_US + 5000u);
+	drain();
+
+	zassert_equal(2u, count_bcast_from(dev),
+		      "frame 1, one period after the acquiring frame, did not "
+		      "reach the host (%u broadcasts)",
+		      (unsigned int)count_bcast_from(dev));
+	zassert_equal(0u, count_channel_events(CH, (uint8_t)ANTW_EVENT_RX_FAIL),
+		      "RX_FAIL after an acquisition whose next frame was on air");
+
+	end_of_test();
+}
+
+/*
+ * The control for the test above: with a second channel still searching, the
+ * sweep serves it, so the chunk carries on when the carrier acquires. Cutting
+ * it there would cost the other searcher a re-arm gap (TODO follow-up).
+ */
+ZTEST(api, test_the_sweep_keeps_running_while_another_channel_still_searches)
+{
+	const struct fake_radio_arm *w;
+	uint16_t                     dev;
+	uint8_t                      tracking;
+	uint8_t                      other;
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_network_address_set(0u, ant_plus_key));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_lib_config_set((uint8_t)ANTW_LIB_CONFIG_ALL_EXT_FIELDS));
+	open_wildcard_slave(CH, 0u, RF_INDEX);
+	open_wildcard_slave(1u, 0u, RF_INDEX);
+	/* Both channels join the sweep before the device is aired. */
+	k_sleep(K_MSEC(3 * RADIANT_API_HOUSEKEEP_MS));
+
+	w = armed_search_window();
+	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &dev);
+	fake_radio_advance_to(w->t_open + 1500u);
+	drain();
+
+	if (radiant_channel_state_get(CH) == RADIANT_CH_STATE_TRACKING) {
+		tracking = CH;
+		other = 1u;
+	} else {
+		tracking = 1u;
+		other = CH;
+	}
+	zassert_equal(RADIANT_CH_STATE_TRACKING,
+		      radiant_channel_state_get(tracking),
+		      "setup: neither channel acquired");
+	zassert_equal(RADIANT_CH_STATE_SEARCHING,
+		      radiant_channel_state_get(other),
+		      "setup: the second channel left the search");
+
+	k_sleep(K_MSEC(3 * RADIANT_API_HOUSEKEEP_MS));
+
+	zassert_false(w->terminated,
+		      "the sweep chunk was cut while a channel still searched");
+	zassert_equal(RADIANT_CH_STATE_SEARCHING,
+		      radiant_channel_state_get(other),
+		      "the second channel left the search");
+
+	(void)antr_channel_close(1u);
+	end_of_test();
+}
+
+/*
  * The inclusion/exclusion list is configurable on an OPEN channel, and a list
  * written there governs the search already running.
  *
