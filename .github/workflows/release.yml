@@ -2391,7 +2391,7 @@ jobs:
       # at the fix (NCS v3.4.0, this recipe): 668 / 612 / 760 B of 2048, and
       # 484 / 428 / 576 B of 768, an exception frame of 32 B included. The
       # frame limit is the net under chains nobody named: the largest frame in
-      # radiant/src or apps/common is fe_mul's 288 B.
+      # radiant/src or apps/common is 288 B (fe_mul, api_tracked_frame).
       #
       # A function that stops having a frame (inlined, renamed) fails the
       # check rather than counting as zero: rename it in its chain.

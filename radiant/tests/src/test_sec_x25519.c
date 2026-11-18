@@ -109,6 +109,62 @@ ZTEST(sec_x25519, test_rfc7748_vector_two)
 	zassert_mem_equal(got, v2_want, 32, "vector 2");
 }
 
+/*
+ * RFC 7748 section 5.2, the iterated vectors: k = u = 9, then repeatedly
+ * k' = X25519(k, u), u = k, k = k'. Each round feeds the last output back in
+ * as both a scalar and a point, so 1,000 of them walk the ladder over a
+ * thousand unrelated inputs - far stronger evidence than four fixed vectors
+ * that a rearrangement of the ladder step (the 2026-11-17 fold into a static
+ * workspace, security review item 1) computes exactly what it did before.
+ */
+static const uint8_t iter1_want[32] = {
+	0x42, 0x2c, 0x8e, 0x7a, 0x62, 0x27, 0xd7, 0xbc,
+	0xa1, 0x35, 0x0b, 0x3e, 0x2b, 0xb7, 0x27, 0x9f,
+	0x78, 0x97, 0xb8, 0x7b, 0xb6, 0x85, 0x4b, 0x78,
+	0x3c, 0x60, 0xe8, 0x03, 0x11, 0xae, 0x30, 0x79,
+};
+static const uint8_t iter1000_want[32] = {
+	0x68, 0x4c, 0xf5, 0x9b, 0xa8, 0x33, 0x09, 0x55,
+	0x28, 0x00, 0xef, 0x56, 0x6f, 0x2f, 0x4d, 0x3c,
+	0x1c, 0x38, 0x87, 0xc4, 0x93, 0x60, 0xe3, 0x87,
+	0x5f, 0x2e, 0xb9, 0x4d, 0x99, 0x53, 0x2c, 0x51,
+};
+
+static void x25519_iterate(uint8_t k[32], unsigned int rounds)
+{
+	uint8_t u[32];
+	uint8_t r[32];
+
+	memcpy(k, radiant_sec_x25519_basepoint, 32);
+	memcpy(u, radiant_sec_x25519_basepoint, 32);
+	while (rounds-- > 0u) {
+		zassert_equal(RADIANT_SEC_OK, radiant_sec_x25519(r, k, u));
+		memcpy(u, k, 32);
+		memcpy(k, r, 32);
+	}
+}
+
+ZTEST(sec_x25519, test_rfc7748_iterated_once)
+{
+	uint8_t k[32];
+
+	x25519_iterate(k, 1u);
+	zassert_mem_equal(k, iter1_want, 32, "1 iteration");
+}
+
+ZTEST(sec_x25519, test_rfc7748_iterated_a_thousand_times)
+{
+	uint8_t k[32];
+
+	/* About 375 ms an exchange on a Cortex-M at 64 MHz, so six minutes
+	 * on a DK: run where it costs well under a second. */
+	if (!IS_ENABLED(CONFIG_ARCH_POSIX)) {
+		ztest_test_skip();
+	}
+	x25519_iterate(k, 1000u);
+	zassert_mem_equal(k, iter1000_want, 32, "1,000 iterations");
+}
+
 ZTEST(sec_x25519, test_the_base_point_produces_the_published_public_keys)
 {
 	uint8_t got[32];

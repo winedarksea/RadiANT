@@ -77,6 +77,20 @@ class TheReviewFinding(unittest.TestCase):
                                frame_limit_paths=["radiant/src"])
         self.assertEqual(0, failures, lines)
 
+    def test_a_bigger_same_named_frame_elsewhere_does_not_hide_one(self):
+        # Merged by name, zephyr's 900 B ctx_of would stand in for radiant's
+        # 600 B one, and zephyr is outside the limited paths.
+        su = ("/z/subsys/x.c:10:1:ctx_of\t900\tstatic\n"
+              "C:/r/radiant/src/radiant_sec.c:20:1:ctx_of\t600\tstatic\n")
+        every = []
+        frames = csb.parse_su(su, every=every)
+        lines = []
+        failures = csb.check(frames, [], 32, frame_limit=512,
+                             frame_limit_paths=["radiant/src"],
+                             out=lines.append, every=every)
+        self.assertEqual(1, failures, lines)
+        self.assertIn("ctx_of is 600 B", lines[0])
+
 
 class TheRefusals(unittest.TestCase):
 

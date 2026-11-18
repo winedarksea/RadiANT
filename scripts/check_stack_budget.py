@@ -58,12 +58,15 @@ class Frame:
         self.source = source
 
 
-def parse_su(text, frames=None):
+def parse_su(text, frames=None, every=None):
     """`path:line:col:function<TAB>bytes<TAB>static|dynamic[,bounded]` lines.
 
     The same name can appear more than once (two static functions in different
     files, or a clone); the largest frame wins, which is the safe direction for
-    a budget.
+    a budget. `every`, when given, also collects each frame unmerged, for the
+    per-function limit: merged by name, a big frame outside the limited paths
+    would hide a same-named one inside them (`ctx_of` and `main` are both
+    defined twice in the pairing build).
     """
     frames = {} if frames is None else frames
     for line in text.splitlines():
@@ -79,6 +82,8 @@ def parse_su(text, frames=None):
         # path:line:col -> path
         source = source.rsplit(":", 2)[0] if source.count(":") >= 2 else source
         base = _CLONE.sub("", name)
+        if every is not None:
+            every.append(Frame(base, nbytes, kind, source))
         prev = frames.get(base)
         if prev is None or nbytes > prev.size or (
                 nbytes == prev.size and "dynamic" in kind):
@@ -86,11 +91,12 @@ def parse_su(text, frames=None):
     return frames
 
 
-def load_frames(build):
+def load_frames(build, every=None):
     frames = {}
     paths = sorted(Path(build).rglob("*.su"))
     for path in paths:
-        parse_su(path.read_text(encoding="utf-8", errors="replace"), frames)
+        parse_su(path.read_text(encoding="utf-8", errors="replace"), frames,
+                 every)
     return frames, len(paths)
 
 
@@ -136,8 +142,12 @@ def resolve_limit(token, config, macros):
 
 
 def check(frames, chains, exception_frame, frame_limit=None,
-          frame_limit_paths=(), out=print):
-    """Returns the number of failures; prints one line per finding."""
+          frame_limit_paths=(), out=print, every=None):
+    """Returns the number of failures; prints one line per finding.
+
+    The frame limit looks at `every` (each frame unmerged) when given, else at
+    the by-name merge in `frames`.
+    """
     failures = 0
     for name, funcs, limit in chains:
         total = exception_frame
@@ -166,7 +176,8 @@ def check(frames, chains, exception_frame, frame_limit=None,
         if total > limit:
             failures += 1
     if frame_limit is not None:
-        for frame in sorted(frames.values(), key=lambda f: -f.size):
+        pool = every if every is not None else frames.values()
+        for frame in sorted(pool, key=lambda f: -f.size):
             if frame.size <= frame_limit:
                 break
             src = frame.source.replace("\\", "/")
@@ -198,7 +209,8 @@ def main(argv=None):
                     help="... defined in a source whose path contains this")
     args = ap.parse_args(argv)
 
-    frames, nfiles = load_frames(args.build)
+    every = []
+    frames, nfiles = load_frames(args.build, every)
     if nfiles == 0:
         print(f"FAIL no .su files under {args.build}: build with "
               f"CONFIG_STACK_USAGE=y")
@@ -235,7 +247,7 @@ def main(argv=None):
     print(f"{nfiles} .su files, {len(frames)} functions, exception frame "
           f"{exc} B ({cfg_path if cfg_path else 'no .config'})")
     failures = check(frames, chains, exc, args.frame_limit,
-                     args.frame_limit_path)
+                     args.frame_limit_path, every=every)
     print("stack budget: " + ("FAIL" if failures else "ok"))
     return 1 if failures else 0
 
