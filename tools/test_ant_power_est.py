@@ -299,6 +299,26 @@ class Inputs(unittest.TestCase):
         self.assertIsNone(iv.cpu_us)
         self.assertIsNone(iv.idle_entries)
         self.assertIsNone(iv.constlat)
+        self.assertIsNone(iv.rfon_us)       # no rfon_pm on a non-TI line
+
+    def test_log_rfon_pm_weighted_and_only_when_on_every_line(self):
+        ti = ("power dt_ms=10000 hfxo_pm=-1 tx_us=1115 tx_ops=41 rx_us=4362 rx_ops=41 "
+              "cpu_pm=55 idle_x10=374 constlat=0/-1 rfon_pm={} rfpu_x10=40 pudur_us=448 "
+              "fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0")
+        iv = pe.parse_log([ti.format(17), ti.format(18)])
+        self.assertEqual(iv.rfon_us, 350_000)          # mean 17.5 per-mille of 20 s
+        self.assertTrue(any("floored" in p for p in iv.problems))
+        # A line without the field (an nRF line spliced in) leaves it unmeasured.
+        iv = pe.parse_log([ti.format(17), "power dt_ms=10000 hfxo_pm=-1 tx_us=0 tx_ops=0 "
+                           "rx_us=0 rx_ops=0 cpu_pm=1 idle_x10=1 constlat=0/-1"])
+        self.assertIsNone(iv.rfon_us)
+
+    def test_snapshot_rf_core_on_needs_the_ti_flag(self):
+        a = snap(uptime_ms=0, ti_rf_core_on_us=1_000, flags=ALL_FLAGS | pe.F_TI)
+        b = snap(uptime_ms=10_000, ti_rf_core_on_us=181_000, flags=ALL_FLAGS | pe.F_TI)
+        self.assertEqual(pe.diff_snapshots(a, b).rfon_us, 180_000)
+        b["fields"]["flags"] = ALL_FLAGS              # F_TI clear: not a cc26xx build
+        self.assertIsNone(pe.diff_snapshots(a, b).rfon_us)
 
     def test_log_without_power_lines_refused(self):
         with self.assertRaises(pe.InputError):
@@ -427,6 +447,34 @@ class Estimate(unittest.TestCase):
         with self.assertRaises(pe.InputError):
             pe.resolve_board("nrf52840", None, True)
 
+    def test_rf_core_idle_term_cc2652(self):
+        b = pe.resolve_board("cc2652", None, False)
+        # 10 s: core on 180 ms, of which TX 11 ms and RX 44 ms.
+        e = pe.estimate(b, self.iv(tx_us=11_000, rx_us=44_000, rfon_us=180_000))
+        c = {x.name: x for x in e.components}
+        self.assertAlmostEqual(c["RF core on (idle)"].ua, (0.018 - 0.0011 - 0.0044) * 210.9)
+        self.assertIn("1.250 % of 1.800 % on", c["RF core on (idle)"].basis)
+        self.assertNotIn("RF core on (idle)", e.excluded)
+        self.assertAlmostEqual(e.total_ua, sum(x.ua for x in e.components if x.ua is not None))
+        # Charged as a delta: the standby floor does not change it.
+        s = pe.estimate(pe.resolve_board("cc2652", None, True),
+                        self.iv(tx_us=11_000, rx_us=44_000, rfon_us=180_000))
+        self.assertAlmostEqual(next(x.ua for x in s.components if x.name == "RF core on (idle)"),
+                               c["RF core on (idle)"].ua)
+
+    def test_rf_core_idle_clamped_and_excluded_when_unmeasured(self):
+        b = pe.resolve_board("cc2652", None, False)
+        # On-time floored below TX + RX (log rounding): clamped to 0, not negative.
+        e = pe.estimate(b, self.iv(tx_us=11_000, rx_us=44_000, rfon_us=50_000))
+        self.assertEqual(next(x.ua for x in e.components if x.name == "RF core on (idle)"), 0.0)
+        e = pe.estimate(b, self.iv())
+        self.assertIn("RF core on (idle)", e.excluded)
+        why = next(x.why_excluded for x in e.components if x.name == "RF core on (idle)")
+        self.assertIn("not measured", why)
+        # No such term on a board without a separate RF core.
+        e = pe.estimate(pe.resolve_board("nrf54l15dk", None, False), self.iv(rfon_us=180_000))
+        self.assertNotIn("RF core on (idle)", [x.name for x in e.components])
+
 
 class Table(unittest.TestCase):
     def test_every_known_current_is_cited_and_every_unknown_says_why(self):
@@ -436,7 +484,7 @@ class Table(unittest.TestCase):
             cur += list(b.hfxo.values())
             if b.hfxo_default is not None:
                 self.assertIn(b.hfxo_default, b.hfxo)
-            cur += [c for c in (b.constlat, b.constlat_base) if c is not None]
+            cur += [c for c in (b.constlat, b.constlat_base, b.rfcore_idle) if c is not None]
             for c in cur:
                 seen += 1
                 with self.subTest(board=name, where=c.where):
@@ -474,7 +522,9 @@ class Cli(unittest.TestCase):
                 json.dump(PEEK, fh)
             with redirect_stdout(buf):
                 self.assertEqual(pe.main(["--board", "cc2652", p]), 0)
-        self.assertIn("EXCLUDED from the total: HFXO (outside radio)", buf.getvalue())
+        # The peek carries no ti_* fields, so the RF core term is excluded too.
+        self.assertIn("EXCLUDED from the total: RF core on (idle), HFXO (outside radio)",
+                      buf.getvalue())
 
     def test_bad_input_exit_1(self):
         with tempfile.TemporaryDirectory() as d:

@@ -54,7 +54,13 @@ THE MODEL (deliberately simple, stated so it can be argued with):
       + max(0, d_hfxo - d_tx - d_rx) * I_hfxo
       + d_cpu * (I_cpu - I_floor)          CPU rows include their clock
       + f_constlat * (I_constlat - I_idle0)        nRF54L15 only
+      + max(0, d_rfon - d_tx - d_rx) * I_rfcore    cc2652 only
       + I_uart                                     only with --uart-on
+
+d_rfon is the TI RF core's powered time (rfon_pm on the log line,
+ti_rf_core_on_us in a snapshot); the part outside TX and RX (power-up setup,
+synth, the tail before power-down) is charged at the datasheet's "RF core
+idle" peripheral delta. The radio rows already include the core.
 
 I_hfxo is, where the datasheet has one, the whole-chip "one TIMER running
 @ 1 MHz, clock = HFXO" row counted over the floor - today's state is the
@@ -95,6 +101,7 @@ F_CONSTLAT_REQ = 1 << 2
 F_CONSTLAT_HW_VALID = 1 << 3
 F_CPU_LOAD = 1 << 4
 F_IDLE = 1 << 5
+F_TI = 1 << 6               # RADIANT_POWER_DIAG_F_TI: ti_* fields measured (cc26xx)
 
 # Which flag says a field is measured. A field with a flag is judged by the
 # flag when the snapshot carries flags, else by the 0xFFFFFFFF sentinel.
@@ -105,10 +112,11 @@ FIELD_FLAG = {
     "hfxo_req_us": F_HFXO_MEASURED,
     "cpu_active_us": F_CPU_LOAD,
     "idle_entries": F_IDLE,
+    "ti_rf_core_on_us": F_TI,
 }
 
 # Fields that count microseconds: they wrap after 2^32 us (71.6 min).
-US_FIELDS = ("hfxo_req_us", "radio_tx_us", "radio_rx_us", "cpu_active_us")
+US_FIELDS = ("hfxo_req_us", "radio_tx_us", "radio_rx_us", "cpu_active_us", "ti_rf_core_on_us")
 COUNT_FIELDS = ("radio_tx_ops", "radio_rx_ops", "idle_entries")
 
 HR_PERIOD_S = 8070 / 32768  # ANT+ heart-rate channel period
@@ -225,6 +233,9 @@ TI_CPU = Current(3.39, "cc2652r", "8.5 Power Consumption - Power Modes, Active: 
 TI_IDLE = Current(0.675, "cc2652r", "8.5 Power Consumption - Power Modes, Idle: supply systems and RAM powered, RCOSC_HF")
 TI_STANDBY = Current(0.00094, "cc2652r", "8.5 Power Consumption - Power Modes, Standby without cache retention, RTC running, 80 kB RAM, RCOSC_LF")
 TI_UART = Current(0.1675, "cc2652r", "8.5 Iperi, UART: delta current, clock enabled, module idle")
+# The RF core powered and clocked but not transmitting or receiving: what the
+# core costs between power-up and power-down outside its TX/RX operations.
+TI_RFCORE_IDLE = Current(0.2109, "cc2652r", "8.5 Iperi, RF core: delta current, power domain enabled, clock enabled, RF core idle")
 TI_HFXO_WHY = "CC2652R/P datasheets list no XOSC_HF current"
 
 
@@ -243,6 +254,9 @@ class Board:
     notes: tuple[str, ...] = ()
     hfxo_default: str | None = None   # row used without --hfxo-row; None = UNKNOWN
     hfxo_unknown_why: str = "no row chosen"
+    # RF core powered outside TX/RX (a delta, not counted over the floor);
+    # None = the board has no such term (its radio has no separate core).
+    rfcore_idle: Current | None = None
 
 
 BOARDS: dict[str, Board] = {
@@ -269,7 +283,7 @@ BOARDS: dict[str, Board] = {
                     TI_RX, TI_CPU, {}, TI_UART,
                     notes=("Floor is Idle (675 uA): standby is off in this firmware; --ti-standby "
                            "uses the standby row instead.",),
-                    hfxo_unknown_why=TI_HFXO_WHY),
+                    hfxo_unknown_why=TI_HFXO_WHY, rfcore_idle=TI_RFCORE_IDLE),
 }
 
 LDO_OVERRIDES = {
@@ -353,6 +367,7 @@ class Interval:
     cpu_us: int | None = None
     idle_entries: int | None = None
     constlat: bool | None = None
+    rfon_us: int | None = None      # TI RF core powered (cc26xx power diag)
     source: str = ""
     problems: list[str] = dataclasses.field(default_factory=list)
 
@@ -465,6 +480,7 @@ def diff_snapshots(a: dict, b: dict, host_tol_s: float = 5.0, host_tol_frac: flo
     iv.hfxo_us = get("hfxo_req_us", True)
     iv.cpu_us = get("cpu_active_us", True)
     iv.idle_entries = get("idle_entries", False)
+    iv.rfon_us = get("ti_rf_core_on_us", True)
     if flags is not None:
         if flags & F_CONSTLAT_HW_VALID and fb.get("constlat_stat") is not None:
             iv.constlat = bool(int(fb["constlat_stat"]) & 1)
@@ -481,7 +497,8 @@ def parse_log(lines: list[str]) -> Interval:
     """Sum the firmware's per-interval power lines (TO RECONCILE WITH A1)."""
     dt_ms = 0
     sums = {"tx_us": 0, "rx_us": 0, "tx_ops": 0, "rx_ops": 0}
-    weighted = {"hfxo_pm": [0, 0], "cpu_pm": [0, 0], "idle_x10": [0, 0]}  # [sum*dt, dt]
+    weighted = {"hfxo_pm": [0, 0], "cpu_pm": [0, 0], "idle_x10": [0, 0],
+                "rfon_pm": [0, 0]}  # [sum*dt, dt]
     constlat = None
     n = 0
     for line in lines:
@@ -519,6 +536,11 @@ def parse_log(lines: list[str]) -> Interval:
         iv.cpu_us = round(weighted["cpu_pm"][0] / dt_ms / 1000 * dt_us)
     if full("idle_x10"):
         iv.idle_entries = round(weighted["idle_x10"][0] / 10 / 1000)   # sum(rate/s x dt_s)
+    if full("rfon_pm"):
+        iv.rfon_us = round(weighted["rfon_pm"][0] / dt_ms / 1000 * dt_us)
+        # The firmware floors rfon_pm per line, so the mean reads up to 1 per-mille low.
+        iv.problems.append("rfon_pm is floored on each log line: the RF core term "
+                           "may read up to 1 per-mille of on-time low")
     return iv
 
 
@@ -604,6 +626,19 @@ def estimate(board: Board, iv: Interval, *, tx_dbm: int = 0, uart_on: bool = Fal
                                       f"(rows: {sorted(board.tx)})"))
     add(f"radio TX {tx_dbm:+d} dBm", _pct(d_tx), tx_cur, d_tx, minus_ma=floor_ma)
     add("radio RX", _pct(d_rx), board.rx, d_rx, minus_ma=floor_ma)
+
+    # TI: the RF core's powered time outside TX/RX, at the core's idle delta
+    # (the radio rows already include the core while it transmits/receives).
+    if board.rfcore_idle is not None:
+        d_on = duty(iv.rfon_us)
+        rf_idle = None
+        if d_on is not None:
+            rf_idle = max(0.0, d_on - (d_tx or 0.0) - (d_rx or 0.0))
+        add("RF core on (idle)",
+            _pct(rf_idle) + (f" of {_pct(d_on)} on" if d_on is not None else ""),
+            board.rfcore_idle, rf_idle,
+            "" if d_on is not None else "RF core on-time not measured (rfon_pm / "
+            "ti_rf_core_on_us need CONFIG_RADIANT_POWER_DIAG on cc26xx)")
 
     # HFXO: sampled duty wins over the stack's own request counter (MPSL or
     # USB may hold the crystal too); radio rows already include the crystal.

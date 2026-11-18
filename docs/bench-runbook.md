@@ -481,8 +481,11 @@ ESTIMATE, µA, TI CC2652R datasheet SWRS207J rows):
 | XOSC_HF outside radio | not measured, no datasheet row | UNKNOWN, excluded |
 | **Total (known parts)** | | **1028** (860 without the UART row) |
 
-The estimator does not model the RF core's on-time outside TX and RX (about
-12 ms/s here), so the total leaves that out. `--ti-standby` (a what-if for
+The estimator at GC1 did not model the RF core's on-time outside TX and RX
+(about 12 ms/s here), so the total above leaves that out. It now charges it
+(power/c2: `RF core on (idle)`, rfon time minus TX/RX at the SWRS207J Iperi
+"RF core idle" delta, 210.9 µA): on this capture 1.195 % of time, **2.5 µA**,
+total 1030 µA. `--ti-standby` (a what-if for
 standby, which this firmware forbids) gives 227 µA, and most of that is the
 console-inflated CPU term. The idle floor and the UART row dominate, which is
 why Pass C2 (XOSC_HF release) and the TI standby decision are the levers left
