@@ -45,6 +45,31 @@
 
 #if defined(NRF54L_ERRATA_20_PRESENT)
 #include <hal/nrf_power.h>
+/*
+ * nRF54L errata 20: the backend holds CONSTLAT from init. On an MPSL build a
+ * raw TASKS_CONSTLAT does not survive: MPSL's own low-latency callbacks
+ * (nrf/subsys/mpsl/init/mpsl_init.c) trigger CONSTLAT around each of its
+ * events and LOWPWR after. Those writes are raw unless CONFIG_NRFX_POWER or
+ * CONFIG_NRF_SYS_EVENT is on (on nRF54L both use nrfx's reference count), so
+ * the first event's release turned the backend's request off (Gate GA
+ * 2026-11-18: CONSTLATSTAT 0/200 on an MPSL L15 image, 200/200 direct). With
+ * NRFX_POWER (selected by RADIANT_BACKEND_NRF_GATE_MPSL on nRF54L) MPSL goes
+ * through nrfx's reference count, and so does this request - if it is made at
+ * all: CONFIG_RADIANT_NRF54L_MPSL_CONSTLAT_HOLD=n leaves CONSTLAT to MPSL's
+ * per-event acquire/release.
+ */
+#if defined(CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL) && defined(CONFIG_SOC_SERIES_NRF54L)
+#include <nrfx_power.h>
+#define CONSTLAT_REFCOUNTED 1
+BUILD_ASSERT(IS_ENABLED(CONFIG_NRFX_POWER),
+	     "MPSL nRF54L build without CONFIG_NRFX_POWER: MPSL would raw-trigger "
+	     "LOWPWR over the backend's CONSTLAT request (errata 20)");
+#if defined(CONFIG_RADIANT_NRF54L_MPSL_CONSTLAT_HOLD)
+/* The one reference is taken once per boot, not once per init attempt: an
+ * init that fails after taking it and is retried must not take a second. */
+static bool constlat_held;
+#endif
+#endif
 #endif
 
 #include <radiant/radiant_radio_hal.h>
@@ -2330,8 +2355,31 @@ int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 
 #if defined(NRF54L_ERRATA_20_PRESENT)
 	if (nrf54l_errata_20()) {
+#if defined(CONSTLAT_REFCOUNTED)
+#if defined(CONFIG_RADIANT_NRF54L_MPSL_CONSTLAT_HOLD)
+		/*
+		 * One reference, never freed: MPSL's release at the end of each of
+		 * its events then drops the count to 1, not 0, and CONSTLAT stays on
+		 * as it does on a direct build. MPSL's callbacks run in a zero-latency
+		 * interrupt, which nrfx's irq_lock() critical section does not mask,
+		 * so the count's read-modify-write here is fenced with PRIMASK.
+		 * -EALREADY (MPSL is inside an event) is success.
+		 */
+		if (!constlat_held) {
+			uint32_t cl_key = radiant_swi_zli_lock();
+
+			(void)nrfx_power_constlat_mode_request();
+			radiant_swi_zli_unlock(cl_key);
+			constlat_held = true;
+		}
+		POWER_DIAG(radiant_power_diag_constlat_requested());
+#else
+		/* HOLD=n: no request; MPSL's per-event acquire/release is all. */
+#endif
+#else
 		nrf_power_task_trigger(NRF_POWER, NRF_POWER_TASK_CONSTLAT);
 		POWER_DIAG(radiant_power_diag_constlat_requested());
+#endif
 	}
 #endif
 

@@ -355,10 +355,34 @@ On the same day, before it was reflashed, the L15 carried the MPSL ackps image
 The backend still raw-triggers CONSTLAT at init (`NRF54L_ERRATA_20`), yet the
 hardware reads it off. So the errata-20 workaround is **not in force on MPSL
 nRF54L15 builds**. That is finding 2 of the power plan, now confirmed. The
-likely mechanism is MPSL's refcounted release (`mpsl_init.c`), inferred from
-the code and not traced on the board. Pass A4 replaces the raw trigger with the
-refcounted request. The image had no power_diag, so the struct could not show
-whether the trigger ran.
+image had no power_diag, so the struct could not show whether the trigger ran.
+
+The mechanism, from the image's own disassembly (Pass A4): that build has
+neither `CONFIG_NRFX_POWER` nor `CONFIG_NRF_SYS_EVENT`, so MPSL's
+`mpsl_low_latency_acquire_callback()` / `_release_callback()`
+(`nrf/subsys/mpsl/init/mpsl_init.c`) are raw writes to `TASKS_CONSTLAT`
+(0x5010E030) and `TASKS_LOWPWR` (0x5010E034), not a reference count. MPSL's
+scheduler calls acquire before each event it dispatches and release after it
+(it may skip the release between back-to-back events), and the first release
+turned the backend's init-time CONSTLAT off. Pass A4 makes the MPSL gate
+select `NRFX_POWER` on nRF54L, which moves MPSL's callbacks onto nrfx's
+reference count. With `CONFIG_RADIANT_NRF54L_MPSL_CONSTLAT_HOLD=y` (the
+default) the backend also takes one reference at init that it never frees, so
+CONSTLAT stays on as in a direct build. With `=n` it takes none and leaves
+CONSTLAT to MPSL's per-event acquire.
+
+Whether MPSL's acquire covers its *timeslots*, where all of this backend's
+radio work runs, is **not verified**. The disassembly shows a single acquire
+site in the scheduler's event-start path, but the library is closed. The GA
+0/200 does not settle it either, because the dongle may have had no channel
+open. The bench check: flash the `=n` diag image, keep the radio busy with a
+never-locking scan (`tools\ant_scan_rate.py --port COM4 --baud 57600
+--seconds 300 --scan-type 0x40`), and sample during the scan with
+`jlink_peek.ps1 -Preset nrf54l15 -Samples 200 -ElfPath <elf> -Decode
+-ExtraSymbol m_power_mode_refs`. A CONSTLAT-on fraction near the scan's radio
+duty, with `m_power_mode_refs` 1 in exactly those samples, means the timeslots
+are covered. 0/200 means they are not, and `=y` has to stay. On the `=y` image
+expect 200/200 and `m_power_mode_refs` 1 idle, 2 inside an MPSL event.
 
 ### TI hr_transmitter (no proxy yet)
 

@@ -104,6 +104,16 @@
 .PARAMETER SymbolAddress
     Hex address, instead of -ElfPath (with -SymbolSize in bytes).
 
+.PARAMETER ExtraSymbol
+    A RAM variable to read in EVERY register sample, beside the preset
+    registers (needs -ElfPath and -Preset). Looked up with nm, so a static or
+    file-local symbol (type b/d) is found too; a name defined more than once
+    is refused. The aligned 32-bit word containing its first byte is read,
+    and that byte's value is reported as a histogram, each value with how
+    many of ITS samples had CONSTLAT / HFXO on - e.g. nrfx_power's
+    m_power_mode_refs (the CONSTLAT reference count) next to CONSTLATSTAT.
+    Must be in SRAM, like every other read here.
+
 .PARAMETER Decode
     Decode a radiant_power_diag dump with the layout table below.
 
@@ -131,6 +141,9 @@
     .\scripts\jlink_peek.ps1 -Preset nrf54l15 -Serial 001057737173 -Samples 400
     .\scripts\jlink_peek.ps1 -Preset nrf54l15 -Serial 001057737173 -Samples 400 `
         -ElfPath build\hrtx_l15\hr_transmitter\zephyr\zephyr.elf -Decode -Json pd.json
+    .\scripts\jlink_peek.ps1 -Preset nrf54l15 -Serial 001057737173 -Samples 200 `
+        -ElfPath build\a4_l15_mpsl_pd\dongle\zephyr\zephyr.elf -Decode `
+        -ExtraSymbol m_power_mode_refs -Json pd.json
     .\scripts\jlink_peek.ps1 -SelfTest
 #>
 [CmdletBinding()]
@@ -149,6 +162,7 @@ param(
     [string]$Symbol = 'radiant_power_diag',
     [string]$SymbolAddress,
     [int]$SymbolSize = 0,
+    [string]$ExtraSymbol,
     [string]$NmExe = 'C:\ncs\toolchains\dcbdc366a1\opt\zephyr-sdk\gnu\arm-zephyr-eabi\bin\arm-zephyr-eabi-nm.exe',
     [switch]$Decode,
     [string]$Json,
@@ -427,8 +441,48 @@ function Format-Mem32([int64]$addr, [int]$count) {
     return ('mem32 0x{0:X8}, 0x{1:X}' -f $addr, $count)
 }
 
+# One RAM symbol from `nm --defined-only` output (size column optional, so
+# lines with and without -S both parse). Local/static symbols (b, d) count.
+# A name defined more than once (two file-local statics) is refused: which
+# one is meant cannot be told from the name.
+function Resolve-ElfSymbol([string[]]$nmLines, [string]$name) {
+    $hits = @()
+    foreach ($l in $nmLines) {
+        $m = [regex]::Match("$l", '^([0-9a-fA-F]+)\s+(?:([0-9a-fA-F]+)\s+)?([A-Za-z])\s+(\S+)$')
+        if ($m.Success -and $m.Groups[4].Value -ceq $name) { $hits += $m }
+    }
+    if ($hits.Count -eq 0) { throw "Symbol $name not found in the ELF." }
+    if ($hits.Count -gt 1) {
+        $where = ($hits | ForEach-Object { '0x' + $_.Groups[1].Value }) -join ', '
+        throw "Symbol $name is defined $($hits.Count) times ($where); refusing to guess which."
+    }
+    $h = $hits[0]
+    $type = $h.Groups[3].Value
+    if ('bBdD' -cnotmatch [regex]::Escape($type)) { throw "Symbol $name is type '$type', not RAM data (b/B/d/D)." }
+    $addr = [Convert]::ToInt64($h.Groups[1].Value, 16)
+    $size = 0
+    if ($h.Groups[2].Success) { $size = [int][Convert]::ToInt64($h.Groups[2].Value, 16) }
+    return [pscustomobject]@{ Name = $name; Addr = $addr; Size = $size; Type = $type }
+}
+
+# The per-sample read for -ExtraSymbol: the aligned word holding its first byte.
+# SRAM only - explicitly, since Test-ReadAddressAllowed also passes the preset
+# registers (a one-word read of CONSTLATSTAT would otherwise slip through).
+function New-ExtraRead([string]$name, [int64]$addr) {
+    $wa = $addr -band (-bnot 3L)
+    if ($wa -lt 0x20000000L -or $wa -gt 0x3FFFFFFCL -or -not (Test-ReadAddressAllowed $wa 1)) {
+        throw ('{0} at 0x{1:X8} is not in SRAM; refusing to read it.' -f $name, $addr)
+    }
+    return @{ Symbol = $name; Addr = $addr; WordAddr = $wa; ByteOff = [int]($addr - $wa) }
+}
+
+function Get-ExtraByte([int64]$word, [int]$byteOff) {
+    return [int](($word -shr (8 * $byteOff)) -band 0xFF)
+}
+
 function New-PeekPlan {
     param([hashtable]$Cfg)
+    $ex = $null; if ($Cfg.ContainsKey('Extra')) { $ex = $Cfg.Extra }
     $lines = New-Object System.Collections.Generic.List[string]
     $reads = New-Object System.Collections.Generic.List[object]
     $sleeps = New-Object System.Collections.Generic.List[int]
@@ -482,6 +536,7 @@ function New-PeekPlan {
                 $lines.Add("sleep $d")
             }
             foreach ($r in $p.Reads) { & $addRead "s.$i.$($r.Name)" ($base + $r.Off) $r.Count }
+            if ($ex) { & $addRead "s.$i.extra" $ex.WordAddr 1 }
         }
     }
 
@@ -619,6 +674,7 @@ function Select-DiagSnapshot([hashtable]$results, [string]$when, $diagCfg) {
 # Analysis of one run (live or -ParseLog).
 # ---------------------------------------------------------------------------
 function Get-PeekAnalysis($cfg, $plan, [string[]]$output) {
+    $ex = $null; if ($cfg.ContainsKey('Extra')) { $ex = $cfg.Extra }
     $parsed = ConvertFrom-Mem32Output $output
     $j = Join-ReadResults $plan.Reads $parsed
     $r = $j.Results
@@ -627,7 +683,7 @@ function Get-PeekAnalysis($cfg, $plan, [string[]]$output) {
         preset = $cfg.Preset; device = $cfg.Device; serial = $cfg.Serial
         parse_ok = $j.Ok; parse_error = $j.Error
         liveness = [ordered]@{ verdict = 'unknown'; dhcsr = @(); counter = $null; counter_moved = $null; notes = @() }
-        samples = $null; diag = $null
+        samples = $null; extra = $null; diag = $null
     }
 
     # Liveness from DHCSR (start and end), counter as corroboration.
@@ -656,17 +712,29 @@ function Get-PeekAnalysis($cfg, $plan, [string[]]$output) {
     if ($cfg.Preset) {
         $n = 0; $k = 0; $cn = 0; $ck = 0
         $states = @()
+        $hist = @{}   # extra byte value -> counts over the samples that read it
         for ($i = 0; $i -lt $cfg.Samples; $i++) {
             $w = @{}; $complete = $true
             foreach ($rd in $Presets[$cfg.Preset].Reads) {
                 $t = "s.$i.$($rd.Name)"
                 if ($r.ContainsKey($t)) { $w[$rd.Name] = $r[$t] } else { $complete = $false }
             }
+            # With -ExtraSymbol a sample counts only if all its reads arrived,
+            # so the histogram and the fractions cover the same samples.
+            if ($ex -and -not $r.ContainsKey("s.$i.extra")) { $complete = $false }
             if (-not $complete) { continue }
             $st = Get-SampleState $cfg.Preset $w
             $states += $st
             $n++; if ($st.hfxo) { $k++ }
             if ($null -ne $st.constlat) { $cn++; if ($st.constlat) { $ck++ } }
+            if ($ex) {
+                $v = Get-ExtraByte ([int64]$r["s.$i.extra"][0]) $ex.ByteOff
+                $st.raw[$ex.Symbol] = $v
+                if (-not $hist.ContainsKey($v)) { $hist[$v] = @{ count = 0; constlat_on = 0; hfxo_on = 0 } }
+                $hist[$v].count++
+                if ($st.constlat) { $hist[$v].constlat_on++ }
+                if ($st.hfxo) { $hist[$v].hfxo_on++ }
+            }
         }
         $ci = Get-WilsonInterval $k $n
         $smp = [ordered]@{
@@ -683,6 +751,20 @@ function Get-PeekAnalysis($cfg, $plan, [string[]]$output) {
             last = $(if ($states.Count) { $states[-1].raw } else { $null })
         }
         $an.samples = $smp
+        if ($ex) {
+            $rows = @()
+            foreach ($v in ($hist.Keys | Sort-Object)) {
+                $rows += [ordered]@{ value = $v; count = $hist[$v].count; constlat_on = $hist[$v].constlat_on; hfxo_on = $hist[$v].hfxo_on }
+            }
+            $an['extra'] = [ordered]@{
+                symbol = $ex.Symbol
+                address = ('0x{0:X8}' -f $ex.Addr)
+                word_address = ('0x{0:X8}' -f $ex.WordAddr)
+                byte_offset = $ex.ByteOff
+                samples = $n
+                histogram = $rows
+            }
+        }
     }
 
     # Diag snapshots.
@@ -743,6 +825,16 @@ function Write-PeekReport($an, $cfg) {
             }
         } else {
             Write-Host 'No valid samples.' -ForegroundColor Yellow
+        }
+    }
+
+    if ($an.extra) {
+        $x = $an.extra
+        Write-Host ''
+        Write-Host ("{0} @ {1} (byte {2} of word {3}), per sample:" -f $x.symbol, $x.address, $x.byte_offset, $x.word_address)
+        if ($x.histogram.Count -eq 0) { Write-Host '  no valid samples' -ForegroundColor Yellow }
+        foreach ($h in $x.histogram) {
+            Write-Host ("  value {0,3} (0x{0:X2}): {1,5} samples, CONSTLAT on in {2}, HFXO on in {3}" -f $h.value, $h.count, $h.constlat_on, $h.hfxo_on)
         }
     }
 
@@ -934,6 +1026,61 @@ function Invoke-SelfTest {
     try { Assert-SafeJLinkScript $short.Lines } catch { $padOk = $false }
     & $check "diag span padded to >= $DiagMinSpanMs ms" ($padOk -and ($short.Sleeps | Measure-Object -Sum).Sum -ge $DiagMinSpanMs)
 
+    # -ExtraSymbol: nm lookup (with and without the size column, local
+    # symbols, duplicates, wrong type), the aligned read, and the histogram.
+    $nmCanned = @(
+        '20000300 00000058 D radiant_power_diag',
+        '20007056 b m_power_mode_refs',
+        '00008308 00000038 T nrfx_power_constlat_mode_request',
+        '20001000 00000004 b dup_static',
+        '20001010 00000004 b dup_static',
+        '0001a000 00000004 r rodata_thing'
+    )
+    $xs = Resolve-ElfSymbol $nmCanned 'm_power_mode_refs'
+    & $check 'extra: local b symbol without size resolves' ($xs.Addr -eq 0x20007056L -and $xs.Type -ceq 'b')
+    & $check 'extra: global D symbol with size resolves' ((Resolve-ElfSymbol $nmCanned 'radiant_power_diag').Size -eq 0x58)
+    foreach ($bad in 'dup_static', 'nrfx_power_constlat_mode_request', 'rodata_thing', 'no_such_symbol') {
+        $refused = $false
+        try { Resolve-ElfSymbol $nmCanned $bad | Out-Null } catch { $refused = $true }
+        & $check "extra: lookup refuses $bad" $refused
+    }
+    $xr = New-ExtraRead 'm_power_mode_refs' 0x20007056L
+    & $check 'extra: reads the aligned word, byte 2' ($xr.WordAddr -eq 0x20007054L -and $xr.ByteOff -eq 2)
+    $refused = $false
+    try { New-ExtraRead 'flashy' 0x00008308L | Out-Null } catch { $refused = $true }
+    & $check 'extra: refuses a non-SRAM address' $refused
+    $refused = $false
+    try { New-ExtraRead 'periph' 0x5010E520L | Out-Null } catch { $refused = $true }
+    & $check 'extra: refuses a peripheral address' $refused
+    & $check 'extra: byte extraction' ((Get-ExtraByte 0x11220344L 1) -eq 3 -and (Get-ExtraByte 0x11220344L 3) -eq 0x11)
+
+    $xcfg = @{ Preset = 'nrf54l15'; Device = 'nRF54L15_M33'; Serial = '001057737173'; Speed = 4000; Samples = 4; IntervalMs = 300; JitterMs = 150; Seed = 11; NonSecure = $false; Diag = $null; Extra = $xr }
+    $xpl = New-PeekPlan -Cfg $xcfg
+    $okRun = $true
+    try { Assert-SafeJLinkScript $xpl.Lines } catch { $okRun = $false }
+    & $check 'extra: plan passes the whitelist' $okRun
+    & $check 'extra: one read of the word per sample' (@($xpl.Lines | Where-Object { $_ -ceq 'mem32 0x20007054, 0x1' }).Count -eq 4)
+    # Samples: refs byte (offset 2) = 1,1,2,0; CONSTLAT 1,1,1,0; XO running 1,0,1,1.
+    $xcanned = @(
+        'E000EDF0 = 01050003 ',
+        '5010E408 = 00000001 00010001 ', '5010E520 = 00000001 ', '20007054 = 00010000 ',
+        '5010E408 = 00000001 00000000 ', '5010E520 = 00000001 ', '20007054 = AB01CDEF ',
+        '5010E408 = 00000001 00010000 ', '5010E520 = 00000001 ', '20007054 = 00020000 ',
+        '5010E408 = 00000001 00010000 ', '5010E520 = 00000000 ', '20007054 = 00000000 ',
+        'E000EDF0 = 00040003 '
+    )
+    $an = Get-PeekAnalysis $xcfg $xpl $xcanned
+    $hv = @{}; foreach ($h in $an.extra.histogram) { $hv[[int]$h.value] = $h }
+    & $check 'extra: parse ok, 4 samples' ($an.parse_ok -and $an.samples.valid -eq 4 -and $an.extra.samples -eq 4)
+    & $check 'extra: histogram values 0,1,2' ($an.extra.histogram.Count -eq 3 -and $hv.ContainsKey(0) -and $hv.ContainsKey(1) -and $hv.ContainsKey(2))
+    & $check 'extra: value 1 = 2 samples, CONSTLAT 2, HFXO 1' ($hv[1].count -eq 2 -and $hv[1].constlat_on -eq 2 -and $hv[1].hfxo_on -eq 1)
+    & $check 'extra: value 0 = 1 sample, CONSTLAT 0' ($hv[0].count -eq 1 -and $hv[0].constlat_on -eq 0 -and $hv[0].hfxo_on -eq 1)
+    & $check 'extra: value 2 = 1 sample, CONSTLAT 1' ($hv[2].count -eq 1 -and $hv[2].constlat_on -eq 1)
+    # A missing extra read drops that sample from every count, not just the histogram.
+    $xgap = @($xcanned[0..2] + $xcanned[4..13])
+    $an = Get-PeekAnalysis $xcfg $xpl $xgap
+    & $check 'extra: a missing extra read is reported, not shifted' (-not $an.parse_ok -and $an.samples.valid -eq 0)
+
     Write-Host ''
     if ($script:stFail) { Write-Host "SELF-TEST: $($script:stFail) FAILED" -ForegroundColor Red; exit 1 }
     Write-Host 'SELF-TEST: all passed' -ForegroundColor Green
@@ -999,10 +1146,20 @@ if ($ElfPath -or $SymbolAddress) {
 }
 if (-not $Preset -and -not $diag) { throw 'Nothing to read: pass -Preset and/or -ElfPath/-SymbolAddress.' }
 
+$extra = $null
+if ($ExtraSymbol) {
+    if (-not $ElfPath) { throw '-ExtraSymbol needs -ElfPath (it is looked up with nm).' }
+    if (-not $Preset) { throw '-ExtraSymbol needs -Preset (it is read in each register sample).' }
+    $nmAll = & $NmExe --defined-only $ElfPath
+    if ($LASTEXITCODE -ne 0) { throw "nm failed on $ElfPath" }
+    $xs = Resolve-ElfSymbol $nmAll $ExtraSymbol
+    $extra = New-ExtraRead $ExtraSymbol $xs.Addr
+}
+
 $cfg = @{
     Preset = $Preset; Device = $Device; Serial = $Serial; Speed = $Speed
     Samples = $Samples; IntervalMs = $IntervalMs; JitterMs = $JitterMs; Seed = $Seed
-    NonSecure = [bool]$NonSecure; Diag = $diag; DoDecode = [bool]$Decode
+    NonSecure = [bool]$NonSecure; Diag = $diag; DoDecode = [bool]$Decode; Extra = $extra
 }
 $plan = New-PeekPlan -Cfg $cfg
 
@@ -1015,6 +1172,9 @@ if ($DryRun) {
     $auto = Find-AutoAcceptEntries $saved
     Write-Host ("# J-Link saved settings: {0} entries read, {1} look like a remembered unsecure/erase answer{2}" -f $saved.Count, $auto.Count, $(if ($auto.Count) { ' - a live run would REFUSE: ' + ($auto -join '; ') } else { '' }))
     Write-Host "# JLink.exe stdin would carry $($StdinRefusals.Count) 'n' answers."
+    if ($extra) {
+        Write-Host ("# extra symbol {0} at 0x{1:X8}: byte {2} of word 0x{3:X8}, read once per sample" -f $extra.Symbol, $extra.Addr, $extra.ByteOff, $extra.WordAddr)
+    }
     $plan.Lines | ForEach-Object { Write-Output $_ }
     exit 0
 }
