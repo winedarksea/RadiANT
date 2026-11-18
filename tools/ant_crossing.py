@@ -90,8 +90,13 @@ def parse(lines):
                     epoch = float(tok[6:])
             continue
         if line.startswith('# diag '):
-            _, _, t, payload = line.split(' ', 3)
-            snaps.append((float(t), json.loads(payload)))
+            # '# diag <t> <json>'; '# diag unavailable: ...' and '# diag
+            # snapshot failed: ...' are warnings, not snapshots.
+            parts = line.split(' ', 3)
+            try:
+                snaps.append((float(parts[2]), json.loads(parts[3])))
+            except (IndexError, ValueError):
+                pass
             continue
         parts = line.split()
         if (len(parts) < 4 or line.startswith('#')
@@ -322,7 +327,23 @@ class LoggedDevice:
         return self.dev.read(*args, **kwargs)
 
 
-def make_reader(dev, log: Log, timeout_ms: int):
+def tx_terminal(got, ch):
+    """The TX_COMPLETED / TX_FAILED code in frame `got` for channel `ch`,
+    else None."""
+    if (got and got[0] == w.MESG_RESPONSE_EVENT_ID and len(got[1]) >= 3
+            and got[1][0] & 0x1F == ch and got[1][1] == w.MESG_EVENT_ID
+            and got[1][2] in (w.EVENT_TRANSFER_TX_COMPLETED,
+                              w.EVENT_TRANSFER_TX_FAILED)):
+        return got[1][2]
+    return None
+
+
+def make_reader(dev, log: Log, timeout_ms: int, fec_ch: int | None = None):
+    """A FrameReader that logs every frame and queues FE-C TX terminals in
+    `.terminals`. The queue sees frames other readers consume: ant_diag's
+    page request discards everything but its reply, so a terminal arriving
+    during a snapshot would otherwise be lost and its command counted
+    no_terminal."""
     from ant_probe import FrameReader
 
     class LoggedReader(FrameReader):
@@ -330,9 +351,14 @@ def make_reader(dev, log: Log, timeout_ms: int):
             got = super().next_frame(deadline)
             if got is not None:
                 log.message('dev->host', got[0], got[1])
+                code = tx_terminal(got, fec_ch)
+                if code is not None:
+                    self.terminals.append(code)
             return got
 
-    return LoggedReader(dev, timeout_ms=timeout_ms)
+    reader = LoggedReader(dev, timeout_ms=timeout_ms)
+    reader.terminals = []
+    return reader
 
 
 def command(dev, reader, msg, body):
@@ -383,9 +409,10 @@ def run(args) -> int:
             f'target={args.port or args.serial} label={args.label or "-"}')
     raw = open_device(True, port=args.port, serial=args.serial, baud=args.baud)
     dev = LoggedDevice(raw, log)
-    reader = make_reader(dev, log, SERIAL_READ_TIMEOUT_MS
-                         if isinstance(raw, SerialDevice) else READ_TIMEOUT_MS)
     fec_ch = ROLES['fec'][0]
+    reader = make_reader(dev, log, SERIAL_READ_TIMEOUT_MS
+                         if isinstance(raw, SerialDevice) else READ_TIMEOUT_MS,
+                         fec_ch=fec_ch)
     sent = completed = failed = dropped = 0
     diag = False
     try:
@@ -417,8 +444,18 @@ def run(args) -> int:
         next_tick = start + args.diag_every
         pending_since = None
         reported = 0
+        reader.terminals.clear()
         print('running; Ctrl-C to stop', flush=True)
         while args.seconds <= 0 or time.monotonic() < start + args.seconds:
+            # Settle terminals before the timeout check: one may have
+            # arrived inside the last snapshot.
+            for code in reader.terminals:
+                if code == w.EVENT_TRANSFER_TX_COMPLETED:
+                    completed += 1
+                else:
+                    failed += 1
+                pending_since = None
+            reader.terminals.clear()
             now = time.monotonic()
             if pending_since is not None and now - pending_since > PENDING_LIMIT_S:
                 dropped += 1
@@ -430,16 +467,7 @@ def run(args) -> int:
                 sent += 1
                 pending_since = now
                 next_send = max(next_send + args.interval, now)
-            got = reader.next_frame(time.monotonic() + 0.05)
-            if (got and got[0] == w.MESG_RESPONSE_EVENT_ID and len(got[1]) >= 3
-                    and got[1][0] & 0x1F == fec_ch and got[1][1] == w.MESG_EVENT_ID
-                    and got[1][2] in (w.EVENT_TRANSFER_TX_COMPLETED,
-                                      w.EVENT_TRANSFER_TX_FAILED)):
-                if got[1][2] == w.EVENT_TRANSFER_TX_COMPLETED:
-                    completed += 1
-                else:
-                    failed += 1
-                pending_since = None
+            reader.next_frame(time.monotonic() + 0.05)
             if time.monotonic() >= next_tick:
                 next_tick += args.diag_every
                 if diag:

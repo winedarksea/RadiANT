@@ -216,6 +216,15 @@ class Silence(unittest.TestCase):
         self.assertEqual(r["pending_at_reacquire"], 1)
         self.assertTrue(r["pass"], r)
 
+    def test_a_refused_first_command_after_reacquire_fails(self):
+        # The first submit after the reacquiring frame is refused; a later
+        # completion must not be credited as first_after.
+        ev = self.GOOD[:-2] + [(5.3, "submit"), (5.301, "refused"),
+                               (5.5, "submit"), (5.8, "completed")]
+        r = s.judge_silence(ev)
+        self.assertEqual(r["first_after"], "refused")
+        self.assertFalse(r["pass"])
+
     def test_no_drop_to_search_is_not_a_pass(self):
         r = s.judge_silence([(0.2, "submit"), (0.5, "completed")])
         self.assertFalse(r["pass"])

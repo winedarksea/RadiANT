@@ -287,8 +287,13 @@ def judge_silence(events: list[tuple[float, str]]) -> dict:
         elif kind == "refused":
             # A refusal can arrive after the reacquiring frame for a submit
             # made before it; it was never held, so it leaves that count.
-            if pending and pending.pop()["at_reacq"]:
+            p = pending.pop() if pending else None
+            if p and p["at_reacq"]:
                 out["pending_at_reacquire"] -= 1
+            # The first command after reacquiring was refused: it did not
+            # complete, and a later completion must not stand in for it.
+            if p and p["after"] and out["first_after"] is None:
+                out["first_after"] = kind
             if away:
                 out["refused_while_away"] += 1
         elif kind in ("completed", "failed"):

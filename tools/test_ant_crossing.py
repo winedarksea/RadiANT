@@ -149,6 +149,44 @@ class CrossingTests(unittest.TestCase):
         self.assertIn('  control pcap: not aligned', text)
         self.assertNotRegex(text, r'control pcap: \d+ / \d+ missed')
 
+    def test_parse_skips_diag_warnings(self):
+        # run() logs these when a build has no 0xF7 or a snapshot fails;
+        # parse() read them as '# diag <t> <json>' and raised ValueError.
+        lines = ['# ant_crossing epoch=1.0 channels=fec target=t label=-',
+                 '# diag unavailable: page 0: refused (response code 0x28).',
+                 '# diag snapshot failed: page 3: no 0xF7 reply after 2 tries.',
+                 '# diag 2.000 ' + json.dumps({'0': {'fields': {}}}),
+                 rx_line(1.0, 3, 100)]
+        epoch, snaps, events = x.parse(lines)
+        self.assertEqual([t for t, _ in snaps], [2.0])
+        self.assertEqual(len(events), 1)
+
+    def test_terminal_inside_a_snapshot_is_kept(self):
+        # ant_diag's page request discards frames that are not its reply; a
+        # TX_COMPLETED arriving mid-snapshot must still reach the counters.
+        from unittest import mock
+
+        import ant_diag
+        import ant_probe
+        from test_ant_diag import body
+        completed = (w.MESG_RESPONSE_EVENT_ID,
+                     bytes([3, w.MESG_EVENT_ID, w.EVENT_TRANSFER_TX_COMPLETED]))
+        other_ch = (w.MESG_RESPONSE_EVENT_ID,
+                    bytes([2, w.MESG_EVENT_ID, w.EVENT_TRANSFER_TX_FAILED]))
+        script = [completed, other_ch,
+                  (ant_diag.MESG_RADIANT_DIAG_ID, body(0, [0] * 8))]
+
+        class Sink:
+            def write(self, ep, data):
+                return len(data)
+        log = x.Log(None)
+        with mock.patch.object(ant_probe.FrameReader, 'next_frame',
+                               lambda self, deadline: script.pop(0) if script else None):
+            reader = x.make_reader(Sink(), log, 50, fec_ch=3)
+            pages = ant_diag.read_pages(Sink(), reader, [0])
+        self.assertIn('0', pages)
+        self.assertEqual(reader.terminals, [w.EVENT_TRANSFER_TX_COMPLETED])
+
     def test_grade_page(self):
         self.assertEqual(x.grade_page(0.0).hex(), '33ffffffff204eff')
         self.assertEqual(x.grade_page(1.5)[5:7], (20150).to_bytes(2, 'little'))
