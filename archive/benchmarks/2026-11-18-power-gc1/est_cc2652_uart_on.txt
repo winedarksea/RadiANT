@@ -1,0 +1,29 @@
+ESTIMATE — no current meter; datasheet currents
+===============================================
+board CC2652R/P LaunchXL (DC/DC); interval 2390.2 s from log (239 lines)
+
+component              duty/state                       mA     avg uA
+idle floor             always                        0.675     675.00
+radio TX +0 dBm        0.112 %                           7       7.05
+radio RX               0.436 %                         6.9      27.15
+HFXO (outside radio)   n/a                         UNKNOWN   excluded
+CPU active             5.563 %                        3.39     151.04
+UART (declared on)     always                       0.1675     167.50
+TOTAL (known parts)                                           1027.75
+EXCLUDED from the total: HFXO (outside radio)
+
+per broadcast: 275 us TX on-time -> 1923 nC at 7.0 mA; once per HR period (8070/32768 s) = 7.81 uA
+broadcast rate 4.060 /s (HR period = 4.060 /s)
+per RX window: 1074 us -> 7412 nC at 6.9 mA; once per HR period = 30.10 uA
+wakes: 37.4 idle entries /s
+
+citations (typical, 25 C, 3 V):
+  idle floor: TI CC2652R datasheet SWRS207J (rev. Nov 2023), 8.5 Power Consumption - Power Modes, Idle: supply systems and RAM powered, RCOSC_HF
+  radio TX +0 dBm: TI CC2652R datasheet SWRS207J (rev. Nov 2023), 8.6 Power Consumption - Radio Modes, TX 2.4 GHz PA (BLE), 0 dBm setting, 2440 MHz
+  radio RX: TI CC2652R datasheet SWRS207J (rev. Nov 2023), 8.6 Power Consumption - Radio Modes, radio receive current, 2440 MHz
+  HFXO (outside radio): UNKNOWN: CC2652R/P datasheets list no XOSC_HF current
+  HFXO (outside radio): excluded - not measured on this build
+  CPU active: TI CC2652R datasheet SWRS207J (rev. Nov 2023), 8.5 Power Consumption - Power Modes, Active: MCU running CoreMark at 48 MHz, RCOSC_HF
+  UART (declared on): TI CC2652R datasheet SWRS207J (rev. Nov 2023), 8.5 Iperi, UART: delta current, clock enabled, module idle
+note: Floor is Idle (675 uA): standby is off in this firmware; --ti-standby uses the standby row instead.
+mA = the cited datasheet row. Radio/CPU rows are counted over the floor (CONSTLAT over ION_IDLE0); overlaps are added, so this leans high.
