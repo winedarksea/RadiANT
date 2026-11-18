@@ -13,6 +13,18 @@
  * the RTC while the RF core is off is rounded UP by one RTC tick (about 122
  * RAT ticks), so the next real read after power-up can sit a little below it,
  * and the fold then jumps the clock forward by 2^32 ticks (about 1074 s).
+ * The same happens, by more, where the backend switches time base: before
+ * RF_open() and after RF_close() it reads an uptime-derived value, and the
+ * switch to or from the real RAT can step back thousands of ticks. So a
+ * largest back-step (bks_max on the log line) of up to ~130 ticks points at
+ * the RTC round-up, and one well above that at a time-base switch.
+ *
+ * BLIND SPOT. A back-step that straddles the counter's wrap point (previous
+ * read just past 0, the next just below 2^32) is not seen as a back-step: it
+ * reads as a forward step, the fold jumps there without adding 2^32, and the
+ * next read is classified RADIANT_RAT_STEP_WRAP. It shows up as an extra
+ * genuine wrap instead, so two wraps counted far less than 1074 s apart are a
+ * mis-fold too.
  *
  * The two cases are told apart by size. Reads come at least once a minute
  * (the backend's keepalive), far below half the 1074 s wrap, so a genuine wrap

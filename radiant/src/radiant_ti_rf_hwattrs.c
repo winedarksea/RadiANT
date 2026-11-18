@@ -27,11 +27,15 @@
  * With none of them on, this file is not compiled and Zephyr's definition is
  * the one linked: a default image is unchanged.
  *
- * REFUSED where the RF core is not ours alone or the board may need a callback
- * of its own: the cc2652p_dongle (its antenna switch is not settled, see its
- * defconfig) and every 802.15.4 coexistence build (Zephyr's 802.15.4 or BLE
- * driver, or radiant's coex fork, is a second RF client and the counts would
- * mix two clients' power cycles).
+ * REFUSED on a board that ships its own RFCC26XX_hwAttrs (Zephyr's
+ * board_antenna.c for the SKY13317 CC1352 LaunchPads and the Beagle boards:
+ * a duplicate definition, so say so rather than fail at link), and, for the
+ * power-diag callback, where the RF core is not ours alone or the board may
+ * need a callback of its own: the cc2652p_dongle (its antenna switch is not
+ * settled, see its defconfig) and every 802.15.4 coexistence build (Zephyr's
+ * 802.15.4 or BLE driver, or radiant's coex fork, is a second RF client and
+ * the counts would mix two clients' power cycles). The last two are keyed on
+ * CONFIG_RADIANT_POWER_DIAG so a later option decides for itself.
  *
  * WHAT THE COUNTS MEAN (CONFIG_RADIANT_POWER_DIAG).
  *
@@ -50,8 +54,12 @@
  *   pu_dur_us is the driver's own nPowerUpDuration for the current client:
  *   what it measured the last power-up to take (low-pass filtered, clamped to
  *   300..2500 us), and what it subtracts from a command's start time to
- *   decide when to wake. Read at the first dispatch after each power-up and
- *   at each power-down.
+ *   decide when to wake. Read at every dispatch and at each power-down, so
+ *   it is the value as of the driver's last measurement. That lags by one
+ *   power-up at the first dispatch after a power-up: the RF hardware
+ *   interrupt dispatches the pending command (CmdStart) before the driver's
+ *   software interrupt, at the same priority, measures that power-up. The
+ *   power-down read sees it.
  *
  *   cold_late and tx_late compare the radio timer, read when the driver hands
  *   a command to the RF core (RF_GlobalEventCmdStart, just before the
@@ -68,11 +76,15 @@
  *   chained to a power-up setup fails (the driver's default callback ignores
  *   it). The backend installs radiant_ti_rf_err_cb() as its pErrCb.
  *
- * CONTEXTS. The driver invokes the global callback from its software
- * interrupt, its RF hardware interrupt and, through RF_postCmd(), from thread
- * context. Every update takes irq_lock for a few dozen instructions; the
- * CmdStart path, which runs just before every doorbell, reads one register and
- * touches no clock but the radio timer.
+ * CONTEXTS. Every site that invokes the global callback runs in interrupt
+ * context: the RF CPE0 hardware interrupt, the driver's software interrupt
+ * (on Zephyr a SwiP is itself the lowest-priority hardware interrupt) and a
+ * ClockP expiry (a k_timer, also an interrupt). RF_postCmd() never calls it
+ * directly. Every update still takes irq_lock, because those interrupts and
+ * the thread that reads the counters can preempt one another; each holds it
+ * for a few dozen instructions. The CmdStart path, which runs just before
+ * every doorbell, reads one register and touches no clock but the radio
+ * timer. radiant_ti_rf_err_cb() is called from the software interrupt.
  */
 
 #include <stdbool.h>
@@ -104,18 +116,33 @@
 	"RADIANT_CC26XX_RF_HWATTRS selects it); without it hal_ti defines a second one"
 #endif
 
-#if defined(CONFIG_BOARD_CC2652P_DONGLE)
-#error "radiant's RFCC26XX_hwAttrs is refused on the cc2652p_dongle: its antenna " \
-	"switch may need a callback of its own (see the board defconfig). Turn off " \
-	"CONFIG_RADIANT_POWER_DIAG for this board."
+/* Zephyr compiles a board_antenna.c defining RFCC26XX_hwAttrs (with an
+ * antenna-switch callback) on exactly the boards that define this symbol:
+ * boards/ti/common for the SKY13317 CC1352 LaunchPads, and both Beagle
+ * boards. The board's own defconfig sets HAS_CUSTOM_RF_HWATTRS, so the check
+ * above does not catch it. */
+#if defined(CONFIG_BOARD_ANTENNA_INIT_PRIO) || defined(CONFIG_BOARD_CC1352_LP_SKY13317) || \
+	defined(CONFIG_BOARD_BEAGLECONNECT_FREEDOM) || defined(CONFIG_BOARD_BEAGLEPLAY)
+#error "this board defines its own RFCC26XX_hwAttrs (Zephyr's board_antenna.c, with " \
+	"an antenna-switch callback); radiant_ti_rf_hwattrs.c would be a second one. " \
+	"Turn off the option that selects CONFIG_RADIANT_CC26XX_RF_HWATTRS " \
+	"(CONFIG_RADIANT_POWER_DIAG) for this board."
 #endif
 
-#if defined(CONFIG_RADIANT_BACKEND_CC26XX_COEX) || defined(CONFIG_RADIANT_COEX154_CC26XX_FORK) || \
-	defined(CONFIG_IEEE802154_CC13XX_CC26XX) || \
-	defined(CONFIG_IEEE802154_CC13XX_CC26XX_SUB_GHZ) || defined(CONFIG_BLE_CC13XX_CC26XX)
-#error "radiant's RFCC26XX_hwAttrs is refused on a build with a second RF client " \
-	"(802.15.4/BLE coexistence): the RF core's power cycles are not radiant's alone. " \
-	"Turn off CONFIG_RADIANT_POWER_DIAG for this build."
+#if defined(CONFIG_RADIANT_POWER_DIAG) && defined(CONFIG_BOARD_CC2652P_DONGLE)
+#error "radiant's power-diag RF callback is refused on the cc2652p_dongle: its " \
+	"antenna switch may need a callback of its own (see the board defconfig). " \
+	"Turn off CONFIG_RADIANT_POWER_DIAG for this board."
+#endif
+
+#if defined(CONFIG_RADIANT_POWER_DIAG) && \
+	(defined(CONFIG_RADIANT_BACKEND_CC26XX_COEX) || \
+	 defined(CONFIG_RADIANT_COEX154_CC26XX_FORK) || \
+	 defined(CONFIG_IEEE802154_CC13XX_CC26XX) || \
+	 defined(CONFIG_IEEE802154_CC13XX_CC26XX_SUB_GHZ) || defined(CONFIG_BLE_CC13XX_CC26XX))
+#error "radiant's power-diag RF callback is refused on a build with a second RF " \
+	"client (802.15.4/BLE coexistence): the RF core's power cycles are not " \
+	"radiant's alone. Turn off CONFIG_RADIANT_POWER_DIAG for this build."
 #endif
 
 #if defined(CONFIG_RADIANT_POWER_DIAG)
@@ -140,7 +167,8 @@ static struct {
 
 /* AON RTC units (32.32 fixed-point seconds) to microseconds. The low 16
  * fraction bits are below the RTC's 1/32768 s step, so dropping them first
- * loses nothing and keeps the product in 64 bits for 8900 years. */
+ * loses nothing and keeps the product in 64 bits for about 8.9 years of
+ * accumulated on-time (2^64 / 10^6 / 2^16 s). */
 static uint64_t rtc_to_us(uint64_t rtc)
 {
 	return ((rtc >> 16) * 1000000u) >> 16;
@@ -160,10 +188,9 @@ static void note_cmd_start(RF_Handle h, const RF_Cmd *cmd)
 	int32_t late;
 
 	trf.first_cmd = false;
-	if (first) {
-		/* The driver has measured this power-up by now. */
-		note_pu_dur(h);
-	}
+	/* As of the driver's last measurement: at the first dispatch after a
+	 * power-up, that power-up is not measured yet (see the header). */
+	note_pu_dur(h);
 	/* Only an absolute start can be late, and the radio timer only runs
 	 * while the core is on (it always is at a dispatch). */
 	if (op == NULL || !trf.on || op->startTrigger.triggerType != TRIG_ABSTIME) {

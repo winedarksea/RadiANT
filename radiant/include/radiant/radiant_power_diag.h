@@ -139,7 +139,14 @@
  *   previous one by less than 2^31 ticks - not a wrap - which the
  *   backend's fold nevertheless treated as one, adding 2^32 ticks (1074 s)
  *   to the clock (src/radiant_rat_fold.h). Measurement only: the fold is
- *   unchanged. Nonzero means that clock jump happened.
+ *   unchanged. Nonzero means that clock jump happened. Two blind spots, both
+ *   on the log line (rat_fold.h has the detail): a back-step that straddles
+ *   the counter's wrap point is not counted here but shows as an extra
+ *   genuine wrap, so two `wraps` far less than 1074 s apart are a mis-fold
+ *   too; and a largest back-step (bks_max) well above ~130 ticks is not the
+ *   RTC round-up but a switch of time base (radiant_radio_disable()/enable()
+ *   moving between the RAT and the uptime-derived clock can step back
+ *   thousands of ticks).
  *
  * ZERO COST WHEN OFF. Without CONFIG_RADIANT_POWER_DIAG the hook functions
  * below are empty static inlines, radiant_power_diag.c is not built and no
