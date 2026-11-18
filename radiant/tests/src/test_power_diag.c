@@ -25,6 +25,8 @@
 
 #include <radiant/radiant_power_diag.h>
 
+#include "../../src/radiant_rat_fold.h"
+
 ZTEST_SUITE(radiant_power_diag, NULL, NULL, NULL, NULL, NULL);
 
 /* --- Layout: the offsets are what an SWD script decodes --- */
@@ -288,6 +290,50 @@ ZTEST(radiant_power_diag, test_hfxo_clock_behind_since_adds_nothing)
 	zassert_equal(radiant_power_diag_hfxo_held(&h, 900u), 0u);
 }
 
+/* --- The cc26xx radio-timer fold: wrap or back-step (ti_fold_backsteps) --- */
+
+ZTEST(radiant_power_diag, test_rat_step_forward)
+{
+	zassert_equal(radiant_rat_step_classify(1000u, 1000u), RADIANT_RAT_STEP_FORWARD);
+	zassert_equal(radiant_rat_step_classify(1000u, 1001u), RADIANT_RAT_STEP_FORWARD);
+	zassert_equal(radiant_rat_step_classify(0u, 0xFFFFFFFFu), RADIANT_RAT_STEP_FORWARD);
+	zassert_equal(radiant_rat_backstep_ticks(1000u, 1001u), 0u);
+}
+
+ZTEST(radiant_power_diag, test_rat_step_genuine_wrap)
+{
+	/* The keepalive samples once a minute (240 M ticks): a wrap seen at
+	 * any sampling interval below half the 2^32 period. */
+	zassert_equal(radiant_rat_step_classify(0xFFFFFF00u, 0x00000010u),
+		      RADIANT_RAT_STEP_WRAP);
+	zassert_equal(radiant_rat_step_classify(0xF0000000u, 0x0E4E1C00u),
+		      RADIANT_RAT_STEP_WRAP);
+	/* Exactly 2^31 behind is the boundary, and counts as a wrap. */
+	zassert_equal(radiant_rat_step_classify(0x80000000u, 0x00000000u),
+		      RADIANT_RAT_STEP_WRAP);
+	zassert_equal(radiant_rat_backstep_ticks(0xFFFFFF00u, 0x10u), 0u);
+}
+
+ZTEST(radiant_power_diag, test_rat_step_small_backstep)
+{
+	/* An RTC-synthesised read while the RF core is off is rounded up one
+	 * 32768 Hz tick, about 122 radio-timer ticks; the next real read can
+	 * land that far behind it. */
+	zassert_equal(radiant_rat_step_classify(5000122u, 5000000u),
+		      RADIANT_RAT_STEP_BACK);
+	zassert_equal(radiant_rat_backstep_ticks(5000122u, 5000000u), 122u);
+	zassert_equal(radiant_rat_step_classify(1u, 0u), RADIANT_RAT_STEP_BACK);
+	zassert_equal(radiant_rat_backstep_ticks(1u, 0u), 1u);
+	/* One tick short of the boundary is still a back-step, and a back-step
+	 * across the top of the counter is still small. */
+	zassert_equal(radiant_rat_step_classify(0x80000000u, 0x00000001u),
+		      RADIANT_RAT_STEP_BACK);
+	zassert_equal(radiant_rat_backstep_ticks(0x80000000u, 0x00000001u),
+		      0x7FFFFFFFu);
+	zassert_equal(radiant_rat_step_classify(0xFFFFFFFFu, 0xFFFFFF85u),
+		      RADIANT_RAT_STEP_BACK);
+}
+
 /* --- The seq protocol --- */
 
 ZTEST(radiant_power_diag, test_publish_leaves_seq_even_and_advanced)
@@ -376,7 +422,8 @@ ZTEST(radiant_power_diag, test_global_header_and_sentinels)
 	zassert_equal(d.magic, RADIANT_POWER_DIAG_MAGIC);
 	zassert_equal(d.version, RADIANT_POWER_DIAG_VERSION);
 	zassert_equal(d.size, RADIANT_POWER_DIAG_SIZE);
-	/* No TI pass yet, and this image's radio is the fake. */
+	/* The ti_* fields are cc26xx only, and this image's radio is the fake. */
+	zassert_equal(d.flags & RADIANT_POWER_DIAG_F_TI, 0u);
 	zassert_equal(d.ti_rf_core_on_us, RADIANT_POWER_DIAG_NOT_MEASURED);
 	zassert_equal(d.ti_rf_powerups, RADIANT_POWER_DIAG_NOT_MEASURED);
 	zassert_equal(d.ti_rf_pu_dur_us, RADIANT_POWER_DIAG_NOT_MEASURED);
