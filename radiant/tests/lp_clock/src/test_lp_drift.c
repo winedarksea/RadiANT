@@ -10,9 +10,11 @@
  *
  * THE MODEL. Physical time is counted in "pu", 2^-20 us. The HFXO is the
  * physical reference (1 us = 2^20 pu exactly). HFINT, which clocks the TIMER
- * while the HFXO is starting, runs hfint_ppm off it (+1.5 % here). The LF
- * crystal ticks every tick_pu, its nominal period plus a ppm offset. Each
- * cycle:
+ * while the HFXO is starting, runs hfint_ppm off it (+-1.5 % here). The LF
+ * crystal ticks every tick_pu, its nominal period plus a ppm offset: +-60 ppm
+ * and -30 ppm on the RTC runs, -58.5 ppm on the GRTC run, covering the -30
+ * (nRF54L15 DK) and -58.5 ppm (Pro Micro clone) HF-vs-LF steps spike B1
+ * measured. Each cycle:
  *
  *   awake    the TIMER reads seg_base_us + whole us since it started; any
  *            part of that spent before the HFXO was stable counted at the
@@ -38,7 +40,7 @@
  * LF image, the asleep reading equals the reference by construction - both
  * are the same multiply - so "zero asleep error" is not news about the
  * arithmetic. What is tested is everything around it: that under +-1 us
- * anchor jitter, +-50 ppm LF offset and an HFINT clock during start-up the
+ * anchor jitter, +-60 ppm LF offset and an HFINT clock during start-up the
  * release takes the LF image every time it should (and the TIMER on every
  * linger), so the reference never has to move; that the 24-bit RTC wrap
  * (~50 times a run), junk above a raw counter's width, an extended counter
@@ -71,7 +73,7 @@
 #define CYCLES    100000u
 #define PERIOD_US 246277u             /* ANT+ period 8070/32768 s, in us */
 #define ARM_US    300u                /* the backend's arming lead */
-#define HFXO_US   1650u               /* nRF54L15 devicetree start-up */
+#define HFXO_US   800u                /* nRF54L15 default (spike B1 S4) */
 #define HFXO_LEAD (HFXO_US + RADIANT_LP_HFXO_ISR_MARGIN_US)
 #define KEEP_US   3000u
 
@@ -386,7 +388,7 @@ static struct sim_result res;
 ZTEST(radiant_lp_drift, test_rtc_lf_fast_no_drift)
 {
 	static const struct sim_cfg c = {
-		RTC_CFG(50),
+		RTC_CFG(60),
 		.width = RADIANT_LP_RTC_WIDTH,
 		.k_offset = 0xFFFFFFu - 1000u,
 		.junk = UINT64_C(0x5A) << 32,
@@ -402,7 +404,7 @@ ZTEST(radiant_lp_drift, test_rtc_lf_fast_no_drift)
 ZTEST(radiant_lp_drift, test_rtc_lf_slow_no_drift)
 {
 	static const struct sim_cfg c = {
-		RTC_CFG(-50),
+		RTC_CFG(-60),
 		.width = RADIANT_LP_RTC_WIDTH,
 		.k_offset = 12345u,
 		.tol_us = RADIANT_LP_RELEASE_TOL_US,
@@ -419,7 +421,7 @@ ZTEST(radiant_lp_drift, test_rtc_extended_no_drift)
 {
 	static const struct sim_cfg c = {
 		.num = RADIANT_LP_RTC_NUM, .shift = RADIANT_LP_RTC_SHIFT,
-		.tick_pu = 32000000 + 20 * 32,
+		.tick_pu = 32000000 - 30 * 32,
 		.min_lead = RADIANT_LP_RTC_MIN_LEAD_TICKS,
 		.hfint_ppm = -15000,
 		.width = RADIANT_LP_EXTENDED_WIDTH,
@@ -433,13 +435,13 @@ ZTEST(radiant_lp_drift, test_rtc_extended_no_drift)
 	assert_clean(&res, CYCLES / 1000u);
 }
 
-/* GRTC, 1 MHz nominal (1048576 pu), +52 pu = +49.6 ppm. */
+/* GRTC, 1 MHz nominal (1048576 pu), -61 pu = -58.2 ppm. */
 ZTEST(radiant_lp_drift, test_grtc_no_drift)
 {
 	static const struct sim_cfg c = {
 		.num = RADIANT_LP_GRTC_NUM, .shift = RADIANT_LP_GRTC_SHIFT,
 		.width = RADIANT_LP_GRTC_WIDTH,
-		.tick_pu = 1048576 + 52,
+		.tick_pu = 1048576 - 61,
 		.k_offset = (UINT64_C(1) << 52) - 100000u,
 		.junk = UINT64_C(0xA5) << 56,
 		.min_lead = RADIANT_LP_GRTC_MIN_LEAD_TICKS,
@@ -496,9 +498,9 @@ ZTEST(radiant_lp_drift, test_control_timer_anchored_releases_drift)
 
 /*
  * Negative control: one wake edge for both the HFXO request and the TIMER
- * start. The TIMER counts the 1650 us start-up on HFINT, 1.5 % fast: ~26 us
+ * start. The TIMER counts the ~850 us start-up on HFINT, 1.5 % fast: ~13 us
  * out at every release, beyond the tolerance, so the TIMER's reading is taken
- * every period and the error is kept - seconds over the run.
+ * every period and the error is kept - about a second over the run.
  */
 ZTEST(radiant_lp_drift, test_control_single_edge_wake_drifts)
 {
@@ -514,7 +516,7 @@ ZTEST(radiant_lp_drift, test_control_single_edge_wake_drifts)
 	zassert_true(res.hfint_segments == CYCLES);
 	zassert_true(res.timer_releases > CYCLES - CYCLES / 100u,
 		     "only %u releases fell back", res.timer_releases);
-	zassert_true(res.max_asleep_err_q > (UINT64_C(1000000) << c.shift),
+	zassert_true(res.max_asleep_err_q > (UINT64_C(100000) << c.shift),
 		     "only %u q of drift", (uint32_t)MIN(res.max_asleep_err_q,
 							 UINT32_MAX));
 }

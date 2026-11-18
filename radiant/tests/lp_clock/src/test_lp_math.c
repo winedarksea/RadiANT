@@ -723,7 +723,7 @@ static void check_wake_plan(const struct radiant_lp_tb *tb, uint32_t n)
 {
 	struct radiant_lp_clock c;
 	const uint32_t arm = 300u;
-	const uint32_t hfxo = 1650u + RADIANT_LP_HFXO_ISR_MARGIN_US;
+	const uint32_t hfxo = 800u + RADIANT_LP_HFXO_ISR_MARGIN_US;
 	uint64_t lead = radiant_lp_wake_lead_us(tb, arm, hfxo);
 
 	for (uint32_t i = 0; i < n; i++) {

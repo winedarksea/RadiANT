@@ -783,9 +783,13 @@ config RADIANT_NRF_LOW_POWER
 	             operation.
 
 	  The TIMER is started on a second edge, not on the HFXO request,
-	  because until the crystal is up the HF clock is HFINT (~1 %): a
-	  TIMER counting the start-up on it would be ~16 us out at every
-	  release, and that error would be kept each period. Between the
+	  because until the crystal is up the HF clock is HFINT, accurate
+	  only to the order of a percent: a TIMER counting the start-up on
+	  it could be several us out at every release, and that error would
+	  be kept each period. Only LF compare events anchor the TIMER;
+	  a GRTC capture triggered while the CPU sleeps reads a stale
+	  counter and is never used (spike B1,
+	  docs/spike-lp-clock-results.md). Between the
 	  edges now = max(last value, anchor + exact LF-to-us conversion),
 	  with the sub-microsecond fraction carried so that conversions never
 	  add up to drift (src/radiant_radio_nrf_lp.h). Over a gap the
@@ -803,7 +807,7 @@ config RADIANT_NRF_LOW_POWER
 	  in steady state is awake about 4.5 ms per period (~2 % duty).
 
 	  ACCEPTED BEHAVIOUR CHANGE: each operation after a sleep depends on
-	  an interrupt about 1.8 ms before it (edge 1, which requests the
+	  an interrupt about 1 ms before it (edge 1, which requests the
 	  HFXO) and on the HFXO being stable when edge 2 starts the TIMER.
 	  An irq_lock(), a flash erase or a higher-priority interrupt that
 	  holds the CPU across edge 1 costs the slot: the operation fails
@@ -822,26 +826,33 @@ config RADIANT_NRF_LP_HFXO_STARTUP_US
 	int "HFXO start-up time the low-power wake allows for, us"
 	depends on RADIANT_NRF_LOW_POWER
 	range 100 10000
-	# The same source MPSL takes its MPSL_HFCLK_LATENCY default from: the
-	# SoC devicetree's hfxo startup-time-us (1650 on the nRF54L05/10/15 and
-	# nRF54LM20), and MPSL's own 1400 where the devicetree states none
-	# (nRF52840, nRF5340).
+	# Spike B1 S4 (docs/spike-lp-clock-results.md), request -> callback,
+	# 1000 samples per CONSTLAT mode, HFXO off before each: nRF54L15 DK
+	# p99.9 679-680 us, max 680 (CONSTLAT no effect) -> 800; Pro Micro
+	# nRF52840 clone p99.9 379-405 us, max 418 -> 500. The nRF5340 network
+	# core was not measured, so it keeps the conservative figure MPSL
+	# assumes for MPSL_HFCLK_LATENCY: the devicetree's hfxo startup-time-us
+	# where there is one, else MPSL's own 1400.
+	default 800 if SOC_COMPATIBLE_NRF54LX
+	default 500 if SOC_COMPATIBLE_NRF52X
 	default $(dt_node_int_prop_int,/clocks/hfxo,startup-time-us) if $(dt_node_has_prop,/clocks/hfxo,startup-time-us)
 	default 1400
 	help
 	  The time from the HFXO request (edge 1) to a crystal stable enough
-	  to start the TIMER on (edge 2). Too short and the TIMER counts
-	  part of the start-up on HFINT and the radio may ramp on an
-	  unsettled clock (late wakes, counted); too long and every period
-	  spends the excess awake.
+	  to start the TIMER on (edge 2), measured from onoff_request() to
+	  the clock callback; edge 1's own interrupt latency is budgeted
+	  separately. Too short and the TIMER counts part of the start-up on
+	  HFINT and the radio may ramp on an unsettled clock (late wakes,
+	  counted); too long and every period spends the excess awake.
 
-	  The default is the SoC devicetree's hfxo startup-time-us where it
-	  has one (1650 us on the nRF54L15), else 1400 us, which is the
-	  figure MPSL assumes for MPSL_HFCLK_LATENCY on parts whose
-	  devicetree gives none (nRF52840, nRF5340 network core). Both are
-	  conservative typical figures, not measurements on this bench; the
-	  power plan's spike B1 (S4) measures the start-up distribution with
-	  CONSTLAT and may lower them.
+	  Defaults, from the power plan's spike B1 (one board of each kind;
+	  start-up depends on the crystal and its load capacitors, so a
+	  different board may need its own figure): 800 us on the nRF54L
+	  (the nRF54L15 DK's maximum was 680 us), 500 us on the nRF52840 (the
+	  Pro Micro clone's maximum was 418 us). Elsewhere, including the
+	  unmeasured nRF5340 network core, the SoC devicetree's hfxo
+	  startup-time-us if it has one, else 1400 us, the figure MPSL
+	  assumes for MPSL_HFCLK_LATENCY.
 
 config RADIANT_NRF_LP_KEEP_ON_US
 	int "least idle gap worth sleeping through, beyond the wake lead, us"

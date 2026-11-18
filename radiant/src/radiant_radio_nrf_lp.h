@@ -33,15 +33,27 @@
  *             radiant_lp_wake() takes.
  *
  * WHY TWO WAKE EDGES. Requesting the HFXO does not stop the HF clock: until
- * the crystal is up the TIMER runs on HFINT, which is only ~1 % accurate. A
- * TIMER started on the HFXO request edge therefore gains or loses ~16 us
- * across a 1650 us start-up. The next release then sees the TIMER's reading
- * that far from the LF image, beyond any sane tolerance, takes the TIMER's
- * (radiant_lp_release), and the error is kept: every period, so ~65 ppm of
- * drift at 4 Hz - the same failure as anchoring every release on the TIMER.
- * Starting the TIMER on a second edge, after start-up, keeps HFINT out of the
- * timebase altogether. radiant/tests/lp_clock's drift simulation models
- * HFINT and shows both outcomes.
+ * the crystal is up the TIMER runs on HFINT, whose specified accuracy is
+ * only of the order of a percent (spike B1 measured +0.13..0.16 % on one
+ * nRF52840; nothing on the nRF54L15). At 1 % a TIMER started on the HFXO
+ * request edge is ~7 us out after the nRF54L15's ~680 us start-up. The next
+ * release then sees the TIMER's reading that far from the LF image, beyond
+ * the tolerance, takes the TIMER's (radiant_lp_release), and the error is
+ * kept: every period, ~30 ppm of drift at 4 Hz - the same failure as
+ * anchoring every release on the TIMER. Starting the TIMER on a second edge,
+ * after start-up, keeps HFINT out of the timebase altogether, whatever HFINT
+ * turns out to be. radiant/tests/lp_clock's drift simulation models HFINT
+ * and shows both outcomes.
+ *
+ * THE ANCHOR SOURCE (spike B1, docs/spike-lp-clock-results.md). Anchor ONLY
+ * with an LF COMPARE event driving the TIMER: START on a wake, a fork to
+ * CAPTURE[5] on a release (and on a re-anchor). Compare events are exact
+ * while the CPU sleeps: {-1, 0} us on the nRF54L15, -1.125..+0.875 us on the
+ * nRF52840, over 20 000 cycles each. NEVER anchor the other way, with a TIMER
+ * or RADIO event triggering a GRTC CAPTURE by DPPI: while the CPU sleeps the
+ * GRTC's 1 MHz SYSCOUNTER stops ~170-200 us after the CPU last ran, and such
+ * a capture read 270-830 us early. Software reads (z_nrf_grtc_timer_read())
+ * are made awake and are fine.
  *
  * Everything in this file is the bookkeeping between those edges and the
  * decisions around them; none of it touches a register, so
@@ -108,13 +120,27 @@
  * hwm_us - runs under the backend's CLOCK_LOCK, the same critical section as
  * its TIMER fold (PRIMASK on an MPSL build, so ZLI-safe there).
  *
- * FOR PASS B3 (not done here): BUILD_ASSERT that the system timer has the two
- * user channels this needs (CONFIG_NRF_RTC_TIMER_USER_CHAN_COUNT >= 2 on RTC1;
- * free GRTC channels for z_nrf_grtc_timer_chan_alloc() on the nRF54L), choose
- * the RTC or GRTC format by which system timer is enabled (CONFIG_NRF_RTC_TIMER
- * / CONFIG_NRF_GRTC_TIMER) rather than by SoC, and BUILD_ASSERT the frequency
- * the chosen format assumes (CONFIG_CLOCK_CONTROL_NRF_K32SRC_FREQUENCY ==
- * 32768; the GRTC node's clock-frequency == 1000000).
+ * FOR PASS B3 (not done here):
+ *   - BUILD_ASSERT that the system timer has the two user channels this
+ *     needs (CONFIG_NRF_RTC_TIMER_USER_CHAN_COUNT >= 2 on RTC1 - the Pro
+ *     Micro build has exactly 2; free z_nrf_grtc_timer_chan_alloc()
+ *     channels on the nRF54L - the spike found 4, with or without MPSL).
+ *   - Choose the RTC or GRTC format by which system timer is enabled
+ *     (CONFIG_NRF_RTC_TIMER / CONFIG_NRF_GRTC_TIMER), not by SoC, and
+ *     BUILD_ASSERT the frequency it assumes
+ *     (CONFIG_CLOCK_CONTROL_NRF_K32SRC_FREQUENCY == 32768; the GRTC node's
+ *     clock-frequency == 1000000).
+ *   - On the nRF54L15 the GRTC and TIMER20 are both on DPPIC20: the anchor
+ *     is one same-domain DPPI channel, no PPIB, no cross-domain failure path.
+ *   - On the nRF52, TIMER SHUTDOWN (anomaly 78) zeroes the counter but keeps
+ *     the CC registers: read the release capture (CC5) BEFORE SHUTDOWN.
+ *   - Nothing to restore after a wake: the spike found every RADIO, TIMER
+ *     and (D)PPI register retained across HFXO-off System ON idle on both
+ *     SoCs, so no register shadow is needed for this.
+ *   - Expect a constant rate step: asleep intervals run at the LFXO rate,
+ *     awake ones at the HFXO rate, and the spike measured them -30 ppm
+ *     apart on the nRF54L15 DK and -58.5 ppm on the Pro Micro clone (7.4 and
+ *     14.4 us per 246 ms HR period spent asleep). Not an accumulating error.
  */
 
 #ifndef RADIANT_RADIO_NRF_LP_H_
@@ -161,19 +187,22 @@ extern "C" {
 /*
  * How far the LF image of a release edge may sit from the TIMER's capture of
  * it, in us, and still be taken (radiant_lp_release). The budget: 1 us for
- * the capture's whole-us quantisation, 1 us of anchor jitter (the (D)PPI
- * start and capture latencies; spike B1's S3 target is +-1 us) and the
- * HF-vs-LF crystal difference over a short awake segment (+-60 ppm over
- * 6 ms is 0.4 us): 2.4 us, so 3. It is also the most a release can move the
+ * the capture's whole-us quantisation, 1.125 us of anchor jitter (spike B1
+ * S3: -1.125..+0.875 us on the nRF52840 RTC path, {-1, 0} us on the
+ * nRF54L15 GRTC) and the HF-vs-LF crystal difference over a short awake
+ * segment (the spike measured -30 and -58.5 ppm; +-60 ppm over 6 ms is
+ * 0.36 us): 2.5 us, so 3. It is also the most a release can move the
  * timebase. It assumes the TIMER ran on the HFXO for the whole segment
- * (EDGE 2 above); S3's measurement may revise it.
+ * (EDGE 2 above).
  */
 #define RADIANT_LP_RELEASE_TOL_US 3u
 
 /*
  * Time from EDGE 1's compare event to the HFXO request actually issued: the
- * compare interrupt's latency, in us, on top of the crystal's start-up. A
- * starting value; B3 counts late wakes, which is how a too-small one shows.
+ * compare interrupt's latency, in us. CONFIG_RADIANT_NRF_LP_HFXO_STARTUP_US
+ * is measured from onoff_request() to the clock callback (spike B1 S4), so
+ * this comes on top of it: EDGE 1 = EDGE 2 - (start-up + this). A starting
+ * value; B3 counts late wakes, which is how a too-small one shows.
  */
 #define RADIANT_LP_HFXO_ISR_MARGIN_US 100u
 
