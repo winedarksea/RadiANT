@@ -68,6 +68,9 @@ rsource "../common/Kconfig.heartbeat_led"
 # the one way to read SCHED_DENIED off a running image.
 rsource "../common/Kconfig.health"
 
+# CONFIG_ANT_DONGLE_BRIDGE_STACK_SIZE: the serial bridge thread's stack.
+rsource "../common/Kconfig.bridge"
+
 choice ANT_DONGLE_RADIO
 	prompt "ANT radio backend"
 	default ANT_DONGLE_RADIO_CORE

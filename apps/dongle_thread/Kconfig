@@ -226,6 +226,9 @@ rsource "../common/Kconfig.heartbeat_led"
 # CONFIG_ANT_DONGLE_HEALTH_COUNTERS: the 0xF6 reply, shared with apps/dongle.
 rsource "../common/Kconfig.health"
 
+# CONFIG_ANT_DONGLE_BRIDGE_STACK_SIZE: the serial bridge thread's stack.
+rsource "../common/Kconfig.bridge"
+
 choice ANT_DONGLE_RADIO
 	prompt "ANT radio backend"
 	default ANT_DONGLE_RADIO_CORE

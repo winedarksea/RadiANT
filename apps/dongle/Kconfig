@@ -308,6 +308,10 @@ rsource "../common/Kconfig.heartbeat_led"
 # rather than caution about the feature.
 rsource "../common/Kconfig.health"
 
+# CONFIG_ANT_DONGLE_BRIDGE_STACK_SIZE: the serial bridge thread's stack, which
+# every host command (0xF5 pairing included) runs on. See that file's header.
+rsource "../common/Kconfig.bridge"
+
 # CONFIG_ANT_DONGLE_RGB_LED: the activity-rate NeoPixel indicator. Off by
 # default, and sourced only here - see that file for why apps/dongle_thread
 # deliberately does not get it (the no-cost-to-the-radio argument does not

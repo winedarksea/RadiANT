@@ -2565,6 +2565,146 @@ ZTEST(api, test_sec_host_pairing_holds_api_lock_and_its_hold_time)
 	(void)f5(HOST_CH, ANTW_RADIANT_PAIR_LEAVE, NULL, 0u, reply, &rlen);
 	host_done();
 }
+
+/*
+ * Security review 2026-11-17, item 1: the dongle runs every host command on
+ * the serial bridge thread, a 2,048 B stack (CONFIG_ANT_DONGLE_BRIDGE_STACK_SIZE),
+ * and the X25519 alone used to need 2,636 B of it - every other test here runs
+ * on the 4 KB ztest stack and could not see that. So this one runs the whole
+ * 0xF5 exchange, both ends, on a thread of the bridge's size and priority.
+ *
+ * Where it bites: on hardware with a stack limit (the nRF5340 DK's PSPLIM, run
+ * by scripts/run_ztest_hw.ps1) the old ladder faults on the first SCALAR. On
+ * native_sim a Zephyr thread runs on a host pthread stack, so there it checks
+ * the exchange only; the high-water assertion needs CONFIG_INIT_STACKS on a
+ * real target.
+ */
+#define PAIR_BRIDGE_STACK CONFIG_ANT_DONGLE_BRIDGE_STACK_SIZE
+K_THREAD_STACK_DEFINE(pair_bridge_stack, PAIR_BRIDGE_STACK);
+static struct k_thread pair_bridge_thread;
+
+struct pair_bridge_run {
+	int      failed_step;	/* 0 = every step answered as expected */
+	uint32_t fp_a;
+	uint32_t fp_b;
+};
+
+/* The host sequence of test_sec_host_pairing_commits_before_it_reveals, every
+ * 0xF5 command of it on this thread. No zassert here: a ztest assertion off
+ * the test thread does not fail the test cleanly, so each step is checked and
+ * the first that misbehaves is reported back. */
+static void pair_bridge_fn(void *p1, void *p2, void *p3)
+{
+	struct pair_bridge_run *r = p1;
+	uint8_t pub_a[RADIANT_SEC_X25519_BYTES];
+	uint8_t pub_b[RADIANT_SEC_X25519_BYTES];
+	uint8_t cb[RADIANT_SEC_BLOCK_BYTES];
+	uint8_t reply[2 + RADIANT_SEC_X25519_BYTES];
+	uint8_t rlen = 0u;
+	int     step = 0;
+
+	ARG_UNUSED(p2);
+	ARG_UNUSED(p3);
+
+#define PAIR_STEP(call, want_len)                                         \
+	do {                                                              \
+		step++;                                                   \
+		if ((call) != 0 || rlen != (uint8_t)(want_len)) {         \
+			r->failed_step = step;                            \
+			return;                                           \
+		}                                                         \
+	} while (0)
+
+	PAIR_STEP(f5(HOST_CH, ANTW_RADIANT_PAIR_ENTER, NULL, 0u, reply, &rlen),
+		  2u);
+	PAIR_STEP(f5(PEER_CH, ANTW_RADIANT_PAIR_ENTER, NULL, 0u, reply, &rlen),
+		  2u);
+	PAIR_STEP(f5(HOST_CH, ANTW_RADIANT_PAIR_SCALAR, pair_sa,
+		     sizeof(pair_sa), reply, &rlen),
+		  2u + RADIANT_SEC_X25519_BYTES);
+	memcpy(pub_a, &reply[2], sizeof(pub_a));
+	PAIR_STEP(f5(PEER_CH, ANTW_RADIANT_PAIR_SCALAR, pair_sb,
+		     sizeof(pair_sb), reply, &rlen),
+		  2u + RADIANT_SEC_X25519_BYTES);
+	memcpy(pub_b, &reply[2], sizeof(pub_b));
+	PAIR_STEP(f5(HOST_CH, ANTW_RADIANT_PAIR_EXCHANGE, pub_b, sizeof(pub_b),
+		     reply, &rlen),
+		  2u);
+	PAIR_STEP(f5(PEER_CH, ANTW_RADIANT_PAIR_EXCHANGE, pub_a, sizeof(pub_a),
+		     reply, &rlen),
+		  2u);
+	PAIR_STEP(f5(PEER_CH, ANTW_RADIANT_PAIR_NONCE, pair_nb_arg,
+		     sizeof(pair_nb_arg), reply, &rlen),
+		  2u + RADIANT_SEC_BLOCK_BYTES);
+	memcpy(cb, &reply[2], sizeof(cb));
+	PAIR_STEP(f5(HOST_CH, ANTW_RADIANT_PAIR_NONCE, pair_na_arg,
+		     sizeof(pair_na_arg), reply, &rlen),
+		  2u);
+	PAIR_STEP(f5(HOST_CH, ANTW_RADIANT_PAIR_PEER_COMMIT, cb, sizeof(cb),
+		     reply, &rlen),
+		  2u);
+	PAIR_STEP(f5(PEER_CH, ANTW_RADIANT_PAIR_PEER_NONCE, &pair_na_arg[1],
+		     RADIANT_SEC_PAIR_NONCE_BYTES, reply, &rlen),
+		  5u);
+	r->fp_b = rd24(&reply[2]);
+	PAIR_STEP(f5(HOST_CH, ANTW_RADIANT_PAIR_PEER_NONCE, &pair_nb_arg[1],
+		     RADIANT_SEC_PAIR_NONCE_BYTES, reply, &rlen),
+		  5u);
+	r->fp_a = rd24(&reply[2]);
+#undef PAIR_STEP
+	r->failed_step = 0;
+}
+
+ZTEST(api, test_sec_host_pairing_runs_on_the_bridge_stack)
+{
+	struct pair_bridge_run r = { .failed_step = -1 };
+	uint8_t reply[2 + RADIANT_SEC_X25519_BYTES];
+	uint8_t rlen = 0u;
+
+	host_assign(true, true);
+	zassert_ok(antr_channel_assign(PEER_CH,
+				       (uint8_t)ANTW_CHANNEL_TYPE_MASTER, 0u,
+				       0u));
+	zassert_ok(antr_channel_id_set(PEER_CH, PEER_DEVNUM, HOST_DEVTYPE,
+				       HOST_TRANS));
+
+	k_thread_create(&pair_bridge_thread, pair_bridge_stack,
+			K_THREAD_STACK_SIZEOF(pair_bridge_stack), pair_bridge_fn,
+			&r, NULL, NULL, ANTR_HOST_THREAD_PRIORITY, 0, K_NO_WAIT);
+	zassert_ok(k_thread_join(&pair_bridge_thread, K_FOREVER));
+
+	zassert_equal(0, r.failed_step,
+		      "0xF5 step %d failed on the bridge-sized stack",
+		      r.failed_step);
+	zassert_equal(r.fp_a, r.fp_b, "the two ends show different digits");
+	zassert_equal(PAIR_VEC_FP, r.fp_a);
+	zassert_equal(1u, enrolments_of(HOST_CH));
+	zassert_equal(1u, enrolments_of(PEER_CH));
+
+#if defined(CONFIG_INIT_STACKS) && defined(CONFIG_THREAD_STACK_INFO) && \
+	!defined(CONFIG_ARCH_POSIX)
+	{
+		size_t unused = 0u;
+		size_t size = pair_bridge_thread.stack_info.size;
+
+		zassert_ok(k_thread_stack_space_get(&pair_bridge_thread,
+						    &unused));
+		printk("0xF5 on the bridge stack: high-water %u of %u bytes\n",
+		       (unsigned int)(size - unused), (unsigned int)size);
+		/* The bridge's own frames and an interrupt sit on top of this
+		 * in the image, so a quarter stays free (the hardware
+		 * criterion of the 2026-11-17 plan: at most 1,536 of 2,048). */
+		zassert_true(size - unused <= (size * 3u) / 4u,
+			     "0xF5 used %u of %u bytes of the bridge stack",
+			     (unsigned int)(size - unused), (unsigned int)size);
+	}
+#endif
+
+	(void)f5(HOST_CH, ANTW_RADIANT_PAIR_LEAVE, NULL, 0u, reply, &rlen);
+	(void)f5(PEER_CH, ANTW_RADIANT_PAIR_LEAVE, NULL, 0u, reply, &rlen);
+	(void)antr_channel_unassign(PEER_CH);
+	host_done();
+}
 #endif /* CONFIG_RADIANT_SEC_PAIRING_X25519 */
 
 #endif /* CONFIG_RADIANT_SEC_LOCK_CHECK */
