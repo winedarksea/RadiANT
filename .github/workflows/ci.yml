@@ -447,4 +447,5 @@ jobs:
             -- -DEXTRA_CONF_FILE=lowpower.conf
           grep -qx 'CONFIG_RADIANT_BACKEND_NRF=y' build/zephyr/.config
           grep -qx '# CONFIG_SERIAL is not set' build/zephyr/.config
+          grep -qx '# CONFIG_LOG is not set' build/zephyr/.config
 

@@ -77,8 +77,9 @@
     Build just the targets whose artifact name matches this wildcard. The node
     rows (apps/hrm_ble) have no artifact, so they match on their
     build-directory name instead: -Only "node_*". The hr_transmitter sample
-    rows match either their directory or their artifact: -Only "hrtx_*",
-    -Only ti_hr_tx.
+    rows match on their build-directory name too, never on their artifact, so
+    "*nrf54l15dk*" or "*launchxl*" does not pull them in ("*promicro*" still
+    matches hrtx_promicro_lp by its directory): -Only "hrtx_*", -Only ti_hr_tx.
 
 .PARAMETER SkipDfu
     Do not package the dongle DFU zip (which needs nrfutil).
@@ -300,8 +301,10 @@ $treadmillTargets = @(
 # it must end up with and the build asserts it. Not affected by -RadiantBackend.
 #
 # The image goes to dist\ for bench flashing; none of these is a release
-# artifact. -Only matches the build directory OR the artifact name, so
-# -Only hrtx_l15_lp works as well as -Only "*hrtx*".
+# artifact. -Only matches the build directory only, as for the node rows, so
+# dongle patterns that match $targets' artifact names ("*nrf54l15dk*",
+# "*launchxl*") do not also build these. "*promicro*" still matches
+# hrtx_promicro_lp by its directory name. -Only "hrtx_*", -Only ti_hr_tx.
 #
 # Asserted below: the HAL, CONFIG_SERIAL and CONFIG_LOG off on the lowpower.conf
 # rows (no UART driver linked means no UARTE is ever enabled, which is the point
@@ -746,7 +749,7 @@ try {
         $sampleApp = Join-Path $repo 'radiant\samples\hr_transmitter'
 
         foreach ($t in $sampleTargets) {
-            if ($t.dir -notlike $Only -and $t.artifact -notlike $Only) { continue }
+            if ($t.dir -notlike $Only) { continue }
 
             $out = Join-Path $repo "build\$($t.dir)"
             Write-Host "`n=== hr_transmitter $($t.dir)  [$($t.board)]" -ForegroundColor Cyan
