@@ -1,0 +1,103 @@
+Found 0FCF:1009  bcdDevice=0x0100
+  manufacturer: RadiANT Project
+  product:      RadiANT ANT+ compatible USB stick
+  serial:       EE6986854FD72803
+
+Opening ANT+ receive channels
+  OK: extended messages
+  OK: ANT+ network key
+  OK: ch0 assign slave
+  OK: ch0 channel id
+  OK: ch0 radio frequency
+  OK: ch0 message period
+  OK: ch0 search timeout
+  OK: ch0 open
+  OK: channel 0 - heart rate, device type 0x78, pinned to #12345
+
+Listening for 300 s
+  ch0 22 pkts
+  ch0 43 pkts
+  ch0 64 pkts
+  ch0 85 pkts
+  ch0 106 pkts
+  ch0 127 pkts
+  ch0 148 pkts
+  ch0 169 pkts
+  ch0 190 pkts
+  ch0 211 pkts
+  ch0 232 pkts
+  ch0 253 pkts
+  ch0 274 pkts
+  ch0 295 pkts
+  ch0 316 pkts
+  ch0 337 pkts
+  ch0 358 pkts
+  ch0 379 pkts
+  ch0 400 pkts
+  ch0 421 pkts
+  ch0 442 pkts
+  ch0 463 pkts
+  ch0 484 pkts
+  ch0 505 pkts
+  ch0 526 pkts
+  ch0 547 pkts
+  ch0 567 pkts
+  ch0 588 pkts
+  ch0 609 pkts
+  ch0 630 pkts
+  ch0 651 pkts
+  ch0 672 pkts
+  ch0 693 pkts
+  ch0 714 pkts
+  ch0 735 pkts
+  ch0 756 pkts
+  ch0 777 pkts
+  ch0 798 pkts
+  ch0 819 pkts
+  ch0 840 pkts
+  ch0 861 pkts
+  ch0 882 pkts
+  ch0 903 pkts
+  ch0 924 pkts
+  ch0 945 pkts
+  ch0 966 pkts
+  ch0 987 pkts
+  ch0 1008 pkts
+  ch0 1029 pkts
+  ch0 1050 pkts
+  ch0 1071 pkts
+  ch0 1092 pkts
+  ch0 1113 pkts
+  ch0 1134 pkts
+  ch0 1155 pkts
+  ch0 1176 pkts
+  ch0 1197 pkts
+  ch0 1218 pkts
+
+Closing
+  OK: close ch0
+  OK: unassign ch0
+
+wrote build/gc1_run/verify.rec (1218 packets)
+
+=== heart-rate (device type 0x78, 8070 ticks) ===
+  OK   packets                1218 received, 1219 expected over 300.0 s
+  OK   loss                   0.08 % (limit 1.50 %, one packet = 0.08 %)
+  OK   jitter                 stddev 9.7 ms, max 485.0 ms (limit 123.1 ms, period 246.3 ms)
+  OK   accumulator continuity 0 violation(s)
+  OK   sensor liveness        the event counter advanced on 600 of 1217 packet pairs
+  FAIL common pages           80 x0, 81 x0, worst gap None (limit 121)
+  pages: 0x00 x1218
+  timing: 6.92 ms off the 246.3 ms slot grid by the host clock, 0.011 ms by the radio's
+  signal: mean -42.1 dBm (min -44, max -42, n=1218) - ANT tracks to about -90
+  wraps observed: beat_count x3, hr_event_time x5
+  attestation: clear - no key here, which is not the same as unprotected
+  heart_rate_bpm: mean 120.00 (min 120.00, max 120.00, n=600), mean abs error 0.00
+
+channel events: EVENT_RX_FAIL x1
+1 packet(s) missing, all of it reported by the radio as RX_FAIL, so it happened on the air.
+heard on channel 0: device #12345, type 0x78
+
+wrote build/gc1_run/verify.json
+
+FAILED

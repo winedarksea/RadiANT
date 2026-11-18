@@ -1,0 +1,13 @@
+lines 239  uptime 11.0 .. 2391.3 s  sum dt 2390.2 s
+tx  1115.3 us/s  4.0602 ops/s  274.7 us/op
+rx  4361.7 us/s  4.0602 ops/s  1074.2 us/op
+cpu_pm  mean 55.63  min 53  max 60
+idle/s  mean 37.42
+rfon_pm mean 17.43  min 17  max 18
+rfpu/s  4.0602 (9705 power-ups recovered from the floored x10 fields)  line min 3.9  max 4.0
+power-ups per TX op  1.0000   per RX op  1.0000
+rfon duty  17.43..18.43 per mille (floored lines)   = 17431..18431 us/s
+rfon per power-up  4293..4539 us
+pudur_us  median 448  min 424  max 480
+final cumulative: fsx=0 bks=0 bks_max=0 wraps=2 cold=0 txl=0 txl_max_us=0
+wraps changes (first line uptime at new value): 1@1081.1s, 2@2151.2s

@@ -392,4 +392,98 @@ received 1216 of 1219 packets: 4.053/s against a nominal 4.0605/s. All three
 missing packets were RX_FAIL, i.e. lost on the air. Radio-clock timing was
 0.007 ms off the slot grid, signal −43 dBm, 120 bpm exact. The TI has no
 power_diag figures until the C1 pass fills its fields, so no estimate is given
-here.
+here. Gate GC1, below, supplies them.
+
+### TI (CC2652) power-diag, GC1 (2026-11-18)
+
+Image: radiant/samples/hr_transmitter for `cc26x2r1_launchxl` with
+`-DEXTRA_CONF_FILE=power_diag.conf`, local master db5abfb (Pass C1 merged). It
+was a hand west build into `build\gc1_ti_pd`, with hal_ti passed as in the
+`ti_hr_tx` row. `zephyr.hex` md5 `171501bf`. `.config` read back
+`CONFIG_RADIANT_POWER_DIAG=y`, `CONFIG_RADIANT_CC26XX_RF_HWATTRS=y` and
+`CONFIG_LOG_MODE_DEFERRED=y`. It was flashed with
+`scripts\flash_ti.ps1 -Serial L1100TY2`. The console was captured on COM11 at
+115200 for 2400 s: the port was opened with DTR and RTS, then
+`xds110reset.exe` was pulsed, so the capture starts at boot. That gave 239 log
+lines covering 2390 s of uptime. The receiver was the Pro Micro, which ran
+`ant_verify` for 300 s during the capture. Raw data is in
+`archive/benchmarks/2026-11-18-power-gc1/`.
+
+On the cc26xx log line, `rfon_pm` is the RF core's on-time in per-mille and
+`rfpu_x10` its power-ups per second ×10. Both are floored on each line, so
+power-ups were recovered exactly per line with ceil(x10 × dt_ms / 10000), and
+the RF-core duty is given as a [floor, floor + 1) range.
+
+| Quantity | Value over 2390 s |
+|---|---|
+| TX | 1115.3 µs/s, 4.0602 ops/s, 274.7 µs/op |
+| RX (listen after TX) | 4361.7 µs/s, 4.0602 ops/s, 1074.2 µs/op |
+| RF core power-ups | **4.0602/s** (9705), i.e. **1.0000 per TX slot** |
+| RF core on (`rfon_pm`) | **17.4–18.4 ‰** (17.4–18.4 ms/s); lines read 17 or 18 |
+| RF core on per power-up | **4.29–4.54 ms** (TX + RX ops are 1.35 ms of it) |
+| `pudur_us` (driver's nPowerUpDuration) | median 448, range 424–480 |
+| `fsx` / `cold` / `txl` / `txl_max_us` | 0 / 0 / 0 / 0 |
+| `bks` / `bks_max` | **0 / 0** |
+| `wraps` | 2: the first in uptime (1071, 1081] s, the second in (2141, 2151] s |
+| CPU active | 55.6 ‰ (lines 53–60, floored) |
+| Idle entries | 37.4/s |
+
+What the gate showed:
+
+- **H1 holds: the RF core already powers down between slots.** There is one
+  power-up per 246 ms slot, so the TX and its following listen window share
+  one power-up. The core is on for 1.7–1.8 % of the time, not ~100 %. No
+  `RADIANT_CC26XX_LOW_POWER` option is needed for this.
+- **Each wake keeps the core on ~4.3–4.5 ms for 1.35 ms of radio work.** The
+  timer starts at the driver's setup event, after the core has booted. The
+  remaining ~3 ms covers the setup and synth commands plus any tail before
+  power-down. Inferred from the driver source, not measured: with
+  `nInactivityTimeout = WAIT_FOREVER`, the driver powers down only when the
+  next command is dispatched with a far-future start
+  (`RFCC26X2_multiMode.c`, `RF_dispatchNextCmd` →
+  `RF_powerConstraintRelease`). So the tail is probably the time until the
+  backend posts the next slot's TX. Not broken down further.
+- **Finding 4 (fold back-steps) did not reproduce.** There were 0 back-steps
+  over 9705 power-up/power-down cycles. The two wraps fall 1060–1080 s apart,
+  against 2^32 / 4 MHz = 1073.7 s, and both sit where a RAT running from boot
+  puts them (1073.7 s and 2147.5 s), so the wrap-straddle blind spot did not
+  produce a false wrap either. One likely reason, inferred and not measured: a
+  read taken after power-up comes at least one power-up time (~450 µs, about
+  1800 ticks) after the last RTC-synthesised read, which is far more than the
+  one-RTC-tick round-up (~122 ticks). Under the plan's rule (bks > 0), the
+  fold bug-fix pass is not triggered.
+- **No late starts.** No first command after a power-up and no TX was handed
+  to the RF core at or after its start time. There were no synth errors.
+- **On the air:** the Pro Micro received 1218 of 1219 packets (loss 0.08 %,
+  one RX_FAIL). Radio-clock timing was 0.011 ms off the slot grid, signal
+  −42.1 dBm (−44 to −42), 120 bpm exact. The L15 was left on its GA image,
+  which also transmits #12345. The receiver's packets are attributed to the TI
+  by signal: every one fell in the TI's band (GA: −43 dBm, max −40). The L15's
+  band at GA was −46 to −52 dBm, and the GA verify logs show none of its
+  packets above −46. The count also matches one 4.06/s stream.
+- **The console inflates CPU.** `apply_power()` in the cc26xx TX arm logs
+  `tx power req=...` at INF on every transmit: 9748 lines in 2400 s, beside
+  an `RF_setTxPower()` call each time. That is the likely reason CPU reads
+  55.6 ‰, against 5.6 ‰ for the console-on L15 arm D (unverified; the
+  deferred log thread prints over a 115200 console). A build with LOG off
+  does not pay this.
+
+Estimate (`tools\ant_power_est.py --board cc2652 --log <capture> --uart-on`;
+ESTIMATE, µA, TI CC2652R datasheet SWRS207J rows):
+
+| Component | Basis | µA |
+|---|---|---|
+| Idle floor (Idle, RCOSC_HF; standby is off in this firmware) | always | **675** |
+| UART declared on (Iperi UART) | always | **167.5** |
+| CPU active (48 MHz CoreMark row) | 5.56 % | **151.0** |
+| Radio RX | 0.436 % | 27.2 |
+| Radio TX 0 dBm | 0.112 % | 7.1 |
+| XOSC_HF outside radio | not measured, no datasheet row | UNKNOWN, excluded |
+| **Total (known parts)** | | **1028** (860 without the UART row) |
+
+The estimator does not model the RF core's on-time outside TX and RX (about
+12 ms/s here), so the total leaves that out. `--ti-standby` (a what-if for
+standby, which this firmware forbids) gives 227 µA, and most of that is the
+console-inflated CPU term. The idle floor and the UART row dominate, which is
+why Pass C2 (XOSC_HF release) and the TI standby decision are the levers left
+on this board, not the RF core's duty.

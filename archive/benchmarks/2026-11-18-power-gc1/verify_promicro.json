@@ -1,0 +1,157 @@
+{
+  "channels": [
+    {
+      "profile": "heart-rate",
+      "channel": 0,
+      "device_number": 12345,
+      "device_type": 120,
+      "exact_basis": {
+        "pairs": 0,
+        "still": 0
+      },
+      "period_ticks": 8070,
+      "packets": 1218,
+      "elapsed_s": 299.96799999999985,
+      "expected_packets": 1219.0113288723662,
+      "loss_pct": 0.08296304131165666,
+      "time_to_first_packet_s": 0.032000000000152795,
+      "reacquire_s": null,
+      "jitter": {
+        "n": 1217,
+        "mean_s": 0.24648151191454384,
+        "stdev_s": 0.009728602883542244,
+        "max_s": 0.4849999999996726,
+        "period_s": 0.24627685546875,
+        "radio_n": 1217,
+        "offgrid_host_s": 0.0069215061211685075,
+        "offgrid_radio_s": 1.0956836968878688e-05
+      },
+      "signal": {
+        "n": 1218,
+        "mean_dbm": -42.07553366174056,
+        "min_dbm": -44,
+        "max_dbm": -42
+      },
+      "pages": {
+        "0x00": 1218
+      },
+      "common_page_gaps": {
+        "count": 0,
+        "max": null
+      },
+      "power": null,
+      "cadence": null,
+      "speed_mps": null,
+      "heart_rate_bpm": {
+        "n": 600,
+        "mean": 120.0,
+        "min": 120.0,
+        "max": 120.0,
+        "expected": 120.0,
+        "mean_abs_error": 0.0,
+        "mean_error": 0.0
+      },
+      "attestation": {
+        "verdict": "clear"
+      },
+      "accumulator_wraps": {
+        "beat_count": 3,
+        "hr_event_time": 5
+      },
+      "telemetry": null,
+      "event_advances": 600,
+      "event_comparisons": 1217,
+      "exact_loss": null,
+      "violations": {
+        "count": 0,
+        "first": []
+      },
+      "checks": [
+        {
+          "name": "packets",
+          "pass": true,
+          "detail": "1218 received, 1219 expected over 300.0 s"
+        },
+        {
+          "name": "loss",
+          "pass": true,
+          "detail": "0.08 % (limit 1.50 %, one packet = 0.08 %)"
+        },
+        {
+          "name": "jitter",
+          "pass": true,
+          "detail": "stddev 9.7 ms, max 485.0 ms (limit 123.1 ms, period 246.3 ms)"
+        },
+        {
+          "name": "accumulator continuity",
+          "pass": true,
+          "detail": "0 violation(s)"
+        },
+        {
+          "name": "sensor liveness",
+          "pass": true,
+          "detail": "the event counter advanced on 600 of 1217 packet pairs"
+        },
+        {
+          "name": "common pages",
+          "pass": false,
+          "detail": "80 x0, 81 x0, worst gap None (limit 121)"
+        }
+      ],
+      "pass": false
+    }
+  ],
+  "events": {
+    "EVENT_RX_FAIL": 1
+  },
+  "identities": {
+    "0": {
+      "device_number": 12345,
+      "device_type": 120
+    }
+  },
+  "receiver_reboots": [],
+  "accounting": {
+    "missing": 1,
+    "radio_fails": 1,
+    "collisions": 0,
+    "unaccounted": 0,
+    "allowed_unaccounted": 2,
+    "verdict": "all of it reported by the radio as RX_FAIL, so it happened on the air",
+    "pass": true
+  },
+  "derived": {
+    "loss_pct": 0.08296304131165666,
+    "loss_exact_pct": null,
+    "unexplained_loss": 0,
+    "accumulator_violations": 0,
+    "timing_offgrid_host_ms": 6.921506121168507,
+    "timing_offgrid_radio_ms": 0.010956836968878688,
+    "rssi_dbm_mean": -42.07553366174056,
+    "time_to_first_packet_s": 0.032000000000152795,
+    "reacquire_s": null,
+    "per_channel": {
+      "0": {
+        "channel": 0,
+        "profile": "heart-rate",
+        "device_number": 12345,
+        "device_type": 120,
+        "exact_pairs": 0,
+        "exact_still": 0,
+        "packets": 1218,
+        "loss_pct": 0.08296304131165666,
+        "loss_exact_pct": null,
+        "exact_missed": null,
+        "exact_sent": null,
+        "exact_scope": null,
+        "accumulator_violations": 0,
+        "timing_offgrid_host_ms": 6.921506121168507,
+        "timing_offgrid_radio_ms": 0.010956836968878688,
+        "rssi_dbm_mean": -42.07553366174056,
+        "time_to_first_packet_s": 0.032000000000152795,
+        "reacquire_s": null
+      }
+    }
+  },
+  "pass": false
+}
