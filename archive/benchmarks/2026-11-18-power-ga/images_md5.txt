@@ -1,0 +1,10 @@
+b869d171433fe0f9c5e6861efd0c10d2 *ga_def_log.hex
+2a130085d291eaf379ebc86e25b6a602 *ga_def_q.hex
+921c146a02bfa7efcd505105e30360ba *ga_lp1w_q.hex
+2a130085d291eaf379ebc86e25b6a602 *ga_lp_q.hex
+f2c7d5c6bc7e301bdb34127ae6e5d9b6 *ti_hr_tx.hex
+a2c7fded52a795a085b498a2c0aca209 *ga_def_log.elf
+4f85dc5fcdcaf246a4f2f6eaa69b298b *ga_def_q.elf
+e01b5b208c3fe81a76333d9a7566d01d *ga_lp1w_q.elf
+2520dc162b879daed39530635b0774cf *ga_lp_q.elf
+7177433060566a5bc72314f5a84bd9b7 *ti_hr_tx.elf

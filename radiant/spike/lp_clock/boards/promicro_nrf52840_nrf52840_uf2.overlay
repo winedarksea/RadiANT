@@ -1,0 +1,12 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* TIMER4: the radiant,radio-timer the nRF backend owns on this board. The
+ * console stays on the board's CDC ACM UART (enabled late, see main.c). */
+/ {
+	chosen {
+		spike,timer = &timer4;
+	};
+};
+
+&timer4 {
+	status = "okay";
+};

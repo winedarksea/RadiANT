@@ -214,3 +214,158 @@ Traps this tool already handles, so don't work around them by hand:
 - **The 54L15's fine ladder bottoms out at −28 dBm.** Its −40/−46 dBm settings
   are 11-bit register values, and the wire's custom TX-power byte is one byte.
   If no knee is reached, move the transmitter away; don't extrapolate.
+
+---
+
+## Power without a meter
+
+There is no current meter on this bench, and the DKs have none built in. Every
+power figure here is an **ESTIMATE**: a software proxy multiplied by a typical
+current from the vendor's datasheet. Use these numbers to compare arms of one
+build measured the same way. They are not absolute currents, and nothing here
+can be quoted as one.
+
+### The method
+
+1. **Build the image with the proxy.** Add `power_diag_quiet.conf` (no console;
+   the `radiant_power_diag` struct is read over SWD) or `power_diag.conf` (a
+   `power dt_ms=...` log line every 10 s) to the sample's
+   `-DEXTRA_CONF_FILE`. The struct holds free-running counters: HFXO request
+   time, radio TX/RX on-time and op counts, CPU active time, idle entries and
+   the CONSTLAT state. Its layout is in
+   `radiant/include/radiant/radiant_power_diag.h`.
+2. **Sample the hardware and dump the struct, with the target running:**
+
+   ```powershell
+   .\scripts\jlink_peek.ps1 -Preset nrf54l15 -Serial 001057737173 -Samples 200 `
+       -ElfPath build\<dir>\hr_transmitter\zephyr\zephyr.elf -Decode -Json pd.json
+   ```
+
+   It reads `CLOCK.XO.STAT` and `POWER.CONSTLATSTAT` 200 times at random
+   intervals of 150–450 ms, so the samples cannot phase-lock to the 246 ms slot.
+   It reports each as a fraction with a 95 % Wilson interval. It dumps the
+   struct before and after the sampling run, about 60 s apart. It never resets
+   or halts the core: `connect` plus `mem32` only, behind the
+   `exec DisableAutoUpdateFW` guard and a read-only whitelist. Check that the
+   run reports `liveness: running` and that `power_diag uptime advanced` matches
+   the planned sleeps. Exit 3 means J-Link mentioned security, erase or unlock.
+   Stop there and answer nothing. Never point it at TI.
+3. **Turn the counters into an estimate:**
+   `python tools\ant_power_est.py --board nrf54l15dk pd.json`. It differences
+   the two snapshots and takes the sampled HFXO duty and CONSTLAT fraction from
+   the same file. It prints a cited row for each component and leaves out any
+   current it could not verify (marked UNKNOWN). `--hfxo-row X2` swaps the HFXO
+   row for the crystal-core standby current, which gives a lower bound. With
+   `--log console.txt --uart-on` it reads the firmware's log lines instead.
+4. **Confirm the arm is on the air.** Leave the struct alone for this check
+   and run `tools\ant_verify.py --profile heart-rate --device-number 12345` on
+   another board. A counter showing radio ops proves the scheduler ran them. It
+   does not prove a receiver heard them.
+
+Caveats:
+
+- **Datasheet rows are typical values at 25 °C and 3 V.** The model adds radio
+  and CPU time as if they never overlap. The HFXO row is "TIMER10 at 32 MHz on
+  HFXO" (ITIMER3), which runs higher than the stack's 1 MHz TIMER20. Both push
+  the total high.
+- **The probe is attached while it samples** (DHCSR `C_DEBUGEN` reads 1). A
+  debug session can hold clocks or power domains that the target would release
+  on its own. Today that changes nothing, because the stack holds the HFXO for
+  the whole uptime. Once the HFXO is released (Track B), compare the sampled
+  duty with the struct's `hfxo_req_us` before trusting either. One thing the
+  probe does *not* do is force CONSTLAT on: the MPSL image below reads 0/200
+  with the same probe attached.
+- **`power_diag_quiet.conf` already turns off LOG, SERIAL, CONSOLE and
+  UART_CONSOLE**, the same four symbols `lowpower.conf` sets. "Default + quiet"
+  and "lowpower + quiet" therefore build byte-identical images, and that is
+  what happened at Gate GA (both `2a130085`). The arm with the console on is
+  `power_diag.conf`.
+- **The nRF54L15 datasheet has no UARTE current**, so a console-on estimate
+  leaves out the console's real cost. All the struct can show is the CPU side.
+- **`hfxo_pm` and `cpu_pm` in the log line are floored to whole per-mille.** A
+  log-derived HFXO duty therefore reads 99.92 %, not 100 %. Use the struct for
+  sums.
+- **Every arm of the sample transmits as device 12345, type 0x78.** Two
+  transmitters on the air at once (the L15 and the TI, say) cannot be told
+  apart by a receiver. Keep only one transmitting while you verify.
+
+### Baseline, Gate GA (2026-11-18): hr_transmitter on the nRF54L15 DK
+
+All arms are local master 78864b2, direct radio (no MPSL), at 0 dBm, with a
+bidirectional MASTER at 8070/32768 s unless noted. Each line is one SWD
+session: 200 register samples, plus struct snapshots about 60 s apart starting
+at 33 s uptime (arm A started at 16 s). The receiver was the Pro Micro
+(apps/dongle diag image), about 60 s per arm. Raw data and images are in
+`archive/benchmarks/2026-11-18-power-ga/`.
+
+| Arm (image md5) | HFXO on, sampled (95 % CI) | CONSTLAT | TX µs/s | RX µs/s | TX / RX ops/s | CPU active ‰ | Idle entries/s | Est. total µA (ESTIMATE) | Received by Pro Micro |
+|---|---|---|---|---|---|---|---|---|---|
+| A default + quiet (`2a130085`) | 200/200 (98.1–100 %) | 200/200 on | 603.9 | 2597.5 | 4.068 / 4.068 | 4.14 | 25.35 | **811** (608 with crystal-core HFXO) | 245/245 |
+| B lowpower + quiet (`2a130085`, same image) | 200/200 (98.1–100 %) | 200/200 on | 603.9 | 2596.8 | 4.066 / 4.066 | 4.14 | 25.36 | **811** (608) | 245/245 |
+| C lowpower + one-way + quiet (`921c146a`) | 200/200 (98.1–100 %) | 200/200 on | 600.3 | 0 | 4.064 / 0 | 3.22 | 21.29 | **800** (597) | 244/245, 1 RX_FAIL |
+| D default + `power_diag.conf`, console on (`b869d171`) | 200/200 (98.1–100 %) | 200/200 on | 603.1 | 2595.6 | 4.064 / 4.064 | 5.56 | 25.34 | **815** + UART UNKNOWN (612) | 243/245 |
+
+Breakdown of arm B's total (ESTIMATE, µA). The rows are cited in the tool
+output (nRF54L15/L10/L05 Datasheet v1.0):
+
+| Component | Basis | µA |
+|---|---|---|
+| CONSTLAT (ION_IDLE11 − ION_IDLE0) | on 100 % | **549** |
+| HFXO outside radio (ITIMER3; crystal-core X2 = 34) | 99.68 % | **236** |
+| CPU active (IAPPCPU0, 128 MHz) | 0.41 % | 10.8 |
+| Radio RX (IRADIO_RX0), one 639 µs window per slot | 0.26 % | 8.8 |
+| Radio TX 0 dBm (IRADIO_TX0), 148 µs per broadcast | 0.06 % | 2.9 |
+| Idle floor (ION_IDLE8) | always | 2.9 |
+
+What the gate showed:
+
+- **The HFXO is held ≈100 %.** The stack's own request counter reads 100.000 %
+  of uptime and the register reads 200/200, on every arm. This is the
+  regression baseline for Track B.
+- **CONSTLAT is on in every direct build**: `constlat_stat` = 1, flags 0x3F.
+  Together with the HFXO, it is ~97 % of the estimate. Radio, CPU and the floor
+  come to ~25 µA.
+- **One-way removes the listen and nothing else.** RX ops go from equal to TX
+  ops to 0. Arm C also has exactly 4.06 fewer idle entries per second (one per
+  slot) and 0.9 ‰ less CPU. Only ~11 µA of the estimate moves. The RX window
+  (639 µs) agrees with finding 6's ~670 µs.
+- **Wakes are not "slots + API thread + snapshot".** That sum predicts
+  4 + 20 + 1 ≈ 25/s for both arms. One-way measured 21.3/s, so the TX slot
+  does not add a separate wake. It probably shares one with the API thread's
+  50 ms poll, which an event re-phases (a hypothesis, not checked). The listen
+  window adds one wake per slot.
+- **The log line agrees with the struct.** In arm D, the ten 10 s lines read
+  5929–6096 TX µs (struct 603 µs/s), 25536–26199 RX µs (2596 µs/s),
+  idle_x10 251–254 (25.3/s), `cpu_pm` 4–6 (5.6 ‰), `hfxo_pm` 999/1000 and
+  `constlat=1/1`. The console costs +1.4 ‰ CPU (~4 µA ESTIMATE) plus a UARTE
+  current that cannot be estimated.
+- **Arms A and B form a same-image repeat.** Every rate agrees within 0.1 %.
+
+### MPSL builds: CONSTLAT does not stay on
+
+On the same day, before it was reflashed, the L15 carried the MPSL ackps image
+(apps/dongle, `CONFIG_MPSL=y`, `build/ackps_l15_mpsl`, `zephyr.hex` md5
+`666f64f4`). Sampled with the same tool, it read:
+
+| | Sampled | 95 % CI |
+|---|---|---|
+| HFXO running | 200/200 | 98.1–100 % |
+| CONSTLATSTAT on | **0/200** | 0–1.9 % |
+
+The backend still raw-triggers CONSTLAT at init (`NRF54L_ERRATA_20`), yet the
+hardware reads it off. So the errata-20 workaround is **not in force on MPSL
+nRF54L15 builds**. That is finding 2 of the power plan, now confirmed. The
+likely mechanism is MPSL's refcounted release (`mpsl_init.c`), inferred from
+the code and not traced on the board. Pass A4 replaces the raw trigger with the
+refcounted request. The image had no power_diag, so the struct could not show
+whether the trigger ran.
+
+### TI hr_transmitter (no proxy yet)
+
+The `ti_hr_tx` row (`f2c7d5c6`) was flashed with `scripts\flash_ti.ps1`
+(dslite, then the backchannel reset) and heard by the Pro Micro for 300 s. It
+received 1216 of 1219 packets: 4.053/s against a nominal 4.0605/s. All three
+missing packets were RX_FAIL, i.e. lost on the air. Radio-clock timing was
+0.007 ms off the slot grid, signal −43 dBm, 120 bpm exact. The TI has no
+power_diag figures until the C1 pass fills its fields, so no estimate is given
+here.
