@@ -126,6 +126,29 @@ class CrossingTests(unittest.TestCase):
         self.assertEqual(snaps[0][0], 3.25)
         self.assertEqual(len(events), 1)
 
+    def test_parse_without_header_has_no_epoch(self):
+        # A decode_pcap -o export: no host-clock origin.
+        epoch, _snaps, events = x.parse([rx_line(1.0, 3, 100)])
+        self.assertIsNone(epoch)
+        self.assertEqual(len(events), 1)
+
+    def test_parse_skips_frames_recovered_at_eof(self):
+        lines = [rx_line(1.0, 3, 100),
+                 rx_line(2.0, 3, 200) + '  ' + dp.HEURISTIC_MARK]
+        _epoch, _snaps, events = x.parse(lines)
+        self.assertEqual([e[0] for e in events], [1.0])
+
+    def test_control_without_epoch_is_reported_not_aligned(self):
+        dut = synthetic(160, 1.0, 3277, epoch=1000.0)
+        ctl = [ln for ln in synthetic(160, None, 0, power=False)
+               if not ln.startswith('# ant_crossing')]
+        out = io.StringIO()
+        x.analyse(dut, controls=[('pcap', ctl)], out=out)
+        text = out.getvalue()
+        self.assertIn('NOT ALIGNED (no epoch header in the control log)', text)
+        self.assertIn('  control pcap: not aligned', text)
+        self.assertNotRegex(text, r'control pcap: \d+ / \d+ missed')
+
     def test_grade_page(self):
         self.assertEqual(x.grade_page(0.0).hex(), '33ffffffff204eff')
         self.assertEqual(x.grade_page(1.5)[5:7], (20150).to_bytes(2, 'little'))

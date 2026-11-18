@@ -26,6 +26,7 @@ import console_capture as cc  # noqa: E402
 from ant_wire import (  # noqa: E402
     EVENT_CHANNEL_CLOSED,
     EVENT_RX_FAIL,
+    EVENT_RX_SEARCH_TIMEOUT,
     MESG_BROADCAST_DATA_ID,
     MESG_EVENT_ID,
     MESG_RESPONSE_EVENT_ID,
@@ -318,6 +319,28 @@ class TestResetLoopOrdering(unittest.TestCase):
         self.assertTrue(row["ok"])
         self.assertEqual(row["frames_before"], ["0x4E", "0x40"])
         self.assertEqual(row["violations_before"], ["0x40 ch0 0x01:0x07"])
+
+    def test_a_search_timeouts_own_close_is_not_a_violation(self):
+        # A finite search ends with RX_SEARCH_TIMEOUT then CHANNEL_CLOSED on
+        # its own, so an earlier session's channel can queue both pre-reset.
+        timeout = (MESG_RESPONSE_EVENT_ID,
+                   bytes([0, MESG_EVENT_ID, EVENT_RX_SEARCH_TIMEOUT]))
+        reader = FakeReader([timeout, self.CLOSED, self.STARTUP])
+        row = arl.wait_startup(reader, time.perf_counter(), 3.0)
+        self.assertTrue(row["ok"])
+        self.assertEqual(row["violations_before"], [])
+
+    def test_a_search_timeout_excuses_one_close_on_its_own_channel(self):
+        # Not a second close, and not a close on another channel.
+        timeout1 = (MESG_RESPONSE_EVENT_ID,
+                    bytes([1, MESG_EVENT_ID, EVENT_RX_SEARCH_TIMEOUT]))
+        closed1 = (MESG_RESPONSE_EVENT_ID,
+                   bytes([1, MESG_EVENT_ID, EVENT_CHANNEL_CLOSED]))
+        reader = FakeReader([timeout1, self.CLOSED, closed1, closed1,
+                             self.STARTUP])
+        row = arl.wait_startup(reader, time.perf_counter(), 3.0)
+        self.assertEqual(row["violations_before"],
+                         ["0x40 ch0 0x01:0x07", "0x40 ch1 0x01:0x07"])
 
     def test_broadcasts_and_older_events_before_startup_are_allowed(self):
         # Both can have been queued before the reset arrived.

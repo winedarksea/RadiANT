@@ -254,8 +254,11 @@ extern "C" {
  * transfer counters that page 0 has no room for. All counts.
  *
  *   0 watchdogs          transfers the watchdog terminated (never normal)
- *   1 no_opener          a slave's held command expired, still tracking,
- *                        with no master frame to open its slot
+ *   1 no_opener          a slave's held command expired with no master
+ *                        frame to open its slot: while tracking, or while
+ *                        searching if it was accepted on a channel already
+ *                        in search (a drop to search after it was accepted
+ *                        counts lost_track instead)
  *   2 lost_track         a slave's held command failed because its channel
  *                        dropped to search (RX_FAIL_GO_TO_SEARCH)
  *   3 reacquired         a slave's held command sent from the frame that

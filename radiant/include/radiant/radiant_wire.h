@@ -1936,13 +1936,14 @@
  * frames with a filter index the window did not have, transmit events, energy
  * detect events - 0xFFFFFFFF without ED scan; three reserved, 0xFFFFFFFF); 13
  * slave acknowledged-data outcomes (transfers the watchdog terminated; held
- * commands that expired while tracking with no opener, that failed because
- * the channel dropped to search, that were sent from the reacquiring frame;
- * transfers failed on a wrong acknowledgement, transfers the engine or radio
- * refused to start; two reserved, 0xFFFFFFFF). VERSIONING: pinned at 1; a
- * field's meaning never changes and a new meaning is a new page.
- * docs/decisions/0023-radiant-diag-message.md has the reasoning and
- * radiant/include/radiant/radiant_diag.h the layout. [ADR 0023]
+ * commands that expired with no opener while tracking or, if accepted in
+ * search, while still searching, that failed because the channel dropped to
+ * search, that were sent from the reacquiring frame; transfers failed on a
+ * wrong acknowledgement, transfers the engine or radio refused to start; two
+ * reserved, 0xFFFFFFFF). VERSIONING: pinned at 1; a field's meaning never
+ * changes and a new meaning is a new page. docs/decisions/0023-radiant-diag-
+ * message.md has the reasoning and radiant/include/radiant/radiant_diag.h the
+ * layout. [ADR 0023]
  */
 #define RADIANT_WIRE_MESG_RADIANT_DIAG_ID                    0xF7
 

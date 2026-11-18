@@ -144,7 +144,8 @@ struct radiant_api_stats {
 	uint32_t xfer_no_opener;    /* pending slave command expired before a slot */
 	/* Pending slave command failed because its channel dropped to search
 	 * (RX_FAIL_GO_TO_SEARCH) before an opener came. Apart from
-	 * xfer_no_opener, which is now expiry while still tracking. */
+	 * xfer_no_opener, which is expiry at the deadline: while tracking, or
+	 * while still searching for a command accepted on a searching channel. */
 	uint32_t xfer_pending_lost_track;
 	/* Pending slave command sent from the frame that reacquired its
 	 * channel, rather than from a tracked frame. */

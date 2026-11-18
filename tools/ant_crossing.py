@@ -75,8 +75,13 @@ MARGIN_S = 0.5          # control window padding around a DUT crossing
 # ---------------------------------------------------------------------------
 
 def parse(lines):
-    """(epoch, diag snapshots [(t, pages)], events [(t, dir, msg, body)])."""
-    epoch = 0.0
+    """(epoch, diag snapshots [(t, pages)], events [(t, dir, msg, body)]).
+
+    epoch is None without an '# ant_crossing epoch=' header (a decode_pcap
+    -o export): its times have no host-clock origin to align by. Lines
+    decode_pcap marks as recovered at EOF are possibly bytes of a truncated
+    message, so they are skipped, as decode_pcap's own parsers do."""
+    epoch = None
     snaps, events = [], []
     for line in lines:
         if line.startswith('# ant_crossing'):
@@ -89,7 +94,8 @@ def parse(lines):
             snaps.append((float(t), json.loads(payload)))
             continue
         parts = line.split()
-        if len(parts) < 4 or line.startswith('#'):
+        if (len(parts) < 4 or line.startswith('#')
+                or line.rstrip().endswith(dp.HEURISTIC_MARK)):
             continue
         msg = dp.MESSAGE_IDS.get(parts[2])
         if msg is None and parts[2].startswith('MSG_'):
@@ -186,7 +192,8 @@ def channel_events(events, ch, t0, t1):
 
 def control_window(rows, offset, t0, t1):
     """(slots, missed, longest run) of a control's FE-C rows in DUT time
-    [t0, t1]; offset = control epoch - DUT epoch."""
+    [t0, t1]; offset = control epoch - DUT epoch (both known: see
+    analyse())."""
     inside = [r for r in rows if t0 <= r[0] + offset <= t1]
     best, _ = dp.longest_run(inside)
     return len(inside), sum(not r[1] for r in inside), best
@@ -212,10 +219,18 @@ def analyse(lines, *, fec_ch=3, power_ch=2, band_ms=3.0, controls=(),
     for name, clines in controls:
         cepoch, _s, _e = parse(clines)
         crows, per = dp.slot_timeline(clines, fec_ch)
-        ctl.append((name, crows, cepoch - epoch))
+        # Without an epoch on both sides there is no common clock: a
+        # substituted 0 would put the control decades away and report its
+        # windows as empty rather than unaligned.
+        missing = [side for side, e in (('DUT', epoch), ('control', cepoch))
+                   if e is None]
+        offset = None if missing else cepoch - epoch
+        ctl.append((name, crows, offset))
+        where = (f'offset to DUT {offset:+.3f} s' if offset is not None else
+                 f'NOT ALIGNED (no epoch header in the {" or ".join(missing)} log)')
         print(f'control {name}: {len(crows)} FE-C slots, '
               f'{sum(not r[1] for r in crows)} missed, period {per.text}, '
-              f'offset to DUT {cepoch - epoch:+.3f} s', file=out)
+              f'{where}', file=out)
     print(f'{len(found)} crossing(s) at |offset| <= {band_ms} ms', file=out)
     for n, (a, b) in enumerate(found, 1):
         t0, t1 = rows[a][0], rows[b][0]
@@ -236,6 +251,9 @@ def analyse(lines, *, fec_ch=3, power_ch=2, band_ms=3.0, controls=(),
             print('  FE-C events (t0-1 .. t1+3 s): '
                   + ' '.join(f'{k}={v}' for k, v in sorted(ev.items())), file=out)
         for name, crows, offset in ctl:
+            if offset is None:
+                print(f'  control {name}: not aligned', file=out)
+                continue
             slots, missed, run = control_window(crows, offset, t0 - MARGIN_S, t1 + MARGIN_S)
             print(f'  control {name}: {missed} / {slots} missed, longest run {run}',
                   file=out)

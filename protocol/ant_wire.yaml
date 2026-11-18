@@ -2255,9 +2255,10 @@ radiant_messages:
              filter index the window did not have, transmit events, energy
              detect events - 0xFFFFFFFF without ED scan; three reserved,
              0xFFFFFFFF); 13 slave acknowledged-data outcomes (transfers the
-             watchdog terminated; held commands that expired while tracking
-             with no opener, that failed because the channel dropped to
-             search, that were sent from the reacquiring frame; transfers
+             watchdog terminated; held commands that expired with no
+             opener while tracking or, if accepted in search, while still
+             searching, that failed because the channel dropped to search,
+             that were sent from the reacquiring frame; transfers
              failed on a wrong acknowledgement, transfers the engine or radio
              refused to start; two reserved, 0xFFFFFFFF). VERSIONING: pinned
              at 1; a field's
