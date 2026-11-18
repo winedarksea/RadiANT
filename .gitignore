@@ -89,6 +89,9 @@ __pycache__/
 # GitHub release asset referenced by SHA-256 from the relevant archive/README.
 # Ignored here so the decision is made deliberately rather than by a commit.
 bench-logs/
+# The 2026-11-15 TI-over-shim Zwift capture (TODO.md cites it): 2.86 MB, six to
+# eight times its committed siblings, so it stays local (owner, 2026-11-17).
+captures/zwift-20261115-214118.pcap
 tools/zwift_shim/out/
 tools/zwift_shim/obj_a/
 tools/zwift_shim/obj_b/
