@@ -439,9 +439,11 @@ config RADIANT_BACKEND_NRF_GATE_MPSL
 	depends on ZEPHYR_NRF_MODULE
 	select MPSL
 	select MPSL_ASSERT_HANDLER
-	# nRF54L errata 20. Without NRFX_POWER, MPSL's low-latency release
-	# raw-triggers LOWPWR after each of its events and turns off the
-	# backend's CONSTLAT; with it, both go through nrfx's reference count.
+	# nRF54L errata 20. MPSL's low-latency acquire/release write
+	# TASKS_CONSTLAT / TASKS_LOWPWR raw unless NRFX_POWER or NRF_SYS_EVENT
+	# is on (on nRF54L both use nrfx's reference count), and a raw release
+	# turns off the backend's CONSTLAT. Selected whatever
+	# RADIANT_NRF54L_MPSL_CONSTLAT_HOLD says, so the count is always shared.
 	# See radiant_radio_nrf.c (CONSTLAT_REFCOUNTED).
 	select NRFX_POWER if SOC_SERIES_NRF54L
 	help
@@ -469,6 +471,29 @@ config RADIANT_BACKEND_NRF_GATE_MPSL
 	  It does not take its air, provided the reservation is released the
 	  moment an empty window closes - which the backend does, and which is a
 	  required line of the design rather than an optimisation.
+
+config RADIANT_NRF54L_MPSL_CONSTLAT_HOLD
+	bool "hold nRF54L constant-latency mode for the whole uptime (MPSL builds)"
+	default y
+	depends on RADIANT_BACKEND_NRF_GATE_MPSL && SOC_SERIES_NRF54L
+	help
+	  nRF54L errata 20 wants constant-latency mode (CONSTLAT) while the
+	  RADIO is in use. A direct build holds it from radio init until reset.
+
+	  y: the backend takes one nrfx CONSTLAT reference at init and never
+	  frees it, so CONSTLAT is on for the whole uptime, as on a direct
+	  build. This costs the CONSTLAT current all the time (~549 uA
+	  ESTIMATE on the nRF54L15, Gate GA).
+
+	  n: no reference; CONSTLAT is left to MPSL, which acquires it before
+	  each event its scheduler dispatches and releases it after (it may
+	  skip the release between back-to-back events). Whether MPSL's
+	  timeslots - where this backend's radio work runs - get that
+	  acquire is not verified; check CONSTLATSTAT on the bench with the
+	  radio busy before choosing n.
+
+	  Either way NRFX_POWER is selected, so MPSL's acquire/release share
+	  nrfx's reference count with anything else that requests CONSTLAT.
 
 # -------- The software-interrupt trampoline (bug 27) --------
 #
