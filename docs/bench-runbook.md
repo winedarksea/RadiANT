@@ -366,10 +366,11 @@ scheduler calls acquire before each event it dispatches and release after it
 (it may skip the release between back-to-back events), and the first release
 turned the backend's init-time CONSTLAT off. Pass A4 makes the MPSL gate
 select `NRFX_POWER` on nRF54L, which moves MPSL's callbacks onto nrfx's
-reference count. With `CONFIG_RADIANT_NRF54L_MPSL_CONSTLAT_HOLD=y` (the
-default) the backend also takes one reference at init that it never frees, so
-CONSTLAT stays on as in a direct build. With `=n` it takes none and leaves
-CONSTLAT to MPSL's per-event acquire.
+reference count. With `CONFIG_RADIANT_NRF54L_MPSL_CONSTLAT_HOLD=y` the
+backend also takes one reference at init that it never frees, so CONSTLAT
+stays on as in a direct build. With `=n` (the default since the check below,
+owner decision 2026-11-18) it takes none and leaves CONSTLAT to MPSL's
+per-event acquire.
 
 **MPSL's acquire covers its timeslots, where all of this backend's radio
 work runs (bench check, 2026-11-18).** The disassembly shows a single acquire
