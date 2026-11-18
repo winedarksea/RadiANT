@@ -60,7 +60,8 @@ extern "C" {
 
 enum gate_rc {
 	/* The air is ours from now until at least t_to. Programme immediately.
-	 * The direct gate returns this and nothing else. */
+	 * The direct gate returns this and nothing else (the low-power gate,
+	 * radiant_radio_nrf_lp.c, also answers GATE_PENDING while it sleeps). */
 	GATE_GRANTED = 0,
 	/*
 	 * A reservation has been placed and its outcome is not yet known. The

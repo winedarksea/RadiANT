@@ -3670,7 +3670,9 @@ static void program_ed(const struct radiant_ed_req *req)
 
 /*
  * What the gate calls back. Unreachable in the direct build (GATE_PENDING cannot
- * occur there), but the gate header declares them.
+ * occur there), but the gate header declares them. The low-power gate
+ * (CONFIG_RADIANT_NRF_LOW_POWER, radiant_radio_nrf_lp.c) calls on_grant() and
+ * finish_failed() after its wake, from the GRTC or clock interrupt.
  */
 
 void radiant_nrf_gate_on_grant(void)

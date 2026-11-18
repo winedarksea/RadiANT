@@ -149,29 +149,24 @@
  * taking it can be older than an anchor another context moved meanwhile,
  * which is the "reading from before the anchor" raw mode cannot detect.
  *
- * FOR PASS B3 (not done here):
- *   - BUILD_ASSERT that the system timer has the two user channels this
- *     needs (CONFIG_NRF_RTC_TIMER_USER_CHAN_COUNT >= 2 on RTC1 - the Pro
- *     Micro build has exactly 2; free z_nrf_grtc_timer_chan_alloc()
- *     channels on the nRF54L - the spike found 4, with or without MPSL).
- *   - Choose the RTC or GRTC format by which system timer is enabled
- *     (CONFIG_NRF_RTC_TIMER / CONFIG_NRF_GRTC_TIMER), not by SoC, and
- *     BUILD_ASSERT the frequency it assumes
- *     (CONFIG_CLOCK_CONTROL_NRF_K32SRC_FREQUENCY == 32768; the GRTC node's
- *     clock-frequency == 1000000).
- *   - On the nRF54L15 the GRTC and TIMER20 are both on DPPIC20: the anchor
- *     is one same-domain DPPI channel, no PPIB, no cross-domain failure path.
- *   - On the nRF52, TIMER SHUTDOWN (anomaly 78) zeroes the counter but keeps
- *     the CC registers: read the release capture (CC5) BEFORE SHUTDOWN.
- *   - Nothing to restore after a wake: the spike found every RADIO, TIMER
- *     and (D)PPI register retained across HFXO-off System ON idle on both
- *     SoCs, so no register shadow is needed for this.
- *   - Record whether the HFXO-started callback has run by the time EDGE 2
- *     fires (a start-up longer than CONFIG_RADIANT_NRF_LP_HFXO_STARTUP_US).
- *     If not, the TIMER started on HFINT: mark the segment
- *     timer_at_anchor = false, count it, and radiant_lp_reanchor() once the
- *     crystal is stable, so its release is judged against the LF image
- *     again.
+ * THE BACKEND SIDE is src/radiant_radio_nrf_lp.c (pass B3, nRF54L15 GRTC,
+ * direct backend). What it took from the list this header carried for B3:
+ *   - DONE: the GRTC format, extended, chosen by CONFIG_NRF_GRTC_TIMER (the
+ *     only system timer Kconfig allows it on today) with its 1 MHz rate
+ *     BUILD_ASSERTed; its two channels are allocated at init and a shortage
+ *     refuses the option at run time (the spike found 4 free, with or
+ *     without MPSL).
+ *   - DONE: the anchor is one same-domain DPPIC20 connection (GRTC compare
+ *     -> TIMER START, forked to CAPTURE[5]); no PPIB path exists to fail.
+ *   - DONE: nothing is restored after a wake (spike B1: all retained).
+ *   - DONE: an HFXO callback that has not run by EDGE 2 marks the segment
+ *     timer_at_anchor = false (radiant_lp_wake(..., false)), is counted
+ *     (hfxo_late_edge2), and is re-anchored once the crystal is stable.
+ *   - PASS B5: the RTC1 format (CONFIG_NRF_RTC_TIMER_USER_CHAN_COUNT >= 2,
+ *     CONFIG_CLOCK_CONTROL_NRF_K32SRC_FREQUENCY == 32768), the RTC driver's
+ *     exact_set() for the anchoring edges, and TIMER SHUTDOWN (anomaly 78,
+ *     which zeroes the counter but keeps the CC registers: read CC5 BEFORE
+ *     SHUTDOWN).
  *   - Expect a constant rate step: asleep intervals run at the LFXO rate,
  *     awake ones at the HFXO rate, and the spike measured them -30 ppm
  *     apart on the nRF54L15 DK and -58.5 ppm on the Pro Micro clone (7.4 and

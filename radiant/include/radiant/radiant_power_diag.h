@@ -85,10 +85,13 @@
  *   hfxo_req_us is timed on the system timer (the LF clock), not on the
  *   radio TIMER, so it stays correct across an HFXO release. It is the
  *   stack's own request: on an nRF52840 with USB, or under MPSL, something
- *   else may hold the crystal too, which this cannot see. Today the nRF
- *   backend requests the HFXO once at init and never releases it, so it
- *   reads ~uptime: that is intended, and is the baseline the low-power work
- *   (RADIANT_NRF_LOW_POWER) measures itself against.
+ *   else may hold the crystal too, which this cannot see. Without
+ *   CONFIG_RADIANT_NRF_LOW_POWER the nRF backend requests the HFXO once at
+ *   init and never releases it, so it reads ~uptime: the baseline the
+ *   low-power work measures itself against. With it, the backend releases
+ *   and re-requests the crystal around every sleep, and hfxo_req_us over
+ *   uptime is the crystal's duty (its own transitions and late wakes are
+ *   in the separate radiant_nrf_lp_stats symbol).
  *
  *   radio_*_us run from the operation's armed open to the instant the
  *   scheduler hears it ended, on radiant_radio_now(). A transmit's open is
