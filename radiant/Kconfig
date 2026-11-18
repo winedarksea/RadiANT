@@ -725,6 +725,136 @@ config RADIANT_NRF_RX_DIAG
 	  Off by default and never in a shipping image. With it off nothing
 	  here compiles, so the non-diagnostic interrupt path is unchanged.
 
+# ------ Low power: release the HFXO between distant operations (Track B) ------
+#
+# Power plan Track B, summarised in the help texts below. Pass B2 adds only
+# the options and the pure arithmetic they will drive
+# (src/radiant_radio_nrf_lp.h, radiant/tests/lp_clock); nothing in the
+# backend reads them yet, so enabling RADIANT_NRF_LOW_POWER today changes no
+# behaviour. Pass B3 implements it on the nRF54L15 direct backend.
+config RADIANT_NRF_LOW_POWER
+	bool "EXPERIMENTAL: release the HFXO and stop the radio TIMER in idle gaps"
+	depends on RADIANT_BACKEND_NRF
+	# The asleep timebase runs on the LF crystal: the gaps are timed at the
+	# LF clock's accuracy, which an RC oscillator (+-250..500 ppm) cannot
+	# meet for an ANT+ period, and a clock SYNTHESISED from the HFCLK would
+	# keep the HFXO this exists to release running (the apps/dongle
+	# synth.conf / Pro Micro `_synth` builds). So the crystal source only.
+	# The backend refuses at run time too if LFCLK is not running from it.
+	depends on CLOCK_CONTROL_NRF_K32SRC_XTAL
+	# The LF counter is the system timer's: user channels of RTC1
+	# (nRF52840, nRF5340 network core) or of the GRTC (nRF54L).
+	depends on NRF_RTC_TIMER || NRF_GRTC_TIMER
+	# Direct backend only for now. On an MPSL build the HFXO and the wake
+	# both belong to MPSL's timeslot placement; pass B6 lifts this.
+	depends on !RADIANT_BACKEND_NRF_GATE_MPSL
+	help
+	  Today the nRF backend requests the HFXO at init and never releases
+	  it, and a free-running 1 MHz TIMER is its only timebase. On a
+	  battery node that sends four frames a second this crystal is most
+	  of the idle current (hundreds of uA; the power-diag proxy reports it
+	  as hfxo_req_us).
+
+	  With this on, when the next radio operation is far enough away the
+	  backend releases the HFXO and stops the TIMER, and keeps time on
+	  the low-frequency counter the system timer already runs: RTC1 at
+	  32768 Hz on the nRF52840 and nRF5340 network core, the GRTC at
+	  1 MHz on the nRF54L15. The hand-over is exact to about 1 us at both
+	  ends, because both are LF compare events wired by (D)PPI: on
+	  release one captures the TIMER on a known LF tick, on wake one
+	  starts the cleared TIMER on a known LF tick. Between them
+	  now = max(last value, anchor + exact LF-to-us conversion), with the
+	  sub-microsecond fraction carried so that conversions never add up
+	  to drift (src/radiant_radio_nrf_lp.h). Over a gap the timebase runs
+	  at the LF crystal's rate, so an ANT+ period is as accurate as that
+	  crystal (+-20..50 ppm, a constant few us per period).
+
+	  The backend sleeps only when the next operation starts more than
+	  the wake lead (RADIANT_NRF_LP_HFXO_STARTUP_US plus arming
+	  margin) plus RADIANT_NRF_LP_KEEP_ON_US away, and not for
+	  RADIANT_NRF_LP_LINGER_MS after the radio is enabled or a
+	  PRIO_NORMAL operation is acquired: a search, a receive that is
+	  still acquiring, or a burst never sleeps. A master in steady state
+	  is awake about 4.5 ms per period (~2 % duty).
+
+	  ACCEPTED BEHAVIOUR CHANGE: each operation after a sleep depends on
+	  two interrupts about 1.7 ms before it (the wake compare that
+	  requests the HFXO and the HFXO-started event that arms the radio).
+	  An irq_lock(), a flash erase or a higher-priority interrupt that
+	  holds the CPU across that window costs the slot: the operation
+	  fails through the existing FAILED path and is counted, as a late
+	  wake, rather than being transmitted late. Without this option no
+	  operation depends on any interrupt before its own arm call.
+
+	  Requires the LF crystal (CLOCK_CONTROL_NRF_K32SRC_XTAL). Off by
+	  default; with it off nothing here compiles.
+
+	  STATUS: scaffolding only. The options and the timebase arithmetic
+	  exist; the backend does not act on them yet, so turning this on
+	  today builds the same radio as turning it off.
+
+config RADIANT_NRF_LP_HFXO_STARTUP_US
+	int "HFXO start-up time the low-power wake allows for, us"
+	depends on RADIANT_NRF_LOW_POWER
+	range 100 10000
+	# The same source MPSL takes its MPSL_HFCLK_LATENCY default from: the
+	# SoC devicetree's hfxo startup-time-us (1650 on the nRF54L05/10/15 and
+	# nRF54LM20), and MPSL's own 1400 where the devicetree states none
+	# (nRF52840, nRF5340).
+	default $(dt_node_int_prop_int,/clocks/hfxo,startup-time-us) if $(dt_node_has_prop,/clocks/hfxo,startup-time-us)
+	default 1400
+	help
+	  How long before an operation's own arming lead the backend
+	  requests the HFXO back. Too short and the crystal is not stable
+	  when the radio must ramp (the operation fails late and is counted);
+	  too long and every period spends the excess awake.
+
+	  The default is the SoC devicetree's hfxo startup-time-us where it
+	  has one (1650 us on the nRF54L15), else 1400 us, which is the
+	  figure MPSL assumes for MPSL_HFCLK_LATENCY on parts whose
+	  devicetree gives none (nRF52840, nRF5340 network core). Both are
+	  conservative typical figures, not measurements on this bench; the
+	  power plan's spike B1 (S4) measures the start-up distribution with
+	  CONSTLAT and may lower them.
+
+config RADIANT_NRF_LP_KEEP_ON_US
+	int "least idle gap worth sleeping through, beyond the wake lead, us"
+	depends on RADIANT_NRF_LOW_POWER
+	range 0 1000000
+	default 3000
+	help
+	  The backend sleeps only when the next operation is more than the
+	  wake lead plus this far away. Stopping and restarting the crystal
+	  costs its start-up charge and two interrupts, so a gap barely
+	  longer than the wake lead is cheaper spent awake. 3 ms keeps an
+	  acknowledged-data exchange, a burst and the master's post-TX
+	  receive window awake, and still sleeps through ~240 ms of every
+	  4 Hz period.
+
+config RADIANT_NRF_LP_LINGER_MS
+	int "stay awake this long after enable or a PRIO_NORMAL acquire, ms"
+	depends on RADIANT_NRF_LOW_POWER
+	range 0 60000
+	default 1000
+	help
+	  No sleep for this long after the radio is enabled and after every
+	  PRIO_NORMAL (acquiring, searching) operation, so a search or a
+	  receiver that is still finding its master runs on the TIMER
+	  exactly as without this option, and only a settled schedule
+	  sleeps.
+
+config RADIANT_NRF_LP_STATS
+	bool "count low-power transitions, late wakes and anchor disagreement"
+	depends on RADIANT_NRF_LOW_POWER
+	default y if RADIANT_POWER_DIAG
+	help
+	  Counters for the low-power path: sleeps, wakes, wakes that were
+	  too late for their operation (each one also fails that operation),
+	  releases that took the LF image of their edge rather than the
+	  TIMER's, and the largest disagreement between the two. On by
+	  default with RADIANT_POWER_DIAG, whose proxy is how a board with
+	  no current meter shows what the option saved.
+
 # ------ ADR 0018 candidate (d2): a second timeslot session (Phase 1) -------
 #
 # A committed operation's request is BOOKED a lead ahead in a second MPSL

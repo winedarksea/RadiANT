@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# The nRF low-power timebase arithmetic. native_sim only, on the parent
+# application's 32-bit reasoning: the header does 64-bit tick and q-unit
+# arithmetic that a 64-bit host would quietly widen, and the target shares the
+# 32-bit host's pointer and long widths.
+#
+# The timeout is twister's default: five 100 000-cycle drift simulations are
+# a fraction of a second.
+tests:
+  radiant.lp_clock:
+    tags:
+      - radiant
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
