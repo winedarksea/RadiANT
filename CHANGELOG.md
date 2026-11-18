@@ -20,6 +20,18 @@ reads.
 
 ### Fixed
 
+- **Security: a receiver that joins an epoch older than its own uptime now
+  counts from the epoch, not from its boot.** The anchor `0xF3` sets was
+  clamped to the clock's zero, and so were the re-anchor and the master's slot
+  latch. A receiver 10 s after boot given an epoch 1000 s old then refused
+  every genuine window and verified recordings about 1000 s old, and never
+  recovered; a master given such an epoch sent the wrong slot index. The
+  anchor is now signed and may lie before boot. `0xF3` now refuses a phase of
+  more than `INT32_MAX` periods, or one whose whole wraps would pass the epoch
+  headroom (`ANTW_INVALID_PARAMETER_PROVIDED`, nothing changed), and
+  `tools/ant_sec.py` refuses a phase of 2^52 us or more (review 2026-11-17
+  item 3; `docs/radiant-security.md` 3.1, 3.5, 7.6).
+
 - **SYSTEM_RESET is answered in a few milliseconds, not 52.** The bridge slept
   50 ms before sending STARTUP, which put the reply on top of libusb-win32's
   short-read race: a host reading with a 50 ms timeout lost 5 of 1000 STARTUPs.

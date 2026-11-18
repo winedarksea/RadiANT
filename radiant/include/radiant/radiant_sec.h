@@ -883,15 +883,22 @@ int  radiant_sec_configure(uint8_t ch, uint8_t switches, uint8_t w,
  * letting the receiver derive the slot counter from TIME rather than arrival
  * history - the only thing that works for a mid-epoch join, a gap longer than
  * 255 slots, or slot-aligned sparse mode. The sender latches its own slot
- * phase from it at the first secured transform.
+ * phase from it at the first secured transform. It may exceed the clock's
+ * uptime - the normal case for a receiver joining a running sender - and the
+ * anchor then lies before radiant_radio_now()'s zero; it is not clamped
+ * there. Replay slack is the fixed 128 periods around this phase.
  *
  * `period_counts` (channel period in 1/32768 s counts) is passed in rather
  * than read from radiant_channel so this module depends on nothing but the
  * seam and the clock.
  *
- * Refuses an epoch <= the current one, and epochs within
+ * Refuses (RADIANT_SEC_EINVAL) an epoch <= the current one, epochs within
  * RADIANT_SEC_EPOCH_HEADROOM of 0xFFFFFFFF so a wrap always has room to
- * advance into. No transform enables until this is called after a reset.
+ * advance into, and a phase of more than INT32_MAX periods or whose whole
+ * wraps (phase / 65536 periods) would take the epoch into that headroom.
+ * A refusal changes nothing. Whole wraps in an accepted phase are advanced
+ * by the first packet or slot, not here. No transform enables until this is
+ * called after a reset.
  */
 #define RADIANT_SEC_EPOCH_HEADROOM 0x1000u
 

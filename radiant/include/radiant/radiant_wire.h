@@ -1733,12 +1733,15 @@
  * the epoch is coarse real time (minutes since the RadiANT date) rather than
  * a bare ordinal; [2..5] epoch (u32 LE); [6..13] microseconds into that epoch
  * (u64 LE), which is the phase a receiver derives the slot counter from
- * rather than from arrival history. REFUSES an epoch less than or equal to
- * the current one, and refuses epochs near 0xFFFFFFFF so a counter wrap
- * always has headroom. No transform enables until this has been set after a
- * reset: a reboot that restarts the counter under an unchanged epoch is a
- * two-time pad for X_CONF and a full session replay against X_AUTH. [K4
- * (docs/radiant-security.md sec 3.5 and 9)]
+ * rather than from arrival history; it may exceed the dongle's uptime (the
+ * anchor then lies before its boot). REFUSES an epoch less than or equal to
+ * the current one, refuses epochs near 0xFFFFFFFF so a counter wrap always
+ * has headroom, and refuses a phase of more than INT32_MAX channel periods or
+ * whose whole wraps would pass that headroom, changing nothing. No transform
+ * enables until this has been set after a reset: a reboot that restarts the
+ * counter under an unchanged epoch is a two-time pad for X_CONF and a full
+ * session replay against X_AUTH. [K4 (docs/radiant-security.md sec 3.5 and
+ * 9)]
  */
 #define RADIANT_WIRE_MESG_RADIANT_EPOCH_ID                   0xF3
 

@@ -241,8 +241,13 @@ def encode_epoch(channel: int, epoch: int, us_into_epoch: int = 0,
         raise ValueError(
             f"epoch {epoch} outside 0..{EPOCH_MAX}; the top 0x{EPOCH_HEADROOM:X} "
             "is reserved so a counter wrap always has room to advance into")
-    if not 0 <= us_into_epoch < (1 << 64):
-        raise ValueError("us_into_epoch does not fit in 64 bits")
+    # Firmware refuses a phase of more than INT32_MAX channel periods (review
+    # 2026-11-17 item 3). 2^52 us is past that at every legal period, so a
+    # larger value is a host mistake (ns or a raw tick count), caught here.
+    if not 0 <= us_into_epoch < (1 << 52):
+        raise ValueError(
+            "us_into_epoch must be below 2^52 us; firmware refuses a phase "
+            "of more than INT32_MAX channel periods")
 
     flags = EPOCH_FLAG_REAL_TIME if real_time else 0x00
     return (bytes([channel, flags]) +

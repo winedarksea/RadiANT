@@ -187,6 +187,20 @@ Drift budget: nearest-rollover resolution needs combined clock error below
 verified** (`X_AUTH`), so drift only ever accumulates across a gap in which
 nothing verified.
 
+**The anchor may lie before the receiver's boot, and normally does.** `0xF3`'s
+phase is the epoch's age, and an epoch outlives a receiver's uptime: a receiver
+joins a sender that has run for an hour. The anchor is
+`radiant_radio_now() - us_into_epoch`, held signed, so it may be negative.
+Until 2026-11-17 it was clamped to zero in three places: at `0xF3`, at the
+re-anchor below, and in the master's slot latch (review 2026-11-17 item 3). A
+receiver 10 s after boot, given an epoch 1000 s old, then counted from its own
+boot: no genuine window ever verified, recordings about 1000 s old did, and
+because a verified window could not move the anchor below zero either, it
+never healed. A master given such an epoch counted its slots from boot too.
+There is no separate allowance for the host's error: the slack is the fixed
+128 periods around the supplied phase, and the first verified window absorbs
+whatever error is left inside it.
+
 The rule is *verified*, not *accepted*, because the anchor is what decides which
 counter every later packet resolves to and whether it is a replay. Unverified
 input must not move state that judges later input. Until 2026-11-06 the
@@ -705,6 +719,18 @@ counter     = expected_index & 0xFFFF
 `65536` is divisible by every legal W, so window alignment survives the wrap
 untouched. `0xF3` rejects epochs close to `0xFFFFFFFF` so that a wrap always has
 headroom.
+
+**`0xF3` refuses a phase it cannot represent** (review 2026-11-17 item 3): more
+than `INT32_MAX` channel periods, or one whose whole wraps (`phase / 65536`
+periods) would carry the epoch past that headroom, so `epoch + wraps` must
+itself be an epoch `0xF3` would accept. The refusal comes before anything is
+written, and is `ANTW_INVALID_PARAMETER_PROVIDED`. Until then such a phase was
+accepted and clamped. An accepted phase's wraps are not folded into the epoch
+at `0xF3`: the first packet a receiver resolves, or the first slot a master
+builds, advances them as it would after a long silence. Folding them at `0xF3`
+would lose the ±128-period tolerance when the phase lands near a wrap.
+`tools/ant_sec.py` refuses a phase of 2^52 µs or more before sending it, which
+is past the firmware's bound at every period.
 
 ### 3.6 What the counter is, exactly, and where the invariant does not hold
 
@@ -1401,7 +1427,12 @@ Replay rejection is the time-consistency check of section 3.1: anything more
 than a small slack behind the expected index is rejected. That survives receiver
 reboot, which a volatile high-water mark cannot — and the *normal* case is a
 receiver joining mid-stream, which a high-water mark handles by accepting a full
-epoch of replay.
+epoch of replay. The slack is the fixed 128 periods around the phase the host
+supplied; it does not widen for the host's error. That phase may put the anchor
+before the receiver's boot (section 3.1). Until 2026-11-17 the anchor was
+clamped to boot there, so a receiver whose uptime was shorter than the epoch's
+age accepted recordings about that difference old, and refused the current
+windows.
 
 Inside a session there is a second check alongside it, the **verified-window
 floor**. Every VERIFIED verdict raises a per-channel floor to the end of the
@@ -1669,7 +1700,10 @@ in v1; see section 5.2. Bit 4 (the `0xF8` window-verdict event) without bit 1
 (`X_AUTH`) is refused the same way: only `X_AUTH` has a verdict, and accepting
 it would promise events that never come. Bits 7..5 are reserved and refused. A page range outside `0x01..0x1F` is refused the same
 way; see section 5.5. `0xF3` refuses an epoch less than or equal to the current
-one, and refuses epochs near `0xFFFFFFFF`; see section 3.5.
+one, refuses epochs near `0xFFFFFFFF`, and refuses a phase of more than
+`INT32_MAX` periods or one whose whole wraps would pass that headroom, with
+nothing changed; see section 3.5. A phase longer than the dongle's uptime is
+normal and accepted: the anchor then lies before its boot (section 3.1).
 
 ### The two ordering rules, and why they are refusals rather than defaults
 

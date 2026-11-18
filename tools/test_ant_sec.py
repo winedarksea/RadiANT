@@ -195,6 +195,17 @@ class TestEpoch(unittest.TestCase):
         with self.assertRaises(ValueError):
             encode_epoch(0, 0xFFFFFFFF)
 
+    def test_a_phase_from_2_52_us_is_refused(self):
+        # Firmware refuses a phase of more than INT32_MAX periods (review
+        # 2026-11-17 item 3); 2^52 us (~143 years) is past that at every
+        # legal period, so an encoder asked for one is mistaken.
+        body = encode_epoch(0, 1, us_into_epoch=(1 << 52) - 1)
+        self.assertEqual((1 << 52) - 1, decode_epoch(body)["us_into_epoch"])
+        with self.assertRaises(ValueError):
+            encode_epoch(0, 1, us_into_epoch=1 << 52)
+        with self.assertRaises(ValueError):
+            encode_epoch(0, 1, us_into_epoch=(1 << 64) - 1)
+
 
 class TestStatus(unittest.TestCase):
     """0xF4. Mirrors antr_sec_status_get()."""

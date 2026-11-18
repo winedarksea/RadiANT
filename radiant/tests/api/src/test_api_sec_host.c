@@ -227,6 +227,46 @@ ZTEST(api, test_sec_host_an_epoch_needs_a_key_and_only_moves_forwards)
 	host_done();
 }
 
+/*
+ * Review 2026-11-17 item 3 through 0xF3: a phase longer than the uptime (a
+ * receiver joining an epoch that began before it booted) counts from the
+ * epoch, not from boot - it used to be clamped to boot. And a phase the
+ * anchor cannot carry is refused, with nothing changed.
+ */
+ZTEST(api, test_sec_host_a_late_joiner_counts_from_the_epoch_not_from_boot)
+{
+	/* 200000 periods, ~50000 s: longer than the fake clock has run. In
+	 * radiant_sec's own period, truncated microseconds. */
+	const uint64_t age_us =
+		200000ull *
+		(((uint64_t)RADIANT_CHANNEL_PERIOD_ANT_PLUS * 1000000u) / 32768u);
+	uint8_t        st[ANTR_SEC_STATUS_LEN];
+
+	host_assign(true, true);
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_key_set(HOST_CH, 128u, host_key));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_config(HOST_CH, RADIANT_SEC_SW_AUTH, 2u, 0x01u,
+				      0x0Fu));
+	zassert_true((uint64_t)radiant_radio_now() < age_us);
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_epoch_set(HOST_CH, 0u, 20u, age_us));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_status_get(HOST_CH, st, sizeof(st)));
+	zassert_equal((uint16_t)200000u, rd16(&st[10]), "expected index %u",
+		      rd16(&st[10]));
+
+	zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
+		      antr_sec_epoch_set(HOST_CH, 0u, 21u, UINT64_MAX));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_status_get(HOST_CH, st, sizeof(st)));
+	zassert_equal(20u, rd32(&st[6]));
+	zassert_equal((uint16_t)200000u, rd16(&st[10]));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_epoch_set(HOST_CH, 0u, 21u, 0u));
+	host_done();
+}
+
 ZTEST(api, test_sec_host_status_reports_enrolments)
 {
 	uint8_t st[ANTR_SEC_STATUS_LEN];

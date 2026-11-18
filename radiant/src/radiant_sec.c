@@ -87,7 +87,11 @@ struct sec_ctx {
 	 * because both fill alignment holes on a 32-bit target, so the fix that
 	 * added them cost no RAM. */
 	int32_t  rx_prev_err;
-	uint64_t epoch_anchor;  /* radiant_radio_now() at us_into_epoch == 0 */
+	/* radiant_radio_now() at us_into_epoch == 0. Signed: an epoch normally
+	 * began before this clock's zero (a receiver joins a sender that has
+	 * run for hours), and clamping that to zero counted from boot instead
+	 * (review 2026-11-17 item 3). */
+	int64_t  epoch_anchor;
 
 	struct radiant_sec_key k_root;
 	struct radiant_sec_key k_enc;
@@ -288,6 +292,16 @@ static uint64_t period_us_of(const struct sec_ctx *c)
 	return ((uint64_t)c->period_counts * 1000000u) / 32768u;
 }
 
+/* Microseconds from the anchor to `t`, 0 for an instant before it. Unsigned
+ * subtraction, then signed: modular rather than undefined, and exact for any
+ * two instants less than 2^63 us apart (radiant_sec_compat.c elapsed_us()). */
+static uint64_t since_anchor(const struct sec_ctx *c, uint64_t t)
+{
+	int64_t d = (int64_t)(t - (uint64_t)c->epoch_anchor);
+
+	return (d > 0) ? (uint64_t)d : 0u;
+}
+
 /* D4: expected slot index, from TIME rather than arrival history - a receiver
  * joining mid-epoch (the normal case) has none to count from. The sender's
  * counter is its slot index too (tx_slot_index()), one count per slot whether
@@ -296,16 +310,14 @@ static uint64_t period_us_of(const struct sec_ctx *c)
 static uint32_t expected_index(const struct sec_ctx *c, uint64_t now)
 {
 	uint64_t period_us = period_us_of(c);
-	uint64_t elapsed;
 
 	if (period_us == 0u) {
 		return 0u;
 	}
-	if (now <= c->epoch_anchor) {
-		return 0u;
-	}
-	elapsed = now - c->epoch_anchor;
-	return (uint32_t)(elapsed / period_us);
+	/* set_epoch refuses a phase past INT32_MAX periods, which leaves as
+	 * many again of uptime before this cast truncates; each wrap moves the
+	 * anchor 65536 periods on. */
+	return (uint32_t)(since_anchor(c, now) / period_us);
 }
 
 /*
@@ -422,7 +434,7 @@ static int advance_epoch(struct sec_ctx *c, uint16_t by)
 
 	/* Move the anchor with it so the phase stays continuous: 65536 packets
 	 * per wrap. */
-	c->epoch_anchor += (uint64_t)by * 65536u * period_us_of(c);
+	c->epoch_anchor += (int64_t)((uint64_t)by * 65536u * period_us_of(c));
 
 	return derive_keys(c);
 }
@@ -698,6 +710,7 @@ int radiant_sec_set_epoch(uint8_t ch, uint32_t epoch, uint64_t us_into_epoch,
 	RADIANT_SEC_ASSERT_LOCKED();
 	struct sec_ctx *c = ctx_of(ch);
 	uint64_t        now;
+	uint64_t        slots;
 
 	if (c == NULL) {
 		return RADIANT_SEC_ENOKEY;
@@ -723,10 +736,25 @@ int radiant_sec_set_epoch(uint8_t ch, uint32_t epoch, uint64_t us_into_epoch,
 	if (epoch > 0xFFFFFFFFu - RADIANT_SEC_EPOCH_HEADROOM) {
 		return RADIANT_SEC_EINVAL;
 	}
+	/* The phase as slots: past INT32_MAX of them the 32-bit expected index
+	 * and the 16-bit wrap count of advance_epoch() overflow, and the whole
+	 * wraps must land on an epoch this call would accept itself. Refused
+	 * before anything is written. Wraps are not folded in here:
+	 * the first packet or slot advances them as after any silence, and
+	 * folding would lose the +/-128-slot tolerance at a wrap boundary. */
+	slots = us_into_epoch /
+		(((uint64_t)period_counts * 1000000u) / 32768u);
+	if (slots > (uint64_t)INT32_MAX ||
+	    (uint64_t)epoch + (slots >> 16) >
+		    0xFFFFFFFFu - RADIANT_SEC_EPOCH_HEADROOM) {
+		return RADIANT_SEC_EINVAL;
+	}
 
 	now = (uint64_t)radiant_radio_now();
 	c->epoch = epoch;
-	c->epoch_anchor = (now > us_into_epoch) ? (now - us_into_epoch) : 0u;
+	/* Before this clock's zero whenever the epoch is older than the uptime,
+	 * which is the normal case for a receiver joining a running sender. */
+	c->epoch_anchor = (int64_t)(now - us_into_epoch);
 	c->period_counts = period_counts;
 	c->epoch_set = true;
 
@@ -1096,9 +1124,7 @@ static int tx_slot_index(struct sec_ctx *c, uint64_t t_sync, uint32_t *idx)
 	if (!c->tx_latched) {
 		/* The host's anchor need not fall on a slot; whatever slot is
 		 * nearest is this one, and every later slot counts from it. */
-		n = (t_sync > c->epoch_anchor)
-			    ? (t_sync - c->epoch_anchor + slot_us / 2u) / slot_us
-			    : 0u;
+		n = (since_anchor(c, t_sync) + slot_us / 2u) / slot_us;
 		c->tx_zero_t = (int64_t)t_sync - (int64_t)(n * slot_us);
 		c->tx_latched = true;
 	}
@@ -1428,12 +1454,8 @@ static void rx_close_window(struct sec_ctx *c, const struct sec_pkt *last,
 				step = (step > lim) ? lim
 						    : ((step < -lim) ? -lim : step);
 			}
-			if (step < 0 &&
-			    (uint64_t)(-(int64_t)step) > c->epoch_anchor) {
-				c->epoch_anchor = 0u;
-			} else {
-				c->epoch_anchor += (uint64_t)(int64_t)step;
-			}
+			/* Before boot is as good an anchor as any. */
+			c->epoch_anchor += step;
 			c->rx_floor = (uint16_t)(c->rx_prev_start + c->w);
 
 			verdict = RADIANT_SEC_VERDICT_VERIFIED;
@@ -1468,10 +1490,10 @@ static void rx_close_window(struct sec_ctx *c, const struct sec_pkt *last,
 		 * against the anchor as it now stands. Measured per window, not
 		 * per packet, and applied only if this window verifies. Bounded
 		 * by the replay slack to ~129 periods (258 s at the longest
-		 * period); saturated only when t_sync precedes the anchor. */
+		 * period); the saturation below is defence only. */
 		int64_t err = (int64_t)last->t_sync -
 			      (int64_t)((uint64_t)counter * period_us) -
-			      (int64_t)c->epoch_anchor;
+			      c->epoch_anchor;
 
 		c->rx_prev_err = (err > INT32_MAX)
 					 ? INT32_MAX

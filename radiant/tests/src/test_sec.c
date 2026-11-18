@@ -2280,3 +2280,306 @@ ZTEST(radiant_sec, test_a_followed_channel_refuses_set_epoch_and_a_raise_only_ra
 	zassert_ok(radiant_sec_tx_transform(TX_CH, pay, 8u, slot_t(3u * 65536u)));
 	zassert_equal(203u, tx_epoch_now(TX_CH));
 }
+
+/* ── An epoch that began before boot (review 2026-11-17 item 3) ─────────── */
+
+/*
+ * The host's 0xF3 phase is the epoch's age, and an epoch normally outlives the
+ * receiver's uptime: a receiver joins a sender that has run for an hour. The
+ * anchor (radiant_radio_now() - phase) is then before this clock's zero. It
+ * used to be clamped to zero there, which made a receiver 10 s after boot
+ * count from its boot rather than from the epoch: genuine windows ~1000 s on
+ * never verified, recordings ~1000 s old did, and a verified window could not
+ * pull the anchor back below zero, so it never healed. The same clamp sat in
+ * the master's slot latch.
+ *
+ * The sender here is "normally anchored": its recordings are made on a clock
+ * that has run longer than the epoch (late_record()), and the clock is then
+ * moved back to a receiver 10 s after its boot. A sender anchored on the
+ * receiver's clock would carry the same clamp on master and agree with it.
+ */
+
+#define LATE_UPTIME_US 10000000ull     /* the receiver booted 10 s ago */
+#define LATE_SENDER_US 20000000000ull  /* a sender up ~5.6 h */
+#define LATE_AGE       4000u           /* ~1000 s into the epoch, in slots */
+
+/* Set `ch`'s epoch `k` slots in, as a host 0xF3 does. sec_anchor becomes slot
+ * 0's instant - modular, so "before zero" wraps, and slot_t() of a slot after
+ * boot is still exact. */
+static void epoch_late(uint8_t ch, uint32_t epoch, uint32_t k)
+{
+	zassert_ok(radiant_sec_set_epoch(ch, epoch, (uint64_t)k * period_us(),
+					 TEST_PERIOD));
+	sec_anchor = (uint64_t)radiant_radio_now() - (uint64_t)k * period_us();
+}
+
+/* A sender up for hours, whose epoch began `from` slots before now, records
+ * slots from..from+n-1 into rec[] as they go on the air. Then the clock moves
+ * to a receiver LATE_UPTIME_US after its boot. */
+static void late_record(uint32_t epoch, uint32_t from, uint32_t n)
+{
+	uint32_t i;
+
+	zassert_true(n <= REC_MAX);
+	fake_radio_set_origin((radiant_time_t)LATE_SENDER_US);
+	epoch_late(TX_CH, epoch, from);
+	for (i = 0u; i < n; i++) {
+		tx_hop(from + i, rec[i]);
+	}
+	fake_radio_set_origin((radiant_time_t)LATE_UPTIME_US);
+}
+
+/* rec[i] heard at slot k + i of the receiver's own epoch_late(). */
+static void late_hop(uint32_t k, uint32_t i)
+{
+	ingest_at(rec[i], slot_t(k + i));
+}
+
+/* Ten whole windows of W=4 heard: each closes on its own last packet, and
+ * every close but the first judges the window before it. */
+#define LATE_JUDGED 9u
+
+ZTEST(radiant_sec, test_a_late_joiner_verifies_current_windows)
+{
+	struct radiant_sec_stats st;
+	uint32_t                 i;
+
+	key_both();
+	configure_both(RADIANT_SEC_SW_AUTH, 4u);
+	late_record(73u, LATE_AGE, 40u);
+	epoch_late(RX_CH, 73u, LATE_AGE);
+
+	zassert_equal(LATE_AGE, rx_expected_at(slot_t(LATE_AGE)));
+	for (i = 0u; i < 40u; i++) {
+		late_hop(LATE_AGE, i);
+	}
+	st = rx_stats();
+	zassert_equal(LATE_JUDGED, st.windows_verified, "%u",
+		      st.windows_verified);
+	zassert_equal(0u, st.windows_unverified, "%u", st.windows_unverified);
+	zassert_equal(LATE_AGE + 40u, rx_expected_at(slot_t(LATE_AGE + 40u)));
+}
+
+/*
+ * The exploit on master: the epoch's first 40 slots, recorded ~1000 s ago and
+ * replayed to a receiver 10 s after its boot. Far outside the 128-slot slack,
+ * so nearest-rollover resolution sends each packet to a counter 256 on and its
+ * MAC fails - a MAC failure, not a replay drop.
+ */
+static void late_old_replay(uint8_t switches)
+{
+	uint32_t i;
+
+	key_both();
+	configure_both(switches, 4u);
+	late_record(79u, 0u, 40u);
+	epoch_late(RX_CH, 79u, LATE_AGE);
+
+	for (i = 0u; i < 40u; i++) {
+		late_hop(LATE_AGE, i);
+	}
+	zassert_equal(0u, verified_count());
+	zassert_equal(0u, rx_stats().windows_verified);
+	if ((switches & RADIANT_SEC_SW_DROP_UNVER) != 0u) {
+		zassert_equal(0u, log_n_pkt, "%u packets", log_n_pkt);
+	}
+}
+
+ZTEST(radiant_sec, test_a_late_joiner_refuses_a_recording_older_than_the_slack)
+{
+	late_old_replay(RADIANT_SEC_SW_AUTH);
+}
+
+ZTEST(radiant_sec, test_a_late_joiner_refuses_an_old_recording_under_the_drop_policy)
+{
+	late_old_replay(RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_DROP_UNVER);
+}
+
+/* Inside the slack a recording is genuine bytes and verifies - the documented
+ * cost of tracking drift at all - but only once: the floor drops it after. */
+ZTEST(radiant_sec, test_a_late_joiner_accepts_a_recording_inside_the_slack_once)
+{
+	uint32_t replay_before;
+	uint32_t i;
+
+	key_both();
+	configure_both(RADIANT_SEC_SW_AUTH, 4u);
+	late_record(83u, LATE_AGE - 60u, 40u);
+	epoch_late(RX_CH, 83u, LATE_AGE);
+
+	/* 60 slots late. */
+	for (i = 0u; i < 40u; i++) {
+		late_hop(LATE_AGE, i);
+	}
+	zassert_equal(LATE_JUDGED, rx_stats().windows_verified, "%u",
+		      rx_stats().windows_verified);
+	replay_before = rx_stats().dropped_replay;
+
+	/* The nine verified windows again, 100 slots late: every one below the
+	 * floor. */
+	for (i = 0u; i < 4u * LATE_JUDGED; i++) {
+		late_hop(LATE_AGE + 40u, i);
+	}
+	zassert_equal(LATE_JUDGED, rx_stats().windows_verified);
+	zassert_equal(replay_before + 4u * LATE_JUDGED,
+		      rx_stats().dropped_replay, "%u",
+		      rx_stats().dropped_replay - replay_before);
+	for (i = 0u; i < LATE_JUDGED; i++) {
+		zassert_equal(1u, verdicts_for((uint16_t)(LATE_AGE - 60u + 4u * i),
+					       RADIANT_SEC_VERDICT_VERIFIED));
+	}
+}
+
+/* A phase past a whole counter wrap: the receiver's first packet advances its
+ * epoch, as the sender's first slot did. */
+ZTEST(radiant_sec, test_a_phase_past_a_wrap_advances_the_epoch_on_the_first_packet)
+{
+	const uint32_t k = 65536u + LATE_AGE;
+	struct radiant_sec_state s;
+	uint32_t i;
+
+	key_both();
+	configure_both(RADIANT_SEC_SW_AUTH, 4u);
+	late_record(89u, k, 40u);
+	epoch_late(RX_CH, 89u, k);
+
+	zassert_equal((uint16_t)k, rx_expected_at(slot_t(k)));
+	zassert_equal(0u, rx_stats().epoch_advances);
+	late_hop(k, 0u);
+	zassert_equal(1u, rx_stats().epoch_advances);
+	radiant_sec_get_state(RX_CH, &s);
+	zassert_equal(90u, s.epoch);
+	for (i = 1u; i < 40u; i++) {
+		late_hop(k, i);
+	}
+	zassert_equal(LATE_JUDGED, rx_stats().windows_verified, "%u",
+		      rx_stats().windows_verified);
+	zassert_equal(0u, rx_stats().windows_unverified);
+}
+
+/* Joined 20 slots before a wrap, the receiver follows the sender through it. */
+ZTEST(radiant_sec, test_a_late_joiner_follows_the_sender_through_a_wrap)
+{
+	const uint32_t k = 65536u - 20u;
+	struct radiant_sec_state s;
+	uint32_t i;
+
+	key_both();
+	configure_both(RADIANT_SEC_SW_AUTH, 4u);
+	late_record(97u, k, 40u);
+	epoch_late(RX_CH, 97u, k);
+
+	for (i = 0u; i < 40u; i++) {
+		late_hop(k, i);
+	}
+	radiant_sec_get_state(RX_CH, &s);
+	zassert_equal(98u, s.epoch);
+	zassert_equal(1u, rx_stats().epoch_advances);
+	/* Before the wrap 65516..65528 are judged (65532's verdict would ride
+	 * in new-epoch window 0, which carries none); after it 0..12. */
+	for (i = 0u; i < 4u; i++) {
+		zassert_true(window_was_verified((uint16_t)(k + 4u * i)),
+			     "window %u", k + 4u * i);
+		zassert_true(window_was_verified((uint16_t)(4u * i)),
+			     "window %u", 4u * i);
+	}
+	zassert_equal(8u, rx_stats().windows_verified, "%u",
+		      rx_stats().windows_verified);
+	zassert_equal(0u, rx_stats().windows_unverified);
+}
+
+/*
+ * The master's latch had the same clamp: given an epoch older than its uptime,
+ * it counted slots from boot. Here its epoch is 20 slots past a wrap, so its
+ * first slot must advance the epoch and carry counter 20 - and a receiver
+ * anchored normally (epoch + 1, 20 slots in, after boot) verifies it.
+ */
+ZTEST(radiant_sec, test_a_master_whose_epoch_predates_boot_sends_the_right_slot)
+{
+	const uint32_t k = 65536u + 20u;
+	struct radiant_sec_stats st;
+	uint8_t                  air[8];
+	uint32_t                 i;
+
+	fake_radio_set_origin((radiant_time_t)LATE_UPTIME_US);
+	key_both();
+	configure_both(RADIANT_SEC_SW_AUTH, 4u);
+	zassert_ok(radiant_sec_set_epoch(RX_CH, 102u, 20u * period_us(),
+					 TEST_PERIOD));
+	epoch_late(TX_CH, 101u, k);
+
+	for (i = 0u; i < 40u; i++) {
+		tx_hop(k + i, air);
+		zassert_equal((uint8_t)(20u + i), air[1], "slot %u", i);
+		ingest_at(air, slot_t(k + i));
+	}
+	zassert_equal(102u, tx_epoch_now(TX_CH));
+	st = rx_stats();
+	zassert_equal(LATE_JUDGED, st.windows_verified, "%u",
+		      st.windows_verified);
+	zassert_equal(0u, st.windows_unverified);
+}
+
+/*
+ * The host's phase is off by 64 slots, late: the receiver's anchor lands ~1 s
+ * after boot while the sender's epoch began ~15 s before it. The first
+ * verified window takes the error whole (3.1), which moves the anchor before
+ * boot - it was clamped at zero, leaving the clock 4 slots out for good.
+ */
+ZTEST(radiant_sec, test_the_first_verified_window_can_move_the_anchor_before_boot)
+{
+	uint32_t i;
+
+	key_both();
+	configure_both(RADIANT_SEC_SW_AUTH, 4u);
+	late_record(103u, 100u, 40u);
+	epoch_late(RX_CH, 103u, 36u);
+
+	for (i = 0u; i < 40u; i++) {
+		late_hop(36u, i);
+	}
+	zassert_equal(LATE_JUDGED, rx_stats().windows_verified, "%u",
+		      rx_stats().windows_verified);
+	zassert_equal(140u, rx_expected_at(slot_t(36u + 40u)));
+}
+
+/*
+ * A phase the anchor cannot carry is refused before anything changes: more
+ * than INT32_MAX periods, or more whole wraps than the epoch has room to
+ * advance into. The bound itself is accepted.
+ */
+ZTEST(radiant_sec, test_set_epoch_refuses_a_phase_it_cannot_represent)
+{
+	/* radiant_sec's own period: truncated, not rounded. */
+	const uint64_t p = ((uint64_t)TEST_PERIOD * 1000000u) / 32768u;
+	const uint32_t top = 0xFFFFFFFFu - RADIANT_SEC_EPOCH_HEADROOM;
+	struct radiant_sec_state s;
+
+	key_both();
+	configure_both(RADIANT_SEC_SW_AUTH, 4u);
+
+	/* A refusal leaves a fresh channel pending. */
+	zassert_equal(RADIANT_SEC_EINVAL,
+		      radiant_sec_set_epoch(RX_CH, 5u, UINT64_MAX, TEST_PERIOD));
+	zassert_equal(RADIANT_SEC_EINVAL,
+		      radiant_sec_set_epoch(RX_CH, 5u,
+					    ((uint64_t)INT32_MAX + 1u) * p,
+					    TEST_PERIOD));
+	radiant_sec_get_state(RX_CH, &s);
+	zassert_false(s.secured);
+
+	/* ...and an armed one as it was, the epoch not consumed. */
+	zassert_ok(radiant_sec_set_epoch(RX_CH, 5u, 0u, TEST_PERIOD));
+	zassert_equal(RADIANT_SEC_EINVAL,
+		      radiant_sec_set_epoch(RX_CH, 6u, UINT64_MAX, TEST_PERIOD));
+	radiant_sec_get_state(RX_CH, &s);
+	zassert_equal(5u, s.epoch);
+	zassert_equal(0u, s.expected_index);
+	zassert_ok(radiant_sec_set_epoch(RX_CH, 6u, (uint64_t)INT32_MAX * p,
+					 TEST_PERIOD));
+
+	/* One wrap past the top epoch has nowhere to advance into. */
+	zassert_equal(RADIANT_SEC_EINVAL,
+		      radiant_sec_set_epoch(TX_CH, top, 65536u * p, TEST_PERIOD));
+	zassert_ok(radiant_sec_set_epoch(TX_CH, top, 65535u * p, TEST_PERIOD));
+}
