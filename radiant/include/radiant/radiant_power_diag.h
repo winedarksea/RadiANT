@@ -71,8 +71,8 @@
  *   3. reads seq again (s2); the read is consistent only if s2 == s1.
  *
  * seq == 0 means no snapshot has been published yet (magic, version, size,
- * the NOT_MEASURED sentinels and constlat_stat are valid from reset; the
- * counters are still 0). An SWD block read takes microseconds and a snapshot
+ * flags and the NOT_MEASURED sentinels are valid from reset; the counters
+ * are still 0 and constlat_stat still reads NOT_MEASURED). An SWD block read takes microseconds and a snapshot
  * comes once a second, so a retry is rare; a reader that sees s2 != s1 twice
  * running should suspect it is reading the wrong address.
  *
