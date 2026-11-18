@@ -109,7 +109,11 @@
  * ZERO COST WHEN OFF. Without CONFIG_RADIANT_POWER_DIAG the hook functions
  * below are empty static inlines, radiant_power_diag.c is not built and no
  * symbol is added. The arithmetic helpers are static inlines with no state,
- * defined in every build so that the unit tests reach them.
+ * defined in every build so that the unit tests reach them. The stack's own
+ * callers (radiant_sched.c, radiant_radio_nrf.c) include this header only
+ * when the option is on: even unused inline declarations renumber GCC's
+ * internal switch tables (CSWTCH.n), and the zero-cost symbol comparison
+ * reports the rename.
  */
 
 #ifndef RADIANT_POWER_DIAG_H_

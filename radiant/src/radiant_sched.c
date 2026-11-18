@@ -36,7 +36,10 @@
 #include <radiant/radiant_diag.h>
 #include <radiant/radiant_frame.h>
 #include <radiant/radiant_noise.h>
+/* Only with the option: see power_note_end() for why. */
+#if defined(CONFIG_RADIANT_POWER_DIAG)
 #include <radiant/radiant_power_diag.h>
+#endif
 #include <radiant/radiant_radio_hal.h>
 #include <radiant/radiant_sched.h>
 /* Only for radiant_event_crit_enter()/_exit(); nothing here queues an event. */
@@ -1101,15 +1104,22 @@ static void note_lost(uint8_t c)
  * its armed open to now, before clear_armed() forgets it. Backend-neutral (the
  * HAL clock). The caller decides whether the radio ran at all: a DENIED
  * operation never did, an abort before the open did not.
+ *
+ * Off, this is a macro that expands to nothing and the header is not
+ * included: even an unused declaration renumbers GCC's internal switch tables
+ * (CSWTCH.n), which the zero-cost job's symbol comparison reports.
  */
+#if defined(CONFIG_RADIANT_POWER_DIAG)
 static void power_note_end(void)
 {
-#if defined(CONFIG_RADIANT_POWER_DIAG)
 	radiant_power_diag_radio(s.armed_kind == (uint8_t)SLOT_TX,
 				 radiant_power_diag_on_us(radiant_radio_now(),
 							  s.armed_open));
-#endif
 }
+#define POWER_NOTE_END() power_note_end()
+#else
+#define POWER_NOTE_END() do { } while (0)
+#endif
 
 /*
  * The armed operation reached its own end. Members are consumed and told why,
@@ -1129,7 +1139,7 @@ static void end_armed(enum radiant_sched_done why)
 	s.ended_bounded = (s.armed_kind == (uint8_t)SLOT_TX) ||
 			  (s.armed_kind == (uint8_t)SLOT_RX && !s.armed_continuous);
 	if (why != RADIANT_SCHED_DONE_DENIED) {
-		power_note_end();
+		POWER_NOTE_END();
 	}
 	memcpy(list, s.members, sizeof(list));
 	clear_armed();
@@ -1186,7 +1196,7 @@ static bool abort_armed(uint8_t skip_ch)
 
 	started = s.armed_open <= radiant_radio_now();
 	if (started) {
-		power_note_end();
+		POWER_NOTE_END();
 	}
 
 	memcpy(list, s.members, sizeof(list));
