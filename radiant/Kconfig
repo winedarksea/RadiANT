@@ -1577,6 +1577,7 @@ config RADIANT_POWER_DIAG
 	bool "DIAGNOSTIC: software power proxy (radiant_power_diag struct)"
 	default n
 	imply CPU_LOAD
+	select RADIANT_CC26XX_RF_HWATTRS if RADIANT_BACKEND_CC26XX
 	help
 	  For boards with no current meter. Keeps free-running counters of
 	  what sets a battery node's current - how long the backend has held
@@ -1601,8 +1602,28 @@ config RADIANT_POWER_DIAG
 	  because a Kconfig choice member cannot be selected; see
 	  RADIANT_POWER_DIAG_IDLE.
 
+	  On the cc26xx backend it also counts RF core power-ups and on-time
+	  through the TI RF driver's global callback, synthesiser errors, and
+	  the radio-timer fold's mistaken wraps (the ti_* fields), which
+	  replaces Zephyr's RF driver hardware attributes with radiant's own
+	  (RADIANT_CC26XX_RF_HWATTRS). Refused at compile time on the
+	  cc2652p_dongle and on 802.15.4/BLE coexistence builds.
+
 	  OFF BY DEFAULT and never in a shipping image. With it off every hook
 	  is an empty inline and nothing is linked.
+
+config RADIANT_CC26XX_RF_HWATTRS
+	bool
+	depends on RADIANT_BACKEND_CC26XX
+	select CC13X2_CC26X2_HAS_CUSTOM_RF_HWATTRS
+	help
+	  radiant defines the TI RF driver's RFCC26XX_hwAttrs itself
+	  (src/radiant_ti_rf_hwattrs.c) instead of taking hal_ti's
+	  definition: the same priorities and xoscHfAlwaysNeeded, plus
+	  whatever the option that selected this needs. Not set by hand;
+	  selected by RADIANT_POWER_DIAG on cc26xx (the global callback that
+	  feeds the ti_* fields). Off, the file is not built and a default
+	  image links hal_ti's definition as before.
 
 config RADIANT_POWER_DIAG_LOG_S
 	int "seconds between power-diag log lines (0 = no log line)"

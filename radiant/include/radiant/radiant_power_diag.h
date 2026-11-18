@@ -42,18 +42,22 @@
  *   0x38 idle_entries       idle-thread entries (CONFIG_RADIANT_POWER_DIAG_IDLE)
  *   0x3C flags              RADIANT_POWER_DIAG_F_* below
  *   0x40 constlat_stat      nRF54L POWER.CONSTLATSTAT read at the snapshot
- *   0x44 ti_rf_core_on_us   reserved for the TI pass (RF core powered, us)
- *   0x48 ti_rf_powerups     reserved for the TI pass (RF core power-ups)
- *   0x4C ti_rf_pu_dur_us    reserved for the TI pass (power-up duration, us)
- *   0x50 ti_fs_errors       reserved for the TI pass (synth errors)
- *   0x54 ti_fold_backsteps  reserved for the TI pass (RAT fold back-steps)
+ *   0x44 ti_rf_core_on_us   cc26xx: cumulative us the RF core was powered
+ *   0x48 ti_rf_powerups     cc26xx: RF core power-ups
+ *   0x4C ti_rf_pu_dur_us    cc26xx: the RF driver's nPowerUpDuration, us (a
+ *                           gauge, not cumulative)
+ *   0x50 ti_fs_errors       cc26xx: synthesiser-programming errors (CMD_FS)
+ *   0x54 ti_fold_backsteps  cc26xx: small backward steps of the 32-bit radio
+ *                           timer that the 64-bit fold took for a wrap
  *
  * A field this build cannot measure reads RADIANT_POWER_DIAG_NOT_MEASURED
  * (0xFFFFFFFF) for the whole run: cpu_* without CONFIG_CPU_LOAD,
  * idle_entries without CONFIG_RADIANT_POWER_DIAG_IDLE, constlat_stat on a
  * part with no CONSTLATSTAT register (every nRF52/nRF53, and cc26xx), the
  * hfxo_* trio on a backend that does not report its clock request (cc26xx,
- * null), and all five ti_* fields until the TI pass fills them.
+ * null), and all five ti_* fields on any backend but cc26xx (flag F_TI says
+ * they are measured). ti_rf_pu_dur_us also reads NOT_MEASURED on cc26xx until
+ * the RF core has powered up once.
  *
  * WRAP. The cumulative fields are free-running u32s: a reader takes
  * differences modulo 2^32 (radiant_power_diag_delta()). The us counters wrap
@@ -106,6 +110,25 @@
  *   hardware says now, which may differ on an MPSL build if MPSL's
  *   refcounted free undid the raw trigger.
  *
+ *   ti_rf_* (cc26xx only) come from the TI RF driver's global callback in
+ *   src/radiant_ti_rf_hwattrs.c, which defines RFCC26XX_hwAttrs for this
+ *   build; that file's header says exactly what each includes. In short:
+ *   ti_rf_core_on_us runs from the setup command of each power-up to the
+ *   power-down, timed on the AON RTC (it excludes the wake before setup,
+ *   which ti_rf_powerups x ti_rf_pu_dur_us bounds); ti_rf_powerups counts
+ *   power-ups, not reconfigurations. If the driver powers the core down
+ *   between distant radio slots, ti_rf_powerups grows at about the slot
+ *   rate; if it keeps the core on, ti_rf_core_on_us reads ~uptime.
+ *
+ *   ti_fs_errors counts RF_ERROR_CMDFS_SYNTH_PROG through the backend's
+ *   pErrCb (the driver's default callback ignores it).
+ *
+ *   ti_fold_backsteps counts reads of the 32-bit radio timer below the
+ *   previous one by less than 2^31 ticks - not a wrap - which the
+ *   backend's fold nevertheless treated as one, adding 2^32 ticks (1074 s)
+ *   to the clock (src/radiant_rat_fold.h). Measurement only: the fold is
+ *   unchanged. Nonzero means that clock jump happened.
+ *
  * ZERO COST WHEN OFF. Without CONFIG_RADIANT_POWER_DIAG the hook functions
  * below are empty static inlines, radiant_power_diag.c is not built and no
  * symbol is added. The arithmetic helpers are static inlines with no state,
@@ -144,6 +167,7 @@ extern "C" {
 #define RADIANT_POWER_DIAG_F_CONSTLAT_HW_VALID (1u << 3) /* constlat_stat read */
 #define RADIANT_POWER_DIAG_F_CPU_LOAD        (1u << 4) /* cpu_* measured */
 #define RADIANT_POWER_DIAG_F_IDLE            (1u << 5) /* idle_entries measured */
+#define RADIANT_POWER_DIAG_F_TI              (1u << 6) /* ti_* measured (cc26xx) */
 
 struct radiant_power_diag {
 	uint32_t magic;             /* 0x00 */
@@ -186,6 +210,12 @@ _Static_assert(offsetof(struct radiant_power_diag, cpu_active_us) == 0x30u,
 _Static_assert(offsetof(struct radiant_power_diag, flags) == 0x3Cu, "flags");
 _Static_assert(offsetof(struct radiant_power_diag, ti_rf_core_on_us) == 0x44u,
 	       "ti_rf_core_on_us");
+_Static_assert(offsetof(struct radiant_power_diag, ti_rf_powerups) == 0x48u,
+	       "ti_rf_powerups");
+_Static_assert(offsetof(struct radiant_power_diag, ti_rf_pu_dur_us) == 0x4Cu,
+	       "ti_rf_pu_dur_us");
+_Static_assert(offsetof(struct radiant_power_diag, ti_fs_errors) == 0x50u,
+	       "ti_fs_errors");
 _Static_assert(offsetof(struct radiant_power_diag, ti_fold_backsteps) == 0x54u,
 	       "ti_fold_backsteps");
 #endif
@@ -351,6 +381,16 @@ void radiant_power_diag_constlat_requested(void);
  */
 void radiant_power_diag_radio(bool tx, uint32_t on_us);
 
+/*
+ * The cc26xx backend's 64-bit fold of its 32-bit radio timer saw a read
+ * (`now`) below the previous one (`last`) and is about to add 2^32. Called
+ * only on that backward step, under the backend's irq_lock (the fold's own
+ * serialization), which is the only writer of the fold counters; lock-free.
+ * Classifies the step (src/radiant_rat_fold.h): a genuine wrap or a small
+ * back-step the fold mistook for one.
+ */
+void radiant_power_diag_rat_backward(uint32_t last, uint32_t now);
+
 #else
 
 static inline void radiant_power_diag_hfxo(bool on)
@@ -366,6 +406,12 @@ static inline void radiant_power_diag_radio(bool tx, uint32_t on_us)
 {
 	(void)tx;
 	(void)on_us;
+}
+
+static inline void radiant_power_diag_rat_backward(uint32_t last, uint32_t now)
+{
+	(void)last;
+	(void)now;
 }
 
 #endif /* CONFIG_RADIANT_POWER_DIAG */

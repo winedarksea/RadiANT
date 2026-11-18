@@ -297,6 +297,14 @@ elseif(CONFIG_RADIANT_BACKEND_CC26XX)
   zephyr_library_sources_ifdef(CONFIG_RADIANT_BACKEND_CC26XX_COEX
 			       src/radiant_radio_cc26xx_arb.c)
 
+  # radiant's own RFCC26XX_hwAttrs (the RF driver's hardware attributes), in
+  # place of hal_ti's: only for the options that need a field or the global
+  # callback (RADIANT_POWER_DIAG today). The symbol selects
+  # CC13X2_CC26X2_HAS_CUSTOM_RF_HWATTRS, which is what stops hal_ti compiling
+  # its own; the file refuses the boards and builds it must not run on.
+  zephyr_library_sources_ifdef(CONFIG_RADIANT_CC26XX_RF_HWATTRS
+			       src/radiant_ti_rf_hwattrs.c)
+
   # The neighbour, forked so that it survives being preempted by the hooks
   # above. A vendored copy of Zephyr's driver plus one re-post branch; see
   # coex154_ti/ieee802154_cc13xx_cc26xx.c's header for the provenance and for

@@ -53,6 +53,13 @@
  * radiant_cc26xx_client() is defined only under coex. */
 #include "radiant_radio_cc26xx_arb.h"
 
+/* Only with the option on: see radiant_power_diag.h on why even unused
+ * inlines are kept out of a default build. */
+#if defined(CONFIG_RADIANT_POWER_DIAG)
+#include <radiant/radiant_power_diag.h>
+#include "radiant_ti_rf_hwattrs.h"
+#endif
+
 LOG_MODULE_REGISTER(radiant_cc26xx, CONFIG_RADIANT_LOG_LEVEL);
 
 /* --- PHY constants: measured on the spike, or from SmartRF's settings --- */
@@ -592,6 +599,12 @@ static struct k_timer rat_keepalive;
 static uint64_t rat_fold(uint32_t now32)
 {
 	if (now32 < st.rat_last) {
+#if defined(CONFIG_RADIANT_POWER_DIAG)
+		/* Measurement only: counts a small back-step (an RTC-synthesised
+		 * read while the RF core was off, rounded up) that the line below
+		 * takes for a wrap. See src/radiant_rat_fold.h. */
+		radiant_power_diag_rat_backward(st.rat_last, now32);
+#endif
 		st.rat_hi += (uint64_t)1 << 32;
 	}
 	st.rat_last = now32;
@@ -1541,6 +1554,11 @@ int radiant_radio_enable(void)
 	 * wrong on a coin cell.
 	 */
 	params.nInactivityTimeout = UINT32_MAX;
+#if defined(CONFIG_RADIANT_POWER_DIAG)
+	/* Counts CMD_FS synth errors; does nothing else, like the driver's
+	 * default error callback it replaces. */
+	params.pErrCb = radiant_ti_rf_err_cb;
+#endif
 
 	st.rf_handle = RF_open(&st.rf_object, &rf_mode,
 			       (RF_RadioSetup *)&setup_cmd, &params);

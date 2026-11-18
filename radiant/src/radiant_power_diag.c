@@ -36,6 +36,16 @@
 
 #include <radiant/radiant_power_diag.h>
 
+/* The ti_* fields: the RF driver's counters (radiant_ti_rf_hwattrs.c, which
+ * CONFIG_RADIANT_POWER_DIAG selects on cc26xx) and the backend's fold. */
+#if defined(CONFIG_RADIANT_BACKEND_CC26XX)
+#define PD_TI 1
+#include "radiant_rat_fold.h"
+#include "radiant_ti_rf_hwattrs.h"
+#else
+#define PD_TI 0
+#endif
+
 LOG_MODULE_REGISTER(radiant_power, CONFIG_RADIANT_LOG_LEVEL);
 
 /* Which fields this build can fill. Fixed at build time. */
@@ -62,13 +72,15 @@ LOG_MODULE_REGISTER(radiant_power, CONFIG_RADIANT_LOG_LEVEL);
 #define PD_INIT_CPU   (IS_ENABLED(CONFIG_CPU_LOAD) ? 0u : RADIANT_POWER_DIAG_NOT_MEASURED)
 #define PD_INIT_IDLE  (IS_ENABLED(CONFIG_RADIANT_POWER_DIAG_IDLE) ? 0u \
 		       : RADIANT_POWER_DIAG_NOT_MEASURED)
+#define PD_INIT_TI    (PD_TI ? 0u : RADIANT_POWER_DIAG_NOT_MEASURED)
 
 #define PD_FLAGS_STATIC                                                        \
 	((PD_HFXO_MEASURED ? RADIANT_POWER_DIAG_F_HFXO_MEASURED : 0u) |        \
 	 (PD_CONSTLAT_HW ? RADIANT_POWER_DIAG_F_CONSTLAT_HW_VALID : 0u) |      \
 	 (IS_ENABLED(CONFIG_CPU_LOAD) ? RADIANT_POWER_DIAG_F_CPU_LOAD : 0u) |  \
 	 (IS_ENABLED(CONFIG_RADIANT_POWER_DIAG_IDLE) ? RADIANT_POWER_DIAG_F_IDLE \
-						     : 0u))
+						     : 0u) |                    \
+	 (PD_TI ? RADIANT_POWER_DIAG_F_TI : 0u))
 
 /*
  * The published snapshot. Valid header and sentinels from reset, so an SWD
@@ -88,11 +100,12 @@ __used struct radiant_power_diag radiant_power_diag = {
 	.idle_entries = PD_INIT_IDLE,
 	.flags = PD_FLAGS_STATIC,
 	.constlat_stat = RADIANT_POWER_DIAG_NOT_MEASURED,
-	.ti_rf_core_on_us = RADIANT_POWER_DIAG_NOT_MEASURED,
-	.ti_rf_powerups = RADIANT_POWER_DIAG_NOT_MEASURED,
+	.ti_rf_core_on_us = PD_INIT_TI,
+	.ti_rf_powerups = PD_INIT_TI,
+	/* Until the RF core has powered up once, on every backend. */
 	.ti_rf_pu_dur_us = RADIANT_POWER_DIAG_NOT_MEASURED,
-	.ti_fs_errors = RADIANT_POWER_DIAG_NOT_MEASURED,
-	.ti_fold_backsteps = RADIANT_POWER_DIAG_NOT_MEASURED,
+	.ti_fs_errors = PD_INIT_TI,
+	.ti_fold_backsteps = PD_INIT_TI,
 };
 
 static struct {
@@ -107,6 +120,10 @@ static struct {
 	uint32_t idle_entries;
 	/* Backend init thread, once. */
 	bool constlat_req;
+	/* cc26xx fold, under the backend's irq_lock. */
+	uint32_t fold_backsteps;
+	uint32_t fold_back_max;  /* ticks, the largest back-step */
+	uint32_t fold_wraps;
 
 	/* Work item only. */
 	uint64_t last_snap_us;
@@ -146,6 +163,28 @@ void radiant_power_diag_radio(bool tx, uint32_t on_us)
 		pd.rx_ops++;
 	}
 }
+
+#if PD_TI
+void radiant_power_diag_rat_backward(uint32_t last, uint32_t now)
+{
+	switch (radiant_rat_step_classify(last, now)) {
+	case RADIANT_RAT_STEP_WRAP:
+		pd.fold_wraps++;
+		break;
+	case RADIANT_RAT_STEP_BACK: {
+		uint32_t ticks = radiant_rat_backstep_ticks(last, now);
+
+		pd.fold_backsteps++;
+		if (ticks > pd.fold_back_max) {
+			pd.fold_back_max = ticks;
+		}
+		break;
+	}
+	default:
+		break;
+	}
+}
+#endif
 
 #if defined(CONFIG_RADIANT_POWER_DIAG_IDLE)
 /*
@@ -223,6 +262,18 @@ static void pd_snapshot(void)
 #if PD_CONSTLAT_HW
 	next.constlat_stat = NRF_POWER->CONSTLATSTAT;
 #endif
+#if PD_TI
+	{
+		struct radiant_ti_rf_diag t;
+
+		radiant_ti_rf_diag_read(&t);
+		next.ti_rf_core_on_us = t.on_us;
+		next.ti_rf_powerups = t.powerups;
+		next.ti_rf_pu_dur_us = t.pu_dur_us;
+		next.ti_fs_errors = t.fs_errors;
+		next.ti_fold_backsteps = pd.fold_backsteps;
+	}
+#endif
 	next.flags = flags;
 
 	radiant_power_diag_publish(&radiant_power_diag, &next);
@@ -245,27 +296,60 @@ static void pd_log(const struct radiant_power_diag *now,
 	bool     hfxo = (now->flags & RADIANT_POWER_DIAG_F_HFXO_MEASURED) != 0u;
 	bool     cl_hw = (now->flags & RADIANT_POWER_DIAG_F_CONSTLAT_HW_VALID) != 0u;
 
+	int      hfxo_pm = pd_or_unmeasured(hfxo, radiant_power_diag_duty_permille(
+		radiant_power_diag_delta(now->hfxo_req_us, then->hfxo_req_us), dt_us));
+	uint32_t tx_us = radiant_power_diag_delta(now->radio_tx_us, then->radio_tx_us);
+	uint32_t tx_ops = radiant_power_diag_delta(now->radio_tx_ops, then->radio_tx_ops);
+	uint32_t rx_us = radiant_power_diag_delta(now->radio_rx_us, then->radio_rx_us);
+	uint32_t rx_ops = radiant_power_diag_delta(now->radio_rx_ops, then->radio_rx_ops);
+	int      cpu_pm = pd_or_unmeasured(cpu, radiant_power_diag_duty_permille(
+		radiant_power_diag_delta(now->cpu_active_us, then->cpu_active_us), dt_us));
+	int      idle_x10 = pd_or_unmeasured(idle, radiant_power_diag_rate_x10(
+		radiant_power_diag_delta(now->idle_entries, then->idle_entries), dt_ms));
+	uint32_t cl_req = (now->flags & RADIANT_POWER_DIAG_F_CONSTLAT_REQ) != 0u ? 1u : 0u;
+	int      cl_stat = pd_or_unmeasured(cl_hw, now->constlat_stat & 1u);
+
 	/* key=value, integers only: one line a parser and a person both read.
 	 * _pm is per-mille of dt_ms, _x10 is tenths per second, -1 is not
-	 * measured on this build. */
+	 * measured on this build. A cc26xx build appends its ti_* fields to the
+	 * same line. */
+#if PD_TI
+	/*
+	 * The cc26xx fields. rfon_pm and rfpu_x10 are over dt_ms like the rest;
+	 * every other field is cumulative since boot, because each is a rare
+	 * event whose total is the answer: pudur_us is the RF driver's
+	 * nPowerUpDuration now (-1 before the first power-up), fsx the synth
+	 * errors, bks the fold's mistaken wraps and bks_max the largest of them
+	 * in radio-timer ticks (4 per us), wraps the fold's genuine wraps
+	 * (one per 1074 s of radio timer), cold the first commands after a
+	 * power-up handed to the RF core at or after their start time, txl the
+	 * transmits handed over late (cold or warm) and txl_max_us the latest.
+	 */
+	struct radiant_ti_rf_diag t;
+
+	radiant_ti_rf_diag_read(&t);
+	LOG_INF("power dt_ms=%u hfxo_pm=%d tx_us=%u tx_ops=%u rx_us=%u rx_ops=%u "
+		"cpu_pm=%d idle_x10=%d constlat=%u/%d "
+		"rfon_pm=%u rfpu_x10=%u pudur_us=%d fsx=%u bks=%u bks_max=%u "
+		"wraps=%u cold=%u txl=%u txl_max_us=%u",
+		dt_ms, hfxo_pm, tx_us, tx_ops, rx_us, rx_ops, cpu_pm, idle_x10,
+		cl_req, cl_stat,
+		radiant_power_diag_duty_permille(
+			radiant_power_diag_delta(now->ti_rf_core_on_us,
+						 then->ti_rf_core_on_us), dt_us),
+		radiant_power_diag_rate_x10(
+			radiant_power_diag_delta(now->ti_rf_powerups,
+						 then->ti_rf_powerups), dt_ms),
+		pd_or_unmeasured(now->ti_rf_pu_dur_us != RADIANT_POWER_DIAG_NOT_MEASURED,
+				 now->ti_rf_pu_dur_us),
+		now->ti_fs_errors, now->ti_fold_backsteps, pd.fold_back_max,
+		pd.fold_wraps, t.cold_late, t.tx_late, t.tx_late_max_us);
+#else
 	LOG_INF("power dt_ms=%u hfxo_pm=%d tx_us=%u tx_ops=%u rx_us=%u rx_ops=%u "
 		"cpu_pm=%d idle_x10=%d constlat=%u/%d",
-		dt_ms,
-		pd_or_unmeasured(hfxo, radiant_power_diag_duty_permille(
-			radiant_power_diag_delta(now->hfxo_req_us, then->hfxo_req_us),
-			dt_us)),
-		radiant_power_diag_delta(now->radio_tx_us, then->radio_tx_us),
-		radiant_power_diag_delta(now->radio_tx_ops, then->radio_tx_ops),
-		radiant_power_diag_delta(now->radio_rx_us, then->radio_rx_us),
-		radiant_power_diag_delta(now->radio_rx_ops, then->radio_rx_ops),
-		pd_or_unmeasured(cpu, radiant_power_diag_duty_permille(
-			radiant_power_diag_delta(now->cpu_active_us, then->cpu_active_us),
-			dt_us)),
-		pd_or_unmeasured(idle, radiant_power_diag_rate_x10(
-			radiant_power_diag_delta(now->idle_entries, then->idle_entries),
-			dt_ms)),
-		(now->flags & RADIANT_POWER_DIAG_F_CONSTLAT_REQ) != 0u ? 1u : 0u,
-		pd_or_unmeasured(cl_hw, now->constlat_stat & 1u));
+		dt_ms, hfxo_pm, tx_us, tx_ops, rx_us, rx_ops, cpu_pm, idle_x10,
+		cl_req, cl_stat);
+#endif
 }
 #endif
 
