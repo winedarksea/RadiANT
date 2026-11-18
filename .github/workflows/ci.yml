@@ -439,4 +439,12 @@ jobs:
               -b nrf52840dk/nrf52840 -d build -p always
             grep -qx 'CONFIG_RADIANT_BACKEND_NRF=y' build/zephyr/.config
           done
+          # The transmitter's battery fragment, here on stock Zephyr so a
+          # symbol only NCS defines (NCS_BOOT_BANNER, say) cannot creep into
+          # it. The read-back proves the fragment reached the image.
+          west build app/radiant/samples/hr_transmitter \
+            -b nrf52840dk/nrf52840 -d build -p always \
+            -- -DEXTRA_CONF_FILE=lowpower.conf
+          grep -qx 'CONFIG_RADIANT_BACKEND_NRF=y' build/zephyr/.config
+          grep -qx '# CONFIG_SERIAL is not set' build/zephyr/.config
 

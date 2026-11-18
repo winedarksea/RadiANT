@@ -16,3 +16,12 @@ tests:
     integration_platforms:
       - native_sim
       - nrf52840dk/nrf52840
+  sample.radiant.hr_transmitter.lowpower:
+    extra_conf_files:
+      - lowpower.conf
+    platform_allow:
+      - nrf52840dk/nrf52840
+      - nrf54l15dk/nrf54l15/cpuapp
+      - promicro_nrf52840/nrf52840/uf2
+    integration_platforms:
+      - nrf52840dk/nrf52840
