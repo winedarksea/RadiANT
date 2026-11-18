@@ -477,7 +477,9 @@ config RADIANT_NRF54L_MPSL_CONSTLAT_HOLD
 	depends on RADIANT_BACKEND_NRF_GATE_MPSL && SOC_SERIES_NRF54L
 	help
 	  nRF54L errata 20 wants constant-latency mode (CONSTLAT) while the
-	  RADIO is in use. A direct build holds it from radio init until reset.
+	  RADIO is in use. A direct build holds it from radio init until reset
+	  (with RADIANT_NRF_LOW_POWER, only while the radio can be active: it is
+	  freed with the HFXO at each sleep and taken back at each wake).
 
 	  n (default): no reference; CONSTLAT is left to MPSL, which acquires
 	  it before each event its scheduler dispatches and releases it after
@@ -757,18 +759,12 @@ config RADIANT_NRF_RX_DIAG
 
 # ------ Low power: release the HFXO between distant operations (Track B) ------
 #
-# Power plan Track B, summarised in the help texts below. Pass B2 adds only
-# the options and the pure arithmetic they will drive
-# (src/radiant_radio_nrf_lp.h, radiant/tests/lp_clock); nothing in the
-# backend reads them yet, so enabling RADIANT_NRF_LOW_POWER today changes no
-# behaviour. Pass B3 implements it on the nRF54L15 direct backend.
-#
-# For pass B3: BUILD_ASSERT the system timer's spare channels (three LF
-# compares per sleep - release, HFXO edge, TIMER edge - in at least two
-# channels: CONFIG_NRF_RTC_TIMER_USER_CHAN_COUNT >= 2 on RTC1, free
-# z_nrf_grtc_timer_chan_alloc() channels on the GRTC), and pick the RTC or
-# GRTC counter format by which system timer is enabled (NRF_RTC_TIMER /
-# NRF_GRTC_TIMER), not by SoC. The header's top comment lists the rest.
+# Power plan Track B, summarised in the help texts below. The arithmetic is
+# src/radiant_radio_nrf_lp.h (pass B2, radiant/tests/lp_clock); the backend
+# side is src/radiant_radio_nrf_lp.c (pass B3, radiant/tests/backend's lp
+# scenario), on the nRF54L GRTC only. The nRF52840/nRF5340 RTC1 path is
+# pass B5 (CONFIG_NRF_RTC_TIMER_USER_CHAN_COUNT >= 2, the RTC format, TIMER
+# SHUTDOWN after the release capture) and MPSL is pass B6.
 config RADIANT_NRF_LOW_POWER
 	bool "EXPERIMENTAL: release the HFXO and stop the radio TIMER in idle gaps"
 	depends on RADIANT_BACKEND_NRF
@@ -780,15 +776,20 @@ config RADIANT_NRF_LOW_POWER
 	# Pass B3's backend is to refuse at run time too if LFCLK is not
 	# running from the crystal.
 	depends on CLOCK_CONTROL_NRF_K32SRC_XTAL
-	# The LF counter is the system timer's: user channels of RTC1
-	# (nRF52840, nRF5340 network core) or of the GRTC (nRF54L).
-	depends on NRF_RTC_TIMER || NRF_GRTC_TIMER
+	# The LF counter is the system timer's: two channels of the GRTC
+	# (nRF54L), allocated at init (a shortage refuses at run time). RTC1
+	# user channels (nRF52840, nRF5340 network core) are pass B5.
+	depends on NRF_GRTC_TIMER
 	# Direct backend only for now. On an MPSL build the HFXO and the wake
 	# both belong to MPSL's timeslot placement - and that includes an MPSL
 	# that something else turned on without the gate (the 802.15.4 radio
 	# driver alone enables MPSL on the nRF54L). Pass B6 lifts both.
 	depends on !RADIANT_BACKEND_NRF_GATE_MPSL
 	depends on !MPSL
+	# nRF54L errata 20: CONSTLAT is held whenever the radio can be active
+	# and freed with the HFXO, through nrfx's reference count.
+	select NRFX_POWER if SOC_SERIES_NRF54L
+	select ONOFF
 	help
 	  Today the nRF backend requests the HFXO at init and never releases
 	  it, and a free-running 1 MHz TIMER is its only timebase. On a
@@ -845,12 +846,15 @@ config RADIANT_NRF_LOW_POWER
 	  rather than being transmitted late. Without this option no
 	  operation depends on any interrupt before its own arm call.
 
-	  Requires the LF crystal (CLOCK_CONTROL_NRF_K32SRC_XTAL). Off by
-	  default; with it off nothing here compiles.
+	  Requires the LF crystal (CLOCK_CONTROL_NRF_K32SRC_XTAL); the backend
+	  also checks at init that LFCLK runs from it, and that it has two
+	  GRTC channels and its DPPI connection, and otherwise logs a warning
+	  and keeps the HFXO on for the whole run. Off by default; with it
+	  off nothing here compiles.
 
-	  STATUS: scaffolding only. The options and the timebase arithmetic
-	  exist; the backend does not act on them yet, so turning this on
-	  today builds the same radio as turning it off.
+	  STATUS: EXPERIMENTAL, nRF54L15 direct backend only (power plan pass
+	  B3). Not yet bench-gated (Gate G1). The nRF52840 RTC1 path (pass
+	  B5) and MPSL (pass B6) are not implemented: Kconfig refuses them.
 
 config RADIANT_NRF_LP_HFXO_STARTUP_US
 	int "HFXO start-up time the low-power wake allows for, us"
@@ -929,6 +933,11 @@ config RADIANT_NRF_LP_STATS
 	  readings refused as out of range (a lost timebase). On by default
 	  with RADIANT_POWER_DIAG, whose proxy is how a board with no
 	  current meter shows what the option saved.
+
+	  They live in the global radiant_nrf_lp_stats (88 bytes, layout in
+	  src/radiant_radio_nrf_lp.c), not in radiant_power_diag, whose layout
+	  is fixed: read it over SWD by symbol (scripts/jlink_peek.ps1
+	  -Symbol radiant_nrf_lp_stats).
 
 # ------ ADR 0018 candidate (d2): a second timeslot session (Phase 1) -------
 #

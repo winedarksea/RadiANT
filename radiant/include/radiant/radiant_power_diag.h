@@ -85,10 +85,13 @@
  *   hfxo_req_us is timed on the system timer (the LF clock), not on the
  *   radio TIMER, so it stays correct across an HFXO release. It is the
  *   stack's own request: on an nRF52840 with USB, or under MPSL, something
- *   else may hold the crystal too, which this cannot see. Today the nRF
- *   backend requests the HFXO once at init and never releases it, so it
- *   reads ~uptime: that is intended, and is the baseline the low-power work
- *   (RADIANT_NRF_LOW_POWER) measures itself against.
+ *   else may hold the crystal too, which this cannot see. Without
+ *   CONFIG_RADIANT_NRF_LOW_POWER the nRF backend requests the HFXO once at
+ *   init and never releases it, so it reads ~uptime: the baseline the
+ *   low-power work measures itself against. With it, the backend releases
+ *   and re-requests the crystal around every sleep, and hfxo_req_us over
+ *   uptime is the crystal's duty (its own transitions and late wakes are
+ *   in the separate radiant_nrf_lp_stats symbol).
  *
  *   radio_*_us run from the operation's armed open to the instant the
  *   scheduler hears it ended, on radiant_radio_now(). A transmit's open is
@@ -121,7 +124,11 @@
  *   (nRF54L errata 20): a raw trigger on a direct build, an nrfx reference on
  *   an MPSL build. F_CONSTLAT_HW_VALID + constlat_stat bit 0: what the
  *   hardware says now. The two disagreeing means something triggered LOWPWR
- *   over the request (MPSL did, before the reference count).
+ *   over the request (MPSL did, before the reference count) - except with
+ *   CONFIG_RADIANT_NRF_LOW_POWER, where F_CONSTLAT_REQ is only a boot flag:
+ *   that backend frees its CONSTLAT reference with the HFXO at every sleep
+ *   and takes it back at every wake, so constlat_stat reading 0 is expected
+ *   between slots and the flag must not be read as "held".
  *
  *   ti_rf_* (cc26xx only) come from the TI RF driver's global callback in
  *   src/radiant_ti_rf_hwattrs.c, which defines RFCC26XX_hwAttrs for this

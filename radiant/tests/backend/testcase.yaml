@@ -11,3 +11,14 @@ tests:
       - native_sim
     integration_platforms:
       - native_sim
+  radiant.backend.lp:
+    # CONFIG_RADIANT_NRF_LOW_POWER (power plan pass B3): the backend's HFXO
+    # release and two-edge wake against a simulated GRTC, HFXO and TIMER.
+    tags:
+      - radiant
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    extra_args:
+      - BACKEND_LP=1

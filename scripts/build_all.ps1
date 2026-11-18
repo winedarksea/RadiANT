@@ -306,19 +306,22 @@ $treadmillTargets = @(
 # "*launchxl*") do not also build these. "*promicro*" still matches
 # hrtx_promicro_lp by its directory name. -Only "hrtx_*", -Only "ti_hr_tx*".
 #
-# Asserted below: the HAL, CONFIG_SERIAL and CONFIG_LOG off on the lowpower.conf
+# Asserted below: CONFIG_RADIANT_NRF_LOW_POWER exactly on the lp rows
+# (lowpower.conf implies it; the nRF52840 has no implementation until power
+# plan pass B5, so its lowpower row must come out without it), the HAL,
+# CONFIG_SERIAL and CONFIG_LOG off on the lowpower.conf
 # rows (no UART driver linked means no UARTE is ever enabled, which is the point
 # of that fragment), CONFIG_HR_TX_ONE_WAY in both directions, on the
 # DC/DC row the regulator modes read back from zephyr.dts, and each row's own
 # assert_config lines (exact .config lines, for the TI rows' XOSC_HF release).
 $sampleTargets = @(
-    @{ dir='hrtx_l15';         board='nrf54l15dk/nrf54l15/cpuapp';     artifact='radiant_hrtx_nrf54l15dk.hex';          pkg='hex'; radiant='nrf'; conf=$null;                        lowpower=$false; one_way=$false }
-    @{ dir='hrtx_l15_lp';      board='nrf54l15dk/nrf54l15/cpuapp';     artifact='radiant_hrtx_nrf54l15dk_lp.hex';       pkg='hex'; radiant='nrf'; conf='lowpower.conf';              lowpower=$true;  one_way=$false }
+    @{ dir='hrtx_l15';         board='nrf54l15dk/nrf54l15/cpuapp';     artifact='radiant_hrtx_nrf54l15dk.hex';          pkg='hex'; radiant='nrf'; conf=$null;                        lowpower=$false; one_way=$false; lp=$false }
+    @{ dir='hrtx_l15_lp';      board='nrf54l15dk/nrf54l15/cpuapp';     artifact='radiant_hrtx_nrf54l15dk_lp.hex';       pkg='hex'; radiant='nrf'; conf='lowpower.conf';              lowpower=$true;  one_way=$false; lp=$true }
     # The third arm of a power A/B: lowpower plus transmit-only (MASTER_TX_ONLY).
-    @{ dir='hrtx_l15_lp_1way'; board='nrf54l15dk/nrf54l15/cpuapp';     artifact='radiant_hrtx_nrf54l15dk_lp_1way.hex';  pkg='hex'; radiant='nrf'; conf='lowpower.conf;one_way.conf'; lowpower=$true;  one_way=$true }
+    @{ dir='hrtx_l15_lp_1way'; board='nrf54l15dk/nrf54l15/cpuapp';     artifact='radiant_hrtx_nrf54l15dk_lp_1way.hex';  pkg='hex'; radiant='nrf'; conf='lowpower.conf;one_way.conf'; lowpower=$true;  one_way=$true;  lp=$true }
     # Plus REG1 on DC/DC (dcdc_promicro.overlay; owner confirmed the clone's
     # DCC inductors 2026-11-18). REG0 stays as the board leaves it.
-    @{ dir='hrtx_promicro_lp'; board='promicro_nrf52840/nrf52840/uf2'; artifact='radiant_hrtx_promicro_lp.uf2';         pkg='uf2'; radiant='nrf'; conf='lowpower.conf';              lowpower=$true;  one_way=$false; overlay='dcdc_promicro.overlay'; dcdc=$true }
+    @{ dir='hrtx_promicro_lp'; board='promicro_nrf52840/nrf52840/uf2'; artifact='radiant_hrtx_promicro_lp.uf2';         pkg='uf2'; radiant='nrf'; conf='lowpower.conf';              lowpower=$true;  one_way=$false; overlay='dcdc_promicro.overlay'; dcdc=$true; lp=$false }
 )
 # The TI LaunchXL, under the same hal_ti condition as the dongle_ti rows above
 # (skipped with their message when it is absent). Not in the sample's
@@ -803,6 +806,13 @@ try {
                 if (-not ($cfg | Where-Object { $_ -ceq $line })) {
                     throw "hr_transmitter $($t.dir): expected '$line' in .config"
                 }
+            }
+
+            # 2c. The HFXO release (power plan Track B), in both directions:
+            # lowpower.conf reaches it through an imply, which fails silently.
+            $hasLp = [bool]($cfg | Where-Object { $_ -ceq 'CONFIG_RADIANT_NRF_LOW_POWER=y' })
+            if ($hasLp -ne [bool]$t.lp) {
+                throw "hr_transmitter $($t.dir): CONFIG_RADIANT_NRF_LOW_POWER is $hasLp, expected $([bool]$t.lp)"
             }
 
             # 3. The channel type, in both directions.

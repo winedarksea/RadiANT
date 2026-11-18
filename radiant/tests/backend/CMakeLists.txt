@@ -12,10 +12,19 @@ list(APPEND ZEPHYR_EXTRA_MODULES "${CMAKE_CURRENT_SOURCE_DIR}/../..")
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(radiant_backend_tests)
 
-file(GLOB suite_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.c")
+# -DBACKEND_LP=1 (scenario radiant.backend.lp): the same backend with
+# CONFIG_RADIANT_NRF_LOW_POWER and its simulated GRTC/HFXO instead of the MPSL
+# gate. The two configurations define the same symbols, so one image each.
+if(BACKEND_LP)
+  file(GLOB suite_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src_lp/*.c")
+  set(under_test "${CMAKE_CURRENT_SOURCE_DIR}/backend_lp_under_test.c")
+else()
+  file(GLOB suite_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.c")
+  set(under_test "${CMAKE_CURRENT_SOURCE_DIR}/backend_under_test.c")
+endif()
 target_sources(app PRIVATE ${suite_sources})
 target_sources(app PRIVATE
-  "${CMAKE_CURRENT_SOURCE_DIR}/backend_under_test.c"
+  "${under_test}"
   "${CMAKE_CURRENT_SOURCE_DIR}/../../src/radiant_addr_split.c")
 
 target_include_directories(app BEFORE PRIVATE
