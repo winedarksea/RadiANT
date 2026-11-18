@@ -1,0 +1,78 @@
+J-Link saved settings: 23 entries read, none look like a remembered unsecure/erase answer.
+Reading nrf54l15 on nRF54L15_M33 (10 samples, ~2.9 s of sleeps); target is not reset or halted.
+
+liveness: running  DHCSR 0x01140001 -> 0x01140001
+  note: power_diag uptime at first snapshot: 748061 ms
+  note: power_diag uptime advanced 3000 ms across the session (planned sleeps 2910 ms; the struct is republished once 
+a second)
+
+HFXO running: 10/10 = 100.0%  (95 % Wilson 72.2% .. 100.0%)
+CONSTLAT on:  10/10 = 100.0%  (95 % Wilson 72.2% .. 100.0%)
+first sample: XO.RUN=0x00000001 XO.STAT=0x00010001 CONSTLATSTAT=0x00000001
+last sample:  XO.RUN=0x00000001 XO.STAT=0x00010001 CONSTLATSTAT=0x00000001
+delays uniform 150..450 ms (seed 1555119112), 2910 ms planned sleep in total
+  The interval assumes independent samples; long HFXO on/off runs make it optimistic.
+
+radiant_power_diag @ 0x20000264, 88 bytes (radiant_power_diag v1 per power/a1 2189023 (TO RECONCILE WITH A1))
+  snapshot 'before': ok
+    +0x000: 52504431 00000001 00000058 000005D8
+    +0x010: 000B6A1D 2C967A20 00000001 00000000
+    +0x020: 0006E19E 001D97E0 00000BDD 00000BDD
+    +0x030: 002F43F8 00000004 00004A1B 0000003F
+    +0x040: 00000001 FFFFFFFF FFFFFFFF FFFFFFFF
+    +0x050: FFFFFFFF FFFFFFFF
+    magic              0x52504431
+    version            1
+    size               88
+    seq                1496
+    uptime_ms          748061
+    hfxo_req_us        748059168
+    hfxo_requests      1
+    hfxo_releases      0
+    radio_tx_us        450974
+    radio_rx_us        1939424
+    radio_tx_ops       3037
+    radio_rx_ops       3037
+    cpu_active_us      3097592
+    cpu_load_permille  4
+    idle_entries       18971
+    flags              0x0000003F
+    constlat_stat      0x00000001
+    ti_rf_core_on_us   NOT_MEASURED
+    ti_rf_powerups     NOT_MEASURED
+    ti_rf_pu_dur_us    NOT_MEASURED
+    ti_fs_errors       NOT_MEASURED
+    ti_fold_backsteps  NOT_MEASURED
+  snapshot 'after': ok
+    +0x000: 52504431 00000001 00000058 000005DE
+    +0x010: 000B75D5 2CC441C0 00000001 00000000
+    +0x020: 0006E88B 001DB5CB 00000BE9 00000BE9
+    +0x030: 002F743A 00000004 00004A67 0000003F
+    +0x040: 00000001 FFFFFFFF FFFFFFFF FFFFFFFF
+    +0x050: FFFFFFFF FFFFFFFF
+    magic              0x52504431
+    version            1
+    size               88
+    seq                1502
+    uptime_ms          751061
+    hfxo_req_us        751059392
+    hfxo_requests      1
+    hfxo_releases      0
+    radio_tx_us        452747
+    radio_rx_us        1947083
+    radio_tx_ops       3049
+    radio_rx_ops       3049
+    cpu_active_us      3109946
+    cpu_load_permille  4
+    idle_entries       19047
+    flags              0x0000003F
+    constlat_stat      0x00000001
+    ti_rf_core_on_us   NOT_MEASURED
+    ti_rf_powerups     NOT_MEASURED
+    ti_rf_pu_dur_us    NOT_MEASURED
+    ti_fs_errors       NOT_MEASURED
+    ti_fold_backsteps  NOT_MEASURED
+
+raw J-Link output: C:\Users\Colin\AppData\Local\Temp\jlink_peek_401704.log  (re-analyse with -ParseLog and the same 
+arguments)
+realised mean interval 322.3 ms per sample (session wall time incl. connect / requested 300 ms)
