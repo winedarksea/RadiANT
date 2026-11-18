@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+
+mainmenu "RadiANT heart-rate transmitter"
+
+config HR_TX_ONE_WAY
+	bool "Transmit only: never listen after a transmit"
+	help
+	  Open the channel as MASTER_TX_ONLY (0x50) instead of a bidirectional
+	  MASTER (0x10). A bidirectional master opens a short receive window
+	  after every transmit in case the receiver answers; a transmit-only
+	  master never does, which saves that radio time on every message.
+
+	  The cost: nothing the receiver sends can arrive (no page requests, no
+	  acknowledged messages), and the ANT+ heart-rate profile says a strap
+	  shall be a bidirectional master (Rev 2.5, sec 5.2.1, MD_0004).
+	  Receivers still decode it. See the README's "Low power" section.
+
+source "Kconfig.zephyr"

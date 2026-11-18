@@ -16,6 +16,14 @@
 #define HR_PERIOD      8070u /* 32768 / 8070 = 4.06 messages a second */
 #define HR_RF_FREQ     57u   /* 2457 MHz */
 
+/*
+ * A bidirectional master listens briefly after every transmit; a transmit-only
+ * one never does. See CONFIG_HR_TX_ONE_WAY.
+ */
+#define HR_CHANNEL_TYPE (IS_ENABLED(CONFIG_HR_TX_ONE_WAY) ?            \
+			 ANTW_CHANNEL_TYPE_MASTER_TX_ONLY :              \
+			 ANTW_CHANNEL_TYPE_MASTER)
+
 /* Pick your own, from 1 to 65535. Two sensors should not share a number. */
 #define DEVICE_NUMBER  12345u
 #define TX_TYPE        5u
@@ -70,7 +78,7 @@ int main(void)
 	TRY(antr_init());
 	TRY(antr_network_address_set(HR_NETWORK, ant_plus_key));
 
-	TRY(antr_channel_assign(HR_CHANNEL, ANTW_CHANNEL_TYPE_MASTER, HR_NETWORK, 0u));
+	TRY(antr_channel_assign(HR_CHANNEL, HR_CHANNEL_TYPE, HR_NETWORK, 0u));
 	TRY(antr_channel_id_set(HR_CHANNEL, DEVICE_NUMBER, HR_DEVICE_TYPE, TX_TYPE));
 	TRY(antr_channel_period_set(HR_CHANNEL, HR_PERIOD));
 	TRY(antr_channel_radio_freq_set(HR_CHANNEL, HR_RF_FREQ));
