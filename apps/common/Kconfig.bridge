@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# The serial bridge thread's own symbols, rsourced by apps/dongle,
+# apps/dongle_thread and apps/dongle_ti (every application that compiles
+# apps/common/ant_serial_bridge.c) and by radiant/tests/api, whose
+# test_sec_host_pairing_runs_on_the_bridge_stack runs a whole 0xF5 exchange on
+# a thread of exactly this size. One symbol, so the test cannot drift from the
+# image it stands in for.
+
+config ANT_DONGLE_BRIDGE_STACK_SIZE
+	int "Serial bridge thread stack size"
+	default 2048
+	range 1024 8192
+	help
+	  The thread that parses host frames and calls the antr_* adapter
+	  directly, so every host command runs on this stack - the 0xF5
+	  pairing exchange included, whose X25519 is the deepest call chain in
+	  the image when CONFIG_RADIANT_SEC_PAIRING_X25519 is on.
+
+	  ant_serial_bridge.c checks this against RADIANT_SEC_PAIR_STACK_BYTES
+	  (radiant/include/radiant/radiant_sec.h) plus the bridge's own frames
+	  and an interrupt reserve at build time, and logs the measured
+	  high-water after each 0xF5 command when CONFIG_INIT_STACKS is on.
+	  scripts/check_stack_budget.py measures the chains themselves from the
+	  compiler's .su files in CI.

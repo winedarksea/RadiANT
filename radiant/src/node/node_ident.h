@@ -257,7 +257,9 @@ enum node_ident_scalar_src node_ident_scalar_src(bool host_supplied,
  * in radiant/tests/src/test_node_ident.c come from that mirror.
  *
  * Not clamped: RFC 7748 clamping happens in radiant_sec_x25519() - a second
- * implementation here would be a second place for it to be wrong.
+ * implementation here would be a second place for it to be wrong. The thread
+ * that then pairs with the scalar needs RADIANT_SEC_PAIR_STACK_BYTES
+ * (radiant_sec.h) of stack below its own frames.
  */
 int node_ident_pair_derive(const uint8_t k_dev[NODE_IDENT_K_DEV_BYTES],
 			   uint32_t pair_counter, uint16_t base_devnum,

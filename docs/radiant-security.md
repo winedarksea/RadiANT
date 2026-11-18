@@ -1644,6 +1644,24 @@ lifecycle, the path that already had one scalar-reuse bug. On a slower core
 `test_sec_host_pairing_holds_api_lock_and_its_hold_time` before enabling
 `CONFIG_RADIANT_SEC_PAIRING_X25519`.
 
+**Stack and workspace.** The ladder's seven field elements (896 B) live in one
+static workspace in `radiant_x25519.c`, not on the caller's stack, and the step
+reuses `x2, z2, x3, z3` as they die instead of keeping ten temporaries. Until the
+2026-11-17 security review (item 1) they were all locals: a 2,248 B frame, run
+by 0xF5 on the dongle's 2,048 B serial bridge thread, which overran it by about
+800 B. Every test passed, because every test ran on a 4 KB ztest stack, and on
+nRF52840 a frame that size steps over the 32 B MPU guard rather than tripping
+it. The curve's frame is now 72 B and the deepest pairing chain is
+`PEER_NONCE`'s key install (544 B on nRF52840 at `-Os`, 760 B from the bridge
+thread's entry with an exception frame). The price is 896 B of RAM in pairing
+builds only, and `radiant_sec_x25519()` is not re-entrant: it asserts
+`api_lock` like every other thread-context entry point. A thread that pairs
+reserves `RADIANT_SEC_PAIR_STACK_BYTES` (`radiant_sec.h`) below its own frames;
+`ant_serial_bridge.c` checks `CONFIG_ANT_DONGLE_BRIDGE_STACK_SIZE` against it
+at build time, `scripts/check_stack_budget.py` re-measures the chains from the
+compiler's `.su` files in CI, and `test_sec_host_pairing_runs_on_the_bridge_stack`
+runs a whole exchange on a thread of the bridge's size.
+
 **The sensor holds one key. Every authorized receiver gets a copy.** Over-air
 enrolment (section 11.7) is how a copy is handed over without a host: the X25519
 key it agrees is pairwise and used only to wrap the sensor's existing root for

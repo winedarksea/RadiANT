@@ -6,4 +6,8 @@
 config RADIANT_SEC_HOST_MESSAGES
 	default y if RADIANT_ANTR_API && RADIANT_SEC
 
+# The bridge thread's stack size, so the 0xF5-on-the-bridge-stack test runs on
+# exactly the stack the dongle images give that thread.
+rsource "../../../apps/common/Kconfig.bridge"
+
 source "Kconfig.zephyr"

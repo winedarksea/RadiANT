@@ -204,21 +204,22 @@ static void fe_mul_small(fe o, const fe a, int64_t n)
  * Modular inverse by Fermat: a^(p-2) mod p. p - 2 = 2^255 - 21, all-ones
  * except bits 2 and 4, so: square 255 times, multiply in `a` except at those
  * two steps. Constant time since the exponent is a constant.
+ *
+ * Works in `o` directly, so `o` MUST NOT be `a`: `a` is read on every step.
+ * (It had a scratch element of its own; the caller's spare one is cheaper
+ * than 128 B more stack - security review 2026-11-17, item 1.)
  */
 static void fe_invert(fe o, const fe a)
 {
-	fe  c;
 	int i;
 
-	fe_copy(c, a);
+	fe_copy(o, a);
 	for (i = 253; i >= 0; i--) {
-		fe_sq(c, c);
+		fe_sq(o, o);
 		if (i != 2 && i != 4) {
-			fe_mul(c, c, a);
+			fe_mul(o, o, a);
 		}
 	}
-	fe_copy(o, c);
-	fe_wipe(c, FE_LIMBS);
 }
 
 /*
@@ -242,15 +243,16 @@ static void fe_unpack(fe o, const uint8_t *in)
  * can still be anywhere in [0, 2p), so subtract p conditionally, twice.
  * Subtraction is computed unconditionally into scratch and selected with the
  * same constant-time swap the ladder uses.
+ *
+ * Freezes `t` in place and uses the caller's `m` as scratch (both were
+ * locals here until security review 2026-11-17, item 1); the caller wipes
+ * both, since `t` is the shared secret itself and `m` it or it minus p.
  */
-static void fe_pack(uint8_t *out, const fe n)
+static void fe_pack(uint8_t *out, fe t, fe m)
 {
-	fe      t;
-	fe      m;
 	int64_t borrow;
 	int     i, pass;
 
-	fe_copy(t, n);
 	fe_carry(t);
 	fe_carry(t);
 	fe_carry(t);
@@ -273,16 +275,31 @@ static void fe_pack(uint8_t *out, const fe n)
 		out[2 * i] = (uint8_t)(t[i] & 0xFF);
 		out[2 * i + 1] = (uint8_t)((t[i] >> 8) & 0xFF);
 	}
-	/* t is the shared secret itself, m it or it minus p. */
-	fe_wipe(t, FE_LIMBS);
-	fe_wipe(m, FE_LIMBS);
 }
+
+/*
+ * The ladder's working state: seven field elements, 896 B, in .bss rather
+ * than on the caller's stack. On the stack they and the step's ten
+ * temporaries made a 2,248 B frame, which overran the dongle's 2,048 B serial
+ * bridge thread that runs 0xF5, and on nRF52840 stepped clean over the 32 B
+ * MPU stack guard instead of tripping it (security review 2026-11-17,
+ * item 1). The frame is now under 100 B; fe_mul()'s 248 B product is the
+ * deepest thing left.
+ *
+ * NOT RE-ENTRANT - radiant serialises every call with api_lock, and the entry
+ * point asserts it (RADIANT_SEC_ASSERT_LOCKED) in a lock-checked build, as
+ * radiant_sec_aes.c does for the shared key schedule. Only built with
+ * CONFIG_RADIANT_SEC_PAIRING_X25519, so no other image pays for the RAM.
+ */
+static struct {
+	fe x1, x2, z2, x3, z3;
+	fe t0, t1;
+} ws;
 
 int radiant_sec_x25519(uint8_t *out, const uint8_t *scalar, const uint8_t *point)
 {
+	RADIANT_SEC_ASSERT_LOCKED();
 	uint8_t k[RADIANT_SEC_X25519_BYTES];
-	fe      x1, x2, z2, x3, z3;
-	fe      a, aa, b, bb, e, c, d, da, cb, t;
 	int64_t swap = 0;
 	int64_t bit;
 	int     i;
@@ -302,11 +319,11 @@ int radiant_sec_x25519(uint8_t *out, const uint8_t *scalar, const uint8_t *point
 	k[31] &= 127u;
 	k[31] |= 64u;
 
-	fe_unpack(x1, point);
-	fe_one(x2);
-	fe_zero(z2);
-	fe_copy(x3, x1);
-	fe_one(z3);
+	fe_unpack(ws.x1, point);
+	fe_one(ws.x2);
+	fe_zero(ws.z2);
+	fe_copy(ws.x3, ws.x1);
+	fe_one(ws.z3);
 
 	/*
 	 * The Montgomery ladder, RFC 7748 section 5; loop starts at bit 254
@@ -318,62 +335,59 @@ int radiant_sec_x25519(uint8_t *out, const uint8_t *scalar, const uint8_t *point
 	for (i = 254; i >= 0; i--) {
 		bit = (int64_t)((k[i >> 3] >> (i & 7)) & 1u);
 		swap ^= bit;
-		fe_cswap(x2, x3, swap);
-		fe_cswap(z2, z3, swap);
+		fe_cswap(ws.x2, ws.x3, swap);
+		fe_cswap(ws.z2, ws.z3, swap);
 		swap = bit;
 
-		fe_add(a, x2, z2);
-		fe_sq(aa, a);
-		fe_sub(b, x2, z2);
-		fe_sq(bb, b);
-		fe_sub(e, aa, bb);
-		fe_add(c, x3, z3);
-		fe_sub(d, x3, z3);
-		fe_mul(da, d, a);
-		fe_mul(cb, c, b);
+		/*
+		 * RFC 7748's step, A = x2 + z2 through z2 = E * (AA + a24 * E),
+		 * in two temporaries instead of ten: each of x2, z2, x3, z3 is
+		 * overwritten once its last reader has run. Same field
+		 * operations on the same operands in the same order as the
+		 * RFC's list, which the section 5.2 and 6.1 vectors in
+		 * test_sec_x25519.c pin. Aliasing is safe because fe_add() and
+		 * fe_sub() are limb-wise and fe_mul() writes its output only
+		 * after reading both inputs. The name each element holds is on
+		 * its right.
+		 */
+		fe_add(ws.t0, ws.x2, ws.z2);         /* t0 = A  = x2 + z2      */
+		fe_sub(ws.t1, ws.x2, ws.z2);         /* t1 = B  = x2 - z2      */
+		fe_add(ws.x2, ws.x3, ws.z3);         /* x2 = C  = x3 + z3      */
+		fe_sub(ws.z2, ws.x3, ws.z3);         /* z2 = D  = x3 - z3      */
+		fe_mul(ws.z2, ws.z2, ws.t0);         /* z2 = DA = D * A        */
+		fe_mul(ws.x2, ws.x2, ws.t1);         /* x2 = CB = C * B        */
+		fe_sq(ws.t0, ws.t0);                 /* t0 = AA = A^2          */
+		fe_sq(ws.t1, ws.t1);                 /* t1 = BB = B^2          */
 
-		fe_add(t, da, cb);
-		fe_sq(x3, t);
-		fe_sub(t, da, cb);
-		fe_sq(t, t);
-		fe_mul(z3, x1, t);
+		fe_add(ws.x3, ws.z2, ws.x2);         /* x3 = DA + CB           */
+		fe_sq(ws.x3, ws.x3);                 /* x3 = (DA + CB)^2       */
+		fe_sub(ws.z3, ws.z2, ws.x2);         /* z3 = DA - CB           */
+		fe_sq(ws.z3, ws.z3);                 /* z3 = (DA - CB)^2       */
+		fe_mul(ws.z3, ws.x1, ws.z3);         /* z3 = x1 * (DA - CB)^2  */
 
-		fe_mul(x2, aa, bb);
-		fe_mul_small(t, e, A24);
-		fe_add(t, aa, t);
-		fe_mul(z2, e, t);
+		fe_sub(ws.z2, ws.t0, ws.t1);         /* z2 = E  = AA - BB      */
+		fe_mul(ws.x2, ws.t0, ws.t1);         /* x2 = AA * BB           */
+		fe_mul_small(ws.t1, ws.z2, A24);     /* t1 = a24 * E           */
+		fe_add(ws.t1, ws.t0, ws.t1);         /* t1 = AA + a24 * E      */
+		fe_mul(ws.z2, ws.z2, ws.t1);         /* z2 = E * (AA + a24 * E) */
 	}
-	fe_cswap(x2, x3, swap);
-	fe_cswap(z2, z3, swap);
+	fe_cswap(ws.x2, ws.x3, swap);
+	fe_cswap(ws.z2, ws.z3, swap);
 
-	fe_invert(z2, z2);
-	fe_mul(x2, x2, z2);
-	fe_pack(out, x2);
+	fe_invert(ws.t0, ws.z2);                     /* t0 = 1 / z2 */
+	fe_mul(ws.x2, ws.x2, ws.t0);
+	fe_pack(out, ws.x2, ws.t1);
 
-	/* Wipe the clamped scalar and every field-element intermediate: the
-	 * ladder's working state is as sensitive as the scalar itself. These
-	 * are the ladder's; fe_mul(), fe_invert() and fe_pack() wipe their own
-	 * scratch before returning (they did not until review 2026-11-14,
+	/* Wipe the clamped scalar and the whole workspace: the ladder's
+	 * working state is as sensitive as the scalar itself, and after
+	 * fe_pack() x2 is the shared secret and t1 it or it minus p.
+	 * fe_mul() still wipes its own product scratch (review 2026-11-14,
 	 * item 4). Not covered: scalar locals (the swap flag, a carry), which
 	 * live in registers or spill slots C cannot name. radiant_sec_wipe(),
-	 * not memset(): these are dead locals, and a plain memset() on a dead
+	 * not memset(): `k` is a dead local, and a plain memset() on a dead
 	 * local is a store GCC deletes at -Os. */
 	radiant_sec_wipe(k, sizeof(k));
-	radiant_sec_wipe(x1, sizeof(x1));
-	radiant_sec_wipe(x2, sizeof(x2));
-	radiant_sec_wipe(z2, sizeof(z2));
-	radiant_sec_wipe(x3, sizeof(x3));
-	radiant_sec_wipe(z3, sizeof(z3));
-	radiant_sec_wipe(a, sizeof(a));
-	radiant_sec_wipe(aa, sizeof(aa));
-	radiant_sec_wipe(b, sizeof(b));
-	radiant_sec_wipe(bb, sizeof(bb));
-	radiant_sec_wipe(e, sizeof(e));
-	radiant_sec_wipe(c, sizeof(c));
-	radiant_sec_wipe(d, sizeof(d));
-	radiant_sec_wipe(da, sizeof(da));
-	radiant_sec_wipe(cb, sizeof(cb));
-	radiant_sec_wipe(t, sizeof(t));
+	radiant_sec_wipe(&ws, sizeof(ws));
 
 	return RADIANT_SEC_OK;
 }

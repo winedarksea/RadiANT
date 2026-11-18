@@ -34,6 +34,10 @@
  * drives radiant_sec_pair_join() and radiant_sec_pair_accept_root() itself
  * (test_profile_enrol.c plays one; no application wires one yet).
  *
+ * STACK: the thread that calls into this module runs the X25519, so it needs
+ * RADIANT_SEC_PAIR_STACK_BYTES (radiant_sec.h) below its own frames; the
+ * ladder's field elements are in a static workspace, not on that stack.
+ *
  * THE HONEST LIMIT THIS FILE DOES NOT SOLVE: pairing happens IN THE CLEAR
  * (no prior secret, no out-of-band channel), so an attacker present during
  * the window can be a man in the middle. radiant_sec_pair.c's six-digit

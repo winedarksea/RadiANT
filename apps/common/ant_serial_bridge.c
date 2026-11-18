@@ -43,6 +43,9 @@
 #include <radiant/radiant_diag.h>
 #endif
 #include "ant_radio.h"
+#ifdef CONFIG_RADIANT_SEC_PAIRING_X25519
+#include <radiant/radiant_sec.h>
+#endif
 #include "ant_reset_cause.h"
 #include "ant_serial_bridge.h"
 #include "ant_wire.h"
@@ -76,7 +79,10 @@ LOG_MODULE_REGISTER(ant_bridge, LOG_LEVEL_INF);
 
 /* ── Bridge thread ─────────────────────────────────────────────────────────── */
 
-#define BRIDGE_STACK_SIZE  2048
+/* Every host command runs on this stack, 0xF5 pairing included. One Kconfig
+ * symbol (apps/common/Kconfig.bridge), shared with the radiant/tests/api test
+ * that runs a whole 0xF5 exchange on a thread of this size. */
+#define BRIDGE_STACK_SIZE  CONFIG_ANT_DONGLE_BRIDGE_STACK_SIZE
 
 /* Taken from src/ant_radio.h, not respelled here, so this and a backend's
  * event thread (which must sit below it - see ANTR_HOST_THREAD_PRIORITY)
@@ -84,8 +90,52 @@ LOG_MODULE_REGISTER(ant_bridge, LOG_LEVEL_INF);
  */
 #define BRIDGE_PRIORITY    ANTR_HOST_THREAD_PRIORITY
 
+#ifdef CONFIG_RADIANT_SEC_PAIRING_X25519
+/*
+ * The deepest chain in the image: bridge_thread_fn() (dispatch is inlined
+ * into it) -> antr_sec_pair() -> the radiant_sec_pair_* call. Measured on
+ * nRF52840 at -Os (2026-11-17): bridge_thread_fn 144 B + antr_sec_pair 40 B,
+ * so 256 B covers the bridge's share; the reserve covers an exception frame
+ * with FP context (104 B) and the thread entry, with room to spare. Until the
+ * 2026-11-17 security review the X25519 alone needed 2,636 B here and
+ * overran this 2,048 B stack; scripts/check_stack_budget.py measures the
+ * chain itself from the compiler's .su files in CI.
+ */
+#define BRIDGE_OWN_FRAMES_BYTES 256
+#define BRIDGE_STACK_RESERVE    256
+BUILD_ASSERT(BRIDGE_STACK_SIZE >= RADIANT_SEC_PAIR_STACK_BYTES +
+				  BRIDGE_OWN_FRAMES_BYTES +
+				  BRIDGE_STACK_RESERVE,
+	     "CONFIG_ANT_DONGLE_BRIDGE_STACK_SIZE cannot hold a 0xF5 pairing "
+	     "exchange (RADIANT_SEC_PAIR_STACK_BYTES)");
+#endif
+
 K_THREAD_STACK_DEFINE(bridge_stack, BRIDGE_STACK_SIZE);
 static struct k_thread bridge_thread_data;
+
+/*
+ * Free bridge stack after a 0xF5 command, the deepest thing this thread runs.
+ * Needs the 0xAA fill (CONFIG_INIT_STACKS) to mean anything, so it is a bench
+ * aid, not a release feature; the number is what tools/ant_pair_bench.py's
+ * high-water criterion is read against.
+ */
+#if defined(CONFIG_RADIANT_SEC_PAIRING_X25519) && defined(CONFIG_INIT_STACKS) && \
+	defined(CONFIG_THREAD_STACK_INFO)
+static void log_pair_stack_high_water(void)
+{
+	size_t unused = 0u;
+	size_t size = k_current_get()->stack_info.size;
+
+	if (k_thread_stack_space_get(k_current_get(), &unused) == 0) {
+		LOG_INF("bridge: 0xF5 stack high-water %u of %u bytes",
+			(unsigned int)(size - unused), (unsigned int)size);
+	}
+}
+#elif defined(CONFIG_RADIANT_SEC_PAIRING_X25519)
+static inline void log_pair_stack_high_water(void)
+{
+}
+#endif
 
 /* Set while a system reset is tearing channels down, so the resulting
  * EVENT_CHANNEL_CLOSED storm is not forwarded to the host. A real stick emits
@@ -1586,6 +1636,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		 * transport buffer beneath it are not reachable from here.
 		 */
 		memset(reply, 0, sizeof(reply));
+		log_pair_stack_high_water();
 		break;
 	}
 #endif /* CONFIG_RADIANT_SEC_PAIRING_X25519 */

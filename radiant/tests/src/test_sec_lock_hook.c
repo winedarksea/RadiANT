@@ -192,6 +192,12 @@ ZTEST(sec_lock_hook, test_every_pairing_entry_point_asks_the_port_for_its_lock)
 	EXPECT_CHECKED(radiant_sec_pair_leave, radiant_sec_pair_leave(0u));
 	EXPECT_CHECKED(radiant_sec_pair_service, radiant_sec_pair_service());
 	EXPECT_CHECKED(radiant_sec_pair_reset, radiant_sec_pair_reset());
+	/* Not re-entrant since the 2026-11-17 security review (item 1): the
+	 * ladder works in one static workspace, so the curve itself asks too,
+	 * not only the pairing calls that wrap it. */
+	EXPECT_CHECKED(radiant_sec_x25519,
+		       radiant_sec_x25519(pub, scalar,
+					  radiant_sec_x25519_basepoint));
 }
 #endif
 

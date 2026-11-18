@@ -1333,9 +1333,13 @@ config RADIANT_SEC_PAIRING_X25519
 	bool "X25519 pairing over the acknowledged/burst path"
 	default n
 	help
-	  Vendored public-domain X25519 behind a single radiant_sec_x25519()
-	  entry point, so a PKA backend can displace it without touching the
-	  pairing logic. Its own symbol even when CONFIG_RADIANT_SEC is on,
+	  A clean-room X25519 written from RFC 7748 (src/ext/radiant_x25519.c,
+	  docs/third-party.md), behind a single radiant_sec_x25519() entry
+	  point, so a PKA backend can displace it without touching the pairing
+	  logic. It costs 896 B of static RAM for the ladder's workspace, kept
+	  off the caller's stack so 0xF5 fits the serial bridge thread; a
+	  thread that pairs needs RADIANT_SEC_PAIR_STACK_BYTES (radiant_sec.h).
+	  Its own symbol even when CONFIG_RADIANT_SEC is on,
 	  because most deployments should use the out-of-band path - a QR code
 	  or a typed key - which needs no protocol and has no attack surface
 	  during pairing at all.
