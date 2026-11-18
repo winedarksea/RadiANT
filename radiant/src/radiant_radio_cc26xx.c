@@ -878,7 +878,15 @@ static uint32_t sync_word_of(const uint8_t *addr, uint8_t hw_len)
  * different powers still get theirs: each change of request applies. An
  * off-table request is remembered too (the PA keeps the last power that
  * applied), so a repeat does not warn again; a failed RF_setTxPower() is not,
- * so the next transmit retries it.
+ * so the next transmit retries it (and warns once).
+ *
+ * Known gap: RF_setTxPower() reports success once setup_cmd is updated, even
+ * when the immediate CMD_SET_TX_POWER it then sends is dropped because the RF
+ * core is powering up or switching PHY (the setup already submitted carries
+ * the old value). The cache then skips the repeats and the old power stays on
+ * air until the core next powers down; the next power-up replays setup_cmd
+ * with the new value, so it heals within one power cycle (one slot on a
+ * battery node). The driver gives no status to detect it.
  */
 static bool txp_same(const struct radiant_tx_power *a,
 		     const struct radiant_tx_power *b)
@@ -886,12 +894,15 @@ static bool txp_same(const struct radiant_tx_power *a,
 	if (a->use_raw != b->use_raw) {
 		return false;
 	}
+	/* 22 bits: RF_TxPowerTable_Value::rawValue is a 22-bit field
+	 * (RFCC26X2.h), so raw values equal under the mask program the same PA. */
 	return a->use_raw ? ((a->raw & 0x3FFFFFu) == (b->raw & 0x3FFFFFu))
 			  : (a->dbm == b->dbm);
 }
 
 static void apply_power(const struct radiant_tx_power *p)
 {
+	static bool warned_set_fail;
 	RF_TxPowerTable_Value v;
 
 	if (st.txp_valid && txp_same(p, &st.txp_last)) {
@@ -913,13 +924,22 @@ static void apply_power(const struct radiant_tx_power *p)
 		}
 	}
 
-	LOG_INF("tx power req=%d dBm use_raw=%d -> rawValue=0x%x paType=%u",
+	/* DBG, not INF: channels with different powers alternate requests, and
+	 * each change applies, so this can still run once per transmit. */
+	LOG_DBG("tx power req=%d dBm use_raw=%d -> rawValue=0x%x paType=%u",
 		p->dbm, p->use_raw, (unsigned int)v.rawValue, v.paType);
 
-	if (st.rf_handle != NULL &&
-	    RF_setTxPower(st.rf_handle, v) == RF_StatSuccess) {
+	if (st.rf_handle == NULL) {
+		return;
+	}
+	if (RF_setTxPower(st.rf_handle, v) == RF_StatSuccess) {
 		st.txp_last = *p;
 		st.txp_valid = true;
+	} else if (!warned_set_fail) {
+		warned_set_fail = true;
+		LOG_WRN("RF_setTxPower failed (req=%d dBm use_raw=%d raw=0x%x); "
+			"retrying on each transmit, not logged again",
+			p->dbm, p->use_raw, (unsigned int)v.rawValue);
 	}
 }
 
