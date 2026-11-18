@@ -115,6 +115,9 @@ tests:
   # application's test_sched.c drives directly; their cases exist only here.
   # Every other case runs here too, which is what "the counters change no
   # behaviour" means as a test. radiant.api.diag covers the pages themselves.
+  # CONFIG_RADIANT_POWER_DIAG (the software power proxy) rides along for the
+  # same reason: its scheduler hooks run under every case here, and
+  # test_power_diag.c's two cases on the real struct exist only in this build.
   radiant.unit.diag:
     timeout: 300
     tags:
@@ -125,3 +128,4 @@ tests:
       - native_sim
     extra_configs:
       - CONFIG_RADIANT_DIAG_COUNTERS=y
+      - CONFIG_RADIANT_POWER_DIAG=y

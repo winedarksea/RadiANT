@@ -36,6 +36,7 @@
 #include <radiant/radiant_diag.h>
 #include <radiant/radiant_frame.h>
 #include <radiant/radiant_noise.h>
+#include <radiant/radiant_power_diag.h>
 #include <radiant/radiant_radio_hal.h>
 #include <radiant/radiant_sched.h>
 /* Only for radiant_event_crit_enter()/_exit(); nothing here queues an event. */
@@ -1096,6 +1097,21 @@ static void note_lost(uint8_t c)
 /* --- Ending an operation --- */
 
 /*
+ * CONFIG_RADIANT_POWER_DIAG: charge the armed operation's radio on-time, from
+ * its armed open to now, before clear_armed() forgets it. Backend-neutral (the
+ * HAL clock). The caller decides whether the radio ran at all: a DENIED
+ * operation never did, an abort before the open did not.
+ */
+static void power_note_end(void)
+{
+#if defined(CONFIG_RADIANT_POWER_DIAG)
+	radiant_power_diag_radio(s.armed_kind == (uint8_t)SLOT_TX,
+				 radiant_power_diag_on_us(radiant_radio_now(),
+							  s.armed_open));
+#endif
+}
+
+/*
  * The armed operation reached its own end. Members are consumed and told why,
  * except a continuous request that ended normally (it re-arms). Slots are
  * cleared before the owner is told, so a done() that posts is not overwritten.
@@ -1112,6 +1128,9 @@ static void end_armed(enum radiant_sched_done why)
 	/* Cleared when the pass that follows ends (see note_lost()). */
 	s.ended_bounded = (s.armed_kind == (uint8_t)SLOT_TX) ||
 			  (s.armed_kind == (uint8_t)SLOT_RX && !s.armed_continuous);
+	if (why != RADIANT_SCHED_DONE_DENIED) {
+		power_note_end();
+	}
 	memcpy(list, s.members, sizeof(list));
 	clear_armed();
 	/* The reserve outlives only a completed operation (see in_reserve()). */
@@ -1166,6 +1185,9 @@ static bool abort_armed(uint8_t skip_ch)
 	}
 
 	started = s.armed_open <= radiant_radio_now();
+	if (started) {
+		power_note_end();
+	}
 
 	memcpy(list, s.members, sizeof(list));
 	clear_armed();

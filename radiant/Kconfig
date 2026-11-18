@@ -1573,6 +1573,66 @@ config RADIANT_DIAG_COUNTERS
 	  few dozen u32 increments on the radio paths and changes nothing a
 	  host sees unless the host asks.
 
+config RADIANT_POWER_DIAG
+	bool "DIAGNOSTIC: software power proxy (radiant_power_diag struct)"
+	default n
+	imply CPU_LOAD
+	help
+	  For boards with no current meter. Keeps free-running counters of
+	  what sets a battery node's current - how long the backend has held
+	  its HFXO request, radio transmit and receive on-time and operation
+	  counts, CPU load, idle entries, and the nRF54L constant-latency
+	  state - in one small struct exported as the global symbol
+	  radiant_power_diag. A debugger reads it with no host protocol at
+	  all: look the symbol up in zephyr.elf and read its 88 bytes over SWD
+	  while the target runs (scripts/jlink_peek.ps1). The layout, the
+	  sequence protocol that detects a torn read, and what each counter
+	  does and does not include are in
+	  include/radiant/radiant_power_diag.h. Every number is a proxy for
+	  an estimate, not a measurement of current.
+
+	  Not a 0xF7 page and not visible to a host. A work item on the
+	  system work queue publishes a snapshot once a second (one extra
+	  wake a second).
+
+	  Implies CPU_LOAD (which selects TRACING), where the architecture
+	  allows it; without it the CPU fields read 0xFFFFFFFF. Idle entries
+	  need CONFIG_TRACING_USER as well, which a fragment has to set
+	  because a Kconfig choice member cannot be selected; see
+	  RADIANT_POWER_DIAG_IDLE.
+
+	  OFF BY DEFAULT and never in a shipping image. With it off every hook
+	  is an empty inline and nothing is linked.
+
+config RADIANT_POWER_DIAG_LOG_S
+	int "seconds between power-diag log lines (0 = no log line)"
+	default 10
+	range 0 3600
+	depends on RADIANT_POWER_DIAG
+	help
+	  One LOG_INF line every this many seconds with the deltas since the
+	  previous line: HFXO duty, radio on-time and operations, CPU load and
+	  the idle-entry rate, as key=value integers. 0 leaves only the
+	  struct, for a build with logging off that a debugger reads. Capped
+	  at an hour because the microsecond counters wrap after 71 minutes.
+	  Has no effect without CONFIG_LOG.
+
+config RADIANT_POWER_DIAG_IDLE
+	bool "count idle entries through the TRACING_USER idle hook"
+	default y
+	depends on RADIANT_POWER_DIAG && TRACING_USER
+	help
+	  Defines sys_trace_idle_user(), Zephyr's weak user-tracing hook that
+	  the idle thread calls each time it puts the CPU to sleep, and counts
+	  the calls into radiant_power_diag.idle_entries: the wake rate.
+
+	  A separate option because it claims a hook the application may want
+	  for itself: an application that defines its own
+	  sys_trace_idle_user() turns this off (or gets a duplicate-symbol
+	  link error saying so). Only reachable with CONFIG_TRACING=y and
+	  CONFIG_TRACING_USER=y, which the hr_transmitter sample's
+	  power_diag*.conf fragments set.
+
 config RADIANT_HOT_PATH_O2
 	bool "compile the scheduler, the antr runtime and the radio backend at -O2"
 	default n

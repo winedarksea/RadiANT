@@ -76,6 +76,10 @@ zephyr_library_sources(
 # that compile to nothing without the symbol.
 zephyr_library_sources_ifdef(CONFIG_RADIANT_DIAG_COUNTERS src/radiant_diag.c)
 
+# The software power proxy (radiant_power_diag.h). Its hooks are empty inlines
+# without the symbol.
+zephyr_library_sources_ifdef(CONFIG_RADIANT_POWER_DIAG src/radiant_power_diag.c)
+
 # Single-bit CRC repair. Compiled unconditionally rather than behind its own
 # Kconfig symbol, and the ~1 KB it costs is worth what it buys: the unit-test
 # application can exercise the arithmetic whether or not a given build turns

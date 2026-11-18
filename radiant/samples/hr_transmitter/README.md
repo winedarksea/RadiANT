@@ -24,3 +24,22 @@ That board has no console in this sample.
 
 See the [receiver's README](../hr_receiver/README.md) for other boards and for
 checking the build picked a real radio.
+
+## Estimating power without a meter
+
+Two fragments turn on RadiANT's software power proxy (`CONFIG_RADIANT_POWER_DIAG`):
+how long the HFXO request was held, radio transmit and receive on-time, CPU
+load and idle entries.
+
+```sh
+# A "power dt_ms=... hfxo_pm=... tx_us=..." log line every 10 s:
+west build -b nrf54l15dk/nrf54l15/cpuapp path/to/radiant/samples/hr_transmitter -- -DEXTRA_CONF_FILE=power_diag.conf
+# No console at all; read the radiant_power_diag struct over SWD instead:
+west build -b nrf54l15dk/nrf54l15/cpuapp path/to/radiant/samples/hr_transmitter -- -DEXTRA_CONF_FILE=power_diag_quiet.conf
+```
+
+To combine one with another fragment, separate them with a semicolon:
+`-DEXTRA_CONF_FILE="other.conf;power_diag_quiet.conf"`. The struct layout
+and how to read it without a torn read are in
+`radiant/include/radiant/radiant_power_diag.h`. These numbers are proxies.
+Multiply them by datasheet currents to get an estimate, not a measurement.
