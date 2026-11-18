@@ -214,7 +214,11 @@ static void send_response(uint8_t ch, uint8_t msg_id, uint8_t code)
  * Re-record the transcripts after this change: they now differ by this frame,
  * and only by this frame.
  */
-static void send_startup(uint8_t reason)
+/* `queued`: through the writer thread's queue, behind whatever is already in
+ * it, rather than as a direct write that may overtake those frames (see
+ * handle_system_reset()). A queue that refuses it falls back to the direct
+ * write: a lost STARTUP is worse than a misordered one. */
+static void send_startup(uint8_t reason, bool queued)
 {
 	uint8_t buf[5];
 	buf[0] = ANTW_SYNC_TX;
@@ -223,6 +227,9 @@ static void send_startup(uint8_t reason)
 	buf[3] = reason;
 	buf[4] = buf[0] ^ buf[1] ^ buf[2] ^ buf[3];
 	TRACE_TX(buf, sizeof(buf));
+	if (queued && usb_ant_send_async(buf, sizeof(buf)) == 0) {
+		return;
+	}
 	usb_ant_send(buf, sizeof(buf));
 }
 
@@ -253,7 +260,7 @@ void ant_serial_bridge_announce_boot(void)
 	uint32_t cause;
 
 	(void)ant_reset_cause(&cause);
-	send_startup(ant_reset_cause_startup_reason(cause));
+	send_startup(ant_reset_cause_startup_reason(cause), false);
 #endif
 }
 
@@ -949,9 +956,16 @@ static void handle_system_reset(void)
 	 *    The STARTUP is a direct write, so it would overtake them. Those
 	 *    frames are older than the reset and the host may have them; they
 	 *    go out first, and nothing older follows the STARTUP.
+	 *
+	 *    The bound is shorter than one stalled USB write (ANT_TX_TIMEOUT,
+	 *    1000 ms, a host not polling IN), so a fence that times out sends
+	 *    the STARTUP through the queue instead: FIFO with one consumer,
+	 *    it then follows every older frame however long they take.
 	 */
-	if (ant_transport_tx_fence(K_MSEC(RESET_TX_FENCE_MS)) != 0) {
-		LOG_WRN("reset: transmit queue not drained in %d ms",
+	bool fenced = ant_transport_tx_fence(K_MSEC(RESET_TX_FENCE_MS)) == 0;
+
+	if (!fenced) {
+		LOG_WRN("reset: transmit queue not drained in %d ms; STARTUP queued",
 			RESET_TX_FENCE_MS);
 	}
 
@@ -964,6 +978,9 @@ static void handle_system_reset(void)
 	 */
 	k_sleep(K_MSEC(50));
 #endif
+	/* Before the flag clears, so a queued STARTUP is ahead of any event
+	 * the new session raises. */
+	send_startup(ANTW_STARTUP_COMMAND_RESET, !fenced);
 	atomic_set(&reset_in_progress, 0);
 }
 
@@ -1049,8 +1066,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 	switch (msg_id) {
 
 	case ANTW_MESG_SYSTEM_RESET_ID:
-		handle_system_reset();
-		send_startup(ANTW_STARTUP_COMMAND_RESET);
+		handle_system_reset(); /* sends the STARTUP */
 		return; /* no RESPONSE_EVENT for reset */
 
 	case ANTW_MESG_NETWORK_KEY_ID:

@@ -373,7 +373,7 @@ static struct k_thread api_event_thread_data;
 static void api_event_thread(void *a, void *b, void *c);
 static void api_pump_locked(void);
 static void api_ack_pending_lost_track(uint8_t ch);
-static bool api_search_release_carrier(uint8_t ch);
+static bool api_search_release_carrier(uint8_t ch, bool *released);
 
 /* Port hooks that radiant_event.c declares but leaves undefined, so a
  * build that omits one fails to link. */
@@ -1449,6 +1449,7 @@ static void api_search_acquired(uint8_t channel,
 	struct radiant_rx_event hal;
 	bool                 is_scan;
 	bool                 post = true;
+	bool                 released = false;
 
 	(void)user;
 	if (!api_ch_valid(channel) || r == NULL) {
@@ -1551,19 +1552,39 @@ static void api_search_acquired(uint8_t channel,
 	 * (bench 2026-11-17, L15: 10 of 10 sends expired in the scheduler,
 	 * page 2 tx_margin_min_us -22607), and a send that cannot make its
 	 * slot fails the command; kept, it goes from the next tracked frame.
+	 *
+	 * Only from a master's frame (slot-opener bit, 0x0A): the continuous
+	 * search also hears another slave's 0x02 reply to the same master,
+	 * and a send timed from that lands where no reply slot is open.
 	 */
 	if (post && !is_scan && api_ch[channel].ack_pending &&
 	    !radiant_channel_is_master(channel) &&
 	    radiant_frame_msg_type(r->frame.ctrl_byte) == RADIANT_MSG_BROADCAST &&
+	    radiant_ctrl_is_slot_opener(r->frame.ctrl_byte) &&
 	    r->t_sync_exact &&
 	    radiant_radio_now() +
 			    (radiant_time_t)radiant_radio_caps_get()->min_arm_lead_us <
 		    r->t_sync + (radiant_time_t)RADIANT_TRANSFER_SLOT_REPLY_US &&
 	    api_ack_pending_sendable(channel) &&
-	    api_search_release_carrier(channel)) {
+	    api_search_release_carrier(channel, &released)) {
 		api_ack_pending_send(channel, r->t_sync);
-		if (!api_ch[channel].ack_pending &&
-		    !radiant_transfer_is_idle(&api_xfer[channel])) {
+		if (radiant_transfer_is_idle(&api_xfer[channel])) {
+			/* No transmit took the slot: the command expired between
+			 * the checks above and the send, or the submit failed. A
+			 * released carrier's continuous chunk would otherwise hold
+			 * the slot for good, and the pump never posts a tracked
+			 * window for a channel with a pending slot. Cancel it as
+			 * api_search_cut_locked() does; the cancel is silent, so
+			 * the binding goes too. */
+			if (released) {
+				unsigned int key = radiant_event_crit_enter();
+
+				(void)radiant_sched_cancel(channel);
+				api_bind_rejected(channel);
+				radiant_event_crit_exit(key);
+				radiant_event_wakeup();
+			}
+		} else if (!api_ch[channel].ack_pending) {
 			api_stats.xfer_pending_reacquired++;
 		}
 	}
@@ -1639,14 +1660,18 @@ static void api_search_cut_locked(void)
  * its scan channel once riding): with others searching the chunk still
  * serves them, and the carrier sends from its next tracked frame instead.
  * Returns whether the channel may transmit now (true for a non-carrier).
+ * *released says whether this call ended the hold: the continuous chunk is
+ * then still in the slot, and only a transmit request drops it, so a caller
+ * that ends up not sending must cancel it (api_search_acquired()).
  * Radio callback context.
  */
-static bool api_search_release_carrier(uint8_t ch)
+static bool api_search_release_carrier(uint8_t ch, bool *released)
 {
 	unsigned int key;
 	uint8_t      o;
 	bool         ok = true;
 
+	*released = false;
 	key = radiant_event_crit_enter();
 	if (api_search_slot == ch) {
 		for (o = 0u; o < API_CHANNELS; o++) {
@@ -1663,6 +1688,7 @@ static bool api_search_release_carrier(uint8_t ch)
 			api_search_slot = RADIANT_SCHED_CH_NONE;
 			api_xfer_superseded(ch);
 			api_ch[ch].slot_heard = false;
+			*released = true;
 		}
 	}
 	radiant_event_crit_exit(key);
@@ -2427,12 +2453,14 @@ static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 		}
 #endif
 		/* After the policy guard, so a frame it defers or drops never
-		 * opens a pending command's slot. */
-		if (!crc_failed && api_ch[ch].ack_pending &&
-		    !radiant_channel_is_master(ch)) {
+		 * opens a pending command's slot. Only a master's frame opens
+		 * one: another slave's 0x02 reply in a widened window does not. */
+		if (crc_failed || radiant_channel_is_master(ch) ||
+		    !radiant_ctrl_is_slot_opener(f.ctrl_byte)) {
+			/* nothing to send from this frame */
+		} else if (api_ch[ch].ack_pending) {
 			api_ack_pending_send(ch, evt->t_sync);
-		} else if (!crc_failed && api_ch[ch].bcast_pending &&
-			   !radiant_channel_is_master(ch)) {
+		} else if (api_ch[ch].bcast_pending) {
 			api_post_slave_bcast(ch, evt->t_sync);
 		}
 		api_post_rx(ch, (uint8_t)ANTW_MESG_BROADCAST_DATA_ID, &id, evt,
