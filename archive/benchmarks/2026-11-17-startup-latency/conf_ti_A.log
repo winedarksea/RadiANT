@@ -1,9 +1,0 @@
-﻿
-running 296 conformance cases (reset before each: True)
-
-wrote archive\benchmarks\2026-11-17-startup-latency\conf_ti_A.antser
-  296 cases, 1318 records, 634 replies
-  sha256 a3a82dbe446927e73bed336cbd9e27188a1d5fd228af8c5f1ba6f937d5db6609
-
-Run this against the other backend and diff the two:
-  python tools/ant_conformance.py --compare <other> archive\benchmarks\2026-11-17-startup-latency\conf_ti_A.antser

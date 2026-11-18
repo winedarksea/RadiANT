@@ -1,0 +1,1762 @@
+[
+ {
+  "leg": "leg1_Os",
+  "image": "A",
+  "flash_md5": "d6f0421947cf2bcaff80c4aae9c621e6",
+  "flash_probe_pass": true,
+  "count_pre": {
+   "l15": 3,
+   "n53": 3,
+   "dongle": 2
+  },
+  "count_post": {
+   "l15": 3,
+   "n53": 3,
+   "dongle": 2
+  },
+  "count_pre_devices": [
+   "21001:0x0B",
+   "21002:0x78",
+   "21003:0x79",
+   "23001:0x79",
+   "23002:0x0B",
+   "24001:0x78",
+   "24002:0x79",
+   "24003:0x0B",
+   "52233:0x0B",
+   "52233:0x11",
+   "52233:0x7B"
+  ],
+  "count_post_devices": [
+   "21001:0x0B",
+   "21002:0x78",
+   "21003:0x79",
+   "23001:0x79",
+   "23002:0x0B",
+   "24001:0x78",
+   "24002:0x79",
+   "24003:0x0B",
+   "52233:0x0B",
+   "52233:0x11",
+   "52233:0x7B"
+  ],
+  "window": {
+   "scan_pm": {
+    "rc": 0,
+    "start": 1794865514.957194,
+    "secs": 315.1142363548279
+   },
+   "scan_ti": {
+    "rc": 0,
+    "start": 1794865514.9694464,
+    "secs": 315.10198402404785
+   }
+  },
+  "steps_nonzero_rc": [],
+  "ti_pages": {
+   "0": {
+    "sched_dones": 21195,
+    "sched_missed": 12,
+    "sched_failed": 0,
+    "sched_denied": 0,
+    "slots_missed": 783,
+    "slots_denied": 0,
+    "rx_sched_events": 12160,
+    "xfer_no_ack": 0
+   },
+   "3": {
+    "rx_posted": 21026,
+    "rx_refused": 0,
+    "term_ok": 11903,
+    "term_empty": 9069,
+    "term_error": 53,
+    "status_err": 0,
+    "status_last": 0,
+    "sync_entries": 13497
+   },
+   "4": {
+    "sw_addr_mismatch": 59,
+    "window_drops": 53,
+    "crc_fail": 1260,
+    "alt_sync_hits": 0,
+    "rx_nok": 0,
+    "rx_buf_full": 0,
+    "drain_max_us": 568,
+    "min_lead_us": 175
+   },
+   "5": {
+    "windows": 996,
+    "sets_advanced": 930,
+    "sweeps": 857,
+    "frames_ok": 1535,
+    "crc_fail": 0,
+    "acquired": 15,
+    "scan_reports": 1523,
+    "timeouts": 0
+   },
+   "7": {
+    "srch_cut_close": null,
+    "srch_cut_abort": null,
+    "srch_end_near_close": null,
+    "trk_open_late": 33,
+    "trk_open_late_max_us": 213,
+    "trk_missed_behind_scan": 0,
+    "tx_start_missed": null,
+    "rx_start_missed": null
+   },
+   "8": {
+    "drain_max_frames": 1,
+    "frame_max_us": 102,
+    "crc_max_us": 7,
+    "rx_cb_max_us": 491,
+    "pass_max_us": 394,
+    "pass_steps_max": 2,
+    "pass_over_100us": 22145,
+    "drain_over_250us": 10256
+   },
+   "9": {
+    "sweep_max_us": 95,
+    "decide_max_us": 176,
+    "arm_call_max_us": 78,
+    "done_cb_max_us": 148,
+    "book_max_us": null,
+    "pass_to_arm_max_us": 319,
+    "arm_slack_min_us": 22,
+    "early_etime": 0
+   },
+   "10": {
+    "crc_repaired": 9,
+    "crc_unrepairable": 27,
+    "crc_repair_refuted": 0,
+    "crc_repair_implausible": 0,
+    "late_isr_drops": null,
+    "end_late_max_us": null,
+    "t_sync_max_us": 2,
+    "match_max_us": 29
+   },
+   "11": {
+    "windows_merged": 226,
+    "preempted": 0,
+    "replans": 0,
+    "arm_rejected": 0,
+    "tx_armed": 0,
+    "stale_events": 66,
+    "slots_collided": 12,
+    "turn_yields": 0
+   },
+   "12": {
+    "stale_rx_frame": 0,
+    "stale_rx_end": 66,
+    "stale_rx_filter_index": 0,
+    "stale_tx": 0,
+    "stale_ed": null,
+    "reserved_5": null,
+    "reserved_6": null,
+    "reserved_7": null
+   }
+  },
+  "ti_health_before": {
+   "burst_stalls": 0,
+   "event_high_water": 0,
+   "event_overflows": 0,
+   "host_csum": 0,
+   "host_desync": 0,
+   "key_rejects": 0,
+   "rx_backpressure": 0,
+   "rx_not_owner": 0,
+   "saturated": false,
+   "sched_denied": 0,
+   "sched_failed": 0,
+   "sched_missed": 0,
+   "sweep_busy": 0,
+   "tx_drops": 0,
+   "tx_high_water": 0,
+   "tx_timeout": 0,
+   "uart_rx_overruns": 0,
+   "version": 1
+  },
+  "ti_health_after": {
+   "burst_stalls": 0,
+   "event_high_water": 2,
+   "event_overflows": 0,
+   "host_csum": 0,
+   "host_desync": 0,
+   "key_rejects": 0,
+   "rx_backpressure": 0,
+   "rx_not_owner": 0,
+   "saturated": false,
+   "sched_denied": 0,
+   "sched_failed": 0,
+   "sched_missed": 12,
+   "sweep_busy": 0,
+   "tx_drops": 0,
+   "tx_high_water": 0,
+   "tx_timeout": 0,
+   "uart_rx_overruns": 0,
+   "version": 1
+  },
+  "ti_scan": {
+   "seconds": 300.0149999999999,
+   "opens": 66,
+   "tracked": {
+    "21001:0x0B": {
+     "loss_pct": 4.135021097046414,
+     "received": 1136,
+     "rx_fail": 49
+    },
+    "21002:0x78": {
+     "loss_pct": 4.670558798999166,
+     "received": 1143,
+     "rx_fail": 56
+    },
+    "21003:0x79": {
+     "loss_pct": 3.7159372419488026,
+     "received": 1166,
+     "rx_fail": 45
+    },
+    "23001:0x79": {
+     "loss_pct": 2.0,
+     "received": 1176,
+     "rx_fail": 24
+    },
+    "23002:0x0B": {
+     "loss_pct": 0.8424599831508003,
+     "received": 1177,
+     "rx_fail": 10
+    },
+    "24001:0x78": {
+     "loss_pct": 1.4107883817427387,
+     "received": 1188,
+     "rx_fail": 17
+    },
+    "24002:0x79": {
+     "loss_pct": 0.831946755407654,
+     "received": 1192,
+     "rx_fail": 10
+    },
+    "24003:0x0B": {
+     "loss_pct": 1.0092514718250631,
+     "received": 1177,
+     "rx_fail": 12
+    },
+    "52233:0x11": {
+     "loss_pct": 44.80968858131488,
+     "received": 638,
+     "rx_fail": 518
+    }
+   }
+  },
+  "pm_pages": {
+   "0": {
+    "sched_dones": 21657,
+    "sched_missed": 0,
+    "sched_failed": 0,
+    "sched_denied": 0,
+    "slots_missed": 1089,
+    "slots_denied": 0,
+    "rx_sched_events": 12823,
+    "xfer_no_ack": 0
+   },
+   "3": {
+    "rx_posted": 21561,
+    "rx_refused": 0,
+    "term_ok": 4277,
+    "term_empty": 7164,
+    "term_error": 54,
+    "status_err": null,
+    "status_last": null,
+    "sync_entries": 16550
+   },
+   "4": {
+    "sw_addr_mismatch": 0,
+    "window_drops": null,
+    "crc_fail": 3912,
+    "alt_sync_hits": null,
+    "rx_nok": null,
+    "rx_buf_full": null,
+    "drain_max_us": null,
+    "min_lead_us": null
+   },
+   "5": {
+    "windows": 1087,
+    "sets_advanced": 1020,
+    "sweeps": 950,
+    "frames_ok": 2354,
+    "crc_fail": 0,
+    "acquired": 10,
+    "scan_reports": 2338,
+    "timeouts": 0
+   },
+   "7": {
+    "srch_cut_close": 34,
+    "srch_cut_abort": 0,
+    "srch_end_near_close": 81,
+    "trk_open_late": 40,
+    "trk_open_late_max_us": 205,
+    "trk_missed_behind_scan": 0,
+    "tx_start_missed": 0,
+    "rx_start_missed": 0
+   },
+   "8": {
+    "drain_max_frames": null,
+    "frame_max_us": null,
+    "crc_max_us": null,
+    "rx_cb_max_us": null,
+    "pass_max_us": 198,
+    "pass_steps_max": 2,
+    "pass_over_100us": 21560,
+    "drain_over_250us": null
+   },
+   "9": {
+    "sweep_max_us": 26,
+    "decide_max_us": 104,
+    "arm_call_max_us": 74,
+    "done_cb_max_us": 120,
+    "book_max_us": null,
+    "pass_to_arm_max_us": 179,
+    "arm_slack_min_us": 61,
+    "early_etime": 0
+   },
+   "10": {
+    "crc_repaired": 66,
+    "crc_unrepairable": 119,
+    "crc_repair_refuted": 0,
+    "crc_repair_implausible": 0,
+    "late_isr_drops": 0,
+    "end_late_max_us": 38,
+    "t_sync_max_us": null,
+    "match_max_us": null
+   },
+   "11": {
+    "windows_merged": 158,
+    "preempted": 0,
+    "replans": 0,
+    "arm_rejected": 0,
+    "tx_armed": 0,
+    "stale_events": 61,
+    "slots_collided": 0,
+    "turn_yields": 0
+   },
+   "12": {
+    "stale_rx_frame": 0,
+    "stale_rx_end": 61,
+    "stale_rx_filter_index": 0,
+    "stale_tx": 0,
+    "stale_ed": null,
+    "reserved_5": null,
+    "reserved_6": null,
+    "reserved_7": null
+   }
+  },
+  "pm_health_before": {
+   "burst_stalls": 0,
+   "event_high_water": 3,
+   "event_overflows": 0,
+   "host_csum": 0,
+   "host_desync": 0,
+   "key_rejects": 0,
+   "rx_backpressure": 0,
+   "rx_not_owner": 0,
+   "saturated": false,
+   "sched_denied": 0,
+   "sched_failed": 0,
+   "sched_missed": 10,
+   "sweep_busy": 0,
+   "tx_drops": 2,
+   "tx_high_water": 1,
+   "tx_timeout": 1,
+   "version": 1
+  },
+  "pm_health_after": {
+   "burst_stalls": 0,
+   "event_high_water": 3,
+   "event_overflows": 0,
+   "host_csum": 0,
+   "host_desync": 0,
+   "key_rejects": 0,
+   "rx_backpressure": 0,
+   "rx_not_owner": 0,
+   "saturated": false,
+   "sched_denied": 0,
+   "sched_failed": 0,
+   "sched_missed": 10,
+   "sweep_busy": 0,
+   "tx_drops": 53,
+   "tx_high_water": 32,
+   "tx_timeout": 2,
+   "version": 1
+  },
+  "pm_scan": {
+   "seconds": 300.0149999999999,
+   "opens": 67,
+   "tracked": {
+    "21001:0x0B": {
+     "loss_pct": 3.7468776019983348,
+     "received": 1156,
+     "rx_fail": 45
+    },
+    "21002:0x78": {
+     "loss_pct": 4.108463434675431,
+     "received": 1167,
+     "rx_fail": 50
+    },
+    "21003:0x79": {
+     "loss_pct": 3.45679012345679,
+     "received": 1173,
+     "rx_fail": 42
+    },
+    "23001:0x79": {
+     "loss_pct": 1.3991769547325104,
+     "received": 1198,
+     "rx_fail": 17
+    },
+    "23002:0x0B": {
+     "loss_pct": 0.4166666666666667,
+     "received": 1195,
+     "rx_fail": 5
+    },
+    "24001:0x78": {
+     "loss_pct": 17.597998331943288,
+     "received": 988,
+     "rx_fail": 211
+    },
+    "24002:0x79": {
+     "loss_pct": 13.79598662207358,
+     "received": 1031,
+     "rx_fail": 165
+    },
+    "24003:0x0B": {
+     "loss_pct": 16.835871404399324,
+     "received": 983,
+     "rx_fail": 199
+    },
+    "52233:0x11": {
+     "loss_pct": 26.554621848739497,
+     "received": 874,
+     "rx_fail": 316
+    }
+   }
+  },
+  "ti_scan_no_answer_lines": []
+ },
+ {
+  "leg": "leg2_O2",
+  "image": "B",
+  "flash_md5": "c4e5eb81765eed9412a633603ece3040",
+  "flash_probe_pass": true,
+  "count_pre": {
+   "l15": 3,
+   "n53": 3,
+   "dongle": 2
+  },
+  "count_post": {
+   "l15": 3,
+   "n53": 3,
+   "dongle": 2
+  },
+  "count_pre_devices": [
+   "21001:0x0B",
+   "21002:0x78",
+   "21003:0x79",
+   "23001:0x79",
+   "23002:0x0B",
+   "24001:0x78",
+   "24002:0x79",
+   "24003:0x0B",
+   "52233:0x0B",
+   "52233:0x11",
+   "52233:0x7B"
+  ],
+  "count_post_devices": [
+   "21001:0x0B",
+   "21002:0x78",
+   "21003:0x79",
+   "23001:0x79",
+   "23002:0x0B",
+   "24001:0x78",
+   "24002:0x79",
+   "24003:0x0B",
+   "52233:0x0B",
+   "52233:0x11",
+   "52233:0x7B"
+  ],
+  "window": {
+   "scan_pm": {
+    "rc": 0,
+    "start": 1794866031.6196373,
+    "secs": 315.1427857875824
+   },
+   "scan_ti": {
+    "rc": 0,
+    "start": 1794866031.6307013,
+    "secs": 315.1317217350006
+   }
+  },
+  "steps_nonzero_rc": [],
+  "ti_pages": {
+   "0": {
+    "sched_dones": 21109,
+    "sched_missed": 11,
+    "sched_failed": 0,
+    "sched_denied": 0,
+    "slots_missed": 738,
+    "slots_denied": 0,
+    "rx_sched_events": 12283,
+    "xfer_no_ack": 0
+   },
+   "3": {
+    "rx_posted": 20922,
+    "rx_refused": 0,
+    "term_ok": 11933,
+    "term_empty": 8939,
+    "term_error": 49,
+    "status_err": 0,
+    "status_last": 0,
+    "sync_entries": 13519
+   },
+   "4": {
+    "sw_addr_mismatch": 53,
+    "window_drops": 52,
+    "crc_fail": 1176,
+    "alt_sync_hits": 0,
+    "rx_nok": 0,
+    "rx_buf_full": 0,
+    "drain_max_us": 496,
+    "min_lead_us": 225
+   },
+   "5": {
+    "windows": 970,
+    "sets_advanced": 903,
+    "sweeps": 827,
+    "frames_ok": 1630,
+    "crc_fail": 0,
+    "acquired": 18,
+    "scan_reports": 1615,
+    "timeouts": 0
+   },
+   "7": {
+    "srch_cut_close": null,
+    "srch_cut_abort": null,
+    "srch_end_near_close": null,
+    "trk_open_late": 34,
+    "trk_open_late_max_us": 222,
+    "trk_missed_behind_scan": 0,
+    "tx_start_missed": null,
+    "rx_start_missed": null
+   },
+   "8": {
+    "drain_max_frames": 1,
+    "frame_max_us": 102,
+    "crc_max_us": 7,
+    "rx_cb_max_us": 423,
+    "pass_max_us": 313,
+    "pass_steps_max": 2,
+    "pass_over_100us": 21404,
+    "drain_over_250us": 10249
+   },
+   "9": {
+    "sweep_max_us": 68,
+    "decide_max_us": 143,
+    "arm_call_max_us": 71,
+    "done_cb_max_us": 137,
+    "book_max_us": null,
+    "pass_to_arm_max_us": 244,
+    "arm_slack_min_us": 72,
+    "early_etime": 0
+   },
+   "10": {
+    "crc_repaired": 12,
+    "crc_unrepairable": 35,
+    "crc_repair_refuted": 0,
+    "crc_repair_implausible": 0,
+    "late_isr_drops": null,
+    "end_late_max_us": null,
+    "t_sync_max_us": 2,
+    "match_max_us": 32
+   },
+   "11": {
+    "windows_merged": 241,
+    "preempted": 0,
+    "replans": 0,
+    "arm_rejected": 0,
+    "tx_armed": 0,
+    "stale_events": 61,
+    "slots_collided": 11,
+    "turn_yields": 0
+   },
+   "12": {
+    "stale_rx_frame": 0,
+    "stale_rx_end": 61,
+    "stale_rx_filter_index": 0,
+    "stale_tx": 0,
+    "stale_ed": null,
+    "reserved_5": null,
+    "reserved_6": null,
+    "reserved_7": null
+   }
+  },
+  "ti_health_before": {
+   "burst_stalls": 0,
+   "event_high_water": 0,
+   "event_overflows": 0,
+   "host_csum": 0,
+   "host_desync": 0,
+   "key_rejects": 0,
+   "rx_backpressure": 0,
+   "rx_not_owner": 0,
+   "saturated": false,
+   "sched_denied": 0,
+   "sched_failed": 0,
+   "sched_missed": 0,
+   "sweep_busy": 0,
+   "tx_drops": 0,
+   "tx_high_water": 0,
+   "tx_timeout": 0,
+   "uart_rx_overruns": 0,
+   "version": 1
+  },
+  "ti_health_after": {
+   "burst_stalls": 0,
+   "event_high_water": 2,
+   "event_overflows": 0,
+   "host_csum": 0,
+   "host_desync": 0,
+   "key_rejects": 0,
+   "rx_backpressure": 0,
+   "rx_not_owner": 0,
+   "saturated": false,
+   "sched_denied": 0,
+   "sched_failed": 0,
+   "sched_missed": 11,
+   "sweep_busy": 0,
+   "tx_drops": 0,
+   "tx_high_water": 0,
+   "tx_timeout": 0,
+   "uart_rx_overruns": 0,
+   "version": 1
+  },
+  "ti_scan": {
+   "seconds": 300.0,
+   "opens": 66,
+   "tracked": {
+    "21001:0x0B": {
+     "loss_pct": 3.5413153456998314,
+     "received": 1144,
+     "rx_fail": 42
+    },
+    "21002:0x78": {
+     "loss_pct": 4.232365145228216,
+     "received": 1154,
+     "rx_fail": 51
+    },
+    "21003:0x79": {
+     "loss_pct": 4.24646128226478,
+     "received": 1150,
+     "rx_fail": 51
+    },
+    "23001:0x79": {
+     "loss_pct": 1.4107883817427387,
+     "received": 1188,
+     "rx_fail": 17
+    },
+    "23002:0x0B": {
+     "loss_pct": 0.6717044500419815,
+     "received": 1183,
+     "rx_fail": 8
+    },
+    "24001:0x78": {
+     "loss_pct": 1.077943615257048,
+     "received": 1193,
+     "rx_fail": 13
+    },
+    "24002:0x79": {
+     "loss_pct": 1.0806317539484622,
+     "received": 1190,
+     "rx_fail": 13
+    },
+    "24003:0x0B": {
+     "loss_pct": 1.1764705882352942,
+     "received": 1176,
+     "rx_fail": 14
+    },
+    "52233:0x11": {
+     "loss_pct": 43.27433628318584,
+     "received": 641,
+     "rx_fail": 489
+    }
+   }
+  },
+  "pm_pages": {
+   "0": {
+    "sched_dones": 21606,
+    "sched_missed": 0,
+    "sched_failed": 0,
+    "sched_denied": 0,
+    "slots_missed": 1077,
+    "slots_denied": 0,
+    "rx_sched_events": 12778,
+    "xfer_no_ack": 0
+   },
+   "3": {
+    "rx_posted": 21518,
+    "rx_refused": 0,
+    "term_ok": 3868,
+    "term_empty": 7492,
+    "term_error": 53,
+    "status_err": null,
+    "status_last": null,
+    "sync_entries": 16282
+   },
+   "4": {
+    "sw_addr_mismatch": 0,
+    "window_drops": null,
+    "crc_fail": 3665,
+    "alt_sync_hits": null,
+    "rx_nok": null,
+    "rx_buf_full": null,
+    "drain_max_us": null,
+    "min_lead_us": null
+   },
+   "5": {
+    "windows": 1064,
+    "sets_advanced": 997,
+    "sweeps": 927,
+    "frames_ok": 2300,
+    "crc_fail": 0,
+    "acquired": 10,
+    "scan_reports": 2289,
+    "timeouts": 0
+   },
+   "7": {
+    "srch_cut_close": 20,
+    "srch_cut_abort": 0,
+    "srch_end_near_close": 62,
+    "trk_open_late": 52,
+    "trk_open_late_max_us": 205,
+    "trk_missed_behind_scan": 0,
+    "tx_start_missed": 0,
+    "rx_start_missed": 0
+   },
+   "8": {
+    "drain_max_frames": null,
+    "frame_max_us": null,
+    "crc_max_us": null,
+    "rx_cb_max_us": null,
+    "pass_max_us": 203,
+    "pass_steps_max": 2,
+    "pass_over_100us": 21517,
+    "drain_over_250us": null
+   },
+   "9": {
+    "sweep_max_us": 26,
+    "decide_max_us": 107,
+    "arm_call_max_us": 74,
+    "done_cb_max_us": 120,
+    "book_max_us": null,
+    "pass_to_arm_max_us": 185,
+    "arm_slack_min_us": 61,
+    "early_etime": 0
+   },
+   "10": {
+    "crc_repaired": 51,
+    "crc_unrepairable": 110,
+    "crc_repair_refuted": 0,
+    "crc_repair_implausible": 0,
+    "late_isr_drops": 0,
+    "end_late_max_us": 39,
+    "t_sync_max_us": null,
+    "match_max_us": null
+   },
+   "11": {
+    "windows_merged": 152,
+    "preempted": 0,
+    "replans": 0,
+    "arm_rejected": 0,
+    "tx_armed": 0,
+    "stale_events": 63,
+    "slots_collided": 0,
+    "turn_yields": 0
+   },
+   "12": {
+    "stale_rx_frame": 0,
+    "stale_rx_end": 63,
+    "stale_rx_filter_index": 0,
+    "stale_tx": 0,
+    "stale_ed": null,
+    "reserved_5": null,
+    "reserved_6": null,
+    "reserved_7": null
+   }
+  },
+  "pm_health_before": {
+   "burst_stalls": 0,
+   "event_high_water": 9,
+   "event_overflows": 0,
+   "host_csum": 0,
+   "host_desync": 0,
+   "key_rejects": 0,
+   "rx_backpressure": 0,
+   "rx_not_owner": 0,
+   "saturated": false,
+   "sched_denied": 0,
+   "sched_failed": 0,
+   "sched_missed": 10,
+   "sweep_busy": 0,
+   "tx_drops": 76,
+   "tx_high_water": 32,
+   "tx_timeout": 2,
+   "version": 1
+  },
+  "pm_health_after": {
+   "burst_stalls": 0,
+   "event_high_water": 9,
+   "event_overflows": 0,
+   "host_csum": 0,
+   "host_desync": 0,
+   "key_rejects": 0,
+   "rx_backpressure": 0,
+   "rx_not_owner": 0,
+   "saturated": false,
+   "sched_denied": 0,
+   "sched_failed": 0,
+   "sched_missed": 10,
+   "sweep_busy": 0,
+   "tx_drops": 121,
+   "tx_high_water": 32,
+   "tx_timeout": 3,
+   "version": 1
+  },
+  "pm_scan": {
+   "seconds": 300.0,
+   "opens": 67,
+   "tracked": {
+    "21001:0x0B": {
+     "loss_pct": 3.419516263552961,
+     "received": 1158,
+     "rx_fail": 41
+    },
+    "21002:0x78": {
+     "loss_pct": 3.9408866995073892,
+     "received": 1170,
+     "rx_fail": 48
+    },
+    "21003:0x79": {
+     "loss_pct": 3.8651315789473686,
+     "received": 1169,
+     "rx_fail": 47
+    },
+    "23001:0x79": {
+     "loss_pct": 1.5625,
+     "received": 1197,
+     "rx_fail": 19
+    },
+    "23002:0x0B": {
+     "loss_pct": 0.831946755407654,
+     "received": 1192,
+     "rx_fail": 10
+    },
+    "24001:0x78": {
+     "loss_pct": 16.099585062240664,
+     "received": 1011,
+     "rx_fail": 194
+    },
+    "24002:0x79": {
+     "loss_pct": 14.214463840399002,
+     "received": 1032,
+     "rx_fail": 171
+    },
+    "24003:0x0B": {
+     "loss_pct": 14.345991561181435,
+     "received": 1015,
+     "rx_fail": 170
+    },
+    "52233:0x11": {
+     "loss_pct": 27.478991596638654,
+     "received": 863,
+     "rx_fail": 327
+    }
+   }
+  },
+  "ti_scan_no_answer_lines": []
+ },
+ {
+  "leg": "leg3_Os",
+  "image": "A",
+  "flash_md5": "d6f0421947cf2bcaff80c4aae9c621e6",
+  "flash_probe_pass": true,
+  "count_pre": {
+   "l15": 3,
+   "n53": 3,
+   "dongle": 2
+  },
+  "count_post": {
+   "l15": 3,
+   "n53": 3,
+   "dongle": 2
+  },
+  "count_pre_devices": [
+   "21001:0x0B",
+   "21002:0x78",
+   "21003:0x79",
+   "23001:0x79",
+   "23002:0x0B",
+   "24001:0x78",
+   "24002:0x79",
+   "24003:0x0B",
+   "52233:0x0B",
+   "52233:0x11",
+   "52233:0x7B"
+  ],
+  "count_post_devices": [
+   "21001:0x0B",
+   "21002:0x78",
+   "21003:0x79",
+   "23001:0x79",
+   "23002:0x0B",
+   "24001:0x78",
+   "24002:0x79",
+   "24003:0x0B",
+   "52233:0x0B",
+   "52233:0x11",
+   "52233:0x7B"
+  ],
+  "window": {
+   "scan_pm": {
+    "rc": 0,
+    "start": 1794866556.05732,
+    "secs": 315.1098279953003
+   },
+   "scan_ti": {
+    "rc": 0,
+    "start": 1794866556.0663974,
+    "secs": 315.10175251960754
+   }
+  },
+  "steps_nonzero_rc": [],
+  "ti_pages": {
+   "0": {
+    "sched_dones": 21110,
+    "sched_missed": 12,
+    "sched_failed": 0,
+    "sched_denied": 0,
+    "slots_missed": 805,
+    "slots_denied": 0,
+    "rx_sched_events": 12236,
+    "xfer_no_ack": 0
+   },
+   "3": {
+    "rx_posted": 20937,
+    "rx_refused": 0,
+    "term_ok": 11931,
+    "term_empty": 8948,
+    "term_error": 57,
+    "status_err": 0,
+    "status_last": 0,
+    "sync_entries": 13601
+   },
+   "4": {
+    "sw_addr_mismatch": 44,
+    "window_drops": 67,
+    "crc_fail": 1312,
+    "alt_sync_hits": 0,
+    "rx_nok": 0,
+    "rx_buf_full": 0,
+    "drain_max_us": 566,
+    "min_lead_us": 174
+   },
+   "5": {
+    "windows": 992,
+    "sets_advanced": 926,
+    "sweeps": 851,
+    "frames_ok": 1626,
+    "crc_fail": 0,
+    "acquired": 16,
+    "scan_reports": 1609,
+    "timeouts": 0
+   },
+   "7": {
+    "srch_cut_close": null,
+    "srch_cut_abort": null,
+    "srch_end_near_close": null,
+    "trk_open_late": 41,
+    "trk_open_late_max_us": 232,
+    "trk_missed_behind_scan": 0,
+    "tx_start_missed": null,
+    "rx_start_missed": null
+   },
+   "8": {
+    "drain_max_frames": 1,
+    "frame_max_us": 108,
+    "crc_max_us": 7,
+    "rx_cb_max_us": 488,
+    "pass_max_us": 399,
+    "pass_steps_max": 2,
+    "pass_over_100us": 22074,
+    "drain_over_250us": 10232
+   },
+   "9": {
+    "sweep_max_us": 103,
+    "decide_max_us": 176,
+    "arm_call_max_us": 78,
+    "done_cb_max_us": 149,
+    "book_max_us": null,
+    "pass_to_arm_max_us": 323,
+    "arm_slack_min_us": 21,
+    "early_etime": 0
+   },
+   "10": {
+    "crc_repaired": 15,
+    "crc_unrepairable": 43,
+    "crc_repair_refuted": 0,
+    "crc_repair_implausible": 0,
+    "late_isr_drops": null,
+    "end_late_max_us": null,
+    "t_sync_max_us": 2,
+    "match_max_us": 29
+   },
+   "11": {
+    "windows_merged": 226,
+    "preempted": 0,
+    "replans": 0,
+    "arm_rejected": 0,
+    "tx_armed": 0,
+    "stale_events": 64,
+    "slots_collided": 12,
+    "turn_yields": 0
+   },
+   "12": {
+    "stale_rx_frame": 0,
+    "stale_rx_end": 64,
+    "stale_rx_filter_index": 0,
+    "stale_tx": 0,
+    "stale_ed": null,
+    "reserved_5": null,
+    "reserved_6": null,
+    "reserved_7": null
+   }
+  },
+  "ti_health_before": {
+   "burst_stalls": 0,
+   "event_high_water": 0,
+   "event_overflows": 0,
+   "host_csum": 0,
+   "host_desync": 0,
+   "key_rejects": 0,
+   "rx_backpressure": 0,
+   "rx_not_owner": 0,
+   "saturated": false,
+   "sched_denied": 0,
+   "sched_failed": 0,
+   "sched_missed": 0,
+   "sweep_busy": 0,
+   "tx_drops": 0,
+   "tx_high_water": 0,
+   "tx_timeout": 0,
+   "uart_rx_overruns": 0,
+   "version": 1
+  },
+  "ti_health_after": {
+   "burst_stalls": 0,
+   "event_high_water": 2,
+   "event_overflows": 0,
+   "host_csum": 0,
+   "host_desync": 0,
+   "key_rejects": 0,
+   "rx_backpressure": 0,
+   "rx_not_owner": 0,
+   "saturated": false,
+   "sched_denied": 0,
+   "sched_failed": 0,
+   "sched_missed": 12,
+   "sweep_busy": 0,
+   "tx_drops": 0,
+   "tx_high_water": 0,
+   "tx_timeout": 0,
+   "uart_rx_overruns": 0,
+   "version": 1
+  },
+  "ti_scan": {
+   "seconds": 300.0,
+   "opens": 66,
+   "tracked": {
+    "21001:0x0B": {
+     "loss_pct": 4.064352243861134,
+     "received": 1133,
+     "rx_fail": 48
+    },
+    "21002:0x78": {
+     "loss_pct": 5.0,
+     "received": 1140,
+     "rx_fail": 60
+    },
+    "21003:0x79": {
+     "loss_pct": 3.877887788778878,
+     "received": 1165,
+     "rx_fail": 47
+    },
+    "23001:0x79": {
+     "loss_pct": 1.7543859649122806,
+     "received": 1176,
+     "rx_fail": 21
+    },
+    "23002:0x0B": {
+     "loss_pct": 0.3372681281618887,
+     "received": 1182,
+     "rx_fail": 4
+    },
+    "24001:0x78": {
+     "loss_pct": 1.3311148086522462,
+     "received": 1186,
+     "rx_fail": 16
+    },
+    "24002:0x79": {
+     "loss_pct": 1.1666666666666667,
+     "received": 1186,
+     "rx_fail": 14
+    },
+    "24003:0x0B": {
+     "loss_pct": 1.3513513513513513,
+     "received": 1168,
+     "rx_fail": 16
+    },
+    "52233:0x11": {
+     "loss_pct": 46.53812445223488,
+     "received": 610,
+     "rx_fail": 531
+    }
+   }
+  },
+  "pm_pages": {
+   "0": {
+    "sched_dones": 21588,
+    "sched_missed": 0,
+    "sched_failed": 0,
+    "sched_denied": 0,
+    "slots_missed": 1339,
+    "slots_denied": 0,
+    "rx_sched_events": 12447,
+    "xfer_no_ack": 0
+   },
+   "3": {
+    "rx_posted": 21500,
+    "rx_refused": 0,
+    "term_ok": 3984,
+    "term_empty": 7606,
+    "term_error": 57,
+    "status_err": null,
+    "status_last": null,
+    "sync_entries": 15992
+   },
+   "4": {
+    "sw_addr_mismatch": 0,
+    "window_drops": null,
+    "crc_fail": 3694,
+    "alt_sync_hits": null,
+    "rx_nok": null,
+    "rx_buf_full": null,
+    "drain_max_us": null,
+    "min_lead_us": null
+   },
+   "5": {
+    "windows": 1066,
+    "sets_advanced": 999,
+    "sweeps": 929,
+    "frames_ok": 2249,
+    "crc_fail": 0,
+    "acquired": 10,
+    "scan_reports": 2232,
+    "timeouts": 0
+   },
+   "7": {
+    "srch_cut_close": 28,
+    "srch_cut_abort": 0,
+    "srch_end_near_close": 93,
+    "trk_open_late": 38,
+    "trk_open_late_max_us": 205,
+    "trk_missed_behind_scan": 0,
+    "tx_start_missed": 0,
+    "rx_start_missed": 0
+   },
+   "8": {
+    "drain_max_frames": null,
+    "frame_max_us": null,
+    "crc_max_us": null,
+    "rx_cb_max_us": null,
+    "pass_max_us": 203,
+    "pass_steps_max": 2,
+    "pass_over_100us": 21498,
+    "drain_over_250us": null
+   },
+   "9": {
+    "sweep_max_us": 26,
+    "decide_max_us": 107,
+    "arm_call_max_us": 74,
+    "done_cb_max_us": 120,
+    "book_max_us": null,
+    "pass_to_arm_max_us": 185,
+    "arm_slack_min_us": 61,
+    "early_etime": 0
+   },
+   "10": {
+    "crc_repaired": 50,
+    "crc_unrepairable": 99,
+    "crc_repair_refuted": 0,
+    "crc_repair_implausible": 0,
+    "late_isr_drops": 0,
+    "end_late_max_us": 39,
+    "t_sync_max_us": null,
+    "match_max_us": null
+   },
+   "11": {
+    "windows_merged": 152,
+    "preempted": 0,
+    "replans": 0,
+    "arm_rejected": 0,
+    "tx_armed": 0,
+    "stale_events": 63,
+    "slots_collided": 0,
+    "turn_yields": 0
+   },
+   "12": {
+    "stale_rx_frame": 0,
+    "stale_rx_end": 63,
+    "stale_rx_filter_index": 0,
+    "stale_tx": 0,
+    "stale_ed": null,
+    "reserved_5": null,
+    "reserved_6": null,
+    "reserved_7": null
+   }
+  },
+  "pm_health_before": {
+   "burst_stalls": 0,
+   "event_high_water": 9,
+   "event_overflows": 0,
+   "host_csum": 0,
+   "host_desync": 0,
+   "key_rejects": 0,
+   "rx_backpressure": 0,
+   "rx_not_owner": 0,
+   "saturated": false,
+   "sched_denied": 0,
+   "sched_failed": 0,
+   "sched_missed": 10,
+   "sweep_busy": 0,
+   "tx_drops": 146,
+   "tx_high_water": 32,
+   "tx_timeout": 3,
+   "version": 1
+  },
+  "pm_health_after": {
+   "burst_stalls": 0,
+   "event_high_water": 9,
+   "event_overflows": 0,
+   "host_csum": 0,
+   "host_desync": 0,
+   "key_rejects": 0,
+   "rx_backpressure": 0,
+   "rx_not_owner": 0,
+   "saturated": false,
+   "sched_denied": 0,
+   "sched_failed": 0,
+   "sched_missed": 10,
+   "sweep_busy": 0,
+   "tx_drops": 192,
+   "tx_high_water": 32,
+   "tx_timeout": 4,
+   "version": 1
+  },
+  "pm_scan": {
+   "seconds": 300.0,
+   "opens": 67,
+   "tracked": {
+    "21001:0x0B": {
+     "loss_pct": 3.660565723793677,
+     "received": 1158,
+     "rx_fail": 44
+    },
+    "21002:0x78": {
+     "loss_pct": 4.51559934318555,
+     "received": 1163,
+     "rx_fail": 55
+    },
+    "21003:0x79": {
+     "loss_pct": 3.2976092333058533,
+     "received": 1173,
+     "rx_fail": 40
+    },
+    "23001:0x79": {
+     "loss_pct": 1.2335526315789473,
+     "received": 1201,
+     "rx_fail": 15
+    },
+    "23002:0x0B": {
+     "loss_pct": 0.16638935108153077,
+     "received": 1200,
+     "rx_fail": 2
+    },
+    "24001:0x78": {
+     "loss_pct": 21.786310517529216,
+     "received": 937,
+     "rx_fail": 261
+    },
+    "24002:0x79": {
+     "loss_pct": 20.84717607973422,
+     "received": 953,
+     "rx_fail": 251
+    },
+    "24003:0x0B": {
+     "loss_pct": 20.672268907563026,
+     "received": 944,
+     "rx_fail": 246
+    },
+    "52233:0x11": {
+     "loss_pct": 30.17751479289941,
+     "received": 826,
+     "rx_fail": 357
+    }
+   }
+  },
+  "ti_scan_no_answer_lines": []
+ },
+ {
+  "leg": "leg4_O2",
+  "image": "B",
+  "flash_md5": "c4e5eb81765eed9412a633603ece3040",
+  "flash_probe_pass": true,
+  "count_pre": {
+   "l15": 3,
+   "n53": 3,
+   "dongle": 2
+  },
+  "count_post": {
+   "l15": 3,
+   "n53": 3,
+   "dongle": 2
+  },
+  "count_pre_devices": [
+   "21001:0x0B",
+   "21002:0x78",
+   "21003:0x79",
+   "23001:0x79",
+   "23002:0x0B",
+   "24001:0x78",
+   "24002:0x79",
+   "24003:0x0B",
+   "52233:0x0B",
+   "52233:0x11",
+   "52233:0x7B"
+  ],
+  "count_post_devices": [
+   "21001:0x0B",
+   "21002:0x78",
+   "21003:0x79",
+   "23001:0x79",
+   "23002:0x0B",
+   "24001:0x78",
+   "24002:0x79",
+   "24003:0x0B",
+   "52233:0x0B",
+   "52233:0x11",
+   "52233:0x7B"
+  ],
+  "window": {
+   "scan_pm": {
+    "rc": 0,
+    "start": 1794867068.880339,
+    "secs": 315.16880774497986
+   },
+   "scan_ti": {
+    "rc": 0,
+    "start": 1794867068.8908658,
+    "secs": 315.1582808494568
+   }
+  },
+  "steps_nonzero_rc": [],
+  "ti_pages": {
+   "0": {
+    "sched_dones": 21132,
+    "sched_missed": 11,
+    "sched_failed": 0,
+    "sched_denied": 0,
+    "slots_missed": 777,
+    "slots_denied": 0,
+    "rx_sched_events": 12190,
+    "xfer_no_ack": 0
+   },
+   "3": {
+    "rx_posted": 20956,
+    "rx_refused": 1,
+    "term_ok": 11871,
+    "term_empty": 9030,
+    "term_error": 54,
+    "status_err": 0,
+    "status_last": 0,
+    "sync_entries": 13523
+   },
+   "4": {
+    "sw_addr_mismatch": 60,
+    "window_drops": 46,
+    "crc_fail": 1264,
+    "alt_sync_hits": 0,
+    "rx_nok": 0,
+    "rx_buf_full": 0,
+    "drain_max_us": 496,
+    "min_lead_us": 144
+   },
+   "5": {
+    "windows": 1001,
+    "sets_advanced": 932,
+    "sweeps": 853,
+    "frames_ok": 1603,
+    "crc_fail": 0,
+    "acquired": 20,
+    "scan_reports": 1585,
+    "timeouts": 0
+   },
+   "7": {
+    "srch_cut_close": null,
+    "srch_cut_abort": null,
+    "srch_end_near_close": null,
+    "trk_open_late": 34,
+    "trk_open_late_max_us": 213,
+    "trk_missed_behind_scan": 0,
+    "tx_start_missed": null,
+    "rx_start_missed": null
+   },
+   "8": {
+    "drain_max_frames": 1,
+    "frame_max_us": 96,
+    "crc_max_us": 7,
+    "rx_cb_max_us": 421,
+    "pass_max_us": 514,
+    "pass_steps_max": 3,
+    "pass_over_100us": 21371,
+    "drain_over_250us": 10216
+   },
+   "9": {
+    "sweep_max_us": 90,
+    "decide_max_us": 224,
+    "arm_call_max_us": 76,
+    "done_cb_max_us": 138,
+    "book_max_us": null,
+    "pass_to_arm_max_us": 444,
+    "arm_slack_min_us": 6,
+    "early_etime": 1
+   },
+   "10": {
+    "crc_repaired": 6,
+    "crc_unrepairable": 32,
+    "crc_repair_refuted": 0,
+    "crc_repair_implausible": 0,
+    "late_isr_drops": null,
+    "end_late_max_us": null,
+    "t_sync_max_us": 2,
+    "match_max_us": 10
+   },
+   "11": {
+    "windows_merged": 232,
+    "preempted": 0,
+    "replans": 0,
+    "arm_rejected": 1,
+    "tx_armed": 0,
+    "stale_events": 65,
+    "slots_collided": 11,
+    "turn_yields": 0
+   },
+   "12": {
+    "stale_rx_frame": 0,
+    "stale_rx_end": 65,
+    "stale_rx_filter_index": 0,
+    "stale_tx": 0,
+    "stale_ed": null,
+    "reserved_5": null,
+    "reserved_6": null,
+    "reserved_7": null
+   }
+  },
+  "ti_health_before": {
+   "burst_stalls": 0,
+   "event_high_water": 0,
+   "event_overflows": 0,
+   "host_csum": 0,
+   "host_desync": 0,
+   "key_rejects": 0,
+   "rx_backpressure": 0,
+   "rx_not_owner": 0,
+   "saturated": false,
+   "sched_denied": 0,
+   "sched_failed": 0,
+   "sched_missed": 0,
+   "sweep_busy": 0,
+   "tx_drops": 0,
+   "tx_high_water": 0,
+   "tx_timeout": 0,
+   "uart_rx_overruns": 0,
+   "version": 1
+  },
+  "ti_health_after": {
+   "burst_stalls": 0,
+   "event_high_water": 3,
+   "event_overflows": 0,
+   "host_csum": 0,
+   "host_desync": 0,
+   "key_rejects": 0,
+   "rx_backpressure": 0,
+   "rx_not_owner": 0,
+   "saturated": false,
+   "sched_denied": 0,
+   "sched_failed": 0,
+   "sched_missed": 11,
+   "sweep_busy": 0,
+   "tx_drops": 0,
+   "tx_high_water": 0,
+   "tx_timeout": 0,
+   "uart_rx_overruns": 0,
+   "version": 1
+  },
+  "ti_scan": {
+   "seconds": 300.0,
+   "opens": 66,
+   "tracked": {
+    "21001:0x0B": {
+     "loss_pct": 4.219409282700422,
+     "received": 1135,
+     "rx_fail": 50
+    },
+    "21002:0x78": {
+     "loss_pct": 4.4665012406947895,
+     "received": 1155,
+     "rx_fail": 54
+    },
+    "21003:0x79": {
+     "loss_pct": 3.8939519469759736,
+     "received": 1160,
+     "rx_fail": 47
+    },
+    "23001:0x79": {
+     "loss_pct": 1.2468827930174564,
+     "received": 1188,
+     "rx_fail": 15
+    },
+    "23002:0x0B": {
+     "loss_pct": 0.5892255892255892,
+     "received": 1181,
+     "rx_fail": 7
+    },
+    "24001:0x78": {
+     "loss_pct": 1.5767634854771784,
+     "received": 1186,
+     "rx_fail": 19
+    },
+    "24002:0x79": {
+     "loss_pct": 1.497504159733777,
+     "received": 1184,
+     "rx_fail": 18
+    },
+    "24003:0x0B": {
+     "loss_pct": 1.3445378151260505,
+     "received": 1174,
+     "rx_fail": 16
+    },
+    "52233:0x11": {
+     "loss_pct": 44.494584837545126,
+     "received": 615,
+     "rx_fail": 493
+    }
+   }
+  },
+  "pm_pages": {
+   "0": {
+    "sched_dones": 21656,
+    "sched_missed": 2,
+    "sched_failed": 0,
+    "sched_denied": 0,
+    "slots_missed": 1293,
+    "slots_denied": 0,
+    "rx_sched_events": 12550,
+    "xfer_no_ack": 0
+   },
+   "3": {
+    "rx_posted": 21558,
+    "rx_refused": 0,
+    "term_ok": 4048,
+    "term_empty": 7570,
+    "term_error": 47,
+    "status_err": null,
+    "status_last": null,
+    "sync_entries": 16223
+   },
+   "4": {
+    "sw_addr_mismatch": 0,
+    "window_drops": null,
+    "crc_fail": 3821,
+    "alt_sync_hits": null,
+    "rx_nok": null,
+    "rx_buf_full": null,
+    "drain_max_us": null,
+    "min_lead_us": null
+   },
+   "5": {
+    "windows": 1087,
+    "sets_advanced": 1019,
+    "sweeps": 948,
+    "frames_ok": 2302,
+    "crc_fail": 0,
+    "acquired": 11,
+    "scan_reports": 2286,
+    "timeouts": 0
+   },
+   "7": {
+    "srch_cut_close": 21,
+    "srch_cut_abort": 0,
+    "srch_end_near_close": 60,
+    "trk_open_late": 41,
+    "trk_open_late_max_us": 205,
+    "trk_missed_behind_scan": 0,
+    "tx_start_missed": 0,
+    "rx_start_missed": 0
+   },
+   "8": {
+    "drain_max_frames": null,
+    "frame_max_us": null,
+    "crc_max_us": null,
+    "rx_cb_max_us": null,
+    "pass_max_us": 203,
+    "pass_steps_max": 2,
+    "pass_over_100us": 21554,
+    "drain_over_250us": null
+   },
+   "9": {
+    "sweep_max_us": 42,
+    "decide_max_us": 107,
+    "arm_call_max_us": 74,
+    "done_cb_max_us": 120,
+    "book_max_us": null,
+    "pass_to_arm_max_us": 185,
+    "arm_slack_min_us": 61,
+    "early_etime": 0
+   },
+   "10": {
+    "crc_repaired": 46,
+    "crc_unrepairable": 102,
+    "crc_repair_refuted": 0,
+    "crc_repair_implausible": 0,
+    "late_isr_drops": 0,
+    "end_late_max_us": 39,
+    "t_sync_max_us": null,
+    "match_max_us": null
+   },
+   "11": {
+    "windows_merged": 158,
+    "preempted": 0,
+    "replans": 0,
+    "arm_rejected": 0,
+    "tx_armed": 0,
+    "stale_events": 61,
+    "slots_collided": 2,
+    "turn_yields": 0
+   },
+   "12": {
+    "stale_rx_frame": 0,
+    "stale_rx_end": 61,
+    "stale_rx_filter_index": 0,
+    "stale_tx": 0,
+    "stale_ed": null,
+    "reserved_5": null,
+    "reserved_6": null,
+    "reserved_7": null
+   }
+  },
+  "pm_health_before": {
+   "burst_stalls": 0,
+   "event_high_water": 9,
+   "event_overflows": 0,
+   "host_csum": 0,
+   "host_desync": 0,
+   "key_rejects": 0,
+   "rx_backpressure": 0,
+   "rx_not_owner": 0,
+   "saturated": false,
+   "sched_denied": 0,
+   "sched_failed": 0,
+   "sched_missed": 10,
+   "sweep_busy": 0,
+   "tx_drops": 217,
+   "tx_high_water": 32,
+   "tx_timeout": 4,
+   "version": 1
+  },
+  "pm_health_after": {
+   "burst_stalls": 0,
+   "event_high_water": 9,
+   "event_overflows": 0,
+   "host_csum": 0,
+   "host_desync": 0,
+   "key_rejects": 0,
+   "rx_backpressure": 0,
+   "rx_not_owner": 0,
+   "saturated": false,
+   "sched_denied": 0,
+   "sched_failed": 0,
+   "sched_missed": 12,
+   "sweep_busy": 0,
+   "tx_drops": 262,
+   "tx_high_water": 32,
+   "tx_timeout": 5,
+   "version": 1
+  },
+  "pm_scan": {
+   "seconds": 300.0,
+   "opens": 67,
+   "tracked": {
+    "21001:0x0B": {
+     "loss_pct": 3.7437603993344424,
+     "received": 1157,
+     "rx_fail": 45
+    },
+    "21002:0x78": {
+     "loss_pct": 3.937653814602133,
+     "received": 1171,
+     "rx_fail": 48
+    },
+    "21003:0x79": {
+     "loss_pct": 3.6213991769547325,
+     "received": 1171,
+     "rx_fail": 44
+    },
+    "23001:0x79": {
+     "loss_pct": 1.2335526315789473,
+     "received": 1201,
+     "rx_fail": 15
+    },
+    "23002:0x0B": {
+     "loss_pct": 0.3336113427856547,
+     "received": 1195,
+     "rx_fail": 4
+    },
+    "24001:0x78": {
+     "loss_pct": 20.632279534109816,
+     "received": 954,
+     "rx_fail": 248
+    },
+    "24002:0x79": {
+     "loss_pct": 21.065778517901748,
+     "received": 948,
+     "rx_fail": 253
+    },
+    "24003:0x0B": {
+     "loss_pct": 20.65491183879093,
+     "received": 945,
+     "rx_fail": 246
+    },
+    "52233:0x11": {
+     "loss_pct": 27.20403022670025,
+     "received": 867,
+     "rx_fail": 324
+    }
+   }
+  },
+  "ti_scan_no_answer_lines": []
+ }
+]

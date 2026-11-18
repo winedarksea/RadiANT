@@ -117,7 +117,10 @@ jobs:
         run: |
           set -euo pipefail
           limit=10485760
-          bytes="$(du -sb archive | cut -f1)"
+          # Sum of the committed blobs, not `du`: du also counts directory
+          # blocks and, run locally, the ignored raw bench output that stays
+          # on disk, so this is the number a local run and CI agree on.
+          bytes="$(git ls-tree -r -l HEAD -- archive | awk '{s+=$4} END {print s+0}')"
           echo "archive/ is ${bytes} B, limit ${limit} B"
           {
             echo "### \`archive/\` budget"

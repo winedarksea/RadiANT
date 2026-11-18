@@ -1,0 +1,46 @@
+diff --git a/apps/common/ant_uart_transport.c b/apps/common/ant_uart_transport.c
+index 31a1c49..925b92b 100644
+--- a/apps/common/ant_uart_transport.c
++++ b/apps/common/ant_uart_transport.c
+@@ -29,6 +29,8 @@
+ 
+ #include "ant_transport.h"
+ #include "ant_health.h"
++#define DIAG_UART_ERRS 1
++#include <zephyr/sys/sys_io.h>
+ 
+ LOG_MODULE_REGISTER(ant_uart, LOG_LEVEL_INF);
+ 
+@@ -93,6 +95,22 @@ static void ant_uart_isr(const struct device *dev, void *user_data)
+ 	ARG_UNUSED(user_data);
+ 
+ 	while (uart_irq_update(dev) && uart_irq_is_pending(dev)) {
++#ifdef DIAG_UART_ERRS
++		{
++			/* AD HOC (not for commit): UART0 RSR error bits. */
++			uint32_t rsr = sys_read32(0x40001004u);
++
++			if (rsr & 0x8u) {
++				ant_health_note(ANT_HEALTH_RX_BACKPRESSURE);
++			}
++			if (rsr & 0x7u) {
++				ant_health_note(ANT_HEALTH_KEY_REJECT);
++			}
++			if (rsr) {
++				sys_write32(0xFFu, 0x40001004u);
++			}
++		}
++#endif
+ 		if (uart_irq_rx_ready(dev)) {
+ 			uint8_t chunk[32];
+ 			int n = uart_fifo_read(dev, chunk, sizeof(chunk));
+@@ -103,6 +121,9 @@ static void ant_uart_isr(const struct device *dev, void *user_data)
+ 
+ 				if (put < (uint32_t)n) {
+ 					rx_dropped += (uint32_t)n - put;
++#ifdef DIAG_UART_ERRS
++					ant_health_note(ANT_HEALTH_RX_NOT_OWNER);
++#endif
+ 				}
+ 
+ 				if (put > 0) {

@@ -1,180 +1,0 @@
-== peer before flash 2026-11-14T13:09:24.755493
-$ ot state
-ot state
-leader
-Done
-[1;32muart:~$ [m
-$ ot channel
-ot channel
-26
-Done
-[1;32muart:~$ [m
-$ ot child table
-ot child table
-| ID  | RLOC16 | Timeout    | Age        | LQ In | C_VN |R|D|N|Ver|CSL|QMsgCnt|Suprvsn| Extended MAC     |
-+-----+--------+------------+------------+-------+------+-+-+-+---+---+-------+-------+------------------+
-|   2 | 0x0402 |        240 |        121 |     3 |    1 |1|0|0|  5| 0 |     0 |     0 | 2a3e66a0f4196d46 |
-
-Done
-[1;32muart:~$ [m
-Flashing C:\wt_69108\build\a2_soak\dongle_thread\zephyr\zephyr.hex (844.5 KB) to nRF54L15_M33 at 4000 kHz
-SEGGER J-Link Commander V9.66 (Compiled Aug  5 2026 12:16:05)
-DLL version V9.66, compiled Aug  5 2026 12:15:00
-
-
-J-Link Command File read successfully.
-Processing script file...
-J-Link>exec DisableAutoUpdateFW
-J-Link>SelectEmuBySN 1057737173
-Connecting to J-Link ...O.K.
-Firmware: J-Link OB-nRF5340-NordicSemi compiled Feb 11 2025 17:15:35
-Hardware version: V1.00
-J-Link uptime (since boot): 2d 17h 25m 17s
-S/N: 1057737173
-License(s): RDI,FlashBP,FlashDL,JFlash,GDB
-USB speed mode: Full speed (12 MBit/s)
-VTref=3.300V
-J-Link>si SWD
-Selecting SWD as current target interface.
-J-Link>speed 4000
-Selecting 4000 kHz as target interface speed
-J-Link>device nRF54L15_M33
-J-Link>connect
-Device "NRF54L15_M33" selected.
-
-
-Connecting to target via SWD
-ConfigTargetSettings() start
-ConfigTargetSettings() end - Took 12us
-InitTarget() start
-InitTarget() end - Took 6.45ms
-Found SW-DP with ID 0x6BA02477
-DPIDR: 0x6BA02477
-CoreSight SoC-400 or earlier
-AP map detection skipped. Manually configured AP map found.
-AP[0]: AHB-AP (IDR: Not set, ADDR: 0x00000000)
-AP[1]: APB-AP (IDR: Not set, ADDR: 0x00000000)
-AP[2]: MEM-AP (IDR: Not set, ADDR: 0x00000000)
-Iterating through AP map to find AHB-AP to use
-AP[0]: Core found
-AP[0]: AHB-AP ROM base: 0xE00FE000
-CPUID register: 0x411FD210. Implementer code: 0x41 (ARM)
-Feature set: Mainline
-Cache: No cache
-Found Cortex-M33 r1p0, Little endian.
-FPUnit: 8 code (BP) slots and 0 literal slots
-Security extension: implemented
-Secure debug: enabled
-CoreSight components:
-ROMTbl[0] @ E00FE000
-[0][0]: E00FF000 CID B105100D PID 000BB4C9 ROM Table
-ROMTbl[1] @ E00FF000
-[1][0]: E000E000 CID B105900D PID 000BBD21 DEVARCH 47702A04 DEVTYPE 00 Cortex-M33
-[1][1]: E0001000 CID B105900D PID 000BBD21 DEVARCH 47701A02 DEVTYPE 00 DWT
-[1][2]: E0002000 CID B105900D PID 000BBD21 DEVARCH 47701A03 DEVTYPE 00 FPB
-[1][3]: E0000000 CID B105900D PID 000BBD21 DEVARCH 47701A01 DEVTYPE 43 ITM
-[1][5]: E0041000 CID B105900D PID 002BBD21 DEVARCH 47724A13 DEVTYPE 13 ETM
-[0][1]: E0040000 CID B105900D PID 000BBD21 DEVARCH 00000000 DEVTYPE 11 TPIU
-Memory zones:
-  Zone: "Default" Description: Default access mode
-Cortex-M33 identified.
-J-Link>r
-Reset delay: 0 ms
-Reset type: NORMAL (https://kb.segger.com/J-Link_Reset_Strategies)
-Reset: ARMv8M core with Security Extension enabled detected. Switch to secure domain.
-Reset: Halt core after reset via DEMCR.VC_CORERESET.
-Reset: Reset device via AIRCR.SYSRESETREQ.
-J-Link>h
-PC = 00009674, CycleCnt = 00000000
-R0 = 00000000, R1 = 00000000, R2 = 00000000, R3 = 00000000
-R4 = 00000000, R5 = 00000000, R6 = 00000000, R7 = 00000000
-R8 = FFFFFFFF, R9 = FFFFFFFF, R10= FFFFFFFF, R11= FFFFFFFF
-R12= FFFFFFFF
-SP(R13)= 2001F228, MSP= 2001F228, PSP= 00000000, R14(LR) = FFFFFFFF
-XPSR = F9000000: APSR = NZCVQ, EPSR = 01000000, IPSR = 000 (NoException)
-CFBP = 00000000, CONTROL = 00, FAULTMASK = 00, BASEPRI = 00, PRIMASK = 00
-MSPLIM = 00000000
-PSPLIM = 00000000
-
-Security extension regs:
-MSP_S = 2001F228, MSP_NS = 00000000
-MSPLIM_S = 00000000, MSPLIM_NS = 00000000
-PSP_S = 00000000, PSP_NS = FFFFFFFC
-PSPLIM_S = 00000000, PSPLIM_NS = 00000000
-CONTROL_S  = 00, FAULTMASK_S  = 00, BASEPRI_S  = 00, PRIMASK_S  = 00
-CONTROL_NS = 00, FAULTMASK_NS = 00, BASEPRI_NS = 00, PRIMASK_NS = 00
-
-FPS0 = 00000000, FPS1 = 00000000, FPS2 = 00000000, FPS3 = 00000000
-FPS4 = 00000000, FPS5 = 00000000, FPS6 = 00000000, FPS7 = 00000000
-FPS8 = 00000000, FPS9 = 00000000, FPS10= 00000000, FPS11= 00000000
-FPS12= 00000000, FPS13= 00000000, FPS14= 00000000, FPS15= 00000000
-FPS16= 00000000, FPS17= 00000000, FPS18= 00000000, FPS19= 00000000
-FPS20= 00000000, FPS21= 00000000, FPS22= 00000000, FPS23= 00000000
-FPS24= 00000000, FPS25= 00000000, FPS26= 00000000, FPS27= 00000000
-FPS28= 00000000, FPS29= 00000000, FPS30= 00000000, FPS31= 00000000
-FPSCR= 00000000
-J-Link>loadfile C:\wt_69108\build\a2_soak\dongle_thread\zephyr\zephyr.hex
-'loadfile': Performing implicit reset & halt of MCU.
-Reset type: NORMAL (https://kb.segger.com/J-Link_Reset_Strategies)
-Reset: ARMv8M core with Security Extension enabled detected. Switch to secure domain.
-Reset: Halt core after reset via DEMCR.VC_CORERESET.
-Reset: Reset device via AIRCR.SYSRESETREQ.
-Downloading file [C:\wt_69108\build\a2_soak\dongle_thread\zephyr\zephyr.hex]...
-Comparing flash   [000%]000%]020%]020%]025%]025%]030%]030%]035%]035%]040%]040%]060%]060%]065%]065%]070%]070%]075%]075%]080%]080%]090%]090%]095%]095%]100%] Done.
-Erasing flash     [000%]100%] Done.
-Programming flash [000%]000%]000%]000%]000%]000%]000%]000%]005%]005%]005%]005%]005%]005%]005%]005%]010%]010%]010%]010%]010%]010%]010%]010%]015%]015%]015%]015%]015%]015%]015%]015%]020%]020%]020%]020%]020%]020%]025%]025%]025%]025%]025%]025%]025%]025%]030%]030%]030%]030%]030%]030%]030%]030%]035%]035%]035%]035%]035%]035%]035%]035%]040%]040%]040%]040%]040%]040%]040%]040%]045%]045%]045%]045%]045%]045%]050%]050%]050%]050%]050%]050%]050%]050%]055%]055%]055%]055%]055%]055%]055%]055%]060%]060%]060%]060%]060%]060%]060%]060%]065%]065%]065%]065%]065%]065%]065%]065%]070%]070%]070%]070%]070%]070%]075%]075%]075%]075%]075%]075%]075%]075%]080%]080%]080%]080%]080%]080%]080%]080%]085%]085%]085%]085%]085%]085%]085%]085%]090%]090%]090%]090%]090%]090%]090%]090%]095%]095%]095%]095%]095%]095%]100%] Done.
-Verifying flash   [000%]000%]040%]040%]080%]080%]100%] Done.
-J-Link: Flash download: Bank 1 @ 0x00000000: 1 range affected (311296 bytes)
-J-Link: Flash download: Total: 2.736s (Prepare: 0.167s, Compare: 0.192s, Erase: 0.000s, Program: 2.152s, Verify: 0.091s, Restore: 0.132s)
-J-Link: Flash download: Program & Verify speed: 135 KB/s
-O.K.
-J-Link>r
-Reset delay: 0 ms
-Reset type: NORMAL (https://kb.segger.com/J-Link_Reset_Strategies)
-Reset: ARMv8M core with Security Extension enabled detected. Switch to secure domain.
-Reset: Halt core after reset via DEMCR.VC_CORERESET.
-Reset: Reset device via AIRCR.SYSRESETREQ.
-J-Link>g
-Memory map 'after startup completion point' is active
-J-Link>q
-
-Script processing completed.
-
-
-Flashed. The simulator starts transmitting immediately.
-  logs:   COM7 at 115200 (the DK VCOM)
-  verify: python tools\ant_verify.py --expect-watts 100 --expect-rpm 80 --seconds 60
-          run that against the *dongle*, on a second board.
-flash rc 0
-waiting 75s for DUT boot + attach
-== peer after boot wait 2026-11-14T13:10:48.845073
-$ ot state
-ot state
-leader
-Done
-[1;32muart:~$ [m
-$ ot child table
-ot child table
-| ID  | RLOC16 | Timeout    | Age        | LQ In | C_VN |R|D|N|Ver|CSL|QMsgCnt|Suprvsn| Extended MAC     |
-+-----+--------+------------+------------+-------+------+-+-+-+---+---+-------+-------+------------------+
-|   2 | 0x0402 |        240 |         76 |     3 |    1 |1|0|0|  5| 0 |     0 |     0 | 2a3e66a0f4196d46 |
-
-Done
-[1;32muart:~$ [m
-leg ends: assert seen; keeping console 3s for the dump
-== peer after 2026-11-14T13:11:19.570499
-$ ot state
-ot state
-leader
-Done
-[1;32muart:~$ [m
-$ ot child table
-ot child table
-| ID  | RLOC16 | Timeout    | Age        | LQ In | C_VN |R|D|N|Ver|CSL|QMsgCnt|Suprvsn| Extended MAC     |
-+-----+--------+------------+------------+-------+------+-+-+-+---+---+-------+-------+------------------+
-|   2 | 0x0402 |        240 |        107 |     3 |    1 |1|0|0|  5| 0 |     0 |     0 | 2a3e66a0f4196d46 |
-
-Done
-[1;32muart:~$ [m
-ROW ctrl3	baseline_abd6be7	a66f3d851bd7	2026-11-14T13:09:24	assert at 101.9 s	14.376	507	490	16	0/21	389	0	1
-DONE C:\wt_69108\archive\benchmarks\2026-11-15-assert-69108\ctrl3

@@ -1,0 +1,112 @@
+                               leg1_Os    leg2_O2    leg3_Os
+-- levels (after) / counts (diff)
+p 0 sched_dones                   21086      21055      21110
+p 0 sched_missed                      2          3          1
+p 0 sched_failed                      0          0          0
+p 0 sched_denied                      0          0          0
+p 0 slots_missed                    554        478        509
+p 0 slots_denied                      0          0          0
+p 0 rx_sched_events               12523      12889      12761
+p 0 xfer_no_ack                       0          0          0
+p 4 sw_addr_mismatch                  0          0          0
+p 4 window_drops                   None       None       None
+p 4 crc_fail                       3517       3767       3588
+p 4 alt_sync_hits                  None       None       None
+p 4 rx_nok                         None       None       None
+p 4 rx_buf_full                    None       None       None
+p 4 drain_max_us                   None       None       None
+p 4 min_lead_us                    None       None       None
+p 7 srch_cut_close                   20         33         25
+p 7 srch_cut_abort                    0          0          0
+p 7 srch_end_near_close              88         86         62
+p 7 trk_open_late                    46         41         37
+p 7 trk_open_late_max_us            197        195        153
+p 7 trk_missed_behind_scan            0          0          0
+p 7 tx_start_missed                   0          0          0
+p 7 rx_start_missed                   0          0          0
+p 8 drain_max_frames               None       None       None
+p 8 frame_max_us                   None       None       None
+p 8 crc_max_us                     None       None       None
+p 8 rx_cb_max_us                   None       None       None
+p 8 pass_max_us                     311        274        578
+p 8 pass_steps_max                    2          2          2
+p 8 pass_over_100us               21010      20972      21029
+p 8 drain_over_250us               None       None       None
+p 9 sweep_max_us                     47         44         65
+p 9 decide_max_us                   129        106        239
+p 9 arm_call_max_us                 143        144        220
+p 9 done_cb_max_us                  120        115        120
+p 9 book_max_us                    None       None       None
+p 9 pass_to_arm_max_us              289        255        557
+p 9 arm_slack_min_us                 21         52         18
+p 9 early_etime                       0          0          1
+p10 crc_repaired                     15         16          9
+p10 crc_unrepairable                 26         19         27
+p10 crc_repair_refuted                0          0          0
+p10 crc_repair_implausible            0          0          0
+p10 late_isr_drops                    0          0          0
+p10 end_late_max_us                  60         37         59
+p10 t_sync_max_us                  None       None       None
+p10 match_max_us                   None       None       None
+p11 windows_merged                  136        142        142
+p11 preempted                         0          0          0
+p11 replans                           0          0          0
+p11 arm_rejected                      0          0          1
+p11 tx_armed                          0          0          0
+p11 stale_events                     62         62         62
+p11 slots_collided                    2          3          1
+p11 turn_yields                       0          0          0
+p12 stale_rx_frame                    0          0          0
+p12 stale_rx_end                     62         62         62
+p12 stale_rx_filter_index             0          0          0
+p12 stale_tx                          0          0          0
+p12 stale_ed                       None       None       None
+p12 reserved_5                     None       None       None
+p12 reserved_6                     None       None       None
+p12 reserved_7                     None       None       None
+
+leg1_Os B4 est 113 C4 cand 390 health {'tx_high_water': {'before': 0, 'after': 32}, 'tx_drops': {'before': 0, 'after': 89}}
+  window {'scan_pm': (0, 301.3), 'garmin_verify': (1, 301.6)} post_full True
+  sims {'l15': (1, 480.5), 'n53': (1, 480.5), 'dongle': (0, 481.4)}
+  scan 300.0 opens 67 sight/s 7.1 events {'ch1:0x09': 2, 'ch9:0x08': 3}
+   21001:0x0B   rx  1158 fail   40 loss 3.34%  short 3.5
+   21002:0x78   rx  1165 fail   51 loss 4.19%  short 2.2
+   21003:0x79   rx  1177 fail   37 loss 3.05%  short 1.8
+   23001:0x79   rx  1197 fail   18 loss 1.48%  short 0.8
+   23002:0x0B   rx  1184 fail   18 loss 1.50%  short -0.5
+   24001:0x78   rx  1206 fail   12 loss 0.99%  short 0.2
+   24002:0x79   rx  1206 fail    9 loss 0.74%  short 0.8
+   24003:0x0B   rx  1185 fail   16 loss 1.33%  short 0.5
+   52233:0x11   rx   830 fail  344 loss 29.30%  short 26.1
+  garmin 21001 1156 1203.0 3.90% {'EVENT_RX_FAIL': 47}
+  scan devices {'52233:0x0B': {'per_s': 4.600705441500951, 'heard': '67/67'}, '52233:0x11': {'per_s': 0.013335378091307103, 'heard': '4/67'}, '52233:0x7B': {'per_s': 2.4637111023689875, 'heard': '67/67'}}
+leg2_O2 B4 est 105 C4 cand 340 health {'tx_high_water': {'before': 0, 'after': 32}, 'tx_drops': {'before': 0, 'after': 84}}
+  window {'scan_pm': (0, 301.2), 'garmin_verify': (1, 301.4)} post_full True
+  sims {'l15': (1, 480.6), 'n53': (1, 480.6), 'dongle': (0, 481.3)}
+  scan 300.0 opens 67 sight/s 8.08 events {'ch2:0x09': 1, 'ch8:0x09': 2, 'ch9:0x08': 1}
+   21001:0x0B   rx  1156 fail   45 loss 3.75%  short 0.5
+   21002:0x78   rx  1164 fail   52 loss 4.28%  short 2.2
+   21003:0x79   rx  1168 fail   45 loss 3.71%  short 2.8
+   23001:0x79   rx  1195 fail   21 loss 1.73%  short -0.2
+   23002:0x0B   rx  1195 fail    4 loss 0.33%  short 2.5
+   24001:0x78   rx  1211 fail    7 loss 0.57%  short 0.2
+   24002:0x79   rx  1205 fail   10 loss 0.82%  short 0.8
+   24003:0x0B   rx  1193 fail    9 loss 0.75%  short -0.5
+   52233:0x11   rx   902 fail  278 loss 23.56%  short 20.1
+  garmin 21001 1154 1202.0 3.99% {'EVENT_RX_FAIL': 48}
+  scan devices {'52233:0x0B': {'per_s': 5.2997405161658975, 'heard': '67/67'}, '52233:0x11': {'per_s': 0.006670535577301319, 'heard': '2/67'}, '52233:0x7B': {'per_s': 2.748260657848143, 'heard': '67/67'}}
+leg3_Os B4 est 253 C4 cand 720 health {'tx_high_water': {'before': 0, 'after': 32}, 'tx_drops': {'before': 0, 'after': 52}}
+  window {'scan_pm': (0, 301.3), 'garmin_verify': (1, 301.5)} post_full True
+  sims {'l15': (1, 480.6), 'n53': (1, 480.6), 'dongle': (0, 481.4)}
+  scan 300.0 opens 67 sight/s 7.73 events {'ch3:0x09': 1, 'ch9:0x08': 2}
+   21001:0x0B   rx  1159 fail   41 loss 3.42%  short 1.5
+   21002:0x78   rx  1160 fail   56 loss 4.61%  short 2.2
+   21003:0x79   rx  1171 fail   44 loss 3.62%  short 0.8
+   23001:0x79   rx  1195 fail   21 loss 1.73%  short -0.2
+   23002:0x0B   rx  1187 fail   13 loss 1.08%  short 1.5
+   24001:0x78   rx  1203 fail   13 loss 1.07%  short 2.2
+   24002:0x79   rx  1202 fail   12 loss 0.99%  short 1.8
+   24003:0x0B   rx  1192 fail    9 loss 0.75%  short 0.5
+   52233:0x11   rx   894 fail  294 loss 24.75%  short 12.1
+  garmin 21001 1132 1202.0 5.83% {'EVENT_RX_FAIL': 70}
+  scan devices {'52233:0x0B': {'per_s': 5.134428678117972, 'heard': '67/67'}, '52233:0x11': {'per_s': 0.010002133788541505, 'heard': '3/67'}, '52233:0x7B': {'per_s': 2.560546249866625, 'heard': '67/67'}}

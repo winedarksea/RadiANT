@@ -33,10 +33,35 @@ archive/benchmarks/2026-11-14-garmin-compare/**
 # Tracked: the README, the rig and analysis scripts, and windows.txt (every
 # window's per-receiver counts plus the raw rxdiag captures).
 archive/benchmarks/2026-11-07-devnum-rx-loss/*/
-archive/benchmarks/2026-11-15**
-archive/benchmarks/2026-11-16**
 archive/benchmarks/2026-11-17-fec-crossing/**
 !archive/benchmarks/2026-11-17-fec-crossing/README.md
+# Every dated benchmark folder: raw per-leg output stays local and is
+# regenerated with the folder's committed script; READMEs, scripts, rig files
+# and summaries are tracked. `**/` also matches zero directories, so this
+# covers each folder's own files and its nested window folders. Top-level
+# archive/benchmarks/*.json baselines are not inside a dated folder and stay
+# tracked. Do not force-add past these rules: archive/ has a 10 MB budget.
+archive/benchmarks/20??-??-??-*/**/*.log
+archive/benchmarks/20??-??-??-*/**/*.json
+archive/benchmarks/20??-??-??-*/**/*.gz
+archive/benchmarks/20??-??-??-*/**/*.out
+archive/benchmarks/20??-??-??-*/**/*.err
+archive/benchmarks/20??-??-??-*/**/*.hex
+archive/benchmarks/20??-??-??-*/*/**/*.txt
+!archive/benchmarks/20??-??-??-*/**/*summary*.json
+!archive/benchmarks/20??-??-??-*/**/*summary*.txt
+!archive/benchmarks/2026-11-13-inbound-burst-gaps/regression/*.txt
+# Firmware images and their .config dumps rebuild from the commit and the
+# .conf overlay named in the folder's README.
+archive/benchmarks/20??-??-??-*/**/*.uf2
+archive/benchmarks/20??-??-??-*/**/*.elf
+archive/benchmarks/20??-??-??-*/**/*.zip
+archive/benchmarks/20??-??-??-*/**/*.config
+# Named evidence with no summary file to stand in for it (~77 KB in total).
+!archive/benchmarks/2026-11-07-garmin-compare/devnum-ab/*/*.json
+!archive/benchmarks/2026-11-07-vcom-soak/S_multi_3_54L15_console.log
+# Re-stated after the summary exception above: this folder stays local whole.
+archive/benchmarks/2026-11-14-garmin-compare/**
 twister-out*/
 
 # Tool caches. Each of these regenerates on demand; none is an input to

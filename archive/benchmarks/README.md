@@ -207,3 +207,12 @@ here — it goes to [`../captures/radio/`](../captures/radio/), and
 `radio_runs[].capture` points at it. A run with a capture can be re-analysed
 after a decoder fix; a run without one is only ever worth the numbers it
 already printed.
+
+### Dated session folders
+
+A session that adds a `YYYY-MM-DD-<topic>/` folder commits its README, the
+runner and analysis scripts, the rig file, and the summaries (`*summary*.json`,
+`legs.tsv`, folder-level `.txt` tables). Raw per-leg `.log`/`.json` output,
+nested per-window `.txt`, and firmware images stay on the bench machine, because
+the committed script regenerates them; `.gitignore` enforces this, so never
+force-add past it. See `docs/preservation.md`.
