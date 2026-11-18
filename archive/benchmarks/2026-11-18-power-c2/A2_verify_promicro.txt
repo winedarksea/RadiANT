@@ -1,0 +1,161 @@
+Found 0FCF:1009  bcdDevice=0x0100
+  manufacturer: RadiANT Project
+  product:      RadiANT ANT+ compatible USB stick
+  serial:       EE6986854FD72803
+
+Opening ANT+ receive channels
+  OK: extended messages
+  OK: ANT+ network key
+  OK: ch0 assign slave
+  OK: ch0 channel id
+  OK: ch0 radio frequency
+  OK: ch0 message period
+  OK: ch0 search timeout
+  OK: ch0 open
+  OK: channel 0 - heart rate, device type 0x78, pinned to #12345
+
+Listening for 600 s
+  ch0 20 pkts
+  ch0 40 pkts
+  ch0 59 pkts
+  ch0 80 pkts
+  ch0 101 pkts
+  ch0 122 pkts
+  ch0 141 pkts
+  ch0 162 pkts
+  ch0 182 pkts
+  ch0 203 pkts
+  ch0 223 pkts
+  ch0 244 pkts
+  ch0 262 pkts
+  ch0 282 pkts
+  ch0 302 pkts
+  ch0 322 pkts
+  ch0 343 pkts
+  ch0 363 pkts
+  ch0 381 pkts
+  ch0 402 pkts
+  ch0 423 pkts
+  ch0 443 pkts
+  ch0 464 pkts
+  ch0 485 pkts
+  ch0 506 pkts
+  ch0 527 pkts
+  ch0 547 pkts
+  ch0 567 pkts
+  ch0 588 pkts
+  ch0 608 pkts
+  ch0 629 pkts
+  ch0 648 pkts
+  ch0 667 pkts
+  ch0 687 pkts
+  ch0 706 pkts
+  ch0 726 pkts
+  ch0 747 pkts
+  ch0 768 pkts
+  ch0 788 pkts
+  ch0 809 pkts
+  ch0 828 pkts
+  ch0 849 pkts
+  ch0 870 pkts
+  ch0 891 pkts
+  ch0 911 pkts
+  ch0 931 pkts
+  ch0 952 pkts
+  ch0 973 pkts
+  ch0 993 pkts
+  ch0 1014 pkts
+  ch0 1033 pkts
+  ch0 1054 pkts
+  ch0 1075 pkts
+  ch0 1095 pkts
+  ch0 1115 pkts
+  ch0 1135 pkts
+  ch0 1156 pkts
+  ch0 1177 pkts
+  ch0 1197 pkts
+  ch0 1217 pkts
+  ch0 1237 pkts
+  ch0 1256 pkts
+  ch0 1276 pkts
+  ch0 1295 pkts
+  ch0 1315 pkts
+  ch0 1335 pkts
+  ch0 1355 pkts
+  ch0 1375 pkts
+  ch0 1394 pkts
+  ch0 1415 pkts
+  ch0 1436 pkts
+  ch0 1456 pkts
+  ch0 1475 pkts
+  ch0 1494 pkts
+  ch0 1514 pkts
+  ch0 1533 pkts
+  ch0 1554 pkts
+  ch0 1575 pkts
+  ch0 1595 pkts
+  ch0 1615 pkts
+  ch0 1635 pkts
+  ch0 1656 pkts
+  ch0 1675 pkts
+  ch0 1696 pkts
+  ch0 1716 pkts
+  ch0 1737 pkts
+  ch0 1756 pkts
+  ch0 1774 pkts
+  ch0 1794 pkts
+  ch0 1814 pkts
+  ch0 1835 pkts
+  ch0 1856 pkts
+  ch0 1876 pkts
+  ch0 1897 pkts
+  ch0 1917 pkts
+  ch0 1938 pkts
+  ch0 1958 pkts
+  ch0 1978 pkts
+  ch0 1998 pkts
+  ch0 2016 pkts
+  ch0 2037 pkts
+  ch0 2057 pkts
+  ch0 2078 pkts
+  ch0 2099 pkts
+  ch0 2120 pkts
+  ch0 2140 pkts
+  ch0 2159 pkts
+  ch0 2180 pkts
+  ch0 2200 pkts
+  ch0 2219 pkts
+  ch0 2239 pkts
+  ch0 2260 pkts
+  ch0 2281 pkts
+  ch0 2302 pkts
+  ch0 2321 pkts
+  ch0 2341 pkts
+
+Closing
+  OK: close ch0
+  OK: unassign ch0
+
+wrote C:\Users\Colin\AppData\Local\Temp\claude\0b707879d249ade1\455ff62d-a306-44ec-ba83-9f98c9b995b4\scratchpad\c2\runs\A2_verify.rec (2342 packets)
+
+=== heart-rate (device type 0x78, 8070 ticks) ===
+  OK   packets                2342 received, 2437 expected over 599.9 s
+  FAIL loss                   3.89 % (limit 1.50 %, one packet = 0.04 %)
+  OK   jitter                 stddev 50.8 ms, max 766.0 ms (limit 123.1 ms, period 246.3 ms)
+  OK   accumulator continuity 0 violation(s)
+  OK   sensor liveness        the event counter advanced on 1197 of 2341 packet pairs
+  FAIL common pages           80 x0, 81 x0, worst gap None (limit 121)
+  pages: 0x00 x2342
+  timing: 7.61 ms off the 246.3 ms slot grid by the host clock, 0.008 ms by the radio's
+  signal: mean -58.2 dBm (min -61, max -55, n=2342) - ANT tracks to about -90
+  wraps observed: beat_count x5, hr_event_time x10
+  attestation: clear - no key here, which is not the same as unprotected
+  heart_rate_bpm: mean 120.00 (min 120.00, max 120.00, n=1197), mean abs error 0.00
+
+channel events: EVENT_RX_FAIL x93
+95 packet(s) missing, 93 of it reported as RX_FAIL; the other 2 went missing without the radio noticing.
+heard on channel 0: device #12345, type 0x78
+
+wrote C:\Users\Colin\AppData\Local\Temp\claude\0b707879d249ade1\455ff62d-a306-44ec-ba83-9f98c9b995b4\scratchpad\c2\runs\A2_verify_promicro.json
+
+FAILED

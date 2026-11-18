@@ -513,9 +513,69 @@ ESTIMATE, µA, TI CC2652R datasheet SWRS207J rows):
 | XOSC_HF outside radio | not measured, no datasheet row | UNKNOWN, excluded |
 | **Total (known parts)** | | **1028** (860 without the UART row) |
 
-The estimator does not model the RF core's on-time outside TX and RX (about
-12 ms/s here), so the total leaves that out. `--ti-standby` (a what-if for
+The estimator at GC1 did not model the RF core's on-time outside TX and RX
+(about 12 ms/s here), so the total above leaves that out. It now charges a
+**lower bound** for it (power/c2: `RF core idle (LB)`, rfon time minus TX/RX
+at the SWRS207J Iperi "RF core idle" delta, 210.9 µA): on this capture
+1.195 % of time, 2.5 µA, total 1030 µA. The real cost is higher and not
+known: while the synthesiser is locked after CMD_FS waiting for the TX the
+chip draws mA, not 210.9 µA, and rfon starts at the setup command, so the
+core's boot before it is not counted at all. The estimator lists that as
+`RF synth/boot`, UNKNOWN and excluded, and prints the driver's wake budget
+(power-ups/s × pudur_us) beside it: 1801 µs/s on this capture. `--ti-standby` (a what-if for
 standby, which this firmware forbids) gives 227 µA, and most of that is the
 console-inflated CPU term. The idle floor and the UART row dominate, which is
 why Pass C2 (XOSC_HF release) and the TI standby decision are the levers left
 on this board, not the RF core's duty.
+
+### TI XOSC_HF release, C2 gate (2026-11-18)
+
+An on-air A/B/A of `CONFIG_RADIANT_CC26XX_XOSC_HF_RELEASE`, local master b7d4bd6. A is hr_transmitter for
+`cc26x2r1_launchxl` with `power_diag.conf;console_on.conf` (`zephyr.hex` `f205db7e`). B is the `ti_hr_tx_lp_pd` row,
+`ti_lowpower.conf;power_diag.conf;console_on.conf` (`0525ff6d`). Their `.config` files differ only in the option.
+In the ELFs, `RFCC26XX_hwAttrs.xoscHfAlwaysNeeded` is 1 in A and 0 in B. Each arm used GC1's method: flash with
+`flash_ti.ps1`, capture COM11 from boot, then after a random 25–55 s offset, 600 s of receivers. There were two
+receivers in the same window. The Pro Micro ran `ant_verify`. The nRF54L15 DK was reflashed with apps/dongle direct
+(`71fdffe4`), which also took its own #12345 off the air. It ran as a bidirectional slave sending one acknowledged
+message every 1–2 s (`scripts/c2_acked_probe.py`), which probes the TI's in-grant RX window and its ACK. The TI's
+`radiant_api: rxpath ... tot=` line counts what it received. Raw data, method and per-arm tables are in
+`archive/benchmarks/2026-11-18-power-c2/`.
+
+| | A1 (off) | B (on) | A2 (off) |
+|---|---|---|---|
+| `pudur_us` median (range) | 448 (448–480) | **480 (480–482)** | 448 (448–480) |
+| `cold` / `txl` / `fsx` / `bks` | 0 / 0 / 0 / 0 | **0 / 0 / 0 / 0** | 0 / 0 / 0 / 0 |
+| `rfon_pm`, power-ups per slot | 17.62, 1.000 | 17.68, 1.000 | 17.60, 1.000 |
+| `cpu_pm`, idle entries /s | 15.9, 37.9 | 16.7, **49.9** | 15.9, 38.0 |
+| Pro Micro loss (signal) | 1.47 % (−46.8 dBm) | 3.28 % (−57.4) | 3.89 % (−58.2) |
+| L15 loss, same window | 0.66 % | 0.72 % | 0.67 % |
+| TI received acked / round trip OK | 99.05 / 98.41 % | 99.37 / 99.05 % | 98.75 / 98.75 % |
+| Estimate, known parts (ESTIMATE, µA, `--uart-on`) | 921.7 | 924.0 | 921.6 |
+
+What the gate showed:
+
+- **Gate C2 PASSES** against all three predictions, plus the receive-path check.
+  - `pudur_us` lands in the predicted 450–750 band, at its bottom.
+  - `cold` and `txl` stay at 0.
+  - B's Pro Micro loss falls inside the A1–A2 spread.
+  - The same-window L15 control moves +0.05 pp, about one packet.
+  - The TI's own receive and ACK path is no worse in B. The review's worry was a late in-grant RX arm caused by the
+    per-power-up RCOSC_HF recalibration, which `cold`/`txl` would not show. B received 99.37 % of the acknowledged
+    messages and completed 99.05 % of round trips, with 0 transfer failures on the TI.
+- **The crystal start hides under the RF core's boot.** The driver times a power-up in whole AON RTC ticks
+  (448 = 14 ticks, 480 = 15; A's 450–464 values are its average of the two). B measures 15 ticks almost every time, so
+  releasing the crystal costs at most one 31 µs tick per power-up, not ~200 µs.
+- **The Pro Micro's loss followed its signal, not the arm.** Its signal fell ~10 dB after A1 and stayed down through
+  A2, while the L15's rose ~14 dB over the same period: a propagation change in the room. Bursts of misses came in
+  episodes.
+- **The estimator cannot price the saving.** The CC2652R/P datasheets have no XOSC_HF current, so the HFXO term is
+  UNKNOWN in both arms. The only component that moves is CPU, +0.83 ‰ in B (≈ +2.3 µA). That CPU time and the extra
+  ~3 wakes per power-up are the Power driver's crystal switch and RCOSC_HF calibration (inferred). In B the crystal
+  should run only while the core is on, plus the wake before setup: ≤ ~2 % of the time (17.7 ‰ + 4.06/s × 480 µs).
+  The saving is about 0.98 × an unknown I(XOSC_HF). The Idle floor row is specified on RCOSC_HF, B's idle state, so
+  A's total is the one understated by that term. The RF synth/boot term stays UNKNOWN, and RF core idle stays a lower
+  bound.
+- **C2's `apply_power()` fix shows here.** The A arm's CPU is 15.9 ‰, against 55.6 ‰ at GC1, and its estimate drops
+  from 1030 to 922 µA. That is the per-transmit INF log line and the `RF_setTxPower()` call gone.
+
+The TI was left on image B. The L15 was left on the c2gate apps/dongle image, and Gate G1 reflashes it.

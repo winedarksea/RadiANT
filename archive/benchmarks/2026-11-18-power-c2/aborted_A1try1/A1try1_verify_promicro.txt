@@ -1,0 +1,147 @@
+Found 0FCF:1009  bcdDevice=0x0100
+  manufacturer: RadiANT Project
+  product:      RadiANT ANT+ compatible USB stick
+  serial:       EE6986854FD72803
+
+Opening ANT+ receive channels
+  OK: extended messages
+  OK: ANT+ network key
+  OK: ch0 assign slave
+  OK: ch0 channel id
+  OK: ch0 radio frequency
+  OK: ch0 message period
+  OK: ch0 search timeout
+  OK: ch0 open
+  OK: channel 0 - heart rate, device type 0x78, pinned to #12345
+
+Listening for 600 s
+  ch0 19 pkts
+  ch0 40 pkts
+  ch0 60 pkts
+  ch0 81 pkts
+  ch0 99 pkts
+  ch0 118 pkts
+  ch0 138 pkts
+  ch0 159 pkts
+  ch0 176 pkts
+  ch0 197 pkts
+  ch0 217 pkts
+  ch0 237 pkts
+  ch0 255 pkts
+  ch0 270 pkts
+  ch0 283 pkts
+  ch0 304 pkts
+  ch0 325 pkts
+  ch0 346 pkts
+  ch0 367 pkts
+  ch0 388 pkts
+  ch0 409 pkts
+  ch0 430 pkts
+  ch0 450 pkts
+  ch0 471 pkts
+  ch0 492 pkts
+  ch0 513 pkts
+  ch0 534 pkts
+  ch0 555 pkts
+  ch0 576 pkts
+  ch0 597 pkts
+  ch0 618 pkts
+  ch0 639 pkts
+  ch0 660 pkts
+  ch0 681 pkts
+  ch0 702 pkts
+  ch0 722 pkts
+  ch0 743 pkts
+  ch0 764 pkts
+  ch0 784 pkts
+  ch0 805 pkts
+  ch0 826 pkts
+  ch0 847 pkts
+  ch0 868 pkts
+  ch0 889 pkts
+  ch0 910 pkts
+  ch0 931 pkts
+  ch0 952 pkts
+  ch0 973 pkts
+  ch0 994 pkts
+  ch0 1015 pkts
+  ch0 1036 pkts
+  ch0 1057 pkts
+  ch0 1078 pkts
+  ch0 1099 pkts
+  ch0 1120 pkts
+  ch0 1141 pkts
+  ch0 1161 pkts
+  ch0 1181 pkts
+  ch0 1202 pkts
+  ch0 1223 pkts
+  ch0 1243 pkts
+  ch0 1263 pkts
+  ch0 1284 pkts
+  ch0 1303 pkts
+  ch0 1324 pkts
+  ch0 1344 pkts
+  ch0 1365 pkts
+  ch0 1386 pkts
+  ch0 1406 pkts
+  ch0 1427 pkts
+  ch0 1448 pkts
+  ch0 1468 pkts
+  ch0 1489 pkts
+  ch0 1510 pkts
+  ch0 1531 pkts
+  ch0 1552 pkts
+  ch0 1573 pkts
+  ch0 1594 pkts
+  ch0 1615 pkts
+  ch0 1636 pkts
+  ch0 1657 pkts
+  ch0 1676 pkts
+  ch0 1697 pkts
+  ch0 1718 pkts
+  ch0 1739 pkts
+  ch0 1760 pkts
+  ch0 1781 pkts
+  ch0 1802 pkts
+  ch0 1823 pkts
+  ch0 1844 pkts
+  ch0 1865 pkts
+  ch0 1886 pkts
+  ch0 1907 pkts
+  ch0 1928 pkts
+  ch0 1949 pkts
+  ch0 1970 pkts
+  ch0 1990 pkts
+  ch0 2011 pkts
+  ch0 2032 pkts
+  ch0 2053 pkts
+  ch0 2074 pkts
+  ch0 2095 pkts
+  ch0 2116 pkts
+  ch0 2137 pkts
+  ch0 2158 pkts
+  ch0 2179 pkts
+  ch0 2199 pkts
+  ch0 2220 pkts
+  ch0 2240 pkts
+  ch0 2259 pkts
+  ch0 2280 pkts
+  ch0 2301 pkts
+  ch0 2321 pkts
+  ch0 2342 pkts
+  ch0 2363 pkts
+  ch0 2383 pkts
+
+Closing
+  OK: close ch0
+  OK: unassign ch0
+Traceback (most recent call last):
+  File "C:\Users\Colin\ant_dongle\tools\ant_verify.py", line 2570, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "C:\Users\Colin\ant_dongle\tools\ant_verify.py", line 2520, in main
+    ap.write_capture(args.record, resolved, comments=[
+  File "C:\Users\Colin\ant_dongle\tools\ant_pages.py", line 4575, in write_capture
+    with open(path, "w") as handle:
+         ^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: 'runs\\A1_verify.rec'

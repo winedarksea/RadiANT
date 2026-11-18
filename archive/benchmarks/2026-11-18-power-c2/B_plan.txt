@@ -1,0 +1,6 @@
+start 2026-11-18 15:52:10
+offset_s 54.7
+rx_seconds 600
+capture_s 679.7
+receivers start 15:53:05 (capture +54.7 s)
+end 16:03:31 verify rc 1 acked rc 0 capture rc 0
