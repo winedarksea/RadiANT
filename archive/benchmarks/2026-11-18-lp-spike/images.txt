@@ -1,0 +1,19 @@
+Pass B1 LP-clock spike, 2026-11-18. Images (MD5) and the log each produced.
+
+Spike images (built from radiant/spike/lp_clock on power/b1, NCS v3.4.0):
+  lp_l15     nrf54l15dk/nrf54l15/cpuapp, plain             FB7DC2480CEA4E2868A580545DB9A8D2  -> l15_plain.log
+  lp_l15_s3  same, -DSPIKE_S3ONLY=1 (S2 + S3 v2 only)      447284C2AE03D9C44503294E1E8FF1E5  -> l15_s3v2.log
+  lp_l15_ble same, -DEXTRA_CONF_FILE=ble.conf (SDC/MPSL)   C4E10FF99E9257046BEDD8F01C790075  -> l15_ble.log
+  lp_pm      promicro_nrf52840/nrf52840/uf2 (zephyr.uf2)   29B27BD73A36E69C7F44BEA695C3B5A2  -> pm.log
+
+  lp_l15 and lp_pm were built before the S3 "v2" edit and the BT ad[] fix in
+  main.c. Neither change touches code those two images run (s3_v2 is a
+  compile-time false outside SPIKE_S3ONLY, and the RTC1 s3_cycle is unchanged).
+
+Restored afterwards (both verified):
+  nRF54L15 DK  C:\wt_power_ta\build\ga_lp_q\hr_transmitter\zephyr\zephyr.hex  2A130085D291EAF379EBC86E25B6A602
+               jlink_peek liveness running, power_diag uptime advancing (restore_l15_peek.txt);
+               ant_verify HR #12345 30 s on the Pro Micro: loss -0.05 %, 120 bpm (restore_verify.log;
+               the TI also transmits #12345, so this run alone does not prove which board was heard)
+  Pro Micro    archive/benchmarks/2026-11-17-fec-crossing/images/pm_diag_acdd9d2.uf2  6F75C634AD3C1014CAC78FE969D91076
+               tools/ant_probe.py --serial EE6986854FD72803: PASS (RADIANT0.01B00, 32 ch)
