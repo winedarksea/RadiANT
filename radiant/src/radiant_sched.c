@@ -1102,8 +1102,9 @@ static void note_lost(uint8_t c)
 /*
  * CONFIG_RADIANT_POWER_DIAG: charge the armed operation's radio on-time, from
  * its armed open to now, before clear_armed() forgets it. Backend-neutral (the
- * HAL clock). The caller decides whether the radio ran at all: a DENIED
- * operation never did, an abort before the open did not.
+ * HAL clock). An operation that ends before its open (an abort, or a FAILED
+ * the backend reports early) never had the radio and is not counted; the
+ * caller also skips DENIED, which never ran whenever it is reported.
  *
  * Off, this is a macro that expands to nothing and the header is not
  * included: even an unused declaration renumbers GCC's internal switch tables
@@ -1112,9 +1113,13 @@ static void note_lost(uint8_t c)
 #if defined(CONFIG_RADIANT_POWER_DIAG)
 static void power_note_end(void)
 {
+	radiant_time_t now = radiant_radio_now();
+
+	if (now < s.armed_open) {
+		return;
+	}
 	radiant_power_diag_radio(s.armed_kind == (uint8_t)SLOT_TX,
-				 radiant_power_diag_on_us(radiant_radio_now(),
-							  s.armed_open));
+				 radiant_power_diag_on_us(now, s.armed_open));
 }
 #define POWER_NOTE_END() power_note_end()
 #else

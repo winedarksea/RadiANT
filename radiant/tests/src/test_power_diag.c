@@ -138,13 +138,93 @@ ZTEST(radiant_power_diag, test_on_us)
 	zassert_equal(radiant_power_diag_on_us(((uint64_t)1 << 40), 0u), UINT32_MAX);
 }
 
-ZTEST(radiant_power_diag, test_active_us)
+/* --- The idle accumulator (CPU time) --- */
+
+ZTEST(radiant_power_diag, test_idle_open_close)
 {
-	zassert_equal(radiant_power_diag_active_us(125u, 1000000u), 125000u);
-	zassert_equal(radiant_power_diag_active_us(1000u, 1000000u), 1000000u);
-	/* A load over 1000 cannot make active time exceed the interval. */
-	zassert_equal(radiant_power_diag_active_us(1500u, 1000000u), 1000000u);
-	zassert_equal(radiant_power_diag_active_us(1000u, UINT32_MAX), UINT32_MAX);
+	struct radiant_power_diag_idle d = { 0 };
+
+	radiant_power_diag_idle_open(&d, 1000u);
+	zassert_true(d.open);
+	radiant_power_diag_idle_close(&d, 1700u);
+	zassert_false(d.open);
+	zassert_equal(d.idle_cyc, 700u);
+	radiant_power_diag_idle_open(&d, 2000u);
+	radiant_power_diag_idle_close(&d, 2050u);
+	zassert_equal(d.idle_cyc, 750u);
+}
+
+ZTEST(radiant_power_diag, test_idle_nested_close_counts_once)
+{
+	/* The wake's interrupt closes the interval; a nested or later one must
+	 * not add the time since the open a second time. */
+	struct radiant_power_diag_idle d = { 0 };
+
+	radiant_power_diag_idle_open(&d, 100u);
+	radiant_power_diag_idle_close(&d, 400u);
+	radiant_power_diag_idle_close(&d, 450u);
+	radiant_power_diag_idle_close(&d, 9000u);
+	zassert_equal(d.idle_cyc, 300u);
+	/* Closing with nothing open is a no-op from the start too. */
+	{
+		struct radiant_power_diag_idle e = { 0 };
+
+		radiant_power_diag_idle_close(&e, 123u);
+		zassert_equal(e.idle_cyc, 0u);
+	}
+}
+
+ZTEST(radiant_power_diag, test_idle_reopen_closes_a_stale_interval)
+{
+	/* The wake went through an untraced interrupt: the idle thread's next
+	 * entry closes the old interval at its own time and opens a new one. */
+	struct radiant_power_diag_idle d = { 0 };
+
+	radiant_power_diag_idle_open(&d, 100u);
+	radiant_power_diag_idle_open(&d, 600u);
+	zassert_equal(d.idle_cyc, 500u);
+	zassert_true(d.open);
+	zassert_equal(d.t0, 600u);
+	radiant_power_diag_idle_close(&d, 650u);
+	zassert_equal(d.idle_cyc, 550u);
+}
+
+ZTEST(radiant_power_diag, test_idle_across_cycle_clock_wrap)
+{
+	/* k_cycle_get_32() wraps (36.4 h at 32768 Hz, 71.6 min at 1 MHz). */
+	struct radiant_power_diag_idle d = { 0 };
+
+	radiant_power_diag_idle_open(&d, UINT32_MAX - 99u);
+	radiant_power_diag_idle_close(&d, 200u);
+	zassert_equal(d.idle_cyc, 300u);
+}
+
+ZTEST(radiant_power_diag, test_active_cyc)
+{
+	zassert_equal(radiant_power_diag_active_cyc(32768u, 32000u), 768u);
+	zassert_equal(radiant_power_diag_active_cyc(32768u, 0u), 32768u);
+	/* Idle read a little over the span clamps to 0, never wraps. */
+	zassert_equal(radiant_power_diag_active_cyc(32768u, 32768u), 0u);
+	zassert_equal(radiant_power_diag_active_cyc(32768u, 40000u), 0u);
+	zassert_equal(radiant_power_diag_active_cyc(10u, (uint64_t)1 << 40), 0u);
+}
+
+ZTEST(radiant_power_diag, test_low_load_is_not_floored_away)
+{
+	/*
+	 * The reason this replaced Zephyr's cpu_load_get(): a 0.4 per-mille load
+	 * (13 active cycles a second at 32768 Hz) floored to 0 every window. Summed
+	 * in cycles over 100 one-second snapshots and converted once, it survives.
+	 */
+	uint64_t active = 0u;
+	uint32_t i;
+
+	for (i = 0u; i < 100u; i++) {
+		active += radiant_power_diag_active_cyc(32768u, 32768u - 13u);
+	}
+	zassert_equal(active, 1300u);
+	zassert_equal(radiant_power_diag_duty_permille(13u, 32768u), 0u,
+		      "per window the floored per-mille still reads 0");
 }
 
 /* --- The HFXO request accumulator --- */
@@ -332,4 +412,33 @@ ZTEST(radiant_power_diag, test_snapshot_publishes_radio_counters)
 	zassert_true(radiant_power_diag_delta(after.radio_rx_us, before.radio_rx_us) >= 4567u);
 	zassert_true(radiant_power_diag_delta(after.radio_rx_ops, before.radio_rx_ops) >= 2u);
 }
+
+#if defined(CONFIG_RADIANT_POWER_DIAG_IDLE)
+ZTEST(radiant_power_diag, test_snapshot_measures_idle_and_cpu_time)
+{
+	struct radiant_power_diag before;
+	struct radiant_power_diag after;
+	uint32_t                  dt_us;
+	uint32_t                  active_us;
+
+	k_sleep(K_MSEC(RADIANT_POWER_DIAG_SNAPSHOT_MS + 100u));
+	before = read_published();
+	zassert_true((before.flags & RADIANT_POWER_DIAG_F_CPU_LOAD) != 0u);
+	zassert_true((before.flags & RADIANT_POWER_DIAG_F_IDLE) != 0u);
+
+	/* Asleep for two snapshots: the idle thread runs, so it is entered. */
+	k_sleep(K_MSEC(2u * RADIANT_POWER_DIAG_SNAPSHOT_MS + 100u));
+	after = read_published();
+
+	dt_us = radiant_power_diag_delta(after.uptime_ms, before.uptime_ms) * 1000u;
+	active_us = radiant_power_diag_delta(after.cpu_active_us, before.cpu_active_us);
+	zassert_true(radiant_power_diag_delta(after.idle_entries, before.idle_entries) >= 1u);
+	zassert_true(dt_us >= 2u * RADIANT_POWER_DIAG_SNAPSHOT_MS * 1000u, "dt %u", dt_us);
+	/* Active time cannot exceed wall time (one snapshot of slack for the
+	 * two clocks being sampled at slightly different instants). */
+	zassert_true(active_us <= dt_us + RADIANT_POWER_DIAG_SNAPSHOT_MS * 1000u,
+		     "active %u of %u us", active_us, dt_us);
+	zassert_true(after.cpu_load_permille <= 1000u);
+}
+#endif
 #endif /* CONFIG_RADIANT_POWER_DIAG */

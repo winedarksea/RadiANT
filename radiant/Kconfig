@@ -1576,7 +1576,6 @@ config RADIANT_DIAG_COUNTERS
 config RADIANT_POWER_DIAG
 	bool "DIAGNOSTIC: software power proxy (radiant_power_diag struct)"
 	default n
-	imply CPU_LOAD
 	help
 	  For boards with no current meter. Keeps free-running counters of
 	  what sets a battery node's current - how long the backend has held
@@ -1595,11 +1594,10 @@ config RADIANT_POWER_DIAG
 	  system work queue publishes a snapshot once a second (one extra
 	  wake a second).
 
-	  Implies CPU_LOAD (which selects TRACING), where the architecture
-	  allows it; without it the CPU fields read 0xFFFFFFFF. Idle entries
-	  need CONFIG_TRACING_USER as well, which a fragment has to set
-	  because a Kconfig choice member cannot be selected; see
-	  RADIANT_POWER_DIAG_IDLE.
+	  CPU time and idle entries need CONFIG_TRACING=y and
+	  CONFIG_TRACING_USER=y, which a fragment has to set because a Kconfig
+	  choice member cannot be selected; without them those fields read
+	  0xFFFFFFFF. See RADIANT_POWER_DIAG_IDLE.
 
 	  OFF BY DEFAULT and never in a shipping image. With it off every hook
 	  is an empty inline and nothing is linked.
@@ -1618,20 +1616,27 @@ config RADIANT_POWER_DIAG_LOG_S
 	  Has no effect without CONFIG_LOG.
 
 config RADIANT_POWER_DIAG_IDLE
-	bool "count idle entries through the TRACING_USER idle hook"
+	bool "measure CPU time and idle entries through TRACING_USER hooks"
 	default y
-	depends on RADIANT_POWER_DIAG && TRACING_USER
+	depends on RADIANT_POWER_DIAG && TRACING_USER && TRACING_ISR
 	help
-	  Defines sys_trace_idle_user(), Zephyr's weak user-tracing hook that
-	  the idle thread calls each time it puts the CPU to sleep, and counts
-	  the calls into radiant_power_diag.idle_entries: the wake rate.
+	  Defines two of Zephyr's weak user-tracing hooks.
+	  sys_trace_idle_user(), which the idle thread calls each time it puts
+	  the CPU to sleep, counts radiant_power_diag.idle_entries (the wake
+	  rate) and opens an idle interval on the cycle clock.
+	  sys_trace_isr_enter_user(), which every traced interrupt calls on
+	  entry, closes it in the first interrupt after the wake. CPU active
+	  time (cpu_active_us, cpu_load_permille) is wall time minus those
+	  intervals, summed in cycles: no per-window per-mille rounding, which
+	  is why Zephyr's CPU_LOAD is not used. A zero-latency or bare direct
+	  ISR is not traced, so its run time counts as idle.
 
-	  A separate option because it claims a hook the application may want
+	  A separate option because it claims hooks the application may want
 	  for itself: an application that defines its own
-	  sys_trace_idle_user() turns this off (or gets a duplicate-symbol
-	  link error saying so). Only reachable with CONFIG_TRACING=y and
-	  CONFIG_TRACING_USER=y, which the hr_transmitter sample's
-	  power_diag*.conf fragments set.
+	  sys_trace_idle_user() or sys_trace_isr_enter_user() turns this off
+	  (or gets a duplicate-symbol link error saying so). Only reachable
+	  with CONFIG_TRACING=y and CONFIG_TRACING_USER=y, which the
+	  hr_transmitter sample's power_diag*.conf fragments set.
 
 config RADIANT_HOT_PATH_O2
 	bool "compile the scheduler, the antr runtime and the radio backend at -O2"
