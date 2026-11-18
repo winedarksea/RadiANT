@@ -1,0 +1,286 @@
+[
+ {
+  "run": "nohold_idle",
+  "image": "hold=n",
+  "case": "idle, no channel",
+  "liveness": "running",
+  "uptime_ms": [
+   20003,
+   79007
+  ],
+  "samples": 200,
+  "constlat_on": 0,
+  "constlat_ci95": [
+   0,
+   0.0188
+  ],
+  "rx_duty": 0.0,
+  "rx_ops_per_s": 0.0,
+  "rx_us_per_op": null,
+  "refs_hist": {
+   "0": {
+    "samples": 200,
+    "constlat_on": 0
+   }
+  },
+  "refs_max": 0
+ },
+ {
+  "run": "nohold_scan_peek1",
+  "image": "hold=n",
+  "case": "background scan 0x40, early",
+  "liveness": "running",
+  "uptime_ms": [
+   101008,
+   161012
+  ],
+  "samples": 200,
+  "constlat_on": 178,
+  "constlat_ci95": [
+   0.8391,
+   0.9262
+  ],
+  "rx_duty": 0.89138,
+  "rx_ops_per_s": 10.266,
+  "rx_us_per_op": 86828.8,
+  "refs_hist": {
+   "0": {
+    "samples": 23,
+    "constlat_on": 1
+   },
+   "1": {
+    "samples": 177,
+    "constlat_on": 177
+   }
+  },
+  "refs_max": 1
+ },
+ {
+  "run": "nohold_scan_peek2",
+  "image": "hold=n",
+  "case": "background scan 0x40, late",
+  "liveness": "running",
+  "uptime_ms": [
+   177013,
+   238017
+  ],
+  "samples": 200,
+  "constlat_on": 183,
+  "constlat_ci95": [
+   0.8681,
+   0.9463
+  ],
+  "rx_duty": 0.89076,
+  "rx_ops_per_s": 10.262,
+  "rx_us_per_op": 86804.6,
+  "refs_hist": {
+   "0": {
+    "samples": 17,
+    "constlat_on": 0
+   },
+   "1": {
+    "samples": 183,
+    "constlat_on": 183
+   }
+  },
+  "refs_max": 1
+ },
+ {
+  "run": "nohold_track_peek",
+  "image": "hold=n",
+  "case": "wildcard slave, tracking",
+  "liveness": "running",
+  "uptime_ms": [
+   411029,
+   472033
+  ],
+  "samples": 200,
+  "constlat_on": 3,
+  "constlat_ci95": [
+   0.0051,
+   0.0432
+  ],
+  "rx_duty": 0.00342,
+  "rx_ops_per_s": 4.196,
+  "rx_us_per_op": 815.0,
+  "refs_hist": {
+   "0": {
+    "samples": 199,
+    "constlat_on": 2
+   },
+   "1": {
+    "samples": 1,
+    "constlat_on": 1
+   }
+  },
+  "refs_max": 1
+ },
+ {
+  "run": "hold_idle",
+  "image": "hold=y",
+  "case": "idle, no channel",
+  "liveness": "running",
+  "uptime_ms": [
+   13002,
+   73006
+  ],
+  "samples": 200,
+  "constlat_on": 200,
+  "constlat_ci95": [
+   0.9812,
+   1
+  ],
+  "rx_duty": 0.0,
+  "rx_ops_per_s": 0.0,
+  "rx_us_per_op": null,
+  "refs_hist": {
+   "1": {
+    "samples": 200,
+    "constlat_on": 200
+   }
+  },
+  "refs_max": 1
+ },
+ {
+  "run": "hold_scan_peek1",
+  "image": "hold=y",
+  "case": "background scan 0x40, early",
+  "liveness": "running",
+  "uptime_ms": [
+   97008,
+   157012
+  ],
+  "samples": 200,
+  "constlat_on": 200,
+  "constlat_ci95": [
+   0.9812,
+   1
+  ],
+  "rx_duty": 0.89139,
+  "rx_ops_per_s": 10.266,
+  "rx_us_per_op": 86829.1,
+  "refs_hist": {
+   "1": {
+    "samples": 17,
+    "constlat_on": 17
+   },
+   "2": {
+    "samples": 183,
+    "constlat_on": 183
+   }
+  },
+  "refs_max": 2
+ },
+ {
+  "run": "hold_scan_peek2",
+  "image": "hold=y",
+  "case": "background scan 0x40, late (600 samples)",
+  "liveness": "running",
+  "uptime_ms": [
+   180013,
+   360025
+  ],
+  "samples": 600,
+  "constlat_on": 600,
+  "constlat_ci95": [
+   0.9936,
+   1
+  ],
+  "rx_duty": 0.89166,
+  "rx_ops_per_s": 10.272,
+  "rx_us_per_op": 86808.7,
+  "refs_hist": {
+   "1": {
+    "samples": 65,
+    "constlat_on": 65
+   },
+   "2": {
+    "samples": 535,
+    "constlat_on": 535
+   }
+  },
+  "refs_max": 2
+ },
+ {
+  "run": "hold_postscan_idle",
+  "image": "hold=y",
+  "case": "idle after the scan closed",
+  "liveness": "running",
+  "uptime_ms": [
+   396027,
+   426030
+  ],
+  "samples": 100,
+  "constlat_on": 100,
+  "constlat_ci95": [
+   0.963,
+   1
+  ],
+  "rx_duty": 0.0,
+  "rx_ops_per_s": 0.0,
+  "rx_us_per_op": null,
+  "refs_hist": {
+   "1": {
+    "samples": 100,
+    "constlat_on": 100
+   }
+  },
+  "refs_max": 1
+ },
+ {
+  "run": "hold_track_peek",
+  "image": "hold=y",
+  "case": "wildcard slave, tracking",
+  "liveness": "running",
+  "uptime_ms": [
+   450031,
+   510036
+  ],
+  "samples": 200,
+  "constlat_on": 200,
+  "constlat_ci95": [
+   0.9812,
+   1
+  ],
+  "rx_duty": 0.00107,
+  "rx_ops_per_s": 4.066,
+  "rx_us_per_op": 264.1,
+  "refs_hist": {
+   "1": {
+    "samples": 199,
+    "constlat_on": 199
+   },
+   "2": {
+    "samples": 1,
+    "constlat_on": 1
+   }
+  },
+  "refs_max": 2
+ },
+ {
+  "run": "hold_posttrack_idle",
+  "image": "hold=y",
+  "case": "idle after tracking closed",
+  "liveness": "running",
+  "uptime_ms": [
+   563040,
+   578041
+  ],
+  "samples": 50,
+  "constlat_on": 50,
+  "constlat_ci95": [
+   0.9287,
+   1
+  ],
+  "rx_duty": 0.0,
+  "rx_ops_per_s": 0.0,
+  "rx_us_per_op": null,
+  "refs_hist": {
+   "1": {
+    "samples": 50,
+    "constlat_on": 50
+   }
+  },
+  "refs_max": 1
+ }
+]

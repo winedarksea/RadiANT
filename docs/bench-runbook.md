@@ -371,18 +371,46 @@ default) the backend also takes one reference at init that it never frees, so
 CONSTLAT stays on as in a direct build. With `=n` it takes none and leaves
 CONSTLAT to MPSL's per-event acquire.
 
-Whether MPSL's acquire covers its *timeslots*, where all of this backend's
-radio work runs, is **not verified**. The disassembly shows a single acquire
-site in the scheduler's event-start path, but the library is closed. The GA
-0/200 does not settle it either, because the dongle may have had no channel
-open. The bench check: flash the `=n` diag image, keep the radio busy with a
-never-locking scan (`tools\ant_scan_rate.py --port COM4 --baud 57600
---seconds 300 --scan-type 0x40`), and sample during the scan with
+**MPSL's acquire covers its timeslots, where all of this backend's radio
+work runs (bench check, 2026-11-18).** The disassembly shows a single acquire
+site in the scheduler's event-start path, and the library is closed, so this
+was checked on hardware. The check: flash the `=n` diag image, keep the radio
+busy with a never-locking scan (`tools\ant_scan_rate.py --port COM4 --baud
+57600 --seconds 300 --scan-type 0x40`), and sample during the scan with
 `jlink_peek.ps1 -Preset nrf54l15 -Samples 200 -ElfPath <elf> -Decode
--ExtraSymbol m_power_mode_refs`. A CONSTLAT-on fraction near the scan's radio
-duty, with `m_power_mode_refs` 1 in exactly those samples, means the timeslots
-are covered. 0/200 means they are not, and `=y` has to stay. On the `=y` image
-expect 200/200 and `m_power_mode_refs` 1 idle, 2 inside an MPSL event.
+-ExtraSymbol m_power_mode_refs`. The A4 diag images were `d89c2476` (`=n`)
+and `c4c8fbf1` (`=y`). Raw data is in
+`archive/benchmarks/2026-11-18-a4-constlat/`.
+
+| Image | Case | CONSTLAT on | RX duty (struct) | `m_power_mode_refs` (CONSTLAT on within) |
+|---|---|---|---|---|
+| `=n` | idle, no channel | 0/200 | 0 | 0: 200 (0) |
+| `=n` | scan, two 200-sample runs | 361/400 (90.3 %) | 89.1 % | 1: 360 (360); 0: 40 (1) |
+| `=n` | 4 Hz tracking | 3/200 (0.5–4.3 %) | 0.34 % | 1: 1 (1); 0: 199 (2) |
+| `=y` | idle, scan (800 samples), tracking, after close | 1350/1350 | 0 / 89.2 % / 0.11 % | only 1 (idle) or 2 (in an event) |
+
+With `=n` the CONSTLAT-on fraction tracks the scan's radio duty, sitting a
+point above it as it should if the MPSL event (timeslot plus ramp) contains
+the radio window. Every sample with `m_power_mode_refs` 1 had CONSTLAT on.
+Uncovered timeslots would have read ~0/200, as GA's ackps image did. The
+three samples with CONSTLAT on and refs 0 are a read-order artefact: the
+refs word is read one SWD round trip after the register, so an event ended
+between the two reads. The tracking fraction is a superset of the RX
+on-time, but with 3 hits it is a consistency check, not a per-slot proof.
+The sampler cannot read RADIO state, so "CONSTLAT is up before the ramp"
+rests on the acquire's position at event start.
+
+On `=y`, CONSTLAT was 100 % in every run. The count is balanced:
+`m_power_mode_refs` never exceeded 2 over ~10 minutes and ~3500 RX ops, and
+read exactly 1 after the scan and after tracking closed. With `=n` it went
+back to 0. The scan reported the same devices at the same rate on both
+images (15.0 vs 15.2 sightings/s).
+
+So `=n` meets errata 20's "CONSTLAT while the RADIO is in use" on this
+evidence. It drops the always-on CONSTLAT term (~549 µA ESTIMATE, Gate GA)
+to ~549 µA × the MPSL event duty: about 1.5 % when tracking one 4 Hz channel,
+about 90 % during a background scan. The Kconfig default is still `y`;
+flipping it is the owner's call.
 
 ### TI hr_transmitter (no proxy yet)
 

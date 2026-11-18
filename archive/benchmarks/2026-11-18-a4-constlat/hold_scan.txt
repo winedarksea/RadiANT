@@ -1,0 +1,8 @@
+COM4 (RADIANT0.01B00): 4569 sightings in 300.1 s listening, 15.23/s, 1 open(s)
+          device   per s  heard/opens  median 1st  max 1st
+      12345:0x78    3.57     1/1           0.12 s   0.12 s
+      52233:0x0B    5.81     1/1           0.08 s   0.08 s
+      52233:0x11    2.94     1/1           0.25 s   0.25 s
+      52233:0x7B    2.91     1/1           0.17 s   0.17 s
+
+exit=0
