@@ -52,7 +52,7 @@ left on this image.
   2141.2 s). Spacing 1060–1080 s, against 2^32 / 4 MHz = 1073.7 s.
 - CPU 55.6 ‰ (floored lines 53–60). Idle entries 37.4/s.
 
-`verify.log` / `verify.json`: 1218/1219 packets, loss 0.08 % (one RX_FAIL), jitter stddev 9.7 ms, timing 0.011 ms
+`verify_promicro.txt` / `verify_promicro.json`: 1218/1219 packets, loss 0.08 % (one RX_FAIL), jitter stddev 9.7 ms, timing 0.011 ms
 off grid by the radio's clock, 120 bpm exact. The `common pages` FAIL is expected: the sample sends page 0 only.
 
 `est_cc2652_uart_on.txt` / `.json` (`--board cc2652 --log <capture> --uart-on`): ESTIMATE total of known parts
