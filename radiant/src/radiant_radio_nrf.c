@@ -50,6 +50,18 @@
 #include <radiant/radiant_radio_hal.h>
 #include <radiant/radiant_radio_nrf_diag.h>
 
+/*
+ * CONFIG_RADIANT_POWER_DIAG hooks. The header is included only when the option
+ * is on: even unused static inlines renumber GCC's internal switch tables
+ * (CSWTCH.n), which the zero-cost symbol comparison sees as a difference.
+ */
+#if defined(CONFIG_RADIANT_POWER_DIAG)
+#include <radiant/radiant_power_diag.h>
+#define POWER_DIAG(...) do { __VA_ARGS__; } while (0)
+#else
+#define POWER_DIAG(...) do { } while (0)
+#endif
+
 /* Private header: nothing above the backend may know who owns the RADIO. */
 #include <radiant/radiant_swi.h>
 
@@ -2306,9 +2318,12 @@ int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 		return RADIANT_RADIO_EIO;
 	}
 
-	/* The RADIO needs the HFXO crystal: 1 Mbps GFSK does not hold bit sync on HFINT. Blocking. */
+	/* The RADIO needs the HFXO crystal: 1 Mbps GFSK does not hold bit sync on HFINT. Blocking.
+	 * Held from here until reset: the power proxy reads it as ~uptime. */
+	POWER_DIAG(radiant_power_diag_hfxo(true));
 	err = clock_control_on(clk, CLOCK_CONTROL_NRF_SUBSYS_HF);
 	if (err < 0) {
+		POWER_DIAG(radiant_power_diag_hfxo(false));
 		LOG_ERR("HFXO did not start (%d)", err);
 		return RADIANT_RADIO_EIO;
 	}
@@ -2316,6 +2331,7 @@ int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 #if defined(NRF54L_ERRATA_20_PRESENT)
 	if (nrf54l_errata_20()) {
 		nrf_power_task_trigger(NRF_POWER, NRF_POWER_TASK_CONSTLAT);
+		POWER_DIAG(radiant_power_diag_constlat_requested());
 	}
 #endif
 

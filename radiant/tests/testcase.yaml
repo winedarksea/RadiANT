@@ -115,6 +115,11 @@ tests:
   # application's test_sched.c drives directly; their cases exist only here.
   # Every other case runs here too, which is what "the counters change no
   # behaviour" means as a test. radiant.api.diag covers the pages themselves.
+  # CONFIG_RADIANT_POWER_DIAG (the software power proxy) rides along for the
+  # same reason: its scheduler hooks run under every case here, and
+  # test_power_diag.c's cases on the real struct exist only in this build.
+  # TRACING + TRACING_USER turn on its idle/ISR-entry hooks (CPU time and idle
+  # entries), which native_sim's idle loop and interrupt handler both call.
   radiant.unit.diag:
     timeout: 300
     tags:
@@ -125,3 +130,6 @@ tests:
       - native_sim
     extra_configs:
       - CONFIG_RADIANT_DIAG_COUNTERS=y
+      - CONFIG_RADIANT_POWER_DIAG=y
+      - CONFIG_TRACING=y
+      - CONFIG_TRACING_USER=y
