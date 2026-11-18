@@ -461,9 +461,13 @@ The serial bridge calls pairing on its 2,048-byte thread stack (`apps/common/ant
 
 In `radiant/src/antr/ant_sec_host.c`, key installation checks for an active master transfer, but the enabling `0xF1` configuration call does not. The radio path can also retain a scheduled TX body, a same-slot output, and an automatic ACK payload built under the previous policy. Make the policy transition take effect before reporting success. Cover queued ACK and burst transfers, a scheduled broadcast, and cached replies when enabling X_CONF or expanding the secured range. After success, affected pages must satisfy the new policy and the nonce high-water mark must survive.
 
-## 3. [OPEN, HIGH] Preserve epoch phase when a receiver joins after boot
+## 3. [DONE 2026-11-17, 3d554a6 on wip/sec-epoch-anchor] Preserve epoch phase when a receiver joins after boot
 
-`radiant_sec_set_epoch()` in `radiant/src/radiant_sec.c` clamps the epoch origin to zero when the supplied epoch age exceeds local uptime. The receiver then resolves counters against the wrong point in the epoch, invalidating the host's freshness boundary (§7.6). Preserve the full supplied phase through counter resolution, wrap, and clock correction. Check that a newly booted receiver verifies current windows and rejects windows outside the supplied time slack. The compat epoch setter already represents an origin before local boot.
+`radiant_sec_set_epoch()` in `radiant/src/radiant_sec.c` clamped the epoch origin to zero when the supplied epoch age exceeded local uptime, and so did the re-anchor and the master's slot latch. The receiver then resolved counters against the wrong point in the epoch, invalidating the host's freshness boundary (§7.6). Fixed: `epoch_anchor` is signed, all three clamps are gone, and `0xF3` refuses a phase of more than `INT32_MAX` periods or whose whole wraps pass the epoch headroom. A newly booted receiver verifies current windows and rejects windows outside the fixed 128-period slack around the supplied phase (10 new `radiant_sec` tests, 1 adapter test, 1 Python test, all failing on 876711c). Security text 7340 → 7452 B (ceiling 7680), bss 6974 unchanged. Caveat: an absurd phase that used to be accepted silently is now refused.
+
+- [OPEN, LOW] `rx_process()` returns silently when `advance_epoch()` fails (headroom or ceiling): nothing is counted.
+- [OPEN, LOW] `tools/radiant_crypto.py` `resolve_counter()` breaks the exact 128-period tie toward the lower rollover; the C keeps `base + low`.
+- [OPEN, LOW] `protocol/ant_wire.yaml` says `0xF3` can be read, but `ant_sec_host.c` has no read handler.
 
 ## 4. [OPEN, MEDIUM] Preserve the verified-window floor across configuration retries
 
