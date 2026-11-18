@@ -299,7 +299,7 @@ elseif(CONFIG_RADIANT_BACKEND_CC26XX)
 
   # radiant's own RFCC26XX_hwAttrs (the RF driver's hardware attributes), in
   # place of hal_ti's: only for the options that need a field or the global
-  # callback (RADIANT_POWER_DIAG today). The symbol selects
+  # callback (RADIANT_POWER_DIAG, RADIANT_CC26XX_XOSC_HF_RELEASE). The symbol selects
   # CC13X2_CC26X2_HAS_CUSTOM_RF_HWATTRS, which is what stops hal_ti compiling
   # its own; the file refuses the boards and builds it must not run on.
   zephyr_library_sources_ifdef(CONFIG_RADIANT_CC26XX_RF_HWATTRS

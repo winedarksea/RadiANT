@@ -1650,8 +1650,41 @@ config RADIANT_CC26XX_RF_HWATTRS
 	  definition: the same priorities and xoscHfAlwaysNeeded, plus
 	  whatever the option that selected this needs. Not set by hand;
 	  selected by RADIANT_POWER_DIAG on cc26xx (the global callback that
-	  feeds the ti_* fields). Off, the file is not built and a default
-	  image links hal_ti's definition as before.
+	  feeds the ti_* fields) and by RADIANT_CC26XX_XOSC_HF_RELEASE
+	  (xoscHfAlwaysNeeded = false). Off, the file is not built and a
+	  default image links hal_ti's definition as before.
+
+config RADIANT_CC26XX_XOSC_HF_RELEASE
+	bool "cc26xx: let the 48 MHz crystal (XOSC_HF) stop while the RF core is off"
+	depends on RADIANT_BACKEND_CC26XX
+	select RADIANT_CC26XX_RF_HWATTRS
+	help
+	  For a battery node. Sets xoscHfAlwaysNeeded = false in radiant's
+	  RFCC26XX_hwAttrs (src/radiant_ti_rf_hwattrs.c): TI's RF driver then
+	  requests XOSC_HF when it powers the RF core up and releases it when
+	  it powers the core down, instead of holding it from the first
+	  RF_open(). Between radio slots the system clock (CPU, UART, every
+	  peripheral) runs on the 48 MHz RC oscillator, RCOSC_HF, which the
+	  Power driver recalibrates against the crystal at every switch back.
+	  The system timer and the RF driver's own wake timing are on the
+	  32.768 kHz crystal (AON RTC) and do not change.
+
+	  Cost: each RF core power-up waits for the crystal to start before
+	  the radio timer can sync. The driver measures every power-up and
+	  wakes that much earlier for the next command, so the wait shows as
+	  a longer pudur_us and longer RF core on-time, not as a late start;
+	  the power-diag counters cold/txl are what would show otherwise. See
+	  the analysis at the top of src/radiant_ti_rf_hwattrs.c.
+
+	  Enabled only in radiant/samples/hr_transmitter/ti_lowpower.conf.
+	  Never in apps/dongle_ti: its host link is a UART, which would run
+	  on RCOSC_HF between slots, and a dongle's RF core is rarely off
+	  long enough to gain anything (its CMakeLists.txt refuses it).
+	  Refused at compile time on the cc2652p_dongle and on 802.15.4/BLE
+	  coexistence builds, as RADIANT_POWER_DIAG is.
+
+	  OFF BY DEFAULT: with it off nothing changes, not even the hwattrs
+	  object.
 
 config RADIANT_POWER_DIAG_LOG_S
 	int "seconds between power-diag log lines (0 = no log line)"

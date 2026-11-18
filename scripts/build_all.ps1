@@ -304,12 +304,13 @@ $treadmillTargets = @(
 # artifact. -Only matches the build directory only, as for the node rows, so
 # dongle patterns that match $targets' artifact names ("*nrf54l15dk*",
 # "*launchxl*") do not also build these. "*promicro*" still matches
-# hrtx_promicro_lp by its directory name. -Only "hrtx_*", -Only ti_hr_tx.
+# hrtx_promicro_lp by its directory name. -Only "hrtx_*", -Only "ti_hr_tx*".
 #
 # Asserted below: the HAL, CONFIG_SERIAL and CONFIG_LOG off on the lowpower.conf
 # rows (no UART driver linked means no UARTE is ever enabled, which is the point
-# of that fragment), CONFIG_HR_TX_ONE_WAY in both directions, and on the
-# DC/DC row the regulator modes read back from zephyr.dts.
+# of that fragment), CONFIG_HR_TX_ONE_WAY in both directions, on the
+# DC/DC row the regulator modes read back from zephyr.dts, and each row's own
+# assert_config lines (exact .config lines, for the TI rows' XOSC_HF release).
 $sampleTargets = @(
     @{ dir='hrtx_l15';         board='nrf54l15dk/nrf54l15/cpuapp';     artifact='radiant_hrtx_nrf54l15dk.hex';          pkg='hex'; radiant='nrf'; conf=$null;                        lowpower=$false; one_way=$false }
     @{ dir='hrtx_l15_lp';      board='nrf54l15dk/nrf54l15/cpuapp';     artifact='radiant_hrtx_nrf54l15dk_lp.hex';       pkg='hex'; radiant='nrf'; conf='lowpower.conf';              lowpower=$true;  one_way=$false }
@@ -323,7 +324,14 @@ $sampleTargets = @(
 # (skipped with their message when it is absent). Not in the sample's
 # sample.yaml: CI has no hal_ti.
 if ($Backend -eq 'core' -and $halTiModule) {
-    $sampleTargets += @{ dir='ti_hr_tx'; board='cc26x2r1_launchxl'; artifact='radiant_hrtx_cc26x2r1_launchxl.hex'; pkg='hex'; radiant='cc26xx'; conf=$null; lowpower=$false; one_way=$false; modules=$halTiModule }
+    $sampleTargets += @{ dir='ti_hr_tx'; board='cc26x2r1_launchxl'; artifact='radiant_hrtx_cc26x2r1_launchxl.hex'; pkg='hex'; radiant='cc26xx'; conf=$null; lowpower=$false; one_way=$false; modules=$halTiModule; assert_config=@('# CONFIG_RADIANT_CC26XX_XOSC_HF_RELEASE is not set') }
+    # Battery build: XOSC_HF released while the RF core is off, console off
+    # (ti_lowpower.conf; see radiant/src/radiant_ti_rf_hwattrs.c).
+    $sampleTargets += @{ dir='ti_hr_tx_lp'; board='cc26x2r1_launchxl'; artifact='radiant_hrtx_cc26x2r1_launchxl_lp.hex'; pkg='hex'; radiant='cc26xx'; conf='ti_lowpower.conf'; lowpower=$true; one_way=$false; modules=$halTiModule; assert_config=@('CONFIG_RADIANT_CC26XX_XOSC_HF_RELEASE=y', 'CONFIG_RADIANT_CC26XX_RF_HWATTRS=y', '# CONFIG_RADIANT_POWER_DIAG is not set') }
+    # Its bench variant: the same release plus the power-diag log line
+    # (rfon_pm, pudur_us, cold, txl). console_on.conf comes last and turns the
+    # log and console back on.
+    $sampleTargets += @{ dir='ti_hr_tx_lp_pd'; board='cc26x2r1_launchxl'; artifact='radiant_hrtx_cc26x2r1_launchxl_lp_pd.hex'; pkg='hex'; radiant='cc26xx'; conf='ti_lowpower.conf;power_diag.conf;console_on.conf'; lowpower=$false; one_way=$false; modules=$halTiModule; assert_config=@('CONFIG_RADIANT_CC26XX_XOSC_HF_RELEASE=y', 'CONFIG_RADIANT_CC26XX_RF_HWATTRS=y', 'CONFIG_RADIANT_POWER_DIAG=y', 'CONFIG_LOG=y', 'CONFIG_SERIAL=y', 'CONFIG_UART_CONSOLE=y') }
 }
 
 if (-not (Get-Command west -ErrorAction SilentlyContinue)) {
@@ -786,6 +794,14 @@ try {
                     if (-not ($cfg | Where-Object { $_ -ceq $sym })) {
                         throw "hr_transmitter $($t.dir): expected '$sym' in .config"
                     }
+                }
+            }
+
+            # 2b. The row's own exact lines.
+            foreach ($line in @($t.assert_config)) {
+                if (-not $line) { continue }
+                if (-not ($cfg | Where-Object { $_ -ceq $line })) {
+                    throw "hr_transmitter $($t.dir): expected '$line' in .config"
                 }
             }
 
