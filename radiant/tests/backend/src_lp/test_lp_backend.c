@@ -863,3 +863,22 @@ ZTEST(radiant_backend_lp, test_abort_with_wake_edges_latched)
 	zassert_equal(st.spurious, 2, "both latched handlers ran and were ignored");
 	zassert_equal(st.wakes, 0);
 }
+
+/* Nits N2/N4: a refused always-on request is counted (and logged), and the
+ * drop to always-on happens once however many errors follow. */
+ZTEST(radiant_backend_lp, test_hfxo_fallback_refused_counted_once)
+{
+	struct lpt_stats st;
+	uint64_t t_sync = arm_far_and_sleep();
+
+	lpt_set_fallback_rc(-EIO);
+	lpt_hfxo_errors(false, true);
+	lpt_run_to(t_start_world(t_sync) - ARM_LEAD - HFXO_LEAD + 700u);
+	lpt_stats(&st);
+	zassert_equal(lpt_state(), LPT_OFF);
+	zassert_equal(st.refused, 2);
+	zassert_equal(st.hfxo_errors, 2, "the start error and the refused fallback");
+	lpt_run(FAR_US);
+	lpt_stats(&st);
+	zassert_equal(st.hfxo_errors, 2, "nothing degrades twice");
+}

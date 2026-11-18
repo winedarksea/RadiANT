@@ -213,7 +213,7 @@ BUILD_ASSERT(RADIANT_LP_LF_HZ == 1000000,
  */
 #ifndef LP_HF_FALLBACK
 #define LP_HF_FALLBACK()                                                       \
-	(void)clock_control_async_on(DEVICE_DT_GET_ONE(nordic_nrf_clock),      \
+	clock_control_async_on(DEVICE_DT_GET_ONE(nordic_nrf_clock),      \
 				     CLOCK_CONTROL_NRF_SUBSYS_HF, NULL, NULL)
 #endif
 
@@ -470,6 +470,11 @@ static void lp_cancel_edges_locked(void);
  */
 static void lp_degrade_locked(void)
 {
+	int rc;
+
+	if (lp.state == LP_OFF) {
+		return;   /* already always-on: counted once */
+	}
 	LP_STAT(radiant_nrf_lp_stats.hfxo_errors++; radiant_nrf_lp_stats.refused = 2u);
 	lp_cancel_edges_locked();
 	if (lp_timer_stopped()) {
@@ -477,7 +482,13 @@ static void lp_degrade_locked(void)
 	}
 	lp.hfxo_wait = false;
 	lp.sw_start_pending = false;
-	LP_HF_FALLBACK();
+	rc = LP_HF_FALLBACK();
+	if (rc < 0 && rc != -EALREADY) {
+		/* No crystal by either route: the radio will not hold bit sync. */
+		LP_STAT(radiant_nrf_lp_stats.hfxo_errors++);
+		LOG_WRN("low power: HFXO failed and the always-on request was "
+			"refused too (%d)", rc);
+	}
 	lp_constlat(true);
 	if (lp.want) {
 		/* The staged operation cannot be met on this plan. */
@@ -664,16 +675,19 @@ static void lp_cancel_hf_locked(void)
 
 static void lp_cancel_edges_locked(void)
 {
+	bool wake = (lp.anchor == LP_ANCHOR_WAKE && lp.state == LP_ASLEEP);
+
 	lp_cancel_hf_locked();
-	if (lp.anchor == LP_ANCHOR_WAKE && lp.state == LP_ASLEEP) {
-		/* EDGE 2's DPPI may already have started the TIMER with its
-		 * interrupt still held off: put it back stopped and cleared. */
-		nrf_timer_task_trigger(TIMER_ADDR, NRF_TIMER_TASK_STOP);
-		nrf_timer_task_trigger(TIMER_ADDR, NRF_TIMER_TASK_CLEAR);
-	}
 	if (lp.anchor != LP_ANCHOR_NONE) {
 		z_nrf_grtc_timer_abort(lp.ch_anchor);
 		lp.anchor = LP_ANCHOR_NONE;
+	}
+	if (wake) {
+		/* EDGE 2's DPPI may already have started the TIMER with its
+		 * interrupt still held off: put it back stopped and cleared -
+		 * after the abort, so no START can land behind the STOP. */
+		nrf_timer_task_trigger(TIMER_ADDR, NRF_TIMER_TASK_STOP);
+		nrf_timer_task_trigger(TIMER_ADDR, NRF_TIMER_TASK_CLEAR);
 	}
 }
 
@@ -1082,6 +1096,13 @@ static void lp_fail_work_fn(struct k_work *w)
 	bool go;
 
 	ARG_UNUSED(w);
+	/*
+	 * The check and the terminal under one lock: released in between, an
+	 * interrupt could end this operation and arm the next, which would then
+	 * take the FAILED. The core callback behind deliver_terminal() runs with
+	 * interrupts off here, as its scheduler pass does in any case; this is
+	 * the work queue, so nothing else is held up but interrupts.
+	 */
 	key = irq_lock();
 	go = lp.defer_fail && radiant_op.id == lp.defer_op &&
 	     radiant_op.kind != OP_NONE && !radiant_op.terminal_sent;
@@ -1089,12 +1110,10 @@ static void lp_fail_work_fn(struct k_work *w)
 	if (go) {
 		radiant_staged.pending = false;
 		radiant_op.gate_failed = false;
-	}
-	irq_unlock(key);
-	if (go) {
-		lp_count_late_wake();
+		LP_STAT(radiant_nrf_lp_stats.late_wakes++);
 		deliver_terminal(RADIANT_RADIO_STATUS_FAILED);
 	}
+	irq_unlock(key);
 }
 
 static K_WORK_DEFINE(lp_fail_work, lp_fail_work_fn);

@@ -45,7 +45,7 @@ int fake_onoff_cancel_or_release(struct onoff_manager *mgr, struct onoff_client 
 #define onoff_request fake_onoff_request
 #define onoff_cancel_or_release fake_onoff_cancel_or_release
 /* The always-on fallback after an HFXO failure. */
-void fake_hf_fallback(void);
+int fake_hf_fallback(void);
 #define LP_HF_FALLBACK() fake_hf_fallback()
 
 #undef DT_CHOSEN
@@ -110,6 +110,7 @@ static struct {
 	bool     hf_cb_error;   /* the start completes with an error */
 	bool     hf_shared;     /* another client holds the HFXO: start is synchronous */
 	bool     fallback;      /* LP_HF_FALLBACK() ran */
+	int      fallback_rc;   /* what it returns */
 	uint64_t hf_on_since;
 	uint64_t hf_on_us;
 	int      constlat;
@@ -199,10 +200,13 @@ static void fw_hf_up(void)
 	fw.hf_on_since = fw.now;
 }
 
-void fake_hf_fallback(void)
+int fake_hf_fallback(void)
 {
 	fw.fallback = true;
-	fw_hf_up();
+	if (fw.fallback_rc == 0) {
+		fw_hf_up();
+	}
+	return fw.fallback_rc;
 }
 
 int fake_onoff_request(struct onoff_manager *mgr, struct onoff_client *cli)
@@ -602,6 +606,7 @@ void lpt_hfxo_errors(bool on_request, bool on_start)
 }
 void lpt_hfxo_shared(bool on) { fw.hf_shared = on; }
 bool lpt_hf_fallback(void) { return fw.fallback; }
+void lpt_set_fallback_rc(int rc) { fw.fallback_rc = rc; }
 void lpt_run_work(void) { k_msleep(2); }
 
 int lpt_boot_hfxo_timeout(bool *still_queued)

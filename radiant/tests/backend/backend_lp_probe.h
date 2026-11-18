@@ -108,6 +108,7 @@ void     lpt_hfxo_errors(bool on_request, bool on_start);
 /* Another client holds the HFXO, so a request completes synchronously. */
 void     lpt_hfxo_shared(bool on);
 bool     lpt_hf_fallback(void);
+void     lpt_set_fallback_rc(int rc);
 /* Let the system work queue run (a deferred FAILED). */
 void     lpt_run_work(void);
 /* lp_hfxo_boot() against an HFXO that never starts: its rc, and whether the
