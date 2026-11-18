@@ -474,23 +474,23 @@ config RADIANT_BACKEND_NRF_GATE_MPSL
 
 config RADIANT_NRF54L_MPSL_CONSTLAT_HOLD
 	bool "hold nRF54L constant-latency mode for the whole uptime (MPSL builds)"
-	default y
 	depends on RADIANT_BACKEND_NRF_GATE_MPSL && SOC_SERIES_NRF54L
 	help
 	  nRF54L errata 20 wants constant-latency mode (CONSTLAT) while the
 	  RADIO is in use. A direct build holds it from radio init until reset.
 
+	  n (default): no reference; CONSTLAT is left to MPSL, which acquires
+	  it before each event its scheduler dispatches and releases it after
+	  (it may skip the release between back-to-back events). MPSL's
+	  timeslots, where all of this backend's radio work runs, get that
+	  acquire: on the bench (2026-11-18, docs/bench-runbook.md) CONSTLAT
+	  was on in 90 % of samples during a scan with 89 % RX duty, and
+	  MPSL held a reference in every such sample.
+
 	  y: the backend takes one nrfx CONSTLAT reference at init and never
 	  frees it, so CONSTLAT is on for the whole uptime, as on a direct
 	  build. This costs the CONSTLAT current all the time (~549 uA
-	  ESTIMATE on the nRF54L15, Gate GA).
-
-	  n: no reference; CONSTLAT is left to MPSL, which acquires it before
-	  each event its scheduler dispatches and releases it after (it may
-	  skip the release between back-to-back events). Whether MPSL's
-	  timeslots - where this backend's radio work runs - get that
-	  acquire is not verified; check CONSTLATSTAT on the bench with the
-	  radio busy before choosing n.
+	  ESTIMATE on the nRF54L15, Gate GA) for no measured benefit.
 
 	  Either way NRFX_POWER is selected, so MPSL's acquire/release share
 	  nrfx's reference count with anything else that requests CONSTLAT.

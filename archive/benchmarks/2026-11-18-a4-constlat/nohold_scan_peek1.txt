@@ -1,0 +1,79 @@
+
+liveness: running  DHCSR 0x01140001 -> 0x01140001
+  note: power_diag uptime at first snapshot: 101008 ms
+  note: power_diag uptime advanced 60004 ms across the session (planned sleeps 59127 ms; the struct is republished 
+once a second)
+
+HFXO running: 200/200 = 100.0%  (95 % Wilson 98.1% .. 100.0%)
+CONSTLAT on:  178/200 = 89.0%  (95 % Wilson 83.9% .. 92.6%)
+first sample: XO.RUN=0x00000001 XO.STAT=0x00010001 CONSTLATSTAT=0x00000001 m_power_mode_refs=1
+last sample:  XO.RUN=0x00000001 XO.STAT=0x00010001 CONSTLATSTAT=0x00000001 m_power_mode_refs=1
+delays uniform 150..450 ms (seed 1396686253), 59127 ms planned sleep in total
+  The interval assumes independent samples; long HFXO on/off runs make it optimistic.
+
+m_power_mode_refs @ 0x20008682 (byte 2 of word 0x20008680), per sample:
+  value   0 (0x00):    23 samples, CONSTLAT on in 1, HFXO on in 23
+  value   1 (0x01):   177 samples, CONSTLAT on in 177, HFXO on in 177
+
+radiant_power_diag @ 0x20000300, 88 bytes (radiant_power_diag v1 per power/a1 2189023 (TO RECONCILE WITH A1))
+  snapshot 'before': ok
+    +0x000: 52504431 00000001 00000058 000000CA
+    +0x010: 00018A90 05F5F880 00000001 00000000
+    +0x020: 00000000 009C6E76 00000000 00000076
+    +0x030: FFFFFFFF FFFFFFFF FFFFFFFF 0000000B
+    +0x040: 00000001 FFFFFFFF FFFFFFFF FFFFFFFF
+    +0x050: FFFFFFFF FFFFFFFF
+    magic              0x52504431
+    version            1
+    size               88
+    seq                202
+    uptime_ms          101008
+    hfxo_req_us        100006016
+    hfxo_requests      1
+    hfxo_releases      0
+    radio_tx_us        0
+    radio_rx_us        10251894
+    radio_tx_ops       0
+    radio_rx_ops       118
+    cpu_active_us      NOT_MEASURED
+    cpu_load_permille  NOT_MEASURED
+    idle_entries       NOT_MEASURED
+    flags              0x0000000B
+    constlat_stat      0x00000001
+    ti_rf_core_on_us   NOT_MEASURED
+    ti_rf_powerups     NOT_MEASURED
+    ti_rf_pu_dur_us    NOT_MEASURED
+    ti_fs_errors       NOT_MEASURED
+    ti_fold_backsteps  NOT_MEASURED
+  snapshot 'after': ok
+    +0x000: 52504431 00000001 00000058 00000142
+    +0x010: 000274F4 09898EE0 00000001 00000000
+    +0x020: 00000000 03CC924A 00000000 000002DE
+    +0x030: FFFFFFFF FFFFFFFF FFFFFFFF 0000000B
+    +0x040: 00000001 FFFFFFFF FFFFFFFF FFFFFFFF
+    +0x050: FFFFFFFF FFFFFFFF
+    magic              0x52504431
+    version            1
+    size               88
+    seq                322
+    uptime_ms          161012
+    hfxo_req_us        160009952
+    hfxo_requests      1
+    hfxo_releases      0
+    radio_tx_us        0
+    radio_rx_us        63738442
+    radio_tx_ops       0
+    radio_rx_ops       734
+    cpu_active_us      NOT_MEASURED
+    cpu_load_permille  NOT_MEASURED
+    idle_entries       NOT_MEASURED
+    flags              0x0000000B
+    constlat_stat      0x00000001
+    ti_rf_core_on_us   NOT_MEASURED
+    ti_rf_powerups     NOT_MEASURED
+    ti_rf_pu_dur_us    NOT_MEASURED
+    ti_fs_errors       NOT_MEASURED
+    ti_fold_backsteps  NOT_MEASURED
+
+raw J-Link output: C:\wt_power_a4b\archive\benchmarks\2026-11-18-a4-constlat\nohold_scan_peek1_jlink.log  (re-analyse 
+with -ParseLog and the same arguments)

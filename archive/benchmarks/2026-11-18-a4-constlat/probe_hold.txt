@@ -1,0 +1,16 @@
+Using COM4 at 57600 baud (UART transport)
+
+[1/4] reset
+  OK: startup, reason 0x20 (STARTUP_COMMAND_RESET)
+
+[2/4] request capabilities
+  OK: 200300ba2600050001
+      max channels: 32, max networks: 3
+
+[3/4] request version
+  OK: 'RADIANT0.01B00'
+
+[4/4] request serial number (0x61, 0xC6)
+  OK: serial 0x18689802 (409507842), 0xC6 agrees
+
+PASS: reset -> startup -> capabilities -> version -> serial
