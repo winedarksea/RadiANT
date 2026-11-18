@@ -100,8 +100,8 @@ min_scenarios: 18
 # rule-6 sched cases in each of the five unit scenarios (observed 6373).
 # 5880 (+38) with the radiant.lp_clock scenario (power plan pass B2).
 # 5900 (+20) with the radiant.backend.lp scenario (power plan pass B3).
-# 5911 (+11) with the B3 review fixes' backend.lp cases.
-min_testcases: 5911
+# 5912 (+12) with the B3 review fixes' backend.lp cases.
+min_testcases: 5912
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -147,4 +147,4 @@ min_cases.trainer.model: 14
 min_cases.radiant.lp_clock: 38
 # radiant.backend.lp (power plan pass B3): the nRF backend with
 # CONFIG_RADIANT_NRF_LOW_POWER against a simulated GRTC, HFXO and TIMER.
-min_cases.radiant.backend.lp: 31
+min_cases.radiant.backend.lp: 32
