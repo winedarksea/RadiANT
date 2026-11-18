@@ -1,0 +1,131 @@
+{
+  "label": "ESTIMATE inputs - software proxies, no current meter",
+  "date": "2026-11-18",
+  "step1_mpsl_ackps": {
+    "hfxo": "200/200",
+    "hfxo_ci95": [
+      0.9811546736227335,
+      1
+    ],
+    "constlat": "0/200",
+    "constlat_ci95": [
+      0,
+      0.018845326377266575
+    ],
+    "liveness": "running",
+    "dhcsr": [
+      "0x00140001",
+      "0x01140001"
+    ]
+  },
+  "arms": [
+    {
+      "arm": "armA_default_quiet",
+      "window_s": 59.004,
+      "first_uptime_s": 16.002,
+      "hfxo": "200/200",
+      "hfxo_ci": [
+        98.1,
+        100
+      ],
+      "constlat": "200/200",
+      "constlat_ci": [
+        98.1,
+        100
+      ],
+      "hfxo_req_pct": 100.001,
+      "tx_us_s": 603.9,
+      "rx_us_s": 2597.5,
+      "tx_ops_s": 4.068,
+      "rx_ops_s": 4.068,
+      "tx_us_per_op": 148.5,
+      "rx_us_per_op": 638.6,
+      "cpu_pm": 4.14,
+      "idle_s": 25.35,
+      "flags": "0x3f",
+      "constlat_stat": 1,
+      "est_total_ua_itimer3": 810.9174333265541
+    },
+    {
+      "arm": "armB_lowpower_quiet",
+      "window_s": 60.005,
+      "first_uptime_s": 33.003,
+      "hfxo": "200/200",
+      "hfxo_ci": [
+        98.1,
+        100
+      ],
+      "constlat": "200/200",
+      "constlat_ci": [
+        98.1,
+        100
+      ],
+      "hfxo_req_pct": 100.0,
+      "tx_us_s": 603.9,
+      "rx_us_s": 2596.8,
+      "tx_ops_s": 4.066,
+      "rx_ops_s": 4.066,
+      "tx_us_per_op": 148.5,
+      "rx_us_per_op": 638.6,
+      "cpu_pm": 4.14,
+      "idle_s": 25.36,
+      "flags": "0x3f",
+      "constlat_stat": 1,
+      "est_total_ua_itimer3": 810.9184874743771
+    },
+    {
+      "arm": "armC_lowpower_oneway_quiet",
+      "window_s": 62.005,
+      "first_uptime_s": 33.003,
+      "hfxo": "200/200",
+      "hfxo_ci": [
+        98.1,
+        100
+      ],
+      "constlat": "200/200",
+      "constlat_ci": [
+        98.1,
+        100
+      ],
+      "hfxo_req_pct": 100.0,
+      "tx_us_s": 600.3,
+      "rx_us_s": 0.0,
+      "tx_ops_s": 4.064,
+      "rx_ops_s": 0.0,
+      "tx_us_per_op": 147.7,
+      "rx_us_per_op": 0.0,
+      "cpu_pm": 3.22,
+      "idle_s": 21.29,
+      "flags": "0x3f",
+      "constlat_stat": 1,
+      "est_total_ua_itimer3": 800.2967257205064
+    },
+    {
+      "arm": "armD_default_log",
+      "window_s": 62.005,
+      "first_uptime_s": 33.003,
+      "hfxo": "200/200",
+      "hfxo_ci": [
+        98.1,
+        100
+      ],
+      "constlat": "200/200",
+      "constlat_ci": [
+        98.1,
+        100
+      ],
+      "hfxo_req_pct": 100.0,
+      "tx_us_s": 603.1,
+      "rx_us_s": 2595.6,
+      "tx_ops_s": 4.064,
+      "rx_ops_s": 4.064,
+      "tx_us_per_op": 148.4,
+      "rx_us_per_op": 638.6,
+      "cpu_pm": 5.56,
+      "idle_s": 25.34,
+      "flags": "0x3f",
+      "constlat_stat": 1,
+      "est_total_ua_itimer3": 814.5918524957665
+    }
+  ]
+}

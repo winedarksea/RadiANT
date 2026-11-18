@@ -51,10 +51,13 @@
     behaviour (debug interface mode); cross-check the fraction against the
     struct's hfxo_req_us.
 
-    UNVERIFIED ON THE BENCH (this script was written without hardware): that
-    Commander's `connect` leaves the nRF54L15/52840/5340-net core running, and
-    the exact mem32/sleep output format. The DHCSR check, the power_diag
-    uptime notes and the strict output alignment are there to catch either.
+    BENCH-CHECKED ON THE nRF54L15 DK ONLY (Gate GA, 2026-11-18, J-Link V9.66,
+    OB firmware Feb 2025): `connect` left the core running (DHCSR S_HALT
+    clear at both ends, power_diag uptime advancing with the host clock), the
+    mem32 output parsed as assumed, and the only security-pattern lines were
+    the two benign Cortex-M33 banners below. The nRF52840 and 5340-net
+    presets are still unchecked on hardware. The DHCSR check, the power_diag
+    uptime notes and the strict output alignment stay to catch a change.
     UNSECURE = MASS ERASE. If the target is read-protected, J-Link may offer
     to unsecure it. JLink.exe's stdin carries explicit "n" answers; the output
     is scanned for security/erase/unlock wording (exit 3, loud warning); and

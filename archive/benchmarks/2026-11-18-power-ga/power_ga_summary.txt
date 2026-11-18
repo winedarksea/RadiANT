@@ -1,0 +1,283 @@
+Gate GA raw-derived summary, 2026-11-18. Every current figure below is an ESTIMATE (software proxies x datasheet currents; no meter).
+
+################ armA_default_quiet
+liveness: running  DHCSR 0x00140001 -> 0x01140001
+  note: power_diag uptime at first snapshot: 16002 ms
+  note: power_diag uptime advanced 59004 ms across the session (planned sleeps 58761 ms; the struct is republished 
+HFXO running: 200/200 = 100.0%  (95 % Wilson 98.1% .. 100.0%)
+CONSTLAT on:  200/200 = 100.0%  (95 % Wilson 98.1% .. 100.0%)
+    uptime_ms          16002
+    uptime_ms          75006
+  OK   packets                245 received, 245 expected over 60.1 s
+  OK   loss                   0.00 % (limit 1.50 %, one packet = 0.41 %)
+  OK   jitter                 stddev 6.7 ms, max 250.0 ms (limit 123.1 ms, period 246.3 ms)
+  OK   accumulator continuity 0 violation(s)
+  OK   sensor liveness        the event counter advanced on 120 of 244 packet pairs
+  FAIL common pages           80 x0, 81 x0, worst gap None (limit 121)
+  signal: mean -47.1 dBm (min -50, max -46, n=245) - ANT tracks to about -90
+heard on channel 0: device #12345, type 0x78
+ESTIMATE — no current meter; datasheet currents
+===============================================
+board nRF54L15 DK (DC/DC); interval 59.0 s from snapshots
+HFXO duty 100.00 % (jlink_peek register samples, 95 % CI 98.1..100.0 %)
+
+component              duty/state                       mA     avg uA
+idle floor             always                       0.0029       2.90
+radio TX +0 dBm        0.060 %                         4.8       2.90
+radio RX               0.260 %                         3.4       8.82
+HFXO (outside radio)   99.680 % of 100.000 % on       0.24     236.34
+CPU active             0.414 %                         2.6      10.76
+CONSTLAT               100.000 %                      0.55     549.20
+TOTAL (known parts)                                            810.92
+
+per broadcast: 148 us TX on-time -> 713 nC at 4.8 mA; once per HR period (8070/32768 s) = 2.89 uA
+broadcast rate 4.068 /s (HR period = 4.060 /s)
+per RX window: 639 us -> 2171 nC at 3.4 mA; once per HR period = 8.82 uA
+wakes: 25.4 idle entries /s
+
+citations (typical, 25 C, 3 V):
+  idle floor: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > Sleep, ION_IDLE8 (System ON, wake on pin + GRTC, LFXO, 256 KB RAM retained)
+  radio TX +0 dBm: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > RADIO transmitting/receiving, IRADIO_TX0 (0 dBm, HFXO)
+  radio RX: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > RADIO transmitting/receiving, IRADIO_RX0 (1 Mbps, HFXO)
+  HFXO (outside radio): Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > TIMER active, ITIMER3 (TIMER10 running at 32 MHz, HFXO; the stack's TIMER20 at 1 MHz draws less)
+  CPU active: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > CPU running, IAPPCPU0 (CoreMark 128 MHz from NVM, cache on; the cpuapp default clock is 128 MHz)
+  CONSTLAT: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > Sleep, ION_IDLE11 (System ON, wake on pin, Constant Latency mode, 0 KB RAM); used as ION_IDLE11 - ION_IDLE0
+note: HFXO row ITIMER3 is TIMER10 at 32 MHz on HFXO (leans high); --hfxo-row X2|X3 gives the crystal-core lower bound.
+note: hfxo_req_us advanced 59004672 us in a 59004000 us interval (an operation is charged whole when it ends); duty clamped to 100 %
+note: stack HFXO request counter says 100.000 % (sampled 100.000 %)
+mA = the cited datasheet row. Radio/CPU rows are counted over the floor (CONSTLAT over ION_IDLE0); overlaps are added, so this leans high.
+-- crystal-core lower bound (--hfxo-row X2):
+HFXO (outside radio)   99.680 % of 100.000 % on      0.034      33.89
+TOTAL (known parts)                                            608.47
+  HFXO (outside radio): Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), 32 MHz crystal oscillator (HFXO), ISTBY_X32M_X2 (core standby, 2.0x1.6 mm crystal; crystal core only - a lower bound)
+note: HFXO row ITIMER3 is TIMER10 at 32 MHz on HFXO (leans high); --hfxo-row X2|X3 gives the crystal-core lower bound.
+
+################ armB_lowpower_quiet
+liveness: running  DHCSR 0x00140001 -> 0x01140001
+  note: power_diag uptime at first snapshot: 33003 ms
+  note: power_diag uptime advanced 60005 ms across the session (planned sleeps 59562 ms; the struct is republished 
+HFXO running: 200/200 = 100.0%  (95 % Wilson 98.1% .. 100.0%)
+CONSTLAT on:  200/200 = 100.0%  (95 % Wilson 98.1% .. 100.0%)
+    uptime_ms          33003
+    uptime_ms          93008
+  OK   packets                245 received, 245 expected over 60.1 s
+  OK   loss                   -0.02 % (limit 1.50 %, one packet = 0.41 %)
+  OK   jitter                 stddev 7.5 ms, max 281.0 ms (limit 123.1 ms, period 246.3 ms)
+  OK   accumulator continuity 0 violation(s)
+  OK   sensor liveness        the event counter advanced on 120 of 244 packet pairs
+  FAIL common pages           80 x0, 81 x0, worst gap None (limit 121)
+  signal: mean -47.2 dBm (min -50, max -47, n=245) - ANT tracks to about -90
+heard on channel 0: device #12345, type 0x78
+ESTIMATE — no current meter; datasheet currents
+===============================================
+board nRF54L15 DK (DC/DC); interval 60.0 s from snapshots
+HFXO duty 100.00 % (jlink_peek register samples, 95 % CI 98.1..100.0 %)
+
+component              duty/state                       mA     avg uA
+idle floor             always                       0.0029       2.90
+radio TX +0 dBm        0.060 %                         4.8       2.90
+radio RX               0.260 %                         3.4       8.82
+HFXO (outside radio)   99.680 % of 100.000 % on       0.24     236.34
+CPU active             0.414 %                         2.6      10.76
+CONSTLAT               100.000 %                      0.55     549.20
+TOTAL (known parts)                                            810.92
+
+per broadcast: 149 us TX on-time -> 713 nC at 4.8 mA; once per HR period (8070/32768 s) = 2.89 uA
+broadcast rate 4.066 /s (HR period = 4.060 /s)
+per RX window: 639 us -> 2171 nC at 3.4 mA; once per HR period = 8.82 uA
+wakes: 25.4 idle entries /s
+
+citations (typical, 25 C, 3 V):
+  idle floor: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > Sleep, ION_IDLE8 (System ON, wake on pin + GRTC, LFXO, 256 KB RAM retained)
+  radio TX +0 dBm: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > RADIO transmitting/receiving, IRADIO_TX0 (0 dBm, HFXO)
+  radio RX: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > RADIO transmitting/receiving, IRADIO_RX0 (1 Mbps, HFXO)
+  HFXO (outside radio): Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > TIMER active, ITIMER3 (TIMER10 running at 32 MHz, HFXO; the stack's TIMER20 at 1 MHz draws less)
+  CPU active: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > CPU running, IAPPCPU0 (CoreMark 128 MHz from NVM, cache on; the cpuapp default clock is 128 MHz)
+  CONSTLAT: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > Sleep, ION_IDLE11 (System ON, wake on pin, Constant Latency mode, 0 KB RAM); used as ION_IDLE11 - ION_IDLE0
+note: HFXO row ITIMER3 is TIMER10 at 32 MHz on HFXO (leans high); --hfxo-row X2|X3 gives the crystal-core lower bound.
+note: hfxo_req_us advanced 60005024 us in a 60005000 us interval (an operation is charged whole when it ends); duty clamped to 100 %
+note: stack HFXO request counter says 100.000 % (sampled 100.000 %)
+mA = the cited datasheet row. Radio/CPU rows are counted over the floor (CONSTLAT over ION_IDLE0); overlaps are added, so this leans high.
+-- crystal-core lower bound (--hfxo-row X2):
+HFXO (outside radio)   99.680 % of 100.000 % on      0.034      33.89
+TOTAL (known parts)                                            608.47
+  HFXO (outside radio): Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), 32 MHz crystal oscillator (HFXO), ISTBY_X32M_X2 (core standby, 2.0x1.6 mm crystal; crystal core only - a lower bound)
+note: HFXO row ITIMER3 is TIMER10 at 32 MHz on HFXO (leans high); --hfxo-row X2|X3 gives the crystal-core lower bound.
+
+################ armC_lowpower_oneway_quiet
+liveness: running  DHCSR 0x00140001 -> 0x01140001
+  note: power_diag uptime at first snapshot: 33003 ms
+  note: power_diag uptime advanced 62005 ms across the session (planned sleeps 61217 ms; the struct is republished 
+HFXO running: 200/200 = 100.0%  (95 % Wilson 98.1% .. 100.0%)
+CONSTLAT on:  200/200 = 100.0%  (95 % Wilson 98.1% .. 100.0%)
+    uptime_ms          33003
+    uptime_ms          95008
+  OK   packets                244 received, 245 expected over 60.1 s
+  OK   loss                   0.41 % (limit 1.50 %, one packet = 0.41 %)
+  OK   jitter                 stddev 17.6 ms, max 500.0 ms (limit 123.1 ms, period 246.3 ms)
+  OK   accumulator continuity 0 violation(s)
+  OK   sensor liveness        the event counter advanced on 121 of 243 packet pairs
+  FAIL common pages           80 x0, 81 x0, worst gap None (limit 121)
+  signal: mean -47.2 dBm (min -52, max -46, n=244) - ANT tracks to about -90
+channel events: EVENT_RX_FAIL x1
+1 packet(s) missing, all of it reported by the radio as RX_FAIL, so it happened on the air.
+heard on channel 0: device #12345, type 0x78
+ESTIMATE — no current meter; datasheet currents
+===============================================
+board nRF54L15 DK (DC/DC); interval 62.0 s from snapshots
+HFXO duty 100.00 % (jlink_peek register samples, 95 % CI 98.1..100.0 %)
+
+component              duty/state                       mA     avg uA
+idle floor             always                       0.0029       2.90
+radio TX +0 dBm        0.060 %                         4.8       2.88
+radio RX               0.000 %                         3.4       0.00
+HFXO (outside radio)   99.940 % of 100.000 % on       0.24     236.96
+CPU active             0.322 %                         2.6       8.36
+CONSTLAT               100.000 %                      0.55     549.20
+TOTAL (known parts)                                            800.30
+
+per broadcast: 148 us TX on-time -> 709 nC at 4.8 mA; once per HR period (8070/32768 s) = 2.88 uA
+broadcast rate 4.064 /s (HR period = 4.060 /s)
+wakes: 21.3 idle entries /s
+
+citations (typical, 25 C, 3 V):
+  idle floor: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > Sleep, ION_IDLE8 (System ON, wake on pin + GRTC, LFXO, 256 KB RAM retained)
+  radio TX +0 dBm: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > RADIO transmitting/receiving, IRADIO_TX0 (0 dBm, HFXO)
+  radio RX: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > RADIO transmitting/receiving, IRADIO_RX0 (1 Mbps, HFXO)
+  HFXO (outside radio): Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > TIMER active, ITIMER3 (TIMER10 running at 32 MHz, HFXO; the stack's TIMER20 at 1 MHz draws less)
+  CPU active: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > CPU running, IAPPCPU0 (CoreMark 128 MHz from NVM, cache on; the cpuapp default clock is 128 MHz)
+  CONSTLAT: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > Sleep, ION_IDLE11 (System ON, wake on pin, Constant Latency mode, 0 KB RAM); used as ION_IDLE11 - ION_IDLE0
+note: HFXO row ITIMER3 is TIMER10 at 32 MHz on HFXO (leans high); --hfxo-row X2|X3 gives the crystal-core lower bound.
+note: hfxo_req_us advanced 62005120 us in a 62005000 us interval (an operation is charged whole when it ends); duty clamped to 100 %
+note: stack HFXO request counter says 100.000 % (sampled 100.000 %)
+mA = the cited datasheet row. Radio/CPU rows are counted over the floor (CONSTLAT over ION_IDLE0); overlaps are added, so this leans high.
+-- crystal-core lower bound (--hfxo-row X2):
+HFXO (outside radio)   99.940 % of 100.000 % on      0.034      33.98
+TOTAL (known parts)                                            597.32
+  HFXO (outside radio): Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), 32 MHz crystal oscillator (HFXO), ISTBY_X32M_X2 (core standby, 2.0x1.6 mm crystal; crystal core only - a lower bound)
+note: HFXO row ITIMER3 is TIMER10 at 32 MHz on HFXO (leans high); --hfxo-row X2|X3 gives the crystal-core lower bound.
+
+################ armD_default_log
+liveness: running  DHCSR 0x00140001 -> 0x01140001
+  note: power_diag uptime at first snapshot: 33003 ms
+  note: power_diag uptime advanced 62005 ms across the session (planned sleeps 61297 ms; the struct is republished 
+HFXO running: 200/200 = 100.0%  (95 % Wilson 98.1% .. 100.0%)
+CONSTLAT on:  200/200 = 100.0%  (95 % Wilson 98.1% .. 100.0%)
+    uptime_ms          33003
+    uptime_ms          95008
+  OK   packets                243 received, 245 expected over 60.1 s
+  OK   loss                   0.82 % (limit 1.50 %, one packet = 0.41 %)
+  OK   jitter                 stddev 23.3 ms, max 500.0 ms (limit 123.1 ms, period 246.3 ms)
+  OK   accumulator continuity 0 violation(s)
+  OK   sensor liveness        the event counter advanced on 120 of 242 packet pairs
+  FAIL common pages           80 x0, 81 x0, worst gap None (limit 121)
+  signal: mean -48.0 dBm (min -48, max -47, n=243) - ANT tracks to about -90
+channel events: EVENT_RX_FAIL x2
+2 packet(s) missing, all of it reported by the radio as RX_FAIL, so it happened on the air.
+heard on channel 0: device #12345, type 0x78
+ESTIMATE — no current meter; datasheet currents
+===============================================
+board nRF54L15 DK (DC/DC); interval 62.0 s from snapshots
+HFXO duty 100.00 % (jlink_peek register samples, 95 % CI 98.1..100.0 %)
+
+component              duty/state                       mA     avg uA
+idle floor             always                       0.0029       2.90
+radio TX +0 dBm        0.060 %                         4.8       2.89
+radio RX               0.260 %                         3.4       8.82
+HFXO (outside radio)   99.680 % of 100.000 % on       0.24     236.34
+CPU active             0.556 %                         2.6      14.44
+CONSTLAT               100.000 %                      0.55     549.20
+TOTAL (known parts)                                            814.59
+
+per broadcast: 148 us TX on-time -> 712 nC at 4.8 mA; once per HR period (8070/32768 s) = 2.89 uA
+broadcast rate 4.064 /s (HR period = 4.060 /s)
+per RX window: 639 us -> 2171 nC at 3.4 mA; once per HR period = 8.82 uA
+wakes: 25.3 idle entries /s
+
+citations (typical, 25 C, 3 V):
+  idle floor: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > Sleep, ION_IDLE8 (System ON, wake on pin + GRTC, LFXO, 256 KB RAM retained)
+  radio TX +0 dBm: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > RADIO transmitting/receiving, IRADIO_TX0 (0 dBm, HFXO)
+  radio RX: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > RADIO transmitting/receiving, IRADIO_RX0 (1 Mbps, HFXO)
+  HFXO (outside radio): Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > TIMER active, ITIMER3 (TIMER10 running at 32 MHz, HFXO; the stack's TIMER20 at 1 MHz draws less)
+  CPU active: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > CPU running, IAPPCPU0 (CoreMark 128 MHz from NVM, cache on; the cpuapp default clock is 128 MHz)
+  CONSTLAT: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > Sleep, ION_IDLE11 (System ON, wake on pin, Constant Latency mode, 0 KB RAM); used as ION_IDLE11 - ION_IDLE0
+note: HFXO row ITIMER3 is TIMER10 at 32 MHz on HFXO (leans high); --hfxo-row X2|X3 gives the crystal-core lower bound.
+note: hfxo_req_us advanced 62005056 us in a 62005000 us interval (an operation is charged whole when it ends); duty clamped to 100 %
+note: stack HFXO request counter says 100.000 % (sampled 100.000 %)
+mA = the cited datasheet row. Radio/CPU rows are counted over the floor (CONSTLAT over ION_IDLE0); overlaps are added, so this leans high.
+-- crystal-core lower bound (--hfxo-row X2):
+HFXO (outside radio)   99.680 % of 100.000 % on      0.034      33.89
+TOTAL (known parts)                                            612.14
+  HFXO (outside radio): Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), 32 MHz crystal oscillator (HFXO), ISTBY_X32M_X2 (core standby, 2.0x1.6 mm crystal; crystal core only - a lower bound)
+note: HFXO row ITIMER3 is TIMER10 at 32 MHz on HFXO (leans high); --hfxo-row X2|X3 gives the crystal-core lower bound.
+
+################ armD console (COM3, host unix time prefix)
+1795018326.182 *** Booting nRF Connect SDK v3.4.0-99553055607b ***
+1795018326.182 *** Using Zephyr OS v4.4.0-bf801e4e3d19 ***
+1795018326.182 [00:19:53.732,767] <inf> radiant_radio_nrf: timer @0x500ca000, 1001 us elapsed over a 1000 us wait
+1795018326.182 [00:19:53.732,809] <inf> radiant_radio_nrf: die temperature at init: 2.67 degC
+1795018326.182 [00:19:53.732,896] <inf> radiant_api: radiant up: 32 channels, 1 filters/window, 1 search sets
+1795018326.182 Transmitting as device 12345
+1795018338.187 [00:20:04.730,957] <inf> radiant_power: power dt_ms=10001 hfxo_pm=999 tx_us=5933 tx_ops=40 rx_us=25559 rx_ops=40 cpu_pm=4 idle_x10=252 constlat=1/1
+1795018348.155 [00:20:14.731,743] <inf> radiant_power: power dt_ms=10001 hfxo_pm=999 tx_us=6096 tx_ops=41 rx_us=26189 rx_ops=41 cpu_pm=5 idle_x10=253 constlat=1/1
+1795018358.130 [00:20:24.732,508] <inf> radiant_power: power dt_ms=10001 hfxo_pm=999 tx_us=5940 tx_ops=40 rx_us=25536 rx_ops=40 cpu_pm=5 idle_x10=252 constlat=1/1
+1795018368.119 [00:20:34.733,258] <inf> radiant_power: power dt_ms=10001 hfxo_pm=999 tx_us=6091 tx_ops=41 rx_us=26186 rx_ops=41 cpu_pm=5 idle_x10=253 constlat=1/1
+1795018378.092 [00:20:44.734,067] <inf> radiant_power: power dt_ms=10000 hfxo_pm=1000 tx_us=6091 tx_ops=41 rx_us=26199 rx_ops=41 cpu_pm=5 idle_x10=254 constlat=1/1
+1795018387.259 [00:20:53.783,070] <inf> radiant_api: noise rf=57 n=243 floor=-105 busy=-74 min=-106 max=-55 clip=0/0 lost=0
+1795018387.259 [00:20:54.734,808] <inf> radiant_power: power dt_ms=10001 hfxo_pm=999 tx_us=5929 tx_ops=40 rx_us=25551 rx_ops=40 cpu_pm=5 idle_x10=252 constlat=1/1
+1795018398.073 [00:21:04.735,701] <inf> radiant_power: power dt_ms=10001 hfxo_pm=999 tx_us=6081 tx_ops=41 rx_us=26182 rx_ops=41 cpu_pm=6 idle_x10=254 constlat=1/1
+1795018408.050 [00:21:14.736,535] <inf> radiant_power: power dt_ms=10001 hfxo_pm=999 tx_us=5946 tx_ops=40 rx_us=25554 rx_ops=40 cpu_pm=5 idle_x10=252 constlat=1/1
+1795018418.066 [00:21:24.737,411] <inf> radiant_power: power dt_ms=10001 hfxo_pm=999 tx_us=6051 tx_ops=41 rx_us=26172 rx_ops=41 cpu_pm=5 idle_x10=251 constlat=1/1
+1795018428.070 [00:21:34.738,189] <inf> radiant_power: power dt_ms=10000 hfxo_pm=1000 tx_us=6073 tx_ops=41 rx_us=26188 rx_ops=41 cpu_pm=5 idle_x10=253 constlat=1/1
+1795018438.052 [00:21:44.739,011] <inf> radiant_power: power dt_ms=10001 hfxo_pm=999 tx_us=5958 tx_ops=40 rx_us=25545 rx_ops=40 cpu_pm=5 idle_x10=251 constlat=1/1
+
+################ armD estimate from the log lines (--log --uart-on)
+ESTIMATE — no current meter; datasheet currents
+===============================================
+board nRF54L15 DK (DC/DC); interval 110.0 s from log (11 lines)
+HFXO duty 99.92 % (hfxo_req_us counter (stack's own request only))
+
+component              duty/state                       mA     avg uA
+idle floor             always                       0.0029       2.90
+radio TX +0 dBm        0.060 %                         4.8       2.89
+radio RX               0.259 %                         3.4       8.80
+HFXO (outside radio)   99.599 % of 99.918 % on        0.24     236.15
+CPU active             0.500 %                         2.6      12.99
+CONSTLAT               100.000 %                      0.55     549.20
+UART (declared on)     always                      UNKNOWN   excluded
+TOTAL (known parts)                                            812.92
+EXCLUDED from the total: UART (declared on)
+
+per broadcast: 148 us TX on-time -> 712 nC at 4.8 mA; once per HR period (8070/32768 s) = 2.89 uA
+broadcast rate 4.054 /s (HR period = 4.060 /s)
+per RX window: 639 us -> 2172 nC at 3.4 mA; once per HR period = 8.82 uA
+wakes: 25.2 idle entries /s
+
+citations (typical, 25 C, 3 V):
+  idle floor: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > Sleep, ION_IDLE8 (System ON, wake on pin + GRTC, LFXO, 256 KB RAM retained)
+  radio TX +0 dBm: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > RADIO transmitting/receiving, IRADIO_TX0 (0 dBm, HFXO)
+  radio RX: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > RADIO transmitting/receiving, IRADIO_RX0 (1 Mbps, HFXO)
+  HFXO (outside radio): Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > TIMER active, ITIMER3 (TIMER10 running at 32 MHz, HFXO; the stack's TIMER20 at 1 MHz draws less)
+  CPU active: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > CPU running, IAPPCPU0 (CoreMark 128 MHz from NVM, cache on; the cpuapp default clock is 128 MHz)
+  CONSTLAT: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > Sleep, ION_IDLE11 (System ON, wake on pin, Constant Latency mode, 0 KB RAM); used as ION_IDLE11 - ION_IDLE0
+  UART (declared on): UNKNOWN: nRF54L15 datasheet lists no UARTE current
+note: HFXO row ITIMER3 is TIMER10 at 32 MHz on HFXO (leans high); --hfxo-row X2|X3 gives the crystal-core lower bound.
+mA = the cited datasheet row. Radio/CPU rows are counted over the floor (CONSTLAT over ION_IDLE0); overlaps are added, so this leans high.
+
+################ ti_hr_tx, 300 s on the Pro Micro
+  OK   packets                1216 received, 1219 expected over 300.0 s
+  OK   loss                   0.24 % (limit 1.50 %, one packet = 0.08 %)
+  OK   jitter                 stddev 13.9 ms, max 500.0 ms (limit 123.1 ms, period 246.3 ms)
+  OK   accumulator continuity 0 violation(s)
+  OK   sensor liveness        the event counter advanced on 600 of 1215 packet pairs
+  FAIL common pages           80 x0, 81 x0, worst gap None (limit 121)
+  timing: 6.96 ms off the 246.3 ms slot grid by the host clock, 0.007 ms by the radio's
+  signal: mean -43.3 dBm (min -44, max -40, n=1216) - ANT tracks to about -90
+  heart_rate_bpm: mean 120.00 (min 120.00, max 120.00, n=600), mean abs error 0.00
+channel events: EVENT_RX_FAIL x3
+3 packet(s) missing, all of it reported by the radio as RX_FAIL, so it happened on the air.
+heard on channel 0: device #12345, type 0x78
+
+################ step 1: MPSL ackps L15 before reflash (security-pattern lines in the J-Link output, both benign banners)
+Security extension: implemented
+Secure debug: enabled
