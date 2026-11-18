@@ -66,8 +66,8 @@
  * hundred microseconds, well inside the ~4.3 ms the core stays on per slot,
  * so it does not keep the crystal on longer. TI's CC26x2 datasheets give a
  * calibrated RCOSC_HF of about +/-0.25 %, far inside a UART's tolerance: a
- * console keeps working. (apps/dongle_ti's host link is kept off it anyway;
- * its CMakeLists.txt refuses this option.) Unaffected: the AON RTC and with
+ * console keeps working. (An ANT host link is still refused, as policy - see
+ * the end of this section.) Unaffected: the AON RTC and with
  * it Zephyr's system timer, ClockP and the RF driver's wake timer, all on
  * the 32.768 kHz crystal (SCLK_LF = XOSC_LF in the CCFG); and the radio timer,
  * which runs only while the core is on, after the RAT sync. RAT/RTC sync is
@@ -98,7 +98,10 @@
  * coexistence builds the second client's timing (and CC26XX_COEX_PHY_SWITCH_
  * LEAD_US) was budgeted with the crystal always on and has never run against
  * a peer; on the cc2652p_dongle, a dongle whose antenna switch is not
- * settled (see its defconfig).
+ * settled (see its defconfig). Also refused, as policy, in any image with an
+ * ANT host link (an ANT_DONGLE_TRANSPORT_* choice: apps/dongle,
+ * apps/dongle_ti, apps/dongle_thread): a dongle's RF core is rarely off long
+ * enough to gain anything, and a host link on RCOSC_HF has never been tested.
  *
  * WHAT THE COUNTS MEAN (CONFIG_RADIANT_POWER_DIAG).
  *
@@ -222,6 +225,16 @@
 #error "CONFIG_RADIANT_CC26XX_XOSC_HF_RELEASE is refused on a build with a second RF " \
 	"client (802.15.4/BLE coexistence): that client's timing was budgeted with the " \
 	"crystal always on. Turn it off for this build."
+#endif
+
+#if defined(CONFIG_RADIANT_CC26XX_XOSC_HF_RELEASE) && \
+	(defined(CONFIG_ANT_DONGLE_TRANSPORT_UART) || \
+	 defined(CONFIG_ANT_DONGLE_TRANSPORT_USB_LEGACY) || \
+	 defined(CONFIG_ANT_DONGLE_TRANSPORT_USB_NEXT))
+#error "CONFIG_RADIANT_CC26XX_XOSC_HF_RELEASE is refused in an image with an ANT " \
+	"host link (CONFIG_ANT_DONGLE_TRANSPORT_*): a dongle's RF core is rarely off " \
+	"long enough to gain anything, and a host link on RCOSC_HF is untested. " \
+	"The option is for battery nodes (radiant/samples/hr_transmitter ti_lowpower.conf)."
 #endif
 
 /* xoscHfAlwaysNeeded: hal_ti's true unless the release option is on. */

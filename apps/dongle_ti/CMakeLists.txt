@@ -67,16 +67,6 @@ project(radiant_dongle_ti)
 
 ant_assert_radio("radiant_dongle_ti")
 
-# The XOSC_HF release is for a battery node (radiant/samples/hr_transmitter's
-# ti_lowpower.conf). Here the ANT host link is a UART, which would run on the
-# RC oscillator between radio slots, and a dongle's RF core is rarely off long
-# enough to gain anything. See radiant/src/radiant_ti_rf_hwattrs.c.
-if(CONFIG_RADIANT_CC26XX_XOSC_HF_RELEASE)
-  message(FATAL_ERROR
-    "apps/dongle_ti refuses CONFIG_RADIANT_CC26XX_XOSC_HF_RELEASE: its host link "
-    "is a UART on SCLK_HF. The option is for battery nodes only.")
-endif()
-
 target_sources(app PRIVATE src/main.c)
 
 # ── apps/common: the antr_* seam, the serial bridge and its transports ─────

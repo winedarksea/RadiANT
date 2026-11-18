@@ -1677,11 +1677,12 @@ config RADIANT_CC26XX_XOSC_HF_RELEASE
 	  the analysis at the top of src/radiant_ti_rf_hwattrs.c.
 
 	  Enabled only in radiant/samples/hr_transmitter/ti_lowpower.conf.
-	  Never in apps/dongle_ti: its host link is a UART, which would run
-	  on RCOSC_HF between slots, and a dongle's RF core is rarely off
-	  long enough to gain anything (its CMakeLists.txt refuses it).
-	  Refused at compile time on the cc2652p_dongle and on 802.15.4/BLE
-	  coexistence builds, as RADIANT_POWER_DIAG is.
+	  Refused at compile time, as policy, in any image with an ANT host
+	  link (CONFIG_ANT_DONGLE_TRANSPORT_*, e.g. apps/dongle_ti): a
+	  dongle's RF core is rarely off long enough to gain anything, and
+	  a host link on RCOSC_HF is untested. Also refused on the
+	  cc2652p_dongle and on 802.15.4/BLE coexistence builds, as
+	  RADIANT_POWER_DIAG is.
 
 	  OFF BY DEFAULT: with it off nothing changes, not even the hwattrs
 	  object.
