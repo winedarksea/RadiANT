@@ -20,10 +20,11 @@ config HR_TX_RELEASE_HFXO
 	imply RADIANT_NRF_LOW_POWER
 	help
 	  Turns on CONFIG_RADIANT_NRF_LOW_POWER (power plan Track B) wherever
-	  its dependencies hold - today the nRF54L15 direct backend with the
-	  LF crystal - and leaves it off without a Kconfig error elsewhere
-	  (the nRF52840 boards until power plan pass B5), so lowpower.conf
-	  stays one fragment for every board. build_all.ps1 asserts which
-	  rows end up with it.
+	  its dependencies hold - the nRF54L15 and nRF52840 direct backends
+	  with the LF crystal - and leaves it off without a Kconfig error
+	  elsewhere (an LF clock synthesised from the HFXO, as the Pro Micro
+	  clones without a 32 kHz crystal need, or an RC LF clock; the TI
+	  boards), so lowpower.conf stays one fragment for every board.
+	  build_all.ps1 asserts which rows end up with it.
 
 source "Kconfig.zephyr"

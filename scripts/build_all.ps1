@@ -307,8 +307,10 @@ $treadmillTargets = @(
 # hrtx_promicro_lp by its directory name. -Only "hrtx_*", -Only "ti_hr_tx*".
 #
 # Asserted below: CONFIG_RADIANT_NRF_LOW_POWER exactly on the lp rows
-# (lowpower.conf implies it; the nRF52840 has no implementation until power
-# plan pass B5, so its lowpower row must come out without it), the HAL,
+# (lowpower.conf implies it: on with the LF crystal on the nRF54L15 and, since
+# power plan pass B5, the nRF52840; off on the Pro Micro's synth.conf variant,
+# whose LF clock is synthesised from the HFXO the option exists to release),
+# the HAL,
 # CONFIG_SERIAL and CONFIG_LOG off on the lowpower.conf
 # rows (no UART driver linked means no UARTE is ever enabled, which is the point
 # of that fragment), CONFIG_HR_TX_ONE_WAY in both directions, on the
@@ -321,7 +323,11 @@ $sampleTargets = @(
     @{ dir='hrtx_l15_lp_1way'; board='nrf54l15dk/nrf54l15/cpuapp';     artifact='radiant_hrtx_nrf54l15dk_lp_1way.hex';  pkg='hex'; radiant='nrf'; conf='lowpower.conf;one_way.conf'; lowpower=$true;  one_way=$true;  lp=$true }
     # Plus REG1 on DC/DC (dcdc_promicro.overlay; owner confirmed the clone's
     # DCC inductors 2026-11-18). REG0 stays as the board leaves it.
-    @{ dir='hrtx_promicro_lp'; board='promicro_nrf52840/nrf52840/uf2'; artifact='radiant_hrtx_promicro_lp.uf2';         pkg='uf2'; radiant='nrf'; conf='lowpower.conf';              lowpower=$true;  one_way=$false; overlay='dcdc_promicro.overlay'; dcdc=$true; lp=$false }
+    @{ dir='hrtx_promicro_lp'; board='promicro_nrf52840/nrf52840/uf2'; artifact='radiant_hrtx_promicro_lp.uf2';         pkg='uf2'; radiant='nrf'; conf='lowpower.conf';              lowpower=$true;  one_way=$false; overlay='dcdc_promicro.overlay'; dcdc=$true; lp=$true; assert_config=@('CONFIG_NRF_RTC_TIMER_USER_CHAN_COUNT=2', 'CONFIG_RADIANT_NRF_LP_HFXO_STARTUP_US=500') }
+    # The same board without its 32 kHz crystal (apps/dongle's synth.conf:
+    # LFCLK synthesised from the HFXO): lowpower.conf's imply must drop the
+    # HFXO release there, cleanly, and leave RTC1's user channels at 0.
+    @{ dir='hrtx_promicro_lp_synth'; board='promicro_nrf52840/nrf52840/uf2'; artifact='radiant_hrtx_promicro_lp_synth.uf2'; pkg='uf2'; radiant='nrf'; conf='lowpower.conf;../../../apps/dongle/synth.conf'; lowpower=$true; one_way=$false; lp=$false; assert_config=@('CONFIG_CLOCK_CONTROL_NRF_K32SRC_SYNTH=y', 'CONFIG_NRF_RTC_TIMER_USER_CHAN_COUNT=0') }
 )
 # The TI LaunchXL, under the same hal_ti condition as the dongle_ti rows above
 # (skipped with their message when it is absent). Not in the sample's

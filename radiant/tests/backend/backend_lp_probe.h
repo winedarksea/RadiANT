@@ -1,8 +1,9 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * The low-power scenario's handle on backend_lp_under_test.c: the nRF backend
- * with CONFIG_RADIANT_NRF_LOW_POWER, its GRTC, HFXO and TIMER simulated on one
- * world clock in microseconds (the GRTC's ticks).
+ * The low-power scenarios' handle on backend_lp_under_test.c: the nRF backend
+ * with CONFIG_RADIANT_NRF_LOW_POWER, its LF counter (the GRTC, or RTC1 with
+ * -DLPT_RTC), HFXO and TIMER simulated on one world clock. Every time here is
+ * in microseconds of world time.
  */
 #ifndef RADIANT_TESTS_BACKEND_LP_PROBE_H_
 #define RADIANT_TESTS_BACKEND_LP_PROBE_H_
@@ -12,6 +13,55 @@
 
 /* World time the radio TIMER starts at: radio time t is world LPT_W0 + t. */
 #define LPT_W0 1000u
+
+/*
+ * What differs between the two scenarios, for the cases shared by both
+ * (src_lp/). The wake leads are the backend's own: LP_ARM_LEAD_US (230)
+ * after EDGE 2, and CONFIG_RADIANT_NRF_LP_HFXO_STARTUP_US + 100 from EDGE 1
+ * to EDGE 2.
+ *
+ *   LPT_TICK_US            one LF tick, rounded up. A wake edge is the last
+ *                          tick at or before its ideal time, so an edge is
+ *                          early by less than this.
+ *   LPT_ASLEEP_SLACK_US    how far an asleep reading may lag world time: it
+ *                          converts the last tick that began (0 on the 1 us
+ *                          GRTC).
+ *   LPT_HFXO_LEAD          EDGE 1 to EDGE 2: 800 + 100 (nRF54L15), 500 + 100
+ *                          (nRF52840).
+ *   LPT_HFXO_STARTUP       the simulated crystal's start-up: spike B1's
+ *                          maximum on each board (680, 418).
+ *   LPT_CONSTLAT_ON        CONSTLAT references while awake: 1 on the nRF54L
+ *                          (errata 20), 0 on the nRF52 (no CONSTLAT).
+ *   LPT_ABORT_KEEPS_LATCHED  1 if an aborted compare's latched event still
+ *                          reaches its handler (nrfx's GRTC), 0 if the
+ *                          abort clears it (nrf_rtc_timer).
+ *   LPT_ANCHOR_SERVICED_FIRST  1 if the anchor channel is serviced before
+ *                          the HF channel when both are pending: channel
+ *                          allocation order against the drivers' ascending
+ *                          loops (this fake's GRTC hands out 0 then 1; RTC1's
+ *                          driver hands out 2 then 1).
+ *   LPT_LF_OFFSET          the LF counter at world 0: RTC1 starts 3 s short
+ *                          of its 24-bit wrap, so every long case crosses it.
+ */
+#if defined(LPT_RTC)
+#define LPT_TICK_US               31u
+#define LPT_ASLEEP_SLACK_US       31u
+#define LPT_HFXO_LEAD             600u
+#define LPT_HFXO_STARTUP          418u
+#define LPT_CONSTLAT_ON           0
+#define LPT_ABORT_KEEPS_LATCHED   0
+#define LPT_ANCHOR_SERVICED_FIRST 0
+#define LPT_LF_OFFSET             ((1ull << 24) - 3ull * 32768ull)
+#else
+#define LPT_TICK_US               1u
+#define LPT_ASLEEP_SLACK_US       0u
+#define LPT_HFXO_LEAD             900u
+#define LPT_HFXO_STARTUP          680u
+#define LPT_CONSTLAT_ON           1
+#define LPT_ABORT_KEEPS_LATCHED   1
+#define LPT_ANCHOR_SERVICED_FIRST 1
+#define LPT_LF_OFFSET             0ull
+#endif
 
 /* lp_state, as the stats struct reports it. */
 #define LPT_OFF       0
@@ -47,6 +97,8 @@ struct lpt_probe {
 void     lpt_reset(void);
 /* lpt_reset() with LFCLK running from the RC oscillator. */
 void     lpt_reset_lf_rc(void);
+/* lpt_reset() with the LF counter at `lf_off` at world 0. */
+void     lpt_reset_lf_offset(uint64_t lf_off);
 struct lpt_probe *lpt_probe(void);
 void     lpt_stats(struct lpt_stats *out);
 
@@ -55,6 +107,15 @@ uint64_t lpt_radio_now(void);
 /* Run the world to `world` (absolute) or by `us`, firing what falls due. */
 void     lpt_run_to(uint64_t world);
 void     lpt_run(uint64_t us);
+/* World time of the armed anchor-channel compare; false if none is armed. */
+bool     lpt_anchor_world(uint64_t *world);
+/* Run to `us` before the armed anchor-channel compare (nothing if none),
+ * or to just after it. */
+void     lpt_run_to_anchor_minus(uint32_t us);
+void     lpt_run_past_anchor(void);
+/* The LF counter (extended), and a run to just after its next step. */
+uint64_t lpt_lf_ticks(void);
+void     lpt_run_to_next_lf_tick(uint32_t plus_us);
 
 /* The transmit's TXEN lead before t_sync. */
 uint64_t lpt_tx_lead(void);
@@ -93,13 +154,31 @@ uint64_t lpt_hfxo_on_us(void);
 uint32_t lpt_disable_tasks(void);
 bool     lpt_timer_at_anchor(void);
 
+/* The hardware and driver models, for the RTC-specific cases. */
+struct lpt_hw {
+	uint32_t timer_count;        /* the TIMER's counter now */
+	uint32_t shutdowns;          /* TIMER SHUTDOWN tasks */
+	uint32_t stop_then_shutdown; /* ... of them straight after a STOP */
+	uint32_t cc5;
+	bool     cc5_poisoned;       /* CC5 still holds what SHUTDOWN left */
+	uint64_t timer_t0_world_q;   /* world time (1/512 us) the TIMER last started */
+	uint32_t exact_refusals;     /* exact compares the driver refused */
+	uint32_t span_refusals;      /* compares refused as beyond its span */
+	uint32_t min_exact_ahead;    /* least ticks ahead an accepted exact compare was */
+	uint32_t wait_edges;         /* software starts that waited for the LF step */
+	uint32_t hf_sets;            /* writes to the HF channel */
+};
+void     lpt_hw(struct lpt_hw *out);
+
 /* Knobs. */
 void     lpt_set_hfxo_startup(uint32_t us);
 /* The next anchor-channel compare fires without its DPPI (no TIMER START,
  * no capture). */
 void     lpt_break_next_dppi(void);
-/* The next anchor-channel compare write takes `ticks` (a preemption). */
-void     lpt_delay_next_anchor_set(uint32_t ticks);
+/* The next anchor-channel compare write is preempted for `us`: on the GRTC
+ * after the write lands (before the caller's re-read), on RTC1 before the
+ * driver checks it. */
+void     lpt_delay_next_anchor_set(uint32_t us);
 void     lpt_set_disable_hangs(bool on);
 /* Hold the GRTC interrupt off until world time `world` (0: none). */
 void     lpt_hold_isr_until(uint64_t world);

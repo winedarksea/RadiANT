@@ -6,7 +6,9 @@
  * Provenance: clean-room. Written from radiant_radio_nrf.c's own clock and
  * gate seam, src/radiant_radio_nrf_lp.h (the arithmetic, pass B2), the spike
  * results in docs/spike-lp-clock-results.md (pass B1), and Zephyr's public
- * nrf_grtc_timer, onoff and clock_control APIs. Nothing derives from sdk-ant
+ * nrf_grtc_timer, nrf_rtc_timer, onoff and clock_control APIs, and the nrfx
+ * TIMER HAL's SHUTDOWN task with the nRF52 anomaly 78 workaround nrfx's own
+ * timer driver applies. Nothing derives from sdk-ant
  * or any ANT+ document.
  *
  * NOT A TRANSLATION UNIT OF ITS OWN. radiant_radio_nrf.c #includes this file
@@ -16,11 +18,18 @@
  * compiles both by including one. CMake compiles it through that include and
  * never on its own; with the option off not one line of it is seen.
  *
- * SCOPE. The direct (unarbitrated) backend on the nRF54L15: the LF counter is
- * the GRTC SYSCOUNTER (1 MHz, the system timer's), read extended (64-bit
- * z_nrf_grtc_timer_read()), and the GRTC and the radio TIMER share DPPIC20, so
- * the anchor is one same-domain DPPI connection with no PPIB (spike B1 S2).
- * Kconfig refuses the nRF52/nRF5340 RTC1 path (pass B5) and MPSL (pass B6).
+ * SCOPE. The direct (unarbitrated) backend, on whichever LF counter the system
+ * timer runs - one state machine, two counters behind THE LF COUNTER SEAM
+ * below:
+ *   - nRF54L15 (pass B3): the GRTC SYSCOUNTER (1 MHz), read extended (64-bit
+ *     z_nrf_grtc_timer_read()); the GRTC and the radio TIMER share DPPIC20,
+ *     so the anchor is one same-domain DPPI connection with no PPIB (spike
+ *     B1 S2).
+ *   - nRF52840 (pass B5): RTC1 (32768 Hz, 24-bit), read extended (64-bit
+ *     z_nrf_rtc_timer_read()) with two of its user channels; the anchor is
+ *     one PPI channel with a FORK; the radio TIMER is SHUT DOWN after it is
+ *     stopped (nRF52 anomaly 78).
+ * Kconfig refuses MPSL (pass B6).
  *
  * THE GATE SEAM. This file is the build's gate (radiant_radio_nrf_gate.h) in
  * place of radiant_radio_nrf_gate_direct.c. Awake, gate_acquire() answers
@@ -33,30 +42,34 @@
  * compares wired to RADIO tasks by DPPI - is unchanged, because EDGE 2 below
  * brings the TIMER back on an exact anchor before anything is programmed.
  *
- * ONE SLEEP, FOUR EDGES. The GRTC carries two of this file's compares: the
- * ANCHOR channel, whose compare event is wired by DPPI to TIMER START and,
- * forked, TIMER CAPTURE[5] (CC5) - permanently, since START on a running
+ * ONE SLEEP, FOUR EDGES. The LF counter carries two of this file's compares:
+ * the ANCHOR channel, whose compare event is wired by (D)PPI to TIMER START
+ * and, forked, TIMER CAPTURE[5] (CC5) - permanently, since START on a running
  * TIMER does nothing - and the HF channel, an interrupt only.
  *
  *   RELEASE   (anchor ch.) CC5 captures the running TIMER on a known LF tick;
- *             the interrupt then stops and clears the TIMER, takes the
+ *             the interrupt then stops and clears the TIMER (on the
+ *             nRF52, stops and SHUTS IT DOWN: lp_timer_halt()), takes the
  *             release (radiant_lp_release), releases the HFXO and frees
  *             CONSTLAT, and plans the wake for the staged operation.
  *   EDGE 1    (HF ch.) the interrupt requests the HFXO (and CONSTLAT),
  *             start-up + RADIANT_LP_HFXO_ISR_MARGIN_US before EDGE 2.
- *   EDGE 2    (anchor ch.) DPPI starts the cleared TIMER on the tick; the
+ *   EDGE 2    (anchor ch.) (D)PPI starts the cleared TIMER on the tick; the
  *             interrupt loads the fold (radiant_lp_wake) and grants the staged
  *             operation, LP_ARM_LEAD_US before it starts.
  *   REANCHOR  (anchor ch.) a capture of the running TIMER after a wake whose
  *             TIMER did not start on a stable crystal (see below).
  *
  * The edges are never the anchor the wrong way round: no TIMER or RADIO event
- * ever triggers a GRTC CAPTURE (spike B1's stale-SYSCOUNTER trap).
+ * ever triggers an LF counter CAPTURE (spike B1's stale-SYSCOUNTER trap on
+ * the GRTC; the nRF52 RTC has no capture task at all).
  *
  * FAILURE PATHS, ALL COUNTED (struct radiant_nrf_lp_stats):
  *   - A compare that, re-read after it is written, is not still
  *     LP_POSTWRITE_LEAD ticks ahead is a LATE ANCHOR (the header's driver
- *     rule: z_nrf_grtc_timer_set() writes a passed value unchanged). At a
+ *     rules: z_nrf_grtc_timer_set() writes a passed value unchanged;
+ *     z_nrf_rtc_timer_exact_set(), which every anchoring RTC edge uses,
+ *     refuses one closer than its 3-tick minimum). At a
  *     release nothing has been stopped yet, so the backend simply stays
  *     awake. At EDGE 2 the TIMER cannot be trusted to have started on the
  *     tick: the staged operation fails through the existing FAILED terminal,
@@ -73,7 +86,7 @@
  *     HFXO is requested in software and EDGE 2 placed one start-up later;
  *     the grant then runs program_*()'s ETIME check, so a wake that came too
  *     late fails the operation (FAILED) rather than transmitting late.
- *   - EDGE 2 serviced while still ASLEEP (the GRTC interrupt was held off
+ *   - EDGE 2 serviced while still ASLEEP (the LF interrupt was held off
  *     past both wake edges, and the anchor channel, the lower index, is
  *     serviced first): the TIMER did start on the tick, so the handler does
  *     EDGE 1's work first and then takes the edge (counted in edge_order).
@@ -112,13 +125,13 @@
  * detect (rx_arm(), radiant_radio_ed()): searches and acquisition never sleep.
  *
  * LOCKING. Every field of `lp` and every call into radiant_radio_nrf_lp.h,
- * including the GRTC counter read that feeds it, is under CLOCK_LOCK, the
+ * including the LF counter read that feeds it, is under CLOCK_LOCK, the
  * same critical section as the TIMER fold (irq_lock on the direct build;
  * MPSL builds, where it is PRIMASK, are refused). The completion work a wake
  * triggers - radiant_nrf_gate_on_grant(), a FAILED terminal and the core
  * callback and scheduler pass behind it - runs after the lock is dropped
- * (lp_flush()), from the GRTC interrupt (the system timer's, priority 1 on
- * the nRF54L15), the clock interrupt (the HFXO callback) or the system work
+ * (lp_flush()), from the LF counter's interrupt (the system timer's: GRTC
+ * or RTC1, priority 1 by default on both families), the clock interrupt (the HFXO callback) or the system work
  * queue (a deferred FAILED). None is zero-latency, but none is the RADIO
  * interrupt either: they rely on the core's callbacks being callable from
  * any ordinary interrupt or thread, under the scheduler's own interrupt lock,
@@ -163,10 +176,11 @@
  *   0x48 spurious           compare interrupts for an edge no longer armed
  *   0x4C hfxo_errors        HFXO requests or callbacks that returned an error
  *   0x50 refused            1 if the option refused itself at init (LFCLK
- *                           not the crystal, no GRTC channel, no DPPI); 2 if
+ *                           not the crystal, no LF channel, no (D)PPI); 2 if
  *                           it dropped to always-on after an HFXO error
  *   0x54 last_disagree_q    signed LF image minus TIMER at the last exact
- *                           release, q units (us on the GRTC)
+ *                           release, q units (us on the GRTC, 1/512 us
+ *                           on the RTC)
  *   0x58 edge_order         EDGE 2 handled before EDGE 1 (a held interrupt)
  */
 
@@ -175,7 +189,11 @@
 #endif
 
 #include <zephyr/sys/onoff.h>
+#if defined(CONFIG_NRF_GRTC_TIMER)
 #include <zephyr/drivers/timer/nrf_grtc_timer.h>
+#elif defined(CONFIG_NRF_RTC_TIMER)
+#include <zephyr/drivers/timer/nrf_rtc_timer.h>
+#endif
 #include <hal/nrf_clock.h>
 #if defined(NRF54L_ERRATA_20_PRESENT)
 #include <nrfx_power.h>
@@ -183,9 +201,9 @@
 
 #include "radiant_radio_nrf_lp.h"
 
-BUILD_ASSERT(IS_ENABLED(CONFIG_NRF_GRTC_TIMER),
-	     "RADIANT_NRF_LOW_POWER is implemented on the GRTC (nRF54L) only; "
-	     "the RTC1 path is power plan pass B5");
+BUILD_ASSERT(IS_ENABLED(CONFIG_NRF_GRTC_TIMER) || IS_ENABLED(CONFIG_NRF_RTC_TIMER),
+	     "RADIANT_NRF_LOW_POWER keeps time on the system timer's LF counter: "
+	     "the GRTC (nRF54L) or RTC1 (nRF52)");
 BUILD_ASSERT(!IS_ENABLED(CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL),
 	     "RADIANT_NRF_LOW_POWER is the direct backend's gate; MPSL is pass B6");
 #if defined(CORE_CB_DEFERRED)
@@ -195,15 +213,13 @@ BUILD_ASSERT(DT_PROP_OR(RADIANT_TIMER_NODE, cc_num, 0) >= 6,
 	     "RADIANT_NRF_LOW_POWER needs CC5 of the radio TIMER for its anchor");
 
 /*
- * The LF counter's rate. The GRTC format below is exact only for a 1 MHz
- * SYSCOUNTER, which on the nRF54L is also the system timer's cycle rate. The
- * backend test harness supplies its own value.
+ * The LF counter's rate: the system timer's cycle rate on both families
+ * (1 MHz GRTC SYSCOUNTER, 32768 Hz RTC1), checked against the counter format
+ * below. The backend test harness supplies its own value.
  */
 #ifndef RADIANT_LP_LF_HZ
 #define RADIANT_LP_LF_HZ CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC
 #endif
-BUILD_ASSERT(RADIANT_LP_LF_HZ == 1000000,
-	     "the GRTC low-power format assumes a 1 MHz SYSCOUNTER");
 
 /*
  * After an HFXO failure: keep the crystal on through the clock_control API
@@ -222,19 +238,227 @@ BUILD_ASSERT(RADIANT_LP_LF_HZ == 1000000,
 /* CC5 before EDGE 2: the edge's capture of the cleared TIMER writes 0. */
 #define LP_CC5_UNSET 0xFFFFFFFFu
 
+/* ---- THE LF COUNTER SEAM (pass B5) ----
+ *
+ * Everything that differs between the two LF counters, and nothing else: the
+ * state machine below is one copy, so a fix to it is a fix on both. Each
+ * counter supplies
+ *
+ *   LP_CNT_NAME, LP_CNT_NUM, LP_CNT_SHIFT, LP_CNT_HZ
+ *                       its name (logs) and its radiant_radio_nrf_lp.h
+ *                       format, used EXTENDED (the driver's 64-bit count,
+ *                       so RTC1's 24-bit wrap every 512 s never reaches the
+ *                       arithmetic);
+ *   LP_MIN_LEAD         least ticks ahead a compare is written with;
+ *   LP_POSTWRITE_LEAD   how far ahead a compare must still be when the
+ *                       counter is re-read after the write (the "past
+ *                       compare" bound radiant_lp_compare_in_time()
+ *                       applies), and before a committed release may be
+ *                       called off;
+ *   LP_RELEASE_GRACE    a terminal-decided release's edge lead, ~300 us:
+ *                       long enough that the arm a scheduler pass makes
+ *                       right after an abort can still call it off before
+ *                       the edge (the edge itself refuses to sleep anyway);
+ *   LP_MAX_SLEEP_TICKS  furthest a wake is planned from the anchor (the
+ *                       range bound: further sleeps rebase there);
+ *   lp_cnt_read()       the extended counter, read under CLOCK_LOCK;
+ *   lp_cnt_chan_alloc() / lp_cnt_chan_free() / lp_cnt_evt_address()
+ *                       the two channels, and the anchor channel's compare
+ *                       event for the (D)PPI connection - nrfx_gppi either
+ *                       way: DPPI on the nRF54L, PPI with a FORK on the
+ *                       nRF52, the same calls for both;
+ *   lp_cnt_set(ch, tick, handler, exact) / lp_cnt_abort(ch)
+ *                       a compare and its withdrawal; `exact` (the
+ *                       anchoring edges) means "on this tick or not at all";
+ *   LP_CNT_WAIT_EDGE()  the counter just after it has stepped, for a
+ *                       software TIMER start (just a read at 1 us ticks).
+ *
+ * and lp_timer_halt(), which stops the radio TIMER for a sleep (a property of
+ * the SoC's TIMER rather than of the counter, but it differs on the same
+ * line: the nRF52 has SHUTDOWN and anomaly 78).
+ */
+typedef void (*lp_cnt_handler_t)(int32_t id, uint64_t expire, void *user);
+
+#if defined(CONFIG_NRF_GRTC_TIMER)
+
+#define LP_CNT_NAME   "GRTC"
+#define LP_CNT_NUM    RADIANT_LP_GRTC_NUM
+#define LP_CNT_SHIFT  RADIANT_LP_GRTC_SHIFT
+#define LP_CNT_HZ     1000000
 /* Lead a compare is written with, and how far ahead it must still be when
  * re-read after the write: the GRTC latch bound nrf_grtc_timer.c waits on
- * (MAX_CC_LATCH_WAIT_TIME_US, 77) plus a margin for the re-read itself. */
-#define LP_MIN_LEAD       RADIANT_LP_GRTC_MIN_LEAD_TICKS
-#define LP_POSTWRITE_LEAD (77u + 8u)
-/* A release decided at a terminal with nothing armed waits this long for its
- * edge, so the arm a scheduler pass makes right after an abort can still call
- * it off before the edge (the edge itself refuses to sleep in any case). */
-#define LP_RELEASE_GRACE  300u
+ * (MAX_CC_LATCH_WAIT_TIME_US, 77) plus a margin for the re-read itself.
+ * z_nrf_grtc_timer_set() writes any value unchanged, so the re-read is the
+ * only check there is. */
+#define LP_MIN_LEAD        RADIANT_LP_GRTC_MIN_LEAD_TICKS
+#define LP_POSTWRITE_LEAD  (77u + 8u)
+#define LP_RELEASE_GRACE   300u
+#define LP_MAX_SLEEP_TICKS (600ull * 1000000ull)
+
+static inline uint64_t lp_cnt_read(void)
+{
+	return z_nrf_grtc_timer_read();
+}
+
+static inline int32_t lp_cnt_chan_alloc(void)
+{
+	return z_nrf_grtc_timer_chan_alloc();
+}
+
+static inline void lp_cnt_chan_free(int32_t ch)
+{
+	z_nrf_grtc_timer_chan_free(ch);
+}
+
+static inline uint32_t lp_cnt_evt_address(int32_t ch)
+{
+	return z_nrf_grtc_timer_compare_evt_address_get(ch);
+}
+
+static inline int lp_cnt_set(int32_t ch, uint64_t tick, lp_cnt_handler_t h, bool exact)
+{
+	/* The driver never moves a value: every write is as exact as it gets,
+	 * and the caller's re-read decides whether it was in time. */
+	ARG_UNUSED(exact);
+	return z_nrf_grtc_timer_set(ch, tick, h, NULL);
+}
+
+static inline void lp_cnt_abort(int32_t ch)
+{
+	z_nrf_grtc_timer_abort(ch);
+}
+
+#ifndef LP_CNT_WAIT_EDGE
+#define LP_CNT_WAIT_EDGE() lp_cnt_read()   /* 1 us ticks: the read is the edge */
+#endif
+
+#elif defined(CONFIG_NRF_RTC_TIMER)
+
+#define LP_CNT_NAME   "RTC1"
+#define LP_CNT_NUM    RADIANT_LP_RTC_NUM
+#define LP_CNT_SHIFT  RADIANT_LP_RTC_SHIFT
+#define LP_CNT_HZ     32768
+/*
+ * nrf_rtc_timer.c's MIN_CYCLES_FROM_NOW (3): the product specification
+ * guarantees a compare written two ticks ahead, but the driver's own tests
+ * saw N + 2 missed after an N + 1 compare, so it keeps three, and
+ * z_nrf_rtc_timer_exact_set() refuses anything closer. Every anchoring edge
+ * uses exact_set(): z_nrf_rtc_timer_set() silently moves a too-close compare
+ * LATER, onto a tick the anchor arithmetic would not know about.
+ *
+ * The edges are written one tick further out than that: the backend picks a
+ * tick from its own counter read and the driver checks against its own read
+ * a few microseconds later, and at 30.5 us a tick a step falls between the
+ * two reads about one time in ten. With three ticks that step would leave
+ * two, the driver would refuse, and a tenth of all releases would be lost
+ * (late anchors, a whole period awake each); with four it leaves three.
+ * (The GRTC's 108 against its 85 is the same margin.)
+ *
+ * The re-read after a successful exact_set() needs no latch margin (the
+ * driver itself checked the compare against the counter after writing it),
+ * but the same bound also decides whether a committed release may still be
+ * withdrawn (lp_cancel_release_locked()): two ticks (61 us) is far more than
+ * an abort's register writes take to land ahead of the compare.
+ */
+#define LP_MIN_LEAD        (RADIANT_LP_RTC_MIN_LEAD_TICKS + 1u)
+#define LP_POSTWRITE_LEAD  2u
+#define LP_RELEASE_GRACE   10u   /* 305 us */
+/* z_nrf_rtc_timer_set()/_exact_set() refuse a target more than
+ * NRF_RTC_TIMER_MAX_SCHEDULE_SPAN (2^23 ticks, 256 s) ahead; half of it
+ * (128 s) leaves the time between planning and writing far inside. */
+#define LP_MAX_SLEEP_TICKS ((uint64_t)NRF_RTC_TIMER_MAX_SCHEDULE_SPAN / 2u)
+
+BUILD_ASSERT(CONFIG_NRF_RTC_TIMER_USER_CHAN_COUNT >= 2,
+	     "RADIANT_NRF_LOW_POWER takes two RTC1 user channels "
+	     "(CONFIG_NRF_RTC_TIMER_USER_CHAN_COUNT, which radiant/Kconfig "
+	     "defaults to 2 with the option)");
+
+static inline uint64_t lp_cnt_read(void)
+{
+	return z_nrf_rtc_timer_read();
+}
+
+static inline int32_t lp_cnt_chan_alloc(void)
+{
+	return z_nrf_rtc_timer_chan_alloc();
+}
+
+static inline void lp_cnt_chan_free(int32_t ch)
+{
+	z_nrf_rtc_timer_chan_free(ch);
+}
+
+static inline uint32_t lp_cnt_evt_address(int32_t ch)
+{
+	return z_nrf_rtc_timer_compare_evt_address_get(ch);
+}
+
+static inline int lp_cnt_set(int32_t ch, uint64_t tick, lp_cnt_handler_t h, bool exact)
+{
+	return exact ? z_nrf_rtc_timer_exact_set(ch, tick, h, NULL)
+		     : z_nrf_rtc_timer_set(ch, tick, h, NULL);
+}
+
+static inline void lp_cnt_abort(int32_t ch)
+{
+	z_nrf_rtc_timer_abort(ch);
+}
+
+/*
+ * The counter just after it steps. A software TIMER start (a late anchor's
+ * recovery, a degrade) loads its fold from the LF reading it makes; read
+ * mid-tick, that reading is up to one tick (30.5 us) behind the start, an
+ * error the next release takes into the timebase for good. Starting on the
+ * step bounds it by this loop's latency instead. At most one tick, under
+ * CLOCK_LOCK, on a recovery path only. Bounded by a count, not a time (the
+ * system clock IS this counter): 4096 reads take well over a tick. The test
+ * harness supplies its own.
+ */
+#ifndef LP_CNT_WAIT_EDGE
+static uint64_t lp_cnt_wait_edge(void)
+{
+	uint64_t t0 = lp_cnt_read();
+	uint64_t t = t0;
+
+	for (uint32_t n = 0u; n < 4096u && t == t0; n++) {
+		t = lp_cnt_read();
+	}
+	return t;
+}
+#define LP_CNT_WAIT_EDGE() lp_cnt_wait_edge()
+#endif
+
+#endif /* the LF counter */
+
+BUILD_ASSERT(RADIANT_LP_LF_HZ == LP_CNT_HZ,
+	     "the low-power counter format does not match the system timer's rate");
+
+/*
+ * Stop the radio TIMER for a sleep. On parts with a TIMER SHUTDOWN task (the
+ * nRF52 - anomaly 78: STOP alone leaves the TIMER drawing current) STOP is
+ * followed by SHUTDOWN, as nrfx's own timer driver does. SHUTDOWN zeroes the
+ * counter (spike B1 S1; the CC registers survive), so it stands in for the
+ * CLEAR every other part gets: either way the TIMER is left stopped at 0,
+ * which EDGE 2's (D)PPI start and the fold's `last` = 0 at a wake rely on,
+ * and no fold reads the TIMER while it is stopped (lp_now_locked() and
+ * radio_disable_now() check lp_timer_stopped() first). A release reads its
+ * CC5 capture before calling this.
+ */
+static inline void lp_timer_halt(void)
+{
+	nrf_timer_task_trigger(TIMER_ADDR, NRF_TIMER_TASK_STOP);
+#if NRF_TIMER_HAS_SHUTDOWN
+	nrf_timer_task_trigger(TIMER_ADDR, NRF_TIMER_TASK_SHUTDOWN);
+#else
+	nrf_timer_task_trigger(TIMER_ADDR, NRF_TIMER_TASK_CLEAR);
+#endif
+}
+
+/* ---- End of the seam ---- */
 
 /*
  * EDGE 2's lead over the operation: the backend's own programming budget
- * plus the GRTC interrupt's latency and the wake bookkeeping before
+ * plus the LF interrupt's latency and the wake bookkeeping before
  * radiant_nrf_gate_on_grant() runs. A starting value: max_wake_late_us
  * and late_wakes are how a too-small one shows.
  */
@@ -243,8 +467,6 @@ BUILD_ASSERT(RADIANT_LP_LF_HZ == 1000000,
 /* EDGE 1's lead over EDGE 2. */
 #define LP_HFXO_LEAD_US (CONFIG_RADIANT_NRF_LP_HFXO_STARTUP_US + \
 			 RADIANT_LP_HFXO_ISR_MARGIN_US)
-/* Furthest a wake is planned from the anchor; further sleeps rebase there. */
-#define LP_MAX_SLEEP_TICKS (600ull * 1000000ull)
 /* A release or re-anchor capture older than this at its interrupt is not one. */
 #define LP_CAPTURE_MAX_AGE_US 20000
 #define LP_LINGER_US ((uint64_t)CONFIG_RADIANT_NRF_LP_LINGER_MS * 1000u)
@@ -365,7 +587,7 @@ static void lp_set_state(enum lp_state s)
 
 static inline uint64_t lp_ticks(void)
 {
-	return z_nrf_grtc_timer_read();
+	return lp_cnt_read();
 }
 
 /* Whole ticks covering `us`, rounded up. */
@@ -418,7 +640,8 @@ static bool lp_capture_time(uint64_t *timer_us)
 }
 
 /* Start the TIMER from zero in software now, the fold loaded from the LF
- * counter (radiant_lp_wake(..., false)). Under CLOCK_LOCK. */
+ * counter (radiant_lp_wake(..., false)), on the counter's step where it has
+ * one (LP_CNT_WAIT_EDGE). Under CLOCK_LOCK. */
 static void lp_timer_sw_start_locked(void)
 {
 	uint64_t t;
@@ -426,7 +649,7 @@ static void lp_timer_sw_start_locked(void)
 	/* From zero, whatever a stray edge may have done meanwhile. */
 	nrf_timer_task_trigger(TIMER_ADDR, NRF_TIMER_TASK_STOP);
 	nrf_timer_task_trigger(TIMER_ADDR, NRF_TIMER_TASK_CLEAR);
-	t = lp_ticks();
+	t = LP_CNT_WAIT_EDGE();
 	nrf_timer_task_trigger(TIMER_ADDR, NRF_TIMER_TASK_START);
 	radiant_clock.base = radiant_lp_wake(&lp.tb, &lp.clk, t, false);
 	radiant_clock.last = 0u;
@@ -635,10 +858,10 @@ static bool lp_set_anchor_locked(uint64_t tick, enum lp_anchor what)
 						  : timer_capture(CC_NOW) + 0x80000000u);
 	lp.anchor = (uint8_t)what;
 	lp.anchor_tick = tick;
-	rc = z_nrf_grtc_timer_set(lp.ch_anchor, tick, lp_anchor_handler, NULL);
+	rc = lp_cnt_set(lp.ch_anchor, tick, lp_anchor_handler, true);
 	if (rc != 0 ||
 	    !radiant_lp_compare_in_time(&lp.tb, lp_ticks(), tick, LP_POSTWRITE_LEAD)) {
-		z_nrf_grtc_timer_abort(lp.ch_anchor);
+		lp_cnt_abort(lp.ch_anchor);
 		lp.anchor = LP_ANCHOR_NONE;
 		LP_STAT(radiant_nrf_lp_stats.late_anchors++);
 		return false;
@@ -655,10 +878,10 @@ static bool lp_set_hf_locked(uint64_t tick, enum lp_hf what)
 
 	lp.hf = (uint8_t)what;
 	lp.hf_tick = tick;
-	rc = z_nrf_grtc_timer_set(lp.ch_hf, tick, lp_hf_handler, NULL);
+	rc = lp_cnt_set(lp.ch_hf, tick, lp_hf_handler, false);
 	if (rc != 0 ||
 	    !radiant_lp_compare_in_time(&lp.tb, lp_ticks(), tick, LP_POSTWRITE_LEAD)) {
-		z_nrf_grtc_timer_abort(lp.ch_hf);
+		lp_cnt_abort(lp.ch_hf);
 		lp.hf = LP_HF_NONE;
 		return false;
 	}
@@ -668,7 +891,7 @@ static bool lp_set_hf_locked(uint64_t tick, enum lp_hf what)
 static void lp_cancel_hf_locked(void)
 {
 	if (lp.hf != LP_HF_NONE) {
-		z_nrf_grtc_timer_abort(lp.ch_hf);
+		lp_cnt_abort(lp.ch_hf);
 		lp.hf = LP_HF_NONE;
 	}
 }
@@ -679,15 +902,14 @@ static void lp_cancel_edges_locked(void)
 
 	lp_cancel_hf_locked();
 	if (lp.anchor != LP_ANCHOR_NONE) {
-		z_nrf_grtc_timer_abort(lp.ch_anchor);
+		lp_cnt_abort(lp.ch_anchor);
 		lp.anchor = LP_ANCHOR_NONE;
 	}
 	if (wake) {
-		/* EDGE 2's DPPI may already have started the TIMER with its
+		/* EDGE 2's (D)PPI may already have started the TIMER with its
 		 * interrupt still held off: put it back stopped and cleared -
 		 * after the abort, so no START can land behind the STOP. */
-		nrf_timer_task_trigger(TIMER_ADDR, NRF_TIMER_TASK_STOP);
-		nrf_timer_task_trigger(TIMER_ADDR, NRF_TIMER_TASK_CLEAR);
+		lp_timer_halt();
 	}
 }
 
@@ -715,7 +937,7 @@ static bool lp_commit_release_locked(uint32_t lead)
 
 	if (lp.anchor == LP_ANCHOR_REANCHOR) {
 		/* Superseded: the release captures the same TIMER. */
-		z_nrf_grtc_timer_abort(lp.ch_anchor);
+		lp_cnt_abort(lp.ch_anchor);
 		lp.anchor = LP_ANCHOR_NONE;
 	}
 	if (lp.hf == LP_HF_LINGER) {
@@ -736,7 +958,7 @@ static bool lp_cancel_release_locked(void)
 					LP_POSTWRITE_LEAD)) {
 		return false;
 	}
-	z_nrf_grtc_timer_abort(lp.ch_anchor);
+	lp_cnt_abort(lp.ch_anchor);
 	lp.anchor = LP_ANCHOR_NONE;
 	lp_set_state(LP_AWAKE);
 	LP_STAT(radiant_nrf_lp_stats.release_cancels++);
@@ -889,8 +1111,8 @@ static void lp_release_edge_locked(uint64_t edge)
 		lp.act |= LP_ACT_SETTLE;
 		return;
 	}
-	nrf_timer_task_trigger(TIMER_ADDR, NRF_TIMER_TASK_STOP);
-	nrf_timer_task_trigger(TIMER_ADDR, NRF_TIMER_TASK_CLEAR);
+	/* timer_us came from CC5 above: read before the halt (SHUTDOWN). */
+	lp_timer_halt();
 	took_lf = radiant_lp_release(&lp.tb, &lp.clk, edge, timer_us,
 				     RADIANT_LP_RELEASE_TOL_US, &diff);
 	ARG_UNUSED(took_lf);
@@ -934,7 +1156,7 @@ static void lp_sw_start_locked(void)
 static void lp_late_anchor_locked(void)
 {
 	if (lp.anchor != LP_ANCHOR_NONE) {
-		z_nrf_grtc_timer_abort(lp.ch_anchor);
+		lp_cnt_abort(lp.ch_anchor);
 		lp.anchor = LP_ANCHOR_NONE;
 	}
 	lp.fail_owed = lp.want;
@@ -996,10 +1218,13 @@ static void lp_anchor_handler(int32_t id, uint64_t expire, void *user)
 		if (lp.state == LP_ASLEEP) {
 			/*
 			 * EDGE 2 serviced before EDGE 1: the interrupt was held
-			 * off past both, and nrfx services the lower channel
-			 * first. The DPPI started the TIMER on this tick all the
-			 * same, so do EDGE 1's work and take the edge; the HFXO
-			 * is not up yet, so it is the hfxo_wait path.
+			 * off past both, and the driver services the lower
+			 * channel first (nrfx's GRTC loop and nrf_rtc_timer's
+			 * both go upwards; which of our two channels is lower
+			 * depends on the allocation). The (D)PPI started the
+			 * TIMER on this tick all the same, so do EDGE 1's work
+			 * and take the edge; the HFXO is not up yet, so it is
+			 * the hfxo_wait path.
 			 */
 			lp_cancel_hf_locked();
 			lp_set_state(LP_WAKING);
@@ -1428,17 +1653,17 @@ uint32_t gate_max_window_us(void)
 static void lp_refuse(const char *why, int err)
 {
 	if (lp.conn_alloc) {
-		nrfx_gppi_conn_free(z_nrf_grtc_timer_compare_evt_address_get(lp.ch_anchor),
+		nrfx_gppi_conn_free(lp_cnt_evt_address(lp.ch_anchor),
 				    nrf_timer_task_address_get(TIMER_ADDR, NRF_TIMER_TASK_START),
 				    lp.conn_anchor);
 		lp.conn_alloc = false;
 	}
 	if (lp.ch_anchor >= 0) {
-		z_nrf_grtc_timer_chan_free(lp.ch_anchor);
+		lp_cnt_chan_free(lp.ch_anchor);
 		lp.ch_anchor = -1;
 	}
 	if (lp.ch_hf >= 0) {
-		z_nrf_grtc_timer_chan_free(lp.ch_hf);
+		lp_cnt_chan_free(lp.ch_hf);
 		lp.ch_hf = -1;
 	}
 	lp_set_state(LP_OFF);
@@ -1461,7 +1686,7 @@ static void lp_init(void)
 	if (lp.state != LP_OFF) {
 		return;
 	}
-	if (!radiant_lp_tb_init(&lp.tb, RADIANT_LP_GRTC_NUM, RADIANT_LP_GRTC_SHIFT,
+	if (!radiant_lp_tb_init(&lp.tb, LP_CNT_NUM, LP_CNT_SHIFT,
 				RADIANT_LP_EXTENDED_WIDTH)) {
 		lp_refuse("counter format", -EINVAL);
 		return;
@@ -1473,13 +1698,13 @@ static void lp_init(void)
 		lp_refuse("LFCLK is not running from the crystal", (int)src);
 		return;
 	}
-	lp.ch_anchor = z_nrf_grtc_timer_chan_alloc();
-	lp.ch_hf = (lp.ch_anchor >= 0) ? z_nrf_grtc_timer_chan_alloc() : -1;
+	lp.ch_anchor = lp_cnt_chan_alloc();
+	lp.ch_hf = (lp.ch_anchor >= 0) ? lp_cnt_chan_alloc() : -1;
 	if (lp.ch_anchor < 0 || lp.ch_hf < 0) {
-		lp_refuse("no free GRTC channel", -ENOMEM);
+		lp_refuse("no free " LP_CNT_NAME " channel", -ENOMEM);
 		return;
 	}
-	err = nrfx_gppi_conn_alloc(z_nrf_grtc_timer_compare_evt_address_get(lp.ch_anchor),
+	err = nrfx_gppi_conn_alloc(lp_cnt_evt_address(lp.ch_anchor),
 				   nrf_timer_task_address_get(TIMER_ADDR, NRF_TIMER_TASK_START),
 				   &lp.conn_anchor);
 	if (err == 0) {
@@ -1508,7 +1733,7 @@ static void lp_init(void)
 	CLOCK_UNLOCK(key);
 
 	LOG_INF("low power on: sleep beyond %u us (wake lead %u, LF %u, keep-on %u), "
-		"GRTC ch %d/%d", (unsigned)(lp.wake_lead_us + lp.lf_overhead_us +
+		LP_CNT_NAME " ch %d/%d", (unsigned)(lp.wake_lead_us + lp.lf_overhead_us +
 					    CONFIG_RADIANT_NRF_LP_KEEP_ON_US),
 		(unsigned)lp.wake_lead_us, (unsigned)lp.lf_overhead_us,
 		(unsigned)CONFIG_RADIANT_NRF_LP_KEEP_ON_US, (int)lp.ch_anchor,
