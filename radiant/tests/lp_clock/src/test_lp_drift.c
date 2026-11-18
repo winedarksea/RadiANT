@@ -276,6 +276,18 @@ static void run_sim(const struct sim_cfg *config, uint32_t seed,
 	}
 }
 
+static void print_result(const char *name, const struct sim_result *r)
+{
+	TC_PRINT("%s: asleep err %u q (first 1000 cycles %u q), awake err %u pu, "
+		 "release step back %u us fwd %u us, releases lf %u timer %u\n",
+		 name, (uint32_t)MIN(r->max_asleep_err_q, UINT32_MAX),
+		 (uint32_t)MIN(r->early_asleep_err_q, UINT32_MAX),
+		 (uint32_t)r->max_awake_err_pu,
+		 (uint32_t)MIN(r->max_back_us, UINT32_MAX),
+		 (uint32_t)MIN(r->max_fwd_us, UINT32_MAX),
+		 r->lf_releases, r->timer_releases);
+}
+
 static void assert_clean(const struct sim_result *r, uint32_t lingers)
 {
 	zassert_equal(r->max_asleep_err_q, 0u,
@@ -324,6 +336,7 @@ ZTEST(radiant_lp_drift, test_rtc_lf_fast_no_drift)
 	};
 
 	run_sim(&c, 0x1234567u, &res);
+	print_result(__func__, &res);
 	assert_clean(&res, CYCLES / 1000u);
 }
 
@@ -341,6 +354,7 @@ ZTEST(radiant_lp_drift, test_rtc_lf_slow_no_drift)
 	};
 
 	run_sim(&c, 0xC0FFEEu, &res);
+	print_result(__func__, &res);
 	assert_clean(&res, CYCLES / 1000u);
 }
 
@@ -359,6 +373,7 @@ ZTEST(radiant_lp_drift, test_grtc_no_drift)
 	};
 
 	run_sim(&c, 0xBADC0DEu, &res);
+	print_result(__func__, &res);
 	assert_clean(&res, CYCLES / 1000u);
 }
 
@@ -382,6 +397,7 @@ ZTEST(radiant_lp_drift, test_control_dropping_the_fraction_drifts)
 	};
 
 	run_sim(&c, 0x1234567u, &res);
+	print_result(__func__, &res);
 	zassert_true(res.max_asleep_err_q > (UINT64_C(10000) << c.shift),
 		     "only %u q of drift", (uint32_t)res.max_asleep_err_q);
 	zassert_true(res.early_asleep_err_q < (UINT64_C(1000) << c.shift),
@@ -407,6 +423,7 @@ ZTEST(radiant_lp_drift, test_control_timer_anchored_releases_drift)
 	};
 
 	run_sim(&c, 0x1234567u, &res);
+	print_result(__func__, &res);
 	zassert_true(res.timer_releases > CYCLES - CYCLES / 100u);
 	zassert_true(res.max_asleep_err_q > (UINT64_C(10000) << c.shift),
 		     "only %u q of drift", (uint32_t)res.max_asleep_err_q);
