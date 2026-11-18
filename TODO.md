@@ -394,14 +394,14 @@ Captures `captures/zwift-20261115-*.pcap`, plus the shim log `captures/zwift-shi
 
 The trainer is a Wahoo Kicker #52233 on 2017 firmware; it never sends page 0x47. None of the faults below was visible in Zwift.
 
-## 1. [CLOSED 2026-11-17: on the air (the Kicker), not the dongle; Zwift acceptance + Kicker re-pair ride open] The FE-C channel goes deaf when its slot crosses the power meter's
+## 1. [DONE 2026-11-17: trainer-internal (the Kicker), not the dongle] The FE-C channel goes deaf when its slot crosses the power meter's
 Done (ADR 0024): two slots that cannot both be heard now take turns losing (`turn_candidate()` in radiant_sched.c), and a slot the scheduler dropped is an EVENT_CHANNEL_COLLISION, not an RX_FAIL, and never counts toward search. So a crossing can no longer send FE-C to search on its own, whatever its cause. 0xF7 page 11 (scheduler contention) and `decode_pcap.py --phase A B` are in.
 
 Open: what makes the 0.57-2.67 ms band unservable. `test_two_masters_drifting_through_each_other` (radiant/tests/api) does not reproduce it on the nRF-direct or TI preset, with commands, frame latency, jitter or scattered loss; FE-C never loses two in a row there, before or after the change. So it is backend timing the fake does not model, or the real masters. Next: the two-master bench below, on the Pro Micro then the TI, reading page 11 and `--phase` across >= 4 crossings; then one Zwift ride (`decode_pcap.py --phase 3 2`, no 8-miss run, 0x33 completion at crossings equal to the rest of the ride). The booking path (MPSL) still books earliest-first.
 
 2026-11-17, simulated masters (plan step 4, `archive/benchmarks/2026-11-17-fec-crossing/`, tool `tools/ant_crossing.py`): apps/trainer at 8192 (#52235, because the real Kicker was on the air) plus ant_sim power #20329 at 8182, received at once by the Pro Micro (diag, master 27a2a15), the TI (diag a63489c5) and the Garmin (FE-C only), 2 x 1200 s, 12 crossings. **The dongle serves the crossing:** FE-C lost 6-8 of 117 in-band slots per receiver, every one within +-0.2 ms of power's frame. That is on-air overlap: the FE-C-only controls lose the same slot. No run was longer than 2, and nothing was lost in the 0.57-2.67 ms band. ADR 0024 on hardware: `slots_collided` 1-3 per crossing and 0 elsewhere, `turn_yields`/`arm_rejected` 0. So the Zwift loss needs the real masters.
 2026-11-17, real masters (plan step 3, `archive/benchmarks/2026-11-17-fec-crossing/real/`): Kicker #52233 + #20329 pedalled, Pro Micro DUT (diag acdd9d2, power + FE-C, commands), TI FE-C-only control, 2 crossings. **On the air:** in the band the TI loses the same slots (58 % of in-band slots missed by both, against 24 % elsewhere). The DUT's loss on frames the TI heard is 25 % in band and 23 % outside. Scheduler counters flat (`slots_collided` 1/0, `turn_yields`/`arm_rejected` 0). The Garmin was dropped (69 % background). Caveats: only 2 crossings, and 29-40 % background loss today. Crossing 2 still reached GO_TO_SEARCH from 8 air misses. The held-command path for that is item 3.
-- Remaining: (a) the owner clears the Kicker's power-meter pairing and rides once, to see whether the band disappears (that ride is also the proof of the mechanism); (b) Zwift acceptance on the Pro Micro with `archive/benchmarks/2026-11-17-fec-crossing/images/pm_ship_acdd9d2.uf2` plus a pcap, `decode_pcap.py --phase 3 2`. Pass = no command lost to the reacquire (0x33 completes on the first heard frame after each crossing), not "no misses".
+2026-11-17, Zwift acceptance (`captures/zwift-20261117-192749.pcap`, Pro Micro `pm_ship_acdd9d2`, 3 crossings): **PASS, closed as trainer behaviour.** No command lost to the reacquire: one GO_TO_SEARCH (138.066 s); the pending 0x33 failed there (Garmin order) and FE-C was back one period later. FE-C got no COLLISION events, and power yielded 2 slots to FE-C, so none of the band loss is the scheduler. Band loss was 59-76 % from -4 to +8 ms against 33.5 % background. Inside the band FE-C was heard on about every third slot (750 ms), which points to a cycle inside the Kicker. #20329 is on the same bike (owner confirmed; the Kicker reads high), consistent with a PowerMatch pairing. Not pursued further (owner, 2026-11-17). The Kicker re-pair ride stays optional: it would only prove the mechanism.
 
 Original report:
 Power #20329 has period 8182 and FE-C has 8192, so their slots line up every ~204 s. Each crossing costs FE-C most of its frames while power barely loses:
@@ -431,13 +431,6 @@ There was no MPSL assert and no re-enumeration.
 - Then A/B the direct image against `gate.conf` in that position. Compare power loss, scan rate, FE-C reacquire time and the "heard, no ACK" rate.
 
 ## 5. [DONE 2026-11-17, branch fix/startup-latency] STARTUP_MESG takes 53–59 ms after SYSTEM_RESET
-The cause was `k_sleep(K_MSEC(50))` in `handle_system_reset()`. It is now replaced by an event-path fence, a transport TX fence (`ant_transport_tx_fence()`) and a drain wait in `antr_stack_reset()`. Reset to STARTUP p50, from A to B:
-- Pro Micro: 52.7 to 2.6 ms.
-- L15 MPSL: 53.2 to 3.1 ms.
-- TI: 55.4 to 5.4 ms.
-- Garmin, for reference: 0.66 ms.
-
-With 50 ms reads on the Pro Micro, A lost 5/1000 STARTUPs and B lost 0/1000. No board had an ordering violation, and negative controls show the tool catches both races. Evidence: `archive/benchmarks/2026-11-17-startup-latency/`.
 
 ## 6. [DONE 2026-11-16, branch tools/shim-log-and-decode-pcap] Zwift shim logging
 
@@ -459,3 +452,36 @@ Settled by these captures, nothing to do:
 - Power meter #20329 reads about 35 % below the trainer. It is probably not on the same bike (actually it is, the trainer is really that inaccurate).
 
 Make sure there is an RGB activity version of the feather, and the other version then is no LEDs at all (quiet mode)
+# Open issues from the 2026-11-17 RadiANT security review (HEAD acdd9d2)
+
+## 1. [OPEN, HIGH] Give serial pairing enough stack for X25519
+
+The serial bridge calls pairing on its 2,048-byte thread stack (`apps/common/ant_serial_bridge.c`, `BRIDGE_STACK_SIZE`). ARM GCC at `-Os -mcpu=cortex-m4 -mthumb -fstack-usage` reports 2,248 bytes for `radiant_sec_x25519` alone and another 296 for its nested `fe_mul`. Size the pairing-enabled bridge stack or reduce the curve workspace. Check the complete bridge-to-curve call chain against the target stack budget and exercise ordinary serial pairing on that stack.
+
+## 2. [OPEN, HIGH] Stop old plaintext transmissions when a master enables confidentiality
+
+In `radiant/src/antr/ant_sec_host.c`, key installation checks for an active master transfer, but the enabling `0xF1` configuration call does not. The radio path can also retain a scheduled TX body, a same-slot output, and an automatic ACK payload built under the previous policy. Make the policy transition take effect before reporting success. Cover queued ACK and burst transfers, a scheduled broadcast, and cached replies when enabling X_CONF or expanding the secured range. After success, affected pages must satisfy the new policy and the nonce high-water mark must survive.
+
+## 3. [OPEN, HIGH] Preserve epoch phase when a receiver joins after boot
+
+`radiant_sec_set_epoch()` in `radiant/src/radiant_sec.c` clamps the epoch origin to zero when the supplied epoch age exceeds local uptime. The receiver then resolves counters against the wrong point in the epoch, invalidating the host's freshness boundary (§7.6). Preserve the full supplied phase through counter resolution, wrap, and clock correction. Check that a newly booted receiver verifies current windows and rejects windows outside the supplied time slack. The compat epoch setter already represents an origin before local boot.
+
+## 4. [OPEN, MEDIUM] Preserve the verified-window floor across configuration retries
+
+`radiant_sec_configure()` unconditionally clears `rx_floor`, even for an identical `0xF1`. A recently verified window inside the time slack can be delivered twice under strict delivery. Make identical configuration idempotent and retain the authenticated counter floor across policy changes within the same identity and epoch. Check at-most-once delivery after a retry and align the configure-reset wording in §7.6 with the fix.
+
+## 5. [OPEN, MEDIUM] Clear compat verdicts when the security identity changes
+
+`radiant_sec_compat_set_key()` disarms the epoch but leaves the previous identity's verdict and per-tier freshness state. A pinned stream can still report VERIFIED between rekey and rearm. Clear identity-bound verdict and freshness state on replacement. Check both Tier I and Tier II-only receivers immediately after rekey and after rearm. VERIFIED must require fresh evidence under the new identity.
+
+## 6. [OPEN, MEDIUM] Advance the host Tier I replay floor only after MAC verification
+
+`CompatVerifier._feed_tier1()` in `tools/ant_verify.py` writes `last_counter` before it checks the tag. A rejected page can therefore cause subsequent genuine attestations to be counted as replays. Follow the firmware's authenticated-counter rule and keep any arrival diagnostics separate. Check that a bad tag leaves the authenticated floor intact and that the next genuine attestation verifies.
+
+## 7. [OPEN, MEDIUM] Make factory provisioning safe to retry with the installed key
+
+`node_ident_provision()` in `radiant/src/node/node_ident.c` zeros the boot counter, pairing counter, and epoch reservation even when the supplied K_dev is unchanged. This can repeat deterministic pairing scalars and roll back freshness counters. Preserve all three records on a same-key retry and fail closed on a key-read error. Cover retries after the counters have advanced as well as interrupted first provisioning. Keep factory reset with a genuinely new key working.
+
+## 8. [OPEN, MEDIUM, hostless pairing API] Honor the RNG selection in ADR 0009
+
+`node_ident_pair_begin()` always calls `node_ident_pair_scalar()`, including when `caps.has_rng` is set. No production caller of this helper was found at the reviewed commit. Before wiring it into a node, use the advertised RNG for the ephemeral scalar and reserve deterministic derivation for builds without one. Exercise the entry point with and without RNG support and on a failed draw. The pairing counter must advance before public-key use, and a failed RNG draw must close the window.
