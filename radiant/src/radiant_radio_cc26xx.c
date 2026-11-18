@@ -1535,10 +1535,10 @@ int radiant_radio_enable(void)
 
 	RF_Params_init(&params);
 	/*
-	 * Keep the RF core powered between operations. Waking it costs about 1.5 ms,
-	 * more than min_arm_lead_us, which tracked windows cannot afford. The
-	 * default of 0 powers down as soon as the queue drains. Fine on USB power,
-	 * wrong on a coin cell.
+	 * UINT32_MAX is RF_Params_init()'s own default (SemaphoreP_WAIT_FOREVER),
+	 * so this changes nothing: the inactivity timer stays off. A finite value
+	 * would add a ~1.5 ms wake, more than min_arm_lead_us. Whether the driver
+	 * still powers the core down between distant slots is unverified.
 	 */
 	params.nInactivityTimeout = UINT32_MAX;
 
