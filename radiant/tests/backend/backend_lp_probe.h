@@ -24,7 +24,7 @@ struct lpt_stats {
 	uint32_t state, sleeps, wakes, late_anchors, late_wakes, hfxo_late_edge2,
 		 reanchors, range_errors, lf_taken, timer_taken, disagreements,
 		 max_disagree_us, max_wake_slack_us, max_wake_late_us, asap_wakes,
-		 release_cancels, spurious, hfxo_errors, refused;
+		 release_cancels, spurious, hfxo_errors, refused, edge_order;
 };
 
 struct lpt_probe {
@@ -101,5 +101,17 @@ void     lpt_break_next_dppi(void);
 /* The next anchor-channel compare write takes `ticks` (a preemption). */
 void     lpt_delay_next_anchor_set(uint32_t ticks);
 void     lpt_set_disable_hangs(bool on);
+/* Hold the GRTC interrupt off until world time `world` (0: none). */
+void     lpt_hold_isr_until(uint64_t world);
+/* Make HFXO requests (onoff_request) and/or starts (the callback) fail. */
+void     lpt_hfxo_errors(bool on_request, bool on_start);
+/* Another client holds the HFXO, so a request completes synchronously. */
+void     lpt_hfxo_shared(bool on);
+bool     lpt_hf_fallback(void);
+/* Let the system work queue run (a deferred FAILED). */
+void     lpt_run_work(void);
+/* lp_hfxo_boot() against an HFXO that never starts: its rc, and whether the
+ * client was left queued on the manager. */
+int      lpt_boot_hfxo_timeout(bool *still_queued);
 
 #endif

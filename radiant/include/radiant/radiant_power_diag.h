@@ -124,7 +124,11 @@
  *   (nRF54L errata 20): a raw trigger on a direct build, an nrfx reference on
  *   an MPSL build. F_CONSTLAT_HW_VALID + constlat_stat bit 0: what the
  *   hardware says now. The two disagreeing means something triggered LOWPWR
- *   over the request (MPSL did, before the reference count).
+ *   over the request (MPSL did, before the reference count) - except with
+ *   CONFIG_RADIANT_NRF_LOW_POWER, where F_CONSTLAT_REQ is only a boot flag:
+ *   that backend frees its CONSTLAT reference with the HFXO at every sleep
+ *   and takes it back at every wake, so constlat_stat reading 0 is expected
+ *   between slots and the flag must not be read as "held".
  *
  *   ti_rf_* (cc26xx only) come from the TI RF driver's global callback in
  *   src/radiant_ti_rf_hwattrs.c, which defines RFCC26XX_hwAttrs for this

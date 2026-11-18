@@ -233,5 +233,7 @@ static inline void nrfx_gppi_conn_enable(nrfx_gppi_handle_t h) { fake_hw.conn_on
 static inline void nrfx_gppi_conn_disable(nrfx_gppi_handle_t h) { fake_hw.conn_on &= ~(1u << (h & 31u)); }
 static inline int nrfx_gppi_ep_attach(uint32_t ep, nrfx_gppi_handle_t h)
 { (void)h; fake_hw.ep_attached = ep; return 0; }
+static inline void nrfx_gppi_conn_free(uint32_t e, uint32_t t, nrfx_gppi_handle_t h)
+{ (void)e; (void)t; fake_hw.conn_on &= ~(1u << (h & 31u)); }
 
 #endif

@@ -44,6 +44,9 @@ int fake_onoff_request(struct onoff_manager *mgr, struct onoff_client *cli);
 int fake_onoff_cancel_or_release(struct onoff_manager *mgr, struct onoff_client *cli);
 #define onoff_request fake_onoff_request
 #define onoff_cancel_or_release fake_onoff_cancel_or_release
+/* The always-on fallback after an HFXO failure. */
+void fake_hf_fallback(void);
+#define LP_HF_FALLBACK() fake_hf_fallback()
 
 #undef DT_CHOSEN
 #undef DT_NODE_EXISTS
@@ -83,10 +86,15 @@ static struct {
 	/* GRTC */
 	struct {
 		bool     armed;
+		bool     pending;   /* fired, handler not yet run */
 		uint64_t cc;
 		z_nrf_grtc_timer_compare_handler_t h;
 		void    *u;
 	} ch[FW_CHANNELS];
+	/* The GRTC interrupt is held off until this time (a long irq_lock or a
+	 * higher-priority interrupt); then nrfx services the pending channels in
+	 * ascending index, as its CTZ loop does. */
+	uint64_t isr_hold_until;
 	int32_t  n_alloc;
 	bool     break_dppi;
 	uint32_t delay_anchor_set;
@@ -98,6 +106,10 @@ static struct {
 	uint64_t hf_ready_at;
 	uint32_t hf_startup;
 	uint32_t hf_requests;
+	bool     hf_req_error;  /* onoff_request() fails */
+	bool     hf_cb_error;   /* the start completes with an error */
+	bool     hf_shared;     /* another client holds the HFXO: start is synchronous */
+	bool     fallback;      /* LP_HF_FALLBACK() ran */
 	uint64_t hf_on_since;
 	uint64_t hf_on_us;
 	int      constlat;
@@ -160,6 +172,7 @@ int z_nrf_grtc_timer_set(int32_t chan, uint64_t target,
 			 z_nrf_grtc_timer_compare_handler_t h, void *u)
 {
 	fw.ch[chan].armed = true;
+	fw.ch[chan].pending = false;   /* nrfx clears the event with the write */
 	fw.ch[chan].cc = target;
 	fw.ch[chan].h = h;
 	fw.ch[chan].u = u;
@@ -173,6 +186,7 @@ int z_nrf_grtc_timer_set(int32_t chan, uint64_t target,
 
 void z_nrf_grtc_timer_abort(int32_t chan)
 {
+	/* An event already latched still reaches the handler (nrfx reads it). */
 	fw.ch[chan].armed = false;
 }
 
@@ -185,12 +199,21 @@ static void fw_hf_up(void)
 	fw.hf_on_since = fw.now;
 }
 
+void fake_hf_fallback(void)
+{
+	fw.fallback = true;
+	fw_hf_up();
+}
+
 int fake_onoff_request(struct onoff_manager *mgr, struct onoff_client *cli)
 {
 	ARG_UNUSED(mgr);
 	ARG_UNUSED(cli);
 	fw.hf_requests++;
-	if (fw.hf_sync) {
+	if (fw.hf_req_error) {
+		return -EIO;
+	}
+	if (fw.hf_sync || fw.hf_shared) {
 		fw_hf_up();
 		lp_hfxo_cb(&fw.mgr, &lp.hf_cli, 0u, 0);
 	} else {
@@ -235,11 +258,16 @@ int nrfx_power_constlat_mode_free(void)
 
 /* ---- The world ---- */
 
-/* Fire the earliest event due at or before `until`. False if none is. */
+/*
+ * Fire the earliest event due at or before `until`. False if none is. A
+ * compare's hardware part (the anchor DPPI) acts at its tick; its handler
+ * runs then, or at the end of an interrupt hold, lowest channel first.
+ */
 static bool fw_step(uint64_t until)
 {
 	uint64_t best = UINT64_MAX;
 	int      which = -1;
+	bool     service = false;
 
 	for (int c = 0; c < FW_CHANNELS; c++) {
 		if (fw.ch[c].armed && fw.ch[c].cc < best) {
@@ -247,9 +275,22 @@ static bool fw_step(uint64_t until)
 			which = c;
 		}
 	}
+	for (int c = 0; c < FW_CHANNELS; c++) {
+		if (fw.ch[c].pending) {
+			uint64_t at = (fw.isr_hold_until > fw.now) ? fw.isr_hold_until : fw.now;
+
+			if (at < best || (at == best && !service)) {
+				best = at;
+				which = c;
+				service = true;
+			}
+			break;   /* the lowest pending channel is serviced first */
+		}
+	}
 	if (fw.hf_starting && fw.hf_ready_at < best) {
 		best = fw.hf_ready_at;
 		which = FW_CHANNELS;
+		service = false;
 	}
 	if (which < 0 || best > until) {
 		return false;
@@ -259,18 +300,38 @@ static bool fw_step(uint64_t until)
 	}
 	if (which == FW_CHANNELS) {
 		fw_hf_up();
-		lp_hfxo_cb(&fw.mgr, &lp.hf_cli, 0u, 0);
+		if (fw.hf_cb_error) {
+			fw.hf_on = false;
+			lp_hfxo_cb(&fw.mgr, &lp.hf_cli, 0u, -EIO);
+		} else {
+			lp_hfxo_cb(&fw.mgr, &lp.hf_cli, 0u, 0);
+		}
 		return true;
 	}
-	fw.ch[which].armed = false;
-	if (which == lp.ch_anchor && (fake_hw.conn_on & (1u << (lp.conn_anchor & 31u))) != 0u) {
-		if (fw.break_dppi) {
-			fw.break_dppi = false;
-		} else {
-			fw_task(NRF_TIMER_TASK_START);
-			fake_hw.cc[LP_CC_ANCHOR] = fw_timer();
+	if (!service) {
+		/* The compare event: hardware first. */
+		fw.ch[which].armed = false;
+		fw.ch[which].pending = true;
+		if (which == lp.ch_anchor &&
+		    (fake_hw.conn_on & (1u << (lp.conn_anchor & 31u))) != 0u) {
+			if (fw.break_dppi) {
+				fw.break_dppi = false;
+			} else {
+				fw_task(NRF_TIMER_TASK_START);
+				fake_hw.cc[LP_CC_ANCHOR] = fw_timer();
+			}
+		}
+		if (fw.isr_hold_until > fw.now) {
+			return true;
+		}
+		/* Lower channels still pending go first. */
+		for (int c = 0; c < which; c++) {
+			if (fw.ch[c].pending) {
+				return true;
+			}
 		}
 	}
+	fw.ch[which].pending = false;
 	fw.ch[which].h(which, fw.ch[which].cc, fw.ch[which].u);
 	return true;
 }
@@ -345,6 +406,7 @@ static void lpt_boot(nrf_clock_lfclk_t lf)
 	lp.ch_hf = -1;
 	memset(&radiant_nrf_lp_stats, 0, sizeof(radiant_nrf_lp_stats));
 	radiant_nrf_lp_stats.magic = 0x52504C31u;
+	(void)k_work_cancel(&lp_fail_work);
 	radiant_nrf_lp_stats.size = sizeof(radiant_nrf_lp_stats);
 	memset(&fake_radio_regs, 0, sizeof(fake_radio_regs));
 	reg_shadow_forget();
@@ -401,6 +463,7 @@ void lpt_stats(struct lpt_stats *o)
 	o->spurious = s->spurious;
 	o->hfxo_errors = s->hfxo_errors;
 	o->refused = s->refused;
+	o->edge_order = s->edge_order;
 }
 
 uint64_t lpt_world(void) { return fw.now; }
@@ -531,3 +594,27 @@ void lpt_set_hfxo_startup(uint32_t us) { fw.hf_startup = us; }
 void lpt_break_next_dppi(void) { fw.break_dppi = true; }
 void lpt_delay_next_anchor_set(uint32_t ticks) { fw.delay_anchor_set = ticks; }
 void lpt_set_disable_hangs(bool on) { fake_hw.disable_hangs = on; }
+void lpt_hold_isr_until(uint64_t world) { fw.isr_hold_until = world; }
+void lpt_hfxo_errors(bool on_request, bool on_start)
+{
+	fw.hf_req_error = on_request;
+	fw.hf_cb_error = on_start;
+}
+void lpt_hfxo_shared(bool on) { fw.hf_shared = on; }
+bool lpt_hf_fallback(void) { return fw.fallback; }
+void lpt_run_work(void) { k_msleep(2); }
+
+int lpt_boot_hfxo_timeout(bool *still_queued)
+{
+	int rc;
+
+	memset(&lp, 0, sizeof(lp));
+	lp.ch_anchor = -1;
+	lp.ch_hf = -1;
+	fw.hf_sync = false;
+	fw.hf_startup = 1000000u;   /* never within the boot wait */
+	rc = lp_hfxo_boot();
+	*still_queued = fw.hf_starting || lp.hfxo_req;
+	return rc;
+}
+

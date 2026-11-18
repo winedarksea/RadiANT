@@ -322,7 +322,10 @@ What the gate showed:
 - **The HFXO is held ≈100 %.** The stack's own request counter reads 100.000 %
   of uptime and the register reads 200/200, on every arm. This is the
   regression baseline for Track B.
-- **CONSTLAT is on in every direct build**: `constlat_stat` = 1, flags 0x3F.
+- **CONSTLAT is on in every direct build** (built without
+  `CONFIG_RADIANT_NRF_LOW_POWER`; with it, CONSTLAT is freed between slots,
+  so `constlat_stat` sampled at random reads mostly 0 while flag
+  `F_CONSTLAT_REQ` stays set as a boot flag): `constlat_stat` = 1, flags 0x3F.
   Together with the HFXO, it is ~97 % of the estimate. Radio, CPU and the floor
   come to ~25 µA.
 - **One-way removes the listen and nothing else.** RX ops go from equal to TX

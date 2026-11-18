@@ -477,7 +477,9 @@ config RADIANT_NRF54L_MPSL_CONSTLAT_HOLD
 	depends on RADIANT_BACKEND_NRF_GATE_MPSL && SOC_SERIES_NRF54L
 	help
 	  nRF54L errata 20 wants constant-latency mode (CONSTLAT) while the
-	  RADIO is in use. A direct build holds it from radio init until reset.
+	  RADIO is in use. A direct build holds it from radio init until reset
+	  (with RADIANT_NRF_LOW_POWER, only while the radio can be active: it is
+	  freed with the HFXO at each sleep and taken back at each wake).
 
 	  n (default): no reference; CONSTLAT is left to MPSL, which acquires
 	  it before each event its scheduler dispatches and releases it after

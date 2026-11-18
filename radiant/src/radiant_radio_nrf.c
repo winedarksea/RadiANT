@@ -1891,7 +1891,7 @@ static int8_t rssi_sample_dbm(void)
  * operation whose grant failed, and no path may carry it into a new one (a
  * claim needs the slot free, so the failed operation has had its terminal).
  */
-#if defined(CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL)
+#if defined(CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL) || defined(CONFIG_RADIANT_NRF_LOW_POWER)
 #define CLAIM_TERMINAL()                                                       \
 	do {                                                                   \
 		radiant_op.terminal_sent = false;                              \
@@ -4078,7 +4078,7 @@ int radiant_radio_abort(void)
 	/* A staged, unprogrammed operation has nothing to tear down. Clearing the flag under the lock stops a grant in flight from arming it. */
 	was_staged = radiant_staged.pending;
 	radiant_staged.pending = false;
-#if defined(CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL)
+#if defined(CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL) || defined(CONFIG_RADIANT_NRF_LOW_POWER)
 	/*
 	 * A FAILED still owed for a grant whose programming failed belongs to this
 	 * operation, which ends ABORTED below. Left set, denied_work_fn() would

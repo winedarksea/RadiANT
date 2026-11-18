@@ -11,6 +11,8 @@
  * in 680 us (spike B1's maximum) unless a case says otherwise.
  */
 
+#include <errno.h>
+
 #include <zephyr/ztest.h>
 
 #include <radiant/radiant_radio_hal.h>
@@ -203,7 +205,7 @@ ZTEST(radiant_backend_lp, test_late_anchor_fails_once_then_recovers)
 	zassert_equal(st.late_wakes, 1);
 	zassert_equal(st.wakes, 1);
 	zassert_equal(lpt_state(), LPT_RELEASING, "nothing armed: sleep again");
-	lpt_run(200u);
+	lpt_run(400u);
 	lpt_stats(&st);
 	zassert_equal(st.timer_taken, st0.timer_taken + 1u,
 		      "no exact anchor: the release took the TIMER");
@@ -408,10 +410,13 @@ ZTEST(radiant_backend_lp, test_linger_after_enable)
 	zassert_equal(p->tx_events, 1);
 	zassert_equal(lpt_state(), LPT_AWAKE, "still lingering");
 
+	/* Finding 5: the linger's end is itself a decision point. */
 	lpt_run(1000000u);
+	zassert_equal(lpt_state(), LPT_ASLEEP, "linger over: slept with nothing armed");
+	zassert_false(lpt_hfxo_on());
+	zassert_equal(lpt_constlat_refs(), 0);
 	zassert_equal(lpt_tx_at(lpt_radio_now() + FAR_US), RADIANT_RADIO_OK_RC);
-	zassert_true(lpt_staged(), "linger over: sleeps");
-	zassert_equal(lpt_state(), LPT_RELEASING);
+	zassert_true(lpt_staged(), "and the next far arm is staged behind a wake");
 }
 
 ZTEST(radiant_backend_lp, test_linger_after_prio_normal_acquire)
@@ -578,4 +583,260 @@ ZTEST(radiant_backend_lp, test_very_far_arm_rebases)
 	lpt_stats(&st);
 	zassert_equal(st.wakes, 1);
 	zassert_equal(st.range_errors, 0);
+}
+
+/* ---- Review 2026-11-18 findings ---- */
+
+/*
+ * Finding 1: a release committed at an abort's terminal races the arm the
+ * same scheduler pass makes next. Re-armed after the cancel window has gone
+ * by, the near operation is programmed at once and the release edge, seeing
+ * it, stops nothing - no sleep, no ASAP wake, no FAILED.
+ */
+ZTEST(radiant_backend_lp, test_abort_then_near_arm_past_cancel_window)
+{
+	struct lpt_probe *p = lpt_probe();
+	struct lpt_stats st;
+	uint64_t start;
+	uint64_t t_sync;
+
+	zassert_equal(lpt_tx_at(lpt_radio_now() + NEAR_US), RADIANT_RADIO_OK_RC);
+	zassert_equal(lpt_abort(), RADIANT_RADIO_OK_RC);
+	zassert_equal(lpt_state(), LPT_RELEASING, "the abort's terminal committed a release");
+	lpt_run(250u);   /* past the cancel window (grace 300 - 85) */
+	t_sync = lpt_radio_now() + NEAR_US;
+	zassert_equal(lpt_tx_at(t_sync), RADIANT_RADIO_OK_RC);
+	zassert_false(lpt_staged(), "programmed at once on the running TIMER");
+	lpt_run(200u);
+	zassert_equal(lpt_state(), LPT_AWAKE, "the edge saw the operation and stayed awake");
+	zassert_true(lpt_timer_running());
+	zassert_true(lpt_tx_programmed(&start));
+	zassert_within(start, t_start_world(t_sync), 1);
+	lpt_stats(&st);
+	zassert_equal(st.sleeps, 0);
+	zassert_equal(st.release_cancels, 1);
+	zassert_equal(st.asap_wakes, 0);
+	zassert_equal(p->failed_events, 0);
+	lpt_tx_end();
+	zassert_equal(p->last_tx_status, RADIANT_RADIO_STATUS_OK);
+}
+
+/* Finding 1, the arm-committed release (108-tick lead): same outcome. */
+ZTEST(radiant_backend_lp, test_far_then_near_arm_races_release_edge)
+{
+	struct lpt_probe *p = lpt_probe();
+	uint64_t start;
+	uint64_t t_sync;
+
+	zassert_equal(lpt_tx_at(lpt_radio_now() + FAR_US), RADIANT_RADIO_OK_RC);
+	zassert_equal(lpt_abort(), RADIANT_RADIO_OK_RC);
+	lpt_run(50u);    /* past the cancel window (108 - 85) */
+	t_sync = lpt_radio_now() + NEAR_US;
+	zassert_equal(lpt_tx_at(t_sync), RADIANT_RADIO_OK_RC);
+	lpt_run(200u);
+	zassert_equal(lpt_state(), LPT_AWAKE);
+	zassert_true(lpt_tx_programmed(&start));
+	zassert_within(start, t_start_world(t_sync), 1);
+	zassert_equal(p->failed_events, 0);
+}
+
+/*
+ * Finding 2: the GRTC interrupt held off past both wake edges; nrfx services
+ * the anchor channel (EDGE 2, the lower index) first, while still ASLEEP. The
+ * handler must do EDGE 1's work and take the edge, not drop it and leave the
+ * backend waking forever on HFINT with the HFXO held.
+ */
+ZTEST(radiant_backend_lp, test_edge2_serviced_before_edge1)
+{
+	struct lpt_probe *p = lpt_probe();
+	struct lpt_stats st;
+	uint64_t t_sync = arm_far_and_sleep();
+	uint64_t e2 = t_start_world(t_sync) - ARM_LEAD;
+
+	lpt_hold_isr_until(e2 + 50u);
+	lpt_run_to(e2 + 50u + 1000u);
+	lpt_stats(&st);
+	zassert_equal(st.edge_order, 1, "EDGE 2 handled first");
+	zassert_equal(st.hfxo_late_edge2, 1);
+	zassert_equal(p->failed_events, 1, "the operation was missed, and said so");
+	lpt_run(1000u);
+	zassert_equal(lpt_state(), LPT_ASLEEP, "not wedged: back to sleep");
+	zassert_false(lpt_hfxo_on());
+	zassert_equal(lpt_constlat_refs(), 0);
+	zassert_within(lpt_radio_now(), lpt_world() - LPT_W0, 1,
+		       "the TIMER started on the edge: the timebase is exact");
+}
+
+/*
+ * Finding 3: a wake moved earlier inside gate_acquire() whose EDGE 2 write is
+ * late, on a ready HFXO, recovers synchronously (software start). The arm
+ * must then be granted - programmed now, its own ETIME check deciding -
+ * rather than left PENDING with nothing to settle it.
+ */
+ZTEST(radiant_backend_lp, test_late_wake_rewrite_inside_arm_grants)
+{
+	struct lpt_probe *p = lpt_probe();
+	struct lpt_stats st0, st;
+	uint64_t t_sync = arm_far_and_sleep();
+	uint64_t e1 = t_start_world(t_sync) - ARM_LEAD - HFXO_LEAD;
+	uint64_t start;
+
+	lpt_run_to(e1 + 700u);
+	zassert_equal(lpt_state(), LPT_WAKING);
+	zassert_equal(lpt_abort(), RADIANT_RADIO_OK_RC);
+	lpt_stats(&st0);
+	lpt_delay_next_anchor_set(200u);
+	t_sync = lpt_radio_now() + lpt_tx_lead() + 300u;
+	zassert_equal(lpt_tx_at(t_sync), RADIANT_RADIO_OK_RC);
+	zassert_false(lpt_staged(), "granted, not stranded PENDING");
+	zassert_equal(lpt_state(), LPT_AWAKE);
+	zassert_true(lpt_tx_programmed(&start));
+	zassert_within(start, t_start_world(t_sync), 1);
+	lpt_stats(&st);
+	zassert_equal(st.late_anchors, st0.late_anchors + 1u);
+	zassert_equal(p->failed_events, 0);
+	lpt_tx_end();
+	zassert_equal(p->last_tx_status, RADIANT_RADIO_STATUS_OK);
+}
+
+/*
+ * Finding 4: the HFXO start fails (the callback reports an error). The
+ * staged operation fails once and the option drops to always-on: TIMER
+ * running, crystal requested through the fallback, CONSTLAT held, and later
+ * arms programmed at once.
+ */
+ZTEST(radiant_backend_lp, test_hfxo_start_error_drops_to_always_on)
+{
+	struct lpt_probe *p = lpt_probe();
+	struct lpt_stats st;
+	uint64_t t_sync = arm_far_and_sleep();
+	uint64_t start;
+
+	lpt_hfxo_errors(false, true);
+	lpt_run_to(t_start_world(t_sync) - ARM_LEAD - HFXO_LEAD + 700u);
+	lpt_stats(&st);
+	zassert_equal(st.hfxo_errors, 1);
+	zassert_equal(st.refused, 2);
+	zassert_equal(lpt_state(), LPT_OFF);
+	zassert_equal(p->failed_events, 1);
+	zassert_true(lpt_timer_running());
+	zassert_true(lpt_hf_fallback());
+	zassert_equal(lpt_constlat_refs(), 1);
+	zassert_within(lpt_radio_now(), lpt_world() - LPT_W0, 1);
+	lpt_run(FAR_US);
+	t_sync = lpt_radio_now() + FAR_US;
+	zassert_equal(lpt_tx_at(t_sync), RADIANT_RADIO_OK_RC);
+	zassert_true(lpt_tx_programmed(&start));
+	zassert_within(start, t_start_world(t_sync), 1);
+}
+
+/* Finding 4: the request itself fails, inside an arm call: always-on, and
+ * the arm is granted rather than failed from inside it. */
+ZTEST(radiant_backend_lp, test_hfxo_request_error_inside_arm)
+{
+	struct lpt_probe *p = lpt_probe();
+	struct lpt_stats st;
+	uint64_t t_sync;
+	uint64_t start;
+
+	(void)arm_far_and_sleep();
+	zassert_equal(lpt_abort(), RADIANT_RADIO_OK_RC);
+	lpt_hfxo_errors(true, false);
+	t_sync = lpt_radio_now() + lpt_tx_lead() + 800u;   /* an ASAP wake */
+	zassert_equal(lpt_tx_at(t_sync), RADIANT_RADIO_OK_RC);
+	zassert_false(lpt_staged());
+	zassert_equal(lpt_state(), LPT_OFF);
+	zassert_true(lpt_tx_programmed(&start));
+	zassert_within(start, t_start_world(t_sync), 1);
+	lpt_stats(&st);
+	zassert_equal(st.refused, 2);
+	zassert_equal(p->failed_events, 0, "the aborted one ended ABORTED, this one runs");
+}
+
+/* A request that completes synchronously (another client holds the HFXO)
+ * leaves its work to the caller, and the wake runs normally. */
+ZTEST(radiant_backend_lp, test_hfxo_shared_sync_callback)
+{
+	struct lpt_stats st;
+	uint64_t t_sync = arm_far_and_sleep();
+	uint64_t start;
+
+	lpt_hfxo_shared(true);
+	lpt_run_to(t_start_world(t_sync) - ARM_LEAD + 1u);
+	zassert_true(lpt_tx_programmed(&start));
+	zassert_within(start, t_start_world(t_sync), 1);
+	lpt_stats(&st);
+	zassert_equal(st.hfxo_late_edge2, 0);
+	zassert_equal(st.late_wakes, 0);
+}
+
+/* Finding 5: enable while a release is committed lingers instead of
+ * sleeping, and the linger's end sleeps. */
+ZTEST(radiant_backend_lp, test_enable_while_releasing_lingers)
+{
+	struct lpt_stats st;
+
+	zassert_equal(lpt_tx_at(lpt_radio_now() + FAR_US), RADIANT_RADIO_OK_RC);
+	zassert_equal(lpt_abort(), RADIANT_RADIO_OK_RC);
+	zassert_equal(lpt_state(), LPT_RELEASING);
+	zassert_equal(lpt_enable(), RADIANT_RADIO_OK_RC);
+	lpt_run(500u);
+	zassert_equal(lpt_state(), LPT_AWAKE, "lingering: the edge stopped nothing");
+	lpt_stats(&st);
+	zassert_equal(st.sleeps, 0);
+	lpt_run(1000000u);
+	zassert_equal(lpt_state(), LPT_ASLEEP, "and slept at the linger's end");
+}
+
+/*
+ * Finding 6: an arm whose staging a wake overtook, granted from lp_staged()
+ * inside the arm call, fails ETIME there. The FAILED must not be delivered
+ * inside the arm call (the scheduler has not recorded the operation yet); it
+ * comes from the work queue, and not at all if the operation ended first.
+ */
+ZTEST(radiant_backend_lp, test_staging_failure_is_deferred)
+{
+	struct lpt_probe *p = lpt_probe();
+	uint64_t t_sync;
+	uint32_t ev0;
+
+	(void)arm_far_and_sleep();
+	zassert_equal(lpt_abort(), RADIANT_RADIO_OK_RC);
+	ev0 = p->tx_events;
+	t_sync = lpt_radio_now() + FAR_US;
+	zassert_equal(lpt_acquire(t_sync - lpt_tx_lead(), false), 1, "GATE_PENDING");
+	lpt_run_to(t_start_world(t_sync) + 100u);   /* woke; the op's time has passed */
+	lpt_stage_tx_late(t_sync);
+	zassert_equal(p->tx_events, ev0, "nothing delivered inside the arm call");
+	lpt_run_work();
+	zassert_equal(p->tx_events, ev0 + 1u);
+	zassert_equal(p->last_tx_status, RADIANT_RADIO_STATUS_FAILED);
+}
+
+ZTEST(radiant_backend_lp, test_deferred_failure_dropped_after_abort)
+{
+	struct lpt_probe *p = lpt_probe();
+	uint64_t t_sync;
+
+	(void)arm_far_and_sleep();
+	zassert_equal(lpt_abort(), RADIANT_RADIO_OK_RC);
+	t_sync = lpt_radio_now() + FAR_US;
+	zassert_equal(lpt_acquire(t_sync - lpt_tx_lead(), false), 1);
+	lpt_run_to(t_start_world(t_sync) + 100u);
+	lpt_stage_tx_late(t_sync);
+	zassert_equal(lpt_abort(), RADIANT_RADIO_OK_RC);
+	zassert_equal(p->last_tx_status, RADIANT_RADIO_STATUS_ABORTED);
+	lpt_run_work();
+	zassert_equal(p->last_tx_status, RADIANT_RADIO_STATUS_ABORTED, "no FAILED after it");
+	zassert_equal(p->failed_events, 0);
+}
+
+/* Nit: a boot HFXO request that times out is taken back off the manager's
+ * queue, so a retried init does not queue the same client twice. */
+ZTEST(radiant_backend_lp, test_boot_hfxo_timeout_dequeues)
+{
+	bool queued = true;
+
+	zassert_equal(lpt_boot_hfxo_timeout(&queued), -ETIMEDOUT);
+	zassert_false(queued);
 }
