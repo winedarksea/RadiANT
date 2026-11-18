@@ -439,6 +439,11 @@ config RADIANT_BACKEND_NRF_GATE_MPSL
 	depends on ZEPHYR_NRF_MODULE
 	select MPSL
 	select MPSL_ASSERT_HANDLER
+	# nRF54L errata 20. Without NRFX_POWER, MPSL's low-latency release
+	# raw-triggers LOWPWR after each of its events and turns off the
+	# backend's CONSTLAT; with it, both go through nrfx's reference count.
+	# See radiant_radio_nrf.c (CONSTLAT_REFCOUNTED).
+	select NRFX_POWER if SOC_SERIES_NRF54L
 	help
 	  Take the RADIO through MPSL's timeslot API instead of owning it, so
 	  that a BLE controller or an 802.15.4 stack can share the chip. The

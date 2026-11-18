@@ -113,10 +113,11 @@
  *   idle_entries counts sys_trace_idle_user() calls: one per entry into the
  *   CPU's sleep instruction from the idle thread. Its rate is the wake rate.
  *
- *   flags bit F_CONSTLAT_REQ: the nRF backend raw-triggered CONSTLAT at init
- *   (nRF54L errata 20). F_CONSTLAT_HW_VALID + constlat_stat bit 0: what the
- *   hardware says now, which may differ on an MPSL build if MPSL's
- *   refcounted free undid the raw trigger.
+ *   flags bit F_CONSTLAT_REQ: the nRF backend requested CONSTLAT at init
+ *   (nRF54L errata 20): a raw trigger on a direct build, an nrfx reference on
+ *   an MPSL build. F_CONSTLAT_HW_VALID + constlat_stat bit 0: what the
+ *   hardware says now. The two disagreeing means something triggered LOWPWR
+ *   over the request (MPSL did, before the reference count).
  *
  * ZERO COST WHEN OFF. Without CONFIG_RADIANT_POWER_DIAG the hook functions
  * below are empty static inlines, radiant_power_diag.c is not built and no
@@ -386,7 +387,7 @@ extern struct radiant_power_diag radiant_power_diag;
  */
 void radiant_power_diag_hfxo(bool on);
 
-/* The backend raw-triggered CONSTLAT (nRF54L errata 20). Thread context. */
+/* The backend requested CONSTLAT (nRF54L errata 20). Thread context. */
 void radiant_power_diag_constlat_requested(void);
 
 /*

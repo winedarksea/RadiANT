@@ -355,10 +355,18 @@ On the same day, before it was reflashed, the L15 carried the MPSL ackps image
 The backend still raw-triggers CONSTLAT at init (`NRF54L_ERRATA_20`), yet the
 hardware reads it off. So the errata-20 workaround is **not in force on MPSL
 nRF54L15 builds**. That is finding 2 of the power plan, now confirmed. The
-likely mechanism is MPSL's refcounted release (`mpsl_init.c`), inferred from
-the code and not traced on the board. Pass A4 replaces the raw trigger with the
-refcounted request. The image had no power_diag, so the struct could not show
-whether the trigger ran.
+image had no power_diag, so the struct could not show whether the trigger ran.
+
+The mechanism, from the image's own disassembly (Pass A4): that build has
+neither `CONFIG_NRFX_POWER` nor `CONFIG_NRF_SYS_EVENT`, so MPSL's
+`mpsl_low_latency_acquire_callback()` / `_release_callback()`
+(`nrf/subsys/mpsl/init/mpsl_init.c`) are raw writes to `TASKS_CONSTLAT`
+(0x5010E030) and `TASKS_LOWPWR` (0x5010E034), not a reference count. MPSL's
+scheduler calls them at the start and end of each event it dispatches, and the
+first release turned the backend's init-time CONSTLAT off. Pass A4 makes the
+MPSL gate select `NRFX_POWER` on nRF54L, which moves MPSL's callbacks onto
+nrfx's reference count, and the backend takes one reference at init that it
+never frees. Recheck CONSTLATSTAT on the A4 MPSL image: expect 200/200.
 
 ### TI hr_transmitter (no proxy yet)
 
