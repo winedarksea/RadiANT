@@ -305,13 +305,16 @@ $treadmillTargets = @(
 #
 # Asserted below: the HAL, CONFIG_SERIAL and CONFIG_LOG off on the lowpower.conf
 # rows (no UART driver linked means no UARTE is ever enabled, which is the point
-# of that fragment), and CONFIG_HR_TX_ONE_WAY in both directions.
+# of that fragment), CONFIG_HR_TX_ONE_WAY in both directions, and on the
+# DC/DC row the regulator modes read back from zephyr.dts.
 $sampleTargets = @(
     @{ dir='hrtx_l15';         board='nrf54l15dk/nrf54l15/cpuapp';     artifact='radiant_hrtx_nrf54l15dk.hex';          pkg='hex'; radiant='nrf'; conf=$null;                        lowpower=$false; one_way=$false }
     @{ dir='hrtx_l15_lp';      board='nrf54l15dk/nrf54l15/cpuapp';     artifact='radiant_hrtx_nrf54l15dk_lp.hex';       pkg='hex'; radiant='nrf'; conf='lowpower.conf';              lowpower=$true;  one_way=$false }
     # The third arm of a power A/B: lowpower plus transmit-only (MASTER_TX_ONLY).
     @{ dir='hrtx_l15_lp_1way'; board='nrf54l15dk/nrf54l15/cpuapp';     artifact='radiant_hrtx_nrf54l15dk_lp_1way.hex';  pkg='hex'; radiant='nrf'; conf='lowpower.conf;one_way.conf'; lowpower=$true;  one_way=$true }
-    @{ dir='hrtx_promicro_lp'; board='promicro_nrf52840/nrf52840/uf2'; artifact='radiant_hrtx_promicro_lp.uf2';         pkg='uf2'; radiant='nrf'; conf='lowpower.conf';              lowpower=$true;  one_way=$false }
+    # Plus REG1 on DC/DC (dcdc_promicro.overlay; owner confirmed the clone's
+    # DCC inductors 2026-11-18). REG0 stays as the board leaves it.
+    @{ dir='hrtx_promicro_lp'; board='promicro_nrf52840/nrf52840/uf2'; artifact='radiant_hrtx_promicro_lp.uf2';         pkg='uf2'; radiant='nrf'; conf='lowpower.conf';              lowpower=$true;  one_way=$false; overlay='dcdc_promicro.overlay'; dcdc=$true }
 )
 # The TI LaunchXL, under the same hal_ti condition as the dongle_ti rows above
 # (skipped with their message when it is absent). Not in the sample's
@@ -751,6 +754,7 @@ try {
             $extra = @('--')
             if ($t.modules) { $extra += "-DEXTRA_ZEPHYR_MODULES=$($t.modules)" }
             if ($t.conf) { $extra += "-DEXTRA_CONF_FILE=$($t.conf)" }
+            if ($t.overlay) { $extra += "-DEXTRA_DTC_OVERLAY_FILE=$($t.overlay)" }
 
             $log = Join-Path $env:TEMP "build_$($t.dir).log"
             $rc = Invoke-West @('-z', $zephyr, 'build', '-s', $sampleApp,
@@ -788,6 +792,20 @@ try {
                 throw "hr_transmitter $($t.dir): expected '$wantType' in .config"
             }
 
+            # 4. The regulator, read from the generated devicetree: REG1 on
+            # DC/DC (mode 1) where the row asks for it, and REG0 still
+            # disabled - its DC/DC is the one the clone's inductor cannot take.
+            # A dropped overlay builds green on LDO, so only this notices.
+            if ($t.dcdc) {
+                $dts = Get-Content -Raw (Join-Path $zdir 'zephyr.dts')
+                if ($dts -notmatch 'reg1: regulator@40000578 \{[^}]*regulator-initial-mode = < 0x1 >;') {
+                    throw "hr_transmitter $($t.dir): reg1 is not on DC/DC in zephyr.dts"
+                }
+                if ($dts -notmatch 'reg0: regulator@40000580 \{[^}]*status = "disabled";') {
+                    throw "hr_transmitter $($t.dir): reg0 is no longer disabled in zephyr.dts"
+                }
+            }
+
             switch ($t.pkg) {
                 'uf2' { Copy-Item (Join-Path $zdir 'zephyr.uf2') (Join-Path $dist $t.artifact) -Force }
                 'hex' { Copy-Item (Join-Path $zdir 'zephyr.hex') (Join-Path $dist $t.artifact) -Force }
@@ -795,6 +813,7 @@ try {
 
             $notes = @()
             if ($t.lowpower) { $notes += 'lowpower' }
+            if ($t.dcdc) { $notes += 'REG1 DC/DC' }
             if ($t.one_way) { $notes += 'MASTER_TX_ONLY' } else { $notes += 'bidirectional MASTER' }
             Write-Host ("  ok: {0} HAL, {1}" -f $t.radiant, ($notes -join ', '))
         }

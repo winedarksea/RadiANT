@@ -1,0 +1,23 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * Pro Micro nRF52840: run the main core supply (REG1) from the DC/DC converter
+ * instead of the LDO. Low-power build only, applied on top of the board overlay:
+ *
+ *   west build -b promicro_nrf52840/nrf52840/uf2 hr_transmitter -- \
+ *       -DEXTRA_CONF_FILE=lowpower.conf \
+ *       -DEXTRA_DTC_OVERLAY_FILE=dcdc_promicro.overlay
+ *
+ * DC/DC needs the 10 uH + 15 nH inductors on DCC/DEC4; without them the chip
+ * does not run. The clone on this bench has them (owner check, 2026-11-18).
+ * The UF2 bootloader runs before this image and does not use this setting,
+ * so double-tap reset still recovers a board that will not start.
+ *
+ * REG0 (the high-voltage stage, DCDCEN0) is deliberately left alone: clones
+ * fit an undersized inductor on DCCH, and its DC/DC raised the current there.
+ */
+
+#include <zephyr/dt-bindings/regulator/nrf5x.h>
+
+&reg1 {
+	regulator-initial-mode = <NRF5X_REG_MODE_DCDC>;
+};

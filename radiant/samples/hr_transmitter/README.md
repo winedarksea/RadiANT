@@ -64,15 +64,18 @@ be a bidirectional master, so the default stays that way.
 
 **Regulator.** Whether the chip runs its DC/DC converter or its LDO is set in
 devicetree, and DC/DC needs an inductor on the board. The nRF52840 DK and the
-nRF54L15 DK already turn it on. The Pro Micro board leaves the nRF52840 on LDO.
-Enable DC/DC only on a board you know has the inductor; without it the chip
-does not run:
+nRF54L15 DK already turn it on. The Pro Micro board leaves the nRF52840 on LDO;
+`dcdc_promicro.overlay` here switches the main stage (REG1) to DC/DC:
 
-```dts
-&reg1 {
-	regulator-initial-mode = <NRF5X_REG_MODE_DCDC>;
-};
+```sh
+west build -b promicro_nrf52840/nrf52840/uf2 path/to/radiant/samples/hr_transmitter \
+    -- -DEXTRA_CONF_FILE=lowpower.conf -DEXTRA_DTC_OVERLAY_FILE=dcdc_promicro.overlay
 ```
+
+Use it only on a board you know has the 10 µH + 15 nH inductors on DCC/DEC4;
+without them the chip does not run (double-tap reset still reaches the UF2
+bootloader). It leaves the high-voltage stage (REG0) alone on purpose: some
+clones fit an undersized inductor there, and its DC/DC drew more, not less.
 
 **Receivers.** A battery receiver should not search forever.
 [`hr_receiver`](../hr_receiver/) searches without a limit
