@@ -213,8 +213,8 @@ BUILD_ASSERT(RADIANT_LP_LF_HZ == 1000000,
  */
 #ifndef LP_HF_FALLBACK
 #define LP_HF_FALLBACK()                                                       \
-	(void)clock_control_start(DEVICE_DT_GET_ONE(nordic_nrf_clock),         \
-				  CLOCK_CONTROL_NRF_SUBSYS_HF, NULL, NULL)
+	(void)clock_control_async_on(DEVICE_DT_GET_ONE(nordic_nrf_clock),      \
+				     CLOCK_CONTROL_NRF_SUBSYS_HF, NULL, NULL)
 #endif
 
 /* The TIMER compare the anchor connection captures into. */
@@ -665,6 +665,12 @@ static void lp_cancel_hf_locked(void)
 static void lp_cancel_edges_locked(void)
 {
 	lp_cancel_hf_locked();
+	if (lp.anchor == LP_ANCHOR_WAKE && lp.state == LP_ASLEEP) {
+		/* EDGE 2's DPPI may already have started the TIMER with its
+		 * interrupt still held off: put it back stopped and cleared. */
+		nrf_timer_task_trigger(TIMER_ADDR, NRF_TIMER_TASK_STOP);
+		nrf_timer_task_trigger(TIMER_ADDR, NRF_TIMER_TASK_CLEAR);
+	}
 	if (lp.anchor != LP_ANCHOR_NONE) {
 		z_nrf_grtc_timer_abort(lp.ch_anchor);
 		lp.anchor = LP_ANCHOR_NONE;

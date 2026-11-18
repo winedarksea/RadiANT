@@ -840,3 +840,26 @@ ZTEST(radiant_backend_lp, test_boot_hfxo_timeout_dequeues)
 	zassert_equal(lpt_boot_hfxo_timeout(&queued), -ETIMEDOUT);
 	zassert_false(queued);
 }
+
+/* Finding 2, the reverse: an abort while both wake edges are latched behind
+ * a held interrupt. EDGE 2's DPPI has already started the TIMER; cancelling
+ * the wake must stop it again, and the late handlers change nothing. */
+ZTEST(radiant_backend_lp, test_abort_with_wake_edges_latched)
+{
+	struct lpt_stats st;
+	uint64_t t_sync = arm_far_and_sleep();
+	uint64_t e2 = t_start_world(t_sync) - ARM_LEAD;
+
+	lpt_hold_isr_until(e2 + 50u);
+	lpt_run_to(e2 + 10u);
+	zassert_true(lpt_timer_running(), "the DPPI started it on the tick");
+	zassert_equal(lpt_abort(), RADIANT_RADIO_OK_RC);
+	zassert_false(lpt_timer_running(), "stopped again with the cancelled wake");
+	lpt_run(2000u);
+	zassert_equal(lpt_state(), LPT_ASLEEP);
+	zassert_false(lpt_timer_running());
+	zassert_false(lpt_hfxo_on());
+	lpt_stats(&st);
+	zassert_equal(st.spurious, 2, "both latched handlers ran and were ignored");
+	zassert_equal(st.wakes, 0);
+}
