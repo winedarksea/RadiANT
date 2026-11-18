@@ -1,8 +1,8 @@
 # 0024 — Contended tracked slots alternate the loser, and a scheduler drop is a collision
 
 - **Status:** accepted (owner decisions, 2026-11-15). Implemented and verified in
-  ztest. **The root cause of the 2026-11-15 FE-C crossing loss is not
-  identified**; see *What this does not settle*.
+  ztest. **The 2026-11-15 FE-C crossing loss is on the air**, not in the
+  dongle (real-master bench 2026-11-17); see *What this does not settle*.
 - **Date:** 2026-11-16
 - **Builds on:** [0016](0016-merge-reach-is-the-arm-lead.md) (merge reach),
   [0013](0013-sweep-is-the-elastic-consumer.md) (a denial is not a miss)
@@ -121,8 +121,21 @@ Neither dongle loses FE-C in the 0.57–2.67 ms band. The only in-band misses
 are within ±0.2 ms of power's frame, where the controls lose the same slot.
 `slots_collided` rises 1–3 per crossing and stays at 0 outside them. So against
 these masters the dongle has no band to explain; the remaining candidate is
-the real Kicker (or the real pair). The real-master run with FE-C-only
-controls is still to do.
+the real Kicker (or the real pair).
+
+**2026-11-17, real masters** (`archive/benchmarks/2026-11-17-fec-crossing/real/`):
+the Kicker #52233 and #20329, owner pedalling, two crossings. The DUT was the
+Pro Micro (diag, acdd9d2, power + FE-C with commands), and the TI received FE-C
+alone as the control. In the band both lose the same slots: 58 % of in-band slots
+were missed by both, against 24 % elsewhere. The DUT's loss on frames the TI heard
+was 25 % in the band and 23 % outside it. `slots_collided` was 1 and 0, and
+`turn_yields`/`arm_rejected` stayed 0. **The band is on the air**: the Kicker's
+FE-C frames near #20329's frame are not received by any receiver. No dongle change
+can recover them, and alternation does not apply. FE-C can still reach GO_TO_SEARCH
+at a real crossing (crossing 2: 8 armed-empty slots), but that comes from air
+misses, not from scheduler drops. The mechanism inside the Kicker (presumably an
+old power-meter pairing) is not shown. The run had only two crossings and 29–40 %
+background loss.
 
 What this record guarantees regardless: whatever makes the pair unservable,
 the cost now alternates and is reported as a collision, so it can no longer
