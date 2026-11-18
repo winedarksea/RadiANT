@@ -78,6 +78,7 @@ from ant_compare import quantile, wilson  # noqa: E402
 from ant_wire import (  # noqa: E402
     CHANNEL_TYPE_SLAVE,
     EVENT_CHANNEL_CLOSED,
+    EVENT_RX_SEARCH_TIMEOUT,
     MESG_ASSIGN_CHANNEL_ID,
     MESG_CHANNEL_ID_ID,
     MESG_CHANNEL_MESG_PERIOD_ID,
@@ -99,11 +100,20 @@ CHANNEL = 0
 EP_OUT = 0x01
 
 
+def channel_event(msg_id: int, body: bytes) -> tuple[int, int] | None:
+    """(channel, event code) for a channel event frame, else None."""
+    if (msg_id == MESG_RESPONSE_EVENT_ID and len(body) >= 3
+            and body[1] == MESG_EVENT_ID):
+        return body[0] & 0x1F, body[2]
+    return None
+
+
 def is_reset_event(msg_id: int, body: bytes) -> bool:
-    """True for a frame the reset itself must have raised, which therefore
-    cannot have been queued before it: EVENT_CHANNEL_CLOSED."""
-    return (msg_id == MESG_RESPONSE_EVENT_ID and len(body) >= 3
-            and body[1] == MESG_EVENT_ID and body[2] == EVENT_CHANNEL_CLOSED)
+    """True for a frame the reset itself may have raised: EVENT_CHANNEL_CLOSED.
+    wait_startup() still excuses one that a finite search timeout raised
+    first (see there)."""
+    ev = channel_event(msg_id, body)
+    return ev is not None and ev[1] == EVENT_CHANNEL_CLOSED
 
 
 def describe(msg_id: int, body: bytes) -> str:
@@ -120,6 +130,11 @@ def wait_startup(reader, t0: float, timeout_s: float,
     should see broadcasts drain, then nothing, then STARTUP), and
     violations_before: those of them the reset raised (is_reset_event()).
 
+    A CHANNEL_CLOSED that follows RX_SEARCH_TIMEOUT on its channel is not a
+    violation: a finite search ends with both, in that order, on its own
+    (radiant_channel.c, search timeout), so a channel an earlier host session
+    left searching can queue the pair before the reset lands.
+
     `t0` is on `clock`, which is perf_counter and not monotonic: on Windows
     time.monotonic() ticks every ~15.6 ms, which quantised the first 1000-reset
     run's latencies to 47/63 ms - too coarse to aim run (b)'s read timeout at.
@@ -127,6 +142,7 @@ def wait_startup(reader, t0: float, timeout_s: float,
     deadline = time.monotonic() + max(0.0, timeout_s - (clock() - t0))
     before: list[str] = []
     bad: list[str] = []
+    timed_out: set[int] = set()   # channels whose search timeout owes a close
     while True:
         got = reader.next_frame(deadline)
         if got is None:
@@ -141,8 +157,14 @@ def wait_startup(reader, t0: float, timeout_s: float,
                                if reason is not None else None),
                     "frames_before": before, "violations_before": bad}
         before.append(f"0x{msg_id:02X}")
-        if is_reset_event(msg_id, body):
-            bad.append(describe(msg_id, body))
+        ev = channel_event(msg_id, body)
+        if ev is not None and ev[1] == EVENT_RX_SEARCH_TIMEOUT:
+            timed_out.add(ev[0])
+        elif is_reset_event(msg_id, body):
+            if ev[0] in timed_out:
+                timed_out.discard(ev[0])
+            else:
+                bad.append(describe(msg_id, body))
 
 
 def read_after(reader, seconds: float) -> list[str]:
