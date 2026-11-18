@@ -58,3 +58,25 @@ encoder wrote:
 
 That is the whole point of the directory. Anything else is a fixture, belongs
 in `tools/`, and should say so.
+
+## Real exchanges to look at
+
+Want to see what ANT traffic actually looks like before reading any code? Start
+with these. They are all tracked.
+
+- **A Zwift session on a real Garmin stick:**
+  [`captures/zwift-20261111-193805.pcap`](../../captures/zwift-20261111-193805.pcap)
+  (repo-root `captures/`, outside this budget). It is a USBPcap capture of
+  Zwift driving a Garmin USB-m stick, and the wire spec cites it for the
+  0x61/0xC6 bytes. Open it in Wireshark. Do not move it, because
+  `protocol/ant_wire.yaml` and the generated `radiant_wire.h` cite its path.
+  The tracked 2026-11-15 pcaps in the same folder are Zwift FE-C trainer
+  sessions.
+- **Host-to-dongle serial transcripts:** the
+  [`serial/conformance-*.antser`](serial/) files are one conformance script
+  replayed against three stacks: the sdk-ant reference, RadiANT on nRF, and
+  RadiANT on CC26xx.
+- **On-air sniffs of a Garmin master and slave:**
+  [`radio/2026-11-11-*garmin*.log`](radio/) (master burst with Garmin ACKs,
+  slave broadcast), plus the 2026-11-13 Garmin-master inbound-burst and
+  acked-transfer logs beside them.

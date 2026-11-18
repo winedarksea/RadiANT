@@ -1,47 +1,0 @@
-== peer before flash 2026-11-14T18:03:30.439757
-$ ot state
-ot state
-leader
-Done
-[1;32muart:~$ [m
-$ ot channel
-ot channel
-26
-Done
-[1;32muart:~$ [m
-$ ot child table
-ot child table
-| ID  | RLOC16 | Timeout    | Age        | LQ In | C_VN |R|D|N|Ver|CSL|QMsgCnt|Suprvsn| Extended MAC     |
-+-----+--------+------------+------------+-------+------+-+-+-+---+---+-------+-------+------------------+
-|   3 | 0x0403 |        240 |         78 |     3 |    1 |1|0|0|  5| 0 |     0 |     0 | 2a3e66a0f4196d46 |
-
-Done
-[1;32muart:~$ [m
-== peer after boot wait 2026-11-14T18:04:51.981032
-$ ot state
-ot state
-leader
-Done
-[1;32muart:~$ [m
-$ ot child table
-ot child table
-| ID  | RLOC16 | Timeout    | Age        | LQ In | C_VN |R|D|N|Ver|CSL|QMsgCnt|Suprvsn| Extended MAC     |
-+-----+--------+------------+------------+-------+------+-+-+-+---+---+-------+-------+------------------+
-|   3 | 0x0403 |        240 |         76 |     3 |    1 |1|0|0|  5| 0 |     0 |     0 | 2a3e66a0f4196d46 |
-
-Done
-[1;32muart:~$ [m
-== peer after 2026-11-14T19:05:06.519357
-$ ot state
-ot state
-leader
-Done
-[1;32muart:~$ [m
-$ ot child table
-ot child table
-| ID  | RLOC16 | Timeout    | Age        | LQ In | C_VN |R|D|N|Ver|CSL|QMsgCnt|Suprvsn| Extended MAC     |
-+-----+--------+------------+------------+-------+------+-+-+-+---+---+-------+-------+------------------+
-|   3 | 0x0403 |        240 |        150 |     3 |    1 |1|0|0|  5| 0 |     0 |     0 | 2a3e66a0f4196d46 |
-
-Done
-[1;32muart:~$ [m

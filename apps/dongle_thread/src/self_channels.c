@@ -333,7 +333,7 @@ static void button_init(void)
  * gives that unless the reset was still running when it was taken:
  * reset_busy covers the whole of handle_system_reset() from before
  * antr_stack_reset() to after the generation bump and the reset's fences,
- * just before the STARTUP goes out (ant_serial_bridge.h),
+ * and the STARTUP sent (ant_serial_bridge.h),
  * so an assign the wipe could have undone - or one landing between the wipe
  * and the bump, which would be recorded against the OLD generation and cleared
  * as the host's - is always seen busy. That case is put back to unassigned

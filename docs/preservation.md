@@ -66,15 +66,28 @@ Current usage:
 
 | Directory | Contents | Size |
 |---|---|---|
-| `archive/firmware/` | two `.uf2` flash readbacks | ~1.9 MB |
-| `archive/drivers/` | our INF, install notes, provenance | ~24 KB |
-| `archive/specs/` | pointers, hashes, snapshot URLs | ~11 KB |
-| `archive/host-api/` | `ANT_DLL` export list, Zwift subset, JSON | ~82 KB |
-| `archive/captures/` | `.antcap` radio captures and `.antser` serial traces, 31 files | ~1.64 MB |
-| `archive/benchmarks/` | sdk-ant A/B baselines, including the sensitivity curve, 13 files | ~280 KB |
+| `archive/firmware/` | `.uf2` flash readbacks, 3 files | ~1.96 MB |
+| `archive/drivers/` | our INF, install notes, provenance | ~26 KB |
+| `archive/specs/` | pointers, hashes, snapshot URLs | ~12 KB |
+| `archive/host-api/` | `ANT_DLL` export list, Zwift subset, JSON | ~84 KB |
+| `archive/captures/` | `.antcap` radio captures, `.antser` serial traces, coex logs, 40 files | ~1.94 MB |
+| `archive/benchmarks/` (top level) | A/B baselines, schema, conformance JSON, 14 files | ~335 KB |
+| `archive/benchmarks/YYYY-MM-DD-*/` | dated session folders: READMEs, scripts, rigs, summaries, 333 files | ~1.90 MB |
+| `archive/review-2026-10-31-timing/` | one review note | ~25 KB |
 
-`archive/` totals ~3.90 MB against the 10 MB cap. See *What is here* at the
-end for what each directory holds.
+`archive/` totals ~6.29 MB (2026-11-17, committed blob sizes) against the
+10 MB cap. CI measures the same thing: the sum of tracked blob sizes from
+`git ls-tree -l`, not `du`, so raw files kept on a local disk do not count. See
+*What is here* at the end for what each directory holds.
+
+**Dated benchmark folders commit the written evidence only**: the README, the
+runner and analysis scripts, the rig file, and the summaries. Raw per-leg logs
+and JSON, nested per-window `.txt`, and firmware images stay on the bench
+machine, because the committed script regenerates them; `.gitignore` enforces
+this. On 2026-11-17 this rule took ~31 MB of force-added raw output back out of
+the tree (the budget had reached 31.3 MB). Untracking does not shrink clones
+that already exist, since the blobs remain in history. A history rewrite was
+not done: master is pushed and the working tree is shared.
 
 ---
 
@@ -116,8 +129,8 @@ known exception rather than left to be discovered:
 
 ## What is here
 
-`archive/captures/` (31 files, across `radio/`, `serial/` and `coex/`) and
-`archive/benchmarks/` (13 JSON baselines) are both populated from real bench
+`archive/captures/` (40 files, across `radio/`, `serial/` and `coex/`) and
+`archive/benchmarks/` (14 top-level baselines plus dated session folders) are both populated from real bench
 sessions. `archive/captures/radio/README.md` and `archive/benchmarks/README.md`
 specify exactly what each directory holds and how a future session extends it.
 

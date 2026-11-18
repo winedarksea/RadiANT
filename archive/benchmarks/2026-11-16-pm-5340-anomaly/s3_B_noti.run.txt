@@ -1,0 +1,35 @@
+C:\Users\Colin\ant_dongle\archive\benchmarks\2026-11-16-pm-5340-anomaly\leg_anom.py:2: SyntaxWarning: invalid escape sequence '\w'
+  """C2-TI / C3 RERUN leg runner (ti_rerun/), copied from ../ti/leg_ti.py.
+16:35:31 leg start -> C:\Users\Colin\ant_dongle\archive\benchmarks\2026-11-16-pm-5340-anomaly\s3_B_noti, trainer=True
+16:35:32 ti_probe: rc=0 0.2s
+16:35:32 pm_probe: rc=0 0.8s
+16:35:33 try0_reset_l15_0: rc=0 0.2s
+16:35:33 try0_reset_n53_0: rc=0 0.2s
+16:35:34 try0_reset_dongle_0: rc=0 0.8s
+16:35:34 try0_sim_l15 started pid=105636
+16:35:34 try0_sim_n53 started pid=105428
+16:35:34 try0_sim_dongle started pid=98884
+16:35:35 try0 sims ready: ['dongle', 'l15', 'n53']
+16:35:59 count_pre_try0: rc=0 20.9s
+16:36:00 count_pre_try0_pm_reset: rc=0 0.9s
+16:36:00 count_pre_try0: l15=3/3, n53=3/3, dongle=2/2
+16:36:00 ti_diag_before: rc=0 0.3s
+16:36:00 ti_health_before: rc=0 0.2s
+16:36:01 pm_diag_before: rc=0 0.8s
+16:36:02 pm_health_before: rc=0 0.8s
+16:36:02 window start_at 1794868577.5
+16:38:17 scan_pm: rc=0 135.2s
+16:38:18 ti_diag_after: rc=0 0.3s
+16:38:18 ti_health_after: rc=0 0.2s
+16:38:18 ti_diag_diff: rc=0 0.1s
+16:38:19 pm_diag_after: rc=0 0.8s
+16:38:19 pm_health_after: rc=0 0.8s
+16:38:19 pm_diag_diff: rc=0 0.1s
+16:38:40 count_post: rc=0 20.8s
+16:38:41 count_post_pm_reset: rc=0 0.8s
+16:38:41 count_post: l15=3/3, n53=3/3, dongle=2/2
+16:41:04 sim_l15: rc=1
+16:41:04 sim_n53: rc=1
+16:41:05 sim_dongle: rc=0
+16:41:05 ti_reset_end: rc=0 0.2s
+16:41:05 leg done

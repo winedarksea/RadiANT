@@ -1,0 +1,71 @@
+field                           leg1_A    leg2_B    leg3_A    leg4_B
+p8 pass_max_us                     872       197       273       202
+p8 pass_steps_max                    4         2         2         2
+p8 pass_over_100us               21041     21025     21005     20657
+p0 sched_dones                   21129     21113     21098     20725
+p9[0] sweep_max_us                  77        43        45        32
+p9[1] decide_max_us                355       104       104       106
+p9[2] arm_call_max_us              327        74       144        74
+p9[3] done_cb_max_us               115       115       115       115
+p9[4] book_max_us                    -         -         -         -
+p9[5] pass_to_arm_max_us           855       178       254       183
+p9[6] arm_slack_min_us              52        83        52        83
+p9[7] early_etime                    3         0         0         0
+p7 srch_cut_close                   35        17        19        19
+p7 srch_end_near_close              65        68        67        61
+p7 trk_open_late                    41        40        41        48
+p7 trk_open_late_max_us            188       148       161       186
+p7 trk_missed_behind_scan            0         0         0         0
+p7 tx_start_missed                   0         0         0         0
+p7 rx_start_missed                   0         0         0         0
+p10 crc_repaired                     5        14        14        15
+p10 crc_unrepairable                26        25        24        42
+p10 crc_repair_refuted               0         0         0         0
+p10 crc_repair_implausible           0         0         0         1
+p10 late_isr_drops                   0         0         0         0
+p10 end_late_max_us                 39        40        38        39
+p11 windows_merged                 148       148       153       129
+p11 preempted                        0         0         0         0
+p11 replans                          0         1         0         0
+p11 arm_rejected                     3         0         0         0
+p11 stale_events                    65        63        62        63
+p11 slots_collided                   4         3         3         2
+p0 sched_missed                      5         3         3         2
+p0 slots_missed                    493       519       587       607
+p2 sched_arm_rejected                3         0         0         0
+p3 rx_posted                     21042     21026     21005     20658
+p3 rx_refused                        3         0         0         0
+p4 crc_fail                       3776      3809      3576      3595
+
+B4 estimate [5]-[0]-[1]            423        31       105        45
+C4 candidate                      1090       250       340       250
+
+0xF6 tx_high_water b->a          0->32     0->32     0->32     0->32
+0xF6 tx_drops b->a              0->258    0->112    0->119    0->101
+
+scan seconds                    300.00    300.00    300.00    300.05
+scan opens                          67        67        67        67
+scan sightings/s                  7.80      7.84      7.34      7.00
+loss % 21001:0x0B                 3.41      3.41      3.58      3.50
+loss % 21002:0x78                 4.35      4.69      4.35      4.27
+loss % 21003:0x79                 3.46      3.37      3.37      3.79
+loss % 23001:0x79                 1.07      1.23      1.40      1.23
+loss % 23002:0x0B                 0.67      0.42      0.33      0.33
+loss % 24001:0x78                 0.99      0.99      1.64      1.15
+loss % 24002:0x79                 0.82      0.99      0.66      0.99
+loss % 24003:0x0B                 1.17      1.17      1.00      1.00
+loss % 52233:0x11                24.83     26.94     32.03     34.15
+acct short 21001:0x0B            -0.50      0.50      1.50      2.70
+acct short 21002:0x78             1.10      3.10      0.10      1.30
+acct short 21003:0x79             1.70      0.70      0.70      0.90
+acct short 23001:0x79             2.70     -0.30      2.70      0.90
+acct short 23002:0x0B             1.50      2.50      1.50      1.70
+acct short 24001:0x78             2.10      0.10      0.10      3.30
+acct short 24002:0x79             0.70      6.70      0.70      0.90
+acct short 24003:0x0B             2.50      3.50      1.50      4.70
+acct short 52233:0x11            12.00     12.00     23.00     17.20
+
+leg1_A pre {'l15': 3, 'n53': 3, 'dongle': 2} post {'l15': 3, 'n53': 3, 'dongle': 2} post_full True window {'scan_pm': 301.6} sims {'l15': (1, 480.7), 'n53': (1, 480.7), 'dongle': (0, 481.7)}
+leg2_B pre {'l15': 3, 'n53': 3, 'dongle': 2} post {'l15': 3, 'n53': 3, 'dongle': 2} post_full True window {'scan_pm': 301.5} sims {'l15': (1, 480.7), 'n53': (1, 480.7), 'dongle': (0, 481.8)}
+leg3_A pre {'l15': 3, 'n53': 3, 'dongle': 2} post {'l15': 3, 'n53': 3, 'dongle': 2} post_full True window {'scan_pm': 301.6} sims {'l15': (1, 480.8), 'n53': (1, 480.8), 'dongle': (0, 481.8)}
+leg4_B pre {'l15': 3, 'n53': 3, 'dongle': 2} post {'l15': 3, 'n53': 3, 'dongle': 2} post_full True window {'scan_pm': 301.7} sims {'l15': (1, 480.7), 'n53': (1, 480.7), 'dongle': (0, 481.6)}

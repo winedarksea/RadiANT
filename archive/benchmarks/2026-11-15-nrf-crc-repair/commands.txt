@@ -1,0 +1,26 @@
+# C1 nRF CRC repair gate, 2026-11-15. Run from C:\Users\Colin\ant_dongle (master 3b486c3 tools).
+# py = C:\ncs\toolchains\dcbdc366a1\opt\bin\python.exe
+# A  = C:\Users\Colin\ant_dongle\archive\benchmarks\2026-11-15-nrf-crc-repair
+
+# Image (built elsewhere, C:\wt_rxsnap @ ff32752, EXTRA_CONF_FILE=crc_repair.conf;diag_counters.conf,
+# board promicro_nrf52840/nrf52840/uf2): md5 CAC3E56A82714A1F8C481B3C10B2488B, UF2 addr 0x26000, family 0xADA52840
+Get-FileHash -Algorithm MD5 C:\wt_rxsnap\build\b3_pm_crcdiag\dongle\zephyr\zephyr.uf2
+
+# Flash the Pro Micro
+py -u tools\ant_probe.py --serial EE6986854FD72803 --reboot-to-bootloader      # NICENANO mounted as F:
+Copy-Item C:\wt_rxsnap\build\b3_pm_crcdiag\dongle\zephyr\zephyr.uf2 F:\        # re-enumerated after ~3 s
+py -u tools\ant_probe.py --serial EE6986854FD72803                             # PASS
+py -u tools\ant_diag.py --serial EE6986854FD72803 --json A\diag_verify_after_flash.json
+py -u tools\ant_probe.py --port COM4 --baud 115200                             # L15 transmitter PASS
+
+# Each 300 s block
+py -u tools\ant_diag.py --serial EE6986854FD72803 --json A\diag_before_bN.json
+py -u A\crc_truth_nrf.py --tx-port COM4 --tx-part nrf54l15 --rx-serial EE6986854FD72803 --dbm <rung> --seconds 300 --json A\truth_bN_<rung>.json
+py -u tools\ant_diag.py --serial EE6986854FD72803 --json A\diag_after_bN.json
+py -u tools\ant_diag.py --diff A\diag_before_bN.json A\diag_after_bN.json
+
+# Blocks actually run: b1-b3 at --dbm -28 (inline loop), then
+#   .\run_rung.ps1 -Dbm -20 -Tag m20 -FirstBlock 4    (b4-b6)
+#   .\run_rung.ps1 -Dbm 0   -Tag p0  -FirstBlock 7    (b7-b9)
+# 0xF6 reads: py -u tools\ant_health.py --serial EE6986854FD72803   (after b3, after b9)
+# Table: py -I reconcile.py

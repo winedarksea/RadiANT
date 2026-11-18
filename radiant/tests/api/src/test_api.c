@@ -5697,6 +5697,44 @@ ZTEST(api, test_fec_pending_not_sent_on_inexact_reacquiring_frame)
 	fec_reacquire_does_not_send(RADIANT_CTRL_BROADCAST, false);
 }
 
+/* Another slave's 0x02 reply to the same master, heard by the continuous
+ * search after it missed the master's frame, opens no reply slot. */
+ZTEST(api, test_fec_pending_not_sent_on_reacquiring_slave_broadcast)
+{
+	fec_reacquire_does_not_send(RADIANT_CTRL_SLAVE_BROADCAST, true);
+}
+
+/* The same on a tracked window: a 0x02 does not send the pending command,
+ * which then goes from the master's next frame. */
+ZTEST(api, test_fec_pending_not_sent_on_tracked_slave_broadcast)
+{
+	uint16_t number = fec_acquire(0u, true);
+	const struct fake_radio_arm *w;
+	uint8_t frame[FAKE_RADIO_AIR_FRAME_MAX];
+	uint8_t n;
+	radiant_time_t sync;
+	uint32_t arms;
+
+	zassert_ok(antr_acknowledge_message_tx(CH, 8u, peer_payload));
+	arms = count_tx_with_ctrl(RADIANT_CTRL_BURST_LAST_SEQ0);
+	w = last_arm_of(FAKE_RADIO_ARM_RX);
+	sync = w->t_open + (w->t_close - w->t_open) / 2u;
+	n = fake_radio_build_ant_frame(frame, number, 0x11u, 5u, peer_payload);
+	frame[6] = RADIANT_CTRL_SLAVE_BROADCAST;
+	zassert_ok(fake_radio_air_frame(sync, frame, n));
+	fake_radio_advance_to(sync + RADIANT_TRANSFER_SLOT_REPLY_US + 1000u);
+	drain();
+	zassert_equal(arms, count_tx_with_ctrl(RADIANT_CTRL_BURST_LAST_SEQ0),
+		      "a slave's 0x02 opened the pending command's slot");
+	zassert_equal(0u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED));
+
+	k_sleep(K_MSEC(3 * RADIANT_API_HOUSEKEEP_MS));
+	fec_exchange(number, RADIANT_CTRL_ACK_LAST_SEQ1, true);
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_COMPLETED));
+	zassert_equal(0u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED));
+	end_of_test();
+}
+
 /*
  * The ride case: Zwift closes its scan channel once riding, so a dropped
  * FE-C channel is the only one searching and carries the sweep itself. The

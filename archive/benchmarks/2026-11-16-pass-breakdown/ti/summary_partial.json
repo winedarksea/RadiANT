@@ -1,0 +1,538 @@
+[
+ {
+  "leg": "aborted_leg1_scan_csum",
+  "image": "B1 -Os",
+  "count_pre": {
+   "l15": 3,
+   "n53": 3,
+   "dongle": 2
+  },
+  "count_post": {
+   "l15": 3,
+   "n53": 3,
+   "dongle": 2
+  },
+  "window": {
+   "rc": 1,
+   "start": 1794848098.2250943,
+   "secs": 315.45819759368896
+  },
+  "ti_pages": {
+   "0": {
+    "sched_dones": 12442,
+    "sched_missed": 13,
+    "sched_failed": 0,
+    "sched_denied": 0,
+    "slots_missed": 884,
+    "slots_denied": 0,
+    "rx_sched_events": 10826,
+    "xfer_no_ack": 0
+   },
+   "3": {
+    "rx_posted": 12198,
+    "rx_refused": 0,
+    "term_ok": 10616,
+    "term_empty": 1577,
+    "term_error": 4,
+    "status_err": 0,
+    "status_last": 0,
+    "sync_entries": 11012
+   },
+   "4": {
+    "sw_addr_mismatch": 60,
+    "window_drops": 15,
+    "crc_fail": 189,
+    "alt_sync_hits": 0,
+    "rx_nok": 0,
+    "rx_buf_full": 0,
+    "drain_max_us": 673,
+    "min_lead_us": 175
+   },
+   "5": {
+    "windows": 105,
+    "sets_advanced": 96,
+    "sweeps": 84,
+    "frames_ok": 196,
+    "crc_fail": 0,
+    "acquired": 15,
+    "scan_reports": 148,
+    "timeouts": 0
+   },
+   "7": {
+    "srch_cut_close": null,
+    "srch_cut_abort": null,
+    "srch_end_near_close": null,
+    "trk_open_late": 43,
+    "trk_open_late_max_us": 235,
+    "trk_missed_behind_scan": 0,
+    "tx_start_missed": null,
+    "rx_start_missed": null
+   },
+   "8": {
+    "drain_max_frames": 1,
+    "frame_max_us": 101,
+    "crc_max_us": 32,
+    "rx_cb_max_us": 594,
+    "pass_max_us": 412,
+    "pass_steps_max": 2,
+    "pass_over_100us": 12304,
+    "drain_over_250us": 10241
+   },
+   "9": {
+    "sweep_max_us": 98,
+    "decide_max_us": 174,
+    "arm_call_max_us": 78,
+    "done_cb_max_us": 149,
+    "book_max_us": null,
+    "pass_to_arm_max_us": 336,
+    "arm_slack_min_us": 22,
+    "early_etime": 0
+   },
+   "10": {
+    "crc_repaired": 24,
+    "crc_unrepairable": 53,
+    "crc_repair_refuted": 1,
+    "crc_repair_implausible": 0,
+    "late_isr_drops": null,
+    "end_late_max_us": null,
+    "t_sync_max_us": 14,
+    "match_max_us": 22
+   },
+   "11": {
+    "windows_merged": 237,
+    "preempted": 0,
+    "replans": 0,
+    "arm_rejected": 0,
+    "tx_armed": 0,
+    "stale_events": 5,
+    "slots_collided": 13,
+    "turn_yields": 0
+   },
+   "12": {
+    "stale_rx_frame": 0,
+    "stale_rx_end": 5,
+    "stale_rx_filter_index": 0,
+    "stale_tx": 0,
+    "stale_ed": null,
+    "reserved_5": null,
+    "reserved_6": null,
+    "reserved_7": null
+   }
+  },
+  "ti_health_after": {
+   "burst_stalls": 0,
+   "event_high_water": 2,
+   "event_overflows": 0,
+   "host_csum": 1,
+   "host_desync": 5,
+   "key_rejects": 0,
+   "rx_backpressure": 0,
+   "rx_not_owner": 0,
+   "saturated": false,
+   "sched_denied": 0,
+   "sched_failed": 0,
+   "sched_missed": 13,
+   "sweep_busy": 0,
+   "tx_drops": 0,
+   "tx_high_water": 0,
+   "tx_timeout": 0,
+   "version": 1
+  },
+  "pm_scan": {
+   "seconds": 300.015999999996,
+   "opens": 67,
+   "tracked_loss_pct": {
+    "21001:0x0B": 4.163197335553705,
+    "21002:0x78": 4.930156121610517,
+    "21003:0x79": 3.624382207578254,
+    "23001:0x79": 2.3026315789473686,
+    "23002:0x0B": 0.9991673605328892,
+    "24001:0x78": 1.4814814814814814,
+    "24002:0x79": 1.2335526315789473,
+    "24003:0x0B": 0.7512520868113522,
+    "52233:0x11": 44.44444444444444
+   }
+  },
+  "ti_scan_log": [
+   "COM11: FAILED - open scan -> no answer"
+  ]
+ },
+ {
+  "leg": "aborted_leg1b_scan_csum",
+  "image": "B1 -Os",
+  "count_pre": {
+   "l15": 3,
+   "n53": 3,
+   "dongle": 2
+  },
+  "count_post": {
+   "l15": 3,
+   "n53": 3,
+   "dongle": 2
+  },
+  "window": {
+   "scan_pm": {
+    "rc": 0,
+    "start": 1794848676.6733508,
+    "secs": 315.27280044555664
+   },
+   "scan_ti": {
+    "rc": 1,
+    "start": 1794848676.6844542,
+    "secs": 315.2616970539093
+   }
+  },
+  "ti_pages": {
+   "0": {
+    "sched_dones": 14493,
+    "sched_missed": 38,
+    "sched_failed": 0,
+    "sched_denied": 0,
+    "slots_missed": 799,
+    "slots_denied": 0,
+    "rx_sched_events": 10864,
+    "xfer_no_ack": 0
+   },
+   "3": {
+    "rx_posted": 14049,
+    "rx_refused": 1,
+    "term_ok": 10452,
+    "term_empty": 3592,
+    "term_error": 4,
+    "status_err": 0,
+    "status_last": 0,
+    "sync_entries": 11521
+   },
+   "4": {
+    "sw_addr_mismatch": 84,
+    "window_drops": 60,
+    "crc_fail": 592,
+    "alt_sync_hits": 0,
+    "rx_nok": 0,
+    "rx_buf_full": 0,
+    "drain_max_us": 672,
+    "min_lead_us": 75
+   },
+   "5": {
+    "windows": 407,
+    "sets_advanced": 399,
+    "sweeps": 384,
+    "frames_ok": 711,
+    "crc_fail": 0,
+    "acquired": 18,
+    "scan_reports": 123,
+    "timeouts": 0
+   },
+   "7": {
+    "srch_cut_close": null,
+    "srch_cut_abort": null,
+    "srch_end_near_close": null,
+    "trk_open_late": 77,
+    "trk_open_late_max_us": 586,
+    "trk_missed_behind_scan": 0,
+    "tx_start_missed": null,
+    "rx_start_missed": null
+   },
+   "8": {
+    "drain_max_frames": 1,
+    "frame_max_us": 111,
+    "crc_max_us": 19,
+    "rx_cb_max_us": 585,
+    "pass_max_us": 691,
+    "pass_steps_max": 3,
+    "pass_over_100us": 14432,
+    "drain_over_250us": 9387
+   },
+   "9": {
+    "sweep_max_us": 133,
+    "decide_max_us": 338,
+    "arm_call_max_us": 85,
+    "done_cb_max_us": 149,
+    "book_max_us": null,
+    "pass_to_arm_max_us": 615,
+    "arm_slack_min_us": 18,
+    "early_etime": 1
+   },
+   "10": {
+    "crc_repaired": 31,
+    "crc_unrepairable": 50,
+    "crc_repair_refuted": 0,
+    "crc_repair_implausible": 0,
+    "late_isr_drops": null,
+    "end_late_max_us": null,
+    "t_sync_max_us": 14,
+    "match_max_us": 31
+   },
+   "11": {
+    "windows_merged": 414,
+    "preempted": 0,
+    "replans": 0,
+    "arm_rejected": 1,
+    "tx_armed": 0,
+    "stale_events": 5,
+    "slots_collided": 38,
+    "turn_yields": 2
+   },
+   "12": {
+    "stale_rx_frame": 0,
+    "stale_rx_end": 5,
+    "stale_rx_filter_index": 0,
+    "stale_tx": 0,
+    "stale_ed": null,
+    "reserved_5": null,
+    "reserved_6": null,
+    "reserved_7": null
+   }
+  },
+  "ti_health_after": {
+   "burst_stalls": 0,
+   "event_high_water": 3,
+   "event_overflows": 0,
+   "host_csum": 1,
+   "host_desync": 6,
+   "key_rejects": 0,
+   "rx_backpressure": 0,
+   "rx_not_owner": 0,
+   "saturated": false,
+   "sched_denied": 0,
+   "sched_failed": 0,
+   "sched_missed": 38,
+   "sweep_busy": 0,
+   "tx_drops": 0,
+   "tx_high_water": 0,
+   "tx_timeout": 0,
+   "version": 1
+  },
+  "pm_scan": {
+   "seconds": 300.04700000000594,
+   "opens": 67,
+   "tracked_loss_pct": {
+    "21001:0x0B": 3.9215686274509802,
+    "21002:0x78": 4.1118421052631575,
+    "21003:0x79": 3.3772652388797364,
+    "23001:0x79": 1.3980263157894737,
+    "23002:0x0B": 0.7493755203996669,
+    "24001:0x78": 0.5747126436781609,
+    "24002:0x79": 0.7407407407407407,
+    "24003:0x0B": 3.6123348017621146,
+    "52233:0x11": 30.756013745704468
+   }
+  },
+  "ti_scan_log": [
+   "RETRY t=39.3s msg 0x43 payload 00861f (no answer)",
+   "RETRY result: None",
+   "COM11: FAILED - scan period -> no answer"
+  ]
+ },
+ {
+  "leg": "aborted_leg1c_cmd_stall",
+  "image": "B1 -Os",
+  "count_pre": {
+   "l15": 3,
+   "n53": 3,
+   "dongle": 2
+  },
+  "count_post": {
+   "l15": 3,
+   "n53": 3,
+   "dongle": 2
+  },
+  "window": {
+   "scan_pm": {
+    "rc": 0,
+    "start": 1794849221.5931013,
+    "secs": 315.29053497314453
+   },
+   "scan_ti": {
+    "rc": 1,
+    "start": 1794849221.6071372,
+    "secs": 315.27749276161194
+   }
+  },
+  "ti_pages": {
+   "error": "FileNotFoundError(2, 'No such file or directory')"
+  },
+  "ti_health_after": null,
+  "pm_scan": {
+   "seconds": 300.0,
+   "opens": 67,
+   "tracked_loss_pct": {
+    "21001:0x0B": 4.166666666666667,
+    "21002:0x78": 4.6875,
+    "21003:0x79": 3.3717105263157894,
+    "23001:0x79": 1.812191103789127,
+    "23002:0x0B": 0.49916805324459235,
+    "24001:0x78": 1.3968775677896468,
+    "24002:0x79": 0.6578947368421053,
+    "24003:0x0B": 0.7493755203996669,
+    "52233:0x11": 27.69097222222222
+   }
+  },
+  "ti_scan_log": [
+   "RETRY 1 t=21.3s msg 0x43 payload 00861f (no answer)",
+   "RETRY 1 result: None",
+   "RETRY 2 t=23.8s msg 0x43 payload 00861f (no answer)",
+   "RETRY 2 result: 0",
+   "RETRY 1 t=40.0s msg 0x42 payload 00000001 (no answer)",
+   "RETRY 1 result: None",
+   "RETRY 2 t=42.5s msg 0x42 payload 00000001 (no answer)",
+   "RETRY 2 result: 0",
+   "RETRY 1 t=45.0s msg 0x45 payload 0039 (no answer)",
+   "RETRY 1 result: None",
+   "RETRY 2 t=47.5s msg 0x45 payload 0039 (no answer)",
+   "RETRY 2 result: None",
+   "RETRY 3 t=50.1s msg 0x45 payload 0039 (no answer)",
+   "RETRY 3 result: None",
+   "RETRY 4 t=52.6s msg 0x45 payload 0039 (no answer)",
+   "RETRY 4 result: None",
+   "COM11: FAILED - scan frequency -> no answer"
+  ]
+ },
+ {
+  "leg": "leg4_preB1",
+  "image": "pre-B1 dd17fc1",
+  "count_pre": {
+   "l15": 3,
+   "n53": 3,
+   "dongle": 2
+  },
+  "count_post": {
+   "l15": 3,
+   "n53": 3,
+   "dongle": 2
+  },
+  "window": {
+   "scan_pm": {
+    "rc": 0,
+    "start": 1794849789.2192953,
+    "secs": 315.2424247264862
+   },
+   "scan_ti": {
+    "rc": 1,
+    "start": 1794849789.2312953,
+    "secs": 315.23042464256287
+   }
+  },
+  "ti_pages": {
+   "0": {
+    "sched_dones": 11849,
+    "sched_missed": 12,
+    "sched_failed": 0,
+    "sched_denied": 0,
+    "slots_missed": 764,
+    "slots_denied": 0,
+    "rx_sched_events": 10741,
+    "xfer_no_ack": 0
+   },
+   "3": {
+    "rx_posted": 11599,
+    "rx_refused": 0,
+    "term_ok": 10603,
+    "term_empty": 994,
+    "term_error": 1,
+    "status_err": 0,
+    "status_last": 0,
+    "sync_entries": 10948
+   },
+   "4": {
+    "sw_addr_mismatch": 54,
+    "window_drops": 14,
+    "crc_fail": 139,
+    "alt_sync_hits": 0,
+    "rx_nok": 0,
+    "rx_buf_full": 0,
+    "drain_max_us": 678,
+    "min_lead_us": 198
+   },
+   "5": {
+    "windows": 60,
+    "sets_advanced": 54,
+    "sweeps": 46,
+    "frames_ok": 127,
+    "crc_fail": 0,
+    "acquired": 14,
+    "scan_reports": 71,
+    "timeouts": 0
+   },
+   "7": {
+    "srch_cut_close": null,
+    "srch_cut_abort": null,
+    "srch_end_near_close": null,
+    "trk_open_late": 46,
+    "trk_open_late_max_us": 235,
+    "trk_missed_behind_scan": 0,
+    "tx_start_missed": null,
+    "rx_start_missed": null
+   },
+   "8": {
+    "drain_max_frames": 1,
+    "frame_max_us": 135,
+    "crc_max_us": 70,
+    "rx_cb_max_us": 566,
+    "pass_max_us": 390,
+    "pass_steps_max": 2,
+    "pass_over_100us": 11644,
+    "drain_over_250us": 10268
+   },
+   "9": {
+    "sweep_max_us": 90,
+    "decide_max_us": 155,
+    "arm_call_max_us": 84,
+    "done_cb_max_us": 69,
+    "book_max_us": null,
+    "pass_to_arm_max_us": 309,
+    "arm_slack_min_us": 44,
+    "early_etime": 0
+   },
+   "10": {
+    "crc_repaired": null,
+    "crc_unrepairable": null,
+    "crc_repair_refuted": null,
+    "crc_repair_implausible": null,
+    "late_isr_drops": null,
+    "end_late_max_us": null,
+    "t_sync_max_us": 14,
+    "match_max_us": 33
+   }
+  },
+  "ti_health_after": {
+   "burst_stalls": 0,
+   "event_high_water": 3,
+   "event_overflows": 0,
+   "host_csum": 1,
+   "host_desync": 7,
+   "key_rejects": 0,
+   "rx_backpressure": 0,
+   "rx_not_owner": 0,
+   "saturated": false,
+   "sched_denied": 0,
+   "sched_failed": 0,
+   "sched_missed": 12,
+   "sweep_busy": 0,
+   "tx_drops": 0,
+   "tx_high_water": 0,
+   "tx_timeout": 0,
+   "version": 1
+  },
+  "pm_scan": {
+   "seconds": 300.0,
+   "opens": 67,
+   "tracked_loss_pct": {
+    "21001:0x0B": 3.6666666666666665,
+    "21002:0x78": 4.105090311986864,
+    "21003:0x79": 4.042904290429043,
+    "23001:0x79": 1.4839241549876339,
+    "23002:0x0B": 0.7518796992481203,
+    "24001:0x78": 0.7395234182415776,
+    "24002:0x79": 0.5756578947368421,
+    "24003:0x0B": 0.832639467110741,
+    "52233:0x11": 36.78665496049166
+   }
+  },
+  "ti_scan_log": [
+   "RETRY 1 t=24.9s msg 0x42 payload 00000001 (no answer)",
+   "RETRY 1 result: 21",
+   "COM11: FAILED - assign background scan -> code 21"
+  ]
+ }
+]
