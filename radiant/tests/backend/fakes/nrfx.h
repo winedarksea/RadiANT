@@ -37,7 +37,8 @@ typedef enum {
 } nrf_radio_task_t;
 typedef enum { NRF_RADIO_MODE_NRF_1MBIT, NRF_RADIO_MODE_BLE_LR125KBIT } nrf_radio_mode_t;
 typedef enum {
-	NRF_TIMER_TASK_CLEAR = 100, NRF_TIMER_TASK_START = 101
+	NRF_TIMER_TASK_CLEAR = 100, NRF_TIMER_TASK_START = 101,
+	NRF_TIMER_TASK_STOP = 102
 } nrf_timer_task_t;
 typedef int nrf_timer_event_t;
 typedef int nrf_timer_cc_channel_t;
@@ -121,6 +122,18 @@ struct fake_hw {
 	void   (*cc0_hook)(uint32_t nth_read);
 	uint32_t cc3_captures;
 	void   (*cc3_hook)(uint32_t nth_capture);
+	/*
+	 * The low-power scenario's TIMER (backend_lp_under_test.c): when set, a
+	 * capture latches counter_fn() instead of advancing by counter_step, and
+	 * START/STOP/CLEAR go to task_hook, so the TIMER can run against a
+	 * simulated clock and be stopped. Unset (every other suite), the model
+	 * above is unchanged.
+	 */
+	uint32_t (*counter_fn)(void);
+	void   (*task_hook)(nrf_timer_task_t task);
+	uint32_t ep_attached;   /* the last nrfx_gppi_ep_attach() endpoint */
+	bool     disable_hangs; /* TASKS_DISABLE never raises EVENTS_DISABLED */
+	uint32_t disable_tasks; /* TASKS_DISABLE triggers */
 };
 extern struct fake_hw fake_hw;
 
@@ -129,7 +142,15 @@ static inline bool nrf_radio_event_check(NRF_RADIO_Type *r, nrf_radio_event_t e)
 static inline void nrf_radio_event_clear(NRF_RADIO_Type *r, nrf_radio_event_t e)
 { (void)r; fake_hw.event[e] = false; }
 static inline void nrf_radio_task_trigger(NRF_RADIO_Type *r, nrf_radio_task_t t)
-{ (void)r; if (t == NRF_RADIO_TASK_DISABLE) { fake_hw.event[NRF_RADIO_EVENT_DISABLED] = true; } }
+{
+	(void)r;
+	if (t == NRF_RADIO_TASK_DISABLE) {
+		fake_hw.disable_tasks++;
+		if (!fake_hw.disable_hangs) {
+			fake_hw.event[NRF_RADIO_EVENT_DISABLED] = true;
+		}
+	}
+}
 static inline bool nrf_radio_crc_status_check(NRF_RADIO_Type *r)
 { (void)r; return fake_hw.crc_ok; }
 static inline void nrf_radio_shorts_set(NRF_RADIO_Type *r, uint32_t m)
@@ -155,6 +176,9 @@ static inline void nrf_timer_task_trigger(NRF_TIMER_Type *t, nrf_timer_task_t ta
 		uint32_t old = fake_hw.counter;
 		uint32_t step = (fake_hw.counter_step != 0u) ? fake_hw.counter_step : 1u;
 
+		if (fake_hw.counter_fn != NULL) {
+			step = fake_hw.counter_fn() - old;
+		}
 		fake_hw.counter = old + step;
 		for (int c = 0; c < 8; c++) {
 			if ((uint32_t)(fake_hw.cc[c] - old - 1u) < step) {
@@ -168,6 +192,8 @@ static inline void nrf_timer_task_trigger(NRF_TIMER_Type *t, nrf_timer_task_t ta
 				fake_hw.cc3_hook(fake_hw.cc3_captures);
 			}
 		}
+	} else if (fake_hw.task_hook != NULL) {
+		fake_hw.task_hook(task);
 	}
 }
 static inline uint32_t nrf_timer_cc_get(NRF_TIMER_Type *t, uint8_t cc)
@@ -205,5 +231,7 @@ static inline int nrfx_gppi_conn_alloc(uint32_t e, uint32_t t, nrfx_gppi_handle_
 { (void)e; (void)t; *h = 1u; return 0; }
 static inline void nrfx_gppi_conn_enable(nrfx_gppi_handle_t h) { fake_hw.conn_on |= (1u << (h & 31u)); }
 static inline void nrfx_gppi_conn_disable(nrfx_gppi_handle_t h) { fake_hw.conn_on &= ~(1u << (h & 31u)); }
+static inline int nrfx_gppi_ep_attach(uint32_t ep, nrfx_gppi_handle_t h)
+{ (void)h; fake_hw.ep_attached = ep; return 0; }
 
 #endif
