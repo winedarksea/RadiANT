@@ -49,8 +49,9 @@
 # 16, radiant.unit.diag (the unit suites with the 0xF7 counters on, the only
 # build where page 7's scheduler cases exist).
 # 2026-11-18: 17, radiant.lp_clock (the nRF low-power timebase arithmetic,
-# power plan pass B2).
-min_scenarios: 17
+# power plan pass B2). 18, radiant.backend.lp (the backend's HFXO release and
+# two-edge wake against a simulated GRTC/HFXO/TIMER, pass B3).
+min_scenarios: 18
 
 # Total ztest cases twister executes, summed over every scenario. It equals the
 # sum of the per-scenario floors below, so the backstop and the floors cannot
@@ -98,7 +99,8 @@ min_scenarios: 17
 # 5842 (+30) on fix/ti-sync-separation (Bluefin twister, 2026-11-16): six
 # rule-6 sched cases in each of the five unit scenarios (observed 6373).
 # 5880 (+38) with the radiant.lp_clock scenario (power plan pass B2).
-min_testcases: 5880
+# 5900 (+20) with the radiant.backend.lp scenario (power plan pass B3).
+min_testcases: 5900
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -142,3 +144,6 @@ min_cases.trainer.model: 14
 # 31 unit cases and seven 100 000-cycle drift simulations (three of them
 # negative controls).
 min_cases.radiant.lp_clock: 38
+# radiant.backend.lp (power plan pass B3): the nRF backend with
+# CONFIG_RADIANT_NRF_LOW_POWER against a simulated GRTC, HFXO and TIMER.
+min_cases.radiant.backend.lp: 20

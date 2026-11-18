@@ -502,3 +502,80 @@ ZTEST(radiant_backend_lp, test_wake_overtakes_staging)
 	zassert_true(lpt_tx_programmed(&start), "granted by lp_staged()");
 	zassert_within(start, t_start_world(t_sync), 1);
 }
+
+/*
+ * Risk: the release edge fires without its capture (the DPPI did nothing), so
+ * the TIMER's relation to the edge is unknown. Nothing may be stopped: stay
+ * awake, count it, and commit the release again.
+ */
+ZTEST(radiant_backend_lp, test_release_without_capture_stays_awake)
+{
+	struct lpt_stats st;
+	uint64_t t_sync = lpt_radio_now() + FAR_US;
+	uint64_t start;
+
+	zassert_equal(lpt_tx_at(t_sync), RADIANT_RADIO_OK_RC);
+	lpt_break_next_dppi();
+	lpt_run(120u);
+	lpt_stats(&st);
+	zassert_equal(st.late_anchors, 1);
+	zassert_equal(st.sleeps, 0);
+	zassert_true(lpt_timer_running(), "nothing stopped on a missing capture");
+	zassert_equal(lpt_state(), LPT_RELEASING, "the release is committed again");
+	lpt_run(200u);
+	zassert_equal(lpt_state(), LPT_ASLEEP);
+	lpt_run_to(t_start_world(t_sync) - ARM_LEAD + 1u);
+	zassert_true(lpt_tx_programmed(&start));
+	zassert_within(start, t_start_world(t_sync), 1);
+}
+
+/*
+ * Risk: the release compare is written late (the arm was preempted between
+ * choosing the edge and writing it), so the edge may already have passed.
+ * That is a late anchor at a point where nothing has stopped: stay awake and
+ * programme the operation now.
+ */
+ZTEST(radiant_backend_lp, test_late_release_write_stays_awake)
+{
+	struct lpt_stats st;
+	uint64_t t_sync = lpt_radio_now() + FAR_US;
+	uint64_t start;
+
+	lpt_delay_next_anchor_set(200u);
+	zassert_equal(lpt_tx_at(t_sync), RADIANT_RADIO_OK_RC);
+	zassert_false(lpt_staged(), "granted at once");
+	zassert_equal(lpt_state(), LPT_AWAKE);
+	zassert_true(lpt_tx_programmed(&start));
+	zassert_within(start, t_start_world(t_sync), 1);
+	lpt_stats(&st);
+	zassert_equal(st.late_anchors, 1);
+	lpt_run(500u);
+	zassert_equal(lpt_state(), LPT_AWAKE, "the stale edge was withdrawn");
+}
+
+/*
+ * Risk: an operation further out than the longest planned wake (600 s): the
+ * backend wakes without the HFXO at the clamp, rebases, plans again, and the
+ * operation is still on its microsecond.
+ */
+ZTEST(radiant_backend_lp, test_very_far_arm_rebases)
+{
+	struct lpt_stats st;
+	uint64_t t_sync = lpt_radio_now() + 700000000ull;   /* 700 s */
+	uint64_t start;
+	uint32_t req0 = lpt_hfxo_requests();
+
+	zassert_equal(lpt_tx_at(t_sync), RADIANT_RADIO_OK_RC);
+	lpt_run(200u);
+	zassert_equal(lpt_state(), LPT_ASLEEP);
+	lpt_run(650000000ull);
+	zassert_equal(lpt_state(), LPT_ASLEEP, "the clamp wake needs no HFXO");
+	zassert_equal(lpt_hfxo_requests(), req0);
+	zassert_within(lpt_radio_now(), lpt_world() - LPT_W0, 1);
+	lpt_run_to(t_start_world(t_sync) - ARM_LEAD + 1u);
+	zassert_true(lpt_tx_programmed(&start));
+	zassert_within(start, t_start_world(t_sync), 1);
+	lpt_stats(&st);
+	zassert_equal(st.wakes, 1);
+	zassert_equal(st.range_errors, 0);
+}
