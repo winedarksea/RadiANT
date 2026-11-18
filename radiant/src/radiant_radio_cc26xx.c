@@ -581,6 +581,11 @@ static struct {
 	 * st may hold the next operation, so it must not be attributed to that
 	 * operation. NO_HANDLE when none. */
 	RF_CmdHandle              retired_handle;
+
+	/* The transmit power last requested of apply_power() on this handle, and
+	 * whether it is valid. Cleared by RF_open()/RF_close(). */
+	struct radiant_tx_power   txp_last;
+	bool                      txp_valid;
 } st;
 
 #define NO_HANDLE ((RF_CmdHandle)-1)
@@ -862,10 +867,47 @@ static uint32_t sync_word_of(const uint8_t *addr, uint8_t hw_len)
  * Rounds to the nearest table entry; an unreachable value keeps the current
  * power (as the HAL requires). use_raw writes rawValue and paType directly,
  * for bench work off the table.
+ *
+ * Acts, and logs, only when the request differs from the last one on this
+ * handle. Every transmit carries its power, so without the check a lone
+ * channel re-set the PA and logged at INF on every slot (9748 lines in 40 min
+ * at gate GC1). Skipping a repeat is safe because the setting is not lost
+ * while the handle is open: RF_setTxPower() writes it into setup_cmd, which
+ * the driver replays at every RF core power-up (and on a client switch under
+ * coex), so only RF_open()/RF_close() clear the cache. Channels with
+ * different powers still get theirs: each change of request applies. An
+ * off-table request is remembered too (the PA keeps the last power that
+ * applied), so a repeat does not warn again; a failed RF_setTxPower() is not,
+ * so the next transmit retries it (and warns once).
+ *
+ * Known gap: RF_setTxPower() reports success once setup_cmd is updated, even
+ * when the immediate CMD_SET_TX_POWER it then sends is dropped because the RF
+ * core is powering up or switching PHY (the setup already submitted carries
+ * the old value). The cache then skips the repeats and the old power stays on
+ * air until the core next powers down; the next power-up replays setup_cmd
+ * with the new value, so it heals within one power cycle (one slot on a
+ * battery node). The driver gives no status to detect it.
  */
+static bool txp_same(const struct radiant_tx_power *a,
+		     const struct radiant_tx_power *b)
+{
+	if (a->use_raw != b->use_raw) {
+		return false;
+	}
+	/* 22 bits: RF_TxPowerTable_Value::rawValue is a 22-bit field
+	 * (RFCC26X2.h), so raw values equal under the mask program the same PA. */
+	return a->use_raw ? ((a->raw & 0x3FFFFFu) == (b->raw & 0x3FFFFFu))
+			  : (a->dbm == b->dbm);
+}
+
 static void apply_power(const struct radiant_tx_power *p)
 {
+	static bool warned_set_fail;
 	RF_TxPowerTable_Value v;
+
+	if (st.txp_valid && txp_same(p, &st.txp_last)) {
+		return;
+	}
 
 	if (p->use_raw) {
 		v.rawValue = p->raw & 0x3FFFFFu;
@@ -876,15 +918,28 @@ static void apply_power(const struct radiant_tx_power *p)
 		if (v.rawValue == RF_TxPowerTable_INVALID_VALUE) {
 			LOG_WRN("tx power %d dBm off the table, keeping current",
 				p->dbm);
+			st.txp_last = *p;
+			st.txp_valid = true;
 			return;
 		}
 	}
 
-	LOG_INF("tx power req=%d dBm use_raw=%d -> rawValue=0x%x paType=%u",
+	/* DBG, not INF: channels with different powers alternate requests, and
+	 * each change applies, so this can still run once per transmit. */
+	LOG_DBG("tx power req=%d dBm use_raw=%d -> rawValue=0x%x paType=%u",
 		p->dbm, p->use_raw, (unsigned int)v.rawValue, v.paType);
 
-	if (st.rf_handle != NULL) {
-		RF_setTxPower(st.rf_handle, v);
+	if (st.rf_handle == NULL) {
+		return;
+	}
+	if (RF_setTxPower(st.rf_handle, v) == RF_StatSuccess) {
+		st.txp_last = *p;
+		st.txp_valid = true;
+	} else if (!warned_set_fail) {
+		warned_set_fail = true;
+		LOG_WRN("RF_setTxPower failed (req=%d dBm use_raw=%d raw=0x%x); "
+			"retrying on each transmit, not logged again",
+			p->dbm, p->use_raw, (unsigned int)v.rawValue);
 	}
 }
 
@@ -1566,6 +1621,8 @@ int radiant_radio_enable(void)
 		LOG_ERR("RF_open failed");
 		return RADIANT_RADIO_EIO;
 	}
+	/* A new handle: the first transmit applies its power (apply_power()). */
+	st.txp_valid = false;
 
 	/*
 	 * Set the synthesiser once here, not per arm, since every ANT+ operation
@@ -1622,6 +1679,7 @@ int radiant_radio_disable(void)
 
 	RF_close(st.rf_handle);
 	st.rf_handle = NULL;
+	st.txp_valid = false;
 	st.enabled = false;
 
 	return RADIANT_RADIO_OK_RC;

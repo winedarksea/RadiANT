@@ -39,6 +39,13 @@
  * calibrateFxn unconditionally regardless of these flags, and "flags false,
  * pointer NULL" is the combination Zephyr ships that faults.
  *
+ * Nothing here holds XOSC_HF: the RF driver does, through
+ * RFCC26XX_hwAttrs.xoscHfAlwaysNeeded (hal_ti's true, or radiant's false
+ * under CONFIG_RADIANT_CC26XX_XOSC_HF_RELEASE - src/radiant_ti_rf_hwattrs.c).
+ * With the release option, calibrateFxn runs at every switch to the crystal,
+ * once per RF core power-up, and the RCOSC_HF trim it leaves is the system
+ * clock between radio slots.
+ *
  * enablePolicy is false and policyFxn is NULL: Zephyr's idle path owns power
  * states, not TI's. Handing TI's driver the policy would let it enter
  * STANDBY between windows, powering down the debug interface and adding a

@@ -20,9 +20,10 @@
  * is what CONFIG_RADIANT_CC26XX_RF_HWATTRS selects. Each option that needs a
  * field changed selects that symbol in turn:
  *
- *   - CONFIG_RADIANT_POWER_DIAG (today): adds the global callback, which
- *     counts RF core power-ups and on-time for radiant_power_diag.
- *   - an XOSC_HF release option (planned): xoscHfAlwaysNeeded = false.
+ *   - CONFIG_RADIANT_POWER_DIAG: adds the global callback, which counts RF
+ *     core power-ups and on-time for radiant_power_diag.
+ *   - CONFIG_RADIANT_CC26XX_XOSC_HF_RELEASE: xoscHfAlwaysNeeded = false (see
+ *     XOSC_HF RELEASE below).
  *
  * With none of them on, this file is not compiled and Zephyr's definition is
  * the one linked: a default image is unchanged.
@@ -35,7 +36,72 @@
  * settled, see its defconfig) and every 802.15.4 coexistence build (Zephyr's
  * 802.15.4 or BLE driver, or radiant's coex fork, is a second RF client and
  * the counts would mix two clients' power cycles). The last two are keyed on
- * CONFIG_RADIANT_POWER_DIAG so a later option decides for itself.
+ * each option; CONFIG_RADIANT_CC26XX_XOSC_HF_RELEASE takes both, for its own
+ * reasons (end of the next section).
+ *
+ * XOSC_HF RELEASE (CONFIG_RADIANT_CC26XX_XOSC_HF_RELEASE). How hal_ti's
+ * RFCC26X2_multiMode.c honours xoscHfAlwaysNeeded:
+ *
+ *   true (hal_ti's value): RF_init(), at the first RF_open(), calls
+ *   Power_setDependency(PowerCC26XX_XOSC_HF), and only RF_close() of the last
+ *   client releases it. The Power driver starts the crystal and switches
+ *   SCLK_HF to it from the OSC interrupt; it then runs for the life of the
+ *   radio, whether or not the RF core is powered.
+ *
+ *   false: the RF core's wake-up (RF_FsmEventWakeup in RF_fsmPowerUpState)
+ *   sets the dependency, and RF_fsmPowerDownState releases it once the core
+ *   is off; the release switches SCLK_HF back to RCOSC_HF and stops the
+ *   crystal (OSCHF_SwitchToRcOscTurnOffXosc). RF_fsmSetupState submits the
+ *   setup command at once but, while SCLK_HF is not yet XOSC_HF, holds back
+ *   CMD_SYNC_START_RAT and the chained CMD_FS: RF_fsmXOSCState polls every
+ *   RF_XOSC_HF_SWITCH_CHECK_PERIOD_US (50 us, which ClockP rounds to 2 ticks
+ *   of the 32768 Hz system clock, so 61..92 us between polls) and submits the
+ *   rest of the chain once the switch has happened.
+ *
+ * Meanwhile the CPU and every peripheral on SCLK_HF run from RCOSC_HF. The
+ * Power driver calls calibrateFxn (radiant_ti_power.c: PowerCC26XX_calibrate
+ * with calibrateRCOSC_HF = true) at every switch to the crystal, so RCOSC_HF
+ * is re-trimmed against it once per RF power-up - once per 246 ms slot on
+ * hr_transmitter. The calibration holds its own XOSC_HF dependency for a few
+ * hundred microseconds, well inside the ~4.3 ms the core stays on per slot,
+ * so it does not keep the crystal on longer. TI's CC26x2 datasheets give a
+ * calibrated RCOSC_HF of about +/-0.25 %, far inside a UART's tolerance: a
+ * console keeps working. (An ANT host link is still refused, as policy - see
+ * the end of this section.) Unaffected: the AON RTC and with
+ * it Zephyr's system timer, ClockP and the RF driver's wake timer, all on
+ * the 32.768 kHz crystal (SCLK_LF = XOSC_LF in the CCFG); and the radio timer,
+ * which runs only while the core is on, after the RAT sync. RAT/RTC sync is
+ * not new either: gate GC1 showed the core already powering down every slot
+ * with the crystal held, so CMD_SYNC_STOP_RAT/START_RAT already ran per slot.
+ *
+ * Lead. The driver wakes the core nPowerUpDuration + nPowerUpDurationMargin
+ * (314 us) + 25 us per active RAT channel before a command's start. With the
+ * crystal held, gate GC1 read nPowerUpDuration 424..480 us (median 448) and
+ * no late first command. Released, a power-up also waits for the crystal.
+ * The wait overlaps the core's boot and the setup command, so it adds at
+ * most the crystal start-up (about 200 us typical in the CC26x2 datasheets)
+ * plus one poll period (<= 92 us): expect nPowerUpDuration of roughly
+ * 450..750 us. The driver times every power-up on the RTC, wait included,
+ * adopts a longer one at once and averages in a shorter one, so the next
+ * wake already budgets for it. A late start needs one power-up to exceed the
+ * running estimate by more than the 314 us margin, against poll-grid and
+ * start-up jitter well under 100 us. The first power-up after RF_open() is
+ * not measured and the estimate starts at the driver's 2500 us, so the first
+ * transmit after boot wakes early, not late. The backend's own budgets do
+ * not move: a cold arm is only ever posted far ahead (the driver keeps the
+ * core on when the next command is nearer than nPowerUpDuration + 314 +
+ * 1000 us, a threshold this option lengthens), and in-grant arms
+ * (IN_GRANT_LEAD_US) find the core, and so the crystal, already on. cold and
+ * txl on the power-diag line are what would show this to be wrong.
+ *
+ * Refused where power_diag is, for its own reasons: on 802.15.4/BLE
+ * coexistence builds the second client's timing (and CC26XX_COEX_PHY_SWITCH_
+ * LEAD_US) was budgeted with the crystal always on and has never run against
+ * a peer; on the cc2652p_dongle, a dongle whose antenna switch is not
+ * settled (see its defconfig). Also refused, as policy, in any image with an
+ * ANT host link (an ANT_DONGLE_TRANSPORT_* choice: apps/dongle,
+ * apps/dongle_ti, apps/dongle_thread): a dongle's RF core is rarely off long
+ * enough to gain anything, and a host link on RCOSC_HF has never been tested.
  *
  * WHAT THE COUNTS MEAN (CONFIG_RADIANT_POWER_DIAG).
  *
@@ -126,7 +192,7 @@
 #error "this board defines its own RFCC26XX_hwAttrs (Zephyr's board_antenna.c, with " \
 	"an antenna-switch callback); radiant_ti_rf_hwattrs.c would be a second one. " \
 	"Turn off the option that selects CONFIG_RADIANT_CC26XX_RF_HWATTRS " \
-	"(CONFIG_RADIANT_POWER_DIAG) for this board."
+	"(CONFIG_RADIANT_POWER_DIAG, CONFIG_RADIANT_CC26XX_XOSC_HF_RELEASE) for this board."
 #endif
 
 #if defined(CONFIG_RADIANT_POWER_DIAG) && defined(CONFIG_BOARD_CC2652P_DONGLE)
@@ -143,6 +209,39 @@
 #error "radiant's power-diag RF callback is refused on a build with a second RF " \
 	"client (802.15.4/BLE coexistence): the RF core's power cycles are not " \
 	"radiant's alone. Turn off CONFIG_RADIANT_POWER_DIAG for this build."
+#endif
+
+#if defined(CONFIG_RADIANT_CC26XX_XOSC_HF_RELEASE) && defined(CONFIG_BOARD_CC2652P_DONGLE)
+#error "CONFIG_RADIANT_CC26XX_XOSC_HF_RELEASE is refused on the cc2652p_dongle: a " \
+	"dongle, and its antenna switch may need a callback of its own (see the board " \
+	"defconfig). Turn it off for this board."
+#endif
+
+#if defined(CONFIG_RADIANT_CC26XX_XOSC_HF_RELEASE) && \
+	(defined(CONFIG_RADIANT_BACKEND_CC26XX_COEX) || \
+	 defined(CONFIG_RADIANT_COEX154_CC26XX_FORK) || \
+	 defined(CONFIG_IEEE802154_CC13XX_CC26XX) || \
+	 defined(CONFIG_IEEE802154_CC13XX_CC26XX_SUB_GHZ) || defined(CONFIG_BLE_CC13XX_CC26XX))
+#error "CONFIG_RADIANT_CC26XX_XOSC_HF_RELEASE is refused on a build with a second RF " \
+	"client (802.15.4/BLE coexistence): that client's timing was budgeted with the " \
+	"crystal always on. Turn it off for this build."
+#endif
+
+#if defined(CONFIG_RADIANT_CC26XX_XOSC_HF_RELEASE) && \
+	(defined(CONFIG_ANT_DONGLE_TRANSPORT_UART) || \
+	 defined(CONFIG_ANT_DONGLE_TRANSPORT_USB_LEGACY) || \
+	 defined(CONFIG_ANT_DONGLE_TRANSPORT_USB_NEXT))
+#error "CONFIG_RADIANT_CC26XX_XOSC_HF_RELEASE is refused in an image with an ANT " \
+	"host link (CONFIG_ANT_DONGLE_TRANSPORT_*): a dongle's RF core is rarely off " \
+	"long enough to gain anything, and a host link on RCOSC_HF is untested. " \
+	"The option is for battery nodes (radiant/samples/hr_transmitter ti_lowpower.conf)."
+#endif
+
+/* xoscHfAlwaysNeeded: hal_ti's true unless the release option is on. */
+#if defined(CONFIG_RADIANT_CC26XX_XOSC_HF_RELEASE)
+#define TI_XOSC_HF_ALWAYS_NEEDED false
+#else
+#define TI_XOSC_HF_ALWAYS_NEEDED true
 #endif
 
 #if defined(CONFIG_RADIANT_POWER_DIAG)
@@ -286,15 +385,16 @@ void radiant_ti_rf_diag_read(struct radiant_ti_rf_diag *out)
 #endif /* CONFIG_RADIANT_POWER_DIAG */
 
 /*
- * hal_ti's values, field for field, except the callback. xoscHfAlwaysNeeded
- * stays true: the Power driver keeps XOSC_HF on from boot, and the RF driver
- * never requests or releases it. The XOSC_HF release option will change only
- * that field.
+ * hal_ti's values, field for field, except the callback and, with
+ * CONFIG_RADIANT_CC26XX_XOSC_HF_RELEASE, xoscHfAlwaysNeeded. Left true, the
+ * RF driver holds XOSC_HF from the first RF_open() to the last RF_close();
+ * false, it holds it only while the RF core is powered (see XOSC_HF RELEASE
+ * at the top).
  */
 const RFCC26XX_HWAttrsV2 RFCC26XX_hwAttrs = {
 	.hwiPriority        = INT_PRI_LEVEL7, /* lowest: as hal_ti */
 	.swiPriority        = 0,              /* lowest: as hal_ti */
-	.xoscHfAlwaysNeeded = true,
+	.xoscHfAlwaysNeeded = TI_XOSC_HF_ALWAYS_NEEDED,
 	.globalCallback     = TI_RF_GLOBAL_CB,
 	.globalEventMask    = TI_RF_GLOBAL_MASK,
 };
