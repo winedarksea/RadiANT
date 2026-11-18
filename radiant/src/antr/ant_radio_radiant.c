@@ -4173,6 +4173,75 @@ bool antr_master_xfer_busy(uint8_t ch)
 	radiant_event_crit_exit(key);
 	return busy;
 }
+
+/*
+ * 0xF1 (review 2026-11-17 item 2): on a master, a changed policy is the one on
+ * the air from the moment antr_sec_policy_set() returns OK. The next slot is
+ * built up to a period ahead and its bytes double as the ack payload, so both
+ * are taken back: the master's scheduled slot is cancelled (a frame already on
+ * the air is cut short on nRF; on TI RF_flushCmd is asynchronous and it may
+ * complete) and the ack payload is dropped, then the pump posts again.
+ * radiant_sec withholds the cancelled slot's re-post (tx_last_stale) and builds
+ * the next under the new policy, so a change costs at most one silent slot.
+ *
+ * Refused (ESTATE, nothing changed) while the transfer engine holds host data
+ * or a reply accepted under the old policy, the check 0xF2 makes. radiant_sec
+ * asks radiant_sec_policy_changing() before it writes a changed tuple, so the
+ * refusal comes before any write and the flush in the same crit section as
+ * the write: the radio interrupt - which posts an unsecured master's next slot
+ * and reads the ack payload - sees the old policy with its slot or the new one
+ * with none. An identical tuple never asks, and a slave is never refused or
+ * flushed. Caller holds api_lock.
+ *
+ * Both cold: host commands in the one file built at -O2 for its radio
+ * callbacks, where they would otherwise grow to about twice their -Os size
+ * against the security text budget.
+ */
+enum { POLICY_IDLE = 0, POLICY_ASKED, POLICY_FLUSHED };
+static uint8_t api_sec_policy;
+
+/*
+ * radiant_sec asks before it writes a changed tuple; inside
+ * antr_sec_policy_set() only, so a direct radiant_sec_configure() keeps its
+ * plain meaning. With the engine idle, a master's slot holds its staged
+ * MASTER_TX or its turnaround, and either goes: the cancel is silent, so the
+ * binding goes too (api_search_cut_locked()).
+ */
+__attribute__((cold)) int radiant_sec_policy_changing(uint8_t ch)
+{
+	/* is_master() also bounds ch for the api_ch[] use below. */
+	if (api_sec_policy == POLICY_IDLE || !radiant_channel_is_master(ch)) {
+		return RADIANT_SEC_OK;
+	}
+	if (antr_master_xfer_busy(ch)) {
+		return RADIANT_SEC_ESTATE;
+	}
+	/* The engine's saved reply needs nothing: an idle engine's is reached
+	 * only by radiant_transfer_reply_retransmit(), which antr never calls,
+	 * and every other use is inside a burst, which is refused above. */
+	(void)radiant_sched_cancel(ch);
+	api_bind_rejected(ch);
+	api_ch[ch].sec_pay_valid = false;
+	api_sec_policy = POLICY_FLUSHED;
+	return RADIANT_SEC_OK;
+}
+
+__attribute__((cold)) int antr_sec_policy_set(uint8_t ch, uint8_t switches,
+					      uint8_t w, uint8_t page_lo,
+					      uint8_t page_hi)
+{
+	unsigned int key = radiant_event_crit_enter();
+	int          rc;
+
+	api_sec_policy = POLICY_ASKED;
+	rc = radiant_sec_configure(ch, switches, w, page_lo, page_hi);
+	radiant_event_crit_exit(key);
+	if (api_sec_policy == POLICY_FLUSHED) {
+		api_pump_locked();
+	}
+	api_sec_policy = POLICY_IDLE;
+	return rc;
+}
 #endif
 
 antr_err_t antr_acknowledge_message_tx(uint8_t channel, uint8_t size,

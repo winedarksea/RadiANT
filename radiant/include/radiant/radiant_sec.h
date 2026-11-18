@@ -873,8 +873,33 @@ void radiant_sec_epoch_wanted(uint8_t ch, uint32_t epoch);
  */
 int  radiant_sec_set_key(uint8_t ch, const uint8_t *root, size_t bits,
 			 uint16_t base_devnum);
+
+/*
+ * Install the switches, W and secured page range (0xF1). A tuple different
+ * from the installed one marks the slot last built as the old policy's: if
+ * that same slot is transformed again, radiant_sec_tx_transform() returns
+ * RADIANT_SEC_EINVAL and the caller withholds it, rather than resending the
+ * old bytes or building a second ciphertext under its nonce. The slot clock
+ * and the last-slot guard stay, so no index is ever built twice. Before a
+ * change is written, radiant_sec_policy_changing() may refuse it; its code is
+ * returned with nothing changed. An identical tuple never asks. The adapter
+ * reaches this through antr_sec_policy_set(), which also takes back the slot
+ * and ack payload it already staged (review 2026-11-17 item 2).
+ */
 int  radiant_sec_configure(uint8_t ch, uint8_t switches, uint8_t w,
 			   uint8_t page_lo, uint8_t page_hi);
+
+/*
+ * Port hook: radiant_sec_configure() is about to change channel `ch`'s
+ * switches, W or page range. Anything but RADIANT_SEC_OK refuses the change
+ * and is returned from configure with nothing written. Called only for a
+ * valid tuple that differs from the installed one, under the port's lock,
+ * from whatever context configure runs in. Weak, returning OK, by default.
+ * The antr port acts only inside its 0xF1 path (antr_sec_policy_set()): it
+ * refuses a master with a transfer in flight (RADIANT_SEC_ESTATE) and
+ * otherwise takes back that master's staged slot and ack payload.
+ */
+int  radiant_sec_policy_changing(uint8_t ch);
 
 /*
  * Set the epoch and anchor its phase.

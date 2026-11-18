@@ -2583,3 +2583,155 @@ ZTEST(radiant_sec, test_set_epoch_refuses_a_phase_it_cannot_represent)
 		      radiant_sec_set_epoch(TX_CH, top, 65536u * p, TEST_PERIOD));
 	zassert_ok(radiant_sec_set_epoch(TX_CH, top, 65535u * p, TEST_PERIOD));
 }
+
+/* ── A policy change takes effect before 0xF1 answers (review 2026-11-17
+ * item 2) ─────────────────────────────────────────────────────────────── */
+
+/* Configure the sender alone, with the default page range unless given. */
+static int tx_configure(uint8_t switches, uint8_t lo, uint8_t hi)
+{
+	return radiant_sec_configure(TX_CH, switches, 4u, lo, hi);
+}
+
+/*
+ * The slot the adapter staged before a 0xF1 is posted again once the 0xF1 has
+ * flushed it. Its bytes were built under the old policy - here X_AUTH alone,
+ * the host's five bytes in the clear - so resending them would put the old
+ * policy on the air after the new one was acknowledged, and building them
+ * again would be a second ciphertext and a second absorb under one nonce. The
+ * slot is withheld; the next is built under the new policy. Fails on master,
+ * which resends the X_AUTH bytes.
+ */
+ZTEST(radiant_sec, test_a_policy_change_withholds_the_slot_already_built)
+{
+	uint8_t air[8];
+
+	key_both();
+	zassert_ok(tx_configure(RADIANT_SEC_SW_AUTH, RADIANT_SEC_PAGE_LO_DEFAULT,
+				RADIANT_SEC_PAGE_HI_DEFAULT));
+	epoch_both(90u);
+	tx_air(0u, air);
+	tx_air(1u, air);
+	zassert_mem_equal(&air[2], &conf_plain[2], 5u, "setup: X_AUTH hid the bytes");
+
+	zassert_ok(tx_configure(RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_CONF,
+				RADIANT_SEC_PAGE_LO_DEFAULT,
+				RADIANT_SEC_PAGE_HI_DEFAULT));
+	memcpy(air, conf_plain, sizeof(air));
+	zassert_equal(RADIANT_SEC_EINVAL,
+		      radiant_sec_tx_transform(TX_CH, air, 8u, slot_t(1u)),
+		      "the slot built under the old policy was sent again");
+
+	/* Withheld again if posted again, and the next slot is the new one's. */
+	memcpy(air, conf_plain, sizeof(air));
+	zassert_equal(RADIANT_SEC_EINVAL,
+		      radiant_sec_tx_transform(TX_CH, air, 8u, slot_t(1u)));
+	tx_air(2u, air);
+	zassert_equal(2u, air[1]);
+	zassert_true(memcmp(&air[2], &conf_plain[2], 5u) != 0,
+		     "the slot after the change is not encrypted");
+}
+
+/* The guard beside it: the same policy again changes nothing, so a slot
+ * posted again still resends exactly what it built. */
+ZTEST(radiant_sec, test_an_identical_configure_keeps_a_reposted_slot)
+{
+	uint8_t first[8];
+	uint8_t again[8];
+
+	key_both();
+	zassert_ok(tx_configure(RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_CONF,
+				RADIANT_SEC_PAGE_LO_DEFAULT,
+				RADIANT_SEC_PAGE_HI_DEFAULT));
+	epoch_both(91u);
+	tx_air(0u, first);
+	tx_air(1u, first);
+
+	zassert_ok(tx_configure(RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_CONF,
+				RADIANT_SEC_PAGE_LO_DEFAULT,
+				RADIANT_SEC_PAGE_HI_DEFAULT));
+	memset(again, 0x99u, sizeof(again));
+	again[0] = TEST_PAGE;
+	zassert_ok(radiant_sec_tx_transform(TX_CH, again, 8u, slot_t(1u)));
+	zassert_mem_equal(first, again, 8u);
+}
+
+/* A slot whose page the old range left clear was never built, so a range that
+ * now covers it builds it - once, and a later re-post resends those bytes. */
+ZTEST(radiant_sec, test_a_widened_range_builds_an_unbuilt_slot_once)
+{
+	uint8_t air[8];
+	uint8_t built[8];
+
+	key_both();
+	zassert_ok(tx_configure(RADIANT_SEC_SW_CONF, 0x01u, 0x04u));
+	epoch_both(92u);
+	memcpy(air, conf_plain, sizeof(air));
+	zassert_ok(radiant_sec_tx_transform(TX_CH, air, 8u, slot_t(0u)));
+	zassert_mem_equal(air, conf_plain, 8u, "setup: page 5 was secured");
+
+	zassert_ok(tx_configure(RADIANT_SEC_SW_CONF, 0x01u, 0x0Fu));
+	memcpy(built, conf_plain, sizeof(built));
+	zassert_ok(radiant_sec_tx_transform(TX_CH, built, 8u, slot_t(0u)));
+	zassert_equal(0u, built[1]);
+	zassert_true(memcmp(&built[2], &conf_plain[2], 5u) != 0,
+		     "the widened range left the page in the clear");
+
+	memset(air, 0x77u, sizeof(air));
+	air[0] = TEST_PAGE;
+	zassert_ok(radiant_sec_tx_transform(TX_CH, air, 8u, slot_t(0u)));
+	zassert_mem_equal(air, built, 8u, "the slot was built twice");
+}
+
+/*
+ * radiant_sec_policy_changing(), the port's say before a change is written:
+ * this image's stand-in records the asks and answers what the test sets.
+ * Every other suite that configures a channel sees OK, the weak default.
+ */
+static int      changing_rc = RADIANT_SEC_OK;
+static uint32_t changing_calls;
+static uint8_t  changing_ch;
+
+int radiant_sec_policy_changing(uint8_t ch)
+{
+	changing_calls++;
+	changing_ch = ch;
+	return changing_rc;
+}
+
+/* Asked only for a valid tuple that differs from the installed one, and a
+ * refusal is returned with nothing written: not the tuple, and not the mark
+ * that withholds the slot already built. */
+ZTEST(radiant_sec, test_only_a_change_asks_the_port_and_a_refusal_changes_nothing)
+{
+	const uint8_t            sw = RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_CONF;
+	struct radiant_sec_state s;
+	uint8_t                  first[8];
+	uint8_t                  again[8];
+
+	key_both();
+	changing_calls = 0u;
+	zassert_ok(tx_configure(sw, 0x01u, 0x0Fu));
+	zassert_equal(1u, changing_calls, "a fresh context's first tuple");
+	zassert_equal(TX_CH, changing_ch);
+	zassert_ok(tx_configure(sw, 0x01u, 0x0Fu));
+	zassert_equal(RADIANT_SEC_EINVAL,
+		      radiant_sec_configure(TX_CH, sw, 3u, 0x01u, 0x0Fu));
+	zassert_equal(1u, changing_calls, "asked for an identical or invalid tuple");
+
+	epoch_both(93u);
+	tx_air(0u, first);
+	changing_rc = RADIANT_SEC_ESTATE;
+	zassert_equal(RADIANT_SEC_ESTATE,
+		      tx_configure(RADIANT_SEC_SW_AUTH, 0x01u, 0x0Fu));
+	changing_rc = RADIANT_SEC_OK;
+	zassert_equal(2u, changing_calls);
+
+	radiant_sec_get_state(TX_CH, &s);
+	zassert_equal(sw, s.switches, "the refused tuple was installed");
+	memset(again, 0x99u, sizeof(again));
+	again[0] = TEST_PAGE;
+	zassert_ok(radiant_sec_tx_transform(TX_CH, again, 8u, slot_t(0u)),
+		   "a refused change withheld the slot");
+	zassert_mem_equal(first, again, 8u);
+}

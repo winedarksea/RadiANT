@@ -119,8 +119,12 @@ static antr_err_t sec_config_locked(uint8_t channel, uint8_t switches, uint8_t w
 		return (antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED;
 	}
 
-	return sec_err(radiant_sec_configure(channel, switches, w, page_lo,
-					     page_hi));
+	/* Not radiant_sec_configure() directly: on a master the change must be
+	 * the one on the air before this answers, so the adapter takes back
+	 * the slot it staged, and refuses while a transfer is in flight
+	 * (review 2026-11-17 item 2). */
+	return sec_err(antr_sec_policy_set(channel, switches, w, page_lo,
+					   page_hi));
 }
 
 static antr_err_t sec_key_set_locked(uint8_t channel, uint8_t bits,

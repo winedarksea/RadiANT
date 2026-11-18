@@ -508,7 +508,14 @@ acknowledged data or a burst still in flight, which was accepted in the clear
 and would otherwise go out in the clear after the key landed; the host retries
 once the transfer completes. A key installed by pairing (section 7.4) is
 outside that check, since pairing runs its own acknowledged exchange on the
-channel (review 2026-11-14, item 4).
+channel (review 2026-11-14, item 4). `0xF1` (`antr_sec_config()`) follows the
+same rule: on a master, a `0xF1` that changes the switches, W or the page range
+returns `CHANNEL_IN_WRONG_STATE`, with nothing changed, while host acknowledged
+data or a burst is in flight or the master is answering a slave's burst. A
+channel is only secured once `0xF1` sets a switch, so without this a transfer
+accepted under the old policy would go out after the new one was acknowledged.
+An identical `0xF1` and any `0xF1` to a slave are never refused (review
+2026-11-17, item 2; section 3.5 has what a change does to the air).
 
 ### 3.3 The pinned block layouts
 
@@ -613,6 +620,30 @@ before the `0xF3` stays silent on its secured pages until it arrives. Later
   installed (a same-root re-send keeps a moved one), and an install that fails
   once the old root is destroyed leaves the channel unkeyed rather than half on
   each root.
+
+**A policy change takes effect before `0xF1` answers** (review 2026-11-17,
+item 2). A master builds its next slot up to a period ahead, and that slot's
+bytes are also what it acknowledges with. Until this fix a `0xF1` that switched
+`X_CONF` on, added it to `X_AUTH` or widened the page range left the slot
+already built in place, so the old policy's bytes (often the host's plaintext)
+went on the air after the host had been told the change was made, and an
+acknowledgement in between carried them too. Now a `0xF1` that changes the
+switches, W or the range on a master takes back the staged slot and the
+acknowledgement payload, under the same interrupt lock that installs the
+policy, before it answers. That slot is then withheld, not rebuilt: its index
+already has bytes, and rebuilding it would put a second ciphertext under one
+nonce. The next slot is built under the new policy. A change therefore costs at
+most one silent slot (two when the period is under 50 ms, the pump's
+interval), and no slot index is ever used twice. The boundary is a frame
+already on the air when the `0xF1` lands. The nRF backend stops the radio on
+the spot, cutting that frame short. The TI backend's `RF_flushCmd` is
+asynchronous and the frame may complete; this is unmeasured on TI. An
+identical `0xF1` takes nothing back, and a slave's is not restricted: a
+receiver stages no secured slot. A master busy with a transfer is refused (see
+"Non-broadcast traffic", section 3.2). This is unconditional, by owner decision
+(2026-11-17): no Kconfig symbol or wire option lets the old policy's frame
+through. A node that wants plaintext beside protected pages has two ways to
+get it: put those pages outside the secured range, or use `X_AUTH` alone.
 
 **The host is the authority for the roots it installs** (owner, 2026-11-16).
 `0xF2` and `0xF3` do not check one channel against another. A host that keys
@@ -1705,12 +1736,12 @@ one, refuses epochs near `0xFFFFFFFF`, and refuses a phase of more than
 nothing changed; see section 3.5. A phase longer than the dongle's uptime is
 normal and accepted: the anchor then lies before its boot (section 3.1).
 
-### The two ordering rules, and why they are refusals rather than defaults
+### The three ordering rules, and why they are refusals rather than defaults
 
 `0xF1`–`0xF4` are implemented by `radiant/src/antr/ant_sec_host.c` behind
 `CONFIG_RADIANT_SEC_HOST_MESSAGES`, and reached from the host through
 `antr_sec_config()`, `antr_sec_key_set()`, `antr_sec_epoch_set()` and
-`antr_sec_status_get()`. Two orderings are mandatory, and both answer
+`antr_sec_status_get()`. Three orderings are mandatory, and all three answer
 `ANTW_CHANNEL_IN_WRONG_STATE` rather than guessing:
 
 - **The channel ID must be set before the key.** `base_devnum` is bound into the
@@ -1722,6 +1753,14 @@ normal and accepted: the anchor then lies before its boot (section 3.1).
   `us_into_epoch` into a slot index. A host-supplied period that disagreed
   with the channel's would desynchronise the counter in a way that looks exactly
   like clock drift, so `0xF3` does not carry one either.
+- **A master's transfer must finish before its key or policy changes.** `0xF2`,
+  and a `0xF1` that changes the switches, W or the page range, are refused on a
+  master with host acknowledged data or a burst in flight, or one answering a
+  slave's burst. That data was accepted under the old policy and would go out
+  under the new one's name. Nothing is changed, and the host retries once the
+  transfer completes. An identical `0xF1`, and any `0xF1` or `0xF2` to a slave,
+  is not refused (section 3.2, "Non-broadcast traffic"; review 2026-11-14 item
+  4 and review 2026-11-17 item 2).
 
 `ANTW_CHANNEL_IN_WRONG_STATE` rather than `ANTW_INVALID_PARAMETER_PROVIDED` is
 the useful distinction: the parameter is correct and arrived early, and a host

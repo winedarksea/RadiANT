@@ -39,6 +39,13 @@ extern uint32_t antr_api_lock_violations;
 /* True when `ch` is a master with host acked data or a burst block in
  * flight; 0xF2 refuses to key such a channel. Caller holds api_lock. */
 bool antr_master_xfer_busy(uint8_t ch);
+
+/* 0xF1: radiant_sec_configure(), and on a master whose policy changes, the
+ * staged slot and ack payload taken back before it returns; refused with
+ * RADIANT_SEC_ESTATE (nothing changed) while that master's transfer engine is
+ * busy. RADIANT_SEC_* codes. Caller holds api_lock. Review 2026-11-17 item 2. */
+int antr_sec_policy_set(uint8_t ch, uint8_t switches, uint8_t w,
+			uint8_t page_lo, uint8_t page_hi);
 #endif
 
 #if defined(CONFIG_ZTEST)

@@ -120,6 +120,10 @@ struct sec_ctx {
 	bool     tx_prev_valid;   /* tx_prev_tag holds a closed window's tag */
 	/* Epoch exhausted at a wrap: no further secured TX until a new epoch. */
 	bool     tx_spent;
+	/* tx_last_out was built under a policy configure() has since replaced:
+	 * that slot posted again is withheld, not resent and not rebuilt (review
+	 * 2026-11-17 item 2). Fills an alignment hole, so no RAM. */
+	bool     tx_last_stale;
 	uint8_t  tx_last_out[SEC_PAGE_BYTES];
 	struct radiant_sec_cmac_ctx tx_cmac;
 	/* The tag of the window that just closed, transmitted one byte per
@@ -231,6 +235,14 @@ static bool ctx_armed(const struct sec_ctx *c)
 static bool page_secured(const struct sec_ctx *c, uint8_t page)
 {
 	return page >= c->page_lo && page <= c->page_hi;
+}
+
+/* The 0xF1 tuple installed is exactly this one. */
+static bool cfg_same(const struct sec_ctx *c, uint8_t switches, uint8_t w,
+		     uint8_t page_lo, uint8_t page_hi)
+{
+	return c->switches == switches && c->w == w && c->page_lo == page_lo &&
+	       c->page_hi == page_hi;
 }
 
 static void stat_bump(uint32_t *counter)
@@ -483,6 +495,12 @@ __weak void radiant_sec_epoch_wanted(uint8_t ch, uint32_t epoch)
 	ARG_UNUSED(epoch);
 }
 
+__weak int radiant_sec_policy_changing(uint8_t ch)
+{
+	ARG_UNUSED(ch);
+	return RADIANT_SEC_OK;
+}
+
 /* ── Configuration ──────────────────────────────────────────────────────── */
 
 static void q_purge(uint8_t ch);
@@ -687,6 +705,21 @@ int radiant_sec_configure(uint8_t ch, uint8_t switches, uint8_t w,
 		return RADIANT_SEC_ENOTSUP;
 	}
 
+	if (!cfg_same(c, switches, w, page_lo, page_hi)) {
+		/* A change: the port may refuse it (a master with a transfer
+		 * accepted under the old policy) or take back what it staged
+		 * under it (antr_sec_policy_set()). Nothing is written yet. */
+		int rc = radiant_sec_policy_changing(ch);
+
+		if (rc != RADIANT_SEC_OK) {
+			return rc;
+		}
+		/* The slot last built carries the old policy's bytes, and its
+		 * re-post is withheld: resending it is the old policy on the air
+		 * after the change was acknowledged, and building it again is a
+		 * second ciphertext under its nonce. */
+		c->tx_last_stale = true;
+	}
 	c->switches = switches;
 	c->w = w;
 	c->page_lo = page_lo;
@@ -1196,7 +1229,12 @@ int radiant_sec_tx_transform(uint8_t ch, uint8_t *pay, uint8_t len,
 			 * re-posted): the bytes it already has, whatever the
 			 * host wrote since. A second build would be a second
 			 * ciphertext under this slot's nonce and a second
-			 * absorb into its window's MAC. */
+			 * absorb into its window's MAC. Unless a policy change
+			 * since made those bytes the old policy's: then nothing
+			 * goes out in this slot (review 2026-11-17 item 2). */
+			if (c->tx_last_stale) {
+				return RADIANT_SEC_EINVAL;
+			}
 			memcpy(pay, c->tx_last_out, SEC_PAGE_BYTES);
 			return RADIANT_SEC_OK;
 		}
@@ -1269,6 +1307,7 @@ int radiant_sec_tx_transform(uint8_t ch, uint8_t *pay, uint8_t len,
 	memcpy(c->tx_last_out, pay, SEC_PAGE_BYTES);
 	c->tx_last_idx = idx;
 	c->tx_last_valid = true;
+	c->tx_last_stale = false;
 	return RADIANT_SEC_OK;
 }
 
