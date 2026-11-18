@@ -482,10 +482,15 @@ ESTIMATE, µA, TI CC2652R datasheet SWRS207J rows):
 | **Total (known parts)** | | **1028** (860 without the UART row) |
 
 The estimator at GC1 did not model the RF core's on-time outside TX and RX
-(about 12 ms/s here), so the total above leaves that out. It now charges it
-(power/c2: `RF core on (idle)`, rfon time minus TX/RX at the SWRS207J Iperi
-"RF core idle" delta, 210.9 µA): on this capture 1.195 % of time, **2.5 µA**,
-total 1030 µA. `--ti-standby` (a what-if for
+(about 12 ms/s here), so the total above leaves that out. It now charges a
+**lower bound** for it (power/c2: `RF core idle (LB)`, rfon time minus TX/RX
+at the SWRS207J Iperi "RF core idle" delta, 210.9 µA): on this capture
+1.195 % of time, 2.5 µA, total 1030 µA. The real cost is higher and not
+known: while the synthesiser is locked after CMD_FS waiting for the TX the
+chip draws mA, not 210.9 µA, and rfon starts at the setup command, so the
+core's boot before it is not counted at all. The estimator lists that as
+`RF synth/boot`, UNKNOWN and excluded, and prints the driver's wake budget
+(power-ups/s × pudur_us) beside it: 1801 µs/s on this capture. `--ti-standby` (a what-if for
 standby, which this firmware forbids) gives 227 µA, and most of that is the
 console-inflated CPU term. The idle floor and the UART row dominate, which is
 why Pass C2 (XOSC_HF release) and the TI standby decision are the levers left

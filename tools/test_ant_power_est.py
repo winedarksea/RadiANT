@@ -452,28 +452,59 @@ class Estimate(unittest.TestCase):
         # 10 s: core on 180 ms, of which TX 11 ms and RX 44 ms.
         e = pe.estimate(b, self.iv(tx_us=11_000, rx_us=44_000, rfon_us=180_000))
         c = {x.name: x for x in e.components}
-        self.assertAlmostEqual(c["RF core on (idle)"].ua, (0.018 - 0.0011 - 0.0044) * 210.9)
-        self.assertIn("1.250 % of 1.800 % on", c["RF core on (idle)"].basis)
-        self.assertNotIn("RF core on (idle)", e.excluded)
+        self.assertAlmostEqual(c["RF core idle (LB)"].ua, (0.018 - 0.0011 - 0.0044) * 210.9)
+        self.assertIn("1.250 % of 1.800 % on", c["RF core idle (LB)"].basis)
+        self.assertNotIn("RF core idle (LB)", e.excluded)
         self.assertAlmostEqual(e.total_ua, sum(x.ua for x in e.components if x.ua is not None))
         # Charged as a delta: the standby floor does not change it.
         s = pe.estimate(pe.resolve_board("cc2652", None, True),
                         self.iv(tx_us=11_000, rx_us=44_000, rfon_us=180_000))
-        self.assertAlmostEqual(next(x.ua for x in s.components if x.name == "RF core on (idle)"),
-                               c["RF core on (idle)"].ua)
+        self.assertAlmostEqual(next(x.ua for x in s.components if x.name == "RF core idle (LB)"),
+                               c["RF core idle (LB)"].ua)
 
     def test_rf_core_idle_clamped_and_excluded_when_unmeasured(self):
         b = pe.resolve_board("cc2652", None, False)
         # On-time floored below TX + RX (log rounding): clamped to 0, not negative.
         e = pe.estimate(b, self.iv(tx_us=11_000, rx_us=44_000, rfon_us=50_000))
-        self.assertEqual(next(x.ua for x in e.components if x.name == "RF core on (idle)"), 0.0)
+        self.assertEqual(next(x.ua for x in e.components if x.name == "RF core idle (LB)"), 0.0)
         e = pe.estimate(b, self.iv())
-        self.assertIn("RF core on (idle)", e.excluded)
-        why = next(x.why_excluded for x in e.components if x.name == "RF core on (idle)")
+        self.assertIn("RF core idle (LB)", e.excluded)
+        why = next(x.why_excluded for x in e.components if x.name == "RF core idle (LB)")
         self.assertIn("not measured", why)
         # No such term on a board without a separate RF core.
         e = pe.estimate(pe.resolve_board("nrf54l15dk", None, False), self.iv(rfon_us=180_000))
-        self.assertNotIn("RF core on (idle)", [x.name for x in e.components])
+        self.assertNotIn("RF core idle (LB)", [x.name for x in e.components])
+        self.assertNotIn("RF synth/boot", [x.name for x in e.components])
+
+    def test_rf_synth_boot_unknown_excluded_with_wake_info(self):
+        b = pe.resolve_board("cc2652", None, False)
+        # 10 s, 40.6 power-ups at 448 us: 1819 us/s of wake, shown, not charged.
+        e = pe.estimate(b, self.iv(tx_us=11_000, rx_us=44_000, rfon_us=180_000,
+                                   rf_wake_us=40.6 * 448))
+        c = {x.name: x for x in e.components}
+        self.assertIsNone(c["RF synth/boot"].ua)
+        self.assertIn("RF synth/boot", e.excluded)
+        self.assertIn("UNKNOWN", c["RF synth/boot"].why_excluded)
+        self.assertIn("wake 1819 us/s", c["RF synth/boot"].basis)
+        self.assertTrue(any("LOWER BOUND" in n and "1819 us/s" in n for n in e.notes))
+        self.assertAlmostEqual(e.total_ua, sum(x.ua for x in e.components if x.ua is not None))
+        e = pe.estimate(b, self.iv())
+        self.assertEqual({x.name: x for x in e.components}["RF synth/boot"].basis, "n/a")
+
+    def test_rf_wake_from_log_and_snapshots(self):
+        line = ("power dt_ms=10000 hfxo_pm=-1 tx_us=1 tx_ops=1 rx_us=1 rx_ops=1 cpu_pm=1 "
+                "idle_x10=1 constlat=0/-1 rfon_pm=17 rfpu_x10={} pudur_us={} fsx=0")
+        iv = pe.parse_log([line.format(40, 448), line.format(40, 460)])
+        self.assertAlmostEqual(iv.rf_wake_us, 40 * 448 + 40 * 460)
+        iv = pe.parse_log([line.format(40, 448), line.format(40, -1)])   # pudur not yet read
+        self.assertIsNone(iv.rf_wake_us)
+        a = snap(uptime_ms=0, ti_rf_core_on_us=0, ti_rf_powerups=10, ti_rf_pu_dur_us=448,
+                 flags=ALL_FLAGS | pe.F_TI)
+        b = snap(uptime_ms=10_000, ti_rf_core_on_us=175_000, ti_rf_powerups=51,
+                 ti_rf_pu_dur_us=450, flags=ALL_FLAGS | pe.F_TI)
+        self.assertEqual(pe.diff_snapshots(a, b).rf_wake_us, 41 * 450)
+        b["fields"]["flags"] = ALL_FLAGS
+        self.assertIsNone(pe.diff_snapshots(a, b).rf_wake_us)
 
 
 class Table(unittest.TestCase):
@@ -523,7 +554,7 @@ class Cli(unittest.TestCase):
             with redirect_stdout(buf):
                 self.assertEqual(pe.main(["--board", "cc2652", p]), 0)
         # The peek carries no ti_* fields, so the RF core term is excluded too.
-        self.assertIn("EXCLUDED from the total: RF core on (idle), HFXO (outside radio)",
+        self.assertIn("EXCLUDED from the total: RF core idle (LB), RF synth/boot, HFXO (outside radio)",
                       buf.getvalue())
 
     def test_bad_input_exit_1(self):

@@ -54,13 +54,20 @@ THE MODEL (deliberately simple, stated so it can be argued with):
       + max(0, d_hfxo - d_tx - d_rx) * I_hfxo
       + d_cpu * (I_cpu - I_floor)          CPU rows include their clock
       + f_constlat * (I_constlat - I_idle0)        nRF54L15 only
-      + max(0, d_rfon - d_tx - d_rx) * I_rfcore    cc2652 only
+      + max(0, d_rfon - d_tx - d_rx) * I_rfcore    cc2652 only, LOWER BOUND
       + I_uart                                     only with --uart-on
 
 d_rfon is the TI RF core's powered time (rfon_pm on the log line,
 ti_rf_core_on_us in a snapshot); the part outside TX and RX (power-up setup,
 synth, the tail before power-down) is charged at the datasheet's "RF core
-idle" peripheral delta. The radio rows already include the core.
+idle" peripheral delta. The radio rows already include the core. That term is
+a LOWER BOUND: while the synthesiser is locked after CMD_FS, waiting for a TX
+or RX, the chip draws milliamps, not the idle delta, and ti_rf_core_on_us
+starts at the setup command, so the core's boot before it is not in d_rfon
+at all. The datasheet has no row for either, so a separate "synth/boot"
+component is listed as UNKNOWN and excluded; the wake time the driver
+budgets (power-ups/s x pudur_us, in us/s) is printed beside it as a size
+hint, not charged.
 
 I_hfxo is, where the datasheet has one, the whole-chip "one TIMER running
 @ 1 MHz, clock = HFXO" row counted over the floor - today's state is the
@@ -236,6 +243,9 @@ TI_UART = Current(0.1675, "cc2652r", "8.5 Iperi, UART: delta current, clock enab
 # The RF core powered and clocked but not transmitting or receiving: what the
 # core costs between power-up and power-down outside its TX/RX operations.
 TI_RFCORE_IDLE = Current(0.2109, "cc2652r", "8.5 Iperi, RF core: delta current, power domain enabled, clock enabled, RF core idle")
+TI_SYNTH_BOOT = _unk("CC2652R datasheet has no row for the RF core booting, or for the "
+                     "synthesiser locked between CMD_FS and a TX/RX (mA, far above the "
+                     "RF core idle delta)")
 TI_HFXO_WHY = "CC2652R/P datasheets list no XOSC_HF current"
 
 
@@ -368,6 +378,7 @@ class Interval:
     idle_entries: int | None = None
     constlat: bool | None = None
     rfon_us: int | None = None      # TI RF core powered (cc26xx power diag)
+    rf_wake_us: float | None = None  # TI: sum of power-ups x the driver's pudur_us
     source: str = ""
     problems: list[str] = dataclasses.field(default_factory=list)
 
@@ -481,6 +492,9 @@ def diff_snapshots(a: dict, b: dict, host_tol_s: float = 5.0, host_tol_frac: flo
     iv.cpu_us = get("cpu_active_us", True)
     iv.idle_entries = get("idle_entries", False)
     iv.rfon_us = get("ti_rf_core_on_us", True)
+    pu = get("ti_rf_powerups", False) if measured(fb, "ti_rf_core_on_us") else None
+    if pu is not None and _measured(fb.get("ti_rf_pu_dur_us")):
+        iv.rf_wake_us = float(pu) * int(fb["ti_rf_pu_dur_us"])
     if flags is not None:
         if flags & F_CONSTLAT_HW_VALID and fb.get("constlat_stat") is not None:
             iv.constlat = bool(int(fb["constlat_stat"]) & 1)
@@ -500,6 +514,7 @@ def parse_log(lines: list[str]) -> Interval:
     weighted = {"hfxo_pm": [0, 0], "cpu_pm": [0, 0], "idle_x10": [0, 0],
                 "rfon_pm": [0, 0]}  # [sum*dt, dt]
     constlat = None
+    wake = [0.0, 0]   # [sum of power-ups x pudur_us, dt covered]
     n = 0
     for line in lines:
         m = LOG_RE.search(line)
@@ -511,6 +526,10 @@ def parse_log(lines: list[str]) -> Interval:
             continue
         n += 1
         dt_ms += d
+        if "rfpu_x10" in kv and "pudur_us" in kv and kv["pudur_us"][0] >= 0:
+            # power-ups in this line = rate/s x dt_s, at the driver's pudur now
+            wake[0] += kv["rfpu_x10"][0] / 10 * d / 1000 * kv["pudur_us"][0]
+            wake[1] += d
         for k in sums:
             if k in kv:
                 sums[k] += kv[k][0]
@@ -541,6 +560,8 @@ def parse_log(lines: list[str]) -> Interval:
         # The firmware floors rfon_pm per line, so the mean reads up to 1 per-mille low.
         iv.problems.append("rfon_pm is floored on each log line: the RF core term "
                            "may read up to 1 per-mille of on-time low")
+    if wake[1] == dt_ms:
+        iv.rf_wake_us = wake[0]
     return iv
 
 
@@ -634,11 +655,23 @@ def estimate(board: Board, iv: Interval, *, tx_dbm: int = 0, uart_on: bool = Fal
         rf_idle = None
         if d_on is not None:
             rf_idle = max(0.0, d_on - (d_tx or 0.0) - (d_rx or 0.0))
-        add("RF core on (idle)",
+        add("RF core idle (LB)",
             _pct(rf_idle) + (f" of {_pct(d_on)} on" if d_on is not None else ""),
             board.rfcore_idle, rf_idle,
             "" if d_on is not None else "RF core on-time not measured (rfon_pm / "
             "ti_rf_core_on_us need CONFIG_RADIANT_POWER_DIAG on cc26xx)")
+        # What that term cannot see: the synthesiser locked between CMD_FS and
+        # the TX/RX (mA), and the core's boot before setup (outside rfon).
+        wake = None if iv.rf_wake_us is None else iv.rf_wake_us / iv.dt_s
+        add("RF synth/boot", "n/a" if wake is None else f"wake {wake:.0f} us/s (info)",
+            TI_SYNTH_BOOT, 1.0)
+        notes.append("RF core idle (LB) is a LOWER BOUND: it charges the core's on-time "
+                     "outside TX/RX at the idle delta, but the synth locked after CMD_FS "
+                     "draws mA and the boot before setup is not in rfon at all "
+                     "(RF synth/boot, UNKNOWN, excluded)"
+                     + ("" if wake is None else
+                        f"; the driver's wake budget, power-ups/s x pudur_us, is "
+                        f"{wake:.0f} us/s ({wake / 1000:.2f} per-mille), informational"))
 
     # HFXO: sampled duty wins over the stack's own request counter (MPSL or
     # USB may hold the crystal too); radio rows already include the crystal.
