@@ -1,0 +1,6 @@
+d89c24763bd6dc52015e28b46cf65afd *a4_l15_mpsl_pd_nohold.hex
+7b0a6c82a215d4fb2205869623f528e5 *a4_l15_mpsl_pd_nohold.elf
+c4c8fbf1f116a4289b2fdf65875d8982 *a4_l15_mpsl_pd.hex
+961cf4d2c08c956c2d967b79c5da1715 *a4_l15_mpsl_pd.elf
+2a130085d291eaf379ebc86e25b6a602 *ga_lp_q.hex
+2520dc162b879daed39530635b0774cf *ga_lp_q.elf

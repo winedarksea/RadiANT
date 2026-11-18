@@ -1,0 +1,75 @@
+
+liveness: running  DHCSR 0x01140001 -> 0x01140001
+  note: power_diag uptime at first snapshot: 4012323 ms
+  note: power_diag uptime advanced 2000 ms across the session (planned sleeps 2500 ms; the struct is republished once 
+a second)
+
+HFXO running: 3/3 = 100.0%  (95 % Wilson 43.9% .. 100.0%)
+CONSTLAT on:  3/3 = 100.0%  (95 % Wilson 43.9% .. 100.0%)
+first sample: XO.RUN=0x00000001 XO.STAT=0x00010001 CONSTLATSTAT=0x00000001
+last sample:  XO.RUN=0x00000001 XO.STAT=0x00010001 CONSTLATSTAT=0x00000001
+delays uniform 150..450 ms (seed 1206290280), 2500 ms planned sleep in total
+  The interval assumes independent samples; long HFXO on/off runs make it optimistic.
+
+radiant_power_diag @ 0x20000264, 88 bytes (radiant_power_diag v1 per power/a1 2189023 (TO RECONCILE WITH A1))
+  snapshot 'before': ok
+    +0x000: 52504431 00000001 00000058 00001F58
+    +0x010: 003D3923 EF272BC0 00000001 00000000
+    +0x020: 0024E911 009EBD48 00003FA3 00003FA3
+    +0x030: 00FD62BA 00000004 00018D6E 0000003F
+    +0x040: 00000001 FFFFFFFF FFFFFFFF FFFFFFFF
+    +0x050: FFFFFFFF FFFFFFFF
+    magic              0x52504431
+    version            1
+    size               88
+    seq                8024
+    uptime_ms          4012323
+    hfxo_req_us        4012321728
+    hfxo_requests      1
+    hfxo_releases      0
+    radio_tx_us        2418961
+    radio_rx_us        10403144
+    radio_tx_ops       16291
+    radio_rx_ops       16291
+    cpu_active_us      16605882
+    cpu_load_permille  4
+    idle_entries       101742
+    flags              0x0000003F
+    constlat_stat      0x00000001
+    ti_rf_core_on_us   NOT_MEASURED
+    ti_rf_powerups     NOT_MEASURED
+    ti_rf_pu_dur_us    NOT_MEASURED
+    ti_fs_errors       NOT_MEASURED
+    ti_fold_backsteps  NOT_MEASURED
+  snapshot 'after': ok
+    +0x000: 52504431 00000001 00000058 00001F5C
+    +0x010: 003D40F3 EF45B0E0 00000001 00000000
+    +0x020: 0024EDBE 009ED133 00003FAB 00003FAB
+    +0x030: 00FD8308 00000004 00018DA1 0000003F
+    +0x040: 00000001 FFFFFFFF FFFFFFFF FFFFFFFF
+    +0x050: FFFFFFFF FFFFFFFF
+    magic              0x52504431
+    version            1
+    size               88
+    seq                8028
+    uptime_ms          4014323
+    hfxo_req_us        4014321888
+    hfxo_requests      1
+    hfxo_releases      0
+    radio_tx_us        2420158
+    radio_rx_us        10408243
+    radio_tx_ops       16299
+    radio_rx_ops       16299
+    cpu_active_us      16614152
+    cpu_load_permille  4
+    idle_entries       101793
+    flags              0x0000003F
+    constlat_stat      0x00000001
+    ti_rf_core_on_us   NOT_MEASURED
+    ti_rf_powerups     NOT_MEASURED
+    ti_rf_pu_dur_us    NOT_MEASURED
+    ti_fs_errors       NOT_MEASURED
+    ti_fold_backsteps  NOT_MEASURED
+
+raw J-Link output: C:\wt_power_a4b\archive\benchmarks\2026-11-18-a4-constlat\pre_ga_state_jlink.log  (re-analyse with 
+-ParseLog and the same arguments)

@@ -1,0 +1,23 @@
+Using COM4 at 57600 baud (UART transport)
+
+Opening a wildcard ANT+ receive channel
+  OK: extended messages
+  OK: network key
+  OK: assign channel (slave)
+  OK: wildcard channel id
+  OK: radio frequency 2457 MHz
+  OK: message period
+  OK: infinite search timeout
+  OK: open channel
+
+Listening for 120 s
+  found: #52233 - power meter
+  found: #52233 - fitness equipment (trainer)
+  found: #52233 - speed
+  found: #12345 - heart rate monitor
+
+Closing
+  OK: close channel
+
+Heard 369 broadcasts from 4 sensor(s)
+exit=0
