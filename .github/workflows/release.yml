@@ -2098,7 +2098,8 @@ jobs:
             -d build-pairing \
             -p always \
             -- "-DANT_RADIO=core" "-DEXTRA_CONF_FILE=security.conf" \
-               "-DCONFIG_RADIANT_SEC_PAIRING_X25519=y"
+               "-DCONFIG_RADIANT_SEC_PAIRING_X25519=y" \
+               "-DCONFIG_STACK_USAGE=y"
           west build app/apps/dongle \
             -b adafruit_feather_nrf52840/nrf52840/uf2 \
             -d build-compat \
@@ -2249,6 +2250,11 @@ jobs:
           # Trimmed from 3824 B (a length table in antr_sec_pair, one wipe,
           # one finish path per role) before the ceiling moved; 4096 is the
           # next multiple of 512, leaving 348 B.
+          # 4044 B at 876711c (2026-11-17, NCS v3.4.0, this recipe: 52 B
+          # left, unrecorded growth since); 3852 B after the X25519 ladder
+          # fold and static workspace (security review 2026-11-17, item 1:
+          # radiant_sec_x25519 1024 -> 864 B, fe_wipe inlined into fe_mul).
+          # Pairing bss +896 B (the workspace), not gated. Ceiling unchanged.
           check "pairing text" "$(( pair_text - on_text ))" 4096
 
           # ── The compat attestation layer ─────────────────────────────────
@@ -2366,6 +2372,50 @@ jobs:
           fi
 
           exit "${fail}"
+
+      # ── The pairing stack, measured (security review 2026-11-17, item 1) ──
+      #
+      # The X25519 ladder used to keep fifteen field elements on the stack: a
+      # 2,248 B frame, run by 0xF5 on the dongle's 2,048 B serial bridge
+      # thread. The chain was 2,852 B against 2,048 and every test passed,
+      # because every test ran on a 4 KB ztest stack; on nRF52840 the frame
+      # stepped over the 32 B MPU guard instead of tripping it. Nothing
+      # measured it, so this does, from the .su files CONFIG_STACK_USAGE=y
+      # writes on build-pairing above (-fstack-usage changes no code).
+      #
+      # Three chains, caller first: the two that run the curve (EXCHANGE and
+      # SCALAR) and the deepest one left once the curve was small, PEER_NONCE's
+      # key install. Each against the bridge stack (CONFIG_, from the image's
+      # .config) and its radiant part against RADIANT_SEC_PAIR_STACK_BYTES,
+      # the number radiant_sec.h tells a pairing thread to reserve. Measured
+      # at the fix (NCS v3.4.0, this recipe): 668 / 612 / 760 B of 2048, and
+      # 484 / 428 / 576 B of 768, an exception frame of 32 B included. The
+      # frame limit is the net under chains nobody named: the largest frame in
+      # radiant/src or apps/common is fe_mul's 288 B.
+      #
+      # A function that stops having a frame (inlined, renamed) fails the
+      # check rather than counting as zero: rename it in its chain.
+      - name: Pairing stays inside the bridge thread's stack
+        run: |
+          set -euo pipefail
+          B=CONFIG_ANT_DONGLE_BRIDGE_STACK_SIZE
+          P=RADIANT_SEC_PAIR_STACK_BYTES
+          BR=bridge_thread_fn,antr_sec_pair
+          CURVE=radiant_sec_x25519,fe_mul,fe_carry
+          INSTALL=pair_finish,radiant_sec_set_key,radiant_sec_key_same
+          INSTALL=${INSTALL},radiant_sec_cmac,radiant_sec_cmac_final
+          INSTALL=${INSTALL},encrypt_block
+          python app/scripts/check_stack_budget.py \
+            --build build-pairing \
+            --header app/radiant/include/radiant/radiant_sec.h \
+            --frame-limit 512 \
+            --frame-limit-path radiant/src --frame-limit-path apps/common \
+            --chain "peer=${BR},radiant_sec_pair_peer,${CURVE}<=${B}" \
+            --chain "set_scalar=${BR},radiant_sec_pair_set_scalar,${CURVE}<=${B}" \
+            --chain "peer_nonce=${BR},radiant_sec_pair_peer_nonce,${INSTALL}<=${B}" \
+            --chain "pair_peer=radiant_sec_pair_peer,${CURVE}<=${P}" \
+            --chain "pair_set_scalar=radiant_sec_pair_set_scalar,${CURVE}<=${P}" \
+            --chain "pair_peer_nonce=radiant_sec_pair_peer_nonce,${INSTALL}<=${P}"
 
       # CONFIG_RADIANT_SEC depends on CONFIG_RADIANT, so it can never reach a
       # build with no radiant in it - the stub here, and equally the sdk_ant

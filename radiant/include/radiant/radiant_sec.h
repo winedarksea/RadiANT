@@ -233,6 +233,13 @@ extern const uint8_t radiant_sec_x25519_basepoint[RADIANT_SEC_X25519_BYTES];
  * not rewritten. Constant time in the scalar; no claim is made about power or
  * electromagnetic analysis.
  *
+ * NOT RE-ENTRANT, and lock-checked like every thread-context entry point here
+ * (RADIANT_SEC_ASSERT_LOCKED): the ladder's seven field elements live in one
+ * static 896 B workspace, not on the caller's stack, so two calls must never
+ * overlap. Software implementation only; a PKA backend behind this entry
+ * point need not have one. The workspace and the clamped scalar copy are wiped
+ * before return.
+ *
  * Returns RADIANT_SEC_OK or RADIANT_SEC_EINVAL.
  */
 int radiant_sec_x25519(uint8_t *out, const uint8_t *scalar,
@@ -301,6 +308,18 @@ bool radiant_sec_x25519_is_degenerate(const uint8_t *shared);
 /* A node in pairing mode accepts a key from whoever asks, so the mode is always
  * bounded. Zero from a host means this, not "forever". */
 #define RADIANT_SEC_PAIR_TIMEOUT_DEFAULT_S 60
+
+/*
+ * Stack a caller of any radiant_sec_pair_* function needs below its own frame,
+ * the X25519 included: the deepest chain measured from the compiler's .su
+ * files (nRF52840, -Os, ARM GCC; 2026-11-17: PEER_NONCE's key install, 544 B),
+ * rounded up to a multiple of 256. A thread that runs pairing should check its
+ * stack against this at build time, as apps/common/ant_serial_bridge.c does
+ * (node_ident.h and profile_enrol.h point their callers here);
+ * scripts/check_stack_budget.py re-measures the chains in CI, so a change that
+ * deepens one fails there and this number moves with a measurement behind it.
+ */
+#define RADIANT_SEC_PAIR_STACK_BYTES 768
 
 /* Entering always starts a fresh exchange: any earlier one on the channel,
  * whatever its step, is wiped first. */
