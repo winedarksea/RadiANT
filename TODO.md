@@ -453,7 +453,9 @@ Settled by these captures, nothing to do:
 
 # Open issues from the 2026-11-17 RadiANT security review (HEAD acdd9d2)
 
-## 1. [OPEN, HIGH] Give serial pairing enough stack for X25519
+## 1. [DONE 2026-11-17, HIGH] Give serial pairing enough stack for X25519
+
+**Done** (`68f3545` tests, `dd7ade4` fix, branch `wip/sec-x25519-stack`): the ladder works in two temporaries plus the dead `x2, z2, x3, z3`, in one static 896 B workspace (pairing builds only; not re-entrant, now lock-checked). Feather pairing recipe, NCS v3.4.0: curve frame 2,248 -> 72 B, bridge-to-curve chain 2,852 -> 668 B of 2,048 (exception frame included), deepest pairing chain now `PEER_NONCE`'s key install at 760 B; pairing text 4,044 -> 3,852 B, pairing bss +896 B. `RADIANT_SEC_PAIR_STACK_BYTES` (768) is checked by a bridge `BUILD_ASSERT`; `scripts/check_stack_budget.py` runs on the CI pairing build. Hardware: the bridge-stack ztest faulted before the fix (USAGE FAULT, stack overflow) and passes after on the nRF5340 DK (M33, high-water 728 of 2,048 B; `radiant.api.sec_host` 172/172); twister on Bluefin 6,425/6,425 in 16 scenarios; on the Pro Micro (Cortex-M4) `tools/ant_pair_bench.py` ran the full serial exchange (RFC 7748 public keys, fingerprint 362706 on both ends, no reset) with a bridge high-water of 680 of 2,048 B. Caveats: the chains in CI are named by hand (not a call-graph analysis; a per-function 512 B frame limit is the net); the bridge's deepest non-pairing path (channel open, ~1.2 KB by objdump call graph) is not gated.
 
 The serial bridge calls pairing on its 2,048-byte thread stack (`apps/common/ant_serial_bridge.c`, `BRIDGE_STACK_SIZE`). ARM GCC at `-Os -mcpu=cortex-m4 -mthumb -fstack-usage` reports 2,248 bytes for `radiant_sec_x25519` alone and another 296 for its nested `fe_mul`. Size the pairing-enabled bridge stack or reduce the curve workspace. Check the complete bridge-to-curve call chain against the target stack budget and exercise ordinary serial pairing on that stack.
 

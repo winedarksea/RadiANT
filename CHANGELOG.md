@@ -20,6 +20,13 @@ reads.
 
 ### Fixed
 
+- **0xF5 pairing fits the serial bridge thread.** The X25519 ladder needed a
+  2,248 B stack frame on a 2,048 B thread (security review 2026-11-17, item 1;
+  only builds with `CONFIG_RADIANT_SEC_PAIRING_X25519`, which no released image
+  enables). Its working state now lives in a static 896 B workspace and the
+  curve's frame is 72 B; a Pro Micro pairs over serial with 680 of 2,048 B of
+  bridge stack used. CI measures the pairing chains from the compiler's `.su`
+  files (`scripts/check_stack_budget.py`).
 - **SYSTEM_RESET is answered in a few milliseconds, not 52.** The bridge slept
   50 ms before sending STARTUP, which put the reply on top of libusb-win32's
   short-read race: a host reading with a 50 ms timeout lost 5 of 1000 STARTUPs.
