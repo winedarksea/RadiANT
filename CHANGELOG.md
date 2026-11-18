@@ -20,6 +20,19 @@ reads.
 
 ### Fixed
 
+- **Security: a `0xF1` that changes a master's policy now takes effect before
+  it answers.** A master builds its next slot up to a period ahead and
+  acknowledges with the same bytes. A `0xF1` that switched `X_CONF` on, added
+  it to `X_AUTH` or widened the page range left both in place, so the old
+  policy's bytes (often the host's plaintext) went on the air after the host
+  was told the change was made. The slot and the acknowledgement payload are
+  now taken back first. The slot is withheld rather than rebuilt under its
+  nonce, which costs at most one silent slot. A master with host acknowledged
+  data or a burst in flight, or one answering a slave's burst, is refused with
+  `CHANNEL_IN_WRONG_STATE` and nothing changes, as `0xF2` already was. An
+  identical `0xF1`, and any `0xF1` to a slave, is unaffected (review
+  2026-11-17 item 2; `docs/radiant-security.md` 3.2, 3.5, 9).
+
 - **Security: a receiver that joins an epoch older than its own uptime now
   counts from the epoch, not from its boot.** The anchor `0xF3` sets was
   clamped to the clock's zero, and so were the re-anchor and the master's slot

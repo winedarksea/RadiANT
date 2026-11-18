@@ -2232,6 +2232,17 @@ jobs:
           # signed expected_index, now inlined into both, -60 as a symbol),
           # radiant_sec_set_epoch +58 (the phase refusal), rx_close_window -32
           # (no clamp). Ceilings unchanged, 228 B of text left.
+          # 7664 / 6975 after the 0xF1 policy change takes effect before it
+          # answers (review 2026-11-17 item 2; this recipe, NCS v3.4.0):
+          # 7452 / 6974 at c273bef, +212 / +1. radiant_sec_policy_changing
+          # +96 (the antr hook: busy refusal, slot cancel, ack payload),
+          # antr_sec_policy_set +80, radiant_sec_configure +40 (the change
+          # test and the hook call), radiant_sec_tx_transform +14 (the stale
+          # slot); bss is the hook's one-byte state. Both antr functions are
+          # __attribute__((cold)), so the file's -O2 does not expand them; the
+          # first draft (a radiant_sec_config_is() query, no cold) was +312.
+          # Ceilings unchanged, 16 B of text left: the next security fix
+          # will need the ceiling moved.
           check "security text" "$(( on_text - off_text ))" 7680
           check "security bss"  "$(( on_bss  - off_bss  ))" 7168
 
