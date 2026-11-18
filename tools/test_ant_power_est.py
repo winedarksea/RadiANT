@@ -84,6 +84,10 @@ class Arithmetic(unittest.TestCase):
         d, ci = pe.parse_duty("388/400")
         self.assertAlmostEqual(d, 0.97)
         self.assertEqual(ci, pe.wilson_interval(388, 400))
+        import argparse
+        for bad in ("3/0", "5/4", "-1/4", "a/4", "1.5", "x"):
+            with self.subTest(bad=bad), self.assertRaises(argparse.ArgumentTypeError):
+                pe.parse_duty(bad)
 
 
 class Diff(unittest.TestCase):
@@ -137,6 +141,20 @@ class Diff(unittest.TestCase):
         self.assertIsNone(iv.cpu_us)
         self.assertTrue(iv.problems)
 
+    def test_radio_counter_may_run_one_operation_past_the_interval(self):
+        # A1 charges an operation's whole on-time when it ends; a scan chunk
+        # is up to 250 ms, so 10.2 s of RX in a 10 s window is legitimate.
+        a = snap(uptime_ms=0, radio_rx_us=0)
+        b = snap(uptime_ms=10_000, radio_rx_us=10_200_000)
+        iv = pe.diff_snapshots(a, b)
+        self.assertEqual(iv.rx_us, 10_000_000)                 # clamped to 100 %
+        self.assertTrue(any("clamped" in p for p in iv.problems))
+        b = snap(uptime_ms=10_000, radio_rx_us=10_000_000 + 100_000 + pe.MAX_OP_US + 1)
+        self.assertIsNone(pe.diff_snapshots(a, b).rx_us)       # more than one op past: refused
+        # cpu/hfxo keep the tight tolerance
+        b = snap(uptime_ms=10_000, cpu_active_us=10_200_000)
+        self.assertIsNone(pe.diff_snapshots(snap(uptime_ms=0), b).cpu_us)
+
     def test_not_measured_and_flags(self):
         a = snap(uptime_ms=0, cpu_active_us=NM, idle_entries=NM, hfxo_req_us=NM,
                  flags=pe.F_CONSTLAT_REQ)
@@ -180,6 +198,8 @@ class Diff(unittest.TestCase):
 PEEK = {
     "tool": "jlink_peek", "schema": 1, "preset": "nrf54l15",
     "host_start_unix": 1000.0, "host_end_unix": 1030.2,
+    "parse_ok": True, "parse_error": None,
+    "liveness": {"verdict": "running"},
     "samples": {"requested": 100, "valid": 100, "hfxo_running": 97, "hfxo_duty": 0.97,
                 "constlat_on": 100, "constlat_valid": 100},
     "diag": {"snapshots": [
@@ -202,10 +222,46 @@ class Inputs(unittest.TestCase):
 
     def test_single_peek_file_gives_both_snapshots_and_samples(self):
         with tempfile.TemporaryDirectory() as d:
-            iv, samples = pe.load_inputs([self._write(PEEK, d, "pd.json")], None)
+            iv, peek = pe.load_inputs([self._write(PEEK, d, "pd.json")], None)
         self.assertEqual(iv.dt_s, 30.0)
         self.assertEqual(iv.hfxo_us, 30_000_000)
-        self.assertEqual(samples["hfxo_running"], 97)
+        self.assertEqual(peek["samples"]["hfxo_running"], 97)
+
+    def test_sampled_duty_used_only_from_a_running_core(self):
+        duty, ci, cl, notes = pe.sampled_duty(PEEK)
+        self.assertAlmostEqual(duty, 0.97)
+        self.assertEqual(ci, pe.wilson_interval(97, 100))
+        self.assertEqual(cl, 1.0)
+        self.assertEqual(notes, [])
+        for verdict in ("halted", "lockup", "unknown", None):
+            peek = json.loads(json.dumps(PEEK))
+            peek["liveness"]["verdict"] = verdict
+            with self.subTest(verdict=verdict):
+                duty, ci, cl, notes = pe.sampled_duty(peek)
+                self.assertEqual((duty, ci, cl), (None, None, None))
+                self.assertTrue(any("refused" in n for n in notes))
+        no_liveness = {k: v for k, v in PEEK.items() if k != "liveness"}
+        self.assertIsNone(pe.sampled_duty(no_liveness)[0])
+
+    def test_parse_problem_warns_but_keeps_the_aligned_samples(self):
+        peek = json.loads(json.dumps(PEEK))
+        peek["parse_ok"] = False
+        peek["parse_error"] = "misaligned at read 's.7.xo'"
+        duty, _, _, notes = pe.sampled_duty(peek)
+        self.assertAlmostEqual(duty, 0.97)
+        self.assertTrue(any("could not align" in n for n in notes))
+
+    def test_halted_peek_falls_back_to_the_counter_end_to_end(self):
+        peek = json.loads(json.dumps(PEEK))
+        peek["liveness"]["verdict"] = "halted"
+        with tempfile.TemporaryDirectory() as d:
+            p = self._write(peek, d, "pd.json")
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                self.assertEqual(pe.main(["--board", "nrf54l15dk", p]), 0)
+        text = buf.getvalue()
+        self.assertIn("hfxo_req_us counter", text)
+        self.assertIn("WARNING: jlink_peek liveness verdict is 'halted'", text)
 
     def test_torn_or_unusable_snapshots_are_skipped(self):
         peek = json.loads(json.dumps(PEEK))
@@ -217,8 +273,8 @@ class Inputs(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             a = self._write(snap(uptime_ms=0, radio_tx_us=0), d, "a.json")
             b = self._write(snap(uptime_ms=10_000, radio_tx_us=1000), d, "b.json")
-            iv, samples = pe.load_inputs([a, b], None)
-        self.assertEqual((iv.dt_s, iv.tx_us, samples), (10.0, 1000, None))
+            iv, peek = pe.load_inputs([a, b], None)
+        self.assertEqual((iv.dt_s, iv.tx_us, peek), (10.0, 1000, None))
 
     def test_log_lines_summed(self):
         lines = [
@@ -257,12 +313,13 @@ class Estimate(unittest.TestCase):
         return pe.Interval(**base)
 
     def test_unknown_current_is_excluded_and_listed(self):
-        b = pe.resolve_board("nrf52840", None, False)
+        b = pe.resolve_board("cc2652", None, False)
         e = pe.estimate(b, self.iv())
         names = {c.name: c for c in e.components}
         self.assertIsNone(names["HFXO (outside radio)"].ua)
         self.assertIn("HFXO (outside radio)", e.excluded)
         self.assertIn("UNKNOWN", names["HFXO (outside radio)"].why_excluded)
+        self.assertIn("XOSC_HF", names["HFXO (outside radio)"].why_excluded)
         self.assertAlmostEqual(e.total_ua, sum(c.ua for c in e.components if c.ua is not None))
 
     def test_breakdown_numbers_nrf52840(self):
@@ -275,24 +332,56 @@ class Estimate(unittest.TestCase):
         self.assertAlmostEqual(c["radio TX +0 dBm"], 4_000 / 10e6 * (6.40 - 0.00316) * 1000)
         self.assertAlmostEqual(c["CPU active"], 0.01 * (3.3 - 0.00316) * 1000)
         self.assertAlmostEqual(c["radio RX"], 0.0)
+        # HFXO held 100 %, minus the 0.04 % already inside the TX row, at the
+        # ITIMER2 whole-chip total over the floor.
+        self.assertAlmostEqual(c["HFXO (outside radio)"], (1 - 0.0004) * (0.646 - 0.00316) * 1000)
+        self.assertEqual(e.excluded, [])
 
     def test_hfxo_term_excludes_radio_time_and_prefers_samples(self):
         b = pe.resolve_board("nrf5340net", None, False)
-        e = pe.estimate(b, self.iv(tx_us=1_000_000, hfxo_us=5_000_000), hfxo_crystal="X2",
+        e = pe.estimate(b, self.iv(tx_us=1_000_000, hfxo_us=5_000_000), hfxo_row="X2",
                         hfxo_duty=0.6, hfxo_ci=(0.5, 0.7))
         h = next(x for x in e.components if x.name.startswith("HFXO"))
-        self.assertAlmostEqual(h.ua, (0.6 - 0.1) * 0.135 * 1000)
+        self.assertAlmostEqual(h.ua, (0.6 - 0.1) * 0.135 * 1000)   # crystal row: no floor
         self.assertEqual(e.hfxo_duty, 0.6)
         self.assertTrue(any("request counter" in n for n in e.notes))
 
-    def test_crystal_dependent_hfxo_unknown_until_chosen(self):
+    def test_hfxo_rows_default_and_alternatives(self):
         b = pe.resolve_board("nrf54l15dk", None, False)
-        e = pe.estimate(b, self.iv())
-        self.assertIn("HFXO (outside radio)", e.excluded)
-        e2 = pe.estimate(b, self.iv(), hfxo_crystal="X2")
-        self.assertNotIn("HFXO (outside radio)", e2.excluded)
+        e = pe.estimate(b, self.iv(hfxo_us=10_000_000, tx_us=0))
+        h = next(x for x in e.components if x.name.startswith("HFXO"))
+        self.assertIn("ITIMER3", h.current.where)
+        self.assertAlmostEqual(h.ua, (0.240 - 0.0029) * 1000)
+        e2 = pe.estimate(b, self.iv(hfxo_us=10_000_000, tx_us=0), hfxo_row="X2")
+        self.assertAlmostEqual(next(x for x in e2.components if x.name.startswith("HFXO")).ua, 34.0)
         with self.assertRaises(pe.InputError):
-            pe.estimate(b, self.iv(), hfxo_crystal="X9")
+            pe.estimate(b, self.iv(), hfxo_row="X9")
+        net = pe.estimate(pe.resolve_board("nrf5340net", None, False), self.iv(tx_us=0))
+        self.assertAlmostEqual(next(x for x in net.components if x.name.startswith("HFXO")).ua,
+                               (0.400 - 0.0017) * 1000)
+        # LDO on the net core: no TIMER-on-HFXO row, so UNKNOWN until a crystal row.
+        ldo = pe.resolve_board("nrf5340net", "ldo", False)
+        self.assertIn("HFXO (outside radio)", pe.estimate(ldo, self.iv()).excluded)
+        self.assertNotIn("HFXO (outside radio)", pe.estimate(ldo, self.iv(), hfxo_row="X0").excluded)
+
+    def test_counter_past_the_interval_is_clamped(self):
+        b = pe.resolve_board("nrf54l15dk", None, False)
+        e = pe.estimate(b, self.iv(rx_us=10_200_000))
+        rx = next(x for x in e.components if x.name == "radio RX")
+        self.assertAlmostEqual(rx.ua, (3.4 - 0.0029) * 1000)
+        self.assertTrue(any("clamped" in n for n in e.notes))
+
+    def test_cpu_band(self):
+        b = pe.resolve_board("nrf54l15dk", None, False)
+        e = pe.estimate(b, self.iv(), cpu_band_pm=(0.0, 1.0))
+        self.assertIsNotNone(e.total_band_ua)
+        self.assertAlmostEqual(e.total_band_ua[0], e.total_ua)
+        self.assertAlmostEqual(e.total_band_ua[1] - e.total_ua, 0.001 * (2.6 - 0.0029) * 1000)
+        self.assertIsNone(pe.estimate(b, self.iv()).total_band_ua)   # default (0, 0): no band
+        self.assertEqual(pe.parse_band("-1,0"), (-1.0, 0.0))
+        for bad in ("1", "2,1", "a,b"):
+            with self.subTest(bad=bad), self.assertRaises(Exception):
+                pe.parse_band(bad)
 
     def test_constlat_l15(self):
         b = pe.resolve_board("nrf54l15dk", None, False)
@@ -344,7 +433,9 @@ class Table(unittest.TestCase):
         seen = 0
         for name, b in pe.BOARDS.items():
             cur = [b.floor, b.rx, b.cpu, b.uart, *b.tx.values()]
-            cur += list(b.hfxo.values()) if isinstance(b.hfxo, dict) else [b.hfxo]
+            cur += list(b.hfxo.values())
+            if b.hfxo_default is not None:
+                self.assertIn(b.hfxo_default, b.hfxo)
             cur += [c for c in (b.constlat, b.constlat_base) if c is not None]
             for c in cur:
                 seen += 1
@@ -373,10 +464,17 @@ class Cli(unittest.TestCase):
         text = buf.getvalue()
         self.assertEqual(rc, 0)
         self.assertTrue(text.startswith(pe.BANNER))
-        self.assertIn("EXCLUDED from the total", text)
         self.assertIn("95 % CI", text)
-        self.assertIn("HFXO (outside radio)", js["excluded"])
+        self.assertEqual(js["excluded"], [])
         self.assertAlmostEqual(js["hfxo_duty"], 0.97)
+        buf = io.StringIO()
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "pd.json")
+            with open(p, "w", encoding="utf-8") as fh:
+                json.dump(PEEK, fh)
+            with redirect_stdout(buf):
+                self.assertEqual(pe.main(["--board", "cc2652", p]), 0)
+        self.assertIn("EXCLUDED from the total: HFXO (outside radio)", buf.getvalue())
 
     def test_bad_input_exit_1(self):
         with tempfile.TemporaryDirectory() as d:

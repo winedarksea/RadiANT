@@ -31,7 +31,10 @@ on power/a1 2189023, struct version 1):
   * jlink_peek -Json: {"tool": "jlink_peek", "samples": {...}, "diag":
     {"snapshots": [{"ok": true, "fields": {...}}, ...]}, "host_start_unix":
     ..., "host_end_unix": ...}. With one file, its first and last usable
-    snapshots are differenced; "samples" supplies the HFXO duty.
+    snapshots are differenced; "samples" supplies the HFXO duty and
+    CONSTLAT fraction - but only when "liveness": {"verdict": "running"}
+    (samples of a halted core are one frozen state; the counters are used
+    instead, with a warning). "parse_ok": false adds a warning.
   * simple snapshot: {"fields": {"uptime_ms": ..., "hfxo_req_us": ...,
     "radio_tx_us": ..., "radio_rx_us": ..., "radio_tx_ops": ...,
     "radio_rx_ops": ..., "cpu_active_us": ..., "idle_entries": ...,
@@ -53,7 +56,15 @@ THE MODEL (deliberately simple, stated so it can be argued with):
       + f_constlat * (I_constlat - I_idle0)        nRF54L15 only
       + I_uart                                     only with --uart-on
 
-d_* are fractions of the interval. CPU and radio time are added as if they
+I_hfxo is, where the datasheet has one, the whole-chip "one TIMER running
+@ 1 MHz, clock = HFXO" row counted over the floor - today's state is the
+HFXO held with the stack's 1 MHz timebase TIMER free-running (nRF52840
+ITIMER2, nRF5340 net INET,TIMER1; the nRF54L15 has only TIMER10 at 32 MHz,
+ITIMER3, which leans high). --hfxo-row picks the crystal-core standby rows
+instead, a lower bound. CPU_BAND_PM / --cpu-band-pm adds a resolution band
+to the CPU term (TO RECONCILE WITH A1).
+
+d_* are fractions of the interval, clamped to 1. CPU and radio time are added as if they
 never overlap (an ISR during a radio window is counted twice), and the CPU
 rows' own clock source is not subtracted from the HFXO term, so the result
 leans high. Datasheet rows are typical values at 25 C, 3 V.
@@ -127,6 +138,7 @@ class Current:
     ma: float | None
     doc: str
     where: str      # section / table / symbol, or why it is UNKNOWN
+    total: bool = False   # a whole-chip System ON figure: counted over the floor
 
     @property
     def known(self) -> bool:
@@ -152,7 +164,13 @@ N52_RX_LDO = Current(10.10, "nrf52840", "Current consumption > Radio transmittin
 N52_CPU_DCDC = Current(3.3, "nrf52840", "Current consumption > CPU running, ICPU0 (CoreMark 64 MHz from flash, HFXO, DC/DC)")
 N52_CPU_LDO = Current(6.3, "nrf52840", "Current consumption > CPU running, ICPU1 (CoreMark 64 MHz from flash, HFXO, LDO)")
 N52_FLOOR = Current(0.00316, "nrf52840", "Current consumption > Sleep, ION_RAMON_RTC (System ON, 256 kB retained, RTC on LFRC, LDO; nearest row - no LFXO or DC/DC sleep row)")
-N52_HFXO = _unk("nRF52840 HFXO run current - the PS's HFXO electrical table could not be read from the official source")
+# "HFXO held, CPU idle" with the stack's 1 MHz timebase TIMER running is
+# today's state (HFXO requested at init, TIMER free-running). The TIMER rows
+# are that state as whole-chip totals. The common conditions default to LDO
+# and the row names no regulator, so on the DC/DC DK it leans high.
+N52_HFXO = {
+    "ITIMER2": Current(0.646, "nrf52840", "Current consumption > TIMER running, ITIMER2 (one TIMER instance running @ 1 MHz, Clock = HFXO; LDO by the chapter's common conditions)", total=True),
+}
 N52_UART = _unk("nRF52840 PS has no UARTE current-consumption scenario")
 
 # --- nRF54L15 datasheet v1.0, chapter "Current consumption" (common
@@ -165,9 +183,16 @@ L15_CPU = Current(2.6, "nrf54l15", "Current consumption > CPU running, IAPPCPU0 
 L15_FLOOR = Current(0.0029, "nrf54l15", "Current consumption > Sleep, ION_IDLE8 (System ON, wake on pin + GRTC, LFXO, 256 KB RAM retained)")
 L15_IDLE0 = Current(0.0008, "nrf54l15", "Current consumption > Sleep, ION_IDLE0 (System ON, wake on pin, 0 KB RAM)")
 L15_CONSTLAT = Current(0.55, "nrf54l15", "Current consumption > Sleep, ION_IDLE11 (System ON, wake on pin, Constant Latency mode, 0 KB RAM); used as ION_IDLE11 - ION_IDLE0")
+# The datasheet has no "HFXO running" current row. The nearest whole-chip
+# figure is the TIMER table's only HFXO row: TIMER10 at 32 MHz. The stack's
+# timebase is TIMER20 at 1 MHz (apps/*/boards/nrf54l15dk overlays,
+# radiant,radio-timer = &timer20), and ITIMER2 "TIMER20 running at 1 MHz" is
+# 121 uA on HFINT, so ITIMER3 leans high. The ISTBY rows are crystal-core
+# standby only, a lower bound.
 L15_HFXO = {
-    "X2": Current(0.034, "nrf54l15", "32 MHz crystal oscillator (HFXO), ISTBY_X32M_X2 (core standby, 2.0x1.6 mm crystal; crystal core only, not the clock tree)"),
-    "X3": Current(0.063, "nrf54l15", "32 MHz crystal oscillator (HFXO), ISTBY_X32M_X3 (core standby, 1.2x1.0 mm crystal; crystal core only, not the clock tree)"),
+    "ITIMER3": Current(0.240, "nrf54l15", "Current consumption > TIMER active, ITIMER3 (TIMER10 running at 32 MHz, HFXO; the stack's TIMER20 at 1 MHz draws less)", total=True),
+    "X2": Current(0.034, "nrf54l15", "32 MHz crystal oscillator (HFXO), ISTBY_X32M_X2 (core standby, 2.0x1.6 mm crystal; crystal core only - a lower bound)"),
+    "X3": Current(0.063, "nrf54l15", "32 MHz crystal oscillator (HFXO), ISTBY_X32M_X3 (core standby, 1.2x1.0 mm crystal; crystal core only - a lower bound)"),
 }
 L15_UART = _unk("nRF54L15 datasheet lists no UARTE current")
 
@@ -182,6 +207,8 @@ N53_CPU_DCDC = Current(2.6, "nrf5340", "Current consumption > Network CPU runnin
 N53_CPU_LDO = Current(5.1, "nrf5340", "Current consumption > Network CPU running, INETCPU0 (CoreMark from flash, LDO; HFINT)")
 N53_FLOOR = Current(0.0017, "nrf5340", "Current consumption > Sleep, 'System ON, 64 kB network RAM, wake on network RTC (running from LFXO clock)' (printed as ION_IDLE8; the symbol is duplicated in the table)")
 N53_HFXO = {
+    # The net core's own "TIMER @ 1 MHz on HFXO64M" row: today's state exactly.
+    "INET_TIMER1": Current(0.400, "nrf5340", "Current consumption > TIMER running, INET,TIMER1 (one network TIMER running @ 1 MHz, clock = HFXO64M)", total=True),
     "X0": Current(0.065, "nrf5340", "Oscillators > 32 MHz crystal oscillator (HFXO), ISTBY_X32M, crystal X0 2.5x2.0 mm (crystal core only)"),
     "X1": Current(0.187, "nrf5340", "Oscillators > 32 MHz crystal oscillator (HFXO), ISTBY_X32M, crystal X1 1.6x1.2 mm (crystal core only)"),
     "X2": Current(0.135, "nrf5340", "Oscillators > 32 MHz crystal oscillator (HFXO), ISTBY_X32M, crystal X2 2.0x1.6 mm (crystal core only)"),
@@ -198,7 +225,7 @@ TI_CPU = Current(3.39, "cc2652r", "8.5 Power Consumption - Power Modes, Active: 
 TI_IDLE = Current(0.675, "cc2652r", "8.5 Power Consumption - Power Modes, Idle: supply systems and RAM powered, RCOSC_HF")
 TI_STANDBY = Current(0.00094, "cc2652r", "8.5 Power Consumption - Power Modes, Standby without cache retention, RTC running, 80 kB RAM, RCOSC_LF")
 TI_UART = Current(0.1675, "cc2652r", "8.5 Iperi, UART: delta current, clock enabled, module idle")
-TI_HFXO = _unk("CC2652R/P datasheets list no XOSC_HF current")
+TI_HFXO_WHY = "CC2652R/P datasheets list no XOSC_HF current"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -209,41 +236,65 @@ class Board:
     tx: dict[int, Current]   # dBm -> current
     rx: Current
     cpu: Current
-    hfxo: Current | dict[str, Current]   # dict = crystal-dependent, pick one
+    hfxo: dict[str, Current]  # rows for "HFXO held outside radio"; pick with --hfxo-row
     uart: Current
     constlat: Current | None = None
     constlat_base: Current | None = None
     notes: tuple[str, ...] = ()
+    hfxo_default: str | None = None   # row used without --hfxo-row; None = UNKNOWN
+    hfxo_unknown_why: str = "no row chosen"
 
 
 BOARDS: dict[str, Board] = {
     # nrf54l15dk: Zephyr board dts sets regulator-initial-mode DCDC.
     "nrf54l15dk": Board("nRF54L15 DK", "DC/DC", L15_FLOOR, {0: L15_TX0, 4: L15_TX4, 8: L15_TX8},
                         L15_RX, L15_CPU, L15_HFXO, L15_UART, L15_CONSTLAT, L15_IDLE0,
-                        ("HFXO current depends on the crystal; pass --hfxo-crystal X2|X3 "
-                         "(the DK's crystal package is not verified here).",)),
+                        ("HFXO row ITIMER3 is TIMER10 at 32 MHz on HFXO (leans high); "
+                         "--hfxo-row X2|X3 gives the crystal-core lower bound.",),
+                        hfxo_default="ITIMER3"),
     # nrf52840: the DK (board dts regulator-initial-mode DCDC).
     "nrf52840": Board("nRF52840 DK", "DC/DC", N52_FLOOR, {0: N52_TX0_DCDC, 8: N52_TX8_DCDC},
-                      N52_RX_DCDC, N52_CPU_DCDC, N52_HFXO, N52_UART),
+                      N52_RX_DCDC, N52_CPU_DCDC, N52_HFXO, N52_UART,
+                      notes=("HFXO row ITIMER2 is an LDO figure; this board runs DC/DC, so it leans high.",),
+                      hfxo_default="ITIMER2"),
     # promicro: no DCDC node upstream, so LDO.
     "promicro": Board("Pro Micro nRF52840 (LDO)", "LDO", N52_FLOOR,
                       {0: N52_TX0_LDO, 8: _unk("nRF52840 PS has no +8 dBm LDO row")},
-                      N52_RX_LDO, N52_CPU_LDO, N52_HFXO, N52_UART),
+                      N52_RX_LDO, N52_CPU_LDO, N52_HFXO, N52_UART, hfxo_default="ITIMER2"),
     "nrf5340net": Board("nRF5340 network core", "DC/DC", N53_FLOOR, {0: N53_TX0_DCDC, 3: N53_TX3_DCDC},
                         N53_RX_DCDC, N53_CPU_DCDC, N53_HFXO, N53_UART,
-                        notes=("HFXO current depends on the crystal; pass --hfxo-crystal X0..X3.",)),
+                        notes=("--hfxo-row X0..X3 gives the crystal-core lower bound instead.",),
+                        hfxo_default="INET_TIMER1"),
     "cc2652": Board("CC2652R/P LaunchXL", "DC/DC", TI_IDLE, {0: TI_TX0, 5: TI_TX5},
-                    TI_RX, TI_CPU, TI_HFXO, TI_UART,
+                    TI_RX, TI_CPU, {}, TI_UART,
                     notes=("Floor is Idle (675 uA): standby is off in this firmware; --ti-standby "
-                           "uses the standby row instead.",)),
+                           "uses the standby row instead.",),
+                    hfxo_unknown_why=TI_HFXO_WHY),
 }
 
 LDO_OVERRIDES = {
     "nrf52840": dict(tx={0: N52_TX0_LDO, 8: _unk("nRF52840 PS has no +8 dBm LDO row")},
-                     rx=N52_RX_LDO, cpu=N52_CPU_LDO, regulator="LDO"),
+                     rx=N52_RX_LDO, cpu=N52_CPU_LDO, regulator="LDO", notes=()),
+    # No LDO row for the network TIMER on HFXO64M: crystal rows only.
     "nrf5340net": dict(tx={0: N53_TX0_LDO, 3: _unk("nRF5340 PS has no +3 dBm LDO row")},
-                       rx=N53_RX_LDO, cpu=N53_CPU_LDO, regulator="LDO"),
+                       rx=N53_RX_LDO, cpu=N53_CPU_LDO, regulator="LDO",
+                       hfxo={k: v for k, v in N53_HFXO.items() if k != "INET_TIMER1"},
+                       hfxo_default=None,
+                       hfxo_unknown_why="no LDO row for the network TIMER on HFXO64M; pass --hfxo-row X0..X3"),
 }
+
+# CPU-load resolution band, per-mille of the interval, (low, high) added to
+# the measured CPU duty. TO RECONCILE WITH A1: A1 is changing how
+# cpu_active_us is computed (cpu_load_get floors to whole per-mille, ~0.5
+# per-mille low). Set this to A1's documented resolution, e.g. (0.0, 1.0) for
+# a floor, or override per run with --cpu-band-pm LO,HI.
+CPU_BAND_PM: tuple[float, float] = (0.0, 0.0)
+
+# Longest single radio operation the scheduler charges in one piece: A1
+# charges an operation's whole on-time when it ends, and a scan chunk is up
+# to RADIANT_SCHED_SCAN_CHUNK_US (250 ms, radiant_sched.h), so a us counter
+# can legitimately run ahead of the interval by that much.
+MAX_OP_US = 260_000
 
 
 # ---------------------------------------------------------------------------
@@ -390,20 +441,25 @@ def diff_snapshots(a: dict, b: dict, host_tol_s: float = 5.0, host_tol_frac: flo
             return bool(int(f["flags"]) & FIELD_FLAG[name])
         return _measured(f[name])
 
-    def get(name: str, is_us: bool) -> int | None:
+    def get(name: str, is_us: bool, slack_us: int = 2000) -> int | None:
         if not (measured(fa, name) and measured(fb, name)):
             return None
         if is_us and not us_ok:
             return None
         d = u32_delta(fb[name], fa[name])
-        if is_us and d > dt_us * 1.01 + 2000:
+        if is_us and d > dt_us * 1.01 + slack_us:
             iv.problems.append(f"{name} advanced {d} us in a {dt_us} us interval: "
                                "impossible, counter not trusted")
             return None
+        if is_us and d > dt_us:
+            iv.problems.append(f"{name} advanced {d} us in a {dt_us} us interval (an operation "
+                               "is charged whole when it ends); duty clamped to 100 %")
+            d = dt_us
         return d
 
-    iv.tx_us = get("radio_tx_us", True)
-    iv.rx_us = get("radio_rx_us", True)
+    # Radio on-time is charged per operation at its end, up to MAX_OP_US late.
+    iv.tx_us = get("radio_tx_us", True, MAX_OP_US)
+    iv.rx_us = get("radio_rx_us", True, MAX_OP_US)
     iv.tx_ops = get("radio_tx_ops", False)
     iv.rx_ops = get("radio_rx_ops", False)
     iv.hfxo_us = get("hfxo_req_us", True)
@@ -489,6 +545,7 @@ class Estimate:
     hfxo_duty_source: str
     hfxo_ci: tuple[float, float] | None
     notes: list[str]
+    total_band_ua: tuple[float, float] | None = None   # from the CPU resolution band
 
 
 def resolve_board(name: str, regulator: str | None, ti_standby: bool) -> Board:
@@ -507,12 +564,14 @@ def resolve_board(name: str, regulator: str | None, ti_standby: bool) -> Board:
 
 
 def estimate(board: Board, iv: Interval, *, tx_dbm: int = 0, uart_on: bool = False,
-             hfxo_crystal: str | None = None, hfxo_duty: float | None = None,
+             hfxo_row: str | None = None, hfxo_duty: float | None = None,
              hfxo_ci: tuple[float, float] | None = None,
-             constlat_fraction: float | None = None) -> Estimate:
+             constlat_fraction: float | None = None,
+             cpu_band_pm: tuple[float, float] = CPU_BAND_PM,
+             extra_notes: list[str] | None = None) -> Estimate:
     dt_us = iv.dt_s * 1e6
     comps: list[Component] = []
-    notes = list(board.notes) + list(iv.problems)
+    notes = list(board.notes) + list(iv.problems) + list(extra_notes or [])
 
     floor_ma = board.floor.ma if board.floor.known else 0.0
 
@@ -528,7 +587,14 @@ def estimate(board: Board, iv: Interval, *, tx_dbm: int = 0, uart_on: bool = Fal
             comps.append(Component(name, basis, cur, factor * max(0.0, cur.ma - minus_ma) * 1000.0))
 
     def duty(us: int | None) -> float | None:
-        return None if us is None else us / dt_us
+        if us is None:
+            return None
+        if us > dt_us:
+            # A summed log can carry an operation charged at its end past the
+            # interval; a duty is never above 1.
+            notes.append(f"a counter ran {us - dt_us:.0f} us past the interval; duty clamped to 100 %")
+            return 1.0
+        return us / dt_us
 
     d_tx, d_rx, d_cpu = duty(iv.tx_us), duty(iv.rx_us), duty(iv.cpu_us)
 
@@ -550,22 +616,31 @@ def estimate(board: Board, iv: Interval, *, tx_dbm: int = 0, uart_on: bool = Fal
                          f"(sampled {_pct(hfxo_duty)})")
     elif iv.hfxo_us is not None:
         d_h, src = duty(iv.hfxo_us), "hfxo_req_us counter (stack's own request only)"
-    if isinstance(board.hfxo, dict):
-        if hfxo_crystal is None:
-            hcur = _unk(f"crystal-dependent; pass --hfxo-crystal ({'/'.join(board.hfxo)})")
-        elif hfxo_crystal not in board.hfxo:
-            raise InputError(f"--hfxo-crystal {hfxo_crystal}: {board.name} rows are {sorted(board.hfxo)}")
-        else:
-            hcur = board.hfxo[hfxo_crystal]
+    row = hfxo_row if hfxo_row is not None else board.hfxo_default
+    if row is None:
+        hint = f"; pass --hfxo-row ({'/'.join(board.hfxo)})" if board.hfxo else ""
+        hcur = _unk(board.hfxo_unknown_why + hint)
+    elif row not in board.hfxo:
+        raise InputError(f"--hfxo-row {row}: {board.name} rows are {sorted(board.hfxo) or 'none'}")
     else:
-        hcur = board.hfxo
+        hcur = board.hfxo[row]
     hf_only = None
     if d_h is not None:
         hf_only = max(0.0, d_h - (d_tx or 0.0) - (d_rx or 0.0))
     add("HFXO (outside radio)", _pct(hf_only) + (f" of {_pct(d_h)} on" if d_h is not None else ""),
-        hcur, hf_only)
+        hcur, hf_only, minus_ma=floor_ma if hcur.total else 0.0)
 
     add("CPU active", _pct(d_cpu), board.cpu, d_cpu, minus_ma=floor_ma)
+    cpu_band = None
+    cpu_c = comps[-1]
+    if cpu_c.ua is not None and d_cpu is not None and cpu_band_pm != (0.0, 0.0):
+        per_duty = max(0.0, board.cpu.ma - floor_ma) * 1000.0
+        lo = min(1.0, max(0.0, d_cpu + cpu_band_pm[0] / 1000.0)) * per_duty
+        hi = min(1.0, max(0.0, d_cpu + cpu_band_pm[1] / 1000.0)) * per_duty
+        cpu_band = (lo - cpu_c.ua, hi - cpu_c.ua)
+        cpu_c.basis += f" [{cpu_band_pm[0]:+g}/{cpu_band_pm[1]:+g} pm]"
+        notes.append(f"CPU load resolution band {cpu_band_pm[0]:+g}..{cpu_band_pm[1]:+g} per-mille "
+                     f"-> CPU term {cpu_band[0]:+.2f}..{cpu_band[1]:+.2f} uA (TO RECONCILE WITH A1)")
 
     if board.constlat is not None:
         f = constlat_fraction
@@ -581,7 +656,10 @@ def estimate(board: Board, iv: Interval, *, tx_dbm: int = 0, uart_on: bool = Fal
 
     total = sum(c.ua for c in comps if c.ua is not None)
     excluded = [c.name for c in comps if c.ua is None]
-    return Estimate(board, iv, comps, total, excluded, d_h, src, hfxo_ci, notes)
+    band = None
+    if cpu_band is not None:
+        band = (total + cpu_band[0], total + cpu_band[1])
+    return Estimate(board, iv, comps, total, excluded, d_h, src, hfxo_ci, notes, band)
 
 
 def _pct(x: float | None) -> str:
@@ -631,6 +709,9 @@ def render(est: Estimate, tx_dbm: int) -> str:
         ua = f"{c.ua:10.2f}" if c.ua is not None else f"{'excluded':>10}"
         L.append(f"{c.name:<22} {c.basis:<26} {ma:>8} {ua}")
     L.append(f"{'TOTAL (known parts)':<22} {'':<26} {'':>8} {est.total_ua:10.2f}")
+    if est.total_band_ua:
+        L.append(f"{'  with CPU band':<22} {'':<26} {'':>8} "
+                 f"{est.total_band_ua[0]:.2f}..{est.total_band_ua[1]:.2f}")
     if est.excluded:
         L.append(f"EXCLUDED from the total: {', '.join(est.excluded)}")
     L.append("")
@@ -664,6 +745,7 @@ def to_json(est: Estimate) -> dict:
              "excluded": c.ua is None, "why_excluded": c.why_excluded or None}
             for c in est.components],
         "total_ua_known": est.total_ua,
+        "total_ua_band": est.total_band_ua,
         "excluded": est.excluded,
         "notes": est.notes,
     }
@@ -672,16 +754,65 @@ def to_json(est: Estimate) -> dict:
 def parse_duty(text: str) -> tuple[float, tuple[float, float] | None]:
     """'0.97' or '388/400' (the latter gets a Wilson interval)."""
     if "/" in text:
-        k, n = (int(x) for x in text.split("/", 1))
+        try:
+            k, n = (int(x) for x in text.split("/", 1))
+        except ValueError:
+            raise argparse.ArgumentTypeError(f"--hfxo-duty {text!r}: k/n needs two integers") from None
+        if n <= 0 or not 0 <= k <= n:
+            raise argparse.ArgumentTypeError(f"--hfxo-duty {text!r}: need n > 0 and 0 <= k <= n")
         return k / n, wilson_interval(k, n)
-    v = float(text)
+    try:
+        v = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"--hfxo-duty {text!r}: not a number") from None
     if not 0.0 <= v <= 1.0:
         raise argparse.ArgumentTypeError("--hfxo-duty is a fraction 0..1 or k/n")
     return v, None
 
 
+def parse_band(text: str) -> tuple[float, float]:
+    """'LO,HI' per-mille, e.g. '0,1' or '-1,0'."""
+    try:
+        lo, hi = (float(x) for x in text.split(",", 1))
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"--cpu-band-pm {text!r}: want LO,HI") from None
+    if lo > hi:
+        raise argparse.ArgumentTypeError(f"--cpu-band-pm {text!r}: LO > HI")
+    return lo, hi
+
+
+def sampled_duty(peek: dict | None) -> tuple[float | None, tuple[float, float] | None,
+                                             float | None, list[str]]:
+    """HFXO duty, its CI and the CONSTLAT fraction from a jlink_peek result.
+
+    Refused unless the session's liveness verdict is "running": samples of a
+    halted (or unknown) core are one frozen state, not a duty cycle.
+    """
+    notes: list[str] = []
+    if not peek:
+        return None, None, None, notes
+    samples = peek.get("samples") or {}
+    if not samples.get("valid"):
+        return None, None, None, notes
+    verdict = (peek.get("liveness") or {}).get("verdict")
+    if peek.get("parse_ok") is False:
+        notes.append("WARNING: jlink_peek could not align all of its output "
+                     f"({peek.get('parse_error')}); samples after the gap are missing")
+    if verdict != "running":
+        notes.append(f"WARNING: jlink_peek liveness verdict is {verdict!r}, not 'running': "
+                     "sampled HFXO/CONSTLAT state refused, falling back to the counters")
+        return None, None, None, notes
+    duty = ci = cl = None
+    if samples.get("hfxo_duty") is not None:
+        duty = float(samples["hfxo_duty"])
+        ci = wilson_interval(int(samples["hfxo_running"]), int(samples["valid"]))
+    if samples.get("constlat_valid"):
+        cl = int(samples["constlat_on"]) / int(samples["constlat_valid"])
+    return duty, ci, cl, notes
+
+
 def load_inputs(paths: list[str], log: str | None) -> tuple[Interval, dict | None]:
-    """Returns the interval and, if a jlink_peek result supplied it, its samples block."""
+    """Returns the interval and the jlink_peek result that carried samples, if any."""
     samples = None
     if log:
         if paths:
@@ -697,7 +828,7 @@ def load_inputs(paths: list[str], log: str | None) -> tuple[Interval, dict | Non
         if isinstance(o, dict) and o.get("tool") == "jlink_peek":
             ps = peek_snapshots(o)
             if o.get("samples") and o["samples"].get("valid"):
-                samples = o["samples"]
+                samples = o
             if len(objs) == 1:
                 snaps.extend(ps)
             elif ps:
@@ -720,25 +851,24 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--regulator", choices=("dcdc", "ldo"), help="override the board's regulator mode")
     ap.add_argument("--tx-dbm", type=int, default=0, help="transmit power the image uses (default 0)")
     ap.add_argument("--hfxo-duty", type=parse_duty, help="sampled HFXO duty: fraction or k/n")
-    ap.add_argument("--hfxo-crystal", help="crystal row for the HFXO current (nRF54L15: X2/X3; nRF5340: X0..X3)")
+    ap.add_argument("--hfxo-row", "--hfxo-crystal", dest="hfxo_row",
+                    help="row for the HFXO-held current (nRF54L15: ITIMER3 default, X2/X3; "
+                         "nRF5340 net: INET_TIMER1 default, X0..X3; nRF52840: ITIMER2)")
+    ap.add_argument("--cpu-band-pm", type=parse_band, default=CPU_BAND_PM,
+                    help="CPU-load resolution band LO,HI per-mille (TO RECONCILE WITH A1)")
     ap.add_argument("--uart-on", action="store_true", help="the console UART is enabled in this image")
     ap.add_argument("--ti-standby", action="store_true", help="cc2652: floor = standby, not idle")
     ap.add_argument("--json", help="also write the estimate as JSON")
     a = ap.parse_args(argv)
     try:
         board = resolve_board(a.board, a.regulator, a.ti_standby)
-        iv, samples = load_inputs(a.snapshots, a.log)
-        duty = ci = None
-        cl_frac = None
+        iv, peek = load_inputs(a.snapshots, a.log)
+        duty, ci, cl_frac, notes = sampled_duty(peek)
         if a.hfxo_duty is not None:
             duty, ci = a.hfxo_duty
-        elif samples is not None and samples.get("hfxo_duty") is not None:
-            duty = float(samples["hfxo_duty"])
-            ci = wilson_interval(int(samples["hfxo_running"]), int(samples["valid"]))
-        if samples is not None and samples.get("constlat_valid"):
-            cl_frac = int(samples["constlat_on"]) / int(samples["constlat_valid"])
-        est = estimate(board, iv, tx_dbm=a.tx_dbm, uart_on=a.uart_on, hfxo_crystal=a.hfxo_crystal,
-                       hfxo_duty=duty, hfxo_ci=ci, constlat_fraction=cl_frac)
+        est = estimate(board, iv, tx_dbm=a.tx_dbm, uart_on=a.uart_on, hfxo_row=a.hfxo_row,
+                       hfxo_duty=duty, hfxo_ci=ci, constlat_fraction=cl_frac,
+                       cpu_band_pm=a.cpu_band_pm, extra_notes=notes)
     except (InputError, OSError, ValueError, KeyError) as e:
         print(f"ant_power_est: {e}", file=sys.stderr)
         return 1

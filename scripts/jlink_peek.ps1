@@ -55,8 +55,13 @@
     Commander's `connect` leaves the nRF54L15/52840/5340-net core running, and
     the exact mem32/sleep output format. The DHCSR check, the power_diag
     uptime notes and the strict output alignment are there to catch either.
-    If J-Link reports the device as secured and offers to unlock it, answer
-    NO: unlocking is a mass erase. A 5340 network core held off by the
+    UNSECURE = MASS ERASE. If the target is read-protected, J-Link may offer
+    to unsecure it. JLink.exe's stdin carries explicit "n" answers; the output
+    is scanned for security/erase/unlock wording (exit 3, loud warning); and
+    a live run refuses to start if J-Link's saved settings (registry
+    Software\SEGGER, %APPDATA%\SEGGER\*.ini) look like a remembered answer.
+    Whether the prompt is a console prompt (which the "n" answers reach) or
+    a dialog is unverified. A 5340 network core held off by the
     application core cannot be connected to.
 
     NEVER ON TI. CC26xx parts use an XDS110, and a JTAG connect there wipes
@@ -194,6 +199,7 @@ $PowerDiag = @{
     )
 }
 $DiagAttempts = 3   # (block, seq) read pairs per snapshot; first consistent wins
+$DiagMinSpanMs = 2500   # minimum planned sleep between the before and after dumps
 
 # ---------------------------------------------------------------------------
 # Register map. Addresses are [int64] (L suffix): PowerShell 5.1 reads a hex
@@ -355,6 +361,63 @@ function Test-ReadAddressAllowed([int64]$addr, [int]$count) {
 }
 
 # ---------------------------------------------------------------------------
+# Unsecure / mass-erase defences.
+#
+# J-Link offers to "unsecure" a read-protected nRF (APPROTECT) on connect, and
+# accepting is a mass erase of the board. Three layers, none of them a probe
+# test (this was written without hardware):
+#   1. JLink.exe's stdin is fed explicit "n" answers, so a console prompt
+#      reads a refusal rather than whatever PowerShell's stdin holds.
+#   2. The output is scanned for security/erase/unlock wording; any hit ends
+#      the run with exit 3 and a loud warning (Find-SecurityPromptLines).
+#   3. Before running, J-Link's saved settings (registry under
+#      Software\SEGGER, and %APPDATA%\SEGGER\*.ini) are read - read only -
+#      for a remembered answer or auto-accept; any hit refuses the run.
+# ---------------------------------------------------------------------------
+$StdinRefusals = @('n') * 64
+# 'eras' catches erase, erasing, erased and ERASEALL.
+$SecurityPattern = '(?i)secur|unsecur|eras|ERASEALL|APPROTECT|unlock'
+# Lines that match the pattern but are routine Cortex-M33 connect banners.
+# UNVERIFIED wording: if a bench run trips on another harmless line, add it
+# here only after reading it.
+$SecurityBenign = @('(?i)^\s*Security extension\s*:', '(?i)^\s*Secure debug\s*:')
+$AutoAcceptPattern = '(?i)unsecur|unlock|erase|remember|dont.?ask|do.?not.?ask|noask|auto.?(accept|confirm|answer)|suppress.*(dialog|prompt|question)'
+
+function Find-SecurityPromptLines([string[]]$text) {
+    $hits = @()
+    foreach ($line in $text) {
+        if ($null -eq $line -or $line -notmatch $SecurityPattern) { continue }
+        $benign = $false
+        foreach ($b in $SecurityBenign) { if ($line -match $b) { $benign = $true } }
+        if (-not $benign) { $hits += $line }
+    }
+    return ,$hits
+}
+
+function Find-AutoAcceptEntries([string[]]$entries) {
+    return ,@($entries | Where-Object { $_ -match $AutoAcceptPattern })
+}
+
+# "where: name = value" strings from J-Link's saved settings, read only.
+function Get-JLinkSavedSettings {
+    $out = New-Object System.Collections.Generic.List[string]
+    foreach ($root in 'HKCU:\Software\SEGGER', 'HKLM:\Software\SEGGER', 'HKLM:\Software\WOW6432Node\SEGGER') {
+        if (-not (Test-Path $root)) { continue }
+        $keys = @(Get-Item $root) + @(Get-ChildItem $root -Recurse -ErrorAction SilentlyContinue)
+        foreach ($k in $keys) {
+            foreach ($n in $k.GetValueNames()) { $out.Add(("{0}: {1} = {2}" -f $k.Name, $n, $k.GetValue($n))) }
+        }
+    }
+    $iniDir = Join-Path $env:APPDATA 'SEGGER'
+    if (Test-Path $iniDir) {
+        foreach ($f in Get-ChildItem $iniDir -Filter *.ini -Recurse -File -ErrorAction SilentlyContinue) {
+            foreach ($l in Get-Content $f.FullName -ErrorAction SilentlyContinue) { $out.Add(("{0}: {1}" -f $f.FullName, $l)) }
+        }
+    }
+    return ,$out.ToArray()
+}
+
+# ---------------------------------------------------------------------------
 # Plan: the script lines plus the reads they produce, in order.
 # ---------------------------------------------------------------------------
 function Format-Mem32([int64]$addr, [int]$count) {
@@ -419,6 +482,17 @@ function New-PeekPlan {
         }
     }
 
+    if ($Cfg.Samples -gt 1 -and $Cfg.Diag) {
+        # The struct is republished once a second (RADIANT_POWER_DIAG_SNAPSHOT_MS),
+        # so dumps closer together than a couple of seconds usually catch the
+        # same snapshot twice and ant_power_est.py sees a zero interval.
+        $span = [int](($sleeps | Measure-Object -Sum).Sum)
+        if ($span -lt $DiagMinSpanMs) {
+            $pad = $DiagMinSpanMs - $span
+            $sleeps.Add($pad)
+            $lines.Add("sleep $pad")
+        }
+    }
     if ($Cfg.Samples -gt 1) { & $addDiag 'after' }
     elseif ($p -and $p.Counter) { $lines.Add('sleep 20') }   # let RTC1 tick between the counter reads
     if ($p -and $p.Counter) { & $addRead 'ctr.1' $p.Counter.Addr 1 }
@@ -723,8 +797,9 @@ function Invoke-SelfTest {
         & $check "preset $pn script passes the whitelist" $okRun
         & $check "preset $pn first line is the guard" ($pl.Lines[0] -ceq $GuardLine)
         & $check "preset $pn second line is SelectEmuBySN" ($pl.Lines[1] -ceq 'SelectEmuBySN 001057737173')
+        # Four randomised delays, then (diag dump present) one pad to the minimum span.
         $sl = @($pl.Lines | Where-Object { $_ -like 'sleep *' } | ForEach-Object { [int]($_ -split ' ')[1] })
-        & $check "preset $pn has 4 randomised sleeps in 150..450" ($sl.Count -eq 4 -and @($sl | Where-Object { $_ -lt 150 -or $_ -gt 450 }).Count -eq 0)
+        & $check "preset $pn has 4 randomised sleeps in 150..450" ($sl.Count -ge 4 -and @($sl[0..3] | Where-Object { $_ -lt 150 -or $_ -gt 450 }).Count -eq 0)
     }
 
     # The whitelist refuses what it must.
@@ -830,6 +905,32 @@ function Invoke-SelfTest {
     & $check 'counter moved' ($an.liveness.counter_moved -eq $true)
     & $check '52840 hfxo 2/2' ($an.samples.hfxo_running -eq 2)
 
+    # Security-prompt scan.
+    $secOut = @('SEGGER J-Link Commander V9.66', 'Cortex-M33 identified.', 'Security extension: implemented',
+                'Secure debug: enabled', 'E000EDF0 = 01040003 ')
+    & $check 'security scan: routine connect banner passes' ((Find-SecurityPromptLines $secOut).Count -eq 0)
+    foreach ($bad in 'Device is secured. Unsecure (mass erase)? (y/n)', 'APPROTECT is enabled',
+                     'Erasing device...', 'ERASEALL', 'Unlocking device', 'Debug access is not secured') {
+        & $check "security scan flags: $bad" ((Find-SecurityPromptLines @($secOut + $bad)).Count -eq 1)
+    }
+    & $check 'stdin refusals are all n' (@($StdinRefusals | Where-Object { $_ -ne 'n' }).Count -eq 0 -and $StdinRefusals.Count -ge 16)
+
+    # Saved-answer check.
+    $okEntries = @('HKEY_CURRENT_USER\Software\SEGGER\J-Link: NotifyOnSecurityUpdate = 1',
+                   'HKEY_CURRENT_USER\Software\SEGGER\J-Link: StartMinimized = 1',
+                   'C:\x\JLinkDLL.ini: NRF54L15_M33')
+    & $check 'saved settings: this box''s kind of entries pass' ((Find-AutoAcceptEntries $okEntries).Count -eq 0)
+    foreach ($bad in 'J-Link: AutoUnsecure = 1', 'J-Link: RememberAnswer = 1', 'J-Link: DontAskAgain = 1',
+                     'J-Link: AutoConfirm = 1', 'JLinkSettings.ini: SuppressUnlockDialog = 1') {
+        & $check "saved settings flags: $bad" ((Find-AutoAcceptEntries @($okEntries + $bad)).Count -eq 1)
+    }
+
+    # Diag dump with short sleeps gets padded to the minimum span.
+    $short = New-PeekPlan -Cfg @{ Preset = 'nrf54l15'; Device = 'nRF54L15_M33'; Serial = $null; Speed = 4000; Samples = 3; IntervalMs = 100; JitterMs = 50; Seed = 5; NonSecure = $false; Diag = $dcfg }
+    $padOk = $true
+    try { Assert-SafeJLinkScript $short.Lines } catch { $padOk = $false }
+    & $check "diag span padded to >= $DiagMinSpanMs ms" ($padOk -and ($short.Sleeps | Measure-Object -Sum).Sum -ge $DiagMinSpanMs)
+
     Write-Host ''
     if ($script:stFail) { Write-Host "SELF-TEST: $($script:stFail) FAILED" -ForegroundColor Red; exit 1 }
     Write-Host 'SELF-TEST: all passed' -ForegroundColor Green
@@ -907,6 +1008,10 @@ Assert-SafeJLinkScript $plan.Lines
 
 if ($DryRun) {
     Write-Host "# jlink_peek dry run: $($plan.Lines.Count) lines, $($plan.Reads.Count) reads, seed $Seed (whitelist passed)"
+    $saved = Get-JLinkSavedSettings
+    $auto = Find-AutoAcceptEntries $saved
+    Write-Host ("# J-Link saved settings: {0} entries read, {1} look like a remembered unsecure/erase answer{2}" -f $saved.Count, $auto.Count, $(if ($auto.Count) { ' - a live run would REFUSE: ' + ($auto -join '; ') } else { '' }))
+    Write-Host "# JLink.exe stdin would carry $($StdinRefusals.Count) 'n' answers."
     $plan.Lines | ForEach-Object { Write-Output $_ }
     exit 0
 }
@@ -919,6 +1024,13 @@ if ($ParseLog) {
     $hostEnd = $hostStart
 } else {
     if (-not (Test-Path $JLinkExe)) { throw "No JLink.exe at $JLinkExe. Install SEGGER J-Link, or pass -JLinkExe <path>." }
+    $saved = Get-JLinkSavedSettings
+    $auto = Find-AutoAcceptEntries $saved
+    if ($auto.Count -gt 0) {
+        throw ("Refusing to run: J-Link's saved settings carry what looks like a remembered answer " +
+               "or auto-accept (an unsecure prompt could be answered YES = mass erase):`n  " + ($auto -join "`n  "))
+    }
+    Write-Host ("J-Link saved settings: {0} entries read, none look like a remembered unsecure/erase answer." -f $saved.Count)
     $tmp = [System.IO.Path]::GetTempPath()
     $scriptPath = Join-Path $tmp ("jlink_peek_{0}.jlink" -f $PID)
     $logPath = Join-Path $tmp ("jlink_peek_{0}.log" -f $PID)
@@ -928,7 +1040,8 @@ if ($ParseLog) {
 
     $est = [Math]::Round((($plan.Sleeps | Measure-Object -Sum).Sum) / 1000.0, 1)
     Write-Host ("Reading {0} on {1} ({2} samples, ~{3} s of sleeps); target is not reset or halted." -f $(if ($Preset) { $Preset } else { $Symbol }), $Device, $Samples, $est)
-    $output = & $JLinkExe -NoGui 1 -CommanderScript $scriptPath
+    # Refusals on stdin: a console unsecure/erase prompt reads "n".
+    $output = $StdinRefusals | & $JLinkExe -NoGui 1 -CommanderScript $scriptPath
     $code = $LASTEXITCODE
     $hostEnd = [DateTimeOffset]::UtcNow
     # Set-Content, not '>': PowerShell 5.1 redirection writes UTF-16.
@@ -944,6 +1057,8 @@ If it reported a firmware update, the probe is now in its bootloader
 }
 
 $an = Get-PeekAnalysis $cfg $plan $output
+$secHits = Find-SecurityPromptLines $output
+$an['security_lines'] = $secHits
 # Host times bracket the session (connect included). A re-parsed log has
 # none: the times of this run would be a lie about that one.
 $an['host_start_unix'] = $null
@@ -966,6 +1081,16 @@ if ($an.samples -and $an.samples.Contains('realised_mean_interval_ms')) {
 if ($Json) {
     $an | ConvertTo-Json -Depth 8 | Set-Content -Path $Json -Encoding ascii
     Write-Host "JSON: $Json"
+}
+
+if ($secHits.Count -gt 0) {
+    Write-Host ''
+    Write-Host '!!! J-LINK MENTIONED SECURITY / ERASE / UNLOCK - STOP AND READ THIS !!!' -ForegroundColor Red
+    foreach ($h in $secHits) { Write-Host "    $h" -ForegroundColor Red }
+    Write-Host '    The target may be read-protected (APPROTECT) or J-Link may have offered to unsecure it.' -ForegroundColor Red
+    Write-Host '    Unsecuring is a MASS ERASE. Check the board still runs its image before anything else.' -ForegroundColor Red
+    Write-Host "    Raw output: $logPath" -ForegroundColor Red
+    exit 3
 }
 
 $bad = (-not $an.parse_ok) -or ($an.liveness.verdict -ne 'running')
