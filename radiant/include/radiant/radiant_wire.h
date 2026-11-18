@@ -1711,7 +1711,15 @@
  * high, both bounded to 0x01..0x1F so the descriptor and the ANT+ common
  * pages stay in the clear mechanically rather than by memory. The two
  * switches are independent, not a ladder: X_AUTH alone is the most useful
- * setting in the table. [K4 (docs/radiant-security.md sec 3 and 9)]
+ * setting in the table. On a MASTER, a tuple different from the installed one
+ * is REFUSED with ANTW_CHANNEL_IN_WRONG_STATE, changing nothing, while host
+ * acknowledged data or a burst is in flight or the master is answering a
+ * slave's burst; the host retries once it completes, as for 0xF2. An accepted
+ * change takes back the slot and acknowledgement payload already built, so
+ * the new policy is the one on the air when this answers, at the cost of at
+ * most one silent slot. An identical tuple, and any tuple to a slave, is
+ * never refused (docs/radiant-security.md sec 3.2 and 3.5). [K4
+ * (docs/radiant-security.md sec 3 and 9)]
  */
 #define RADIANT_WIRE_MESG_RADIANT_SEC_CONFIG_ID              0xF1
 

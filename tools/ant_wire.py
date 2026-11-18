@@ -1305,8 +1305,15 @@ CAPABILITIES_ID_MATCH_FIX_ON_SHARED_CHANNEL_RXBURST = 0x04
 # page); [3] secured page range low and [4] high, both bounded to 0x01..0x1F so
 # the descriptor and the ANT+ common pages stay in the clear mechanically
 # rather than by memory. The two switches are independent, not a ladder: X_AUTH
-# alone is the most useful setting in the table. [K4 (docs/radiant-security.md
-# sec 3 and 9)]
+# alone is the most useful setting in the table. On a MASTER, a tuple different
+# from the installed one is REFUSED with ANTW_CHANNEL_IN_WRONG_STATE, changing
+# nothing, while host acknowledged data or a burst is in flight or the master
+# is answering a slave's burst; the host retries once it completes, as for
+# 0xF2. An accepted change takes back the slot and acknowledgement payload
+# already built, so the new policy is the one on the air when this answers, at
+# the cost of at most one silent slot. An identical tuple, and any tuple to a
+# slave, is never refused (docs/radiant-security.md sec 3.2 and 3.5). [K4
+# (docs/radiant-security.md sec 3 and 9)]
 MESG_RADIANT_SEC_CONFIG_ID = 0xF1
 
 # Install the one 16-byte root key for a channel. [0] channel; [1] key length
@@ -2093,7 +2100,7 @@ RADIANT_MESSAGES = {
         "name": 'MESG_RADIANT_SEC_CONFIG_ID',
         "direction": 'h2d',
         "payload_len": 5,
-        "desc": 'Configure the two payload transforms on one channel. [0] channel; [1] switch bitmask - bit 0 X_CONF, bit 1 X_AUTH, bit 2 drop an unverified window instead of delivering it (default 0, deliver), bit 3 encrypt the descriptor set (REFUSED in v1 with ANTW_INVALID_PARAMETER_PROVIDED - the descriptor has no counter and therefore no nonce), bit 4 send one MESG_RADIANT_SEC_VERDICT (0xF8) per judged window (valid only with bit 1, X_AUTH; refused with ANTW_INVALID_PARAMETER_PROVIDED otherwise), bits 7..5 reserved must be 0; [2] MAC window W, the literal 2, 4 or 8 (W=1 is reserved for the reliable-command page); [3] secured page range low and [4] high, both bounded to 0x01..0x1F so the descriptor and the ANT+ common pages stay in the clear mechanically rather than by memory. The two switches are independent, not a ladder: X_AUTH alone is the most useful setting in the table.',
+        "desc": "Configure the two payload transforms on one channel. [0] channel; [1] switch bitmask - bit 0 X_CONF, bit 1 X_AUTH, bit 2 drop an unverified window instead of delivering it (default 0, deliver), bit 3 encrypt the descriptor set (REFUSED in v1 with ANTW_INVALID_PARAMETER_PROVIDED - the descriptor has no counter and therefore no nonce), bit 4 send one MESG_RADIANT_SEC_VERDICT (0xF8) per judged window (valid only with bit 1, X_AUTH; refused with ANTW_INVALID_PARAMETER_PROVIDED otherwise), bits 7..5 reserved must be 0; [2] MAC window W, the literal 2, 4 or 8 (W=1 is reserved for the reliable-command page); [3] secured page range low and [4] high, both bounded to 0x01..0x1F so the descriptor and the ANT+ common pages stay in the clear mechanically rather than by memory. The two switches are independent, not a ladder: X_AUTH alone is the most useful setting in the table. On a MASTER, a tuple different from the installed one is REFUSED with ANTW_CHANNEL_IN_WRONG_STATE, changing nothing, while host acknowledged data or a burst is in flight or the master is answering a slave's burst; the host retries once it completes, as for 0xF2. An accepted change takes back the slot and acknowledgement payload already built, so the new policy is the one on the air when this answers, at the cost of at most one silent slot. An identical tuple, and any tuple to a slave, is never refused (docs/radiant-security.md sec 3.2 and 3.5).",
     },
     0xF2: {
         "name": 'MESG_RADIANT_SET_KEY_ID',
