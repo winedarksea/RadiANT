@@ -144,6 +144,9 @@ $backendSymbol = "CONFIG_ANT_DONGLE_RADIO_$($Backend.ToUpper())=y"
 # loudly by design - see apps\dongle\rgb.conf.
 $targets = @(
     @{ dir='release';        board='adafruit_feather_nrf52840/nrf52840/uf2'; artifact='radiant_dongle.uf2';                   pkg='uf2'; offset=0x26000; transport='USB_LEGACY'; conf='rgb.conf';    release=$true; overlay='rgb_feather.overlay' }
+    # The second shipping Feather image: no LED at all. No overlay, on purpose
+    # - see apps\dongle\quiet.conf.
+    @{ dir='feather_quiet';  board='adafruit_feather_nrf52840/nrf52840/uf2'; artifact='radiant_dongle_feather_quiet.uf2';     pkg='uf2'; offset=0x26000; transport='USB_LEGACY'; conf='quiet.conf';  release=$true; assert_config=@('# CONFIG_ANT_DONGLE_HEARTBEAT_LED is not set', '# CONFIG_ANT_DONGLE_RGB_LED is not set', '# CONFIG_LED_STRIP is not set') }
     @{ dir='dongle';         board='nrf52840dongle/nrf52840';                artifact='radiant_dongle_nrf52840dongle.zip';    pkg='dfu'; offset=0x1000;  transport='USB_LEGACY'; conf=$null;         release=$true  }
     @{ dir='promicro';       board='promicro_nrf52840/nrf52840/uf2';         artifact='radiant_dongle_promicro.uf2';          pkg='uf2'; offset=0x26000; transport='USB_LEGACY'; conf=$null;         release=$true; assert_config=@('CONFIG_ANT_DONGLE_UF2_REBOOT_REQUEST=y') }
     @{ dir='promicro_synth'; board='promicro_nrf52840/nrf52840/uf2';         artifact='radiant_dongle_promicro_synth.uf2';    pkg='uf2'; offset=0x26000; transport='USB_LEGACY'; conf='synth.conf';  release=$true; assert_config=@('CONFIG_ANT_DONGLE_UF2_REBOOT_REQUEST=y') }

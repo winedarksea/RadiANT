@@ -58,7 +58,7 @@ jobs:
   # because release images stayed on the proprietary backend until the Tier 3
   # Zwift acceptance passed for radiant. It passed (a 30-minute ride, recorded
   # in docs/decisions/0001-backend-selection-and-release-default.md), so the
-  # four shipping images are cut here now, and the `build-sdk-ant` job that
+  # shipping images are cut here now, and the `build-sdk-ant` job that
   # used to cut them is gone from this file entirely.
   #
   # WHAT THAT MOVED IN WITH IT: the rows carrying `artifact` also carry
@@ -88,7 +88,7 @@ jobs:
     # board whose USB node moved would silently compile a different transport
     # and still build green.
     #
-    # FOUR ROWS CARRY `release: true` and they are the shipping images. A row
+    # FIVE ROWS CARRY `release: true` and they are the shipping images. A row
     # with `artifact` is packaged and uploaded from the run; a row that ALSO
     # has `release: true` is attached to a `v*` tag with its SHA-256. Every
     # other row exists to keep something compiling and is downloadable from the
@@ -97,15 +97,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # ── THE FOUR SHIPPING IMAGES ─────────────────────────────────────
+          # ── THE FIVE SHIPPING IMAGES ─────────────────────────────────────
           #
-          # THE FEATHER IMAGE CARRIES THE RGB INDICATOR, and this row is the
-          # merge of what used to be two: a plain "core: feather" that shipped,
-          # and a separate "core: feather, rgb activity led" that was built and
-          # thrown away. Two Feather images of shipping shape, one of which
-          # nobody was ever handed, is one image too many - so the activity
-          # NeoPixel is now simply part of the product and the extra row is
-          # gone.
+          # THE FEATHER SHIPS AS TWO IMAGES, and they differ only in the LED:
+          # this one (NeoPixel activity indicator plus the red led0 heartbeat)
+          # and "core: feather, quiet (no led)" below it, which drives no LED at
+          # all. Owner ruling 2026-11-17: those two and no other LED
+          # combinations. This row keeps the file name radiant_dongle.uf2 so
+          # existing download links still work.
           #
           # The assertions are the reason that row existed and they are kept
           # verbatim. CONFIG_WS2812_STRIP_SPI is `default y` gated purely on a
@@ -132,6 +131,34 @@ jobs:
               # maskable priority-0 radio ISR - and the row must fail.
               CONFIG_WS2812_STRIP_SPI=y
               CONFIG_LED_STRIP=y
+              # CRC repair ships on (apps/dongle/prj.conf, owner acceptance
+              # 2026-11-15). PROFILE_SANITY is its third refutation and
+              # must travel with it.
+              CONFIG_RADIANT_CRC_REPAIR=y
+              CONFIG_RADIANT_PROFILE_SANITY=y
+              # The hot files at -O2 (apps/dongle/prj.conf, owner ruling
+              # 2026-11-16, step C2: pass-to-arm 289 us at -Os, 255 at -O2).
+              CONFIG_RADIANT_HOT_PATH_O2=y
+          # THE SECOND FEATHER IMAGE: NO LED AT ALL, for users who find a
+          # blinking light annoying. The Feather ships as exactly these two
+          # LED variants (owner ruling 2026-11-17); no other LED combination
+          # is released. No rgb_feather.overlay here, so the ws2812 node,
+          # driver and SPI never enter the image - see apps/dongle/quiet.conf.
+          - name: "core: feather, quiet (no led)"
+            board: adafruit_feather_nrf52840/nrf52840/uf2
+            radio: core
+            extra_conf: quiet.conf
+            transport: USB_LEGACY
+            artifact: radiant_dongle_feather_quiet.uf2
+            package: uf2
+            offset: "0x26000"
+            release: true
+            assert_config: |
+              # The whole off-switch. If this stops reading back as unset,
+              # the board blinks again and the row must fail.
+              # CONFIG_ANT_DONGLE_HEARTBEAT_LED is not set
+              # CONFIG_ANT_DONGLE_RGB_LED is not set
+              # CONFIG_LED_STRIP is not set
               # CRC repair ships on (apps/dongle/prj.conf, owner acceptance
               # 2026-11-15). PROFILE_SANITY is its third refutation and
               # must travel with it.
@@ -205,7 +232,7 @@ jobs:
           # Not a shipping image. The nRF54 targets can only use the new USB
           # device stack, and the Feather is the one board that stack can be
           # tested against a real host on - so it is built here, and it is NOT
-          # one of the two Feather images that were consolidated above.
+          # one of the two shipping Feather images above (RGB and quiet).
           - name: "core: feather, new USB stack"
             board: adafruit_feather_nrf52840/nrf52840/uf2
             radio: core
@@ -615,7 +642,7 @@ jobs:
             echo '```'
           } >> "${GITHUB_STEP_SUMMARY}"
 
-      # Only the four shipping images. Every other row in this matrix is built
+      # Only the five shipping images. Every other row in this matrix is built
       # to keep it compiling and is downloadable from the run, not handed to
       # anyone as a release.
       - name: Attach to release

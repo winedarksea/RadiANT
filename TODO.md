@@ -451,7 +451,6 @@ Settled by these captures, nothing to do:
   - It also broadcasts as power (type 0x0B, transmission type 0xA5) and speed (type 0x7B).
 - Power meter #20329 reads about 35 % below the trainer. It is probably not on the same bike (actually it is, the trainer is really that inaccurate).
 
-Make sure there is an RGB activity version of the feather, and the other version then is no LEDs at all (quiet mode)
 # Open issues from the 2026-11-17 RadiANT security review (HEAD acdd9d2)
 
 ## 1. [OPEN, HIGH] Give serial pairing enough stack for X25519

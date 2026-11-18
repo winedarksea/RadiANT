@@ -11,6 +11,13 @@ reads.
 
 ## [Unreleased]
 
+### Added
+
+- **A quiet Feather image, `radiant_dongle_feather_quiet.uf2`, with no LED
+  activity at all.** The Feather now ships as two images: `radiant_dongle.uf2`
+  (RGB activity indicator, unchanged) and this one. No other LED variants are
+  released.
+
 ### Fixed
 
 - **SYSTEM_RESET is answered in a few milliseconds, not 52.** The bridge slept

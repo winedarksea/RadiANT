@@ -57,13 +57,15 @@ those the board never appears at all.
 
 1. Plug the Feather in.
 2. **Double-tap the RESET button.** A USB drive named `FTHR840BOOT` appears.
-3. Drag `radiant_dongle.uf2` onto that drive.
+3. Drag `radiant_dongle.uf2` onto that drive. If you would rather have no
+   blinking light, use `radiant_dongle_feather_quiet.uf2` instead: it is the
+   same firmware with every LED off.
 
 The drive ejects itself and the board reboots as an ANT+ compatible dongle. That's the
 whole install — the firmware lives on the board, and there is nothing to
 configure.
 
-Grab `radiant_dongle.uf2` from the
+Grab either file from the
 [latest release](https://github.com/winedarksea/RadiANT/releases/latest), or [build it yourself](#building-from-source).
 
 ### 3. Set up your platform
@@ -233,9 +235,11 @@ flash:
 .\scripts\flash_uf2.ps1 -TimeoutSeconds 30   # double-tap RESET when prompted
 ```
 
-The shipping Feather image carries the activity-rate RGB indicator: its build
-row applies `rgb.conf` and `rgb_feather.overlay` together, and either one
-without the other fails the build on purpose.
+The Feather ships as two images that differ only in the LED.
+`radiant_dongle.uf2` has the activity-rate RGB indicator: its build row applies
+`rgb.conf` and `rgb_feather.overlay` together, and either one without the other
+fails the build on purpose. `radiant_dongle_feather_quiet.uf2` applies
+`quiet.conf` and no overlay, so it drives no LED at all.
 
 #### The LED
 
@@ -357,11 +361,12 @@ manual run.** That is the trade taken.
 `ztest` exists for, and it is the only C verification that runs on every change
 (`native_sim` needs Linux; [`docs/testing.md`](docs/testing.md) covers running it yourself).
 
-The release lane attaches four artifacts to a `v*` release:
+The release lane attaches five artifacts to a `v*` release:
 
 | Artifact | Board |
 |---|---|
-| `radiant_dongle.uf2` | Adafruit Feather nRF52840 Express |
+| `radiant_dongle.uf2` | Adafruit Feather nRF52840 Express, RGB activity LED |
+| `radiant_dongle_feather_quiet.uf2` | Adafruit Feather nRF52840 Express, no LED |
 | `radiant_dongle_nrf52840dongle.zip` | Nordic nRF52840 Dongle (DFU package) |
 | `radiant_dongle_promicro.uf2` | Pro Micro nRF52840, with a 32.768 kHz crystal |
 | `radiant_dongle_promicro_synth.uf2` | Pro Micro nRF52840, clock synthesized for boards without one |
