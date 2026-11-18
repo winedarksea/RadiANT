@@ -37,7 +37,7 @@
  *   0x24 radio_rx_us        cumulative receive on-time (energy detect too), us
  *   0x28 radio_tx_ops       transmit operations that ran
  *   0x2C radio_rx_ops       receive / energy-detect operations that ran
- *   0x30 cpu_active_us      cumulative CPU non-idle time, us (CONFIG_CPU_LOAD)
+ *   0x30 cpu_active_us      cumulative CPU non-idle time, us (..._IDLE)
  *   0x34 cpu_load_permille  CPU load over the last snapshot interval, 0..1000
  *   0x38 idle_entries       idle-thread entries (CONFIG_RADIANT_POWER_DIAG_IDLE)
  *   0x3C flags              RADIANT_POWER_DIAG_F_* below
@@ -51,8 +51,8 @@
  *                           timer that the 64-bit fold took for a wrap
  *
  * A field this build cannot measure reads RADIANT_POWER_DIAG_NOT_MEASURED
- * (0xFFFFFFFF) for the whole run: cpu_* without CONFIG_CPU_LOAD,
- * idle_entries without CONFIG_RADIANT_POWER_DIAG_IDLE, constlat_stat on a
+ * (0xFFFFFFFF) for the whole run: cpu_* and idle_entries without
+ * CONFIG_RADIANT_POWER_DIAG_IDLE, constlat_stat on a
  * part with no CONSTLATSTAT register (every nRF52/nRF53, and cc26xx), the
  * hfxo_* trio on a backend that does not report its clock request (cc26xx,
  * null), and all five ti_* fields on any backend but cc26xx (flag F_TI says
@@ -95,12 +95,24 @@
  *   its sync-word time, so the ramp-up and preamble before it are not
  *   counted and the interrupt latency after its END is. A receive window
  *   counts from its open whether or not a frame came. An operation denied by
- *   an arbiter (MPSL) is not counted at all; one aborted before its open is
- *   not counted. Backend-neutral: the same code counts on nRF and cc26xx.
+ *   an arbiter (MPSL) is not counted at all, and neither is one that ends
+ *   (aborted, failed) before its open. Backend-neutral: the same code counts
+ *   on nRF and cc26xx.
  *
- *   cpu_* come from Zephyr's CPU_LOAD (idle time between the idle thread's
- *   entry and exit). cpu_load_get(true) is called once per snapshot, so a
- *   second user of cpu_load_get(true) in the same image splits the windows.
+ *   cpu_* are this file's own idle accumulator on Zephyr's cycle clock
+ *   (k_cycle_get_32(): 32768 Hz RTC on nRF52/53 and cc26xx, 1 MHz GRTC on
+ *   nRF54L), through two TRACING_USER hooks: sys_trace_idle_user() opens an
+ *   idle interval as the idle thread goes to sleep, and
+ *   sys_trace_isr_enter_user() closes it in the first interrupt after the
+ *   wake (later, nested ones find it closed). Active time is the snapshot
+ *   interval minus the idle in it, accumulated in cycles and converted to us
+ *   once, so there is no per-window rounding (Zephyr's cpu_load_get() floors
+ *   each window to whole per-mille, which is why it is not used). Resolution
+ *   is one cycle per idle interval. An interrupt that does not run Zephyr's
+ *   tracing (a zero-latency or bare direct ISR) does not close the interval;
+ *   the idle thread's next entry, or the next snapshot, closes it instead,
+ *   and that ISR's run time is counted as idle. cpu_load_permille is the
+ *   last snapshot interval's load, floored; use cpu_active_us for sums.
  *
  *   idle_entries counts sys_trace_idle_user() calls: one per entry into the
  *   CPU's sleep instruction from the idle thread. Its rate is the wake rate.
@@ -165,7 +177,7 @@ extern "C" {
 #define RADIANT_POWER_DIAG_F_HFXO_MEASURED   (1u << 1) /* backend reports it */
 #define RADIANT_POWER_DIAG_F_CONSTLAT_REQ    (1u << 2) /* backend triggered it */
 #define RADIANT_POWER_DIAG_F_CONSTLAT_HW_VALID (1u << 3) /* constlat_stat read */
-#define RADIANT_POWER_DIAG_F_CPU_LOAD        (1u << 4) /* cpu_* measured */
+#define RADIANT_POWER_DIAG_F_CPU_LOAD        (1u << 4) /* cpu_* measured (..._IDLE) */
 #define RADIANT_POWER_DIAG_F_IDLE            (1u << 5) /* idle_entries measured */
 #define RADIANT_POWER_DIAG_F_TI              (1u << 6) /* ti_* measured (cc26xx) */
 
@@ -273,13 +285,47 @@ static inline uint32_t radiant_power_diag_on_us(uint64_t now, uint64_t open)
 	return (d > UINT32_MAX) ? UINT32_MAX : (uint32_t)d;
 }
 
-/* CPU active time over interval_us at load_permille (clamped to 1000). */
-static inline uint32_t radiant_power_diag_active_us(uint32_t load_permille,
-						     uint32_t interval_us)
-{
-	uint32_t pm = (load_permille > 1000u) ? 1000u : load_permille;
+/*
+ * The idle accumulator, on a free-running u32 cycle clock (k_cycle_get_32()).
+ * One interval at a time: open as the CPU goes to sleep, closed by the first
+ * interrupt after the wake. Each interval is a u32 difference, so the clock
+ * may wrap between open and close (an interval must be shorter than one wrap:
+ * 36.4 h at 32768 Hz, 71.6 min at 1 MHz; the 1 s snapshot guarantees it).
+ */
+struct radiant_power_diag_idle {
+	uint64_t idle_cyc; /* closed intervals, cycles */
+	uint32_t t0;       /* open time, valid while open */
+	bool     open;
+};
 
-	return (uint32_t)(((uint64_t)interval_us * pm) / 1000u);
+/* Close the open interval at now. No-op when none is open, so a nested or
+ * later interrupt cannot count the same sleep twice. */
+static inline void radiant_power_diag_idle_close(struct radiant_power_diag_idle *d,
+						 uint32_t now)
+{
+	if (d->open) {
+		d->idle_cyc += (uint32_t)(now - d->t0);
+		d->open = false;
+	}
+}
+
+/* Open an interval at now. One still open (its wake went through an
+ * interrupt that is not traced) is closed at now first. */
+static inline void radiant_power_diag_idle_open(struct radiant_power_diag_idle *d,
+						uint32_t now)
+{
+	radiant_power_diag_idle_close(d, now);
+	d->t0 = now;
+	d->open = true;
+}
+
+/* Active cycles in a span that held idle_delta idle cycles. Idle can read a
+ * little over the span (an interval closed just after the span's end); that
+ * clamps to 0 rather than wrapping. */
+static inline uint32_t radiant_power_diag_active_cyc(uint32_t span,
+						      uint64_t idle_delta)
+{
+	return (idle_delta >= span) ? 0u : (span - (uint32_t)idle_delta);
 }
 
 /*

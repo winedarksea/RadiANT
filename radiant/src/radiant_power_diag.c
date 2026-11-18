@@ -10,11 +10,11 @@
  * Contexts. Three kinds of writer feed the private accumulators below, each
  * the only writer of its own fields: the scheduler (radio counters, under its
  * own serialization), the backend's HFXO hook (irq_lock, rare) and the idle
- * thread (idle entries). The work item is the only writer of the published
- * struct, and reads the accumulators without a lock: each is a naturally
- * aligned u32, read whole, and a counter read a moment early is a counter
- * read a moment early. The HFXO state is 64-bit, so it is read under the
- * same irq_lock its hook takes.
+ * hooks (idle thread and first ISR after a wake, irq_lock). The work item is
+ * the only writer of the published struct, and reads the u32 radio counters
+ * without a lock: each is naturally aligned and read whole, and a counter
+ * read a moment early is a counter read a moment early. The HFXO and idle
+ * state are 64-bit, so they are read under the irq_lock their hooks take.
  */
 
 #include <stdbool.h>
@@ -25,10 +25,6 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/util.h>
-
-#if defined(CONFIG_CPU_LOAD)
-#include <zephyr/debug/cpu_load.h>
-#endif
 
 #if defined(CONFIG_RADIANT_BACKEND_NRF)
 #include <nrfx.h>
@@ -69,7 +65,7 @@ LOG_MODULE_REGISTER(radiant_power, CONFIG_RADIANT_LOG_LEVEL);
 #endif
 
 #define PD_INIT_HFXO  (PD_HFXO_MEASURED ? 0u : RADIANT_POWER_DIAG_NOT_MEASURED)
-#define PD_INIT_CPU   (IS_ENABLED(CONFIG_CPU_LOAD) ? 0u : RADIANT_POWER_DIAG_NOT_MEASURED)
+/* The idle hooks measure both idle entries and CPU time. */
 #define PD_INIT_IDLE  (IS_ENABLED(CONFIG_RADIANT_POWER_DIAG_IDLE) ? 0u \
 		       : RADIANT_POWER_DIAG_NOT_MEASURED)
 #define PD_INIT_TI    (PD_TI ? 0u : RADIANT_POWER_DIAG_NOT_MEASURED)
@@ -77,9 +73,9 @@ LOG_MODULE_REGISTER(radiant_power, CONFIG_RADIANT_LOG_LEVEL);
 #define PD_FLAGS_STATIC                                                        \
 	((PD_HFXO_MEASURED ? RADIANT_POWER_DIAG_F_HFXO_MEASURED : 0u) |        \
 	 (PD_CONSTLAT_HW ? RADIANT_POWER_DIAG_F_CONSTLAT_HW_VALID : 0u) |      \
-	 (IS_ENABLED(CONFIG_CPU_LOAD) ? RADIANT_POWER_DIAG_F_CPU_LOAD : 0u) |  \
-	 (IS_ENABLED(CONFIG_RADIANT_POWER_DIAG_IDLE) ? RADIANT_POWER_DIAG_F_IDLE \
-						     : 0u) |                    \
+	 (IS_ENABLED(CONFIG_RADIANT_POWER_DIAG_IDLE)                           \
+		  ? (RADIANT_POWER_DIAG_F_CPU_LOAD | RADIANT_POWER_DIAG_F_IDLE)  \
+		  : 0u) |                                                \
 	 (PD_TI ? RADIANT_POWER_DIAG_F_TI : 0u))
 
 /*
@@ -95,8 +91,8 @@ __used struct radiant_power_diag radiant_power_diag = {
 	.hfxo_req_us = PD_INIT_HFXO,
 	.hfxo_requests = PD_INIT_HFXO,
 	.hfxo_releases = PD_INIT_HFXO,
-	.cpu_active_us = PD_INIT_CPU,
-	.cpu_load_permille = PD_INIT_CPU,
+	.cpu_active_us = PD_INIT_IDLE,
+	.cpu_load_permille = PD_INIT_IDLE,
 	.idle_entries = PD_INIT_IDLE,
 	.flags = PD_FLAGS_STATIC,
 	.constlat_stat = RADIANT_POWER_DIAG_NOT_MEASURED,
@@ -116,7 +112,8 @@ static struct {
 	uint32_t rx_ops;
 	/* irq_lock. */
 	struct radiant_power_diag_hfxo hfxo;
-	/* Idle thread. */
+	/* irq_lock: idle thread and the first ISR after a wake. */
+	struct radiant_power_diag_idle idle;
 	uint32_t idle_entries;
 	/* Backend init thread, once. */
 	bool constlat_req;
@@ -125,9 +122,10 @@ static struct {
 	uint32_t fold_back_max;  /* ticks, the largest back-step */
 	uint32_t fold_wraps;
 
-	/* Work item only. */
-	uint64_t last_snap_us;
-	uint32_t cpu_active_us;
+	/* Work item only (and pd_init()). */
+	uint32_t last_cyc;
+	uint64_t last_idle_cyc;
+	uint64_t active_cyc;
 	uint32_t snaps_since_log;
 	bool     have_log;
 	struct radiant_power_diag last_log;
@@ -188,14 +186,38 @@ void radiant_power_diag_rat_backward(uint32_t last, uint32_t now)
 
 #if defined(CONFIG_RADIANT_POWER_DIAG_IDLE)
 /*
- * Zephyr's TRACING_USER hook (subsys/tracing/user/tracing_user.c defines it
- * __weak): the idle thread calls it, interrupts locked, on every entry into
- * the CPU's sleep instruction. An application that defines its own
- * sys_trace_idle_user() turns CONFIG_RADIANT_POWER_DIAG_IDLE off.
+ * Zephyr's TRACING_USER hooks (subsys/tracing/user/tracing_user.c defines
+ * both __weak). The idle thread calls sys_trace_idle_user() with interrupts
+ * locked, just before the CPU's sleep instruction: count the entry and open an
+ * idle interval. TRACING_USER has no user hook for the idle exit, so the
+ * interval is closed by sys_trace_isr_enter_user(), which every traced
+ * interrupt runs on entry (CONFIG_TRACING_ISR): the first one after the wake
+ * is the wake. Arm's arch_cpu_idle() unmasks right after its own (non-user)
+ * idle-exit trace, so the gap between the wake and that close is a few
+ * instructions. Nested and later interrupts find the interval closed and only
+ * pay one load. An application that defines either hook itself turns
+ * CONFIG_RADIANT_POWER_DIAG_IDLE off.
  */
 void sys_trace_idle_user(void)
 {
+	uint32_t     now = k_cycle_get_32();
+	unsigned int key = irq_lock();
+
 	pd.idle_entries++;
+	radiant_power_diag_idle_open(&pd.idle, now);
+	irq_unlock(key);
+}
+
+void sys_trace_isr_enter_user(void)
+{
+	unsigned int key;
+
+	if (!pd.idle.open) {
+		return;
+	}
+	key = irq_lock();
+	radiant_power_diag_idle_close(&pd.idle, k_cycle_get_32());
+	irq_unlock(key);
 }
 #endif
 
@@ -203,12 +225,9 @@ static void pd_snapshot(void)
 {
 	struct radiant_power_diag next = radiant_power_diag;
 	uint64_t     now_us = pd_now_us();
-	uint32_t     interval_us = (uint32_t)MIN(now_us - pd.last_snap_us,
-						 (uint64_t)UINT32_MAX);
 	uint32_t     flags = PD_FLAGS_STATIC;
 	unsigned int key;
 
-	pd.last_snap_us = now_us;
 	next.uptime_ms = (uint32_t)(now_us / 1000u);
 
 #if PD_HFXO_MEASURED
@@ -234,26 +253,31 @@ static void pd_snapshot(void)
 	next.radio_tx_ops = pd.tx_ops;
 	next.radio_rx_ops = pd.rx_ops;
 
-#if defined(CONFIG_CPU_LOAD)
-	{
-		/* Load since the previous call, i.e. since the previous snapshot
-		 * (since boot for the first). Negative: the counter variant
-		 * overflowed; keep the old values rather than invent one. */
-		int load = cpu_load_get(true);
-
-		if (load >= 0) {
-			pd.cpu_active_us += radiant_power_diag_active_us((uint32_t)load,
-									 interval_us);
-			next.cpu_load_permille = (uint32_t)load;
-			next.cpu_active_us = pd.cpu_active_us;
-		}
-	}
-#else
-	ARG_UNUSED(interval_us);
-#endif
-
 #if defined(CONFIG_RADIANT_POWER_DIAG_IDLE)
-	next.idle_entries = pd.idle_entries;
+	{
+		/* The span since the previous snapshot on the same cycle clock the
+		 * idle hooks use, minus the idle in it. Summed in cycles and
+		 * converted once, so no rounding accumulates. An interval still
+		 * open here is stale (its wake was an untraced interrupt): this is
+		 * not the idle thread. */
+		uint32_t now_cyc = k_cycle_get_32();
+		uint32_t span = radiant_power_diag_delta(now_cyc, pd.last_cyc);
+		uint32_t active;
+		uint64_t idle;
+
+		key = irq_lock();
+		radiant_power_diag_idle_close(&pd.idle, now_cyc);
+		idle = pd.idle.idle_cyc;
+		next.idle_entries = pd.idle_entries;
+		irq_unlock(key);
+
+		active = radiant_power_diag_active_cyc(span, idle - pd.last_idle_cyc);
+		pd.active_cyc += active;
+		pd.last_cyc = now_cyc;
+		pd.last_idle_cyc = idle;
+		next.cpu_active_us = (uint32_t)k_cyc_to_us_floor64(pd.active_cyc);
+		next.cpu_load_permille = radiant_power_diag_duty_permille(active, span);
+	}
 #endif
 
 	if (pd.constlat_req) {
@@ -383,6 +407,9 @@ static void pd_work_fn(struct k_work *work)
 
 static int pd_init(void)
 {
+	/* The first CPU window starts here, not at a cycle count of 0: a GRTC
+	 * can carry its count across a soft reset. */
+	pd.last_cyc = k_cycle_get_32();
 	(void)k_work_schedule(&pd_work, K_MSEC(RADIANT_POWER_DIAG_SNAPSHOT_MS));
 	return 0;
 }
