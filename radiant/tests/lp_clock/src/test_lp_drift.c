@@ -268,7 +268,7 @@ static void run_sim(const struct sim_cfg *config, uint32_t seed,
 
 		/* Both wake edges for the next operation. */
 		rc = radiant_lp_wake_plan(&tb, &c, next_op, ARM_US, HFXO_LEAD,
-					  UINT64_MAX, &plan);
+					  config->min_lead, UINT64_MAX, &plan);
 		r->bad_wake_rc += rc != RADIANT_LP_WAKE_OK;
 		if (!radiant_lp_compare_in_time(&tb, counter(k_r), plan.hfxo_cmp,
 						config->min_lead) ||

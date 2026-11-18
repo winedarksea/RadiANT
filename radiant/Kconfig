@@ -829,12 +829,14 @@ config RADIANT_NRF_LP_HFXO_STARTUP_US
 	# Spike B1 S4 (docs/spike-lp-clock-results.md), request -> callback,
 	# 1000 samples per CONSTLAT mode, HFXO off before each: nRF54L15 DK
 	# p99.9 679-680 us, max 680 (CONSTLAT no effect) -> 800; Pro Micro
-	# nRF52840 clone p99.9 379-405 us, max 418 -> 500. The nRF5340 network
-	# core was not measured, so it keeps the conservative figure MPSL
-	# assumes for MPSL_HFCLK_LATENCY: the devicetree's hfxo startup-time-us
-	# where there is one, else MPSL's own 1400.
-	default 800 if SOC_COMPATIBLE_NRF54LX
-	default 500 if SOC_COMPATIBLE_NRF52X
+	# nRF52840 clone p99.9 379-405 us, max 418 -> 500. Only those two SoCs
+	# were measured, so only they get the measured defaults; the rest of
+	# each family (nRF54L05/10, nRF54LM20, other nRF52s) and the nRF5340
+	# network core keep the conservative figure MPSL assumes for
+	# MPSL_HFCLK_LATENCY: the devicetree's hfxo startup-time-us where there
+	# is one (1650 on the nRF54L family), else MPSL's own 1400.
+	default 800 if SOC_NRF54L15
+	default 500 if SOC_NRF52840
 	default $(dt_node_int_prop_int,/clocks/hfxo,startup-time-us) if $(dt_node_has_prop,/clocks/hfxo,startup-time-us)
 	default 1400
 	help
@@ -847,11 +849,12 @@ config RADIANT_NRF_LP_HFXO_STARTUP_US
 
 	  Defaults, from the power plan's spike B1 (one board of each kind;
 	  start-up depends on the crystal and its load capacitors, so a
-	  different board may need its own figure): 800 us on the nRF54L
-	  (the nRF54L15 DK's maximum was 680 us), 500 us on the nRF52840 (the
-	  Pro Micro clone's maximum was 418 us). Elsewhere, including the
-	  unmeasured nRF5340 network core, the SoC devicetree's hfxo
-	  startup-time-us if it has one, else 1400 us, the figure MPSL
+	  different board may need its own figure): 800 us on the nRF54L15
+	  (the DK's maximum was 680 us), 500 us on the nRF52840 (the Pro
+	  Micro clone's maximum was 418 us). Every other SoC, including the
+	  rest of both families and the nRF5340 network core, is unmeasured
+	  and gets the SoC devicetree's hfxo startup-time-us if it has one
+	  (1650 us on the nRF54L family), else 1400 us, the figure MPSL
 	  assumes for MPSL_HFCLK_LATENCY.
 
 config RADIANT_NRF_LP_KEEP_ON_US

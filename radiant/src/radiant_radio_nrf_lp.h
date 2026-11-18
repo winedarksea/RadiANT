@@ -79,11 +79,37 @@
  *     backwards (a missed compare, a reading taken before the anchor) is
  *     detectable. THE RECOMMENDED MODE.
  *   - RAW (width = the hardware counter's bits, 24 for the RTC, 52 for the
- *     GRTC): values are reduced modulo 2^width and distances are right
- *     across a wrap only while the true distance is under half the range
- *     (256 s on the RTC). A longer one - an RTC compare that was missed and
- *     so fires one counter period later - is indistinguishable from a short
- *     one. Kept for callers that only have the raw register.
+ *     GRTC): values are reduced modulo 2^width. A reading is trusted up to
+ *     a whole counter period after the anchor (512 s on the RTC) - a reading
+ *     from before the anchor cannot happen under CLOCK_LOCK, since every
+ *     anchor is an edge that has already gone by - and a wake is never
+ *     placed further than 3/8 of the period (192 s on the RTC), so the edge
+ *     it fires on, and the readings until radiant_lp_rebase(), are well
+ *     inside that. A missed RTC compare, which fires a whole counter period
+ *     later, wraps to a short distance and CANNOT be detected in this mode.
+ *     Kept for callers that only have the raw register.
+ *
+ * SETTING THE COMPARES THROUGH ZEPHYR'S DRIVERS. A wake compare comes back
+ * as the absolute value the drivers take, but the drivers add rules of
+ * their own:
+ *   - z_nrf_rtc_timer_set() and _exact_set() refuse a target more than
+ *     NRF_RTC_TIMER_MAX_SCHEDULE_SPAN ticks (2^23, 256 s) ahead, so the
+ *     caller passes max_ticks no greater than that (minus the time between
+ *     planning and writing) to radiant_lp_wake_compare/_wake_plan.
+ *   - z_nrf_rtc_timer_set() silently moves a compare that is too close to
+ *     the counter LATER, onto another tick. For an ANCHORING edge - the
+ *     release, EDGE 2, a re-anchor - that would leave the anchor on the
+ *     wrong tick with timer_at_anchor still true: a locked-in error of 30.5
+ *     us or more. Anchoring edges therefore use z_nrf_rtc_timer_exact_set(),
+ *     whose failure means a late anchor. EDGE 1 (the HFXO request, which
+ *     anchors nothing) and a rebase wake may use z_nrf_rtc_timer_set().
+ *   - z_nrf_grtc_timer_set() writes the 52-bit absolute value unchanged
+ *     (nrfx_grtc_syscounter_cc_absolute_set(); no span limit, no
+ *     adjustment), so nothing stops a value the SYSCOUNTER has already
+ *     passed from being written. After every GRTC write the caller re-reads
+ *     the counter and applies radiant_lp_compare_in_time(); on an anchoring
+ *     edge, false is a late anchor whatever the hardware then does with the
+ *     stale value.
  *
  * WHY THE FRACTION IS CARRIED. 15625/512 us is 30.517578125 us. Rounding each
  * conversion to whole microseconds loses up to 1 us per conversion, and a
@@ -118,7 +144,10 @@
  * (71 min) wrong. Every call that reads or writes a struct radiant_lp_clock -
  * radiant_lp_mono() and radiant_lp_clock_now() included, since they raise
  * hwm_us - runs under the backend's CLOCK_LOCK, the same critical section as
- * its TIMER fold (PRIMASK on an MPSL build, so ZLI-safe there).
+ * its TIMER fold (PRIMASK on an MPSL build, so ZLI-safe there). The LF
+ * counter value handed in is READ under the same lock: a value read before
+ * taking it can be older than an anchor another context moved meanwhile,
+ * which is the "reading from before the anchor" raw mode cannot detect.
  *
  * FOR PASS B3 (not done here):
  *   - BUILD_ASSERT that the system timer has the two user channels this
@@ -137,6 +166,12 @@
  *   - Nothing to restore after a wake: the spike found every RADIO, TIMER
  *     and (D)PPI register retained across HFXO-off System ON idle on both
  *     SoCs, so no register shadow is needed for this.
+ *   - Record whether the HFXO-started callback has run by the time EDGE 2
+ *     fires (a start-up longer than CONFIG_RADIANT_NRF_LP_HFXO_STARTUP_US).
+ *     If not, the TIMER started on HFINT: mark the segment
+ *     timer_at_anchor = false, count it, and radiant_lp_reanchor() once the
+ *     crystal is stable, so its release is judged against the LF image
+ *     again.
  *   - Expect a constant rate step: asleep intervals run at the LFXO rate,
  *     awake ones at the HFXO rate, and the spike measured them -30 ppm
  *     apart on the nRF54L15 DK and -58.5 ppm on the Pro Micro clone (7.4 and
@@ -214,20 +249,28 @@ extern "C" {
 /* ------------------------------------------------------------------------ */
 
 struct radiant_lp_tb {
-	uint64_t mask;   /* 2^width - 1; all ones when extended */
-	uint64_t range;  /* the longest trusted distance, ticks */
-	uint32_t num;    /* q units per tick */
-	uint8_t  shift;  /* q units per us = 2^shift */
-	uint8_t  width;  /* counter bits; RADIANT_LP_EXTENDED_WIDTH = extended */
+	uint64_t mask;      /* 2^width - 1; all ones when extended */
+	uint64_t read_max;  /* longest distance a reading is trusted at */
+	uint64_t half;      /* longest distance that reads as the future */
+	uint64_t wake_max;  /* furthest a wake is ever placed */
+	uint32_t num;       /* q units per tick */
+	uint8_t  shift;     /* q units per us = 2^shift */
+	uint8_t  width;     /* counter bits; RADIANT_LP_EXTENDED_WIDTH = extended */
 };
 
 /*
  * Fill *tb. False (and *tb untouched) for a format this arithmetic cannot
  * carry exactly in 64 bits: num 0, shift over 31, or a raw width outside
  * 2..63 or with width + bitlength(num) over 63 (which keeps any in-range
- * distance * num below 2^63). The trusted distance is half the range for a
- * raw counter, and for an extended one the largest whose product with num
- * stays below 2^63 (2^49 ticks, ~544 years, on the RTC format).
+ * distance * num below 2^63).
+ *
+ * Raw: a reading is trusted up to a whole period (read_max = 2^width - 1),
+ * a compare is "ahead" up to half the period, and a wake is placed at most
+ * 3/8 of the period out (half - half/4: 192 s on the RTC), so the readings
+ * between a clamped wake's edge and its rebase are far inside read_max.
+ * Extended: all three are the largest distance whose product with num stays
+ * below 2^63 (2^49 ticks, ~544 years, on the RTC format); the caller's
+ * max_ticks is what bounds a wake there (see SETTING THE COMPARES above).
  */
 static inline bool radiant_lp_tb_init(struct radiant_lp_tb *tb, uint32_t num,
 				      uint8_t shift, uint8_t width)
@@ -242,14 +285,18 @@ static inline bool radiant_lp_tb_init(struct radiant_lp_tb *tb, uint32_t num,
 	}
 	if (width == RADIANT_LP_EXTENDED_WIDTH) {
 		tb->mask = UINT64_MAX;
-		tb->range = (UINT64_C(1) << (63u - num_bits)) - 1u;
+		tb->read_max = (UINT64_C(1) << (63u - num_bits)) - 1u;
+		tb->half = tb->read_max;
+		tb->wake_max = tb->read_max;
 	} else {
 		if (width < 2u || width > 63u ||
 		    (unsigned int)width + num_bits > 63u) {
 			return false;
 		}
 		tb->mask = (UINT64_C(1) << width) - 1u;
-		tb->range = tb->mask >> 1;
+		tb->read_max = tb->mask;
+		tb->half = tb->mask >> 1;
+		tb->wake_max = tb->half - (tb->half >> 2);
 	}
 	tb->num = num;
 	tb->shift = shift;
@@ -257,10 +304,16 @@ static inline bool radiant_lp_tb_init(struct radiant_lp_tb *tb, uint32_t num,
 	return true;
 }
 
-/* The longest forward distance, in ticks, that is trusted. */
+/* The longest forward distance, in ticks, that reads as the future. */
 static inline uint64_t radiant_lp_tb_half(const struct radiant_lp_tb *tb)
 {
-	return tb->range;
+	return tb->half;
+}
+
+/* The furthest, in ticks from the anchor, a wake is ever placed. */
+static inline uint64_t radiant_lp_tb_wake_max(const struct radiant_lp_tb *tb)
+{
+	return tb->wake_max;
 }
 
 /* One tick in whole us, rounded up: 31 on the RTC, 1 on the GRTC. */
@@ -279,9 +332,10 @@ static inline uint64_t radiant_lp_ticks_since(const struct radiant_lp_tb *tb,
 
 /*
  * True once the counter has reached `target`: `now` is at or past it by no
- * more than the trusted distance. The backend's "has this edge already gone
- * by" test - e.g. EDGE 2's compare passed but the TIMER is not running, which
- * is a missed compare (a late anchor).
+ * more than radiant_lp_tb_half() (half the period raw, the format's range
+ * extended). The backend's "has this edge already gone by" test - e.g. EDGE
+ * 2's compare passed but the TIMER is not running, which is a missed compare
+ * (a late anchor).
  */
 static inline bool radiant_lp_tick_reached(const struct radiant_lp_tb *tb,
 					   uint64_t now, uint64_t target)
@@ -291,7 +345,7 @@ static inline bool radiant_lp_tick_reached(const struct radiant_lp_tb *tb,
 
 /*
  * True if a compare at `compare` is certain to fire, the counter reading
- * `now`: at least min_lead ticks ahead and not more than the trusted distance
+ * `now`: at least min_lead ticks ahead and not more than radiant_lp_tb_half()
  * ahead (further reads as the past). False is a late anchor: the edge may
  * never come (on the RTC, an equality compare that the counter has already
  * passed fires one counter period - 512 s - later), so nothing may be
@@ -390,7 +444,7 @@ static inline void radiant_lp_clock_init(struct radiant_lp_clock *c)
 
 /*
  * Exact asleep timebase at LF counter `ticks`, q units. Unchecked: `ticks`
- * must be within the trusted distance past the anchor (radiant_lp_asleep_ok).
+ * must be within read_max past the anchor (radiant_lp_asleep_ok).
  */
 static inline uint64_t radiant_lp_asleep_q(const struct radiant_lp_tb *tb,
 					   const struct radiant_lp_clock *c,
@@ -402,18 +456,19 @@ static inline uint64_t radiant_lp_asleep_q(const struct radiant_lp_tb *tb,
 
 /*
  * True if `ticks` is a reading the asleep conversion can trust: at or after
- * the anchor by no more than the trusted distance. False means the timebase
- * cannot say what time it is from this reading - with an extended counter, a
- * reading from before the anchor or a sleep that overran by centuries; with a
- * raw one, a reading past half the range, which also catches a missed RTC
- * compare once it is more than 256 s old.
+ * the anchor by no more than read_max. False means the timebase cannot say
+ * what time it is from this reading: with an extended counter, a reading
+ * from before the anchor (a stale value, or one read outside CLOCK_LOCK) or
+ * a sleep that overran by centuries. With a raw counter every distance up to
+ * a whole period is accepted, so this is false only for a full-period
+ * reading, which wraps to 0 anyway: raw mode cannot see an overrun.
  */
 static inline bool radiant_lp_asleep_ok(const struct radiant_lp_tb *tb,
 					const struct radiant_lp_clock *c,
 					uint64_t ticks)
 {
 	return radiant_lp_ticks_since(tb, c->anchor_ticks, ticks) <=
-	       radiant_lp_tb_half(tb);
+	       tb->read_max;
 }
 
 /* Asleep timebase at LF counter `ticks`, us, toward zero. Unchecked. */
@@ -538,7 +593,10 @@ static inline bool radiant_lp_release(const struct radiant_lp_tb *tb,
  * (radiant_lp_wake(..., false), a late anchor's recovery) has no exact
  * relation to any LF edge. Its awake readings are off the LF image by the
  * software start's delay - less than one LF tick plus the start's interrupt
- * latency (~31 us + latency on the RTC, ~1 us + latency on the GRTC). That
+ * latency (~31 us + latency on the RTC, ~1 us + latency on the GRTC), plus,
+ * if the recovery started the TIMER before the HFXO was stable, the HFINT
+ * error over the rest of the start-up (start-up x HFINT's rate error: ~7 us
+ * for 680 us at 1 %). That
  * offset is taken into the timebase ONCE, at the next release, and does not
  * grow: the wake after it is an exact (D)PPI start again. Re-anchoring inside
  * the segment changes nothing about that offset (the TIMER's reading is what
@@ -546,17 +604,28 @@ static inline bool radiant_lp_release(const struct radiant_lp_tb *tb,
  * rest of the segment, so a long software-started segment's release is
  * judged against the LF image rather than taken on trust. Also usable on the
  * boot TIMER, which has free-run since before any LF edge was known.
+ *
+ * Returns true if it re-anchored; false, and changes nothing, when the
+ * relation is already exact (timer_at_anchor), since a capture can only add
+ * its own 1 us quantisation to an exact anchor.
  */
-static inline void radiant_lp_reanchor(const struct radiant_lp_tb *tb,
+static inline bool radiant_lp_reanchor(const struct radiant_lp_tb *tb,
 				       struct radiant_lp_clock *c,
 				       uint64_t ticks, uint64_t timer_us)
 {
+	if (c->timer_at_anchor) {
+		/* Already exact: replacing the anchor with a capture would
+		 * only add that capture's quantisation.
+		 */
+		return false;
+	}
 	c->anchor_q = (timer_us << tb->shift) + c->awake_frac;
 	c->anchor_ticks = ticks & tb->mask;
 	c->timer_at_anchor = true;
 	/* awake_frac is unchanged: it is the TIMER domain's offset, and the
 	 * TIMER keeps running from the same base.
 	 */
+	return true;
 }
 
 /*
@@ -590,8 +659,8 @@ static inline uint64_t radiant_lp_wake(const struct radiant_lp_tb *tb,
  * REBASE while asleep, with no HFXO and no TIMER: move the anchor forward to
  * LF edge `ticks`, at its exact LF image. Nothing about the timebase changes;
  * only the distance future readings convert over gets short again. For a
- * clamped wake (RADIANT_LP_WAKE_CLAMPED: the operation is beyond the trusted
- * distance, or there is none - RADIANT_LP_NO_OP) the backend arms only a
+ * clamped wake (RADIANT_LP_WAKE_CLAMPED: the operation is beyond the wake
+ * maximum, or there is none - RADIANT_LP_NO_OP) the backend arms only a
  * compare at the clamped tick, rebases there, and decides again.
  */
 static inline void radiant_lp_rebase(const struct radiant_lp_tb *tb,
@@ -709,9 +778,11 @@ enum radiant_lp_wake_rc {
  * The LF compare value for an edge at `at_us` while asleep on *c: the LAST
  * tick whose exact time is at or before at_us (rounded toward earlier, never
  * later - an edge is early by less than one tick). max_ticks caps the
- * distance from the anchor and is itself capped at the trusted distance.
- * Whether the compare is still far enough ahead of the counter to fire is a
- * separate question: radiant_lp_compare_in_time().
+ * distance from the anchor and is itself capped at radiant_lp_tb_wake_max()
+ * (3/8 of a raw counter's period); with Zephyr's RTC driver the caller passes
+ * no more than NRF_RTC_TIMER_MAX_SCHEDULE_SPAN. Whether the compare is still
+ * far enough ahead of the counter to fire is a separate question:
+ * radiant_lp_compare_in_time().
  *
  * One 64-by-32-bit division (a library call on Cortex-M, a few hundred cycles
  * at most).
@@ -721,12 +792,11 @@ radiant_lp_wake_compare(const struct radiant_lp_tb *tb,
 			const struct radiant_lp_clock *c, uint64_t at_us,
 			uint64_t max_ticks, uint64_t *compare)
 {
-	uint64_t half = radiant_lp_tb_half(tb);
 	uint64_t ticks;
 	enum radiant_lp_wake_rc rc = RADIANT_LP_WAKE_OK;
 
-	if (max_ticks > half) {
-		max_ticks = half;
+	if (max_ticks > tb->wake_max) {
+		max_ticks = tb->wake_max;
 	}
 	if (at_us > (UINT64_MAX >> tb->shift)) {
 		/* Not representable in q units: beyond any reachable anchor. */
@@ -761,24 +831,26 @@ struct radiant_lp_wake_plan {
  *
  *   EDGE 2 is the last tick at or before op_start_us - arm_lead_us;
  *   EDGE 1 is the last tick at or before EDGE 2's exact time - hfxo_lead_us,
- *          and strictly before EDGE 2,
+ *          and strictly before EDGE 2, and at least min_lead ticks after the
+ *          anchor (the release edge, when planning straight after it),
  *
  * so the HFXO has at least hfxo_lead_us (start-up + request latency) before
  * the TIMER starts, and the TIMER and HFXO at least arm_lead_us before the
  * operation. In all, the wake begins less than radiant_lp_wake_lead_us() before
  * the operation.
  *
- * RADIANT_LP_WAKE_CLAMPED: the operation is beyond max_ticks (or the trusted
- * distance) - both fields hold the clamped tick; wake there without the HFXO,
+ * RADIANT_LP_WAKE_CLAMPED: the operation is beyond max_ticks (or
+ * radiant_lp_tb_wake_max()) - both fields hold the clamped tick; wake there without the HFXO,
  * radiant_lp_rebase(), plan again. RADIANT_LP_WAKE_PAST: EDGE 1 would fall
- * before the anchor. Each compare must still pass radiant_lp_compare_in_time()
- * when written.
+ * less than min_lead ticks (at least 1) after the anchor. Each compare must
+ * still pass radiant_lp_compare_in_time() when written.
  */
 static inline enum radiant_lp_wake_rc
 radiant_lp_wake_plan(const struct radiant_lp_tb *tb,
 		     const struct radiant_lp_clock *c, uint64_t op_start_us,
 		     uint32_t arm_lead_us, uint32_t hfxo_lead_us,
-		     uint64_t max_ticks, struct radiant_lp_wake_plan *plan)
+		     uint32_t min_lead, uint64_t max_ticks,
+		     struct radiant_lp_wake_plan *plan)
 {
 	uint64_t t2, d2, q2, lead_q, d1;
 	enum radiant_lp_wake_rc rc;
@@ -802,6 +874,9 @@ radiant_lp_wake_plan(const struct radiant_lp_tb *tb,
 		d1 = d2 - 1u;
 	}
 	plan->hfxo_cmp = (c->anchor_ticks + d1) & tb->mask;
+	if (d1 < (min_lead > 0u ? min_lead : 1u)) {
+		return RADIANT_LP_WAKE_PAST;
+	}
 	return RADIANT_LP_WAKE_OK;
 }
 
