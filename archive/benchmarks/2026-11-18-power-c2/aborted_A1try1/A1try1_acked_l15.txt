@@ -1,0 +1,38 @@
+Using COM4 at 115200 baud (UART transport)
+  OK: ext messages (code 0)
+  OK: network key (code 0)
+  OK: assign bidirectional slave (code 0)
+  OK: channel id #12345/0x78/5 (code 0)
+  OK: rf 57 (code 0)
+  OK: period 8070 (code 0)
+  OK: infinite search (code 0)
+  OK: open (code 0)
+{
+ "label": "A1",
+ "device": 12345,
+ "broadcasts": 2390,
+ "rx_fail": 44,
+ "rx_fail_go_to_search": 0,
+ "sent": 321,
+ "completed": 312,
+ "failed": 9,
+ "unresolved": 0,
+ "other_events": {},
+ "host_start_unix": 1795037348.8813016,
+ "seconds": 600.0160000000014,
+ "first_broadcast_s": 0.10900000000037835,
+ "host_end_unix": 1795037948.906234,
+ "rssi_mean": -45.45857740585774,
+ "rssi_min": -75,
+ "rssi_max": -41,
+ "rssi_n": 2390,
+ "ack_success_pct": 97.19626168224299
+}
+Traceback (most recent call last):
+  File "C:\Users\Colin\AppData\Local\Temp\claude\0b707879d249ade1\455ff62d-a306-44ec-ba83-9f98c9b995b4\scratchpad\c2\c2_acked_probe.py", line 185, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "C:\Users\Colin\AppData\Local\Temp\claude\0b707879d249ade1\455ff62d-a306-44ec-ba83-9f98c9b995b4\scratchpad\c2\c2_acked_probe.py", line 179, in main
+    with open(a.json, "w", encoding="utf-8") as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: 'runs\\A1_acked_l15.json'

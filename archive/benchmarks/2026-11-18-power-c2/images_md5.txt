@@ -1,0 +1,5 @@
+f205db7e307ce369af97af6c034861e5 *c2gate_A/hr_transmitter/zephyr/zephyr.hex
+e03e08013d1cc86c38931e311fc9b8ed *c2gate_A/hr_transmitter/zephyr/zephyr.elf
+0525ff6d4606777e822541c15d0ccb15 *c2gate_B/hr_transmitter/zephyr/zephyr.hex
+d9b2b2929823c09b31d71b755e39bdb2 *c2gate_B/hr_transmitter/zephyr/zephyr.elf
+71fdffe497e214864334a776cec1e587 *c2gate_l15/dongle/zephyr/zephyr.hex

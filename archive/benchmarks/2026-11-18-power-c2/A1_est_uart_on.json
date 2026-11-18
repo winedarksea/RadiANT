@@ -1,0 +1,93 @@
+{
+  "banner": "ESTIMATE \u2014 no current meter; datasheet currents",
+  "board": "CC2652R/P LaunchXL",
+  "interval_s": 660.075,
+  "hfxo_duty": null,
+  "hfxo_duty_source": "not measured",
+  "hfxo_ci95": null,
+  "components": [
+    {
+      "name": "idle floor",
+      "basis": "always",
+      "ma": 0.675,
+      "avg_ua": 675.0,
+      "citation": "TI CC2652R datasheet SWRS207J (rev. Nov 2023), 8.5 Power Consumption - Power Modes, Idle: supply systems and RAM powered, RCOSC_HF",
+      "excluded": false,
+      "why_excluded": null
+    },
+    {
+      "name": "radio TX +0 dBm",
+      "basis": "0.123 %",
+      "ma": 7.0,
+      "avg_ua": 7.792137446502292,
+      "citation": "TI CC2652R datasheet SWRS207J (rev. Nov 2023), 8.6 Power Consumption - Radio Modes, TX 2.4 GHz PA (BLE), 0 dBm setting, 2440 MHz",
+      "excluded": false,
+      "why_excluded": null
+    },
+    {
+      "name": "radio RX",
+      "basis": "0.414 %",
+      "ma": 6.9,
+      "avg_ua": 25.781520168162707,
+      "citation": "TI CC2652R datasheet SWRS207J (rev. Nov 2023), 8.6 Power Consumption - Radio Modes, radio receive current, 2440 MHz",
+      "excluded": false,
+      "why_excluded": null
+    },
+    {
+      "name": "RF core idle (LB)",
+      "basis": "1.223 % of 1.761 % on",
+      "ma": 0.2109,
+      "avg_ua": 2.579832512669015,
+      "citation": "TI CC2652R datasheet SWRS207J (rev. Nov 2023), 8.5 Iperi, RF core: delta current, power domain enabled, clock enabled, RF core idle",
+      "excluded": false,
+      "why_excluded": null
+    },
+    {
+      "name": "RF synth/boot",
+      "basis": "wake 1781 us/s (info)",
+      "ma": null,
+      "avg_ua": null,
+      "citation": "UNKNOWN: CC2652R datasheet has no row for the RF core booting, or for the synthesiser locked between CMD_FS and a TX/RX (mA, far above the RF core idle delta)",
+      "excluded": true,
+      "why_excluded": "UNKNOWN: CC2652R datasheet has no row for the RF core booting, or for the synthesiser locked between CMD_FS and a TX/RX (mA, far above the RF core idle delta)"
+    },
+    {
+      "name": "HFXO (outside radio)",
+      "basis": "n/a",
+      "ma": null,
+      "avg_ua": null,
+      "citation": "UNKNOWN: CC2652R/P datasheets list no XOSC_HF current",
+      "excluded": true,
+      "why_excluded": "not measured on this build"
+    },
+    {
+      "name": "CPU active",
+      "basis": "1.585 %",
+      "ma": 3.39,
+      "avg_ua": 43.02862963299625,
+      "citation": "TI CC2652R datasheet SWRS207J (rev. Nov 2023), 8.5 Power Consumption - Power Modes, Active: MCU running CoreMark at 48 MHz, RCOSC_HF",
+      "excluded": false,
+      "why_excluded": null
+    },
+    {
+      "name": "UART (declared on)",
+      "basis": "always",
+      "ma": 0.1675,
+      "avg_ua": 167.5,
+      "citation": "TI CC2652R datasheet SWRS207J (rev. Nov 2023), 8.5 Iperi, UART: delta current, clock enabled, module idle",
+      "excluded": false,
+      "why_excluded": null
+    }
+  ],
+  "total_ua_known": 921.6821197603302,
+  "total_ua_band": null,
+  "excluded": [
+    "RF synth/boot",
+    "HFXO (outside radio)"
+  ],
+  "notes": [
+    "Floor is Idle (675 uA): standby is off in this firmware; --ti-standby uses the standby row instead.",
+    "rfon_pm is floored on each log line: the RF core term may read up to 1 per-mille of on-time low",
+    "RF core idle (LB) is a LOWER BOUND: it charges the core's on-time outside TX/RX at the idle delta, but the synth locked after CMD_FS draws mA and the boot before setup is not in rfon at all (RF synth/boot, UNKNOWN, excluded); the driver's wake budget, power-ups/s x pudur_us, is 1781 us/s (1.78 per-mille), informational"
+  ]
+}

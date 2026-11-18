@@ -1,0 +1,10 @@
+# capture COM11@115200 start 2026-11-18 16:16:39
+# xds110reset rc=0 at +0.207s
+    0.740 *** Booting nRF Connect SDK v3.4.0-99553055607b ***
+    0.740 *** Using Zephyr OS v4.4.0-bf801e4e3d19 ***
+    0.740 [00:00:00.004,089] <inf> radiant_cc26xx: enabled: RF core open, synth on 2457 MHz
+    0.740 [00:00:00.004,364] <inf> radiant_api: radiant up: 32 channels, 1 filters/window, 1 search sets
+    0.740 Transmitting as device 12345
+   12.420 [00:00:11.001,342] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=11040 tx_ops=40 rx_us=42968 rx_ops=40 cpu_pm=13 idle_x10=493 constlat=0/-1 rfon_pm=17 rfpu_x10=39 pudur_us=480 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+   22.554 [00:00:21.002,441] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=11308 tx_ops=41 rx_us=44043 rx_ops=41 cpu_pm=16 idle_x10=499 constlat=0/-1 rfon_pm=17 rfpu_x10=40 pudur_us=480 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+# end +25.075s

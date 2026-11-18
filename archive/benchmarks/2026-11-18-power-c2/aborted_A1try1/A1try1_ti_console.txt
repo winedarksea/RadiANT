@@ -1,0 +1,114 @@
+# capture COM11@115200 start 2026-11-18 15:28:43
+# xds110reset rc=0 at +0.159s
+    0.671 *** Booting nRF Connect SDK v3.4.0-99553055607b ***
+    0.671 *** Using Zephyr OS v4.4.0-bf801e4e3d19 ***
+    0.671 [00:00:00.004,089] <inf> radiant_cc26xx: enabled: RF core open, synth on 2457 MHz
+    0.671 [00:00:00.004,364] <inf> radiant_api: radiant up: 32 channels, 1 filters/window, 1 search sets
+    0.671 Transmitting as device 12345
+   12.300 [00:00:11.001,373] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=11038 tx_ops=40 rx_us=42966 rx_ops=40 cpu_pm=12 idle_x10=372 constlat=0/-1 rfon_pm=17 rfpu_x10=39 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+   22.400 [00:00:21.002,441] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=11306 tx_ops=41 rx_us=44039 rx_ops=41 cpu_pm=15 idle_x10=379 constlat=0/-1 rfon_pm=17 rfpu_x10=40 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+   32.058 [00:00:30.546,234] <inf> radiant_api: rxpath/30546ms sched=1 tracked=1 on_data=1 up=1 posted=1 | xfer=0 dropped=0 tot=1
+   32.058 [00:00:30.546,264] <inf> radiant_api: xfer failures: no_opener=0 lost_track=0 no_ack=0 bad_ack=0 radio=0
+   32.058 [00:00:31.003,662] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=11276 tx_ops=41 rx_us=42501 rx_ops=40 cpu_pm=15 idle_x10=373 constlat=0/-1 rfon_pm=17 rfpu_x10=39 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+   42.665 [00:00:41.004,669] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12499 tx_ops=46 rx_us=41719 rx_ops=41 cpu_pm=17 idle_x10=382 constlat=0/-1 rfon_pm=18 rfpu_x10=40 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+   52.289 [00:00:51.005,859] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12736 tx_ops=47 rx_us=41263 rx_ops=41 cpu_pm=15 idle_x10=382 constlat=0/-1 rfon_pm=18 rfpu_x10=40 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+   61.889 [00:01:00.547,607] <inf> radiant_api: rxpath/30001ms sched=16 tracked=17 on_data=17 up=17 posted=17 | xfer=0 dropped=0 tot=17
+   61.889 [00:01:00.547,637] <inf> radiant_api: xfer failures: no_opener=0 lost_track=0 no_ack=0 bad_ack=0 radio=0
+   61.889 [00:01:01.006,988] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12230 tx_ops=45 rx_us=40639 rx_ops=40 cpu_pm=15 idle_x10=377 constlat=0/-1 rfon_pm=17 rfpu_x10=39 pudur_us=449 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+   72.530 [00:01:11.008,087] <inf> radiant_power: power dt_ms=10002 hfxo_pm=-1 tx_us=12492 tx_ops=46 rx_us=41708 rx_ops=41 cpu_pm=18 idle_x10=378 constlat=0/-1 rfon_pm=18 rfpu_x10=40 pudur_us=450 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+   82.659 [00:01:21.009,307] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12220 tx_ops=45 rx_us=40644 rx_ops=40 cpu_pm=15 idle_x10=376 constlat=0/-1 rfon_pm=17 rfpu_x10=39 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+   92.240 [00:01:30.593,475] <inf> radiant_api: rxpath/30045ms sched=15 tracked=32 on_data=32 up=32 posted=32 | xfer=0 dropped=0 tot=32
+   92.240 [00:01:30.593,505] <inf> radiant_api: xfer failures: no_opener=0 lost_track=0 no_ack=0 bad_ack=0 radio=0
+   92.240 [00:01:31.010,345] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12496 tx_ops=46 rx_us=41711 rx_ops=41 cpu_pm=15 idle_x10=378 constlat=0/-1 rfon_pm=18 rfpu_x10=40 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  102.362 [00:01:41.011,444] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12725 tx_ops=47 rx_us=41247 rx_ops=41 cpu_pm=18 idle_x10=377 constlat=0/-1 rfon_pm=18 rfpu_x10=40 pudur_us=456 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  112.464 [00:01:51.012,603] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12218 tx_ops=45 rx_us=40645 rx_ops=40 cpu_pm=15 idle_x10=376 constlat=0/-1 rfon_pm=17 rfpu_x10=39 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  122.063 [00:02:00.639,221] <inf> radiant_api: rxpath/30045ms sched=16 tracked=48 on_data=48 up=48 posted=48 | xfer=0 dropped=0 tot=48
+  122.063 [00:02:00.639,251] <inf> radiant_api: xfer failures: no_opener=0 lost_track=0 no_ack=0 bad_ack=0 radio=0
+  122.063 [00:02:01.013,671] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12497 tx_ops=46 rx_us=41722 rx_ops=41 cpu_pm=15 idle_x10=381 constlat=0/-1 rfon_pm=18 rfpu_x10=40 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  132.713 [00:02:11.014,801] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12467 tx_ops=46 rx_us=40176 rx_ops=40 cpu_pm=18 idle_x10=374 constlat=0/-1 rfon_pm=17 rfpu_x10=39 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  142.325 [00:02:21.015,899] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12494 tx_ops=46 rx_us=41717 rx_ops=41 cpu_pm=15 idle_x10=381 constlat=0/-1 rfon_pm=18 rfpu_x10=40 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  151.923 [00:02:30.686,035] <inf> radiant_api: rxpath/30046ms sched=17 tracked=65 on_data=65 up=65 posted=65 | xfer=0 dropped=0 tot=65
+  151.923 [00:02:30.686,065] <inf> radiant_api: xfer failures: no_opener=0 lost_track=0 no_ack=0 bad_ack=0 radio=0
+  151.923 [00:02:31.017,150] <inf> radiant_power: power dt_ms=10002 hfxo_pm=-1 tx_us=12728 tx_ops=47 rx_us=41253 rx_ops=41 cpu_pm=15 idle_x10=382 constlat=0/-1 rfon_pm=18 rfpu_x10=40 pudur_us=480 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  162.516 [00:02:41.018,249] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12227 tx_ops=45 rx_us=40642 rx_ops=40 cpu_pm=17 idle_x10=373 constlat=0/-1 rfon_pm=17 rfpu_x10=39 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  172.648 [00:02:51.019,317] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12253 tx_ops=45 rx_us=42192 rx_ops=41 cpu_pm=15 idle_x10=380 constlat=0/-1 rfon_pm=18 rfpu_x10=40 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  182.309 [00:03:00.730,804] <inf> radiant_api: rxpath/30044ms sched=14 tracked=79 on_data=79 up=79 posted=79 | xfer=0 dropped=0 tot=79
+  182.309 [00:03:00.730,834] <inf> radiant_api: xfer failures: no_opener=0 lost_track=0 no_ack=0 bad_ack=0 radio=0
+  182.309 [00:03:01.020,507] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12727 tx_ops=47 rx_us=40184 rx_ops=40 cpu_pm=15 idle_x10=383 constlat=0/-1 rfon_pm=18 rfpu_x10=40 pudur_us=480 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  192.423 [00:03:11.021,545] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12225 tx_ops=45 rx_us=41719 rx_ops=41 cpu_pm=17 idle_x10=373 constlat=0/-1 rfon_pm=18 rfpu_x10=39 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  202.591 [00:03:21.022,735] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12497 tx_ops=46 rx_us=41718 rx_ops=41 cpu_pm=15 idle_x10=382 constlat=0/-1 rfon_pm=18 rfpu_x10=40 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  212.198 [00:03:30.776,580] <inf> radiant_api: rxpath/30045ms sched=16 tracked=95 on_data=95 up=95 posted=95 | xfer=0 dropped=0 tot=95
+  212.198 [00:03:30.776,611] <inf> radiant_api: xfer failures: no_opener=0 lost_track=0 no_ack=0 bad_ack=0 radio=0
+  212.198 [00:03:31.023,925] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12222 tx_ops=45 rx_us=40638 rx_ops=40 cpu_pm=15 idle_x10=377 constlat=0/-1 rfon_pm=17 rfpu_x10=39 pudur_us=464 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  222.343 [00:03:41.024,932] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12727 tx_ops=47 rx_us=41249 rx_ops=41 cpu_pm=18 idle_x10=378 constlat=0/-1 rfon_pm=18 rfpu_x10=40 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  232.460 [00:03:51.026,062] <inf> radiant_power: power dt_ms=10002 hfxo_pm=-1 tx_us=12494 tx_ops=46 rx_us=41717 rx_ops=41 cpu_pm=15 idle_x10=381 constlat=0/-1 rfon_pm=18 rfpu_x10=40 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  242.102 [00:04:00.822,387] <inf> radiant_api: rxpath/30045ms sched=16 tracked=111 on_data=111 up=111 posted=111 | xfer=0 dropped=0 tot=111
+  242.102 [00:04:00.822,418] <inf> radiant_api: xfer failures: no_opener=0 lost_track=0 no_ack=0 bad_ack=0 radio=0
+  242.102 [00:04:01.027,160] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12218 tx_ops=45 rx_us=40645 rx_ops=40 cpu_pm=15 idle_x10=378 constlat=0/-1 rfon_pm=17 rfpu_x10=39 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  252.693 [00:04:11.028,198] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12729 tx_ops=47 rx_us=41252 rx_ops=41 cpu_pm=18 idle_x10=377 constlat=0/-1 rfon_pm=18 rfpu_x10=40 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  262.309 [00:04:21.029,388] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12222 tx_ops=45 rx_us=40645 rx_ops=40 cpu_pm=15 idle_x10=377 constlat=0/-1 rfon_pm=17 rfpu_x10=39 pudur_us=480 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  272.384 [00:04:30.868,194] <inf> radiant_api: rxpath/30045ms sched=16 tracked=127 on_data=127 up=127 posted=127 | xfer=0 dropped=0 tot=127
+  272.384 [00:04:30.868,225] <inf> radiant_api: xfer failures: no_opener=0 lost_track=0 no_ack=0 bad_ack=0 radio=0
+  272.384 [00:04:31.030,395] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12488 tx_ops=46 rx_us=41714 rx_ops=41 cpu_pm=15 idle_x10=376 constlat=0/-1 rfon_pm=18 rfpu_x10=40 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  282.485 [00:04:41.031,494] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12265 tx_ops=45 rx_us=42175 rx_ops=41 cpu_pm=18 idle_x10=378 constlat=0/-1 rfon_pm=18 rfpu_x10=40 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  292.598 [00:04:51.032,653] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12223 tx_ops=45 rx_us=40640 rx_ops=40 cpu_pm=15 idle_x10=376 constlat=0/-1 rfon_pm=17 rfpu_x10=39 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  302.228 [00:05:00.915,008] <inf> radiant_api: rxpath/30046ms sched=15 tracked=142 on_data=142 up=142 posted=142 | xfer=0 dropped=0 tot=142
+  302.228 [00:05:00.915,039] <inf> radiant_api: xfer failures: no_opener=0 lost_track=0 no_ack=0 bad_ack=0 radio=0
+  302.228 [00:05:01.033,843] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12719 tx_ops=47 rx_us=41247 rx_ops=41 cpu_pm=15 idle_x10=382 constlat=0/-1 rfon_pm=18 rfpu_x10=40 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  312.344 [00:05:11.034,942] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12226 tx_ops=45 rx_us=40643 rx_ops=40 cpu_pm=18 idle_x10=373 constlat=0/-1 rfon_pm=17 rfpu_x10=39 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  322.433 [00:05:21.035,980] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12494 tx_ops=46 rx_us=41713 rx_ops=41 cpu_pm=15 idle_x10=377 constlat=0/-1 rfon_pm=18 rfpu_x10=40 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  332.577 [00:05:30.959,777] <inf> radiant_api: rxpath/30044ms sched=16 tracked=158 on_data=158 up=158 posted=158 | xfer=0 dropped=0 tot=158
+  332.577 [00:05:30.959,808] <inf> radiant_api: xfer failures: no_opener=0 lost_track=0 no_ack=0 bad_ack=0 radio=0
+  332.577 [00:05:31.037,048] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12725 tx_ops=47 rx_us=41247 rx_ops=41 cpu_pm=15 idle_x10=382 constlat=0/-1 rfon_pm=18 rfpu_x10=40 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  342.725 [00:05:41.038,085] <inf> radiant_power: power dt_ms=10002 hfxo_pm=-1 tx_us=12224 tx_ops=45 rx_us=40639 rx_ops=40 cpu_pm=17 idle_x10=374 constlat=0/-1 rfon_pm=17 rfpu_x10=39 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  352.308 [00:05:51.039,123] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12497 tx_ops=46 rx_us=41714 rx_ops=41 cpu_pm=15 idle_x10=381 constlat=0/-1 rfon_pm=18 rfpu_x10=40 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  362.433 [00:06:01.005,554] <inf> radiant_api: rxpath/30045ms sched=15 tracked=173 on_data=173 up=173 posted=173 | xfer=0 dropped=0 tot=173
+  362.433 [00:06:01.005,584] <inf> radiant_api: xfer failures: no_opener=0 lost_track=0 no_ack=0 bad_ack=0 radio=0
+  362.433 [00:06:01.040,313] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12219 tx_ops=45 rx_us=40642 rx_ops=40 cpu_pm=15 idle_x10=378 constlat=0/-1 rfon_pm=17 rfpu_x10=39 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  372.556 [00:06:11.041,320] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12728 tx_ops=47 rx_us=41248 rx_ops=41 cpu_pm=18 idle_x10=378 constlat=0/-1 rfon_pm=18 rfpu_x10=40 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  382.664 [00:06:21.042,419] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12490 tx_ops=46 rx_us=41721 rx_ops=41 cpu_pm=15 idle_x10=381 constlat=0/-1 rfon_pm=18 rfpu_x10=40 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  392.259 [00:06:31.043,609] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12216 tx_ops=45 rx_us=40643 rx_ops=40 cpu_pm=15 idle_x10=377 constlat=0/-1 rfon_pm=17 rfpu_x10=39 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  392.259 [00:06:31.051,361] <inf> radiant_api: rxpath/30045ms sched=16 tracked=189 on_data=189 up=189 posted=189 | xfer=0 dropped=0 tot=189
+  392.259 [00:06:31.051,391] <inf> radiant_api: xfer failures: no_opener=0 lost_track=0 no_ack=0 bad_ack=0 radio=0
+  402.367 [00:06:41.044,738] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12496 tx_ops=46 rx_us=41713 rx_ops=41 cpu_pm=18 idle_x10=375 constlat=0/-1 rfon_pm=18 rfpu_x10=40 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  412.483 [00:06:51.045,898] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12489 tx_ops=46 rx_us=41711 rx_ops=41 cpu_pm=15 idle_x10=384 constlat=0/-1 rfon_pm=18 rfpu_x10=40 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  422.628 [00:07:01.047,027] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12220 tx_ops=45 rx_us=40639 rx_ops=40 cpu_pm=15 idle_x10=378 constlat=0/-1 rfon_pm=17 rfpu_x10=39 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  422.628 [00:07:01.097,167] <inf> radiant_api: rxpath/30045ms sched=15 tracked=204 on_data=204 up=204 posted=204 | xfer=0 dropped=0 tot=204
+  422.628 [00:07:01.097,198] <inf> radiant_api: xfer failures: no_opener=0 lost_track=0 no_ack=0 bad_ack=0 radio=0
+  432.715 [00:07:11.048,217] <inf> radiant_power: power dt_ms=10002 hfxo_pm=-1 tx_us=12732 tx_ops=47 rx_us=41252 rx_ops=41 cpu_pm=18 idle_x10=381 constlat=0/-1 rfon_pm=18 rfpu_x10=40 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  442.287 [00:07:21.049,377] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12458 tx_ops=46 rx_us=40178 rx_ops=40 cpu_pm=15 idle_x10=379 constlat=0/-1 rfon_pm=17 rfpu_x10=39 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  452.370 [00:07:31.050,476] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12490 tx_ops=46 rx_us=41712 rx_ops=41 cpu_pm=15 idle_x10=378 constlat=0/-1 rfon_pm=18 rfpu_x10=40 pudur_us=450 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  452.370 [00:07:31.142,944] <inf> radiant_api: rxpath/30045ms sched=17 tracked=221 on_data=221 up=221 posted=221 | xfer=0 dropped=0 tot=221
+  452.370 [00:07:31.142,974] <inf> radiant_api: xfer failures: no_opener=0 lost_track=0 no_ack=0 bad_ack=0 radio=0
+  462.455 [00:07:41.051,574] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12725 tx_ops=47 rx_us=41259 rx_ops=41 cpu_pm=18 idle_x10=380 constlat=0/-1 rfon_pm=18 rfpu_x10=40 pudur_us=452 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  472.551 [00:07:51.052,673] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12226 tx_ops=45 rx_us=40636 rx_ops=40 cpu_pm=15 idle_x10=377 constlat=0/-1 rfon_pm=17 rfpu_x10=39 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  482.638 [00:08:01.053,710] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12728 tx_ops=47 rx_us=41258 rx_ops=41 cpu_pm=15 idle_x10=384 constlat=0/-1 rfon_pm=18 rfpu_x10=40 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  482.638 [00:08:01.188,812] <inf> radiant_api: rxpath/30045ms sched=17 tracked=238 on_data=238 up=238 posted=238 | xfer=0 dropped=0 tot=238
+  482.638 [00:08:01.188,842] <inf> radiant_api: xfer failures: no_opener=0 lost_track=0 no_ack=0 bad_ack=0 radio=0
+  492.705 [00:08:11.054,840] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12457 tx_ops=46 rx_us=40179 rx_ops=40 cpu_pm=17 idle_x10=377 constlat=0/-1 rfon_pm=17 rfpu_x10=39 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  502.287 [00:08:21.055,908] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12730 tx_ops=47 rx_us=41247 rx_ops=41 cpu_pm=15 idle_x10=377 constlat=0/-1 rfon_pm=18 rfpu_x10=40 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  512.359 [00:08:31.057,067] <inf> radiant_power: power dt_ms=10002 hfxo_pm=-1 tx_us=12256 tx_ops=45 rx_us=42183 rx_ops=41 cpu_pm=15 idle_x10=380 constlat=0/-1 rfon_pm=18 rfpu_x10=40 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  512.359 [00:08:31.234,527] <inf> radiant_api: rxpath/30045ms sched=16 tracked=254 on_data=254 up=254 posted=254 | xfer=0 dropped=0 tot=254
+  512.359 [00:08:31.234,558] <inf> radiant_api: xfer failures: no_opener=0 lost_track=0 no_ack=0 bad_ack=0 radio=0
+  522.454 [00:08:41.058,227] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12458 tx_ops=46 rx_us=40179 rx_ops=40 cpu_pm=18 idle_x10=378 constlat=0/-1 rfon_pm=17 rfpu_x10=39 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  532.576 [00:08:51.059,234] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12489 tx_ops=46 rx_us=41720 rx_ops=41 cpu_pm=15 idle_x10=380 constlat=0/-1 rfon_pm=18 rfpu_x10=40 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  542.681 [00:09:01.060,455] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12222 tx_ops=45 rx_us=40646 rx_ops=40 cpu_pm=15 idle_x10=377 constlat=0/-1 rfon_pm=17 rfpu_x10=39 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  542.681 [00:09:01.280,334] <inf> radiant_api: rxpath/30045ms sched=16 tracked=270 on_data=270 up=270 posted=270 | xfer=0 dropped=0 tot=270
+  542.681 [00:09:01.280,364] <inf> radiant_api: xfer failures: no_opener=0 lost_track=0 no_ack=0 bad_ack=0 radio=0
+  552.265 [00:09:11.061,920] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12506 tx_ops=46 rx_us=41720 rx_ops=41 cpu_pm=18 idle_x10=380 constlat=0/-1 rfon_pm=18 rfpu_x10=40 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  562.370 [00:09:21.062,988] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12974 tx_ops=48 rx_us=40788 rx_ops=41 cpu_pm=15 idle_x10=384 constlat=0/-1 rfon_pm=18 rfpu_x10=40 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  572.470 [00:09:31.064,147] <inf> radiant_power: power dt_ms=10002 hfxo_pm=-1 tx_us=12225 tx_ops=45 rx_us=40638 rx_ops=40 cpu_pm=15 idle_x10=378 constlat=0/-1 rfon_pm=17 rfpu_x10=39 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  572.470 [00:09:31.326,141] <inf> radiant_api: rxpath/30045ms sched=17 tracked=287 on_data=287 up=287 posted=287 | xfer=0 dropped=0 tot=287
+  572.470 [00:09:31.326,171] <inf> radiant_api: xfer failures: no_opener=0 lost_track=0 no_ack=0 bad_ack=0 radio=0
+  582.567 [00:09:41.065,277] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12486 tx_ops=46 rx_us=41742 rx_ops=41 cpu_pm=18 idle_x10=376 constlat=0/-1 rfon_pm=18 rfpu_x10=40 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  592.664 [00:09:51.066,497] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12225 tx_ops=45 rx_us=40640 rx_ops=40 cpu_pm=15 idle_x10=378 constlat=0/-1 rfon_pm=17 rfpu_x10=39 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  602.241 [00:10:01.067,596] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12733 tx_ops=47 rx_us=41250 rx_ops=41 cpu_pm=15 idle_x10=384 constlat=0/-1 rfon_pm=18 rfpu_x10=40 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  602.746 [00:10:01.371,978] <inf> radiant_api: rxpath/30045ms sched=16 tracked=303 on_data=303 up=303 posted=303 | xfer=0 dropped=0 tot=303
+  602.746 [00:10:01.372,009] <inf> radiant_api: xfer failures: no_opener=0 lost_track=0 no_ack=0 bad_ack=0 radio=0
+  612.316 [00:10:11.068,695] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12483 tx_ops=46 rx_us=41715 rx_ops=41 cpu_pm=18 idle_x10=380 constlat=0/-1 rfon_pm=18 rfpu_x10=40 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  622.394 [00:10:21.069,885] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=12460 tx_ops=46 rx_us=40172 rx_ops=40 cpu_pm=15 idle_x10=379 constlat=0/-1 rfon_pm=17 rfpu_x10=39 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  632.473 [00:10:31.071,044] <inf> radiant_power: power dt_ms=10001 hfxo_pm=-1 tx_us=11781 tx_ops=43 rx_us=43107 rx_ops=41 cpu_pm=15 idle_x10=378 constlat=0/-1 rfon_pm=17 rfpu_x10=40 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+  632.473 [00:10:31.417,785] <inf> radiant_api: rxpath/30045ms sched=13 tracked=316 on_data=316 up=316 posted=316 | xfer=0 dropped=0 tot=316
+  632.473 [00:10:31.417,816] <inf> radiant_api: xfer failures: no_opener=0 lost_track=0 no_ack=0 bad_ack=0 radio=0
+  642.568 [00:10:41.072,265] <inf> radiant_power: power dt_ms=10002 hfxo_pm=-1 tx_us=11305 tx_ops=41 rx_us=44042 rx_ops=41 cpu_pm=17 idle_x10=375 constlat=0/-1 rfon_pm=17 rfpu_x10=40 pudur_us=448 fsx=0 bks=0 bks_max=0 wraps=0 cold=0 txl=0 txl_max_us=0
+# end +650.629s

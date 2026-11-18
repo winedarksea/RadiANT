@@ -1,0 +1,30 @@
+Using COM4 at 115200 baud (UART transport)
+  OK: ext messages (code 0)
+  OK: network key (code 0)
+  OK: assign bidirectional slave (code 0)
+  OK: channel id #12345/0x78/5 (code 0)
+  OK: rf 57 (code 0)
+  OK: period 8070 (code 0)
+  OK: infinite search (code 0)
+  OK: open (code 0)
+{
+ "label": "A2",
+ "device": 12345,
+ "broadcasts": 2421,
+ "rx_fail": 16,
+ "rx_fail_go_to_search": 0,
+ "sent": 319,
+ "completed": 315,
+ "failed": 4,
+ "unresolved": 0,
+ "other_events": {},
+ "host_start_unix": 1795039501.1302946,
+ "seconds": 600.2339999999967,
+ "first_broadcast_s": 0.0779999999977008,
+ "host_end_unix": 1795040101.3683448,
+ "rssi_mean": -27.0,
+ "rssi_min": -27,
+ "rssi_max": -27,
+ "rssi_n": 2421,
+ "ack_success_pct": 98.74608150470219
+}
