@@ -97,8 +97,8 @@ min_scenarios: 17
 # unit scenarios.
 # 5842 (+30) on fix/ti-sync-separation (Bluefin twister, 2026-11-16): six
 # rule-6 sched cases in each of the five unit scenarios (observed 6373).
-# 5867 (+25) with the radiant.lp_clock scenario (power plan pass B2).
-min_testcases: 5867
+# 5877 (+35) with the radiant.lp_clock scenario (power plan pass B2).
+min_testcases: 5877
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -139,5 +139,6 @@ min_cases.radiant.unit.ack_faults: 1069
 min_cases.radiant.unit.diag: 1140
 min_cases.trainer.model: 14
 # radiant.lp_clock (power plan pass B2): the low-power timebase arithmetic,
-# 20 unit cases and five 100 000-cycle drift simulations.
-min_cases.radiant.lp_clock: 25
+# 28 unit cases and seven 100 000-cycle drift simulations (three of them
+# negative controls).
+min_cases.radiant.lp_clock: 35

@@ -5,7 +5,7 @@
 # arithmetic that a 64-bit host would quietly widen, and the target shares the
 # 32-bit host's pointer and long widths.
 #
-# The timeout is twister's default: five 100 000-cycle drift simulations are
+# The timeout is twister's default: seven 100 000-cycle drift simulations are
 # a fraction of a second.
 tests:
   radiant.lp_clock:

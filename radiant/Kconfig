@@ -732,6 +732,13 @@ config RADIANT_NRF_RX_DIAG
 # (src/radiant_radio_nrf_lp.h, radiant/tests/lp_clock); nothing in the
 # backend reads them yet, so enabling RADIANT_NRF_LOW_POWER today changes no
 # behaviour. Pass B3 implements it on the nRF54L15 direct backend.
+#
+# For pass B3: BUILD_ASSERT the system timer's spare channels (three LF
+# compares per sleep - release, HFXO edge, TIMER edge - in at least two
+# channels: CONFIG_NRF_RTC_TIMER_USER_CHAN_COUNT >= 2 on RTC1, free
+# z_nrf_grtc_timer_chan_alloc() channels on the GRTC), and pick the RTC or
+# GRTC counter format by which system timer is enabled (NRF_RTC_TIMER /
+# NRF_GRTC_TIMER), not by SoC. The header's top comment lists the rest.
 config RADIANT_NRF_LOW_POWER
 	bool "EXPERIMENTAL: release the HFXO and stop the radio TIMER in idle gaps"
 	depends on RADIANT_BACKEND_NRF
@@ -747,8 +754,11 @@ config RADIANT_NRF_LOW_POWER
 	# (nRF52840, nRF5340 network core) or of the GRTC (nRF54L).
 	depends on NRF_RTC_TIMER || NRF_GRTC_TIMER
 	# Direct backend only for now. On an MPSL build the HFXO and the wake
-	# both belong to MPSL's timeslot placement; pass B6 lifts this.
+	# both belong to MPSL's timeslot placement - and that includes an MPSL
+	# that something else turned on without the gate (the 802.15.4 radio
+	# driver alone enables MPSL on the nRF54L). Pass B6 lifts both.
 	depends on !RADIANT_BACKEND_NRF_GATE_MPSL
+	depends on !MPSL
 	help
 	  Today the nRF backend requests the HFXO at init and never releases
 	  it, and a free-running 1 MHz TIMER is its only timebase. On a
@@ -760,31 +770,45 @@ config RADIANT_NRF_LOW_POWER
 	  backend releases the HFXO and stops the TIMER, and keeps time on
 	  the low-frequency counter the system timer already runs: RTC1 at
 	  32768 Hz on the nRF52840 and nRF5340 network core, the GRTC at
-	  1 MHz on the nRF54L15. The hand-over is exact to about 1 us at both
-	  ends, because both are LF compare events wired by (D)PPI: on
-	  release one captures the TIMER on a known LF tick, on wake one
-	  starts the cleared TIMER on a known LF tick. Between them
-	  now = max(last value, anchor + exact LF-to-us conversion), with the
-	  sub-microsecond fraction carried so that conversions never add up
-	  to drift (src/radiant_radio_nrf_lp.h). Over a gap the timebase runs
-	  at the LF crystal's rate, so an ANT+ period is as accurate as that
-	  crystal (+-20..50 ppm, a constant few us per period).
+	  1 MHz on the nRF54L15. Every hand-over is an LF compare event, so
+	  it happens on a known LF tick:
+
+	    release  (D)PPI captures the TIMER on the tick; the TIMER stops
+	             and the HFXO is released.
+	    edge 1   an interrupt requests the HFXO back, its start-up
+	             (RADIANT_NRF_LP_HFXO_STARTUP_US) plus the interrupt's
+	             latency before edge 2.
+	    edge 2   once the crystal is stable, (D)PPI starts the cleared
+	             TIMER on the tick, the backend's arming lead before the
+	             operation.
+
+	  The TIMER is started on a second edge, not on the HFXO request,
+	  because until the crystal is up the HF clock is HFINT (~1 %): a
+	  TIMER counting the start-up on it would be ~16 us out at every
+	  release, and that error would be kept each period. Between the
+	  edges now = max(last value, anchor + exact LF-to-us conversion),
+	  with the sub-microsecond fraction carried so that conversions never
+	  add up to drift (src/radiant_radio_nrf_lp.h). Over a gap the
+	  timebase runs at the LF crystal's rate, so an ANT+ period is as
+	  accurate as that crystal (+-20..50 ppm, a constant few us per
+	  period).
 
 	  The backend sleeps only when the next operation starts more than
-	  the wake lead (RADIANT_NRF_LP_HFXO_STARTUP_US plus arming
-	  margin) plus RADIANT_NRF_LP_KEEP_ON_US away, and not for
-	  RADIANT_NRF_LP_LINGER_MS after the radio is enabled or a
-	  PRIO_NORMAL operation is acquired: a search, a receive that is
-	  still acquiring, or a burst never sleeps. A master in steady state
-	  is awake about 4.5 ms per period (~2 % duty).
+	  the wake lead (arming lead + HFXO start-up + interrupt margin +
+	  two ticks of rounding), the LF overhead (the release edge's and
+	  edge 1's compare leads, ~215 us) and RADIANT_NRF_LP_KEEP_ON_US
+	  away, and not for RADIANT_NRF_LP_LINGER_MS after the radio is
+	  enabled or a PRIO_NORMAL operation is acquired: a search, a
+	  receive that is still acquiring, or a burst never sleeps. A master
+	  in steady state is awake about 4.5 ms per period (~2 % duty).
 
 	  ACCEPTED BEHAVIOUR CHANGE: each operation after a sleep depends on
-	  two interrupts about 1.7 ms before it (the wake compare that
-	  requests the HFXO and the HFXO-started event that arms the radio).
+	  an interrupt about 1.8 ms before it (edge 1, which requests the
+	  HFXO) and on the HFXO being stable when edge 2 starts the TIMER.
 	  An irq_lock(), a flash erase or a higher-priority interrupt that
-	  holds the CPU across that window costs the slot: the operation
-	  fails through the existing FAILED path and is counted, as a late
-	  wake, rather than being transmitted late. Without this option no
+	  holds the CPU across edge 1 costs the slot: the operation fails
+	  through the existing FAILED path and is counted, as a late wake,
+	  rather than being transmitted late. Without this option no
 	  operation depends on any interrupt before its own arm call.
 
 	  Requires the LF crystal (CLOCK_CONTROL_NRF_K32SRC_XTAL). Off by
@@ -805,10 +829,11 @@ config RADIANT_NRF_LP_HFXO_STARTUP_US
 	default $(dt_node_int_prop_int,/clocks/hfxo,startup-time-us) if $(dt_node_has_prop,/clocks/hfxo,startup-time-us)
 	default 1400
 	help
-	  How long before an operation's own arming lead the backend
-	  requests the HFXO back. Too short and the crystal is not stable
-	  when the radio must ramp (the operation fails late and is counted);
-	  too long and every period spends the excess awake.
+	  The time from the HFXO request (edge 1) to a crystal stable enough
+	  to start the TIMER on (edge 2). Too short and the TIMER counts
+	  part of the start-up on HFINT and the radio may ramp on an
+	  unsettled clock (late wakes, counted); too long and every period
+	  spends the excess awake.
 
 	  The default is the SoC devicetree's hfxo startup-time-us where it
 	  has one (1650 us on the nRF54L15), else 1400 us, which is the
@@ -821,13 +846,17 @@ config RADIANT_NRF_LP_HFXO_STARTUP_US
 config RADIANT_NRF_LP_KEEP_ON_US
 	int "least idle gap worth sleeping through, beyond the wake lead, us"
 	depends on RADIANT_NRF_LOW_POWER
-	range 0 1000000
+	# The floor covers interrupt latency around the release and edge 1,
+	# which the LF-overhead term (compare leads and rounding) does not.
+	range 500 1000000
 	default 3000
 	help
 	  The backend sleeps only when the next operation is more than the
-	  wake lead plus this far away. Stopping and restarting the crystal
-	  costs its start-up charge and two interrupts, so a gap barely
-	  longer than the wake lead is cheaper spent awake. 3 ms keeps an
+	  wake lead plus the LF overhead plus this far away. Stopping and
+	  restarting the crystal costs its start-up charge and two
+	  interrupts, so a gap barely longer than the wake lead is cheaper
+	  spent awake; the 500 us floor also covers the interrupt latency
+	  around the release and the HFXO edge. 3 ms keeps an
 	  acknowledged-data exchange, a burst and the master's post-TX
 	  receive window awake, and still sleeps through ~240 ms of every
 	  4 Hz period.
@@ -852,9 +881,10 @@ config RADIANT_NRF_LP_STATS
 	  Counters for the low-power path: sleeps, wakes, wakes that were
 	  too late for their operation (each one also fails that operation),
 	  releases that took the LF image of their edge rather than the
-	  TIMER's, and the largest disagreement between the two. On by
-	  default with RADIANT_POWER_DIAG, whose proxy is how a board with
-	  no current meter shows what the option saved.
+	  TIMER's, the largest disagreement between the two, and asleep
+	  readings refused as out of range (a lost timebase). On by default
+	  with RADIANT_POWER_DIAG, whose proxy is how a board with no
+	  current meter shows what the option saved.
 
 # ------ ADR 0018 candidate (d2): a second timeslot session (Phase 1) -------
 #

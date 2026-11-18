@@ -76,7 +76,7 @@ ZTEST(radiant_lp_math, test_format_init_refuses_what_64_bits_cannot_carry)
 	zassert_false(radiant_lp_tb_init(&tb, 0u, 0u, 24u));
 	zassert_false(radiant_lp_tb_init(&tb, 1u, 32u, 24u));
 	zassert_false(radiant_lp_tb_init(&tb, 1u, 0u, 1u));
-	zassert_false(radiant_lp_tb_init(&tb, 1u, 0u, 64u));
+	zassert_false(radiant_lp_tb_init(&tb, 1u, 0u, 65u));
 	/* 50 + bitlength(15625) = 50 + 14 = 64 bits: refused; 49 fits. */
 	zassert_false(radiant_lp_tb_init(&tb, 15625u, 9u, 50u));
 	zassert_equal(tb.mask, 0xABu, "a refused init must not write");
@@ -490,28 +490,52 @@ ZTEST(radiant_lp_math, test_wake_compare_edges)
 
 ZTEST(radiant_lp_math, test_should_sleep_boundaries)
 {
-	const uint32_t lead = 1700u, keep = 3000u;
+	const uint64_t lead = 2112u, lf = 214u;
+	const uint32_t keep = 3000u;
 	const uint64_t now = UINT64_C(5000000);
+	const uint64_t all = lead + lf + keep;
 
-	/* Strictly more than lead + keep. */
-	zassert_false(radiant_lp_should_sleep(now, now + lead + keep, lead, keep, 0u));
-	zassert_true(radiant_lp_should_sleep(now, now + lead + keep + 1u, lead, keep, 0u));
+	/* Strictly more than the whole budget: wake lead + LF overhead + keep. */
+	zassert_false(radiant_lp_should_sleep(now, now + all, lead, lf, keep, 0u));
+	zassert_true(radiant_lp_should_sleep(now, now + all + 1u, lead, lf, keep, 0u));
+	/* The LF overhead is part of it: without it this gap would sleep. */
+	zassert_false(radiant_lp_should_sleep(now, now + lead + keep + 1u, lead,
+					      lf, keep, 0u));
 	/* An operation now, or already due, never sleeps. */
-	zassert_false(radiant_lp_should_sleep(now, now, lead, keep, 0u));
-	zassert_false(radiant_lp_should_sleep(now, now - 1u, lead, keep, 0u));
+	zassert_false(radiant_lp_should_sleep(now, now, lead, lf, keep, 0u));
+	zassert_false(radiant_lp_should_sleep(now, now - 1u, lead, lf, keep, 0u));
 	/* Nothing pending sleeps. */
-	zassert_true(radiant_lp_should_sleep(now, RADIANT_LP_NO_OP, lead, keep, 0u));
+	zassert_true(radiant_lp_should_sleep(now, RADIANT_LP_NO_OP, lead, lf, keep, 0u));
 	/* Lingering: not before the deadline, from it on. */
-	zassert_false(radiant_lp_should_sleep(now, RADIANT_LP_NO_OP, lead, keep,
+	zassert_false(radiant_lp_should_sleep(now, RADIANT_LP_NO_OP, lead, lf, keep,
 					      now + 1u));
-	zassert_false(radiant_lp_should_sleep(now, now + 1000000u, lead, keep,
+	zassert_false(radiant_lp_should_sleep(now, now + 1000000u, lead, lf, keep,
 					      now + 1u));
-	zassert_true(radiant_lp_should_sleep(now, now + 1000000u, lead, keep, now));
-	/* Zero lead and keep: any gap at all. */
-	zassert_true(radiant_lp_should_sleep(now, now + 1u, 0u, 0u, 0u));
-	/* No 32-bit overflow in lead + keep. */
+	zassert_true(radiant_lp_should_sleep(now, now + 1000000u, lead, lf, keep,
+					     now));
+	/* Zero budget: any gap at all. */
+	zassert_true(radiant_lp_should_sleep(now, now + 1u, 0u, 0u, 0u, 0u));
+	/* No 32-bit overflow in the sum. */
 	zassert_false(radiant_lp_should_sleep(now, now + UINT32_MAX, UINT32_MAX,
-					      UINT32_MAX, 0u));
+					      UINT32_MAX, UINT32_MAX, 0u));
+}
+
+ZTEST(radiant_lp_math, test_lead_budgets_round_up)
+{
+	/* A tick in whole us, up: 30.5 -> 31 on the RTC, 1 on the GRTC. */
+	zassert_equal(radiant_lp_tick_us_ceil(&rtc), 31u);
+	zassert_equal(radiant_lp_tick_us_ceil(&grtc), 1u);
+	/* arm + hfxo + two ticks of rounding. */
+	zassert_equal(radiant_lp_wake_lead_us(&rtc, 300u, 1750u), 300u + 1750u + 62u);
+	zassert_equal(radiant_lp_wake_lead_us(&grtc, 300u, 1750u), 300u + 1750u + 2u);
+	/* 2 * min_lead + 1 ticks: 7 RTC ticks = 213.6 us -> 214; 217 GRTC. */
+	zassert_equal(radiant_lp_lf_overhead_us(&rtc, RADIANT_LP_RTC_MIN_LEAD_TICKS),
+		      214u);
+	zassert_equal(radiant_lp_lf_overhead_us(&grtc, RADIANT_LP_GRTC_MIN_LEAD_TICKS),
+		      217u);
+	/* The release edge: min_lead on, across the raw wrap. */
+	zassert_equal(radiant_lp_release_edge(&rtc, 0xFFFFFEu,
+					      RADIANT_LP_RTC_MIN_LEAD_TICKS), 1u);
 }
 
 ZTEST(radiant_lp_math, test_linger_pushes_out_never_in)
@@ -533,4 +557,253 @@ ZTEST(radiant_lp_math, test_wake_at_and_late_by)
 	zassert_equal(radiant_lp_late_by_us(9801u, 10000u, 200u), 1u);
 	zassert_equal(radiant_lp_late_by_us(12000u, 10000u, 200u), 2200u);
 	zassert_equal(radiant_lp_late_by_us(0u, 10000u, 200u), 0u);
+}
+
+/* --- Extended counters, and the range guard --- */
+
+ZTEST(radiant_lp_math, test_extended_counter_is_never_masked)
+{
+	struct radiant_lp_tb ext;
+	struct radiant_lp_clock c;
+	uint64_t cmp;
+
+	zassert_true(radiant_lp_tb_init(&ext, RADIANT_LP_RTC_NUM,
+					RADIANT_LP_RTC_SHIFT,
+					RADIANT_LP_EXTENDED_WIDTH));
+	zassert_equal(ext.mask, UINT64_MAX);
+	/* 63 - bitlength(15625) = 49 bits of distance. */
+	zassert_equal(radiant_lp_tb_half(&ext), (UINT64_C(1) << 49) - 1u);
+
+	/* Past the 24-bit RTC wrap, the extended count just carries on. */
+	radiant_lp_clock_init(&c);
+	c.anchor_q = 0u;
+	c.anchor_ticks = UINT64_C(0x3FFFFF0);
+	zassert_equal(radiant_lp_ticks_since(&ext, c.anchor_ticks,
+					     UINT64_C(0x4000010)), 0x20u);
+	zassert_equal(radiant_lp_asleep_us(&ext, &c, UINT64_C(0x4000010)), 976u);
+	/* A compare comes back absolute, as z_nrf_rtc_timer_set() takes it:
+	 * 600 s on is beyond any 24-bit value.
+	 */
+	zassert_equal(radiant_lp_wake_compare(&ext, &c, UINT64_C(600000000),
+					      UINT64_MAX, &cmp),
+		      RADIANT_LP_WAKE_OK);
+	zassert_equal(cmp, UINT64_C(0x3FFFFF0) + UINT64_C(19660800));
+	/* Reached means at or after; before is not, by any amount. */
+	zassert_true(radiant_lp_tick_reached(&ext, cmp, cmp));
+	zassert_true(radiant_lp_tick_reached(&ext, cmp + 1000000u, cmp));
+	zassert_false(radiant_lp_tick_reached(&ext, cmp - 1u, cmp));
+	zassert_true(radiant_lp_compare_in_time(&ext, cmp - 3u, cmp, 3u));
+	zassert_false(radiant_lp_compare_in_time(&ext, cmp - 2u, cmp, 3u));
+	zassert_false(radiant_lp_compare_in_time(&ext, cmp + 1u, cmp, 3u));
+}
+
+/*
+ * A missed compare. On the nRF52 RTC an equality compare whose value the
+ * counter has passed fires one counter period (512 s) later. With an extended
+ * counter the overrun is visible as distance; with a raw 24-bit one it is
+ * visible only past half the range, and before that it is indistinguishable
+ * from a short sleep - which is why extended is the recommended mode.
+ */
+ZTEST(radiant_lp_math, test_missed_compare_is_refused_not_wrapped)
+{
+	struct radiant_lp_tb ext;
+	struct radiant_lp_clock c;
+	uint64_t hwm;
+
+	zassert_true(radiant_lp_tb_init(&ext, RADIANT_LP_RTC_NUM,
+					RADIANT_LP_RTC_SHIFT,
+					RADIANT_LP_EXTENDED_WIDTH));
+
+	/* Raw: 300 s after the anchor is past half the range. */
+	radiant_lp_clock_init(&c);
+	c.anchor_q = UINT64_C(1000000) << RADIANT_LP_RTC_SHIFT;
+	c.anchor_ticks = 0x100000u;
+	hwm = radiant_lp_clock_now(&rtc, &c, true, 0u, 0x100000u + 32768u);
+	zassert_equal(hwm, 2000000u);
+	zassert_true(radiant_lp_asleep_ok(&rtc, &c, 0x100000u + 0x7FFFFFu));
+	zassert_false(radiant_lp_asleep_ok(&rtc, &c, 0x100000u + 300u * 32768u));
+	zassert_equal(radiant_lp_clock_now(&rtc, &c, true, 0u,
+					   0x100000u + 300u * 32768u), hwm,
+		      "an out-of-range reading must hold, not convert");
+	zassert_equal(c.range_errors, 1u);
+	/* A raw reading BEFORE the anchor wraps to ~512 s ahead: refused too. */
+	zassert_false(radiant_lp_asleep_ok(&rtc, &c, 0x100000u - 1u));
+
+	/* Extended: before the anchor is refused at any distance, and a 512 s
+	 * overrun converts correctly (it is a real 512 s).
+	 */
+	radiant_lp_clock_init(&c);
+	c.anchor_q = UINT64_C(1000000) << RADIANT_LP_RTC_SHIFT;
+	c.anchor_ticks = UINT64_C(0x5000000);
+	zassert_false(radiant_lp_asleep_ok(&ext, &c, UINT64_C(0x4FFFFFF)));
+	zassert_equal(radiant_lp_clock_now(&ext, &c, true, 0u,
+					   UINT64_C(0x4FFFFFF)), 0u);
+	zassert_equal(c.range_errors, 1u);
+	zassert_true(radiant_lp_asleep_ok(&ext, &c, UINT64_C(0x5000000) +
+					  (UINT64_C(512) * 32768u)));
+	zassert_equal(radiant_lp_asleep_us(&ext, &c, UINT64_C(0x5000000) +
+					   (UINT64_C(512) * 32768u)),
+		      513000000u);
+	/* The release refuses to judge an out-of-range edge: TIMER's reading. */
+	radiant_lp_clock_init(&c);
+	c.timer_at_anchor = true;
+	c.anchor_ticks = UINT64_C(0x5000000);
+	zassert_false(radiant_lp_release(&ext, &c, UINT64_C(0x4FFFFFF), 777u,
+					 RADIANT_LP_RELEASE_TOL_US, NULL));
+	zassert_equal(c.anchor_q, UINT64_C(777) << 9);
+}
+
+/* --- Rebase and re-anchor --- */
+
+ZTEST(radiant_lp_math, test_rebase_moves_the_anchor_not_the_time)
+{
+	struct radiant_lp_clock c;
+	uint64_t cmp, at_99, at_far;
+
+	radiant_lp_clock_init(&c);
+	c.anchor_q = (UINT64_C(7000000) << 9) + 123u;
+	c.anchor_ticks = 0xFFFF00u;
+
+	/* No operation: the wake is clamped at half the range (256 s). */
+	zassert_equal(radiant_lp_wake_compare(&rtc, &c, RADIANT_LP_NO_OP,
+					      UINT64_MAX, &cmp),
+		      RADIANT_LP_WAKE_CLAMPED);
+	at_99 = radiant_lp_asleep_q(&rtc, &c, cmp - 1u);
+	radiant_lp_rebase(&rtc, &c, cmp);
+	zassert_equal(c.anchor_ticks, cmp);
+	zassert_false(c.timer_at_anchor);
+	zassert_equal(c.anchor_q, at_99 + RADIANT_LP_RTC_NUM,
+		      "a rebase is the exact LF image of its edge");
+	/* Readings a further 200 s on are in range again, and continuous. */
+	at_far = radiant_lp_asleep_q(&rtc, &c, cmp + 200u * 32768u);
+	zassert_true(radiant_lp_asleep_ok(&rtc, &c, cmp + 200u * 32768u));
+	zassert_equal(at_far, at_99 + RADIANT_LP_RTC_NUM +
+			      UINT64_C(200) * 32768u * RADIANT_LP_RTC_NUM);
+}
+
+ZTEST(radiant_lp_math, test_reanchor_restores_the_lf_release)
+{
+	struct radiant_lp_clock c;
+	uint64_t base;
+	int64_t diff;
+
+	radiant_lp_clock_init(&c);
+	c.anchor_q = 0u;
+	/* A software-started wake at tick 1000 (the TIMER started some us after
+	 * that tick was read): no exact relation, no carried fraction.
+	 */
+	base = radiant_lp_wake(&rtc, &c, 1000u, false);
+	zassert_equal(base, 30517u);
+	zassert_false(c.timer_at_anchor);
+
+	/* (D)PPI captures the running TIMER on tick 1010 as base + 290 us
+	 * (the start was ~15 us late: 10 ticks are 305.18 us).
+	 */
+	radiant_lp_reanchor(&rtc, &c, 1010u, base + 290u);
+	zassert_true(c.timer_at_anchor);
+	zassert_equal(c.anchor_ticks, 1010u);
+	zassert_equal(c.anchor_q, (UINT64_C(30807) << 9));
+
+	/* 100 ticks later (3051.76 us), the TIMER reads 3052 us more: the
+	 * release takes the LF image of the edge again.
+	 */
+	zassert_true(radiant_lp_release(&rtc, &c, 1110u, base + 290u + 3052u,
+					RADIANT_LP_RELEASE_TOL_US, &diff));
+	zassert_equal(c.anchor_q, (UINT64_C(30807) << 9) + 100u * 15625u);
+	/* Without the re-anchor the same release would have taken the TIMER. */
+	radiant_lp_clock_init(&c);
+	(void)radiant_lp_wake(&rtc, &c, 1000u, false);
+	zassert_false(radiant_lp_release(&rtc, &c, 1110u, base + 290u + 3052u,
+					 RADIANT_LP_RELEASE_TOL_US, NULL));
+}
+
+/* --- The two-edge wake plan --- */
+
+static void check_wake_plan(const struct radiant_lp_tb *tb, uint32_t n)
+{
+	struct radiant_lp_clock c;
+	const uint32_t arm = 300u;
+	const uint32_t hfxo = 1650u + RADIANT_LP_HFXO_ISR_MARGIN_US;
+	uint64_t lead = radiant_lp_wake_lead_us(tb, arm, hfxo);
+
+	for (uint32_t i = 0; i < n; i++) {
+		struct radiant_lp_wake_plan plan;
+		uint64_t op, q1, q2, d1, d2;
+		enum radiant_lp_wake_rc rc;
+
+		radiant_lp_clock_init(&c);
+		c.anchor_q = rnd64() & ((UINT64_C(1) << 50) - 1u);
+		c.anchor_ticks = rnd64() & tb->mask;
+		/* At least the whole lead past the anchor, up to ~8 s. */
+		op = (c.anchor_q >> tb->shift) + 1u + lead + (rnd() & 0x7FFFFFu);
+		rc = radiant_lp_wake_plan(tb, &c, op, arm, hfxo,
+					  radiant_lp_tb_half(tb), &plan);
+		zassert_equal(rc, RADIANT_LP_WAKE_OK);
+		d1 = radiant_lp_ticks_since(tb, c.anchor_ticks, plan.hfxo_cmp);
+		d2 = radiant_lp_ticks_since(tb, c.anchor_ticks, plan.timer_cmp);
+		q1 = c.anchor_q + d1 * tb->num;
+		q2 = c.anchor_q + d2 * tb->num;
+		zassert_true(d1 < d2, "EDGE 1 must precede EDGE 2");
+		/* EDGE 2: never late for the arm lead, less than a tick early. */
+		zassert_true(q2 <= (op - arm) << tb->shift);
+		zassert_true(q2 + tb->num > (op - arm) << tb->shift);
+		/* EDGE 1: the HFXO gets its whole lead, and no tick more. */
+		zassert_true(q2 - q1 >= (uint64_t)hfxo << tb->shift);
+		zassert_true(q2 - q1 < ((uint64_t)hfxo << tb->shift) + tb->num);
+		/* The whole wake fits the budget should_sleep() charges. */
+		zassert_true((op << tb->shift) - q1 <= lead << tb->shift);
+	}
+}
+
+ZTEST(radiant_lp_math, test_wake_plan_two_edges_rtc)
+{
+	check_wake_plan(&rtc, 100000u);
+}
+
+ZTEST(radiant_lp_math, test_wake_plan_two_edges_grtc)
+{
+	check_wake_plan(&grtc, 100000u);
+}
+
+ZTEST(radiant_lp_math, test_wake_plan_edges)
+{
+	struct radiant_lp_clock c;
+	struct radiant_lp_wake_plan plan;
+
+	radiant_lp_clock_init(&c);
+	c.anchor_q = UINT64_C(1000) << RADIANT_LP_RTC_SHIFT;
+	c.anchor_ticks = 0xFFFFF0u;
+
+	/* Exactly: op - arm = anchor + 15625 us is tick 512; the HFXO edge is
+	 * the last tick at or before 15625 - 1750 = 13875 us: 454 ticks
+	 * (13854.98 us), and 455 would be 13885.5.
+	 */
+	zassert_equal(radiant_lp_wake_plan(&rtc, &c, 1000u + 15625u + 300u, 300u,
+					   1750u, UINT64_MAX, &plan),
+		      RADIANT_LP_WAKE_OK);
+	zassert_equal(plan.timer_cmp, (0xFFFFF0u + 512u) & 0xFFFFFFu);
+	zassert_equal(plan.hfxo_cmp, (0xFFFFF0u + 454u) & 0xFFFFFFu);
+
+	/* Room for EDGE 2 but not for the HFXO lead before it: PAST. */
+	zassert_equal(radiant_lp_wake_plan(&rtc, &c, 1000u + 1000u + 300u, 300u,
+					   1750u, UINT64_MAX, &plan),
+		      RADIANT_LP_WAKE_PAST);
+	/* EDGE 2 on the anchor itself: PAST (EDGE 1 must be strictly before). */
+	zassert_equal(radiant_lp_wake_plan(&rtc, &c, 1000u + 300u, 300u, 0u,
+					   UINT64_MAX, &plan),
+		      RADIANT_LP_WAKE_PAST);
+	/* A zero HFXO lead still keeps EDGE 1 a tick before EDGE 2. */
+	zassert_equal(radiant_lp_wake_plan(&rtc, &c, 1000u + 15625u + 300u, 300u,
+					   0u, UINT64_MAX, &plan),
+		      RADIANT_LP_WAKE_OK);
+	zassert_equal(plan.hfxo_cmp, (0xFFFFF0u + 511u) & 0xFFFFFFu);
+	/* Beyond max_ticks: CLAMPED, both fields the clamped (rebase) tick. */
+	zassert_equal(radiant_lp_wake_plan(&rtc, &c, 1000u + 15625u + 300u, 300u,
+					   1750u, 100u, &plan),
+		      RADIANT_LP_WAKE_CLAMPED);
+	zassert_equal(plan.timer_cmp, (0xFFFFF0u + 100u) & 0xFFFFFFu);
+	zassert_equal(plan.hfxo_cmp, plan.timer_cmp);
+	zassert_equal(radiant_lp_wake_plan(&rtc, &c, RADIANT_LP_NO_OP, 300u,
+					   1750u, UINT64_MAX, &plan),
+		      RADIANT_LP_WAKE_CLAMPED);
 }
