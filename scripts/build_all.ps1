@@ -20,11 +20,13 @@
     transport, no artifact) and $treadmillTargets (apps/treadmill - shares the
     node shape but not its Kconfig choices). Kept separate rather than folded
     into $targets with optional fields, because `if ($t.field)` would silently
-    skip an assertion a row meant to have.
+    skip an assertion a row meant to have. A fourth, $sampleTargets, builds
+    radiant/samples/hr_transmitter (default, lowpower.conf, one_way.conf, and
+    the TI LaunchXL) for power work on the bench.
 
-    The node and treadmill rows build only under -Backend core, since neither
-    application has an ANT_RADIO axis - both are built out of radiant with no
-    sdk-ant path, which is the demonstration they exist to make.
+    The node, treadmill and sample rows build only under -Backend core, since
+    none has an ANT_RADIO axis - all are built out of radiant with no sdk-ant
+    path, which is the demonstration they exist to make.
 
     See docs\gotchas.md for the promicro/lm20 `radiant,radio-timer` build
     failure this matrix caught.
@@ -74,7 +76,9 @@
 .PARAMETER Only
     Build just the targets whose artifact name matches this wildcard. The node
     rows (apps/hrm_ble) have no artifact, so they match on their
-    build-directory name instead: -Only "node_*".
+    build-directory name instead: -Only "node_*". The hr_transmitter sample
+    rows match either their directory or their artifact: -Only "hrtx_*",
+    -Only ti_hr_tx.
 
 .PARAMETER SkipDfu
     Do not package the dongle DFU zip (which needs nrfutil).
@@ -287,6 +291,34 @@ $treadmillTargets = @(
     # than falling back to the simulator.
     @{ dir='tread_custom';   board='nrf54l15dk/nrf54l15/cpuapp'; source='CUSTOM';    conf='source_custom.conf';   sdm=$true }
 )
+
+# ---- The heart-rate transmitter sample ---------------------------------------
+#
+# radiant/samples/hr_transmitter, the battery-node demonstration. A fourth list:
+# no ANT_RADIO axis and no -DRADIANT_BACKEND (the sample has no backend-selection
+# CMake; radiant/Kconfig picks the radio the SoC has), so each row names the HAL
+# it must end up with and the build asserts it. Not affected by -RadiantBackend.
+#
+# The image goes to dist\ for bench flashing; none of these is a release
+# artifact. -Only matches the build directory OR the artifact name, so
+# -Only hrtx_l15_lp works as well as -Only "*hrtx*".
+#
+# Asserted below: the HAL, CONFIG_SERIAL and CONFIG_LOG off on the lowpower.conf
+# rows (no UART driver linked means no UARTE is ever enabled, which is the point
+# of that fragment), and CONFIG_HR_TX_ONE_WAY in both directions.
+$sampleTargets = @(
+    @{ dir='hrtx_l15';         board='nrf54l15dk/nrf54l15/cpuapp';     artifact='radiant_hrtx_nrf54l15dk.hex';          pkg='hex'; radiant='nrf'; conf=$null;                        lowpower=$false; one_way=$false }
+    @{ dir='hrtx_l15_lp';      board='nrf54l15dk/nrf54l15/cpuapp';     artifact='radiant_hrtx_nrf54l15dk_lp.hex';       pkg='hex'; radiant='nrf'; conf='lowpower.conf';              lowpower=$true;  one_way=$false }
+    # The third arm of a power A/B: lowpower plus transmit-only (MASTER_TX_ONLY).
+    @{ dir='hrtx_l15_lp_1way'; board='nrf54l15dk/nrf54l15/cpuapp';     artifact='radiant_hrtx_nrf54l15dk_lp_1way.hex';  pkg='hex'; radiant='nrf'; conf='lowpower.conf;one_way.conf'; lowpower=$true;  one_way=$true }
+    @{ dir='hrtx_promicro_lp'; board='promicro_nrf52840/nrf52840/uf2'; artifact='radiant_hrtx_promicro_lp.uf2';         pkg='uf2'; radiant='nrf'; conf='lowpower.conf';              lowpower=$true;  one_way=$false }
+)
+# The TI LaunchXL, under the same hal_ti condition as the dongle_ti rows above
+# (skipped with their message when it is absent). Not in the sample's
+# sample.yaml: CI has no hal_ti.
+if ($Backend -eq 'core' -and $halTiModule) {
+    $sampleTargets += @{ dir='ti_hr_tx'; board='cc26x2r1_launchxl'; artifact='radiant_hrtx_cc26x2r1_launchxl.hex'; pkg='hex'; radiant='cc26xx'; conf=$null; lowpower=$false; one_way=$false; modules=$halTiModule }
+}
 
 if (-not (Get-Command west -ErrorAction SilentlyContinue)) {
     throw "west is not on PATH. Dot-source the environment first:`n" +
@@ -698,6 +730,73 @@ try {
             if ($t.ble) { $notes += 'FTMS + RSC + SMP + MPSL gate' }
             if ($t.hr)  { $notes += 'ANT+ HR slave' }
             Write-Host ("  ok: {0} HAL, {1} source, {2}" -f $RadiantBackend, $t.source, ($notes -join ', '))
+        }
+    }
+
+    # ---- The heart-rate transmitter sample ------------------------------------
+    #
+    # NO -DANT_RADIO OR -DRADIANT_BACKEND HERE: the sample has neither axis (see
+    # $sampleTargets). A plain -DEXTRA_CONF_FILE, because that is what the
+    # sample's README tells a user to type; the .config read-back below is what
+    # proves it reached the image.
+    if ($Backend -eq 'core') {
+        $sampleApp = Join-Path $repo 'radiant\samples\hr_transmitter'
+
+        foreach ($t in $sampleTargets) {
+            if ($t.dir -notlike $Only -and $t.artifact -notlike $Only) { continue }
+
+            $out = Join-Path $repo "build\$($t.dir)"
+            Write-Host "`n=== hr_transmitter $($t.dir)  [$($t.board)]" -ForegroundColor Cyan
+
+            $extra = @('--')
+            if ($t.modules) { $extra += "-DEXTRA_ZEPHYR_MODULES=$($t.modules)" }
+            if ($t.conf) { $extra += "-DEXTRA_CONF_FILE=$($t.conf)" }
+
+            $log = Join-Path $env:TEMP "build_$($t.dir).log"
+            $rc = Invoke-West @('-z', $zephyr, 'build', '-s', $sampleApp,
+                                '-d', $out, '-b', $t.board, '-p', 'always') $extra $log
+            if ($rc -ne 0) {
+                Get-Content $log -Tail 30
+                throw "build failed for hr_transmitter $($t.dir); full log at $log"
+            }
+
+            # 'hr_transmitter', the basename of the application directory.
+            $zdir = Join-Path $out 'hr_transmitter\zephyr'
+            $cfg = Get-Content (Join-Path $zdir '.config')
+
+            # 1. radiant's radio HAL: a null-radio transmitter boots, prints
+            # "Transmitting" and puts nothing on the air.
+            $want = "CONFIG_RADIANT_BACKEND_$($t.radiant.ToUpper())=y"
+            if (-not ($cfg | Where-Object { $_ -eq $want })) {
+                $got = ($cfg | Where-Object { $_ -match '^CONFIG_RADIANT_BACKEND_\w+=y' })
+                throw "hr_transmitter $($t.dir): expected $want in .config, found '$got'"
+            }
+
+            # 2. lowpower.conf took effect. Kconfig writes an absent bool as
+            # `# CONFIG_X is not set`, so match that exact line.
+            if ($t.lowpower) {
+                foreach ($sym in @('# CONFIG_SERIAL is not set', '# CONFIG_LOG is not set')) {
+                    if (-not ($cfg | Where-Object { $_ -ceq $sym })) {
+                        throw "hr_transmitter $($t.dir): expected '$sym' in .config"
+                    }
+                }
+            }
+
+            # 3. The channel type, in both directions.
+            $wantType = if ($t.one_way) { 'CONFIG_HR_TX_ONE_WAY=y' } else { '# CONFIG_HR_TX_ONE_WAY is not set' }
+            if (-not ($cfg | Where-Object { $_ -ceq $wantType })) {
+                throw "hr_transmitter $($t.dir): expected '$wantType' in .config"
+            }
+
+            switch ($t.pkg) {
+                'uf2' { Copy-Item (Join-Path $zdir 'zephyr.uf2') (Join-Path $dist $t.artifact) -Force }
+                'hex' { Copy-Item (Join-Path $zdir 'zephyr.hex') (Join-Path $dist $t.artifact) -Force }
+            }
+
+            $notes = @()
+            if ($t.lowpower) { $notes += 'lowpower' }
+            if ($t.one_way) { $notes += 'MASTER_TX_ONLY' } else { $notes += 'bidirectional MASTER' }
+            Write-Host ("  ok: {0} HAL, {1}" -f $t.radiant, ($notes -join ', '))
         }
     }
 } finally {
