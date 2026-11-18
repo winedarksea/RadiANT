@@ -2244,6 +2244,8 @@ jobs:
           # first draft (a radiant_sec_config_is() query, no cold) was +312.
           # Ceilings unchanged, 16 B of text left: the next security fix
           # will need the ceiling moved.
+          # 7664 / 6975 on the merged items 1-3 of review 2026-11-17 (1a9dbba,
+          # this recipe, NCS v3.4.0): item 1 adds nothing here. Unchanged.
           check "security text" "$(( on_text - off_text ))" 7680
           check "security bss"  "$(( on_bss  - off_bss  ))" 7168
 
@@ -2272,6 +2274,8 @@ jobs:
           # fold and static workspace (security review 2026-11-17, item 1:
           # radiant_sec_x25519 1024 -> 864 B, fe_wipe inlined into fe_mul).
           # Pairing bss +896 B (the workspace), not gated. Ceiling unchanged.
+          # 3852 B on the merged items 1-3 (1a9dbba, this recipe, NCS v3.4.0);
+          # the stack step below: 668 / 612 / 760 B and 484 / 428 / 576 B.
           check "pairing text" "$(( pair_text - on_text ))" 4096
 
           # ── The compat attestation layer ─────────────────────────────────
