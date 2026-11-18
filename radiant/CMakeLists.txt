@@ -377,9 +377,12 @@ elseif(CONFIG_RADIANT_BACKEND_NRF)
     # in a zero-latency interrupt, which is a condition the direct backend does
     # not have. See include/radiant/radiant_swi.h.
     zephyr_library_sources(src/radiant_swi.c)
-  else()
+  elseif(NOT CONFIG_RADIANT_NRF_LOW_POWER)
     zephyr_library_sources(src/radiant_radio_nrf_gate_direct.c)
   endif()
+  # CONFIG_RADIANT_NRF_LOW_POWER: the gate is src/radiant_radio_nrf_lp.c,
+  # which radiant_radio_nrf.c #includes (and so compiles, -O2 included) -
+  # never listed here.
   # This used to be a CMake WARNING on every nRF build. A permanent warning is
   # one nobody reads, and it would bury the null-backend warning above. The
   # calibration caveats it carried live in the 'what is measured and what is

@@ -266,6 +266,26 @@ static volatile uint32_t radiant_dbg_clock_back;
 #define CLOCK_UNLOCK(k) irq_unlock(k)
 #endif
 
+/*
+ * CONFIG_RADIANT_NRF_LOW_POWER (power plan Track B): radiant_radio_nrf_lp.c,
+ * included at the end of this file, stops this TIMER and releases the HFXO in
+ * long idle gaps and is the build's gate. LP_HOOK() marks the few places this
+ * file tells it something; with the option off they compile to nothing.
+ */
+#if defined(CONFIG_RADIANT_NRF_LOW_POWER)
+static uint64_t lp_now_locked(void);
+static bool lp_timer_stopped(void);
+static void lp_staged(void);
+static void lp_terminal_done(void);
+static void lp_on_enable(void);
+static int lp_hfxo_boot(void);
+static void lp_init(void);
+static void lp_constlat(bool on);
+#define LP_HOOK(...) do { __VA_ARGS__; } while (0)
+#else
+#define LP_HOOK(...) do { } while (0)
+#endif
+
 static uint32_t timer_capture(uint8_t cc)
 {
 	nrf_timer_task_trigger(TIMER_ADDR, nrf_timer_capture_task_get(cc));
@@ -288,7 +308,12 @@ static uint64_t clock_fold(uint32_t counter)
 radiant_time_t radiant_radio_now(void)
 {
 	unsigned int key = CLOCK_LOCK();
+#if defined(CONFIG_RADIANT_NRF_LOW_POWER)
+	/* Piecewise: the TIMER awake, the LF counter asleep, clamped monotonic. */
+	uint64_t now = lp_now_locked();
+#else
 	uint64_t now = clock_fold(timer_capture(CC_NOW));
+#endif
 
 	CLOCK_UNLOCK(key);
 	return (radiant_time_t)now;
@@ -2346,7 +2371,12 @@ int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 	/* The RADIO needs the HFXO crystal: 1 Mbps GFSK does not hold bit sync on HFINT. Blocking.
 	 * Held from here until reset: the power proxy reads it as ~uptime. */
 	POWER_DIAG(radiant_power_diag_hfxo(true));
+#if defined(CONFIG_RADIANT_NRF_LOW_POWER)
+	/* Through the HFXO's onoff manager, which every later request uses. */
+	err = lp_hfxo_boot();
+#else
 	err = clock_control_on(clk, CLOCK_CONTROL_NRF_SUBSYS_HF);
+#endif
 	if (err < 0) {
 		POWER_DIAG(radiant_power_diag_hfxo(false));
 		LOG_ERR("HFXO did not start (%d)", err);
@@ -2376,6 +2406,10 @@ int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 #else
 		/* HOLD=n: no request; MPSL's per-event acquire/release is all. */
 #endif
+#elif defined(CONFIG_RADIANT_NRF_LOW_POWER)
+		/* nrfx's reference, freed and taken again with the HFXO. */
+		lp_constlat(true);
+		POWER_DIAG(radiant_power_diag_constlat_requested());
 #else
 		nrf_power_task_trigger(NRF_POWER, NRF_POWER_TASK_CONSTLAT);
 		POWER_DIAG(radiant_power_diag_constlat_requested());
@@ -2614,6 +2648,9 @@ int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 		}
 	}
 
+	/* Low power starts awake; a refusal leaves the HFXO on (LP_OFF). */
+	LP_HOOK(lp_init());
+
 	/*
 	 * One die-temperature reading, in thread context, on every boot. It logs the
 	 * confound (radiant_radio_nrf_diag.h) and seeds the errata-153/225 RSSI cache
@@ -2684,6 +2721,7 @@ int radiant_radio_enable(void)
 	/* Not needed by any path today (disable forgets too); kept so an enable never trusts what preceded it. */
 	reg_shadow_forget();
 	radiant_op.enabled = true;
+	LP_HOOK(lp_on_enable());
 	return RADIANT_RADIO_OK_RC;
 }
 
@@ -2841,6 +2879,7 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 		radiant_staged.tx.fmt = &radiant_staged.tx_fmt;
 		radiant_staged.tx_regs = fmt_regs;
 		radiant_staged.pending = true;
+		LP_HOOK(lp_staged());
 #if defined(CONFIG_RADIANT_GATE_MPSL_D2)
 		d2_settle_now();
 #endif
@@ -3313,6 +3352,7 @@ static int rx_arm(const struct radiant_rx_req *req, uint32_t *op)
 		       (size_t)req->n_filters * sizeof(struct radiant_rx_filter));
 		radiant_staged.rx.filters = radiant_staged.rx_filters;
 		radiant_staged.pending = true;
+		LP_HOOK(lp_staged());
 #if defined(CONFIG_RADIANT_GATE_MPSL_D2)
 		d2_settle_now();
 #endif
@@ -3545,6 +3585,7 @@ int radiant_radio_ed(const struct radiant_ed_req *req, uint32_t *op)
 	if (g == GATE_PENDING) {
 		radiant_staged.ed = *req;
 		radiant_staged.pending = true;
+		LP_HOOK(lp_staged());
 #if defined(CONFIG_RADIANT_GATE_MPSL_D2)
 		d2_settle_now();
 #endif
@@ -4062,7 +4103,12 @@ int radiant_radio_abort(void)
 	 * delivered from here. deliver_terminal() is idempotent, so this is not a double delivery.
 	 */
 	/* Only if the radio is ours: forcing DISABLE on another stack's live receiver is the same mistake as the SHORTS write above. */
-	if (RADIO_IS_OURS()) {
+	if (RADIO_IS_OURS()
+#if defined(CONFIG_RADIANT_NRF_LOW_POWER)
+	    /* Staged behind a low-power wake: the RADIO was never touched. */
+	    && !was_staged
+#endif
+	    ) {
 		radio_disable_now();
 	}
 	deliver_terminal(RADIANT_RADIO_STATUS_ABORTED);
@@ -4112,6 +4158,13 @@ static void radio_disable_now(void)
 {
 	uint32_t deadline;
 
+#if defined(CONFIG_RADIANT_NRF_LOW_POWER)
+	/* Asleep nothing is programmed, and the backstop below would spin on a
+	 * stopped TIMER. */
+	if (lp_timer_stopped()) {
+		return;
+	}
+#endif
 	nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_DISABLED);
 	nrf_radio_task_trigger(NRF_RADIO, NRF_RADIO_TASK_DISABLE);
 
@@ -4182,6 +4235,7 @@ static void deliver_terminal(enum radiant_radio_status st)
 		evt.status = st;
 		/* No measurement on a terminal event. Indices measured earlier were already reported. */
 		core_cb_ed(&evt);
+		LP_HOOK(lp_terminal_done());
 		return;
 	}
 #endif
@@ -4229,6 +4283,8 @@ static void deliver_terminal(enum radiant_radio_status st)
 
 		core_cb_rx(&evt);
 	}
+	/* After the callback: it may have armed the next operation. */
+	LP_HOOK(lp_terminal_done());
 }
 
 /*
@@ -4357,6 +4413,8 @@ static void radio_isr(const void *arg)
 			grant_release_after_core();
 #endif
 			core_cb_tx(&evt);
+			/* A terminal outside deliver_terminal(): the same hook. */
+			LP_HOOK(lp_terminal_done());
 		}
 
 		/*
@@ -4684,6 +4742,10 @@ rx_end_again:
 #endif
 				}
 				core_cb_rx(&evt);
+				/* After a STOP_ON_FIRST terminal, as deliver_terminal() does. */
+				LP_HOOK(if (radiant_op.kind == OP_NONE) {
+						lp_terminal_done();
+					});
 			}
 		}
 rx_end_done:
@@ -4762,3 +4824,9 @@ uint8_t radiant_radio_diag_get(struct radiant_radio_diag *out)
 	return RADIANT_DIAG_BACKEND_NRF;
 }
 #endif /* CONFIG_RADIANT_DIAG_COUNTERS */
+
+#if defined(CONFIG_RADIANT_NRF_LOW_POWER)
+/* Part of this translation unit: see the file's own header. */
+#define RADIANT_RADIO_NRF_LP_INCLUDED 1
+#include "radiant_radio_nrf_lp.c"
+#endif

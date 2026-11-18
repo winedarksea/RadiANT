@@ -1,0 +1,1219 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * radiant_radio_nrf_lp.c - release the HFXO and stop the radio TIMER in long
+ * idle gaps (CONFIG_RADIANT_NRF_LOW_POWER, power plan Track B, pass B3).
+ *
+ * Provenance: clean-room. Written from radiant_radio_nrf.c's own clock and
+ * gate seam, src/radiant_radio_nrf_lp.h (the arithmetic, pass B2), the spike
+ * results in docs/spike-lp-clock-results.md (pass B1), and Zephyr's public
+ * nrf_grtc_timer, onoff and clock_control APIs. Nothing derives from sdk-ant
+ * or any ANT+ document.
+ *
+ * NOT A TRANSLATION UNIT OF ITS OWN. radiant_radio_nrf.c #includes this file
+ * at its end, only when the option is on, so the code here reaches the
+ * backend's TIMER fold, CLOCK_LOCK and staged operation without widening any
+ * of them into an interface, and so radiant/tests/backend's under-test file
+ * compiles both by including one. CMake compiles it through that include and
+ * never on its own; with the option off not one line of it is seen.
+ *
+ * SCOPE. The direct (unarbitrated) backend on the nRF54L15: the LF counter is
+ * the GRTC SYSCOUNTER (1 MHz, the system timer's), read extended (64-bit
+ * z_nrf_grtc_timer_read()), and the GRTC and the radio TIMER share DPPIC20, so
+ * the anchor is one same-domain DPPI connection with no PPIB (spike B1 S2).
+ * Kconfig refuses the nRF52/nRF5340 RTC1 path (pass B5) and MPSL (pass B6).
+ *
+ * THE GATE SEAM. This file is the build's gate (radiant_radio_nrf_gate.h) in
+ * place of radiant_radio_nrf_gate_direct.c. Awake, gate_acquire() answers
+ * GATE_GRANTED exactly as the direct gate does and the arm programs at once.
+ * When the operation asked for is far enough away (radiant_lp_should_sleep),
+ * it answers GATE_PENDING instead: the arm call stages the request
+ * (radiant_staged, the path the MPSL gate already uses), and this file
+ * releases the HFXO and later calls radiant_nrf_gate_on_grant() once the
+ * TIMER is running again on a stable crystal. Arming itself - TIMER CC
+ * compares wired to RADIO tasks by DPPI - is unchanged, because EDGE 2 below
+ * brings the TIMER back on an exact anchor before anything is programmed.
+ *
+ * ONE SLEEP, FOUR EDGES. The GRTC carries two of this file's compares: the
+ * ANCHOR channel, whose compare event is wired by DPPI to TIMER START and,
+ * forked, TIMER CAPTURE[5] (CC5) - permanently, since START on a running
+ * TIMER does nothing - and the HF channel, an interrupt only.
+ *
+ *   RELEASE   (anchor ch.) CC5 captures the running TIMER on a known LF tick;
+ *             the interrupt then stops and clears the TIMER, takes the
+ *             release (radiant_lp_release), releases the HFXO and frees
+ *             CONSTLAT, and plans the wake for the staged operation.
+ *   EDGE 1    (HF ch.) the interrupt requests the HFXO (and CONSTLAT),
+ *             start-up + RADIANT_LP_HFXO_ISR_MARGIN_US before EDGE 2.
+ *   EDGE 2    (anchor ch.) DPPI starts the cleared TIMER on the tick; the
+ *             interrupt loads the fold (radiant_lp_wake) and grants the staged
+ *             operation, LP_ARM_LEAD_US before it starts.
+ *   REANCHOR  (anchor ch.) a capture of the running TIMER after a wake whose
+ *             TIMER did not start on a stable crystal (see below).
+ *
+ * The edges are never the anchor the wrong way round: no TIMER or RADIO event
+ * ever triggers a GRTC CAPTURE (spike B1's stale-SYSCOUNTER trap).
+ *
+ * FAILURE PATHS, ALL COUNTED (struct radiant_nrf_lp_stats):
+ *   - A compare that, re-read after it is written, is not still
+ *     LP_POSTWRITE_LEAD ticks ahead is a LATE ANCHOR (the header's driver
+ *     rule: z_nrf_grtc_timer_set() writes a passed value unchanged). At a
+ *     release nothing has been stopped yet, so the backend simply stays
+ *     awake. At EDGE 2 the TIMER cannot be trusted to have started on the
+ *     tick: the staged operation fails through the existing FAILED terminal,
+ *     once, and the TIMER is started in software (radiant_lp_wake(false))
+ *     and re-anchored, which bounds the error to one software start.
+ *   - The HFXO callback had not run when EDGE 2 fired (a start-up longer
+ *     than CONFIG_RADIANT_NRF_LP_HFXO_STARTUP_US): the TIMER started on
+ *     HFINT. The segment is marked timer_at_anchor = false (radiant_lp_wake),
+ *     nothing is programmed until the crystal is up, then a REANCHOR edge
+ *     restores the exact relation and the operation is granted - and fails
+ *     late through program_*()'s own ETIME check, as FAILED, if it must.
+ *   - An operation armed while asleep closer than the wake lead (or whose
+ *     plan comes back RADIANT_LP_WAKE_PAST) wakes AS SOON AS POSSIBLE: the
+ *     HFXO is requested in software and EDGE 2 placed one start-up later;
+ *     the grant then runs program_*()'s ETIME check, so a wake that came too
+ *     late fails the operation (FAILED) rather than transmitting late.
+ *
+ * WHERE THE DECISION IS MADE. gate_acquire() (every arm), the end of every
+ * terminal (lp_terminal_done(), after the core's callback has had its chance
+ * to arm the next operation) and every wake (lp_settle()). An operation is
+ * never programmed while asleep, so radio_disable_now() returns at once then
+ * (its TIMER-timed backstop would spin on a stopped TIMER), and an abort of a
+ * staged operation has nothing to tear down (radiant_radio_abort() already
+ * handles staged operations; gate_forget_pending() cancels the wake edges).
+ *
+ * LINGER. No sleep for CONFIG_RADIANT_NRF_LP_LINGER_MS after enable and after
+ * every RADIANT_GATE_PRIO_NORMAL acquire. PRIO_NORMAL is what the backend
+ * passes for a scan chunk or receive window of 10 ms or more and for energy
+ * detect (rx_arm(), radiant_radio_ed()): searches and acquisition never sleep.
+ *
+ * LOCKING. Every field of `lp` and every call into radiant_radio_nrf_lp.h,
+ * including the GRTC counter read that feeds it, is under CLOCK_LOCK, the
+ * same critical section as the TIMER fold (irq_lock on the direct build;
+ * MPSL builds, where it is PRIMASK, are refused). The completion work a wake
+ * triggers - radiant_nrf_gate_on_grant(), a FAILED terminal and the core
+ * callback behind it - runs after the lock is dropped, from the GRTC or
+ * clock interrupt, an ordinary (non-zero-latency) context like the RADIO
+ * interrupt the core already takes completions from.
+ *
+ * STATS (CONFIG_RADIANT_NRF_LP_STATS). The global `radiant_nrf_lp_stats`,
+ * every field a u32, little-endian, no padding; read it over SWD by symbol
+ * (scripts/jlink_peek.ps1 -Symbol radiant_nrf_lp_stats). It is a separate
+ * symbol rather than part of radiant_power_diag because that struct has no
+ * spare field and its layout is pinned at version 1.
+ *
+ *   off  field              meaning
+ *   0x00 magic              0x52504C31 ("RPL1")
+ *   0x04 size               sizeof (0x58)
+ *   0x08 state              current state: 0 off (refused or not
+ *                           initialised), 1 awake, 2 releasing, 3 asleep,
+ *                           4 waking
+ *   0x0C sleeps             releases completed (TIMER stopped, HFXO released)
+ *   0x10 wakes              wakes completed (EDGE 2 or a software start)
+ *   0x14 late_anchors       anchoring compares not in time after the write,
+ *                           or whose capture was missing (release, EDGE 2,
+ *                           re-anchor)
+ *   0x18 late_wakes         operations failed (FAILED) because the wake came
+ *                           too late for them: a late EDGE 2, or the grant's
+ *                           own ETIME check
+ *   0x1C hfxo_late_edge2    EDGE 2 fired before the HFXO callback
+ *   0x20 reanchors          re-anchors taken (radiant_lp_reanchor true)
+ *   0x24 range_errors       asleep readings refused as out of range (a lost
+ *                           timebase; expected 0 with the extended counter)
+ *   0x28 lf_taken           releases that took the LF image of their edge
+ *   0x2C timer_taken        releases that took the TIMER's reading
+ *   0x30 disagreements      releases with an exact anchor whose LF image lay
+ *                           more than RADIANT_LP_RELEASE_TOL_US from the TIMER
+ *   0x34 max_disagree_us    largest |LF image - TIMER| at an exact release
+ *   0x38 max_wake_slack_us  largest time from "awake and granted" to the
+ *                           operation's start (how early a wake was)
+ *   0x3C max_wake_late_us   largest radiant_lp_late_by_us() at a grant after
+ *                           a wake (0 = every wake in time)
+ *   0x40 asap_wakes         wakes started in software without EDGE 1's lead
+ *   0x44 release_cancels    committed releases called off by a nearer arm
+ *   0x48 spurious           compare interrupts for an edge no longer armed
+ *   0x4C hfxo_errors        HFXO requests or callbacks that returned an error
+ *   0x50 refused            1 if the option refused itself at init (LFCLK
+ *                           not the crystal, no GRTC channel, no DPPI)
+ *   0x54 last_disagree_q    signed LF image minus TIMER at the last exact
+ *                           release, q units (us on the GRTC)
+ */
+
+#if !defined(RADIANT_RADIO_NRF_LP_INCLUDED)
+#error "radiant_radio_nrf_lp.c is part of radiant_radio_nrf.c, which includes it"
+#endif
+
+#include <zephyr/sys/onoff.h>
+#include <zephyr/drivers/timer/nrf_grtc_timer.h>
+#include <hal/nrf_clock.h>
+#if defined(NRF54L_ERRATA_20_PRESENT)
+#include <nrfx_power.h>
+#endif
+
+#include "radiant_radio_nrf_lp.h"
+
+BUILD_ASSERT(IS_ENABLED(CONFIG_NRF_GRTC_TIMER),
+	     "RADIANT_NRF_LOW_POWER is implemented on the GRTC (nRF54L) only; "
+	     "the RTC1 path is power plan pass B5");
+BUILD_ASSERT(!IS_ENABLED(CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL),
+	     "RADIANT_NRF_LOW_POWER is the direct backend's gate; MPSL is pass B6");
+#if defined(CORE_CB_DEFERRED)
+#error "RADIANT_NRF_LOW_POWER assumes the direct build's CLOCK_LOCK (irq_lock)"
+#endif
+BUILD_ASSERT(DT_PROP_OR(RADIANT_TIMER_NODE, cc_num, 0) >= 6,
+	     "RADIANT_NRF_LOW_POWER needs CC5 of the radio TIMER for its anchor");
+
+/*
+ * The LF counter's rate. The GRTC format below is exact only for a 1 MHz
+ * SYSCOUNTER, which on the nRF54L is also the system timer's cycle rate. The
+ * backend test harness supplies its own value.
+ */
+#ifndef RADIANT_LP_LF_HZ
+#define RADIANT_LP_LF_HZ CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC
+#endif
+BUILD_ASSERT(RADIANT_LP_LF_HZ == 1000000,
+	     "the GRTC low-power format assumes a 1 MHz SYSCOUNTER");
+
+/* The TIMER compare the anchor connection captures into. */
+#define LP_CC_ANCHOR 5u
+/* CC5 before EDGE 2: the edge's capture of the cleared TIMER writes 0. */
+#define LP_CC5_UNSET 0xFFFFFFFFu
+
+/* Lead a compare is written with, and how far ahead it must still be when
+ * re-read after the write (the GRTC latch bound nrf_grtc_timer.c waits on,
+ * MAX_CC_LATCH_WAIT_TIME_US). */
+#define LP_MIN_LEAD       RADIANT_LP_GRTC_MIN_LEAD_TICKS
+#define LP_POSTWRITE_LEAD 77u
+
+/*
+ * EDGE 2's lead over the operation: the backend's own programming budget
+ * plus the GRTC interrupt's latency and the wake bookkeeping before
+ * radiant_nrf_gate_on_grant() runs. A starting value: max_wake_late_us
+ * and late_wakes are how a too-small one shows.
+ */
+#define LP_EDGE2_ISR_US 150u
+#define LP_ARM_LEAD_US  (ARM_SETUP_US + LP_EDGE2_ISR_US)
+/* EDGE 1's lead over EDGE 2. */
+#define LP_HFXO_LEAD_US (CONFIG_RADIANT_NRF_LP_HFXO_STARTUP_US + \
+			 RADIANT_LP_HFXO_ISR_MARGIN_US)
+/* Furthest a wake is planned from the anchor; further sleeps rebase there. */
+#define LP_MAX_SLEEP_TICKS (600ull * 1000000ull)
+/* A release or re-anchor capture older than this at its interrupt is not one. */
+#define LP_CAPTURE_MAX_AGE_US 20000
+#define LP_LINGER_US ((uint64_t)CONFIG_RADIANT_NRF_LP_LINGER_MS * 1000u)
+
+enum lp_state {
+	LP_OFF = 0,     /* not initialised, or refused: the direct gate's behaviour */
+	LP_AWAKE,       /* TIMER running, HFXO requested */
+	LP_RELEASING,   /* the release edge is armed; the TIMER still runs */
+	LP_ASLEEP,      /* TIMER stopped and cleared, HFXO released */
+	LP_WAKING,      /* HFXO requested, EDGE 2 armed (or a software start owed) */
+};
+
+enum lp_anchor { LP_ANCHOR_NONE = 0, LP_ANCHOR_RELEASE, LP_ANCHOR_WAKE, LP_ANCHOR_REANCHOR };
+enum lp_hf { LP_HF_NONE = 0, LP_HF_EDGE1, LP_HF_REBASE };
+
+static struct {
+	struct radiant_lp_tb    tb;
+	struct radiant_lp_clock clk;
+	struct onoff_manager   *hf_mgr;
+	struct onoff_client     hf_cli;
+	int32_t                 ch_anchor;
+	int32_t                 ch_hf;
+	nrfx_gppi_handle_t      conn_anchor;
+	uint64_t                anchor_tick;   /* armed anchor-channel compare */
+	uint64_t                hf_tick;       /* armed HF-channel compare */
+	uint64_t                hfxo_req_tick; /* when the HFXO was last requested */
+	uint64_t                want_t;        /* t_from of the staged operation */
+	uint64_t                linger_until;
+	uint64_t                wake_lead_us;
+	uint64_t                lf_overhead_us;
+	uint8_t                 state;         /* enum lp_state */
+	uint8_t                 anchor;        /* enum lp_anchor */
+	uint8_t                 hf;            /* enum lp_hf */
+	bool                    want;          /* an operation is staged for a wake */
+	bool                    grant_owed;    /* woke before the arm finished staging */
+	bool                    fail_owed;     /* that operation fails (late anchor) */
+	bool                    just_woke;     /* the next grant follows a wake */
+	volatile bool           hfxo_req;
+	volatile bool           hfxo_ready;
+	bool                    hfxo_wait;     /* awake on HFINT until the HFXO is up */
+	bool                    sw_start_pending;
+	bool                    constlat_held;
+} lp = {
+	.ch_anchor = -1,
+	.ch_hf = -1,
+};
+
+#if defined(CONFIG_RADIANT_NRF_LP_STATS)
+struct radiant_nrf_lp_stats {
+	uint32_t magic;
+	uint32_t size;
+	uint32_t state;
+	uint32_t sleeps;
+	uint32_t wakes;
+	uint32_t late_anchors;
+	uint32_t late_wakes;
+	uint32_t hfxo_late_edge2;
+	uint32_t reanchors;
+	uint32_t range_errors;
+	uint32_t lf_taken;
+	uint32_t timer_taken;
+	uint32_t disagreements;
+	uint32_t max_disagree_us;
+	uint32_t max_wake_slack_us;
+	uint32_t max_wake_late_us;
+	uint32_t asap_wakes;
+	uint32_t release_cancels;
+	uint32_t spurious;
+	uint32_t hfxo_errors;
+	uint32_t refused;
+	int32_t  last_disagree_q;
+};
+BUILD_ASSERT(sizeof(struct radiant_nrf_lp_stats) == 0x58, "layout in the file header");
+
+struct radiant_nrf_lp_stats radiant_nrf_lp_stats = {
+	.magic = 0x52504C31u,
+	.size = sizeof(struct radiant_nrf_lp_stats),
+};
+#define LP_STAT(...) do { __VA_ARGS__; } while (0)
+#define LP_STAT_MAX(f, v)                                                      \
+	do {                                                                   \
+		uint64_t v_ = (v);                                             \
+		uint32_t s_ = (v_ > UINT32_MAX) ? UINT32_MAX : (uint32_t)v_;   \
+		if (s_ > radiant_nrf_lp_stats.f) {                             \
+			radiant_nrf_lp_stats.f = s_;                           \
+		}                                                              \
+	} while (0)
+#else
+#define LP_STAT(...) do { } while (0)
+#define LP_STAT_MAX(f, v) do { (void)(v); } while (0)
+#endif
+
+static void lp_set_state(enum lp_state s)
+{
+	lp.state = (uint8_t)s;
+	LP_STAT(radiant_nrf_lp_stats.state = (uint32_t)s);
+}
+
+static inline uint64_t lp_ticks(void)
+{
+	return z_nrf_grtc_timer_read();
+}
+
+/* Whole ticks covering `us`, rounded up. */
+static inline uint64_t lp_us_to_ticks_ceil(uint64_t us)
+{
+	return ((us << lp.tb.shift) + lp.tb.num - 1u) / lp.tb.num;
+}
+
+static bool lp_timer_stopped(void)
+{
+	return lp.state == LP_ASLEEP || lp.state == LP_WAKING;
+}
+
+/* ---- The piecewise clock (radiant_radio_now()) ---- */
+
+/* Under CLOCK_LOCK. */
+static uint64_t lp_now_locked(void)
+{
+	uint64_t t;
+
+	if (lp.state == LP_OFF) {
+		return clock_fold(timer_capture(CC_NOW));
+	}
+	if (lp_timer_stopped()) {
+		t = radiant_lp_clock_now(&lp.tb, &lp.clk, true, 0u, lp_ticks());
+		LP_STAT(radiant_nrf_lp_stats.range_errors = lp.clk.range_errors);
+		return t;
+	}
+	return radiant_lp_clock_now(&lp.tb, &lp.clk, false,
+				    clock_fold(timer_capture(CC_NOW)), 0u);
+}
+
+/*
+ * The TIMER-domain time of a CC5 capture taken shortly before now, or false
+ * if CC5 does not hold one (the sentinel written when the edge was armed, a
+ * capture from the future, or one older than LP_CAPTURE_MAX_AGE_US). Under
+ * CLOCK_LOCK, TIMER running.
+ */
+static bool lp_capture_time(uint64_t *timer_us)
+{
+	uint64_t base = clock_fold(timer_capture(CC_NOW));
+	int32_t  d = (int32_t)(nrf_timer_cc_get(TIMER_ADDR, LP_CC_ANCHOR) -
+			       radiant_clock.last);
+
+	if (d > 0 || d < -(int32_t)LP_CAPTURE_MAX_AGE_US) {
+		return false;
+	}
+	*timer_us = (uint64_t)((int64_t)base + d);
+	return true;
+}
+
+/* ---- HFXO and CONSTLAT ---- */
+
+/*
+ * nRF54L errata 20: CONSTLAT whenever the radio can be active. Through nrfx's
+ * reference count (the direct build without this option raw-triggers it at
+ * init and never lets go): requested with the HFXO, freed with it.
+ */
+static void lp_constlat(bool on)
+{
+#if defined(NRF54L_ERRATA_20_PRESENT)
+	if (!nrf54l_errata_20() || on == lp.constlat_held) {
+		return;
+	}
+	if (on) {
+		(void)nrfx_power_constlat_mode_request();
+	} else {
+		(void)nrfx_power_constlat_mode_free();
+	}
+	lp.constlat_held = on;
+#else
+	ARG_UNUSED(on);
+#endif
+}
+
+static void lp_settle(void);
+static void lp_reanchor_arm_locked(void);
+static void lp_sw_start_locked(void);
+
+static void lp_hfxo_cb(struct onoff_manager *mgr, struct onoff_client *cli,
+		       uint32_t st, int res)
+{
+	unsigned int key;
+	bool settle = false;
+
+	ARG_UNUSED(mgr);
+	ARG_UNUSED(cli);
+	ARG_UNUSED(st);
+
+	key = CLOCK_LOCK();
+	if (!lp.hfxo_req) {
+		/* Released before it started. */
+		CLOCK_UNLOCK(key);
+		return;
+	}
+	if (res < 0) {
+		LP_STAT(radiant_nrf_lp_stats.hfxo_errors++);
+		CLOCK_UNLOCK(key);
+		return;
+	}
+	lp.hfxo_ready = true;
+	if (lp.state == LP_AWAKE && lp.hfxo_wait) {
+		/* EDGE 2 started the TIMER on HFINT: restore the exact relation
+		 * on the crystal, then grant. */
+		lp.hfxo_wait = false;
+		lp_reanchor_arm_locked();
+		settle = true;
+	} else if (lp.state == LP_WAKING && lp.sw_start_pending) {
+		lp_sw_start_locked();
+		settle = true;
+	}
+	CLOCK_UNLOCK(key);
+	if (settle) {
+		lp_settle();
+	}
+}
+
+/* Under CLOCK_LOCK. */
+static void lp_hfxo_on_locked(void)
+{
+	int r;
+
+	if (lp.hfxo_req) {
+		return;
+	}
+	lp_constlat(true);
+	lp.hfxo_req = true;
+	lp.hfxo_ready = false;
+	lp.hfxo_req_tick = lp_ticks();
+	POWER_DIAG(radiant_power_diag_hfxo(true));
+	sys_notify_init_callback(&lp.hf_cli.notify, lp_hfxo_cb);
+	r = onoff_request(lp.hf_mgr, &lp.hf_cli);
+	if (r < 0) {
+		LP_STAT(radiant_nrf_lp_stats.hfxo_errors++);
+	}
+}
+
+/* Under CLOCK_LOCK. */
+static void lp_hfxo_off_locked(void)
+{
+	if (lp.hfxo_req) {
+		lp.hfxo_req = false;
+		lp.hfxo_ready = false;
+		(void)onoff_cancel_or_release(lp.hf_mgr, &lp.hf_cli);
+		POWER_DIAG(radiant_power_diag_hfxo(false));
+	}
+	lp_constlat(false);
+}
+
+/*
+ * The boot request, in place of clock_control_on(): the HFXO's onoff manager
+ * and the blocking clock_control API may not both control it (the driver
+ * answers -EPERM), and every later request goes through the manager. Thread
+ * context, radiant_radio_init().
+ */
+static int lp_hfxo_boot(void)
+{
+	int r;
+
+	if (lp.hfxo_req && lp.hfxo_ready) {
+		return 0;   /* an init retry: still held from the first attempt */
+	}
+	lp.hf_mgr = z_nrf_clock_control_get_onoff(CLOCK_CONTROL_NRF_SUBSYS_HF);
+	if (lp.hf_mgr == NULL) {
+		return -ENODEV;
+	}
+	lp.hfxo_ready = false;
+	lp.hfxo_req = true;
+	sys_notify_init_callback(&lp.hf_cli.notify, lp_hfxo_cb);
+	r = onoff_request(lp.hf_mgr, &lp.hf_cli);
+	if (r < 0) {
+		lp.hfxo_req = false;
+		return r;
+	}
+	for (uint32_t i = 0u; i < 5000u && !lp.hfxo_ready; i++) {
+		k_busy_wait(10);
+	}
+	return lp.hfxo_ready ? 0 : -ETIMEDOUT;
+}
+
+/* ---- Compares ---- */
+
+static void lp_anchor_handler(int32_t id, uint64_t expire, void *user);
+static void lp_hf_handler(int32_t id, uint64_t expire, void *user);
+
+/*
+ * Arm the anchor channel at `tick` for `what`, with CC5 primed so a missing
+ * capture is recognisable. False, with nothing armed, if the compare is not
+ * still LP_POSTWRITE_LEAD ahead when re-read after the write (a late anchor).
+ * Under CLOCK_LOCK.
+ */
+static bool lp_set_anchor_locked(uint64_t tick, enum lp_anchor what)
+{
+	int rc;
+
+	nrf_timer_cc_set(TIMER_ADDR, LP_CC_ANCHOR,
+			 (what == LP_ANCHOR_WAKE) ? LP_CC5_UNSET
+						  : timer_capture(CC_NOW) + 0x80000000u);
+	lp.anchor = (uint8_t)what;
+	lp.anchor_tick = tick;
+	rc = z_nrf_grtc_timer_set(lp.ch_anchor, tick, lp_anchor_handler, NULL);
+	if (rc != 0 ||
+	    !radiant_lp_compare_in_time(&lp.tb, lp_ticks(), tick, LP_POSTWRITE_LEAD)) {
+		z_nrf_grtc_timer_abort(lp.ch_anchor);
+		lp.anchor = LP_ANCHOR_NONE;
+		LP_STAT(radiant_nrf_lp_stats.late_anchors++);
+		return false;
+	}
+	return true;
+}
+
+/* EDGE 1 and rebases anchor nothing: a late one is merely early or late
+ * interrupt. Still checked, so a stale value is never left armed. */
+static bool lp_set_hf_locked(uint64_t tick, enum lp_hf what)
+{
+	int rc;
+
+	lp.hf = (uint8_t)what;
+	lp.hf_tick = tick;
+	rc = z_nrf_grtc_timer_set(lp.ch_hf, tick, lp_hf_handler, NULL);
+	if (rc != 0 ||
+	    !radiant_lp_compare_in_time(&lp.tb, lp_ticks(), tick, LP_POSTWRITE_LEAD)) {
+		z_nrf_grtc_timer_abort(lp.ch_hf);
+		lp.hf = LP_HF_NONE;
+		return false;
+	}
+	return true;
+}
+
+static void lp_cancel_edges_locked(void)
+{
+	if (lp.hf != LP_HF_NONE) {
+		z_nrf_grtc_timer_abort(lp.ch_hf);
+		lp.hf = LP_HF_NONE;
+	}
+	if (lp.anchor != LP_ANCHOR_NONE) {
+		z_nrf_grtc_timer_abort(lp.ch_anchor);
+		lp.anchor = LP_ANCHOR_NONE;
+	}
+}
+
+/* Under CLOCK_LOCK, TIMER running. A failure is counted and left: the next
+ * release then takes the TIMER's reading, as it would without the re-anchor. */
+static void lp_reanchor_arm_locked(void)
+{
+	(void)lp_set_anchor_locked(radiant_lp_release_edge(&lp.tb, lp_ticks(), LP_MIN_LEAD),
+				   LP_ANCHOR_REANCHOR);
+}
+
+/* ---- Decisions ---- */
+
+static bool lp_should_sleep_locked(uint64_t now, uint64_t next)
+{
+	return radiant_lp_should_sleep(now, next, lp.wake_lead_us, lp.lf_overhead_us,
+				       CONFIG_RADIANT_NRF_LP_KEEP_ON_US, lp.linger_until);
+}
+
+/* Commit a release: arm its edge. Under CLOCK_LOCK, state AWAKE. False (still
+ * awake, nothing armed) on a late anchor. */
+static bool lp_commit_release_locked(void)
+{
+	uint64_t edge = radiant_lp_release_edge(&lp.tb, lp_ticks(), LP_MIN_LEAD);
+
+	if (lp.anchor == LP_ANCHOR_REANCHOR) {
+		/* Superseded: the release captures the same TIMER. */
+		z_nrf_grtc_timer_abort(lp.ch_anchor);
+		lp.anchor = LP_ANCHOR_NONE;
+	}
+	if (!lp_set_anchor_locked(edge, LP_ANCHOR_RELEASE)) {
+		return false;
+	}
+	lp_set_state(LP_RELEASING);
+	return true;
+}
+
+/* Call off a committed release for a nearer arm, only while its compare is
+ * certainly still ahead. Under CLOCK_LOCK, state RELEASING. */
+static bool lp_cancel_release_locked(void)
+{
+	if (!radiant_lp_compare_in_time(&lp.tb, lp_ticks(), lp.anchor_tick,
+					LP_POSTWRITE_LEAD)) {
+		return false;
+	}
+	z_nrf_grtc_timer_abort(lp.ch_anchor);
+	lp.anchor = LP_ANCHOR_NONE;
+	lp_set_state(LP_AWAKE);
+	LP_STAT(radiant_nrf_lp_stats.release_cancels++);
+	return true;
+}
+
+static void lp_want_locked(uint64_t t_from)
+{
+	lp.want = true;
+	lp.want_t = t_from;
+	lp.grant_owed = false;
+}
+
+static void lp_late_anchor_locked(void);
+
+/*
+ * Wake now: request the HFXO in software and place EDGE 2 one start-up later
+ * (or at the wanted operation's own EDGE 2 if that is later still). Under
+ * CLOCK_LOCK, state ASLEEP.
+ */
+static void lp_wake_asap_locked(void)
+{
+	uint64_t now_t;
+	uint64_t e2;
+	uint64_t ideal;
+
+	lp_cancel_edges_locked();
+	lp_set_state(LP_WAKING);
+	lp_hfxo_on_locked();
+	LP_STAT(radiant_nrf_lp_stats.asap_wakes++);
+	now_t = lp_ticks();
+	e2 = lp.hfxo_ready ? now_t + LP_MIN_LEAD
+			   : lp.hfxo_req_tick + lp_us_to_ticks_ceil(LP_HFXO_LEAD_US);
+	if (e2 < now_t + LP_MIN_LEAD) {
+		e2 = now_t + LP_MIN_LEAD;
+	}
+	if (lp.want &&
+	    radiant_lp_wake_compare(&lp.tb, &lp.clk,
+				    radiant_lp_wake_at(lp.want_t, LP_ARM_LEAD_US),
+				    LP_MAX_SLEEP_TICKS, &ideal) == RADIANT_LP_WAKE_OK &&
+	    ideal > e2) {
+		e2 = ideal;
+	}
+	if (!lp_set_anchor_locked(e2, LP_ANCHOR_WAKE)) {
+		lp_late_anchor_locked();
+	}
+}
+
+/* Plan the wake for the wanted operation. Under CLOCK_LOCK, state ASLEEP. */
+static void lp_plan_locked(void)
+{
+	struct radiant_lp_wake_plan p;
+	enum radiant_lp_wake_rc rc;
+
+	lp_cancel_edges_locked();
+	if (!lp.want) {
+		return;   /* nothing to wake for: the extended counter never wraps */
+	}
+	rc = radiant_lp_wake_plan(&lp.tb, &lp.clk, lp.want_t, LP_ARM_LEAD_US,
+				  LP_HFXO_LEAD_US, LP_MIN_LEAD, LP_MAX_SLEEP_TICKS, &p);
+	if (rc == RADIANT_LP_WAKE_CLAMPED) {
+		if (lp_set_hf_locked(p.timer_cmp, LP_HF_REBASE)) {
+			return;
+		}
+	} else if (rc == RADIANT_LP_WAKE_OK &&
+		   radiant_lp_compare_in_time(&lp.tb, lp_ticks(), p.hfxo_cmp, LP_MIN_LEAD)) {
+		if (lp_set_anchor_locked(p.timer_cmp, LP_ANCHOR_WAKE) &&
+		    lp_set_hf_locked(p.hfxo_cmp, LP_HF_EDGE1)) {
+			return;
+		}
+		lp_cancel_edges_locked();
+	}
+	lp_wake_asap_locked();
+}
+
+/*
+ * A new operation wanted while the wake is under way. The wake only moves
+ * earlier: a later operation is decided again once awake (lp_settle()).
+ * Under CLOCK_LOCK, state WAKING.
+ */
+static void lp_wake_earlier_locked(void)
+{
+	uint64_t t2;
+	uint64_t now_t;
+	uint64_t floor_t;
+
+	if (lp.anchor != LP_ANCHOR_WAKE ||
+	    radiant_lp_wake_compare(&lp.tb, &lp.clk,
+				    radiant_lp_wake_at(lp.want_t, LP_ARM_LEAD_US),
+				    LP_MAX_SLEEP_TICKS, &t2) == RADIANT_LP_WAKE_CLAMPED ||
+	    t2 >= lp.anchor_tick) {
+		return;
+	}
+	now_t = lp_ticks();
+	floor_t = now_t + LP_MIN_LEAD;
+	if (!lp.hfxo_ready) {
+		uint64_t up = lp.hfxo_req_tick + lp_us_to_ticks_ceil(LP_HFXO_LEAD_US);
+
+		floor_t = (up > floor_t) ? up : floor_t;
+	}
+	if (t2 < floor_t) {
+		t2 = floor_t;
+	}
+	if (t2 >= lp.anchor_tick ||
+	    !radiant_lp_compare_in_time(&lp.tb, now_t, lp.anchor_tick, LP_MIN_LEAD)) {
+		return;
+	}
+	if (!lp_set_anchor_locked(t2, LP_ANCHOR_WAKE)) {
+		lp_late_anchor_locked();
+	}
+}
+
+/* ---- Edges ---- */
+
+/* RELEASE. Under CLOCK_LOCK, state RELEASING. False if it did not sleep. */
+static bool lp_release_edge_locked(uint64_t edge)
+{
+	uint64_t timer_us;
+	int64_t  diff = 0;
+	bool     exact = lp.clk.timer_at_anchor;
+	bool     took_lf;
+
+	if (!lp_capture_time(&timer_us)) {
+		/* No capture on the edge: nothing is stopped. */
+		LP_STAT(radiant_nrf_lp_stats.late_anchors++);
+		lp_set_state(LP_AWAKE);
+		return false;
+	}
+	nrf_timer_task_trigger(TIMER_ADDR, NRF_TIMER_TASK_STOP);
+	nrf_timer_task_trigger(TIMER_ADDR, NRF_TIMER_TASK_CLEAR);
+	took_lf = radiant_lp_release(&lp.tb, &lp.clk, edge, timer_us,
+				     RADIANT_LP_RELEASE_TOL_US, &diff);
+	ARG_UNUSED(took_lf);
+	ARG_UNUSED(exact);
+	LP_STAT(if (took_lf) {
+			radiant_nrf_lp_stats.lf_taken++;
+		} else {
+			radiant_nrf_lp_stats.timer_taken++;
+		}
+		if (exact) {
+			uint64_t mag = (uint64_t)((diff < 0) ? -diff : diff) >> lp.tb.shift;
+
+			radiant_nrf_lp_stats.last_disagree_q =
+				(diff > INT32_MAX) ? INT32_MAX
+				: (diff < INT32_MIN) ? INT32_MIN : (int32_t)diff;
+			LP_STAT_MAX(max_disagree_us, mag);
+			if (!took_lf) {
+				radiant_nrf_lp_stats.disagreements++;
+			}
+		});
+	lp_set_state(LP_ASLEEP);
+	lp_hfxo_off_locked();
+	LP_STAT(radiant_nrf_lp_stats.sleeps++);
+	lp_plan_locked();
+	return true;
+}
+
+/* Start the TIMER in software on a stable HFXO (a late anchor's recovery).
+ * Under CLOCK_LOCK. */
+static void lp_sw_start_locked(void)
+{
+	uint64_t t;
+
+	/* From zero, whatever a stray edge may have done meanwhile. */
+	nrf_timer_task_trigger(TIMER_ADDR, NRF_TIMER_TASK_STOP);
+	nrf_timer_task_trigger(TIMER_ADDR, NRF_TIMER_TASK_CLEAR);
+	t = lp_ticks();
+	nrf_timer_task_trigger(TIMER_ADDR, NRF_TIMER_TASK_START);
+	radiant_clock.base = radiant_lp_wake(&lp.tb, &lp.clk, t, false);
+	radiant_clock.last = 0u;
+	lp.sw_start_pending = false;
+	lp.just_woke = true;
+	lp_set_state(LP_AWAKE);
+	LP_STAT(radiant_nrf_lp_stats.wakes++);
+	lp_reanchor_arm_locked();
+}
+
+/* EDGE 2 cannot be trusted. Under CLOCK_LOCK, state WAKING. */
+static void lp_late_anchor_locked(void)
+{
+	if (lp.anchor != LP_ANCHOR_NONE) {
+		z_nrf_grtc_timer_abort(lp.ch_anchor);
+		lp.anchor = LP_ANCHOR_NONE;
+	}
+	lp.fail_owed = lp.want;
+	if (lp.hfxo_ready) {
+		lp_sw_start_locked();
+	} else {
+		lp.sw_start_pending = true;
+	}
+}
+
+/* EDGE 2. Under CLOCK_LOCK, state WAKING. True if awake on a stable HFXO. */
+static bool lp_wake_edge_locked(uint64_t edge)
+{
+	uint32_t cc5 = nrf_timer_cc_get(TIMER_ADDR, LP_CC_ANCHOR);
+
+	if (cc5 == LP_CC5_UNSET) {
+		/* The edge did not start the TIMER. */
+		LP_STAT(radiant_nrf_lp_stats.late_anchors++);
+		lp_late_anchor_locked();
+		return lp.state == LP_AWAKE;
+	}
+	radiant_clock.base = radiant_lp_wake(&lp.tb, &lp.clk, edge, lp.hfxo_ready);
+	radiant_clock.last = cc5;
+	lp.just_woke = true;
+	lp_set_state(LP_AWAKE);
+	LP_STAT(radiant_nrf_lp_stats.wakes++);
+	if (!lp.hfxo_ready) {
+		lp.hfxo_wait = true;
+		LP_STAT(radiant_nrf_lp_stats.hfxo_late_edge2++);
+		return false;
+	}
+	return true;
+}
+
+static void lp_anchor_handler(int32_t id, uint64_t expire, void *user)
+{
+	unsigned int key;
+	uint8_t      what;
+	bool         settle = false;
+
+	ARG_UNUSED(id);
+	ARG_UNUSED(user);
+
+	key = CLOCK_LOCK();
+	what = lp.anchor;
+	if (what == LP_ANCHOR_NONE || expire != lp.anchor_tick) {
+		LP_STAT(radiant_nrf_lp_stats.spurious++);
+		CLOCK_UNLOCK(key);
+		return;
+	}
+	lp.anchor = LP_ANCHOR_NONE;
+	switch (what) {
+	case LP_ANCHOR_RELEASE:
+		if (lp.state == LP_RELEASING) {
+			settle = !lp_release_edge_locked(expire);
+		}
+		break;
+	case LP_ANCHOR_WAKE:
+		if (lp.state == LP_WAKING) {
+			settle = lp_wake_edge_locked(expire);
+		}
+		break;
+	default:
+		if (lp.state == LP_AWAKE) {
+			uint64_t timer_us;
+
+			if (!lp_capture_time(&timer_us)) {
+				LP_STAT(radiant_nrf_lp_stats.late_anchors++);
+			} else if (radiant_lp_reanchor(&lp.tb, &lp.clk, expire, timer_us)) {
+				LP_STAT(radiant_nrf_lp_stats.reanchors++);
+			}
+		}
+		break;
+	}
+	CLOCK_UNLOCK(key);
+	if (settle) {
+		lp_settle();
+	}
+}
+
+static void lp_hf_handler(int32_t id, uint64_t expire, void *user)
+{
+	unsigned int key;
+	uint8_t      what;
+
+	ARG_UNUSED(id);
+	ARG_UNUSED(user);
+
+	key = CLOCK_LOCK();
+	what = lp.hf;
+	if (what == LP_HF_NONE || expire != lp.hf_tick || lp.state != LP_ASLEEP) {
+		LP_STAT(radiant_nrf_lp_stats.spurious++);
+		CLOCK_UNLOCK(key);
+		return;
+	}
+	lp.hf = LP_HF_NONE;
+	if (what == LP_HF_REBASE) {
+		radiant_lp_rebase(&lp.tb, &lp.clk, expire);
+		lp_plan_locked();
+	} else {
+		/* EDGE 1. */
+		lp_set_state(LP_WAKING);
+		lp_hfxo_on_locked();
+	}
+	CLOCK_UNLOCK(key);
+}
+
+/* ---- After a wake, a grant, a terminal ---- */
+
+/* Fail the staged operation (a late EDGE 2). No lock held. */
+static void lp_fail_staged(void)
+{
+	unsigned int key = irq_lock();
+	bool was = radiant_staged.pending;
+
+	radiant_staged.pending = false;
+	irq_unlock(key);
+	if (was) {
+		LP_STAT(radiant_nrf_lp_stats.late_wakes++);
+		deliver_terminal(RADIANT_RADIO_STATUS_FAILED);
+	}
+}
+
+/* Programme the staged operation. No lock held, state AWAKE on the HFXO. */
+static void lp_grant(void)
+{
+	radiant_nrf_gate_on_grant();
+	if (radiant_op.gate_failed) {
+		/* program_*()'s ETIME: the wake came too late for it. */
+		LP_STAT(radiant_nrf_lp_stats.late_wakes++);
+		radiant_nrf_gate_finish_failed();
+	}
+}
+
+/* Sleep again if nothing is armed (RADIANT_LP_NO_OP) and no linger holds. */
+static void lp_reconsider(void)
+{
+	unsigned int key;
+
+	if (lp.state == LP_OFF) {
+		return;
+	}
+	key = CLOCK_LOCK();
+	if (lp.state == LP_AWAKE && !lp.hfxo_wait && !lp.want &&
+	    radiant_op.kind == OP_NONE &&
+	    lp_should_sleep_locked(lp_now_locked(), RADIANT_LP_NO_OP)) {
+		(void)lp_commit_release_locked();
+	}
+	CLOCK_UNLOCK(key);
+}
+
+/*
+ * Awake on a stable HFXO, after a wake or a release that did not happen:
+ * grant the wanted operation, fail it (late anchor), sleep again if it turned
+ * out to be far (the wake only moves earlier), or reconsider with nothing
+ * wanted. No lock held.
+ */
+static void lp_settle(void)
+{
+	unsigned int key = CLOCK_LOCK();
+	bool fail = false;
+	bool grant = false;
+
+	if (lp.state != LP_AWAKE || lp.hfxo_wait) {
+		CLOCK_UNLOCK(key);
+		return;
+	}
+	if (lp.want) {
+		uint64_t now = lp_now_locked();
+
+		if (lp.fail_owed) {
+			fail = radiant_staged.pending;
+		} else if (lp_should_sleep_locked(now, lp.want_t) &&
+			   lp_commit_release_locked()) {
+			CLOCK_UNLOCK(key);
+			return;
+		} else {
+			if (lp.just_woke) {
+				LP_STAT_MAX(max_wake_slack_us,
+					    (lp.want_t > now) ? lp.want_t - now : 0u);
+				LP_STAT_MAX(max_wake_late_us,
+					    radiant_lp_late_by_us(now, lp.want_t,
+								  ARM_SETUP_US));
+			}
+			grant = radiant_staged.pending;
+		}
+		if (fail || grant) {
+			lp.want = false;
+			lp.fail_owed = false;
+		} else {
+			/* The arm is still copying its request: lp_staged() finishes. */
+			lp.grant_owed = true;
+		}
+	}
+	lp.just_woke = false;
+	CLOCK_UNLOCK(key);
+	if (fail) {
+		lp_fail_staged();
+	} else if (grant) {
+		lp_grant();
+	}
+	lp_reconsider();
+}
+
+/* LP_HOOK: an arm call has just staged its request (radiant_staged.pending). */
+static void lp_staged(void)
+{
+	unsigned int key = CLOCK_LOCK();
+	bool owed = lp.grant_owed;
+	bool fail = lp.fail_owed;
+
+	if (owed) {
+		lp.grant_owed = false;
+		lp.want = false;
+		lp.fail_owed = false;
+	}
+	CLOCK_UNLOCK(key);
+	if (!owed) {
+		return;
+	}
+	if (fail) {
+		lp_fail_staged();
+	} else {
+		lp_grant();
+	}
+}
+
+/* LP_HOOK: the end of deliver_terminal(), after the core's callback. */
+static void lp_terminal_done(void)
+{
+	lp_reconsider();
+}
+
+/* LP_HOOK: radiant_radio_enable(). Linger, and be awake for what follows. */
+static void lp_on_enable(void)
+{
+	unsigned int key;
+
+	if (lp.state == LP_OFF) {
+		return;
+	}
+	key = CLOCK_LOCK();
+	lp.linger_until = radiant_lp_linger(lp.linger_until, lp_now_locked(), LP_LINGER_US);
+	if (lp.state == LP_ASLEEP) {
+		lp_wake_asap_locked();
+	}
+	CLOCK_UNLOCK(key);
+}
+
+/* ---- The gate (radiant_radio_nrf_gate.h), in place of the direct gate ---- */
+
+enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
+			  radiant_time_t t_to, uint16_t follow_on_us,
+			  uint8_t prio)
+{
+	unsigned int key;
+	enum gate_rc rc = GATE_GRANTED;
+	uint64_t now;
+
+	ARG_UNUSED(op);
+	ARG_UNUSED(t_to);
+	ARG_UNUSED(follow_on_us);
+
+	if (lp.state == LP_OFF) {
+		return GATE_GRANTED;
+	}
+	key = CLOCK_LOCK();
+	now = lp_now_locked();
+	if (prio == RADIANT_GATE_PRIO_NORMAL) {
+		lp.linger_until = radiant_lp_linger(lp.linger_until, now, LP_LINGER_US);
+	}
+	switch (lp.state) {
+	case LP_AWAKE:
+		if (lp.hfxo_wait) {
+			/* On HFINT: granted from the HFXO callback. */
+			lp_want_locked(t_from);
+			rc = GATE_PENDING;
+		} else if (lp_should_sleep_locked(now, t_from) &&
+			   lp_commit_release_locked()) {
+			lp_want_locked(t_from);
+			rc = GATE_PENDING;
+		}
+		break;
+	case LP_RELEASING:
+		if (!lp_should_sleep_locked(now, t_from) && lp_cancel_release_locked()) {
+			break;
+		}
+		lp_want_locked(t_from);   /* planned by the release interrupt */
+		rc = GATE_PENDING;
+		break;
+	case LP_ASLEEP:
+		lp_want_locked(t_from);
+		lp_plan_locked();
+		rc = GATE_PENDING;
+		break;
+	default: /* LP_WAKING */
+		lp_want_locked(t_from);
+		lp_wake_earlier_locked();
+		rc = GATE_PENDING;
+		break;
+	}
+	CLOCK_UNLOCK(key);
+	return rc;
+}
+
+void gate_release(void)
+{
+	unsigned int key = CLOCK_LOCK();
+
+	/* The operation ended or failed: nothing is wanted any more. */
+	lp.want = false;
+	lp.grant_owed = false;
+	lp.fail_owed = false;
+	CLOCK_UNLOCK(key);
+}
+
+void gate_forget_pending(void)
+{
+	unsigned int key = CLOCK_LOCK();
+
+	lp.want = false;
+	lp.grant_owed = false;
+	lp.fail_owed = false;
+	/* Asleep, EDGE 1 has not fired and EDGE 2 is a start-up beyond it, so
+	 * both can go; the wake is spared. Once waking, it runs its course. */
+	if (lp.state == LP_ASLEEP) {
+		lp_cancel_edges_locked();
+	}
+	CLOCK_UNLOCK(key);
+}
+
+bool gate_held(void)
+{
+	return false;
+}
+
+bool gate_in_signal(void)
+{
+	return false;
+}
+
+bool gate_extend(uint32_t us)
+{
+	ARG_UNUSED(us);
+	return false;
+}
+
+int gate_init(void)
+{
+	return RADIANT_RADIO_OK_RC;
+}
+
+void gate_shutdown(void)
+{
+}
+
+uint32_t gate_min_arm_lead_us(void)
+{
+	/* Unchanged: an arm inside the wake lead fails late, counted, rather
+	 * than widening every window's exclusion radius. */
+	return 0u;
+}
+
+uint32_t gate_max_window_us(void)
+{
+	return 0u;
+}
+
+/* ---- Init ---- */
+
+static void lp_refuse(const char *why, int err)
+{
+	if (lp.ch_anchor >= 0) {
+		z_nrf_grtc_timer_chan_free(lp.ch_anchor);
+		lp.ch_anchor = -1;
+	}
+	if (lp.ch_hf >= 0) {
+		z_nrf_grtc_timer_chan_free(lp.ch_hf);
+		lp.ch_hf = -1;
+	}
+	lp_set_state(LP_OFF);
+	LP_STAT(radiant_nrf_lp_stats.refused = 1u);
+	LOG_WRN("low power refused (%s, %d): the HFXO stays on as without "
+		"CONFIG_RADIANT_NRF_LOW_POWER", why, err);
+}
+
+/*
+ * After the TIMER runs and the backend's connections exist. Any failure
+ * leaves the option off for this boot (state LP_OFF: always awake, the boot
+ * HFXO request and CONSTLAT held), which is the build without it.
+ */
+static void lp_init(void)
+{
+	nrf_clock_lfclk_t src = (nrf_clock_lfclk_t)0;
+	unsigned int key;
+	int err;
+
+	if (lp.state != LP_OFF) {
+		return;
+	}
+	if (!radiant_lp_tb_init(&lp.tb, RADIANT_LP_GRTC_NUM, RADIANT_LP_GRTC_SHIFT,
+				RADIANT_LP_EXTENDED_WIDTH)) {
+		lp_refuse("counter format", -EINVAL);
+		return;
+	}
+	/* The gaps are timed on the LF clock: only the crystal will do. */
+	z_nrf_clock_control_lf_on(CLOCK_CONTROL_NRF_LF_START_STABLE);
+	if (!nrf_clock_is_running(NRF_CLOCK, NRF_CLOCK_DOMAIN_LFCLK, &src) ||
+	    src != NRF_CLOCK_LFCLK_XTAL) {
+		lp_refuse("LFCLK is not running from the crystal", (int)src);
+		return;
+	}
+	lp.ch_anchor = z_nrf_grtc_timer_chan_alloc();
+	lp.ch_hf = (lp.ch_anchor >= 0) ? z_nrf_grtc_timer_chan_alloc() : -1;
+	if (lp.ch_anchor < 0 || lp.ch_hf < 0) {
+		lp_refuse("no free GRTC channel", -ENOMEM);
+		return;
+	}
+	err = nrfx_gppi_conn_alloc(z_nrf_grtc_timer_compare_evt_address_get(lp.ch_anchor),
+				   nrf_timer_task_address_get(TIMER_ADDR, NRF_TIMER_TASK_START),
+				   &lp.conn_anchor);
+	if (err == 0) {
+		err = nrfx_gppi_ep_attach(nrf_timer_task_address_get(
+						  TIMER_ADDR,
+						  nrf_timer_capture_task_get(LP_CC_ANCHOR)),
+					  lp.conn_anchor);
+	}
+	if (err != 0) {
+		lp_refuse("anchor (D)PPI connection", err);
+		return;
+	}
+	/* Permanent: START on a running TIMER does nothing. */
+	nrfx_gppi_conn_enable(lp.conn_anchor);
+
+	radiant_lp_clock_init(&lp.clk);
+	lp.wake_lead_us = radiant_lp_wake_lead_us(&lp.tb, LP_ARM_LEAD_US, LP_HFXO_LEAD_US);
+	lp.lf_overhead_us = radiant_lp_lf_overhead_us(&lp.tb, LP_MIN_LEAD);
+
+	key = CLOCK_LOCK();
+	lp.clk.hwm_us = clock_fold(timer_capture(CC_NOW));
+	lp_set_state(LP_AWAKE);
+	/* The boot TIMER has free-run since before any LF edge was known. */
+	lp_reanchor_arm_locked();
+	CLOCK_UNLOCK(key);
+
+	LOG_INF("low power on: sleep beyond %u us (wake lead %u, LF %u, keep-on %u), "
+		"GRTC ch %d/%d", (unsigned)(lp.wake_lead_us + lp.lf_overhead_us +
+					    CONFIG_RADIANT_NRF_LP_KEEP_ON_US),
+		(unsigned)lp.wake_lead_us, (unsigned)lp.lf_overhead_us,
+		(unsigned)CONFIG_RADIANT_NRF_LP_KEEP_ON_US, (int)lp.ch_anchor,
+		(int)lp.ch_hf);
+}
