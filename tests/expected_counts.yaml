@@ -130,7 +130,10 @@ min_scenarios: 21
 # own refused request). 6100 (+1) with the re-review's two-event case (a
 # stale denial, then the request's START between staging and settle).
 # Merged with master (2026-11-19): 6080 + fix/mpsl-arm-handback's +24 = 6104.
-min_testcases: 6104
+# 6108 (+4) on power/wrapup (2026-11-19): the idle regression guard (no HFXO
+# held or requested while nothing is due within 5 ms) and its positive control,
+# in each of radiant.backend.lp and radiant.backend.lp_rtc.
+min_testcases: 6108
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -182,14 +185,16 @@ min_cases.radiant.lp_clock: 38
 # radiant.backend.lp (power plan pass B3): the nRF backend with
 # CONFIG_RADIANT_NRF_LOW_POWER against a simulated GRTC, HFXO and TIMER.
 # 34 with the GRTC-on-LFLPRC refusal (GRTC only, so not in lp_rtc).
-min_cases.radiant.backend.lp: 34
+# 36 with the idle HFXO guard and its positive control (power plan wrap-up).
+min_cases.radiant.backend.lp: 36
 # radiant.backend.lp_rtc (power plan pass B5): the low-power path on a
 # simulated RTC1 driver and nRF52 TIMER (the rest of the backend keeps its
 # nRF54L shape) - every radiant.backend.lp case but the GRTC-only one, plus
 # 8 of RTC1's own (64-bit
 # arithmetic across 2^24, schedule span, minimum lead, TIMER SHUTDOWN,
 # software start).
-min_cases.radiant.backend.lp_rtc: 41
+# 43 with the idle HFXO guard and its positive control (shared src_lp cases).
+min_cases.radiant.backend.lp_rtc: 43
 # radiant.backend.lp_mpsl (power plan pass B6): CONFIG_RADIANT_NRF_LOW_POWER
 # on the MPSL gate's build - the TIMER stopped between timeslots and started
 # from the GRTC at each SIGNAL_START. 18 with the GRTC-on-LFLPRC refusal.
