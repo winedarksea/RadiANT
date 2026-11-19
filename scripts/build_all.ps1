@@ -641,7 +641,7 @@ try {
             if ($t.ble) {
                 foreach ($sym in @('CONFIG_HRM_BLE_HRS=y',
                                    'CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL=y',
-                                   'CONFIG_MPSL_TIMESLOT_SESSION_COUNT=1')) {
+                                   'CONFIG_MPSL_TIMESLOT_SESSION_COUNT=2')) {
                     if (-not ($cfg | Where-Object { $_ -eq $sym })) {
                         throw "hrm_ble $($t.dir): expected $sym in .config"
                     }
@@ -757,7 +757,7 @@ try {
             if ($t.ble) {
                 foreach ($sym in @('CONFIG_TREADMILL_BLE=y',
                                    'CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL=y',
-                                   'CONFIG_MPSL_TIMESLOT_SESSION_COUNT=1',
+                                   'CONFIG_MPSL_TIMESLOT_SESSION_COUNT=2',
                                    'CONFIG_BT_RSCS=y',
                                    'CONFIG_BT_SMP=y',
                                    'CONFIG_BT_LL_SOFTDEVICE=y')) {

@@ -36,7 +36,24 @@ rsource "../common/Kconfig.antr_api"
 # help text for RADIANT_BACKEND_NRF_GATE_MPSL says so at length. It used to be
 # set by hand in ble.conf, which worked only for as long as somebody remembered
 # to pass that fragment.
+#
+# THE NUMBER IS THE GATE'S SESSIONS, COUNTED FROM WHAT IS ENABLED: one, plus
+# one for RADIANT_GATE_MPSL_D2's second session (default y on every MPSL gate
+# build). Both are opened at radio init and held for the whole uptime.
+#
+# NOT the flash-sync driver's session. NCS v3.4.0 sizes MPSL's pool as
+# MPSL_TIMESLOT_SESSION_COUNT + SOC_FLASH_NRF_RADIO_SYNC_MPSL_TIMESLOT_SESSION_COUNT
+# (nrf/subsys/mpsl/init/mpsl_init.c), and that second symbol is already 1
+# whenever SOC_FLASH_NRF_RADIO_SYNC_MPSL is (the default with MPSL). But the
+# pool is shared and first come, first served: flash_sync_mpsl opens its
+# session per flash operation, long after the gate has opened its own. With
+# `default 1` and D2 on, the gate's second session_open() took the slot NCS
+# had added for flash sync, every settings/NVS write then failed with
+# "mpsl_timeslot_session_open failed: -12" (-NRF_ENOMEM), node_ident_boot()
+# failed with it, and the node fell back to HRM_DEVICE_NUMBER 4242.
+# radiant_radio_nrf_gate_mpsl.c BUILD_ASSERTs this sum when flash sync is on.
 config MPSL_TIMESLOT_SESSION_COUNT
+	default 2 if HRM_BLE_HRS && RADIANT_GATE_MPSL_D2
 	default 1 if HRM_BLE_HRS
 
 # BT_PERIPHERAL_PREF_* is the PPCP characteristic

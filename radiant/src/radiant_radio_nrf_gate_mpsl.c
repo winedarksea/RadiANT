@@ -82,9 +82,25 @@ LOG_MODULE_REGISTER(radiant_gate_mpsl, CONFIG_RADIANT_LOG_LEVEL);
 BUILD_ASSERT(CONFIG_MPSL_TIMESLOT_SESSION_COUNT >= 1,
 	     "CONFIG_MPSL_TIMESLOT_SESSION_COUNT defaults to 0, which sizes "
 	     "MPSL's session array to nothing: the gate links and boots and "
-	     "then never gets air. Set it to 2 (as apps/dongle_thread/"
-	     "thread.conf does) - the SoftDevice Controller takes no public "
-	     "session but the RRAM flash-sync driver adds one invisibly.");
+	     "then never gets air. Set it to the gate's sessions: 1, or 2 "
+	     "with RADIANT_GATE_MPSL_D2.");
+/*
+ * The pool is CONFIG_MPSL_TIMESLOT_SESSION_COUNT plus
+ * CONFIG_SOC_FLASH_NRF_RADIO_SYNC_MPSL_TIMESLOT_SESSION_COUNT (NCS adds the
+ * flash-sync driver's session itself, mpsl_init.c), and it is first come, first
+ * served. The gate opens both its sessions at init and flash_sync_mpsl opens
+ * its own per flash operation, later. So a count that misses D2's second session
+ * does not degrade the gate to single-session as the D2 help promises: the gate
+ * gets both, and every settings/NVS write fails with -NRF_ENOMEM (-12). That
+ * shipped in apps/hrm_ble (identity boot failed, device number 4242).
+ */
+#if defined(CONFIG_RADIANT_GATE_MPSL_D2) && defined(CONFIG_SOC_FLASH_NRF_RADIO_SYNC_MPSL)
+BUILD_ASSERT(CONFIG_MPSL_TIMESLOT_SESSION_COUNT >= 2,
+	     "RADIANT_GATE_MPSL_D2 opens two timeslot sessions: with "
+	     "CONFIG_MPSL_TIMESLOT_SESSION_COUNT < 2 the second takes the "
+	     "session NCS adds for MPSL flash sync and every flash write fails "
+	     "with -12. Raise the count to 2 (plus any other session user).");
+#endif
 #endif
 
 /* Margins */
