@@ -750,6 +750,25 @@ class TestCounterReconstruction(unittest.TestCase):
         counter, _ = rc.resolve_counter(5000, 5000 & 0xFF)
         self.assertEqual(counter, 5000)
 
+    def test_an_exact_128_period_tie_keeps_base_plus_low(self):
+        # radiant_sec.c resolve_counter() starts from base + low and replaces
+        # it only with a strictly nearer rollover, so a candidate exactly 128
+        # periods away on either side loses to base + low (review 2026-11-17
+        # item 3, LOW). Each case: (expected, byte, counter, epoch_delta).
+        cases = (
+            # Lower tie: 0x0090 and 0x0190 are both 0x80 from 0x0110.
+            (0x0110, 0x90, 0x0190, 0),
+            # Upper tie: 0x0110 and 0x0210 are both 0x80 from 0x0190.
+            (0x0190, 0x10, 0x0110, 0),
+            # Lower tie across the wrap: 0xFF90 and 0x10090 from 0x10010.
+            # The C takes 0x10090 - one epoch advance, counter 0x0090.
+            (0x10010, 0x90, 0x0090, 1),
+        )
+        for expected, low, counter, delta in cases:
+            with self.subTest(expected=hex(expected), low=hex(low)):
+                self.assertEqual(rc.resolve_counter(expected, low),
+                                 (counter, delta))
+
 
 class TestNodeIdentity(unittest.TestCase):
     """ADR 0009: what a node with no host derives from K_dev and a counter.
