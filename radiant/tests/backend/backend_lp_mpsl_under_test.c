@@ -79,6 +79,9 @@ NRF_TIMER_Type fake_timer_regs;
 NRF_TEMP_Type  fake_temp_regs;
 struct fake_hw fake_hw;
 nrf_clock_lfclk_t fake_lfclk_src;
+nrf_grtc_clksel_t fake_grtc_clksel;
+/* lmt_reset_grtc_lflprc(): the next boot's GRTC runs from the LFLPRC. */
+static bool lmt_next_lflprc;
 
 static struct {
 	uint64_t ns;        /* world time */
@@ -281,6 +284,8 @@ static void lmt_boot(nrf_clock_lfclk_t lf)
 	lp_arming = false;
 	lp_ed_lost = false;
 	fake_lfclk_src = lf;
+	fake_grtc_clksel = lmt_next_lflprc ? NRF_GRTC_CLKSEL_LFLPRC : NRF_GRTC_CLKSEL_LFXO;
+	lmt_next_lflprc = false;
 	fake_hw.counter_fn = fw_timer;
 	fake_hw.task_hook = fw_task;
 	fw.lf_off = LMT_LF_OFFSET;
@@ -310,6 +315,11 @@ static void lmt_boot(nrf_clock_lfclk_t lf)
 
 void lmt_reset(void) { lmt_boot(NRF_CLOCK_LFCLK_XTAL); }
 void lmt_reset_lf_rc(void) { lmt_boot(NRF_CLOCK_LFCLK_RC); }
+void lmt_reset_grtc_lflprc(void)
+{
+	lmt_next_lflprc = true;
+	lmt_boot(NRF_CLOCK_LFCLK_XTAL);
+}
 
 void lmt_stats(struct lmt_stats *o)
 {

@@ -36,6 +36,8 @@ struct lmt_stats {
  * LMT_W0, low power initialised 50 us later (or refused, with an RC LFCLK). */
 void     lmt_reset(void);
 void     lmt_reset_lf_rc(void);
+/* LFCLK on the crystal but the GRTC on the LFLPRC. */
+void     lmt_reset_grtc_lflprc(void);
 void     lmt_stats(struct lmt_stats *out);
 
 void     lmt_run(uint64_t us);

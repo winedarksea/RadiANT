@@ -229,6 +229,7 @@
 #include <zephyr/sys/onoff.h>
 #if defined(CONFIG_NRF_GRTC_TIMER)
 #include <zephyr/drivers/timer/nrf_grtc_timer.h>
+#include <hal/nrf_grtc.h>
 #elif defined(CONFIG_NRF_RTC_TIMER)
 #include <zephyr/drivers/timer/nrf_rtc_timer.h>
 #endif
@@ -485,6 +486,22 @@ static uint64_t lp_cnt_wait_edge(void)
 
 BUILD_ASSERT(RADIANT_LP_LF_HZ == LP_CNT_HZ,
 	     "the low-power counter format does not match the system timer's rate");
+
+/*
+ * True if the LF counter runs from an RC oscillator although LFCLK is on the
+ * crystal: the GRTC has its own source select (CLKCFG.CLKSEL), and
+ * NRF_GRTC_TIMER_SOURCE_LFLPRC points it at the LFLPRC. Kconfig refuses that
+ * symbol; this also catches a CLKSEL written elsewhere (a bootloader, or a
+ * build with NRF_GRTC_START_SYSCOUNTER off, which leaves CLKSEL alone).
+ */
+static bool lp_cnt_on_rc(void)
+{
+#if defined(CONFIG_NRF_GRTC_TIMER) && defined(NRF_GRTC_HAS_CLKSEL_LFLPRC) && 	NRF_GRTC_HAS_CLKSEL_LFLPRC
+	return nrf_grtc_clksel_get(NRF_GRTC) == NRF_GRTC_CLKSEL_LFLPRC;
+#else
+	return false;
+#endif
+}
 
 /*
  * Stop the radio TIMER for a sleep. On parts with a TIMER SHUTDOWN task (the
@@ -1800,6 +1817,10 @@ static void lp_init(void)
 		lp_refuse("LFCLK is not running from the crystal", (int)src);
 		return;
 	}
+	if (lp_cnt_on_rc()) {
+		lp_refuse(LP_CNT_NAME " runs from the LFLPRC, not the crystal", -EINVAL);
+		return;
+	}
 	lp.ch_anchor = lp_cnt_chan_alloc();
 	lp.ch_hf = (lp.ch_anchor >= 0) ? lp_cnt_chan_alloc() : -1;
 	if (lp.ch_anchor < 0 || lp.ch_hf < 0) {
@@ -2138,6 +2159,10 @@ static void lp_init(void)
 	if (!nrf_clock_is_running(NRF_CLOCK, NRF_CLOCK_DOMAIN_LFCLK, &src) ||
 	    src != NRF_CLOCK_LFCLK_XTAL) {
 		lp_refuse("LFCLK is not running from the crystal", (int)src);
+		return;
+	}
+	if (lp_cnt_on_rc()) {
+		lp_refuse(LP_CNT_NAME " runs from the LFLPRC, not the crystal", -EINVAL);
 		return;
 	}
 

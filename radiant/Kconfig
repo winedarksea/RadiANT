@@ -774,9 +774,13 @@ config RADIANT_NRF_LOW_POWER
 	# meet for an ANT+ period, and a clock SYNTHESISED from the HFCLK would
 	# keep the HFXO this exists to release running (the apps/dongle
 	# synth.conf / Pro Micro `_synth` builds). So the crystal source only.
-	# Pass B3's backend is to refuse at run time too if LFCLK is not
-	# running from the crystal.
+	# The backend also refuses at run time if LFCLK is not running from
+	# the crystal.
 	depends on CLOCK_CONTROL_NRF_K32SRC_XTAL
+	# The GRTC selects its own source, whatever LFCLK runs from: LFXO and
+	# SYSTEM_LFCLK (the crystal, given the line above) are fine, LFLPRC is
+	# an RC. The backend refuses at run time too if GRTC CLKSEL is LFLPRC.
+	depends on !NRF_GRTC_TIMER_SOURCE_LFLPRC
 	# The LF counter is the system timer's: two channels of the GRTC
 	# (nRF54L) or two RTC1 user channels (nRF52; the count is defaulted to
 	# 2 below), allocated at init (a shortage refuses at run time). The RTC
