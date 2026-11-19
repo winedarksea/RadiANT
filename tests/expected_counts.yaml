@@ -115,7 +115,10 @@ min_scenarios: 21
 # in scenarios whose floors were not raised. 6076 (+3) with the B6 review's
 # backend.lp_mpsl cases (a wake below the high-water mark, sub-tick phases and
 # read latency, an arm preempted by the timeslot's end).
-min_testcases: 6076
+# 6078 (+2) on fix/crc-repair-deliver (Bluefin twister, 2026-11-18, 6878
+# executed): a repaired broadcast reaches the host, a refuted repair does not
+# (radiant.api.crc_repair).
+min_testcases: 6078
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -136,7 +139,9 @@ min_cases.radiant.unit.no_pairing: 1002
 min_cases.radiant.api: 86
 min_cases.radiant.api.sec: 90
 min_cases.radiant.api.sec_host: 104
-min_cases.radiant.api.crc_repair: 87
+# radiant.api.crc_repair: 112, the observed count on fix/crc-repair-deliver
+# (2026-11-18), including the two delivery cases.
+min_cases.radiant.api.crc_repair: 112
 # radiant.api.diag (ADR 0023): the api suite with the 0xF7 counters on.
 # 104 (2026-11-16, Bluefin twister on fix/diag-page9-done-cb): the observed
 # count, including the page-12 api case.
