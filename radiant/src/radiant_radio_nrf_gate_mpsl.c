@@ -1289,15 +1289,57 @@ static void deadline_expired(struct k_timer *t)
  */
 
 /*
+ * The grant generation (gate_grant_gen(), radiant_radio_nrf_gate.h): odd from
+ * SIGNAL_START until the timeslot's first hand-back, even after it. Every write
+ * is under the zero-latency lock (a no-op nesting inside the signal itself), so
+ * a low-priority hand-back cannot lose an update to a START, and a backend
+ * span under the same lock reads one value.
+ */
+static volatile uint32_t grant_gen;
+
+uint32_t gate_grant_gen(void)
+{
+	return grant_gen;
+}
+
+bool gate_request_pending(void)
+{
+	return g.pending;
+}
+
+/* SIGNAL_START, before anything can programme the radio: a fresh odd value. */
+static inline void grant_gen_start(void)
+{
+	const uint32_t zkey = radiant_swi_zli_lock();
+
+	grant_gen = (grant_gen + 2u) | 1u;
+	radiant_swi_zli_unlock(zkey);
+}
+
+/* The loan is over: even. Idempotent, so every path that might end a loan
+ * calls it without knowing whether another already did. */
+static inline void grant_gen_end(void)
+{
+	const uint32_t zkey = radiant_swi_zli_lock();
+
+	grant_gen = (grant_gen + 1u) & ~1u;
+	radiant_swi_zli_unlock(zkey);
+}
+
+/*
  * Returns the radio. Split from timer0_disarm() because gate_release() needs the
  * radio back at once but must leave the TIMER0 compare armed; that compare is the
  * only way MPSL is asked to return ACTION_END. Exactly one call per granted
  * timeslot: a second call hands back a radio the controller already took, and a
  * missed call leaves the 802.15.4 driver's SUBSCRIBE_RXEN swapped out. g.hw_held
  * enforces this.
+ *
+ * The generation ends first, unconditionally: from here an arm still in progress
+ * underneath (a completion's follow-on, an arm from a thread) writes nothing.
  */
 static inline void gate_hand_back(void)
 {
+	grant_gen_end();
 	if (!g.hw_held) {
 		return;
 	}
@@ -1415,6 +1457,9 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		/* A new timeslot: nothing of it is the radio's yet (see
 		 * radiant_nrf_gate_radio_irq_unpend()). Before any path below. */
 		radiant_nrf_gate_on_slot_start();
+		/* A new grant generation: an arm still unwinding from the last
+		 * timeslot (or claimed between the two) writes nothing in this one. */
+		grant_gen_start();
 #if defined(CONFIG_RADIANT_NRF_LOW_POWER)
 		/* MPSL's guaranteed crystal is up: start the backend's TIMER from the
 		 * GRTC (pass B6), before the anchor is read and before anything can
@@ -1956,6 +2001,9 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		rv.callback_action = MPSL_TIMESLOT_SIGNAL_ACTION_NONE;
 	} else if (rv.callback_action == MPSL_TIMESLOT_SIGNAL_ACTION_END) {
 		g.ended = true;
+		/* Every ACTION_END ends the generation (its hand-back already did,
+		 * if the radio was on loan: idempotent). */
+		grant_gen_end();
 		g.ts_live = false;
 		GSTAT(dbg.t_end = (uint32_t)radiant_radio_now());
 		/* A placement held back for this timeslot (place_one()). */
@@ -2242,6 +2290,7 @@ void gate_shutdown(void)
 	g.pending = false;
 	g.granted = false;
 	g.ts_live = false;
+	grant_gen_end();
 #if defined(CONFIG_RADIANT_NRF_LOW_POWER)
 	radiant_nrf_gate_lp_slot_end(true);
 #endif

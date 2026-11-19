@@ -67,12 +67,27 @@ static struct {
 	bool     in_signal;
 	bool     pending;   /* gate_acquire() answers GATE_PENDING (a staged arm) */
 	uint32_t releases;
+	uint32_t gen;       /* the grant generation: odd while a loan runs */
+	bool     req_pending;  /* a request placed and not yet answered (g.pending) */
+	bool     deny_wanted;  /* a denial queued for gate_wq (g.deny_wanted) */
+	bool     answered_pending; /* the last gate_acquire() said GATE_PENDING */
 } fg;
+
+static void pre_at_acquire(void);
 
 bool gate_held(void) { return fg.held; }
 bool gate_in_signal(void) { return fg.in_signal; }
-void gate_release(void) { fg.releases++; fg.held = false; }
-void gate_forget_pending(void) {}
+uint32_t gate_grant_gen(void) { return fg.gen; }
+bool gate_request_pending(void) { return fg.req_pending; }
+/* As the real gate's: the loan ends at once (gate_hand_back() ends the
+ * generation), the timeslot at its compare. */
+void gate_release(void)
+{
+	fg.releases++;
+	fg.held = false;
+	fg.gen = (fg.gen + 1u) & ~1u;
+}
+void gate_forget_pending(void) { fg.req_pending = false; }
 bool gate_extend(uint32_t us) { ARG_UNUSED(us); return false; }
 int gate_init(void) { return RADIANT_RADIO_OK_RC; }
 void gate_shutdown(void) {}
@@ -83,11 +98,48 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from, radiant_time_t
 {
 	ARG_UNUSED(op); ARG_UNUSED(t_from); ARG_UNUSED(t_to);
 	ARG_UNUSED(follow_on_us); ARG_UNUSED(prio);
-	return fg.pending ? GATE_PENDING : GATE_GRANTED;
+	enum gate_rc r;
+
+	/* GRANTED only from a held grant (the real gate's in-grant branch);
+	 * otherwise the request is placed and the arm is staged. */
+	if (fg.pending || !fg.held) {
+		fg.req_pending = true;
+		r = GATE_PENDING;
+	} else {
+		r = GATE_GRANTED;
+	}
+	fg.answered_pending = (r == GATE_PENDING);
+	/* The caller may be preempted as soon as the answer exists. */
+	pre_at_acquire();
+	return r;
 }
 
-uint32_t radiant_swi_zli_lock(void) { return 0u; }
-void radiant_swi_zli_unlock(uint32_t key) { ARG_UNUSED(key); }
+/*
+ * PRIMASK, modelled by depth: a zero-latency signal (or anything preempting
+ * a thread arm) can only land where it is clear, so just before an outermost
+ * lock and at an outermost unlock are where test_arm_handback.c's simulated
+ * events are taken.
+ */
+static uint32_t zli_depth;
+static void zli_at_unlock(void);
+static void zli_before_lock(void);
+
+uint32_t radiant_swi_zli_lock(void)
+{
+	if (zli_depth == 0u) {
+		zli_before_lock();
+	}
+	zli_depth++;
+	return 0u;
+}
+
+void radiant_swi_zli_unlock(uint32_t key)
+{
+	ARG_UNUSED(key);
+	if (--zli_depth == 0u) {
+		zli_at_unlock();
+	}
+}
 int radiant_swi_register(uint32_t bits, radiant_swi_handler_t h)
 { ARG_UNUSED(bits); ARG_UNUSED(h); return 0; }
 void radiant_swi_pend(uint32_t bits) { ARG_UNUSED(bits); }
@@ -131,7 +183,14 @@ static void cb_tx(const struct radiant_tx_event *evt, void *user)
 	arm_follow_on_if_asked();
 }
 
-static const struct radiant_radio_cbs bcbs = { .rx = cb_rx, .tx = cb_tx };
+static void cb_ed(const struct radiant_ed_event *evt, void *user)
+{
+	ARG_UNUSED(evt);
+	ARG_UNUSED(user);
+	bp.ed_events++;
+}
+
+static const struct radiant_radio_cbs bcbs = { .rx = cb_rx, .tx = cb_tx, .ed = cb_ed };
 static const struct radiant_rx_filter bfilt = { .addr_len = 5u };
 static const struct radiant_rx_filter bfilt2[2] = { { .addr_len = 5u }, { .addr_len = 5u } };
 
@@ -159,6 +218,28 @@ void backend_reset(void)
 	radiant_op.id = 7u;
 	radio_on_loan = true;
 	fg.held = true;
+	/* A loan running, and the arm guard's claim made in it, so the suites
+	 * that call program_*() directly (with no claim) programme as before. */
+	fg.gen = 1u;
+	arm_gen = 1u;
+	arm_marked = false;
+	arm_ed_lost = false;
+	zli_depth = 0u;
+	backend_preempt_off();
+}
+
+/*
+ * The suites that call program_*() directly programme from a grant, as
+ * on_grant() does: a new loan if the last one was released, and the arm guard's
+ * generation taken from it.
+ */
+static void direct_programme_grant(void)
+{
+	if (!GATE_GEN_LIVE(fg.gen)) {
+		fg.gen = (fg.gen + 2u) | 1u;
+		fg.held = true;
+	}
+	arm_gen = fg.gen;
 }
 
 /* The operation is live inside a held grant, and the RADIO signal is running. */
@@ -254,6 +335,7 @@ int backend_program_rx(void)
 
 		rc = rx_prepare(&req, &prep);
 		if (rc == RADIANT_RADIO_OK_RC) {
+			direct_programme_grant();
 			rc = program_rx(&req, &prep);
 		}
 	}
@@ -316,6 +398,7 @@ int backend_program_tx(uint32_t d_us, uint32_t step)
 	if (rc != RADIANT_RADIO_OK_RC) {
 		return rc;
 	}
+	direct_programme_grant();
 	return program_tx(&req, &fmt_regs);
 }
 
@@ -488,6 +571,299 @@ void backend_program_ed(void)
 		.t_start = radiant_radio_now() + 10000u,
 	};
 
+	direct_programme_grant();
 	program_ed(&ed);
 	radiant_op.kind = OP_NONE;
 }
+
+/* ---- An arm preempted by the grant's end (test_arm_handback.c) ---- */
+
+static struct {
+	uint32_t at;      /* take the event at this preemption point (0: off) */
+	uint32_t n;
+	int      mode;    /* BACKEND_PRE_* */
+	bool     fired;
+	bool     busy;
+	bool     marked_at_fire;
+	bool     handed_back;
+	bool     second;     /* BACKEND_PRE_DENY_THEN_START's START, still to fire */
+	uint32_t writes_at_handback;
+	NRF_RADIO_Type regs_at_handback;
+} pre;
+
+void backend_preempt_off(void)
+{
+	memset(&pre, 0, sizeof(pre));
+}
+
+/* The gate's hand-back as timer0_disarm() makes it: the generation ends, then
+ * the backend gives the peripheral back; end_housekeeping() queues a denial. */
+static void pre_hand_back(void)
+{
+	fg.gen = (fg.gen + 1u) & ~1u;
+	fg.held = false;
+	radiant_nrf_gate_on_grant_end();
+	fg.deny_wanted = true;
+}
+
+/* A SIGNAL_START for the placed request, as the gate runs it. */
+static void pre_start(void)
+{
+	fg.in_signal = true;
+	radiant_nrf_gate_on_slot_start();
+	fg.gen = (fg.gen + 2u) | 1u;
+	fg.held = true;
+	fg.req_pending = false;
+	radiant_nrf_gate_on_grant();
+	if (!fg.held) {
+		/* on_grant() gave it back (nothing staged, or ETIME): SIGNAL_START's
+		 * release_wanted branch ends the timeslot at once. */
+		radiant_nrf_gate_on_grant_end();
+		fg.deny_wanted = true;
+	}
+	fg.in_signal = false;
+}
+
+/* denied_work_fn() on gate_wq: the failed programme, then the denial if one
+ * is queued and nothing is pending. */
+static void pre_denied_work(void)
+{
+	radiant_nrf_gate_finish_failed();
+	if (fg.deny_wanted) {
+		fg.deny_wanted = false;
+		if (!fg.req_pending) {
+			radiant_nrf_gate_on_denied();
+		}
+	}
+}
+
+static void pre_fire(void)
+{
+	pre.busy = true;
+	pre.fired = true;
+	pre.marked_at_fire = arm_marked;
+	switch (pre.mode) {
+	case BACKEND_PRE_END:
+		/* SIGNAL_TIMER0's end, or a release's: hand-back, ACTION_END. */
+		fg.in_signal = true;
+		pre_hand_back();
+		pre.handed_back = true;
+		fg.in_signal = false;
+		break;
+	case BACKEND_PRE_END_START:
+		/* The same, and the next timeslot's START before the arm resumes,
+		 * worst case with the radio on loan again. */
+		fg.in_signal = true;
+		pre_hand_back();
+		pre.handed_back = true;
+		radiant_nrf_gate_on_slot_start();
+		fg.gen = (fg.gen + 2u) | 1u;
+		fg.held = true;
+		radio_on_loan = true;
+		fg.in_signal = false;
+		break;
+	case BACKEND_PRE_ABORT_END:
+		/* EXTEND_FAILED and the extension skip: timer0_disarm() (the
+		 * hand-back), then radiant_radio_abort(), in the signal. */
+		fg.in_signal = true;
+		pre_hand_back();
+		pre.handed_back = true;
+		(void)radiant_radio_abort();
+		fg.in_signal = false;
+		break;
+	case BACKEND_PRE_DENIED:
+		/* A queued denial (an earlier grant's end) reaching gate_wq. */
+		fg.deny_wanted = true;
+		pre_denied_work();
+		break;
+	case BACKEND_PRE_BLOCKED:
+	case BACKEND_PRE_DEADLINE:
+		/* MPSL refuses the placed request (BLOCKED: submit_denial()), or
+		 * its deadline expires (deadline_expired(): op_forget()); either
+		 * way g.pending clears and gate_wq runs the denial. Before the
+		 * request exists this is a stale refusal of an earlier one. */
+		fg.req_pending = false;
+		fg.deny_wanted = true;
+		pre_denied_work();
+		break;
+	case BACKEND_PRE_DENY_THEN_START:
+		/* A stale denial reaching gate_wq (held, if the arm is marked);
+		 * the placed request's START comes at the first point after the
+		 * arm has staged it (pre_point()). */
+		fg.deny_wanted = true;
+		pre_denied_work();
+		pre.second = true;
+		break;
+	case BACKEND_PRE_GRANT_EARLY:
+	default:
+		/* The placed request's START arrives before the arm staged it
+		 * (on_grant() finds nothing and gives it back; gate_wq's denial
+		 * then lands under the arm), or just after (on_grant() takes the
+		 * staged request; gate_wq runs after the arm, as it would behind
+		 * an arm from the software interrupt). */
+		if (fg.req_pending) {
+			const bool staged = radiant_staged.pending;
+
+			pre_start();
+			if (!staged) {
+				pre_denied_work();
+			}
+		}
+		break;
+	}
+	pre.busy = false;
+	if (pre.handed_back) {
+		pre.writes_at_handback = fake_hw.radio_writes;
+		pre.regs_at_handback = fake_radio_regs;
+	}
+}
+
+static void pre_point(void)
+{
+	if (pre.busy) {
+		return;
+	}
+	if (pre.second && radiant_staged.pending && fg.req_pending) {
+		pre.second = false;
+		pre.busy = true;
+		pre_start();
+		pre.busy = false;
+		return;
+	}
+	if (pre.at == 0u || pre.fired || ++pre.n != pre.at) {
+		return;
+	}
+	pre_fire();
+}
+
+static void zli_at_unlock(void)
+{
+	pre_point();
+}
+
+static void zli_before_lock(void)
+{
+	pre_point();
+}
+
+static void pre_at_acquire(void)
+{
+	if (zli_depth == 0u) {
+		pre_point();
+	}
+}
+
+static uint8_t pre_body[RADIANT_RADIO_BODY_MAX];
+
+static int pre_arm(int kind, radiant_time_t t)
+{
+	uint32_t op;
+
+	switch (kind) {
+	case BACKEND_ARM_TX: {
+		struct radiant_tx_req req;
+
+		memset(&req, 0, sizeof(req));
+		req.fmt = radiant_frame_format(RADIANT_FRAME_CFG_TRACKING);
+		req.addr_len = req.fmt->addr_len;
+		req.body = pre_body;
+		req.body_len = req.fmt->body_len;
+		req.t_sync_at = t;
+		return radiant_radio_tx(&req, &op);
+	}
+	case BACKEND_ARM_RX: {
+		struct radiant_rx_req req;
+
+		memset(&req, 0, sizeof(req));
+		req.fmt = radiant_frame_format(RADIANT_FRAME_CFG_TRACKING);
+		req.filters = &bfilt;
+		req.n_filters = 1u;
+		req.t_open = t;
+		req.t_close = t + 1000u;
+		return radiant_radio_rx(&req, &op);
+	}
+	default: {
+		struct radiant_ed_req req;
+
+		memset(&req, 0, sizeof(req));
+		req.rf_index_lo = 10u;
+		req.rf_index_hi = 11u;
+		req.dwell_us = 2000u;
+		req.t_start = t;
+		return radiant_radio_ed(&req, &op);
+	}
+	}
+}
+
+#define PRE_WINDOW_CONNS ((1u << 1) | (1u << 2) | (1u << 4) | (1u << 5))
+
+static uint32_t pre_terminals(void)
+{
+	return bp.rx_events + bp.tx_events + bp.ed_events + core_cb_head;
+}
+
+void backend_preempt_arm(int kind, int mode, uint32_t n, bool late, bool held,
+			 struct backend_preempt_result *out)
+{
+	radiant_time_t t;
+
+	memset(out, 0, sizeof(*out));
+	backend_reset();
+	/* The option-off build: the TIMER free-runs (one tick per capture
+	 * here), and the backend's own connections exist. With `held` a grant
+	 * is held and the arm is served from it (GATE_GRANTED); without, its
+	 * request is placed (GATE_PENDING). */
+	radiant_op.inited = true;
+	radiant_op.enabled = true;
+	radiant_op.next_id = 1u;
+	radiant_op.conn_start = 1u;
+	radiant_op.conn_close = 2u;
+	radiant_op.conn_sync = 3u;
+	radiant_op.conn_start_tx = 4u;
+	radiant_op.conn_rssi = 5u;
+	fg.held = held;
+	radio_on_loan = held;
+	fg.gen = held ? 7u : 8u;
+	t = radiant_radio_now() + (late ? 10u : 1500u);
+
+	pre.at = n;
+	pre.mode = mode;
+	out->rc = pre_arm(kind, t);
+	pre.at = 0u;
+	pre.second = false;
+	out->staged_path = fg.answered_pending;
+	out->fired = pre.fired;
+	out->marked_at_fire = pre.marked_at_fire;
+	out->radio_written_after_handback =
+		pre.handed_back &&
+		(fake_hw.radio_writes != pre.writes_at_handback ||
+		 memcmp(&fake_radio_regs, &pre.regs_at_handback,
+			sizeof(fake_radio_regs)) != 0);
+	out->conns_after_arm = (fake_hw.conn_on & PRE_WINDOW_CONNS) != 0u;
+	out->terminals_during_arm = pre_terminals();
+	out->marked_after_arm = arm_marked;
+
+	/* The rest of the world, until nothing is owed: queued denials, the
+	 * placed request's grant, and the end of any loan still running. */
+	for (int i = 0; i < 4; i++) {
+		pre_denied_work();
+		if (fg.req_pending) {
+			pre_start();
+		} else if (fg.held) {
+			fg.in_signal = true;
+			pre_hand_back();
+			fg.in_signal = false;
+		}
+	}
+	pre_denied_work();
+	out->conns_final = (fake_hw.conn_on & PRE_WINDOW_CONNS) != 0u;
+	out->op_idle_final = radiant_op.kind == OP_NONE;
+	out->terminals_final = pre_terminals();
+
+	/* And the slot is usable: the next arm, in a fresh grant, is taken. */
+	fg.gen = (fg.gen + 2u) | 1u;
+	fg.held = true;
+	radio_on_loan = true;
+	out->next_rc = pre_arm(BACKEND_ARM_TX, radiant_radio_now() + 1500u);
+}
+

@@ -9,6 +9,7 @@ struct backend_probe {
 	bool     arm_follow_on;
 	uint32_t rx_events;
 	uint32_t tx_events;
+	uint32_t ed_events;
 	int      last_rx_status;
 	int      last_tx_status;
 	uint8_t  last_rx_body[16];
@@ -66,5 +67,40 @@ uint8_t  backend_op_n_filters(void);
 uint16_t backend_op_crc_init(void);
 bool     backend_filt_memo_holds(const struct radiant_rx_req *req);
 void     backend_program_ed(void);
+
+/* An arm preempted by the grant's end (test_arm_handback.c): the simulated
+ * event, taken at the n-th preemption point of the arm (each outermost unlock
+ * of the zero-latency lock, and the return of gate_acquire()). */
+enum { BACKEND_ARM_TX, BACKEND_ARM_RX, BACKEND_ARM_ED };
+enum {
+	BACKEND_PRE_END,         /* hand-back and ACTION_END (TIMER0, a release) */
+	BACKEND_PRE_END_START,   /* the same, then the next START */
+	BACKEND_PRE_ABORT_END,   /* hand-back, then radiant_radio_abort() (EXTEND_FAILED, skip) */
+	BACKEND_PRE_DENIED,      /* a queued denial reaching gate_wq */
+	BACKEND_PRE_BLOCKED,     /* MPSL refuses the placed request; gate_wq denies */
+	BACKEND_PRE_DEADLINE,    /* the placed request's deadline expires; gate_wq denies */
+	BACKEND_PRE_GRANT_EARLY, /* the placed request's START before the arm staged it */
+	BACKEND_PRE_DENY_THEN_START, /* a stale denial, then the request's START after
+				      * the staging and before the arm settles */
+};
+struct backend_preempt_result {
+	int      rc;
+	bool     fired;
+	bool     marked_at_fire;     /* the event found the arm in progress */
+	bool     radio_written_after_handback;
+	bool     conns_after_arm;
+	uint32_t terminals_during_arm;
+	bool     marked_after_arm;
+	bool     staged_path;        /* gate_acquire() answered GATE_PENDING */
+	/* After the world has settled: every denial run, the request granted
+	 * if still placed, every loan ended. */
+	bool     conns_final;
+	bool     op_idle_final;
+	uint32_t terminals_final;
+	int      next_rc;            /* the next arm, in a fresh grant */
+};
+void     backend_preempt_off(void);
+void     backend_preempt_arm(int kind, int mode, uint32_t n, bool late, bool held,
+			     struct backend_preempt_result *out);
 
 #endif

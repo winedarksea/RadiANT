@@ -287,83 +287,128 @@ static void lp_init(void);
 static void lp_constlat(bool on);
 #define LP_HOOK(...) do { __VA_ARGS__; } while (0)
 #if defined(CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL)
-/*
- * Pass B6: AN ARM PREEMPTED BY THE TIMESLOT'S END. An arm served inside a held
- * grant (a completion's follow-on, from the software interrupt) can be
- * preempted by the zero-latency ACTION_END - which hands the RADIO back to the
- * other stack and stops this TIMER (radiant_nrf_gate_lp_slot_end()) - or by
- * the next START. Resumed, it would write MODE, FREQUENCY, PACKETPTR, SHORTS
- * and compares into a RADIO that is no longer ours, from a TIMER that no longer
- * runs. So (LP_SLOT_GUARD, only with the option on the MPSL build):
- *
- *   - the claim records the timeslot generation it was made in (lp_arm_gen,
- *     lp_slot_gen(): 0 while the TIMER is stopped) and that an arm is in
- *     progress (lp_arming); radiant_radio_nrf_gate_on_grant() records the
- *     generation of the START it programmes from;
- *   - program_tx/rx/ed run their whole register span under the zero-latency
- *     lock (PRIMASK), and start it by checking that the generation is still
- *     the claim's: if a timeslot ended (or another began) since, nothing is
- *     written and the arm fails ETIME. Inside the span nothing can end the
- *     timeslot, so every RADIO write, compare and connection enable belongs
- *     to the timeslot that is running, and start_compare_missed() reads the
- *     running TIMER. The span has no loop but the filter writes (at most
- *     caps.max_filters) and the body copy (at most RADIANT_RADIO_BODY_MAX
- *     bytes): some tens of us at the nRF54L15's 128 MHz, an estimate, not a
- *     measurement. It can only delay this timeslot's own TIMER0 end signal,
- *     which fires END_MARGIN_FIXED_US (750 us) or END_MARGIN_EXTEND_US before
- *     the grant expires; a span that finds its timeslot gone leaves at once.
- *   - radiant_radio_abort() from the zero-latency signal (EXTEND_FAILED, the
- *     extension skip), and the gate's deferred denial, leave an arm in
- *     progress to that arm, which then fails ETIME at its span: one outcome
- *     for the operation, not ETIME plus ABORTED or DENIED. The mark is cleared
- *     only once the span programmed, or after a failed arm has freed the slot.
- *   - Known cost, accepted: an arm claimed while the TIMER is stopped records
- *     generation 0, so if a START lands between the claim and a GRANTED
- *     answer the span refuses it (ETIME: the scheduler's MISSED, one slot).
- *     Taking the generation after GRANTED instead would reopen the race the
- *     generation exists to close.
- */
-#define LP_SLOT_GUARD 1
-static uint32_t lp_slot_gen(void);
-static uint32_t lp_arm_gen;
-static volatile bool lp_arming;
-#define LP_ARM_CLAIM() do { lp_arm_gen = lp_slot_gen(); lp_arming = true; } while (0)
-#define LP_ARM_DONE()  do { lp_arming = false; } while (0)
+/* The option on the MPSL build (pass B6): the TIMER stops between timeslots. */
+#define LP_MPSL_TIMER 1
+#endif
+#else
+#define LP_HOOK(...) do { } while (0)
+#endif
 
-/* Open a programme's span: the zero-latency lock, and whether the timeslot
- * the arm was claimed in is still the one running. */
-static inline uint32_t lp_span_begin(bool *ok)
+#if defined(CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL)
+/*
+ * AN ARM PREEMPTED BY THE GRANT'S END (every MPSL build; pass B6 closed it for
+ * CONFIG_RADIANT_NRF_LOW_POWER only, this generalises it). An arm served
+ * inside a held grant - a completion's follow-on from the software interrupt,
+ * or an arm from a preemptible thread - runs gate_acquire() (GATE_GRANTED) and
+ * then program_tx/rx/ed. The zero-latency signal can preempt it anywhere in
+ * between with ACTION_END (the TIMER0 end, EXTEND_FAILED, the extension skip):
+ * radiant_nrf_gate_on_grant_end() clears SHORTS and the interrupt mask, the
+ * loan ends, and MPSL gives the RADIO to the SoftDevice Controller or the
+ * 802.15.4 driver. Resumed, the arm would write MODE, PCNF, BASE/PREFIX, CRC,
+ * FREQUENCY, PACKETPTR and SHORTS (and INTENSET RXREADY for ED) into the other
+ * stack's live RADIO and enable TIMER->RADIO (D)PPI connections that then fire
+ * inside the other stack's event - the class of fault that asserts the SDC.
+ * With the option on, the end also stops this TIMER, and the next START may
+ * already have restarted it. So (ARM_SLOT_GUARD):
+ *
+ *   - the claim records the grant generation it was made in (arm_gen,
+ *     gate_grant_gen(): odd only while a timeslot's loan of the radio is
+ *     running, moved at every START and every hand-back / ACTION_END) and
+ *     marks an arm in progress (arm_marked), both under the zero-latency lock
+ *     with the slot claim, so the signal sees either no operation or one marked
+ *     as arming. radiant_nrf_gate_on_grant() records the generation of the
+ *     START it programmes from;
+ *   - program_tx/rx/ed run their whole register span under the zero-latency
+ *     lock (PRIMASK), and start it by checking that the generation is still the
+ *     claim's and still live: if the loan ended (or another timeslot began)
+ *     since, nothing is written and the arm fails ETIME. Inside the span nothing
+ *     can end the loan, so every RADIO write, compare and connection enable
+ *     belongs to the timeslot that is running (and, with the option on, reads
+ *     the running TIMER). The span holds no kernel call, log or wait: register
+ *     writes, the filter writes (at most caps.max_filters), the body copy (at
+ *     most RADIANT_RADIO_BODY_MAX bytes), two clock reads (CLOCK_LOCK nests
+ *     inside it) and the diagnostic counters - some tens of us at the
+ *     nRF54L15's 128 MHz, an estimate, not a measurement. It can only delay
+ *     this timeslot's own TIMER0 end signal, which fires END_MARGIN_FIXED_US
+ *     (750 us) or END_MARGIN_EXTEND_US before the grant expires; a span that
+ *     finds its loan gone leaves at once;
+ *   - radiant_radio_abort() from the zero-latency signal (EXTEND_FAILED, the
+ *     extension skip), and the gate's deferred denial, leave an arm in progress
+ *     to that arm, which then fails ETIME at its span (or programmed before the
+ *     signal, and is a live operation the gate will end): one outcome for the
+ *     operation, not ETIME plus ABORTED or DENIED. An arm needs a free slot to
+ *     claim, so whatever the abort or denial was for has had its terminal. The
+ *     mark is cleared only once the span programmed, or after a failed arm has
+ *     freed the slot (OP_NONE, a compiler barrier, then the mark);
+ *   - with the option on this replaces B6's TIMER generation (lp_slot_gen(), gone):
+ *     every wake is a START, which moves this generation too, and every
+ *     release (the funnel and the backstops) follows a hand-back that ended
+ *     it, so "live and unchanged" here implies "awake in the same segment"
+ *     there. It is stricter in two places, both right: between a
+ *     gate_release() hand-back and its ACTION_END (the TIMER still runs but
+ *     the RADIO is no longer ours), and when the option was refused at boot
+ *     (the TIMER generation was then constant and the guard inert);
+ *   - known cost, accepted: an arm claimed between timeslots records an even
+ *     generation, so a START landing between the claim and a GRANTED answer
+ *     is refused (ETIME: the scheduler's MISSED, one slot). Such a START has
+ *     nothing staged (the slot was free), so the gate ends it at once and
+ *     cannot answer GRANTED from it; the cost is theoretical. Taking the
+ *     generation after GRANTED instead would reopen the race the generation
+ *     exists to close;
+ *   - WHICH CONTEXTS REACH IT. Every production arm call (radiant_sched.c's
+ *     three, under PB_ARM_CALL) runs inside pass(), under
+ *     radiant_event_crit_enter() = irq_lock(). Only the MPSL zero-latency
+ *     signal preempts it there, so the ACTION_END windows above (the hand-back
+ *     under an arm, the abort from the signal) are live on every MPSL build,
+ *     while no thread - gate_wq's deferred denial included - can run during
+ *     one. The denial windows (on_denied() under a marked arm, and the staged
+ *     path in arm_settle_staged()) are latent in production: only an arm made
+ *     outside pass() (the spikes) or the test fakes reach them. They are
+ *     closed anyway, because the HAL does not require arms under irq_lock.
+ */
+#define ARM_SLOT_GUARD 1
+static uint32_t arm_gen;
+static volatile bool arm_marked;
+/* A gate denial that reached radiant_nrf_gate_on_denied() while the arm was
+ * marked (see arm_settle_staged()). Cleared by every claim. */
+static volatile bool arm_deny_owed;
+#define ARM_CLAIM() do { arm_gen = gate_grant_gen(); arm_deny_owed = false; 			 arm_marked = true; } while (0)
+#define ARM_DONE()  do { arm_marked = false; } while (0)
+
+/* Open a programme's span: the zero-latency lock, and whether the loan the
+ * arm was claimed in is still the one running. */
+static inline uint32_t arm_span_begin(bool *ok)
 {
 	uint32_t key = radiant_swi_zli_lock();
-	uint32_t gen = lp_slot_gen();
+	uint32_t gen = gate_grant_gen();
 
-	*ok = gen != 0u && gen == lp_arm_gen;
+	*ok = GATE_GEN_LIVE(gen) && gen == arm_gen;
 	return key;
 }
 
 /* Close a span that programmed the operation: from here an abort from the
  * signal is a normal abort of a live operation. */
-static inline void lp_span_end(uint32_t key)
+static inline void arm_span_end(uint32_t key)
 {
-	lp_arming = false;
+	arm_marked = false;
 	radiant_swi_zli_unlock(key);
 }
 
 /* Close a span that failed: the arm stays marked as arming until its caller
  * has given the slot back (`fail:`, OP_NONE first), so an abort from the
  * signal in between still leaves it the arm's ETIME. */
-static inline void lp_span_fail(uint32_t key)
+static inline void arm_span_fail(uint32_t key)
 {
 	radiant_swi_zli_unlock(key);
 }
+
+/* The staged branch's end (below radiant_staged). */
+static bool arm_settle_staged(void);
 #endif
+#if defined(ARM_SLOT_GUARD)
+#define ARM_GUARD_ONLY(...) do { __VA_ARGS__; } while (0)
 #else
-#define LP_HOOK(...) do { } while (0)
-#endif
-#if defined(LP_SLOT_GUARD)
-#define LP_GUARD_ONLY(...) do { __VA_ARGS__; } while (0)
-#else
-#define LP_GUARD_ONLY(...) do { } while (0)
+#define ARM_GUARD_ONLY(...) do { } while (0)
 #endif
 
 static uint32_t timer_capture(uint8_t cc)
@@ -407,7 +452,7 @@ radiant_time_t radiant_radio_now(void)
 static radiant_time_t clock_absolute(uint32_t counter)
 {
 	unsigned int key = CLOCK_LOCK();
-#if defined(LP_SLOT_GUARD)
+#if defined(LP_MPSL_TIMER)
 	/* A stopped TIMER is never folded: the result is meaningless (the
 	 * caller's timeslot is over) but the fold is left intact. */
 	uint64_t base = lp_timer_stopped() ? lp_now_locked()
@@ -425,7 +470,7 @@ static radiant_time_t clock_absolute(uint32_t counter)
 static uint32_t clock_counter_at(radiant_time_t t)
 {
 	unsigned int key = CLOCK_LOCK();
-#if defined(LP_SLOT_GUARD)
+#if defined(LP_MPSL_TIMER)
 	/* As clock_absolute(). (A programme's own reads are inside its span,
 	 * where the TIMER cannot stop; this covers any other caller.) */
 	uint64_t base = lp_timer_stopped() ? lp_now_locked()
@@ -964,6 +1009,66 @@ static struct {
 	/* True from a GATE_PENDING acquire until its grant or denial. Lets gate callbacks reject late signals. */
 	bool pending;
 } radiant_staged;
+
+#if defined(ARM_SLOT_GUARD)
+/*
+ * The staged (GATE_PENDING) branch's end, called once radiant_staged holds the
+ * request. Latent in production (see WHICH CONTEXTS REACH IT above: every
+ * production arm runs under irq_lock, so no denial lands during one); reached
+ * by arms made outside the scheduler's pass and by the test fakes. A denial the
+ * gate delivered while the arm was marked was held, not dropped
+ * (arm_deny_owed): the gate sends one only with nothing pending
+ * (denied_work_fn() tests g.pending), and from a cooperative thread it can
+ * land between gate_acquire() placing this arm's own request and this point -
+ * MPSL refusing it (BLOCKED, inline or deferred), its deadline expiring, or
+ * its grant arriving before the request was staged (on_grant() then finds
+ * nothing staged and gives the grant back). Dropping it wedged the slot: a
+ * staged operation with no grant, deadline or denial owed, and EBUSY for every
+ * later arm. Settled here, against the zero-latency signal and every thread:
+ *
+ *   - a denial held, the gate no longer pending and the request still staged:
+ *     nothing is coming for the request. It is unstaged and the arm fails
+ *     EDENIED, the synchronous
+ *     refusal (the caller's scheduler is inside its own arm call, so a
+ *     terminal from here would re-enter it): one outcome, no terminal;
+ *   - a denial held but the gate still pending: the denial predated this
+ *     arm's request (a stale one), and the request's own grant or denial is
+ *     still to come. Dropped;
+ *   - a denial held and the gate no longer pending but the request no longer
+ *     staged: its START came between the staging and this lock, and on_grant()
+ *     took it (only on_grant() clears radiant_staged.pending while the arm is
+ *     marked: on_denied() holds instead, and an abort from the signal skips).
+ *     The denial was a stale one; the operation is live (or, if on_grant()'s
+ *     programme failed ETIME, owes the gate's FAILED). Dropped, and the arm
+ *     returns OK: refusing here would free the slot under a programmed radio;
+ *   - no denial held: the mark goes, and any later denial reaches the staged
+ *     operation as a terminal, as it always has.
+ *
+ * Known gap, not closed (the same check-then-act class as denied_work_fn()'s
+ * g.pending test): a stale denial held here can be taken as this request's
+ * own while the request's real refusal (BLOCKED, the deadline) is still queued
+ * in gate_wq. The arm fails EDENIED, and the queued denial later reaches the
+ * next operation if one is armed in-grant by then.
+ *
+ * Returns true when the arm must fail EDENIED; the mark then stays until the
+ * caller's `fail:` has freed the slot.
+ */
+static bool arm_settle_staged(void)
+{
+	uint32_t key = radiant_swi_zli_lock();
+	const bool refuse = arm_deny_owed && !gate_request_pending() &&
+			    radiant_staged.pending;
+
+	arm_deny_owed = false;
+	if (refuse) {
+		radiant_staged.pending = false;
+	} else {
+		ARM_DONE();
+	}
+	radiant_swi_zli_unlock(key);
+	return refuse;
+}
+#endif
 
 /* Debug counters: logging from the RADIO ISR is unsafe, so the ISR counts and thread context reports. */
 static volatile uint32_t radiant_dbg_isr;
@@ -2898,23 +3003,23 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 	}
 
 	/* One operation in flight, resolved the same way arm_rx does. */
-#if defined(LP_SLOT_GUARD)
+#if defined(ARM_SLOT_GUARD)
 	/* The claim and its arming mark as one step against the zero-latency
-	 * signal too (AN ARM PREEMPTED BY THE TIMESLOT'S END): an abort from it
+	 * signal too (AN ARM PREEMPTED BY THE GRANT'S END): an abort from it
 	 * sees either no operation or one marked as arming. */
-	uint32_t lp_ck;
+	uint32_t claim_key;
 #endif
 	key = irq_lock();
-	LP_GUARD_ONLY(lp_ck = radiant_swi_zli_lock());
+	ARM_GUARD_ONLY(claim_key = radiant_swi_zli_lock());
 	if (radiant_op.kind != OP_NONE) {
-		LP_GUARD_ONLY(radiant_swi_zli_unlock(lp_ck));
+		ARM_GUARD_ONLY(radiant_swi_zli_unlock(claim_key));
 		irq_unlock(key);
 		return RADIANT_RADIO_EBUSY;
 	}
 	radiant_op.kind = OP_TX;
 	CLAIM_TERMINAL();
-	LP_GUARD_ONLY(LP_ARM_CLAIM());
-	LP_GUARD_ONLY(radiant_swi_zli_unlock(lp_ck));
+	ARM_GUARD_ONLY(ARM_CLAIM());
+	ARM_GUARD_ONLY(radiant_swi_zli_unlock(claim_key));
 	irq_unlock(key);
 
 	/* The only validation of the format: program_tx() writes what this computes. */
@@ -2983,7 +3088,15 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 		radiant_staged.tx.fmt = &radiant_staged.tx_fmt;
 		radiant_staged.tx_regs = fmt_regs;
 		radiant_staged.pending = true;
-		LP_GUARD_ONLY(LP_ARM_DONE());
+#if defined(ARM_SLOT_GUARD)
+		if (arm_settle_staged()) {
+			/* The gate refused this arm's own request while it was
+			 * being staged: refused now, with no terminal. */
+			*op = 0u;
+			rc = RADIANT_RADIO_EDENIED;
+			goto fail;
+		}
+#endif
 		LP_HOOK(lp_staged());
 #if defined(CONFIG_RADIANT_GATE_MPSL_D2)
 		d2_settle_now();
@@ -3004,7 +3117,7 @@ fail:
 	radiant_op.kind = OP_NONE;
 	/* Slot free before the mark goes: an abort from the signal in between
 	 * sees no operation, never one it would deliver ABORTED to. */
-	LP_GUARD_ONLY(compiler_barrier(); LP_ARM_DONE());
+	ARM_GUARD_ONLY(compiler_barrier(); ARM_DONE());
 	return rc;
 }
 
@@ -3037,13 +3150,13 @@ static int program_tx(const struct radiant_tx_req *req,
 	radiant_time_t t_start;
 	uint32_t lead;
 	uint32_t start_cc;
-#if defined(LP_SLOT_GUARD)
-	bool lp_ok;
-	const uint32_t lp_key = lp_span_begin(&lp_ok);
+#if defined(ARM_SLOT_GUARD)
+	bool span_ok;
+	const uint32_t span_key = arm_span_begin(&span_ok);
 
-	if (!lp_ok) {
+	if (!span_ok) {
 		/* Its timeslot ended (or another began) since the claim. */
-		lp_span_fail(lp_key);
+		arm_span_fail(span_key);
 		return RADIANT_RADIO_ETIME;
 	}
 #endif
@@ -3070,8 +3183,8 @@ static int program_tx(const struct radiant_tx_req *req,
 	NRF_DIAG(nrf_diag_early(now, req->t_sync_at, lead));
 	if (req->t_sync_at < now + lead) {
 		/* Never silently late: a late master frame lands in the next slot. */
-#if defined(LP_SLOT_GUARD)
-		lp_span_fail(lp_key);
+#if defined(ARM_SLOT_GUARD)
+		arm_span_fail(span_key);
 #endif
 		return RADIANT_RADIO_ETIME;
 	}
@@ -3117,13 +3230,13 @@ static int program_tx(const struct radiant_tx_req *req,
 		nrf_radio_shorts_set(NRF_RADIO, 0);
 		NRF_DIAG(nrf_diag.tx_start_missed++);
 		ARMDBG(2);
-#if defined(LP_SLOT_GUARD)
-		lp_span_fail(lp_key);
+#if defined(ARM_SLOT_GUARD)
+		arm_span_fail(span_key);
 #endif
 		return RADIANT_RADIO_ETIME;
 	}
-#if defined(LP_SLOT_GUARD)
-	lp_span_end(lp_key);
+#if defined(ARM_SLOT_GUARD)
+	arm_span_end(span_key);
 #endif
 
 	LOG_DBG("tx op=%u alen=%u blen=%u start=+%d last_err=%d",
@@ -3148,13 +3261,13 @@ static int program_rx(const struct radiant_rx_req *req,
 	uint32_t start_cc, close_cc;
 
 	const uint8_t sw_addr_len = prep->sw_addr_len;
-#if defined(LP_SLOT_GUARD)
-	bool lp_ok;
-	const uint32_t lp_key = lp_span_begin(&lp_ok);
+#if defined(ARM_SLOT_GUARD)
+	bool span_ok;
+	const uint32_t span_key = arm_span_begin(&span_ok);
 
-	if (!lp_ok) {
+	if (!span_ok) {
 		/* Its timeslot ended (or another began) since the claim. */
-		lp_span_fail(lp_key);
+		arm_span_fail(span_key);
 		return RADIANT_RADIO_ETIME;
 	}
 #endif
@@ -3174,8 +3287,8 @@ static int program_rx(const struct radiant_rx_req *req,
 				air_lead_us(req->fmt->phy, req->fmt->addr_len)));
 	if (req->t_open < now + air_lead_us(req->fmt->phy, req->fmt->addr_len)) {
 		/* Never silently late: a late window looks like a quiet sensor. */
-#if defined(LP_SLOT_GUARD)
-		lp_span_fail(lp_key);
+#if defined(ARM_SLOT_GUARD)
+		arm_span_fail(span_key);
 #endif
 		return RADIANT_RADIO_ETIME;
 	}
@@ -3289,13 +3402,13 @@ static int program_rx(const struct radiant_rx_req *req,
 		radiant_dbg_start_late++;
 		NRF_DIAG(nrf_diag.rx_start_missed++);
 		ARMDBG(3);
-#if defined(LP_SLOT_GUARD)
-		lp_span_fail(lp_key);
+#if defined(ARM_SLOT_GUARD)
+		arm_span_fail(span_key);
 #endif
 		return RADIANT_RADIO_ETIME;
 	}
-#if defined(LP_SLOT_GUARD)
-	lp_span_end(lp_key);
+#if defined(ARM_SLOT_GUARD)
+	arm_span_end(span_key);
 #endif
 
 	LOG_DBG("rx op=%u n=%u alen=%u cov=%u open=+%d close=+%d isr=%u ev=%u ok=%u term=%u noaddr=%u late=%u",
@@ -3426,23 +3539,23 @@ static int rx_arm(const struct radiant_rx_req *req, uint32_t *op)
 	}
 
 	/* One operation in flight. The lock resolves a thread arming while the freeing callback runs: EBUSY, never corruption. */
-#if defined(LP_SLOT_GUARD)
+#if defined(ARM_SLOT_GUARD)
 	/* The claim and its arming mark as one step against the zero-latency
-	 * signal too (AN ARM PREEMPTED BY THE TIMESLOT'S END): an abort from it
+	 * signal too (AN ARM PREEMPTED BY THE GRANT'S END): an abort from it
 	 * sees either no operation or one marked as arming. */
-	uint32_t lp_ck;
+	uint32_t claim_key;
 #endif
 	key = irq_lock();
-	LP_GUARD_ONLY(lp_ck = radiant_swi_zli_lock());
+	ARM_GUARD_ONLY(claim_key = radiant_swi_zli_lock());
 	if (radiant_op.kind != OP_NONE) {
-		LP_GUARD_ONLY(radiant_swi_zli_unlock(lp_ck));
+		ARM_GUARD_ONLY(radiant_swi_zli_unlock(claim_key));
 		irq_unlock(key);
 		return RADIANT_RADIO_EBUSY;
 	}
 	radiant_op.kind = OP_RX;
 	CLAIM_TERMINAL();
-	LP_GUARD_ONLY(LP_ARM_CLAIM());
-	LP_GUARD_ONLY(radiant_swi_zli_unlock(lp_ck));
+	ARM_GUARD_ONLY(ARM_CLAIM());
+	ARM_GUARD_ONLY(radiant_swi_zli_unlock(claim_key));
 	irq_unlock(key);
 
 	/*
@@ -3508,7 +3621,15 @@ static int rx_arm(const struct radiant_rx_req *req, uint32_t *op)
 		       (size_t)req->n_filters * sizeof(struct radiant_rx_filter));
 		radiant_staged.rx.filters = radiant_staged.rx_filters;
 		radiant_staged.pending = true;
-		LP_GUARD_ONLY(LP_ARM_DONE());
+#if defined(ARM_SLOT_GUARD)
+		if (arm_settle_staged()) {
+			/* The gate refused this arm's own request while it was
+			 * being staged: refused now, with no terminal. */
+			*op = 0u;
+			rc = RADIANT_RADIO_EDENIED;
+			goto fail;
+		}
+#endif
 		LP_HOOK(lp_staged());
 #if defined(CONFIG_RADIANT_GATE_MPSL_D2)
 		d2_settle_now();
@@ -3530,7 +3651,7 @@ fail:
 	radiant_op.kind = OP_NONE;
 	/* Slot free before the mark goes: an abort from the signal in between
 	 * sees no operation, never one it would deliver ABORTED to. */
-	LP_GUARD_ONLY(compiler_barrier(); LP_ARM_DONE());
+	ARM_GUARD_ONLY(compiler_barrier(); ARM_DONE());
 	return rc;
 }
 
@@ -3663,9 +3784,9 @@ static void ed_dwell(void)
 
 #if defined(CONFIG_RADIANT_ED_SCAN)
 static void program_ed(const struct radiant_ed_req *req);
-#if defined(LP_SLOT_GUARD)
-/* program_ed() found its timeslot gone (LP_SLOT_GUARD): nothing written. */
-static bool lp_ed_lost;
+#if defined(ARM_SLOT_GUARD)
+/* program_ed() found its timeslot gone (ARM_SLOT_GUARD): nothing written. */
+static bool arm_ed_lost;
 #endif
 #endif
 
@@ -3708,23 +3829,23 @@ int radiant_radio_ed(const struct radiant_ed_req *req, uint32_t *op)
 	}
 
 	/* One operation in flight, resolved as in the other arms. */
-#if defined(LP_SLOT_GUARD)
+#if defined(ARM_SLOT_GUARD)
 	/* The claim and its arming mark as one step against the zero-latency
-	 * signal too (AN ARM PREEMPTED BY THE TIMESLOT'S END): an abort from it
+	 * signal too (AN ARM PREEMPTED BY THE GRANT'S END): an abort from it
 	 * sees either no operation or one marked as arming. */
-	uint32_t lp_ck;
+	uint32_t claim_key;
 #endif
 	key = irq_lock();
-	LP_GUARD_ONLY(lp_ck = radiant_swi_zli_lock());
+	ARM_GUARD_ONLY(claim_key = radiant_swi_zli_lock());
 	if (radiant_op.kind != OP_NONE) {
-		LP_GUARD_ONLY(radiant_swi_zli_unlock(lp_ck));
+		ARM_GUARD_ONLY(radiant_swi_zli_unlock(claim_key));
 		irq_unlock(key);
 		return RADIANT_RADIO_EBUSY;
 	}
 	radiant_op.kind = OP_ED;
 	CLAIM_TERMINAL();
-	LP_GUARD_ONLY(LP_ARM_CLAIM());
-	LP_GUARD_ONLY(radiant_swi_zli_unlock(lp_ck));
+	ARM_GUARD_ONLY(ARM_CLAIM());
+	ARM_GUARD_ONLY(radiant_swi_zli_unlock(claim_key));
 	irq_unlock(key);
 
 	/* Test against what the hardware needs (ramp-up alone, there is no address), not the advertised worst case. See radiant_radio_rx(). */
@@ -3759,7 +3880,15 @@ int radiant_radio_ed(const struct radiant_ed_req *req, uint32_t *op)
 	if (g == GATE_PENDING) {
 		radiant_staged.ed = *req;
 		radiant_staged.pending = true;
-		LP_GUARD_ONLY(LP_ARM_DONE());
+#if defined(ARM_SLOT_GUARD)
+		if (arm_settle_staged()) {
+			/* The gate refused this arm's own request while it was
+			 * being staged: refused now, with no terminal. */
+			*op = 0u;
+			rc = RADIANT_RADIO_EDENIED;
+			goto fail;
+		}
+#endif
 		LP_HOOK(lp_staged());
 #if defined(CONFIG_RADIANT_GATE_MPSL_D2)
 		d2_settle_now();
@@ -3768,8 +3897,8 @@ int radiant_radio_ed(const struct radiant_ed_req *req, uint32_t *op)
 	}
 
 	program_ed(req);
-#if defined(LP_SLOT_GUARD)
-	if (lp_ed_lost) {
+#if defined(ARM_SLOT_GUARD)
+	if (arm_ed_lost) {
 		rc = RADIANT_RADIO_ETIME;
 		*op = 0u;
 		gate_release();
@@ -3787,7 +3916,7 @@ fail:
 	radiant_op.kind = OP_NONE;
 	/* Slot free before the mark goes: an abort from the signal in between
 	 * sees no operation, never one it would deliver ABORTED to. */
-	LP_GUARD_ONLY(compiler_barrier(); LP_ARM_DONE());
+	ARM_GUARD_ONLY(compiler_barrier(); ARM_DONE());
 	return rc;
 #endif /* CONFIG_RADIANT_ED_SCAN */
 }
@@ -3798,14 +3927,14 @@ fail:
 static void program_ed(const struct radiant_ed_req *req)
 {
 	uint32_t start_cc;
-#if defined(LP_SLOT_GUARD)
-	bool lp_ok;
-	const uint32_t lp_key = lp_span_begin(&lp_ok);
+#if defined(ARM_SLOT_GUARD)
+	bool span_ok;
+	const uint32_t span_key = arm_span_begin(&span_ok);
 
-	lp_ed_lost = !lp_ok;
-	if (!lp_ok) {
+	arm_ed_lost = !span_ok;
+	if (!span_ok) {
 		/* Its timeslot ended since the claim: radiant_radio_ed() fails. */
-		lp_span_fail(lp_key);
+		arm_span_fail(span_key);
 		return;
 	}
 #endif
@@ -3847,8 +3976,8 @@ static void program_ed(const struct radiant_ed_req *req)
 	nrf_timer_cc_set(TIMER_ADDR, CC_START, start_cc);
 	nrfx_gppi_conn_enable(radiant_op.conn_start);
 	/* conn_close is deliberately not enabled: an index ends when its burst does, and a close compare would cut it short. */
-#if defined(LP_SLOT_GUARD)
-	lp_span_end(lp_key);
+#if defined(ARM_SLOT_GUARD)
+	arm_span_end(span_key);
 #endif
 }
 #endif /* CONFIG_RADIANT_ED_SCAN */
@@ -3939,16 +4068,16 @@ void radiant_nrf_gate_on_grant(void)
 
 	switch (radiant_op.kind) {
 	case OP_RX:
-		LP_GUARD_ONLY(lp_arm_gen = lp_slot_gen());
+		ARM_GUARD_ONLY(arm_gen = gate_grant_gen());
 		rc = program_rx(&radiant_staged.rx, &radiant_staged.rx_prep);
 		break;
 	case OP_TX:
-		LP_GUARD_ONLY(lp_arm_gen = lp_slot_gen());
+		ARM_GUARD_ONLY(arm_gen = gate_grant_gen());
 		rc = program_tx(&radiant_staged.tx, &radiant_staged.tx_regs);
 		break;
 #if defined(CONFIG_RADIANT_ED_SCAN)
 	case OP_ED:
-		LP_GUARD_ONLY(lp_arm_gen = lp_slot_gen());
+		ARM_GUARD_ONLY(arm_gen = gate_grant_gen());
 		program_ed(&radiant_staged.ed);
 		break;
 #endif
@@ -4134,6 +4263,24 @@ void radiant_nrf_gate_on_grant_end(void)
 	nrf_radio_int_disable(NRF_RADIO, NRF_RADIO_INT_END_MASK |
 					 NRF_RADIO_INT_DISABLED_MASK |
 					 NRF_RADIO_INT_RXREADY_MASK);
+#if defined(CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL)
+	/*
+	 * And our (D)PPI connections into it. Every terminal disables them already;
+	 * this covers a loan that ended under an operation still armed (its DENIED
+	 * or ABORTED comes later, from the gate's work or the signal). The TIMER
+	 * keeps counting on a build without CONFIG_RADIANT_NRF_LOW_POWER, so a
+	 * start or close compare left connected would fire TXEN, RXEN or DISABLE
+	 * inside the other stack's event (on nRF52 PPI directly; on DPPI wherever
+	 * the endpoint swap leaves our subscription). The option's release stops the
+	 * TIMER-driven three with its TIMER. Nothing armed later in this timeslot
+	 * can need them: the loan is over, and the grant generation fails any arm
+	 * still in progress (AN ARM PREEMPTED BY THE GRANT'S END).
+	 */
+	nrfx_gppi_conn_disable(radiant_op.conn_start);
+	nrfx_gppi_conn_disable(radiant_op.conn_start_tx);
+	nrfx_gppi_conn_disable(radiant_op.conn_close);
+	nrfx_gppi_conn_disable(radiant_op.conn_rssi);
+#endif
 	/* The other stack has the RADIO from here (see RADIANT_NRF_REG_SHADOW). */
 	reg_shadow_forget();
 
@@ -4230,22 +4377,33 @@ void radiant_nrf_gate_on_denied(void)
 {
 	unsigned int key;
 
-#if defined(LP_SLOT_GUARD)
+#if defined(ARM_SLOT_GUARD)
 	/*
 	 * The gate's deferred denial (end_housekeeping() -> denied_work_fn(), a
-	 * cooperative thread) preempting an arm made from a preemptible thread:
+	 * cooperative thread) preempting an arm made from a preemptible thread
+	 * outside the scheduler's pass (production arms run under irq_lock and
+	 * cannot be preempted by it: see WHICH CONTEXTS REACH IT):
 	 * nothing is staged (g.pending was false), the operation in the slot is
 	 * that arm's, and the arm settles it itself (ETIME at its span, or OK and
-	 * live). An arm needs a free slot to claim, so the operation the denial
-	 * was for has already had its terminal.
+	 * live). Held, not dropped: if the arm's own request was just refused (it
+	 * got GATE_PENDING and is still staging it) this denial is that request's
+	 * only outcome, and arm_settle_staged() turns it into the arm's EDENIED.
+	 * Tested under irq_lock with the unstaging, so an arm from an
+	 * interrupt cannot claim between the two.
 	 */
-	if (lp_arming) {
+	key = irq_lock();
+	if (arm_marked) {
+		arm_deny_owed = true;
+		irq_unlock(key);
 		return;
 	}
-#endif
+	radiant_staged.pending = false;
+	irq_unlock(key);
+#else
 	key = irq_lock();
 	radiant_staged.pending = false;
 	irq_unlock(key);
+#endif
 
 	/*
 	 * Delivered unconditionally, never guarded on radiant_staged.pending: an operation
@@ -4273,14 +4431,18 @@ int radiant_radio_abort(void)
 		irq_unlock(key);
 		return RADIANT_RADIO_OK_RC;
 	}
-#if defined(LP_SLOT_GUARD)
+#if defined(ARM_SLOT_GUARD)
 	/*
 	 * The timeslot's end (EXTEND_FAILED, the extension skip) aborting an
 	 * arm still in progress underneath it: nothing of it is programmed, and
-	 * the arm fails ETIME at its span (AN ARM PREEMPTED BY THE TIMESLOT'S
-	 * END). Leaving it to the arm gives the operation one outcome.
+	 * the arm fails ETIME at its span (AN ARM PREEMPTED BY THE GRANT'S
+	 * END). Leaving it to the arm gives the operation one outcome. An arm
+	 * that got GATE_PENDING and is still staging loses nothing by the skip:
+	 * the abort was for the grant that just ended (whose operation had its
+	 * terminal before the slot was free to claim), the arm's own request is
+	 * untouched in the gate (g.pending), and its grant or denial still comes.
 	 */
-	if (lp_arming && gate_in_signal()) {
+	if (arm_marked && gate_in_signal()) {
 		irq_unlock(key);
 		return RADIANT_RADIO_OK_RC;
 	}

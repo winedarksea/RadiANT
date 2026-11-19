@@ -169,6 +169,20 @@ struct fake_backend_counts {
 	uint32_t lp_end_seq;
 	uint32_t lp_end_abort_calls;
 	uint32_t lp_end_outside;
+	/*
+	 * The grant generation (gate_grant_gen()) as the backend saw it: at the
+	 * last on_grant() (must be live, odd), at the last on_grant_end() (must
+	 * already be over, even), and every value on_grant() was handed, so a
+	 * test can show no two grants shared one.
+	 */
+	uint32_t gen_at_grant;
+	uint32_t gen_at_grant_end;
+	uint32_t gen_grant_reused;
+	/* Faults, zero on every path (assert_invariant() in test_gate.c): an
+	 * on_grant() handed an even (over) generation, an on_grant_end() that
+	 * found it still live. */
+	uint32_t gen_dead_at_grant;
+	uint32_t gen_live_at_grant_end;
 };
 
 void                              fake_backend_reset(void);
