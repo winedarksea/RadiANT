@@ -1,0 +1,6 @@
+b7ae330e9c3720bc7d76b738710f19e7 *build/h3_A_meas/hr_transmitter/zephyr/zephyr.hex
+23643442e9681e505352f7a903117ec4 *build/h3_A_tail50/hr_transmitter/zephyr/zephyr.hex
+c523f42c2c5f743ec968a0f728290c58 *build/h3_B_meas/hr_transmitter/zephyr/zephyr.hex
+395cc61c5c2019d2a97741901cb66c66 *build/h3_B_tail50/hr_transmitter/zephyr/zephyr.hex
+554705b3e0f979f8a7d3fd9a62da0ead *build/h3_ti_bits/dongle_ti/zephyr/zephyr.hex
+a5c3f1d9b8e0083e328681f5f3f26e56 *build/h3_ti_bits2/dongle_ti/zephyr/zephyr.hex
