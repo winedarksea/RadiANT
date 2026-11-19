@@ -149,10 +149,11 @@
  * taking it can be older than an anchor another context moved meanwhile,
  * which is the "reading from before the anchor" raw mode cannot detect.
  *
- * THE BACKEND SIDE is src/radiant_radio_nrf_lp.c (pass B3, nRF54L15 GRTC,
- * direct backend). What it took from the list this header carried for B3:
- *   - DONE: the GRTC format, extended, chosen by CONFIG_NRF_GRTC_TIMER (the
- *     only system timer Kconfig allows it on today) with its 1 MHz rate
+ * THE BACKEND SIDE is src/radiant_radio_nrf_lp.c (pass B3, nRF54L15 GRTC;
+ * pass B5, nRF52840 RTC1; direct backend). What it took from the list this
+ * header carried:
+ *   - DONE: the GRTC format, extended, chosen by CONFIG_NRF_GRTC_TIMER with
+ *     its 1 MHz rate
  *     BUILD_ASSERTed; its two channels are allocated at init and a shortage
  *     refuses the option at run time (the spike found 4 free, with or
  *     without MPSL).
@@ -162,11 +163,16 @@
  *   - DONE: an HFXO callback that has not run by EDGE 2 marks the segment
  *     timer_at_anchor = false (radiant_lp_wake(..., false)), is counted
  *     (hfxo_late_edge2), and is re-anchored once the crystal is stable.
- *   - PASS B5: the RTC1 format (CONFIG_NRF_RTC_TIMER_USER_CHAN_COUNT >= 2,
- *     CONFIG_CLOCK_CONTROL_NRF_K32SRC_FREQUENCY == 32768), the RTC driver's
- *     exact_set() for the anchoring edges, and TIMER SHUTDOWN (anomaly 78,
- *     which zeroes the counter but keeps the CC registers: read CC5 BEFORE
- *     SHUTDOWN).
+ *   - DONE (pass B5, nRF52840): the RTC1 format, extended, chosen by
+ *     CONFIG_NRF_RTC_TIMER, with its 32768 Hz rate BUILD_ASSERTed and
+ *     CONFIG_NRF_RTC_TIMER_USER_CHAN_COUNT >= 2 (radiant/Kconfig defaults it
+ *     to 2 with the option); the RTC driver's exact_set() for the anchoring
+ *     edges, its set() for EDGE 1, rebases and the linger's end; wakes
+ *     planned at most NRF_RTC_TIMER_MAX_SCHEDULE_SPAN / 2 (128 s) out; the
+ *     anchor a PPI channel with a FORK; and TIMER SHUTDOWN after STOP
+ *     (anomaly 78, which zeroes the counter but keeps the CC registers: CC5
+ *     is read BEFORE it). Both counters sit behind one seam in
+ *     radiant_radio_nrf_lp.c, so the state machine is shared.
  *   - Expect a constant rate step: asleep intervals run at the LFXO rate,
  *     awake ones at the HFXO rate, and the spike measured them -30 ppm
  *     apart on the nRF54L15 DK and -58.5 ppm on the Pro Micro clone (7.4 and
@@ -704,7 +710,8 @@ static inline uint64_t radiant_lp_wake_lead_us(const struct radiant_lp_tb *tb,
  * the release edge is min_lead ticks after the decision (plus up to a tick,
  * the counter having been read mid-tick), and EDGE 1 at least min_lead after
  * the release edge. 2 * min_lead + 1 ticks, rounded up: 214 us on the RTC
- * (min_lead 3), 217 on the GRTC (min_lead 108). Interrupt latency on top of
+ * at min_lead 3 (275 at the 4 the backend writes with), 217 on the GRTC
+ * (min_lead 108). Interrupt latency on top of
  * that is the keep-on margin's to cover.
  */
 static inline uint64_t radiant_lp_lf_overhead_us(const struct radiant_lp_tb *tb,

@@ -761,10 +761,9 @@ config RADIANT_NRF_RX_DIAG
 #
 # Power plan Track B, summarised in the help texts below. The arithmetic is
 # src/radiant_radio_nrf_lp.h (pass B2, radiant/tests/lp_clock); the backend
-# side is src/radiant_radio_nrf_lp.c (pass B3, radiant/tests/backend's lp
-# scenario), on the nRF54L GRTC only. The nRF52840/nRF5340 RTC1 path is
-# pass B5 (CONFIG_NRF_RTC_TIMER_USER_CHAN_COUNT >= 2, the RTC format, TIMER
-# SHUTDOWN after the release capture) and MPSL is pass B6.
+# side is src/radiant_radio_nrf_lp.c (pass B3 on the nRF54L GRTC, pass B5 on
+# the nRF52840 RTC1, one state machine behind a counter seam; radiant/tests/
+# backend's lp and lp_rtc scenarios). MPSL is pass B6.
 config RADIANT_NRF_LOW_POWER
 	bool "EXPERIMENTAL: release the HFXO and stop the radio TIMER in idle gaps"
 	depends on RADIANT_BACKEND_NRF
@@ -777,9 +776,12 @@ config RADIANT_NRF_LOW_POWER
 	# running from the crystal.
 	depends on CLOCK_CONTROL_NRF_K32SRC_XTAL
 	# The LF counter is the system timer's: two channels of the GRTC
-	# (nRF54L), allocated at init (a shortage refuses at run time). RTC1
-	# user channels (nRF52840, nRF5340 network core) are pass B5.
-	depends on NRF_GRTC_TIMER
+	# (nRF54L) or two RTC1 user channels (nRF52; the count is defaulted to
+	# 2 below), allocated at init (a shortage refuses at run time). The RTC
+	# path assumes the full 24-bit counter: the nRF52832's 15-bit build has a
+	# 2^14-tick schedule span and a driver that moves CC 0 to 1 even on an
+	# exact compare.
+	depends on NRF_GRTC_TIMER || (NRF_RTC_TIMER && NRF_RTC_COUNTER_BIT_WIDTH = 24)
 	# Direct backend only for now. On an MPSL build the HFXO and the wake
 	# both belong to MPSL's timeslot placement - and that includes an MPSL
 	# that something else turned on without the gate (the 802.15.4 radio
@@ -831,8 +833,9 @@ config RADIANT_NRF_LOW_POWER
 	  The backend sleeps only when the next operation starts more than
 	  the wake lead (arming lead + HFXO start-up + interrupt margin +
 	  two ticks of rounding), the LF overhead (the release edge's and
-	  edge 1's compare leads, ~215 us) and RADIANT_NRF_LP_KEEP_ON_US
-	  away, and not for RADIANT_NRF_LP_LINGER_MS after the radio is
+	  edge 1's compare leads, ~215 us on the GRTC, ~275 us on RTC1)
+	  and RADIANT_NRF_LP_KEEP_ON_US away, and not for
+	  RADIANT_NRF_LP_LINGER_MS after the radio is
 	  enabled or a PRIO_NORMAL operation is acquired: a search, a
 	  receive that is still acquiring, or a burst never sleeps. A master
 	  in steady state is awake about 4.5 ms per period (~2 % duty).
@@ -848,13 +851,33 @@ config RADIANT_NRF_LOW_POWER
 
 	  Requires the LF crystal (CLOCK_CONTROL_NRF_K32SRC_XTAL); the backend
 	  also checks at init that LFCLK runs from it, and that it has two
-	  GRTC channels and its DPPI connection, and otherwise logs a warning
-	  and keeps the HFXO on for the whole run. Off by default; with it
-	  off nothing here compiles.
+	  LF channels (GRTC, or RTC1 user channels) and its (D)PPI
+	  connection, and otherwise logs a warning and keeps the HFXO on for
+	  the whole run. Off by default; with it off nothing here compiles.
 
-	  STATUS: EXPERIMENTAL, nRF54L15 direct backend only (power plan pass
-	  B3). Not yet bench-gated (Gate G1). The nRF52840 RTC1 path (pass
-	  B5) and MPSL (pass B6) are not implemented: Kconfig refuses them.
+	  On the nRF52 the radio TIMER is shut down (TASKS_SHUTDOWN, nRF52
+	  anomaly 78) rather than just stopped while asleep, and RTC1's
+	  32768 Hz tick (30.5 us) makes every wake edge up to one tick early,
+	  which the wake lead absorbs.
+
+	  STATUS: EXPERIMENTAL, direct backend only: nRF54L15 (power plan
+	  pass B3, Gate G1 running) and nRF52840 (pass B5, not yet
+	  bench-gated). Other parts with these system timers - the rest of
+	  both families, the nRF5340 network core - build but are unmeasured
+	  (spike B1 covered one nRF54L15 DK and one nRF52840 Pro Micro
+	  clone). MPSL (pass B6) is not implemented: Kconfig refuses it.
+
+# Two of the system timer's RTC1 compare channels for the option (the anchor
+# and the HF edge). Sourced before drivers/timer/Kconfig.nrf_rtc, as every
+# module's Kconfig is (Kconfig.zephyr: modules/Kconfig before drivers/Kconfig),
+# so this default is the one taken. Its condition is false with the option
+# off, which leaves the driver's own defaults - and every image without the
+# option - exactly as they were. radiant_radio_nrf_lp.c BUILD_ASSERTs >= 2
+# against an explicit lower setting.
+config NRF_RTC_TIMER_USER_CHAN_COUNT
+	int
+	depends on NRF_RTC_TIMER
+	default 2 if RADIANT_NRF_LOW_POWER
 
 config RADIANT_NRF_LP_HFXO_STARTUP_US
 	int "HFXO start-up time the low-power wake allows for, us"
@@ -934,7 +957,7 @@ config RADIANT_NRF_LP_STATS
 	  with RADIANT_POWER_DIAG, whose proxy is how a board with no
 	  current meter shows what the option saved.
 
-	  They live in the global radiant_nrf_lp_stats (88 bytes, layout in
+	  They live in the global radiant_nrf_lp_stats (92 bytes, layout in
 	  src/radiant_radio_nrf_lp.c), not in radiant_power_diag, whose layout
 	  is fixed: read it over SWD by symbol (scripts/jlink_peek.ps1
 	  -Symbol radiant_nrf_lp_stats).

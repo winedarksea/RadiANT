@@ -50,8 +50,10 @@
 # build where page 7's scheduler cases exist).
 # 2026-11-18: 17, radiant.lp_clock (the nRF low-power timebase arithmetic,
 # power plan pass B2). 18, radiant.backend.lp (the backend's HFXO release and
-# two-edge wake against a simulated GRTC/HFXO/TIMER, pass B3).
-min_scenarios: 18
+# two-edge wake against a simulated GRTC/HFXO/TIMER, pass B3). 19,
+# radiant.backend.lp_rtc (the low-power path against a simulated RTC1 driver
+# and nRF52 TIMER, pass B5).
+min_scenarios: 19
 
 # Total ztest cases twister executes, summed over every scenario. It equals the
 # sum of the per-scenario floors below, so the backstop and the floors cannot
@@ -101,7 +103,9 @@ min_scenarios: 18
 # 5880 (+38) with the radiant.lp_clock scenario (power plan pass B2).
 # 5900 (+20) with the radiant.backend.lp scenario (power plan pass B3).
 # 5913 (+13) with the B3 review fixes' backend.lp cases.
-min_testcases: 5913
+# 5954 (+41) with the radiant.backend.lp_rtc scenario (power plan pass B5):
+# the 33 backend.lp cases on RTC1 and RTC1's own 8.
+min_testcases: 5954
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -148,3 +152,9 @@ min_cases.radiant.lp_clock: 38
 # radiant.backend.lp (power plan pass B3): the nRF backend with
 # CONFIG_RADIANT_NRF_LOW_POWER against a simulated GRTC, HFXO and TIMER.
 min_cases.radiant.backend.lp: 33
+# radiant.backend.lp_rtc (power plan pass B5): the low-power path on a
+# simulated RTC1 driver and nRF52 TIMER (the rest of the backend keeps its
+# nRF54L shape) - every radiant.backend.lp case plus 8 of RTC1's own (64-bit
+# arithmetic across 2^24, schedule span, minimum lead, TIMER SHUTDOWN,
+# software start).
+min_cases.radiant.backend.lp_rtc: 41

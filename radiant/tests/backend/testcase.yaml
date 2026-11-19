@@ -22,3 +22,17 @@ tests:
       - native_sim
     extra_args:
       - BACKEND_LP=1
+  radiant.backend.lp_rtc:
+    # The same backend on the nRF52840's LF counter (power plan pass B5):
+    # every radiant.backend.lp case against a simulated RTC1 (32768 Hz,
+    # 24-bit, Zephyr's nrf_rtc_timer rules), PPI and the nRF52 TIMER's
+    # SHUTDOWN, plus RTC1's own cases (src_lp_rtc/).
+    tags:
+      - radiant
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    extra_args:
+      - BACKEND_LP=1
+      - BACKEND_LP_RTC=1

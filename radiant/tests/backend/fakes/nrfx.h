@@ -38,8 +38,16 @@ typedef enum {
 typedef enum { NRF_RADIO_MODE_NRF_1MBIT, NRF_RADIO_MODE_BLE_LR125KBIT } nrf_radio_mode_t;
 typedef enum {
 	NRF_TIMER_TASK_CLEAR = 100, NRF_TIMER_TASK_START = 101,
-	NRF_TIMER_TASK_STOP = 102
+	NRF_TIMER_TASK_STOP = 102, NRF_TIMER_TASK_SHUTDOWN = 103
 } nrf_timer_task_t;
+/* The nRF52 TIMER's SHUTDOWN task (nrfx: TIMER_TASKS_SHUTDOWN present). Only
+ * the low-power RTC1 scenario (radiant.backend.lp_rtc, -DLPT_RTC) models the
+ * nRF52 TIMER; every other build here is the nRF54L shape, which has none. */
+#if defined(LPT_RTC)
+#define NRF_TIMER_HAS_SHUTDOWN 1
+#else
+#define NRF_TIMER_HAS_SHUTDOWN 0
+#endif
 typedef int nrf_timer_event_t;
 typedef int nrf_timer_cc_channel_t;
 typedef enum { NRF_TIMER_MODE_TIMER } nrf_timer_mode_t;

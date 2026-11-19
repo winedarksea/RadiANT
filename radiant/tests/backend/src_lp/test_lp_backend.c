@@ -1,14 +1,21 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * The nRF backend with CONFIG_RADIANT_NRF_LOW_POWER (power plan pass B3,
- * src/radiant_radio_nrf_lp.c), against a simulated GRTC, HFXO and TIMER
- * (backend_lp_under_test.c). Each case names the risk it covers.
+ * The nRF backend with CONFIG_RADIANT_NRF_LOW_POWER (power plan passes B3 and
+ * B5, src/radiant_radio_nrf_lp.c), against a simulated LF counter, HFXO and
+ * TIMER (backend_lp_under_test.c). Each case names the risk it covers. Every
+ * case here runs in both scenarios: radiant.backend.lp (the nRF54L15 GRTC)
+ * and radiant.backend.lp_rtc (the nRF52840 RTC1); src_lp_rtc/ adds RTC1's
+ * own. What differs between them comes from backend_lp_probe.h (LPT_*).
  *
  * The numbers: the wake lead is LP_ARM_LEAD_US (ARM_SETUP_US 80 + 150 = 230)
- * after EDGE 2 and LP_HFXO_LEAD_US (800 + 100 = 900) from EDGE 1 to EDGE 2;
- * the backend sleeps when the next operation is more than 1132 (wake lead) +
- * 217 (LF overhead) + 3000 (keep-on) = 4349 us away. The simulated HFXO starts
- * in 680 us (spike B1's maximum) unless a case says otherwise.
+ * after EDGE 2 and LPT_HFXO_LEAD from EDGE 1 to EDGE 2 (800 + 100 = 900 on
+ * the GRTC, 500 + 100 = 600 on RTC1). On the GRTC the backend sleeps when the
+ * next operation is more than 1132 (wake lead) + 217 (LF overhead) + 3000
+ * (keep-on) = 4349 us away; on RTC1, 892 + 275 + 3000 = 4167 us. The
+ * simulated HFXO starts in LPT_HFXO_STARTUP (spike B1's maximum on each
+ * board: 680, 418 us) unless a case says otherwise. RTC1's wake edges fall on
+ * 30.5 us ticks, up to one tick early, so times "before an edge" allow
+ * LPT_TICK_US per edge.
  */
 
 #include <errno.h>
@@ -20,7 +27,7 @@
 #include "backend_lp_probe.h"
 
 #define ARM_LEAD   230u
-#define HFXO_LEAD  900u
+#define HFXO_LEAD  LPT_HFXO_LEAD
 #define FAR_US     100000u
 #define NEAR_US    3000u
 
@@ -67,12 +74,13 @@ ZTEST(radiant_backend_lp, test_far_arm_sleeps_and_fires_on_time)
 	zassert_equal(lpt_constlat_refs(), 0, "CONSTLAT freed between slots");
 	zassert_false(lpt_tx_programmed(&start));
 
-	lpt_run_to(ts - ARM_LEAD - HFXO_LEAD - 2u);
+	lpt_run_to(ts - ARM_LEAD - HFXO_LEAD - 2u * LPT_TICK_US - 2u);
 	zassert_equal(lpt_state(), LPT_ASLEEP, "EDGE 1 not before its time");
-	lpt_run_to(ts - ARM_LEAD - 1u);
+	lpt_run_to(ts - ARM_LEAD - LPT_TICK_US - 1u);
 	zassert_equal(lpt_state(), LPT_WAKING, "EDGE 1 requested the HFXO");
 	zassert_true(lpt_hfxo_on());
-	zassert_equal(lpt_constlat_refs(), 1, "CONSTLAT back before the radio runs");
+	zassert_equal(lpt_constlat_refs(), LPT_CONSTLAT_ON,
+		      "CONSTLAT back before the radio runs");
 	lpt_run_to(ts - ARM_LEAD + 1u);
 	zassert_equal(lpt_state(), LPT_AWAKE);
 	zassert_true(lpt_tx_programmed(&start), "EDGE 2 granted the staged transmit");
@@ -146,7 +154,7 @@ ZTEST(radiant_backend_lp, test_periodic_master_monotonic_and_on_time)
 			t = lpt_radio_now();
 			zassert_true(t >= last, "time ran backwards: %llu < %llu",
 				     (unsigned long long)t, (unsigned long long)last);
-			zassert_within(t, lpt_world() - LPT_W0, 3,
+			zassert_within(t, lpt_world() - LPT_W0, 3u + LPT_ASLEEP_SLACK_US,
 				       "radio %llu world %llu", (unsigned long long)t,
 				       (unsigned long long)(lpt_world() - LPT_W0));
 			last = t;
@@ -165,7 +173,8 @@ ZTEST(radiant_backend_lp, test_periodic_master_monotonic_and_on_time)
 	zassert_equal(st.range_errors, 0);
 	zassert_equal(st.disagreements, 0);
 	zassert_true(st.max_disagree_us <= 1u);
-	zassert_true(st.max_wake_slack_us <= ARM_LEAD, "slack %u", st.max_wake_slack_us);
+	zassert_true(st.max_wake_slack_us <= ARM_LEAD + LPT_TICK_US, "slack %u",
+		     st.max_wake_slack_us);
 	{
 		uint64_t on = lpt_hfxo_on_us() - on_begin;
 		uint64_t span = lpt_world() - w_begin;
@@ -209,7 +218,7 @@ ZTEST(radiant_backend_lp, test_late_anchor_fails_once_then_recovers)
 	lpt_stats(&st);
 	zassert_equal(st.timer_taken, st0.timer_taken + 1u,
 		      "no exact anchor: the release took the TIMER");
-	zassert_within(lpt_radio_now(), lpt_world() - LPT_W0, 1);
+	zassert_within(lpt_radio_now(), lpt_world() - LPT_W0, 1u + LPT_ASLEEP_SLACK_US);
 
 	/* And the next one sleeps and wakes normally. */
 	t_sync = lpt_radio_now() + FAR_US;
@@ -268,7 +277,7 @@ ZTEST(radiant_backend_lp, test_hfxo_late_at_edge2_reanchors)
 	uint64_t start;
 
 	lpt_stats(&st0);
-	lpt_set_hfxo_startup(1000u);   /* ready 100 us after EDGE 2 */
+	lpt_set_hfxo_startup(HFXO_LEAD + 100u);   /* ready ~100 us after EDGE 2 */
 	t_sync = arm_far_and_sleep();
 	ts = t_start_world(t_sync);
 	lpt_run_to(ts - ARM_LEAD + 1u);
@@ -295,7 +304,7 @@ ZTEST(radiant_backend_lp, test_hfxo_too_late_fails_once)
 	struct lpt_stats st;
 	uint64_t t_sync;
 
-	lpt_set_hfxo_startup(1300u);   /* ready 170 us after TXEN */
+	lpt_set_hfxo_startup(HFXO_LEAD + 400u);   /* ready over 100 us after TXEN */
 	t_sync = arm_far_and_sleep();
 	lpt_run_to(t_start_world(t_sync) + 500u);
 	zassert_equal(p->failed_events, 1);
@@ -441,7 +450,8 @@ ZTEST(radiant_backend_lp, test_near_arm_while_asleep_wakes_asap)
 
 	(void)arm_far_and_sleep();
 	zassert_equal(lpt_abort(), RADIANT_RADIO_OK_RC);
-	t_sync = lpt_radio_now() + lpt_tx_lead() + 800u;
+	/* Starts before an ASAP wake's EDGE 2 (one HFXO lead from now). */
+	t_sync = lpt_radio_now() + lpt_tx_lead() + HFXO_LEAD - 100u;
 	zassert_equal(lpt_tx_at(t_sync), RADIANT_RADIO_OK_RC);
 	zassert_equal(lpt_state(), LPT_WAKING, "HFXO requested at once");
 	lpt_run(HFXO_LEAD + 300u);
@@ -521,7 +531,7 @@ ZTEST(radiant_backend_lp, test_release_without_capture_stays_awake)
 
 	zassert_equal(lpt_tx_at(t_sync), RADIANT_RADIO_OK_RC);
 	lpt_break_next_dppi();
-	lpt_run(120u);
+	lpt_run_past_anchor();
 	lpt_stats(&st);
 	zassert_equal(st.late_anchors, 1);
 	zassert_equal(st.sleeps, 0);
@@ -559,9 +569,10 @@ ZTEST(radiant_backend_lp, test_late_release_write_stays_awake)
 }
 
 /*
- * Risk: an operation further out than the longest planned wake (600 s): the
- * backend wakes without the HFXO at the clamp, rebases, plans again, and the
- * operation is still on its microsecond.
+ * Risk: an operation further out than the longest planned wake (600 s on the
+ * GRTC, 128 s on RTC1 - whose driver refuses anything past 256 s, and whose
+ * 24-bit counter wraps every 512 s): the backend wakes without the HFXO at the
+ * clamp, rebases, plans again, and the operation is still on its microsecond.
  */
 ZTEST(radiant_backend_lp, test_very_far_arm_rebases)
 {
@@ -576,7 +587,7 @@ ZTEST(radiant_backend_lp, test_very_far_arm_rebases)
 	lpt_run(650000000ull);
 	zassert_equal(lpt_state(), LPT_ASLEEP, "the clamp wake needs no HFXO");
 	zassert_equal(lpt_hfxo_requests(), req0);
-	zassert_within(lpt_radio_now(), lpt_world() - LPT_W0, 1);
+	zassert_within(lpt_radio_now(), lpt_world() - LPT_W0, 1u + LPT_ASLEEP_SLACK_US);
 	lpt_run_to(t_start_world(t_sync) - ARM_LEAD + 1u);
 	zassert_true(lpt_tx_programmed(&start));
 	zassert_within(start, t_start_world(t_sync), 1);
@@ -603,7 +614,9 @@ ZTEST(radiant_backend_lp, test_abort_then_near_arm_past_cancel_window)
 	zassert_equal(lpt_tx_at(lpt_radio_now() + NEAR_US), RADIANT_RADIO_OK_RC);
 	zassert_equal(lpt_abort(), RADIANT_RADIO_OK_RC);
 	zassert_equal(lpt_state(), LPT_RELEASING, "the abort's terminal committed a release");
-	lpt_run(250u);   /* past the cancel window (grace 300 - 85) */
+	/* Past the cancel window (LP_POSTWRITE_LEAD before the edge: 85 us on
+	 * the GRTC, two ticks on RTC1), before the edge. */
+	lpt_run_to_anchor_minus(10u);
 	t_sync = lpt_radio_now() + NEAR_US;
 	zassert_equal(lpt_tx_at(t_sync), RADIANT_RADIO_OK_RC);
 	zassert_false(lpt_staged(), "programmed at once on the running TIMER");
@@ -630,7 +643,7 @@ ZTEST(radiant_backend_lp, test_far_then_near_arm_races_release_edge)
 
 	zassert_equal(lpt_tx_at(lpt_radio_now() + FAR_US), RADIANT_RADIO_OK_RC);
 	zassert_equal(lpt_abort(), RADIANT_RADIO_OK_RC);
-	lpt_run(50u);    /* past the cancel window (108 - 85) */
+	lpt_run_to_anchor_minus(10u);    /* past the cancel window, before the edge */
 	t_sync = lpt_radio_now() + NEAR_US;
 	zassert_equal(lpt_tx_at(t_sync), RADIANT_RADIO_OK_RC);
 	lpt_run(200u);
@@ -641,10 +654,12 @@ ZTEST(radiant_backend_lp, test_far_then_near_arm_races_release_edge)
 }
 
 /*
- * Finding 2: the GRTC interrupt held off past both wake edges; nrfx services
- * the anchor channel (EDGE 2, the lower index) first, while still ASLEEP. The
- * handler must do EDGE 1's work and take the edge, not drop it and leave the
- * backend waking forever on HFINT with the HFXO held.
+ * Finding 2: the LF interrupt held off past both wake edges. Where the
+ * anchor channel (EDGE 2) is the lower index (this fake's GRTC), the driver
+ * services it first, while still ASLEEP: the handler must do EDGE 1's work
+ * and take the edge, not drop it and leave the backend waking forever on
+ * HFINT with the HFXO held. On RTC1 the HF channel is the lower and EDGE 1
+ * runs first; the outcome must be the same either way.
  */
 ZTEST(radiant_backend_lp, test_edge2_serviced_before_edge1)
 {
@@ -656,14 +671,14 @@ ZTEST(radiant_backend_lp, test_edge2_serviced_before_edge1)
 	lpt_hold_isr_until(e2 + 50u);
 	lpt_run_to(e2 + 50u + 1000u);
 	lpt_stats(&st);
-	zassert_equal(st.edge_order, 1, "EDGE 2 handled first");
+	zassert_equal(st.edge_order, LPT_ANCHOR_SERVICED_FIRST, "EDGE 2 handled first");
 	zassert_equal(st.hfxo_late_edge2, 1);
 	zassert_equal(p->failed_events, 1, "the operation was missed, and said so");
 	lpt_run(1000u);
 	zassert_equal(lpt_state(), LPT_ASLEEP, "not wedged: back to sleep");
 	zassert_false(lpt_hfxo_on());
 	zassert_equal(lpt_constlat_refs(), 0);
-	zassert_within(lpt_radio_now(), lpt_world() - LPT_W0, 1,
+	zassert_within(lpt_radio_now(), lpt_world() - LPT_W0, 1u + LPT_ASLEEP_SLACK_US,
 		       "the TIMER started on the edge: the timebase is exact");
 }
 
@@ -681,12 +696,14 @@ ZTEST(radiant_backend_lp, test_late_wake_rewrite_inside_arm_grants)
 	uint64_t e1 = t_start_world(t_sync) - ARM_LEAD - HFXO_LEAD;
 	uint64_t start;
 
-	lpt_run_to(e1 + 700u);
+	lpt_run_to(e1 + LPT_HFXO_STARTUP + 20u);   /* HFXO up, EDGE 2 not yet */
 	zassert_equal(lpt_state(), LPT_WAKING);
 	zassert_equal(lpt_abort(), RADIANT_RADIO_OK_RC);
 	lpt_stats(&st0);
 	lpt_delay_next_anchor_set(200u);
-	t_sync = lpt_radio_now() + lpt_tx_lead() + 300u;
+	/* Leaves the arming lead after the 200 us preemption and RTC1's wait for
+	 * its step before the software start. */
+	t_sync = lpt_radio_now() + lpt_tx_lead() + 300u + LPT_TICK_US;
 	zassert_equal(lpt_tx_at(t_sync), RADIANT_RADIO_OK_RC);
 	zassert_false(lpt_staged(), "granted, not stranded PENDING");
 	zassert_equal(lpt_state(), LPT_AWAKE);
@@ -713,7 +730,7 @@ ZTEST(radiant_backend_lp, test_hfxo_start_error_drops_to_always_on)
 	uint64_t start;
 
 	lpt_hfxo_errors(false, true);
-	lpt_run_to(t_start_world(t_sync) - ARM_LEAD - HFXO_LEAD + 700u);
+	lpt_run_to(t_start_world(t_sync) - ARM_LEAD - HFXO_LEAD + LPT_HFXO_STARTUP + 20u);
 	lpt_stats(&st);
 	zassert_equal(st.hfxo_errors, 1);
 	zassert_equal(st.refused, 2);
@@ -721,7 +738,7 @@ ZTEST(radiant_backend_lp, test_hfxo_start_error_drops_to_always_on)
 	zassert_equal(p->failed_events, 1);
 	zassert_true(lpt_timer_running());
 	zassert_true(lpt_hf_fallback());
-	zassert_equal(lpt_constlat_refs(), 1);
+	zassert_equal(lpt_constlat_refs(), LPT_CONSTLAT_ON);
 	zassert_within(lpt_radio_now(), lpt_world() - LPT_W0, 1);
 	lpt_run(FAR_US);
 	t_sync = lpt_radio_now() + FAR_US;
@@ -742,7 +759,7 @@ ZTEST(radiant_backend_lp, test_hfxo_request_error_inside_arm)
 	(void)arm_far_and_sleep();
 	zassert_equal(lpt_abort(), RADIANT_RADIO_OK_RC);
 	lpt_hfxo_errors(true, false);
-	t_sync = lpt_radio_now() + lpt_tx_lead() + 800u;   /* an ASAP wake */
+	t_sync = lpt_radio_now() + lpt_tx_lead() + HFXO_LEAD - 100u;   /* an ASAP wake */
 	zassert_equal(lpt_tx_at(t_sync), RADIANT_RADIO_OK_RC);
 	zassert_false(lpt_staged());
 	zassert_equal(lpt_state(), LPT_OFF);
@@ -842,8 +859,9 @@ ZTEST(radiant_backend_lp, test_boot_hfxo_timeout_dequeues)
 }
 
 /* Finding 2, the reverse: an abort while both wake edges are latched behind
- * a held interrupt. EDGE 2's DPPI has already started the TIMER; cancelling
- * the wake must stop it again, and the late handlers change nothing. */
+ * a held interrupt. EDGE 2's (D)PPI has already started the TIMER; cancelling
+ * the wake must stop it again, and the late handlers - where the driver
+ * still delivers them after the abort (the GRTC's) - change nothing. */
 ZTEST(radiant_backend_lp, test_abort_with_wake_edges_latched)
 {
 	struct lpt_stats st;
@@ -860,7 +878,8 @@ ZTEST(radiant_backend_lp, test_abort_with_wake_edges_latched)
 	zassert_false(lpt_timer_running());
 	zassert_false(lpt_hfxo_on());
 	lpt_stats(&st);
-	zassert_equal(st.spurious, 2, "both latched handlers ran and were ignored");
+	zassert_equal(st.spurious, LPT_ABORT_KEEPS_LATCHED ? 2u : 0u,
+		      "both latched handlers ran and were ignored");
 	zassert_equal(st.wakes, 0);
 }
 
@@ -873,7 +892,7 @@ ZTEST(radiant_backend_lp, test_hfxo_fallback_refused_counted_once)
 
 	lpt_set_fallback_rc(-EIO);
 	lpt_hfxo_errors(false, true);
-	lpt_run_to(t_start_world(t_sync) - ARM_LEAD - HFXO_LEAD + 700u);
+	lpt_run_to(t_start_world(t_sync) - ARM_LEAD - HFXO_LEAD + LPT_HFXO_STARTUP + 20u);
 	lpt_stats(&st);
 	zassert_equal(lpt_state(), LPT_OFF);
 	zassert_equal(st.refused, 2);
