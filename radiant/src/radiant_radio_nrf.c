@@ -359,7 +359,10 @@ static void lp_constlat(bool on);
 #define ARM_SLOT_GUARD 1
 static uint32_t arm_gen;
 static volatile bool arm_marked;
-#define ARM_CLAIM() do { arm_gen = gate_grant_gen(); arm_marked = true; } while (0)
+/* A gate denial that reached radiant_nrf_gate_on_denied() while the arm was
+ * marked (see arm_settle_staged()). Cleared by every claim. */
+static volatile bool arm_deny_owed;
+#define ARM_CLAIM() do { arm_gen = gate_grant_gen(); arm_deny_owed = false; 			 arm_marked = true; } while (0)
 #define ARM_DONE()  do { arm_marked = false; } while (0)
 
 /* Open a programme's span: the zero-latency lock, and whether the loan the
@@ -388,6 +391,9 @@ static inline void arm_span_fail(uint32_t key)
 {
 	radiant_swi_zli_unlock(key);
 }
+
+/* The staged branch's end (below radiant_staged). */
+static bool arm_settle_staged(void);
 #endif
 #if defined(ARM_SLOT_GUARD)
 #define ARM_GUARD_ONLY(...) do { __VA_ARGS__; } while (0)
@@ -993,6 +999,48 @@ static struct {
 	/* True from a GATE_PENDING acquire until its grant or denial. Lets gate callbacks reject late signals. */
 	bool pending;
 } radiant_staged;
+
+#if defined(ARM_SLOT_GUARD)
+/*
+ * The staged (GATE_PENDING) branch's end, called once radiant_staged holds the
+ * request. A denial the gate delivered while the arm was marked was held, not
+ * dropped (arm_deny_owed): the gate sends one only with nothing pending
+ * (denied_work_fn() tests g.pending), and from a cooperative thread it can
+ * land between gate_acquire() placing this arm's own request and this point -
+ * MPSL refusing it (BLOCKED, inline or deferred), its deadline expiring, or
+ * its grant arriving before the request was staged (on_grant() then finds
+ * nothing staged and gives the grant back). Dropping it wedged the slot: a
+ * staged operation with no grant, deadline or denial owed, and EBUSY for every
+ * later arm. Settled here, against the zero-latency signal and every thread:
+ *
+ *   - a denial held and the gate no longer pending: nothing is coming for the
+ *     request. It is unstaged and the arm fails EDENIED, the synchronous
+ *     refusal (the caller's scheduler is inside its own arm call, so a
+ *     terminal from here would re-enter it): one outcome, no terminal;
+ *   - a denial held but the gate still pending: the denial predated this
+ *     arm's request (a stale one), and the request's own grant or denial is
+ *     still to come. Dropped;
+ *   - no denial held: the mark goes, and any later denial reaches the staged
+ *     operation as a terminal, as it always has.
+ *
+ * Returns true when the arm must fail EDENIED; the mark then stays until the
+ * caller's `fail:` has freed the slot.
+ */
+static bool arm_settle_staged(void)
+{
+	uint32_t key = radiant_swi_zli_lock();
+	const bool refuse = arm_deny_owed && !gate_request_pending();
+
+	arm_deny_owed = false;
+	if (refuse) {
+		radiant_staged.pending = false;
+	} else {
+		ARM_DONE();
+	}
+	radiant_swi_zli_unlock(key);
+	return refuse;
+}
+#endif
 
 /* Debug counters: logging from the RADIO ISR is unsafe, so the ISR counts and thread context reports. */
 static volatile uint32_t radiant_dbg_isr;
@@ -3012,7 +3060,15 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 		radiant_staged.tx.fmt = &radiant_staged.tx_fmt;
 		radiant_staged.tx_regs = fmt_regs;
 		radiant_staged.pending = true;
-		ARM_GUARD_ONLY(ARM_DONE());
+#if defined(ARM_SLOT_GUARD)
+		if (arm_settle_staged()) {
+			/* The gate refused this arm's own request while it was
+			 * being staged: refused now, with no terminal. */
+			*op = 0u;
+			rc = RADIANT_RADIO_EDENIED;
+			goto fail;
+		}
+#endif
 		LP_HOOK(lp_staged());
 #if defined(CONFIG_RADIANT_GATE_MPSL_D2)
 		d2_settle_now();
@@ -3537,7 +3593,15 @@ static int rx_arm(const struct radiant_rx_req *req, uint32_t *op)
 		       (size_t)req->n_filters * sizeof(struct radiant_rx_filter));
 		radiant_staged.rx.filters = radiant_staged.rx_filters;
 		radiant_staged.pending = true;
-		ARM_GUARD_ONLY(ARM_DONE());
+#if defined(ARM_SLOT_GUARD)
+		if (arm_settle_staged()) {
+			/* The gate refused this arm's own request while it was
+			 * being staged: refused now, with no terminal. */
+			*op = 0u;
+			rc = RADIANT_RADIO_EDENIED;
+			goto fail;
+		}
+#endif
 		LP_HOOK(lp_staged());
 #if defined(CONFIG_RADIANT_GATE_MPSL_D2)
 		d2_settle_now();
@@ -3788,7 +3852,15 @@ int radiant_radio_ed(const struct radiant_ed_req *req, uint32_t *op)
 	if (g == GATE_PENDING) {
 		radiant_staged.ed = *req;
 		radiant_staged.pending = true;
-		ARM_GUARD_ONLY(ARM_DONE());
+#if defined(ARM_SLOT_GUARD)
+		if (arm_settle_staged()) {
+			/* The gate refused this arm's own request while it was
+			 * being staged: refused now, with no terminal. */
+			*op = 0u;
+			rc = RADIANT_RADIO_EDENIED;
+			goto fail;
+		}
+#endif
 		LP_HOOK(lp_staged());
 #if defined(CONFIG_RADIANT_GATE_MPSL_D2)
 		d2_settle_now();
@@ -4283,16 +4355,25 @@ void radiant_nrf_gate_on_denied(void)
 	 * cooperative thread) preempting an arm made from a preemptible thread:
 	 * nothing is staged (g.pending was false), the operation in the slot is
 	 * that arm's, and the arm settles it itself (ETIME at its span, or OK and
-	 * live). An arm needs a free slot to claim, so the operation the denial
-	 * was for has already had its terminal.
+	 * live). Held, not dropped: if the arm's own request was just refused (it
+	 * got GATE_PENDING and is still staging it) this denial is that request's
+	 * only outcome, and arm_settle_staged() turns it into the arm's EDENIED.
+	 * Tested under irq_lock with the unstaging, so an arm from an
+	 * interrupt cannot claim between the two.
 	 */
+	key = irq_lock();
 	if (arm_marked) {
+		arm_deny_owed = true;
+		irq_unlock(key);
 		return;
 	}
-#endif
+	radiant_staged.pending = false;
+	irq_unlock(key);
+#else
 	key = irq_lock();
 	radiant_staged.pending = false;
 	irq_unlock(key);
+#endif
 
 	/*
 	 * Delivered unconditionally, never guarded on radiant_staged.pending: an operation
@@ -4325,7 +4406,11 @@ int radiant_radio_abort(void)
 	 * The timeslot's end (EXTEND_FAILED, the extension skip) aborting an
 	 * arm still in progress underneath it: nothing of it is programmed, and
 	 * the arm fails ETIME at its span (AN ARM PREEMPTED BY THE GRANT'S
-	 * END). Leaving it to the arm gives the operation one outcome.
+	 * END). Leaving it to the arm gives the operation one outcome. An arm
+	 * that got GATE_PENDING and is still staging loses nothing by the skip:
+	 * the abort was for the grant that just ended (whose operation had its
+	 * terminal before the slot was free to claim), the arm's own request is
+	 * untouched in the gate (g.pending), and its grant or denial still comes.
 	 */
 	if (arm_marked && gate_in_signal()) {
 		irq_unlock(key);

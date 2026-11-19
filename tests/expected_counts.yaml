@@ -119,8 +119,10 @@ min_scenarios: 21
 # (fix/mpsl-arm-handback): radiant.backend's 2 (the preempted-arm sweep on the
 # option-off build, the hand-back disabling a live operation's connections)
 # and test_gate_grant_gen.c's 10 in each of radiant.gate and radiant.gate.lp.
-# The Bluefin run on that branch (2026-11-18) executed 6898.
-min_testcases: 6098
+# The Bluefin run on that branch (2026-11-18) executed 6898. 6099 (+1) with
+# the review's staged-path sweep (a denial landing while the arm stages its
+# own refused request).
+min_testcases: 6099
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -151,8 +153,9 @@ min_cases.radiant.api.diag: 104
 # 86 with the grant generation's 10 (observed 104).
 min_cases.radiant.gate: 86
 # radiant.backend (ADR 0021): the backend completion path against register models.
-# 10 with the option-off preempted-arm cases (observed 45).
-min_cases.radiant.backend: 10
+# 10 with the option-off preempted-arm cases (observed 45), 11 with the
+# staged-path sweep.
+min_cases.radiant.backend: 11
 min_cases.hrm_ble.sim_sched: 4
 min_cases.treadmill.pages: 20
 min_cases.treadmill.hr_rx: 3

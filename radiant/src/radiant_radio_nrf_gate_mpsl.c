@@ -1302,6 +1302,11 @@ uint32_t gate_grant_gen(void)
 	return grant_gen;
 }
 
+bool gate_request_pending(void)
+{
+	return g.pending;
+}
+
 /* SIGNAL_START, before anything can programme the radio: a fresh odd value. */
 static inline void grant_gen_start(void)
 {

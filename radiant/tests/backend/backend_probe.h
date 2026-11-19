@@ -69,29 +69,36 @@ bool     backend_filt_memo_holds(const struct radiant_rx_req *req);
 void     backend_program_ed(void);
 
 /* An arm preempted by the grant's end (test_arm_handback.c): the simulated
- * signal, taken at the n-th outermost unlock of the zero-latency lock. */
+ * event, taken at the n-th preemption point of the arm (each outermost unlock
+ * of the zero-latency lock, and the return of gate_acquire()). */
 enum { BACKEND_ARM_TX, BACKEND_ARM_RX, BACKEND_ARM_ED };
 enum {
-	BACKEND_PRE_END,        /* hand-back and ACTION_END (TIMER0, a release) */
-	BACKEND_PRE_END_START,  /* the same, then the next START */
-	BACKEND_PRE_ABORT_END,  /* hand-back, then radiant_radio_abort() (EXTEND_FAILED, skip) */
-	BACKEND_PRE_DENIED,     /* the gate's deferred denial from a cooperative thread */
+	BACKEND_PRE_END,         /* hand-back and ACTION_END (TIMER0, a release) */
+	BACKEND_PRE_END_START,   /* the same, then the next START */
+	BACKEND_PRE_ABORT_END,   /* hand-back, then radiant_radio_abort() (EXTEND_FAILED, skip) */
+	BACKEND_PRE_DENIED,      /* a queued denial reaching gate_wq */
+	BACKEND_PRE_BLOCKED,     /* MPSL refuses the placed request; gate_wq denies */
+	BACKEND_PRE_DEADLINE,    /* the placed request's deadline expires; gate_wq denies */
+	BACKEND_PRE_GRANT_EARLY, /* the placed request's START before the arm staged it */
 };
 struct backend_preempt_result {
 	int      rc;
 	bool     fired;
-	bool     marked_at_fire;     /* the signal found the arm in progress */
+	bool     marked_at_fire;     /* the event found the arm in progress */
 	bool     radio_written_after_handback;
 	bool     conns_after_arm;
-	bool     op_idle_after_arm;
 	uint32_t terminals_during_arm;
-	bool     conns_at_end;       /* after the deferred denial too */
-	bool     op_idle_at_end;
-	uint32_t terminals;
-	bool     marked_at_end;
+	bool     marked_after_arm;
+	bool     staged_path;        /* gate_acquire() answered GATE_PENDING */
+	/* After the world has settled: every denial run, the request granted
+	 * if still placed, every loan ended. */
+	bool     conns_final;
+	bool     op_idle_final;
+	uint32_t terminals_final;
+	int      next_rc;            /* the next arm, in a fresh grant */
 };
 void     backend_preempt_off(void);
-void     backend_preempt_arm(int kind, int mode, uint32_t n, bool late,
+void     backend_preempt_arm(int kind, int mode, uint32_t n, bool late, bool held,
 			     struct backend_preempt_result *out);
 
 #endif

@@ -189,6 +189,8 @@ bool gate_in_signal(void) { return lmt_in_signal; }
  * hand-back, even after (lmt_slot_start() / lmt_slot_end()). */
 static uint32_t lmt_gen;
 uint32_t gate_grant_gen(void) { return lmt_gen; }
+/* This gate always grants in place: nothing is ever pending. */
+bool gate_request_pending(void) { return false; }
 void gate_release(void) {}
 void gate_forget_pending(void) {}
 bool gate_extend(uint32_t us) { ARG_UNUSED(us); return false; }

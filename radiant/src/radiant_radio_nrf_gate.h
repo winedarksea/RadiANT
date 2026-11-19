@@ -294,6 +294,16 @@ bool gate_in_signal(void);
 uint32_t gate_grant_gen(void);
 #define GATE_GEN_LIVE(gen) (((gen) & 1u) != 0u)
 
+/*
+ * Whether a grant (or the gate's denial) is still owed for the staged
+ * operation's request (the MPSL gate's g.pending). False once MPSL refused it
+ * (BLOCKED, CANCELLED, SESSION_CLOSED), its deadline expired, or its START
+ * arrived. The backend reads it under radiant_swi_zli_lock() to settle a
+ * denial that landed while an arm was staging (arm_settle_staged(),
+ * radiant_radio_nrf.c). Arbitrated build only, declared unconditionally.
+ */
+bool gate_request_pending(void);
+
 /* The air arrived. Programme the staged operation and let the hardware run. */
 void radiant_nrf_gate_on_grant(void);
 
