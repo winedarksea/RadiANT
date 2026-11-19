@@ -118,7 +118,7 @@ compare IRQ masked so nothing wakes it at T, and awake for the GRTC capture.
 | variant | anchor | n | distribution (µs) | mean |
 |---|---|---|---|---|
 | lp (HFXO off between cycles) | wake | 10 000 | −1: 6784, 0: 3216 | −0.68 |
-| lp | release | 10 000 | −1: 7451, 0: 2549 | −0.75 |
+| lp (**invalid**, as above) | release | 10 000 | −1: 7451, 0: 2549 | −0.75 |
 | held | wake | 10 000 | −1: 7212, 0: 2788 | −0.72 |
 | held | release | 10 000 | −1: 7380, 0: 2620 | −0.74 |
 
@@ -187,17 +187,28 @@ on RC) at 125 ms.
 
 ### S3 (units: 1/8 µs; expected 64 ticks = 1953.125 µs)
 
+> **The lp rows are INVALID, pending a rerun. The rerun has NOT been done.**
+> S4 ended with a second HFXO request on the client it already held, so the
+> HFXO had two references going into S3 lp, and each lp cycle released only
+> one. The HFXO kept running through every "cold" wake: the lp rows measured
+> a held HFXO, and "no HFXO start was late" says nothing about a real start.
+> The spike is fixed (`hf_request()` now holds at most one reference) but has
+> not been rebuilt or run on the Pro Micro since. The held rows are
+> unaffected. The L15 S3 numbers above are unaffected too: they come from the
+> `SPIKE_S3ONLY` image, which skips S4.
+
 | variant | anchor | n | distribution (1/8 µs) |
 |---|---|---|---|
-| lp (USB off, HFXO off between cycles) | wake | 10 000 | −9: 832, −1: 9093, +7: 75 |
-| lp | release | 10 000 | −9: 15, −1: 9389, +7: 596 |
+| lp (USB off; **HFXO was NOT off between cycles, invalid**) | wake | 10 000 | −9: 832, −1: 9093, +7: 75 |
+| lp (**invalid**, as above) | release | 10 000 | −9: 15, −1: 9389, +7: 596 |
 | held (USB up) | wake | 10 000 | −9: 622, −1: 9280, +7: 98 |
 | held | release | 10 000 | −9: 273, −1: 9540, +7: 187 |
 
 The three values are TIMER counts of 1952, 1953 and 1954 against an exact
 1953.125: errors of −1.125, −0.125 and +0.875 µs, which is pure 1 µs
 quantisation. No HFXO start was late (0 of 10 000), and CPU asleep vs busy
-made no difference. **Gate met.** The RTC has no capture task, so this method
+made no difference. **Gate met for held only; lp is unmeasured (see the note
+above).** The RTC has no capture task, so this method
 measures the combined jitter of two RTC → TIMER paths, not an absolute offset.
 The design needs exactly that: LF ticks map to TIMER µs with ≤ ±1.125 µs.
 
@@ -222,7 +233,8 @@ tolerance. The clone has passed every on-air test so far with HFXO timing.
 ### What USB on the nRF52840 does to the numbers
 
 The CDC console holds the HFXO while USB is enabled, so S1, S4 and S3-lp were
-run before `usbd_enable()`. They are real HFXO-off numbers. S3-held and S5
+run before `usbd_enable()`. S1 and S4 are real HFXO-off numbers; S3-lp is
+not, because of the spike's own reference leak (see S3). S3-held and S5
 ran with USB up, and need the HFXO to be on regardless. In B5, a CDC debug
 build can therefore only report the stack's own request duty, as the plan
 already says.
@@ -270,10 +282,10 @@ already says.
 | criterion | nRF54L15 | nRF52840 |
 |---|---|---|
 | S2: two LF channels, LF compare → TIMER START + fork CAPTURE allocates and works | PASS: 4 channels (plain and SDC/MPSL), same-domain DPPIC20 | PASS: 2 RTC1 user channels, PPI + FORK |
-| S3 ≤ ±2 µs | PASS: {−1, 0} µs over 20 000 cycles each for wake and release | PASS: −1.125…+0.875 µs over 20 000 cycles each |
+| S3 ≤ ±2 µs | PASS: {−1, 0} µs over 20 000 cycles each for wake and release | held PASS: −1.125…+0.875 µs over 10 000 cycles each; **lp INVALID, rerun not done** (HFXO stayed on, see S3) |
 | restore list known | PASS: empty (63/63 retained) | PASS: empty (54/54 retained); SHUTDOWN zeroes the counter |
 
-**G0: PASS.** Track B can proceed to B2, with the changes above.
+**G0: PASS** (on the nRF54L15 S3 numbers and the nRF52840 held rows; the nRF52840 lp S3 rows are invalid pending a rerun). Track B can proceed to B2, with the changes above.
 
 ## Not done / limits
 
@@ -288,3 +300,6 @@ already says.
 - The L15 `held_bt` S3 ran 2000 cycles, not 10 000, and was built before the
   v2 method: only its CPU-awake half is a valid measurement.
 - Absolute crystal error (which of HFXO/LFXO is off) was not measured.
+- **Pro Micro S3 lp must be rerun** with the fixed spike (one HFXO reference
+  per cycle). Until then its nRF52840 G0 S3 cell rests on the held rows only.
+  Not yet done.

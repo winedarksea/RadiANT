@@ -880,13 +880,18 @@ static uint32_t sync_word_of(const uint8_t *addr, uint8_t hw_len)
  * applied), so a repeat does not warn again; a failed RF_setTxPower() is not,
  * so the next transmit retries it (and warns once).
  *
- * Known gap: RF_setTxPower() reports success once setup_cmd is updated, even
- * when the immediate CMD_SET_TX_POWER it then sends is dropped because the RF
- * core is powering up or switching PHY (the setup already submitted carries
- * the old value). The cache then skips the repeats and the old power stays on
- * air until the core next powers down; the next power-up replays setup_cmd
- * with the new value, so it heals within one power cycle (one slot on a
- * battery node). The driver gives no status to detect it.
+ * A success is cached only when the RF core was active at the call.
+ * RF_setTxPower() reports success once setup_cmd is updated, even when the
+ * immediate CMD_SET_TX_POWER it then sends is dropped because the core is not
+ * active (RF_executeDirectImmediateCmd() in RFCC26X2_multiMode.c). While the
+ * core is off that is harmless (the next power-up replays setup_cmd), but
+ * while it is powering up or switching PHY the setup already submitted
+ * carries the old value, and a cached request would keep the old power on air
+ * until the core next powered down. RF_GET_RADIO_STATE cannot tell "off" from
+ * "powering up", so every inactive state leaves the cache invalid and the next
+ * transmit applies the power again. The state read and the call share one
+ * irq_lock(), so the driver cannot change state between them. Active with the
+ * other coex client current is cached: the switch back replays setup_cmd.
  */
 static bool txp_same(const struct radiant_tx_power *a,
 		     const struct radiant_tx_power *b)
@@ -932,9 +937,20 @@ static void apply_power(const struct radiant_tx_power *p)
 	if (st.rf_handle == NULL) {
 		return;
 	}
-	if (RF_setTxPower(st.rf_handle, v) == RF_StatSuccess) {
+
+	unsigned int key = irq_lock();
+	RF_InfoVal info = { .bRadioState = false };
+	bool active = RF_getInfo(st.rf_handle, RF_GET_RADIO_STATE, &info) ==
+			      RF_StatSuccess &&
+		      info.bRadioState;
+	RF_Stat rc = RF_setTxPower(st.rf_handle, v);
+
+	irq_unlock(key);
+
+	if (rc == RF_StatSuccess) {
+		/* Not cached while the core is inactive: see above. */
 		st.txp_last = *p;
-		st.txp_valid = true;
+		st.txp_valid = active;
 	} else if (!warned_set_fail) {
 		warned_set_fail = true;
 		LOG_WRN("RF_setTxPower failed (req=%d dBm use_raw=%d raw=0x%x); "

@@ -481,6 +481,26 @@ ZTEST(radiant_backend_lp, test_refuses_without_lf_crystal)
 	zassert_equal(lpt_state(), LPT_OFF);
 }
 
+#if !defined(LPT_RTC)
+/* Risk: LFCLK on the crystal while the GRTC counts the LFLPRC (its own
+ * CLKSEL, NRF_GRTC_TIMER_SOURCE_LFLPRC) passes the LFCLK check and times the
+ * gaps on an RC. */
+ZTEST(radiant_backend_lp, test_refuses_grtc_on_lflprc)
+{
+	struct lpt_stats st;
+
+	lpt_reset_grtc_lflprc();
+	lpt_stats(&st);
+	zassert_equal(st.refused, 1);
+	zassert_equal(lpt_state(), LPT_OFF);
+	zassert_equal(lpt_tx_at(lpt_radio_now() + FAR_US), RADIANT_RADIO_OK_RC);
+	zassert_false(lpt_staged());
+	zassert_true(lpt_hfxo_on(), "always on");
+	lpt_tx_end();
+	zassert_true(lpt_hfxo_on(), "always on");
+}
+#endif
+
 /* Risk: the receive path's staging (lp_staged() hook, staged filter copies). */
 ZTEST(radiant_backend_lp, test_far_receive_window_on_time)
 {

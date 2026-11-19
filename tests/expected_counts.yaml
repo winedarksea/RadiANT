@@ -118,7 +118,10 @@ min_scenarios: 21
 # 6078 (+2) on fix/crc-repair-deliver (Bluefin twister, 2026-11-18, 6878
 # executed): a repaired broadcast reaches the host, a refuted repair does not
 # (radiant.api.crc_repair).
-min_testcases: 6078
+# 6080 (+2) on fix/review-followups (Bluefin twister, 2026-11-18, 6880
+# executed): a GRTC clocked from the LFLPRC refuses low power
+# (radiant.backend.lp, radiant.backend.lp_mpsl).
+min_testcases: 6080
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -166,17 +169,19 @@ min_cases.trainer.model: 14
 min_cases.radiant.lp_clock: 38
 # radiant.backend.lp (power plan pass B3): the nRF backend with
 # CONFIG_RADIANT_NRF_LOW_POWER against a simulated GRTC, HFXO and TIMER.
-min_cases.radiant.backend.lp: 33
+# 34 with the GRTC-on-LFLPRC refusal (GRTC only, so not in lp_rtc).
+min_cases.radiant.backend.lp: 34
 # radiant.backend.lp_rtc (power plan pass B5): the low-power path on a
 # simulated RTC1 driver and nRF52 TIMER (the rest of the backend keeps its
-# nRF54L shape) - every radiant.backend.lp case plus 8 of RTC1's own (64-bit
+# nRF54L shape) - every radiant.backend.lp case but the GRTC-only one, plus
+# 8 of RTC1's own (64-bit
 # arithmetic across 2^24, schedule span, minimum lead, TIMER SHUTDOWN,
 # software start).
 min_cases.radiant.backend.lp_rtc: 41
 # radiant.backend.lp_mpsl (power plan pass B6): CONFIG_RADIANT_NRF_LOW_POWER
 # on the MPSL gate's build - the TIMER stopped between timeslots and started
-# from the GRTC at each SIGNAL_START.
-min_cases.radiant.backend.lp_mpsl: 17
+# from the GRTC at each SIGNAL_START. 18 with the GRTC-on-LFLPRC refusal.
+min_cases.radiant.backend.lp_mpsl: 18
 # radiant.gate.lp (pass B6): every radiant.gate case (94 observed) with the
 # low-power hooks compiled in, plus their 10 cases.
 min_cases.radiant.gate.lp: 104

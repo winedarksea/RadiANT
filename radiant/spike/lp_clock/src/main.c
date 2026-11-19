@@ -294,9 +294,17 @@ static void hf_cb(struct onoff_manager *mgr, struct onoff_client *cli,
 	k_sem_give(&hf_sem);
 }
 
+/* Holds at most one reference. A second onoff_request() on hf_cli while held
+ * took a reference hf_release() never dropped: S4's exit request did that, so
+ * S3 lp released one of two references per cycle and the HFXO never stopped.
+ * Already held, this only signals hf_wait() (hf_cb_t keeps its last stamp). */
 static int hf_request(void)
 {
 	k_sem_reset(&hf_sem);
+	if (hf_held) {
+		k_sem_give(&hf_sem);
+		return 0;
+	}
 	sys_notify_init_callback(&hf_cli.notify, hf_cb);
 	int r = onoff_request(hf_mgr, &hf_cli);
 

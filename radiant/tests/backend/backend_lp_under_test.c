@@ -124,6 +124,11 @@ NRF_TIMER_Type fake_timer_regs;
 NRF_TEMP_Type  fake_temp_regs;
 struct fake_hw fake_hw;
 nrf_clock_lfclk_t fake_lfclk_src;
+#if !defined(LPT_RTC)
+nrf_grtc_clksel_t fake_grtc_clksel;
+/* lpt_reset_grtc_lflprc(): the next boot's GRTC runs from the LFLPRC. */
+static bool lpt_next_lflprc;
+#endif
 
 #define FW_CHANNELS 4
 /* World q units per microsecond, and per LF tick. */
@@ -656,6 +661,10 @@ static void lpt_boot(nrf_clock_lfclk_t lf, uint64_t lf_off)
 	reg_shadow_forget();
 	arm_memo_forget();
 	fake_lfclk_src = lf;
+#if !defined(LPT_RTC)
+	fake_grtc_clksel = lpt_next_lflprc ? NRF_GRTC_CLKSEL_LFLPRC : NRF_GRTC_CLKSEL_LFXO;
+	lpt_next_lflprc = false;
+#endif
 	fake_hw.counter_fn = fw_timer;
 	fake_hw.task_hook = fw_task;
 	fw.lf_off = lf_off;
@@ -684,6 +693,13 @@ static void lpt_boot(nrf_clock_lfclk_t lf, uint64_t lf_off)
 
 void lpt_reset(void) { lpt_boot(NRF_CLOCK_LFCLK_XTAL, LPT_LF_OFFSET); }
 void lpt_reset_lf_rc(void) { lpt_boot(NRF_CLOCK_LFCLK_RC, LPT_LF_OFFSET); }
+#if !defined(LPT_RTC)
+void lpt_reset_grtc_lflprc(void)
+{
+	lpt_next_lflprc = true;
+	lpt_boot(NRF_CLOCK_LFCLK_XTAL, LPT_LF_OFFSET);
+}
+#endif
 void lpt_reset_lf_offset(uint64_t lf_off) { lpt_boot(NRF_CLOCK_LFCLK_XTAL, lf_off); }
 struct lpt_probe *lpt_probe(void) { return &lpp; }
 

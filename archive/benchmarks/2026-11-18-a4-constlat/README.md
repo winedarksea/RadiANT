@@ -19,7 +19,11 @@ for errata 20 and saves the always-on CONSTLAT current. Also check `=y` gives CO
 
 apps/dongle for `nrf54l15dk/nrf54l15/cpuapp`, sysbuild, built by the A4 author in `C:\wt_power_a4` at ac6904a (an
 ancestor of this branch), `-DEXTRA_CONF_FILE=apps/dongle_thread/gate.conf;apps/dongle_thread/uart_57600.conf;
-apps/dongle/diag_counters.conf -Ddongle_CONFIG_RADIANT_POWER_DIAG=y -Ddongle_CONFIG_RADIANT_POWER_DIAG_LOG_S=0`.
+apps/dongle/diag_counters.conf -DEXTRA_DTC_OVERLAY_FILE=apps/dongle_thread/uart_57600.overlay
+-Ddongle_CONFIG_RADIANT_POWER_DIAG=y -Ddongle_CONFIG_RADIANT_POWER_DIAG_LOG_S=0`. Paths are from the repo root; the
+build passed them absolute (its `CMakeCache.txt` has `EXTRA_DTC_OVERLAY_FILE=C:\wt_power_a4\apps\dongle_thread\uart_57600.overlay`).
+The overlay is not optional: it sets uart30's `current-speed` to 57600, and without it the UART transport's
+build-time check against `CONFIG_ANT_DONGLE_UART_BAUD=57600` fails.
 `.config` read back `CONFIG_MPSL=y`, `CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL=y`, `CONFIG_NRFX_POWER=y`,
 `CONFIG_RADIANT_POWER_DIAG=y`, `CONFIG_ANT_DONGLE_UART_BAUD=57600`.
 

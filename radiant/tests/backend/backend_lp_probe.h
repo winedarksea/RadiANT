@@ -97,6 +97,9 @@ struct lpt_probe {
 void     lpt_reset(void);
 /* lpt_reset() with LFCLK running from the RC oscillator. */
 void     lpt_reset_lf_rc(void);
+/* lpt_reset() with LFCLK on the crystal but the GRTC on the LFLPRC (GRTC
+ * builds only). */
+void     lpt_reset_grtc_lflprc(void);
 /* lpt_reset() with the LF counter at `lf_off` at world 0. */
 void     lpt_reset_lf_offset(uint64_t lf_off);
 struct lpt_probe *lpt_probe(void);

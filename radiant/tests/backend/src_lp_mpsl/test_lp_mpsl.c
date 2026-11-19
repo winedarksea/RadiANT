@@ -410,6 +410,20 @@ ZTEST(radiant_backend_lp_mpsl, test_refused_without_lf_crystal)
 	zassert_equal(radio_err(), 0);
 }
 
+/* Risk: LFCLK on the crystal while the GRTC counts the LFLPRC passes the
+ * LFCLK check and times the gaps between timeslots on an RC. */
+ZTEST(radiant_backend_lp_mpsl, test_refused_grtc_on_lflprc)
+{
+	struct lmt_stats st;
+
+	lmt_reset_grtc_lflprc();
+	lmt_stats(&st);
+	zassert_equal(st.refused, 1u);
+	zassert_equal(lmt_state(), LMT_OFF);
+	zassert_true(lmt_hfxo_on(), "the boot request stays");
+	zassert_true(lmt_timer_running(), "the TIMER free-runs as without the option");
+}
+
 /* Risk: the duty proxy (Gate G4's) counts the gaps, or drops a timeslot. */
 ZTEST(radiant_backend_lp_mpsl, test_awake_us_accumulates)
 {
