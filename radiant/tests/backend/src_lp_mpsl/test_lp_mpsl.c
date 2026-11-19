@@ -501,64 +501,98 @@ ZTEST(radiant_backend_lp_mpsl, test_sub_tick_phases_and_read_latency)
 
 /*
  * Risk: an in-grant arm (a completion's follow-on, from the software
- * interrupt) preempted by the zero-latency ACTION_END that stops the TIMER:
- * it folds a stopped and cleared TIMER, writes compares from that, and
- * re-enables its start connection after the release disabled it - a
- * connection that then survives into the next timeslot and fires TXEN at a
- * meaningless offset once the TIMER restarts from zero. Swept over every
- * point of the arm (after each of its TIMER captures), with and without the
- * next START landing too.
+ * interrupt) preempted by the zero-latency ACTION_END, which hands the RADIO
+ * back to the other stack and stops the TIMER. Resumed, the arm wrote MODE,
+ * FREQUENCY, PACKETPTR and SHORTS into the other stack's live RADIO, folded a
+ * stopped TIMER, and re-enabled a window connection that then fired in the
+ * next timeslot; and when the end also aborted (EXTEND_FAILED, the extension
+ * skip) the operation got ETIME and ABORTED both. Swept over every point of a
+ * transmit, a receive and an energy-detect arm (the signal lands at the end
+ * of whichever critical section holds it off, as PRIMASK makes it), with the
+ * end alone, the end and the next START, and an aborting end. Always: no
+ * RADIO write after the hand-back, no window connection left on, exactly one
+ * outcome for the operation.
  */
+enum { ARM_TX, ARM_RX, ARM_ED };
+
+static int arm_kind(int kind, uint64_t t)
+{
+	switch (kind) {
+	case ARM_TX:
+		return lmt_tx_at(t);
+	case ARM_RX:
+		return lmt_rx_at(t, 1000u);
+	default:
+		return lmt_ed_at(t);
+	}
+}
+
 ZTEST(radiant_backend_lp_mpsl, test_arm_preempted_by_slot_end)
 {
-	for (int restart = 0; restart <= 1; restart++) {
-		uint32_t etimes = 0u;
+	static const char *const kn[] = { "tx", "rx", "ed" };
+	static const char *const mn[] = { "end", "end+start", "abort+end" };
 
-		for (uint32_t n = 1u; n <= 6u; n++) {
-			uint64_t t_sync;
-			int rc;
+	for (int kind = ARM_TX; kind <= ARM_ED; kind++) {
+		for (int mode = 0; mode <= 2; mode++) {
+			uint32_t etimes = 0u;
 
-			lmt_reset();
-			lmt_run(10000u);
-			lmt_slot_start(0u);
-			lmt_run(100u);
-			t_sync = lmt_radio_now() + 1500u;
-			lmt_preempt_after_capture(n, restart != 0);
-			rc = lmt_tx_at(t_sync);
-			lmt_preempt_after_capture(0u, false);
-			if (!lmt_preempt_fired()) {
-				/* The arm made fewer captures: it finished first. */
-				zassert_equal(rc, RADIANT_RADIO_OK_RC);
-				break;
-			}
-			/*
-			 * Either the arm saw its timeslot end and failed (ETIME,
-			 * slot freed), or the end landed after its last check -
-			 * as if the timeslot had ended just after the arm returned
-			 * - and the operation stays claimed for the gate's DENIED.
-			 * Never armed into the next timeslot, either way.
-			 */
-			if (rc == RADIANT_RADIO_OK_RC) {
-				zassert_false(lmt_op_idle(), "n %u: OK but freed", n);
-			} else {
-				zassert_equal(rc, RADIANT_RADIO_ETIME, "n %u: rc %d", n, rc);
-				zassert_true(lmt_op_idle(), "n %u: the slot was not freed", n);
-				etimes++;
-			}
-			zassert_false(lmt_tx_conn_on(),
-				      "n %u restart %d: TXEN connection outlived the release",
-				      n, restart);
-			if (!restart) {
-				zassert_false(lmt_timer_running());
-				lmt_run(1000u);
+			for (uint32_t n = 1u; n <= 12u; n++) {
+				uint64_t t;
+				uint32_t term;
+				int rc;
+
+				lmt_reset();
+				lmt_run(10000u);
 				lmt_slot_start(0u);
-				zassert_false(lmt_tx_conn_on(), "n %u: still off at the next START", n);
-				lmt_slot_end(false);
+				lmt_run(100u);
+				t = lmt_radio_now() + 1500u;
+				lmt_preempt_mode(n, mode == 1, mode == 2);
+				rc = arm_kind(kind, t);
+				lmt_preempt_after_capture(0u, false);
+				if (!lmt_preempt_fired()) {
+					/* The arm made fewer captures: it finished first. */
+					zassert_equal(rc, RADIANT_RADIO_OK_RC, "%s: rc %d", kn[kind], rc);
+					break;
+				}
+				term = lmt_terminals();
+				zassert_false(lmt_radio_written_after_handback(),
+					      "%s %s n %u: RADIO written after the hand-back",
+					      kn[kind], mn[mode], n);
+				zassert_false(lmt_window_conns_on(),
+					      "%s %s n %u: a window connection outlived the release",
+					      kn[kind], mn[mode], n);
+				if (rc == RADIANT_RADIO_OK_RC) {
+					/* The end landed after the arm's span: an operation
+					 * armed and then cut, as if the timeslot ended just
+					 * after the arm returned. Live for the gate's DENIED,
+					 * or aborted by the signal - never both, never ETIME. */
+					zassert_true((!lmt_op_idle() && term == 0u) ||
+						     (mode == 2 && lmt_op_idle() && term == 1u),
+						     "%s %s n %u: OK, idle %d, %u terminals", kn[kind],
+						     mn[mode], n, lmt_op_idle(), term);
+				} else {
+					zassert_equal(rc, RADIANT_RADIO_ETIME, "%s %s n %u: rc %d",
+						      kn[kind], mn[mode], n, rc);
+					zassert_true(lmt_op_idle(), "%s %s n %u: slot not freed",
+						     kn[kind], mn[mode], n);
+					zassert_equal(term, 0u,
+						      "%s %s n %u: ETIME and a terminal too",
+						      kn[kind], mn[mode], n);
+					etimes++;
+				}
+				if (mode != 1) {
+					zassert_false(lmt_timer_running());
+					lmt_run(1000u);
+					lmt_slot_start(0u);
+					zassert_false(lmt_window_conns_on(),
+						      "%s n %u: on at the next START", kn[kind], n);
+					lmt_slot_end(false);
+				}
+				zassert_true(radio_err() >= -1 && radio_err() <= 1,
+					     "%s %s n %u: the timebase moved", kn[kind], mn[mode], n);
 			}
-			zassert_true(radio_err() >= -1 && radio_err() <= 1,
-				     "n %u restart %d: the timebase moved", n, restart);
+			zassert_true(etimes > 0u, "%s %s: no preemption point failed the arm",
+				     kn[kind], mn[mode]);
 		}
-		zassert_true(etimes > 0u, "restart %d: no preemption point failed the arm",
-			     restart);
 	}
 }

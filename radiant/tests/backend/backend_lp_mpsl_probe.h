@@ -81,8 +81,20 @@ uint32_t lmt_conn_bit_timer(void);
 uint32_t lmt_conn_bits_other(void);
 
 /* The timeslot's ACTION_END (and, with restart, the next START) preempts the
- * next arm right after its n-th TIMER capture (0: off). */
+ * next arm at its n-th outermost unlock of CLOCK_LOCK / the zero-latency lock,
+ * the points where PRIMASK lets a zero-latency signal in (0: off). */
 void     lmt_preempt_after_capture(uint32_t n, bool restart);
+/* The same; with abort, the signal first calls radiant_radio_abort() from the
+ * zero-latency context, as EXTEND_FAILED and the extension skip do. */
+void     lmt_preempt_mode(uint32_t n, bool restart, bool abort);
+/* A RADIO register written after the simulated hand-back. */
+bool     lmt_radio_written_after_handback(void);
+/* Terminal events delivered or queued since the last reset. */
+uint32_t lmt_terminals(void);
+int      lmt_rx_at(uint64_t t_open, uint32_t len_us);
+int      lmt_ed_at(uint64_t t_start);
+/* Any TIMER-driven window connection enabled. */
+bool     lmt_window_conns_on(void);
 bool     lmt_preempt_fired(void);
 bool     lmt_op_idle(void);
 bool     lmt_tx_conn_on(void);

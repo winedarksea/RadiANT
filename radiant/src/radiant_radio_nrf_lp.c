@@ -1909,12 +1909,11 @@ static void lp_init(void)
  *
  * AN ARM PREEMPTED BY THE END. An in-grant arm (a completion's follow-on, from
  * the software interrupt) can be preempted by the zero-latency ACTION_END that
- * stops the TIMER, and in principle by the next START too. lp_slot_gen() and
- * lp_slot_lost() bracket each programme in radiant_radio_nrf.c
- * (LP_SLOT_GUARD): a generation that changed, or a TIMER that stopped, fails
- * the arm (ETIME) with every window connection disabled under CLOCK_LOCK, so
- * no enable survives into the next timeslot, where the restarted TIMER would
- * reach a compare computed for the old one.
+ * hands the RADIO back and stops the TIMER, and in principle by the next START.
+ * radiant_radio_nrf.c (LP_SLOT_GUARD) runs each programme's register span under
+ * the zero-latency lock, opened by checking lp_slot_gen() against the
+ * generation the arm was claimed in: a timeslot that ended (or began) since
+ * fails the arm ETIME with nothing written, and inside the span none can end.
  *
  * CONSTLAT is MPSL's: its per-event acquire covers the timeslots
  * (RADIANT_NRF54L_MPSL_CONSTLAT_HOLD, default n), so lp_constlat() is empty
@@ -2075,8 +2074,9 @@ void radiant_nrf_gate_lp_slot_end(bool backstop)
 	CLOCK_UNLOCK(key);
 }
 
-/* LP_SLOT_GUARD (radiant_radio_nrf.c): the awake segment an arm starts in, or
- * 0 if the TIMER is stopped. Option refused: always the same non-zero value. */
+/* LP_SLOT_GUARD (radiant_radio_nrf.c): the awake segment an arm is claimed or
+ * programmed in, or 0 if the TIMER is stopped. Option refused: always the same
+ * non-zero value. */
 static uint32_t lp_slot_gen(void)
 {
 	unsigned int key = CLOCK_LOCK();
@@ -2084,25 +2084,6 @@ static uint32_t lp_slot_gen(void)
 
 	CLOCK_UNLOCK(key);
 	return g;
-}
-
-/* True if the segment `gen` is over (stopped, or another START since), with
- * every window connection disabled in the same critical section: a release
- * that lands after this test disables them itself. */
-static bool lp_slot_lost(uint32_t gen)
-{
-	unsigned int key = CLOCK_LOCK();
-	bool lost = lp.state != LP_OFF &&
-		    (gen == 0u || lp.state != LP_AWAKE || gen != lp_gen);
-
-	if (lost) {
-		nrfx_gppi_conn_disable(radiant_op.conn_start);
-		nrfx_gppi_conn_disable(radiant_op.conn_start_tx);
-		nrfx_gppi_conn_disable(radiant_op.conn_close);
-		nrfx_gppi_conn_disable(radiant_op.conn_rssi);
-	}
-	CLOCK_UNLOCK(key);
-	return lost;
 }
 
 /* LP_HOOKs the direct build's state machine needs and this one does not:

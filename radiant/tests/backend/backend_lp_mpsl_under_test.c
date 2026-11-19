@@ -44,6 +44,8 @@
 #define CONFIG_RADIANT_NRF_LP_STATS 1
 #define CONFIG_NRF_GRTC_TIMER 1
 #define RADIANT_LP_LF_HZ 1000000
+/* The ED sweep, so the preempted-arm cases cover program_ed() too. */
+#define CONFIG_RADIANT_ED_SCAN 1
 
 /* The HFXO's onoff manager, simulated below. */
 int fake_onoff_request(struct onoff_manager *mgr, struct onoff_client *cli);
@@ -180,7 +182,9 @@ void z_nrf_clock_control_lf_on(enum nrf_lfclk_start_mode start_mode)
 /* ---- The gate, as an in-grant arm sees it ---- */
 
 bool gate_held(void) { return true; }
-bool gate_in_signal(void) { return false; }
+/* True while a simulated zero-latency signal runs (lmt_preempt_after_capture()). */
+static bool lmt_in_signal;
+bool gate_in_signal(void) { return lmt_in_signal; }
 void gate_release(void) {}
 void gate_forget_pending(void) {}
 bool gate_extend(uint32_t us) { ARG_UNUSED(us); return false; }
@@ -225,19 +229,33 @@ void radiant_swi_pend(uint32_t bits) { ARG_UNUSED(bits); }
 
 static uint8_t lmt_body[RADIANT_RADIO_BODY_MAX];
 
+/* Terminal callbacks delivered directly (outside a signal; inside one they
+ * queue on the core trampoline, counted from core_cb_head). */
+static uint32_t lmt_cb_calls;
+
 static void cb_tx(const struct radiant_tx_event *evt, void *user)
 {
 	ARG_UNUSED(evt);
 	ARG_UNUSED(user);
+	lmt_cb_calls++;
 }
 
 static void cb_rx(const struct radiant_rx_event *evt, void *user)
 {
 	ARG_UNUSED(evt);
 	ARG_UNUSED(user);
+	lmt_cb_calls++;
 }
 
-static const struct radiant_radio_cbs lmt_cbs = { .rx = cb_rx, .tx = cb_tx };
+static void cb_ed(const struct radiant_ed_event *evt, void *user)
+{
+	ARG_UNUSED(evt);
+	ARG_UNUSED(user);
+	lmt_cb_calls++;
+}
+
+static const struct radiant_radio_cbs lmt_cbs = { .rx = cb_rx, .tx = cb_tx, .ed = cb_ed };
+static const struct radiant_rx_filter lmt_filt = { .addr_len = 5u };
 
 static void lmt_boot(nrf_clock_lfclk_t lf)
 {
@@ -258,6 +276,10 @@ static void lmt_boot(nrf_clock_lfclk_t lf)
 	core_cb_head = 0u;
 	core_cb_tail = 0u;
 	core_cb_depth = 0u;
+	lmt_cb_calls = 0u;
+	lmt_in_signal = false;
+	lp_arming = false;
+	lp_ed_lost = false;
 	fake_lfclk_src = lf;
 	fake_hw.counter_fn = fw_timer;
 	fake_hw.task_hook = fw_task;
@@ -418,12 +440,14 @@ uint32_t lmt_conn_bits_other(void)
 /* ---- An arm preempted by the timeslot's end ---- */
 
 static struct {
-	uint32_t at;        /* fire after this many CC_NOW captures (0: off) */
+	uint32_t at;        /* fire at this outermost unlock of the arm (0: off) */
 	uint32_t n;
 	bool     restart;   /* and the next START too */
+	bool     abort;     /* the signal aborts first (EXTEND_FAILED, ext-skip) */
+	uint32_t writes_at_handback;
+	NRF_RADIO_Type regs_at_handback;
 	bool     fired;
 	bool     busy;
-	bool     owed;      /* due inside CLOCK_LOCK: taken at its unlock */
 } pre;
 
 static void pre_fire(void)
@@ -432,7 +456,15 @@ static void pre_fire(void)
 	 * instructions of the arm. */
 	pre.busy = true;
 	pre.fired = true;
+	if (pre.abort) {
+		lmt_in_signal = true;
+		(void)radiant_radio_abort();
+		lmt_in_signal = false;
+	}
 	lmt_slot_end(false);
+	/* The RADIO is the other stack's from here. */
+	pre.writes_at_handback = fake_hw.radio_writes;
+	pre.regs_at_handback = fake_radio_regs;
 	if (pre.restart) {
 		lmt_run(5u);
 		lmt_slot_start(0u);
@@ -440,39 +472,35 @@ static void pre_fire(void)
 	pre.busy = false;
 }
 
-static void pre_hook(uint32_t nth)
-{
-	ARG_UNUSED(nth);
-	if (pre.busy || pre.at == 0u || ++pre.n != pre.at) {
-		return;
-	}
-	if (zli_depth > 0u) {
-		pre.owed = true;
-	} else {
-		pre_fire();
-	}
-}
-
+/*
+ * The zero-latency signal can only land where PRIMASK is clear: at the end of
+ * an outermost CLOCK_LOCK / zero-latency lock, or between two of them. Each
+ * outermost unlock is one such point; the n-th of the arm takes the signal.
+ */
 static void pre_at_unlock(void)
 {
-	if (pre.owed && !pre.busy) {
-		pre.owed = false;
-		pre_fire();
+	if (pre.at == 0u || pre.busy || pre.fired || ++pre.n != pre.at) {
+		return;
 	}
+	pre_fire();
 }
 
 void lmt_preempt_after_capture(uint32_t n, bool restart)
 {
+	lmt_preempt_mode(n, restart, false);
+}
+
+void lmt_preempt_mode(uint32_t n, bool restart, bool abort)
+{
 	if (n == 0u) {
 		/* Disarm, keeping `fired` for lmt_preempt_fired(). */
-		fake_hw.cc3_hook = NULL;
 		pre.at = 0u;
 		return;
 	}
 	memset(&pre, 0, sizeof(pre));
 	pre.at = n;
 	pre.restart = restart;
-	fake_hw.cc3_hook = (n != 0u) ? pre_hook : NULL;
+	pre.abort = abort;
 }
 
 bool lmt_preempt_fired(void)
@@ -484,4 +512,47 @@ bool lmt_op_idle(void) { return radiant_op.kind == OP_NONE; }
 bool lmt_tx_conn_on(void)
 {
 	return (fake_hw.conn_on & (1u << (radiant_op.conn_start_tx & 31u))) != 0u;
+}
+
+bool lmt_radio_written_after_handback(void)
+{
+	return pre.fired &&
+	       (fake_hw.radio_writes != pre.writes_at_handback ||
+		memcmp(&fake_radio_regs, &pre.regs_at_handback, sizeof(fake_radio_regs)) != 0);
+}
+
+uint32_t lmt_terminals(void) { return lmt_cb_calls + core_cb_head; }
+
+int lmt_rx_at(uint64_t t_open, uint32_t len_us)
+{
+	struct radiant_rx_req req;
+	uint32_t op;
+
+	memset(&req, 0, sizeof(req));
+	req.fmt = radiant_frame_format(RADIANT_FRAME_CFG_TRACKING);
+	req.filters = &lmt_filt;
+	req.n_filters = 1u;
+	req.t_open = t_open;
+	req.t_close = t_open + len_us;
+	return radiant_radio_rx(&req, &op);
+}
+
+int lmt_ed_at(uint64_t t_start)
+{
+	struct radiant_ed_req req;
+	uint32_t op;
+
+	memset(&req, 0, sizeof(req));
+	req.rf_index_lo = 10u;
+	req.rf_index_hi = 11u;
+	req.dwell_us = 2000u;
+	req.t_start = t_start;
+	return radiant_radio_ed(&req, &op);
+}
+
+bool lmt_window_conns_on(void)
+{
+	return (fake_hw.conn_on & ((1u << (radiant_op.conn_start & 31u)) |
+				   (1u << (radiant_op.conn_start_tx & 31u)) |
+				   (1u << (radiant_op.conn_close & 31u)))) != 0u;
 }
