@@ -1,0 +1,319 @@
+Gate G1: ant_power_est.py outputs (ESTIMATE) and radiant_nrf_lp_stats decodes, concatenated from runs/ (local).
+
+===== A1_est.txt
+ESTIMATE — no current meter; datasheet currents
+===============================================
+board nRF54L15 DK (DC/DC); interval 555.0 s from snapshots
+HFXO duty 100.00 % (jlink_peek register samples, 95 % CI 97.5..100.0 %)
+
+component              duty/state                       mA     avg uA
+idle floor             always                       0.0029       2.90
+radio TX +0 dBm        0.060 %                         4.8       2.89
+radio RX               0.259 %                         3.4       8.81
+HFXO (outside radio)   99.681 % of 100.000 % on       0.24     236.34
+CPU active             0.414 %                         2.6      10.75
+CONSTLAT               100.000 %                      0.55     549.20
+TOTAL (known parts)                                            810.89
+
+per broadcast: 148 us TX on-time -> 713 nC at 4.8 mA; once per HR period (8070/32768 s) = 2.89 uA
+broadcast rate 4.059 /s (HR period = 4.060 /s)
+per RX window: 639 us -> 2171 nC at 3.4 mA; once per HR period = 8.82 uA
+wakes: 25.4 idle entries /s
+
+citations (typical, 25 C, 3 V):
+  idle floor: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > Sleep, ION_IDLE8 (System ON, wake on pin + GRTC, LFXO, 256 KB RAM retained)
+  radio TX +0 dBm: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > RADIO transmitting/receiving, IRADIO_TX0 (0 dBm, HFXO)
+  radio RX: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > RADIO transmitting/receiving, IRADIO_RX0 (1 Mbps, HFXO)
+  HFXO (outside radio): Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > TIMER active, ITIMER3 (TIMER10 running at 32 MHz, HFXO; the stack's TIMER20 at 1 MHz draws less)
+  CPU active: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > CPU running, IAPPCPU0 (CoreMark 128 MHz from NVM, cache on; the cpuapp default clock is 128 MHz)
+  CONSTLAT: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > Sleep, ION_IDLE11 (System ON, wake on pin, Constant Latency mode, 0 KB RAM); used as ION_IDLE11 - ION_IDLE0
+note: HFXO row ITIMER3 is TIMER10 at 32 MHz on HFXO (leans high); --hfxo-row X2|X3 gives the crystal-core lower bound.
+note: hfxo_req_us advanced 555044768 us in a 555044000 us interval (an operation is charged whole when it ends); duty clamped to 100 %
+note: stack HFXO request counter says 100.000 % (sampled 100.000 %)
+mA = the cited datasheet row. Radio/CPU rows are counted over the floor (CONSTLAT over ION_IDLE0); overlaps are added, so this leans high.
+
+===== A1_est_x2.txt
+ESTIMATE — no current meter; datasheet currents
+===============================================
+board nRF54L15 DK (DC/DC); interval 555.0 s from snapshots
+HFXO duty 100.00 % (jlink_peek register samples, 95 % CI 97.5..100.0 %)
+
+component              duty/state                       mA     avg uA
+idle floor             always                       0.0029       2.90
+radio TX +0 dBm        0.060 %                         4.8       2.89
+radio RX               0.259 %                         3.4       8.81
+HFXO (outside radio)   99.681 % of 100.000 % on      0.034      33.89
+CPU active             0.414 %                         2.6      10.75
+CONSTLAT               100.000 %                      0.55     549.20
+TOTAL (known parts)                                            608.43
+
+per broadcast: 148 us TX on-time -> 713 nC at 4.8 mA; once per HR period (8070/32768 s) = 2.89 uA
+broadcast rate 4.059 /s (HR period = 4.060 /s)
+per RX window: 639 us -> 2171 nC at 3.4 mA; once per HR period = 8.82 uA
+wakes: 25.4 idle entries /s
+
+citations (typical, 25 C, 3 V):
+  idle floor: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > Sleep, ION_IDLE8 (System ON, wake on pin + GRTC, LFXO, 256 KB RAM retained)
+  radio TX +0 dBm: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > RADIO transmitting/receiving, IRADIO_TX0 (0 dBm, HFXO)
+  radio RX: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > RADIO transmitting/receiving, IRADIO_RX0 (1 Mbps, HFXO)
+  HFXO (outside radio): Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), 32 MHz crystal oscillator (HFXO), ISTBY_X32M_X2 (core standby, 2.0x1.6 mm crystal; crystal core only - a lower bound)
+  CPU active: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > CPU running, IAPPCPU0 (CoreMark 128 MHz from NVM, cache on; the cpuapp default clock is 128 MHz)
+  CONSTLAT: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > Sleep, ION_IDLE11 (System ON, wake on pin, Constant Latency mode, 0 KB RAM); used as ION_IDLE11 - ION_IDLE0
+note: HFXO row ITIMER3 is TIMER10 at 32 MHz on HFXO (leans high); --hfxo-row X2|X3 gives the crystal-core lower bound.
+note: hfxo_req_us advanced 555044768 us in a 555044000 us interval (an operation is charged whole when it ends); duty clamped to 100 %
+note: stack HFXO request counter says 100.000 % (sampled 100.000 %)
+mA = the cited datasheet row. Radio/CPU rows are counted over the floor (CONSTLAT over ION_IDLE0); overlaps are added, so this leans high.
+
+===== B_est.txt
+ESTIMATE — no current meter; datasheet currents
+===============================================
+board nRF54L15 DK (DC/DC); interval 566.0 s from snapshots
+HFXO duty 1.79 % (jlink_peek register samples, 95 % CI 0.3..9.4 %)
+
+component              duty/state                       mA     avg uA
+idle floor             always                       0.0029       2.90
+radio TX +0 dBm        0.060 %                         4.8       2.89
+radio RX               0.260 %                         3.4       8.82
+HFXO (outside radio)   1.466 % of 1.786 % on          0.24       3.48
+CPU active             0.485 %                         2.6      12.60
+CONSTLAT               1.786 %                        0.55       9.81
+TOTAL (known parts)                                             40.50
+
+per broadcast: 149 us TX on-time -> 713 nC at 4.8 mA; once per HR period (8070/32768 s) = 2.90 uA
+broadcast rate 4.060 /s (HR period = 4.060 /s)
+per RX window: 640 us -> 2175 nC at 3.4 mA; once per HR period = 8.83 uA
+wakes: 45.7 idle entries /s
+
+citations (typical, 25 C, 3 V):
+  idle floor: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > Sleep, ION_IDLE8 (System ON, wake on pin + GRTC, LFXO, 256 KB RAM retained)
+  radio TX +0 dBm: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > RADIO transmitting/receiving, IRADIO_TX0 (0 dBm, HFXO)
+  radio RX: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > RADIO transmitting/receiving, IRADIO_RX0 (1 Mbps, HFXO)
+  HFXO (outside radio): Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > TIMER active, ITIMER3 (TIMER10 running at 32 MHz, HFXO; the stack's TIMER20 at 1 MHz draws less)
+  CPU active: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > CPU running, IAPPCPU0 (CoreMark 128 MHz from NVM, cache on; the cpuapp default clock is 128 MHz)
+  CONSTLAT: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > Sleep, ION_IDLE11 (System ON, wake on pin, Constant Latency mode, 0 KB RAM); used as ION_IDLE11 - ION_IDLE0
+note: HFXO row ITIMER3 is TIMER10 at 32 MHz on HFXO (leans high); --hfxo-row X2|X3 gives the crystal-core lower bound.
+note: stack HFXO request counter says 1.684 % (sampled 1.786 %)
+mA = the cited datasheet row. Radio/CPU rows are counted over the floor (CONSTLAT over ION_IDLE0); overlaps are added, so this leans high.
+
+===== B_est_x2.txt
+ESTIMATE — no current meter; datasheet currents
+===============================================
+board nRF54L15 DK (DC/DC); interval 566.0 s from snapshots
+HFXO duty 1.79 % (jlink_peek register samples, 95 % CI 0.3..9.4 %)
+
+component              duty/state                       mA     avg uA
+idle floor             always                       0.0029       2.90
+radio TX +0 dBm        0.060 %                         4.8       2.89
+radio RX               0.260 %                         3.4       8.82
+HFXO (outside radio)   1.466 % of 1.786 % on         0.034       0.50
+CPU active             0.485 %                         2.6      12.60
+CONSTLAT               1.786 %                        0.55       9.81
+TOTAL (known parts)                                             37.53
+
+per broadcast: 149 us TX on-time -> 713 nC at 4.8 mA; once per HR period (8070/32768 s) = 2.90 uA
+broadcast rate 4.060 /s (HR period = 4.060 /s)
+per RX window: 640 us -> 2175 nC at 3.4 mA; once per HR period = 8.83 uA
+wakes: 45.7 idle entries /s
+
+citations (typical, 25 C, 3 V):
+  idle floor: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > Sleep, ION_IDLE8 (System ON, wake on pin + GRTC, LFXO, 256 KB RAM retained)
+  radio TX +0 dBm: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > RADIO transmitting/receiving, IRADIO_TX0 (0 dBm, HFXO)
+  radio RX: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > RADIO transmitting/receiving, IRADIO_RX0 (1 Mbps, HFXO)
+  HFXO (outside radio): Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), 32 MHz crystal oscillator (HFXO), ISTBY_X32M_X2 (core standby, 2.0x1.6 mm crystal; crystal core only - a lower bound)
+  CPU active: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > CPU running, IAPPCPU0 (CoreMark 128 MHz from NVM, cache on; the cpuapp default clock is 128 MHz)
+  CONSTLAT: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > Sleep, ION_IDLE11 (System ON, wake on pin, Constant Latency mode, 0 KB RAM); used as ION_IDLE11 - ION_IDLE0
+note: HFXO row ITIMER3 is TIMER10 at 32 MHz on HFXO (leans high); --hfxo-row X2|X3 gives the crystal-core lower bound.
+note: stack HFXO request counter says 1.684 % (sampled 1.786 %)
+mA = the cited datasheet row. Radio/CPU rows are counted over the floor (CONSTLAT over ION_IDLE0); overlaps are added, so this leans high.
+
+===== B_est_counter.txt
+ESTIMATE — no current meter; datasheet currents
+===============================================
+board nRF54L15 DK (DC/DC); interval 566.0 s from snapshots
+HFXO duty 1.68 % (jlink_peek register samples)
+
+component              duty/state                       mA     avg uA
+idle floor             always                       0.0029       2.90
+radio TX +0 dBm        0.060 %                         4.8       2.89
+radio RX               0.260 %                         3.4       8.82
+HFXO (outside radio)   1.364 % of 1.684 % on          0.24       3.23
+CPU active             0.485 %                         2.6      12.60
+CONSTLAT               1.786 %                        0.55       9.81
+TOTAL (known parts)                                             40.26
+
+per broadcast: 149 us TX on-time -> 713 nC at 4.8 mA; once per HR period (8070/32768 s) = 2.90 uA
+broadcast rate 4.060 /s (HR period = 4.060 /s)
+per RX window: 640 us -> 2175 nC at 3.4 mA; once per HR period = 8.83 uA
+wakes: 45.7 idle entries /s
+
+citations (typical, 25 C, 3 V):
+  idle floor: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > Sleep, ION_IDLE8 (System ON, wake on pin + GRTC, LFXO, 256 KB RAM retained)
+  radio TX +0 dBm: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > RADIO transmitting/receiving, IRADIO_TX0 (0 dBm, HFXO)
+  radio RX: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > RADIO transmitting/receiving, IRADIO_RX0 (1 Mbps, HFXO)
+  HFXO (outside radio): Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > TIMER active, ITIMER3 (TIMER10 running at 32 MHz, HFXO; the stack's TIMER20 at 1 MHz draws less)
+  CPU active: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > CPU running, IAPPCPU0 (CoreMark 128 MHz from NVM, cache on; the cpuapp default clock is 128 MHz)
+  CONSTLAT: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > Sleep, ION_IDLE11 (System ON, wake on pin, Constant Latency mode, 0 KB RAM); used as ION_IDLE11 - ION_IDLE0
+note: HFXO row ITIMER3 is TIMER10 at 32 MHz on HFXO (leans high); --hfxo-row X2|X3 gives the crystal-core lower bound.
+note: stack HFXO request counter says 1.684 % (sampled 1.684 %)
+mA = the cited datasheet row. Radio/CPU rows are counted over the floor (CONSTLAT over ION_IDLE0); overlaps are added, so this leans high.
+
+===== A2_est.txt
+ESTIMATE — no current meter; datasheet currents
+===============================================
+board nRF54L15 DK (DC/DC); interval 563.0 s from snapshots
+HFXO duty 100.00 % (jlink_peek register samples, 95 % CI 97.3..100.0 %)
+
+component              duty/state                       mA     avg uA
+idle floor             always                       0.0029       2.90
+radio TX +0 dBm        0.060 %                         4.8       2.89
+radio RX               0.259 %                         3.4       8.81
+HFXO (outside radio)   99.680 % of 100.000 % on       0.24     236.34
+CPU active             0.414 %                         2.6      10.75
+CONSTLAT               100.000 %                      0.55     549.20
+TOTAL (known parts)                                            810.89
+
+per broadcast: 148 us TX on-time -> 713 nC at 4.8 mA; once per HR period (8070/32768 s) = 2.89 uA
+broadcast rate 4.060 /s (HR period = 4.060 /s)
+per RX window: 639 us -> 2171 nC at 3.4 mA; once per HR period = 8.82 uA
+wakes: 25.4 idle entries /s
+
+citations (typical, 25 C, 3 V):
+  idle floor: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > Sleep, ION_IDLE8 (System ON, wake on pin + GRTC, LFXO, 256 KB RAM retained)
+  radio TX +0 dBm: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > RADIO transmitting/receiving, IRADIO_TX0 (0 dBm, HFXO)
+  radio RX: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > RADIO transmitting/receiving, IRADIO_RX0 (1 Mbps, HFXO)
+  HFXO (outside radio): Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > TIMER active, ITIMER3 (TIMER10 running at 32 MHz, HFXO; the stack's TIMER20 at 1 MHz draws less)
+  CPU active: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > CPU running, IAPPCPU0 (CoreMark 128 MHz from NVM, cache on; the cpuapp default clock is 128 MHz)
+  CONSTLAT: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > Sleep, ION_IDLE11 (System ON, wake on pin, Constant Latency mode, 0 KB RAM); used as ION_IDLE11 - ION_IDLE0
+note: HFXO row ITIMER3 is TIMER10 at 32 MHz on HFXO (leans high); --hfxo-row X2|X3 gives the crystal-core lower bound.
+note: stack HFXO request counter says 100.000 % (sampled 100.000 %)
+mA = the cited datasheet row. Radio/CPU rows are counted over the floor (CONSTLAT over ION_IDLE0); overlaps are added, so this leans high.
+
+===== B2_est.txt
+ESTIMATE — no current meter; datasheet currents
+===============================================
+board nRF54L15 DK (DC/DC); interval 409.0 s from snapshots
+HFXO duty 1.50 % (jlink_peek register samples, 95 % CI 0.5..4.3 %)
+
+component              duty/state                       mA     avg uA
+idle floor             always                       0.0029       2.90
+radio TX +0 dBm        0.060 %                         4.8       2.89
+radio RX               0.260 %                         3.4       8.82
+HFXO (outside radio)   1.180 % of 1.500 % on          0.24       2.80
+CPU active             0.484 %                         2.6      12.58
+CONSTLAT               1.000 %                        0.55       5.49
+TOTAL (known parts)                                             35.48
+
+per broadcast: 149 us TX on-time -> 713 nC at 4.8 mA; once per HR period (8070/32768 s) = 2.90 uA
+broadcast rate 4.061 /s (HR period = 4.060 /s)
+per RX window: 640 us -> 2175 nC at 3.4 mA; once per HR period = 8.83 uA
+wakes: 45.7 idle entries /s
+
+citations (typical, 25 C, 3 V):
+  idle floor: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > Sleep, ION_IDLE8 (System ON, wake on pin + GRTC, LFXO, 256 KB RAM retained)
+  radio TX +0 dBm: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > RADIO transmitting/receiving, IRADIO_TX0 (0 dBm, HFXO)
+  radio RX: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > RADIO transmitting/receiving, IRADIO_RX0 (1 Mbps, HFXO)
+  HFXO (outside radio): Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > TIMER active, ITIMER3 (TIMER10 running at 32 MHz, HFXO; the stack's TIMER20 at 1 MHz draws less)
+  CPU active: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > CPU running, IAPPCPU0 (CoreMark 128 MHz from NVM, cache on; the cpuapp default clock is 128 MHz)
+  CONSTLAT: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > Sleep, ION_IDLE11 (System ON, wake on pin, Constant Latency mode, 0 KB RAM); used as ION_IDLE11 - ION_IDLE0
+note: HFXO row ITIMER3 is TIMER10 at 32 MHz on HFXO (leans high); --hfxo-row X2|X3 gives the crystal-core lower bound.
+note: stack HFXO request counter says 1.684 % (sampled 1.500 %)
+mA = the cited datasheet row. Radio/CPU rows are counted over the floor (CONSTLAT over ION_IDLE0); overlaps are added, so this leans high.
+
+===== B2_est_x2.txt
+ESTIMATE — no current meter; datasheet currents
+===============================================
+board nRF54L15 DK (DC/DC); interval 409.0 s from snapshots
+HFXO duty 1.50 % (jlink_peek register samples, 95 % CI 0.5..4.3 %)
+
+component              duty/state                       mA     avg uA
+idle floor             always                       0.0029       2.90
+radio TX +0 dBm        0.060 %                         4.8       2.89
+radio RX               0.260 %                         3.4       8.82
+HFXO (outside radio)   1.180 % of 1.500 % on         0.034       0.40
+CPU active             0.484 %                         2.6      12.58
+CONSTLAT               1.000 %                        0.55       5.49
+TOTAL (known parts)                                             33.09
+
+per broadcast: 149 us TX on-time -> 713 nC at 4.8 mA; once per HR period (8070/32768 s) = 2.90 uA
+broadcast rate 4.061 /s (HR period = 4.060 /s)
+per RX window: 640 us -> 2175 nC at 3.4 mA; once per HR period = 8.83 uA
+wakes: 45.7 idle entries /s
+
+citations (typical, 25 C, 3 V):
+  idle floor: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > Sleep, ION_IDLE8 (System ON, wake on pin + GRTC, LFXO, 256 KB RAM retained)
+  radio TX +0 dBm: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > RADIO transmitting/receiving, IRADIO_TX0 (0 dBm, HFXO)
+  radio RX: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > RADIO transmitting/receiving, IRADIO_RX0 (1 Mbps, HFXO)
+  HFXO (outside radio): Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), 32 MHz crystal oscillator (HFXO), ISTBY_X32M_X2 (core standby, 2.0x1.6 mm crystal; crystal core only - a lower bound)
+  CPU active: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > CPU running, IAPPCPU0 (CoreMark 128 MHz from NVM, cache on; the cpuapp default clock is 128 MHz)
+  CONSTLAT: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > Sleep, ION_IDLE11 (System ON, wake on pin, Constant Latency mode, 0 KB RAM); used as ION_IDLE11 - ION_IDLE0
+note: HFXO row ITIMER3 is TIMER10 at 32 MHz on HFXO (leans high); --hfxo-row X2|X3 gives the crystal-core lower bound.
+note: stack HFXO request counter says 1.684 % (sampled 1.500 %)
+mA = the cited datasheet row. Radio/CPU rows are counted over the floor (CONSTLAT over ION_IDLE0); overlaps are added, so this leans high.
+
+===== A3_est.txt
+ESTIMATE — no current meter; datasheet currents
+===============================================
+board nRF54L15 DK (DC/DC); interval 440.0 s from snapshots
+HFXO duty 100.00 % (jlink_peek register samples, 95 % CI 97.8..100.0 %)
+
+component              duty/state                       mA     avg uA
+idle floor             always                       0.0029       2.90
+radio TX +0 dBm        0.060 %                         4.8       2.89
+radio RX               0.259 %                         3.4       8.81
+HFXO (outside radio)   99.680 % of 100.000 % on       0.24     236.34
+CPU active             0.414 %                         2.6      10.75
+CONSTLAT               100.000 %                      0.55     549.20
+TOTAL (known parts)                                            810.89
+
+per broadcast: 148 us TX on-time -> 713 nC at 4.8 mA; once per HR period (8070/32768 s) = 2.89 uA
+broadcast rate 4.061 /s (HR period = 4.060 /s)
+per RX window: 639 us -> 2171 nC at 3.4 mA; once per HR period = 8.82 uA
+wakes: 25.4 idle entries /s
+
+citations (typical, 25 C, 3 V):
+  idle floor: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > Sleep, ION_IDLE8 (System ON, wake on pin + GRTC, LFXO, 256 KB RAM retained)
+  radio TX +0 dBm: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > RADIO transmitting/receiving, IRADIO_TX0 (0 dBm, HFXO)
+  radio RX: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > RADIO transmitting/receiving, IRADIO_RX0 (1 Mbps, HFXO)
+  HFXO (outside radio): Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > TIMER active, ITIMER3 (TIMER10 running at 32 MHz, HFXO; the stack's TIMER20 at 1 MHz draws less)
+  CPU active: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > CPU running, IAPPCPU0 (CoreMark 128 MHz from NVM, cache on; the cpuapp default clock is 128 MHz)
+  CONSTLAT: Nordic nRF54L15/L10/L05 Datasheet v1.0 (Sep 2025), Current consumption > Sleep, ION_IDLE11 (System ON, wake on pin, Constant Latency mode, 0 KB RAM); used as ION_IDLE11 - ION_IDLE0
+note: HFXO row ITIMER3 is TIMER10 at 32 MHz on HFXO (leans high); --hfxo-row X2|X3 gives the crystal-core lower bound.
+note: stack HFXO request counter says 100.000 % (sampled 100.000 %)
+mA = the cited datasheet row. Radio/CPU rows are counted over the floor (CONSTLAT over ION_IDLE0); overlaps are added, so this leans high.
+
+===== B_lp_stats.txt
+B_Sboot_lp.json [before] magic_ok=True state=asleep
+   state=3 sleeps=5 wakes=4 late_anchors=0 late_wakes=0 hfxo_late_edge2=0 reanchors=1 range_errors=0 lf_taken=4 timer_taken=1 disagreements=1 max_disagree_us=37 max_wake_slack_us=209 max_wake_late_us=0 asap_wakes=0 release_cancels=0 spurious=0 hfxo_errors=0 refused=0 last_disagree_q=0 edge_order=0
+B_Sboot_lp.json [after] magic_ok=True state=asleep
+   state=3 sleeps=15 wakes=14 late_anchors=0 late_wakes=0 hfxo_late_edge2=0 reanchors=1 range_errors=0 lf_taken=14 timer_taken=1 disagreements=1 max_disagree_us=37 max_wake_slack_us=209 max_wake_late_us=0 asap_wakes=0 release_cancels=0 spurious=0 hfxo_errors=0 refused=0 last_disagree_q=0 edge_order=0
+B_S1_lp.json [before] magic_ok=True state=asleep
+   state=3 sleeps=665 wakes=664 late_anchors=0 late_wakes=0 hfxo_late_edge2=0 reanchors=1 range_errors=0 lf_taken=664 timer_taken=1 disagreements=1 max_disagree_us=37 max_wake_slack_us=209 max_wake_late_us=0 asap_wakes=0 release_cancels=0 spurious=0 hfxo_errors=0 refused=0 last_disagree_q=0 edge_order=0
+B_S1_lp.json [after] magic_ok=True state=asleep
+   state=3 sleeps=678 wakes=677 late_anchors=0 late_wakes=0 hfxo_late_edge2=0 reanchors=1 range_errors=0 lf_taken=677 timer_taken=1 disagreements=1 max_disagree_us=37 max_wake_slack_us=209 max_wake_late_us=0 asap_wakes=0 release_cancels=0 spurious=0 hfxo_errors=0 refused=0 last_disagree_q=0 edge_order=0
+B_S3_lp.json [before] magic_ok=True state=asleep
+   state=3 sleeps=2460 wakes=2459 late_anchors=0 late_wakes=0 hfxo_late_edge2=0 reanchors=1 range_errors=0 lf_taken=2459 timer_taken=1 disagreements=1 max_disagree_us=37 max_wake_slack_us=209 max_wake_late_us=0 asap_wakes=0 release_cancels=0 spurious=0 hfxo_errors=0 refused=0 last_disagree_q=0 edge_order=0
+B_S3_lp.json [after] magic_ok=True state=asleep
+   state=3 sleeps=2470 wakes=2469 late_anchors=0 late_wakes=0 hfxo_late_edge2=0 reanchors=1 range_errors=0 lf_taken=2469 timer_taken=1 disagreements=1 max_disagree_us=37 max_wake_slack_us=209 max_wake_late_us=0 asap_wakes=0 release_cancels=0 spurious=0 hfxo_errors=0 refused=0 last_disagree_q=0 edge_order=0
+delta first->last: sleeps=2465 wakes=2465 late_anchors=0 late_wakes=0 hfxo_late_edge2=0 reanchors=0 range_errors=0 lf_taken=2465 timer_taken=0 disagreements=0 asap_wakes=0 release_cancels=0 spurious=0 hfxo_errors=0 edge_order=0
+
+===== B2_lp_stats.txt
+B2_Sboot_lp.json [before] magic_ok=True state=asleep
+   state=3 sleeps=1 wakes=0 late_anchors=0 late_wakes=0 hfxo_late_edge2=0 reanchors=1 range_errors=0 lf_taken=0 timer_taken=1 disagreements=1 max_disagree_us=37 max_wake_slack_us=0 max_wake_late_us=0 asap_wakes=0 release_cancels=0 spurious=0 hfxo_errors=0 refused=0 last_disagree_q=37 edge_order=0
+B2_Sboot_lp.json [after] magic_ok=True state=asleep
+   state=3 sleeps=11 wakes=10 late_anchors=0 late_wakes=0 hfxo_late_edge2=0 reanchors=1 range_errors=0 lf_taken=10 timer_taken=1 disagreements=1 max_disagree_us=37 max_wake_slack_us=208 max_wake_late_us=0 asap_wakes=0 release_cancels=0 spurious=0 hfxo_errors=0 refused=0 last_disagree_q=0 edge_order=0
+B2_S1_lp.json [before] magic_ok=True state=asleep
+   state=3 sleeps=562 wakes=561 late_anchors=0 late_wakes=0 hfxo_late_edge2=0 reanchors=1 range_errors=0 lf_taken=561 timer_taken=1 disagreements=1 max_disagree_us=37 max_wake_slack_us=209 max_wake_late_us=0 asap_wakes=0 release_cancels=0 spurious=0 hfxo_errors=0 refused=0 last_disagree_q=0 edge_order=0
+B2_S1_lp.json [after] magic_ok=True state=asleep
+   state=3 sleeps=572 wakes=571 late_anchors=0 late_wakes=0 hfxo_late_edge2=0 reanchors=1 range_errors=0 lf_taken=571 timer_taken=1 disagreements=1 max_disagree_us=37 max_wake_slack_us=209 max_wake_late_us=0 asap_wakes=0 release_cancels=0 spurious=0 hfxo_errors=0 refused=0 last_disagree_q=0 edge_order=0
+B2_S3_lp.json [before] magic_ok=True state=asleep
+   state=3 sleeps=1796 wakes=1795 late_anchors=0 late_wakes=0 hfxo_late_edge2=0 reanchors=1 range_errors=0 lf_taken=1795 timer_taken=1 disagreements=1 max_disagree_us=37 max_wake_slack_us=209 max_wake_late_us=0 asap_wakes=0 release_cancels=0 spurious=0 hfxo_errors=0 refused=0 last_disagree_q=0 edge_order=0
+B2_S3_lp.json [after] magic_ok=True state=asleep
+   state=3 sleeps=1808 wakes=1807 late_anchors=0 late_wakes=0 hfxo_late_edge2=0 reanchors=1 range_errors=0 lf_taken=1807 timer_taken=1 disagreements=1 max_disagree_us=37 max_wake_slack_us=209 max_wake_late_us=0 asap_wakes=0 release_cancels=0 spurious=0 hfxo_errors=0 refused=0 last_disagree_q=0 edge_order=0
+delta first->last: sleeps=1807 wakes=1807 late_anchors=0 late_wakes=0 hfxo_late_edge2=0 reanchors=0 range_errors=0 lf_taken=1807 timer_taken=0 disagreements=0 asap_wakes=0 release_cancels=0 spurious=0 hfxo_errors=0 edge_order=0
+
+===== resume_after_crash_lp_stats.txt
+resume_lp.json [before] magic_ok=True state=asleep
+   state=3 sleeps=3364 wakes=3363 late_anchors=0 late_wakes=0 hfxo_late_edge2=0 reanchors=1 range_errors=0 lf_taken=3363 timer_taken=1 disagreements=1 max_disagree_us=37 max_wake_slack_us=209 max_wake_late_us=0 asap_wakes=0 release_cancels=0 spurious=0 hfxo_errors=0 refused=0 last_disagree_q=0 edge_order=0
+resume_lp.json [after] magic_ok=True state=asleep
+   state=3 sleeps=3375 wakes=3374 late_anchors=0 late_wakes=0 hfxo_late_edge2=0 reanchors=1 range_errors=0 lf_taken=3374 timer_taken=1 disagreements=1 max_disagree_us=37 max_wake_slack_us=209 max_wake_late_us=0 asap_wakes=0 release_cancels=0 spurious=0 hfxo_errors=0 refused=0 last_disagree_q=0 edge_order=0
+delta first->last: sleeps=11 wakes=11 late_anchors=0 late_wakes=0 hfxo_late_edge2=0 reanchors=0 range_errors=0 lf_taken=11 timer_taken=0 disagreements=0 asap_wakes=0 release_cancels=0 spurious=0 hfxo_errors=0 edge_order=0

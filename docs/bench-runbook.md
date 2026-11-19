@@ -579,3 +579,70 @@ What the gate showed:
   from 1030 to 922 µA. That is the per-transmit INF log line and the `RF_setTxPower()` call gone.
 
 The TI was left on image B. The L15 was left on the c2gate apps/dongle image, and Gate G1 reflashes it.
+
+### nRF54L15 HFXO/timebase release, Gate G1 (2026-11-18)
+
+An on-air A/B/A of `CONFIG_RADIANT_NRF_LOW_POWER` (pass B3), local master 2ec8901. Both arms are
+radiant/samples/hr_transmitter for `nrf54l15dk/nrf54l15/cpuapp` with `lowpower.conf;power_diag_quiet.conf`. B
+(`26e088bc`) has the option on. A (`1fbebd37`) adds a fragment that sets `CONFIG_HR_TX_RELEASE_HFXO=n`. The two
+`.config` files differ only in the option, `NRFX_POWER` and the four `RADIANT_NRF_LP_*` sub-options. The L15 was the
+transmitter (HR #12345). There were two receivers in the same windows:
+
+- the Pro Micro;
+- the TI, reflashed as an apps/dongle_ti receiver (`fa76ef0f`, ANT on COM11 at 57600).
+
+Both ran `ant_verify` for 600 s per arm, through a wrapper that keeps the radio-clock receive intervals. The L15 was
+read only through `jlink_peek.ps1`:
+
+- the struct at the start and end of each window, with a ~2-minute span left unattached;
+- `-Symbol radiant_nrf_lp_stats` before and after the main sampling run;
+- 136-200 pooled XO.STAT/CONSTLATSTAT samples per arm.
+
+The arms ran A1, B, A2, then (after a host crash) a B repeat, B2, and a control, A3. Raw data, scripts and per-arm
+tables are in `archive/benchmarks/2026-11-18-power-g1/`.
+
+| | A (A1 / A2 / A3) | B | B2 |
+|---|---|---|---|
+| `hfxo_req_us` / uptime | 100.000 % | **1.684 %** (4.06 requests/s × 4.15 ms) | **1.684 %** |
+| XO.STAT / CONSTLATSTAT on, sampled | 100 % / 100 % | 1/56 / 1/56 | 3/200 / 2/200 |
+| lp_stats in the window: sleeps = wakes; every fault counter | — | 4.056/s; all 0 | 4.057/s; all 0 |
+| CPU ‰ / idle entries /s | 4.14 / 25.35 | 4.85 / 45.66 | 4.84 / 45.66 |
+| Mean period, Pro Micro / TI radio clock | 246281.47 / 246283.45-.59 µs | **−7.34 / −7.34 µs** | −7.45 / −7.42 µs |
+| Off-grid stddev, Pro Micro / TI | 10.9 / 12.6 µs | 8.7 / 5.0 µs | 8.9 / 5.1 µs |
+| Pro Micro loss | 0.00 / 0.08 / 0.00 % | 0.08 % | 0.12 % |
+| **TI loss** | 0.41 / 1.11 / 0.53 % | **1.84 %** | **2.54 %** |
+| Estimate, known parts (ESTIMATE, µA; X2 HFXO row in brackets) | **811** (608) | **40.5** (37.5) | **35.5** (33.1) |
+
+What the gate showed:
+
+- **Gate G1 FAILS on TI receiver loss; every other criterion passes.**
+  - HFXO duty is under 3 % by the counter (1.684 %) and by the pooled samples (4/256 = 1.6 %, CI 0.6–4.0 %). The
+    unattached span reads the same as the attached one, so the probe does not hold the crystal.
+  - CONSTLAT is off between slots (253/256 samples off, `constlat_stat` 0, flags 0x3E).
+  - In the measured windows, every LP fault counter is 0 and so are disagreements. sleeps = wakes at 4.06/s.
+  - The period shift is the LF offset. Off-grid jitter is no worse.
+  - The Pro Micro moved by at most one packet.
+  - Both B arms lost 2–5× more packets at the TI than any of the three interleaved A arms. In B the TI's signal was
+    the same as in A1/A2. In B2 it was the same as in A3. Most of the excess is misses with no RX_FAIL, i.e. no sync
+    word found. Every packet the TI did receive lay within one tick of the grid. So the L15 was left on A.
+  - Untested hypothesis: the carrier has not settled after each slot's fresh HFXO start (~1 ms before TX), and the
+    TI's receiver is more frequency-sensitive than the Pro Micro's. Next, a Kconfig-only arm with a longer
+    `CONFIG_RADIANT_NRF_LP_HFXO_STARTUP_US`.
+- **The saving, if the on-air issue is solved: ~811 → ~36–41 µA (ESTIMATE).**
+  - CONSTLAT falls from 549 to ~9 µA and the HFXO term from 236 to ~3 µA.
+  - CPU rises by ~2 µA: about five extra wakes per slot (+20 idle entries/s), the GRTC edges and the HFXO callback.
+  - The HFXO start transient is not modelled.
+  - Each HFXO request is 4.15 ms per slot, against the simulator's ~1.7 ms (the ~0.7 % prediction). That gap is ~7 µA
+    and is not broken down.
+- **The period moves the other way from the brief.** The asleep, LFXO-timed period is 7.34 µs *shorter* (−29.8 ppm).
+  The magnitude is spike S5's L15 offset. The sign means the LF crystal runs fast relative to the HFXO on this board.
+- **The since-boot gauges come from boot.** `max_disagree_us` = 37, `max_wake_slack_us` = 209 and one `timer_taken`
+  are set by the first release, ~2 s after reset, with identical values on every boot. They never move after that. The
+  release correctly took the TIMER's reading.
+- **jlink_peek: keep reads under ~4 s apart.** With delays of 1.7–4.7 s, the SWD session lost the target (`Could not
+  read memory` for the rest of the session) after a 4.2 s gap in B, and also in A2, after 116 reads. The parse guard
+  flagged it (rc 2, liveness unknown), and the next session connected normally. Use several short sessions at the
+  default 150–450 ms spacing instead (`g1_arm.py --burst`).
+
+The L15 was left on image A (`1fbebd37`), transmitting #12345. The TI was left as the apps/dongle_ti receiver
+(`fa76ef0f`), so the TI does not transmit #12345 now.

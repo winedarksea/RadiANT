@@ -1,0 +1,31 @@
+# Gate G1 images, built from local master 2ec8901 (hand west from C:\ncs\v3.4.0, scripts/g1_build.ps1)
+## g1_A (radiant/samples/hr_transmitter, nrf54l15dk/nrf54l15/cpuapp)
+1fbebd37b8ca70ff7c546cbd797b455a *build/g1_A/hr_transmitter/zephyr/zephyr.hex
+de3f43ba832400da7a9a04431e6b7572 *build/g1_A/hr_transmitter/zephyr/zephyr.elf
+20000264 00000058 D radiant_power_diag
+## g1_B (radiant/samples/hr_transmitter, nrf54l15dk/nrf54l15/cpuapp)
+26e088bc19ff288ee11b9c340e60a665 *build/g1_B/hr_transmitter/zephyr/zephyr.hex
+6cecb5fa3140b422562fbeadfb966eb6 *build/g1_B/hr_transmitter/zephyr/zephyr.elf
+20000120 000000c0 d lp
+20000390 0000005c D radiant_nrf_lp_stats
+20000324 00000058 D radiant_power_diag
+## g1_ti_rx (apps/dongle_ti, cc26x2r1_launchxl, ti_health.conf;ti_diag.conf, ANT UART 57600)
+fa76ef0f5ace41db1c164251d13ec001 *build/g1_ti_rx/dongle_ti/zephyr/zephyr.hex
+9de8b61a64bdc7deb10352539fd72347 *build/g1_ti_rx/dongle_ti/zephyr/zephyr.elf
+## .config diff A -> B
+2c2
+< # CONFIG_HR_TX_RELEASE_HFXO is not set
+---
+> CONFIG_HR_TX_RELEASE_HFXO=y
+1013c1013
+< # CONFIG_NRFX_POWER is not set
+---
+> CONFIG_NRFX_POWER=y
+1177c1177,1181
+< # CONFIG_RADIANT_NRF_LOW_POWER is not set
+---
+> CONFIG_RADIANT_NRF_LOW_POWER=y
+> CONFIG_RADIANT_NRF_LP_HFXO_STARTUP_US=800
+> CONFIG_RADIANT_NRF_LP_KEEP_ON_US=3000
+> CONFIG_RADIANT_NRF_LP_LINGER_MS=1000
+> CONFIG_RADIANT_NRF_LP_STATS=y
