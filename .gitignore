@@ -96,3 +96,6 @@ tools/zwift_shim/out/
 tools/zwift_shim/obj_a/
 tools/zwift_shim/obj_b/
 tools/zwift_shim/build.bat
+
+# Gate G4 raw per-leg output stays on the bench machine (README says so).
+archive/benchmarks/2026-11-19-power-g4/runs/
