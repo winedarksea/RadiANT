@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
  * radiant_radio_nrf_lp.c - release the HFXO and stop the radio TIMER in long
- * idle gaps (CONFIG_RADIANT_NRF_LOW_POWER, power plan Track B, pass B3).
+ * idle gaps (CONFIG_RADIANT_NRF_LOW_POWER, power plan Track B, passes B3, B5
+ * and B6).
  *
  * Provenance: clean-room. Written from radiant_radio_nrf.c's own clock and
  * gate seam, src/radiant_radio_nrf_lp.h (the arithmetic, pass B2), the spike
@@ -29,9 +30,12 @@
  *     z_nrf_rtc_timer_read()) with two of its user channels; the anchor is
  *     one PPI channel with a FORK; the radio TIMER is SHUT DOWN after it is
  *     stopped (nRF52 anomaly 78).
- * Kconfig refuses MPSL (pass B6).
+ * The MPSL gate's build (pass B6, GRTC only) shares the timebase, the counter
+ * seam's read, the stats and the HFXO boot request, and nothing of the state
+ * machine below: there the timeslot START is the wake. Its own section, at
+ * the end of this file (LP_MPSL), says why.
  *
- * THE GATE SEAM. This file is the build's gate (radiant_radio_nrf_gate.h) in
+ * THE GATE SEAM (direct build). This file is the build's gate (radiant_radio_nrf_gate.h) in
  * place of radiant_radio_nrf_gate_direct.c. Awake, gate_acquire() answers
  * GATE_GRANTED exactly as the direct gate does and the arm programs at once.
  * When the operation asked for is far enough away (radiant_lp_should_sleep),
@@ -130,7 +134,8 @@
  * LOCKING. Every field of `lp` and every call into radiant_radio_nrf_lp.h,
  * including the LF counter read that feeds it, is under CLOCK_LOCK, the
  * same critical section as the TIMER fold (irq_lock on the direct build;
- * MPSL builds, where it is PRIMASK, are refused). The completion work a wake
+ * PRIMASK on the MPSL build, whose hooks run in the zero-latency timeslot
+ * signal and make no kernel call). The completion work a wake
  * triggers - radiant_nrf_gate_on_grant(), a FAILED terminal and the core
  * callback and scheduler pass behind it - runs after the lock is dropped
  * (lp_flush()), from the LF counter's interrupt (the system timer's: GRTC
@@ -185,6 +190,31 @@
  *                           release, q units (us on the GRTC, 1/512 us
  *                           on the RTC)
  *   0x58 edge_order         EDGE 2 handled before EDGE 1 (a held interrupt)
+ *
+ * The MPSL build (pass B6) appends six fields (size 0x74) and uses only some
+ * of the ones above: sleeps and wakes count timeslot ends and STARTs (the
+ * epoch release at init is not counted); lf_taken, timer_taken,
+ * disagreements, max_disagree_us and last_disagree_q judge each timeslot's
+ * TIMER against the GRTC at its end; range_errors and refused as above. The
+ * rest stay 0: there is no edge to be late, no HFXO request after init, no
+ * staged wake.
+ *
+ *   0x5C slot_awake_us      us the TIMER ran in timeslots (GRTC-timed,
+ *                           wraps at 2^32): the duty proxy, since MPSL
+ *                           holds the HFXO for at least this long on the
+ *                           backend's behalf (plus its own ramp ahead of
+ *                           each START, which this does not see)
+ *   0x60 start_err_n        STARTs of timed timeslots (not the bootstrap,
+ *                           not the elastic class) cross-checked below
+ *   0x64 start_err_min_us   signed: the START's GRTC reading minus the start
+ *   0x68 start_err_max_us   the gate asked MPSL for. Both are on the LF
+ *   0x6C start_err_last_us  timebase, so this is MPSL's own dispatch
+ *                           latency plus any drift of this timebase against
+ *                           MPSL's grid (the gate's spike: 0..17 us)
+ *   0x70 missed_releases    timeslots whose TIMER was still running at the
+ *                           next START or at a low-priority backstop (the
+ *                           ACTION_END funnel was not passed); each takes the
+ *                           LF image whatever the TIMER read
  */
 
 #if !defined(RADIANT_RADIO_NRF_LP_INCLUDED)
@@ -207,13 +237,22 @@
 BUILD_ASSERT(IS_ENABLED(CONFIG_NRF_GRTC_TIMER) || IS_ENABLED(CONFIG_NRF_RTC_TIMER),
 	     "RADIANT_NRF_LOW_POWER keeps time on the system timer's LF counter: "
 	     "the GRTC (nRF54L) or RTC1 (nRF52)");
-BUILD_ASSERT(!IS_ENABLED(CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL),
-	     "RADIANT_NRF_LOW_POWER is the direct backend's gate; MPSL is pass B6");
-#if defined(CORE_CB_DEFERRED)
-#error "RADIANT_NRF_LOW_POWER assumes the direct build's CLOCK_LOCK (irq_lock)"
+/*
+ * LP_MPSL: the MPSL gate's build (pass B6). The direct build's state machine
+ * (the edges, the staged wake, the gate) is compiled only without it; the MPSL
+ * build shares the timebase, the counter, the stats and the HFXO boot request,
+ * and adds its own section at the end of this file.
+ */
+#if defined(CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL)
+#define LP_MPSL 1
 #endif
+#if defined(CORE_CB_DEFERRED) && !defined(LP_MPSL)
+#error "RADIANT_NRF_LOW_POWER's direct build assumes its CLOCK_LOCK (irq_lock)"
+#endif
+#if !defined(LP_MPSL)
 BUILD_ASSERT(DT_PROP_OR(RADIANT_TIMER_NODE, cc_num, 0) >= 6,
 	     "RADIANT_NRF_LOW_POWER needs CC5 of the radio TIMER for its anchor");
+#endif
 
 /*
  * The LF counter's rate: the system timer's cycle rate on both families
@@ -560,8 +599,21 @@ struct radiant_nrf_lp_stats {
 	uint32_t refused;
 	int32_t  last_disagree_q;
 	uint32_t edge_order;
+#if defined(LP_MPSL)
+	/* Appended by the MPSL build only (pass B6); see the file header. */
+	uint32_t slot_awake_us;
+	uint32_t start_err_n;
+	int32_t  start_err_min_us;
+	int32_t  start_err_max_us;
+	int32_t  start_err_last_us;
+	uint32_t missed_releases;
+#endif
 };
+#if defined(LP_MPSL)
+BUILD_ASSERT(sizeof(struct radiant_nrf_lp_stats) == 0x74, "layout in the file header");
+#else
 BUILD_ASSERT(sizeof(struct radiant_nrf_lp_stats) == 0x5C, "layout in the file header");
+#endif
 
 struct radiant_nrf_lp_stats radiant_nrf_lp_stats = {
 	.magic = 0x52504C31u,
@@ -581,6 +633,7 @@ struct radiant_nrf_lp_stats radiant_nrf_lp_stats = {
 #define LP_STAT_MAX(f, v) do { (void)(v); } while (0)
 #endif
 
+#if !defined(LP_MPSL)
 /* late_wakes from outside CLOCK_LOCK. */
 static void lp_count_late_wake(void)
 {
@@ -589,6 +642,7 @@ static void lp_count_late_wake(void)
 	LP_STAT(radiant_nrf_lp_stats.late_wakes++);
 	CLOCK_UNLOCK(key);
 }
+#endif
 
 static void lp_set_state(enum lp_state s)
 {
@@ -631,6 +685,7 @@ static uint64_t lp_now_locked(void)
 				    clock_fold(timer_capture(CC_NOW)), 0u);
 }
 
+#if !defined(LP_MPSL)
 /*
  * The TIMER-domain time of a CC5 capture taken shortly before now, or false
  * if CC5 does not hold one (the sentinel written when the edge was armed, a
@@ -678,6 +733,7 @@ static void lp_timer_sw_start_locked(void)
 	lp.clk.awake_frac = (uint32_t)(lp.clk.anchor_q &
 				       ((UINT64_C(1) << lp.tb.shift) - 1u));
 }
+#endif /* !LP_MPSL */
 
 /* ---- HFXO and CONSTLAT ---- */
 
@@ -688,7 +744,7 @@ static void lp_timer_sw_start_locked(void)
  */
 static void lp_constlat(bool on)
 {
-#if defined(NRF54L_ERRATA_20_PRESENT)
+#if defined(NRF54L_ERRATA_20_PRESENT) && !defined(LP_MPSL)
 	if (!nrf54l_errata_20() || on == lp.constlat_held) {
 		return;
 	}
@@ -699,10 +755,12 @@ static void lp_constlat(bool on)
 	}
 	lp.constlat_held = on;
 #else
+	/* The MPSL build leaves CONSTLAT to MPSL (see its section below). */
 	ARG_UNUSED(on);
 #endif
 }
 
+#if !defined(LP_MPSL)
 static void lp_flush(void);
 static void lp_settle(void);
 static void lp_reconsider(void);
@@ -746,6 +804,7 @@ static void lp_degrade_locked(void)
 	lp.fail_owed = false;
 	lp_set_state(LP_OFF);
 }
+#endif /* !LP_MPSL */
 
 static void lp_hfxo_cb(struct onoff_manager *mgr, struct onoff_client *cli,
 		       uint32_t st, int res)
@@ -767,13 +826,19 @@ static void lp_hfxo_cb(struct onoff_manager *mgr, struct onoff_client *cli,
 		return;
 	}
 	if (res < 0) {
+#if !defined(LP_MPSL)
 		if (lp.state != LP_OFF) {
 			lp_degrade_locked();
 		} else {
 			LP_STAT(radiant_nrf_lp_stats.hfxo_errors++);
 		}
+#else
+		/* Only the boot request exists here (LP_OFF). */
+		LP_STAT(radiant_nrf_lp_stats.hfxo_errors++);
+#endif
 	} else {
 		lp.hfxo_ready = true;   /* also the boot request, in LP_OFF */
+#if !defined(LP_MPSL)
 		if (lp.state == LP_AWAKE && lp.hfxo_wait) {
 			/* EDGE 2 started the TIMER on HFINT: restore the exact
 			 * relation on the crystal, then grant. */
@@ -783,13 +848,19 @@ static void lp_hfxo_cb(struct onoff_manager *mgr, struct onoff_client *cli,
 		} else if (lp.state == LP_WAKING && lp.sw_start_pending) {
 			lp_sw_start_locked();
 		}
+#endif
 	}
 	CLOCK_UNLOCK(key);
+#if !defined(LP_MPSL)
 	if (flush) {
 		lp_flush();
 	}
+#else
+	ARG_UNUSED(flush);
+#endif
 }
 
+#if !defined(LP_MPSL)
 /* Under CLOCK_LOCK. May degrade (state LP_OFF) if the request fails. */
 static void lp_hfxo_on_locked(void)
 {
@@ -811,6 +882,7 @@ static void lp_hfxo_on_locked(void)
 		lp_degrade_locked();
 	}
 }
+#endif /* !LP_MPSL */
 
 /* Under CLOCK_LOCK. */
 static void lp_hfxo_off_locked(void)
@@ -862,6 +934,7 @@ static int lp_hfxo_boot(void)
 	return 0;
 }
 
+#if !defined(LP_MPSL)
 /* ---- Compares ---- */
 
 static void lp_anchor_handler(int32_t id, uint64_t expire, void *user);
@@ -1763,3 +1836,283 @@ static void lp_init(void)
 		(unsigned)CONFIG_RADIANT_NRF_LP_KEEP_ON_US, (int)lp.ch_anchor,
 		(int)lp.ch_hf);
 }
+
+#else /* LP_MPSL */
+
+/* ---- The MPSL build (pass B6): the timeslot is the wake ----
+ *
+ * WHY NOTHING ABOVE APPLIES. Under the MPSL gate this backend touches the RADIO
+ * only inside an MPSL timeslot, and the gate asks for every timeslot with
+ * MPSL_TIMESLOT_HFCLK_CFG_XTAL_GUARANTEED (radiant_radio_nrf_gate_mpsl.c,
+ * GATE_HFCLK_CFG): MPSL starts the HFXO before SIGNAL_START, delivers the
+ * signal only once it is running and stable, and keeps it until the timeslot
+ * ends. So the timeslot itself is the wake, with its crystal start already
+ * paid for, and a timeslot that MPSL cannot start on a stable crystal is one
+ * it does not start (BLOCKED or CANCELLED, which the gate already turns into
+ * DENIED). There is no EDGE 1 to be late for and no TIMER to start on HFINT.
+ *
+ * What this section does instead, called by the gate:
+ *
+ *   radiant_nrf_gate_lp_slot_start()   SIGNAL_START, first thing. Start the
+ *       stopped and cleared TIMER, from zero, right after a read of the GRTC
+ *       SYSCOUNTER, both under CLOCK_LOCK (PRIMASK, in the zero-latency
+ *       signal): the awake segment is anchored to that tick as an EDGE 2
+ *       (D)PPI start anchors it, so radiant_lp_wake(..., true). The error is
+ *       the read-to-START latency (well under 1 us; the read retries only
+ *       while the counter reports BUSY) plus the 1 us tick: the same bound as
+ *       the (D)PPI start, whose spike B1 S3 errors were {-1, 0} us.
+ *   radiant_nrf_gate_lp_slot_end()     the funnel every high-priority
+ *       ACTION_END passes, after the hand-back, every radiant_radio_abort()
+ *       and the RADIO vector clear: read the GRTC, capture the TIMER, stop
+ *       and clear it, and take the release (radiant_lp_release: the LF image
+ *       when the two agree within RADIANT_LP_RELEASE_TOL_US, which a timeslot
+ *       of a few ms always does). From then until the next START
+ *       radiant_radio_now() is the GRTC's. Also called from the gate's
+ *       low-priority backstops (an expiry-ended timeslot, a session closing)
+ *       and gate_shutdown(), where a TIMER still running is a missed release.
+ *
+ * Both are reads made by an awake CPU (spike B1's stale-capture trap is a DPPI
+ * capture while the CPU sleeps). The Zephyr GRTC driver's compare and abort
+ * calls take a kernel lock and are never made from the zero-latency signal:
+ * no GRTC channel, no (D)PPI connection and no HFXO request is used after
+ * init.
+ *
+ * WHY NOT THE DIRECT BUILD'S TWO-EDGE WAKE AHEAD OF THE START. It would need
+ * the backend's own HFXO request a start-up ahead of each timeslot, two GRTC
+ * interrupts per slot, and compare writes the zero-latency context may not
+ * make, and it would add a failure mode the gate does not have (an EDGE 1 held
+ * off by a BLE event loses the slot). It buys nothing on accuracy: both
+ * anchors are one 1 us GRTC tick. Re-anchoring at every START also means no
+ * error carries from one timeslot into the next.
+ *
+ * THE MISSED RELEASE. If a START finds the TIMER still running (an earlier
+ * timeslot ended without passing the funnel), MPSL may have released the HFXO
+ * after that timeslot and the TIMER may have counted part of the gap on HFINT.
+ * The release then takes the LF image whatever the TIMER says, and is counted
+ * (missed_releases).
+ *
+ * CONSTLAT is MPSL's: its per-event acquire covers the timeslots
+ * (RADIANT_NRF54L_MPSL_CONSTLAT_HOLD, default n), so lp_constlat() is empty
+ * here.
+ */
+
+#if !defined(CONFIG_NRF_GRTC_TIMER)
+#error "RADIANT_NRF_LOW_POWER on an MPSL build anchors in software at SIGNAL_START, which needs the GRTC's 1 us tick (Kconfig refuses RTC1 here)"
+#endif
+
+/* A missed release's tolerance: take the LF image whatever the TIMER read. */
+#define LP_MISSED_TOL_US 1000000u
+
+/* Where the TIMER last started (LF ticks): the awake-time stat. */
+static uint64_t lp_slot_t0;
+
+/*
+ * The release: the TIMER's reading of the LF tick `t` read just before it,
+ * then the TIMER stopped and cleared. Under CLOCK_LOCK, state AWAKE. `tol_us`:
+ * RADIANT_LP_RELEASE_TOL_US, or LP_MISSED_TOL_US for a missed release. Read
+ * in the wake's order (the counter, then the TIMER), so the read-to-TIMER
+ * latency is the same at both ends of the segment and cancels.
+ */
+static void lp_slot_release_locked(uint32_t tol_us, bool count)
+{
+	uint64_t t = lp_cnt_read();
+	uint64_t timer_us = clock_fold(timer_capture(CC_NOW));
+	int64_t  diff = 0;
+	bool     exact = lp.clk.timer_at_anchor;
+	bool     took_lf;
+
+	lp_timer_halt();
+	/*
+	 * The TIMER restarts from zero at the next START, where a compare left
+	 * from this timeslot would fire early, inside that timeslot's operation:
+	 * its TIMER-driven connections stop with it. Every terminal disables
+	 * them already; this covers a timeslot that ended with an operation
+	 * still armed (its DENIED comes later, from the gate's work).
+	 */
+	nrfx_gppi_conn_disable(radiant_op.conn_start);
+	nrfx_gppi_conn_disable(radiant_op.conn_start_tx);
+	nrfx_gppi_conn_disable(radiant_op.conn_close);
+	took_lf = radiant_lp_release(&lp.tb, &lp.clk, t, timer_us, tol_us, &diff);
+	ARG_UNUSED(took_lf);
+	ARG_UNUSED(exact);
+	ARG_UNUSED(count);
+	LP_STAT(if (count) {
+			radiant_nrf_lp_stats.sleeps++;
+			radiant_nrf_lp_stats.slot_awake_us +=
+				(uint32_t)radiant_lp_ticks_to_us(&lp.tb, t - lp_slot_t0);
+			if (took_lf) {
+				radiant_nrf_lp_stats.lf_taken++;
+			} else {
+				radiant_nrf_lp_stats.timer_taken++;
+			}
+			if (exact) {
+				uint64_t mag = (uint64_t)((diff < 0) ? -diff : diff) >>
+					       lp.tb.shift;
+
+				radiant_nrf_lp_stats.last_disagree_q =
+					(diff > INT32_MAX) ? INT32_MAX
+					: (diff < INT32_MIN) ? INT32_MIN : (int32_t)diff;
+				LP_STAT_MAX(max_disagree_us, mag);
+				if (!took_lf) {
+					radiant_nrf_lp_stats.disagreements++;
+				}
+			}
+		});
+	lp_set_state(LP_ASLEEP);
+}
+
+/*
+ * The wake: start the stopped TIMER from zero on the counter's current tick
+ * and load the fold from that tick's asleep reading. Under CLOCK_LOCK, state
+ * ASLEEP. r_start: the requested start of this timeslot, for the START
+ * cross-check, or 0 for none.
+ */
+static void lp_slot_wake_locked(radiant_time_t r_start)
+{
+	uint64_t t;
+
+	/* From zero, whatever a stray START may have done meanwhile. */
+	nrf_timer_task_trigger(TIMER_ADDR, NRF_TIMER_TASK_STOP);
+	nrf_timer_task_trigger(TIMER_ADDR, NRF_TIMER_TASK_CLEAR);
+	t = lp_cnt_read();
+	nrf_timer_task_trigger(TIMER_ADDR, NRF_TIMER_TASK_START);
+	if (!radiant_lp_asleep_ok(&lp.tb, &lp.clk, t)) {
+		/* A reading the asleep conversion cannot place (a lost
+		 * timebase): counted, and the segment continues from the
+		 * high-water mark rather than from garbage. */
+		lp.clk.range_errors++;
+		LP_STAT(radiant_nrf_lp_stats.range_errors = lp.clk.range_errors);
+		lp.clk.anchor_q = lp.clk.hwm_us << lp.tb.shift;
+		lp.clk.anchor_ticks = t & lp.tb.mask;
+	}
+	radiant_clock.base = radiant_lp_wake(&lp.tb, &lp.clk, t, true);
+	radiant_clock.last = 0u;
+	lp_slot_t0 = t;
+	lp_set_state(LP_AWAKE);
+	LP_STAT(radiant_nrf_lp_stats.wakes++);
+	LP_STAT(if (r_start != 0u) {
+			int64_t e = (int64_t)(radiant_clock.base - (uint64_t)r_start);
+			int32_t e32 = (e > INT32_MAX) ? INT32_MAX
+				      : (e < INT32_MIN) ? INT32_MIN : (int32_t)e;
+
+			if (radiant_nrf_lp_stats.start_err_n == 0u ||
+			    e32 < radiant_nrf_lp_stats.start_err_min_us) {
+				radiant_nrf_lp_stats.start_err_min_us = e32;
+			}
+			if (radiant_nrf_lp_stats.start_err_n == 0u ||
+			    e32 > radiant_nrf_lp_stats.start_err_max_us) {
+				radiant_nrf_lp_stats.start_err_max_us = e32;
+			}
+			radiant_nrf_lp_stats.start_err_last_us = e32;
+			radiant_nrf_lp_stats.start_err_n++;
+		});
+	ARG_UNUSED(r_start);
+}
+
+void radiant_nrf_gate_lp_slot_start(radiant_time_t r_start)
+{
+	unsigned int key;
+
+	if (lp.state == LP_OFF) {
+		return;
+	}
+	key = CLOCK_LOCK();
+	if (lp.state == LP_AWAKE) {
+		LP_STAT(radiant_nrf_lp_stats.missed_releases++);
+		lp_slot_release_locked(LP_MISSED_TOL_US, true);
+	}
+	lp_slot_wake_locked(r_start);
+	CLOCK_UNLOCK(key);
+}
+
+void radiant_nrf_gate_lp_slot_end(bool backstop)
+{
+	unsigned int key;
+
+	if (lp.state == LP_OFF) {
+		return;
+	}
+	key = CLOCK_LOCK();
+	if (lp.state == LP_AWAKE) {
+		if (backstop) {
+			LP_STAT(radiant_nrf_lp_stats.missed_releases++);
+		}
+		lp_slot_release_locked(backstop ? LP_MISSED_TOL_US : RADIANT_LP_RELEASE_TOL_US,
+				       true);
+	}
+	CLOCK_UNLOCK(key);
+}
+
+/* LP_HOOKs the direct build's state machine needs and this one does not:
+ * nothing is staged behind a wake, and a terminal or an enable decides
+ * nothing (the next timeslot's START does). */
+static void lp_staged(void)
+{
+}
+
+static void lp_terminal_done(void)
+{
+}
+
+static void lp_on_enable(void)
+{
+}
+
+/* ---- Init ---- */
+
+static void lp_refuse(const char *why, int err)
+{
+	lp_set_state(LP_OFF);
+	LP_STAT(radiant_nrf_lp_stats.refused = 1u);
+	LOG_WRN("low power refused (%s, %d): the HFXO stays on as without "
+		"CONFIG_RADIANT_NRF_LOW_POWER", why, err);
+}
+
+/*
+ * After the TIMER runs and the backend's connections exist. radiant_radio_init()
+ * opens the gate's sessions first, so a bootstrap timeslot may already have
+ * come and gone (it never takes the radio, and its START found the option
+ * still LP_OFF and did nothing); no operation can have been armed yet. Any
+ * failure leaves the option off for this boot: the boot HFXO request held and
+ * the TIMER free-running, which is the build without it.
+ */
+static void lp_init(void)
+{
+	nrf_clock_lfclk_t src = (nrf_clock_lfclk_t)0;
+	unsigned int key;
+
+	if (lp.state != LP_OFF) {
+		return;
+	}
+	if (!radiant_lp_tb_init(&lp.tb, LP_CNT_NUM, LP_CNT_SHIFT,
+				RADIANT_LP_EXTENDED_WIDTH)) {
+		lp_refuse("counter format", -EINVAL);
+		return;
+	}
+	/* The gaps between timeslots are timed on the LF clock: only the
+	 * crystal will do. */
+	z_nrf_clock_control_lf_on(CLOCK_CONTROL_NRF_LF_START_STABLE);
+	if (!nrf_clock_is_running(NRF_CLOCK, NRF_CLOCK_DOMAIN_LFCLK, &src) ||
+	    src != NRF_CLOCK_LFCLK_XTAL) {
+		lp_refuse("LFCLK is not running from the crystal", (int)src);
+		return;
+	}
+
+	radiant_lp_clock_init(&lp.clk);
+	key = CLOCK_LOCK();
+	lp.clk.hwm_us = clock_fold(timer_capture(CC_NOW));
+	lp_set_state(LP_AWAKE);
+	/* The boot TIMER has free-run since before any LF tick was known: its
+	 * reading becomes the epoch (timer_at_anchor is false, so the TIMER's
+	 * value is taken). Not a timeslot, so not counted. */
+	lp_slot_release_locked(RADIANT_LP_RELEASE_TOL_US, false);
+	CLOCK_UNLOCK(key);
+	/* MPSL brings the crystal up for every timeslot from here on. Thread
+	 * context; the onoff manager is not called under PRIMASK. */
+	lp_hfxo_off_locked();
+
+	LOG_INF("low power on (MPSL): TIMER stopped between timeslots, "
+		"started from the " LP_CNT_NAME " at each START");
+}
+
+#endif /* LP_MPSL */

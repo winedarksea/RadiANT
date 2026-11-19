@@ -18,7 +18,12 @@ project(radiant_backend_tests)
 # -DBACKEND_LP_RTC=1 as well (scenario radiant.backend.lp_rtc): the same
 # low-power cases against a simulated RTC1 and nRF52 TIMER (LPT_RTC), plus
 # RTC1's own cases in src_lp_rtc/.
-if(BACKEND_LP)
+# -DBACKEND_LP_MPSL=1 (scenario radiant.backend.lp_mpsl): the option on the
+# MPSL gate's build (pass B6), the gate stubbed, in src_lp_mpsl/.
+if(BACKEND_LP_MPSL)
+  file(GLOB suite_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src_lp_mpsl/*.c")
+  set(under_test "${CMAKE_CURRENT_SOURCE_DIR}/backend_lp_mpsl_under_test.c")
+elseif(BACKEND_LP)
   file(GLOB suite_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src_lp/*.c")
   if(BACKEND_LP_RTC)
     file(GLOB rtc_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src_lp_rtc/*.c")

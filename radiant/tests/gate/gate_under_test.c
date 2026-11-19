@@ -83,6 +83,7 @@ void gate_probe_read(struct gate_probe *out)
 	out->el_lead_us     = el_lead_us;
 	out->d2_on          = d2_on;
 #endif
+	out->r_start        = ss[0].r_start;
 }
 
 void gate_probe_fire_booking_due(void)

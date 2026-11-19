@@ -311,6 +311,7 @@ void fake_backend_release_in_radio_irq(bool on) { release_in_radio_irq = on; }
 void radiant_nrf_gate_on_grant(void)
 {
 	b.on_grant++;
+	b.grant_seq = ++backend_seq;
 	/* The real backend takes the radio here (radio_on_loan). */
 	radio_lent_this_slot = true;
 	if (release_in_grant) {
@@ -341,6 +342,38 @@ void radiant_nrf_gate_on_grant_end(void)
 	b.on_grant_end++;
 	b.grant_end_seq = ++backend_seq;
 }
+
+#if defined(CONFIG_RADIANT_NRF_LOW_POWER)
+void radiant_nrf_gate_lp_slot_start(radiant_time_t r_start)
+{
+	b.lp_start++;
+	if (b.lp_awake) {
+		b.lp_start_awake++;
+	}
+	b.lp_awake = true;
+	b.lp_last_r_start = r_start;
+	b.lp_start_seq = ++backend_seq;
+}
+
+void radiant_nrf_gate_lp_slot_end(bool backstop)
+{
+	b.lp_end++;
+	if (backstop) {
+		b.lp_end_backstop++;
+	} else if (!m.in_timeslot) {
+		b.lp_end_outside++;
+	}
+	if (b.lp_awake) {
+		b.lp_releases++;
+		if (backstop) {
+			b.lp_backstop_releases++;
+		}
+	}
+	b.lp_awake = false;
+	b.lp_end_seq = ++backend_seq;
+	b.lp_end_abort_calls = fake_radio_abort_calls();
+}
+#endif
 
 #if defined(CONFIG_RADIANT_GATE_MPSL_D2)
 void radiant_nrf_gate_on_booking_due(void)

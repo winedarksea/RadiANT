@@ -91,6 +91,8 @@ struct gate_probe {
 	uint32_t refused_too_near;
 	uint32_t el_lead_us;
 	bool     d2_on;
+	/* Session 0's requested start for its placed request. */
+	uint64_t r_start;
 };
 
 void gate_probe_read(struct gate_probe *out);

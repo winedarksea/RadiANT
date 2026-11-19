@@ -269,8 +269,12 @@ static volatile uint32_t radiant_dbg_clock_back;
 /*
  * CONFIG_RADIANT_NRF_LOW_POWER (power plan Track B): radiant_radio_nrf_lp.c,
  * included at the end of this file, stops this TIMER and releases the HFXO in
- * long idle gaps and is the build's gate. LP_HOOK() marks the few places this
- * file tells it something; with the option off they compile to nothing.
+ * long idle gaps and is the build's gate. On the MPSL build (pass B6) it is not
+ * the gate: the MPSL gate stops and restarts this TIMER around each timeslot
+ * through radiant_nrf_gate_lp_slot_start()/_end(), and the boot HFXO request
+ * below is dropped once the option is running (MPSL starts the crystal for
+ * every timeslot). LP_HOOK() marks the few places this file tells it
+ * something; with the option off they compile to nothing.
  */
 #if defined(CONFIG_RADIANT_NRF_LOW_POWER)
 static uint64_t lp_now_locked(void);

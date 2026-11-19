@@ -36,3 +36,17 @@ tests:
     extra_args:
       - BACKEND_LP=1
       - BACKEND_LP_RTC=1
+  radiant.backend.lp_mpsl:
+    # CONFIG_RADIANT_NRF_LOW_POWER on the MPSL gate's build (power plan pass
+    # B6): the TIMER stopped between timeslots and started from the GRTC at
+    # each SIGNAL_START, against a simulated GRTC, HFXO and TIMER. The gate's
+    # half (which signal reaches which hook) is radiant.gate.lp.
+    tags:
+      - radiant
+      - mpsl
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    extra_args:
+      - BACKEND_LP_MPSL=1

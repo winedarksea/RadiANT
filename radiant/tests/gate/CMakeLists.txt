@@ -50,6 +50,16 @@ target_sources(app PRIVATE ${suite_sources})
 # twice and the suites silently test two different gates.
 target_sources(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/gate_under_test.c")
 
+# -DGATE_LP=1 (scenario radiant.gate.lp): the same gate with
+# CONFIG_RADIANT_NRF_LOW_POWER defined for this application's sources only
+# (the gate, the fakes, the suites), so its two low-power hooks are compiled
+# in and the fake backend records them (power plan pass B6). Every other
+# suite runs against that build too. Not a Kconfig line: the symbol depends
+# on a real nRF backend, which this image does not have.
+if(GATE_LP)
+  target_compile_definitions(app PRIVATE CONFIG_RADIANT_NRF_LOW_POWER=1 GATE_LP=1)
+endif()
+
 # The arbiter and the backend, both fake. See fake_mpsl.h.
 target_sources(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/fake_mpsl.c")
 
