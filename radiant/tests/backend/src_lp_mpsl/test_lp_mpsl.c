@@ -245,11 +245,13 @@ ZTEST(radiant_backend_lp_mpsl, test_timed_start_cross_check)
 
 /*
  * Risk: a timeslot that ended without passing the ACTION_END funnel leaves the
- * TIMER running after MPSL may have dropped the crystal; the next START takes
- * that TIMER's (HFINT) reading into the timebase for good, or runs time
- * backwards to undo it.
+ * TIMER running after MPSL may have dropped the crystal. The next START must
+ * count it, never step time by more than the tolerance, and start the new
+ * segment on the clock radiant_radio_now() already reports: if it froze at the
+ * high-water mark while the TIMER's base sat below it, the gate's s->anchor
+ * and every compare of the timeslot would disagree by the HFINT error.
  */
-ZTEST(radiant_backend_lp_mpsl, test_missed_release_takes_lf_image)
+ZTEST(radiant_backend_lp_mpsl, test_missed_release_keeps_one_clock)
 {
 	struct lmt_stats st;
 	uint64_t ahead;
@@ -266,13 +268,43 @@ ZTEST(radiant_backend_lp_mpsl, test_missed_release_takes_lf_image)
 	lmt_set_hf_ppm(0);
 	lmt_stats(&st);
 	zassert_equal(st.missed_releases, 1u);
-	zassert_equal(st.last_disagree_q, -100, "it saw the HFINT reading...");
-	zassert_equal(st.lf_taken, 1u, "...and took the LF image all the same");
+	zassert_equal(st.last_disagree_q, -100, "it saw the HFINT reading");
+	zassert_equal(st.timer_taken, 1u, "beyond tolerance: no 100 us step back");
 	zassert_equal(st.sleeps, 1u);
 	zassert_equal(st.wakes, 2u);
-	zassert_true(lmt_radio_now() >= ahead, "monotonic: held, not stepped back");
-	lmt_run(101u);
-	zassert_equal(radio_err(), 0, "back on the GRTC once the clamp is passed");
+	zassert_equal(lmt_radio_now(), ahead, "no step at all");
+	lmt_run(10u);
+	zassert_equal(lmt_radio_now(), ahead + 10u,
+		      "the segment runs from that value at once, not frozen");
+}
+
+/*
+ * Risk: the ordinary case of the same fault - a release that took the LF image
+ * a microsecond or two behind the TIMER, and a START inside those
+ * microseconds. The new segment must run from the high-water mark, not from
+ * the LF image below it with every reading clamped.
+ */
+ZTEST(radiant_backend_lp_mpsl, test_wake_below_high_water_mark_starts_there)
+{
+	struct lmt_stats st;
+	uint64_t hwm;
+
+	lmt_run(10000u);
+	lmt_set_hf_ppm(400);     /* +2 us over 5 ms */
+	lmt_slot_start(0u);
+	lmt_run(5000u);
+	hwm = lmt_radio_now();
+	lmt_slot_end(false);
+	lmt_stats(&st);
+	zassert_equal(st.lf_taken, 1u);
+	lmt_slot_start(0u);      /* at once */
+	lmt_set_hf_ppm(0);
+	zassert_equal(lmt_radio_now(), hwm);
+	lmt_run(10u);
+	zassert_equal(lmt_radio_now(), hwm + 10u, "not frozen for 2 us");
+	lmt_slot_end(false);
+	lmt_run(1000u);
+	zassert_equal(radio_err(), 2, "the 2 us is kept, not stepped back");
 }
 
 /*
@@ -394,4 +426,139 @@ ZTEST(radiant_backend_lp_mpsl, test_awake_us_accumulates)
 	lmt_run(200000u);
 	lmt_stats(&st);
 	zassert_equal(st.slot_awake_us, 4500u);
+}
+
+/*
+ * Risk (test fidelity): every case above starts the TIMER and reads the GRTC
+ * on the same whole microsecond, the best case. Here the START lands on a
+ * drifting sub-microsecond phase, each GRTC read costs 40..900 ns before the
+ * TIMER starts or is captured, and the TIMER's prescaler phase varies. The
+ * anchor must still hold to the tick: every short timeslot's release agrees
+ * with the GRTC to 2 us, one tick at each end (inside the 3 us tolerance), time does not
+ * accumulate error over 2000 periods at -30 ppm, the START cross-check reads
+ * the dispatch lateness to the tick, and a transmit lands where asked.
+ */
+ZTEST(radiant_backend_lp_mpsl, test_sub_tick_phases_and_read_latency)
+{
+	static const uint32_t lat[] = { 40u, 300u, 900u };
+	static const uint32_t phase[] = { 0u, 500u, 999u };
+
+	for (size_t a = 0; a < ARRAY_SIZE(lat); a++) {
+		for (size_t b = 0; b < ARRAY_SIZE(phase); b++) {
+			struct lmt_stats st;
+			uint64_t start;
+			uint64_t t_sync;
+			uint64_t want;
+
+			lmt_reset();
+			lmt_set_hf_ppm(-30);
+			lmt_set_read_latency_ns(lat[a]);
+			lmt_set_timer_phase_ns(phase[b]);
+			for (uint32_t i = 0u; i < 2000u; i++) {
+				uint64_t r;
+
+				lmt_run_ns((uint64_t)(PERIOD_US - SLOT_US) * 1000u + 137u);
+				/* MPSL dispatched this START 5 us after the
+				 * start the gate asked for. */
+				r = lmt_world() - LMT_W0 - 5u;
+				lmt_slot_start(r);
+				lmt_run(SLOT_US);
+				lmt_slot_end(false);
+			}
+			lmt_stats(&st);
+			zassert_equal(st.lf_taken, 2000u, "lat %u phase %u", lat[a], phase[b]);
+			/* Two 1 us quantisations (the wake's tick and the
+			 * release's) plus 0.09 us of drift: at most 2, inside
+			 * the 3 us tolerance with room to spare. */
+			zassert_true(st.max_disagree_us <= 2u, "lat %u phase %u: %u us",
+				     lat[a], phase[b], st.max_disagree_us);
+			zassert_true(radio_err() >= -2 && radio_err() <= 2,
+				     "lat %u phase %u: %lld us off", lat[a], phase[b],
+				     (long long)radio_err());
+			/* 5, give or take the tick, the radio-vs-world error and
+			 * a high-water-mark start. */
+			zassert_true(st.start_err_min_us >= 3 && st.start_err_max_us <= 7,
+				     "lat %u phase %u: START error %d..%d, dispatched 5 late",
+				     lat[a], phase[b], st.start_err_min_us, st.start_err_max_us);
+
+			lmt_run_ns((uint64_t)(PERIOD_US - SLOT_US) * 1000u + 371u);
+			lmt_slot_start(0u);
+			lmt_run(100u);
+			t_sync = lmt_radio_now() + 1500u;
+			zassert_equal(lmt_tx_at(t_sync), RADIANT_RADIO_OK_RC);
+			zassert_true(lmt_tx_programmed(&start));
+			/* Radio time is world - W0 + radio_err(). */
+			want = (uint64_t)((int64_t)(LMT_W0 + t_sync - lmt_tx_lead()) - radio_err());
+			zassert_true(start + 2u >= want && start <= want + 2u,
+				     "lat %u phase %u: TXEN at %llu, wanted %llu", lat[a],
+				     phase[b], (unsigned long long)start,
+				     (unsigned long long)want);
+			lmt_retire_op();
+			lmt_slot_end(false);
+		}
+	}
+}
+
+/*
+ * Risk: an in-grant arm (a completion's follow-on, from the software
+ * interrupt) preempted by the zero-latency ACTION_END that stops the TIMER:
+ * it folds a stopped and cleared TIMER, writes compares from that, and
+ * re-enables its start connection after the release disabled it - a
+ * connection that then survives into the next timeslot and fires TXEN at a
+ * meaningless offset once the TIMER restarts from zero. Swept over every
+ * point of the arm (after each of its TIMER captures), with and without the
+ * next START landing too.
+ */
+ZTEST(radiant_backend_lp_mpsl, test_arm_preempted_by_slot_end)
+{
+	for (int restart = 0; restart <= 1; restart++) {
+		uint32_t etimes = 0u;
+
+		for (uint32_t n = 1u; n <= 6u; n++) {
+			uint64_t t_sync;
+			int rc;
+
+			lmt_reset();
+			lmt_run(10000u);
+			lmt_slot_start(0u);
+			lmt_run(100u);
+			t_sync = lmt_radio_now() + 1500u;
+			lmt_preempt_after_capture(n, restart != 0);
+			rc = lmt_tx_at(t_sync);
+			lmt_preempt_after_capture(0u, false);
+			if (!lmt_preempt_fired()) {
+				/* The arm made fewer captures: it finished first. */
+				zassert_equal(rc, RADIANT_RADIO_OK_RC);
+				break;
+			}
+			/*
+			 * Either the arm saw its timeslot end and failed (ETIME,
+			 * slot freed), or the end landed after its last check -
+			 * as if the timeslot had ended just after the arm returned
+			 * - and the operation stays claimed for the gate's DENIED.
+			 * Never armed into the next timeslot, either way.
+			 */
+			if (rc == RADIANT_RADIO_OK_RC) {
+				zassert_false(lmt_op_idle(), "n %u: OK but freed", n);
+			} else {
+				zassert_equal(rc, RADIANT_RADIO_ETIME, "n %u: rc %d", n, rc);
+				zassert_true(lmt_op_idle(), "n %u: the slot was not freed", n);
+				etimes++;
+			}
+			zassert_false(lmt_tx_conn_on(),
+				      "n %u restart %d: TXEN connection outlived the release",
+				      n, restart);
+			if (!restart) {
+				zassert_false(lmt_timer_running());
+				lmt_run(1000u);
+				lmt_slot_start(0u);
+				zassert_false(lmt_tx_conn_on(), "n %u: still off at the next START", n);
+				lmt_slot_end(false);
+			}
+			zassert_true(radio_err() >= -1 && radio_err() <= 1,
+				     "n %u restart %d: the timebase moved", n, restart);
+		}
+		zassert_true(etimes > 0u, "restart %d: no preemption point failed the arm",
+			     restart);
+	}
 }

@@ -39,7 +39,13 @@ void     lmt_reset_lf_rc(void);
 void     lmt_stats(struct lmt_stats *out);
 
 void     lmt_run(uint64_t us);
+void     lmt_run_ns(uint64_t ns);
+/* World microseconds, floored. */
 uint64_t lmt_world(void);
+/* The world time a GRTC read costs (the read-to-START latency), and the
+ * TIMER's prescaler phase at START (ns, < 1000). Both 0 by default. */
+void     lmt_set_read_latency_ns(uint32_t ns);
+void     lmt_set_timer_phase_ns(uint32_t ns);
 uint64_t lmt_radio_now(void);
 /* The radio TIMER's rate against the world (the HFXO against the LFXO). */
 void     lmt_set_hf_ppm(int32_t ppm);
@@ -73,5 +79,12 @@ uint32_t lmt_conn_on(void);
 void     lmt_conn_enable_all(void);
 uint32_t lmt_conn_bit_timer(void);
 uint32_t lmt_conn_bits_other(void);
+
+/* The timeslot's ACTION_END (and, with restart, the next START) preempts the
+ * next arm right after its n-th TIMER capture (0: off). */
+void     lmt_preempt_after_capture(uint32_t n, bool restart);
+bool     lmt_preempt_fired(void);
+bool     lmt_op_idle(void);
+bool     lmt_tx_conn_on(void);
 
 #endif

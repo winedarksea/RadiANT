@@ -14,12 +14,17 @@
  * hooks), the GRTC (its SYSCOUNTER read), the HFXO's onoff manager, and the
  * TIMER.
  *
- * The world: one clock in microseconds. The GRTC SYSCOUNTER reads world +
- * lf_off. The radio TIMER counts world microseconds while running, scaled by
- * hf_ppm (the HFXO against the LFXO; spike B1 measured -30 ppm on one nRF54L15
- * DK), so a transition that carried an error, or a timebase that took the
- * HF rate between timeslots, shows as radio time drifting from world time.
- * The public lmt_* API speaks world microseconds throughout.
+ * The world: one clock in nanoseconds. The GRTC SYSCOUNTER reads whole world
+ * microseconds + lf_off, and each read costs read_lat_ns of world time before
+ * the next action (the read-to-START latency of a wake, the read-to-capture
+ * latency of a release). The radio TIMER counts whole microseconds of world
+ * time from its START, offset by a prescaler phase t_phase_ns (its first
+ * increment comes 1000 - phase ns after START) and scaled by hf_ppm (the HFXO
+ * against the LFXO; spike B1 measured -30 ppm on one nRF54L15 DK). A
+ * transition that carried an error, or a timebase that took the HF rate
+ * between timeslots, shows as radio time drifting from world time; the phases
+ * are what a real START lands on, so a sweep of them is the anchor's error.
+ * The public lmt_* API speaks world microseconds (lmt_run_ns() aside).
  */
 
 #include <zephyr/kernel.h>
@@ -74,9 +79,11 @@ struct fake_hw fake_hw;
 nrf_clock_lfclk_t fake_lfclk_src;
 
 static struct {
-	uint64_t us;        /* world time */
+	uint64_t ns;        /* world time */
 	uint64_t lf_off;    /* GRTC at world 0 */
 	int32_t  hf_ppm;    /* TIMER rate against the world, parts per million */
+	uint32_t read_lat_ns;  /* world time a GRTC read costs */
+	uint32_t t_phase_ns;   /* the TIMER's prescaler phase at START, < 1000 */
 	/* TIMER */
 	bool     t_run;
 	uint32_t t_base;    /* counter at t_t0 */
@@ -102,8 +109,8 @@ static uint32_t fw_timer(void)
 	}
 	/* Whole counts, floored, so a short timeslot's sub-us drift shows as
 	 * the 1 us quantisation the real TIMER would read. */
-	el = (int64_t)(fw.us - fw.t_t0);
-	return fw.t_base + (uint32_t)((el * (1000000 + fw.hf_ppm)) / 1000000);
+	el = (int64_t)(fw.ns - fw.t_t0) + (int64_t)fw.t_phase_ns;
+	return fw.t_base + (uint32_t)((el * (1000000 + fw.hf_ppm)) / 1000000000);
 }
 
 static void fw_task(nrf_timer_task_t t)
@@ -112,7 +119,7 @@ static void fw_task(nrf_timer_task_t t)
 	case NRF_TIMER_TASK_START:
 		if (!fw.t_run) {
 			fw.t_run = true;
-			fw.t_t0 = fw.us;
+			fw.t_t0 = fw.ns;
 			fw.t_starts++;
 		}
 		break;
@@ -122,7 +129,7 @@ static void fw_task(nrf_timer_task_t t)
 		break;
 	case NRF_TIMER_TASK_CLEAR:
 		fw.t_base = 0u;
-		fw.t_t0 = fw.us;
+		fw.t_t0 = fw.ns;
 		break;
 	default:
 		break;
@@ -133,8 +140,11 @@ static void fw_task(nrf_timer_task_t t)
 
 uint64_t z_nrf_grtc_timer_read(void)
 {
+	uint64_t v = fw.ns / 1000u + fw.lf_off;
+
 	fw.grtc_reads++;
-	return fw.us + fw.lf_off;
+	fw.ns += fw.read_lat_ns;
+	return v;
 }
 
 int fake_onoff_request(struct onoff_manager *mgr, struct onoff_client *cli)
@@ -186,8 +196,27 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from, radiant_time_t
 	return GATE_GRANTED;
 }
 
-uint32_t radiant_swi_zli_lock(void) { return 0u; }
-void radiant_swi_zli_unlock(uint32_t key) { ARG_UNUSED(key); }
+/*
+ * CLOCK_LOCK is this PRIMASK lock on the MPSL build, and it masks the
+ * zero-latency signal: a simulated ACTION_END that falls inside it is taken at
+ * the unlock, as the real one would be (lmt_preempt_after_capture()).
+ */
+static uint32_t zli_depth;
+static void pre_at_unlock(void);
+
+uint32_t radiant_swi_zli_lock(void)
+{
+	zli_depth++;
+	return 0u;
+}
+
+void radiant_swi_zli_unlock(uint32_t key)
+{
+	ARG_UNUSED(key);
+	if (--zli_depth == 0u) {
+		pre_at_unlock();
+	}
+}
 int radiant_swi_register(uint32_t bits, radiant_swi_handler_t h)
 { ARG_UNUSED(bits); ARG_UNUSED(h); return 0; }
 void radiant_swi_pend(uint32_t bits) { ARG_UNUSED(bits); }
@@ -235,9 +264,9 @@ static void lmt_boot(nrf_clock_lfclk_t lf)
 	fw.lf_off = LMT_LF_OFFSET;
 
 	/* radiant_radio_init()'s order: the HFXO, the TIMER, then low power. */
-	fw.us = LMT_W0 - 100u;
+	fw.ns = (uint64_t)(LMT_W0 - 100u) * 1000u;
 	(void)lp_hfxo_boot();
-	fw.us = LMT_W0;
+	fw.ns = (uint64_t)LMT_W0 * 1000u;
 	fw_task(NRF_TIMER_TASK_CLEAR);
 	fw_task(NRF_TIMER_TASK_START);
 	radiant_clock.base = 0u;
@@ -253,7 +282,7 @@ static void lmt_boot(nrf_clock_lfclk_t lf)
 	radiant_op.conn_close = 1u;
 	radiant_op.conn_rssi = 2u;
 	radiant_op.conn_sync = 3u;
-	fw.us += 50u;
+	fw.ns += 50000u;
 	lp_init();
 }
 
@@ -288,8 +317,11 @@ void lmt_stats(struct lmt_stats *o)
 
 /* ---- The world ---- */
 
-void lmt_run(uint64_t us) { fw.us += us; }
-uint64_t lmt_world(void) { return fw.us; }
+void lmt_run(uint64_t us) { fw.ns += us * 1000u; }
+void lmt_run_ns(uint64_t ns) { fw.ns += ns; }
+uint64_t lmt_world(void) { return fw.ns / 1000u; }
+void lmt_set_read_latency_ns(uint32_t ns) { fw.read_lat_ns = ns; }
+void lmt_set_timer_phase_ns(uint32_t ns) { fw.t_phase_ns = ns % 1000u; }
 uint64_t lmt_radio_now(void) { return radiant_radio_now(); }
 void lmt_set_hf_ppm(int32_t ppm) { fw.hf_ppm = ppm; }
 
@@ -339,11 +371,15 @@ bool lmt_tx_programmed(uint64_t *world_start)
 	    (fake_hw.conn_on & (1u << (radiant_op.conn_start_tx & 31u))) == 0u) {
 		return false;
 	}
-	/* The first world microsecond at which the running TIMER has reached
-	 * the compare (the inverse of fw_timer()'s floor: a ceiling). */
+	/* The world microsecond in which the running TIMER reaches the compare
+	 * (the inverse of fw_timer()'s floor: a ceiling, in ns). */
 	ticks = (int64_t)(uint32_t)(fake_hw.cc[CC_TXSTART] - fw.t_base);
-	*world_start = fw.t_t0 + (uint64_t)((ticks * 1000000 + (1000000 + fw.hf_ppm) - 1) /
-					    (1000000 + fw.hf_ppm));
+	{
+		int64_t el = (ticks * 1000000000 + (1000000 + fw.hf_ppm) - 1) /
+			     (1000000 + fw.hf_ppm);
+
+		*world_start = (fw.t_t0 + (uint64_t)(el - (int64_t)fw.t_phase_ns)) / 1000u;
+	}
 	return true;
 }
 
@@ -377,4 +413,75 @@ uint32_t lmt_conn_bit_timer(void) { return 1u << (radiant_op.conn_start & 31u); 
 uint32_t lmt_conn_bits_other(void)
 {
 	return (1u << (radiant_op.conn_rssi & 31u)) | (1u << (radiant_op.conn_sync & 31u));
+}
+
+/* ---- An arm preempted by the timeslot's end ---- */
+
+static struct {
+	uint32_t at;        /* fire after this many CC_NOW captures (0: off) */
+	uint32_t n;
+	bool     restart;   /* and the next START too */
+	bool     fired;
+	bool     busy;
+	bool     owed;      /* due inside CLOCK_LOCK: taken at its unlock */
+} pre;
+
+static void pre_fire(void)
+{
+	/* The zero-latency ACTION_END (and START) land here, between two
+	 * instructions of the arm. */
+	pre.busy = true;
+	pre.fired = true;
+	lmt_slot_end(false);
+	if (pre.restart) {
+		lmt_run(5u);
+		lmt_slot_start(0u);
+	}
+	pre.busy = false;
+}
+
+static void pre_hook(uint32_t nth)
+{
+	ARG_UNUSED(nth);
+	if (pre.busy || pre.at == 0u || ++pre.n != pre.at) {
+		return;
+	}
+	if (zli_depth > 0u) {
+		pre.owed = true;
+	} else {
+		pre_fire();
+	}
+}
+
+static void pre_at_unlock(void)
+{
+	if (pre.owed && !pre.busy) {
+		pre.owed = false;
+		pre_fire();
+	}
+}
+
+void lmt_preempt_after_capture(uint32_t n, bool restart)
+{
+	if (n == 0u) {
+		/* Disarm, keeping `fired` for lmt_preempt_fired(). */
+		fake_hw.cc3_hook = NULL;
+		pre.at = 0u;
+		return;
+	}
+	memset(&pre, 0, sizeof(pre));
+	pre.at = n;
+	pre.restart = restart;
+	fake_hw.cc3_hook = (n != 0u) ? pre_hook : NULL;
+}
+
+bool lmt_preempt_fired(void)
+{
+	return pre.fired;
+}
+
+bool lmt_op_idle(void) { return radiant_op.kind == OP_NONE; }
+bool lmt_tx_conn_on(void)
+{
+	return (fake_hw.conn_on & (1u << (radiant_op.conn_start_tx & 31u))) != 0u;
 }

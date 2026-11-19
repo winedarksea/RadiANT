@@ -286,6 +286,21 @@ static int lp_hfxo_boot(void);
 static void lp_init(void);
 static void lp_constlat(bool on);
 #define LP_HOOK(...) do { __VA_ARGS__; } while (0)
+#if defined(CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL)
+/*
+ * Pass B6: an arm inside a grant can be preempted by the zero-latency
+ * ACTION_END that stops this TIMER (radiant_nrf_gate_lp_slot_end()), and by
+ * the next START that restarts it from zero. LP_SLOT_GUARD brackets each
+ * programme: lp_slot_gen() at entry (0 if the TIMER is stopped), and
+ * lp_slot_lost() after the last connection enable, which under CLOCK_LOCK
+ * disables every window connection and reports true if that timeslot has
+ * ended meanwhile, so no enable can outlive the release that stopped its
+ * TIMER. Neither exists without the option, or on the direct build.
+ */
+#define LP_SLOT_GUARD 1
+static uint32_t lp_slot_gen(void);
+static bool lp_slot_lost(uint32_t gen);
+#endif
 #else
 #define LP_HOOK(...) do { } while (0)
 #endif
@@ -331,7 +346,14 @@ radiant_time_t radiant_radio_now(void)
 static radiant_time_t clock_absolute(uint32_t counter)
 {
 	unsigned int key = CLOCK_LOCK();
+#if defined(LP_SLOT_GUARD)
+	/* A stopped TIMER is never folded: the result is meaningless (the
+	 * caller's timeslot is over) but the fold is left intact. */
+	uint64_t base = lp_timer_stopped() ? lp_now_locked()
+					   : clock_fold(timer_capture(CC_NOW));
+#else
 	uint64_t base = clock_fold(timer_capture(CC_NOW));
+#endif
 	int32_t  delta = (int32_t)(counter - radiant_clock.last);
 
 	CLOCK_UNLOCK(key);
@@ -342,7 +364,13 @@ static radiant_time_t clock_absolute(uint32_t counter)
 static uint32_t clock_counter_at(radiant_time_t t)
 {
 	unsigned int key = CLOCK_LOCK();
+#if defined(LP_SLOT_GUARD)
+	/* As clock_absolute(); lp_slot_lost() then fails the arm. */
+	uint64_t base = lp_timer_stopped() ? lp_now_locked()
+					   : clock_fold(timer_capture(CC_NOW));
+#else
 	uint64_t base = clock_fold(timer_capture(CC_NOW));
+#endif
 	uint32_t last = radiant_clock.last;
 
 	CLOCK_UNLOCK(key);
@@ -2933,6 +2961,13 @@ static int program_tx(const struct radiant_tx_req *req,
 	radiant_time_t t_start;
 	uint32_t lead;
 	uint32_t start_cc;
+#if defined(LP_SLOT_GUARD)
+	const uint32_t lp_gen = lp_slot_gen();
+
+	if (lp_gen == 0u) {
+		return RADIANT_RADIO_ETIME;   /* the timeslot is already over */
+	}
+#endif
 
 	/* Validated by the arm call, which computed fmt_regs (format_prepare()). */
 	format_write(fmt_regs);
@@ -2995,6 +3030,13 @@ static int program_tx(const struct radiant_tx_req *req,
 	nrfx_gppi_conn_enable(radiant_op.conn_start_tx);
 	nrf_timer_cc_set(TIMER_ADDR, CC_TXSTART, start_cc);
 
+#if defined(LP_SLOT_GUARD)
+	if (lp_slot_lost(lp_gen)) {
+		/* Its timeslot ended under this arm; the connections are off. */
+		ARMDBG(2);
+		return RADIANT_RADIO_ETIME;
+	}
+#endif
 	if (start_compare_missed(CC_TXSTART, start_cc)) {
 		nrfx_gppi_conn_disable(radiant_op.conn_start_tx);
 		nrf_radio_shorts_set(NRF_RADIO, 0);
@@ -3025,6 +3067,13 @@ static int program_rx(const struct radiant_rx_req *req,
 	uint32_t start_cc, close_cc;
 
 	const uint8_t sw_addr_len = prep->sw_addr_len;
+#if defined(LP_SLOT_GUARD)
+	const uint32_t lp_gen = lp_slot_gen();
+
+	if (lp_gen == 0u) {
+		return RADIANT_RADIO_ETIME;   /* the timeslot is already over */
+	}
+#endif
 
 	format_write(&prep->fmt);
 	filters_write(&prep->filt, prep->slot);
@@ -3144,6 +3193,14 @@ static int program_rx(const struct radiant_rx_req *req,
 	/* Receive only. Enabled and disabled with the others, so "which connections are live" has one answer. */
 	nrfx_gppi_conn_enable(radiant_op.conn_rssi);
 
+#if defined(LP_SLOT_GUARD)
+	if (lp_slot_lost(lp_gen)) {
+		/* Its timeslot ended under this arm; the connections are off. */
+		radiant_dbg_start_late++;
+		ARMDBG(3);
+		return RADIANT_RADIO_ETIME;
+	}
+#endif
 	if (start_compare_missed(CC_START, start_cc)) {
 		/* ETIME unwinds as in the early check: the scheduler reports MISSED and retries. */
 		nrfx_gppi_conn_disable(radiant_op.conn_start);
@@ -3616,6 +3673,9 @@ fail:
 static void program_ed(const struct radiant_ed_req *req)
 {
 	uint32_t start_cc;
+#if defined(LP_SLOT_GUARD)
+	const uint32_t lp_gen = lp_slot_gen();
+#endif
 
 	radiant_op.ed_hi = req->rf_index_hi;
 	radiant_op.ed_cur = req->rf_index_lo;
@@ -3654,6 +3714,11 @@ static void program_ed(const struct radiant_ed_req *req)
 	nrf_timer_cc_set(TIMER_ADDR, CC_START, start_cc);
 	nrfx_gppi_conn_enable(radiant_op.conn_start);
 	/* conn_close is deliberately not enabled: an index ends when its burst does, and a close compare would cut it short. */
+#if defined(LP_SLOT_GUARD)
+	/* No failure path here: a sweep whose timeslot ended is denied by the
+	 * gate's end housekeeping; only the enable must not survive. */
+	(void)lp_slot_lost(lp_gen);
+#endif
 }
 #endif /* CONFIG_RADIANT_ED_SCAN */
 

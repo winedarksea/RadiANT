@@ -108,10 +108,14 @@ min_scenarios: 21
 # 5913 (+13) with the B3 review fixes' backend.lp cases.
 # 5954 (+41) with the radiant.backend.lp_rtc scenario (power plan pass B5):
 # the 33 backend.lp cases on RTC1 and RTC1's own 8.
-# 6073 (+119) with pass B6 (Bluefin twister on power/b6, 2026-11-18,
-# observed 6873): radiant.backend.lp_mpsl's 14, radiant.gate.lp's 104 (every
-# gate case plus 10 hook cases) and the XTAL_GUARANTEED case in radiant.gate.
-min_testcases: 6073
+# 6073 (+119) with pass B6: radiant.backend.lp_mpsl's 14, radiant.gate.lp's
+# 104 (every gate case plus 10 hook cases) and the XTAL_GUARANTEED case in
+# radiant.gate. The floor moves by that coverage only; the Bluefin run on
+# power/b6 (2026-11-18) executed 6873 in total, the rest being earlier growth
+# in scenarios whose floors were not raised. 6076 (+3) with the B6 review's
+# backend.lp_mpsl cases (a wake below the high-water mark, sub-tick phases and
+# read latency, an arm preempted by the timeslot's end).
+min_testcases: 6076
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -167,7 +171,7 @@ min_cases.radiant.backend.lp_rtc: 41
 # radiant.backend.lp_mpsl (power plan pass B6): CONFIG_RADIANT_NRF_LOW_POWER
 # on the MPSL gate's build - the TIMER stopped between timeslots and started
 # from the GRTC at each SIGNAL_START.
-min_cases.radiant.backend.lp_mpsl: 14
+min_cases.radiant.backend.lp_mpsl: 17
 # radiant.gate.lp (pass B6): every radiant.gate case (94 observed) with the
 # low-power hooks compiled in, plus their 10 cases.
 min_cases.radiant.gate.lp: 104

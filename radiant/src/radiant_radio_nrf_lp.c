@@ -151,9 +151,14 @@
  * symbol rather than part of radiant_power_diag because that struct has no
  * spare field and its layout is pinned at version 1.
  *
+ * Two layouts under the one magic, told apart by `size`: 0x5C on the direct
+ * build, 0x74 on the MPSL build, which appends six fields (listed after the
+ * common table). A reader decodes the common 0x5C and, if size is 0x74, the
+ * rest (archive/benchmarks/2026-11-18-power-g1/scripts/g1_lpdecode.py does).
+ *
  *   off  field              meaning
  *   0x00 magic              0x52504C31 ("RPL1")
- *   0x04 size               sizeof (0x5C)
+ *   0x04 size               sizeof: 0x5C direct, 0x74 MPSL
  *   0x08 state              current state: 0 off (refused, degraded or not
  *                           initialised), 1 awake, 2 releasing, 3 asleep,
  *                           4 waking
@@ -213,8 +218,8 @@
  *                           MPSL's grid (the gate's spike: 0..17 us)
  *   0x70 missed_releases    timeslots whose TIMER was still running at the
  *                           next START or at a low-priority backstop (the
- *                           ACTION_END funnel was not passed); each takes the
- *                           LF image whatever the TIMER read
+ *                           ACTION_END funnel was not passed); each is then
+ *                           released as any other (see THE MISSED RELEASE)
  */
 
 #if !defined(RADIANT_RADIO_NRF_LP_INCLUDED)
@@ -1888,8 +1893,28 @@ static void lp_init(void)
  * THE MISSED RELEASE. If a START finds the TIMER still running (an earlier
  * timeslot ended without passing the funnel), MPSL may have released the HFXO
  * after that timeslot and the TIMER may have counted part of the gap on HFINT.
- * The release then takes the LF image whatever the TIMER says, and is counted
- * (missed_releases).
+ * It is counted (missed_releases) and judged like any release: within
+ * RADIANT_LP_RELEASE_TOL_US the LF image, beyond it the TIMER's reading, so
+ * time never steps by more than the tolerance (an HFINT error that large is
+ * kept as a constant offset against the GRTC, which MPSL's distances, all
+ * measured between this timebase's own anchors, do not see).
+ *
+ * ONE VALUE AT THE START. A wake whose LF image lies below the high-water mark
+ * (a release that took the LF image a few us behind the TIMER, then a START
+ * within those us; or the missed release above) starts the segment at the
+ * high-water mark instead: the TIMER's base and every radiant_radio_now() in
+ * the timeslot - the gate's s->anchor first - are then the same clock, rather
+ * than readings clamped at hwm while the compares are computed from a base
+ * below it.
+ *
+ * AN ARM PREEMPTED BY THE END. An in-grant arm (a completion's follow-on, from
+ * the software interrupt) can be preempted by the zero-latency ACTION_END that
+ * stops the TIMER, and in principle by the next START too. lp_slot_gen() and
+ * lp_slot_lost() bracket each programme in radiant_radio_nrf.c
+ * (LP_SLOT_GUARD): a generation that changed, or a TIMER that stopped, fails
+ * the arm (ETIME) with every window connection disabled under CLOCK_LOCK, so
+ * no enable survives into the next timeslot, where the restarted TIMER would
+ * reach a compare computed for the old one.
  *
  * CONSTLAT is MPSL's: its per-event acquire covers the timeslots
  * (RADIANT_NRF54L_MPSL_CONSTLAT_HOLD, default n), so lp_constlat() is empty
@@ -1900,20 +1925,19 @@ static void lp_init(void)
 #error "RADIANT_NRF_LOW_POWER on an MPSL build anchors in software at SIGNAL_START, which needs the GRTC's 1 us tick (Kconfig refuses RTC1 here)"
 #endif
 
-/* A missed release's tolerance: take the LF image whatever the TIMER read. */
-#define LP_MISSED_TOL_US 1000000u
-
 /* Where the TIMER last started (LF ticks): the awake-time stat. */
 static uint64_t lp_slot_t0;
 
+/* The awake segment's generation: changes at every wake, never 0. */
+static uint32_t lp_gen = 1u;
+
 /*
  * The release: the TIMER's reading of the LF tick `t` read just before it,
- * then the TIMER stopped and cleared. Under CLOCK_LOCK, state AWAKE. `tol_us`:
- * RADIANT_LP_RELEASE_TOL_US, or LP_MISSED_TOL_US for a missed release. Read
+ * then the TIMER stopped and cleared. Under CLOCK_LOCK, state AWAKE. Read
  * in the wake's order (the counter, then the TIMER), so the read-to-TIMER
  * latency is the same at both ends of the segment and cancels.
  */
-static void lp_slot_release_locked(uint32_t tol_us, bool count)
+static void lp_slot_release_locked(bool count)
 {
 	uint64_t t = lp_cnt_read();
 	uint64_t timer_us = clock_fold(timer_capture(CC_NOW));
@@ -1932,7 +1956,8 @@ static void lp_slot_release_locked(uint32_t tol_us, bool count)
 	nrfx_gppi_conn_disable(radiant_op.conn_start);
 	nrfx_gppi_conn_disable(radiant_op.conn_start_tx);
 	nrfx_gppi_conn_disable(radiant_op.conn_close);
-	took_lf = radiant_lp_release(&lp.tb, &lp.clk, t, timer_us, tol_us, &diff);
+	took_lf = radiant_lp_release(&lp.tb, &lp.clk, t, timer_us,
+				     RADIANT_LP_RELEASE_TOL_US, &diff);
 	ARG_UNUSED(took_lf);
 	ARG_UNUSED(exact);
 	ARG_UNUSED(count);
@@ -1984,10 +2009,18 @@ static void lp_slot_wake_locked(radiant_time_t r_start)
 		LP_STAT(radiant_nrf_lp_stats.range_errors = lp.clk.range_errors);
 		lp.clk.anchor_q = lp.clk.hwm_us << lp.tb.shift;
 		lp.clk.anchor_ticks = t & lp.tb.mask;
+	} else if ((radiant_lp_asleep_q(&lp.tb, &lp.clk, t) >> lp.tb.shift) <
+		   lp.clk.hwm_us) {
+		/* ONE VALUE AT THE START (above): the segment starts at the
+		 * high-water mark, so the TIMER's base is what radiant_radio_now()
+		 * says from the first reading on. */
+		lp.clk.anchor_q = lp.clk.hwm_us << lp.tb.shift;
+		lp.clk.anchor_ticks = t & lp.tb.mask;
 	}
 	radiant_clock.base = radiant_lp_wake(&lp.tb, &lp.clk, t, true);
 	radiant_clock.last = 0u;
 	lp_slot_t0 = t;
+	lp_gen = (lp_gen + 1u == 0u) ? 1u : lp_gen + 1u;
 	lp_set_state(LP_AWAKE);
 	LP_STAT(radiant_nrf_lp_stats.wakes++);
 	LP_STAT(if (r_start != 0u) {
@@ -2019,7 +2052,7 @@ void radiant_nrf_gate_lp_slot_start(radiant_time_t r_start)
 	key = CLOCK_LOCK();
 	if (lp.state == LP_AWAKE) {
 		LP_STAT(radiant_nrf_lp_stats.missed_releases++);
-		lp_slot_release_locked(LP_MISSED_TOL_US, true);
+		lp_slot_release_locked(true);
 	}
 	lp_slot_wake_locked(r_start);
 	CLOCK_UNLOCK(key);
@@ -2037,10 +2070,39 @@ void radiant_nrf_gate_lp_slot_end(bool backstop)
 		if (backstop) {
 			LP_STAT(radiant_nrf_lp_stats.missed_releases++);
 		}
-		lp_slot_release_locked(backstop ? LP_MISSED_TOL_US : RADIANT_LP_RELEASE_TOL_US,
-				       true);
+		lp_slot_release_locked(true);
 	}
 	CLOCK_UNLOCK(key);
+}
+
+/* LP_SLOT_GUARD (radiant_radio_nrf.c): the awake segment an arm starts in, or
+ * 0 if the TIMER is stopped. Option refused: always the same non-zero value. */
+static uint32_t lp_slot_gen(void)
+{
+	unsigned int key = CLOCK_LOCK();
+	uint32_t g = (lp.state == LP_ASLEEP) ? 0u : lp_gen;
+
+	CLOCK_UNLOCK(key);
+	return g;
+}
+
+/* True if the segment `gen` is over (stopped, or another START since), with
+ * every window connection disabled in the same critical section: a release
+ * that lands after this test disables them itself. */
+static bool lp_slot_lost(uint32_t gen)
+{
+	unsigned int key = CLOCK_LOCK();
+	bool lost = lp.state != LP_OFF &&
+		    (gen == 0u || lp.state != LP_AWAKE || gen != lp_gen);
+
+	if (lost) {
+		nrfx_gppi_conn_disable(radiant_op.conn_start);
+		nrfx_gppi_conn_disable(radiant_op.conn_start_tx);
+		nrfx_gppi_conn_disable(radiant_op.conn_close);
+		nrfx_gppi_conn_disable(radiant_op.conn_rssi);
+	}
+	CLOCK_UNLOCK(key);
+	return lost;
 }
 
 /* LP_HOOKs the direct build's state machine needs and this one does not:
@@ -2105,7 +2167,7 @@ static void lp_init(void)
 	/* The boot TIMER has free-run since before any LF tick was known: its
 	 * reading becomes the epoch (timer_at_anchor is false, so the TIMER's
 	 * value is taken). Not a timeslot, so not counted. */
-	lp_slot_release_locked(RADIANT_LP_RELEASE_TOL_US, false);
+	lp_slot_release_locked(false);
 	CLOCK_UNLOCK(key);
 	/* MPSL brings the crystal up for every timeslot from here on. Thread
 	 * context; the onoff manager is not called under PRIMASK. */
