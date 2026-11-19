@@ -141,8 +141,9 @@ min_scenarios: 22
 # four radiant_sec cases in each of the five unit scenarios (an identical 0xF1
 # keeps the replay floor and the TX tag, a W change keeps the floor, a new
 # epoch still clears it) and one radiant.api.sec_host case (an identical 0xF1
-# retry discards nothing), security review 2026-11-17 item 4.
-min_testcases: 6250
+# retry discards nothing), security review 2026-11-17 item 4. 6255 (+5)
+# with the range-change-keeps-W replay case in each unit scenario.
+min_testcases: 6255
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -157,10 +158,10 @@ min_testcases: 6250
 # above. The earlier values were nRF5340 DK counts minus about 1%, plus static
 # counts. A floor equal to the observed count still fails only when coverage
 # goes down, which is the event it exists to catch.
-# +4 in each unit scenario with review 2026-11-17 item 4's radiant_sec cases.
-min_cases.radiant.unit: 1066
-min_cases.radiant.unit.sec_modes: 1066
-min_cases.radiant.unit.no_pairing: 1006
+# +5 in each unit scenario with review 2026-11-17 item 4's radiant_sec cases.
+min_cases.radiant.unit: 1067
+min_cases.radiant.unit.sec_modes: 1067
+min_cases.radiant.unit.no_pairing: 1007
 min_cases.radiant.api: 86
 min_cases.radiant.api.sec: 90
 # +1 with the identical-0xF1 retry case (review 2026-11-17 item 4).
@@ -186,11 +187,11 @@ min_cases.radiant.backend: 12
 min_cases.hrm_ble.sim_sched: 4
 min_cases.treadmill.pages: 20
 min_cases.treadmill.hr_rx: 3
-min_cases.radiant.unit.ack_faults: 1073
+min_cases.radiant.unit.ack_faults: 1074
 # radiant.unit.diag: the unit suites with CONFIG_RADIANT_DIAG_COUNTERS.
 # 1127 (2026-11-16, Bluefin twister on fix/diag-page9-done-cb): the observed
 # count, including the four page-9/page-12 scheduler cases.
-min_cases.radiant.unit.diag: 1144
+min_cases.radiant.unit.diag: 1145
 min_cases.trainer.model: 14
 # radiant.lp_clock (power plan pass B2): the low-power timebase arithmetic,
 # 31 unit cases and seven 100 000-cycle drift simulations (three of them

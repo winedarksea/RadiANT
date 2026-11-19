@@ -2889,3 +2889,37 @@ ZTEST(radiant_sec, test_a_new_epoch_still_resets_the_replay_floor)
 	zassert_equal(1u, verdicts_for(0u, RADIANT_SEC_VERDICT_VERIFIED),
 		      "window 0 of the new epoch did not verify");
 }
+
+/*
+ * Where keeping the floor is what stops the replay: a real change that keeps
+ * W (here the page range widened 0x0F -> 0x1F, page 5 covered by both). The
+ * change still drops the held window 16, but windows 8 and 12 replayed under
+ * the same W would verify again on their own tags, so only the floor refuses
+ * them. On master the change cleared it, and window 8 verified and was
+ * delivered a second time.
+ */
+ZTEST(radiant_sec, test_a_range_change_with_w_kept_cannot_deliver_a_window_twice)
+{
+	const uint8_t sw = RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_DROP_UNVER;
+	uint32_t      replay_before;
+	uint32_t      policy_before;
+
+	floor_setup(sw, 99u);
+	zassert_equal(1u, deliveries_of(8u), "setup: packet 8 delivered %u times",
+		      deliveries_of(8u));
+	replay_before = rx_stats().dropped_replay;
+	policy_before = dropped_policy_now();
+
+	zassert_ok(radiant_sec_configure(RX_CH, sw, 4u,
+					 RADIANT_SEC_PAGE_LO_DEFAULT,
+					 RADIANT_SEC_PAGE_HI_MAX));
+	zassert_equal(policy_before + 4u, dropped_policy_now(),
+		      "the held window survived the change");
+	floor_replay();
+
+	zassert_equal(1u, verdicts_for(8u, RADIANT_SEC_VERDICT_VERIFIED),
+		      "window 8 verified twice");
+	zassert_equal(1u, deliveries_of(8u), "packet 8 delivered %u times",
+		      deliveries_of(8u));
+	zassert_equal(replay_before + 8u, rx_stats().dropped_replay);
+}
