@@ -118,7 +118,7 @@ compare IRQ masked so nothing wakes it at T, and awake for the GRTC capture.
 | variant | anchor | n | distribution (µs) | mean |
 |---|---|---|---|---|
 | lp (HFXO off between cycles) | wake | 10 000 | −1: 6784, 0: 3216 | −0.68 |
-| lp (**invalid**, as above) | release | 10 000 | −1: 7451, 0: 2549 | −0.75 |
+| lp | release | 10 000 | −1: 7451, 0: 2549 | −0.75 |
 | held | wake | 10 000 | −1: 7212, 0: 2788 | −0.72 |
 | held | release | 10 000 | −1: 7380, 0: 2620 | −0.74 |
 
