@@ -643,17 +643,18 @@ def resolve_counter(expected: int, counter_low: int) -> tuple:
     Picks the 16-bit rollover nearest the expected index, then reports the
     counter-wrap count it implies - a wrap advances the epoch by 1 on both
     sides, and the time-derived index carries the high bits for free.
+
+    As radiant_sec.c resolve_counter(): base + low is the starting answer and
+    only a strictly nearer rollover replaces it, so an exact 128-period tie
+    keeps base + low.
     """
     base = expected - (expected & 0xFF)
-    best = None
-    for candidate in (base + counter_low - 256, base + counter_low,
-                      base + counter_low + 256):
+    best = base + counter_low
+    for candidate in (base + counter_low - 256, base + counter_low + 256):
         if candidate < 0:
             continue
-        if best is None or abs(candidate - expected) < abs(best - expected):
+        if abs(candidate - expected) < abs(best - expected):
             best = candidate
-    if best is None:
-        best = counter_low
     return best & 0xFFFF, best >> 16
 
 
