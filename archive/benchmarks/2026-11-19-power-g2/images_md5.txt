@@ -1,0 +1,4 @@
+99c15a0ea9e241fc3e4de706c18463d8 *g2_A/trainer/zephyr/zephyr.hex
+804e9c276905c97bd84cbde81c4accb2 *g2_B/trainer/zephyr/zephyr.hex
+e0d9809b84cf3babfd298a0e0d8664f9 *g2_A/trainer/zephyr/zephyr.elf
+20d60b4671d927dc765b169cae1f4e75 *g2_B/trainer/zephyr/zephyr.elf

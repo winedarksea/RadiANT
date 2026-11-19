@@ -1,0 +1,112 @@
+diff --git a/apps/trainer/src/trainer_shell.c b/apps/trainer/src/trainer_shell.c
+index 7a39313..a3f652d 100644
+--- a/apps/trainer/src/trainer_shell.c
++++ b/apps/trainer/src/trainer_shell.c
+@@ -54,6 +54,41 @@ static uint32_t      ring_lost;  /* overwritten before a dump read them */
+ static uint32_t      next_seq;
+ 
+ static struct trainer_ackfault af;
++
++/* G2 BENCH INSTRUMENTATION (not for merge): reply turnaround histogram.
++ * dt = slave packet t_sync - this master's achieved TX t_sync (ant_radio_radiant.c). */
++extern volatile int32_t antr_g2_turn_us;
++#define G2_LO 2150
++#define G2_NB 80
++static struct g2_turn {
++	uint32_t n, under, over, later;
++	int32_t  min, max;
++	int64_t  sum;
++	uint32_t h[G2_NB];
++} g2;
++
++static void g2_note_locked(int32_t dt)
++{
++	if (dt >= 3000 || dt < 0) {
++		g2.later++;
++		return;
++	}
++	if (g2.n == 0u || dt < g2.min) {
++		g2.min = dt;
++	}
++	if (g2.n == 0u || dt > g2.max) {
++		g2.max = dt;
++	}
++	g2.n++;
++	g2.sum += dt;
++	if (dt < G2_LO) {
++		g2.under++;
++	} else if (dt >= G2_LO + G2_NB) {
++		g2.over++;
++	} else {
++		g2.h[dt - G2_LO]++;
++	}
++}
+ static uint8_t                 af_channel;
+ 
+ /* The hook runs in the radio ISR and the shell in a thread; this covers the
+@@ -93,6 +128,7 @@ static void reply_plan(void *ctx, uint8_t channel, const uint8_t *payload,
+ 	key = k_spin_lock(&af_lock);
+ 
+ 	settle_locked(newest_locked(), st.acks_sent);
++	g2_note_locked(antr_g2_turn_us);
+ 	trainer_ackfault_decide(&af, t_sync_us, &d);
+ 
+ 	r = &ring[ring_head];
+@@ -331,8 +367,34 @@ static int cmd_reset(const struct shell *sh, size_t argc, char **argv)
+ 	return 0;
+ }
+ 
++static int cmd_turn(const struct shell *sh, size_t argc, char **argv)
++{
++	k_spinlock_key_t key;
++	bool             clear = (argc > 1) && (strcmp(argv[1], "reset") == 0);
++	struct g2_turn   c;
++
++	key = k_spin_lock(&af_lock);
++	c = g2;
++	if (clear) {
++		memset(&g2, 0, sizeof(g2));
++	}
++	k_spin_unlock(&af_lock, key);
++
++	shell_print(sh, "TURN n=%u min=%d max=%d sum=%d under=%u over=%u later=%u",
++		    (unsigned)c.n, (int)c.min, (int)c.max, (int)c.sum,
++		    (unsigned)c.under, (unsigned)c.over, (unsigned)c.later);
++	for (int i = 0; i < G2_NB; i++) {
++		if (c.h[i] != 0u) {
++			shell_print(sh, "TURNH %d:%u", G2_LO + i, (unsigned)c.h[i]);
++		}
++	}
++	shell_print(sh, "TURN-END%s", clear ? " cleared" : "");
++	return 0;
++}
++
+ SHELL_STATIC_SUBCMD_SET_CREATE(
+ 	sub_ackfault,
++	SHELL_CMD_ARG(turn, NULL, "[reset] G2 reply turnaround histogram", cmd_turn, 1, 1),
+ 	SHELL_CMD_ARG(show, NULL, "print the fault parameters", cmd_show, 1, 0),
+ 	SHELL_CMD_ARG(set, NULL,
+ 		      "k=v ... (offset_us jitter_us mute_pm deaf_pm p_bad "
+diff --git a/radiant/src/antr/ant_radio_radiant.c b/radiant/src/antr/ant_radio_radiant.c
+index 1222d09..4b54487 100644
+--- a/radiant/src/antr/ant_radio_radiant.c
++++ b/radiant/src/antr/ant_radio_radiant.c
+@@ -975,6 +975,10 @@ static struct {
+ 	void              *ctx;
+ } api_reply_hook[API_CHANNELS];
+ 
++/* G2 BENCH INSTRUMENTATION (not for merge): the slave reply's t_sync minus
++ * this master's own achieved TX t_sync, read by apps/trainer's hook. */
++volatile int32_t antr_g2_turn_us;
++
+ static void api_xfer_reply_plan(void *ctx, const struct radiant_frame *f,
+ 				radiant_time_t t_sync,
+ 				struct radiant_reply_plan *out)
+@@ -990,6 +994,7 @@ static void api_xfer_reply_plan(void *ctx, const struct radiant_frame *f,
+ 	if (fn == NULL) {
+ 		return;
+ 	}
++	antr_g2_turn_us = (int32_t)(t_sync - api_ch[ch].turn_t_sync);
+ 	fn(api_reply_hook[ch].ctx, ch, f->payload, (uint64_t)t_sync, &plan);
+ 	out->action = (enum radiant_reply_action)plan.action;
+ 	out->offset_us = plan.offset_us;

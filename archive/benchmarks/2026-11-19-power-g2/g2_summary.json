@@ -1,0 +1,487 @@
+{
+ "A1": {
+  "sweep": {
+   "ok": 296,
+   "window_missed": 4,
+   "sim_no_tx": 0,
+   "expected": 0,
+   "not_heard": 0,
+   "IMPOSSIBLE": 0,
+   "originator_error": 0,
+   "n": 300,
+   "window_miss_rate": 0.013333333333333334,
+   "page71_advanced": 297
+  },
+  "burst": {
+   "bursts": 100,
+   "packets": 8,
+   "seconds": 75.4,
+   "outcomes": {
+    "COMPLETED": 100
+   },
+   "other_events": {
+    "event 0x0A": 100
+   },
+   "broadcasts_heard": 199
+  },
+  "turn_sweep": {
+   "n": 300,
+   "min": 2207,
+   "max": 2208,
+   "mean": 2207.18,
+   "under": 0,
+   "over": 0,
+   "later": 0,
+   "hist": {
+    "2207": 245,
+    "2208": 55
+   }
+  },
+  "turn_burst": {
+   "n": 100,
+   "min": 2200,
+   "max": 2202,
+   "mean": 2200.74,
+   "under": 0,
+   "over": 0,
+   "later": 700,
+   "hist": {
+    "2200": 27,
+    "2201": 72,
+    "2202": 1
+   }
+  },
+  "sim_stats_sweep": "acked_frames=300 ack=300 mute=0 deaf=0 cause_busy=0 cause_burst=0 cause_deaf=0 cause_mute=0 acks_sent=300 too_early=0 ring=300 lost=0",
+  "sim_stats_burst": "acked_frames=1100 ack=1100 mute=0 deaf=0 cause_busy=0 cause_burst=0 cause_deaf=0 cause_mute=0 acks_sent=1107 too_early=0 ring=512 lost=588",
+  "sampled": {
+   "n": 120,
+   "hfxo_running": 120,
+   "constlat_on": 120
+  },
+  "power_diag": {
+   "window_s": 398.033,
+   "hfxo_req_us": 398033696,
+   "hfxo_requests": 0,
+   "hfxo_releases": 0,
+   "radio_tx_us": 379248,
+   "radio_rx_us": 1342750,
+   "radio_tx_ops": 2700,
+   "radio_rx_ops": 2400,
+   "cpu_active_us": 2379441,
+   "idle_entries": 16922,
+   "hfxo_req_pct": 100.0,
+   "hfxo_us_per_request": null,
+   "flags_end": "0x3f",
+   "constlat_stat_end": 1
+  }
+ },
+ "B1": {
+  "sweep": {
+   "ok": 299,
+   "window_missed": 1,
+   "sim_no_tx": 0,
+   "expected": 0,
+   "not_heard": 0,
+   "IMPOSSIBLE": 0,
+   "originator_error": 0,
+   "n": 300,
+   "window_miss_rate": 0.0033333333333333335,
+   "page71_advanced": 299
+  },
+  "burst": {
+   "bursts": 100,
+   "packets": 8,
+   "seconds": 75.4,
+   "outcomes": {
+    "COMPLETED": 100
+   },
+   "other_events": {
+    "event 0x0A": 100
+   },
+   "broadcasts_heard": 198
+  },
+  "turn_sweep": {
+   "n": 300,
+   "min": 2207,
+   "max": 2208,
+   "mean": 2207.33,
+   "under": 0,
+   "over": 0,
+   "later": 0,
+   "hist": {
+    "2207": 201,
+    "2208": 99
+   }
+  },
+  "turn_burst": {
+   "n": 100,
+   "min": 2207,
+   "max": 2210,
+   "mean": 2208.37,
+   "under": 0,
+   "over": 0,
+   "later": 700,
+   "hist": {
+    "2207": 6,
+    "2208": 53,
+    "2209": 39,
+    "2210": 2
+   }
+  },
+  "sim_stats_sweep": "acked_frames=300 ack=300 mute=0 deaf=0 cause_busy=0 cause_burst=0 cause_deaf=0 cause_mute=0 acks_sent=300 too_early=0 ring=300 lost=0",
+  "sim_stats_burst": "acked_frames=1100 ack=1100 mute=0 deaf=0 cause_busy=0 cause_burst=0 cause_deaf=0 cause_mute=0 acks_sent=1104 too_early=0 ring=512 lost=588",
+  "sampled": {
+   "n": 120,
+   "hfxo_running": 2,
+   "constlat_on": 2
+  },
+  "power_diag": {
+   "window_s": 412.033,
+   "hfxo_req_us": 9738176,
+   "hfxo_requests": 1649,
+   "hfxo_releases": 1649,
+   "radio_tx_us": 396235,
+   "radio_rx_us": 1371974,
+   "radio_tx_ops": 2753,
+   "radio_rx_ops": 2453,
+   "cpu_active_us": 2803932,
+   "idle_entries": 25518,
+   "hfxo_req_pct": 2.363,
+   "hfxo_us_per_request": 5905.5,
+   "flags_end": "0x3e",
+   "constlat_stat_end": 0
+  },
+  "lp_boot": {
+   "magic": 1380994097,
+   "size": 92,
+   "state": 3,
+   "sleeps": 20,
+   "wakes": 19,
+   "late_anchors": 0,
+   "late_wakes": 0,
+   "hfxo_late_edge2": 0,
+   "reanchors": 1,
+   "range_errors": 0,
+   "lf_taken": 19,
+   "timer_taken": 1,
+   "disagreements": 1,
+   "max_disagree_us": 31,
+   "max_wake_slack_us": 208,
+   "max_wake_late_us": 0,
+   "asap_wakes": 0,
+   "release_cancels": 0,
+   "spurious": 0,
+   "hfxo_errors": 0,
+   "refused": 0,
+   "last_disagree_q": 0,
+   "edge_order": 0
+  },
+  "lp_window": {
+   "from": "S1_lp",
+   "to": "S5_lp",
+   "magic": 1380994097,
+   "size": 92,
+   "state": 3,
+   "sleeps": 1608,
+   "wakes": 1608,
+   "late_anchors": 0,
+   "late_wakes": 0,
+   "hfxo_late_edge2": 0,
+   "reanchors": 0,
+   "range_errors": 0,
+   "lf_taken": 1608,
+   "timer_taken": 0,
+   "disagreements": 0,
+   "max_disagree_us": 31,
+   "max_wake_slack_us": 215,
+   "max_wake_late_us": 0,
+   "asap_wakes": 0,
+   "release_cancels": 400,
+   "spurious": 0,
+   "hfxo_errors": 0,
+   "refused": 0,
+   "last_disagree_q": 0,
+   "edge_order": 0
+  }
+ },
+ "A2": {
+  "sweep": {
+   "ok": 296,
+   "window_missed": 3,
+   "sim_no_tx": 0,
+   "expected": 0,
+   "not_heard": 1,
+   "IMPOSSIBLE": 0,
+   "originator_error": 0,
+   "n": 300,
+   "window_miss_rate": 0.010033444816053512,
+   "page71_advanced": 298
+  },
+  "burst": {
+   "bursts": 100,
+   "packets": 8,
+   "seconds": 75.4,
+   "outcomes": {
+    "COMPLETED": 100
+   },
+   "other_events": {
+    "event 0x0A": 100
+   },
+   "broadcasts_heard": 199
+  },
+  "turn_sweep": {
+   "n": 299,
+   "min": 2207,
+   "max": 2208,
+   "mean": 2207.16,
+   "under": 0,
+   "over": 0,
+   "later": 0,
+   "hist": {
+    "2207": 251,
+    "2208": 48
+   }
+  },
+  "turn_burst": {
+   "n": 100,
+   "min": 2200,
+   "max": 2201,
+   "mean": 2200.66,
+   "under": 0,
+   "over": 0,
+   "later": 700,
+   "hist": {
+    "2200": 34,
+    "2201": 66
+   }
+  },
+  "sim_stats_sweep": "acked_frames=299 ack=299 mute=0 deaf=0 cause_busy=0 cause_burst=0 cause_deaf=0 cause_mute=0 acks_sent=299 too_early=0 ring=299 lost=0",
+  "sim_stats_burst": "acked_frames=1099 ack=1099 mute=0 deaf=0 cause_busy=0 cause_burst=0 cause_deaf=0 cause_mute=0 acks_sent=1101 too_early=0 ring=512 lost=587",
+  "sampled": {
+   "n": 120,
+   "hfxo_running": 120,
+   "constlat_on": 120
+  },
+  "power_diag": {
+   "window_s": 400.034,
+   "hfxo_req_us": 400034240,
+   "hfxo_requests": 0,
+   "hfxo_releases": 0,
+   "radio_tx_us": 379808,
+   "radio_rx_us": 1345628,
+   "radio_tx_ops": 2702,
+   "radio_rx_ops": 2403,
+   "cpu_active_us": 2385661,
+   "idle_entries": 16957,
+   "hfxo_req_pct": 100.0,
+   "hfxo_us_per_request": null,
+   "flags_end": "0x3f",
+   "constlat_stat_end": 1
+  }
+ },
+ "B2": {
+  "sweep": {
+   "ok": 297,
+   "window_missed": 2,
+   "sim_no_tx": 0,
+   "expected": 0,
+   "not_heard": 1,
+   "IMPOSSIBLE": 0,
+   "originator_error": 0,
+   "n": 300,
+   "window_miss_rate": 0.006688963210702341,
+   "page71_advanced": 298
+  },
+  "burst": {
+   "bursts": 100,
+   "packets": 8,
+   "seconds": 75.4,
+   "outcomes": {
+    "COMPLETED": 100
+   },
+   "other_events": {
+    "event 0x0A": 100,
+    "event 0x02": 1
+   },
+   "broadcasts_heard": 198
+  },
+  "turn_sweep": {
+   "n": 299,
+   "min": 2207,
+   "max": 2208,
+   "mean": 2207.35,
+   "under": 0,
+   "over": 0,
+   "later": 0,
+   "hist": {
+    "2207": 193,
+    "2208": 106
+   }
+  },
+  "turn_burst": {
+   "n": 100,
+   "min": 2207,
+   "max": 2210,
+   "mean": 2208.31,
+   "under": 0,
+   "over": 0,
+   "later": 700,
+   "hist": {
+    "2207": 6,
+    "2208": 59,
+    "2209": 33,
+    "2210": 2
+   }
+  },
+  "sim_stats_sweep": "acked_frames=299 ack=299 mute=0 deaf=0 cause_busy=0 cause_burst=0 cause_deaf=0 cause_mute=0 acks_sent=299 too_early=0 ring=299 lost=0",
+  "sim_stats_burst": "acked_frames=1099 ack=1099 mute=0 deaf=0 cause_busy=0 cause_burst=0 cause_deaf=0 cause_mute=0 acks_sent=1101 too_early=0 ring=512 lost=587",
+  "sampled": {
+   "n": 120,
+   "hfxo_running": 2,
+   "constlat_on": 2
+  },
+  "power_diag": {
+   "window_s": 412.033,
+   "hfxo_req_us": 9731456,
+   "hfxo_requests": 1649,
+   "hfxo_releases": 1649,
+   "radio_tx_us": 395854,
+   "radio_rx_us": 1371547,
+   "radio_tx_ops": 2750,
+   "radio_rx_ops": 2451,
+   "cpu_active_us": 2803530,
+   "idle_entries": 25518,
+   "hfxo_req_pct": 2.362,
+   "hfxo_us_per_request": 5901.4,
+   "flags_end": "0x3e",
+   "constlat_stat_end": 0
+  },
+  "lp_boot": {
+   "magic": 1380994097,
+   "size": 92,
+   "state": 3,
+   "sleeps": 21,
+   "wakes": 20,
+   "late_anchors": 0,
+   "late_wakes": 0,
+   "hfxo_late_edge2": 0,
+   "reanchors": 1,
+   "range_errors": 0,
+   "lf_taken": 20,
+   "timer_taken": 1,
+   "disagreements": 1,
+   "max_disagree_us": 30,
+   "max_wake_slack_us": 208,
+   "max_wake_late_us": 0,
+   "asap_wakes": 0,
+   "release_cancels": 0,
+   "spurious": 0,
+   "hfxo_errors": 0,
+   "refused": 0,
+   "last_disagree_q": 0,
+   "edge_order": 0
+  },
+  "lp_window": {
+   "from": "S1_lp",
+   "to": "S5_lp",
+   "magic": 1380994097,
+   "size": 92,
+   "state": 3,
+   "sleeps": 1609,
+   "wakes": 1609,
+   "late_anchors": 0,
+   "late_wakes": 0,
+   "hfxo_late_edge2": 0,
+   "reanchors": 0,
+   "range_errors": 0,
+   "lf_taken": 1609,
+   "timer_taken": 0,
+   "disagreements": 0,
+   "max_disagree_us": 30,
+   "max_wake_slack_us": 217,
+   "max_wake_late_us": 0,
+   "asap_wakes": 0,
+   "release_cancels": 399,
+   "spurious": 0,
+   "hfxo_errors": 0,
+   "refused": 0,
+   "last_disagree_q": 0,
+   "edge_order": 0
+  }
+ },
+ "A3": {
+  "sweep": {
+   "ok": 295,
+   "window_missed": 4,
+   "sim_no_tx": 0,
+   "expected": 0,
+   "not_heard": 1,
+   "IMPOSSIBLE": 0,
+   "originator_error": 0,
+   "n": 300,
+   "window_miss_rate": 0.013377926421404682,
+   "page71_advanced": 298
+  },
+  "burst": {
+   "bursts": 100,
+   "packets": 8,
+   "seconds": 75.4,
+   "outcomes": {
+    "COMPLETED": 100
+   },
+   "other_events": {
+    "event 0x0A": 100
+   },
+   "broadcasts_heard": 199
+  },
+  "turn_sweep": {
+   "n": 299,
+   "min": 2207,
+   "max": 2208,
+   "mean": 2207.16,
+   "under": 0,
+   "over": 0,
+   "later": 0,
+   "hist": {
+    "2207": 251,
+    "2208": 48
+   }
+  },
+  "turn_burst": {
+   "n": 100,
+   "min": 2200,
+   "max": 2201,
+   "mean": 2200.65,
+   "under": 0,
+   "over": 0,
+   "later": 700,
+   "hist": {
+    "2200": 35,
+    "2201": 65
+   }
+  },
+  "sim_stats_sweep": "acked_frames=299 ack=299 mute=0 deaf=0 cause_busy=0 cause_burst=0 cause_deaf=0 cause_mute=0 acks_sent=299 too_early=0 ring=299 lost=0",
+  "sim_stats_burst": "acked_frames=1099 ack=1099 mute=0 deaf=0 cause_busy=0 cause_burst=0 cause_deaf=0 cause_mute=0 acks_sent=1103 too_early=0 ring=512 lost=587",
+  "sampled": {
+   "n": 120,
+   "hfxo_running": 120,
+   "constlat_on": 120
+  },
+  "power_diag": {
+   "window_s": 396.033,
+   "hfxo_req_us": 396033376,
+   "hfxo_requests": 0,
+   "hfxo_releases": 0,
+   "radio_tx_us": 377541,
+   "radio_rx_us": 1336026,
+   "radio_tx_ops": 2688,
+   "radio_rx_ops": 2389,
+   "cpu_active_us": 2366758,
+   "idle_entries": 16840,
+   "hfxo_req_pct": 100.0,
+   "hfxo_us_per_request": null,
+   "flags_end": "0x3f",
+   "constlat_stat_end": 1
+  }
+ }
+}
