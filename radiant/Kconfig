@@ -884,10 +884,12 @@ config RADIANT_NRF_LOW_POWER
 	  or does not come. The tuning options below (HFXO start-up, keep-on,
 	  linger) do not apply and are hidden.
 
-	  STATUS: EXPERIMENTAL. Direct backend: nRF54L15 (power plan pass
-	  B3, Gate G1: power and timing pass, TI receiver loss under
-	  diagnosis) and nRF52840 (pass B5, not yet bench-gated). MPSL gate:
-	  nRF54L15 (pass B6, Gate G4 not yet run). Other parts with these
+	  STATUS: EXPERIMENTAL (ADR 0025). Direct backend: nRF54L15 (power
+	  plan pass B3, Gate G1: power and timing pass; a TI-only receiver
+	  loss excess of ~0.3-0.4 points remains) and nRF52840 (pass B5:
+	  power and timing pass, loss gate not passed on a confounded
+	  control). MPSL gate: nRF54L15 (pass B6, Gate G4 1 h with BLE
+	  connected: no asserts, steady anchor -4 us). Other parts with these
 	  system timers - the rest of both families, the nRF5340 network
 	  core - build but are unmeasured (spike B1 covered one nRF54L15 DK
 	  and one nRF52840 Pro Micro clone).
