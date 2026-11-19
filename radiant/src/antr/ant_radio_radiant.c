@@ -2321,7 +2321,11 @@ static void api_crc_repair_setup(void)
 
 #if defined(CONFIG_RADIANT_DIAG_CRC_BITS)
 /* Which bit each delivered repair flipped: 0xF7 page 12 fields 5-7
- * (radiant_diag.h). Saturating; not atomic, like every diag counter. */
+ * (radiant_diag.h). Saturating; not atomic, like every diag counter.
+ * Lanes stop one short of all-ones so a full field never reads as
+ * RADIANT_DIAG_NOT_MEASURED (0xFFFFFFFF). */
+#define API_CRC_BITS_MAX8  (UINT8_MAX - 1u)
+#define API_CRC_BITS_MAX16 (UINT16_MAX - 1u)
 static struct {
 	uint16_t rx1;     /* received 1 where 0 was sent */
 	uint16_t rx0;     /* received 0 where 1 was sent */
@@ -2344,7 +2348,7 @@ static void api_crc_bits_note(const struct radiant_rx_event *evt,
 		uint8_t *p = &api_crc_bits.syn[(31u - (uint32_t)__builtin_clz(syn)) / 2u];
 
 		rx1 = (((uint16_t)evt->crc_rx & syn) != 0u);
-		if (*p < UINT8_MAX) {
+		if (*p < API_CRC_BITS_MAX8) {
 			(*p)++;
 		}
 	} else {
@@ -2357,9 +2361,9 @@ static void api_crc_bits_note(const struct radiant_rx_event *evt,
 			}
 		}
 	}
-	if (rx1 && api_crc_bits.rx1 < UINT16_MAX) {
+	if (rx1 && api_crc_bits.rx1 < API_CRC_BITS_MAX16) {
 		api_crc_bits.rx1++;
-	} else if (!rx1 && api_crc_bits.rx0 < UINT16_MAX) {
+	} else if (!rx1 && api_crc_bits.rx0 < API_CRC_BITS_MAX16) {
 		api_crc_bits.rx0++;
 	}
 }
@@ -3379,6 +3383,9 @@ antr_err_t antr_init(void)
 	api_reset_state();
 	k_mutex_unlock(&api_lock);
 	memset(&api_stats, 0, sizeof(api_stats));
+#if defined(CONFIG_RADIANT_DIAG_CRC_BITS)
+	memset(&api_crc_bits, 0, sizeof(api_crc_bits));
+#endif
 
 	/* Order matters: the event ring must exist before the radio is enabled,
 	 * since an earlier post returns ESTATE. */

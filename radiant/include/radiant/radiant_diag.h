@@ -244,7 +244,8 @@ extern "C" {
  *   5-7                RADIANT_DIAG_NOT_MEASURED, unless the image has
  *                      CONFIG_RADIANT_DIAG_CRC_BITS (2026-11-19, Gate G1 H3):
  *                      which bit each repaired-and-delivered frame
- *                      (page 10 field 0) had flipped. Saturating counts:
+ *                      (page 10 field 0) had flipped. Counts saturate at
+ *                      65534 / 254, so a field is never all-ones:
  *   5 crc_bit_dir      bits 0-15 received 1 where 0 was sent, bits 16-31
  *                      received 0 where 1 was sent (sum = page 10 field 0
  *                      until a half saturates)
