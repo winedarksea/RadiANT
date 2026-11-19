@@ -526,7 +526,8 @@ core's boot before it is not counted at all. The estimator lists that as
 standby, which this firmware forbids) gives 227 µA, and most of that is the
 console-inflated CPU term. The idle floor and the UART row dominate, which is
 why Pass C2 (XOSC_HF release) and the TI standby decision are the levers left
-on this board, not the RF core's duty.
+on this board, not the RF core's duty. (TI standby was deferred by the owner on
+2026-11-19: ADR 0025, section 7.)
 
 ### TI XOSC_HF release, C2 gate (2026-11-18)
 
@@ -615,7 +616,9 @@ tables are in `archive/benchmarks/2026-11-18-power-g1/`.
 
 What the gate showed:
 
-- **Gate G1 FAILS on TI receiver loss; every other criterion passes.**
+- **Gate G1 FAILS on TI receiver loss; every other criterion passes.** (2026-11-19: after the CRC-repair delivery
+  fix the re-judge still failed narrowly on a TI-only RX_FAIL excess of ~0.3-0.4 pp, which the owner accepted: G1 is
+  PASS with accepted TI-only excess. See `archive/benchmarks/2026-11-19-power-g1-rejudge/` and ADR 0025.)
   - HFXO duty is under 3 % by the counter (1.684 %) and by the pooled samples (4/256 = 1.6 %, CI 0.6–4.0 %). The
     unattached span reads the same as the attached one, so the probe does not hold the crystal.
   - CONSTLAT is off between slots (253/256 samples off, `constlat_stat` 0, flags 0x3E).

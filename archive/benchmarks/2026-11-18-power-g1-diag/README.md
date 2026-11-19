@@ -6,6 +6,9 @@ firmware source changed. The diagnostic images are Kconfig fragments on top of G
 
 ## Verdict
 
+> **2026-11-19, owner:** G1 is PASS with accepted TI-only excess (the residual ~0.3-0.4 pp TI RX_FAIL; see
+> `2026-11-19-power-g1-rejudge/`). This diagnosis is left as written.
+
 1. **The G1 "unaccounted" TI misses are not missed syncs. They are CRC-failed frames that the TI repaired and then
    dropped.** This is a firmware defect in the core, present on every `apps/dongle` and `apps/dongle_ti` image (both set
    `CONFIG_RADIANT_CRC_REPAIR=y`). In each of the 25 arms here, the host's "unaccounted" count equals the TI's 0xF7
