@@ -71,7 +71,7 @@ from ant_session import (  # noqa: E402
     MESG_UNASSIGN_CHANNEL_ID,
     wait_for_close,
 )
-from ant_wire import MESG_EVENT_ID  # noqa: E402
+from ant_wire import MESG_CHANNEL_RADIO_TX_POWER_ID, MESG_EVENT_ID  # noqa: E402
 
 CHANNEL_TYPE_MASTER = 0x10
 EVENT_TX = 3
@@ -155,6 +155,14 @@ class Sensor:
     # transmitter and read as spectacular loss rather than a misconfiguration.
     rf_freq: int = ap.ANT_PLUS_RF_FREQ
 
+    # Per-channel transmit power level (RADIO_TX_POWER_LVL_*), or None to
+    # send no power message and keep the dongle's default - which on a
+    # RadiANT dongle with ANT_DONGLE_TX_POWER_BOOST is the part's maximum
+    # (+8 dBm on nRF52840), not the ANT default of 0 dBm. An explicit LVL_3 is
+    # honoured as a true 0 dBm there, so --tx-power 3 is how a bench A/B
+    # matches a transmitter that runs at the stack default.
+    tx_power: int | None = None
+
     def __init__(self, channel: int, device_number: int, trans_type: int,
                  watts: Signal, rpm: Signal):
         self.channel = channel
@@ -209,6 +217,11 @@ class Sensor:
              bytes([self.channel, self.period & 0xFF, self.period >> 8]),
              "message period"),
         ]
+        if self.tx_power is not None:
+            # Only takes on an assigned channel, so it follows the assign.
+            steps.append((MESG_CHANNEL_RADIO_TX_POWER_ID,
+                          bytes([self.channel, self.tx_power]),
+                          f"tx power level {self.tx_power}"))
         for msg_id, payload, what in steps:
             if not command(dev, reader, msg_id, payload,
                            f"ch{self.channel} {what}"):
@@ -1327,6 +1340,15 @@ def main() -> int:
              "and 80, which sit in the gaps between Wi-Fi 1, 6 and 11",
     )
     parser.add_argument(
+        "--tx-power", type=int, default=None, metavar="LEVEL",
+        choices=range(0, 6),
+        help="send MESG_CHANNEL_RADIO_TX_POWER with this level after the "
+             "assign: 0=-20, 1=-12, 2=-4, 3=0, 4=+4, 5=+8 dBm (rounded to "
+             "the part). Omit and the dongle keeps its default, which a "
+             "RadiANT dongle with ANT_DONGLE_TX_POWER_BOOST raises to the "
+             "part's maximum; 3 is a true 0 dBm there",
+    )
+    parser.add_argument(
         "--dry-run", action="store_true",
         help="build the payload stream without a board and write it out; "
              "feed the result to ant_verify.py --replay",
@@ -1380,6 +1402,7 @@ def main() -> int:
             sensor.period_ppm = args.period_ppm
             if args.rf_freq is not None:
                 sensor.rf_freq = args.rf_freq
+            sensor.tx_power = args.tx_power
             if args.attest:
                 if name not in ATTESTABLE:
                     sys.exit(f"--attest is for an ANT+ compat profile; {name} "
