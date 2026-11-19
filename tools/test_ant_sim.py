@@ -1092,3 +1092,38 @@ class TestRadioClock(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipIf(ant_sim is None, "pyusb is not installed")
+class TestTxPowerOption(unittest.TestCase):
+    """--tx-power sends one 0x60 after the assign, and nothing by default."""
+
+    def _bring_up(self, tx_power):
+        sent = []
+
+        class Dev:
+            def write(self, _ep, _data):
+                pass
+
+        real = ant_sim.command
+        ant_sim.command = lambda _d, _r, msg_id, payload, _what: (
+            sent.append((msg_id, bytes(payload))) or True)
+        try:
+            sensor = build("heart-rate")
+            sensor.tx_power = tx_power
+            sensor.bring_up(Dev(), None)
+        finally:
+            ant_sim.command = real
+        return sent
+
+    def test_no_power_message_by_default(self):
+        ids = [m for m, _ in self._bring_up(None)]
+        self.assertNotIn(ant_sim.MESG_CHANNEL_RADIO_TX_POWER_ID, ids)
+
+    def test_power_message_follows_the_assign(self):
+        sent = self._bring_up(3)
+        ids = [m for m, _ in sent]
+        self.assertEqual(ids.count(ant_sim.MESG_CHANNEL_RADIO_TX_POWER_ID), 1)
+        at = ids.index(ant_sim.MESG_CHANNEL_RADIO_TX_POWER_ID)
+        self.assertGreater(at, ids.index(ant_sim.MESG_ASSIGN_CHANNEL_ID))
+        self.assertEqual(sent[at][1], bytes([0, 3]))

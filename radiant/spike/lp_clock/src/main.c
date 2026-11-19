@@ -1378,9 +1378,16 @@ int main(void)
 done:
 	out("LPSPIKE DONE\n");
 #if CDC_CONSOLE
-	/* No other software path leads back to the UF2 bootloader once this
-	 * image runs, so return there by itself. The console blocks instead of
-	 * dropping (RTS/CTS), so the host holds every line by now; 'B' is sooner. */
+	if (!olive) {
+		/* An abort before usb_up(), or a build that never calls it:
+		 * bring the console up so the buffered text (and the reason)
+		 * is printed before the board leaves for the bootloader. */
+		usb_up();
+	}
+	/* Return to the UF2 bootloader by itself, so the next flash needs no
+	 * double-tap (the 1200-baud touch also works, but needs a host to do
+	 * it). The console blocks instead of dropping (RTS/CTS), so the host
+	 * holds every line by now; 'B' is sooner. */
 	out("LPSPIKE rebooting to UF2 bootloader in %d s (send B for now)\n",
 	    SPIKE_AUTO_BOOTLOADER_S);
 	for (int t = 0; t < SPIKE_AUTO_BOOTLOADER_S * 20; t++) {
