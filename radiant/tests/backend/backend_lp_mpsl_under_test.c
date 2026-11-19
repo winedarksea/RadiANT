@@ -185,6 +185,10 @@ bool gate_held(void) { return true; }
 /* True while a simulated zero-latency signal runs (lmt_preempt_after_capture()). */
 static bool lmt_in_signal;
 bool gate_in_signal(void) { return lmt_in_signal; }
+/* The grant generation, as the real gate moves it: odd from each START to the
+ * hand-back, even after (lmt_slot_start() / lmt_slot_end()). */
+static uint32_t lmt_gen;
+uint32_t gate_grant_gen(void) { return lmt_gen; }
 void gate_release(void) {}
 void gate_forget_pending(void) {}
 bool gate_extend(uint32_t us) { ARG_UNUSED(us); return false; }
@@ -278,8 +282,10 @@ static void lmt_boot(nrf_clock_lfclk_t lf)
 	core_cb_depth = 0u;
 	lmt_cb_calls = 0u;
 	lmt_in_signal = false;
-	lp_arming = false;
-	lp_ed_lost = false;
+	arm_marked = false;
+	arm_gen = 0u;
+	lmt_gen = 0u;
+	arm_ed_lost = false;
 	fake_lfclk_src = lf;
 	fake_hw.counter_fn = fw_timer;
 	fake_hw.task_hook = fw_task;
@@ -351,6 +357,7 @@ void lmt_set_hf_ppm(int32_t ppm) { fw.hf_ppm = ppm; }
 
 void lmt_slot_start(uint64_t r_start)
 {
+	lmt_gen = (lmt_gen + 2u) | 1u;
 	radiant_nrf_gate_lp_slot_start((radiant_time_t)r_start);
 	/* What the staged operation's on_grant() leaves: the radio on loan. */
 	radio_on_loan = true;
@@ -358,6 +365,7 @@ void lmt_slot_start(uint64_t r_start)
 
 void lmt_slot_end(bool backstop)
 {
+	lmt_gen = (lmt_gen + 1u) & ~1u;
 	radio_on_loan = false;
 	radiant_nrf_gate_lp_slot_end(backstop);
 }

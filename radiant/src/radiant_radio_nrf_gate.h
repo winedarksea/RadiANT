@@ -273,6 +273,27 @@ void radiant_nrf_gate_on_booking_due(void);
  */
 bool gate_in_signal(void);
 
+/*
+ * THE GRANT GENERATION (arbitrated build only; declared unconditionally like
+ * gate_in_signal(), defined by the MPSL gate alone).
+ *
+ * A counter the gate moves at every SIGNAL_START and at every end of a
+ * timeslot's loan of the radio (each hand-back, every ACTION_END, and the
+ * low-priority backstops). It is odd from SIGNAL_START until the first
+ * hand-back of that timeslot, and even otherwise, and never takes the same odd
+ * value twice (short of 2^31 timeslots).
+ *
+ * The backend reads it at an arm's claim and again at the start of the arm's
+ * register span, under radiant_swi_zli_lock(): an arm that finds it changed,
+ * or even, was preempted by the end of its grant (or by the next START) and
+ * writes nothing (AN ARM PREEMPTED BY THE GRANT'S END, radiant_radio_nrf.c).
+ * Written only from the zero-latency signal or under radiant_swi_zli_lock(),
+ * so a reader under that lock sees a stable value. One load, zero-latency
+ * safe.
+ */
+uint32_t gate_grant_gen(void);
+#define GATE_GEN_LIVE(gen) (((gen) & 1u) != 0u)
+
 /* The air arrived. Programme the staged operation and let the hardware run. */
 void radiant_nrf_gate_on_grant(void);
 

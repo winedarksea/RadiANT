@@ -312,6 +312,13 @@ void radiant_nrf_gate_on_grant(void)
 {
 	b.on_grant++;
 	b.grant_seq = ++backend_seq;
+	if (b.on_grant > 1u && gate_grant_gen() == b.gen_at_grant) {
+		b.gen_grant_reused++;
+	}
+	b.gen_at_grant = gate_grant_gen();
+	if (!GATE_GEN_LIVE(b.gen_at_grant)) {
+		b.gen_dead_at_grant++;
+	}
 	/* The real backend takes the radio here (radio_on_loan). */
 	radio_lent_this_slot = true;
 	if (release_in_grant) {
@@ -341,6 +348,10 @@ void radiant_nrf_gate_on_grant_end(void)
 {
 	b.on_grant_end++;
 	b.grant_end_seq = ++backend_seq;
+	b.gen_at_grant_end = gate_grant_gen();
+	if (GATE_GEN_LIVE(b.gen_at_grant_end)) {
+		b.gen_live_at_grant_end++;
+	}
 }
 
 #if defined(CONFIG_RADIANT_NRF_LOW_POWER)

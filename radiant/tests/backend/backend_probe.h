@@ -9,6 +9,7 @@ struct backend_probe {
 	bool     arm_follow_on;
 	uint32_t rx_events;
 	uint32_t tx_events;
+	uint32_t ed_events;
 	int      last_rx_status;
 	int      last_tx_status;
 	uint8_t  last_rx_body[16];
@@ -66,5 +67,31 @@ uint8_t  backend_op_n_filters(void);
 uint16_t backend_op_crc_init(void);
 bool     backend_filt_memo_holds(const struct radiant_rx_req *req);
 void     backend_program_ed(void);
+
+/* An arm preempted by the grant's end (test_arm_handback.c): the simulated
+ * signal, taken at the n-th outermost unlock of the zero-latency lock. */
+enum { BACKEND_ARM_TX, BACKEND_ARM_RX, BACKEND_ARM_ED };
+enum {
+	BACKEND_PRE_END,        /* hand-back and ACTION_END (TIMER0, a release) */
+	BACKEND_PRE_END_START,  /* the same, then the next START */
+	BACKEND_PRE_ABORT_END,  /* hand-back, then radiant_radio_abort() (EXTEND_FAILED, skip) */
+	BACKEND_PRE_DENIED,     /* the gate's deferred denial from a cooperative thread */
+};
+struct backend_preempt_result {
+	int      rc;
+	bool     fired;
+	bool     marked_at_fire;     /* the signal found the arm in progress */
+	bool     radio_written_after_handback;
+	bool     conns_after_arm;
+	bool     op_idle_after_arm;
+	uint32_t terminals_during_arm;
+	bool     conns_at_end;       /* after the deferred denial too */
+	bool     op_idle_at_end;
+	uint32_t terminals;
+	bool     marked_at_end;
+};
+void     backend_preempt_off(void);
+void     backend_preempt_arm(int kind, int mode, uint32_t n, bool late,
+			     struct backend_preempt_result *out);
 
 #endif

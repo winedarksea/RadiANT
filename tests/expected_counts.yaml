@@ -115,7 +115,12 @@ min_scenarios: 21
 # in scenarios whose floors were not raised. 6076 (+3) with the B6 review's
 # backend.lp_mpsl cases (a wake below the high-water mark, sub-tick phases and
 # read latency, an arm preempted by the timeslot's end).
-min_testcases: 6076
+# 6098 (+22) with the grant generation on every MPSL build
+# (fix/mpsl-arm-handback): radiant.backend's 2 (the preempted-arm sweep on the
+# option-off build, the hand-back disabling a live operation's connections)
+# and test_gate_grant_gen.c's 10 in each of radiant.gate and radiant.gate.lp.
+# The Bluefin run on that branch (2026-11-18) executed 6898.
+min_testcases: 6098
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -143,9 +148,11 @@ min_cases.radiant.api.crc_repair: 87
 min_cases.radiant.api.diag: 104
 # 32 since C5-1 (inline BLOCKED backs off the class that was refused). 38 with
 # the extension skip (ADR 0021). 76 with pass B6's XTAL_GUARANTEED case.
-min_cases.radiant.gate: 76
+# 86 with the grant generation's 10 (observed 104).
+min_cases.radiant.gate: 86
 # radiant.backend (ADR 0021): the backend completion path against register models.
-min_cases.radiant.backend: 8
+# 10 with the option-off preempted-arm cases (observed 45).
+min_cases.radiant.backend: 10
 min_cases.hrm_ble.sim_sched: 4
 min_cases.treadmill.pages: 20
 min_cases.treadmill.hr_rx: 3
@@ -174,4 +181,5 @@ min_cases.radiant.backend.lp_rtc: 41
 min_cases.radiant.backend.lp_mpsl: 17
 # radiant.gate.lp (pass B6): every radiant.gate case (94 observed) with the
 # low-power hooks compiled in, plus their 10 cases.
-min_cases.radiant.gate.lp: 104
+# 114 with the grant generation's 10.
+min_cases.radiant.gate.lp: 114

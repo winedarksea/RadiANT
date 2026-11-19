@@ -1910,10 +1910,14 @@ static void lp_init(void)
  * AN ARM PREEMPTED BY THE END. An in-grant arm (a completion's follow-on, from
  * the software interrupt) can be preempted by the zero-latency ACTION_END that
  * hands the RADIO back and stops the TIMER, and in principle by the next START.
- * radiant_radio_nrf.c (LP_SLOT_GUARD) runs each programme's register span under
- * the zero-latency lock, opened by checking lp_slot_gen() against the
- * generation the arm was claimed in: a timeslot that ended (or began) since
- * fails the arm ETIME with nothing written, and inside the span none can end.
+ * radiant_radio_nrf.c (ARM_SLOT_GUARD, on every MPSL build) runs each
+ * programme's register span under the zero-latency lock, opened by checking the
+ * gate's grant generation against the one the arm was claimed in: a loan that
+ * ended (or a timeslot that began) since fails the arm ETIME with nothing
+ * written, and inside the span none can end. Every wake here is a START and
+ * every release follows a hand-back, both of which move that generation, so it
+ * also proves the TIMER is running in the segment the arm was claimed in (this
+ * file's own segment counter, which B6 keyed the guard on, is gone).
  *
  * CONSTLAT is MPSL's: its per-event acquire covers the timeslots
  * (RADIANT_NRF54L_MPSL_CONSTLAT_HOLD, default n), so lp_constlat() is empty
@@ -1926,9 +1930,6 @@ static void lp_init(void)
 
 /* Where the TIMER last started (LF ticks): the awake-time stat. */
 static uint64_t lp_slot_t0;
-
-/* The awake segment's generation: changes at every wake, never 0. */
-static uint32_t lp_gen = 1u;
 
 /*
  * The release: the TIMER's reading of the LF tick `t` read just before it,
@@ -2019,7 +2020,6 @@ static void lp_slot_wake_locked(radiant_time_t r_start)
 	radiant_clock.base = radiant_lp_wake(&lp.tb, &lp.clk, t, true);
 	radiant_clock.last = 0u;
 	lp_slot_t0 = t;
-	lp_gen = (lp_gen + 1u == 0u) ? 1u : lp_gen + 1u;
 	lp_set_state(LP_AWAKE);
 	LP_STAT(radiant_nrf_lp_stats.wakes++);
 	LP_STAT(if (r_start != 0u) {
@@ -2072,18 +2072,6 @@ void radiant_nrf_gate_lp_slot_end(bool backstop)
 		lp_slot_release_locked(true);
 	}
 	CLOCK_UNLOCK(key);
-}
-
-/* LP_SLOT_GUARD (radiant_radio_nrf.c): the awake segment an arm is claimed or
- * programmed in, or 0 if the TIMER is stopped. Option refused: always the same
- * non-zero value. */
-static uint32_t lp_slot_gen(void)
-{
-	unsigned int key = CLOCK_LOCK();
-	uint32_t g = (lp.state == LP_ASLEEP) ? 0u : lp_gen;
-
-	CLOCK_UNLOCK(key);
-	return g;
 }
 
 /* LP_HOOKs the direct build's state machine needs and this one does not:

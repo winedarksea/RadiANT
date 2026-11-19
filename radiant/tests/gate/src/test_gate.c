@@ -180,6 +180,17 @@ static void assert_invariant(void)
 		      "an action was returned outside a timeslot");
 	zassert_equal(0u, p.overstayed + p.invalid_return + p.unknown_signal,
 		      "the gate recorded a signal it should never see");
+
+	/* The grant generation (AN ARM PREEMPTED BY THE GRANT'S END): live at
+	 * every on_grant(), over at every hand-back, over now, never reused. */
+	zassert_equal(0u, fake_backend()->gen_dead_at_grant,
+		      "on_grant() ran with the grant generation over");
+	zassert_equal(0u, fake_backend()->gen_live_at_grant_end,
+		      "a hand-back left the grant generation live");
+	zassert_equal(0u, fake_backend()->gen_grant_reused,
+		      "two grants shared one generation");
+	zassert_false(GATE_GEN_LIVE(gate_grant_gen()),
+		      "no loan, but the grant generation is live");
 }
 
 /* Place a window and take the grant. Returns with the grant live. */
