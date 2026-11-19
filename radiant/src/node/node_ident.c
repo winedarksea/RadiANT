@@ -71,7 +71,9 @@ static struct {
  * 0xFFFFFFFF. The node is now the epoch authority, so it must refuse rather
  * than wrap a boot counter here - a wrapped counter is a silently replayed
  * epoch. Hitting this means ~4 billion boots; the fix is re-provisioning
- * (new K_dev, new identity).
+ * (new K_dev, new identity). If that is interrupted after the key write,
+ * retrying with the same new key keeps the old counters and so cannot clear
+ * the exhausted boot counter: use a different key.
  */
 #define BOOT_COUNTER_MAX (0xFFFFFFFFu - RADIANT_SEC_EPOCH_HEADROOM - 1u)
 

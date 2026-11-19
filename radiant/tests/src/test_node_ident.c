@@ -528,8 +528,14 @@ ZTEST(node_ident, test_an_interrupted_first_provisioning_recovers)
 	zassert_equal(0u, v[1]);
 	zassert_equal(0u, v[2]);
 
-	/* Some present, one missing: a boot ran in between (boot counter 1,
-	 * reservation 3) and the pairing record is gone. */
+	/* The half above passes on the old code too (it zeroed everything);
+	 * this half is the one that discriminates. Some present, one never
+	 * written: a boot ran in between (boot counter 1, reservation 3) and
+	 * the interrupted provisioning never wrote the pairing record, modelled
+	 * by forgetting it. Creating an absent record at 0 is safe only for one
+	 * never written; a record lost after use would repeat a scalar or an
+	 * epoch - the exposure node_ident_boot() already has when it reads an
+	 * absent counter as 0. */
 	zassert_equal(NODE_IDENT_OK, node_ident_boot());
 	fake_nvm_forget(NODE_NVM_KEY_PAIR);
 	zassert_equal(NODE_IDENT_OK, node_ident_provision(k_dev));

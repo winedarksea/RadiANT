@@ -87,7 +87,14 @@ extern "C" {
  * Safe to retry: called with the K_dev already installed, it keeps the boot
  * counter, pairing counter and epoch reservation, creating at zero only those
  * an interrupted first provisioning never wrote. A K_dev read that fails for
- * any reason but "never written" returns NODE_IDENT_EIO and writes nothing.
+ * any reason but "never written" returns NODE_IDENT_EIO and writes nothing -
+ * so a corrupt K_dev record (wrong size, read error) makes provisioning fail
+ * closed instead of overwriting it.
+ *
+ * The same rule applies to a new-key provisioning interrupted after its key
+ * write: retrying with that key keeps the old counters, so it cannot clear an
+ * exhausted boot counter (NODE_IDENT_ESTATE from node_ident_boot()). Use a
+ * different key for that.
  *
  * Refuses an all-zero key (what erased flash reads as, and would otherwise
  * look provisioned).
