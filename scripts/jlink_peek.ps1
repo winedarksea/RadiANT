@@ -730,9 +730,14 @@ function Get-PeekAnalysis($cfg, $plan, [string[]]$output) {
             if ($ex) {
                 $v = Get-ExtraByte ([int64]$r["s.$i.extra"][0]) $ex.ByteOff
                 $st.raw[$ex.Symbol] = $v
-                if (-not $hist.ContainsKey($v)) { $hist[$v] = @{ count = 0; constlat_on = 0; hfxo_on = 0 } }
+                if (-not $hist.ContainsKey($v)) { $hist[$v] = @{ count = 0; constlat_on = 0; constlat_n = 0; hfxo_on = 0 } }
                 $hist[$v].count++
-                if ($st.constlat) { $hist[$v].constlat_on++ }
+                # As in the summary: null, not 0, where the preset has no
+                # CONSTLAT register to sample (nrf52840, nrf5340net).
+                if ($null -ne $st.constlat) {
+                    $hist[$v].constlat_n++
+                    if ($st.constlat) { $hist[$v].constlat_on++ }
+                }
                 if ($st.hfxo) { $hist[$v].hfxo_on++ }
             }
         }
@@ -754,7 +759,7 @@ function Get-PeekAnalysis($cfg, $plan, [string[]]$output) {
         if ($ex) {
             $rows = @()
             foreach ($v in ($hist.Keys | Sort-Object)) {
-                $rows += [ordered]@{ value = $v; count = $hist[$v].count; constlat_on = $hist[$v].constlat_on; hfxo_on = $hist[$v].hfxo_on }
+                $rows += [ordered]@{ value = $v; count = $hist[$v].count; constlat_on = $(if ($hist[$v].constlat_n) { $hist[$v].constlat_on } else { $null }); hfxo_on = $hist[$v].hfxo_on }
             }
             $an['extra'] = [ordered]@{
                 symbol = $ex.Symbol
@@ -834,7 +839,8 @@ function Write-PeekReport($an, $cfg) {
         Write-Host ("{0} @ {1} (byte {2} of word {3}), per sample:" -f $x.symbol, $x.address, $x.byte_offset, $x.word_address)
         if ($x.histogram.Count -eq 0) { Write-Host '  no valid samples' -ForegroundColor Yellow }
         foreach ($h in $x.histogram) {
-            Write-Host ("  value {0,3} (0x{0:X2}): {1,5} samples, CONSTLAT on in {2}, HFXO on in {3}" -f $h.value, $h.count, $h.constlat_on, $h.hfxo_on)
+            $clTxt = $(if ($null -ne $h.constlat_on) { $h.constlat_on } else { 'n/a' })
+            Write-Host ("  value {0,3} (0x{0:X2}): {1,5} samples, CONSTLAT on in {2}, HFXO on in {3}" -f $h.value, $h.count, $clTxt, $h.hfxo_on)
         }
     }
 
@@ -1080,6 +1086,27 @@ function Invoke-SelfTest {
     $xgap = @($xcanned[0..2] + $xcanned[4..13])
     $an = Get-PeekAnalysis $xcfg $xpl $xgap
     & $check 'extra: a missing extra read is reported, not shifted' (-not $an.parse_ok -and $an.samples.valid -eq 0)
+    # nrf52840 (and nrf5340net): no CONSTLAT register, so null, as the summary.
+    $x52 = @{ Preset = 'nrf52840'; Device = 'nRF52840_xxAA'; Serial = '001057737173'; Speed = 4000; Samples = 2; IntervalMs = 300; JitterMs = 150; Seed = 11; NonSecure = $false; Diag = $null; Extra = $xr }
+    $x52pl = New-PeekPlan -Cfg $x52
+    $x52lines = @($x52pl.Lines | Where-Object { $_ -match '^mem32 ' })
+    # Answer each mem32 line in plan order: HFCLK running on the crystal, the
+    # refs byte 1, RTC1 counters 5 then 6, DHCSR running.
+    $x52canned = @()
+    foreach ($ln in $x52lines) {
+        $m = [regex]::Match($ln, '^mem32 0x([0-9A-Fa-f]+), 0x([0-9A-Fa-f]+)')
+        $a = [Convert]::ToInt64($m.Groups[1].Value, 16); $c = [Convert]::ToInt32($m.Groups[2].Value, 16)
+        $vals = switch ($a) {
+            0x40000408L { @('00000001', '00010001') }
+            0x20007054L { @('00010000') }
+            0xE000EDF0L { @('01000003') }
+            default { @(@('00000005') * $c) }
+        }
+        $x52canned += ('{0:X8} = {1} ' -f $a, ($vals -join ' '))
+    }
+    $an = Get-PeekAnalysis $x52 $x52pl $x52canned
+    & $check 'extra nrf52840: 2 samples, value 1' ($an.samples.valid -eq 2 -and $an.extra.histogram.Count -eq 1 -and [int]$an.extra.histogram[0].value -eq 1)
+    & $check 'extra nrf52840: constlat_on null in summary and histogram' (($null -eq $an.samples.constlat_on) -and ($null -eq $an.extra.histogram[0].constlat_on) -and $an.extra.histogram[0].hfxo_on -eq 2)
 
     Write-Host ''
     if ($script:stFail) { Write-Host "SELF-TEST: $($script:stFail) FAILED" -ForegroundColor Red; exit 1 }
