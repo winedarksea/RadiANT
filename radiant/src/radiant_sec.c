@@ -705,11 +705,16 @@ int radiant_sec_configure(uint8_t ch, uint8_t switches, uint8_t w,
 		return RADIANT_SEC_ENOTSUP;
 	}
 
+	/* The same tuple again (a host retrying a 0xF1 it never saw answered)
+	 * changes nothing: no windows discarded, no TX tag restarted, no port
+	 * hook. Until review 2026-11-17 item 4 it cleared the replay floor, so
+	 * a window verified just before the retry could verify, and be
+	 * delivered, a second time. */
 	if (!cfg_same(c, switches, w, page_lo, page_hi)) {
 		/* A change: the port may refuse it (a master with a transfer
 		 * accepted under the old policy) or take back what it staged
 		 * under it (antr_sec_policy_set()). Nothing is written yet. */
-		int rc = radiant_sec_policy_changing(ch);
+		int rc = radiant_sec_policy_changing(c->ch);
 
 		if (rc != RADIANT_SEC_OK) {
 			return rc;
@@ -719,17 +724,20 @@ int radiant_sec_configure(uint8_t ch, uint8_t switches, uint8_t w,
 		 * after the change was acknowledged, and building it again is a
 		 * second ciphertext under its nonce. */
 		c->tx_last_stale = true;
-	}
-	c->switches = switches;
-	c->w = w;
-	c->page_lo = page_lo;
-	c->page_hi = page_hi;
+		c->switches = switches;
+		c->w = w;
+		c->page_lo = page_lo;
+		c->page_hi = page_hi;
 
-	/* Any window in flight is meaningless under a new W or a new range. */
-	rx_discard(c);
-	c->rx_floor = 0u;
-	c->tx_win_open = false;
-	c->tx_prev_valid = false;
+		/* Any window in flight is meaningless under a new W or a new
+		 * range, and so is the TX window. The replay floor stays: it is
+		 * a counter value, and a counter already verified under this key
+		 * and epoch is a replay under any W. Only a new epoch or device
+		 * number clears it. */
+		rx_discard(c);
+		c->tx_win_open = false;
+		c->tx_prev_valid = false;
+	}
 	/* The slot clock's latch and the last-slot guard stay: neither the
 	 * epoch nor the period changes here, so a fresh latch could only move
 	 * the phase, and the guard is what stops one slot being built twice

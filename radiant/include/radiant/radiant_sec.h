@@ -901,9 +901,14 @@ int  radiant_sec_set_key(uint8_t ch, const uint8_t *root, size_t bits,
  * old bytes or building a second ciphertext under its nonce. The slot clock
  * and the last-slot guard stay, so no index is ever built twice. Before a
  * change is written, radiant_sec_policy_changing() may refuse it; its code is
- * returned with nothing changed. An identical tuple never asks. The adapter
- * reaches this through antr_sec_policy_set(), which also takes back the slot
- * and ack payload it already staged (review 2026-11-17 item 2).
+ * returned with nothing changed. An identical tuple never asks and changes
+ * nothing at all: windows in flight, the replay floor and the TX tag in
+ * progress are kept, so a host may retry a 0xF1 safely. A change discards the
+ * windows in flight and restarts the TX tag (their boundaries move) but keeps
+ * the replay floor, a counter value that means the same under any W (review
+ * 2026-11-17 item 4). The adapter reaches this through antr_sec_policy_set(),
+ * which also takes back the slot and ack payload it already staged (review
+ * 2026-11-17 item 2).
  */
 int  radiant_sec_configure(uint8_t ch, uint8_t switches, uint8_t w,
 			   uint8_t page_lo, uint8_t page_hi);

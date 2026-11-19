@@ -2003,7 +2003,11 @@ radiant_messages:
              acknowledgement payload already built, so the new policy is the
              one on the air when this answers, at the cost of at most one
              silent slot. An identical tuple, and any tuple to a slave, is
-             never refused (docs/radiant-security.md sec 3.2 and 3.5)."
+             never refused. An identical tuple (a retry) changes nothing:
+             windows in flight, the replay floor and the sender's tag in
+             progress are kept. A change discards the windows in flight and
+             restarts the sender's tag but keeps the replay floor
+             (docs/radiant-security.md sec 3.2, 3.5 and 7.6)."
       source: "K4 (docs/radiant-security.md sec 3 and 9)"
     - name: MESG_RADIANT_SET_KEY_ID
       id: 0xF2
@@ -2292,9 +2296,10 @@ radiant_messages:
              channel's verdict count: one more per verdict, never reset
              while the channel keeps its key, and one more again whenever
              the firmware throws away a window that was waiting for its
-             verdict (the host's 0xF1 or 0xF3, an epoch advance, a new
-             device-number candidate, a channel close or open), so any
-             verdict that will never come shows as a gap. VERSIONING: as
+             verdict (a host 0xF1 that changes the policy, the host's 0xF3,
+             an epoch advance, a new device-number candidate, a channel
+             close or open), so any verdict that will never come shows as a
+             gap. VERSIONING: as
              0xF4, fields are only appended and a reader decodes the fields
              it knows from a longer body. The window covers counters
              window_start .. window_start+W-1. COVERAGE: a verdict covers
