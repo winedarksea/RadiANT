@@ -118,7 +118,7 @@ compare IRQ masked so nothing wakes it at T, and awake for the GRTC capture.
 | variant | anchor | n | distribution (µs) | mean |
 |---|---|---|---|---|
 | lp (HFXO off between cycles) | wake | 10 000 | −1: 6784, 0: 3216 | −0.68 |
-| lp | release | 10 000 | −1: 7451, 0: 2549 | −0.75 |
+| lp (**invalid**, as above) | release | 10 000 | −1: 7451, 0: 2549 | −0.75 |
 | held | wake | 10 000 | −1: 7212, 0: 2788 | −0.72 |
 | held | release | 10 000 | −1: 7380, 0: 2620 | −0.74 |
 
@@ -200,7 +200,7 @@ on RC) at 125 ms.
 | variant | anchor | n | distribution (1/8 µs) |
 |---|---|---|---|
 | lp (USB off; **HFXO was NOT off between cycles, invalid**) | wake | 10 000 | −9: 832, −1: 9093, +7: 75 |
-| lp | release | 10 000 | −9: 15, −1: 9389, +7: 596 |
+| lp (**invalid**, as above) | release | 10 000 | −9: 15, −1: 9389, +7: 596 |
 | held (USB up) | wake | 10 000 | −9: 622, −1: 9280, +7: 98 |
 | held | release | 10 000 | −9: 273, −1: 9540, +7: 187 |
 
@@ -285,7 +285,7 @@ already says.
 | S3 ≤ ±2 µs | PASS: {−1, 0} µs over 20 000 cycles each for wake and release | held PASS: −1.125…+0.875 µs over 10 000 cycles each; **lp INVALID, rerun not done** (HFXO stayed on, see S3) |
 | restore list known | PASS: empty (63/63 retained) | PASS: empty (54/54 retained); SHUTDOWN zeroes the counter |
 
-**G0: PASS.** Track B can proceed to B2, with the changes above.
+**G0: PASS** (on the nRF54L15 S3 numbers and the nRF52840 held rows; the nRF52840 lp S3 rows are invalid pending a rerun). Track B can proceed to B2, with the changes above.
 
 ## Not done / limits
 
