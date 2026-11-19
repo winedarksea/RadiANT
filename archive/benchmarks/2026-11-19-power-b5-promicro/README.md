@@ -6,6 +6,8 @@ duty is meaningful)." The Garmin was not used.
 
 ## Verdict
 
+> **Rerun at equal TX power:** [`../2026-11-19-power-b5-rerun/`](../2026-11-19-power-b5-rerun/README.md). The excess below was transmit power. At 0 dBm with the HFXO held, the TI loses 3.8-4.6 %, and B2 matches A2; the transmitter-side explanation is refuted.
+
 **B5 NOT PASSED: the on-air loss criterion fails against the control that was available, and that control is
 confounded. Every power and timing criterion passes.**
 

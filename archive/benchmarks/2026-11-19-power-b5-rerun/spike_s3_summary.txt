@@ -1,0 +1,47 @@
+LPSPIKE begin board=promicro_nrf52840 lf=RTC1 bt=0 timer=0x4001b000 hfxo_req=0 hf_stat=0x00010001
+LPSPIKE cfg sys_clock_hw_cycles=32768 ticks_per_sec=32768 hfint_cal=0 k32src_xtal=1
+LPSPIKE lfclk running=1 src=1 (1 = xtal on both SoCs)
+S2 lf_alloc #1 -> channel 2
+S2 lf_alloc #2 -> channel 1
+S2 lf_alloc #3 -> -12 (stop)
+S2 lf_channels_available=2
+S2 headroom lf->timer=11 timer->lf=11 timer->radio=11 radio->timer=11 (domains lf=0 timer=0 radio=0)
+S2 anchor_ok=1 meas_ok=1
+S1 var=0 DIFF TIMER.CC[2] before=0x40000222 after=0x000007d0
+S1 var=0 constlat=1 timer_shutdown=0 hfxo_off_seen=1 mid_hfxo_running=0 mid_hf_stat=0x00010000 mid_constlatstat=4294967295 rerequest=0 count_after=2000 (before 2000) same=53 diff=1
+S1 var=1 DIFF TIMER.CC[2] before=0x40000222 after=0x000007d0
+S1 var=1 constlat=0 timer_shutdown=0 hfxo_off_seen=1 mid_hfxo_running=0 mid_hf_stat=0x00010000 mid_constlatstat=4294967295 rerequest=0 count_after=2000 (before 2000) same=53 diff=1
+S1 var=2 DIFF TIMER.CC[2] before=0x40000222 after=0x00000000
+S1 var=2 constlat=0 timer_shutdown=1 hfxo_off_seen=1 mid_hfxo_running=0 mid_hf_stat=0x00010000 mid_constlatstat=4294967295 rerequest=0 count_after=0 (before 2000) same=53 diff=1
+S4 hfint_cal rep=0 hfxo_running=0 timer_counts_per_rtc_second=1001311 ppm=1311
+S4 hfint_cal rep=1 hfxo_running=0 timer_counts_per_rtc_second=1001183 ppm=1183
+S4 hfint_cal rep=2 hfxo_running=0 timer_counts_per_rtc_second=1001180 ppm=1180
+S4 constlat=1 was_on_before_request=0 timeouts=0 constlatstat=4294967295
+S4 cl=1 request->callback n=1000 bad=0 min=305 p0.1=305 p1=308 p50=345 p99=363 p99.9=395 max=413 mean_milli=341826
+S4 constlat=0 was_on_before_request=0 timeouts=0 constlatstat=4294967295
+S4 cl=0 request->callback n=1000 bad=0 min=306 p0.1=306 p1=310 p50=346 p99=363 p99.9=400 max=416 mean_milli=343555
+S3 lp begin n=10000 lp=1 units=1/8us
+S3 lp cycles=10000 late_hfxo=0 lf_irqs=40000 elapsed_ms=153803
+S3 lp wake_err hist -9:1124 -1:8840 7:36
+S3 lp wake_err cpu_busy hist -9:576 -1:4388 7:36
+S3 lp wake_err cpu_sleep hist -9:548 -1:4452
+S3 lp release_err hist -9:123 -1:9614 7:263
+S3 lp release_err cpu_busy hist -9:115 -1:4714 7:171
+S3 lp release_err cpu_sleep hist -9:8 -1:4900 7:92
+S3 lp cc5_at_wake hist 0:10000
+S3 lp hfxo_running_at_request=0 of 10000
+S3 lp request->callback_rtc_ticks hist 11:10000
+USB console up; buffered text above was produced with USB disabled
+S3 held begin n=10000 lp=0 units=1/8us
+S3 held cycles=10000 late_hfxo=0 lf_irqs=40000 elapsed_ms=43484
+S3 held wake_err hist -9:1702 -1:8295 7:3
+S3 held wake_err cpu_busy hist -9:1159 -1:3838 7:3
+S3 held wake_err cpu_sleep hist -9:543 -1:4457
+S3 held release_err hist -9:372 -1:9485 7:143
+S3 held release_err cpu_busy hist -9:348 -1:4605 7:47
+S3 held release_err cpu_sleep hist -9:24 -1:4880 7:96
+S3 held cc5_at_wake hist 0:10000
+S5 sleep fit n=301 slope_milli_ppm=-56874 (positive: TIMER/HFXO fast vs LF)
+S5 busy fit n=121 slope_milli_ppm=-55889 (positive: TIMER/HFXO fast vs LF)
+LPSPIKE DONE
+LPSPIKE rebooting to UF2 bootloader in 20 s (send B for now)

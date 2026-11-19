@@ -1,0 +1,402 @@
+{
+ "A1": {
+  "l15": {
+   "packets": 2432,
+   "expected": 2436.0,
+   "loss_pct": 0.162,
+   "rx_fail": 4,
+   "unaccounted": 0,
+   "collisions": 0,
+   "host_interval_mean_ms": 246.677,
+   "host_interval_stdev_ms": 13.03,
+   "gap_max_ms": 500.0,
+   "offgrid_radio_us": 13.023,
+   "radio_intervals": 2431,
+   "radio_slots": 2435,
+   "radio_period_us": 246269.5613,
+   "radio_period_minus_nominal_us": -7.2941,
+   "radio_single_interval_mean_us": 246269.562,
+   "radio_single_interval_stdev_us": 13.015,
+   "radio_resid_stdev_us": 13.019,
+   "rssi_mean": -43.9,
+   "rssi_min": -44,
+   "rssi_max": -43,
+   "bpm": 119.93547048038268
+  },
+  "ti": {
+   "packets": 2343,
+   "expected": 2435.9,
+   "loss_pct": 3.813,
+   "rx_fail": 93,
+   "unaccounted": 0,
+   "collisions": 0,
+   "host_interval_mean_ms": 256.045,
+   "host_interval_stdev_ms": 50.83,
+   "gap_max_ms": 750.0,
+   "offgrid_radio_us": 6.199,
+   "radio_intervals": 2342,
+   "radio_slots": 2435,
+   "radio_period_us": 246278.1213,
+   "radio_period_minus_nominal_us": 1.2658,
+   "radio_single_interval_mean_us": 246278.142,
+   "radio_single_interval_stdev_us": 6.133,
+   "radio_resid_stdev_us": 6.197,
+   "rssi_mean": -48.3,
+   "rssi_min": -51,
+   "rssi_max": -47,
+   "bpm": 119.93284846878072
+  },
+  "garmin": {
+   "packets": 2306,
+   "expected": 2436.9,
+   "loss_pct": 5.372,
+   "rx_fail": 131,
+   "unaccounted": 0,
+   "collisions": 0,
+   "host_interval_mean_ms": 260.263,
+   "host_interval_stdev_ms": 62.05,
+   "gap_max_ms": 750.0,
+   "offgrid_radio_us": 13495.456,
+   "radio_intervals": 2192,
+   "radio_slots": 8777,
+   "radio_period_us": 261467.2938,
+   "radio_period_minus_nominal_us": 15190.4383,
+   "radio_single_interval_mean_us": null,
+   "radio_single_interval_stdev_us": null,
+   "radio_resid_stdev_us": 12719.375,
+   "rssi_mean": null,
+   "rssi_min": null,
+   "rssi_max": null,
+   "bpm": 119.9319609982922
+  },
+  "ti_diag": {
+   "api.slots_missed": 93,
+   "backend_b.crc_fail": 10,
+   "rx_integrity.crc_repaired": 2,
+   "rx_integrity.crc_unrepairable": 8
+  },
+  "overlap": {
+   "slots": 2433,
+   "missed": {
+    "l15": 4,
+    "ti": 93,
+    "garmin": 131
+   },
+   "pairs": {
+    "garmin+l15": {
+     "both": 2,
+     "independent_expectation": 0.22
+    },
+    "garmin+ti": {
+     "both": 88,
+     "independent_expectation": 5.01
+    },
+    "l15+ti": {
+     "both": 2,
+     "independent_expectation": 0.15
+    }
+   },
+   "all": 2
+  }
+ },
+ "A2": {
+  "l15": {
+   "packets": 2428,
+   "expected": 2435.9,
+   "loss_pct": 0.324,
+   "rx_fail": 8,
+   "unaccounted": 0,
+   "collisions": 0,
+   "host_interval_mean_ms": 247.077,
+   "host_interval_stdev_ms": 17.27,
+   "gap_max_ms": 547.0,
+   "offgrid_radio_us": 13.038,
+   "radio_intervals": 2427,
+   "radio_slots": 2435,
+   "radio_period_us": 246269.5488,
+   "radio_period_minus_nominal_us": -7.3067,
+   "radio_single_interval_mean_us": 246269.576,
+   "radio_single_interval_stdev_us": 13.006,
+   "radio_resid_stdev_us": 13.015,
+   "rssi_mean": -44.0,
+   "rssi_min": -44,
+   "rssi_max": -43,
+   "bpm": 120.02904328266412
+  },
+  "ti": {
+   "packets": 2325,
+   "expected": 2436.0,
+   "loss_pct": 4.555,
+   "rx_fail": 111,
+   "unaccounted": 0,
+   "collisions": 0,
+   "host_interval_mean_ms": 258.034,
+   "host_interval_stdev_ms": 53.36,
+   "gap_max_ms": 500.0,
+   "offgrid_radio_us": 6.222,
+   "radio_intervals": 2324,
+   "radio_slots": 2435,
+   "radio_period_us": 246278.1213,
+   "radio_period_minus_nominal_us": 1.2658,
+   "radio_single_interval_mean_us": 246278.152,
+   "radio_single_interval_stdev_us": 6.155,
+   "radio_resid_stdev_us": 6.222,
+   "rssi_mean": -48.3,
+   "rssi_min": -51,
+   "rssi_max": -47,
+   "bpm": 120.03119397941073
+  },
+  "garmin": {
+   "packets": 2249,
+   "expected": 2436.9,
+   "loss_pct": 7.711,
+   "rx_fail": 188,
+   "unaccounted": 0,
+   "collisions": 0,
+   "host_interval_mean_ms": 266.863,
+   "host_interval_stdev_ms": 73.06,
+   "gap_max_ms": 750.0,
+   "offgrid_radio_us": 15004.953,
+   "radio_intervals": 2082,
+   "radio_slots": 8339,
+   "radio_period_us": 261412.8643,
+   "radio_period_minus_nominal_us": 15136.0088,
+   "radio_single_interval_mean_us": null,
+   "radio_single_interval_stdev_us": null,
+   "radio_resid_stdev_us": 13796.801,
+   "rssi_mean": null,
+   "rssi_min": null,
+   "rssi_max": null,
+   "bpm": 120.03113069985046
+  },
+  "ti_diag": {
+   "api.slots_missed": 111,
+   "backend_b.crc_fail": 14,
+   "rx_integrity.crc_repaired": 4,
+   "rx_integrity.crc_unrepairable": 9
+  },
+  "overlap": {
+   "slots": 2429,
+   "missed": {
+    "l15": 8,
+    "ti": 111,
+    "garmin": 187
+   },
+   "pairs": {
+    "garmin+l15": {
+     "both": 3,
+     "independent_expectation": 0.62
+    },
+    "garmin+ti": {
+     "both": 102,
+     "independent_expectation": 8.55
+    },
+    "l15+ti": {
+     "both": 2,
+     "independent_expectation": 0.37
+    }
+   },
+   "all": 2
+  }
+ },
+ "B1": {
+  "l15": {
+   "packets": 2425,
+   "expected": 2435.8,
+   "loss_pct": 0.442,
+   "rx_fail": 11,
+   "unaccounted": 0,
+   "collisions": 0,
+   "host_interval_mean_ms": 247.37,
+   "host_interval_stdev_ms": 25.27,
+   "gap_max_ms": 828.0,
+   "offgrid_radio_us": 14.193,
+   "radio_intervals": 2424,
+   "radio_slots": 2435,
+   "radio_period_us": 246255.8879,
+   "radio_period_minus_nominal_us": -20.9675,
+   "radio_single_interval_mean_us": 246255.874,
+   "radio_single_interval_stdev_us": 14.145,
+   "radio_resid_stdev_us": 14.144,
+   "rssi_mean": -43.3,
+   "rssi_min": -44,
+   "rssi_max": -42,
+   "bpm": 120.0
+  },
+  "ti": {
+   "packets": 2291,
+   "expected": 2436.8,
+   "loss_pct": 5.982,
+   "rx_fail": 146,
+   "unaccounted": 0,
+   "collisions": 0,
+   "host_interval_mean_ms": 261.954,
+   "host_interval_stdev_ms": 66.01,
+   "gap_max_ms": 984.0,
+   "offgrid_radio_us": 15.224,
+   "radio_intervals": 2290,
+   "radio_slots": 2436,
+   "radio_period_us": 246264.4655,
+   "radio_period_minus_nominal_us": -12.3899,
+   "radio_single_interval_mean_us": 246264.487,
+   "radio_single_interval_stdev_us": 14.983,
+   "radio_resid_stdev_us": 14.831,
+   "rssi_mean": -48.5,
+   "rssi_min": -51,
+   "rssi_max": -47,
+   "bpm": 120.0
+  },
+  "garmin": {
+   "packets": 2177,
+   "expected": 2435.8,
+   "loss_pct": 10.623,
+   "rx_fail": 260,
+   "unaccounted": 0,
+   "collisions": 0,
+   "host_interval_mean_ms": 275.563,
+   "host_interval_stdev_ms": 97.4,
+   "gap_max_ms": 1735.0,
+   "offgrid_radio_us": 21182.287,
+   "radio_intervals": 1983,
+   "radio_slots": 7954,
+   "radio_period_us": 260151.1425,
+   "radio_period_minus_nominal_us": 13874.287,
+   "radio_single_interval_mean_us": 167968.75,
+   "radio_single_interval_stdev_us": 3906.25,
+   "radio_resid_stdev_us": 21542.15,
+   "rssi_mean": null,
+   "rssi_min": null,
+   "rssi_max": null,
+   "bpm": 120.0
+  },
+  "ti_diag": {
+   "api.slots_missed": 146,
+   "backend_b.crc_fail": 13,
+   "rx_integrity.crc_repaired": 2,
+   "rx_integrity.crc_unrepairable": 10
+  },
+  "overlap": {
+   "slots": 2432,
+   "missed": {
+    "l15": 15,
+    "ti": 149,
+    "garmin": 261
+   },
+   "pairs": {
+    "garmin+l15": {
+     "both": 7,
+     "independent_expectation": 1.61
+    },
+    "garmin+ti": {
+     "both": 135,
+     "independent_expectation": 15.99
+    },
+    "l15+ti": {
+     "both": 5,
+     "independent_expectation": 0.92
+    }
+   },
+   "all": 4
+  }
+ },
+ "B2": {
+  "l15": {
+   "packets": 2431,
+   "expected": 2435.8,
+   "loss_pct": 0.195,
+   "rx_fail": 5,
+   "unaccounted": 0,
+   "collisions": 0,
+   "host_interval_mean_ms": 246.759,
+   "host_interval_stdev_ms": 14.23,
+   "gap_max_ms": 500.0,
+   "offgrid_radio_us": 14.197,
+   "radio_intervals": 2430,
+   "radio_slots": 2435,
+   "radio_period_us": 246255.913,
+   "radio_period_minus_nominal_us": -20.9425,
+   "radio_single_interval_mean_us": 246255.915,
+   "radio_single_interval_stdev_us": 14.161,
+   "radio_resid_stdev_us": 14.163,
+   "rssi_mean": -43.0,
+   "rssi_min": -43,
+   "rssi_max": -42,
+   "bpm": 120.0
+  },
+  "ti": {
+   "packets": 2324,
+   "expected": 2435.8,
+   "loss_pct": 4.588,
+   "rx_fail": 112,
+   "unaccounted": 0,
+   "collisions": 0,
+   "host_interval_mean_ms": 258.125,
+   "host_interval_stdev_ms": 56.96,
+   "gap_max_ms": 750.0,
+   "offgrid_radio_us": 15.157,
+   "radio_intervals": 2323,
+   "radio_slots": 2435,
+   "radio_period_us": 246264.5356,
+   "radio_period_minus_nominal_us": -12.3198,
+   "radio_single_interval_mean_us": 246264.505,
+   "radio_single_interval_stdev_us": 15.007,
+   "radio_resid_stdev_us": 14.911,
+   "rssi_mean": -48.4,
+   "rssi_min": -56,
+   "rssi_max": -47,
+   "bpm": 120.0
+  },
+  "garmin": {
+   "packets": 2234,
+   "expected": 2436.8,
+   "loss_pct": 8.321,
+   "rx_fail": 203,
+   "unaccounted": 0,
+   "collisions": 0,
+   "host_interval_mean_ms": 268.641,
+   "host_interval_stdev_ms": 77.71,
+   "gap_max_ms": 984.0,
+   "offgrid_radio_us": 16688.039,
+   "radio_intervals": 2063,
+   "radio_slots": 8264,
+   "radio_period_us": 260433.053,
+   "radio_period_minus_nominal_us": 14156.1975,
+   "radio_single_interval_mean_us": 171875.0,
+   "radio_single_interval_stdev_us": null,
+   "radio_resid_stdev_us": 16246.917,
+   "rssi_mean": null,
+   "rssi_min": null,
+   "rssi_max": null,
+   "bpm": 120.0
+  },
+  "ti_diag": {
+   "api.slots_missed": 112,
+   "backend_b.crc_fail": 9,
+   "rx_integrity.crc_repaired": 2,
+   "rx_integrity.crc_unrepairable": 6
+  },
+  "overlap": {
+   "slots": 2431,
+   "missed": {
+    "l15": 6,
+    "ti": 112,
+    "garmin": 202
+   },
+   "pairs": {
+    "garmin+l15": {
+     "both": 3,
+     "independent_expectation": 0.5
+    },
+    "garmin+ti": {
+     "both": 105,
+     "independent_expectation": 9.31
+    },
+    "l15+ti": {
+     "both": 3,
+     "independent_expectation": 0.28
+    }
+   },
+   "all": 3
+  }
+ }
+}
