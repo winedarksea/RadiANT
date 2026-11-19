@@ -954,7 +954,7 @@ config RADIANT_NRF_LP_STATS
 	  with RADIANT_POWER_DIAG, whose proxy is how a board with no
 	  current meter shows what the option saved.
 
-	  They live in the global radiant_nrf_lp_stats (88 bytes, layout in
+	  They live in the global radiant_nrf_lp_stats (92 bytes, layout in
 	  src/radiant_radio_nrf_lp.c), not in radiant_power_diag, whose layout
 	  is fixed: read it over SWD by symbol (scripts/jlink_peek.ps1
 	  -Symbol radiant_nrf_lp_stats).

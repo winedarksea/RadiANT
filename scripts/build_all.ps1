@@ -328,6 +328,11 @@ $sampleTargets = @(
     # LFCLK synthesised from the HFXO): lowpower.conf's imply must drop the
     # HFXO release there, cleanly, and leave RTC1's user channels at 0.
     @{ dir='hrtx_promicro_lp_synth'; board='promicro_nrf52840/nrf52840/uf2'; artifact='radiant_hrtx_promicro_lp_synth.uf2'; pkg='uf2'; radiant='nrf'; conf='lowpower.conf;../../../apps/dongle/synth.conf'; lowpower=$true; one_way=$false; lp=$false; assert_config=@('CONFIG_CLOCK_CONTROL_NRF_K32SRC_SYNTH=y', 'CONFIG_NRF_RTC_TIMER_USER_CHAN_COUNT=0') }
+    # Its bench variant (power plan pass B5's gate): the same HFXO release plus
+    # the power-diag log line and radiant_nrf_lp_stats, on the USB CDC console
+    # (console_cdc_promicro.conf/.overlay come last). USB holds the HFXO while
+    # it is up, so only the stack's own request duty means anything here.
+    @{ dir='hrtx_promicro_lp_pd'; board='promicro_nrf52840/nrf52840/uf2'; artifact='radiant_hrtx_promicro_lp_pd.uf2'; pkg='uf2'; radiant='nrf'; conf='lowpower.conf;power_diag.conf;console_cdc_promicro.conf'; lowpower=$false; one_way=$false; overlay='dcdc_promicro.overlay;console_cdc_promicro.overlay'; dcdc=$true; lp=$true; assert_config=@('CONFIG_RADIANT_POWER_DIAG=y', 'CONFIG_RADIANT_NRF_LP_STATS=y', 'CONFIG_BOARD_SERIAL_BACKEND_CDC_ACM=y', 'CONFIG_LOG=y', 'CONFIG_SERIAL=y', 'CONFIG_UART_CONSOLE=y') }
 )
 # The TI LaunchXL, under the same hal_ti condition as the dongle_ti rows above
 # (skipped with their message when it is absent). Not in the sample's

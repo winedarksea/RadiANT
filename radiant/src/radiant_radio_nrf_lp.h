@@ -710,7 +710,8 @@ static inline uint64_t radiant_lp_wake_lead_us(const struct radiant_lp_tb *tb,
  * the release edge is min_lead ticks after the decision (plus up to a tick,
  * the counter having been read mid-tick), and EDGE 1 at least min_lead after
  * the release edge. 2 * min_lead + 1 ticks, rounded up: 214 us on the RTC
- * (min_lead 3), 217 on the GRTC (min_lead 108). Interrupt latency on top of
+ * at min_lead 3 (275 at the 4 the backend writes with), 217 on the GRTC
+ * (min_lead 108). Interrupt latency on top of
  * that is the keep-on margin's to cover.
  */
 static inline uint64_t radiant_lp_lf_overhead_us(const struct radiant_lp_tb *tb,

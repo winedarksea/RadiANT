@@ -1,0 +1,15 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * The Pro Micro's USB CDC ACM console, which the board overlay here removes,
+ * back for a bench variant: see console_cdc_promicro.conf. USB keeps the
+ * HFXO on while it is up.
+ */
+/ {
+	chosen {
+		zephyr,console = &board_cdc_acm_uart;
+	};
+};
+
+&board_cdc_acm_uart {
+	status = "okay";
+};
