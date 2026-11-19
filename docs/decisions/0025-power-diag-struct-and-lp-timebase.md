@@ -320,4 +320,5 @@ in 22c75e3 / 28d7754. Since that fix only the RX_FAIL residual above remains.
   (f39c704) and need a rerun.
 - G4 found that hrm_ble BLE rows set `MPSL_TIMESLOT_SESSION_COUNT` 1 while D2
   takes 2 (`flash_sync_mpsl` −12, identity falls back to devnum 4242).
-  This is unrelated to power but was found here.
+  This is unrelated to power but was found here. **Fixed 7f2974f**
+  (BLE rows default the count to 2 with D2).
