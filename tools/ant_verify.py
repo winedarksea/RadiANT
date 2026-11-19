@@ -186,13 +186,11 @@ class CompatVerifier:
         self.announce_verified = 0
         self.announce_unverified = 0
 
-        # The last Tier I counter that ARRIVED (any page past the floor), for
-        # the loss count only.
-        self.last_counter: int | None = None
         # The last VERIFIED Tier I counter: the replay floor, as rx_t1_last
-        # in radiant_sec_compat.c, and the counter an announcement is checked
-        # at (the firmware's anchor moves only on a VERIFIED page). A rejected
-        # page never moves it (review 2026-11-17 item 6).
+        # in radiant_sec_compat.c, the counter an announcement is checked at
+        # (the firmware's anchor moves only on a VERIFIED page), and the base
+        # of the loss count. A rejected page never moves it (review
+        # 2026-11-17 item 6).
         self.t1_floor: int | None = None
         self.last_window_index: int | None = None
         # The last VERIFIED window index: Tier II's replay floor, as
@@ -286,18 +284,19 @@ class CompatVerifier:
             self.tier1["replay"] += 1
             self.tier1[ATTEST_UNVERIFIED] += 1
             return ATTEST_UNVERIFIED
-        # Arrival diagnostics: follow every page past the floor, verified or
-        # not, and count only forward gaps, so a forged high counter can't
-        # make the genuine pages behind it read as a 16-bit wrap of losses.
-        if self.last_counter is not None:
-            missing = counter - self.last_counter - 1
-            if missing > 0:
-                self.tier1[ATTEST_LOST] += missing
-        self.last_counter = counter
 
         expected = rc.compat_tier1_tag(self.k_auth, self.epoch, self.devnum,
                                        counter)
         if expected == got["tag"]:
+            # Loss is counted between VERIFIED pages only, so a page without
+            # a valid tag cannot add to it, move it back, or make a gap count
+            # twice. Counters skipped between two verified pages are lost,
+            # whether they never arrived or arrived without a valid tag
+            # (those are also in `unverified`).
+            if self.t1_floor is not None:
+                missing = counter - self.t1_floor - 1
+                if missing > 0:
+                    self.tier1[ATTEST_LOST] += missing
             self.t1_floor = counter
             self.tier1[ATTEST_VERIFIED] += 1
             return ATTEST_VERIFIED

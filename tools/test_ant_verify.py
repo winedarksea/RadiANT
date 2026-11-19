@@ -1026,13 +1026,27 @@ class TestCompatTierIAuthenticatedFloor(unittest.TestCase):
         self.assertEqual(tier1["replays"], 1)
         self.assertEqual(tier1["verified"], 1)
 
-    def test_lost_follows_arrivals_without_wrapping(self):
-        # Genuine 5, forged 9, genuine 6: the forged page counts its gap as
-        # an arrival diagnostic (3), and the genuine 6 behind it adds no
-        # 16-bit wrap's worth of "lost" pages.
-        for page in (self.genuine(5), self.forged(9), self.genuine(6)):
+    def lost_after(self, pages: list) -> int:
+        for page in pages:
             self.v.feed(page)
-        self.assertEqual(self.v.summary()["tier_i"]["lost"], 3)
+        return self.v.summary()["tier_i"]["lost"]
+
+    def test_a_forged_page_counts_no_loss(self):
+        # Genuine 5, forged 9, genuine 6..10: nothing was lost.
+        pages = [self.genuine(5), self.forged(9)]
+        pages += [self.genuine(c) for c in range(6, 11)]
+        self.assertEqual(self.lost_after(pages), 0)
+
+    def test_a_forged_far_counter_counts_no_loss(self):
+        pages = [self.genuine(5), self.forged(60000), self.genuine(6)]
+        self.assertEqual(self.lost_after(pages), 0)
+
+    def test_a_gap_behind_a_forged_page_counts_once(self):
+        # Genuine 5, forged 9, genuine 6, genuine 10: 7, 8 and 9 are lost
+        # (9 arrived, but not with a valid tag), and only once.
+        pages = [self.genuine(5), self.forged(9), self.genuine(6),
+                 self.genuine(10)]
+        self.assertEqual(self.lost_after(pages), 3)
 
     def test_an_announcement_binds_to_the_last_authenticated_counter(self):
         # The firmware tags and checks an announcement at the counter its
