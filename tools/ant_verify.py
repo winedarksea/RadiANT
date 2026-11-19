@@ -186,7 +186,12 @@ class CompatVerifier:
         self.announce_verified = 0
         self.announce_unverified = 0
 
-        self.last_counter: int | None = None
+        # The last VERIFIED Tier I counter: the replay floor, as rx_t1_last
+        # in radiant_sec_compat.c, the counter an announcement is checked at
+        # (the firmware's anchor moves only on a VERIFIED page), and the base
+        # of the loss count. A rejected page never moves it (review
+        # 2026-11-17 item 6).
+        self.t1_floor: int | None = None
         self.last_window_index: int | None = None
         # The last VERIFIED window index: Tier II's replay floor, as
         # rx_t2_last in radiant_sec_compat.c. Separate from last_window_index,
@@ -255,11 +260,11 @@ class CompatVerifier:
 
     def _feed_announce_b(self, tag: bytes) -> str:
         """A SWITCH/RETURN frame is acted on only after its tag verifies."""
-        if self.announce_frame_a is None or self.last_counter is None:
+        if self.announce_frame_a is None or self.t1_floor is None:
             self.announce_unverified += 1
             return ATTEST_UNVERIFIED
         expected = rc.compat_announce_tag(self.k_auth, self.epoch, self.devnum,
-                                          self.last_counter,
+                                          self.t1_floor,
                                           self.announce_frame_a)
         self.announce_frame_a = None
         if expected == tag:
@@ -272,21 +277,27 @@ class CompatVerifier:
         got = ap.decode_compat_attest_tier1(payload)
         counter = got["att_counter"]
 
-        if self.last_counter is not None:
-            if counter <= self.last_counter:
-                # Replay. Closed by the counter rather than by payload coverage,
-                # which is what lets the tag cover nothing at all.
-                self.tier1["replay"] += 1
-                self.tier1[ATTEST_UNVERIFIED] += 1
-                return ATTEST_UNVERIFIED
-            missing = ap.delta_u16(counter, self.last_counter) - 1
-            if missing:
-                self.tier1[ATTEST_LOST] += missing
-        self.last_counter = counter
+        if self.t1_floor is not None and counter <= self.t1_floor:
+            # Replay. Closed by the counter rather than by payload coverage,
+            # which is what lets the tag cover nothing at all. Checked before
+            # the tag against the last VERIFIED counter, as the firmware does.
+            self.tier1["replay"] += 1
+            self.tier1[ATTEST_UNVERIFIED] += 1
+            return ATTEST_UNVERIFIED
 
         expected = rc.compat_tier1_tag(self.k_auth, self.epoch, self.devnum,
                                        counter)
         if expected == got["tag"]:
+            # Loss is counted between VERIFIED pages only, so a page without
+            # a valid tag cannot add to it, move it back, or make a gap count
+            # twice. Counters skipped between two verified pages are lost,
+            # whether they never arrived or arrived without a valid tag
+            # (those are also in `unverified`).
+            if self.t1_floor is not None:
+                missing = counter - self.t1_floor - 1
+                if missing > 0:
+                    self.tier1[ATTEST_LOST] += missing
+            self.t1_floor = counter
             self.tier1[ATTEST_VERIFIED] += 1
             return ATTEST_VERIFIED
         self.tier1[ATTEST_UNVERIFIED] += 1

@@ -974,5 +974,112 @@ class TestCompatTierIIReplayFloor(unittest.TestCase):
         self.assertEqual(v.summary()["tier_ii"]["replays"], 1)
 
 
+class TestCompatTierIAuthenticatedFloor(unittest.TestCase):
+    """Tier I's replay floor moves only on a VERIFIED page, as rx_t1_last in
+    radiant_sec_compat.c rx_tier1() (review 2026-11-17 item 6). Arrival
+    counts (lost, replays) are diagnostics and never move it."""
+
+    ROOT = bytes(range(16))
+    EPOCH = 7
+    DEVNUM = 0x3A17
+
+    def setUp(self):
+        self.v = ant_verify.CompatVerifier(self.ROOT, self.EPOCH, self.DEVNUM)
+
+    def genuine(self, counter: int) -> bytes:
+        tag = ant_verify.rc.compat_tier1_tag(self.v.k_auth, self.EPOCH,
+                                             self.DEVNUM, counter)
+        return ant_verify.ap.encode_compat_attest_tier1(counter, tag)
+
+    def forged(self, counter: int) -> bytes:
+        good = self.genuine(counter)
+        return good[:-1] + bytes([good[-1] ^ 0x01])
+
+    def test_a_bad_tag_leaves_the_floor_and_the_next_page_verifies(self):
+        self.assertEqual(self.v.feed(self.genuine(5)),
+                         ant_verify.ATTEST_VERIFIED)
+        self.assertEqual(self.v.feed(self.forged(40)),
+                         ant_verify.ATTEST_UNVERIFIED)
+        self.assertEqual(self.v.feed(self.genuine(6)),
+                         ant_verify.ATTEST_VERIFIED)
+        tier1 = self.v.summary()["tier_i"]
+        self.assertEqual(tier1["verified"], 2)
+        self.assertEqual(tier1["unverified"], 1)
+        self.assertEqual(tier1["replays"], 0)
+
+    def test_a_bad_tag_on_first_contact_sets_no_floor(self):
+        self.assertEqual(self.v.feed(self.forged(0xFFF0)),
+                         ant_verify.ATTEST_UNVERIFIED)
+        self.assertEqual(self.v.feed(self.genuine(6)),
+                         ant_verify.ATTEST_VERIFIED)
+        self.assertEqual(self.v.summary()["tier_i"]["replays"], 0)
+
+    def test_a_replay_is_still_refused_after_a_bad_tag(self):
+        recorded = self.genuine(5)
+        self.assertEqual(self.v.feed(recorded), ant_verify.ATTEST_VERIFIED)
+        # Above the floor, so it reaches the tag check (one below the floor
+        # is itself refused as a replay before the tag, as the firmware does).
+        self.assertEqual(self.v.feed(self.forged(9)),
+                         ant_verify.ATTEST_UNVERIFIED)
+        self.assertEqual(self.v.feed(recorded), ant_verify.ATTEST_UNVERIFIED)
+        tier1 = self.v.summary()["tier_i"]
+        self.assertEqual(tier1["replays"], 1)
+        self.assertEqual(tier1["verified"], 1)
+
+    def lost_after(self, pages: list) -> int:
+        for page in pages:
+            self.v.feed(page)
+        return self.v.summary()["tier_i"]["lost"]
+
+    def test_a_forged_page_counts_no_loss(self):
+        # Genuine 5, forged 9, genuine 6..10: nothing was lost.
+        pages = [self.genuine(5), self.forged(9)]
+        pages += [self.genuine(c) for c in range(6, 11)]
+        self.assertEqual(self.lost_after(pages), 0)
+
+    def test_a_forged_far_counter_counts_no_loss(self):
+        pages = [self.genuine(5), self.forged(60000), self.genuine(6)]
+        self.assertEqual(self.lost_after(pages), 0)
+
+    def test_a_gap_behind_a_forged_page_counts_once(self):
+        # Genuine 5, forged 9, genuine 6, genuine 10: 7, 8 and 9 are lost
+        # (9 arrived, but not with a valid tag), and only once.
+        pages = [self.genuine(5), self.forged(9), self.genuine(6),
+                 self.genuine(10)]
+        self.assertEqual(self.lost_after(pages), 3)
+
+    def test_an_announcement_binds_to_the_last_authenticated_counter(self):
+        # The firmware tags and checks an announcement at the counter its
+        # anchor gives, and only a VERIFIED Tier I page moves the anchor; a
+        # forged page between must not move the host's counter either.
+        self.assertEqual(self.v.feed(self.genuine(5)),
+                         ant_verify.ATTEST_VERIFIED)
+        self.assertEqual(self.v.feed(self.forged(9)),
+                         ant_verify.ATTEST_UNVERIFIED)
+        ap, rc = ant_verify.ap, ant_verify.rc
+        frame_a = ap.encode_compat_announce_a(ap.CompatAnnounce(
+            target_device_type=ap.RADIANT_TLM_DEVICE_TYPE,
+            target_device_number=0x9C41, target_period=8182,
+            reason=ap.COMPAT_REASON_COMMAND, countdown=8))
+        tag = rc.compat_announce_tag(self.v.k_auth, self.EPOCH, self.DEVNUM,
+                                     5, frame_a)
+        self.assertIsNone(self.v.feed(frame_a))
+        self.assertEqual(self.v.feed(ap.encode_compat_announce_b(tag)),
+                         ant_verify.ATTEST_VERIFIED)
+
+    def test_no_announcement_verifies_before_a_tier_i_page_does(self):
+        self.v.feed(self.forged(5))
+        ap, rc = ant_verify.ap, ant_verify.rc
+        frame_a = ap.encode_compat_announce_a(ap.CompatAnnounce(
+            target_device_type=ap.RADIANT_TLM_DEVICE_TYPE,
+            target_device_number=0x9C41, target_period=8182,
+            reason=ap.COMPAT_REASON_COMMAND, countdown=8))
+        tag = rc.compat_announce_tag(self.v.k_auth, self.EPOCH, self.DEVNUM,
+                                     5, frame_a)
+        self.v.feed(frame_a)
+        self.assertEqual(self.v.feed(ap.encode_compat_announce_b(tag)),
+                         ant_verify.ATTEST_UNVERIFIED)
+
+
 if __name__ == "__main__":
     unittest.main()
