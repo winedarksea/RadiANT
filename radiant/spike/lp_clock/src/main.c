@@ -125,6 +125,10 @@ static uint32_t rnd(void)
 
 #define NMAX 10000
 static int16_t A[NMAX], B[NMAX], C[NMAX];
+/* S3 lp only: HFXO request -> callback per cycle (LF units). A real start is
+ * hundreds of us; a request that finds the HFXO still running returns at once. */
+static int16_t D[NMAX];
+static int s3_was_on; /* S3 lp cycles whose HFXO was still running at the request */
 static int32_t scratch[NMAX];
 
 static int cmp_i32(const void *a, const void *b)
@@ -992,10 +996,18 @@ static void s3_cycle(int i, bool lp, bool cpu_sleep, int *late)
 	uint64_t T = lf_now() + (lp ? LEAD_SLEEP : LEAD_HELD);
 
 	lf_set(ch_cmp, T);
+	D[i] = BAD;
 	if (lp) {
 		constlat(true);
+		if (hfxo_running()) {
+			s3_was_on++;
+		}
+		uint32_t t0 = stamp();
+
 		hf_request();
-		hf_wait(K_MSEC(20));
+		if (hf_wait(K_MSEC(20)) == 0) {
+			D[i] = clamp16((int32_t)(hf_cb_t - t0));
+		}
 		if ((int32_t)(hf_cb_t - (uint32_t)T) >= 0) {
 			(*late)++;
 		}
@@ -1076,10 +1088,18 @@ static void s3_cycle(int i, bool lp, bool cpu_sleep, int *late)
 
 	lf_set(ch_a, Ta);
 	lf_set(ch_b, Ta + NB);
+	D[i] = BAD;
 	if (lp) {
 		constlat(true);
+		if (hfxo_running()) {
+			s3_was_on++;
+		}
+		uint32_t t0 = stamp();
+
 		hf_request();
-		hf_wait(K_MSEC(20));
+		if (hf_wait(K_MSEC(20)) == 0) {
+			D[i] = clamp16((int32_t)(hf_cb_t - t0));
+		}
 		if ((int32_t)(hf_cb_t - (uint32_t)Ta) >= 0) {
 			(*late)++;
 		}
@@ -1118,6 +1138,7 @@ static void s3(const char *name, bool lp, int n)
 
 	out("S3 %s begin n=%d lp=%d units=%s\n", name, n, lp,
 	    LF_GRTC ? "us" : "1/8us");
+	s3_was_on = 0;
 	tmr_init();
 	if (!lp) {
 		constlat(true);
@@ -1151,6 +1172,15 @@ static void s3(const char *name, bool lp, int n)
 	report(tag, B, n, 1, 2);
 	snprintk(tag, sizeof(tag), "S3 %s cc5_at_wake", name);
 	report(tag, C, n, 0, 1);
+	if (lp) {
+		/* Evidence the HFXO really stopped between cycles: its state just
+		 * before each request, and a request -> callback that takes a real
+		 * start-up (S4) instead of returning at once. */
+		out("S3 %s hfxo_running_at_request=%d of %d\n", name, s3_was_on, n);
+		snprintk(tag, sizeof(tag), "S3 %s request->callback_%s", name,
+			 LF_GRTC ? "us" : "rtc_ticks");
+		report(tag, D, n, 0, 1);
+	}
 	tmr_init();
 }
 
@@ -1215,6 +1245,10 @@ static void s5(const char *name, bool busy, int nsec)
 
 #if CDC_CONSOLE
 static const struct device *const con = DEVICE_DT_GET(DT_CHOSEN(zephyr_console));
+
+#ifndef SPIKE_AUTO_BOOTLOADER_S
+#define SPIKE_AUTO_BOOTLOADER_S 20
+#endif
 
 static void reboot_to_bootloader(void)
 {
@@ -1343,15 +1377,33 @@ int main(void)
 #endif
 done:
 	out("LPSPIKE DONE\n");
-	while (1) {
 #if CDC_CONSOLE
+	if (!olive) {
+		/* An abort before usb_up(), or a build that never calls it:
+		 * bring the console up so the buffered text (and the reason)
+		 * is printed before the board leaves for the bootloader. */
+		usb_up();
+	}
+	/* Return to the UF2 bootloader by itself, so the next flash needs no
+	 * double-tap (the 1200-baud touch also works, but needs a host to do
+	 * it). The console blocks instead of dropping (RTS/CTS), so the host
+	 * holds every line by now; 'B' is sooner. */
+	out("LPSPIKE rebooting to UF2 bootloader in %d s (send B for now)\n",
+	    SPIKE_AUTO_BOOTLOADER_S);
+	for (int t = 0; t < SPIKE_AUTO_BOOTLOADER_S * 20; t++) {
 		uint8_t ch;
 
 		if (uart_poll_in(con, &ch) == 0 && (ch == 'B' || ch == 'b')) {
-			out("rebooting to UF2 bootloader\n");
-			k_msleep(100);
-			reboot_to_bootloader();
+			break;
 		}
+		k_msleep(50);
+	}
+	out("rebooting to UF2 bootloader\n");
+	k_msleep(200);
+	reboot_to_bootloader();
+#endif
+	while (1) {
+#if CDC_CONSOLE
 		k_msleep(50);
 #else
 		k_sleep(K_FOREVER);

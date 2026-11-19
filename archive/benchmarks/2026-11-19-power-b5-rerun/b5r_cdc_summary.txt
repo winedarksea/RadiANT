@@ -1,0 +1,20 @@
+# Pro Micro CDC console, hrtx_promicro_lp_pd (uf2 875a1aee), 2026-11-19 09:47-10:12 (b5_cdc_capture.py COM12)
+1795103270.802 *** Booting nRF Connect SDK v3.4.0-99553055607b ***
+1795103270.802 [00:00:00.379,119] <inf> radiant_radio_nrf: low power on: sleep beyond 4327 us (wake lead 1052, LF 275, keep-on 3000), RTC1 ch 2/1
+1795103270.802 Transmitting as device 12345
+1795103270.803 [00:00:01.182,464] <err> udc: Failed to allocate net_buf 4095, ep 0x80
+1795103270.803 [00:00:01.260,284] <err> udc: Failed to allocate net_buf 4095, ep 0x80
+1795103519.038 [00:04:11.471,343] <err> udc: Failed to allocate net_buf 4095, ep 0x80
+## power-diag lines (10 s each): 144
+hfxo_pm=16: 143 lines
+hfxo_pm=39: 1 lines
+tx_ops=40: 57 lines
+tx_ops=41: 87 lines
+cpu_pm mean 9.63, idle_x10 mean 338.5
+## first 3 and last 3 power lines
+power dt_ms=10001 hfxo_pm=39 tx_us=6920 tx_ops=40 rx_us=25440 rx_ops=40 cpu_pm=11 idle_x10=366 constlat=0/-1
+power dt_ms=10001 hfxo_pm=16 tx_us=7065 tx_ops=41 rx_us=26076 rx_ops=41 cpu_pm=10 idle_x10=339 constlat=0/-1
+power dt_ms=10001 hfxo_pm=16 tx_us=6920 tx_ops=40 rx_us=25440 rx_ops=40 cpu_pm=9 idle_x10=336 constlat=0/-1
+power dt_ms=10001 hfxo_pm=16 tx_us=7034 tx_ops=41 rx_us=26075 rx_ops=41 cpu_pm=10 idle_x10=339 constlat=0/-1
+power dt_ms=10001 hfxo_pm=16 tx_us=7044 tx_ops=41 rx_us=26075 rx_ops=41 cpu_pm=10 idle_x10=339 constlat=0/-1
+power dt_ms=10001 hfxo_pm=16 tx_us=6880 tx_ops=40 rx_us=25440 rx_ops=40 cpu_pm=9 idle_x10=337 constlat=0/-1
