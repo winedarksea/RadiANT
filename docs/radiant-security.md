@@ -619,7 +619,10 @@ before the `0xF3` stays silent on its secured pages until it arrives. Later
   device number restarts at the provisioning one with every root actually
   installed (a same-root re-send keeps a moved one), and an install that fails
   once the old root is destroyed leaves the channel unkeyed rather than half on
-  each root.
+  each root. A real rekey also drops the receive verdict and the Tier I / Tier
+  II freshness state (review 2026-11-17, item 5), so a pinned stream reads
+  UNVERIFIED until new-identity evidence verifies; a same-root re-send keeps
+  them.
 
 **A policy change takes effect before `0xF1` answers** (review 2026-11-17,
 item 2). A master builds its next slot up to a period ahead, and that slot's

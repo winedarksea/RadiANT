@@ -246,13 +246,34 @@ static bool ctx_armed(const struct compat_ctx *c)
 /* Everything a receiver has learned under the held key and epoch: the open
  * Tier II window, both tiers' floors and freshness, and the last verdict - the
  * RX block of compat_ctx, last_verdict included, and nothing past it. Zero is
- * every field's "nothing learned", CLEAR included. */
+ * every field's "nothing learned", CLEAR included.
+ *
+ * The range is pinned at both ends, so a field added later lands visibly in or
+ * out of it: rx_win directly follows the last TX field (a byte array has no
+ * padding before it), last_verdict ends within stats' alignment padding, and
+ * stats is the last member, so nothing can sit after the cleared block
+ * unnoticed. */
+#define COMPAT_RX_FROM offsetof(struct compat_ctx, rx_win)
+#define COMPAT_RX_TO   offsetof(struct compat_ctx, stats)
+
 BUILD_ASSERT(RADIANT_SEC_VERDICT_CLEAR == 0);
+BUILD_ASSERT(COMPAT_RX_FROM == offsetof(struct compat_ctx, tx_t1_any) +
+			       sizeof(bool));
+BUILD_ASSERT(offsetof(struct compat_ctx, last_verdict) +
+	     sizeof(enum radiant_sec_verdict) <= COMPAT_RX_TO &&
+	     COMPAT_RX_TO - offsetof(struct compat_ctx, last_verdict) -
+	     sizeof(enum radiant_sec_verdict) <
+	     __alignof__(struct radiant_sec_compat_stats));
+BUILD_ASSERT(COMPAT_RX_TO + sizeof(struct radiant_sec_compat_stats) <=
+	     sizeof(struct compat_ctx) &&
+	     sizeof(struct compat_ctx) - COMPAT_RX_TO -
+	     sizeof(struct radiant_sec_compat_stats) <
+	     __alignof__(struct compat_ctx));
 
 static void rx_forget(struct compat_ctx *c)
 {
-	memset(c->rx_win, 0, offsetof(struct compat_ctx, stats) -
-			     offsetof(struct compat_ctx, rx_win));
+	/* Through the struct's bytes, not past the end of rx_win[]. */
+	memset((uint8_t *)c + COMPAT_RX_FROM, 0, COMPAT_RX_TO - COMPAT_RX_FROM);
 }
 
 static void stat_bump(uint32_t *counter)

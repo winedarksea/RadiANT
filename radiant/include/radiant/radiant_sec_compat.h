@@ -344,6 +344,10 @@ int radiant_sec_compat_tier2_tag(const struct radiant_sec_key *k_auth,
  * a re-send cannot be followed by an older epoch. A different root closes the
  * epoch gate (any epoch is accepted next: new keys, no nonce used under them),
  * clears the ceiling and restarts the on-air device number at `base_devnum`.
+ * It also drops what the old identity proved - the receive verdict
+ * (radiant_sec_compat_last_verdict() reads CLEAR) and every Tier I / Tier II
+ * floor, freshness instant and open window - so a pinned stream is UNVERIFIED
+ * until a page or window under the new identity verifies.
  * A root the backend refuses changes nothing (radiant_sec_key_same() imports
  * it first). Past that point the old root is destroyed before the new one is
  * imported, so a later failure - the import itself on a backend that refuses
