@@ -84,6 +84,11 @@ extern "C" {
  * A factory reset is this call with a new K_dev, re-rolling identity (Tier 0
  * device number derives from K_dev) and counters together.
  *
+ * Safe to retry: called with the K_dev already installed, it keeps the boot
+ * counter, pairing counter and epoch reservation, creating at zero only those
+ * an interrupted first provisioning never wrote. A K_dev read that fails for
+ * any reason but "never written" returns NODE_IDENT_EIO and writes nothing.
+ *
  * Refuses an all-zero key (what erased flash reads as, and would otherwise
  * look provisioned).
  */
