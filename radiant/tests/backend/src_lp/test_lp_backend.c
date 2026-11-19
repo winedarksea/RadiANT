@@ -921,3 +921,153 @@ ZTEST(radiant_backend_lp, test_hfxo_fallback_refused_counted_once)
 	lpt_stats(&st);
 	zassert_equal(st.hfxo_errors, 2, "nothing degrades twice");
 }
+
+/*
+ * THE IDLE REGRESSION GUARD (power plan wrap-up). What the option exists for,
+ * stated as one property: while nothing is armed, or nothing is due within
+ * IDLE_N_US, the backend neither holds the HFXO nor requests it. Gate GA's
+ * 100 % HFXO duty is what a regression here would bring back, silently: every
+ * other case would still pass, since operations would only be on time with
+ * the crystal running.
+ *
+ * IDLE_N_US is 5 ms, chosen from the backend's own constants so that it lies
+ * above both thresholds an operation can cross:
+ *   - the sleep threshold, wake lead + LF overhead + keep-on
+ *     (CONFIG_RADIANT_NRF_LP_KEEP_ON_US 3000): 1132 + 217 + 3000 = 4349 us on
+ *     the GRTC, 892 + 275 + 3000 = 4167 us on RTC1. An operation nearer than
+ *     that keeps the crystal on (test_near_arm_stays_awake);
+ *   - the wake lead (LP_ARM_LEAD_US 230 + HFXO start-up + 100 + two ticks),
+ *     1132 / 892 us before the operation, where EDGE 1 requests the HFXO.
+ * So an operation more than IDLE_N_US away has the crystal off until less
+ * than IDLE_N_US remains, and one inside IDLE_N_US requests it before its
+ * start. The linger (CONFIG_RADIANT_NRF_LP_LINGER_MS, 1000 in
+ * backend_lp_under_test.c) holds the crystal on after enable by design; the
+ * guard starts where it ends.
+ */
+#define IDLE_N_US   5000u
+#define LINGER_US   1000000u
+#define IDLE_SPAN   5000000u   /* 5 s of idle: twenty 4 Hz periods */
+#define IDLE_STEP   397u       /* off any LF tick or period grid, and well inside
+                                * the shorter wake lead (892 us on RTC1), so a
+                                * request is seen before its operation starts */
+
+/*
+ * Run `us` of world time in steps. True if the HFXO was off at every step
+ * and no request was made over the span (a request and release between two
+ * steps still moves the request count). Stops at the first step that finds
+ * it on.
+ */
+static bool hfxo_quiet_for(uint64_t us)
+{
+	uint32_t req0 = lpt_hfxo_requests();
+	uint64_t on0 = lpt_hfxo_on_us();
+	uint64_t end = lpt_world() + us;
+
+	while (lpt_world() < end) {
+		uint64_t left = end - lpt_world();
+
+		lpt_run(left < IDLE_STEP ? left : IDLE_STEP);
+		if (lpt_hfxo_on() || lpt_timer_running() || lpt_constlat_refs() != 0) {
+			return false;
+		}
+	}
+	return lpt_hfxo_requests() == req0 && lpt_hfxo_on_us() == on0;
+}
+
+/* Asleep with nothing armed: a far arm, aborted, then its release edge. */
+static void sleep_with_nothing_armed(void)
+{
+	zassert_equal(lpt_tx_at(lpt_radio_now() + FAR_US), RADIANT_RADIO_OK_RC);
+	zassert_equal(lpt_abort(), RADIANT_RADIO_OK_RC);
+	lpt_run(500u);
+	zassert_equal(lpt_state(), LPT_ASLEEP);
+	zassert_false(lpt_hfxo_on());
+}
+
+/*
+ * Risk: an idle backend keeps, or keeps re-taking, the HFXO - the 100 % duty
+ * Gate GA measured without the option. Two idles: nothing armed after the
+ * enable linger has run out, and an operation armed but not due within
+ * IDLE_N_US. Neither may hold or request the crystal, and the stats must
+ * agree (no sleep or wake counted while idle); the far operation then costs
+ * exactly one request and goes out on time.
+ */
+ZTEST(radiant_backend_lp, test_idle_without_near_op_requests_no_hfxo)
+{
+	struct lpt_stats st0, st;
+	uint64_t t_sync;
+	uint64_t ts;
+	uint64_t start;
+	uint32_t req;
+
+	/* Idle 1: nothing armed, from the end of the enable linger. */
+	zassert_equal(lpt_enable(), RADIANT_RADIO_OK_RC);
+	lpt_run(LINGER_US + 5000u);
+	zassert_equal(lpt_state(), LPT_ASLEEP, "the linger's end sleeps");
+	lpt_stats(&st0);
+	zassert_true(hfxo_quiet_for(IDLE_SPAN),
+		     "HFXO held or requested with nothing armed (req %u, on %llu us)",
+		     lpt_hfxo_requests(), (unsigned long long)lpt_hfxo_on_us());
+	lpt_stats(&st);
+	zassert_equal(st.state, LPT_ASLEEP);
+	zassert_equal(st.sleeps, st0.sleeps, "no release while idle");
+	zassert_equal(st.wakes, st0.wakes, "no wake while idle");
+	zassert_equal(st.asap_wakes, st0.asap_wakes);
+	zassert_equal(st.spurious, st0.spurious);
+	zassert_equal(st.range_errors, 0);
+
+	/* Idle 2: armed while asleep, not due within IDLE_N_US until the end. */
+	t_sync = lpt_radio_now() + 2u * FAR_US;
+	ts = t_start_world(t_sync);
+	zassert_equal(lpt_tx_at(t_sync), RADIANT_RADIO_OK_RC);
+	zassert_true(lpt_staged(), "staged behind a wake");
+	req = lpt_hfxo_requests();
+	zassert_true(hfxo_quiet_for(ts - IDLE_N_US - lpt_world()),
+		     "HFXO taken with the operation %u us or more away", IDLE_N_US);
+	zassert_equal(lpt_state(), LPT_ASLEEP);
+
+	/* And the operation still goes out, on time, on one request. */
+	lpt_run_to(ts - ARM_LEAD + 1u);
+	zassert_true(lpt_tx_programmed(&start));
+	zassert_within(start, ts, 1);
+	zassert_equal(lpt_hfxo_requests(), req + 1u, "one request per wake");
+	lpt_stats(&st);
+	zassert_equal(st.wakes, st0.wakes + 1u);
+	zassert_equal(st.late_wakes, 0);
+}
+
+/*
+ * Positive control for the guard above: hfxo_quiet_for() with the same span
+ * must come back false when an operation IS due inside IDLE_N_US - from
+ * asleep (EDGE 1 requests the crystal ~wake lead before it) and from awake
+ * (an operation that near keeps it on). Without this the guard could pass on
+ * a helper that never sees the crystal.
+ */
+ZTEST(radiant_backend_lp, test_op_due_inside_idle_bound_requests_hfxo)
+{
+	uint64_t t_sync;
+	uint64_t ts;
+	uint64_t start;
+	uint32_t req;
+
+	/* From awake: an operation NEAR_US on keeps the crystal on. */
+	zassert_equal(lpt_tx_at(lpt_radio_now() + NEAR_US), RADIANT_RADIO_OK_RC);
+	zassert_false(lpt_staged());
+	zassert_false(hfxo_quiet_for(IDLE_N_US), "an operation inside the bound let the HFXO go");
+	lpt_tx_end();
+	zassert_equal(lpt_probe()->tx_events, 1);
+
+	/* From asleep: wanted IDLE_N_US - 1 ms on; EDGE 1 requests it. */
+	sleep_with_nothing_armed();
+	req = lpt_hfxo_requests();
+	t_sync = lpt_radio_now() + IDLE_N_US - 1000u;
+	ts = t_start_world(t_sync);
+	zassert_equal(lpt_tx_at(t_sync), RADIANT_RADIO_OK_RC);
+	zassert_true(lpt_staged(), "asleep: staged behind a wake");
+	zassert_false(hfxo_quiet_for(IDLE_N_US), "an operation inside the bound took no HFXO");
+	zassert_equal(lpt_hfxo_requests(), req + 1u);
+	zassert_true(lpt_world() < ts - ARM_LEAD, "requested before the operation");
+	lpt_run_to(ts - ARM_LEAD + 1u);
+	zassert_true(lpt_tx_programmed(&start));
+	zassert_within(start, ts, 1);
+}
