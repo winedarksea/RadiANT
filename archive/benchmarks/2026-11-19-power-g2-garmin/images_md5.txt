@@ -1,0 +1,5 @@
+99c15a0ea9e241fc3e4de706c18463d8 *build/power_images_2026-11-19/g2_A/trainer_zephyr_zephyr.hex
+804e9c276905c97bd84cbde81c4accb2 *build/power_images_2026-11-19/g2_B/trainer_zephyr_zephyr.hex
+e0d9809b84cf3babfd298a0e0d8664f9 *build/power_images_2026-11-19/g2_A/trainer_zephyr_zephyr.elf
+20d60b4671d927dc765b169cae1f4e75 *build/power_images_2026-11-19/g2_B/trainer_zephyr_zephyr.elf
+a3862fbfeb32c53a84b9326350ff2d30 *build/power_images_2026-11-19/crcfix_ti_rx/dongle_ti_zephyr_zephyr.hex (TI, not reflashed)

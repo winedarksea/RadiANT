@@ -14,6 +14,8 @@ against the same-window A arms instead:
 
 Whether the band criterion is met this way is the owner's call.
 
+**Garmin rerun (same day): [2026-11-19-power-g2-garmin](../2026-11-19-power-g2-garmin/README.md).** The band is not a master property (the Garmin wanders over about 100 µs in A and B alike; the master-owned share is unchanged to within 0.3 µs). The +7.6 µs opener shift is a radiant-slave artefact (nominal-period burst-START prediction), not a master-side shift. ACK rate and bursts are not worse with the option on.
+
 Code: the worktree was at local master `4d23321`, plus the bench-only instrumentation in `g2_instrumentation.patch`
 (see below). No firmware fix was needed. The only new file committed outside this directory is
 `apps/trainer/lowpower.conf`, the conf fragment that turns the option on for the trainer.
