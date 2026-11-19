@@ -1998,3 +1998,125 @@ ZTEST(sec_compat_stream, test_the_same_root_again_keeps_a_moved_on_air_device_nu
 	zassert_equal(RADIANT_SEC_OK, deliver(air, t),
 		      "an idempotent re-send reset the moved on-air number");
 }
+
+/* Review 2026-11-17 item 5: a new root (or base device number) disarms the
+ * epoch, and it must take the old identity's verdict and freshness with it.
+ * Before, a pinned receiver rekeyed between pages still read VERIFIED off the
+ * previous root's last page until the next set_epoch, and last_verdict kept
+ * the old root's answer. The same root again is a no-op and keeps both. */
+ZTEST(sec_compat_stream, test_a_new_root_drops_the_tier1_verdict_until_new_evidence)
+{
+	uint8_t  air[RADIANT_SEC_COMPAT_MSG_BYTES];
+	uint64_t t;
+
+	setup_pair(RADIANT_SEC_COMPAT_SW_TIER_I,
+		   RADIANT_SEC_COMPAT_SW_TIER_I | RADIANT_SEC_COMPAT_SW_PIN,
+		   909u, 909u);
+	t = tier1_page(T_ORIGIN, 1u, 0u, air);
+	zassert_equal(RADIANT_SEC_OK, deliver(air, t));
+	zassert_equal(RADIANT_SEC_VERDICT_VERIFIED,
+		      radiant_sec_compat_stream_verdict(RX_CH, rx_time(t)));
+
+	/* The same root again keeps the verdict. */
+	zassert_ok(radiant_sec_compat_set_key(RX_CH, compat_root, 128,
+					      TEST_DEVNUM));
+	zassert_equal(RADIANT_SEC_VERDICT_VERIFIED,
+		      radiant_sec_compat_stream_verdict(RX_CH, rx_time(t)));
+	zassert_equal(RADIANT_SEC_VERDICT_VERIFIED,
+		      radiant_sec_compat_last_verdict(RX_CH));
+
+	/* A new root does not: nothing has been proven under it yet. */
+	zassert_ok(radiant_sec_compat_set_key(RX_CH, new_root, 128,
+					      TEST_DEVNUM));
+	zassert_equal(RADIANT_SEC_VERDICT_UNVERIFIED,
+		      radiant_sec_compat_stream_verdict(RX_CH, rx_time(t)),
+		      "the old root's page still verifies the rekeyed stream");
+	zassert_equal(RADIANT_SEC_VERDICT_CLEAR,
+		      radiant_sec_compat_last_verdict(RX_CH));
+
+	/* Rearmed: still nothing, and the old root's next page fails. */
+	zassert_ok(radiant_sec_compat_set_epoch(RX_CH, 909u, T_ORIGIN, 0u,
+						TEST_PERIOD));
+	zassert_equal(RADIANT_SEC_VERDICT_UNVERIFIED,
+		      radiant_sec_compat_stream_verdict(RX_CH, rx_time(t)));
+	t = tier1_page(T_ORIGIN, 2u, 0u, air);
+	zassert_equal(RADIANT_SEC_EBADMAC, deliver(air, t));
+	zassert_equal(RADIANT_SEC_VERDICT_UNVERIFIED,
+		      radiant_sec_compat_stream_verdict(RX_CH, rx_time(t)));
+
+	/* A page under the new root is what verifies it. */
+	zassert_ok(radiant_sec_compat_set_key(TX_CH, new_root, 128,
+					      TEST_DEVNUM));
+	zassert_ok(radiant_sec_compat_set_epoch(TX_CH, 909u, T_ORIGIN, 0u,
+						TEST_PERIOD));
+	t = tier1_page(T_ORIGIN, 3u, 0u, air);
+	zassert_equal(RADIANT_SEC_OK, deliver(air, t));
+	zassert_equal(RADIANT_SEC_VERDICT_VERIFIED,
+		      radiant_sec_compat_stream_verdict(RX_CH, rx_time(t)));
+	zassert_equal(RADIANT_SEC_VERDICT_VERIFIED,
+		      radiant_sec_compat_last_verdict(RX_CH));
+}
+
+/* ...and the Tier II-only half, whose verdict is its own last window. */
+ZTEST(sec_compat_stream, test_a_new_root_drops_the_tier2_verdict_until_new_evidence)
+{
+	uint32_t i;
+
+	setup_pair(RADIANT_SEC_COMPAT_SW_TIER_II,
+		   RADIANT_SEC_COMPAT_SW_TIER_II | RADIANT_SEC_COMPAT_SW_PIN,
+		   61u, 61u);
+	for (i = 0u; i < TEST_N; i++) {          /* window 0, tag at slot 7 */
+		(void)slot_at(i, true);
+	}
+	zassert_equal(RADIANT_SEC_VERDICT_VERIFIED,
+		      radiant_sec_compat_stream_verdict(RX_CH, t_of(TEST_N)));
+
+	/* The same root again keeps the verdict. */
+	zassert_ok(radiant_sec_compat_set_key(RX_CH, compat_root, 128,
+					      TEST_DEVNUM));
+	zassert_equal(RADIANT_SEC_VERDICT_VERIFIED,
+		      radiant_sec_compat_stream_verdict(RX_CH, t_of(TEST_N)));
+	zassert_equal(RADIANT_SEC_VERDICT_VERIFIED,
+		      radiant_sec_compat_last_verdict(RX_CH));
+
+	/* A new base device number is a new identity too. */
+	zassert_ok(radiant_sec_compat_set_key(RX_CH, compat_root, 128,
+					      TEST_DEVNUM + 1u));
+	zassert_equal(RADIANT_SEC_VERDICT_UNVERIFIED,
+		      radiant_sec_compat_stream_verdict(RX_CH, t_of(TEST_N)),
+		      "the old identity's window still verifies the rekeyed "
+		      "stream");
+	zassert_equal(RADIANT_SEC_VERDICT_CLEAR,
+		      radiant_sec_compat_last_verdict(RX_CH));
+
+	/* Back to the sender's devnum under a new root, rearmed: still
+	 * nothing, and the old identity's next window fails. */
+	zassert_ok(radiant_sec_compat_set_key(RX_CH, new_root, 128,
+					      TEST_DEVNUM));
+	zassert_equal(RADIANT_SEC_VERDICT_UNVERIFIED,
+		      radiant_sec_compat_stream_verdict(RX_CH, t_of(TEST_N)));
+	zassert_ok(radiant_sec_compat_set_epoch(RX_CH, 61u, T_ORIGIN, 0u,
+						TEST_PERIOD));
+	zassert_equal(RADIANT_SEC_VERDICT_UNVERIFIED,
+		      radiant_sec_compat_stream_verdict(RX_CH, t_of(TEST_N)));
+	for (i = TEST_N; i < 2u * TEST_N; i++) {
+		(void)slot_at(i, true);
+	}
+	zassert_equal(1u, verdicts(RADIANT_SEC_COMPAT_SUBTYPE_TIER_II,
+				   RADIANT_SEC_VERDICT_UNVERIFIED));
+	zassert_equal(RADIANT_SEC_VERDICT_UNVERIFIED,
+		      radiant_sec_compat_stream_verdict(RX_CH, t_of(2u * TEST_N)));
+
+	/* A window under the new root is what verifies it. */
+	zassert_ok(radiant_sec_compat_set_key(TX_CH, new_root, 128,
+					      TEST_DEVNUM));
+	zassert_ok(radiant_sec_compat_set_epoch(TX_CH, 61u, T_ORIGIN, 0u,
+						TEST_PERIOD));
+	for (i = 2u * TEST_N; i < 3u * TEST_N; i++) {
+		(void)slot_at(i, true);
+	}
+	zassert_equal(RADIANT_SEC_VERDICT_VERIFIED,
+		      radiant_sec_compat_stream_verdict(RX_CH, t_of(3u * TEST_N)));
+	zassert_equal(RADIANT_SEC_VERDICT_VERIFIED,
+		      radiant_sec_compat_last_verdict(RX_CH));
+}
