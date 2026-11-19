@@ -1017,7 +1017,9 @@ class TestCompatTierIAuthenticatedFloor(unittest.TestCase):
     def test_a_replay_is_still_refused_after_a_bad_tag(self):
         recorded = self.genuine(5)
         self.assertEqual(self.v.feed(recorded), ant_verify.ATTEST_VERIFIED)
-        self.assertEqual(self.v.feed(self.forged(3)),
+        # Above the floor, so it reaches the tag check (one below the floor
+        # is itself refused as a replay before the tag, as the firmware does).
+        self.assertEqual(self.v.feed(self.forged(9)),
                          ant_verify.ATTEST_UNVERIFIED)
         self.assertEqual(self.v.feed(recorded), ant_verify.ATTEST_UNVERIFIED)
         tier1 = self.v.summary()["tier_i"]
