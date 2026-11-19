@@ -1,0 +1,6 @@
+9a86b7214d045bd0a62c140b39124651 *build/g1d_B10000/hr_transmitter/zephyr/zephyr.hex
+91504224504fb0189d62982968cb471c *build/g1d_B3000/hr_transmitter/zephyr/zephyr.hex
+9dc5c3770c5d9350396568ff469112bb *build/g1d_Bcl/hr_transmitter/zephyr/zephyr.hex
+94249dd0a5107b354b84b293fc9ba4e8 *build/g1d_Bkeep/hr_transmitter/zephyr/zephyr.hex
+1fbebd37b8ca70ff7c546cbd797b455a *build/g1_A/hr_transmitter/zephyr/zephyr.hex
+26e088bc19ff288ee11b9c340e60a665 *build/g1_B/hr_transmitter/zephyr/zephyr.hex
