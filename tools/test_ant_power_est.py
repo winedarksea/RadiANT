@@ -308,6 +308,17 @@ class Inputs(unittest.TestCase):
         iv = pe.parse_log([ti.format(17), ti.format(18)])
         self.assertEqual(iv.rfon_us, 350_000)          # mean 17.5 per-mille of 20 s
         self.assertTrue(any("floored" in p for p in iv.problems))
+        # The bound is 1 per-mille of the elapsed 20 s (20 000 us), not of the
+        # on-time: 6 % of the 350 000 us measured.
+        msg = next(p for p in iv.problems if "floored" in p)
+        self.assertIn("of the elapsed interval", msg)
+        self.assertIn("< 20000 us in 20 s", msg)
+        self.assertIn("6 % of the 350000 us measured", msg)
+        # Low duty: 1 per-mille measured over 10 s -> the bound equals the value.
+        iv = pe.parse_log([ti.format(1)])
+        self.assertEqual(iv.rfon_us, 10_000)
+        msg = next(p for p in iv.problems if "floored" in p)
+        self.assertIn("100 % of the 10000 us measured", msg)
         # A line without the field (an nRF line spliced in) leaves it unmeasured.
         iv = pe.parse_log([ti.format(17), "power dt_ms=10000 hfxo_pm=-1 tx_us=0 tx_ops=0 "
                            "rx_us=0 rx_ops=0 cpu_pm=1 idle_x10=1 constlat=0/-1"])

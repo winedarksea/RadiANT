@@ -557,9 +557,17 @@ def parse_log(lines: list[str]) -> Interval:
         iv.idle_entries = round(weighted["idle_x10"][0] / 10 / 1000)   # sum(rate/s x dt_s)
     if full("rfon_pm"):
         iv.rfon_us = round(weighted["rfon_pm"][0] / dt_ms / 1000 * dt_us)
-        # The firmware floors rfon_pm per line, so the mean reads up to 1 per-mille low.
-        iv.problems.append("rfon_pm is floored on each log line: the RF core term "
-                           "may read up to 1 per-mille of on-time low")
+        # The firmware floors rfon_pm per line: each line loses under 1 per-mille
+        # of ITS dt, so the sum loses under 1 per-mille of the elapsed interval
+        # (dt_ms us), whatever the duty. Against the on-time that is 1000/rfon_pm
+        # per-mille, so at low duty the relative error is large. Not corrected:
+        # the term it feeds is already a lower bound (RF core idle (LB)).
+        low_us = dt_ms   # 1 per-mille of dt_us
+        rel = (f"{100.0 * low_us / iv.rfon_us:.0f} % of the {iv.rfon_us} us measured"
+               if iv.rfon_us else "unbounded relative to the 0 us measured")
+        iv.problems.append(f"rfon_pm is floored on each log line: the RF core on-time "
+                           f"may read up to 1 per-mille of the elapsed interval low "
+                           f"(< {low_us} us in {iv.dt_s:g} s; {rel})")
     if wake[1] == dt_ms:
         iv.rf_wake_us = wake[0]
     return iv
