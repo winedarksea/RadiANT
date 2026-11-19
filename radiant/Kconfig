@@ -1012,7 +1012,11 @@ config RADIANT_GATE_MPSL_D2
 	  operation is armed later into its booking at the in-grant lead.
 	  Needs CONFIG_MPSL_TIMESLOT_SESSION_COUNT one higher than without it.
 	  If the second session cannot be opened the gate runs single-session
-	  and reports caps.booking false, which is exactly master's behaviour.
+	  and reports caps.booking false. But the pool is shared first come,
+	  first served with MPSL flash sync (NCS adds flash sync's own session):
+	  with the count one short, the gate's second open SUCCEEDS and the
+	  first flash write fails -ENOMEM instead (identity boot, settings).
+	  radiant_radio_nrf_gate_mpsl.c BUILD_ASSERTs that case.
 
 config RADIANT_GATE_MPSL_D2_SCAN_LEAD_US
 	int "(d2) placement lead for scan chunks with no stack contending (us)"

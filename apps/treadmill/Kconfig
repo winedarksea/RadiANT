@@ -28,7 +28,16 @@ rsource "../common/Kconfig.antr_api"
 # RADIANT_BACKEND_NRF_GATE_MPSL says so at length. apps/hrm_ble learned this
 # the expensive way; this application inherits the answer rather than the
 # lesson.
+#
+# THE NUMBER IS THE GATE'S SESSIONS: one, plus one for RADIANT_GATE_MPSL_D2's
+# second session (default y on MPSL gate builds). The flash-sync driver's
+# session is NOT counted here: NCS adds it to MPSL's pool itself
+# (SOC_FLASH_NRF_RADIO_SYNC_MPSL_TIMESLOT_SESSION_COUNT, mpsl_init.c). The pool
+# is shared, though, so a count that misses D2 lets the gate's second session
+# take flash sync's slot and every settings write fails with -12 - see
+# apps/hrm_ble/Kconfig, where that happened on hardware.
 config MPSL_TIMESLOT_SESSION_COUNT
+	default 2 if TREADMILL_BLE && RADIANT_GATE_MPSL_D2
 	default 1 if TREADMILL_BLE
 
 # BT_PERIPHERAL_PREF_* redeclaration, carried over from apps/hrm_ble/Kconfig -

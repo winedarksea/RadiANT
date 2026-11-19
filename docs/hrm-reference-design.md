@@ -89,7 +89,8 @@ Three things now stand between that and a repeat, and none of them is a comment:
 1. `build-node` in CI asserts the resulting `.config` symbol by symbol. A
    build-only check passes the no-op without noticing; only a read-back does not.
 2. `CONFIG_HRM_BLE_HRS` `select`s the MPSL gate and `default`s
-   `MPSL_TIMESLOT_SESSION_COUNT` to 1, so turning BLE on carries the interlock
+   `MPSL_TIMESLOT_SESSION_COUNT` to the gate's sessions (2 with the default
+   `RADIANT_GATE_MPSL_D2`), so turning BLE on carries the interlock
    with it however it is turned on.
 3. `apps/hrm_ble/CMakeLists.txt` fails the configure with a named message if
    `CONFIG_BT` is set without `CONFIG_HRM_BLE_HRS`.
