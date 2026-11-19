@@ -639,9 +639,20 @@ static bool lp_capture_time(uint64_t *timer_us)
 	return true;
 }
 
-/* Start the TIMER from zero in software now, the fold loaded from the LF
+/*
+ * Start the TIMER from zero in software now, the fold loaded from the LF
  * counter (radiant_lp_wake(..., false)), on the counter's step where it has
- * one (LP_CNT_WAIT_EDGE). Under CLOCK_LOCK. */
+ * one (LP_CNT_WAIT_EDGE). Under CLOCK_LOCK.
+ *
+ * Started on the step, the TIMER's zero is that tick's exact time to within
+ * the wait loop's latency, so the tick's sub-microsecond part is carried into
+ * the segment as an EDGE 2 wake carries it; radiant_lp_wake(..., false) drops
+ * it, and on RTC1 (1/512 us units) that would leave the segment - and,
+ * through the release that takes its TIMER reading, the timebase for good -
+ * up to a microsecond behind. The relation still is not a (D)PPI start, so
+ * timer_at_anchor stays false and the segment is re-anchored as before. On
+ * the GRTC (1 us ticks) the fraction is always 0.
+ */
 static void lp_timer_sw_start_locked(void)
 {
 	uint64_t t;
@@ -653,6 +664,8 @@ static void lp_timer_sw_start_locked(void)
 	nrf_timer_task_trigger(TIMER_ADDR, NRF_TIMER_TASK_START);
 	radiant_clock.base = radiant_lp_wake(&lp.tb, &lp.clk, t, false);
 	radiant_clock.last = 0u;
+	lp.clk.awake_frac = (uint32_t)(lp.clk.anchor_q &
+				       ((UINT64_C(1) << lp.tb.shift) - 1u));
 }
 
 /* ---- HFXO and CONSTLAT ---- */

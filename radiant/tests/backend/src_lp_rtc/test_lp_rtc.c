@@ -330,39 +330,50 @@ ZTEST(radiant_backend_lp_rtc, test_rtc_cancelled_wake_shuts_timer_down)
  * TIMER is started in software from an LF reading; read mid-tick, that
  * reading lags the start by up to 30.5 us, an error the next release would
  * keep for good. The start must wait for the counter's step, so the TIMER's
- * segment begins exactly on a tick and the timebase stays within a
- * microsecond of world time.
+ * segment begins exactly on a tick, and must carry that tick's
+ * sub-microsecond part (dropped, the timebase ends up to 2 us behind at some
+ * phases), so the operation after the recovery is on its microsecond.
+ * Swept over 16 phases between RTC1 ticks and microseconds: the dropped
+ * fraction passes at some of them by luck.
  */
 ZTEST(radiant_backend_lp_rtc, test_rtc_software_start_waits_for_the_step)
 {
-	struct lpt_hw hw0, hw;
-	struct lpt_stats st;
-	uint64_t t_sync = lpt_radio_now() + FAR_US;
-	uint64_t start;
+	for (uint32_t k = 0u; k < 16u; k++) {
+		struct lpt_hw hw0, hw;
+		struct lpt_stats st;
+		uint64_t t_sync;
+		uint64_t start;
 
-	zassert_equal(lpt_tx_at(t_sync), RADIANT_RADIO_OK_RC);
-	lpt_run(200u);
-	zassert_equal(lpt_state(), LPT_ASLEEP);
-	lpt_hw(&hw0);
-	lpt_break_next_dppi();
-	lpt_run_to(t_start_world(t_sync) - ARM_LEAD + 1u);
-	lpt_stats(&st);
-	zassert_equal(st.late_anchors, 1);
-	zassert_equal(lpt_probe()->failed_events, 1);
-	lpt_hw(&hw);
-	zassert_equal(hw.wait_edges, hw0.wait_edges + 1u, "the software start waited");
-	zassert_equal(hw.timer_t0_world_q % 15625u, 0u,
-		      "the TIMER started on an RTC1 step");
+		lpt_reset();
+		lpt_run(k * 37u);
+		t_sync = lpt_radio_now() + FAR_US + k * 13u;
+		zassert_equal(lpt_tx_at(t_sync), RADIANT_RADIO_OK_RC);
+		lpt_run(200u);
+		zassert_equal(lpt_state(), LPT_ASLEEP);
+		lpt_hw(&hw0);
+		lpt_break_next_dppi();
+		lpt_run_to(t_start_world(t_sync) - ARM_LEAD + 1u);
+		lpt_stats(&st);
+		zassert_equal(st.late_anchors, 1, "phase %u", k);
+		zassert_equal(lpt_probe()->failed_events, 1, "phase %u", k);
+		lpt_hw(&hw);
+		zassert_equal(hw.wait_edges, hw0.wait_edges + 1u,
+			      "phase %u: the software start waited", k);
+		zassert_equal(hw.timer_t0_world_q % 15625u, 0u,
+			      "phase %u: the TIMER started on an RTC1 step", k);
 
-	/* Nothing armed: the release takes the TIMER's reading, which is good. */
-	lpt_run(500u);
-	zassert_equal(lpt_state(), LPT_ASLEEP);
-	zassert_within(lpt_radio_now(), lpt_world() - LPT_W0, 1u + LPT_ASLEEP_SLACK_US);
-	t_sync = lpt_radio_now() + FAR_US;
-	zassert_equal(lpt_tx_at(t_sync), RADIANT_RADIO_OK_RC);
-	lpt_run_to(t_start_world(t_sync) - ARM_LEAD + 1u);
-	zassert_true(lpt_tx_programmed(&start));
-	zassert_within(start, t_start_world(t_sync), 1, "TXEN %llu wanted %llu",
-		       (unsigned long long)start,
-		       (unsigned long long)t_start_world(t_sync));
+		/* Nothing armed: the release takes the TIMER's reading. */
+		lpt_run(500u);
+		zassert_equal(lpt_state(), LPT_ASLEEP, "phase %u", k);
+		zassert_within(lpt_radio_now(), lpt_world() - LPT_W0,
+			       1u + LPT_ASLEEP_SLACK_US, "phase %u", k);
+		t_sync = lpt_radio_now() + FAR_US;
+		zassert_equal(lpt_tx_at(t_sync), RADIANT_RADIO_OK_RC);
+		lpt_run_to(t_start_world(t_sync) - ARM_LEAD + 1u);
+		zassert_true(lpt_tx_programmed(&start), "phase %u", k);
+		zassert_within(start, t_start_world(t_sync), 1,
+			       "phase %u: TXEN %llu wanted %llu", k,
+			       (unsigned long long)start,
+			       (unsigned long long)t_start_world(t_sync));
+	}
 }
