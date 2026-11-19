@@ -9,6 +9,9 @@ Two Pro Micro (nRF52840 nice!nano clone, serial EE6986854FD72803) reruns for the
 
 Every power figure is an ESTIMATE. There is no current meter on this bench.
 
+**Owner decision, 2026-11-19: B5 PASS.** B2 matches the control on every receiver, and B1's excess is within
+the drift between the two control windows. No A3 window was run. The verdict table below is left as written.
+
 ## Verdicts
 
 | Job | Verdict |

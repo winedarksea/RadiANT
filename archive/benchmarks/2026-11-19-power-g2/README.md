@@ -3,6 +3,9 @@
 **Every current-related number here is a software proxy, not a measured current.**
 
 **Verdict: PASS on ACK rate, bursts and LP stats. The literal 2186–2191 µs band can't be judged on this rig.**
+
+**Owner decision, 2026-11-19 (after the [Garmin rerun](../2026-11-19-power-g2-garmin/README.md)): PASS on
+master-side timing.**
 The only available slave is the TI dongle, and its own reply sits at 2200–2208 µs in every arm, A included. Judged
 against the same-window A arms instead:
 

@@ -4,7 +4,8 @@
   local master 2026-11-18/19). Every option below is **off by default**. The
   owner closed the two open gate calls on 2026-11-19 (G1 PASS with an accepted
   TI-only residual, G4 PASS on a steady-state reading of the anchor band) and
-  deferred TI standby. B5 needs an equal-power rerun. See *Gates*.
+  deferred TI standby. The same day the owner passed B5 (equal-power rerun)
+  and G2 (on master-side timing). Every gate is closed. See *Gates*.
 - **Date:** 2026-11-19
 - **Decides:** how a board with no current meter reports what sets its current
   (A1/A2), and how the nRF backend keeps a 1 µs timebase with the HFXO stopped
@@ -271,6 +272,8 @@ same-window controls.
 | G1 | L15 direct, option on, A/B/A | Power and timing PASS: HFXO request 1.684 % (4.06 req/s × 4.15 ms), CONSTLAT off between slots, all LP fault counters 0, period −7.4 µs (the LF offset). ~811 → **~36–41 µA**. **FAIL on TI receiver loss** (B 1.84/2.54 % vs A 0.41–1.11 %) |
 | G1 re-judge | same, TI with the CRC-repair delivery fix | **Still FAIL, narrowly.** B 0.69/0.69 % vs A 0.21–0.45 %. Every CRC failure is now repaired and delivered. The residual is TI-only RX_FAIL (B 34 of 58 pooled, p = 0.003). The Pro Micro shows no B excess (p = 0.30). **Owner, 2026-11-19: PASS with accepted TI-only excess** (TI-receiver sensitivity; no FREQ_TRIM sweep) |
 | B5 | Pro Micro (RTC1), option on | **Not passed: confounded control.** Duty 1.6 %, ops 4.06/s, period −13.9 µs (−56.4 ppm, matches the LF crystal). Loss 4.4 % against a +8 dBm control image (1.1 %), while B transmits at 0 dBm. Needs an equal-power A/B |
+| B5 rerun | Pro Micro, equal TX power (0 dBm both arms), A1 B1 A2 B2 | Confound removed: at 0 dBm with the HFXO held, the TI and Garmin already lose 3.8-7.7 %. B2 matches A2 on all three receivers; B1 sits above A by about the A1-A2 drift. RSSI equal across arms. Spike S3 lp rerun PASS (HFXO off before 10 000 of 10 000 requests, anchors within ±1.125 µs). **Owner, 2026-11-19: PASS** (archive `2026-11-19-power-b5-rerun`) |
+| G2 (B4) | trainer FE-C master on the L15, option on; TI slave, then Garmin + TI A/B/A/B/A | ACK rate and bursts unchanged against same-session controls; HFXO request duty 2.4 %. The literal 2186-2191 µs band cannot be judged: the Garmin's reply wanders ~100 µs and the TI answers at ~2207 µs. The master-side part is unchanged within 0.3 µs. The +7.6 µs burst-opener shift is the RadiANT slave placing its opener from the nominal period (TODO item). **Owner, 2026-11-19: PASS on master-side timing** (archives `2026-11-19-power-g2`, `2026-11-19-power-g2-garmin`) |
 | G4 | MPSL hrm_ble + BLE connected, 1 h | **Passed except the anchor band as written.** 0 asserts, 0 disconnects, TI loss 1.63 %, `slot_awake` duty 1.207 %, no own HFXO request after boot, ~38 µA for the parts the counters see (SDC events and MPSL's ramp excluded). `start_err` sits at a steady **−4 µs** (band 0–17). The since-boot extremes −33/+31 µs come from boot STARTs and BLE connect setup, and did not move during the hour. **Owner, 2026-11-19: PASS** - the band is read as steady state only; the −4 µs steady offset is accepted and the boot/connect swings are one-off events |
 
 **H3, the G1 mechanism** (archive `2026-11-18-power-g1-h3`): B does not add a
@@ -316,8 +319,11 @@ in 22c75e3 / 28d7754. Since that fix only the RX_FAIL residual above remains.
 - ~~G1's TI-only RX_FAIL residual and G4's −4 µs anchor offset: owner calls.~~
   Closed 2026-11-19: both accepted by the owner (G1 PASS with accepted TI-only
   excess, G4 PASS on steady state). TI standby: deferred (section 7).
-- B5: equal-power A/B on the Pro Micro. Its spike S3 lp rows are invalid
-  (f39c704) and need a rerun.
+- ~~B5: equal-power A/B on the Pro Micro; spike S3 lp rerun.~~ Closed
+  2026-11-19: both rerun, owner PASS (archive `2026-11-19-power-b5-rerun`).
+- ~~G2 absolute turnaround.~~ Closed 2026-11-19: owner PASS on master-side
+  timing. The RadiANT slave's burst opener uses the nominal period (+7.3 µs
+  against this master); recorded in TODO.md, not planned.
 - G4 found that hrm_ble BLE rows set `MPSL_TIMESLOT_SESSION_COUNT` 1 while D2
   takes 2 (`flash_sync_mpsl` −12, identity falls back to devnum 4242).
   This is unrelated to power but was found here. **Fixed 7f2974f**

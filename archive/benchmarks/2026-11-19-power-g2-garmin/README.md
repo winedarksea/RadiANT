@@ -4,6 +4,10 @@
 ANT USB-m (USB serial `006`) is now the third-party FE-C slave, and a TI arm runs in every session as the tie-in to G2.
 No firmware was built or changed.
 
+**Owner decision, 2026-11-19: G2 PASS on master-side timing.** The band is judged by the part of the
+turnaround the master owns, which is unchanged within 0.3 µs with the option on. The slave's nominal-period
+opener prediction is recorded in TODO.md and not planned.
+
 **Verdict:**
 
 1. **The 2186–2191 µs band can't be judged against the master.** No slave on this bench puts its reply inside a 6 µs
