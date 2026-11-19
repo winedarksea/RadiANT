@@ -241,13 +241,27 @@ extern "C" {
  *   3 tx               a transmit event for a retired operation
  *   4 ed               an energy-detect event for a retired operation;
  *                      RADIANT_DIAG_NOT_MEASURED without CONFIG_RADIANT_ED_SCAN
- *   5-7                reserved, RADIANT_DIAG_NOT_MEASURED
+ *   5-7                RADIANT_DIAG_NOT_MEASURED, unless the image has
+ *                      CONFIG_RADIANT_DIAG_CRC_BITS (2026-11-19, Gate G1 H3):
+ *                      which bit each repaired-and-delivered frame
+ *                      (page 10 field 0) had flipped. Saturating counts:
+ *   5 crc_bit_dir      bits 0-15 received 1 where 0 was sent, bits 16-31
+ *                      received 0 where 1 was sent (sum = page 10 field 0
+ *                      until a half saturates)
+ *   6 crc_syn_0_7      repairs in the CRC field by syndrome bit pair, one
+ *   7 crc_syn_8_15     byte each, low byte first: field 6 byte 0 = bits
+ *                      {0,1}, the frame's last two bits on air ... field 7
+ *                      byte 3 = bits {14,15}. Repairs in the body are field
+ *                      5's sum minus these.
  */
 #define RADIANT_DIAG_STALE_RX_FRAME        0u
 #define RADIANT_DIAG_STALE_RX_END          1u
 #define RADIANT_DIAG_STALE_RX_FILTER_INDEX 2u
 #define RADIANT_DIAG_STALE_TX              3u
 #define RADIANT_DIAG_STALE_ED              4u
+#define RADIANT_DIAG_CRC_BIT_DIR           5u
+#define RADIANT_DIAG_CRC_SYN_0_7           6u
+#define RADIANT_DIAG_CRC_SYN_8_15          7u
 
 /*
  * Page 13, transfer outcomes (2026-11-17, TODO item 3). radiant_api_stats'

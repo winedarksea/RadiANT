@@ -104,3 +104,19 @@ tests:
       - native_sim
     extra_configs:
       - CONFIG_RADIANT_CRC_REPAIR=y
+
+  # CRC repair with the 0xF7 counters and CONFIG_RADIANT_DIAG_CRC_BITS (Gate
+  # G1 H3's receiver counter, page 12 fields 5-7). The only build where that
+  # option's case exists; radiant.api.crc_repair stays the shipping shape.
+  radiant.api.crc_bits:
+    tags:
+      - radiant
+      - radiant_api
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    extra_configs:
+      - CONFIG_RADIANT_CRC_REPAIR=y
+      - CONFIG_RADIANT_DIAG_COUNTERS=y
+      - CONFIG_RADIANT_DIAG_CRC_BITS=y

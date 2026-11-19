@@ -148,6 +148,11 @@ class Stale(unittest.TestCase):
         self.assertEqual(len(idx), 5)
         for name, i in idx.items():
             self.assertEqual(fields[i], "stale_" + name)
+        crc = dict((m.group(1).lower(), int(m.group(2))) for m in re.finditer(
+            r"#define RADIANT_DIAG_(CRC_\w+)\s+(\d+)u", text))
+        self.assertEqual(len(crc), 3)
+        for name, i in crc.items():
+            self.assertEqual(fields[i], name)
 
     def test_page_12_counts_subtract_and_reserved_read_none(self):
         nm = d.NOT_MEASURED
@@ -157,7 +162,7 @@ class Stale(unittest.TestCase):
                                  flags=1, backend=1))}
         self.assertEqual(a["12"]["name"], "stale")
         self.assertIsNone(a["12"]["fields"]["stale_ed"])
-        self.assertIsNone(a["12"]["fields"]["reserved_7"])
+        self.assertIsNone(a["12"]["fields"]["crc_syn_8_15"])
         out = d.diff(a, b)["12"]["fields"]
         self.assertEqual(out["stale_rx_frame"], 3)
         self.assertEqual(out["stale_rx_end"], 550)

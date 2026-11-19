@@ -94,11 +94,14 @@ PAGES: dict[int, tuple[str, list[str]]] = {
                    "tx_armed", "stale_events", "slots_collided",
                    "turn_yields"]),
     # 2026-11-16 page 11's stale_events by site; 0-4 sum to it. All counts.
-    # stale_ed is 0xFFFFFFFF without CONFIG_RADIANT_ED_SCAN; 5-7 reserved
-    # (always 0xFFFFFFFF until given a meaning).
+    # stale_ed is 0xFFFFFFFF without CONFIG_RADIANT_ED_SCAN. 5-7 are
+    # 0xFFFFFFFF unless CONFIG_RADIANT_DIAG_CRC_BITS (2026-11-19, G1 H3):
+    # packed saturating counts (radiant_diag.h), so --diff still subtracts
+    # them lane by lane. crc_bit_dir = rx1 | rx0 << 16; crc_syn_* = one byte
+    # per CRC syndrome bit pair, byte 0 of crc_syn_0_7 = the last 2 bits on air.
     12: ("stale", ["stale_rx_frame", "stale_rx_end", "stale_rx_filter_index",
-                   "stale_tx", "stale_ed", "reserved_5", "reserved_6",
-                   "reserved_7"]),
+                   "stale_tx", "stale_ed", "crc_bit_dir", "crc_syn_0_7",
+                   "crc_syn_8_15"]),
     # 2026-11-17 transfer outcomes, radiant_api_stats (TODO item 3). All
     # counts; 6-7 reserved (always 0xFFFFFFFF until given a meaning).
     13: ("xfer", ["xfer_watchdogs", "xfer_no_opener", "xfer_lost_track",
