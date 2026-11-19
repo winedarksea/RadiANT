@@ -10,10 +10,19 @@
  *                           the GRTC SYSCOUNTER (1 MHz), DPPI, CONSTLAT
  *                           (errata 20), the TIMER stopped and cleared.
  *   radiant.backend.lp_rtc  (-DBACKEND_LP_RTC=1, which defines LPT_RTC,
- *                           pass B5): the nRF52840 shape - RTC1 (32768 Hz,
- *                           24-bit, behind Zephyr's nrf_rtc_timer API and
- *                           its rules), PPI, no CONSTLAT, and the TIMER
- *                           stopped and SHUT DOWN (anomaly 78).
+ *                           pass B5): the low-power path's nRF52840 parts -
+ *                           RTC1 (32768 Hz ticks behind Zephyr's
+ *                           nrf_rtc_timer API and its scheduling rules),
+ *                           PPI, no CONSTLAT, and the TIMER stopped and SHUT
+ *                           DOWN (anomaly 78).
+ *
+ * WHAT THE RTC SCENARIO DOES NOT COVER. The fake driver hands back a perfect
+ * 64-bit count (the driver's extended read, never its overflow handling), so
+ * the "24-bit wrap" cases test that the backend's 64-bit arithmetic runs
+ * through 2^24, not the driver's wrap logic; and the rest of the backend
+ * keeps its nRF54L shape (CONFIG_SOC_COMPATIBLE_NRF54LX below), so no
+ * nRF52-only code in radiant_radio_nrf.c runs here - that is covered by the
+ * nRF52840 builds, not by a test.
  *
  * The world. One clock, `fw.q`, in q units of 1/512 us: the radio TIMER
  * counts whole microseconds of it while running (the two crystals at the
@@ -65,6 +74,7 @@
 #if defined(LPT_RTC)
 #define CONFIG_NRF_RTC_TIMER 1
 #define CONFIG_NRF_RTC_TIMER_USER_CHAN_COUNT 2
+#define CONFIG_NRF_RTC_COUNTER_BIT_WIDTH 24
 #define RADIANT_LP_LF_HZ 32768
 #define CONFIG_RADIANT_NRF_LP_HFXO_STARTUP_US 500
 /* The software start's wait for the counter's step, simulated below. */
@@ -310,9 +320,14 @@ static int fw_rtc_set(int32_t chan, uint64_t target,
 			fw.exact_refusals++;
 			return -EINVAL;
 		}
-		/* Forced interrupt: the handler runs, no compare event, no PPI. */
-		fw.ch[chan].armed = false;
-		fw.ch[chan].hw_only = false;
+		/*
+		 * Forced interrupt: the handler runs with no compare event and so
+		 * no PPI. The driver does not touch the CC or its routing here, so
+		 * a compare still armed from an earlier write stays armed - with
+		 * no handler behind it any more (the forced run consumes the new
+		 * target).
+		 */
+		fw.ch[chan].hw_only = true;
 		fw.ch[chan].pending = true;
 		fw.ch[chan].target = target;
 		fw.ch[chan].h = h;

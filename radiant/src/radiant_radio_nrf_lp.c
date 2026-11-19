@@ -87,9 +87,12 @@
  *     the grant then runs program_*()'s ETIME check, so a wake that came too
  *     late fails the operation (FAILED) rather than transmitting late.
  *   - EDGE 2 serviced while still ASLEEP (the LF interrupt was held off
- *     past both wake edges, and the anchor channel, the lower index, is
- *     serviced first): the TIMER did start on the tick, so the handler does
- *     EDGE 1's work first and then takes the edge (counted in edge_order).
+ *     past both wake edges, and the anchor channel happens to have the
+ *     lower index, which the drivers service first): the TIMER did start on
+ *     the tick, so the handler does EDGE 1's work first and then takes the
+ *     edge (counted in edge_order). Which channel is lower depends on the
+ *     allocation: on RTC1 the HF channel is 1 and the anchor 2, so EDGE 1 is
+ *     always serviced first and edge_order stays 0 there.
  *   - An HFXO request or start that fails is permanent here (the nRF clock
  *     driver's onoff manager has no reset transition): the option drops to
  *     always-on for the rest of the run (refused = 2, the TIMER started in
@@ -368,6 +371,12 @@ static inline void lp_cnt_abort(int32_t ch)
  * (128 s) leaves the time between planning and writing far inside. */
 #define LP_MAX_SLEEP_TICKS ((uint64_t)NRF_RTC_TIMER_MAX_SCHEDULE_SPAN / 2u)
 
+/* The format, the span and the driver behaviour above are the 24-bit RTC's.
+ * With a narrower counter (nRF52832: 15 bits) the driver moves a CC of 0 to
+ * 1 even in exact_set() and the schedule span is 2^14 ticks; Kconfig refuses
+ * the option there, this is the backstop. */
+BUILD_ASSERT(CONFIG_NRF_RTC_COUNTER_BIT_WIDTH == 24,
+	     "RADIANT_NRF_LOW_POWER assumes RTC1's full 24-bit counter");
 BUILD_ASSERT(CONFIG_NRF_RTC_TIMER_USER_CHAN_COUNT >= 2,
 	     "RADIANT_NRF_LOW_POWER takes two RTC1 user channels "
 	     "(CONFIG_NRF_RTC_TIMER_USER_CHAN_COUNT, which radiant/Kconfig "
@@ -439,10 +448,12 @@ BUILD_ASSERT(RADIANT_LP_LF_HZ == LP_CNT_HZ,
  * followed by SHUTDOWN, as nrfx's own timer driver does. SHUTDOWN zeroes the
  * counter (spike B1 S1; the CC registers survive), so it stands in for the
  * CLEAR every other part gets: either way the TIMER is left stopped at 0,
- * which EDGE 2's (D)PPI start and the fold's `last` = 0 at a wake rely on,
- * and no fold reads the TIMER while it is stopped (lp_now_locked() and
- * radio_disable_now() check lp_timer_stopped() first). A release reads its
- * CC5 capture before calling this.
+ * so that EDGE 2's (D)PPI start counts the segment from the edge. The fold
+ * does not depend on the 0: lp_wake_edge_locked() loads `last` from the CC5
+ * capture EDGE 2 itself took, so a counter that a stray START or a SHUTDOWN
+ * left non-zero would shift nothing. No fold reads the TIMER while it is
+ * stopped (lp_now_locked() and radio_disable_now() check lp_timer_stopped()
+ * first). A release reads its CC5 capture before calling this.
  */
 static inline void lp_timer_halt(void)
 {

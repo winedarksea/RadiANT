@@ -5,8 +5,11 @@
  * (backend_lp_under_test.c with LPT_RTC). Every shared case in src_lp/ runs
  * here as well; these cover what only RTC1 and the nRF52 TIMER have:
  *
- *   - a 24-bit counter that wraps every 512 s, and a driver that refuses to
- *     schedule more than 2^23 ticks (256 s) ahead;
+ *   - a driver that refuses to schedule more than 2^23 ticks (256 s) ahead,
+ *     and extended counts that run through 2^24 (RTC1's 24-bit wrap, every
+ *     512 s); the fake driver returns a perfect 64-bit count, so these test
+ *     the backend's arithmetic across the wrap, not the driver's overflow
+ *     handling;
  *   - the driver's 3-tick minimum for an exact compare (the product
  *     specification's 2-tick guarantee is not enough for nrf_rtc_timer);
  *   - TIMER SHUTDOWN after STOP (nRF52 anomaly 78), which zeroes the counter
@@ -72,10 +75,11 @@ static void run_checked(uint64_t world, uint64_t step_us)
 }
 
 /*
- * Risk: RTC1's 24-bit COUNTER wraps in the middle of a sleep. The timebase
- * must run straight through it - no step, no range error - and the wake must
- * land on its microsecond, then the next period's release take the LF image
- * as usual.
+ * Risk: the extended count crosses 2^24 (where RTC1's COUNTER wraps) in the
+ * middle of a sleep. The backend's timebase must run straight through it - no
+ * step, no range error, no 24- or 32-bit truncation - and the wake must land
+ * on its microsecond, then the next period's release take the LF image as
+ * usual. (The driver's own wrap handling is not modelled.)
  */
 ZTEST(radiant_backend_lp_rtc, test_rtc_sleep_across_24bit_wrap)
 {

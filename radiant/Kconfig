@@ -777,8 +777,11 @@ config RADIANT_NRF_LOW_POWER
 	depends on CLOCK_CONTROL_NRF_K32SRC_XTAL
 	# The LF counter is the system timer's: two channels of the GRTC
 	# (nRF54L) or two RTC1 user channels (nRF52; the count is defaulted to
-	# 2 below), allocated at init (a shortage refuses at run time).
-	depends on NRF_GRTC_TIMER || NRF_RTC_TIMER
+	# 2 below), allocated at init (a shortage refuses at run time). The RTC
+	# path assumes the full 24-bit counter: the nRF52832's 15-bit build has a
+	# 2^14-tick schedule span and a driver that moves CC 0 to 1 even on an
+	# exact compare.
+	depends on NRF_GRTC_TIMER || (NRF_RTC_TIMER && NRF_RTC_COUNTER_BIT_WIDTH = 24)
 	# Direct backend only for now. On an MPSL build the HFXO and the wake
 	# both belong to MPSL's timeslot placement - and that includes an MPSL
 	# that something else turned on without the gate (the 802.15.4 radio
