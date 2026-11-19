@@ -511,7 +511,9 @@ ZTEST(radiant_backend_lp_mpsl, test_sub_tick_phases_and_read_latency)
  * of whichever critical section holds it off, as PRIMASK makes it), with the
  * end alone, the end and the next START, and an aborting end. Always: no
  * RADIO write after the hand-back, no window connection left on, exactly one
- * outcome for the operation.
+ * outcome for the operation. The late variant arms too near to make it (the
+ * span's own late check fails), so the aborting end can land after that
+ * failure, while the arm is still unwinding: still ETIME alone.
  */
 enum { ARM_TX, ARM_RX, ARM_ED };
 
@@ -532,6 +534,7 @@ ZTEST(radiant_backend_lp_mpsl, test_arm_preempted_by_slot_end)
 	static const char *const kn[] = { "tx", "rx", "ed" };
 	static const char *const mn[] = { "end", "end+start", "abort+end" };
 
+	for (int late = 0; late <= 1; late++)
 	for (int kind = ARM_TX; kind <= ARM_ED; kind++) {
 		for (int mode = 0; mode <= 2; mode++) {
 			uint32_t etimes = 0u;
@@ -545,13 +548,14 @@ ZTEST(radiant_backend_lp_mpsl, test_arm_preempted_by_slot_end)
 				lmt_run(10000u);
 				lmt_slot_start(0u);
 				lmt_run(100u);
-				t = lmt_radio_now() + 1500u;
+				t = lmt_radio_now() + (late ? 10u : 1500u);
 				lmt_preempt_mode(n, mode == 1, mode == 2);
 				rc = arm_kind(kind, t);
 				lmt_preempt_after_capture(0u, false);
 				if (!lmt_preempt_fired()) {
 					/* The arm made fewer captures: it finished first. */
-					zassert_equal(rc, RADIANT_RADIO_OK_RC, "%s: rc %d", kn[kind], rc);
+					zassert_equal(rc, late ? RADIANT_RADIO_ETIME : RADIANT_RADIO_OK_RC,
+						      "%s late %d: rc %d", kn[kind], late, rc);
 					break;
 				}
 				term = lmt_terminals();
@@ -561,6 +565,8 @@ ZTEST(radiant_backend_lp_mpsl, test_arm_preempted_by_slot_end)
 				zassert_false(lmt_window_conns_on(),
 					      "%s %s n %u: a window connection outlived the release",
 					      kn[kind], mn[mode], n);
+				zassert_true(!late || rc == RADIANT_RADIO_ETIME,
+					     "%s %s n %u: a late arm not refused", kn[kind], mn[mode], n);
 				if (rc == RADIANT_RADIO_OK_RC) {
 					/* The end landed after the arm's span: an operation
 					 * armed and then cut, as if the timeslot ended just
