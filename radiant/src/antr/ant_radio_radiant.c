@@ -2325,6 +2325,7 @@ static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 	struct radiant_channel_id id;
 	struct radiant_frame_wire w;
 	struct radiant_frame      f;
+	struct radiant_rx_event   repaired;
 	enum radiant_msg_type     mt;
 	int                   n;
 	int                   rc;
@@ -2415,6 +2416,22 @@ static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 	if (crc_failed) {
 		/* Counted here, not at the repair: this means repaired AND delivered. */
 		api_stats.crc_repaired++;
+		/*
+		 * The repair is accepted, so from here on this is a good frame. The
+		 * HAL event still says CRC_FAIL, and radiant_event_post_rx() rejects
+		 * every CRC_FAIL as its last gate before the host, so posting it
+		 * as-is lost every repaired frame (and, the slot being heard, raised
+		 * no RX_FAIL either: archive/benchmarks/2026-11-18-power-g1-diag).
+		 * Post a copy that carries the repaired body and an OK status, as
+		 * radiant_sec_deliver() builds its own OK event. crc_failed stays
+		 * true below, so the frame still opens no pending command's slot.
+		 */
+		repaired = *evt;
+		repaired.status = RADIANT_RADIO_STATUS_OK;
+		repaired.body = w.body;
+		repaired.has_crc_rx = false; /* the HAL contract for an OK event */
+		repaired.crc_rx = 0u;
+		evt = &repaired;
 	}
 
 	/*

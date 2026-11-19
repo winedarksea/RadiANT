@@ -4055,8 +4055,9 @@ ZTEST(api, test_a_one_packet_burst_raises_no_tx_start)
 
 #if defined(CONFIG_RADIANT_CRC_REPAIR)
 /* One tracked-window frame of `ctrl`, one payload bit off the CRC it carries,
- * so the repair path recovers it. Returns once the window has ended. */
-static void air_one_bit_off(uint16_t dev, uint8_t ctrl)
+ * so the repair path recovers it. Returns once the window has ended.
+ * `trans_type` is the frame's own transmission type (body byte 0). */
+static void air_one_bit_off_tt(uint16_t dev, uint8_t ctrl, uint8_t trans_type)
 {
 	const struct fake_radio_arm *w;
 	struct fake_radio_air        a;
@@ -4072,6 +4073,7 @@ static void air_one_bit_off(uint16_t dev, uint8_t ctrl)
 	fake_radio_air_init(&a);
 	a.t_sync = w->t_open + ((w->t_close - w->t_open) / 2u);
 	a.len = build_peer_frame_for(a.bytes, dev, ctrl, peer_payload);
+	a.bytes[5] = trans_type;
 	crc = radiant_crc16(RADIANT_CRC_INIT, a.bytes, a.len);
 	a.bytes[9] ^= 0x01u;            /* payload byte d2, bit 0 */
 	a.crc_bad = true;
@@ -4081,6 +4083,127 @@ static void air_one_bit_off(uint16_t dev, uint8_t ctrl)
 
 	fake_radio_advance_to(a.t_sync + RADIANT_TRANSFER_REPLY_US + 1000u);
 	drain();
+}
+
+/* As aired by air_device() during the acquisition: transmission type 5. */
+static void air_one_bit_off(uint16_t dev, uint8_t ctrl)
+{
+	air_one_bit_off_tt(dev, ctrl, 5u);
+}
+
+static void clear_msglog(void)
+{
+	memset(msglog, 0, sizeof(msglog));
+	n_msg = 0u;
+}
+
+/*
+ * The one BROADCAST_DATA in the log, or NULL if there is not exactly one.
+ * data[0] is the channel and data[1..8] the payload.
+ */
+static const struct msg_rec *only_bcast(void)
+{
+	const struct msg_rec *hit = NULL;
+	uint32_t              i;
+
+	for (i = 0u; i < n_msg && i < MSGLOG_MAX; i++) {
+		if (msglog[i].id != (uint8_t)ANTW_MESG_BROADCAST_DATA_ID) {
+			continue;
+		}
+		if (hit != NULL) {
+			return NULL;
+		}
+		hit = &msglog[i];
+	}
+	return hit;
+}
+
+/*
+ * A repaired broadcast reaches the host, with the repaired payload, and the
+ * slot raises no RX_FAIL. Until 2026-11-18 api_tracked_frame() posted the
+ * original HAL event, still CRC_FAIL, and radiant_event_post_rx()'s CRC gate
+ * dropped it: the counter rose, the host saw nothing at all - neither data nor
+ * RX_FAIL (archive/benchmarks/2026-11-18-power-g1-diag, "Defect").
+ */
+ZTEST(api, test_a_repaired_broadcast_reaches_the_host)
+{
+	const struct radiant_api_stats *s = radiant_api_stats_get();
+	const struct msg_rec           *m;
+	uint16_t dev;
+	uint32_t repaired;
+	uint32_t dropped;
+	uint32_t posted;
+
+	open_and_acquire_slave(&dev);
+	run_housekeeping();
+	clear_msglog();
+
+	repaired = s->crc_repaired;
+	dropped = s->rx_dropped;
+	posted = s->rx_posted;
+	air_one_bit_off(dev, RADIANT_CTRL_BROADCAST);
+
+	zassert_equal(repaired + 1u, s->crc_repaired,
+		      "setup: the frame was not repaired (refuted %u, "
+		      "unrepairable %u)", (unsigned)s->crc_repair_refuted,
+		      (unsigned)s->crc_unrepairable);
+	zassert_equal(dropped, s->rx_dropped,
+		      "the event queue refused the repaired frame");
+	zassert_equal(posted + 1u, s->rx_posted,
+		      "the repaired frame was not queued for the host");
+	m = only_bcast();
+	zassert_not_null(m, "the repaired broadcast did not reach the host "
+			    "exactly once (%u messages)", (unsigned)n_msg);
+	zassert_equal(CH, m->data[0]);
+	zassert_mem_equal(peer_payload, &m->data[1], 8u,
+			  "the host got the payload as received, not as repaired");
+	zassert_equal(1u, count_bcast_from(dev),
+		      "the repaired broadcast went up under the wrong ID");
+	zassert_equal(0u, count_channel_events(CH, (uint8_t)ANTW_EVENT_RX_FAIL),
+		      "RX_FAIL for a slot whose frame was repaired");
+
+	end_of_test();
+}
+
+/*
+ * The negative: a repair the sanity checks refute is not delivered. The
+ * sender's frame carries transmission type 6 against the 5 the channel
+ * acquired. The address match cannot see byte 0 of the body, so a repaired
+ * frame whose transmission type disagrees is taken as a mis-repair. (A clean
+ * frame like it would go up: on a clean frame it is a fact about the air.)
+ */
+ZTEST(api, test_a_refuted_repair_is_not_delivered)
+{
+	const struct radiant_api_stats *s = radiant_api_stats_get();
+	uint16_t dev;
+	uint32_t repaired;
+	uint32_t refuted;
+	uint32_t posted;
+	uint32_t dropped;
+
+	open_and_acquire_slave(&dev);
+	run_housekeeping();
+	clear_msglog();
+
+	repaired = s->crc_repaired;
+	refuted = s->crc_repair_refuted;
+	posted = s->rx_posted;
+	dropped = s->rx_dropped;
+	air_one_bit_off_tt(dev, RADIANT_CTRL_BROADCAST, 6u);
+
+	zassert_equal(refuted + 1u, s->crc_repair_refuted,
+		      "the transmission-type refutation did not fire "
+		      "(repaired %u -> %u, unrepairable %u)", (unsigned)repaired,
+		      (unsigned)s->crc_repaired, (unsigned)s->crc_unrepairable);
+	zassert_equal(repaired, s->crc_repaired,
+		      "a refuted repair was counted as delivered");
+	zassert_equal(posted, s->rx_posted, "a refuted repair was queued");
+	zassert_equal(dropped, s->rx_dropped,
+		      "a refuted repair reached the event queue at all");
+	zassert_equal(0u, count_msgs((uint8_t)ANTW_MESG_BROADCAST_DATA_ID),
+		      "a refuted repair reached the host");
+
+	end_of_test();
 }
 
 /*
