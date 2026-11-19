@@ -71,7 +71,9 @@ static struct {
  * 0xFFFFFFFF. The node is now the epoch authority, so it must refuse rather
  * than wrap a boot counter here - a wrapped counter is a silently replayed
  * epoch. Hitting this means ~4 billion boots; the fix is re-provisioning
- * (new K_dev, new identity).
+ * (new K_dev, new identity). If that is interrupted after the key write,
+ * retrying with the same new key keeps the old counters and so cannot clear
+ * the exhausted boot counter: use a different key.
  */
 #define BOOT_COUNTER_MAX (0xFFFFFFFFu - RADIANT_SEC_EPOCH_HEADROOM - 1u)
 
@@ -150,10 +152,30 @@ static int store_u32_confirmed(const char *key, uint32_t val)
 
 /* ── Provisioning (first boot, ADR 0020, or a factory step) ──────────────── */
 
-int node_ident_provision(const uint8_t k_dev[NODE_IDENT_K_DEV_BYTES])
+static const char *const prov_keys[] = {
+	NODE_NVM_KEY_BOOT, NODE_NVM_KEY_PAIR, NODE_NVM_KEY_EPOCH,
+};
+
+/* Load the stored K_dev and compare it with `k` in constant time. `*eq` is
+ * false whenever the load is not NODE_NVM_OK; the load's code is returned. */
+static int kdev_load_eq(const uint8_t *k, bool *eq)
 {
 	uint8_t back[NODE_IDENT_K_DEV_BYTES];
-	int     rc;
+	int     rc = node_nvm_load(NODE_NVM_KEY_KDEV, back, sizeof(back));
+
+	*eq = rc == NODE_NVM_OK && radiant_sec_ct_equal(back, k, sizeof(back));
+	/* A failed read may still have filled part of it. */
+	radiant_sec_wipe(back, sizeof(back));
+	return rc;
+}
+
+int node_ident_provision(const uint8_t k_dev[NODE_IDENT_K_DEV_BYTES])
+{
+	uint32_t v;
+	bool     present;
+	bool     same;
+	bool     ok;
+	int      rc;
 
 	if (k_dev == NULL) {
 		return NODE_IDENT_EINVAL;
@@ -167,38 +189,48 @@ int node_ident_provision(const uint8_t k_dev[NODE_IDENT_K_DEV_BYTES])
 		return NODE_IDENT_EIO;
 	}
 
-	/* Key first, then counters: an interrupted provisioning leaves a new
-	 * key with old (unused) counters, never zeroed counters under the old
-	 * key - the reset-under-unchanged-key condition ADR 0009 forbids. */
-	if (node_nvm_store(NODE_NVM_KEY_KDEV, k_dev,
-			   NODE_IDENT_K_DEV_BYTES) != NODE_NVM_OK) {
+	/* Read before writing (review 2026-11-17 item 7). The installed key
+	 * again is a retry, not a factory reset: zeroing its counters would
+	 * repeat pairing scalars and replay epochs. Only "never written" may
+	 * go on without a match; any other read failure writes nothing. */
+	rc = kdev_load_eq(k_dev, &same);
+	if (rc != NODE_NVM_OK && rc != NODE_NVM_ENOENT) {
 		return NODE_IDENT_EIO;
 	}
-	if (node_nvm_load(NODE_NVM_KEY_KDEV, back,
-			  NODE_IDENT_K_DEV_BYTES) != NODE_NVM_OK) {
-		/* A failed read may still have filled part of it. */
-		radiant_sec_wipe(back, sizeof(back));
-		return NODE_IDENT_EIO;
-	}
-	if (memcmp(back, k_dev, NODE_IDENT_K_DEV_BYTES) != 0) {
-		radiant_sec_wipe(back, sizeof(back));
-		return NODE_IDENT_EIO;
-	}
-	radiant_sec_wipe(back, sizeof(back));
 
-	rc = store_u32_confirmed(NODE_NVM_KEY_BOOT, 0u);
-	if (rc != NODE_IDENT_OK) {
-		return rc;
+	/* A new key: key first, then counters, so an interrupted provisioning
+	 * leaves the new key with old (unused) counters, never zeroed counters
+	 * under the old key - the reset-under-unchanged-key condition ADR 0009
+	 * forbids. Retrying with that key then takes the "same" path below. */
+	if (!same) {
+		if (node_nvm_store(NODE_NVM_KEY_KDEV, k_dev,
+				   NODE_IDENT_K_DEV_BYTES) != NODE_NVM_OK) {
+			return NODE_IDENT_EIO;
+		}
+		/* Confirm by re-reading; any load failure leaves ok false. */
+		(void)kdev_load_eq(k_dev, &ok);
+		if (!ok) {
+			return NODE_IDENT_EIO;
+		}
 	}
-	rc = store_u32_confirmed(NODE_NVM_KEY_PAIR, 0u);
-	if (rc != NODE_IDENT_OK) {
-		return rc;
-	}
-	/* The epoch reservation belongs to the old key like the boot counter:
-	 * a new key starts its epochs afresh, so both go together. */
-	rc = store_u32_confirmed(NODE_NVM_KEY_EPOCH, 0u);
-	if (rc != NODE_IDENT_OK) {
-		return rc;
+
+	/* Boot counter, pairing counter, epoch reservation: all three belong
+	 * to the key. A new key zeroes them; the same key keeps them and
+	 * creates only those an interrupted first provisioning never wrote. */
+	for (size_t i = 0u; i < ARRAY_SIZE(prov_keys); i++) {
+		if (same) {
+			rc = load_u32(prov_keys[i], &v, &present);
+			if (rc != NODE_IDENT_OK) {
+				return rc;
+			}
+			if (present) {
+				continue;
+			}
+		}
+		rc = store_u32_confirmed(prov_keys[i], 0u);
+		if (rc != NODE_IDENT_OK) {
+			return rc;
+		}
 	}
 
 	/* Provisioning invalidates everything derived from the old key. */

@@ -451,6 +451,150 @@ ZTEST(node_ident, test_provisioning_zeroes_both_counters_with_the_key)
 	zassert_not_equal(VECTOR_DEVNUM, devnum);
 }
 
+/* The three records provisioning owns, straight out of the part; false when
+ * any is absent. */
+static bool peek_counters(uint32_t v[3])
+{
+	return fake_nvm_peek_u32(NODE_NVM_KEY_BOOT, &v[0]) &&
+	       fake_nvm_peek_u32(NODE_NVM_KEY_PAIR, &v[1]) &&
+	       fake_nvm_peek_u32(NODE_NVM_KEY_EPOCH, &v[2]);
+}
+
+/* Three boots and a pairing window: all three records non-zero. With no
+ * clock the epochs are 1, 3, 5, so the reservation reads 7. */
+static void advance_counters(uint32_t v[3])
+{
+	provisioned_and_booted();
+	for (int i = 0; i < 2; i++) {
+		fake_nvm_reboot();
+		zassert_equal(NODE_IDENT_OK, node_ident_boot());
+	}
+	zassert_equal(NODE_IDENT_OK, node_ident_pair_window_open(NULL));
+	node_ident_pair_window_close();
+	zassert_true(peek_counters(v));
+	zassert_equal(3u, v[0]);
+	zassert_equal(1u, v[1]);
+	zassert_equal(7u, v[2]);
+}
+
+/* Review 2026-11-17 item 7: a factory step re-run with the key already
+ * installed is not a factory reset. Zeroing the counters under the same key
+ * would repeat pairing scalar 1 and hand out epochs already used. */
+ZTEST(node_ident, test_a_same_key_retry_keeps_all_three_counters)
+{
+	uint8_t  scalar[NODE_IDENT_PAIR_SCALAR_BYTES];
+	uint32_t before[3];
+	uint32_t after[3];
+	uint32_t v;
+
+	advance_counters(before);
+	zassert_equal(NODE_IDENT_OK, node_ident_provision(k_dev));
+	zassert_true(peek_counters(after));
+	zassert_mem_equal(before, after, sizeof(before));
+
+	/* And the node carries on from them: the next boot is the fourth, its
+	 * epoch is above every one used, and the next window derives counter
+	 * 2's scalar, never counter 1's again. */
+	fake_nvm_reboot();
+	zassert_equal(NODE_IDENT_OK, node_ident_boot());
+	zassert_equal(NODE_IDENT_OK, node_ident_boot_counter(&v));
+	zassert_equal(4u, v);
+	zassert_equal(NODE_IDENT_OK, node_ident_epoch(&v));
+	zassert_equal(7u, v);
+	zassert_equal(NODE_IDENT_OK, node_ident_pair_window_open(NULL));
+	zassert_equal(NODE_IDENT_OK, node_ident_pair_scalar(scalar));
+	zassert_mem_equal(scalar_ctr2, scalar, sizeof(scalar));
+	node_ident_pair_window_close();
+}
+
+/* The other half of item 7: the retry exists because the first attempt died
+ * after the key landed. Whatever counters it left - none, or some - the retry
+ * creates the missing ones at zero and keeps the ones already there. */
+ZTEST(node_ident, test_an_interrupted_first_provisioning_recovers)
+{
+	uint8_t  stored[NODE_IDENT_K_DEV_BYTES];
+	uint32_t v[3];
+
+	/* Key written, the first counter write fails. */
+	fake_nvm_fail_stores_after(1u, 1u);
+	zassert_equal(NODE_IDENT_EIO, node_ident_provision(k_dev));
+	zassert_true(fake_nvm_peek(NODE_NVM_KEY_KDEV, stored, sizeof(stored)));
+	zassert_mem_equal(k_dev, stored, sizeof(stored));
+	zassert_false(fake_nvm_peek_u32(NODE_NVM_KEY_BOOT, &v[0]));
+
+	zassert_equal(NODE_IDENT_OK, node_ident_provision(k_dev));
+	zassert_true(peek_counters(v));
+	zassert_equal(0u, v[0]);
+	zassert_equal(0u, v[1]);
+	zassert_equal(0u, v[2]);
+
+	/* The half above passes on the old code too (it zeroed everything);
+	 * this half is the one that discriminates. Some present, one never
+	 * written: a boot ran in between (boot counter 1, reservation 3) and
+	 * the interrupted provisioning never wrote the pairing record, modelled
+	 * by forgetting it. Creating an absent record at 0 is safe only for one
+	 * never written; a record lost after use would repeat a scalar or an
+	 * epoch - the exposure node_ident_boot() already has when it reads an
+	 * absent counter as 0. */
+	zassert_equal(NODE_IDENT_OK, node_ident_boot());
+	fake_nvm_forget(NODE_NVM_KEY_PAIR);
+	zassert_equal(NODE_IDENT_OK, node_ident_provision(k_dev));
+	zassert_true(peek_counters(v));
+	zassert_equal(1u, v[0]);
+	zassert_equal(0u, v[1]);
+	zassert_equal(3u, v[2]);
+}
+
+ZTEST(node_ident, test_a_new_key_still_resets_all_three_counters)
+{
+	uint8_t  other[NODE_IDENT_K_DEV_BYTES];
+	uint8_t  stored[NODE_IDENT_K_DEV_BYTES];
+	uint32_t v[3];
+
+	advance_counters(v);
+	memset(other, 0x3C, sizeof(other));
+	zassert_equal(NODE_IDENT_OK, node_ident_provision(other));
+	zassert_true(fake_nvm_peek(NODE_NVM_KEY_KDEV, stored, sizeof(stored)));
+	zassert_mem_equal(other, stored, sizeof(stored));
+	zassert_true(peek_counters(v));
+	zassert_equal(0u, v[0]);
+	zassert_equal(0u, v[1]);
+	zassert_equal(0u, v[2]);
+}
+
+/* A K_dev read that fails is neither "absent" nor "same": nothing is
+ * written, under the installed key or a new one. */
+ZTEST(node_ident, test_a_key_read_fault_on_provisioning_writes_nothing)
+{
+	uint8_t  keys[2][NODE_IDENT_K_DEV_BYTES];
+	uint8_t  stored[NODE_IDENT_K_DEV_BYTES];
+	uint32_t before[3];
+	uint32_t after[3];
+	uint32_t stores;
+
+	memcpy(keys[0], k_dev, sizeof(k_dev));
+	memset(keys[1], 0xC3, sizeof(keys[1]));
+
+	/* A factory-fresh part whose first read errors. */
+	fake_nvm_fail_loads(1u);
+	zassert_equal(NODE_IDENT_EIO, node_ident_provision(k_dev));
+	zassert_equal(0u, fake_nvm_store_count());
+	zassert_false(node_ident_is_provisioned());
+
+	advance_counters(before);
+	for (int i = 0; i < 2; i++) {
+		stores = fake_nvm_store_count();
+		fake_nvm_fail_loads(1u);
+		zassert_equal(NODE_IDENT_EIO, node_ident_provision(keys[i]));
+		zassert_equal(stores, fake_nvm_store_count());
+		zassert_true(fake_nvm_peek(NODE_NVM_KEY_KDEV, stored,
+					   sizeof(stored)));
+		zassert_mem_equal(k_dev, stored, sizeof(stored));
+		zassert_true(peek_counters(after));
+		zassert_mem_equal(before, after, sizeof(before));
+	}
+}
+
 /* ── The boot counter ─────────────────────────────────────────────────────── */
 
 ZTEST(node_ident, test_boot_counter_survives_a_power_cycle)
