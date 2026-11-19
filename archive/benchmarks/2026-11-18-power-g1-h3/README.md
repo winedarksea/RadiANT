@@ -6,6 +6,9 @@ from e58b047. Diagnostic code only, nothing merged.
 
 ## Verdict
 
+> **2026-11-19, owner:** G1 is PASS with accepted TI-only excess (the residual ~0.3-0.4 pp TI RX_FAIL; see
+> `2026-11-19-power-g1-rejudge/`). This diagnosis is left as written.
+
 1. **Every repaired TI error, in A and in B, is the last bit or the last-but-one bit of the frame on air, and it is
    always a transmitted 0 received as 1.**
    - Rounds 2 and 3 used the CRC-bit-index receiver: 269 repaired-and-delivered frames. 255 had their flipped bit in

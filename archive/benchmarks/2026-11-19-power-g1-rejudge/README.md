@@ -7,6 +7,12 @@ G1's A/B/A with the fixed TI receiver and counts RX_FAIL and CRC failures separa
 
 ## Verdict
 
+> **Owner decision, 2026-11-19: G1 PASS with accepted TI-only excess.** The owner accepts the narrow TI-only
+> RX_FAIL excess left after the CRC-repair delivery fix (~0.3-0.4 pp: B 0.69 % against 0.21-0.45 % with the HFXO
+> held, `2026-11-19-power-g1-rejudge/`). Cause per H3 (`2026-11-18-power-g1-h3/`): the TI misreads the frame's last
+> bit after each HFXO restart; the Pro Micro receiver shows no excess. No TI FREQ_TRIM sweep. The verdict text
+> below is the record as judged on the day and is left as written.
+
 **G1 still FAILS on the TI criterion, by a much smaller margin. Every other criterion passes again.**
 
 - **Repaired frames now reach the host.** Every arm has 0 unaccounted misses at the TI (the original B/B2 had 18/41).
@@ -73,6 +79,9 @@ the text reports locally (gitignored). The JSON and `.rec` files stay in `build\
 The TI-only RX_FAIL excess of ~0.3-0.4 pp after an HFXO restart is now the whole G1 TI gap. The Pro Micro shows none
 of it. Options: accept it as a TI-receiver sensitivity (the TI is not the product's receiver), or chase it with a
 TI FREQ_TRIM / RX bandwidth sweep, as the H3 README suggests. That is an owner call.
+
+**2026-11-19, owner:** accepted as a TI-receiver sensitivity. G1 is PASS with accepted TI-only excess; the sweep is
+not run.
 
 ## Board state at the end of this gate
 

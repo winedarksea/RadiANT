@@ -6955,12 +6955,106 @@ ZTEST(api, test_diag_stale_page_reports_the_split)
 		zassert_equal(RADIANT_DIAG_NOT_MEASURED,
 			      diag_u32(out, RADIANT_DIAG_STALE_ED));
 	}
-	for (unsigned int f = 5u; f < RADIANT_DIAG_FIELDS; f++) {
+	for (unsigned int f = 5u; f < RADIANT_DIAG_FIELDS &&
+	     !IS_ENABLED(CONFIG_RADIANT_DIAG_CRC_BITS); f++) {
 		zassert_equal(RADIANT_DIAG_NOT_MEASURED, diag_u32(out, f),
 			      "page 12 field %u", f);
 	}
 	end_of_test();
 }
+
+#if defined(CONFIG_RADIANT_DIAG_CRC_BITS)
+/* As air_one_bit_off_tt(), with the error chosen: frame byte `idx` ^ `mask`,
+ * and the CRC as received ^ `crc_xor`. Exactly one of the two flips a bit. */
+static void air_bit_off(uint16_t dev, uint8_t idx, uint8_t mask,
+			uint16_t crc_xor)
+{
+	const struct fake_radio_arm *w;
+	struct fake_radio_air        a;
+
+	if (fake_radio_is_idle()) {
+		run_housekeeping();
+	}
+	w = last_arm_of(FAKE_RADIO_ARM_RX);
+	zassert_not_null(w, "setup: no tracked window armed");
+	zassert_false(w->terminated, "setup: the tracked window had already ended");
+
+	fake_radio_air_init(&a);
+	a.t_sync = w->t_open + ((w->t_close - w->t_open) / 2u);
+	a.len = build_peer_frame_for(a.bytes, dev, RADIANT_CTRL_BROADCAST,
+				     peer_payload);
+	a.crc_rx = (uint16_t)(radiant_crc16(RADIANT_CRC_INIT, a.bytes, a.len) ^
+			      crc_xor);
+	a.bytes[idx] ^= mask;
+	a.crc_bad = true;
+	a.crc_rx_set = true;
+	zassert_ok(fake_radio_air_add(&a));
+
+	fake_radio_advance_to(a.t_sync + RADIANT_TRANSFER_REPLY_US + 1000u);
+	drain();
+}
+
+/*
+ * CONFIG_RADIANT_DIAG_CRC_BITS (Gate G1 H3): page 12 fields 5-7 say which bit
+ * each delivered repair flipped. A body bit moves the direction count only; a
+ * CRC bit also moves its syndrome pair's byte (bit 0 = last on air).
+ */
+ZTEST(api, test_diag_crc_bits_count_direction_and_syndrome_bit)
+{
+	const struct radiant_api_stats *s = radiant_api_stats_get();
+	uint8_t  out[RADIANT_DIAG_BODY_LEN];
+	uint8_t  frame[FAKE_RADIO_AIR_FRAME_MAX];
+	uint32_t dir;
+	uint32_t lo;
+	uint32_t hi;
+	uint32_t repaired;
+	uint16_t crc;
+	uint16_t dev;
+	bool     rx1;
+
+	open_and_acquire_slave(&dev);
+	run_housekeeping();
+	(void)build_peer_frame_for(frame, dev, RADIANT_CTRL_BROADCAST,
+				   peer_payload);
+	crc = radiant_crc16(RADIANT_CRC_INIT, frame, AIR_LEN);
+
+	zassert_ok(antr_diag_page(RADIANT_DIAG_PAGE_STALE, out));
+	dir = diag_u32(out, RADIANT_DIAG_CRC_BIT_DIR);
+	lo = diag_u32(out, RADIANT_DIAG_CRC_SYN_0_7);
+	hi = diag_u32(out, RADIANT_DIAG_CRC_SYN_8_15);
+	repaired = s->crc_repaired;
+
+	/* A body bit: payload byte d2, bit 0. */
+	air_bit_off(dev, 9u, 0x01u, 0u);
+	zassert_equal(repaired + 1u, s->crc_repaired, "setup: body repair");
+	rx1 = ((frame[9] ^ 0x01u) & 0x01u) != 0u;
+	zassert_ok(antr_diag_page(RADIANT_DIAG_PAGE_STALE, out));
+	zassert_equal(dir + (rx1 ? 1u : 0x10000u),
+		      diag_u32(out, RADIANT_DIAG_CRC_BIT_DIR), "body direction");
+	zassert_equal(lo, diag_u32(out, RADIANT_DIAG_CRC_SYN_0_7));
+	zassert_equal(hi, diag_u32(out, RADIANT_DIAG_CRC_SYN_8_15));
+	dir = diag_u32(out, RADIANT_DIAG_CRC_BIT_DIR);
+
+	/* CRC bit 0, the frame's last bit on air: pair {0,1}, field 6 byte 0. */
+	air_bit_off(dev, 9u, 0u, 0x0001u);
+	zassert_equal(repaired + 2u, s->crc_repaired, "setup: CRC repair");
+	rx1 = ((crc ^ 0x0001u) & 0x0001u) != 0u;
+	zassert_ok(antr_diag_page(RADIANT_DIAG_PAGE_STALE, out));
+	zassert_equal(dir + (rx1 ? 1u : 0x10000u),
+		      diag_u32(out, RADIANT_DIAG_CRC_BIT_DIR), "CRC direction");
+	zassert_equal(lo + 1u, diag_u32(out, RADIANT_DIAG_CRC_SYN_0_7));
+	zassert_equal(hi, diag_u32(out, RADIANT_DIAG_CRC_SYN_8_15));
+
+	/* CRC bit 15: pair {14,15}, field 7 byte 3. */
+	air_bit_off(dev, 9u, 0u, 0x8000u);
+	zassert_equal(repaired + 3u, s->crc_repaired, "setup: CRC repair 15");
+	zassert_ok(antr_diag_page(RADIANT_DIAG_PAGE_STALE, out));
+	zassert_equal(lo + 1u, diag_u32(out, RADIANT_DIAG_CRC_SYN_0_7));
+	zassert_equal(hi + 0x01000000u, diag_u32(out, RADIANT_DIAG_CRC_SYN_8_15));
+
+	end_of_test();
+}
+#endif /* CONFIG_RADIANT_DIAG_CRC_BITS */
 
 /* A listening master posts a turnaround after every slot it transmits, and
  * page 1 sees each one posted and each one end. */

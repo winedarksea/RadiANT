@@ -1,9 +1,10 @@
 # 0025 — A power proxy instead of a meter, and an LF-anchored timebase that lets the HFXO go
 
 - **Status:** accepted (owner-approved power plan, 2026-11-17; passes merged to
-  local master 2026-11-18/19). Every option below is **off by default**. Two
-  gate verdicts are open owner calls (G1's TI residual, G4's anchor band), and
-  B5 needs an equal-power rerun. See *Gates*.
+  local master 2026-11-18/19). Every option below is **off by default**. The
+  owner closed the two open gate calls on 2026-11-19 (G1 PASS with an accepted
+  TI-only residual, G4 PASS on a steady-state reading of the anchor band) and
+  deferred TI standby. B5 needs an equal-power rerun. See *Gates*.
 - **Date:** 2026-11-19
 - **Decides:** how a board with no current meter reports what sets its current
   (A1/A2), and how the nRF backend keeps a 1 µs timebase with the HFXO stopped
@@ -240,13 +241,19 @@ acked transfers.
   (~675 µA, no standby) now dominates the TI. The estimator's `--ti-standby`
   what-if gives ~227 µA, but this firmware has no standby. That is a separate
   decision.
+  **Deferred by the owner, 2026-11-19 (`CONFIG_PM` on the TI).** Standby needs
+  a power policy, a timer wake for the next slot and a UART rework. The
+  easy step is already taken by `RADIANT_CC26XX_XOSC_HF_RELEASE` (C2).
 - **nRF5340 network-core low power.** RTC1 on the net core builds through the
   same seam but is unmeasured. Spike S1 retention there was not run.
 - **Adaptive API wake.** The API thread still polls (20 Hz). Blocking on events
   and arming a deadline only when a retry, search or watchdog is pending
   (TODO.md) was left for when it becomes visible next to the radio's duty.
 - **The H3 root cause** (see *Gates*). No nRF-side fix was found. A TI
-  FREQ_TRIM / RX bandwidth sweep was proposed and not run.
+  FREQ_TRIM / RX bandwidth sweep was proposed and not run; with G1 accepted
+  (2026-11-19) it is not planned. The receiver counter that found the
+  mechanism is kept behind `RADIANT_DIAG_CRC_BITS` (default n, 0xF7 page 12
+  fields 5-7) for a later look.
 
 ## Gates
 
@@ -262,9 +269,9 @@ same-window controls.
 | GC1 | TI power-diag | H1 holds (1 power-up/slot, core on ~1.8 %, `pudur` ~448 µs). Fold finding 4 not reproduced (0 back-steps over 9705 power cycles) |
 | C2 | TI XOSC_HF release A/B/A | **PASS.** `pudur` 448 → 480 µs (one AON RTC tick); cold/late 0; TI received 99.05/99.37/98.75 % of acked messages. The saving cannot be priced: the XOSC_HF row is UNKNOWN. B costs +0.8 ‰ CPU and +12 wakes/s |
 | G1 | L15 direct, option on, A/B/A | Power and timing PASS: HFXO request 1.684 % (4.06 req/s × 4.15 ms), CONSTLAT off between slots, all LP fault counters 0, period −7.4 µs (the LF offset). ~811 → **~36–41 µA**. **FAIL on TI receiver loss** (B 1.84/2.54 % vs A 0.41–1.11 %) |
-| G1 re-judge | same, TI with the CRC-repair delivery fix | **Still FAIL, narrowly.** B 0.69/0.69 % vs A 0.21–0.45 %. Every CRC failure is now repaired and delivered. The residual is TI-only RX_FAIL (B 34 of 58 pooled, p = 0.003). The Pro Micro shows no B excess (p = 0.30). Owner call: accept as TI-receiver sensitivity, or sweep TI FREQ_TRIM |
+| G1 re-judge | same, TI with the CRC-repair delivery fix | **Still FAIL, narrowly.** B 0.69/0.69 % vs A 0.21–0.45 %. Every CRC failure is now repaired and delivered. The residual is TI-only RX_FAIL (B 34 of 58 pooled, p = 0.003). The Pro Micro shows no B excess (p = 0.30). **Owner, 2026-11-19: PASS with accepted TI-only excess** (TI-receiver sensitivity; no FREQ_TRIM sweep) |
 | B5 | Pro Micro (RTC1), option on | **Not passed: confounded control.** Duty 1.6 %, ops 4.06/s, period −13.9 µs (−56.4 ppm, matches the LF crystal). Loss 4.4 % against a +8 dBm control image (1.1 %), while B transmits at 0 dBm. Needs an equal-power A/B |
-| G4 | MPSL hrm_ble + BLE connected, 1 h | **Passed except the anchor band as written.** 0 asserts, 0 disconnects, TI loss 1.63 %, `slot_awake` duty 1.207 %, no own HFXO request after boot, ~38 µA for the parts the counters see (SDC events and MPSL's ramp excluded). `start_err` sits at a steady **−4 µs** (band 0–17). The since-boot extremes −33/+31 µs come from boot STARTs and BLE connect setup, and did not move during the hour. Owner call |
+| G4 | MPSL hrm_ble + BLE connected, 1 h | **Passed except the anchor band as written.** 0 asserts, 0 disconnects, TI loss 1.63 %, `slot_awake` duty 1.207 %, no own HFXO request after boot, ~38 µA for the parts the counters see (SDC events and MPSL's ramp excluded). `start_err` sits at a steady **−4 µs** (band 0–17). The since-boot extremes −33/+31 µs come from boot STARTs and BLE connect setup, and did not move during the hour. **Owner, 2026-11-19: PASS** - the band is read as steady state only; the −4 µs steady offset is accepted and the boot/connect swings are one-off events |
 
 **H3, the G1 mechanism** (archive `2026-11-18-power-g1-h3`): B does not add a
 new kind of error at the TI. It raises the rate of the one error A already has,
@@ -306,7 +313,9 @@ in 22c75e3 / 28d7754. Since that fix only the RX_FAIL residual above remains.
 
 ## Open
 
-- G1's TI-only RX_FAIL residual and G4's −4 µs anchor offset: owner calls.
+- ~~G1's TI-only RX_FAIL residual and G4's −4 µs anchor offset: owner calls.~~
+  Closed 2026-11-19: both accepted by the owner (G1 PASS with accepted TI-only
+  excess, G4 PASS on steady state). TI standby: deferred (section 7).
 - B5: equal-power A/B on the Pro Micro. Its spike S3 lp rows are invalid
   (f39c704) and need a rerun.
 - G4 found that hrm_ble BLE rows set `MPSL_TIMESLOT_SESSION_COUNT` 1 while D2

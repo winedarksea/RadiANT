@@ -56,7 +56,9 @@
 # 2026-11-18: 21 (power plan pass B6): radiant.backend.lp_mpsl (the option on
 # the MPSL gate's build, the backend's half) and radiant.gate.lp (the gate
 # with the option's two hooks compiled in).
-min_scenarios: 21
+# 2026-11-19: 22, radiant.api.crc_bits (CRC repair + 0xF7 counters +
+# CONFIG_RADIANT_DIAG_CRC_BITS, Gate G1 H3's receiver counter).
+min_scenarios: 22
 
 # Total ztest cases twister executes, summed over every scenario. It equals the
 # sum of the per-scenario floors below, so the backstop and the floors cannot
@@ -133,7 +135,9 @@ min_scenarios: 21
 # 6108 (+4) on power/wrapup (2026-11-19): the idle regression guard (no HFXO
 # held or requested while nothing is due within 5 ms) and its positive control,
 # in each of radiant.backend.lp and radiant.backend.lp_rtc.
-min_testcases: 6108
+# 6229 (+121) on diag/g1-h3-min (Bluefin twister, 2026-11-19, 7029 executed):
+# the new radiant.api.crc_bits scenario, its one CRC-bits case included.
+min_testcases: 6229
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -157,6 +161,9 @@ min_cases.radiant.api.sec_host: 104
 # radiant.api.crc_repair: 112, the observed count on fix/crc-repair-deliver
 # (2026-11-18), including the two delivery cases.
 min_cases.radiant.api.crc_repair: 112
+# radiant.api.crc_bits: 121, the observed count on diag/g1-h3-min
+# (2026-11-19), including test_diag_crc_bits_count_direction_and_syndrome_bit.
+min_cases.radiant.api.crc_bits: 121
 # radiant.api.diag (ADR 0023): the api suite with the 0xF7 counters on.
 # 104 (2026-11-16, Bluefin twister on fix/diag-page9-done-cb): the observed
 # count, including the page-12 api case.

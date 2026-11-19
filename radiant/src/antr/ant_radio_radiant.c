@@ -2319,6 +2319,56 @@ static void api_crc_repair_setup(void)
 #endif
 }
 
+#if defined(CONFIG_RADIANT_DIAG_CRC_BITS)
+/* Which bit each delivered repair flipped: 0xF7 page 12 fields 5-7
+ * (radiant_diag.h). Saturating; not atomic, like every diag counter.
+ * Lanes stop one short of all-ones so a full field never reads as
+ * RADIANT_DIAG_NOT_MEASURED (0xFFFFFFFF). */
+#define API_CRC_BITS_MAX8  (UINT8_MAX - 1u)
+#define API_CRC_BITS_MAX16 (UINT16_MAX - 1u)
+static struct {
+	uint16_t rx1;     /* received 1 where 0 was sent */
+	uint16_t rx0;     /* received 0 where 1 was sent */
+	uint8_t  syn[8];  /* in-CRC repairs by syndrome bit pair {0,1}..{14,15} */
+} api_crc_bits;
+
+static void api_crc_bits_note(const struct radiant_rx_event *evt,
+			      const struct radiant_frame_wire *w)
+{
+	/* w holds the repaired body. Its CRC equals the received one when the
+	 * repair was in the body; otherwise the syndrome is the one CRC bit. */
+	uint16_t c = radiant_crc16(RADIANT_CRC_INIT, w->addr, w->addr_len);
+	uint16_t syn;
+	bool     rx1 = false;
+	uint16_t k;
+
+	c = radiant_crc16(c, w->body, w->body_len);
+	syn = (uint16_t)((uint16_t)evt->crc_rx ^ c);
+	if (syn != 0u) {
+		uint8_t *p = &api_crc_bits.syn[(31u - (uint32_t)__builtin_clz(syn)) / 2u];
+
+		rx1 = (((uint16_t)evt->crc_rx & syn) != 0u);
+		if (*p < API_CRC_BITS_MAX8) {
+			(*p)++;
+		}
+	} else {
+		for (k = 0u; k < w->body_len; k++) {
+			uint8_t d = (uint8_t)(evt->body[k] ^ w->body[k]);
+
+			if (d != 0u) {
+				rx1 = ((evt->body[k] & d) != 0u);
+				break;
+			}
+		}
+	}
+	if (rx1 && api_crc_bits.rx1 < API_CRC_BITS_MAX16) {
+		api_crc_bits.rx1++;
+	} else if (!rx1 && api_crc_bits.rx0 < API_CRC_BITS_MAX16) {
+		api_crc_bits.rx0++;
+	}
+}
+#endif
+
 static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 			      bool crc_failed)
 {
@@ -2416,6 +2466,9 @@ static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 	if (crc_failed) {
 		/* Counted here, not at the repair: this means repaired AND delivered. */
 		api_stats.crc_repaired++;
+#if defined(CONFIG_RADIANT_DIAG_CRC_BITS)
+		api_crc_bits_note(evt, &w);
+#endif
 		/*
 		 * The repair is accepted, so from here on this is a good frame. The
 		 * HAL event still says CRC_FAIL, and radiant_event_post_rx() rejects
@@ -3330,6 +3383,9 @@ antr_err_t antr_init(void)
 	api_reset_state();
 	k_mutex_unlock(&api_lock);
 	memset(&api_stats, 0, sizeof(api_stats));
+#if defined(CONFIG_RADIANT_DIAG_CRC_BITS)
+	memset(&api_crc_bits, 0, sizeof(api_crc_bits));
+#endif
 
 	/* Order matters: the event ring must exist before the radio is enabled,
 	 * since an earlier post returns ESTATE. */
@@ -4808,9 +4864,16 @@ antr_err_t antr_diag_page(uint8_t page, uint8_t *out)
 #else
 		v[RADIANT_DIAG_STALE_ED] = RADIANT_DIAG_NOT_MEASURED;
 #endif
+#if defined(CONFIG_RADIANT_DIAG_CRC_BITS)
+		v[RADIANT_DIAG_CRC_BIT_DIR] = (uint32_t)api_crc_bits.rx1 |
+					      ((uint32_t)api_crc_bits.rx0 << 16);
+		v[RADIANT_DIAG_CRC_SYN_0_7] = sys_get_le32(&api_crc_bits.syn[0]);
+		v[RADIANT_DIAG_CRC_SYN_8_15] = sys_get_le32(&api_crc_bits.syn[4]);
+#else
 		v[5] = RADIANT_DIAG_NOT_MEASURED;
 		v[6] = RADIANT_DIAG_NOT_MEASURED;
 		v[7] = RADIANT_DIAG_NOT_MEASURED;
+#endif
 		break;
 	case RADIANT_DIAG_PAGE_XFER:
 		v[RADIANT_DIAG_XFER_WATCHDOGS] = api_stats.xfer_watchdogs;

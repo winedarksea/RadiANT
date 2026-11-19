@@ -4,6 +4,12 @@
 > `docs/preservation.md`). The committed numbers are in this README,
 > `g4_summary.json` and `g4_extremes_summary.tsv`.
 
+> **Owner decision, 2026-11-19: G4 PASS.** The owner reads the 0-17 us anchor
+> band as a steady-state criterion only. The steady `start_err` of -4 us
+> (spread about 2 us) is accepted; the since-boot -33 / +31 us extremes (the
+> first STARTs after boot, BLE connection setup) are one-off events, not
+> steady state. The verdict below is the record as judged on the day.
+
 **Verdict: every G4 criterion holds except the anchor band as literally written,
 which is an owner call.**
 - Held for the hour:

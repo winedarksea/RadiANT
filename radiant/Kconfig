@@ -1443,6 +1443,25 @@ config RADIANT_CRC_REPAIR
 	  a mis-repair, and an un-acked packet is resent anyway. Acks and
 	  unknown control bytes are refused the same way.
 
+config RADIANT_DIAG_CRC_BITS
+	bool "DIAGNOSTIC: which bit each delivered CRC repair flipped"
+	depends on RADIANT_CRC_REPAIR && RADIANT_DIAG_COUNTERS
+	default n
+	help
+	  For every repaired-and-delivered frame (crc_repaired), counts the
+	  flipped bit's direction (received 1 where 0 was sent, or 0 where 1
+	  was sent) and, when the bit was in the CRC field, which syndrome
+	  bit it was (bit 0 = the last bit on air). Read on 0xF7 page 12,
+	  fields 5-7 (radiant_diag.h); tools/ant_diag.py names them.
+
+	  This is the receiver-side counter that answered Gate G1's H3
+	  question (archive/benchmarks/2026-11-18-power-g1-h3): the TI's
+	  extra errors behind an nRF54L15 transmitter that restarts its HFXO
+	  every slot are the frame's last bit, a 0 read as 1. Turn it on in a
+	  receiver image when a transmitter change moves its CRC-fail rate.
+
+	  Off, nothing is compiled and page 12 fields 5-7 read 0xFFFFFFFF.
+
 config RADIANT_PROFILE_SANITY
 	bool "drop a repaired frame whose payload is not physically possible"
 	depends on RADIANT_CRC_REPAIR

@@ -4,6 +4,12 @@
 and `jlink_peek` register samples) multiplied by typical datasheet currents (`tools/ant_power_est.py`). No current meter
 was used.
 
+> **Owner decision, 2026-11-19: G1 PASS with accepted TI-only excess.** The owner accepts the narrow TI-only
+> RX_FAIL excess left after the CRC-repair delivery fix (~0.3-0.4 pp: B 0.69 % against 0.21-0.45 % with the HFXO
+> held, `2026-11-19-power-g1-rejudge/`). Cause per H3 (`2026-11-18-power-g1-h3/`): the TI misreads the frame's last
+> bit after each HFXO restart; the Pro Micro receiver shows no excess. No TI FREQ_TRIM sweep. The verdict text
+> below is the record as judged on the day and is left as written.
+
 **Verdict: G1 FAILS on one criterion, TI receiver loss.** Every power and timing criterion passes: HFXO duty 1.68 %,
 CONSTLAT off between slots, zero LP faults in the measured windows, and the period shift is the LF offset. But both B
 arms lost 2-5x more packets at the TI receiver than any of the three A arms around them. The Pro Micro, in the same
