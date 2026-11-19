@@ -256,6 +256,15 @@ $nodeTargets = @(
     # fails for the wrong reason.
     @{ dir='node_example';    board='nrf54l15dk/nrf54l15/cpuapp';    sensor='EXAMPLE';   conf='sensor_example.conf' }
     @{ dir='node_custom';     board='nrf54l15dk/nrf54l15/cpuapp';    sensor='CUSTOM';    conf='sensor_custom.conf' }
+    # RADIANT_NRF_LOW_POWER on the MPSL gate (power plan pass B6): the TIMER
+    # stopped between timeslots and started from the GRTC at each START, the
+    # boot HFXO request dropped. The option must survive Kconfig (it depends
+    # on the GRTC and the gate) and leave the tuning knobs of the direct
+    # build's two-edge wake hidden.
+    @{ dir='node_ble_lp';     board='nrf54l15dk/nrf54l15/cpuapp';    sensor='SIMULATED'; conf='ble.conf;lowpower.conf';       ble=$true; assert_config=@('CONFIG_RADIANT_NRF_LOW_POWER=y', 'CONFIG_NRF_GRTC_TIMER=y', '# CONFIG_RADIANT_NRF_LP_STATS is not set'); assert_absent=@('CONFIG_RADIANT_NRF_LP_HFXO_STARTUP_US', 'CONFIG_RADIANT_NRF_LP_KEEP_ON_US', 'CONFIG_RADIANT_NRF_LP_LINGER_MS') }
+    # Its Gate G4 bench image: plus the power-diag line and
+    # radiant_nrf_lp_stats (SWD, by symbol).
+    @{ dir='node_ble_lp_pd';  board='nrf54l15dk/nrf54l15/cpuapp';    sensor='SIMULATED'; conf='ble.conf;lowpower.conf;power_diag.conf'; ble=$true; assert_config=@('CONFIG_RADIANT_NRF_LOW_POWER=y', 'CONFIG_RADIANT_POWER_DIAG=y', 'CONFIG_RADIANT_NRF_LP_STATS=y', 'CONFIG_LOG=y') }
 )
 
 # ---- The treadmill -----------------------------------------------------------
@@ -637,6 +646,30 @@ try {
                         throw "hrm_ble $($t.dir): expected $sym in .config"
                     }
                 }
+            }
+
+            # 4. The row's own exact .config lines (as the sample rows'). The
+            # BLE rows without the option must not have it: pass B6 lifted
+            # its MPSL refusal, so nothing else would notice it creeping in.
+            foreach ($line in @($t.assert_config)) {
+                if (-not $line) { continue }
+                if (-not ($cfg | Where-Object { $_ -eq $line })) {
+                    throw "hrm_ble $($t.dir): expected '$line' in .config"
+                }
+            }
+            # 5. Symbols that must not appear at all, set or unset (hidden by
+            # a `depends on`): the direct build's two-edge wake knobs on the
+            # MPSL low-power row.
+            foreach ($sym in @($t.assert_absent)) {
+                if (-not $sym) { continue }
+                $hit = $cfg | Where-Object { $_ -match "^(# )?$sym[= ]" }
+                if ($hit) {
+                    throw "hrm_ble $($t.dir): '$sym' must be absent from .config, found '$hit'"
+                }
+            }
+            if ($t.ble -and -not ($t.assert_config -contains 'CONFIG_RADIANT_NRF_LOW_POWER=y') -and
+                ($cfg | Where-Object { $_ -eq 'CONFIG_RADIANT_NRF_LOW_POWER=y' })) {
+                throw "hrm_ble $($t.dir): CONFIG_RADIANT_NRF_LOW_POWER is on without lowpower.conf"
             }
 
             $bleNote = if ($t.ble) { ', BLE HRS + MPSL gate' } else { '' }

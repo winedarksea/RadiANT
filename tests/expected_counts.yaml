@@ -53,7 +53,10 @@
 # two-edge wake against a simulated GRTC/HFXO/TIMER, pass B3). 19,
 # radiant.backend.lp_rtc (the low-power path against a simulated RTC1 driver
 # and nRF52 TIMER, pass B5).
-min_scenarios: 19
+# 2026-11-18: 21 (power plan pass B6): radiant.backend.lp_mpsl (the option on
+# the MPSL gate's build, the backend's half) and radiant.gate.lp (the gate
+# with the option's two hooks compiled in).
+min_scenarios: 21
 
 # Total ztest cases twister executes, summed over every scenario. It equals the
 # sum of the per-scenario floors below, so the backstop and the floors cannot
@@ -105,7 +108,14 @@ min_scenarios: 19
 # 5913 (+13) with the B3 review fixes' backend.lp cases.
 # 5954 (+41) with the radiant.backend.lp_rtc scenario (power plan pass B5):
 # the 33 backend.lp cases on RTC1 and RTC1's own 8.
-min_testcases: 5954
+# 6073 (+119) with pass B6: radiant.backend.lp_mpsl's 14, radiant.gate.lp's
+# 104 (every gate case plus 10 hook cases) and the XTAL_GUARANTEED case in
+# radiant.gate. The floor moves by that coverage only; the Bluefin run on
+# power/b6 (2026-11-18) executed 6873 in total, the rest being earlier growth
+# in scenarios whose floors were not raised. 6076 (+3) with the B6 review's
+# backend.lp_mpsl cases (a wake below the high-water mark, sub-tick phases and
+# read latency, an arm preempted by the timeslot's end).
+min_testcases: 6076
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -132,8 +142,8 @@ min_cases.radiant.api.crc_repair: 87
 # count, including the page-12 api case.
 min_cases.radiant.api.diag: 104
 # 32 since C5-1 (inline BLOCKED backs off the class that was refused). 38 with
-# the extension skip (ADR 0021).
-min_cases.radiant.gate: 75
+# the extension skip (ADR 0021). 76 with pass B6's XTAL_GUARANTEED case.
+min_cases.radiant.gate: 76
 # radiant.backend (ADR 0021): the backend completion path against register models.
 min_cases.radiant.backend: 8
 min_cases.hrm_ble.sim_sched: 4
@@ -158,3 +168,10 @@ min_cases.radiant.backend.lp: 33
 # arithmetic across 2^24, schedule span, minimum lead, TIMER SHUTDOWN,
 # software start).
 min_cases.radiant.backend.lp_rtc: 41
+# radiant.backend.lp_mpsl (power plan pass B6): CONFIG_RADIANT_NRF_LOW_POWER
+# on the MPSL gate's build - the TIMER stopped between timeslots and started
+# from the GRTC at each SIGNAL_START.
+min_cases.radiant.backend.lp_mpsl: 17
+# radiant.gate.lp (pass B6): every radiant.gate case (94 observed) with the
+# low-power hooks compiled in, plus their 10 cases.
+min_cases.radiant.gate.lp: 104

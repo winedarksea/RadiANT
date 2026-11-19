@@ -142,6 +142,10 @@ struct fake_hw {
 	uint32_t ep_attached;   /* the last nrfx_gppi_ep_attach() endpoint */
 	bool     disable_hangs; /* TASKS_DISABLE never raises EVENTS_DISABLED */
 	uint32_t disable_tasks; /* TASKS_DISABLE triggers */
+	/* Every HAL write to a RADIO register (SHORTS, INTEN, MODE, FREQUENCY,
+	 * TXADDRESS, TXPOWER): the lp_mpsl scenario checks none lands after a
+	 * timeslot's hand-back. Plain register stores show in fake_radio_regs. */
+	uint32_t radio_writes;
 };
 extern struct fake_hw fake_hw;
 
@@ -162,13 +166,19 @@ static inline void nrf_radio_task_trigger(NRF_RADIO_Type *r, nrf_radio_task_t t)
 static inline bool nrf_radio_crc_status_check(NRF_RADIO_Type *r)
 { (void)r; return fake_hw.crc_ok; }
 static inline void nrf_radio_shorts_set(NRF_RADIO_Type *r, uint32_t m)
-{ (void)r; fake_hw.shorts = m; }
-static inline void nrf_radio_int_enable(NRF_RADIO_Type *r, uint32_t m) { (void)r; (void)m; }
-static inline void nrf_radio_int_disable(NRF_RADIO_Type *r, uint32_t m) { (void)r; (void)m; }
-static inline void nrf_radio_mode_set(NRF_RADIO_Type *r, nrf_radio_mode_t m) { r->MODE = (uint32_t)m; }
-static inline void nrf_radio_frequency_set(NRF_RADIO_Type *r, uint16_t f) { r->FREQUENCY = f; }
-static inline void nrf_radio_txaddress_set(NRF_RADIO_Type *r, uint8_t a) { r->TXADDRESS = a; }
-static inline void nrf_radio_txpower_set(NRF_RADIO_Type *r, nrf_radio_txpower_t p) { (void)r; (void)p; }
+{ (void)r; fake_hw.shorts = m; fake_hw.radio_writes++; }
+static inline void nrf_radio_int_enable(NRF_RADIO_Type *r, uint32_t m)
+{ (void)r; (void)m; fake_hw.radio_writes++; }
+static inline void nrf_radio_int_disable(NRF_RADIO_Type *r, uint32_t m)
+{ (void)r; (void)m; fake_hw.radio_writes++; }
+static inline void nrf_radio_mode_set(NRF_RADIO_Type *r, nrf_radio_mode_t m)
+{ r->MODE = (uint32_t)m; fake_hw.radio_writes++; }
+static inline void nrf_radio_frequency_set(NRF_RADIO_Type *r, uint16_t f)
+{ r->FREQUENCY = f; fake_hw.radio_writes++; }
+static inline void nrf_radio_txaddress_set(NRF_RADIO_Type *r, uint8_t a)
+{ r->TXADDRESS = a; fake_hw.radio_writes++; }
+static inline void nrf_radio_txpower_set(NRF_RADIO_Type *r, nrf_radio_txpower_t p)
+{ (void)r; (void)p; fake_hw.radio_writes++; }
 static inline void nrf_radio_fast_ramp_up_enable_set(NRF_RADIO_Type *r, bool e) { (void)r; (void)e; }
 static inline bool nrf_radio_fast_ramp_up_check(NRF_RADIO_Type *r) { (void)r; return true; }
 static inline void nrf_radio_reset(NRF_RADIO_Type *r) { (void)r; }

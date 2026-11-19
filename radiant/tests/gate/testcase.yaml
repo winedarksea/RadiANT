@@ -25,3 +25,18 @@ tests:
       - native_sim
     integration_platforms:
       - native_sim
+  radiant.gate.lp:
+    # The gate with CONFIG_RADIANT_NRF_LOW_POWER's two hooks compiled in
+    # (power plan pass B6): every radiant.gate case plus test_gate_lp.c's -
+    # one slot_start per START before anything programmes, one slot_end as
+    # the last act of every ACTION_END, the backstops on the low-priority
+    # paths. The backend's half is radiant.backend.lp_mpsl.
+    tags:
+      - radiant
+      - mpsl
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    extra_args:
+      - GATE_LP=1

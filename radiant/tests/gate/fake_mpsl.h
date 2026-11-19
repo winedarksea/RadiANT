@@ -139,6 +139,36 @@ struct fake_backend_counts {
 	uint32_t grant_end_seq;
 	uint32_t unpend_seq;
 	uint32_t unpend_abort_calls;
+	/* on_grant()'s place in the same order. */
+	uint32_t grant_seq;
+	/*
+	 * CONFIG_RADIANT_NRF_LOW_POWER (the radiant.gate.lp scenario only; zero
+	 * otherwise): radiant_nrf_gate_lp_slot_start()/_end(). The fake keeps the
+	 * backend's one bit of state, whether its TIMER is running (lp_awake):
+	 *   lp_start           slot_start calls; lp_last_r_start the last r_start
+	 *   lp_start_awake     ... that found the TIMER still running (a missed
+	 *                      release)
+	 *   lp_start_seq       its place in the backend-call order
+	 *   lp_end             slot_end calls; lp_end_backstop those with
+	 *                      backstop true
+	 *   lp_releases        slot_end calls that stopped a running TIMER;
+	 *                      lp_backstop_releases those from a backstop
+	 *   lp_end_seq         the last slot_end's place in the order
+	 *   lp_end_abort_calls fake_radio_abort_calls() at the last slot_end
+	 *   lp_end_outside     slot_end(false) calls made outside a timeslot
+	 */
+	bool     lp_awake;
+	uint32_t lp_start;
+	uint32_t lp_start_awake;
+	uint64_t lp_last_r_start;
+	uint32_t lp_start_seq;
+	uint32_t lp_end;
+	uint32_t lp_end_backstop;
+	uint32_t lp_releases;
+	uint32_t lp_backstop_releases;
+	uint32_t lp_end_seq;
+	uint32_t lp_end_abort_calls;
+	uint32_t lp_end_outside;
 };
 
 void                              fake_backend_reset(void);

@@ -763,7 +763,9 @@ config RADIANT_NRF_RX_DIAG
 # src/radiant_radio_nrf_lp.h (pass B2, radiant/tests/lp_clock); the backend
 # side is src/radiant_radio_nrf_lp.c (pass B3 on the nRF54L GRTC, pass B5 on
 # the nRF52840 RTC1, one state machine behind a counter seam; radiant/tests/
-# backend's lp and lp_rtc scenarios). MPSL is pass B6.
+# backend's lp and lp_rtc scenarios). MPSL is pass B6: the same file, its own
+# small section (the timeslot START is the wake; radiant/tests/backend's
+# lp_mpsl scenario, radiant/tests/gate's gate.lp scenario).
 config RADIANT_NRF_LOW_POWER
 	bool "EXPERIMENTAL: release the HFXO and stop the radio TIMER in idle gaps"
 	depends on RADIANT_BACKEND_NRF
@@ -782,12 +784,16 @@ config RADIANT_NRF_LOW_POWER
 	# 2^14-tick schedule span and a driver that moves CC 0 to 1 even on an
 	# exact compare.
 	depends on NRF_GRTC_TIMER || (NRF_RTC_TIMER && NRF_RTC_COUNTER_BIT_WIDTH = 24)
-	# Direct backend only for now. On an MPSL build the HFXO and the wake
-	# both belong to MPSL's timeslot placement - and that includes an MPSL
-	# that something else turned on without the gate (the 802.15.4 radio
-	# driver alone enables MPSL on the nRF54L). Pass B6 lifts both.
-	depends on !RADIANT_BACKEND_NRF_GATE_MPSL
-	depends on !MPSL
+	# On an MPSL build (pass B6) the HFXO and the wake both belong to MPSL's
+	# timeslot: the gate asks for XTAL_GUARANTEED and the backend starts
+	# its TIMER from the LF counter at each SIGNAL_START. That needs the
+	# gate - an MPSL something else turned on without it (the 802.15.4
+	# radio driver alone enables MPSL on the nRF54L) is still refused - and
+	# the GRTC: the START re-anchor is a software read of the LF counter in
+	# a zero-latency interrupt, exact at the GRTC's 1 us tick, while an RTC1
+	# read would need a busy-wait of up to a 30.5 us tick there.
+	depends on !MPSL || RADIANT_BACKEND_NRF_GATE_MPSL
+	depends on !RADIANT_BACKEND_NRF_GATE_MPSL || NRF_GRTC_TIMER
 	# nRF54L errata 20: CONSTLAT is held whenever the radio can be active
 	# and freed with the HFXO, through nrfx's reference count.
 	select NRFX_POWER if SOC_SERIES_NRF54L
@@ -860,12 +866,27 @@ config RADIANT_NRF_LOW_POWER
 	  32768 Hz tick (30.5 us) makes every wake edge up to one tick early,
 	  which the wake lead absorbs.
 
-	  STATUS: EXPERIMENTAL, direct backend only: nRF54L15 (power plan
-	  pass B3, Gate G1 running) and nRF52840 (pass B5, not yet
-	  bench-gated). Other parts with these system timers - the rest of
-	  both families, the nRF5340 network core - build but are unmeasured
-	  (spike B1 covered one nRF54L15 DK and one nRF52840 Pro Micro
-	  clone). MPSL (pass B6) is not implemented: Kconfig refuses it.
+	  WITH THE MPSL GATE (RADIANT_BACKEND_NRF_GATE_MPSL, power plan pass
+	  B6; GRTC parts only) none of the edges above exist. The radio is
+	  only ever used inside an MPSL timeslot, and every timeslot is
+	  requested with MPSL_TIMESLOT_HFCLK_CFG_XTAL_GUARANTEED, so MPSL
+	  itself starts the HFXO before each one and holds it to the end.
+	  The backend drops its boot-time HFXO request once this option is
+	  running, stops its TIMER when each timeslot ends (time runs on the
+	  GRTC in between) and starts it again, from zero, on the GRTC's
+	  current tick at each SIGNAL_START. No compare, (D)PPI connection or
+	  GRTC channel is used, no interrupt is added, and no operation can
+	  fail late because of it: a START either comes on a stable crystal
+	  or does not come. The tuning options below (HFXO start-up, keep-on,
+	  linger) do not apply and are hidden.
+
+	  STATUS: EXPERIMENTAL. Direct backend: nRF54L15 (power plan pass
+	  B3, Gate G1: power and timing pass, TI receiver loss under
+	  diagnosis) and nRF52840 (pass B5, not yet bench-gated). MPSL gate:
+	  nRF54L15 (pass B6, Gate G4 not yet run). Other parts with these
+	  system timers - the rest of both families, the nRF5340 network
+	  core - build but are unmeasured (spike B1 covered one nRF54L15 DK
+	  and one nRF52840 Pro Micro clone).
 
 # Two of the system timer's RTC1 compare channels for the option (the anchor
 # and the HF edge). Sourced before drivers/timer/Kconfig.nrf_rtc, as every
@@ -881,7 +902,7 @@ config NRF_RTC_TIMER_USER_CHAN_COUNT
 
 config RADIANT_NRF_LP_HFXO_STARTUP_US
 	int "HFXO start-up time the low-power wake allows for, us"
-	depends on RADIANT_NRF_LOW_POWER
+	depends on RADIANT_NRF_LOW_POWER && !RADIANT_BACKEND_NRF_GATE_MPSL
 	range 100 10000
 	# Spike B1 S4 (docs/spike-lp-clock-results.md), request -> callback,
 	# 1000 samples per CONSTLAT mode, HFXO off before each: nRF54L15 DK
@@ -916,7 +937,7 @@ config RADIANT_NRF_LP_HFXO_STARTUP_US
 
 config RADIANT_NRF_LP_KEEP_ON_US
 	int "least idle gap worth sleeping through, beyond the wake lead, us"
-	depends on RADIANT_NRF_LOW_POWER
+	depends on RADIANT_NRF_LOW_POWER && !RADIANT_BACKEND_NRF_GATE_MPSL
 	# The floor covers interrupt latency around the release and edge 1,
 	# which the LF-overhead term (compare leads and rounding) does not.
 	range 500 1000000
@@ -934,7 +955,7 @@ config RADIANT_NRF_LP_KEEP_ON_US
 
 config RADIANT_NRF_LP_LINGER_MS
 	int "stay awake this long after enable or a PRIO_NORMAL acquire, ms"
-	depends on RADIANT_NRF_LOW_POWER
+	depends on RADIANT_NRF_LOW_POWER && !RADIANT_BACKEND_NRF_GATE_MPSL
 	range 0 60000
 	default 1000
 	help
@@ -957,10 +978,12 @@ config RADIANT_NRF_LP_STATS
 	  with RADIANT_POWER_DIAG, whose proxy is how a board with no
 	  current meter shows what the option saved.
 
-	  They live in the global radiant_nrf_lp_stats (92 bytes, layout in
-	  src/radiant_radio_nrf_lp.c), not in radiant_power_diag, whose layout
-	  is fixed: read it over SWD by symbol (scripts/jlink_peek.ps1
-	  -Symbol radiant_nrf_lp_stats).
+	  They live in the global radiant_nrf_lp_stats (92 bytes; 116 on an
+	  MPSL build, which appends the timeslot fields: time awake in
+	  timeslots, START against its requested start, missed releases;
+	  layout in src/radiant_radio_nrf_lp.c), not in radiant_power_diag,
+	  whose layout is fixed: read it over SWD by symbol
+	  (scripts/jlink_peek.ps1 -Symbol radiant_nrf_lp_stats).
 
 # ------ ADR 0018 candidate (d2): a second timeslot session (Phase 1) -------
 #

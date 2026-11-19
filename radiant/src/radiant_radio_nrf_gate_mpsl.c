@@ -14,8 +14,24 @@
  *
  * Constants (mpsl_arb spike): grant latency 1692-1695 us (2760 us tail); anchor
  * error 0-17 us over 640 chained NORMAL requests; BLOCKED arrives 11-31 ms before
- * its start; timer drift -99 ppm, but only while the app holds its own HFXO
- * request (clock_control_on(); do not remove).
+ * its start; the backend's TIMER ran -99 ppm against MPSL's clock.
+ *
+ * The HFXO and the backend's TIMER between timeslots. Every request here is
+ * XTAL_GUARANTEED (GATE_HFCLK_CFG): MPSL starts the HFXO before SIGNAL_START and
+ * holds it to the timeslot's end, and releases it after unless something else
+ * holds it. The -99 ppm was measured with the backend holding its own HFXO
+ * request for the whole uptime, which is what kept its free-running TIMER on the
+ * crystal between timeslots (without it that TIMER would count the gaps on HFINT,
+ * accurate only to the order of a percent). So:
+ *   - CONFIG_RADIANT_NRF_LOW_POWER=n: the backend's boot request
+ *     (radiant_radio_init()) stays for the whole uptime. Do not remove it.
+ *   - CONFIG_RADIANT_NRF_LOW_POWER=y (power plan pass B6): the backend drops that
+ *     request, its TIMER is stopped between timeslots and its timebase runs on the
+ *     GRTC (MPSL's own clock), and radiant_nrf_gate_lp_slot_start() starts the
+ *     TIMER from the GRTC at each START, on MPSL's crystal. The gate's anchors
+ *     and r_start are then LF time outside a timeslot, as MPSL's are, and the
+ *     -99 ppm applies only inside one. XTAL_GUARANTEED is what makes that start
+ *     exact: never request a timeslot with a weaker HFCLK configuration.
  *
  * Rules:
  * 1. One request outstanding per session (-NRF_EAGAIN unless IDLE).
@@ -168,6 +184,14 @@ BUILD_ASSERT(CONFIG_MPSL_TIMESLOT_SESSION_COUNT >= 1,
  * since nothing waits on it; far past the measured grant latency.
  */
 #define BOOTSTRAP_TIMEOUT_US 1000000u
+
+/*
+ * The HFCLK every request asks for, bootstrap and NORMAL alike. Not a tuning
+ * knob: the radio needs the crystal in every timeslot, and
+ * CONFIG_RADIANT_NRF_LOW_POWER (pass B6) starts the backend's TIMER at SIGNAL_START
+ * on the strength of it (see the header).
+ */
+#define GATE_HFCLK_CFG MPSL_TIMESLOT_HFCLK_CFG_XTAL_GUARANTEED
 
 BUILD_ASSERT(PLACE_MIN_US < PLACE_LEAD_US,
 	     "the too-near floor must be strictly below the advertised lead: "
@@ -1183,7 +1207,7 @@ static void bootstrap_anchor(struct sess *s)
 	}
 	memset(&s->req, 0, sizeof(s->req));
 	s->req.request_type = MPSL_TIMESLOT_REQ_TYPE_EARLIEST;
-	s->req.params.earliest.hfclk = MPSL_TIMESLOT_HFCLK_CFG_XTAL_GUARANTEED;
+	s->req.params.earliest.hfclk = GATE_HFCLK_CFG;
 	s->req.params.earliest.priority = MPSL_TIMESLOT_PRIORITY_NORMAL;
 	s->req.params.earliest.length_us = MPSL_TIMESLOT_LENGTH_MIN_US;
 	s->req.params.earliest.timeout_us = BOOTSTRAP_TIMEOUT_US;
@@ -1391,6 +1415,13 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		/* A new timeslot: nothing of it is the radio's yet (see
 		 * radiant_nrf_gate_radio_irq_unpend()). Before any path below. */
 		radiant_nrf_gate_on_slot_start();
+#if defined(CONFIG_RADIANT_NRF_LOW_POWER)
+		/* MPSL's guaranteed crystal is up: start the backend's TIMER from the
+		 * GRTC (pass B6), before the anchor is read and before anything can
+		 * programme the radio. Only a timed request's start is cross-checked. */
+		radiant_nrf_gate_lp_slot_start(
+			(s->bootstrapping || s->placed_extendable) ? 0u : s->r_start);
+#endif
 		stats.granted++;
 		GSTAT(s->n_granted++);
 		/* Answered: the session accepts a new request. See struct sess::mpsl_owes. */
@@ -1684,6 +1715,9 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 				g.granted = false;
 				timer0_disarm();
 				g.ts_live = false;
+#if defined(CONFIG_RADIANT_NRF_LOW_POWER)
+				radiant_nrf_gate_lp_slot_end(true);
+#endif
 			}
 			radiant_swi_zli_unlock(zkey);
 		}
@@ -1843,6 +1877,11 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		 * hw_held already false and an interrupt still armed.
 		 */
 		timer0_disarm();
+#if defined(CONFIG_RADIANT_NRF_LOW_POWER)
+		/* No timeslot is running: a TIMER still running is a timeslot that
+		 * ended by expiry, past the ACTION_END funnel. */
+		radiant_nrf_gate_lp_slot_end(true);
+#endif
 		radiant_swi_zli_unlock(zkey);
 		/* Authoritative clear of mpsl_owes ("no request outstanding"). The re-place
 		 * below sets it again on acceptance. */
@@ -1878,6 +1917,9 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 				stats.idle_disarm++;
 			}
 			timer0_disarm();
+#if defined(CONFIG_RADIANT_NRF_LOW_POWER)
+			radiant_nrf_gate_lp_slot_end(true);
+#endif
 		}
 		radiant_swi_zli_unlock(zkey);
 		if (g.pending && g.op_sess == si) {
@@ -1958,6 +2000,15 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 			ARG_UNUSED(was_pending);
 #endif
 		}
+#if defined(CONFIG_RADIANT_NRF_LOW_POWER)
+		/*
+		 * Pass B6: stop the backend's TIMER and put its timebase back on the
+		 * GRTC. The very last act of the timeslot: radio_disable_now() returns
+		 * at once on a stopped TIMER, so every hand-back, radiant_radio_abort()
+		 * and the vector clear above had to run first.
+		 */
+		radiant_nrf_gate_lp_slot_end(false);
+#endif
 	}
 
 	TRACE_SIGNAL(si, signal, rv.callback_action);
@@ -2191,6 +2242,9 @@ void gate_shutdown(void)
 	g.pending = false;
 	g.granted = false;
 	g.ts_live = false;
+#if defined(CONFIG_RADIANT_NRF_LOW_POWER)
+	radiant_nrf_gate_lp_slot_end(true);
+#endif
 }
 
 uint32_t gate_max_window_us(void)
@@ -2546,8 +2600,7 @@ static bool build_normal(struct sess *s, radiant_time_t start, radiant_time_t en
 	}
 	memset(rq, 0, sizeof(*rq));
 	rq->request_type = MPSL_TIMESLOT_REQ_TYPE_NORMAL;
-	rq->params.normal.hfclk =
-		MPSL_TIMESLOT_HFCLK_CFG_XTAL_GUARANTEED;
+	rq->params.normal.hfclk = GATE_HFCLK_CFG;
 	/* HIGH for tracked windows and transmits, NORMAL for elastic. This ranks only our own requests. */
 	rq->params.normal.priority =
 		(prio == RADIANT_GATE_PRIO_HIGH)

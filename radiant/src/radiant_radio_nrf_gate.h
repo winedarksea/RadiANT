@@ -341,6 +341,33 @@ bool radiant_nrf_gate_radio_irq_unpend(void);
  */
 void radiant_nrf_gate_on_slot_start(void);
 
+#if defined(CONFIG_RADIANT_NRF_LOW_POWER)
+/*
+ * CONFIG_RADIANT_NRF_LOW_POWER on the arbitrated (MPSL) build, power plan pass
+ * B6 (radiant_radio_nrf_lp.c, its LP_MPSL section). Between timeslots the
+ * backend's radio TIMER is stopped and its timebase runs on the GRTC; every
+ * timeslot is requested XTAL_GUARANTEED, so the HFXO is MPSL's to start.
+ *
+ * radiant_nrf_gate_lp_slot_start(): SIGNAL_START, before anything reads the
+ * clock or touches the radio. The backend starts its TIMER from zero on the
+ * GRTC's current tick (the re-anchor). r_start is where the gate asked MPSL to
+ * start this timeslot, for the START cross-check stat, or 0 for a timeslot
+ * with no meaningful requested start (the bootstrap, the elastic class).
+ *
+ * radiant_nrf_gate_lp_slot_end(): the timeslot is over. From the ACTION_END
+ * funnel (backstop false) as the very last act, after every hand-back, abort
+ * and RADIO vector clear - radio_disable_now() returns at once on a stopped
+ * TIMER, so no radio work may follow it. From the low-priority backstops and
+ * gate_shutdown() with backstop true: a TIMER still running there is a
+ * missed release and is counted. Idempotent: a no-op if already stopped.
+ *
+ * Both are zero-latency safe (PRIMASK and register reads only). Declared only
+ * with the option, so the gate's object is unchanged without it.
+ */
+void radiant_nrf_gate_lp_slot_start(radiant_time_t r_start);
+void radiant_nrf_gate_lp_slot_end(bool backstop);
+#endif
+
 #ifdef __cplusplus
 }
 #endif
