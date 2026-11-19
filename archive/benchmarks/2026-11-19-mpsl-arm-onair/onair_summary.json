@@ -1,0 +1,10 @@
+{
+ "image": {"path": "C:/wt_mpsl_arm/build/ackps_l15_mpsl/dongle/zephyr/zephyr.hex", "md5": "41f6e951d698f8aafc04cee8385b4a18", "commit": "dd28bde", "conf": "apps/dongle_thread gate.conf;uart_57600.conf + apps/dongle/diag_counters.conf"},
+ "asserts": 0, "resets": 0, "console_uptime_s": [339, 879],
+ "phase1_300s": {"l15_ch0_loss_pct": 4.59, "l15_missing": 56, "l15_expected": 1218, "l15_rx_fail": 48,
+                  "ti_ref_loss_pct": 5.57, "ti_missing": 68, "ti_expected": 1219,
+                  "search_windows": 611, "sweeps": 608, "acquired": 1, "timeouts": 0},
+ "acked": {"l15_master_receives": "58/60", "l15_slave_originates": "59/60", "l15_master_originates": "60/60"},
+ "diag_after_phase1": {"sched_denied": 4, "slots_denied": 2, "slots_missed": 48, "sched_missed": 0, "sched_failed": 0},
+ "diag_after_phase2": {"sched_denied": 6, "slots_denied": 2, "slots_missed": 51, "xfer_no_ack": 1, "term_error": 3, "tx_expired": 0, "sched_arm_rejected": 0, "crc_repaired": 6, "crc_unrepairable": 8}
+}

@@ -1,0 +1,107 @@
+{
+ "image": {
+  "path": "C:\\wt_mpsl_arm\\build\\g4_lp_pd_ns\\hrm_ble\\zephyr\\zephyr.hex",
+  "md5": "9e6d6eb7bcc3b4e08aeba9dce04258ee",
+  "commit": "47bdf80",
+  "conf": "ble.conf;ble_nosuppress.conf;lowpower.conf;power_diag.conf"
+ },
+ "ble": {
+  "central": "Windows host radio, scripts/ble_central.ps1 -Mode connect",
+  "held_s": 3636,
+  "notifications": 4361,
+  "disconnects": 0,
+  "interval_ms": 1000
+ },
+ "asserts": 0,
+ "resets": 0,
+ "console_port_deaths": 0,
+ "ti_hour": {
+  "segments": [
+   {
+    "seg": 0,
+    "received": 2395,
+    "expected": 2436,
+    "seconds": 599.7,
+    "rx_fail": 41,
+    "loss_pct": 1.683
+   },
+   {
+    "seg": 1,
+    "received": 2403,
+    "expected": 2437,
+    "seconds": 599.9,
+    "rx_fail": 34,
+    "loss_pct": 1.395
+   },
+   {
+    "seg": 2,
+    "received": 2400,
+    "expected": 2437,
+    "seconds": 599.9,
+    "rx_fail": 37,
+    "loss_pct": 1.518
+   },
+   {
+    "seg": 3,
+    "received": 2390,
+    "expected": 2437,
+    "seconds": 599.9,
+    "rx_fail": 47,
+    "loss_pct": 1.929
+   },
+   {
+    "seg": 4,
+    "received": 2394,
+    "expected": 2437,
+    "seconds": 599.9,
+    "rx_fail": 43,
+    "loss_pct": 1.764
+   },
+   {
+    "seg": 5,
+    "received": 2399,
+    "expected": 2436,
+    "seconds": 599.7,
+    "rx_fail": 37,
+    "loss_pct": 1.519
+   }
+  ],
+  "received": 14381,
+  "expected": 14620,
+  "loss_pct": 1.635
+ },
+ "ti_ctrl_ble_unconnected": {
+  "received": 2372,
+  "expected": 2436,
+  "loss_pct": 2.627
+ },
+ "lp_hour": {
+  "interval_s": 3623.8,
+  "starts": 14566,
+  "sleeps": 14566,
+  "slot_awake_us": 43728520,
+  "duty_pct": 1.207,
+  "awake_per_slot_us": 3002.1,
+  "missed_releases": 0,
+  "disagreements": 0,
+  "max_disagree_us": 1,
+  "range_errors": 0,
+  "refused": 0,
+  "hfxo_errors": 0,
+  "start_err_since_boot_min_us": -33,
+  "start_err_since_boot_max_us": 31,
+  "start_err_last_us_at_7_reads": [
+   -4,
+   -4,
+   -4,
+   -4,
+   -4,
+   -4,
+   -4
+  ]
+ },
+ "xo_samples": {
+  "hfxo_running": "0/20",
+  "constlat": "0/20"
+ }
+}
