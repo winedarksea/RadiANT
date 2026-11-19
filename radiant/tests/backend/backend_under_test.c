@@ -116,14 +116,19 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from, radiant_time_t
 
 /*
  * PRIMASK, modelled by depth: a zero-latency signal (or anything preempting
- * a thread arm) can only land where it is clear, so the outermost unlock is
- * where test_arm_handback.c's simulated signal is taken.
+ * a thread arm) can only land where it is clear, so just before an outermost
+ * lock and at an outermost unlock are where test_arm_handback.c's simulated
+ * events are taken.
  */
 static uint32_t zli_depth;
 static void zli_at_unlock(void);
+static void zli_before_lock(void);
 
 uint32_t radiant_swi_zli_lock(void)
 {
+	if (zli_depth == 0u) {
+		zli_before_lock();
+	}
 	zli_depth++;
 	return 0u;
 }
@@ -581,6 +586,7 @@ static struct {
 	bool     busy;
 	bool     marked_at_fire;
 	bool     handed_back;
+	bool     second;     /* BACKEND_PRE_DENY_THEN_START's START, still to fire */
 	uint32_t writes_at_handback;
 	NRF_RADIO_Type regs_at_handback;
 } pre;
@@ -680,12 +686,28 @@ static void pre_fire(void)
 		fg.deny_wanted = true;
 		pre_denied_work();
 		break;
+	case BACKEND_PRE_DENY_THEN_START:
+		/* A stale denial reaching gate_wq (held, if the arm is marked);
+		 * the placed request's START comes at the first point after the
+		 * arm has staged it (pre_point()). */
+		fg.deny_wanted = true;
+		pre_denied_work();
+		pre.second = true;
+		break;
 	case BACKEND_PRE_GRANT_EARLY:
 	default:
-		/* The placed request's START arrives before the arm staged it. */
+		/* The placed request's START arrives before the arm staged it
+		 * (on_grant() finds nothing and gives it back; gate_wq's denial
+		 * then lands under the arm), or just after (on_grant() takes the
+		 * staged request; gate_wq runs after the arm, as it would behind
+		 * an arm from the software interrupt). */
 		if (fg.req_pending) {
+			const bool staged = radiant_staged.pending;
+
 			pre_start();
-			pre_denied_work();
+			if (!staged) {
+				pre_denied_work();
+			}
 		}
 		break;
 	}
@@ -698,13 +720,28 @@ static void pre_fire(void)
 
 static void pre_point(void)
 {
-	if (pre.at == 0u || pre.busy || pre.fired || ++pre.n != pre.at) {
+	if (pre.busy) {
+		return;
+	}
+	if (pre.second && radiant_staged.pending && fg.req_pending) {
+		pre.second = false;
+		pre.busy = true;
+		pre_start();
+		pre.busy = false;
+		return;
+	}
+	if (pre.at == 0u || pre.fired || ++pre.n != pre.at) {
 		return;
 	}
 	pre_fire();
 }
 
 static void zli_at_unlock(void)
+{
+	pre_point();
+}
+
+static void zli_before_lock(void)
 {
 	pre_point();
 }
@@ -793,6 +830,7 @@ void backend_preempt_arm(int kind, int mode, uint32_t n, bool late, bool held,
 	pre.mode = mode;
 	out->rc = pre_arm(kind, t);
 	pre.at = 0u;
+	pre.second = false;
 	out->staged_path = fg.answered_pending;
 	out->fired = pre.fired;
 	out->marked_at_fire = pre.marked_at_fire;
@@ -828,3 +866,4 @@ void backend_preempt_arm(int kind, int mode, uint32_t n, bool late, bool held,
 	radio_on_loan = true;
 	out->next_rc = pre_arm(BACKEND_ARM_TX, radiant_radio_now() + 1500u);
 }
+

@@ -121,8 +121,9 @@ min_scenarios: 21
 # and test_gate_grant_gen.c's 10 in each of radiant.gate and radiant.gate.lp.
 # The Bluefin run on that branch (2026-11-18) executed 6898. 6099 (+1) with
 # the review's staged-path sweep (a denial landing while the arm stages its
-# own refused request).
-min_testcases: 6099
+# own refused request). 6100 (+1) with the re-review's two-event case (a
+# stale denial, then the request's START between staging and settle).
+min_testcases: 6100
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -154,8 +155,8 @@ min_cases.radiant.api.diag: 104
 min_cases.radiant.gate: 86
 # radiant.backend (ADR 0021): the backend completion path against register models.
 # 10 with the option-off preempted-arm cases (observed 45), 11 with the
-# staged-path sweep.
-min_cases.radiant.backend: 11
+# staged-path sweep, 12 with the stale-denial-then-START case.
+min_cases.radiant.backend: 12
 min_cases.hrm_ble.sim_sched: 4
 min_cases.treadmill.pages: 20
 min_cases.treadmill.hr_rx: 3

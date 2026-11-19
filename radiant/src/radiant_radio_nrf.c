@@ -354,7 +354,17 @@ static void lp_constlat(bool on);
  *     nothing staged (the slot was free), so the gate ends it at once and
  *     cannot answer GRANTED from it; the cost is theoretical. Taking the
  *     generation after GRANTED instead would reopen the race the generation
- *     exists to close.
+ *     exists to close;
+ *   - WHICH CONTEXTS REACH IT. Every production arm call (radiant_sched.c's
+ *     three, under PB_ARM_CALL) runs inside pass(), under
+ *     radiant_event_crit_enter() = irq_lock(). Only the MPSL zero-latency
+ *     signal preempts it there, so the ACTION_END windows above (the hand-back
+ *     under an arm, the abort from the signal) are live on every MPSL build,
+ *     while no thread - gate_wq's deferred denial included - can run during
+ *     one. The denial windows (on_denied() under a marked arm, and the staged
+ *     path in arm_settle_staged()) are latent in production: only an arm made
+ *     outside pass() (the spikes) or the test fakes reach them. They are
+ *     closed anyway, because the HAL does not require arms under irq_lock.
  */
 #define ARM_SLOT_GUARD 1
 static uint32_t arm_gen;
@@ -1003,8 +1013,11 @@ static struct {
 #if defined(ARM_SLOT_GUARD)
 /*
  * The staged (GATE_PENDING) branch's end, called once radiant_staged holds the
- * request. A denial the gate delivered while the arm was marked was held, not
- * dropped (arm_deny_owed): the gate sends one only with nothing pending
+ * request. Latent in production (see WHICH CONTEXTS REACH IT above: every
+ * production arm runs under irq_lock, so no denial lands during one); reached
+ * by arms made outside the scheduler's pass and by the test fakes. A denial the
+ * gate delivered while the arm was marked was held, not dropped
+ * (arm_deny_owed): the gate sends one only with nothing pending
  * (denied_work_fn() tests g.pending), and from a cooperative thread it can
  * land between gate_acquire() placing this arm's own request and this point -
  * MPSL refusing it (BLOCKED, inline or deferred), its deadline expiring, or
@@ -1013,15 +1026,29 @@ static struct {
  * staged operation with no grant, deadline or denial owed, and EBUSY for every
  * later arm. Settled here, against the zero-latency signal and every thread:
  *
- *   - a denial held and the gate no longer pending: nothing is coming for the
- *     request. It is unstaged and the arm fails EDENIED, the synchronous
+ *   - a denial held, the gate no longer pending and the request still staged:
+ *     nothing is coming for the request. It is unstaged and the arm fails
+ *     EDENIED, the synchronous
  *     refusal (the caller's scheduler is inside its own arm call, so a
  *     terminal from here would re-enter it): one outcome, no terminal;
  *   - a denial held but the gate still pending: the denial predated this
  *     arm's request (a stale one), and the request's own grant or denial is
  *     still to come. Dropped;
+ *   - a denial held and the gate no longer pending but the request no longer
+ *     staged: its START came between the staging and this lock, and on_grant()
+ *     took it (only on_grant() clears radiant_staged.pending while the arm is
+ *     marked: on_denied() holds instead, and an abort from the signal skips).
+ *     The denial was a stale one; the operation is live (or, if on_grant()'s
+ *     programme failed ETIME, owes the gate's FAILED). Dropped, and the arm
+ *     returns OK: refusing here would free the slot under a programmed radio;
  *   - no denial held: the mark goes, and any later denial reaches the staged
  *     operation as a terminal, as it always has.
+ *
+ * Known gap, not closed (the same check-then-act class as denied_work_fn()'s
+ * g.pending test): a stale denial held here can be taken as this request's
+ * own while the request's real refusal (BLOCKED, the deadline) is still queued
+ * in gate_wq. The arm fails EDENIED, and the queued denial later reaches the
+ * next operation if one is armed in-grant by then.
  *
  * Returns true when the arm must fail EDENIED; the mark then stays until the
  * caller's `fail:` has freed the slot.
@@ -1029,7 +1056,8 @@ static struct {
 static bool arm_settle_staged(void)
 {
 	uint32_t key = radiant_swi_zli_lock();
-	const bool refuse = arm_deny_owed && !gate_request_pending();
+	const bool refuse = arm_deny_owed && !gate_request_pending() &&
+			    radiant_staged.pending;
 
 	arm_deny_owed = false;
 	if (refuse) {
@@ -4352,7 +4380,9 @@ void radiant_nrf_gate_on_denied(void)
 #if defined(ARM_SLOT_GUARD)
 	/*
 	 * The gate's deferred denial (end_housekeeping() -> denied_work_fn(), a
-	 * cooperative thread) preempting an arm made from a preemptible thread:
+	 * cooperative thread) preempting an arm made from a preemptible thread
+	 * outside the scheduler's pass (production arms run under irq_lock and
+	 * cannot be preempted by it: see WHICH CONTEXTS REACH IT):
 	 * nothing is staged (g.pending was false), the operation in the slot is
 	 * that arm's, and the arm settles it itself (ETIME at its span, or OK and
 	 * live). Held, not dropped: if the arm's own request was just refused (it

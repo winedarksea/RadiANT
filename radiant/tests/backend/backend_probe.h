@@ -80,6 +80,8 @@ enum {
 	BACKEND_PRE_BLOCKED,     /* MPSL refuses the placed request; gate_wq denies */
 	BACKEND_PRE_DEADLINE,    /* the placed request's deadline expires; gate_wq denies */
 	BACKEND_PRE_GRANT_EARLY, /* the placed request's START before the arm staged it */
+	BACKEND_PRE_DENY_THEN_START, /* a stale denial, then the request's START after
+				      * the staging and before the arm settles */
 };
 struct backend_preempt_result {
 	int      rc;

@@ -23,7 +23,14 @@
  * that request (BLOCKED), its deadline expires, or its START arrives first.
  * The gate's denial then reached the backend while the arm was marked and was
  * dropped: the arm staged and returned OK with no grant, deadline or denial
- * owed, and every later arm got EBUSY.
+ * owed, and every later arm got EBUSY. And the two-event case: a stale denial
+ * held while the arm was marked, then the request's START between the staging
+ * and the arm's settle (on_grant() programs the radio): the settle refused the
+ * already-programmed arm EDENIED and freed the slot under a live radio.
+ *
+ * Production arms run inside the scheduler's pass under irq_lock, so only the
+ * zero-latency signal reaches them there; the denial cases model arms made
+ * outside a pass, which the HAL allows.
  *
  * Swept over every preemption point of a transmit, a receive and an energy-
  * detect arm (each outermost unlock of the zero-latency lock or CLOCK_LOCK,
@@ -46,7 +53,7 @@ ZTEST_SUITE(radiant_backend_arm_handback, NULL, NULL, NULL, NULL, NULL);
 
 static const char *const kn[] = { "tx", "rx", "ed" };
 static const char *const mn[] = { "end", "end+start", "abort+end", "denied",
-				  "blocked", "deadline", "grant-early" };
+				  "blocked", "deadline", "grant-early", "denied+start" };
 
 struct sweep_counts {
 	uint32_t points;
@@ -60,7 +67,7 @@ static void sweep(int kind, int mode, bool late, bool held, struct sweep_counts 
 			       mode == BACKEND_PRE_ABORT_END;
 	const char *path = held ? "granted" : "staged";
 
-	for (uint32_t n = 1u; n <= 16u; n++) {
+	for (uint32_t n = 1u; n <= 24u; n++) {
 		struct backend_preempt_result r;
 
 		backend_preempt_arm(kind, mode, n, late, held, &r);
@@ -80,10 +87,12 @@ static void sweep(int kind, int mode, bool late, bool held, struct sweep_counts 
 		}
 		if (r.marked_at_fire) {
 			zassert_equal(r.terminals_during_arm, 0u,
-				      "%s %s %s n %u: a terminal under the arm in progress",
-				      path, kn[kind], mn[mode], n);
+				      "%s %s %s n %u: a terminal under the arm in progress (rc %d)",
+				      path, kn[kind], mn[mode], n, r.rc);
 		}
-		if (hand_back) {
+		/* A hand-back the arm was claimed after belongs to a loan the arm
+		 * never saw (END+START before the claim gives it the new one). */
+		if (hand_back && r.marked_at_fire) {
 			zassert_false(r.radio_written_after_handback,
 				      "%s %s %s n %u: RADIO written after the hand-back",
 				      path, kn[kind], mn[mode], n);
@@ -102,6 +111,11 @@ static void sweep(int kind, int mode, bool late, bool held, struct sweep_counts 
 			      "%s %s %s n %u: the next arm got %d", path, kn[kind], mn[mode],
 			      n, r.next_rc);
 		if (r.rc != RADIANT_RADIO_OK_RC) {
+			/* A refused arm owns nothing on the radio: no window armed
+			 * for an operation the caller was told does not exist. */
+			zassert_false(r.conns_after_arm,
+				      "%s %s %s n %u: refused (rc %d) with the radio armed",
+				      path, kn[kind], mn[mode], n, r.rc);
 			c->refused++;
 		}
 		if (r.rc == RADIANT_RADIO_EDENIED) {
@@ -134,7 +148,7 @@ ZTEST(radiant_backend_arm_handback, test_staged_arm_refused_while_staging)
 {
 	for (int late = 0; late <= 1; late++) {
 	for (int kind = BACKEND_ARM_TX; kind <= BACKEND_ARM_ED; kind++) {
-	for (int mode = BACKEND_PRE_DENIED; mode <= BACKEND_PRE_GRANT_EARLY; mode++) {
+	for (int mode = BACKEND_PRE_DENIED; mode <= BACKEND_PRE_DENY_THEN_START; mode++) {
 		struct sweep_counts c = { 0 };
 
 		sweep(kind, mode, late != 0, false, &c);
@@ -143,7 +157,8 @@ ZTEST(radiant_backend_arm_handback, test_staged_arm_refused_while_staging)
 		/* The arm's own request refused after gate_acquire() placed it:
 		 * reached on time for every arm, and too late for TX/RX (ED's
 		 * late arm is refused before the gate). */
-		if (mode != BACKEND_PRE_DENIED && (!late || kind != BACKEND_ARM_ED)) {
+		if (mode != BACKEND_PRE_DENIED && mode != BACKEND_PRE_DENY_THEN_START &&
+		    (!late || kind != BACKEND_ARM_ED)) {
 			zassert_true(c.edenied > 0u,
 				     "%s %s late %d: the staged path's refusal never ran",
 				     kn[kind], mn[mode], late);
@@ -165,7 +180,7 @@ ZTEST(radiant_backend_arm_handback, test_handback_disables_live_connections)
 
 	/* The last point: past the arm's span, the arm programmed, then the
 	 * loan ended. */
-	for (uint32_t n = 16u; n > 0u; n--) {
+	for (uint32_t n = 24u; n > 0u; n--) {
 		backend_preempt_arm(BACKEND_ARM_RX, BACKEND_PRE_END, n, false, true, &r);
 		if (r.fired) {
 			break;
@@ -175,4 +190,41 @@ ZTEST(radiant_backend_arm_handback, test_handback_disables_live_connections)
 	zassert_equal(r.rc, RADIANT_RADIO_OK_RC, "the last point is after the span");
 	zassert_false(r.conns_after_arm, "a window connection survived the hand-back");
 	zassert_equal(r.terminals_final, 1u, NULL);
+}
+
+/*
+ * Risk (re-review of the staged-path fix): a stale denial held while the arm
+ * was marked, then the request's own START between the staging and the arm's
+ * settle. on_grant() programs the radio (or fails ETIME and owes FAILED); the
+ * settle saw "denial held, nothing pending" and refused the arm EDENIED,
+ * freeing the slot under a programmed radio - two outcomes. The arm must stay
+ * accepted: OK, then exactly one terminal (FAILED for a late one).
+ */
+ZTEST(radiant_backend_arm_handback, test_stale_denial_then_start_keeps_the_arm)
+{
+	for (int late = 0; late <= 1; late++) {
+	for (int kind = BACKEND_ARM_TX; kind <= BACKEND_ARM_ED; kind++) {
+		struct backend_preempt_result r;
+
+		if (late && kind == BACKEND_ARM_ED) {
+			continue;   /* refused before the gate */
+		}
+		/* Point 2: the claim's unlock, the arm marked and nothing placed. */
+		backend_preempt_arm(kind, BACKEND_PRE_DENY_THEN_START, 2u, late != 0, false, &r);
+		zassert_true(r.fired && r.marked_at_fire, "%s late %d", kn[kind], late);
+		zassert_true(r.staged_path, "%s late %d: not staged", kn[kind], late);
+		zassert_equal(r.rc, RADIANT_RADIO_OK_RC, "%s late %d: rc %d", kn[kind], late,
+			      r.rc);
+		zassert_equal(r.terminals_final, 1u, "%s late %d: %u terminals", kn[kind], late,
+			      r.terminals_final);
+		zassert_true(r.op_idle_final, NULL);
+		zassert_false(r.conns_final, NULL);
+		if (late) {
+			zassert_equal(kind == BACKEND_ARM_TX ? backend_probe()->last_tx_status
+							     : backend_probe()->last_rx_status,
+				      RADIANT_RADIO_STATUS_FAILED,
+				      "%s: a late programme owes FAILED", kn[kind]);
+		}
+	}
+	}
 }
