@@ -123,6 +123,10 @@ static struct {
 	uint32_t fold_wraps;
 
 	/* Work item only (and pd_init()). */
+	/* fold_back_max and fold_wraps as of the snapshot that took
+	 * ti_fold_backsteps, so one log line pairs bks with its own bks_max. */
+	uint32_t snap_back_max;
+	uint32_t snap_wraps;
 	uint32_t last_cyc;
 	uint64_t last_idle_cyc;
 	uint64_t active_cyc;
@@ -295,7 +299,13 @@ static void pd_snapshot(void)
 		next.ti_rf_powerups = t.powerups;
 		next.ti_rf_pu_dur_us = t.pu_dur_us;
 		next.ti_fs_errors = t.fs_errors;
+		/* One irq_lock (the fold's writer runs under the backend's) for
+		 * all three, so the log never shows bks=0 with bks_max>0. */
+		key = irq_lock();
 		next.ti_fold_backsteps = pd.fold_backsteps;
+		pd.snap_back_max = pd.fold_back_max;
+		pd.snap_wraps = pd.fold_wraps;
+		irq_unlock(key);
 	}
 #endif
 	next.flags = flags;
@@ -366,8 +376,8 @@ static void pd_log(const struct radiant_power_diag *now,
 						 then->ti_rf_powerups), dt_ms),
 		pd_or_unmeasured(now->ti_rf_pu_dur_us != RADIANT_POWER_DIAG_NOT_MEASURED,
 				 now->ti_rf_pu_dur_us),
-		now->ti_fs_errors, now->ti_fold_backsteps, pd.fold_back_max,
-		pd.fold_wraps, t.cold_late, t.tx_late, t.tx_late_max_us);
+		now->ti_fs_errors, now->ti_fold_backsteps, pd.snap_back_max,
+		pd.snap_wraps, t.cold_late, t.tx_late, t.tx_late_max_us);
 #else
 	LOG_INF("power dt_ms=%u hfxo_pm=%d tx_us=%u tx_ops=%u rx_us=%u rx_ops=%u "
 		"cpu_pm=%d idle_x10=%d constlat=%u/%d",
