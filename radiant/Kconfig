@@ -1423,6 +1423,16 @@ config RADIANT_CRC_REPAIR
 	  radiant_api_stats.crc_repaired (0xF7 page 10), so an A/B can see
 	  how many there were and never confuses one for a clean receive.
 
+	  WHAT A REPAIRED FRAME MAY DO. Only a broadcast is accepted: it goes
+	  up as BROADCAST_DATA (posted as an OK event; until 2026-11-18 it
+	  went up still marked CRC_FAIL and the event queue's CRC gate dropped
+	  every one) and counts as the slot heard. It never opens a pending
+	  command's slot, so it never makes this node transmit. Acknowledged
+	  data and burst packets are refused (crc_repair_refuted): acking one
+	  would end the sender's own failure report on a payload that may be
+	  a mis-repair, and an un-acked packet is resent anyway. Acks and
+	  unknown control bytes are refused the same way.
+
 config RADIANT_PROFILE_SANITY
 	bool "drop a repaired frame whose payload is not physically possible"
 	depends on RADIANT_CRC_REPAIR
