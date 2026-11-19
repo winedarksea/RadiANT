@@ -137,7 +137,11 @@ min_scenarios: 22
 # in each of radiant.backend.lp and radiant.backend.lp_rtc.
 # 6229 (+121) on diag/g1-h3-min (Bluefin twister, 2026-11-19, 7029 executed):
 # the new radiant.api.crc_bits scenario, its one CRC-bits case included.
-min_testcases: 6229
+# 6239 (+10) on wip/sec-compat-rekey (Bluefin twister, 2026-11-19, 7039
+# executed): a new root or base devnum drops the Tier I / Tier II verdict until
+# new-identity evidence (review 2026-11-17 item 5), in each of the five
+# radiant.unit scenarios.
+min_testcases: 6239
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole

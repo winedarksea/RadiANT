@@ -19,6 +19,7 @@
  * slot owes an attestation page).
  */
 
+#include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -197,7 +198,8 @@ struct compat_ctx {
 	uint32_t tx_t1_last;
 	bool     tx_t1_any;
 
-	/* ── RX ── */
+	/* ── RX ── rx_forget() clears rx_win up to stats as one block, so
+	 * anything a receiver learns under a key or epoch belongs in here. */
 	uint8_t  rx_win[COMPAT_WIN_MAX];
 	uint8_t  rx_absorbed;
 	bool     rx_overflow;           /* more messages than the window covers,
@@ -239,6 +241,39 @@ static bool ctx_armed(const struct compat_ctx *c)
 	return c != NULL && c->used && c->epoch_set &&
 	       (c->switches & (uint8_t)(RADIANT_SEC_COMPAT_SW_TIER_I |
 				       RADIANT_SEC_COMPAT_SW_TIER_II)) != 0u;
+}
+
+/* Everything a receiver has learned under the held key and epoch: the open
+ * Tier II window, both tiers' floors and freshness, and the last verdict - the
+ * RX block of compat_ctx, last_verdict included, and nothing past it. Zero is
+ * every field's "nothing learned", CLEAR included.
+ *
+ * The range is pinned at both ends, so a field added later lands visibly in or
+ * out of it: rx_win directly follows the last TX field (a byte array has no
+ * padding before it), last_verdict ends within stats' alignment padding, and
+ * stats is the last member, so nothing can sit after the cleared block
+ * unnoticed. */
+#define COMPAT_RX_FROM offsetof(struct compat_ctx, rx_win)
+#define COMPAT_RX_TO   offsetof(struct compat_ctx, stats)
+
+BUILD_ASSERT(RADIANT_SEC_VERDICT_CLEAR == 0);
+BUILD_ASSERT(COMPAT_RX_FROM == offsetof(struct compat_ctx, tx_t1_any) +
+			       sizeof(bool));
+BUILD_ASSERT(offsetof(struct compat_ctx, last_verdict) +
+	     sizeof(enum radiant_sec_verdict) <= COMPAT_RX_TO &&
+	     COMPAT_RX_TO - offsetof(struct compat_ctx, last_verdict) -
+	     sizeof(enum radiant_sec_verdict) <
+	     __alignof__(struct radiant_sec_compat_stats));
+BUILD_ASSERT(COMPAT_RX_TO + sizeof(struct radiant_sec_compat_stats) <=
+	     sizeof(struct compat_ctx) &&
+	     sizeof(struct compat_ctx) - COMPAT_RX_TO -
+	     sizeof(struct radiant_sec_compat_stats) <
+	     __alignof__(struct compat_ctx));
+
+static void rx_forget(struct compat_ctx *c)
+{
+	/* Through the struct's bytes, not past the end of rx_win[]. */
+	memset((uint8_t *)c + COMPAT_RX_FROM, 0, COMPAT_RX_TO - COMPAT_RX_FROM);
 }
 
 static void stat_bump(uint32_t *counter)
@@ -502,6 +537,12 @@ int radiant_sec_compat_set_key(uint8_t ch, const uint8_t *root, size_t bits,
 	c->epoch_set = false;
 	c->ceil_inv = 0;
 	radiant_sec_key_destroy(&c->k_auth);
+	/* ...and what the old identity proved goes with it: until review
+	 * 2026-11-17 item 5 a pinned stream kept reading VERIFIED off the old
+	 * root's last page between here and the next set_epoch. The TX state
+	 * needs no clearing here: nothing transmits or receives until
+	 * set_epoch, which clears it. */
+	rx_forget(c);
 
 	/* K_id is epoch-less - the "id" label uses epoch 0 - so it is derived
 	 * once here and survives every wrap, every recovery and every adopted
@@ -623,13 +664,7 @@ int radiant_sec_compat_set_epoch(uint8_t ch, uint32_t epoch, uint64_t now_us,
 	c->tx_closing = false;
 	c->tx_fill = 0u;
 	c->tx_t1_any = false;
-	c->rx_absorbed = 0u;
-	c->rx_overflow = false;
-	c->rx_t1_any = false;
-	c->rx_t1_ok = false;
-	c->rx_t2_any = false;
-	c->rx_t2_ok = false;
-	c->last_verdict = RADIANT_SEC_VERDICT_CLEAR;
+	rx_forget(c);
 
 	return derive_auth(c);
 }
@@ -1728,13 +1763,7 @@ int radiant_sec_compat_adopt_epoch(uint8_t ch, uint32_t epoch, uint8_t flags)
 	/* Everything in flight belonged to the previous epoch, and the replay
 	 * high-water mark most of all: a fresh epoch has its own counter space,
 	 * and judging it against the old one's mark would reject every page. */
-	c->rx_absorbed = 0u;
-	c->rx_overflow = false;
-	c->rx_t1_any = false;
-	c->rx_t1_ok = false;
-	c->rx_t2_any = false;
-	c->rx_t2_ok = false;
-	c->last_verdict = RADIANT_SEC_VERDICT_CLEAR;
+	rx_forget(c);
 
 	return derive_auth(c);
 }
