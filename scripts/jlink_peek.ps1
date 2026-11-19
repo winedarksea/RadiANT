@@ -112,7 +112,9 @@
     and that byte's value is reported as a histogram, each value with how
     many of ITS samples had CONSTLAT / HFXO on - e.g. nrfx_power's
     m_power_mode_refs (the CONSTLAT reference count) next to CONSTLATSTAT.
-    Must be in SRAM, like every other read here.
+    Must be in SRAM, like every other read here. Without -Decode and with
+    -Symbol at its default, the ELF need not have radiant_power_diag: the
+    dump is then left out and only the presets and this symbol are read.
 
 .PARAMETER Decode
     Decode a radiant_power_diag dump with the layout table below.
@@ -1136,8 +1138,14 @@ if ($Samples -gt 1 -and (2 * $JitterMs) -lt 247) {
 }
 if ($Seed -eq 0) { $Seed = (Get-Random -Minimum 1 -Maximum 2147483647) }
 
-# Symbol: from the ELF, or an explicit address.
+# Symbol: from the ELF, or an explicit address. With -ElfPath given only for
+# -ExtraSymbol (no -Decode, -Symbol left at its default), the power-diag dump
+# is optional: an ELF built without CONFIG_RADIANT_POWER_DIAG still serves the
+# extra symbol, and the dump is just left out.
 $diag = $null
+$diagOptional = $ExtraSymbol -and -not $Decode -and -not $SymbolAddress -and
+    -not $PSBoundParameters.ContainsKey('Symbol')
+$skipDiag = $false
 if ($ElfPath -or $SymbolAddress) {
     if ($ElfPath) {
         if (-not (Test-Path $ElfPath)) { throw "No ELF at $ElfPath" }
@@ -1149,7 +1157,14 @@ if ($ElfPath -or $SymbolAddress) {
             $m = [regex]::Match($l, '^([0-9a-fA-F]+)\s+([0-9a-fA-F]+)\s+([A-Za-z])\s+(\S+)$')
             if ($m.Success -and $m.Groups[4].Value -ceq $Symbol) { $hit = $m; break }
         }
-        if (-not $hit) { throw "Symbol $Symbol not found (with a size) in $ElfPath. Is CONFIG_RADIANT_POWER_DIAG=y in that image?" }
+        if (-not $hit -and $diagOptional) {
+            Write-Host "Note: $Symbol is not in $ElfPath; reading -ExtraSymbol without the power-diag dump."
+            $skipDiag = $true
+        } elseif (-not $hit) { throw "Symbol $Symbol not found (with a size) in $ElfPath. Is CONFIG_RADIANT_POWER_DIAG=y in that image?" }
+    }
+}
+if (($ElfPath -or $SymbolAddress) -and -not $skipDiag) {
+    if ($ElfPath) {
         if ('bBdD' -notmatch [regex]::Escape($hit.Groups[3].Value)) { throw "Symbol $Symbol is type '$($hit.Groups[3].Value)', not RAM data (b/B/d/D)." }
         $symAddr = [Convert]::ToInt64($hit.Groups[1].Value, 16)
         $symBytes = [int][Convert]::ToInt64($hit.Groups[2].Value, 16)
