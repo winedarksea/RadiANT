@@ -593,6 +593,14 @@ void fake_radio_force_arm_repeat(int rc, uint32_t count);
 void fake_radio_force_terminal_repeat(enum radiant_radio_status status,
 				      uint32_t count);
 
+/* Time an arm call refused by one of the forces above spends before it
+ * returns: the clock moves forward `us` inside the call (never backwards, and
+ * nothing due in between is delivered), as a backend that worked on the arm
+ * before refusing it - the nRF start compare written too late. Applies to
+ * every forced refusal until changed. Callable from a callback. 0 (the
+ * default, and after fake_radio_reset()) is an instant refusal. */
+void fake_radio_set_forced_arm_cost_us(uint32_t us);
+
 /* Offset, in microseconds, between the t_sync a transmit asks for and the
  * t_sync it reports. Models a backend that cannot schedule exactly; the
  * channel state machine's drift handling should survive it. Default 0. */

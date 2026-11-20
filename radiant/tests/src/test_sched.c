@@ -2527,6 +2527,62 @@ ZTEST(radiant_sched, test_an_etime_refusal_is_missed_and_the_pass_moves_on)
 	finish_forced(1u, 0u);
 }
 
+/*
+ * An ETIME refusal costs time: the nRF backend refuses after writing its start
+ * compare too late, so the clock has moved on by the time the pass hears it.
+ * The retry must plan from that later instant. Planning it from the pass's
+ * first `now` hands the backend an arm that is already inside its lead, which
+ * is refused too: the cascade seen on the bench (archive/benchmarks/
+ * 2026-11-16-b4-pair/README.md, three refusals in one pass).
+ *
+ * Two windows on different RF channels, so they cannot merge. The first is
+ * refused with the clock advanced by just under the arm lead. The second opens
+ * after the first pass's earliest instant but before the refusal's
+ * now + lead: still armable for its rest, from the later instant.
+ */
+ZTEST(radiant_sched, test_an_etime_retry_plans_from_the_time_after_the_refusal)
+{
+	struct radiant_sched_rx r;
+	const struct fake_radio_arm *a;
+	radiant_time_t t0;
+	radiant_time_t lead;
+
+	bring_up();
+	lead = (radiant_time_t)radiant_radio_caps_get()->min_arm_lead_us;
+	zassert_true(lead > 20u, "the preset's lead is %u us", (unsigned)lead);
+	t0 = radiant_radio_now();
+	post_track(0u, t0 + lead + 10u, t0 + lead + 10u + TEST_WINDOW_US);
+	rx_req_init(&r, radiant_frame_format(RADIANT_FRAME_CFG_TRACKING),
+		    &track_filter[1], 1u, t0 + lead + 100u,
+		    t0 + lead + 100u + TEST_WINDOW_US);
+	r.rf_index = 26u;
+	zassert_ok(radiant_sched_request_rx(1u, &r));
+	fake_radio_force_next_arm(RADIANT_RADIO_ETIME);
+	fake_radio_set_forced_arm_cost_us((uint32_t)lead - 10u);
+	zassert_ok(radiant_sched_tick());
+
+	/* One refusal, the forced one: the retry was not refused as well. */
+	zassert_equal(1u, radiant_sched_stats_get()->arm_rejected, "%u refusals",
+		      radiant_sched_stats_get()->arm_rejected);
+	zassert_equal(2u, fake_radio_arm_count(), "%u arm calls",
+		      fake_radio_arm_count());
+	zassert_equal(RADIANT_RADIO_ETIME, fake_radio_arm(0u)->rc);
+	a = fake_radio_arm(1u);
+	zassert_not_null(a);
+	zassert_equal(RADIANT_RADIO_OK_RC, a->rc, "the retry was refused rc %d", a->rc);
+	zassert_equal(26u, a->rf_index);
+	/* The retry respected the backend's lead from the instant it was made. */
+	zassert_true(a->t_open >= a->t_arm + lead,
+		     "retry opens %d us after its arm call, lead %u",
+		     (int)((int64_t)a->t_open - (int64_t)a->t_arm), (unsigned)lead);
+	zassert_equal(1u, log.missed_count[0]);
+	zassert_equal(0u, log.missed_count[1]);
+
+	fake_radio_advance_to(t0 + lead + 100u + TEST_WINDOW_US + 1u);
+	zassert_equal(1u, log.ok_count[1]);
+	finish_forced(1u, 0u);
+}
+
 /* ESTATE describes the radio (disabled), not the request: nothing consumed,
  * nothing reported, the next commit arms it. */
 ZTEST(radiant_sched, test_an_estate_refusal_keeps_the_request)

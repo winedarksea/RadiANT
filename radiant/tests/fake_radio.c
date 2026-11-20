@@ -148,6 +148,9 @@ struct fake_state {
 	 * failure is a RUN of refusals, and re-arming the one-shot between them
 	 * would be re-arming it from inside the very callback under test. */
 	uint32_t force_arm_n;
+	/* Microseconds a forced refusal spends before it returns: the clock
+	 * moves forward by this much inside the arm call. 0 = instant. */
+	uint32_t force_arm_cost_us;
 	int32_t  tx_offset_us;
 	/* The last accepted arm's follow_on_us reserve, as an absolute end (0 =
 	 * none): an arbitrated backend serves an operation ending inside it at
@@ -2157,6 +2160,12 @@ static int arm_preflight(void)
 		}
 		if (rc != RADIANT_RADIO_OK_RC) {
 			g.stats.rc_forced++;
+			/* Not fake_radio_advance*(): that dispatches due events and
+			 * refuses callback context, and this is the middle of an arm
+			 * call. The clock only moves; nothing is delivered. */
+			if (g.force_arm_cost_us != 0u) {
+				clock_to(g.now + (radiant_time_t)g.force_arm_cost_us);
+			}
 			return rc;
 		}
 	}
@@ -2711,6 +2720,11 @@ void fake_radio_force_arm_repeat(int rc, uint32_t count)
 {
 	g.force_arm_rc = rc;
 	g.force_arm_n = (rc == RADIANT_RADIO_OK_RC) ? 0u : count;
+}
+
+void fake_radio_set_forced_arm_cost_us(uint32_t us)
+{
+	g.force_arm_cost_us = us;
 }
 
 void fake_radio_set_rx_terminal_delay_us(uint32_t delay)
