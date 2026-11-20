@@ -241,7 +241,7 @@ jobs:
       # on the linked pairing ELF only runs at tag time. This compiles the file
       # standalone with the SDK's own arm-zephyr-eabi-gcc - the one the setup
       # step above installed (Zephyr SDK 1.0.1 for NCS v3.4.0, GCC 14.3) - at
-      # -Os/-O2/-O3 for cortex-m4 and cortex-m33, and fails on any branch in
+      # -Og/-Os/-O2/-O3 for cortex-m4 and cortex-m33, and fails on any branch in
       # fe_cswap but the loop edge. Seconds, not minutes.
       #
       # The compiler is located through the same action release.yml uses, so

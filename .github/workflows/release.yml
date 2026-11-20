@@ -2285,12 +2285,18 @@ jobs:
 
           # THE CONDITIONAL SWAP IS CONSTANT TIME ONLY IF THIS PASSES. The
           # masked-XOR fe_cswap() compiled to `cmp / beq` on the swap flag
-          # under GCC 14.3 at -Os (security review 2026-11-20, item 1): the C
-          # never promised constant time. The fix is a value barrier, and this
-          # is the proof it held, on the exact production pairing flags: every
-          # fe_cswap symbol in pair_elf, no IT block, no cbz/cbnz, no
-          # conditional branch but the one backward loop edge. objdump sits
-          # beside the nm the arm-binutils action resolved.
+          # under GCC 14.3 at -Os and -O2 (security review 2026-11-20, item 1):
+          # the C never promised constant time. The fix is a value barrier;
+          # this checks it held on the exact production pairing flags. Every
+          # fe_cswap symbol in pair_elf: no IT block, cbz/cbnz, table branch,
+          # call or msr/vmrs; one conditional branch at most, a backward loop
+          # edge whose flags a CFG taint pass (allow-list) finds clean of the
+          # swap argument, as it must find every memory address.
+          # radiant_sec_x25519: >= 4 direct fe_cswap calls (5 with fe_pack
+          # when out of line), no IT block or cbz/cbnz. Scope: compiler
+          # changes on reviewed source, not source edits (see the script's
+          # docstring). objdump sits beside the nm the arm-binutils action
+          # resolved.
           objdump="${NM%nm}objdump"
           test -x "${objdump}" || {
             echo "::error::arm objdump not found beside ${NM}"

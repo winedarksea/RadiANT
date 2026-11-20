@@ -1702,27 +1702,47 @@ What holds the swap now is two things together. First, a value barrier: the
 mask passes through an empty `asm` the compiler must treat as producing an
 unknown value, so no range is left to turn into a select. Second, a checked
 disassembly: `scripts/check_x25519_ct.py` disassembles every `fe_cswap` symbol
-(it is `noinline` so the symbol exists) and fails on any IT block,
-`cbz`/`cbnz`, table branch, register-indexed load or store (a mask read from a
-table indexed by the flag), or conditional branch other than one backward loop
-edge, and on a loop edge whose flags a register taint pass traces to the swap
-argument. It also requires `radiant_sec_x25519()` to call `fe_cswap` at least
-five times (two per ladder step, two after the ladder, one from `fe_pack()`)
-and to contain no IT block or `cbz`/`cbnz`, so a swap done some other way in
-the ladder fails too. It runs in three places: on the linked release pairing
-image in `release.yml`, which is the production check because it uses
-Zephyr's real flags; on every push in `ci.yml`'s ztest job, compiling the file
-standalone with the SDK's GCC at `-Os`/`-O2`/`-O3` for Cortex-M4 and M33; and
-locally over the same matrix with GCC 14.3 and 12.2. The standalone compile
-leaves out Zephyr's real flags, so it is an early warning, not a substitute
-for the ELF check.
+(it is `noinline` so the symbol exists). It fails on any IT block,
+`cbz`/`cbnz`, table branch, call, or direct flag write (`msr`, `vmrs
+APSR_nzcv`), and on any conditional branch other than one backward loop edge.
+A forward taint pass over the function's control-flow graph must find that
+loop edge's flags, and every memory address, clean of the swap argument. The
+pass is an allow-list: an instruction it does not model taints everything it
+names. It also requires `radiant_sec_x25519()` to call `fe_cswap` at least
+four times, and five counting `fe_pack()` when that is out of line, and to
+contain no IT block or `cbz`/`cbnz`. That catches a compiler inlining or
+cloning the swap into the ladder, where the per-symbol rules cannot see it.
+
+**Scope: compiler changes, not source edits.** The checker guards reviewed
+source against a new compiler, new flags or a new core turning it back into
+secret-dependent code. It is not a defence against adversarial edits to the
+source or to hand-written asm; those go through code review. Known
+limitations, all of them needing such an edit:
+- a conditional `fe_cswap` call in the ladder, or a swap done some other way
+  in source, is not detected;
+- `msr` is failed outright rather than modelled;
+- memory is a single taint cell, so flags hidden through stack spills are only
+  caught coarsely. The same coarseness makes `-O0` fail closed.
+
+Two compiler-side caveats. `-funroll-all-loops` puts a `cbz` on a public loop
+counter in the ladder and trips the blunt ladder rule. An LTO build must keep
+`radiant_sec_x25519` out of line, or the check fails closed with "no symbol".
+
+It runs in three places:
+- on the linked release pairing image in `release.yml`. This is the production
+  check, because it uses Zephyr's real flags;
+- on every push in `ci.yml`'s ztest job, compiling the file standalone with
+  the SDK's GCC at `-Og`/`-Os`/`-O2`/`-O3` for Cortex-M4 and M33;
+- locally, over the same matrix with GCC 14.3 and 12.2.
+
+The standalone compile leaves out Zephyr's real flags, so it is an early
+warning, not a substitute for the ELF check.
 
 What that shows, and no more: `fe_cswap` is branch-free apart from a loop edge
-whose exit test does not visibly read the flag, and the ladder swaps only
-through it. It is a pattern check, not data-flow analysis. The taint pass
-follows registers, not memory, so it does not prove the loop's trip count is
-fixed. Everything else, the field arithmetic, memory access, the trip count
-and multiplier timing, rests on review of straight-line code. The claim covers
+whose exit test does not visibly derive from the flag, and the ladder calls it
+directly. It does not prove the loop's trip count is fixed. Everything else
+rests on review of straight-line code: the field arithmetic, memory access
+outside the swap, the trip count and multiplier timing. The claim covers
 Cortex-M4 and M33 only: their `umull` is fixed-time, while Cortex-M3's exits
 early on small operands. Exposure while it was false was small: no released image enables
 `CONFIG_RADIANT_SEC_PAIRING_X25519`, and each scalar is used for one exchange.

@@ -23,8 +23,10 @@
  * release pairing image (the production check), and compiled standalone over
  * a compiler, -O level and core matrix on every push and locally - and shows
  * two things only: fe_cswap is branch-free apart from a loop edge whose exit
- * test does not visibly read the flag, and the ladder swaps only through it.
- * Everything else - the field arithmetic, memory access, the loop's trip
+ * test does not visibly derive from the flag, and the ladder calls it
+ * directly. Its scope is COMPILER changes on this reviewed source; it is not
+ * a defence against edits to the source or asm, which go through code
+ * review. Everything else - the field arithmetic, memory access, the loop's trip
  * count, multiplier timing - rests on review of straight-line code, and the
  * claim covers Cortex-M4/M33 only (M3's umull exits early). NOT claimed:
  * resistance to power/EM analysis - a node needing that should use a PKA
