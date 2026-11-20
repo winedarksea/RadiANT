@@ -234,6 +234,39 @@ jobs:
         if: always()
         run: python app/scripts/check_test_counts.py twister-out/twister.json
 
+      # fe_cswap(), the X25519 ladder's conditional swap, compiled to a branch
+      # on the secret scalar bit under GCC 14.3 at -Os (security review
+      # 2026-11-20, item 1). No push-triggered job builds an ARM pairing image
+      # (the twister builds above are native_sim, x86), so release.yml's check
+      # on the linked pairing ELF only runs at tag time. This compiles the file
+      # standalone with the SDK's own arm-zephyr-eabi-gcc - the one the setup
+      # step above installed (Zephyr SDK 1.0.1 for NCS v3.4.0, GCC 14.3) - at
+      # -Os/-O2/-O3 for cortex-m4 and cortex-m33, and fails on any branch in
+      # fe_cswap but the loop edge. Seconds, not minutes.
+      #
+      # The compiler is located through the same action release.yml uses, so
+      # the SDK-root fallbacks live in one place; gcc sits beside its nm. A
+      # missing compiler FAILS the step - a check that skips when its tool is
+      # absent is a check that stopped checking.
+      - name: Resolve arm-zephyr-eabi binutils
+        if: always()
+        id: binutils
+        uses: ./app/.github/actions/arm-binutils
+
+      - name: X25519 conditional swap compiles branch-free
+        if: always()
+        env:
+          NM: ${{ steps.binutils.outputs.nm }}
+        run: |
+          set -euo pipefail
+          gcc="${NM%-nm}-gcc"
+          if [[ -z "${NM}" || ! -x "${gcc}" ]]; then
+            echo "::error::arm-zephyr-eabi-gcc not found (nm: '${NM}')"
+            exit 1
+          fi
+          "${gcc}" --version | head -n1
+          python app/scripts/check_x25519_ct.py --gcc "${gcc}"
+
       - name: Upload twister report
         if: always()
         uses: actions/upload-artifact@v4
