@@ -2336,8 +2336,14 @@ radiant_messages:
              with secured packets), so the deadline settles its packets
              unverified first: fail-safe, genuine data marked unverified,
              never the reverse; (4) pending packets are settled unverified on
-             CHANNEL_CLOSED, on the host's own 0xF1 or 0xF3 for the channel,
-             and on reset, and so is everything pending when the first 0xF8
+             CHANNEL_CLOSED, on the host's own 0xF3 for the channel, on its
+             own 0xF1 for the channel unless it knows that tuple is already
+             installed, and on reset. An identical 0xF1 throws nothing away
+             and spends no seq, so a flush on it only marks genuine packets
+             unverified; a 0xF1 that changes the policy, or one sent while
+             the host is unsure which tuple is installed (a retry of an
+             unanswered 0xF1 that may have changed it), is flushed. Also
+             settled is everything pending when the first 0xF8
              after any of these (or after the host starts listening)
              arrives: that first verdict only sets the seq baseline and
              binds nothing, because packets still in flight from before the

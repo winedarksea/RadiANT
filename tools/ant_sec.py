@@ -555,7 +555,11 @@ class VerdictResolver:
                             a loss the transport reported (overflow_all()
                             feeds the events to every channel's resolver)
     expire(now)             settle packets pending longer than the deadline
-    flush()                 CHANNEL_CLOSED, the host's own 0xF1/0xF3, reset
+    flush()                 CHANNEL_CLOSED, the host's own 0xF3, reset, and
+                            the host's own 0xF1 unless it knows that tuple is
+                            already installed (an identical 0xF1 keeps the
+                            firmware's windows and seq; flushing on it only
+                            marks genuine packets unverified)
 
     Each settled packet is appended to `.settled` as (payload, verdict). A
     packet is settled exactly once: by the first covering verdict after it,

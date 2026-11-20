@@ -419,10 +419,17 @@ either delay the data by that much or always read `unverified`. Instead:
      forgery marked verified - and costs about what the clear run already
      costs (the table above).
   4. Pending packets are settled as unverified on `CHANNEL_CLOSED`, on the
-     host's own `0xF1` or `0xF3` for the channel, and on reset - and so is
-     whatever is pending when the **first** `0xF8` after any of these (or
-     after the host starts listening) arrives. That verdict only sets the
-     `seq` baseline and binds nothing: a forged packet pumped just before the
+     host's own `0xF3` for the channel, on its own `0xF1` for the channel
+     unless it knows that tuple is already installed, and on reset - and so
+     is whatever is pending when the **first** `0xF8` after any of these (or
+     after the host starts listening) arrives. An identical `0xF1` throws no
+     window away and spends no `seq` (above), so flushing on it only marks
+     genuine packets unverified and spends the next genuine verdict on the
+     baseline. Flush on a `0xF1` that changes the switches, W or the page
+     range, and on one sent while the installed tuple is uncertain - a retry
+     of a `0xF1` never seen answered, which may or may not have changed it.
+     The first `0xF8` after a flush only sets the `seq` baseline and binds
+     nothing: a forged packet pumped just before the
      host's `0xF3` lost its window when the firmware discarded it, so no
      `unverified` will ever come for it, and it may reach the host after the
      flush. A host using `0xF8` must not filter `EVENT_CHANNEL_CLOSED`
