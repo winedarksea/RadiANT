@@ -260,11 +260,12 @@ static uint8_t delta_u8(uint8_t seq, uint8_t last)
 }
 
 /* The wire's eight bits, extended against last_ext (profile_command.h,
- * PROFILE_CMD_EXT_LAST). Before adoption the sender is at an epoch's start,
- * so ext = seq. A behind that would go below zero can only be the first
- * lap, where last_ext + d is the seq itself; it cannot overflow there, and
- * past the first lap last_ext <= PROFILE_CMD_EXT_LAST keeps last_ext + d
- * (d <= 64) inside 16 bits. */
+ * PROFILE_CMD_EXT_LAST): d in 1..127 ahead, 0 duplicate, 128..255 behind by
+ * 256 - d. Before adoption the sender is at an epoch's start, so ext = seq.
+ * A behind that would go below zero (last_ext < 256 - d <= 128) can only be
+ * the first lap, where last_ext + d is the seq itself and below 256, so it
+ * cannot overflow; an ahead keeps last_ext + d (d <= 127) inside 16 bits
+ * because last_ext <= PROFILE_CMD_EXT_LAST. */
 static uint16_t ext_of(const struct profile_cmd_node *n, uint8_t seq)
 {
 	uint8_t d = delta_u8(seq, (uint8_t)n->last_ext);

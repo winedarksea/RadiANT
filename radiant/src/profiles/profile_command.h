@@ -116,30 +116,43 @@ int profile_cmd_channel_check(const struct profile_schedule *s,
 
 /* The idempotency rule's constants - section 9, stated as numbers. */
 
-/* "Accept if delta_u8(seq, last_seq) is in 1..64": wide enough to survive a
- * run of loss, narrow enough that a stale command can't walk back into range.
+/* "Accept if ext - last_ext is in 1..127", in extended-sequence space: as
+ * far ahead as the eight-bit wire can say unambiguously, so a sender that
+ * lost a long run of acks is still accepted. The window no longer stops a
+ * replay - the tag does, because it binds the extended sequence and a command
+ * from an earlier lap is rebuilt with the wrong one (PROFILE_CMD_EXT_LAST).
  */
-#define PROFILE_CMD_ACCEPT_WINDOW 64u
+#define PROFILE_CMD_ACCEPT_WINDOW 127u
 
 /*
  * The extended sequence (security review 2026-11-20, item 3). The wire carries
  * eight bits; the tag binds sixteen. The receiver keeps last_ext and infers the
- * high byte from d = delta_u8(seq, last): last_ext + d for d in 1..64,
- * last_ext for d == 0, and last_ext - (256 - d) otherwise ("behind"), except
- * that a behind that would go below zero is read as last_ext + d - which only
- * happens on the first lap, where it is the seq itself. So for every ext < 256
- * the tag is byte-identical to the eight-bit tag it replaced.
+ * high byte from d = delta_u8(seq, last), split symmetrically:
  *
- * A command from an earlier lap is rebuilt with the wrong ext and fails rule
- * 1 like any forgery. Without this, a command 193..255 behind the stream had
- * its low byte back in the window and its original tag still valid.
+ *     d in 1..127     ahead:     ext = last_ext + d
+ *     d == 0          duplicate: ext = last_ext
+ *     d in 128..255   behind:    ext = last_ext - (256 - d), 1..128 behind
  *
- * PROFILE_CMD_EXT_LAST is the highest ext a node accepts: 0xFFFF - 64 = 65471.
- * Accepting it leaves last_ext + PROFILE_CMD_ACCEPT_WINDOW = 0xFFFF, so the
- * window never wraps the 16-bit counter and no ext is ever reachable twice.
- * Anything above (anything within 64 of 65536) is refused with 0x02 and
- * counted in seq_exhausted; the sender must advance the epoch. That is 65472
- * accepted sequences per epoch, about 4.5 hours of a command every 250 ms.
+ * except that a behind that would go below zero (last_ext < 256 - d) is read
+ * as last_ext + d. That only happens on the first lap (256 - d <= 128), where
+ * last_ext + d < 256 is the seq itself. So for every ext < 256 the tag is
+ * byte-identical to the eight-bit tag it replaced.
+ *
+ * Outcomes: ahead is accepted; a duplicate answers the stored ack; behind
+ * verifies only for a command that really was sent at that ext and is answered
+ * 0x02 (authenticated, so the sender learns it is stale); anything else - an
+ * earlier lap, or a sender 128 or more ahead - is rebuilt with the wrong ext
+ * and fails rule 1 (0x03, or silence under backoff). Without this, a command
+ * 193..255 behind the stream had its low byte back in the window and its
+ * original tag still valid.
+ *
+ * PROFILE_CMD_EXT_LAST is the highest ext a node accepts: 0xFFFF - 127 =
+ * 65408. Accepting it leaves last_ext + PROFILE_CMD_ACCEPT_WINDOW = 0xFFFF, so
+ * the ahead inference never wraps the 16-bit counter and no ext is ever
+ * reachable twice. Anything above (anything within 127 of 65536) is refused
+ * with 0x02 and counted in seq_exhausted; the sender must advance the epoch.
+ * That is 65409 accepted sequences per epoch (ext 0..65408), about 4.5 hours
+ * of a command every 250 ms.
  */
 #define PROFILE_CMD_EXT_LAST (0xFFFFu - PROFILE_CMD_ACCEPT_WINDOW)
 
@@ -264,6 +277,10 @@ int profile_cmd_init(struct profile_cmd_node *n, const struct profile_cmd_cfg *c
  * After an advance, rule 4 adopts the first verified command with ext = seq:
  * a sender starts every epoch with the high byte at 0. A node reboot advances
  * the epoch (ADR 0009), so adoption only ever happens at an epoch's start.
+ * A node that misses the whole first lap (no command with ext < 256 reaches
+ * it) can never adopt: every later command is rebuilt with ext = seq and
+ * fails the tag. The remedy is an epoch advance, after which the sender
+ * starts again at 0.
  */
 int profile_cmd_set_epoch(struct profile_cmd_node *n, uint32_t epoch);
 

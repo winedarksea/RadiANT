@@ -8,7 +8,7 @@
  *      its first two bytes passes short and fails long.
  *   2. Section 9's idempotency rule: verify first and change no state on
  *      failure, answer a duplicate without executing it, accept only inside
- *      1..64, adopt a sequence exactly once per epoch; plus backoff, costed
+ *      1..127, adopt a sequence exactly once per epoch; plus backoff, costed
  *      in simulated microseconds.
  *   3. The phase, recomputed - RF-5a's forward reference: two schedule
  *      frames sent at different instants must announce different phases
@@ -420,17 +420,20 @@ ZTEST(command, test_the_accept_window_is_one_to_sixty_four_and_wraps)
 	int rc;
 	uint8_t i;
 
-	/* delta 64 in, delta 65 out, delta 255 (one backwards) out, and a
+	/* delta 127 in, delta 128 out, delta 255 (one backwards) out, and a
 	 * delta that crosses the wrap treated like any other. `second` is the
 	 * sender's extended sequence: the same as the wire byte except across
-	 * the wrap, where seq 5 after 250 is ext 261 and is tagged as such. */
+	 * the wrap, where seq 5 after 250 is ext 261 and is tagged as such.
+	 * 10 -> 138 is the first lap's "behind below zero" case: read as 128
+	 * ahead, it verifies and is refused 0x02 as it always was. */
 	static const struct {
 		uint8_t  first;
 		uint16_t second;
 		bool     accept;
 	} cases[] = {
-		{ 10u, 74u, true },  /* delta 64 - the edge, inside */
-		{ 10u, 75u, false }, /* delta 65 - the edge, outside */
+		{ 10u, 137u, true },  /* delta 127 - the edge, inside */
+		{ 10u, 138u, false }, /* delta 128 - the edge, outside */
+		{ 10u, 74u, true },   /* delta 64, the old edge */
 		{ 10u, 11u, true },  /* delta 1 */
 		{ 10u, 9u, false },  /* delta 255: backwards */
 		{ 250u, 261u, true },  /* seq 5, delta 11, across the wrap */
@@ -560,10 +563,10 @@ ZTEST(command, test_a_command_captured_in_a_previous_epoch_never_verifies)
 }
 
 /* Security review 2026-11-20, item 3. The wire carries eight bits of sequence,
- * so once the stream has moved more than 192 past an executed command, that
- * command's low byte is back inside the 1..64 window. Its original tag must not
- * be: the tag binds the extended sequence, and a replay from an earlier lap is
- * a bad tag. */
+ * so once the stream has moved more than 128 past an executed command, that
+ * command's low byte reads as ahead again. Its original tag must not verify:
+ * the tag binds the extended sequence, and a replay from an earlier lap is a
+ * bad tag. */
 ZTEST(command, test_a_command_from_an_earlier_lap_never_executes_again)
 {
 	struct profile_cmd_node n;
@@ -735,9 +738,9 @@ ZTEST(command, test_second_lap_commands_tagged_with_their_ext_are_accepted)
 	zassert_equal(-EINVAL, profile_cmd_tag_ext(&n, body, 501u, tag));
 }
 
-/* PROFILE_CMD_EXT_LAST = 65471 is the last ext an epoch accepts; 65472, within
- * 64 of 65536, is refused so the window never wraps the 16-bit counter. Walked
- * there with genuine commands, not by writing last_ext. */
+/* PROFILE_CMD_EXT_LAST = 65408 is the last ext an epoch accepts; 65409, within
+ * 127 of 65536, is refused so the ahead inference never wraps the 16-bit
+ * counter. Walked there with genuine commands, not by writing last_ext. */
 ZTEST(command, test_the_extended_sequence_is_refused_before_it_can_wrap)
 {
 	struct profile_cmd_node n;
@@ -749,18 +752,18 @@ ZTEST(command, test_the_extended_sequence_is_refused_before_it_can_wrap)
 	uint32_t ext;
 	int rc;
 
-	zassert_equal(65471u, PROFILE_CMD_EXT_LAST);
+	zassert_equal(65408u, PROFILE_CMD_EXT_LAST);
 
 	node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
-	for (ext = 0u; ext <= 65408u; ext += PROFILE_CMD_ACCEPT_WINDOW) {
+	for (ext = 0u; ext <= 65405u; ext += PROFILE_CMD_ACCEPT_WINDOW) {
 		(void)build_command_ext(&n, (uint16_t)ext, PROFILE_TLM_CMD_NOP,
 					PROFILE_TLM_TARGET_NODE, 0u, body,
 					sizeof(body));
 		zassert_true(profile_cmd_on_command(&n, body, sizeof(body), 1000u,
 						    ack, sizeof(ack)) > 0);
 	}
-	zassert_equal(65408u, n.last_ext);
-	zassert_equal(1023u, g_exec_calls);
+	zassert_equal(65405u, n.last_ext);
+	zassert_equal(516u, g_exec_calls);
 
 	/* The last one an epoch may use. */
 	(void)build_command_ext(&n, PROFILE_CMD_EXT_LAST, PROFILE_TLM_CMD_SET_BOOL,
@@ -769,7 +772,7 @@ ZTEST(command, test_the_extended_sequence_is_refused_before_it_can_wrap)
 	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
 						    sizeof(tag)) > 0);
 	zassert_equal(PROFILE_TLM_RESULT_OK, a.result);
-	zassert_equal(1024u, g_exec_calls);
+	zassert_equal(517u, g_exec_calls);
 
 	/* One more, and the top of the window: 0x02, counted, nothing runs. */
 	(void)build_command_ext(&n, PROFILE_CMD_EXT_LAST + 1u, PROFILE_TLM_CMD_NOP,
@@ -784,7 +787,7 @@ ZTEST(command, test_the_extended_sequence_is_refused_before_it_can_wrap)
 	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
 						    sizeof(tag)) > 0);
 	zassert_equal(PROFILE_TLM_RESULT_BAD_SEQ, a.result);
-	zassert_equal(1024u, g_exec_calls);
+	zassert_equal(517u, g_exec_calls);
 	zassert_equal(2u, profile_cmd_stats(&n)->seq_exhausted);
 	zassert_equal(0u, profile_cmd_stats(&n)->bad_seq);
 	zassert_equal(PROFILE_CMD_EXT_LAST, n.last_ext);
@@ -803,7 +806,142 @@ ZTEST(command, test_the_extended_sequence_is_refused_before_it_can_wrap)
 	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
 						    sizeof(tag)) > 0);
 	zassert_equal(PROFILE_TLM_RESULT_OK, a.result);
-	zassert_equal(1025u, g_exec_calls);
+	zassert_equal(518u, g_exec_calls);
+}
+
+/* Reviewer finding 2026-11-20: a genuine sender more than 64 ahead was read as
+ * behind, failed the tag and was locked out for the rest of the epoch. With
+ * the window at 1..127 a sender 100 ahead is simply accepted. */
+static void walk_to(struct profile_cmd_node *n, uint16_t from, uint16_t to)
+{
+	uint8_t body[PROFILE_TLM_CMD_LEN_STD];
+	uint8_t ack[PROFILE_TLM_CMD_LEN_LR];
+	uint32_t ext;
+
+	for (ext = from; ext <= to; ext += 100u) {
+		(void)build_command_ext(n, (uint16_t)ext, PROFILE_TLM_CMD_NOP,
+					PROFILE_TLM_TARGET_NODE, 0u, body,
+					sizeof(body));
+		zassert_true(profile_cmd_on_command(n, body, sizeof(body), 1000u,
+						    ack, sizeof(ack)) > 0);
+	}
+	zassert_equal(to, n->last_ext);
+}
+
+ZTEST(command, test_a_sender_a_hundred_ahead_is_accepted)
+{
+	struct profile_cmd_node n;
+	struct profile_command_ack a;
+	uint8_t body[PROFILE_TLM_CMD_LEN_STD];
+	uint8_t ack[PROFILE_TLM_CMD_LEN_LR];
+	uint8_t tag[PROFILE_TLM_CMD_TAG_LR];
+	int rc;
+
+	node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
+	walk_to(&n, 0u, 200u);
+	zassert_equal(3u, g_exec_calls);
+
+	/* The reviewer's case: last_ext 200, next 300 (d = 100). */
+	(void)build_command_ext(&n, 300u, PROFILE_TLM_CMD_SET_BOOL, 0x01u, 1u,
+				body, sizeof(body));
+	rc = profile_cmd_on_command(&n, body, sizeof(body), 2000u, ack,
+				    sizeof(ack));
+	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
+						    sizeof(tag)) > 0);
+	zassert_equal(PROFILE_TLM_RESULT_OK, a.result);
+	zassert_equal(4u, g_exec_calls);
+	zassert_equal(300u, n.last_ext);
+	zassert_true(profile_cmd_tag_ok_ext(&n, ack, 300u,
+					    &ack[PROFILE_TLM_CMD_COVERED]));
+	zassert_equal(0u, profile_cmd_stats(&n)->bad_tag);
+
+	/* And it stays in step: the next ones follow at 100 apiece. */
+	(void)build_command_ext(&n, 400u, PROFILE_TLM_CMD_NOP,
+				PROFILE_TLM_TARGET_NODE, 0u, body, sizeof(body));
+	rc = profile_cmd_on_command(&n, body, sizeof(body), 3000u, ack,
+				    sizeof(ack));
+	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
+						    sizeof(tag)) > 0);
+	zassert_equal(PROFILE_TLM_RESULT_OK, a.result);
+	zassert_equal(5u, g_exec_calls);
+}
+
+/* 128 or more ahead is past what eight bits can say: it reads as behind, is
+ * rebuilt with the wrong ext and fails the tag. The node is not wedged by it -
+ * an in-window sender is accepted once the backoff has passed. */
+ZTEST(command, test_a_sender_128_or_more_ahead_fails_the_tag_and_the_node_recovers)
+{
+	struct profile_cmd_node n;
+	struct profile_command_ack a;
+	uint8_t body[PROFILE_TLM_CMD_LEN_STD];
+	uint8_t ack[PROFILE_TLM_CMD_LEN_LR];
+	uint8_t tag[PROFILE_TLM_CMD_TAG_LR];
+	radiant_time_t t = 10000u;
+	int rc;
+
+	node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
+	walk_to(&n, 0u, 300u);
+	zassert_equal(4u, g_exec_calls);
+
+	/* 128 ahead (ext 428, d = 128) and 130 ahead (ext 430). */
+	(void)build_command_ext(&n, 428u, PROFILE_TLM_CMD_SET_BOOL, 0x01u, 1u,
+				body, sizeof(body));
+	rc = profile_cmd_on_command(&n, body, sizeof(body), t, ack, sizeof(ack));
+	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
+						    sizeof(tag)) > 0);
+	zassert_equal(PROFILE_TLM_RESULT_BAD_TAG, a.result);
+
+	t += 2u * PROFILE_CMD_BACKOFF_BASE_US;
+	(void)build_command_ext(&n, 430u, PROFILE_TLM_CMD_SET_BOOL, 0x01u, 1u,
+				body, sizeof(body));
+	zassert_equal(0, profile_cmd_on_command(&n, body, sizeof(body), t, ack,
+						sizeof(ack)));
+	zassert_equal(2u, profile_cmd_stats(&n)->bad_tag);
+	zassert_equal(4u, g_exec_calls);
+	zassert_equal(300u, n.last_ext);
+
+	/* An in-window sender, past the backoff, is accepted. */
+	t += 4u * PROFILE_CMD_BACKOFF_BASE_US;
+	(void)build_command_ext(&n, 427u, PROFILE_TLM_CMD_NOP,
+				PROFILE_TLM_TARGET_NODE, 0u, body, sizeof(body));
+	rc = profile_cmd_on_command(&n, body, sizeof(body), t, ack, sizeof(ack));
+	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
+						    sizeof(tag)) > 0);
+	zassert_equal(PROFILE_TLM_RESULT_OK, a.result);
+	zassert_equal(5u, g_exec_calls);
+	zassert_equal(427u, n.last_ext);
+}
+
+/* A stale command 100 behind verifies (it really was sent at that ext) and is
+ * answered with an AUTHENTICATED 0x02, so its sender learns it is stale. */
+ZTEST(command, test_a_command_a_hundred_behind_gets_an_authenticated_0x02)
+{
+	struct profile_cmd_node n;
+	struct profile_command_ack a;
+	uint8_t stale[PROFILE_TLM_CMD_LEN_STD];
+	uint8_t ack[PROFILE_TLM_CMD_LEN_LR];
+	uint8_t tag[PROFILE_TLM_CMD_TAG_LR];
+	int rc;
+
+	node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
+	walk_to(&n, 0u, 300u);
+	(void)build_command_ext(&n, 300u, PROFILE_TLM_CMD_NOP,
+				PROFILE_TLM_TARGET_NODE, 0u, stale, sizeof(stale));
+	walk_to(&n, 400u, 400u);
+	zassert_equal(5u, g_exec_calls);
+
+	/* delta_u8(44, 144) = 156: behind by 100, ext 300. */
+	rc = profile_cmd_on_command(&n, stale, sizeof(stale), 2000u, ack,
+				    sizeof(ack));
+	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
+						    sizeof(tag)) > 0);
+	zassert_equal(PROFILE_TLM_RESULT_BAD_SEQ, a.result);
+	zassert_true(profile_cmd_tag_ok_ext(&n, ack, 300u,
+					    &ack[PROFILE_TLM_CMD_COVERED]));
+	zassert_equal(5u, g_exec_calls);
+	zassert_equal(0u, profile_cmd_stats(&n)->bad_tag);
+	zassert_equal(1u, profile_cmd_stats(&n)->bad_seq);
+	zassert_equal(400u, n.last_ext);
 }
 
 /* ---------------------------------------------------------------------------

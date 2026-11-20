@@ -171,7 +171,10 @@ min_scenarios: 24
 # 2026-11-20 item 3, fix/cmd-replay-ext-seq): +5 per unit scenario
 # (test_command.c: earlier-lap replay, same-epoch setter retry, rollback,
 # second-lap ext tags, extended-sequence exhaustion).
-min_testcases: 6441
+# 6456 (+15), the review's symmetric split (window 1..127): +3 per unit
+# scenario (a sender 100 ahead, 128+ ahead fails the tag and the node recovers,
+# 100 behind gets an authenticated 0x02).
+min_testcases: 6456
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -192,9 +195,10 @@ min_testcases: 6441
 # t_sync, transfer failed-reply staleness, sched nested abort terminal).
 # 2026-11-20: +1 per unit scenario (sched: the ETIME retry plans from a fresh now).
 # 2026-11-20: +5 per unit scenario (command: the extended sequence, review item 3).
-min_cases.radiant.unit: 1080
-min_cases.radiant.unit.sec_modes: 1080
-min_cases.radiant.unit.no_pairing: 1020
+# 2026-11-20: +3 per unit scenario (command: the 1..127 window's three cases).
+min_cases.radiant.unit: 1083
+min_cases.radiant.unit.sec_modes: 1083
+min_cases.radiant.unit.no_pairing: 1023
 min_cases.radiant.api: 86
 min_cases.radiant.api.sec: 90
 # +1 with the identical-0xF1 retry case (review 2026-11-17 item 4).
@@ -225,14 +229,16 @@ min_cases.treadmill.hr_rx: 3
 # 2026-11-20: +3 (HAL drift item 5, as radiant.unit).
 # 2026-11-20: +1 (the ETIME retry re-read, as radiant.unit).
 # 2026-11-20: +5 (command: the extended sequence, as radiant.unit).
-min_cases.radiant.unit.ack_faults: 1087
+# 2026-11-20: +3 (command: the 1..127 window, as radiant.unit).
+min_cases.radiant.unit.ack_faults: 1090
 # radiant.unit.diag: the unit suites with CONFIG_RADIANT_DIAG_COUNTERS.
 # 1127 (2026-11-16, Bluefin twister on fix/diag-page9-done-cb): the observed
 # count, including the four page-9/page-12 scheduler cases.
 # 2026-11-20: +3 (HAL drift item 5, as radiant.unit).
 # 2026-11-20: +1 (the ETIME retry re-read, as radiant.unit).
 # 2026-11-20: +5 (command: the extended sequence, as radiant.unit).
-min_cases.radiant.unit.diag: 1158
+# 2026-11-20: +3 (command: the 1..127 window, as radiant.unit).
+min_cases.radiant.unit.diag: 1161
 min_cases.trainer.model: 14
 # radiant.lp_clock (power plan pass B2): the low-power timebase arithmetic,
 # 31 unit cases and seven 100 000-cycle drift simulations (three of them

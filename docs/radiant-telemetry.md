@@ -1159,34 +1159,48 @@ protocol to it adds rows to no table at all.
 
 The node keeps `last_ext`, the extended sequence of the last command it
 answered (its low byte is the wire's `last_seq`), and the `result` it produced.
-Before rule 1 it extends the received `seq`, from `d = delta_u8(seq, last_seq)`:
-`ext = last_ext + d` for `d` in 1..64, `ext = last_ext` for `d = 0`, and
-otherwise `ext = last_ext - (256 - d)`, the command "behind" — unless that would
-go below zero, which can only happen on the first lap, where `ext = last_ext + d`
-is `seq` itself. Before adoption `ext = seq`. This uses only public state, so it
-tells an observer nothing the order below protects.
+Before rule 1 it extends the received `seq`, from `d = delta_u8(seq, last_seq)`,
+split symmetrically: `d` in 1..127 is **ahead**, `ext = last_ext + d`; `d = 0`
+is a **duplicate**, `ext = last_ext`; `d` in 128..255 is **behind** by `256 - d`
+(1..128), `ext = last_ext - (256 - d)` — unless that would go below zero, which
+can only happen on the first lap, where `ext = last_ext + d` is `seq` itself.
+Before adoption `ext = seq`. This uses only public state, so it tells an
+observer nothing the order below protects.
 
 1. Verify the tag first, under that `ext`. A bad tag is rejected with `0x03` and
    **changes no state**, including `last_ext`.
 2. If `ext == last_ext`, **re-send the stored acknowledgement and do not
    execute again.** Same sequence, same effect. This is what makes a retried
    "AC on" safe.
-3. Otherwise accept if `ext - last_ext` is in 1..64 — a window wide enough to
-   survive a run of loss, narrow enough that a stale command cannot walk back
-   into range. Anything else is rejected with `0x02`. A command from an earlier
-   lap, whose low byte is back inside the window, is extended to the wrong `ext`
-   and fails rule 1 instead: its tag was made under a different counter.
+3. Otherwise accept if `ext - last_ext` is in 1..127 — as far ahead as eight
+   bits can say unambiguously, so a sender that lost a long run of
+   acknowledgements is still accepted. The window no longer has to stop a
+   replay: the tag does, because it covers `ext`. So, case by case:
+   - **ahead 1..127**: accepted and executed;
+   - **0**: a duplicate, rule 2;
+   - **behind 1..128**: verifies only if that command really was sent at that
+     `ext`, and is rejected with an authenticated `0x02`, so the sender learns
+     it is stale;
+   - **anything else** — a command from an earlier lap whose low byte is back
+     in range, or a sender 128 or more ahead — is extended to the wrong `ext`
+     and fails rule 1: `0x03`, or silence under backoff. A sender must
+     therefore never run more than 127 ahead of the last acknowledgement it
+     received.
 4. On power-up `last_ext` is unknown, and the node adopts the sequence of the
    first command that passes the tag check **in the current epoch**, as
    `ext = seq`. That is correct because a sender starts every epoch at `ext = 0`,
    and a node reboot advances the epoch (ADR 0009), so adoption only happens at
    an epoch's start. Setting the current epoch again keeps `last_ext` and the
-   stored acknowledgement; an older epoch is refused.
+   stored acknowledgement; an older epoch is refused. **A node that misses the
+   whole first lap** (no command with `ext` below 256 reaches it) can never
+   adopt: every later command fails the tag under `ext = seq`. The remedy is an
+   epoch advance, after which the sender starts again at 0.
 5. **The extended sequence never wraps.** A command whose `ext` would be above
-   65471 (`0xFFFF - 64`, within one window of 65536) is rejected with `0x02`
-   and counted, and executes nothing. Accepting 65471 leaves `last_ext + 64 =
-   0xFFFF`, so the window never reaches a counter value twice. That is 65472
-   sequences per epoch; a sender that reaches the end must advance the epoch.
+   65408 (`0xFFFF - 127`, within one window of 65536) is rejected with `0x02`
+   and counted, and executes nothing. Accepting 65408 leaves `last_ext + 127 =
+   0xFFFF`, so the inference never reaches a counter value twice. That is 65409
+   sequences per epoch (`ext` 0..65408); a sender that reaches the end must
+   advance the epoch.
 
 Step 4 is where the epoch earns its four bytes even on a node with no
 confidentiality and no privacy: the tag covers the epoch, so a command captured
