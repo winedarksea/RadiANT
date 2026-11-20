@@ -180,7 +180,7 @@ ZTEST(radiant_backend_cc26xx_smoke, test_tx_ok)
 	tx = fake_rf_find_op(c, CMD_PROP_TX_ADV);
 	zassert_not_null(tx);
 	zassert_equal(tx->trigger_type, TRIG_ABSTIME);
-	zassert_true(tx->past_trig);
+	zassert_false(tx->past_trig, "a transmit never starts late");
 	zassert_true(tx->start_time < (uint32_t)(t_sync * 4u), "starts before t_sync");
 	zassert_equal(tx->pkt_len, (cc_fmt()->addr_len - cc_hw_addr_len()) +
 				   cc_fmt()->body_len + 2u);

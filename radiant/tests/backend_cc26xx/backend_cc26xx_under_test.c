@@ -129,6 +129,7 @@ int16_t  cc_retired_handle(void) { return st.retired_handle; }
 uint8_t  cc_hw_addr_len(void) { return st.hw_addr_len; }
 uint8_t  cc_sw_addr_len(void) { return st.sw_addr_len; }
 bool     cc_delivered_terminal(void) { return st.delivered_terminal; }
+void     cc_set_next_op_id(uint32_t v) { st.next_op_id = v; }
 uint32_t cc_sw_addr_mismatch(void) { return radiant_cc26xx_sw_addr_mismatch; }
 
 /* ---- Requests and payloads ---- */
