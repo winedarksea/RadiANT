@@ -333,7 +333,12 @@ static void abort_one(struct fake_rf_cmd *c, uint8_t mode, bool flush)
 
 static RF_Stat cancel_common(RF_Handle h, RF_CmdHandle ch, uint8_t mode, bool flush)
 {
-	struct fake_rf_cmd *c = fake_rf_cmd(ch);
+	struct fake_rf_cmd *c;
+
+	if (fake_rf.on_cancel_entry != NULL) {
+		fake_rf.on_cancel_entry(ch);
+	}
+	c = fake_rf_cmd(ch);
 
 	if (c == NULL || c->h != h) {
 		return RF_StatInvalidParamsError;

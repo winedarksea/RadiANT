@@ -15,6 +15,9 @@ tests:
   radiant.backend_cc26xx.coex:
     # CONFIG_RADIANT_BACKEND_CC26XX_COEX: every arm through RF_scheduleCmd,
     # and radiant_radio_cc26xx_arb.c's submit/execute hooks (src_coex/).
+    # Also CONFIG_RADIANT_DIAG_COUNTERS, so the backend's 0xF7 counters
+    # (cc_diag) compile and test_terminal.c can read status_err; the plain
+    # scenario keeps them off, as a production build does.
     tags:
       - radiant
       - cc26xx
@@ -24,3 +27,5 @@ tests:
       - native_sim
     extra_args:
       - BACKEND_COEX=1
+    extra_configs:
+      - CONFIG_RADIANT_DIAG_COUNTERS=y

@@ -72,6 +72,10 @@ uint8_t  cc_hw_addr_len(void);
 uint8_t  cc_sw_addr_len(void);
 bool     cc_delivered_terminal(void);
 uint32_t cc_sw_addr_mismatch(void);
+/* cc_diag.status_err; cc_diag_built() is false (and this 0) without
+ * CONFIG_RADIANT_DIAG_COUNTERS. */
+bool     cc_diag_built(void);
+uint32_t cc_status_err(void);
 
 /* The tracking format and a fixed test address (A6 C5 34 12 78). */
 const struct radiant_pkt_format *cc_fmt(void);

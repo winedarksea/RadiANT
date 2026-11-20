@@ -130,6 +130,13 @@ uint8_t  cc_hw_addr_len(void) { return st.hw_addr_len; }
 uint8_t  cc_sw_addr_len(void) { return st.sw_addr_len; }
 bool     cc_delivered_terminal(void) { return st.delivered_terminal; }
 uint32_t cc_sw_addr_mismatch(void) { return radiant_cc26xx_sw_addr_mismatch; }
+#if defined(CONFIG_RADIANT_DIAG_COUNTERS)
+bool     cc_diag_built(void) { return true; }
+uint32_t cc_status_err(void) { return cc_diag.status_err; }
+#else
+bool     cc_diag_built(void) { return false; }
+uint32_t cc_status_err(void) { return 0u; }
+#endif
 
 /* ---- Requests and payloads ---- */
 
