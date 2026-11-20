@@ -897,6 +897,9 @@ static struct {
 	 * The t_sync a transmit asked for, compared with the captured one to measure
 	 * TX timing error. A fixed lateness is invisible on broadcast but fatal for
 	 * acknowledged data, where the peer's window opens 1560 us after the packet.
+	 * Also what a transmit that did not go out reports as its t_sync (HAL: the
+	 * requested time, not exact), so it is set when the arm is accepted, before
+	 * any staging: a denial or a failed grant ends the operation unprogrammed.
 	 */
 	radiant_time_t t_sync_req;
 
@@ -3080,6 +3083,7 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 		radiant_op.next_id = 1u;   /* ids are non-zero by contract */
 	}
 	*op = radiant_op.id;
+	radiant_op.t_sync_req = req->t_sync_at;
 
 	if (g == GATE_PENDING) {
 		/* Copied only on the deferred path (see radiant_radio_rx()). The body must stay valid until completion. */
@@ -4638,8 +4642,12 @@ static void deliver_terminal(enum radiant_radio_status st)
 		memset(&evt, 0, sizeof(evt));
 		evt.op = radiant_op.id;
 		evt.status = st;
-		/* Nothing went out, so CC_SYNC holds an earlier operation's capture. Report it as inexact. */
-		evt.t_sync = radiant_radio_now();
+		/*
+		 * Nothing went out, so CC_SYNC holds an earlier operation's capture. The
+		 * HAL's value for a transmit that did not go out: the requested t_sync,
+		 * not exact (radiant_tx_event). The OK completion is not delivered here.
+		 */
+		evt.t_sync = radiant_op.t_sync_req;
 		evt.t_sync_exact = false;
 		core_cb_tx(&evt);
 	} else {

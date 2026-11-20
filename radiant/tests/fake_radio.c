@@ -131,11 +131,11 @@ struct fake_state {
 
 	struct cur_op cur;
 
-	/* deferred abort: a callback may abort, but callbacks never nest, so
-	 * the terminal event waits until the current one returns */
-	uint32_t                 defer_abort_op;
-	enum fake_radio_arm_kind defer_abort_kind;
-	bool                     draining;
+	/* radiant_radio_abort() from inside a callback: the HAL's one
+	 * exception to "callbacks never nest" (radiant_radio_hal.h ORDERING).
+	 * Set for exactly the aborted operation's terminal, which is delivered
+	 * nested before abort returns, and consumed by that delivery. */
+	bool     nested_abort;
 
 	bool     in_cb;
 	uint32_t isr_calls;
@@ -686,7 +686,36 @@ static struct fake_radio_event *new_event_record(void)
  * ---------------------------------------------------------------------------
  */
 
-static void run_deferred(void);
+/* Whether a delivery must be refused because a callback is running. The
+ * one exemption is the terminal radiant_radio_abort() delivers nested; the
+ * permission is consumed here, so it covers that one event only. */
+static bool nest_refused(const char *what)
+{
+	bool nested_ok = g.nested_abort;
+
+	g.nested_abort = false;
+	if (g.in_cb && !nested_ok) {
+		record_viol(FAKE_RADIO_VIOL_CB_NESTED, what);
+		return true;
+	}
+	return false;
+}
+
+/* Enter a callback; returns whether one was already running (a nested
+ * abort terminal). The per-callback HAL-call budget is the outer
+ * callback's: the nested terminal runs inside its abort call. */
+static bool cb_enter(void)
+{
+	bool outer = g.in_cb;
+
+	g.in_cb = true;
+	if (!outer) {
+		g.isr_calls = 0u;
+		g.isr_work_flagged = false;
+	}
+	g.stats.callbacks++;
+	return outer;
+}
 
 static bool has_frame_fields(enum radiant_radio_status st)
 {
@@ -701,18 +730,22 @@ static void deliver_rx(uint32_t op, enum radiant_radio_status status, bool termi
 	struct radiant_rx_event evt;
 	struct fake_radio_event *rec;
 	bool frame = has_frame_fields(status);
+	bool outer;
 
-	if (g.in_cb) {
-		record_viol(FAKE_RADIO_VIOL_CB_NESTED, "rx callback would nest");
+	if (nest_refused("rx callback would nest")) {
 		return;
 	}
 
 	memset(&evt, 0, sizeof(evt));
-	memset(g.body_buf, 0, sizeof(g.body_buf));
-	if (frame && body != NULL && body_len > 0u) {
-		memcpy(g.body_buf, body,
-		       body_len > sizeof(g.body_buf) ? sizeof(g.body_buf)
-						     : body_len);
+	/* A nested delivery is an ABORTED terminal (no body), and the outer
+	 * callback's event - body included - is still live: leave it alone. */
+	if (!g.in_cb) {
+		memset(g.body_buf, 0, sizeof(g.body_buf));
+		if (frame && body != NULL && body_len > 0u) {
+			memcpy(g.body_buf, body,
+			       body_len > sizeof(g.body_buf) ? sizeof(g.body_buf)
+							     : body_len);
+		}
 	}
 
 	evt.op = op;
@@ -777,17 +810,14 @@ static void deliver_rx(uint32_t op, enum radiant_radio_status status, bool termi
 		g.stats.ev_late++;
 	}
 
-	g.in_cb = true;
-	g.isr_calls = 0u;
-	g.isr_work_flagged = false;
-	g.stats.callbacks++;
+	outer = cb_enter();
 	if (g.cbs.rx != NULL) {
 		g.cbs.rx(&evt, g.user);
 	}
-	g.in_cb = false;
-	memset(g.body_buf, FAKE_RADIO_BODY_POISON, sizeof(g.body_buf));
-
-	run_deferred();
+	g.in_cb = outer;
+	if (!outer) {
+		memset(g.body_buf, FAKE_RADIO_BODY_POISON, sizeof(g.body_buf));
+	}
 }
 
 static void deliver_tx(uint32_t op, enum radiant_radio_status status,
@@ -795,16 +825,22 @@ static void deliver_tx(uint32_t op, enum radiant_radio_status status,
 {
 	struct radiant_tx_event evt;
 	struct fake_radio_event *rec;
+	bool outer;
 
-	if (g.in_cb) {
-		record_viol(FAKE_RADIO_VIOL_CB_NESTED, "tx callback would nest");
+	if (nest_refused("tx callback would nest")) {
 		return;
 	}
 
 	memset(&evt, 0, sizeof(evt));
 	evt.op = op;
 	evt.status = status;
-	evt.t_sync = (status == RADIANT_RADIO_STATUS_OK) ? t_sync : 0u;
+	/* The caller passes the achieved t_sync on OK and the requested one
+	 * otherwise: the HAL's value for a transmit that did not go out, never
+	 * exact. A core module that reads it without checking the status gets
+	 * a plausible time, as on hardware - which is why the core must not
+	 * read it on failure, and the tests that pin that inject a misleading
+	 * value of their own. */
+	evt.t_sync = t_sync;
 	evt.t_sync_exact = (status == RADIANT_RADIO_STATUS_OK) &&
 			   g.caps.has_sync_timestamp;
 
@@ -824,16 +860,11 @@ static void deliver_tx(uint32_t op, enum radiant_radio_status status,
 		g.stats.ev_late++;
 	}
 
-	g.in_cb = true;
-	g.isr_calls = 0u;
-	g.isr_work_flagged = false;
-	g.stats.callbacks++;
+	outer = cb_enter();
 	if (g.cbs.tx != NULL) {
 		g.cbs.tx(&evt, g.user);
 	}
-	g.in_cb = false;
-
-	run_deferred();
+	g.in_cb = outer;
 }
 
 /* One energy-detect event. `terminal` selects the HAL's two shapes: an OK
@@ -848,9 +879,9 @@ static void deliver_ed(uint32_t op, enum radiant_radio_status status,
 	struct radiant_ed_event evt;
 	struct fake_radio_event *rec;
 	bool measured = (status == RADIANT_RADIO_STATUS_OK) && !terminal;
+	bool outer;
 
-	if (g.in_cb) {
-		record_viol(FAKE_RADIO_VIOL_CB_NESTED, "ed callback would nest");
+	if (nest_refused("ed callback would nest")) {
 		return;
 	}
 
@@ -880,16 +911,11 @@ static void deliver_ed(uint32_t op, enum radiant_radio_status status,
 		count_status(status, false);
 	}
 
-	g.in_cb = true;
-	g.isr_calls = 0u;
-	g.isr_work_flagged = false;
-	g.stats.callbacks++;
+	outer = cb_enter();
 	if (g.cbs.ed != NULL) {
 		g.cbs.ed(&evt, g.user);
 	}
-	g.in_cb = false;
-
-	run_deferred();
+	g.in_cb = outer;
 }
 
 /* ---------------------------------------------------------------------------
@@ -940,6 +966,7 @@ static void end_op(enum radiant_radio_status status, radiant_time_t t_sync)
 	enum fake_radio_arm_kind kind = g.cur.kind;
 	uint32_t op = g.cur.op;
 	int32_t arm_idx = g.cur.arm_idx;
+	radiant_time_t t_sync_req = g.cur.t_sync_req;
 
 	if (kind == FAKE_RADIO_ARM_NONE) {
 		return;
@@ -948,38 +975,16 @@ static void end_op(enum radiant_radio_status status, radiant_time_t t_sync)
 	clear_cur();
 
 	if (kind == FAKE_RADIO_ARM_TX) {
-		deliver_tx(op, status, t_sync, false);
+		/* t_sync is meaningful only on OK; otherwise the requested time. */
+		deliver_tx(op, status,
+			   (status == RADIANT_RADIO_STATUS_OK) ? t_sync : t_sync_req,
+			   false);
 	} else if (kind == FAKE_RADIO_ARM_ED) {
 		deliver_ed(op, status, true, 0u, 0, 0, 0u);
 	} else {
 		deliver_rx(op, status, true, 0u, 0u, NULL, 0u, 0, false, 0u,
 			   false);
 	}
-}
-
-static void run_deferred(void)
-{
-	if (g.draining) {
-		return;
-	}
-	g.draining = true;
-	while (g.defer_abort_op != 0u) {
-		uint32_t op = g.defer_abort_op;
-		enum fake_radio_arm_kind kind = g.defer_abort_kind;
-
-		g.defer_abort_op = 0u;
-		g.defer_abort_kind = FAKE_RADIO_ARM_NONE;
-		if (kind == FAKE_RADIO_ARM_TX) {
-			deliver_tx(op, RADIANT_RADIO_STATUS_ABORTED, 0u, false);
-		} else if (kind == FAKE_RADIO_ARM_ED) {
-			deliver_ed(op, RADIANT_RADIO_STATUS_ABORTED, true, 0u, 0,
-				   0, 0u);
-		} else {
-			deliver_rx(op, RADIANT_RADIO_STATUS_ABORTED, true, 0u, 0u,
-				   NULL, 0u, 0, false, 0u, false);
-		}
-	}
-	g.draining = false;
 }
 
 /* ---------------------------------------------------------------------------
@@ -2076,8 +2081,7 @@ int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 	g.cbs = *cbs;
 	g.user = user;
 	clear_cur();
-	g.defer_abort_op = 0u;
-	g.defer_abort_kind = FAKE_RADIO_ARM_NONE;
+	g.nested_abort = false;
 	g.lc = LC_INIT;
 	return RADIANT_RADIO_OK_RC;
 }
@@ -2681,19 +2685,15 @@ int radiant_radio_abort(void)
 		return RADIANT_RADIO_OK_RC;
 	}
 
+	/* From inside a callback the ABORTED terminal is delivered nested,
+	 * here, before this returns (the HAL's one exception to "callbacks
+	 * never nest", as the nRF and TI backends do). end_op() frees the slot
+	 * first, so the caller - or the nested callback - may re-arm. */
 	if (g.in_cb) {
-		/* A callback may abort, but callbacks never nest: free the
-		 * slot immediately (caller may re-arm before returning) and
-		 * deliver ABORTED once the current callback returns - the
-		 * case the op id exists to disambiguate. */
-		mark_terminal(g.cur.arm_idx, RADIANT_RADIO_STATUS_ABORTED);
-		g.defer_abort_op = g.cur.op;
-		g.defer_abort_kind = g.cur.kind;
-		clear_cur();
-		return RADIANT_RADIO_OK_RC;
+		g.nested_abort = true;
 	}
-
 	end_op(RADIANT_RADIO_STATUS_ABORTED, 0u);
+	g.nested_abort = false;
 	return RADIANT_RADIO_OK_RC;
 }
 
@@ -2802,12 +2802,29 @@ int fake_radio_inject_late_rx(uint32_t op, const struct fake_radio_air *f,
 	return RADIANT_RADIO_OK_RC;
 }
 
+/* The t_sync_at an accepted transmit with this op id asked for, from the arm
+ * log; `fallback` if the log no longer holds it. */
+static radiant_time_t requested_t_sync(uint32_t op, radiant_time_t fallback)
+{
+	for (uint32_t i = g.n_arms; i > 0u; i--) {
+		const struct fake_radio_arm *a = &g.arms[i - 1u];
+
+		if (a->op == op && a->kind == FAKE_RADIO_ARM_TX) {
+			return a->t_sync_at;
+		}
+	}
+	return fallback;
+}
+
 int fake_radio_inject_late_tx(uint32_t op, enum radiant_radio_status status)
 {
 	if (reject_from_callback()) {
 		return RADIANT_RADIO_ESTATE;
 	}
-	deliver_tx(op, status, g.now, true);
+	deliver_tx(op, status,
+		   (status == RADIANT_RADIO_STATUS_OK) ? g.now
+						       : requested_t_sync(op, g.now),
+		   true);
 	return RADIANT_RADIO_OK_RC;
 }
 
@@ -2835,9 +2852,6 @@ const char *fake_radio_busy_reason(void)
 	}
 	if (g.cur.kind == FAKE_RADIO_ARM_ED) {
 		return "an energy-detect sweep is still armed";
-	}
-	if (g.defer_abort_op != 0u) {
-		return "an aborted operation's terminal event is still pending";
 	}
 	return NULL;
 }

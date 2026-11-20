@@ -2779,6 +2779,14 @@ static void api_feed_xfer_terminal(uint8_t ch, enum radiant_radio_status st)
 		memset(&e, 0, sizeof(e));
 		e.op = RADIANT_TRANSFER_OP_EXTERNAL;
 		e.status = st;
+		/*
+		 * The HAL's value for a transmit that did not go out is the t_sync it
+		 * was armed for, but the scheduler's completion carries only the
+		 * outcome, not the request, so it is not known here. now() stands in.
+		 * Harmless: t_sync is meaningful only on OK, this path never carries
+		 * an OK (an OK transmit reaches the engine through api_sched_tx()),
+		 * and the engine anchors a failed transmit on its own in_ack_at.
+		 */
 		e.t_sync = radiant_radio_now();
 		e.t_sync_exact = false;
 		radiant_transfer_on_tx_event(&api_xfer[ch], &e);

@@ -843,9 +843,11 @@ int radiant_transfer_abort(struct radiant_transfer *t)
 	/* The cancelled operation's terminal event still arrives (HAL guarantee,
 	 * confirmed by the mock with no fault injection), so this marks the
 	 * engine ABORTING rather than finishing now; the event handler below
-	 * finishes it when the terminal lands. From thread context
-	 * radiant_radio_abort() delivers it before returning; from inside a
-	 * callback it's deferred until the current one returns.
+	 * finishes it when the terminal lands. radiant_radio_abort() delivers
+	 * it before returning, from thread context and from inside a callback
+	 * alike (nested in the callback case, the HAL's one exception to
+	 * "callbacks never nest"), so the engine may already be finished when
+	 * the call returns. ABORTING is set first so that terminal finds it.
 	 *
 	 * radiant_radio_abort(), NOT radiant_sched_cancel(): the latter is
 	 * documented SILENT for the cancelled channel, so no completion would
@@ -1015,10 +1017,16 @@ void radiant_transfer_on_tx_event(struct radiant_transfer *t,
 		 * finish()/reset_transfer(). That means a stale ack could go out
 		 * on the next idle window; the staleness check in
 		 * radiant_transfer_reply_retransmit() (against the t_sync stamped
-		 * below) is what prevents it. */
+		 * below) is what prevents it.
+		 *
+		 * The achieved t_sync when the reply went out; the instant it was
+		 * armed for when it did not, as the in-burst branch above anchors.
+		 * The HAL defines t_sync only on OK, and the scheduler's path
+		 * (api_feed_xfer_terminal()) hands a clock reading for a failure. */
 		t->op = 0u;
 		t->state = RADIANT_TRANSFER_STATE_IDLE;
-		t->reply_t_sync = e->t_sync;
+		t->reply_t_sync = (e->status == RADIANT_RADIO_STATUS_OK) ?
+					  e->t_sync : t->in_ack_at;
 		if (e->status == RADIANT_RADIO_STATUS_OK) {
 			t->stats.acks_sent++;
 		}

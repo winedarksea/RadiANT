@@ -565,7 +565,13 @@ struct radiant_tx_event {
 	enum radiant_radio_status status;
 	/* Actual t_sync of the frame that went out, for closing the loop on
 	 * master slot phase. Equals the requested value on every backend that
-	 * can schedule exactly; a backend that cannot must report what it did. */
+	 * can schedule exactly; a backend that cannot must report what it did.
+	 *
+	 * Meaningful ONLY on RADIANT_RADIO_STATUS_OK. On any other status
+	 * nothing went out, and every backend reports the requested t_sync_at
+	 * with t_sync_exact false: a fixed, known value rather than a clock
+	 * reading taken whenever the failure was noticed. The core never
+	 * reads it on failure; it anchors on the time it armed for. */
 	radiant_time_t            t_sync;
 	bool                  t_sync_exact;
 };
@@ -627,7 +633,10 @@ struct radiant_ed_event {
  *   - call radiant_radio_init(), radiant_radio_enable() or radiant_radio_disable(),
  *   - do work proportional to anything - queue it and return.
  *
- * ORDERING. Callbacks never nest and never run concurrently with each other.
+ * ORDERING. Callbacks never nest and never run concurrently with each other,
+ * with ONE EXCEPTION: radiant_radio_abort() called from inside a callback
+ * delivers the aborted operation's terminal (RADIANT_RADIO_STATUS_ABORTED)
+ * nested, from inside that call, before it returns (see radiant_radio_abort()).
  * Every accepted arm call produces exactly one terminal event; a receive window
  * may additionally produce zero or more non-terminal RADIANT_RADIO_STATUS_OK /
  * CRC_FAIL events before it. Events are delivered in time order.
@@ -997,9 +1006,21 @@ int radiant_radio_ed(const struct radiant_ed_req *req, uint32_t *op);
 
 /*
  * Abort the current operation. Its terminal event is still delivered, with
- * status RADIANT_RADIO_STATUS_ABORTED, before this function's caller can observe
- * the slot as free - so the core never has to reason about an operation that
- * ended without an event. Returns RADIANT_RADIO_OK_RC when there was nothing to do.
+ * status RADIANT_RADIO_STATUS_ABORTED, before this function returns - so the
+ * core never has to reason about an operation that ended without an event.
+ * Returns RADIANT_RADIO_OK_RC when there was nothing to do.
+ *
+ * From inside a callback this is the one place callbacks nest: the ABORTED
+ * terminal runs nested, inside this call, inside the calling callback
+ * (exactly once; nothing more is delivered for that operation after the
+ * outer callback returns). The caller may assume, on return:
+ *   - the nested callback has already run, and any state it changed is
+ *     visible. A core that wants that terminal ignored retires the
+ *     operation (forgets its op id) before calling this;
+ *   - the slot is free, so it may re-arm from the same callback (unless the
+ *     nested callback itself armed, in which case that operation holds it);
+ *   - the outer callback's event, including evt->body, is still valid until
+ *     that callback returns (the nested terminal carries no body).
  */
 int radiant_radio_abort(void);
 

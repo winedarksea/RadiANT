@@ -1808,8 +1808,9 @@ ZTEST(radiant_sched, test_a_window_is_truncated_to_clear_a_transmit_deadline)
  * that hears acknowledged data owes a full 8-byte reply ~1.55 ms later
  * (docs/spike-b-results.md). The request arrives from inside the
  * receive callback of the still-armed window, so only preemption can serve
- * it, and it also produces a late ABORTED terminal (with no fault injection)
- * that the scheduler must recognise rather than mistake for the transmit's end.
+ * it, and it also produces an ABORTED terminal (with no fault injection),
+ * delivered nested inside the abort, that the scheduler must recognise as the
+ * dead window's rather than let it end anything.
  */
 ZTEST(radiant_sched, test_a_reply_preempts_the_window_it_was_heard_in)
 {
@@ -1854,8 +1855,9 @@ ZTEST(radiant_sched, test_a_reply_preempts_the_window_it_was_heard_in)
 	 * that is already owed outranks the rest of a window. */
 	zassert_equal(1u, log.aborted_count[0]);
 
-	/* The aborted window's terminal event arrived after the transmit was
-	 * armed. It carried the dead op id and changed nothing. */
+	/* The aborted window's terminal event arrived nested inside the abort,
+	 * after the window was retired and before the transmit was armed
+	 * (HAL item 5). It carried the dead op id and changed nothing. */
 	zassert_equal(1u, radiant_sched_stats_get()->stale_events);
 	zassert_equal(1u, radiant_sched_stats_get()->tx_armed);
 

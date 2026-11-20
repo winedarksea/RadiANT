@@ -350,7 +350,9 @@ enum fake_radio_viol {
 	FAKE_RADIO_VIOL_ISR_LIFECYCLE,   /* init/enable/disable from a callback */
 	FAKE_RADIO_VIOL_ISR_HARNESS,     /* clock/queue/reset from a callback */
 	FAKE_RADIO_VIOL_ISR_WORK,        /* callback exceeded the HAL-call budget */
-	FAKE_RADIO_VIOL_CB_NESTED,       /* a callback was about to nest */
+	FAKE_RADIO_VIOL_CB_NESTED,       /* a callback was about to nest (other than
+					  * the terminal radiant_radio_abort() delivers
+					  * nested from a callback) */
 	FAKE_RADIO_VIOL_DOUBLE_TERMINAL,
 	FAKE_RADIO_VIOL_EVENT_AFTER_END,
 	FAKE_RADIO_VIOL_CLOCK_BACKWARDS,
@@ -618,7 +620,7 @@ int fake_radio_end_current(enum radiant_radio_status status);
  * ---------------------------------------------------------------------------
  */
 
-/* No operation armed or running, and nothing deferred. The end-of-test check
+/* No operation armed or running. The end-of-test check
  * that catches a module which left the radio armed. */
 bool        fake_radio_is_idle(void);
 /* NULL when idle, otherwise a short static description, for the message
