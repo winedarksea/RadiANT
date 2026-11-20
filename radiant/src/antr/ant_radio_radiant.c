@@ -643,7 +643,7 @@ static bool api_id_list_permits(uint8_t ch, const struct radiant_channel_id *id)
  * Handing a received frame to the host
  * ---------------------------------------------------------------------------
  */
-static void api_post_rx(uint8_t ch, uint8_t msg_id,
+static bool api_post_rx(uint8_t ch, uint8_t msg_id,
 			const struct radiant_channel_id *id,
 			const struct radiant_rx_event *hal, const uint8_t *payload,
 			uint8_t payload_len, uint8_t burst_seq, bool burst_last)
@@ -662,9 +662,10 @@ static void api_post_rx(uint8_t ch, uint8_t msg_id,
 
 	if (radiant_event_post_rx(&r) == RADIANT_EVENT_OK) {
 		api_stats.rx_posted++;
-	} else {
-		api_stats.rx_dropped++;
+		return true;
 	}
+	api_stats.rx_dropped++;
+	return false;
 }
 
 #if defined(CONFIG_RADIANT_SEC)
@@ -2376,6 +2377,9 @@ static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 	struct radiant_frame_wire w;
 	struct radiant_frame      f;
 	struct radiant_rx_event   repaired;
+#if defined(CONFIG_RADIANT_DIAG_CRC_BITS)
+	const struct radiant_rx_event *heard = evt; /* as received, for the bit diag */
+#endif
 	enum radiant_msg_type     mt;
 	int                   n;
 	int                   rc;
@@ -2464,11 +2468,6 @@ static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 	}
 
 	if (crc_failed) {
-		/* Counted here, not at the repair: this means repaired AND delivered. */
-		api_stats.crc_repaired++;
-#if defined(CONFIG_RADIANT_DIAG_CRC_BITS)
-		api_crc_bits_note(evt, &w);
-#endif
 		/*
 		 * The repair is accepted, so from here on this is a good frame. The
 		 * HAL event still says CRC_FAIL, and radiant_event_post_rx() rejects
@@ -2533,8 +2532,18 @@ static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 		} else if (api_ch[ch].bcast_pending) {
 			api_post_slave_bcast(ch, evt->t_sync);
 		}
-		api_post_rx(ch, (uint8_t)ANTW_MESG_BROADCAST_DATA_ID, &id, evt,
-			    f.payload, f.payload_len, 0u, false);
+		/* crc_repaired means repaired AND delivered: counted only once the
+		 * host queue took the frame, so a repair the policy guard held or
+		 * dropped, or a full queue refused, is not counted. Only broadcasts
+		 * reach here repaired (the others are refuted above). */
+		if (api_post_rx(ch, (uint8_t)ANTW_MESG_BROADCAST_DATA_ID, &id, evt,
+				f.payload, f.payload_len, 0u, false) &&
+		    crc_failed) {
+			api_stats.crc_repaired++;
+#if defined(CONFIG_RADIANT_DIAG_CRC_BITS)
+			api_crc_bits_note(heard, &w);
+#endif
+		}
 		break;
 	case RADIANT_MSG_BURST_DATA:
 	case RADIANT_MSG_BURST_LAST:

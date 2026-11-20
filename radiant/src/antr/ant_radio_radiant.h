@@ -158,6 +158,8 @@ struct radiant_api_stats {
 	 * (CONFIG_RADIANT_CRC_REPAIR). Kept apart from a clean receive:
 	 * about 1 in 341 unrepairable frames hits a valid syndrome by chance
 	 * and gets "repaired" wrong, so at full signal this must be zero.
+	 * Counted only when the repaired frame reaches the host queue: one the
+	 * security policy guard holds or drops, or a full queue refuses, is not.
 	 */
 	uint32_t crc_repaired;
 	/* Tracked-window CRC failures no single flipped bit explains. Against
