@@ -143,6 +143,37 @@ bool     cc_diag_built(void) { return false; }
 uint32_t cc_status_err(void) { return 0u; }
 #endif
 
+/* The same macros radiant_radio_tx() and the caps use, at any calibration. */
+int32_t cc_tx_cal_us(void) { return CONFIG_RADIANT_CC26XX_TX_TIME_CAL_US; }
+
+radiant_time_t cc_tx_start_us(radiant_time_t t, uint8_t addr_len, int32_t cal)
+{
+	return tx_start_us(t, addr_len, cal);
+}
+
+uint32_t cc_tx_arm_floor_us(uint8_t addr_len, bool retune, int32_t cal)
+{
+	return TX_ARM_FLOOR_US(addr_len, retune, cal);
+}
+
+uint32_t cc_min_arm_lead_us(int32_t cal)
+{
+#if defined(CONFIG_RADIANT_BACKEND_CC26XX_COEX)
+	return CC26XX_MIN_ARM_LEAD_US(cal) + CC26XX_COEX_PHY_SWITCH_LEAD_US;
+#else
+	return CC26XX_MIN_ARM_LEAD_US(cal);
+#endif
+}
+
+uint32_t cc_in_grant_lead_us(int32_t cal)
+{
+#if defined(CONFIG_RADIANT_BACKEND_CC26XX_COEX)
+	return CC26XX_IN_GRANT_LEAD_US(600, cal);
+#else
+	return CC26XX_IN_GRANT_LEAD_US(IN_GRANT_LEAD_BASE_US, cal);
+#endif
+}
+
 /* ---- Requests and payloads ---- */
 
 const uint8_t cc_addr[RADIANT_RADIO_ADDR_MAX] = { 0xA6, 0xC5, 0x34, 0x12, 0x78 };
