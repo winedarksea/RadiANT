@@ -38,7 +38,7 @@
  * sequence rather than staying behind in one application's main.c.
  */
 BUILD_ASSERT(!(IS_ENABLED(CONFIG_CLOCK_CONTROL_NRF_K32SRC_SYNTH) &&
-	       IS_ENABLED(CONFIG_SOC_SERIES_NRF54LX)),
+	       IS_ENABLED(CONFIG_SOC_COMPATIBLE_NRF54LX)),
 	     "A synthesized low-frequency clock does not keep ANT's timing on "
 	     "nRF54L. The build boots and hears nothing. This part needs a real "
 	     "32.768 kHz crystal; see synth.conf.");
