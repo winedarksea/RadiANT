@@ -251,6 +251,25 @@ static const RF_TxPowerTable_Entry radiant_cc26xx_txp[] = {
 #define FS_TRIM_FRACT ((((FS_TRIM_KHZ) + 1000) * 65536 / 1000) % 65536)
 #define FS_TRIM_MHZ   ((FS_TRIM_KHZ) < 0 ? -1 : 0)
 
+/*
+ * The one CMD_FS. radiant_radio_enable() runs it alone (RF_runCmd) onto the
+ * default channel; an arm whose rf_index differs from st.tuned_rf chains it
+ * AHEAD of its RX/TX in the same posted command (chain_fs()), so the
+ * operation still starts at its own absolute time.
+ *
+ * Why chained, and why this struct: the TI driver caches the first CMD_FS
+ * of every chain it completes (RFCC26X2_multiMode.c RF_cacheFsCmd(), from
+ * RF_radioOpDoneCb()) and replays that copy after each power-up or client
+ * switch (RF_fsmPowerUpState()/RF_fsmActiveState(): "Chain in the implicit
+ * FS command"), skipping the replay when the chain it powers up for starts
+ * with a CMD_FS. A retune the driver did not see would be undone silently
+ * at the next power cycle; a chained one is the replay.
+ *
+ * setup_cmd.centerFreq stays at 2457: TI documents it as the centre of the
+ * band in use, for internal TX/RX parameters, not the carrier (rf_prop_cmd.h);
+ * changing it would need the driver to re-run setup (bUpdateSetup). The
+ * synthesiser itself is set by CMD_FS alone.
+ */
 static volatile rfc_CMD_FS_t fs_cmd = {
 	.commandNo = CMD_FS,
 	.condition.rule = COND_NEVER,
@@ -259,6 +278,17 @@ static volatile rfc_CMD_FS_t fs_cmd = {
 	.synthConf.bTxMode = 0,
 	.synthConf.refFreq = 0,
 };
+
+/*
+ * Time budgeted for a chained CMD_FS before the operation behind it starts:
+ * synthesiser programming and lock. Unmeasured; generous like the ramp-up
+ * constants. A retune arm is refused ETIME unless the FS fits ahead of the
+ * operation (rx_arm(), radiant_radio_tx()).
+ */
+#define FS_SETTLE_US           250
+
+/* st.tuned_rf when the synthesiser's channel is not known. */
+#define TUNED_NONE             0xFFu
 
 /*
  * The patch is the one every PHY constant here was measured under. The
@@ -586,6 +616,14 @@ static struct {
 	 * whether it is valid. Cleared by RF_open()/RF_close(). */
 	struct radiant_tx_power   txp_last;
 	bool                      txp_valid;
+
+	/* The rf_index the synthesiser is known to be on, or TUNED_NONE. Set by
+	 * enable's CMD_FS; after a chained retune only once that FS is seen to
+	 * have run (tuned_rf_resolve()). fs_inflight: a posted chain carries an
+	 * FS onto fs_inflight_rf whose outcome has not been read yet. */
+	uint8_t                   tuned_rf;
+	bool                      fs_inflight;
+	uint8_t                   fs_inflight_rf;
 } st;
 
 #define NO_HANDLE ((RF_CmdHandle)-1)
@@ -1592,6 +1630,7 @@ int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 	st.user = user;
 	st.next_op_id = 1;
 	st.retired_handle = NO_HANDLE;
+	st.tuned_rf = TUNED_NONE;
 	st.inited = true;
 
 	/* 0xF7 pages 8-10: the A0 cycle clock, at this core's fixed clock. */
@@ -1641,10 +1680,23 @@ int radiant_radio_enable(void)
 	st.txp_valid = false;
 
 	/*
-	 * Set the synthesiser once here, not per arm, since every ANT+ operation
-	 * uses the same frequency. Test the event bit, not the whole mask: a
-	 * successful RF_runCmd can return other bits as well.
+	 * Put the synthesiser on the default channel, the one most operations
+	 * use; an arm on another channel chains a retune (chain_fs()). A lone FS,
+	 * started now: a chained retune left pNextOp/condition/trigger behind.
+	 * Test the event bit, not the whole mask: a successful RF_runCmd can
+	 * return other bits as well.
 	 */
+	st.tuned_rf = TUNED_NONE;
+	st.fs_inflight = false;
+	fs_cmd.status = IDLE;
+	fs_cmd.pNextOp = NULL;
+	fs_cmd.condition.rule = COND_NEVER;
+	fs_cmd.startTrigger.triggerType = TRIG_NOW;
+	fs_cmd.startTrigger.pastTrig = 0;
+	fs_cmd.startTime = 0u;
+	fs_cmd.frequency = (uint16_t)(radiant_rf_index_to_mhz(ANT_RF_INDEX_DEFAULT) +
+				      FS_TRIM_MHZ);
+	fs_cmd.fractFreq = FS_TRIM_FRACT;
 	if ((RF_runCmd(st.rf_handle, (RF_Op *)&fs_cmd, RF_PriorityNormal,
 		       NULL, 0) & RF_EventLastCmdDone) == 0) {
 		LOG_ERR("CMD_FS failed, status=0x%04x", fs_cmd.status);
@@ -1652,6 +1704,7 @@ int radiant_radio_enable(void)
 		st.rf_handle = NULL;
 		return RADIANT_RADIO_EIO;
 	}
+	st.tuned_rf = ANT_RF_INDEX_DEFAULT;
 
 	/* Re-anchor the fold on the RAT now that there is one to read. */
 	(void)now_us();
@@ -1696,6 +1749,11 @@ int radiant_radio_disable(void)
 	RF_close(st.rf_handle);
 	st.rf_handle = NULL;
 	st.txp_valid = false;
+	/* The next RF_open() zeroes the client state, the driver's cached FS
+	 * with it (RF_open()'s memset of pObj->state); enable starts over on
+	 * the default channel. */
+	st.tuned_rf = TUNED_NONE;
+	st.fs_inflight = false;
 	st.enabled = false;
 
 	return RADIANT_RADIO_OK_RC;
@@ -1708,7 +1766,71 @@ radiant_time_t radiant_radio_now(void)
 
 /* --- Arm --- */
 
-static int arm_common(const struct radiant_pkt_format *fmt, radiant_time_t at)
+/* The next operation id. 0 means "no operation" (HAL), so the wrap skips it,
+ * as the nRF backend does. */
+static uint32_t op_id_next(void)
+{
+	uint32_t id = st.next_op_id++;
+
+	if (id == 0u) {
+		id = st.next_op_id++;
+	}
+	if (st.next_op_id == 0u) {
+		st.next_op_id = 1u;
+	}
+	return id;
+}
+
+/*
+ * The channel the synthesiser is on, for deciding whether an arm must
+ * retune: TUNED_NONE if unknown. A retune posted earlier is credited only now,
+ * once its operation has ended, and only if its CMD_FS reported DONE_OK.
+ * An FS that never ran (the chain was cancelled before the RF core reached
+ * it) or failed (ERROR_SYNTH_PROG) leaves the channel unknown, so the next
+ * arm retunes whatever it asks for - and that chained FS is again the one the
+ * driver caches for its power-up replay.
+ */
+static uint8_t tuned_rf_resolve(void)
+{
+	if (st.fs_inflight && st.kind == OP_NONE) {
+		st.fs_inflight = false;
+		st.tuned_rf = (fs_cmd.status == DONE_OK) ? st.fs_inflight_rf
+							  : TUNED_NONE;
+	}
+	return st.fs_inflight ? TUNED_NONE : st.tuned_rf;
+}
+
+/*
+ * Chain the CMD_FS onto rf_index ahead of `op`, which starts at op_start_rat;
+ * returns the chain's head. The FS starts FS_SETTLE_US earlier at an absolute
+ * time, so the driver schedules the chain from there (it reads only the first
+ * op's trigger: RF_postCmd()/RF_scheduleCmd(), RF_howToSchedule()), and `op`
+ * keeps its own absolute trigger: the RF core starts each op of a chain on
+ * its own start trigger once the one before has ended. pastTrig = 1 on the FS:
+ * a late FS only delays itself; whether the operation may then start late is
+ * the operation's own pastTrig. COND_STOP_ON_FALSE: no RX/TX on a synthesiser
+ * that failed to program.
+ */
+static RF_Op *chain_fs(RF_Op *op, uint32_t op_start_rat, uint8_t rf_index)
+{
+	fs_cmd.status = IDLE;
+	fs_cmd.frequency = (uint16_t)(radiant_rf_index_to_mhz(rf_index) + FS_TRIM_MHZ);
+	fs_cmd.fractFreq = FS_TRIM_FRACT;
+	fs_cmd.startTrigger.triggerType = TRIG_ABSTIME;
+	fs_cmd.startTrigger.pastTrig = 1;
+	fs_cmd.startTime = op_start_rat - (uint32_t)FS_SETTLE_US * RAT_TICKS_PER_US;
+	fs_cmd.pNextOp = (rfc_radioOp_t *)op;
+	fs_cmd.condition.rule = COND_STOP_ON_FALSE;
+	return (RF_Op *)&fs_cmd;
+}
+
+/*
+ * `at` (t_open or t_sync) must be at least floor_us past now, or ETIME:
+ * ARM_FLOOR_US, plus for a transmit the airtime its start precedes t_sync by
+ * (never send late), plus FS_SETTLE_US when the arm retunes.
+ */
+static int arm_common(const struct radiant_pkt_format *fmt, radiant_time_t at,
+		      uint32_t floor_us)
 {
 	if (!st.enabled) {
 		return RADIANT_RADIO_ESTATE;
@@ -1737,13 +1859,13 @@ static int arm_common(const struct radiant_pkt_format *fmt, radiant_time_t at)
 		/* The same check, one clock read shared with page 9. */
 		const radiant_time_t now = now_us();
 
-		cc_diag_early(now, at, ARM_FLOOR_US);
-		if (at < now + ARM_FLOOR_US) {
+		cc_diag_early(now, at, floor_us);
+		if (at < now + floor_us) {
 			return RADIANT_RADIO_ETIME;
 		}
 	}
 #else
-	if (at < now_us() + ARM_FLOOR_US) {
+	if (at < now_us() + floor_us) {
 		return RADIANT_RADIO_ETIME;
 	}
 #endif
@@ -1755,20 +1877,37 @@ static int rx_arm(const struct radiant_rx_req *req, uint32_t *op)
 {
 	uint32_t start_rat;
 	uint32_t end_rat;
+	RF_Op *head;
+	bool retune;
 	int rc;
 
-	if (req == NULL || op == NULL || req->filters == NULL ||
-	    req->n_filters == 0u) {
+	if (op == NULL) {
+		return RADIANT_RADIO_EINVAL;
+	}
+	*op = 0u;
+	if (req == NULL || req->filters == NULL || req->n_filters == 0u) {
 		return RADIANT_RADIO_EINVAL;
 	}
 	if (req->t_close < req->t_open) {
+		return RADIANT_RADIO_EINVAL;
+	}
+	if (req->rf_index > RADIANT_RF_INDEX_MAX) {
 		return RADIANT_RADIO_EINVAL;
 	}
 	if (req->n_filters > caps.max_filters) {
 		return RADIANT_RADIO_ENOTSUP;
 	}
 
-	rc = arm_common(req->fmt, req->t_open);
+	/*
+	 * A retune is refused ETIME unless its FS fits ahead of the window: the
+	 * floor grows by FS_SETTLE_US, so the FS starts no later than the RX
+	 * would without one. caps.min_arm_lead_us (600) covers it for a cold
+	 * arm (150 + 250 = 400 against t_open); an in-grant follow-on stays on
+	 * its channel.
+	 */
+	retune = req->rf_index != tuned_rf_resolve();
+	rc = arm_common(req->fmt, req->t_open,
+			ARM_FLOOR_US + (retune ? FS_SETTLE_US : 0u));
 	if (rc != RADIANT_RADIO_OK_RC) {
 		LOG_DBG("rx refused rc=%d n=%u alen=%u open=%llu now=%llu",
 			rc, req->n_filters, req->fmt ? req->fmt->addr_len : 0,
@@ -1893,6 +2032,10 @@ static int rx_arm(const struct radiant_rx_req *req, uint32_t *op)
 	 * pastTrig = 1 on both triggers. With 0, a time already passed is an error
 	 * that looks like an empty window, so the scheduler would re-arm forever.
 	 * A few microseconds late is normal, so start now and lose that head.
+	 * Unlike a transmit (pastTrig = 0 there), a late receive start is not a
+	 * contract breach: it only shortens listening, and every frame heard still
+	 * carries its own RAT t_sync. The same holds behind a chained FS that ran
+	 * long.
 	 */
 	rx_cmd.startTrigger.triggerType = TRIG_ABSTIME;
 	rx_cmd.startTrigger.pastTrig = 1;
@@ -1901,16 +2044,22 @@ static int rx_arm(const struct radiant_rx_req *req, uint32_t *op)
 	rx_cmd.endTrigger.pastTrig = 1;
 	rx_cmd.endTime = end_rat;
 
+	head = retune ? chain_fs((RF_Op *)&rx_cmd, start_rat, req->rf_index)
+		      : (RF_Op *)&rx_cmd;
+
 	rx_queue_init();
 	CC_DIAG(cc_diag_fold_rx_output(); cc_diag.win_frames = 0u);
 	memset(&rx_output, 0, sizeof(rx_output));
 
 	st.kind = OP_RX;
-	st.op_id = st.next_op_id++;
+	st.op_id = op_id_next();
 	st.delivered_terminal = false;
+	/* Before the post: its callback may arm the next operation. */
+	st.fs_inflight = retune;
+	st.fs_inflight_rf = req->rf_index;
 
 	st.cmd_handle = post_op(
-		(RF_Op *)&rx_cmd, start_rat,
+		head, head->startTime,
 		/*
 		 * The scheduler's endTime, which adds follow_on_us to the hardware end
 		 * trigger. A tracked frame may become a transmit up to follow_on_us
@@ -1932,6 +2081,8 @@ static int rx_arm(const struct radiant_rx_req *req, uint32_t *op)
 			RF_EventCmdCancelled | RF_EventCmdPreempted);
 	if (st.cmd_handle < 0) {
 		st.kind = OP_NONE;
+		/* The driver never saw the FS: the synthesiser is where it was. */
+		st.fs_inflight = false;
 		/* A refusal is routine under arbitration, so report EDENIED. */
 		return RADIANT_RADIO_EDENIED;
 	}
@@ -1953,18 +2104,52 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 	return rc;
 }
 
+/*
+ * How long before t_sync the transmit command starts: preamble and address
+ * airtime plus ramp-up, less the calibration term. The start trigger is this
+ * far ahead of t_sync, so the arm floor applies to it.
+ */
+static uint32_t tx_start_lead_us(uint8_t addr_len)
+{
+	const int32_t lead = (int32_t)((PREAMBLE_BYTES + addr_len) * BYTE_US) +
+			     (int32_t)TX_RAMP_UP_US -
+			     (int32_t)CONFIG_RADIANT_CC26XX_TX_TIME_CAL_US;
+
+	return (lead > 0) ? (uint32_t)lead : 0u;
+}
+
 int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 {
 	uint8_t hw_len;
 	uint8_t sw_len;
 	size_t n = 0;
+	uint32_t start_lead;
+	RF_Op *head;
+	bool retune;
 	int rc;
 
-	if (req == NULL || op == NULL || req->body == NULL) {
+	if (op == NULL) {
+		return RADIANT_RADIO_EINVAL;
+	}
+	*op = 0u;
+	if (req == NULL || req->body == NULL) {
+		return RADIANT_RADIO_EINVAL;
+	}
+	if (req->rf_index > RADIANT_RF_INDEX_MAX) {
 		return RADIANT_RADIO_EINVAL;
 	}
 
-	rc = arm_common(req->fmt, req->t_sync_at);
+	/*
+	 * Never transmit late (HAL, t_sync_at): the command's START, not just
+	 * t_sync, must clear the arm floor, and a retune's FS must fit ahead of
+	 * it. Inside that, ETIME. Past this check, pastTrig = 0 below turns a
+	 * start the RF core still reaches late into ERROR_PAST_START, never a
+	 * late frame reported exact.
+	 */
+	start_lead = tx_start_lead_us(req->fmt != NULL ? req->fmt->addr_len : 0u);
+	retune = req->rf_index != tuned_rf_resolve();
+	rc = arm_common(req->fmt, req->t_sync_at,
+			ARM_FLOOR_US + start_lead + (retune ? FS_SETTLE_US : 0u));
 	if (rc != RADIANT_RADIO_OK_RC) {
 		return rc;
 	}
@@ -2018,26 +2203,31 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 	tx_cmd.syncWord = sync_word_of(req->addr, hw_len);
 	tx_cmd.pktLen = (uint16_t)n;
 	tx_cmd.startTrigger.triggerType = TRIG_ABSTIME;
-	/* As for rx_cmd: a start time a few microseconds in the past starts the
-	 * transmit rather than refusing it. */
-	tx_cmd.startTrigger.pastTrig = 1;
+	/*
+	 * pastTrig = 0, unlike rx_cmd: a start already past ends the command
+	 * with ERROR_PAST_START instead of sending late. A late master frame
+	 * lands in the next slot, and its terminal would still claim the
+	 * requested t_sync, exact.
+	 */
+	tx_cmd.startTrigger.pastTrig = 0;
 	/*
 	 * Start time = t_sync minus preamble, address and ramp-up airtime. This is
 	 * what makes the master's period exact.
 	 */
-	tx_cmd.startTime = us_to_rat(req->t_sync_at -
-				     (radiant_time_t)((PREAMBLE_BYTES +
-						       req->fmt->addr_len) *
-						      BYTE_US) -
-				     (radiant_time_t)TX_RAMP_UP_US +
-				     (radiant_time_t)CONFIG_RADIANT_CC26XX_TX_TIME_CAL_US);
+	tx_cmd.startTime = us_to_rat(req->t_sync_at - (radiant_time_t)start_lead);
+
+	head = retune ? chain_fs((RF_Op *)&tx_cmd, tx_cmd.startTime, req->rf_index)
+		      : (RF_Op *)&tx_cmd;
 
 	st.kind = OP_TX;
-	st.op_id = st.next_op_id++;
+	st.op_id = op_id_next();
 	st.delivered_terminal = false;
+	/* Before the post: its callback may arm the next operation. */
+	st.fs_inflight = retune;
+	st.fs_inflight_rf = req->rf_index;
 
 	st.cmd_handle = post_op(
-		(RF_Op *)&tx_cmd, tx_cmd.startTime,
+		head, head->startTime,
 		/*
 		 * TX_ADV has no end trigger, so this end time is scheduler bookkeeping
 		 * only. It lets RF_verifyGap place a neighbour after this transmit.
@@ -2052,6 +2242,8 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 			RF_EventCmdPreempted);
 	if (st.cmd_handle < 0) {
 		st.kind = OP_NONE;
+		/* The driver never saw the FS: the synthesiser is where it was. */
+		st.fs_inflight = false;
 		return RADIANT_RADIO_EDENIED;
 	}
 
