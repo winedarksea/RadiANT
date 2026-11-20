@@ -5,7 +5,8 @@
 # apps/common/ant_serial_bridge.c) and by radiant/tests/api, whose
 # test_sec_host_pairing_runs_on_the_bridge_stack runs a whole 0xF5 exchange on
 # a thread of exactly this size. One symbol, so the test cannot drift from the
-# image it stands in for.
+# image it stands in for. radiant/tests/api/Kconfig carries a fallback copy of
+# the default for CI's radiant/-only build; change both together.
 
 config ANT_DONGLE_BRIDGE_STACK_SIZE
 	int "Serial bridge thread stack size"

@@ -8,6 +8,17 @@ config RADIANT_SEC_HOST_MESSAGES
 
 # The bridge thread's stack size, so the 0xF5-on-the-bridge-stack test runs on
 # exactly the stack the dongle images give that thread.
-rsource "../../../apps/common/Kconfig.bridge"
+#
+# orsource, not rsource: CI's import-isolation job builds this application from
+# a `git archive` of radiant/ alone, where apps/ does not exist. In this
+# repository the apps' definition is sourced first, so its default wins and the
+# test tracks the images; in the isolated copy only the fallback below exists.
+# Keep the fallback equal to apps/common/Kconfig.bridge's default. (Not
+# osource: that resolves against $srctree, so it silently finds nothing.)
+orsource "../../../apps/common/Kconfig.bridge"
+
+config ANT_DONGLE_BRIDGE_STACK_SIZE
+	int
+	default 2048
 
 source "Kconfig.zephyr"
