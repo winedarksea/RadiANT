@@ -268,6 +268,9 @@ RF_CmdHandle RF_postCmd(RF_Handle h, RF_Op *pOp, RF_Priority ePri,
 	}
 	c = record(FAKE_RF_POST, h, pOp, ePri, pCb, bmEvent);
 	pOp->status = PENDING;
+	if (fake_rf.on_post != NULL) {
+		fake_rf.on_post(c->cmd.ch);
+	}
 	return c->cmd.ch;
 }
 
@@ -294,6 +297,9 @@ RF_CmdHandle RF_scheduleCmd(RF_Handle h, RF_Op *pOp,
 	c->cmd.coexPriority = pSchParams->coexPriority;
 	c->cmd.coexRequest = pSchParams->coexRequest;
 	pOp->status = PENDING;
+	if (fake_rf.on_post != NULL) {
+		fake_rf.on_post(c->cmd.ch);
+	}
 	return c->cmd.ch;
 }
 
@@ -337,6 +343,21 @@ static RF_Stat cancel_common(RF_Handle h, RF_CmdHandle ch, uint8_t mode, bool fl
 
 	if (fake_rf.on_cancel_entry != NULL) {
 		fake_rf.on_cancel_entry(ch);
+	}
+	if (ch == RF_CMDHANDLE_FLUSH_ALL) {
+		/* The driver: every command of this client, running or pending. */
+		bool any = false;
+
+		fake_rf.flush_all_calls++;
+		for (uint32_t i = 0u; i < fake_rf.n_cmds; i++) {
+			struct fake_rf_cmd *n = fake_rf_nth(i);
+
+			if (n != NULL && n->via != FAKE_RF_RUN && n->h == h && !n->ended) {
+				abort_one(n, mode, flush);
+				any = true;
+			}
+		}
+		return any ? RF_StatSuccess : RF_StatInvalidParamsError;
 	}
 	c = fake_rf_cmd(ch);
 

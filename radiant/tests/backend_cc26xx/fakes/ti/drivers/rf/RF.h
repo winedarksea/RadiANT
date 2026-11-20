@@ -90,10 +90,16 @@
  *                    command: the RF SWI landing at that instant (e.g. a
  *                    test completing the command there, so the cancel then
  *                    finds it ended and returns RF_StatCmdEnded)
+ *   on_post          if set, called inside RF_postCmd/RF_scheduleCmd after the
+ *                    command is recorded, before its handle is returned: the
+ *                    RF SWI (or an abort from another context) landing while
+ *                    an arm from a thread is still inside the post call
  *   last_ch          the handle most recently issued; the next is
  *                    (last_ch + 1) & FAKE_RF_CH_MASK, as the driver's
  *                    nSeqPost (N_CMD_MODMASK 0xFFF). Set it to test a wrap.
- * Counters: opens, closes, n_cmds, cancel_calls, flush_calls,
+ * Counters: opens, closes, n_cmds, cancel_calls, flush_calls, flush_all_calls
+ *   (a cancel/flush naming RF_CMDHANDLE_FLUSH_ALL, -1: the driver aborts every
+ *   command of the client; the fake does the same),
  *   set_tx_power_calls, last_tx_power, params (last RF_open), mode, setup.
  *
  * Scheduler-policy hooks (coex scenario): RF_scheduleCmd does NOT run the
@@ -433,6 +439,7 @@ struct fake_rf_state {
 	uint32_t          rat_step;
 	RF_ScheduleStatus default_submit_rc;
 	void            (*on_cancel_entry)(RF_CmdHandle ch);
+	void            (*on_post)(RF_CmdHandle ch);
 	RF_ExecuteAction  default_execute_rc;
 	/* state and counters */
 	uint32_t          rat;
@@ -448,6 +455,7 @@ struct fake_rf_state {
 	uint32_t          refusals;
 	uint32_t          cancel_calls;
 	uint32_t          flush_calls;
+	uint32_t          flush_all_calls;
 	uint32_t          set_tx_power_calls;
 	RF_TxPowerTable_Value last_tx_power;
 	uint32_t          default_submit_calls;
