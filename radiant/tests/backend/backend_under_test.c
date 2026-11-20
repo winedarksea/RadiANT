@@ -173,6 +173,9 @@ static void cb_rx(const struct radiant_rx_event *evt, void *user)
 	bp.last_rx_filter_index = evt->filter_index;
 	bp.last_rx_rssi_dbm = evt->rssi_dbm;
 	arm_follow_on_if_asked();
+	if (bp.on_rx != NULL) {
+		bp.on_rx(evt->status);
+	}
 }
 
 static void cb_tx(const struct radiant_tx_event *evt, void *user)
@@ -180,7 +183,12 @@ static void cb_tx(const struct radiant_tx_event *evt, void *user)
 	ARG_UNUSED(user);
 	bp.tx_events++;
 	bp.last_tx_status = evt->status;
+	bp.last_tx_t_sync = evt->t_sync;
+	bp.last_tx_t_sync_exact = evt->t_sync_exact;
 	arm_follow_on_if_asked();
+	if (bp.on_tx != NULL) {
+		bp.on_tx(evt->status);
+	}
 }
 
 static void cb_ed(const struct radiant_ed_event *evt, void *user)
@@ -441,6 +449,75 @@ void backend_take_slot_unclaimed(void)
 void backend_claim_terminal(void) { CLAIM_TERMINAL(); }
 bool     backend_grant_held(void) { return fg.held; }
 bool     backend_op_retired(void) { return radiant_op.kind == OP_NONE; }
+
+/* ---- HAL item 5: terminal t_sync and abort from a callback (test_terminal_contract.c) ---- */
+
+void backend_arm_ready(void)
+{
+	radiant_op.inited = true;
+	radiant_op.enabled = true;
+}
+
+static void backend_tracking_tx_req(struct radiant_tx_req *req, uint64_t t_sync_at)
+{
+	memset(req, 0, sizeof(*req));
+	req->fmt = radiant_frame_format(RADIANT_FRAME_CFG_TRACKING);
+	req->addr_len = req->fmt->addr_len;
+	req->body = btx_body;
+	req->body_len = req->fmt->body_len;
+	req->t_sync_at = t_sync_at;
+}
+
+int backend_tx_live(uint64_t t_sync_at, uint32_t *op)
+{
+	struct radiant_tx_req req;
+
+	backend_arm_ready();
+	radiant_op.conn_start_tx = BACKEND_CONN_TX;
+	backend_tracking_tx_req(&req, t_sync_at);
+	return radiant_radio_tx(&req, op);
+}
+
+static struct radiant_rx_req brx_req;
+
+int backend_rx_live(uint32_t *op)
+{
+	backend_arm_ready();
+	memset(&brx_req, 0, sizeof(brx_req));
+	brx_req.fmt = radiant_frame_format(RADIANT_FRAME_CFG_TRACKING);
+	brx_req.filters = &bfilt;
+	brx_req.n_filters = 1u;
+	brx_req.t_open = radiant_radio_now() + 10000u;
+	brx_req.t_close = brx_req.t_open + 1000u;
+	return radiant_radio_rx(&brx_req, op);
+}
+
+int backend_tx_staged(uint64_t t_sync_at, uint32_t *op)
+{
+	int rc;
+
+	fg.pending = true;
+	rc = backend_tx_live(t_sync_at, op);
+	fg.pending = false;
+	return rc;
+}
+
+void backend_grant_after(uint32_t late_us)
+{
+	/* The clock and the counter differ by the fold base, so move by the difference. */
+	fake_hw.counter += (uint32_t)(radiant_staged.tx.t_sync_at + late_us -
+				      radiant_radio_now());
+	fg.held = true;
+	radiant_nrf_gate_on_grant();
+}
+
+void backend_deny_staged(void)
+{
+	fg.req_pending = false;
+	radiant_nrf_gate_on_denied();
+}
+
+uint64_t backend_now(void) { return radiant_radio_now(); }
 
 /* ---- The arm cache (B4): test_arm_cache.c ---- */
 

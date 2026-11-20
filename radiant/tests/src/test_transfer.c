@@ -216,6 +216,12 @@ static void sched_tx(uint8_t ch, const struct radiant_tx_event *e, void *user)
 	}
 }
 
+/* When set, the t_sync sched_done() hands a non-OK transmit terminal, in place
+ * of radiant_radio_now(): a value the HAL says nothing about (t_sync is
+ * meaningful only on OK), which the engine must therefore never read. */
+static bool           done_tx_t_sync_set;
+static radiant_time_t done_tx_t_sync;
+
 /* api_feed_xfer_terminal() from radiant_api.c, reduced to the two states this
  * suite can be in: without it a reply window that closed empty never tells
  * the engine, and the missing-ack test waits forever for a NO_ACK. */
@@ -262,7 +268,7 @@ static void sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 		memset(&e, 0, sizeof(e));
 		e.op = RADIANT_TRANSFER_OP_EXTERNAL;
 		e.status = st;
-		e.t_sync = radiant_radio_now();
+		e.t_sync = done_tx_t_sync_set ? done_tx_t_sync : radiant_radio_now();
 		e.t_sync_exact = false;
 		radiant_transfer_on_tx_event(t, &e);
 		break;
@@ -332,6 +338,8 @@ static void before(void *f)
 	rx_last = false;
 	bcast_available = true;
 	engine_b = NULL;
+	done_tx_t_sync_set = false;
+	done_tx_t_sync = 0u;
 
 	make_cfg(&cfg_slave, false, CH_XFER);
 	zassert_equal(RADIANT_TRANSFER_OK, radiant_transfer_init(&xfer, &cfg_slave));
@@ -2339,6 +2347,52 @@ ZTEST(transfer, test_an_ancient_acknowledgement_is_not_retransmitted)
 			      &xfer, radiant_radio_now() +
 					     (radiant_time_t)RADIANT_TRANSFER_REPLY_RETRY_US));
 	zassert_equal(1u, radiant_transfer_stats(&xfer)->stale_replies);
+
+	end_of_test();
+}
+
+/* HAL item 5: a reply that did not go out carries a t_sync the HAL does not
+ * define. The staleness of the saved acknowledgement is judged from the
+ * instant the reply was armed for (in_ack_at), as the in-burst path already
+ * anchors a failed reply, and never from that event field - here one far in
+ * the future, which would make a retry one interval later look "before" the
+ * reply and drop it as stale. */
+ZTEST(transfer, test_a_failed_reply_is_judged_from_its_armed_time_not_its_t_sync)
+{
+	struct radiant_frame in;
+	struct radiant_ctrl_fields fields;
+	const struct fake_radio_arm *arm;
+	radiant_time_t armed_for;
+
+	zassert_equal(RADIANT_TRANSFER_OK,
+		      radiant_transfer_ctrl_fields(0u, true, false, &fields));
+	zassert_equal(RADIANT_FRAME_OK,
+		      radiant_frame_make(&in, &cfg_slave.id, &fields, peer_payload,
+				     RADIANT_TRANSFER_PKT_BYTES));
+	zassert_equal(RADIANT_TRANSFER_OK,
+		      radiant_transfer_on_data(&xfer, &in, radiant_radio_now() + 10000u));
+	fake_radio_force_next_terminal(RADIANT_RADIO_STATUS_FAILED);
+	commit();
+
+	arm = last_arm_of(FAKE_RADIO_ARM_TX);
+	zassert_not_null(arm);
+	armed_for = arm->t_sync_at;
+	done_tx_t_sync_set = true;
+	done_tx_t_sync = armed_for + 4u * (radiant_time_t)RADIANT_TRANSFER_REPLY_VALID_US;
+	fake_radio_advance_to(armed_for + 1u);
+	zassert_equal(RADIANT_TRANSFER_STATE_IDLE, radiant_transfer_state(&xfer));
+	zassert_equal(0u, radiant_transfer_stats(&xfer)->acks_sent);
+
+	zassert_equal(RADIANT_TRANSFER_OK,
+		      radiant_transfer_reply_retransmit(
+			      &xfer, armed_for +
+					     (radiant_time_t)RADIANT_TRANSFER_REPLY_RETRY_US),
+		      "a retry one interval after a failed reply was refused");
+	zassert_equal(0u, radiant_transfer_stats(&xfer)->stale_replies);
+	commit();
+	arm = last_arm_of(FAKE_RADIO_ARM_TX);
+	zassert_not_null(arm);
+	fake_radio_advance_to(arm->t_sync_at + 1u);
 
 	end_of_test();
 }

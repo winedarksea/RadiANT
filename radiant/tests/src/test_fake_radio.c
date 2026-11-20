@@ -694,6 +694,58 @@ ZTEST(fake_radio, test_transmit_reports_the_t_sync_it_achieved)
 	expect_clean();
 }
 
+/* HAL item 5: t_sync is meaningful only on OK. A transmit that did not go
+ * out reports the t_sync it was armed for, not exact - never 0 or a clock
+ * reading, which a reader that skipped the status check would take as a
+ * real anchor. */
+ZTEST(fake_radio, test_a_transmit_that_did_not_go_out_reports_its_requested_t_sync)
+{
+	static const enum radiant_radio_status forced[] = {
+		RADIANT_RADIO_STATUS_FAILED, RADIANT_RADIO_STATUS_DENIED,
+	};
+	struct radiant_tx_req req;
+	uint32_t op = 0u;
+	radiant_time_t want;
+	static const uint8_t body[10] = {
+		TEST_TRANSTYPE, 0x0Au, 1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u
+	};
+
+	up();
+	memset(&req, 0, sizeof(req));
+	req.fmt = &fmt_hal_len_from_body;
+	req.rf_index = RADIANT_RF_INDEX_ANT_PLUS;
+	req.power.dbm = 4;
+	memcpy(req.addr, filt_track.addr, sizeof(req.addr));
+	req.addr_len = filt_track.addr_len;
+	req.body = body;
+	req.body_len = sizeof(body);
+
+	for (size_t i = 0u; i < ARRAY_SIZE(forced); i++) {
+		n_txr = 0u;
+		want = radiant_radio_now() + 20000u;
+		req.t_sync_at = want;
+		fake_radio_force_next_terminal(forced[i]);
+		zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_tx(&req, &op));
+		fake_radio_advance_to(want + 100u);
+		zassert_equal(1u, n_txr);
+		zassert_equal(forced[i], txr[0].status);
+		zassert_equal(want, txr[0].t_sync, "status %d", (int)forced[i]);
+		zassert_false(txr[0].t_sync_exact);
+	}
+
+	/* Aborted from thread context, long before its t_sync. */
+	n_txr = 0u;
+	want = radiant_radio_now() + 20000u;
+	req.t_sync_at = want;
+	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_tx(&req, &op));
+	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_abort());
+	zassert_equal(1u, n_txr);
+	zassert_equal(RADIANT_RADIO_STATUS_ABORTED, txr[0].status);
+	zassert_equal(want, txr[0].t_sync);
+	zassert_false(txr[0].t_sync_exact);
+	expect_clean();
+}
+
 /* ---------------------------------------------------------------------------
  * Failure modes
  * ---------------------------------------------------------------------------
@@ -1222,29 +1274,47 @@ ZTEST(fake_radio, test_arming_from_a_nonterminal_event_is_ebusy)
 }
 
 static uint32_t abort_cb_calls;
+static uint32_t abort_n_at_return;
+static bool     abort_body_intact;
+static struct radiant_rx_req abort_rearm_req;
+static int      abort_rearm_rc;
+static uint32_t abort_rearm_op;
 
 static void abort_cb(const struct radiant_rx_event *e, void *user)
 {
 	ARG_UNUSED(user);
 	rx_cb(e, NULL);
 	abort_cb_calls++;
-	if (e->status == RADIANT_RADIO_STATUS_OK) {
+	if (e->status == RADIANT_RADIO_STATUS_OK && abort_cb_calls == 1u) {
+		uint8_t copy[RADIANT_RADIO_BODY_MAX];
+		uint8_t len = e->body_len;
+
+		memcpy(copy, e->body, len);
 		(void)radiant_radio_abort();
-		/* The terminal event must not nest inside the callback that
-		 * caused it: the HAL says callbacks never nest. */
-		zassert_equal(1u, abort_cb_calls);
+		/* The one exception to "callbacks never nest" (HAL item 5): the
+		 * aborted operation's terminal is delivered nested, before
+		 * radiant_radio_abort() returns ... */
+		abort_n_at_return = n_rxr;
+		/* ... the outer event, body included, is still valid ... */
+		abort_body_intact = (memcmp(copy, e->body, len) == 0);
+		/* ... and the slot is free for a re-arm from the same callback. */
+		abort_rearm_rc = radiant_radio_rx(&abort_rearm_req, &abort_rearm_op);
 	}
 }
 
 static const struct radiant_radio_cbs abort_cbs = { abort_cb, NULL };
 
-ZTEST(fake_radio, test_abort_from_a_callback_defers_its_terminal_event)
+ZTEST(fake_radio, test_abort_from_a_callback_delivers_its_terminal_nested)
 {
 	struct radiant_rx_req req;
 	uint32_t op = 0u;
 	radiant_time_t now;
 
 	abort_cb_calls = 0u;
+	abort_n_at_return = 0u;
+	abort_body_intact = false;
+	abort_rearm_rc = RADIANT_RADIO_EINVAL;
+	abort_rearm_op = 0u;
 
 	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_init(&abort_cbs, NULL));
 	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_enable());
@@ -1260,6 +1330,9 @@ ZTEST(fake_radio, test_abort_from_a_callback_defers_its_terminal_event)
 	req.n_filters = 1u;
 	req.t_open = now + 1000u;
 	req.t_close = now + 100000u;
+	abort_rearm_req = req;
+	abort_rearm_req.t_open = now + 10000u;
+	abort_rearm_req.t_close = now + 20000u;
 	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_rx(&req, &op));
 	fake_radio_advance_to(now + 5000u);
 
@@ -1267,6 +1340,19 @@ ZTEST(fake_radio, test_abort_from_a_callback_defers_its_terminal_event)
 	zassert_equal(RADIANT_RADIO_STATUS_OK, rxr[0].status);
 	zassert_equal(RADIANT_RADIO_STATUS_ABORTED, rxr[1].status);
 	zassert_equal(op, rxr[1].op);
+	zassert_true(rxr[1].in_cb_flag);
+	zassert_equal(2u, abort_n_at_return,
+		      "the ABORTED terminal was not delivered before abort returned");
+	zassert_true(abort_body_intact, "the nested terminal clobbered the outer body");
+	zassert_equal(RADIANT_RADIO_OK_RC, abort_rearm_rc,
+		      "a re-arm after the abort was refused");
+	zassert_not_equal(op, abort_rearm_op);
+
+	/* Exactly one terminal for the aborted window; the re-armed one runs. */
+	fake_radio_advance_to(now + 30000u);
+	zassert_equal(3u, n_rxr);
+	zassert_equal(abort_rearm_op, rxr[2].op);
+	zassert_equal(RADIANT_RADIO_STATUS_TIMEOUT, rxr[2].status);
 	expect_clean();
 }
 

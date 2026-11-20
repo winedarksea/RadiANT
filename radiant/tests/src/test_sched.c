@@ -140,6 +140,12 @@ static struct {
 	uint32_t missed_count[RADIANT_SCHED_MAX_CHANNELS];
 	uint32_t aborted_count[RADIANT_SCHED_MAX_CHANNELS];
 	uint32_t denied_count[RADIANT_SCHED_MAX_CHANNELS];
+	/* stale_events as the last DONE_ABORTED of each channel saw it: whether
+	 * the aborted operation's own terminal had already come and been
+	 * dropped by the time its members were told (HAL item 5, nested). */
+	uint32_t stale_at_aborted[RADIANT_SCHED_MAX_CHANNELS];
+	/* Whether that DONE_ABORTED ran inside a radio callback. */
+	bool     aborted_in_cb[RADIANT_SCHED_MAX_CHANNELS];
 
 	/* Steady-state driver: re-post the next window from done(), which is
 	 * what radiant_channel.c will do and the only way the round-robin fairness
@@ -298,6 +304,8 @@ static void on_done(uint8_t ch, enum radiant_sched_done why, void *user)
 		break;
 	case RADIANT_SCHED_DONE_ABORTED:
 		log.aborted_count[ch]++;
+		log.stale_at_aborted[ch] = radiant_sched_stats_get()->stale_events;
+		log.aborted_in_cb[ch] = fake_radio_in_callback();
 		break;
 	case RADIANT_SCHED_DONE_DENIED:
 		log.denied_count[ch]++;
@@ -1850,6 +1858,63 @@ ZTEST(radiant_sched, test_a_reply_preempts_the_window_it_was_heard_in)
 	 * armed. It carried the dead op id and changed nothing. */
 	zassert_equal(1u, radiant_sched_stats_get()->stale_events);
 	zassert_equal(1u, radiant_sched_stats_get()->tx_armed);
+
+	assert_every_window_bounded();
+	finish();
+}
+
+/*
+ * HAL item 5: radiant_radio_abort() from inside a callback delivers the
+ * aborted operation's terminal nested, before abort returns. The preemption
+ * above is that case: the owner's receive callback posts the reply, and the
+ * pass at that callback's tail aborts the window it is running in. The
+ * window is retired (s.armed_op cleared) before the abort, so the nested
+ * ABORTED is a stale event, dropped before the members are told, and it
+ * ends nothing: one DONE_ABORTED for the window, and the reply's own end.
+ */
+ZTEST(radiant_sched, test_a_nested_abort_terminal_is_stale_and_ends_nothing)
+{
+	radiant_time_t open;
+	radiant_time_t heard_at;
+	uint32_t       i;
+	uint32_t       done_ch0 = 0u;
+	uint32_t       done_ch1 = 0u;
+
+	bring_up();
+	open = radiant_radio_now() + 100000u;
+	heard_at = open + 1000u;
+
+	post_track(0u, open, open + 50000u);
+	post_track(1u, open, open + 50000u);
+	zassert_ok(radiant_sched_tick());
+
+	log.reply_after_us = 1559u;
+	log.reply_ch = 1u;
+	air_frame_for(1u, heard_at);
+	fake_radio_advance_to(heard_at + 1559u + 100u);
+
+	zassert_equal(1u, log.aborted_count[0]);
+	zassert_true(log.aborted_in_cb[0]);
+	zassert_equal(1u, log.stale_at_aborted[0],
+		      "the aborted window's terminal had not arrived when its "
+		      "members were told: it was deferred, not nested");
+	zassert_equal(1u, radiant_sched_stats_get()->stale_events);
+	zassert_equal(1u, radiant_sched_stats_get()->tx_armed);
+	zassert_equal(1u, log.n_tx);
+
+	/* No double end: channel 0 once (its window), channel 1 once (the
+	 * reply; it was a member of the aborted window too, but its own
+	 * request was replaced, not ended). */
+	for (i = 0u; i < MIN(log.n_done, (uint32_t)TEST_LOG_MAX); i++) {
+		if (log.done[i].ch == 0u) {
+			done_ch0++;
+		} else if (log.done[i].ch == 1u) {
+			done_ch1++;
+		}
+	}
+	zassert_equal(1u, done_ch0, "channel 0 ended %u times", done_ch0);
+	zassert_equal(1u, done_ch1, "channel 1 ended %u times", done_ch1);
+	zassert_equal(1u, log.ok_count[1]);
 
 	assert_every_window_bounded();
 	finish();

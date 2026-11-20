@@ -17,6 +17,13 @@ struct backend_probe {
 	uint32_t last_rx_crc_rx;
 	uint8_t  last_rx_filter_index;
 	int8_t   last_rx_rssi_dbm;
+	/* The last transmit terminal's t_sync and exactness (HAL item 5). */
+	uint64_t last_tx_t_sync;
+	bool     last_tx_t_sync_exact;
+	/* Run inside the core's rx/tx callback after it is recorded, so a
+	 * test can arm or abort from there as the core does. */
+	void (*on_rx)(int status);
+	void (*on_tx)(int status);
 };
 
 struct backend_probe *backend_probe(void);
@@ -51,6 +58,21 @@ void     backend_take_slot_unclaimed(void);
 void     backend_claim_terminal(void);
 bool     backend_grant_held(void);
 bool     backend_op_retired(void);
+
+/* HAL item 5 (test_terminal_contract.c): real arm calls that leave the
+ * operation in the slot. backend_tx_live()/backend_rx_live() arm inside the
+ * held grant; backend_tx_staged() arms behind a placed request, which
+ * backend_grant_after() grants once the clock has moved `late_us` past the
+ * transmit's t_sync (the arm then fails in the grant), and
+ * backend_deny_staged() denies. backend_arm_ready() marks the backend
+ * initialised and enabled without arming anything. */
+void     backend_arm_ready(void);
+int      backend_tx_live(uint64_t t_sync_at, uint32_t *op);
+int      backend_rx_live(uint32_t *op);
+int      backend_tx_staged(uint64_t t_sync_at, uint32_t *op);
+void     backend_grant_after(uint32_t late_us);
+void     backend_deny_staged(void);
+uint64_t backend_now(void);
 
 struct radiant_rx_req;
 struct radiant_tx_req;

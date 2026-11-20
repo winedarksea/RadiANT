@@ -568,3 +568,49 @@ ZTEST(radiant_backend_cc26xx_terminal, test_tx_normal_ends_ok)
 	zassert_equal(cc_probe()->tx[0].status, RADIANT_RADIO_STATUS_OK);
 	zassert_true(cc_probe()->tx[0].t_sync_exact);
 }
+
+/* ------------------------------------------------------------------------
+ * Item 5: a transmit that did not go out reports its requested t_sync
+ * ------------------------------------------------------------------------
+ * HAL: t_sync is meaningful only on OK; otherwise it is the t_sync_at the
+ * transmit was armed for, with t_sync_exact false.
+ */
+
+ZTEST(radiant_backend_cc26xx_terminal, test_tx_failed_reports_requested_t_sync)
+{
+	RF_CmdHandle ch;
+	const radiant_time_t t = radiant_radio_now() + 2000u;
+
+	(void)arm_tx(t, &ch);
+	fake_rf_complete(ch, ERROR_PAST_START, RF_EventLastCmdDone);
+	zassert_equal(cc_probe()->tx[0].status, RADIANT_RADIO_STATUS_FAILED);
+	zassert_equal(cc_probe()->tx[0].t_sync, t);
+	zassert_false(cc_probe()->tx[0].t_sync_exact);
+}
+
+ZTEST(radiant_backend_cc26xx_terminal, test_tx_denied_reports_requested_t_sync)
+{
+	RF_CmdHandle ch;
+	const radiant_time_t t = radiant_radio_now() + 2000u;
+
+	(void)arm_tx(t, &ch);
+	fake_rf_fire(ch, RF_EventCmdCancelled | RF_EventCmdPreempted);
+	zassert_equal(cc_probe()->tx[0].status, RADIANT_RADIO_STATUS_DENIED);
+	zassert_equal(cc_probe()->tx[0].t_sync, t);
+	zassert_false(cc_probe()->tx[0].t_sync_exact);
+}
+
+ZTEST(radiant_backend_cc26xx_terminal, test_tx_aborted_reports_requested_t_sync)
+{
+	RF_CmdHandle ch;
+	const radiant_time_t t = radiant_radio_now() + 2000u;
+
+	(void)arm_tx(t, &ch);
+	zassert_equal(radiant_radio_abort(), RADIANT_RADIO_OK_RC);
+	zassert_equal(cc_probe()->tx_events, 1u);
+	zassert_equal(cc_probe()->tx[0].status, RADIANT_RADIO_STATUS_ABORTED);
+	zassert_equal(cc_probe()->tx[0].t_sync, t);
+	zassert_false(cc_probe()->tx[0].t_sync_exact);
+	(void)fake_rf_deliver_pending();
+	zassert_equal(cc_probe()->tx_events, 1u);
+}
