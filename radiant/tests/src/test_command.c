@@ -547,6 +547,82 @@ ZTEST(command, test_a_command_captured_in_a_previous_epoch_never_verifies)
 	zassert_false(yesterday.seq_known);
 }
 
+/* Security review 2026-11-20, item 3. The wire carries eight bits of sequence,
+ * so once the stream has moved more than 192 past an executed command, that
+ * command's low byte is back inside the 1..64 window. Its original tag must not
+ * be: the tag binds the extended sequence, and a replay from an earlier lap is
+ * a bad tag. */
+ZTEST(command, test_a_command_from_an_earlier_lap_never_executes_again)
+{
+	struct profile_cmd_node n;
+	struct profile_command_ack a;
+	uint8_t original[PROFILE_TLM_CMD_LEN_STD];
+	uint8_t body[PROFILE_TLM_CMD_LEN_STD];
+	uint8_t ack[PROFILE_TLM_CMD_LEN_LR];
+	uint8_t tag[PROFILE_TLM_CMD_TAG_LR];
+	uint32_t seq;
+	int rc;
+
+	node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
+	(void)build_command(&n, 10u, PROFILE_TLM_CMD_SET_BOOL, 0x01u, 1u,
+			    original, sizeof(original));
+	zassert_true(profile_cmd_on_command(&n, original, sizeof(original), 1000u,
+					    ack, sizeof(ack)) > 0);
+	zassert_equal(1u, g_exec_calls);
+
+	/* 10 -> 60 -> 110 -> 160 -> 210: four genuine commands, 200 past the
+	 * first, and delta_u8(10, 210) = 56 puts seq 10 back in the window. */
+	for (seq = 60u; seq <= 210u; seq += 50u) {
+		(void)build_command(&n, (uint8_t)seq, PROFILE_TLM_CMD_NOP,
+				    PROFILE_TLM_TARGET_NODE, 0u, body,
+				    sizeof(body));
+		zassert_true(profile_cmd_on_command(&n, body, sizeof(body), 2000u,
+						    ack, sizeof(ack)) > 0);
+	}
+	zassert_equal(5u, g_exec_calls);
+
+	rc = profile_cmd_on_command(&n, original, sizeof(original), 3000u, ack,
+				    sizeof(ack));
+	zassert_true(rc > 0);
+	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
+						    sizeof(tag)) > 0);
+	zassert_equal(PROFILE_TLM_RESULT_BAD_TAG, a.result);
+	zassert_equal(5u, g_exec_calls, "a replayed command executed twice");
+	zassert_equal(1u, profile_cmd_stats(&n)->bad_tag);
+}
+
+/* The same review item's second half: re-applying the CURRENT epoch (an
+ * integrator retrying its setter) is not a key change and must not forget
+ * which sequence already ran. */
+ZTEST(command, test_resetting_the_same_epoch_keeps_the_duplicate_history)
+{
+	struct profile_cmd_node n;
+	struct profile_command_ack a;
+	uint8_t body[PROFILE_TLM_CMD_LEN_STD];
+	uint8_t ack[PROFILE_TLM_CMD_LEN_LR];
+	uint8_t tag[PROFILE_TLM_CMD_TAG_LR];
+	int rc;
+
+	node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
+	(void)build_command(&n, 33u, PROFILE_TLM_CMD_SET_BOOL, 0x01u, 1u, body,
+			    sizeof(body));
+	zassert_true(profile_cmd_on_command(&n, body, sizeof(body), 1000u, ack,
+					    sizeof(ack)) > 0);
+	zassert_equal(1u, g_exec_calls);
+
+	zassert_ok(profile_cmd_set_epoch(&n, EPOCH_A));
+	zassert_true(n.seq_known);
+
+	rc = profile_cmd_on_command(&n, body, sizeof(body), 2000u, ack,
+				    sizeof(ack));
+	zassert_true(rc > 0);
+	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
+						    sizeof(tag)) > 0);
+	zassert_equal(PROFILE_TLM_RESULT_ALREADY, a.result);
+	zassert_equal(1u, g_exec_calls, "a setter retry re-armed a replay");
+	zassert_equal(1u, profile_cmd_stats(&n)->adopted);
+}
+
 /* ---------------------------------------------------------------------------
  * 3. The phase, recomputed - RF-5a's forward reference, closed
  * ---------------------------------------------------------------------------
