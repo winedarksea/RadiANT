@@ -6,7 +6,7 @@ Discovery short match (ADR 0022), left open 2026-11-11:
 - Decided 2026-11-14 (owner): short match stays default y on EVERY nRF image (MPSL, Matter, nRF5340 net core, L15), none of which had its own gate run; no CI job for `long_match.conf` (declined).
 
 ## Open after the 2026-11-16 benches (filed on fix/ti-cmd-stall):
-- nRF: re-read `now` on STEP_RETRY after an early-ETIME refusal; the stale `now` makes the refusals cascade (`archive/benchmarks/2026-11-16-b4-pair/`).
+- [DONE 2026-11-20] Re-read `now` on STEP_RETRY after an early-ETIME refusal; the stale `now` made the refusals cascade (`archive/benchmarks/2026-11-16-b4-pair/`). Fixed in the core scheduler, so every backend (14bd0f5 red case, 0397411 fix): `arm_failed()` sets `s.renow`, `pass()` re-reads before the next step and before `book_ahead()`; `pb.now` stays the first read. Gate is the ztest `test_an_etime_retry_plans_from_the_time_after_the_refusal`; no bench A/B (about 1 refusal per 900 s).
 - nRF: `radiant_frame.c` (`rx_sw_addr_len` / `radiant_addr_alt_run` bit loop) is outside the O2 hot set, ~17 us per filter on a filter-memo miss.
 - TI and every backend: the scheduler's `pass()` masks interrupts for its whole body. TI 9-channel worst case 492 us, arm slack 19-26 us. Candidates: run done callbacks and event posting after the unlock; take `RF_scheduleCmd` out of the lock (`archive/benchmarks/2026-11-16-ti-cmd-stall/isr_blocker/`).
 - TI: Pro Micro -> TI link loses 8-13 % (other links 0.25-4 %), unexplained; not RX buffering and not the masked pass (`archive/benchmarks/2026-11-16-b4-pair/gate_extra/`).
