@@ -998,6 +998,7 @@ ZTEST(radiant_backend_lp, test_idle_without_near_op_requests_no_hfxo)
 	uint64_t t_sync;
 	uint64_t ts;
 	uint64_t start;
+	uint64_t on_us;
 	uint32_t req;
 
 	/* Idle 1: nothing armed, from the end of the enable linger. */
@@ -1019,9 +1020,14 @@ ZTEST(radiant_backend_lp, test_idle_without_near_op_requests_no_hfxo)
 	/* Idle 2: armed while asleep, not due within IDLE_N_US until the end. */
 	t_sync = lpt_radio_now() + 2u * FAR_US;
 	ts = t_start_world(t_sync);
+	/* Baseline before the arm: a request and release inside lpt_tx_at()
+	 * would leave the HFXO off again and pass hfxo_quiet_for() alone. */
+	req = lpt_hfxo_requests();
+	on_us = lpt_hfxo_on_us();
 	zassert_equal(lpt_tx_at(t_sync), RADIANT_RADIO_OK_RC);
 	zassert_true(lpt_staged(), "staged behind a wake");
-	req = lpt_hfxo_requests();
+	zassert_equal(lpt_hfxo_requests(), req, "the far arm requested the HFXO");
+	zassert_equal(lpt_hfxo_on_us(), on_us, "the far arm ran the HFXO");
 	zassert_true(hfxo_quiet_for(ts - IDLE_N_US - lpt_world()),
 		     "HFXO taken with the operation %u us or more away", IDLE_N_US);
 	zassert_equal(lpt_state(), LPT_ASLEEP);

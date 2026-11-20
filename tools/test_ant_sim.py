@@ -1090,10 +1090,6 @@ class TestRadioClock(unittest.TestCase):
         self.assertTrue(any(c["name"] == "jitter" for c in summary["checks"]))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 @unittest.skipIf(ant_sim is None, "pyusb is not installed")
 class TestTxPowerOption(unittest.TestCase):
     """--tx-power sends one 0x60 after the assign, and nothing by default."""
@@ -1127,3 +1123,7 @@ class TestTxPowerOption(unittest.TestCase):
         at = ids.index(ant_sim.MESG_CHANNEL_RADIO_TX_POWER_ID)
         self.assertGreater(at, ids.index(ant_sim.MESG_ASSIGN_CHANNEL_ID))
         self.assertEqual(sent[at][1], bytes([0, 3]))
+
+
+if __name__ == "__main__":
+    unittest.main()
