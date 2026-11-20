@@ -165,7 +165,9 @@ min_scenarios: 24
 # out, nested abort terminal) on fix/hal-item5-tsync-abort: radiant.backend +5
 # (test_terminal_contract.c), +3 per cc26xx scenario, +3 per unit scenario
 # (fake_radio, transfer, sched; the rewritten fake_radio abort case replaces one).
-min_testcases: 6411
+# 2026-11-20: 6416 (+5), the ETIME retry re-reads now (fix/sched-etime-renow,
+# Bluefin twister, 7216 executed): +1 per unit scenario (test_sched.c).
+min_testcases: 6416
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -184,9 +186,10 @@ min_testcases: 6411
 # +4 with item 7's node_ident provisioning-retry cases.
 # 2026-11-20: +3 per unit scenario (HAL drift item 5: fake_radio non-OK transmit
 # t_sync, transfer failed-reply staleness, sched nested abort terminal).
-min_cases.radiant.unit: 1074
-min_cases.radiant.unit.sec_modes: 1074
-min_cases.radiant.unit.no_pairing: 1014
+# 2026-11-20: +1 per unit scenario (sched: the ETIME retry plans from a fresh now).
+min_cases.radiant.unit: 1075
+min_cases.radiant.unit.sec_modes: 1075
+min_cases.radiant.unit.no_pairing: 1015
 min_cases.radiant.api: 86
 min_cases.radiant.api.sec: 90
 # +1 with the identical-0xF1 retry case (review 2026-11-17 item 4).
@@ -215,12 +218,14 @@ min_cases.hrm_ble.sim_sched: 4
 min_cases.treadmill.pages: 20
 min_cases.treadmill.hr_rx: 3
 # 2026-11-20: +3 (HAL drift item 5, as radiant.unit).
-min_cases.radiant.unit.ack_faults: 1081
+# 2026-11-20: +1 (the ETIME retry re-read, as radiant.unit).
+min_cases.radiant.unit.ack_faults: 1082
 # radiant.unit.diag: the unit suites with CONFIG_RADIANT_DIAG_COUNTERS.
 # 1127 (2026-11-16, Bluefin twister on fix/diag-page9-done-cb): the observed
 # count, including the four page-9/page-12 scheduler cases.
 # 2026-11-20: +3 (HAL drift item 5, as radiant.unit).
-min_cases.radiant.unit.diag: 1152
+# 2026-11-20: +1 (the ETIME retry re-read, as radiant.unit).
+min_cases.radiant.unit.diag: 1153
 min_cases.trainer.model: 14
 # radiant.lp_clock (power plan pass B2): the low-power timebase arithmetic,
 # 31 unit cases and seven 100 000-cycle drift simulations (three of them
