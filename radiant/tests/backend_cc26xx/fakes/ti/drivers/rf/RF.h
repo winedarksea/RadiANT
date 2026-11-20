@@ -85,6 +85,11 @@
  *                    as commands; fake_rf.refusals counts them
  *   radio_active     RF_getInfo(RF_GET_RADIO_STATE) (default true)
  *   set_tx_power_rc  RF_setTxPower() return (default RF_StatSuccess)
+ *   on_cancel_entry  if set, called at the TOP of RF_cancelCmd/RF_flushCmd
+ *                    with the handle named, before the fake looks at the
+ *                    command: the RF SWI landing at that instant (e.g. a
+ *                    test completing the command there, so the cancel then
+ *                    finds it ended and returns RF_StatCmdEnded)
  *   last_ch          the handle most recently issued; the next is
  *                    (last_ch + 1) & FAKE_RF_CH_MASK, as the driver's
  *                    nSeqPost (N_CMD_MODMASK 0xFFF). Set it to test a wrap.
@@ -427,6 +432,7 @@ struct fake_rf_state {
 	RF_Stat           set_tx_power_rc;
 	uint32_t          rat_step;
 	RF_ScheduleStatus default_submit_rc;
+	void            (*on_cancel_entry)(RF_CmdHandle ch);
 	RF_ExecuteAction  default_execute_rc;
 	/* state and counters */
 	uint32_t          rat;

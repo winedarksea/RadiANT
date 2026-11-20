@@ -125,12 +125,23 @@ void cc_reset(bool enable)
 int      cc_kind(void) { return (int)st.kind; }
 uint32_t cc_op_id(void) { return st.op_id; }
 int16_t  cc_cmd_handle(void) { return st.cmd_handle; }
-int16_t  cc_retired_handle(void) { return st.retired_handle; }
+/* The newest entry of st.retired (NO_HANDLE once its callback came). */
+int16_t  cc_retired_handle(void)
+{
+	return st.retired[(st.retired_next + RETIRED_MAX - 1u) % RETIRED_MAX];
+}
 uint8_t  cc_hw_addr_len(void) { return st.hw_addr_len; }
 uint8_t  cc_sw_addr_len(void) { return st.sw_addr_len; }
 bool     cc_delivered_terminal(void) { return st.delivered_terminal; }
 void     cc_set_next_op_id(uint32_t v) { st.next_op_id = v; }
 uint32_t cc_sw_addr_mismatch(void) { return radiant_cc26xx_sw_addr_mismatch; }
+#if defined(CONFIG_RADIANT_DIAG_COUNTERS)
+bool     cc_diag_built(void) { return true; }
+uint32_t cc_status_err(void) { return cc_diag.status_err; }
+#else
+bool     cc_diag_built(void) { return false; }
+uint32_t cc_status_err(void) { return 0u; }
+#endif
 
 /* ---- Requests and payloads ---- */
 

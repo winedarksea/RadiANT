@@ -570,6 +570,9 @@ enum op_kind {
 	OP_TX,
 };
 
+/* Retired commands whose callbacks can be owed at once; see st.retired. */
+#define RETIRED_MAX 4u
+
 static struct {
 	const struct radiant_radio_cbs *cbs;
 	void                       *user;
@@ -605,12 +608,24 @@ static struct {
 	uint64_t                  rat_hi;
 	int64_t                   rat_uptime_ref;
 
+	/* The live operation's one terminal has been claimed (claim_locked()).
+	 * Written only under irq_lock. */
 	bool                      delivered_terminal;
 
-	/* A window rx_drain() retired early. Its cancel callback arrives after
-	 * st may hold the next operation, so it must not be attributed to that
-	 * operation. NO_HANDLE when none. */
-	RF_CmdHandle              retired_handle;
+	/* The live receive drained at least one finished entry: the receiver
+	 * ran, so a preemption now is ABORTED, not DENIED. Reset per arm. */
+	bool                      op_heard;
+
+	/*
+	 * Commands this backend ended itself (abort(), rx_drain()'s STOP_ON_FIRST)
+	 * whose driver callbacks are still owed. They arrive after st may hold
+	 * later operations, so they must never be attributed to one. Each entry
+	 * leaves when its OWN terminal callback arrives, so several can be owed
+	 * at once (a reply armed and aborted inside one callback). NO_HANDLE in
+	 * an unused entry. Written only under irq_lock.
+	 */
+	RF_CmdHandle              retired[RETIRED_MAX];
+	uint8_t                   retired_next;
 
 	/* The transmit power last requested of apply_power() on this handle, and
 	 * whether it is valid. Cleared by RF_open()/RF_close(). */
@@ -627,6 +642,92 @@ static struct {
 } st;
 
 #define NO_HANDLE ((RF_CmdHandle)-1)
+
+/* --- The operation slot's terminal and retired commands ---
+ *
+ * The RF callback runs in the driver's SWI (an NVIC interrupt at the lowest
+ * level); abort() may run from a thread. Every test-and-set of st.kind /
+ * st.delivered_terminal and every st.retired write is under irq_lock, and
+ * the core's callback always runs after the lock is released, as on the
+ * nRF backend.
+ */
+
+static void retired_clear(void)
+{
+	for (uint32_t i = 0u; i < RETIRED_MAX; i++) {
+		st.retired[i] = NO_HANDLE;
+	}
+	st.retired_next = 0u;
+}
+
+/* Under irq_lock. Overwrites the oldest entry when full: four owed
+ * callbacks at once is already beyond any path the core takes. */
+static void retired_add(RF_CmdHandle ch)
+{
+	st.retired[st.retired_next] = ch;
+	st.retired_next = (uint8_t)((st.retired_next + 1u) % RETIRED_MAX);
+}
+
+/* Under irq_lock. True if ch is a retired command; its entry goes when
+ * `terminal` (its own last callback). */
+static bool retired_take(RF_CmdHandle ch, bool terminal)
+{
+	for (uint32_t i = 0u; i < RETIRED_MAX; i++) {
+		if (st.retired[i] == ch && ch != NO_HANDLE) {
+			if (terminal) {
+				st.retired[i] = NO_HANDLE;
+			}
+			return true;
+		}
+	}
+	return false;
+}
+
+/* What a claimed terminal reports, captured under the claim's lock. */
+struct claim {
+	enum op_kind   kind;
+	uint32_t       op;
+	RF_CmdHandle   ch;
+	radiant_time_t tx_t_sync;
+};
+
+/*
+ * Under irq_lock: take the live operation's one terminal. False if there is
+ * none to take (no operation, or its terminal already claimed). The slot is
+ * free from here on: st.kind is OP_NONE and st.cmd_handle NO_HANDLE, so a
+ * callback for this command can no longer reach the core. `retire` records
+ * the handle in st.retired, for a command whose driver callback is still owed
+ * (the caller is about to cancel it).
+ */
+static bool claim_locked(struct claim *c, bool retire)
+{
+	if (st.kind == OP_NONE || st.delivered_terminal) {
+		return false;
+	}
+	c->kind = st.kind;
+	c->op = st.op_id;
+	c->ch = st.cmd_handle;
+	c->tx_t_sync = st.tx_t_sync;
+	st.delivered_terminal = true;
+	st.kind = OP_NONE;
+	st.cmd_handle = NO_HANDLE;
+	if (retire && c->ch >= 0) {
+		retired_add(c->ch);
+	}
+	return true;
+}
+
+/* A cancel that found no command (RF_StatInvalidParamsError) owes no
+ * callback, so its entry would only linger. */
+static void retired_cancel_result(RF_CmdHandle ch, RF_Stat rc)
+{
+	if (rc == RF_StatInvalidParamsError) {
+		unsigned int key = irq_lock();
+
+		(void)retired_take(ch, true);
+		irq_unlock(key);
+	}
+}
 
 static struct k_timer rat_keepalive;
 
@@ -1114,51 +1215,54 @@ static bool fmt_supported(const struct radiant_pkt_format *fmt)
 	return true;
 }
 
-static void deliver_rx_terminal(enum radiant_radio_status status)
+/* The core's terminal callback for an operation claim_locked() took. Called
+ * with no lock held: the core may arm the next operation from inside it. */
+static void deliver_terminal(const struct claim *c, enum radiant_radio_status status)
 {
-	struct radiant_rx_event evt = {
-		.op = st.op_id,
-		.status = status,
-	};
+	if (c->kind == OP_RX) {
+		struct radiant_rx_event evt = {
+			.op = c->op,
+			.status = status,
+		};
 
-	if (st.delivered_terminal) {
-		return;
-	}
-	st.delivered_terminal = true;
-	st.kind = OP_NONE;
+		/* A window that heard a frame counts as OK, even if the reply armed
+		 * from the frame callback aborted it. */
+		CC_DIAG(if (cc_diag.win_frames != 0u) {
+				cc_diag.term_ok++;
+			} else if (status == RADIANT_RADIO_STATUS_TIMEOUT) {
+				cc_diag.term_empty++;
+			} else {
+				cc_diag.term_error++;
+			});
 
-	/* A window that heard a frame counts as OK, even if the reply armed from
-	 * the frame callback aborted it. */
-	CC_DIAG(if (cc_diag.win_frames != 0u) {
-			cc_diag.term_ok++;
-		} else if (status == RADIANT_RADIO_STATUS_TIMEOUT) {
-			cc_diag.term_empty++;
-		} else {
-			cc_diag.term_error++;
-		});
+		if (st.cbs != NULL && st.cbs->rx != NULL) {
+			st.cbs->rx(&evt, st.user);
+		}
+	} else if (c->kind == OP_TX) {
+		struct radiant_tx_event evt = {
+			.op = c->op,
+			.status = status,
+			.t_sync = c->tx_t_sync,
+			.t_sync_exact = (status == RADIANT_RADIO_STATUS_OK),
+		};
 
-	if (st.cbs != NULL && st.cbs->rx != NULL) {
-		st.cbs->rx(&evt, st.user);
+		if (st.cbs != NULL && st.cbs->tx != NULL) {
+			st.cbs->tx(&evt, st.user);
+		}
 	}
 }
 
-static void deliver_tx_terminal(enum radiant_radio_status status)
+/* The live operation ended by itself (its own terminal callback): claim it
+ * and tell the core, unless an abort claimed it first. */
+static void end_live_op(enum radiant_radio_status status)
 {
-	struct radiant_tx_event evt = {
-		.op = st.op_id,
-		.status = status,
-		.t_sync = st.tx_t_sync,
-		.t_sync_exact = (status == RADIANT_RADIO_STATUS_OK),
-	};
+	struct claim c;
+	unsigned int key = irq_lock();
+	const bool won = claim_locked(&c, false);
 
-	if (st.delivered_terminal) {
-		return;
-	}
-	st.delivered_terminal = true;
-	st.kind = OP_NONE;
-
-	if (st.cbs != NULL && st.cbs->tx != NULL) {
-		st.cbs->tx(&evt, st.user);
+	irq_unlock(key);
+	if (won) {
+		deliver_terminal(&c, status);
 	}
 }
 
@@ -1309,6 +1413,10 @@ static inline void cc_diag_unlock(unsigned int key)
 static uint32_t rx_drain_entries(void)
 {
 	uint32_t frames = 0u;
+	/* The operation this drain serves. A frame callback may abort it and arm
+	 * the next, whose rx_queue_init() resets rx_data and rx_read: from then
+	 * on the queue is the new operation's, and this drain must not touch it. */
+	const uint32_t drain_op = st.op_id;
 
 	for (;;) {
 		rfc_dataEntryGeneral_t *e =
@@ -1329,6 +1437,8 @@ static uint32_t rx_drain_entries(void)
 			break;
 		}
 		frames++;
+		/* The receiver ran: a preemption from here on is ABORTED. */
+		st.op_heard = true;
 		t_entry = cc_diag_t();
 
 		p = (const uint8_t *)(&e->data);
@@ -1475,10 +1585,20 @@ static uint32_t rx_drain_entries(void)
 			evt.body = copy;
 			e->status = DATA_ENTRY_PENDING;
 			rx_read = (uint8_t)((rx_read + 1u) % RX_ENTRIES);
-			st.delivered_terminal = true;
-			st.kind = OP_NONE;
-			st.retired_handle = st.cmd_handle;
-			RF_cancelCmd(st.rf_handle, st.cmd_handle, 0);
+			{
+				struct claim c;
+				unsigned int key = irq_lock();
+				const bool won = claim_locked(&c, true);
+
+				irq_unlock(key);
+				if (!won) {
+					/* An abort took the terminal first: the frame
+					 * belongs to an operation the core has retired. */
+					return frames;
+				}
+				retired_cancel_result(c.ch,
+					RF_cancelCmd(st.rf_handle, c.ch, 0));
+			}
 			/* This frame is the window's terminal too. */
 			CC_DIAG(cc_diag.win_frames++; cc_diag.term_ok++);
 			CC_DIAG_LEVEL(frame_max_us, cc_diag_t() - t_entry);
@@ -1500,6 +1620,11 @@ static uint32_t rx_drain_entries(void)
 			st.cbs->rx(&evt, st.user);
 			cb_ticks = cc_diag_t() - t_cb;
 			CC_DIAG_LEVEL(rx_cb_max_us, cb_ticks);
+		}
+		/* The callback aborted this window (and maybe armed the next, which
+		 * now owns rx_data and rx_read): stop without touching the queue. */
+		if (st.kind != OP_RX || st.op_id != drain_op) {
+			return frames;
 		}
 
 next:
@@ -1540,81 +1665,144 @@ static void rx_drain(void)
 			 RF_EventCmdStopped | RF_EventCmdCancelled |   \
 			 RF_EventCmdPreempted)
 
-/* True for the callback of a window rx_drain() retired (see retired_handle).
- * Cleared on the first terminal callback of any command, so it cannot outlive
- * a handle wrap. */
-static bool retired_callback(RF_CmdHandle ch, RF_EventMask events)
+/*
+ * Whether a driver callback for ch belongs to the live operation. A retired
+ * command's callbacks never do (its entry goes with its own terminal). The
+ * live operation's handle always does. Anything else is live only while an
+ * arm is between RF_postCmd/RF_scheduleCmd and storing st.cmd_handle (which
+ * only an arm from a thread outside irq_lock can be caught in): st.cmd_handle
+ * is then NO_HANDLE, or the arm's refusal code.
+ */
+static bool callback_is_live(RF_CmdHandle ch, bool terminal)
 {
-	bool hit = (ch == st.retired_handle);
+	unsigned int key = irq_lock();
+	bool live;
 
-	if ((events & TERMINAL_EVENTS) != 0) {
-		st.retired_handle = NO_HANDLE;
+	if (st.kind != OP_NONE && ch == st.cmd_handle) {
+		/* A live handle equal to a lingering entry (a wrap): not retired. */
+		(void)retired_take(ch, true);
+		live = true;
+	} else if (retired_take(ch, terminal)) {
+		live = false;
+	} else {
+		live = (st.kind != OP_NONE) && (st.cmd_handle < 0);
 	}
-	return hit;
+	irq_unlock(key);
+	return live;
+}
+
+/* Normal command ends: DONE_* (0x04xx) and PROP_DONE_* (0x34xx). */
+static bool status_normal_end(uint16_t s)
+{
+	return (s & 0xFF00u) == 0x0400u || (s & 0xFF00u) == 0x3400u;
+}
+
+/* Command errors: generic ERROR_* (0x08xx) and PROP_ERROR_* (0x38xx). */
+static bool status_error(uint16_t s)
+{
+	return (s & 0xFF00u) == 0x0800u || s >= 0x3800u;
+}
+
+/*
+ * A preempted operation had the air (ABORTED) or never did (DENIED). A
+ * command preempted in the driver's pending queue ends Cancelled|Preempted
+ * and never reached the RF core. One the RF core held ends Aborted (or
+ * Stopped)|Preempted, but it is dispatched ahead of its start trigger, so it
+ * listened only if its window opened: a frame was drained, or t_open passed.
+ * A transmit started once its preamble's first bit was due.
+ */
+static bool op_had_air(enum op_kind kind, RF_EventMask events)
+{
+	const radiant_time_t now = now_us();
+
+	if ((events & (RF_EventCmdAborted | RF_EventCmdStopped)) == 0) {
+		return false;
+	}
+	if (kind == OP_RX) {
+		return st.op_heard || now >= st.t_open;
+	}
+	return now + (radiant_time_t)((PREAMBLE_BYTES + st.fmt.addr_len) *
+				      BYTE_US) >= st.tx_t_sync;
 }
 
 static void rf_callback(RF_Handle h, RF_CmdHandle ch, RF_EventMask events)
 {
+	const bool terminal = (events & TERMINAL_EVENTS) != 0;
+	enum op_kind kind;
+	uint16_t cmd_status;
+	enum radiant_radio_status status;
+
 	ARG_UNUSED(h);
 
-	if (retired_callback(ch, events)) {
+	if (!callback_is_live(ch, terminal)) {
 		return;
 	}
 
 	if ((events & RF_EventRxEntryDone) != 0) {
 		rx_drain();
-		/* rx_drain() may have retired this window already. */
-		if (retired_callback(ch, events)) {
+		/* A frame may have ended the window (STOP_ON_FIRST), or its
+		 * callback aborted it. */
+		if (!callback_is_live(ch, terminal)) {
+			return;
+		}
+	}
+
+	if (!terminal) {
+		return;
+	}
+
+	kind = st.kind;
+	if (kind == OP_RX) {
+		/* Drain anything finished that the entry-done event did not cover. */
+		rx_drain();
+		if (!callback_is_live(ch, terminal)) {
 			return;
 		}
 	}
 
 	/*
-	 * Log the command status word on any error. Every way this backend can fail
-	 * to hear a frame looks like an empty window to the driver, and only this
-	 * 16-bit field tells them apart. 0x3400 is PROP_DONE_OK and 0x3401
-	 * PROP_DONE_RXTIMEOUT. 0x38xx is PROP_ERROR_*, and 0x0800..0x08FF is a
-	 * generic command error such as ERROR_PAST_START.
+	 * The op's own status word: every way this backend can fail to hear or
+	 * send a frame looks alike to the driver, and only this field tells them
+	 * apart. Counted once per command end. IDLE/PENDING means the op never
+	 * ran (a chained CMD_FS ahead of it failed); arm_common() resets it, as
+	 * neither the driver nor the RF core touches an op that never started.
 	 */
-	if (st.kind == OP_RX && rx_cmd.status >= 0x3800u) {
-		CC_DIAG(cc_diag.status_err++; cc_diag.status_last = rx_cmd.status);
-		LOG_WRN("rx cmd ended status=0x%04x (start=%u end=%u sw0=%08x)",
-			rx_cmd.status, rx_cmd.startTime, rx_cmd.endTime,
-			rx_cmd.syncWord0);
-	} else if (st.kind == OP_TX && tx_cmd.status >= 0x3800u) {
-		CC_DIAG(cc_diag.status_err++; cc_diag.status_last = tx_cmd.status);
-		LOG_WRN("tx cmd ended status=0x%04x (start=%u)",
-			tx_cmd.status, tx_cmd.startTime);
-	}
-
-	if ((events & TERMINAL_EVENTS) == 0) {
-		return;
+	cmd_status = (kind == OP_RX) ? rx_cmd.status : tx_cmd.status;
+	if (status_error(cmd_status)) {
+		CC_DIAG(cc_diag.status_err++; cc_diag.status_last = cmd_status);
+		if (kind == OP_RX) {
+			LOG_WRN("rx cmd ended status=0x%04x (start=%u end=%u sw0=%08x)",
+				cmd_status, rx_cmd.startTime, rx_cmd.endTime,
+				rx_cmd.syncWord0);
+		} else {
+			LOG_WRN("tx cmd ended status=0x%04x (start=%u)",
+				cmd_status, tx_cmd.startTime);
+		}
 	}
 
 	/*
 	 * Preempted is tested before Cancelled/Aborted, because RF_abortCmd sets
-	 * both flags when our own execute hook aborts a command. A preempted window
-	 * heard nothing, so it reports DENIED, not ABORTED. Under arbitration a
-	 * refusal is routine, not a fault.
+	 * both flags when the execute hook aborts a command. DENIED only for an
+	 * operation that never had the air (the core credits it as no listening);
+	 * one cut short mid-window is ABORTED, like the MPSL gate's lost grant.
+	 * LastCmdDone (never beside an abort bit) ends the op normally only if its
+	 * own status says so; an error, or an op that never ran, is FAILED.
 	 */
-	if (st.kind == OP_RX) {
-		/* Drain anything finished that the entry-done event did not cover. */
-		rx_drain();
-		if (retired_callback(ch, events)) {
-			return;
-		}
-		deliver_rx_terminal((events & RF_EventCmdPreempted) != 0
-					? RADIANT_RADIO_STATUS_DENIED
-				    : (events & RF_EventLastCmdDone) != 0
-					? RADIANT_RADIO_STATUS_TIMEOUT
-					: RADIANT_RADIO_STATUS_ABORTED);
-	} else if (st.kind == OP_TX) {
-		deliver_tx_terminal((events & RF_EventCmdPreempted) != 0
-					? RADIANT_RADIO_STATUS_DENIED
-				    : (events & RF_EventLastCmdDone) != 0
-					? RADIANT_RADIO_STATUS_OK
-					: RADIANT_RADIO_STATUS_ABORTED);
+	if ((events & RF_EventCmdPreempted) != 0) {
+		status = op_had_air(kind, events) ? RADIANT_RADIO_STATUS_ABORTED
+						  : RADIANT_RADIO_STATUS_DENIED;
+	} else if ((events & RF_EventLastCmdDone) == 0) {
+		status = RADIANT_RADIO_STATUS_ABORTED;
+	} else if (kind == OP_RX) {
+		status = status_normal_end(cmd_status) ? RADIANT_RADIO_STATUS_TIMEOUT
+						       : RADIANT_RADIO_STATUS_FAILED;
+	} else {
+		status = (cmd_status == PROP_DONE_OK || cmd_status == DONE_OK)
+				 ? RADIANT_RADIO_STATUS_OK
+				 : RADIANT_RADIO_STATUS_FAILED;
 	}
+
+	end_live_op(status);
 }
 
 /* --- Lifecycle --- */
@@ -1629,7 +1817,8 @@ int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 	st.cbs = cbs;
 	st.user = user;
 	st.next_op_id = 1;
-	st.retired_handle = NO_HANDLE;
+	retired_clear();
+	st.cmd_handle = NO_HANDLE;
 	st.tuned_rf = TUNED_NONE;
 	st.inited = true;
 
@@ -1710,7 +1899,8 @@ int radiant_radio_enable(void)
 	(void)now_us();
 
 	/* A fresh handle may number its commands from where the last began. */
-	st.retired_handle = NO_HANDLE;
+	retired_clear();
+	st.cmd_handle = NO_HANDLE;
 
 #if defined(CONFIG_RADIANT_BACKEND_CC26XX_COEX)
 	/* Patch the three caps that a shared RF core makes honest. */
@@ -1835,8 +2025,24 @@ static int arm_common(const struct radiant_pkt_format *fmt, radiant_time_t at,
 	if (!st.enabled) {
 		return RADIANT_RADIO_ESTATE;
 	}
-	if (st.kind != OP_NONE) {
-		return RADIANT_RADIO_EBUSY;
+	{
+		/* Read against the RF SWI's terminal claim (claim_locked()). Under the
+		 * same lock, the per-op state a terminal reads: no frame heard yet,
+		 * and the op status words IDLE, since neither the driver nor the RF
+		 * core writes an op that never starts (rf_callback() reads that as
+		 * FAILED rather than the last operation's end). */
+		unsigned int key = irq_lock();
+		const bool busy = (st.kind != OP_NONE);
+
+		if (!busy) {
+			st.op_heard = false;
+			rx_cmd.status = IDLE;
+			tx_cmd.status = IDLE;
+		}
+		irq_unlock(key);
+		if (busy) {
+			return RADIANT_RADIO_EBUSY;
+		}
 	}
 	if (!fmt_supported(fmt)) {
 		return RADIANT_RADIO_ENOTSUP;
@@ -2266,24 +2472,29 @@ int radiant_radio_ed(const struct radiant_ed_req *req, uint32_t *op)
 
 int radiant_radio_abort(void)
 {
-	if (!st.enabled || st.kind == OP_NONE) {
+	struct claim c;
+	unsigned int key;
+	bool won;
+
+	/*
+	 * Claim the terminal first, under the lock, so the RF SWI cannot deliver
+	 * one in between (abort() may be called from a thread): from here the
+	 * operation's own callbacks are retired and reach no one, including the
+	 * flush's asynchronous cancel, which can arrive after the next operation
+	 * is armed. Then flush, then deliver ABORTED synchronously, as the HAL
+	 * requires before the slot is seen as free. The flush comes before the
+	 * core's callback, which may arm the next operation (the arb hook passes
+	 * an own command whose termination is stored as absent; see arb.c).
+	 */
+	key = irq_lock();
+	won = st.enabled && claim_locked(&c, true);
+	irq_unlock(key);
+	if (!won) {
 		return RADIANT_RADIO_OK_RC;
 	}
 
-	/*
-	 * Deliver the terminal event synchronously, as the HAL requires before the
-	 * slot is seen as free. RF_flushCmd is asynchronous, so its cancel callback
-	 * can arrive after the next operation is armed. Retire the handle, as
-	 * rx_drain() does, so that callback is not attributed to the new operation.
-	 */
-	st.retired_handle = st.cmd_handle;
-	RF_flushCmd(st.rf_handle, st.cmd_handle, 0);
-
-	if (st.kind == OP_RX) {
-		deliver_rx_terminal(RADIANT_RADIO_STATUS_ABORTED);
-	} else if (st.kind == OP_TX) {
-		deliver_tx_terminal(RADIANT_RADIO_STATUS_ABORTED);
-	}
+	retired_cancel_result(c.ch, RF_flushCmd(st.rf_handle, c.ch, 0));
+	deliver_terminal(&c, RADIANT_RADIO_STATUS_ABORTED);
 
 	return RADIANT_RADIO_OK_RC;
 }

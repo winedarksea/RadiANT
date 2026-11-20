@@ -74,6 +74,10 @@ bool     cc_delivered_terminal(void);
 /* Seed the backend's next operation id (st.next_op_id), to test its wrap. */
 void     cc_set_next_op_id(uint32_t v);
 uint32_t cc_sw_addr_mismatch(void);
+/* cc_diag.status_err; cc_diag_built() is false (and this 0) without
+ * CONFIG_RADIANT_DIAG_COUNTERS. */
+bool     cc_diag_built(void);
+uint32_t cc_status_err(void);
 
 /* The tracking format and a fixed test address (A6 C5 34 12 78). */
 const struct radiant_pkt_format *cc_fmt(void);
