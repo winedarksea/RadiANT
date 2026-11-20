@@ -88,6 +88,12 @@ ap2 = None
 dev = a.dev
 
 
+def kill_tree(p):
+    # ble_central.ps1 runs ble_central.exe as a child of powershell; kill that
+    # tree only, never every ble_central.exe on the machine.
+    subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], capture_output=True)
+
+
 def start_ble(n):
     f = open(os.path.join(out, f"ble_central_{n}.txt"), "w", encoding="utf-8")
     p = subprocess.Popen(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
@@ -104,8 +110,7 @@ def start_ble(n):
             break
         time.sleep(2)
     log(f"ble_central attempt {n} failed rc={p.poll()}")
-    if p.poll() is None:
-        p.kill()
+    kill_tree(p)
     return None
 
 
@@ -135,7 +140,6 @@ for i in range(a.segs):
 ti_diag("post")
 peek("Send_pd", samples=10)
 log(f"ble alive at end={ble.poll() is None}")
-ble.terminate()
-subprocess.run(["taskkill", "/F", "/IM", "ble_central.exe"], capture_output=True)
+kill_tree(ble)
 log(f"console deaths {con.stop()}")
 log("done")

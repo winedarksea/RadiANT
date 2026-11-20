@@ -80,15 +80,19 @@ for arm in arms:
             n += sj["samples"]["valid"]
             hx += sj["samples"]["hfxo_running"]
         r["sampled_xo"] = f"{hx}/{n}"
-    lps = []
+    # The window runs from S1_lp's first good snapshot to S5_lp's last. Both
+    # endpoints must come from their own capture: a missing S5_lp used to fall
+    # back to two snapshots of S1_lp and print a short, clean-looking window.
+    ends = {}
     for tag in ("S1_lp", "S5_lp"):
         j = load(os.path.join(runs, f"{arm}_{tag}.json"))
-        if j:
-            for snap in j["diag"]["snapshots"]:
-                if snap.get("ok"):
-                    lps.append(decode(snap["words"]))
-    if len(lps) >= 2:
-        first, last = lps[0], lps[-1]
+        ok = [s for s in j["diag"]["snapshots"] if s.get("ok")] if j else []
+        if ok:
+            ends[tag] = decode((ok[0] if tag == "S1_lp" else ok[-1])["words"])
+    if len(ends) == 1:
+        r["lp_window"] = f"MISSING {'S5_lp' if 'S1_lp' in ends else 'S1_lp'}: no window"
+    elif ends:
+        first, last = ends["S1_lp"], ends["S5_lp"]
         delta = {}
         for k, v in last.items():
             if k in GAUGES:
