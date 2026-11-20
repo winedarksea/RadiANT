@@ -52,6 +52,11 @@ struct RecordV1 {
 	uint8_t *mUserData = nullptr;
 };
 
+/* The same shape contract bridge_core_asserts.cpp asserts on the real
+ * BridgedDeviceV2 (types and field order), so the mirror cannot drift from
+ * it without one side failing to compile. */
+RADIANT_MATTER_ASSERT_RECORD_V2_SHAPE(RecordV2);
+
 /* The decoded struct with guard bytes behind it: an overrun of the last
  * string lands in the guard instead of somewhere unobservable. */
 struct Guarded {
@@ -140,7 +145,15 @@ ZTEST_SUITE(matter_storage, NULL, NULL, NULL, NULL, NULL);
 /* ---- well-formed records ---------------------------------------------- */
 
 /* What ant_bridge.cpp actually stores: an 18-character unique ID and a
- * label, no user data. */
+ * label, no user data.
+ *
+ * NOT A STORE/LOAD ROUND TRIP. The record is built by the hand-written Writer
+ * above, not by StoreBridgedDevice()'s serialiser, which lives in the vendored
+ * bridge_storage_manager.cpp behind CHIP and persistent-storage headers. That
+ * the Writer's layout matches StoreBridgedDevice() (endpoint, type, length,
+ * ID, length, label, then optional user-data size and bytes, each scalar as
+ * its own native bytes) was established by reading it, in the 2026-11-20
+ * review. */
 ZTEST(matter_storage, test_v2_typical_record_round_trips)
 {
 	Writer w;

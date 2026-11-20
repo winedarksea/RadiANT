@@ -38,6 +38,47 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/*
+ * The shape a V2 record struct must have, stated once and asserted on both
+ * sides: by bridge_core_asserts.cpp against the vendored
+ * BridgeStorageManager::BridgedDeviceV2, and by
+ * apps/dongle_thread/tests/matter_storage against its mirror RecordV2. If a
+ * future NCS re-copy changes a field's type or reorders the struct, the
+ * Matter build stops instead of the test quietly checking a different shape.
+ *
+ * Types: the serialised record holds each length as the field's own bytes
+ * (sizeof(size_t), little-endian on every target), so the types ARE the
+ * format. Order: the decoder reads by field name, so struct order does not
+ * change the format; it is pinned so the mirror stays recognisably the same
+ * struct, in the serialised order. The array capacities are asserted
+ * separately on each side, as numbers, because the test needs them as
+ * numbers.
+ *
+ * __is_same is the GCC/Clang builtin rather than std::is_same because the
+ * test builds with Zephyr's minimal C++ library, which has no <type_traits>.
+ */
+#define RADIANT_MATTER_ASSERT_RECORD_V2_SHAPE(T)                                                                   \
+	static_assert(__is_same(decltype(T::mEndpointId), uint16_t), #T "::mEndpointId is not uint16_t"); \
+	static_assert(__is_same(decltype(T::mDeviceType), uint16_t), #T "::mDeviceType is not uint16_t"); \
+	static_assert(__is_same(decltype(T::mUniqueIDLength), size_t),                                   \
+		      #T "::mUniqueIDLength is not size_t");                                                        \
+	static_assert(__is_same(decltype(T::mUniqueID), char[sizeof(T::mUniqueID)]),                \
+		      #T "::mUniqueID is not a char array");                                                        \
+	static_assert(__is_same(decltype(T::mNodeLabelLength), size_t),                                  \
+		      #T "::mNodeLabelLength is not size_t");                                                       \
+	static_assert(__is_same(decltype(T::mNodeLabel), char[sizeof(T::mNodeLabel)]),               \
+		      #T "::mNodeLabel is not a char array");                                                       \
+	static_assert(__is_same(decltype(T::mUserDataSize), size_t), #T "::mUserDataSize is not size_t"); \
+	static_assert(__is_same(decltype(T::mUserData), uint8_t *), #T "::mUserData is not uint8_t *");  \
+	static_assert(offsetof(T, mEndpointId) < offsetof(T, mDeviceType) &&                                       \
+			      offsetof(T, mDeviceType) < offsetof(T, mUniqueIDLength) &&                           \
+			      offsetof(T, mUniqueIDLength) < offsetof(T, mUniqueID) &&                             \
+			      offsetof(T, mUniqueID) < offsetof(T, mNodeLabelLength) &&                            \
+			      offsetof(T, mNodeLabelLength) < offsetof(T, mNodeLabel) &&                           \
+			      offsetof(T, mNodeLabel) < offsetof(T, mUserDataSize) &&                              \
+			      offsetof(T, mUserDataSize) < offsetof(T, mUserData),                                 \
+		      #T "'s fields are not in the serialised order")
+
 namespace RadiantMatter
 {
 namespace StorageCodec

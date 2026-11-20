@@ -6,6 +6,7 @@
 
 #include "bridge_storage_manager.h"
 #include "bridge_manager.h"
+/* RadiANT: the bounds-checked record decoder (security review 2026-11-20 item 2). */
 #include "bridge_storage_codec.h"
 #include "platform/ConfigurationManager.h"
 

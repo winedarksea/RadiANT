@@ -96,3 +96,12 @@ static_assert(sizeof(Nrf::BridgeStorageManager::BridgedDeviceV2::mUniqueID) == 3
 static_assert(sizeof(Nrf::BridgeStorageManager::BridgedDeviceV2::mNodeLabel) == 32,
 	      "mNodeLabel is no longer 32 bytes: update kNodeLabelSize in "
 	      "apps/dongle_thread/tests/matter_storage/src/main.cpp.");
+
+/* Field types and order: the same macro the test applies to its mirror, so
+ * the two sides state one contract. NOTE: this file compiles only in the
+ * Matter build (release.yml's dongle_thread Matter row, or a hand build), not
+ * in push CI, which runs the test side only - a re-copy that changes the
+ * struct fails here at the next Matter build, not on push. */
+#include "bridge_storage_codec.h"
+
+RADIANT_MATTER_ASSERT_RECORD_V2_SHAPE(Nrf::BridgeStorageManager::BridgedDeviceV2);
