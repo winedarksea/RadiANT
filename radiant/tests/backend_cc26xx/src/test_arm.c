@@ -394,3 +394,40 @@ ZTEST(radiant_backend_cc26xx_arm, test_failed_arm_clears_op)
 		      RADIANT_RADIO_ESTATE);
 	zassert_equal(op, 0u);
 }
+
+/* The CMD_FS is one static struct shared by every chain. A chain aborted while
+ * its FS ran can have that FS finish afterwards and write DONE_OK over the
+ * status of a later chain's FS that never ran (that chain was cancelled before
+ * the RF core reached it). The later channel must not be credited from it:
+ * the synthesiser is on the earlier one. (Review 2026-11-19, finding 2.) */
+ZTEST(radiant_backend_cc26xx_arm, test_retune_not_credited_from_stale_fs_status)
+{
+	struct fake_rf_cmd *c;
+	rfc_radioOp_t *fs;
+	uint32_t op = 0u;
+
+	/* A: a retune to 66, aborted. */
+	zassert_equal(arm_rx(RF_OTHER, radiant_radio_now() + 2000u, &op),
+		      RADIANT_RADIO_OK_RC);
+	zassert_not_null(chained_fs(CMD_PROP_RX_ADV));
+	c = fake_rf_last();
+	fs = c->chain[0].op;
+	zassert_equal(radiant_radio_abort(), RADIANT_RADIO_OK_RC);
+	(void)fake_rf_deliver_pending();
+
+	/* B: a retune to 70, cancelled before the RF core reached it. */
+	zassert_equal(arm_rx(70u, radiant_radio_now() + 2000u, &op),
+		      RADIANT_RADIO_OK_RC);
+	zassert_not_null(chained_fs(CMD_PROP_RX_ADV));
+	zassert_equal_ptr(fake_rf_last()->chain[0].op, fs, "one shared fs_cmd");
+	zassert_equal(radiant_radio_abort(), RADIANT_RADIO_OK_RC);
+	(void)fake_rf_deliver_pending();
+
+	/* A's FS completes late, into the shared struct. */
+	fs->status = DONE_OK;
+
+	zassert_equal(arm_rx(70u, radiant_radio_now() + 2000u, &op),
+		      RADIANT_RADIO_OK_RC);
+	zassert_not_null(chained_fs(CMD_PROP_RX_ADV),
+			 "B's operation never ran, so neither did its FS: retune");
+}

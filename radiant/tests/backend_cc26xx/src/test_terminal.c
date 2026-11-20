@@ -510,8 +510,25 @@ ZTEST(radiant_backend_cc26xx_terminal, test_rx_prop_error_failed)
 	uint32_t op = 0u;
 	RF_CmdHandle ch = arm_rx(radiant_radio_now() + 2000u, 1000u, 0u, &op);
 
-	fake_rf_complete(ch, PROP_ERROR_RXBUF, RF_EventLastCmdDone);
+	fake_rf_complete(ch, PROP_ERROR_PAR, RF_EventLastCmdDone);
 	zassert_equal(rx_terminal_status(op), RADIANT_RADIO_STATUS_FAILED);
+}
+
+/* Out of receive buffers (the drain fell behind a merged window): the window
+ * listened, so it ends TIMEOUT, not FAILED - FAILED would credit a search no
+ * dwell and end any transfer riding on it. (Review 2026-11-19, finding 3.) */
+ZTEST(radiant_backend_cc26xx_terminal, test_rx_buffer_full_timeout)
+{
+	static const uint16_t ends[] = { PROP_ERROR_RXBUF, PROP_ERROR_RXFULL };
+
+	for (size_t i = 0u; i < ARRAY_SIZE(ends); i++) {
+		uint32_t op = 0u;
+		RF_CmdHandle ch = arm_rx(radiant_radio_now() + 2000u, 1000u, 0u, &op);
+
+		fake_rf_complete(ch, ends[i], RF_EventLastCmdDone);
+		zassert_equal(rx_terminal_status(op), RADIANT_RADIO_STATUS_TIMEOUT,
+			      "end 0x%04x", ends[i]);
+	}
 }
 
 ZTEST(radiant_backend_cc26xx_terminal, test_rx_generic_error_failed)
