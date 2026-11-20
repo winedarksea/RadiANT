@@ -1489,6 +1489,7 @@ static uint32_t rx_drain_entries(void)
 		uint32_t t_entry;
 		uint32_t cb_ticks = 0u;
 		uint32_t m_cyc;   /* page 10 field 7: rx_match() and the copies */
+		uint8_t copy[RADIANT_RADIO_BODY_MAX];
 
 		if (e == NULL || e->status != DATA_ENTRY_FINISHED) {
 			break;
@@ -1608,9 +1609,7 @@ static uint32_t rx_drain_entries(void)
 				}
 				/*
 				 * Keep evt.body (the received, damaged bytes) and
-				 * crc_rx: CONFIG_RADIANT_CRC_REPAIR needs both. The
-				 * entry is released at next:, after the callback, so
-				 * the body lives as long as the HAL promises.
+				 * crc_rx: CONFIG_RADIANT_CRC_REPAIR needs both.
 				 */
 				evt.status = RADIANT_RADIO_STATUS_CRC_FAIL;
 			} else {
@@ -1622,24 +1621,30 @@ static uint32_t rx_drain_entries(void)
 			evt.status = RADIANT_RADIO_STATUS_OK;
 		}
 
+		/*
+		 * The callback gets a copy, never the queue entry: it may abort
+		 * this window and arm the next (from the nested ABORTED terminal
+		 * or after abort() returns), and that arm's rx_queue_init() zeroes
+		 * rx_data while the callback still holds evt.body. The HAL
+		 * promises the body until the callback returns.
+		 */
+		{
+			const uint32_t t_cp = cc_diag_t();
+
+			memcpy(copy, body, st.fmt.body_len);
+			m_cyc += cc_diag_t() - t_cp;
+		}
+		evt.body = copy;
+
 		if (evt.status == RADIANT_RADIO_STATUS_OK &&
 		    (st.flags & RADIANT_RX_STOP_ON_FIRST) != 0u) {
-			uint8_t copy[RADIANT_RADIO_BODY_MAX];
-
 			/*
 			 * This frame ends the window. Retire the operation before the
 			 * callback, since the core may arm the next one from inside it.
 			 * Release the entry and cancel first, since that arm may reset
 			 * the queue and replace st.cmd_handle.
 			 */
-			{
-				const uint32_t t_cp = cc_diag_t();
-
-				memcpy(copy, body, st.fmt.body_len);
-				m_cyc += cc_diag_t() - t_cp;
-			}
 			CC_DIAG_LEVEL(match_max_us, m_cyc);
-			evt.body = copy;
 			e->status = DATA_ENTRY_PENDING;
 			rx_read = (uint8_t)((rx_read + 1u) % RX_ENTRIES);
 			{

@@ -229,6 +229,55 @@ ZTEST(radiant_backend_cc26xx_terminal, test_stale_cancels_after_nested_abort)
 	zassert_equal(rx_terminal_status(nest_op_c), RADIANT_RADIO_STATUS_TIMEOUT);
 }
 
+static uint32_t body_op_a;
+static uint32_t body_op_c;
+static bool body_seen;
+static uint8_t body_after_abort[RADIANT_RADIO_BODY_MAX];
+
+/*
+ * From a frame of op A (no STOP_ON_FIRST, so the drain does not retire A
+ * first): abort A, and from A's nested ABORTED arm C, whose rx_queue_init()
+ * resets the queue A's frame was read from. Then read the outer evt->body.
+ */
+static void body_on_rx(const struct radiant_rx_event *evt)
+{
+	if (evt->op == body_op_a && evt->status == RADIANT_RADIO_STATUS_OK &&
+	    !body_seen) {
+		body_seen = true;
+		zassert_equal(radiant_radio_abort(), RADIANT_RADIO_OK_RC);
+		zassert_not_equal(body_op_c, 0u, "C armed from the nested terminal");
+		memcpy(body_after_abort, evt->body, evt->body_len);
+	} else if (evt->op == body_op_a && is_terminal(evt->status) &&
+		   body_op_c == 0u) {
+		(void)arm_rx(radiant_radio_now() + 6000u, 1000u, 0u, &body_op_c);
+	}
+}
+
+/* HAL: the outer event's body stays valid until that callback returns, even
+ * when the nested terminal re-arms the receiver. */
+ZTEST(radiant_backend_cc26xx_terminal, test_body_survives_nested_rearm)
+{
+	const radiant_time_t t_open = radiant_radio_now() + 2000u;
+	RF_CmdHandle ch_a;
+
+	body_op_a = 0u;
+	body_op_c = 0u;
+	body_seen = false;
+	memset(body_after_abort, 0, sizeof(body_after_abort));
+	ch_a = arm_rx(t_open, 1000u, 0u, &body_op_a);
+	fake_rf_start(ch_a);
+	cc_probe()->on_rx = body_on_rx;
+	fake_rf_advance_us(2200u);
+	hear_frame(ch_a, t_open + 100u);
+	cc_probe()->on_rx = NULL;
+
+	zassert_true(body_seen);
+	zassert_equal(rx_terminal_status(body_op_a), RADIANT_RADIO_STATUS_ABORTED);
+	zassert_equal(cc_op_id(), body_op_c);
+	zassert_mem_equal(body_after_abort, body8, cc_probe()->rx[0].body_len,
+			  "the re-arm zeroed the frame under the callback");
+}
+
 /* abort() of a command the driver has already ended (flush: CmdEnded) whose
  * LastCmdDone is still queued in the SWI: that callback reaches no one. */
 ZTEST(radiant_backend_cc26xx_terminal, test_abort_ended_command_late_end_dropped)
