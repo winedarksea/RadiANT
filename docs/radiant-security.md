@@ -1693,19 +1693,38 @@ or table lookup. The one secret-dependent step is the conditional swap,
 this file claimed it was constant time because it was written as a masked XOR.
 That claim was false on the production compiler: every caller passes 0 or 1,
 GCC 14.3 (Zephyr SDK 1.0.1) carries that range into the function, and at `-Os`
-for Cortex-M4 it turned the mask back into `cmp ip,#0 / beq` inside the limb
-loop, a branch on the scalar. GCC 12.2 (SDK 0.17.0) happened not to, which is
-why no earlier check caught it. C semantics do not promise constant time, so
-they cannot hold the claim. What holds it now is two things together. First, a
-value barrier: the mask passes through an empty `asm` the compiler must treat
-as producing an unknown value, so no range is left to turn into a select.
-Second, a checked disassembly: `scripts/check_x25519_ct.py` disassembles every
-`fe_cswap` symbol (it is `noinline` so the symbol exists) and fails on any IT
-block, `cbz`/`cbnz`, table branch, or conditional branch other than the one
-backward loop edge. It runs on the release pairing image in CI, and locally
-over GCC 14.3 and 12.2, `-Os`/`-O2`/`-O3`, Cortex-M4 and M33. A new compiler
-or flag set is constant time once that script passes on it, not before.
-Exposure while it was false was small: no released image enables
+and `-O2`, for Cortex-M4 and M33, it turned the mask back into
+`cmp ip,#0 / beq` inside the limb loop, a branch on the scalar. GCC 12.2
+(SDK 0.17.0) happened not to, which is why no earlier check caught it. C
+semantics do not promise constant time, so they cannot hold the claim.
+
+What holds the swap now is two things together. First, a value barrier: the
+mask passes through an empty `asm` the compiler must treat as producing an
+unknown value, so no range is left to turn into a select. Second, a checked
+disassembly: `scripts/check_x25519_ct.py` disassembles every `fe_cswap` symbol
+(it is `noinline` so the symbol exists) and fails on any IT block,
+`cbz`/`cbnz`, table branch, register-indexed load or store (a mask read from a
+table indexed by the flag), or conditional branch other than one backward loop
+edge, and on a loop edge whose flags a register taint pass traces to the swap
+argument. It also requires `radiant_sec_x25519()` to call `fe_cswap` at least
+five times (two per ladder step, two after the ladder, one from `fe_pack()`)
+and to contain no IT block or `cbz`/`cbnz`, so a swap done some other way in
+the ladder fails too. It runs in three places: on the linked release pairing
+image in `release.yml`, which is the production check because it uses
+Zephyr's real flags; on every push in `ci.yml`'s ztest job, compiling the file
+standalone with the SDK's GCC at `-Os`/`-O2`/`-O3` for Cortex-M4 and M33; and
+locally over the same matrix with GCC 14.3 and 12.2. The standalone compile
+leaves out Zephyr's real flags, so it is an early warning, not a substitute
+for the ELF check.
+
+What that shows, and no more: `fe_cswap` is branch-free apart from a loop edge
+whose exit test does not visibly read the flag, and the ladder swaps only
+through it. It is a pattern check, not data-flow analysis. The taint pass
+follows registers, not memory, so it does not prove the loop's trip count is
+fixed. Everything else, the field arithmetic, memory access, the trip count
+and multiplier timing, rests on review of straight-line code. The claim covers
+Cortex-M4 and M33 only: their `umull` is fixed-time, while Cortex-M3's exits
+early on small operands. Exposure while it was false was small: no released image enables
 `CONFIG_RADIANT_SEC_PAIRING_X25519`, and each scalar is used for one exchange.
 Power and EM analysis are still not claimed.
 

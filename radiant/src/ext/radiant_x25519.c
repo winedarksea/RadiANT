@@ -16,13 +16,17 @@
  * Constant time in the secret scalar: every bit runs the same field-op
  * sequence and multiplication is schoolbook with no data-dependent
  * branches/lookups. The conditional swap is the one place C semantics do NOT
- * hold the line: masked-XOR source is no promise, and GCC 14.3 at -Os turned
- * the old version back into a branch on the swap flag (security review
+ * hold the line: masked-XOR source is no promise, and GCC 14.3 at -Os and -O2
+ * turned the old version back into a branch on the swap flag (security review
  * 2026-11-20, item 1). fe_cswap() now hides its mask behind a compiler value
- * barrier, and scripts/check_x25519_ct.py disassembles it - over a compiler,
- * -O level and core matrix locally, and on the release pairing image in CI -
- * and fails on any branch other than the loop edge. Constant time rests on
- * that barrier plus the checked disassembly, not on the C. NOT claimed:
+ * barrier. scripts/check_x25519_ct.py disassembles the result - on the
+ * release pairing image (the production check), and compiled standalone over
+ * a compiler, -O level and core matrix on every push and locally - and shows
+ * two things only: fe_cswap is branch-free apart from a loop edge whose exit
+ * test does not visibly read the flag, and the ladder swaps only through it.
+ * Everything else - the field arithmetic, memory access, the loop's trip
+ * count, multiplier timing - rests on review of straight-line code, and the
+ * claim covers Cortex-M4/M33 only (M3's umull exits early). NOT claimed:
  * resistance to power/EM analysis - a node needing that should use a PKA
  * backend.
  *
