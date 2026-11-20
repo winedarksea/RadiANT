@@ -2086,6 +2086,7 @@ jobs:
       - name: Enabled build stays inside its measured budget
         env:
           SIZE: ${{ steps.binutils.outputs.size }}
+          NM: ${{ steps.binutils.outputs.nm }}
         run: |
           set -euo pipefail
           west build app/apps/dongle \
@@ -2277,6 +2278,25 @@ jobs:
           # 3852 B on the merged items 1-3 (1a9dbba, this recipe, NCS v3.4.0);
           # the stack step below: 668 / 612 / 760 B and 484 / 428 / 576 B.
           check "pairing text" "$(( pair_text - on_text ))" 4096
+
+          # THE CONDITIONAL SWAP IS CONSTANT TIME ONLY IF THIS PASSES. The
+          # masked-XOR fe_cswap() compiled to `cmp / beq` on the swap flag
+          # under GCC 14.3 at -Os (security review 2026-11-20, item 1): the C
+          # never promised constant time. The fix is a value barrier, and this
+          # is the proof it held, on the exact production pairing flags: every
+          # fe_cswap symbol in pair_elf, no IT block, no cbz/cbnz, no
+          # conditional branch but the one backward loop edge. objdump sits
+          # beside the nm the arm-binutils action resolved.
+          objdump="${NM%nm}objdump"
+          test -x "${objdump}" || {
+            echo "::error::arm objdump not found beside ${NM}"
+            fail=1
+          }
+          if ! python app/scripts/check_x25519_ct.py --elf "${pair_elf}" \
+                 --objdump "${objdump}" --nm "${NM}"; then
+            echo "::error::fe_cswap in the pairing image is not branch-free"
+            fail=1
+          fi
 
           # ── The compat attestation layer ─────────────────────────────────
           #
