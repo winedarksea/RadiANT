@@ -640,6 +640,14 @@ static struct {
 	bool                      fs_inflight;
 	bool                      fs_inflight_tx; /* the chain's op: tx_cmd */
 	uint8_t                   fs_inflight_rf;
+
+	/*
+	 * The op id of an operation claimed for cancellation (abort(), the
+	 * STOP_ON_FIRST frame) while its arm was still inside post_op(), so its
+	 * handle was not known yet; 0 if none (op ids skip 0). arm_settle()
+	 * cancels that handle once post_op() returns it. Under irq_lock.
+	 */
+	uint32_t                  orphan_op;
 } st;
 
 #define NO_HANDLE ((RF_CmdHandle)-1)
@@ -712,8 +720,15 @@ static bool claim_locked(struct claim *c, bool retire)
 	st.delivered_terminal = true;
 	st.kind = OP_NONE;
 	st.cmd_handle = NO_HANDLE;
-	if (retire && c->ch >= 0) {
-		retired_add(c->ch);
+	if (retire) {
+		if (c->ch >= 0) {
+			retired_add(c->ch);
+		} else {
+			/* Its arm is still inside post_op(): NO_HANDLE is the driver's
+			 * RF_CMDHANDLE_FLUSH_ALL, so the caller must not cancel it;
+			 * arm_settle() cancels the real handle instead. */
+			st.orphan_op = c->op;
+		}
 	}
 	return true;
 }
@@ -1597,8 +1612,10 @@ static uint32_t rx_drain_entries(void)
 					 * belongs to an operation the core has retired. */
 					return frames;
 				}
-				retired_cancel_result(c.ch,
-					RF_cancelCmd(st.rf_handle, c.ch, 0));
+				if (c.ch >= 0) {
+					retired_cancel_result(c.ch,
+						RF_cancelCmd(st.rf_handle, c.ch, 0));
+				}
 			}
 			/* This frame is the window's terminal too. */
 			CC_DIAG(cc_diag.win_frames++; cc_diag.term_ok++);
@@ -1692,6 +1709,44 @@ static bool callback_is_live(RF_CmdHandle ch, bool terminal)
 	return live;
 }
 
+/*
+ * A command that ended in error, logged from the system work queue, never
+ * from the RF SWI: CONFIG_LOG_MODE_IMMEDIATE on the FIFO-off TI UART would
+ * stall the SWI for milliseconds per line, and ERROR_PAST_START on a late
+ * transmit (pastTrig = 0) is an expected outcome. Rate-limited to one line per
+ * second; the line shows the latest error and the running count.
+ */
+static volatile uint32_t status_err_count;
+static volatile uint16_t status_err_last;
+static volatile uint32_t status_err_start;
+static volatile bool     status_err_tx;
+static int64_t status_err_logged_ms = INT64_MIN / 2;
+
+static void status_err_log_work_fn(struct k_work *work)
+{
+	ARG_UNUSED(work);
+	LOG_WRN("%s cmd ended status=0x%04x (start=%u), %u so far",
+		status_err_tx ? "tx" : "rx", (unsigned int)status_err_last,
+		(unsigned int)status_err_start,
+		(unsigned int)status_err_count);
+}
+
+static K_WORK_DEFINE(status_err_log_work, status_err_log_work_fn);
+
+static void note_status_error(bool tx, uint16_t status, uint32_t start)
+{
+	const int64_t now = k_uptime_get();
+
+	status_err_count++;
+	status_err_last = status;
+	status_err_start = start;
+	status_err_tx = tx;
+	if (now - status_err_logged_ms >= 1000) {
+		status_err_logged_ms = now;
+		(void)k_work_submit(&status_err_log_work);
+	}
+}
+
 /* Normal command ends: DONE_* (0x04xx) and PROP_DONE_* (0x34xx). */
 static bool status_normal_end(uint16_t s)
 {
@@ -1771,14 +1826,9 @@ static void rf_callback(RF_Handle h, RF_CmdHandle ch, RF_EventMask events)
 	cmd_status = (kind == OP_RX) ? rx_cmd.status : tx_cmd.status;
 	if (status_error(cmd_status)) {
 		CC_DIAG(cc_diag.status_err++; cc_diag.status_last = cmd_status);
-		if (kind == OP_RX) {
-			LOG_WRN("rx cmd ended status=0x%04x (start=%u end=%u sw0=%08x)",
-				cmd_status, rx_cmd.startTime, rx_cmd.endTime,
-				rx_cmd.syncWord0);
-		} else {
-			LOG_WRN("tx cmd ended status=0x%04x (start=%u)",
-				cmd_status, tx_cmd.startTime);
-		}
+		note_status_error(kind == OP_TX, cmd_status,
+				  (kind == OP_RX) ? rx_cmd.startTime
+						  : tx_cmd.startTime);
 	}
 
 	/*
@@ -2032,6 +2082,62 @@ static RF_Op *chain_fs(RF_Op *op, uint32_t op_start_rat, uint8_t rf_index)
 }
 
 /*
+ * After post_op() returned ch for operation `id`. False if the post was
+ * refused. Under irq_lock, because an arm from a thread can have its
+ * operation's terminal taken while still inside post_op() (by the RF SWI, or
+ * by abort()):
+ * - Still live: store the handle. Never store into a slot whose op has gone,
+ *   or a stale handle would make the next arm's early callbacks look foreign.
+ * - Claimed for cancellation before the handle was known (st.orphan_op):
+ *   cancel it now, as retired, so it neither goes on air nor reports.
+ * - Already ended by its own terminal: nothing to do.
+ * A refused chain that carried a retune leaves fs_cmd on the new channel,
+ * and the driver caches whatever fs_cmd holds when an earlier chain with an
+ * FS completes (RF_cacheFsCmd() from RF_radioOpDoneCb()), then replays it at
+ * every power-up and client switch. tuned_rf then becomes TUNED_NONE, so the
+ * next arm chains, and the driver re-caches, a fresh FS.
+ */
+static bool arm_settle(uint32_t id, RF_CmdHandle ch, bool retune)
+{
+	bool cancel = false;
+	unsigned int key = irq_lock();
+	const bool live = st.op_id == id && st.kind != OP_NONE &&
+			  !st.delivered_terminal;
+
+	if (ch < 0) {
+		if (live) {
+			st.kind = OP_NONE;
+		}
+		if (st.op_id == id) {
+			/* The driver never saw the FS. */
+			st.fs_inflight = false;
+		}
+		if (retune) {
+			st.tuned_rf = TUNED_NONE;
+		}
+		if (st.orphan_op == id) {
+			st.orphan_op = 0u;
+		}
+		irq_unlock(key);
+		return false;
+	}
+
+	if (live) {
+		st.cmd_handle = ch;
+	} else if (st.orphan_op == id) {
+		st.orphan_op = 0u;
+		retired_add(ch);
+		cancel = true;
+	}
+	irq_unlock(key);
+
+	if (cancel) {
+		retired_cancel_result(ch, RF_flushCmd(st.rf_handle, ch, 0));
+	}
+	return true;
+}
+
+/*
  * `at` (t_open or t_sync) must be at least floor_us past now, or ETIME:
  * ARM_FLOOR_US, plus for a transmit the airtime its start precedes t_sync by
  * (never send late), plus FS_SETTLE_US when the arm retunes.
@@ -2103,6 +2209,8 @@ static int rx_arm(const struct radiant_rx_req *req, uint32_t *op)
 	RF_Op *head;
 	bool retune;
 	int rc;
+	uint32_t id;
+	RF_CmdHandle ch;
 
 	if (op == NULL) {
 		return RADIANT_RADIO_EINVAL;
@@ -2276,13 +2384,14 @@ static int rx_arm(const struct radiant_rx_req *req, uint32_t *op)
 
 	st.kind = OP_RX;
 	st.op_id = op_id_next();
+	id = st.op_id;
 	st.delivered_terminal = false;
 	/* Before the post: its callback may arm the next operation. */
 	st.fs_inflight = retune;
 	st.fs_inflight_rf = req->rf_index;
 	st.fs_inflight_tx = false;
 
-	st.cmd_handle = post_op(
+	ch = post_op(
 		head, head->startTime,
 		/*
 		 * The scheduler's endTime, which adds follow_on_us to the hardware end
@@ -2303,15 +2412,12 @@ static int rx_arm(const struct radiant_rx_req *req, uint32_t *op)
 		RF_EventRxEntryDone | RF_EventLastCmdDone |
 			RF_EventCmdAborted | RF_EventCmdStopped |
 			RF_EventCmdCancelled | RF_EventCmdPreempted);
-	if (st.cmd_handle < 0) {
-		st.kind = OP_NONE;
-		/* The driver never saw the FS: the synthesiser is where it was. */
-		st.fs_inflight = false;
+	if (!arm_settle(id, ch, retune)) {
 		/* A refusal is routine under arbitration, so report EDENIED. */
 		return RADIANT_RADIO_EDENIED;
 	}
 
-	*op = st.op_id;
+	*op = id;
 
 	return RADIANT_RADIO_OK_RC;
 }
@@ -2351,6 +2457,8 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 	RF_Op *head;
 	bool retune;
 	int rc;
+	uint32_t id;
+	RF_CmdHandle ch;
 
 	if (op == NULL) {
 		return RADIANT_RADIO_EINVAL;
@@ -2445,13 +2553,14 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 
 	st.kind = OP_TX;
 	st.op_id = op_id_next();
+	id = st.op_id;
 	st.delivered_terminal = false;
 	/* Before the post: its callback may arm the next operation. */
 	st.fs_inflight = retune;
 	st.fs_inflight_rf = req->rf_index;
 	st.fs_inflight_tx = true;
 
-	st.cmd_handle = post_op(
+	ch = post_op(
 		head, head->startTime,
 		/*
 		 * TX_ADV has no end trigger, so this end time is scheduler bookkeeping
@@ -2465,14 +2574,11 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 		RF_EventLastCmdDone | RF_EventCmdAborted |
 			RF_EventCmdStopped | RF_EventCmdCancelled |
 			RF_EventCmdPreempted);
-	if (st.cmd_handle < 0) {
-		st.kind = OP_NONE;
-		/* The driver never saw the FS: the synthesiser is where it was. */
-		st.fs_inflight = false;
+	if (!arm_settle(id, ch, retune)) {
 		return RADIANT_RADIO_EDENIED;
 	}
 
-	*op = st.op_id;
+	*op = id;
 
 	return RADIANT_RADIO_OK_RC;
 }
@@ -2512,7 +2618,10 @@ int radiant_radio_abort(void)
 		return RADIANT_RADIO_OK_RC;
 	}
 
-	retired_cancel_result(c.ch, RF_flushCmd(st.rf_handle, c.ch, 0));
+	/* c.ch < 0: the arm is mid-post and cancels its own handle (claim_locked). */
+	if (c.ch >= 0) {
+		retired_cancel_result(c.ch, RF_flushCmd(st.rf_handle, c.ch, 0));
+	}
 	deliver_terminal(&c, RADIANT_RADIO_STATUS_ABORTED);
 
 	return RADIANT_RADIO_OK_RC;
