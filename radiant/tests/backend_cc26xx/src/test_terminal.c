@@ -381,24 +381,173 @@ ZTEST(radiant_backend_cc26xx_terminal, test_status_err_counts_generic_errors)
 {
 	uint32_t op = 0u;
 	RF_CmdHandle ch;
+	uint32_t err0;
 
 	if (!cc_diag_built()) {
 		ztest_test_skip();
 	}
 
+	err0 = cc_status_err();  /* the counters outlive cc_reset() */
 	(void)arm_tx(radiant_radio_now() + 2000u, &ch);
 	fake_rf_complete(ch, ERROR_PAST_START, RF_EventLastCmdDone);
-	zassert_equal(cc_status_err(), 1u, "ERROR_PAST_START counted");
+	zassert_equal(cc_status_err() - err0, 1u, "ERROR_PAST_START counted");
 
 	ch = arm_rx(radiant_radio_now() + 2000u, 1000u, 0u, &op);
 	fake_rf_complete(ch, ERROR_SYNTH_PROG, RF_EventLastCmdDone);
-	zassert_equal(cc_status_err(), 2u, "ERROR_SYNTH_PROG counted");
+	zassert_equal(cc_status_err() - err0, 2u, "ERROR_SYNTH_PROG counted");
 
 	ch = arm_rx(radiant_radio_now() + 2000u, 1000u, 0u, &op);
 	fake_rf_complete(ch, PROP_ERROR_RXBUF, RF_EventLastCmdDone);
-	zassert_equal(cc_status_err(), 3u, "PROP_ERROR_RXBUF still counted");
+	zassert_equal(cc_status_err() - err0, 3u, "PROP_ERROR_RXBUF still counted");
 
 	ch = arm_rx(radiant_radio_now() + 2000u, 1000u, 0u, &op);
 	fake_rf_complete(ch, PROP_DONE_OK, RF_EventLastCmdDone);
-	zassert_equal(cc_status_err(), 3u, "a normal end is not an error");
+	zassert_equal(cc_status_err() - err0, 3u, "a normal end is not an error");
+}
+
+/* ------------------------------------------------------------------------
+ * Item 3 (drain): an arm made from a frame callback owns the queue
+ * ------------------------------------------------------------------------
+ */
+
+static uint32_t rearm_op2;
+
+static void abort_rearm_once(const struct radiant_rx_event *evt)
+{
+	if (evt->status == RADIANT_RADIO_STATUS_OK && rearm_op2 == 0u) {
+		zassert_equal(radiant_radio_abort(), RADIANT_RADIO_OK_RC);
+		(void)arm_rx(radiant_radio_now() + 3000u, 1000u, 0u, &rearm_op2);
+	}
+}
+
+/* The core aborts op 1 and arms op 2 from op 1's frame callback (a reply
+ * displacing the window). rx_arm() re-initialised the receive queue for op
+ * 2, so the drain of op 1 must not then advance the read cursor over it:
+ * op 2's first frame must be heard. */
+ZTEST(radiant_backend_cc26xx_terminal, test_rearm_from_frame_callback_hears_next_frame)
+{
+	uint32_t op1 = 0u;
+	const radiant_time_t t_open = radiant_radio_now() + 2000u;
+	RF_CmdHandle ch = arm_rx(t_open, 1000u, 0u, &op1);
+	RF_CmdHandle ch2;
+	radiant_time_t t_open2;
+
+	rearm_op2 = 0u;
+	fake_rf_start(ch);
+	fake_rf_advance_us(2200u);
+	cc_probe()->on_rx = abort_rearm_once;
+	hear_frame(ch, t_open + 100u);
+	cc_probe()->on_rx = NULL;
+	(void)fake_rf_deliver_pending();
+
+	zassert_not_equal(rearm_op2, 0u);
+	zassert_equal(cc_op_id(), rearm_op2);
+	ch2 = cc_cmd_handle();
+	t_open2 = radiant_radio_now() + 3000u;  /* as abort_rearm_once() armed it */
+	fake_rf_start(ch2);
+	fake_rf_advance_us(3200u);
+	hear_frame(ch2, t_open2 + 100u);
+
+	zassert_equal(cc_probe()->rx_events, 3u, "frame, ABORTED, op 2's frame");
+	zassert_equal(cc_probe()->rx[2].op, rearm_op2);
+	zassert_equal(cc_probe()->rx[2].status, RADIANT_RADIO_STATUS_OK);
+}
+
+/* ------------------------------------------------------------------------
+ * Item 5: a command that ended in error, or never ran, is FAILED
+ * ------------------------------------------------------------------------
+ */
+
+/* A late transmit start (pastTrig = 0): nothing went out. */
+ZTEST(radiant_backend_cc26xx_terminal, test_tx_past_start_failed)
+{
+	RF_CmdHandle ch;
+	const uint32_t op = arm_tx(radiant_radio_now() + 2000u, &ch);
+
+	fake_rf_complete(ch, ERROR_PAST_START, RF_EventLastCmdDone);
+	zassert_equal(cc_probe()->tx_events, 1u);
+	zassert_equal(cc_probe()->tx[0].op, op);
+	zassert_equal(cc_probe()->tx[0].status, RADIANT_RADIO_STATUS_FAILED);
+	zassert_false(cc_probe()->tx[0].t_sync_exact);
+	zassert_equal(cc_kind(), 0);
+}
+
+/* The chain ended (LastCmdDone) but the transmit op itself never ran, e.g.
+ * a CMD_FS chained ahead of it failed: its status is still IDLE. */
+ZTEST(radiant_backend_cc26xx_terminal, test_tx_never_ran_failed)
+{
+	RF_CmdHandle ch;
+
+	(void)arm_tx(radiant_radio_now() + 2000u, &ch);
+	fake_rf_complete(ch, IDLE, RF_EventLastCmdDone);
+	zassert_equal(cc_probe()->tx[0].status, RADIANT_RADIO_STATUS_FAILED);
+	zassert_false(cc_probe()->tx[0].t_sync_exact);
+}
+
+/* A previous window's normal end must not pass for this one's: a chain
+ * whose receive op never ran reports FAILED, not the stale TIMEOUT left in
+ * the reused command struct. */
+ZTEST(radiant_backend_cc26xx_terminal, test_rx_never_ran_failed_not_stale_timeout)
+{
+	uint32_t op = 0u;
+	RF_CmdHandle ch = arm_rx(radiant_radio_now() + 2000u, 1000u, 0u, &op);
+	struct fake_rf_cmd *c;
+
+	fake_rf_complete(ch, PROP_DONE_RXTIMEOUT, RF_EventLastCmdDone);
+	zassert_equal(rx_terminal_status(op), RADIANT_RADIO_STATUS_TIMEOUT);
+
+	ch = arm_rx(radiant_radio_now() + 2000u, 1000u, 0u, &op);
+	/* The driver never touches the op's status; undo the fake's PENDING. */
+	c = fake_rf_cmd(ch);
+	zassert_not_null(c);
+	zassert_equal(c->chain[c->n_chain - 1u].op->status, PENDING);
+	fake_rf_fire(ch, RF_EventLastCmdDone);
+	zassert_equal(rx_terminal_status(op), RADIANT_RADIO_STATUS_FAILED);
+}
+
+ZTEST(radiant_backend_cc26xx_terminal, test_rx_prop_error_failed)
+{
+	uint32_t op = 0u;
+	RF_CmdHandle ch = arm_rx(radiant_radio_now() + 2000u, 1000u, 0u, &op);
+
+	fake_rf_complete(ch, PROP_ERROR_RXBUF, RF_EventLastCmdDone);
+	zassert_equal(rx_terminal_status(op), RADIANT_RADIO_STATUS_FAILED);
+}
+
+ZTEST(radiant_backend_cc26xx_terminal, test_rx_generic_error_failed)
+{
+	uint32_t op = 0u;
+	RF_CmdHandle ch = arm_rx(radiant_radio_now() + 2000u, 1000u, 0u, &op);
+
+	fake_rf_complete(ch, ERROR_SYNTH_PROG, RF_EventLastCmdDone);
+	zassert_equal(rx_terminal_status(op), RADIANT_RADIO_STATUS_FAILED);
+}
+
+/* Every normal receive end keeps TIMEOUT. */
+ZTEST(radiant_backend_cc26xx_terminal, test_rx_normal_ends_timeout)
+{
+	static const uint16_t ends[] = {
+		PROP_DONE_OK, PROP_DONE_RXTIMEOUT, PROP_DONE_BREAK,
+		PROP_DONE_ENDED, PROP_DONE_RXERR, DONE_OK,
+	};
+
+	for (size_t i = 0u; i < ARRAY_SIZE(ends); i++) {
+		uint32_t op = 0u;
+		RF_CmdHandle ch = arm_rx(radiant_radio_now() + 2000u, 1000u, 0u, &op);
+
+		fake_rf_complete(ch, ends[i], RF_EventLastCmdDone);
+		zassert_equal(rx_terminal_status(op), RADIANT_RADIO_STATUS_TIMEOUT,
+			      "end 0x%04x", ends[i]);
+	}
+}
+
+/* A transmit that ended DONE_OK (generic) or PROP_DONE_OK went out. */
+ZTEST(radiant_backend_cc26xx_terminal, test_tx_normal_ends_ok)
+{
+	RF_CmdHandle ch;
+
+	(void)arm_tx(radiant_radio_now() + 2000u, &ch);
+	fake_rf_complete(ch, DONE_OK, RF_EventLastCmdDone);
+	zassert_equal(cc_probe()->tx[0].status, RADIANT_RADIO_STATUS_OK);
+	zassert_true(cc_probe()->tx[0].t_sync_exact);
 }
