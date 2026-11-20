@@ -1686,6 +1686,68 @@ at build time, `scripts/check_stack_budget.py` re-measures the chains from the
 compiler's `.su` files in CI, and `test_sec_host_pairing_runs_on_the_bridge_stack`
 runs a whole exchange on a thread of the bridge's size.
 
+**Constant time, and what actually holds it.** The ladder runs the same field
+operations for every scalar bit, and the multiply has no data-dependent branch
+or table lookup. The one secret-dependent step is the conditional swap,
+`fe_cswap()`, called once per bit. Until the 2026-11-20 security review (item 1)
+this file claimed it was constant time because it was written as a masked XOR.
+That claim was false on the production compiler: every caller passes 0 or 1,
+GCC 14.3 (Zephyr SDK 1.0.1) carries that range into the function, and at `-Os`
+and `-O2`, for Cortex-M4 and M33, it turned the mask back into
+`cmp ip,#0 / beq` inside the limb loop, a branch on the scalar. GCC 12.2
+(SDK 0.17.0) happened not to, which is why no earlier check caught it. C
+semantics do not promise constant time, so they cannot hold the claim.
+
+What holds the swap now is two things together. First, a value barrier: the
+mask passes through an empty `asm` the compiler must treat as producing an
+unknown value, so no range is left to turn into a select. Second, a checked
+disassembly: `scripts/check_x25519_ct.py` disassembles every `fe_cswap` symbol
+(it is `noinline` so the symbol exists). It fails on any IT block,
+`cbz`/`cbnz`, table branch, call, or direct flag write (`msr`, `vmrs
+APSR_nzcv`), and on any conditional branch other than one backward loop edge.
+A forward taint pass over the function's control-flow graph must find that
+loop edge's flags, and every memory address, clean of the swap argument. The
+pass is an allow-list: an instruction it does not model taints everything it
+names. It also requires `radiant_sec_x25519()` to call `fe_cswap` at least
+four times, and five counting `fe_pack()` when that is out of line, and to
+contain no IT block or `cbz`/`cbnz`. That catches a compiler inlining or
+cloning the swap into the ladder, where the per-symbol rules cannot see it.
+
+**Scope: compiler changes, not source edits.** The checker guards reviewed
+source against a new compiler, new flags or a new core turning it back into
+secret-dependent code. It is not a defence against adversarial edits to the
+source or to hand-written asm; those go through code review. Known
+limitations, all of them needing such an edit:
+- a conditional `fe_cswap` call in the ladder, or a swap done some other way
+  in source, is not detected;
+- `msr` is failed outright rather than modelled;
+- memory is a single taint cell, so flags hidden through stack spills are only
+  caught coarsely. The same coarseness makes `-O0` fail closed.
+
+Two compiler-side caveats. `-funroll-all-loops` puts a `cbz` on a public loop
+counter in the ladder and trips the blunt ladder rule. An LTO build must keep
+`radiant_sec_x25519` out of line, or the check fails closed with "no symbol".
+
+It runs in three places:
+- on the linked release pairing image in `release.yml`. This is the production
+  check, because it uses Zephyr's real flags;
+- on every push in `ci.yml`'s ztest job, compiling the file standalone with
+  the SDK's GCC at `-Og`/`-Os`/`-O2`/`-O3` for Cortex-M4 and M33;
+- locally, over the same matrix with GCC 14.3 and 12.2.
+
+The standalone compile leaves out Zephyr's real flags, so it is an early
+warning, not a substitute for the ELF check.
+
+What that shows, and no more: `fe_cswap` is branch-free apart from a loop edge
+whose exit test does not visibly derive from the flag, and the ladder calls it
+directly. It does not prove the loop's trip count is fixed. Everything else
+rests on review of straight-line code: the field arithmetic, memory access
+outside the swap, the trip count and multiplier timing. The claim covers
+Cortex-M4 and M33 only: their `umull` is fixed-time, while Cortex-M3's exits
+early on small operands. Exposure while it was false was small: no released image enables
+`CONFIG_RADIANT_SEC_PAIRING_X25519`, and each scalar is used for one exchange.
+Power and EM analysis are still not claimed.
+
 **The sensor holds one key. Every authorized receiver gets a copy.** Over-air
 enrolment (section 11.7) is how a copy is handed over without a host: the X25519
 key it agrees is pairwise and used only to wrap the sensor's existing root for

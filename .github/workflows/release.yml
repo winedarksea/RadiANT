@@ -2086,6 +2086,7 @@ jobs:
       - name: Enabled build stays inside its measured budget
         env:
           SIZE: ${{ steps.binutils.outputs.size }}
+          NM: ${{ steps.binutils.outputs.nm }}
         run: |
           set -euo pipefail
           west build app/apps/dongle \
@@ -2276,7 +2277,36 @@ jobs:
           # Pairing bss +896 B (the workspace), not gated. Ceiling unchanged.
           # 3852 B on the merged items 1-3 (1a9dbba, this recipe, NCS v3.4.0);
           # the stack step below: 668 / 612 / 760 B and 484 / 428 / 576 B.
+          # +4 B after the fe_cswap value barrier (security review 2026-11-20
+          # item 1; this recipe, NCS v3.4.0, pairing text 104848 -> 104852 B
+          # against 3677a18): fe_cswap 96 -> 68 B (no select path left),
+          # radiant_sec_x25519 864 -> 896 B. Ceiling unchanged.
           check "pairing text" "$(( pair_text - on_text ))" 4096
+
+          # THE CONDITIONAL SWAP IS CONSTANT TIME ONLY IF THIS PASSES. The
+          # masked-XOR fe_cswap() compiled to `cmp / beq` on the swap flag
+          # under GCC 14.3 at -Os and -O2 (security review 2026-11-20, item 1):
+          # the C never promised constant time. The fix is a value barrier;
+          # this checks it held on the exact production pairing flags. Every
+          # fe_cswap symbol in pair_elf: no IT block, cbz/cbnz, table branch,
+          # call or msr/vmrs; one conditional branch at most, a backward loop
+          # edge whose flags a CFG taint pass (allow-list) finds clean of the
+          # swap argument, as it must find every memory address.
+          # radiant_sec_x25519: >= 4 direct fe_cswap calls (5 with fe_pack
+          # when out of line), no IT block or cbz/cbnz. Scope: compiler
+          # changes on reviewed source, not source edits (see the script's
+          # docstring). objdump sits beside the nm the arm-binutils action
+          # resolved.
+          objdump="${NM%nm}objdump"
+          test -x "${objdump}" || {
+            echo "::error::arm objdump not found beside ${NM}"
+            fail=1
+          }
+          if ! python app/scripts/check_x25519_ct.py --elf "${pair_elf}" \
+                 --objdump "${objdump}" --nm "${NM}"; then
+            echo "::error::fe_cswap in the pairing image is not branch-free"
+            fail=1
+          fi
 
           # ── The compat attestation layer ─────────────────────────────────
           #

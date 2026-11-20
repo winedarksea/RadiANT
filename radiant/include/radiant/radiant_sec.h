@@ -230,8 +230,10 @@ extern const uint8_t radiant_sec_x25519_basepoint[RADIANT_SEC_X25519_BYTES];
  * out = X25519(scalar, point). All three are 32 bytes.
  *
  * `scalar` is clamped on a copy per RFC 7748 section 5, so the caller's key is
- * not rewritten. Constant time in the scalar; no claim is made about power or
- * electromagnetic analysis.
+ * not rewritten. Constant time in the scalar, as checked on the compiled
+ * conditional swap by scripts/check_x25519_ct.py (C alone did not hold it,
+ * review 2026-11-20 item 1); no claim is made about power or electromagnetic
+ * analysis.
  *
  * NOT RE-ENTRANT, and lock-checked like every thread-context entry point here
  * (RADIANT_SEC_ASSERT_LOCKED): the ladder's seven field elements live in one
