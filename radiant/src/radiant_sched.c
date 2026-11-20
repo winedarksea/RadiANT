@@ -126,6 +126,10 @@ static struct {
 	/* The table changed, so a pass is due. Lets a non-terminal receive event
 	 * cost nothing unless a callback posted something. */
 	bool dirty;
+	/* An arm call was refused ETIME in this pass: the backend's clock has
+	 * moved past the pass's now, so pass() reads it again before the retry
+	 * plans. Set by arm_failed(), cleared by pass(). */
+	bool renow;
 	/* A request was posted since the last arm, so an armed window not yet open
 	 * is worth rebuilding. Cleared on every arm: one attempt per request. */
 	bool replan;
@@ -1293,8 +1297,12 @@ static enum step arm_failed(uint8_t ch, int rc)
 	case RADIANT_RADIO_ETIME:
 		/* The pass subtracts min_arm_lead_us, but the nRF backend can still
 		 * return this when its start compare was written too late. Report
-		 * missed. */
+		 * missed. The refusal means the backend's clock is past the pass's
+		 * now, so the retry must not plan from it: planning from the stale
+		 * now hands the backend arms already inside its lead, and the
+		 * refusals cascade (archive/benchmarks/2026-11-16-b4-pair/). */
 		s.stats.arm_rejected++;
+		s.renow = true;
 		slot_clear(ch);
 		notify_done(ch, RADIANT_SCHED_DONE_MISSED);
 		return STEP_RETRY;
@@ -2369,13 +2377,19 @@ static enum step pass_step(radiant_time_t now)
 
 /*
  * One scheduling decision, from whichever entry point asked. radiant_radio_now()
- * is read once, so the pass reasons about one instant.
+ * is read once, so the pass reasons about one instant, with one exception: an
+ * ETIME refusal says the backend's clock has passed that instant, so the step
+ * after it and book_ahead() plan from a fresh read (s.renow). pb.now, which
+ * page 8's span and page 9's stamp measure from, stays the first read.
  */
 static void pass(void)
 {
 	radiant_time_t now;
 	uint32_t   guard;
 	unsigned int key;
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+	bool       refused = false;
+#endif
 
 	/* Interrupts stay off for the whole pass: the in_pass check-and-set and the
 	 * table reads must not interleave with an ISR. Nested entry is free. */
@@ -2385,6 +2399,7 @@ static void pass(void)
 		return;
 	}
 	s.in_pass = true;
+	s.renow = false;
 	now = radiant_radio_now();
 #if defined(CONFIG_RADIANT_DIAG_COUNTERS)
 	memset(&pb, 0, sizeof(pb));
@@ -2394,8 +2409,10 @@ static void pass(void)
 	bk_prune(now);
 #endif
 
-	/* Bounded: each retry consumes or arms a request. The margin over the
-	 * channel count covers one window closing late enough to expire them all. */
+	/* Bounded: each retry consumes or arms a request (an ETIME retry too: the
+	 * refused request was consumed, and the fresh now only moves the next
+	 * step's earliest later). The margin over the channel count covers one
+	 * window closing late enough to expire them all. */
 	for (guard = 0u; guard < (2u * RADIANT_SCHED_MAX_CHANNELS) + 4u; guard++) {
 		enum step st;
 
@@ -2406,11 +2423,25 @@ static void pass(void)
 			st = pass_step(now);
 			PB_ADD(steps, t_step);
 		}
+		if (s.renow) {
+			/* Refused ETIME: the backend's clock is past `now`. The retry
+			 * plans from where it is, or it is handed arms already inside
+			 * the lead and is refused again. */
+			s.renow = false;
+#if defined(CONFIG_RADIANT_SCHED_BOOKING)
+			refused = true;
+#endif
+			now = radiant_radio_now();
+		}
 		if (st != STEP_RETRY && !s.dirty) {
 			break;
 		}
 	}
 #if defined(CONFIG_RADIANT_SCHED_BOOKING)
+	if (refused) {
+		/* The steps after the refusal took time too. */
+		now = radiant_radio_now();
+	}
 	{
 		PB_T0(t_book);
 
@@ -2434,11 +2465,12 @@ static void pass(void)
 		RADIANT_DIAG_MAX(pb_book_max_cyc, pb.book);
 	}
 	{
-		/* 0xF7 page 8: the pass's interrupts-off span, measured from the
-		 * one `now` it planned with. A break leaves guard at the last
-		 * iteration's index; running out leaves it at the bound. */
+		/* 0xF7 page 8: the pass's interrupts-off span, measured from its
+		 * first `now` (pb.now: an ETIME retry's fresh read is not a new
+		 * start). A break leaves guard at the last iteration's index;
+		 * running out leaves it at the bound. */
 		const uint32_t limit = (2u * RADIANT_SCHED_MAX_CHANNELS) + 4u;
-		const uint32_t us = (uint32_t)(radiant_radio_now() - now);
+		const uint32_t us = (uint32_t)(radiant_radio_now() - pb.now);
 
 		RADIANT_DIAG_MAX(pass_max_us, us);
 		RADIANT_DIAG_MAX(pass_steps_max,
