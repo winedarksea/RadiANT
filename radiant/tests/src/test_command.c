@@ -421,17 +421,19 @@ ZTEST(command, test_the_accept_window_is_one_to_sixty_four_and_wraps)
 	uint8_t i;
 
 	/* delta 64 in, delta 65 out, delta 255 (one backwards) out, and a
-	 * delta that crosses the wrap treated like any other. */
+	 * delta that crosses the wrap treated like any other. `second` is the
+	 * sender's extended sequence: the same as the wire byte except across
+	 * the wrap, where seq 5 after 250 is ext 261 and is tagged as such. */
 	static const struct {
-		uint8_t first;
-		uint8_t second;
-		bool    accept;
+		uint8_t  first;
+		uint16_t second;
+		bool     accept;
 	} cases[] = {
 		{ 10u, 74u, true },  /* delta 64 - the edge, inside */
 		{ 10u, 75u, false }, /* delta 65 - the edge, outside */
 		{ 10u, 11u, true },  /* delta 1 */
 		{ 10u, 9u, false },  /* delta 255: backwards */
-		{ 250u, 5u, true },  /* delta 11, across the wrap */
+		{ 250u, 261u, true },  /* seq 5, delta 11, across the wrap */
 		{ 250u, 200u, false }, /* delta 206 */
 	};
 
@@ -448,9 +450,9 @@ ZTEST(command, test_the_accept_window_is_one_to_sixty_four_and_wraps)
 						    ack, sizeof(ack)) > 0);
 		zassert_equal(1u, g_exec_calls);
 
-		(void)build_command(&n, cases[i].second, PROFILE_TLM_CMD_NOP,
-				    PROFILE_TLM_TARGET_NODE, 0u, body,
-				    sizeof(body));
+		(void)build_command_ext(&n, cases[i].second, PROFILE_TLM_CMD_NOP,
+					PROFILE_TLM_TARGET_NODE, 0u, body,
+					sizeof(body));
 		rc = profile_cmd_on_command(&n, body, sizeof(body), 2000u, ack,
 					    sizeof(ack));
 		zassert_true(rc > 0);
