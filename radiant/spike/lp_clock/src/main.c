@@ -1267,7 +1267,16 @@ static void touch_fn(struct k_timer *t)
 }
 static K_TIMER_DEFINE(touch_timer, touch_fn, NULL);
 
-static void usb_up(void)
+/* How long the end-of-run console waits for a host before rebooting without
+ * one (an early abort or an S3-only run with nobody on the port). */
+#ifndef SPIKE_END_DTR_WAIT_S
+#define SPIKE_END_DTR_WAIT_S 30
+#endif
+
+/* dtr_wait_ms 0 waits for a host for ever (the mid-run console, which a run
+ * needs). Otherwise it gives up after that long and leaves the console off:
+ * out() keeps buffering and the caller goes on to reboot. */
+static void usb_up(uint32_t dtr_wait_ms)
 {
 	struct usbd_context *ctx = NULL;
 
@@ -1287,10 +1296,15 @@ static void usb_up(void)
 		(void)uart_configure(con, &cfg);
 	}
 	uint32_t dtr = 0;
+	uint32_t waited = 0;
 
 	while (!dtr) {
 		(void)uart_line_ctrl_get(con, UART_LINE_CTRL_DTR, &dtr);
+		if (!dtr && dtr_wait_ms != 0u && waited >= dtr_wait_ms) {
+			return;
+		}
 		k_msleep(50);
+		waited += 50u;
 	}
 	k_msleep(300);
 	olive = true;
@@ -1369,7 +1383,7 @@ int main(void)
 	s4();
 	s3("lp", true, NMAX);
 #if CDC_CONSOLE
-	usb_up();
+	usb_up(0u);
 #endif
 	s3("held", false, NMAX);
 	s5("sleep", false, 300);
@@ -1381,8 +1395,10 @@ done:
 	if (!olive) {
 		/* An abort before usb_up(), or a build that never calls it:
 		 * bring the console up so the buffered text (and the reason)
-		 * is printed before the board leaves for the bootloader. */
-		usb_up();
+		 * is printed before the board leaves for the bootloader. With
+		 * no host on the port it gives up, so the countdown below still
+		 * runs and the board still reaches the bootloader. */
+		usb_up(SPIKE_END_DTR_WAIT_S * 1000u);
 	}
 	/* Return to the UF2 bootloader by itself, so the next flash needs no
 	 * double-tap (the 1200-baud touch also works, but needs a host to do
