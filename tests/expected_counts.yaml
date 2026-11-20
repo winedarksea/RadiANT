@@ -155,7 +155,10 @@ min_scenarios: 24
 # 6304 (+19) on drift/tih (Bluefin twister, 2026-11-19, 7104 executed):
 # radiant.backend_cc26xx's 7 smoke cases and
 # radiant.backend_cc26xx.coex's 12 (the same 7 plus 5 arb hook cases).
-min_testcases: 6304
+# 6367 (+63) on drift/integ (Bluefin twister, 2026-11-19, 7167 executed): backend
+# drift items 1, 3, 4, 5: test_arm.c (11 cases, both cc26xx scenarios) and
+# test_terminal.c (20 plain, 21 coex).
+min_testcases: 6367
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -232,8 +235,9 @@ min_cases.radiant.backend.lp_mpsl: 18
 # 114 with the grant generation's 10.
 min_cases.radiant.gate.lp: 114
 # radiant.backend_cc26xx: the TI backend (radiant_radio_cc26xx.c) against a fake
-# RF driver and hal_ti's driverlib headers; 7 smoke cases.
-min_cases.radiant.backend_cc26xx: 7
+# RF driver and hal_ti's driverlib headers; 7 smoke + 11 arm-path + 20 terminal/abort cases.
+min_cases.radiant.backend_cc26xx: 38
 # radiant.backend_cc26xx.coex: the same under CONFIG_RADIANT_BACKEND_CC26XX_COEX,
-# plus 5 cases on radiant_radio_cc26xx_arb.c's submit/execute hooks.
-min_cases.radiant.backend_cc26xx.coex: 12
+# plus 5 cases on radiant_radio_cc26xx_arb.c's submit/execute hooks and the
+# diag-counter status_err case (44).
+min_cases.radiant.backend_cc26xx.coex: 44
