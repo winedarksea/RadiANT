@@ -1653,6 +1653,12 @@ static bool callback_is_live(RF_CmdHandle ch, bool terminal)
 	return live;
 }
 
+/* Normal command ends: DONE_* (0x04xx) and PROP_DONE_* (0x34xx). */
+static bool status_normal_end(uint16_t s)
+{
+	return (s & 0xFF00u) == 0x0400u || (s & 0xFF00u) == 0x3400u;
+}
+
 /* Command errors: generic ERROR_* (0x08xx) and PROP_ERROR_* (0x38xx). */
 static bool status_error(uint16_t s)
 {
@@ -1719,7 +1725,9 @@ static void rf_callback(RF_Handle h, RF_CmdHandle ch, RF_EventMask events)
 	/*
 	 * The op's own status word: every way this backend can fail to hear or
 	 * send a frame looks alike to the driver, and only this field tells them
-	 * apart. Counted once per command end.
+	 * apart. Counted once per command end. IDLE/PENDING means the op never
+	 * ran (a chained CMD_FS ahead of it failed); arm_common() resets it, as
+	 * neither the driver nor the RF core touches an op that never started.
 	 */
 	cmd_status = (kind == OP_RX) ? rx_cmd.status : tx_cmd.status;
 	if (status_error(cmd_status)) {
@@ -1739,8 +1747,8 @@ static void rf_callback(RF_Handle h, RF_CmdHandle ch, RF_EventMask events)
 	 * both flags when the execute hook aborts a command. DENIED only for an
 	 * operation that never had the air (the core credits it as no listening);
 	 * one cut short mid-window is ABORTED, like the MPSL gate's lost grant.
-	 * LastCmdDone (never beside an abort bit) is TIMEOUT for a receive and OK
-	 * for a transmit.
+	 * LastCmdDone (never beside an abort bit) ends the op normally only if its
+	 * own status says so; an error, or an op that never ran, is FAILED.
 	 */
 	if ((events & RF_EventCmdPreempted) != 0) {
 		status = op_had_air(kind, events) ? RADIANT_RADIO_STATUS_ABORTED
@@ -1748,9 +1756,12 @@ static void rf_callback(RF_Handle h, RF_CmdHandle ch, RF_EventMask events)
 	} else if ((events & RF_EventLastCmdDone) == 0) {
 		status = RADIANT_RADIO_STATUS_ABORTED;
 	} else if (kind == OP_RX) {
-		status = RADIANT_RADIO_STATUS_TIMEOUT;
+		status = status_normal_end(cmd_status) ? RADIANT_RADIO_STATUS_TIMEOUT
+						       : RADIANT_RADIO_STATUS_FAILED;
 	} else {
-		status = RADIANT_RADIO_STATUS_OK;
+		status = (cmd_status == PROP_DONE_OK || cmd_status == DONE_OK)
+				 ? RADIANT_RADIO_STATUS_OK
+				 : RADIANT_RADIO_STATUS_FAILED;
 	}
 
 	end_live_op(status);
@@ -1894,12 +1905,17 @@ static int arm_common(const struct radiant_pkt_format *fmt, radiant_time_t at)
 	}
 	{
 		/* Read against the RF SWI's terminal claim (claim_locked()). Under the
-		 * same lock, the per-op state a terminal reads: no frame heard yet. */
+		 * same lock, the per-op state a terminal reads: no frame heard yet,
+		 * and the op status words IDLE, since neither the driver nor the RF
+		 * core writes an op that never starts (rf_callback() reads that as
+		 * FAILED rather than the last operation's end). */
 		unsigned int key = irq_lock();
 		const bool busy = (st.kind != OP_NONE);
 
 		if (!busy) {
 			st.op_heard = false;
+			rx_cmd.status = IDLE;
+			tx_cmd.status = IDLE;
 		}
 		irq_unlock(key);
 		if (busy) {
