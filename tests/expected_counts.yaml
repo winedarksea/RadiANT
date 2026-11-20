@@ -60,7 +60,10 @@
 # CONFIG_RADIANT_DIAG_CRC_BITS, Gate G1 H3's receiver counter).
 # 2026-11-19: 24, radiant.backend_cc26xx and radiant.backend_cc26xx.coex (the
 # TI backend against a fake RF driver; the coex build adds its scheduler hooks).
-min_scenarios: 24
+# 2026-11-20: 25, dongle_thread.matter_storage (the Matter bridge's stored-record
+# decoder, security review 2026-11-20 item 2), reached through the ztest job's
+# `-T app/apps/dongle_thread/tests`.
+min_scenarios: 25
 
 # Total ztest cases twister executes, summed over every scenario. It equals the
 # sum of the per-scenario floors below, so the backstop and the floors cannot
@@ -174,7 +177,9 @@ min_scenarios: 24
 # 6456 (+15), the review's symmetric split (window 1..127): +3 per unit
 # scenario (a sender 100 ahead, 128+ ahead fails the tag and the node recovers,
 # 100 behind gets an authenticated 0x02).
-min_testcases: 6456
+# 2026-11-20: 6482 (+26), the dongle_thread.matter_storage scenario (security
+# review 2026-11-20 item 2, fix/matter-storage-bounds).
+min_testcases: 6482
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -274,3 +279,7 @@ min_cases.radiant.backend_cc26xx: 50
 # diag-counter status_err case (44).
 # 2026-11-20: 53 (third review), 56 with +3 HAL drift item 5 cases (as the plain scenario).
 min_cases.radiant.backend_cc26xx.coex: 56
+# dongle_thread.matter_storage (security review 2026-11-20 item 2): the Matter
+# bridge's stored-record decoder - destination and record bounds on each
+# length-prefixed string, the SIZE_MAX wrap, upstream's user-data bounds.
+min_cases.dongle_thread.matter_storage: 26

@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# The Matter bridge's stored-record decoder: destination and record bounds on
+# every length-prefixed string (security review 2026-11-20 item 2). Pure
+# arithmetic over byte buffers - native_sim is the right place.
+#
+# On Windows there is no native_sim (no host C compiler):
+#
+#   .\scripts\run_ztest_hw.ps1 -App apps\dongle_thread\tests\matter_storage
+tests:
+  dongle_thread.matter_storage:
+    tags:
+      - radiant
+      - matter
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim

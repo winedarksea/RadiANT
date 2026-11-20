@@ -183,6 +183,7 @@ pip install -r zephyr/scripts/requirements.txt
 export ZEPHYR_TOOLCHAIN_VARIANT=host ZEPHYR_BASE="$PWD/zephyr"
 zephyr/scripts/twister -T app/radiant/tests -T app/apps/hrm_ble/tests \
   -T app/apps/treadmill/tests -T app/apps/trainer/tests \
+  -T app/apps/dongle_thread/tests \
   -p native_sim --inline-logs -v
 python app/scripts/check_test_counts.py twister-out/twister.json
 ```

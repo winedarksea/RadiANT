@@ -213,11 +213,15 @@ jobs:
           # raise them in the same commit that adds coverage, or the floor
           # stops describing the tree. min_scenarios is what notices if one of
           # these arguments is ever dropped.
+          # app/apps/dongle_thread/tests is the Matter bridge's stored-record
+          # decoder (security review 2026-11-20 item 2) - the one part of the
+          # Matter arm that builds without the CHIP stack.
           "${zephyr_base}/scripts/twister" \
             -T app/radiant/tests \
             -T app/apps/hrm_ble/tests \
             -T app/apps/treadmill/tests \
             -T app/apps/trainer/tests \
+            -T app/apps/dongle_thread/tests \
             -p native_sim \
             --inline-logs \
             -v
