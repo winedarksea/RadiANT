@@ -638,6 +638,7 @@ static struct {
 	 * FS onto fs_inflight_rf whose outcome has not been read yet. */
 	uint8_t                   tuned_rf;
 	bool                      fs_inflight;
+	bool                      fs_inflight_tx; /* the chain's op: tx_cmd */
 	uint8_t                   fs_inflight_rf;
 } st;
 
@@ -1794,8 +1795,14 @@ static void rf_callback(RF_Handle h, RF_CmdHandle ch, RF_EventMask events)
 	} else if ((events & RF_EventLastCmdDone) == 0) {
 		status = RADIANT_RADIO_STATUS_ABORTED;
 	} else if (kind == OP_RX) {
-		status = status_normal_end(cmd_status) ? RADIANT_RADIO_STATUS_TIMEOUT
-						       : RADIANT_RADIO_STATUS_FAILED;
+		/* Out of receive buffers (the drain fell behind a merged window)
+		 * is counted as an error above but ends a window that listened:
+		 * TIMEOUT, as it was before FAILED existed here. */
+		status = (status_normal_end(cmd_status) ||
+			  cmd_status == PROP_ERROR_RXBUF ||
+			  cmd_status == PROP_ERROR_RXFULL)
+				 ? RADIANT_RADIO_STATUS_TIMEOUT
+				 : RADIANT_RADIO_STATUS_FAILED;
 	} else {
 		status = (cmd_status == PROP_DONE_OK || cmd_status == DONE_OK)
 				 ? RADIANT_RADIO_STATUS_OK
@@ -1983,9 +1990,19 @@ static uint32_t op_id_next(void)
 static uint8_t tuned_rf_resolve(void)
 {
 	if (st.fs_inflight && st.kind == OP_NONE) {
+		/* fs_cmd is shared by every chain: an earlier chain aborted while
+		 * its FS ran can finish that FS later and write DONE_OK over this
+		 * chain's never-run FS. Trust the status only if this chain's own
+		 * operation ran: behind COND_STOP_ON_FALSE it runs only after this
+		 * chain's FS succeeded. Called before arm_common() resets the op
+		 * statuses to IDLE. Otherwise unknown, and the next arm retunes. */
+		const uint16_t op_status = st.fs_inflight_tx ? tx_cmd.status
+							     : rx_cmd.status;
+		const bool op_ran = op_status == ACTIVE || op_status >= 0x0400u;
+
 		st.fs_inflight = false;
-		st.tuned_rf = (fs_cmd.status == DONE_OK) ? st.fs_inflight_rf
-							  : TUNED_NONE;
+		st.tuned_rf = (fs_cmd.status == DONE_OK && op_ran) ? st.fs_inflight_rf
+								    : TUNED_NONE;
 	}
 	return st.fs_inflight ? TUNED_NONE : st.tuned_rf;
 }
@@ -2263,6 +2280,7 @@ static int rx_arm(const struct radiant_rx_req *req, uint32_t *op)
 	/* Before the post: its callback may arm the next operation. */
 	st.fs_inflight = retune;
 	st.fs_inflight_rf = req->rf_index;
+	st.fs_inflight_tx = false;
 
 	st.cmd_handle = post_op(
 		head, head->startTime,
@@ -2431,6 +2449,7 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 	/* Before the post: its callback may arm the next operation. */
 	st.fs_inflight = retune;
 	st.fs_inflight_rf = req->rf_index;
+	st.fs_inflight_tx = true;
 
 	st.cmd_handle = post_op(
 		head, head->startTime,

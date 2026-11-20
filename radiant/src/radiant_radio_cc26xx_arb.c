@@ -69,10 +69,16 @@ static bool is_ours(const RF_Cmd *cmd)
  *
  * Safe to schedule past: the backend holds at most one live op
  * (arm_common() refuses EBUSY otherwise), so the only own command a new arm
- * can meet here is one already retired; the new op's absolute start trigger
- * has pastTrig = 1 (radiant_radio_rx()/_tx()), so if the abort is still
- * completing at its start time it opens microseconds late instead of
- * failing. A live own command (no termination stored) keeps the full test.
+ * can meet here is one already retired. A receive's absolute start trigger
+ * has pastTrig = 1 (rx_arm()), so if the abort is still completing at its
+ * start time it opens microseconds late instead of failing. A transmit's has
+ * pastTrig = 0 since 2026-11-19 (the HAL forbids a late transmit): one that
+ * reaches the RF core after its start ends ERROR_PAST_START and is reported
+ * FAILED. The retired command blocks dispatch until the CPE0 done interrupt,
+ * which cannot run before the RF SWI returns, so a transmit armed at the
+ * in-grant lead from a callback that cancelled its own receive can hit this
+ * (review 2026-11-19, finding 1; bench check: FAILED counts during tracking).
+ * A live own command (no termination stored) keeps the full test.
  */
 #define OWN_RETIRED_EVENTS (RF_EventCmdAborted | RF_EventCmdStopped | \
 			    RF_EventCmdCancelled)
