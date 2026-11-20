@@ -364,6 +364,21 @@ MPSL (needs a soak beside BLE or Thread, which that clearance excluded):
     `CONFIG_RADIANT_ED_SCAN`, default n) or `program_rx()` writing
     SHORTS/connections on a radio no longer ours. Improbable (end margin);
     found by review, not observed.
+  - [ ] EXTEND_FAILED (or the ext-skip END) can abort a successor staged
+    behind a held grant (review 2026-11-19, source inspection, not observed).
+    The old op ends early in a growing elastic grant with the release owed
+    (`grant_release_after_core()`); the next op, armed from the dispatch,
+    misses the held air and stages (GATE_PENDING); `arm_settle_staged()`
+    clears `arm_marked` before `d2_settle_now()` pays the release. A TIMER0
+    compare in that gap (or one pended under settle's ZLI mask) asks EXTEND;
+    on refusal `radiant_radio_abort()` (radiant_radio_nrf_gate_mpsl.c ~1736)
+    passes the `arm_marked` guard (radiant_radio_nrf.c ~4445) and aborts the
+    staged successor: ABORTED for air it never had, its request forgotten to
+    a booking, one slot lost; nothing wedges. Window ~1-3 us with D2 (default
+    y). No test covers it: test_arm_handback.c sweeps PRE_ABORT_END only with
+    the grant held and GRANTED. Red test: backend harness, grant held but arm
+    answered PENDING, abort injected after `arm_settle_staged()`; assert no
+    ABORTED and the successor still staged.
   - [ ] The symmetric case: a TIMER0 COMPARE0 that fires while a RADIO signal
     returns END can leave TIMER10 pending after END. Not cleared on purpose
     (MPSL uses other CCs on that timer). No TIMER-context assert has been seen.
