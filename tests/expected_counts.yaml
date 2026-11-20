@@ -160,7 +160,12 @@ min_scenarios: 24
 # test_terminal.c (20 plain, 21 coex).
 # 6371 (+4): review 2026-11-19 findings 2 and 3, one case each in both scenarios.
 # 2026-11-19: 6377, +3 per cc26xx scenario (second review: refused retune, mid-post abort/terminal).
-min_testcases: 6377
+# 2026-11-20: 6403 (+26), HAL drift item 5 (t_sync of a transmit that did not go
+# out, nested abort terminal) on fix/hal-item5-tsync-abort (Bluefin twister, 7203
+# executed): radiant.backend +5 (test_terminal_contract.c), +3 per cc26xx
+# scenario, +3 per unit scenario (fake_radio, transfer, sched; the rewritten
+# fake_radio abort case replaces one).
+min_testcases: 6403
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -177,9 +182,11 @@ min_testcases: 6377
 # goes down, which is the event it exists to catch.
 # +5 in each unit scenario with review 2026-11-17 item 4's radiant_sec cases,
 # +4 with item 7's node_ident provisioning-retry cases.
-min_cases.radiant.unit: 1071
-min_cases.radiant.unit.sec_modes: 1071
-min_cases.radiant.unit.no_pairing: 1011
+# 2026-11-20: +3 per unit scenario (HAL drift item 5: fake_radio non-OK transmit
+# t_sync, transfer failed-reply staleness, sched nested abort terminal).
+min_cases.radiant.unit: 1074
+min_cases.radiant.unit.sec_modes: 1074
+min_cases.radiant.unit.no_pairing: 1014
 min_cases.radiant.api: 86
 min_cases.radiant.api.sec: 90
 # +1 with the identical-0xF1 retry case (review 2026-11-17 item 4).
@@ -201,15 +208,19 @@ min_cases.radiant.gate: 86
 # radiant.backend (ADR 0021): the backend completion path against register models.
 # 10 with the option-off preempted-arm cases (observed 45), 11 with the
 # staged-path sweep, 12 with the stale-denial-then-START case.
-min_cases.radiant.backend: 12
+# 2026-11-20: 17 with HAL drift item 5's 5 (test_terminal_contract.c: t_sync of
+# FAILED/DENIED/ABORTED transmits, abort from a frame and a transmit callback).
+min_cases.radiant.backend: 17
 min_cases.hrm_ble.sim_sched: 4
 min_cases.treadmill.pages: 20
 min_cases.treadmill.hr_rx: 3
-min_cases.radiant.unit.ack_faults: 1078
+# 2026-11-20: +3 (HAL drift item 5, as radiant.unit).
+min_cases.radiant.unit.ack_faults: 1081
 # radiant.unit.diag: the unit suites with CONFIG_RADIANT_DIAG_COUNTERS.
 # 1127 (2026-11-16, Bluefin twister on fix/diag-page9-done-cb): the observed
 # count, including the four page-9/page-12 scheduler cases.
-min_cases.radiant.unit.diag: 1149
+# 2026-11-20: +3 (HAL drift item 5, as radiant.unit).
+min_cases.radiant.unit.diag: 1152
 min_cases.trainer.model: 14
 # radiant.lp_clock (power plan pass B2): the low-power timebase arithmetic,
 # 31 unit cases and seven 100 000-cycle drift simulations (three of them
@@ -238,8 +249,10 @@ min_cases.radiant.backend.lp_mpsl: 18
 min_cases.radiant.gate.lp: 114
 # radiant.backend_cc26xx: the TI backend (radiant_radio_cc26xx.c) against a fake
 # RF driver and hal_ti's driverlib headers; 7 smoke + 11 arm-path + 20 terminal/abort cases.
-min_cases.radiant.backend_cc26xx: 43
+# 2026-11-20: 46, +3 HAL drift item 5 cases (requested t_sync on FAILED/DENIED/ABORTED).
+min_cases.radiant.backend_cc26xx: 46
 # radiant.backend_cc26xx.coex: the same under CONFIG_RADIANT_BACKEND_CC26XX_COEX,
 # plus 5 cases on radiant_radio_cc26xx_arb.c's submit/execute hooks and the
 # diag-counter status_err case (44).
-min_cases.radiant.backend_cc26xx.coex: 49
+# 2026-11-20: 52, +3 HAL drift item 5 cases (as the plain scenario).
+min_cases.radiant.backend_cc26xx.coex: 52
