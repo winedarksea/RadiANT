@@ -58,7 +58,9 @@
 # with the option's two hooks compiled in).
 # 2026-11-19: 22, radiant.api.crc_bits (CRC repair + 0xF7 counters +
 # CONFIG_RADIANT_DIAG_CRC_BITS, Gate G1 H3's receiver counter).
-min_scenarios: 22
+# 2026-11-19: 24, radiant.backend_cc26xx and radiant.backend_cc26xx.coex (the
+# TI backend against a fake RF driver; the coex build adds its scheduler hooks).
+min_scenarios: 24
 
 # Total ztest cases twister executes, summed over every scenario. It equals the
 # sum of the per-scenario floors below, so the backstop and the floors cannot
@@ -150,7 +152,10 @@ min_scenarios: 22
 # 6285 on merged master 47cab88 (Bluefin twister, 2026-11-19, 7085 executed):
 # item 5 +10, item 4 +26 and item 7 +20 (four node_ident provisioning-retry
 # cases in each of the five unit scenarios) on the 7029 / 6229 base.
-min_testcases: 6285
+# 6304 (+19) on drift/tih (Bluefin twister, 2026-11-19, 7104 executed):
+# radiant.backend_cc26xx's 7 smoke cases and
+# radiant.backend_cc26xx.coex's 12 (the same 7 plus 5 arb hook cases).
+min_testcases: 6304
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -226,3 +231,9 @@ min_cases.radiant.backend.lp_mpsl: 18
 # low-power hooks compiled in, plus their 10 cases.
 # 114 with the grant generation's 10.
 min_cases.radiant.gate.lp: 114
+# radiant.backend_cc26xx: the TI backend (radiant_radio_cc26xx.c) against a fake
+# RF driver and hal_ti's driverlib headers; 7 smoke cases.
+min_cases.radiant.backend_cc26xx: 7
+# radiant.backend_cc26xx.coex: the same under CONFIG_RADIANT_BACKEND_CC26XX_COEX,
+# plus 5 cases on radiant_radio_cc26xx_arb.c's submit/execute hooks.
+min_cases.radiant.backend_cc26xx.coex: 12
