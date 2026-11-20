@@ -447,12 +447,30 @@ void fake_rf_advance_us(uint32_t us)
 	fake_rf.rat += us * 4u;
 }
 
+/*
+ * The RF core runs a chain in order, so by the time its last op starts (or
+ * the chain ends with LastCmdDone) every op ahead of it - a chained CMD_FS -
+ * has finished. Mark those DONE_OK unless a test already gave them a status.
+ */
+static void chain_head_done(struct fake_rf_cmd *c)
+{
+	for (uint8_t i = 0u; i + 1u < c->n_chain; i++) {
+		RF_Op *op = c->chain[i].op;
+
+		if (op->status == IDLE || op->status == PENDING ||
+		    op->status == ACTIVE) {
+			op->status = DONE_OK;
+		}
+	}
+}
+
 void fake_rf_start(RF_CmdHandle ch)
 {
 	struct fake_rf_cmd *c = fake_rf_cmd(ch);
 
 	if (c != NULL) {
 		c->started = true;
+		chain_head_done(c);
 		if (c->n_chain > 0u) {
 			c->chain[c->n_chain - 1u].op->status = ACTIVE;
 		}
@@ -478,6 +496,9 @@ static void deliver(struct fake_rf_cmd *c, RF_CmdHandle ch, RF_EventMask events)
 		if ((events & TERM_EVENTS) != 0u) {
 			c->ended = true;
 			c->started = true;
+		}
+		if ((events & RF_EventLastCmdDone) != 0u) {
+			chain_head_done(c);
 		}
 		cb = c->cb;
 		h = c->h;

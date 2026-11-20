@@ -49,6 +49,9 @@
  *       which the backend reads in its callback, e.g. PROP_DONE_RXTIMEOUT,
  *       PROP_ERROR_PAR, ERROR_PAST_START).
  *   fake_rf_start(ch)        marks ch as started (running on the core).
+ *                            Ops chained ahead of the last one (a CMD_FS)
+ *                            still IDLE/PENDING/ACTIVE become DONE_OK, as
+ *                            they do on any LastCmdDone fire.
  *   fake_rf_fire(ch, events)
  *       calls ch's callback NOW, synchronously, with exactly `events` (no
  *       subscription masking), as the RF SWI would. Any termination bit

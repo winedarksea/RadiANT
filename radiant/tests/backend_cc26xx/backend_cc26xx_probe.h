@@ -71,6 +71,8 @@ int16_t  cc_retired_handle(void);
 uint8_t  cc_hw_addr_len(void);
 uint8_t  cc_sw_addr_len(void);
 bool     cc_delivered_terminal(void);
+/* Seed the backend's next operation id (st.next_op_id), to test its wrap. */
+void     cc_set_next_op_id(uint32_t v);
 uint32_t cc_sw_addr_mismatch(void);
 
 /* The tracking format and a fixed test address (A6 C5 34 12 78). */
