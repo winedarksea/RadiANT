@@ -14,9 +14,17 @@
  * in behind radiant_sec_x25519() later without anything above it changing.
  *
  * Constant time in the secret scalar: every bit runs the same field-op
- * sequence, conditional swap is arithmetic not branching, multiplication is
- * schoolbook with no data-dependent branches/lookups. NOT claimed: resistance
- * to power/EM analysis - a node needing that should use a PKA backend.
+ * sequence and multiplication is schoolbook with no data-dependent
+ * branches/lookups. The conditional swap is the one place C semantics do NOT
+ * hold the line: masked-XOR source is no promise, and GCC 14.3 at -Os turned
+ * the old version back into a branch on the swap flag (security review
+ * 2026-11-20, item 1). fe_cswap() now hides its mask behind a compiler value
+ * barrier, and scripts/check_x25519_ct.py disassembles it - over a compiler,
+ * -O level and core matrix locally, and on the release pairing image in CI -
+ * and fails on any branch other than the loop edge. Constant time rests on
+ * that barrier plus the checked disassembly, not on the C. NOT claimed:
+ * resistance to power/EM analysis - a node needing that should use a PKA
+ * backend.
  *
  * Representation: a field element is 16 signed 64-bit limbs of 16 bits each,
  * little-endian, value = sum(limb[i] * 2^(16i)). Limbs are signed and run
@@ -88,15 +96,45 @@ static void fe_wipe(int64_t *p, int n)
 
 /*
  * Swap a and b when `swap` is 1, in the same instructions either way. Mask
- * is the negated flag (all-ones or all-zeros); nothing branches on `swap`,
+ * is the negated flag (all-ones or all-zeros); nothing may branch on `swap`,
  * because the ladder calls this once per scalar bit and a branch would leak
  * the scalar through timing.
+ *
+ * The C alone does not guarantee that. Every caller passes 0 or 1, GCC's
+ * interprocedural value ranges carry that into this body, and once the mask
+ * is provably 0 or -1 the masked XOR is just a select: GCC 14.3 at -Os
+ * emitted `cmp ip,#0 / beq` inside the limb loop (security review
+ * 2026-11-20, item 1). The empty asm below takes the mask in a register and
+ * hands back a value the compiler must treat as unknown, so there is no
+ * range left to turn into a select. The volatile round trip is the fallback
+ * for a compiler without GNU asm; a volatile read is equally opaque, just one
+ * load and store dearer.
+ *
+ * noinline keeps fe_cswap a symbol of its own in the ELF, which is what
+ * scripts/check_x25519_ct.py disassembles (`objdump --disassemble=fe_cswap`)
+ * to prove no branch came back.
  */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((noinline))
+#endif
 static void fe_cswap(fe a, fe b, int64_t swap)
 {
-	int64_t mask = -swap;
-	int64_t t;
-	int     i;
+	uint32_t m = 0u - (uint32_t)swap;
+	int64_t  mask;
+	int64_t  t;
+	int      i;
+
+#if defined(__GNUC__) || defined(__clang__)
+	__asm__("" : "+r"(m));
+#else
+	{
+		volatile uint32_t vm = m;
+
+		m = vm;
+	}
+#endif
+	/* Sign-extend: 0 -> 0, 0xFFFFFFFF -> all 64 bits set. */
+	mask = (int64_t)(int32_t)m;
 
 	for (i = 0; i < FE_LIMBS; i++) {
 		t = mask & (a[i] ^ b[i]);

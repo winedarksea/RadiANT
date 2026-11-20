@@ -1686,6 +1686,29 @@ at build time, `scripts/check_stack_budget.py` re-measures the chains from the
 compiler's `.su` files in CI, and `test_sec_host_pairing_runs_on_the_bridge_stack`
 runs a whole exchange on a thread of the bridge's size.
 
+**Constant time, and what actually holds it.** The ladder runs the same field
+operations for every scalar bit, and the multiply has no data-dependent branch
+or table lookup. The one secret-dependent step is the conditional swap,
+`fe_cswap()`, called once per bit. Until the 2026-11-20 security review (item 1)
+this file claimed it was constant time because it was written as a masked XOR.
+That claim was false on the production compiler: every caller passes 0 or 1,
+GCC 14.3 (Zephyr SDK 1.0.1) carries that range into the function, and at `-Os`
+for Cortex-M4 it turned the mask back into `cmp ip,#0 / beq` inside the limb
+loop, a branch on the scalar. GCC 12.2 (SDK 0.17.0) happened not to, which is
+why no earlier check caught it. C semantics do not promise constant time, so
+they cannot hold the claim. What holds it now is two things together. First, a
+value barrier: the mask passes through an empty `asm` the compiler must treat
+as producing an unknown value, so no range is left to turn into a select.
+Second, a checked disassembly: `scripts/check_x25519_ct.py` disassembles every
+`fe_cswap` symbol (it is `noinline` so the symbol exists) and fails on any IT
+block, `cbz`/`cbnz`, table branch, or conditional branch other than the one
+backward loop edge. It runs on the release pairing image in CI, and locally
+over GCC 14.3 and 12.2, `-Os`/`-O2`/`-O3`, Cortex-M4 and M33. A new compiler
+or flag set is constant time once that script passes on it, not before.
+Exposure while it was false was small: no released image enables
+`CONFIG_RADIANT_SEC_PAIRING_X25519`, and each scalar is used for one exchange.
+Power and EM analysis are still not claimed.
+
 **The sensor holds one key. Every authorized receiver gets a copy.** Over-air
 enrolment (section 11.7) is how a copy is handed over without a host: the X25519
 key it agrees is pairwise and used only to wrap the sensor's existing root for
