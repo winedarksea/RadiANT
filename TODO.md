@@ -108,7 +108,7 @@ usability work (samples, `antr_*` in the module, stock Zephyr support) is done.
 
 - [ ] **Rename `antr_*`, `ANTW_*` and `ant_radio.h` to RadiANT-specific names.**
   They are public API now, and the names describe the ANT serial protocol rather
-  than this project. Keep compatibility aliases for a release. Do this before the
+  than this project. Probably don't need to keep compatibility aliases for a release. Do this before the
   listing below, while few people depend on them. `ant_wire.h` is generated, so the
   prefix changes in `scripts/gen_ant_wire.py`; the sdk-ant comparison backend
   relies on the prefix not colliding with sdk-ant's own names.
@@ -480,7 +480,7 @@ In `radiant/src/antr/ant_sec_host.c`, key installation checks for an active mast
 
 Fixed, unconditionally (owner, 2026-11-17: no Kconfig or wire option). `radiant_sec_configure()` asks a weak port hook, `radiant_sec_policy_changing()`, before it writes a changed tuple, and marks the slot last built stale: its re-post is withheld, never resent or rebuilt, so no slot index is used twice. The antr `0xF1` path (`antr_sec_policy_set()`) runs configure inside the event crit section. Its hook refuses a master whose transfer engine is busy (`CHANNEL_IN_WRONG_STATE`, nothing changed: acked, burst, or answering a slave's burst). Otherwise it cancels the master's scheduled slot and drops the ack payload in that same section, then pumps. An identical `0xF1` and a slave's are untouched. 4 `radiant_sec` tests and 10 sec_host api tests; the policy-change unit test and the 7 refusal and take-back api tests fail on c273bef. Twister native_sim 6500 cases in 16 scenarios pass (security on and off, check_test_counts OK); nRF5340 DK radiant/tests 1152/1152 and api sec_host 182/182, one boot each. Security text 7452 → 7664 B (ceiling 7680, 16 B left), bss 6974 → 6975. Deviations from the plan: a hook instead of `radiant_sec_config_is()`, both antr functions `cold`, and the engine's `reply_ctrl` left alone, all for the size gate. The plan's version measured 7764. An idle engine's saved reply is reachable only through `radiant_transfer_reply_retransmit()`, which antr never calls, and every other use is inside a refused burst. Caveats: the boundary is a frame already on the air. nRF cuts it short; on TI it is unmeasured (`RF_flushCmd` is asynchronous and the frame may complete). A change costs one silent slot, or two below a 50 ms period. Independent review 2026-11-17: weak/strong hook linkage, crit atomicity, the stale flag, both deviations and the revert check confirmed (the 2 unit and 7 api tests fail with the fix neutered); `ant_wire.yaml`'s `0xF1` description now states the refusal and take-back (665c077).
 
-- [OPEN, LOW] An identical `0xF1` still resets the TX MAC window (`tx_win_open`, `tx_prev_valid`), so the window in progress goes out without a tag and the receiver reports it unverified. Item 4's idempotent configure should cover TX as well as `rx_floor`.
+- [DONE 2026-11-19 with item 4, merge ded8169] An identical `0xF1` still resets the TX MAC window (`tx_win_open`, `tx_prev_valid`), so the window in progress goes out without a tag and the receiver reports it unverified. Item 4's idempotent configure should cover TX as well as `rx_floor`.
 - [OPEN, LOW] The TI boundary is unmeasured: sniff whether a frame in flight when `0xF1` lands completes on the CC2652 (L15 promiscuous rig).
 
 ## 3. [DONE 2026-11-17, 3d554a6 on wip/sec-epoch-anchor] Preserve epoch phase when a receiver joins after boot
@@ -488,25 +488,200 @@ Fixed, unconditionally (owner, 2026-11-17: no Kconfig or wire option). `radiant_
 `radiant_sec_set_epoch()` in `radiant/src/radiant_sec.c` clamped the epoch origin to zero when the supplied epoch age exceeded local uptime, and so did the re-anchor and the master's slot latch. The receiver then resolved counters against the wrong point in the epoch, invalidating the host's freshness boundary (§7.6). Fixed: `epoch_anchor` is signed, all three clamps are gone, and `0xF3` refuses a phase of more than `INT32_MAX` periods or whose whole wraps pass the epoch headroom. A newly booted receiver verifies current windows and rejects windows outside the fixed 128-period slack around the supplied phase (9 new `radiant_sec` tests, 1 adapter test, 1 Python test, all failing on 876711c). Security text 7340 → 7452 B (ceiling 7680), bss 6974 unchanged. Caveat: an absurd phase that used to be accepted silently is now refused.
 
 - [OPEN, LOW] `rx_process()` returns silently when `advance_epoch()` fails (headroom or ceiling): nothing is counted.
-- [OPEN, LOW] `tools/radiant_crypto.py` `resolve_counter()` breaks the exact 128-period tie toward the lower rollover; the C keeps `base + low`.
+- [DONE 2026-11-19 with item 6, 5bd9674, merge c443b07] `tools/radiant_crypto.py` `resolve_counter()` breaks the exact 128-period tie toward the lower rollover; the C keeps `base + low`.
 - [OPEN, LOW] `protocol/ant_wire.yaml` says `0xF3` can be read, but `ant_sec_host.c` has no read handler.
 
-## 4. [OPEN, MEDIUM] Preserve the verified-window floor across configuration retries
+## 4. [DONE 2026-11-19, merge ded8169 (de4b895, fcdd2a4, 7408f28, 901fe3a)] Preserve the verified-window floor across configuration retries
 
 `radiant_sec_configure()` unconditionally clears `rx_floor`, even for an identical `0xF1`. A recently verified window inside the time slack can be delivered twice under strict delivery. Make identical configuration idempotent and retain the authenticated counter floor across policy changes within the same identity and epoch. Check at-most-once delivery after a retry and align the configure-reset wording in §7.6 with the fix.
 
-## 5. [OPEN, MEDIUM] Clear compat verdicts when the security identity changes
+Fixed: an identical `(switches, w, page_lo, page_hi)` returns OK and touches nothing (RX windows, `rx_floor`, TX window, stale flag, and the `radiant_sec_policy_changing()` hook does not fire, so no master flush and no `0xF8` seq spent). A real change still discards in-flight RX windows and restarts the TX window but keeps `rx_floor`; `set_epoch`/`set_key`/`try_devnum` still clear it. Side effect: the first window verified after a real `0xF1` is slew-limited instead of taken whole (§3.1 says so). Docs: §3.1, §3.2, §7.6, `radiant_sec.h`, `ant_wire.yaml` (`0xF1` idempotence, `0xF8` seq rule). 5 `radiant_sec` tests + 1 sec_host api test; with radiant_sec.c from 591174b, 4 unit tests and the api retry test fail (DK, one boot, reviewer-confirmed). The reviewer's LOW (the W-change test does not exercise the floor, since old-W replays cannot verify under a new W) is closed by the page-range-change-with-W-kept test (901fe3a), which delivers window 8 twice on the old code. Security text +8 B.
+
+## 5. [DONE 2026-11-19, merge 6277248 (42a7b27, 09c5975, 6fcb584)] Clear compat verdicts when the security identity changes
 
 `radiant_sec_compat_set_key()` disarms the epoch but leaves the previous identity's verdict and per-tier freshness state. A pinned stream can still report VERIFIED between rekey and rearm. Clear identity-bound verdict and freshness state on replacement. Check both Tier I and Tier II-only receivers immediately after rekey and after rearm. VERIFIED must require fresh evidence under the new identity.
 
-## 6. [OPEN, MEDIUM] Advance the host Tier I replay floor only after MAC verification
+Fixed: `rx_forget()` zeroes the whole receive block of `compat_ctx` (open window, absorbed/overflow, Tier I and Tier II last/any/ok/instant, `last_verdict` → CLEAR) on a real rekey (root or base devnum changed); the same-key no-op keeps it. `set_epoch`/`adopt_epoch` use the same helper. BUILD_ASSERTs pin the cleared range (follows the last TX field, `stats` last). TX state left alone: nothing transmits until `set_epoch`, which clears it. Header and `radiant-security.md` ("Compat follows both rules") updated. 2 `sec_compat_stream` tests (Tier I-only, Tier II-only; Tier II case also covers a devnum-only rekey); both fail at the right-after-rekey assert with the fix reverted (DK, one boot, reviewer-confirmed). Compat object text 4770 → 4768 B (ceiling 5120), linked delta 192 unchanged; not in the security text gate. Accepted (info): an on-air-only `set_devnum` keeps the verdict, as designed.
+
+## 6. [DONE 2026-11-19, merge c443b07 (10ddbe7, 8c329fd, 5bd9674, 036f062)] Advance the host Tier I replay floor only after MAC verification
 
 `CompatVerifier._feed_tier1()` in `tools/ant_verify.py` writes `last_counter` before it checks the tag. A rejected page can therefore cause subsequent genuine attestations to be counted as replays. Follow the firmware's authenticated-counter rule and keep any arrival diagnostics separate. Check that a bad tag leaves the authenticated floor intact and that the next genuine attestation verifies.
 
-## 7. [OPEN, MEDIUM] Make factory provisioning safe to retry with the installed key
+Fixed: `t1_floor` (the last VERIFIED counter, as `rx_t1_last`) moves only on a tag match; the replay check runs against it before the tag. `last_counter` is gone; the lost count is taken between VERIFIED pages only (review follow-up 036f062: a forged page had inflated it, e.g. forged 60000 gave lost=59994). `_feed_announce_b()` now checks at `t1_floor`, matching the firmware's anchor that moves only on a verified page. 9 tests; 6 fail on the old code, 3 more on 5bd9674. Tools suite 1227 OK.
+
+- [OPEN, LOW, host tool] The host checks an announcement at the last verified Tier I counter, but the firmware tags at the clock's interval index; an announcement whose Tier I page was lost (or sent before it) fails on the host. Was true before item 6 too.
+- [OPEN, LOW, host tool] `ant_verify.py` does not handle a 16-bit Tier I counter wrap (no modular compare, no next-epoch K_auth); after 65536×T every page reads as a replay. Was true before item 6 too.
+
+## 7. [DONE 2026-11-19, merge b79b524 (dc314af, 2636422, a9bd295)] Make factory provisioning safe to retry with the installed key
 
 `node_ident_provision()` in `radiant/src/node/node_ident.c` zeros the boot counter, pairing counter, and epoch reservation even when the supplied K_dev is unchanged. This can repeat deterministic pairing scalars and roll back freshness counters. Preserve all three records on a same-key retry and fail closed on a key-read error. Cover retries after the counters have advanced as well as interrupted first provisioning. Keep factory reset with a genuinely new key working.
+
+Fixed: provisioning reads the stored K_dev first (`kdev_load_eq()`, constant-time, wiped). Any load result other than OK/absent returns `NODE_IDENT_EIO` with nothing written. Same key: the boot, pair and epoch records are kept, an absent one is created at 0 (only safe for a never-written record; same exposure as `node_ident_boot()` reading absent as 0). Absent or different key: the old path. 4 `node_ident` tests; 3 fail on the old code (DK, one boot, reviewer-confirmed; the new-key test is a guard). +96 B text, in no release gate. Documented limits (a9bd295): an interrupted new-key provisioning retried with that key keeps the old counters, so it cannot clear an exhausted boot counter (use a different key); a corrupt K_dev record now fails closed instead of being overwritten.
+
+- [OPEN, LOW] Recovering a node whose K_dev record is corrupt now needs a partition erase or a separate delete API; provisioning refuses (by design of item 7).
+
+**Merged-tree verification 2026-11-19 (47cab88, all unpushed):** twister on Bluefin 7085/7085 in 22 scenarios, check_test_counts OK (floors raised in 2367155: global 6285, unit scenarios +4 for item 7); nRF5340 DK `radiant\tests` 1186 pass + 1 skip and api sec_host 184/184, one boot each; tools 1227 OK; `gen_ant_wire --check` in sync (LF export). Security text 7676 / 7680 (**4 B left**, the next security change must raise the ceiling; owner OK'd raising 2026-11-17), bss 6975 / 7168, compat object 4768 / 5120, compat linked delta 192 / 288. `radiant/tests/boards/nrf5340dk_nrf5340_cpuapp.conf` (47cab88) sets `CONFIG_ZTEST_ASSERT_VERBOSE=0` for the DK only: master overflowed DK flash by 5648 B at the default.
 
 ## 8. [OPEN, MEDIUM, hostless pairing API] Honor the RNG selection in ADR 0009
 
 `node_ident_pair_begin()` always calls `node_ident_pair_scalar()`, including when `caps.has_rng` is set. No production caller of this helper was found at the reviewed commit. Before wiring it into a node, use the advertised RNG for the ephemeral scalar and reserve deterministic derivation for builds without one. Exercise the entry point with and without RNG support and on a failed draw. The pairing counter must advance before public-key use, and a failed RNG draw must close the window.
+
+# Low-power operation for battery-powered nodes
+Apply only where it doesn't otherwise harm performance (or configurable, ie for a heart rate sensor use power saving, but a dongle doesn't need to save power as much). Note also that much power saving should be end application specific, we only want more generalizable items added here (or perhaps in one example like the HR example)
+
+Suggested order: baseline and sample configuration first, then nRF on MPSL
+builds, nRF standalone, CC26xx, and the API thread wake last. Leaving HFXO on
+costs a few hundred µA against an idle floor of a few µA, so the nRF clock item
+should outweigh the rest. The 50 ms API wake is probably low single µA and can't
+be measured until the clock item lands.
+
+**Status 2026-11-19 (power plan, ADR 0025; every current is an ESTIMATE, no
+meter on the bench).** Done on local master: power-diag struct + readers
+(baseline, `jlink_peek.ps1`, `tools/ant_power_est.py`), `hr_transmitter`
+low-power overlays, nRF HFXO/timebase release `RADIANT_NRF_LOW_POWER` (default
+n; nRF54L15 GRTC, nRF52840 RTC1, MPSL timeslot variant), TI C1 hooks and
+`RADIANT_CC26XX_XOSC_HF_RELEASE` (default n), and the idle-HFXO regression
+ztest (item below). Gates: G1 (L15 direct) ~811 -> ~36-41 µA, power and timing
+pass, a TI-only receiver loss excess of ~0.3-0.4 points remains (H3: frame's
+last bit after each HFXO restart; owner ACCEPTED it 2026-11-19, no FREQ_TRIM
+sweep); G4 (MPSL, BLE connected 1 h) PASS on the steady-state reading the
+owner chose (steady anchor -4 µs; boot/connect ±33 µs are one-off);
+B5 (Pro Micro) PASS at equal TX power, owner 2026-11-19 (spike S3 lp rerun
+PASS too, HFXO proven off); G2 (trainer FE-C on L15, option on) PASS on
+master-side timing, owner 2026-11-19: ACK rate and bursts unchanged against
+TI and Garmin slaves, HFXO released (~2.4 % duty); the literal 2186-2191 µs
+band cannot be judged with either slave. All power gates are closed.
+TI standby (CONFIG_PM): DEFERRED by owner 2026-11-19 - it needs a PM policy, RTC wake and a
+UART rework, and C2's XOSC_HF release already takes the TI's easy step.
+Open: nRF5340 net core, receivers at fractional rate, RX window counter, API
+thread wake.
+
+- [ ] **Slave burst opener uses the nominal period (low priority, not planned).**
+  A RadiANT slave places its burst START at last t_sync + nominal period +
+  2190 µs (`api_xfer_t_sync_for()`, `c->t_next = t_sync + period_us(c)` in
+  `radiant_channel.c`). A master whose clock is off by a few ppm therefore
+  sees the opener shifted: +7.6 µs against the L15 with
+  `RADIANT_NRF_LOW_POWER` (LF crystal −30 ppm). It stays well inside the reply
+  window and every burst completed (archive `2026-11-19-power-g2-garmin`).
+  Fix if it ever matters: predict with the slave's drift-tracked period.
+
+- [ ] **Baseline: document and measure low-power configurations.**
+  Do this first, so the items below can be ranked and checked. Add a low-power
+  overlay for `radiant/samples/hr_transmitter` (its `prj.conf` has
+  `CONFIG_LOG=y`). The overlay turns off logging, serial, and the console, or
+  suspends them with PM_DEVICE. An enabled nRF UART keeps the high-frequency
+  clock requested and hides everything else. Note how to enable DCDC in
+  devicetree. Show how one-way sensors can use the existing `MASTER_TX_ONLY`
+  type to skip the post-TX receive window. Document bounded search for
+  battery-powered receivers and the acquisition-latency tradeoff. Use a
+  matched 1 Hz test link to measure between-slot current and charge per
+  broadcast. Also check packet delivery at the standard HR profile cadence.
+
+- [ ] **Receivers tracking at a fraction of the master's rate.**
+  The ANT+ HRM profile lets a receiver open at period 16140 or 32280 against
+  an 8070 master. That is a low-power receiver configuration that needs no new
+  code. Add a test that RadiANT tracks reliably at 2× and 4× the period, since
+  window drift grows with the gap, then document it alongside bounded search.
+
+- [ ] **Measure and tighten the RX window per tracked message.**
+  Receive current (about 5–6 mA) times window length is what a receiver spends
+  per message. Expose window length per tracked message as a counter. Check the
+  lead and the widening after missed messages for anything wider than timing
+  accuracy needs. Re-run tracked loss when changing either.
+
+- [ ] **nRF: release the high-frequency clock and timer during long idle gaps.**
+  `radiant/src/radiant_radio_nrf.c` calls `clock_control_on()` for HFXO at init
+  with no guard, and leaves its 1 MHz TIMER running even when there is no radio
+  work. Prototype waking from a low-frequency timer far enough ahead of the next
+  slot to start HFXO and arm the hardware compare. Preserve monotonic radio
+  time, slot phase, and turnaround timing.
+  - *MPSL builds first.* The MPSL gate already requests
+    `MPSL_TIMESLOT_HFCLK_CFG_XTAL_GUARANTEED` for each grant
+    (`radiant_radio_nrf_gate_mpsl.c`), so the init-time request pins the
+    crystal on and overrides MPSL's own clock management on hrm_ble, Matter,
+    and Thread builds. MPSL already starts HFXO ahead of each grant, which
+    makes this the easier first step.
+  - *Time base.* Once HFXO is off, the TIMER falls back to HFINT, which is only
+    accurate to about a percent. Keep radio time on RTC (nRF52) or GRTC
+    (nRF54L, µs resolution and low power), and re-anchor the TIMER after each
+    wake. Pausing the TIMER alone loses time.
+  - *Low-frequency clock source.* The `_synth` builds derive their 32 kHz
+    clock from HFXO and cannot release it. LFRC at 250–500 ppm drifts 60–125
+    µs over a 250 ms gap, about the size of the ACK window. Require LFXO, or
+    widen the wake margin and RX windows for LFRC.
+  - *Register retention.* The nRF52-only register shadow in the same file
+    lists retention across HFXO-off as unverified on nRF54L and the nRF5340
+    network core. This item inherits that check.
+
+- [ ] **CC26xx: let the RF core power down between distant slots.**
+  `radiant/src/radiant_radio_cc26xx.c` sets `nInactivityTimeout = UINT32_MAX`.
+  Budget RF startup in the scheduler and let the driver power down across long
+  gaps while keeping the core available for closely spaced operations. Wake
+  also restarts XOSC_HF (`radiant_ti_power.c`). Check the full startup cost
+  against the 250 µs in-grant arm budget, and how far ahead the scheduler posts
+  commands. The driver can only power up early for commands posted with enough
+  lead. On coex154 builds 802.15.4 shares the RF core, so this only helps the
+  standalone TI image. Verify the first TX and tracked RX after wake, plus
+  acknowledged transfers.
+
+- [ ] **Wake the API thread for work or a deadline.**
+  `radiant/src/antr/ant_radio_radiant.c` wakes every
+  `RADIANT_API_HOUSEKEEP_MS` (50 ms) even when idle. Block on events when there
+  is no timed work, and arm a wakeup for the next retry, search timeout, or
+  transfer watchdog when one is pending. Verify deadlines with no radio events.
+  The tick does more than housekeeping:
+  - `radiant_sched.c` has no timer, so the tick is the only retry path for arms
+    refused with EBUSY or ESTATE. Give that retry an explicit deadline.
+  - Each denied search chunk extends the search and ACQUIRE deadlines by
+    exactly `RADIANT_API_HOUSEKEEP_MS` (`radiant_search_note_denied()`,
+    `radiant_channel_search_note_denied()`). Credit measured elapsed time
+    instead, or search timeouts will quietly come out wrong.
+
+- [x] **Guard against power regressions.** Done 2026-11-19 (power/wrapup):
+  `test_idle_without_near_op_requests_no_hfxo` + positive control in
+  radiant.backend.lp / lp_rtc.
+  After the baseline, add a counter or ztest check such as "HFXO not requested
+  while idle with no slot within N ms". A bench-only number won't catch a later
+  change that puts the crystal back on.
+
+# Backend drift: TI vs nRF (audit 2026-11-18, HEAD 40d6961)
+Read-only audit of the nRF backend (direct and MPSL gate) and the CC26xx backend against `radiant/include/radiant/radiant_radio_hal.h`. The HAL boundary itself is clean: radiant_sched/channel/ack/burst/search have no `#if` on a backend or SoC symbol, and core timing goes through caps. The drift is in how each backend keeps the contract (error codes, terminal events, timing anchors). The arbitration code (TI RF-scheduler hook vs MPSL timeslot gate), power code and register/RF-command programming are genuinely hardware-specific and should stay apart. Cause: nRF changes get red ztests (`radiant/tests/backend`, `radiant/tests/gate`), TI changes only get bench sessions.
+
+Suggested order: items 1-4 (bugs), then 5 (settle the contract text), then 6 and 7 together.
+
+## 1. [OPEN, HIGH, TI] The TI backend ignores `rf_index`
+`radiant_radio_cc26xx.c` never reads `req->rf_index`. The synth is fixed at 2400 + `ANT_RF_INDEX_DEFAULT` (`:212` `.centerFreq`, `:257` `.frequency`), and no caps field tells the core. A channel on any other frequency (private network, ANT-FS, adaptive frequency per ADR 0012) arms successfully and silently listens on 2457 MHz. nRF validates (`> 124` gives EINVAL, `radiant_radio_nrf.c:~1088`) and programs `2400 + rf_index`. Fix: retune on change (FS command), or refuse non-default indexes and advertise it in caps. Silent wrong-frequency is the one outcome to rule out. `radiant_rf_index_to_mhz()` in the HAL header is used by neither backend.
+
+## 2. [OPEN, HIGH, apps] A BUILD_ASSERT is disarmed by a deprecated SoC symbol
+`apps/common/ant_dongle_main.c:40-41` refuses a synthesised LF clock on nRF54L by testing `CONFIG_SOC_SERIES_NRF54LX`. On NCS v3.4.0 that symbol is only `select DEPRECATED` and is never set (`zephyr/soc/nordic/nrf54l/Kconfig:12`), so the assert never fires; the failure it guards is a build that boots and hears nothing. Same class as the nrf backend-selection trap. Fix: `CONFIG_SOC_COMPATIBLE_NRF54LX` (see `radiant/Kconfig:73-96`). Grep the tree for other deprecated SoC symbols while there.
+
+## 3. [OPEN, MEDIUM, TI] Abort delivers the terminal without a lock
+`radiant_radio_abort()` (`radiant_radio_cc26xx.c:~2001`) delivers the terminal from the caller's context, and `deliver_rx_terminal()`/`deliver_tx_terminal()` do an unlocked test-and-set of `st.delivered_terminal` (`:1015-1019`) and clear `st.kind`. TI's RF callback runs in the RF driver SWI (`radiant_radio_cc26xx_arb.c:39-45`). `arm_common()` also checks `st.kind != OP_NONE` with no lock (`:1642`). nRF claims the op slot and aborts under `irq_lock` (`radiant_radio_nrf.c:2759-2766`, `3231-3240`). Risk: a double terminal, or a core callback running concurrently with another, against HAL "callbacks never nest and never run concurrently" (`radiant_radio_hal.h:630`) and the thread re-entrancy clause (`:635-639`). Not yet confirmed whether the core's call contexts can actually preempt the RF SWI on TI; check that first.
+
+## 4. [OPEN, MEDIUM, TI coex] A preempted window reports DENIED even after it heard frames
+`rf_callback` maps any `RF_EventCmdPreempted` to `RADIANT_RADIO_STATUS_DENIED` (`radiant_radio_cc26xx.c:1497`, `1503`). The comment assumes "a preempted window heard nothing", which is false for a mid-window preemption. The core credits DENIED as zero listening (`radiant_sched.c:~2535-2540`). The nRF MPSL gate ends a window that lost the air mid-way as ABORTED so partial listening is credited (`radiant_radio_nrf_gate_mpsl.c:~1631-1656`, HAL `:829-832`). Fix: DENIED only if the command never started (no frames, start not reached), ABORTED otherwise.
+
+## 5. [OPEN, contract] Settle the HAL text where the backends picked different readings
+Decide each, write it into `radiant_radio_hal.h`, then make nRF, TI and `radiant/tests/fake_radio.c` agree:
+- Abort from inside a callback. nRF (`radiant_radio_nrf.c:~4049-4068`) and TI (`:2016-2019`) deliver the terminal nested inside the calling callback; the fake frees the slot and defers the terminal until the callback returns (`fake_radio.c:2684-2693`). `radiant_burst.c:842-848` documents the fake's behaviour as the contract. The HAL contradicts itself: "never nest" (`:630`) vs "terminal before the slot looks free" (`:998-1002`). The nested path is unreachable in tests today.
+- Error codes. `n_filters > max_filters`: nRF EINVAL, TI ENOTSUP, fake EINVAL (the core maps these differently). Abort before init: nRF/fake ESTATE, TI OK. CRC width 0 and `body_len` 0: nRF refuses, TI accepts. Double init / NULL rx/tx callbacks: nRF refuses, TI accepts. Window longer than `max_window_us`: MPSL gate EDENIED, fake ENOTSUP, TI unchecked. Non-coex TI returns EDENIED when `RF_postCmd` fails (`:1859-1862`, `1979-1981`), which the HAL reserves for arbitrated backends.
+- Op id. nRF skips 0 on wrap and clears `*op` on a failed arm; TI uses a bare `st.next_op_id++` (`:1835`, `:1962`) and leaves `*op`.
+- Terminal `t_sync` of a TX that did not go out: nRF `now()` (`:~4196`), TI the requested time (`:1041`), fake 0 (`fake_radio.c:807`). `radiant_burst.c:1021` stores it as `reply_t_sync` regardless of status and `radiant_ack.c:473` judges the retransmit by it, so the retry decision differs per backend.
+- TI never emits FAILED: a command ending with error status `>= 0x3800` is only logged (`:1470-1479`); RX then ends TIMEOUT and TX ends OK if LastCmdDone fired. 0x08xx generic errors (e.g. ERROR_PAST_START) are not even counted.
+- Late start. TI sets `pastTrig = 1` (`:1819-1828`, `:1949`), so a start time already passed launches immediately, and the TX event still reports the requested `t_sync` with `exact = true`. HAL `:343-346` says a backend never transmits late; nRF returns ETIME or goes out on time. Only `ARM_FLOOR_US` (150 us) guards it at arm time.
+- Receive window edges. TI drops frames whose `t_sync` falls outside `[t_open, t_close]` in software (`:1281-1286`); nRF has no equivalent check (hardware close only, `radiant_radio_nrf.c:~3072-3075`).
+- RX terminal contents. nRF sets `t_sync = now`, `exact = false` and fills `noise_dbm` on an empty TIMEOUT (`:~4190-4228`); TI leaves `t_sync` 0 and never reports noise.
+
+## 6. [OPEN, refactor] Shared HAL contract layer (~200-300 lines)
+Small pure helpers both backends call; register access stays in the backends. Do after item 5 so the helpers encode the settled contract:
+- Request validation with one set of error codes (`radiant_hal_validate_rx/tx()`), and `op_id_next()`. TI `arm_common`/`rx_arm`/`radiant_radio_tx`/`fmt_supported` (`:976`, `:1637-1760`, `:1882-1950`) vs nRF `rx_arm`/`radiant_radio_tx`/`format_prepare` (`:3221`, `:2738`, `:~1087`). nRF `rx_arm` also skips the `radiant_rx_filters_separable()` check that TI makes (`:1726`).
+- Terminal and RX event fill (window gate on `t_sync`, `wild_value` policy, CRC-fail gating, terminal `t_sync`/`exact`/noise). TI `rx_drain_entries` (`:1200-1409`) vs nRF `radio_isr` END branch (`:~4500-4690`). `wild_value` also differs: TI sets it only under `CONFIG_RADIANT_SEARCH_SHORT_MATCH`, nRF whenever `filter.wild_last` is set (`:4636`).
+- Window priority rule `(t_close - t_open) >= 10000 ? NORMAL : HIGH`, written three times: nRF `rx_gate_prio` (`:3132`), inline in nRF `rx_arm` (`:~3278`), TI (`:1849-1853`).
+- TX start formula `t_sync - (PREAMBLE + addr_len) * 8 - RAMP_UP` with a named calibration term. Same shape on both (TI `:1955-1959`, nRF `:2905-2910`), but the calibration sign is opposite: nRF subtracts `T_SYNC_CAL_TX_US`, TI adds `CONFIG_RADIANT_CC26XX_TX_TIME_CAL_US`.
+- Early-arm diagnostic and terminal classification: `nrf_diag_early` (`radiant_radio_nrf.c:128-155`) and `cc_diag_early` (`radiant_radio_cc26xx.c:422-445`) are near copies; `term_ok`/`term_empty`/`term_error` too (nRF `:4187-4194`, TI `:1008-1030`). Move to `radiant_diag.c`.
+- Smaller: TI's CRC16 (`:663-720`) could use `radiant_crc16` for the CCITT case. TX power: nRF rounds to the nearest table entry, TI keeps the previous power with a warning for an off-table dBm (`:874-881`), so an in-range request can leave TI at a stale power; share a nearest-entry helper.
+Leave apart: TI arb vs MPSL gate, `radiant_rx_torn` (nRF single-buffer only), power/idle code, RSSI conversion, filter/address hardware programming.
+
+## 7. [OPEN, tests] A TI backend test harness, and a fake that matches the hardware
+- No test compiles `radiant_radio_cc26xx*.c`; `release.yml` only proves it builds. Add a `radiant/tests/backend`-style harness with an RF driver fake (`RF_postCmd`/`RF_scheduleCmd`/`RF_flushCmd`/`RF_cancelCmd`, data-entry queue, callback events). Items 3 and 4 should land as red tests first. Also worth a test: `rx_queue_init()` (`:1830`) memsets `rx_data`/`rx_output` and rewrites the static `rx_cmd` on the next arm while a cancelled window may still be finishing (cancel/flush are asynchronous, see `e82a0ea`); TI benches clean, so likely tiny, but the nRF equivalent was a recurring bug class.
+- `fake_radio.c` gaps: no cc26xx preset (hamming 4, `rx_close_hold_us` 508, `addr_len_hw_max` 3, in-grant lead; tests rely on `caps_mut`). ETIME is stricter than either real backend (refuses inside the full `min_arm_lead_us`, `:1837-1845`), so the real `[floor, lead)` band is never exercised. The nRF preset has `filter_wildcard_dev = false` (`:423`) while real nRF defaults it on (ADR 0022). Terminal and frame delivery default to 0 delay while real backends land ~100-150 us later (knobs exist, default 0). Cannot model TI errors as TIMEOUT, TI preemption as DENIED mid-window, or late TX starts.
