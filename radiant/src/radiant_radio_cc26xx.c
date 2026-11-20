@@ -364,9 +364,10 @@ static RF_Mode rf_mode = {
 /*
  * Minimum time between radiant_radio_now() and the earliest arm this backend
  * can honour. Larger than the nRF value: an arm posts through the driver to
- * another processor's doorbell.
+ * another processor's doorbell. Raised past 600 only when the transmit floor
+ * (TX_ARM_FLOOR_US) needs more, which a negative TX_TIME_CAL_US can do.
  */
-#define MIN_ARM_LEAD_US        600
+#define MIN_ARM_LEAD_BASE_US   600
 
 /*
  * Lead below which an arm is refused. This is the hardware limit. MIN_ARM_LEAD_US
@@ -384,9 +385,49 @@ static RF_Mode rf_mode = {
  * Lead for an operation armed from a radio callback into air the previous
  * operation reserved (follow_on_us), on the non-coex build. The RF core is
  * already awake, so the cold-arm wake cost is not owed. Roughly halfway
- * between the floor and MIN_ARM_LEAD_US.
+ * between the floor and MIN_ARM_LEAD_US. Raised like MIN_ARM_LEAD_BASE_US.
  */
-#define IN_GRANT_LEAD_US       400
+#define IN_GRANT_LEAD_BASE_US  400
+
+/*
+ * How far before t_sync a transmit command starts: preamble and address
+ * airtime plus ramp-up, less the calibration term. Signed: a calibration
+ * above that airtime (198 us for a five-byte address, against a Kconfig
+ * range up to +300) puts the start after t_sync, and clipping it to t_sync
+ * would send the frame early by the difference.
+ */
+#define TX_START_OFFSET_US(addr_len, cal)                                    \
+	((int32_t)((PREAMBLE_BYTES + (uint32_t)(addr_len)) * BYTE_US) +      \
+	 (int32_t)TX_RAMP_UP_US - (int32_t)(cal))
+
+/*
+ * The lead before t_sync below which a transmit is refused ETIME: the
+ * command's START must clear ARM_FLOOR_US (a start at or after t_sync owes
+ * nothing extra), and a retune's FS must fit ahead of it.
+ */
+#define TX_ARM_FLOOR_US(addr_len, retune, cal)                               \
+	((uint32_t)ARM_FLOOR_US +                                            \
+	 (uint32_t)MAX(TX_START_OFFSET_US(addr_len, cal), 0) +               \
+	 ((retune) ? (uint32_t)FS_SETTLE_US : 0u))
+
+/*
+ * The advertised leads, never below the floor of a transmit they could be
+ * used for: min_arm_lead_us covers a retuning transmit with the longest
+ * address, the in-grant lead a same-channel follow-on. Both are their base
+ * values at the shipped calibration (+100). The receive floors (ARM_FLOOR_US,
+ * plus FS_SETTLE_US on a retune) fit both without a calibration term.
+ */
+#define CC26XX_MIN_ARM_LEAD_US(cal)                                          \
+	MAX((uint32_t)MIN_ARM_LEAD_BASE_US,                                  \
+	    TX_ARM_FLOOR_US(RADIANT_RADIO_ADDR_MAX, true, cal))
+#define CC26XX_IN_GRANT_LEAD_US(base, cal)                                   \
+	MAX((uint32_t)(base), TX_ARM_FLOOR_US(RADIANT_RADIO_ADDR_MAX, false, cal))
+
+#define MIN_ARM_LEAD_US                                                      \
+	CC26XX_MIN_ARM_LEAD_US(CONFIG_RADIANT_CC26XX_TX_TIME_CAL_US)
+#define IN_GRANT_LEAD_US                                                     \
+	CC26XX_IN_GRANT_LEAD_US(IN_GRANT_LEAD_BASE_US,                       \
+				CONFIG_RADIANT_CC26XX_TX_TIME_CAL_US)
 
 /* --- Receive buffers: sized for the worst case the HAL permits --- */
 
@@ -1967,8 +2008,10 @@ int radiant_radio_enable(void)
 	 * ERG mode needs lead + 250 <= 1560. With 0, min_arm_lead_us (1414) fails
 	 * that test, and ERG is silently refused. 600 is valid because RX reserves
 	 * follow_on_us, so the phy-switch lead is paid only between clients.
+	 * More only if a negative TX_TIME_CAL_US raises the transmit floor.
 	 */
-	caps.min_arm_lead_in_grant_us = 600;
+	caps.min_arm_lead_in_grant_us = CC26XX_IN_GRANT_LEAD_US(
+		600, CONFIG_RADIANT_CC26XX_TX_TIME_CAL_US);
 	caps.max_window_us = CC26XX_COEX_MAX_WINDOW_US;
 #endif
 
@@ -2090,6 +2133,9 @@ static RF_Op *chain_fs(RF_Op *op, uint32_t op_start_rat, uint8_t rf_index)
  *   or a stale handle would make the next arm's early callbacks look foreign.
  * - Claimed for cancellation before the handle was known (st.orphan_op):
  *   cancel it now, as retired, so it neither goes on air nor reports.
+ *   RF_cancelCmd, never RF_flushCmd: the claim delivered the terminal, the
+ *   core may have armed a replacement from it, and that command is already
+ *   queued behind this one, which a flush would discard with it.
  * - Already ended by its own terminal: nothing to do.
  * A refused chain that carried a retune leaves fs_cmd on the new channel,
  * and the driver caches whatever fs_cmd holds when an earlier chain with an
@@ -2132,7 +2178,7 @@ static bool arm_settle(uint32_t id, RF_CmdHandle ch, bool retune)
 	irq_unlock(key);
 
 	if (cancel) {
-		retired_cancel_result(ch, RF_flushCmd(st.rf_handle, ch, 0));
+		retired_cancel_result(ch, RF_cancelCmd(st.rf_handle, ch, 0));
 	}
 	return true;
 }
@@ -2435,17 +2481,17 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 }
 
 /*
- * How long before t_sync the transmit command starts: preamble and address
- * airtime plus ramp-up, less the calibration term. The start trigger is this
- * far ahead of t_sync, so the arm floor applies to it.
+ * When the transmit command starts for a frame whose t_sync is t_sync:
+ * TX_START_OFFSET_US before it, or after it when that offset is negative.
+ * The arm floor (TX_ARM_FLOOR_US) is computed from the same offset.
  */
-static uint32_t tx_start_lead_us(uint8_t addr_len)
+static radiant_time_t tx_start_us(radiant_time_t t_sync, uint8_t addr_len,
+				  int32_t cal)
 {
-	const int32_t lead = (int32_t)((PREAMBLE_BYTES + addr_len) * BYTE_US) +
-			     (int32_t)TX_RAMP_UP_US -
-			     (int32_t)CONFIG_RADIANT_CC26XX_TX_TIME_CAL_US;
+	const int32_t off = TX_START_OFFSET_US(addr_len, cal);
 
-	return (lead > 0) ? (uint32_t)lead : 0u;
+	return (off >= 0) ? t_sync - (radiant_time_t)off
+			  : t_sync + (radiant_time_t)(-off);
 }
 
 int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
@@ -2453,7 +2499,7 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 	uint8_t hw_len;
 	uint8_t sw_len;
 	size_t n = 0;
-	uint32_t start_lead;
+	uint8_t addr_len;
 	RF_Op *head;
 	bool retune;
 	int rc;
@@ -2478,10 +2524,11 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 	 * start the RF core still reaches late into ERROR_PAST_START, never a
 	 * late frame reported exact.
 	 */
-	start_lead = tx_start_lead_us(req->fmt != NULL ? req->fmt->addr_len : 0u);
+	addr_len = (req->fmt != NULL) ? req->fmt->addr_len : 0u;
 	retune = req->rf_index != tuned_rf_resolve();
 	rc = arm_common(req->fmt, req->t_sync_at,
-			ARM_FLOOR_US + start_lead + (retune ? FS_SETTLE_US : 0u));
+			TX_ARM_FLOOR_US(addr_len, retune,
+					CONFIG_RADIANT_CC26XX_TX_TIME_CAL_US));
 	if (rc != RADIANT_RADIO_OK_RC) {
 		return rc;
 	}
@@ -2543,10 +2590,11 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 	 */
 	tx_cmd.startTrigger.pastTrig = 0;
 	/*
-	 * Start time = t_sync minus preamble, address and ramp-up airtime. This is
-	 * what makes the master's period exact.
+	 * Start time = t_sync minus preamble, address and ramp-up airtime, plus
+	 * the calibration. This is what makes the master's period exact.
 	 */
-	tx_cmd.startTime = us_to_rat(req->t_sync_at - (radiant_time_t)start_lead);
+	tx_cmd.startTime = us_to_rat(tx_start_us(req->t_sync_at, addr_len,
+						 CONFIG_RADIANT_CC26XX_TX_TIME_CAL_US));
 
 	head = retune ? chain_fs((RF_Op *)&tx_cmd, tx_cmd.startTime, req->rf_index)
 		      : (RF_Op *)&tx_cmd;

@@ -79,6 +79,20 @@ uint32_t cc_sw_addr_mismatch(void);
 bool     cc_diag_built(void);
 uint32_t cc_status_err(void);
 
+/*
+ * The transmit timing arithmetic at any calibration (Kconfig range -300..300),
+ * not only the +100 this build has (cc_tx_cal_us()):
+ *   cc_tx_start_us       when a transmit with t_sync t starts its command
+ *   cc_tx_arm_floor_us   the lead before t_sync below which it is ETIME
+ *   cc_min_arm_lead_us   caps.min_arm_lead_us this build would advertise
+ *   cc_in_grant_lead_us  caps.min_arm_lead_in_grant_us, likewise
+ */
+int32_t        cc_tx_cal_us(void);
+radiant_time_t cc_tx_start_us(radiant_time_t t, uint8_t addr_len, int32_t cal);
+uint32_t       cc_tx_arm_floor_us(uint8_t addr_len, bool retune, int32_t cal);
+uint32_t       cc_min_arm_lead_us(int32_t cal);
+uint32_t       cc_in_grant_lead_us(int32_t cal);
+
 /* The tracking format and a fixed test address (A6 C5 34 12 78). */
 const struct radiant_pkt_format *cc_fmt(void);
 extern const uint8_t cc_addr[RADIANT_RADIO_ADDR_MAX];

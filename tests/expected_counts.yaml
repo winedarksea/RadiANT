@@ -160,12 +160,12 @@ min_scenarios: 24
 # test_terminal.c (20 plain, 21 coex).
 # 6371 (+4): review 2026-11-19 findings 2 and 3, one case each in both scenarios.
 # 2026-11-19: 6377, +3 per cc26xx scenario (second review: refused retune, mid-post abort/terminal).
-# 2026-11-20: 6403 (+26), HAL drift item 5 (t_sync of a transmit that did not go
-# out, nested abort terminal) on fix/hal-item5-tsync-abort (Bluefin twister, 7203
-# executed): radiant.backend +5 (test_terminal_contract.c), +3 per cc26xx
-# scenario, +3 per unit scenario (fake_radio, transfer, sched; the rewritten
-# fake_radio abort case replaces one).
-min_testcases: 6403
+# 2026-11-20: 6385, +4 per cc26xx scenario (third review: mid-post cancel spares the rearm, TX cal start/leads).
+# 2026-11-20: 6411 (+26), HAL drift item 5 (t_sync of a transmit that did not go
+# out, nested abort terminal) on fix/hal-item5-tsync-abort: radiant.backend +5
+# (test_terminal_contract.c), +3 per cc26xx scenario, +3 per unit scenario
+# (fake_radio, transfer, sched; the rewritten fake_radio abort case replaces one).
+min_testcases: 6411
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -249,10 +249,10 @@ min_cases.radiant.backend.lp_mpsl: 18
 min_cases.radiant.gate.lp: 114
 # radiant.backend_cc26xx: the TI backend (radiant_radio_cc26xx.c) against a fake
 # RF driver and hal_ti's driverlib headers; 7 smoke + 11 arm-path + 20 terminal/abort cases.
-# 2026-11-20: 46, +3 HAL drift item 5 cases (requested t_sync on FAILED/DENIED/ABORTED).
-min_cases.radiant.backend_cc26xx: 46
+# 2026-11-20: 47 (third review), 50 with +3 HAL drift item 5 cases (requested t_sync on FAILED/DENIED/ABORTED).
+min_cases.radiant.backend_cc26xx: 50
 # radiant.backend_cc26xx.coex: the same under CONFIG_RADIANT_BACKEND_CC26XX_COEX,
 # plus 5 cases on radiant_radio_cc26xx_arb.c's submit/execute hooks and the
 # diag-counter status_err case (44).
-# 2026-11-20: 52, +3 HAL drift item 5 cases (as the plain scenario).
-min_cases.radiant.backend_cc26xx.coex: 52
+# 2026-11-20: 53 (third review), 56 with +3 HAL drift item 5 cases (as the plain scenario).
+min_cases.radiant.backend_cc26xx.coex: 56
