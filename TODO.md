@@ -12,7 +12,7 @@ Discovery short match (ADR 0022), left open 2026-11-11:
 - TI: Pro Micro -> TI link loses 8-13 % (other links 0.25-4 %), unexplained; not RX buffering and not the masked pass (`archive/benchmarks/2026-11-16-b4-pair/gate_extra/`).
 
 ## FE-C coverage (deferred from the 2026-11-11 Zwift-capture plan, one item):
-- `tools/ant_fec_control.py`: the page-70 count byte is shifted (:152-156), and the incline is read at [3..4] instead of [4..5] (:171).
+- [DONE 2026-11-20] `tools/ant_fec_control.py`: page-70 count byte no longer shifted (bits 0-6 of byte 5), page-17 incline read at [4..5]; both match `profile_fec_tx.c`.
 - Sim (`profile_fec_tx.c`, `apps/trainer`): refuses page 55 on request; ignores the page-70 "reply acknowledged" bit and the transmission count; sends page 71 in reply to a page 70, which needs checking against the spec.
 - Never run on air: 0x31 ERG, 0x30 and 0x32; page 70 -> 54/55/71 round trips; acked replies from the master; Zwift against the sim; a commercial trainer's page 71. (Master-originated bursts DO run on air since 2026-11-11, against a Garmin slave - they never had before, see archive/captures/radio/README.md, "The master-burst captures". Master acked data was run on air 2026-11-12 with `ant_ack_pair.py --master-acked`: 0/100 and 2/100 failed with both ends at 0 dBm or more, see archive/benchmarks/2026-11-12-master-acked-power/.)
 - Burst on an open slave channel is untested; MPSL doesn't support multi-packet burst.

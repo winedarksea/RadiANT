@@ -145,13 +145,20 @@ def page51(grade_pct: float) -> bytes:
 
 def page70(requested: int, count: int = 4) -> bytes:
     """SS7.2 Request Data Page - READ-ONLY, which is what makes it the right
-    control probe against somebody else's machine."""
+    control probe against somebody else's machine.
+
+    Byte 5: bits 0-6 are the transmission count, bit 7 asks for acknowledged
+    replies (0 here = broadcast). Not shifted (profile_fec_tx.c reads
+    body[5] & 0x7F)."""
     return bytes([PAGE_REQUEST, 0xFF, 0xFF, 0xFF, 0xFF,
-                  (count & 0x7F) << 1 | 0x00, requested & 0xFF, 0x01])
+                  count & 0x7F, requested & 0xFF, 0x01])
 
 
 def decode_grade(body: bytes) -> float | None:
-    """Page 17's incline: a SIGNED int16 in 0.01 %, sentinel 0x7FFF.
+    """Page 17's incline, bytes 4-5: a SIGNED int16 in 0.01 %, sentinel 0x7FFF.
+
+    Byte 3 is the cycle length, not the incline (profile_fec_tx.c puts it at
+    out[4]).
 
     NOT the same encoding as page 51's grade, and getting them the same way
     round is the trap. Page 51's *command* grade is an UNSIGNED uint16 with a
@@ -162,7 +169,7 @@ def decode_grade(body: bytes) -> float | None:
     absurd enough to catch, and it would not have been if the machine had
     happened to be near +200 %.
     """
-    raw = body[3] | (body[4] << 8)
+    raw = body[4] | (body[5] << 8)
     if raw == 0x7FFF:
         return None
     if raw >= 0x8000:
