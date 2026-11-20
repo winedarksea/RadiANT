@@ -898,8 +898,8 @@ static struct {
 	 * TX timing error. A fixed lateness is invisible on broadcast but fatal for
 	 * acknowledged data, where the peer's window opens 1560 us after the packet.
 	 * Also what a transmit that did not go out reports as its t_sync (HAL: the
-	 * requested time, not exact), so it is set when the arm is accepted, before
-	 * any staging: a denial or a failed grant ends the operation unprogrammed.
+	 * requested time, not exact), so it is set with the slot claim, before
+	 * gate_acquire(): a denial or a failed grant ends the operation unprogrammed.
 	 */
 	radiant_time_t t_sync_req;
 
@@ -3024,6 +3024,13 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 	ARM_GUARD_ONLY(ARM_CLAIM());
 	ARM_GUARD_ONLY(radiant_swi_zli_unlock(claim_key));
 	irq_unlock(key);
+	/*
+	 * Stored with the claim, before anything can end the operation: a
+	 * transmit that does not go out reports this (HAL: requested t_sync, not
+	 * exact), and from here on no terminal can report a previous transmit's.
+	 * program_tx() stores it again (the same value).
+	 */
+	radiant_op.t_sync_req = req->t_sync_at;
 
 	/* The only validation of the format: program_tx() writes what this computes. */
 	rc = format_prepare_memo(req->fmt, req->rf_index, 0u, &fmt_regs);
@@ -3082,8 +3089,16 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 	if (radiant_op.next_id == 0u) {
 		radiant_op.next_id = 1u;   /* ids are non-zero by contract */
 	}
+	/*
+	 * The id is taken only now, after gate_acquire(), and no terminal can
+	 * carry the previous one: every asynchronous terminal waits for this arm.
+	 * The gate's grant and the low-power FAILED act only on a staged request
+	 * (radiant_staged.pending, set below); the low-power wake owed during the
+	 * arm is replayed by lp_staged() after staging; on MPSL builds a denial
+	 * landing while the arm is marked is held (arm_deny_owed) and an abort
+	 * from the grant's end is left to the arm (ARM_SLOT_GUARD).
+	 */
 	*op = radiant_op.id;
-	radiant_op.t_sync_req = req->t_sync_at;
 
 	if (g == GATE_PENDING) {
 		/* Copied only on the deferred path (see radiant_radio_rx()). The body must stay valid until completion. */
