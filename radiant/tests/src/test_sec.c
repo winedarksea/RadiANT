@@ -2735,3 +2735,191 @@ ZTEST(radiant_sec, test_only_a_change_asks_the_port_and_a_refusal_changes_nothin
 		   "a refused change withheld the slot");
 	zassert_mem_equal(first, again, 8u);
 }
+
+/* ── An identical 0xF1 is a no-op, and a change keeps the replay floor
+ * (review 2026-11-17 item 4) ──────────────────────────────────────────── */
+
+/* Packets 0..19 recorded and heard in order: windows 0, 4, 8 and 12 have
+ * verified (each by the close of the window after it), so the floor stands at
+ * 16, and window 16 is closed and waiting for its verdict. */
+static void floor_setup(uint8_t switches, uint32_t epoch)
+{
+	uint32_t i;
+
+	key_both();
+	configure_both(switches, 4u);
+	epoch_both(epoch);
+	for (i = 0u; i < 20u; i++) {
+		tx_hop(i, rec[i]);
+		ingest_at(rec[i], slot_t(i));
+	}
+	zassert_equal(1u, verdicts_for(8u, RADIANT_SEC_VERDICT_VERIFIED),
+		      "setup: window 8 did not verify");
+}
+
+/* Windows 8 and 12 (window 8 and the window carrying its tag) again, genuine
+ * bytes 12 periods late: well inside the 128-period slack, so only the floor
+ * can refuse them. */
+static void floor_replay(void)
+{
+	uint32_t i;
+
+	for (i = 8u; i < 16u; i++) {
+		ingest_at(rec[i], slot_t(i + 12u));
+	}
+}
+
+static uint32_t deliveries_of(uint8_t index)
+{
+	uint32_t n = 0u;
+	uint32_t i;
+
+	for (i = 0u; i < log_n_pkt && i < LOG_MAX; i++) {
+		if (log_pkt[i].pay[2] == index) {
+			n++;
+		}
+	}
+	return n;
+}
+
+/*
+ * A host that never saw a 0xF1 answered sends it again. On master configure
+ * cleared the floor for that retry too, so a recording of window 8 replayed
+ * inside the slack verified a second time and, under the drop policy, was
+ * released to the host a second time. The same tuple again changes nothing
+ * and asks the port nothing.
+ */
+ZTEST(radiant_sec, test_an_identical_0xf1_retry_cannot_deliver_a_window_twice)
+{
+	const uint8_t sw = RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_DROP_UNVER;
+	uint32_t      replay_before;
+	uint32_t      calls;
+
+	floor_setup(sw, 94u);
+	zassert_equal(1u, deliveries_of(8u), "setup: packet 8 delivered %u times",
+		      deliveries_of(8u));
+	replay_before = rx_stats().dropped_replay;
+	calls = changing_calls;
+
+	zassert_ok(radiant_sec_configure(RX_CH, sw, 4u,
+					 RADIANT_SEC_PAGE_LO_DEFAULT,
+					 RADIANT_SEC_PAGE_HI_DEFAULT));
+	zassert_equal(calls, changing_calls, "an identical 0xF1 asked the port");
+	floor_replay();
+
+	zassert_equal(1u, verdicts_for(8u, RADIANT_SEC_VERDICT_VERIFIED),
+		      "window 8 verified twice");
+	zassert_equal(1u, deliveries_of(8u), "packet 8 delivered %u times",
+		      deliveries_of(8u));
+	zassert_equal(replay_before + 8u, rx_stats().dropped_replay);
+}
+
+/*
+ * The sender's half (item 2's LOW): an identical 0xF1 in the middle of window
+ * 4 cleared the running CMAC and the closed window 0's tag, so window 4's
+ * last packets carried zeros for window 0's tag and window 4's own tag was
+ * computed over half a window. Both windows came out UNVERIFIED.
+ */
+ZTEST(radiant_sec, test_an_identical_0xf1_keeps_the_tag_in_progress)
+{
+	uint32_t i;
+
+	key_both();
+	configure_both(RADIANT_SEC_SW_AUTH, 4u);
+	epoch_both(95u);
+	for (i = 0u; i < 12u; i++) {
+		if (i == 6u) {
+			zassert_ok(tx_configure(RADIANT_SEC_SW_AUTH,
+						RADIANT_SEC_PAGE_LO_DEFAULT,
+						RADIANT_SEC_PAGE_HI_DEFAULT));
+		}
+		hop(i, false, -1);
+	}
+	zassert_equal(1u, verdicts_for(0u, RADIANT_SEC_VERDICT_VERIFIED),
+		      "window 0 lost its tag");
+	zassert_equal(1u, verdicts_for(4u, RADIANT_SEC_VERDICT_VERIFIED),
+		      "window 4's tag was cut");
+}
+
+/*
+ * A real change - W 4 -> 8 under the same key and epoch - still throws away
+ * the windows in flight (window 16, held for its verdict, is dropped and
+ * counted), but the floor is a counter value and means the same under any W:
+ * windows already verified stay refused. On master the change cleared it and
+ * the replay was taken in.
+ */
+ZTEST(radiant_sec, test_a_w_change_keeps_the_replay_floor)
+{
+	const uint8_t sw = RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_DROP_UNVER;
+	uint32_t      replay_before;
+	uint32_t      policy_before;
+	uint32_t      calls;
+
+	floor_setup(sw, 96u);
+	replay_before = rx_stats().dropped_replay;
+	policy_before = dropped_policy_now();
+	calls = changing_calls;
+
+	zassert_ok(radiant_sec_configure(RX_CH, sw, 8u,
+					 RADIANT_SEC_PAGE_LO_DEFAULT,
+					 RADIANT_SEC_PAGE_HI_DEFAULT));
+	zassert_equal(calls + 1u, changing_calls, "a change did not ask the port");
+	zassert_equal(policy_before + 4u, dropped_policy_now(),
+		      "the held window survived the change");
+	floor_replay();
+
+	zassert_equal(replay_before + 8u, rx_stats().dropped_replay,
+		      "replays refused: %u",
+		      rx_stats().dropped_replay - replay_before);
+	zassert_equal(1u, deliveries_of(8u), "packet 8 delivered again");
+}
+
+/* The guard beside it: a new epoch restarts the counter, so the floor goes
+ * with it, or window 0 of the new epoch would be refused as a replay. */
+ZTEST(radiant_sec, test_a_new_epoch_still_resets_the_replay_floor)
+{
+	uint32_t i;
+
+	floor_setup(RADIANT_SEC_SW_AUTH, 97u);
+	epoch_both(98u);
+	log_n_verdict = 0u;
+	for (i = 0u; i < 8u; i++) {
+		hop(i, false, -1);
+	}
+	zassert_equal(1u, verdicts_for(0u, RADIANT_SEC_VERDICT_VERIFIED),
+		      "window 0 of the new epoch did not verify");
+}
+
+/*
+ * Where keeping the floor is what stops the replay: a real change that keeps
+ * W (here the page range widened 0x0F -> 0x1F, page 5 covered by both). The
+ * change still drops the held window 16, but windows 8 and 12 replayed under
+ * the same W would verify again on their own tags, so only the floor refuses
+ * them. On master the change cleared it, and window 8 verified and was
+ * delivered a second time.
+ */
+ZTEST(radiant_sec, test_a_range_change_with_w_kept_cannot_deliver_a_window_twice)
+{
+	const uint8_t sw = RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_DROP_UNVER;
+	uint32_t      replay_before;
+	uint32_t      policy_before;
+
+	floor_setup(sw, 99u);
+	zassert_equal(1u, deliveries_of(8u), "setup: packet 8 delivered %u times",
+		      deliveries_of(8u));
+	replay_before = rx_stats().dropped_replay;
+	policy_before = dropped_policy_now();
+
+	zassert_ok(radiant_sec_configure(RX_CH, sw, 4u,
+					 RADIANT_SEC_PAGE_LO_DEFAULT,
+					 RADIANT_SEC_PAGE_HI_MAX));
+	zassert_equal(policy_before + 4u, dropped_policy_now(),
+		      "the held window survived the change");
+	floor_replay();
+
+	zassert_equal(1u, verdicts_for(8u, RADIANT_SEC_VERDICT_VERIFIED),
+		      "window 8 verified twice");
+	zassert_equal(1u, deliveries_of(8u), "packet 8 delivered %u times",
+		      deliveries_of(8u));
+	zassert_equal(replay_before + 8u, rx_stats().dropped_replay);
+}

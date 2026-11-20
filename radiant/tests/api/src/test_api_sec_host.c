@@ -1177,11 +1177,13 @@ ZTEST(api, test_sec_host_a_close_and_reopen_leaves_no_window_pending)
 
 /*
  * Review finding 2: a forged page already pumped when the host sends 0xF3
- * (a new epoch) or 0xF1 loses its window there, so its UNVERIFIED never
- * comes - and with the old firmware the next verdicts followed in an
- * unbroken seq, so a host that took the first one after its flush as
- * binding would credit the forgery with VERIFIED 6. The discard now spends
- * a seq value: the first verdict after shows a gap of one.
+ * (a new epoch) or a 0xF1 that changes the policy loses its window there, so
+ * its UNVERIFIED never comes - and with the old firmware the next verdicts
+ * followed in an unbroken seq, so a host that took the first one after its
+ * flush as binding would credit the forgery with VERIFIED 6. The discard now
+ * spends a seq value: the first verdict after shows a gap of one. The 0xF1
+ * here widens the receiver's page range (0x0F -> 0x1F, page 5 covered by
+ * both): an identical one discards nothing (review 2026-11-17 item 4).
  */
 static void vd_stale_across(bool new_epoch)
 {
@@ -1216,7 +1218,7 @@ static void vd_stale_across(bool new_epoch)
 			      antr_sec_config(VD_RX_CH,
 					      RADIANT_SEC_SW_AUTH |
 						      RADIANT_SEC_SW_VERDICT_EVENT,
-					      2u, 0x01u, 0x0Fu));
+					      2u, 0x01u, 0x1Fu));
 	}
 
 	for (uint32_t i = 4u; i < 10u; i++) {
@@ -1234,6 +1236,37 @@ ZTEST(api, test_sec_host_a_stale_forgery_across_0xf3_leaves_a_seq_gap)
 ZTEST(api, test_sec_host_a_stale_forgery_across_0xf1_leaves_a_seq_gap)
 {
 	vd_stale_across(false);
+}
+
+/*
+ * Review 2026-11-17 item 4: a host retrying a 0xF1 it never saw answered sends
+ * the same tuple mid-window. That changes nothing: window 2, open when it
+ * lands, still verifies, and the verdicts run on with no seq gap. On master
+ * the retry threw window 2 away (a gap, and no verdict for it ever).
+ */
+ZTEST(api, test_sec_host_an_identical_0xf1_retry_discards_nothing)
+{
+	static const struct vd_want want[] = {
+		{ 0u, 0u }, { 0u, 1u }, { 0u, 2u }, { 0u, 3u }, { V_OK, 0u },
+		{ 0u, 4u }, { 0u, 5u }, { V_OK, 2u },
+		{ 0u, 6u }, { 0u, 7u }, { V_OK, 4u },
+	};
+	uint32_t from;
+
+	vd_setup(RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_VERDICT_EVENT, 2u);
+	from = api_msglog_count();
+	for (uint32_t i = 0u; i < 8u; i++) {
+		if (i == 3u) {
+			zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+				      antr_sec_config(VD_RX_CH,
+						      RADIANT_SEC_SW_AUTH |
+							      RADIANT_SEC_SW_VERDICT_EVENT,
+						      2u, 0x01u, 0x0Fu));
+		}
+		(void)vd_hop(i, false);
+	}
+	vd_expect(from, want, ARRAY_SIZE(want), 2u);
+	vd_done();
 }
 
 ZTEST(api, test_sec_host_a_tag_riding_past_clear_windows_still_verifies)

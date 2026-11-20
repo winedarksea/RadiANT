@@ -219,8 +219,10 @@ How it re-anchors now:
   closes it. It is taken only when the window can produce a tag. It is applied
   only when the next close judges that window VERIFIED, which means the bytes
   of that packet, its counter included, are the sender's.
-- The first verified window after any reset (`0xF3`, configure, a `try_devnum`
-  trial, a wrap) is applied in full. That absorbs the host anchor's error once.
+- The first verified window after any reset (`0xF3`, a `try_devnum` trial, a
+  wrap) is applied in full. That absorbs the host anchor's error once. A `0xF1`
+  is not a reset here: it keeps the floor (section 7.6), so the window after it
+  is slew-limited like any other.
 - After that, each verified window moves the anchor by at most `period / 16`.
   Real drift is about 0.004 period per window (500 ppm at `W = 8`), so the
   limit never binds on genuine traffic. A test holds a sender 0.5 % off rate
@@ -370,10 +372,11 @@ either delay the data by that much or always read `unverified`. Instead:
   u16 LE, W, seq u16 LE]`, verdict 1 verified or 2 unverified. `seq` counts
   the channel's verdicts and is never reset while the channel keeps its key;
   every time the firmware throws away a window that was waiting for its
-  verdict (the host's `0xF1` or `0xF3`, an epoch advance, a `try_devnum`
-  candidate, a channel close or open) it spends one more, so a verdict that
-  will never come is a gap, not silence. It is posted to the same queue as the data, after every packet it covers
-  (under the drop policy, immediately after a verified window's release).
+  verdict (a host `0xF1` that changes the policy, the host's `0xF3`, an epoch
+  advance, a `try_devnum` candidate, a channel close or open) it spends one
+  more, so a verdict that will never come is a gap, not silence. An identical
+  `0xF1` throws nothing away and spends nothing. The `0xF8` is posted to the same
+  queue as the data, after every packet it covers (under the drop policy, immediately after a verified window's release).
 - **Only pages inside the secured range on the same channel are covered.** A
   page outside `[page_lo, page_hi]` (`0xF4` `[4..5]`) is cleartext even on an
   `X_AUTH` channel - it reaches the host as an ordinary `BROADCAST_DATA` and is
@@ -1476,9 +1479,20 @@ could be replayed inside the 128-period slack, with genuine bytes and a genuine
 tag, and verify a second time. With it, each window verifies at most once per
 epoch. Only a verdict raises the floor. A floor that unverified packets could
 raise would let one forged `expected + 127` packet blind the receiver for 32 s.
-The floor is cleared wherever the window state is (`0xF3`, configure, a
-`try_devnum` trial, a wrap). It costs 2 B per context, in an alignment hole, and
-doubles as the "has a verified window re-anchored yet" flag of section 3.1.
+The floor is cleared only where the counter's meaning changes: a new epoch
+(`0xF3`, which a new root on `0xF2` also requires, or a wrap) or a new device
+number (a `try_devnum` trial). A `0xF1` does not clear it (review 2026-11-17,
+item 4). An identical `0xF1`, such as a host's retry of one it never saw
+answered, changes nothing at all: the windows in flight, the floor and the
+sender's tag in progress are kept. Until this fix it cleared the floor, so a window verified just before the
+retry could be replayed inside the slack and verify, and under the drop policy
+be delivered, a second time; and on a master the window in progress went out
+without its tag. A `0xF1` that changes the switches, W or the page range still
+throws away the windows in flight and restarts the sender's tag, because their
+boundaries or their coverage move, but keeps the floor: it is a counter value,
+and a counter already verified under the old W is no less a replay under the
+new one. It costs 2 B per context, in an alignment hole, and doubles as the
+"has a verified window re-anchored yet" flag of section 3.1.
 
 **A master refuses secured pages.** A master's RX shares its context with its
 TX: the same epoch, the same keys. If it ran the RX path on a broadcast heard in
