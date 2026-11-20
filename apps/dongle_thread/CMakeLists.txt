@@ -222,6 +222,10 @@ if(CONFIG_CHIP)
     "${CMAKE_CURRENT_SOURCE_DIR}/src/matter/core/matter_bridged_device.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/matter/core/bridge_storage_manager.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/matter/core/bridged_device_data_provider.cpp"
+    # OURS, not vendored: the bounds-checked record decoder that
+    # bridge_storage_manager.cpp calls (security review 2026-11-20 item 2).
+    # Free of CHIP so apps/dongle_thread/tests/matter_storage can link it alone.
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/matter/bridge_storage_codec.cpp"
     # NOT vendored, referenced in place, exactly as matter_bridge does:
     # BridgeManager::Init() calls Nrf::Matter::BindingHandler::Init() and
     # BridgeManager::HandleCommand() builds its BindingData. It is NCS's file

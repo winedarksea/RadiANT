@@ -15,22 +15,34 @@ Aggregator endpoint and the dynamic-endpoint machinery.
 | Copied on | 2026-08-15 |
 | Upstream licence | `LicenseRef-Nordic-5-Clause` (the `core/` files) and Apache-2.0 (the ZAP output, which is Project CHIP's) |
 
-**Every upstream file below is byte-for-byte identical to its source.** Nothing
-was reformatted, retagged or "tidied". If a future reader needs to diff against
-a newer NCS, the copy is a straight `Copy-Item`:
+**Every upstream file below is byte-for-byte identical to its source, except
+`core/bridge_storage_manager.cpp`** (see the next paragraph). Nothing was
+reformatted, retagged or "tidied". If a future reader needs to diff against a
+newer NCS, the copy is a straight `Copy-Item`:
 
 ```
 core/bridge_manager.{h,cpp}                <- src/core/
 core/matter_bridged_device.{h,cpp}         <- src/core/
 core/bridged_device_data_provider.{h,cpp}  <- src/core/
-core/bridge_storage_manager.{h,cpp}        <- src/core/
+core/bridge_storage_manager.h              <- src/core/
+core/bridge_storage_manager.cpp            <- src/core/, PATCHED (below)
 core/util/bridge_util.h                    <- src/core/util/
 default_zap/bridge.zap                     <- src/default_zap/
 default_zap/bridge.matter                  <- src/default_zap/
 default_zap/zap-generated/*                <- src/default_zap/zap-generated/
 ```
 
-Two files in this directory are **ours**, carry this repository's Apache-2.0
+**`core/bridge_storage_manager.cpp` is patched** (security review 2026-11-20
+item 2). Upstream's record loaders checked each stored string length against
+the bytes read, never against the `char[32]` it was copied into, so a corrupted
+settings record overran the stack at every boot. The V1 and V2 loaders now load
+and then call `bridge_storage_codec.h`'s decoders; `StoreBridgedDevice()`
+refuses a length the loader would refuse; the two compiled-out migrations bound
+their label copies. Every change carries a `RadiANT:` comment. When re-copying
+from a newer NCS, check whether upstream has fixed this, and re-apply the patch
+if it has not. The record format is unchanged.
+
+Three files in this directory are **ours**, carry this repository's Apache-2.0
 tag, and are not upstream copies:
 
 - `chip_project_config.h` — the CHIP project-config header. Upstream's has one
@@ -38,6 +50,9 @@ tag, and are not upstream copies:
   overrides; ours restates the load-bearing line and explains it.
 - `bridge_core_asserts.cpp` — a translation unit whose entire content is
   `static_assert`s. See trap 15.
+- `bridge_storage_codec.{h,cpp}` — the bounds-checked bridged-device record
+  decoder that the patched loader calls. It includes no CHIP header, so
+  `apps/dongle_thread/tests/matter_storage` tests it on native_sim.
 
 `Kconfig` is also ours: it is upstream's `src/core/Kconfig` with the whole
 `if BRIDGED_DEVICE_BT` menu removed, so it is a derivative rather than a copy

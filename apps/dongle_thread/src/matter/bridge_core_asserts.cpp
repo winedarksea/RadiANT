@@ -79,3 +79,20 @@ static_assert(Nrf::BridgeManager::kAggregatorEndpointId != 0,
 	      "The aggregator cannot be endpoint 0; endpoint 0 is the Matter root node. See "
 	      "CONFIG_BRIDGE_AGGREGATOR_ENDPOINT_ID in src/matter/Kconfig and the Aggregator "
 	      "endpoint in default_zap/bridge.zap.");
+
+/* ---------------------------------------------------------------------------
+ * Security review 2026-11-20 item 2: the record decoder's test mirror.
+ * ------------------------------------------------------------------------- */
+
+/* apps/dongle_thread/tests/matter_storage tests bridge_storage_codec.h's
+ * decoders on a copy of BridgedDeviceV2 (the real struct sits behind CHIP
+ * headers), with 32-byte unique-ID and label arrays. If either capacity moves,
+ * the tests' boundary cases stop being the boundary. */
+#include "bridge_storage_manager.h"
+
+static_assert(sizeof(Nrf::BridgeStorageManager::BridgedDeviceV2::mUniqueID) == 32,
+	      "mUniqueID is no longer 32 bytes: update kUniqueIDSize in "
+	      "apps/dongle_thread/tests/matter_storage/src/main.cpp.");
+static_assert(sizeof(Nrf::BridgeStorageManager::BridgedDeviceV2::mNodeLabel) == 32,
+	      "mNodeLabel is no longer 32 bytes: update kNodeLabelSize in "
+	      "apps/dongle_thread/tests/matter_storage/src/main.cpp.");

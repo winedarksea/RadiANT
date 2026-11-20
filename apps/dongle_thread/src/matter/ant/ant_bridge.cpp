@@ -584,9 +584,13 @@ bool CreateEndpointForRow(Row &row)
 	Nrf::BridgeStorageManager::BridgedDevice stored;
 	stored.mEndpointId = assigned;
 	stored.mDeviceType = deviceType;
-	stored.mUniqueIDLength = strlen(uniqueID);
+	/* Capped one short of each array so the record keeps a NUL and
+	 * StoreBridgedDevice() accepts it (security review 2026-11-20 item 2).
+	 * GetNodeLabel() is a char[32] that is not guaranteed NUL-terminated, so
+	 * strnlen is also what keeps this read inside it. */
+	stored.mUniqueIDLength = strnlen(uniqueID, sizeof(stored.mUniqueID) - 1);
 	memcpy(stored.mUniqueID, uniqueID, stored.mUniqueIDLength);
-	stored.mNodeLabelLength = strlen(device->GetNodeLabel());
+	stored.mNodeLabelLength = strnlen(device->GetNodeLabel(), sizeof(stored.mNodeLabel) - 1);
 	memcpy(stored.mNodeLabel, device->GetNodeLabel(), stored.mNodeLabelLength);
 	stored.mUserData = nullptr;
 	stored.mUserDataSize = 0;
@@ -637,9 +641,10 @@ void PersistRowLabel(const Row &row, const char *nodeLabel)
 
 	stored.mEndpointId = row.chipEndpoint;
 	stored.mDeviceType = row.deviceType;
-	stored.mUniqueIDLength = strlen(uniqueID);
+	/* Capped as in the creation path above. */
+	stored.mUniqueIDLength = strnlen(uniqueID, sizeof(stored.mUniqueID) - 1);
 	memcpy(stored.mUniqueID, uniqueID, stored.mUniqueIDLength);
-	stored.mNodeLabelLength = strlen(nodeLabel);
+	stored.mNodeLabelLength = strnlen(nodeLabel, sizeof(stored.mNodeLabel) - 1);
 	memcpy(stored.mNodeLabel, nodeLabel, stored.mNodeLabelLength);
 	stored.mUserData = nullptr;
 	stored.mUserDataSize = 0;
