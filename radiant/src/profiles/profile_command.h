@@ -143,7 +143,7 @@ int profile_cmd_channel_check(const struct profile_schedule *s,
  * 0x02 (authenticated, so the sender learns it is stale); anything else - an
  * earlier lap, or a sender 128 or more ahead - is rebuilt with the wrong ext
  * and fails rule 1 (0x03, or silence under backoff). Without this, a command
- * 193..255 behind the stream had its low byte back in the window and its
+ * 192..255 behind the stream had its low byte back in the window and its
  * original tag still valid.
  *
  * PROFILE_CMD_EXT_LAST is the highest ext a node accepts: 0xFFFF - 127 =

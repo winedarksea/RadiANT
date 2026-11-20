@@ -1185,7 +1185,8 @@ observer nothing the order below protects.
      in range, or a sender 128 or more ahead — is extended to the wrong `ext`
      and fails rule 1: `0x03`, or silence under backoff. A sender must
      therefore never run more than 127 ahead of the last acknowledgement it
-     received.
+     received. One that did is locked out while it keeps counting forward,
+     and the remedy is an epoch advance.
 4. On power-up `last_ext` is unknown, and the node adopts the sequence of the
    first command that passes the tag check **in the current epoch**, as
    `ext = seq`. That is correct because a sender starts every epoch at `ext = 0`,
@@ -1208,7 +1209,7 @@ yesterday and replayed after a reboot fails verification instead of being
 adopted as a fresh sequence. A command-only node still needs the epoch. Inside
 one epoch the extended sequence does the same job (security review 2026-11-20,
 item 3): with the tag over the eight-bit `seq` alone, a command became valid
-again once the stream had moved 193 past it.
+again once the stream had moved 192 past it.
 
 ### The honest limit on a 16-bit inline tag
 

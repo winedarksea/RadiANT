@@ -411,7 +411,7 @@ ZTEST(command, test_a_bad_tag_changes_no_state_including_last_seq)
 	zassert_equal(7u, n.last_ext);
 }
 
-ZTEST(command, test_the_accept_window_is_one_to_sixty_four_and_wraps)
+ZTEST(command, test_the_accept_window_is_one_to_one_hundred_twenty_seven_and_wraps)
 {
 	struct profile_command_ack a;
 	uint8_t body[PROFILE_TLM_CMD_LEN_STD];
@@ -867,9 +867,12 @@ ZTEST(command, test_a_sender_a_hundred_ahead_is_accepted)
 }
 
 /* 128 or more ahead is past what eight bits can say: it reads as behind, is
- * rebuilt with the wrong ext and fails the tag. The node is not wedged by it -
- * an in-window sender is accepted once the backoff has passed. */
-ZTEST(command, test_a_sender_128_or_more_ahead_fails_the_tag_and_the_node_recovers)
+ * rebuilt with the wrong ext and fails the tag, and no state moves. A sender
+ * that keeps counting forward from there stays 128+ ahead and is locked out
+ * for the rest of the epoch; the only way out is an epoch advance. The last
+ * step below only shows the state is intact - a sender at ext 427 is one that
+ * went BACK into the window, which a monotonic sender never does. */
+ZTEST(command, test_a_sender_128_or_more_ahead_fails_the_tag_and_changes_no_state)
 {
 	struct profile_cmd_node n;
 	struct profile_command_ack a;
@@ -900,7 +903,8 @@ ZTEST(command, test_a_sender_128_or_more_ahead_fails_the_tag_and_the_node_recove
 	zassert_equal(4u, g_exec_calls);
 	zassert_equal(300u, n.last_ext);
 
-	/* An in-window sender, past the backoff, is accepted. */
+	/* last_ext is untouched: an ext inside the window, past the backoff,
+	 * is still accepted. */
 	t += 4u * PROFILE_CMD_BACKOFF_BASE_US;
 	(void)build_command_ext(&n, 427u, PROFILE_TLM_CMD_NOP,
 				PROFILE_TLM_TARGET_NODE, 0u, body, sizeof(body));
