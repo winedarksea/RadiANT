@@ -5,7 +5,7 @@
  *
  * Provenance: docs/radiant-telemetry.md section 9 in full (the page 0x10 and
  * 0x11 layouts, the result-code table, the command vocabulary, the idempotency
- * rule stated as four numbered steps, and the honest-limit paragraph on a
+ * rule stated as five numbered steps, and the honest-limit paragraph on a
  * 16-bit inline tag together with its 2026-08-11 amendment for the long-range
  * PHY) and section 6's schedule block (the downlink interval, phase and dwell
  * this file finally opens a window for). That document is this project's own
@@ -122,6 +122,28 @@ int profile_cmd_channel_check(const struct profile_schedule *s,
 #define PROFILE_CMD_ACCEPT_WINDOW 64u
 
 /*
+ * The extended sequence (security review 2026-11-20, item 3). The wire carries
+ * eight bits; the tag binds sixteen. The receiver keeps last_ext and infers the
+ * high byte from d = delta_u8(seq, last): last_ext + d for d in 1..64,
+ * last_ext for d == 0, and last_ext - (256 - d) otherwise ("behind"), except
+ * that a behind that would go below zero is read as last_ext + d - which only
+ * happens on the first lap, where it is the seq itself. So for every ext < 256
+ * the tag is byte-identical to the eight-bit tag it replaced.
+ *
+ * A command from an earlier lap is rebuilt with the wrong ext and fails rule
+ * 1 like any forgery. Without this, a command 193..255 behind the stream had
+ * its low byte back in the window and its original tag still valid.
+ *
+ * PROFILE_CMD_EXT_LAST is the highest ext a node accepts: 0xFFFF - 64 = 65471.
+ * Accepting it leaves last_ext + PROFILE_CMD_ACCEPT_WINDOW = 0xFFFF, so the
+ * window never wraps the 16-bit counter and no ext is ever reachable twice.
+ * Anything above (anything within 64 of 65536) is refused with 0x02 and
+ * counted in seq_exhausted; the sender must advance the epoch. That is 65472
+ * accepted sequences per epoch, about 4.5 hours of a command every 250 ms.
+ */
+#define PROFILE_CMD_EXT_LAST (0xFFFFu - PROFILE_CMD_ACCEPT_WINDOW)
+
+/*
  * Backoff on failed verifications - the whole mitigation for a 16-bit tag.
  * The n-th consecutive failure blocks for 100 ms << min(n-1, 13): the first
  * 14 failures cost 1638 s total, every one after costs 819.2 s, capping a
@@ -154,6 +176,7 @@ struct profile_cmd_stats {
 	uint32_t adopted;     /* rule 4 fired: a sequence adopted from nothing */
 	uint32_t windows;     /* response slots actually armed */
 	uint32_t window_hits; /* response slots a command arrived in */
+	uint32_t seq_exhausted; /* refused past PROFILE_CMD_EXT_LAST: epoch due */
 };
 
 /*
@@ -180,7 +203,8 @@ struct profile_cmd_slot {
 struct profile_cmd_cfg {
 	/* Identity the tag is bound to. The epoch is why a command captured
 	 * yesterday and replayed after a reboot fails verification instead
-	 * of being adopted as a fresh sequence (rule 4). */
+	 * of being adopted as a fresh sequence (rule 4). Inside one epoch
+	 * the extended sequence does that job (PROFILE_CMD_EXT_LAST). */
 	uint32_t epoch;
 	uint16_t devnum;
 
@@ -201,8 +225,9 @@ struct profile_cmd_cfg {
 struct profile_cmd_node {
 	struct profile_cmd_cfg cfg;
 
-	/* Section 9's idempotency state: last_seq and the result produced. */
-	uint8_t                    last_seq;
+	/* Section 9's idempotency state: the last sequence, EXTENDED to 16
+	 * bits (its low byte is the wire's last_seq), and the result produced. */
+	uint16_t                   last_ext;
 	bool                       seq_known;
 	struct profile_command_ack stored;
 	bool                       stored_valid;
@@ -228,8 +253,18 @@ struct profile_cmd_node {
  * a missing actuator, or a null argument. */
 int profile_cmd_init(struct profile_cmd_node *n, const struct profile_cmd_cfg *cfg);
 
-/* Move to a new epoch. Clears last_seq and the stored ack: a sequence number
- * is only meaningful inside the epoch whose key authenticated it. */
+/*
+ * Move to a new epoch. A real advance clears last_ext and the stored ack: a
+ * sequence number is only meaningful inside the epoch whose key authenticated
+ * it. The current epoch again is a no-op that KEEPS the replay state, so a
+ * retried setter cannot re-arm a command that already ran; an older epoch is
+ * -EINVAL and changes nothing (no rollback). The epoch is a u32 that never
+ * wraps (docs/radiant-security.md 3.5), so "older" is a plain comparison.
+ *
+ * After an advance, rule 4 adopts the first verified command with ext = seq:
+ * a sender starts every epoch with the high byte at 0. A node reboot advances
+ * the epoch (ADR 0009), so adoption only ever happens at an epoch's start.
+ */
 int profile_cmd_set_epoch(struct profile_cmd_node *n, uint32_t epoch);
 
 const struct profile_cmd_stats *profile_cmd_stats(const struct profile_cmd_node *n);
@@ -237,25 +272,40 @@ const struct profile_cmd_stats *profile_cmd_stats(const struct profile_cmd_node 
 /* The tag. */
 
 /*
- * trunc(MAC(K_cmd, nonce || body[0..5])) at the configured width. `body` is
- * a packed page 0x10 or 0x11; the covered six bytes include the page number,
- * which is what separates a command's tag from an acknowledgement's without
- * a second domain byte.
+ * trunc(MAC(K_cmd, nonce || body[0..5])) at the configured width, where the
+ * nonce's counter is `ext`, the EXTENDED sequence (PROFILE_CMD_EXT_LAST).
+ * `body` is a packed page 0x10 or 0x11; the covered six bytes include the
+ * page number, which is what separates a command's tag from an
+ * acknowledgement's without a second domain byte.
  *
- * `tag` receives cfg.tag_len bytes. Returns 0, -EACCES with no root key, or
- * -ENOTSUP without CONFIG_RADIANT_SEC - never OK with an untouched buffer.
+ * A sender keeps its own 16-bit counter per epoch, starting at 0, puts its low
+ * byte in body[1] and tags with it here; it verifies the acknowledgement with
+ * the same ext, so an acknowledgement from an earlier lap cannot answer it.
+ *
+ * `tag` receives cfg.tag_len bytes. Returns 0, -EINVAL when ext's low byte is
+ * not body[1], -EACCES with no root key, or -ENOTSUP without
+ * CONFIG_RADIANT_SEC - never OK with an untouched buffer.
  */
+int profile_cmd_tag_ext(const struct profile_cmd_node *n, const uint8_t *body,
+			uint16_t ext, uint8_t *tag);
+
+/* Constant-time verify of a tag already on the wire, under `ext`. true only
+ * for a match. */
+bool profile_cmd_tag_ok_ext(const struct profile_cmd_node *n,
+			    const uint8_t *body, uint16_t ext,
+			    const uint8_t *tag);
+
+/* The first lap only: ext = body[1]. Correct for an epoch's first 256
+ * sequences, wrong (fails verification) for any later one. */
 int profile_cmd_tag(const struct profile_cmd_node *n, const uint8_t *body,
 		    uint8_t *tag);
-
-/* Constant-time verify of a tag already on the wire. true only for a match. */
 bool profile_cmd_tag_ok(const struct profile_cmd_node *n, const uint8_t *body,
 			const uint8_t *tag);
 
 /* The state machine. */
 
 /*
- * One received page 0x10, through section 9's four rules in order.
+ * One received page 0x10, through section 9's five rules in order.
  *
  * `len` is the received body length (must match the configured width).
  * `now` is the frame's t_sync, what the backoff is measured on.

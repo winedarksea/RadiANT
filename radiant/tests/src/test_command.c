@@ -131,16 +131,19 @@ static void node_init(struct profile_cmd_node *n, uint8_t tag_len, uint32_t epoc
 	zassert_ok(profile_cmd_init(n, &cfg));
 }
 
-/* Build a signed page 0x10 the way a commanding receiver would. */
-static int build_command(struct profile_cmd_node *signer, uint8_t seq, uint8_t cmd,
-			 uint8_t target, uint16_t arg, uint8_t *body, size_t cap)
+/* Build a signed page 0x10 the way a commanding receiver would: its own
+ * 16-bit sequence for the epoch, the low byte on the wire, the whole of it in
+ * the tag (security review 2026-11-20, item 3). */
+static int build_command_ext(struct profile_cmd_node *signer, uint16_t ext,
+			     uint8_t cmd, uint8_t target, uint16_t arg,
+			     uint8_t *body, size_t cap)
 {
 	struct profile_command c;
 	uint8_t tag[PROFILE_TLM_CMD_TAG_LR];
 	int rc;
 
 	memset(&c, 0, sizeof(c));
-	c.seq = seq;
+	c.seq = (uint8_t)ext;
 	c.cmd = cmd;
 	c.target = target;
 	c.arg = arg;
@@ -148,8 +151,15 @@ static int build_command(struct profile_cmd_node *signer, uint8_t seq, uint8_t c
 	memset(tag, 0, sizeof(tag));
 	rc = profile_command_encode_tag(&c, tag, signer->cfg.tag_len, body, cap);
 	zassert_true(rc > 0);
-	zassert_ok(profile_cmd_tag(signer, body, tag));
+	zassert_ok(profile_cmd_tag_ext(signer, body, ext, tag));
 	return profile_command_encode_tag(&c, tag, signer->cfg.tag_len, body, cap);
+}
+
+/* An epoch's first lap, where ext is the wire's seq. */
+static int build_command(struct profile_cmd_node *signer, uint8_t seq, uint8_t cmd,
+			 uint8_t target, uint16_t arg, uint8_t *body, size_t cap)
+{
+	return build_command_ext(signer, seq, cmd, target, arg, body, cap);
 }
 
 static void cmd_before(void *fixture)
@@ -398,7 +408,7 @@ ZTEST(command, test_a_bad_tag_changes_no_state_including_last_seq)
 	zassert_true(rc > 0);
 	zassert_equal(1u, g_exec_calls);
 	zassert_equal(1u, profile_cmd_stats(&n)->adopted);
-	zassert_equal(7u, n.last_seq);
+	zassert_equal(7u, n.last_ext);
 }
 
 ZTEST(command, test_the_accept_window_is_one_to_sixty_four_and_wraps)
@@ -621,6 +631,177 @@ ZTEST(command, test_resetting_the_same_epoch_keeps_the_duplicate_history)
 	zassert_equal(PROFILE_TLM_RESULT_ALREADY, a.result);
 	zassert_equal(1u, g_exec_calls, "a setter retry re-armed a replay");
 	zassert_equal(1u, profile_cmd_stats(&n)->adopted);
+}
+
+ZTEST(command, test_an_older_epoch_is_refused_and_changes_nothing)
+{
+	struct profile_cmd_node n;
+	uint8_t body[PROFILE_TLM_CMD_LEN_STD];
+	uint8_t ack[PROFILE_TLM_CMD_LEN_LR];
+
+	node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_B);
+	(void)build_command(&n, 21u, PROFILE_TLM_CMD_NOP, PROFILE_TLM_TARGET_NODE,
+			    0u, body, sizeof(body));
+	zassert_true(profile_cmd_on_command(&n, body, sizeof(body), 1000u, ack,
+					    sizeof(ack)) > 0);
+
+	/* A rollback would make every tag EPOCH_A ever produced valid again. */
+	zassert_equal(-EINVAL, profile_cmd_set_epoch(&n, EPOCH_A));
+	zassert_equal(EPOCH_B, n.cfg.epoch);
+	zassert_true(n.seq_known);
+	zassert_true(n.stored_valid);
+	zassert_equal(21u, n.last_ext);
+
+	/* Only a real advance forgets the sequence. */
+	zassert_ok(profile_cmd_set_epoch(&n, EPOCH_B + 1u));
+	zassert_false(n.seq_known);
+	zassert_false(n.stored_valid);
+}
+
+/* What the extended sequence costs a legitimate sender: nothing. Commands on
+ * the second lap, tagged with their real ext, are accepted, and each ack is
+ * bound to that ext - the first lap's tag over the same bytes does not
+ * verify it, so an earlier lap's ack cannot answer a later command. */
+ZTEST(command, test_second_lap_commands_tagged_with_their_ext_are_accepted)
+{
+	struct profile_cmd_node n;
+	struct profile_command_ack a;
+	uint8_t body[PROFILE_TLM_CMD_LEN_STD];
+	uint8_t ack[PROFILE_TLM_CMD_LEN_LR];
+	uint8_t tag[PROFILE_TLM_CMD_TAG_LR];
+	uint32_t ext;
+	int rc;
+
+	node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
+	for (ext = 10u; ext <= 210u; ext += 50u) {
+		(void)build_command_ext(&n, (uint16_t)ext, PROFILE_TLM_CMD_NOP,
+					PROFILE_TLM_TARGET_NODE, 0u, body,
+					sizeof(body));
+		zassert_true(profile_cmd_on_command(&n, body, sizeof(body), 1000u,
+						    ack, sizeof(ack)) > 0);
+	}
+
+	/* 266 = 0x10A: seq 10 on the wire, 56 past 210. */
+	(void)build_command_ext(&n, 266u, PROFILE_TLM_CMD_SET_BOOL, 0x01u, 1u,
+				body, sizeof(body));
+	zassert_equal(10u, body[1]);
+	rc = profile_cmd_on_command(&n, body, sizeof(body), 2000u, ack,
+				    sizeof(ack));
+	zassert_true(rc > 0);
+	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
+						    sizeof(tag)) > 0);
+	zassert_equal(PROFILE_TLM_RESULT_OK, a.result);
+	zassert_equal(6u, g_exec_calls);
+	zassert_equal(266u, n.last_ext);
+	zassert_true(profile_cmd_tag_ok_ext(&n, ack, 266u,
+					    &ack[PROFILE_TLM_CMD_COVERED]));
+	zassert_false(profile_cmd_tag_ok(&n, ack, &ack[PROFILE_TLM_CMD_COVERED]));
+
+	/* Its retry is a duplicate, as on the first lap. */
+	rc = profile_cmd_on_command(&n, body, sizeof(body), 3000u, ack,
+				    sizeof(ack));
+	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
+						    sizeof(tag)) > 0);
+	zassert_equal(PROFILE_TLM_RESULT_ALREADY, a.result);
+	zassert_equal(6u, g_exec_calls);
+
+	/* Across the next byte wrap too (300 -> 0x12C, 520 -> 0x208). */
+	for (ext = 300u; ext <= 520u; ext += 55u) {
+		(void)build_command_ext(&n, (uint16_t)ext, PROFILE_TLM_CMD_NOP,
+					PROFILE_TLM_TARGET_NODE, 0u, body,
+					sizeof(body));
+		rc = profile_cmd_on_command(&n, body, sizeof(body), 4000u, ack,
+					    sizeof(ack));
+		zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a,
+							    tag, sizeof(tag)) > 0);
+		zassert_equal(PROFILE_TLM_RESULT_OK, a.result, "ext %u", (unsigned int)ext);
+	}
+	zassert_equal(11u, g_exec_calls);
+
+	/* A recent stale command still verifies and is refused as stale, not
+	 * as forged: 0x02, as before the extension. */
+	(void)build_command_ext(&n, 500u, PROFILE_TLM_CMD_NOP,
+				PROFILE_TLM_TARGET_NODE, 0u, body, sizeof(body));
+	rc = profile_cmd_on_command(&n, body, sizeof(body), 5000u, ack,
+				    sizeof(ack));
+	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
+						    sizeof(tag)) > 0);
+	zassert_equal(PROFILE_TLM_RESULT_BAD_SEQ, a.result);
+	zassert_equal(0u, profile_cmd_stats(&n)->bad_tag);
+
+	/* A tag whose ext disagrees with the wire byte is not a tag. */
+	zassert_equal(-EINVAL, profile_cmd_tag_ext(&n, body, 501u, tag));
+}
+
+/* PROFILE_CMD_EXT_LAST = 65471 is the last ext an epoch accepts; 65472, within
+ * 64 of 65536, is refused so the window never wraps the 16-bit counter. Walked
+ * there with genuine commands, not by writing last_ext. */
+ZTEST(command, test_the_extended_sequence_is_refused_before_it_can_wrap)
+{
+	struct profile_cmd_node n;
+	struct profile_command_ack a;
+	uint8_t body[PROFILE_TLM_CMD_LEN_STD];
+	uint8_t last[PROFILE_TLM_CMD_LEN_STD];
+	uint8_t ack[PROFILE_TLM_CMD_LEN_LR];
+	uint8_t tag[PROFILE_TLM_CMD_TAG_LR];
+	uint32_t ext;
+	int rc;
+
+	zassert_equal(65471u, PROFILE_CMD_EXT_LAST);
+
+	node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
+	for (ext = 0u; ext <= 65408u; ext += PROFILE_CMD_ACCEPT_WINDOW) {
+		(void)build_command_ext(&n, (uint16_t)ext, PROFILE_TLM_CMD_NOP,
+					PROFILE_TLM_TARGET_NODE, 0u, body,
+					sizeof(body));
+		zassert_true(profile_cmd_on_command(&n, body, sizeof(body), 1000u,
+						    ack, sizeof(ack)) > 0);
+	}
+	zassert_equal(65408u, n.last_ext);
+	zassert_equal(1023u, g_exec_calls);
+
+	/* The last one an epoch may use. */
+	(void)build_command_ext(&n, PROFILE_CMD_EXT_LAST, PROFILE_TLM_CMD_SET_BOOL,
+				0x01u, 1u, last, sizeof(last));
+	rc = profile_cmd_on_command(&n, last, sizeof(last), 2000u, ack, sizeof(ack));
+	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
+						    sizeof(tag)) > 0);
+	zassert_equal(PROFILE_TLM_RESULT_OK, a.result);
+	zassert_equal(1024u, g_exec_calls);
+
+	/* One more, and the top of the window: 0x02, counted, nothing runs. */
+	(void)build_command_ext(&n, PROFILE_CMD_EXT_LAST + 1u, PROFILE_TLM_CMD_NOP,
+				PROFILE_TLM_TARGET_NODE, 0u, body, sizeof(body));
+	rc = profile_cmd_on_command(&n, body, sizeof(body), 3000u, ack, sizeof(ack));
+	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
+						    sizeof(tag)) > 0);
+	zassert_equal(PROFILE_TLM_RESULT_BAD_SEQ, a.result);
+	(void)build_command_ext(&n, 0xFFFFu, PROFILE_TLM_CMD_NOP,
+				PROFILE_TLM_TARGET_NODE, 0u, body, sizeof(body));
+	rc = profile_cmd_on_command(&n, body, sizeof(body), 4000u, ack, sizeof(ack));
+	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
+						    sizeof(tag)) > 0);
+	zassert_equal(PROFILE_TLM_RESULT_BAD_SEQ, a.result);
+	zassert_equal(1024u, g_exec_calls);
+	zassert_equal(2u, profile_cmd_stats(&n)->seq_exhausted);
+	zassert_equal(0u, profile_cmd_stats(&n)->bad_seq);
+	zassert_equal(PROFILE_CMD_EXT_LAST, n.last_ext);
+
+	/* The last accepted command still answers its retry. */
+	rc = profile_cmd_on_command(&n, last, sizeof(last), 5000u, ack, sizeof(ack));
+	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
+						    sizeof(tag)) > 0);
+	zassert_equal(PROFILE_TLM_RESULT_ALREADY, a.result);
+
+	/* The way out is a new epoch, where the sender starts again at 0. */
+	zassert_ok(profile_cmd_set_epoch(&n, EPOCH_B));
+	(void)build_command(&n, 0u, PROFILE_TLM_CMD_NOP, PROFILE_TLM_TARGET_NODE,
+			    0u, body, sizeof(body));
+	rc = profile_cmd_on_command(&n, body, sizeof(body), 6000u, ack, sizeof(ack));
+	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
+						    sizeof(tag)) > 0);
+	zassert_equal(PROFILE_TLM_RESULT_OK, a.result);
+	zassert_equal(1025u, g_exec_calls);
 }
 
 /* ---------------------------------------------------------------------------

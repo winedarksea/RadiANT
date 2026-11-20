@@ -1096,8 +1096,13 @@ k times.
 [2]    command id
 [3]    target field id; 0xFF = the node as a whole
 [4..5] argument (u16 LE), scaled by the target field's exponent
-[6..7] inline tag (u16) = trunc16(MAC(K_cmd, epoch || seq || cmd || target || arg))
+[6..7] inline tag (u16) = trunc16(MAC(K_cmd, epoch || ext || cmd || target || arg))
 ```
+
+`ext` is the **extended sequence**: a 16-bit counter the sender keeps per epoch,
+starting at 0, whose low byte is `[1]`. Only the low byte travels; the node
+infers the rest (rule 3 below). For the first 256 commands of an epoch `ext`
+equals `seq` and the tag is the one an eight-bit sequence produced.
 
 ### Page `0x11` — command acknowledge
 
@@ -1107,8 +1112,11 @@ k times.
 [2]    result code
 [3]    command id, echoed
 [4..5] resulting value of the target field (u16, target field's scaling)
-[6..7] inline tag (u16) over (epoch || seq || result || cmd || value)
+[6..7] inline tag (u16) over (epoch || ext || result || cmd || value)
 ```
+
+The acknowledgement is tagged under the command's `ext`, so an acknowledgement
+captured on an earlier lap cannot answer a later command with the same low byte.
 
 Result codes:
 
@@ -1149,23 +1157,44 @@ protocol to it adds rows to no table at all.
 
 ### Idempotency, stated as a rule
 
-The node keeps `last_seq` and the `result` it produced.
+The node keeps `last_ext`, the extended sequence of the last command it
+answered (its low byte is the wire's `last_seq`), and the `result` it produced.
+Before rule 1 it extends the received `seq`, from `d = delta_u8(seq, last_seq)`:
+`ext = last_ext + d` for `d` in 1..64, `ext = last_ext` for `d = 0`, and
+otherwise `ext = last_ext - (256 - d)`, the command "behind" — unless that would
+go below zero, which can only happen on the first lap, where `ext = last_ext + d`
+is `seq` itself. Before adoption `ext = seq`. This uses only public state, so it
+tells an observer nothing the order below protects.
 
-1. Verify the tag first. A bad tag is rejected with `0x03` and **changes no
-   state**, including `last_seq`.
-2. If `seq == last_seq`, **re-send the stored acknowledgement and do not
+1. Verify the tag first, under that `ext`. A bad tag is rejected with `0x03` and
+   **changes no state**, including `last_ext`.
+2. If `ext == last_ext`, **re-send the stored acknowledgement and do not
    execute again.** Same sequence, same effect. This is what makes a retried
    "AC on" safe.
-3. Otherwise accept if `delta_u8(seq, last_seq)` is in 1..64 — a window wide
-   enough to survive a run of loss, narrow enough that a stale command cannot
-   walk back into range. Anything else is rejected with `0x02`.
-4. On power-up `last_seq` is unknown, and the node adopts the sequence of the
-   first command that passes the tag check **in the current epoch**.
+3. Otherwise accept if `ext - last_ext` is in 1..64 — a window wide enough to
+   survive a run of loss, narrow enough that a stale command cannot walk back
+   into range. Anything else is rejected with `0x02`. A command from an earlier
+   lap, whose low byte is back inside the window, is extended to the wrong `ext`
+   and fails rule 1 instead: its tag was made under a different counter.
+4. On power-up `last_ext` is unknown, and the node adopts the sequence of the
+   first command that passes the tag check **in the current epoch**, as
+   `ext = seq`. That is correct because a sender starts every epoch at `ext = 0`,
+   and a node reboot advances the epoch (ADR 0009), so adoption only happens at
+   an epoch's start. Setting the current epoch again keeps `last_ext` and the
+   stored acknowledgement; an older epoch is refused.
+5. **The extended sequence never wraps.** A command whose `ext` would be above
+   65471 (`0xFFFF - 64`, within one window of 65536) is rejected with `0x02`
+   and counted, and executes nothing. Accepting 65471 leaves `last_ext + 64 =
+   0xFFFF`, so the window never reaches a counter value twice. That is 65472
+   sequences per epoch; a sender that reaches the end must advance the epoch.
 
 Step 4 is where the epoch earns its four bytes even on a node with no
 confidentiality and no privacy: the tag covers the epoch, so a command captured
 yesterday and replayed after a reboot fails verification instead of being
-adopted as a fresh sequence. A command-only node still needs the epoch.
+adopted as a fresh sequence. A command-only node still needs the epoch. Inside
+one epoch the extended sequence does the same job (security review 2026-11-20,
+item 3): with the tag over the eight-bit `seq` alone, a command became valid
+again once the stream had moved 193 past it.
 
 ### The honest limit on a 16-bit inline tag
 

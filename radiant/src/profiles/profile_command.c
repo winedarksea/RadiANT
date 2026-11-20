@@ -12,7 +12,9 @@
  * The order of on_command() is section 9's order and must stay that way: tag,
  * then duplicate, then window, then execute. Checking the window before the
  * tag, for instance, turns the accept window into a free oracle for which
- * sequence numbers are live.
+ * sequence numbers are live. The extended sequence the tag is checked under
+ * is inferred before rule 1, but only from public state (last_ext and the
+ * wire's seq), so it answers nothing an observer could not compute.
  */
 
 #include <errno.h>
@@ -89,12 +91,23 @@ int profile_cmd_set_epoch(struct profile_cmd_node *n, uint32_t epoch)
 		return -EINVAL;
 	}
 
+	/* The epoch is a u32 that never wraps (docs/radiant-security.md
+	 * 3.5). Rollback would re-validate every tag the older epoch made;
+	 * the same epoch again is a setter retry and must keep the history
+	 * that stops a replay (security review 2026-11-20, item 3). */
+	if (epoch < n->cfg.epoch) {
+		return -EINVAL;
+	}
+	if (epoch == n->cfg.epoch) {
+		return 0;
+	}
+
 	n->cfg.epoch = epoch;
 	/* See the header: a sequence number is meaningless outside the epoch
 	 * whose key authenticated it. */
 	n->seq_known = false;
 	n->stored_valid = false;
-	n->last_seq = 0u;
+	n->last_ext = 0u;
 	return 0;
 }
 
@@ -108,8 +121,8 @@ const struct profile_cmd_stats *profile_cmd_stats(const struct profile_cmd_node 
  * ---------------------------------------------------------------------------
  */
 
-int profile_cmd_tag(const struct profile_cmd_node *n, const uint8_t *body,
-		    uint8_t *tag)
+int profile_cmd_tag_ext(const struct profile_cmd_node *n, const uint8_t *body,
+			uint16_t ext, uint8_t *tag)
 {
 #if defined(CONFIG_RADIANT_SEC)
 	struct radiant_sec_cmac_ctx ctx;
@@ -118,7 +131,8 @@ int profile_cmd_tag(const struct profile_cmd_node *n, const uint8_t *body,
 	uint8_t full[RADIANT_SEC_BLOCK_BYTES];
 	int rc;
 
-	if (n == NULL || body == NULL || tag == NULL) {
+	if (n == NULL || body == NULL || tag == NULL ||
+	    (uint8_t)ext != body[1]) {
 		return -EINVAL;
 	}
 	if (n->cfg.k_root == NULL) {
@@ -134,10 +148,12 @@ int profile_cmd_tag(const struct profile_cmd_node *n, const uint8_t *body,
 		return -EIO;
 	}
 
-	/* Sequence number rides the nonce too, so two pages differing only in
-	 * sequence never share a MAC block. */
-	radiant_sec_nonce_block(nonce, n->cfg.epoch, n->cfg.devnum,
-				(uint16_t)body[1], RADIANT_SEC_DOM_TLM_CMD);
+	/* The EXTENDED sequence rides the nonce, so two pages differing only
+	 * in sequence never share a MAC block - including two whose wire
+	 * byte is the same a lap apart. For ext < 256 this is the eight-bit
+	 * nonce it replaced, byte for byte. */
+	radiant_sec_nonce_block(nonce, n->cfg.epoch, n->cfg.devnum, ext,
+				RADIANT_SEC_DOM_TLM_CMD);
 
 	rc = radiant_sec_cmac_init(&ctx, &k_cmd);
 	if (rc == RADIANT_SEC_OK) {
@@ -161,14 +177,22 @@ int profile_cmd_tag(const struct profile_cmd_node *n, const uint8_t *body,
 #else
 	(void)n;
 	(void)body;
+	(void)ext;
 	(void)tag;
 	/* Never OK with an untouched buffer. See the header. */
 	return -ENOTSUP;
 #endif
 }
 
-bool profile_cmd_tag_ok(const struct profile_cmd_node *n, const uint8_t *body,
-			const uint8_t *tag)
+int profile_cmd_tag(const struct profile_cmd_node *n, const uint8_t *body,
+		    uint8_t *tag)
+{
+	return profile_cmd_tag_ext(n, body, (body == NULL) ? 0u : body[1], tag);
+}
+
+bool profile_cmd_tag_ok_ext(const struct profile_cmd_node *n,
+			    const uint8_t *body, uint16_t ext,
+			    const uint8_t *tag)
 {
 	uint8_t want[PROFILE_TLM_CMD_TAG_LR];
 	uint8_t diff = 0u;
@@ -177,7 +201,7 @@ bool profile_cmd_tag_ok(const struct profile_cmd_node *n, const uint8_t *body,
 	if (n == NULL || body == NULL || tag == NULL) {
 		return false;
 	}
-	if (profile_cmd_tag(n, body, want) != 0) {
+	if (profile_cmd_tag_ext(n, body, ext, want) != 0) {
 		return false;
 	}
 
@@ -188,6 +212,13 @@ bool profile_cmd_tag_ok(const struct profile_cmd_node *n, const uint8_t *body,
 	}
 	memset(want, 0, sizeof(want));
 	return diff == 0u;
+}
+
+bool profile_cmd_tag_ok(const struct profile_cmd_node *n, const uint8_t *body,
+			const uint8_t *tag)
+{
+	return profile_cmd_tag_ok_ext(n, body, (body == NULL) ? 0u : body[1],
+				      tag);
 }
 
 /* ---------------------------------------------------------------------------
@@ -217,7 +248,7 @@ static void backoff_clear(struct profile_cmd_node *n)
 }
 
 /* ---------------------------------------------------------------------------
- * The state machine - section 9's four rules, in section 9's order
+ * The state machine - section 9's five rules, in section 9's order
  * ---------------------------------------------------------------------------
  */
 
@@ -228,9 +259,33 @@ static uint8_t delta_u8(uint8_t seq, uint8_t last)
 	return (uint8_t)(seq - last);
 }
 
+/* The wire's eight bits, extended against last_ext (profile_command.h,
+ * PROFILE_CMD_EXT_LAST). Before adoption the sender is at an epoch's start,
+ * so ext = seq. A behind that would go below zero can only be the first
+ * lap, where last_ext + d is the seq itself; it cannot overflow there, and
+ * past the first lap last_ext <= PROFILE_CMD_EXT_LAST keeps last_ext + d
+ * (d <= 64) inside 16 bits. */
+static uint16_t ext_of(const struct profile_cmd_node *n, uint8_t seq)
+{
+	uint8_t d = delta_u8(seq, (uint8_t)n->last_ext);
+
+	if (!n->seq_known) {
+		return seq;
+	}
+	if (d == 0u) {
+		return n->last_ext;
+	}
+	if (d <= PROFILE_CMD_ACCEPT_WINDOW || n->last_ext < (uint16_t)(256u - d)) {
+		return (uint16_t)(n->last_ext + d);
+	}
+	return (uint16_t)(n->last_ext - (256u - d));
+}
+
+/* `ext` is the command's: the ack is tagged under the same extended
+ * sequence, so an earlier lap's ack cannot answer a later command. */
 static int emit_ack(struct profile_cmd_node *n,
-		    const struct profile_command_ack *a, uint8_t *ack,
-		    size_t ack_cap)
+		    const struct profile_command_ack *a, uint16_t ext,
+		    uint8_t *ack, size_t ack_cap)
 {
 	uint8_t body[PROFILE_TLM_CMD_LEN_LR];
 	uint8_t tag[PROFILE_TLM_CMD_TAG_LR];
@@ -245,7 +300,7 @@ static int emit_ack(struct profile_cmd_node *n,
 		return rc;
 	}
 
-	if (profile_cmd_tag(n, body, tag) != 0) {
+	if (profile_cmd_tag_ext(n, body, ext, tag) != 0) {
 		return -EACCES;
 	}
 	rc = profile_command_ack_encode_tag(a, tag, n->cfg.tag_len, body,
@@ -269,6 +324,7 @@ int profile_cmd_on_command(struct profile_cmd_node *n, const uint8_t *body,
 	uint8_t tag[PROFILE_TLM_CMD_TAG_LR];
 	uint8_t result;
 	uint16_t value = 0u;
+	uint16_t ext;
 	int rc;
 
 	if (n == NULL || body == NULL || ack == NULL) {
@@ -299,11 +355,12 @@ int profile_cmd_on_command(struct profile_cmd_node *n, const uint8_t *body,
 		return 0;
 	}
 
-	/* --- Rule 1: verify the tag first. ---------------------------------
-	 * A failure changes no protocol state (not last_seq, not the stored
+	/* --- Rule 1: verify the tag first, under the inferred ext. --------
+	 * A failure changes no protocol state (not last_ext, not the stored
 	 * ack) - only the backoff counter moves.
 	 */
-	if (!profile_cmd_tag_ok(n, body, tag)) {
+	ext = ext_of(n, c.seq);
+	if (!profile_cmd_tag_ok_ext(n, body, ext, tag)) {
 		bool first = (n->fails == 0u);
 
 		n->stats.bad_tag++;
@@ -317,7 +374,7 @@ int profile_cmd_on_command(struct profile_cmd_node *n, const uint8_t *body,
 		a.result = PROFILE_TLM_RESULT_BAD_TAG;
 		a.cmd = c.cmd;
 		a.value = 0u;
-		return emit_ack(n, &a, ack, ack_cap);
+		return emit_ack(n, &a, ext, ack, ack_cap);
 	}
 
 	backoff_clear(n);
@@ -330,35 +387,40 @@ int profile_cmd_on_command(struct profile_cmd_node *n, const uint8_t *body,
 	 * never ran would be a lie. Tag is recomputed either way since it
 	 * covers the result.
 	 */
-	if (n->seq_known && c.seq == n->last_seq && n->stored_valid) {
+	if (n->seq_known && ext == n->last_ext && n->stored_valid) {
 		a = n->stored;
 		if (a.result == PROFILE_TLM_RESULT_OK) {
 			a.result = PROFILE_TLM_RESULT_ALREADY;
 		}
 		n->stats.repeats++;
 		profile_cmd_expect(n, PROFILE_CMD_RETRY_WINDOWS);
-		return emit_ack(n, &a, ack, ack_cap);
+		return emit_ack(n, &a, ext, ack, ack_cap);
 	}
 
-	/* --- Rules 3 and 4: the accept window, and adoption from nothing. --- */
+	/* --- Rules 3 and 4: the accept window, and adoption from nothing. ---
+	 * Rule 4 is safe because the tag check above already excludes a
+	 * command captured in a previous epoch. Outside the window, or past
+	 * the last ext an epoch may use, the answer is 0x02 and nothing moves.
+	 */
+	result = PROFILE_TLM_RESULT_OK;
+	if (n->seq_known && (ext <= n->last_ext ||
+			     ext - n->last_ext > PROFILE_CMD_ACCEPT_WINDOW)) {
+		n->stats.bad_seq++;
+		result = PROFILE_TLM_RESULT_BAD_SEQ;
+	} else if (ext > PROFILE_CMD_EXT_LAST) {
+		n->stats.seq_exhausted++;
+		result = PROFILE_TLM_RESULT_BAD_SEQ;
+	}
+	if (result != PROFILE_TLM_RESULT_OK) {
+		memset(&a, 0, sizeof(a));
+		a.seq = c.seq;
+		a.result = result;
+		a.cmd = c.cmd;
+		profile_cmd_expect(n, PROFILE_CMD_RETRY_WINDOWS);
+		return emit_ack(n, &a, ext, ack, ack_cap);
+	}
 	if (!n->seq_known) {
-		/* Rule 4. Safe because the tag check above already excludes a
-		 * command captured in a previous epoch. */
 		n->stats.adopted++;
-	} else {
-		uint8_t d = delta_u8(c.seq, n->last_seq);
-
-		if (d == 0u || d > PROFILE_CMD_ACCEPT_WINDOW) {
-			/* d == 0 with no stored ack: node rebooted mid-
-			 * exchange. Still outside the window either way. */
-			n->stats.bad_seq++;
-			memset(&a, 0, sizeof(a));
-			a.seq = c.seq;
-			a.result = PROFILE_TLM_RESULT_BAD_SEQ;
-			a.cmd = c.cmd;
-			profile_cmd_expect(n, PROFILE_CMD_RETRY_WINDOWS);
-			return emit_ack(n, &a, ack, ack_cap);
-		}
 	}
 
 	result = n->cfg.execute(c.cmd, c.target, c.arg, &value, n->cfg.user);
@@ -376,13 +438,13 @@ int profile_cmd_on_command(struct profile_cmd_node *n, const uint8_t *body,
 
 	/* Sequence advances on any answer, accepted or refused - storing only
 	 * successes would make a refused command retry forever. */
-	n->last_seq = c.seq;
+	n->last_ext = ext;
 	n->seq_known = true;
 	n->stored = a;
 	n->stored_valid = true;
 
 	profile_cmd_expect(n, PROFILE_CMD_RETRY_WINDOWS);
-	return emit_ack(n, &a, ack, ack_cap);
+	return emit_ack(n, &a, ext, ack, ack_cap);
 }
 
 /* ---------------------------------------------------------------------------
