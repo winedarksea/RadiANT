@@ -247,6 +247,18 @@ static void backoff_clear(struct profile_cmd_node *n)
 	n->blocked_until = 0u;
 }
 
+/* After any authenticated answer, at least PROFILE_CMD_RETRY_WINDOWS windows
+ * stay open: expect_left is raised to that count, never added to. Adding let
+ * one recorded command bank windows without bound (each replay spends one
+ * window and buys two). Raising keeps a retry of a retry working, penalty or
+ * not, and never takes away windows bought with profile_cmd_expect(). */
+static void retry_windows_top_up(struct profile_cmd_node *n)
+{
+	if (n->expect_left < PROFILE_CMD_RETRY_WINDOWS) {
+		n->expect_left = PROFILE_CMD_RETRY_WINDOWS;
+	}
+}
+
 /* ---------------------------------------------------------------------------
  * The state machine - section 9's five rules, in section 9's order
  * ---------------------------------------------------------------------------
@@ -378,7 +390,10 @@ int profile_cmd_on_command(struct profile_cmd_node *n, const uint8_t *body,
 		return emit_ack(n, &a, ext, ack, ack_cap);
 	}
 
-	backoff_clear(n);
+	/* A genuine tag is not yet a success. The duplicate and the 0x02 below
+	 * answer commands anyone can record off air, so the ladder clears only
+	 * where a fresh sequence is accepted (security review 2026-11-20
+	 * item 4). */
 
 	/* --- Rule 2: a duplicate executes nothing. -------------------------
 	 * Re-sends the stored content but reports 0x01 (already executed)
@@ -394,7 +409,7 @@ int profile_cmd_on_command(struct profile_cmd_node *n, const uint8_t *body,
 			a.result = PROFILE_TLM_RESULT_ALREADY;
 		}
 		n->stats.repeats++;
-		profile_cmd_expect(n, PROFILE_CMD_RETRY_WINDOWS);
+		retry_windows_top_up(n);
 		return emit_ack(n, &a, ext, ack, ack_cap);
 	}
 
@@ -417,9 +432,10 @@ int profile_cmd_on_command(struct profile_cmd_node *n, const uint8_t *body,
 		a.seq = c.seq;
 		a.result = result;
 		a.cmd = c.cmd;
-		profile_cmd_expect(n, PROFILE_CMD_RETRY_WINDOWS);
+		retry_windows_top_up(n);
 		return emit_ack(n, &a, ext, ack, ack_cap);
 	}
+	backoff_clear(n);
 	if (!n->seq_known) {
 		n->stats.adopted++;
 	}
@@ -444,7 +460,7 @@ int profile_cmd_on_command(struct profile_cmd_node *n, const uint8_t *body,
 	n->stored = a;
 	n->stored_valid = true;
 
-	profile_cmd_expect(n, PROFILE_CMD_RETRY_WINDOWS);
+	retry_windows_top_up(n);
 	return emit_ack(n, &a, ext, ack, ack_cap);
 }
 

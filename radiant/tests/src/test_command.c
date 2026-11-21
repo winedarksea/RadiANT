@@ -948,6 +948,234 @@ ZTEST(command, test_a_command_a_hundred_behind_gets_an_authenticated_0x02)
 	zassert_equal(400u, n.last_ext);
 }
 
+/* Security review 2026-11-20 item 4: a replay is authenticated (its tag is
+ * genuine), but it is not a success. Both replays below can be recorded off
+ * air. If either one cleared the ladder, an attacker could interleave them
+ * with forgeries: every forgery would then start again at 100 ms and earn a
+ * 0x03, and a 16-bit tag would fall in hours instead of about 625 days. */
+static void forge_from(const uint8_t *good, uint8_t *forged)
+{
+	memcpy(forged, good, PROFILE_TLM_CMD_LEN_STD);
+	forged[PROFILE_TLM_CMD_COVERED] ^= 0xFFu;
+}
+
+static void replay_keeps_the_ladder(struct profile_cmd_node *n,
+				    const uint8_t *replay, uint8_t want_result,
+				    uint16_t want_ext, const uint8_t *forged)
+{
+	struct profile_command_ack a;
+	uint8_t ack[PROFILE_TLM_CMD_LEN_LR];
+	uint8_t tag[PROFILE_TLM_CMD_TAG_LR];
+	radiant_time_t t = 1000000u;
+	radiant_time_t blocked_1;
+	uint32_t exec_before = g_exec_calls;
+	int rc;
+
+	/* Forgery 1: answered once with 0x03, ladder at the base. */
+	zassert_true(profile_cmd_on_command(n, forged, PROFILE_TLM_CMD_LEN_STD, t,
+					    ack, sizeof(ack)) > 0);
+	zassert_equal(1u, n->fails);
+	blocked_1 = n->blocked_until;
+	zassert_equal(t + PROFILE_CMD_BACKOFF_BASE_US, blocked_1);
+	/* Every window bought so far has been spent. */
+	n->expect_left = 0u;
+
+	/* The replay, once the block has run out: still answered, still
+	 * authenticated, still the same result - and the ladder stays put. */
+	t = blocked_1;
+	rc = profile_cmd_on_command(n, replay, PROFILE_TLM_CMD_LEN_STD, t, ack,
+				    sizeof(ack));
+	zassert_equal((int)PROFILE_TLM_CMD_LEN_STD, rc);
+	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
+						    sizeof(tag)) > 0);
+	zassert_equal(want_result, a.result);
+	zassert_true(profile_cmd_tag_ok_ext(n, ack, want_ext,
+					    &ack[PROFILE_TLM_CMD_COVERED]));
+	zassert_equal(exec_before, g_exec_calls);
+	zassert_equal(1u, n->fails);
+	zassert_equal(blocked_1, n->blocked_until);
+	/* The penalty does not make the node deaf: a sender whose answer was
+	 * lost again finds the retry windows open. The top-up is bounded, so
+	 * this buys an attacker nothing (see the banking test below). */
+	zassert_equal(PROFILE_CMD_RETRY_WINDOWS, n->expect_left);
+
+	/* Forgery 2: silent, and the interval has doubled. */
+	zassert_equal(0, profile_cmd_on_command(n, forged, PROFILE_TLM_CMD_LEN_STD,
+						t, ack, sizeof(ack)));
+	zassert_equal(2u, n->fails);
+	zassert_equal(t + (2u * PROFILE_CMD_BACKOFF_BASE_US), n->blocked_until);
+	zassert_equal(2u, profile_cmd_stats(n)->bad_tag);
+
+	/* Inside the new block, the next forgery is not even verified. */
+	zassert_equal(0, profile_cmd_on_command(n, forged, PROFILE_TLM_CMD_LEN_STD,
+						t + 1u, ack, sizeof(ack)));
+	zassert_equal(1u, profile_cmd_stats(n)->throttled);
+	zassert_equal(2u, profile_cmd_stats(n)->bad_tag);
+}
+
+ZTEST(command, test_a_replayed_duplicate_does_not_clear_the_backoff)
+{
+	struct profile_cmd_node n;
+	uint8_t dup[PROFILE_TLM_CMD_LEN_STD];
+	uint8_t next[PROFILE_TLM_CMD_LEN_STD];
+	uint8_t forged[PROFILE_TLM_CMD_LEN_STD];
+	uint8_t ack[PROFILE_TLM_CMD_LEN_LR];
+
+	node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
+	(void)build_command(&n, 5u, PROFILE_TLM_CMD_SET_BOOL, 0x01u, 1u, dup,
+			    sizeof(dup));
+	zassert_true(profile_cmd_on_command(&n, dup, sizeof(dup), 1000u, ack,
+					    sizeof(ack)) > 0);
+	zassert_equal(1u, g_exec_calls);
+
+	(void)build_command(&n, 6u, PROFILE_TLM_CMD_SET_BOOL, 0x01u, 0u, next,
+			    sizeof(next));
+	forge_from(next, forged);
+	replay_keeps_the_ladder(&n, dup, PROFILE_TLM_RESULT_ALREADY, 5u, forged);
+	zassert_equal(1u, profile_cmd_stats(&n)->repeats);
+	zassert_equal(5u, n.last_ext);
+}
+
+ZTEST(command, test_a_stale_replay_does_not_clear_the_backoff)
+{
+	struct profile_cmd_node n;
+	uint8_t stale[PROFILE_TLM_CMD_LEN_STD];
+	uint8_t next[PROFILE_TLM_CMD_LEN_STD];
+	uint8_t forged[PROFILE_TLM_CMD_LEN_STD];
+
+	node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
+	walk_to(&n, 0u, 0u);
+	(void)build_command_ext(&n, 50u, PROFILE_TLM_CMD_NOP,
+				PROFILE_TLM_TARGET_NODE, 0u, stale, sizeof(stale));
+	walk_to(&n, 50u, 50u);
+	walk_to(&n, 100u, 100u);
+
+	/* Behind by 50, ext 50: an authenticated 0x02. */
+	(void)build_command_ext(&n, 101u, PROFILE_TLM_CMD_NOP,
+				PROFILE_TLM_TARGET_NODE, 0u, next, sizeof(next));
+	forge_from(next, forged);
+	replay_keeps_the_ladder(&n, stale, PROFILE_TLM_RESULT_BAD_SEQ, 50u, forged);
+	zassert_equal(1u, profile_cmd_stats(&n)->bad_seq);
+	zassert_equal(100u, n.last_ext);
+}
+
+ZTEST(command, test_an_exhausted_sequence_0x02_keeps_the_backoff)
+{
+	struct profile_cmd_node n;
+	uint8_t body[PROFILE_TLM_CMD_LEN_STD];
+	uint8_t past[PROFILE_TLM_CMD_LEN_STD];
+	uint8_t forged[PROFILE_TLM_CMD_LEN_STD];
+	uint8_t ack[PROFILE_TLM_CMD_LEN_LR];
+	uint32_t ext;
+
+	node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
+	for (ext = 0u; ext <= 65405u; ext += PROFILE_CMD_ACCEPT_WINDOW) {
+		(void)build_command_ext(&n, (uint16_t)ext, PROFILE_TLM_CMD_NOP,
+					PROFILE_TLM_TARGET_NODE, 0u, body,
+					sizeof(body));
+		zassert_true(profile_cmd_on_command(&n, body, sizeof(body), 1000u,
+						    ack, sizeof(ack)) > 0);
+	}
+	(void)build_command_ext(&n, PROFILE_CMD_EXT_LAST, PROFILE_TLM_CMD_NOP,
+				PROFILE_TLM_TARGET_NODE, 0u, body, sizeof(body));
+	zassert_true(profile_cmd_on_command(&n, body, sizeof(body), 1000u, ack,
+					    sizeof(ack)) > 0);
+	zassert_equal(PROFILE_CMD_EXT_LAST, n.last_ext);
+
+	/* Inside the window but past the epoch's last ext: genuine, refused
+	 * with an authenticated 0x02 by the exhausted branch, not the window. */
+	(void)build_command_ext(&n, PROFILE_CMD_EXT_LAST + 1u, PROFILE_TLM_CMD_NOP,
+				PROFILE_TLM_TARGET_NODE, 0u, past, sizeof(past));
+	(void)build_command_ext(&n, PROFILE_CMD_EXT_LAST + 2u, PROFILE_TLM_CMD_NOP,
+				PROFILE_TLM_TARGET_NODE, 0u, body, sizeof(body));
+	forge_from(body, forged);
+	replay_keeps_the_ladder(&n, past, PROFILE_TLM_RESULT_BAD_SEQ,
+				PROFILE_CMD_EXT_LAST + 1u, forged);
+	zassert_equal(1u, profile_cmd_stats(&n)->seq_exhausted);
+	zassert_equal(0u, profile_cmd_stats(&n)->bad_seq);
+	zassert_equal(PROFILE_CMD_EXT_LAST, n.last_ext);
+}
+
+ZTEST(command, test_a_fresh_command_after_a_replay_still_clears_the_backoff)
+{
+	struct profile_cmd_node n;
+	uint8_t dup[PROFILE_TLM_CMD_LEN_STD];
+	uint8_t next[PROFILE_TLM_CMD_LEN_STD];
+	uint8_t forged[PROFILE_TLM_CMD_LEN_STD];
+	uint8_t ack[PROFILE_TLM_CMD_LEN_LR];
+
+	node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
+	(void)build_command(&n, 5u, PROFILE_TLM_CMD_SET_BOOL, 0x01u, 1u, dup,
+			    sizeof(dup));
+	zassert_true(profile_cmd_on_command(&n, dup, sizeof(dup), 1000u, ack,
+					    sizeof(ack)) > 0);
+	(void)build_command(&n, 6u, PROFILE_TLM_CMD_SET_BOOL, 0x01u, 0u, next,
+			    sizeof(next));
+	forge_from(next, forged);
+	replay_keeps_the_ladder(&n, dup, PROFILE_TLM_RESULT_ALREADY, 5u, forged);
+
+	/* The genuine seq 6, once the doubled block runs out: accepted, and the
+	 * ladder is gone, so the sender is never punished for the attack. */
+	zassert_true(profile_cmd_on_command(&n, next, sizeof(next),
+					    n.blocked_until, ack, sizeof(ack)) > 0);
+	zassert_equal(0u, n.fails);
+	zassert_equal(0u, n.blocked_until);
+	zassert_equal(2u, g_exec_calls);
+	zassert_equal(6u, n.last_ext);
+}
+
+/* Duplicates and 0x02s top the windows up to PROFILE_CMD_RETRY_WINDOWS
+ * rather than adding to them. Adding let anyone with one recorded command
+ * bank windows while the ladder was clear (spend one, buy two), then forge
+ * into them, and kept the receiver on for as long as the replays went on. */
+ZTEST(command, test_replays_cannot_bank_windows_past_the_retry_allowance)
+{
+	struct profile_cmd_node n;
+	uint8_t dup[PROFILE_TLM_CMD_LEN_STD];
+	uint8_t next[PROFILE_TLM_CMD_LEN_STD];
+	uint8_t ack[PROFILE_TLM_CMD_LEN_LR];
+	uint32_t i;
+
+	node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
+	(void)build_command(&n, 5u, PROFILE_TLM_CMD_SET_BOOL, 0x01u, 1u, dup,
+			    sizeof(dup));
+	zassert_true(profile_cmd_on_command(&n, dup, sizeof(dup), 1000u, ack,
+					    sizeof(ack)) > 0);
+	zassert_equal(PROFILE_CMD_RETRY_WINDOWS, n.expect_left);
+
+	/* Ten duplicates, each landing in a window it spends. */
+	for (i = 0u; i < 10u; i++) {
+		n.expect_left--;
+		zassert_true(profile_cmd_on_command(&n, dup, sizeof(dup),
+						    2000u + i, ack,
+						    sizeof(ack)) > 0);
+		zassert_equal(PROFILE_CMD_RETRY_WINDOWS, n.expect_left);
+	}
+	zassert_equal(10u, profile_cmd_stats(&n)->repeats);
+
+	/* Seq 6 makes seq 5 stale; ten 0x02s bank nothing either. */
+	(void)build_command(&n, 6u, PROFILE_TLM_CMD_NOP, PROFILE_TLM_TARGET_NODE,
+			    0u, next, sizeof(next));
+	zassert_true(profile_cmd_on_command(&n, next, sizeof(next), 3000u, ack,
+					    sizeof(ack)) > 0);
+	zassert_equal(PROFILE_CMD_RETRY_WINDOWS, n.expect_left);
+	for (i = 0u; i < 10u; i++) {
+		n.expect_left--;
+		zassert_true(profile_cmd_on_command(&n, dup, sizeof(dup),
+						    4000u + i, ack,
+						    sizeof(ack)) > 0);
+		zassert_equal(PROFILE_CMD_RETRY_WINDOWS, n.expect_left);
+	}
+	zassert_equal(10u, profile_cmd_stats(&n)->bad_seq);
+	zassert_equal(2u, g_exec_calls);
+
+	/* A window the application bought itself is never taken away. */
+	profile_cmd_expect(&n, 5u);
+	zassert_true(profile_cmd_on_command(&n, dup, sizeof(dup), 5000u, ack,
+					    sizeof(ack)) > 0);
+	zassert_equal(PROFILE_CMD_RETRY_WINDOWS + 5u, n.expect_left);
+}
+
 /* ---------------------------------------------------------------------------
  * 3. The phase, recomputed - RF-5a's forward reference, closed
  * ---------------------------------------------------------------------------
@@ -1505,8 +1733,16 @@ ZTEST(command, test_a_received_command_buys_the_windows_a_retry_needs)
 	zassert_equal(PROFILE_CMD_RETRY_WINDOWS, n.expect_left);
 
 	/* And so does a duplicate, or a retry of the retry would find the node
-	 * deaf. */
+	 * deaf. The retry spends the window it lands in, and its answer tops the
+	 * allowance back up - to RETRY_WINDOWS, not past it (the banking test). */
+	n.expect_left--;
 	zassert_true(profile_cmd_on_command(&n, body, sizeof(body), 2000u, ack,
 					    sizeof(ack)) > 0);
-	zassert_equal(2u * PROFILE_CMD_RETRY_WINDOWS, n.expect_left);
+	zassert_equal(PROFILE_CMD_RETRY_WINDOWS, n.expect_left);
+
+	/* Every window spent, one more retry: still open afterwards. */
+	n.expect_left = 0u;
+	zassert_true(profile_cmd_on_command(&n, body, sizeof(body), 3000u, ack,
+					    sizeof(ack)) > 0);
+	zassert_equal(PROFILE_CMD_RETRY_WINDOWS, n.expect_left);
 }

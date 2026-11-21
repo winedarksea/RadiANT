@@ -51,8 +51,9 @@
  * would run the receiver at full announced duty forever. So arming is
  * explicit and consumable: profile_cmd_expect() buys windows,
  * profile_cmd_arm_listen() spends one, and a node expecting nothing arms
- * nothing. A received command silently buys PROFILE_CMD_RETRY_WINDOWS more,
- * so a lost-ack retry lands in a window that's still open.
+ * nothing. Any authenticated answer (accepted, duplicate or 0x02) leaves at
+ * least PROFILE_CMD_RETRY_WINDOWS windows open, so a lost-ack retry lands in
+ * a window that's still open.
  *
  * THE TAG, AND THE ONE THING THE LONG-RANGE PHY CHANGED. Section 9 fixed the
  * inline tag at 16 bits pending a measured way to put a longer frame on the
@@ -171,8 +172,10 @@ int profile_cmd_channel_check(const struct profile_schedule *s,
 #define PROFILE_CMD_BACKOFF_BASE_US   100000u
 #define PROFILE_CMD_BACKOFF_SHIFT_MAX 13u
 
-/* Windows a received command buys, so a retry lands unasked. Two, not one,
- * because the lost ack may be lost again. */
+/* Windows left open after any authenticated answer, so a retry lands unasked.
+ * Two, not one, because the lost ack may be lost again. The answer raises
+ * expect_left to this count and never adds to it, so replays cannot bank
+ * windows. */
 #define PROFILE_CMD_RETRY_WINDOWS 2u
 
 /* The node. */
@@ -245,8 +248,10 @@ struct profile_cmd_node {
 	struct profile_command_ack stored;
 	bool                       stored_valid;
 
-	/* The backoff. `fails` counts CONSECUTIVE failures, cleared by any
-	 * success, so an unlucky-but-legitimate receiver never climbs it. */
+	/* The backoff. `fails` counts CONSECUTIVE failures, cleared by an
+	 * accepted fresh command, so an unlucky-but-legitimate receiver never
+	 * climbs it. A duplicate or a 0x02 verifies but does not clear it:
+	 * both are replays anyone can record. */
 	uint8_t        fails;
 	radiant_time_t blocked_until;
 
@@ -331,8 +336,9 @@ bool profile_cmd_tag_ok(const struct profile_cmd_node *n, const uint8_t *body,
  * negative errno for malformed input. The zero return is deliberate: a node
  * that answered every failed verification would be a tag oracle, and one
  * that answered a flood would spend its battery on it. Only the FIRST
- * failure after a success gets result 0x03 (telling a legitimate receiver
- * once that its key/epoch went stale); failures during backoff are silent.
+ * failure after an accepted fresh command gets result 0x03 (telling a
+ * legitimate receiver once that its key/epoch went stale); failures during
+ * backoff are silent.
  */
 int profile_cmd_on_command(struct profile_cmd_node *n, const uint8_t *body,
 			   uint8_t len, radiant_time_t now, uint8_t *ack,
