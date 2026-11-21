@@ -54,10 +54,68 @@ LOG_MODULE_REGISTER(ant_bridge, LOG_LEVEL_INF);
 
 /*
  * ANT_BRIDGE_PARSER_ONLY: radiant/tests/src/test_bridge_parser.c includes this
- * file with that defined, which compiles the host-frame parser below and
- * nothing else; the test supplies dispatch() and the health counter. Never
- * defined in an image.
+ * file with that defined, which compiles the host trace and the host-frame
+ * parser below and nothing else; the test supplies dispatch() and the health
+ * counter. Never defined in an image.
  */
+
+/* ── Host trace (CONFIG_ANT_DONGLE_HOST_TRACE) ─────────────────────────────── */
+
+/*
+ * One log line per whole frame, both directions: "H>" host to dongle, "<D"
+ * dongle to host. For learning what an unfamiliar host (the Android ANT USB
+ * Service, say) sends on a board with a console, where no USB capture of the
+ * host side is possible. Off by default and never in a release: at 115200 baud
+ * a line costs ~5 ms of log time.
+ *
+ * Key material is masked, not dropped, so the frame shape stays visible:
+ * a network key (0x46) keeps its network number, and RadiANT's key and pairing
+ * messages keep only their header.
+ */
+#ifdef CONFIG_ANT_DONGLE_HOST_TRACE
+/* Where a trace line goes. The parser test (ANT_BRIDGE_PARSER_ONLY) defines
+ * it to capture the line; an image logs it. */
+#ifndef ANT_BRIDGE_TRACE_EMIT
+#define ANT_BRIDGE_TRACE_EMIT(dir, line) LOG_INF("%s %s", (dir), (line))
+#endif
+
+static void trace_frame(const char *dir, const uint8_t *f, size_t n)
+{
+	static const char hex[] = "0123456789abcdef";
+	char line[3 * ANTW_MAX_FRAME_SIZE + 1];
+	size_t redact_from = n;
+	size_t o = 0;
+
+	if (n >= 3) {
+		if (f[2] == ANTW_MESG_NETWORK_KEY_ID) {
+			redact_from = 4;	/* SYNC LEN ID net# */
+		}
+#ifdef CONFIG_RADIANT_SEC_HOST_MESSAGES
+		if (f[2] == ANTW_MESG_RADIANT_SET_KEY_ID
+#ifdef CONFIG_RADIANT_SEC_PAIRING_X25519
+		    || f[2] == ANTW_MESG_RADIANT_PAIRING_ID
+#endif
+		) {
+			redact_from = 3;
+		}
+#endif
+	}
+
+	for (size_t i = 0; i < n && i < ANTW_MAX_FRAME_SIZE; i++) {
+		bool mask = i >= redact_from && i + 1 < n;	/* keep checksum */
+
+		line[o++] = mask ? 'x' : hex[f[i] >> 4];
+		line[o++] = mask ? 'x' : hex[f[i] & 0xF];
+		line[o++] = ' ';
+	}
+	line[o ? o - 1 : 0] = '\0';
+	ANT_BRIDGE_TRACE_EMIT(dir, line);
+}
+#define TRACE_TX(buf, n) trace_frame("<D", (buf), (n))
+#else
+#define TRACE_TX(buf, n) do { } while (0)
+#endif
+
 #if !defined(ANT_BRIDGE_PARSER_ONLY)
 
 /* sdk-ant's Kconfig hangs this symbol off CONFIG_ANT, so on a radio-stub build
@@ -155,57 +213,6 @@ static atomic_t evt_inflight;
  * or host cannot hang the reset. */
 #define RESET_EVT_FENCE_MS 10
 #define RESET_TX_FENCE_MS  100
-
-/* ── Host trace (CONFIG_ANT_DONGLE_HOST_TRACE) ─────────────────────────────── */
-
-/*
- * One log line per whole frame, both directions: "H>" host to dongle, "<D"
- * dongle to host. For learning what an unfamiliar host (the Android ANT USB
- * Service, say) sends on a board with a console, where no USB capture of the
- * host side is possible. Off by default and never in a release: at 115200 baud
- * a line costs ~5 ms of log time.
- *
- * Key material is masked, not dropped, so the frame shape stays visible:
- * a network key (0x46) keeps its network number, and RadiANT's key and pairing
- * messages keep only their header.
- */
-#ifdef CONFIG_ANT_DONGLE_HOST_TRACE
-static void trace_frame(const char *dir, const uint8_t *f, size_t n)
-{
-	static const char hex[] = "0123456789abcdef";
-	char line[3 * ANTW_MAX_FRAME_SIZE + 1];
-	size_t redact_from = n;
-	size_t o = 0;
-
-	if (n >= 3) {
-		if (f[2] == ANTW_MESG_NETWORK_KEY_ID) {
-			redact_from = 4;	/* SYNC LEN ID net# */
-		}
-#ifdef CONFIG_RADIANT_SEC_HOST_MESSAGES
-		if (f[2] == ANTW_MESG_RADIANT_SET_KEY_ID
-#ifdef CONFIG_RADIANT_SEC_PAIRING_X25519
-		    || f[2] == ANTW_MESG_RADIANT_PAIRING_ID
-#endif
-		) {
-			redact_from = 3;
-		}
-#endif
-	}
-
-	for (size_t i = 0; i < n && i < ANTW_MAX_FRAME_SIZE; i++) {
-		bool mask = i >= redact_from && i + 1 < n;	/* keep checksum */
-
-		line[o++] = mask ? 'x' : hex[f[i] >> 4];
-		line[o++] = mask ? 'x' : hex[f[i] & 0xF];
-		line[o++] = ' ';
-	}
-	line[o ? o - 1 : 0] = '\0';
-	LOG_INF("%s %s", dir, line);
-}
-#define TRACE_TX(buf, n) trace_frame("<D", (buf), (n))
-#else
-#define TRACE_TX(buf, n) do { } while (0)
-#endif
 
 /* ── Frame helpers ─────────────────────────────────────────────────────────── */
 
