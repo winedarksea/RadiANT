@@ -16,15 +16,16 @@ Aggregator endpoint and the dynamic-endpoint machinery.
 | Upstream licence | `LicenseRef-Nordic-5-Clause` (the `core/` files) and Apache-2.0 (the ZAP output, which is Project CHIP's) |
 
 **Every upstream file below is byte-for-byte identical to its source, except
-`core/bridge_storage_manager.cpp`** (see the next paragraph). Nothing was
+the three marked PATCHED** (see the next two paragraphs). Nothing was
 reformatted, retagged or "tidied". If a future reader needs to diff against a
 newer NCS, the copy is a straight `Copy-Item`:
 
 ```
-core/bridge_manager.{h,cpp}                <- src/core/
+core/bridge_manager.h                      <- src/core/
+core/bridge_manager.cpp                    <- src/core/, PATCHED (below)
 core/matter_bridged_device.{h,cpp}         <- src/core/
 core/bridged_device_data_provider.{h,cpp}  <- src/core/
-core/bridge_storage_manager.h              <- src/core/
+core/bridge_storage_manager.h              <- src/core/, PATCHED (below)
 core/bridge_storage_manager.cpp            <- src/core/, PATCHED (below)
 core/util/bridge_util.h                    <- src/core/util/
 default_zap/bridge.zap                     <- src/default_zap/
@@ -42,6 +43,24 @@ their label copies. Every change carries a `RadiANT:` comment. When re-copying
 from a newer NCS, check whether upstream has fixed this, and re-apply the patch
 if it has not. The record format is unchanged.
 
+**`core/bridge_manager.cpp` and `core/bridge_storage_manager.{h,cpp}` are
+patched for the endpoint high-water mark** (security review 2026-11-20 item B).
+Upstream rebuilt the next dynamic endpoint id at every boot as
+max(restored ids) + 1, so the id of a device that was unbound before a reboot,
+or whose record did not restore, was handed to the next new device - a reuse
+Matter forbids. `BridgeStorageManager` gains one key, `br/brd_ep_hw` (a
+`uint16_t`, the next id), with `StoreEndpointHighWater()` /
+`LoadEndpointHighWater()`. `BridgeManager::Init()` seeds the counter from it,
+the restore still raises it past every restored id, a raised counter is
+written back once after the restore, and every fresh allocation writes it before
+the caller stores the device record. The counter arithmetic (upstream's raise
+and wrap guard included) lives in `bridge_storage_codec.h`'s
+`EndpointHighWater`, which the native_sim suite drives through
+bind/unbind/reboot sequences. A store without the key behaves exactly as
+upstream; neither the record format nor `kCurrentVersion` changes. Every
+change carries a `RadiANT:` comment; re-apply it on a re-copy unless upstream
+has started persisting the counter itself.
+
 Three files in this directory are **ours**, carry this repository's Apache-2.0
 tag, and are not upstream copies:
 
@@ -51,7 +70,8 @@ tag, and are not upstream copies:
 - `bridge_core_asserts.cpp` — a translation unit whose entire content is
   `static_assert`s. See trap 15.
 - `bridge_storage_codec.{h,cpp}` — the bounds-checked bridged-device record
-  decoder that the patched loader calls. It includes no CHIP header, so
+  decoder that the patched loader calls, and the endpoint high-water mark's
+  codec and counter arithmetic. It includes no CHIP header, so
   `apps/dongle_thread/tests/matter_storage` tests it on native_sim.
 
 `Kconfig` is also ours: it is upstream's `src/core/Kconfig` with the whole

@@ -392,6 +392,31 @@ bool BridgeStorageManager::RemoveBridgedDevice(uint8_t index)
 	return status == PSErrorCode::Success;
 }
 
+/* RadiANT: the endpoint high-water mark (security review 2026-11-20 item B). */
+bool BridgeStorageManager::StoreEndpointHighWater(uint16_t next)
+{
+	uint8_t buffer[RadiantMatter::EndpointHighWater::kSize];
+
+	RadiantMatter::EndpointHighWater::Encode(next, buffer);
+
+	return Nrf::GetPersistentStorage().NonSecureStore(&mEndpointHighWater, buffer, sizeof(buffer)) ==
+	       PSErrorCode::Success;
+}
+
+bool BridgeStorageManager::LoadEndpointHighWater(uint16_t &next)
+{
+	/* One byte over, so an oversized value reads as malformed, not truncated. */
+	uint8_t buffer[RadiantMatter::EndpointHighWater::kSize + 1];
+	size_t readSize = 0;
+
+	if (Nrf::GetPersistentStorage().NonSecureLoad(&mEndpointHighWater, buffer, sizeof(buffer), readSize) !=
+	    PSErrorCode::Success) {
+		return false;
+	}
+
+	return RadiantMatter::EndpointHighWater::Decode(buffer, readSize, next);
+}
+
 #ifdef CONFIG_BRIDGE_MIGRATE_PRE_2_7_0
 #ifdef CONFIG_BRIDGED_DEVICE_BT
 bool BridgeStorageManager::LoadBtAddress(bt_addr_le_t &addr, uint8_t bridgedDeviceIndex)

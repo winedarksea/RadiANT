@@ -6,6 +6,8 @@
 
 #include "bridge_manager.h"
 #include "bridge_storage_manager.h"
+/* RadiANT: the endpoint high-water mark (security review 2026-11-20 item B). */
+#include "bridge_storage_codec.h"
 
 #include "binding/binding_handler.h"
 
@@ -53,8 +55,27 @@ CHIP_ERROR BridgeManager::Init(LoadStoredBridgedDevicesCallback loadStoredBridge
 
 	Nrf::Matter::BindingHandler::Init();
 
+	/* RadiANT: seed the counter from the persisted high-water mark, so an id
+	 * whose device is gone (unbound, or its record did not restore) is never
+	 * handed to a different device after a reboot. Matter forbids that reuse.
+	 * The restore below still raises the counter past every restored id, so a
+	 * store written before the key existed behaves as upstream. */
+	uint16_t storedNext = 0;
+	const bool haveStored = Nrf::BridgeStorageManager::Instance().LoadEndpointHighWater(storedNext);
+	const uint16_t seeded = RadiantMatter::EndpointHighWater::Seed(mFirstDynamicEndpointId, haveStored, storedNext);
+	mCurrentDynamicEndpointId = seeded;
+
 	/* Invoke the callback to load stored devices in a proper moment. */
 	CHIP_ERROR err = loadStoredBridgedDevicesCb();
+
+	/* RadiANT: a restored id at or above the stored mark (first boot after an
+	 * upgrade, or a lost write) raised the counter: persist it now, before the
+	 * device can be unbound and its id forgotten. An unchanged boot writes
+	 * nothing. */
+	if (mCurrentDynamicEndpointId != seeded &&
+	    !Nrf::BridgeStorageManager::Instance().StoreEndpointHighWater(mCurrentDynamicEndpointId)) {
+		LOG_ERR("Endpoint high-water mark %u not persisted", mCurrentDynamicEndpointId);
+	}
 
 	if (err == CHIP_NO_ERROR) {
 		mIsInitialized = true;
@@ -243,8 +264,9 @@ CHIP_ERROR BridgeManager::AddSingleDevice(MatterBridgedDevice *device, BridgedDe
 
 			/* Make sure that the following endpoint id assignments will be monotonically continued from the
 			 * biggest assigned number. */
+			/* RadiANT: upstream's expression, moved to EndpointHighWater::Raise(). */
 			mCurrentDynamicEndpointId =
-				mCurrentDynamicEndpointId > endpointId ? mCurrentDynamicEndpointId : endpointId + 1;
+				RadiantMatter::EndpointHighWater::Raise(mCurrentDynamicEndpointId, endpointId);
 		} else {
 			/* The pair was added to a map, so we have to take care about removing it in case of failure. */
 			if (err == CHIP_ERROR_NO_MEMORY) {
@@ -272,16 +294,28 @@ CHIP_ERROR BridgeManager::AddSingleDevice(MatterBridgedDevice *device, BridgedDe
 							mDevicesMap.Erase(index);
 						}
 
-						/* Handle wrap condition */
-						if (++mCurrentDynamicEndpointId < mFirstDynamicEndpointId) {
-							mCurrentDynamicEndpointId = mFirstDynamicEndpointId;
-						}
+						/* Handle wrap condition (RadiANT: upstream's, in
+						 * EndpointHighWater::Advance()) */
+						mCurrentDynamicEndpointId = RadiantMatter::EndpointHighWater::Advance(
+							mCurrentDynamicEndpointId, mFirstDynamicEndpointId);
 					} while (err == CHIP_ERROR_SENTINEL);
 
 					if (err == CHIP_NO_ERROR) {
 						devicesPairIndex.SetValue(index);
 						mDevicesIndexes[mDevicesIndexesCounter] = index;
 						mDevicesIndexesCounter++;
+
+						/* RadiANT: persist the new high-water mark before the
+						 * caller stores the device record, so no record can
+						 * outlive a mark that does not cover it. A failed
+						 * write is logged, not unwound: the endpoint works,
+						 * and only a reboot after its removal could reuse
+						 * the id. */
+						if (!Nrf::BridgeStorageManager::Instance().StoreEndpointHighWater(
+							    mCurrentDynamicEndpointId)) {
+							LOG_ERR("Endpoint high-water mark %u not persisted",
+								mCurrentDynamicEndpointId);
+						}
 					}
 
 					return err;

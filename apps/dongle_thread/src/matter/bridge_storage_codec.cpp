@@ -83,7 +83,6 @@ bool ReadUserData(const uint8_t *buf, size_t size, size_t &counter, uint8_t *use
 namespace EndpointHighWater
 {
 
-/* NOT YET PERSISTED: upstream's behaviour, for the red step. */
 void Encode(uint16_t next, uint8_t (&out)[kSize])
 {
 	memcpy(out, &next, kSize);
@@ -91,17 +90,22 @@ void Encode(uint16_t next, uint8_t (&out)[kSize])
 
 bool Decode(const uint8_t *buf, size_t size, uint16_t &next)
 {
-	(void)buf;
-	(void)size;
-	(void)next;
-	return false;
+	uint16_t value;
+
+	if (buf == nullptr || size != kSize) {
+		return false;
+	}
+	memcpy(&value, buf, kSize);
+	if (value == kInvalid) {
+		return false;
+	}
+	next = value;
+	return true;
 }
 
 uint16_t Seed(uint16_t first, bool haveStored, uint16_t storedNext)
 {
-	(void)haveStored;
-	(void)storedNext;
-	return first;
+	return haveStored && storedNext > first ? storedNext : first;
 }
 
 uint16_t Raise(uint16_t current, uint16_t restoredId)
