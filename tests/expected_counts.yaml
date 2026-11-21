@@ -70,7 +70,9 @@
 # CONFIG_RADIANT_GATE_MPSL_D2, the staged branches' d2_settle_now()).
 # 2026-11-20: 28, radiant.backend_cc26xx.short_match (backend drift item 7: the TI
 # backend built with the shipping short match, caps parity only).
-min_scenarios: 28
+# 2026-11-21: 29, radiant.backend.short_match (the nRF backend suite built with
+# the shipping short match, so caps parity compares the shipping nRF rows).
+min_scenarios: 29
 
 # Total ztest cases twister executes, summed over every scenario. It equals the
 # sum of the per-scenario floors below, so the backstop and the floors cannot
@@ -244,7 +246,9 @@ min_scenarios: 28
 # (the handoff gate against a one-window sweep).
 # 2026-11-20: +2 (backend drift item 6, TI transmit power to the nearest entry): +1 in
 # radiant.backend_cc26xx and .coex (test_tx_power_rounds_to_nearest_entry).
-min_testcases: 8108
+# 2026-11-21: +70 (fix/parity, Bluefin twister): the new radiant.backend.short_match
+# scenario, the whole radiant.backend suite with CONFIG_RADIANT_SEARCH_SHORT_MATCH.
+min_testcases: 8178
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -325,6 +329,10 @@ min_cases.radiant.backend: 35
 # 68 with the review's search-window edge case.
 # +2 (item 7): caps parity, as radiant.backend.
 min_cases.radiant.backend.d2: 70
+# radiant.backend.short_match: the same suite with CONFIG_RADIANT_SEARCH_SHORT_MATCH
+# (ADR 0022, the shipping default), so test_caps_parity.c compares the shipping
+# nRF rows (filter_wildcard_dev true). 70, the observed count (2026-11-21).
+min_cases.radiant.backend.short_match: 70
 min_cases.hrm_ble.sim_sched: 4
 min_cases.treadmill.pages: 20
 min_cases.treadmill.hr_rx: 3

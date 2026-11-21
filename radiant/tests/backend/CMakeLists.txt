@@ -34,6 +34,14 @@ elseif(BACKEND_LP)
 else()
   file(GLOB suite_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.c")
   set(under_test "${CMAKE_CURRENT_SOURCE_DIR}/backend_under_test.c")
+  # -DBACKEND_SHORT_MATCH=1 (scenario radiant.backend.short_match): the same
+  # suite with CONFIG_RADIANT_SEARCH_SHORT_MATCH, the shipping default (ADR
+  # 0022), so test_caps_parity.c compares the shipping row (wildcard on). On
+  # nRF the option changes only caps.filter_wildcard_dev, so every src/ case
+  # runs unchanged.
+  if(BACKEND_SHORT_MATCH)
+    target_compile_definitions(app PRIVATE BACKEND_SHORT_MATCH=1)
+  endif()
 endif()
 target_sources(app PRIVATE ${suite_sources})
 target_sources(app PRIVATE
