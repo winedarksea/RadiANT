@@ -1183,6 +1183,8 @@ static void assert_failed_draw_closed_the_window(void)
 	zassert_not_equal(NODE_IDENT_OK, node_ident_pair_pubkey(TEST_CH, pub));
 	zassert_not_equal(RADIANT_SEC_OK,
 			  radiant_sec_pair_local_pubkey(TEST_CH, pub));
+	zassert_false(radiant_sec_pair_is_open(TEST_CH),
+		      "a failed draw must leave the pairing context");
 
 	zassert_true(fake_nvm_peek_u32(NODE_NVM_KEY_PAIR, &stored));
 	zassert_equal(1u, stored);
