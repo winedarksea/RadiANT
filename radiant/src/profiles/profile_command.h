@@ -51,8 +51,9 @@
  * would run the receiver at full announced duty forever. So arming is
  * explicit and consumable: profile_cmd_expect() buys windows,
  * profile_cmd_arm_listen() spends one, and a node expecting nothing arms
- * nothing. A received command silently buys PROFILE_CMD_RETRY_WINDOWS more,
- * so a lost-ack retry lands in a window that's still open.
+ * nothing. Any authenticated answer (accepted, duplicate or 0x02) leaves at
+ * least PROFILE_CMD_RETRY_WINDOWS windows open, so a lost-ack retry lands in
+ * a window that's still open.
  *
  * THE TAG, AND THE ONE THING THE LONG-RANGE PHY CHANGED. Section 9 fixed the
  * inline tag at 16 bits pending a measured way to put a longer frame on the
@@ -171,9 +172,10 @@ int profile_cmd_channel_check(const struct profile_schedule *s,
 #define PROFILE_CMD_BACKOFF_BASE_US   100000u
 #define PROFILE_CMD_BACKOFF_SHIFT_MAX 13u
 
-/* Windows a received command buys, so a retry lands unasked. Two, not one,
- * because the lost ack may be lost again. A duplicate or a 0x02 buys none
- * while the backoff runs. */
+/* Windows left open after any authenticated answer, so a retry lands unasked.
+ * Two, not one, because the lost ack may be lost again. The answer raises
+ * expect_left to this count and never adds to it, so replays cannot bank
+ * windows. */
 #define PROFILE_CMD_RETRY_WINDOWS 2u
 
 /* The node. */

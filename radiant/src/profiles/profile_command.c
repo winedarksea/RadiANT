@@ -247,13 +247,16 @@ static void backoff_clear(struct profile_cmd_node *n)
 	n->blocked_until = 0u;
 }
 
-/* Windows a duplicate or a 0x02 buys: none while a penalty runs. The replay
- * is still answered, but it must not keep the node listening for the next
- * forgery. A legitimate sender caught by that penalty still gets its answer,
- * and its next fresh command clears the ladder and buys windows again. */
-static uint32_t replay_windows(const struct profile_cmd_node *n)
+/* After any authenticated answer, at least PROFILE_CMD_RETRY_WINDOWS windows
+ * stay open: expect_left is raised to that count, never added to. Adding let
+ * one recorded command bank windows without bound (each replay spends one
+ * window and buys two). Raising keeps a retry of a retry working, penalty or
+ * not, and never takes away windows bought with profile_cmd_expect(). */
+static void retry_windows_top_up(struct profile_cmd_node *n)
 {
-	return (n->fails == 0u) ? PROFILE_CMD_RETRY_WINDOWS : 0u;
+	if (n->expect_left < PROFILE_CMD_RETRY_WINDOWS) {
+		n->expect_left = PROFILE_CMD_RETRY_WINDOWS;
+	}
 }
 
 /* ---------------------------------------------------------------------------
@@ -406,7 +409,7 @@ int profile_cmd_on_command(struct profile_cmd_node *n, const uint8_t *body,
 			a.result = PROFILE_TLM_RESULT_ALREADY;
 		}
 		n->stats.repeats++;
-		profile_cmd_expect(n, replay_windows(n));
+		retry_windows_top_up(n);
 		return emit_ack(n, &a, ext, ack, ack_cap);
 	}
 
@@ -429,7 +432,7 @@ int profile_cmd_on_command(struct profile_cmd_node *n, const uint8_t *body,
 		a.seq = c.seq;
 		a.result = result;
 		a.cmd = c.cmd;
-		profile_cmd_expect(n, replay_windows(n));
+		retry_windows_top_up(n);
 		return emit_ack(n, &a, ext, ack, ack_cap);
 	}
 	backoff_clear(n);
@@ -457,7 +460,7 @@ int profile_cmd_on_command(struct profile_cmd_node *n, const uint8_t *body,
 	n->stored = a;
 	n->stored_valid = true;
 
-	profile_cmd_expect(n, PROFILE_CMD_RETRY_WINDOWS);
+	retry_windows_top_up(n);
 	return emit_ack(n, &a, ext, ack, ack_cap);
 }
 
