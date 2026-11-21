@@ -1,0 +1,3 @@
+leg	image	sha12	start	result	since_open_s	placed	granted	blocked	ext	skip	reboots	asserts
+wd_mpsl	wd_mpsl_0fce666	117028d4d648	2026-11-20T22:56:42	clean at 928.0 s							0	0
+wd_dir	wd_dir_0fce666	9cc916774678	2026-11-20T23:12:33	clean at 927.5 s							0	0
