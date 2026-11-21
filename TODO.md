@@ -656,6 +656,7 @@ Suggested order: items 1-4 (bugs), then 5 (settle the contract text), then 6 and
 - Known limit: DENIED vs ABORTED is judged at callback time, not abort time.
 
 ## 5. [DONE 2026-11-20, 59ae9db + a23674a, review 3e41790 + dcedfd7; nRF window-edge bench PASS 2026-11-20 (846def7)] Settle the HAL text where the backends picked different readings
+- [DONE 2026-11-21, merge 7f1fb48 (9a65617)] Follow-up from the 30-commit review: the null backend answers the refusal table (init NULL cbs EINVAL, second init and abort-before-init ESTATE, rx/tx request EINVAL before ESTATE in cc26xx order; ED is ENOTSUP per its own contract). Null-backend nrf52840dongle image builds; no test compiles this file.
 
 ## 6. [OPEN, refactor] Shared HAL contract layer (~200-300 lines)
 Small pure helpers both backends call; register access stays in the backends. Do after item 5 so the helpers encode the settled contract:
@@ -668,6 +669,8 @@ Small pure helpers both backends call; register access stays in the backends. Do
 Leave apart: TI arb vs MPSL gate, `radiant_rx_torn` (nRF single-buffer only), power/idle code, RSSI conversion, filter/address hardware programming.
 
 ## 7. [DONE 2026-11-20, 118f173..3082ca9] A TI backend test harness, and a fake that matches the hardware
+- [DONE 2026-11-21, merge 2a24780 (d145502, 41e26de)] Follow-up from the 30-commit review: `radiant.backend.short_match` builds the nRF backend suite with the shipping short match, so caps parity compares the shipping row (`filter_wildcard_dev` true). Bite: hardcoding it false turns this scenario red while `radiant.backend` stays green.
+- [DONE 2026-11-21, merge f2072e9 (1850818, 34f3ee8)] Follow-up from the 30-commit review: lr, schedule, search_rf and the api cases that skipped `end_of_test()` (incl. the sec files) now end on `fake_radio_viol_count() == 0` (a helper call per case: a ztest `after` hook cannot fail a case on this Zephyr). It caught `test_sec_a_retransmission_is_byte_identical` comparing one slot with itself (fixed). xing applies each run's preset before `antr_stack_reset()`. The arm_lead()-50 us mutation reaches only one newly covered case (schedule/search_rf never use the scheduler).
 
 # Findings from the 2026-11-21 RadiANT security review (HEAD 381c47d)
 
