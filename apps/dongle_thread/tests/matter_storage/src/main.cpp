@@ -517,8 +517,6 @@ ZTEST(matter_storage, test_v1_label_bounds)
 	}
 }
 
-/* ---- lengths near SIZE_MAX: `counter + length` wraps ------------------- */
-
 /* ---------------------------------------------------------------------------
  * The endpoint high-water mark (security review 2026-11-20 item B).
  *
@@ -672,6 +670,18 @@ ZTEST(matter_storage, test_endpoint_hw_advance_keeps_the_wrap_guard)
 	zassert_equal(EndpointHighWater::Raise(4, 10), 11);
 }
 
+/* 0xFFFF is chip::kInvalidEndpointId: never tried, never stored. Upstream's
+ * guard only caught the wrap to 0, so 0xFFFE advanced (or a restored 0xFFFE
+ * raised) to 0xFFFF - CreateEndpoint() then failed, and the stored 0xFFFF
+ * was refused at the next boot, which fell back to reuse. */
+ZTEST(matter_storage, test_endpoint_hw_never_yields_the_invalid_id)
+{
+	zassert_equal(EndpointHighWater::Advance(0xFFFE, kFirstDynamic), kFirstDynamic);
+	zassert_equal(EndpointHighWater::Advance(0xFFFD, kFirstDynamic), 0xFFFE);
+	zassert_equal(EndpointHighWater::Raise(10, 0xFFFE), kFirstDynamic);
+	zassert_equal(EndpointHighWater::Raise(kFirstDynamic, 0xFFFD), 0xFFFE);
+}
+
 /* No key at all: exactly upstream's max(restored) + 1. */
 ZTEST(matter_storage, test_endpoint_hw_missing_key_falls_back_to_max_restored_plus_one)
 {
@@ -749,6 +759,8 @@ ZTEST(matter_storage, test_endpoint_hw_upgraded_store_persists_restored_high_wat
 	br.Boot();
 	zassert_equal(br.hwWrites, writes, "an unchanged boot rewrote the key");
 }
+
+/* ---- lengths near SIZE_MAX: `counter + length` wraps ------------------- */
 
 ZTEST(matter_storage, test_wrap_unique_id_length_rejected)
 {

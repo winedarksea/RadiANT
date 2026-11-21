@@ -179,9 +179,9 @@ min_scenarios: 25
 # 100 behind gets an authenticated 0x02).
 # 2026-11-20: 6482 (+26), the dongle_thread.matter_storage scenario (security
 # review 2026-11-20 item 2, fix/matter-storage-bounds).
-# 2026-11-20: 6490 (+8), the Matter endpoint high-water mark (security review
-# 2026-11-20 item B, fix/matter-endpoint-hw): +8 in dongle_thread.matter_storage.
-min_testcases: 6490
+# 2026-11-20: 6491 (+9), the Matter endpoint high-water mark (security review
+# 2026-11-20 item B, fix/matter-endpoint-hw): +9 in dongle_thread.matter_storage.
+min_testcases: 6491
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -284,6 +284,6 @@ min_cases.radiant.backend_cc26xx.coex: 56
 # dongle_thread.matter_storage (security review 2026-11-20 item 2): the Matter
 # bridge's stored-record decoder - destination and record bounds on each
 # length-prefixed string, the SIZE_MAX wrap, upstream's user-data bounds.
-# 34 (+8, item B): the endpoint high-water mark - codec round trip and
+# 35 (+9, item B): the endpoint high-water mark - codec round trip and
 # refusals, seed, wrap guard, and bind/unbind/reboot sequences.
-min_cases.dongle_thread.matter_storage: 34
+min_cases.dongle_thread.matter_storage: 35
