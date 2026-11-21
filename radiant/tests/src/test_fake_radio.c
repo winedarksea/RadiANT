@@ -755,6 +755,14 @@ ZTEST(fake_radio, test_a_transmit_that_did_not_go_out_reports_its_requested_t_sy
  * ---------------------------------------------------------------------------
  */
 
+/*
+ * ETIME is the hardware floor, not the advertised lead (backend drift item 7):
+ * the nRF backend refuses only inside air_lead_us() - ramp-up plus preamble
+ * and address, 88 us for a 5-byte address, one more for a transmit - and the
+ * advertised min_arm_lead_us is the scheduler's planning budget. Between the
+ * two an arm succeeds, goes out on time, and is counted in arms_inside_lead,
+ * which is how a suite still asserts "the core never arms inside the lead".
+ */
 ZTEST(fake_radio, test_arming_too_late_is_etime)
 {
 	struct radiant_rx_req rx;
@@ -762,6 +770,8 @@ ZTEST(fake_radio, test_arming_too_late_is_etime)
 	uint32_t op = 0u;
 	radiant_time_t now;
 	uint16_t lead;
+	uint32_t floor_rx;
+	uint32_t floor_tx;
 	static const uint8_t body[10] = {
 		TEST_TRANSTYPE, 0x0Au, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u
 	};
@@ -769,19 +779,47 @@ ZTEST(fake_radio, test_arming_too_late_is_etime)
 	up();
 	now = radiant_radio_now();
 	lead = radiant_radio_caps_get()->min_arm_lead_us;
-	zassert_true(lead > 0u);
+	floor_rx = fake_radio_arm_floor_us(FAKE_RADIO_ARM_RX,
+					   &fmt_hal_len_from_body,
+					   filt_track.addr_len,
+					   RADIANT_RF_INDEX_ANT_PLUS);
+	floor_tx = fake_radio_arm_floor_us(FAKE_RADIO_ARM_TX,
+					   &fmt_hal_len_from_body,
+					   filt_track.addr_len,
+					   RADIANT_RF_INDEX_ANT_PLUS);
+	zassert_equal(40u + (1u + 5u) * 8u, floor_rx);
+	zassert_equal(floor_rx + 1u, floor_tx);
+	zassert_true(floor_tx < lead, "no band: floor %u lead %u", floor_tx, lead);
 
 	memset(&rx, 0, sizeof(rx));
 	rx.fmt = &fmt_hal_len_from_body;
 	rx.rf_index = RADIANT_RF_INDEX_ANT_PLUS;
 	rx.filters = &filt_track;
 	rx.n_filters = 1u;
-	rx.t_open = now + lead - 1u;
+	rx.t_open = now + floor_rx - 1u;
 	rx.t_close = now + 10000u;
 	zassert_equal(RADIANT_RADIO_ETIME, radiant_radio_rx(&rx, &op));
 
-	rx.t_open = now + lead;
+	/* Inside the band: accepted, counted, on time. */
+	rx.t_open = now + floor_rx;
 	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_rx(&rx, &op));
+	zassert_equal(1u, fake_radio_stats()->arms_inside_lead);
+	zassert_true(fake_radio_last_arm()->inside_lead);
+	zassert_equal(RADIANT_RADIO_OK_RC,
+		      fake_radio_air_frame(rx.t_open, test_frame,
+					   test_frame_len));
+	fake_radio_advance_to(rx.t_open + 1u);
+	zassert_equal(1u, n_rxr, "the head of an on-time window was lost");
+	zassert_equal(RADIANT_RADIO_STATUS_OK, rxr[0].status);
+	(void)radiant_radio_abort();
+
+	/* At the lead: not counted. */
+	now = radiant_radio_now();
+	rx.t_open = now + lead;
+	rx.t_close = now + 10000u;
+	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_rx(&rx, &op));
+	zassert_equal(1u, fake_radio_stats()->arms_inside_lead);
+	zassert_false(fake_radio_last_arm()->inside_lead);
 	(void)radiant_radio_abort();
 	n_rxr = 0u;
 
@@ -792,9 +830,17 @@ ZTEST(fake_radio, test_arming_too_late_is_etime)
 	tx.addr_len = filt_track.addr_len;
 	tx.body = body;
 	tx.body_len = sizeof(body);
-	tx.t_sync_at = radiant_radio_now() + lead - 1u;
+	tx.t_sync_at = radiant_radio_now() + floor_tx - 1u;
 	zassert_equal(RADIANT_RADIO_ETIME, radiant_radio_tx(&tx, &op));
 	zassert_equal(2u, fake_radio_stats()->rc_etime);
+
+	tx.t_sync_at = radiant_radio_now() + floor_tx;
+	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_tx(&tx, &op));
+	zassert_equal(2u, fake_radio_stats()->arms_inside_lead);
+	fake_radio_advance_to(tx.t_sync_at + 1u);
+	zassert_equal(1u, n_txr);
+	zassert_equal(RADIANT_RADIO_STATUS_OK, txr[0].status);
+	zassert_equal(tx.t_sync_at, txr[0].t_sync, "the transmit went out late");
 	expect_clean();
 }
 
@@ -1823,5 +1869,104 @@ ZTEST(fake_radio, test_the_terminal_delay_stacks_on_the_close_hold)
 	fake_radio_advance_to(req.t_close + 508u + 40u);
 	zassert_equal(1u, n_rxr);
 	zassert_equal(req.t_close + 548u, rxr[0].now_in_cb);
+	expect_clean();
+}
+
+/*
+ * The CC26x2's band (backend drift item 7): its receive floor is 150 us
+ * (ARM_FLOOR_US; 400 on a retune, the CMD_FS ahead of it), its transmit
+ * floor TX_ARM_FLOOR_US, and its 600 us lead the budget its RF core needs to
+ * honour a start (pastTrig). An RX armed in between starts late and loses its
+ * head: it listens from arm time + the lead. A TX in between still goes out
+ * on time.
+ */
+ZTEST(fake_radio, test_a_cc26xx_window_armed_inside_the_lead_loses_its_head)
+{
+	struct radiant_rx_req rx;
+	struct radiant_rx_filter one = filt_track;
+	uint32_t op = 0u;
+	radiant_time_t now;
+	uint16_t lead;
+	uint8_t frame2[FAKE_RADIO_AIR_FRAME_MAX];
+
+	fake_radio_caps_preset_cc26xx(false);
+	lead = radiant_radio_caps_get()->min_arm_lead_us;
+	zassert_equal(600u, lead);
+	up();
+	zassert_equal(150u, fake_radio_arm_floor_us(FAKE_RADIO_ARM_RX,
+						    &fmt_hal_len_from_body, 5u,
+						    RADIANT_RF_INDEX_ANT_PLUS));
+	zassert_equal(400u, fake_radio_arm_floor_us(FAKE_RADIO_ARM_RX,
+						    &fmt_hal_len_from_body, 5u,
+						    26u),
+		      "a retune owes the FS");
+	now = radiant_radio_now();
+
+	memset(&rx, 0, sizeof(rx));
+	rx.fmt = &fmt_hal_len_from_body;
+	rx.rf_index = RADIANT_RF_INDEX_ANT_PLUS;
+	rx.filters = &one;
+	rx.n_filters = 1u;
+	rx.t_open = now + 149u;
+	rx.t_close = now + 3000u;
+	zassert_equal(RADIANT_RADIO_ETIME, radiant_radio_rx(&rx, &op));
+
+	rx.t_open = now + 300u;
+	memcpy(frame2, test_frame, test_frame_len);
+	/* One frame in the lost head, one after the late start. */
+	zassert_equal(RADIANT_RADIO_OK_RC,
+		      fake_radio_air_frame(now + 310u, test_frame,
+					   test_frame_len));
+	zassert_equal(RADIANT_RADIO_OK_RC,
+		      fake_radio_air_frame(now + lead + 10u, frame2,
+					   test_frame_len));
+	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_rx(&rx, &op));
+	zassert_equal(1u, fake_radio_stats()->arms_inside_lead);
+
+	fake_radio_advance_past_close(rx.t_close);
+	zassert_equal(2u, n_rxr);
+	zassert_equal(RADIANT_RADIO_STATUS_OK, rxr[0].status);
+	zassert_equal(now + lead + 10u, rxr[0].t_sync);
+	zassert_equal(RADIANT_RADIO_STATUS_TIMEOUT, rxr[1].status);
+	zassert_equal(1u, fake_radio_stats()->air_delivered);
+	zassert_equal(1u, fake_radio_stats()->air_missed);
+	zassert_equal(1u, fake_radio_stats()->rc_etime);
+	expect_clean();
+}
+
+ZTEST(fake_radio, test_a_cc26xx_transmit_inside_the_lead_goes_out_on_time)
+{
+	struct radiant_tx_req tx;
+	uint32_t op = 0u;
+	uint32_t floor_tx;
+	static const uint8_t body[10] = {
+		TEST_TRANSTYPE, 0x0Au, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u
+	};
+
+	fake_radio_caps_preset_cc26xx(false);
+	up();
+	/* TX_ARM_FLOOR_US(5, false, +100): 150 + (1 + 5) * 8 + 150 - 100. */
+	floor_tx = fake_radio_arm_floor_us(FAKE_RADIO_ARM_TX,
+					   &fmt_hal_len_from_body, 5u,
+					   RADIANT_RF_INDEX_ANT_PLUS);
+	zassert_equal(248u, floor_tx);
+
+	memset(&tx, 0, sizeof(tx));
+	tx.fmt = &fmt_hal_len_from_body;
+	tx.rf_index = RADIANT_RF_INDEX_ANT_PLUS;
+	memcpy(tx.addr, filt_track.addr, sizeof(tx.addr));
+	tx.addr_len = filt_track.addr_len;
+	tx.body = body;
+	tx.body_len = sizeof(body);
+	tx.t_sync_at = radiant_radio_now() + floor_tx - 1u;
+	zassert_equal(RADIANT_RADIO_ETIME, radiant_radio_tx(&tx, &op));
+
+	tx.t_sync_at = radiant_radio_now() + floor_tx;
+	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_tx(&tx, &op));
+	zassert_equal(1u, fake_radio_stats()->arms_inside_lead);
+	fake_radio_advance(5000u);
+	zassert_equal(1u, n_txr);
+	zassert_equal(RADIANT_RADIO_STATUS_OK, txr[0].status);
+	zassert_equal(tx.t_sync_at, txr[0].t_sync);
 	expect_clean();
 }

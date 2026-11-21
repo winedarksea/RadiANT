@@ -454,6 +454,11 @@ static void finish(void)
 	zassert_equal(0u, fake_radio_viol_count(), "%s",
 		      fake_radio_viol_name(fake_radio_viol(0)->code));
 	zassert_equal(0u, st->rc_etime);
+	/* The "core never arms inside the lead" detector. The fake refuses
+	 * ETIME only inside the hardware floor (as the real backends do), so
+	 * an arm between the floor and min_arm_lead_us succeeds and is counted
+	 * here instead of in rc_etime. */
+	zassert_equal(0u, st->arms_inside_lead);
 	zassert_equal(0u, st->rc_einval);
 	zassert_equal(0u, st->rc_enotsup);
 	zassert_equal(0u, st->rc_estate);
@@ -2587,6 +2592,85 @@ ZTEST(radiant_sched, test_an_etime_retry_plans_from_the_time_after_the_refusal)
 	fake_radio_advance_to(t0 + lead + 100u + TEST_WINDOW_US + 1u);
 	zassert_equal(1u, log.ok_count[1]);
 	finish_forced(1u, 0u);
+}
+
+/*
+ * A refusal that is not ETIME costs time too (an arbiter answering EDENIED
+ * after a while), but the pass keeps its first `now`, so the next channel's arm
+ * lands inside min_arm_lead_us by that cost. The real backends refuse only
+ * inside their hardware floor (backend drift item 7): between the floor and
+ * the lead the arm succeeds, so the window is kept, not taken as DONE_MISSED
+ * with a fresh now. Two windows on different RF channels, so they cannot
+ * merge; the first arm is the refused one.
+ */
+static void band_arm_case(uint32_t cost_us, uint8_t *served_out,
+			  radiant_time_t *open_out)
+{
+	const struct fake_radio_arm *a;
+	struct radiant_sched_rx r;
+	radiant_time_t open;
+	radiant_time_t lead;
+	uint8_t served;
+
+	bring_up();
+	lead = (radiant_time_t)radiant_radio_caps_get()->min_arm_lead_us;
+	open = radiant_radio_now() + lead + 10u;
+	post_track(0u, open, open + TEST_WINDOW_US);
+	rx_req_init(&r, radiant_frame_format(RADIANT_FRAME_CFG_TRACKING),
+		    &track_filter[1], 1u, open, open + TEST_WINDOW_US);
+	r.rf_index = 26u;
+	zassert_ok(radiant_sched_request_rx(1u, &r));
+	fake_radio_force_next_arm(RADIANT_RADIO_EDENIED);
+	fake_radio_set_forced_arm_cost_us(cost_us);
+	zassert_ok(radiant_sched_tick());
+
+	zassert_equal(2u, fake_radio_arm_count(), "%u arm calls",
+		      fake_radio_arm_count());
+	zassert_equal(RADIANT_RADIO_EDENIED, fake_radio_arm(0u)->rc);
+	a = fake_radio_arm(1u);
+	zassert_equal(RADIANT_RADIO_OK_RC, a->rc, "the band arm was refused rc %d",
+		      a->rc);
+	zassert_true(a->inside_lead, "opens %d us after its arm call, lead %u",
+		     (int)((int64_t)a->t_open - (int64_t)a->t_arm),
+		     (unsigned)lead);
+	zassert_equal(open, a->t_open, "the core moved the window");
+	zassert_equal(1u, fake_radio_stats()->arms_inside_lead);
+	zassert_equal(0u, fake_radio_stats()->rc_etime);
+	served = (a->rf_index == 26u) ? 1u : 0u;
+	zassert_equal(0u, log.missed_count[served]);
+	*served_out = served;
+	*open_out = open;
+}
+
+ZTEST(radiant_sched, test_an_arm_pushed_inside_the_lead_keeps_its_window)
+{
+	uint8_t served;
+	radiant_time_t open;
+
+	band_arm_case(60u, &served, &open);
+	fake_radio_advance_past_close(open + TEST_WINDOW_US);
+	zassert_equal(1u, log.ok_count[served]);
+	zassert_equal(0u, log.missed_count[served]);
+	finish_forced(0u, 0u);
+}
+
+/* The same on the CC26x2, whose window is kept but starts late (the
+ * backend's pastTrig start; test_fake_radio.c shows the head it loses). */
+ZTEST(radiant_sched, test_a_cc26xx_arm_inside_the_lead_keeps_a_late_window)
+{
+	uint8_t served;
+	radiant_time_t open;
+	const struct fake_radio_arm *a;
+
+	fake_radio_caps_preset_cc26xx(false);
+	/* 100 us: the retune's 400 us floor still fits inside 600 - 90. */
+	band_arm_case(100u, &served, &open);
+	a = fake_radio_arm(1u);
+	zassert_true(a->t_arm + radiant_radio_caps_get()->min_arm_lead_us > open,
+		     "no head to lose");
+	fake_radio_advance_past_close(open + TEST_WINDOW_US);
+	zassert_equal(1u, log.ok_count[served]);
+	finish_forced(0u, 0u);
 }
 
 /* ESTATE describes the radio (disabled), not the request: nothing consumed,

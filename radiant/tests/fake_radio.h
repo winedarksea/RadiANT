@@ -257,6 +257,10 @@ struct fake_radio_arm {
 	enum radiant_radio_status terminal_status;
 	radiant_time_t            t_terminal;
 	uint16_t              n_rx_events;  /* non-terminal OK / CRC_FAIL */
+
+	/* Accepted between the hardware floor and the advertised lead
+	 * (fake_radio_arm_floor_us()); counted in stats.arms_inside_lead. */
+	bool                  inside_lead;
 };
 
 struct fake_radio_event {
@@ -324,6 +328,11 @@ struct fake_radio_stats {
 	uint32_t rc_etime;
 	uint32_t rc_estate;
 	uint32_t rc_forced;
+	/* Arms accepted inside the advertised lead but outside the hardware
+	 * floor (fake_radio_arm_floor_us()). A real backend serves these (an
+	 * nRF on time, a CC26x2 receive late), so they are not ETIME; a suite
+	 * asserting "the core never arms inside the lead" asserts this is 0. */
+	uint32_t arms_inside_lead;
 
 	uint32_t ev_ok;
 	uint32_t ev_crc_fail;
@@ -620,6 +629,26 @@ void fake_radio_force_terminal_repeat(enum radiant_radio_status status,
  * every forced refusal until changed. Callable from a callback. 0 (the
  * default, and after fake_radio_reset()) is an instant refusal. */
 void fake_radio_set_forced_arm_cost_us(uint32_t us);
+
+/*
+ * The hardware floor an arm is refused ETIME inside, which the fake models
+ * per preset as the real backends do (backend drift item 7), never above the
+ * advertised lead outside a grant:
+ *   - nRF (fake_radio_caps_preset_nrf()): air_lead_us(), ramp-up plus
+ *     preamble and address (88 us for a 5-byte address; 376 on the coded
+ *     PHY), +1 for a transmit (T_SYNC_CAL_TX_US);
+ *   - CC26x2: ARM_FLOOR_US 150 for a receive, TX_ARM_FLOOR_US for a
+ *     transmit, +250 (FS_SETTLE_US) on a retune - an rf_index other than the
+ *     one the last accepted arm (or enable) tuned;
+ *   - RAIL: the lead itself (no band).
+ * Between the floor and the lead an arm succeeds and counts
+ * stats.arms_inside_lead. nRF operations go out on time; a CC26x2 receive
+ * starts late and listens only from arm time + the lead; a CC26x2 transmit
+ * goes out on time. Energy detect keeps the full lead.
+ */
+uint32_t fake_radio_arm_floor_us(enum fake_radio_arm_kind kind,
+				 const struct radiant_pkt_format *fmt,
+				 uint8_t addr_len, uint8_t rf_index);
 
 /* Offset, in microseconds, between the t_sync a transmit asks for and the
  * t_sync it reports. Models a backend that cannot schedule exactly; the

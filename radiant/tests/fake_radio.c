@@ -90,6 +90,9 @@ struct cur_op {
 	uint32_t             flags;
 	radiant_time_t           t_open;
 	radiant_time_t           t_close;
+	/* Where acceptance starts: t_open, or later for a CC26x2 window armed
+	 * inside its lead, which starts late (fake_radio_arm_floor_us()). */
+	radiant_time_t           t_listen;
 
 	/* transmit */
 	radiant_time_t t_sync_req;
@@ -119,6 +122,13 @@ struct cur_op {
 };
 
 #define FBK_N 4u /* ADR 0018 (d2) booking slots in the model */
+
+/* Which real backend's arm floor a preset models (fake_radio_arm_floor_us()). */
+enum floor_model {
+	FLOOR_NRF = 0,   /* air_lead_us(): ramp-up + preamble + address */
+	FLOOR_CC26XX,    /* ARM_FLOOR_US / TX_ARM_FLOOR_US, + FS on a retune */
+	FLOOR_LEAD       /* no band: the lead is the floor */
+};
 
 struct fake_state {
 	enum fake_lifecycle  lc;
@@ -157,6 +167,14 @@ struct fake_state {
 	 * none): an arbitrated backend serves an operation ending inside it at
 	 * caps.min_arm_lead_in_grant_us. See too_late(). */
 	radiant_time_t reserve_end;
+	/* The arm floor (fake_radio_arm_floor_us()): which backend's, the
+	 * floor of the arm call in progress, and whether that call was
+	 * accepted inside the lead. tuned_rf is the CC26x2's synthesiser
+	 * channel, for its retune floor. */
+	enum floor_model floor_model;
+	uint32_t arm_floor_us;
+	bool     arm_inside_lead;
+	uint8_t  tuned_rf;
 	uint32_t rx_terminal_delay_us;
 	/* Delivery lag of a received frame's event after its t_sync. */
 	uint32_t rx_frame_delay_us;
@@ -445,6 +463,7 @@ void fake_radio_caps_preset_nrf(void)
 	c->has_ed_scan = true;
 	c->tx_power_min_dbm = -40;
 	c->tx_power_max_dbm = 8;
+	g.floor_model = FLOOR_NRF;
 }
 
 void fake_radio_caps_preset_rail(void)
@@ -486,6 +505,7 @@ void fake_radio_caps_preset_rail(void)
 	c->has_ed_scan = false;
 	c->tx_power_min_dbm = -26;
 	c->tx_power_max_dbm = 20;
+	g.floor_model = FLOOR_LEAD;
 }
 
 /*
@@ -498,6 +518,7 @@ static void caps_preset_apply(const struct radiant_radio_caps *c,
 {
 	g.caps = *c;
 	g.caps.name = name;
+	g.floor_model = FLOOR_CC26XX;
 }
 
 void fake_radio_caps_preset_cc26xx(bool coex)
@@ -1469,7 +1490,7 @@ static bool next_due(radiant_time_t *t_out, enum due_kind *kind_out,
 		/* Acceptance is judged on t_sync; only the delivery is late
 		 * (fake_radio_set_rx_frame_delay_us()). */
 		if (f->t_sync + g.rx_frame_delay_us < g.now ||
-		    f->t_sync < g.cur.t_open || f->t_sync > g.cur.t_close) {
+		    f->t_sync < g.cur.t_listen || f->t_sync > g.cur.t_close) {
 			continue;
 		}
 		if (!air_matches(f, &fidx)) {
@@ -1894,15 +1915,90 @@ static bool fbk_too_late(uint8_t kind, radiant_time_t t, radiant_time_t open,
 /* `end` is the operation's last instant: inside the previous arm's reserve, the
  * in-grant lead applies instead, as on an arbitrated backend holding that air.
  * Unchanged wherever min_arm_lead_in_grant_us is 0 (every preset). */
-static bool too_late(radiant_time_t t, radiant_time_t end)
+static uint32_t lead_for(radiant_time_t end)
 {
-	uint32_t lead = g.caps.min_arm_lead_us;
-
 	if (g.caps.min_arm_lead_in_grant_us != 0u && g.reserve_end != 0u &&
 	    end <= g.reserve_end) {
-		lead = g.caps.min_arm_lead_in_grant_us;
+		return g.caps.min_arm_lead_in_grant_us;
 	}
-	return t < g.now + (radiant_time_t)lead;
+	return g.caps.min_arm_lead_us;
+}
+
+static bool too_late(radiant_time_t t, radiant_time_t end)
+{
+	return t < g.now + (radiant_time_t)lead_for(end);
+}
+
+/* The model behind fake_radio_arm_floor_us(), before the cap at the lead. */
+static uint32_t floor_raw(enum fake_radio_arm_kind kind,
+			  const struct radiant_pkt_format *fmt,
+			  uint8_t addr_len, uint8_t rf_index)
+{
+	const bool tx = (kind == FAKE_RADIO_ARM_TX);
+
+	if (kind == FAKE_RADIO_ARM_ED || fmt == NULL) {
+		return UINT32_MAX;
+	}
+	switch (g.floor_model) {
+	case FLOOR_NRF: {
+		/* radiant_radio_nrf.c air_lead_us() (+ T_SYNC_CAL_TX_US 1). */
+		uint32_t air = (fmt->phy == RADIANT_PHY_LR_CODED)
+				       ? 40u + 80u + 256u
+				       : 40u + (1u + (uint32_t)addr_len) * 8u;
+
+		return air + (tx ? 1u : 0u);
+	}
+	case FLOOR_CC26XX: {
+		/* radiant_radio_cc26xx.c ARM_FLOOR_US, TX_ARM_FLOOR_US at the
+		 * shipped TX_TIME_CAL_US (+100), FS_SETTLE_US on a retune. */
+		uint32_t f = 150u;
+
+		if (tx) {
+			int32_t start = (int32_t)((1u + (uint32_t)addr_len) * 8u) +
+					150 - 100;
+
+			f += (start > 0) ? (uint32_t)start : 0u;
+		}
+		if (rf_index != g.tuned_rf) {
+			f += 250u;
+		}
+		return f;
+	}
+	case FLOOR_LEAD:
+	default:
+		return UINT32_MAX;
+	}
+}
+
+/*
+ * The arm-time test the real backends make: refuse (true, ETIME) only inside
+ * the hardware floor g.arm_floor_us (set by the arm call), never above the
+ * lead that applies. Between the floor and the lead the arm is accepted and
+ * marked inside the lead.
+ */
+static bool refuse_late(radiant_time_t t, radiant_time_t end)
+{
+	uint32_t lead = lead_for(end);
+	uint32_t fl = (g.arm_floor_us < lead) ? g.arm_floor_us : lead;
+
+	if (t >= g.now + (radiant_time_t)lead) {
+		return false;
+	}
+	if (t < g.now + (radiant_time_t)fl) {
+		return true;
+	}
+	g.arm_inside_lead = true;
+	return false;
+}
+
+/* Book-keeping for an accepted arm the floor test passed inside the lead. */
+static void note_arm_accepted(struct fake_radio_arm *rec, uint8_t rf_index)
+{
+	if (g.arm_inside_lead) {
+		g.stats.arms_inside_lead++;
+		rec->inside_lead = true;
+	}
+	g.tuned_rf = rf_index;
 }
 
 #if defined(CONFIG_RADIANT_SCHED_BOOKING)
@@ -1953,7 +2049,7 @@ static bool fbk_too_late(uint8_t kind, radiant_time_t t, radiant_time_t open,
 		*denied = true;
 		return false;
 	}
-	return too_late(t, close);
+	return refuse_late(t, close);
 }
 
 int radiant_radio_book(const struct radiant_rx_req *rx,
@@ -2157,6 +2253,8 @@ int radiant_radio_enable(void)
 		return RADIANT_RADIO_ESTATE;
 	}
 	g.lc = LC_ENABLED;
+	/* The CC26x2's enable tunes the synthesiser to the ANT+ channel. */
+	g.tuned_rf = RADIANT_RF_INDEX_ANT_PLUS;
 	return RADIANT_RADIO_OK_RC;
 }
 
@@ -2204,6 +2302,8 @@ static bool window_over_cap(radiant_time_t t_open, radiant_time_t t_close)
 
 static int arm_preflight(void)
 {
+	g.arm_inside_lead = false;
+	g.arm_floor_us = UINT32_MAX;
 	if (g.lc != LC_ENABLED) {
 		return RADIANT_RADIO_ESTATE;
 	}
@@ -2324,9 +2424,11 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 		}
 	}
 	if (rc == RADIANT_RADIO_OK_RC) {
+		g.arm_floor_us = floor_raw(FAKE_RADIO_ARM_TX, req->fmt,
+					   req->addr_len, req->rf_index);
 		if (req->t_sync_at == RADIANT_TIME_NEVER) {
 			rc = RADIANT_RADIO_EINVAL;
-		} else if (too_late(req->t_sync_at, req->t_sync_at)) {
+		} else if (refuse_late(req->t_sync_at, req->t_sync_at)) {
 			/* A backend never silently transmits late: a late
 			 * master frame lands in the next slot and is worse
 			 * than no frame at all. */
@@ -2352,6 +2454,7 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 	g.cur.arm_idx = rec_idx;
 	g.cur.fmt = *req->fmt;
 	g.cur.t_sync_req = req->t_sync_at;
+	note_arm_accepted(rec, req->rf_index);
 	g.cur.t_fire = req->t_sync_at;
 	if (g.tx_offset_us > 0) {
 		g.cur.t_fire += (radiant_time_t)g.tx_offset_us;
@@ -2532,6 +2635,8 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 		  req->t_close + (radiant_time_t)req->follow_on_us <= g.held_tail_end));
 #endif
 	if (rc == RADIANT_RADIO_OK_RC) {
+		g.arm_floor_us = floor_raw(FAKE_RADIO_ARM_RX, req->fmt,
+					   req->fmt->addr_len, req->rf_index);
 		if (req->t_open == RADIANT_TIME_NEVER ||
 		    req->t_close == RADIANT_TIME_NEVER) {
 			/* RADIANT_TIME_NEVER is never a valid arm time: an
@@ -2558,7 +2663,7 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 					&bk_denied, &bk_idx) || bk_denied) {
 			rc = bk_denied ? RADIANT_RADIO_EDENIED : RADIANT_RADIO_ETIME;
 #else
-		} else if (too_late(req->t_open, req->t_close)) {
+		} else if (refuse_late(req->t_open, req->t_close)) {
 			rc = RADIANT_RADIO_ETIME;
 #endif
 		}
@@ -2621,6 +2726,18 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 	g.cur.flags = req->flags;
 	g.cur.t_open = req->t_open;
 	g.cur.t_close = req->t_close;
+	g.cur.t_listen = req->t_open;
+	if (g.arm_inside_lead && g.floor_model == FLOOR_CC26XX) {
+		/* pastTrig: the RF core needs the lead to honour a start, so a
+		 * window armed inside it starts late and loses its head. */
+		radiant_time_t start = g.now +
+				       (radiant_time_t)lead_for(req->t_close);
+
+		if (start > g.cur.t_listen) {
+			g.cur.t_listen = start;
+		}
+	}
+	note_arm_accepted(rec, req->rf_index);
 	/* One window, one answer to "did this hear anything". Reset at the arm
 	 * rather than at the terminal event, because the terminal event is
 	 * where it is read. */
@@ -2845,6 +2962,16 @@ static void take_pending_force(void)
 	    g.cur.kind == FAKE_RADIO_ARM_ED) {
 		g.cur.ed_done = (uint32_t)(g.cur.ed_hi - g.cur.ed_lo) + 1u;
 	}
+}
+
+uint32_t fake_radio_arm_floor_us(enum fake_radio_arm_kind kind,
+				 const struct radiant_pkt_format *fmt,
+				 uint8_t addr_len, uint8_t rf_index)
+{
+	uint32_t raw = floor_raw(kind, fmt, addr_len, rf_index);
+	uint32_t lead = g.caps.min_arm_lead_us;
+
+	return (raw < lead) ? raw : lead;
 }
 
 void fake_radio_set_tx_offset_us(int32_t us)
