@@ -435,16 +435,14 @@ void fake_radio_set_isr_call_budget(uint16_t calls)
  */
 
 /*
- * The presets. Only three numbers in each are documented facts rather than
- * placeholders - max_filters, addr_len_hw_max, crc_in_hw (docs/backends.md,
- * "the caps table"). nRF: 8/5/true (one base + eight prefixes, five-byte
- * matcher, CRC engine covers the address). RAIL: 2/4/false (two runtime sync
- * words, four-byte matcher, CRC engine can't fold in a per-channel sync word
- * so the backend verifies in software).
- *
- * The timing figures are deliberately non-zero and different between presets
- * but are NOT measurements - their only job is to fail a core module that
- * hardcoded one backend's constant under the other.
+ * The presets. The nRF and CC26x2 ones are the real backends' figures, from
+ * radiant/tests/common/caps_presets.h (checked against the backends by the
+ * parity tests). RAIL has no backend: only max_filters, addr_len_hw_max and
+ * crc_in_hw are documented facts there (2/4/false: two runtime sync words,
+ * four-byte matcher, a CRC engine that can't fold in a per-channel sync
+ * word); its timing figures are placeholders, deliberately different from
+ * the others so a core module hardcoding one backend's constant fails under
+ * another.
  */
 /* A preset's delivery delays (fake_radio_restore_delays()). */
 static void delays_preset(uint32_t rx_terminal_us, uint32_t isr_us,
@@ -462,46 +460,22 @@ static void delays_preset(uint32_t rx_terminal_us, uint32_t isr_us,
 
 void fake_radio_caps_preset_nrf(void)
 {
-	struct radiant_radio_caps *c = &g.caps;
-
-	memset(c, 0, sizeof(*c));
-	c->name = "fake:nrf";
-	c->max_filters = 8u;
 	/*
-	 * Two, a fourth documented fact rather than a placeholder: the nRF's
-	 * eight logical addresses are one BASE0+AP0 and seven BASE1+AP1..AP7,
-	 * so a window carries at most two distinct bases. On the 3-byte search
-	 * format the base [A6 C5] is shared by every filter; on the 5-byte
-	 * tracking format the base carries the device number, so two tracked
-	 * channels share a window only if they're the same sensor. Modelling
-	 * this matters: an unmodelled 8 would let CI miss a scheduler merging
-	 * eight tracked channels into a window the real backend refuses.
+	 * The nRF54L15 direct-gate row of radiant/tests/common/caps_presets.h,
+	 * which radiant.backend checks against radiant_radio_nrf.c: 8 filters
+	 * in two address groups (one BASE0+AP0, seven BASE1+AP1..AP7), 5-byte
+	 * matcher, CRC in hardware with RXCRC kept, the 168 us lead, 40 us ramp
+	 * and turnarounds. The ADR 0022 wildcard on, as it ships (short match,
+	 * default y); fake_radio_caps_preset_nrf_long_match() turns it off.
+	 * Energy detect on (the shipping image has it off): the RAIL preset
+	 * must differ, or "backends without it return ENOTSUP" is
+	 * unexercisable.
 	 */
-	c->max_addr_groups = 2u;
-	/* On, as the real nRF backend ships it (ADR 0022 short match, default
-	 * y): a search window can be one wild_last filter covering every
-	 * devnum_lo. fake_radio_caps_preset_nrf_long_match() turns it off. */
-	c->filter_wildcard_dev = true;
-	c->addr_len_hw_max = 5u;
-	c->max_body_len = RADIANT_RADIO_BODY_MAX;
-	c->phys = fake_phys_1m;
-	c->n_phys = 1u;
-	c->phy_switch_us = 0u;
-	c->ramp_up_us = 40u;
-	c->rx_to_tx_us = 130u;
-	c->tx_to_rx_us = 130u;
-	c->min_arm_lead_us = 200u;
-	c->time_resolution_ns = 1000u;
-	c->has_sync_timestamp = true;
-	c->has_rssi = true;
-	c->crc_in_hw = true;
-	/* RXCRC holds the received CRC, not just a pass/fail bit. */
-	c->has_rx_crc = true;
-	/* True here, false in the RAIL preset below: the two presets must
-	 * differ or "backends without it return ENOTSUP" is unexercisable. */
-	c->has_ed_scan = true;
-	c->tx_power_min_dbm = -40;
-	c->tx_power_max_dbm = 8;
+	const struct radiant_radio_caps c = caps_preset_nrf54l(true, true);
+
+	g.caps = c;
+	g.caps.name = "fake:nrf";
+	g.caps.phys = fake_phys_1m;
 	g.floor_model = FLOOR_NRF;
 	/* nRF54L15, measured (radiant_radio_nrf.c rx_close_hold_us comment):
 	 * an empty window's terminal 149 us after t_close, 112 us of airtime

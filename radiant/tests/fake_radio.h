@@ -507,10 +507,12 @@ bool fake_radio_step(void);
  */
 struct radiant_radio_caps *fake_radio_caps_mut(void);
 
-/* nRF52840 / nRF54L15: max_filters 8 (one base plus eight prefixes),
- * addr_len_hw_max 5, crc_in_hw true, filter_wildcard_dev true (the shipping
- * ADR 0022 short match). _long_match is CONFIG_RADIANT_SEARCH_SHORT_MATCH=n:
- * no wildcard, the 32-set search sweep. */
+/* nRF54L15 on the direct gate, as the real backend advertises it
+ * (caps_preset_nrf54l() in radiant/tests/common/caps_presets.h, checked by
+ * radiant.backend): max_filters 8 in two address groups, addr_len_hw_max 5,
+ * crc_in_hw true, 168 us lead, 40 us ramp and turnarounds, filter_wildcard_dev
+ * true (the shipping ADR 0022 short match), energy detect on. _long_match is
+ * CONFIG_RADIANT_SEARCH_SHORT_MATCH=n: no wildcard, the 32-set search sweep. */
 void fake_radio_caps_preset_nrf(void);
 void fake_radio_caps_preset_nrf_long_match(void);
 
