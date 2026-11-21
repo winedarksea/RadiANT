@@ -193,10 +193,12 @@ bool Decode(const uint8_t *buf, size_t size, uint16_t &next);
  * there is one and it is past the first dynamic id, else the first. */
 uint16_t Seed(uint16_t first, bool haveStored, uint16_t storedNext);
 
-/* Upstream's raise past a restored endpoint id, unchanged. */
-uint16_t Raise(uint16_t current, uint16_t restoredId);
-
-/* Upstream's step after a fresh allocation, with its wrap guard. */
+/* Upstream's raise past a restored endpoint id, and upstream's step after a
+ * fresh allocation with its wrap guard. Both differ from upstream in one
+ * way: a result of kInvalid (from 0xFFFE) wraps to `first` like the wrap to 0
+ * already did, so 0xFFFF is never tried as an endpoint id and never stored -
+ * a stored 0xFFFF is refused at boot, which would fall back to reuse. */
+uint16_t Raise(uint16_t current, uint16_t restoredId, uint16_t first);
 uint16_t Advance(uint16_t current, uint16_t first);
 
 } /* namespace EndpointHighWater */

@@ -108,17 +108,23 @@ uint16_t Seed(uint16_t first, bool haveStored, uint16_t storedNext)
 	return haveStored && storedNext > first ? storedNext : first;
 }
 
-uint16_t Raise(uint16_t current, uint16_t restoredId)
+namespace
 {
-	return current > restoredId ? current : static_cast<uint16_t>(restoredId + 1);
+/* The wrap guard: below the dynamic range (the wrap to 0) or kInvalid. */
+uint16_t Wrap(uint16_t next, uint16_t first)
+{
+	return next < first || next == kInvalid ? first : next;
+}
+} /* namespace */
+
+uint16_t Raise(uint16_t current, uint16_t restoredId, uint16_t first)
+{
+	return current > restoredId ? current : Wrap(static_cast<uint16_t>(restoredId + 1), first);
 }
 
 uint16_t Advance(uint16_t current, uint16_t first)
 {
-	if (++current < first) {
-		current = first;
-	}
-	return current;
+	return Wrap(static_cast<uint16_t>(current + 1), first);
 }
 
 } /* namespace EndpointHighWater */

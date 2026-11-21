@@ -570,7 +570,7 @@ struct Bridge {
 		current = seeded;
 		for (size_t i = 0; i < nRecs; i++) {
 			if (recs[i].present && recs[i].restorable) {
-				current = EndpointHighWater::Raise(current, recs[i].ep);
+				current = EndpointHighWater::Raise(current, recs[i].ep, kFirstDynamic);
 			}
 		}
 		if (current != seeded) {
@@ -666,8 +666,8 @@ ZTEST(matter_storage, test_endpoint_hw_advance_keeps_the_wrap_guard)
 {
 	zassert_equal(EndpointHighWater::Advance(kFirstDynamic, kFirstDynamic), kFirstDynamic + 1);
 	zassert_equal(EndpointHighWater::Advance(0xFFFF, kFirstDynamic), kFirstDynamic);
-	zassert_equal(EndpointHighWater::Raise(10, 4), 10);
-	zassert_equal(EndpointHighWater::Raise(4, 10), 11);
+	zassert_equal(EndpointHighWater::Raise(10, 4, kFirstDynamic), 10);
+	zassert_equal(EndpointHighWater::Raise(4, 10, kFirstDynamic), 11);
 }
 
 /* 0xFFFF is chip::kInvalidEndpointId: never tried, never stored. Upstream's
@@ -678,8 +678,8 @@ ZTEST(matter_storage, test_endpoint_hw_never_yields_the_invalid_id)
 {
 	zassert_equal(EndpointHighWater::Advance(0xFFFE, kFirstDynamic), kFirstDynamic);
 	zassert_equal(EndpointHighWater::Advance(0xFFFD, kFirstDynamic), 0xFFFE);
-	zassert_equal(EndpointHighWater::Raise(10, 0xFFFE), kFirstDynamic);
-	zassert_equal(EndpointHighWater::Raise(kFirstDynamic, 0xFFFD), 0xFFFE);
+	zassert_equal(EndpointHighWater::Raise(10, 0xFFFE, kFirstDynamic), kFirstDynamic);
+	zassert_equal(EndpointHighWater::Raise(kFirstDynamic, 0xFFFD, kFirstDynamic), 0xFFFE);
 }
 
 /* No key at all: exactly upstream's max(restored) + 1. */

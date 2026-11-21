@@ -266,7 +266,8 @@ CHIP_ERROR BridgeManager::AddSingleDevice(MatterBridgedDevice *device, BridgedDe
 			 * biggest assigned number. */
 			/* RadiANT: upstream's expression, moved to EndpointHighWater::Raise(). */
 			mCurrentDynamicEndpointId =
-				RadiantMatter::EndpointHighWater::Raise(mCurrentDynamicEndpointId, endpointId);
+				RadiantMatter::EndpointHighWater::Raise(mCurrentDynamicEndpointId, endpointId,
+									mFirstDynamicEndpointId);
 		} else {
 			/* The pair was added to a map, so we have to take care about removing it in case of failure. */
 			if (err == CHIP_ERROR_NO_MEMORY) {
