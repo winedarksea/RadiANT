@@ -25,6 +25,20 @@ tests:
       - native_sim
     extra_configs:
       - CONFIG_RADIANT_GATE_MPSL_D2=y
+  radiant.backend.short_match:
+    # CONFIG_RADIANT_SEARCH_SHORT_MATCH, the shipping default (ADR 0022): the
+    # whole suite, so test_caps_parity.c compares the shipping nRF rows
+    # (filter_wildcard_dev true) with the backend that ships. On nRF the option
+    # changes only that caps field, so the other cases run unchanged.
+    tags:
+      - radiant
+      - mpsl
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    extra_args:
+      - BACKEND_SHORT_MATCH=1
   radiant.backend.lp:
     # CONFIG_RADIANT_NRF_LOW_POWER (power plan pass B3): the backend's HFXO
     # release and two-edge wake against a simulated GRTC, HFXO and TIMER.

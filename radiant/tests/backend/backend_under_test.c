@@ -35,6 +35,12 @@ static const uint32_t SystemCoreClock = 64000000u;
 /* radiant.backend.d2 sets CONFIG_RADIANT_GATE_MPSL_D2 (Kconfig: it selects
  * the HAL's booking fields), ADR 0018's d2 as on every shipping MPSL image, so
  * the staged branches run d2_settle_now(). */
+/* -DBACKEND_SHORT_MATCH=1 (scenario radiant.backend.short_match): the shipping
+ * ADR 0022 short match, so caps.filter_wildcard_dev is the shipping value and
+ * test_caps_parity.c compares the shipping row (backend_cfg_short_match). */
+#if defined(BACKEND_SHORT_MATCH)
+#define CONFIG_RADIANT_SEARCH_SHORT_MATCH 1
+#endif
 
 #undef DT_CHOSEN
 #undef DT_NODE_EXISTS
