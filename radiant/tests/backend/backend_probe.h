@@ -92,6 +92,10 @@ int      backend_rx_window(uint64_t t_open, uint64_t t_close, uint32_t flags, ui
 int      backend_rx_window_staged(uint64_t t_open, uint64_t t_close, uint32_t *op);
 void     backend_grant_rx_after(uint32_t late_us);
 int      backend_rx_n_filters(uint8_t n);
+/* A wildcard search window: 3-byte search format, one wild_last filter, so
+ * one address byte is matched in software (backend_sw_addr_len() 1). */
+int      backend_rx_search_window(uint64_t t_open, uint64_t t_close, uint32_t *op);
+uint8_t  backend_sw_addr_len(void);
 int      backend_ed_live(uint8_t lo, uint8_t hi, uint32_t dwell_us, uint32_t *op);
 void     backend_set_max_window(uint32_t us);
 uint32_t backend_acquires(void);

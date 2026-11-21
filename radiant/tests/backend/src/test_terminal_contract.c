@@ -249,9 +249,46 @@ ZTEST(radiant_backend_terminal, test_an_ed_sweep_over_the_ceiling_is_enotsup_bef
 	zassert_equal(0u, op);
 	zassert_equal(0u, backend_acquires(), "the gate was asked for it");
 	zassert_true(backend_op_retired());
+
+	/* Exactly the ceiling (2 x 10000) is accepted and goes to the gate. */
+	zassert_equal(RADIANT_RADIO_OK_RC, backend_ed_live(10u, 11u, 10000u, &op));
+	zassert_not_equal(0u, op);
+	zassert_equal(1u, backend_acquires());
 }
 
 /* ---- Window edges: t_sync always lies in [t_open, t_close] ---- */
+
+/*
+ * The edges are judged on the whole address's t_sync, after the software-
+ * matched bytes' airtime is added (radiant_addr_split_t_sync_us()), not on
+ * the hardware ADDRESS capture. A wildcard search window (ADR 0022) leaves
+ * one byte to software, 8 us at 1 M: a frame at exactly t_open and one at
+ * exactly t_close are delivered, t_close + 1 is dropped.
+ */
+ZTEST(radiant_backend_terminal, test_search_window_edges_count_the_software_address_byte)
+{
+	const uint64_t t_open = backend_now() + 10000u;
+	const uint64_t t_close = t_open + 1000u;
+	uint32_t op = 0u;
+
+	zassert_equal(RADIANT_RADIO_OK_RC, backend_rx_search_window(t_open, t_close, &op));
+	zassert_equal(1u, backend_sw_addr_len(), "not a short-match window");
+
+	backend_frame_t_sync(true, t_open);
+	backend_dispatch();
+	zassert_equal(1u, backend_probe()->rx_events, "a frame at t_open was dropped");
+	zassert_equal(t_open, backend_probe()->last_rx_t_sync);
+
+	backend_frame_t_sync(true, t_close);
+	backend_dispatch();
+	zassert_equal(2u, backend_probe()->rx_events, "a frame at t_close was dropped");
+	zassert_equal(t_close, backend_probe()->last_rx_t_sync);
+
+	backend_frame_t_sync(true, t_close + 1u);
+	backend_dispatch();
+	zassert_equal(2u, backend_probe()->rx_events, "a frame after t_close was delivered");
+	zassert_equal(1u, backend_window_drops());
+}
 
 /* One microsecond before t_open is outside: dropped in software, counted,
  * and the window goes on (a STOP_ON_FIRST window is not ended by it). A

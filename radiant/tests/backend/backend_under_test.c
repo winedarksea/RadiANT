@@ -495,6 +495,10 @@ void backend_arm_ready(void)
 {
 	radiant_op.inited = true;
 	radiant_op.enabled = true;
+	/* As radiant_radio_init() leaves it: op ids are non-zero (HAL). */
+	if (radiant_op.next_id == 0u) {
+		radiant_op.next_id = 1u;
+	}
 }
 
 static void backend_tracking_tx_req(struct radiant_tx_req *req, uint64_t t_sync_at)
@@ -622,6 +626,27 @@ int backend_ed_live(uint8_t lo, uint8_t hi, uint32_t dwell_us, uint32_t *op)
 	backend_arm_ready();
 	return radiant_radio_ed(&req, op);
 }
+
+/* A wildcard search window (ADR 0022): the 3-byte search format with one
+ * wild_last filter, so the hardware matches two bytes and the third reaches
+ * software (sw_addr_len 1), whatever CONFIG_RADIANT_NRF_TRACK_HW_ADDR_LEN. */
+static struct radiant_rx_filter bfilt_wild = {
+	.addr = { 0xA6u, 0xC5u, 0x00u }, .addr_len = 3u, .wild_last = true,
+};
+
+int backend_rx_search_window(uint64_t t_open, uint64_t t_close, uint32_t *op)
+{
+	backend_arm_ready();
+	memset(&brx_req, 0, sizeof(brx_req));
+	brx_req.fmt = radiant_frame_format(RADIANT_FRAME_CFG_SEARCH);
+	brx_req.filters = &bfilt_wild;
+	brx_req.n_filters = 1u;
+	brx_req.t_open = t_open;
+	brx_req.t_close = t_close;
+	return radiant_radio_rx(&brx_req, op);
+}
+
+uint8_t  backend_sw_addr_len(void) { return radiant_op.sw_addr_len; }
 
 void     backend_set_max_window(uint32_t us) { fg.max_window = us; }
 uint32_t backend_acquires(void) { return fg.acquires; }

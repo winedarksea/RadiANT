@@ -220,7 +220,9 @@ min_scenarios: 27
 # RX terminal t_sync, window ceiling first; sched: ED chunk under max_window_us),
 # +12 in radiant.backend and radiant.backend.d2 each, +9 in each
 # radiant.backend_cc26xx scenario.
-min_testcases: 7997
+# 7999 (+2), the review's search-window edge case in radiant.backend and
+# radiant.backend.d2 (the ED-at-the-ceiling pin joined an existing case).
+min_testcases: 7999
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -290,12 +292,14 @@ min_cases.radiant.gate: 87
 # staged operation aborted once its request is gone).
 # 2026-11-20: 32 with item 5's remaining 12 (error codes, window ceiling, window
 # edges, RX terminal t_sync/noise).
-min_cases.radiant.backend: 32
+# 33 with the review's search-window edge case.
+min_cases.radiant.backend: 33
 # radiant.backend.d2: the same suite with CONFIG_RADIANT_GATE_MPSL_D2 (the
 # staged branches run d2_settle_now()). 54, the observed count (2026-11-20).
 # 55 with the review's case (as radiant.backend).
 # 67 with item 5's remaining 12 (as radiant.backend).
-min_cases.radiant.backend.d2: 67
+# 68 with the review's search-window edge case.
+min_cases.radiant.backend.d2: 68
 min_cases.hrm_ble.sim_sched: 4
 min_cases.treadmill.pages: 20
 min_cases.treadmill.hr_rx: 3
