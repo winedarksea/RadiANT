@@ -111,6 +111,9 @@ static struct {
 	 * radiant_rx_torn() and the END branch), and the worst END-interrupt
 	 * lateness of a frame it accepted. */
 	uint32_t late_isr_drops, end_late_max_us;
+	/* RADIANT_RADIO_DIAG_WINDOW_DROPS, as cc26xx's: a matched frame dropped because its
+	 * t_sync fell outside [t_open, t_close] (the END branch). */
+	uint32_t window_drops;
 } nrf_diag = {
 	.arm_slack_min_us = RADIANT_DIAG_NO_SAMPLE,
 };
@@ -709,6 +712,18 @@ static struct radiant_radio_caps radiant_nrf_caps = {
 	.tx_power_max_dbm    = RADIANT_NRF_TXP_MAX_DBM,
 };
 
+/*
+ * True if [from, to] is longer than the gate's ceiling (caps.max_window_us,
+ * 0 = unbounded). Read from the gate, not the caps struct, which is refreshed
+ * only when the caps are read.
+ */
+static bool window_over_cap(radiant_time_t from, radiant_time_t to)
+{
+	const uint32_t max = gate_max_window_us();
+
+	return max != 0u && to > from && (to - from) > (radiant_time_t)max;
+}
+
 const struct radiant_radio_caps *radiant_radio_caps_get(void)
 {
 	/*
@@ -902,6 +917,16 @@ static struct {
 	 * gate_acquire(): a denial or a failed grant ends the operation unprogrammed.
 	 */
 	radiant_time_t t_sync_req;
+
+	/*
+	 * The receive window as requested. The END branch drops a frame whose
+	 * t_sync falls outside it (HAL: an event's t_sync lies in [t_open,
+	 * t_close]), and every RX terminal reports t_close as its t_sync. Set
+	 * with the slot claim, like t_sync_req, so a denied or failed window
+	 * that was never programmed reports its own close.
+	 */
+	radiant_time_t rx_t_open;
+	radiant_time_t rx_t_close;
 
 #if defined(CONFIG_RADIANT_ED_SCAN)
 	/*
@@ -1724,8 +1749,12 @@ static int filters_prepare(const struct radiant_rx_filter *filters, uint8_t n,
 	uint8_t  n_base1 = 0;
 	int8_t   lone = -1;
 
-	if (filters == NULL || n == 0u || n > radiant_nrf_caps.max_filters) {
+	if (filters == NULL || n == 0u) {
 		return RADIANT_RADIO_EINVAL;
+	}
+	/* Well formed, beyond this matcher (HAL: which code for which refusal). */
+	if (n > radiant_nrf_caps.max_filters) {
+		return RADIANT_RADIO_ENOTSUP;
 	}
 
 	memset(prefixes, 0, sizeof(prefixes));
@@ -3334,6 +3363,9 @@ static int program_rx(const struct radiant_rx_req *req,
 	radiant_op.phy             = req->fmt->phy;
 	radiant_op.stop_on_first   = (req->flags & RADIANT_RX_STOP_ON_FIRST) != 0u;
 	radiant_op.report_crc_fail = (req->flags & RADIANT_RX_REPORT_CRC_FAIL) != 0u;
+	/* rx_arm() stored these with the claim; the same values again. */
+	radiant_op.rx_t_open       = req->t_open;
+	radiant_op.rx_t_close      = req->t_close;
 	radiant_op.terminal_sent   = false;
 	radiant_op.rx_any          = false;
 	radiant_op.addr_carry      = false;
@@ -3562,6 +3594,15 @@ static int rx_arm(const struct radiant_rx_req *req, uint32_t *op)
 	if (req->t_close < req->t_open) {
 		return RADIANT_RADIO_EINVAL;
 	}
+	/*
+	 * Longer than the advertised ceiling: a request this backend cannot take,
+	 * refused before the gate is asked (HAL caps.max_window_us). Under MPSL
+	 * the gate would otherwise answer EDENIED only past the real timeslot
+	 * maximum, which the cap sits below by the grant overhead.
+	 */
+	if (window_over_cap(req->t_open, req->t_close)) {
+		return RADIANT_RADIO_ENOTSUP;
+	}
 
 	/* One operation in flight. The lock resolves a thread arming while the freeing callback runs: EBUSY, never corruption. */
 #if defined(ARM_SLOT_GUARD)
@@ -3582,6 +3623,9 @@ static int rx_arm(const struct radiant_rx_req *req, uint32_t *op)
 	ARM_GUARD_ONLY(ARM_CLAIM());
 	ARM_GUARD_ONLY(radiant_swi_zli_unlock(claim_key));
 	irq_unlock(key);
+	/* With the claim, before anything can end the operation (see rx_t_close). */
+	radiant_op.rx_t_open = req->t_open;
+	radiant_op.rx_t_close = req->t_close;
 
 	/*
 	 * Refusals that depend only on the request are answered here, before the gate is
@@ -3846,6 +3890,15 @@ int radiant_radio_ed(const struct radiant_ed_req *req, uint32_t *op)
 		return RADIANT_RADIO_EINVAL;
 	}
 	if (req->dwell_us < ED_DWELL_MIN_US) {
+		return RADIANT_RADIO_ENOTSUP;
+	}
+	/* The sweep spans (hi - lo + 1) * dwell: the same ceiling as a window,
+	 * refused before the gate is asked. */
+	if (window_over_cap(req->t_start,
+			    req->t_start +
+				    (radiant_time_t)((uint32_t)req->rf_index_hi -
+						     req->rf_index_lo + 1u) *
+					    (radiant_time_t)req->dwell_us)) {
 		return RADIANT_RADIO_ENOTSUP;
 	}
 	/* No consumer, no operation: a sweep whose events have nowhere to go would still occupy the radio. */
@@ -4707,7 +4760,9 @@ static void deliver_terminal(enum radiant_radio_status st)
 		memset(&evt, 0, sizeof(evt));
 		evt.op = radiant_op.id;
 		evt.status = st;
-		evt.t_sync = radiant_radio_now();
+		/* HAL: an RX terminal reports the requested t_close, not exact,
+		 * whatever ended it (radiant_rx_event.t_sync). */
+		evt.t_sync = radiant_op.rx_t_close;
 		evt.t_sync_exact = false;
 
 		/*
@@ -5114,19 +5169,37 @@ rx_end_again:
 				 } else if (fidx >= 0 && !crc_ok) {
 					 nrf_diag.crc_fail++;
 				 });
+
+			/* Hardware capture, moved to antenna reference with this operation's PHY calibration (the PHYs differ by 20 us). */
+			radiant_time_t t_sync = 0u;
+
+			if (fidx >= 0) {
+				t_sync = t_sync_cal(clock_absolute(sync),
+						    t_sync_cal_rx_us(radiant_op.phy));
+				/* ADDRESS fired at the end of the short hardware address; t_sync is the end of the whole on-air address. */
+				t_sync += (radiant_time_t)radiant_addr_split_t_sync_us(
+					radiant_op.sw_addr_len);
+				/*
+				 * Outside [t_open, t_close]: dropped, as on cc26xx (HAL, t_sync
+				 * contract). The receiver runs from t_open less the air lead and
+				 * closes past t_close by the longest frame's tail, so a frame
+				 * whose address ended a few us early, or a short coded frame
+				 * starting after t_close, can reach END. Not an event, and it
+				 * does not end a STOP_ON_FIRST window; rx_any stays set, since
+				 * RSSISAMPLE now holds that frame.
+				 */
+				if (t_sync < radiant_op.rx_t_open ||
+				    t_sync > radiant_op.rx_t_close) {
+					NRF_DIAG(nrf_diag.window_drops++);
+					goto rx_end_done;
+				}
+			}
 			if (fidx >= 0 && (crc_ok || radiant_op.report_crc_fail)) {
 				memset(&evt, 0, sizeof(evt));
 				evt.op = radiant_op.id;
 				evt.status = crc_ok ? RADIANT_RADIO_STATUS_OK
 						    : RADIANT_RADIO_STATUS_CRC_FAIL;
-
-				/* Hardware capture, moved to antenna reference with this operation's PHY calibration (the PHYs differ by 20 us). */
-				evt.t_sync = t_sync_cal(clock_absolute(sync),
-							t_sync_cal_rx_us(radiant_op.phy));
-				/* ADDRESS fired at the end of the short hardware address; t_sync is the end of the whole on-air address. */
-				evt.t_sync += (radiant_time_t)
-					radiant_addr_split_t_sync_us(
-						radiant_op.sw_addr_len);
+				evt.t_sync = t_sync;
 				evt.t_sync_exact = true;
 
 				evt.filter_index = (uint8_t)fidx;
@@ -5243,6 +5316,7 @@ uint8_t radiant_radio_diag_get(struct radiant_radio_diag *out)
 	out->v[RADIANT_RADIO_DIAG_TERM_ERROR] = nrf_diag.term_error;
 	out->v[RADIANT_RADIO_DIAG_SYNC_ENTRIES] = nrf_diag.frames;
 	out->v[RADIANT_RADIO_DIAG_SW_ADDR_MISMATCH] = nrf_diag.sw_mismatch;
+	out->v[RADIANT_RADIO_DIAG_WINDOW_DROPS] = nrf_diag.window_drops;
 	out->v[RADIANT_RADIO_DIAG_CRC_FAIL] = nrf_diag.crc_fail;
 	out->v[RADIANT_RADIO_DIAG_SRCH_CUT_CLOSE] = nrf_diag.srch_cut_close;
 	out->v[RADIANT_RADIO_DIAG_SRCH_CUT_ABORT] = nrf_diag.srch_cut_abort;

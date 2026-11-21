@@ -739,6 +739,7 @@ struct claim {
 	uint32_t       op;
 	RF_CmdHandle   ch;
 	radiant_time_t tx_t_sync;
+	radiant_time_t rx_t_close;
 };
 
 /*
@@ -758,6 +759,7 @@ static bool claim_locked(struct claim *c, bool retire)
 	c->op = st.op_id;
 	c->ch = st.cmd_handle;
 	c->tx_t_sync = st.tx_t_sync;
+	c->rx_t_close = st.t_close;
 	st.delivered_terminal = true;
 	st.kind = OP_NONE;
 	st.cmd_handle = NO_HANDLE;
@@ -1240,6 +1242,17 @@ static RF_CmdHandle post_op(RF_Op *op, uint32_t start_rat, uint32_t end_rat,
 }
 #endif
 
+/*
+ * A malformed format (EINVAL, HAL "which code for which refusal"): none at
+ * all, or a fixed-length one with no body. Anything fmt_supported() refuses
+ * past that is well formed and beyond this backend (ENOTSUP).
+ */
+static bool fmt_malformed(const struct radiant_pkt_format *fmt)
+{
+	return fmt == NULL ||
+	       (fmt->len_mode == RADIANT_LEN_FIXED && fmt->body_len == 0u);
+}
+
 static bool fmt_supported(const struct radiant_pkt_format *fmt)
 {
 	if (fmt == NULL) {
@@ -1277,9 +1290,17 @@ static bool fmt_supported(const struct radiant_pkt_format *fmt)
 static void deliver_terminal(const struct claim *c, enum radiant_radio_status status)
 {
 	if (c->kind == OP_RX) {
+		/*
+		 * HAL: an RX terminal reports the requested t_close, not exact. No
+		 * noise sample (has_noise false): RF_getRssi() reads only while the
+		 * receiver runs, and the one sample a window could give is not worth
+		 * a mid-window call from the drain.
+		 */
 		struct radiant_rx_event evt = {
 			.op = c->op,
 			.status = status,
+			.t_sync = c->rx_t_close,
+			.t_sync_exact = false,
 		};
 
 		/* A window that heard a frame counts as OK, even if the reply armed
@@ -1912,8 +1933,16 @@ static void rf_callback(RF_Handle h, RF_CmdHandle ch, RF_EventMask events)
 
 int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 {
-	if (cbs == NULL) {
+	if (cbs == NULL || cbs->rx == NULL || cbs->tx == NULL) {
 		return RADIANT_RADIO_EINVAL;
+	}
+	/*
+	 * Once only, as on nRF. A second init would memset st below with the RF
+	 * core possibly open and an operation live, losing rf_handle (the radio
+	 * stays open with nothing able to close it) and the operation's terminal.
+	 */
+	if (st.inited) {
+		return RADIANT_RADIO_ESTATE;
 	}
 
 	memset(&st, 0, sizeof(st));
@@ -2270,6 +2299,9 @@ static int rx_arm(const struct radiant_rx_req *req, uint32_t *op)
 	if (req == NULL || req->filters == NULL || req->n_filters == 0u) {
 		return RADIANT_RADIO_EINVAL;
 	}
+	if (fmt_malformed(req->fmt)) {
+		return RADIANT_RADIO_EINVAL;
+	}
 	if (req->t_close < req->t_open) {
 		return RADIANT_RADIO_EINVAL;
 	}
@@ -2277,6 +2309,15 @@ static int rx_arm(const struct radiant_rx_req *req, uint32_t *op)
 		return RADIANT_RADIO_EINVAL;
 	}
 	if (req->n_filters > caps.max_filters) {
+		return RADIANT_RADIO_ENOTSUP;
+	}
+	/*
+	 * Longer than a non-zero caps.max_window_us (the coex build's 20000):
+	 * ENOTSUP before anything reaches the RF driver's scheduler (HAL). The
+	 * plain build advertises 0, unbounded.
+	 */
+	if (caps.max_window_us != 0u &&
+	    req->t_close - req->t_open > (radiant_time_t)caps.max_window_us) {
 		return RADIANT_RADIO_ENOTSUP;
 	}
 
@@ -2515,7 +2556,7 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 		return RADIANT_RADIO_EINVAL;
 	}
 	*op = 0u;
-	if (req == NULL || req->body == NULL) {
+	if (req == NULL || req->body == NULL || fmt_malformed(req->fmt)) {
 		return RADIANT_RADIO_EINVAL;
 	}
 	if (req->rf_index > RADIANT_RF_INDEX_MAX) {
@@ -2653,6 +2694,12 @@ int radiant_radio_abort(void)
 	struct claim c;
 	unsigned int key;
 	bool won;
+
+	/* Before init: the wrong lifecycle state (HAL), as on nRF. After init with
+	 * nothing armed (or not enabled, so nothing can be): OK below. */
+	if (!st.inited) {
+		return RADIANT_RADIO_ESTATE;
+	}
 
 	/*
 	 * Claim the terminal first, under the lock, so the RF SWI cannot deliver

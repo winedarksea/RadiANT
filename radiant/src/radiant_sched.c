@@ -1745,6 +1745,19 @@ static enum step arm_ed_chunk(uint8_t ch, radiant_time_t earliest,
 		if (cap == 0u) {
 			cap = 1u;
 		}
+		/*
+		 * And the backend's own ceiling (caps.max_window_us, 0 = unbounded):
+		 * a sweep over it is refused ENOTSUP like an over-long window, and
+		 * chunk_us is the caller's, so it can be the larger. A single dwell
+		 * over the cap still goes as one, for the backend to refuse.
+		 */
+		if (s.caps != NULL && s.caps->max_window_us != 0u &&
+		    cap > s.caps->max_window_us / dwell) {
+			cap = s.caps->max_window_us / dwell;
+			if (cap == 0u) {
+				cap = 1u;
+			}
+		}
 		if (n > cap) {
 			n = cap;
 		}

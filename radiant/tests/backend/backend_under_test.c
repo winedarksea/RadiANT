@@ -294,6 +294,10 @@ void backend_arm_rx(bool stop_on_first)
 	radiant_op.n_filters = 1u;
 	radiant_op.addr_len = 5u;
 	radiant_op.body_len = 8u;
+	/* A window wide open: these suites test the END branch, not its edges
+	 * (test_terminal_contract.c arms real windows for those). */
+	radiant_op.rx_t_open = 0u;
+	radiant_op.rx_t_close = RADIANT_TIME_NEVER;
 }
 
 void backend_arm_tx(void)

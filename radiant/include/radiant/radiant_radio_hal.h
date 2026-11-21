@@ -60,9 +60,11 @@ extern "C" {
 #define RADIANT_RADIO_ESTATE     (-5)  /* called in the wrong lifecycle state */
 #define RADIANT_RADIO_EIO        (-6)  /* the hardware did not do as it was told */
 /*
- * RADIANT_RADIO_EDENIED - request well formed, instant reachable, but an
- * arbitrated backend (MPSL beside BLE/802.15.4, RAIL's mp scheduler) has no
- * air to give. A backend that owns the radio never returns it.
+ * RADIANT_RADIO_EDENIED - request well formed, instant reachable, but the
+ * backend's radio scheduler refused the air (an MPSL timeslot beside
+ * BLE/802.15.4, the TI RF driver's scheduler, RAIL's mp scheduler), whether
+ * or not another protocol is present. A backend that programs the radio
+ * directly, with no scheduler between it and the hardware, never returns it.
  *
  * Not ETIME: ETIME means the instant itself is unreachable, and radiant_sched.c
  * reports that as MISSED; under an arbiter the instant IS reachable, just not
@@ -76,6 +78,35 @@ extern "C" {
  * different times and get the same accounting.
  */
 #define RADIANT_RADIO_EDENIED    (-7)
+
+/*
+ * Which code for which refusal. Every backend answers these cases alike
+ * (TODO "Backend drift" item 5, 2026-11-20); request-only refusals come
+ * before any arbitration, so they are answered the same with or without an
+ * arbiter:
+ *
+ *   NULL op, req, fmt, filters or body; n_filters 0;   EINVAL
+ *   a fixed-length format with body_len 0;
+ *   t_close < t_open; rf_index > RADIANT_RF_INDEX_MAX
+ *   n_filters > caps.max_filters                        ENOTSUP
+ *   a format, CRC or PHY this backend cannot express    ENOTSUP
+ *     (a CRC of width_bits 0 is legal, see struct
+ *     radiant_crc_cfg; a backend without a no-CRC mode
+ *     refuses it ENOTSUP, as one that cannot cover the
+ *     address refuses a 16-bit CRC without cover_addr)
+ *   a window or ED sweep longer than a non-zero         ENOTSUP
+ *     caps.max_window_us (t_close - t_open, or
+ *     (hi - lo + 1) * dwell_us), checked before the
+ *     arbiter is asked
+ *   radiant_radio_init(): NULL cbs, cbs->rx or cbs->tx  EINVAL
+ *   radiant_radio_init() a second time                  ESTATE
+ *   an arm call before init or while not enabled        ESTATE
+ *   radiant_radio_abort() before init                   ESTATE
+ *   radiant_radio_abort() after init, nothing armed     OK
+ *   an operation already armed or running               EBUSY
+ *   an instant inside the backend's arm floor           ETIME
+ *   the radio scheduler refused the air                 EDENIED
+ */
 
 /* ---------------------------------------------------------------------------
  * Time
@@ -292,6 +323,15 @@ struct radiant_rx_filter {
  * inside it, so the backend must be listening early enough to have heard the
  * whole preamble+address of a frame completing exactly at t_open.
  *
+ * And it delivers nothing else: an OK or CRC_FAIL event's t_sync always lies
+ * in [t_open, t_close], both ends included. A receiver is on before t_open
+ * (ramp-up and address airtime) and after t_close (the tail of the longest
+ * frame, sized from the format's ceiling, so a shorter frame can start and
+ * end past t_close before the close lands), so where hardware could deliver
+ * a frame outside the window the backend drops it in software, without an
+ * event and without ending a STOP_ON_FIRST window (counted as window_drops
+ * on the 0xF7 backend page).
+ *
  * CALIBRATION: each backend's correction constant is measured with a wired
  * two-board GPIO trigger against its own timestamp, per part and per PHY, and
  * recorded next to the constant with its date.
@@ -504,7 +544,12 @@ enum radiant_radio_status {
 struct radiant_rx_event {
 	uint32_t              op;      /* the id the arm call returned */
 	enum radiant_radio_status status;
-	/* Valid when status is OK or CRC_FAIL. See the t_sync contract above. */
+	/* On OK and CRC_FAIL: the frame's t_sync (see the t_sync contract
+	 * above), inside [t_open, t_close]. On a terminal TIMEOUT, ABORTED,
+	 * DENIED or FAILED: the window's requested t_close with t_sync_exact
+	 * false, on every backend - a fixed, known value rather than a clock
+	 * reading taken whenever the end was noticed, the mirror of the
+	 * transmit rule in struct radiant_tx_event. */
 	radiant_time_t            t_sync;
 	bool                  t_sync_exact;
 	/*
@@ -546,8 +591,10 @@ struct radiant_rx_event {
 	/*
 	 * RSSI measured inside this window with no packet present - the noise
 	 * floor. Valid only on a terminal TIMEOUT event for a window that
-	 * delivered no frame. A backend that can't take such a sample leaves
-	 * has_noise false.
+	 * delivered no frame. Optional: a backend that can't take such a
+	 * sample leaves has_noise false on every event (the nRF backend fills
+	 * it on an empty TIMEOUT; cc26xx never does, since RF_getRssi() reads
+	 * only mid-window).
 	 *
 	 * Not rssi_dbm under another name: rssi_dbm measures an arrived
 	 * packet's transmitter, this measures the absence of one, and a window
@@ -830,7 +877,8 @@ struct radiant_radio_caps {
 	 *
 	 * A capability, not a policy knob: on an arbitrated backend it's a hard
 	 * API ceiling (MPSL_TIMESLOT_LENGTH_MAX_US = 100000), so a longer
-	 * window cannot be requested at all. It must bound the REQUEST rather
+	 * window cannot be requested at all: every backend refuses one ENOTSUP,
+	 * before asking its arbiter. It must bound the REQUEST rather
 	 * than have the backend silently run a shorter window: radiant_sched.c
 	 * reports the bounds it asked for, and radiant_search.c credits the
 	 * full dwell whenever a window ran to its requested close - a silently

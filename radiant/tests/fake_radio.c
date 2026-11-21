@@ -753,11 +753,12 @@ static void deliver_rx(uint32_t op, enum radiant_radio_status status, bool termi
 
 	evt.op = op;
 	evt.status = status;
-	/* The HAL says t_sync, filter_index, body and rssi are meaningful only
-	 * for OK and CRC_FAIL. Leaving them as a NULL body and a zero
-	 * timestamp on the other statuses makes a core module that reads them
-	 * anyway fault in CI instead of quietly using a stale value. */
-	evt.t_sync = frame ? t_sync : 0u;
+	/* The HAL says filter_index, body and rssi are meaningful only for OK
+	 * and CRC_FAIL. Leaving them as a NULL body on the other statuses makes
+	 * a core module that reads them anyway fault in CI instead of quietly
+	 * using a stale value. t_sync on a terminal is the window's requested
+	 * t_close, not exact, as on every backend (end_op() passes it). */
+	evt.t_sync = (frame || terminal) ? t_sync : 0u;
 	evt.t_sync_exact = frame ? g.caps.has_sync_timestamp : false;
 	evt.filter_index = frame ? filter_index : 0u;
 	evt.wild_value = frame ? g_next_wild : 0u;
@@ -970,6 +971,7 @@ static void end_op(enum radiant_radio_status status, radiant_time_t t_sync)
 	uint32_t op = g.cur.op;
 	int32_t arm_idx = g.cur.arm_idx;
 	radiant_time_t t_sync_req = g.cur.t_sync_req;
+	radiant_time_t t_close = g.cur.t_close;
 
 	if (kind == FAKE_RADIO_ARM_NONE) {
 		return;
@@ -985,7 +987,8 @@ static void end_op(enum radiant_radio_status status, radiant_time_t t_sync)
 	} else if (kind == FAKE_RADIO_ARM_ED) {
 		deliver_ed(op, status, true, 0u, 0, 0, 0u);
 	} else {
-		deliver_rx(op, status, true, 0u, 0u, NULL, 0u, 0, false, 0u,
+		/* An RX terminal reports the requested t_close (HAL item 5). */
+		deliver_rx(op, status, true, t_close, 0u, NULL, 0u, 0, false, 0u,
 			   false);
 	}
 }
@@ -2075,10 +2078,14 @@ int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 			    "radiant_radio_init() from a callback");
 		return RADIANT_RADIO_ESTATE;
 	}
+	/* NULL rx/tx entries stay legal HERE, unlike on the real backends (HAL
+	 * EINVAL): a test double, so a suite that asserts on the event log can
+	 * leave a callback out (fake_radio.h's example, fake_radio_bring_up()). */
 	if (cbs == NULL) {
 		return RADIANT_RADIO_EINVAL;
 	}
-	if (g.lc == LC_ENABLED) {
+	/* Once per fake_radio_reset(), as nRF and TI allow once per boot. */
+	if (g.lc != LC_DOWN) {
 		return RADIANT_RADIO_ESTATE;
 	}
 	g.cbs = *cbs;
@@ -2396,10 +2403,13 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 	if (rc == RADIANT_RADIO_OK_RC) {
 		/* The capability gate: a scheduler that hardcoded 8 fails here
 		 * the moment a suite sets caps.max_filters = 2. */
-		if (req->filters == NULL || req->n_filters == 0u ||
-		    req->n_filters > g.caps.max_filters ||
-		    req->n_filters > FAKE_RADIO_MAX_FILTERS) {
+		if (req->filters == NULL || req->n_filters == 0u) {
 			rc = RADIANT_RADIO_EINVAL;
+		} else if (req->n_filters > g.caps.max_filters ||
+			   req->n_filters > FAKE_RADIO_MAX_FILTERS) {
+			/* Well formed, beyond the capability: ENOTSUP on every
+			 * backend (HAL item 5). */
+			rc = RADIANT_RADIO_ENOTSUP;
 		}
 	}
 	if (rc == RADIANT_RADIO_OK_RC) {
@@ -2481,6 +2491,16 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 			rc = RADIANT_RADIO_EINVAL;
 		} else if (req->t_close < req->t_open) {
 			rc = RADIANT_RADIO_EINVAL;
+		} else if (window_over_cap(req->t_open, req->t_close)) {
+			/* Longer than caps.max_window_us, an API ceiling on an
+			 * arbitrated backend (MPSL_TIMESLOT_LENGTH_MAX_US is
+			 * 100000), not a preference. Refused with ENOTSUP
+			 * rather than quietly shortened - a shortened window
+			 * would let the scheduler credit a dwell never spent.
+			 * A property of the request, so checked before the lead
+			 * and the arbiter, as every backend does (HAL item 5).
+			 */
+			rc = RADIANT_RADIO_ENOTSUP;
 #if defined(CONFIG_RADIANT_SCHED_BOOKING)
 		} else if (fbk_too_late((uint8_t)FAKE_RADIO_ARM_RX, req->t_open,
 					req->t_open, req->t_close,
@@ -2492,14 +2512,6 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 		} else if (too_late(req->t_open, req->t_close)) {
 			rc = RADIANT_RADIO_ETIME;
 #endif
-		} else if (window_over_cap(req->t_open, req->t_close)) {
-			/* Longer than caps.max_window_us, an API ceiling on an
-			 * arbitrated backend (MPSL_TIMESLOT_LENGTH_MAX_US is
-			 * 100000), not a preference. Refused with ENOTSUP
-			 * rather than quietly shortened - a shortened window
-			 * would let the scheduler credit a dwell never spent.
-			 */
-			rc = RADIANT_RADIO_ENOTSUP;
 		}
 	}
 #if defined(CONFIG_RADIANT_SCHED_BOOKING)
@@ -2634,18 +2646,18 @@ int radiant_radio_ed(const struct radiant_ed_req *req, uint32_t *op)
 		rc = RADIANT_RADIO_EINVAL;
 		goto refuse;
 	}
-	if (too_late(req->t_start, RADIANT_TIME_NEVER)) {
-		rc = RADIANT_RADIO_ETIME;
-		goto refuse;
-	}
 	/* An ED chunk's span is (hi - lo + 1) * dwell, so the same ceiling
-	 * applies as to a receive window. */
+	 * applies as to a receive window, and is checked as early. */
 	if (window_over_cap(req->t_start,
 			    req->t_start +
 				    (radiant_time_t)((uint32_t)req->rf_index_hi -
 						     req->rf_index_lo + 1u) *
 					    (radiant_time_t)req->dwell_us)) {
 		rc = RADIANT_RADIO_ENOTSUP;
+		goto refuse;
+	}
+	if (too_late(req->t_start, RADIANT_TIME_NEVER)) {
+		rc = RADIANT_RADIO_ETIME;
 		goto refuse;
 	}
 
