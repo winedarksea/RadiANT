@@ -92,6 +92,27 @@ tests:
       - CONFIG_RADIANT_SEC_PAIRING_X25519=n
       - CONFIG_RADIANT_TEST_FAKE_RNG=n
 
+  # The same suites with pairing ON and the entropy backend OFF: a hostless
+  # node with no RNG (security review 2026-11-17 item 8). ADR 0009 gives it the
+  # deterministic scalar KDF(K_dev, "pair" || pair_counter), and
+  # node_ident_pair_begin() must pick that path only when caps.has_rng is
+  # false. Every other scenario that builds pairing has the fake RNG on, so
+  # without this one the KDF branch of pair_begin() runs nowhere.
+  # SELF_PROVISION goes off by dependency, so node_ident's cases provision
+  # K_dev through the factory path, as they already do.
+  radiant.unit.pairing_no_rng:
+    timeout: 300
+    tags:
+      - radiant
+      - radiant_sec
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    extra_configs:
+      - CONFIG_RADIANT_SEC_PAIRING_X25519=y
+      - CONFIG_RADIANT_TEST_FAKE_RNG=n
+
   # The same suites with the ACK fault instrument COMPILED IN
   # (CONFIG_RADIANT_ACK_FAULTS, apps/trainer's lever on the acknowledger).
   # Two halves of one claim: test_transfer.c's reply_plan cases exist only

@@ -1096,6 +1096,151 @@ ZTEST(node_ident, test_pair_begin_fails_closed_on_a_write_failure)
 	zassert_equal(NODE_IDENT_ESTATE, node_ident_pair_pubkey(TEST_CH, pub));
 }
 
+/* ── Which scalar pair_begin() installs (ADR 0009 decision 5) ─────────────── */
+
+/* The public key a given scalar puts on the air. */
+static void pub_of(const uint8_t *scalar, uint8_t out[RADIANT_SEC_X25519_BYTES])
+{
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_x25519(out, scalar,
+					 radiant_sec_x25519_basepoint));
+}
+
+#if defined(CONFIG_RADIANT_TEST_FAKE_RNG)
+
+/* A scalar no KDF produced: what the fake RNG hands the next 32-byte draw. */
+static const uint8_t rng_scalar[NODE_IDENT_PAIR_SCALAR_BYTES] = {
+	0xA5, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+	0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+	0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+	0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x5A,
+};
+
+ZTEST(node_ident, test_pair_begin_draws_the_scalar_when_the_cap_says_rng)
+{
+	uint8_t pub[NODE_IDENT_PAIR_SCALAR_BYTES];
+	uint8_t want[NODE_IDENT_PAIR_SCALAR_BYTES];
+	uint8_t kdf_pub[NODE_IDENT_PAIR_SCALAR_BYTES];
+
+	provisioned_and_booted();
+	zassert_true(radiant_sec_caps()->has_rng);
+	zassert_equal(0u, fake_rng_draw_count());
+
+	/* caps.has_rng and no host: the scalar is the RNG's (ADR 0009's
+	 * precedence), not KDF(K_dev, "pair" || 1). */
+	fake_rng_force_next(rng_scalar, sizeof(rng_scalar));
+	zassert_equal(NODE_IDENT_OK, node_ident_pair_begin(TEST_CH, 60u));
+	zassert_equal(1u, fake_rng_draw_count());
+
+	zassert_equal(NODE_IDENT_OK, node_ident_pair_pubkey(TEST_CH, pub));
+	pub_of(rng_scalar, want);
+	pub_of(scalar_ctr1, kdf_pub);
+	zassert_mem_equal(want, pub, sizeof(pub));
+	zassert_true(memcmp(kdf_pub, pub, sizeof(pub)) != 0);
+}
+
+/* What storage held at the moment of the draw. */
+static bool     draw_seen;
+static uint32_t draw_stored_ctr;
+static uint32_t draw_store_count;
+
+static void note_storage_at_draw(void)
+{
+	draw_seen = fake_nvm_peek_u32(NODE_NVM_KEY_PAIR, &draw_stored_ctr);
+	draw_store_count = fake_nvm_store_count();
+}
+
+ZTEST(node_ident, test_pair_begin_persists_the_counter_before_the_draw)
+{
+	uint32_t stores_before;
+
+	provisioned_and_booted();
+	draw_seen = false;
+	draw_stored_ctr = 0u;
+	stores_before = fake_nvm_store_count();
+	fake_rng_on_draw(note_storage_at_draw);
+
+	zassert_equal(NODE_IDENT_OK, node_ident_pair_begin(TEST_CH, 60u));
+
+	/* ADR 0009 decision 4 holds on the RNG path too: the window's counter
+	 * was already in the part when the scalar was drawn, and its write was
+	 * the only store in between. */
+	zassert_equal(1u, fake_rng_draw_count());
+	zassert_true(draw_seen);
+	zassert_equal(1u, draw_stored_ctr);
+	zassert_equal(stores_before + 1u, draw_store_count);
+}
+
+/* A draw that failed: no key, no window, and the counter stays burnt. */
+static void assert_failed_draw_closed_the_window(void)
+{
+	uint8_t  pub[NODE_IDENT_PAIR_SCALAR_BYTES];
+	uint32_t stored = 0u;
+	uint32_t ctr = 0u;
+
+	zassert_equal(1u, fake_rng_draw_count());
+	zassert_false(node_ident_pair_window_is_open());
+	zassert_not_equal(NODE_IDENT_OK, node_ident_pair_pubkey(TEST_CH, pub));
+	zassert_not_equal(RADIANT_SEC_OK,
+			  radiant_sec_pair_local_pubkey(TEST_CH, pub));
+
+	zassert_true(fake_nvm_peek_u32(NODE_NVM_KEY_PAIR, &stored));
+	zassert_equal(1u, stored);
+	zassert_equal(NODE_IDENT_OK, node_ident_pair_window_open(&ctr));
+	zassert_equal(2u, ctr);
+}
+
+ZTEST(node_ident, test_pair_begin_closes_the_window_on_a_failed_draw)
+{
+	provisioned_and_booted();
+
+	fake_rng_fail_next(1u);
+	zassert_equal(NODE_IDENT_EIO, node_ident_pair_begin(TEST_CH, 60u));
+	assert_failed_draw_closed_the_window();
+}
+
+ZTEST(node_ident, test_pair_begin_refuses_an_all_zero_draw)
+{
+	provisioned_and_booted();
+
+	/* A backend that reports success with nothing in the buffer is the
+	 * failure self_provision() already refuses; a zero scalar is no
+	 * secret. */
+	fake_rng_return_zeros(true);
+	zassert_equal(NODE_IDENT_EIO, node_ident_pair_begin(TEST_CH, 60u));
+	assert_failed_draw_closed_the_window();
+}
+
+#endif /* CONFIG_RADIANT_TEST_FAKE_RNG */
+
+#if !defined(CONFIG_RADIANT_SEC_HAS_RNG)
+
+/* radiant.unit.pairing_no_rng: pairing built, no entropy backend. */
+ZTEST(node_ident, test_pair_begin_without_an_rng_uses_the_kdf_scalar)
+{
+	uint8_t pub[NODE_IDENT_PAIR_SCALAR_BYTES];
+	uint8_t want[NODE_IDENT_PAIR_SCALAR_BYTES];
+
+	provisioned_and_booted();
+	zassert_false(radiant_sec_caps()->has_rng);
+
+	/* ADR 0009 decision 3: KDF(K_dev, "pair" || pair_counter), so the
+	 * first two windows are the Python vectors' counters 1 and 2. */
+	zassert_equal(NODE_IDENT_OK, node_ident_pair_begin(TEST_CH, 60u));
+	zassert_equal(NODE_IDENT_OK, node_ident_pair_pubkey(TEST_CH, pub));
+	pub_of(scalar_ctr1, want);
+	zassert_mem_equal(want, pub, sizeof(pub));
+
+	radiant_sec_pair_leave(TEST_CH);
+	node_ident_pair_window_close();
+	zassert_equal(NODE_IDENT_OK, node_ident_pair_begin(TEST_CH, 60u));
+	zassert_equal(NODE_IDENT_OK, node_ident_pair_pubkey(TEST_CH, pub));
+	pub_of(scalar_ctr2, want);
+	zassert_mem_equal(want, pub, sizeof(pub));
+}
+
+#endif /* !CONFIG_RADIANT_SEC_HAS_RNG */
+
 #endif /* CONFIG_RADIANT_SEC_PAIRING_X25519 */
 
 /* ── The epoch reservation (review 2026-11-13 item 1) ─────────────────────── */

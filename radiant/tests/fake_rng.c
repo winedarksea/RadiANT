@@ -27,6 +27,7 @@
 static uint32_t draws;
 static uint32_t fail_remaining;
 static bool     zeros;
+static void   (*on_draw)(void);
 
 #define FORCED_MAX 16u
 #define FORCED_LEN 32u
@@ -42,6 +43,12 @@ void fake_rng_reset(void)
 	zeros = false;
 	forced_n = 0u;
 	forced_next = 0u;
+	on_draw = NULL;
+}
+
+void fake_rng_on_draw(void (*fn)(void))
+{
+	on_draw = fn;
 }
 
 void fake_rng_force_next(const uint8_t *key, size_t len)
@@ -88,6 +95,9 @@ int radiant_sec_rng(uint8_t *out, size_t len)
 		return RADIANT_SEC_EINVAL;
 	}
 	draws++;
+	if (on_draw != NULL) {
+		on_draw();
+	}
 	if (len == 0u) {
 		return RADIANT_SEC_OK;
 	}

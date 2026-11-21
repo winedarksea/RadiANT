@@ -63,7 +63,10 @@
 # 2026-11-20: 25, dongle_thread.matter_storage (the Matter bridge's stored-record
 # decoder, security review 2026-11-20 item 2), reached through the ztest job's
 # `-T app/apps/dongle_thread/tests`.
-min_scenarios: 25
+# 2026-11-20: 26, radiant.unit.pairing_no_rng (pairing on, entropy backend off:
+# the only build where node_ident_pair_begin() takes the KDF scalar, security
+# review 2026-11-17 item 8).
+min_scenarios: 26
 
 # Total ztest cases twister executes, summed over every scenario. It equals the
 # sum of the per-scenario floors below, so the backstop and the floors cannot
@@ -197,7 +200,12 @@ min_scenarios: 25
 # Merged (items 4, C, D, B on one tree): 6482 + 25 + 9 + 110 + 11 = 6637.
 # 2026-11-20: 6493 (+11), the Matter endpoint high-water mark (security review
 # 2026-11-20 item B, fix/matter-endpoint-hw): +11 in dongle_thread.matter_storage.
-min_testcases: 6637
+# 2026-11-20: 7871 (+1234), node_ident_pair_begin() honours caps.has_rng
+# (security review 2026-11-17 item 8, sec/item8-pair-rng, Bluefin twister): +4
+# node_ident cases in each of the four unit scenarios with the fake RNG (RNG
+# scalar, counter before the draw, failed draw, all-zero draw) and the new
+# radiant.unit.pairing_no_rng scenario's 1218 (its KDF-scalar case included).
+min_testcases: 7871
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -225,9 +233,15 @@ min_testcases: 6637
 # 2026-11-20: +16 per unit scenario (bridge_trace, bridge_trace_sec: key
 # redaction, security review item D).
 # 2026-11-20: +6 per unit scenario (bridge_trace{,_sec}: review follow-ups).
-min_cases.radiant.unit: 1111
-min_cases.radiant.unit.sec_modes: 1111
+# 2026-11-20: +4 per unit scenario with the fake RNG (node_ident: pair_begin's
+# RNG scalar, counter before the draw, failed and all-zero draws; item 8).
+# no_pairing compiles them out.
+min_cases.radiant.unit: 1115
+min_cases.radiant.unit.sec_modes: 1115
 min_cases.radiant.unit.no_pairing: 1051
+# radiant.unit.pairing_no_rng: 1218, the observed count on sec/item8-pair-rng
+# (2026-11-20), including test_pair_begin_without_an_rng_uses_the_kdf_scalar.
+min_cases.radiant.unit.pairing_no_rng: 1218
 min_cases.radiant.api: 86
 min_cases.radiant.api.sec: 90
 # +1 with the identical-0xF1 retry case (review 2026-11-17 item 4).
@@ -265,7 +279,8 @@ min_cases.treadmill.hr_rx: 3
 # 2026-11-20: +1 (radiant_sec: only a real rekey cues the port, as radiant.unit).
 # 2026-11-20: +16 (bridge_trace, bridge_trace_sec, as radiant.unit).
 # 2026-11-20: +6 (bridge_trace review follow-ups, as radiant.unit).
-min_cases.radiant.unit.ack_faults: 1118
+# 2026-11-20: +4 (node_ident pair_begin RNG cases, as radiant.unit).
+min_cases.radiant.unit.ack_faults: 1122
 # radiant.unit.diag: the unit suites with CONFIG_RADIANT_DIAG_COUNTERS.
 # 1127 (2026-11-16, Bluefin twister on fix/diag-page9-done-cb): the observed
 # count, including the four page-9/page-12 scheduler cases.
@@ -278,7 +293,8 @@ min_cases.radiant.unit.ack_faults: 1118
 # 2026-11-20: +1 (radiant_sec: only a real rekey cues the port, as radiant.unit).
 # 2026-11-20: +16 (bridge_trace, bridge_trace_sec, as radiant.unit).
 # 2026-11-20: +6 (bridge_trace review follow-ups, as radiant.unit).
-min_cases.radiant.unit.diag: 1189
+# 2026-11-20: +4 (node_ident pair_begin RNG cases, as radiant.unit).
+min_cases.radiant.unit.diag: 1193
 min_cases.trainer.model: 14
 # radiant.lp_clock (power plan pass B2): the low-power timebase arithmetic,
 # 31 unit cases and seven 100 000-cycle drift simulations (three of them

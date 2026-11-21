@@ -45,6 +45,12 @@ void fake_rng_force_next(const uint8_t *key, size_t len);
  * all-zero refusal is what has to catch it. */
 void fake_rng_return_zeros(bool on);
 
+/* Call `fn` at the start of every draw, before the buffer is filled, so a
+ * suite can see what was already in storage at the moment of the draw (the
+ * pairing counter must be durable before the scalar is drawn). NULL clears;
+ * fake_rng_reset() clears it too. */
+void fake_rng_on_draw(void (*fn)(void));
+
 /* Every call, failed or not, since fake_rng_reset(). */
 uint32_t fake_rng_draw_count(void);
 
