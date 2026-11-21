@@ -1737,10 +1737,12 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		timer0_disarm();
 		(void)radiant_radio_abort();
 		/*
-		 * An orphan still gets its denial. radiant_radio_abort() terminates only an
-		 * armed operation, not one staged but not yet programmed, which would wedge
-		 * the core's single operation slot. The g.pending test in denied_work_fn()
-		 * stops this from denying an operation a fresh request is coming for.
+		 * An orphan still gets its denial. From this signal radiant_radio_abort()
+		 * leaves alone an arm in progress and an operation staged behind its own
+		 * still-placed request (g.pending: its grant or denial follows); it
+		 * aborts a live operation, and a staged one whose request is gone. The
+		 * g.pending test in denied_work_fn() stops this from denying an
+		 * operation a fresh request is coming for.
 		 * radiant_radio_abort() runs here at priority 0 (up to ~100 us). Deferring it
 		 * would return the timeslot with the peripheral still armed, so measure first.
 		 */

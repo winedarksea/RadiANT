@@ -2368,6 +2368,9 @@ static void grant_release_settle(void)
 		D2DBG(1);
 		return;
 	}
+	/* gate_held() is load-bearing, here and in d2_settle_now(): with no grant
+	 * held gate_release_masked() calls op_forget(), which would drop the
+	 * staged operation's placed request (g.pending) with no denial. */
 	if (gate_held()) {
 		D2DBG(0);
 		gate_release();
@@ -2383,6 +2386,9 @@ static void grant_release_settle(void)
  */
 static void d2_settle_now(void)
 {
+	/* gate_held(): see grant_release_settle(). The release must not reach
+	 * gate_release_masked()'s !g.granted branch, whose op_forget() would drop
+	 * the request the arm just staged behind. */
 	if (grant_release_owed && gate_held()) {
 		D2DBG(4);
 		grant_release_owed = false;
@@ -4328,12 +4334,16 @@ void radiant_nrf_gate_on_grant_end(void)
 	 */
 
 	/*
-	 * Known gap: the (D)PPI endpoints are not detached here. Detaching them all
-	 * unconditionally stopped the receive path dead (every window ran to full
-	 * length). radio_endpoints_attach(false) restores only the endpoints another
-	 * stack held at init, which is empty without a second stack. Beside OpenThread
-	 * the mask is PUBLISH_ADDRESS and SUBSCRIBE_RXEN, neither needed at this
-	 * instant. Unproven either way.
+	 * The endpoint registers go back as this grant found them: each register in
+	 * radio_ep_mine_mask (the ones this backend programmed) gets the value it held
+	 * at the grant's entry. Detaching them all unconditionally instead stopped
+	 * the receive path dead (every window ran to full length). A register the
+	 * other stack has not written (beside OpenThread, all but PUBLISH_ADDRESS
+	 * and SUBSCRIBE_RXEN; with no second stack, all six) therefore keeps our
+	 * value, so SUBSCRIBE_DISABLE/TXEN/RSSISTART stay on our DPPI channels
+	 * between grants. That is inert only because the four connections into
+	 * them were disabled above, before this hand-back and any abort
+	 * (test_arm_handback.c test_handback_disables_connections_before_abort).
 	 */
 	radio_endpoints_attach(false);
 
@@ -4460,8 +4470,23 @@ int radiant_radio_abort(void)
 	 * the abort was for the grant that just ended (whose operation had its
 	 * terminal before the slot was free to claim), the arm's own request is
 	 * untouched in the gate (g.pending), and its grant or denial still comes.
+	 *
+	 * The same holds once that arm has staged and cleared its mark
+	 * (arm_settle_staged()): an operation staged behind its own placed
+	 * request never had the ending grant's air, so the signal's abort is not
+	 * for it. Aborting it gave ABORTED for air it never had and forgot its
+	 * request (one slot lost) whenever the end landed between the settle and
+	 * the owed release (review 2026-11-19): inside the arm before
+	 * d2_settle_now(), or, without D2, anywhere in the rest of the dispatch
+	 * before grant_release_settle(). Tested here, at the one abort site,
+	 * rather than by holding the mark longer, so the transmit, receive and
+	 * energy-detect staged branches and the time after the arm returns are
+	 * all covered. Only while the request is still placed: then its grant
+	 * or denial is certain to follow (test_arm_handback.c
+	 * test_staged_successor_survives_extend_failed).
 	 */
-	if (arm_marked && gate_in_signal()) {
+	if (gate_in_signal() &&
+	    (arm_marked || (radiant_staged.pending && gate_request_pending()))) {
 		irq_unlock(key);
 		return RADIANT_RADIO_OK_RC;
 	}

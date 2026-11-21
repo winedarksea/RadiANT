@@ -66,7 +66,9 @@
 # 2026-11-20: 26, radiant.unit.pairing_no_rng (pairing on, entropy backend off:
 # the only build where node_ident_pair_begin() takes the KDF scalar, security
 # review 2026-11-17 item 8).
-min_scenarios: 26
+# 2026-11-20: 27, radiant.backend.d2 (the backend suite with
+# CONFIG_RADIANT_GATE_MPSL_D2, the staged branches' d2_settle_now()).
+min_scenarios: 27
 
 # Total ztest cases twister executes, summed over every scenario. It equals the
 # sum of the per-scenario floors below, so the backstop and the floors cannot
@@ -205,7 +207,15 @@ min_scenarios: 26
 # node_ident cases in each of the four unit scenarios with the fake RNG (RNG
 # scalar, counter before the draw, failed draw, all-zero draw) and the new
 # radiant.unit.pairing_no_rng scenario's 1218 (its KDF-scalar case included).
-min_testcases: 7871
+# 2026-11-20: 6695 (+58), the MPSL hazards (mpsl/staged-abort): radiant.backend
+# +2 (staged successor vs EXTEND_FAILED, connections off at the hand-back),
+# radiant.gate and radiant.gate.lp +1 each (EXTEND_FAILED leaves a staged
+# request pending), and the new radiant.backend.d2 scenario's 54.
+# 6697 (+2), the review: the signal abort's staged skip bounded by the request
+# (test_signal_abort_skips_staged_only_while_requested), in radiant.backend
+# and radiant.backend.d2.
+# Merged with sec/item8-pair-rng: 7871 + 58 + 2 = 7931.
+min_testcases: 7931
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -260,13 +270,22 @@ min_cases.radiant.api.diag: 104
 # 32 since C5-1 (inline BLOCKED backs off the class that was refused). 38 with
 # the extension skip (ADR 0021). 76 with pass B6's XTAL_GUARANTEED case.
 # 86 with the grant generation's 10 (observed 104).
-min_cases.radiant.gate: 86
+# 87 with EXTEND_FAILED leaving a staged request pending (observed 105).
+min_cases.radiant.gate: 87
 # radiant.backend (ADR 0021): the backend completion path against register models.
 # 10 with the option-off preempted-arm cases (observed 45), 11 with the
 # staged-path sweep, 12 with the stale-denial-then-START case.
 # 2026-11-20: 17 with HAL drift item 5's 5 (test_terminal_contract.c: t_sync of
 # FAILED/DENIED/ABORTED transmits, abort from a frame and a transmit callback).
-min_cases.radiant.backend: 17
+# 2026-11-20: 19 with the MPSL hazards' 2 (test_arm_handback.c: a staged
+# successor survives EXTEND_FAILED; connections off at the hand-back before
+# any abort). Observed 54. 20 with the review's bound on the skip (the
+# staged operation aborted once its request is gone).
+min_cases.radiant.backend: 20
+# radiant.backend.d2: the same suite with CONFIG_RADIANT_GATE_MPSL_D2 (the
+# staged branches run d2_settle_now()). 54, the observed count (2026-11-20).
+# 55 with the review's case (as radiant.backend).
+min_cases.radiant.backend.d2: 55
 min_cases.hrm_ble.sim_sched: 4
 min_cases.treadmill.pages: 20
 min_cases.treadmill.hr_rx: 3
@@ -320,7 +339,8 @@ min_cases.radiant.backend.lp_mpsl: 18
 # radiant.gate.lp (pass B6): every radiant.gate case (94 observed) with the
 # low-power hooks compiled in, plus their 10 cases.
 # 114 with the grant generation's 10.
-min_cases.radiant.gate.lp: 114
+# 115 with EXTEND_FAILED leaving a staged request pending (as radiant.gate).
+min_cases.radiant.gate.lp: 115
 # radiant.backend_cc26xx: the TI backend (radiant_radio_cc26xx.c) against a fake
 # RF driver and hal_ti's driverlib headers; 7 smoke + 11 arm-path + 20 terminal/abort cases.
 # 2026-11-20: 47 (third review), 50 with +3 HAL drift item 5 cases (requested t_sync on FAILED/DENIED/ABORTED).

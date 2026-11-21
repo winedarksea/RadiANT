@@ -192,7 +192,11 @@ bool gate_in_signal(void) { return lmt_in_signal; }
  * hand-back, even after (lmt_slot_start() / lmt_slot_end()). */
 static uint32_t lmt_gen;
 uint32_t gate_grant_gen(void) { return lmt_gen; }
-/* This gate always grants in place: nothing is ever pending. */
+/* This gate always grants in place: nothing is ever pending. So the
+ * staged-successor clause of radiant_radio_abort()'s signal skip (ba16a6a,
+ * radiant_staged.pending && gate_request_pending()) is never reached in this
+ * scenario; radiant.backend and radiant.backend.d2 cover it
+ * (test_arm_handback.c). */
 bool gate_request_pending(void) { return false; }
 void gate_release(void) {}
 void gate_forget_pending(void) {}

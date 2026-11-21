@@ -470,6 +470,55 @@ ZTEST(radiant_gate_d2, test_d2_a_refused_scan_extension_costs_the_booked_slot_no
 	assert_invariant();
 }
 
+/*
+ * The gate's half of the staged-successor case (backend: test_arm_handback.c
+ * test_staged_successor_survives_extend_failed). An arm staged behind a
+ * booking (g.pending, the booked session ROLE_OP) while the scan's grant is
+ * live; the scan's extension is then refused. EXTEND_FAILED ends session 0's
+ * timeslot and calls radiant_radio_abort(), but nothing in the gate may drop
+ * the staged request: g.pending and the booking's role survive, no denial
+ * reaches the backend (denied_work_fn()'s g.pending test), and the booked
+ * session's START still programmes it. Documentation of the gate's side only:
+ * the backend is faked here, so this is green with or without ba16a6a; the
+ * fix is pinned by the backend test above.
+ */
+ZTEST(radiant_gate_d2, test_d2_extend_failed_leaves_a_staged_request_pending)
+{
+	radiant_time_t scan = scan_granted();
+	radiant_time_t t = scan + TRACK_AFTER_US;
+	uint32_t       denied0;
+	uint32_t       grant0;
+
+	zassert_equal(GATE_BOOK_OK, gate_book(t, t + TRACK_LEN_US, 0u), NULL);
+	k_msleep(WORK_MS);
+	zassert_equal(GATE_PENDING,
+		      gate_acquire(GATE_OP_RX, t, t + TRACK_LEN_US, 0u,
+				   RADIANT_GATE_PRIO_HIGH), NULL);
+	gate_probe_read(&p);
+	zassert_true(p.pending, NULL);
+	zassert_equal(ROLE_OP, p.role[1], NULL);
+	denied0 = fake_backend()->on_denied;
+	grant0 = fake_backend()->on_grant;
+
+	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_END,
+		      fake_mpsl_signal_s(0u, MPSL_TIMESLOT_SIGNAL_EXTEND_FAILED), NULL);
+	k_msleep(WORK_MS);
+	gate_probe_read(&p);
+	zassert_true(p.pending, "EXTEND_FAILED dropped the staged request");
+	zassert_equal(ROLE_OP, p.role[1], "EXTEND_FAILED touched the booked session");
+	zassert_equal(denied0, fake_backend()->on_denied,
+		      "the staged request was denied by another session's end");
+
+	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_NONE,
+		      fake_mpsl_signal_s(1u, MPSL_TIMESLOT_SIGNAL_START), NULL);
+	zassert_equal(grant0 + 1u, fake_backend()->on_grant,
+		      "the booked START did not programme the staged request");
+	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_END,
+		      fake_mpsl_signal_s(1u, MPSL_TIMESLOT_SIGNAL_TIMER0), NULL);
+	k_msleep(WORK_MS);
+	assert_invariant();
+}
+
 ZTEST(radiant_gate_d2, test_d2_an_aborted_booked_op_re_arms_into_the_same_booking)
 {
 	radiant_time_t t = radiant_radio_now() + SCAN_LEAD_US;

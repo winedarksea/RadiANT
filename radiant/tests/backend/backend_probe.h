@@ -120,9 +120,37 @@ struct backend_preempt_result {
 	bool     op_idle_final;
 	uint32_t terminals_final;
 	int      next_rc;            /* the next arm, in a fresh grant */
+	bool     staged_at_fire;     /* the operation was staged when the event came */
+	/* A window connection on as the event's hand-back began, and still on
+	 * when radiant_nrf_gate_on_grant_end() returned (before any abort). */
+	bool     conns_before_handback;
+	bool     conns_at_handback;
+	uint32_t aborted_final;      /* ABORTED terminals, queued or delivered */
+	/* backend_preempt_staged_in_grant() only. */
+	bool     staged_after_arm;   /* the arm returned with its operation staged */
+	bool     fired_after_arm;    /* the event came after the arm returned */
+	bool     staged_after_point; /* still staged once the event's point passed */
+	bool     req_pending_after_point; /* its request still placed (g.pending) */
+	uint32_t forgets_after_point;     /* gate_forget_pending() calls by then */
+	uint32_t aborted_after_point;     /* ABORTED terminals by then */
 };
 void     backend_preempt_off(void);
 void     backend_preempt_arm(int kind, int mode, uint32_t n, bool late, bool held,
 			     struct backend_preempt_result *out);
+/* An arm made from the completion's dispatch inside a held grant (the old
+ * operation ended early, its release owed) that the gate answers GATE_PENDING:
+ * the successor is staged behind its own request. EXTEND_FAILED / the
+ * extension skip (hand-back, then radiant_radio_abort() from the signal) is
+ * taken at the n-th preemption point of the arm, or, at the point after the
+ * last, once the arm has returned (the rest of the dispatch, before
+ * grant_release_settle()). */
+void     backend_preempt_staged_in_grant(int kind, uint32_t n, bool late,
+					 struct backend_preempt_result *out);
+/* An arm staged behind a placed request (GATE_PENDING, grant held), then
+ * EXTEND_FAILED from the signal; with !request_placed the request is gone
+ * first (g.pending false). Returns the arm's rc; ABORTED terminals and whether
+ * the operation is still staged come back through the pointers. */
+int      backend_signal_abort_staged(int kind, bool request_placed, uint32_t *aborted,
+				     bool *still_staged);
 
 #endif
