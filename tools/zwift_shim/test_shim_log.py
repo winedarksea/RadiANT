@@ -34,11 +34,11 @@ THREADS = 8
 CALLS = 2000
 PREFIX = re.compile(r'^(\d+)\.(\d{6}) t(\d+) (usbxp|cp210x) \S')
 
-# A key whose bytes appear nowhere else in the writes below, so a key byte
-# anywhere in a dump is a leak. (The 0x46 frame's checksum happens to be 0xE3,
-# one of them, so a leaked checksum is caught the same way.)
-KEY8 = bytes(range(0xE1, 0xE9))
-KEY16 = bytes(range(0xE1, 0xF1))
+# A key whose bytes appear nowhere else in the writes below (no header and no
+# unmasked checksum among 0xC1-0xD0), so a key byte anywhere in a dump is a
+# leak. A leaked checksum is caught by the exact dumps asserted at the end.
+KEY8 = bytes(range(0xC1, 0xC9))
+KEY16 = bytes(range(0xC1, 0xD1))
 KEY_TOKENS = {'%02X' % b for b in KEY16}
 
 
