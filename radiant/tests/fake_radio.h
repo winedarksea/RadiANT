@@ -455,6 +455,12 @@ void fake_radio_set_isr_call_budget(uint16_t calls);
 void fake_radio_set_origin(radiant_time_t t);
 
 void fake_radio_advance(uint64_t us);
+
+/* Advance to one microsecond past the instant an empty window closing at
+ * t_close delivers its terminal: t_close + caps.rx_close_hold_us + the
+ * terminal delay. The hardware-shaped replacement for advance_to(t_close + 1),
+ * which on a backend with a receiver hold (CC26x2) stops short of the end. */
+void fake_radio_advance_past_close(radiant_time_t t_close);
 void fake_radio_advance_to(radiant_time_t t);
 
 /* The instant of the next event the mock would fire, or RADIANT_TIME_NEVER if
@@ -503,7 +509,10 @@ void fake_radio_caps_preset_cc26xx_long_match(bool coex);
 /* phys must have static storage duration: caps holds the pointer. */
 void fake_radio_set_phys(const enum radiant_phy *phys, uint8_t n_phys);
 
-/* Deliver an empty window's terminal this far after nominal t_close, without
+/* An empty window's terminal lands at t_close + caps.rx_close_hold_us (the
+ * receiver hold, modelled: the radio stays busy until then) + this delay.
+ *
+ * Deliver an empty window's terminal this far after nominal t_close, without
  * widening its acceptance interval. Models airtime tail and ISR delivery. */
 void fake_radio_set_rx_terminal_delay_us(uint32_t delay);
 

@@ -922,7 +922,7 @@ static void two_coincident(uint16_t dev0, uint16_t dev1, uint8_t hw_len,
 	zassert_equal(want_filters, fake_radio_arm(0u)->n_filters,
 		      "%u filters", fake_radio_arm(0u)->n_filters);
 
-	fake_radio_advance_to(open + TEST_WINDOW_US + 1u);
+	fake_radio_advance_past_close(open + TEST_WINDOW_US);
 	zassert_equal(1u, log.ok_count[0]);
 	if (want_filters == 2u) {
 		zassert_equal(1u, log.ok_count[1]);
@@ -992,7 +992,7 @@ ZTEST(radiant_sched, test_rule6_is_mirrored_by_the_late_join)
 	zassert_equal(RADIANT_RADIO_OK_RC, fake_radio_arm(1u)->rc);
 	zassert_equal(2u, fake_radio_arm(1u)->n_filters);
 
-	fake_radio_advance_to(open + TEST_WINDOW_US + 1u);
+	fake_radio_advance_past_close(open + TEST_WINDOW_US);
 	zassert_equal(1u, log.ok_count[2]);
 	/* Channels 0 and 1 are never in one window: one is served, one missed. */
 	zassert_equal(1u, log.ok_count[0] + log.ok_count[1]);

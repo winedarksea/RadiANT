@@ -1372,6 +1372,22 @@ static void clock_to(radiant_time_t t)
 	mark_missed(g.now);
 }
 
+/*
+ * When an empty window ends: past t_close by the receiver hold the backend
+ * advertises (caps.rx_close_hold_us; the CC26x2 listens 508 us on, because
+ * its end trigger stops sync search, not reception) and then the terminal's
+ * delivery lag. The radio stays busy until then; acceptance stays
+ * [t_open, t_close], so a frame inside the hold is not heard.
+ */
+static radiant_time_t rx_close_due(radiant_time_t t_close)
+{
+	const radiant_time_t after = (radiant_time_t)g.caps.rx_close_hold_us +
+				     (radiant_time_t)g.rx_terminal_delay_us;
+
+	return (RADIANT_TIME_NEVER - t_close < after) ? RADIANT_TIME_NEVER
+						      : t_close + after;
+}
+
 static bool next_due(radiant_time_t *t_out, enum due_kind *kind_out,
 		     int32_t *air_out)
 {
@@ -1473,8 +1489,7 @@ static bool next_due(radiant_time_t *t_out, enum due_kind *kind_out,
 		*air_out = best_i;
 		return true;
 	}
-	*t_out = (RADIANT_TIME_NEVER - g.cur.t_close < g.rx_terminal_delay_us)
-		 ? RADIANT_TIME_NEVER : g.cur.t_close + g.rx_terminal_delay_us;
+	*t_out = rx_close_due(g.cur.t_close);
 	*kind_out = DUE_CLOSE;
 	return true;
 }
@@ -1676,6 +1691,13 @@ void fake_radio_advance_to(radiant_time_t t)
 void fake_radio_advance(uint64_t us)
 {
 	fake_radio_advance_to(g.now + (radiant_time_t)us);
+}
+
+void fake_radio_advance_past_close(radiant_time_t t_close)
+{
+	radiant_time_t due = rx_close_due(t_close);
+
+	fake_radio_advance_to((due == RADIANT_TIME_NEVER) ? due : due + 1u);
 }
 
 radiant_time_t fake_radio_next_due(void)

@@ -1745,3 +1745,83 @@ ZTEST(fake_radio, test_a_window_over_the_ceiling_is_enotsup_first)
 	fake_radio_advance_to(req.t_close + 1u);
 	expect_clean();
 }
+
+/* ---------------------------------------------------------------------------
+ * The hardware presets' timing (backend drift item 7)
+ * ---------------------------------------------------------------------------
+ */
+
+/* caps.rx_close_hold_us is modelled, not just advertised: on the CC26x2 the
+ * receiver stays on 508 us past t_close (its end trigger stops sync search,
+ * not reception), so the radio is busy until then and an empty window's
+ * terminal lands there. A frame inside the hold is still outside the window
+ * and not heard: acceptance stays [t_open, t_close]. */
+ZTEST(fake_radio, test_the_close_hold_keeps_the_radio_busy_past_t_close)
+{
+	struct radiant_rx_req req;
+	struct radiant_rx_filter one = filt_track;
+	uint32_t op = 0u;
+	uint32_t op2 = 0u;
+	radiant_time_t now;
+	uint16_t hold;
+
+	fake_radio_caps_preset_cc26xx(false);
+	hold = radiant_radio_caps_get()->rx_close_hold_us;
+	zassert_equal(508u, hold);
+	up();
+	now = radiant_radio_now();
+
+	memset(&req, 0, sizeof(req));
+	req.fmt = &fmt_hal_len_from_body;
+	req.rf_index = RADIANT_RF_INDEX_ANT_PLUS;
+	req.filters = &one;
+	req.n_filters = 1u;
+	req.t_open = now + 2000u;
+	req.t_close = now + 3000u;
+	zassert_equal(RADIANT_RADIO_OK_RC,
+		      fake_radio_air_frame(req.t_close + 100u, test_frame,
+					   test_frame_len));
+	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_rx(&req, &op));
+
+	fake_radio_advance_to(req.t_close + hold - 1u);
+	zassert_equal(0u, n_rxr, "terminal before the hold ran out");
+	zassert_false(fake_radio_is_idle());
+	zassert_equal(RADIANT_RADIO_EBUSY, radiant_radio_rx(&req, &op2));
+
+	fake_radio_advance_to(req.t_close + hold);
+	zassert_equal(1u, n_rxr);
+	zassert_equal(RADIANT_RADIO_STATUS_TIMEOUT, rxr[0].status);
+	zassert_equal(req.t_close + hold, rxr[0].now_in_cb);
+	zassert_equal(0u, fake_radio_stats()->air_delivered);
+	expect_clean();
+}
+
+/* The terminal delay knob stacks on the hold. */
+ZTEST(fake_radio, test_the_terminal_delay_stacks_on_the_close_hold)
+{
+	struct radiant_rx_req req;
+	struct radiant_rx_filter one = filt_track;
+	uint32_t op = 0u;
+	radiant_time_t now;
+
+	fake_radio_caps_preset_cc26xx(false);
+	fake_radio_set_rx_terminal_delay_us(40u);
+	up();
+	now = radiant_radio_now();
+
+	memset(&req, 0, sizeof(req));
+	req.fmt = &fmt_hal_len_from_body;
+	req.rf_index = RADIANT_RF_INDEX_ANT_PLUS;
+	req.filters = &one;
+	req.n_filters = 1u;
+	req.t_open = now + 2000u;
+	req.t_close = now + 3000u;
+	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_rx(&req, &op));
+
+	fake_radio_advance_to(req.t_close + 508u + 40u - 1u);
+	zassert_equal(0u, n_rxr);
+	fake_radio_advance_to(req.t_close + 508u + 40u);
+	zassert_equal(1u, n_rxr);
+	zassert_equal(req.t_close + 548u, rxr[0].now_in_cb);
+	expect_clean();
+}
