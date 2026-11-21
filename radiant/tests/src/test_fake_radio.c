@@ -207,10 +207,22 @@ static void up(void)
 	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_enable());
 }
 
+/* This suite pins the fake's own mechanics at exact instants, so it runs
+ * with punctual delivery; the presets' delays have their own cases at the
+ * end (backend drift item 7), and any preset a case selects brings its
+ * delays back. */
+static void punctual(void)
+{
+	fake_radio_set_rx_terminal_delay_us(0u);
+	fake_radio_set_rx_frame_delay_us(0u);
+	fake_radio_set_tx_terminal_delay_us(0u);
+}
+
 static void before(void *fixture)
 {
 	ARG_UNUSED(fixture);
 	fake_radio_reset();
+	punctual();
 	n_rxr = 0u;
 	n_txr = 0u;
 	memset(rxr, 0, sizeof(rxr));
@@ -426,7 +438,7 @@ ZTEST(fake_radio, test_queued_frame_arrives_at_its_t_sync_with_filter_index)
 	req.t_close = t_frame + 1000u;
 	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_rx(&req, &op));
 
-	fake_radio_advance_to(req.t_close + 1u);
+	fake_radio_advance_past_close(req.t_close);
 
 	zassert_equal(2u, n_rxr);
 	zassert_equal(RADIANT_RADIO_STATUS_OK, rxr[0].status);
@@ -484,7 +496,7 @@ ZTEST(fake_radio, test_same_frame_through_the_tracking_format)
 	req.flags = RADIANT_RX_STOP_ON_FIRST;
 	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_rx(&req, &op));
 
-	fake_radio_advance_to(req.t_close + 1u);
+	fake_radio_advance_past_close(req.t_close);
 
 	/* STOP_ON_FIRST: the accepted frame's own event is the terminal one, so
 	 * there is no separate TIMEOUT. */
@@ -523,7 +535,7 @@ ZTEST(fake_radio, test_window_that_hears_nothing_times_out)
 	req.t_close = now + 9000u;
 	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_rx(&req, &op));
 
-	fake_radio_advance_to(req.t_close + 1u);
+	fake_radio_advance_past_close(req.t_close);
 
 	zassert_equal(1u, n_rxr);
 	zassert_equal(RADIANT_RADIO_STATUS_TIMEOUT, rxr[0].status);
@@ -556,7 +568,7 @@ ZTEST(fake_radio, test_crc_failure_is_reported_only_when_asked)
 	req.t_close = now + 9000u;
 	/* Flag clear: the core is not asking for CRC failures. */
 	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_rx(&req, &op));
-	fake_radio_advance_to(req.t_close + 1u);
+	fake_radio_advance_past_close(req.t_close);
 
 	zassert_equal(1u, n_rxr);
 	zassert_equal(RADIANT_RADIO_STATUS_TIMEOUT, rxr[0].status);
@@ -571,7 +583,7 @@ ZTEST(fake_radio, test_crc_failure_is_reported_only_when_asked)
 	req.t_close = now + 9000u;
 	req.flags = RADIANT_RX_REPORT_CRC_FAIL;
 	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_rx(&req, &op));
-	fake_radio_advance_to(req.t_close + 1u);
+	fake_radio_advance_past_close(req.t_close);
 
 	zassert_equal(2u, n_rxr);
 	zassert_equal(RADIANT_RADIO_STATUS_CRC_FAIL, rxr[0].status);
@@ -605,7 +617,7 @@ ZTEST(fake_radio, test_noise_triggers_do_not_look_like_frames)
 	req.t_open = now + 1000u;
 	req.t_close = now + 9000u;
 	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_rx(&req, &op));
-	fake_radio_advance_to(req.t_close + 1u);
+	fake_radio_advance_past_close(req.t_close);
 
 	zassert_equal(1u, n_rxr);
 	zassert_equal(6u, fake_radio_stats()->crc_fail_suppressed);
@@ -636,7 +648,7 @@ ZTEST(fake_radio, test_a_stream_of_master_frames_is_all_heard)
 	req.t_open = first - 1000u;
 	req.t_close = first + 9u * FAKE_RADIO_ANT_PERIOD_US + 1000u;
 	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_rx(&req, &op));
-	fake_radio_advance_to(req.t_close + 1u);
+	fake_radio_advance_past_close(req.t_close);
 
 	zassert_equal(11u, n_rxr);
 	for (i = 0u; i < 10u; i++) {
@@ -837,7 +849,7 @@ ZTEST(fake_radio, test_arming_too_late_is_etime)
 	tx.t_sync_at = radiant_radio_now() + floor_tx;
 	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_tx(&tx, &op));
 	zassert_equal(2u, fake_radio_stats()->arms_inside_lead);
-	fake_radio_advance_to(tx.t_sync_at + 1u);
+	fake_radio_advance_past_tx(tx.t_sync_at);
 	zassert_equal(1u, n_txr);
 	zassert_equal(RADIANT_RADIO_STATUS_OK, txr[0].status);
 	zassert_equal(tx.t_sync_at, txr[0].t_sync, "the transmit went out late");
@@ -946,7 +958,7 @@ ZTEST(fake_radio, test_forced_failure_and_forced_ebusy)
 
 	fake_radio_force_next_terminal(RADIANT_RADIO_STATUS_FAILED);
 	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_rx(&req, &op));
-	fake_radio_advance_to(req.t_close + 1u);
+	fake_radio_advance_past_close(req.t_close);
 	zassert_equal(1u, n_rxr);
 	zassert_equal(RADIANT_RADIO_STATUS_FAILED, rxr[0].status);
 	expect_clean();
@@ -970,7 +982,7 @@ ZTEST(fake_radio, test_second_arm_while_busy_is_ebusy)
 	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_rx(&req, &op1));
 	zassert_equal(RADIANT_RADIO_EBUSY, radiant_radio_rx(&req, &op2));
 	zassert_equal(0u, op2);
-	fake_radio_advance_to(req.t_close + 1u);
+	fake_radio_advance_past_close(req.t_close);
 	expect_clean();
 }
 
@@ -1018,7 +1030,7 @@ ZTEST(fake_radio, test_a_late_event_from_a_cancelled_op_is_detectable)
 	zassert_not_equal(live, rxr[0].op);
 	zassert_equal(1u, fake_radio_stats()->ev_late);
 
-	fake_radio_advance_to(req.t_close + 1u);
+	fake_radio_advance_past_close(req.t_close);
 	expect_clean();
 }
 
@@ -1066,7 +1078,7 @@ ZTEST(fake_radio, test_lifecycle_calls_from_a_callback_are_refused)
 	req.t_open = now + 1000u;
 	req.t_close = now + 5000u;
 	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_rx(&req, &op));
-	fake_radio_advance_to(req.t_close + 1u);
+	fake_radio_advance_past_close(req.t_close);
 
 	zassert_equal(RADIANT_RADIO_ESTATE, isr_rc_enable);
 	zassert_equal(RADIANT_RADIO_ESTATE, isr_rc_init);
@@ -1116,7 +1128,7 @@ ZTEST(fake_radio, test_the_harness_cannot_be_driven_from_a_callback)
 	req.t_open = now + 1000u;
 	req.t_close = now + 5000u;
 	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_rx(&req, &op));
-	fake_radio_advance_to(req.t_close + 1u);
+	fake_radio_advance_past_close(req.t_close);
 
 	zassert_equal(harness_now_before, harness_now_after);
 	zassert_equal(FAKE_RADIO_VIOL_ISR_HARNESS, fake_radio_viol(0)->code);
@@ -1154,7 +1166,7 @@ ZTEST(fake_radio, test_a_callback_that_does_work_is_flagged)
 	req.t_open = now + 1000u;
 	req.t_close = now + 5000u;
 	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_rx(&req, &op));
-	fake_radio_advance_to(req.t_close + 1u);
+	fake_radio_advance_past_close(req.t_close);
 
 	zassert_equal(1u, fake_radio_viol_count());
 	zassert_equal(FAKE_RADIO_VIOL_ISR_WORK, fake_radio_viol(0)->code);
@@ -1204,7 +1216,7 @@ ZTEST(fake_radio, test_the_event_body_is_poisoned_after_the_callback)
 	req.t_open = now + 1000u;
 	req.t_close = now + 5000u;
 	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_rx(&req, &op));
-	fake_radio_advance_to(req.t_close + 1u);
+	fake_radio_advance_past_close(req.t_close);
 
 	zassert_not_null(retained_body);
 	zassert_equal(10u, retained_len);
@@ -1317,7 +1329,7 @@ ZTEST(fake_radio, test_arming_from_a_nonterminal_event_is_ebusy)
 	req.t_open = now + 1000u;
 	req.t_close = now + 9000u;
 	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_rx(&req, &op));
-	fake_radio_advance_to(req.t_close + 1u);
+	fake_radio_advance_past_close(req.t_close);
 
 	zassert_equal(RADIANT_RADIO_EBUSY, nonterminal_arm_rc);
 	expect_clean();
@@ -1492,7 +1504,7 @@ ZTEST(fake_radio, test_stop_on_first_is_refused_on_a_merged_window)
 
 	req.n_filters = 1u;
 	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_rx(&req, &op));
-	fake_radio_advance_to(req.t_close + 1u);
+	fake_radio_advance_past_close(req.t_close);
 	expect_clean();
 }
 
@@ -1631,7 +1643,7 @@ ZTEST(fake_radio, test_every_arm_call_is_recorded_with_its_deadline)
 	zassert_equal(RADIANT_RADIO_EBUSY, a->rc);
 	zassert_equal(0u, a->op);
 
-	fake_radio_advance_to(req.t_close + 1u);
+	fake_radio_advance_past_close(req.t_close);
 	expect_clean();
 }
 
@@ -1744,7 +1756,7 @@ ZTEST(fake_radio, test_an_rx_terminal_reports_t_close)
 	req.t_close = now + 5000u;
 
 	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_rx(&req, &op));
-	fake_radio_advance_to(req.t_close + 1u);
+	fake_radio_advance_past_close(req.t_close);
 	zassert_equal(1u, n_rxr);
 	zassert_equal(RADIANT_RADIO_STATUS_TIMEOUT, rxr[0].status);
 	zassert_equal(req.t_close, rxr[0].t_sync);
@@ -1788,7 +1800,7 @@ ZTEST(fake_radio, test_a_window_over_the_ceiling_is_enotsup_first)
 	req.t_open = now + 1000u;
 	req.t_close = req.t_open + 2000u;
 	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_rx(&req, &op));
-	fake_radio_advance_to(req.t_close + 1u);
+	fake_radio_advance_past_close(req.t_close);
 	expect_clean();
 }
 
@@ -1812,6 +1824,7 @@ ZTEST(fake_radio, test_the_close_hold_keeps_the_radio_busy_past_t_close)
 	uint16_t hold;
 
 	fake_radio_caps_preset_cc26xx(false);
+	punctual();
 	hold = radiant_radio_caps_get()->rx_close_hold_us;
 	zassert_equal(508u, hold);
 	up();
@@ -1968,5 +1981,118 @@ ZTEST(fake_radio, test_a_cc26xx_transmit_inside_the_lead_goes_out_on_time)
 	zassert_equal(1u, n_txr);
 	zassert_equal(RADIANT_RADIO_STATUS_OK, txr[0].status);
 	zassert_equal(tx.t_sync_at, txr[0].t_sync);
+	expect_clean();
+}
+
+/*
+ * The presets' delivery delays (backend drift item 7). On the nRF preset an
+ * empty window's terminal lands 149 us after t_close (measured on the
+ * nRF54L15), a received frame's event at its END (body + CRC past t_sync at
+ * 8 us a byte) + 37 us, and a transmit's terminal the same way. The knobs
+ * override with constants; fake_radio_restore_delays() brings the model back.
+ */
+ZTEST(fake_radio, test_the_nrf_preset_delivers_at_the_hardware_instants)
+{
+	struct radiant_rx_req rx;
+	struct radiant_tx_req tx;
+	uint32_t op = 0u;
+	radiant_time_t now;
+	radiant_time_t t_frame;
+	static const uint8_t body[10] = {
+		TEST_TRANSTYPE, 0x0Au, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u
+	};
+
+	fake_radio_restore_delays();
+	up();
+	now = radiant_radio_now();
+
+	memset(&rx, 0, sizeof(rx));
+	rx.fmt = &fmt_hal_len_from_body;
+	rx.rf_index = RADIANT_RF_INDEX_ANT_PLUS;
+	rx.filters = &filt_track;
+	rx.n_filters = 1u;
+	rx.t_open = now + 1000u;
+	rx.t_close = now + 3000u;
+	t_frame = now + 2000u;
+	zassert_equal(RADIANT_RADIO_OK_RC,
+		      fake_radio_air_frame(t_frame, test_frame, test_frame_len));
+	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_rx(&rx, &op));
+
+	/* 15-byte frame, 5-byte address: 10 body + 2 CRC bytes after t_sync. */
+	fake_radio_advance_to(t_frame + 12u * 8u + 37u - 1u);
+	zassert_equal(0u, n_rxr, "the frame's event came before its END");
+	fake_radio_advance_to(t_frame + 12u * 8u + 37u);
+	zassert_equal(1u, n_rxr);
+	zassert_equal(RADIANT_RADIO_STATUS_OK, rxr[0].status);
+	zassert_equal(t_frame, rxr[0].t_sync, "t_sync moved with the delivery");
+	zassert_equal(0u, fake_radio_stats()->air_missed);
+
+	fake_radio_advance_to(rx.t_close + 149u - 1u);
+	zassert_equal(1u, n_rxr);
+	zassert_false(fake_radio_is_idle());
+	fake_radio_advance_to(rx.t_close + 149u);
+	zassert_equal(2u, n_rxr);
+	zassert_equal(RADIANT_RADIO_STATUS_TIMEOUT, rxr[1].status);
+
+	memset(&tx, 0, sizeof(tx));
+	tx.fmt = &fmt_hal_len_from_body;
+	tx.rf_index = RADIANT_RF_INDEX_ANT_PLUS;
+	memcpy(tx.addr, filt_track.addr, sizeof(tx.addr));
+	tx.addr_len = filt_track.addr_len;
+	tx.body = body;
+	tx.body_len = sizeof(body);
+	tx.t_sync_at = radiant_radio_now() + 2000u;
+	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_tx(&tx, &op));
+	fake_radio_advance_to(tx.t_sync_at + 12u * 8u + 37u - 1u);
+	zassert_equal(0u, n_txr);
+	fake_radio_advance_past_tx(tx.t_sync_at);
+	zassert_equal(1u, n_txr);
+	zassert_equal(tx.t_sync_at, txr[0].t_sync);
+	zassert_equal(tx.t_sync_at + 12u * 8u + 37u + 1u, radiant_radio_now());
+
+	/* A constant overrides the model; restore brings it back. */
+	fake_radio_set_rx_terminal_delay_us(5u);
+	now = radiant_radio_now();
+	rx.t_open = now + 1000u;
+	rx.t_close = now + 3000u;
+	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_rx(&rx, &op));
+	fake_radio_advance_past_close(rx.t_close);
+	zassert_equal(rx.t_close + 5u + 1u, radiant_radio_now());
+	zassert_equal(3u, n_rxr);
+	fake_radio_restore_delays();
+	now = radiant_radio_now();
+	rx.t_open = now + 1000u;
+	rx.t_close = now + 3000u;
+	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_rx(&rx, &op));
+	fake_radio_advance_past_close(rx.t_close);
+	zassert_equal(rx.t_close + 149u + 1u, radiant_radio_now());
+	zassert_equal(4u, n_rxr);
+	expect_clean();
+}
+
+/* The CC26x2 preset: the empty terminal 60 us past the 508 us hold. */
+ZTEST(fake_radio, test_the_cc26xx_preset_terminal_follows_the_hold)
+{
+	struct radiant_rx_req rx;
+	struct radiant_rx_filter one = filt_track;
+	uint32_t op = 0u;
+	radiant_time_t now;
+
+	fake_radio_caps_preset_cc26xx(false);
+	up();
+	now = radiant_radio_now();
+	memset(&rx, 0, sizeof(rx));
+	rx.fmt = &fmt_hal_len_from_body;
+	rx.rf_index = RADIANT_RF_INDEX_ANT_PLUS;
+	rx.filters = &one;
+	rx.n_filters = 1u;
+	rx.t_open = now + 1000u;
+	rx.t_close = now + 3000u;
+	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_rx(&rx, &op));
+	fake_radio_advance_to(rx.t_close + 508u + 60u - 1u);
+	zassert_equal(0u, n_rxr);
+	fake_radio_advance_to(rx.t_close + 508u + 60u);
+	zassert_equal(1u, n_rxr);
+	zassert_equal(RADIANT_RADIO_STATUS_TIMEOUT, rxr[0].status);
 	expect_clean();
 }

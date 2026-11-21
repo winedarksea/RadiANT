@@ -733,7 +733,7 @@ static bool tracked_slot(uint8_t ch, radiant_time_t t_true)
 
 	arm = fake_radio_arm_for_op(op);
 	zassert_not_null(arm);
-	fake_radio_advance_to(arm->t_close + 1u);
+	fake_radio_advance_past_close(arm->t_close);
 
 	if (g_heard) {
 		radiant_channel_on_slot(ch, g_t_sync);

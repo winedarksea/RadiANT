@@ -97,6 +97,7 @@ struct cur_op {
 	/* transmit */
 	radiant_time_t t_sync_req;
 	radiant_time_t t_fire;
+	uint32_t       tx_delay_us;  /* terminal lag past t_fire */
 
 	/*
 	 * energy detect
@@ -176,6 +177,19 @@ struct fake_state {
 	bool     arm_inside_lead;
 	uint8_t  tuned_rf;
 	uint32_t rx_terminal_delay_us;
+	/* A transmit's terminal lag past its t_sync (frame tail + ISR on the
+	 * hardware presets). */
+	uint32_t tx_terminal_delay_us;
+	/* The delivery model the preset defaults to (restored by
+	 * fake_radio_restore_delays()): its empty-terminal lag, and the ISR/SWI
+	 * cost added to a frame's own tail. frame_tail_model: a received
+	 * frame's event and a transmit's terminal land at the frame's END +
+	 * delay_isr_us, computed per frame, until a test sets a constant. */
+	uint32_t preset_rx_terminal_us;
+	uint32_t delay_isr_us;
+	bool     frame_tail_model;
+	bool     rx_frame_delay_fixed;
+	bool     tx_terminal_delay_fixed;
 	/* Delivery lag of a received frame's event after its t_sync. */
 	uint32_t rx_frame_delay_us;
 	int8_t   default_rssi;
@@ -424,6 +438,20 @@ void fake_radio_set_isr_call_budget(uint16_t calls)
  * but are NOT measurements - their only job is to fail a core module that
  * hardcoded one backend's constant under the other.
  */
+/* A preset's delivery delays (fake_radio_restore_delays()). */
+static void delays_preset(uint32_t rx_terminal_us, uint32_t isr_us,
+			  bool tail_model)
+{
+	g.preset_rx_terminal_us = rx_terminal_us;
+	g.delay_isr_us = isr_us;
+	g.frame_tail_model = tail_model;
+	g.rx_terminal_delay_us = rx_terminal_us;
+	g.rx_frame_delay_us = 0u;
+	g.tx_terminal_delay_us = 0u;
+	g.rx_frame_delay_fixed = false;
+	g.tx_terminal_delay_fixed = false;
+}
+
 void fake_radio_caps_preset_nrf(void)
 {
 	struct radiant_radio_caps *c = &g.caps;
@@ -467,6 +495,11 @@ void fake_radio_caps_preset_nrf(void)
 	c->tx_power_min_dbm = -40;
 	c->tx_power_max_dbm = 8;
 	g.floor_model = FLOOR_NRF;
+	/* nRF54L15, measured (radiant_radio_nrf.c rx_close_hold_us comment):
+	 * an empty window's terminal 149 us after t_close, 112 us of airtime
+	 * tail plus ~37 us DISABLED -> ISR -> callback; a frame's event or a
+	 * transmit's terminal at the frame's END plus the same ~37 us. */
+	delays_preset(149u, 37u, true);
 }
 
 void fake_radio_caps_preset_nrf_long_match(void)
@@ -516,6 +549,8 @@ void fake_radio_caps_preset_rail(void)
 	c->tx_power_min_dbm = -26;
 	c->tx_power_max_dbm = 20;
 	g.floor_model = FLOOR_LEAD;
+	/* No backend behind it: punctual delivery, as before item 7. */
+	delays_preset(0u, 0u, false);
 }
 
 /*
@@ -529,6 +564,11 @@ static void caps_preset_apply(const struct radiant_radio_caps *c,
 	g.caps = *c;
 	g.caps.name = name;
 	g.floor_model = FLOOR_CC26XX;
+	/* CC26x2: the 508 us hold is caps.rx_close_hold_us; the RF driver's
+	 * SWI then delivers (an estimate, unmeasured: 60 us). A frame lands at
+	 * its END plus the backend's per-entry drain work, 123 us measured
+	 * (archive/benchmarks/2026-11-13-drain-timing/). */
+	delays_preset(60u, 123u, true);
 }
 
 void fake_radio_caps_preset_cc26xx(bool coex)
@@ -1381,13 +1421,29 @@ static enum air_fit air_body(const struct fake_radio_air *f,
  * ---------------------------------------------------------------------------
  */
 
+/*
+ * Frames whose instant has passed with nobody to hear them. A frame the
+ * armed window accepted is not missed while its delivery is still pending
+ * (a frame's event lands after its t_sync: fake_radio_set_rx_frame_delay_us()
+ * and the presets' frame tails), or the clock reaching that delivery would
+ * count it missed and delivered both.
+ */
+static bool pending_delivery(const struct fake_radio_air *f)
+{
+	uint8_t fidx = 0u;
+
+	return g.cur.kind == FAKE_RADIO_ARM_RX && f->t_sync >= g.cur.t_listen &&
+	       f->t_sync <= g.cur.t_close && air_matches(f, &fidx);
+}
+
 static void mark_missed(radiant_time_t before)
 {
 	uint32_t i;
 
 	for (i = 0u; i < FAKE_RADIO_AIR_MAX; i++) {
 		if (g.air[i].used && !g.air[i].done &&
-		    g.air[i].f.t_sync < before) {
+		    g.air[i].f.t_sync < before &&
+		    !pending_delivery(&g.air[i].f)) {
 			g.air[i].done = true;
 			g.stats.air_missed++;
 		}
@@ -1419,11 +1475,34 @@ static radiant_time_t rx_close_due(radiant_time_t t_close)
 						      : t_close + after;
 }
 
+/* Bytes of CRC the format carries on air. */
+static uint32_t crc_bytes(const struct radiant_pkt_format *fmt)
+{
+	return ((uint32_t)fmt->crc.width_bits + 7u) / 8u;
+}
+
+/* A received frame's delivery lag past its t_sync: the knob's constant, or
+ * on the hardware presets the rest of the frame on air (body and CRC, 8 us a
+ * byte at 1 M) plus the ISR. */
+static uint32_t frame_delay(const struct fake_radio_air *f)
+{
+	uint32_t tail_bytes;
+
+	if (g.rx_frame_delay_fixed || !g.frame_tail_model) {
+		return g.rx_frame_delay_us;
+	}
+	tail_bytes = ((f->len > g.cur.fmt.addr_len)
+			      ? (uint32_t)(f->len - g.cur.fmt.addr_len) : 0u) +
+		     crc_bytes(&g.cur.fmt);
+	return tail_bytes * 8u + g.delay_isr_us;
+}
+
 static bool next_due(radiant_time_t *t_out, enum due_kind *kind_out,
 		     int32_t *air_out)
 {
 	uint32_t i;
 	radiant_time_t best = RADIANT_TIME_NEVER;
+	radiant_time_t best_t_sync = RADIANT_TIME_NEVER;
 	int32_t best_i = -1;
 
 	*air_out = -1;
@@ -1467,7 +1546,7 @@ static bool next_due(radiant_time_t *t_out, enum due_kind *kind_out,
 	}
 
 	if (g.cur.kind == FAKE_RADIO_ARM_TX) {
-		*t_out = g.cur.t_fire;
+		*t_out = g.cur.t_fire + (radiant_time_t)g.cur.tx_delay_us;
 		*kind_out = DUE_TX;
 		return true;
 	}
@@ -1499,15 +1578,18 @@ static bool next_due(radiant_time_t *t_out, enum due_kind *kind_out,
 		}
 		/* Acceptance is judged on t_sync; only the delivery is late
 		 * (fake_radio_set_rx_frame_delay_us()). */
-		if (f->t_sync + g.rx_frame_delay_us < g.now ||
+		const radiant_time_t due = f->t_sync + frame_delay(f);
+
+		if (due < g.now ||
 		    f->t_sync < g.cur.t_listen || f->t_sync > g.cur.t_close) {
 			continue;
 		}
 		if (!air_matches(f, &fidx)) {
 			continue;
 		}
-		if (f->t_sync < best) {
-			best = f->t_sync;
+		if (due < best || (due == best && f->t_sync < best_t_sync)) {
+			best = due;
+			best_t_sync = f->t_sync;
 			best_i = (int32_t)i;
 		}
 	}
@@ -1515,7 +1597,7 @@ static bool next_due(radiant_time_t *t_out, enum due_kind *kind_out,
 	/* A frame whose t_sync is exactly t_close is inside the window, so it
 	 * is delivered before the window closes. */
 	if (best_i >= 0) {
-		*t_out = best + g.rx_frame_delay_us;
+		*t_out = best;
 		*kind_out = DUE_AIR;
 		*air_out = best_i;
 		return true;
@@ -1722,6 +1804,37 @@ void fake_radio_advance_to(radiant_time_t t)
 void fake_radio_advance(uint64_t us)
 {
 	fake_radio_advance_to(g.now + (radiant_time_t)us);
+}
+
+void fake_radio_advance_past_frame(radiant_time_t t_sync)
+{
+	radiant_time_t due = t_sync;
+	uint32_t i;
+
+	for (i = 0u; i < FAKE_RADIO_AIR_MAX; i++) {
+		if (g.air[i].used && !g.air[i].done &&
+		    g.air[i].f.t_sync == t_sync &&
+		    g.cur.kind == FAKE_RADIO_ARM_RX) {
+			due = t_sync + (radiant_time_t)frame_delay(&g.air[i].f);
+			break;
+		}
+	}
+	fake_radio_advance_to(due + 1u);
+}
+
+void fake_radio_advance_past_tx(radiant_time_t t_sync)
+{
+	radiant_time_t due = t_sync;
+
+	/* The transmit may be armed on the way (from a callback): reach its
+	 * t_sync first, then its terminal. */
+	if (!(g.cur.kind == FAKE_RADIO_ARM_TX && g.cur.t_sync_req == t_sync)) {
+		fake_radio_advance_to(t_sync);
+	}
+	if (g.cur.kind == FAKE_RADIO_ARM_TX && g.cur.t_sync_req == t_sync) {
+		due = g.cur.t_fire + (radiant_time_t)g.cur.tx_delay_us;
+	}
+	fake_radio_advance_to(due + 1u);
 }
 
 void fake_radio_advance_past_close(radiant_time_t t_close)
@@ -2466,6 +2579,10 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 	g.cur.t_sync_req = req->t_sync_at;
 	note_arm_accepted(rec, req->rf_index);
 	g.cur.t_fire = req->t_sync_at;
+	g.cur.tx_delay_us = (g.tx_terminal_delay_fixed || !g.frame_tail_model)
+				    ? g.tx_terminal_delay_us
+				    : ((uint32_t)req->body_len + crc_bytes(req->fmt)) *
+						  8u + g.delay_isr_us;
 	if (g.tx_offset_us > 0) {
 		g.cur.t_fire += (radiant_time_t)g.tx_offset_us;
 	} else if (g.tx_offset_us < 0) {
@@ -2923,6 +3040,22 @@ void fake_radio_set_rx_terminal_delay_us(uint32_t delay)
 void fake_radio_set_rx_frame_delay_us(uint32_t delay)
 {
 	g.rx_frame_delay_us = delay;
+	g.rx_frame_delay_fixed = true;
+}
+
+void fake_radio_set_tx_terminal_delay_us(uint32_t delay)
+{
+	g.tx_terminal_delay_us = delay;
+	g.tx_terminal_delay_fixed = true;
+}
+
+void fake_radio_restore_delays(void)
+{
+	g.rx_terminal_delay_us = g.preset_rx_terminal_us;
+	g.rx_frame_delay_us = 0u;
+	g.tx_terminal_delay_us = 0u;
+	g.rx_frame_delay_fixed = false;
+	g.tx_terminal_delay_fixed = false;
 }
 
 void fake_radio_force_terminal_repeat(enum radiant_radio_status status,

@@ -530,7 +530,7 @@ ZTEST(radiant_sched, test_a_window_is_armed_at_the_requested_absolute_microsecon
 	zassert_equal(RADIANT_RF_INDEX_ANT_PLUS, a->rf_index);
 	zassert_mem_equal(a->filters[0].addr, track_filter[0].addr, 5u);
 
-	fake_radio_advance_to(close + 1u);
+	fake_radio_advance_past_close(close);
 	zassert_equal(1u, log.n_done);
 	zassert_equal(RADIANT_SCHED_DONE_OK, log.done[0].why);
 	zassert_equal(0u, log.done[0].ch);
@@ -600,7 +600,7 @@ ZTEST(radiant_sched, test_overlapping_windows_collapse_into_one_hardware_window)
 
 	/* Channel 1's master transmits inside the shared window. */
 	air_frame_for(1u, open + 100u);
-	fake_radio_advance_to(a->t_close + 1u);
+	fake_radio_advance_past_close(a->t_close);
 
 	zassert_equal(1u, log.n_rx);
 	zassert_equal(1u, log.rx[0].ch);
@@ -652,7 +652,7 @@ ZTEST(radiant_sched, test_disjoint_windows_are_not_merged)
 
 	/* The second window is armed on its own, from the first one's terminal
 	 * callback. */
-	fake_radio_advance_to(open + 120000u + TEST_WINDOW_US + 1u);
+	fake_radio_advance_past_close(open + 120000u + TEST_WINDOW_US);
 	zassert_equal(2u, fake_radio_arm_count());
 	zassert_equal(1u, fake_radio_arm(1u)->n_filters);
 	zassert_equal(open + 120000u, fake_radio_arm(1u)->t_open);
@@ -714,7 +714,7 @@ ZTEST(radiant_sched, test_an_off_57_window_never_joins_the_merged_one)
 
 	/* And the off-57 channel is not lost - it is served next, on its own
 	 * frequency, which is exactly what "costs its own RX window" means. */
-	fake_radio_advance_to(close + 40000u + 1u);
+	fake_radio_advance_past_close(close + 40000u);
 	zassert_true(fake_radio_arm_count() >= 2u);
 	a = fake_radio_arm(1u);
 	zassert_not_null(a);
@@ -785,7 +785,7 @@ ZTEST(radiant_sched, test_merging_is_bounded_by_max_addr_groups_on_tracking)
 	zassert_equal(2u, fake_radio_arm(0u)->n_filters,
 		      "%u filters", fake_radio_arm(0u)->n_filters);
 
-	fake_radio_advance_to(open + TEST_WINDOW_US + 1u);
+	fake_radio_advance_past_close(open + TEST_WINDOW_US);
 	for (ch = 0u; ch < 2u; ch++) {
 		zassert_equal(1u, log.ok_count[ch], "channel %u", ch);
 	}
@@ -827,7 +827,7 @@ ZTEST(radiant_sched, test_search_filters_share_one_address_group)
 	zassert_equal(RADIANT_RADIO_OK_RC, fake_radio_arm(0u)->rc);
 	zassert_equal(8u, fake_radio_arm(0u)->n_filters);
 
-	fake_radio_advance_to(open + TEST_WINDOW_US + 1u);
+	fake_radio_advance_past_close(open + TEST_WINDOW_US);
 	assert_every_window_bounded();
 	finish();
 }
@@ -857,7 +857,7 @@ ZTEST(radiant_sched, test_merging_is_bounded_by_max_filters_at_two)
 		      "%u filters", fake_radio_arm(0u)->n_filters);
 	zassert_equal(RADIANT_RADIO_OK_RC, fake_radio_arm(0u)->rc);
 
-	fake_radio_advance_to(open + TEST_WINDOW_US + 1u);
+	fake_radio_advance_past_close(open + TEST_WINDOW_US);
 	zassert_equal(1u, log.ok_count[0]);
 	zassert_equal(1u, log.ok_count[1]);
 	for (ch = 2u; ch < 12u; ch++) {
@@ -1116,7 +1116,7 @@ ZTEST(radiant_sched, test_filter_index_is_translated_to_the_channels_own_filter)
 	/* Device number base+5: the second of channel 1's two filters, and the
 	 * sixth of the merged window's six. */
 	air_frame_for(5u, open + 900u);
-	fake_radio_advance_to(close + 1u);
+	fake_radio_advance_past_close(close);
 
 	zassert_equal(2u, log.n_rx);
 	zassert_equal(0u, log.rx[0].ch);
@@ -1162,7 +1162,7 @@ ZTEST(radiant_sched, test_a_late_channel_joins_a_window_that_has_not_opened_yet)
 	zassert_ok(radiant_sched_tick());
 	zassert_equal(2u, fake_radio_arm_count());
 
-	fake_radio_advance_to(open + TEST_WINDOW_US + 1u);
+	fake_radio_advance_past_close(open + TEST_WINDOW_US);
 	zassert_equal(1u, log.ok_count[0]);
 	zassert_equal(1u, log.ok_count[1]);
 
@@ -1263,7 +1263,7 @@ ZTEST(radiant_sched, test_two_tracked_slots_inside_the_arming_lead_share_one_win
 	/* The later master transmits at its own slot instant, in the part of
 	 * the window that only exists because of the merge. */
 	air_frame_for(1u, c1);
-	fake_radio_advance_to(a->t_close + 1u);
+	fake_radio_advance_past_close(a->t_close);
 
 	zassert_equal(1u, log.n_rx);
 	zassert_equal(1u, log.rx[0].ch);
@@ -1335,8 +1335,8 @@ ZTEST(radiant_sched, test_no_separation_between_two_tracked_slots_drops_a_slot)
 		post_tracked_slot(1u, base + (radiant_time_t)delta);
 		zassert_ok(radiant_sched_tick());
 
-		fake_radio_advance_to(base + (radiant_time_t)delta +
-				      (radiant_time_t)TEST_TRACK_GUARD_US + 1u);
+		fake_radio_advance_past_close(base + (radiant_time_t)delta +
+				      (radiant_time_t)TEST_TRACK_GUARD_US);
 
 		zassert_equal(missed_before, radiant_sched_stats_get()->missed,
 			      "delta %u us reach %u us", delta, merge_max);
@@ -1396,7 +1396,7 @@ ZTEST(radiant_sched, test_three_tracked_slots_inside_one_lead_still_drop_the_thi
 	zassert_equal(2u, fake_radio_arm(0u)->n_filters,
 		      "%u filters", fake_radio_arm(0u)->n_filters);
 
-	fake_radio_advance_to(base + 300u + TEST_TRACK_GUARD_US + 1u);
+	fake_radio_advance_past_close(base + 300u + TEST_TRACK_GUARD_US);
 
 	zassert_equal(1u, log.ok_count[0]);
 	zassert_equal(1u, log.ok_count[1]);
@@ -1530,7 +1530,7 @@ ZTEST(radiant_sched, test_an_unopened_window_gives_way_to_a_receive_that_starts_
 
 	/* And the displaced request is not lost - it is served after, which is
 	 * the whole difference between preempting and dropping. */
-	fake_radio_advance_to(far_open + 60000u + 1u);
+	fake_radio_advance_past_close(far_open + 60000u);
 	zassert_equal(1u, log.ok_count[1]);
 	zassert_equal(1u, log.ok_count[0]);
 	zassert_equal(0u, radiant_sched_stats_get()->missed);
@@ -1585,7 +1585,7 @@ ZTEST(radiant_sched, test_an_open_window_is_not_torn_down_for_a_receive_that_sta
 	zassert_equal(0u, radiant_sched_stats_get()->preempted);
 	zassert_equal(0u, log.aborted_count[0]);
 
-	fake_radio_advance_to(open + 60000u + 1u);
+	fake_radio_advance_past_close(open + 60000u);
 	zassert_equal(1u, log.ok_count[0]);
 	zassert_equal(1u, log.missed_count[1]);
 
@@ -1740,7 +1740,7 @@ ZTEST(radiant_sched, test_an_unreachable_deadline_is_refused_rather_than_run_lat
 	zassert_equal(5u, fake_radio_arm(0u)->addr_len);
 	zassert_mem_equal(fake_radio_arm(0u)->addr, track_filter[2].addr, 5u);
 
-	fake_radio_advance_to(t.t_sync_at + 10u);
+	fake_radio_advance_past_tx(t.t_sync_at);
 	zassert_equal(1u, log.n_tx);
 	zassert_equal(2u, log.tx[0].ch);
 	zassert_equal(t.t_sync_at, log.tx[0].t_sync);
@@ -1796,7 +1796,7 @@ ZTEST(radiant_sched, test_a_window_is_truncated_to_clear_a_transmit_deadline)
 	air_frame_for(0u, cut - 1u);
 	air_frame_for(0u, cut + 150u);
 
-	fake_radio_advance_to(tx_at + 10u);
+	fake_radio_advance_past_tx(tx_at);
 	zassert_equal(2u, fake_radio_arm_count());
 	zassert_equal(FAKE_RADIO_ARM_TX, fake_radio_arm(1u)->kind);
 	zassert_equal(tx_at, fake_radio_arm(1u)->t_sync_at);
@@ -1843,7 +1843,8 @@ ZTEST(radiant_sched, test_a_reply_preempts_the_window_it_was_heard_in)
 	log.reply_ch = 1u;
 	air_frame_for(1u, heard_at);
 
-	fake_radio_advance_to(heard_at + 1559u + 100u);
+	fake_radio_advance_past_frame(heard_at);
+	fake_radio_advance_past_tx(heard_at + 1559u);
 
 	zassert_equal(1u, log.n_rx);
 	zassert_equal(1u, log.rx[0].ch);
@@ -1901,7 +1902,8 @@ ZTEST(radiant_sched, test_a_nested_abort_terminal_is_stale_and_ends_nothing)
 	log.reply_after_us = 1559u;
 	log.reply_ch = 1u;
 	air_frame_for(1u, heard_at);
-	fake_radio_advance_to(heard_at + 1559u + 100u);
+	fake_radio_advance_past_frame(heard_at);
+	fake_radio_advance_past_tx(heard_at + 1559u);
 
 	zassert_equal(1u, log.aborted_count[0]);
 	zassert_true(log.aborted_in_cb[0]);
@@ -1964,7 +1966,7 @@ ZTEST(radiant_sched, test_a_transmit_deadline_displaces_an_armed_window)
 	zassert_equal(1u, log.aborted_count[0]);
 	zassert_equal(1u, radiant_sched_stats_get()->stale_events);
 
-	fake_radio_advance_to(t.t_sync_at + 10u);
+	fake_radio_advance_past_tx(t.t_sync_at);
 	zassert_equal(1u, log.n_tx);
 	zassert_equal(t.t_sync_at, log.tx[0].t_sync);
 
@@ -2001,7 +2003,7 @@ ZTEST(radiant_sched, test_a_dead_operations_late_event_changes_nothing)
 	dead_op = fake_radio_arm(0u)->op;
 	zassert_not_equal(0u, dead_op);
 
-	fake_radio_advance_to(close + 1u);
+	fake_radio_advance_past_close(close);
 	zassert_equal(1u, log.n_done);
 	zassert_equal(0u, log.n_rx);
 
@@ -2027,7 +2029,7 @@ ZTEST(radiant_sched, test_a_dead_operations_late_event_changes_nothing)
 
 	/* The live window is untouched and still runs to its own end. */
 	zassert_equal(2u, fake_radio_arm_count());
-	fake_radio_advance_to(close + 100000u + TEST_WINDOW_US + 1u);
+	fake_radio_advance_past_close(close + 100000u + TEST_WINDOW_US);
 	zassert_equal(1u, log.ok_count[1]);
 
 	assert_every_window_bounded();
@@ -2089,7 +2091,7 @@ ZTEST(radiant_sched, test_a_continuous_request_becomes_a_chain_of_bounded_window
 
 	/* ...and the tracked window must nonetheless be served on time, with
 	 * the scan filling what is left of the gap. */
-	fake_radio_advance_to(tracked_at + TEST_WINDOW_US + 1u);
+	fake_radio_advance_past_close(tracked_at + TEST_WINDOW_US);
 	zassert_equal(1u, log.ok_count[0]);
 	zassert_true(radiant_sched_stats_get()->scan_chunks > chunks_before);
 
@@ -2139,7 +2141,7 @@ ZTEST(radiant_sched, test_a_scan_chunk_is_reported_with_the_bounds_it_got)
 		      log.armed[0].t_close);
 
 	/* A bounded window is reported too, on the same terms. */
-	fake_radio_advance_to(tracked_at + TEST_WINDOW_US + 1u);
+	fake_radio_advance_past_close(tracked_at + TEST_WINDOW_US);
 	zassert_true(log.n_armed >= 2u);
 	zassert_equal(0u, log.armed[1].ch);
 	zassert_equal(tracked_at, log.armed[1].t_open);
@@ -2184,7 +2186,7 @@ ZTEST(radiant_sched, test_a_displaced_scan_chunk_is_reported_and_stays_live)
 	zassert_equal(1u, log.aborted_count[31]);
 	zassert_true(radiant_sched_pending(31u));
 
-	fake_radio_advance_to(tracked_at + TEST_WINDOW_US + 1u);
+	fake_radio_advance_past_close(tracked_at + TEST_WINDOW_US);
 	zassert_equal(1u, log.ok_count[0]);
 	zassert_true(radiant_sched_pending(31u));
 
@@ -2452,7 +2454,7 @@ ZTEST(radiant_sched, test_stop_on_first_survives_only_an_unmerged_window)
 	zassert_equal(2u, fake_radio_arm(1u)->n_filters);
 	zassert_equal(0u, fake_radio_arm(1u)->flags & RADIANT_RX_STOP_ON_FIRST);
 
-	fake_radio_advance_to(open + TEST_WINDOW_US + 1u);
+	fake_radio_advance_past_close(open + TEST_WINDOW_US);
 	assert_every_window_bounded();
 	finish();
 }
@@ -2484,7 +2486,7 @@ ZTEST(radiant_sched, test_ebusy_leaves_the_request_for_the_next_commit)
 	zassert_equal(2u, fake_radio_arm_count());
 	zassert_equal(RADIANT_RADIO_OK_RC, fake_radio_arm(1u)->rc);
 
-	fake_radio_advance_to(open + TEST_WINDOW_US + 1u);
+	fake_radio_advance_past_close(open + TEST_WINDOW_US);
 	zassert_equal(1u, log.ok_count[0]);
 
 	assert_every_window_bounded();
@@ -2533,7 +2535,7 @@ ZTEST(radiant_sched, test_an_etime_refusal_is_missed_and_the_pass_moves_on)
 	zassert_false(radiant_sched_pending(0u));
 	zassert_equal(1u, radiant_sched_stats_get()->arm_rejected);
 
-	fake_radio_advance_to(open + 20000u + TEST_WINDOW_US + 1u);
+	fake_radio_advance_past_close(open + 20000u + TEST_WINDOW_US);
 	zassert_equal(1u, log.ok_count[1]);
 	finish_forced(1u, 0u);
 }
@@ -2589,7 +2591,7 @@ ZTEST(radiant_sched, test_an_etime_retry_plans_from_the_time_after_the_refusal)
 	zassert_equal(1u, log.missed_count[0]);
 	zassert_equal(0u, log.missed_count[1]);
 
-	fake_radio_advance_to(t0 + lead + 100u + TEST_WINDOW_US + 1u);
+	fake_radio_advance_past_close(t0 + lead + 100u + TEST_WINDOW_US);
 	zassert_equal(1u, log.ok_count[1]);
 	finish_forced(1u, 0u);
 }
@@ -2692,7 +2694,7 @@ ZTEST(radiant_sched, test_an_estate_refusal_keeps_the_request)
 	zassert_ok(radiant_sched_tick());
 	zassert_equal(2u, fake_radio_arm_count());
 	zassert_equal(RADIANT_RADIO_OK_RC, fake_radio_arm(1u)->rc);
-	fake_radio_advance_to(open + TEST_WINDOW_US + 1u);
+	fake_radio_advance_past_close(open + TEST_WINDOW_US);
 	zassert_equal(1u, log.ok_count[0]);
 	finish_forced(0u, 1u);
 }
@@ -2720,7 +2722,7 @@ ZTEST(radiant_sched, test_a_merged_union_is_capped_at_the_merge_span)
 	zassert_equal(open + RADIANT_SCHED_MERGE_SPAN_MAX_US, a->t_close,
 		      "%u us", (unsigned)(a->t_close - a->t_open));
 
-	fake_radio_advance_to(a->t_close + 1u);
+	fake_radio_advance_past_close(a->t_close);
 	assert_every_window_bounded();
 	finish();
 }
@@ -2742,7 +2744,7 @@ ZTEST(radiant_sched, test_an_empty_window_feeds_the_noise_floor_on_its_own_rf)
 	for (i = 0u; i < RADIANT_NOISE_MIN_SAMPLES; i++) {
 		post_track(0u, open, open + TEST_WINDOW_US);
 		zassert_ok(radiant_sched_tick());
-		fake_radio_advance_to(open + TEST_WINDOW_US + 1u);
+		fake_radio_advance_past_close(open + TEST_WINDOW_US);
 		open += TEST_PERIOD_US;
 	}
 	zassert_true(radiant_noise_get(0u, &r));
@@ -2782,7 +2784,7 @@ ZTEST(radiant_sched, test_a_crc_failure_does_not_end_a_stop_on_first_window)
 	zassert_ok(fake_radio_air_add(&air));
 	air_frame_for(0u, open + 300u);
 
-	fake_radio_advance_to(open + TEST_WINDOW_US + 1u);
+	fake_radio_advance_past_close(open + TEST_WINDOW_US);
 	zassert_equal(2u, log.n_rx);
 	zassert_equal(RADIANT_RADIO_STATUS_CRC_FAIL, log.rx[0].status);
 	zassert_equal(RADIANT_RADIO_STATUS_OK, log.rx[1].status);
@@ -2822,7 +2824,7 @@ ZTEST(radiant_sched, test_an_operation_that_never_terminates_is_reclaimed)
 	zassert_not_null(last, NULL);
 	zassert_equal(t0 + 400000u, last->t_open);
 
-	fake_radio_set_rx_terminal_delay_us(0u);
+	fake_radio_restore_delays();
 	fake_radio_advance_to(t0 + 400200u + 1100000u);
 	finish();
 }
@@ -2845,7 +2847,7 @@ ZTEST(radiant_sched, test_a_failed_operation_ends_the_request)
 	zassert_ok(radiant_sched_tick());
 	zassert_equal(1u, fake_radio_arm_count());
 
-	fake_radio_advance_to(open + TEST_WINDOW_US + 1u);
+	fake_radio_advance_past_close(open + TEST_WINDOW_US);
 	zassert_equal(1u, log.n_done);
 	zassert_equal(RADIANT_SCHED_DONE_FAILED, log.done[0].why);
 	zassert_false(radiant_sched_pending(0u));
@@ -2911,7 +2913,7 @@ ZTEST(radiant_sched, test_a_denied_terminal_is_not_an_abort)
 	zassert_ok(radiant_sched_tick());
 	zassert_equal(1u, fake_radio_arm_count());
 
-	fake_radio_advance_to(open + TEST_WINDOW_US + 1u);
+	fake_radio_advance_past_close(open + TEST_WINDOW_US);
 	zassert_equal(1u, log.n_done);
 	zassert_equal(RADIANT_SCHED_DONE_DENIED, log.done[0].why);
 	zassert_equal(0u, log.aborted_count[0], NULL);
@@ -3152,7 +3154,7 @@ ZTEST(radiant_sched, test_the_follow_on_reserve_reaches_the_backend)
 	zassert_equal(2u, fake_radio_arm(0u)->n_filters, NULL);
 	zassert_equal(4150u, fake_radio_arm(0u)->follow_on_us);
 
-	fake_radio_advance_to(open + TEST_WINDOW_US + 1u);
+	fake_radio_advance_past_close(open + TEST_WINDOW_US);
 
 	assert_every_window_bounded();
 	finish();
@@ -3283,7 +3285,7 @@ static void stale_reserve_case(int how)
 	zassert_equal(1u, fake_radio_arm_count());
 
 	if (how <= 1 || how == 4) {
-		fake_radio_advance_to(close + 1u);
+		fake_radio_advance_past_close(close);
 	} else {
 		fake_radio_advance_to(open + 100u);
 		if (how == 2) {
@@ -3359,7 +3361,7 @@ static void reserve_from_done_case(int how)
 	zassert_ok(radiant_sched_tick());
 	zassert_equal(1u, fake_radio_arm_count());
 
-	fake_radio_advance_to(close + 1u);
+	fake_radio_advance_past_close(close);
 	zassert_false(log.tx_from_done, "case %d", how);
 
 	if (how == 2) {
@@ -3367,7 +3369,7 @@ static void reserve_from_done_case(int how)
 		zassert_equal(FAKE_RADIO_ARM_TX, fake_radio_arm(1u)->kind);
 		zassert_equal(RADIANT_RADIO_OK_RC, fake_radio_arm(1u)->rc);
 		zassert_true(fake_radio_arm(1u)->from_callback);
-		fake_radio_advance_to(fake_radio_arm(1u)->t_sync_at + 1u);
+		fake_radio_advance_past_tx(fake_radio_arm(1u)->t_sync_at);
 		zassert_equal(0u, log.missed_count[2]);
 	} else {
 		zassert_equal(1u, fake_radio_arm_count(), "case %d", how);
@@ -3475,7 +3477,7 @@ ZTEST(radiant_sched, test_crc_failures_are_delivered_only_when_asked_for)
 	zassert_ok(radiant_sched_tick());
 	fake_radio_air_noise(open + 1000u, open + 50000u, 6u,
 			     FAKE_RADIO_RSSI_NOISE_DBM);
-	fake_radio_advance_to(close + 1u);
+	fake_radio_advance_past_close(close);
 
 	zassert_equal(0u, log.n_rx);
 	zassert_equal(6u, fake_radio_stats()->crc_fail_suppressed);
@@ -3491,7 +3493,7 @@ ZTEST(radiant_sched, test_crc_failures_are_delivered_only_when_asked_for)
 	zassert_ok(radiant_sched_tick());
 	fake_radio_air_noise(open + 1000u, open + 50000u, 6u,
 			     FAKE_RADIO_RSSI_NOISE_DBM);
-	fake_radio_advance_to(close + 1u);
+	fake_radio_advance_past_close(close);
 
 	zassert_equal(6u, log.n_rx, "got %u", log.n_rx);
 	zassert_equal(RADIANT_RADIO_STATUS_CRC_FAIL, log.rx[0].status);
@@ -4114,7 +4116,7 @@ ZTEST(radiant_sched, test_d2_a_late_chunk_gives_way_at_the_booking_due)
 	zassert_equal(0u, radiant_sched_stats_get()->book_late, NULL);
 	log.repost = false;
 	zassert_ok(radiant_sched_cancel(SHAPE_SCAN_CH));
-	fake_radio_set_rx_terminal_delay_us(0u);
+	fake_radio_restore_delays();
 	fake_radio_advance_to(radiant_radio_now() + 2u * SHAPE_PERIOD_US);
 	finish();
 }
@@ -4587,7 +4589,7 @@ static void diag_two_windows(uint32_t delay_us)
 	zassert_ok(radiant_sched_tick());
 	fake_radio_advance_to(t0 + 30000u);
 	zassert_ok(radiant_sched_tick());
-	fake_radio_set_rx_terminal_delay_us(0u);
+	fake_radio_restore_delays();
 	fake_radio_advance_to(t0 + 80000u);
 }
 
@@ -4813,7 +4815,7 @@ ZTEST(radiant_sched, test_diag_a_preemptions_terminal_is_a_stale_rx_end)
 	zassert_ok(radiant_sched_request_tx(2u, &t));
 	zassert_ok(radiant_sched_tick());
 	zassert_equal(1u, radiant_sched_stats_get()->preempted);
-	fake_radio_advance_to(t.t_sync_at + 10u);
+	fake_radio_advance_past_tx(t.t_sync_at);
 
 	zassert_equal(1u, radiant_sched_stats_get()->stale_events);
 	zassert_equal(end0 + 1u, dc->stale_rx_end);

@@ -299,7 +299,7 @@ static radiant_time_t run_one_rx(bool crc_bad, uint32_t flags)
 	req.flags = flags;
 	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_rx(&req, &op));
 
-	fake_radio_advance_to(req.t_close + 1u);
+	fake_radio_advance_past_close(req.t_close);
 	zassert_equal(1u, cb_calls);
 
 	return t;

@@ -507,7 +507,7 @@ static radiant_time_t run_one_master_slot(void)
 	t_sync = tx->t_sync_at;
 
 	/* Just past the terminal event that arms the turnaround, no further. */
-	fake_radio_advance_to(t_sync + 1u);
+	fake_radio_advance_past_tx(t_sync);
 	zassert_true(tx->terminated, "the master's slot did not complete");
 	return t_sync;
 }
@@ -522,8 +522,8 @@ static radiant_time_t run_one_quiet_period(void)
 
 	host_writes_broadcast();
 	t_tx = run_one_master_slot();
-	fake_radio_advance_to(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US +
-			      RADIANT_TRANSFER_ACK_GUARD_US + 10u);
+	fake_radio_advance_past_close(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US +
+			      RADIANT_TRANSFER_ACK_GUARD_US + 9u);
 	return t_tx;
 }
 
@@ -645,8 +645,8 @@ ZTEST(api, test_a_master_answers_every_slave_exchange_not_only_the_first)
 						   RADIANT_TRANSFER_SLOT_REPLY_US,
 						   frame, AIR_LEN));
 
-		fake_radio_advance_to(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US +
-				      RADIANT_TRANSFER_REPLY_US + 10u);
+		fake_radio_advance_past_tx(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US +
+				      RADIANT_TRANSFER_REPLY_US);
 
 		reply = last_tx_with_ctrl(RADIANT_CTRL_ACK_LAST_SEQ1);
 		zassert_not_null(reply,
@@ -759,8 +759,8 @@ ZTEST(api, test_a_master_originates_acknowledged_data_on_its_own_slot)
 
 	/* Let it transmit, miss its acknowledgement (nothing is answering) and
 	 * fail, so the channel is idle for end_of_test(). */
-	fake_radio_advance_to(ack->t_sync_at + RADIANT_TRANSFER_REPLY_US +
-			      RADIANT_TRANSFER_ACK_GUARD_US + 100u);
+	fake_radio_advance_past_close(ack->t_sync_at + RADIANT_TRANSFER_REPLY_US +
+			      RADIANT_TRANSFER_ACK_GUARD_US + 99u);
 	drain();
 
 	end_of_test();
@@ -825,8 +825,8 @@ static void assert_next_broadcast_on_grid(radiant_time_t slot,
 	zassert_equal(missed0, radiant_api_stats_get()->slots_missed,
 		      "a transmitted transfer slot was counted missed");
 
-	fake_radio_advance_to(next->t_sync_at + RADIANT_TRANSFER_SLOT_REPLY_US +
-			      RADIANT_TRANSFER_ACK_GUARD_US + 10u);
+	fake_radio_advance_past_close(next->t_sync_at + RADIANT_TRANSFER_SLOT_REPLY_US +
+			      RADIANT_TRANSFER_ACK_GUARD_US + 9u);
 }
 
 static void master_acked_data_keeps_grid(bool slave_answers)
@@ -861,8 +861,8 @@ static void master_acked_data_keeps_grid(bool slave_answers)
 				      slot + RADIANT_TRANSFER_OPENER_REPLY_US,
 				      frame, AIR_LEN));
 	}
-	fake_radio_advance_to(slot + RADIANT_TRANSFER_SLOT_REPLY_US +
-			      RADIANT_TRANSFER_ACK_GUARD_US + 100u);
+	fake_radio_advance_past_close(slot + RADIANT_TRANSFER_SLOT_REPLY_US +
+			      RADIANT_TRANSFER_ACK_GUARD_US + 99u);
 	drain();
 	zassert_equal(slave_answers ? 1u : 0u,
 		      count_channel_events(CH,
@@ -925,8 +925,8 @@ ZTEST(api, test_a_master_keeps_its_grid_after_a_burst)
 	zassert_equal(RADIANT_RADIO_OK_RC,
 		      fake_radio_air_frame(p1->t_sync_at + RADIANT_TRANSFER_REPLY_US,
 					   frame, AIR_LEN));
-	fake_radio_advance_to(p1->t_sync_at + RADIANT_TRANSFER_REPLY_US +
-			      RADIANT_TRANSFER_ACK_GUARD_US + 100u);
+	fake_radio_advance_past_close(p1->t_sync_at + RADIANT_TRANSFER_REPLY_US +
+			      RADIANT_TRANSFER_ACK_GUARD_US + 99u);
 	drain();
 	zassert_equal(1u, count_channel_events(CH,
 					       ANTW_EVENT_TRANSFER_TX_COMPLETED),
@@ -999,8 +999,8 @@ ZTEST(api, test_a_power_change_after_open_reaches_acked_data_and_acks)
 	zassert_equal(RADIANT_RADIO_OK_RC,
 		      fake_radio_air_frame(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US,
 					   frame, AIR_LEN));
-	fake_radio_advance_to(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US +
-			      RADIANT_TRANSFER_REPLY_US + 10u);
+	fake_radio_advance_past_tx(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US +
+			      RADIANT_TRANSFER_REPLY_US);
 	assert_tx_power(last_tx_with_ctrl(RADIANT_CTRL_ACK_LAST_SEQ1), -20,
 			"the master's acknowledgement (0xF2)");
 	drain();
@@ -1015,8 +1015,8 @@ ZTEST(api, test_a_power_change_after_open_reaches_acked_data_and_acks)
 	ack = last_tx_with_ctrl(RADIANT_CTRL_ACK_DATA_OPEN);
 	assert_tx_power(ack, -20, "the acknowledged data (0xAA)");
 
-	fake_radio_advance_to(ack->t_sync_at + RADIANT_TRANSFER_REPLY_US +
-			      RADIANT_TRANSFER_ACK_GUARD_US + 100u);
+	fake_radio_advance_past_close(ack->t_sync_at + RADIANT_TRANSFER_REPLY_US +
+			      RADIANT_TRANSFER_ACK_GUARD_US + 99u);
 	drain();
 
 	end_of_test();
@@ -1071,8 +1071,8 @@ ZTEST(api, test_a_power_change_after_open_reaches_burst_packets)
 	}
 	p1 = last_tx_with_ctrl(RADIANT_CTRL_BROADCAST);
 	zassert_not_null(p1);
-	fake_radio_advance_to(p1->t_sync_at + RADIANT_TRANSFER_SLOT_REPLY_US +
-			      RADIANT_TRANSFER_ACK_GUARD_US + 10u);
+	fake_radio_advance_past_close(p1->t_sync_at + RADIANT_TRANSFER_SLOT_REPLY_US +
+			      RADIANT_TRANSFER_ACK_GUARD_US + 9u);
 	end_of_test();
 }
 
@@ -1112,8 +1112,8 @@ ZTEST(api, test_a_master_answers_before_the_host_has_written_a_broadcast)
 	zassert_equal(RADIANT_RADIO_OK_RC,
 		      fake_radio_air_frame(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US,
 					   frame, AIR_LEN));
-	fake_radio_advance_to(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US +
-			      RADIANT_TRANSFER_REPLY_US + 10u);
+	fake_radio_advance_past_tx(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US +
+			      RADIANT_TRANSFER_REPLY_US);
 
 	reply = last_tx_with_ctrl(RADIANT_CTRL_ACK_LAST_SEQ1);
 	zassert_not_null(reply,
@@ -1191,8 +1191,8 @@ ZTEST(api, test_the_master_keeps_broadcasting_after_an_exchange)
 	zassert_equal(RADIANT_RADIO_OK_RC,
 		      fake_radio_air_frame(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US,
 					   frame, AIR_LEN));
-	fake_radio_advance_to(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US +
-			      RADIANT_TRANSFER_REPLY_US + 10u);
+	fake_radio_advance_past_tx(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US +
+			      RADIANT_TRANSFER_REPLY_US);
 	zassert_not_null(last_tx_with_ctrl(RADIANT_CTRL_ACK_LAST_SEQ1),
 			 "the exchange itself did not happen");
 
@@ -1242,7 +1242,7 @@ ZTEST(api, test_a_broadcast_write_during_an_ack_reply_is_accepted)
 	zassert_equal(RADIANT_RADIO_OK_RC,
 		      fake_radio_air_frame(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US,
 					   frame, AIR_LEN));
-	fake_radio_advance_to(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US + 10u);
+	fake_radio_advance_past_frame(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US);
 	reply = last_tx_with_ctrl(RADIANT_CTRL_ACK_LAST_SEQ1);
 	zassert_true(reply != NULL && !reply->terminated,
 		     "the reply was not in flight - the write below would not "
@@ -1255,8 +1255,8 @@ ZTEST(api, test_a_broadcast_write_during_an_ack_reply_is_accepted)
 		      "a broadcast write was refused while the master was "
 		      "acknowledging its slave - the host started no transfer");
 
-	fake_radio_advance_to(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US +
-			      RADIANT_TRANSFER_REPLY_US + 10u);
+	fake_radio_advance_past_tx(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US +
+			      RADIANT_TRANSFER_REPLY_US);
 	reply = last_tx_with_ctrl(RADIANT_CTRL_ACK_LAST_SEQ1);
 	zassert_not_null(reply, "the exchange itself did not happen");
 	zassert_mem_equal(&reply->body[BODY_D0], bcast_payload, 8u,
@@ -1301,7 +1301,7 @@ ZTEST(api, test_a_wedged_reply_is_recovered_by_housekeeping)
 	zassert_equal(RADIANT_RADIO_OK_RC,
 		      fake_radio_air_frame(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US,
 					   frame, AIR_LEN));
-	fake_radio_advance_to(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US + 10u);
+	fake_radio_advance_past_frame(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US);
 
 	/* ...and take the arm away without telling anyone. */
 	zassert_equal(RADIANT_RADIO_OK_RC, radiant_sched_cancel(CH));
@@ -1503,7 +1503,7 @@ static void test_a_background_scan_reports_every_device_not_only_the_first_body(
 	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &dev_a);
 	air_device(w, 1u, 0x0600u, 0x78u, 5000u, &dev_b);
 
-	fake_radio_advance_to(w->t_close + 1u);
+	fake_radio_advance_past_close(w->t_close);
 	drain();
 
 	zassert_true(count_bcast_from(dev_a) >= 1u,
@@ -1529,7 +1529,7 @@ static void test_a_background_scan_reports_every_device_not_only_the_first_body(
 			  "the sweep did not move on to a second window");
 
 	air_device(w, 0u, 0x0700u, 0x11u, 1000u, &dev_c);
-	fake_radio_advance_to(w->t_close + 1u);
+	fake_radio_advance_past_close(w->t_close);
 	drain();
 
 	zassert_true(count_bcast_from(dev_c) >= 1u,
@@ -1602,7 +1602,7 @@ ZTEST(api, test_a_short_match_scan_hears_any_device_number_in_one_window)
 	op_first = w->op;
 	wild_air(w, 0x0512u, 0x0Bu, 1000u);
 	wild_air(w, 0x06A7u, 0x78u, 5000u);
-	fake_radio_advance_to(w->t_close + 1u);
+	fake_radio_advance_past_close(w->t_close);
 	drain();
 
 	zassert_true(count_bcast_from(0x0512u) >= 1u, "device 0x0512 not reported");
@@ -1613,7 +1613,7 @@ ZTEST(api, test_a_short_match_scan_hears_any_device_number_in_one_window)
 	w = armed_wild_window();
 	zassert_not_equal(op_first, w->op, "the sweep did not move on");
 	wild_air(w, 0x07F0u, 0x11u, 1000u);
-	fake_radio_advance_to(w->t_close + 1u);
+	fake_radio_advance_past_close(w->t_close);
 	drain();
 	zassert_true(count_bcast_from(0x07F0u) >= 1u, "device 0x07F0 not reported");
 
@@ -1721,7 +1721,7 @@ static void test_the_scan_keeps_finding_devices_while_another_channel_tracks_bod
 	w = armed_search_window();
 	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &dev_a);
 	t_acq = w->t_open + 1000u;
-	fake_radio_advance_to(w->t_close + 1u);
+	fake_radio_advance_past_close(w->t_close);
 	drain();
 
 	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(1u),
@@ -1834,7 +1834,7 @@ ZTEST(api, test_a_named_device_is_steered_to_rather_than_waited_for)
 	lo_now = w->filters[0].addr[2];
 	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &dev_a);
 	t_acq = w->t_open + 1000u;
-	fake_radio_advance_to(w->t_close + 1u);
+	fake_radio_advance_past_close(w->t_close);
 	drain();
 
 	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(1u),
@@ -2035,7 +2035,7 @@ ZTEST(api, test_a_scan_chunk_that_ends_mid_set_keeps_its_slot)
 	w = armed_search_window();
 	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &dev_a);
 	t_acq = w->t_open + 1000u;
-	fake_radio_advance_to(w->t_close + 1u);
+	fake_radio_advance_past_close(w->t_close);
 	drain();
 
 	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(1u),
@@ -2059,7 +2059,7 @@ ZTEST(api, test_a_scan_chunk_that_ends_mid_set_keeps_its_slot)
 	/* Run the chunk out and stop. drain() delivers queued host messages
 	 * but doesn't sleep, so the event thread hasn't pumped - anything in
 	 * this slot now was left by the completion itself. */
-	fake_radio_advance_to(w->t_close + 1u);
+	fake_radio_advance_past_close(w->t_close);
 	drain();
 
 	zassert_true(radiant_sched_pending(CH),
@@ -2146,7 +2146,7 @@ ZTEST(api, test_a_plain_wildcard_slave_still_acquires_and_tracks)
 
 	w = armed_search_window();
 	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &dev_a);
-	fake_radio_advance_to(w->t_close + 1u);
+	fake_radio_advance_past_close(w->t_close);
 	drain();
 
 	zassert_true(count_bcast_from(dev_a) >= 1u,
@@ -2348,7 +2348,7 @@ ZTEST(api, test_the_id_list_is_configurable_on_an_open_channel)
 	w = armed_search_window();
 	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &dev_pwr);
 	air_device(w, 1u, 0x0600u, 0x78u, 5000u, &dev_hrm);
-	fake_radio_advance_to(w->t_close + 1u);
+	fake_radio_advance_past_close(w->t_close);
 	drain();
 
 	zassert_equal(0u, count_bcast_from(dev_pwr),
@@ -2455,7 +2455,7 @@ ZTEST(api, test_a_search_timeout_landing_mid_chunk_does_not_strand_the_sweep)
 
 	w = armed_search_window();
 	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &dev_a);
-	fake_radio_advance_to(w->t_close + 1u);
+	fake_radio_advance_past_close(w->t_close);
 	drain();
 	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(1u),
 		      "the swept channel did not acquire - state %d",
@@ -2640,7 +2640,7 @@ ZTEST(api, test_a_first_key_deferred_by_a_live_chunk_still_reaches_the_sweep)
 		     w->filters[0].addr[0], w->filters[0].addr[1]);
 
 	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &dev);
-	fake_radio_advance_to(w->t_close + 1u);
+	fake_radio_advance_past_close(w->t_close);
 	drain();
 	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(1u),
 		      "a real ANT+ device was not acquired - state %d",
@@ -2756,7 +2756,7 @@ static void expect_mid_search_key_reaches_the_sweep(uint8_t network)
 			     "setup: too little of the window is left to air in");
 		air_device(w, 0u, 0x0500u, 0x0Bu, at, &dev);
 	}
-	fake_radio_advance_to(w->t_close + 1u);
+	fake_radio_advance_past_close(w->t_close);
 	drain();
 	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH),
 		      "network %u: a real ANT+ device was not acquired - state %d",
@@ -2954,7 +2954,7 @@ ZTEST(api, test_a_keyless_scan_on_rf_71_is_still_offered_a_device_heard_on_57)
 		      "setup: the sweep is not on 57 (RF %u)",
 		      (unsigned int)w->rf_index);
 	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &dev);
-	fake_radio_advance_to(w->t_close + 1u);
+	fake_radio_advance_past_close(w->t_close);
 	drain();
 	zassert_true(count_bcast_from(dev) >= 1u,
 		     "the keyless scan was not offered #%u, heard on 57",
@@ -2976,7 +2976,7 @@ ZTEST(api, test_a_keyless_scan_on_rf_53_leaves_the_sweep_on_57_and_hears_it)
 		      "a keyless scan on RF 53 pulled the sweep to RF %u",
 		      (unsigned int)w->rf_index);
 	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &dev);
-	fake_radio_advance_to(w->t_close + 1u);
+	fake_radio_advance_past_close(w->t_close);
 	drain();
 	zassert_true(count_bcast_from(dev) >= 1u,
 		     "the RF 53 scan was not offered #%u, heard on 57",
@@ -3022,7 +3022,7 @@ ZTEST(api, test_a_tracked_slaves_device_is_cached_on_its_own_frequency)
 	air_device(w, 1u, 0x0500u, 0x0Bu, 1000u, &dev);
 	t_acq = w->t_open + 1000u; /* the acquiring frame's own sync */
 	lo = (uint8_t)(dev & 0xFFu);
-	fake_radio_advance_to(w->t_close + 1u);
+	fake_radio_advance_past_close(w->t_close);
 	drain();
 	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH),
 		      "setup: the keyless slave did not acquire");
@@ -3120,7 +3120,7 @@ ZTEST(api, test_a_tracked_channel_reposts_its_next_window_without_a_pump)
 	/* Acquire, so the channel is TRACKING and its slots are predicted. */
 	w = armed_search_window();
 	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &dev_a);
-	fake_radio_advance_to(w->t_close + 1u);
+	fake_radio_advance_past_close(w->t_close);
 	drain();
 	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH),
 		      "setup: the channel did not acquire");
@@ -3138,7 +3138,7 @@ ZTEST(api, test_a_tracked_channel_reposts_its_next_window_without_a_pump)
 		zassert_not_null(tw, "no tracked window was armed after acquiring");
 		zassert_false(tw->terminated,
 			      "setup: the tracked window had already ended");
-		fake_radio_advance_to(tw->t_close + 1u);
+		fake_radio_advance_past_close(tw->t_close);
 		drain();
 	}
 
@@ -3182,7 +3182,7 @@ static void open_and_acquire_slave_of_type(uint8_t type, uint16_t *out_dev)
 
 	w = armed_search_window();
 	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, out_dev);
-	fake_radio_advance_to(w->t_close + 1u);
+	fake_radio_advance_past_close(w->t_close);
 	drain();
 	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH),
 		      "setup: the channel did not acquire");
@@ -3415,7 +3415,7 @@ ZTEST(api, test_a_channel_that_drops_to_search_does_not_starve_one_still_trackin
 
 	w = armed_search_window();
 	air_device(w, 1u, 0x0600u, 0x0Bu, 1000u, &dev_b);
-	fake_radio_advance_to(w->t_close + 1u);
+	fake_radio_advance_past_close(w->t_close);
 	drain();
 	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(1u),
 		      "setup: channel 1 did not acquire the second device");
@@ -3736,7 +3736,7 @@ static radiant_time_t air_inbound_burst(uint16_t dev, uint32_t n, uint32_t send)
 		(void)build_peer_frame_for(frame, dev, ctrl, pay);
 		zassert_equal(RADIANT_RADIO_OK_RC,
 			      fake_radio_air_frame(t, frame, AIR_LEN));
-		fake_radio_advance_to(t + 100u);
+		fake_radio_advance_past_frame(t);
 
 		tx = last_arm_of(FAKE_RADIO_ARM_TX);
 		zassert_not_null(tx, "packet %u was not acknowledged", i);
@@ -3749,7 +3749,7 @@ static radiant_time_t air_inbound_burst(uint16_t dev, uint32_t n, uint32_t send)
 		zassert_equal(radiant_ctrl_reply_for(ctrl), tx->body[BODY_CTRL],
 			      "packet %u (0x%02X) acknowledged with 0x%02X", i,
 			      ctrl, tx->body[BODY_CTRL]);
-		fake_radio_advance_to(tx->t_sync_at + 1u);
+		fake_radio_advance_past_tx(tx->t_sync_at);
 		t = tx->t_sync_at + RADIANT_TRANSFER_NEXT_PACKET_US;
 	}
 	return t0;
@@ -3850,7 +3850,7 @@ static void open_and_acquire_slave_with_period(uint16_t period, uint16_t *out_de
 	w = armed_search_window();
 	air_device(w, 0u, 0x0500u, 0x0Bu,
 		   (uint32_t)(w->t_close - w->t_open) - 1000u, out_dev);
-	fake_radio_advance_to(w->t_close + 1u);
+	fake_radio_advance_past_close(w->t_close);
 	drain();
 	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH),
 		      "setup: the channel did not acquire");
@@ -3884,7 +3884,7 @@ ZTEST(api, test_a_burst_longer_than_eight_periods_does_not_drop_to_search)
 		const struct fake_radio_arm *w = await_tracked_window(dev);
 
 		air_tracked_frame(w, dev);
-		fake_radio_advance_to(w->t_close + 1u);
+		fake_radio_advance_past_close(w->t_close);
 		drain();
 	}
 	narrow = radiant_channel_guard_us(CH);
@@ -3923,7 +3923,7 @@ ZTEST(api, test_a_burst_longer_than_eight_periods_does_not_drop_to_search)
 			     "(+/-%u us)", (unsigned)(w->t_close - slot));
 		zassert_equal(RADIANT_RADIO_OK_RC,
 			      fake_radio_air_frame(slot + 150u, frame, len));
-		fake_radio_advance_to(w->t_close + 1u);
+		fake_radio_advance_past_close(w->t_close);
 		drain();
 	}
 	zassert_equal(1u, count_bcast_on(CH),
@@ -3936,7 +3936,7 @@ ZTEST(api, test_a_burst_longer_than_eight_periods_does_not_drop_to_search)
 		const struct fake_radio_arm *w = await_tracked_window(dev);
 
 		air_tracked_frame(w, dev);
-		fake_radio_advance_to(w->t_close + 1u);
+		fake_radio_advance_past_close(w->t_close);
 		drain();
 	}
 	zassert_equal(3u, count_bcast_on(CH),
@@ -4020,7 +4020,7 @@ ZTEST(api, test_a_second_channel_keeps_tracking_across_a_burst)
 	}
 	zassert_not_null(w, "setup: no search window reaches the chosen phase");
 	air_device(w, 1u, 0x0600u, 0x0Bu, (uint32_t)(t_b - w->t_open), &dev_b);
-	fake_radio_advance_to(w->t_close + 1u);
+	fake_radio_advance_past_close(w->t_close);
 	drain();
 	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(1u),
 		      "setup: channel 1 did not acquire");
@@ -4160,13 +4160,13 @@ ZTEST(api, test_a_master_follows_a_slave_originated_burst)
 		pay[0] = (uint8_t)i;
 		(void)build_peer_frame(frame, ctrl, pay);
 		zassert_ok(fake_radio_air_frame(t, frame, AIR_LEN));
-		fake_radio_advance_to(t + 100u);
+		fake_radio_advance_past_frame(t);
 		tx = last_arm_of(FAKE_RADIO_ARM_TX);
 		zassert_not_null(tx);
 		zassert_equal(t + RADIANT_TRANSFER_REPLY_US, tx->t_sync_at,
 			      "packet %u: no acknowledgement at +1560", i);
 		zassert_equal(radiant_ctrl_reply_for(ctrl), tx->body[BODY_CTRL]);
-		fake_radio_advance_to(tx->t_sync_at + 1u);
+		fake_radio_advance_past_tx(tx->t_sync_at);
 		t = tx->t_sync_at + RADIANT_TRANSFER_NEXT_PACKET_US;
 	}
 	fake_radio_advance_to(t + 2000u);
@@ -4198,8 +4198,8 @@ ZTEST(api, test_a_one_packet_burst_raises_no_tx_start)
 			       peer_payload);
 	zassert_ok(fake_radio_air_frame(p0->t_sync_at + RADIANT_TRANSFER_OPENER_REPLY_US,
 					frame, AIR_LEN));
-	fake_radio_advance_to(p0->t_sync_at + RADIANT_TRANSFER_SLOT_REPLY_US +
-			      RADIANT_TRANSFER_ACK_GUARD_US + 100u);
+	fake_radio_advance_past_close(p0->t_sync_at + RADIANT_TRANSFER_SLOT_REPLY_US +
+			      RADIANT_TRANSFER_ACK_GUARD_US + 99u);
 	drain();
 
 	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_COMPLETED));
@@ -4489,7 +4489,7 @@ ZTEST(api, test_a_missed_tracked_window_reposts_with_no_pump_at_all)
 	 * makes it the right refusal to use: the slot is occupied by a window
 	 * that will die where it stands. */
 	fake_radio_force_arm_repeat(RADIANT_RADIO_EBUSY, 64u);
-	fake_radio_advance_to(tw->t_close + 1u);
+	fake_radio_advance_past_close(tw->t_close);
 	drain();
 
 	pumps_before = radiant_api_stats_get()->pumps;
@@ -4563,7 +4563,7 @@ ZTEST(api, test_nine_scheduling_misses_never_reach_rx_fail_go_to_search)
 		/* The successor this window's completion posts is refused once,
 		 * so it is the one that dies unarmed. */
 		fake_radio_force_next_arm(RADIANT_RADIO_EBUSY);
-		fake_radio_advance_to(tw->t_close + 1u);
+		fake_radio_advance_past_close(tw->t_close);
 		drain();
 
 		api_kill_the_pending_window();
@@ -4646,8 +4646,8 @@ ZTEST(api, test_a_missed_master_slot_reposts_with_no_pump_at_all)
 	 * scheduler slot is still pending, and between a transmit and its
 	 * turnaround's close the turnaround IS that slot - so the next thing
 	 * posted on this channel is the master's own next transmit. */
-	fake_radio_advance_to(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US +
-			      RADIANT_TRANSFER_ACK_GUARD_US + 10u);
+	fake_radio_advance_past_close(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US +
+			      RADIANT_TRANSFER_ACK_GUARD_US + 9u);
 	drain();
 
 	/* Every arm from here is refused, so the slot the pump posts next sits
@@ -4753,7 +4753,7 @@ ZTEST(api, test_a_scheduler_dropped_slot_is_a_collision_not_an_rx_fail)
 	 * successor is refused and dies unarmed. */
 	air_tracked_frame(tw, dev_a);
 	fake_radio_force_arm_repeat(RADIANT_RADIO_EBUSY, 64u);
-	fake_radio_advance_to(tw->t_close + 1u);
+	fake_radio_advance_past_close(tw->t_close);
 	drain();
 
 	memset(msglog, 0, sizeof(msglog));
@@ -4792,7 +4792,7 @@ ZTEST(api, test_scheduler_collisions_never_send_a_channel_to_search)
 
 	air_tracked_frame(tw, dev_a);
 	fake_radio_force_arm_repeat(RADIANT_RADIO_EBUSY, 1000u);
-	fake_radio_advance_to(tw->t_close + 1u);
+	fake_radio_advance_past_close(tw->t_close);
 	drain();
 
 	memset(msglog, 0, sizeof(msglog));
@@ -4936,7 +4936,7 @@ static uint32_t api_tracked_quiet_run(bool deny)
 
 	w = armed_search_window();
 	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &dev_a);
-	fake_radio_advance_to(w->t_close + 1u);
+	fake_radio_advance_past_close(w->t_close);
 	drain();
 	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH),
 		      "setup: the channel did not acquire");
@@ -4997,7 +4997,7 @@ ZTEST(api, test_a_denied_tracked_window_is_not_reported_as_an_rx_failure)
 
 	w = armed_search_window();
 	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &dev_a);
-	fake_radio_advance_to(w->t_close + 1u);
+	fake_radio_advance_past_close(w->t_close);
 	drain();
 	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH),
 		      "setup: the channel did not acquire");
@@ -5330,7 +5330,7 @@ ZTEST(api, test_a_search_denied_every_chunk_still_times_out)
 	w = last_arm_of(FAKE_RADIO_ARM_RX);
 	zassert_not_null(w);
 	fake_radio_force_arm_repeat(RADIANT_RADIO_EBUSY, 1000u);
-	fake_radio_advance_to(w->t_close + 1u);
+	fake_radio_advance_past_close(w->t_close);
 	fake_radio_advance_to(end - 200000u);
 	run_housekeeping();
 	drain();
@@ -5384,8 +5384,8 @@ ZTEST(api, test_the_second_acknowledged_data_is_reported_as_acknowledged_data)
 			      fake_radio_air_frame(t_tx +
 						   RADIANT_TRANSFER_SLOT_REPLY_US,
 						   frame, AIR_LEN));
-		fake_radio_advance_to(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US +
-				      RADIANT_TRANSFER_REPLY_US + 10u);
+		fake_radio_advance_past_tx(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US +
+				      RADIANT_TRANSFER_REPLY_US);
 	}
 
 	drain();
@@ -5402,8 +5402,8 @@ ZTEST(api, test_the_second_acknowledged_data_is_reported_as_acknowledged_data)
 	zassert_equal(RADIANT_RADIO_OK_RC,
 		      fake_radio_air_frame(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US,
 					   frame, AIR_LEN));
-	fake_radio_advance_to(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US +
-			      RADIANT_TRANSFER_REPLY_US + 10u);
+	fake_radio_advance_past_tx(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US +
+			      RADIANT_TRANSFER_REPLY_US);
 	drain();
 	zassert_equal(1u, count_msgs((uint8_t)ANTW_MESG_BURST_DATA_ID),
 		      "the truncated burst's first packet was not reported as "
@@ -5426,8 +5426,8 @@ ZTEST(api, test_the_second_acknowledged_data_is_reported_as_acknowledged_data)
 	zassert_equal(RADIANT_RADIO_OK_RC,
 		      fake_radio_air_frame(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US,
 					   frame, AIR_LEN));
-	fake_radio_advance_to(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US +
-			      RADIANT_TRANSFER_REPLY_US + 10u);
+	fake_radio_advance_past_tx(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US +
+			      RADIANT_TRANSFER_REPLY_US);
 	drain();
 
 	zassert_equal(3u, count_msgs((uint8_t)ANTW_MESG_ACKNOWLEDGED_DATA_ID),
@@ -5453,7 +5453,7 @@ static uint16_t fec_acquire_with_period(uint8_t trans_type, bool wildcard, uint1
 	zassert_ok(antr_channel_open(CH));
 	w = armed_search_window();
 	air_device(w, 0u, 0xCC00u, 0x11u, 1000u, &number);
-	fake_radio_advance_to(w->t_close + 1u);
+	fake_radio_advance_past_close(w->t_close);
 	drain();
 	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH));
 	run_housekeeping();
@@ -5488,8 +5488,8 @@ static void fec_exchange(uint16_t number, uint8_t reply_ctrl, bool reply)
 		zassert_ok(fake_radio_air_frame(tx->t_sync_at + RADIANT_TRANSFER_REPLY_US,
 					       frame, n));
 	}
-	fake_radio_advance_to(tx->t_sync_at + RADIANT_TRANSFER_REPLY_US +
-			      RADIANT_TRANSFER_ACK_GUARD_US + 1000u);
+	fake_radio_advance_past_close(tx->t_sync_at + RADIANT_TRANSFER_REPLY_US +
+			      RADIANT_TRANSFER_ACK_GUARD_US + 999u);
 	drain();
 }
 
@@ -5651,7 +5651,7 @@ ZTEST(api, test_fec_pending_without_an_opener_expires_once)
 	/* Let one genuinely empty window end, then prevent further arms so
 	 * housekeeping, rather than a fabricated peer, expires the command. */
 	fake_radio_force_arm_repeat(RADIANT_RADIO_EBUSY, 100u);
-	fake_radio_advance_to(w->t_close + 1u);
+	fake_radio_advance_past_close(w->t_close);
 	/* Past the opener budget, derived rather than hard-coded: FE-C's 8192
 	 * counts times the slots it is allowed, plus a margin. */
 	fake_radio_advance((uint64_t)RADIANT_API_ACK_OPENER_PERIODS *
@@ -5674,7 +5674,7 @@ ZTEST(api, test_fec_pending_watchdog_allows_slow_channel_periods_past_the_floor)
 
 	zassert_ok(antr_acknowledge_message_tx(CH, 8u, peer_payload));
 	fake_radio_force_arm_repeat(RADIANT_RADIO_EBUSY, 100u);
-	fake_radio_advance_to(w->t_close + 1u);
+	fake_radio_advance_past_close(w->t_close);
 	fake_radio_advance(600000u);
 	run_housekeeping();
 	drain();
@@ -5720,7 +5720,7 @@ ZTEST(api, test_fec_pending_command_survives_two_missed_master_slots)
 		if (w->t_open > t_q + (radiant_time_t)RADIANT_API_XFER_WATCHDOG_MS * 1000u) {
 			break;
 		}
-		fake_radio_advance_to(w->t_close + 1u);
+		fake_radio_advance_past_close(w->t_close);
 		drain();
 		k_sleep(K_MSEC(3 * RADIANT_API_HOUSEKEEP_MS));
 		skipped++;
@@ -5790,7 +5790,7 @@ ZTEST(api, test_fec_pending_fails_at_go_to_search)
 				   (radiant_time_t)RADIANT_API_ACK_OPENER_PERIODS *
 					   radiant_channel_counts_to_us(8192u);
 		}
-		fake_radio_advance_to(w->t_close + 1u);
+		fake_radio_advance_past_close(w->t_close);
 		drain();
 		k_sleep(K_MSEC(3 * RADIANT_API_HOUSEKEEP_MS));
 		empty++;
@@ -5848,7 +5848,7 @@ static void next_sweep_chunk(void)
 {
 	const struct fake_radio_arm *w = armed_search_window();
 
-	fake_radio_advance_to(w->t_close + 1u);
+	fake_radio_advance_past_close(w->t_close);
 	drain();
 	k_sleep(K_MSEC(3 * RADIANT_API_HOUSEKEEP_MS));
 }
@@ -5912,8 +5912,8 @@ static void ack_from_peer(uint16_t number, const struct fake_radio_arm *tx)
 	frame[6] = RADIANT_CTRL_ACK_LAST_SEQ1;
 	zassert_ok(fake_radio_air_frame(tx->t_sync_at + RADIANT_TRANSFER_REPLY_US,
 				       frame, n));
-	fake_radio_advance_to(tx->t_sync_at + RADIANT_TRANSFER_REPLY_US +
-			      RADIANT_TRANSFER_ACK_GUARD_US + 1000u);
+	fake_radio_advance_past_close(tx->t_sync_at + RADIANT_TRANSFER_REPLY_US +
+			      RADIANT_TRANSFER_ACK_GUARD_US + 999u);
 	drain();
 }
 
@@ -6126,7 +6126,7 @@ ZTEST(api, test_fec_pending_not_sent_from_a_late_reacquiring_frame)
 	fake_radio_set_rx_frame_delay_us(RADIANT_TRANSFER_SLOT_REPLY_US);
 	(void)air_in_sweep(RADIANT_CTRL_BROADCAST, 0u, &number);
 	fake_radio_advance(1000u); /* past the delayed delivery */
-	fake_radio_set_rx_frame_delay_us(0u);
+	fake_radio_restore_delays();
 	drain();
 	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH),
 		      "setup: the channel did not reacquire");
@@ -6193,7 +6193,7 @@ ZTEST(api, test_fec_pending_on_a_shared_carrier_waits_for_the_next_frame)
 
 	/* The next tracked frame. The armed receive may be FEC_CH's chunk, so
 	 * the master is aired at CH's projected slot, not fec_exchange()'s. */
-	fake_radio_advance_to(w->t_close + 1u);
+	fake_radio_advance_past_close(w->t_close);
 	drain();
 	k_sleep(K_MSEC(3 * RADIANT_API_HOUSEKEEP_MS));
 	{
@@ -6246,7 +6246,7 @@ ZTEST(api, test_fec_pending_not_sent_on_reacquiring_frame_past_deadline)
 		if (w->t_close > deadline + 3000u) {
 			break;
 		}
-		fake_radio_advance_to(w->t_close + 1u);
+		fake_radio_advance_past_close(w->t_close);
 		drain();
 	}
 	zassert_true(radiant_radio_now() < deadline, "setup: time passed the "
@@ -6287,7 +6287,7 @@ ZTEST(api, test_fec_reacquisition_uses_new_peer_without_narrowing_wildcards)
 	const struct fake_radio_arm *w = armed_search_window();
 	uint16_t second;
 	air_device(w, 0u, 0xDD00u, 0x11u, 1000u, &second);
-	fake_radio_advance_to(w->t_close + 1u);
+	fake_radio_advance_past_close(w->t_close);
 	drain();
 	zassert_not_equal(first, second);
 	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH));
@@ -6326,8 +6326,8 @@ ZTEST(api, test_fec_turnaround_survives_a_scan_terminal_delivered_after_its_airt
 	frame[6] = RADIANT_CTRL_ACK_LAST_SEQ1;
 	zassert_ok(fake_radio_air_frame(sync + RADIANT_TRANSFER_SLOT_REPLY_US +
 				       RADIANT_TRANSFER_REPLY_US, frame, len));
-	fake_radio_advance_to(sync + RADIANT_TRANSFER_SLOT_REPLY_US +
-		RADIANT_TRANSFER_REPLY_US + RADIANT_TRANSFER_ACK_GUARD_US + 1000u);
+	fake_radio_advance_past_close(sync + RADIANT_TRANSFER_SLOT_REPLY_US +
+		RADIANT_TRANSFER_REPLY_US + RADIANT_TRANSFER_ACK_GUARD_US + 999u);
 	drain();
 	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_COMPLETED),
 		      "a short gap scan consumed the transmit's arming lead");
@@ -6462,7 +6462,7 @@ ZTEST(api, test_fec_pending_command_fails_when_search_timeout_closes_the_channel
 	w = last_arm_of(FAKE_RADIO_ARM_RX);
 	zassert_not_null(w);
 	fake_radio_force_arm_repeat(RADIANT_RADIO_EBUSY, 1000u);
-	fake_radio_advance_to(w->t_close + 1u);
+	fake_radio_advance_past_close(w->t_close);
 	fake_radio_advance(3000000u);
 	run_housekeeping();
 	drain();
@@ -6710,8 +6710,8 @@ ZTEST(api, test_the_master_repeats_its_last_acknowledged_payload_until_the_host_
 
 	/* Nothing answers: the transfer fails and the engine goes idle. A
 	 * slot opener's window runs to the slave's slot-reply turnaround. */
-	fake_radio_advance_to(ack->t_sync_at + RADIANT_TRANSFER_OPENER_REPLY_US +
-			      RADIANT_TRANSFER_ACK_GUARD_US + 100u);
+	fake_radio_advance_past_close(ack->t_sync_at + RADIANT_TRANSFER_OPENER_REPLY_US +
+			      RADIANT_TRANSFER_ACK_GUARD_US + 99u);
 	drain();
 	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED));
 
@@ -6728,8 +6728,8 @@ ZTEST(api, test_the_master_repeats_its_last_acknowledged_payload_until_the_host_
 			  "payload");
 
 	/* The host writes: its page goes out from the next slot on. */
-	fake_radio_advance_to(next->t_sync_at + RADIANT_TRANSFER_SLOT_REPLY_US +
-			      RADIANT_TRANSFER_ACK_GUARD_US + 10u);
+	fake_radio_advance_past_close(next->t_sync_at + RADIANT_TRANSFER_SLOT_REPLY_US +
+			      RADIANT_TRANSFER_ACK_GUARD_US + 9u);
 	(void)run_one_quiet_period();
 	next = last_tx_with_ctrl(RADIANT_CTRL_BROADCAST);
 	zassert_mem_equal(&next->body[BODY_D0], bcast_payload, 8u,
@@ -6807,8 +6807,8 @@ ZTEST(api, test_the_master_repeats_the_last_burst_packet_it_sent)
 		      "the burst moved the master's slot grid by %u us",
 		      (unsigned)((next->t_sync_at - p0->t_sync_at) % PERIOD_US));
 
-	fake_radio_advance_to(next->t_sync_at + RADIANT_TRANSFER_SLOT_REPLY_US +
-			      RADIANT_TRANSFER_ACK_GUARD_US + 10u);
+	fake_radio_advance_past_close(next->t_sync_at + RADIANT_TRANSFER_SLOT_REPLY_US +
+			      RADIANT_TRANSFER_ACK_GUARD_US + 9u);
 	end_of_test();
 }
 
@@ -7692,8 +7692,7 @@ static void xing_run(const struct xing_cfg *cfg, struct xing_result *r)
 	fake_radio_air_clear();
 	fake_radio_advance(5000u);
 	drain();
-	fake_radio_set_rx_terminal_delay_us(0u);
-	fake_radio_set_rx_frame_delay_us(0u);
+	fake_radio_restore_delays();
 
 	/* The same ending as the long runs above: a run this long fills the
 	 * arm log, which is the harness, not the firmware. */

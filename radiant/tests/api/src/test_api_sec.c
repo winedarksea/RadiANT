@@ -140,10 +140,10 @@ static void sec_run_slot(void)
 	zassert_not_null(tx, "no master slot was armed");
 	t_sync = tx->t_sync_at;
 
-	fake_radio_advance_to(t_sync + 1u);
+	fake_radio_advance_past_tx(t_sync);
 	zassert_true(tx->terminated, "the master's slot did not complete");
-	fake_radio_advance_to(t_sync + RADIANT_TRANSFER_SLOT_REPLY_US +
-			      RADIANT_TRANSFER_ACK_GUARD_US + 10u);
+	fake_radio_advance_past_close(t_sync + RADIANT_TRANSFER_SLOT_REPLY_US +
+			      RADIANT_TRANSFER_ACK_GUARD_US + 9u);
 }
 
 /*
@@ -331,7 +331,7 @@ ZTEST(api, test_sec_an_acknowledgement_carries_what_the_broadcast_put_on_air)
 
 	/* Let the master's own slot and its turnaround exist, then speak into
 	 * the turnaround as a slave sending acknowledged data. */
-	fake_radio_advance_to(t_tx + 1u);
+	fake_radio_advance_past_tx(t_tx);
 	sec_build_peer_frame(frame, RADIANT_CTRL_BURST_LAST_SEQ0);
 	zassert_equal(RADIANT_RADIO_OK_RC,
 		      fake_radio_air_frame(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US,
@@ -482,7 +482,7 @@ ZTEST(api, test_sec_a_pending_master_sends_nothing_in_the_clear)
 
 	/* Acknowledged data in that slot's turnaround: the ack would carry the
 	 * plaintext buffer, so there is none. */
-	fake_radio_advance_to(t_tx + 1u);
+	fake_radio_advance_past_tx(t_tx);
 	sec_build_peer_frame(frame, RADIANT_CTRL_BURST_LAST_SEQ0);
 	zassert_equal(RADIANT_RADIO_OK_RC,
 		      fake_radio_air_frame(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US,
@@ -668,7 +668,7 @@ static void sec_dir_air(radiant_time_t t_tx, const uint8_t pay[8])
 
 	sec_build_peer_frame(frame, RADIANT_CTRL_SLAVE_BROADCAST);
 	memcpy(&frame[7], pay, 8u);
-	fake_radio_advance_to(t_tx + 1u);
+	fake_radio_advance_past_tx(t_tx);
 	zassert_equal(RADIANT_RADIO_OK_RC,
 		      fake_radio_air_frame(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US,
 					   frame, SEC_AIR_LEN));
@@ -1116,7 +1116,7 @@ ZTEST(api, test_sec_policy_refused_while_master_answers_a_burst)
 	tx = sec_staged();
 	t_tx = tx->t_sync_at;
 
-	fake_radio_advance_to(t_tx + 1u);
+	fake_radio_advance_past_tx(t_tx);
 	sec_build_peer_frame(frame, RADIANT_CTRL_BURST_SEQ0);
 	zassert_equal(RADIANT_RADIO_OK_RC,
 		      fake_radio_air_frame(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US,
@@ -1295,7 +1295,7 @@ ZTEST(api, test_sec_an_identical_policy_disturbs_nothing)
 	zassert_true(antr_test_ack_payload(SEC_CH, after));
 	zassert_mem_equal(before, after, sizeof(before));
 
-	fake_radio_advance_to(t_tx + 1u);
+	fake_radio_advance_past_tx(t_tx);
 	zassert_true(tx->terminated);
 	zassert_equal(RADIANT_RADIO_STATUS_OK, tx->terminal_status,
 		      "the staged slot did not go out");
@@ -1379,7 +1379,7 @@ ZTEST(api, test_sec_a_rekey_takes_back_the_staged_slot_and_ack_payload)
 		      "the old key's ack payload is still offered");
 
 	/* Before any further pump: the staged slot's instant. */
-	fake_radio_advance_to(tx->t_sync_at + 1u);
+	fake_radio_advance_past_tx(tx->t_sync_at);
 	zassert_false(tx->terminated &&
 			      tx->terminal_status == RADIANT_RADIO_STATUS_OK,
 		      "the slot built under the old key went on the air");
@@ -1418,7 +1418,7 @@ ZTEST(api, test_sec_an_identical_key_disturbs_nothing)
 	zassert_true(antr_test_ack_payload(SEC_CH, after));
 	zassert_mem_equal(before, after, sizeof(before));
 
-	fake_radio_advance_to(t_tx + 1u);
+	fake_radio_advance_past_tx(t_tx);
 	zassert_true(tx->terminated);
 	zassert_equal(RADIANT_RADIO_STATUS_OK, tx->terminal_status,
 		      "the staged slot did not go out");

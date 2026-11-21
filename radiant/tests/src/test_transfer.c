@@ -1862,7 +1862,7 @@ ZTEST(transfer, test_the_receive_path_meets_the_turnaround_deadline)
 	zassert_false(rx_last);
 	zassert_mem_equal(rx_payload, peer_payload, RADIANT_TRANSFER_PKT_BYTES);
 
-	fake_radio_advance_to(arm->t_sync_at + 1u);
+	fake_radio_advance_past_tx(arm->t_sync_at);
 	/* 0x82 is not LAST, so it opened an inbound burst: the window for the
 	 * next packet follows the acknowledgement. */
 	zassert_equal(RADIANT_TRANSFER_STATE_WAIT_NEXT, radiant_transfer_state(&xfer));
@@ -1902,7 +1902,7 @@ ZTEST(transfer, test_received_acknowledged_data_is_answered_with_transfer_ack)
 	zassert_true(rx_last);
 	zassert_equal(0u, arm->follow_on_us);
 
-	fake_radio_advance_to(arm->t_sync_at + 1u);
+	fake_radio_advance_past_tx(arm->t_sync_at);
 	end_of_test();
 }
 
@@ -1991,7 +1991,7 @@ static uint64_t planned_turnaround(int32_t offset_us)
 	zassert_equal(RADIANT_CTRL_ACK_LAST_SEQ1, arm->body[BODY_CTRL]);
 	zassert_equal(1u, n_rx_data);
 
-	fake_radio_advance_to(arm->t_sync_at + 1u);
+	fake_radio_advance_past_tx(arm->t_sync_at);
 	zassert_equal(1u, radiant_transfer_stats(&xfer)->acks_sent);
 	zassert_equal(0u, radiant_transfer_stats(&xfer)->reply_plan_too_early);
 	return turnaround;
@@ -2149,7 +2149,7 @@ ZTEST(transfer, test_a_slot_opening_packet_is_acknowledged)
 	/* Let the armed reply actually go out. end_of_test() requires an idle
 	 * radio, and unlike the refusal this replaces there IS now a transmit
 	 * pending - which is the whole point of the test. */
-	fake_radio_advance_to(tx->t_sync_at + 1u);
+	fake_radio_advance_past_tx(tx->t_sync_at);
 	zassert_equal(RADIANT_TRANSFER_STATE_IDLE, radiant_transfer_state(&xfer));
 	end_of_test();
 }
@@ -2217,7 +2217,7 @@ ZTEST(transfer, test_a_non_final_slot_opening_packet_is_acknowledged)
 		      "got 0x%02X", tx->body[BODY_CTRL]);
 	zassert_false(radiant_ctrl_is_last(tx->body[BODY_CTRL]));
 
-	fake_radio_advance_to(tx->t_sync_at + 1u);
+	fake_radio_advance_past_tx(tx->t_sync_at);
 	/* A non-final packet opened an inbound burst; close it the way
 	 * antr_channel_close() does. */
 	zassert_equal(RADIANT_TRANSFER_STATE_WAIT_NEXT, radiant_transfer_state(&xfer));
@@ -2272,7 +2272,7 @@ ZTEST(transfer, test_the_acknowledgement_retransmission_limit)
 
 	arm = last_arm_of(FAKE_RADIO_ARM_TX);
 	zassert_not_null(arm);
-	fake_radio_advance_to(arm->t_sync_at + 1u);
+	fake_radio_advance_past_tx(arm->t_sync_at);
 
 	/* Attempt 1 has been made; twenty repeats remain. */
 	for (i = 1u; i < RADIANT_TRANSFER_REPLY_ATTEMPTS_MAX; i++) {
@@ -2287,7 +2287,7 @@ ZTEST(transfer, test_the_acknowledgement_retransmission_limit)
 		zassert_not_null(arm);
 		zassert_equal(RADIANT_CTRL_ACK_LAST_SEQ1, arm->body[BODY_CTRL]);
 		zassert_equal(0u, arm->follow_on_us);
-		fake_radio_advance_to(arm->t_sync_at + 1u);
+		fake_radio_advance_past_tx(arm->t_sync_at);
 	}
 
 	zassert_equal(RADIANT_TRANSFER_ESTATE,
@@ -2321,7 +2321,7 @@ ZTEST(transfer, test_an_ancient_acknowledgement_is_not_retransmitted)
 
 	arm = last_arm_of(FAKE_RADIO_ARM_TX);
 	zassert_not_null(arm);
-	fake_radio_advance_to(arm->t_sync_at + 1u);
+	fake_radio_advance_past_tx(arm->t_sync_at);
 
 	/* One retry interval later is the measured cadence and must be allowed,
 	 * so the staleness check cannot be mistaken for a stricter limit. */
@@ -2332,7 +2332,7 @@ ZTEST(transfer, test_an_ancient_acknowledgement_is_not_retransmitted)
 	commit();
 	arm = last_arm_of(FAKE_RADIO_ARM_TX);
 	zassert_not_null(arm);
-	fake_radio_advance_to(arm->t_sync_at + 1u);
+	fake_radio_advance_past_tx(arm->t_sync_at);
 
 	zassert_equal(RADIANT_TRANSFER_ESTATE,
 		      radiant_transfer_reply_retransmit(
@@ -2379,7 +2379,7 @@ ZTEST(transfer, test_a_failed_reply_is_judged_from_its_armed_time_not_its_t_sync
 	armed_for = arm->t_sync_at;
 	done_tx_t_sync_set = true;
 	done_tx_t_sync = armed_for + 4u * (radiant_time_t)RADIANT_TRANSFER_REPLY_VALID_US;
-	fake_radio_advance_to(armed_for + 1u);
+	fake_radio_advance_past_tx(armed_for);
 	zassert_equal(RADIANT_TRANSFER_STATE_IDLE, radiant_transfer_state(&xfer));
 	zassert_equal(0u, radiant_transfer_stats(&xfer)->acks_sent);
 
@@ -2392,7 +2392,7 @@ ZTEST(transfer, test_a_failed_reply_is_judged_from_its_armed_time_not_its_t_sync
 	commit();
 	arm = last_arm_of(FAKE_RADIO_ARM_TX);
 	zassert_not_null(arm);
-	fake_radio_advance_to(arm->t_sync_at + 1u);
+	fake_radio_advance_past_tx(arm->t_sync_at);
 
 	end_of_test();
 }
@@ -2796,7 +2796,7 @@ static radiant_time_t send_armed_ack(void)
 	zassert_not_null(tx);
 	zassert_true(radiant_ctrl_is_ack(tx->body[BODY_CTRL]), "0x%02X", tx->body[BODY_CTRL]);
 	at = tx->t_sync_at;
-	fake_radio_advance_to(at + 1u);
+	fake_radio_advance_past_tx(at);
 	return at;
 }
 
@@ -2852,7 +2852,7 @@ ZTEST(transfer, test_an_inbound_burst_is_followed_packet_by_packet)
 			break;
 		}
 		t_data = air_in_next_window(c[i + 1u], i + 1u);
-		fake_radio_advance_to(t_data + 100u);
+		fake_radio_advance_past_frame(t_data);
 		zassert_equal(RADIANT_TRANSFER_STATE_TX_REPLY,
 			      radiant_transfer_state(&xfer));
 	}
@@ -2902,7 +2902,7 @@ ZTEST(transfer, test_a_duplicate_is_reacknowledged_and_not_delivered)
 	 * the ACK that was lost, byte for byte. */
 	bcast_payload[0] ^= 0xFFu;
 	t = air_in_next_window(inbound_ctrl(0u, false), 0u);
-	fake_radio_advance_to(t + 100u);
+	fake_radio_advance_past_frame(t);
 	bcast_payload[0] ^= 0xFFu;
 
 	zassert_equal(RADIANT_TRANSFER_STATE_TX_REPLY, radiant_transfer_state(&xfer));
@@ -2917,7 +2917,7 @@ ZTEST(transfer, test_a_duplicate_is_reacknowledged_and_not_delivered)
 
 	/* And the next packet proper still goes up. */
 	t = air_in_next_window(inbound_ctrl(1u, true), 1u);
-	fake_radio_advance_to(t + 100u);
+	fake_radio_advance_past_frame(t);
 	zassert_equal(2u, n_rx_data);
 	zassert_true(rx_last);
 	(void)send_armed_ack();
@@ -3119,7 +3119,7 @@ ZTEST(transfer, test_abort_after_last_reports_nothing)
 	(void)inbound_open(inbound_ctrl(0u, false));
 	(void)send_armed_ack();
 	t = air_in_next_window(inbound_ctrl(1u, true), 1u);
-	fake_radio_advance_to(t + 100u);
+	fake_radio_advance_past_frame(t);
 	(void)send_armed_ack();
 	zassert_equal(RADIANT_TRANSFER_STATE_WAIT_NEXT, radiant_transfer_state(&xfer));
 
@@ -3226,7 +3226,7 @@ ZTEST(transfer, test_a_muted_burst_packet_is_reacknowledged_on_its_retry)
 	(void)inbound_open(inbound_ctrl(0u, false));
 	(void)send_armed_ack();
 	t1 = air_in_next_window(inbound_ctrl(1u, false), 1u);
-	fake_radio_advance_to(t1 + 100u);
+	fake_radio_advance_past_frame(t1);
 
 	zassert_equal(2u, n_rx_data);
 	zassert_equal(1u, fake_radio_stats()->arms_tx);
@@ -3237,7 +3237,7 @@ ZTEST(transfer, test_a_muted_burst_packet_is_reacknowledged_on_its_retry)
 
 	/* The peer's retry of packet 1: same sequence bit. */
 	t = air_in_next_window(inbound_ctrl(1u, false), 1u);
-	fake_radio_advance_to(t + 100u);
+	fake_radio_advance_past_frame(t);
 	zassert_equal(RADIANT_TRANSFER_STATE_TX_REPLY, radiant_transfer_state(&xfer));
 	tx = last_arm_of(FAKE_RADIO_ARM_TX);
 	zassert_equal(t + RADIANT_TRANSFER_REPLY_US, tx->t_sync_at);
@@ -3249,7 +3249,7 @@ ZTEST(transfer, test_a_muted_burst_packet_is_reacknowledged_on_its_retry)
 	/* And the burst completes. */
 	(void)send_armed_ack();
 	t = air_in_next_window(inbound_ctrl(2u, true), 2u);
-	fake_radio_advance_to(t + 100u);
+	fake_radio_advance_past_frame(t);
 	(void)send_armed_ack();
 	fake_radio_advance_to(radiant_radio_now() + 5000u);
 	zassert_equal(RADIANT_TRANSFER_STATE_IDLE, radiant_transfer_state(&xfer));
@@ -3285,7 +3285,7 @@ ZTEST(transfer, test_a_deaf_burst_packet_is_delivered_on_its_retry)
 
 	(void)send_armed_ack();
 	t = air_in_next_window(inbound_ctrl(1u, true), 1u);
-	fake_radio_advance_to(t + 100u);
+	fake_radio_advance_past_frame(t);
 	zassert_equal(2u, n_rx_data);
 	tx = last_arm_of(FAKE_RADIO_ARM_TX);
 	zassert_equal(t + RADIANT_TRANSFER_REPLY_US, tx->t_sync_at);

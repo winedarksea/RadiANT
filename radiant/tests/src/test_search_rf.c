@@ -119,7 +119,7 @@ static int win_open(void)
 
 static void win_run(void)
 {
-	fake_radio_advance_to(g_close + 1u);
+	fake_radio_advance_past_close(g_close);
 	radiant_search_tick(&g_s, radiant_radio_now());
 }
 

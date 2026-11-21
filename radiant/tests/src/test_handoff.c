@@ -166,7 +166,7 @@ static void win_run(void)
 	const struct fake_radio_arm *a = fake_radio_arm_for_op(g_op);
 
 	zassert_not_null(a);
-	fake_radio_advance_to(a->t_close + 1u);
+	fake_radio_advance_past_close(a->t_close);
 	g_windows_run++;
 	radiant_search_tick(&g_s, radiant_radio_now());
 }

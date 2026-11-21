@@ -233,7 +233,9 @@ min_scenarios: 28
 # (two CC26x2 band cases in test_fake_radio.c, two band-arm cases in test_sched.c).
 # 2026-11-20: +6 (item 7 step 4, the nRF preset's ADR 0022 wildcard): +1 per api
 # scenario (test_a_short_match_scan_hears_any_device_number_in_one_window).
-min_testcases: 8050
+# 2026-11-20: +12 (item 7 step 5, delivery delays from the preset): +2 per unit scenario
+# (the nRF and CC26x2 delivery instants in test_fake_radio.c).
+min_testcases: 8062
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -265,13 +267,13 @@ min_testcases: 8050
 # RNG scalar, counter before the draw, failed and all-zero draws; item 8).
 # no_pairing compiles them out.
 # 2026-11-20: +4 per unit scenario (HAL drift item 5 settled: fake_radio x3, ED chunk cap).
-min_cases.radiant.unit: 1125
-min_cases.radiant.unit.sec_modes: 1125
-min_cases.radiant.unit.no_pairing: 1061
+min_cases.radiant.unit: 1127
+min_cases.radiant.unit.sec_modes: 1127
+min_cases.radiant.unit.no_pairing: 1063
 # radiant.unit.pairing_no_rng: 1218, the observed count on sec/item8-pair-rng
 # (2026-11-20), including test_pair_begin_without_an_rng_uses_the_kdf_scalar.
 # +4 (HAL drift item 5 settled, as radiant.unit).
-min_cases.radiant.unit.pairing_no_rng: 1228
+min_cases.radiant.unit.pairing_no_rng: 1230
 min_cases.radiant.api: 87
 min_cases.radiant.api.sec: 91
 # +1 with the identical-0xF1 retry case (review 2026-11-17 item 4).
@@ -328,7 +330,7 @@ min_cases.treadmill.hr_rx: 3
 # 2026-11-20: +6 (bridge_trace review follow-ups, as radiant.unit).
 # 2026-11-20: +4 (node_ident pair_begin RNG cases, as radiant.unit).
 # 2026-11-20: +4 (HAL drift item 5 settled, as radiant.unit).
-min_cases.radiant.unit.ack_faults: 1132
+min_cases.radiant.unit.ack_faults: 1134
 # radiant.unit.diag: the unit suites with CONFIG_RADIANT_DIAG_COUNTERS.
 # 1127 (2026-11-16, Bluefin twister on fix/diag-page9-done-cb): the observed
 # count, including the four page-9/page-12 scheduler cases.
@@ -343,7 +345,7 @@ min_cases.radiant.unit.ack_faults: 1132
 # 2026-11-20: +6 (bridge_trace review follow-ups, as radiant.unit).
 # 2026-11-20: +4 (node_ident pair_begin RNG cases, as radiant.unit).
 # 2026-11-20: +4 (HAL drift item 5 settled, as radiant.unit).
-min_cases.radiant.unit.diag: 1203
+min_cases.radiant.unit.diag: 1205
 min_cases.trainer.model: 14
 # radiant.lp_clock (power plan pass B2): the low-power timebase arithmetic,
 # 31 unit cases and seven 100 000-cycle drift simulations (three of them

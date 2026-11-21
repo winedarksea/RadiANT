@@ -61,7 +61,7 @@
  *           struct radiant_rx_req req = { ... .t_open = t - 500, .t_close = t + 500 };
  *           uint32_t op;
  *           zassert_ok(radiant_radio_rx(&req, &op));
- *           fake_radio_advance_to(req.t_close + 1u);
+ *           fake_radio_advance_past_close(req.t_close);
  *
  *           zassert_true(fake_radio_is_idle(), "%s", fake_radio_busy_reason());
  *           zassert_equal(0u, fake_radio_viol_count(), "%s",
@@ -470,6 +470,15 @@ void fake_radio_advance(uint64_t us);
  * terminal delay. The hardware-shaped replacement for advance_to(t_close + 1),
  * which on a backend with a receiver hold (CC26x2) stops short of the end. */
 void fake_radio_advance_past_close(radiant_time_t t_close);
+
+/* The same for the transmit armed for t_sync, now or by the time the clock
+ * reaches t_sync: one microsecond past its terminal (t_sync + the transmit
+ * terminal delay); t_sync + 1 if no such transmit is armed. */
+void fake_radio_advance_past_tx(radiant_time_t t_sync);
+
+/* The same for a frame queued on the air at t_sync: one microsecond past its
+ * event (t_sync + the frame delay, if the armed window will hear it). */
+void fake_radio_advance_past_frame(radiant_time_t t_sync);
 void fake_radio_advance_to(radiant_time_t t);
 
 /* The instant of the next event the mock would fire, or RADIANT_TIME_NEVER if
@@ -533,6 +542,23 @@ void fake_radio_set_rx_terminal_delay_us(uint32_t delay);
  * the rest of the frame on air plus ISR latency: on hardware a
  * STOP_ON_FIRST window ends at the frame's END, not its ADDRESS. Default 0. */
 void fake_radio_set_rx_frame_delay_us(uint32_t delay);
+
+/* Deliver a transmit's terminal this far after its t_sync (the frame's END
+ * plus ISR on hardware). The radio stays busy until then. */
+void fake_radio_set_tx_terminal_delay_us(uint32_t delay);
+
+/*
+ * The delivery delays default from the preset (backend drift item 7):
+ *   - nRF: empty terminal 149 us past t_close (measured on the nRF54L15); a
+ *     frame's event and a transmit's terminal at the frame's END (body + CRC
+ *     at 8 us a byte past t_sync) + 37 us;
+ *   - CC26x2: empty terminal 60 us past the 508 us hold (SWI, an estimate);
+ *     frames and transmits at END + 123 us (the measured per-entry drain);
+ *   - RAIL: 0, punctual.
+ * The three knobs above override with a constant; this puts the preset's
+ * model back (what a test that changed them restores at its end).
+ */
+void fake_radio_restore_delays(void);
 
 /* A ready-made two-PHY list: 1 M first (required of any ANT+-compatible
  * backend), then the coded PHY. Both presets still default to 1 M alone;
