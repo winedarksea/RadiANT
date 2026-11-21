@@ -889,6 +889,7 @@ void radiant_sec_epoch_wanted(uint8_t ch, uint32_t epoch);
  *     dropped. Switches, W and page range stay; the on-air device number
  *     restarts at base_devnum (as on a fresh context), ending any Tier 2
  *     trial (radiant_sec_try_devnum()). The same-root no-op keeps it.
+ *     radiant_sec_key_replacing() is called before the old root goes.
  *
  * A failed import leaves the existing context exactly as it was.
  */
@@ -926,6 +927,18 @@ int  radiant_sec_configure(uint8_t ch, uint8_t switches, uint8_t w,
  * otherwise takes back that master's staged slot and ack payload.
  */
 int  radiant_sec_policy_changing(uint8_t ch);
+
+/*
+ * Port hook: radiant_sec_set_key() is about to replace channel `ch`'s root
+ * with a different root or base device number - a real rekey, never a first
+ * key or the same-root no-op. Called after the import check and before the
+ * old root is destroyed, under the port's lock; it cannot refuse (a port that
+ * must refuse a rekey does so before calling set_key). Weak, a no-op, by
+ * default. The antr port acts only inside its 0xF2 path (antr_sec_key_set()):
+ * on a secured master it takes back the staged slot and ack payload, both
+ * ciphertext under the old keys (review 2026-11-20 item C).
+ */
+void radiant_sec_key_replacing(uint8_t ch);
 
 /*
  * Set the epoch and anchor its phase.

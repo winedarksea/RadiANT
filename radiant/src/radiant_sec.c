@@ -501,6 +501,11 @@ __weak int radiant_sec_policy_changing(uint8_t ch)
 	return RADIANT_SEC_OK;
 }
 
+__weak void radiant_sec_key_replacing(uint8_t ch)
+{
+	ARG_UNUSED(ch);
+}
+
 /* ── Configuration ──────────────────────────────────────────────────────── */
 
 static void q_purge(uint8_t ch);
@@ -610,6 +615,10 @@ int radiant_sec_set_key(uint8_t ch, const uint8_t *root, size_t bits,
 		if (same && base_devnum == c->base_devnum) {
 			return RADIANT_SEC_OK;
 		}
+		/* A real rekey: the port takes back what it built under the
+		 * old root while that root still stands (review 2026-11-20
+		 * item C). */
+		radiant_sec_key_replacing(ch);
 		radiant_sec_key_destroy(&c->k_root);
 	}
 
