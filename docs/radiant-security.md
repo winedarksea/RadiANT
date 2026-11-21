@@ -658,6 +658,22 @@ receiver stages no secured slot. A master busy with a transfer is refused (see
 through. A node that wants plaintext beside protected pages has two ways to
 get it: put those pages outside the secured range, or use `X_AUTH` alone.
 
+**A rekey takes back the old key's slot before `0xF2` answers** (review
+2026-11-20, item C). The staged slot and the acknowledgement payload of a
+keyed, secured master are ciphertext under the old root's keys: readable, and
+under `X_AUTH` verifiable, by whoever holds that root, which a rekey is often
+meant to revoke. A `0xF2` that installs a different root (or a different base
+device number) on such a master now takes both back the same way, before the
+old root is destroyed and before it answers. The new root leaves the channel
+pending, so nothing more goes out in the secured range until the `0xF3` that
+follows. A `0xF2` re-sending the root already installed takes nothing back. A
+slave, a master with no switch on (its slot is plaintext the policy already
+allows) and the pairing exchange, which installs its keys inside its own
+exchange on the channel, are left alone. The busy refusal comes first, so a
+refused `0xF2` changes nothing. The boundary is the same as for `0xF1`: a frame
+already on the air is cut short on nRF, and the TI backend's asynchronous
+`RF_flushCmd` may let it complete.
+
 **The host is the authority for the roots it installs** (owner, 2026-11-16).
 `0xF2` and `0xF3` do not check one channel against another. A host that keys
 two live channels with one root and one base device number and gives them the
