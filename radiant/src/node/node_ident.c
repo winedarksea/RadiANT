@@ -948,23 +948,19 @@ int node_ident_pair_window_open(uint32_t *ctr_out)
 	return NODE_IDENT_OK;
 }
 
-int node_ident_pair_scalar(uint8_t out[NODE_IDENT_PAIR_SCALAR_BYTES])
+/*
+ * The gate in front of every scalar source: an open window whose counter is
+ * already in storage (not cached/queued). `!=` not `<` - a stored counter
+ * ahead means some other path moved it, and a scalar under a stale window
+ * would be the repeat the counter exists to prevent.
+ */
+static int pair_ctr_durable(void)
 {
 	uint32_t stored = 0u;
 
-	if (out == NULL) {
-		return NODE_IDENT_EINVAL;
-	}
-	if (!s.booted || !s.have_k_dev) {
-		return NODE_IDENT_ESTATE;
-	}
 	if (!s.window_open) {
 		return NODE_IDENT_ESTATE;
 	}
-
-	/* The gate: the derivation counter must already be in storage (not
-	 * cached/queued). `!=` not `<` - a stored counter ahead means some
-	 * other path moved it, and deriving under a stale value repeats it. */
 	if (node_nvm_load(NODE_NVM_KEY_PAIR, &stored,
 			  sizeof(stored)) != NODE_NVM_OK) {
 		return NODE_IDENT_EIO;
@@ -972,7 +968,23 @@ int node_ident_pair_scalar(uint8_t out[NODE_IDENT_PAIR_SCALAR_BYTES])
 	if (stored != s.scalar_ctr) {
 		return NODE_IDENT_EIO;
 	}
+	return NODE_IDENT_OK;
+}
 
+int node_ident_pair_scalar(uint8_t out[NODE_IDENT_PAIR_SCALAR_BYTES])
+{
+	int rc;
+
+	if (out == NULL) {
+		return NODE_IDENT_EINVAL;
+	}
+	if (!s.booted || !s.have_k_dev) {
+		return NODE_IDENT_ESTATE;
+	}
+	rc = pair_ctr_durable();
+	if (rc != NODE_IDENT_OK) {
+		return rc;
+	}
 	return node_ident_pair_derive(s.k_dev, s.scalar_ctr, s.devnum, out);
 }
 
@@ -1015,11 +1027,24 @@ int node_ident_pair_begin(uint8_t ch, uint8_t timeout_s)
 		return NODE_IDENT_EIO;
 	}
 
-	/* 3. Derive the scalar (gated on step 1 having reached storage). Host
-	 * branch unreachable here (no host); RNG branch is left to a build
-	 * with caps.has_rng, which fills `scalar` itself after step 1. */
-	rc = node_ident_pair_scalar(scalar);
+	/* 3. The scalar, gated on step 1 having reached storage. No host here,
+	 * so ADR 0009's precedence leaves the RNG when caps.has_rng says one
+	 * exists and the KDF otherwise. A failed draw, or one that "succeeded"
+	 * with nothing in the buffer, closes the window; the counter stays
+	 * burnt. */
+	if (node_ident_scalar_src(false, radiant_sec_caps()->has_rng) ==
+	    NODE_IDENT_SCALAR_RNG) {
+		rc = pair_ctr_durable();
+		if (rc == NODE_IDENT_OK &&
+		    (radiant_sec_rng(scalar, sizeof(scalar)) != RADIANT_SEC_OK ||
+		     key_is_all_zero(scalar, sizeof(scalar)))) {
+			rc = NODE_IDENT_EIO;
+		}
+	} else {
+		rc = node_ident_pair_scalar(scalar);
+	}
 	if (rc != NODE_IDENT_OK) {
+		radiant_sec_wipe(scalar, sizeof(scalar));
 		radiant_sec_pair_leave(ch);
 		node_ident_pair_window_close();
 		return rc;

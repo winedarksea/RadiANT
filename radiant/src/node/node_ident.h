@@ -300,11 +300,14 @@ void node_ident_pair_window_close(void);
 #if defined(CONFIG_RADIANT_SEC_PAIRING_X25519)
 /*
  * The whole sequence for a channel: open the window (counter advances and is
- * persisted), derive, hand the scalar to radiant, enter pairing mode. Any
+ * persisted), enter pairing mode, obtain the scalar, hand it to radiant. The
+ * scalar follows ADR 0009's precedence with no host: radiant_sec_rng() when
+ * caps.has_rng, else node_ident_pair_scalar()'s KDF. A failed or all-zero
+ * draw is NODE_IDENT_EIO with the window closed and the counter burnt. Any
  * failure leaves the channel not pairing. Order is load-bearing and asserted
- * in the suite: counter is in NVM before radiant_sec_pair_set_scalar() (which
- * computes the public key) is called. Needs api_lock: see THREAD SAFETY at
- * the top of this file.
+ * in the suite: counter is in NVM before the scalar is drawn or derived and
+ * before radiant_sec_pair_set_scalar() (which computes the public key) is
+ * called. Needs api_lock: see THREAD SAFETY at the top of this file.
  */
 int node_ident_pair_begin(uint8_t ch, uint8_t timeout_s);
 
