@@ -144,6 +144,76 @@ ZTEST(radiant_backend_arm_handback, test_arm_preempted_by_grant_end)
 	}
 }
 
+/*
+ * Risk (review 2026-11-19, TODO "EXTEND_FAILED ... can abort a successor
+ * staged behind a held grant"): the old operation ends early in a growing
+ * grant with the release owed (grant_release_after_core()); the follow-on,
+ * armed from the dispatch, misses the held air and is staged behind a new
+ * request (GATE_PENDING). Once the arm's staged branch has cleared the arming
+ * mark (arm_settle_staged()) and before the owed release is paid
+ * (d2_settle_now() on a D2 build, grant_release_settle() after the dispatch
+ * otherwise), the grant's TIMER0 compare asks EXTEND; on refusal
+ * radiant_radio_abort() from the signal aborted the staged successor: ABORTED
+ * for air it never had and its request forgotten (one slot lost).
+ *
+ * The abort is for the grant that just ended. A staged successor never had
+ * that grant's air: it must stay staged, its request still placed, and end
+ * with exactly one terminal from its own grant. Swept over every preemption
+ * point of the staged transmit, receive and energy-detect arm, and the point
+ * after the arm returns; radiant.backend.d2 runs it with d2_settle_now().
+ */
+ZTEST(radiant_backend_arm_handback, test_staged_successor_survives_extend_failed)
+{
+	for (int late = 0; late <= 1; late++) {
+	for (int kind = BACKEND_ARM_TX; kind <= BACKEND_ARM_ED; kind++) {
+		uint32_t points = 0u;
+		uint32_t unmarked_staged = 0u;
+		bool     after_arm = false;
+
+		if (late && kind == BACKEND_ARM_ED) {
+			continue;   /* refused before the gate */
+		}
+		for (uint32_t n = 1u; n <= 24u; n++) {
+			struct backend_preempt_result r;
+
+			backend_preempt_staged_in_grant(kind, n, late != 0, &r);
+			if (!r.fired) {
+				break;
+			}
+			points++;
+			if (r.staged_at_fire && !r.marked_at_fire) {
+				unmarked_staged++;
+			}
+			after_arm |= r.fired_after_arm;
+			zassert_equal(r.rc, RADIANT_RADIO_OK_RC, "%s late %d n %u: rc %d",
+				      kn[kind], late, n, r.rc);
+			zassert_true(r.staged_path && r.staged_after_arm,
+				     "%s late %d n %u: not staged", kn[kind], late, n);
+			zassert_equal(r.aborted_final, 0u,
+				      "%s late %d n %u: ABORTED for air it never had",
+				      kn[kind], late, n);
+			zassert_equal(r.forgets_after_point, 0u,
+				      "%s late %d n %u: its request forgotten", kn[kind], late, n);
+			zassert_true(r.staged_after_point && r.req_pending_after_point,
+				     "%s late %d n %u: no longer staged behind its request",
+				     kn[kind], late, n);
+			zassert_equal(r.terminals_final, 1u, "%s late %d n %u: %u terminals",
+				      kn[kind], late, n, r.terminals_final);
+			zassert_true(r.op_idle_final, "%s late %d n %u: the slot is wedged",
+				     kn[kind], late, n);
+			zassert_false(r.conns_final, NULL);
+			zassert_equal(r.next_rc, RADIANT_RADIO_OK_RC, NULL);
+		}
+		zassert_true(points > 0u, "%s late %d: no preemption point", kn[kind], late);
+		/* The gap itself: past the settle, the mark gone, the arm staged. */
+		zassert_true(unmarked_staged > 0u, "%s late %d: the gap was never reached",
+			     kn[kind], late);
+		zassert_true(after_arm, "%s late %d: the point after the arm never ran",
+			     kn[kind], late);
+	}
+	}
+}
+
 ZTEST(radiant_backend_arm_handback, test_staged_arm_refused_while_staging)
 {
 	for (int late = 0; late <= 1; late++) {
@@ -190,6 +260,48 @@ ZTEST(radiant_backend_arm_handback, test_handback_disables_live_connections)
 	zassert_equal(r.rc, RADIANT_RADIO_OK_RC, "the last point is after the span");
 	zassert_false(r.conns_after_arm, "a window connection survived the hand-back");
 	zassert_equal(r.terminals_final, 1u, NULL);
+}
+
+/*
+ * Risk (TODO "DPPI hand-back order", 2026-11-14; closed by a8ad20d): beside
+ * OpenThread the grant-boundary endpoint swap moves only PUBLISH_ADDRESS and
+ * SUBSCRIBE_RXEN, so RADIO SUBSCRIBE_DISABLE/TXEN/RSSISTART stay wired to
+ * radiant's DPPI channels between grants. EXTEND_FAILED and the extension
+ * skip hand the radio back (timer0_disarm()) before radiant_radio_abort()
+ * disables the operation's connections, and a TIMER0 END that cuts a live
+ * operation leaves them until the gate's DENIED. A start or close compare in
+ * that gap fired TXEN or DISABLE on the 802.15.4 driver's radio. The four
+ * window connections must be off at the hand-back itself, before any abort,
+ * on every END shape (plain, and hand-back-then-abort) of a live receive and
+ * transmit.
+ */
+ZTEST(radiant_backend_arm_handback, test_handback_disables_connections_before_abort)
+{
+	static const int modes[] = { BACKEND_PRE_END, BACKEND_PRE_ABORT_END };
+
+	for (int kind = BACKEND_ARM_TX; kind <= BACKEND_ARM_RX; kind++) {
+	for (size_t m = 0u; m < ARRAY_SIZE(modes); m++) {
+		struct backend_preempt_result r;
+
+		/* The last point: the arm programmed, the operation live. */
+		for (uint32_t n = 24u; n > 0u; n--) {
+			backend_preempt_arm(kind, modes[m], n, false, true, &r);
+			if (r.fired) {
+				break;
+			}
+		}
+		zassert_true(r.fired, "%s %s", kn[kind], mn[modes[m]]);
+		zassert_equal(r.rc, RADIANT_RADIO_OK_RC, "%s %s: not past the span",
+			      kn[kind], mn[modes[m]]);
+		/* Positive control: the live operation had its window wired. */
+		zassert_true(r.conns_before_handback, "%s %s: nothing was connected",
+			     kn[kind], mn[modes[m]]);
+		zassert_false(r.conns_at_handback,
+			      "%s %s: a window connection outlived the hand-back",
+			      kn[kind], mn[modes[m]]);
+		zassert_equal(r.terminals_final, 1u, "%s %s", kn[kind], mn[modes[m]]);
+	}
+	}
 }
 
 /*

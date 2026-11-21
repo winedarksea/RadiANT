@@ -11,6 +11,20 @@ tests:
       - native_sim
     integration_platforms:
       - native_sim
+  radiant.backend.d2:
+    # The same suite with CONFIG_RADIANT_GATE_MPSL_D2 (ADR 0018, default y on
+    # every MPSL gate): the arm's staged branches pay an owed release in
+    # d2_settle_now(), so test_arm_handback.c's staged-successor case runs
+    # through it. The gate stays stubbed; booking is reported off.
+    tags:
+      - radiant
+      - mpsl
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    extra_configs:
+      - CONFIG_RADIANT_GATE_MPSL_D2=y
   radiant.backend.lp:
     # CONFIG_RADIANT_NRF_LOW_POWER (power plan pass B3): the backend's HFXO
     # release and two-edge wake against a simulated GRTC, HFXO and TIMER.

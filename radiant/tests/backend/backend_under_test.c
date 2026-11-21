@@ -31,6 +31,9 @@ static const uint32_t SystemCoreClock = 64000000u;
 #define RADIANT_NRF_REG_SHADOW 1
 /* The ED sweep, so test_arm_cache.c can check that program_ed() invalidates the shadow. */
 #define CONFIG_RADIANT_ED_SCAN 1
+/* radiant.backend.d2 sets CONFIG_RADIANT_GATE_MPSL_D2 (Kconfig: it selects
+ * the HAL's booking fields), ADR 0018's d2 as on every shipping MPSL image, so
+ * the staged branches run d2_settle_now(). */
 
 #undef DT_CHOSEN
 #undef DT_NODE_EXISTS
@@ -71,6 +74,7 @@ static struct {
 	bool     req_pending;  /* a request placed and not yet answered (g.pending) */
 	bool     deny_wanted;  /* a denial queued for gate_wq (g.deny_wanted) */
 	bool     answered_pending; /* the last gate_acquire() said GATE_PENDING */
+	uint32_t forgets;      /* gate_forget_pending() calls */
 } fg;
 
 static void pre_at_acquire(void);
@@ -87,7 +91,23 @@ void gate_release(void)
 	fg.held = false;
 	fg.gen = (fg.gen + 1u) & ~1u;
 }
-void gate_forget_pending(void) { fg.req_pending = false; }
+void gate_forget_pending(void) { fg.forgets++; fg.req_pending = false; }
+#if defined(CONFIG_RADIANT_GATE_MPSL_D2)
+/* radiant.backend.d2: the booking API, never exercised here (no second
+ * session); only d2_settle_now() in the arm's staged branch is under test. */
+bool gate_booking(void) { return false; }
+int gate_book(radiant_time_t t_from, radiant_time_t t_to, uint16_t follow_on_us)
+{
+	ARG_UNUSED(t_from); ARG_UNUSED(t_to); ARG_UNUSED(follow_on_us);
+	return GATE_BOOK_ENOTSUP;
+}
+int gate_book_tail(radiant_time_t t_from, radiant_time_t t_to, uint16_t follow_on_us,
+		   uint16_t tail_us)
+{
+	ARG_UNUSED(tail_us);
+	return gate_book(t_from, t_to, follow_on_us);
+}
+#endif
 bool gate_extend(uint32_t us) { ARG_UNUSED(us); return false; }
 int gate_init(void) { return RADIANT_RADIO_OK_RC; }
 void gate_shutdown(void) {}
@@ -146,6 +166,8 @@ void radiant_swi_pend(uint32_t bits) { ARG_UNUSED(bits); }
 
 /* The core's callback: records, and arms a follow-on if the test asked. */
 static struct backend_probe bp;
+/* ABORTED terminals delivered to the callbacks (test_arm_handback.c). */
+static uint32_t cb_aborted;
 
 static void arm_follow_on_if_asked(void)
 {
@@ -163,6 +185,7 @@ static void cb_rx(const struct radiant_rx_event *evt, void *user)
 	ARG_UNUSED(user);
 	bp.rx_events++;
 	bp.last_rx_status = evt->status;
+	cb_aborted += (evt->status == RADIANT_RADIO_STATUS_ABORTED) ? 1u : 0u;
 	bp.last_rx_body_len = evt->body_len;
 	memset(bp.last_rx_body, 0, sizeof(bp.last_rx_body));
 	if (evt->body != NULL) {
@@ -183,6 +206,7 @@ static void cb_tx(const struct radiant_tx_event *evt, void *user)
 	ARG_UNUSED(user);
 	bp.tx_events++;
 	bp.last_tx_status = evt->status;
+	cb_aborted += (evt->status == RADIANT_RADIO_STATUS_ABORTED) ? 1u : 0u;
 	bp.last_tx_t_sync = evt->t_sync;
 	bp.last_tx_t_sync_exact = evt->t_sync_exact;
 	arm_follow_on_if_asked();
@@ -193,9 +217,9 @@ static void cb_tx(const struct radiant_tx_event *evt, void *user)
 
 static void cb_ed(const struct radiant_ed_event *evt, void *user)
 {
-	ARG_UNUSED(evt);
 	ARG_UNUSED(user);
 	bp.ed_events++;
+	cb_aborted += (evt->status == RADIANT_RADIO_STATUS_ABORTED) ? 1u : 0u;
 }
 
 static const struct radiant_radio_cbs bcbs = { .rx = cb_rx, .tx = cb_tx, .ed = cb_ed };
@@ -209,6 +233,7 @@ void backend_reset(void)
 	memset(&fake_hw, 0, sizeof(fake_hw));
 	memset(&fg, 0, sizeof(fg));
 	memset(&bp, 0, sizeof(bp));
+	cb_aborted = 0u;
 	memset(&radiant_op, 0, sizeof(radiant_op));
 	memset(&radiant_staged, 0, sizeof(radiant_staged));
 	memset(radiant_rx_buf, 0, sizeof(radiant_rx_buf));
@@ -662,7 +687,10 @@ static struct {
 	bool     fired;
 	bool     busy;
 	bool     marked_at_fire;
+	bool     staged_at_fire;  /* radiant_staged.pending when the event came */
 	bool     handed_back;
+	uint32_t conns_before_handback; /* fake_hw.conn_on as the hand-back began */
+	uint32_t conns_at_handback;     /* ... and as on_grant_end() returned */
 	bool     second;     /* BACKEND_PRE_DENY_THEN_START's START, still to fire */
 	uint32_t writes_at_handback;
 	NRF_RADIO_Type regs_at_handback;
@@ -679,7 +707,10 @@ static void pre_hand_back(void)
 {
 	fg.gen = (fg.gen + 1u) & ~1u;
 	fg.held = false;
+	pre.conns_before_handback = fake_hw.conn_on;
 	radiant_nrf_gate_on_grant_end();
+	/* The moment the other stack has the RADIO: before any abort. */
+	pre.conns_at_handback = fake_hw.conn_on;
 	fg.deny_wanted = true;
 }
 
@@ -719,6 +750,7 @@ static void pre_fire(void)
 	pre.busy = true;
 	pre.fired = true;
 	pre.marked_at_fire = arm_marked;
+	pre.staged_at_fire = radiant_staged.pending;
 	switch (pre.mode) {
 	case BACKEND_PRE_END:
 		/* SIGNAL_TIMER0's end, or a release's: hand-back, ACTION_END. */
@@ -879,8 +911,24 @@ static uint32_t pre_terminals(void)
 	return bp.rx_events + bp.tx_events + bp.ed_events + core_cb_head;
 }
 
-void backend_preempt_arm(int kind, int mode, uint32_t n, bool late, bool held,
-			 struct backend_preempt_result *out)
+/* ABORTED terminals, queued (the signal's) or delivered. */
+static uint32_t pre_aborted(void)
+{
+	uint32_t a = 0u;
+
+	for (uint32_t i = 0u; i < core_cb_head && i < CORE_CB_RING; i++) {
+		const struct core_cb_entry *e = &core_cb_q[i];
+		const int st = (e->kind == CORE_CB_RX) ? (int)e->ev.rx.status
+			     : (e->kind == CORE_CB_TX) ? (int)e->ev.tx.status
+						       : (int)e->ev.ed.status;
+
+		a += (st == RADIANT_RADIO_STATUS_ABORTED) ? 1u : 0u;
+	}
+	return a;
+}
+
+static void preempt_run(int kind, int mode, uint32_t n, bool late, bool held,
+			bool staged_in_grant, struct backend_preempt_result *out)
 {
 	radiant_time_t t;
 
@@ -903,14 +951,45 @@ void backend_preempt_arm(int kind, int mode, uint32_t n, bool late, bool held,
 	fg.gen = held ? 7u : 8u;
 	t = radiant_radio_now() + (late ? 10u : 1500u);
 
+	if (staged_in_grant) {
+		/* An arm from the completion's dispatch inside a held grant whose
+		 * operation ended early with its release owed
+		 * (grant_release_after_core()); its air lies past the held
+		 * grant, so the gate places a new request (GATE_PENDING). */
+		fg.pending = true;
+		grant_release_owed = true;
+		core_cb_depth = 1u;
+	}
+
 	pre.at = n;
 	pre.mode = mode;
 	out->rc = pre_arm(kind, t);
+	if (staged_in_grant) {
+		out->staged_after_arm = radiant_staged.pending &&
+					radiant_op.kind != OP_NONE;
+		/* One point past the arm: the rest of the dispatch, before
+		 * grant_release_settle() pays a release still owed (every
+		 * build without d2_settle_now()). */
+		if (!pre.fired && pre.at != 0u && ++pre.n == pre.at) {
+			pre_fire();
+			out->fired_after_arm = true;
+		}
+		out->staged_after_point = radiant_staged.pending &&
+					  radiant_op.kind != OP_NONE;
+		out->req_pending_after_point = fg.req_pending;
+		out->forgets_after_point = fg.forgets;
+		out->aborted_after_point = pre_aborted() + cb_aborted;
+		fg.pending = false;
+		core_cb_depth = 0u;
+	}
 	pre.at = 0u;
 	pre.second = false;
 	out->staged_path = fg.answered_pending;
 	out->fired = pre.fired;
 	out->marked_at_fire = pre.marked_at_fire;
+	out->staged_at_fire = pre.staged_at_fire;
+	out->conns_before_handback = (pre.conns_before_handback & PRE_WINDOW_CONNS) != 0u;
+	out->conns_at_handback = (pre.conns_at_handback & PRE_WINDOW_CONNS) != 0u;
 	out->radio_written_after_handback =
 		pre.handed_back &&
 		(fake_hw.radio_writes != pre.writes_at_handback ||
@@ -936,6 +1015,7 @@ void backend_preempt_arm(int kind, int mode, uint32_t n, bool late, bool held,
 	out->conns_final = (fake_hw.conn_on & PRE_WINDOW_CONNS) != 0u;
 	out->op_idle_final = radiant_op.kind == OP_NONE;
 	out->terminals_final = pre_terminals();
+	out->aborted_final = pre_aborted() + cb_aborted;
 
 	/* And the slot is usable: the next arm, in a fresh grant, is taken. */
 	fg.gen = (fg.gen + 2u) | 1u;
@@ -944,3 +1024,14 @@ void backend_preempt_arm(int kind, int mode, uint32_t n, bool late, bool held,
 	out->next_rc = pre_arm(BACKEND_ARM_TX, radiant_radio_now() + 1500u);
 }
 
+void backend_preempt_arm(int kind, int mode, uint32_t n, bool late, bool held,
+			 struct backend_preempt_result *out)
+{
+	preempt_run(kind, mode, n, late, held, false, out);
+}
+
+void backend_preempt_staged_in_grant(int kind, uint32_t n, bool late,
+				     struct backend_preempt_result *out)
+{
+	preempt_run(kind, BACKEND_PRE_ABORT_END, n, late, true, true, out);
+}
