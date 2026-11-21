@@ -211,24 +211,40 @@ static void *api_setup(void)
 /* Channel type open_background_scan_channel() assigns; reset per test. */
 static uint8_t bg_scan_type;
 
-static void api_before(void *f)
+/* A fresh stack on a fresh mock. long_match: the nRF preset without the
+ * ADR 0022 wildcard (api_long_match()). The preset is applied before the
+ * stack reset too, because antr_stack_reset() runs radiant_search_init(),
+ * which reads the caps then and keeps them. */
+static void api_reset(bool long_match)
 {
-	ARG_UNUSED(f);
-
 	bg_scan_type = (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY;
 #if defined(CONFIG_RADIANT_DIAG_COUNTERS)
 	radiant_diag_core_reset();
 #endif
+	if (long_match) {
+		k_sched_lock();
+		fake_radio_caps_preset_nrf_long_match();
+		k_sched_unlock();
+	}
 	(void)antr_stack_reset();
 
 	k_sched_lock();
 	fake_radio_reset();
+	if (long_match) {
+		fake_radio_caps_preset_nrf_long_match();
+	}
 	(void)radiant_radio_init(radiant_sched_radio_cbs(), NULL);
 	(void)radiant_radio_enable();
 	k_sched_unlock();
 
 	memset(msglog, 0, sizeof(msglog));
 	n_msg = 0u;
+}
+
+static void api_before(void *f)
+{
+	ARG_UNUSED(f);
+	api_reset(false);
 }
 
 /* The whole-suite form of the api_lock rule (TODO security item 8) is the
@@ -238,6 +254,19 @@ static void api_before(void *f)
  * after() makes ztest SKIP every test behind it and still report the suite as
  * passed, which is a worse signal than the halt. */
 ZTEST_SUITE(api, NULL, api_setup, api_before, NULL, NULL);
+
+/*
+ * The nRF preset ships the ADR 0022 wildcard (backend drift item 7 step 4),
+ * so a search window is one wild_last filter. The cases that call this read
+ * device numbers off the armed sweep set (armed_search_window(), the 32-set
+ * shape: eight filters, devnum_lo in addr[2]), so they run on the long-match
+ * preset; the rest of the suite runs on the shipping short match. First thing
+ * in a case: it resets the stack again, as api_before() did.
+ */
+static void api_long_match(void)
+{
+	api_reset(true);
+}
 
 /* Close the channel first: a live channel keeps the radio armed forever
  * (correct behaviour), which would make an unconditional is_idle() a false
@@ -1514,6 +1543,7 @@ static void test_a_background_scan_reports_every_device_not_only_the_first_body(
 
 ZTEST(api, test_a_background_scan_reports_every_device_not_only_the_first)
 {
+	api_long_match();
 	bg_scan_type = (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY;
 	test_a_background_scan_reports_every_device_not_only_the_first_body();
 }
@@ -1524,9 +1554,70 @@ ZTEST(api, test_a_background_scan_reports_every_device_not_only_the_first)
  * 2026-11-12. */
 ZTEST(api, test_bidir_a_background_scan_reports_every_device_not_only_the_first)
 {
+	api_long_match();
 	bg_scan_type = (uint8_t)ANTW_CHANNEL_TYPE_SLAVE;
 	test_a_background_scan_reports_every_device_not_only_the_first_body();
 	bg_scan_type = (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY;
+}
+
+/*
+ * The same scan on the shipping short match (ADR 0022, the nRF preset's
+ * default since backend drift item 7): the sweep is ONE window with one
+ * wild_last filter, so any devnum_lo is heard, and the device number comes
+ * from the received address byte (wild_value), not from a filter. Two
+ * devices whose low bytes no single long-match set holds together, in one
+ * window, then a third in the next.
+ */
+static void wild_air(const struct fake_radio_arm *w, uint16_t number,
+		     uint8_t dev_type, uint32_t at_offset_us)
+{
+	uint8_t frame[FAKE_RADIO_AIR_FRAME_MAX];
+	uint8_t len;
+
+	len = fake_radio_build_ant_frame(frame, number, dev_type, 5u, peer_payload);
+	zassert_equal(RADIANT_RADIO_OK_RC,
+		      fake_radio_air_frame(w->t_open + at_offset_us, frame, len));
+}
+
+static const struct fake_radio_arm *armed_wild_window(void)
+{
+	const struct fake_radio_arm *w = last_arm_of(FAKE_RADIO_ARM_RX);
+
+	zassert_not_null(w, "no search window was armed at all");
+	zassert_false(w->terminated, "the window found had already run");
+	zassert_equal(1u, w->n_filters, "short match arms one wildcard filter");
+	zassert_true(w->filters[0].wild_last);
+	return w;
+}
+
+ZTEST(api, test_a_short_match_scan_hears_any_device_number_in_one_window)
+{
+	const struct fake_radio_arm *w;
+	uint32_t op_first;
+
+	zassert_true(radiant_radio_caps_get()->filter_wildcard_dev);
+	open_background_scan_channel();
+
+	w = armed_wild_window();
+	op_first = w->op;
+	wild_air(w, 0x0512u, 0x0Bu, 1000u);
+	wild_air(w, 0x06A7u, 0x78u, 5000u);
+	fake_radio_advance_to(w->t_close + 1u);
+	drain();
+
+	zassert_true(count_bcast_from(0x0512u) >= 1u, "device 0x0512 not reported");
+	zassert_true(count_bcast_from(0x06A7u) >= 1u, "device 0x06A7 not reported");
+	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(CH));
+
+	run_housekeeping();
+	w = armed_wild_window();
+	zassert_not_equal(op_first, w->op, "the sweep did not move on");
+	wild_air(w, 0x07F0u, 0x11u, 1000u);
+	fake_radio_advance_to(w->t_close + 1u);
+	drain();
+	zassert_true(count_bcast_from(0x07F0u) >= 1u, "device 0x07F0 not reported");
+
+	end_of_test();
 }
 
 /* Broadcasts delivered on one channel, whatever device they came from. */
@@ -1680,6 +1771,7 @@ static void test_the_scan_keeps_finding_devices_while_another_channel_tracks_bod
 
 ZTEST(api, test_the_scan_keeps_finding_devices_while_another_channel_tracks)
 {
+	api_long_match();
 	bg_scan_type = (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY;
 	test_the_scan_keeps_finding_devices_while_another_channel_tracks_body();
 }
@@ -1690,6 +1782,7 @@ ZTEST(api, test_the_scan_keeps_finding_devices_while_another_channel_tracks)
  * 2026-11-12. */
 ZTEST(api, test_bidir_the_scan_keeps_finding_devices_while_another_channel_tracks)
 {
+	api_long_match();
 	bg_scan_type = (uint8_t)ANTW_CHANNEL_TYPE_SLAVE;
 	test_the_scan_keeps_finding_devices_while_another_channel_tracks_body();
 	bg_scan_type = (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY;
@@ -1717,6 +1810,8 @@ ZTEST(api, test_a_named_device_is_steered_to_rather_than_waited_for)
 	uint16_t                     dev_b;
 	uint8_t                      lo_now;
 	radiant_time_t               t_acq;
+
+	api_long_match();
 
 	open_background_scan_channel();
 
@@ -1812,6 +1907,7 @@ ZTEST(api, test_a_named_device_is_steered_to_rather_than_waited_for)
  */
 ZTEST(api, test_a_pinned_channel_reacquires_fast_when_its_first_packet_back_is_lost)
 {
+	api_long_match();
 	/* #52233's high byte, but a low byte in the LAST sweep set: nothing else
 	 * searches while it tracks, so the round-robin cursor is still at the
 	 * start, and #52233's own set (1) would be reached naturally in one
@@ -1917,6 +2013,8 @@ ZTEST(api, test_a_scan_chunk_that_ends_mid_set_keeps_its_slot)
 	uint16_t                     dev_a;
 	radiant_time_t               t_acq;
 	uint32_t                     len;
+
+	api_long_match();
 
 	open_background_scan_channel();
 
@@ -2027,6 +2125,8 @@ ZTEST(api, test_a_plain_wildcard_slave_still_acquires_and_tracks)
 	const struct fake_radio_arm *w;
 	uint16_t                     dev_a;
 
+	api_long_match();
+
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
 		      antr_network_address_set(0u, ant_plus_key));
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
@@ -2093,6 +2193,8 @@ ZTEST(api, test_a_lone_searcher_hears_its_sensors_next_frame_after_acquiring)
 	uint8_t                      frame[FAKE_RADIO_AIR_FRAME_MAX];
 	uint8_t                      len;
 
+	api_long_match();
+
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
 		      antr_network_address_set(0u, ant_plus_key));
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
@@ -2146,6 +2248,8 @@ ZTEST(api, test_the_sweep_keeps_running_while_another_channel_still_searches)
 	uint16_t                     dev;
 	uint8_t                      tracking;
 	uint8_t                      other;
+
+	api_long_match();
 
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
 		      antr_network_address_set(0u, ant_plus_key));
@@ -2207,6 +2311,8 @@ ZTEST(api, test_the_id_list_is_configurable_on_an_open_channel)
 	const struct fake_radio_arm *w;
 	uint16_t                     dev_pwr;
 	uint16_t                     dev_hrm;
+
+	api_long_match();
 
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
 		      antr_network_address_set(0u, ant_plus_key));
@@ -2278,6 +2384,8 @@ ZTEST(api, test_a_search_timeout_landing_mid_chunk_does_not_strand_the_sweep)
 	const struct fake_radio_arm *w;
 	uint16_t                     dev_a;
 	radiant_time_t               deadline;
+
+	api_long_match();
 
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
 		      antr_network_address_set(0u, ant_plus_key));
@@ -2379,6 +2487,8 @@ ZTEST(api, test_a_key_resent_while_the_last_carrier_chunk_runs_does_not_orphan_i
 	uint32_t                     a0;
 	uint32_t                     q;
 
+	api_long_match();
+
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
 		      antr_network_address_set(0u, ant_plus_key));
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
@@ -2463,6 +2573,8 @@ ZTEST(api, test_a_first_key_deferred_by_a_live_chunk_still_reaches_the_sweep)
 	uint8_t                      frame[FAKE_RADIO_AIR_FRAME_MAX];
 	uint8_t                      len;
 	uint16_t                     dev;
+
+	api_long_match();
 
 	/* No key yet. */
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
@@ -2565,6 +2677,8 @@ ZTEST(api, test_a_key_on_network_1_only_moves_the_sweep_to_the_ant_plus_address)
 {
 	const struct fake_radio_arm *w;
 
+	api_long_match();
+
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
 		      antr_network_address_set(1u, ant_plus_key));
 	open_wildcard_slave(CH, 1u, (uint8_t)RF_INDEX);
@@ -2651,12 +2765,14 @@ static void expect_mid_search_key_reaches_the_sweep(uint8_t network)
 
 ZTEST(api, test_a_first_key_on_network_1_installed_mid_search_reaches_the_sweep)
 {
+	api_long_match();
 	expect_mid_search_key_reaches_the_sweep(1u);
 	end_of_test();
 }
 
 ZTEST(api, test_a_first_key_on_network_0_installed_mid_search_reaches_the_sweep)
 {
+	api_long_match();
 	expect_mid_search_key_reaches_the_sweep(0u);
 	end_of_test();
 }
@@ -2666,6 +2782,8 @@ ZTEST(api, test_a_first_key_on_network_0_installed_mid_search_reaches_the_sweep)
 ZTEST(api, test_closing_and_retrying_the_key_keeps_the_ant_plus_sweep)
 {
 	const struct fake_radio_arm *w;
+
+	api_long_match();
 
 	expect_mid_search_key_reaches_the_sweep(1u);
 	(void)antr_channel_close(CH);
@@ -2693,6 +2811,8 @@ ZTEST(api, test_a_slave_keyed_mid_search_declares_its_frequency)
 {
 	const struct fake_radio_arm *w;
 
+	api_long_match();
+
 	open_wildcard_slave(CH, 1u, 66u);
 	w = armed_search_window();
 	zassert_equal((uint8_t)RF_INDEX, w->rf_index,
@@ -2715,6 +2835,8 @@ ZTEST(api, test_the_sweep_stays_on_the_ant_plus_address_when_both_networks_are_k
 {
 	const struct fake_radio_arm *w;
 
+	api_long_match();
+
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
 		      antr_network_address_set(1u, ant_plus_key));
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
@@ -2735,6 +2857,8 @@ ZTEST(api, test_a_slave_off_57_moves_the_sweep_to_its_frequency)
 {
 	const struct fake_radio_arm *w;
 
+	api_long_match();
+
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
 		      antr_network_address_set(0u, ant_plus_key));
 	open_wildcard_slave(CH, 0u, 66u);
@@ -2752,6 +2876,8 @@ ZTEST(api, test_a_slave_off_57_moves_the_sweep_to_its_frequency)
 ZTEST(api, test_a_slave_on_57_still_sweeps_57)
 {
 	const struct fake_radio_arm *w;
+
+	api_long_match();
 
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
 		      antr_network_address_set(0u, ant_plus_key));
@@ -2802,6 +2928,8 @@ ZTEST(api, test_a_keyless_scan_on_rf_71_leaves_the_sweep_on_57)
 {
 	const struct fake_radio_arm *w;
 
+	api_long_match();
+
 	open_keyless_scan(CH, 2u, 71u);
 	w = armed_search_window();
 	zassert_equal((uint8_t)RF_INDEX, w->rf_index,
@@ -2815,6 +2943,8 @@ ZTEST(api, test_a_keyless_scan_on_rf_71_is_still_offered_a_device_heard_on_57)
 {
 	const struct fake_radio_arm *w;
 	uint16_t                     dev;
+
+	api_long_match();
 
 	open_keyless_scan(CH, 2u, 71u);
 	w = armed_search_window();
@@ -2837,6 +2967,8 @@ ZTEST(api, test_a_keyless_scan_on_rf_53_leaves_the_sweep_on_57_and_hears_it)
 {
 	const struct fake_radio_arm *w;
 	uint16_t                     dev;
+
+	api_long_match();
 
 	open_keyless_scan(CH, 1u, 53u);
 	w = armed_search_window();
@@ -2881,6 +3013,8 @@ ZTEST(api, test_a_tracked_slaves_device_is_cached_on_its_own_frequency)
 	uint8_t                      lo;
 	radiant_time_t               t_acq;
 	uint32_t                     n_before;
+
+	api_long_match();
 
 	/* A plain slave, not a background scan: a scan never leaves the search. */
 	open_keyless_slave(CH, 2u, 71u, 0u);
@@ -2964,6 +3098,8 @@ ZTEST(api, test_a_tracked_channel_reposts_its_next_window_without_a_pump)
 {
 	const struct fake_radio_arm *w;
 	uint16_t                     dev_a;
+
+	api_long_match();
 
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
 		      antr_network_address_set(0u, ant_plus_key));
@@ -3110,6 +3246,8 @@ ZTEST(api, test_a_filtered_rx_fail_never_reaches_the_host_but_is_still_counted)
 	uint32_t missed_filtered;
 	uint32_t filtered_before;
 
+	api_long_match();
+
 	open_and_acquire_slave(&dev);
 
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
@@ -3252,6 +3390,8 @@ ZTEST(api, test_a_channel_that_drops_to_search_does_not_starve_one_still_trackin
 	radiant_time_t               t_acq;
 	uint32_t                     served;
 	uint32_t                     rx_fail;
+
+	api_long_match();
 	/* 5 s at the ANT+ period. Kept short so the counts below stay inside
 	 * MSGLOG_MAX after the log is reset. */
 	const uint32_t               slots = 20u;
@@ -3360,6 +3500,8 @@ ZTEST(api, test_a_tracking_slave_reports_one_message_per_acknowledged_packet)
 	uint8_t                      frame[AIR_LEN];
 	radiant_time_t               t_data;
 
+	api_long_match();
+
 	open_and_acquire_slave_of_type((uint8_t)ANTW_CHANNEL_TYPE_SLAVE, &dev);
 
 	/* The first tracked window legitimately comes from the pump - nothing
@@ -3421,6 +3563,8 @@ ZTEST(api, test_an_inbound_burst_numbers_packets_0_1_2_3_1_2_3)
 	radiant_time_t               t_data;
 	uint32_t                     i;
 	uint32_t                     k = 0u;
+
+	api_long_match();
 
 	open_and_acquire_slave_of_type((uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
 				       &dev);
@@ -3622,6 +3766,8 @@ ZTEST(api, test_an_inbound_burst_at_air_spacing_is_delivered_whole)
 	uint32_t                     i;
 	uint32_t                     k = 0u;
 
+	api_long_match();
+
 	open_and_acquire_slave_of_type((uint8_t)ANTW_CHANNEL_TYPE_SLAVE, &dev);
 	run_housekeeping();
 	memset(msglog, 0, sizeof(msglog));
@@ -3726,6 +3872,8 @@ ZTEST(api, test_a_burst_longer_than_eight_periods_does_not_drop_to_search)
 	uint32_t                     k;
 	uint32_t                     narrow;
 
+	api_long_match();
+
 	open_and_acquire_slave_with_period(period, &dev);
 	/* The pump, without run_housekeeping()'s idle assertion: at this
 	 * period the first tracked window may already be armed. */
@@ -3825,6 +3973,8 @@ ZTEST(api, test_a_second_channel_keeps_tracking_across_a_burst)
 	radiant_time_t               slot_b;
 	uint32_t                     tries;
 
+	api_long_match();
+
 	zassert_true(BURST_OVERLAP_US + 1000u <
 			     RADIANT_TRANSFER_OPENER_REPLY_US +
 				     (n - 1u) * RADIANT_TRANSFER_PACKET_US,
@@ -3917,6 +4067,8 @@ ZTEST(api, test_a_burst_the_peer_abandons_raises_rx_failed_once)
 	radiant_time_t               t;
 	uint16_t                     dev;
 
+	api_long_match();
+
 	open_and_acquire_slave_of_type((uint8_t)ANTW_CHANNEL_TYPE_SLAVE, &dev);
 	run_housekeeping();
 	memset(msglog, 0, sizeof(msglog));
@@ -3952,6 +4104,8 @@ ZTEST(api, test_closing_mid_burst_reports_rx_failed_before_channel_closed)
 	uint16_t dev;
 	int      i_failed;
 	int      i_closed;
+
+	api_long_match();
 
 	open_and_acquire_slave_of_type((uint8_t)ANTW_CHANNEL_TYPE_SLAVE, &dev);
 	run_housekeeping();
@@ -4134,6 +4288,8 @@ ZTEST(api, test_a_repaired_broadcast_reaches_the_host)
 	uint32_t dropped;
 	uint32_t posted;
 
+	api_long_match();
+
 	open_and_acquire_slave(&dev);
 	run_housekeeping();
 	clear_msglog();
@@ -4181,6 +4337,8 @@ ZTEST(api, test_a_refuted_repair_is_not_delivered)
 	uint32_t posted;
 	uint32_t dropped;
 
+	api_long_match();
+
 	open_and_acquire_slave(&dev);
 	run_housekeeping();
 	clear_msglog();
@@ -4222,6 +4380,8 @@ ZTEST(api, test_a_repaired_acknowledged_frame_is_neither_acked_nor_delivered)
 	uint32_t repaired;
 	uint32_t refuted;
 	uint32_t replies;
+
+	api_long_match();
 
 	open_and_acquire_slave_of_type((uint8_t)ANTW_CHANNEL_TYPE_SLAVE, &dev);
 	run_housekeeping();
@@ -4312,6 +4472,8 @@ ZTEST(api, test_a_missed_tracked_window_reposts_with_no_pump_at_all)
 	uint32_t                     pumps_before;
 	uint32_t                     missed_before;
 
+	api_long_match();
+
 	open_and_acquire_slave(&dev_a);
 
 	/* The FIRST tracked window legitimately comes from the pump - nothing
@@ -4377,6 +4539,8 @@ ZTEST(api, test_nine_scheduling_misses_never_reach_rx_fail_go_to_search)
 	uint32_t pumps_before;
 	uint32_t missed_before;
 	uint32_t i;
+
+	api_long_match();
 
 	open_and_acquire_slave(&dev_a);
 	run_housekeeping();
@@ -4578,6 +4742,8 @@ ZTEST(api, test_a_scheduler_dropped_slot_is_a_collision_not_an_rx_fail)
 	uint16_t                     dev_a;
 	uint32_t                     collided0;
 
+	api_long_match();
+
 	open_and_acquire_slave(&dev_a);
 	run_housekeeping();
 	tw = last_arm_of(FAKE_RADIO_ARM_RX);
@@ -4616,6 +4782,8 @@ ZTEST(api, test_scheduler_collisions_never_send_a_channel_to_search)
 	uint16_t                     dev_a;
 	uint32_t                     collided0;
 	uint32_t                     i;
+
+	api_long_match();
 
 	open_and_acquire_slave(&dev_a);
 	run_housekeeping();
@@ -4785,7 +4953,10 @@ static uint32_t api_tracked_quiet_run(bool deny)
 
 ZTEST(api, test_a_quiet_tracked_channel_misses_the_same_either_way)
 {
-	uint32_t quiet = api_tracked_quiet_run(false);
+	uint32_t quiet;
+
+	api_long_match();
+	quiet = api_tracked_quiet_run(false);
 
 	end_of_test();
 	(void)antr_stack_reset();
@@ -4807,6 +4978,8 @@ ZTEST(api, test_a_denied_tracked_window_is_not_reported_as_an_rx_failure)
 {
 	const struct fake_radio_arm *w;
 	uint16_t                     dev_a;
+
+	api_long_match();
 
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
 		      antr_network_address_set(0u, ant_plus_key));
@@ -5351,24 +5524,32 @@ static void fec_success_case(uint8_t trans_type, bool wildcard)
 
 ZTEST(api, test_fec_slave_resolves_wildcard_transmission_type)
 {
+	api_long_match();
 	fec_success_case(0u, false);
 }
 
 ZTEST(api, test_fec_slave_resolves_fully_wildcard_identity)
 {
+	api_long_match();
 	fec_success_case(0u, true);
 }
 
 ZTEST(api, test_fec_slave_with_pinned_identity_completes)
 {
+	api_long_match();
 	fec_success_case(5u, false);
 }
 
 ZTEST(api, test_fec_slave_no_ack_and_wrong_ack_recover_once)
 {
-	uint16_t number = fec_acquire(0u, false);
-	uint32_t no_ack = radiant_api_stats_get()->xfer_no_ack;
-	uint32_t bad_ack = radiant_api_stats_get()->xfer_bad_ack;
+	uint16_t number;
+	uint32_t no_ack;
+	uint32_t bad_ack;
+
+	api_long_match();
+	number = fec_acquire(0u, false);
+	no_ack = radiant_api_stats_get()->xfer_no_ack;
+	bad_ack = radiant_api_stats_get()->xfer_bad_ack;
 	zassert_ok(antr_acknowledge_message_tx(CH, 8u, peer_payload));
 	fec_exchange(number, 0u, false);
 	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED));
@@ -5385,6 +5566,7 @@ ZTEST(api, test_fec_slave_no_ack_and_wrong_ack_recover_once)
 
 ZTEST(api, test_fec_pending_close_fails_once_and_reset_discards_pending)
 {
+	api_long_match();
 	(void)fec_acquire(0u, false);
 	zassert_ok(antr_acknowledge_message_tx(CH, 8u, peer_payload));
 	end_of_test();
@@ -5409,12 +5591,17 @@ ZTEST(api, test_fec_pending_close_fails_once_and_reset_discards_pending)
  */
 ZTEST(api, test_fec_close_with_a_queued_transfer_fails_it_once_without_the_watchdog)
 {
-	uint16_t number = fec_acquire(0u, false);
-	uint32_t wd = radiant_api_stats_get()->xfer_watchdogs;
-	const struct fake_radio_arm *w = last_arm_of(FAKE_RADIO_ARM_RX);
+	uint16_t number;
+	uint32_t wd;
+	const struct fake_radio_arm *w;
 	uint8_t frame[FAKE_RADIO_AIR_FRAME_MAX];
 	radiant_time_t sync;
 	uint8_t n;
+
+	api_long_match();
+	number = fec_acquire(0u, false);
+	wd = radiant_api_stats_get()->xfer_watchdogs;
+	w = last_arm_of(FAKE_RADIO_ARM_RX);
 
 	zassert_not_null(w, "setup: no tracked window armed");
 	sync = w->t_open + (w->t_close - w->t_open) / 2u;
@@ -5455,6 +5642,7 @@ ZTEST(api, test_fec_close_with_a_queued_transfer_fails_it_once_without_the_watch
 
 ZTEST(api, test_fec_pending_without_an_opener_expires_once)
 {
+	api_long_match();
 	(void)fec_acquire(0u, false);
 	uint32_t expired = radiant_api_stats_get()->xfer_no_opener;
 	const struct fake_radio_arm *w = last_arm_of(FAKE_RADIO_ARM_RX);
@@ -5480,6 +5668,7 @@ ZTEST(api, test_fec_pending_without_an_opener_expires_once)
 /* On a slow channel the allowance is the periods, not the 500 ms floor. */
 ZTEST(api, test_fec_pending_watchdog_allows_slow_channel_periods_past_the_floor)
 {
+	api_long_match();
 	(void)fec_acquire_with_period(0u, false, 32768u);
 	const struct fake_radio_arm *w = last_arm_of(FAKE_RADIO_ARM_RX);
 
@@ -5510,10 +5699,13 @@ ZTEST(api, test_fec_pending_watchdog_allows_slow_channel_periods_past_the_floor)
  */
 ZTEST(api, test_fec_pending_command_survives_two_missed_master_slots)
 {
-	uint16_t number = fec_acquire(0u, false);
+	uint16_t number;
 	const struct fake_radio_arm *w;
 	radiant_time_t t_q;
 	uint32_t skipped = 0u;
+
+	api_long_match();
+	number = fec_acquire(0u, false);
 
 	zassert_ok(antr_acknowledge_message_tx(CH, 8u, peer_payload));
 	t_q = radiant_radio_now();
@@ -5575,6 +5767,7 @@ static int32_t channel_event_index(uint8_t ch, uint8_t code)
  */
 ZTEST(api, test_fec_pending_fails_at_go_to_search)
 {
+	api_long_match();
 	(void)fec_acquire(0u, false);
 	const struct radiant_api_stats *st = radiant_api_stats_get();
 	uint32_t lost = st->xfer_pending_lost_track;
@@ -5744,6 +5937,8 @@ ZTEST(api, test_fec_pending_sent_on_reacquiring_frame)
 	const struct fake_radio_arm *tx;
 	radiant_time_t sync;
 
+	api_long_match();
+
 	(void)fec_acquire_beside_scan();
 	sent = radiant_api_stats_get()->xfer_pending_reacquired;
 	drop_to_search(FEC_CH);
@@ -5812,11 +6007,13 @@ static void fec_reacquire_does_not_send(uint8_t ctrl, bool exact)
 
 ZTEST(api, test_fec_pending_not_sent_on_reacquiring_acked_data)
 {
+	api_long_match();
 	fec_reacquire_does_not_send(RADIANT_CTRL_ACK_DATA_OPEN, true);
 }
 
 ZTEST(api, test_fec_pending_not_sent_on_inexact_reacquiring_frame)
 {
+	api_long_match();
 	fec_reacquire_does_not_send(RADIANT_CTRL_BROADCAST, false);
 }
 
@@ -5824,6 +6021,7 @@ ZTEST(api, test_fec_pending_not_sent_on_inexact_reacquiring_frame)
  * search after it missed the master's frame, opens no reply slot. */
 ZTEST(api, test_fec_pending_not_sent_on_reacquiring_slave_broadcast)
 {
+	api_long_match();
 	fec_reacquire_does_not_send(RADIANT_CTRL_SLAVE_BROADCAST, true);
 }
 
@@ -5831,12 +6029,15 @@ ZTEST(api, test_fec_pending_not_sent_on_reacquiring_slave_broadcast)
  * which then goes from the master's next frame. */
 ZTEST(api, test_fec_pending_not_sent_on_tracked_slave_broadcast)
 {
-	uint16_t number = fec_acquire(0u, true);
+	uint16_t number;
 	const struct fake_radio_arm *w;
 	uint8_t frame[FAKE_RADIO_AIR_FRAME_MAX];
 	uint8_t n;
 	radiant_time_t sync;
 	uint32_t arms;
+
+	api_long_match();
+	number = fec_acquire(0u, true);
 
 	zassert_ok(antr_acknowledge_message_tx(CH, 8u, peer_payload));
 	arms = count_tx_with_ctrl(RADIANT_CTRL_BURST_LAST_SEQ0);
@@ -5872,6 +6073,8 @@ ZTEST(api, test_fec_pending_on_the_lone_carrier_sent_on_reacquiring_frame)
 	uint32_t sent;
 	const struct fake_radio_arm *tx;
 	radiant_time_t sync;
+
+	api_long_match();
 
 	(void)fec_acquire(0u, true);
 	sent = radiant_api_stats_get()->xfer_pending_reacquired;
@@ -5912,6 +6115,8 @@ ZTEST(api, test_fec_pending_not_sent_from_a_late_reacquiring_frame)
 	uint16_t number;
 	uint32_t sent;
 	uint32_t arms;
+
+	api_long_match();
 
 	(void)fec_acquire(0u, true);
 	sent = radiant_api_stats_get()->xfer_pending_reacquired;
@@ -5963,6 +6168,8 @@ ZTEST(api, test_fec_pending_on_a_shared_carrier_waits_for_the_next_frame)
 	uint32_t sent;
 	uint32_t arms;
 	const struct fake_radio_arm *w;
+
+	api_long_match();
 
 	(void)fec_acquire(0u, true);
 	/* A second slave that never finds its device keeps the sweep busy. */
@@ -6023,6 +6230,8 @@ ZTEST(api, test_fec_pending_not_sent_on_reacquiring_frame_past_deadline)
 	radiant_time_t deadline;
 	radiant_time_t sync;
 
+	api_long_match();
+
 	(void)fec_acquire_beside_scan();
 	drop_to_search(FEC_CH);
 	zassert_ok(antr_acknowledge_message_tx(FEC_CH, 8u, peer_payload));
@@ -6063,7 +6272,10 @@ ZTEST(api, test_fec_pending_not_sent_on_reacquiring_frame_past_deadline)
 
 ZTEST(api, test_fec_reacquisition_uses_new_peer_without_narrowing_wildcards)
 {
-	uint16_t first = fec_acquire(0u, true);
+	uint16_t first;
+
+	api_long_match();
+	first = fec_acquire(0u, true);
 	zassert_ok(antr_acknowledge_message_tx(CH, 8u, peer_payload));
 	fec_exchange(first, RADIANT_CTRL_ACK_LAST_SEQ1, true);
 	/* A real loss returns the still-open wildcard channel to SEARCHING. */
@@ -6090,10 +6302,15 @@ ZTEST(api, test_fec_reacquisition_uses_new_peer_without_narrowing_wildcards)
 
 ZTEST(api, test_fec_turnaround_survives_a_scan_terminal_delivered_after_its_airtime_tail)
 {
-	uint16_t number = fec_acquire(0u, false);
-	radiant_time_t sync = radiant_channel_next_slot(CH);
+	uint16_t number;
+	radiant_time_t sync;
 	uint8_t frame[FAKE_RADIO_AIR_FRAME_MAX];
-	uint8_t len = fake_radio_build_ant_frame(frame, number, 0x11u, 5u, peer_payload);
+	uint8_t len;
+
+	api_long_match();
+	number = fec_acquire(0u, false);
+	sync = radiant_channel_next_slot(CH);
+	len = fake_radio_build_ant_frame(frame, number, 0x11u, 5u, peer_payload);
 
 	/* Search tail = 112 us. Inject another 138 us of dispatch load: a
 	 * four-channel hardware run still missed once with a 100 us budget.
@@ -6146,10 +6363,14 @@ ZTEST(api, test_fec_pending_command_survives_an_early_frame_in_a_merged_window)
 	const struct fake_radio_arm *tx;
 	uint8_t frame[FAKE_RADIO_AIR_FRAME_MAX];
 	uint8_t len;
-	uint16_t number = fec_acquire(0u, false);
+	uint16_t number;
 	uint16_t second;
-	radiant_time_t s0 = radiant_channel_next_slot(CH);
+	radiant_time_t s0;
 	radiant_time_t sync;
+
+	api_long_match();
+	number = fec_acquire(0u, false);
+	s0 = radiant_channel_next_slot(CH);
 
 	fake_radio_caps_mut()->min_arm_lead_us = 328u;
 
@@ -6302,12 +6523,19 @@ ZTEST(api, test_fec_unverified_frame_never_opens_a_pending_command_slot)
 	static const uint8_t forged[8] = {
 		0x05u, 0x01u, 0x5Au, 0xA5u, 0x00u, 0x11u, 0x22u, 0x33u
 	};
-	uint16_t number = fec_acquire(0u, false);
-	uint32_t expired = radiant_api_stats_get()->xfer_no_opener;
-	const struct fake_radio_arm *w = last_arm_of(FAKE_RADIO_ARM_RX);
+	uint16_t number;
+	uint32_t expired;
+	const struct fake_radio_arm *w;
 	uint8_t frame[FAKE_RADIO_AIR_FRAME_MAX];
-	uint8_t n = fake_radio_build_ant_frame(frame, number, 0x11u, 5u, forged);
-	radiant_time_t sync = w->t_open + (w->t_close - w->t_open) / 2u;
+	uint8_t n;
+	radiant_time_t sync;
+
+	api_long_match();
+	number = fec_acquire(0u, false);
+	expired = radiant_api_stats_get()->xfer_no_opener;
+	w = last_arm_of(FAKE_RADIO_ARM_RX);
+	n = fake_radio_build_ant_frame(frame, number, 0x11u, 5u, forged);
+	sync = w->t_open + (w->t_close - w->t_open) / 2u;
 
 	zassert_ok(antr_acknowledge_message_tx(CH, 8u, peer_payload));
 	fec_secure(number);
@@ -6331,9 +6559,12 @@ ZTEST(api, test_fec_unverified_frame_never_opens_a_pending_command_slot)
  * before frame-driven handoff, and transmits with no frame received. */
 ZTEST(api, test_fec_secured_channel_command_takes_the_projected_slot)
 {
-	uint16_t number = fec_acquire(0u, false);
+	uint16_t number;
 	const struct fake_radio_arm *tx;
 	radiant_time_t slot;
+
+	api_long_match();
+	number = fec_acquire(0u, false);
 
 	fec_secure(number);
 	slot = radiant_channel_next_slot(CH);
@@ -6394,6 +6625,8 @@ ZTEST(api, test_an_rx_only_slave_delivers_acknowledged_data_but_never_transmits)
 	uint8_t                      frame[AIR_LEN];
 	radiant_time_t               t_data;
 	uint32_t                     tx_before;
+
+	api_long_match();
 
 	open_and_acquire_slave_of_type((uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
 				       &dev);
@@ -6611,6 +6844,8 @@ ZTEST(api, test_a_slave_broadcast_goes_out_once_in_the_masters_reply_window)
 	radiant_time_t               t_master;
 	uint8_t                      pending = 0xFFu;
 
+	api_long_match();
+
 	open_and_acquire_slave_of_type((uint8_t)ANTW_CHANNEL_TYPE_SLAVE, &dev);
 	run_housekeeping();
 
@@ -6683,6 +6918,8 @@ ZTEST(api, test_a_slave_broadcast_written_mid_reply_still_goes_out)
 	const struct fake_radio_arm *tx;
 	radiant_time_t               t_master;
 	uint8_t                      pending = 0xFFu;
+
+	api_long_match();
 
 	open_and_acquire_slave_of_type((uint8_t)ANTW_CHANNEL_TYPE_SLAVE, &dev);
 	run_housekeeping();
@@ -6758,6 +6995,8 @@ ZTEST(api, test_an_rx_only_slave_never_transmits_a_broadcast)
 	uint8_t                      buf[8] = { 1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u };
 	uint16_t                     dev;
 	const struct fake_radio_arm *w;
+
+	api_long_match();
 
 	open_and_acquire_slave_of_type((uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
 				       &dev);
@@ -6906,6 +7145,8 @@ ZTEST(api, test_diag_xfer_page_reports_the_api_counters)
 	const struct radiant_api_stats *st = radiant_api_stats_get();
 	uint8_t out[RADIANT_DIAG_BODY_LEN];
 
+	api_long_match();
+
 	(void)fec_acquire(0u, true);
 	zassert_ok(antr_acknowledge_message_tx(CH, 8u, peer_payload));
 	drop_to_search(CH);
@@ -7011,6 +7252,8 @@ ZTEST(api, test_diag_crc_bits_count_direction_and_syndrome_bit)
 	uint16_t crc;
 	uint16_t dev;
 	bool     rx1;
+
+	api_long_match();
 
 	open_and_acquire_slave(&dev);
 	run_housekeeping();

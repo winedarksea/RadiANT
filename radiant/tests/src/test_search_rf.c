@@ -67,6 +67,9 @@ static void setup(void *f)
 {
 	ARG_UNUSED(f);
 	fake_radio_reset();
+	/* The 32-set sweep geometry these cases test: the nRF without the
+	 * ADR 0022 wildcard. Cases that want it set it themselves. */
+	fake_radio_caps_preset_nrf_long_match();
 }
 
 ZTEST_SUITE(radiant_search_rf, NULL, NULL, setup, NULL, NULL);

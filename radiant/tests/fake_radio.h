@@ -496,8 +496,11 @@ bool fake_radio_step(void);
 struct radiant_radio_caps *fake_radio_caps_mut(void);
 
 /* nRF52840 / nRF54L15: max_filters 8 (one base plus eight prefixes),
- * addr_len_hw_max 5, crc_in_hw true. */
+ * addr_len_hw_max 5, crc_in_hw true, filter_wildcard_dev true (the shipping
+ * ADR 0022 short match). _long_match is CONFIG_RADIANT_SEARCH_SHORT_MATCH=n:
+ * no wildcard, the 32-set search sweep. */
 void fake_radio_caps_preset_nrf(void);
+void fake_radio_caps_preset_nrf_long_match(void);
 
 /* EFR32 / RAIL: max_filters 2 (two runtime sync words), addr_len_hw_max 4,
  * crc_in_hw false - RAIL's CRC engine cannot be made to cover a sync word that

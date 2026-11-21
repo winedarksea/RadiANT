@@ -278,7 +278,8 @@ ZTEST(lr, test_discovery_stays_on_one_megabit)
 	struct radiant_search_window win;
 	struct radiant_search_id_filter want;
 
-	fake_radio_caps_preset_nrf();
+	/* Long match: the assertion below is on the 32-set sweep length. */
+	fake_radio_caps_preset_nrf_long_match();
 	/* A backend that HAS the coded PHY. The question is whether search uses
 	 * it, and a build without it could not answer. */
 	fake_radio_set_phys(fake_phys_1m_lr, fake_phys_1m_lr_count);

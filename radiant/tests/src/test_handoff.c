@@ -649,6 +649,9 @@ ZTEST(handoff, test_a_handoff_acquires_faster_than_a_sweep_on_the_same_rig)
 	uint32_t arms_after_handoff;
 	uint32_t windows_handed;
 
+	/* The address-set sweep (no ADR 0022 wildcard), the slower of the two
+	 * search shapes, which is what this gate measures the handoff against. */
+	fake_radio_caps_preset_nrf_long_match();
 	bring_up();
 
 	/* Both halves answer "how long from wanting this node to hearing it"

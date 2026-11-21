@@ -442,7 +442,10 @@ void fake_radio_caps_preset_nrf(void)
 	 * eight tracked channels into a window the real backend refuses.
 	 */
 	c->max_addr_groups = 2u;
-	c->filter_wildcard_dev = false;
+	/* On, as the real nRF backend ships it (ADR 0022 short match, default
+	 * y): a search window can be one wild_last filter covering every
+	 * devnum_lo. fake_radio_caps_preset_nrf_long_match() turns it off. */
+	c->filter_wildcard_dev = true;
 	c->addr_len_hw_max = 5u;
 	c->max_body_len = RADIANT_RADIO_BODY_MAX;
 	c->phys = fake_phys_1m;
@@ -464,6 +467,13 @@ void fake_radio_caps_preset_nrf(void)
 	c->tx_power_min_dbm = -40;
 	c->tx_power_max_dbm = 8;
 	g.floor_model = FLOOR_NRF;
+}
+
+void fake_radio_caps_preset_nrf_long_match(void)
+{
+	fake_radio_caps_preset_nrf();
+	g.caps.name = "fake:nrf long";
+	g.caps.filter_wildcard_dev = false;
 }
 
 void fake_radio_caps_preset_rail(void)
