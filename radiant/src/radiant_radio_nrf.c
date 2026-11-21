@@ -4328,12 +4328,16 @@ void radiant_nrf_gate_on_grant_end(void)
 	 */
 
 	/*
-	 * Known gap: the (D)PPI endpoints are not detached here. Detaching them all
-	 * unconditionally stopped the receive path dead (every window ran to full
-	 * length). radio_endpoints_attach(false) restores only the endpoints another
-	 * stack held at init, which is empty without a second stack. Beside OpenThread
-	 * the mask is PUBLISH_ADDRESS and SUBSCRIBE_RXEN, neither needed at this
-	 * instant. Unproven either way.
+	 * The endpoint registers go back as this grant found them: each register in
+	 * radio_ep_mine_mask (the ones this backend programmed) gets the value it held
+	 * at the grant's entry. Detaching them all unconditionally instead stopped
+	 * the receive path dead (every window ran to full length). A register the
+	 * other stack has not written (beside OpenThread, all but PUBLISH_ADDRESS
+	 * and SUBSCRIBE_RXEN; with no second stack, all six) therefore keeps our
+	 * value, so SUBSCRIBE_DISABLE/TXEN/RSSISTART stay on our DPPI channels
+	 * between grants. That is inert only because the four connections into
+	 * them were disabled above, before this hand-back and any abort
+	 * (test_arm_handback.c test_handback_disables_connections_before_abort).
 	 */
 	radio_endpoints_attach(false);
 

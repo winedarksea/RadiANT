@@ -357,41 +357,40 @@ MPSL (needs a soak beside BLE or Thread, which that clearance excluded):
     same window (DUT below the Garmin in the other three legs), and the child's
     age read 210 s of a 240 s timeout at the end of the leg.
   Open items found on the way, not fixed here:
-  - [ ] DPPI hand-back order. Beside OpenThread the grant-boundary endpoint swap
-    moves only PUBLISH_ADDRESS and SUBSCRIBE_RXEN, so RADIO
+  - [x] DPPI hand-back order: closed by a8ad20d, pinned by
+    `test_arm_handback.c` `test_handback_disables_connections_before_abort`
+    (mpsl/staged-abort). The 2026-11-14 entry: beside OpenThread
     SUBSCRIBE_DISABLE/TXEN/RSSISTART stay wired to radiant's DPPI channels
-    between grants. EXTEND_FAILED and the ext-skip TIMER0 path call
-    `timer0_disarm()` (hand-back) before `radiant_radio_abort()` disables the
-    operation's connections, and a TIMER0 END that cuts a live operation
-    (extendable grant whose last step is below the extension minimum, or a
-    fixed backstop) leaves them enabled until `denied_work_fn()` delivers the
-    terminal. A CC_CLOSE or CC_TXSTART compare landing in that gap would
-    trigger DISABLE/TXEN on the 802.15.4 driver's radio. Ruled out as the cause
-    of 69:108 (every RADIO DPPI endpoint read 0 at the assert); still a latent
-    hazard to the other stack's radio on the plain TIMER0 END that cuts a live
-    operation. Untested. A test: disable the four connections before the
-    hand-back on every TIMER0/EXTEND_FAILED END.
+    between grants (the hand-back restores each register of
+    `radio_ep_mine_mask` to its grant-entry value, which is ours wherever the
+    other stack has not written it), and EXTEND_FAILED, the ext-skip END and a
+    TIMER0 END that cuts a live operation handed back before the abort or the
+    DENIED disabled the operation's connections. a8ad20d (2026-11-18) disables
+    conn_start/start_tx/close/rssi inside `radiant_nrf_gate_on_grant_end()`,
+    so they are off at the hand-back on every END path. The test snapshots
+    them inside the hand-back, before any abort, for plain END and
+    hand-back-then-abort on a live TX and RX; with those four lines reverted
+    it fails. The stale "Known gap" comment at the hand-back is rewritten.
   - [ ] In-grant `gate_acquire()` returns GATE_GRANTED unmasked and the caller
     then programs the radio from SWI or a thread. A TIMER0 backstop END between
     the two leaves `program_ed()` enabling RXREADY in INTENSET (only with
     `CONFIG_RADIANT_ED_SCAN`, default n) or `program_rx()` writing
     SHORTS/connections on a radio no longer ours. Improbable (end margin);
     found by review, not observed.
-  - [ ] EXTEND_FAILED (or the ext-skip END) can abort a successor staged
-    behind a held grant (review 2026-11-19, source inspection, not observed).
-    The old op ends early in a growing elastic grant with the release owed
-    (`grant_release_after_core()`); the next op, armed from the dispatch,
-    misses the held air and stages (GATE_PENDING); `arm_settle_staged()`
-    clears `arm_marked` before `d2_settle_now()` pays the release. A TIMER0
-    compare in that gap (or one pended under settle's ZLI mask) asks EXTEND;
-    on refusal `radiant_radio_abort()` (radiant_radio_nrf_gate_mpsl.c ~1736)
-    passes the `arm_marked` guard (radiant_radio_nrf.c ~4445) and aborts the
-    staged successor: ABORTED for air it never had, its request forgotten to
-    a booking, one slot lost; nothing wedges. Window ~1-3 us with D2 (default
-    y). No test covers it: test_arm_handback.c sweeps PRE_ABORT_END only with
-    the grant held and GRANTED. Red test: backend harness, grant held but arm
-    answered PENDING, abort injected after `arm_settle_staged()`; assert no
-    ABORTED and the successor still staged.
+  - [x] EXTEND_FAILED (or the ext-skip END) can abort a successor staged
+    behind a held grant (review 2026-11-19). Fixed in ba16a6a
+    (mpsl/staged-abort): `radiant_radio_abort()` from the signal also skips
+    an operation staged behind its own still-placed request
+    (`radiant_staged.pending && gate_request_pending()`), so a staged
+    successor keeps its request and gets its own grant or denial. Chosen over
+    holding `arm_marked` until `d2_settle_now()`: without D2 the owed release
+    is paid by `grant_release_settle()` after the dispatch, so the window
+    outlives the arm. Red test first (ef58f29):
+    `test_arm_handback.c` `test_staged_successor_survives_extend_failed`
+    sweeps every preemption point of the staged TX/RX/ED arm plus the point
+    after it returns, in `radiant.backend` and the new `radiant.backend.d2`;
+    the gate's half is `test_gate_d2.c`
+    `test_d2_extend_failed_leaves_a_staged_request_pending`.
   - [ ] The symmetric case: a TIMER0 COMPARE0 that fires while a RADIO signal
     returns END can leave TIMER10 pending after END. Not cleared on purpose
     (MPSL uses other CCs on that timer). No TIMER-context assert has been seen.
