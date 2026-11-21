@@ -7621,7 +7621,6 @@ static int32_t xing_jitter(uint32_t j, uint32_t k, uint32_t salt)
 
 static void xing_run(const struct xing_cfg *cfg, struct xing_result *r)
 {
-	const enum xing_preset p = cfg->p;
 	const bool             commands = cfg->cmd;
 	static const uint8_t cmd[8] = {
 		0x33u, 0xFFu, 0xFFu, 0xFFu, 0xFFu, 0xFFu, 0x00u, 0x00u
@@ -7637,8 +7636,9 @@ static void xing_run(const struct xing_cfg *cfg, struct xing_result *r)
 	uint32_t       streak_p = 0u;
 	uint32_t       k;
 
+	/* cfg->p is already in place: xing_reset_for() applied it before the
+	 * stack reset, which is when radiant_search_init() reads the caps. */
 	memset(r, 0, sizeof(*r));
-	xing_apply_preset(p);
 	fake_radio_set_rx_terminal_delay_us(cfg->term_us);
 	fake_radio_set_rx_frame_delay_us(cfg->frame_us);
 
@@ -7758,7 +7758,6 @@ static void xing_run(const struct xing_cfg *cfg, struct xing_result *r)
 		}
 	}
 
-	(void)p;
 	TC_PRINT("xing %s: fec missed %u (band %u, streak %u), "
 		 "pwr missed %u (streak %u), go_to_search %u\n", cfg->name,
 		 r->fec_missed, r->fec_band,
@@ -7786,11 +7785,17 @@ static void xing_run(const struct xing_cfg *cfg, struct xing_result *r)
 	}
 }
 
-static void xing_reset_between_runs(void)
+/* A fresh stack on a fresh mock for one run, in api_reset()'s order: the
+ * run's preset before antr_stack_reset(), because radiant_search_init() reads
+ * the caps then and keeps them (otherwise the stack saw the previous run's
+ * preset), and again after the fake reset puts the defaults back. */
+static void xing_reset_for(enum xing_preset p)
 {
+	xing_apply_preset(p);
 	(void)antr_stack_reset();
 	k_sched_lock();
 	fake_radio_reset();
+	xing_apply_preset(p);
 	(void)radiant_radio_init(radiant_sched_radio_cbs(), NULL);
 	(void)radiant_radio_enable();
 	k_sched_unlock();
@@ -7820,15 +7825,13 @@ ZTEST(api, test_two_masters_drifting_through_each_other)
 	/* Every run is reported before any is asserted, so one failing
 	 * preset does not hide what the others did. */
 	for (size_t i = 0u; i < ARRAY_SIZE(runs); i++) {
-		if (i > 0u) {
-			xing_reset_between_runs();
-		}
+		xing_reset_for(runs[i].p);
 		xing_run(&runs[i], &r);
 		if (r.go_to_search != 0u || r.fec_streak > 1u || r.pwr_streak > 1u) {
 			failures |= 1u << i;
 		}
 	}
-	xing_reset_between_runs();
+	xing_reset_for(XING_NRF);
 	zassert_equal(0u, failures,
 		      "runs failing (bit = row of runs[]): 0x%03x", failures);
 }
