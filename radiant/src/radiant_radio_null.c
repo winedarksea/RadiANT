@@ -136,6 +136,13 @@ const struct radiant_radio_caps *radiant_radio_caps_get(void)
 
 int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 {
+	/* The HAL's refusal table, as every backend answers it. */
+	if (cbs == NULL || cbs->rx == NULL || cbs->tx == NULL) {
+		return RADIANT_RADIO_EINVAL;
+	}
+	if (null_inited) {
+		return RADIANT_RADIO_ESTATE;
+	}
 	null_cbs = cbs;
 	null_user = user;
 	null_inited = true;
@@ -192,47 +199,86 @@ radiant_time_t radiant_radio_now(void)
  * RADIANT_SCHED_DONE_FAILED for it. EBUSY/ESTATE instead leave the request in
  * the table for retry, which against a backend that never accepts anything
  * would be an unbounded retry every 50ms for the life of the image.
+ *
+ * The refusals before it follow the HAL's table (radiant_radio_hal.h), in
+ * the cc26xx backend's order: request-only EINVAL first, then the lifecycle
+ * ESTATE, so a malformed request is answered alike whatever state the
+ * backend is in.
  */
+
+/* NULL fmt, or a fixed-length format with body_len 0. */
+static bool null_fmt_malformed(const struct radiant_pkt_format *fmt)
+{
+	return fmt == NULL ||
+	       (fmt->len_mode == RADIANT_LEN_FIXED && fmt->body_len == 0u);
+}
+
 int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 {
-	if (req == NULL || op == NULL) {
+	if (op == NULL) {
 		return RADIANT_RADIO_EINVAL;
 	}
-	if (!null_enabled) {
+	*op = 0u;
+	if (req == NULL || req->body == NULL || null_fmt_malformed(req->fmt)) {
+		return RADIANT_RADIO_EINVAL;
+	}
+	if (req->rf_index > RADIANT_RF_INDEX_MAX) {
+		return RADIANT_RADIO_EINVAL;
+	}
+	if (!null_inited || !null_enabled) {
 		return RADIANT_RADIO_ESTATE;
 	}
-	*op = 0u;
 	return RADIANT_RADIO_ENOTSUP;
 }
 
 int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 {
-	if (req == NULL || op == NULL) {
+	if (op == NULL) {
 		return RADIANT_RADIO_EINVAL;
 	}
-	if (!null_enabled) {
+	*op = 0u;
+	if (req == NULL || req->filters == NULL || req->n_filters == 0u ||
+	    null_fmt_malformed(req->fmt)) {
+		return RADIANT_RADIO_EINVAL;
+	}
+	if (req->t_close < req->t_open) {
+		return RADIANT_RADIO_EINVAL;
+	}
+	if (req->rf_index > RADIANT_RF_INDEX_MAX) {
+		return RADIANT_RADIO_EINVAL;
+	}
+	if (!null_inited || !null_enabled) {
 		return RADIANT_RADIO_ESTATE;
 	}
-	*op = 0u;
 	return RADIANT_RADIO_ENOTSUP;
 }
 
+/*
+ * caps.has_ed_scan is false, and radiant_radio_ed()'s own contract puts that
+ * ENOTSUP ahead of the range checks (as fake_radio.c and the nRF build
+ * without CONFIG_RADIANT_ED_SCAN answer): only the NULL pointers, which the
+ * table refuses before anything, are EINVAL here.
+ */
 int radiant_radio_ed(const struct radiant_ed_req *req, uint32_t *op)
 {
-	if (req == NULL || op == NULL) {
+	if (op == NULL) {
 		return RADIANT_RADIO_EINVAL;
 	}
-	if (!null_enabled) {
-		return RADIANT_RADIO_ESTATE;
-	}
 	*op = 0u;
+	if (req == NULL) {
+		return RADIANT_RADIO_EINVAL;
+	}
 	return RADIANT_RADIO_ENOTSUP;
 }
 
 int radiant_radio_abort(void)
 {
-	/* "Returns RADIANT_RADIO_OK_RC when there was nothing to do", and there
-	 * never is. */
+	/* Before init: the wrong lifecycle state (HAL). After it, "Returns
+	 * RADIANT_RADIO_OK_RC when there was nothing to do", and there never
+	 * is. */
+	if (!null_inited) {
+		return RADIANT_RADIO_ESTATE;
+	}
 	(void)null_cbs;
 	(void)null_user;
 	return RADIANT_RADIO_OK_RC;
