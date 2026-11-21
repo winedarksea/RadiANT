@@ -53,3 +53,18 @@ ZTEST(bridge_trace, test_a_key_frame_with_a_bad_checksum_is_wiped)
 {
 	check_bad_checksum_key_wiped();
 }
+
+ZTEST(bridge_trace, test_any_frame_that_fails_its_checksum_is_wiped)
+{
+	check_bad_checksum_any_id_wiped();
+}
+
+ZTEST(bridge_trace, test_an_rng_seed_shows_only_its_type)
+{
+	check_rng_seed_masked_and_wiped();
+}
+
+ZTEST(bridge_trace, test_a_crypto_id_info_is_traced_whole_and_kept)
+{
+	check_crypto_id_info_whole();
+}

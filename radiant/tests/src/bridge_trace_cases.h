@@ -251,3 +251,54 @@ static void check_bad_checksum_key_wiped(void)
 	zassert_equal(0u, n_dispatched);
 	zassert_true(body_is_zero(), "a bad-checksum key frame was kept");
 }
+
+/* A frame that fails its checksum is wiped whatever its id: a UART overrun
+ * that drops the id byte of a 0x7E makes its key number the id and leaves
+ * the key in the body under an id that carries none. */
+static void check_bad_checksum_any_id_wiped(void)
+{
+	uint8_t body[17], f[24];
+	size_t n;
+
+	body[0] = 0x03;
+	fill_key(&body[1], 16);
+	n = trace_frame_build(f, ANTW_MESG_SET_ENCRYPT_KEY_ID, body, sizeof(body));
+	/* Drop the id byte: LEN 0x11, then the key number read as the id. */
+	memmove(&f[2], &f[3], n - 3);
+	trace_feed(f, n - 1);
+	trace_feed((const uint8_t[]){0x00}, 1);	/* the byte taken as checksum */
+	zassert_equal(0u, n_dispatched);
+	zassert_equal(0u, n_trace);
+	zassert_true(body_is_zero(), "a failed frame's body was kept");
+}
+
+/* 0x7F type 0x02 is an RNG seed: the type shows, the seed does not, and it is
+ * wiped. */
+static void check_rng_seed_masked_and_wiped(void)
+{
+	uint8_t body[17], f[24];
+	size_t n;
+
+	body[0] = ANTW_ENCRYPTION_INFO_SET_RNG_SEED;
+	fill_key(&body[1], 16);
+	n = trace_frame_build(f, ANTW_MESG_SET_ENCRYPT_INFO_ID, body, sizeof(body));
+	trace_feed(f, n);
+	zassert_equal(1u, n_trace);
+	expect_line("H>", f, 4, 16 + 1);
+	zassert_true(body_is_zero(), "an RNG seed was kept");
+}
+
+/* Other 0x7F types are not secret: traced whole, not wiped. */
+static void check_crypto_id_info_whole(void)
+{
+	const uint8_t body[] = {ANTW_ENCRYPTION_INFO_SET_CRYPTO_ID,
+				0x11, 0x22, 0x33, 0x44};
+	uint8_t f[12];
+	size_t n = trace_frame_build(f, ANTW_MESG_SET_ENCRYPT_INFO_ID, body,
+				     sizeof(body));
+
+	trace_feed(f, n);
+	zassert_equal(1u, n_trace);
+	expect_line("H>", f, n, 0);
+	zassert_equal(0x44, parser.msg_body[4]);
+}

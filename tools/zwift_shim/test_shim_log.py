@@ -40,6 +40,9 @@ PREFIX = re.compile(r'^(\d+)\.(\d{6}) t(\d+) (usbxp|cp210x) \S')
 KEY8 = bytes(range(0xC1, 0xC9))
 KEY16 = bytes(range(0xC1, 0xD1))
 KEY_TOKENS = {'%02X' % b for b in KEY16}
+# A key byte in any spelling: a bare token, 0xC1, or inside a word.
+KEY_RE = re.compile(r'(?i)(?<![0-9A-F])(?:%s)(?![0-9A-F])'
+                    % '|'.join(sorted(KEY_TOKENS)))
 
 
 def frame(msg_id, body):
@@ -62,6 +65,12 @@ WRITES = [
     frame(0xF5, b'\x00\x02' + KEY16 + KEY16),   # pairing: the scalar
     FREQ + NETKEY[:7],                          # a key frame cut short
     b'\x00' + KEY8,                             # not 0xA4-framed at all
+    NETKEY[:4],                                 # a 0x46 split in two writes:
+    NETKEY[4:],                                 # the second starts on the key
+    bytes([0xA4, 0x08, 0x45, 0x00, 0x39]) + NETKEY,  # a LEN that lies
+    bytes([0xA4, 0x03, 0x4E]) + KEY8[:4],       # key bytes that frame by luck
+    frame(0x7F, b'\x02' + KEY16),               # set-info: an RNG seed
+    frame(0x7F, b'\x00\x11\x22\x33\x44'),       # set-info: a crypto id
 ]
 
 
@@ -180,13 +189,13 @@ class ShimLogTest(unittest.TestCase):
 @unittest.skipUnless(os.path.exists(XP_DLL),
                      'shim not built: run scripts/zwift_ant_shim.ps1 -BuildOnly')
 class ShimWriteDumpTest(unittest.TestCase):
-    def test_level2_write_dump_holds_no_key(self):
+    def run_writes(self, level):
         with tempfile.TemporaryDirectory() as tmp:
             log = os.path.join(tmp, 'shim.log')
             env = dict(os.environ,
                        RADIANT_SHIM_LOG=log,
                        RADIANT_ANT_COM='pipe\\radiant_shim_test_%d' % os.getpid(),
-                       RADIANT_SHIM_LOG_LEVEL='2')
+                       RADIANT_SHIM_LOG_LEVEL=level)
             r = subprocess.run([sys.executable, os.path.abspath(__file__),
                                 '--child-write'], env=env, check=True,
                                timeout=60, capture_output=True, text=True)
@@ -199,14 +208,25 @@ class ShimWriteDumpTest(unittest.TestCase):
         dumps = [l.split(' SI_Write ', 1)[1] for l in lines
                  if ' SI_Write ' in l]
         self.assertEqual(len(dumps), len(WRITES), lines)
-        for d in dumps:
-            leaked = KEY_TOKENS & set(d.replace(':', ' ').split())
-            self.assertEqual(leaked, set(), d)
+        leaks = ['write %d: %s' % (k, d) for k, d in enumerate(dumps)
+                 if KEY_RE.search(d)]
+        self.assertEqual(leaks, [], 'key bytes in the log')
+        return dumps
+
+    def test_level1_write_line_holds_no_key(self):
+        dumps = self.run_writes('1')
+        self.assertTrue(dumps[0].endswith(' id=0x46'), dumps[0])
+        self.assertTrue(dumps[6].endswith(' unframed'), dumps[6])
+        self.assertTrue(dumps[8].endswith(' unframed'), dumps[8])
+
+    def test_level2_write_dump_holds_no_key(self):
+        dumps = self.run_writes('2')
 
         def mask(n):
             return ' '.join(['..'] * n)
         net = 'A4 09 46 00 ' + mask(9)
         freq = 'A4 02 45 00 39 DA'
+        crypto_id = frame(0x7F, b'\x00\x11\x22\x33\x44')
         self.assertTrue(dumps[0].endswith('id=0x46: ' + net), dumps[0])
         self.assertTrue(dumps[1].endswith(
             'id=0x45,0x46,0x4B: %s %s A4 01 4B 00 EE' % (freq, net)), dumps[1])
@@ -216,10 +236,15 @@ class ShimWriteDumpTest(unittest.TestCase):
                         dumps[3])
         self.assertTrue(dumps[4].endswith(': A4 22 F5 ' + mask(35)), dumps[4])
         self.assertTrue(dumps[5].endswith(
-            ': %s (+7 bytes not whole frames)' % freq), dumps[5])
-        self.assertTrue(dumps[6].endswith(': (+9 bytes not whole frames)'),
-                        dumps[6])
-
+            ' id=0x45: %s (+7 bytes not whole frames)' % freq), dumps[5])
+        for k, n in ((6, 9), (7, 4), (8, 9), (9, 18), (10, 7)):
+            self.assertTrue(dumps[k].endswith(
+                ' unframed: (+%d bytes not whole frames)' % n), dumps[k])
+        self.assertTrue(dumps[11].endswith(
+            ' id=0x7F: A4 11 7F 02 ' + mask(17)), dumps[11])
+        self.assertTrue(dumps[12].endswith(
+            ' id=0x7F: ' + ' '.join('%02X' % b for b in crypto_id)),
+            dumps[12])
 
 if __name__ == '__main__':
     if sys.argv[1:] == ['--child']:
