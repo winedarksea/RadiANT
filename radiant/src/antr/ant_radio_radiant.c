@@ -954,6 +954,14 @@ __weak void antr_test_master_tx_seam(uint8_t ch)
 	ARG_UNUSED(ch);
 }
 
+/* The 0xF1/0xF2 take-back has happened and the pump has not run: what an
+ * acknowledged request landing during set_key's crypto would be answered
+ * with (review 2026-11-20 item C). */
+__weak void antr_test_take_back_seam(uint8_t ch)
+{
+	ARG_UNUSED(ch);
+}
+
 bool antr_test_ack_payload(uint8_t ch, uint8_t out[RADIANT_TRANSFER_PKT_BYTES])
 {
 	return api_xfer_broadcast((void *)(uintptr_t)ch, out);
@@ -4290,6 +4298,19 @@ bool antr_master_xfer_busy(uint8_t ch)
 enum { POLICY_IDLE = 0, POLICY_ASKED, POLICY_FLUSHED };
 static uint8_t api_sec_policy;
 
+/* The take-back itself, shared by 0xF1 and 0xF2, in a crit section of its own
+ * (0xF1's nests inside configure's). Not inlined: one copy for both. */
+static __attribute__((cold, noinline)) void api_sec_take_back(uint8_t ch)
+{
+	unsigned int key = radiant_event_crit_enter();
+
+	(void)radiant_sched_cancel(ch);
+	api_bind_rejected(ch);
+	api_ch[ch].sec_pay_valid = false;
+	api_sec_policy = POLICY_FLUSHED;
+	radiant_event_crit_exit(key);
+}
+
 /*
  * radiant_sec asks before it writes a changed tuple; inside
  * antr_sec_policy_set() only, so a direct radiant_sec_configure() keeps its
@@ -4309,10 +4330,7 @@ __attribute__((cold)) int radiant_sec_policy_changing(uint8_t ch)
 	/* The engine's saved reply needs nothing: an idle engine's is reached
 	 * only by radiant_transfer_reply_retransmit(), which antr never calls,
 	 * and every other use is inside a burst, which is refused above. */
-	(void)radiant_sched_cancel(ch);
-	api_bind_rejected(ch);
-	api_ch[ch].sec_pay_valid = false;
-	api_sec_policy = POLICY_FLUSHED;
+	api_sec_take_back(ch);
 	return RADIANT_SEC_OK;
 }
 
@@ -4327,6 +4345,51 @@ __attribute__((cold)) int antr_sec_policy_set(uint8_t ch, uint8_t switches,
 	rc = radiant_sec_configure(ch, switches, w, page_lo, page_hi);
 	radiant_event_crit_exit(key);
 	if (api_sec_policy == POLICY_FLUSHED) {
+#if defined(CONFIG_ZTEST)
+		antr_test_take_back_seam(ch);
+#endif
+		api_pump_locked();
+	}
+	api_sec_policy = POLICY_IDLE;
+	return rc;
+}
+
+/*
+ * 0xF2 (review 2026-11-20 item C): a real rekey on a secured master takes back
+ * the staged slot and ack payload the same way, since both are ciphertext
+ * under the old keys - the old key holder's to read and, under X_AUTH, to
+ * verify, after the host was told the new key is in. radiant_sec cues
+ * radiant_sec_key_replacing() before it destroys the old root, inside
+ * antr_sec_key_replace() only: pairing installs its keys with
+ * radiant_sec_set_key() directly, inside its own exchange on the channel. The
+ * busy refusal is the adapter's, before set_key (antr_master_xfer_busy()). A
+ * slave, an unsecured master (its slot is plaintext the policy allows) and an
+ * identical key are left alone. The new root leaves the channel pending, so
+ * the pump's re-post is withheld until 0xF3; set_key's crypto runs outside the
+ * crit section, which holds the flush alone - the radio interrupt reads the
+ * ack payload, and only the pump (under api_lock, held here) posts a secured
+ * master. The TI RF_flushCmd caveat above applies.
+ */
+__attribute__((cold)) void radiant_sec_key_replacing(uint8_t ch)
+{
+	/* is_master() also bounds ch for the api_ch[] use. */
+	if (api_sec_policy != POLICY_IDLE && radiant_channel_is_master(ch) &&
+	    radiant_sec_channel_is_secured(ch)) {
+		api_sec_take_back(ch);
+	}
+}
+
+__attribute__((cold)) int antr_sec_key_replace(uint8_t ch, const uint8_t *root,
+					       size_t bits, uint16_t base_devnum)
+{
+	int rc;
+
+	api_sec_policy = POLICY_ASKED;
+	rc = radiant_sec_set_key(ch, root, bits, base_devnum);
+	if (api_sec_policy == POLICY_FLUSHED) {
+#if defined(CONFIG_ZTEST)
+		antr_test_take_back_seam(ch);
+#endif
 		api_pump_locked();
 	}
 	api_sec_policy = POLICY_IDLE;

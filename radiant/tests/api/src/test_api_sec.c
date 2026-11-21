@@ -999,6 +999,29 @@ static void sec_assert_encrypted_on_air(void)
 			    5u) != 0, "the page went on the air in the clear");
 }
 
+/* What the ack path offered between the take-back and the pump that follows
+ * it, the window where set_key's crypto runs: the pump re-post and the cancel
+ * clear the payload too, so only this sees the take-back's own invalidation. */
+static uint32_t tb_calls;
+static bool     tb_acks;
+
+void antr_test_take_back_seam(uint8_t ch)
+{
+	uint8_t out[8];
+
+	if (ch == SEC_CH) {
+		tb_calls++;
+		tb_acks = antr_test_ack_payload(ch, out);
+	}
+}
+
+static void sec_assert_no_ack_before_the_pump(void)
+{
+	zassert_equal(1u, tb_calls, "no take-back");
+	zassert_false(tb_acks,
+		      "the old ack payload was offered before the pump");
+}
+
 /* The ack payload a master would send now: none, or not the host's bytes. */
 static void sec_assert_ack_not_clear(void)
 {
@@ -1172,8 +1195,10 @@ ZTEST(api, test_sec_adding_conf_to_auth_takes_back_slot_and_ack_payload)
 			  "setup: the X_AUTH ack payload is not in the clear");
 
 	t = radiant_radio_now();
+	tb_calls = 0u;
 	sec_host_ok(antr_sec_config(SEC_CH, SEC_SW_AC, 2u, 0x01u, 0x0Fu),
 		    "0xF1");
+	sec_assert_no_ack_before_the_pump();
 	sec_assert_ack_not_clear();
 	sec_periods(4);
 
@@ -1297,6 +1322,151 @@ ZTEST(api, test_sec_a_slave_policy_is_neither_refused_nor_flushed)
 				    0x0Fu), "a slave's 0xF1");
 	zassert_equal(aborts, fake_radio_abort_calls(), "something was aborted");
 	zassert_true(radiant_sec_channel_is_secured(SEC_CH));
+	sec_close();
+}
+
+/*
+ * Review 2026-11-20 item C: a real 0xF2 rekey takes back what the master
+ * built under the old root, as a changed 0xF1 does. The staged slot and the
+ * ack payload are ciphertext under the old keys; sent after the host was told
+ * the new key is in, they are the old key holder's to read and, under X_AUTH,
+ * to verify - and a rekey is how a host revokes that holder.
+ */
+static const uint8_t sec_rekey_root[16] = {
+	0x0f, 0x1e, 0x2d, 0x3c, 0x4b, 0x5a, 0x69, 0x78,
+	0x87, 0x96, 0xa5, 0xb4, 0xc3, 0xd2, 0xe1, 0xf0,
+};
+
+/* Did a transmit due at or after `t` go on the air with exactly the eight
+ * payload bytes `body`? */
+static bool sec_aired_body_since(radiant_time_t t, const uint8_t body[8])
+{
+	for (uint32_t i = 0u; i < fake_radio_arm_count(); i++) {
+		const struct fake_radio_arm *a = fake_radio_arm(i);
+
+		if (a != NULL && a->kind == FAKE_RADIO_ARM_TX &&
+		    a->rc == RADIANT_RADIO_OK_RC && a->t_sync_at >= t &&
+		    a->terminated &&
+		    a->terminal_status == RADIANT_RADIO_STATUS_OK &&
+		    a->body_len >= SEC_BODY_LEN &&
+		    memcmp(&a->body[SEC_BODY_D0], body, 8u) == 0) {
+			return true;
+		}
+	}
+	return false;
+}
+
+ZTEST(api, test_sec_a_rekey_takes_back_the_staged_slot_and_ack_payload)
+{
+	const struct fake_radio_arm *tx;
+	uint8_t                      staged[8];
+	uint8_t                      ack[8];
+	radiant_time_t               t;
+
+	sec_open((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	sec_host_armed(SEC_SW_AC, 0x01u, 0x0Fu);
+	tx = sec_staged();
+	memcpy(staged, &tx->body[SEC_BODY_D0], sizeof(staged));
+	zassert_true(antr_test_ack_payload(SEC_CH, ack),
+		     "setup: no ack payload under the old key");
+
+	t = radiant_radio_now();
+	tb_calls = 0u;
+	sec_host_ok(antr_sec_key_set(SEC_CH, 128u, sec_rekey_root),
+		    "the new 0xF2");
+	sec_assert_no_ack_before_the_pump();
+	zassert_false(antr_test_ack_payload(SEC_CH, ack),
+		      "the old key's ack payload is still offered");
+
+	/* Before any further pump: the staged slot's instant. */
+	fake_radio_advance_to(tx->t_sync_at + 1u);
+	zassert_false(tx->terminated &&
+			      tx->terminal_status == RADIANT_RADIO_STATUS_OK,
+		      "the slot built under the old key went on the air");
+
+	sec_periods(3);
+	sec_host_ok(antr_sec_epoch_set(SEC_CH, 0u, 1u, 0u), "0xF3");
+	sec_periods(3);
+	zassert_false(sec_aired_body_since(t, staged),
+		      "the old key's slot went out after the rekey");
+	sec_assert_encrypted_on_air();
+	sec_close();
+}
+
+/* Guard: the same key again (a 0xF2 retry) disturbs nothing - no abort, the
+ * staged slot goes out as built, and the ack payload stays. */
+ZTEST(api, test_sec_an_identical_key_disturbs_nothing)
+{
+	const struct fake_radio_arm *tx;
+	uint8_t                      before[8];
+	uint8_t                      after[8];
+	uint8_t                      staged[8];
+	uint32_t                     aborts;
+	radiant_time_t               t_tx;
+
+	sec_open((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	sec_host_armed(SEC_SW_AC, 0x01u, 0x0Fu);
+	tx = sec_staged();
+	t_tx = tx->t_sync_at;
+	memcpy(staged, &tx->body[SEC_BODY_D0], sizeof(staged));
+	zassert_true(antr_test_ack_payload(SEC_CH, before));
+	aborts = fake_radio_abort_calls();
+
+	sec_host_ok(antr_sec_key_set(SEC_CH, 128u, sec_dir_root),
+		    "the same 0xF2");
+	zassert_equal(aborts, fake_radio_abort_calls(), "something was aborted");
+	zassert_true(antr_test_ack_payload(SEC_CH, after));
+	zassert_mem_equal(before, after, sizeof(before));
+
+	fake_radio_advance_to(t_tx + 1u);
+	zassert_true(tx->terminated);
+	zassert_equal(RADIANT_RADIO_STATUS_OK, tx->terminal_status,
+		      "the staged slot did not go out");
+	zassert_mem_equal(&tx->body[SEC_BODY_D0], staged, sizeof(staged));
+	sec_close();
+}
+
+/* Guard: a slave's rekey flushes nothing - it stages no secured slot. */
+ZTEST(api, test_sec_a_slave_rekey_is_not_flushed)
+{
+	uint32_t aborts;
+
+	sec_open((uint8_t)ANTW_CHANNEL_TYPE_SLAVE);
+	sec_host_armed(SEC_SW_AC, 0x01u, 0x0Fu);
+	sec_periods(1);
+	aborts = fake_radio_abort_calls();
+
+	sec_host_ok(antr_sec_key_set(SEC_CH, 128u, sec_rekey_root),
+		    "a slave's new 0xF2");
+	zassert_equal(aborts, fake_radio_abort_calls(), "something was aborted");
+	zassert_true(radiant_sec_channel_is_secured(SEC_CH));
+	sec_close();
+}
+
+/* Guard: only the 0xF2 path flushes. Pairing installs its keys through
+ * radiant_sec_set_key() directly, inside its own acked exchange on the
+ * channel, and must not have its slot cancelled under it. */
+ZTEST(api, test_sec_a_direct_set_key_does_not_flush)
+{
+	uint8_t  before[8];
+	uint8_t  after[8];
+	uint32_t aborts;
+	int      rc;
+
+	sec_open((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	sec_host_armed(SEC_SW_AC, 0x01u, 0x0Fu);
+	(void)sec_staged();
+	zassert_true(antr_test_ack_payload(SEC_CH, before));
+	aborts = fake_radio_abort_calls();
+
+	k_mutex_lock(&api_lock, K_FOREVER);
+	rc = radiant_sec_set_key(SEC_CH, sec_rekey_root, 128, SEC_DEVNUM);
+	k_mutex_unlock(&api_lock);
+	zassert_equal(RADIANT_SEC_OK, rc);
+	zassert_equal(aborts, fake_radio_abort_calls(), "something was aborted");
+	zassert_true(antr_test_ack_payload(SEC_CH, after),
+		     "the ack payload was dropped");
+	zassert_mem_equal(before, after, sizeof(before));
 	sec_close();
 }
 #endif /* CONFIG_RADIANT_SEC_HOST_MESSAGES */

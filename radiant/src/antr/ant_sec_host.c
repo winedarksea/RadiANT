@@ -165,9 +165,11 @@ static antr_err_t sec_key_set_locked(uint8_t channel, uint8_t bits,
 	/* The on-air number starts equal to the provisioning one: set_key puts
 	 * it there whenever it installs a root. Not set here as well, since a
 	 * same-root re-send is a no-op (item 9) and must keep a Tier 2
-	 * receiver's trial number (radiant_sec_try_devnum()). */
-	return sec_err(radiant_sec_set_key(channel, key, (size_t)bits,
-					   id.device_number));
+	 * receiver's trial number (radiant_sec_try_devnum()). A real rekey also
+	 * takes back the master's old-key slot and ack payload (review
+	 * 2026-11-20 item C). */
+	return sec_err(antr_sec_key_replace(channel, key, (size_t)bits,
+					    id.device_number));
 }
 
 static antr_err_t sec_epoch_set_locked(uint8_t channel, uint8_t flags,

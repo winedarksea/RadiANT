@@ -2736,6 +2736,36 @@ ZTEST(radiant_sec, test_only_a_change_asks_the_port_and_a_refusal_changes_nothin
 	zassert_mem_equal(first, again, 8u);
 }
 
+/*
+ * radiant_sec_key_replacing(), the port's cue to take back what it built
+ * under the old root (review 2026-11-20 item C): this image's stand-in counts.
+ */
+static uint32_t replacing_calls;
+static uint8_t  replacing_ch;
+
+void radiant_sec_key_replacing(uint8_t ch)
+{
+	replacing_calls++;
+	replacing_ch = ch;
+}
+
+/* Called for a real rekey only - a different root or base device number on a
+ * keyed context - and never for the first key or the same one again. */
+ZTEST(radiant_sec, test_only_a_real_rekey_cues_the_port)
+{
+	replacing_calls = 0u;
+	key_both();
+	zassert_ok(radiant_sec_set_key(TX_CH, test_root, 128, TEST_DEVNUM));
+	zassert_equal(0u, replacing_calls, "a first key or a re-send cued it");
+
+	zassert_ok(radiant_sec_set_key(TX_CH, other_root, 128, TEST_DEVNUM));
+	zassert_equal(1u, replacing_calls, "a new root was not cued");
+	zassert_equal(TX_CH, replacing_ch);
+	zassert_ok(radiant_sec_set_key(TX_CH, other_root, 128,
+				       TEST_DEVNUM + 1u));
+	zassert_equal(2u, replacing_calls, "a new base devnum was not cued");
+}
+
 /* ── An identical 0xF1 is a no-op, and a change keeps the replay floor
  * (review 2026-11-17 item 4) ──────────────────────────────────────────── */
 

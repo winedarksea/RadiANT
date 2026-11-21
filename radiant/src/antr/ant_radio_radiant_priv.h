@@ -46,6 +46,13 @@ bool antr_master_xfer_busy(uint8_t ch);
  * busy. RADIANT_SEC_* codes. Caller holds api_lock. Review 2026-11-17 item 2. */
 int antr_sec_policy_set(uint8_t ch, uint8_t switches, uint8_t w,
 			uint8_t page_lo, uint8_t page_hi);
+
+/* 0xF2: radiant_sec_set_key(), and on a secured master whose root really
+ * changes, the staged slot and ack payload (old-key ciphertext) taken back
+ * before it returns. RADIANT_SEC_* codes. Caller holds api_lock and has made
+ * the busy check. Review 2026-11-20 item C. */
+int antr_sec_key_replace(uint8_t ch, const uint8_t *root, size_t bits,
+			 uint16_t base_devnum);
 #endif
 
 #if defined(CONFIG_ZTEST)
@@ -54,6 +61,8 @@ int antr_sec_policy_set(uint8_t ch, uint8_t switches, uint8_t w,
  * path, 8 bytes into `out`, false when the channel would not acknowledge. */
 void antr_test_master_tx_seam(uint8_t ch);
 bool antr_test_ack_payload(uint8_t ch, uint8_t out[8]);
+/* Weak: after the 0xF1/0xF2 take-back, before the pump that follows it. */
+void antr_test_take_back_seam(uint8_t ch);
 #endif
 
 #endif /* ANT_RADIO_RADIANT_PRIV_H_ */
