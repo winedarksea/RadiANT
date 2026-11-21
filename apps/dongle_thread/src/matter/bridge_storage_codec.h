@@ -156,4 +156,48 @@ template <class T> bool StorableBridgedDeviceV2(const T &device)
 }
 
 } /* namespace StorageCodec */
+
+/*
+ * The bridged-endpoint high-water mark (security review 2026-11-20 item B).
+ *
+ * Matter forbids reusing a bridged endpoint id for a different device.
+ * Upstream BridgeManager rebuilt its next-id counter at every boot as
+ * max(restored ids) + 1, so an id came back into use whenever its record was
+ * not restored: the highest endpoint was unbound before a reboot, or its
+ * record failed to load or to restore (corrupt, CHIP heap, a device type this
+ * build does not serve). BridgeManager now persists the next id it will hand
+ * out (br/brd_ep_hw, see BridgeStorageManager) on every fresh allocation and
+ * seeds the counter from it at boot. A store written before the key existed
+ * decodes as absent and behaves as upstream did; restoring then raises the
+ * counter and writes the key once.
+ *
+ * The stored value is the NEXT id (one past the highest ever handed out), as
+ * a uint16_t in native byte order (little-endian on every target), the way
+ * brd_cnt stores its uint8_t. These functions are the whole of the counter
+ * arithmetic BridgeManager uses, so apps/dongle_thread/tests/matter_storage
+ * can drive the bind/unbind/reboot sequence without CHIP.
+ */
+namespace EndpointHighWater
+{
+
+constexpr size_t kSize = sizeof(uint16_t);
+/* chip::kInvalidEndpointId. Never a valid next id: stored, it is corrupt. */
+constexpr uint16_t kInvalid = 0xFFFF;
+
+void Encode(uint16_t next, uint8_t (&out)[kSize]);
+
+/* False (next untouched) unless buf holds exactly one valid stored value. */
+bool Decode(const uint8_t *buf, size_t size, uint16_t &next);
+
+/* The counter at boot, before any record is restored: the stored next id if
+ * there is one and it is past the first dynamic id, else the first. */
+uint16_t Seed(uint16_t first, bool haveStored, uint16_t storedNext);
+
+/* Upstream's raise past a restored endpoint id, unchanged. */
+uint16_t Raise(uint16_t current, uint16_t restoredId);
+
+/* Upstream's step after a fresh allocation, with its wrap guard. */
+uint16_t Advance(uint16_t current, uint16_t first);
+
+} /* namespace EndpointHighWater */
 } /* namespace RadiantMatter */
