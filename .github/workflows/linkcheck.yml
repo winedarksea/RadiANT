@@ -20,14 +20,18 @@ on:
     - cron: "17 6 * * 1"
   workflow_dispatch:
 
+# Read by default. Only the links job, which files the dead-link issue,
+# raises itself to issues: write; budget needs nothing more than read.
 permissions:
   contents: read
-  issues: write
 
 jobs:
   links:
     name: external URLs in archive/ and docs/
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: write
     # This one reaches the network, so it is the job most able to hang.
     timeout-minutes: 20
     steps:
