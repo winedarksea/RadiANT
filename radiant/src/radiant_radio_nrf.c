@@ -4460,8 +4460,23 @@ int radiant_radio_abort(void)
 	 * the abort was for the grant that just ended (whose operation had its
 	 * terminal before the slot was free to claim), the arm's own request is
 	 * untouched in the gate (g.pending), and its grant or denial still comes.
+	 *
+	 * The same holds once that arm has staged and cleared its mark
+	 * (arm_settle_staged()): an operation staged behind its own placed
+	 * request never had the ending grant's air, so the signal's abort is not
+	 * for it. Aborting it gave ABORTED for air it never had and forgot its
+	 * request (one slot lost) whenever the end landed between the settle and
+	 * the owed release (review 2026-11-19): inside the arm before
+	 * d2_settle_now(), or, without D2, anywhere in the rest of the dispatch
+	 * before grant_release_settle(). Tested here, at the one abort site,
+	 * rather than by holding the mark longer, so the transmit, receive and
+	 * energy-detect staged branches and the time after the arm returns are
+	 * all covered. Only while the request is still placed: then its grant
+	 * or denial is certain to follow (test_arm_handback.c
+	 * test_staged_successor_survives_extend_failed).
 	 */
-	if (arm_marked && gate_in_signal()) {
+	if (gate_in_signal() &&
+	    (arm_marked || (radiant_staged.pending && gate_request_pending()))) {
 		irq_unlock(key);
 		return RADIANT_RADIO_OK_RC;
 	}
