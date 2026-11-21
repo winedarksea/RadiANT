@@ -478,7 +478,9 @@ ZTEST(radiant_gate_d2, test_d2_a_refused_scan_extension_costs_the_booked_slot_no
  * timeslot and calls radiant_radio_abort(), but nothing in the gate may drop
  * the staged request: g.pending and the booking's role survive, no denial
  * reaches the backend (denied_work_fn()'s g.pending test), and the booked
- * session's START still programmes it.
+ * session's START still programmes it. Documentation of the gate's side only:
+ * the backend is faked here, so this is green with or without ba16a6a; the
+ * fix is pinned by the backend test above.
  */
 ZTEST(radiant_gate_d2, test_d2_extend_failed_leaves_a_staged_request_pending)
 {

@@ -1035,3 +1035,35 @@ void backend_preempt_staged_in_grant(int kind, uint32_t n, bool late,
 {
 	preempt_run(kind, BACKEND_PRE_ABORT_END, n, late, true, true, out);
 }
+
+int backend_signal_abort_staged(int kind, bool request_placed, uint32_t *aborted,
+				bool *still_staged)
+{
+	int rc;
+
+	backend_reset();
+	radiant_op.inited = true;
+	radiant_op.enabled = true;
+	radiant_op.next_id = 1u;
+	radiant_op.conn_start = 1u;
+	radiant_op.conn_close = 2u;
+	radiant_op.conn_start_tx = 4u;
+	radiant_op.conn_rssi = 5u;
+	fg.gen = 7u;
+	fg.pending = true;
+	rc = pre_arm(kind, radiant_radio_now() + 1500u);
+	fg.pending = false;
+	if (!request_placed) {
+		/* The request is gone (its deadline fired, or op_forget()) and
+		 * its denial is not yet delivered. */
+		fg.req_pending = false;
+	}
+	/* EXTEND_FAILED / the extension skip: hand-back, then the abort. */
+	fg.in_signal = true;
+	pre_hand_back();
+	(void)radiant_radio_abort();
+	fg.in_signal = false;
+	*aborted = pre_aborted() + cb_aborted;
+	*still_staged = radiant_staged.pending && radiant_op.kind != OP_NONE;
+	return rc;
+}

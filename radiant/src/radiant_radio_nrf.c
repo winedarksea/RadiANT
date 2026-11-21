@@ -2368,6 +2368,9 @@ static void grant_release_settle(void)
 		D2DBG(1);
 		return;
 	}
+	/* gate_held() is load-bearing, here and in d2_settle_now(): with no grant
+	 * held gate_release_masked() calls op_forget(), which would drop the
+	 * staged operation's placed request (g.pending) with no denial. */
 	if (gate_held()) {
 		D2DBG(0);
 		gate_release();
@@ -2383,6 +2386,9 @@ static void grant_release_settle(void)
  */
 static void d2_settle_now(void)
 {
+	/* gate_held(): see grant_release_settle(). The release must not reach
+	 * gate_release_masked()'s !g.granted branch, whose op_forget() would drop
+	 * the request the arm just staged behind. */
 	if (grant_release_owed && gate_held()) {
 		D2DBG(4);
 		grant_release_owed = false;

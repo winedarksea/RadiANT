@@ -300,7 +300,40 @@ ZTEST(radiant_backend_arm_handback, test_handback_disables_connections_before_ab
 			      "%s %s: a window connection outlived the hand-back",
 			      kn[kind], mn[modes[m]]);
 		zassert_equal(r.terminals_final, 1u, "%s %s", kn[kind], mn[modes[m]]);
+		/* The signal's abort of a live operation is a real abort: its
+		 * terminal is ABORTED, not the gate's later DENIED (which would
+		 * hide an abort that skipped every operation in the signal). */
+		zassert_equal(r.aborted_final, (modes[m] == BACKEND_PRE_ABORT_END) ? 1u : 0u,
+			      "%s %s: %u ABORTED", kn[kind], mn[modes[m]], r.aborted_final);
 	}
+	}
+}
+
+/*
+ * The bounds of ba16a6a's skip. The signal's abort leaves a staged operation
+ * alone only while its own request is still placed (its grant or denial is
+ * then certain). With the request gone (deadline fired, op_forget()) the
+ * staged operation is aborted as before: ABORTED, no longer staged. A skip
+ * wider than that (every staged operation, or every abort in the signal)
+ * fails the second half.
+ */
+ZTEST(radiant_backend_arm_handback, test_signal_abort_skips_staged_only_while_requested)
+{
+	for (int kind = BACKEND_ARM_TX; kind <= BACKEND_ARM_ED; kind++) {
+		uint32_t aborted;
+		bool     staged;
+
+		zassert_equal(backend_signal_abort_staged(kind, true, &aborted, &staged),
+			      RADIANT_RADIO_OK_RC, "%s", kn[kind]);
+		zassert_true(staged, "%s: request placed, but the staged op was aborted",
+			     kn[kind]);
+		zassert_equal(aborted, 0u, "%s", kn[kind]);
+
+		zassert_equal(backend_signal_abort_staged(kind, false, &aborted, &staged),
+			      RADIANT_RADIO_OK_RC, "%s", kn[kind]);
+		zassert_false(staged, "%s: request gone, but the staged op was kept",
+			      kn[kind]);
+		zassert_equal(aborted, 1u, "%s: request gone, %u ABORTED", kn[kind], aborted);
 	}
 }
 

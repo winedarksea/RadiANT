@@ -146,5 +146,11 @@ void     backend_preempt_arm(int kind, int mode, uint32_t n, bool late, bool hel
  * grant_release_settle()). */
 void     backend_preempt_staged_in_grant(int kind, uint32_t n, bool late,
 					 struct backend_preempt_result *out);
+/* An arm staged behind a placed request (GATE_PENDING, grant held), then
+ * EXTEND_FAILED from the signal; with !request_placed the request is gone
+ * first (g.pending false). Returns the arm's rc; ABORTED terminals and whether
+ * the operation is still staged come back through the pointers. */
+int      backend_signal_abort_staged(int kind, bool request_placed, uint32_t *aborted,
+				     bool *still_staged);
 
 #endif

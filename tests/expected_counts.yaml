@@ -203,7 +203,10 @@ min_scenarios: 26
 # +2 (staged successor vs EXTEND_FAILED, connections off at the hand-back),
 # radiant.gate and radiant.gate.lp +1 each (EXTEND_FAILED leaves a staged
 # request pending), and the new radiant.backend.d2 scenario's 54.
-min_testcases: 6695
+# 6697 (+2), the review: the signal abort's staged skip bounded by the request
+# (test_signal_abort_skips_staged_only_while_requested), in radiant.backend
+# and radiant.backend.d2.
+min_testcases: 6697
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -261,11 +264,13 @@ min_cases.radiant.gate: 87
 # FAILED/DENIED/ABORTED transmits, abort from a frame and a transmit callback).
 # 2026-11-20: 19 with the MPSL hazards' 2 (test_arm_handback.c: a staged
 # successor survives EXTEND_FAILED; connections off at the hand-back before
-# any abort). Observed 54.
-min_cases.radiant.backend: 19
+# any abort). Observed 54. 20 with the review's bound on the skip (the
+# staged operation aborted once its request is gone).
+min_cases.radiant.backend: 20
 # radiant.backend.d2: the same suite with CONFIG_RADIANT_GATE_MPSL_D2 (the
 # staged branches run d2_settle_now()). 54, the observed count (2026-11-20).
-min_cases.radiant.backend.d2: 54
+# 55 with the review's case (as radiant.backend).
+min_cases.radiant.backend.d2: 55
 min_cases.hrm_ble.sim_sched: 4
 min_cases.treadmill.pages: 20
 min_cases.treadmill.hr_rx: 3
