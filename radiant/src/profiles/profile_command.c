@@ -247,6 +247,15 @@ static void backoff_clear(struct profile_cmd_node *n)
 	n->blocked_until = 0u;
 }
 
+/* Windows a duplicate or a 0x02 buys: none while a penalty runs. The replay
+ * is still answered, but it must not keep the node listening for the next
+ * forgery. A legitimate sender caught by that penalty still gets its answer,
+ * and its next fresh command clears the ladder and buys windows again. */
+static uint32_t replay_windows(const struct profile_cmd_node *n)
+{
+	return (n->fails == 0u) ? PROFILE_CMD_RETRY_WINDOWS : 0u;
+}
+
 /* ---------------------------------------------------------------------------
  * The state machine - section 9's five rules, in section 9's order
  * ---------------------------------------------------------------------------
@@ -378,7 +387,10 @@ int profile_cmd_on_command(struct profile_cmd_node *n, const uint8_t *body,
 		return emit_ack(n, &a, ext, ack, ack_cap);
 	}
 
-	backoff_clear(n);
+	/* A genuine tag is not yet a success. The duplicate and the 0x02 below
+	 * answer commands anyone can record off air, so the ladder clears only
+	 * where a fresh sequence is accepted (security review 2026-11-20
+	 * item 4). */
 
 	/* --- Rule 2: a duplicate executes nothing. -------------------------
 	 * Re-sends the stored content but reports 0x01 (already executed)
@@ -394,7 +406,7 @@ int profile_cmd_on_command(struct profile_cmd_node *n, const uint8_t *body,
 			a.result = PROFILE_TLM_RESULT_ALREADY;
 		}
 		n->stats.repeats++;
-		profile_cmd_expect(n, PROFILE_CMD_RETRY_WINDOWS);
+		profile_cmd_expect(n, replay_windows(n));
 		return emit_ack(n, &a, ext, ack, ack_cap);
 	}
 
@@ -417,9 +429,10 @@ int profile_cmd_on_command(struct profile_cmd_node *n, const uint8_t *body,
 		a.seq = c.seq;
 		a.result = result;
 		a.cmd = c.cmd;
-		profile_cmd_expect(n, PROFILE_CMD_RETRY_WINDOWS);
+		profile_cmd_expect(n, replay_windows(n));
 		return emit_ack(n, &a, ext, ack, ack_cap);
 	}
+	backoff_clear(n);
 	if (!n->seq_known) {
 		n->stats.adopted++;
 	}
