@@ -1986,12 +1986,6 @@ ZTEST(profiles, test_gate_a_0x60_node_is_discovered_and_decoded_from_the_air)
 	 * opens a continuous search window and is handed eight bytes at a
 	 * time; everything below comes out of those bytes. */
 	fake_radio_reset();
-	/* Punctual delivery: this gate is about decoding every frame, and the
-	 * preset's chunk-end terminal lag (149 us plus the lead before the
-	 * next chunk) drops the one frame that falls into a gap between
-	 * background-scan chunks, as it would on the bench. */
-	fake_radio_set_rx_terminal_delay_us(0u);
-	fake_radio_set_rx_frame_delay_us(0u);
 	profile_desc_rx_init(&heard_rx);
 	heard_have_schema = false;
 	heard_n_data = 0u;
@@ -2008,7 +2002,13 @@ ZTEST(profiles, test_gate_a_0x60_node_is_discovered_and_decoded_from_the_air)
 					    sizeof(search_filter.addr)));
 	search_filter.addr_len = 3u;
 
-	t = radiant_radio_now() + 50000u;
+	/* The scan opens half a chunk (RADIANT_SCHED_SCAN_CHUNK_US) before the
+	 * first frame. The 4 Hz frame grid drifts ~0.6 ms a chunk against the
+	 * chunk boundaries (chunk 250 ms vs period 249.725 ms, plus each chunk
+	 * end's terminal lag and re-arm lead), so starting mid-chunk keeps all
+	 * 32 frames clear of a boundary gap with the preset delays left on. A
+	 * frame inside a gap is lost, on the bench as here. */
+	t = radiant_radio_now() + 200000u;
 	for (i = 0u; i < gate_n_air; i++) {
 		uint8_t frame[FAKE_RADIO_AIR_FRAME_MAX];
 		uint8_t n;
@@ -2031,7 +2031,7 @@ ZTEST(profiles, test_gate_a_0x60_node_is_discovered_and_decoded_from_the_air)
 		rx.rf_index = RADIANT_RF_INDEX_ANT_PLUS;
 		rx.filters = &search_filter;
 		rx.n_filters = 1u;
-		rx.t_open = t - 1000u;
+		rx.t_open = t - RADIANT_SCHED_SCAN_CHUNK_US / 2u;
 		rx.t_close = RADIANT_TIME_NEVER; /* background scan */
 		zassert_ok(radiant_sched_request_rx(0u, &rx));
 		zassert_ok(radiant_sched_tick());
