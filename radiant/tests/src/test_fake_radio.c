@@ -802,6 +802,7 @@ ZTEST(fake_radio, test_arming_too_late_is_etime)
 	zassert_equal(40u + (1u + 5u) * 8u, floor_rx);
 	zassert_equal(floor_rx + 1u, floor_tx);
 	zassert_true(floor_tx < lead, "no band: floor %u lead %u", floor_tx, lead);
+	fake_radio_allow_inside_lead(true);
 
 	memset(&rx, 0, sizeof(rx));
 	rx.fmt = &fmt_hal_len_from_body;
@@ -1905,6 +1906,7 @@ ZTEST(fake_radio, test_a_cc26xx_window_armed_inside_the_lead_loses_its_head)
 	fake_radio_caps_preset_cc26xx(false);
 	lead = radiant_radio_caps_get()->min_arm_lead_us;
 	zassert_equal(600u, lead);
+	fake_radio_allow_inside_lead(true);
 	up();
 	zassert_equal(150u, fake_radio_arm_floor_us(FAKE_RADIO_ARM_RX,
 						    &fmt_hal_len_from_body, 5u,
@@ -1957,6 +1959,7 @@ ZTEST(fake_radio, test_a_cc26xx_transmit_inside_the_lead_goes_out_on_time)
 	};
 
 	fake_radio_caps_preset_cc26xx(false);
+	fake_radio_allow_inside_lead(true);
 	up();
 	/* TX_ARM_FLOOR_US(5, false, +100): 150 + (1 + 5) * 8 + 150 - 100. */
 	floor_tx = fake_radio_arm_floor_us(FAKE_RADIO_ARM_TX,
@@ -2095,4 +2098,28 @@ ZTEST(fake_radio, test_the_cc26xx_preset_terminal_follows_the_hold)
 	zassert_equal(1u, n_rxr);
 	zassert_equal(RADIANT_RADIO_STATUS_TIMEOUT, rxr[0].status);
 	expect_clean();
+}
+
+/* An arm inside the lead that no test asked for is a violation: the core
+ * plans against min_arm_lead_us, so the viol_count() == 0 teardown every
+ * suite runs is the "never arms inside the lead" detector. */
+ZTEST(fake_radio, test_an_unasked_arm_inside_the_lead_is_a_violation)
+{
+	struct radiant_rx_req rx;
+	uint32_t op = 0u;
+	radiant_time_t now;
+
+	up();
+	now = radiant_radio_now();
+	memset(&rx, 0, sizeof(rx));
+	rx.fmt = &fmt_hal_len_from_body;
+	rx.rf_index = RADIANT_RF_INDEX_ANT_PLUS;
+	rx.filters = &filt_track;
+	rx.n_filters = 1u;
+	rx.t_open = now + radiant_radio_caps_get()->min_arm_lead_us - 1u;
+	rx.t_close = now + 10000u;
+	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_rx(&rx, &op));
+	zassert_equal(1u, fake_radio_viol_count());
+	zassert_equal(FAKE_RADIO_VIOL_INSIDE_LEAD, fake_radio_viol(0)->code);
+	(void)radiant_radio_abort();
 }

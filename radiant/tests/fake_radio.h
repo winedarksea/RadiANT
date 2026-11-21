@@ -369,6 +369,9 @@ enum fake_radio_viol {
 	FAKE_RADIO_VIOL_CAPS_UNMODELLABLE,
 	FAKE_RADIO_VIOL_QUEUE_FULL,
 	FAKE_RADIO_VIOL_LOG_FULL,
+	FAKE_RADIO_VIOL_INSIDE_LEAD,     /* an arm accepted inside the advertised
+					  * lead (stats.arms_inside_lead), unless
+					  * fake_radio_allow_inside_lead() */
 	FAKE_RADIO_VIOL_COUNT
 };
 
@@ -675,6 +678,12 @@ void fake_radio_set_forced_arm_cost_us(uint32_t us);
  * starts late and listens only from arm time + the lead; a CC26x2 transmit
  * goes out on time. Energy detect keeps the full lead.
  */
+/* Every arm accepted inside the lead also records FAKE_RADIO_VIOL_INSIDE_LEAD,
+ * so the viol_count() == 0 habit in every suite's teardown is the "core never
+ * arms inside the lead" detector. A test that pushes an arm into the band on
+ * purpose opts out with this (cleared by fake_radio_reset()). */
+void fake_radio_allow_inside_lead(bool allow);
+
 uint32_t fake_radio_arm_floor_us(enum fake_radio_arm_kind kind,
 				 const struct radiant_pkt_format *fmt,
 				 uint8_t addr_len, uint8_t rf_index);

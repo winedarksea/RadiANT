@@ -175,6 +175,7 @@ struct fake_state {
 	enum floor_model floor_model;
 	uint32_t arm_floor_us;
 	bool     arm_inside_lead;
+	bool     allow_inside_lead; /* fake_radio_allow_inside_lead() */
 	uint8_t  tuned_rf;
 	uint32_t rx_terminal_delay_us;
 	/* A transmit's terminal lag past its t_sync (frame tail + ISR on the
@@ -354,6 +355,8 @@ const char *fake_radio_viol_name(enum fake_radio_viol v)
 		return "the air queue is full";
 	case FAKE_RADIO_VIOL_LOG_FULL:
 		return "a record log is full";
+	case FAKE_RADIO_VIOL_INSIDE_LEAD:
+		return "an arm inside caps.min_arm_lead_us: the core planned too late";
 	case FAKE_RADIO_VIOL_COUNT:
 	default:
 		return "unknown";
@@ -2120,6 +2123,15 @@ static void note_arm_accepted(struct fake_radio_arm *rec, uint8_t rf_index)
 	if (g.arm_inside_lead) {
 		g.stats.arms_inside_lead++;
 		rec->inside_lead = true;
+		/* The backend serves it, but the core subtracts the lead itself
+		 * when it plans, so reaching here is a planning bug unless the
+		 * test pushed the arm into the band on purpose. Recorded as a
+		 * violation so every suite's viol_count() == 0 teardown catches
+		 * it, as finish()'s rc_etime == 0 did before the floor model. */
+		if (!g.allow_inside_lead) {
+			record_viol(FAKE_RADIO_VIOL_INSIDE_LEAD,
+				    "armed inside caps.min_arm_lead_us");
+		}
 	}
 	g.tuned_rf = rf_index;
 }
@@ -3115,6 +3127,11 @@ uint32_t fake_radio_arm_floor_us(enum fake_radio_arm_kind kind,
 	uint32_t lead = g.caps.min_arm_lead_us;
 
 	return (raw < lead) ? raw : lead;
+}
+
+void fake_radio_allow_inside_lead(bool allow)
+{
+	g.allow_inside_lead = allow;
 }
 
 void fake_radio_set_tx_offset_us(int32_t us)

@@ -2624,6 +2624,7 @@ static void band_arm_case(uint32_t cost_us, uint8_t *served_out,
 	zassert_ok(radiant_sched_request_rx(1u, &r));
 	fake_radio_force_next_arm(RADIANT_RADIO_EDENIED);
 	fake_radio_set_forced_arm_cost_us(cost_us);
+	fake_radio_allow_inside_lead(true);
 	zassert_ok(radiant_sched_tick());
 
 	zassert_equal(2u, fake_radio_arm_count(), "%u arm calls",
