@@ -21,10 +21,14 @@ on:
       - "v*"
   workflow_dispatch:
 
-# Needed by softprops/action-gh-release in build-core. ci.yml is narrowed to
-# read for exactly this reason: only the lane that publishes gets to write.
+# READ BY DEFAULT, WRITE IN ONE JOB. Every build job runs third-party
+# actions, the SDK's west/CMake/Python and the repository's own scripts; none
+# of them needs to write to the repository, so none of them gets a token that
+# can. Only `publish` (at the end of this file) raises itself to
+# contents: write, and it runs nothing but checkout, download-artifact,
+# sha256sum, version_int.py and the release action.
 permissions:
-  contents: write
+  contents: read
 
 # NO SECRET IS USED ANYWHERE IN THIS FILE, and that is new. Until the
 # 2026-08-20 switchover in
@@ -568,14 +572,28 @@ jobs:
       # The dongle has no mass-storage bootloader; its onboard USB bootloader
       # takes a Nordic DFU package. `pkg` lives in nrfutil's nrf5sdk-tools
       # command, which is a separate install on top of the nrfutil binary.
+      #
+      # BOTH ARE PINNED, because this step builds a shipping image. The
+      # unversioned .../x86_64-unknown-linux-gnu/nrfutil URL is whatever Nordic
+      # last uploaded, so the binary is fetched by its versioned name (Nordic
+      # keeps every release beside "latest" in the same Artifactory folder) and
+      # checked against a SHA-256 taken when the pin was set - a replaced file
+      # fails here, loudly, instead of packaging the release. nrf5sdk-tools is
+      # installed at an exact version, the same one scripts/package_dfu.ps1
+      # insists on; bump the two together.
       - name: Collect DFU package
         if: matrix.package == 'dfu'
+        env:
+          NRFUTIL_URL: https://files.nordicsemi.com/artifactory/swtools/external/nrfutil/executables/x86_64-unknown-linux-gnu/nrfutil-x86_64-unknown-linux-gnu-1.4.2-8a9090a
+          NRFUTIL_SHA256: a14996288928a92081cadeefd2dd37fcb54ee99a568fd4eaa6fb9586a51fba57
+          NRF5SDK_TOOLS_VERSION: 1.1.0
         run: |
           set -euxo pipefail
-          curl -fsSL -o nrfutil \
-            https://files.nordicsemi.com/artifactory/swtools/external/nrfutil/executables/x86_64-unknown-linux-gnu/nrfutil
+          curl -fsSL -o nrfutil "${NRFUTIL_URL}"
+          echo "${NRFUTIL_SHA256}  nrfutil" | sha256sum -c -
           chmod +x nrfutil
-          ./nrfutil install nrf5sdk-tools
+          ./nrfutil install "nrf5sdk-tools=${NRF5SDK_TOOLS_VERSION}"
+          ./nrfutil nrf5sdk-tools --version | head -n 1 | grep -F " ${NRF5SDK_TOOLS_VERSION} "
           hex="$(find build -name zephyr.hex -path '*/dongle/*' -print -quit)"
           test -n "${hex}"
           mkdir -p dist
@@ -607,21 +625,6 @@ jobs:
             "dist/${{ matrix.artifact }}"
           ls -l dist/
 
-      - name: Upload artifact
-        if: matrix.artifact != ''
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: ${{ matrix.artifact }}
-          if-no-files-found: error
-          path: dist/${{ matrix.artifact }}
-
-      # A tag that disagrees with VERSION produces a DFU package whose declared
-      # version does not match the release it hangs off. Checked here rather
-      # than in host-tests because only here is there a tag to check.
-      - name: Tag agrees with VERSION
-        if: matrix.release && startsWith(github.ref, 'refs/tags/v')
-        run: python app/scripts/version_int.py --check-tag "${GITHUB_REF_NAME}"
-
       # UF2 targets cannot be signed at all - the bootloader takes any image on
       # the drive - and the nRF52840 Dongle's DFU cannot USEFULLY be signed
       # either, because the stock Nordic bootloader validates against a key
@@ -629,27 +632,56 @@ jobs:
       # works-out-of-the-box property, so the posture is published sums rather
       # than a signature that would not be checked. SECURITY.md states this
       # plainly rather than leaving it implied; these are the sums it promises.
+      #
+      # Computed inside dist/ so the file names the image by its bare name and
+      # `sha256sum -c` works from wherever a user saved both files. Every row
+      # with an artifact gets one (it costs nothing), and it travels in the
+      # uploaded artifact; the publish job re-checks it before attaching.
       - name: Publish SHA-256 of the artifact
-        if: matrix.release && startsWith(github.ref, 'refs/tags/v')
+        if: matrix.artifact != ''
+        working-directory: dist
         run: |
           set -euo pipefail
-          sha256sum "dist/${{ matrix.artifact }}" | tee "dist/${{ matrix.artifact }}.sha256"
+          sha256sum "${{ matrix.artifact }}" | tee "${{ matrix.artifact }}.sha256"
           {
             echo "### ${{ matrix.artifact }}"
             echo ''
             echo '```'
-            cat "dist/${{ matrix.artifact }}.sha256"
+            cat "${{ matrix.artifact }}.sha256"
             echo '```'
           } >> "${GITHUB_STEP_SUMMARY}"
 
-      # Only the five shipping images. Every other row in this matrix is built
-      # to keep it compiling and is downloadable from the run, not handed to
-      # anyone as a release.
-      - name: Attach to release
-        if: matrix.release && startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+      - name: Upload artifact
+        if: matrix.artifact != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          files: |
+          name: ${{ matrix.artifact }}
+          if-no-files-found: error
+          path: |
+            dist/${{ matrix.artifact }}
+            dist/${{ matrix.artifact }}.sha256
+
+      # A tag that disagrees with VERSION produces a DFU package whose declared
+      # version does not match the release it hangs off. Checked here as well
+      # as in `publish` so a bad tag fails the row that built the image, not
+      # only the job at the end.
+      - name: Tag agrees with VERSION
+        if: matrix.release && startsWith(github.ref, 'refs/tags/v')
+        run: python app/scripts/version_int.py --check-tag "${GITHUB_REF_NAME}"
+
+      # NOTHING IN THIS JOB WRITES TO THE RELEASE ANY MORE. The five shipping
+      # images are handed to the `publish` job under a `release-` name; it
+      # attaches them only after every build job and zero-cost have passed,
+      # and it is the only job holding contents: write. Every other row in
+      # this matrix is built to keep it compiling and is downloadable from the
+      # run, not handed to anyone as a release.
+      - name: Hand the image to the publish job
+        if: matrix.release && startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-${{ matrix.artifact }}
+          if-no-files-found: error
+          path: |
             dist/${{ matrix.artifact }}
             dist/${{ matrix.artifact }}.sha256
 
@@ -2486,3 +2518,87 @@ jobs:
             exit 1
           fi
 
+  # THE ONLY JOB THAT PUBLISHES, and the only one that can write. It used to be
+  # a step inside each shipping build-core row, which meant each row attached
+  # its own image the moment it finished - with no regard for the other build
+  # jobs or for zero-cost - and every job in the workflow held contents: write
+  # to make that possible. Now a release appears only when the whole lane is
+  # green, and all five images go up together or not at all.
+  #
+  # What it trusts: the `release-*` artifacts from this run. It re-checks each
+  # image against the .sha256 its build row computed, re-checks the tag
+  # against VERSION, and checks that it got exactly one artifact per
+  # `release: true` row in this file, so a sixth shipping row cannot be added
+  # and silently left out.
+  publish:
+    name: publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - build-core
+      - build-new-apps
+      - build-node
+      - build-treadmill
+      - build-trainer
+      - zero-cost
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout application
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          path: app
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Tag agrees with VERSION
+        run: python app/scripts/version_int.py --check-tag "${GITHUB_REF_NAME}"
+
+      - name: Download the shipping images
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Verify the images against their sums
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          ls -l
+          want="$(grep -cE '^ +release: true$' ../app/.github/workflows/release.yml)"
+          sums=( *.sha256 )
+          echo "release rows: ${want}, sums downloaded: ${#sums[@]}"
+          if [[ "${#sums[@]}" -ne "${want}" ]]; then
+            echo "::error::expected ${want} shipping images, got ${#sums[@]}"
+            exit 1
+          fi
+          for sum in "${sums[@]}"; do
+            img="${sum%.sha256}"
+            test -f "${img}"
+            # One line, naming the image by its bare name (a leading `*` is
+            # sha256sum's binary-mode marker): anything else is
+            # not a sum this workflow wrote.
+            test "$(wc -l < "${sum}")" -eq 1
+            test "$(awk '{f = $2; sub(/^\*/, "", f); print f}' "${sum}")" = "${img}"
+            sha256sum -c "${sum}"
+          done
+          # And no image without a sum.
+          for img in *; do
+            [[ "${img}" == *.sha256 ]] && continue
+            test -f "${img}.sha256"
+          done
+
+      - name: Attach to release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          fail_on_unmatched_files: true
+          files: dist/*
