@@ -189,7 +189,13 @@ min_scenarios: 25
 # payload (security review 2026-11-20 item C, fix/sec-rekey-staged): +1 per
 # unit scenario (test_sec.c: only a real rekey cues the port) and +4 in
 # radiant.api.sec_host (test_api_sec.c: the take-back and three guards).
-min_testcases: 6516
+# 2026-11-20: 6562 (+80), key redaction in the bridge's host trace and parser
+# wipe (security review 2026-11-20 item D, fix/sec-trace-redact): +16 per unit
+# scenario (bridge_trace and bridge_trace_sec, 8 cases each).
+# 2026-11-20: 6592 (+30), the review's follow-ups to item D: +6 per unit
+# scenario (failed-checksum wipe, 0x7F RNG seed, 0x7F crypto id, in each suite).
+# Merged (items 4, C, D on one tree): 6482 + 25 + 9 + 110 = 6626.
+min_testcases: 6626
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -214,9 +220,12 @@ min_testcases: 6516
 # 2026-11-20: +2 per unit scenario (command: replays keep the backoff, review item 4).
 # 2026-11-20: +3 per unit scenario (command: fresh-after-replay, exhausted 0x02, no banking).
 # 2026-11-20: +1 per unit scenario (radiant_sec: only a real rekey cues the port).
-min_cases.radiant.unit: 1089
-min_cases.radiant.unit.sec_modes: 1089
-min_cases.radiant.unit.no_pairing: 1029
+# 2026-11-20: +16 per unit scenario (bridge_trace, bridge_trace_sec: key
+# redaction, security review item D).
+# 2026-11-20: +6 per unit scenario (bridge_trace{,_sec}: review follow-ups).
+min_cases.radiant.unit: 1111
+min_cases.radiant.unit.sec_modes: 1111
+min_cases.radiant.unit.no_pairing: 1051
 min_cases.radiant.api: 86
 min_cases.radiant.api.sec: 90
 # +1 with the identical-0xF1 retry case (review 2026-11-17 item 4).
@@ -252,7 +261,9 @@ min_cases.treadmill.hr_rx: 3
 # 2026-11-20: +2 (command: replays keep the backoff, as radiant.unit).
 # 2026-11-20: +3 (command: the review's three cases, as radiant.unit).
 # 2026-11-20: +1 (radiant_sec: only a real rekey cues the port, as radiant.unit).
-min_cases.radiant.unit.ack_faults: 1096
+# 2026-11-20: +16 (bridge_trace, bridge_trace_sec, as radiant.unit).
+# 2026-11-20: +6 (bridge_trace review follow-ups, as radiant.unit).
+min_cases.radiant.unit.ack_faults: 1118
 # radiant.unit.diag: the unit suites with CONFIG_RADIANT_DIAG_COUNTERS.
 # 1127 (2026-11-16, Bluefin twister on fix/diag-page9-done-cb): the observed
 # count, including the four page-9/page-12 scheduler cases.
@@ -263,7 +274,9 @@ min_cases.radiant.unit.ack_faults: 1096
 # 2026-11-20: +2 (command: replays keep the backoff, as radiant.unit).
 # 2026-11-20: +3 (command: the review's three cases, as radiant.unit).
 # 2026-11-20: +1 (radiant_sec: only a real rekey cues the port, as radiant.unit).
-min_cases.radiant.unit.diag: 1167
+# 2026-11-20: +16 (bridge_trace, bridge_trace_sec, as radiant.unit).
+# 2026-11-20: +6 (bridge_trace review follow-ups, as radiant.unit).
+min_cases.radiant.unit.diag: 1189
 min_cases.trainer.model: 14
 # radiant.lp_clock (power plan pass B2): the low-power timebase arithmetic,
 # 31 unit cases and seven 100 000-cycle drift simulations (three of them

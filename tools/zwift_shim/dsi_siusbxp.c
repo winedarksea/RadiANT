@@ -42,19 +42,98 @@ static void flush_zero_run(void)
     t_zero_ms = 0;
 }
 
-/* "id=0x4E" or "id=0x4F,0x46" for each 0xA4-framed message in the buffer.
- * The sync byte is always 0xA4, so logging the first byte says nothing. */
+/* The length of the 0xA4 frame at b[i] if it lies wholly inside the buffer
+ * and its checksum holds, else 0. Nothing past a frame that fails is trusted:
+ * a LEN that lies, or key bytes that happen to start with 0xA4, would
+ * otherwise send the walk through key material as if it were framing. */
+static DWORD frame_ok(const unsigned char *b, DWORD n, DWORD i)
+{
+    DWORD flen, k;
+    unsigned char x = 0;
+
+    if (i + 4 > n || b[i] != 0xA4)
+        return 0;
+    flen = (DWORD)b[i + 1] + 4;     /* sync, len, id, payload, checksum */
+    if (i + flen > n)
+        return 0;
+    for (k = 0; k + 1 < flen; k++)
+        x ^= b[i + k];
+    return x == b[i + flen - 1] ? flen : 0;
+}
+
+/* "id=0x4E" or "id=0x4F,0x46" for each leading frame that passes frame_ok(),
+ * or "unframed" when none does. No byte of a write that did not frame is
+ * named: it may be the middle of a key split across two writes. */
 static void ant_ids(const unsigned char *b, DWORD n, char *out, size_t cap)
 {
-    DWORD i = 0;
+    DWORD i = 0, flen;
     size_t o = 0;
     out[0] = '\0';
-    while (i + 2 < n && b[i] == 0xA4 && o + 8 < cap) {
+    while ((flen = frame_ok(b, n, i)) != 0 && o + 8 < cap) {
         o += sprintf_s(out + o, cap - o, "%s0x%02X", o ? "," : "id=", b[i + 2]);
-        i += (DWORD)b[i + 1] + 4;   /* sync, len, id, payload, checksum */
+        i += flen;
     }
     if (!o && n)
-        sprintf_s(out, cap, "first=0x%02X (not 0xA4-framed)", b[0]);
+        strcpy_s(out, cap, "unframed");
+}
+
+/* -1 for a message that carries no key; for one that does, how many leading
+ * body bytes are not key and may be logged: the network number of a network
+ * key (0x46, which in a Zwift session is the licensed ANT+ key), the key
+ * number of an encryption key (0x7E), the info type of an encryption-info
+ * message setting the RNG seed (0x7F type 0x02), the channel and key length
+ * of a RadiANT root key (0xF2), nothing of a pairing message (0xF5, whose
+ * sub-command 0x02 is a private X25519 scalar). f is a whole frame. Mirrors
+ * key_msg_keep() in apps/common/ant_serial_bridge.c. */
+static int key_keep(const unsigned char *f)
+{
+    switch (f[2]) {
+    case 0x46: case 0x7E: return 1;
+    case 0x7F:            return f[1] >= 1 && f[3] == 0x02 ? 1 : -1;
+    case 0xF2:            return 2;
+    case 0xF5:            return 0;
+    default:              return -1;
+    }
+}
+
+#define WRITE_DUMP_MAX 256          /* bytes; longer writes end in " ..." */
+
+/* The level-2 hex of a write, with each key and its checksum (the XOR of the
+ * key bytes once the header is known) shown as "..". Walks whole 0xA4 frames
+ * that pass frame_ok() from the start of the buffer; from the first byte that
+ * does not, only the count of what is left is logged, since no frame boundary
+ * is known past it. Stateless: Zwift writes whole frames, so that tail is
+ * empty in practice. */
+static const char *write_dump(const unsigned char *b, DWORD n)
+{
+    static __declspec(thread) char buf[WRITE_DUMP_MAX * 3 + 48];
+    static const char digits[] = "0123456789ABCDEF";
+    DWORD i = 0, k, shown = 0;
+    char *o = buf;
+
+    DWORD flen;
+
+    while ((flen = frame_ok(b, n, i)) != 0) {
+        int keep = key_keep(b + i);
+        for (k = 0; k < flen; k++) {
+            int mask = keep >= 0 && k >= 3 + (DWORD)keep;
+            if (shown++ == WRITE_DUMP_MAX) {
+                memcpy(o, " ...", 5);       /* with its NUL */
+                return buf;
+            }
+            if (o != buf)
+                *o++ = ' ';
+            *o++ = mask ? '.' : digits[b[i + k] >> 4];
+            *o++ = mask ? '.' : digits[b[i + k] & 15];
+        }
+        i += flen;
+    }
+    *o = '\0';
+    if (i < n)
+        sprintf_s(o, sizeof(buf) - (size_t)(o - buf),
+                  "%s(+%lu bytes not whole frames)", o == buf ? "" : " ",
+                  n - i);
+    return buf;
 }
 
 /* A handle value ANT_DLL can hold that is obviously ours and never a real
@@ -271,7 +350,8 @@ __declspec(dllexport) DWORD WINAPI SI_Write(HANDLE cyHandle, LPVOID lpBuffer,
     if (lpdwBytesWritten) *lpdwBytesWritten = put;
     if (shim_log_on(2))
         shim_log("SI_Write %lu/%lu in %.3f ms %s: %s", put, dwBytesToWrite,
-                 shim_ms(t0, t1), ids, shim_hex(lpBuffer, dwBytesToWrite));
+                 shim_ms(t0, t1), ids,
+                 write_dump((const unsigned char *)lpBuffer, dwBytesToWrite));
     else if (shim_log_on(1))
         shim_log("SI_Write %lu/%lu in %.3f ms %s", put, dwBytesToWrite,
                  shim_ms(t0, t1), ids);
