@@ -289,6 +289,12 @@ UNASSIGNED --antr_channel_assign()--> ASSIGNED --antr_channel_open*()--> SEARCHI
   `ANTW_CHANNEL_ID_NOT_SET`.
 - **`antr_channel_unassign()` requires the channel to be closed.** Silently closing it first would
   swallow the `ANTW_EVENT_CHANNEL_CLOSED` the host is waiting on.
+- **`antr_channel_ext_assign_set()` (added 2026-11-21, not in the stub table below) requires an
+  assigned, closed channel** and changes only the extended assignment byte; ID, RF, period, ID
+  list, search settings and security context stay. The bridge's Open RX Scan Mode (0x5B) uses it
+  so a keyed channel 0 keeps its keys and policy. A backend without an in-place change returns
+  `ANTW_INVALID_MESSAGE`, and the bridge then falls back to unassign and reassign. sdk-ant and the
+  stub do that, so sdk-ant's conformance transcript is unchanged.
 - **`antr_channel_radio_tx_power_set()` requires an assigned channel, and that is the constraint
   that shapes the bridge.** Hosts set power *before* assigning anything, so the bridge holds the
   requested level in `tx_power[]` and reapplies it after each successful assign

@@ -1310,18 +1310,29 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		 * Rev 5.1 section 9.5.4.5: scan mode opens channel 0 as the host
 		 * already assigned and configured it. A host that set RF 57, a
 		 * network key slot and a device-type filter expects the scan to
-		 * use them. So when channel 0 is assigned, its type, network,
-		 * channel ID, RF and period are read back, the channel is
-		 * reassigned with the always-search bit, and the five are put
-		 * back. Re-assigning resets the rest to defaults: the ID list,
-		 * the low-priority timeout and the search priority are lost
-		 * (the antr_* API has no getters for them). A master channel 0
-		 * cannot scan and is refused. An unassigned channel 0 keeps
-		 * the old fallback: a wildcard slave on network 0, default RF.
+		 * use them. So an assigned channel 0 only has its extended
+		 * assignment byte changed in place
+		 * (antr_channel_ext_assign_set()). On RadiANT that keeps
+		 * everything the host configured: ID, RF, period, ID list,
+		 * search settings and the security context. A keyed channel
+		 * with X_AUTH | DROP_UNVER stays judged as a scan; unassigning
+		 * would release its keys and deliver its secured range unjudged.
+		 *
+		 * Backends with no in-place call (sdk-ant, stub) answer
+		 * INVALID_MESSAGE, and only they take the old path: read back
+		 * type, network, channel ID, RF and period, reassign with the
+		 * always-search bit, put the five back. That reassign loses the
+		 * ID list, the low-priority timeout and the search priority,
+		 * but those backends have no channel security to lose.
+		 *
+		 * A master channel 0 cannot scan and is refused. An unassigned
+		 * channel 0 keeps the old fallback: a wildcard slave on
+		 * network 0, default RF, with no key to lose.
 		 */
 		uint8_t status;
 		uint8_t i;
 		bool restore = false;
+		bool in_place = false;
 		uint8_t saved_type = ANTW_CHANNEL_TYPE_SLAVE;
 		uint8_t saved_net = 0U;
 		uint16_t saved_dev = 0U;
@@ -1353,26 +1364,37 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 					      ANTW_CHANNEL_IN_WRONG_STATE);
 				return;
 			}
-			err = antr_channel_id_get(0, &saved_dev, &saved_dtype,
-						  &saved_ttype);
+			err = antr_channel_ext_assign_set(
+				0, ANTW_EXT_PARAM_ALWAYS_SEARCH);
 			if (!err) {
-				err = antr_channel_radio_freq_get(0, &saved_rf);
+				in_place = true;
+			} else if (err == (antr_err_t)ANTW_INVALID_MESSAGE) {
+				/* Channel 0 is always in range: the backend
+				 * has no in-place call. */
+				err = antr_channel_id_get(0, &saved_dev,
+							  &saved_dtype,
+							  &saved_ttype);
+				if (!err) {
+					err = antr_channel_radio_freq_get(
+						0, &saved_rf);
+				}
+				if (!err) {
+					err = antr_channel_period_get(
+						0, &saved_period);
+				}
+				if (!err) {
+					err = antr_channel_unassign(0);
+				}
+				restore = true;
 			}
-			if (!err) {
-				err = antr_channel_period_get(0, &saved_period);
-			}
-			if (!err) {
-				err = antr_channel_unassign(0);
-			}
-			restore = true;
 		} else {
 			err = (antr_err_t)ANTW_RESPONSE_NO_ERROR;
 		}
-		if (!err) {
+		if (!err && !in_place) {
 			err = antr_channel_assign(0, saved_type, saved_net,
 						  ANTW_EXT_PARAM_ALWAYS_SEARCH);
 		}
-		if (!err) {
+		if (!err && !in_place) {
 			err = antr_channel_id_set(0, saved_dev, saved_dtype,
 						  saved_ttype);
 		}
@@ -1385,6 +1407,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		if (!err) {
 			/* As the assign arm does: the power the host asked
 			 * for (or the boosted default) survives the reassign.
+			 * Harmless on the in-place path, which kept it.
 			 */
 			tx_power_apply(0);
 			err = antr_channel_open(0);

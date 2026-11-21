@@ -511,6 +511,10 @@ radiant_channel_err_t radiant_channel_search_timeout_set(uint8_t channel,
 						 uint8_t timeout);
 radiant_channel_err_t radiant_channel_lp_search_timeout_set(uint8_t channel,
 						    uint8_t timeout);
+/* The low-priority timeout as stored. Returns OK, INVALID_MESSAGE or
+ * INVALID_PARAM (NULL out). */
+radiant_channel_err_t radiant_channel_lp_search_timeout_get(uint8_t channel,
+						    uint8_t *out);
 
 /*
  * antr_channel_radio_crc_mode_set(). Opaque byte, validated against this
@@ -638,6 +642,16 @@ bool radiant_channel_is_open(uint8_t channel);
 uint8_t radiant_channel_type_get(uint8_t channel);
 uint8_t radiant_channel_ext_assign_get(uint8_t channel);
 uint8_t radiant_channel_network_get(uint8_t channel);
+
+/* Replace the extended assignment flags of an assigned, closed channel and
+ * touch nothing else. Both readers of the byte (the open's search mode and
+ * the search deadline) run only once the channel is open, so a closed channel
+ * has no state derived from the old value to unwind.
+ *
+ * Returns RADIANT_CH_OK, RADIANT_CH_ERR_INVALID_MESSAGE (channel out of range)
+ * or RADIANT_CH_ERR_WRONG_STATE (unassigned, or open or closing). */
+radiant_channel_err_t radiant_channel_ext_assign_set(uint8_t channel,
+						     uint8_t ext_assign);
 
 /* ---------------------------------------------------------------------------
  * The scheduler seam

@@ -63,6 +63,10 @@ void antr_test_master_tx_seam(uint8_t ch);
 bool antr_test_ack_payload(uint8_t ch, uint8_t out[8]);
 /* Weak: after the 0xF1/0xF2 take-back, before the pump that follows it. */
 void antr_test_take_back_seam(uint8_t ch);
+/* The channel's ID list as stored: entry 0 (the 4 bytes 0x59 wrote, as a
+ * little-endian word), the size and the exclude sense. */
+void antr_test_id_list_get(uint8_t ch, uint32_t *entry0, uint8_t *size,
+			   bool *exclude);
 #endif
 
 #endif /* ANT_RADIO_RADIANT_PRIV_H_ */

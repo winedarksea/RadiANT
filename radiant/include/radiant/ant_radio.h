@@ -287,6 +287,21 @@ antr_err_t antr_channel_assign(uint8_t channel, uint8_t type, uint8_t network,
 antr_err_t antr_channel_unassign(uint8_t channel);
 
 /**
+ * Change the extended assignment flags of an assigned, closed channel.
+ *
+ * This is the same byte antr_channel_assign() takes, for example
+ * ANTW_EXT_PARAM_ALWAYS_SEARCH, which turns a slave into a background scan.
+ * Nothing else on the channel is reset: its ID, RF, period, search settings,
+ * ID list and security context (keys, policy, epoch) all stay as configured.
+ * Unassigning and assigning again would destroy them.
+ *
+ * Returns 0, ANTW_INVALID_MESSAGE (channel out of range, or a backend that has
+ * no in-place change; such a caller falls back to unassign and assign) or
+ * ANTW_CHANNEL_IN_WRONG_STATE (unassigned, or open or closing).
+ */
+antr_err_t antr_channel_ext_assign_set(uint8_t channel, uint8_t ext_assign);
+
+/**
  * Put an assigned channel on air, optionally delaying the first slot.
  *
  * This is the real entry point; antr_channel_open() below forwards to it with
