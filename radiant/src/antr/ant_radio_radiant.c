@@ -3595,6 +3595,19 @@ antr_err_t antr_channel_assign(uint8_t channel, uint8_t type, uint8_t network,
 	return rc;
 }
 
+antr_err_t antr_channel_ext_assign_set(uint8_t channel, uint8_t ext_assign)
+{
+	antr_err_t rc;
+
+	/* Unlike assign, api_ch[] and the security context are kept: keeping
+	 * them is the whole point (0x5B on a keyed channel 0). */
+	k_mutex_lock(&api_lock, K_FOREVER);
+	rc = radiant_channel_ext_assign_set(channel, ext_assign);
+	k_mutex_unlock(&api_lock);
+
+	return rc;
+}
+
 antr_err_t antr_channel_unassign(uint8_t channel)
 {
 	antr_err_t rc;
@@ -3966,6 +3979,18 @@ antr_err_t antr_id_list_config(uint8_t channel, uint8_t size, uint8_t inc_exc)
 	k_mutex_unlock(&api_lock);
 	return (antr_err_t)ANTW_RESPONSE_NO_ERROR;
 }
+
+#if defined(CONFIG_ZTEST)
+void antr_test_id_list_get(uint8_t ch, uint32_t *entry0, uint8_t *size,
+			   bool *exclude)
+{
+	k_mutex_lock(&api_lock, K_FOREVER);
+	*entry0 = api_ch[ch].id_list[0];
+	*size = api_ch[ch].id_list_size;
+	*exclude = api_ch[ch].id_list_exclude;
+	k_mutex_unlock(&api_lock);
+}
+#endif
 
 /* ---------------------------------------------------------------------------
  * Networks and keys - the permanent limitation

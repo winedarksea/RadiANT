@@ -494,17 +494,39 @@ static uint64_t vd_slot_t(uint32_t i)
 }
 
 /*
+ * The sender half of a pair: keyed directly in radiant_sec. It carries only
+ * the transform bits: VERDICT_EVENT and DROP_UNVER are receiver policy. Its
+ * epoch anchors at the same radiant_radio_now() as the receiver's - nothing
+ * moves the fake clock between them - so its slot counter is the receiver's.
+ */
+static void vd_key_sender(uint8_t tx, uint16_t devnum, uint8_t switches,
+			  uint8_t w)
+{
+	int rc[4];
+
+	k_mutex_lock(&api_lock, K_FOREVER);
+	rc[0] = radiant_sec_set_key(tx, host_key, 128, devnum);
+	rc[1] = radiant_sec_set_devnum(tx, devnum);
+	rc[2] = radiant_sec_configure(
+		tx,
+		(uint8_t)(switches & (RADIANT_SEC_SW_CONF | RADIANT_SEC_SW_AUTH)),
+		w, 0x01u, 0x0Fu);
+	rc[3] = radiant_sec_set_epoch(tx, VD_EPOCH, 0u,
+				      RADIANT_CHANNEL_PERIOD_ANT_PLUS);
+	vd_anchor = (uint64_t)radiant_radio_now();
+	k_mutex_unlock(&api_lock);
+	for (int i = 0; i < 4; i++) {
+		zassert_equal(RADIANT_SEC_OK, rc[i], "sender setup step %d", i);
+	}
+}
+
+/*
  * A receiver configured through the host surface (0xF2, 0xF1, 0xF3), and a
- * sender keyed the same way directly in radiant_sec. The sender carries only
- * the transform bits: VERDICT_EVENT and DROP_UNVER are receiver policy. Every
- * epoch anchors at the same radiant_radio_now() - nothing moves the fake
- * clock between them - so each sender's slot counter is its receiver's.
+ * sender keyed the same way by vd_key_sender().
  */
 static void vd_setup_pair_ext(uint8_t rx, uint8_t tx, uint16_t devnum,
 			      uint8_t switches, uint8_t w, uint8_t ext_assign)
 {
-	int rc[4];
-
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
 		      antr_network_address_set(0u, host_net_key));
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
@@ -529,20 +551,7 @@ static void vd_setup_pair_ext(uint8_t rx, uint8_t tx, uint16_t devnum,
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
 		      antr_sec_epoch_set(rx, 0u, VD_EPOCH, 0u));
 
-	k_mutex_lock(&api_lock, K_FOREVER);
-	rc[0] = radiant_sec_set_key(tx, host_key, 128, devnum);
-	rc[1] = radiant_sec_set_devnum(tx, devnum);
-	rc[2] = radiant_sec_configure(
-		tx,
-		(uint8_t)(switches & (RADIANT_SEC_SW_CONF | RADIANT_SEC_SW_AUTH)),
-		w, 0x01u, 0x0Fu);
-	rc[3] = radiant_sec_set_epoch(tx, VD_EPOCH, 0u,
-				      RADIANT_CHANNEL_PERIOD_ANT_PLUS);
-	vd_anchor = (uint64_t)radiant_radio_now();
-	k_mutex_unlock(&api_lock);
-	for (int i = 0; i < 4; i++) {
-		zassert_equal(RADIANT_SEC_OK, rc[i], "sender setup step %d", i);
-	}
+	vd_key_sender(tx, devnum, switches, w);
 	(void)radiant_event_drain(0u);
 }
 
@@ -1762,6 +1771,166 @@ ZTEST(api, test_sec_host_a_keyed_scan_delivers_no_secured_page_unjudged)
 		      "a page outside the secured range did not arrive at once");
 	zassert_equal(1u, n.all, "and nothing else did");
 	acq_done();
+
+	api_assert_no_viol();
+}
+
+/* The receiver half of the conversion cases: a slave on the host's ID, period
+ * and RF, assigned with no extended flag and left closed. */
+static void vd_assign_closed(uint8_t rx)
+{
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_network_address_set(0u, host_net_key));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_assign(
+			      rx, (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY, 0u,
+			      0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_id_set(rx, HOST_DEVNUM, HOST_DEVTYPE,
+					  HOST_TRANS));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_period_set(rx,
+					      RADIANT_CHANNEL_PERIOD_ANT_PLUS));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_radio_freq_set(rx, HOST_RF));
+}
+
+ZTEST(api, test_sec_host_a_keyed_channel_turned_scan_keeps_its_policy)
+{
+	/*
+	 * Review 2026-11-21: Open RX Scan Mode (0x5B) on a configured channel 0
+	 * used to unassign and reassign it with ALWAYS_SEARCH. The unassign
+	 * released the keys, and the scan then delivered the secured range
+	 * unjudged under X_AUTH | DROP_UNVER. The bridge now flips only the
+	 * extended byte with antr_channel_ext_assign_set(); this is that call
+	 * on a channel keyed while closed, as a host does before 0x5B.
+	 */
+	static const uint8_t clear[8] = { 0x50u, 0x00u, 1u, 2u, 3u, 4u, 5u,
+					  6u };
+	const uint8_t        sw = RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_DROP_UNVER;
+	uint8_t              st[ANTR_SEC_STATUS_LEN];
+	struct acq_bd        n;
+	radiant_time_t       t;
+	uint32_t             from;
+
+	vd_assign_closed(VD_RX_CH);
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_key_set(VD_RX_CH, 128u, host_key));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_config(VD_RX_CH, sw, 2u, 0x01u, 0x0Fu));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_epoch_set(VD_RX_CH, 0u, VD_EPOCH, 0u));
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_ext_assign_set(
+			      VD_RX_CH, (uint8_t)ANTW_EXT_PARAM_ALWAYS_SEARCH));
+
+	memset(st, 0xEE, sizeof(st));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_sec_status_get(VD_RX_CH, st, sizeof(st)));
+	zassert_equal(ANTR_SEC_STATUS_KEYED | ANTR_SEC_STATUS_ARMED, st[30],
+		      "the conversion dropped the key or the epoch (%u)",
+		      st[30]);
+	zassert_equal(sw, st[2], "the conversion dropped the switches");
+	zassert_equal(2u, st[3]);
+	zassert_equal(0x01u, st[4]);
+	zassert_equal(0x0Fu, st[5]);
+	zassert_equal(VD_EPOCH, rd32(&st[6]));
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_open(VD_RX_CH));
+	vd_key_sender(VD_TX_CH, HOST_DEVNUM, sw, 2u);
+	(void)radiant_event_drain(0u);
+
+	from = api_msglog_count();
+	t = acq_search_t();
+	(void)acq_air_genuine(t, 1u);
+	acq_run_to(t + 5000u);
+	zassert_equal(RADIANT_CH_STATE_SEARCHING,
+		      radiant_channel_state_get(VD_RX_CH),
+		      "the converted channel is not a scan: it left its search");
+	acq_settle();
+	n = acq_count(from, VD_PAGE);
+	zassert_equal(0u, n.all,
+		      "a keyed channel turned scan delivered a secured-range "
+		      "page before any verdict");
+
+	t = acq_search_t();
+	acq_air_raw(t, clear);
+	acq_run_to(t + 5000u);
+	(void)radiant_event_drain(0u);
+	n = acq_count(from, 0x50u);
+	zassert_equal(1u, n.page,
+		      "a page outside the secured range did not arrive at once");
+	zassert_equal(1u, n.all, "and nothing else did");
+	acq_done();
+
+	api_assert_no_viol();
+}
+
+ZTEST(api, test_sec_host_turning_a_channel_scan_keeps_its_configuration)
+{
+	/* What the old unassign-and-reassign lost besides the keys: the ID
+	 * list, the low-priority timeout and the search priority. ID, RF and
+	 * period it restored by hand; the in-place change never touches them. */
+	static const uint8_t entry[4] = { 0x34u, 0x12u, 0x78u, 0x00u };
+	uint32_t             want_entry;
+	uint32_t             got_entry;
+	uint8_t              size;
+	bool                 exclude;
+	uint16_t             dev;
+	uint8_t              dtype;
+	uint8_t              ttype;
+	uint16_t             period;
+	uint8_t              rf;
+	uint8_t              v;
+
+	vd_assign_closed(VD_RX_CH);
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_id_list_add(VD_RX_CH, entry, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_id_list_config(VD_RX_CH, 1u, 1u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_low_priority_rx_search_timeout_set(VD_RX_CH,
+								      3u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_search_channel_priority_set(VD_RX_CH, 1u));
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_ext_assign_set(
+			      VD_RX_CH, (uint8_t)ANTW_EXT_PARAM_ALWAYS_SEARCH));
+
+	zassert_equal(RADIANT_CH_STATE_ASSIGNED,
+		      radiant_channel_state_get(VD_RX_CH));
+	zassert_equal((uint8_t)ANTW_EXT_PARAM_ALWAYS_SEARCH,
+		      radiant_channel_ext_assign_get(VD_RX_CH));
+	zassert_equal((uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
+		      radiant_channel_type_get(VD_RX_CH));
+	zassert_equal(0u, radiant_channel_network_get(VD_RX_CH));
+
+	zassert_ok(antr_channel_id_get(VD_RX_CH, &dev, &dtype, &ttype));
+	zassert_equal(HOST_DEVNUM, dev);
+	zassert_equal(HOST_DEVTYPE, dtype);
+	zassert_equal(HOST_TRANS, ttype);
+	zassert_ok(antr_channel_period_get(VD_RX_CH, &period));
+	zassert_equal(RADIANT_CHANNEL_PERIOD_ANT_PLUS, period);
+	zassert_ok(antr_channel_radio_freq_get(VD_RX_CH, &rf));
+	zassert_equal(HOST_RF, rf);
+
+	zassert_equal(RADIANT_CH_OK,
+		      radiant_channel_lp_search_timeout_get(VD_RX_CH, &v));
+	zassert_equal(3u, v, "the low-priority timeout was reset");
+	zassert_equal(RADIANT_CH_OK,
+		      radiant_channel_search_priority_get(VD_RX_CH, &v));
+	zassert_equal(1u, v, "the search priority was reset");
+
+	memcpy(&want_entry, entry, sizeof(want_entry));
+	antr_test_id_list_get(VD_RX_CH, &got_entry, &size, &exclude);
+	zassert_equal(want_entry, got_entry, "the ID list entry was cleared");
+	zassert_equal(1u, size, "the ID list was switched off");
+	zassert_true(exclude, "the ID list lost its exclude sense");
+
+	(void)antr_channel_unassign(VD_RX_CH);
 
 	api_assert_no_viol();
 }

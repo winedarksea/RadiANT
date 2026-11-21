@@ -737,6 +737,84 @@ def check_scan_mode(dev, reader, seconds: float) -> list[str]:
     return problems
 
 
+def check_scan_mode_keyed(dev, reader) -> list[str]:
+    """Open Rx Scan Mode (0x5B) on a keyed channel 0 keeps its security.
+
+    Review 2026-11-21: 0x5B used to unassign and reassign a configured
+    channel 0, which released its keys and policy. The scan then delivered
+    the host's secured page range unverified under X_AUTH | DROP_UNVER, while
+    0x5B answered NO_ERROR. Keys channel 0 through 0xF2/0xF1/0xF3, sends 0x5B,
+    and reads 0xF4 back: the key, the epoch and the switches must survive.
+
+    Skipped with a notice on an image without the RadiANT security messages
+    (0xF2 refused), which is every stock stick and the shipping default.
+    """
+    print("\n[scan-sec] Open Rx Scan Mode keeps channel 0's security (0x5B)")
+    switches = ant_sec.SW_AUTH | ant_sec.SW_DROP_UNVER
+    epoch = 1
+    # A key needs a non-zero device number: it is bound into the KDF.
+    setup = [
+        (MESG_NETWORK_KEY_ID, bytes([0]) + ANT_PLUS_KEY, "network key"),
+        (MESG_ASSIGN_CHANNEL_ID, bytes([0, 0x00, 0x00]), "assign channel 0"),
+        (MESG_CHANNEL_ID_ID, bytes([0, 0x34, 0x12, 0, 0]), "channel id"),
+        (MESG_CHANNEL_RADIO_FREQ_ID, bytes([0, ANT_PLUS_FREQ]), "RF 57"),
+    ]
+    for msg_id, payload, name in setup:
+        code = command(dev, reader, msg_id, payload)
+        if code != RESPONSE_NO_ERROR:
+            print(f"  FAIL: {name} refused, code {code}")
+            reset_stack(dev, reader)
+            return [f"scan mode keyed: {name} refused"]
+
+    code = command(dev, reader, ant_sec.MESG_SET_KEY,
+                   ant_sec.encode_set_key(0, bytes(range(16))))
+    if code != RESPONSE_NO_ERROR:
+        print(f"  -- skipped: 0xF2 answered {code} (no RadiANT security "
+              "messages in this image)")
+        reset_stack(dev, reader)
+        return []
+
+    keying = [
+        (ant_sec.MESG_CONFIG, ant_sec.encode_config(0, switches, 2), "0xF1"),
+        (ant_sec.MESG_EPOCH, ant_sec.encode_epoch(0, epoch), "0xF3"),
+        (MESG_OPEN_RX_SCAN_MODE_ID, bytes([0x00]), "open rx scan mode"),
+    ]
+    for msg_id, payload, name in keying:
+        code = command(dev, reader, msg_id, payload)
+        if code != RESPONSE_NO_ERROR:
+            print(f"  FAIL: {name} refused, code {code}")
+            reset_stack(dev, reader)
+            return [f"scan mode keyed: {name} refused"]
+
+    problems = []
+    got = request(dev, reader, 0, ant_sec.MESG_STATUS)
+    try:
+        if isinstance(got, (int, type(None))):
+            raise ValueError(f"request answered {got}")
+        st = ant_sec.decode_status(got)
+    except ValueError as e:
+        print(f"  FAIL: 0xF4 after 0x5B did not decode ({e})")
+        reset_stack(dev, reader)
+        return ["scan mode keyed: no status after 0x5B"]
+
+    if st.state_flags is not None and not st.armed:
+        print("  FAIL: channel 0 is no longer keyed and armed after 0x5B "
+              f"(state 0x{st.state_flags:02X})")
+        problems.append("scan mode keyed: key or epoch lost")
+    if st.switches != switches or st.epoch != epoch:
+        print(f"  FAIL: after 0x5B switches="
+              f"{ant_sec.switches_str(st.switches)} epoch={st.epoch}, set "
+              f"{ant_sec.switches_str(switches)} epoch={epoch}")
+        problems.append("scan mode keyed: policy lost")
+    if not problems:
+        print(f"  OK: still {ant_sec.switches_str(st.switches)} at epoch "
+              f"{st.epoch}" + ("" if st.state_flags is None else ", armed")
+              + " in scan mode")
+
+    reset_stack(dev, reader)
+    return problems
+
+
 def check_encryption(dev, reader) -> list[str]:
     """Read the encryption capability, and round-trip the writes if they are in.
 
@@ -956,7 +1034,9 @@ def main() -> int:
     parser.add_argument("--scan-mode", action="store_true",
                         help="also check Open Rx Scan Mode (0x5B) keeps "
                              "channel 0's RF and that lib config 0x80 "
-                             "replaces 0xE0 on the air. Puts a receiver on "
+                             "replaces 0xE0 on the air, and that 0x5B keeps "
+                             "a keyed channel 0's key and policy (skipped "
+                             "without RadiANT security). Puts a receiver on "
                              "the air; wants an ANT+ sensor in range")
     parser.add_argument("--scan-seconds", type=float, default=15.0)
     parser.add_argument("--burst-filter", action="store_true",
@@ -1001,6 +1081,7 @@ def main() -> int:
     problems += check_encryption(dev, reader)
     if args.scan_mode:
         problems += check_scan_mode(dev, reader, args.scan_seconds)
+        problems += check_scan_mode_keyed(dev, reader)
     if args.burst_filter:
         problems += check_burst_filter(dev, reader)
     if args.radiant_security:

@@ -449,6 +449,68 @@ ZTEST(api, test_an_assign_to_a_network_with_no_key_is_accepted)
 	api_assert_no_viol();
 }
 
+/*
+ * antr_channel_ext_assign_set() (0x5B on a configured channel 0) takes an
+ * assigned, closed channel only, as unassign does: the byte picks the open's
+ * search mode, so a channel already on air or still closing keeps the one it
+ * opened with.
+ */
+ZTEST(api, test_ext_assign_set_needs_an_assigned_closed_channel)
+{
+	const uint8_t scan = (uint8_t)ANTW_EXT_PARAM_ALWAYS_SEARCH;
+
+	zassert_equal((antr_err_t)ANTW_INVALID_MESSAGE,
+		      antr_channel_ext_assign_set(
+			      (uint8_t)RADIANT_CHANNEL_COUNT, scan),
+		      "a channel out of range was accepted");
+	zassert_equal((antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE,
+		      antr_channel_ext_assign_set(CH, scan),
+		      "an unassigned channel was accepted");
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_network_address_set(0u, ant_plus_key));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_assign(CH,
+					  (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
+					  0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_id_set(CH, 0u, 0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_period_set(CH, RADIANT_CHANNEL_PERIOD_ANT_PLUS));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_radio_freq_set(CH, RF_INDEX));
+	zassert_equal(0u, radiant_channel_ext_assign_get(CH));
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR, antr_channel_open(CH));
+	zassert_equal((antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE,
+		      antr_channel_ext_assign_set(CH, scan),
+		      "an open channel was accepted");
+
+	zassert_equal(0u, radiant_channel_ext_assign_get(CH),
+		      "a refused call changed the byte");
+
+	/* A searching channel's close completes at once (the sweep chunk is
+	 * not bound to it); the CLOSING refusal is in test_channel.c's
+	 * test_close_with_an_operation_in_flight. */
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR, antr_channel_close(CH));
+	fake_radio_advance(1000u);
+	drain();
+	zassert_equal(RADIANT_CH_STATE_ASSIGNED, radiant_channel_state_get(CH),
+		      "setup: the close did not complete");
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_ext_assign_set(CH, scan));
+	zassert_equal(scan, radiant_channel_ext_assign_get(CH));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_ext_assign_set(CH, 0u),
+		      "the byte cannot be cleared again");
+	zassert_equal(0u, radiant_channel_ext_assign_get(CH));
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_unassign(CH));
+
+	api_assert_no_viol();
+}
+
 /* Open one channel of `type`, configured as the bench's own sensor. */
 static void open_channel(uint8_t type)
 {

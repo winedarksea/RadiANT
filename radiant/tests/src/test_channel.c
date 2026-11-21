@@ -1088,6 +1088,11 @@ ZTEST(radiant_channel, test_close_with_an_operation_in_flight)
 	zassert_equal(RADIANT_CH_ERR_WRONG_STATE, radiant_channel_unassign(2u));
 	zassert_equal(RADIANT_CH_ERR_WRONG_STATE, radiant_channel_open(2u, 0u, t0));
 	zassert_equal(RADIANT_CH_ERR_WRONG_STATE, radiant_channel_close(2u, t0));
+	/* 0x5B's in-place change waits for the close like unassign does. */
+	zassert_equal(RADIANT_CH_ERR_WRONG_STATE,
+		      radiant_channel_ext_assign_set(2u, 0x01u));
+	zassert_equal(0u, radiant_channel_ext_assign_get(2u),
+		      "a refused ext assign change still changed the byte");
 
 	/* The abort delivers the terminal event before it returns (the HAL
 	 * guarantees it), and that event is what completes the close. */
@@ -1098,6 +1103,8 @@ ZTEST(radiant_channel, test_close_with_an_operation_in_flight)
 	zassert_equal(RADIANT_CH_STATE_ASSIGNED, radiant_channel_state_get(2u));
 	zassert_equal(1u, evt_count_of(2u, RADIANT_CH_EVENT_CHANNEL_CLOSED));
 	zassert_equal(-1, radiant_channel_op_owner(op));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_ext_assign_set(2u, 0x01u));
+	zassert_equal(0x01u, radiant_channel_ext_assign_get(2u));
 	zassert_equal(RADIANT_CH_OK, radiant_channel_unassign(2u));
 
 	radio_clean();

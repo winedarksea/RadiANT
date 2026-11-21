@@ -936,6 +936,23 @@ radiant_channel_err_t radiant_channel_lp_search_timeout_set(uint8_t channel,
 	return RADIANT_CH_OK;
 }
 
+radiant_channel_err_t radiant_channel_lp_search_timeout_get(uint8_t channel,
+						    uint8_t *out)
+{
+	struct chan *c = NULL;
+	radiant_channel_err_t err = require_range(channel, &c);
+
+	if (err != RADIANT_CH_OK) {
+		return err;
+	}
+	if (out == NULL) {
+		return RADIANT_CH_ERR_INVALID_PARAM;
+	}
+
+	*out = c->lp_search_timeout;
+	return RADIANT_CH_OK;
+}
+
 radiant_channel_err_t radiant_channel_crc_mode_set(uint8_t channel, uint8_t mode)
 {
 	struct chan *c = NULL;
@@ -1289,6 +1306,29 @@ uint8_t radiant_channel_type_get(uint8_t channel)
 uint8_t radiant_channel_ext_assign_get(uint8_t channel)
 {
 	return ch_valid(channel) ? channels[channel].ext_assign : 0u;
+}
+
+radiant_channel_err_t radiant_channel_ext_assign_set(uint8_t channel,
+						     uint8_t ext_assign)
+{
+	struct chan *c;
+
+	if (!ch_valid(channel)) {
+		return RADIANT_CH_ERR_INVALID_MESSAGE;
+	}
+
+	c = ch_at(channel);
+
+	/* The same test radiant_channel_unassign() uses: open and closing
+	 * channels are refused, so the search already started from the old
+	 * byte never sees it change underneath it. */
+	if (c->state != RADIANT_CH_STATE_ASSIGNED) {
+		return RADIANT_CH_ERR_WRONG_STATE;
+	}
+
+	c->ext_assign = ext_assign;
+
+	return RADIANT_CH_OK;
 }
 
 uint8_t radiant_channel_network_get(uint8_t channel)

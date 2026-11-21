@@ -134,6 +134,18 @@ antr_err_t antr_channel_unassign(uint8_t channel)
 	return wire_err(ant_channel_unassign(channel));
 }
 
+antr_err_t antr_channel_ext_assign_set(uint8_t channel, uint8_t ext_assign)
+{
+	/* No in-place sdk-ant counterpart. The bridge falls back to unassign
+	 * and reassign, which is what this backend always did, so its
+	 * conformance transcript stays byte-identical. It has no RadiANT
+	 * channel security for that fallback to lose.
+	 */
+	ARG_UNUSED(channel);
+	ARG_UNUSED(ext_assign);
+	return ANTW_INVALID_MESSAGE;
+}
+
 /* The offset form is the only one implemented: sdk-ant's plain
  * ant_channel_open() is a macro over this with CHANNEL_START_OFFSET_NONE, and
  * forwarding to the macro would recurse through our own static inline.

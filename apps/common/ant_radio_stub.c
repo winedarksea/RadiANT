@@ -357,6 +357,15 @@ antr_err_t antr_channel_unassign(uint8_t channel)
 	return ANTW_RESPONSE_NO_ERROR;
 }
 
+antr_err_t antr_channel_ext_assign_set(uint8_t channel, uint8_t ext_assign)
+{
+	/* Same answer as sdk-ant: the bridge falls back to unassign and
+	 * reassign. There is no channel security here to lose. */
+	ARG_UNUSED(channel);
+	ARG_UNUSED(ext_assign);
+	return ANTW_INVALID_MESSAGE;
+}
+
 antr_err_t antr_broadcast_message_tx(uint8_t channel, uint8_t size,
 				     const uint8_t *data)
 {
