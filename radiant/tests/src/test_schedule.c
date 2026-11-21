@@ -180,6 +180,17 @@ static void sched_before(void *fixture)
 	track_filter.addr_len = RADIANT_FRAME_ADDR_LEN_TRACKING;
 }
 
+/* Every case ends with this: fake_radio_viol_count() == 0, idle-agnostic.
+ * Not an after() hook: on this Zephyr a zassert in after() cannot fail the
+ * case (ztest prints "cannot fail in test phase 'after()'", passes the case
+ * and skips every case behind it, suite reported as succeeded). */
+static void assert_no_viol(void)
+{
+	zassert_equal(0u, fake_radio_viol_count(), "contract violation: %s (%s)",
+		      fake_radio_viol_name(fake_radio_viol(0)->code),
+		      fake_radio_viol(0)->detail);
+}
+
 ZTEST_SUITE(schedule, NULL, NULL, sched_before, NULL, NULL);
 
 /* ---------------------------------------------------------------------------
@@ -210,6 +221,8 @@ ZTEST(schedule, test_the_clock_ladder_is_the_handoff_pages_and_not_a_second_one)
 	zassert_equal(500u, profile_sched_clk_ppm(PROFILE_SCHED_CLK_STATED));
 	zassert_equal(0u, profile_sched_clk_nibble(PROFILE_HANDOFF_CLK_COUNT, true));
 	zassert_equal(0u, profile_sched_clk_nibble(PROFILE_HANDOFF_CLK_20PPM, false));
+
+	assert_no_viol();
 }
 
 ZTEST(schedule, test_the_coding_vocabulary_phase_six_inherits)
@@ -226,6 +239,8 @@ ZTEST(schedule, test_the_coding_vocabulary_phase_six_inherits)
 	zassert_true(profile_sched_coding_implemented(PROFILE_SCHED_CODING_S8));
 	zassert_false(profile_sched_coding_implemented(PROFILE_SCHED_CODING_S2));
 	zassert_false(profile_sched_coding_implemented(7u));
+
+	assert_no_viol();
 }
 
 ZTEST(schedule, test_the_dwell_ladder)
@@ -234,6 +249,8 @@ ZTEST(schedule, test_the_dwell_ladder)
 	zassert_equal(500u, profile_sched_dwell_us(1u));
 	zassert_equal(32000u, profile_sched_dwell_us(PROFILE_SCHED_DWELL_CODE_MAX));
 	zassert_equal(0u, profile_sched_dwell_us(PROFILE_SCHED_DWELL_CODE_MAX + 1u));
+
+	assert_no_viol();
 }
 
 /* ---------------------------------------------------------------------------
@@ -247,6 +264,8 @@ ZTEST(schedule, test_the_block_is_byte_for_byte_what_the_python_encoder_emits)
 
 	zassert_ok(profile_sched_pack(&CANON_SCHED, false, 30u, body));
 	zassert_mem_equal(body, CANON_SCHED_BODY, sizeof(body));
+
+	assert_no_viol();
 }
 
 ZTEST(schedule, test_an_all_defaulted_block_is_forty_eight_zero_bits)
@@ -265,6 +284,8 @@ ZTEST(schedule, test_an_all_defaulted_block_is_forty_eight_zero_bits)
 	zassert_equal(0u, got.dl_interval);
 	zassert_equal(PROFILE_SCHED_TX_POWER_UNSTATED, got.tx_power_dbm);
 	zassert_equal(PROFILE_SCHED_CODING_NONE, got.coding);
+
+	assert_no_viol();
 }
 
 ZTEST(schedule, test_round_trip)
@@ -280,6 +301,8 @@ ZTEST(schedule, test_round_trip)
 	zassert_equal(CANON_SCHED.dl_dwell, got.dl_dwell);
 	zassert_equal(CANON_SCHED.coding, got.coding);
 	zassert_equal(CANON_SCHED.tx_power_dbm, got.tx_power_dbm);
+
+	assert_no_viol();
 }
 
 /* Bits 42..47 are the next informational flags (TODO security item 9): a v1
@@ -300,6 +323,8 @@ ZTEST(schedule, test_the_next_flag_bits_are_ignored_not_refused)
 	zassert_equal(base.dl_dwell, got.dl_dwell);
 	zassert_equal(base.coding, got.coding);
 	zassert_equal(base.tx_power_dbm, got.tx_power_dbm);
+
+	assert_no_viol();
 }
 
 ZTEST(schedule, test_the_phy_bit_and_the_coding_rate_must_agree)
@@ -324,6 +349,8 @@ ZTEST(schedule, test_the_phy_bit_and_the_coding_rate_must_agree)
 	 * transmits. */
 	s.coding = PROFILE_SCHED_CODING_S2;
 	zassert_equal(-ENOTSUP, profile_sched_pack(&s, true, 30u, body));
+
+	assert_no_viol();
 }
 
 ZTEST(schedule, test_a_rate_this_build_cannot_use_still_decodes)
@@ -344,6 +371,8 @@ ZTEST(schedule, test_a_rate_this_build_cannot_use_still_decodes)
 	zassert_ok(profile_sched_unpack(body, true, 30u, &got));
 	zassert_equal(PROFILE_SCHED_CODING_S2, got.coding);
 	zassert_false(profile_sched_coding_implemented(got.coding));
+
+	assert_no_viol();
 }
 
 ZTEST(schedule, test_the_dwell_must_cover_the_clock_error_it_announces)
@@ -374,6 +403,8 @@ ZTEST(schedule, test_the_dwell_must_cover_the_clock_error_it_announces)
 	zassert_equal(-EINVAL, profile_sched_pack(&s, false, 500u, body));
 	s.dl_dwell = 4u; /* 4 ms */
 	zassert_ok(profile_sched_pack(&s, false, 500u, body));
+
+	assert_no_viol();
 }
 
 ZTEST(schedule, test_tx_power_is_biased_so_that_zero_can_mean_silence)
@@ -401,6 +432,8 @@ ZTEST(schedule, test_tx_power_is_biased_so_that_zero_can_mean_silence)
 	body[4] = (uint8_t)((body[4] & 0xC0u) | (228u >> 2));
 	body[5] = (uint8_t)((body[5] & 0x3Fu) | ((228u & 0x03u) << 6));
 	zassert_equal(-EINVAL, profile_sched_unpack(body, false, 30u, &got));
+
+	assert_no_viol();
 }
 
 ZTEST(schedule, test_a_window_the_node_does_not_open_carries_no_phase)
@@ -423,6 +456,8 @@ ZTEST(schedule, test_a_window_the_node_does_not_open_carries_no_phase)
 	zassert_equal(-EINVAL, profile_sched_pack(&s, false, 30u, body));
 	s.dl_phase = 32767u;
 	zassert_ok(profile_sched_pack(&s, false, 30u, body));
+
+	assert_no_viol();
 }
 
 ZTEST(schedule, test_the_listen_window_is_relative_to_the_frame_that_carried_it)
@@ -441,6 +476,8 @@ ZTEST(schedule, test_the_listen_window_is_relative_to_the_frame_that_carried_it)
 
 	/* Nothing announced is not "now": it is nothing. */
 	zassert_equal(RADIANT_TIME_NEVER, profile_sched_listen_at(&quiet, t_carrier, 0u));
+
+	assert_no_viol();
 }
 
 /* ---------------------------------------------------------------------------
@@ -457,6 +494,8 @@ ZTEST(schedule, test_the_descriptor_set_is_byte_for_byte_what_python_emits)
 	zassert_equal(4, profile_desc_encode(&d, frames, PROFILE_TLM_MAX_FRAMES));
 	zassert_mem_equal(frames, CANON_DESC, sizeof(CANON_DESC));
 	zassert_equal(2, profile_desc_schedule_index(&d));
+
+	assert_no_viol();
 }
 
 ZTEST(schedule, test_a_node_that_announces_nothing_is_the_node_it_was_before)
@@ -492,6 +531,8 @@ ZTEST(schedule, test_a_node_that_announces_nothing_is_the_node_it_was_before)
 	zassert_equal(n_without, n_with);
 	with[PROFILE_TLM_FRAME_LEN + 3] &= 0xF0u;
 	zassert_mem_equal(with, without, (size_t)n_with * PROFILE_TLM_FRAME_LEN);
+
+	assert_no_viol();
 }
 
 ZTEST(schedule, test_the_set_round_trips_and_the_shape_is_derived)
@@ -524,6 +565,8 @@ ZTEST(schedule, test_the_set_round_trips_and_the_shape_is_derived)
 	 */
 	frames[1] = (uint8_t)((frames[1] & 0xF0u) | 4u); /* claim 5 frames */
 	zassert_equal(-EPROTO, profile_desc_decode(frames, 4u, &got));
+
+	assert_no_viol();
 }
 
 ZTEST(schedule, test_a_ladder_code_with_nothing_stating_it_is_refused)
@@ -534,6 +577,8 @@ ZTEST(schedule, test_a_ladder_code_with_nothing_stating_it_is_refused)
 	quiet_descriptor(&d);
 	d.clock_accuracy = PROFILE_HANDOFF_CLK_50PPM;
 	zassert_equal(-EINVAL, profile_desc_encode(&d, frames, PROFILE_TLM_MAX_FRAMES));
+
+	assert_no_viol();
 }
 
 /* ---------------------------------------------------------------------------
@@ -616,6 +661,8 @@ ZTEST(schedule, test_an_announcement_only_ever_widens)
 
 	zassert_equal(RADIANT_CH_OK,
 		      radiant_channel_close(SCHED_CH, radiant_radio_now()));
+
+	assert_no_viol();
 }
 
 ZTEST(schedule, test_an_all_defaulted_block_changes_no_scheduler_decision)
@@ -684,6 +731,8 @@ ZTEST(schedule, test_an_all_defaulted_block_changes_no_scheduler_decision)
 		      radiant_channel_close(SCHED_CH, radiant_radio_now()));
 	zassert_equal(RADIANT_CH_OK,
 		      radiant_channel_close(QUIET_CH, radiant_radio_now()));
+
+	assert_no_viol();
 }
 
 /* ---------------------------------------------------------------------------
@@ -794,6 +843,8 @@ ZTEST(schedule, test_an_rc_clocked_master_is_lost_when_it_says_nothing)
 	zassert_equal(0u, heard);
 	zassert_not_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(SCHED_CH));
 	zassert_equal(0u, radiant_channel_residual_us(SCHED_CH));
+
+	assert_no_viol();
 }
 
 ZTEST(schedule, test_an_rc_clocked_master_is_held_when_it_announces_itself)
@@ -826,4 +877,6 @@ ZTEST(schedule, test_an_rc_clocked_master_is_held_when_it_announces_itself)
 
 	zassert_equal(RADIANT_CH_OK,
 		      radiant_channel_close(SCHED_CH, radiant_radio_now()));
+
+	assert_no_viol();
 }

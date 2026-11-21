@@ -15,6 +15,7 @@
 
 #include <radiant/ant_radio.h>
 #include <radiant/ant_wire.h>
+#include "ant_radio_radiant.h"
 #include "ant_radio_radiant_priv.h"
 
 #include <radiant/radiant_channel.h>
@@ -24,6 +25,9 @@
 #include <radiant/radiant_transfer.h>
 
 #include "fake_radio.h"
+
+/* test_api.c: the api suite's end-of-case violation check. */
+void api_assert_no_viol(void);
 
 #define SEC_CH        0u
 #define SEC_DEVNUM    0x3A17u
@@ -181,6 +185,8 @@ ZTEST(api, test_sec_a_masters_body_is_the_hosts_payload_when_nothing_is_on)
 			  "a channel with no key and no switches changed the "
 			  "bytes on the air");
 	sec_close();
+
+	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_a_retransmission_is_byte_identical)
@@ -188,6 +194,7 @@ ZTEST(api, test_sec_a_retransmission_is_byte_identical)
 	const struct fake_radio_arm *tx;
 	uint8_t                      first[8];
 	uint8_t                      i;
+	radiant_time_t               t_prev;
 
 	/* A master retransmits its current body every slot regardless of new
 	 * writes. If a transform wrote through to the host's buffer instead
@@ -201,15 +208,29 @@ ZTEST(api, test_sec_a_retransmission_is_byte_identical)
 	zassert_mem_equal(first, sec_payload, 8u, "the first slot already "
 			  "differs; the wrong slot is being inspected");
 
+	t_prev = tx->t_sync_at;
 	for (i = 0u; i < 4u; i++) {
 		sec_run_slot();
+		/* With no host write nothing pumps the next slot from the test
+		 * thread; the event thread's housekeeping posts it, as it does
+		 * for a host that writes nothing. Without this the loop compared
+		 * one slot with itself four times, rewinding the clock to it
+		 * (FAKE_RADIO_VIOL_CLOCK_BACKWARDS). */
+		if (fake_radio_is_idle()) {
+			k_sleep(K_MSEC(3 * RADIANT_API_HOUSEKEEP_MS));
+		}
 		tx = sec_last_tx();
 		zassert_not_null(tx);
+		zassert_true(tx->t_sync_at > t_prev,
+			     "slot %u: no new transmit was armed", (unsigned)i);
+		t_prev = tx->t_sync_at;
 		zassert_mem_equal(&tx->body[SEC_BODY_D0], first, 8u,
 				  "slot %u differs from the first without the "
 				  "host writing anything", (unsigned)i);
 	}
 	sec_close();
+
+	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_the_on_air_address_is_the_one_the_channel_id_derives)
@@ -242,6 +263,8 @@ ZTEST(api, test_sec_the_on_air_address_is_the_one_the_channel_id_derives)
 			  "ID derives; a payload transform must not touch the "
 			  "address path");
 	sec_close();
+
+	api_assert_no_viol();
 }
 
 /* The peer's frame, hand-assembled from docs/ant-radio-link.md rather than
@@ -345,6 +368,8 @@ ZTEST(api, test_sec_an_acknowledgement_carries_what_the_broadcast_put_on_air)
 			  "the acknowledgement did not carry the bytes the "
 			  "broadcast slot put on the air");
 	sec_close();
+
+	api_assert_no_viol();
 }
 
 #if defined(CONFIG_RADIANT_SEC) && defined(CONFIG_RADIANT_SEC_LOCK_CHECK)
@@ -417,6 +442,8 @@ ZTEST(api, test_sec_a_denied_secured_master_slot_is_posted_by_the_pump_under_the
 		     "(%u arms after %u)", fake_radio_stats()->arms_tx,
 		     tx_before);
 	sec_close();
+
+	api_assert_no_viol();
 }
 #endif
 
@@ -523,6 +550,8 @@ ZTEST(api, test_sec_a_pending_master_sends_nothing_in_the_clear)
 	zassert_true(memcmp(&tx->body[SEC_BODY_D0 + 2u], &sec_payload[2],
 			    5u) != 0, "armed, but still in the clear");
 	sec_close();
+
+	api_assert_no_viol();
 }
 
 /*
@@ -593,6 +622,8 @@ ZTEST(api, test_sec_an_ack_during_the_master_post_never_carries_plaintext)
 		     "an acknowledgement during the master post carried the "
 		     "host's plaintext");
 	sec_close();
+
+	api_assert_no_viol();
 }
 #endif
 
@@ -604,6 +635,8 @@ ZTEST(api, test_sec_an_unsecured_channel_reports_clear)
 	zassert_equal(RADIANT_SEC_VERDICT_CLEAR,
 		      radiant_sec_last_verdict(SEC_CH));
 	zassert_false(radiant_sec_channel_is_secured(SEC_CH));
+
+	api_assert_no_viol();
 }
 
 #if defined(CONFIG_RADIANT_SEC)
@@ -710,6 +743,8 @@ ZTEST(api, test_sec_a_master_refuses_a_forged_secured_page)
 	zassert_equal(0u, api_test_count_bcast(SEC_CH, 0x05u),
 		      "the forged page reached the host");
 	sec_close();
+
+	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_a_masters_own_window_reflected_back_is_not_delivered)
@@ -734,6 +769,8 @@ ZTEST(api, test_sec_a_masters_own_window_reflected_back_is_not_delivered)
 	zassert_equal(0u, api_test_count_bcast(SEC_CH, own[0]),
 		      "the reflected page reached the host");
 	sec_close();
+
+	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_a_plain_slave_broadcast_still_reaches_a_secured_master)
@@ -752,6 +789,8 @@ ZTEST(api, test_sec_a_plain_slave_broadcast_still_reaches_a_secured_master)
 		      "a plain slave reply no longer reaches the host");
 	zassert_equal(0u, st.dropped_direction);
 	sec_close();
+
+	api_assert_no_viol();
 }
 #endif /* CONFIG_RADIANT_SEC */
 
@@ -796,6 +835,8 @@ ZTEST(api, test_sec_a_keyed_master_refuses_acked_and_burst)
 					    ANTR_BURST_SEGMENT_END));
 	zassert_equal(arms, fake_radio_arm_count(), "something was armed");
 	sec_close();
+
+	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_a_keyed_slave_still_sends_acked_data)
@@ -807,6 +848,8 @@ ZTEST(api, test_sec_a_keyed_slave_still_sends_acked_data)
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
 		      antr_acknowledge_message_tx(SEC_CH, 8u, blk));
 	sec_close();
+
+	api_assert_no_viol();
 }
 #endif
 
@@ -841,6 +884,8 @@ ZTEST(api, test_sec_host_key_refused_while_master_acked_in_flight)
 			  "the refused key was installed anyway");
 	zassert_false(radiant_sec_channel_is_secured(SEC_CH));
 	sec_close();
+
+	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_host_key_refused_while_master_burst_in_flight)
@@ -866,6 +911,8 @@ ZTEST(api, test_sec_host_key_refused_while_master_burst_in_flight)
 			  "the refused key was installed anyway");
 	zassert_false(radiant_sec_channel_is_secured(SEC_CH));
 	sec_close();
+
+	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_host_slave_with_acked_in_flight_still_keys)
@@ -888,6 +935,8 @@ ZTEST(api, test_sec_host_slave_with_acked_in_flight_still_keys)
 				      0x0Fu));
 	zassert_true(radiant_sec_channel_is_secured(SEC_CH));
 	sec_close();
+
+	api_assert_no_viol();
 }
 #endif
 
@@ -906,6 +955,8 @@ ZTEST(api, test_sec_an_unkeyed_master_still_sends_acked_and_burst)
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
 		      antr_acknowledge_message_tx(SEC_CH, 8u, ack_blk));
 	sec_close();
+
+	api_assert_no_viol();
 }
 
 /*
@@ -1077,6 +1128,8 @@ ZTEST(api, test_sec_policy_refused_while_master_acked_in_flight)
 	zassert_false(radiant_sec_channel_is_secured(SEC_CH));
 	sec_switches_are(0u);
 	sec_close();
+
+	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_policy_refused_while_master_burst_in_flight)
@@ -1101,6 +1154,8 @@ ZTEST(api, test_sec_policy_refused_while_master_burst_in_flight)
 	zassert_false(radiant_sec_channel_is_secured(SEC_CH));
 	sec_switches_are(0u);
 	sec_close();
+
+	api_assert_no_viol();
 }
 
 /* An armed X_AUTH master answering a slave's burst: each acknowledgement
@@ -1132,6 +1187,8 @@ ZTEST(api, test_sec_policy_refused_while_master_answers_a_burst)
 		      "the policy changed while the master answered a burst");
 	sec_switches_are(RADIANT_SEC_SW_AUTH);
 	sec_close();
+
+	api_assert_no_viol();
 }
 
 /* 0xF2, 0xF1, 0xF3: the slot staged unkeyed carries the host's page in the
@@ -1155,6 +1212,8 @@ ZTEST(api, test_sec_enabling_conf_takes_back_the_staged_broadcast)
 		      "the slot staged before 0xF1 went out in the clear");
 	sec_assert_encrypted_on_air();
 	sec_close();
+
+	api_assert_no_viol();
 }
 
 /* 0xF2, 0xF3, 0xF1: armed the moment X_CONF goes on, so the staged slot is
@@ -1177,6 +1236,8 @@ ZTEST(api, test_sec_enabling_conf_after_the_epoch_takes_back_the_staged_broadcas
 		      "the slot staged before 0xF1 went out in the clear");
 	sec_assert_encrypted_on_air();
 	sec_close();
+
+	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_adding_conf_to_auth_takes_back_slot_and_ack_payload)
@@ -1206,6 +1267,8 @@ ZTEST(api, test_sec_adding_conf_to_auth_takes_back_slot_and_ack_payload)
 		      "the X_AUTH slot went out after X_CONF was acknowledged");
 	sec_assert_encrypted_on_air();
 	sec_close();
+
+	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_widening_the_range_takes_back_slot_and_ack_payload)
@@ -1230,6 +1293,8 @@ ZTEST(api, test_sec_widening_the_range_takes_back_slot_and_ack_payload)
 		      "the page went out in the clear after the range took it");
 	sec_assert_encrypted_on_air();
 	sec_close();
+
+	api_assert_no_viol();
 }
 
 /* Guard: the slot index a change withholds is never used again, before or
@@ -1268,6 +1333,8 @@ ZTEST(api, test_sec_a_policy_change_never_reuses_a_slot_index)
 	}
 	zassert_true(n >= 4u, "setup: only %u secured slots aired", n);
 	sec_close();
+
+	api_assert_no_viol();
 }
 
 /* Guard: the same policy again is accepted and disturbs nothing - no abort,
@@ -1301,6 +1368,8 @@ ZTEST(api, test_sec_an_identical_policy_disturbs_nothing)
 		      "the staged slot did not go out");
 	zassert_mem_equal(&tx->body[SEC_BODY_D0], staged, sizeof(staged));
 	sec_close();
+
+	api_assert_no_viol();
 }
 
 /* Guard: a slave's policy is its own business - neither refused with its
@@ -1323,6 +1392,8 @@ ZTEST(api, test_sec_a_slave_policy_is_neither_refused_nor_flushed)
 	zassert_equal(aborts, fake_radio_abort_calls(), "something was aborted");
 	zassert_true(radiant_sec_channel_is_secured(SEC_CH));
 	sec_close();
+
+	api_assert_no_viol();
 }
 
 /*
@@ -1391,6 +1462,8 @@ ZTEST(api, test_sec_a_rekey_takes_back_the_staged_slot_and_ack_payload)
 		      "the old key's slot went out after the rekey");
 	sec_assert_encrypted_on_air();
 	sec_close();
+
+	api_assert_no_viol();
 }
 
 /* Guard: the same key again (a 0xF2 retry) disturbs nothing - no abort, the
@@ -1424,6 +1497,8 @@ ZTEST(api, test_sec_an_identical_key_disturbs_nothing)
 		      "the staged slot did not go out");
 	zassert_mem_equal(&tx->body[SEC_BODY_D0], staged, sizeof(staged));
 	sec_close();
+
+	api_assert_no_viol();
 }
 
 /* Guard: a slave's rekey flushes nothing - it stages no secured slot. */
@@ -1441,6 +1516,8 @@ ZTEST(api, test_sec_a_slave_rekey_is_not_flushed)
 	zassert_equal(aborts, fake_radio_abort_calls(), "something was aborted");
 	zassert_true(radiant_sec_channel_is_secured(SEC_CH));
 	sec_close();
+
+	api_assert_no_viol();
 }
 
 /* Guard: only the 0xF2 path flushes. Pairing installs its keys through
@@ -1468,5 +1545,7 @@ ZTEST(api, test_sec_a_direct_set_key_does_not_flush)
 		     "the ack payload was dropped");
 	zassert_mem_equal(before, after, sizeof(before));
 	sec_close();
+
+	api_assert_no_viol();
 }
 #endif /* CONFIG_RADIANT_SEC_HOST_MESSAGES */

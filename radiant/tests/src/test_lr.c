@@ -43,6 +43,17 @@
 #include "profile_schedule.h"
 #include "profile_telemetry.h"
 
+/* Every case ends with this: fake_radio_viol_count() == 0, idle-agnostic.
+ * Not an after() hook: on this Zephyr a zassert in after() cannot fail the
+ * case (ztest prints "cannot fail in test phase 'after()'", passes the case
+ * and skips every case behind it, suite reported as succeeded). */
+static void assert_no_viol(void)
+{
+	zassert_equal(0u, fake_radio_viol_count(), "contract violation: %s (%s)",
+		      fake_radio_viol_name(fake_radio_viol(0)->code),
+		      fake_radio_viol(0)->detail);
+}
+
 /* ---------------------------------------------------------------------------
  * 1. Geometry
  * ---------------------------------------------------------------------------
@@ -81,6 +92,8 @@ ZTEST(lr, test_the_format_is_the_one_the_adr_describes)
 	zassert_equal(RADIANT_LEN_FIXED,
 		      radiant_frame_format(RADIANT_FRAME_CFG_TRACKING)->len_mode);
 	zassert_equal(RADIANT_LEN_FIXED, radiant_frame_format(RADIANT_FRAME_CFG_SEARCH)->len_mode);
+
+	assert_no_viol();
 }
 
 ZTEST(lr, test_the_address_is_a_whole_device_number)
@@ -109,6 +122,8 @@ ZTEST(lr, test_the_address_is_a_whole_device_number)
 	 * the length would pass with the device type written over devnum_hi.
 	 */
 	zassert_equal(5, radiant_frame_addr_len(RADIANT_FRAME_CFG_TRACKING));
+
+	assert_no_viol();
 }
 
 ZTEST(lr, test_the_airtime_reproduces_the_fec_block_table)
@@ -144,6 +159,8 @@ ZTEST(lr, test_the_airtime_reproduces_the_fec_block_table)
 		      radiant_frame_airtime_us(RADIANT_FRAME_CFG_LR,
 					       RADIANT_FRAME_PAYLOAD_LR_MAX + 1u),
 		      NULL);
+
+	assert_no_viol();
 }
 
 /* ---------------------------------------------------------------------------
@@ -193,6 +210,8 @@ ZTEST(lr, test_the_body_round_trips_and_states_its_own_length)
 	/* The device number is not in the body - it's in the on-air address,
 	 * consumed by the matcher, same as devnum_lo in search. */
 	zassert_equal(0u, got.device_number);
+
+	assert_no_viol();
 }
 
 ZTEST(lr, test_a_length_that_disagrees_with_the_frame_is_refused)
@@ -231,6 +250,8 @@ ZTEST(lr, test_a_length_that_disagrees_with_the_frame_is_refused)
 						    big, sizeof(big), body,
 						    sizeof(body)));
 	}
+
+	assert_no_viol();
 }
 
 ZTEST(lr, test_the_ant_encoders_refuse_the_long_range_configuration)
@@ -264,6 +285,8 @@ ZTEST(lr, test_the_ant_encoders_refuse_the_long_range_configuration)
 	zassert_equal(RADIANT_FRAME_EINVAL,
 		      radiant_frame_from_bytes(RADIANT_FRAME_CFG_LR, buf,
 					       sizeof(buf), &w));
+
+	assert_no_viol();
 }
 
 /* ---------------------------------------------------------------------------
@@ -307,6 +330,8 @@ ZTEST(lr, test_discovery_stays_on_one_megabit)
 	/* And the sweep length is unchanged: 8 filters, 32 sets. */
 	zassert_equal(8u, radiant_search_filters_per_window(&s), NULL);
 	zassert_equal(32u, radiant_search_sets(&s), NULL);
+
+	assert_no_viol();
 }
 
 /* ---------------------------------------------------------------------------
@@ -427,6 +452,8 @@ ZTEST(lr, test_a_window_inside_the_phy_switch_is_missed_not_skipped)
 	(void)radiant_sched_cancel(0u);
 	(void)radiant_sched_cancel(1u);
 	fake_radio_advance(100000u);
+
+	assert_no_viol();
 }
 
 ZTEST(lr, test_a_change_of_phy_is_budgeted_and_a_repeat_is_not)
@@ -518,6 +545,8 @@ ZTEST(lr, test_a_change_of_phy_is_budgeted_and_a_repeat_is_not)
 
 	st = radiant_sched_stats_get();
 	zassert_true(st->phy_switches >= 2u, "switches %u", st->phy_switches);
+
+	assert_no_viol();
 }
 
 /* ---------------------------------------------------------------------------
@@ -574,6 +603,8 @@ ZTEST(lr, test_the_duty_bound_refuses_at_the_boundary)
 		      profile_sched_duty_check(PROFILE_SCHED_CODING_S8, 8192u,
 					       41u),
 		      NULL);
+
+	assert_no_viol();
 }
 
 /* ---------------------------------------------------------------------------
@@ -659,6 +690,8 @@ ZTEST(lr, test_the_collapse_round_trips_through_the_unchanged_accumulator)
 	zassert_equal(d.flags, got.flags, NULL);
 	zassert_equal(PROFILE_SCHED_CODING_S8, got.schedule.coding);
 	zassert_mem_equal(d.fields, got.fields, sizeof(d.fields[0]) * d.n_fields);
+
+	assert_no_viol();
 }
 
 ZTEST(lr, test_how_complete_the_collapse_actually_is)
@@ -686,6 +719,8 @@ ZTEST(lr, test_how_complete_the_collapse_actually_is)
 	build_lr_descriptor(&d, 8u);
 	zassert_equal(11u, profile_desc_frame_count(&d), NULL);
 	zassert_equal(3, profile_desc_long_count(&d, RADIANT_FRAME_PAYLOAD_LR_MAX));
+
+	assert_no_viol();
 }
 
 ZTEST(lr, test_a_collapse_is_refused_where_the_phy_does_not_hide_it)
@@ -726,6 +761,8 @@ ZTEST(lr, test_a_collapse_is_refused_where_the_phy_does_not_hide_it)
 		memset(payload, 0, sizeof(payload));
 		zassert_equal(-EPROTO, profile_desc_rx_feed_long(&rx, payload, 12u));
 	}
+
+	assert_no_viol();
 }
 
 static void lr_before(void *fixture)
