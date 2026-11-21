@@ -77,8 +77,12 @@ LOG_MODULE_REGISTER(ant_bridge, LOG_LEVEL_INF);
  * to a build that refuses it still crossed the parser buffer and the trace
  * byte for byte. Used by the host trace and by the parser-buffer wipe.
  * `body`/`len` are the message body (channel or type byte first).
+ *
+ * Not inline: inlined, the parser grew by 188 B of text on the Pro Micro
+ * image; out of line the same code costs 72 B.
  */
-static inline uint8_t key_msg_keep(uint8_t id, const uint8_t *body, size_t len)
+static __noinline uint8_t key_msg_keep(uint8_t id, const uint8_t *body,
+				       size_t len)
 {
 	switch (id) {
 	case ANTW_MESG_NETWORK_KEY_ID:
