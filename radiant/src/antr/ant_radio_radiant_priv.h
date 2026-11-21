@@ -61,6 +61,8 @@ int antr_sec_key_replace(uint8_t ch, const uint8_t *root, size_t bits,
  * path, 8 bytes into `out`, false when the channel would not acknowledge. */
 void antr_test_master_tx_seam(uint8_t ch);
 bool antr_test_ack_payload(uint8_t ch, uint8_t out[8]);
+/* Weak: after the 0xF1/0xF2 take-back, before the pump that follows it. */
+void antr_test_take_back_seam(uint8_t ch);
 #endif
 
 #endif /* ANT_RADIO_RADIANT_PRIV_H_ */

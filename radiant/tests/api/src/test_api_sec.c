@@ -999,6 +999,29 @@ static void sec_assert_encrypted_on_air(void)
 			    5u) != 0, "the page went on the air in the clear");
 }
 
+/* What the ack path offered between the take-back and the pump that follows
+ * it, the window where set_key's crypto runs: the pump re-post and the cancel
+ * clear the payload too, so only this sees the take-back's own invalidation. */
+static uint32_t tb_calls;
+static bool     tb_acks;
+
+void antr_test_take_back_seam(uint8_t ch)
+{
+	uint8_t out[8];
+
+	if (ch == SEC_CH) {
+		tb_calls++;
+		tb_acks = antr_test_ack_payload(ch, out);
+	}
+}
+
+static void sec_assert_no_ack_before_the_pump(void)
+{
+	zassert_equal(1u, tb_calls, "no take-back");
+	zassert_false(tb_acks,
+		      "the old ack payload was offered before the pump");
+}
+
 /* The ack payload a master would send now: none, or not the host's bytes. */
 static void sec_assert_ack_not_clear(void)
 {
@@ -1172,8 +1195,10 @@ ZTEST(api, test_sec_adding_conf_to_auth_takes_back_slot_and_ack_payload)
 			  "setup: the X_AUTH ack payload is not in the clear");
 
 	t = radiant_radio_now();
+	tb_calls = 0u;
 	sec_host_ok(antr_sec_config(SEC_CH, SEC_SW_AC, 2u, 0x01u, 0x0Fu),
 		    "0xF1");
+	sec_assert_no_ack_before_the_pump();
 	sec_assert_ack_not_clear();
 	sec_periods(4);
 
@@ -1346,8 +1371,10 @@ ZTEST(api, test_sec_a_rekey_takes_back_the_staged_slot_and_ack_payload)
 		     "setup: no ack payload under the old key");
 
 	t = radiant_radio_now();
+	tb_calls = 0u;
 	sec_host_ok(antr_sec_key_set(SEC_CH, 128u, sec_rekey_root),
 		    "the new 0xF2");
+	sec_assert_no_ack_before_the_pump();
 	zassert_false(antr_test_ack_payload(SEC_CH, ack),
 		      "the old key's ack payload is still offered");
 

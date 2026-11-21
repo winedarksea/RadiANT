@@ -954,6 +954,14 @@ __weak void antr_test_master_tx_seam(uint8_t ch)
 	ARG_UNUSED(ch);
 }
 
+/* The 0xF1/0xF2 take-back has happened and the pump has not run: what an
+ * acknowledged request landing during set_key's crypto would be answered
+ * with (review 2026-11-20 item C). */
+__weak void antr_test_take_back_seam(uint8_t ch)
+{
+	ARG_UNUSED(ch);
+}
+
 bool antr_test_ack_payload(uint8_t ch, uint8_t out[RADIANT_TRANSFER_PKT_BYTES])
 {
 	return api_xfer_broadcast((void *)(uintptr_t)ch, out);
@@ -4337,6 +4345,9 @@ __attribute__((cold)) int antr_sec_policy_set(uint8_t ch, uint8_t switches,
 	rc = radiant_sec_configure(ch, switches, w, page_lo, page_hi);
 	radiant_event_crit_exit(key);
 	if (api_sec_policy == POLICY_FLUSHED) {
+#if defined(CONFIG_ZTEST)
+		antr_test_take_back_seam(ch);
+#endif
 		api_pump_locked();
 	}
 	api_sec_policy = POLICY_IDLE;
@@ -4376,6 +4387,9 @@ __attribute__((cold)) int antr_sec_key_replace(uint8_t ch, const uint8_t *root,
 	api_sec_policy = POLICY_ASKED;
 	rc = radiant_sec_set_key(ch, root, bits, base_devnum);
 	if (api_sec_policy == POLICY_FLUSHED) {
+#if defined(CONFIG_ZTEST)
+		antr_test_take_back_seam(ch);
+#endif
 		api_pump_locked();
 	}
 	api_sec_policy = POLICY_IDLE;
