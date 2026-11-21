@@ -29,6 +29,8 @@ struct cc_rx_rec {
 	int8_t         rssi_dbm;
 	bool           has_crc_rx;
 	uint32_t       crc_rx;
+	bool           has_noise;
+	int8_t         noise_dbm;
 	bool           busy_in_cb;  /* the backend still held an op during it */
 };
 
@@ -78,6 +80,14 @@ uint32_t cc_sw_addr_mismatch(void);
  * CONFIG_RADIANT_DIAG_COUNTERS. */
 bool     cc_diag_built(void);
 uint32_t cc_status_err(void);
+/* cc_diag.window_drops (0 without CONFIG_RADIANT_DIAG_COUNTERS). */
+uint32_t cc_window_drops(void);
+/* HAL item 5 lifecycle: st.inited cleared (the state before init), and
+ * whether the RF driver handle is open. */
+void     cc_forget_init(void);
+bool     cc_rf_open(void);
+/* radiant_radio_init() with the probe's table, one with no rx, or none. */
+int      cc_init_call(int which);
 
 /*
  * The transmit timing arithmetic at any calibration (Kconfig range -300..300),

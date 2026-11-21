@@ -279,3 +279,125 @@ ZTEST(radiant_backend_cc26xx_smoke, test_arm_refusals)
 
 	zassert_equal(radiant_radio_tx(&req, &op), RADIANT_RADIO_OK_RC);
 }
+
+/* ------------------------------------------------------------------------
+ * HAL item 5: window edges, lifecycle and request error codes
+ * ------------------------------------------------------------------------
+ */
+
+/* t_sync always lies in [t_open, t_close]: the receiver runs early and late,
+ * so a frame one microsecond before t_open is dropped in software (and
+ * counted where the 0xF7 counters are built); one at exactly t_close is
+ * delivered. */
+ZTEST(radiant_backend_cc26xx_smoke, test_rx_window_edges)
+{
+	struct radiant_rx_req req;
+	struct radiant_rx_filter filt;
+	const radiant_time_t t_open = radiant_radio_now() + 2000u;
+	uint8_t pl[RADIANT_RADIO_ADDR_MAX + RADIANT_RADIO_BODY_MAX + 2];
+	const uint32_t drops0 = cc_window_drops();
+	uint32_t op = 0u;
+	uint8_t n;
+	RF_CmdHandle ch;
+
+	cc_rx_req(&req, &filt, t_open, 1000u);
+	zassert_equal(radiant_radio_rx(&req, &op), RADIANT_RADIO_OK_RC);
+	ch = fake_rf_last()->cmd.ch;
+
+	n = cc_payload(cc_addr, cc_hw_addr_len(), body8, false, pl);
+	zassert_equal(fake_rf_rx_entry(ch, pl, n, -55, cc_rat_for_t_sync(t_open - 1u), 0u), 0);
+	zassert_equal(fake_rf_rx_entry(ch, pl, n, -55, cc_rat_for_t_sync(req.t_close), 0u), 0);
+	fake_rf_fire(ch, RF_EventRxEntryDone);
+
+	zassert_equal(cc_probe()->rx_events, 1u, "only the frame at t_close");
+	zassert_equal(cc_probe()->rx[0].status, RADIANT_RADIO_STATUS_OK);
+	zassert_equal(cc_probe()->rx[0].t_sync, req.t_close);
+	zassert_true(cc_probe()->rx[0].t_sync_exact);
+	if (cc_diag_built()) {
+		zassert_equal(cc_window_drops() - drops0, 1u);
+	}
+	zassert_equal(cc_kind(), 1);
+}
+
+/* init: a missing table or callback is EINVAL; a second init without a
+ * fresh boot is ESTATE and leaves the open radio and the live operation
+ * alone (it used to memset the state, losing the RF handle). abort: ESTATE
+ * before init, OK after init with nothing armed. */
+ZTEST(radiant_backend_cc26xx_smoke, test_init_and_abort_lifecycle_codes)
+{
+	struct radiant_rx_req req;
+	struct radiant_rx_filter filt;
+	uint32_t op = 0u;
+
+	cc_rx_req(&req, &filt, radiant_radio_now() + 2000u, 1000u);
+	zassert_equal(radiant_radio_rx(&req, &op), RADIANT_RADIO_OK_RC);
+	zassert_equal(cc_init_call(3), RADIANT_RADIO_ESTATE);
+	zassert_true(cc_rf_open(), "a second init dropped the RF handle");
+	zassert_equal(cc_kind(), 1, "a second init dropped the live window");
+	zassert_equal(cc_op_id(), op);
+
+	cc_forget_init();
+	zassert_equal(radiant_radio_abort(), RADIANT_RADIO_ESTATE);
+	zassert_equal(cc_init_call(0), RADIANT_RADIO_EINVAL);
+	zassert_equal(cc_init_call(1), RADIANT_RADIO_EINVAL);
+	zassert_equal(cc_init_call(2), RADIANT_RADIO_EINVAL);
+	zassert_equal(cc_init_call(3), RADIANT_RADIO_OK_RC);
+	zassert_equal(radiant_radio_abort(), RADIANT_RADIO_OK_RC);
+}
+
+/* A NULL format or a zero body is malformed (EINVAL), not a format this
+ * backend cannot express (ENOTSUP), on both arm calls. */
+ZTEST(radiant_backend_cc26xx_smoke, test_malformed_format_is_einval)
+{
+	struct radiant_rx_req rx;
+	struct radiant_rx_filter filt;
+	struct radiant_tx_req tx;
+	struct radiant_pkt_format empty = *cc_fmt();
+	uint32_t op = 1u;
+
+	empty.body_len = 0u;
+
+	cc_rx_req(&rx, &filt, radiant_radio_now() + 2000u, 1000u);
+	rx.fmt = NULL;
+	zassert_equal(radiant_radio_rx(&rx, &op), RADIANT_RADIO_EINVAL);
+	zassert_equal(op, 0u);
+	rx.fmt = &empty;
+	zassert_equal(radiant_radio_rx(&rx, &op), RADIANT_RADIO_EINVAL);
+
+	cc_tx_req(&tx, body8, radiant_radio_now() + 2000u);
+	tx.fmt = NULL;
+	zassert_equal(radiant_radio_tx(&tx, &op), RADIANT_RADIO_EINVAL);
+	tx.fmt = &empty;
+	tx.body_len = 0u;
+	zassert_equal(radiant_radio_tx(&tx, &op), RADIANT_RADIO_EINVAL);
+	zassert_equal(cc_kind(), 0);
+	zassert_is_null(fake_rf_last(), "nothing posted");
+}
+
+/* A window longer than a non-zero caps.max_window_us is ENOTSUP, refused
+ * before anything reaches the RF driver's scheduler. Only the coex build
+ * advertises a ceiling; the plain build takes the same window. */
+ZTEST(radiant_backend_cc26xx_smoke, test_window_over_the_ceiling)
+{
+	struct radiant_rx_req req;
+	struct radiant_rx_filter filt;
+	const uint32_t max = radiant_radio_caps_get()->max_window_us;
+	const uint32_t posted = fake_rf.n_cmds;
+	uint32_t op = 1u;
+
+#if defined(BACKEND_COEX)
+	zassert_equal(max, 20000u);
+	cc_rx_req(&req, &filt, radiant_radio_now() + 3000u, max + 1u);
+	zassert_equal(radiant_radio_rx(&req, &op), RADIANT_RADIO_ENOTSUP);
+	zassert_equal(op, 0u);
+	zassert_equal(fake_rf.n_cmds, posted, "the over-long window was posted");
+	zassert_equal(cc_kind(), 0);
+	cc_rx_req(&req, &filt, radiant_radio_now() + 3000u, max);
+	zassert_equal(radiant_radio_rx(&req, &op), RADIANT_RADIO_OK_RC);
+#else
+	zassert_equal(max, 0u);
+	ARG_UNUSED(posted);
+	cc_rx_req(&req, &filt, radiant_radio_now() + 3000u, 50000u);
+	zassert_equal(radiant_radio_rx(&req, &op), RADIANT_RADIO_OK_RC);
+#endif
+}

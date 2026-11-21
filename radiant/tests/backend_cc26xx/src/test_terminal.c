@@ -663,3 +663,82 @@ ZTEST(radiant_backend_cc26xx_terminal, test_tx_aborted_reports_requested_t_sync)
 	(void)fake_rf_deliver_pending();
 	zassert_equal(cc_probe()->tx_events, 1u);
 }
+
+/* ------------------------------------------------------------------------
+ * Item 5: an RX terminal reports its requested t_close
+ * ------------------------------------------------------------------------
+ * HAL: on TIMEOUT/ABORTED/DENIED/FAILED an rx event's t_sync is the window's
+ * requested t_close with t_sync_exact false, the mirror of the TX rule. This
+ * backend takes no noise sample (RF_getRssi works mid-window only), so
+ * has_noise stays false on every terminal, an empty TIMEOUT included.
+ */
+
+/* The last rx event, which must be the terminal for `op`. */
+static void expect_rx_terminal(uint32_t op, int status, radiant_time_t t_close)
+{
+	const uint32_t n = cc_probe()->rx_events;
+	const struct cc_rx_rec *r;
+
+	zassert_true(n >= 1u && n <= CC_PROBE_LOG);
+	r = &cc_probe()->rx[n - 1u];
+	zassert_equal(r->op, op);
+	zassert_equal(r->status, status);
+	zassert_equal(r->t_sync, t_close, "terminal %d reported t_sync %llu, t_close %llu",
+		      status, (unsigned long long)r->t_sync, (unsigned long long)t_close);
+	zassert_false(r->t_sync_exact);
+	zassert_false(r->has_noise, "this backend has no noise sample");
+}
+
+ZTEST(radiant_backend_cc26xx_terminal, test_rx_empty_timeout_reports_t_close_no_noise)
+{
+	uint32_t op = 0u;
+	const radiant_time_t t_open = radiant_radio_now() + 2000u;
+	RF_CmdHandle ch = arm_rx(t_open, 1000u, 0u, &op);
+
+	fake_rf_complete(ch, PROP_DONE_RXTIMEOUT, RF_EventLastCmdDone);
+	expect_rx_terminal(op, RADIANT_RADIO_STATUS_TIMEOUT, t_open + 1000u);
+}
+
+ZTEST(radiant_backend_cc26xx_terminal, test_rx_timeout_after_frame_reports_t_close)
+{
+	uint32_t op = 0u;
+	const radiant_time_t t_open = radiant_radio_now() + 2000u;
+	RF_CmdHandle ch = arm_rx(t_open, 1000u, 0u, &op);
+
+	fake_rf_start(ch);
+	hear_frame(ch, t_open + 100u);
+	fake_rf_complete(ch, PROP_DONE_RXTIMEOUT, RF_EventLastCmdDone);
+	zassert_equal(cc_probe()->rx_events, 2u);
+	expect_rx_terminal(op, RADIANT_RADIO_STATUS_TIMEOUT, t_open + 1000u);
+}
+
+ZTEST(radiant_backend_cc26xx_terminal, test_rx_aborted_reports_t_close)
+{
+	uint32_t op = 0u;
+	const radiant_time_t t_open = radiant_radio_now() + 2000u;
+
+	(void)arm_rx(t_open, 1000u, 0u, &op);
+	zassert_equal(radiant_radio_abort(), RADIANT_RADIO_OK_RC);
+	expect_rx_terminal(op, RADIANT_RADIO_STATUS_ABORTED, t_open + 1000u);
+	(void)fake_rf_deliver_pending();
+}
+
+ZTEST(radiant_backend_cc26xx_terminal, test_rx_denied_reports_t_close)
+{
+	uint32_t op = 0u;
+	const radiant_time_t t_open = radiant_radio_now() + 2000u;
+	RF_CmdHandle ch = arm_rx(t_open, 1000u, 0u, &op);
+
+	fake_rf_fire(ch, RF_EventCmdCancelled | RF_EventCmdPreempted);
+	expect_rx_terminal(op, RADIANT_RADIO_STATUS_DENIED, t_open + 1000u);
+}
+
+ZTEST(radiant_backend_cc26xx_terminal, test_rx_failed_reports_t_close)
+{
+	uint32_t op = 0u;
+	const radiant_time_t t_open = radiant_radio_now() + 2000u;
+	RF_CmdHandle ch = arm_rx(t_open, 1000u, 0u, &op);
+
+	fake_rf_complete(ch, PROP_ERROR_PAR, RF_EventLastCmdDone);
+	expect_rx_terminal(op, RADIANT_RADIO_STATUS_FAILED, t_open + 1000u);
+}

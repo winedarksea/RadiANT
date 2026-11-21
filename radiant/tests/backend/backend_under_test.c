@@ -18,10 +18,11 @@
 #define CONFIG_RADIANT_BACKEND_NRF_IRQ_PRIO 0
 #define CONFIG_RADIANT_NRF_TRACK_HW_ADDR_LEN 0
 #define CONFIG_SOC_COMPATIBLE_NRF54LX 1
-/* The 0xF7 counters, so a test can read page 10 field 4. Nothing here calls
- * radiant_radio_init(), so the cycle-clock helpers it names are not needed. */
+/* The 0xF7 counters, so a test can read page 10 field 4. radiant_radio_init()
+ * is called only with arguments it refuses (test_terminal_contract.c), so the
+ * cycle-clock helper it names is a stub below. */
 #define CONFIG_RADIANT_DIAG_COUNTERS 1
-/* radiant_radio_init() names the core clock; nothing here calls it. */
+/* radiant_radio_init() names the core clock; it never gets that far here. */
 static const uint32_t SystemCoreClock = 64000000u;
 /*
  * The register shadow (B4) is compiled out of every MPSL build, this one
@@ -54,6 +55,8 @@ static const uint32_t SystemCoreClock = 64000000u;
 
 /* The scheduler's pass stamp (radiant_sched.c, not in this image). */
 uint32_t radiant_diag_pass_now;
+/* radiant_diag.c is not in this image either (see CONFIG_RADIANT_DIAG_COUNTERS). */
+void radiant_diag_cycles_init(uint32_t core_hz) { ARG_UNUSED(core_hz); }
 
 #include <radiant/radiant_frame.h>
 
@@ -75,6 +78,8 @@ static struct {
 	bool     deny_wanted;  /* a denial queued for gate_wq (g.deny_wanted) */
 	bool     answered_pending; /* the last gate_acquire() said GATE_PENDING */
 	uint32_t forgets;      /* gate_forget_pending() calls */
+	uint32_t max_window;   /* what gate_max_window_us() reports (0: unbounded) */
+	uint32_t acquires;     /* gate_acquire() calls */
 } fg;
 
 static void pre_at_acquire(void);
@@ -111,7 +116,7 @@ int gate_book_tail(radiant_time_t t_from, radiant_time_t t_to, uint16_t follow_o
 bool gate_extend(uint32_t us) { ARG_UNUSED(us); return false; }
 int gate_init(void) { return RADIANT_RADIO_OK_RC; }
 void gate_shutdown(void) {}
-uint32_t gate_max_window_us(void) { return 0u; }
+uint32_t gate_max_window_us(void) { return fg.max_window; }
 uint32_t gate_min_arm_lead_us(void) { return 0u; }
 enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from, radiant_time_t t_to,
 			  uint16_t follow_on_us, uint8_t prio)
@@ -120,6 +125,7 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from, radiant_time_t
 	ARG_UNUSED(follow_on_us); ARG_UNUSED(prio);
 	enum gate_rc r;
 
+	fg.acquires++;
 	/* GRANTED only from a held grant (the real gate's in-grant branch);
 	 * otherwise the request is placed and the arm is staged. */
 	if (fg.pending || !fg.held) {
@@ -195,6 +201,10 @@ static void cb_rx(const struct radiant_rx_event *evt, void *user)
 	bp.last_rx_crc_rx = evt->crc_rx;
 	bp.last_rx_filter_index = evt->filter_index;
 	bp.last_rx_rssi_dbm = evt->rssi_dbm;
+	bp.last_rx_t_sync = evt->t_sync;
+	bp.last_rx_t_sync_exact = evt->t_sync_exact;
+	bp.last_rx_has_noise = evt->has_noise;
+	bp.last_rx_noise_dbm = evt->noise_dbm;
 	arm_follow_on_if_asked();
 	if (bp.on_rx != NULL) {
 		bp.on_rx(evt->status);
@@ -543,6 +553,135 @@ void backend_deny_staged(void)
 }
 
 uint64_t backend_now(void) { return radiant_radio_now(); }
+
+/* ---- HAL item 5, the rest: error codes, window cap, window edges, RX terminal ---- */
+
+static struct radiant_rx_filter bfilt9[9];
+
+int backend_rx_window(uint64_t t_open, uint64_t t_close, uint32_t flags, uint32_t *op)
+{
+	backend_arm_ready();
+	memset(&brx_req, 0, sizeof(brx_req));
+	brx_req.fmt = radiant_frame_format(RADIANT_FRAME_CFG_TRACKING);
+	brx_req.filters = &bfilt;
+	brx_req.n_filters = 1u;
+	brx_req.t_open = t_open;
+	brx_req.t_close = t_close;
+	brx_req.flags = flags;
+	return radiant_radio_rx(&brx_req, op);
+}
+
+int backend_rx_window_staged(uint64_t t_open, uint64_t t_close, uint32_t *op)
+{
+	int rc;
+
+	fg.pending = true;
+	rc = backend_rx_window(t_open, t_close, 0u, op);
+	fg.pending = false;
+	return rc;
+}
+
+void backend_grant_rx_after(uint32_t late_us)
+{
+	fake_hw.counter += (uint32_t)(radiant_staged.rx.t_open + late_us -
+				      radiant_radio_now());
+	fg.held = true;
+	radiant_nrf_gate_on_grant();
+}
+
+int backend_rx_n_filters(uint8_t n)
+{
+	uint32_t op;
+
+	backend_arm_ready();
+	for (uint8_t i = 0u; i < ARRAY_SIZE(bfilt9); i++) {
+		memset(&bfilt9[i], 0, sizeof(bfilt9[i]));
+		bfilt9[i].addr_len = 5u;
+		bfilt9[i].addr[4] = i;
+	}
+	memset(&brx_req, 0, sizeof(brx_req));
+	brx_req.fmt = radiant_frame_format(RADIANT_FRAME_CFG_TRACKING);
+	brx_req.filters = bfilt9;
+	brx_req.n_filters = n;
+	brx_req.t_open = radiant_radio_now() + 10000u;
+	brx_req.t_close = brx_req.t_open + 1000u;
+	return radiant_radio_rx(&brx_req, &op);
+}
+
+int backend_ed_live(uint8_t lo, uint8_t hi, uint32_t dwell_us, uint32_t *op)
+{
+	struct radiant_ed_req req = {
+		.rf_index_lo = lo, .rf_index_hi = hi, .dwell_us = dwell_us,
+		.t_start = radiant_radio_now() + 10000u,
+	};
+
+	backend_arm_ready();
+	return radiant_radio_ed(&req, op);
+}
+
+void     backend_set_max_window(uint32_t us) { fg.max_window = us; }
+uint32_t backend_acquires(void) { return fg.acquires; }
+
+/* The window in flight heard as a coded (LR) one: length from the body, the
+ * longest body, and the coded calibration; the length byte says one byte. */
+void backend_make_coded(void)
+{
+	radiant_op.phy = RADIANT_PHY_LR_CODED;
+	radiant_op.len_from_body = true;
+	radiant_op.body_len = RADIANT_RADIO_BODY_MAX;
+	radiant_rx_buf[0] = 0u;
+}
+
+/*
+ * A frame whose event would carry t_sync `t`: CC_SYNC put where the END
+ * branch's calibration maps it back to `t`, and the counter moved on so the
+ * frame has long ended (not torn).
+ */
+void backend_frame_t_sync(bool crc_ok, uint64_t t)
+{
+	const radiant_time_t at = t_sync_cal(
+		(radiant_time_t)t - radiant_addr_split_t_sync_us(radiant_op.sw_addr_len),
+		-t_sync_cal_rx_us(radiant_op.phy));
+	const uint32_t cc = clock_counter_at(at);
+
+	fake_hw.crc_ok = crc_ok;
+	fake_hw.cc[CC_SYNC] = cc;
+	if ((int32_t)(cc + 2000u - fake_hw.counter) > 0) {
+		fake_hw.counter = cc + 2000u;
+	}
+	fake_hw.event[NRF_RADIO_EVENT_ADDRESS] = true;
+	fake_hw.event[NRF_RADIO_EVENT_END] = true;
+	signal_isr();
+}
+
+uint32_t backend_window_drops(void)
+{
+	struct radiant_radio_diag d;
+
+	memset(&d, 0, sizeof(d));
+	(void)radiant_radio_diag_get(&d);
+	return d.v[RADIANT_RADIO_DIAG_WINDOW_DROPS];
+}
+
+int backend_init_call(int which)
+{
+	static const struct radiant_radio_cbs no_rx = { .rx = NULL, .tx = cb_tx };
+	static const struct radiant_radio_cbs no_tx = { .rx = cb_rx, .tx = NULL };
+
+	switch (which) {
+	case 0:  return radiant_radio_init(NULL, NULL);
+	case 1:  return radiant_radio_init(&no_rx, NULL);
+	case 2:  return radiant_radio_init(&no_tx, NULL);
+	default: return radiant_radio_init(&bcbs, NULL);
+	}
+}
+
+int backend_abort_uninited(void)
+{
+	radiant_op.inited = false;
+	radiant_op.enabled = false;
+	return radiant_radio_abort();
+}
 
 /* ---- The arm cache (B4): test_arm_cache.c ---- */
 

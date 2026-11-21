@@ -746,6 +746,35 @@ ZTEST(ed, test_sched_ed_never_expires)
 }
 
 /*
+ * caps.max_window_us bounds an ED sweep as it bounds a receive window (HAL
+ * item 5: over it is ENOTSUP on every backend). The chunk ceiling is the
+ * caller's (struct radiant_sched_ed.chunk_us, here 250 ms against a 100 ms
+ * cap), so the scheduler must cut the chunk to the cap in whole dwells, or
+ * every chunk is refused and nothing is ever measured.
+ */
+ZTEST(ed, test_sched_ed_chunk_respects_max_window)
+{
+	const struct fake_radio_arm *a;
+	uint32_t span;
+
+	bring_up();
+	fake_radio_caps_mut()->max_window_us = 100000u;
+	post_ed(ED_CH);
+	zassert_ok(radiant_sched_tick());
+
+	zassert_true(fake_radio_arm_count() >= 1u);
+	a = fake_radio_arm(0u);
+	zassert_equal(FAKE_RADIO_ARM_ED, a->kind);
+	zassert_equal(RADIANT_RADIO_OK_RC, a->rc, "the ED chunk was refused (%d)", a->rc);
+	span = ((uint32_t)a->rf_index_hi - a->rf_index + 1u) * a->ed_dwell_us;
+	zassert_true(span <= 100000u, "chunk spans %u us", span);
+	zassert_equal(2u * ED_DWELL_US, span, "the chunk was cut below the cap");
+
+	fake_radio_advance(5u * (uint64_t)ED_PERIOD_US);
+	zassert_true(log.n_dwell > 0u);
+}
+
+/*
  * The one way an arbiter can silently end energy-detect scanning for ever:
  * nothing re-posts a struct radiant_sched_ed (unlike a scan or a tracked
  * window). It survives on end_armed() choosing not to consume it, keyed on

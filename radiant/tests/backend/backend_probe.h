@@ -20,6 +20,12 @@ struct backend_probe {
 	/* The last transmit terminal's t_sync and exactness (HAL item 5). */
 	uint64_t last_tx_t_sync;
 	bool     last_tx_t_sync_exact;
+	/* The last rx event's t_sync, exactness and noise sample (HAL item 5:
+	 * an RX terminal reports the requested t_close, not exact). */
+	uint64_t last_rx_t_sync;
+	bool     last_rx_t_sync_exact;
+	bool     last_rx_has_noise;
+	int8_t   last_rx_noise_dbm;
 	/* Run inside the core's rx/tx callback after it is recorded, so a
 	 * test can arm or abort from there as the core does. */
 	void (*on_rx)(int status);
@@ -73,6 +79,27 @@ int      backend_tx_staged(uint64_t t_sync_at, uint32_t *op);
 void     backend_grant_after(uint32_t late_us);
 void     backend_deny_staged(void);
 uint64_t backend_now(void);
+
+/* HAL item 5, the rest (test_terminal_contract.c). backend_rx_window() arms a
+ * tracking receive on [t_open, t_close] inside the held grant;
+ * backend_rx_window_staged() behind a placed request, granted by
+ * backend_grant_rx_after() once the clock is `late_us` past t_open.
+ * backend_frame_t_sync() delivers a frame whose event carries t_sync `t`;
+ * backend_make_coded() turns the window in flight into a coded one with a
+ * one-byte frame. backend_init_call(): 0 NULL table, 1 no rx, 2 no tx, 3 a
+ * whole table. backend_set_max_window() sets gate_max_window_us(). */
+int      backend_rx_window(uint64_t t_open, uint64_t t_close, uint32_t flags, uint32_t *op);
+int      backend_rx_window_staged(uint64_t t_open, uint64_t t_close, uint32_t *op);
+void     backend_grant_rx_after(uint32_t late_us);
+int      backend_rx_n_filters(uint8_t n);
+int      backend_ed_live(uint8_t lo, uint8_t hi, uint32_t dwell_us, uint32_t *op);
+void     backend_set_max_window(uint32_t us);
+uint32_t backend_acquires(void);
+void     backend_make_coded(void);
+void     backend_frame_t_sync(bool crc_ok, uint64_t t);
+uint32_t backend_window_drops(void);
+int      backend_init_call(int which);
+int      backend_abort_uninited(void);
 
 struct radiant_rx_req;
 struct radiant_tx_req;

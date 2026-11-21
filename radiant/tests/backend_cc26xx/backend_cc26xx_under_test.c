@@ -72,6 +72,8 @@ static void core_rx(const struct radiant_rx_event *evt, void *user)
 		r->rssi_dbm = evt->rssi_dbm;
 		r->has_crc_rx = evt->has_crc_rx;
 		r->crc_rx = evt->crc_rx;
+		r->has_noise = evt->has_noise;
+		r->noise_dbm = evt->noise_dbm;
 		r->busy_in_cb = st.kind != OP_NONE;
 	}
 	probe.rx_events++;
@@ -109,6 +111,9 @@ void cc_reset(bool enable)
 	if (st.inited) {
 		k_timer_stop(&rat_keepalive);
 	}
+	/* A fresh boot: a second init without one is ESTATE (HAL item 5). */
+	st.inited = false;
+	st.enabled = false;
 	fake_rf_reset();
 	fake_rf_set_rat(CC_RAT_START);
 	memset(&probe, 0, sizeof(probe));
@@ -138,10 +143,42 @@ uint32_t cc_sw_addr_mismatch(void) { return radiant_cc26xx_sw_addr_mismatch; }
 #if defined(CONFIG_RADIANT_DIAG_COUNTERS)
 bool     cc_diag_built(void) { return true; }
 uint32_t cc_status_err(void) { return cc_diag.status_err; }
+uint32_t cc_window_drops(void) { return cc_diag.window_drops; }
 #else
 bool     cc_diag_built(void) { return false; }
 uint32_t cc_status_err(void) { return 0u; }
+uint32_t cc_window_drops(void) { return 0u; }
 #endif
+
+void cc_forget_init(void)
+{
+	if (st.inited) {
+		k_timer_stop(&rat_keepalive);
+	}
+	st.inited = false;
+	st.enabled = false;
+}
+
+bool cc_rf_open(void) { return st.rf_handle != NULL; }
+
+int cc_init_call(int which)
+{
+	static const struct radiant_radio_cbs no_rx = { .rx = NULL, .tx = core_tx };
+	static const struct radiant_radio_cbs no_tx = { .rx = core_rx, .tx = NULL };
+
+	/* An init that wrongly succeeds re-initialises the keepalive timer;
+	 * never let it do so to a running one (a harness hazard, not the
+	 * backend's). cc_reset() stops it again whatever happened. */
+	if (st.inited) {
+		k_timer_stop(&rat_keepalive);
+	}
+	switch (which) {
+	case 0:  return radiant_radio_init(NULL, NULL);
+	case 1:  return radiant_radio_init(&no_rx, NULL);
+	case 2:  return radiant_radio_init(&no_tx, NULL);
+	default: return radiant_radio_init(&core_cbs, NULL);
+	}
+}
 
 /* The same macros radiant_radio_tx() and the caps use, at any calibration. */
 int32_t cc_tx_cal_us(void) { return CONFIG_RADIANT_CC26XX_TX_TIME_CAL_US; }

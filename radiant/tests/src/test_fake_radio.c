@@ -386,7 +386,11 @@ ZTEST(fake_radio, test_max_filters_is_enforced_by_the_arm_call)
 	req.t_open = now + 1000u;
 	req.t_close = now + 2000u;
 
+	/* Beyond the capability, well formed: ENOTSUP (HAL item 5), as every
+	 * real backend answers. None at all is malformed. */
 	req.n_filters = 8u;
+	zassert_equal(RADIANT_RADIO_ENOTSUP, radiant_radio_rx(&req, &op));
+	req.n_filters = 0u;
 	zassert_equal(RADIANT_RADIO_EINVAL, radiant_radio_rx(&req, &op));
 
 	req.n_filters = 2u;
@@ -1654,5 +1658,90 @@ ZTEST(fake_radio, test_arming_outside_the_enabled_state_is_estate)
 	zassert_equal(RADIANT_RADIO_ESTATE, radiant_radio_rx(&req, &op));
 	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_enable());
 	zassert_true(radiant_radio_now() >= now);
+	expect_clean();
+}
+
+/* ---------------------------------------------------------------------------
+ * HAL item 5: the contract the backends were made to agree on
+ * ---------------------------------------------------------------------------
+ */
+
+/* A second init without a fresh start is ESTATE in every lifecycle state,
+ * as on the nRF and TI backends: initialised, enabled, and disabled again. */
+ZTEST(fake_radio, test_a_second_init_is_estate)
+{
+	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_init(&rec_cbs, NULL));
+	zassert_equal(RADIANT_RADIO_ESTATE, radiant_radio_init(&rec_cbs, NULL));
+	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_enable());
+	zassert_equal(RADIANT_RADIO_ESTATE, radiant_radio_init(&rec_cbs, NULL));
+	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_disable());
+	zassert_equal(RADIANT_RADIO_ESTATE, radiant_radio_init(&rec_cbs, NULL));
+	expect_clean();
+}
+
+/* An RX terminal reports the requested t_close, not exact: on TIMEOUT and
+ * on ABORTED alike (the mirror of the TX rule). */
+ZTEST(fake_radio, test_an_rx_terminal_reports_t_close)
+{
+	struct radiant_rx_req req;
+	uint32_t op = 0u;
+	radiant_time_t now;
+
+	up();
+	now = radiant_radio_now();
+	memset(&req, 0, sizeof(req));
+	req.fmt = &fmt_hal_len_from_body;
+	req.rf_index = RADIANT_RF_INDEX_ANT_PLUS;
+	req.filters = &filt_track;
+	req.n_filters = 1u;
+	req.t_open = now + 1000u;
+	req.t_close = now + 5000u;
+
+	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_rx(&req, &op));
+	fake_radio_advance_to(req.t_close + 1u);
+	zassert_equal(1u, n_rxr);
+	zassert_equal(RADIANT_RADIO_STATUS_TIMEOUT, rxr[0].status);
+	zassert_equal(req.t_close, rxr[0].t_sync);
+	zassert_false(rxr[0].t_sync_exact);
+
+	now = radiant_radio_now();
+	req.t_open = now + 1000u;
+	req.t_close = now + 5000u;
+	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_rx(&req, &op));
+	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_abort());
+	zassert_equal(2u, n_rxr);
+	zassert_equal(RADIANT_RADIO_STATUS_ABORTED, rxr[1].status);
+	zassert_equal(req.t_close, rxr[1].t_sync);
+	zassert_false(rxr[1].t_sync_exact);
+	expect_clean();
+}
+
+/* A window over caps.max_window_us is ENOTSUP before anything else about
+ * when it is: the ceiling is a property of the request, checked ahead of
+ * the lead (and, on a booking build, of arbitration). */
+ZTEST(fake_radio, test_a_window_over_the_ceiling_is_enotsup_first)
+{
+	struct radiant_rx_req req;
+	uint32_t op = 0u;
+	radiant_time_t now;
+
+	up();
+	fake_radio_caps_mut()->max_window_us = 2000u;
+	now = radiant_radio_now();
+	memset(&req, 0, sizeof(req));
+	req.fmt = &fmt_hal_len_from_body;
+	req.rf_index = RADIANT_RF_INDEX_ANT_PLUS;
+	req.filters = &filt_track;
+	req.n_filters = 1u;
+	/* Too late as well as too long. */
+	req.t_open = now + 1u;
+	req.t_close = req.t_open + 2001u;
+	zassert_equal(RADIANT_RADIO_ENOTSUP, radiant_radio_rx(&req, &op));
+	zassert_equal(0u, op);
+
+	req.t_open = now + 1000u;
+	req.t_close = req.t_open + 2000u;
+	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_rx(&req, &op));
+	fake_radio_advance_to(req.t_close + 1u);
 	expect_clean();
 }
