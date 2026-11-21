@@ -357,7 +357,17 @@ MPSL (needs a soak beside BLE or Thread, which that clearance excluded):
   - [ ] Under BLE load 92 of the DUT's 119 misses in `acc_coex_ble` had no
     RX_FAIL (ant_verify fails its loss accounting). Probably slots MPSL gave the
     SoftDevice; confirm, and decide whether a blocked tracking slot should
-    surface as an event.
+    surface as an event. CONFIRMED 2026-11-20 from the leg's 5 s gate
+    counters: tracked requests acquired/pending/granted 7209/7121/7117, so
+    92 never granted = 88 `book_denied` (refused at `gate_acquire()`) + 4
+    pending but never started (mechanism not logged); 27 RX_FAIL + 92 = 119.
+    Refusals come in 45 bursts 40.1 s apart, the beat of 1005 ms advertising
+    against four ch0 periods. A denied slot is counted in `slots_denied`
+    (`antr/ant_radio_radiant.c:3008`) and posts no event, so ant_verify's
+    "unaccounted" always holds them. Granted windows missed 27 against the
+    Garmin's 39. OWNER: surface a denied tracking slot as an event, or have
+    ant_verify credit gate denials. Cheapest diag for the 4: put
+    `slots_denied`/`slots_collided` on the `rxpath` log line (:3279).
   - [ ] Master-originated acked data on the gate image: 58/60 twice, against
     60/60 on 2026-11-14 (two missed acks per run). No same-sitting run of the
     image before the fix, so not attributed.
@@ -509,7 +519,7 @@ Fixed, unconditionally (owner, 2026-11-17: no Kconfig or wire option). `radiant_
 
 - [OPEN, LOW] `rx_process()` returns silently when `advance_epoch()` fails (headroom or ceiling): nothing is counted.
 - [DONE 2026-11-19 with item 6, 5bd9674, merge c443b07] `tools/radiant_crypto.py` `resolve_counter()` breaks the exact 128-period tie toward the lower rollover; the C keeps `base + low`.
-- [OPEN, LOW] `protocol/ant_wire.yaml` says `0xF3` can be read, but `ant_sec_host.c` has no read handler.
+- [OPEN, LOW, owner call] `protocol/ant_wire.yaml` says `0xF3` can be read, but `ant_sec_host.c` has no read handler. Checked 2026-11-20: nothing sends a MESG_REQUEST for it, but `docs/radiant-security.md` (~:1967) states 0xF3/0xF4 readability as intended and `tools/ant_sec.py` ships `decode_epoch()`. Either make it write-only (yaml h2d, security doc ~:1841/~:1968, regenerate) or add the read handler (costs security text, 7804/7856).
 
 ## 4. [DONE 2026-11-19, merge ded8169 (de4b895, fcdd2a4, 7408f28, 901fe3a)] Preserve the verified-window floor across configuration retries
 
