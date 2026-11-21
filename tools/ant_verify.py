@@ -152,6 +152,32 @@ DESC_FAILED = "FAILED"
 DESC_NO_KEY = "no key"
 
 
+#: Tier I's counter is two bytes on the air; a wrap advances the epoch.
+TIER1_SPAN = 0x10000
+#: The top of the epoch space 0xF3 refuses, so a wrap always has room
+#: (RADIANT_SEC_EPOCH_HEADROOM; ant_sec.EPOCH_HEADROOM).
+EPOCH_HEADROOM = 0x1000
+
+
+def resolve_low(expected: int, low: int, span: int) -> int:
+    """The full counter nearest `expected` whose low bits are `low`.
+
+    As radiant_sec_compat.c resolve_low(): base + low is the starting answer
+    and only a strictly nearer rollover replaces it, the lower one tried
+    first, so a tie keeps base + low.
+    """
+    base = expected & ~(span - 1)
+    best = base + low
+    if base >= span:
+        cand = base - span + low
+        if abs(cand - expected) < abs(best - expected):
+            best = cand
+    cand = base + span + low
+    if abs(cand - expected) < abs(best - expected):
+        best = cand
+    return best
+
+
 class CompatVerifier:
     """The receiver half of docs/radiant-security.md section 11.4.
 
@@ -171,9 +197,12 @@ class CompatVerifier:
         # The root too: a 0x60 node's descriptor authentication frame derives
         # its own K_auth per trial epoch (ChannelAnalyzer._tlm_take()).
         self.root = root
+        # K_auth for the epoch now: base epoch + Tier I counter wraps, as
+        # compat_ctx's base_epoch/wraps/epoch. `epoch` stays the one given.
         self.k_auth = keys[rc.LABEL_AUTH]
         self.k_id = keys[rc.LABEL_ID]
         self.epoch = epoch
+        self.wraps = 0
         self.devnum = devnum
         self.window = window
         self.expected_hint = rc.compat_key_group_hint(self.k_id, epoch)
@@ -186,11 +215,11 @@ class CompatVerifier:
         self.announce_verified = 0
         self.announce_unverified = 0
 
-        # The last VERIFIED Tier I counter: the replay floor, as rx_t1_last
-        # in radiant_sec_compat.c, the counter an announcement is checked at
-        # (the firmware's anchor moves only on a VERIFIED page), and the base
-        # of the loss count. A rejected page never moves it (review
-        # 2026-11-17 item 6).
+        # The last VERIFIED Tier I counter, in full (wraps << 16 | on-air
+        # bits): the replay floor, as rx_t1_last in radiant_sec_compat.c,
+        # the counter an announcement is checked at (the firmware's anchor
+        # moves only on a VERIFIED page), and the base of the loss count. A
+        # rejected page never moves it (review 2026-11-17 item 6).
         self.t1_floor: int | None = None
         self.last_window_index: int | None = None
         # The last VERIFIED window index: Tier II's replay floor, as
@@ -263,8 +292,9 @@ class CompatVerifier:
         if self.announce_frame_a is None or self.t1_floor is None:
             self.announce_unverified += 1
             return ATTEST_UNVERIFIED
-        expected = rc.compat_announce_tag(self.k_auth, self.epoch, self.devnum,
-                                          self.t1_floor,
+        expected = rc.compat_announce_tag(self.k_auth, self.epoch_now,
+                                          self.devnum,
+                                          self.t1_floor & 0xFFFF,
                                           self.announce_frame_a)
         self.announce_frame_a = None
         if expected == tag:
@@ -273,21 +303,56 @@ class CompatVerifier:
         self.announce_unverified += 1
         return ATTEST_UNVERIFIED
 
+    @property
+    def epoch_now(self) -> int:
+        """The epoch tags are made under: base epoch + counter wraps."""
+        return self.epoch + self.wraps
+
+    def _auth_key(self, wraps: int) -> bytes | None:
+        """K_auth for `wraps` counter wraps past the base epoch, or None past
+        the headroom (radiant_sec_compat.c wraps_allowed(): EINVAL there)."""
+        if wraps == self.wraps:
+            return self.k_auth
+        epoch = self.epoch + wraps
+        if epoch > 0xFFFFFFFF - EPOCH_HEADROOM:
+            return None
+        return rc.kdf(self.root, rc.LABEL_AUTH, epoch, self.devnum)
+
     def _feed_tier1(self, payload: bytes) -> str:
         got = ap.decode_compat_attest_tier1(payload)
-        counter = got["att_counter"]
+        low = got["att_counter"]
 
-        if self.t1_floor is not None and counter <= self.t1_floor:
-            # Replay. Closed by the counter rather than by payload coverage,
-            # which is what lets the tag cover nothing at all. Checked before
-            # the tag against the last VERIFIED counter, as the firmware does.
-            self.tier1["replay"] += 1
-            self.tier1[ATTEST_UNVERIFIED] += 1
-            return ATTEST_UNVERIFIED
+        if self.t1_floor is None:
+            # First contact, as rx_tier1()'s first try: the on-air bits are
+            # the counter within the epoch the receiver holds (a wrap
+            # advances the epoch, so it is below 65536 by definition).
+            counter = low
+        else:
+            # Locked: the rollover nearest the expected counter. The firmware
+            # expects the clock's interval index; this host has no clock
+            # shared with the sensor, so it expects its own last VERIFIED
+            # counter, as Tier II expects its own window count. The two agree
+            # while fewer than 32768 intervals pass between verified pages.
+            counter = resolve_low(self.t1_floor, low, TIER1_SPAN)
+            if counter <= self.t1_floor:
+                # Replay, compared in full so a page from before a wrap is
+                # one after it. Closed by the counter rather than by payload
+                # coverage, which is what lets the tag cover nothing at all.
+                # Checked before the tag against the last VERIFIED counter,
+                # as the firmware does.
+                self.tier1["replay"] += 1
+                self.tier1[ATTEST_UNVERIFIED] += 1
+                return ATTEST_UNVERIFIED
 
-        expected = rc.compat_tier1_tag(self.k_auth, self.epoch, self.devnum,
-                                       counter)
+        # A counter with more wraps is checked under the next epoch's K_auth
+        # and nonce, and moved in only if its tag matches (rx_tier1()), so a
+        # forged page cannot advance the epoch.
+        wraps = counter >> 16
+        k_auth = self._auth_key(wraps)
+        expected = None if k_auth is None else rc.compat_tier1_tag(
+            k_auth, self.epoch + wraps, self.devnum, low)
         if expected == got["tag"]:
+            self.k_auth, self.wraps = k_auth, wraps
             # Loss is counted between VERIFIED pages only, so a page without
             # a valid tag cannot add to it, move it back, or make a gap count
             # twice. Counters skipped between two verified pages are lost,
@@ -340,8 +405,10 @@ class CompatVerifier:
             self.tier2[ATTEST_LOST] += 1
             return ATTEST_LOST
 
-        expected = rc.compat_tier2_tag(self.k_auth, self.epoch, self.devnum,
-                                       index, covered, late=True)
+        # Under the epoch Tier I's wraps have reached: rx_tier2() tags under
+        # c->epoch, which the same counter wraps advance.
+        expected = rc.compat_tier2_tag(self.k_auth, self.epoch_now,
+                                       self.devnum, index, covered, late=True)
         if expected == got["tag"]:
             self.t2_floor = index
             self.tier2[ATTEST_VERIFIED] += 1
@@ -375,6 +442,7 @@ class CompatVerifier:
         return {
             "verdict": self.verdict(),
             "epoch": self.epoch,
+            "epoch_wraps": self.wraps,
             "beacon_frames": self.beacon_frames,
             "beacon_malformed": self.beacon_malformed,
             "key_group_hint_matches": self.hint_matches,
