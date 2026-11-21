@@ -212,20 +212,23 @@ static void *api_setup(void)
 static uint8_t bg_scan_type;
 
 /* A fresh stack on a fresh mock. long_match: the nRF preset without the
- * ADR 0022 wildcard (api_long_match()). The preset is applied before the
- * stack reset too, because antr_stack_reset() runs radiant_search_init(),
- * which reads the caps then and keeps them. */
+ * ADR 0022 wildcard (api_long_match()). The test's preset is applied before
+ * the stack reset too, on both paths, because antr_stack_reset() runs
+ * radiant_search_init(), which reads the caps then and keeps them: without
+ * it the stack saw whatever caps the previous test left. */
 static void api_reset(bool long_match)
 {
 	bg_scan_type = (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY;
 #if defined(CONFIG_RADIANT_DIAG_COUNTERS)
 	radiant_diag_core_reset();
 #endif
+	k_sched_lock();
 	if (long_match) {
-		k_sched_lock();
 		fake_radio_caps_preset_nrf_long_match();
-		k_sched_unlock();
+	} else {
+		fake_radio_caps_preset_nrf();
 	}
+	k_sched_unlock();
 	(void)antr_stack_reset();
 
 	k_sched_lock();
