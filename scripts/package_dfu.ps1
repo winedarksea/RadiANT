@@ -130,6 +130,20 @@ $savedHome = $env:NRFUTIL_HOME
 $env:NRFUTIL_HOME = $null
 
 try {
+    # The nrfutil core, pinned the same way: release.yml bootstraps core
+    # $NrfutilCoreVersion from a hashed tarball, and the NCS v3.4.0 toolchain
+    # bundle ships the same build. A different core (a self-upgraded one, or
+    # another bundle's) is refused so local and CI packages come from the same
+    # tool. First line: "nrfutil 8.2.0 (c910332 2026-04-21)".
+    $NrfutilCoreVersion = '8.2.0'
+    $coreProbe = & $NrfutilPath --version
+    $coreFirst = [string]@($coreProbe)[0]
+    if ($LASTEXITCODE -ne 0 -or -not $coreFirst.StartsWith("nrfutil $NrfutilCoreVersion ")) {
+        throw ("$NrfutilPath reports '$coreFirst', but this script packages with nrfutil core " +
+               "$NrfutilCoreVersion (the version release.yml pins). Use the NCS v3.4.0 toolchain " +
+               "bundle's nrfutil (pass -NrfutilPath), or: nrfutil self-upgrade --to-version $NrfutilCoreVersion")
+    }
+
     # Probe by invoking the subcommand, not by parsing `nrfutil list`. What
     # `list` reports depends on which home is in effect and does not reliably
     # answer "can I run this"; the exit code does.

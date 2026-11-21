@@ -573,27 +573,72 @@ jobs:
       # takes a Nordic DFU package. `pkg` lives in nrfutil's nrf5sdk-tools
       # command, which is a separate install on top of the nrfutil binary.
       #
-      # BOTH ARE PINNED, because this step builds a shipping image. The
-      # unversioned .../x86_64-unknown-linux-gnu/nrfutil URL is whatever Nordic
-      # last uploaded, so the binary is fetched by its versioned name (Nordic
-      # keeps every release beside "latest" in the same Artifactory folder) and
-      # checked against a SHA-256 taken when the pin was set - a replaced file
-      # fails here, loudly, instead of packaging the release. nrf5sdk-tools is
-      # installed at an exact version, the same one scripts/package_dfu.ps1
-      # insists on; bump the two together.
+      # ALL THREE PIECES ARE PINNED, because this step builds a shipping image.
+      #
+      # 1. The launcher. The unversioned .../x86_64-unknown-linux-gnu/nrfutil
+      #    URL is whatever Nordic last uploaded, so it is fetched by its
+      #    versioned name (Nordic keeps every release beside "latest" in the
+      #    same Artifactory folder) and checked against a SHA-256.
+      # 2. The core. The launcher is only a bootstrapper: on first use it
+      #    downloads whatever core Nordic's bootstrap.json names (9.0.0, a new
+      #    major, when this was pinned). NRFUTIL_BOOTSTRAP_TARBALL_PATH makes it
+      #    install a local tarball instead - 8.2.0, the core the NCS v3.4.0
+      #    toolchain bundle ships (same build, c910332) - into a fresh
+      #    NRFUTIL_HOME under RUNNER_TEMP, and the step fails if any other
+      #    core answers. If a future launcher stops honouring that variable,
+      #    the documented fallback is
+      #      ./nrfutil self-upgrade --from-tarball "${core}" --force
+      #    after the bootstrap, followed by the same version check.
+      # 3. nrf5sdk-tools, installed from its tarball with `install --tarball`
+      #    rather than from the package index, and version-checked.
+      #
+      # Every tarball is checked against a SHA-256 taken when the pin was set
+      # (Artifactory's storage API and a local hash agreed), so a replaced
+      # file fails here, loudly, instead of packaging the release.
+      # scripts/package_dfu.ps1 insists on the same core and nrf5sdk-tools
+      # versions; bump them together.
+      #
+      # Versions are read into a variable and matched with [[ ]], never with
+      # `--version | head`: under pipefail, head closing the pipe early makes
+      # the Rust binary panic on EPIPE (exit 101) at random.
       - name: Collect DFU package
         if: matrix.package == 'dfu'
         env:
           NRFUTIL_URL: https://files.nordicsemi.com/artifactory/swtools/external/nrfutil/executables/x86_64-unknown-linux-gnu/nrfutil-x86_64-unknown-linux-gnu-1.4.2-8a9090a
           NRFUTIL_SHA256: a14996288928a92081cadeefd2dd37fcb54ee99a568fd4eaa6fb9586a51fba57
+          NRFUTIL_CORE_VERSION: 8.2.0
+          NRFUTIL_CORE_URL: https://files.nordicsemi.com/artifactory/swtools/external/nrfutil/packages/nrfutil/nrfutil-x86_64-unknown-linux-gnu-8.2.0.tar.gz
+          NRFUTIL_CORE_SHA256: fabe84198efe045a7cdcc9d5132669c1bc2cb168f61db93f2261ae4fd980e73f
           NRF5SDK_TOOLS_VERSION: 1.1.0
+          NRF5SDK_TOOLS_URL: https://files.nordicsemi.com/artifactory/swtools/external/nrfutil/packages/nrfutil-nrf5sdk-tools/nrfutil-nrf5sdk-tools-x86_64-unknown-linux-gnu-1.1.0.tar.gz
+          NRF5SDK_TOOLS_SHA256: 84b4214c46b917696b171a692a656b0f93e7200dc93dc3ff33fafd6d88b31e4f
         run: |
           set -euxo pipefail
+          export NRFUTIL_HOME="${RUNNER_TEMP}/nrfutil-home"
+          rm -rf "${NRFUTIL_HOME}"
+          core="${RUNNER_TEMP}/nrfutil-core.tar.gz"
+          sdk="${RUNNER_TEMP}/nrfutil-nrf5sdk-tools.tar.gz"
           curl -fsSL -o nrfutil "${NRFUTIL_URL}"
-          echo "${NRFUTIL_SHA256}  nrfutil" | sha256sum -c -
+          curl -fsSL -o "${core}" "${NRFUTIL_CORE_URL}"
+          curl -fsSL -o "${sdk}" "${NRF5SDK_TOOLS_URL}"
+          sha256sum -c - <<SUMS
+          ${NRFUTIL_SHA256}  nrfutil
+          ${NRFUTIL_CORE_SHA256}  ${core}
+          ${NRF5SDK_TOOLS_SHA256}  ${sdk}
+          SUMS
           chmod +x nrfutil
-          ./nrfutil install "nrf5sdk-tools=${NRF5SDK_TOOLS_VERSION}"
-          ./nrfutil nrf5sdk-tools --version | head -n 1 | grep -F " ${NRF5SDK_TOOLS_VERSION} "
+          export NRFUTIL_BOOTSTRAP_TARBALL_PATH="${core}"
+          ver="$(./nrfutil --version)"
+          if [[ $'\n'"${ver}" != *$'\n'"nrfutil ${NRFUTIL_CORE_VERSION} "* ]]; then
+            echo "::error::nrfutil core is not ${NRFUTIL_CORE_VERSION} - the launcher did not bootstrap the pinned tarball (see the fallback in this step's comment). It reported: ${ver}"
+            exit 1
+          fi
+          ./nrfutil install --tarball "${sdk}"
+          ver="$(./nrfutil nrf5sdk-tools --version)"
+          if [[ "${ver%%$'\n'*}" != "nrfutil-nrf5sdk-tools ${NRF5SDK_TOOLS_VERSION} "* ]]; then
+            echo "::error::nrf5sdk-tools is not ${NRF5SDK_TOOLS_VERSION}. It reported: ${ver}"
+            exit 1
+          fi
           hex="$(find build -name zephyr.hex -path '*/dongle/*' -print -quit)"
           test -n "${hex}"
           mkdir -p dist
