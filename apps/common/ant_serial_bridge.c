@@ -67,21 +67,26 @@ LOG_MODULE_REGISTER(ant_bridge, LOG_LEVEL_INF);
  * KEY_MSG_NONE for a message that carries no key material. For one that does,
  * how many leading body bytes are not key and may be shown: the network
  * number of a network key (0x46), the key number of an encryption key (0x7E),
- * the channel and key length of a RadiANT root key (0xF2), and nothing of a
- * pairing message (0xF5), whose sub-command 0x02 carries the host's private
- * X25519 scalar. 0xF5 is judged by id alone, so no sub-command can leak by
- * being classified wrongly.
+ * the channel and key length of a RadiANT root key (0xF2), the info type of
+ * an encryption-info message that sets the RNG seed (0x7F type 0x02; other
+ * 0x7F types are not secret), and nothing of a pairing message (0xF5), whose
+ * sub-command 0x02 carries the host's private X25519 scalar. 0xF5 is judged
+ * by id alone, so no sub-command can leak by being classified wrongly.
  *
  * Deliberately independent of the build's configuration: a 0xF2 or 0x7E sent
  * to a build that refuses it still crossed the parser buffer and the trace
  * byte for byte. Used by the host trace and by the parser-buffer wipe.
+ * `body`/`len` are the message body (channel or type byte first).
  */
-static inline uint8_t key_msg_keep(uint8_t id)
+static inline uint8_t key_msg_keep(uint8_t id, const uint8_t *body, size_t len)
 {
 	switch (id) {
 	case ANTW_MESG_NETWORK_KEY_ID:
 	case ANTW_MESG_SET_ENCRYPT_KEY_ID:
 		return 1;
+	case ANTW_MESG_SET_ENCRYPT_INFO_ID:
+		return (len >= 1 && body[0] == ANTW_ENCRYPTION_INFO_SET_RNG_SEED)
+			? 1 : KEY_MSG_NONE;
 	case ANTW_MESG_RADIANT_SET_KEY_ID:
 		return 2;
 	case ANTW_MESG_RADIANT_PAIRING_ID:
@@ -119,8 +124,12 @@ static void trace_frame(const char *dir, const uint8_t *f, size_t n)
 	size_t redact_from = n;
 	size_t o = 0;
 
-	if (n >= 3 && key_msg_keep(f[2]) != KEY_MSG_NONE) {
-		redact_from = 3U + key_msg_keep(f[2]);	/* SYNC LEN ID kept */
+	if (n >= 3) {
+		uint8_t keep = key_msg_keep(f[2], &f[3], n > 4 ? n - 4 : 0);
+
+		if (keep != KEY_MSG_NONE) {
+			redact_from = 3U + keep;	/* SYNC LEN ID kept */
+		}
 	}
 
 	for (size_t i = 0; i < n && i < ANTW_MAX_FRAME_SIZE; i++) {
@@ -1844,6 +1853,12 @@ static void process_byte(uint8_t b)
 				memcpy(&f[3], parser.msg_body, bl);
 				f[3 + bl] = b;
 				trace_frame("H>", f, 4U + bl);
+				/* The copy holds whatever key the frame did;
+				 * volatile so the dead store is not dropped. */
+				for (volatile uint8_t *v = f;
+				     v < f + 4U + bl; v++) {
+					*v = 0;
+				}
 			}
 #endif
 			dispatch(parser.msg_id, parser.msg_body,
@@ -1854,14 +1869,24 @@ static void process_byte(uint8_t b)
 				parser.running_xor);
 			ant_health_note(ANT_HEALTH_HOST_CSUM);
 		}
-		if (key_msg_keep(parser.msg_id) != KEY_MSG_NONE) {
+		if (b != parser.running_xor
+		    || key_msg_keep(parser.msg_id, parser.msg_body,
+				    MIN(parser.msg_len,
+					(uint8_t)sizeof(parser.msg_body)))
+		       != KEY_MSG_NONE) {
 			/*
 			 * Every key-carrying message (key_msg_keep(): 0x46,
-			 * 0x7E, 0xF2, and 0xF5 by id alone, since its
-			 * sub-command 0x02 carries the host's private X25519
-			 * scalar), in every configuration: a key sent to a
-			 * build that refuses the message still crossed this
-			 * buffer.
+			 * 0x7E, 0x7F's RNG seed, 0xF2, and 0xF5 by id alone,
+			 * since its sub-command 0x02 carries the host's
+			 * private X25519 scalar), in every configuration: a
+			 * key sent to a build that refuses the message still
+			 * crossed this buffer.
+			 *
+			 * And every frame that failed its checksum, whatever
+			 * its id: one that lost its id byte (a UART overrun)
+			 * carries a key under an id that names none, and its
+			 * damaged header cannot be trusted to say otherwise.
+			 * The error path only, so no cost on a good frame.
 			 *
 			 * A key just crossed this static, long-lived
 			 * buffer, which would otherwise hold it until a later
@@ -1876,8 +1901,10 @@ static void process_byte(uint8_t b)
 			 * DOES NOT COVER: the same bytes passed through the USB
 			 * ring buffer and transport buffer beneath it, neither
 			 * reachable or wiped from here, and were in host memory
-			 * before that. Nor a key frame that never reaches this
-			 * state: one cut off part way stays in the buffer until
+			 * before that. Nor a damaged key frame whose checksum
+			 * still passes by chance under a non-key id (about one
+			 * damaged frame in 256): it is dispatched, not wiped.
+			 * Nor a key frame that never reaches this state: one cut off part way stays in the buffer until
 			 * a session boundary's parser_reset() wipes it, which
 			 * happens only when the bridge gets the new session's
 			 * first byte, or until later frames happen to overwrite
