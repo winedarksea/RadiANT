@@ -127,5 +127,10 @@ uint16_t Advance(uint16_t current, uint16_t first)
 	return Wrap(static_cast<uint16_t>(current + 1), first);
 }
 
+bool NeedsMark(uint16_t id, uint16_t next, uint16_t persistedNext)
+{
+	return id >= persistedNext && next > id;
+}
+
 } /* namespace EndpointHighWater */
 } /* namespace RadiantMatter */

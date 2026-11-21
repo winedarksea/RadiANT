@@ -166,7 +166,7 @@ template <class T> bool StorableBridgedDeviceV2(const T &device)
  * not restored: the highest endpoint was unbound before a reboot, or its
  * record failed to load or to restore (corrupt, CHIP heap, a device type this
  * build does not serve). BridgeManager now persists the next id it will hand
- * out (br/brd_ep_hw, see BridgeStorageManager) on every fresh allocation and
+ * out (br/brd_ep_hw, see BridgeStorageManager) before each new id goes live and
  * seeds the counter from it at boot. A store written before the key existed
  * decodes as absent and behaves as upstream did; restoring then raises the
  * counter and writes the key once.
@@ -175,7 +175,8 @@ template <class T> bool StorableBridgedDeviceV2(const T &device)
  * a uint16_t in native byte order (little-endian on every target), the way
  * brd_cnt stores its uint8_t. These functions are the whole of the counter
  * arithmetic BridgeManager uses, so apps/dongle_thread/tests/matter_storage
- * can drive the bind/unbind/reboot sequence without CHIP.
+ * can test it, and a model of the bind/unbind/reboot sequence, without CHIP.
+ * The test does not exercise bridge_manager.cpp itself (see src/matter/README.md).
  */
 namespace EndpointHighWater
 {
@@ -200,6 +201,16 @@ uint16_t Seed(uint16_t first, bool haveStored, uint16_t storedNext);
  * a stored 0xFFFF is refused at boot, which would fall back to reuse. */
 uint16_t Raise(uint16_t current, uint16_t restoredId, uint16_t first);
 uint16_t Advance(uint16_t current, uint16_t first);
+
+/* True if trying endpoint `id` (whose successor is `next`) needs the mark
+ * written first: the stored mark `persistedNext` does not cover it yet.
+ * BridgeManager writes `next` BEFORE CreateEndpoint() makes `id` visible to a
+ * controller, so a power loss between the two cannot leave an exposed id
+ * uncovered; a failed creation only burns an id nobody saw. An id the mark
+ * already covers (the ENDPOINT_EXISTS skip loop only meets those) costs no
+ * write. At the 16-bit wrap (next <= id) nothing is written: the mark keeps
+ * its top value, and ids after the wrap are upstream's reuse, as before. */
+bool NeedsMark(uint16_t id, uint16_t next, uint16_t persistedNext);
 
 } /* namespace EndpointHighWater */
 } /* namespace RadiantMatter */

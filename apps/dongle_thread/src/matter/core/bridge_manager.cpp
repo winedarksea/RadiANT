@@ -21,6 +21,15 @@
 
 LOG_MODULE_DECLARE(app, CONFIG_CHIP_APP_LOG_LEVEL);
 
+namespace
+{
+/* RadiANT: the endpoint high-water mark as last written (0: nothing stored),
+ * so an allocation the stored mark already covers costs no settings write.
+ * BridgeManager is a singleton, so this lives here rather than in the
+ * vendored header. */
+uint16_t sPersistedEndpointHighWater;
+} /* namespace */
+
 using namespace ::chip;
 using namespace ::chip::app;
 
@@ -64,6 +73,7 @@ CHIP_ERROR BridgeManager::Init(LoadStoredBridgedDevicesCallback loadStoredBridge
 	const bool haveStored = Nrf::BridgeStorageManager::Instance().LoadEndpointHighWater(storedNext);
 	const uint16_t seeded = RadiantMatter::EndpointHighWater::Seed(mFirstDynamicEndpointId, haveStored, storedNext);
 	mCurrentDynamicEndpointId = seeded;
+	sPersistedEndpointHighWater = haveStored ? storedNext : 0;
 
 	/* Invoke the callback to load stored devices in a proper moment. */
 	CHIP_ERROR err = loadStoredBridgedDevicesCb();
@@ -72,9 +82,12 @@ CHIP_ERROR BridgeManager::Init(LoadStoredBridgedDevicesCallback loadStoredBridge
 	 * upgrade, or a lost write) raised the counter: persist it now, before the
 	 * device can be unbound and its id forgotten. An unchanged boot writes
 	 * nothing. */
-	if (mCurrentDynamicEndpointId != seeded &&
-	    !Nrf::BridgeStorageManager::Instance().StoreEndpointHighWater(mCurrentDynamicEndpointId)) {
-		LOG_ERR("Endpoint high-water mark %u not persisted", mCurrentDynamicEndpointId);
+	if (mCurrentDynamicEndpointId != seeded) {
+		if (Nrf::BridgeStorageManager::Instance().StoreEndpointHighWater(mCurrentDynamicEndpointId)) {
+			sPersistedEndpointHighWater = mCurrentDynamicEndpointId;
+		} else {
+			LOG_ERR("Endpoint high-water mark %u not persisted", mCurrentDynamicEndpointId);
+		}
 	}
 
 	if (err == CHIP_NO_ERROR) {
@@ -284,7 +297,27 @@ CHIP_ERROR BridgeManager::AddSingleDevice(MatterBridgedDevice *device, BridgedDe
 				if (mDevicesMap.Insert(index, std::move(pair))) {
 					/* Assign the free endpoint ID. */
 					do {
-						err = CreateEndpoint(index, mCurrentDynamicEndpointId);
+						/* RadiANT: cover the id with the stored mark BEFORE
+						 * CreateEndpoint() makes it visible to a controller
+						 * (EndpointHighWater::NeedsMark). If the mark cannot
+						 * be written the endpoint is not created at all. */
+						const uint16_t endpointId = mCurrentDynamicEndpointId;
+						const uint16_t nextEndpointId = RadiantMatter::EndpointHighWater::Advance(
+							endpointId, mFirstDynamicEndpointId);
+
+						if (RadiantMatter::EndpointHighWater::NeedsMark(endpointId, nextEndpointId,
+												sPersistedEndpointHighWater)) {
+							if (!Nrf::BridgeStorageManager::Instance().StoreEndpointHighWater(
+								    nextEndpointId)) {
+								LOG_ERR("Endpoint high-water mark %u not persisted: endpoint %u not created",
+									nextEndpointId, endpointId);
+								mDevicesMap.Erase(index);
+								return CHIP_ERROR_PERSISTED_STORAGE_FAILED;
+							}
+							sPersistedEndpointHighWater = nextEndpointId;
+						}
+
+						err = CreateEndpoint(index, endpointId);
 
 						if (err != CHIP_NO_ERROR) {
 							if (err == CHIP_ERROR_NO_MEMORY) {
@@ -296,27 +329,14 @@ CHIP_ERROR BridgeManager::AddSingleDevice(MatterBridgedDevice *device, BridgedDe
 						}
 
 						/* Handle wrap condition (RadiANT: upstream's, in
-						 * EndpointHighWater::Advance()) */
-						mCurrentDynamicEndpointId = RadiantMatter::EndpointHighWater::Advance(
-							mCurrentDynamicEndpointId, mFirstDynamicEndpointId);
+						 * EndpointHighWater::Advance(), computed above) */
+						mCurrentDynamicEndpointId = nextEndpointId;
 					} while (err == CHIP_ERROR_SENTINEL);
 
 					if (err == CHIP_NO_ERROR) {
 						devicesPairIndex.SetValue(index);
 						mDevicesIndexes[mDevicesIndexesCounter] = index;
 						mDevicesIndexesCounter++;
-
-						/* RadiANT: persist the new high-water mark before the
-						 * caller stores the device record, so no record can
-						 * outlive a mark that does not cover it. A failed
-						 * write is logged, not unwound: the endpoint works,
-						 * and only a reboot after its removal could reuse
-						 * the id. */
-						if (!Nrf::BridgeStorageManager::Instance().StoreEndpointHighWater(
-							    mCurrentDynamicEndpointId)) {
-							LOG_ERR("Endpoint high-water mark %u not persisted",
-								mCurrentDynamicEndpointId);
-						}
 					}
 
 					return err;

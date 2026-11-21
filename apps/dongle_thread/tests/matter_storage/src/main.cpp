@@ -548,9 +548,12 @@ struct Bridge {
 
 	/* Runtime. */
 	uint16_t current = 0;
+	uint16_t persisted = 0; /* sPersistedEndpointHighWater */
+	unsigned live = 0;      /* endpoints a controller could see */
 
 	void StoreHw(uint16_t next)
 	{
+		persisted = next;
 		uint8_t b[EndpointHighWater::kSize];
 
 		EndpointHighWater::Encode(next, b);
@@ -568,6 +571,7 @@ struct Bridge {
 		const uint16_t seeded = EndpointHighWater::Seed(kFirstDynamic, have, stored);
 
 		current = seeded;
+		persisted = have ? stored : 0;
 		for (size_t i = 0; i < nRecs; i++) {
 			if (recs[i].present && recs[i].restorable) {
 				current = EndpointHighWater::Raise(current, recs[i].ep, kFirstDynamic);
@@ -578,13 +582,22 @@ struct Bridge {
 		}
 	}
 
-	/* AddSingleDevice() with no index: the next id, advance, persist. */
-	uint16_t Bind()
+	/* AddSingleDevice() with no index: mark the id if the stored mark does
+	 * not cover it, then CreateEndpoint() makes it live, then (in
+	 * ant_bridge.cpp) the record is stored, unless power fails first. */
+	uint16_t Bind(bool recordStored = true)
 	{
 		const uint16_t id = current;
+		const uint16_t next = EndpointHighWater::Advance(id, kFirstDynamic);
 
-		current = EndpointHighWater::Advance(current, kFirstDynamic);
-		StoreHw(current);
+		if (EndpointHighWater::NeedsMark(id, next, persisted)) {
+			StoreHw(next);
+		}
+		live++;
+		current = next;
+		if (!recordStored) {
+			return id;
+		}
 		zassert_true(nRecs < ARRAY_SIZE(recs));
 		recs[nRecs].ep = id;
 		recs[nRecs].present = true;
@@ -680,6 +693,29 @@ ZTEST(matter_storage, test_endpoint_hw_never_yields_the_invalid_id)
 	zassert_equal(EndpointHighWater::Advance(0xFFFD, kFirstDynamic), 0xFFFE);
 	zassert_equal(EndpointHighWater::Raise(10, 0xFFFE, kFirstDynamic), kFirstDynamic);
 	zassert_equal(EndpointHighWater::Raise(kFirstDynamic, 0xFFFD, kFirstDynamic), 0xFFFE);
+}
+
+ZTEST(matter_storage, test_endpoint_hw_needs_mark)
+{
+	zassert_true(EndpointHighWater::NeedsMark(3, 4, 0), "nothing stored yet");
+	zassert_true(EndpointHighWater::NeedsMark(3, 4, 3), "mark 3 does not cover id 3");
+	zassert_false(EndpointHighWater::NeedsMark(3, 4, 4), "mark 4 covers id 3");
+	zassert_false(EndpointHighWater::NeedsMark(5, 6, 9), "a covered id cost a write");
+	zassert_false(EndpointHighWater::NeedsMark(0xFFFE, kFirstDynamic, 0xFFFE), "the wrap lowered the mark");
+}
+
+/* Power lost after CreateEndpoint() exposed the id and before its record was
+ * stored: the mark was written first, so the id is not handed out again. */
+ZTEST(matter_storage, test_endpoint_hw_power_loss_before_the_record_does_not_reuse)
+{
+	Bridge br;
+
+	br.Boot();
+	zassert_equal(br.Bind(), 3);
+	zassert_equal(br.Bind(false), 4);
+	br.Boot();
+	zassert_equal(br.Bind(), 5, "endpoint 4 was exposed, lost, and reused");
+	zassert_equal(br.hwWrites, 3, "one write per new id, and only one");
 }
 
 /* No key at all: exactly upstream's max(restored) + 1. */

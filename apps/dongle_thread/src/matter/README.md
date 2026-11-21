@@ -51,12 +51,26 @@ or whose record did not restore, was handed to the next new device - a reuse
 Matter forbids. `BridgeStorageManager` gains one key, `br/brd_ep_hw` (a
 `uint16_t`, the next id), with `StoreEndpointHighWater()` /
 `LoadEndpointHighWater()`. `BridgeManager::Init()` seeds the counter from it,
-the restore still raises it past every restored id, a raised counter is
-written back once after the restore, and every fresh allocation writes it before
-the caller stores the device record. The counter arithmetic (upstream's raise
-and wrap guard included) lives in `bridge_storage_codec.h`'s
-`EndpointHighWater`, which the native_sim suite drives through
-bind/unbind/reboot sequences. A store without the key behaves exactly as
+the restore still raises it past every restored id, and a raised counter is
+written back once after the restore. A fresh allocation writes the mark
+*before* `CreateEndpoint()` makes the id visible to a controller, so a power
+loss between the two cannot leave an exposed id uncovered; if that write fails
+the endpoint is not created. An id the stored mark already covers costs no
+write, which keeps upstream's ENDPOINT_EXISTS skip loop from writing per
+skipped id. 0xFFFF (`chip::kInvalidEndpointId`) is never tried or stored: it
+wraps to the first dynamic id like upstream's wrap to 0.
+
+**What the tests cover, and what they do not.** The counter arithmetic
+(upstream's raise and wrap guard included) and the stored value's codec live
+in `bridge_storage_codec.h`'s `EndpointHighWater`, and
+`apps/dongle_thread/tests/matter_storage` tests them on native_sim, together
+with a *model* of the bind/unbind/reboot sequence written in the test. It does
+NOT test `bridge_manager.cpp`'s wiring (the calls, their order, the
+power-loss window): CHIP does not build on native_sim. That wiring is covered
+by review, by the Matter build (nm and `.config` checks) and by an on-device
+bind/unbind/reboot check, which is an owner step.
+
+A store without the key behaves exactly as
 upstream; neither the record format nor `kCurrentVersion` changes. Every
 change carries a `RadiANT:` comment; re-apply it on a re-copy unless upstream
 has started persisting the counter itself.
