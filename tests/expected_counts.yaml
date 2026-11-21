@@ -242,7 +242,9 @@ min_scenarios: 28
 # 2026-11-20: +32 (item 7 review 2, short-match twins): +4 per api scenario, +5 in
 # radiant.api.crc_repair and .crc_bits (the repair twin), +1 per unit scenario
 # (the handoff gate against a one-window sweep).
-min_testcases: 8106
+# 2026-11-20: +2 (backend drift item 6, TI transmit power to the nearest entry): +1 in
+# radiant.backend_cc26xx and .coex (test_tx_power_rounds_to_nearest_entry).
+min_testcases: 8108
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -386,14 +388,16 @@ min_cases.radiant.gate.lp: 116
 # 2026-11-20: 47 (third review), 50 with +3 HAL drift item 5 cases (requested t_sync on FAILED/DENIED/ABORTED).
 # 2026-11-20: 59 with +9 item 5 cases (RX terminal t_close x5, window edges, lifecycle, EINVAL format, window ceiling).
 # +1 (item 7): caps parity (src_caps/).
-min_cases.radiant.backend_cc26xx: 60
+# +1 (item 6): transmit power rounds to the nearest table entry (test_arm.c).
+min_cases.radiant.backend_cc26xx: 61
 # radiant.backend_cc26xx.coex: the same under CONFIG_RADIANT_BACKEND_CC26XX_COEX,
 # plus 5 cases on radiant_radio_cc26xx_arb.c's submit/execute hooks and the
 # diag-counter status_err case (44).
 # 2026-11-20: 53 (third review), 56 with +3 HAL drift item 5 cases (as the plain scenario).
 # 2026-11-20: 65 with +9 item 5 cases (as the plain scenario).
 # +1 (item 7): caps parity (src_caps/), coex row.
-min_cases.radiant.backend_cc26xx.coex: 66
+# +1 (item 6): transmit power rounds to the nearest table entry, coex row.
+min_cases.radiant.backend_cc26xx.coex: 67
 # dongle_thread.matter_storage (security review 2026-11-20 item 2): the Matter
 # bridge's stored-record decoder - destination and record bounds on each
 # length-prefixed string, the SIZE_MAX wrap, upstream's user-data bounds.

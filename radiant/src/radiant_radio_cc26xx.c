@@ -26,6 +26,7 @@
  * side only, so receive windows do not move. A single clock cannot split the sum.
  */
 
+#include <stdlib.h>
 #include <string.h>
 
 #include <zephyr/kernel.h>
@@ -1062,9 +1063,10 @@ static uint32_t sync_word_of(const uint8_t *addr, uint8_t hw_len)
 }
 
 /*
- * Rounds to the nearest table entry; an unreachable value keeps the current
- * power (as the HAL requires). use_raw writes rawValue and paType directly,
- * for bench work off the table.
+ * Rounds to the nearest table entry (nearest_txp()), as the HAL requires
+ * and the nRF backend does, so a value outside the table's range clamps to
+ * its end. use_raw writes rawValue and paType directly, for bench work off
+ * the table.
  *
  * Acts, and logs, only when the request differs from the last one on this
  * handle. Every transmit carries its power, so without the check a lone
@@ -1073,10 +1075,9 @@ static uint32_t sync_word_of(const uint8_t *addr, uint8_t hw_len)
  * while the handle is open: RF_setTxPower() writes it into setup_cmd, which
  * the driver replays at every RF core power-up (and on a client switch under
  * coex), so only RF_open()/RF_close() clear the cache. Channels with
- * different powers still get theirs: each change of request applies. An
- * off-table request is remembered too (the PA keeps the last power that
- * applied), so a repeat does not warn again; a failed RF_setTxPower() is not,
- * so the next transmit retries it (and warns once).
+ * different powers still get theirs: each change of request applies. A
+ * failed RF_setTxPower() is not remembered, so the next transmit retries it
+ * (and warns once).
  *
  * A success is cached only when the RF core was active at the call.
  * RF_setTxPower() reports success once setup_cmd is updated, even when the
@@ -1103,6 +1104,31 @@ static bool txp_same(const struct radiant_tx_power *a,
 			  : (a->dbm == b->dbm);
 }
 
+/*
+ * The radiant_cc26xx_txp[] entry nearest dbm. Not RF_TxPowerTable_findValue():
+ * TI's rule is the highest entry not above the request, invalid below the
+ * first, so -6 dBm went out at -10 and -40 kept whatever power applied last.
+ * nRF's apply_power() rule exactly: nearest wins, a tie goes to the higher
+ * power, and a value past either end clamps to that end.
+ */
+static RF_TxPowerTable_Value nearest_txp(int8_t dbm)
+{
+	size_t best = 0;
+	int    best_err = abs((int)dbm - (int)radiant_cc26xx_txp[0].power);
+
+	for (size_t i = 1; radiant_cc26xx_txp[i].power != RF_TxPowerTable_INVALID_DBM;
+	     i++) {
+		int err = abs((int)dbm - (int)radiant_cc26xx_txp[i].power);
+
+		/* Ascending table: <= hands a tie to the higher power. */
+		if (err <= best_err) {
+			best_err = err;
+			best = i;
+		}
+	}
+	return radiant_cc26xx_txp[best].value;
+}
+
 static void apply_power(const struct radiant_tx_power *p)
 {
 	static bool warned_set_fail;
@@ -1116,15 +1142,7 @@ static void apply_power(const struct radiant_tx_power *p)
 		v.rawValue = p->raw & 0x3FFFFFu;
 		v.paType = RF_TxPowerTable_DefaultPA;
 	} else {
-		v = RF_TxPowerTable_findValue(
-			(RF_TxPowerTable_Entry *)radiant_cc26xx_txp, p->dbm);
-		if (v.rawValue == RF_TxPowerTable_INVALID_VALUE) {
-			LOG_WRN("tx power %d dBm off the table, keeping current",
-				p->dbm);
-			st.txp_last = *p;
-			st.txp_valid = true;
-			return;
-		}
+		v = nearest_txp(p->dbm);
 	}
 
 	/* DBG, not INF: channels with different powers alternate requests, and

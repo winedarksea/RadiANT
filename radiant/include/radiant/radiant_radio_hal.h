@@ -144,7 +144,8 @@ static inline uint16_t radiant_rf_index_to_mhz(uint8_t rf_index)
 
 /*
  * Transmit power. dbm is the request; a backend rounds to its nearest setting
- * rather than failing on an unreachable value.
+ * rather than failing on an unreachable value: a tie goes to the higher
+ * setting, and a value past caps.tx_power_min_dbm/max_dbm clamps to that end.
  *
  * use_raw is the escape hatch for bench work and parts whose settings don't
  * land on integer dBm: dbm is then ignored and raw is written directly. A raw
