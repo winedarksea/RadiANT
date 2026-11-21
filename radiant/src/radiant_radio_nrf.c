@@ -3619,13 +3619,14 @@ static int rx_arm(const struct radiant_rx_req *req, uint32_t *op)
 		return RADIANT_RADIO_EBUSY;
 	}
 	radiant_op.kind = OP_RX;
+	/* Inside the claim's lock, so no terminal for this operation (a grant-end
+	 * abort included) can report the previous window's close. */
+	radiant_op.rx_t_open = req->t_open;
+	radiant_op.rx_t_close = req->t_close;
 	CLAIM_TERMINAL();
 	ARM_GUARD_ONLY(ARM_CLAIM());
 	ARM_GUARD_ONLY(radiant_swi_zli_unlock(claim_key));
 	irq_unlock(key);
-	/* With the claim, before anything can end the operation (see rx_t_close). */
-	radiant_op.rx_t_open = req->t_open;
-	radiant_op.rx_t_close = req->t_close;
 
 	/*
 	 * Refusals that depend only on the request are answered here, before the gate is
