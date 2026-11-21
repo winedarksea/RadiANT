@@ -37,6 +37,9 @@
 #include <radiant/radiant_sec.h>
 
 #include "fake_radio.h"
+
+/* test_api.c: the api suite's end-of-case violation check. */
+void api_assert_no_viol(void);
 #if defined(CONFIG_IRQ_OFFLOAD)
 #include <zephyr/irq_offload.h>
 #endif
@@ -117,6 +120,8 @@ ZTEST(api, test_sec_host_a_key_needs_a_channel_id_first)
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
 		      antr_sec_key_set(HOST_CH, 128u, host_key));
 	host_done();
+
+	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_host_only_a_128_bit_key_is_taken)
@@ -130,6 +135,8 @@ ZTEST(api, test_sec_host_only_a_128_bit_key_is_taken)
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
 		      antr_sec_key_set(HOST_CH, 128u, host_key));
 	host_done();
+
+	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_host_a_reserved_switch_bit_is_refused_not_masked)
@@ -160,6 +167,8 @@ ZTEST(api, test_sec_host_a_reserved_switch_bit_is_refused_not_masked)
 		      antr_sec_config(HOST_CH, RADIANT_SEC_SW_AUTH, 2u, 0x01u,
 				      0x0Fu));
 	host_done();
+
+	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_host_the_config_refusals_reach_the_host)
@@ -187,6 +196,8 @@ ZTEST(api, test_sec_host_the_config_refusals_reach_the_host)
 					      RADIANT_SEC_SW_DESC_CONF,
 				      2u, 0x01u, 0x0Fu));
 	host_done();
+
+	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_host_an_epoch_needs_a_key_and_only_moves_forwards)
@@ -225,6 +236,8 @@ ZTEST(api, test_sec_host_an_epoch_needs_a_key_and_only_moves_forwards)
 	zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
 		      antr_sec_epoch_set(HOST_CH, 0x02u, 12u, 0u));
 	host_done();
+
+	api_assert_no_viol();
 }
 
 /*
@@ -265,6 +278,8 @@ ZTEST(api, test_sec_host_a_late_joiner_counts_from_the_epoch_not_from_boot)
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
 		      antr_sec_epoch_set(HOST_CH, 0u, 21u, 0u));
 	host_done();
+
+	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_host_status_reports_enrolments)
@@ -299,6 +314,8 @@ ZTEST(api, test_sec_host_status_reports_enrolments)
 	zassert_equal(2u, rd16(&st[24]),
 		      "enrolments is not little-endian at [24..25]");
 	host_done();
+
+	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_host_status_reports_what_was_configured)
@@ -340,6 +357,8 @@ ZTEST(api, test_sec_host_status_reports_what_was_configured)
 	zassert_equal((uint8_t)RADIANT_SEC_VERDICT_CLEAR, st[23]);
 	zassert_equal(0u, rd16(&st[24]), "nothing has enrolled");
 	host_done();
+
+	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_host_an_unkeyed_channel_reads_as_zeros_not_as_an_error)
@@ -364,6 +383,8 @@ ZTEST(api, test_sec_host_an_unkeyed_channel_reads_as_zeros_not_as_an_error)
 	zassert_equal((uint8_t)RADIANT_SEC_VERDICT_CLEAR, st[23]);
 	zassert_equal(0u, rd16(&st[24]));
 	zassert_equal(0u, st[30], "%u", st[30]);
+
+	api_assert_no_viol();
 }
 
 /*
@@ -409,6 +430,8 @@ ZTEST(api, test_sec_host_a_resent_key_keeps_the_channel_armed)
 		      antr_sec_status_get(HOST_CH, st, sizeof(st)));
 	zassert_equal(ANTR_SEC_STATUS_KEYED | ANTR_SEC_STATUS_ARMED, st[30]);
 	host_done();
+
+	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_host_a_short_status_buffer_is_refused)
@@ -423,6 +446,8 @@ ZTEST(api, test_sec_host_a_short_status_buffer_is_refused)
 					  ANTR_SEC_STATUS_LEN - 1u));
 	zassert_equal((antr_err_t)ANTW_INVALID_MESSAGE,
 		      antr_sec_status_get(HOST_CH, NULL, sizeof(st)));
+
+	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_host_a_channel_out_of_range_is_refused_everywhere)
@@ -439,6 +464,8 @@ ZTEST(api, test_sec_host_a_channel_out_of_range_is_refused_everywhere)
 		      antr_sec_epoch_set(bad, 0u, 1u, 0u));
 	zassert_equal((antr_err_t)ANTW_INVALID_MESSAGE,
 		      antr_sec_status_get(bad, st, sizeof(st)));
+
+	api_assert_no_viol();
 }
 
 /* ── The 0xF8 window-verdict event (security review 2026-11-13, item 3) ── */
@@ -736,6 +763,8 @@ ZTEST(api, test_sec_host_a_good_window_sends_verified_after_its_packets)
 	}
 	vd_expect(from, want, ARRAY_SIZE(want), 2u);
 	vd_done();
+
+	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_host_a_flipped_bit_sends_unverified)
@@ -758,6 +787,8 @@ ZTEST(api, test_sec_host_a_flipped_bit_sends_unverified)
 	}
 	vd_expect(from, want, ARRAY_SIZE(want), 2u);
 	vd_done();
+
+	api_assert_no_viol();
 }
 
 /*
@@ -800,6 +831,8 @@ ZTEST(api, test_sec_host_a_resent_key_keeps_a_tier2_trial_devnum)
 	}
 	vd_expect(from, want, ARRAY_SIZE(want), 2u);
 	vd_done();
+
+	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_host_the_drop_policy_releases_a_window_before_its_verdict)
@@ -823,6 +856,8 @@ ZTEST(api, test_sec_host_the_drop_policy_releases_a_window_before_its_verdict)
 	}
 	vd_expect(from, want, ARRAY_SIZE(want), 2u);
 	vd_done();
+
+	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_host_a_future_counter_forgery_is_judged_before_the_genuine)
@@ -859,6 +894,8 @@ ZTEST(api, test_sec_host_a_future_counter_forgery_is_judged_before_the_genuine)
 	}
 	vd_expect(from, want, ARRAY_SIZE(want), 2u);
 	vd_done();
+
+	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_host_a_late_reopen_repeats_a_window_start)
@@ -887,6 +924,8 @@ ZTEST(api, test_sec_host_a_late_reopen_repeats_a_window_start)
 	}
 	vd_expect(from, want, ARRAY_SIZE(want), 2u);
 	vd_done();
+
+	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_host_a_clear_page_out_of_range_is_never_judged)
@@ -919,6 +958,8 @@ ZTEST(api, test_sec_host_a_clear_page_out_of_range_is_never_judged)
 	}
 	vd_expect(from, want, ARRAY_SIZE(want), 2u);
 	vd_done();
+
+	api_assert_no_viol();
 }
 
 /* The log index of channel `rx`'s CHANNEL_CLOSED event, or -1. */
@@ -974,6 +1015,8 @@ ZTEST(api, test_sec_host_nothing_follows_channel_closed)
 				  "a verdict after CHANNEL_CLOSED");
 	}
 	vd_done();
+
+	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_host_two_channels_keep_their_own_verdicts)
@@ -1003,6 +1046,8 @@ ZTEST(api, test_sec_host_two_channels_keep_their_own_verdicts)
 	vd_expect_ch(from, VD_RX2_CH, bad, ARRAY_SIZE(bad), 2u);
 	vd_done_pair(VD_RX2_CH, VD_TX2_CH);
 	vd_done();
+
+	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_host_a_lost_verdict_is_counted_and_leaves_a_seq_gap)
@@ -1072,6 +1117,8 @@ ZTEST(api, test_sec_host_a_lost_verdict_is_counted_and_leaves_a_seq_gap)
 			      "[28..29]");
 	}
 	vd_done();
+
+	api_assert_no_viol();
 }
 
 /* A forged secured-range page claiming counter `ctr` with tag byte `tag`,
@@ -1131,6 +1178,8 @@ ZTEST(api, test_sec_host_a_window_aliased_256_on_is_not_verified)
 	vd_forge_tag(259u, 259u, rec5[7]);
 	vd_expect(from, want, ARRAY_SIZE(want), 2u);
 	vd_done();
+
+	api_assert_no_viol();
 }
 
 /*
@@ -1173,6 +1222,8 @@ ZTEST(api, test_sec_host_a_close_and_reopen_leaves_no_window_pending)
 	}
 	vd_expect(from, want, ARRAY_SIZE(want), 2u);
 	vd_done();
+
+	api_assert_no_viol();
 }
 
 /*
@@ -1231,11 +1282,15 @@ static void vd_stale_across(bool new_epoch)
 ZTEST(api, test_sec_host_a_stale_forgery_across_0xf3_leaves_a_seq_gap)
 {
 	vd_stale_across(true);
+
+	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_host_a_stale_forgery_across_0xf1_leaves_a_seq_gap)
 {
 	vd_stale_across(false);
+
+	api_assert_no_viol();
 }
 
 /*
@@ -1267,6 +1322,8 @@ ZTEST(api, test_sec_host_an_identical_0xf1_retry_discards_nothing)
 	}
 	vd_expect(from, want, ARRAY_SIZE(want), 2u);
 	vd_done();
+
+	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_host_a_tag_riding_past_clear_windows_still_verifies)
@@ -1299,6 +1356,8 @@ ZTEST(api, test_sec_host_a_tag_riding_past_clear_windows_still_verifies)
 	}
 	vd_expect(from, want, ARRAY_SIZE(want), 2u);
 	vd_done();
+
+	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_host_without_the_bit_the_stream_is_unchanged)
@@ -1367,6 +1426,8 @@ ZTEST(api, test_sec_host_without_the_bit_the_stream_is_unchanged)
 	zassert_equal(n_with, n_without, "messages missing without the bit");
 	zassert_equal(VD_HOPS, n_with, "one BROADCAST_DATA per packet");
 	vd_done();
+
+	api_assert_no_viol();
 }
 
 /* ---------------------------------------------------------------------------
@@ -1595,6 +1656,8 @@ ZTEST(api, test_sec_host_an_acquiring_frame_is_delivered_decrypted)
 		      "the acquiring frame reached the host as ciphertext: it "
 		      "skipped radiant_sec_rx_ingest()");
 	acq_done();
+
+	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_host_a_forged_acquiring_frame_is_not_delivered_under_drop)
@@ -1621,6 +1684,8 @@ ZTEST(api, test_sec_host_a_forged_acquiring_frame_is_not_delivered_under_drop)
 		      "a forged secured-range acquiring frame reached the host "
 		      "under DROP_UNVER with no verdict");
 	acq_done();
+
+	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_host_a_reacquiring_frame_takes_the_hook)
@@ -1655,6 +1720,8 @@ ZTEST(api, test_sec_host_a_reacquiring_frame_takes_the_hook)
 	zassert_equal(1u, n.plain,
 		      "the reacquiring frame reached the host as ciphertext");
 	acq_done();
+
+	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_host_a_keyed_scan_delivers_no_secured_page_unjudged)
@@ -1695,6 +1762,8 @@ ZTEST(api, test_sec_host_a_keyed_scan_delivers_no_secured_page_unjudged)
 		      "a page outside the secured range did not arrive at once");
 	zassert_equal(1u, n.all, "and nothing else did");
 	acq_done();
+
+	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_host_a_clear_acquiring_frame_still_arrives_at_once)
@@ -1721,6 +1790,8 @@ ZTEST(api, test_sec_host_a_clear_acquiring_frame_still_arrives_at_once)
 	zassert_equal(1u, n.page,
 		      "a clear acquiring frame did not arrive at once");
 	acq_done();
+
+	api_assert_no_viol();
 }
 
 /* `pay` on the air at t as acknowledged data (control byte 0xAA) on the
@@ -1772,6 +1843,8 @@ ZTEST(api, test_sec_host_an_acked_acquiring_frame_follows_d15)
 	zassert_equal(st0.dropped_non_broadcast + 1u, st1.dropped_non_broadcast,
 		      "the frame was not counted as a dropped non-broadcast");
 	acq_done();
+
+	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_host_an_acked_clear_acquiring_frame_still_arrives)
@@ -1798,6 +1871,8 @@ ZTEST(api, test_sec_host_an_acked_clear_acquiring_frame_still_arrives)
 		      "a clear acked acquiring frame did not arrive at once");
 	zassert_equal(1u, n.all, "and nothing else did");
 	acq_done();
+
+	api_assert_no_viol();
 }
 
 /* A keyed background scan whose channel ID wildcards the device and
@@ -1908,6 +1983,8 @@ ZTEST(api, test_sec_host_a_rewildcarded_keyed_scan_keeps_the_sender_number)
 		      "a released scan frame reported the channel's wildcard "
 		      "device number 0x%04x", dn_sec);
 	acq_done();
+
+	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_host_a_released_scan_frame_keeps_its_sender_id)
@@ -1970,6 +2047,8 @@ ZTEST(api, test_sec_host_a_released_scan_frame_keeps_its_sender_id)
 	zassert_equal(clr[15], sec[15],
 		      "a released scan frame lost the sender's RSSI");
 	acq_done();
+
+	api_assert_no_viol();
 }
 
 /*
@@ -2020,6 +2099,8 @@ ZTEST(api, test_sec_host_a_forgery_held_across_a_dropout_is_never_released)
 		     "setup: no genuine window verified after the dropout (%u)",
 		     n.plain);
 	acq_done();
+
+	api_assert_no_viol();
 }
 
 /*
@@ -2092,6 +2173,8 @@ ZTEST(api, test_sec_host_a_forgery_across_a_dropout_is_not_credited)
 	zassert_true(judged, "setup: no verdict or seq gap ever settled the "
 		     "forgery at counter %u, so nothing was checked", ctr);
 	acq_done();
+
+	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_host_a_forged_reacquiring_frame_is_not_credited)
@@ -2144,6 +2227,8 @@ ZTEST(api, test_sec_host_a_forged_reacquiring_frame_is_not_credited)
 					     "the forged acquiring frame"),
 		     "setup: no verdict ever covered the forgery");
 	acq_done();
+
+	api_assert_no_viol();
 }
 
 /*
@@ -2212,6 +2297,8 @@ ZTEST(api, test_sec_host_the_first_window_after_an_acquisition_verifies)
 		      "belong in a verified window",
 		      n.plain);
 	acq_done();
+
+	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_host_the_verdict_event_needs_x_auth)
@@ -2245,6 +2332,8 @@ ZTEST(api, test_sec_host_the_verdict_event_needs_x_auth)
 	zassert_equal(RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_VERDICT_EVENT,
 		      st[2]);
 	host_done();
+
+	api_assert_no_viol();
 }
 
 #if defined(CONFIG_RADIANT_SEC_LOCK_CHECK)
@@ -2277,6 +2366,8 @@ ZTEST(api, test_sec_host_commands_hold_api_lock)
 		      "api_lock");
 
 	host_done();
+
+	api_assert_no_viol();
 }
 
 /* The instrument itself: a call that really is unlocked must be counted, or
@@ -2307,6 +2398,8 @@ ZTEST(api, test_sec_host_the_lock_check_sees_an_unlocked_call)
 		      "a locked call was counted as a violation");
 
 	antr_api_lock_violations = base;
+
+	api_assert_no_viol();
 }
 
 #if defined(CONFIG_IRQ_OFFLOAD)
@@ -2351,6 +2444,8 @@ ZTEST(api, test_sec_host_the_lock_check_refuses_an_isr_inside_the_lock)
 		      "a radiant_sec check from an ISR was not counted");
 
 	antr_api_lock_violations = base;
+
+	api_assert_no_viol();
 }
 #endif /* CONFIG_IRQ_OFFLOAD */
 
@@ -2498,6 +2593,8 @@ ZTEST(api, test_sec_host_pairing_commits_before_it_reveals)
 	zassert_equal(1u, enrolments_of(PEER_CH));
 
 	f5_done();
+
+	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_host_pairing_refuses_out_of_order_and_unopened_commitments)
@@ -2569,6 +2666,8 @@ ZTEST(api, test_sec_host_pairing_refuses_out_of_order_and_unopened_commitments)
 		      "the right nonce was accepted after a wrong one");
 
 	f5_done();
+
+	api_assert_no_viol();
 }
 
 /*
@@ -2637,6 +2736,8 @@ ZTEST(api, test_sec_host_pairing_holds_api_lock_and_its_hold_time)
 
 	(void)f5(HOST_CH, ANTW_RADIANT_PAIR_LEAVE, NULL, 0u, reply, &rlen);
 	host_done();
+
+	api_assert_no_viol();
 }
 
 /*
@@ -2777,6 +2878,8 @@ ZTEST(api, test_sec_host_pairing_runs_on_the_bridge_stack)
 	(void)f5(PEER_CH, ANTW_RADIANT_PAIR_LEAVE, NULL, 0u, reply, &rlen);
 	(void)antr_channel_unassign(PEER_CH);
 	host_done();
+
+	api_assert_no_viol();
 }
 #endif /* CONFIG_RADIANT_SEC_PAIRING_X25519 */
 

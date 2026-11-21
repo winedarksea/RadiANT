@@ -21,6 +21,9 @@
 #include <radiant/radiant_sec.h>
 #include <radiant/radiant_sec_compat.h>
 
+/* test_api.c: the api suite's end-of-case violation check. */
+void api_assert_no_viol(void);
+
 #define CA      0u
 #define CB      1u
 #define DEVNUM  0x3A17u
@@ -79,6 +82,8 @@ ZTEST(api, test_sec_compat_unassign_releases_the_compat_context)
 		      "the compat key outlived antr_channel_unassign()");
 
 	(void)antr_channel_unassign(CB);
+
+	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_compat_system_reset_releases_every_compat_context)
@@ -97,6 +102,8 @@ ZTEST(api, test_sec_compat_system_reset_releases_every_compat_context)
 	zassert_equal(RADIANT_SEC_ENOKEY,
 		      radiant_sec_compat_set_epoch(CB, 8u, 0u, 0u, PERIOD),
 		      "channel B's compat key outlived SYSTEM_RESET");
+
+	api_assert_no_viol();
 }
 
 #endif /* CONFIG_RADIANT_SEC_COMPAT */

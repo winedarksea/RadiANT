@@ -72,6 +72,17 @@ static void setup(void *f)
 	fake_radio_caps_preset_nrf_long_match();
 }
 
+/* Every case ends with this: fake_radio_viol_count() == 0, idle-agnostic.
+ * Not an after() hook: on this Zephyr a zassert in after() cannot fail the
+ * case (ztest prints "cannot fail in test phase 'after()'", passes the case
+ * and skips every case behind it, suite reported as succeeded). */
+static void assert_no_viol(void)
+{
+	zassert_equal(0u, fake_radio_viol_count(), "contract violation: %s (%s)",
+		      fake_radio_viol_name(fake_radio_viol(0)->code),
+		      fake_radio_viol(0)->detail);
+}
+
 ZTEST_SUITE(radiant_search_rf, NULL, NULL, setup, NULL, NULL);
 
 static void bring_up(void)
@@ -183,6 +194,8 @@ ZTEST(radiant_search_rf, test_coverage_mask_resets_with_a_retune)
 	/* A phase heard on 57 is not coverage on 66. */
 	zassert_equal(2u, radiant_search_get_stats(&g_s)->sets_advanced_uncovered);
 	radiant_search_on_done(&g_s, false, false, 0u);
+
+	assert_no_viol();
 }
 #endif /* CONFIG_RADIANT_SEARCH_COVERAGE */
 
@@ -227,6 +240,8 @@ ZTEST(radiant_search_rf, test_undeclared_and_all_57_sessions_never_retune)
 	zassert_equal(RF_A, radiant_search_rf_get(&g_s));
 	zassert_ok(radiant_search_end(&g_s, 0u));
 	zassert_ok(radiant_search_end(&g_s, 1u));
+
+	assert_no_viol();
 }
 
 /* Every searcher is on 66: the sweep goes to 66 for its very first window
@@ -246,6 +261,8 @@ ZTEST(radiant_search_rf, test_sweep_follows_a_frequency_all_searchers_agree_on)
 	expect_pass_on(rf, n, RF_B, "agree, pass 2");
 	zassert_ok(radiant_search_end(&g_s, 0u));
 	zassert_ok(radiant_search_end(&g_s, 1u));
+
+	assert_no_viol();
 }
 
 /* Mixed: whole passes alternate, and the sweep never changes frequency in the
@@ -268,6 +285,8 @@ ZTEST(radiant_search_rf, test_mixed_frequencies_alternate_whole_passes)
 	expect_pass_on(rf, n, RF_A, "mixed, pass 3");
 	zassert_ok(radiant_search_end(&g_s, 0u));
 	zassert_ok(radiant_search_end(&g_s, 1u));
+
+	assert_no_viol();
 }
 
 /*
@@ -317,6 +336,8 @@ ZTEST(radiant_search_rf, test_a_frequency_resumes_its_own_cursor_after_a_retune)
 				     (unsigned int)set, (unsigned int)n);
 		}
 	}
+
+	assert_no_viol();
 }
 
 /* More frequencies than RADIANT_SEARCH_RF_CURSORS: the oldest parked cursor
@@ -353,6 +374,8 @@ ZTEST(radiant_search_rf, test_a_full_cursor_table_drops_the_oldest_undeclared)
 	zassert_equal(0u, g_w.set_index);
 	win_run();
 	zassert_ok(radiant_search_end(&g_s, 0u));
+
+	assert_no_viol();
 }
 
 /*
@@ -403,6 +426,8 @@ ZTEST(radiant_search_rf, test_a_steer_for_the_other_frequency_waits_for_it)
 
 	zassert_ok(radiant_search_end(&g_s, 0u));
 	zassert_ok(radiant_search_end(&g_s, 1u));
+
+	assert_no_viol();
 }
 
 /* A steer for a frequency nobody declares any more is dropped at the next
@@ -424,6 +449,8 @@ ZTEST(radiant_search_rf, test_a_steer_for_an_abandoned_frequency_is_dropped)
 	zassert_false(g_w.from_cache);
 	win_run();
 	zassert_ok(radiant_search_end(&g_s, 1u));
+
+	assert_no_viol();
 }
 
 /* When the last searcher on the current frequency leaves, the sweep moves on
@@ -441,6 +468,8 @@ ZTEST(radiant_search_rf, test_the_sweep_leaves_a_frequency_nobody_searches)
 	run_pass(rf, 2u);
 	expect_pass_on(rf, 2u, RF_B, "after the 57 searcher left");
 	zassert_ok(radiant_search_end(&g_s, 0u));
+
+	assert_no_viol();
 }
 
 /* Review 2026-11-09: a keyless scan on channel 1 and a keyed search on 66 on
@@ -464,6 +493,8 @@ ZTEST(radiant_search_rf, test_the_sweep_returns_home_when_the_last_declared_sear
 	expect_pass_on(rf, n, RF_A, "after the 66 search ended");
 	zassert_equal(RF_A, radiant_search_rf_get(&g_s));
 	zassert_ok(radiant_search_end(&g_s, 1u));
+
+	assert_no_viol();
 }
 
 /* Offer filtering, live. Channel 0 (first in channel order, so it would take
@@ -489,6 +520,8 @@ ZTEST(radiant_search_rf, test_a_channel_is_offered_only_devices_heard_on_its_fre
 	zassert_true(radiant_search_is_searching(&g_s, 0u));
 	zassert_false(radiant_search_is_searching(&g_s, 1u));
 	zassert_ok(radiant_search_end(&g_s, 0u));
+
+	assert_no_viol();
 }
 
 /* Offer filtering, cached. A device heard on 57 is in the seen cache; a channel
@@ -521,6 +554,8 @@ ZTEST(radiant_search_rf, test_the_seen_cache_does_not_steer_across_frequencies)
 					   RADIANT_SEARCH_TIMEOUT_NONE, RF_B));
 	zassert_equal(0u, g_s.n_steer);
 	zassert_ok(radiant_search_end(&g_s, 0u));
+
+	assert_no_viol();
 }
 
 /*
@@ -557,6 +592,8 @@ ZTEST(radiant_search_rf, test_a_pass_that_ended_with_no_searchers_does_not_leak)
 	zassert_ok(radiant_search_end(&g_s, 0u));
 
 	expect_mixed_session_stays_for(n);
+
+	assert_no_viol();
 }
 
 /* The same wrap, but the session ends by ACQUISITION in the last set of the
@@ -589,6 +626,8 @@ ZTEST(radiant_search_rf, test_a_pass_that_ended_by_acquisition_does_not_leak)
 	zassert_equal(0u, radiant_search_n_searching(&g_s));
 
 	expect_mixed_session_stays_for(n);
+
+	assert_no_viol();
 }
 
 ZTEST(radiant_search_rf, test_a_pass_that_ended_undeclared_does_not_leak)
@@ -604,4 +643,6 @@ ZTEST(radiant_search_rf, test_a_pass_that_ended_undeclared_does_not_leak)
 	zassert_ok(radiant_search_end(&g_s, 0u));
 
 	expect_mixed_session_stays_for(n - 1u);
+
+	assert_no_viol();
 }

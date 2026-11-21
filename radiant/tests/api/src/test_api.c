@@ -287,6 +287,18 @@ static void end_of_test(void)
 	zassert_true(n_msg <= MSGLOG_MAX, "the message log overflowed");
 }
 
+/* fake_radio_viol_count() == 0 without end_of_test()'s close and idle check:
+ * the end of every api case that does not call end_of_test(), the sec files'
+ * included (they share this suite and its api_reset(), which clears the
+ * fake). Not an after() hook: on this Zephyr a zassert in after() cannot fail
+ * the case (ztest passes it and skips every case behind it). */
+void api_assert_no_viol(void)
+{
+	zassert_equal(0u, fake_radio_viol_count(), "contract violation: %s (%s)",
+		      fake_radio_viol_name(fake_radio_viol(0)->code),
+		      fake_radio_viol(0)->detail);
+}
+
 /* ---------------------------------------------------------------------------
  * Driving a master channel
  * ---------------------------------------------------------------------------
@@ -433,6 +445,8 @@ ZTEST(api, test_an_assign_to_a_network_with_no_key_is_accepted)
 		      antr_channel_assign(CH, (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
 					  (uint8_t)RADIANT_CHANNEL_NETWORK_COUNT, 0u),
 		      "an out-of-range network number must still be refused");
+
+	api_assert_no_viol();
 }
 
 /* Open one channel of `type`, configured as the bench's own sensor. */
@@ -2108,6 +2122,8 @@ ZTEST(api, test_a_scan_chunk_that_ends_mid_set_keeps_its_slot)
 
 	zassert_true(fake_radio_is_idle(), "radio not idle: %s",
 		     fake_radio_busy_reason());
+
+	api_assert_no_viol();
 }
 
 /*
@@ -2139,6 +2155,8 @@ ZTEST(api, test_a_background_scan_never_times_out)
 	drain();
 	zassert_true(fake_radio_is_idle(), "radio not idle: %s",
 		     fake_radio_busy_reason());
+
+	api_assert_no_viol();
 }
 
 /*
@@ -2493,6 +2511,8 @@ ZTEST(api, test_a_search_timeout_landing_mid_chunk_does_not_strand_the_sweep)
 	drain();
 	zassert_true(fake_radio_is_idle(), "radio not idle: %s",
 		     fake_radio_busy_reason());
+
+	api_assert_no_viol();
 }
 
 /*
@@ -3354,6 +3374,8 @@ ZTEST(api, test_capabilities_claim_only_what_is_implemented)
 		      antr_sdu_mask_set(0u, mask));
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
 		      antr_event_filtering_set(0x0006u));
+
+	api_assert_no_viol();
 }
 
 /*
@@ -3389,6 +3411,8 @@ ZTEST(api, test_serial_number_bit_matches_the_request)
 
 	zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
 		      antr_serial_number_get(NULL));
+
+	api_assert_no_viol();
 }
 
 /*
@@ -5199,6 +5223,8 @@ ZTEST(api, test_a_totally_denied_sweep_still_leaves_its_set)
 
 	/* And nothing pretended to hear anything on the way out. */
 	zassert_equal(0u, ss->frames_ok);
+
+	api_assert_no_viol();
 }
 
 /*
@@ -5247,6 +5273,8 @@ ZTEST(api, test_a_sweep_that_still_gets_air_never_escapes)
 		     "sets_advanced=%u - the credited windows did not advance "
 		     "the sweep, so this control asserted nothing",
 		     (unsigned int)ss->sets_advanced);
+
+	api_assert_no_viol();
 }
 
 /*
@@ -6560,6 +6588,8 @@ ZTEST(api, test_fec_pending_command_fails_when_search_timeout_closes_the_channel
 	drain();
 	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED));
 	zassert_true(fake_radio_is_idle());
+
+	api_assert_no_viol();
 }
 
 #if defined(CONFIG_RADIANT_SEC)
@@ -6900,6 +6930,8 @@ ZTEST(api, test_advanced_burst_capabilities_advertise_no_frequency_hopping)
 	zassert_equal((uint8_t)ANTW_ADV_BURST_MODES_SIZE_24_BYTES, cfg[0]);
 	zassert_equal(0u, cfg[1] & (uint8_t)ANTW_ADV_BURST_MODES_FREQ_HOP,
 		      "frequency hopping is advertised (modes 0x%02x)", cfg[1]);
+
+	api_assert_no_viol();
 }
 
 /*
@@ -7156,6 +7188,8 @@ ZTEST(api, test_diag_every_page_has_the_fixed_shape)
 		      antr_diag_page(RADIANT_DIAG_PAGES, out));
 	zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
 		      antr_diag_page(0u, NULL));
+
+	api_assert_no_viol();
 }
 
 /* Pages 9 and 10 (2026-11-15): every field this build cannot measure says so.
@@ -7210,6 +7244,8 @@ ZTEST(api, test_diag_pass_and_rx_integrity_pages_say_what_is_unmeasured)
 		zassert_equal(RADIANT_DIAG_NOT_MEASURED, diag_u32(out, f),
 			      "page 10 field %u", f);
 	}
+
+	api_assert_no_viol();
 }
 
 /* Page 12 (2026-11-16): the core's stale-event split as it stands. ED without
@@ -7469,6 +7505,8 @@ ZTEST(api, test_diag_an_on_time_continuation_is_not_late)
 	(void)antr_channel_close(CH);
 	fake_radio_advance(1000u);
 	drain();
+
+	api_assert_no_viol();
 }
 
 /* The bench symptom of 2026-11-12: the next block reaches the engine after
@@ -7491,6 +7529,8 @@ ZTEST(api, test_diag_a_delayed_continuation_is_counted_late)
 	(void)antr_channel_close(CH);
 	fake_radio_advance(1000u);
 	drain();
+
+	api_assert_no_viol();
 }
 
 #endif /* CONFIG_RADIANT_DIAG_COUNTERS */
