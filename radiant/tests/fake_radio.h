@@ -671,12 +671,15 @@ void fake_radio_set_forced_arm_cost_us(uint32_t us);
  *     PHY), +1 for a transmit (T_SYNC_CAL_TX_US);
  *   - CC26x2: ARM_FLOOR_US 150 for a receive, TX_ARM_FLOOR_US for a
  *     transmit, +250 (FS_SETTLE_US) on a retune - an rf_index other than the
- *     one the last accepted arm (or enable) tuned;
+ *     one enable or the last operation that ran (not denied, not aborted
+ *     before its start) tuned;
  *   - RAIL: the lead itself (no band).
  * Between the floor and the lead an arm succeeds and counts
- * stats.arms_inside_lead. nRF operations go out on time; a CC26x2 receive
- * starts late and listens only from arm time + the lead; a CC26x2 transmit
- * goes out on time. Energy detect keeps the full lead.
+ * stats.arms_inside_lead. nRF operations go out on time; a CC26x2 transmit
+ * goes out on time; a CC26x2 receive listens only from
+ * max(t_open, arm time + floor + 150 us ramp + (1 + addr_len) * 8 us) - its
+ * command cannot start before the floor, and pastTrig starts it late rather
+ * than refusing. Energy detect keeps the full lead.
  */
 /* Every arm accepted inside the lead also records FAKE_RADIO_VIOL_INSIDE_LEAD,
  * so the viol_count() == 0 habit in every suite's teardown is the "core never

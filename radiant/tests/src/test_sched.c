@@ -2669,8 +2669,9 @@ ZTEST(radiant_sched, test_a_cc26xx_arm_inside_the_lead_keeps_a_late_window)
 	/* 100 us: the retune's 400 us floor still fits inside 600 - 90. */
 	band_arm_case(100u, &served, &open);
 	a = fake_radio_arm(1u);
-	zassert_true(a->t_arm + radiant_radio_caps_get()->min_arm_lead_us > open,
-		     "no head to lose");
+	/* Its command starts 150 + 48 us ahead of t_open and cannot start
+	 * before the retune floor (400 us after the arm), so it is late. */
+	zassert_true(a->t_arm + 400u + 150u + 48u > open, "no head to lose");
 	fake_radio_advance_past_close(open + TEST_WINDOW_US);
 	zassert_equal(1u, log.ok_count[served]);
 	finish_forced(0u, 0u);

@@ -99,6 +99,11 @@ struct cur_op {
 	radiant_time_t t_fire;
 	uint32_t       tx_delay_us;  /* terminal lag past t_fire */
 
+	/* The channel the operation tunes to, and when it starts using the
+	 * air: credited to tuned_rf only once it has run (tune_credit()). */
+	uint8_t        tune_rf;
+	radiant_time_t t_start;
+
 	/*
 	 * energy detect
 	 *
@@ -567,10 +572,12 @@ static void caps_preset_apply(const struct radiant_radio_caps *c,
 	g.caps = *c;
 	g.caps.name = name;
 	g.floor_model = FLOOR_CC26XX;
-	/* CC26x2: the 508 us hold is caps.rx_close_hold_us; the RF driver's
-	 * SWI then delivers (an estimate, unmeasured: 60 us). A frame lands at
-	 * its END plus the backend's per-entry drain work, 123 us measured
-	 * (archive/benchmarks/2026-11-13-drain-timing/). */
+	/* CC26x2: the 508 us hold is caps.rx_close_hold_us. Then:
+	 *   - empty terminal: 60 us of RF driver SWI - an UNMEASURED estimate;
+	 *   - received frame: its END + the backend's per-entry drain work,
+	 *     123 us, measured (archive/benchmarks/2026-11-13-drain-timing/);
+	 *   - transmit terminal: its END + the same 123 us - an UNMEASURED
+	 *     reuse of the RX drain figure, no TX callback timing exists. */
 	delays_preset(60u, 123u, true);
 }
 
@@ -1066,6 +1073,8 @@ static void clear_cur(void)
 /* The slot is freed *before* the terminal callback runs: chaining is done by
  * arming the next operation from inside the completion callback, so holding
  * the slot would EBUSY the one call pattern the contract permits. */
+static void tune_credit(enum radiant_radio_status status);
+
 static void end_op(enum radiant_radio_status status, radiant_time_t t_sync)
 {
 	enum fake_radio_arm_kind kind = g.cur.kind;
@@ -1078,6 +1087,7 @@ static void end_op(enum radiant_radio_status status, radiant_time_t t_sync)
 		return;
 	}
 	mark_terminal(arm_idx, status);
+	tune_credit(status);
 	clear_cur();
 
 	if (kind == FAKE_RADIO_ARM_TX) {
@@ -1664,6 +1674,7 @@ static void dispatch_air(int32_t idx)
 	g.stats.air_delivered++;
 	if (terminal) {
 		mark_terminal(arm_idx, status);
+		tune_credit(status);
 		clear_cur();
 	} else {
 		struct fake_radio_arm *a = arm_at(arm_idx);
@@ -2120,6 +2131,7 @@ static bool refuse_late(radiant_time_t t, radiant_time_t end)
 /* Book-keeping for an accepted arm the floor test passed inside the lead. */
 static void note_arm_accepted(struct fake_radio_arm *rec, uint8_t rf_index)
 {
+	(void)rf_index;
 	if (g.arm_inside_lead) {
 		g.stats.arms_inside_lead++;
 		rec->inside_lead = true;
@@ -2133,7 +2145,25 @@ static void note_arm_accepted(struct fake_radio_arm *rec, uint8_t rf_index)
 				    "armed inside caps.min_arm_lead_us");
 		}
 	}
-	g.tuned_rf = rf_index;
+}
+
+/*
+ * The CC26x2's synthesiser channel is credited only once the operation that
+ * retuned it ran (radiant_radio_cc26xx.c tuned_rf_resolve(): the chained FS
+ * DONE_OK and the op ran). An operation denied, or aborted before its start,
+ * leaves tuned_rf as it was. Called with the terminal status before the
+ * operation is cleared.
+ */
+static void tune_credit(enum radiant_radio_status status)
+{
+	if (g.cur.kind != FAKE_RADIO_ARM_RX && g.cur.kind != FAKE_RADIO_ARM_TX) {
+		return;
+	}
+	if (status == RADIANT_RADIO_STATUS_DENIED ||
+	    (status == RADIANT_RADIO_STATUS_ABORTED && g.now < g.cur.t_start)) {
+		return;
+	}
+	g.tuned_rf = g.cur.tune_rf;
 }
 
 #if defined(CONFIG_RADIANT_SCHED_BOOKING)
@@ -2591,6 +2621,8 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 	g.cur.t_sync_req = req->t_sync_at;
 	note_arm_accepted(rec, req->rf_index);
 	g.cur.t_fire = req->t_sync_at;
+	g.cur.tune_rf = req->rf_index;
+	g.cur.t_start = req->t_sync_at;
 	g.cur.tx_delay_us = (g.tx_terminal_delay_fixed || !g.frame_tail_model)
 				    ? g.tx_terminal_delay_us
 				    : ((uint32_t)req->body_len + crc_bytes(req->fmt)) *
@@ -2866,17 +2898,26 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 	g.cur.t_open = req->t_open;
 	g.cur.t_close = req->t_close;
 	g.cur.t_listen = req->t_open;
-	if (g.arm_inside_lead && g.floor_model == FLOOR_CC26XX) {
-		/* pastTrig: the RF core needs the lead to honour a start, so a
-		 * window armed inside it starts late and loses its head. */
-		radiant_time_t start = g.now +
-				       (radiant_time_t)lead_for(req->t_close);
+	if (g.floor_model == FLOOR_CC26XX) {
+		/*
+		 * radiant_radio_cc26xx.c rx_start(): the command starts at
+		 * t_open - (1 + addr_len) * 8 - RX_RAMP_UP_US (150), with
+		 * pastTrig = 1, and the RF core cannot start it before the
+		 * arm floor (ARM_FLOOR_US 150, + FS_SETTLE_US 250 on a retune)
+		 * has passed. A start that late listens only from the first
+		 * t_sync its ramp and preamble allow: the head is lost.
+		 */
+		radiant_time_t first = g.now + (radiant_time_t)g.arm_floor_us +
+				       150u +
+				       (radiant_time_t)((1u + req->fmt->addr_len) * 8u);
 
-		if (start > g.cur.t_listen) {
-			g.cur.t_listen = start;
+		if (first > g.cur.t_listen) {
+			g.cur.t_listen = first;
 		}
 	}
 	note_arm_accepted(rec, req->rf_index);
+	g.cur.tune_rf = req->rf_index;
+	g.cur.t_start = g.cur.t_listen;
 	/* One window, one answer to "did this hear anything". Reset at the arm
 	 * rather than at the terminal event, because the terminal event is
 	 * where it is read. */

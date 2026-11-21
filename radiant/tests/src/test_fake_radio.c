@@ -1889,10 +1889,11 @@ ZTEST(fake_radio, test_the_terminal_delay_stacks_on_the_close_hold)
 /*
  * The CC26x2's band (backend drift item 7): its receive floor is 150 us
  * (ARM_FLOOR_US; 400 on a retune, the CMD_FS ahead of it), its transmit
- * floor TX_ARM_FLOOR_US, and its 600 us lead the budget its RF core needs to
- * honour a start (pastTrig). An RX armed in between starts late and loses its
- * head: it listens from arm time + the lead. A TX in between still goes out
- * on time.
+ * floor TX_ARM_FLOOR_US. A receive command starts ramp + preamble + address
+ * ahead of t_open (150 + 48 us for a 5-byte address) and cannot start before
+ * the floor, so an RX opening less than 348 us after its arm starts late
+ * (pastTrig) and loses its head; one opening later is on time. A TX in the
+ * band still goes out on time.
  */
 ZTEST(fake_radio, test_a_cc26xx_window_armed_inside_the_lead_loses_its_head)
 {
@@ -1928,12 +1929,13 @@ ZTEST(fake_radio, test_a_cc26xx_window_armed_inside_the_lead_loses_its_head)
 
 	rx.t_open = now + 300u;
 	memcpy(frame2, test_frame, test_frame_len);
-	/* One frame in the lost head, one after the late start. */
+	/* One frame in the lost head (listening starts at now + 150 + 150 +
+	 * 48 = 348), one after the late start. */
 	zassert_equal(RADIANT_RADIO_OK_RC,
-		      fake_radio_air_frame(now + 310u, test_frame,
+		      fake_radio_air_frame(now + 340u, test_frame,
 					   test_frame_len));
 	zassert_equal(RADIANT_RADIO_OK_RC,
-		      fake_radio_air_frame(now + lead + 10u, frame2,
+		      fake_radio_air_frame(now + 348u, frame2,
 					   test_frame_len));
 	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_rx(&rx, &op));
 	zassert_equal(1u, fake_radio_stats()->arms_inside_lead);
@@ -1941,7 +1943,7 @@ ZTEST(fake_radio, test_a_cc26xx_window_armed_inside_the_lead_loses_its_head)
 	fake_radio_advance_past_close(rx.t_close);
 	zassert_equal(2u, n_rxr);
 	zassert_equal(RADIANT_RADIO_STATUS_OK, rxr[0].status);
-	zassert_equal(now + lead + 10u, rxr[0].t_sync);
+	zassert_equal(now + 348u, rxr[0].t_sync);
 	zassert_equal(RADIANT_RADIO_STATUS_TIMEOUT, rxr[1].status);
 	zassert_equal(1u, fake_radio_stats()->air_delivered);
 	zassert_equal(1u, fake_radio_stats()->air_missed);
@@ -2122,4 +2124,59 @@ ZTEST(fake_radio, test_an_unasked_arm_inside_the_lead_is_a_violation)
 	zassert_equal(1u, fake_radio_viol_count());
 	zassert_equal(FAKE_RADIO_VIOL_INSIDE_LEAD, fake_radio_viol(0)->code);
 	(void)radiant_radio_abort();
+}
+
+/* The CC26x2's tuned channel is credited only once an operation ran on it
+ * (the backend's tuned_rf_resolve()): an arm on rf 26 aborted before its
+ * start leaves the synthesiser where it was, so the next arm on 26 still owes
+ * the retune floor; once one has run, it does not. A window armed late
+ * enough for its ramp and preamble is on time even inside the lead. */
+ZTEST(fake_radio, test_a_cc26xx_retune_is_credited_only_once_it_ran)
+{
+	struct radiant_rx_req rx;
+	struct radiant_rx_filter one = filt_track;
+	uint32_t op = 0u;
+	radiant_time_t now;
+
+	fake_radio_caps_preset_cc26xx(false);
+	fake_radio_allow_inside_lead(true);
+	up();
+	zassert_equal(400u, fake_radio_arm_floor_us(FAKE_RADIO_ARM_RX,
+						    &fmt_hal_len_from_body, 5u,
+						    26u));
+	now = radiant_radio_now();
+	memset(&rx, 0, sizeof(rx));
+	rx.fmt = &fmt_hal_len_from_body;
+	rx.rf_index = 26u;
+	rx.filters = &one;
+	rx.n_filters = 1u;
+	rx.t_open = now + 5000u;
+	rx.t_close = now + 6000u;
+	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_rx(&rx, &op));
+	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_abort());
+	zassert_equal(400u, fake_radio_arm_floor_us(FAKE_RADIO_ARM_RX,
+						    &fmt_hal_len_from_body, 5u,
+						    26u),
+		      "an operation that never ran retuned the synthesiser");
+
+	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_rx(&rx, &op));
+	fake_radio_advance_past_close(rx.t_close);
+	zassert_equal(150u, fake_radio_arm_floor_us(FAKE_RADIO_ARM_RX,
+						    &fmt_hal_len_from_body, 5u,
+						    26u));
+
+	/* Inside the lead but late enough: listening starts at t_open. */
+	n_rxr = 0u;
+	now = radiant_radio_now();
+	rx.t_open = now + 150u + 150u + 48u;
+	rx.t_close = rx.t_open + 1000u;
+	zassert_equal(RADIANT_RADIO_OK_RC,
+		      fake_radio_air_frame(rx.t_open, test_frame, test_frame_len));
+	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_rx(&rx, &op));
+	zassert_true(fake_radio_last_arm()->inside_lead);
+	fake_radio_advance_past_close(rx.t_close);
+	zassert_equal(2u, n_rxr);
+	zassert_equal(RADIANT_RADIO_STATUS_OK, rxr[0].status);
+	zassert_equal(rx.t_open, rxr[0].t_sync);
+	expect_clean();
 }
