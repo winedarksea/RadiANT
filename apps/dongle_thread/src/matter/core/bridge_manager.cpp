@@ -6,6 +6,8 @@
 
 #include "bridge_manager.h"
 #include "bridge_storage_manager.h"
+/* RadiANT: the endpoint high-water mark (security review 2026-11-20 item B). */
+#include "bridge_storage_codec.h"
 
 #include "binding/binding_handler.h"
 
@@ -18,6 +20,15 @@
 #include <zephyr/logging/log.h>
 
 LOG_MODULE_DECLARE(app, CONFIG_CHIP_APP_LOG_LEVEL);
+
+namespace
+{
+/* RadiANT: the endpoint high-water mark as last written (0: nothing stored),
+ * so an allocation the stored mark already covers costs no settings write.
+ * BridgeManager is a singleton, so this lives here rather than in the
+ * vendored header. */
+uint16_t sPersistedEndpointHighWater;
+} /* namespace */
 
 using namespace ::chip;
 using namespace ::chip::app;
@@ -53,8 +64,31 @@ CHIP_ERROR BridgeManager::Init(LoadStoredBridgedDevicesCallback loadStoredBridge
 
 	Nrf::Matter::BindingHandler::Init();
 
+	/* RadiANT: seed the counter from the persisted high-water mark, so an id
+	 * whose device is gone (unbound, or its record did not restore) is never
+	 * handed to a different device after a reboot. Matter forbids that reuse.
+	 * The restore below still raises the counter past every restored id, so a
+	 * store written before the key existed behaves as upstream. */
+	uint16_t storedNext = 0;
+	const bool haveStored = Nrf::BridgeStorageManager::Instance().LoadEndpointHighWater(storedNext);
+	const uint16_t seeded = RadiantMatter::EndpointHighWater::Seed(mFirstDynamicEndpointId, haveStored, storedNext);
+	mCurrentDynamicEndpointId = seeded;
+	sPersistedEndpointHighWater = haveStored ? storedNext : 0;
+
 	/* Invoke the callback to load stored devices in a proper moment. */
 	CHIP_ERROR err = loadStoredBridgedDevicesCb();
+
+	/* RadiANT: a restored id at or above the stored mark (first boot after an
+	 * upgrade, or a lost write) raised the counter: persist it now, before the
+	 * device can be unbound and its id forgotten. An unchanged boot writes
+	 * nothing. */
+	if (mCurrentDynamicEndpointId != seeded) {
+		if (Nrf::BridgeStorageManager::Instance().StoreEndpointHighWater(mCurrentDynamicEndpointId)) {
+			sPersistedEndpointHighWater = mCurrentDynamicEndpointId;
+		} else {
+			LOG_ERR("Endpoint high-water mark %u not persisted", mCurrentDynamicEndpointId);
+		}
+	}
 
 	if (err == CHIP_NO_ERROR) {
 		mIsInitialized = true;
@@ -243,8 +277,10 @@ CHIP_ERROR BridgeManager::AddSingleDevice(MatterBridgedDevice *device, BridgedDe
 
 			/* Make sure that the following endpoint id assignments will be monotonically continued from the
 			 * biggest assigned number. */
+			/* RadiANT: upstream's expression, moved to EndpointHighWater::Raise(). */
 			mCurrentDynamicEndpointId =
-				mCurrentDynamicEndpointId > endpointId ? mCurrentDynamicEndpointId : endpointId + 1;
+				RadiantMatter::EndpointHighWater::Raise(mCurrentDynamicEndpointId, endpointId,
+									mFirstDynamicEndpointId);
 		} else {
 			/* The pair was added to a map, so we have to take care about removing it in case of failure. */
 			if (err == CHIP_ERROR_NO_MEMORY) {
@@ -261,7 +297,27 @@ CHIP_ERROR BridgeManager::AddSingleDevice(MatterBridgedDevice *device, BridgedDe
 				if (mDevicesMap.Insert(index, std::move(pair))) {
 					/* Assign the free endpoint ID. */
 					do {
-						err = CreateEndpoint(index, mCurrentDynamicEndpointId);
+						/* RadiANT: cover the id with the stored mark BEFORE
+						 * CreateEndpoint() makes it visible to a controller
+						 * (EndpointHighWater::NeedsMark). If the mark cannot
+						 * be written the endpoint is not created at all. */
+						const uint16_t endpointId = mCurrentDynamicEndpointId;
+						const uint16_t nextEndpointId = RadiantMatter::EndpointHighWater::Advance(
+							endpointId, mFirstDynamicEndpointId);
+
+						if (RadiantMatter::EndpointHighWater::NeedsMark(endpointId, nextEndpointId,
+												sPersistedEndpointHighWater)) {
+							if (!Nrf::BridgeStorageManager::Instance().StoreEndpointHighWater(
+								    nextEndpointId)) {
+								LOG_ERR("Endpoint high-water mark %u not persisted: endpoint %u not created",
+									nextEndpointId, endpointId);
+								mDevicesMap.Erase(index);
+								return CHIP_ERROR_PERSISTED_STORAGE_FAILED;
+							}
+							sPersistedEndpointHighWater = nextEndpointId;
+						}
+
+						err = CreateEndpoint(index, endpointId);
 
 						if (err != CHIP_NO_ERROR) {
 							if (err == CHIP_ERROR_NO_MEMORY) {
@@ -272,10 +328,9 @@ CHIP_ERROR BridgeManager::AddSingleDevice(MatterBridgedDevice *device, BridgedDe
 							mDevicesMap.Erase(index);
 						}
 
-						/* Handle wrap condition */
-						if (++mCurrentDynamicEndpointId < mFirstDynamicEndpointId) {
-							mCurrentDynamicEndpointId = mFirstDynamicEndpointId;
-						}
+						/* Handle wrap condition (RadiANT: upstream's, in
+						 * EndpointHighWater::Advance(), computed above) */
+						mCurrentDynamicEndpointId = nextEndpointId;
 					} while (err == CHIP_ERROR_SENTINEL);
 
 					if (err == CHIP_NO_ERROR) {

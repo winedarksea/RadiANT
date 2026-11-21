@@ -29,6 +29,8 @@ namespace Nrf
  *			.
  *			/n/ /<BridgedDevice>/
  *		/ver/ <uint8_t>
+ *		/brd_ep_hw/ <uint16_t>   (RadiANT: the next dynamic endpoint id, see
+ *		                         bridge_storage_codec.h EndpointHighWater)
  */
 class BridgeStorageManager {
 public:
@@ -39,6 +41,9 @@ public:
 	constexpr static auto kBridgedDevicesIndexesPrefix = "brd_ids";
 	constexpr static auto kBridgedDevicePrefix = "brd";
 	constexpr static auto kVersionPrefix = "ver";
+	/* RadiANT: security review 2026-11-20 item B. "br/brd_ep_hw" is 12 of the
+	 * 18 bytes CONFIG_NCS_SAMPLE_MATTER_STORAGE_MAX_KEY_LEN allows. */
+	constexpr static auto kEndpointHighWaterPrefix = "brd_ep_hw";
 
 #ifdef CONFIG_BRIDGE_MIGRATE_PRE_2_7_0
 	constexpr static auto kBridgedDeviceEndpointIdPrefix = "eid";
@@ -82,7 +87,8 @@ public:
 		  mBridgedDevicesCount(kBridgedDevicesCountPrefix, strlen(kBridgedDevicesCountPrefix), &mBridge),
 		  mBridgedDevicesIndexes(kBridgedDevicesIndexesPrefix, strlen(kBridgedDevicesIndexesPrefix), &mBridge),
 		  mBridgedDevice(kBridgedDevicePrefix, strlen(kBridgedDevicePrefix), &mBridge),
-		  mVersion(kVersionPrefix, strlen(kVersionPrefix), &mBridge)
+		  mVersion(kVersionPrefix, strlen(kVersionPrefix), &mBridge),
+		  mEndpointHighWater(kEndpointHighWaterPrefix, strlen(kEndpointHighWaterPrefix), &mBridge)
 #ifdef CONFIG_BRIDGE_MIGRATE_PRE_2_7_0
 		  ,
 		  mBridgedDeviceEndpointId(kBridgedDeviceEndpointIdPrefix, strlen(kBridgedDeviceEndpointIdPrefix),
@@ -190,6 +196,27 @@ public:
 	 * @return false an error occurred
 	 */
 	bool RemoveBridgedDevice(uint8_t bridgedDeviceIndex);
+
+	/**
+	 * @brief RadiANT: store the next dynamic endpoint id BridgeManager will hand out
+	 *
+	 * Security review 2026-11-20 item B: persisted so that a reboot never hands out
+	 * an id a removed or unrestorable device once had (Matter forbids the reuse).
+	 *
+	 * @param next one past the highest endpoint id ever assigned
+	 * @return true if key has been written successfully
+	 * @return false an error occurred
+	 */
+	bool StoreEndpointHighWater(uint16_t next);
+
+	/**
+	 * @brief RadiANT: load the value StoreEndpointHighWater() wrote
+	 *
+	 * @param next filled in on success only
+	 * @return true if the key is present and holds a valid value
+	 * @return false absent (a store from before the key) or malformed
+	 */
+	bool LoadEndpointHighWater(uint16_t &next);
 
 private:
 	/**
@@ -322,6 +349,7 @@ private:
 	Nrf::PersistentStorageNode mBridgedDevicesIndexes;
 	Nrf::PersistentStorageNode mBridgedDevice;
 	Nrf::PersistentStorageNode mVersion;
+	Nrf::PersistentStorageNode mEndpointHighWater; /* RadiANT */
 
 #ifdef CONFIG_BRIDGE_MIGRATE_PRE_2_7_0
 	/* The below fields are deprecated and used only for the migration purposes between the older scheme versions.

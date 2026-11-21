@@ -24,6 +24,7 @@
 #include "bridge_storage_codec.h"
 
 using namespace RadiantMatter::StorageCodec;
+using namespace RadiantMatter;
 
 namespace
 {
@@ -514,6 +515,285 @@ ZTEST(matter_storage, test_v1_label_bounds)
 		w.Fill('l', 9);
 		zassert_false(DecodeBridgedDeviceV1(w.buf, w.n, r));
 	}
+}
+
+/* ---------------------------------------------------------------------------
+ * The endpoint high-water mark (security review 2026-11-20 item B).
+ *
+ * Bridge mirrors what BridgeManager and RestoreBridgedDevices() do with the
+ * EndpointHighWater functions - Init's seed, the restore raise, the fresh
+ * allocation and its store - over a fake key-value store, so a "reboot" is
+ * Boot() again with the persisted state kept. The CHIP side does not build on
+ * native_sim; the arithmetic it calls is what is under test here.
+ * ------------------------------------------------------------------------- */
+
+namespace
+{
+
+/* Fixed endpoints 0 (root), 1 (aggregator), 2 (placeholder). */
+constexpr uint16_t kFirstDynamic = 3;
+
+struct Bridge {
+	/* Persisted. */
+	bool hwPresent = false;
+	uint8_t hw[EndpointHighWater::kSize + 1] = { 0 };
+	size_t hwLen = 0;
+	struct {
+		uint16_t ep;
+		bool present;
+		bool restorable;
+	} recs[8] = {};
+	size_t nRecs = 0;
+	unsigned hwWrites = 0;
+
+	/* Runtime. */
+	uint16_t current = 0;
+	uint16_t persisted = 0; /* sPersistedEndpointHighWater */
+	unsigned live = 0;      /* endpoints a controller could see */
+
+	void StoreHw(uint16_t next)
+	{
+		persisted = next;
+		uint8_t b[EndpointHighWater::kSize];
+
+		EndpointHighWater::Encode(next, b);
+		memcpy(hw, b, sizeof(b));
+		hwLen = sizeof(b);
+		hwPresent = true;
+		hwWrites++;
+	}
+
+	/* BridgeManager::Init(): seed, restore, persist a raised counter. */
+	void Boot()
+	{
+		uint16_t stored = 0;
+		const bool have = hwPresent && EndpointHighWater::Decode(hw, hwLen, stored);
+		const uint16_t seeded = EndpointHighWater::Seed(kFirstDynamic, have, stored);
+
+		current = seeded;
+		persisted = have ? stored : 0;
+		for (size_t i = 0; i < nRecs; i++) {
+			if (recs[i].present && recs[i].restorable) {
+				current = EndpointHighWater::Raise(current, recs[i].ep, kFirstDynamic);
+			}
+		}
+		if (current != seeded) {
+			StoreHw(current);
+		}
+	}
+
+	/* AddSingleDevice() with no index: mark the id if the stored mark does
+	 * not cover it, then CreateEndpoint() makes it live, then (in
+	 * ant_bridge.cpp) the record is stored, unless power fails first. */
+	uint16_t Bind(bool recordStored = true)
+	{
+		const uint16_t id = current;
+		const uint16_t next = EndpointHighWater::Advance(id, kFirstDynamic);
+
+		if (EndpointHighWater::NeedsMark(id, next, persisted)) {
+			StoreHw(next);
+		}
+		live++;
+		current = next;
+		if (!recordStored) {
+			return id;
+		}
+		zassert_true(nRecs < ARRAY_SIZE(recs));
+		recs[nRecs].ep = id;
+		recs[nRecs].present = true;
+		recs[nRecs].restorable = true;
+		nRecs++;
+		return id;
+	}
+
+	void Unbind(uint16_t ep)
+	{
+		for (size_t i = 0; i < nRecs; i++) {
+			if (recs[i].ep == ep) {
+				recs[i].present = false;
+			}
+		}
+	}
+
+	/* A record that will not restore: corrupt, no heap, unserved type. */
+	void Spoil(uint16_t ep)
+	{
+		for (size_t i = 0; i < nRecs; i++) {
+			if (recs[i].ep == ep) {
+				recs[i].restorable = false;
+			}
+		}
+	}
+
+	/* A store from a build before the key: records only. */
+	void AddLegacyRecord(uint16_t ep)
+	{
+		zassert_true(nRecs < ARRAY_SIZE(recs));
+		recs[nRecs].ep = ep;
+		recs[nRecs].present = true;
+		recs[nRecs].restorable = true;
+		nRecs++;
+	}
+};
+
+} /* namespace */
+
+ZTEST(matter_storage, test_endpoint_hw_round_trip)
+{
+	static const uint16_t values[] = { kFirstDynamic, 4, 0x0100, 0x7FFF, 0xFFFE };
+
+	for (size_t i = 0; i < ARRAY_SIZE(values); i++) {
+		uint8_t b[EndpointHighWater::kSize];
+		uint16_t out = 0;
+
+		EndpointHighWater::Encode(values[i], b);
+		zassert_true(EndpointHighWater::Decode(b, sizeof(b), out), "value %u", values[i]);
+		zassert_equal(out, values[i]);
+	}
+}
+
+ZTEST(matter_storage, test_endpoint_hw_decode_rejects_bad_values)
+{
+	uint8_t b[EndpointHighWater::kSize + 1] = { 9, 0, 0 };
+	uint8_t invalid[EndpointHighWater::kSize];
+	uint16_t out = 1234;
+
+	zassert_false(EndpointHighWater::Decode(nullptr, EndpointHighWater::kSize, out));
+	zassert_false(EndpointHighWater::Decode(b, 0, out));
+	zassert_false(EndpointHighWater::Decode(b, EndpointHighWater::kSize - 1, out));
+	zassert_false(EndpointHighWater::Decode(b, EndpointHighWater::kSize + 1, out));
+	EndpointHighWater::Encode(EndpointHighWater::kInvalid, invalid);
+	zassert_false(EndpointHighWater::Decode(invalid, sizeof(invalid), out));
+	zassert_equal(out, 1234, "a refused value was written out");
+}
+
+ZTEST(matter_storage, test_endpoint_hw_seed)
+{
+	zassert_equal(EndpointHighWater::Seed(kFirstDynamic, false, 40), kFirstDynamic);
+	zassert_equal(EndpointHighWater::Seed(kFirstDynamic, true, 1), kFirstDynamic);
+	zassert_equal(EndpointHighWater::Seed(kFirstDynamic, true, kFirstDynamic), kFirstDynamic);
+	zassert_equal(EndpointHighWater::Seed(kFirstDynamic, true, 40), 40);
+}
+
+ZTEST(matter_storage, test_endpoint_hw_advance_keeps_the_wrap_guard)
+{
+	zassert_equal(EndpointHighWater::Advance(kFirstDynamic, kFirstDynamic), kFirstDynamic + 1);
+	zassert_equal(EndpointHighWater::Advance(0xFFFF, kFirstDynamic), kFirstDynamic);
+	zassert_equal(EndpointHighWater::Raise(10, 4, kFirstDynamic), 10);
+	zassert_equal(EndpointHighWater::Raise(4, 10, kFirstDynamic), 11);
+}
+
+/* 0xFFFF is chip::kInvalidEndpointId: never tried, never stored. Upstream's
+ * guard only caught the wrap to 0, so 0xFFFE advanced (or a restored 0xFFFE
+ * raised) to 0xFFFF - CreateEndpoint() then failed, and the stored 0xFFFF
+ * was refused at the next boot, which fell back to reuse. */
+ZTEST(matter_storage, test_endpoint_hw_never_yields_the_invalid_id)
+{
+	zassert_equal(EndpointHighWater::Advance(0xFFFE, kFirstDynamic), kFirstDynamic);
+	zassert_equal(EndpointHighWater::Advance(0xFFFD, kFirstDynamic), 0xFFFE);
+	zassert_equal(EndpointHighWater::Raise(10, 0xFFFE, kFirstDynamic), kFirstDynamic);
+	zassert_equal(EndpointHighWater::Raise(kFirstDynamic, 0xFFFD, kFirstDynamic), 0xFFFE);
+}
+
+ZTEST(matter_storage, test_endpoint_hw_needs_mark)
+{
+	zassert_true(EndpointHighWater::NeedsMark(3, 4, 0), "nothing stored yet");
+	zassert_true(EndpointHighWater::NeedsMark(3, 4, 3), "mark 3 does not cover id 3");
+	zassert_false(EndpointHighWater::NeedsMark(3, 4, 4), "mark 4 covers id 3");
+	zassert_false(EndpointHighWater::NeedsMark(5, 6, 9), "a covered id cost a write");
+	zassert_false(EndpointHighWater::NeedsMark(0xFFFE, kFirstDynamic, 0xFFFE), "the wrap lowered the mark");
+}
+
+/* Power lost after CreateEndpoint() exposed the id and before its record was
+ * stored: the mark was written first, so the id is not handed out again. */
+ZTEST(matter_storage, test_endpoint_hw_power_loss_before_the_record_does_not_reuse)
+{
+	Bridge br;
+
+	br.Boot();
+	zassert_equal(br.Bind(), 3);
+	zassert_equal(br.Bind(false), 4);
+	br.Boot();
+	zassert_equal(br.Bind(), 5, "endpoint 4 was exposed, lost, and reused");
+	zassert_equal(br.hwWrites, 3, "one write per new id, and only one");
+}
+
+/* No key at all: exactly upstream's max(restored) + 1. */
+ZTEST(matter_storage, test_endpoint_hw_missing_key_falls_back_to_max_restored_plus_one)
+{
+	Bridge br;
+
+	br.AddLegacyRecord(3);
+	br.AddLegacyRecord(7);
+	br.AddLegacyRecord(5);
+	br.Boot();
+	zassert_equal(br.current, 8);
+
+	Bridge empty;
+
+	empty.Boot();
+	zassert_equal(empty.current, kFirstDynamic);
+	zassert_equal(empty.hwWrites, 0, "an empty bridge wrote the key at boot");
+}
+
+/* The plain case: unbind the newest sensor, reboot, bind another. */
+ZTEST(matter_storage, test_endpoint_hw_removed_top_endpoint_not_reused_after_reboot)
+{
+	Bridge br;
+
+	br.Boot();
+	zassert_equal(br.Bind(), 3);
+	zassert_equal(br.Bind(), 4);
+	zassert_equal(br.Bind(), 5);
+	br.Unbind(5);
+	br.Boot();
+	zassert_equal(br.Bind(), 6, "endpoint 5 was reused for a different device");
+}
+
+/* The top record does not restore (corrupt, heap, unserved type). */
+ZTEST(matter_storage, test_endpoint_hw_skipped_top_record_not_reused_after_reboot)
+{
+	Bridge br;
+
+	br.Boot();
+	br.Bind();
+	br.Bind();
+	const uint16_t top = br.Bind();
+
+	br.Spoil(top);
+	br.Boot();
+	zassert_equal(br.Bind(), top + 1, "endpoint %u was reused for a different device", top);
+
+	/* Every record gone, two reboots: still past everything ever used. */
+	br.Unbind(3);
+	br.Unbind(4);
+	br.Unbind(top + 1);
+	br.Boot();
+	br.Boot();
+	zassert_equal(br.Bind(), top + 2);
+}
+
+/* A store from before the key: the first boot persists what it restored, so
+ * unbinding the top device before any new bind cannot reuse it either. */
+ZTEST(matter_storage, test_endpoint_hw_upgraded_store_persists_restored_high_water)
+{
+	Bridge br;
+
+	br.AddLegacyRecord(3);
+	br.AddLegacyRecord(4);
+	br.AddLegacyRecord(5);
+	br.Boot();
+	zassert_equal(br.current, 6);
+	zassert_true(br.hwPresent, "the restored high-water mark was not persisted");
+	br.Unbind(5);
+	br.Boot();
+	zassert_equal(br.Bind(), 6, "endpoint 5 was reused after an upgrade");
+
+	/* And a boot that changes nothing writes nothing. */
+	const unsigned writes = br.hwWrites;
+
+	br.Boot();
+	zassert_equal(br.hwWrites, writes, "an unchanged boot rewrote the key");
 }
 
 /* ---- lengths near SIZE_MAX: `counter + length` wraps ------------------- */

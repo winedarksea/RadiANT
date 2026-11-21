@@ -194,8 +194,10 @@ min_scenarios: 25
 # scenario (bridge_trace and bridge_trace_sec, 8 cases each).
 # 2026-11-20: 6592 (+30), the review's follow-ups to item D: +6 per unit
 # scenario (failed-checksum wipe, 0x7F RNG seed, 0x7F crypto id, in each suite).
-# Merged (items 4, C, D on one tree): 6482 + 25 + 9 + 110 = 6626.
-min_testcases: 6626
+# Merged (items 4, C, D, B on one tree): 6482 + 25 + 9 + 110 + 11 = 6637.
+# 2026-11-20: 6493 (+11), the Matter endpoint high-water mark (security review
+# 2026-11-20 item B, fix/matter-endpoint-hw): +11 in dongle_thread.matter_storage.
+min_testcases: 6637
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -315,4 +317,6 @@ min_cases.radiant.backend_cc26xx.coex: 56
 # dongle_thread.matter_storage (security review 2026-11-20 item 2): the Matter
 # bridge's stored-record decoder - destination and record bounds on each
 # length-prefixed string, the SIZE_MAX wrap, upstream's user-data bounds.
-min_cases.dongle_thread.matter_storage: 26
+# 37 (+11, item B): the endpoint high-water mark - codec round trip and
+# refusals, seed, wrap guard, and bind/unbind/reboot sequences.
+min_cases.dongle_thread.matter_storage: 37

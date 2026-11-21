@@ -105,3 +105,14 @@ static_assert(sizeof(Nrf::BridgeStorageManager::BridgedDeviceV2::mNodeLabel) == 
 #include "bridge_storage_codec.h"
 
 RADIANT_MATTER_ASSERT_RECORD_V2_SHAPE(Nrf::BridgeStorageManager::BridgedDeviceV2);
+
+/* ---------------------------------------------------------------------------
+ * Security review 2026-11-20 item B: the endpoint high-water mark.
+ * ------------------------------------------------------------------------- */
+
+/* bridge_storage_codec.h states these two without CHIP headers so the
+ * native_sim suite can use them; here they are held to CHIP's own. */
+static_assert(RadiantMatter::EndpointHighWater::kSize == sizeof(chip::EndpointId),
+	      "EndpointHighWater::kSize no longer matches chip::EndpointId");
+static_assert(RadiantMatter::EndpointHighWater::kInvalid == chip::kInvalidEndpointId,
+	      "EndpointHighWater::kInvalid no longer matches chip::kInvalidEndpointId");
