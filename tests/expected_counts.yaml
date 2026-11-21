@@ -179,7 +179,11 @@ min_scenarios: 25
 # 100 behind gets an authenticated 0x02).
 # 2026-11-20: 6482 (+26), the dongle_thread.matter_storage scenario (security
 # review 2026-11-20 item 2, fix/matter-storage-bounds).
-min_testcases: 6482
+# 2026-11-20: 6491 (+9), a real 0xF2 rekey takes back the staged slot and ack
+# payload (security review 2026-11-20 item C, fix/sec-rekey-staged): +1 per
+# unit scenario (test_sec.c: only a real rekey cues the port) and +4 in
+# radiant.api.sec_host (test_api_sec.c: the take-back and three guards).
+min_testcases: 6491
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -201,13 +205,15 @@ min_testcases: 6482
 # 2026-11-20: +1 per unit scenario (sched: the ETIME retry plans from a fresh now).
 # 2026-11-20: +5 per unit scenario (command: the extended sequence, review item 3).
 # 2026-11-20: +3 per unit scenario (command: the 1..127 window's three cases).
-min_cases.radiant.unit: 1083
-min_cases.radiant.unit.sec_modes: 1083
-min_cases.radiant.unit.no_pairing: 1023
+# 2026-11-20: +1 per unit scenario (radiant_sec: only a real rekey cues the port).
+min_cases.radiant.unit: 1084
+min_cases.radiant.unit.sec_modes: 1084
+min_cases.radiant.unit.no_pairing: 1024
 min_cases.radiant.api: 86
 min_cases.radiant.api.sec: 90
 # +1 with the identical-0xF1 retry case (review 2026-11-17 item 4).
-min_cases.radiant.api.sec_host: 105
+# +4 with the 0xF2 rekey take-back and its three guards (review 2026-11-20 item C).
+min_cases.radiant.api.sec_host: 109
 # radiant.api.crc_repair: 112, the observed count on fix/crc-repair-deliver
 # (2026-11-18), including the two delivery cases.
 min_cases.radiant.api.crc_repair: 112
@@ -235,7 +241,8 @@ min_cases.treadmill.hr_rx: 3
 # 2026-11-20: +1 (the ETIME retry re-read, as radiant.unit).
 # 2026-11-20: +5 (command: the extended sequence, as radiant.unit).
 # 2026-11-20: +3 (command: the 1..127 window, as radiant.unit).
-min_cases.radiant.unit.ack_faults: 1090
+# 2026-11-20: +1 (radiant_sec: only a real rekey cues the port, as radiant.unit).
+min_cases.radiant.unit.ack_faults: 1091
 # radiant.unit.diag: the unit suites with CONFIG_RADIANT_DIAG_COUNTERS.
 # 1127 (2026-11-16, Bluefin twister on fix/diag-page9-done-cb): the observed
 # count, including the four page-9/page-12 scheduler cases.
@@ -243,7 +250,8 @@ min_cases.radiant.unit.ack_faults: 1090
 # 2026-11-20: +1 (the ETIME retry re-read, as radiant.unit).
 # 2026-11-20: +5 (command: the extended sequence, as radiant.unit).
 # 2026-11-20: +3 (command: the 1..127 window, as radiant.unit).
-min_cases.radiant.unit.diag: 1161
+# 2026-11-20: +1 (radiant_sec: only a real rekey cues the port, as radiant.unit).
+min_cases.radiant.unit.diag: 1162
 min_cases.trainer.model: 14
 # radiant.lp_clock (power plan pass B2): the low-power timebase arithmetic,
 # 31 unit cases and seven 100 000-cycle drift simulations (three of them

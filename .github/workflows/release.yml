@@ -2247,7 +2247,22 @@ jobs:
           # will need the ceiling moved.
           # 7664 / 6975 on the merged items 1-3 of review 2026-11-17 (1a9dbba,
           # this recipe, NCS v3.4.0): item 1 adds nothing here. Unchanged.
-          check "security text" "$(( on_text - off_text ))" 7680
+          # TEXT CEILING 7680 -> 7856 FOR A SECURITY FIX (review 2026-11-20
+          # item C: a real 0xF2 rekey left the master's staged slot and ack
+          # payload, old-key ciphertext, to go out after the host was told
+          # the new key was in; owner OK'd raising the ceiling 2026-11-17).
+          # Measured with this recipe at NCS v3.4.0: 7680 / 6975 at 0d50db8
+          # (0 B left), 7824 / 6975 after (+144 / +0):
+          #     76  api_sec_take_back          the 0xF1 take-back, now one
+          #                                    noinline copy for 0xF1 and 0xF2
+          #     48  antr_sec_key_replace       the 0xF2 wrapper (arm, pump)
+          #     44  radiant_sec_key_replacing  the antr hook's checks
+          #      8  radiant_sec_set_key        the hook call
+          #    -32  radiant_sec_policy_changing (its body moved out)
+          # All cold host-command code; no per-packet path changes. Raised by
+          # the measured value plus a 32 B margin, not to the next multiple
+          # of 512 (8192), so the next growth is still caught.
+          check "security text" "$(( on_text - off_text ))" 7856
           check "security bss"  "$(( on_bss  - off_bss  ))" 7168
 
           # X25519 and the pairing logic, on top of the above and under their
