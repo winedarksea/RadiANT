@@ -633,7 +633,7 @@ ZTEST(handoff, test_a_handoff_lands_in_the_same_channel_state_a_sweep_does)
 	end_of_test();
 }
 
-ZTEST(handoff, test_a_handoff_acquires_faster_than_a_sweep_on_the_same_rig)
+static void handoff_gate(bool long_match)
 {
 	struct profile_handoff h;
 	struct profile_handoff received;
@@ -649,9 +649,11 @@ ZTEST(handoff, test_a_handoff_acquires_faster_than_a_sweep_on_the_same_rig)
 	uint32_t arms_after_handoff;
 	uint32_t windows_handed;
 
-	/* The address-set sweep (no ADR 0022 wildcard), the slower of the two
-	 * search shapes, which is what this gate measures the handoff against. */
-	fake_radio_caps_preset_nrf_long_match();
+	/* long_match: the address-set sweep (no ADR 0022 wildcard), the
+	 * slower search shape; otherwise the shipping one-window sweep. */
+	if (long_match) {
+		fake_radio_caps_preset_nrf_long_match();
+	}
 	bring_up();
 
 	/* Both halves answer "how long from wanting this node to hearing it"
@@ -695,7 +697,10 @@ ZTEST(handoff, test_a_handoff_acquires_faster_than_a_sweep_on_the_same_rig)
 	 * microsecond passed between asking and tracking. */
 	zassert_equal(0u, windows_handed);
 	zassert_equal(t_carrier, radiant_radio_now());
-	zassert_true(windows_swept > 1u);
+	/* The address-set sweep walks sets; the wildcard one needs a single
+	 * window, and the handoff must beat even that. */
+	zassert_true(windows_swept >= (long_match ? 2u : 1u), "%u windows",
+		     windows_swept);
 
 	/* The gate itself. */
 	zassert_true(handoff_us < sweep_us,
@@ -706,6 +711,20 @@ ZTEST(handoff, test_a_handoff_acquires_faster_than_a_sweep_on_the_same_rig)
 		     (uint32_t)handoff_us);
 
 	end_of_test();
+}
+
+ZTEST(handoff, test_a_handoff_acquires_faster_than_a_sweep_on_the_same_rig)
+{
+	handoff_gate(true);
+}
+
+/* The same gate against the shipping short-match sweep (ADR 0022, one
+ * wild_last window): the handoff still lands sooner (backend drift item 7
+ * review). */
+ZTEST(handoff, test_a_handoff_beats_a_one_window_short_match_sweep)
+{
+	zassert_true(radiant_radio_caps_get()->filter_wildcard_dev);
+	handoff_gate(false);
 }
 
 ZTEST(handoff, test_only_a_tracking_channel_may_be_handed_over)

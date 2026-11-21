@@ -1456,6 +1456,12 @@ static const struct fake_radio_arm *armed_search_window(void)
 	zassert_not_null(w, "no search window was armed at all");
 	zassert_false(w->terminated,
 		      "the window found had already run - the sweep stopped");
+	if (radiant_radio_caps_get()->filter_wildcard_dev) {
+		/* Short match (the *_short_match twins): one wild_last filter. */
+		zassert_equal(1u, w->n_filters, "short match arms one filter");
+		zassert_true(w->filters[0].wild_last);
+		return w;
+	}
 	zassert_true(w->n_filters >= 2u,
 		     "the nRF caps preset gives eight filters per window; got %u",
 		     w->n_filters);
@@ -1468,7 +1474,13 @@ static void air_device(const struct fake_radio_arm *w, uint8_t filter_index,
 {
 	uint8_t frame[FAKE_RADIO_AIR_FRAME_MAX];
 	uint8_t len;
-	uint16_t number = (uint16_t)(number_hi | w->filters[filter_index].addr[2]);
+	/* A wild_last window hears any devnum_lo: give each filter_index its
+	 * own (0x00, 0x37, ...), so 0x0500/0x0600 devices stay distinct and a
+	 * named 0xCC00 still matches. */
+	uint16_t number = (uint16_t)(number_hi |
+				     (w->filters[0].wild_last
+					      ? (uint8_t)(filter_index * 0x37u)
+					      : w->filters[filter_index].addr[2]));
 
 	len = fake_radio_build_ant_frame(frame, number, dev_type, 5u, peer_payload);
 	zassert_equal(RADIANT_RADIO_OK_RC,
@@ -1806,15 +1818,13 @@ ZTEST(api, test_bidir_the_scan_keeps_finding_devices_while_another_channel_track
  * position when channel 2 opens, so passing inside the 2 s budget can only
  * be the steer, not the cursor arriving naturally.
  */
-ZTEST(api, test_a_named_device_is_steered_to_rather_than_waited_for)
+static void test_a_named_device_is_steered_to_rather_than_waited_for_run(void)
 {
 	const struct fake_radio_arm *w;
 	uint16_t                     dev_a;
 	uint16_t                     dev_b;
 	uint8_t                      lo_now;
 	radiant_time_t               t_acq;
-
-	api_long_match();
 
 	open_background_scan_channel();
 
@@ -1895,6 +1905,20 @@ ZTEST(api, test_a_named_device_is_steered_to_rather_than_waited_for)
 			     "contract violation: %s",
 			     fake_radio_viol_name(code));
 	}
+}
+
+ZTEST(api, test_a_named_device_is_steered_to_rather_than_waited_for)
+{
+	api_long_match();
+	test_a_named_device_is_steered_to_rather_than_waited_for_run();
+}
+
+/* The shipping short match (ADR 0022): the same scenario through one
+ * wild_last search window (backend drift item 7 review). */
+ZTEST(api, test_a_named_device_is_steered_to_rather_than_waited_for_short_match)
+{
+	zassert_true(radiant_radio_caps_get()->filter_wildcard_dev);
+	test_a_named_device_is_steered_to_rather_than_waited_for_run();
 }
 
 /*
@@ -2856,11 +2880,9 @@ ZTEST(api, test_the_sweep_stays_on_the_ant_plus_address_when_both_networks_are_k
  * Release review 1b. A slave on another frequency used to search on 57 and
  * could never acquire a master on its own. The sweep follows its searchers.
  */
-ZTEST(api, test_a_slave_off_57_moves_the_sweep_to_its_frequency)
+static void test_a_slave_off_57_moves_the_sweep_to_its_frequency_run(void)
 {
 	const struct fake_radio_arm *w;
-
-	api_long_match();
 
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
 		      antr_network_address_set(0u, ant_plus_key));
@@ -2872,6 +2894,20 @@ ZTEST(api, test_a_slave_off_57_moves_the_sweep_to_its_frequency)
 		      (unsigned int)w->rf_index);
 
 	end_of_test();
+}
+
+ZTEST(api, test_a_slave_off_57_moves_the_sweep_to_its_frequency)
+{
+	api_long_match();
+	test_a_slave_off_57_moves_the_sweep_to_its_frequency_run();
+}
+
+/* The shipping short match (ADR 0022): the same scenario through one
+ * wild_last search window (backend drift item 7 review). */
+ZTEST(api, test_a_slave_off_57_moves_the_sweep_to_its_frequency_short_match)
+{
+	zassert_true(radiant_radio_caps_get()->filter_wildcard_dev);
+	test_a_slave_off_57_moves_the_sweep_to_its_frequency_run();
 }
 
 /* An all-57 session still sweeps 57, so nothing in the line above is a
@@ -3964,7 +4000,7 @@ ZTEST(api, test_a_burst_longer_than_eight_periods_does_not_drop_to_search)
 #define BURST_OVERLAP_US \
 	(RADIANT_TRANSFER_OPENER_REPLY_US + 2u * RADIANT_TRANSFER_PACKET_US)
 
-ZTEST(api, test_a_second_channel_keeps_tracking_across_a_burst)
+static void test_a_second_channel_keeps_tracking_across_a_burst_run(void)
 {
 	const struct fake_radio_arm *w = NULL;
 	const uint32_t               n = 9u;
@@ -3975,8 +4011,6 @@ ZTEST(api, test_a_second_channel_keeps_tracking_across_a_burst)
 	radiant_time_t               t0;
 	radiant_time_t               slot_b;
 	uint32_t                     tries;
-
-	api_long_match();
 
 	zassert_true(BURST_OVERLAP_US + 1000u <
 			     RADIANT_TRANSFER_OPENER_REPLY_US +
@@ -3998,7 +4032,8 @@ ZTEST(api, test_a_second_channel_keeps_tracking_across_a_burst)
 	for (tries = 0u; tries < 256u; tries++) {
 		const struct fake_radio_arm *c = last_arm_of(FAKE_RADIO_ARM_RX);
 
-		if (c != NULL && !c->terminated && c->n_filters >= 2u &&
+		if (c != NULL && !c->terminated &&
+		    (c->n_filters >= 2u || c->filters[0].wild_last) &&
 		    c->t_open > radiant_radio_now()) {
 			radiant_time_t lo = c->t_open + 1000u;
 			radiant_time_t hi = c->t_close - 1000u;
@@ -4059,6 +4094,20 @@ ZTEST(api, test_a_second_channel_keeps_tracking_across_a_burst)
 
 	(void)antr_channel_close(1u);
 	end_of_test();
+}
+
+ZTEST(api, test_a_second_channel_keeps_tracking_across_a_burst)
+{
+	api_long_match();
+	test_a_second_channel_keeps_tracking_across_a_burst_run();
+}
+
+/* The shipping short match (ADR 0022): the same scenario through one
+ * wild_last search window (backend drift item 7 review). */
+ZTEST(api, test_a_second_channel_keeps_tracking_across_a_burst_short_match)
+{
+	zassert_true(radiant_radio_caps_get()->filter_wildcard_dev);
+	test_a_second_channel_keeps_tracking_across_a_burst_run();
 }
 
 /* The peer stops mid-burst: exactly one EVENT_TRANSFER_RX_FAILED, and the
@@ -4282,7 +4331,7 @@ static const struct msg_rec *only_bcast(void)
  * dropped it: the counter rose, the host saw nothing at all - neither data nor
  * RX_FAIL (archive/benchmarks/2026-11-18-power-g1-diag, "Defect").
  */
-ZTEST(api, test_a_repaired_broadcast_reaches_the_host)
+static void test_a_repaired_broadcast_reaches_the_host_run(void)
 {
 	const struct radiant_api_stats *s = radiant_api_stats_get();
 	const struct msg_rec           *m;
@@ -4290,8 +4339,6 @@ ZTEST(api, test_a_repaired_broadcast_reaches_the_host)
 	uint32_t repaired;
 	uint32_t dropped;
 	uint32_t posted;
-
-	api_long_match();
 
 	open_and_acquire_slave(&dev);
 	run_housekeeping();
@@ -4322,6 +4369,20 @@ ZTEST(api, test_a_repaired_broadcast_reaches_the_host)
 		      "RX_FAIL for a slot whose frame was repaired");
 
 	end_of_test();
+}
+
+ZTEST(api, test_a_repaired_broadcast_reaches_the_host)
+{
+	api_long_match();
+	test_a_repaired_broadcast_reaches_the_host_run();
+}
+
+/* The shipping short match (ADR 0022): the same scenario through one
+ * wild_last search window (backend drift item 7 review). */
+ZTEST(api, test_a_repaired_broadcast_reaches_the_host_short_match)
+{
+	zassert_true(radiant_radio_caps_get()->filter_wildcard_dev);
+	test_a_repaired_broadcast_reaches_the_host_run();
 }
 
 /*
@@ -5700,14 +5761,13 @@ ZTEST(api, test_fec_pending_watchdog_allows_slow_channel_periods_past_the_floor)
  * (26%) expired with no opener - 0.53^2 at the trainer's measured loss. The
  * third slot is the one this test airs the master in.
  */
-ZTEST(api, test_fec_pending_command_survives_two_missed_master_slots)
+static void test_fec_pending_command_survives_two_missed_master_slots_run(void)
 {
 	uint16_t number;
 	const struct fake_radio_arm *w;
 	radiant_time_t t_q;
 	uint32_t skipped = 0u;
 
-	api_long_match();
 	number = fec_acquire(0u, false);
 
 	zassert_ok(antr_acknowledge_message_tx(CH, 8u, peer_payload));
@@ -5742,6 +5802,20 @@ ZTEST(api, test_fec_pending_command_survives_two_missed_master_slots)
 	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_COMPLETED));
 	zassert_equal(0u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED));
 	end_of_test();
+}
+
+ZTEST(api, test_fec_pending_command_survives_two_missed_master_slots)
+{
+	api_long_match();
+	test_fec_pending_command_survives_two_missed_master_slots_run();
+}
+
+/* The shipping short match (ADR 0022): the same scenario through one
+ * wild_last search window (backend drift item 7 review). */
+ZTEST(api, test_fec_pending_command_survives_two_missed_master_slots_short_match)
+{
+	zassert_true(radiant_radio_caps_get()->filter_wildcard_dev);
+	test_fec_pending_command_survives_two_missed_master_slots_run();
 }
 
 /* Index in msglog of the first such channel event, or -1. */
