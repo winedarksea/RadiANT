@@ -12,6 +12,8 @@
  *  - a transmit never goes out late: pastTrig = 0 on the TX start trigger,
  *    and ETIME when its start is already inside the arm floor.
  *  - operation ids skip 0 on wrap, and every failed arm leaves *op == 0.
+ *  - transmit power rounds to the nearest table entry and clamps at its
+ *    ends, as nRF does (item 6), never keeping a stale power.
  */
 
 #include <string.h>
@@ -430,4 +432,45 @@ ZTEST(radiant_backend_cc26xx_arm, test_retune_not_credited_from_stale_fs_status)
 		      RADIANT_RADIO_OK_RC);
 	zassert_not_null(chained_fs(CMD_PROP_RX_ADV),
 			 "B's operation never ran, so neither did its FS: retune");
+}
+
+/* Transmit at dbm, complete it, and return the PA value the backend set. */
+static uint32_t tx_power_raw(int8_t dbm)
+{
+	struct radiant_tx_req req;
+	struct fake_rf_cmd *c;
+	uint32_t op = 0u;
+
+	cc_tx_req(&req, body8, radiant_radio_now() + 2000u);
+	req.power.dbm = dbm;
+	zassert_equal(radiant_radio_tx(&req, &op), RADIANT_RADIO_OK_RC);
+	c = fake_rf_last();
+	zassert_not_null(c);
+	fake_rf_complete(c->cmd.ch, PROP_DONE_OK, RF_EventLastCmdDone);
+	zassert_equal(cc_kind(), 0);
+	return fake_rf.last_tx_power.rawValue;
+}
+
+/*
+ * TODO.md "Backend drift" item 6: an off-table dBm lands on the nearest
+ * radiant_cc26xx_txp[] entry, as nRF's apply_power() does. TI's
+ * RF_TxPowerTable_findValue() rounded down (-6 went out at -10, -12 at -15)
+ * and refused below the first entry, so -40 kept the previous power. The
+ * expected values are the table's own rows (radiant_radio_cc26xx.c).
+ */
+ZTEST(radiant_backend_cc26xx_arm, test_tx_power_rounds_to_nearest_entry)
+{
+	const RF_TxPowerTable_Value m20 = RF_TxPowerTable_DEFAULT_PA_ENTRY(6, 3, 0, 2);
+	const RF_TxPowerTable_Value m10 = RF_TxPowerTable_DEFAULT_PA_ENTRY(15, 3, 0, 5);
+	const RF_TxPowerTable_Value m5 = RF_TxPowerTable_DEFAULT_PA_ENTRY(22, 3, 0, 9);
+	const RF_TxPowerTable_Value z0 = RF_TxPowerTable_DEFAULT_PA_ENTRY(19, 1, 0, 20);
+	const RF_TxPowerTable_Value p5 = RF_TxPowerTable_DEFAULT_PA_ENTRY(23, 0, 0, 57);
+
+	zassert_equal(tx_power_raw(0), z0.rawValue, "on the table");
+	zassert_equal(tx_power_raw(-6), m5.rawValue, "-6 dBm: -5 is nearest, not -10");
+	zassert_equal(tx_power_raw(-12), m10.rawValue, "-12 dBm: -10 is nearest, not -15");
+	zassert_equal(tx_power_raw(0), z0.rawValue);
+	zassert_equal(tx_power_raw(-40), m20.rawValue,
+		      "below the table: clamps to -20, not the previous 0 dBm");
+	zassert_equal(tx_power_raw(20), p5.rawValue, "above the table: clamps to +5");
 }
