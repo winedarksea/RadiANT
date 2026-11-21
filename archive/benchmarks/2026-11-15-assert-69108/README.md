@@ -237,6 +237,35 @@ from before the fix asserted at 105 s in the same sitting.
   copied to `build\zwift_mpsl\zephyr.hex`): `ant_probe` PASS, `ant_scan` found
   the Pro Micro master. Left on the DUT.
 
+## Coex leg with live BLE load (2026-11-20)
+
+`acc_coex_ble`, master c028e53 (the staged-successor fix ba16a6a included),
+image `coex.conf;ble_load.conf;phase_diag.conf;d2_stats.conf`, sha256
+`31e75a14...cd3203` (`.config` lines in `image-configs.txt`). The SoftDevice
+advertises every 1000 ms (`ble_load: ... rc 0`), so MPSL schedules a second
+stack: the test `acc_coex` lacked.
+
+| leg | image | duration | asserts | reboots | DUT ch0 loss | Garmin ch0 loss | ENDs that found RADIO pending |
+|---|---|---|---|---|---|---|---|
+| `acc_coex_ble` | coex + BLE load | 1800 s (clean at 1827.4 s) | 0 | 0 | 1.65 % (119/7208, -44 dBm) | 0.54 % (39/7209) | 0 |
+
+- Gate: 23 233 timeslots placed, 21 765 granted, 1 468 blocked (0 in
+  `acc_coex`), extensions 744 396 ok / 218 failed. UNPEND end counters: start
+  292, t0other 21 255, extfail 218, radio 0. No END found the RADIO vector
+  pending, so the 69:108 path was not hit under BLE.
+- Only 27 of the DUT's 119 misses were RX_FAIL; the other 92 had no radio
+  event, so `ant_verify` marked its own loss accounting FAILED. Probably slots
+  MPSL refused to the SoftDevice (the 1 468 blocked), not verified.
+- Rig change: the Pro Micro was not on USB, so the TI LaunchXL (COM11, 57600,
+  `crcfix_ti_rx`) was the ANT master through `ant_sim --port`, using a runner
+  copy with an added `--master-port/--master-baud` option (the committed
+  `soak_run.py` does not have it yet).
+- The console timestamp wraps at 2^32 us (01:11:34.9 to 00:00:00.26, no banner,
+  no gap in the frame stream). That is not a reboot.
+- Logs (`acc_coex_ble-*.log`, `-dut.json`, `-ref.json`) are gitignored like
+  the other legs'; `acc_coex_ble-summary.json`, the flash log and the
+  `legs.tsv` row are tracked.
+
 ## Nordic
 
 `nordic-report-draft.md` is a report for DevZone thread 128550, which reports the

@@ -11,3 +11,4 @@ acc_thread	final_1c8967b_thread	4c8372674742	2026-11-14T14:53:20	clean at 7300.0
 acc_gate	final_1c8967b_gate	1beed1c90f74	2026-11-14T16:55:54	clean at 3626.7 s		43246	43246	0	1473258/0	0	0	0
 acc_matter	final_1c8967b_matter	aa358026be79	2026-11-14T18:03:30	clean at 3699.8 s							0	0
 acc_coex	final_1c8967b_coex	22b585cead2e	2026-11-14T19:05:33	clean at 1826.5 s		21627	21627	0	736881/0	0	0	0
+acc_coex_ble	coex_ble_c028e53	31e75a14831b	2026-11-20T21:20:52	clean at 1827.4 s		23233	21765	1468	744396/218	0	0	0

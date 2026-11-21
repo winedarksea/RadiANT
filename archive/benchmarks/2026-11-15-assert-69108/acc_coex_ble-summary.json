@@ -1,0 +1,69 @@
+{
+  "hex": "C:\\wt_bench\\build\\coexble\\dongle_thread\\zephyr\\zephyr.hex",
+  "image_label": "coex_ble_c028e53",
+  "image_sha256": "31e75a14831b544cd666ba6949a3263a2ef67cb3ddf76d3df11ee27cbecd3203",
+  "seconds": 1800,
+  "base": "C:\\Users\\Colin\\AppData\\Local\\Temp\\claude\\0b707879d249ade1\\9d9bcbbe-a989-4c97-b221-52f1cf315d1e\\scratchpad\\coexble\\acc_coex_ble",
+  "start": "2026-11-20T21:20:52",
+  "flags": {
+    "no_peer": true,
+    "no_ref": false,
+    "no_search": false,
+    "no_master": false,
+    "no_flash": false,
+    "stop_on_reboot": false,
+    "continue_after_assert": true
+  },
+  "jlink": {
+    "device": "nRF54L15_M33",
+    "serial": "1057737173"
+  },
+  "tools": "C:\\wt_bench\\tools",
+  "flash_script": "C:\\wt_bench\\scripts\\flash_sim_jlink.ps1",
+  "flash_rc": 0,
+  "dut_starts": [
+    "2026-11-20T21:21:11.918"
+  ],
+  "dut_segments": 0,
+  "cap": "{'deaths': []}",
+  "console_lines": 17384,
+  "first_console_line": "2026-11-20T21:20:54.968",
+  "first_line_is_banner": false,
+  "flash_done": "2026-11-20T21:20:53.891",
+  "dut_open": "2026-11-20T21:21:11.918",
+  "reboots": 0,
+  "reboot_times": [],
+  "reboot_since_boot_s": [],
+  "assert_count": 0,
+  "assert_times": [],
+  "asserts": [],
+  "last_stats": {
+    "placed": 23233,
+    "granted": 21765,
+    "blocked": 1468,
+    "ext": "744396/218",
+    "skip": 0
+  },
+  "end_since_boot_s": 1827.365,
+  "end_since_flash_s": 1828.442,
+  "dut_rc": 1,
+  "ref_rc": 0,
+  "ended_by": "duration",
+  "elapsed": 1810.4148125648499,
+  "end": "2026-11-20T21:51:22",
+  "row": {
+    "leg": "acc_coex_ble",
+    "image": "coex_ble_c028e53",
+    "sha12": "31e75a14831b",
+    "start": "2026-11-20T21:20:52",
+    "result": "clean at 1827.4 s",
+    "since_open_s": "",
+    "placed": "23233",
+    "granted": "21765",
+    "blocked": "1468",
+    "ext": "744396/218",
+    "skip": "0",
+    "reboots": "0",
+    "asserts": "0"
+  }
+}

@@ -348,8 +348,16 @@ MPSL (needs a soak beside BLE or Thread, which that clearance excluded):
   asserted at 105 s in the same sitting. Table and caveats in the evidence
   README. The Zwift image (`build\zwift_mpsl\zephyr.hex`) is on the L15.
   Left from acceptance:
-  - [ ] The coex leg had no BLE load (`coex.conf` never calls `bt_enable`), so
-    the fix beside live BLE traffic is untested. Rebuild with `ble_load.conf`.
+  - [x] The coex leg had no BLE load (`coex.conf` never calls `bt_enable`), so
+    the fix beside live BLE traffic is untested. Done 2026-11-20 on c028e53
+    (`acc_coex_ble`, `ble_load.conf`, SoftDevice advertising every 1 s): 1800 s,
+    0 asserts, 0 reboots, no END found RADIO pending; DUT ch0 loss 1.65 %
+    against the Garmin's 0.54 % in the same window, 1 468 timeslots blocked.
+    Evidence README "Coex leg with live BLE load".
+  - [ ] Under BLE load 92 of the DUT's 119 misses in `acc_coex_ble` had no
+    RX_FAIL (ant_verify fails its loss accounting). Probably slots MPSL gave the
+    SoftDevice; confirm, and decide whether a blocked tracking slot should
+    surface as an event.
   - [ ] Master-originated acked data on the gate image: 58/60 twice, against
     60/60 on 2026-11-14 (two missed acks per run). No same-sitting run of the
     image before the fix, so not attributed.
