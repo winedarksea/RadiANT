@@ -182,7 +182,9 @@ min_scenarios: 25
 # 2026-11-20: 6562 (+80), key redaction in the bridge's host trace and parser
 # wipe (security review 2026-11-20 item D, fix/sec-trace-redact): +16 per unit
 # scenario (bridge_trace and bridge_trace_sec, 8 cases each).
-min_testcases: 6562
+# 2026-11-20: 6592 (+30), the review's follow-ups to item D: +6 per unit
+# scenario (failed-checksum wipe, 0x7F RNG seed, 0x7F crypto id, in each suite).
+min_testcases: 6592
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -206,9 +208,10 @@ min_testcases: 6562
 # 2026-11-20: +3 per unit scenario (command: the 1..127 window's three cases).
 # 2026-11-20: +16 per unit scenario (bridge_trace, bridge_trace_sec: key
 # redaction, security review item D).
-min_cases.radiant.unit: 1099
-min_cases.radiant.unit.sec_modes: 1099
-min_cases.radiant.unit.no_pairing: 1039
+# 2026-11-20: +6 per unit scenario (bridge_trace{,_sec}: review follow-ups).
+min_cases.radiant.unit: 1105
+min_cases.radiant.unit.sec_modes: 1105
+min_cases.radiant.unit.no_pairing: 1045
 min_cases.radiant.api: 86
 min_cases.radiant.api.sec: 90
 # +1 with the identical-0xF1 retry case (review 2026-11-17 item 4).
@@ -241,7 +244,8 @@ min_cases.treadmill.hr_rx: 3
 # 2026-11-20: +5 (command: the extended sequence, as radiant.unit).
 # 2026-11-20: +3 (command: the 1..127 window, as radiant.unit).
 # 2026-11-20: +16 (bridge_trace, bridge_trace_sec, as radiant.unit).
-min_cases.radiant.unit.ack_faults: 1106
+# 2026-11-20: +6 (bridge_trace review follow-ups, as radiant.unit).
+min_cases.radiant.unit.ack_faults: 1112
 # radiant.unit.diag: the unit suites with CONFIG_RADIANT_DIAG_COUNTERS.
 # 1127 (2026-11-16, Bluefin twister on fix/diag-page9-done-cb): the observed
 # count, including the four page-9/page-12 scheduler cases.
@@ -250,7 +254,8 @@ min_cases.radiant.unit.ack_faults: 1106
 # 2026-11-20: +5 (command: the extended sequence, as radiant.unit).
 # 2026-11-20: +3 (command: the 1..127 window, as radiant.unit).
 # 2026-11-20: +16 (bridge_trace, bridge_trace_sec, as radiant.unit).
-min_cases.radiant.unit.diag: 1177
+# 2026-11-20: +6 (bridge_trace review follow-ups, as radiant.unit).
+min_cases.radiant.unit.diag: 1183
 min_cases.trainer.model: 14
 # radiant.lp_clock (power plan pass B2): the low-power timebase arithmetic,
 # 31 unit cases and seven 100 000-cycle drift simulations (three of them
