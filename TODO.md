@@ -2,7 +2,8 @@ MPSL bursts: multi-packet bursts still can't run on MPSL builds. That's a scope 
 
 Discovery short match (ADR 0022), left open 2026-11-11:
 - The two waste fixes (ADR 0022 "Not done here"): closed. The short match is on by default on TI (2026-11-12) and nRF (2026-11-13), and one set makes them moot; they matter only for `long_match.conf` images. No scheduler "window is live" query is built.
-- Zwift acceptance of the nRF default flip (user-run, not a precondition any more): every sensor listed within ~1 s while HR and trainer are tracked, 0x61/0xC6 answered, reset -> NETWORK_KEY against 42-94 s (RadiANT history) and 9.2 s (Garmin). If it passes, mark ADR 0022 accepted; if it fails, rebuild with `apps/dongle/long_match.conf` and investigate.
+- [DONE 2026-11-20, ADR 0022 accepted from existing captures] Zwift acceptance of the nRF default flip. Pro Micro (3 captures) and TI: every untracked sensor listed in 0.09-0.54 s with 3 channels tracked, cold opens 0.17-0.66 s; 0x61/0xC6 answered; reset -> NETWORK_KEY 11-15 s. Table in the ADR's "Zwift acceptance" section.
+- [OPEN, MPSL] With 3 pinned channels tracked, the MPSL gate's scan (nRF52840 Dongle, `zwift-20261115-214722` at 271.8 s) heard 3 frames in 3.66 s, then every sensor within 1 s once Zwift closed the pinned channels. One open, on the stick with the weak Kicker link. Scan airtime under tracking (ADR 0018/0021 arm lead), not the short match, which a long match would make worse. Measure with `ant_scan_rate.py --track` on the gate image beside the direct image at the same position, together with item 4 of "From the 2026-11-15 Zwift captures".
 - Decided 2026-11-14 (owner): short match stays default y on EVERY nRF image (MPSL, Matter, nRF5340 net core, L15), none of which had its own gate run; no CI job for `long_match.conf` (declined).
 
 ## Open after the 2026-11-16 benches (filed on fix/ti-cmd-stall):

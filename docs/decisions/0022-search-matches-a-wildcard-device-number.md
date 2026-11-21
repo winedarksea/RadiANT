@@ -1,13 +1,14 @@
 # 0022 — On nRF, the search can match every device number in one window: [A6 C5] in hardware, devnum_lo received as data
 
-- **Status:** proposed. Built behind `CONFIG_RADIANT_SEARCH_SHORT_MATCH`,
-  ztest-verified, A/B/A on air below. Default **y on cc26xx** since 2026-11-12
-  (the TI A/B/A passed all four gates). Default **y on nRF** since
-  2026-11-13: its four gates passed on 2026-11-12
-  ([Gate 3 on nRF](#gate-3-on-nrf-2026-11-12)), and on every nRF image
-  (MPSL, Matter, nRF5340 net core, nRF54L15) by the owner's decision of
-  2026-11-14. Zwift acceptance pending; `apps/dongle/long_match.conf` builds
-  the 24-bit nRF image (no CI job, by decision).
+- **Status:** accepted 2026-11-20 on the
+  [Zwift captures](#zwift-acceptance-2026-11-20). Built behind
+  `CONFIG_RADIANT_SEARCH_SHORT_MATCH`, ztest-verified, A/B/A on air below.
+  Default **y on cc26xx** since 2026-11-12 (the TI A/B/A passed all four
+  gates). Default **y on nRF** since 2026-11-13: its four gates passed on
+  2026-11-12 ([Gate 3 on nRF](#gate-3-on-nrf-2026-11-12)), and on every nRF
+  image (MPSL, Matter, nRF5340 net core, nRF54L15) by the owner's decision of
+  2026-11-14. `apps/dongle/long_match.conf` builds the 24-bit nRF image (no CI
+  job, by decision).
 - **Date:** 2026-11-11
 - **Supersedes:** the "search format is permanent by design and is not touched"
   note in `radiant/src/radiant_addr_split.h` (ADR 0019's scope line), and the
@@ -206,6 +207,49 @@ sittings). Raw results: `archive/benchmarks/2026-11-12-ti-wildcard/`.
 **Decision.** The default is **y on cc26xx** (5875bd9). nRF stays **n** until
 its own gate 3 is settled. `apps/dongle_ti/ti_long_match.conf` builds the
 24-bit A image.
+
+## Zwift acceptance, 2026-11-20
+
+Gate: every sensor listed within about 1 s of the pairing screen opening.
+Read from five Zwift USB captures with short match on (`.config` checked:
+`build/zwift_3b486c3/*.config`, all `CONFIG_RADIANT_SEARCH_SHORT_MATCH=y`)
+and the two 2026-11-11 references, decoded with `tools/decode_pcap.py`. A
+"listing" is the first frame per device number and type on Zwift's
+background scan channel (channel 0, network 0) after its `OPEN_CHANNEL`.
+Same room and sensors throughout: power #20329, HR #1458 (types 0x78, 0x7C),
+Kicker #52233 (0x0B, 0x11, 0x7B), #41999 (0x22).
+
+| Capture | Dongle | Cold open (nothing tracked): device types listed, by | Open with 3 channels tracked: untracked types listed at |
+|---|---|---|---|
+| `zwift-20261111-193225` | Pro Micro, short match **off** | 2 of 7 in 2.6 s | 0-1 per 4.6 s open, first sightings up to 4.0 s |
+| `zwift-20261111-193805` | Garmin USB-m (reference) | 5 of 5 seen at 0.24 s | steady devices 0.02-0.67 s; #52233 types often 1-3.8 s |
+| `zwift-20261115-215313` | Pro Micro | 7 of 7 at 0.24 s | 0.27-0.48 s |
+| `zwift-20261115-215820` | Pro Micro | 7 of 7 at 0.17 s | 0.15-0.54 s (two opens) |
+| `zwift-20261117-192749` | Pro Micro (`acdd9d2`) | 7 of 7 at 0.66 s | 0.09-0.50 s |
+| `zwift-20261115-214118` | TI over the shim | 7 of 7 at 0.21 s | 0.14-0.39 s (two opens) |
+| `zwift-20261115-214722` | nRF52840 Dongle, MPSL gate | 5 of 5 seen at 0.29 s | **fail:** 3 frames in 3.66 s (0.13, 0.45, 3.47 s), #52233 0x0B never |
+
+A tracked sensor's own frames go to its pinned channel, not the scan, on
+every dongle including the Garmin, so the tracked column counts only the
+untracked device types. Zwift lists a paired sensor anyway.
+
+The other two acceptance points come from the same captures: 0x61 and 0xC6
+are answered within 4 ms of the reset on every RadiANT capture. Reset to the
+first `NETWORK_KEY` takes 11.0-15.1 s, against 42-94 s before the serial
+replies and 9.2 s on the Garmin. One exception, `192749`, takes 51.6 s, but
+the dongle had answered everything by 4 ms and the gap is host silence.
+
+**Verdict: accepted** for the nRF direct backend (the USB dongle the gates
+ran on) and TI. Cold-open discovery is at Garmin parity or better, and with
+three channels tracked it is better than the Garmin.
+
+**The MPSL row is not this ADR's defect.** With three pinned channels the
+MPSL gate's scan heard almost nothing until Zwift closed them at 275.46 s, and
+then it heard every sensor within 1 s. It is one open (n = 1), on the stick
+whose Kicker link was 8 dB weak (TODO "From the 2026-11-15 Zwift captures",
+item 4). The cause is scan airtime under tracking (ADR 0018 and 0021, the
+arm lead), which a 24-bit match would make worse: a dwell would hear 1 of 32
+device-number sets. Tracked separately in TODO.md.
 
 ## Not done here
 
