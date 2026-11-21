@@ -503,6 +503,8 @@ Settled by these captures, nothing to do:
 
 ## 2. [DONE 2026-11-17, 90c7f49 on wip/sec-f1-policy] Stop old plaintext transmissions when a master enables confidentiality
 
+- [OPEN, LOW] The TI boundary is unmeasured: sniff whether a frame in flight when `0xF1` lands completes on the CC2652 (L15 promiscuous rig).
+
 ## 3. [DONE 2026-11-17, 3d554a6 on wip/sec-epoch-anchor] Preserve epoch phase when a receiver joins after boot
 
 - [OPEN, LOW] `rx_process()` returns silently when `advance_epoch()` fails (headroom or ceiling): nothing is counted.
@@ -644,12 +646,14 @@ Read-only audit of the nRF backend (direct and MPSL gate) and the CC26xx backend
 Suggested order: items 1-4 (bugs), then 5 (settle the contract text), then 6 and 7 together.
 
 ## 1. [DONE 2026-11-20, d4d46c0] The TI backend ignores `rf_index`
+- [OPEN] `FS_SETTLE_US` (250) is unmeasured.
 
 ## 2. [DONE 2026-11-20, f06a07e] A BUILD_ASSERT is disarmed by a deprecated SoC symbol
 
 ## 3. [DONE 2026-11-20, 8459e4c + 21b727e] Abort delivers the terminal without a lock
 
 ## 4. [DONE 2026-11-20, 8459e4c] A preempted window reports DENIED even after it heard frames
+- Known limit: DENIED vs ABORTED is judged at callback time, not abort time.
 
 ## 5. [DONE 2026-11-20, 59ae9db + a23674a, review 3e41790 + dcedfd7; nRF window-edge bench PASS 2026-11-20 (846def7)] Settle the HAL text where the backends picked different readings
 
@@ -663,7 +667,7 @@ Small pure helpers both backends call; register access stays in the backends. Do
 - Smaller: TI's CRC16 (`:663-720`) could use `radiant_crc16` for the CCITT case. TX power: nRF rounds to the nearest table entry, TI keeps the previous power with a warning for an off-table dBm (`:874-881`), so an in-range request can leave TI at a stale power; share a nearest-entry helper. [DONE 2026-11-20, 848035b: TI `nearest_txp()` applies nRF's rule (nearest entry, tie to the higher power, clamp at both ends) instead of `RF_TxPowerTable_findValue()`, which actually rounded down in range (-6 went out at -10) and kept the previous power only below -20; HAL text names the tie and the clamp; `test_tx_power_rounds_to_nearest_entry` in both cc26xx scenarios. A shared helper is still item 6's refactor.]
 Leave apart: TI arb vs MPSL gate, `radiant_rx_torn` (nRF single-buffer only), power/idle code, RSSI conversion, filter/address hardware programming.
 
-## 7. [DONE 2026-11-20, f430309..3082ca9] A TI backend test harness, and a fake that matches the hardware
+## 7. [DONE 2026-11-20, 118f173..3082ca9] A TI backend test harness, and a fake that matches the hardware
 
 # Findings from the 2026-11-21 RadiANT security review (HEAD 381c47d)
 
