@@ -51,9 +51,9 @@ jobs:
     # ceiling burns a runner for six hours and reports nothing.
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
 
@@ -120,11 +120,11 @@ jobs:
       # the topdir. Here the manifest repository is this one, since with no
       # sdk-ant in the picture west.yml here is what selects Zephyr.
       - name: Checkout application
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           path: app
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
 
@@ -164,7 +164,7 @@ jobs:
       # current SDK still holds; this note is here so the next person reads the
       # trade rather than rediscovering it.
       - name: Set up Zephyr workspace and toolchain
-        uses: zephyrproject-rtos/action-zephyr-setup@v1
+        uses: zephyrproject-rtos/action-zephyr-setup@cc223fe61661d8573c1cd3f95f72f90cce729ae9 # v1.0.16
         with:
           app-path: app
           toolchains: arm-zephyr-eabi
@@ -174,7 +174,7 @@ jobs:
       # the only thing left worth caching. Zephyr picks ccache up from PATH on
       # its own and the runner image ships it, so this needs no build flag.
       - name: Cache ccache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cache/ccache
           key: ccache-ztest-${{ github.sha }}
@@ -273,7 +273,7 @@ jobs:
 
       - name: Upload twister report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: twister-report
           if-no-files-found: ignore
@@ -292,9 +292,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
 
@@ -314,7 +314,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Check README.md is under the line cap
         run: |
@@ -346,11 +346,11 @@ jobs:
         shell: bash
     steps:
       - name: Checkout application
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           path: app
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
 
@@ -361,7 +361,7 @@ jobs:
           sudo apt-get install -y gcc-multilib g++-multilib
 
       - name: Set up Zephyr workspace and toolchain
-        uses: zephyrproject-rtos/action-zephyr-setup@v1
+        uses: zephyrproject-rtos/action-zephyr-setup@cc223fe61661d8573c1cd3f95f72f90cce729ae9 # v1.0.16
         with:
           app-path: app
           toolchains: arm-zephyr-eabi
@@ -378,7 +378,7 @@ jobs:
           test -f /tmp/radiant-isolated/zephyr/module.yml
 
       - name: Cache ccache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cache/ccache
           key: ccache-import-smoke-${{ github.sha }}
@@ -436,11 +436,11 @@ jobs:
         shell: bash
     steps:
       - name: Checkout application
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           path: app
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
 
@@ -451,7 +451,7 @@ jobs:
           sudo apt-get install -y gcc-multilib g++-multilib
 
       - name: Set up stock Zephyr
-        uses: zephyrproject-rtos/action-zephyr-setup@v1
+        uses: zephyrproject-rtos/action-zephyr-setup@cc223fe61661d8573c1cd3f95f72f90cce729ae9 # v1.0.16
         with:
           app-path: app
           manifest-file-name: .github/zephyr-upstream.yml

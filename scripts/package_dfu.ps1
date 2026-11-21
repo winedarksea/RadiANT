@@ -130,18 +130,47 @@ $savedHome = $env:NRFUTIL_HOME
 $env:NRFUTIL_HOME = $null
 
 try {
+    # The nrfutil core, pinned the same way: release.yml bootstraps core
+    # $NrfutilCoreVersion from a hashed tarball, and the NCS v3.4.0 toolchain
+    # bundle ships the same build. A different core (a self-upgraded one, or
+    # another bundle's) is refused so local and CI packages come from the same
+    # tool. First line: "nrfutil 8.2.0 (c910332 2026-04-21)".
+    $NrfutilCoreVersion = '8.2.0'
+    $coreProbe = & $NrfutilPath --version
+    $coreFirst = [string]@($coreProbe)[0]
+    if ($LASTEXITCODE -ne 0 -or -not $coreFirst.StartsWith("nrfutil $NrfutilCoreVersion ")) {
+        throw ("$NrfutilPath reports '$coreFirst', but this script packages with nrfutil core " +
+               "$NrfutilCoreVersion (the version release.yml pins). Use the NCS v3.4.0 toolchain " +
+               "bundle's nrfutil (pass -NrfutilPath), or: nrfutil self-upgrade --to-version $NrfutilCoreVersion")
+    }
+
     # Probe by invoking the subcommand, not by parsing `nrfutil list`. What
     # `list` reports depends on which home is in effect and does not reliably
     # answer "can I run this"; the exit code does.
-    & $NrfutilPath nrf5sdk-tools --help | Out-Null
+    #
+    # PINNED to the version release.yml installs ($Nrf5SdkToolsVersion; bump
+    # the two together), so a local package and a CI package come from the
+    # same packager. A missing command is installed at that version; an
+    # installed command at any other version is refused rather than silently
+    # used or silently replaced in the user's nrfutil home.
+    $Nrf5SdkToolsVersion = '1.1.0'
+    $probe = & $NrfutilPath nrf5sdk-tools --version
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "Installing the nrf5sdk-tools nrfutil command (provides 'pkg')..."
-        & $NrfutilPath install nrf5sdk-tools
+        Write-Host "Installing the nrf5sdk-tools nrfutil command $Nrf5SdkToolsVersion (provides 'pkg')..."
+        & $NrfutilPath install "nrf5sdk-tools=$Nrf5SdkToolsVersion"
         if ($LASTEXITCODE -ne 0) {
-            throw ("nrfutil install nrf5sdk-tools failed with exit code $LASTEXITCODE. " +
+            throw ("nrfutil install nrf5sdk-tools=$Nrf5SdkToolsVersion failed with exit code $LASTEXITCODE. " +
                    "If it reports a locked home directory, that is the toolchain " +
                    "bundle's home rather than yours - check NRFUTIL_HOME.")
         }
+        $probe = & $NrfutilPath nrf5sdk-tools --version
+    }
+    # First line: "nrfutil-nrf5sdk-tools 1.1.0 (30dc218 2024-06-12)".
+    $installed = (@($probe)[0] -split '\s+')[1]
+    if ($installed -ne $Nrf5SdkToolsVersion) {
+        throw ("nrf5sdk-tools $installed is installed, but this script packages with " +
+               "$Nrf5SdkToolsVersion (the version release.yml pins). Run: " +
+               "nrfutil install nrf5sdk-tools=$Nrf5SdkToolsVersion --force")
     }
 
 # Walk the Intel hex far enough to learn the first data address. Type 00 is

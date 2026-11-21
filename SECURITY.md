@@ -37,8 +37,11 @@ why, because "unsigned" reads as carelessness when here it is a constraint:
 So the honest guarantee is integrity-on-download, not authenticity-at-flash:
 
 - Every release artifact is published with a `.sha256` sidecar, generated in CI
-  immediately before the release attachment (`.github/workflows/release.yml`).
-- Compare the sum before flashing. If it does not match, do not flash it.
+  by the job that built the image and re-checked by the separate `publish` job
+  before it attaches anything (`.github/workflows/release.yml`). Only `publish`
+  can write to the release, and it runs only after every build job passes.
+- Compare the sum before flashing (`sha256sum -c <artifact>.sha256` beside the
+  downloaded file). If it does not match, do not flash it.
 - The build is reproducible from the tagged source with the toolchain the
   release workflow pins ([`.github/workflows/release.yml`](.github/workflows/release.yml)).
 
