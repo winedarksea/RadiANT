@@ -35,7 +35,19 @@ endif()
 # -DBACKEND_COEX=1 (scenario radiant.backend_cc26xx.coex): the backend under
 # CONFIG_RADIANT_BACKEND_CC26XX_COEX (RF_scheduleCmd, patched caps) plus
 # radiant_radio_cc26xx_arb.c and its own cases in src_coex/.
-file(GLOB suite_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.c")
+#
+# src_caps/ (the caps parity test) runs in every scenario. -DBACKEND_SHORT_MATCH=1
+# (scenario radiant.backend_cc26xx.short_match) builds the backend with
+# CONFIG_RADIANT_SEARCH_SHORT_MATCH, the shipping default, and runs only that:
+# the src/ suites are written against the 3-byte hardware address.
+file(GLOB caps_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src_caps/*.c")
+if(BACKEND_SHORT_MATCH)
+  set(suite_sources ${caps_sources})
+  target_compile_definitions(app PRIVATE BACKEND_SHORT_MATCH=1)
+else()
+  file(GLOB suite_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.c")
+  list(APPEND suite_sources ${caps_sources})
+endif()
 if(BACKEND_COEX)
   file(GLOB coex_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src_coex/*.c")
   list(APPEND suite_sources ${coex_sources})

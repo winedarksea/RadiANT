@@ -80,6 +80,9 @@ static struct {
 	uint32_t forgets;      /* gate_forget_pending() calls */
 	uint32_t max_window;   /* what gate_max_window_us() reports (0: unbounded) */
 	uint32_t acquires;     /* gate_acquire() calls */
+	/* What gate_min_arm_lead_us() answers: 0, the direct gate's answer,
+	 * unless test_caps_parity.c sets the MPSL gate's. */
+	uint32_t lead_us;
 } fg;
 
 static void pre_at_acquire(void);
@@ -117,7 +120,7 @@ bool gate_extend(uint32_t us) { ARG_UNUSED(us); return false; }
 int gate_init(void) { return RADIANT_RADIO_OK_RC; }
 void gate_shutdown(void) {}
 uint32_t gate_max_window_us(void) { return fg.max_window; }
-uint32_t gate_min_arm_lead_us(void) { return 0u; }
+uint32_t gate_min_arm_lead_us(void) { return fg.lead_us; }
 enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from, radiant_time_t t_to,
 			  uint16_t follow_on_us, uint8_t prio)
 {
@@ -1234,4 +1237,18 @@ int backend_signal_abort_staged(int kind, bool request_placed, uint32_t *aborted
 	*aborted = pre_aborted() + cb_aborted;
 	*still_staged = radiant_staged.pending && radiant_op.kind != OP_NONE;
 	return rc;
+}
+
+/* ---- Caps parity (test_caps_parity.c) ---- */
+
+/* The Kconfig knobs this image compiled the backend with, defined above
+ * rather than by Kconfig, so the parity test can pick the table row the
+ * backend really built. */
+const bool backend_cfg_short_match = IS_ENABLED(CONFIG_RADIANT_SEARCH_SHORT_MATCH);
+const bool backend_cfg_ed_scan = IS_ENABLED(CONFIG_RADIANT_ED_SCAN);
+
+void backend_set_gate_caps(uint32_t lead_us, uint32_t max_window_us)
+{
+	fg.lead_us = lead_us;
+	fg.max_window = max_window_us;
 }

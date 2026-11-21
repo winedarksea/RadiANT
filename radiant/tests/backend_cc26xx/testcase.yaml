@@ -29,3 +29,16 @@ tests:
       - BACKEND_COEX=1
     extra_configs:
       - CONFIG_RADIANT_DIAG_COUNTERS=y
+  radiant.backend_cc26xx.short_match:
+    # CONFIG_RADIANT_SEARCH_SHORT_MATCH, the shipping default (ADR 0022):
+    # only the caps parity test (src_caps/), which checks the 2-byte sync
+    # word and the wildcard against radiant/tests/common/caps_presets.h.
+    tags:
+      - radiant
+      - cc26xx
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    extra_args:
+      - BACKEND_SHORT_MATCH=1

@@ -489,6 +489,17 @@ void fake_radio_caps_preset_nrf(void);
  * varies per channel, so the backend verifies in software. */
 void fake_radio_caps_preset_rail(void);
 
+/* CC26x2, as the real backend advertises it (radiant/tests/common/
+ * caps_presets.h, checked against radiant_radio_cc26xx.c by
+ * radiant.backend_cc26xx*): two sync words four bits apart, the 508 us
+ * receiver hold past t_close, a 600/400 us lead (1414/600 and a 20 ms window
+ * ceiling under coex). The default is the shipping short match (2-byte
+ * hardware address, wildcard on); _long_match is CONFIG_RADIANT_SEARCH_
+ * SHORT_MATCH=n (3 bytes, no wildcard), for suites testing the 128-set
+ * search geometry. */
+void fake_radio_caps_preset_cc26xx(bool coex);
+void fake_radio_caps_preset_cc26xx_long_match(bool coex);
+
 /* phys must have static storage duration: caps holds the pointer. */
 void fake_radio_set_phys(const enum radiant_phy *phys, uint8_t n_phys);
 

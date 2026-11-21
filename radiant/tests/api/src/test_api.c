@@ -7207,7 +7207,8 @@ ZTEST(api, test_diag_a_delayed_continuation_is_counted_late)
 
 enum xing_preset {
 	XING_NRF, /* direct nRF: lead 328, in-grant 328, 8 filters, 2 groups */
-	XING_TI,  /* CC26xx non-coex: lead 600, in-grant 400, 2 filters */
+	XING_TI,  /* fake_radio_caps_preset_cc26xx(false): lead 600, in-grant
+		   * 400, 2 filters 4 bits apart, 508 us close hold */
 };
 
 /* One run's shape. */
@@ -7246,14 +7247,11 @@ static void xing_apply_preset(enum xing_preset p)
 	struct radiant_radio_caps *c;
 
 	k_sched_lock();
-	fake_radio_caps_preset_nrf();
-	c = fake_radio_caps_mut();
 	if (p == XING_TI) {
-		c->min_arm_lead_us = 600u;
-		c->min_arm_lead_in_grant_us = 400u;
-		c->max_filters = 2u;
-		c->max_addr_groups = 2u;
+		fake_radio_caps_preset_cc26xx(false);
 	} else {
+		fake_radio_caps_preset_nrf();
+		c = fake_radio_caps_mut();
 		c->min_arm_lead_us = 328u;
 		c->min_arm_lead_in_grant_us = 328u;
 		c->max_addr_groups = 2u;

@@ -596,8 +596,8 @@ static uint8_t popcount8(uint8_t v)
 
 ZTEST(radiant_search, test_spread_pairs_when_the_matcher_needs_distance)
 {
-	fake_radio_caps_preset_rail();
-	fake_radio_caps_mut()->min_filter_hamming_bits = 4;
+	/* The CC26x2 preset, long match: the 128-set geometry. */
+	fake_radio_caps_preset_cc26xx_long_match(false);
 	bring_up(false);
 	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE, &want_any,
 				    radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
@@ -624,8 +624,8 @@ ZTEST(radiant_search, test_spread_pairs_still_cover_every_value_once)
 {
 	uint8_t seen[256] = { 0 };
 
-	fake_radio_caps_preset_rail();
-	fake_radio_caps_mut()->min_filter_hamming_bits = 4;
+	/* The CC26x2 preset, long match: the 128-set geometry. */
+	fake_radio_caps_preset_cc26xx_long_match(false);
 	bring_up(false);
 
 	zassert_equal(128u, radiant_search_sets(&g_s));

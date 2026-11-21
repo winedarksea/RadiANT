@@ -68,7 +68,9 @@
 # review 2026-11-17 item 8).
 # 2026-11-20: 27, radiant.backend.d2 (the backend suite with
 # CONFIG_RADIANT_GATE_MPSL_D2, the staged branches' d2_settle_now()).
-min_scenarios: 27
+# 2026-11-20: 28, radiant.backend_cc26xx.short_match (backend drift item 7: the TI
+# backend built with the shipping short match, caps parity only).
+min_scenarios: 28
 
 # Total ztest cases twister executes, summed over every scenario. It equals the
 # sum of the per-scenario floors below, so the backstop and the floors cannot
@@ -222,7 +224,11 @@ min_scenarios: 27
 # radiant.backend_cc26xx scenario.
 # 7999 (+2), the review's search-window edge case in radiant.backend and
 # radiant.backend.d2 (the ED-at-the-ceiling pin joined an existing case).
-min_testcases: 7999
+# 2026-11-20: +9 (backend drift item 7 step 1, caps parity against
+# radiant/tests/common/caps_presets.h): +2 in radiant.backend and radiant.backend.d2,
+# +1 each in radiant.gate, radiant.gate.lp, radiant.backend_cc26xx, .coex and
+# the new .short_match.
+min_testcases: 8008
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -280,7 +286,8 @@ min_cases.radiant.api.diag: 104
 # the extension skip (ADR 0021). 76 with pass B6's XTAL_GUARANTEED case.
 # 86 with the grant generation's 10 (observed 104).
 # 87 with EXTEND_FAILED leaving a staged request pending (observed 105).
-min_cases.radiant.gate: 87
+# +1 (item 7): the MPSL gate's lead and window ceiling against caps_presets.h.
+min_cases.radiant.gate: 88
 # radiant.backend (ADR 0021): the backend completion path against register models.
 # 10 with the option-off preempted-arm cases (observed 45), 11 with the
 # staged-path sweep, 12 with the stale-denial-then-START case.
@@ -293,13 +300,15 @@ min_cases.radiant.gate: 87
 # 2026-11-20: 32 with item 5's remaining 12 (error codes, window ceiling, window
 # edges, RX terminal t_sync/noise).
 # 33 with the review's search-window edge case.
-min_cases.radiant.backend: 33
+# +2 (item 7): the direct and MPSL caps rows of caps_presets.h.
+min_cases.radiant.backend: 35
 # radiant.backend.d2: the same suite with CONFIG_RADIANT_GATE_MPSL_D2 (the
 # staged branches run d2_settle_now()). 54, the observed count (2026-11-20).
 # 55 with the review's case (as radiant.backend).
 # 67 with item 5's remaining 12 (as radiant.backend).
 # 68 with the review's search-window edge case.
-min_cases.radiant.backend.d2: 68
+# +2 (item 7): caps parity, as radiant.backend.
+min_cases.radiant.backend.d2: 70
 min_cases.hrm_ble.sim_sched: 4
 min_cases.treadmill.pages: 20
 min_cases.treadmill.hr_rx: 3
@@ -356,21 +365,26 @@ min_cases.radiant.backend.lp_mpsl: 18
 # low-power hooks compiled in, plus their 10 cases.
 # 114 with the grant generation's 10.
 # 115 with EXTEND_FAILED leaving a staged request pending (as radiant.gate).
-min_cases.radiant.gate.lp: 115
+# +1 (item 7): as radiant.gate.
+min_cases.radiant.gate.lp: 116
 # radiant.backend_cc26xx: the TI backend (radiant_radio_cc26xx.c) against a fake
 # RF driver and hal_ti's driverlib headers; 7 smoke + 11 arm-path + 20 terminal/abort cases.
 # 2026-11-20: 47 (third review), 50 with +3 HAL drift item 5 cases (requested t_sync on FAILED/DENIED/ABORTED).
 # 2026-11-20: 59 with +9 item 5 cases (RX terminal t_close x5, window edges, lifecycle, EINVAL format, window ceiling).
-min_cases.radiant.backend_cc26xx: 59
+# +1 (item 7): caps parity (src_caps/).
+min_cases.radiant.backend_cc26xx: 60
 # radiant.backend_cc26xx.coex: the same under CONFIG_RADIANT_BACKEND_CC26XX_COEX,
 # plus 5 cases on radiant_radio_cc26xx_arb.c's submit/execute hooks and the
 # diag-counter status_err case (44).
 # 2026-11-20: 53 (third review), 56 with +3 HAL drift item 5 cases (as the plain scenario).
 # 2026-11-20: 65 with +9 item 5 cases (as the plain scenario).
-min_cases.radiant.backend_cc26xx.coex: 65
+# +1 (item 7): caps parity (src_caps/), coex row.
+min_cases.radiant.backend_cc26xx.coex: 66
 # dongle_thread.matter_storage (security review 2026-11-20 item 2): the Matter
 # bridge's stored-record decoder - destination and record bounds on each
 # length-prefixed string, the SIZE_MAX wrap, upstream's user-data bounds.
 # 37 (+11, item B): the endpoint high-water mark - codec round trip and
 # refusals, seed, wrap guard, and bind/unbind/reboot sequences.
 min_cases.dongle_thread.matter_storage: 37
+# radiant.backend_cc26xx.short_match (item 7): caps parity, short-match row only.
+min_cases.radiant.backend_cc26xx.short_match: 1

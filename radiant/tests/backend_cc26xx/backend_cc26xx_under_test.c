@@ -29,6 +29,12 @@
 #define CONFIG_RADIANT_BACKEND_CC26XX_MULTI_PATCH 1
 #endif
 
+/* -DBACKEND_SHORT_MATCH=1 (scenario radiant.backend_cc26xx.short_match): the
+ * shipping 2-byte sync word, for the caps parity test (src_caps/). */
+#if defined(BACKEND_SHORT_MATCH)
+#define CONFIG_RADIANT_SEARCH_SHORT_MATCH        1
+#endif
+
 #include "../../src/radiant_radio_cc26xx.c"
 
 #include <radiant/radiant_frame.h>

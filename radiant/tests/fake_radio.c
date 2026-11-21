@@ -50,6 +50,7 @@
 
 #include <radiant/radiant_radio_hal.h>
 #include "fake_radio.h"
+#include "common/caps_presets.h"
 
 /* ---------------------------------------------------------------------------
  * State
@@ -485,6 +486,32 @@ void fake_radio_caps_preset_rail(void)
 	c->has_ed_scan = false;
 	c->tx_power_min_dbm = -26;
 	c->tx_power_max_dbm = 20;
+}
+
+/*
+ * The hardware presets: built from radiant/tests/common/caps_presets.h, the
+ * table the real backends' parity tests check, so these are the shipping
+ * figures rather than placeholders. The name is the fake's own.
+ */
+static void caps_preset_apply(const struct radiant_radio_caps *c,
+			      const char *name)
+{
+	g.caps = *c;
+	g.caps.name = name;
+}
+
+void fake_radio_caps_preset_cc26xx(bool coex)
+{
+	const struct radiant_radio_caps c = caps_preset_cc26xx(true, coex);
+
+	caps_preset_apply(&c, coex ? "fake:cc26xx+coex" : "fake:cc26xx");
+}
+
+void fake_radio_caps_preset_cc26xx_long_match(bool coex)
+{
+	const struct radiant_radio_caps c = caps_preset_cc26xx(false, coex);
+
+	caps_preset_apply(&c, coex ? "fake:cc26xx+coex long" : "fake:cc26xx long");
 }
 
 struct radiant_radio_caps *fake_radio_caps_mut(void)

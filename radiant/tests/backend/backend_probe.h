@@ -184,4 +184,12 @@ void     backend_preempt_staged_in_grant(int kind, uint32_t n, bool late,
 int      backend_signal_abort_staged(int kind, bool request_placed, uint32_t *aborted,
 				     bool *still_staged);
 
+
+/* test_caps_parity.c: the knobs this image built the backend with, and what
+ * the stub gate answers for its lead and window ceiling (0 and 0, the direct
+ * gate, until set; backend_reset() restores that). */
+extern const bool backend_cfg_short_match;
+extern const bool backend_cfg_ed_scan;
+void     backend_set_gate_caps(uint32_t lead_us, uint32_t max_window_us);
+
 #endif

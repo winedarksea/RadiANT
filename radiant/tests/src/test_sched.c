@@ -889,13 +889,16 @@ static void set_track_devnum(uint8_t ch, uint16_t devnum)
 	track_filter[ch].addr_len = 5u;
 }
 
-/* TI-like geometry: two sync words, 4 bits of separation, and hw_len bytes
+/* The CC26x2 preset: two sync words, 4 bits of separation, and hw_len bytes
  * matched in hardware (3 = ti_long_match.conf, [A6 C5 devlo]; 2 = default). */
 static void caps_ti_like(uint8_t hw_len)
 {
-	fake_radio_caps_preset_rail();
-	fake_radio_caps_mut()->min_filter_hamming_bits = 4u;
-	fake_radio_caps_mut()->addr_len_hw_max = hw_len;
+	if (hw_len == 2u) {
+		fake_radio_caps_preset_cc26xx(false);
+	} else {
+		fake_radio_caps_preset_cc26xx_long_match(false);
+	}
+	zassert_equal(hw_len, radiant_radio_caps_get()->addr_len_hw_max);
 }
 
 /* Two coincident tracked windows whose hardware prefixes merge or not. */
@@ -2307,11 +2310,14 @@ ZTEST(radiant_sched, test_a_truncated_scan_leaves_room_for_the_chunks_own_tail)
 	 * A backend that holds the receiver past t_close by more than the frame
 	 * - the CC26x2's rx_start() ends its window at t_close + BYTE_US +
 	 * RX_END_SLOP_US, 508 us, because its end trigger stops sync SEARCH
-	 * rather than reception. Set here so this test covers caps.
-	 * rx_close_hold_us as well as the airtime tail; the nRF preset leaves it
-	 * zero, so without this line half the arithmetic is unexercised.
+	 * rather than reception. The CC26x2 preset here, so this test covers
+	 * caps.rx_close_hold_us as well as the airtime tail; the nRF preset
+	 * leaves it zero, so without this line half the arithmetic is
+	 * unexercised. One search filter: the preset has two sync words, and
+	 * consecutive devnum_lo values are too close to share a window.
 	 */
-	fake_radio_caps_mut()->rx_close_hold_us = 508u;
+	fake_radio_caps_preset_cc26xx(false);
+	zassert_equal(508u, radiant_radio_caps_get()->rx_close_hold_us);
 
 	need = (radiant_time_t)radiant_radio_caps_get()->min_arm_lead_us +
 	       RADIANT_SCHED_DISPATCH_SLACK_US +
@@ -2326,7 +2332,7 @@ ZTEST(radiant_sched, test_a_truncated_scan_leaves_room_for_the_chunks_own_tail)
 	log.next_open[0] = base;
 	post_track(0u, base, base + (radiant_time_t)TEST_WINDOW_US);
 
-	rx_req_init(&r, scan_fmt, search_filter, 8u, base, RADIANT_TIME_NEVER);
+	rx_req_init(&r, scan_fmt, search_filter, 1u, base, RADIANT_TIME_NEVER);
 	r.chunk_us = 260000u; /* RADIANT_SEARCH_DWELL_DEFAULT_US */
 	zassert_ok(radiant_sched_request_rx(31u, &r));
 
@@ -2955,12 +2961,15 @@ ZTEST(radiant_sched, test_a_capped_backend_gets_shorter_chunks_not_shortened_one
 	uint32_t            i;
 
 	bring_up();
-	fake_radio_caps_mut()->max_window_us = 20000u;
+	/* The CC26x2 coex preset, whose ceiling is 20 ms; one search filter
+	 * for its two sync words (consecutive devnum_lo are too close). */
+	fake_radio_caps_preset_cc26xx(true);
+	zassert_equal(20000u, radiant_radio_caps_get()->max_window_us);
 	t0 = radiant_radio_now();
 
 	/* A chunk five times the ceiling. */
 	rx_req_init(&r, radiant_frame_format(RADIANT_FRAME_CFG_SEARCH), search_filter,
-		    8u, t0, RADIANT_TIME_NEVER);
+		    1u, t0, RADIANT_TIME_NEVER);
 	r.chunk_us = 100000u;
 	zassert_ok(radiant_sched_request_rx(31u, &r));
 	zassert_ok(radiant_sched_tick());
