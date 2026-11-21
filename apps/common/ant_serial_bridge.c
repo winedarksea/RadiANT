@@ -59,6 +59,38 @@ LOG_MODULE_REGISTER(ant_bridge, LOG_LEVEL_INF);
  * counter. Never defined in an image.
  */
 
+/* ── Key-carrying messages ───────────────────────────────────────────────── */
+
+#define KEY_MSG_NONE 0xFFU
+
+/*
+ * KEY_MSG_NONE for a message that carries no key material. For one that does,
+ * how many leading body bytes are not key and may be shown: the network
+ * number of a network key (0x46), the key number of an encryption key (0x7E),
+ * the channel and key length of a RadiANT root key (0xF2), and nothing of a
+ * pairing message (0xF5), whose sub-command 0x02 carries the host's private
+ * X25519 scalar. 0xF5 is judged by id alone, so no sub-command can leak by
+ * being classified wrongly.
+ *
+ * Deliberately independent of the build's configuration: a 0xF2 or 0x7E sent
+ * to a build that refuses it still crossed the parser buffer and the trace
+ * byte for byte. Used by the host trace and by the parser-buffer wipe.
+ */
+static inline uint8_t key_msg_keep(uint8_t id)
+{
+	switch (id) {
+	case ANTW_MESG_NETWORK_KEY_ID:
+	case ANTW_MESG_SET_ENCRYPT_KEY_ID:
+		return 1;
+	case ANTW_MESG_RADIANT_SET_KEY_ID:
+		return 2;
+	case ANTW_MESG_RADIANT_PAIRING_ID:
+		return 0;
+	default:
+		return KEY_MSG_NONE;
+	}
+}
+
 /* ── Host trace (CONFIG_ANT_DONGLE_HOST_TRACE) ─────────────────────────────── */
 
 /*
@@ -68,9 +100,10 @@ LOG_MODULE_REGISTER(ant_bridge, LOG_LEVEL_INF);
  * host side is possible. Off by default and never in a release: at 115200 baud
  * a line costs ~5 ms of log time.
  *
- * Key material is masked, not dropped, so the frame shape stays visible:
- * a network key (0x46) keeps its network number, and RadiANT's key and pairing
- * messages keep only their header.
+ * Key material is masked, not dropped, so the frame shape stays visible: a
+ * key-carrying message (key_msg_keep()) keeps its header and non-key bytes,
+ * and loses its key and its checksum. The checksum goes too because, with the
+ * header known, it is the XOR of the key bytes.
  */
 #ifdef CONFIG_ANT_DONGLE_HOST_TRACE
 /* Where a trace line goes. The parser test (ANT_BRIDGE_PARSER_ONLY) defines
@@ -86,23 +119,12 @@ static void trace_frame(const char *dir, const uint8_t *f, size_t n)
 	size_t redact_from = n;
 	size_t o = 0;
 
-	if (n >= 3) {
-		if (f[2] == ANTW_MESG_NETWORK_KEY_ID) {
-			redact_from = 4;	/* SYNC LEN ID net# */
-		}
-#ifdef CONFIG_RADIANT_SEC_HOST_MESSAGES
-		if (f[2] == ANTW_MESG_RADIANT_SET_KEY_ID
-#ifdef CONFIG_RADIANT_SEC_PAIRING_X25519
-		    || f[2] == ANTW_MESG_RADIANT_PAIRING_ID
-#endif
-		) {
-			redact_from = 3;
-		}
-#endif
+	if (n >= 3 && key_msg_keep(f[2]) != KEY_MSG_NONE) {
+		redact_from = 3U + key_msg_keep(f[2]);	/* SYNC LEN ID kept */
 	}
 
 	for (size_t i = 0; i < n && i < ANTW_MAX_FRAME_SIZE; i++) {
-		bool mask = i >= redact_from && i + 1 < n;	/* keep checksum */
+		bool mask = i >= redact_from;	/* checksum included */
 
 		line[o++] = mask ? 'x' : hex[f[i] >> 4];
 		line[o++] = mask ? 'x' : hex[f[i] & 0xF];
@@ -1832,19 +1854,16 @@ static void process_byte(uint8_t b)
 				parser.running_xor);
 			ant_health_note(ANT_HEALTH_HOST_CSUM);
 		}
-#ifdef CONFIG_RADIANT_SEC_HOST_MESSAGES
-		if (parser.msg_id == ANTW_MESG_RADIANT_SET_KEY_ID
-#ifdef CONFIG_RADIANT_SEC_PAIRING_X25519
-		    /* 0xF5 sub-command 0x02 carries the host's private X25519
-		     * scalar, wiped on the same grounds as a root key. Checked
-		     * by message id alone, not sub-command: a wipe that had to
-		     * parse the body first would be one parsing bug away from
-		     * keeping a private key. */
-		    || parser.msg_id == ANTW_MESG_RADIANT_PAIRING_ID
-#endif
-		) {
+		if (key_msg_keep(parser.msg_id) != KEY_MSG_NONE) {
 			/*
-			 * A root key just crossed this static, long-lived
+			 * Every key-carrying message (key_msg_keep(): 0x46,
+			 * 0x7E, 0xF2, and 0xF5 by id alone, since its
+			 * sub-command 0x02 carries the host's private X25519
+			 * scalar), in every configuration: a key sent to a
+			 * build that refuses the message still crossed this
+			 * buffer.
+			 *
+			 * A key just crossed this static, long-lived
 			 * buffer, which would otherwise hold it until a later
 			 * message overwrote it - indefinitely on a quiet link.
 			 *
@@ -1869,7 +1888,6 @@ static void process_byte(uint8_t b)
 			 */
 			memset(parser.msg_body, 0, sizeof(parser.msg_body));
 		}
-#endif
 		if (b != parser.running_xor && b == ANTW_SYNC_TX) {
 			/* A failed checksum that is a SYNC: most often this frame
 			 * lost a byte and b is the NEXT frame's SYNC, read one
