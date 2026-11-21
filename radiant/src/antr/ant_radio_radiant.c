@@ -4290,13 +4290,17 @@ bool antr_master_xfer_busy(uint8_t ch)
 enum { POLICY_IDLE = 0, POLICY_ASKED, POLICY_FLUSHED };
 static uint8_t api_sec_policy;
 
-/* The take-back itself, shared by 0xF1 and 0xF2; caller in a crit section. */
-static __attribute__((cold)) void api_sec_take_back(uint8_t ch)
+/* The take-back itself, shared by 0xF1 and 0xF2, in a crit section of its own
+ * (0xF1's nests inside configure's). Not inlined: one copy for both. */
+static __attribute__((cold, noinline)) void api_sec_take_back(uint8_t ch)
 {
+	unsigned int key = radiant_event_crit_enter();
+
 	(void)radiant_sched_cancel(ch);
 	api_bind_rejected(ch);
 	api_ch[ch].sec_pay_valid = false;
 	api_sec_policy = POLICY_FLUSHED;
+	radiant_event_crit_exit(key);
 }
 
 /*
@@ -4357,16 +4361,11 @@ __attribute__((cold)) int antr_sec_policy_set(uint8_t ch, uint8_t switches,
  */
 __attribute__((cold)) void radiant_sec_key_replacing(uint8_t ch)
 {
-	unsigned int key;
-
 	/* is_master() also bounds ch for the api_ch[] use. */
-	if (api_sec_policy == POLICY_IDLE || !radiant_channel_is_master(ch) ||
-	    !radiant_sec_channel_is_secured(ch)) {
-		return;
+	if (api_sec_policy != POLICY_IDLE && radiant_channel_is_master(ch) &&
+	    radiant_sec_channel_is_secured(ch)) {
+		api_sec_take_back(ch);
 	}
-	key = radiant_event_crit_enter();
-	api_sec_take_back(ch);
-	radiant_event_crit_exit(key);
 }
 
 __attribute__((cold)) int antr_sec_key_replace(uint8_t ch, const uint8_t *root,
