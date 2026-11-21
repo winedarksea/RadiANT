@@ -1081,5 +1081,131 @@ class TestCompatTierIAuthenticatedFloor(unittest.TestCase):
                          ant_verify.ATTEST_UNVERIFIED)
 
 
+class TestCompatTierICounterWrap(unittest.TestCase):
+    """The 16-bit Tier I counter wraps after 65536 intervals and the wrap
+    advances the epoch by 1 on both sides (docs/radiant-security.md 3.5). As
+    radiant_sec_compat.c rx_tier1(): the on-air bits resolve to the full
+    counter (resolve_low(), span 0x10000), the floor compare is on the full
+    counter, and a counter with more wraps is checked under
+    K_auth = KDF(root, "auth", base_epoch + wraps, base_devnum) with
+    base_epoch + wraps in the nonce, moved in only if its tag matches."""
+
+    ROOT = bytes(range(16))
+    EPOCH = 7
+    DEVNUM = 0x3A17
+    N = 8
+
+    def setUp(self):
+        self.v = ant_verify.CompatVerifier(self.ROOT, self.EPOCH, self.DEVNUM,
+                                           window=self.N)
+
+    def k_auth(self, epoch: int) -> bytes:
+        rc = ant_verify.rc
+        return rc.derive_keys(self.ROOT, epoch, self.DEVNUM)[rc.LABEL_AUTH]
+
+    def genuine(self, full: int) -> bytes:
+        """The page the sensor sends at full counter `full`: the low 16 bits
+        on the air and in the nonce, the epoch advanced by full >> 16."""
+        epoch = self.EPOCH + (full >> 16)
+        tag = ant_verify.rc.compat_tier1_tag(self.k_auth(epoch), epoch,
+                                             self.DEVNUM, full & 0xFFFF)
+        return ant_verify.ap.encode_compat_attest_tier1(full & 0xFFFF, tag)
+
+    def forged(self, full: int) -> bytes:
+        good = self.genuine(full)
+        return good[:-1] + bytes([good[-1] ^ 0x01])
+
+    def test_the_wrap_verifies_under_the_next_epoch_key(self):
+        for full in (0xFFFE, 0xFFFF, 0x10000, 0x10001):
+            with self.subTest(full=hex(full)):
+                self.assertEqual(self.v.feed(self.genuine(full)),
+                                 ant_verify.ATTEST_VERIFIED)
+        tier1 = self.v.summary()["tier_i"]
+        self.assertEqual(tier1["verified"], 4)
+        self.assertEqual(tier1["unverified"], 0)
+        self.assertEqual(tier1["replays"], 0)
+        self.assertEqual(tier1["lost"], 0)
+        self.assertEqual(self.v.wraps, 1)
+        self.assertEqual(self.v.k_auth, self.k_auth(self.EPOCH + 1))
+
+    def test_loss_across_the_wrap_is_counted_on_the_full_counter(self):
+        self.v.feed(self.genuine(0xFFFD))
+        self.assertEqual(self.v.feed(self.genuine(0x10003)),
+                         ant_verify.ATTEST_VERIFIED)
+        # 0xFFFE, 0xFFFF, 0x10000, 0x10001, 0x10002.
+        self.assertEqual(self.v.summary()["tier_i"]["lost"], 5)
+
+    def test_a_page_from_before_the_wrap_is_a_replay_after_it(self):
+        recorded = self.genuine(0xFFFF)
+        self.v.feed(self.genuine(0xFFFE))
+        self.v.feed(recorded)
+        self.v.feed(self.genuine(0x10001))
+        self.assertEqual(self.v.feed(recorded), ant_verify.ATTEST_UNVERIFIED)
+        tier1 = self.v.summary()["tier_i"]
+        self.assertEqual(tier1["replays"], 1)
+        self.assertEqual(tier1["verified"], 3)
+
+    def test_an_old_epoch_page_above_the_floors_low_bits_does_not_verify(self):
+        # Recorded at 0x0005 in the base epoch. After the wrap its low bits are
+        # above the floor's, so it resolves to 0x10005 in the next epoch, and
+        # a tag made under the old epoch's key and nonce cannot match there.
+        recorded = self.genuine(0x0005)
+        self.v.feed(self.genuine(0xFFFF))
+        self.v.feed(self.genuine(0x10001))
+        self.assertEqual(self.v.feed(recorded), ant_verify.ATTEST_UNVERIFIED)
+        self.assertEqual(self.v.summary()["tier_i"]["verified"], 2)
+        # ...and the genuine page that counter belongs to still verifies.
+        self.assertEqual(self.v.feed(self.genuine(0x10005)),
+                         ant_verify.ATTEST_VERIFIED)
+
+    def test_a_forged_wrap_moves_neither_the_epoch_nor_the_floor(self):
+        self.v.feed(self.genuine(0xFFFF))
+        self.assertEqual(self.v.feed(self.forged(0x10000)),
+                         ant_verify.ATTEST_UNVERIFIED)
+        self.assertEqual(self.v.wraps, 0)
+        self.assertEqual(self.v.k_auth, self.k_auth(self.EPOCH))
+        self.assertEqual(self.v.feed(self.genuine(0x10000)),
+                         ant_verify.ATTEST_VERIFIED)
+        self.assertEqual(self.v.wraps, 1)
+
+    def test_first_contact_takes_the_counter_within_the_held_epoch(self):
+        # As rx_tier1()'s first try: unlocked, the on-air bits are the counter
+        # within the epoch the receiver holds, wraps 0.
+        v = ant_verify.CompatVerifier(self.ROOT, self.EPOCH + 1, self.DEVNUM)
+        self.assertEqual(v.feed(self.genuine(0x10002)),
+                         ant_verify.ATTEST_VERIFIED)
+        self.assertEqual(v.wraps, 0)
+
+    def test_an_announcement_after_the_wrap_uses_the_next_epoch(self):
+        self.v.feed(self.genuine(0xFFFF))
+        self.v.feed(self.genuine(0x10002))
+        ap, rc = ant_verify.ap, ant_verify.rc
+        frame_a = ap.encode_compat_announce_a(ap.CompatAnnounce(
+            target_device_type=ap.RADIANT_TLM_DEVICE_TYPE,
+            target_device_number=0x9C41, target_period=8182,
+            reason=ap.COMPAT_REASON_COMMAND, countdown=8))
+        epoch = self.EPOCH + 1
+        tag = rc.compat_announce_tag(self.k_auth(epoch), epoch, self.DEVNUM,
+                                     0x0002, frame_a)
+        self.assertIsNone(self.v.feed(frame_a))
+        self.assertEqual(self.v.feed(ap.encode_compat_announce_b(tag)),
+                         ant_verify.ATTEST_VERIFIED)
+
+    def test_a_tier_ii_window_after_the_wrap_uses_the_next_epoch(self):
+        # rx_tier2() tags under c->epoch, which the wrap has advanced.
+        self.v.feed(self.genuine(0xFFFF))
+        self.v.feed(self.genuine(0x10000))
+        self.v.pending = []
+        msgs = [bytes([0x04, i, 0, 0, 0, 0, 0, 0]) for i in range(self.N - 1)]
+        epoch = self.EPOCH + 1
+        tag = ant_verify.rc.compat_tier2_tag(self.k_auth(epoch), epoch,
+                                             self.DEVNUM, 0, msgs)
+        for m in msgs:
+            self.v.feed(m)
+        self.assertEqual(
+            self.v.feed(ant_verify.ap.encode_compat_attest_tier2(0, tag)),
+            ant_verify.ATTEST_VERIFIED)
+
+
 if __name__ == "__main__":
     unittest.main()
