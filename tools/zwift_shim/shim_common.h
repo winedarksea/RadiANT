@@ -55,7 +55,8 @@ void shim_log_loaded(const char *dll);
 /* RADIANT_SHIM_LOG_LEVEL, read once (default 1):
  *   0  setup/identity calls, errors, the "absent" reason
  *   1  + timed I/O lines (SI_Read/SI_Write, empty-read runs)
- *   2  + hex payload of every read and write, and SI_CheckRXQueue */
+ *   2  + hex payload of every read and write (keys in a write masked), and
+ *        SI_CheckRXQueue */
 int shim_log_level(void);
 int shim_log_on(int level);          /* logging enabled at least at `level` */
 

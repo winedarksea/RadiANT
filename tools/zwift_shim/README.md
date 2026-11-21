@@ -87,7 +87,7 @@ call sequence above was established, and it is off unless the variable is set.
 |---|---|
 | `0` | setup and identity calls, errors, and why the port is absent. Use it for long rides. |
 | `1` (default) | level 0, plus one timed line per non-empty read and per write, and runs of empty reads folded into one line |
-| `2` | level 1, plus the hex of every read and write, and `SI_CheckRXQueue` calls, so the log can be re-framed like a pcap |
+| `2` | level 1, plus the hex of every read and write, and `SI_CheckRXQueue` calls, so the log can be re-framed like a pcap. Key material in a write (0x46, 0x7E, 0xF2, 0xF5 bodies and their checksums) shows as `..`, and a write that is not whole 0xA4 frames logs only the byte count past the last whole frame |
 
 Every line has the same prefix:
 

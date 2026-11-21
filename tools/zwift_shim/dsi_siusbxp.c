@@ -57,6 +57,62 @@ static void ant_ids(const unsigned char *b, DWORD n, char *out, size_t cap)
         sprintf_s(out, cap, "first=0x%02X (not 0xA4-framed)", b[0]);
 }
 
+/* -1 for a message that carries no key; for one that does, how many leading
+ * body bytes are not key and may be logged: the network number of a network
+ * key (0x46, which in a Zwift session is the licensed ANT+ key), the key
+ * number of an encryption key (0x7E), the channel and key length of a RadiANT
+ * root key (0xF2), nothing of a pairing message (0xF5, whose sub-command 0x02
+ * is a private X25519 scalar). Mirrors key_msg_keep() in
+ * apps/common/ant_serial_bridge.c. */
+static int key_keep(unsigned char id)
+{
+    switch (id) {
+    case 0x46: case 0x7E: return 1;
+    case 0xF2:            return 2;
+    case 0xF5:            return 0;
+    default:              return -1;
+    }
+}
+
+#define WRITE_DUMP_MAX 256          /* bytes; longer writes end in " ..." */
+
+/* The level-2 hex of a write, with each key and its checksum (the XOR of the
+ * key bytes once the header is known) shown as "..". Walks whole 0xA4 frames
+ * from the start of the buffer; from the first byte that does not begin a
+ * frame wholly inside it, only the count of what is left is logged, since no
+ * frame boundary is known past it. Stateless: Zwift writes whole frames, so
+ * that tail is empty in practice. */
+static const char *write_dump(const unsigned char *b, DWORD n)
+{
+    static __declspec(thread) char buf[WRITE_DUMP_MAX * 3 + 48];
+    static const char digits[] = "0123456789ABCDEF";
+    DWORD i = 0, k, shown = 0;
+    char *o = buf;
+
+    while (i + 4 <= n && b[i] == 0xA4 && i + (DWORD)b[i + 1] + 4 <= n) {
+        DWORD flen = (DWORD)b[i + 1] + 4;   /* sync, len, id, body, checksum */
+        int keep = key_keep(b[i + 2]);
+        for (k = 0; k < flen; k++) {
+            int mask = keep >= 0 && k >= 3 + (DWORD)keep;
+            if (shown++ == WRITE_DUMP_MAX) {
+                memcpy(o, " ...", 5);       /* with its NUL */
+                return buf;
+            }
+            if (o != buf)
+                *o++ = ' ';
+            *o++ = mask ? '.' : digits[b[i + k] >> 4];
+            *o++ = mask ? '.' : digits[b[i + k] & 15];
+        }
+        i += flen;
+    }
+    *o = '\0';
+    if (i < n)
+        sprintf_s(o, sizeof(buf) - (size_t)(o - buf),
+                  "%s(+%lu bytes not whole frames)", o == buf ? "" : " ",
+                  n - i);
+    return buf;
+}
+
 /* A handle value ANT_DLL can hold that is obviously ours and never a real
  * kernel handle it might accidentally pass elsewhere. */
 #define SHIM_HANDLE ((HANDLE)(ULONG_PTR)0x51D0BEEF)
@@ -271,7 +327,8 @@ __declspec(dllexport) DWORD WINAPI SI_Write(HANDLE cyHandle, LPVOID lpBuffer,
     if (lpdwBytesWritten) *lpdwBytesWritten = put;
     if (shim_log_on(2))
         shim_log("SI_Write %lu/%lu in %.3f ms %s: %s", put, dwBytesToWrite,
-                 shim_ms(t0, t1), ids, shim_hex(lpBuffer, dwBytesToWrite));
+                 shim_ms(t0, t1), ids,
+                 write_dump((const unsigned char *)lpBuffer, dwBytesToWrite));
     else if (shim_log_on(1))
         shim_log("SI_Write %lu/%lu in %.3f ms %s", put, dwBytesToWrite,
                  shim_ms(t0, t1), ids);
