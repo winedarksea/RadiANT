@@ -23,11 +23,12 @@ LOG_MODULE_DECLARE(app, CONFIG_CHIP_APP_LOG_LEVEL);
 
 namespace
 {
-/* RadiANT: the endpoint high-water mark as last written (0: nothing stored),
- * so an allocation the stored mark already covers costs no settings write.
- * BridgeManager is a singleton, so this lives here rather than in the
- * vendored header. */
-uint16_t sPersistedEndpointHighWater;
+/* RadiANT: the endpoint high-water mark as last written (persisted, 0:
+ * nothing stored), so an allocation the stored mark already covers costs no
+ * settings write, and whether it is known at all (security review
+ * 2026-11-21: not while the stored mark is unreadable). BridgeManager is a
+ * singleton, so this lives here rather than in the vendored header. */
+RadiantMatter::EndpointHighWater::Mark sEndpointMark;
 } /* namespace */
 
 using namespace ::chip;
@@ -68,12 +69,17 @@ CHIP_ERROR BridgeManager::Init(LoadStoredBridgedDevicesCallback loadStoredBridge
 	 * whose device is gone (unbound, or its record did not restore) is never
 	 * handed to a different device after a reboot. Matter forbids that reuse.
 	 * The restore below still raises the counter past every restored id, so a
-	 * store written before the key existed behaves as upstream. */
+	 * store written before the key existed (and only that: a key that is
+	 * there but unreadable defers new ids instead, security review
+	 * 2026-11-21) behaves as upstream. */
 	uint16_t storedNext = 0;
-	const bool haveStored = Nrf::BridgeStorageManager::Instance().LoadEndpointHighWater(storedNext);
-	const uint16_t seeded = RadiantMatter::EndpointHighWater::Seed(mFirstDynamicEndpointId, haveStored, storedNext);
-	mCurrentDynamicEndpointId = seeded;
-	sPersistedEndpointHighWater = haveStored ? storedNext : 0;
+	const RadiantMatter::EndpointHighWater::MarkLoad load =
+		Nrf::BridgeStorageManager::Instance().LoadEndpointHighWater(storedNext);
+	mCurrentDynamicEndpointId = RadiantMatter::EndpointHighWater::Adopt(sEndpointMark, mFirstDynamicEndpointId, load,
+									  storedNext, mFirstDynamicEndpointId);
+	if (!RadiantMatter::EndpointHighWater::MayAllocate(sEndpointMark)) {
+		LOG_ERR("Endpoint high-water mark unreadable: restoring stored devices, deferring new ones");
+	}
 
 	/* Invoke the callback to load stored devices in a proper moment. */
 	CHIP_ERROR err = loadStoredBridgedDevicesCb();
@@ -81,10 +87,11 @@ CHIP_ERROR BridgeManager::Init(LoadStoredBridgedDevicesCallback loadStoredBridge
 	/* RadiANT: a restored id at or above the stored mark (first boot after an
 	 * upgrade, or a lost write) raised the counter: persist it now, before the
 	 * device can be unbound and its id forgotten. An unchanged boot writes
-	 * nothing. */
-	if (mCurrentDynamicEndpointId != seeded) {
+	 * nothing, and neither does a boot whose mark is unreadable. */
+	if (RadiantMatter::EndpointHighWater::NeedsWriteBack(sEndpointMark, mFirstDynamicEndpointId,
+							      mCurrentDynamicEndpointId)) {
 		if (Nrf::BridgeStorageManager::Instance().StoreEndpointHighWater(mCurrentDynamicEndpointId)) {
-			sPersistedEndpointHighWater = mCurrentDynamicEndpointId;
+			sEndpointMark.persisted = mCurrentDynamicEndpointId;
 		} else {
 			LOG_ERR("Endpoint high-water mark %u not persisted", mCurrentDynamicEndpointId);
 		}
@@ -245,10 +252,32 @@ CHIP_ERROR BridgeManager::AddSingleDevice(MatterBridgedDevice *device, BridgedDe
 	/* Check if the current provider is already contained in the map - if so, there is at least one duplicate */
 	bool isNewProvider = (Instance().mDevicesMap.GetDuplicatesCount(pair, duplicatedItemKeys) == 0);
 
+	/* RadiANT (security review 2026-11-21): the provider is counted when its
+	 * pair is inserted, not here, and every erase of a pair this call
+	 * inserted gives the slot back through ProviderSlots::Erased() with
+	 * Erase()'s result - so CreateEndpoint()'s own SafelyRemoveDevice() (which
+	 * already decrements) is not decremented twice. Upstream counted here and
+	 * leaked the slot on every failed add after this point. */
+	VerifyOrReturnError(RadiantMatter::ProviderSlots::Admit(mNumberOfProviders, kMaxDataProviders, isNewProvider),
+			    CHIP_ERROR_NO_MEMORY, LOG_ERR("Maximum number of providers exceeded"));
+
+	/* RadiANT (security review 2026-11-21): no new endpoint id while the
+	 * stored high-water mark is unreadable. Each attempt (the bridge retries
+	 * a bind every second) reads it again; restored devices, which bring
+	 * their own ids, are not held back. */
+	if (!devicesPairIndex.HasValue() && !RadiantMatter::EndpointHighWater::MayAllocate(sEndpointMark)) {
+		uint16_t storedNext = 0;
+		const RadiantMatter::EndpointHighWater::MarkLoad load =
+			Nrf::BridgeStorageManager::Instance().LoadEndpointHighWater(storedNext);
+
+		mCurrentDynamicEndpointId = RadiantMatter::EndpointHighWater::Adopt(
+			sEndpointMark, mFirstDynamicEndpointId, load, storedNext, mCurrentDynamicEndpointId);
+		VerifyOrReturnError(RadiantMatter::EndpointHighWater::MayAllocate(sEndpointMark),
+				    CHIP_ERROR_PERSISTED_STORAGE_FAILED);
+		LOG_INF("Endpoint high-water mark readable again: next endpoint %u", mCurrentDynamicEndpointId);
+	}
+
 	if (isNewProvider) {
-		VerifyOrReturnError(mNumberOfProviders + 1 <= kMaxDataProviders, CHIP_ERROR_NO_MEMORY,
-				    LOG_ERR("Maximum number of providers exceeded"));
-		mNumberOfProviders++;
 		dataProvider->Init();
 	}
 
@@ -267,6 +296,7 @@ CHIP_ERROR BridgeManager::AddSingleDevice(MatterBridgedDevice *device, BridgedDe
 		if (!mDevicesMap.Insert(index, std::move(pair))) {
 			return CHIP_ERROR_INTERNAL;
 		}
+		RadiantMatter::ProviderSlots::Inserted(mNumberOfProviders, isNewProvider);
 
 		err = CreateEndpoint(index, endpointId);
 
@@ -286,7 +316,7 @@ CHIP_ERROR BridgeManager::AddSingleDevice(MatterBridgedDevice *device, BridgedDe
 			if (err == CHIP_ERROR_NO_MEMORY) {
 				LOG_ERR("The device object was not constructed properly due to the lack of memory");
 			}
-			mDevicesMap.Erase(index);
+			RadiantMatter::ProviderSlots::Erased(mNumberOfProviders, isNewProvider, mDevicesMap.Erase(index));
 		}
 
 		return err;
@@ -295,6 +325,7 @@ CHIP_ERROR BridgeManager::AddSingleDevice(MatterBridgedDevice *device, BridgedDe
 			/* Find the first empty index in the bridged devices list */
 			if (!mDevicesMap.Contains(index)) {
 				if (mDevicesMap.Insert(index, std::move(pair))) {
+					RadiantMatter::ProviderSlots::Inserted(mNumberOfProviders, isNewProvider);
 					/* Assign the free endpoint ID. */
 					do {
 						/* RadiANT: cover the id with the stored mark BEFORE
@@ -306,15 +337,16 @@ CHIP_ERROR BridgeManager::AddSingleDevice(MatterBridgedDevice *device, BridgedDe
 							endpointId, mFirstDynamicEndpointId);
 
 						if (RadiantMatter::EndpointHighWater::NeedsMark(endpointId, nextEndpointId,
-												sPersistedEndpointHighWater)) {
+												sEndpointMark.persisted)) {
 							if (!Nrf::BridgeStorageManager::Instance().StoreEndpointHighWater(
 								    nextEndpointId)) {
 								LOG_ERR("Endpoint high-water mark %u not persisted: endpoint %u not created",
 									nextEndpointId, endpointId);
-								mDevicesMap.Erase(index);
+								RadiantMatter::ProviderSlots::Erased(mNumberOfProviders, isNewProvider,
+												     mDevicesMap.Erase(index));
 								return CHIP_ERROR_PERSISTED_STORAGE_FAILED;
 							}
-							sPersistedEndpointHighWater = nextEndpointId;
+							sEndpointMark.persisted = nextEndpointId;
 						}
 
 						err = CreateEndpoint(index, endpointId);
@@ -324,8 +356,10 @@ CHIP_ERROR BridgeManager::AddSingleDevice(MatterBridgedDevice *device, BridgedDe
 								LOG_ERR("The device object was not constructed properly due to the lack of memory");
 							}
 							/* The pair was added to a map, so we have to take care about
-							 * removing it in case of failure. */
-							mDevicesMap.Erase(index);
+							 * removing it in case of failure. (RadiANT: the slot
+							 * goes back only if this Erase() removed it.) */
+							RadiantMatter::ProviderSlots::Erased(mNumberOfProviders, isNewProvider,
+											     mDevicesMap.Erase(index));
 						}
 
 						/* Handle wrap condition (RadiANT: upstream's, in

@@ -8,6 +8,8 @@
 
 #include "matter_bridged_device.h"
 #include "persistent_storage/persistent_storage.h"
+/* RadiANT: EndpointHighWater::MarkLoad (security review 2026-11-21). */
+#include "bridge_storage_codec.h"
 
 #ifdef CONFIG_BRIDGED_DEVICE_BT
 #include <zephyr/bluetooth/addr.h>
@@ -212,11 +214,15 @@ public:
 	/**
 	 * @brief RadiANT: load the value StoreEndpointHighWater() wrote
 	 *
-	 * @param next filled in on success only
-	 * @return true if the key is present and holds a valid value
-	 * @return false absent (a store from before the key) or malformed
+	 * Security review 2026-11-21: a missing key and an unreadable one are
+	 * different answers. Only Absent may fall back to max(restored) + 1.
+	 *
+	 * @param next filled in for Valid only
+	 * @return Valid the key holds a valid value
+	 * @return Absent the key does not exist (a store from before it)
+	 * @return Unreadable the key exists but did not load, or is malformed
 	 */
-	bool LoadEndpointHighWater(uint16_t &next);
+	RadiantMatter::EndpointHighWater::MarkLoad LoadEndpointHighWater(uint16_t &next);
 
 private:
 	/**

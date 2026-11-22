@@ -403,18 +403,22 @@ bool BridgeStorageManager::StoreEndpointHighWater(uint16_t next)
 	       PSErrorCode::Success;
 }
 
-bool BridgeStorageManager::LoadEndpointHighWater(uint16_t &next)
+RadiantMatter::EndpointHighWater::MarkLoad BridgeStorageManager::LoadEndpointHighWater(uint16_t &next)
 {
 	/* One byte over, so an oversized value reads as malformed, not truncated. */
 	uint8_t buffer[RadiantMatter::EndpointHighWater::kSize + 1];
 	size_t readSize = 0;
 
-	if (Nrf::GetPersistentStorage().NonSecureLoad(&mEndpointHighWater, buffer, sizeof(buffer), readSize) !=
-	    PSErrorCode::Success) {
-		return false;
-	}
+	const bool loaded = Nrf::GetPersistentStorage().NonSecureLoad(&mEndpointHighWater, buffer, sizeof(buffer),
+								      readSize) == PSErrorCode::Success;
+	/* RadiANT (security review 2026-11-21): NonSecureLoad() fails alike for
+	 * a missing key, a read error, an oversized value and the backend's
+	 * empty-value marker. HasEntry() finds the key without reading it, so
+	 * only a key that is not there at all counts as a legacy store. */
+	const bool present =
+		loaded || Nrf::GetPersistentStorage().NonSecureHasEntry(&mEndpointHighWater) == PSErrorCode::Success;
 
-	return RadiantMatter::EndpointHighWater::Decode(buffer, readSize, next);
+	return RadiantMatter::EndpointHighWater::Classify(loaded, buffer, readSize, present, next);
 }
 
 #ifdef CONFIG_BRIDGE_MIGRATE_PRE_2_7_0

@@ -16,7 +16,7 @@ Aggregator endpoint and the dynamic-endpoint machinery.
 | Upstream licence | `LicenseRef-Nordic-5-Clause` (the `core/` files) and Apache-2.0 (the ZAP output, which is Project CHIP's) |
 
 **Every upstream file below is byte-for-byte identical to its source, except
-the three marked PATCHED** (see the next two paragraphs). Nothing was
+the three marked PATCHED** (see the paragraphs after the list). Nothing was
 reformatted, retagged or "tidied". If a future reader needs to diff against a
 newer NCS, the copy is a straight `Copy-Item`:
 
@@ -60,15 +60,52 @@ write, which keeps upstream's ENDPOINT_EXISTS skip loop from writing per
 skipped id. 0xFFFF (`chip::kInvalidEndpointId`) is never tried or stored: it
 wraps to the first dynamic id like upstream's wrap to 0.
 
+**The same three files are patched again for a missing versus an unreadable
+mark** (security review 2026-11-21). `LoadEndpointHighWater()` returns
+`EndpointHighWater::MarkLoad` (Absent / Valid / Unreadable) instead of a
+bool: the persistent-storage API's `NonSecureLoad()` fails alike for a
+missing key, a read error, an oversized value and the settings backend's
+empty-value marker, so a failed load asks `NonSecureHasEntry()` whether the
+key exists. Only Absent takes the legacy max(restored) + 1 fallback. An
+Unreadable mark (present but not loadable, the wrong size, or 0xFFFF)
+restores the stored devices, skips the boot write-back (it would replace the
+mark with max(restored) + 1) and refuses every new allocation with
+`CHIP_ERROR_PERSISTED_STORAGE_FAILED`; each refused attempt re-reads the mark
+(the ANT bridge retries a bind every second) and the first Valid or Absent
+read lets allocation resume past it. A mark that stays malformed blocks new
+sensors until the store is repaired or factory-reset: that is the price of
+never guessing an id. `sPersistedEndpointHighWater` became
+`sEndpointMark` (`EndpointHighWater::Mark`: the persisted value plus whether
+it is known). One limit is below this layer: Zephyr's
+`settings_load_subtree_direct()` returns 0 whatever its backend does, so a
+fault that hides the key from iteration altogether still reads as Absent.
+
+**`core/bridge_manager.cpp` is patched for the provider quota** (security
+review 2026-11-21). Upstream's `AddSingleDevice()` counted a new data
+provider in `mNumberOfProviders` at admission and never gave the slot back
+when a later step failed (the high-water write, an insert, or
+`CreateEndpoint()`), so repeated storage failures exhausted the quota and kept
+new sensors out after storage recovered. The count now follows the map
+(`bridge_storage_codec.h`'s `ProviderSlots`): admission only checks the
+quota, the count rises after a successful `Insert()`, and every erase of a
+pair this call inserted passes `FiniteMap::Erase()`'s result to
+`ProviderSlots::Erased()`. `CreateEndpoint()`'s internal-error path already
+calls `SafelyRemoveDevice()`, which erases the entry and decrements (upstream,
+unchanged); the caller's own `Erase()` then returns false, so the slot is
+returned exactly once. `dataProvider->Init()` now runs after the high-water
+gate, still before the insert.
+
 **What the tests cover, and what they do not.** The counter arithmetic
-(upstream's raise and wrap guard included) and the stored value's codec live
-in `bridge_storage_codec.h`'s `EndpointHighWater`, and
+(upstream's raise and wrap guard included), the stored value's codec, the
+load classification, the unknown-mark rules and the provider bookkeeping live
+in `bridge_storage_codec.h`'s `EndpointHighWater` and `ProviderSlots`, and
 `apps/dongle_thread/tests/matter_storage` tests them on native_sim, together
-with a *model* of the bind/unbind/reboot sequence written in the test. It does
-NOT test `bridge_manager.cpp`'s wiring (the calls, their order, the
-power-loss window): CHIP does not build on native_sim. That wiring is covered
-by review, by the Matter build (nm and `.config` checks) and by an on-device
-bind/unbind/reboot check, which is an owner step.
+with a *model* of the bind/unbind/reboot sequence written in the test (with
+read, write and `CreateEndpoint()` faults). It does NOT test
+`bridge_manager.cpp`'s wiring (the calls, their order, the power-loss window):
+CHIP does not build on native_sim. That wiring is covered by review, by the
+Matter build (nm and `.config` checks) and by an on-device check, which is an
+owner step.
 
 A store without the key behaves exactly as
 upstream; neither the record format nor `kCurrentVersion` changes. Every
@@ -85,7 +122,8 @@ tag, and are not upstream copies:
   `static_assert`s. See trap 15.
 - `bridge_storage_codec.{h,cpp}` — the bounds-checked bridged-device record
   decoder that the patched loader calls, and the endpoint high-water mark's
-  codec and counter arithmetic. It includes no CHIP header, so
+  codec, counter arithmetic and load classification, and the provider-quota
+  bookkeeping (`ProviderSlots`). It includes no CHIP header, so
   `apps/dongle_thread/tests/matter_storage` tests it on native_sim.
 
 `Kconfig` is also ours: it is upstream's `src/core/Kconfig` with the whole

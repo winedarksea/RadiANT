@@ -518,13 +518,16 @@ ZTEST(matter_storage, test_v1_label_bounds)
 }
 
 /* ---------------------------------------------------------------------------
- * The endpoint high-water mark (security review 2026-11-20 item B).
+ * The endpoint high-water mark (security review 2026-11-20 item B), the
+ * missing-versus-unreadable mark and the provider quota (security review
+ * 2026-11-21).
  *
  * Bridge mirrors what BridgeManager and RestoreBridgedDevices() do with the
- * EndpointHighWater functions - Init's seed, the restore raise, the fresh
- * allocation and its store - over a fake key-value store, so a "reboot" is
- * Boot() again with the persisted state kept. The CHIP side does not build on
- * native_sim; the arithmetic it calls is what is under test here.
+ * EndpointHighWater and ProviderSlots functions - Init's load and seed, the
+ * restore and its raise, the write-back, AddSingleDevice()'s admission, mark
+ * gate, insert, mark store and unwind - over a fake key-value store, so a
+ * "reboot" is Boot() again with the persisted state kept. The CHIP side does
+ * not build on native_sim; the logic it calls is what is under test here.
  * ------------------------------------------------------------------------- */
 
 namespace
@@ -542,59 +545,123 @@ struct Bridge {
 		uint16_t ep;
 		bool present;
 		bool restorable;
+		bool live;
 	} recs[8] = {};
 	size_t nRecs = 0;
 	unsigned hwWrites = 0;
 
+	/* Faults. */
+	bool hwReadFault = false;  /* the key exists, its load fails */
+	bool hwWriteFault = false; /* every store of the key fails */
+	bool createFault = false;  /* CreateEndpoint()'s internal-error path */
+
 	/* Runtime. */
 	uint16_t current = 0;
-	uint16_t persisted = 0; /* sPersistedEndpointHighWater */
-	unsigned live = 0;      /* endpoints a controller could see */
+	EndpointHighWater::Mark mark; /* sEndpointMark */
+	unsigned live = 0;            /* endpoints a controller could see */
+	uint16_t providers = 0;       /* mNumberOfProviders */
+	uint16_t maxProviders = 8;    /* kMaxDataProviders */
 
-	void StoreHw(uint16_t next)
+	bool StoreHw(uint16_t next)
 	{
-		persisted = next;
 		uint8_t b[EndpointHighWater::kSize];
 
+		if (hwWriteFault) {
+			return false;
+		}
 		EndpointHighWater::Encode(next, b);
 		memcpy(hw, b, sizeof(b));
 		hwLen = sizeof(b);
 		hwPresent = true;
 		hwWrites++;
+		return true;
 	}
 
-	/* BridgeManager::Init(): seed, restore, persist a raised counter. */
+	/* A value put in the store behind the bridge's back (corruption, or a
+	 * repair). */
+	void PokeHw(const uint8_t *b, size_t n)
+	{
+		memcpy(hw, b, n);
+		hwLen = n;
+		hwPresent = true;
+	}
+
+	/* BridgeStorageManager::LoadEndpointHighWater(). */
+	EndpointHighWater::MarkLoad LoadHw(uint16_t &stored)
+	{
+		const bool loaded = hwPresent && !hwReadFault;
+
+		return EndpointHighWater::Classify(loaded, hw, hwLen, hwPresent, stored);
+	}
+
+	/* BridgeManager::Init(): load and seed, restore, persist a raised
+	 * counter. */
 	void Boot()
 	{
 		uint16_t stored = 0;
-		const bool have = hwPresent && EndpointHighWater::Decode(hw, hwLen, stored);
-		const uint16_t seeded = EndpointHighWater::Seed(kFirstDynamic, have, stored);
+		const EndpointHighWater::MarkLoad load = LoadHw(stored);
 
-		current = seeded;
-		persisted = have ? stored : 0;
+		mark = EndpointHighWater::Mark{};
+		live = 0;
+		providers = 0;
+		current = EndpointHighWater::Adopt(mark, kFirstDynamic, load, stored, kFirstDynamic);
 		for (size_t i = 0; i < nRecs; i++) {
+			recs[i].live = false;
 			if (recs[i].present && recs[i].restorable) {
+				/* AddSingleDevice() with an index: no mark gate. */
+				zassert_true(ProviderSlots::Admit(providers, maxProviders, true));
+				ProviderSlots::Inserted(providers, true);
+				recs[i].live = true;
+				live++;
 				current = EndpointHighWater::Raise(current, recs[i].ep, kFirstDynamic);
 			}
 		}
-		if (current != seeded) {
-			StoreHw(current);
+		if (EndpointHighWater::NeedsWriteBack(mark, kFirstDynamic, current) && StoreHw(current)) {
+			mark.persisted = current;
 		}
 	}
 
-	/* AddSingleDevice() with no index: mark the id if the stored mark does
-	 * not cover it, then CreateEndpoint() makes it live, then (in
-	 * ant_bridge.cpp) the record is stored, unless power fails first. */
+	/* AddSingleDevice() with no index: admit the provider, check the mark is
+	 * known (re-reading it if not), insert, mark the id if the stored mark
+	 * does not cover it, then CreateEndpoint() makes it live, then (in
+	 * ant_bridge.cpp) the record is stored, unless power fails first.
+	 * Returns 0 for a refused bind. */
 	uint16_t Bind(bool recordStored = true)
 	{
+		if (!ProviderSlots::Admit(providers, maxProviders, true)) {
+			return 0;
+		}
+		if (!EndpointHighWater::MayAllocate(mark)) {
+			uint16_t stored = 0;
+			const EndpointHighWater::MarkLoad load = LoadHw(stored);
+
+			current = EndpointHighWater::Adopt(mark, kFirstDynamic, load, stored, current);
+			if (!EndpointHighWater::MayAllocate(mark)) {
+				return 0;
+			}
+		}
+		ProviderSlots::Inserted(providers, true);
+
 		const uint16_t id = current;
 		const uint16_t next = EndpointHighWater::Advance(id, kFirstDynamic);
 
-		if (EndpointHighWater::NeedsMark(id, next, persisted)) {
-			StoreHw(next);
+		if (EndpointHighWater::NeedsMark(id, next, mark.persisted)) {
+			if (!StoreHw(next)) {
+				ProviderSlots::Erased(providers, true, true);
+				return 0;
+			}
+			mark.persisted = next;
+		}
+		current = next;
+		if (createFault) {
+			/* CreateEndpoint() -> SafelyRemoveDevice(): erases the pair and
+			 * gives the slot back itself; AddSingleDevice()'s own erase
+			 * then finds nothing. */
+			providers--;
+			ProviderSlots::Erased(providers, true, false);
+			return 0;
 		}
 		live++;
-		current = next;
 		if (!recordStored) {
 			return id;
 		}
@@ -602,15 +669,22 @@ struct Bridge {
 		recs[nRecs].ep = id;
 		recs[nRecs].present = true;
 		recs[nRecs].restorable = true;
+		recs[nRecs].live = true;
 		nRecs++;
 		return id;
 	}
 
+	/* RemoveEndpointForRow(): SafelyRemoveDevice() gives the slot back. */
 	void Unbind(uint16_t ep)
 	{
 		for (size_t i = 0; i < nRecs; i++) {
 			if (recs[i].ep == ep) {
 				recs[i].present = false;
+				if (recs[i].live) {
+					recs[i].live = false;
+					live--;
+					providers--;
+				}
 			}
 		}
 	}
@@ -632,6 +706,7 @@ struct Bridge {
 		recs[nRecs].ep = ep;
 		recs[nRecs].present = true;
 		recs[nRecs].restorable = true;
+		recs[nRecs].live = false;
 		nRecs++;
 	}
 };
@@ -794,6 +869,179 @@ ZTEST(matter_storage, test_endpoint_hw_upgraded_store_persists_restored_high_wat
 
 	br.Boot();
 	zassert_equal(br.hwWrites, writes, "an unchanged boot rewrote the key");
+}
+
+/* ---- missing versus unreadable mark (security review 2026-11-21) ------- */
+
+ZTEST(matter_storage, test_endpoint_hw_classify)
+{
+	uint8_t good[EndpointHighWater::kSize];
+	uint8_t invalid[EndpointHighWater::kSize];
+	uint16_t out = 1234;
+
+	EndpointHighWater::Encode(9, good);
+	EndpointHighWater::Encode(EndpointHighWater::kInvalid, invalid);
+
+	zassert_equal(EndpointHighWater::Classify(false, good, 0, false, out), EndpointHighWater::MarkLoad::Absent);
+	zassert_equal(EndpointHighWater::Classify(false, good, 0, true, out), EndpointHighWater::MarkLoad::Unreadable,
+		      "a key that exists but did not load was taken for a legacy store");
+	zassert_equal(EndpointHighWater::Classify(true, good, 1, true, out), EndpointHighWater::MarkLoad::Unreadable,
+		      "a short value was taken for a legacy store");
+	zassert_equal(EndpointHighWater::Classify(true, good, EndpointHighWater::kSize + 1, true, out),
+		      EndpointHighWater::MarkLoad::Unreadable, "an oversized value was taken for a legacy store");
+	zassert_equal(EndpointHighWater::Classify(true, invalid, sizeof(invalid), true, out),
+		      EndpointHighWater::MarkLoad::Unreadable, "0xFFFF was taken for a legacy store");
+	zassert_equal(out, 1234, "a refused value was written out");
+	zassert_equal(EndpointHighWater::Classify(true, good, sizeof(good), true, out), EndpointHighWater::MarkLoad::Valid);
+	zassert_equal(out, 9);
+}
+
+ZTEST(matter_storage, test_endpoint_hw_unknown_mark_blocks_allocation_and_write_back)
+{
+	EndpointHighWater::Mark mark;
+
+	zassert_equal(EndpointHighWater::Adopt(mark, kFirstDynamic, EndpointHighWater::MarkLoad::Unreadable, 0, 7), 7);
+	zassert_false(EndpointHighWater::MayAllocate(mark), "an unreadable mark allowed a new id");
+	zassert_false(EndpointHighWater::NeedsWriteBack(mark, kFirstDynamic, 7),
+		      "an unreadable mark would be overwritten with max(restored) + 1");
+
+	/* A later read that succeeds raises the counter to the stored mark, or
+	 * keeps a counter the restore raised past it. */
+	zassert_equal(EndpointHighWater::Adopt(mark, kFirstDynamic, EndpointHighWater::MarkLoad::Valid, 12, 7), 12);
+	zassert_true(EndpointHighWater::MayAllocate(mark));
+	zassert_equal(mark.persisted, 12);
+	zassert_equal(EndpointHighWater::Adopt(mark, kFirstDynamic, EndpointHighWater::MarkLoad::Valid, 5, 7), 7);
+
+	/* Confirmed absence is the legacy fallback, as before. */
+	EndpointHighWater::Mark legacy;
+
+	zassert_equal(EndpointHighWater::Adopt(legacy, kFirstDynamic, EndpointHighWater::MarkLoad::Absent, 0,
+					       kFirstDynamic),
+		      kFirstDynamic);
+	zassert_true(EndpointHighWater::MayAllocate(legacy));
+	zassert_true(EndpointHighWater::NeedsWriteBack(legacy, kFirstDynamic, 6));
+	zassert_false(EndpointHighWater::NeedsWriteBack(legacy, kFirstDynamic, kFirstDynamic));
+}
+
+/* The review's case: the top endpoint was unbound, then the mark cannot be
+ * read at the next boot. The fallback would hand its id to a new sensor. */
+ZTEST(matter_storage, test_endpoint_hw_read_fault_does_not_reuse_unbound_top)
+{
+	Bridge br;
+
+	br.Boot();
+	zassert_equal(br.Bind(), 3);
+	zassert_equal(br.Bind(), 4);
+	zassert_equal(br.Bind(), 5);
+	br.Unbind(5);
+
+	const unsigned writes = br.hwWrites;
+
+	br.hwReadFault = true;
+	br.Boot();
+	zassert_equal(br.live, 2, "the stored devices were not restored");
+	zassert_equal(br.hwWrites, writes, "the unreadable mark was overwritten at boot");
+	for (int i = 0; i < 3; i++) {
+		zassert_equal(br.Bind(), 0, "a new id (endpoint 5?) was handed out under an unreadable mark");
+	}
+	zassert_equal(br.providers, 2, "a deferred bind kept a provider slot");
+
+	/* The store recovers: the next retry reads the mark and goes on past it. */
+	br.hwReadFault = false;
+	zassert_equal(br.Bind(), 6, "endpoint 5 was reused after the read recovered");
+}
+
+/* A malformed value (wrong size, or 0xFFFF) is unreadable too, not legacy. */
+ZTEST(matter_storage, test_endpoint_hw_malformed_mark_defers_until_repaired)
+{
+	uint8_t invalid[EndpointHighWater::kSize];
+	uint8_t repaired[EndpointHighWater::kSize];
+	const uint8_t shortValue[1] = { 9 };
+	Bridge br;
+
+	EndpointHighWater::Encode(EndpointHighWater::kInvalid, invalid);
+	br.AddLegacyRecord(3);
+	br.AddLegacyRecord(4);
+	br.AddLegacyRecord(5);
+	br.PokeHw(invalid, sizeof(invalid));
+	br.Boot();
+	zassert_equal(br.live, 3);
+	zassert_equal(br.current, 6, "restored ids did not raise the counter");
+	zassert_equal(br.hwWrites, 0, "a malformed mark was overwritten at boot");
+	zassert_equal(br.Bind(), 0, "a new id was handed out under a malformed mark");
+
+	br.PokeHw(shortValue, sizeof(shortValue));
+	zassert_equal(br.Bind(), 0, "a new id was handed out under a short mark");
+
+	EndpointHighWater::Encode(9, repaired);
+	br.PokeHw(repaired, sizeof(repaired));
+	zassert_equal(br.Bind(), 9, "the repaired mark was not adopted");
+	zassert_equal(br.Bind(), 10);
+}
+
+/* ---- the provider quota (security review 2026-11-21) ------------------- */
+
+ZTEST(matter_storage, test_provider_slots_follow_the_map)
+{
+	uint16_t count = 0;
+
+	zassert_true(ProviderSlots::Admit(count, 2, true));
+	zassert_equal(count, 0, "admission alone took a slot");
+	ProviderSlots::Inserted(count, true);
+	zassert_equal(count, 1);
+	ProviderSlots::Erased(count, true, false);
+	zassert_equal(count, 1, "an erase that removed nothing gave a slot back");
+	ProviderSlots::Erased(count, true, true);
+	zassert_equal(count, 0);
+
+	/* A provider already in the map (a second device on it) is not counted. */
+	ProviderSlots::Inserted(count, false);
+	ProviderSlots::Erased(count, false, true);
+	zassert_equal(count, 0);
+
+	count = 2;
+	zassert_false(ProviderSlots::Admit(count, 2, true), "the quota was not enforced");
+	zassert_true(ProviderSlots::Admit(count, 2, false), "a known provider was refused");
+	zassert_equal(count, 2);
+}
+
+/* The review's case: the mark write fails on every retry; once storage
+ * recovers, a bind must still succeed. */
+ZTEST(matter_storage, test_provider_slot_returned_after_failed_reservations)
+{
+	Bridge br;
+
+	br.maxProviders = 2;
+	br.Boot();
+	br.hwWriteFault = true;
+	for (int i = 0; i < 5; i++) {
+		zassert_equal(br.Bind(), 0);
+	}
+	zassert_equal(br.providers, 0, "failed endpoint reservations kept %u provider slots", br.providers);
+
+	br.hwWriteFault = false;
+	zassert_equal(br.Bind(), 3, "storage recovered but the bind was refused");
+	zassert_equal(br.Bind(), 4);
+	zassert_equal(br.Bind(), 0, "the provider quota is no longer enforced");
+	zassert_equal(br.providers, 2);
+}
+
+/* CreateEndpoint()'s internal-error path already gives the slot back through
+ * SafelyRemoveDevice(); AddSingleDevice()'s unwind must not do it again. */
+ZTEST(matter_storage, test_provider_slot_not_returned_twice)
+{
+	Bridge br;
+
+	br.maxProviders = 2;
+	br.Boot();
+	zassert_equal(br.Bind(), 3);
+	br.createFault = true;
+	zassert_equal(br.Bind(), 0);
+	zassert_equal(br.Bind(), 0);
+	zassert_equal(br.providers, 1, "provider count %u after two failed creations", br.providers);
+	br.createFault = false;
+	zassert_equal(br.Bind(), 6);
+	zassert_equal(br.Bind(), 0, "a double give-back let a third provider in");
 }
 
 /* ---- lengths near SIZE_MAX: `counter + length` wraps ------------------- */

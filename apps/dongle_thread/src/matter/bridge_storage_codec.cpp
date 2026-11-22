@@ -132,5 +132,69 @@ bool NeedsMark(uint16_t id, uint16_t next, uint16_t persistedNext)
 	return id >= persistedNext && next > id;
 }
 
+MarkLoad Classify(bool loaded, const uint8_t *buf, size_t size, bool present, uint16_t &next)
+{
+	if (loaded) {
+		return Decode(buf, size, next) ? MarkLoad::Valid : MarkLoad::Unreadable;
+	}
+	return present ? MarkLoad::Unreadable : MarkLoad::Absent;
+}
+
+uint16_t Adopt(Mark &mark, uint16_t first, MarkLoad load, uint16_t storedNext, uint16_t current)
+{
+	switch (load) {
+	case MarkLoad::Valid: {
+		const uint16_t seed = Seed(first, true, storedNext);
+
+		mark.known = true;
+		mark.persisted = storedNext;
+		return current > seed ? current : seed;
+	}
+	case MarkLoad::Absent:
+		mark.known = true;
+		mark.persisted = 0;
+		return current;
+	case MarkLoad::Unreadable:
+	default:
+		mark.known = false;
+		mark.persisted = 0;
+		return current;
+	}
+}
+
+bool NeedsWriteBack(const Mark &mark, uint16_t first, uint16_t current)
+{
+	return mark.known && current != Seed(first, mark.persisted != 0, mark.persisted);
+}
+
+bool MayAllocate(const Mark &mark)
+{
+	return mark.known;
+}
+
 } /* namespace EndpointHighWater */
+
+namespace ProviderSlots
+{
+
+bool Admit(uint16_t count, uint16_t max, bool isNewProvider)
+{
+	return !isNewProvider || count < max;
+}
+
+void Inserted(uint16_t &count, bool isNewProvider)
+{
+	if (isNewProvider) {
+		count++;
+	}
+}
+
+void Erased(uint16_t &count, bool isNewProvider, bool erased)
+{
+	if (isNewProvider && erased && count > 0) {
+		count--;
+	}
+}
+
+} /* namespace ProviderSlots */
 } /* namespace RadiantMatter */
