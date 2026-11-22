@@ -1089,9 +1089,14 @@ jobs:
           # LOCKED WITH HASHES (security review 2026-11-21): the same tag must
           # run the same code here. --no-deps because the lock lists every
           # transitive dependency, --only-binary so no sdist's build script
-          # runs. Regenerate the file as its header says; never loosen a pin
-          # in place.
-          pip install --require-hashes --no-deps --only-binary :all: \
+          # runs. --force-reinstall because the Zephyr setup above has already
+          # installed jinja2, MarkupSafe and click unhashed (gcovr, reuse and
+          # spsdk pull them in), and pip answers "already satisfied" for an
+          # installed version that matches a pin WITHOUT checking its hash:
+          # without it the lock would not cover the very packages codegen.py
+          # imports. Regenerate the file as its header says; never loosen a
+          # pin in place.
+          pip install --force-reinstall --require-hashes --no-deps --only-binary :all: \
             -r app/.github/matter-gate-requirements.txt
           # The upstream distribution channel for a gn binary; there is no
           # apt package and connectedhomeip's own bootstrap pulls it from the

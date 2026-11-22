@@ -2,9 +2,12 @@
 #
 # The Python packages release.yml's Matter build gate installs, locked with
 # hashes (security review 2026-11-21). Installed with
-#   pip install --require-hashes --no-deps --only-binary :all: -r <this file>
+#   pip install --force-reinstall --require-hashes --no-deps
+#     --only-binary :all: -r <this file>
 # so every package, transitive ones included, must be listed here with its
-# exact version and the hash of the one wheel pip may use.
+# exact version and the hash of the one wheel pip may use. --force-reinstall
+# matters: an installed version that matches a pin is otherwise "already
+# satisfied" with no hash check at all.
 #
 # Target: CPython 3.12 on x86_64 glibc Linux (setup-python "3.12" on
 # ubuntu-24.04). The hash per package is that wheel's, so a different Python
