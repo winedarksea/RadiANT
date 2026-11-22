@@ -2840,6 +2840,55 @@ ZTEST(api, test_sec_host_pairing_refuses_out_of_order_and_unopened_commitments)
 }
 
 /*
+ * Review 2026-11-21: an unassign ends the channel's exchange. Left live until
+ * its timeout, a delayed but valid completion installed the old exchange's
+ * root under whatever device number the reused channel number carried next.
+ */
+ZTEST(api, test_sec_host_unassign_ends_the_pairing_exchange)
+{
+	uint8_t reply[2 + RADIANT_SEC_X25519_BYTES];
+	uint8_t cb[RADIANT_SEC_BLOCK_BYTES];
+	uint8_t st[ANTR_SEC_STATUS_LEN];
+	uint8_t rlen = 0u;
+
+	f5_keys_cross();
+	zassert_ok(f5(PEER_CH, ANTW_RADIANT_PAIR_NONCE, pair_nb_arg,
+		      sizeof(pair_nb_arg), reply, &rlen));
+	memcpy(cb, &reply[2], sizeof(cb));
+	zassert_ok(f5(HOST_CH, ANTW_RADIANT_PAIR_NONCE, pair_na_arg,
+		      sizeof(pair_na_arg), reply, &rlen));
+	zassert_ok(f5(HOST_CH, ANTW_RADIANT_PAIR_PEER_COMMIT, cb, sizeof(cb),
+		      reply, &rlen));
+
+	/* A's channel number is reused for another sensor mid-exchange. */
+	zassert_ok(antr_channel_unassign(HOST_CH));
+	zassert_ok(antr_channel_assign(HOST_CH,
+				       (uint8_t)ANTW_CHANNEL_TYPE_MASTER, 0u,
+				       0u));
+	zassert_ok(antr_channel_id_set(HOST_CH, HOST_DEVNUM ^ 0x0101u,
+				       HOST_DEVTYPE, HOST_TRANS));
+
+	/* The reveal A was waiting for arrives late: refused, nothing keyed. */
+	zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
+		      f5(HOST_CH, ANTW_RADIANT_PAIR_PEER_NONCE,
+			 &pair_nb_arg[1], RADIANT_SEC_PAIR_NONCE_BYTES, reply,
+			 &rlen),
+		      "a delayed completion keyed the reused channel");
+	zassert_ok(antr_sec_status_get(HOST_CH, st, sizeof(st)));
+	zassert_equal(0u, st[30] & ANTR_SEC_STATUS_KEYED);
+	zassert_equal(0u, enrolments_of(HOST_CH));
+
+	/* And a fresh exchange starts at once, without waiting for a timeout. */
+	zassert_ok(f5(HOST_CH, ANTW_RADIANT_PAIR_ENTER, NULL, 0u, reply, &rlen));
+	zassert_ok(f5(HOST_CH, ANTW_RADIANT_PAIR_SCALAR, pair_sa,
+		      sizeof(pair_sa), reply, &rlen));
+
+	f5_done();
+
+	api_assert_no_viol();
+}
+
+/*
  * How long a pairing command holds api_lock. Each X25519 is a full scalar
  * multiplication on this build's software implementation; the number printed
  * is the figure to read against the RX thread (which needs api_lock for the
