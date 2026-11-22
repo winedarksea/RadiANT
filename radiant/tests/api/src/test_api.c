@@ -5260,6 +5260,81 @@ ZTEST(api, test_a_denied_tracked_window_is_not_reported_as_an_rx_failure)
 	end_of_test();
 }
 
+/*
+ * The slot that takes a denial run past RADIANT_CHANNEL_DENY_TO_SEARCH returns
+ * the channel to search. That slot raises RX_FAIL_GO_TO_SEARCH and nothing
+ * else: the wire docs promise a collision is "never also reported as RX_FAIL",
+ * and two events for one slot would break a host's loss accounting the other
+ * way. Every earlier denied slot is still one EVENT_CHANNEL_COLLISION.
+ */
+ZTEST(api, test_the_denial_that_returns_a_channel_to_search_raises_one_event)
+{
+	const struct fake_radio_arm *w;
+	uint16_t                     dev_a;
+	uint32_t                     coll0;
+	uint32_t                     fail0;
+
+	api_long_match();
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_network_address_set(0u, ant_plus_key));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_assign(CH,
+					  (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
+					  0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_id_set(CH, 0u, 0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_period_set(CH, RADIANT_CHANNEL_PERIOD_ANT_PLUS));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_radio_freq_set(CH, RF_INDEX));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR, antr_channel_open(CH));
+
+	w = armed_search_window();
+	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &dev_a);
+	fake_radio_advance_past_close(w->t_close);
+	drain();
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH),
+		      "setup: the channel did not acquire");
+
+	coll0 = count_channel_events(CH, (uint8_t)ANTW_EVENT_CHANNEL_COLLISION);
+	fail0 = count_channel_events(CH, (uint8_t)ANTW_EVENT_RX_FAIL);
+
+	/* More periods than DENY_TO_SEARCH, every one refused. Once the channel
+	 * is searching, its denied operations are search operations and raise
+	 * nothing on this path. */
+	fake_radio_force_terminal_repeat(RADIANT_RADIO_STATUS_DENIED, 64u);
+	run_virtual_us(((uint64_t)RADIANT_CHANNEL_DENY_TO_SEARCH + 4u) *
+		       (uint64_t)PERIOD_US);
+	drain();
+
+	zassert_true(n_msg < MSGLOG_MAX, "the message log filled; counts unsafe");
+	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(CH),
+		      "the denial run never crossed DENY_TO_SEARCH, so this test "
+		      "proved nothing (state %d)",
+		      (int)radiant_channel_state_get(CH));
+	zassert_equal(1u,
+		      count_channel_events(CH,
+					   (uint8_t)ANTW_EVENT_RX_FAIL_GO_TO_SEARCH),
+		      "the return to search must be reported exactly once");
+	zassert_equal((uint32_t)RADIANT_CHANNEL_DENY_TO_SEARCH - 1u,
+		      count_channel_events(CH,
+					   (uint8_t)ANTW_EVENT_CHANNEL_COLLISION) -
+			      coll0,
+		      "%u collision events for a run of %u denials: the slot "
+		      "that returns the channel to search must raise "
+		      "RX_FAIL_GO_TO_SEARCH only, not a collision as well",
+		      count_channel_events(CH,
+					   (uint8_t)ANTW_EVENT_CHANNEL_COLLISION) -
+			      coll0,
+		      (unsigned int)RADIANT_CHANNEL_DENY_TO_SEARCH);
+	zassert_equal(fail0,
+		      count_channel_events(CH, (uint8_t)ANTW_EVENT_RX_FAIL),
+		      "a denied slot was reported as RX_FAIL");
+
+	end_of_test();
+}
+
 /* ---------------------------------------------------------------------------
  * The bounded-denial escape
  *

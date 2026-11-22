@@ -3007,6 +3007,9 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 		 * host's loss accounting closes. Only the counter tells them apart:
 		 * slots_denied (another stack) versus slots_collided (our scheduling). Only
 		 * a window that ran to its close empty (DONE_OK) counts toward search.
+		 * The exception is the slot that takes a run of them past
+		 * RADIANT_CHANNEL_DENY_TO_SEARCH: it returns the channel to search and
+		 * reports RX_FAIL_GO_TO_SEARCH instead of a collision, never both.
 		 */
 		if (why == RADIANT_SCHED_DONE_DENIED ||
 		    why == RADIANT_SCHED_DONE_MISSED ||
@@ -3016,9 +3019,17 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 			} else {
 				api_stats.slots_collided++;
 			}
-			(void)radiant_channel_on_slot_denied(ch, now);
-			(void)radiant_event_post_channel_event(
-				ch, (uint8_t)ANTW_EVENT_CHANNEL_COLLISION);
+			if (!radiant_channel_on_slot_denied(ch, now)) {
+				(void)radiant_event_post_channel_event(
+					ch,
+					(uint8_t)ANTW_EVENT_CHANNEL_COLLISION);
+			} else if (api_ch[ch].in_pkts != 0u) {
+				/* Promoted to search (DENY_TO_SEARCH): the
+				 * channel layer raised RX_FAIL_GO_TO_SEARCH,
+				 * the slot's one event. A half-delivered
+				 * inbound burst cannot finish now. */
+				api_inbound_failed(ch);
+			}
 		} else {
 			api_stats.slots_missed++;
 			if (!radiant_channel_on_slot_missed(ch, now)) {
