@@ -1317,6 +1317,10 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		 * search settings and the security context. A keyed channel
 		 * with X_AUTH | DROP_UNVER stays judged as a scan; unassigning
 		 * would release its keys and deliver its secured range unjudged.
+		 * The channel ID is then read back and set again: a host that
+		 * never sent 0x51 gets the 0/0/0 wildcard marked set, as the
+		 * reassign path always did, instead of an open refused with
+		 * ID_NOT_SET. Only the ID fields change.
 		 *
 		 * Backends with no in-place call (sdk-ant, stub) answer
 		 * INVALID_MESSAGE, and only they take the old path: read back
@@ -1368,6 +1372,19 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 				0, ANTW_EXT_PARAM_ALWAYS_SEARCH);
 			if (!err) {
 				in_place = true;
+				/* An ID the host never set reads back as the
+				 * 0/0/0 wildcard; setting it marks it set, as
+				 * the old reassign path did, so the open is not
+				 * refused with ID_NOT_SET. A set ID is
+				 * rewritten unchanged. */
+				err = antr_channel_id_get(0, &saved_dev,
+							  &saved_dtype,
+							  &saved_ttype);
+				if (!err) {
+					err = antr_channel_id_set(
+						0, saved_dev, saved_dtype,
+						saved_ttype);
+				}
 			} else if (err == (antr_err_t)ANTW_INVALID_MESSAGE) {
 				/* Channel 0 is always in range: the backend
 				 * has no in-place call. */

@@ -511,6 +511,54 @@ ZTEST(api, test_ext_assign_set_needs_an_assigned_closed_channel)
 	api_assert_no_viol();
 }
 
+/*
+ * The bridge's 0x5B on an assigned channel 0 changes only the extended byte
+ * in place (antr_channel_ext_assign_set()). A host that assigned channel 0 and
+ * never sent 0x51 has no ID set, and the open refuses that. The old reassign
+ * path always ended in antr_channel_id_set(), so the bridge re-applies the ID
+ * it reads back. This is the recipe it uses; the bridge's dispatch itself is
+ * compiled out of ztest (ANT_BRIDGE_PARSER_ONLY).
+ */
+ZTEST(api, test_an_in_place_scan_on_an_id_less_channel_opens_as_a_wildcard)
+{
+	const uint8_t scan = (uint8_t)ANTW_EXT_PARAM_ALWAYS_SEARCH;
+	uint16_t      dev = 0xFFFFu;
+	uint8_t       dtype = 0xFFu;
+	uint8_t       ttype = 0xFFu;
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_network_address_set(0u, ant_plus_key));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_assign(CH,
+					  (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
+					  0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_ext_assign_set(CH, scan));
+
+	/* (a) The contract that makes the bridge's step necessary. */
+	zassert_equal((antr_err_t)ANTW_CHANNEL_ID_NOT_SET, antr_channel_open(CH),
+		      "an ID-less channel opened; the bridge's ID re-apply is "
+		      "no longer needed and this test should be revisited");
+
+	/* (b) The bridge's recipe: read the ID back, set it again. */
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_id_get(CH, &dev, &dtype, &ttype));
+	zassert_equal(0u, dev, "a never-set ID must read back as the wildcard");
+	zassert_equal(0u, dtype);
+	zassert_equal(0u, ttype);
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_id_set(CH, dev, dtype, ttype));
+	zassert_equal(scan, radiant_channel_ext_assign_get(CH),
+		      "setting the ID cleared the extended byte");
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR, antr_channel_open(CH));
+	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(CH));
+	zassert_equal(scan, radiant_channel_ext_assign_get(CH),
+		      "the scan opened without its always-search byte");
+
+	api_assert_no_viol();
+}
+
 /* Open one channel of `type`, configured as the bench's own sensor. */
 static void open_channel(uint8_t type)
 {

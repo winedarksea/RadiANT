@@ -815,6 +815,36 @@ def check_scan_mode_keyed(dev, reader) -> list[str]:
     return problems
 
 
+def check_scan_mode_no_id(dev, reader) -> list[str]:
+    """Open Rx Scan Mode (0x5B) on an assigned channel 0 with no channel ID.
+
+    Review 2026-11-22: 171b52c changed 0x5B on an assigned channel 0 to set
+    only its extended byte in place, and stopped setting a channel ID. A host
+    that assigned channel 0 and sent no 0x51 then got 0x5B refused with
+    CHANNEL_ID_NOT_SET (0x18) instead of a wildcard scan. The bridge now
+    re-applies the ID it reads back, so 0x5B must answer NO_ERROR.
+    """
+    print("\n[scan-noid] Open Rx Scan Mode on channel 0 with no channel ID "
+          "(0x5B)")
+    setup = [
+        (MESG_NETWORK_KEY_ID, bytes([0]) + ANT_PLUS_KEY, "network key"),
+        (MESG_ASSIGN_CHANNEL_ID, bytes([0, 0x00, 0x00]), "assign channel 0"),
+        (MESG_CHANNEL_RADIO_FREQ_ID, bytes([0, ANT_PLUS_FREQ]), "RF 57"),
+        (MESG_OPEN_RX_SCAN_MODE_ID, bytes([0x00]), "open rx scan mode"),
+    ]
+    for msg_id, payload, name in setup:
+        code = command(dev, reader, msg_id, payload)
+        if code != RESPONSE_NO_ERROR:
+            print(f"  FAIL: {name} refused, code {code}")
+            reset_stack(dev, reader)
+            return [f"scan mode no id: {name} refused"]
+    print("  OK: 0x5B opened a scan on a channel 0 the host gave no ID")
+
+    # Scan mode owns the radio until a reset; leave the stick as found.
+    reset_stack(dev, reader)
+    return []
+
+
 def check_encryption(dev, reader) -> list[str]:
     """Read the encryption capability, and round-trip the writes if they are in.
 
@@ -1082,6 +1112,7 @@ def main() -> int:
     if args.scan_mode:
         problems += check_scan_mode(dev, reader, args.scan_seconds)
         problems += check_scan_mode_keyed(dev, reader)
+        problems += check_scan_mode_no_id(dev, reader)
     if args.burst_filter:
         problems += check_burst_filter(dev, reader)
     if args.radiant_security:
