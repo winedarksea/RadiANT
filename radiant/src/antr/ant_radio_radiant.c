@@ -3644,6 +3644,11 @@ antr_err_t antr_channel_unassign(uint8_t channel)
 		 * under the same root and number (EBUSY) until reboot. */
 		radiant_sec_channel_release(channel);
 		radiant_sec_compat_channel_release(channel);
+#if defined(CONFIG_RADIANT_SEC_PAIRING_X25519)
+		/* And the exchange: a late completion would key the next
+		 * sensor on this number with the old root (review 2026-11-21). */
+		radiant_sec_pair_leave(channel);
+#endif
 		memset(&api_ch[channel], 0, sizeof(api_ch[channel]));
 		memset(&api_xfer[channel], 0, sizeof(api_xfer[channel]));
 	}

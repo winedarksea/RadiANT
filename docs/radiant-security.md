@@ -658,6 +658,15 @@ receiver stages no secured slot. A master busy with a transfer is refused (see
 through. A node that wants plaintext beside protected pages has two ways to
 get it: put those pages outside the secured range, or use `X_AUTH` alone.
 
+**A receiver drops what it heard under the old policy or epoch** (review
+2026-11-21). The radio interrupt queues each secured page for the pump with
+only its channel and timestamp. A `0xF1` that changes the policy, and every
+accepted `0xF3`, now empties that channel's queue along with its windows,
+under the queue's own lock. Before the fix the pump read a page heard under
+the old epoch with the new key, and under `X_CONF` alone it reached the host
+as a bogus measurement. An identical `0xF1` and a refused `0xF3` keep the
+queue.
+
 **A rekey takes back the old key's slot before `0xF2` answers** (review
 2026-11-20, item C). The staged slot and the acknowledgement payload of a
 keyed, secured master are ciphertext under the old root's keys: readable, and
@@ -1357,6 +1366,10 @@ hosts, and the node cannot enforce any of them:
   protocol is closing the channel and, after `EVENT_CHANNEL_CLOSED`, sending
   `MESG_UNASSIGN_CHANNEL` (`0x41`) and checking it answered `NO_ERROR`. An
   unassign sent before the close completes is refused, and the key stays live.
+  A successful unassign also ends an unfinished exchange on that channel
+  (review 2026-11-21), so a completion that arrives after the number is
+  reused is refused rather than keying the new sensor, and a fresh `ENTER`
+  can start at once.
 - **A's host sends Na only after `PEER_COMMIT` has answered.** The node holds
   Cb from then on, but it never sees Na leave, so it cannot stop A's host
   revealing Na before the commitment is in place.
