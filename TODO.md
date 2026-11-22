@@ -425,7 +425,7 @@ MPSL (needs a soak beside BLE or Thread, which that clearance excluded):
 
 ## Device Testing Open Items
 
-Make continuous dual transmission the HR default (CONFIG_HRM_SUPPRESS_ANT_WHEN_CONNECTED=n). 
+- [x] [DONE 2026-11-21, d530eac] Continuous dual transmission is the HR default (`CONFIG_HRM_SUPPRESS_ANT_WHEN_CONNECTED` default n). Opt-in suppression is `ble.conf;ble_suppress.conf` (was `ble_nosuppress.conf`); CI and build_all rows renamed, `.config` read-backs on both. Not run on air: the default `ble.conf` image now carries ANT+ and BLE together for a whole connection.
 
 Apple testing round 2
 
