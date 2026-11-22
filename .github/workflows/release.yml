@@ -720,6 +720,12 @@ jobs:
       # and it is the only job holding contents: write. Every other row in
       # this matrix is built to keep it compiling and is downloadable from the
       # run, not handed to anyone as a release.
+      #
+      # THE NAME AND THE CONTENTS ARE A CONTRACT with
+      # scripts/check_release_artifacts.py in `publish`: artifact
+      # `release-<matrix.artifact>` holding exactly `<matrix.artifact>` and
+      # `<matrix.artifact>.sha256` at its root (both paths sit in dist/, so
+      # upload-artifact strips that). Add a file here and publish refuses it.
       - name: Hand the image to the publish job
         if: matrix.release && startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -1080,7 +1086,18 @@ jobs:
         if: matrix.sysbuild_conf != ''
         run: |
           set -euxo pipefail
-          pip install jinja2 lark click python-path coloredlogs
+          # LOCKED WITH HASHES (security review 2026-11-21): the same tag must
+          # run the same code here. --no-deps because the lock lists every
+          # transitive dependency, --only-binary so no sdist's build script
+          # runs. --force-reinstall because the Zephyr setup above has already
+          # installed jinja2, MarkupSafe and click unhashed (gcovr, reuse and
+          # spsdk pull them in), and pip answers "already satisfied" for an
+          # installed version that matches a pin WITHOUT checking its hash:
+          # without it the lock would not cover the very packages codegen.py
+          # imports. Regenerate the file as its header says; never loosen a
+          # pin in place.
+          pip install --force-reinstall --require-hashes --no-deps --only-binary :all: \
+            -r app/.github/matter-gate-requirements.txt
           # The upstream distribution channel for a gn binary; there is no
           # apt package and connectedhomeip's own bootstrap pulls it from the
           # same place, along with a whole pigweed environment this build does
@@ -1095,9 +1112,19 @@ jobs:
           # i.e. the one every local Matter build here has passed with. Move
           # it when west.yml moves the toolchain, and check the version
           # printed below against the bundle's.
+          #
+          # DIGEST-CHECKED BEFORE IT IS UNZIPPED OR RUN (security review
+          # 2026-11-21): a tag can be re-pointed, so the revision check after
+          # execution alone let the same source tag run a different binary.
+          # gn_sha256 is the sha256 of the zip CIPD serves for this revision,
+          # and equals the instance digest CIPD's own ResolveVersion reports
+          # for gn/gn/linux-amd64 at git_revision:${gn_rev} (registered
+          # 2025-03-24). Move both together.
           gn_rev=6e8e0d6d4a151ab2ed9b4a35366e630c55888444
+          gn_sha256=513270681f6aeb1d2e191cd96e1b59b6a67789fee886b9e08ec08ce2eb46fd58
           curl -fsSL -o /tmp/gn.zip \
             "https://chrome-infra-packages.appspot.com/dl/gn/gn/linux-amd64/+/git_revision:${gn_rev}"
+          echo "${gn_sha256}  /tmp/gn.zip" | sha256sum -c -
           mkdir -p "${HOME}/.local/bin"
           unzip -o /tmp/gn.zip gn -d "${HOME}/.local/bin"
           chmod +x "${HOME}/.local/bin/gn"
@@ -2589,11 +2616,17 @@ jobs:
   # to make that possible. Now a release appears only when the whole lane is
   # green, and all five images go up together or not at all.
   #
-  # What it trusts: the `release-*` artifacts from this run. It re-checks each
-  # image against the .sha256 its build row computed, re-checks the tag
-  # against VERSION, and checks that it got exactly one artifact per
-  # `release: true` row in this file, so a sixth shipping row cannot be added
-  # and silently left out.
+  # What it trusts: the `release-*` artifacts from this run, and only by the
+  # names this file gives them. scripts/check_release_artifacts.py reads the
+  # `artifact` of every build-core row with `release: true` (one source: the
+  # matrix above, at the commit this run checked out), requires one
+  # `release-<artifact>` artifact per row and no other, requires each to hold
+  # exactly `<artifact>` and `<artifact>.sha256`, re-checks the image against
+  # that sidecar, and stages only those files for the release action. A sixth
+  # shipping row cannot be added and silently left out, and an image under
+  # another name cannot stand in for a board's (security review 2026-11-21:
+  # the old check merged every artifact into one directory and counted sums).
+  # The tag is re-checked against VERSION as well.
   publish:
     name: publish release
     if: startsWith(github.ref, 'refs/tags/v')
@@ -2626,43 +2659,28 @@ jobs:
       - name: Tag agrees with VERSION
         run: python app/scripts/version_int.py --check-tag "${GITHUB_REF_NAME}"
 
+      # One directory per artifact (merge-multiple off), so a file cannot
+      # arrive under one artifact's name and be counted under another's.
       - name: Download the shipping images
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: release-*
           path: dist
-          merge-multiple: true
 
-      - name: Verify the images against their sums
-        working-directory: dist
+      - name: Verify the images against the matrix and their sums
+        id: verify
         run: |
           set -euo pipefail
-          ls -l
-          want="$(grep -cE '^ +release: true$' ../app/.github/workflows/release.yml)"
-          sums=( *.sha256 )
-          echo "release rows: ${want}, sums downloaded: ${#sums[@]}"
-          if [[ "${#sums[@]}" -ne "${want}" ]]; then
-            echo "::error::expected ${want} shipping images, got ${#sums[@]}"
-            exit 1
-          fi
-          for sum in "${sums[@]}"; do
-            img="${sum%.sha256}"
-            test -f "${img}"
-            # One line, naming the image by its bare name (a leading `*` is
-            # sha256sum's binary-mode marker): anything else is
-            # not a sum this workflow wrote.
-            test "$(wc -l < "${sum}")" -eq 1
-            test "$(awk '{f = $2; sub(/^\*/, "", f); print f}' "${sum}")" = "${img}"
-            sha256sum -c "${sum}"
-          done
-          # And no image without a sum.
-          for img in *; do
-            [[ "${img}" == *.sha256 ]] && continue
-            test -f "${img}.sha256"
-          done
+          ls -lR dist
+          python app/scripts/check_release_artifacts.py \
+            --workflow app/.github/workflows/release.yml \
+            --downloads dist \
+            --out publish \
+            --github-output "${GITHUB_OUTPUT}"
 
+      # Exactly the list the check staged, not a glob over what was downloaded.
       - name: Attach to release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           fail_on_unmatched_files: true
-          files: dist/*
+          files: ${{ steps.verify.outputs.files }}

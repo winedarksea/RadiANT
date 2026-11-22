@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# The Python packages release.yml's Matter build gate installs, locked with
+# hashes (security review 2026-11-21). Installed with
+#   pip install --force-reinstall --require-hashes --no-deps
+#     --only-binary :all: -r <this file>
+# so every package, transitive ones included, must be listed here with its
+# exact version and the hash of the one wheel pip may use. --force-reinstall
+# matters: an installed version that matches a pin is otherwise "already
+# satisfied" with no hash check at all.
+#
+# Target: CPython 3.12 on x86_64 glibc Linux (setup-python "3.12" on
+# ubuntu-24.04). The hash per package is that wheel's, so a different Python
+# or platform needs its own wheel hash added, not a looser pin.
+#
+# Why these: codegen.py (run by chip_codegen on every CHIP build) imports click
+# and python_path, and py_matter_idl parses with lark and renders with jinja2;
+# codegen.py also imports coloredlogs when it is present (optional, kept
+# because the unlocked install had it and a different log path is a
+# different build). MarkupSafe (from jinja2) and
+# humanfriendly (from coloredlogs) are their only Linux dependencies;
+# humanfriendly's pyreadline3 is win32-only and is not needed here. click 8.5
+# no longer depends on colorama.
+#
+# Regenerated 2026-11-22 from PyPI: `pip download --only-binary=:all:
+# --platform manylinux2014_x86_64 --python-version 3.12 --implementation cp
+# jinja2 lark click python-path coloredlogs`, then `pip hash` on each wheel,
+# cross-checked against the sha256 digests PyPI's JSON API publishes.
+
+click==8.5.1 \
+    --hash=sha256:8bb5376d2006950386f8c6427613334a2acadc5f559cb80e638d00b4df957e37
+coloredlogs==15.0.1 \
+    --hash=sha256:612ee75c546f53e92e70049c9dbfcc18c935a2b9a53b66085ce9ef6a6e5c0934
+humanfriendly==10.0 \
+    --hash=sha256:1697e1a8a8f550fd43c2865cd84542fc175a61dcb779b6fee18cf6b6ccba1477
+jinja2==3.1.6 \
+    --hash=sha256:85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67
+lark==1.3.1 \
+    --hash=sha256:c629b661023a014c37da873b4ff58a817398d12635d3bbb2c5a03be7fe5d1e12
+markupsafe==3.0.4 \
+    --hash=sha256:8e124f974786f831d6043728e38296969d3579db8896fe004682f5758e613581
+python-path==0.1.2 \
+    --hash=sha256:6a931878ac6e40a924221ba1f371fb5b60fd58f12c5b7fab48b27c34a0f034a2
