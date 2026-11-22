@@ -51,8 +51,8 @@ target_sources(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../fake_radio.c")
 # CONFIG_RADIANT_ANT_API=y in prj.conf - the same door a real application uses.
 
 # ../ so a suite writes #include "fake_radio.h", the same spelling the parent's
-# suites use. ../../src/radiant_ant is for the adapter's private headers; the public
+# suites use. ../../src/ant_api is for the adapter's private headers; the public
 # ones come from the module's own zephyr_include_directories().
 target_include_directories(app PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/.."
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/radiant_ant")
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/ant_api")
