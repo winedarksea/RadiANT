@@ -102,8 +102,9 @@ ANT_FIXED = [
 
 # Old-name detectors for --check and the collision check.
 OLD_PATTERNS = {
-    "wire": r"\bANTW_\w*",
-    "ant": r"\b(?:antr_\w*|ANTR_\w*)|RADIANT_ANTR_API\b",
+    # \w+, not \w*: a bare `antr_` in prose about the rename is not a leftover.
+    "wire": r"\bANTW_\w+",
+    "ant": r"\b(?:antr_\w+|ANTR_\w+)|RADIANT_ANTR_API\b",
 }
 
 IDENT_RE = re.compile(r"\b(?:radiant_)?(?:profile|node)_\w+|\b(?:RADIANT_)?(?:PROFILE|NODE)_\w+")
