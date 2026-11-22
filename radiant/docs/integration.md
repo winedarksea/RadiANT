@@ -2,12 +2,12 @@
 
 There are two ways to use RadiANT. Almost everyone wants the first.
 
-- **The `antr_*` API.** RadiANT runs itself. You configure channels and receive
+- **The `radiant_ant_*` API.** RadiANT runs itself. You configure channels and receive
   messages. This is what every application in this repository uses.
 - **The low-level API.** You write the runtime that connects the scheduler, search
-  and event queue yourself. Only worth it if `antr_*` cannot do what you need.
+  and event queue yourself. Only worth it if `radiant_ant_*` cannot do what you need.
 
-## The `antr_*` API
+## The `radiant_ant_*` API
 
 This is [`samples/hr_receiver`](../samples/hr_receiver/), which CI builds. Follow
 the [README](../README.md) to add the module first.
@@ -16,7 +16,7 @@ the [README](../README.md) to add the module first.
 
 ```
 CONFIG_RADIANT=y
-CONFIG_RADIANT_ANTR_API=y
+CONFIG_RADIANT_ANT_API=y
 ```
 
 ### Open a channel
@@ -24,7 +24,7 @@ CONFIG_RADIANT_ANTR_API=y
 Every call returns `RADIANT_WIRE_RESPONSE_NO_ERROR` (0) or an ANT response code.
 
 ```c
-#include <radiant/ant_radio.h>
+#include <radiant/radiant_ant.h>
 
 static const uint8_t ant_plus_key[8] = {
 	0xB9, 0xA5, 0x21, 0xFB, 0xBD, 0x72, 0xC3, 0x45
@@ -32,29 +32,29 @@ static const uint8_t ant_plus_key[8] = {
 
 int main(void)
 {
-	antr_init();
-	antr_network_address_set(0, ant_plus_key);
+	radiant_ant_init();
+	radiant_ant_network_address_set(0, ant_plus_key);
 
-	antr_channel_assign(0, RADIANT_WIRE_CHANNEL_TYPE_SLAVE, 0, 0);
-	antr_channel_id_set(0, 0, 0x78, 0);        /* any heart-rate sensor */
-	antr_channel_period_set(0, 8070);          /* 4.06 Hz */
-	antr_channel_radio_freq_set(0, 57);        /* 2457 MHz */
-	antr_channel_search_timeout_set(0, 0xFF);  /* search until found */
-	antr_channel_open(0);
+	radiant_ant_channel_assign(0, RADIANT_WIRE_CHANNEL_TYPE_SLAVE, 0, 0);
+	radiant_ant_channel_id_set(0, 0, 0x78, 0);        /* any heart-rate sensor */
+	radiant_ant_channel_period_set(0, 8070);          /* 4.06 Hz */
+	radiant_ant_channel_radio_freq_set(0, 57);        /* 2457 MHz */
+	radiant_ant_channel_search_timeout_set(0, 0xFF);  /* search until found */
+	radiant_ant_channel_open(0);
 	return 0;
 }
 ```
 
-`antr_init()` starts RadiANT's own thread, so `main()` can return.
+`radiant_ant_init()` starts RadiANT's own thread, so `main()` can return.
 
 ### Receive
 
-Define `antr_on_message()` once in your application. It is resolved at link time,
+Define `radiant_ant_on_message()` once in your application. It is resolved at link time,
 with no registration call, and it runs on RadiANT's event thread, so it must not
 block.
 
 ```c
-void antr_on_message(const struct antr_msg *msg)
+void radiant_ant_on_message(const struct radiant_ant_msg *msg)
 {
 	if (msg->id == RADIANT_WIRE_MESG_BROADCAST_DATA_ID && msg->len >= 9) {
 		uint8_t channel = msg->data[0];
@@ -83,7 +83,7 @@ page encoders and decoders, or `CONFIG_RADIANT_BRIDGE=y` to get decoded samples
 delivered to sinks you register. [`../../docs/radiant-bridge.md`](../../docs/radiant-bridge.md)
 describes the bridge.
 
-The full API is [`include/radiant/ant_radio.h`](../include/radiant/ant_radio.h).
+The full API is [`include/radiant/radiant_ant.h`](../include/radiant/radiant_ant.h).
 
 ## The low-level API
 
@@ -113,7 +113,7 @@ CONFIG_RADIANT=y
 CONFIG_RADIANT_BRIDGE=y
 ```
 
-Leave `CONFIG_RADIANT_ANTR_API` off: it defines the hooks in step 2.
+Leave `CONFIG_RADIANT_ANT_API` off: it defines the hooks in step 2.
 
 ### 2. The two hooks the module needs from you
 
@@ -225,7 +225,7 @@ hear a heart-rate strap.
 
 Wiring a real receiver needs `struct radiant_sched_cbs`, the radio callbacks
 `radiant_sched_radio_cbs()` returns, and a thread driving it all. That is what
-[`src/antr/ant_radio_radiant.c`](../src/antr/ant_radio_radiant.c) does, and
-`antr_init()` shows the order: `radiant_channel_init()`, `radiant_event_init()`,
+[`src/ant_api/radiant_ant.c`](../src/ant_api/radiant_ant.c) does, and
+`radiant_ant_init()` shows the order: `radiant_channel_init()`, `radiant_event_init()`,
 `radiant_sched_init()`, `radiant_radio_init()`, `radiant_search_init()`, with each
 step preconditioning the next.

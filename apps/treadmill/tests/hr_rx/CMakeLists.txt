@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # The treadmill's ANT+ heart-rate slave (src/treadmill_hr_rx.c), against a
-# stub antr_* layer.
+# stub radiant_ant_* layer.
 #
 # WHY A STUB AND NOT THE REAL STACK. The defect this image was added for
 # (review 2026-10-31, B2-3) is an ORDERING one: the HR slave reopened its
@@ -30,7 +30,6 @@ target_sources(app PRIVATE
 )
 target_include_directories(app PRIVATE
   ../../src
-  ../../../common/ant
   ../../../../radiant/include
   ../../../../radiant/src/profiles
 )

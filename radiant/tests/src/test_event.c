@@ -73,8 +73,8 @@ void radiant_event_wakeup(void)
 
 /*
  * The bridge's side of the inverted event path. In the firmware this is
- * src/ant_radio_radiant.c's one-line forward onto src/ant_serial_bridge.c's
- * antr_on_message(); in this binary radiant_on_message() itself is defined
+ * src/radiant_ant.c's one-line forward onto apps/common/ant_serial_bridge.c's
+ * radiant_ant_on_message(); in this binary radiant_on_message() itself is defined
  * here, and it is the only definition, so any future suite that wants
  * delivered messages should read this recorder rather than define a second
  * one.
@@ -1147,8 +1147,8 @@ ZTEST(radiant_event, test_a_filtered_event_is_still_counted_when_posted)
 }
 
 /*
- * antr_stack_reset() discards rather than drains. Draining would call
- * antr_on_message() recursively from inside an antr_* call, which
+ * radiant_ant_stack_reset() discards rather than drains. Draining would call
+ * radiant_ant_on_message() recursively from inside an radiant_ant_* call, which
  * docs/sdk-ant-contract.md forbids, and a real stick emits nothing between the
  * reset command and the startup message anyway.
  */
@@ -1209,7 +1209,7 @@ ZTEST(radiant_event, test_drain_honours_its_bound)
 }
 
 /*
- * antr_init() must leave nothing behind from a previous run of the stack. A
+ * radiant_ant_init() must leave nothing behind from a previous run of the stack. A
  * message surviving a re-init would reach the host between the reset command
  * and the startup message, which is the one window a real stick is silent in.
  */

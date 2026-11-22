@@ -26,7 +26,7 @@
 
       radiant\tests       the suites over the module's lower half, driven
                                against tests\fake_radio.c.
-      radiant\tests\api   CONFIG_RADIANT_ANTR_API=y, which cannot be
+      radiant\tests\api   CONFIG_RADIANT_ANT_API=y, which cannot be
                                flipped in the first one - both it and
                                test_event.c/test_channel.c define the same
                                four radiant_event_*/radiant_channel_event_out()

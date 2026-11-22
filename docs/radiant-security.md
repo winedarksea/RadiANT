@@ -507,18 +507,18 @@ channel are not authenticated. A page outside the secured range passes through
 as ordinary data, and burst continuation packets carry no page number, so they
 are never checked at all. A host must treat both as unauthenticated. Outbound,
 a secured master refuses host acknowledged data and bursts
-(`antr_acknowledge_message_tx()` and `antr_burst_tx()` return
+(`radiant_ant_acknowledge_message_tx()` and `radiant_ant_burst_tx()` return
 `CHANNEL_IN_WRONG_STATE` and nothing goes on air), because sending the host's
 plaintext beside the protected stream would look like protected traffic and is
 not. A secured slave is not restricted: a receiver's acknowledged data (page
 requests, FE-C control) is its own traffic, not the secured stream (security
 review 2026-11-13, item 11). The same holds in the other order: 0xF2
-(`antr_sec_key_set()`) returns `CHANNEL_IN_WRONG_STATE` on a master with host
+(`radiant_ant_sec_key_set()`) returns `CHANNEL_IN_WRONG_STATE` on a master with host
 acknowledged data or a burst still in flight, which was accepted in the clear
 and would otherwise go out in the clear after the key landed; the host retries
 once the transfer completes. A key installed by pairing (section 7.4) is
 outside that check, since pairing runs its own acknowledged exchange on the
-channel (review 2026-11-14, item 4). `0xF1` (`antr_sec_config()`) follows the
+channel (review 2026-11-14, item 4). `0xF1` (`radiant_ant_sec_config()`) follows the
 same rule: on a master, a `0xF1` that changes the switches, W or the page range
 returns `CHANNEL_IN_WRONG_STATE`, with nothing changed, while host acknowledged
 data or a burst is in flight or the master is answering a slave's burst. A
@@ -759,7 +759,7 @@ ceiling carried, whoever set it) under the same root (compared by key check
 value) and the same base device number. A channel keyed with no epoch yet does
 not count. Channels that differ in root or number are allowed, so several
 secured sensors run at once. The conflict ends when the other channel is
-released, which means unassigned (`antr_channel_unassign()` calls
+released, which means unassigned (`radiant_ant_channel_unassign()` calls
 `radiant_sec_channel_release()` and `radiant_sec_compat_channel_release()`; a
 closed but still assigned channel keeps blocking) or a SYSTEM_RESET (which
 calls `radiant_sec_reset()` and `radiant_sec_compat_reset()`), or when a host
@@ -1871,10 +1871,10 @@ normal and accepted: the anchor then lies before its boot (section 3.1).
 
 ### The three ordering rules, and why they are refusals rather than defaults
 
-`0xF1`–`0xF4` are implemented by `radiant/src/antr/ant_sec_host.c` behind
+`0xF1`–`0xF4` are implemented by `radiant/src/ant_api/radiant_ant_sec.c` behind
 `CONFIG_RADIANT_SEC_HOST_MESSAGES`, and reached from the host through
-`antr_sec_config()`, `antr_sec_key_set()`, `antr_sec_epoch_set()` and
-`antr_sec_status_get()`. Three orderings are mandatory, and all three answer
+`radiant_ant_sec_config()`, `radiant_ant_sec_key_set()`, `radiant_ant_sec_epoch_set()` and
+`radiant_ant_sec_status_get()`. Three orderings are mandatory, and all three answer
 `RADIANT_WIRE_CHANNEL_IN_WRONG_STATE` rather than guessing:
 
 - **The channel ID must be set before the key.** `base_devnum` is bound into the
@@ -1905,7 +1905,7 @@ that cannot tell those apart retries the wrong thing.
 is answered `RADIANT_WIRE_INVALID_MESSAGE` — the same answer a device that had never
 heard of `0xF2` would give.
 
-`src/ant_serial_bridge.c` wipes its frame buffer after dispatching one, because
+`apps/common/ant_serial_bridge.c` wipes its frame buffer after dispatching one, because
 that buffer is static and long-lived and would otherwise hold the key until some
 later message happened to overwrite it. **That wipe narrows the window and does
 not close it**, and saying so is more useful than implying otherwise: the same
@@ -1954,7 +1954,7 @@ Nobody should re-propose that range.
 The argument that produced it was:
 
 > No message ID at or above `0xC0` appears in the dispatch in
-> `src/ant_serial_bridge.c`, in any ID defined in `tools/`, or in the
+> `apps/common/ant_serial_bridge.c`, in any ID defined in `tools/`, or in the
 > capabilities reply the dongle emits.
 
 **Every one of those checks was correct, and the conclusion was still wrong,

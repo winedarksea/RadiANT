@@ -18,7 +18,7 @@
  * reached from exactly two contexts in this application:
  *
  *   1. the system workqueue, which advances the state and stages pages, and
- *   2. the radiant callback path - antr_on_message() -> load_next_page() ->
+ *   2. the radiant callback path - radiant_ant_on_message() -> load_next_page() ->
  *      profile_fec_tx_next() / profile_sdm_next().
  *
  * There is no lock in either. So treadmill_source_report_*() does NOT touch a

@@ -51,16 +51,16 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-struct antr_msg;
+struct radiant_ant_msg;
 
 /* Assign, configure and open the slave. Returns 0 or a negative errno; a
  * failure is logged and the node keeps running with no heart rate, which on
  * the air is FE-C page 16's 0xFF sentinel. */
 int treadmill_hr_rx_start(uint8_t channel);
 
-/* Feed one inbound message. Called from antr_on_message(); returns true if the
+/* Feed one inbound message. Called from radiant_ant_on_message(); returns true if the
  * message was this module's. */
-bool treadmill_hr_rx_message(const struct antr_msg *msg);
+bool treadmill_hr_rx_message(const struct radiant_ant_msg *msg);
 
 /* The device number of the strap being tracked, or 0 when none. */
 uint16_t treadmill_hr_rx_device(void);

@@ -6,7 +6,7 @@
  * the four measured data/ack pairs, every us figure below),
  * docs/spike-b-results.md, docs/ant-radio-link.md, radiant_frame.h,
  * radiant_radio_hal.h, and the buffer-ownership obligations B1-B5 in
- * src/ant_radio.h. Nothing here derives from sdk-ant, libant.a, or any
+ * <radiant/radiant_ant.h>. Nothing here derives from sdk-ant, libant.a, or any
  * ANT+ device profile document. See docs/decisions/0002-clean-room-policy.md.
  *
  * Why one module, not two: acknowledged data is a one-packet burst byte for
@@ -45,7 +45,7 @@
  * better, and the guard band below is sized on that basis, not on sample
  * standard deviations.
  *
- * Buffer ownership - the expensive part. src/ant_radio.h states obligations
+ * Buffer ownership - the expensive part. <radiant/radiant_ant.h> states obligations
  * B1-B5; short form: the bridge holds ONE 24-byte block behind a binary
  * semaphore, released only on
  * EVENT_TRANSFER_NEXT_DATA_BLOCK/_TX_COMPLETED/_TX_FAILED. (Since 2026-11-12
@@ -199,11 +199,11 @@ extern "C" {
 
 /*
  * Segment flags, marking the first and last block of a transfer. Chosen to
- * equal src/ant_radio.h's ANTR_BURST_SEGMENT_CONTINUE / _START / _END so that
+ * equal <radiant/radiant_ant.h>'s RADIANT_ANT_BURST_SEGMENT_CONTINUE / _START / _END so that
  * radiant_api.c forwards the byte untouched instead of remapping it.
  *
  * Two constants for one concept is how the END bit ends up wrong - which
- * already happened once, in src/ant_radio.h, where END was 0x04 until a shim
+ * already happened once, in <radiant/radiant_ant.h>, where END was 0x04 until a shim
  * checked it. radiant_api.c must therefore carry a BUILD_ASSERT that the three
  * pairs agree, exactly as the sdk-ant shim does; this header cannot carry it
  * because it must compile with no application header in scope.
@@ -514,7 +514,7 @@ struct radiant_transfer_result {
 	 * The block being released, or NULL.
 	 *
 	 * NULL on every event of an acknowledged-data transfer, because
-	 * antr_acknowledge_message_tx() copies its payload and transfers no
+	 * radiant_ant_acknowledge_message_tx() copies its payload and transfers no
 	 * ownership; NULL on a TX_FAILED raised while the engine held nothing.
 	 * Never NULL on RADIANT_TRANSFER_EV_NEXT_BLOCK.
 	 *
@@ -1070,7 +1070,7 @@ bool radiant_transfer_on_rx_event(struct radiant_transfer *t,
  * only path that works - radiant_sched.c runs its commit on the way out and the
  * frame is armed with no thread wakeup in between. From thread context the
  * caller owes one radiant_sched_tick(); radiant_api.c does that at the end of the
- * antr_* call that provoked the submit.
+ * radiant_ant_* call that provoked the submit.
  *
  * t_sync_at is taken literally. A caller that means "as soon as possible"
  * resolves that itself before calling, because a backend never silently

@@ -8,7 +8,7 @@ Two directions; the reverse one is the one that works today.
 **Forward.** `ANT_DLL.dll` exports `ANT_SetDebugLogDirectory` (ordinal 132);
 called before `ANT_Init`, the DLL writes `Device0.txt`, Garmin's own account of
 its own `Tx`/`Rx` bytes. That is a transcript from a stack neither
-`src/ant_serial_bridge.c` nor `tools/ant_probe.py` wrote, which is what catches
+`apps/common/ant_serial_bridge.c` nor `tools/ant_probe.py` wrote, which is what catches
 a wrong *rule* rather than a constant-for-constant self-agreement.
 
     python tools/ant_trace.py <logdir>/Device0.txt --out zwift-pairing.antser

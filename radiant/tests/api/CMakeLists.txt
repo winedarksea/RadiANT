@@ -4,7 +4,7 @@
 #
 # ── Why this is a second application and not a suite in ../src ───────────────
 #
-# radiant/src/antr/ant_radio_radiant.c (radiant_api.c, before it moved out of radiant -
+# radiant/src/ant_api/radiant_ant.c (radiant_api.c, before it moved out of radiant -
 # see radiant/include/radiant/radiant_msg.h for why) is the only
 # module in radiant's orbit with no ztest coverage, and the whole
 # master-exchange path lives in it: every module underneath is tested and the
@@ -16,10 +16,10 @@
 # link. radiant_event_crit_enter(), radiant_event_crit_exit() and
 # radiant_event_wakeup() are port hooks, and ../src/test_event.c defines its own
 # versions of all three; ../src/test_channel.c likewise defines
-# radiant_channel_event_out(). ant_radio_radiant.c defines the production
+# radiant_channel_event_out(). radiant_ant.c defines the production
 # versions of the same four symbols (plus radiant_on_message()), so the two
 # would collide at link - and if the collision were resolved in
-# ant_radio_radiant.c's favour it would change what those 187 tests assert,
+# radiant_ant.c's favour it would change what those 187 tests assert,
 # which is worse than a link error because it is quiet.
 #
 # So: a sibling application, sharing ../fake_radio.c and the module itself, with
@@ -48,11 +48,11 @@ target_sources(app PRIVATE ${suite_sources})
 target_sources(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../fake_radio.c")
 
 # The adapter under test is compiled by the module, through
-# CONFIG_RADIANT_ANTR_API=y in prj.conf - the same door a real application uses.
+# CONFIG_RADIANT_ANT_API=y in prj.conf - the same door a real application uses.
 
 # ../ so a suite writes #include "fake_radio.h", the same spelling the parent's
-# suites use. ../../src/antr is for the adapter's private headers; the public
+# suites use. ../../src/radiant_ant is for the adapter's private headers; the public
 # ones come from the module's own zephyr_include_directories().
 target_include_directories(app PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/.."
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/antr")
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/radiant_ant")

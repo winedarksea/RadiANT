@@ -25,14 +25,14 @@
 #include <zephyr/kernel.h>
 #include <zephyr/shell/shell.h>
 
-#include "ant_radio.h"
+#include <radiant/radiant_ant.h>
 #include "trainer_ackfault.h"
 #include "trainer_node.h"
 
-BUILD_ASSERT((int)TRAINER_ACTION_ACK == (int)ANTR_REPLY_ACK &&
-	     (int)TRAINER_ACTION_MUTE == (int)ANTR_REPLY_MUTE &&
-	     (int)TRAINER_ACTION_DEAF == (int)ANTR_REPLY_DEAF,
-	     "trainer_action must mirror antr_reply_action");
+BUILD_ASSERT((int)TRAINER_ACTION_ACK == (int)RADIANT_ANT_REPLY_ACK &&
+	     (int)TRAINER_ACTION_MUTE == (int)RADIANT_ANT_REPLY_MUTE &&
+	     (int)TRAINER_ACTION_DEAF == (int)RADIANT_ANT_REPLY_DEAF,
+	     "trainer_action must mirror radiant_ant_reply_action");
 
 struct af_rec {
 	uint32_t seq;
@@ -79,16 +79,16 @@ static void settle_locked(struct af_rec *r, uint32_t acks_now)
 
 /* RADIO INTERRUPT CONTEXT. One decision, one record, O(1). */
 static void reply_plan(void *ctx, uint8_t channel, const uint8_t *payload,
-		       uint64_t t_sync_us, struct antr_reply_plan *out)
+		       uint64_t t_sync_us, struct radiant_ant_reply_plan *out)
 {
-	struct antr_reply_stats          st = { 0 };
+	struct radiant_ant_reply_stats          st = { 0 };
 	struct trainer_ackfault_decision d;
 	struct af_rec                   *r;
 	k_spinlock_key_t                 key;
 
 	ARG_UNUSED(ctx);
 
-	(void)antr_reply_stats_get(channel, &st);
+	(void)radiant_ant_reply_stats_get(channel, &st);
 
 	key = k_spin_lock(&af_lock);
 
@@ -114,7 +114,7 @@ static void reply_plan(void *ctx, uint8_t channel, const uint8_t *payload,
 
 	k_spin_unlock(&af_lock, key);
 
-	out->action = (enum antr_reply_action)d.action;
+	out->action = (enum radiant_ant_reply_action)d.action;
 	out->offset_us = d.offset_us;
 }
 
@@ -126,7 +126,7 @@ int trainer_ackfault_attach(uint8_t channel)
 	trainer_ackfault_init(&af, &p);
 	af_channel = channel;
 
-	return (antr_reply_plan_hook_set(channel, reply_plan, NULL) ==
+	return (radiant_ant_reply_plan_hook_set(channel, reply_plan, NULL) ==
 		RADIANT_WIRE_RESPONSE_NO_ERROR)
 		       ? 0
 		       : -EIO;
@@ -231,7 +231,7 @@ static int cmd_preset(const struct shell *sh, size_t argc, char **argv)
 
 static int cmd_stats(const struct shell *sh, size_t argc, char **argv)
 {
-	struct antr_reply_stats st = { 0 };
+	struct radiant_ant_reply_stats st = { 0 };
 	struct trainer_ackfault a;
 	uint32_t                count, lost;
 	k_spinlock_key_t        key;
@@ -239,7 +239,7 @@ static int cmd_stats(const struct shell *sh, size_t argc, char **argv)
 	ARG_UNUSED(argc);
 	ARG_UNUSED(argv);
 
-	(void)antr_reply_stats_get(af_channel, &st);
+	(void)radiant_ant_reply_stats_get(af_channel, &st);
 
 	key = k_spin_lock(&af_lock);
 	a = af;
@@ -268,14 +268,14 @@ static int cmd_stats(const struct shell *sh, size_t argc, char **argv)
  * held off for the length of a UART print. */
 static int cmd_dump(const struct shell *sh, size_t argc, char **argv)
 {
-	struct antr_reply_stats st = { 0 };
+	struct radiant_ant_reply_stats st = { 0 };
 	uint32_t                count, lost, first;
 	k_spinlock_key_t        key;
 
 	ARG_UNUSED(argc);
 	ARG_UNUSED(argv);
 
-	(void)antr_reply_stats_get(af_channel, &st);
+	(void)radiant_ant_reply_stats_get(af_channel, &st);
 
 	key = k_spin_lock(&af_lock);
 	settle_locked(newest_locked(), st.acks_sent);

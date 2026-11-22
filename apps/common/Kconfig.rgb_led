@@ -111,7 +111,7 @@ config ANT_DONGLE_RGB_LED_PRIO
 	range 7 15
 	help
 	  Must stay numerically ABOVE both the serial bridge thread
-	  (ANTR_HOST_THREAD_PRIORITY, 5) and the radiant API event thread (6), so
+	  (RADIANT_ANT_HOST_THREAD_PRIORITY, 5) and the radiant API event thread (6), so
 	  a preemptible LED update can never delay ANT work. The range starts at
 	  7 to make that structural rather than a comment.
 

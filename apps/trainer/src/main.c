@@ -41,7 +41,7 @@
 #include <zephyr/shell/shell.h>
 #include <zephyr/sys/atomic.h>
 
-#include "ant_radio.h"
+#include <radiant/radiant_ant.h>
 #include <radiant/radiant_wire.h>
 #include "node_ident.h"
 #include "profile_common.h"
@@ -200,7 +200,7 @@ static void apply_control_page(const uint8_t *body)
 }
 
 /*
- * The thread hop, as apps/treadmill's: antr_on_message() runs on radiant's
+ * The thread hop, as apps/treadmill's: radiant_ant_on_message() runs on radiant's
  * event thread and the model is workqueue-only, so the command is copied into
  * a small ring and the workqueue applies it. Invisible on air - page 71 goes
  * out on the next data slot either way.
@@ -297,10 +297,10 @@ static void load_fec_page(void)
 	if (kind == PROFILE_SLOT_IDLE) {
 		return;
 	}
-	(void)antr_broadcast_message_tx(FEC_CHANNEL, sizeof(body), body);
+	(void)radiant_ant_broadcast_message_tx(FEC_CHANNEL, sizeof(body), body);
 }
 
-void antr_on_message(const struct antr_msg *msg)
+void radiant_ant_on_message(const struct radiant_ant_msg *msg)
 {
 	if (msg == NULL || msg->data == NULL) {
 		return;
@@ -332,10 +332,10 @@ void antr_on_message(const struct antr_msg *msg)
  */
 static void silence_end_fn(struct k_work *w)
 {
-	antr_err_t rc;
+	radiant_ant_err_t rc;
 
 	ARG_UNUSED(w);
-	rc = antr_channel_open(FEC_CHANNEL);
+	rc = radiant_ant_channel_open(FEC_CHANNEL);
 	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("silence: reopen refused: %d", (int)rc);
 		return;
@@ -346,12 +346,12 @@ static void silence_end_fn(struct k_work *w)
 
 int trainer_node_silence(uint32_t ms)
 {
-	antr_err_t rc;
+	radiant_ant_err_t rc;
 
 	if (k_work_delayable_is_pending(&silence_end)) {
 		return -EBUSY;
 	}
-	rc = antr_channel_close(FEC_CHANNEL);
+	rc = radiant_ant_channel_close(FEC_CHANNEL);
 	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("silence: close refused: %d", (int)rc);
 		return -EIO;
@@ -363,26 +363,26 @@ int trainer_node_silence(uint32_t ms)
 
 static int ant_master_start(uint8_t channel, uint16_t devnum)
 {
-	antr_err_t rc;
+	radiant_ant_err_t rc;
 
-	rc = antr_channel_assign(channel, RADIANT_WIRE_CHANNEL_TYPE_MASTER, ANT_NETWORK,
+	rc = radiant_ant_channel_assign(channel, RADIANT_WIRE_CHANNEL_TYPE_MASTER, ANT_NETWORK,
 				 0u);
 	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("ch%u assign: %d", channel, (int)rc);
 		return -EIO;
 	}
-	rc = antr_channel_id_set(channel, devnum, PROFILE_FEC_DEVICE_TYPE,
+	rc = radiant_ant_channel_id_set(channel, devnum, PROFILE_FEC_DEVICE_TYPE,
 				 ANT_TRANS_TYPE);
 	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("ch%u channel id: %d", channel, (int)rc);
 		return -EIO;
 	}
-	rc = antr_channel_period_set(channel, PROFILE_FEC_PERIOD);
+	rc = radiant_ant_channel_period_set(channel, PROFILE_FEC_PERIOD);
 	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("ch%u period: %d", channel, (int)rc);
 		return -EIO;
 	}
-	rc = antr_channel_radio_freq_set(channel, ANT_RF_FREQ);
+	rc = radiant_ant_channel_radio_freq_set(channel, ANT_RF_FREQ);
 	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("ch%u rf freq: %d", channel, (int)rc);
 		return -EIO;
@@ -393,7 +393,7 @@ static int ant_master_start(uint8_t channel, uint16_t devnum)
 		LOG_ERR("ch%u ack fault hook did not register", channel);
 		return -EIO;
 	}
-	rc = antr_channel_open(channel);
+	rc = radiant_ant_channel_open(channel);
 	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("ch%u open: %d", channel, (int)rc);
 		return -EIO;
@@ -481,8 +481,8 @@ int main(void)
 	LOG_INF("RadiANT trainer: ANT+ 0x11 FE-C, equipment type 25, "
 		"programmable ACK faults");
 
-	if (antr_init() != RADIANT_WIRE_RESPONSE_NO_ERROR) {
-		LOG_ERR("antr_init failed");
+	if (radiant_ant_init() != RADIANT_WIRE_RESPONSE_NO_ERROR) {
+		LOG_ERR("radiant_ant_init failed");
 		return 0;
 	}
 
@@ -529,7 +529,7 @@ int main(void)
 	trainer_model_tick(&model, 0u);
 	publish();
 
-	if (antr_network_address_set(ANT_NETWORK, ant_plus_key) !=
+	if (radiant_ant_network_address_set(ANT_NETWORK, ant_plus_key) !=
 	    RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("network key");
 		return 0;

@@ -28,7 +28,7 @@ reads.
 - **Pro Micro images reboot into their UF2 bootloader over USB**
   (`tools/ant_probe.py --reboot-to-bootloader`). Any host software that can
   open the device can now put these boards into a writable bootloader.
-- **RadiANT is usable from other firmware:** the `antr_*` API lives in the
+- **RadiANT is usable from other firmware:** the `radiant_ant_*` API lives in the
   `radiant` module with heart-rate samples, and builds on stock Zephyr
   ([radiant/README.md](radiant/README.md)).
 - **Low-power options for battery nodes, default n**

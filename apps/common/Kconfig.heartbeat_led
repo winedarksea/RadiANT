@@ -88,7 +88,7 @@ config ANT_DONGLE_HEARTBEAT_LED_ACTIVITY
 	  genuinely needs both - it needs a second counter, not a second reader.
 
 	  ON BY DEFAULT, AND THAT COMMITS THE HOOK TO EVERY IMAGE. It selects
-	  CONFIG_ANT_DONGLE_ACTIVITY_COUNT, so antr_on_message() gains a switch
+	  CONFIG_ANT_DONGLE_ACTIVITY_COUNT, so radiant_ant_on_message() gains a switch
 	  on the message id and one atomic increment per data-bearing message -
 	  on the radiant API event thread, never in a radio callback. That is
 	  the same code the shipping Feather has run since the NeoPixel landed;

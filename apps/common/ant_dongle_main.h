@@ -9,7 +9,7 @@
  *
  * WHY THIS IS HERE AND NOT COPIED. The two applications ship the same
  * initialisation order, and that order is load-bearing in three separate
- * places (the UF2 settle before enumeration, antr_init() before the transport
+ * places (the UF2 settle before enumeration, radiant_ant_init() before the transport
  * asks for the HFXO, the bridge before ant_transport_enable()). Two copies of
  * it in two shipping products is two things that must not diverge and nothing
  * making them agree - and apps/dongle_thread carried exactly that copy until
@@ -31,12 +31,12 @@
 int ant_dongle_main_run(void);
 
 /*
- * Runs after antr_init() has succeeded and before usb_ant_class_init() and the
+ * Runs after radiant_ant_init() has succeeded and before usb_ant_class_init() and the
  * transport. Weak, defaulting to a no-op; an application that needs to bring a
  * second wireless stack up overrides it (apps/dongle_thread does, for the two
  * coexistence loads).
  *
- * AFTER antr_init() IS THE CONTRACT, not an accident of ordering: the radio
+ * AFTER radiant_ant_init() IS THE CONTRACT, not an accident of ordering: the radio
  * backend holds an explicit HFXO request that is load-bearing - without it the
  * 1 MHz timebase runs 0.42 % fast on the internal RC between timeslots, which
  * shows up in no counter anywhere. A second stack started before that request

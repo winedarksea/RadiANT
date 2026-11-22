@@ -87,7 +87,7 @@ things keep their names outright:
   the protocol's own name out of prose that describes the protocol would make
   the documentation less accurate, not more careful.
 
-**One collision removed as a side effect.** `src/ant_radio_sdk_ant.c` is a
+**One collision removed as a side effect.** `apps/common/ant_radio_sdk_ant.c` is a
 translation unit holding all four sdk-ant headers at once, and `ANTW_*` exists
 because sdk-ant's error macros are computed expressions — identical macro *names*
 with different token sequences are a hard redefinition error, not a warning. A

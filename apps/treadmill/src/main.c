@@ -50,7 +50,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
-#include "ant_radio.h"
+#include <radiant/radiant_ant.h>
 #include <radiant/radiant_wire.h>
 #include "node_ident.h"
 #include "profile_common.h"
@@ -421,7 +421,7 @@ static void apply_control_page(const uint8_t *body)
  * The thread hop, and why it is a queue rather than a call
  * ---------------------------------------------------------------------------
  *
- * antr_on_message() runs on radiant's event thread. apply_control_page() writes
+ * radiant_ant_on_message() runs on radiant's event thread. apply_control_page() writes
  * `state`, and treadmill_state.h's lock-free design is only safe because
  * "everything that touches this struct runs on the system workqueue" - which
  * this path did not. Nor did the FTMS one; see treadmill_ble.c's cp_work.
@@ -523,7 +523,7 @@ static void fec_cmd_work_fn(struct k_work *w)
 
 static K_WORK_DEFINE(fec_cmd_work, fec_cmd_work_fn);
 
-/* Called from antr_on_message(), i.e. the radiant_event thread. Does no more
+/* Called from radiant_ant_on_message(), i.e. the radiant_event thread. Does no more
  * than it has to: copy eight bytes and wake the workqueue. */
 static void queue_control_page(const uint8_t *body)
 {
@@ -622,7 +622,7 @@ static void load_fec_page(void)
 	if (kind == PROFILE_SLOT_IDLE) {
 		return;
 	}
-	(void)antr_broadcast_message_tx(FEC_CHANNEL, sizeof(body), body);
+	(void)radiant_ant_broadcast_message_tx(FEC_CHANNEL, sizeof(body), body);
 }
 
 #if defined(CONFIG_TREADMILL_ANT_SDM)
@@ -639,7 +639,7 @@ static void load_sdm_page(void)
 	if (kind == PROFILE_SLOT_IDLE) {
 		return;
 	}
-	(void)antr_broadcast_message_tx(SDM_CHANNEL, sizeof(body), body);
+	(void)radiant_ant_broadcast_message_tx(SDM_CHANNEL, sizeof(body), body);
 }
 #endif
 
@@ -647,7 +647,7 @@ static void load_sdm_page(void)
  * The backend's only way up. A dongle forwards this to USB; a node is the
  * application the messages were for.
  */
-void antr_on_message(const struct antr_msg *msg)
+void radiant_ant_on_message(const struct radiant_ant_msg *msg)
 {
 	if (msg == NULL || msg->data == NULL) {
 		return;
@@ -700,16 +700,16 @@ void antr_on_message(const struct antr_msg *msg)
 static int ant_master_start(uint8_t channel, uint16_t devnum,
 			    uint8_t device_type, uint16_t period)
 {
-	antr_err_t rc;
+	radiant_ant_err_t rc;
 
-	rc = antr_channel_assign(channel, RADIANT_WIRE_CHANNEL_TYPE_MASTER, ANT_NETWORK,
+	rc = radiant_ant_channel_assign(channel, RADIANT_WIRE_CHANNEL_TYPE_MASTER, ANT_NETWORK,
 				 0u);
 	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("ch%u assign: %d", channel, (int)rc);
 		return -EIO;
 	}
 
-	rc = antr_channel_id_set(channel, devnum, device_type, ANT_TRANS_TYPE);
+	rc = radiant_ant_channel_id_set(channel, devnum, device_type, ANT_TRANS_TYPE);
 	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("ch%u channel id: %d", channel, (int)rc);
 		return -EIO;
@@ -720,26 +720,26 @@ static int ant_master_start(uint8_t channel, uint16_t devnum,
 	 * 4.00 Hz and 8134 is SDM's ~4.03 Hz. A receiver told the wrong one
 	 * never opens the channel and nothing anywhere names the period as the
 	 * reason. */
-	rc = antr_channel_period_set(channel, period);
+	rc = radiant_ant_channel_period_set(channel, period);
 	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("ch%u period: %d", channel, (int)rc);
 		return -EIO;
 	}
 
-	rc = antr_channel_radio_freq_set(channel, ANT_RF_FREQ);
+	rc = radiant_ant_channel_radio_freq_set(channel, ANT_RF_FREQ);
 	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("ch%u rf freq: %d", channel, (int)rc);
 		return -EIO;
 	}
 
 	/* No pre-open stage. It was here to stop the first frame going out
-	 * empty, and it never could: antr_broadcast_message_tx() refuses a
+	 * empty, and it never could: radiant_ant_broadcast_message_tx() refuses a
 	 * channel that is not open yet (NOT_OPENED, by design), so it only
 	 * consumed a page for nothing. open() posts the first slot from
 	 * whatever the buffer holds (zeros at boot; FE-C has no page 0x00, so
 	 * receivers ignore it) and EVENT_TX after that slot starts the real
 	 * stream, group-aligned. */
-	rc = antr_channel_open(channel);
+	rc = radiant_ant_channel_open(channel);
 	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("ch%u open: %d", channel, (int)rc);
 		return -EIO;
@@ -817,8 +817,8 @@ int main(void)
 #endif
 	LOG_INF("RadiANT treadmill: " ANT_BANNER);
 
-	if (antr_init() != RADIANT_WIRE_RESPONSE_NO_ERROR) {
-		LOG_ERR("antr_init failed");
+	if (radiant_ant_init() != RADIANT_WIRE_RESPONSE_NO_ERROR) {
+		LOG_ERR("radiant_ant_init failed");
 		return 0;
 	}
 
@@ -929,7 +929,7 @@ int main(void)
 
 	publish();
 
-	if (antr_network_address_set(ANT_NETWORK, ant_plus_key) !=
+	if (radiant_ant_network_address_set(ANT_NETWORK, ant_plus_key) !=
 	    RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("network key");
 		return 0;

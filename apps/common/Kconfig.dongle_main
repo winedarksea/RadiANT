@@ -2,7 +2,7 @@
 #
 # The shared boot sequence's own two symbols, rsourced by apps/dongle/Kconfig
 # and apps/dongle_thread/Kconfig - the same arrangement, and for the same
-# reason, as apps/common/Kconfig.antr_api beside it.
+# reason, as apps/common/Kconfig.ant_api beside it.
 #
 # apps/hrm_ble and apps/dongle_ti include apps/common/sources.cmake but do NOT
 # rsource this file, so CONFIG_ANT_DONGLE_MAIN is simply undefined there and
@@ -16,7 +16,7 @@ config ANT_DONGLE_MAIN
 	bool "Compile the shared ANT-serial dongle boot sequence"
 	default y
 	help
-	  apps/common/ant_dongle_main.c: settle-after-UF2, antr_init(), the weak
+	  apps/common/ant_dongle_main.c: settle-after-UF2, radiant_ant_init(), the weak
 	  post-radio hook, usb_ant_class_init(), the serial bridge, the
 	  transport, and then the main thread handed to
 	  ant_heartbeat_led_run() - in that order, which is load-bearing in

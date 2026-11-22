@@ -200,7 +200,7 @@ int radiant_transfer_ack_data(struct radiant_transfer *t, const uint8_t *payload
 		return RADIANT_TRANSFER_EINVAL;
 	}
 
-	/* Copied per src/ant_radio.h's antr_acknowledge_message_tx() contract (no
+	/* Copied per <radiant/radiant_ant.h>'s radiant_ant_acknowledge_message_tx() contract (no
 	 * ownership transfer), then run through the ordinary burst path as one
 	 * START|END block so there's a single sequencer, not two. */
 	memcpy(t->ack_payload, payload, RADIANT_TRANSFER_PKT_BYTES);

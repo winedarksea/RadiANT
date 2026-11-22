@@ -3,11 +3,11 @@
  * bridge_app.h - the application half of the RadiANT sample bus.
  *
  * radiant/src/bridge/ is the bus, the binding table, the rule evaluator and
- * the liveness table, and it reaches no radiant header and no antr_* header at
+ * the liveness table, and it reaches no radiant header and no radiant_ant_* header at
  * all - that is a property radiant/tests/CMakeLists.txt states as the reason
  * those files are compiled where they are. Everything in THIS directory is the
  * other side of that line: it is allowed to know about ANT channels, about
- * antr_*, about sockets and about buttons.
+ * radiant_ant_*, about sockets and about buttons.
  *
  * Four files sit behind it:
  *   bridge_pump.c    - the drain thread and the 1 Hz liveness tick. Nothing

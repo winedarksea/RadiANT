@@ -262,7 +262,7 @@ found by the cheapest tier that can see it.
 and malformed, and records the replies to a `.antser` file. **The A/B is a byte
 diff of two files; byte-identical is the pass.** That catches most of the
 divergence there is to catch — response codes, reply framing and sizes, error
-mapping, the leading-index-byte shapes in `src/ant_serial_bridge.c` — with no
+mapping, the leading-index-byte shapes in `apps/common/ant_serial_bridge.c` — with no
 sensors and no statistics anywhere near it.
 
 ### Tier 2 — radio behaviour (two boards)

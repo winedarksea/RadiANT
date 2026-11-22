@@ -3,7 +3,7 @@
  * radiant_channel.h - the per-channel state machine, its configuration, and the
  * slot clock every other core module reads.
  *
- * Provenance: clean-room, from docs/sdk-ant-contract.md and src/ant_radio.h
+ * Provenance: clean-room, from docs/sdk-ant-contract.md and <radiant/radiant_ant.h>
  * (semantics, ordering, permitted error codes), the ANT Message Protocol and
  * Usage Rev 5.1 (D00000652) for the channel-status byte layout and the
  * 32768 Hz period unit, and bench measurements in docs/ant-radio-link.md and
@@ -27,7 +27,7 @@
  * channel field is 5 bits). Flat array of 32, no allocation.
  *
  * Every function radiant_api.c forwards returns radiant_channel_err_t, a
- * uint8_t whose value IS the wire byte (src/ant_radio.h's convention - an
+ * uint8_t whose value IS the wire byte (<radiant/radiant_ant.h>'s convention - an
  * unrecognised code hangs a host library). Values are spelled as literals
  * here rather than pulled from radiant_wire.h so this header reads
  * standalone; the _Static_assert block at the bottom checks the two
@@ -61,7 +61,7 @@ extern "C" {
  * Networks, indexing the keys ant_net.c holds. Three is what every host
  * expects; a host that configures network 1 and gets INVALID_NETWORK_NUMBER
  * concludes the dongle is broken rather than frugal. ant_net.c owns the
- * keys, this module owns only the range check (antr_channel_assign() must
+ * keys, this module owns only the range check (radiant_ant_channel_assign() must
  * refuse a bad network before any key lookup).
  */
 #define RADIANT_CHANNEL_NETWORK_COUNT 3u
@@ -123,7 +123,7 @@ typedef uint8_t radiant_channel_err_t;
  * three slave types. The only bit of the type byte this module interprets -
  * it decides transmitter vs. search on open.
  *
- * An UNRECOGNISED type byte is accepted, deliberately: antr_channel_assign()
+ * An UNRECOGNISED type byte is accepted, deliberately: radiant_ant_channel_assign()
  * has no permitted error code left to reject a type with (only NO_ERROR,
  * INVALID_MESSAGE, WRONG_STATE, INVALID_NETWORK_NUMBER), so inventing one
  * would be wire-visible. See docs/sdk-ant-contract.md.
@@ -143,7 +143,7 @@ typedef uint8_t radiant_channel_err_t;
  * 8182 counts is the ANT+ 4.005 Hz default, matching the bench measurement
  * (249,696.4 us mean over 744 intervals, docs/ant-radio-link.md). NOT 8192:
  * that's 250,000 us exactly, 305 us off what a real ANT+ master transmits
- * at, though src/ant_radio.h's comment calls it "the 4 Hz most profiles use".
+ * at, though <radiant/radiant_ant.h>'s comment calls it "the 4 Hz most profiles use".
  */
 #define RADIANT_CHANNEL_PERIOD_HZ         32768u
 #define RADIANT_CHANNEL_PERIOD_ANT_PLUS   8182u  /* 4.005 Hz, measured */
@@ -333,7 +333,7 @@ enum radiant_channel_state {
  *
  * Implemented by radiant_event.c, not by radiant_channel.c (a test double in
  * radiant/tests/src/test_channel.c otherwise) - resolved at link time,
- * the same inversion src/ant_radio.h uses for antr_on_message(). No
+ * the same inversion <radiant/radiant_ant.h> uses for radiant_ant_on_message(). No
  * registration pointer needed since there's never more than one consumer.
  *
  * @param channel     0 .. RADIANT_CHANNEL_COUNT-1.
@@ -352,11 +352,11 @@ void radiant_channel_event_out(uint8_t channel, uint8_t event_code);
 
 /* Every channel to UNASSIGNED, every configuration byte to its default, the
  * slot clock stopped. Raises no events - there is nobody to tell yet, and
- * antr_init() has not returned. */
+ * radiant_ant_init() has not returned. */
 void radiant_channel_init(void);
 
 /*
- * antr_stack_reset(): every channel closed and unassigned, synchronously.
+ * radiant_ant_stack_reset(): every channel closed and unassigned, synchronously.
  *
  * Channel-closed events raised as a side effect ARE delivered - the contract
  * requires it, and the bridge discards them until the startup message
@@ -375,12 +375,12 @@ void radiant_channel_reset_all(void);
 void radiant_channel_period_floor_set(uint16_t counts);
 
 /* ---------------------------------------------------------------------------
- * Lifecycle - what radiant_api.c forwards from the four antr_channel_* calls
+ * Lifecycle - what radiant_api.c forwards from the four radiant_ant_channel_* calls
  * ---------------------------------------------------------------------------
  */
 
 /*
- * antr_channel_assign(). The channel must be UNASSIGNED.
+ * radiant_ant_channel_assign(). The channel must be UNASSIGNED.
  *
  * Resets every configuration byte to default, including the channel ID - a
  * reassigned channel must not inherit the last session's device number, or a
@@ -394,7 +394,7 @@ radiant_channel_err_t radiant_channel_assign(uint8_t channel, uint8_t type,
 				     uint8_t network, uint8_t ext_assign);
 
 /*
- * antr_channel_unassign(). The channel must be ASSIGNED and closed.
+ * radiant_ant_channel_unassign(). The channel must be ASSIGNED and closed.
  *
  * Returns RADIANT_CH_OK, RADIANT_CH_ERR_INVALID_MESSAGE or RADIANT_CH_ERR_WRONG_STATE
  * (never assigned, still open, or still closing). Refuses rather than
@@ -404,7 +404,7 @@ radiant_channel_err_t radiant_channel_assign(uint8_t channel, uint8_t type,
 radiant_channel_err_t radiant_channel_unassign(uint8_t channel);
 
 /*
- * antr_channel_open_with_offset(). The channel must be ASSIGNED with its ID
+ * radiant_ant_channel_open_with_offset(). The channel must be ASSIGNED with its ID
  * set.
  *
  * @param offset  The one-shot start offset, in the same 32768 Hz counts the
@@ -429,7 +429,7 @@ radiant_channel_err_t radiant_channel_open(uint8_t channel, uint16_t offset,
 				   radiant_time_t now);
 
 /*
- * antr_channel_close(). The channel must be on air.
+ * radiant_ant_channel_close(). The channel must be on air.
  *
  * If no radio operation is bound, the close completes here and
  * CHANNEL_CLOSED is raised before this returns. If one is bound, the channel
@@ -453,13 +453,13 @@ radiant_channel_err_t radiant_channel_close(uint8_t channel, radiant_time_t now)
  * ---------------------------------------------------------------------------
  */
 
-/* antr_channel_id_set(). Zero is the wildcard on a slave, in all three fields.
+/* radiant_ant_channel_id_set(). Zero is the wildcard on a slave, in all three fields.
  * Returns OK, INVALID_MESSAGE, or WRONG_STATE (unassigned or open). */
 radiant_channel_err_t radiant_channel_id_set(uint8_t channel, uint16_t device_number,
 				     uint8_t device_type, uint8_t trans_type);
 
 /*
- * antr_channel_id_get(). On a TRACKING slave reports the ID actually
+ * radiant_ant_channel_id_get(). On a TRACKING slave reports the ID actually
  * acquired (wildcards resolved), otherwise what was configured. The
  * acquired ID is kept separately and discarded when the channel closes, so
  * a reopened channel searches again rather than silently narrowing to last
@@ -471,19 +471,19 @@ radiant_channel_err_t radiant_channel_id_set(uint8_t channel, uint16_t device_nu
 radiant_channel_err_t radiant_channel_id_get(uint8_t channel,
 				     struct radiant_channel_id *out);
 
-/* antr_channel_period_set(), in 32768 Hz counts.
+/* radiant_ant_channel_period_set(), in 32768 Hz counts.
  * Returns OK, INVALID_MESSAGE, WRONG_STATE, or INVALID_PARAM (outside
  * [floor, RADIANT_CHANNEL_PERIOD_MAX_COUNTS]). */
 radiant_channel_err_t radiant_channel_period_set(uint8_t channel, uint16_t period);
 radiant_channel_err_t radiant_channel_period_get(uint8_t channel, uint16_t *out);
 
-/* antr_channel_radio_freq_set(): an index, 0..124, meaning 2400+N MHz.
+/* radiant_ant_channel_radio_freq_set(): an index, 0..124, meaning 2400+N MHz.
  * Returns OK, INVALID_MESSAGE, WRONG_STATE, or INVALID_PARAM (> 124). */
 radiant_channel_err_t radiant_channel_rf_freq_set(uint8_t channel, uint8_t freq);
 radiant_channel_err_t radiant_channel_rf_freq_get(uint8_t channel, uint8_t *out);
 
 /*
- * antr_channel_radio_tx_power_set(). Requires an ASSIGNED channel, legal
+ * radiant_ant_channel_radio_tx_power_set(). Requires an ASSIGNED channel, legal
  * while open - power is the one radio property that doesn't need to leave
  * the air to change.
  *
@@ -501,7 +501,7 @@ radiant_channel_err_t radiant_channel_tx_power_set(uint8_t channel, uint8_t leve
 radiant_channel_err_t radiant_channel_tx_power_get(uint8_t channel, uint8_t *level,
 					   uint8_t *custom);
 
-/* antr_channel_search_timeout_set() / _low_priority_rx_search_timeout_set(),
+/* radiant_ant_channel_search_timeout_set() / _low_priority_rx_search_timeout_set(),
  * both in 2.5 s increments, both requiring only an assigned channel. Changing
  * either on a SEARCHING channel re-derives the deadline from the time the
  * search began, so a host that extends a timeout mid-search gets the extension
@@ -517,7 +517,7 @@ radiant_channel_err_t radiant_channel_lp_search_timeout_get(uint8_t channel,
 						    uint8_t *out);
 
 /*
- * antr_channel_radio_crc_mode_set(). Opaque byte, validated against this
+ * radiant_ant_channel_radio_crc_mode_set(). Opaque byte, validated against this
  * module's supported set - exactly {RADIANT_CH_CRC_MODE_DEFAULT} - since a
  * backend that silently accepted a shorter CRC would give a host a link
  * that works and framing that doesn't. Returns OK, INVALID_MESSAGE,
@@ -527,7 +527,7 @@ radiant_channel_err_t radiant_channel_lp_search_timeout_get(uint8_t channel,
 radiant_channel_err_t radiant_channel_crc_mode_set(uint8_t channel, uint8_t mode);
 radiant_channel_err_t radiant_channel_crc_mode_get(uint8_t channel, uint8_t *out);
 
-/* antr_auto_freq_hop_table_set(). Three 2400 MHz offsets, only meaningful on a
+/* radiant_ant_auto_freq_hop_table_set(). Three 2400 MHz offsets, only meaningful on a
  * channel assigned with the frequency-agility extended flag - which ANT+
  * profiles forbid, so nothing in a standard session reaches it.
  * Returns OK, INVALID_MESSAGE, WRONG_STATE or INVALID_PARAM (any offset >124). */
@@ -547,11 +547,11 @@ radiant_channel_err_t radiant_channel_freq_hop_table_get(uint8_t channel,
  */
 
 /*
- * antr_search_waveform_set(). Stored and never read - this backend runs one
+ * radiant_ant_search_waveform_set(). Stored and never read - this backend runs one
  * search geometry. sdk-ant names exactly two legal values (316 default,
  * 97 fast) and forbids custom ones, so only those two are accepted rather
  * than storing an arbitrary uint16_t that could never mean anything. See
- * the antr_* mapping in docs/sdk-ant-contract.md.
+ * the radiant_ant_* mapping in docs/sdk-ant-contract.md.
  * Returns OK, INVALID_MESSAGE, WRONG_STATE (unassigned) or INVALID_PARAM
  * (neither DEFAULT nor FAST).
  */
@@ -563,13 +563,13 @@ radiant_channel_err_t radiant_channel_search_waveform_get(uint8_t channel,
 						  uint16_t *out);
 
 /*
- * antr_prox_search_set(). PERMANENT LIMITATION, not a gap: nothing wires a
+ * radiant_ant_prox_search_set(). PERMANENT LIMITATION, not a gap: nothing wires a
  * channel's prox_threshold to radiant_search.c's RSSI gate, and the
  * capability bit is not advertised. Storing a non-zero threshold that
  * nothing enforces is the trap docs/gotchas.md warns against - a host would
  * believe distant sensors are filtered when none are. So only 0 (off) is
  * accepted; any non-zero threshold is refused rather than silently dropped.
- * See the antr_* mapping in docs/sdk-ant-contract.md.
+ * See the radiant_ant_* mapping in docs/sdk-ant-contract.md.
  * Returns OK, INVALID_MESSAGE, WRONG_STATE or INVALID_PARAM (threshold > 10,
  * or any non-zero threshold).
  */
@@ -581,7 +581,7 @@ radiant_channel_err_t radiant_channel_prox_search_get(uint8_t channel,
 					      uint8_t *threshold,
 					      uint8_t *custom);
 
-/* antr_search_channel_priority_set()/_get(). 0 low, 1 high.
+/* radiant_ant_search_channel_priority_set()/_get(). 0 low, 1 high.
  * Returns OK, INVALID_MESSAGE or WRONG_STATE (unassigned) on the setter; the
  * getter returns OK or INVALID_MESSAGE, per the contract's asymmetry. */
 radiant_channel_err_t radiant_channel_search_priority_set(uint8_t channel,
@@ -589,7 +589,7 @@ radiant_channel_err_t radiant_channel_search_priority_set(uint8_t channel,
 radiant_channel_err_t radiant_channel_search_priority_get(uint8_t channel,
 						  uint8_t *out);
 
-/* antr_active_search_sharing_cycles_set()/_get(). Advisory for a backend free
+/* radiant_ant_active_search_sharing_cycles_set()/_get(). Advisory for a backend free
  * to merge receive windows, but it must still round-trip because
  * tools/ant_features.py checks that it does. */
 radiant_channel_err_t radiant_channel_sharing_cycles_set(uint8_t channel,
@@ -598,7 +598,7 @@ radiant_channel_err_t radiant_channel_sharing_cycles_get(uint8_t channel,
 						 uint8_t *out);
 
 /*
- * antr_sdu_mask_config(): the per-channel half of selective data update.
+ * radiant_ant_sdu_mask_config(): the per-channel half of selective data update.
  * Only the channel range is checked; the byte is stored verbatim, and the
  * mask-index INVALID_PARAM check belongs to whoever owns the mask table.
  * Returns OK or INVALID_MESSAGE.
@@ -615,7 +615,7 @@ radiant_channel_err_t radiant_channel_sdu_mask_config_get(uint8_t channel,
  */
 
 /*
- * antr_channel_status_get(). Legal on an unassigned channel - that's the
+ * radiant_ant_channel_status_get(). Legal on an unassigned channel - that's the
  * answer, not an error, which is why every host opens a session by reading
  * it. Byte layout: state bits 1:0, network bits 3:2, channel type bits 7:4.
  *

@@ -69,7 +69,7 @@ ant_assert_radio("radiant_dongle_ti")
 
 target_sources(app PRIVATE src/main.c)
 
-# ── apps/common: the antr_* seam, the serial bridge and its transports ─────
+# ── apps/common: the radiant_ant_* seam, the serial bridge and its transports ─────
 #
 # Same file, same reasoning as apps/dongle and apps/dongle_thread. This board
 # always lands on CONFIG_ANT_DONGLE_TRANSPORT_UART (see boards/*.conf - there

@@ -56,7 +56,7 @@
  * here is the literal wire byte (tools/ant_conformance.py byte-diffs it),
  * always from radiant_wire.h, never invented. Three codes also carry buffer
  * ownership, releasing the bridge's single 24-byte burst block
- * (src/ant_serial_bridge.c:452-502): TRANSFER_NEXT_DATA_BLOCK (once per
+ * (apps/common/ant_serial_bridge.c:452-502): TRANSFER_NEXT_DATA_BLOCK (once per
  * non-final accepted block), TRANSFER_TX_COMPLETED, TRANSFER_TX_FAILED.
  * Missing the first doesn't fail loudly - the bridge's k_sem_take() just
  * waits its full 1000 ms per block, silently turning a two-second transfer
@@ -222,19 +222,19 @@ void radiant_event_wakeup(void);
  * Bring the module up: empty ring, library configuration and event filter
  * zeroed, statistics cleared, timestamp policy back to default.
  *
- * Call from antr_init() BEFORE the radio is enabled. Posting before this
+ * Call from radiant_ant_init() BEFORE the radio is enabled. Posting before this
  * returns is RADIANT_EVENT_ESTATE, mirroring the radiant_on_message() rule.
  */
 void radiant_event_init(void);
 
 /*
- * What antr_stack_reset() needs: discard every queued message and zero the
+ * What radiant_ant_stack_reset() needs: discard every queued message and zero the
  * library configuration and event filter, without delivering anything.
  *
  * Discarding, not draining, is correct: a real stick emits nothing between
  * reset and the startup message (the bridge discards inbound events until
  * the startup message for that reason), and draining here would recursively call
- * radiant_on_message() from inside an antr_* call, which
+ * radiant_on_message() from inside an radiant_ant_* call, which
  * docs/sdk-ant-contract.md forbids. Discards counted in
  * radiant_event_stats.dropped_flush; stats themselves are not cleared, so a
  * mid-session reset stays visible to a test.
@@ -440,7 +440,7 @@ int radiant_event_post_channel_event(uint8_t channel, uint8_t code);
  * Queue an arbitrary message - the escape hatch for anything neither a data
  * message nor a channel event. Its one firmware user is the opt-in 0xF8
  * window-verdict event (radiant_sec_window_verdict() in
- * src/antr/ant_radio_radiant.c). The bridge builds the startup message
+ * src/ant_api/radiant_ant.c). The bridge builds the startup message
  * itself, so a backend must not also raise one.
  *
  * body may be NULL only when len is 0. Returns RADIANT_EVENT_EINVAL for a
@@ -489,7 +489,7 @@ bool radiant_event_pending(void);
  * means "everything currently queued".
  *
  * THREAD CONTEXT ONLY. radiant_on_message() must not be re-entered or called
- * from inside an antr_* call the bridge made, so the drain belongs on
+ * from inside an radiant_ant_* call the bridge made, so the drain belongs on
  * radiant_api.c's own thread/work queue, woken by radiant_event_wakeup(). A
  * drain re-entered from inside radiant_on_message() delivers nothing and
  * returns zero.
@@ -504,7 +504,7 @@ uint32_t radiant_event_drain(uint32_t max_msgs);
  * True while a radiant_event_drain() call is running, from before it takes
  * its first message off the ring until after the last delivery returns.
  *
- * For antr_stack_reset(). radiant_event_flush() empties the ring, but a drain
+ * For radiant_ant_stack_reset(). radiant_event_flush() empties the ring, but a drain
  * may already hold a message it took off before the flush and not yet have
  * handed it to radiant_on_message(). Once this has been seen false after the
  * flush, no message from before the flush is still on its way; a drain that

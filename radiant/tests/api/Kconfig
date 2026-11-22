@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# prj.conf turns CONFIG_RADIANT_ANTR_API on, which is what compiles the adapter
+# prj.conf turns CONFIG_RADIANT_ANT_API on, which is what compiles the adapter
 # under test. Any scenario that enables CONFIG_RADIANT_SEC gets the host
 # messages too, matching the applications.
 config RADIANT_SEC_HOST_MESSAGES
-	default y if RADIANT_ANTR_API && RADIANT_SEC
+	default y if RADIANT_ANT_API && RADIANT_SEC
 
 # The bridge thread's stack size, so the 0xF5-on-the-bridge-stack test runs on
 # exactly the stack the dongle images give that thread.

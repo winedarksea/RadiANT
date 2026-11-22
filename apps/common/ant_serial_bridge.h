@@ -4,7 +4,7 @@
  * ant_serial_bridge.h - what the host has done to the stack, for firmware that
  * shares the stack with it.
  *
- * A host SYSTEM_RESET (Zwift sends one at startup) runs antr_stack_reset(),
+ * A host SYSTEM_RESET (Zwift sends one at startup) runs radiant_ant_stack_reset(),
  * which unassigns EVERY channel and clears every network key - including the
  * channels and key a dongle-side user such as apps/dongle_thread's self
  * channels set up for itself. That user cannot see the reset happen (it polls

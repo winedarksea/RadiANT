@@ -187,7 +187,7 @@ def configure(dev, reader, ch_type: int, device: int, label: str) -> bool:
         if not command(dev, reader, msg_id, payload, name):
             return False
 
-    # THE BROADCAST BUFFER, STAGED BEFORE OPEN AND CHECKED. antr_broadcast_
+    # THE BROADCAST BUFFER, STAGED BEFORE OPEN AND CHECKED. radiant_ant_broadcast_
     # message_tx() is refused with CHANNEL_NOT_OPENED before the channel is
     # open, so staging a page here would silently set nothing - see the open
     # below, which is why this comes after it for the master.

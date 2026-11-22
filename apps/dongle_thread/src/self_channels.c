@@ -30,18 +30,18 @@
  * opening; a sensor being tracked is never evicted).
  *
  * Every decision is a pure function in radiant/src/bridge/radiant_self_policy.c
- * (tested in radiant/tests/src/test_self_policy.c); this file keeps the antr_*
+ * (tested in radiant/tests/src/test_self_policy.c); this file keeps the radiant_ant_*
  * calls.
  *
  * This starts on its own delayed thread rather than in
  * ant_dongle_post_radio_init(), because that weak hook already has one strong
  * override (src/main.c). The CONFIG_ANT_DONGLE_SELF_CHANNELS_DELAY_S delay is
- * a real precondition, not caution: ant_radio.h forbids any antr_* call
- * before antr_init() returns, and the default of 5 s is comfortably past it.
- * It polls channel status (antr_channel_status_get()/antr_channel_id_get())
+ * a real precondition, not caution: radiant_ant.h forbids any radiant_ant_* call
+ * before radiant_ant_init() returns, and the default of 5 s is comfortably past it.
+ * It polls channel status (radiant_ant_channel_status_get()/radiant_ant_channel_id_get())
  * rather than watching the RX tap, because the tap runs on the backend's own
- * event thread and calling back into antr_* from there is the re-entrancy
- * ant_radio_radiant.c's api_lock exists to prevent.
+ * event thread and calling back into radiant_ant_* from there is the re-entrancy
+ * radiant_ant.c's api_lock exists to prevent.
  *
  * An ANT slave's channel period must match its master's and its device type
  * must match or be wildcard 0, so a discovering channel cannot search two
@@ -60,7 +60,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
-#include "ant_radio.h"
+#include <radiant/radiant_ant.h>
 #include "ant_serial_bridge.h"
 #include <radiant/radiant_wire.h>
 
@@ -94,8 +94,8 @@ static const uint8_t ant_plus_key[8] = {
 /*
  * ANT's high-priority search timeout is expressed in 2.5 s ticks, and its
  * default is 10 ticks = 25 s (radiant/include/radiant/radiant_channel.h's
- * RADIANT_CHANNEL_SEARCH_TIMEOUT_DEFAULT, and the same figure ant_radio.h
- * documents for the antr_* contract). 255 is ANT's own "never" on sdk-ant and
+ * RADIANT_CHANNEL_SEARCH_TIMEOUT_DEFAULT, and the same figure radiant_ant.h
+ * documents for the radiant_ant_* contract). 255 is ANT's own "never" on sdk-ant and
  * radiant alike (radiant_channel.c treats either byte at 255 as infinite),
  * and it is what Zwift sets on every paired channel.
  */
@@ -270,7 +270,7 @@ static void pair_pressed(const struct device *dev, struct gpio_callback *cb,
 	ARG_UNUSED(pins);
 
 	/* ISR context. Only a timestamp is written; every decision that
-	 * follows is taken on the polling thread below, where an antr_* call
+	 * follows is taken on the polling thread below, where an radiant_ant_* call
 	 * is legal. */
 	(void)atomic_set(&window_until, window_deadline());
 }
@@ -332,7 +332,7 @@ static void button_init(void)
  * really happened AFTER. The snapshot taken here, after the assign returned,
  * gives that unless the reset was still running when it was taken:
  * reset_busy covers the whole of handle_system_reset() from before
- * antr_stack_reset() to after the generation bump and the reset's fences,
+ * radiant_ant_stack_reset() to after the generation bump and the reset's fences,
  * and the STARTUP sent (ant_serial_bridge.h),
  * so an assign the wipe could have undone - or one landing between the wipe
  * and the bump, which would be recorded against the OLD generation and cleared
@@ -351,14 +351,14 @@ static void button_init(void)
  * stated rather than fixed: nothing this side of the bridge can tell an assign
  * the wipe undid from one made after it.
  */
-static int assign_one(uint8_t i, antr_err_t *refusal)
+static int assign_one(uint8_t i, radiant_ant_err_t *refusal)
 {
 	uint8_t ch = self_channel_index(i);
 	struct ant_bridge_host_state hs;
-	antr_err_t rc;
+	radiant_ant_err_t rc;
 
 	*refusal = 0u;
-	rc = antr_channel_assign(ch, RADIANT_WIRE_CHANNEL_TYPE_SLAVE, SELF_NETWORK, 0u);
+	rc = radiant_ant_channel_assign(ch, RADIANT_WIRE_CHANNEL_TYPE_SLAVE, SELF_NETWORK, 0u);
 	if (rc != 0u) {
 		*refusal = rc;
 		return -EIO;
@@ -368,7 +368,7 @@ static int assign_one(uint8_t i, antr_err_t *refusal)
 	if (hs.reset_busy) {
 		/* Ours or already wiped; either way not to be counted.
 		 * A refusal means the reset got there first. */
-		(void)antr_channel_unassign(ch);
+		(void)radiant_ant_channel_unassign(ch);
 		self[i].owned = false;
 		self[i].open_pinned = false;
 		self[i].open_discover = false;
@@ -420,17 +420,17 @@ enum self_assign_why {
  *
  * Any other refusal still means exactly what it says.
  */
-static void log_assign_refusal(uint8_t ch, int res, antr_err_t rc,
+static void log_assign_refusal(uint8_t ch, int res, radiant_ant_err_t rc,
 			       enum self_assign_why why)
 {
 	if (res == -EAGAIN) {
 		LOG_INF("self channel %u: host reset in progress - "
 			"re-establishing on the next poll", ch);
-	} else if (rc == (antr_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE &&
+	} else if (rc == (radiant_ant_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE &&
 		   why == SELF_ASSIGN_AFTER_TEARDOWN) {
 		LOG_INF("self channel %u: teardown still in progress, retrying "
 			"next poll", ch);
-	} else if (rc == (antr_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE) {
+	} else if (rc == (radiant_ant_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE) {
 		LOG_INF("self channel %u: the host assigned it first; it is the "
 			"host's until its next reset", ch);
 	} else {
@@ -441,7 +441,7 @@ static void log_assign_refusal(uint8_t ch, int res, antr_err_t rc,
 
 /*
  * The most device IDs one channel's exclusion list can hold, on either backend:
- * the radiant backend's API_ID_LIST_MAX (radiant/src/antr/ant_radio_radiant.c,
+ * the radiant backend's API_ID_LIST_MAX (radiant/src/ant_api/radiant_ant.c,
  * "what a retail stick accepts") and sdk-ant's ant_id_list_config() list size
  * (0-4, include/ant_interface.h). One more is RADIANT_WIRE_INVALID_LIST_ID.
  */
@@ -462,10 +462,10 @@ static void log_assign_refusal(uint8_t ch, int res, antr_err_t rc,
  * is a backstop for a device that binds elsewhere after this search opened.
  *
  * Backend-agnostic by construction: the list is the ANT API's own
- * (antr_id_list_add()/_config(), ant_radio.h), native on sdk-ant, and on
+ * (radiant_ant_id_list_add()/_config(), radiant_ant.h), native on sdk-ant, and on
  * radiant consulted at steer time, so the sweep does not chase an excluded
  * device, and again at offer time, when an acquisition is handed to the
- * channel (api_id_list_permits(), ant_radio_radiant.c).
+ * channel (api_id_list_permits(), radiant_ant.c).
  *
  * The list outlives a close and an unassign, so it is ALWAYS reconfigured
  * here, with size 0 when nothing is bound elsewhere: an exclusion written on
@@ -481,7 +481,7 @@ static void exclude_pinned(uint8_t ch)
 	static bool overflow_logged;
 	uint8_t n = 0u;
 	uint8_t j;
-	antr_err_t rc;
+	radiant_ant_err_t rc;
 
 	for (j = 0u; j < SELF_N; j++) {
 		uint8_t other = self_channel_index(j);
@@ -519,7 +519,7 @@ static void exclude_pinned(uint8_t ch)
 		id[1] = (uint8_t)(b->devnum >> 8);
 		id[2] = b->devtype;
 		id[3] = b->trans_type;
-		rc = antr_id_list_add(ch, id, n);
+		rc = radiant_ant_id_list_add(ch, id, n);
 		if (rc != 0u) {
 			LOG_WRN("channel %u exclusion list add %u: %u", ch, n,
 				rc);
@@ -528,7 +528,7 @@ static void exclude_pinned(uint8_t ch)
 		n++;
 	}
 
-	rc = antr_id_list_config(ch, n, 1u);
+	rc = radiant_ant_id_list_config(ch, n, 1u);
 	if (rc != 0u) {
 		LOG_WRN("channel %u exclusion list (%u entries): %u - a pinned "
 			"device may be found again and rotated away", ch, n, rc);
@@ -539,8 +539,8 @@ static void exclude_pinned(uint8_t ch)
  * Point an ASSIGNED, CLOSED channel at one discovery row and put it on air.
  *
  * All four configuration calls are legal in exactly this state and in no
- * other: ant_radio.h says antr_channel_id_set(), antr_channel_period_set() and
- * antr_channel_radio_freq_set() answer RADIANT_WIRE_CHANNEL_IN_WRONG_STATE when the
+ * other: radiant_ant.h says radiant_ant_channel_id_set(), radiant_ant_channel_period_set() and
+ * radiant_ant_channel_radio_freq_set() answer RADIANT_WIRE_CHANNEL_IN_WRONG_STATE when the
  * channel is "unassigned or open", and the radiant backend implements that as
  * require_assigned_closed() (radiant/src/radiant_channel.c). A channel whose
  * search has just timed out is precisely assigned-and-closed - the backend
@@ -549,25 +549,25 @@ static void exclude_pinned(uint8_t ch)
  */
 static int configure_and_open(uint8_t ch, const struct self_profile *p)
 {
-	antr_err_t rc;
+	radiant_ant_err_t rc;
 
 	/* All three ID fields wildcard except the device type. Fully wildcard
 	 * (0) is not the more general option it looks like: it widens the ID
 	 * match while leaving the period fixed, so it acquires
 	 * indiscriminately AND still only within one profile's rate. */
-	rc = antr_channel_id_set(ch, 0u, p->device_type, 0u);
+	rc = radiant_ant_channel_id_set(ch, 0u, p->device_type, 0u);
 	if (rc != 0u) {
 		LOG_WRN("channel %u id: %u", ch, rc);
 		return -EIO;
 	}
 
-	rc = antr_channel_period_set(ch, p->period_counts);
+	rc = radiant_ant_channel_period_set(ch, p->period_counts);
 	if (rc != 0u) {
 		LOG_WRN("channel %u period: %u", ch, rc);
 		return -EIO;
 	}
 
-	rc = antr_channel_radio_freq_set(ch, SELF_RF_FREQ);
+	rc = radiant_ant_channel_radio_freq_set(ch, SELF_RF_FREQ);
 	if (rc != 0u) {
 		LOG_WRN("channel %u freq: %u", ch, rc);
 		return -EIO;
@@ -577,7 +577,7 @@ static int configure_and_open(uint8_t ch, const struct self_profile *p)
 	 * default 25 s in place, which is right for three rows of four and
 	 * merely thin for the 0.5 Hz one - a worse search, not a broken
 	 * channel. */
-	rc = antr_channel_search_timeout_set(ch, p->search_ticks);
+	rc = radiant_ant_channel_search_timeout_set(ch, p->search_ticks);
 	if (rc != 0u) {
 		LOG_WRN("channel %u search timeout: %u (leaving the default)",
 			ch, rc);
@@ -585,11 +585,11 @@ static int configure_and_open(uint8_t ch, const struct self_profile *p)
 
 	/* Reached only with the channel assigned and closed - every set above
 	 * refuses anything else, and rotate_and_reopen()'s first try on a
-	 * still-OPEN channel leaves at antr_channel_id_set() - which is the
+	 * still-OPEN channel leaves at radiant_ant_channel_id_set() - which is the
 	 * one state the list calls accept. */
 	exclude_pinned(ch);
 
-	rc = antr_channel_open(ch);
+	rc = radiant_ant_channel_open(ch);
 	if (rc != 0u) {
 		LOG_WRN("channel %u open: %u", ch, rc);
 		return -EIO;
@@ -621,7 +621,7 @@ static void discover_open(uint8_t i)
  * where we thought it was. Rather than open it with a half-applied
  * configuration (a channel searching for the new device type at the old period
  * would find nothing, forever, silently), tear it down and rebuild: close,
- * unassign - which ant_radio.h requires a closed channel for, hence the order
+ * unassign - which radiant_ant.h requires a closed channel for, hence the order
  * - and reassign. Both leading calls may fail; each is a no-op when the
  * channel is already past that state.
  */
@@ -637,10 +637,10 @@ static void rotate_and_reopen(uint8_t i)
 	}
 
 	LOG_WRN("self channel %u would not retune in place - reassigning", ch);
-	(void)antr_channel_close(ch);
-	(void)antr_channel_unassign(ch);
+	(void)radiant_ant_channel_close(ch);
+	(void)radiant_ant_channel_unassign(ch);
 	{
-		antr_err_t refusal;
+		radiant_ant_err_t refusal;
 		int res = assign_one(i, &refusal);
 
 		if (res == 0) {
@@ -666,7 +666,7 @@ static int configure_pinned_and_open(uint8_t i, const struct radiant_binding *b)
 {
 	uint8_t ch = self_channel_index(i);
 	uint16_t period = b->period;
-	antr_err_t rc;
+	radiant_ant_err_t rc;
 
 	if (period == 0u) {
 		/* The read at bind time failed. The row it was found on is the
@@ -674,18 +674,18 @@ static int configure_pinned_and_open(uint8_t i, const struct radiant_binding *b)
 		period = self_profiles[self[i].row].period_counts;
 	}
 
-	rc = antr_channel_id_set(ch, b->devnum, b->devtype, b->trans_type);
+	rc = radiant_ant_channel_id_set(ch, b->devnum, b->devtype, b->trans_type);
 	if (rc == 0u) {
-		rc = antr_channel_period_set(ch, period);
+		rc = radiant_ant_channel_period_set(ch, period);
 	}
 	if (rc == 0u) {
-		rc = antr_channel_radio_freq_set(ch, SELF_RF_FREQ);
+		rc = radiant_ant_channel_radio_freq_set(ch, SELF_RF_FREQ);
 	}
 	if (rc != 0u) {
 		LOG_WRN("channel %u could not be pinned: %u", ch, rc);
 		return -EIO;
 	}
-	rc = antr_channel_search_timeout_set(ch, SELF_SEARCH_TICKS_FOREVER);
+	rc = radiant_ant_channel_search_timeout_set(ch, SELF_SEARCH_TICKS_FOREVER);
 	if (rc != 0u) {
 		/* Survivable: a pinned channel whose search times out comes
 		 * back here on the next poll and is reopened pinned. */
@@ -696,11 +696,11 @@ static int configure_pinned_and_open(uint8_t i, const struct radiant_binding *b)
 	 * outlives the close, so it is switched off here rather than left to
 	 * apply to a pinned search. Not fatal: an exclusion list only ever
 	 * names devices bound to OTHER channels, never this one's. */
-	rc = antr_id_list_config(ch, 0u, 0u);
+	rc = radiant_ant_id_list_config(ch, 0u, 0u);
 	if (rc != 0u) {
 		LOG_WRN("channel %u id list off: %u", ch, rc);
 	}
-	rc = antr_channel_open(ch);
+	rc = radiant_ant_channel_open(ch);
 	if (rc != 0u) {
 		LOG_WRN("channel %u open: %u", ch, rc);
 		return -EIO;
@@ -718,7 +718,7 @@ static int configure_pinned_and_open(uint8_t i, const struct radiant_binding *b)
  * (sdk-ant) work the same as a synchronous one (radiant). */
 static void close_one(uint8_t i)
 {
-	(void)antr_channel_close(self_channel_index(i));
+	(void)radiant_ant_channel_close(self_channel_index(i));
 	self[i].open_pinned = false;
 	self[i].open_discover = false;
 }
@@ -745,7 +745,7 @@ static void release_binding(uint8_t i)
  * entry the tap consults. Called only when the policy said BIND, which it says
  * only with the window open - section 10.1 rule 1 in code.
  *
- * The identity comes from antr_channel_id_get(), never from the table row
+ * The identity comes from radiant_ant_channel_id_get(), never from the table row
  * the channel was searching on. A wildcard search resolves to a real device
  * type, and it is the resolved one that reaches radiant_binding_bind() and
  * therefore rx_tap.c's devtype dispatch - so a binding records what the
@@ -765,7 +765,7 @@ static bool try_bind(uint8_t ch)
 	uint32_t existing;
 	int      rc;
 
-	if (antr_channel_id_get(ch, &devnum, &devtype, &trans) != 0u) {
+	if (radiant_ant_channel_id_get(ch, &devnum, &devtype, &trans) != 0u) {
 		return true;
 	}
 	if (devnum == 0u) {
@@ -832,7 +832,7 @@ static bool try_bind(uint8_t ch)
 	 * period 0, which the liveness table treats as "no honest expiry" and
 	 * counts - see radiant_liveness.h.
 	 */
-	if (antr_channel_period_get(ch, &period) == 0u) {
+	if (radiant_ant_channel_period_get(ch, &period) == 0u) {
 		(void)radiant_binding_set_period(source, period);
 	} else {
 		LOG_WRN("channel %u period read failed: source %u will never "
@@ -874,7 +874,7 @@ static bool tracking_bound_device(uint8_t ch)
 	if (b == NULL) {
 		return false;
 	}
-	if (antr_channel_id_get(ch, &devnum, &devtype, &trans) != 0u ||
+	if (radiant_ant_channel_id_get(ch, &devnum, &devtype, &trans) != 0u ||
 	    devnum == 0u) {
 		return true;
 	}
@@ -916,7 +916,7 @@ static bool self_key_poll(uint32_t *gen)
 
 	switch (radiant_self_key_decide(&key_state, &in, &new_generation)) {
 	case RADIANT_SELF_KEY_APPLY:
-		if (antr_network_address_set(SELF_NETWORK, ant_plus_key) != 0u) {
+		if (radiant_ant_network_address_set(SELF_NETWORK, ant_plus_key) != 0u) {
 			LOG_ERR("ANT+ network key rejected - self channels will "
 				"hear nothing");
 			break;
@@ -926,7 +926,7 @@ static bool self_key_poll(uint32_t *gen)
 		 * back; the next poll reports it if it is not the ANT+ one. */
 		ant_serial_bridge_host_state(SELF_NETWORK, &hs);
 		if (hs.key_writes != in.key_writes && hs.key_written) {
-			(void)antr_network_address_set(SELF_NETWORK, hs.key);
+			(void)radiant_ant_network_address_set(SELF_NETWORK, hs.key);
 		}
 		break;
 	case RADIANT_SELF_KEY_HOST_FOREIGN:
@@ -960,7 +960,7 @@ static void act(uint8_t i, enum radiant_self_action a, bool booting)
 
 	switch (a) {
 	case RADIANT_SELF_REESTABLISH: {
-		antr_err_t refusal;
+		radiant_ant_err_t refusal;
 		int res = assign_one(i, &refusal);
 
 		if (res != 0) {
@@ -982,7 +982,7 @@ static void act(uint8_t i, enum radiant_self_action a, bool booting)
 			radiant_binding_get(ant_bridge_channel_source(ch));
 		uint8_t status = 0u;
 
-		if (antr_channel_status_get(ch, &status) == 0u &&
+		if (radiant_ant_channel_status_get(ch, &status) == 0u &&
 		    radio_of(status) == RADIANT_SELF_RADIO_ASSIGNED) {
 			if (b != NULL) {
 				(void)configure_pinned_and_open(i, b);
@@ -1155,7 +1155,7 @@ static void self_thread_fn(void *a, void *b, void *c)
 			uint8_t ch = self_channel_index(i);
 			bool bound = ant_bridge_channel_source(ch) != RADIANT_BINDING_NONE;
 
-			radio[i] = (antr_channel_status_get(ch, &status) == 0u)
+			radio[i] = (radiant_ant_channel_status_get(ch, &status) == 0u)
 					   ? radio_of(status)
 					   : RADIANT_SELF_RADIO_UNASSIGNED;
 			if (bound && self[i].owned &&
@@ -1235,5 +1235,5 @@ static void self_thread_fn(void *a, void *b, void *c)
  * in a position to delay a receive window.
  */
 K_THREAD_DEFINE(self_channels_tid, SELF_STACK_SIZE, self_thread_fn, NULL, NULL,
-		NULL, ANTR_HOST_THREAD_PRIORITY + 2, 0,
+		NULL, RADIANT_ANT_HOST_THREAD_PRIORITY + 2, 0,
 		CONFIG_ANT_DONGLE_SELF_CHANNELS_DELAY_S * 1000);

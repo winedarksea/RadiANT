@@ -59,9 +59,9 @@ The seam below is what removed that, and it mirrors the transport pattern in
 already works and is already asserted in CI.
 
 ```
-apps/common/ant_serial_bridge.c   unchanged logic; speaks only RADIANT_WIRE_*/antr_*
+apps/common/ant_serial_bridge.c   unchanged logic; speaks only RADIANT_WIRE_*/radiant_ant_*
         |
-   radiant/include/radiant/ant_radio.h    OUR ~50-function contract  (antr_*)
+   radiant/include/radiant/radiant_ant.h    OUR ~50-function contract  (radiant_ant_*)
    radiant/include/radiant/radiant_wire.h     OUR protocol constants     (RADIANT_WIRE_*)
         |
    +----+-----------------+----------------------+
@@ -84,7 +84,7 @@ ant_radio_sdk_ant.c   ant_radio_stub.c    radiant/   (clean-room stack)
 computed expressions (`NRF_ANT_ERROR_OFFSET + INVALID_MESSAGE`), not literals,
 so identical macro *names* with non-identical token sequences are a hard
 redefinition error — `radiant_wire.h` and `ant_parameters.h` could never coexist in
-one translation unit. `RADIANT_WIRE_`/`antr_` is what lets the shim include both and
+one translation unit. `RADIANT_WIRE_`/`radiant_ant_` is what lets the shim include both and
 `BUILD_ASSERT` them against each other. It also makes the bridge textually free
 of Garmin's API names, which matters for the clean-room narrative.
 
@@ -933,7 +933,7 @@ enumerate as the same `0FCF:1009`, which is every two-board bench run in
 
 The ANT-level serial is a different value: the one `MESG_REQUEST` for `0x61`
 returns (four bytes, little-endian), and `0xC6` returns the same plus a `0x00`.
-The radiant backend's `antr_serial_number_get()` takes the last four bytes of
+The radiant backend's `radiant_ant_serial_number_get()` takes the last four bytes of
 the same HWINFO ID, so on nRF it equals the **last eight hex digits** of the
 USB serial. `tools/ant_probe.py` checks that. On the CC26xx, HWINFO returns
 the IEEE MAC, so the value is its low four bytes. Both reply shapes come from
@@ -1161,7 +1161,7 @@ which is why these two are called out.
 **Reachable two ways, as of 2026-08-10.** `radiant` implements background
 scan at the module level through `RADIANT_SEARCH_MODE_SCAN`, and there are two
 routes in from the wire. The first is ext-assign — the
-`API_EXT_ASSIGN_BACKGROUND_SCAN` bit on `antr_channel_assign()`, which is what
+`API_EXT_ASSIGN_BACKGROUND_SCAN` bit on `radiant_ant_channel_assign()`, which is what
 `radiant_api.c` reads to choose `RADIANT_SEARCH_MODE_SCAN` over
 `RADIANT_SEARCH_MODE_ACQUIRE` for one channel at a time. The second is
 `MESG_OPEN_RX_SCAN_MODE` (`0x5B`) itself, now handled in
@@ -1172,7 +1172,7 @@ in one call instead of three.
 Since 2026-11-11 that reassign keeps the host's channel 0 setup, as Rev 5.1
 §9.5.4.5 requires ("opens an already assigned and configured channel 0"). The
 bridge reads back the type, network, channel ID, RF and period through the
-existing `antr_*` getters, reassigns with the always-search bit and writes the
+existing `radiant_ant_*` getters, reassigns with the always-search bit and writes the
 five back. Before, the scan ran as a wildcard slave on network 0 at RF 66, the
 power-on default, so a host that had set RF 57 and the ANT+ key found nothing.
 Three settings do not survive, because the backend-neutral API has no getter

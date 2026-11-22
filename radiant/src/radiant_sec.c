@@ -722,7 +722,7 @@ int radiant_sec_configure(uint8_t ch, uint8_t switches, uint8_t w,
 	if (!cfg_same(c, switches, w, page_lo, page_hi)) {
 		/* A change: the port may refuse it (a master with a transfer
 		 * accepted under the old policy) or take back what it staged
-		 * under it (antr_sec_policy_set()). Nothing is written yet. */
+		 * under it (radiant_ant_sec_policy_set()). Nothing is written yet. */
 		int rc = radiant_sec_policy_changing(c->ch);
 
 		if (rc != RADIANT_SEC_OK) {

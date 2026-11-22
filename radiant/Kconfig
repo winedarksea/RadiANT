@@ -53,7 +53,7 @@ config RADIANT_BACKEND_NULL
 	help
 	  src/radiant_radio_null.c. The lifecycle and the clock are real and
 	  every arm call is refused with RADIANT_RADIO_ENOTSUP. The HAL-level
-	  counterpart of src/ant_radio_stub.c: the image enumerates, answers the
+	  counterpart of apps/common/ant_radio_stub.c: the image enumerates, answers the
 	  host, runs the scheduler, the search policy, the channel state
 	  machines and the event queue, and finds no sensors.
 
@@ -1280,14 +1280,14 @@ config RADIANT_BRIDGE_MATTER_MAP
 
 endif # RADIANT_BRIDGE
 
-config RADIANT_ANTR_API
-	bool "the antr_* channel API and its runtime"
+config RADIANT_ANT_API
+	bool "the radiant_ant_* channel API and its runtime"
 	help
-	  src/antr/: initialises the link layer, runs the event thread and
-	  drives the scheduler, search and transfers, behind the antr_* calls
-	  declared in <radiant/ant_radio.h>. This is the usual way to use
-	  radiant: call antr_init(), configure a channel, and implement
-	  antr_on_message() to receive.
+	  src/ant_api/: initialises the link layer, runs the event thread and
+	  drives the scheduler, search and transfers, behind the radiant_ant_* calls
+	  declared in <radiant/radiant_ant.h>. This is the usual way to use
+	  radiant: call radiant_ant_init(), configure a channel, and implement
+	  radiant_ant_on_message() to receive.
 
 	  Default n because it defines the port hooks (radiant_on_message()
 	  and the radiant_event_* functions) that a project using the
@@ -1618,9 +1618,9 @@ config RADIANT_SEC_MAX_CHANNELS
 
 config RADIANT_SEC_HOST_MESSAGES
 	bool "compile the 0xF1-0xF5 host messages"
-	depends on RADIANT_ANTR_API
+	depends on RADIANT_ANT_API
 	help
-	  src/antr/ant_sec_host.c: the antr_sec_* calls behind message IDs
+	  src/ant_api/radiant_ant_sec.c: the radiant_ant_sec_* calls behind message IDs
 	  0xF1 (configure), 0xF2 (set key), 0xF3 (epoch), 0xF4 (status) and
 	  0xF5 (pairing).
 
@@ -1788,7 +1788,7 @@ endif # RADIANT_SEC
 # DONE_DENIED credits ZERO dwell, and that is correct: a window an arbiter
 # refused did not listen for a microsecond, so crediting it would advance the
 # address set on coverage the sweep never got. See radiant_search_on_done()'s
-# contract and ant_radio_radiant.c's "DENIED CREDITS ZERO ON PURPOSE".
+# contract and radiant_ant.c's "DENIED CREDITS ZERO ON PURPOSE".
 #
 # Correct, and by itself a LIVELOCK. A chunk that is always denied leaves
 # dwell_remaining() unchanged, so radiant_sched_rechunk() re-arms the identical
@@ -1993,11 +1993,11 @@ config RADIANT_POWER_DIAG_IDLE
 	  hr_transmitter sample's power_diag*.conf fragments set.
 
 config RADIANT_HOT_PATH_O2
-	bool "compile the scheduler, the antr runtime and the radio backend at -O2"
+	bool "compile the scheduler, the radiant_ant runtime and the radio backend at -O2"
 	default n
 	help
 	  Adds -O2 to the compile line of three files: radiant_sched.c,
-	  antr/ant_radio_radiant.c (when RADIANT_ANTR_API is on) and the
+	  ant_api/radiant_ant.c (when RADIANT_ANT_API is on) and the
 	  active radio backend (radiant_radio_nrf.c or
 	  radiant_radio_cc26xx.c). Every other file keeps the build's own
 	  optimisation level, usually -Os. GCC uses the last -O on the line,
@@ -2018,7 +2018,7 @@ config RADIANT_HOT_PATH_O2
 
 config RADIANT_SEARCH_PHASE_DIAG
 	bool "log every search frame's phase and each chunk's phase bins"
-	depends on RADIANT_ANTR_API
+	depends on RADIANT_ANT_API
 	default n
 	help
 	  Bench diagnostic for tools/ant_disc_phase.py (ADR 0018): a

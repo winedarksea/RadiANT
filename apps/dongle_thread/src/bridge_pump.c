@@ -10,12 +10,12 @@
  * drained fills its 32-slot ring, starts counting drops, and every sink stays
  * silent - which reads on a console exactly like "no sensors in range".
  *
- * PRIORITY. Numerically 2 below ANTR_HOST_THREAD_PRIORITY, i.e. lower
+ * PRIORITY. Numerically 2 below RADIANT_ANT_HOST_THREAD_PRIORITY, i.e. lower
  * priority than both the bridge thread (5) and radiant's own event thread
  * (API_EVENT_PRIORITY, 6). A sink's publish() may do real work - mqtt_sink.c
  * does a TCP write in it - and a thread that could preempt the event thread
  * while blocked in a socket call would be delaying an ANT receive window to
- * talk to a broker. The ordering rule at ant_radio_radiant.c:230 is a recorded
+ * talk to a broker. The ordering rule at radiant_ant.c:230 is a recorded
  * bench observation (an event delivered before the response that caused it),
  * and this thread sits below the whole of it rather than beside any part of
  * it.
@@ -31,7 +31,7 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/iterable_sections.h>
 
-#include "ant_radio.h" /* ANTR_HOST_THREAD_PRIORITY */
+#include <radiant/radiant_ant.h> /* RADIANT_ANT_HOST_THREAD_PRIORITY */
 
 #include "radiant_binding.h"
 #include "radiant_bridge.h"
@@ -42,9 +42,9 @@
 LOG_MODULE_REGISTER(bridge_pump, LOG_LEVEL_INF);
 
 #define PUMP_STACK_SIZE 2048
-#define PUMP_PRIORITY   (ANTR_HOST_THREAD_PRIORITY + 2)
+#define PUMP_PRIORITY   (RADIANT_ANT_HOST_THREAD_PRIORITY + 2)
 
-BUILD_ASSERT(PUMP_PRIORITY > ANTR_HOST_THREAD_PRIORITY,
+BUILD_ASSERT(PUMP_PRIORITY > RADIANT_ANT_HOST_THREAD_PRIORITY,
 	     "The bridge pump must be strictly lower priority than the ANT "
 	     "host thread: a sink doing a socket write must never be able to "
 	     "delay an ANT window.");

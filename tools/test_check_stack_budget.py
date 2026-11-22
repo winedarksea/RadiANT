@@ -27,7 +27,7 @@ sys.path.insert(0, str(REPO / "scripts"))
 import check_stack_budget as csb  # noqa: E402
 
 BRIDGE = "C:/r/apps/common/ant_serial_bridge.c:1837:13:bridge_thread_fn\t144\tstatic\n"
-HOST = "C:/r/radiant/src/antr/ant_sec_host.c:412:12:antr_sec_pair\t40\tstatic\n"
+HOST = "C:/r/radiant/src/ant_api/radiant_ant_sec.c:412:12:radiant_ant_sec_pair\t40\tstatic\n"
 PEER = "C:/r/radiant/src/radiant_sec_pair.c:429:5:radiant_sec_pair_peer\t72\tstatic\n"
 FE_MUL = "C:/r/radiant/src/ext/radiant_x25519.c:158:13:fe_mul\t296\tstatic\n"
 FE_CARRY = "C:/r/radiant/src/ext/radiant_x25519.c:143:13:fe_carry\t20\tstatic\n"
@@ -35,7 +35,7 @@ OLD_CURVE = "C:/r/radiant/src/ext/radiant_x25519.c:281:5:radiant_sec_x25519\t224
 NEW_CURVE = "C:/r/radiant/src/ext/radiant_x25519.c:299:5:radiant_sec_x25519\t72\tstatic\n"
 FE_MUL_NEW = "C:/r/radiant/src/ext/radiant_x25519.c:158:13:fe_mul\t288\tstatic\n"
 
-PEER_CHAIN = ("peer=bridge_thread_fn,antr_sec_pair,radiant_sec_pair_peer,"
+PEER_CHAIN = ("peer=bridge_thread_fn,radiant_ant_sec_pair,radiant_sec_pair_peer,"
               "radiant_sec_x25519,fe_mul,fe_carry<=2048")
 
 

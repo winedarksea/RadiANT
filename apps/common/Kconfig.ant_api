@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# Every application in this repository that links radiant uses the antr_* API,
+# Every application in this repository that links radiant uses the radiant_ant_* API,
 # so it turns the module's two symbols on by default. The module itself defaults
 # them to n: the adapter defines the port hooks that a project using the
 # low-level API writes for itself, so it cannot be on unasked.
@@ -9,8 +9,8 @@
 # limited by the `depends on` of the first, so without them these would read y
 # on an sdk_ant or stub build, where CONFIG_RADIANT is n.
 
-config RADIANT_ANTR_API
+config RADIANT_ANT_API
 	default y if RADIANT
 
 config RADIANT_SEC_HOST_MESSAGES
-	default y if RADIANT_ANTR_API && RADIANT_SEC
+	default y if RADIANT_ANT_API && RADIANT_SEC

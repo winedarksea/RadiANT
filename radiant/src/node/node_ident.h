@@ -26,10 +26,10 @@
  * _pair_pubkey(), _pair_scalar() and _pair_derive() reach either lock-checked
  * radiant_sec entry points or the shared AES key schedule
  * (radiant_sec_aes.c, not re-entrant). On a build that links
- * ant_radio_radiant.c they must run under api_lock, which the RX pump also
+ * radiant_ant.c they must run under api_lock, which the RX pump also
  * takes. Apps cannot take that lock (it is port-private), so the first caller
- * adds a locked antr_* wrapper in radiant/src/antr/, following the antr_sec_*
- * pattern in ant_sec_host.c: validate, lock, call a _locked body, unlock.
+ * adds a locked radiant_ant_* wrapper in radiant/src/ant_api/, following the radiant_ant_sec_*
+ * pattern in radiant_ant_sec.c: validate, lock, call a _locked body, unlock.
  * No app calls these today.
  *
  * node_ident_boot() is the exception: it runs the AES schedule unlocked,
@@ -231,7 +231,7 @@ int node_ident_arm_compat(uint8_t ch, uint64_t now_us, uint16_t period_counts);
  * (review 2026-11-14 item 2). Keyed with no epoch yet does not count.
  * Channels that differ in root or number arm freely; the same channel
  * re-armed is the re-arm rule above. Releasing the other channel lets the arm
- * through: that is unassign (antr_channel_unassign() releases both the
+ * through: that is unassign (radiant_ant_channel_unassign() releases both the
  * radiant_sec and the compat context) or a SYSTEM_RESET, not a close - a
  * closed but assigned channel keeps blocking. A host replacing its root does
  * too.

@@ -1870,7 +1870,7 @@ jobs:
             # default n), on both trainer rows: this expect block is
             # job-level. Every dongle image turns it on since the owner
             # ruling of 2026-11-16. Treadmill, hrm_ble and dongle_thread
-            # also build radiant_sched.c, the antr runtime and the nRF
+            # also build radiant_sched.c, the radiant_ant runtime and the nRF
             # backend at -Os, but this is the job that asserts it, and
             # pinning the simulator to -Os keeps it in the configuration
             # its ACK window was characterised in.
@@ -2088,7 +2088,7 @@ jobs:
           found=0
           for f in app/radiant/src/radiant_sec.c \
                    app/radiant/src/radiant_sec_pair.c \
-                   app/radiant/src/antr/ant_sec_host.c; do
+                   app/radiant/src/ant_api/radiant_ant_sec.c; do
             [[ -f "${f}" ]] || continue
             found=1
             # Match a CALL, not the word: these files discuss the rule in
@@ -2163,8 +2163,8 @@ jobs:
       #     290  rx_close_window
       #     256  sbox                      the AES table, rodata
       #     228  radiant_sec_cmac_final
-      #     206  antr_sec_status_get
-      #     ~400 the four antr_sec_* entry points together
+      #     206  radiant_ant_sec_status_get
+      #     ~400 the four radiant_ant_sec_* entry points together
       #     ~2300 everything else, none of it over 200 B
       #
       # There is no fat in that list: it is a block cipher, two modes, a KDF,
@@ -2307,7 +2307,7 @@ jobs:
           #                                   queue purge on a new root
           #     22  radiant_sec_tx_transform  pending refusal
           #     16  api_xfer_broadcast        no ack from an unbuilt master
-          #     16  antr_sec_status_get       0xF4 [30] state flags
+          #     16  radiant_ant_sec_status_get       0xF4 [30] state flags
           #     16  radiant_sec_get_state     keyed flag
           #     12  radiant_sec_rx_ingest     pending drop
           #     56  api_post_master_tx        skip slots a withheld
@@ -2322,16 +2322,16 @@ jobs:
           # TEXT CEILING 7168 -> 7680 FOR THE -O2 HOT PATH, NOT FOR SECURITY
           # CODE (owner ruling 2026-11-16: CONFIG_RADIANT_HOT_PATH_O2 on in
           # apps/dongle/prj.conf, so both builds here compile radiant_sched.c,
-          # antr/ant_radio_radiant.c and radiant_radio_nrf.c at -O2; the
+          # ant_api/radiant_ant.c and radiant_radio_nrf.c at -O2; the
           # owner allowed this ceiling to move with it). Measured with this
           # recipe at NCS v3.4.0: 7144 / 6974 at 3292198, 7304 / 6974 with
           # O2 on (+160 / +0). No security source changed: the security
-          # hooks that live in ant_radio_radiant.c grow at -O2 -
+          # hooks that live in radiant_ant.c grow at -O2 -
           #     56  radiant_sec_deliver
-          #     24  antr_acknowledge_message_tx
-          #     20  antr_burst_tx, radiant_sec_window_verdict (each)
+          #     24  radiant_ant_acknowledge_message_tx
+          #     20  radiant_ant_burst_tx, radiant_sec_window_verdict (each)
           #     16  api_post_master_tx, api_search_acquired,
-          #         api_event_thread, antr_master_xfer_busy (each)
+          #         api_event_thread, radiant_ant_master_xfer_busy (each)
           #    -22  api_sec_master_refuses (inlined)
           #      0  four others (+-4 each), net
           # (the symbols sum to 162 B; the section moves 160 B, alignment).
@@ -2345,10 +2345,10 @@ jobs:
           # 7664 / 6975 after the 0xF1 policy change takes effect before it
           # answers (review 2026-11-17 item 2; this recipe, NCS v3.4.0):
           # 7452 / 6974 at c273bef, +212 / +1. radiant_sec_policy_changing
-          # +96 (the antr hook: busy refusal, slot cancel, ack payload),
-          # antr_sec_policy_set +80, radiant_sec_configure +40 (the change
+          # +96 (the radiant_ant hook: busy refusal, slot cancel, ack payload),
+          # radiant_ant_sec_policy_set +80, radiant_sec_configure +40 (the change
           # test and the hook call), radiant_sec_tx_transform +14 (the stale
-          # slot); bss is the hook's one-byte state. Both antr functions are
+          # slot); bss is the hook's one-byte state. Both radiant_ant functions are
           # __attribute__((cold)), so the file's -O2 does not expand them; the
           # first draft (a radiant_sec_config_is() query, no cold) was +312.
           # Ceilings unchanged, 16 B of text left: the next security fix
@@ -2363,8 +2363,8 @@ jobs:
           # (0 B left), 7824 / 6975 after (+144 / +0):
           #     76  api_sec_take_back          the 0xF1 take-back, now one
           #                                    noinline copy for 0xF1 and 0xF2
-          #     48  antr_sec_key_replace       the 0xF2 wrapper (arm, pump)
-          #     44  radiant_sec_key_replacing  the antr hook's checks
+          #     48  radiant_ant_sec_key_replace       the 0xF2 wrapper (arm, pump)
+          #     44  radiant_sec_key_replacing  the radiant_ant hook's checks
           #      8  radiant_sec_set_key        the hook call
           #    -32  radiant_sec_policy_changing (its body moved out)
           # All cold host-command code; no per-packet path changes. Raised by
@@ -2392,9 +2392,9 @@ jobs:
           #     128  radiant_sec_pair_set_nonce   the responder's f4
           #     106  cmac_parts                   the one CMAC helper
           #      66  radiant_sec_pair_peer_commit
-          #     260  antr_sec_pair                three more 0xF5 sub-commands
+          #     260  radiant_ant_sec_pair                three more 0xF5 sub-commands
           # against the removed pair_derive and the old one-shot pair_peer.
-          # Trimmed from 3824 B (a length table in antr_sec_pair, one wipe,
+          # Trimmed from 3824 B (a length table in radiant_ant_sec_pair, one wipe,
           # one finish path per role) before the ceiling moved; 4096 is the
           # next multiple of 512, leaving 348 B.
           # 4044 B at 876711c (2026-11-17, NCS v3.4.0, this recipe: 52 B
@@ -2578,7 +2578,7 @@ jobs:
           set -euo pipefail
           B=CONFIG_ANT_DONGLE_BRIDGE_STACK_SIZE
           P=RADIANT_SEC_PAIR_STACK_BYTES
-          BR=bridge_thread_fn,antr_sec_pair
+          BR=bridge_thread_fn,radiant_ant_sec_pair
           CURVE=radiant_sec_x25519,fe_mul,fe_carry
           INSTALL=pair_finish,radiant_sec_set_key,radiant_sec_key_same
           INSTALL=${INSTALL},radiant_sec_cmac,radiant_sec_cmac_final

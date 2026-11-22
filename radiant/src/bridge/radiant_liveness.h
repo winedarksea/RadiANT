@@ -46,7 +46,7 @@
  * are normal, and then never reports it missing - the exact failure this
  * module exists to prevent, made self-concealing. The interval comes from
  * struct radiant_binding::period, which the binder sets from
- * antr_channel_period_get() at bind time. A binding whose period was never
+ * radiant_ant_channel_period_get() at bind time. A binding whose period was never
  * set is NOT guessed at: it is skipped and counted
  * (radiant_liveness_stats::no_period), because a wrong expiry is worse than
  * a missing one.

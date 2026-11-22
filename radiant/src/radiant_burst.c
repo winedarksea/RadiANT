@@ -7,7 +7,7 @@
  * one-bit sequence, the strict data/acknowledgement alternation, the 1567/1559
  * and 1546/1550 us intervals, and the fragmentation of a 24-byte host block
  * into three eight-byte on-air packets), from the buffer-ownership obligations
- * B1-B5 in src/ant_radio.h, and from radiant/include/radiant/radiant_radio_hal.h. Nothing
+ * B1-B5 in <radiant/radiant_ant.h>, and from radiant/include/radiant/radiant_radio_hal.h. Nothing
  * here derives from sdk-ant, from libant.a, from disassembly of any binary, or
  * from any ANT+ device profile document.
  * See docs/decisions/0002-clean-room-policy.md.
@@ -55,7 +55,7 @@
  * radiant_radio_tx()/rx(); see "One radio, one arming authority" in
  * radiant_transfer.h.
  *
- * B1-B5 (buffer ownership, see src/ant_radio.h) hold because: a block is
+ * B1-B5 (buffer ownership, see <radiant/radiant_ant.h>) hold because: a block is
  * recorded as accepted only after the radio has taken its first packet (B2,
  * B5), and it is released exactly once, by whichever of release_next() or
  * finish() reaches it first, gated by t->block_released (B3, B4). Getting
@@ -824,8 +824,8 @@ int radiant_transfer_abort(struct radiant_transfer *t)
 		 * the host a send it never made had failed - and released the
 		 * bridge's shared burst-block semaphore with it (review
 		 * 2026-10-31, E2-5.3). The armed reply is the caller's to take
-		 * off the air: antr_channel_close() cancels the channel's
-		 * scheduler slot next, antr_stack_reset() has already reset the
+		 * off the air: radiant_ant_channel_close() cancels the channel's
+		 * scheduler slot next, radiant_ant_stack_reset() has already reset the
 		 * scheduler. A terminal that lands anyway meets t->op == 0 and
 		 * is counted late. The saved reply goes too: re-sending an ACK
 		 * on a closed channel is never right. */

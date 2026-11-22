@@ -5,7 +5,7 @@
  * here rather than in either application's own src/main.c.
  *
  * All protocol work happens in the ANT bridge thread (ant_serial_bridge.c) and
- * in antr_on_message(), which the bridge implements and the radio backend
+ * in radiant_ant_on_message(), which the bridge implements and the radio backend
  * calls. This just initialises the subsystems in order, then sleeps forever.
  */
 
@@ -23,11 +23,11 @@
 /* The radio contract - whichever backend is compiled in behind it. Bringing
  * the stack up is the only thing the boot sequence needs from it.
  */
-#include "ant_radio.h"
+#include <radiant/radiant_ant.h>
 
 /* Measured on an nRF54L15 DK, alternating builds: XTAL heard 14 broadcasts,
  * SYNTH heard none, XTAL heard 14 again. Nothing announces the failure - the
- * clock starts, antr_init() returns 0, channels open and acknowledge every
+ * clock starts, radiant_ant_init() returns 0, channels open and acknowledge every
  * command, and the radio just never receives. Refused at build time rather
  * than warned about, since the warning would be read once and the silence
  * debugged forever. Mechanism not established; nRF52840 is unaffected and
@@ -120,13 +120,13 @@ int ant_dongle_main_run(void)
 	/* ANT/MPSL must own clock startup before USB asks for the HFXO.
 	 * If usb_enable() runs first on this target, USB can hang or fail to
 	 * enumerate because the clock path is not fully initialized yet. */
-	ret = antr_init();
+	ret = radiant_ant_init();
 	if (ret) {
-		LOG_ERR("antr_init failed: %d", ret);
+		LOG_ERR("radiant_ant_init failed: %d", ret);
 		(void)diag_flash_log_flush();
 		return ret;
 	}
-	LOG_INF("antr_init ok");
+	LOG_INF("radiant_ant_init ok");
 
 	/* Weak; a no-op unless the application overrode it. See the header for
 	 * why it is placed exactly here (the backend's HFXO request) and why
@@ -137,7 +137,7 @@ int ant_dongle_main_run(void)
 	usb_ant_class_init();
 	LOG_INF("usb_ant_class_init ok");
 
-	/* The bridge owns ANT event forwarding: it defines antr_on_message(),
+	/* The bridge owns ANT event forwarding: it defines radiant_ant_on_message(),
 	 * which the radio backend calls. Nothing is registered.
 	 */
 	ret = ant_serial_bridge_init();

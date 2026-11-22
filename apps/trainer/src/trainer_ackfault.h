@@ -41,7 +41,7 @@
 extern "C" {
 #endif
 
-/* Values match antr_reply_action, which trainer_shell.c asserts. */
+/* Values match radiant_ant_reply_action, which trainer_shell.c asserts. */
 enum trainer_action {
 	TRAINER_ACTION_ACK = 0,
 	TRAINER_ACTION_MUTE,

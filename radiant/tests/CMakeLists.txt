@@ -260,7 +260,7 @@ target_sources(app PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge/radiant_env_adapter.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge/radiant_common_adapter.c"
   # The self channels' decisions (apps/dongle_thread/src/self_channels.c keeps
-  # only the antr_* calls). Pure functions; src/test_self_policy.c.
+  # only the radiant_ant_* calls). Pure functions; src/test_self_policy.c.
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge/radiant_self_policy.c"
   # mqtt_sink.c's owed-offline list. Pure; src/test_owed.c.
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge/radiant_owed.c"
@@ -298,7 +298,7 @@ target_include_directories(app PRIVATE
 #
 # Nothing else is needed: the module's own zephyr_include_directories() puts
 # radiant/include - and only that, now - on the search path for this
-# target too. There used to be a second entry, ../src, for src/ant_radio.h and
+# target too. There used to be a second entry, ../src, for <radiant/radiant_ant.h> and
 # the generated radiant/include/radiant/radiant_wire.h; radiant_event.c reads radiant_msg.h and
 # radiant_wire.h instead now, both inside radiant/include, so no suite
 # here has ever needed the application's src/ at all.

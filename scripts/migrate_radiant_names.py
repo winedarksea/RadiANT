@@ -80,7 +80,8 @@ WIRE_FIXED = [
 
 ANT_FIXED = [
     (r"\bKconfig\.antr_api\b", "Kconfig.ant_api"),
-    (r"\bRADIANT_ANTR_API\b", "RADIANT_ANT_API"),
+    # No leading \b: the usual spelling is CONFIG_RADIANT_ANTR_API.
+    (r"RADIANT_ANTR_API\b", "RADIANT_ANT_API"),
     (r'#include\s+[<"](?:radiant/|ant/)?ant_radio\.h[>"]', "#include <radiant/radiant_ant.h>"),
     (r"<radiant/ant_radio\.h>", "<radiant/radiant_ant.h>"),
     (r"\bradiant/include/radiant/ant_radio\.h\b", "radiant/include/radiant/radiant_ant.h"),
@@ -102,7 +103,7 @@ ANT_FIXED = [
 # Old-name detectors for --check and the collision check.
 OLD_PATTERNS = {
     "wire": r"\bANTW_\w*",
-    "ant": r"\b(?:antr_\w*|ANTR_\w*|RADIANT_ANTR_API)\b",
+    "ant": r"\b(?:antr_\w*|ANTR_\w*)|RADIANT_ANTR_API\b",
 }
 
 IDENT_RE = re.compile(r"\b(?:radiant_)?(?:profile|node)_\w+|\b(?:RADIANT_)?(?:PROFILE|NODE)_\w+")

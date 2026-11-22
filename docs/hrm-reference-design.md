@@ -152,7 +152,7 @@ would make every integrator write the same adapter to get back to it.
 
 `profile_hr` has no lock and is **already** reached from two contexts: the system
 workqueue, which advances the accumulators, and the radiant callback path
-(`antr_on_message()` → `load_next_page()` → `profile_hr_next()`), which reads
+(`radiant_ant_on_message()` → `load_next_page()` → `profile_hr_next()`), which reads
 them. An ISR-driven sensor would make that three-way.
 
 So `hrm_sensor_report_beat()` does not touch `profile_hr` at all. It writes one

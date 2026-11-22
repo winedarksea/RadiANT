@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# The treadmill's heart-rate slave against a stub antr_* layer. See
+# The treadmill's heart-rate slave against a stub radiant_ant_* layer. See
 # CMakeLists.txt beside this file.
 #
 # On Windows there is no native_sim (no host C compiler):

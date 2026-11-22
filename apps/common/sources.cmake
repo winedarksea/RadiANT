@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# ant_app_common: the antr_* seam and everything downstream of it that every
+# ant_app_common: the radiant_ant_* seam and everything downstream of it that every
 # ANT-serial RadiANT application needs, unchanged, once the radio backend
 # question (radiant module vs. sdk-ant vs. stub) is settled.
 #
@@ -34,27 +34,23 @@
 # product - the serial bridge, its transports, LEDs and boot sequence. The
 # module does not know any of it exists.
 
-# ant/ carries forwarding headers for ant_radio.h and radiant_wire.h, the antr_*
-# contract and the wire constants, so bare includes keep working. PUBLIC (via
-# target_include_directories(app ...)) so a consuming application's own
-# sources (radiant-adjacent test doubles, apps/dongle_ti's not-yet-written
-# backend) can `#include "ant_radio.h"` too, and so files in this directory
-# that spell the bare filename (no "ant/" prefix - see ant_serial_bridge.c)
-# resolve without every file needing its own relative path back into the
-# subdirectory.
+# PUBLIC (via target_include_directories(app ...)) so a consuming
+# application's own sources can include this directory's headers. The
+# radiant_ant_* contract and the wire constants are the module's own
+# <radiant/radiant_ant.h> and <radiant/radiant_wire.h>; the forwarding
+# headers that used to live in ant/ were removed on 2026-11-22.
 target_include_directories(app PUBLIC
   "${CMAKE_CURRENT_LIST_DIR}"
-  "${CMAKE_CURRENT_LIST_DIR}/ant"
 )
 
-# The antr_* adapter onto radiant is compiled by the radiant module itself,
-# under CONFIG_RADIANT_ANTR_API. apps/common/Kconfig.antr_api turns it on for
+# The radiant_ant_* adapter onto radiant is compiled by the radiant module itself,
+# under CONFIG_RADIANT_ANT_API. apps/common/Kconfig.ant_api turns it on for
 # the applications in this repository.
 
-# The other two antr_* implementations. Neither reaches the radiant module at
+# The other two radiant_ant_* implementations. Neither reaches the radiant module at
 # all; CONFIG_ANT_DONGLE_RADIO_* is what CMake's ANT_RADIO axis
 # (apps/common/ant_radio_backend.cmake) writes into the generated fragment,
-# so these two and CONFIG_RADIANT_ANTR_API are mutually exclusive by
+# so these two and CONFIG_RADIANT_ANT_API are mutually exclusive by
 # construction, not by convention.
 target_sources_ifdef(CONFIG_ANT_DONGLE_RADIO_SDK_ANT app PRIVATE
   "${CMAKE_CURRENT_LIST_DIR}/ant_radio_sdk_ant.c")

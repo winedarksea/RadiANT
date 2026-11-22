@@ -785,7 +785,7 @@ void radiant_sec_pump(void);
  * Port hook: called at the top of every thread-context radiant_sec entry
  * point when CONFIG_RADIANT_SEC_LOCK_CHECK is on (the default in an ASSERT
  * build). radiant is freestanding and has no lock of its own, so the check is
- * the port's: radiant/src/antr/ant_radio_radiant.c overrides this to assert that
+ * the port's: radiant/src/ant_api/radiant_ant.c overrides this to assert that
  * api_lock is held by the calling thread. The weak default does nothing.
  * `who` is the entry point's name.
  */
@@ -909,7 +909,7 @@ int  radiant_sec_set_key(uint8_t ch, const uint8_t *root, size_t bits,
  * progress are kept, so a host may retry a 0xF1 safely. A change discards the
  * windows in flight and restarts the TX tag (their boundaries move) but keeps
  * the replay floor, a counter value that means the same under any W (review
- * 2026-11-17 item 4). The adapter reaches this through antr_sec_policy_set(),
+ * 2026-11-17 item 4). The adapter reaches this through radiant_ant_sec_policy_set(),
  * which also takes back the slot and ack payload it already staged (review
  * 2026-11-17 item 2).
  */
@@ -922,7 +922,7 @@ int  radiant_sec_configure(uint8_t ch, uint8_t switches, uint8_t w,
  * and is returned from configure with nothing written. Called only for a
  * valid tuple that differs from the installed one, under the port's lock,
  * from whatever context configure runs in. Weak, returning OK, by default.
- * The antr port acts only inside its 0xF1 path (antr_sec_policy_set()): it
+ * The radiant_ant port acts only inside its 0xF1 path (radiant_ant_sec_policy_set()): it
  * refuses a master with a transfer in flight (RADIANT_SEC_ESTATE) and
  * otherwise takes back that master's staged slot and ack payload.
  */
@@ -934,7 +934,7 @@ int  radiant_sec_policy_changing(uint8_t ch);
  * key or the same-root no-op. Called after the import check and before the
  * old root is destroyed, under the port's lock; it cannot refuse (a port that
  * must refuse a rekey does so before calling set_key). Weak, a no-op, by
- * default. The antr port acts only inside its 0xF2 path (antr_sec_key_set()):
+ * default. The radiant_ant port acts only inside its 0xF2 path (radiant_ant_sec_key_set()):
  * on a secured master it takes back the staged slot and ack payload, both
  * ciphertext under the old keys (review 2026-11-20 item C).
  */

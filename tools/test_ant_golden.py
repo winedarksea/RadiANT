@@ -61,7 +61,7 @@ are pinned from the reply alone; `0x78`'s shape is chosen by the earlier
 ## The five-bit ceiling belongs to the burst header
 
 Byte 0 of `MESG_BURST_DATA` and its two relatives is `[last | seq(2) |
-channel(5)]`, read by `src/ant_serial_bridge.c` with
+channel(5)]`, read by `apps/common/ant_serial_bridge.c` with
 `RADIANT_WIRE_BURST_HEADER_CHANNEL_MASK` - the one place the serial protocol packs a
 channel into fewer than 8 bits. Byte 0 of a plain `0x40` response is *not* a
 channel field on most messages, so the 5-bit ceiling must not be applied

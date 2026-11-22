@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 /*
- * src/ant_radio.h implemented on Nordic's prebuilt libant.a, from sdk-ant.
+ * <radiant/radiant_ant.h> implemented on Nordic's prebuilt libant.a, from sdk-ant.
  *
  * Two halves. The first is fifty forwarders, almost all a single renamed
  * call; the exceptions (error narrowing, seven const casts, event inversion)
@@ -20,7 +20,7 @@
  * permitted to read sdk-ant, and only its headers (docs/decisions/0002-clean-
  * room-policy.md). This file is glue against a licensed API, not part of
  * radiant, and must not inform radiant - a clean-room backend is
- * written from src/ant_radio.h and docs/sdk-ant-contract.md only. libant.a
+ * written from <radiant/radiant_ant.h> and docs/sdk-ant-contract.md only. libant.a
  * itself was never disassembled, inspected or instrumented, and that
  * prohibition does not expire.
  */
@@ -29,10 +29,10 @@
 
 #include <zephyr/toolchain.h>
 
-#include "ant_radio.h"
+#include <radiant/radiant_ant.h>
 #include <radiant/radiant_wire.h>
 
-/* sdk-ant. Everything below this line that is not RADIANT_WIRE_/antr_/ANTR_ comes from
+/* sdk-ant. Everything below this line that is not RADIANT_WIRE_/radiant_ant_/RADIANT_ANT_ comes from
  * here, and nothing else in the firmware includes these.
  */
 #include "ant_error.h"
@@ -43,7 +43,7 @@
 /* ── Error narrowing ───────────────────────────────────────────────────────── */
 
 /*
- * antr_err_t is a uint8_t whose value *is* the wire byte. sdk-ant's ant_err_t
+ * radiant_ant_err_t is a uint8_t whose value *is* the wire byte. sdk-ant's ant_err_t
  * is an int32_t carrying NRF_ANT_ERROR_OFFSET (0x4000) added to the wire
  * code. 0x4000 is a multiple of 256, so truncating to the low byte loses
  * nothing - checked below by BUILD_ASSERT for every sdk-ant error code, so a
@@ -56,11 +56,11 @@
  * deliberately: every capture and Zwift session was recorded against this
  * truncation, and tools/ant_conformance.py's pass condition is a
  * byte-identical diff against those captures. Handling the errno family is a
- * contract change in src/ant_radio.h, not a quiet fix here.
+ * contract change in <radiant/radiant_ant.h>, not a quiet fix here.
  */
-static inline antr_err_t wire_err(ant_err_t err)
+static inline radiant_ant_err_t wire_err(ant_err_t err)
 {
-	return (antr_err_t)((uint32_t)err & 0xFFu);
+	return (radiant_ant_err_t)((uint32_t)err & 0xFFu);
 }
 
 /* ── Event inversion ───────────────────────────────────────────────────────── */
@@ -68,7 +68,7 @@ static inline antr_err_t wire_err(ant_err_t err)
 /*
  * sdk-ant hands events back through a callback taking ant_evt_t, a
  * four-level nested union. The shim flattens the three fields the bridge
- * needs into struct antr_msg and calls antr_on_message(); nothing above this
+ * needs into struct radiant_ant_msg and calls radiant_ant_on_message(); nothing above this
  * line sees an sdk-ant type.
  *
  * Lifetime: pointing straight into the event satisfies the "readable until
@@ -82,13 +82,13 @@ static inline antr_err_t wire_err(ant_err_t err)
  */
 static void shim_evt_cb(ant_evt_t *p_evt)
 {
-	const struct antr_msg msg = {
+	const struct radiant_ant_msg msg = {
 		.id   = p_evt->message.ANT_MESSAGE_ucMesgID,
 		.len  = p_evt->message.ANT_MESSAGE_ucSize,
 		.data = p_evt->message.ANT_MESSAGE_aucMesgData,
 	};
 
-	antr_on_message(&msg);
+	radiant_ant_on_message(&msg);
 }
 
 /* ── Initialisation and stack lifecycle ────────────────────────────────────── */
@@ -96,18 +96,18 @@ static void shim_evt_cb(ant_evt_t *p_evt)
 /*
  * The one forwarder that does not narrow its return value: ant_init() reports
  * "no memory for the channel count" as -NRF_ENOMEM, whose low byte would be
- * uninterpretable in main()'s log. src/ant_radio.h says this returns 0 or
+ * uninterpretable in main()'s log. <radiant/radiant_ant.h> says this returns 0 or
  * RADIANT_WIRE_INVALID_PARAMETER_PROVIDED, so it does - harmless since no host exists
  * yet to see the value.
  */
-antr_err_t antr_init(void)
+radiant_ant_err_t radiant_ant_init(void)
 {
 	if (ant_init() != NRF_ANT_SUCCESS) {
 		return RADIANT_WIRE_INVALID_PARAMETER_PROVIDED;
 	}
 
 	/* Registered after the stack is up, before this returns - satisfies the
-	 * header's "no antr_on_message() before antr_init() returns 0" rule.
+	 * header's "no radiant_ant_on_message() before radiant_ant_init() returns 0" rule.
 	 */
 	if (ant_cb_register(shim_evt_cb) != NRF_ANT_SUCCESS) {
 		return RADIANT_WIRE_INVALID_PARAMETER_PROVIDED;
@@ -116,25 +116,25 @@ antr_err_t antr_init(void)
 	return RADIANT_WIRE_RESPONSE_NO_ERROR;
 }
 
-antr_err_t antr_stack_reset(void)
+radiant_ant_err_t radiant_ant_stack_reset(void)
 {
 	return wire_err(ant_stack_reset());
 }
 
 /* ── Channel lifecycle ─────────────────────────────────────────────────────── */
 
-antr_err_t antr_channel_assign(uint8_t channel, uint8_t type, uint8_t network,
+radiant_ant_err_t radiant_ant_channel_assign(uint8_t channel, uint8_t type, uint8_t network,
 			       uint8_t ext_assign)
 {
 	return wire_err(ant_channel_assign(channel, type, network, ext_assign));
 }
 
-antr_err_t antr_channel_unassign(uint8_t channel)
+radiant_ant_err_t radiant_ant_channel_unassign(uint8_t channel)
 {
 	return wire_err(ant_channel_unassign(channel));
 }
 
-antr_err_t antr_channel_ext_assign_set(uint8_t channel, uint8_t ext_assign)
+radiant_ant_err_t radiant_ant_channel_ext_assign_set(uint8_t channel, uint8_t ext_assign)
 {
 	/* No in-place sdk-ant counterpart. The bridge falls back to unassign
 	 * and reassign, which is what this backend always did, so its
@@ -151,69 +151,69 @@ antr_err_t antr_channel_ext_assign_set(uint8_t channel, uint8_t ext_assign)
  * forwarding to the macro would recurse through our own static inline.
  */
 BUILD_ASSERT(CHANNEL_START_OFFSET_NONE == 0,
-	     "sdk-ant's no-offset value is no longer 0, so antr_channel_open()'s "
-	     "hardcoded 0 in src/ant_radio.h no longer means the same thing");
+	     "sdk-ant's no-offset value is no longer 0, so radiant_ant_channel_open()'s "
+	     "hardcoded 0 in <radiant/radiant_ant.h> no longer means the same thing");
 
-antr_err_t antr_channel_open_with_offset(uint8_t channel, uint16_t offset)
+radiant_ant_err_t radiant_ant_channel_open_with_offset(uint8_t channel, uint16_t offset)
 {
 	return wire_err(ant_channel_open_with_offset(channel, offset));
 }
 
-antr_err_t antr_channel_close(uint8_t channel)
+radiant_ant_err_t radiant_ant_channel_close(uint8_t channel)
 {
 	return wire_err(ant_channel_close(channel));
 }
 
 /* ── Channel configuration ─────────────────────────────────────────────────── */
 
-antr_err_t antr_channel_id_set(uint8_t channel, uint16_t device_number,
+radiant_ant_err_t radiant_ant_channel_id_set(uint8_t channel, uint16_t device_number,
 			       uint8_t device_type, uint8_t trans_type)
 {
 	return wire_err(ant_channel_id_set(channel, device_number, device_type,
 					   trans_type));
 }
 
-antr_err_t antr_channel_period_set(uint8_t channel, uint16_t period)
+radiant_ant_err_t radiant_ant_channel_period_set(uint8_t channel, uint16_t period)
 {
 	return wire_err(ant_channel_period_set(channel, period));
 }
 
-antr_err_t antr_channel_radio_freq_set(uint8_t channel, uint8_t freq)
+radiant_ant_err_t radiant_ant_channel_radio_freq_set(uint8_t channel, uint8_t freq)
 {
 	return wire_err(ant_channel_radio_freq_set(channel, freq));
 }
 
-antr_err_t antr_channel_radio_tx_power_set(uint8_t channel, uint8_t level,
+radiant_ant_err_t radiant_ant_channel_radio_tx_power_set(uint8_t channel, uint8_t level,
 					   uint8_t custom)
 {
 	return wire_err(ant_channel_radio_tx_power_set(channel, level, custom));
 }
 
-antr_err_t antr_channel_search_timeout_set(uint8_t channel, uint8_t timeout)
+radiant_ant_err_t radiant_ant_channel_search_timeout_set(uint8_t channel, uint8_t timeout)
 {
 	return wire_err(ant_channel_search_timeout_set(channel, timeout));
 }
 
-antr_err_t antr_channel_low_priority_rx_search_timeout_set(uint8_t channel,
+radiant_ant_err_t radiant_ant_channel_low_priority_rx_search_timeout_set(uint8_t channel,
 							   uint8_t timeout)
 {
 	return wire_err(ant_channel_low_priority_rx_search_timeout_set(channel,
 								       timeout));
 }
 
-antr_err_t antr_channel_radio_crc_mode_set(uint8_t channel, uint8_t mode)
+radiant_ant_err_t radiant_ant_channel_radio_crc_mode_set(uint8_t channel, uint8_t mode)
 {
 	return wire_err(ant_channel_radio_crc_mode_set(channel, mode));
 }
 
-antr_err_t antr_auto_freq_hop_table_set(uint8_t channel, uint8_t freq0,
+radiant_ant_err_t radiant_ant_auto_freq_hop_table_set(uint8_t channel, uint8_t freq0,
 					uint8_t freq1, uint8_t freq2)
 {
 	return wire_err(ant_auto_freq_hop_table_set(channel, freq0, freq1,
 						    freq2));
 }
 
-antr_err_t antr_enhanced_channel_spacing_enable(uint8_t enable)
+radiant_ant_err_t radiant_ant_enhanced_channel_spacing_enable(uint8_t enable)
 {
 	return wire_err(ant_enhanced_channel_spacing_enable(enable));
 }
@@ -226,24 +226,24 @@ antr_err_t antr_enhanced_channel_spacing_enable(uint8_t enable)
  * (ant_network_address_set()), so seven casts land here instead of scattered
  * through the bridge.
  */
-antr_err_t antr_broadcast_message_tx(uint8_t channel, uint8_t size,
+radiant_ant_err_t radiant_ant_broadcast_message_tx(uint8_t channel, uint8_t size,
 				     const uint8_t *data)
 {
 	return wire_err(ant_broadcast_message_tx(channel, size,
 						 (uint8_t *)data));
 }
 
-antr_err_t antr_acknowledge_message_tx(uint8_t channel, uint8_t size,
+radiant_ant_err_t radiant_ant_acknowledge_message_tx(uint8_t channel, uint8_t size,
 				       const uint8_t *data)
 {
 	return wire_err(ant_acknowledge_message_tx(channel, size,
 						   (uint8_t *)data));
 }
 
-/* The segment byte is forwarded untouched; all three ANTR_BURST_SEGMENT_*
+/* The segment byte is forwarded untouched; all three RADIANT_ANT_BURST_SEGMENT_*
  * values are asserted equal to their sdk-ant counterparts below.
  */
-antr_err_t antr_burst_tx(uint8_t channel, uint16_t size, uint8_t *data,
+radiant_ant_err_t radiant_ant_burst_tx(uint8_t channel, uint16_t size, uint8_t *data,
 			 uint8_t segment)
 {
 	return wire_err(ant_burst_handler_request(channel, size, data,
@@ -253,58 +253,58 @@ antr_err_t antr_burst_tx(uint8_t channel, uint16_t size, uint8_t *data,
 /* One of the two names in the contract that is not a prefix swap: sdk-ant's is
  * the verb-less ant_pending_transmit(). docs/sdk-ant-contract.md records both.
  */
-antr_err_t antr_pending_transmit_get(uint8_t channel, uint8_t *pending)
+radiant_ant_err_t radiant_ant_pending_transmit_get(uint8_t channel, uint8_t *pending)
 {
 	return wire_err(ant_pending_transmit(channel, pending));
 }
 
-antr_err_t antr_pending_transmit_clear(uint8_t channel, uint8_t *success)
+radiant_ant_err_t radiant_ant_pending_transmit_clear(uint8_t channel, uint8_t *success)
 {
 	return wire_err(ant_pending_transmit_clear(channel, success));
 }
 
 /* ── Search behaviour ──────────────────────────────────────────────────────── */
 
-antr_err_t antr_search_waveform_set(uint8_t channel, uint16_t waveform)
+radiant_ant_err_t radiant_ant_search_waveform_set(uint8_t channel, uint16_t waveform)
 {
 	return wire_err(ant_search_waveform_set(channel, waveform));
 }
 
-antr_err_t antr_prox_search_set(uint8_t channel, uint8_t threshold,
+radiant_ant_err_t radiant_ant_prox_search_set(uint8_t channel, uint8_t threshold,
 				uint8_t custom)
 {
 	return wire_err(ant_prox_search_set(channel, threshold, custom));
 }
 
-antr_err_t antr_search_channel_priority_set(uint8_t channel, uint8_t priority)
+radiant_ant_err_t radiant_ant_search_channel_priority_set(uint8_t channel, uint8_t priority)
 {
 	return wire_err(ant_search_channel_priority_set(channel, priority));
 }
 
-antr_err_t antr_search_channel_priority_get(uint8_t channel, uint8_t *priority)
+radiant_ant_err_t radiant_ant_search_channel_priority_get(uint8_t channel, uint8_t *priority)
 {
 	return wire_err(ant_search_channel_priority_get(channel, priority));
 }
 
-antr_err_t antr_active_search_sharing_cycles_set(uint8_t channel,
+radiant_ant_err_t radiant_ant_active_search_sharing_cycles_set(uint8_t channel,
 						 uint8_t cycles)
 {
 	return wire_err(ant_active_search_sharing_cycles_set(channel, cycles));
 }
 
-antr_err_t antr_active_search_sharing_cycles_get(uint8_t channel,
+radiant_ant_err_t radiant_ant_active_search_sharing_cycles_get(uint8_t channel,
 						 uint8_t *cycles)
 {
 	return wire_err(ant_active_search_sharing_cycles_get(channel, cycles));
 }
 
-antr_err_t antr_id_list_add(uint8_t channel, const uint8_t *device_id,
+radiant_ant_err_t radiant_ant_id_list_add(uint8_t channel, const uint8_t *device_id,
 			    uint8_t index)
 {
 	return wire_err(ant_id_list_add(channel, (uint8_t *)device_id, index));
 }
 
-antr_err_t antr_id_list_config(uint8_t channel, uint8_t size, uint8_t inc_exc)
+radiant_ant_err_t radiant_ant_id_list_config(uint8_t channel, uint8_t size, uint8_t inc_exc)
 {
 	return wire_err(ant_id_list_config(channel, size, inc_exc));
 }
@@ -312,76 +312,76 @@ antr_err_t antr_id_list_config(uint8_t channel, uint8_t size, uint8_t inc_exc)
 /* ── Networks and keys ─────────────────────────────────────────────────────── */
 
 /* The one buffer-taking function that needs no cast. */
-antr_err_t antr_network_address_set(uint8_t network, const uint8_t *key)
+radiant_ant_err_t radiant_ant_network_address_set(uint8_t network, const uint8_t *key)
 {
 	return wire_err(ant_network_address_set(network, key));
 }
 
 /* ── Library configuration ─────────────────────────────────────────────────── */
 
-antr_err_t antr_lib_config_set(uint8_t config)
+radiant_ant_err_t radiant_ant_lib_config_set(uint8_t config)
 {
 	return wire_err(ant_lib_config_set(config));
 }
 
-antr_err_t antr_lib_config_clear(uint8_t config)
+radiant_ant_err_t radiant_ant_lib_config_clear(uint8_t config)
 {
 	return wire_err(ant_lib_config_clear(config));
 }
 
-antr_err_t antr_lib_config_get(uint8_t *config)
+radiant_ant_err_t radiant_ant_lib_config_get(uint8_t *config)
 {
 	return wire_err(ant_lib_config_get(config));
 }
 
-antr_err_t antr_event_filtering_set(uint16_t filter)
+radiant_ant_err_t radiant_ant_event_filtering_set(uint16_t filter)
 {
 	return wire_err(ant_event_filtering_set(filter));
 }
 
-antr_err_t antr_event_filtering_get(uint16_t *filter)
+radiant_ant_err_t radiant_ant_event_filtering_get(uint16_t *filter)
 {
 	return wire_err(ant_event_filtering_get(filter));
 }
 
-antr_err_t antr_adv_burst_config_set(const uint8_t *config, uint8_t size)
+radiant_ant_err_t radiant_ant_adv_burst_config_set(const uint8_t *config, uint8_t size)
 {
 	return wire_err(ant_adv_burst_config_set((uint8_t *)config, size));
 }
 
-antr_err_t antr_adv_burst_config_get(uint8_t request_type, uint8_t *config)
+radiant_ant_err_t radiant_ant_adv_burst_config_get(uint8_t request_type, uint8_t *config)
 {
 	return wire_err(ant_adv_burst_config_get(request_type, config));
 }
 
-antr_err_t antr_sdu_mask_set(uint8_t mask_index, const uint8_t *mask)
+radiant_ant_err_t radiant_ant_sdu_mask_set(uint8_t mask_index, const uint8_t *mask)
 {
 	return wire_err(ant_sdu_mask_set(mask_index, (uint8_t *)mask));
 }
 
-antr_err_t antr_sdu_mask_get(uint8_t mask_index, uint8_t *mask)
+radiant_ant_err_t radiant_ant_sdu_mask_get(uint8_t mask_index, uint8_t *mask)
 {
 	return wire_err(ant_sdu_mask_get(mask_index, mask));
 }
 
-antr_err_t antr_sdu_mask_config(uint8_t channel, uint8_t mask_config)
+radiant_ant_err_t radiant_ant_sdu_mask_config(uint8_t channel, uint8_t mask_config)
 {
 	return wire_err(ant_sdu_mask_config(channel, mask_config));
 }
 
 /* ── Status and queries ────────────────────────────────────────────────────── */
 
-antr_err_t antr_capabilities_get(uint8_t *capabilities)
+radiant_ant_err_t radiant_ant_capabilities_get(uint8_t *capabilities)
 {
 	return wire_err(ant_capabilities_get(capabilities));
 }
 
-antr_err_t antr_version_get(uint8_t *version)
+radiant_ant_err_t radiant_ant_version_get(uint8_t *version)
 {
 	return wire_err(ant_version_get(version));
 }
 
-antr_err_t antr_serial_number_get(uint32_t *serial)
+radiant_ant_err_t radiant_ant_serial_number_get(uint32_t *serial)
 {
 	/* No sdk-ant counterpart, and the reference stack does not advertise
 	 * CAPABILITIES_SERIAL_NUMBER_ENABLED, so refusing keeps this backend's
@@ -391,53 +391,53 @@ antr_err_t antr_serial_number_get(uint32_t *serial)
 	return RADIANT_WIRE_INVALID_MESSAGE;
 }
 
-antr_err_t antr_channel_status_get(uint8_t channel, uint8_t *status)
+radiant_ant_err_t radiant_ant_channel_status_get(uint8_t channel, uint8_t *status)
 {
 	return wire_err(ant_channel_status_get(channel, status));
 }
 
-antr_err_t antr_channel_id_get(uint8_t channel, uint16_t *device_number,
+radiant_ant_err_t radiant_ant_channel_id_get(uint8_t channel, uint16_t *device_number,
 			       uint8_t *device_type, uint8_t *trans_type)
 {
 	return wire_err(ant_channel_id_get(channel, device_number, device_type,
 					   trans_type));
 }
 
-antr_err_t antr_channel_period_get(uint8_t channel, uint16_t *period)
+radiant_ant_err_t radiant_ant_channel_period_get(uint8_t channel, uint16_t *period)
 {
 	return wire_err(ant_channel_period_get(channel, period));
 }
 
-antr_err_t antr_channel_radio_freq_get(uint8_t channel, uint8_t *freq)
+radiant_ant_err_t radiant_ant_channel_radio_freq_get(uint8_t channel, uint8_t *freq)
 {
 	return wire_err(ant_channel_radio_freq_get(channel, freq));
 }
 
-antr_err_t antr_channel_radio_crc_mode_get(uint8_t channel, uint8_t *mode)
+radiant_ant_err_t radiant_ant_channel_radio_crc_mode_get(uint8_t channel, uint8_t *mode)
 {
 	return wire_err(ant_channel_radio_crc_mode_get(channel, mode));
 }
 
 /* ── Encryption (ANT+ AES-CTR) ─────────────────────────────────────────────── */
 
-antr_err_t antr_crypto_channel_enable(uint8_t channel, uint8_t enable,
+radiant_ant_err_t radiant_ant_crypto_channel_enable(uint8_t channel, uint8_t enable,
 				      uint8_t key_num, uint8_t decimation)
 {
 	return wire_err(ant_crypto_channel_enable(channel, enable, key_num,
 						  decimation));
 }
 
-antr_err_t antr_crypto_key_set(uint8_t key_num, const uint8_t *key)
+radiant_ant_err_t radiant_ant_crypto_key_set(uint8_t key_num, const uint8_t *key)
 {
 	return wire_err(ant_crypto_key_set(key_num, (uint8_t *)key));
 }
 
-antr_err_t antr_crypto_info_set(uint8_t type, const uint8_t *info)
+radiant_ant_err_t radiant_ant_crypto_info_set(uint8_t type, const uint8_t *info)
 {
 	return wire_err(ant_crypto_info_set(type, (uint8_t *)info));
 }
 
-antr_err_t antr_crypto_info_get(uint8_t type, uint8_t *info)
+radiant_ant_err_t radiant_ant_crypto_info_get(uint8_t type, uint8_t *info)
 {
 	return wire_err(ant_crypto_info_get(type, info));
 }
@@ -775,25 +775,25 @@ BUILD_ASSERT((RADIANT_WIRE_BURST_HEADER_SEQ_MASK << RADIANT_WIRE_BURST_HEADER_SE
 	     "sequence field");
 
 /*
- * The three ANTR_BURST_SEGMENT_* values from src/ant_radio.h. All three match
- * their sdk-ant counterparts, which is what makes antr_burst_tx() above a
+ * The three RADIANT_ANT_BURST_SEGMENT_* values from <radiant/radiant_ant.h>. All three match
+ * their sdk-ant counterparts, which is what makes radiant_ant_burst_tx() above a
  * plain forward. These three asserts are the whole guarantee behind that: if
  * either side ever moves, the file stops compiling instead of quietly marking
  * the last block of every burst as a middle one.
  */
-BUILD_ASSERT(ANTR_BURST_SEGMENT_CONTINUE == BURST_SEGMENT_CONTINUE,
-	     "ANTR_BURST_SEGMENT_CONTINUE has drifted from sdk-ant's "
+BUILD_ASSERT(RADIANT_ANT_BURST_SEGMENT_CONTINUE == BURST_SEGMENT_CONTINUE,
+	     "RADIANT_ANT_BURST_SEGMENT_CONTINUE has drifted from sdk-ant's "
 	     "BURST_SEGMENT_CONTINUE");
-BUILD_ASSERT(ANTR_BURST_SEGMENT_START == BURST_SEGMENT_START,
-	     "ANTR_BURST_SEGMENT_START has drifted from sdk-ant's "
+BUILD_ASSERT(RADIANT_ANT_BURST_SEGMENT_START == BURST_SEGMENT_START,
+	     "RADIANT_ANT_BURST_SEGMENT_START has drifted from sdk-ant's "
 	     "BURST_SEGMENT_START");
-BUILD_ASSERT(ANTR_BURST_SEGMENT_END == BURST_SEGMENT_END,
-	     "ANTR_BURST_SEGMENT_END has drifted from sdk-ant's "
+BUILD_ASSERT(RADIANT_ANT_BURST_SEGMENT_END == BURST_SEGMENT_END,
+	     "RADIANT_ANT_BURST_SEGMENT_END has drifted from sdk-ant's "
 	     "BURST_SEGMENT_END - forwarding the segment byte untouched would "
 	     "mark the last block of every burst as a middle block");
-BUILD_ASSERT((ANTR_BURST_SEGMENT_START | ANTR_BURST_SEGMENT_END) !=
-		     ANTR_BURST_SEGMENT_START,
-	     "ANTR_BURST_SEGMENT_START and _END overlap, so a block that is "
+BUILD_ASSERT((RADIANT_ANT_BURST_SEGMENT_START | RADIANT_ANT_BURST_SEGMENT_END) !=
+		     RADIANT_ANT_BURST_SEGMENT_START,
+	     "RADIANT_ANT_BURST_SEGMENT_START and _END overlap, so a block that is "
 	     "both first and last cannot be expressed");
 
 /* ── Advanced burst ────────────────────────────────────────────────────────── */

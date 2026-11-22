@@ -83,7 +83,7 @@ BUILD_ASSERT(RADIANT_CHANNEL_DRIFT_WORST_US == 25u, "drift budget moved");
  *
  * radiant_channel_event_out() is declared by radiant_channel.h and implemented by
  * radiant_event.c in the firmware. Here it is a recorder. The inversion is the
- * same one src/ant_radio.h uses for antr_on_message(): resolved at link time,
+ * same one <radiant/radiant_ant.h> uses for radiant_ant_on_message(): resolved at link time,
  * exactly one definition per image.
  */
 struct evt_rec {
@@ -266,7 +266,7 @@ ZTEST(radiant_channel, test_thirty_two_channels_and_nothing_beyond)
 ZTEST(radiant_channel, test_period_conversion_is_the_measured_one)
 {
 	/*
-	 * 8182 counts, not 8192. src/ant_radio.h calls 8192 "the 4 Hz that
+	 * 8182 counts, not 8192. <radiant/radiant_ant.h> calls 8192 "the 4 Hz that
 	 * most ANT+ profiles use"; the bench measured 249,696.4 us over 744
 	 * intervals, which is 8182 counts, and 8192 would be 250,000. The
 	 * difference is 305 us per slot - enough to walk a receive window off
@@ -1904,7 +1904,7 @@ ZTEST(radiant_channel, test_an_unrecognised_channel_type_is_accepted)
 {
 	uint8_t status = 0u;
 
-	/* antr_channel_assign()'s permitted error set has no code left to reject
+	/* radiant_ant_channel_assign()'s permitted error set has no code left to reject
 	 * a channel type with (INVALID_MESSAGE is already spoken for by the
 	 * channel number, and INVALID_PARAMETER_PROVIDED is not in the set). So
 	 * the type is carried verbatim, only bit 4 interpreted. */

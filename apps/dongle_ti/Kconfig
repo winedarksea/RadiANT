@@ -43,10 +43,10 @@ config ANT_DONGLE_UART_BAUD
 	  it agrees with the devicetree's current-speed, so the two cannot
 	  silently drift apart.
 
-# CONFIG_RADIANT_ANTR_API and CONFIG_RADIANT_SEC_HOST_MESSAGES: the
-# antr_* adapter's own symbols, shared with every other ANT-serial
-# application. See apps/common/Kconfig.antr_api's own header.
-rsource "../common/Kconfig.antr_api"
+# CONFIG_RADIANT_ANT_API and CONFIG_RADIANT_SEC_HOST_MESSAGES: the
+# radiant_ant_* adapter's own symbols, shared with every other ANT-serial
+# application. See apps/common/Kconfig.ant_api's own header.
+rsource "../common/Kconfig.ant_api"
 
 # CONFIG_ANT_DONGLE_ACTIVITY_COUNT and _CLAIMED: the shared receive-activity
 # counter and its one-reader interlock. See that file's own header.
@@ -75,7 +75,7 @@ choice ANT_DONGLE_RADIO
 	prompt "ANT radio backend"
 	default ANT_DONGLE_RADIO_CORE
 	help
-	  Which implementation of radiant/include/radiant/ant_radio.h is compiled.
+	  Which implementation of radiant/include/radiant/radiant_ant.h is compiled.
 
 	  UNLIKE EVERY OTHER APPLICATION IN THIS REPOSITORY, "sdk_ant" is not a
 	  real option here: sdk-ant is Nordic's proprietary radio stack, built
@@ -83,7 +83,7 @@ choice ANT_DONGLE_RADIO
 	  option still exists so the choice has the same shape as the other
 	  applications' copies of it; selecting it here
 	  produces a build with no radiant module and no sdk-ant module either,
-	  which fails at the antr_* link rather than doing anything useful.
+	  which fails at the radiant_ant_* link rather than doing anything useful.
 
 	  As with every other application, this choice does not actually decide
 	  anything - see apps/dongle/Kconfig's copy of this same note for why
@@ -108,7 +108,7 @@ config ANT_DONGLE_RADIO_STUB
 	help
 	  Compile apps/common/ant_radio_stub.c. Useful for bringing up the UART
 	  bridge and the rest of the board without a working radio at all - the
-	  cheapest proof the antr_* seam holds on a new SoC.
+	  cheapest proof the radiant_ant_* seam holds on a new SoC.
 
 endchoice
 

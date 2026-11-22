@@ -8,7 +8,7 @@
   0022 gate 3): the search counters go here, on pages of their own, and 0xF6's
   conditional coverage field is left as it is.
 - **Code:** `radiant/include/radiant/radiant_diag.h`,
-  `radiant/src/antr/ant_radio_radiant.c` (`antr_diag_page()`),
+  `radiant/src/ant_api/radiant_ant.c` (`radiant_ant_diag_page()`),
   `radiant_radio_diag_get()` in each backend, the 0xF7 arm of
   `apps/common/ant_serial_bridge.c`'s request handler, `tools/ant_diag.py`.
 

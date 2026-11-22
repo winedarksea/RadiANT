@@ -8,7 +8,7 @@
 
 #include <zephyr/kernel.h>
 
-#include <radiant/ant_radio.h>
+#include <radiant/radiant_ant.h>
 
 #define HR_CHANNEL     0u
 #define HR_NETWORK     0u
@@ -48,14 +48,14 @@ static void send_next_page(void)
 		(uint8_t)beats, SIM_BPM,
 	};
 
-	(void)antr_broadcast_message_tx(HR_CHANNEL, sizeof(page), page);
+	(void)radiant_ant_broadcast_message_tx(HR_CHANNEL, sizeof(page), page);
 }
 
 /*
  * Called by RadiANT for every message. EVENT_TX means a page has just gone out,
  * which is the moment to supply the next one.
  */
-void antr_on_message(const struct antr_msg *msg)
+void radiant_ant_on_message(const struct radiant_ant_msg *msg)
 {
 	if (msg->id == RADIANT_WIRE_MESG_RESPONSE_EVENT_ID &&
 	    msg->len >= RADIANT_WIRE_MESG_RESPONSE_EVENT_SIZE &&
@@ -66,7 +66,7 @@ void antr_on_message(const struct antr_msg *msg)
 
 #define TRY(call)                                                        \
 	do {                                                             \
-		antr_err_t rc = (call);                                  \
+		radiant_ant_err_t rc = (call);                                  \
 		if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {                      \
 			printk("%s failed: 0x%02x\n", #call, rc);        \
 			return 0;                                        \
@@ -75,15 +75,15 @@ void antr_on_message(const struct antr_msg *msg)
 
 int main(void)
 {
-	TRY(antr_init());
-	TRY(antr_network_address_set(HR_NETWORK, ant_plus_key));
+	TRY(radiant_ant_init());
+	TRY(radiant_ant_network_address_set(HR_NETWORK, ant_plus_key));
 
-	TRY(antr_channel_assign(HR_CHANNEL, HR_CHANNEL_TYPE, HR_NETWORK, 0u));
-	TRY(antr_channel_id_set(HR_CHANNEL, DEVICE_NUMBER, HR_DEVICE_TYPE, TX_TYPE));
-	TRY(antr_channel_period_set(HR_CHANNEL, HR_PERIOD));
-	TRY(antr_channel_radio_freq_set(HR_CHANNEL, HR_RF_FREQ));
+	TRY(radiant_ant_channel_assign(HR_CHANNEL, HR_CHANNEL_TYPE, HR_NETWORK, 0u));
+	TRY(radiant_ant_channel_id_set(HR_CHANNEL, DEVICE_NUMBER, HR_DEVICE_TYPE, TX_TYPE));
+	TRY(radiant_ant_channel_period_set(HR_CHANNEL, HR_PERIOD));
+	TRY(radiant_ant_channel_radio_freq_set(HR_CHANNEL, HR_RF_FREQ));
 	/* The first message goes out empty; EVENT_TX after it starts the data. */
-	TRY(antr_channel_open(HR_CHANNEL));
+	TRY(radiant_ant_channel_open(HR_CHANNEL));
 
 	printk("Transmitting as device %u\n", DEVICE_NUMBER);
 	return 0;

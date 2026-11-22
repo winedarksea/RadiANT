@@ -20,7 +20,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
-#include "ant_radio.h"
+#include <radiant/radiant_ant.h>
 #include <radiant/radiant_wire.h>
 #include "profile_hr.h"
 #include "treadmill_hr_rx.h"
@@ -110,9 +110,9 @@ uint16_t treadmill_hr_rx_device(void)
 
 static int configure_channel(uint8_t channel)
 {
-	antr_err_t rc;
+	radiant_ant_err_t rc;
 
-	rc = antr_channel_assign(channel, RADIANT_WIRE_CHANNEL_TYPE_SLAVE, HR_NETWORK,
+	rc = radiant_ant_channel_assign(channel, RADIANT_WIRE_CHANNEL_TYPE_SLAVE, HR_NETWORK,
 				 0u);
 	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("hr ch%u assign: %d", channel, (int)rc);
@@ -122,36 +122,36 @@ static int configure_channel(uint8_t channel)
 	/* WILDCARD device number and WILDCARD transmission type: 0 in either
 	 * field means "any". The device TYPE is not wildcarded - a slave that
 	 * matched any type would acquire the treadmill's own FE-C master. */
-	rc = antr_channel_id_set(channel, 0u, PROFILE_HR_DEVICE_TYPE, 0u);
+	rc = radiant_ant_channel_id_set(channel, 0u, PROFILE_HR_DEVICE_TYPE, 0u);
 	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("hr ch%u channel id: %d", channel, (int)rc);
 		return -EIO;
 	}
 
-	rc = antr_channel_period_set(channel, HR_PERIOD);
+	rc = radiant_ant_channel_period_set(channel, HR_PERIOD);
 	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("hr ch%u period: %d", channel, (int)rc);
 		return -EIO;
 	}
 
-	rc = antr_channel_radio_freq_set(channel, HR_RF_FREQ);
+	rc = radiant_ant_channel_radio_freq_set(channel, HR_RF_FREQ);
 	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("hr ch%u rf freq: %d", channel, (int)rc);
 		return -EIO;
 	}
 
-	(void)antr_channel_search_timeout_set(channel, HR_SEARCH_TIMEOUT_2P5S);
+	(void)radiant_ant_channel_search_timeout_set(channel, HR_SEARCH_TIMEOUT_2P5S);
 
 	/* LOW priority search, and it is the whole coexistence decision in one
 	 * call: a low-priority search yields to the two masters' transmit
 	 * slots rather than competing with them. A high-priority search on a
 	 * node that also transmits is how a sweep starves an arbiter. */
-	(void)antr_search_channel_priority_set(channel, 0u);
+	(void)radiant_ant_search_channel_priority_set(channel, 0u);
 
 	/* The proximity floor - see the header. A backend that does not
 	 * implement it refuses here, which costs the "nearest strap" property
 	 * and nothing else, so it is not fatal. */
-	if (antr_prox_search_set(channel, prox_threshold, 0u) !=
+	if (radiant_ant_prox_search_set(channel, prox_threshold, 0u) !=
 	    RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_WRN("hr: no proximity search on this backend - the first "
 			"strap heard will be acquired, near or far");
@@ -161,7 +161,7 @@ static int configure_channel(uint8_t channel)
 	 * what names the strap in the log and the RSSI is what the hold-down
 	 * is measured in; without them this module still works and simply
 	 * cannot say which strap it has. */
-	(void)antr_lib_config_set(RADIANT_WIRE_LIB_CONFIG_MESG_OUT_INC_DEVICE_ID |
+	(void)radiant_ant_lib_config_set(RADIANT_WIRE_LIB_CONFIG_MESG_OUT_INC_DEVICE_ID |
 				  RADIANT_WIRE_LIB_CONFIG_MESG_OUT_INC_RSSI);
 
 	return 0;
@@ -169,7 +169,7 @@ static int configure_channel(uint8_t channel)
 
 int treadmill_hr_rx_start(uint8_t channel)
 {
-	antr_err_t rc;
+	radiant_ant_err_t rc;
 	int        err;
 
 	hr_channel = channel;
@@ -178,7 +178,7 @@ int treadmill_hr_rx_start(uint8_t channel)
 		return err;
 	}
 
-	rc = antr_channel_open(channel);
+	rc = radiant_ant_channel_open(channel);
 	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("hr ch%u open: %d", channel, (int)rc);
 		return -EIO;
@@ -216,11 +216,11 @@ static void relax_on_timeout(void)
 
 static void research_after_close(void)
 {
-	antr_err_t rc;
+	radiant_ant_err_t rc;
 
 	research_pending = false;
-	(void)antr_prox_search_set(hr_channel, prox_threshold, 0u);
-	rc = antr_channel_open(hr_channel);
+	(void)radiant_ant_prox_search_set(hr_channel, prox_threshold, 0u);
+	rc = radiant_ant_channel_open(hr_channel);
 	if (rc == RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_INF("heart rate: search timed out, floor now bin %u",
 			prox_threshold);
@@ -264,7 +264,7 @@ static void parse_ext(const uint8_t *data, uint8_t len, uint16_t *device,
 	}
 }
 
-bool treadmill_hr_rx_message(const struct antr_msg *msg)
+bool treadmill_hr_rx_message(const struct radiant_ant_msg *msg)
 {
 	const uint8_t *payload;
 	uint8_t        bpm;

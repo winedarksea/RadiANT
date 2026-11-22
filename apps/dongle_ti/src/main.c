@@ -5,7 +5,7 @@
  *
  * Same shape as apps/dongle/src/main.c, minus the UF2-bootloader settle. All
  * protocol work happens in the ANT bridge thread (apps/common/
- * ant_serial_bridge.c) and in antr_on_message(), which the bridge implements
+ * ant_serial_bridge.c) and in radiant_ant_on_message(), which the bridge implements
  * and the radio backend calls.
  *
  * The LED heartbeat used to be a second copy of the loop in
@@ -30,7 +30,7 @@
 /* The radio contract - whichever backend is compiled in behind it. Bringing
  * the stack up is the only thing main() needs from it.
  */
-#include "ant_radio.h"
+#include <radiant/radiant_ant.h>
 
 LOG_MODULE_REGISTER(ant_dongle_ti, LOG_LEVEL_INF);
 
@@ -50,12 +50,12 @@ int main(void)
 
 	LOG_INF("ANT+ Dongle (TI CC26x2) starting");
 
-	ret = antr_init();
+	ret = radiant_ant_init();
 	if (ret) {
-		LOG_ERR("antr_init failed: %d", ret);
+		LOG_ERR("radiant_ant_init failed: %d", ret);
 		return ret;
 	}
-	LOG_INF("antr_init ok");
+	LOG_INF("radiant_ant_init ok");
 
 	/* Allocate the transport's buffers and start its writer thread, BEFORE
 	 * the bridge exists to use them and before the UART is opened.
@@ -78,7 +78,7 @@ int main(void)
 	usb_ant_class_init();
 	LOG_INF("usb_ant_class_init ok");
 
-	/* The bridge owns ANT event forwarding: it defines antr_on_message(),
+	/* The bridge owns ANT event forwarding: it defines radiant_ant_on_message(),
 	 * which the radio backend calls. Nothing is registered.
 	 */
 	ret = ant_serial_bridge_init();

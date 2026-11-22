@@ -89,12 +89,12 @@ The trainer never sends an early ACK in place of an unreachable one.
 asks the op what to do once a packet is known to be acknowledgeable. A packet
 radiant refuses for its own reasons is never offered to the op. With the op
 NULL, or the symbol off, the path is unchanged. The app reaches the op through
-`antr_reply_plan_hook_set()` and `antr_reply_stats_get()` in
-`radiant/include/radiant/ant_radio.h`. Both exist only under the symbol.
+`radiant_ant_reply_plan_hook_set()` and `radiant_ant_reply_stats_get()` in
+`radiant/include/radiant/radiant_ant.h`. Both exist only under the symbol.
 
 **This symbol never goes into a dongle image.** Every dongle row in
 `.github/workflows/release.yml` asserts `# CONFIG_RADIANT_ACK_FAULTS is not set`.
-`nm` on a dongle ELF finds no `reply_plan` and no `antr_reply_*` symbol.
+`nm` on a dongle ELF finds no `reply_plan` and no `radiant_ant_reply_*` symbol.
 
 ## Measuring a dongle: tools/fec_ack_sweep.py
 

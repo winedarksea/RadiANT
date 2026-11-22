@@ -300,20 +300,20 @@ kernel heap; `bss` and `datas` are the rest.
 | 7 | **9 216** | 3.52 % | CHIP event-loop thread stack | noinit | `libCHIP.a(PlatformManagerImpl)` | `CONFIG_CHIP_TASK_STACK_SIZE` (9216 because CRACEN) |
 | 8 | **8 192** | 3.13 % | `mbedtls_heap` | bss | `libmbedtls_zephyr.a` | `CONFIG_MBEDTLS_HEAP_SIZE` |
 | 9 | **6 144** | 2.34 % | OpenThread thread stack | noinit | `libopenthread_utils.a(openthread.c)` | `CONFIG_OPENTHREAD_THREAD_STACK_SIZE` |
-| 10 | **6 144** | 2.34 % | `api_xfer` | bss | `libapp.a(ant_radio_radiant.c)` | ours — the ANT host transfer buffers |
+| 10 | **6 144** | 2.34 % | `api_xfer` | bss | `libapp.a(radiant_ant.c)` | ours — the ANT host transfer buffers |
 | 11 | 4 192 | 1.60 % | `default_settings_zms` | bss | `libzephyr.a(settings_zms.c)` | ZMS lookup cache |
 | 12 | 4 096 | 1.56 % | main thread stack | noinit | `libkernel.a(init.c)` | `CONFIG_MAIN_STACK_SIZE` (thread.conf) |
 | 13 | 4 096 | 1.56 % | ISR stack | noinit | `libkernel.a(init.c)` | `CONFIG_ISR_STACK_SIZE` |
 | 14 | 4 048 | 1.54 % | `buf32` (log message buffer) | bss | `libzephyr.a(log_core.c)` | `CONFIG_LOG_BUFFER_SIZE` |
 | 15 | 3 896 | 1.49 % | `ThreadStackManagerImpl::sInstance` | bss | `libCHIP.a` | CHIP's OT glue |
 | 16 | 3 840 | 1.46 % | BT ACL RX pool | noinit | `bluetooth/host(buf.c)` | `BT_BUF_ACL_RX_SIZE` 251 × `(BT_MAX_CONN+1+BT_BUF_ACL_RX_COUNT_EXTRA)` |
-| 17 | 3 840 | 1.46 % | `api_ch` | bss | `libapp.a(ant_radio_radiant.c)` | ours |
+| 17 | 3 840 | 1.46 % | `api_ch` | bss | `libapp.a(radiant_ant.c)` | ours |
 | 18 | 3 144 | 1.20 % | `g` | bss | `libradiant.a(radiant_event.c)` | ours |
 | 19 | 2 848 | 1.09 % | `PlatformManagerImpl::sInstance` | bss | `libCHIP.a` | CHIP |
 | 20 | 2 828 | 1.08 % | `sdc_mempool` | bss | `bluetooth/controller(hci_driver.c)` | SoftDevice Controller |
 | 21 | 2 820 | 1.08 % | `global_data` | bss | `libpsa_core.a(slot_management)` | PSA key slots |
 | 22 | 2 580 | 0.98 % | `m_nrf_802154_rx_buffers` | bss | `libnrf-802154-driver.a` | 802.15.4 |
-| 23 | 2 304 | 0.88 % | ANT host thread stack | noinit | `libapp.a(ant_radio_radiant.c)` | ours |
+| 23 | 2 304 | 0.88 % | ANT host thread stack | noinit | `libapp.a(radiant_ant.c)` | ours |
 | 24 | 2 264 | 0.86 % | `s` | bss | `libradiant.a(radiant_sched.c)` | ours |
 | 25 | 2 112 | 0.81 % | UART transport stack | noinit | `libapp.a(ant_uart_transport.c)` | ours |
 | 26 | 2 080 | 0.79 % | `gGroupPeerTable` | bss | `libCHIP.a(SessionManager)` | `CHIP_MAX_FABRICS` |
@@ -866,7 +866,7 @@ it was before.
 one-row table.** A single-row table with a modulo-1 rotation reads better and
 does *not* restore the old image: it still emits `self_profiles[]`, `self_row[]`
 and `configure_and_open()`, still makes the per-row
-`antr_channel_search_timeout_set()` call the original never made, and still
+`radiant_ant_channel_search_timeout_set()` call the original never made, and still
 carries the profile-naming log strings in `.rodata`. Byte-identity was the
 requirement, so the guard is one `#ifdef` around the table and the open/retune
 helpers plus two more inside `self_thread_fn()`.

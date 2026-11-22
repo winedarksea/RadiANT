@@ -485,7 +485,7 @@ BURST_FILTER_RF = 70
 BURST_FILTER_DEVICE = 61234
 BURST_FILTER_PERIOD = 8192
 # The bridge's burst buffers (BURST_BUFS in apps/common/ant_serial_bridge.c,
-# 2 on antr builds). Two more bursts than buffers is the fewest that runs a
+# 2 on radiant_ant builds). Two more bursts than buffers is the fewest that runs a
 # leaking bridge out and then shows the stall.
 BURST_FILTER_BUFS = 2
 # A leaked buffer stalls the dispatcher 1000 ms in k_sem_take() before it
@@ -538,7 +538,7 @@ def _burst_and_status(dev, reader, ch: int, window: float) -> dict:
 def check_burst_filter(dev, reader) -> list[str]:
     """Filtered burst completions must still free the bridge's burst buffer.
 
-    antr_on_message() releases the buffer on TRANSFER_TX_COMPLETED/FAILED
+    radiant_ant_on_message() releases the buffer on TRANSFER_TX_COMPLETED/FAILED
     and only then honours the host's event filter. Swap the two and every
     filtered completion leaks a buffer: after BURST_BUFS bursts the next one
     stalls 1000 ms and fails TRANSFER_IN_PROGRESS, and so does every one

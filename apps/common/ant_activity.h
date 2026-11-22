@@ -15,7 +15,7 @@
  * apps/dongle_thread/src/rx_tap.c. Two features cannot both have it. This costs
  * one call at the single call site in ant_serial_bridge.c and cannot collide.
  *
- * WHERE THE COUNT HAPPENS. antr_on_message() runs on the radiant API event
+ * WHERE THE COUNT HAPPENS. radiant_ant_on_message() runs on the radiant API event
  * thread - ordinary thread context, never the radio callback - so the atomic
  * increment below is free relative to the framing work already being done per
  * message. Nothing in this feature runs in interrupt context at all.

@@ -62,11 +62,11 @@ only configuration that can compile-assert our protocol constants against
 Garmin's own header values. What we will not do is copy any of it into this
 repository. Vendoring the headers would violate the licence, destroy the
 clean-room defence, and convert a public repository into a legal problem; the
-`#include "ant_interface.h"` in `src/ant_serial_bridge.c` is meant to end up
+`#include "ant_interface.h"` in `apps/common/ant_serial_bridge.c` is meant to end up
 *deleted*, not *duplicated*.
 
 **Read scope.** Only the agent or contributor writing
-`src/ant_radio_sdk_ant.c` may open this tree. Everyone writing `radiant/**`
+`apps/common/ant_radio_sdk_ant.c` may open this tree. Everyone writing `radiant/**`
 is barred from it. That split is the clean-room boundary; see
 [`decisions/0002`](decisions/0002-clean-room-policy.md).
 
@@ -206,7 +206,7 @@ See [`decisions/0002`](decisions/0002-clean-room-policy.md).
 ## ANT Message Protocol and Usage, Rev 5.1 (D00000652)
 
 **What it is.** Garmin's specification of the host↔dongle *serial* protocol —
-the `0xA4`-framed messages `src/ant_serial_bridge.c` implements. It is the
+the `0xA4`-framed messages `apps/common/ant_serial_bridge.c` implements. It is the
 document that makes this project possible: it describes exactly the layer we
 must be byte-compatible at, and it is free.
 

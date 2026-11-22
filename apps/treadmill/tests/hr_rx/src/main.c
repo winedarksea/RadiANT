@@ -2,10 +2,10 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * The treadmill's heart-rate slave (src/treadmill_hr_rx.c) against a stub
- * antr_* layer that keeps the one piece of channel state the module's event
+ * radiant_ant_* layer that keeps the one piece of channel state the module's event
  * handling depends on: whether the channel has finished closing.
  *
- * The stub's contract is the real stack's (ant_radio.h): open() on a channel
+ * The stub's contract is the real stack's (radiant_ant.h): open() on a channel
  * that is still open or still CLOSING answers RADIANT_WIRE_CHANNEL_IN_WRONG_STATE, and
  * a search timeout closes the channel ITSELF - RX_SEARCH_TIMEOUT first, then
  * CHANNEL_CLOSED once any scan window bound to it has ended. That gap is the
@@ -20,7 +20,7 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/ztest.h>
 
-#include "ant_radio.h"
+#include <radiant/radiant_ant.h>
 #include <radiant/radiant_wire.h>
 #include "treadmill_hr_rx.h"
 #include "treadmill_state.h"
@@ -49,9 +49,9 @@ static struct {
 static uint8_t  last_bpm_seen = 0xEEu;
 static uint32_t bpm_calls;
 
-/* ── The stub antr_* layer ─────────────────────────────────────────────── */
+/* ── The stub radiant_ant_* layer ─────────────────────────────────────────────── */
 
-antr_err_t antr_channel_assign(uint8_t channel, uint8_t type, uint8_t network,
+radiant_ant_err_t radiant_ant_channel_assign(uint8_t channel, uint8_t type, uint8_t network,
 			       uint8_t ext_assign)
 {
 	ARG_UNUSED(channel);
@@ -62,7 +62,7 @@ antr_err_t antr_channel_assign(uint8_t channel, uint8_t type, uint8_t network,
 	return RADIANT_WIRE_RESPONSE_NO_ERROR;
 }
 
-antr_err_t antr_channel_id_set(uint8_t channel, uint16_t device_number,
+radiant_ant_err_t radiant_ant_channel_id_set(uint8_t channel, uint16_t device_number,
 			       uint8_t device_type, uint8_t trans_type)
 {
 	ARG_UNUSED(channel);
@@ -72,35 +72,35 @@ antr_err_t antr_channel_id_set(uint8_t channel, uint16_t device_number,
 	return RADIANT_WIRE_RESPONSE_NO_ERROR;
 }
 
-antr_err_t antr_channel_period_set(uint8_t channel, uint16_t period)
+radiant_ant_err_t radiant_ant_channel_period_set(uint8_t channel, uint16_t period)
 {
 	ARG_UNUSED(channel);
 	ARG_UNUSED(period);
 	return RADIANT_WIRE_RESPONSE_NO_ERROR;
 }
 
-antr_err_t antr_channel_radio_freq_set(uint8_t channel, uint8_t freq)
+radiant_ant_err_t radiant_ant_channel_radio_freq_set(uint8_t channel, uint8_t freq)
 {
 	ARG_UNUSED(channel);
 	ARG_UNUSED(freq);
 	return RADIANT_WIRE_RESPONSE_NO_ERROR;
 }
 
-antr_err_t antr_channel_search_timeout_set(uint8_t channel, uint8_t timeout)
+radiant_ant_err_t radiant_ant_channel_search_timeout_set(uint8_t channel, uint8_t timeout)
 {
 	ARG_UNUSED(channel);
 	ARG_UNUSED(timeout);
 	return RADIANT_WIRE_RESPONSE_NO_ERROR;
 }
 
-antr_err_t antr_search_channel_priority_set(uint8_t channel, uint8_t priority)
+radiant_ant_err_t radiant_ant_search_channel_priority_set(uint8_t channel, uint8_t priority)
 {
 	ARG_UNUSED(channel);
 	ARG_UNUSED(priority);
 	return RADIANT_WIRE_RESPONSE_NO_ERROR;
 }
 
-antr_err_t antr_prox_search_set(uint8_t channel, uint8_t threshold,
+radiant_ant_err_t radiant_ant_prox_search_set(uint8_t channel, uint8_t threshold,
 				uint8_t custom)
 {
 	ARG_UNUSED(channel);
@@ -110,13 +110,13 @@ antr_err_t antr_prox_search_set(uint8_t channel, uint8_t threshold,
 	return RADIANT_WIRE_RESPONSE_NO_ERROR;
 }
 
-antr_err_t antr_lib_config_set(uint8_t config)
+radiant_ant_err_t radiant_ant_lib_config_set(uint8_t config)
 {
 	ARG_UNUSED(config);
 	return RADIANT_WIRE_RESPONSE_NO_ERROR;
 }
 
-antr_err_t antr_channel_open_with_offset(uint8_t channel, uint16_t offset)
+radiant_ant_err_t radiant_ant_channel_open_with_offset(uint8_t channel, uint16_t offset)
 {
 	ARG_UNUSED(channel);
 	ARG_UNUSED(offset);
@@ -129,7 +129,7 @@ antr_err_t antr_channel_open_with_offset(uint8_t channel, uint16_t offset)
 	return RADIANT_WIRE_RESPONSE_NO_ERROR;
 }
 
-antr_err_t antr_channel_close(uint8_t channel)
+radiant_ant_err_t radiant_ant_channel_close(uint8_t channel)
 {
 	ARG_UNUSED(channel);
 	if (stub.state != STUB_OPEN) {
@@ -151,7 +151,7 @@ void treadmill_node_heart_rate(uint8_t bpm)
 static void feed_event(uint8_t code)
 {
 	uint8_t data[3] = { HR_CH, RADIANT_WIRE_MESG_EVENT_ID, code };
-	struct antr_msg m = {
+	struct radiant_ant_msg m = {
 		.id = RADIANT_WIRE_MESG_RESPONSE_EVENT_ID,
 		.len = sizeof(data),
 		.data = data,
@@ -164,7 +164,7 @@ static void feed_bpm(uint8_t bpm)
 {
 	/* [ch][page, x, x, x, event time lo, hi, count, computed bpm] */
 	uint8_t data[9] = { HR_CH, 0x04u, 0u, 0u, 0u, 0u, 0u, 1u, bpm };
-	struct antr_msg m = {
+	struct radiant_ant_msg m = {
 		.id = RADIANT_WIRE_MESG_BROADCAST_DATA_ID,
 		.len = sizeof(data),
 		.data = data,

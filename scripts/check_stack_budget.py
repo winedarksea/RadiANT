@@ -11,7 +11,7 @@ the `.su` files GCC writes with CONFIG_STACK_USAGE=y (-fstack-usage).
 
 A chain is named by hand, caller first:
 
-    --chain 'peer=bridge_thread_fn,antr_sec_pair,radiant_sec_pair_peer,
+    --chain 'peer=bridge_thread_fn,radiant_ant_sec_pair,radiant_sec_pair_peer,
              radiant_sec_x25519,fe_mul,fe_carry<=CONFIG_ANT_DONGLE_BRIDGE_STACK_SIZE'
 
 and its total is the sum of those frames plus one exception frame (an interrupt

@@ -220,7 +220,7 @@ files in `boards/` are one `.conf` and one `.overlay` each.
 | `apps/common/ant_serial_bridge.c` | ANT serial protocol (`0xA4` framing) ↔ the radio backend |
 | `apps/common/ant_radio_stub.c` | No-op radio, compiled only when the stub backend is selected |
 | `apps/common/diag_flash_log.c` | Log backend that commits to flash, readable back over UF2 |
-| `radiant/include/radiant/ant_radio.h`, `radiant/include/radiant/radiant_wire.h` | Our ~50-function radio contract and our protocol constants — the seam that lets the bridge speak to any backend. See [Backends](docs/backends.md) |
+| `radiant/include/radiant/radiant_ant.h`, `radiant/include/radiant/radiant_wire.h` | Our ~50-function radio contract and our protocol constants — the seam that lets the bridge speak to any backend. See [Backends](docs/backends.md) |
 
 ### Building from source
 

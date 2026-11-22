@@ -4,7 +4,7 @@
 """Tier 1: drive every message the bridge implements and record what came back.
 
 One board, no radio, no sensors, no statistics. Sends every message
-`dispatch()` in `src/ant_serial_bridge.c` implements - valid, then deliberately
+`dispatch()` in `apps/common/ant_serial_bridge.c` implements - valid, then deliberately
 malformed - and writes the whole conversation to a `.antser` transcript. **The
 A/B is a byte diff of two transcripts; byte-identical is the pass.**
 

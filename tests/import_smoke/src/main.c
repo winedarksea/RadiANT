@@ -14,8 +14,8 @@
  * (CONFIG_RADIANT_BACKEND_NULL) and nothing here drives a scheduler tick, so
  * radiant_channel_open() below only ever reaches the SEARCHING state and
  * stays there: it proves the channel API links and can be sequenced
- * correctly, not that a sensor gets found. A working receiver uses the antr_*
- * API instead (CONFIG_RADIANT_ANTR_API), which does the rest of the wiring -
+ * correctly, not that a sensor gets found. A working receiver uses the radiant_ant_*
+ * API instead (CONFIG_RADIANT_ANT_API), which does the rest of the wiring -
  * see radiant/samples/hr_receiver. This smoke test stays on the low-level API
  * so that path keeps being compiled.
  */
@@ -47,7 +47,7 @@ static struct radiant_hr_adapter hr_adapter;
  * The two port hooks radiant_event.h declares and radiant_event.c calls -
  * see that header's "Two hooks the port provides". A real port maps these
  * onto irq_lock()/irq_unlock() and a work-queue wakeup (see
- * radiant/src/antr/ant_radio_radiant.c); this demo has no drain thread to wake,
+ * radiant/src/ant_api/radiant_ant.c); this demo has no drain thread to wake,
  * so radiant_event_wakeup() is a no-op and radiant_event_drain() is polled
  * from the loop below instead.
  * ---------------------------------------------------------------------------

@@ -2,15 +2,15 @@
 
 /*
  * ANT Serial Bridge — translates the ANT USB serial protocol (0xA4-framed
- * messages) to/from the radio contract in ant_radio.h.
+ * messages) to/from the radio contract in radiant_ant.h.
  *
  * Inbound (host → chip):
  *   Parser thread drains ant_rx_ring_buf byte by byte through a state
- *   machine, validates the XOR checksum, and calls the matching antr_*
+ *   machine, validates the XOR checksum, and calls the matching radiant_ant_*
  *   function. Each command gets an RADIANT_WIRE_MESG_RESPONSE_EVENT_ID (0x40) ack.
  *
  * Outbound (chip → host):
- *   The radio backend calls antr_on_message() - implemented here - for every
+ *   The radio backend calls radiant_ant_on_message() - implemented here - for every
  *   message the host should see; it is wrapped in a serial frame and pushed
  *   to usb_ant_send(). No registration step: the symbol resolves at link
  *   time, so ant_serial_bridge_init() only starts the parser thread.
@@ -24,8 +24,8 @@
  * bug once survived a passing test suite.
  *
  * Nothing here names a symbol from sdk-ant: protocol constants come from
- * <radiant/radiant_wire.h> (RADIANT_WIRE_*) and every radio call goes through src/ant_radio.h
- * (antr_*), which is what lets this file build with no sdk-ant present.
+ * <radiant/radiant_wire.h> (RADIANT_WIRE_*) and every radio call goes through <radiant/radiant_ant.h>
+ * (radiant_ant_*), which is what lets this file build with no sdk-ant present.
  */
 
 #include <string.h>
@@ -42,7 +42,7 @@
 #if defined(CONFIG_ANT_DONGLE_DIAG)
 #include <radiant/radiant_diag.h>
 #endif
-#include "ant_radio.h"
+#include <radiant/radiant_ant.h>
 #ifdef CONFIG_RADIANT_SEC_PAIRING_X25519
 #include <radiant/radiant_sec.h>
 #endif
@@ -177,17 +177,17 @@ static void trace_frame(const char *dir, const uint8_t *f, size_t n)
  * that runs a whole 0xF5 exchange on a thread of this size. */
 #define BRIDGE_STACK_SIZE  CONFIG_ANT_DONGLE_BRIDGE_STACK_SIZE
 
-/* Taken from src/ant_radio.h, not respelled here, so this and a backend's
- * event thread (which must sit below it - see ANTR_HOST_THREAD_PRIORITY)
+/* Taken from <radiant/radiant_ant.h>, not respelled here, so this and a backend's
+ * event thread (which must sit below it - see RADIANT_ANT_HOST_THREAD_PRIORITY)
  * stay consistent by construction.
  */
-#define BRIDGE_PRIORITY    ANTR_HOST_THREAD_PRIORITY
+#define BRIDGE_PRIORITY    RADIANT_ANT_HOST_THREAD_PRIORITY
 
 #ifdef CONFIG_RADIANT_SEC_PAIRING_X25519
 /*
  * The deepest chain in the image: bridge_thread_fn() (dispatch is inlined
- * into it) -> antr_sec_pair() -> the radiant_sec_pair_* call. Measured on
- * nRF52840 at -Os (2026-11-17): bridge_thread_fn 144 B + antr_sec_pair 40 B,
+ * into it) -> radiant_ant_sec_pair() -> the radiant_sec_pair_* call. Measured on
+ * nRF52840 at -Os (2026-11-17): bridge_thread_fn 144 B + radiant_ant_sec_pair 40 B,
  * so 256 B covers the bridge's share; the reserve covers an exception frame
  * with FP context (104 B) and the thread entry, with room to spare. Until the
  * 2026-11-17 security review the X25519 alone needed 2,636 B here and
@@ -236,9 +236,9 @@ static inline void log_pair_stack_high_water(void)
  */
 static atomic_t reset_in_progress;
 
-/* How many antr_on_message() calls are past the activity hooks and not yet
+/* How many radiant_ant_on_message() calls are past the activity hooks and not yet
  * returned. handle_system_reset() waits for it to reach zero; see there.
- * An atomic and not a lock, so antr_on_message() stays legal from any context
+ * An atomic and not a lock, so radiant_ant_on_message() stays legal from any context
  * a backend calls it from.
  */
 static atomic_t evt_inflight;
@@ -269,7 +269,7 @@ static void send_response(uint8_t ch, uint8_t msg_id, uint8_t code)
 /* The startup message, with its reason byte.
  *
  * Two callers. The RADIANT_WIRE_MESG_SYSTEM_RESET_ID arm of dispatch() sends
- * RADIANT_WIRE_STARTUP_COMMAND_RESET (0x20) after antr_stack_reset(), and that is the
+ * RADIANT_WIRE_STARTUP_COMMAND_RESET (0x20) after radiant_ant_stack_reset(), and that is the
  * only reason it ever reports for a reset the host asked for.
  * ant_serial_bridge_announce_boot() sends the hardware reset cause once at
  * boot, on UART builds only - see there for why.
@@ -413,7 +413,7 @@ static void send_message(uint8_t msg_id, const uint8_t *payload, uint8_t len)
 #endif
 
 /* What each channel should transmit at, whether or not it is assigned yet.
- * antr_channel_radio_tx_power_set() only takes on an assigned channel (why
+ * radiant_ant_channel_radio_tx_power_set() only takes on an assigned channel (why
  * the 0x47 fan-out below swallows its errors), and hosts set power before
  * assigning - holding it here and reapplying after each assign survives
  * that ordering.
@@ -463,7 +463,7 @@ static uint8_t tx_power_resolve(uint8_t requested)
 static void tx_power_apply(uint8_t ch)
 {
 	if (ch < ARRAY_SIZE(tx_power)) {
-		(void)antr_channel_radio_tx_power_set(ch, tx_power[ch],
+		(void)radiant_ant_channel_radio_tx_power_set(ch, tx_power[ch],
 						      tx_power_custom[ch]);
 	}
 }
@@ -472,7 +472,7 @@ static void tx_power_apply(uint8_t ch)
 
 static void handle_request(const uint8_t *body, uint8_t len)
 {
-	antr_err_t err = 0;
+	radiant_ant_err_t err = 0;
 	uint8_t payload[RADIANT_WIRE_MAX_SIZE_VALUE] = {0};
 	uint16_t value16;
 
@@ -500,7 +500,7 @@ static void handle_request(const uint8_t *body, uint8_t len)
 		size_t n = ant_health_fill(payload, sizeof(payload));
 
 		if (n == 0u) {
-			err = (antr_err_t)RADIANT_WIRE_INVALID_MESSAGE;
+			err = (radiant_ant_err_t)RADIANT_WIRE_INVALID_MESSAGE;
 			break;
 		}
 		send_message(RADIANT_WIRE_MESG_RADIANT_HEALTH_ID, payload, (uint8_t)n);
@@ -515,8 +515,8 @@ static void handle_request(const uint8_t *body, uint8_t len)
 		 * channel byte is the PAGE (ADR 0023), not a channel; every
 		 * page is device-wide.
 		 */
-		err = antr_diag_page(ch, payload);
-		if (err == (antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR) {
+		err = radiant_ant_diag_page(ch, payload);
+		if (err == (radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR) {
 			send_message(RADIANT_WIRE_MESG_RADIANT_DIAG_ID, payload,
 				     (uint8_t)RADIANT_DIAG_BODY_LEN);
 		}
@@ -524,7 +524,7 @@ static void handle_request(const uint8_t *body, uint8_t len)
 #endif
 
 	case RADIANT_WIRE_MESG_CAPABILITIES_ID: {
-		err = antr_capabilities_get(payload);
+		err = radiant_ant_capabilities_get(payload);
 #ifdef ANT_BRIDGE_SELF_CHANNEL_LOWEST
 		/*
 		 * Do not offer the host the channels the self channels own. A host
@@ -568,7 +568,7 @@ static void handle_request(const uint8_t *body, uint8_t len)
 		 */
 		uint32_t serial;
 
-		err = antr_serial_number_get(&serial);
+		err = radiant_ant_serial_number_get(&serial);
 		if (!err) {
 			sys_put_le32(serial, payload);
 			if (req_id == RADIANT_WIRE_MESG_GET_SERIAL_NUM_ID) {
@@ -584,7 +584,7 @@ static void handle_request(const uint8_t *body, uint8_t len)
 	}
 
 	case RADIANT_WIRE_MESG_VERSION_ID: {
-		err = antr_version_get(payload);
+		err = radiant_ant_version_get(payload);
 		if (!err) {
 			send_message(RADIANT_WIRE_MESG_VERSION_ID, payload,
 				     RADIANT_WIRE_MESG_VERSION_SIZE);
@@ -594,7 +594,7 @@ static void handle_request(const uint8_t *body, uint8_t len)
 
 	case RADIANT_WIRE_MESG_CHANNEL_STATUS_ID: {
 		payload[0] = ch;
-		err = antr_channel_status_get(ch, &payload[1]);
+		err = radiant_ant_channel_status_get(ch, &payload[1]);
 		if (!err) {
 			send_message(RADIANT_WIRE_MESG_CHANNEL_STATUS_ID, payload,
 				     RADIANT_WIRE_MESG_CHANNEL_STATUS_SIZE);
@@ -604,7 +604,7 @@ static void handle_request(const uint8_t *body, uint8_t len)
 
 	case RADIANT_WIRE_MESG_CHANNEL_ID_ID: {
 		payload[0] = ch;
-		err = antr_channel_id_get(ch, &value16, &payload[3], &payload[4]);
+		err = radiant_ant_channel_id_get(ch, &value16, &payload[3], &payload[4]);
 		if (!err) {
 			payload[1] = (uint8_t)value16;
 			payload[2] = (uint8_t)(value16 >> 8);
@@ -616,7 +616,7 @@ static void handle_request(const uint8_t *body, uint8_t len)
 
 	case RADIANT_WIRE_MESG_CHANNEL_MESG_PERIOD_ID: {
 		payload[0] = ch;
-		err = antr_channel_period_get(ch, &value16);
+		err = radiant_ant_channel_period_get(ch, &value16);
 		if (!err) {
 			payload[1] = (uint8_t)value16;
 			payload[2] = (uint8_t)(value16 >> 8);
@@ -628,7 +628,7 @@ static void handle_request(const uint8_t *body, uint8_t len)
 
 	case RADIANT_WIRE_MESG_CHANNEL_RADIO_FREQ_ID: {
 		payload[0] = ch;
-		err = antr_channel_radio_freq_get(ch, &payload[1]);
+		err = radiant_ant_channel_radio_freq_get(ch, &payload[1]);
 		if (!err) {
 			send_message(RADIANT_WIRE_MESG_CHANNEL_RADIO_FREQ_ID, payload,
 				     RADIANT_WIRE_MESG_CHANNEL_RADIO_FREQ_SIZE);
@@ -638,7 +638,7 @@ static void handle_request(const uint8_t *body, uint8_t len)
 
 	case RADIANT_WIRE_MESG_CHANNEL_CRC_MODE_ID: {
 		payload[0] = ch;
-		err = antr_channel_radio_crc_mode_get(ch, &payload[1]);
+		err = radiant_ant_channel_radio_crc_mode_get(ch, &payload[1]);
 		if (!err) {
 			send_message(RADIANT_WIRE_MESG_CHANNEL_CRC_MODE_ID, payload,
 				     RADIANT_WIRE_MESG_CHANNEL_CRC_MODE_SIZE);
@@ -648,7 +648,7 @@ static void handle_request(const uint8_t *body, uint8_t len)
 
 	case RADIANT_WIRE_MESG_SET_SEARCH_CH_PRIORITY_ID: {
 		payload[0] = ch;
-		err = antr_search_channel_priority_get(ch, &payload[1]);
+		err = radiant_ant_search_channel_priority_get(ch, &payload[1]);
 		if (!err) {
 			send_message(RADIANT_WIRE_MESG_SET_SEARCH_CH_PRIORITY_ID, payload,
 				     RADIANT_WIRE_MESG_SET_SEARCH_CH_PRIORITY_SIZE);
@@ -658,7 +658,7 @@ static void handle_request(const uint8_t *body, uint8_t len)
 
 	case RADIANT_WIRE_MESG_PENDING_TRANSMIT_CLEAR_ID: {
 		payload[0] = ch;
-		err = antr_pending_transmit_get(ch, &payload[1]);
+		err = radiant_ant_pending_transmit_get(ch, &payload[1]);
 		if (!err) {
 			send_message(RADIANT_WIRE_MESG_PENDING_TRANSMIT_CLEAR_ID, payload,
 				     RADIANT_WIRE_MESG_PENDING_TRANSMIT_GET_SIZE);
@@ -675,10 +675,10 @@ static void handle_request(const uint8_t *body, uint8_t len)
 		 * RADIANT_WIRE_INVALID_MESSAGE, which is the same answer a device that
 		 * had never heard of 0xF2 would give.
 		 */
-		err = antr_sec_status_get(ch, payload, (uint8_t)sizeof(payload));
+		err = radiant_ant_sec_status_get(ch, payload, (uint8_t)sizeof(payload));
 		if (!err) {
 			send_message(RADIANT_WIRE_MESG_RADIANT_SEC_STATUS_ID, payload,
-				     ANTR_SEC_STATUS_LEN);
+				     RADIANT_ANT_SEC_STATUS_LEN);
 		}
 		break;
 	}
@@ -686,7 +686,7 @@ static void handle_request(const uint8_t *body, uint8_t len)
 
 	case RADIANT_WIRE_MESG_ANTLIB_CONFIG_ID: {
 		payload[0] = ch;
-		err = antr_lib_config_get(&payload[1]);
+		err = radiant_ant_lib_config_get(&payload[1]);
 		if (!err) {
 			send_message(RADIANT_WIRE_MESG_ANTLIB_CONFIG_ID, payload,
 				     RADIANT_WIRE_MESG_ANTLIB_CONFIG_SIZE);
@@ -696,7 +696,7 @@ static void handle_request(const uint8_t *body, uint8_t len)
 
 	case RADIANT_WIRE_MESG_ACTIVE_SEARCH_SHARING_ID: {
 		payload[0] = ch;
-		err = antr_active_search_sharing_cycles_get(ch, &payload[1]);
+		err = radiant_ant_active_search_sharing_cycles_get(ch, &payload[1]);
 		if (!err) {
 			send_message(RADIANT_WIRE_MESG_ACTIVE_SEARCH_SHARING_ID, payload,
 				     RADIANT_WIRE_MESG_ACTIVE_SEARCH_SHARING_REQ_SIZE);
@@ -706,7 +706,7 @@ static void handle_request(const uint8_t *body, uint8_t len)
 
 	case RADIANT_WIRE_MESG_EVENT_FILTER_CONFIG_ID: {
 		payload[0] = ch;
-		err = antr_event_filtering_get(&value16);
+		err = radiant_ant_event_filtering_get(&value16);
 		if (!err) {
 			payload[1] = (uint8_t)value16;
 			payload[2] = (uint8_t)(value16 >> 8);
@@ -725,7 +725,7 @@ static void handle_request(const uint8_t *body, uint8_t len)
 			ch ? RADIANT_WIRE_MESG_CONFIG_ADV_BURST_REQ_CONFIG_SIZE :
 			     RADIANT_WIRE_MESG_CONFIG_ADV_BURST_REQ_CAPABILITIES_SIZE;
 
-		err = antr_adv_burst_config_get(ch, payload);
+		err = radiant_ant_adv_burst_config_get(ch, payload);
 		if (!err) {
 			send_message(RADIANT_WIRE_MESG_CONFIG_ADV_BURST_ID, payload,
 				     reply_len);
@@ -742,7 +742,7 @@ static void handle_request(const uint8_t *body, uint8_t len)
 		 * one, and pads the end with a zero the host reads as mask[7].
 		 */
 		payload[0] = ch;
-		err = antr_sdu_mask_get(ch, &payload[1]);
+		err = radiant_ant_sdu_mask_get(ch, &payload[1]);
 		if (!err) {
 			send_message(RADIANT_WIRE_MESG_SDU_SET_MASK_ID, payload,
 				     RADIANT_WIRE_ANT_MAX_PAYLOAD_SIZE +
@@ -758,7 +758,7 @@ static void handle_request(const uint8_t *body, uint8_t len)
 		 * crypto ID, 20 = type + 19 bytes of custom user data.
 		 */
 		payload[0] = ch;
-		err = antr_crypto_info_get(ch, &payload[1]);
+		err = radiant_ant_crypto_info_get(ch, &payload[1]);
 		if (!err) {
 			uint8_t reply_len = 0;
 
@@ -799,7 +799,7 @@ static void handle_request(const uint8_t *body, uint8_t len)
 /* ── Burst block ───────────────────────────────────────────────────────────── */
 
 /*
- * antr_burst_tx() takes ownership of the buffer it is handed until the radio
+ * radiant_ant_burst_tx() takes ownership of the buffer it is handed until the radio
  * has sent it, but `body` points into the parser's frame buffer, overwritten
  * by the next packet - so each block is copied somewhere that outlives the
  * call and held there. Advanced burst carries up to RADIANT_WIRE_ADV_BURST_BLOCK_MAX
@@ -824,7 +824,7 @@ static void handle_request(const uint8_t *body, uint8_t len)
  * completion elsewhere let the next packet overwrite a block the engine was
  * still sending; the owner check keeps that fixed.
  */
-#if defined(CONFIG_RADIANT_ANTR_API)
+#if defined(CONFIG_RADIANT_ANT_API)
 #define BURST_BUFS 2
 #else
 #define BURST_BUFS 1
@@ -959,7 +959,7 @@ void ant_serial_bridge_host_state(uint8_t net, struct ant_bridge_host_state *out
 	out->reset_gen = host_reset_gen;
 	/*
 	 * reset_in_progress is not written under this lock (handle_system_reset()
-	 * sets it before antr_stack_reset() and clears it after
+	 * sets it before radiant_ant_stack_reset() and clears it after
 	 * host_state_note_reset() bumps the generation and the reset's fences
 	 * have passed), so the ORDER of these two reads is what makes them
 	 * agree: generation first, flag second. Read that way, a flag of 0 next
@@ -989,7 +989,7 @@ static void handle_system_reset(void)
 {
 	atomic_set(&reset_in_progress, 1);
 
-	(void)antr_stack_reset();
+	(void)radiant_ant_stack_reset();
 	/* After the reset, not before: a reader that sees the new generation
 	 * must find the channels already gone. */
 	host_state_note_reset();
@@ -1003,7 +1003,7 @@ static void handle_system_reset(void)
 
 	/* A burst in flight when the reset landed is gone, and so is the
 	 * TRANSFER_TX_* event that would have released its block: the stack
-	 * flushes it, or antr_on_message() drops it while reset_in_progress
+	 * flushes it, or radiant_ant_on_message() drops it while reset_in_progress
 	 * is set. The semaphore is
 	 * ours, not the stack's, so nothing else restores it - left taken,
 	 * every later burst packet stalls 1000 ms and fails with
@@ -1014,17 +1014,17 @@ static void handle_system_reset(void)
 	/*
 	 * Nothing may reach the host between the reset and the STARTUP that
 	 * follows except frames already queued before it, and nothing from
-	 * before the reset may follow the STARTUP. antr_stack_reset() is
+	 * before the reset may follow the STARTUP. radiant_ant_stack_reset() is
 	 * synchronous on RadiANT: its channel-closed events have been raised,
 	 * the event ring flushed, and any delivery that had already left the
 	 * ring has returned. Two orderings are still open, and the two fences
 	 * close them.
 	 *
-	 * 1. An event inside antr_on_message() that passed its
+	 * 1. An event inside radiant_ant_on_message() that passed its
 	 *    reset_in_progress check before the flag was set and is not yet
 	 *    queued. This thread pre-empts the event thread, so that frame
 	 *    could be queued after the STARTUP. The flag was set above, before
-	 *    evt_inflight is read here; antr_on_message() bumps evt_inflight
+	 *    evt_inflight is read here; radiant_ant_on_message() bumps evt_inflight
 	 *    before it reads the flag. Atomics are sequentially consistent, so
 	 *    either this loop sees the call and waits for it, or the call sees
 	 *    the flag and drops its frame. The sleep lets the lower-priority
@@ -1093,13 +1093,13 @@ static void handle_burst(uint8_t msg_id, const uint8_t *body, uint8_t len)
 	uint8_t ch      = body[0] & RADIANT_WIRE_BURST_HEADER_CHANNEL_MASK;
 	uint8_t seq     = (body[0] >> RADIANT_WIRE_BURST_HEADER_SEQ_SHIFT) &
 			  RADIANT_WIRE_BURST_HEADER_SEQ_MASK;
-	uint8_t segment = ANTR_BURST_SEGMENT_CONTINUE;
+	uint8_t segment = RADIANT_ANT_BURST_SEGMENT_CONTINUE;
 
 	if (seq == 0) {
-		segment |= ANTR_BURST_SEGMENT_START;
+		segment |= RADIANT_ANT_BURST_SEGMENT_START;
 	}
 	if (body[0] & RADIANT_WIRE_BURST_HEADER_LAST) {
-		segment |= ANTR_BURST_SEGMENT_END;
+		segment |= RADIANT_ANT_BURST_SEGMENT_END;
 	}
 
 	/* Waiting for the stack to release the previous block, rather than
@@ -1118,7 +1118,7 @@ static void handle_burst(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		return;
 	}
 
-	/* Claimed before antr_burst_tx() accepts, so the owner is in place
+	/* Claimed before radiant_ant_burst_tx() accepts, so the owner is in place
 	 * ahead of any event for this block. The semaphore counts free
 	 * buffers, so a claim after a successful take always finds one. */
 	int idx = burst_buf_claim(ch);
@@ -1130,7 +1130,7 @@ static void handle_burst(uint8_t msg_id, const uint8_t *body, uint8_t len)
 	}
 	memcpy(burst_block[idx], &body[1], size);
 
-	antr_err_t err = antr_burst_tx(ch, size, burst_block[idx], segment);
+	radiant_ant_err_t err = radiant_ant_burst_tx(ch, size, burst_block[idx], segment);
 
 	if (err) {
 		burst_buf_drop(idx);
@@ -1151,7 +1151,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 	 * `if (len >= N)` below as RADIANT_WIRE_INVALID_MESSAGE, rather than silently
 	 * acknowledging a truncated command that never ran.
 	 */
-	antr_err_t err = RADIANT_WIRE_INVALID_MESSAGE;
+	radiant_ant_err_t err = RADIANT_WIRE_INVALID_MESSAGE;
 	/* body[0] is channel number (or network number for NETWORK_KEY) */
 	uint8_t ch = (len > 0) ? body[0] : 0;
 
@@ -1164,7 +1164,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 	case RADIANT_WIRE_MESG_NETWORK_KEY_ID:
 		/* body: [net_num, key[8]] */
 		if (len >= 9) {
-			err = antr_network_address_set(body[0], &body[1]);
+			err = radiant_ant_network_address_set(body[0], &body[1]);
 			if (!err) {
 				host_state_note_key(body[0], &body[1]);
 			}
@@ -1175,7 +1175,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		/* body: [ch, type, net, (ext_assign optional)] */
 		if (len >= 3) {
 			uint8_t ext = (len >= 4) ? body[3] : 0x00;
-			err = antr_channel_assign(body[0], body[1], body[2], ext);
+			err = radiant_ant_channel_assign(body[0], body[1], body[2], ext);
 			if (!err) {
 				/* The channel exists now, so the power the host
 				 * asked for earlier - or our boosted default,
@@ -1191,14 +1191,14 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		if (len >= 5) {
 			uint16_t dev = (uint16_t)body[1] |
 				       ((uint16_t)body[2] << 8);
-			err = antr_channel_id_set(body[0], dev, body[3], body[4]);
+			err = radiant_ant_channel_id_set(body[0], dev, body[3], body[4]);
 		}
 		break;
 
 	case RADIANT_WIRE_MESG_CHANNEL_RADIO_FREQ_ID:
 		/* body: [ch, freq_offset_from_2400MHz] */
 		if (len >= 2) {
-			err = antr_channel_radio_freq_set(body[0], body[1]);
+			err = radiant_ant_channel_radio_freq_set(body[0], body[1]);
 		}
 		break;
 
@@ -1207,21 +1207,21 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		if (len >= 3) {
 			uint16_t period = (uint16_t)body[1] |
 					  ((uint16_t)body[2] << 8);
-			err = antr_channel_period_set(body[0], period);
+			err = radiant_ant_channel_period_set(body[0], period);
 		}
 		break;
 
 	case RADIANT_WIRE_MESG_CHANNEL_SEARCH_TIMEOUT_ID:
 		/* body: [ch, timeout] (2.5 s increments) */
 		if (len >= 2) {
-			err = antr_channel_search_timeout_set(body[0], body[1]);
+			err = radiant_ant_channel_search_timeout_set(body[0], body[1]);
 		}
 		break;
 
 	case RADIANT_WIRE_MESG_SET_LP_SEARCH_TIMEOUT_ID:
 		/* body: [ch, timeout] */
 		if (len >= 2) {
-			err = antr_channel_low_priority_rx_search_timeout_set(
+			err = radiant_ant_channel_low_priority_rx_search_timeout_set(
 				body[0], body[1]);
 		}
 		break;
@@ -1247,7 +1247,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 			/* Still call through for an out-of-range channel, so
 			 * the stack returns the error a real stick would.
 			 */
-			err = antr_channel_radio_tx_power_set(body[0], level,
+			err = radiant_ant_channel_radio_tx_power_set(body[0], level,
 							      custom);
 		}
 		break;
@@ -1266,7 +1266,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 			     i++) {
 				tx_power[i] = level;
 				tx_power_custom[i] = custom;
-				(void)antr_channel_radio_tx_power_set(i, level,
+				(void)radiant_ant_channel_radio_tx_power_set(i, level,
 								      custom);
 			}
 			err = 0;
@@ -1276,21 +1276,21 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 	case RADIANT_WIRE_MESG_OPEN_CHANNEL_ID:
 		/* body: [ch] */
 		if (len >= 1) {
-			err = antr_channel_open(body[0]);
+			err = radiant_ant_channel_open(body[0]);
 		}
 		break;
 
 	case RADIANT_WIRE_MESG_CLOSE_CHANNEL_ID:
 		/* body: [ch] */
 		if (len >= 1) {
-			err = antr_channel_close(body[0]);
+			err = radiant_ant_channel_close(body[0]);
 		}
 		break;
 
 	case RADIANT_WIRE_MESG_UNASSIGN_CHANNEL_ID:
 		/* body: [ch] */
 		if (len >= 1) {
-			err = antr_channel_unassign(body[0]);
+			err = radiant_ant_channel_unassign(body[0]);
 		}
 		break;
 
@@ -1312,7 +1312,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		 * network key slot and a device-type filter expects the scan to
 		 * use them. So an assigned channel 0 only has its extended
 		 * assignment byte changed in place
-		 * (antr_channel_ext_assign_set()). On RadiANT that keeps
+		 * (radiant_ant_channel_ext_assign_set()). On RadiANT that keeps
 		 * everything the host configured: ID, RF, period, ID list,
 		 * search settings and the security context. A keyed channel
 		 * with X_AUTH | DROP_UNVER stays judged as a scan; unassigning
@@ -1346,8 +1346,8 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		uint16_t saved_period = 0U;
 
 		for (i = 0; i < CONFIG_ANT_TOTAL_CHANNELS_ALLOCATED; i++) {
-			if (antr_channel_status_get(i, &status) ==
-				    (antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR &&
+			if (radiant_ant_channel_status_get(i, &status) ==
+				    (radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR &&
 			    (status & 0x03u) >= RADIANT_WIRE_STATUS_SEARCHING_CHANNEL) {
 				break;
 			}
@@ -1357,8 +1357,8 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 			return;
 		}
 
-		if (antr_channel_status_get(0, &status) ==
-			    (antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR &&
+		if (radiant_ant_channel_status_get(0, &status) ==
+			    (radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR &&
 		    (status & 0x03u) == RADIANT_WIRE_STATUS_ASSIGNED_CHANNEL) {
 			saved_type = status & 0xF0u;
 			saved_net = (status >> 2) & 0x03u;
@@ -1368,7 +1368,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 					      RADIANT_WIRE_CHANNEL_IN_WRONG_STATE);
 				return;
 			}
-			err = antr_channel_ext_assign_set(
+			err = radiant_ant_channel_ext_assign_set(
 				0, RADIANT_WIRE_EXT_PARAM_ALWAYS_SEARCH);
 			if (!err) {
 				in_place = true;
@@ -1377,49 +1377,49 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 				 * the old reassign path did, so the open is not
 				 * refused with ID_NOT_SET. A set ID is
 				 * rewritten unchanged. */
-				err = antr_channel_id_get(0, &saved_dev,
+				err = radiant_ant_channel_id_get(0, &saved_dev,
 							  &saved_dtype,
 							  &saved_ttype);
 				if (!err) {
-					err = antr_channel_id_set(
+					err = radiant_ant_channel_id_set(
 						0, saved_dev, saved_dtype,
 						saved_ttype);
 				}
-			} else if (err == (antr_err_t)RADIANT_WIRE_INVALID_MESSAGE) {
+			} else if (err == (radiant_ant_err_t)RADIANT_WIRE_INVALID_MESSAGE) {
 				/* Channel 0 is always in range: the backend
 				 * has no in-place call. */
-				err = antr_channel_id_get(0, &saved_dev,
+				err = radiant_ant_channel_id_get(0, &saved_dev,
 							  &saved_dtype,
 							  &saved_ttype);
 				if (!err) {
-					err = antr_channel_radio_freq_get(
+					err = radiant_ant_channel_radio_freq_get(
 						0, &saved_rf);
 				}
 				if (!err) {
-					err = antr_channel_period_get(
+					err = radiant_ant_channel_period_get(
 						0, &saved_period);
 				}
 				if (!err) {
-					err = antr_channel_unassign(0);
+					err = radiant_ant_channel_unassign(0);
 				}
 				restore = true;
 			}
 		} else {
-			err = (antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR;
+			err = (radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR;
 		}
 		if (!err && !in_place) {
-			err = antr_channel_assign(0, saved_type, saved_net,
+			err = radiant_ant_channel_assign(0, saved_type, saved_net,
 						  RADIANT_WIRE_EXT_PARAM_ALWAYS_SEARCH);
 		}
 		if (!err && !in_place) {
-			err = antr_channel_id_set(0, saved_dev, saved_dtype,
+			err = radiant_ant_channel_id_set(0, saved_dev, saved_dtype,
 						  saved_ttype);
 		}
 		if (!err && restore) {
-			err = antr_channel_radio_freq_set(0, saved_rf);
+			err = radiant_ant_channel_radio_freq_set(0, saved_rf);
 		}
 		if (!err && restore) {
-			err = antr_channel_period_set(0, saved_period);
+			err = radiant_ant_channel_period_set(0, saved_period);
 		}
 		if (!err) {
 			/* As the assign arm does: the power the host asked
@@ -1427,7 +1427,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 			 * Harmless on the in-place path, which kept it.
 			 */
 			tx_power_apply(0);
-			err = antr_channel_open(0);
+			err = radiant_ant_channel_open(0);
 		}
 		send_response(0, msg_id, err ? err : RADIANT_WIRE_RESPONSE_NO_ERROR);
 		return;
@@ -1439,20 +1439,20 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		 * Zero clears everything, which is how hosts drop the
 		 * extended-message flags between sessions. The core API stays
 		 * additive (0x66 and the apps rely on that), so the bridge sets
-		 * the new bits first - antr_lib_config_set() refuses an unknown
+		 * the new bits first - radiant_ant_lib_config_set() refuses an unknown
 		 * bit with no side effect - and only then clears the rest.
 		 */
 		if (len >= 2) {
 			if (body[1] == 0U) {
-				err = antr_lib_config_clear(
+				err = radiant_ant_lib_config_clear(
 					RADIANT_WIRE_LIB_CONFIG_MASK_ALL);
 			} else {
 				uint8_t drop = (uint8_t)(RADIANT_WIRE_LIB_CONFIG_MASK_ALL &
 							 ~body[1]);
 
-				err = antr_lib_config_set(body[1]);
+				err = radiant_ant_lib_config_set(body[1]);
 				if (!err && drop != 0U) {
-					err = antr_lib_config_clear(drop);
+					err = radiant_ant_lib_config_clear(drop);
 				}
 			}
 		}
@@ -1466,9 +1466,9 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		 */
 		if (len >= 2) {
 			err = body[1] ?
-			      antr_lib_config_set(
+			      radiant_ant_lib_config_set(
 				      RADIANT_WIRE_LIB_CONFIG_MESG_OUT_INC_DEVICE_ID) :
-			      antr_lib_config_clear(
+			      radiant_ant_lib_config_clear(
 				      RADIANT_WIRE_LIB_CONFIG_MESG_OUT_INC_DEVICE_ID);
 		}
 		break;
@@ -1478,7 +1478,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		if (len >= 3) {
 			uint16_t waveform = (uint16_t)body[1] |
 					    ((uint16_t)body[2] << 8);
-			err = antr_search_waveform_set(body[0], waveform);
+			err = radiant_ant_search_waveform_set(body[0], waveform);
 		}
 		break;
 
@@ -1487,21 +1487,21 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		if (len >= 2) {
 			uint8_t custom = (len >= 3) ? body[2] : 0;
 
-			err = antr_prox_search_set(body[0], body[1], custom);
+			err = radiant_ant_prox_search_set(body[0], body[1], custom);
 		}
 		break;
 
 	case RADIANT_WIRE_MESG_SET_SEARCH_CH_PRIORITY_ID:
 		/* body: [ch, priority] */
 		if (len >= 2) {
-			err = antr_search_channel_priority_set(body[0], body[1]);
+			err = radiant_ant_search_channel_priority_set(body[0], body[1]);
 		}
 		break;
 
 	case RADIANT_WIRE_MESG_ACTIVE_SEARCH_SHARING_ID:
 		/* body: [ch, cycles] */
 		if (len >= 2) {
-			err = antr_active_search_sharing_cycles_set(body[0],
+			err = radiant_ant_active_search_sharing_cycles_set(body[0],
 								    body[1]);
 		}
 		break;
@@ -1509,7 +1509,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 	case RADIANT_WIRE_MESG_AUTO_FREQ_CONFIG_ID:
 		/* body: [ch, freq0, freq1, freq2] */
 		if (len >= 4) {
-			err = antr_auto_freq_hop_table_set(body[0], body[1],
+			err = radiant_ant_auto_freq_hop_table_set(body[0], body[1],
 							   body[2], body[3]);
 		}
 		break;
@@ -1517,21 +1517,21 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 	case RADIANT_WIRE_MESG_CHANNEL_CRC_MODE_ID:
 		/* body: [filler, mode] */
 		if (len >= 2) {
-			err = antr_channel_radio_crc_mode_set(body[0], body[1]);
+			err = radiant_ant_channel_radio_crc_mode_set(body[0], body[1]);
 		}
 		break;
 
 	case RADIANT_WIRE_MESG_ID_LIST_ADD_ID:
 		/* body: [ch, dev_lsb, dev_msb, dev_type, trans_type, index] */
 		if (len >= 6) {
-			err = antr_id_list_add(body[0], &body[1], body[5]);
+			err = radiant_ant_id_list_add(body[0], &body[1], body[5]);
 		}
 		break;
 
 	case RADIANT_WIRE_MESG_ID_LIST_CONFIG_ID:
 		/* body: [ch, list_size, exclude_flag] */
 		if (len >= 3) {
-			err = antr_id_list_config(body[0], body[1], body[2]);
+			err = radiant_ant_id_list_config(body[0], body[1], body[2]);
 		}
 		break;
 
@@ -1544,18 +1544,18 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		if (len >= 3) {
 			uint16_t filter = (uint16_t)body[1] |
 					  ((uint16_t)body[2] << 8);
-			err = antr_event_filtering_set(filter);
+			err = radiant_ant_event_filtering_set(filter);
 		} else if (len == 2) {
 			uint16_t filter = (uint16_t)body[0] |
 					  ((uint16_t)body[1] << 8);
-			err = antr_event_filtering_set(filter);
+			err = radiant_ant_event_filtering_set(filter);
 		}
 		break;
 
 	case RADIANT_WIRE_MESG_CONFIG_ADV_BURST_ID:
 		/* body: [filler, config[8..11]]. The filler byte occupies the channel
 		 * slot every message has and is not part of the configuration, so the
-		 * buffer antr_adv_burst_config_set() documents starts at body[1]:
+		 * buffer radiant_ant_adv_burst_config_set() documents starts at body[1]:
 		 * [enable, rf payload size, required modes, 0, 0, optional modes, 0, 0]
 		 * with an optional [stall lsb, stall msb, retry extension].
 		 *
@@ -1564,7 +1564,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		 * packet.
 		 */
 		if (len >= 9 && len <= 12) {
-			err = antr_adv_burst_config_set(&body[1],
+			err = radiant_ant_adv_burst_config_set(&body[1],
 							(uint8_t)(len - 1));
 		}
 		break;
@@ -1574,7 +1574,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		 * RADIANT_WIRE_INVALID_SDU_MASK (0xFF) turns selective updates back off.
 		 */
 		if (len >= 2) {
-			err = antr_sdu_mask_config(body[0], body[1]);
+			err = radiant_ant_sdu_mask_config(body[0], body[1]);
 		}
 		break;
 
@@ -1583,7 +1583,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		 * - masks are defined here and attached to channels by MESG_SDU_CONFIG.
 		 */
 		if (len >= 9) {
-			err = antr_sdu_mask_set(body[0], &body[1]);
+			err = radiant_ant_sdu_mask_set(body[0], &body[1]);
 		}
 		break;
 
@@ -1595,7 +1595,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 	case RADIANT_WIRE_MESG_ENCRYPT_ENABLE_ID:
 		/* body: [ch, mode, key_num, decimation_rate] */
 		if (len >= 4) {
-			err = antr_crypto_channel_enable(body[0], body[1], body[2],
+			err = radiant_ant_crypto_channel_enable(body[0], body[1], body[2],
 							 body[3]);
 		}
 		break;
@@ -1603,16 +1603,16 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 	case RADIANT_WIRE_MESG_SET_ENCRYPT_KEY_ID:
 		/* body: [key_num, key[16]]. No wire constant names the key length;
 		 * that it is 128 bits is stated only in the prose of
-		 * antr_crypto_key_set(), which takes a bare pointer.
+		 * radiant_ant_crypto_key_set(), which takes a bare pointer.
 		 */
 		if (len >= 1 + RADIANT_WIRE_ENCRYPTION_KEY_SIZE) {
-			err = antr_crypto_key_set(body[0], &body[1]);
+			err = radiant_ant_crypto_key_set(body[0], &body[1]);
 		}
 		break;
 
 	case RADIANT_WIRE_MESG_SET_ENCRYPT_INFO_ID:
 		/* body: [info_type, data]. How much data depends on the type, and the
-		 * length has to be checked against it here: antr_crypto_info_set()
+		 * length has to be checked against it here: radiant_ant_crypto_info_set()
 		 * reads a fixed count per type with no size to bound it, so a
 		 * truncated command would otherwise hand the radio whatever follows
 		 * in the parser's frame buffer.
@@ -1638,7 +1638,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 			}
 
 			if (want && len >= want) {
-				err = antr_crypto_info_set(body[0], &body[1]);
+				err = radiant_ant_crypto_info_set(body[0], &body[1]);
 			}
 		}
 		break;
@@ -1655,7 +1655,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 	case RADIANT_WIRE_MESG_RADIANT_SEC_CONFIG_ID:
 		/* body: [ch, switches, W, page_lo, page_hi] */
 		if (len >= 5) {
-			err = antr_sec_config(body[0], body[1], body[2],
+			err = radiant_ant_sec_config(body[0], body[1], body[2],
 					      body[3], body[4]);
 		}
 		break;
@@ -1668,7 +1668,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		 * not cover.
 		 */
 		if (len >= 18) {
-			err = antr_sec_key_set(body[0], body[1], &body[2]);
+			err = radiant_ant_sec_key_set(body[0], body[1], &body[2]);
 		}
 		break;
 
@@ -1688,7 +1688,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 				us = (us << 8) | (uint64_t)body[6 + i];
 			}
 
-			err = antr_sec_epoch_set(body[0], body[1], epoch, us);
+			err = radiant_ant_sec_epoch_set(body[0], body[1], epoch, us);
 		}
 		break;
 
@@ -1703,7 +1703,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		if (len < 2) {
 			break;
 		}
-		err = antr_sec_pair(body[0], body[1],
+		err = radiant_ant_sec_pair(body[0], body[1],
 				    (len > 2) ? &body[2] : NULL,
 				    (uint8_t)(len - 2), reply,
 				    (uint8_t)sizeof(reply), &reply_len);
@@ -1727,7 +1727,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 	case RADIANT_WIRE_MESG_ECS_ENABLE_ID:
 		/* body: [filler, enable] */
 		if (len >= 2) {
-			err = antr_enhanced_channel_spacing_enable(body[1]);
+			err = radiant_ant_enhanced_channel_spacing_enable(body[1]);
 		}
 		break;
 
@@ -1736,7 +1736,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		if (len >= 1) {
 			uint8_t cleared;
 
-			err = antr_pending_transmit_clear(body[0], &cleared);
+			err = radiant_ant_pending_transmit_clear(body[0], &cleared);
 		}
 		break;
 
@@ -1747,14 +1747,14 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 	case RADIANT_WIRE_MESG_BROADCAST_DATA_ID:
 		/* body: [ch, data[8]] */
 		if (len >= 9) {
-			err = antr_broadcast_message_tx(body[0], 8, &body[1]);
+			err = radiant_ant_broadcast_message_tx(body[0], 8, &body[1]);
 		}
 		break;
 
 	case RADIANT_WIRE_MESG_ACKNOWLEDGED_DATA_ID:
 		/* body: [ch, data[8]] */
 		if (len >= 9) {
-			err = antr_acknowledge_message_tx(body[0], 8, &body[1]);
+			err = radiant_ant_acknowledge_message_tx(body[0], 8, &body[1]);
 		}
 		break;
 
@@ -2094,15 +2094,15 @@ static void bridge_thread_fn(void *p1, void *p2, void *p3)
 /* ── Radio event handler (outbound path, chip → host) ───────────────────────── */
 
 /*
- * The one definition of antr_on_message() in the image; the backend calls it,
+ * The one definition of radiant_ant_on_message() in the image; the backend calls it,
  * nothing registers it. The struct it takes is wire-shaped on purpose - three
  * fields, no unions - since this function's whole job is wrapping those bytes
  * in a frame.
  *
  * Runs on the backend's own thread/work queue/callback context, never
- * re-entrantly, never before antr_init() has returned. Touches only
+ * re-entrantly, never before radiant_ant_init() has returned. Touches only
  * statically-initialised state, so it does not depend on the bridge thread
- * existing - keep it that way: antr_init() runs before
+ * existing - keep it that way: radiant_ant_init() runs before
  * ant_serial_bridge_init().
  */
 #if defined(CONFIG_ANT_DONGLE_RX_TAP)
@@ -2113,17 +2113,17 @@ static void bridge_thread_fn(void *p1, void *p2, void *p3)
  * apps/dongle build, so that image stays byte-identical and the `zero-cost` CI
  * job keeps its meaning.
  *
- * Resolved at link time, exactly like antr_on_message() itself and for the
+ * Resolved at link time, exactly like radiant_ant_on_message() itself and for the
  * same reason: there is one definition per image (apps/dongle_thread/src/
  * rx_tap.c) and nothing to register, so there is nothing here that can fail.
  * It reads a copy and returns; what goes out the transport below is unchanged.
  */
-void ant_dongle_rx_tap(const struct antr_msg *msg);
+void ant_dongle_rx_tap(const struct radiant_ant_msg *msg);
 #endif
 
-static void on_message_forward(const struct antr_msg *msg);
+static void on_message_forward(const struct radiant_ant_msg *msg);
 
-void antr_on_message(const struct antr_msg *msg)
+void radiant_ant_on_message(const struct radiant_ant_msg *msg)
 {
 #if defined(CONFIG_ANT_DONGLE_RX_TAP)
 	ant_dongle_rx_tap(msg);
@@ -2150,9 +2150,9 @@ void antr_on_message(const struct antr_msg *msg)
 	atomic_dec(&evt_inflight);
 }
 
-/* antr_on_message()'s body past the hooks: the reset check, burst buffer
+/* radiant_ant_on_message()'s body past the hooks: the reset check, burst buffer
  * handover, event filter and the frame for the host. */
-static void on_message_forward(const struct antr_msg *msg)
+static void on_message_forward(const struct radiant_ant_msg *msg)
 {
 	/*
 	 * Wire format: [0xA4][LEN][ID][channel+payload...][XOR checksum]
@@ -2192,7 +2192,7 @@ static void on_message_forward(const struct antr_msg *msg)
 			{
 				uint16_t filter = 0u;
 
-				if (antr_event_filtering_get(&filter) == 0 &&
+				if (radiant_ant_event_filtering_get(&filter) == 0 &&
 				    (filter & (uint16_t)(1u << (msg_data[2] - 1u))) != 0u) {
 					return;
 				}
@@ -2240,7 +2240,7 @@ int ant_serial_bridge_init(void)
 {
 	tx_power_reset();
 
-	/* No callback registration: antr_on_message() above is resolved at link
+	/* No callback registration: radiant_ant_on_message() above is resolved at link
 	 * time, so there is nothing here that can fail and nothing to report.
 	 */
 	k_thread_create(&bridge_thread_data, bridge_stack,

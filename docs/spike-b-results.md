@@ -118,7 +118,7 @@ granted", but it was never needed.
 The first three-radio run still failed before the data below was captured:
 burst packets after the first died with `EVENT_TRANSFER_TX_FAILED`, because
 `spike_b_drive.py` paced on `EVENT_TRANSFER_NEXT_DATA_BLOCK` - an event
-`src/ant_serial_bridge.c` consumes and never forwards to the host, on the
+`apps/common/ant_serial_bridge.c` consumes and never forwards to the host, on the
 stated grounds that a real ANT stick frames bursts itself. Streaming instead
 of waiting for that event fixed it: the bridge already blocks in
 `k_sem_take(&burst_block_free, K_MSEC(1000))` before copying each block, so it

@@ -72,7 +72,7 @@ Today the radio is Nordic's `libant.a`, a prebuilt binary from the private,
 non-redistributable `ant-nrfconnect/sdk-ant` repository pinned at `v2.1.0`. Losing
 access to that repository means **nothing builds** — not even the radio-stub
 configuration, because the root `CMakeLists.txt` hard-fails when sdk-ant's
-headers are absent and `src/ant_serial_bridge.c` takes every protocol constant
+headers are absent and `apps/common/ant_serial_bridge.c` takes every protocol constant
 from sdk-ant's `ant_parameters.h`. Garmin closed the ANT+ membership and
 certification programs on 30 June 2025. The dependency is a single point of
 failure on a repository nobody new can be granted access to.
@@ -93,7 +93,7 @@ Three things constrain the answer:
    correct is A/B against an implementation that is known correct — and that
    implementation is `libant.a`. Delete the sdk-ant backend and every A/B gate
    in the plan becomes unrunnable.
-3. **The shim is self-checking, for free.** `src/ant_radio_sdk_ant.c` is about
+3. **The shim is self-checking, for free.** `apps/common/ant_radio_sdk_ant.c` is about
    50 one-line forwarders plus a `BUILD_ASSERT` block comparing every `RADIANT_WIRE_*`
    constant against its `MESG_*` counterpart in sdk-ant's headers. If sdk-ant
    changes a signature the file stops compiling; if one of our constants drifts
@@ -105,14 +105,14 @@ Three things constrain the answer:
 
 ### One seam, three backends
 
-A single contract, `src/ant_radio.h` (`antr_*`, about 50 functions) plus
+A single contract, `<radiant/radiant_ant.h>` (`radiant_ant_*`, about 50 functions) plus
 `radiant/include/radiant/radiant_wire.h` (`RADIANT_WIRE_*` protocol constants), with three implementations
 behind it:
 
 ```
-src/ant_serial_bridge.c        unchanged logic; speaks only RADIANT_WIRE_*/antr_*
+apps/common/ant_serial_bridge.c        unchanged logic; speaks only RADIANT_WIRE_*/radiant_ant_*
         |
-   src/ant_radio.h             our ~50-function contract  (antr_*)
+   <radiant/radiant_ant.h>             our ~50-function contract  (radiant_ant_*)
    radiant/include/radiant/radiant_wire.h              our protocol constants     (RADIANT_WIRE_*)
         |
    +----+-----------------+----------------------+
@@ -250,14 +250,14 @@ this project's documentation rules exist to prevent.
 - Three backends is three things to keep compiling. CI builds all of them, so
   the cost is compute, not attention.
 - A mechanical rename of 47 call sites and about 45 constant references in
-  `src/ant_serial_bridge.c`, plus the stub (renamed in the same wave from
-  `src/ant_stub.c` to `src/ant_radio_stub.c`). Zero behavioural risk, and
+  `apps/common/ant_serial_bridge.c`, plus the stub (renamed in the same wave from
+  `src/ant_stub.c` to `apps/common/ant_radio_stub.c`). Zero behavioural risk, and
   verifiable before and after with `ant_probe.py`, `ant_features.py`,
   `ant_session.py` and `ant_bench.py` — which is why it is worth doing all at
   once rather than incrementally.
 - The shim must absorb two couplings the bridge currently has: the event path
   inverts (`ant_cb_register()`/`ant_evt_t` becomes a fixed
-  `void antr_on_message(const struct antr_msg *)` implemented by the bridge,
+  `void radiant_ant_on_message(const struct radiant_ant_msg *)` implemented by the bridge,
   because `ant_evt_t` is a four-level nested union whose layout is not ours to
   depend on), and `ant_channel_open()` is a macro rather than a function, so the
   split into `..._with_offset` has to be reproduced. Ten lines each, and the

@@ -30,7 +30,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
-#include "ant_radio.h"
+#include <radiant/radiant_ant.h>
 #include <radiant/radiant_wire.h>
 #include "profile_hr.h"
 #include "node_ident.h"
@@ -103,17 +103,17 @@ static void ant_suppression_update(void)
 	}
 
 	if (want_open) {
-		/* No pre-open stage: antr_broadcast_message_tx() refuses a
+		/* No pre-open stage: radiant_ant_broadcast_message_tx() refuses a
 		 * closed channel (NOT_OPENED, by design) and the refused call
 		 * still consumed a page. open() posts the first slot from
 		 * whatever the buffer holds - the last page, after a resume -
 		 * and EVENT_TX after that slot starts the real stream. */
-		if (antr_channel_open(HR_CHANNEL) == RADIANT_WIRE_RESPONSE_NO_ERROR) {
+		if (radiant_ant_channel_open(HR_CHANNEL) == RADIANT_WIRE_RESPONSE_NO_ERROR) {
 			ant_open = true;
 			LOG_INF("ANT+ resumed (BLE disconnected)");
 		}
 	} else {
-		if (antr_channel_close(HR_CHANNEL) == RADIANT_WIRE_RESPONSE_NO_ERROR) {
+		if (radiant_ant_channel_close(HR_CHANNEL) == RADIANT_WIRE_RESPONSE_NO_ERROR) {
 			ant_open = false;
 			LOG_INF("ANT+ suppressed (BLE connected)");
 		}
@@ -127,7 +127,7 @@ static void ant_suppression_update(void)
  * RUNS ON THE SYSTEM WORKQUEUE, and that is the whole reason it exists as a
  * separate function rather than being done inside hrm_sensor_report_beat().
  * profile_hr has no lock and is already reached from the radiant callback path
- * (antr_on_message -> load_next_page -> profile_hr_next). Doing the profile
+ * (radiant_ant_on_message -> load_next_page -> profile_hr_next). Doing the profile
  * work here keeps that at two contexts however the source is driven, including
  * from an ISR. hrm_sensor.h's header states the rule in full.
  *
@@ -205,14 +205,14 @@ static void load_next_page(void)
 		return;
 	}
 
-	(void)antr_broadcast_message_tx(HR_CHANNEL, sizeof(body), body);
+	(void)radiant_ant_broadcast_message_tx(HR_CHANNEL, sizeof(body), body);
 }
 
 /*
  * The backend's only way up. The dongle implements this by forwarding to USB;
  * a node implements it by being the application the messages were for.
  */
-void antr_on_message(const struct antr_msg *msg)
+void radiant_ant_on_message(const struct radiant_ant_msg *msg)
 {
 	if (msg == NULL || msg->data == NULL) {
 		return;
@@ -230,15 +230,15 @@ void antr_on_message(const struct antr_msg *msg)
 
 static int ant_start(uint16_t devnum)
 {
-	antr_err_t rc;
+	radiant_ant_err_t rc;
 
-	rc = antr_network_address_set(HR_NETWORK, ant_plus_key);
+	rc = radiant_ant_network_address_set(HR_NETWORK, ant_plus_key);
 	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("network key: %d", (int)rc);
 		return -EIO;
 	}
 
-	rc = antr_channel_assign(HR_CHANNEL, RADIANT_WIRE_CHANNEL_TYPE_MASTER,
+	rc = radiant_ant_channel_assign(HR_CHANNEL, RADIANT_WIRE_CHANNEL_TYPE_MASTER,
 				 HR_NETWORK, 0u);
 	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("assign: %d", (int)rc);
@@ -247,19 +247,19 @@ static int ant_start(uint16_t devnum)
 
 	/* Transmission type 5, matching apps/sim and tools/ant_sim.py - part of
 	 * the channel id a receiver matches on. */
-	rc = antr_channel_id_set(HR_CHANNEL, devnum, HR_DEVICE_TYPE, 5u);
+	rc = radiant_ant_channel_id_set(HR_CHANNEL, devnum, HR_DEVICE_TYPE, 5u);
 	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("channel id: %d", (int)rc);
 		return -EIO;
 	}
 
-	rc = antr_channel_period_set(HR_CHANNEL, HR_PERIOD_COUNTS);
+	rc = radiant_ant_channel_period_set(HR_CHANNEL, HR_PERIOD_COUNTS);
 	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("period: %d", (int)rc);
 		return -EIO;
 	}
 
-	rc = antr_channel_radio_freq_set(HR_CHANNEL, HR_RF_FREQ);
+	rc = radiant_ant_channel_radio_freq_set(HR_CHANNEL, HR_RF_FREQ);
 	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("rf freq: %d", (int)rc);
 		return -EIO;
@@ -267,14 +267,14 @@ static int ant_start(uint16_t devnum)
 
 	/*
 	 * No pre-open stage. It was here to stop the first frame going out
-	 * empty, and it never could: antr_broadcast_message_tx() refuses a
+	 * empty, and it never could: radiant_ant_broadcast_message_tx() refuses a
 	 * channel that is not open yet (NOT_OPENED, by design), so the call
 	 * only consumed a page for nothing. open() posts the first slot from
 	 * whatever the buffer holds (zeros at boot - HR's computed 0 reads as
 	 * "invalid" to a receiver), and EVENT_TX after that slot starts the
 	 * real stream.
 	 */
-	rc = antr_channel_open(HR_CHANNEL);
+	rc = radiant_ant_channel_open(HR_CHANNEL);
 	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("open: %d", (int)rc);
 		return -EIO;
@@ -291,8 +291,8 @@ int main(void)
 
 	LOG_INF("RadiANT heart-rate node: ANT+ 0x78");
 
-	if (antr_init() != RADIANT_WIRE_RESPONSE_NO_ERROR) {
-		LOG_ERR("antr_init failed");
+	if (radiant_ant_init() != RADIANT_WIRE_RESPONSE_NO_ERROR) {
+		LOG_ERR("radiant_ant_init failed");
 		return 0;
 	}
 

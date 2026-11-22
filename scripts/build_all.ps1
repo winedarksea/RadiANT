@@ -44,7 +44,7 @@
     renamed to CONFIG_SOC_SERIES_NRF52, so libant.a is never located.
 
 .PARAMETER Backend
-    Which implementation of radiant/include/radiant/ant_radio.h to build against:
+    Which implementation of radiant/include/radiant/radiant_ant.h to build against:
     core (the clean-room radiant stack, the default, and the one release
     artifacts are cut from), sdk_ant (Nordic's prebuilt libant.a) or stub.
     Passed through as -DANT_RADIO and asserted afterwards against .config.

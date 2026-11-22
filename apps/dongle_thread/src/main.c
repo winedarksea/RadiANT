@@ -25,9 +25,9 @@ LOG_MODULE_REGISTER(ant_dongle_thread, LOG_LEVEL_INF);
 
 /*
  * Overrides the weak default in apps/common/ant_dongle_main.c. Runs after
- * antr_init() has succeeded and before the transport comes up.
+ * radiant_ant_init() has succeeded and before the transport comes up.
  *
- * AFTER antr_init() is the whole reason the hook is at that point rather than
+ * AFTER radiant_ant_init() is the whole reason the hook is at that point rather than
  * in main(): the radio backend holds an explicit HFXO request that is
  * load-bearing - without it the 1 MHz timebase runs 0.42 % fast on the
  * internal RC between timeslots, invisible in any counter.

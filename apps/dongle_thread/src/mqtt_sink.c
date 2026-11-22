@@ -69,7 +69,7 @@
 #include <zephyr/net/mqtt.h>
 #include <zephyr/net/socket.h>
 
-#include "ant_radio.h" /* ANTR_HOST_THREAD_PRIORITY */
+#include <radiant/radiant_ant.h> /* RADIANT_ANT_HOST_THREAD_PRIORITY */
 
 #include "radiant_binding.h"
 #include "radiant_bridge.h"
@@ -1365,4 +1365,4 @@ static void mqtt_keepalive_fn(void *a, void *b, void *c)
 }
 
 K_THREAD_DEFINE(mqtt_keepalive_tid, MQTT_KEEPALIVE_STACK, mqtt_keepalive_fn,
-		NULL, NULL, NULL, ANTR_HOST_THREAD_PRIORITY + 2, 0, 0);
+		NULL, NULL, NULL, RADIANT_ANT_HOST_THREAD_PRIORITY + 2, 0, 0);

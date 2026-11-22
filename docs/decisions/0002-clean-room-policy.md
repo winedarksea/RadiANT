@@ -182,10 +182,10 @@ defence ever consists of.
 Two consequences follow that are easy to get wrong:
 
 - **The shim is written from sdk-ant's headers and that is fine.**
-  `src/ant_radio_sdk_ant.c` is glue against a licensed API we are entitled to
+  `apps/common/ant_radio_sdk_ant.c` is glue against a licensed API we are entitled to
   call. It is not part of `radiant` and must not be used as a route to inform
   it. An `radiant` author who wants to know what a shim forwarder does reads
-  `src/ant_radio.h`, our own contract.
+  `<radiant/radiant_ant.h>`, our own contract.
 - **`ant_network_address_set()` stays permanently limited.** The key→address
   function is unknown to anyone outside Garmin and is not needed: `ant_net.c`
   holds a small table seeded with ANT+ (`B9A521FBBD72C345` → `A6 C5`) and

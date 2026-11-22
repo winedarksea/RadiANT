@@ -3,8 +3,8 @@
  * rx_tap.c - where ANT broadcasts become struct radiant_sample.
  *
  * apps/common/ant_serial_bridge.c calls ant_dongle_rx_tap() at the top of
- * antr_on_message(), behind CONFIG_ANT_DONGLE_RX_TAP. The symbol is resolved
- * at link time and defined here, in exactly the shape antr_on_message() itself
+ * radiant_ant_on_message(), behind CONFIG_ANT_DONGLE_RX_TAP. The symbol is resolved
+ * at link time and defined here, in exactly the shape radiant_ant_on_message() itself
  * uses: no registration call, one definition, and apps/dongle - which never
  * sets the symbol - compiles the call site away entirely, so its image stays
  * byte-identical and the `zero-cost` CI job stays green.
@@ -21,8 +21,8 @@
  * struct radiant_sample::t_us is specified (radiant_bridge.h, and
  * docs/radiant-bridge.md section 3) as "the decode-time t_sync, not dequeue
  * time, so a sink delayed behind a full bus still reports when the sample was
- * actually heard". struct antr_msg carries no timestamp at all - it is
- * deliberately wire-shaped, three fields, and ant_radio.h says in as many
+ * actually heard". struct radiant_ant_msg carries no timestamp at all - it is
+ * deliberately wire-shaped, three fields, and radiant_ant.h says in as many
  * words that an extra field "would just be one more thing that could disagree
  * with the bytes". So the value taken here is k_uptime_ticks() at tap time,
  * which is a few hundred microseconds after t_sync and jitters with the
@@ -37,10 +37,10 @@
  * for downstream is ordering and expiry, both at second granularity
  * (radiant_liveness.c's 3x-period rule).
  *
- * DO NOT "fix" this by plumbing a timestamp through the antr_* seam. That
+ * DO NOT "fix" this by plumbing a timestamp through the radiant_ant_* seam. That
  * seam is a published contract (docs/sdk-ant-contract.md), it is implemented
  * by the sdk_ant backend as well as by radiant, and tools/ant_conformance.py
- * pins the resulting byte stream. Widening struct antr_msg to improve a field
+ * pins the resulting byte stream. Widening struct radiant_ant_msg to improve a field
  * that no accumulator reads would put a conformance transcript at risk to buy
  * nothing.
  *
@@ -74,7 +74,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
-#include "ant_radio.h"
+#include <radiant/radiant_ant.h>
 #include <radiant/radiant_wire.h>
 
 #include "radiant_binding.h"
@@ -204,7 +204,7 @@ uint32_t ant_bridge_unbound_drops(void)
 	return unbound_drops;
 }
 
-void ant_dongle_rx_tap(const struct antr_msg *msg)
+void ant_dongle_rx_tap(const struct radiant_ant_msg *msg)
 {
 	uint32_t source;
 	uint8_t  channel;

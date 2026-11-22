@@ -196,12 +196,12 @@ config USBD_CDC_ACM_CLASS
 
 endif # ANT_DONGLE_TRANSPORT_USB_NEXT
 
-# CONFIG_RADIANT_ANTR_API and CONFIG_RADIANT_SEC_HOST_MESSAGES: the
-# antr_* adapter's own symbols, shared with apps/dongle, apps/hrm_ble and
+# CONFIG_RADIANT_ANT_API and CONFIG_RADIANT_SEC_HOST_MESSAGES: the
+# radiant_ant_* adapter's own symbols, shared with apps/dongle, apps/hrm_ble and
 # radiant/tests/api the same way radiant/src/node/Kconfig and
-# radiant/src/profiles/Kconfig already are. See apps/common/Kconfig.antr_api's
+# radiant/src/profiles/Kconfig already are. See apps/common/Kconfig.ant_api's
 # header for why they live there and not in radiant/Kconfig.
-rsource "../common/Kconfig.antr_api"
+rsource "../common/Kconfig.ant_api"
 
 # CONFIG_ANT_DONGLE_MAIN and CONFIG_ANT_DONGLE_MAIN_BANNER: the boot sequence
 # this application shares with apps/dongle. This application overrides the
@@ -233,8 +233,8 @@ choice ANT_DONGLE_RADIO
 	prompt "ANT radio backend"
 	default ANT_DONGLE_RADIO_CORE
 	help
-	  Which implementation of radiant/include/radiant/ant_radio.h is compiled. All three
-	  present the same antr_* contract, so the serial bridge and main() do
+	  Which implementation of radiant/include/radiant/radiant_ant.h is compiled. All three
+	  present the same radiant_ant_* contract, so the serial bridge and main() do
 	  not know which is present - the same shape as the transport choice
 	  above, and for the same reason.
 
@@ -272,7 +272,7 @@ config ANT_DONGLE_RADIO_STUB
 	bool "Stub out the ANT radio layer"
 	help
 	  Compile apps/common/ant_radio_stub.c in place of a real ANT stack.
-	  Every antr_*() entry point becomes a no-op returning success - useful
+	  Every radiant_ant_*() entry point becomes a no-op returning success - useful
 	  for bringing up the Thread/coexistence half of this image without a
 	  working ANT build, but not a coexistence measurement of anything.
 
@@ -395,7 +395,7 @@ config ANT_DONGLE_RX_TAP
 	bool "Feed the sample bus from received ANT broadcasts"
 	help
 	  Compiles src/rx_tap.c and makes apps/common/ant_serial_bridge.c call
-	  it at the top of antr_on_message(). The call site is compiled out
+	  it at the top of radiant_ant_on_message(). The call site is compiled out
 	  entirely without this symbol, which is what keeps apps/dongle's image
 	  byte-identical and the `zero-cost` CI job meaningful.
 
@@ -439,11 +439,11 @@ config ANT_DONGLE_SELF_CHANNELS_DELAY_S
 	range 1 600
 	depends on ANT_DONGLE_SELF_CHANNELS > 0
 	help
-	  A real precondition rather than caution: ant_radio.h forbids any
-	  antr_* call before antr_init() has returned, and src/self_channels.c
+	  A real precondition rather than caution: radiant_ant.h forbids any
+	  radiant_ant_* call before radiant_ant_init() has returned, and src/self_channels.c
 	  runs on its own thread rather than on the post-radio hook (which this
 	  application's src/main.c already owns for the coexistence loads). The
-	  boot sequence reaches antr_init() within the UF2 settle delay plus a
+	  boot sequence reaches radiant_ant_init() within the UF2 settle delay plus a
 	  few milliseconds; 5 s is comfortably past it.
 
 config ANT_DONGLE_PAIRING_WINDOW_S

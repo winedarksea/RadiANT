@@ -71,7 +71,7 @@
  *   binding whose period was never set does not go falsely STALE; it simply
  *   never goes STALE at all, silently, and only a counter says so.
  *   apps/dongle_thread/src/self_channels.c does set it, reading the value back
- *   off the channel with antr_channel_period_get() at bind time - verified,
+ *   off the channel with radiant_ant_channel_period_get() at bind time - verified,
  *   not assumed. Any NEW bind path must do the same.
  *
  *   ACQUISITION. A slave channel's period must match its master's, so a

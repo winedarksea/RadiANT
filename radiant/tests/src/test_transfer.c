@@ -12,7 +12,7 @@
  * whose failures look like "ERG mode does not work" months later. Three
  * silent failure modes, each with a dedicated test:
  *
- *   1. THE STALL. src/ant_radio.h obligations B1-B5: the bridge holds one
+ *   1. THE STALL. <radiant/radiant_ant.h> obligations B1-B5: the bridge holds one
  *      24-byte block behind a semaphore, released only on NEXT_DATA_BLOCK,
  *      TX_COMPLETED, or TX_FAILED. Miss one release and the bridge's
  *      k_sem_take() waits its full 1000 ms per host packet, invisibly.
@@ -598,7 +598,7 @@ ZTEST(transfer, test_acknowledged_data_is_a_one_packet_burst)
  * it is a transfer that can never complete.
  *
  * It could never complete, and did not: with cfg.slot_opener set (which
- * ant_radio_radiant.c does for every master - a trainer, a treadmill, any
+ * radiant_ant.c does for every master - a trainer, a treadmill, any
  * dongle channel opened as a master) packet 0 of an acknowledged transfer is
  * 0xAA, radiant_ctrl_reply_for(0xAA) returned 0, radiant_transfer_on_data()
  * refused with ENOTSUP, and the originator sat out its reply window and
@@ -2101,7 +2101,7 @@ ZTEST(transfer, test_reply_plan_is_not_asked_about_a_refused_packet)
  * The old test asserted ENOTSUP and arms_tx == 0, on the reasoning that bit 3
  * of the reply was unmeasured so refusing kept the gap honest. What it
  * actually pinned was a dead path: a master originates 0xAA (see
- * test_acknowledged_data_is_a_one_packet_burst, and ant_radio_radiant.c sets
+ * test_acknowledged_data_is_a_one_packet_burst, and radiant_ant.c sets
  * cfg.slot_opener for every master), so an acknowledger that refuses 0xAA
  * cannot complete a single master-originated acknowledged transfer. On the
  * bench that is exactly what happened, indefinitely, with this suite green.
@@ -2177,7 +2177,7 @@ ZTEST(transfer, test_aborting_our_own_acknowledgement_raises_no_transfer_event)
 	zassert_not_null(last_arm_of(FAKE_RADIO_ARM_TX));
 	zassert_equal(RADIANT_TRANSFER_STATE_TX_REPLY, radiant_transfer_state(&xfer));
 
-	/* antr_channel_close()'s order: engine abort, then the slot cancel. */
+	/* radiant_ant_channel_close()'s order: engine abort, then the slot cancel. */
 	zassert_equal(RADIANT_TRANSFER_OK, radiant_transfer_abort(&xfer));
 	zassert_ok(radiant_sched_cancel(CH_XFER));
 	fake_radio_advance_to(t_data + RADIANT_TRANSFER_REPLY_US + 1000u);
@@ -2219,7 +2219,7 @@ ZTEST(transfer, test_a_non_final_slot_opening_packet_is_acknowledged)
 
 	fake_radio_advance_past_tx(tx->t_sync_at);
 	/* A non-final packet opened an inbound burst; close it the way
-	 * antr_channel_close() does. */
+	 * radiant_ant_channel_close() does. */
 	zassert_equal(RADIANT_TRANSFER_STATE_WAIT_NEXT, radiant_transfer_state(&xfer));
 	zassert_equal(RADIANT_TRANSFER_OK, radiant_transfer_abort(&xfer));
 	zassert_ok(radiant_sched_cancel(CH_XFER));
@@ -2435,7 +2435,7 @@ ZTEST(transfer, test_the_first_packet_lands_where_the_scheduler_asked)
 		     "%u us", (unsigned)arm->follow_on_us);
 
 	/* Copied, not owned: no block pointer ever comes back for acknowledged
-	 * data, because antr_acknowledge_message_tx() copies its payload. */
+	 * data, because radiant_ant_acknowledge_message_tx() copies its payload. */
 	reset_blocks();
 	acks_to_air = 1u;
 	drive();
@@ -2800,7 +2800,7 @@ static radiant_time_t send_armed_ack(void)
 	return at;
 }
 
-/* Close an engine left mid-burst the way antr_channel_close() does. */
+/* Close an engine left mid-burst the way radiant_ant_channel_close() does. */
 static void close_like_the_owner(void)
 {
 	zassert_equal(RADIANT_TRANSFER_OK, radiant_transfer_abort(&xfer));

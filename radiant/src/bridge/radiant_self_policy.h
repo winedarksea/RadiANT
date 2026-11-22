@@ -5,7 +5,7 @@
  * apps/dongle_thread/src/self_channels.c drives a few slave channels of its
  * own beside whatever an ANT host is doing, polls each one once a second, and
  * acts. The DECISIONS in that loop live here, as pure functions over plain
- * inputs, and the file there keeps only the antr_* calls. That split exists
+ * inputs, and the file there keeps only the radiant_ant_* calls. That split exists
  * because radiant/tests can reach radiant and nothing in apps/ (the treadmill
  * control token moved here for the same reason): a policy that can only be
  * exercised on a bench with real sensors is a policy nobody re-checks.

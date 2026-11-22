@@ -48,14 +48,14 @@ In `prj.conf`:
 
 ```
 CONFIG_RADIANT=y
-CONFIG_RADIANT_ANTR_API=y
+CONFIG_RADIANT_ANT_API=y
 ```
 
 On nRF, also copy a devicetree overlay from the samples' `boards/` directory. It
 names the timer the radio uses, and the build stops with an error if it is missing.
 
-**3. Write your application.** Call `antr_init()`, configure a channel, and
-implement `antr_on_message()`. The [integration guide](docs/integration.md) walks
+**3. Write your application.** Call `radiant_ant_init()`, configure a channel, and
+implement `radiant_ant_on_message()`. The [integration guide](docs/integration.md) walks
 through it, and the receiver sample is under 100 lines including comments.
 
 **Check you got a real radio:**
@@ -97,7 +97,7 @@ what is not.
 | Part | Enable with | Include |
 |---|---|---|
 | Link layer and radio backend | `CONFIG_RADIANT` | `<radiant/radiant_channel.h>` and others |
-| `antr_*` channel API and runtime | `CONFIG_RADIANT_ANTR_API` | `<radiant/ant_radio.h>` |
+| `radiant_ant_*` channel API and runtime | `CONFIG_RADIANT_ANT_API` | `<radiant/radiant_ant.h>` |
 | ANT+ device profile pages | `CONFIG_RADIANT_PROFILES` | `"profile_hr.h"` and others |
 | Sample bus, sinks, profile adapters | `CONFIG_RADIANT_BRIDGE` | `"radiant_bridge.h"` and others |
 | Rule, liveness and Matter-map sinks on the bus | `CONFIG_RADIANT_BRIDGE_RULES`, `_LIVENESS`, `_MATTER_MAP` | `"radiant_rules.h"`, `"radiant_liveness.h"`, `"radiant_matter.h"` |
@@ -114,7 +114,7 @@ whether or not you call into its file, so each of the three has its own switch.
 - Optional security: secured channels do **not** interoperate with standard ANT+
   profiles. See [`../docs/radiant-security.md`](../docs/radiant-security.md).
 
-`CONFIG_RADIANT_ANTR_API` is the usual choice. Without it you write the runtime
+`CONFIG_RADIANT_ANT_API` is the usual choice. Without it you write the runtime
 yourself against the low-level API, which the end of the
 [integration guide](docs/integration.md) describes.
 

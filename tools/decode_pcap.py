@@ -613,7 +613,7 @@ class Ledger:
 
     There is no "superseded" case: a submit while a transfer is pending is
     refused with TRANSFER_IN_PROGRESS, not swapped in for the pending one
-    (antr_acknowledge_message_tx() in radiant/src/antr/ant_radio_radiant.c;
+    (radiant_ant_acknowledge_message_tx() in radiant/src/ant_api/radiant_ant.c;
     the Garmin does the same, 142 refusals in the 2026-11-15 22:06 capture),
     and a slave's command whose opener never comes still ends in TX_FAILED
     (the RADIANT_API_ACK_OPENER_PERIODS expiry). So every accepted submit

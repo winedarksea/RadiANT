@@ -522,7 +522,7 @@ static int pair_finish(struct pair_ctx *c, const char *label,
 	int                       rc;
 
 	/* Device number read from the channel, not the wire, since it's bound
-	 * into the KDF (same reasoning as antr_sec_key_set()). Also checked at
+	 * into the KDF (same reasoning as radiant_ant_sec_key_set()). Also checked at
 	 * set_nonce; if it fails here anyway (the ID changed since), the
 	 * callers free the context rather than leave a step to retry. */
 	if (devnum == 0u) {

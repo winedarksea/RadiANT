@@ -1,32 +1,32 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * ant_radio_radiant.h (was radiant/include/radiant/radiant_api.h) -
- * what ant_radio_radiant.c presents to the rest of the image, now that it is
+ * radiant_ant_internal.h (was radiant/include/radiant/radiant_api.h) -
+ * what radiant_ant.c presents to the rest of the image, now that it is
  * the application's own adapter rather than a module header. See
- * src/Kconfig.antr_api's CONFIG_RADIANT_ANTR_API for why it moved.
+ * src/Kconfig.ant_api's CONFIG_RADIANT_ANT_API for why it moved.
  *
- * Provenance: clean-room, from src/ant_radio.h, docs/sdk-ant-contract.md and
+ * Provenance: clean-room, from <radiant/radiant_ant.h>, docs/sdk-ant-contract.md and
  * the six radiant module headers it composes.
  * See docs/decisions/0002-clean-room-policy.md.
  *
- * ant_radio_radiant.c's real interface is src/ant_radio.h (the antr_* entry
+ * radiant_ant.c's real interface is <radiant/radiant_ant.h> (the radiant_ant_* entry
  * points), plus a few symbols the core modules leave undefined on purpose so
  * a build that forgets one fails at link time: radiant_channel_event_out()
  * (adapts to radiant_event_post_channel_event()), radiant_event_crit_enter/exit()
  * (irq_lock(), since the producer is a radio ISR and a mutex would be wrong),
  * radiant_event_wakeup() (semaphore give, O(1), ISR-safe), and
- * radiant_on_message() (the one-line forward onto antr_on_message()). None
+ * radiant_on_message() (the one-line forward onto radiant_ant_on_message()). None
  * belong in a public header; what's left here is the event thread's identity
  * and the integration counters.
  *
  * Hard rule: radiant_event_drain() is THREAD CONTEXT ONLY and must never run
- * inside an antr_* call the bridge made (docs/sdk-ant-contract.md forbids
- * re-entering antr_on_message()). ant_radio_radiant.c owns a thread that
+ * inside an radiant_ant_* call the bridge made (docs/sdk-ant-contract.md forbids
+ * re-entering radiant_ant_on_message()). radiant_ant.c owns a thread that
  * takes the semaphore, drains, and runs housekeeping.
  */
 
-#ifndef ANT_RADIO_RADIANT_H_
-#define ANT_RADIO_RADIANT_H_
+#ifndef RADIANT_ANT_INTERNAL_H_
+#define RADIANT_ANT_INTERNAL_H_
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -84,7 +84,7 @@ extern "C" {
 /* Counters. Each distinguishes two outcomes that look the same from outside. */
 struct radiant_api_stats {
 	uint32_t drains;          /* radiant_event_drain() calls that delivered */
-	uint32_t delivered;       /* messages handed to antr_on_message() */
+	uint32_t delivered;       /* messages handed to radiant_ant_on_message() */
 	uint32_t housekeeps;      /* thread wakes that ran the tick trio */
 	uint32_t pumps;           /* scheduling passes posted from thread ctx */
 	uint32_t rx_posted;       /* received data messages queued for the host */
@@ -202,7 +202,7 @@ struct radiant_api_stats {
 
 const struct radiant_api_stats *radiant_api_stats_get(void);
 
-/* True once antr_init() has returned 0. The bridge has no business asking, but
+/* True once radiant_ant_init() has returned 0. The bridge has no business asking, but
  * a diagnostic line does, and so does a test double. */
 bool radiant_api_ready(void);
 
@@ -210,4 +210,4 @@ bool radiant_api_ready(void);
 }
 #endif
 
-#endif /* ANT_RADIO_RADIANT_H_ */
+#endif /* RADIANT_ANT_INTERNAL_H_ */

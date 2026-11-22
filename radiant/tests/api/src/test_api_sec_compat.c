@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * A compat context goes with its channel. antr_channel_unassign() and
- * antr_stack_reset() (SYSTEM_RESET) used to release only the radiant_sec
+ * A compat context goes with its channel. radiant_ant_channel_unassign() and
+ * radiant_ant_stack_reset() (SYSTEM_RESET) used to release only the radiant_sec
  * context, so a compat context on an unassigned channel stayed installed with
  * its epoch. radiant_sec_compat_live_twin() then kept reporting it, and
  * node_ident_arm_compat() refused every later arm under the same root and
@@ -16,7 +16,7 @@
 
 #include <zephyr/ztest.h>
 
-#include <radiant/ant_radio.h>
+#include <radiant/radiant_ant.h>
 #include <radiant/radiant_wire.h>
 #include <radiant/radiant_sec.h>
 #include <radiant/radiant_sec_compat.h>
@@ -40,8 +40,8 @@ static const uint8_t net_key[8] = {
 
 static void assign(uint8_t ch)
 {
-	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
-		      antr_channel_assign(ch,
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_channel_assign(ch,
 					  (uint8_t)RADIANT_WIRE_CHANNEL_TYPE_MASTER,
 					  0u, 0u));
 }
@@ -65,36 +65,36 @@ static void key_both_run_a(void)
 
 ZTEST(api, test_sec_compat_unassign_releases_the_compat_context)
 {
-	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
-		      antr_network_address_set(0u, net_key));
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_network_address_set(0u, net_key));
 	assign(CA);
 	assign(CB);
 	key_both_run_a();
 
-	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
-		      antr_channel_unassign(CA));
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_channel_unassign(CA));
 
 	zassert_false(radiant_sec_compat_live_twin(CB),
 		      "an unassigned channel's compat context still counts as "
 		      "a live twin: node_ident's next arm is EBUSY until reboot");
 	zassert_equal(RADIANT_SEC_ENOKEY,
 		      radiant_sec_compat_set_epoch(CA, 8u, 0u, 0u, PERIOD),
-		      "the compat key outlived antr_channel_unassign()");
+		      "the compat key outlived radiant_ant_channel_unassign()");
 
-	(void)antr_channel_unassign(CB);
+	(void)radiant_ant_channel_unassign(CB);
 
 	api_assert_no_viol();
 }
 
 ZTEST(api, test_sec_compat_system_reset_releases_every_compat_context)
 {
-	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
-		      antr_network_address_set(0u, net_key));
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_network_address_set(0u, net_key));
 	assign(CA);
 	assign(CB);
 	key_both_run_a();
 
-	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR, antr_stack_reset());
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR, radiant_ant_stack_reset());
 
 	zassert_equal(RADIANT_SEC_ENOKEY,
 		      radiant_sec_compat_set_epoch(CA, 8u, 0u, 0u, PERIOD),

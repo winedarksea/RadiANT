@@ -33,7 +33,7 @@
  * ===========================================================================
  *
  * ant_matter_start() is called from ant_dongle_post_radio_init(), which runs
- * after antr_init() and BEFORE usb_ant_class_init(). Nrf::Matter::StartServer()
+ * after radiant_ant_init() and BEFORE usb_ant_class_init(). Nrf::Matter::StartServer()
  * is documented as "a blocking function which ... waits until all Matter server
  * components are initialized", and Server::Init() on a first boot does key
  * generation, settings enumeration and network bring-up. Blocking there would
@@ -77,12 +77,12 @@
 
 #include <cerrno>
 
-/* ANTR_HOST_THREAD_PRIORITY, and ONLY that. The header carries no
+/* RADIANT_ANT_HOST_THREAD_PRIORITY, and ONLY that. The header carries no
  * `extern "C"` guard, so its function declarations get C++ linkage here; that
  * is harmless because none of them is called from this file, and taking the
  * number from the header rather than restating it is what keeps the assertion
  * below meaningful. */
-#include "ant_radio.h"
+#include <radiant/radiant_ant.h>
 
 /*
  * THE `app` LOG MODULE, REGISTERED HERE AND NOWHERE ELSE.
@@ -114,9 +114,9 @@ constexpr size_t kMatterAppStackSize = 2048;
 /* Same priority as the bridge pump, and BUILD_ASSERTed below for the same
  * reason bridge_pump.c asserts its own: this thread must never be able to
  * delay an ANT receive window. */
-constexpr int kMatterAppPriority = ANTR_HOST_THREAD_PRIORITY + 2;
+constexpr int kMatterAppPriority = RADIANT_ANT_HOST_THREAD_PRIORITY + 2;
 
-static_assert(kMatterAppPriority > ANTR_HOST_THREAD_PRIORITY,
+static_assert(kMatterAppPriority > RADIANT_ANT_HOST_THREAD_PRIORITY,
 	      "The Matter application task must be strictly lower priority than the ANT host thread. "
 	      "It is not the CHIP event loop - that is Nordic's thread at K_PRIO_PREEMPT(1) and is "
 	      "trap 9's subject - but it is ours, and ours has no business preempting a receive window.");

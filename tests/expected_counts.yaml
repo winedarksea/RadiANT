@@ -25,7 +25,7 @@
 # hrm_ble.sim_sched, treadmill.pages, treadmill.hr_rx, trainer.model - the 13
 # that min_scenarios below asserts. (2026-10-31 review:
 # radiant.api.crc_repair - the first scenario that compiles the CRC-repair path
-# at all; treadmill.hr_rx - the HR slave against a stub antr_*; and
+# at all; treadmill.hr_rx - the HR slave against a stub radiant_ant_*; and
 # radiant.unit.pairing renamed no_pairing, now the build of the shipped
 # default-n pairing configuration rather than a duplicate of radiant.unit.)
 # A scenario counts only if it executed at least one case (or failed to

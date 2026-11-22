@@ -845,7 +845,7 @@ def render_doc_region(spec: dict) -> str:
         "`marker` for an identifier that is a field inside another message "
         "rather than a frame of its own. `len` is the LEN byte, so it counts "
         "the leading channel or index byte where the message has one. "
-        "`br` is whether `dispatch()` in `src/ant_serial_bridge.c` implements "
+        "`br` is whether `dispatch()` in `apps/common/ant_serial_bridge.c` implements "
         "it today."
     )
     add("")
@@ -1115,7 +1115,7 @@ def render_doc_region(spec: dict) -> str:
     )
     known_max = max(m["id"] for m in spec["messages"] if m.get("id") is not None)
     add(
-        "- `src/ant_serial_bridge.c` `dispatch()` and `handle_request()` — "
+        "- `apps/common/ant_serial_bridge.c` `dispatch()` and `handle_request()` — "
         "highest id `0x%02X`." % bridged_max
     )
     add(

@@ -21,9 +21,9 @@
 # (D00000652), with one deliberate and labelled exception described below.
 # `source` records which:
 #
-#   bridge      a visible use site in src/ant_serial_bridge.c, usually with the
+#   bridge      a visible use site in apps/common/ant_serial_bridge.c, usually with the
 #               numeric value stated in its own prose comment
-#   stub        src/ant_radio_stub.c (src/ant_stub.c before the Wave 2 rename)
+#   stub        apps/common/ant_radio_stub.c (src/ant_stub.c before the Wave 2 rename)
 #   tools       one of the five Python tools, which hand-duplicated these
 #               values independently of the firmware
 #   readme      README.md, including its decoded examples
@@ -159,7 +159,7 @@ framing:
 #             RESPONSE_EVENT payload to say "channel event", not "command reply"
 # payload_len: an integer, "N..M", or "var". This is the LEN byte, so it counts
 #   the leading channel/index byte where the message has one.
-# bridged: does src/ant_serial_bridge.c dispatch() implement it today
+# bridged: does apps/common/ant_serial_bridge.c dispatch() implement it today
 # reply: the message the dongle answers with, when it is not RESPONSE_EVENT
 #
 # reply_len: present only on the handful of `both` messages where a request's
@@ -434,10 +434,10 @@ messages:
     bridged: true
     reply: MESG_RESPONSE_EVENT_ID
     desc: "[filler, mode] on the way in, [channel, mode] on the way back.
-           Dispatched at src/ant_serial_bridge.c and requested in
+           Dispatched at apps/common/ant_serial_bridge.c and requested in
            handle_request(). A Nordic extension: not in Rev 5.1, and no witness
            inside this repository - the id was recovered by the Wave 2 shim and
-           is BUILD_ASSERTed in src/ant_radio_sdk_ant.c."
+           is BUILD_ASSERTed in apps/common/ant_radio_sdk_ant.c."
     source: "sdk-ant-shim"
     verify: sdk-ant-shim
 
@@ -538,7 +538,7 @@ messages:
            with this id carrying a 4-byte little-endian serial. Zwift asks for
            it right after its SYSTEM_RESET. A bare 0x61 frame sent as a command
            does nothing and is answered INVALID_MESSAGE, as the conformance
-           transcripts pin. The serial comes from antr_serial_number_get(). A
+           transcripts pin. The serial comes from radiant_ant_serial_number_get(). A
            backend that has none (sdk-ant) refuses the request with
            INVALID_MESSAGE and does not set CAPABILITIES_SERIAL_NUMBER_ENABLED."
     source: "rev5.1 sec 9.5, observed captures/zwift-20261111-193805.pcap"
@@ -704,7 +704,7 @@ messages:
     source: "bridge, tools"
     reply_len:
       selector: request_index
-      desc: "src/ant_serial_bridge.c picks the reply length from byte 0 of the
+      desc: "apps/common/ant_serial_bridge.c picks the reply length from byte 0 of the
              MESG_REQUEST - `ch ? ..._REQ_CONFIG_SIZE : ..._REQ_CAPABILITIES_SIZE`
              - and neither reply repeats that byte, so nothing in the reply says
              which of the two it is. Pairing it with the request that drew it is
@@ -856,7 +856,7 @@ messages:
     desc: "[filler, enable]. Enhanced channel spacing. A Nordic extension: not
            in Rev 5.1, and no witness inside this repository - the id was
            recovered by the Wave 2 shim and is BUILD_ASSERTed in
-           src/ant_radio_sdk_ant.c."
+           apps/common/ant_radio_sdk_ant.c."
     source: "sdk-ant-shim"
     verify: sdk-ant-shim
 
@@ -869,7 +869,7 @@ messages:
     desc: "[channel] to clear, [channel, pending] on request. A Nordic
            extension: not in Rev 5.1, and no witness inside this repository -
            the id was recovered by the Wave 2 shim and is BUILD_ASSERTed in
-           src/ant_radio_sdk_ant.c. Note that the *request* form of this id
+           apps/common/ant_radio_sdk_ant.c. Note that the *request* form of this id
            replies with MESG_PENDING_TRANSMIT_GET_SIZE bytes, which is a
            separate constant from MESG_PENDING_TRANSMIT_CLEAR's own 1-byte
            command payload."
@@ -919,7 +919,7 @@ messages:
            shape. It is deliberately not a vendor header name, because no
            header was consulted (ADR 0002), and the meaning of the fifth byte
            is unknown, so this firmware always sends 0x00 there. It answers
-           only when antr_serial_number_get() does, and otherwise refuses with
+           only when radiant_ant_serial_number_get() does, and otherwise refuses with
            INVALID_MESSAGE, exactly like 0x61. It sits in the AP2-era
            0xC0-0xC7 block described under radiant_messages; it is the only id
            in that block seen on the wire (0xC5 and 0xC7 are pinned from the
@@ -990,7 +990,7 @@ message_sizes:
       source: observed
     - name: MESG_VERSION_SIZE
       value: 20
-      desc: "Null-padded version string. src/ant_radio_stub.c calls it a
+      desc: "Null-padded version string. apps/common/ant_radio_stub.c calls it a
              20-byte payload; nothing in this repository shows the reply on the
              wire."
       source: stub
@@ -1055,10 +1055,10 @@ message_sizes:
              ant_features.py reads only the first two bytes and prints the rest
              as hex, and no captured reply is committed - so it was recovered
              by the Wave 2 shim and is BUILD_ASSERTed in
-             src/ant_radio_sdk_ant.c. It had to be: this one is the LEN byte on
+             apps/common/ant_radio_sdk_ant.c. It had to be: this one is the LEN byte on
              a reply the bridge composes, so no local substitute is legitimate,
              and while it was unresolved the capabilities form of the request
-             declined. Used at src/ant_radio_stub.c:254, where it bounds the
+             declined. Used at apps/common/ant_radio_stub.c:254, where it bounds the
              memset; the #ifdef on this name that stood in for it there now
              resolves, so the fallback has been removed."
       source: "sdk-ant-shim"
@@ -1520,10 +1520,10 @@ constant_groups:
                 data as well as broadcast. The radio backend masks it off
                 before range-checking the mask number. The bit's value appears
                 nowhere in this repository, so it was recovered by the Wave 2
-                shim and is BUILD_ASSERTed in src/ant_radio_sdk_ant.c. Note
+                shim and is BUILD_ASSERTed in apps/common/ant_radio_sdk_ant.c. Note
                 that it shares its value with INVALID_SDU_MASK's top bit, which
                 is why the mask number must be range-checked after the bit is
-                cleared and not before. Used at src/ant_radio_stub.c:587; the
+                cleared and not before. Used at apps/common/ant_radio_stub.c:587; the
                 local placeholder that stood in for it there guessed the value
                 correctly and has been retired.",
          source: "sdk-ant-shim",
@@ -1575,8 +1575,8 @@ constant_groups:
                 highest of the encryption modes above - user-data request -
                 rather than an independent number. Not visible in this
                 repository, so it was recovered by the Wave 2 shim and is
-                BUILD_ASSERTed in src/ant_radio_sdk_ant.c. Used at
-                src/ant_radio_stub.c:278 and :541; the local placeholder that
+                BUILD_ASSERTed in apps/common/ant_radio_sdk_ant.c. Used at
+                apps/common/ant_radio_stub.c:278 and :541; the local placeholder that
                 stood in for it there guessed 1 and was wrong, which is why a
                 stub build's answer to ENCRYPTION_INFO_GET_SUPPORTED_MODE
                 changed when it retired.",
@@ -1854,7 +1854,7 @@ capabilities:
       desc: "Observed as 0x8D on this firmware. The bit names are not
              recoverable from this repository - K1 left them blank rather than
              guess - so they were recovered by the Wave 2 shim and are
-             BUILD_ASSERTed in src/ant_radio_sdk_ant.c. Seven of the eight are
+             BUILD_ASSERTed in apps/common/ant_radio_sdk_ant.c. Seven of the eight are
              named below; bit 0x80 is set in the observed reply and has no name
              in the source the shim could check, so it is left unnamed for the
              same reason the whole byte used to be."
@@ -1894,7 +1894,7 @@ capabilities:
       bits:
         - {name: CAPABILITIES_CHANNEL_START_OFFSET_ENABLED, value: 0x01,
            desc: "Channel start offset - the second parameter of
-                  antr_channel_open_with_offset(). Set in the observed reply,
+                  radiant_ant_channel_open_with_offset(). Set in the observed reply,
                   which is the capability behind the offset form existing at
                   all.",
            source: "sdk-ant-shim", verify: sdk-ant-shim}
@@ -1940,7 +1940,7 @@ capabilities:
 # compatibility with. Do not re-propose it.
 #
 # The original argument for 0xE0 was that nothing at or above 0xC0 appears in
-# src/ant_serial_bridge.c's dispatch, in any tools/ definition, or in the
+# apps/common/ant_serial_bridge.c's dispatch, in any tools/ definition, or in the
 # capabilities reply. Every one of those checks was correct, and the conclusion
 # was still wrong, because **this repository is not the whole protocol**. The
 # witnesses below enumerate what this repo knows; a message id is a claim about
@@ -1949,7 +1949,7 @@ capabilities:
 #
 # Collision check, run against every witness available in this repository:
 #
-#   - src/ant_serial_bridge.c dispatch() and handle_request(): highest id 0x8C
+#   - apps/common/ant_serial_bridge.c dispatch() and handle_request(): highest id 0x8C
 #   - every MESG_* definition in tools/ant_wire.py: highest 0xAE, the
 #     serial-layer error the dongle emits
 #   - archive/host-api/ant_dll_exports.json, the real PE export directory of

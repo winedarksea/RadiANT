@@ -33,9 +33,9 @@ TDIAG/TEMPDIAG parsing, the phase arithmetic, the tally, and that a log with
 neither diagnostic line raises `SystemExit(2)`. The check runs after the first
 trial and again at the end.
 
-`CONFIG_RADIANT_SEARCH_PHASE_DIAG` (default n, `depends on RADIANT_ANTR_API`) is
+`CONFIG_RADIANT_SEARCH_PHASE_DIAG` (default n, `depends on RADIANT_ANT_API`) is
 `tdiag_frames.patch` ported by hand onto the moved
-`radiant/src/antr/ant_radio_radiant.c`. In `radiant_search.c` the hook is
+`radiant/src/ant_api/radiant_ant.c`. In `radiant_search.c` the hook is
 `RADIANT_SEARCH_PHASE_DIAG_FRAME(...)`, which is `((void)0)` when the symbol is
 off, and its three locals are inside `#if`. The log lines are byte-for-byte the
 patch's formats, so the harness parses both. `apps/dongle_thread/phase_diag.conf`
@@ -67,7 +67,7 @@ turns it on. On the leg image the DUT printed 98 `TDIAG frame` and 224
   check, the memset and the return value use `ANT_HEALTH_BODY_LEN`.
   `ant_health_fill()` reads the counter through
   `radiant_search_sets_uncovered_get()`, which is defined beside the sweep
-  instance in `ant_radio_radiant.c`. It clamps at 65535 without touching the
+  instance in `radiant_ant.c`. It clamps at 65535 without touching the
   `[1]` flag.
 - Version stays 1. Reworded in `protocol/ant_wire.yaml` (VERSIONING, in both
   0xF4 and 0xF6), the `[0]` comment in `apps/common/ant_health.c`, the comment

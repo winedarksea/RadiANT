@@ -79,7 +79,7 @@ clones fit an undersized inductor there, and its DC/DC drew more, not less.
 
 **Receivers.** A battery receiver should not search forever.
 [`hr_receiver`](../hr_receiver/) searches without a limit
-(`antr_channel_search_timeout_set(ch, 0xFF)`), which keeps the radio listening
+(`radiant_ant_channel_search_timeout_set(ch, 0xFF)`), which keeps the radio listening
 until a sensor appears. Set a finite timeout instead, in 2.5 s steps, and open
 the channel again later if nothing was found.
 

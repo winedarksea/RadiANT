@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # The 0xF6 health counters' own symbol, rsourced by the applications that have
-# a host to answer - the same arrangement as Kconfig.antr_api and
+# a host to answer - the same arrangement as Kconfig.ant_api and
 # Kconfig.dongle_main beside it. apps/hrm_ble does not source it: a node has no
 # serial host to request 0xF6 from, so the counters would have no way out.
 

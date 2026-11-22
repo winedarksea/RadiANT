@@ -47,7 +47,7 @@ KEY = bytes(range(16))
 
 
 class TestConfig(unittest.TestCase):
-    """0xF1. Mirrors radiant_sec_configure() and antr_sec_config()."""
+    """0xF1. Mirrors radiant_sec_configure() and radiant_ant_sec_config()."""
 
     def test_round_trip(self):
         body = encode_config(3, SW_AUTH | SW_CONF, 4, 0x01, 0x0F)
@@ -128,7 +128,7 @@ class TestConfig(unittest.TestCase):
 
 
 class TestSetKey(unittest.TestCase):
-    """0xF2. Mirrors radiant_sec_set_key() and antr_sec_key_set()."""
+    """0xF2. Mirrors radiant_sec_set_key() and radiant_ant_sec_key_set()."""
 
     def test_round_trip(self):
         body = encode_set_key(1, KEY)
@@ -159,7 +159,7 @@ class TestSetKey(unittest.TestCase):
 
 
 class TestEpoch(unittest.TestCase):
-    """0xF3. Mirrors radiant_sec_set_epoch() and antr_sec_epoch_set()."""
+    """0xF3. Mirrors radiant_sec_set_epoch() and radiant_ant_sec_epoch_set()."""
 
     def test_round_trip(self):
         body = encode_epoch(2, 0x0001BEEF, us_into_epoch=1234567890)
@@ -208,7 +208,7 @@ class TestEpoch(unittest.TestCase):
 
 
 class TestStatus(unittest.TestCase):
-    """0xF4. Mirrors antr_sec_status_get()."""
+    """0xF4. Mirrors radiant_ant_sec_status_get()."""
 
     def sample(self, **kw) -> SecStatus:
         base = dict(
@@ -284,7 +284,7 @@ class TestStatus(unittest.TestCase):
 
     def test_the_layout_is_31_bytes_at_version_1(self):
         # Pinned literally, so a change to either constant has to be made on
-        # purpose here as well as in ant_radio.h's ANTR_SEC_STATUS_LEN/_VERSION.
+        # purpose here as well as in radiant_ant.h's RADIANT_ANT_SEC_STATUS_LEN/_VERSION.
         # The version stays 1 through the beta; the length tells the fields.
         self.assertEqual(31, STATUS_LEN)
         self.assertEqual(1, STATUS_VERSION)
@@ -379,7 +379,7 @@ class TestStatus(unittest.TestCase):
             decode_status(bytes(25))
 
     def test_an_unkeyed_channel_reads_as_clear_not_as_an_error(self):
-        # antr_sec_status_get() answers with zeros for a channel nobody keyed,
+        # radiant_ant_sec_status_get() answers with zeros for a channel nobody keyed,
         # apart from the version byte, which describes the layout rather than
         # the channel. "No security here" is a state a host must be able to
         # read without treating an ordinary channel as a fault.
@@ -418,7 +418,7 @@ class TestHumanReadable(unittest.TestCase):
 
 
 class TestVerdict(unittest.TestCase):
-    """0xF8. Mirrors radiant_sec_window_verdict() in ant_radio_radiant.c and
+    """0xF8. Mirrors radiant_sec_window_verdict() in radiant_ant.c and
     the bytes test_api_sec_host.c checks on the firmware side."""
 
     def test_the_bytes_are_ch_verdict_start_le_w_seq_le(self):
@@ -673,7 +673,7 @@ class TestVerdictResolver(unittest.TestCase):
 
 
 class TestPairing(unittest.TestCase):
-    """0xF5. Mirrors radiant_sec_pair.c and antr_sec_pair()."""
+    """0xF5. Mirrors radiant_sec_pair.c and radiant_ant_sec_pair()."""
 
     def test_enter_carries_a_timeout(self):
         body = ant_sec.encode_pair_enter(1, 30)

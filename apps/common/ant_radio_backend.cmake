@@ -5,14 +5,14 @@
 # Shared between apps/dongle and apps/dongle_thread - the two applications
 # with a serial bridge to a host, which is the only reason this axis exists at
 # all. apps/hrm_ble never includes this file: it has no host, no bridge and no
-# antr_* backend choice - CONFIG_RADIANT=y unconditionally, same as
+# radiant_ant_* backend choice - CONFIG_RADIANT=y unconditionally, same as
 # radiant_select_backend() alone gives every other node application.
 #
 # Lives in apps/common/, not in the top-level cmake/ directory beside
 # radiant_backend.cmake, on purpose: RADIANT_BACKEND is a property of the
 # radiant module, and radiant_backend.cmake is written so an out-of-tree
 # consumer can copy it wholesale. ANT_RADIO is not - it is which of three
-# antr_* IMPLEMENTATIONS this
+# radiant_ant_* IMPLEMENTATIONS this
 # application links, and sdk-ant, being private and non-redistributable, must
 # never be reachable from anything the module's own directory points at. So
 # this file stays application-side, permanently.

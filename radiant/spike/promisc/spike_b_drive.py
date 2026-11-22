@@ -169,7 +169,7 @@ def burst_seq(index: int) -> int:
     Two bits on the wire (`RADIANT_WIRE_BURST_HEADER_SEQ_MASK` is 3), and it does
     *not* count modulo 4: sequence 0 marks only the first packet of a
     transfer, so a long burst runs 0, 1, 2, 3, 1, 2, 3, ... (wrap skips 0).
-    `src/ant_serial_bridge.c` derives ANTR_BURST_SEGMENT_START from
+    `apps/common/ant_serial_bridge.c` derives RADIANT_ANT_BURST_SEGMENT_START from
     `seq == 0`, so a naive `index % 4` would tell the stack blocks 4/8/12
     each start a new transfer mid-burst. Whether the on-air field is the
     same width is what this run is for.
@@ -186,9 +186,9 @@ def send_burst(dev, reader, ch: int, blocks: int, counters: dict,
 
     **Every packet is written back to back, no wait between them** - a fix,
     not an optimisation. Waiting for EVENT_TRANSFER_NEXT_DATA_BLOCK after
-    each block (the event `src/ant_radio.h` rules B1-B5 turn on) never
+    each block (the event `<radiant/radiant_ant.h>` rules B1-B5 turn on) never
     worked: the bridge consumes that event internally and never puts it on
-    the wire (`src/ant_serial_bridge.c` returns right after `k_sem_give()`,
+    the wire (`apps/common/ant_serial_bridge.c` returns right after `k_sem_give()`,
     since a real ANT stick never exposes its internal flow control). Waiting
     for it starved every multi-block burst after packet 0
     (EVENT_TRANSFER_TX_FAILED). Back-pressure still works when streaming:

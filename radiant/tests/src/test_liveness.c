@@ -78,7 +78,7 @@ static void liveness_test_reset(void *unused)
 
 /*
  * 8192 counts of 32768 Hz is 250 ms - the 4 Hz every ANT+ heart-rate profile
- * uses, and the value antr_channel_period_set()'s own contract quotes. So the
+ * uses, and the value radiant_ant_channel_period_set()'s own contract quotes. So the
  * expiry under test is 750 ms, and every timestamp below is chosen against
  * that rather than against a round second.
  */

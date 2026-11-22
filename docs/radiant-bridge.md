@@ -1994,7 +1994,7 @@ all — the pinned channel simply keeps searching for that one sensor.
 The self channels now work the same way. Every decision is a pure function in
 `radiant/src/bridge/radiant_self_policy.c`, tested in
 `radiant/tests/src/test_self_policy.c`; `apps/dongle_thread/src/self_channels.c`
-keeps only the `antr_*` calls.
+keeps only the `radiant_ant_*` calls.
 
 | State | Radio | Enters when | Leaves when |
 |---|---|---|---|

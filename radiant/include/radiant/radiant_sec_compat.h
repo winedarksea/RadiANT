@@ -424,7 +424,7 @@ int radiant_sec_compat_raise_epoch_ceiling(uint8_t ch, uint32_t max_epoch);
 /* radiant_sec_live_twin() over the compat contexts: another compat channel
  * with an epoch or a ceiling under the same root and base device number as
  * `ch`. A compat context ends at radiant_sec_compat_channel_release() (which
- * antr_channel_unassign() calls), set_key with another root, or
+ * radiant_ant_channel_unassign() calls), set_key with another root, or
  * radiant_sec_compat_reset() (which SYSTEM_RESET calls). */
 bool radiant_sec_compat_live_twin(uint8_t ch);
 

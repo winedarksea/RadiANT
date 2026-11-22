@@ -39,7 +39,7 @@
  * `profile_hr` is ALREADY reached from two contexts in this application:
  *
  *   1. the system workqueue, which advances the beat accumulators, and
- *   2. the radiant callback path - antr_on_message() -> load_next_page() ->
+ *   2. the radiant callback path - radiant_ant_on_message() -> load_next_page() ->
  *      profile_hr_next() - which reads them to build the next page.
  *
  * An ISR-driven sensor would make that three-way, and profile_hr has no lock.

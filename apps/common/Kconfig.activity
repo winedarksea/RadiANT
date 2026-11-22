@@ -6,7 +6,7 @@
 # neither owns it.
 #
 # IT USED TO LIVE IN Kconfig.rgb_led, and moving it is the whole reason this
-# file exists. The count is one atomic increment in antr_on_message(), and a
+# file exists. The count is one atomic increment in radiant_ant_on_message(), and a
 # second indicator that wanted it had a choice between adding a THIRD hook to
 # the bridge's hot path or generalising the second. ant_activity.h carries the
 # argument, unchanged from where it was written, for why the second hook could
@@ -49,7 +49,7 @@ config ANT_DONGLE_ACTIVITY_COUNT
 	  needs it, and turning it on by hand buys a counter nothing reads.
 
 	  WHERE THE COUNT HAPPENS, because this is the only thing about it that
-	  could ever cost the radio anything: antr_on_message() runs on the
+	  could ever cost the radio anything: radiant_ant_on_message() runs on the
 	  radiant API event thread - ordinary thread context, never a radio
 	  callback - so the increment is free relative to the framing work
 	  already being done per message. With the symbol off,

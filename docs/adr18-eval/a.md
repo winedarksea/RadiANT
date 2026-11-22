@@ -90,7 +90,7 @@ scheduler's planning is active only if the backend sets `caps.held_grant`.
   `RADIANT_RX_ELASTIC`, which marks a short scan chunk elastic; the nRF backend
   maps it to the NORMAL class.
 
-**Search** (`antr/ant_radio_radiant.c`): on a held-grant backend, a set that
+**Search** (`ant_api/radiant_ant.c`): on a held-grant backend, a set that
 finishes in a chunk that really ran posts the next set from the completion, at
 the in-grant lead, instead of leaving it to the 50 ms pump at a fresh placement
 lead. **Known race (prototype):** if this lands between the pump's slot test

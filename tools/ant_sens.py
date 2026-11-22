@@ -106,7 +106,7 @@ from ant_wire import (  # noqa: E402
 # ---------------------------------------------------------------------------
 
 # The six levels ANT names, and the dBm each one means. tools/ant_wire.py holds
-# the same table in its constant comments and src/ant_serial_bridge.c holds the
+# the same table in its constant comments and apps/common/ant_serial_bridge.c holds the
 # firmware half; this is the one a ladder is built from.
 LEVEL_DBM = {0: -20, 1: -12, 2: -4, 3: 0, 4: 4, 5: 8}
 DBM_LEVEL = {dbm: level for level, dbm in LEVEL_DBM.items()}
@@ -140,7 +140,7 @@ PART_FINE_DBM: dict[str, dict[int, int]] = {
                    -16: 0xF0, -20: 0xEC, -40: 0xD8},
     # nrf54l15_types.h. NOT dBm at all: +8 is 0x3F and 0 is 0x18. The field
     # is 11 bits wide and Neg40dBm (0x130) / Neg46dBm (0x110) do not fit the
-    # one custom byte the wire carries (radiant/src/antr/ant_radio_radiant.c holds
+    # one custom byte the wire carries (radiant/src/ant_api/radiant_ant.c holds
     # it as uint8_t), so -28 dBm is the floor of a fine ladder on this part.
     # Neg22dBm is omitted because the header gives it 0x002, the same value as
     # Neg20dBm - one register value cannot be two rungs.

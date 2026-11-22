@@ -60,13 +60,13 @@ ant_assert_radio("radiant_dongle_thread")
 
 target_sources(app PRIVATE src/main.c)
 
-# ── apps/common: the antr_* seam, the serial bridge and its transports ─────
+# ── apps/common: the radiant_ant_* seam, the serial bridge and its transports ─────
 #
 # One source list, added fresh into this application's own image - see that
 # file's own header for why it is include()d rather than add_subdirectory()'d.
 # CONFIG_ANT_DONGLE_TRANSPORT_* (set by the choice in Kconfig) and
-# CONFIG_ANT_DONGLE_RADIO_*/CONFIG_RADIANT_ANTR_API (set above by
-# ant_select_radio() and by apps/common/Kconfig.antr_api's default) together
+# CONFIG_ANT_DONGLE_RADIO_*/CONFIG_RADIANT_ANT_API (set above by
+# ant_select_radio() and by apps/common/Kconfig.ant_api's default) together
 # decide what actually compiles from it into this image.
 include("${CMAKE_CURRENT_SOURCE_DIR}/../common/sources.cmake")
 

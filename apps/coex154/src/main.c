@@ -300,7 +300,7 @@ static void report(void)
 
 #if defined(CONFIG_RADIANT)
 
-#include "ant_radio.h"
+#include <radiant/radiant_ant.h>
 #include <radiant/radiant_wire.h>
 
 /*
@@ -337,19 +337,19 @@ static void ant_load_start(void)
 	};
 	uint8_t ch;
 
-	if (antr_init() != 0) {
-		LOG_ERR("antr_init failed - no ANT load, this is NOT the "
+	if (radiant_ant_init() != 0) {
+		LOG_ERR("radiant_ant_init failed - no ANT load, this is NOT the "
 			"contended build any more");
 		return;
 	}
-	(void)antr_network_address_set(0u, net_key);
+	(void)radiant_ant_network_address_set(0u, net_key);
 
 	/*
 	 * THE ARBITER-ONLY ARM, and it stops here on purpose. radiant is
 	 * linked, initialised and holding its MPSL session; no channel is open,
 	 * so it asks MPSL for no air at all. That is the arm that separates "an
 	 * arbiter is present" from "air was taken away" - and it only means that
-	 * if antr_init() above has actually run, which is why the zero case is
+	 * if radiant_ant_init() above has actually run, which is why the zero case is
 	 * inside this function rather than compiled out around it.
 	 */
 	if (ANT_N == 0u) {
@@ -359,22 +359,22 @@ static void ant_load_start(void)
 	}
 
 	for (ch = 0u; ch < (uint8_t)ANT_N; ch++) {
-		antr_err_t rc;
+		radiant_ant_err_t rc;
 
 		/* MASTER_TX_ONLY, not MASTER: a bidirectional master opens a
 		 * receive window after each slot that nothing will reply to,
 		 * which this measurement would misattribute to the transmit
 		 * blackout. */
-		rc = antr_channel_assign(ch, RADIANT_WIRE_CHANNEL_TYPE_MASTER_TX_ONLY,
+		rc = radiant_ant_channel_assign(ch, RADIANT_WIRE_CHANNEL_TYPE_MASTER_TX_ONLY,
 					 0u, 0u);
 		if (rc != 0) {
 			LOG_ERR("ch%u assign: %u", ch, (unsigned int)rc);
 			return;
 		}
-		(void)antr_channel_id_set(ch, (uint16_t)(0x7000u + ch),
+		(void)radiant_ant_channel_id_set(ch, (uint16_t)(0x7000u + ch),
 					  ANT_DEV_TYPE, ANT_TRANS);
-		(void)antr_channel_period_set(ch, ANT_PERIOD);
-		(void)antr_channel_radio_freq_set(ch, ANT_FREQ);
+		(void)radiant_ant_channel_period_set(ch, ANT_PERIOD);
+		(void)radiant_ant_channel_radio_freq_set(ch, ANT_FREQ);
 
 		/*
 		 * Offsets are spread across the period rather than all zero.
@@ -386,9 +386,9 @@ static void ant_load_start(void)
 		 * zero).
 		 */
 #if defined(CONFIG_COEX154_ANT_BUNCHED)
-		(void)antr_channel_open_with_offset(ch, 0u);
+		(void)radiant_ant_channel_open_with_offset(ch, 0u);
 #else
-		(void)antr_channel_open_with_offset(
+		(void)radiant_ant_channel_open_with_offset(
 			ch, (uint16_t)((ANT_PERIOD / ANT_N_DIV) * ch));
 #endif
 	}
@@ -401,12 +401,12 @@ static void ant_load_start(void)
 }
 
 /*
- * radiant delivers events through antr_on_message(), the same seam the
+ * radiant delivers events through radiant_ant_on_message(), the same seam the
  * USB bridge uses. Refill the payload on EVENT_TX, or the channel silently
  * repeats the last one - fine for a blackout generator but would hide a
  * channel that has actually stopped.
  */
-void antr_on_message(const struct antr_msg *msg)
+void radiant_ant_on_message(const struct radiant_ant_msg *msg)
 {
 	static uint32_t tx_events;
 	uint8_t payload[8];
@@ -425,7 +425,7 @@ void antr_on_message(const struct antr_msg *msg)
 	memset(payload, 0, sizeof(payload));
 	payload[0] = msg->data[0];            /* which channel */
 	payload[7] = (uint8_t)tx_events;      /* something that changes */
-	(void)antr_broadcast_message_tx(msg->data[0], sizeof(payload), payload);
+	(void)radiant_ant_broadcast_message_tx(msg->data[0], sizeof(payload), payload);
 }
 
 #else

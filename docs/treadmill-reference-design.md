@@ -309,7 +309,7 @@ no lock, and `treadmill_ble.h` even admitted it in a comment. A `grep` for
 The fix restores the invariant rather than adding a second, weaker one beside
 it:
 
-- **FE-C** — `antr_on_message()` copies the eight-byte body into a four-deep
+- **FE-C** — `radiant_ant_on_message()` copies the eight-byte body into a four-deep
   ring and submits a `k_work`; `apply_control_page()` runs on the workqueue and
   stages page 71 there. Invisible on air: page 71 goes out on the next data slot
   up to 250 ms later either way, against a workqueue turnaround of microseconds.
@@ -796,7 +796,7 @@ slot, in *both* arms. The proposed root cause — that `RADIANT_TIME_NEVER`
 resolves to an arbitrary phase and the packet "lands where nobody is listening"
 — is false on this backend, and the slot-aligned build bought nothing while
 adding up to one channel period of latency to every acknowledged transfer in
-the tree. **Arm B was therefore reverted.** `radiant/src/antr/ant_radio_radiant.c`
+the tree. **Arm B was therefore reverted.** `radiant/src/ant_api/radiant_ant.c`
 carries the tombstone so the idea is not re-had.
 
 **What is actually broken is the return acknowledgement.** The receiver has the
@@ -893,7 +893,7 @@ host's point of view does not stop the radio re-sending it.
 An acknowledged transfer now completes on air, end to end, for the first time:
 **16 of 18** `TRANSFER_TX_COMPLETED` against 0 of 13 before. Everything in
 §7.4a–§7.7a was chasing a receiver that was never the problem — all four faults
-are in the dongle stack (`radiant/src/antr/ant_radio_radiant.c` and `radiant/`), and
+are in the dongle stack (`radiant/src/ant_api/radiant_ant.c` and `radiant/`), and
 both ends of every failing test were ours.
 
 **The rig that finally separated the failure modes.** Two boards, both running
@@ -916,7 +916,7 @@ and third is what produced §7.7's wrong conclusion.
 
 | # | Defect | Where | Evidence it was real |
 |---|---|---|---|
-| 1 | An originated acknowledged transfer went out at an arbitrary phase, not on the channel's slot | `antr_acknowledge_message_tx()`, `antr_burst_tx()` | master sent 20, slave heard **0** while receiving 150 of its broadcasts; sender failed 0–16 ms after queueing |
+| 1 | An originated acknowledged transfer went out at an arbitrary phase, not on the channel's slot | `radiant_ant_acknowledge_message_tx()`, `radiant_ant_burst_tx()` | master sent 20, slave heard **0** while receiving 150 of its broadcasts; sender failed 0–16 ms after queueing |
 | 2 | A master-originated packet (`0xAA`) had no reply mapping, so no RadiANT peer could ever answer it | `radiant_ctrl_reply_for()` | `reply=0x00` in the receiver's own log; `unackable_openers` |
 | 3 | A channel with an unwritten broadcast buffer refused to acknowledge — which for a **slave** is permanent | `api_xfer_broadcast()` | staging one broadcast by hand turned 0 received into thousands, with no firmware change |
 | 4 | The master's turnaround window reserved no follow-on air for the reply it may have to send | `api_post_master_rx()` | the tracked window sets 1960 µs for the identical reason; matters on MPSL |
@@ -928,7 +928,7 @@ defects 2 and 3 untestable, because the packet never reached a receiver to be
 refused by them.
 
 **Why the test suite did not catch any of it.** 849 tests passed throughout.
-`antr_acknowledge_message_tx()` **had no caller in any suite**, so the transmit
+`radiant_ant_acknowledge_message_tx()` **had no caller in any suite**, so the transmit
 instant of an originated transfer had never once been asserted. Defect 2 was
 worse than untested — it was *pinned*, by
 `test_a_slot_opening_packet_has_no_measured_acknowledgement`, which asserted the

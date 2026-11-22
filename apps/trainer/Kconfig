@@ -5,7 +5,7 @@
 
 rsource "../../radiant/src/node/Kconfig"
 rsource "../../radiant/src/profiles/Kconfig"
-rsource "../common/Kconfig.antr_api"
+rsource "../common/Kconfig.ant_api"
 
 source "Kconfig.zephyr"
 

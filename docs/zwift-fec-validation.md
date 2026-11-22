@@ -190,7 +190,7 @@ failure semantics. A search timeout fails it before RX_SEARCH_TIMEOUT and
 CHANNEL_CLOSED, in the order an explicit close gives; previously unassign wiped
 it with no event
 (`test_fec_pending_command_fails_when_search_timeout_closes_the_channel`).
-Unassign and a not-open channel in housekeeping are backstops that also fail it. `antr_stack_reset` deliberately discards pending commands and
+Unassign and a not-open channel in housekeeping are backstops that also fail it. `radiant_ant_stack_reset` deliberately discards pending commands and
 flushes queued events while tearing down host/channel state. It can therefore
 end a session without a transfer terminal event; callers must retire their
 pre-reset ledger. The existing reset regression explicitly pins this exception.

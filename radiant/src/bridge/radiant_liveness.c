@@ -12,7 +12,7 @@
 
 /*
  * The channel period arrives in ANT's own 32768 Hz counts (see
- * antr_channel_period_set()'s contract: 8192 is the 4 Hz most ANT+ profiles
+ * radiant_ant_channel_period_set()'s contract: 8192 is the 4 Hz most ANT+ profiles
  * use). Converting to microseconds is 1000000/32768, which reduces exactly to
  * 15625/512 - so this is integer arithmetic with no rounding at all, not an
  * approximation that happens to be close. Kept in that order (multiply then

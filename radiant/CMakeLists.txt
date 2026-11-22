@@ -15,7 +15,7 @@
 #   application mode. `radiant` will not be treated as a Zephyr library.
 #
 # and then compiles nothing at all. The build still reached the link and still
-# failed on the same undefined antr_* references, so the symptom was identical
+# failed on the same undefined radiant_ant_* references, so the symptom was identical
 # to a correct build - the only way to notice was that no object file existed.
 # A library form that silently drops every source it was given is exactly the
 # kind of green light that means nothing, and it is recorded here because this
@@ -38,8 +38,8 @@
 
 # include/ carries the namespaced <radiant/...> headers - and nothing
 # else. There used to be a second directory here, ../src, reached for
-# src/radiant_event.c and src/radiant_api.c's output format (struct antr_msg,
-# antr_on_message(), the generated RADIANT_WIRE_* wire constants) - a self-containment
+# src/radiant_event.c and src/radiant_api.c's output format (struct radiant_ant_msg,
+# radiant_ant_on_message(), the generated RADIANT_WIRE_* wire constants) - a self-containment
 # violation for a module meant to be dropped into a project with nothing else
 # from this repository on its include path. radiant_msg.h and radiant_wire.h
 # (both in include/) are what replaced it: radiant_event.c now produces struct
@@ -85,7 +85,7 @@ zephyr_library_sources_ifdef(CONFIG_RADIANT_POWER_DIAG src/radiant_power_diag.c)
 # application can exercise the arithmetic whether or not a given build turns
 # the feature on, so the syndrome table's duplicate check runs in CI on every
 # build instead of only on the ones that opted in. CONFIG_RADIANT_CRC_REPAIR
-# gates the CALL SITE in src/antr/ant_radio_radiant.c, which is where the
+# gates the CALL SITE in src/ant_api/radiant_ant.c, which is where the
 # false-accept trade-off is actually taken.
 zephyr_library_sources(src/radiant_crc_repair.c)
 
@@ -93,7 +93,7 @@ zephyr_library_sources(src/radiant_crc_repair.c)
 # possible reading, for the handful of device types where that is decidable
 # from one frame. Compiled unconditionally for the same reason as
 # radiant_crc_repair.c above; CONFIG_RADIANT_PROFILE_SANITY gates the
-# call site in src/antr/ant_radio_radiant.c.
+# call site in src/ant_api/radiant_ant.c.
 zephyr_library_sources(src/radiant_profile_sanity.c)
 
 # The channel-quality map. Gated rather than compiled unconditionally like
@@ -137,12 +137,12 @@ zephyr_library_sources_ifdef(CONFIG_RADIANT_SEC_RNG_ENTROPY src/radiant_sec_rng_
 # src/profiles/'s business; this authenticates bytes.
 zephyr_library_sources_ifdef(CONFIG_RADIANT_SEC_COMPAT src/radiant_sec_compat.c)
 
-# The antr_* runtime: the usual way to use this module. Off by default, because
+# The radiant_ant_* runtime: the usual way to use this module. Off by default, because
 # it defines the port hooks a project on the low-level API writes for itself.
 # A node with a key baked in and no serial host has no use for the 0xF1-0xF5
 # messages and should not link them, so those have their own symbol.
-zephyr_library_sources_ifdef(CONFIG_RADIANT_ANTR_API src/antr/ant_radio_radiant.c)
-zephyr_library_sources_ifdef(CONFIG_RADIANT_SEC_HOST_MESSAGES src/antr/ant_sec_host.c)
+zephyr_library_sources_ifdef(CONFIG_RADIANT_ANT_API src/ant_api/radiant_ant.c)
+zephyr_library_sources_ifdef(CONFIG_RADIANT_SEC_HOST_MESSAGES src/ant_api/radiant_ant_sec.c)
 
 # Library code a project opts into. One switch each rather than one per profile:
 # the link drops whatever nothing calls. apps/dongle_thread uses both through
@@ -399,7 +399,7 @@ endif()
 
 # ── -O2 for the hot files ───────────────────────────────────────────────────
 #
-# The scheduler pass, the antr runtime's radio callbacks and the backend's
+# The scheduler pass, the radiant_ant runtime's radio callbacks and the backend's
 # ISRs are where the arm lead is spent (2026-11-15 performance plan, B3).
 # CONFIG_RADIANT_HOT_PATH_O2 compiles those files, and only those, at -O2.
 #
@@ -412,8 +412,8 @@ endif()
 # compile_commands.json is where to check it.
 if(CONFIG_RADIANT_HOT_PATH_O2)
   set(radiant_hot_files src/radiant_sched.c)
-  if(CONFIG_RADIANT_ANTR_API)
-    list(APPEND radiant_hot_files src/antr/ant_radio_radiant.c)
+  if(CONFIG_RADIANT_ANT_API)
+    list(APPEND radiant_hot_files src/ant_api/radiant_ant.c)
   endif()
   if(CONFIG_RADIANT_BACKEND_NRF)
     list(APPEND radiant_hot_files src/radiant_radio_nrf.c)

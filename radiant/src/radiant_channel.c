@@ -4,7 +4,7 @@
  * slot clock.
  *
  * Provenance: clean-room. Written from docs/sdk-ant-contract.md and
- * src/ant_radio.h (the per-function semantics, the ordering constraints and
+ * <radiant/radiant_ant.h> (the per-function semantics, the ordering constraints and
  * the permitted error codes), from the free ANT Message Protocol and Usage
  * Rev 5.1 (D00000652) for the channel-status byte layout and the 32768 Hz
  * period unit, and from this bench's own measurements in
@@ -27,7 +27,7 @@
  * compiler.
  *
  * Three rules this file is written to:
- * 1. Every refusal returns the exact wire byte (antr_err_t is a uint8_t sent
+ * 1. Every refusal returns the exact wire byte (radiant_ant_err_t is a uint8_t sent
  *    to the host unchanged; tools/ant_conformance.py byte-diffs it). A bad
  *    channel NUMBER is INVALID_MESSAGE, a bad parameter VALUE is
  *    INVALID_PARAMETER_PROVIDED, and the range check runs first and
@@ -505,7 +505,7 @@ void radiant_channel_init(void)
 
 	period_floor = RADIANT_CHANNEL_PERIOD_MIN_COUNTS;
 	/* Back to the core's own minimum, not whatever the last backend raised
-	 * it to: antr_init() calls this before the radio is enabled and sets
+	 * it to: radiant_ant_init() calls this before the radio is enabled and sets
 	 * the floor from caps afterwards. */
 	guard_floor = RADIANT_CHANNEL_GUARD_MIN_US;
 	stale_ops = 0u;
@@ -569,7 +569,7 @@ radiant_channel_err_t radiant_channel_assign(uint8_t channel, uint8_t type,
 		return RADIANT_CH_ERR_INVALID_NETWORK;
 	}
 
-	/* `type` is stored without validation, deliberately: antr_channel_assign()'s
+	/* `type` is stored without validation, deliberately: radiant_ant_channel_assign()'s
 	 * permitted return set has no code for a bad type (INVALID_MESSAGE is
 	 * already used by the channel number), so refusing here would put an
 	 * out-of-contract byte on the wire. Only bit 4 is interpreted; the rest

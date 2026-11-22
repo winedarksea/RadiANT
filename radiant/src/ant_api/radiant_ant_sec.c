@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
  * The host surface for the two payload transforms: messages 0xF1-0xF4, as
- * antr_* entry points.
+ * radiant_ant_* entry points.
  *
  * The one security file that reaches an application header - the seam
  * between this module's return codes and the ANT serial protocol's.
@@ -11,9 +11,9 @@
  * 0xF1's bitmask byte-for-byte. The BUILD_ASSERTs below keep them that way; a mapping table
  * would be a second, driftable definition of the wire format.
  *
- * antr_sec_key_set() is write-only - no read arm for 0xF2 exists.
+ * radiant_ant_sec_key_set() is write-only - no read arm for 0xF2 exists.
  *
- * The caller (src/ant_serial_bridge.c) wipes its copy of the message body
+ * The caller (apps/common/ant_serial_bridge.c) wipes its copy of the message body
  * after dispatch, but that is not sufficient: the bytes also passed through
  * the USB stack's ring buffer and transport buffer, neither reachable from
  * here. A root key that crossed USB should be treated as having been in
@@ -28,8 +28,8 @@
 #include <radiant/radiant_sec.h>
 #include <radiant/radiant_channel.h>
 
-#include <radiant/ant_radio.h>
-#include "ant_radio_radiant_priv.h"
+#include <radiant/radiant_ant.h>
+#include "radiant_ant_priv.h"
 #include <radiant/radiant_wire.h>
 
 BUILD_ASSERT(RADIANT_SEC_SW_CONF == 0x01,
@@ -59,18 +59,18 @@ BUILD_ASSERT(RADIANT_SEC_SW_VERDICT_EVENT == 0x10,
  * it is not a bad parameter - it is a correct one sent too early, and a host
  * that cannot tell those apart retries the wrong thing.
  */
-static antr_err_t sec_err(int rc)
+static radiant_ant_err_t sec_err(int rc)
 {
 	switch (rc) {
 	case RADIANT_SEC_OK:
-		return (antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR;
+		return (radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR;
 	case RADIANT_SEC_ENOKEY:
 	case RADIANT_SEC_ESTATE:   /* a node's epoch authority follows it */
-		return (antr_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE;
+		return (radiant_ant_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE;
 	case RADIANT_SEC_ENOTSUP:
 	case RADIANT_SEC_EINVAL:
 	default:
-		return (antr_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED;
+		return (radiant_ant_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED;
 	}
 }
 
@@ -97,7 +97,7 @@ static void put_u32(uint8_t *out, uint32_t v)
  * ant_serial_bridge.c, where the frame still exists. */
 
 /*
- * Every radiant_sec call runs under api_lock, like every other antr_* entry
+ * Every radiant_sec call runs under api_lock, like every other radiant_ant_* entry
  * point: the pump runs on the event thread under it, and the software AES
  * shares one key schedule that a preempting host command would re-expand
  * under another key. Each public function below validates, then calls its
@@ -105,33 +105,33 @@ static void put_u32(uint8_t *out, uint32_t v)
  * (RADIANT_SEC_LOCK_CHECK).
  */
 
-static antr_err_t sec_config_locked(uint8_t channel, uint8_t switches, uint8_t w,
+static radiant_ant_err_t sec_config_locked(uint8_t channel, uint8_t switches, uint8_t w,
 				    uint8_t page_lo, uint8_t page_hi)
 {
 	if (channel >= (uint8_t)RADIANT_CHANNEL_COUNT) {
-		return (antr_err_t)RADIANT_WIRE_INVALID_MESSAGE;
+		return (radiant_ant_err_t)RADIANT_WIRE_INVALID_MESSAGE;
 	}
 	if ((switches & ~SEC_SW_KNOWN_MASK) != 0u) {
 		/* A reserved bit set is a host speaking a later dialect. Refuse
 		 * rather than mask: masking would enable the switches it DOES
 		 * understand and silently drop the one it does not, which is
 		 * the worst of both answers. */
-		return (antr_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED;
+		return (radiant_ant_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED;
 	}
 
 	/* Not radiant_sec_configure() directly: on a master the change must be
 	 * the one on the air before this answers, so the adapter takes back
 	 * the slot it staged, and refuses while a transfer is in flight
 	 * (review 2026-11-17 item 2). */
-	return sec_err(antr_sec_policy_set(channel, switches, w, page_lo,
+	return sec_err(radiant_ant_sec_policy_set(channel, switches, w, page_lo,
 					   page_hi));
 }
 
-static antr_err_t sec_key_set_locked(uint8_t channel, uint8_t bits,
+static radiant_ant_err_t sec_key_set_locked(uint8_t channel, uint8_t bits,
 				     const uint8_t *key)
 {
 	if (channel >= (uint8_t)RADIANT_CHANNEL_COUNT || key == NULL) {
-		return (antr_err_t)RADIANT_WIRE_INVALID_MESSAGE;
+		return (radiant_ant_err_t)RADIANT_WIRE_INVALID_MESSAGE;
 	}
 
 	/*
@@ -144,10 +144,10 @@ static antr_err_t sec_key_set_locked(uint8_t channel, uint8_t bits,
 	struct radiant_channel_id id;
 
 	if (radiant_channel_id_get(channel, &id) != RADIANT_CH_OK) {
-		return (antr_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE;
+		return (radiant_ant_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE;
 	}
 	if (id.device_number == 0u) {
-		return (antr_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE;
+		return (radiant_ant_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE;
 	}
 	/*
 	 * A master with host acked data or a burst in flight is not keyed:
@@ -158,8 +158,8 @@ static antr_err_t sec_key_set_locked(uint8_t channel, uint8_t bits,
 	 * radiant_sec_set_key() directly and is outside this check: it runs
 	 * its own acked exchange on the channel.
 	 */
-	if (antr_master_xfer_busy(channel)) {
-		return (antr_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE;
+	if (radiant_ant_master_xfer_busy(channel)) {
+		return (radiant_ant_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE;
 	}
 
 	/* The on-air number starts equal to the provisioning one: set_key puts
@@ -168,40 +168,40 @@ static antr_err_t sec_key_set_locked(uint8_t channel, uint8_t bits,
 	 * receiver's trial number (radiant_sec_try_devnum()). A real rekey also
 	 * takes back the master's old-key slot and ack payload (review
 	 * 2026-11-20 item C). */
-	return sec_err(antr_sec_key_replace(channel, key, (size_t)bits,
+	return sec_err(radiant_ant_sec_key_replace(channel, key, (size_t)bits,
 					    id.device_number));
 }
 
-static antr_err_t sec_epoch_set_locked(uint8_t channel, uint8_t flags,
+static radiant_ant_err_t sec_epoch_set_locked(uint8_t channel, uint8_t flags,
 				       uint32_t epoch, uint64_t us_into_epoch)
 {
 	uint16_t period;
 
 	if (channel >= (uint8_t)RADIANT_CHANNEL_COUNT) {
-		return (antr_err_t)RADIANT_WIRE_INVALID_MESSAGE;
+		return (radiant_ant_err_t)RADIANT_WIRE_INVALID_MESSAGE;
 	}
 	/* Bit 0 says the epoch is coarse real time vs. a bare ordinal; nothing
 	 * here behaves differently either way since both are monotonic. Every
 	 * other bit is reserved. */
 	if ((flags & (uint8_t)~0x01u) != 0u) {
-		return (antr_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED;
+		return (radiant_ant_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED;
 	}
 
 	/* The channel period, read rather than sent: a host-supplied value
 	 * that disagreed would desynchronise the counter in a way that looks
 	 * like clock drift. */
 	if (radiant_channel_period_get(channel, &period) != RADIANT_CH_OK) {
-		return (antr_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE;
+		return (radiant_ant_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE;
 	}
 
 	return sec_err(radiant_sec_set_epoch(channel, epoch, us_into_epoch,
 					     period));
 }
 
-antr_err_t antr_sec_config(uint8_t channel, uint8_t switches, uint8_t w,
+radiant_ant_err_t radiant_ant_sec_config(uint8_t channel, uint8_t switches, uint8_t w,
 			   uint8_t page_lo, uint8_t page_hi)
 {
-	antr_err_t rc;
+	radiant_ant_err_t rc;
 
 	k_mutex_lock(&api_lock, K_FOREVER);
 	rc = sec_config_locked(channel, switches, w, page_lo, page_hi);
@@ -209,9 +209,9 @@ antr_err_t antr_sec_config(uint8_t channel, uint8_t switches, uint8_t w,
 	return rc;
 }
 
-antr_err_t antr_sec_key_set(uint8_t channel, uint8_t bits, const uint8_t *key)
+radiant_ant_err_t radiant_ant_sec_key_set(uint8_t channel, uint8_t bits, const uint8_t *key)
 {
-	antr_err_t rc;
+	radiant_ant_err_t rc;
 
 	k_mutex_lock(&api_lock, K_FOREVER);
 	rc = sec_key_set_locked(channel, bits, key);
@@ -219,10 +219,10 @@ antr_err_t antr_sec_key_set(uint8_t channel, uint8_t bits, const uint8_t *key)
 	return rc;
 }
 
-antr_err_t antr_sec_epoch_set(uint8_t channel, uint8_t flags, uint32_t epoch,
+radiant_ant_err_t radiant_ant_sec_epoch_set(uint8_t channel, uint8_t flags, uint32_t epoch,
 			      uint64_t us_into_epoch)
 {
-	antr_err_t rc;
+	radiant_ant_err_t rc;
 
 	k_mutex_lock(&api_lock, K_FOREVER);
 	rc = sec_epoch_set_locked(channel, flags, epoch, us_into_epoch);
@@ -230,16 +230,16 @@ antr_err_t antr_sec_epoch_set(uint8_t channel, uint8_t flags, uint32_t epoch,
 	return rc;
 }
 
-antr_err_t antr_sec_status_get(uint8_t channel, uint8_t *out, uint8_t out_len)
+radiant_ant_err_t radiant_ant_sec_status_get(uint8_t channel, uint8_t *out, uint8_t out_len)
 {
 	struct radiant_sec_state state;
 	struct radiant_sec_stats stats;
 
-	if (out == NULL || out_len < ANTR_SEC_STATUS_LEN) {
-		return (antr_err_t)RADIANT_WIRE_INVALID_MESSAGE;
+	if (out == NULL || out_len < RADIANT_ANT_SEC_STATUS_LEN) {
+		return (radiant_ant_err_t)RADIANT_WIRE_INVALID_MESSAGE;
 	}
 	if (channel >= (uint8_t)RADIANT_CHANNEL_COUNT) {
-		return (antr_err_t)RADIANT_WIRE_INVALID_MESSAGE;
+		return (radiant_ant_err_t)RADIANT_WIRE_INVALID_MESSAGE;
 	}
 
 	/* An unkeyed channel answers with zeros and CLEAR rather than erroring
@@ -250,9 +250,9 @@ antr_err_t antr_sec_status_get(uint8_t channel, uint8_t *out, uint8_t out_len)
 	radiant_sec_get_stats(channel, &stats);
 	k_mutex_unlock(&api_lock);
 
-	memset(out, 0, ANTR_SEC_STATUS_LEN);
+	memset(out, 0, RADIANT_ANT_SEC_STATUS_LEN);
 	out[0] = channel;
-	out[1] = (uint8_t)ANTR_SEC_STATUS_VERSION;
+	out[1] = (uint8_t)RADIANT_ANT_SEC_STATUS_VERSION;
 	out[2] = state.switches;
 	out[3] = state.w;
 	out[4] = state.page_lo;
@@ -281,10 +281,10 @@ antr_err_t antr_sec_status_get(uint8_t channel, uint8_t *out, uint8_t out_len)
 	put_u16_sat(&out[28], stats.verdict_events_dropped);
 	/* Armed or pending: a pending channel withholds and drops its secured
 	 * pages, and without this a host could not tell it from a quiet link. */
-	out[30] = (uint8_t)((state.keyed ? ANTR_SEC_STATUS_KEYED : 0u) |
-			    (state.secured ? ANTR_SEC_STATUS_ARMED : 0u));
+	out[30] = (uint8_t)((state.keyed ? RADIANT_ANT_SEC_STATUS_KEYED : 0u) |
+			    (state.secured ? RADIANT_ANT_SEC_STATUS_ARMED : 0u));
 
-	return (antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR;
+	return (radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR;
 }
 
 #if defined(CONFIG_RADIANT_SEC_PAIRING_X25519)
@@ -319,7 +319,7 @@ static const uint8_t pair_arg_len[] = {
 	[RADIANT_WIRE_RADIANT_PAIR_PEER_NONCE]  = RADIANT_SEC_PAIR_NONCE_BYTES,
 };
 
-static antr_err_t sec_pair_locked(uint8_t channel, uint8_t subcmd,
+static radiant_ant_err_t sec_pair_locked(uint8_t channel, uint8_t subcmd,
 				  const uint8_t *arg, uint8_t arg_len,
 				  uint8_t *reply, uint8_t reply_cap,
 				  uint8_t *reply_len)
@@ -331,16 +331,16 @@ static antr_err_t sec_pair_locked(uint8_t channel, uint8_t subcmd,
 	 * sub-command can fail for want of room after it has changed state. */
 	if (channel >= (uint8_t)RADIANT_CHANNEL_COUNT || reply == NULL ||
 	    reply_len == NULL || reply_cap < 2u + RADIANT_SEC_X25519_BYTES) {
-		return (antr_err_t)RADIANT_WIRE_INVALID_MESSAGE;
+		return (radiant_ant_err_t)RADIANT_WIRE_INVALID_MESSAGE;
 	}
 	if (subcmd >= ARRAY_SIZE(pair_arg_len)) {
-		return (antr_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED;
+		return (radiant_ant_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED;
 	}
 	if (((subcmd == RADIANT_WIRE_RADIANT_PAIR_ENTER)
 		     ? (arg_len > 1u)
 		     : (arg_len != pair_arg_len[subcmd])) ||
 	    (arg_len != 0u && arg == NULL)) {
-		return (antr_err_t)RADIANT_WIRE_INVALID_MESSAGE;
+		return (radiant_ant_err_t)RADIANT_WIRE_INVALID_MESSAGE;
 	}
 
 	reply[0] = channel;
@@ -407,7 +407,7 @@ static antr_err_t sec_pair_locked(uint8_t channel, uint8_t subcmd,
 	 * refusal an out-of-order call gets. The bridge sends the reply only
 	 * on success, so a refused sub-command's reply_len is never read. */
 	if (rc == RADIANT_SEC_EBADMAC) {
-		return (antr_err_t)RADIANT_WIRE_RADIANT_PAIR_COMMIT_MISMATCH;
+		return (radiant_ant_err_t)RADIANT_WIRE_RADIANT_PAIR_COMMIT_MISMATCH;
 	}
 	return sec_err(rc);
 }
@@ -415,11 +415,11 @@ static antr_err_t sec_pair_locked(uint8_t channel, uint8_t subcmd,
 /* The X25519 exchange (0xF5 EXCHANGE, and SCALAR for the public key) holds
  * api_lock for its whole duration, like the rest; see the hold-time
  * measurement in radiant/tests/api/src/test_api_sec_host.c. */
-antr_err_t antr_sec_pair(uint8_t channel, uint8_t subcmd, const uint8_t *arg,
+radiant_ant_err_t radiant_ant_sec_pair(uint8_t channel, uint8_t subcmd, const uint8_t *arg,
 			 uint8_t arg_len, uint8_t *reply, uint8_t reply_cap,
 			 uint8_t *reply_len)
 {
-	antr_err_t rc;
+	radiant_ant_err_t rc;
 
 	k_mutex_lock(&api_lock, K_FOREVER);
 	rc = sec_pair_locked(channel, subcmd, arg, arg_len, reply, reply_cap,
