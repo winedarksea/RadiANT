@@ -397,9 +397,9 @@ group.
 ## Medium
 
 - [ ] **A keyed receiver accepts a wholly plain descriptor set** (library;
-  radio peer without the key). `profile_desc_rx_take_auth()`
-  (`profile_telemetry.c` ~:994) returns success without verifying anything when
-  frame 0 has no transform bit, and `profile_desc_may_decode_data()` (~:113)
+  radio peer without the key). `radiant_profile_desc_rx_take_auth()`
+  (`radiant_profile_telemetry.c` ~:994) returns success without verifying anything when
+  frame 0 has no transform bit, and `radiant_profile_desc_may_decode_data()` (~:113)
   then allows decoding. An attacker who sends a complete plain set with the
   same schema id makes the receiver read genuine, correctly MAC'd data pages
   through a forged schema, which is the case `docs/radiant-security.md` 5.3
@@ -418,8 +418,8 @@ group.
   machine range through those BLE symbols, which an FE-C-only build does not
   have. Fix: transport-neutral machine-range symbols for incline and speed,
   enforced in `treadmill_state_request_*()`, with page 71 answering
-  REJECTED/FAIL out of range. Also bound `profile_fec_grade_to_centi_pct()`
-  (`profile_fec_tx.c` ~:62) at raw 40000; it accepts up to +455 % today.
+  REJECTED/FAIL out of range. Also bound `radiant_profile_fec_grade_to_centi_pct()`
+  (`radiant_profile_fec_tx.c` ~:62) at raw 40000; it accepts up to +455 % today.
 - [ ] **Matter: a spoofed FE-C equipment type drives one flash write per second
   per endpoint, with no bound** (Matter image; radio transmitter).
   `ant_matter_note_sample()` (`ant_bridge.cpp` ~:1175) sets `labelDirty` on
@@ -468,7 +468,7 @@ group.
 
 - [ ] **Keyed scan channel: X_AUTH tags can be guessed at air rate.** A scan
   offers every CRC-valid frame to `radiant_sec_rx_ingest()`
-  (`radiant_search.c` ~:1028, `ant_radio_radiant.c` ~:1506), `rx_floor` is 0
+  (`radiant_search.c` ~:1028, `radiant_ant.c` ~:1506), `rx_floor` is 0
   until something verifies, and a closed window can be reopened and judged
   again without limit (`radiant_sec.c` ~:1654-1671). An injector sends a chain
   of 2-frame windows, each a 16-bit guess for the one before, so the expected
@@ -479,7 +479,7 @@ group.
   budget failed windows per period; correct 3.2 and 7.5.
 - [ ] **Private-mode receiver accepts a replayed SWITCH/RETURN announcement for
   the rest of the Tier I interval** (library). `rx_take()`
-  (`profile_private.c` ~:768) has no floor on the last verified announcement,
+  (`radiant_profile_private.c` ~:768) has no floor on the last verified announcement,
   and `radiant_sec_compat_announce_verify()` checks only the interval index.
   With a long interval (up to 3600 s) a recorded pair sends every keyed
   receiver to the empty locator again; at any interval a late replay moves
@@ -489,7 +489,7 @@ group.
   frame A within an interval, let `act_at` only decrease once armed, hold two
   candidate frame A's, and record refused-but-verified command tags.
 - [ ] **Reliable-command backoff lets a peer without the key lock out the
-  owner** (library). `profile_command.c` (~:366) drops every command
+  owner** (library). `radiant_profile_command.c` (~:366) drops every command
   unverified while `now < blocked_until`, genuine ones included, and only an
   accepted fresh command clears the ladder. One forged frame after each expiry
   keeps the node deaf, at up to 819 s per frame. Fix: cap the ladder near 1 s
@@ -502,20 +502,20 @@ group.
   not this. Fix: top up on a fresh accept and on the first one or two
   duplicates of a sequence only.
 - [ ] **"Period before epoch" is documented as a refusal and is not enforced.**
-  `antr_sec_epoch_set()` (`ant_sec_host.c` ~:193) only checks
+  `radiant_ant_sec_epoch_set()` (`radiant_ant_sec.c` ~:193) only checks
   `radiant_channel_period_get()`, which cannot fail for a valid channel; there
   is no period-set flag, so an unset period binds as the default 8182.
   `radiant_sec_set_epoch()` caches the period (`radiant_sec.c` ~:811) and
-  `antr_channel_period_set()` has no security hook, so a later 0x43 leaves the
+  `radiant_ant_channel_period_set()` has no security hook, so a later 0x43 leaves the
   slot counter running at the old rate: a master re-sends old ciphertext or
   skips counters (no nonce reuse; the `tx_last_idx` guard holds), and a
-  receiver's counter drifts. `docs/radiant-security.md` 9, `ant_radio.h`
+  receiver's counter drifts. `docs/radiant-security.md` 9, `radiant_ant.h`
   (~:1144) and the header of `test_api_sec_host.c` all claim the refusal. Fix:
   a `CHF_PERIOD_SET` flag checked by 0xF3, and refuse a 0x43 that changes the
   period while the channel has an epoch. Add both tests.
 - [ ] **Re-numbering a keyed master keeps the old device number in the keys and
   nonce.** `radiant_sec_set_key()` stores `base_devnum` once (`radiant_sec.c`
-  ~:647); `antr_channel_id_set()` is a bare forward, and 0xF4 reports neither
+  ~:647); `radiant_ant_channel_id_set()` is a bare forward, and 0xF4 reports neither
   number. After close, 0x51, open, the master is on air under the new number
   with keys for the old one, and the host may believe (root, old number) is
   free for another channel. Fix: on a master with a security context, refuse a
@@ -542,8 +542,8 @@ group.
   wraps only on a matching tag. Extend
   `test_a_forged_first_page_fails_once_and_moves_nothing` to a locked receiver.
 - [ ] **Node identity: a record that reads as absent is taken as 0** (library;
-  storage fault or local flash write). `node_ident_boot()` ignores `present`
-  from `load_u32()` (`node_ident.c` ~:447, :465, :488). If `radiant/epoch`
+  storage fault or local flash write). `radiant_node_ident_boot()` ignores `present`
+  from `load_u32()` (`radiant_node_ident.c` ~:447, :465, :488). If `radiant/epoch`
   alone is lost, the epoch falls back to the boot counter, which is about half
   of N, so an epoch already used is used again with the counter at 0 (keystream
   reuse under X_CONF). Zephyr's `settings_nvs.c` (~:157-191) deletes a setting
@@ -563,7 +563,7 @@ group.
   it inside `radiant_event_crit_enter()` with `active` last; guard the memset
   in `radiant_search_end()` the same way.
 - [ ] **The sweep can offer a frame to a channel that has left SEARCHING.**
-  Membership is removed after the state change (`ant_radio_radiant.c` ~:3787
+  Membership is removed after the state change (`radiant_ant.c` ~:3787
   vs :3797; timeout ~:3239 vs the later pump), and `api_search_acquired()` has
   no state check, so a broadcast can follow CHANNEL_CLOSED and the frame's one
   ACQUIRE claim is spent on a dead channel. Fix: `api_search_permit()` returns
@@ -661,7 +661,7 @@ group.
 ## Hardening
 
 - [ ] **Tracked channels do not check the transmission type of a clean frame.**
-  `api_tracked_frame()` (`ant_radio_radiant.c` ~:2455) compares body byte 0
+  `api_tracked_frame()` (`radiant_ant.c` ~:2455) compares body byte 0
   only for CRC-repaired frames, so a frame with another transmission type
   re-anchors the slot, is ACKed, and goes to the host under the channel's ID.
   ANT+ uses the upper nibble as device-number bits 16-19, so two sensors can
@@ -683,7 +683,7 @@ group.
   checks minimum lengths only; `ant_wire.yaml` declares exact ones and 0xF5
   already enforces them. Fix: `len == N`.
 - [ ] **The channel type byte is stored unvalidated and compared two ways.**
-  Some paths mask it and others compare raw (`ant_radio_radiant.c` ~:1135,
+  Some paths mask it and others compare raw (`radiant_ant.c` ~:1135,
   :1984, :2058, :4470, :4550), so type 0x41 reads back as RX-only and refuses
   broadcasts yet acknowledges and accepts acked data and bursts. Fix:
   normalise once at assign.
@@ -696,8 +696,8 @@ group.
   destroying the old root.
 - [ ] **Lock assertions miss most users of the shared AES schedule.**
   `RADIANT_SEC_ASSERT_LOCKED` is absent from `radiant_sec_compat.c` and from
-  the primitives that `profile_command.c`, `profile_telemetry.c`,
-  `profile_enrol.c` and `node_ident.c` call, some of which key the schedule
+  the primitives that `radiant_profile_command.c`, `radiant_profile_telemetry.c`,
+  `radiant_profile_enrol.c` and `radiant_node_ident.c` call, some of which key the schedule
   with the public all-zero key. Fix: assert in `select_key()`
   (`radiant_sec_aes.c` ~:161).
 - [ ] **`epoch_search()` has no rate limit** (library). One forged beacon or
@@ -706,7 +706,7 @@ group.
   it to a user action; say so in 11.3. Likewise cap refused small-order peer
   keys per enrolment window (`radiant_sec_pair.c` ~:455; each costs an X25519
   under the port lock), and throttle failures in
-  `profile_private_on_command()` as `profile_command` does.
+  `radiant_profile_private_on_command()` as `radiant_profile_command` does.
 - [ ] **Bench Thread and Matter credentials compile in with no guard.**
   `thread.conf` sets the well-known network key with
   `OPENTHREAD_MANUAL_START=n`, and `matter.conf` sets `CHIP_FACTORY_DATA_NONE`
