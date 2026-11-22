@@ -36,27 +36,6 @@ Checks and decisions left over from work that has otherwise landed.
      retry (within 1 s) gets an id at or above it.
 - [ ] **Zwift shim key redaction end to end.** Run `ant_zwift_visible.py --dll`
   on the bench against the redacting shim (sec review 2026-11-20).
-- [ ] **Denied tracking slots, bench check** (2026-11-21, ADR 0024 amendment;
-  firmware on `wip/denied-collision`). Rebuild `acc_coex_ble` (gate +
-  `ble_load.conf`) from the branch. Run ant_verify for 600 s against the
-  2026-11-20 master, with the Garmin as the same-window control. Pass when:
-  - (a) `unaccounted` <= `allowed`, and the verdict lists collisions;
-  - (b) the host's 0x09 count ~= delta(denied) + delta(collided), taken from the
-    run's first and last `rxpath` lines;
-  - (d) no GO_TO_SEARCH comes from denials.
-
-  **The 4 unexplained misses:** compare delta(denied) from the same two `rxpath`
-  lines with the gate's tracked acquired - granted delta from the 5 s gate
-  counters over the same span. This is valid only with no master channel on the
-  DUT, because `slots_denied` also counts denied master transmits, and so does
-  (b)'s sum. If they are equal, every refusal ends DENIED and is now reported.
-  If delta(denied) is short by the late-refusal count, those windows end on a
-  path that posts nothing. That is a separate bug: trace the gate's pending ->
-  not-granted path (`radiant_radio_nrf_gate_mpsl.c`, the `stats.granted++`
-  site).
-- [ ] **HR dual transmission on air.** Since d530eac the default `ble.conf`
-  image sends ANT+ and BLE together for a whole connection. That has not been
-  run on air.
 - [ ] **Nordic report on MPSL assert 69:108.** A draft is in
   `archive/benchmarks/2026-11-15-assert-69108/nordic-report-draft.md`; posting
   it is your call. DevZone thread 128550 reports the same `69, 108` from
@@ -260,14 +239,6 @@ noticeably degrade primary functionality, such as receiving a heart rate strap.
 
 # Matter bridge
 
-- [ ] **The endpoint-already-exists retry is broken** (inherited from upstream;
-  reviewer, 2026-11-22). On `CHIP_ERROR_ENDPOINT_EXISTS`, `CreateEndpoint()`
-  returns `CHIP_ERROR_SENTINEL` so the caller retries with the next id
-  (`bridge_manager.cpp`, the `while (err == CHIP_ERROR_SENTINEL)` loop). But
-  the failure cleanup erases the device even on that signal, so the retry fails
-  and the device is dropped. Stock NCS `applications/matter_bridge` has the
-  same bug, and it predates the endpoint high-water work. Fix: keep the device
-  on SENTINEL, and record it in `src/matter/README.md`'s vendored-patch list.
 - [ ] **"Absent vs unreadable" high-water mark is only partly closed**
   (reviewer, 2026-11-22). Zephyr's `settings_load_subtree_direct()` drops
   backend read errors, so a fault that hides the stored `br/brd_ep_hw` entry

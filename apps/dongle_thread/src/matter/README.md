@@ -95,6 +95,20 @@ unchanged); the caller's own `Erase()` then returns false, so the slot is
 returned exactly once. `dataProvider->Init()` now runs after the high-water
 gate, still before the insert.
 
+**`core/bridge_manager.cpp` is patched for the endpoint-exists retry**
+(2026-11-22). In `AddSingleDevice()`'s auto-id loop, `CreateEndpoint()`
+returns `CHIP_ERROR_SENTINEL` when `emberAfSetDynamicEndpoint()` reports
+`CHIP_ERROR_ENDPOINT_EXISTS`, and the loop is meant to retry with the next id.
+Upstream erases the pair from `mDevicesMap` on every non-success, SENTINEL
+included, so the retry's `CreateEndpoint()` fails `Contains(index)` with
+`CHIP_ERROR_INTERNAL` and the device is dropped. The pair is now erased only
+for errors other than SENTINEL, so the retry finds it. The loop still ends:
+at most `kMaxBridgedDevices - 1` other dynamic endpoints exist and each try
+advances the id once. The explicit-id branch is unchanged (a caller-chosen id
+cannot be retried, so erasing there is right). Upstream note drafted in
+`archive/upstream/ncs-matter-bridge-endpoint-exists-retry.md`. Re-check on an
+NCS re-copy: drop the patch if upstream's loop stops erasing on SENTINEL.
+
 **What the tests cover, and what they do not.** The counter arithmetic
 (upstream's raise and wrap guard included), the stored value's codec, the
 load classification, the unknown-mark rules and the provider bookkeeping live

@@ -1,0 +1,18 @@
+﻿[  0.023] looking for a device whose advertised name contains 'RadiANT HR'
+[ 21.935] found 'RadiANT HR' at FD:D3:C2:A3:0C:4B (rssi -45)
+[ 27.168] connection status: Connected
+[ 29.406] Heart Rate service found; GATT is up, so the link is established
+[ 29.573] subscribed; holding the connection for 720 s
+[749.578] 864 notification(s) in 720 s; disconnecting
+0-60 s: 72
+60-120 s: 72
+120-180 s: 72
+180-240 s: 72
+240-300 s: 72
+300-360 s: 72
+360-420 s: 72
+420-480 s: 72
+480-540 s: 72
+540-600 s: 72
+600-660 s: 72
+660-720 s: 72

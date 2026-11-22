@@ -1,0 +1,72 @@
+{
+  "hex": "C:\\wt_den\\build\\coexble\\dongle_thread\\zephyr\\zephyr.hex",
+  "image_label": "coexble_c58ca20",
+  "image_sha256": "3a1f68be37dcd6941810ff779c98988ded278cd3759e57a17cdb6d954ed3b83a",
+  "seconds": 600,
+  "base": "C:\\Users\\Colin\\AppData\\Local\\Temp\\claude\\0b707879d249ade1\\64ea99b4-7fb0-4d66-81fe-d416ebf49a55\\scratchpad\\den\\den_coexble",
+  "start": "2026-11-22T10:13:48",
+  "flags": {
+    "no_peer": true,
+    "no_ref": false,
+    "no_search": false,
+    "no_master": false,
+    "no_flash": false,
+    "stop_on_reboot": false,
+    "continue_after_assert": true
+  },
+  "jlink": {
+    "device": "nRF54L15_M33",
+    "serial": "1057737173"
+  },
+  "tools": "C:\\wt_den\\tools",
+  "flash_script": "C:\\wt_den\\scripts\\flash_sim_jlink.ps1",
+  "flash_rc": 0,
+  "diag_before_rc": 2,
+  "dut_starts": [
+    "2026-11-22T10:14:11.827"
+  ],
+  "dut_segments": 0,
+  "diag_after_rc": 2,
+  "diag_diff_rc": 1,
+  "cap": "{'deaths': []}",
+  "console_lines": 3073,
+  "first_console_line": "2026-11-22T10:13:54.137",
+  "first_line_is_banner": false,
+  "flash_done": "2026-11-22T10:13:53.232",
+  "dut_open": "2026-11-22T10:14:11.827",
+  "reboots": 0,
+  "reboot_times": [],
+  "reboot_since_boot_s": [],
+  "assert_count": 0,
+  "assert_times": [],
+  "asserts": [],
+  "last_stats": {
+    "placed": 7688,
+    "granted": 7243,
+    "blocked": 445,
+    "ext": "247705/63",
+    "skip": 0
+  },
+  "end_since_boot_s": 630.804,
+  "end_since_flash_s": 631.709,
+  "dut_rc": 1,
+  "ref_rc": 0,
+  "ended_by": "duration",
+  "elapsed": 613.1140749454498,
+  "end": "2026-11-22T10:24:24",
+  "row": {
+    "leg": "den_coexble",
+    "image": "coexble_c58ca20",
+    "sha12": "3a1f68be37dc",
+    "start": "2026-11-22T10:13:48",
+    "result": "clean at 630.8 s",
+    "since_open_s": "",
+    "placed": "7688",
+    "granted": "7243",
+    "blocked": "445",
+    "ext": "247705/63",
+    "skip": "0",
+    "reboots": "0",
+    "asserts": "0"
+  }
+}

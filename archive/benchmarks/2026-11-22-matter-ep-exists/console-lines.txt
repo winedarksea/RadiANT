@@ -1,0 +1,15 @@
+# fix (e7fa93c + debug patch), fx-console.log
+[2026-11-22T11:15:49.341] [00:45:28.535,488] <inf> app: Added device to dynamic endpoint 3 (index=0)
+[2026-11-22T11:15:49.854] [00:45:28.684,187] <wrn> app: DEBUG: forcing next endpoint id to live 3
+[2026-11-22T11:15:49.854] [00:45:28.684,200] <wrn> app: Dynamic endpoint 3 exists: retrying with 4
+[2026-11-22T11:15:49.854] [00:45:28.692,421] <inf> app: Added device to dynamic endpoint 4 (index=1)
+[2026-11-22T11:15:50.369] [00:45:29.497,757] <inf> app: Added device to dynamic endpoint 5 (index=2)
+[2026-11-22T11:15:50.369] [00:45:29.574,867] <inf> app: Added device to dynamic endpoint 6 (index=3)
+
+# control (c58ca20 + debug patch, -Erase flash), ct2-console.log
+[2026-11-22T13:57:51.830] [01:04:20.997,089] <inf> app: Added device to dynamic endpoint 3 (index=0)
+[2026-11-22T13:57:51.830] [01:04:21.149,133] <wrn> app: DEBUG: forcing next endpoint id to live 3
+[2026-11-22T13:57:51.830] [01:04:21.160,309] <err> app: Cannot retrieve bridged device from index 1
+[2026-11-22T13:57:51.830] [01:04:21.160,352] <err> app: matter: AddBridgedDevices failed for 38750734e4ddd6db01: ac
+[2026-11-22T13:57:53.375] [01:04:21.952,211] <inf> app: Added device to dynamic endpoint 5 (index=1)
+[2026-11-22T13:58:00.510] [01:04:29.950,907] <inf> app: Added device to dynamic endpoint 6 (index=2)

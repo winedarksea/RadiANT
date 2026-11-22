@@ -105,6 +105,11 @@ scheduling), so 0xF7 page 0 field 5 and page 11 field 6 keep their meanings. A
 denied **master transmit** stays silent: it is not receive loss. This covers
 every backend whose arbiter denials take the core path, TI included.
 
+Bench, 2026-11-22 (`archive/benchmarks/2026-11-22-denied-slots/`): the same
+image recipe from c58ca20, 600 s. All 37 misses were reported (5 `RX_FAIL`, 32
+`0x09`); `slots_denied` rose by 32 and the gate's tracked acquired - granted by
+32, so every refusal ends `DENIED`. No denial reached search.
+
 ### 3. Page 11
 
 0xF7 page 11 carries the scheduler counters that never reached the host
