@@ -3272,12 +3272,17 @@ static void api_housekeep(void)
 
 		if (now - rxpath_last >= API_RXPATH_REPORT_US &&
 		    api_stats.rx_sched_events != rxpath_seen) {
-			/* Reported as a delta over the interval, since the counters are
-			 * cumulative since boot. */
+			/* sched is a delta over the interval; the rest are cumulative
+			 * since boot. missed/denied/collided split the slots that got no
+			 * frame: the air (missed), the arbiter refusing the radio (denied,
+			 * master transmits included) and our own scheduler's drop
+			 * (collided). Compare a denied delta with the gate's tracked
+			 * acquired - granted over the same window. */
 			uint32_t dt_ms = (uint32_t)((now - rxpath_last) / 1000u);
 
 			LOG_INF("rxpath/%ums sched=%u tracked=%u on_data=%u "
-				"up=%u posted=%u | xfer=%u dropped=%u tot=%u",
+				"up=%u posted=%u | xfer=%u dropped=%u tot=%u "
+				"| missed=%u denied=%u collided=%u",
 				(unsigned int)dt_ms,
 				(unsigned int)(api_stats.rx_sched_events - rxpath_seen),
 				(unsigned int)api_stats.rx_tracked_frames,
@@ -3286,7 +3291,10 @@ static void api_housekeep(void)
 				(unsigned int)api_stats.rx_posted,
 				(unsigned int)api_stats.rx_to_xfer,
 				(unsigned int)api_stats.rx_dropped,
-				(unsigned int)api_stats.rx_sched_events);
+				(unsigned int)api_stats.rx_sched_events,
+				(unsigned int)api_stats.slots_missed,
+				(unsigned int)api_stats.slots_denied,
+				(unsigned int)api_stats.slots_collided);
 			LOG_INF("xfer failures: no_opener=%u lost_track=%u no_ack=%u "
 				"bad_ack=%u radio=%u",
 				(unsigned int)api_stats.xfer_no_opener,
