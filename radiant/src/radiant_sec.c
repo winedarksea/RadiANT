@@ -746,6 +746,9 @@ int radiant_sec_configure(uint8_t ch, uint8_t switches, uint8_t w,
 		rx_discard(c);
 		c->tx_win_open = false;
 		c->tx_prev_valid = false;
+		/* So are pages queued under the old policy: the pump would read
+		 * them with the new switches and range (review 2026-11-21). */
+		q_purge(ch);
 	}
 	/* The slot clock's latch and the last-slot guard stay: neither the
 	 * epoch nor the period changes here, so a fresh latch could only move
@@ -818,6 +821,9 @@ int radiant_sec_set_epoch(uint8_t ch, uint32_t epoch, uint64_t us_into_epoch,
 	c->tx_prev_valid = false;
 	rx_discard(c);
 	c->rx_floor = 0u;
+	/* Pages queued under the old epoch: decrypted with the new key they
+	 * reached the host as garbage under X_CONF (review 2026-11-21). */
+	q_purge(ch);
 
 	return derive_keys(c);
 }

@@ -920,6 +920,57 @@ ZTEST(radiant_sec, test_release_drops_ciphertext_still_queued_for_the_pump)
 	zassert_equal(0u, log_n_pkt);
 }
 
+/*
+ * Review 2026-11-21: a page queued for the pump was heard under the epoch (or
+ * policy) in force at ingest. A host 0xF3 or a changed 0xF1 before the event
+ * thread ran must take it with the windows: under X_CONF alone it decrypted
+ * with the new epoch's key and reached the host as a bogus measurement. An
+ * identical 0xF1 retry changes nothing, the queue included.
+ */
+static void queue_one_conf_page(void)
+{
+	uint8_t air[8];
+
+	key_both();
+	configure_both(RADIANT_SEC_SW_CONF, 2u);
+	epoch_both(41u);
+	tx_air(0u, air);
+	zassert_equal(RADIANT_SEC_RX_DEFER,
+		      radiant_sec_rx_ingest(RX_CH, air, 8u, true, sec_anchor));
+}
+
+ZTEST(radiant_sec, test_a_new_epoch_drops_ciphertext_still_queued_for_the_pump)
+{
+	queue_one_conf_page();
+	zassert_ok(radiant_sec_set_epoch(RX_CH, 42u, 0u, TEST_PERIOD));
+	radiant_sec_pump();
+	zassert_equal(0u, log_n_pkt, "%u packets", log_n_pkt);
+}
+
+ZTEST(radiant_sec, test_a_changed_policy_drops_ciphertext_still_queued_for_the_pump)
+{
+	queue_one_conf_page();
+	zassert_ok(radiant_sec_configure(RX_CH, RADIANT_SEC_SW_CONF, 4u,
+					 RADIANT_SEC_PAGE_LO_DEFAULT,
+					 RADIANT_SEC_PAGE_HI_DEFAULT));
+	radiant_sec_pump();
+	zassert_equal(0u, log_n_pkt, "%u packets", log_n_pkt);
+}
+
+ZTEST(radiant_sec, test_a_refused_epoch_or_identical_policy_keeps_the_queue)
+{
+	queue_one_conf_page();
+	/* Not monotone: refused, so nothing changed and nothing is dropped. */
+	zassert_not_equal(RADIANT_SEC_OK,
+			  radiant_sec_set_epoch(RX_CH, 41u, 0u, TEST_PERIOD));
+	zassert_ok(radiant_sec_configure(RX_CH, RADIANT_SEC_SW_CONF, 2u,
+					 RADIANT_SEC_PAGE_LO_DEFAULT,
+					 RADIANT_SEC_PAGE_HI_DEFAULT));
+	radiant_sec_pump();
+	zassert_equal(1u, log_n_pkt, "%u packets", log_n_pkt);
+	zassert_mem_equal(&log_pkt[0].pay[2], &conf_plain[2], 6u);
+}
+
 /* D1-4: the constant-time compare is still an equality. Constant time itself
  * is not unit-testable; the sec suites staying green is the real guard. */
 ZTEST(radiant_sec, test_ct_equal_is_equality)

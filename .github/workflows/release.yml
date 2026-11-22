@@ -2370,6 +2370,10 @@ jobs:
           # All cold host-command code; no per-packet path changes. Raised by
           # the measured value plus a 32 B margin, not to the next multiple
           # of 512 (8192), so the next growth is still caught.
+          # 7824 / 6975 after the queue purge on 0xF3 and on a changed 0xF1
+          # (review 2026-11-21; this recipe, NCS v3.4.0, measured on
+          # wip/sec-queue-pair): two q_purge() calls in cold host-command
+          # code, no per-packet change. Ceiling unchanged, 32 B left.
           check "security text" "$(( on_text - off_text ))" 7856
           check "security bss"  "$(( on_bss  - off_bss  ))" 7168
 
