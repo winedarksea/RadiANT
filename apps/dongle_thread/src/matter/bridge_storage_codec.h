@@ -198,7 +198,7 @@ uint16_t Seed(uint16_t first, bool haveStored, uint16_t storedNext);
  * fresh allocation with its wrap guard. Both differ from upstream in one
  * way: a result of kInvalid (from 0xFFFE) wraps to `first` like the wrap to 0
  * already did, so 0xFFFF is never tried as an endpoint id and never stored -
- * a stored 0xFFFF is refused at boot, which would fall back to reuse. */
+ * a stored 0xFFFF reads as Unreadable at boot (see MarkLoad). */
 uint16_t Raise(uint16_t current, uint16_t restoredId, uint16_t first);
 uint16_t Advance(uint16_t current, uint16_t first);
 
@@ -271,7 +271,7 @@ namespace ProviderSlots
 {
 
 /* Room for one more provider? A provider already in the map always fits. */
-bool Admit(uint16_t &count, uint16_t max, bool isNewProvider);
+bool Admit(uint16_t count, uint16_t max, bool isNewProvider);
 
 /* The pair is in the map. */
 void Inserted(uint16_t &count, bool isNewProvider);
