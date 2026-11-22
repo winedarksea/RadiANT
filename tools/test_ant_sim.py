@@ -954,6 +954,9 @@ class TestLossAccounting(unittest.TestCase):
         self.assertEqual(result["unaccounted"], 0)
         self.assertTrue(result["pass"])
         self.assertIn("CHANNEL_COLLISION", result["verdict"])
+        # Since 2026-11-21 a slot another radio stack took (RadiANT's MPSL
+        # gate) is a collision too, and the verdict says so.
+        self.assertIn("another radio stack", result["verdict"])
         self.assertNotIn("without the radio noticing", result["verdict"])
 
     def test_collisions_do_not_hide_silent_loss(self):

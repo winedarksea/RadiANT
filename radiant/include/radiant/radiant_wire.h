@@ -1053,7 +1053,12 @@
  */
 #define RADIANT_WIRE_EVENT_RX_FAIL_GO_TO_SEARCH              0x08
 
-/* Two channels wanted the radio at the same instant. [tools (ant_session)] */
+/*
+ * Two channels wanted the radio at the same instant, or another radio stack
+ * took the slot (a tracked window the arbiter refused). The loss is the
+ * receiver's own, not the sensor's, so it is never also reported as RX_FAIL.
+ * [tools (ant_session)]
+ */
 #define RADIANT_WIRE_EVENT_CHANNEL_COLLISION                 0x09
 
 /*

@@ -122,7 +122,9 @@ the scheduler's model of the world true.
 - **A tracked channel that is denied must not report `EVENT_RX_FAIL`**, and must
   not count towards `RX_FAIL_TO_SEARCH`. A denial is evidence about us, not
   about the sensor. It is still charged to the window guard, because a period
-  really did elapse with no fresh sync.
+  really did elapse with no fresh sync. Since 2026-11-21 the host is told
+  `EVENT_CHANNEL_COLLISION` (0x09) for it instead ([ADR 0024](0024-contended-slots-alternate-and-are-collisions.md),
+  amendment to decision 2), so its loss accounting closes.
 - **The combined build is not the default.** A Thread-free dongle build remains
   the safe Zwift default, and the exit criterion is written down: if the
   arbiter's own cost exceeds +1.5 pp of `loss (exact)` with no second stack

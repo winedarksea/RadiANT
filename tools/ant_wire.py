@@ -810,7 +810,10 @@ EVENT_CHANNEL_CLOSED = 0x07
 # [tools (ant_session)]
 EVENT_RX_FAIL_GO_TO_SEARCH = 0x08
 
-# Two channels wanted the radio at the same instant. [tools (ant_session)]
+# Two channels wanted the radio at the same instant, or another radio stack
+# took the slot (a tracked window the arbiter refused). The loss is the
+# receiver's own, not the sensor's, so it is never also reported as RX_FAIL.
+# [tools (ant_session)]
 EVENT_CHANNEL_COLLISION = 0x09
 
 # Progress, not an outcome - keep waiting. RadiANT raises it once per outbound

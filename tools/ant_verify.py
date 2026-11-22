@@ -1805,9 +1805,11 @@ RADIO_FAIL_EVENTS = frozenset((
     "RX_FAIL_GO_TO_SEARCH",
 ))
 
-# The stack owning up to a slot it chose not to listen in: two of its own
-# channels wanted the radio at once and one lost. That is loss in the
-# receiver's scheduler - neither the air's nor the host's - and a retail
+# The stack owning up to a slot it did not listen in: two of its own
+# channels wanted the radio at once and one lost, or (RadiANT under an
+# arbiter, e.g. MPSL with BLE, since 2026-11-21) another radio stack took the
+# slot. That is loss in the receiver's own scheduling - neither the air's nor
+# the host's - and a retail
 # 8-channel stick reports it by the hundred on four mixed-period channels
 # (the Garmin USB-m, 2026-11-07: 156 in 300 s). Filed as "after the radio"
 # it read as a USB fault on a receiver whose host path was fine.
@@ -1857,7 +1859,8 @@ def loss_accounting(result: dict) -> dict | None:
     if collisions:
         verdict = (f"{radio_fails} reported as RX_FAIL (on the air) and "
                    f"{collisions} as CHANNEL_COLLISION (the receiver's own "
-                   f"channels contending for its radio)")
+                   f"scheduling: its channels, or another radio stack, "
+                   f"took the slot)")
         if unaccounted:
             verdict += (f"; the other {unaccounted} went missing without "
                         f"the radio noticing")

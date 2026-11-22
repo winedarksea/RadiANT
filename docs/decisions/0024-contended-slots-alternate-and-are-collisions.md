@@ -93,6 +93,18 @@ ran to its close empty (`DONE_OK`, not heard) counts toward search.
 took the radio from an open window. Collisions share the denial path's bound
 (`RADIANT_CHANNEL_DENY_TO_SEARCH`, 16), because the guard is finite either way.
 
+**Amendment (owner decision, 2026-11-21): a gate denial is a collision too.** A
+tracked window that ends `DENIED` (the arbiter lent the radio to another protocol
+stack, e.g. the MPSL gate under BLE) already took this accounting but sent the
+host nothing, so every refused slot read as unaccounted loss: in `acc_coex_ble`
+(TODO.md), 92 of 119 misses had no event, 88 of them `book_denied`. It now also
+raises `EVENT_CHANNEL_COLLISION`. No new wire code: 0x09 means "the receiver's
+own scheduling took the slot", whether its channels or another radio stack. The
+counters stay split, `slots_denied` (another stack) against `slots_collided` (our
+scheduling), so 0xF7 page 0 field 5 and page 11 field 6 keep their meanings. A
+denied **master transmit** stays silent: it is not receive loss. This covers
+every backend whose arbiter denials take the core path, TI included.
+
 ### 3. Page 11
 
 0xF7 page 11 carries the scheduler counters that never reached the host
