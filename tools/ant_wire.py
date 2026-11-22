@@ -1329,8 +1329,14 @@ MESG_RADIANT_SEC_CONFIG_ID = 0xF1
 # for 0xF2 answers ANTW_INVALID_MESSAGE rather than a key. NOT checked against
 # other channels: the host gives each live channel a distinct root or base
 # device number, or two channels given one epoch by 0xF3 share a keystream
-# (docs/radiant-security.md sec 3.5). [K4 (docs/radiant-security.md sec 3.4 and
-# 9)]
+# (docs/radiant-security.md sec 3.5). On a MASTER, REFUSED with
+# ANTW_CHANNEL_IN_WRONG_STATE while host acknowledged data or a burst is in
+# flight. A different root (a real rekey) on a keyed, secured master takes back
+# the slot and acknowledgement payload built under the old key before this
+# answers, as a changed 0xF1 does; the channel is then pending until 0xF3. The
+# root already installed (a retry) changes nothing. On TI the take-back's
+# RF_flushCmd is asynchronous, so a frame already on the air may complete. [K4
+# (docs/radiant-security.md sec 3.4 and 9)]
 MESG_RADIANT_SET_KEY_ID = 0xF2
 
 # Set or read the epoch and its time anchor. [0] channel; [1] flags, bit 0 =
@@ -2117,7 +2123,7 @@ RADIANT_MESSAGES = {
         "name": 'MESG_RADIANT_SET_KEY_ID',
         "direction": 'h2d',
         "payload_len": 18,
-        "desc": 'Install the one 16-byte root key for a channel. [0] channel; [1] key length in bits, 128 and nothing else in v1; [2..17] the key. Everything else - K_enc, K_auth, K_id, K_cmd - is derived from it, so a pairing moves exactly sixteen bytes. WRITE ONLY: there is no read arm anywhere, and MESG_REQUEST for 0xF2 answers ANTW_INVALID_MESSAGE rather than a key. NOT checked against other channels: the host gives each live channel a distinct root or base device number, or two channels given one epoch by 0xF3 share a keystream (docs/radiant-security.md sec 3.5).',
+        "desc": "Install the one 16-byte root key for a channel. [0] channel; [1] key length in bits, 128 and nothing else in v1; [2..17] the key. Everything else - K_enc, K_auth, K_id, K_cmd - is derived from it, so a pairing moves exactly sixteen bytes. WRITE ONLY: there is no read arm anywhere, and MESG_REQUEST for 0xF2 answers ANTW_INVALID_MESSAGE rather than a key. NOT checked against other channels: the host gives each live channel a distinct root or base device number, or two channels given one epoch by 0xF3 share a keystream (docs/radiant-security.md sec 3.5). On a MASTER, REFUSED with ANTW_CHANNEL_IN_WRONG_STATE while host acknowledged data or a burst is in flight. A different root (a real rekey) on a keyed, secured master takes back the slot and acknowledgement payload built under the old key before this answers, as a changed 0xF1 does; the channel is then pending until 0xF3. The root already installed (a retry) changes nothing. On TI the take-back's RF_flushCmd is asynchronous, so a frame already on the air may complete.",
     },
     0xF3: {
         "name": 'MESG_RADIANT_EPOCH_ID',
