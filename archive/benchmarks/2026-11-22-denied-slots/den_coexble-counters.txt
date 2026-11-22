@@ -1,0 +1,7 @@
+[2026-11-22T10:14:24.197] [00:55:38.244,610] <inf> radiant_api: rxpath/30008ms sched=112 tracked=42 on_data=0 up=0 posted=43 | xfer=0 dropped=0 tot=112 | missed=0 denied=2 collided=0
+[2026-11-22T10:24:24.738] [01:05:38.804,952] <inf> radiant_api: rxpath/30043ms sched=137 tracked=2365 on_data=0 up=0 posted=2366 | xfer=0 dropped=0 tot=4222 | missed=5 denied=32 collided=0
+[2026-11-22T10:14:00.096] [00:55:13.234,420] <inf> radiant_gate_mpsl: D2STAT pl=2 gr=2 bl=0 s0=1/1/0 s1=1/1/0 ext=0/0 near=0 eag=0 dl=0
+[2026-11-22T10:14:00.096] [00:55:13.234,433] <inf> radiant_gate_mpsl: D2BOOK pl=0 hit=0 den=0 blk=0 unpl=0 mis=0 early=0 busy=0 near=0 orph=0 nosess=0 owed=0 | el=3000 [3000..3000] elblk=0 adj=0/0 | eo=0 en=0 hl=0 dfl=0 | sent ag=0 dl=0 bl=0 sup=0 | hi 0/0/0/0
+[2026-11-22T10:24:24.738] [01:05:38.251,911] <inf> radiant_gate_mpsl: D2BOOK pl=2403 hit=2373 den=29 blk=83 unpl=0 mis=0 early=4 busy=0 near=0 orph=0 nosess=91 owed=0 | el=3000 [3000..3000] elblk=362 adj=2/1780 | eo=3 en=1 hl=0 dfl=0 | sent ag=32 dl=0 bl=362 sup=7075 | hi 2402/2373/83/2370
+[2026-11-22T10:24:24.738] [01:05:38.251,898] <inf> radiant_gate_mpsl: D2STAT pl=7688 gr=7243 bl=445 s0=3593/3411/182 s1=4095/3832/263 ext=247705/63 near=25 eag=0 dl=0
+[2026-11-22T10:24:24.738] [01:05:38.251,911] <inf> radiant_gate_mpsl: D2BOOK pl=2403 hit=2373 den=29 blk=83 unpl=0 mis=0 early=4 busy=0 near=0 orph=0 nosess=91 owed=0 | el=3000 [3000..3000] elblk=362 adj=2/1780 | eo=3 en=1 hl=0 dfl=0 | sent ag=32 dl=0 bl=362 sup=7075 | hi 2402/2373/83/2370

@@ -87,6 +87,10 @@ reads.
 
 ### Fixed
 
+- **A Matter sensor is no longer dropped when its endpoint id is taken.**
+  The bridge retried with the next id but had already discarded the device,
+  so the retry failed. Inherited from NCS's `matter_bridge`.
+
 - **MPSL builds no longer assert `69:108`.** MPSL took a RADIO interrupt left
   pending after our timeslot ended. Beside a Thread leader it had fired within
   1.5-6.3 minutes; a 2 h soak and the Matter, gate and BLE legs had none.
