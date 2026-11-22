@@ -155,11 +155,15 @@ def profile_map(module: Path) -> tuple[dict[str, str], dict[str, str]]:
 
 
 def tracked_files(root: Path, paths: list[str]) -> list[Path]:
+    git = None
     if not paths:
-        out = subprocess.run(
-            ["git", "-C", str(root), "ls-files", "-z"], check=True, capture_output=True
-        ).stdout.decode("utf-8")
-        rels = [p for p in out.split("\0") if p]
+        git = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "-z"], capture_output=True
+        )
+        if git.returncode != 0:
+            paths = [str(root)]  # not a checkout (a `git archive` export): walk it
+    if not paths:
+        rels = [p for p in git.stdout.decode("utf-8").split("\0") if p]
         files = [root / p for p in rels]
     else:
         files = []
@@ -212,7 +216,7 @@ class Rewriter:
         if "profiles" in phases:
             self.ids, self.stems = profile_map(module)
             if not self.ids:
-                sys.exit("no profile/node headers found under %s/src" % module)
+                sys.exit(f"no profile/node headers found under {module}/src")
         self.id_re = self._alt(self.ids, r"\b(%s)\b")
         # A file stem only when followed by .c/.h, so `profile_power` the struct
         # and `profile_power_decode.c` the file are each handled once.
@@ -288,9 +292,9 @@ def main() -> int:
     if args.check:
         for n in sorted(old_seen):
             where = ", ".join(sorted(p.as_posix() for p in old_seen[n])[:3])
-            print("%-48s %s" % (n, where))
-        print("%d old name(s) in %d file(s)" % (
-            len(old_seen), len({p for s in old_seen.values() for p in s})))
+            print(f"{n:<48} {where}")
+        nfiles = len({p for s in old_seen.values() for p in s})
+        print(f"{len(old_seen)} old name(s) in {nfiles} file(s)")
         return 1 if old_seen else 0
 
     targets = collision_targets(rw, set(old_seen))
@@ -302,7 +306,7 @@ def main() -> int:
     )
     if clashes:
         for o, n in clashes:
-            print("collision: %s -> %s, but %s already exists" % (o, n, n), file=sys.stderr)
+            print(f"collision: {o} -> {n}, but {n} already exists", file=sys.stderr)
         return 2
 
     changed = 0
@@ -311,7 +315,7 @@ def main() -> int:
         if new != head:
             f.write_bytes((new + tail).encode("utf-8"))
             changed += 1
-    print("rewrote %d file(s); %d distinct old name(s)" % (changed, len(old_seen)))
+    print(f"rewrote {changed} file(s); {len(old_seen)} distinct old name(s)")
     return 0
 
 

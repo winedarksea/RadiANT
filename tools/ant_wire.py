@@ -403,16 +403,17 @@ MESG_ACTIVE_SEARCH_SHARING_ID = 0x81
 
 # [filler, enable]. Enhanced channel spacing. A Nordic extension: not in Rev
 # 5.1, and no witness inside this repository - the id was recovered by the Wave
-# 2 shim and is BUILD_ASSERTed in apps/common/ant_radio_sdk_ant.c. [sdk-ant-shim +
-# verify:sdk-ant-shim]
+# 2 shim and is BUILD_ASSERTed in apps/common/ant_radio_sdk_ant.c. [sdk-ant-
+# shim + verify:sdk-ant-shim]
 MESG_ECS_ENABLE_ID = 0x89
 
 # [channel] to clear, [channel, pending] on request. A Nordic extension: not in
 # Rev 5.1, and no witness inside this repository - the id was recovered by the
-# Wave 2 shim and is BUILD_ASSERTed in apps/common/ant_radio_sdk_ant.c. Note that the
-# *request* form of this id replies with MESG_PENDING_TRANSMIT_GET_SIZE bytes,
-# which is a separate constant from MESG_PENDING_TRANSMIT_CLEAR's own 1-byte
-# command payload. [sdk-ant-shim + verify:sdk-ant-shim]
+# Wave 2 shim and is BUILD_ASSERTed in apps/common/ant_radio_sdk_ant.c. Note
+# that the *request* form of this id replies with
+# MESG_PENDING_TRANSMIT_GET_SIZE bytes, which is a separate constant from
+# MESG_PENDING_TRANSMIT_CLEAR's own 1-byte command payload. [sdk-ant-shim +
+# verify:sdk-ant-shim]
 MESG_PENDING_TRANSMIT_CLEAR_ID = 0x8C
 
 # Serial-layer error: bad checksum, bad length, or a frame that arrived too
@@ -437,11 +438,11 @@ MESG_SERIAL_ERROR_ID = 0xAE
 # own and describes only the observed shape. It is deliberately not a vendor
 # header name, because no header was consulted (ADR 0002), and the meaning of
 # the fifth byte is unknown, so this firmware always sends 0x00 there. It
-# answers only when radiant_ant_serial_number_get() does, and otherwise refuses with
-# INVALID_MESSAGE, exactly like 0x61. It sits in the AP2-era 0xC0-0xC7 block
-# described under radiant_messages; it is the only id in that block seen on the
-# wire (0xC5 and 0xC7 are pinned from the public document, and neither is
-# bridged). [observed captures/zwift-20261111-193805.pcap (request
+# answers only when radiant_ant_serial_number_get() does, and otherwise refuses
+# with INVALID_MESSAGE, exactly like 0x61. It sits in the AP2-era 0xC0-0xC7
+# block described under radiant_messages; it is the only id in that block seen
+# on the wire (0xC5 and 0xC7 are pinned from the public document, and neither
+# is bridged). [observed captures/zwift-20261111-193805.pcap (request
 # a4024d00c62d, reply a405c6069f520000ac)]
 MESG_SERIAL_NUM_EXT_ID = 0xC6
 
@@ -480,9 +481,9 @@ MESG_SERIAL_NUM_SIZE = 4
 # Confirmed by the same stick's a405c6069f520000ac. [observed]
 MESG_SERIAL_NUM_EXT_SIZE = 5
 
-# Null-padded version string. apps/common/ant_radio_stub.c calls it a 20-byte payload;
-# nothing in this repository shows the reply on the wire. [stub + verify:sdk-
-# ant-shim]
+# Null-padded version string. apps/common/ant_radio_stub.c calls it a 20-byte
+# payload; nothing in this repository shows the reply on the wire. [stub +
+# verify:sdk-ant-shim]
 MESG_VERSION_SIZE = 20
 
 # [channel, status]. [inferred + verify:sdk-ant-shim]
@@ -526,12 +527,12 @@ MESG_CONFIG_ADV_BURST_REQ_CONFIG_SIZE = 10
 # Not visible in this repository - ant_features.py reads only the first two
 # bytes and prints the rest as hex, and no captured reply is committed - so it
 # was recovered by the Wave 2 shim and is BUILD_ASSERTed in
-# apps/common/ant_radio_sdk_ant.c. It had to be: this one is the LEN byte on a reply
-# the bridge composes, so no local substitute is legitimate, and while it was
-# unresolved the capabilities form of the request declined. Used at
-# apps/common/ant_radio_stub.c:254, where it bounds the memset; the #ifdef on this name
-# that stood in for it there now resolves, so the fallback has been removed.
-# [sdk-ant-shim + verify:sdk-ant-shim]
+# apps/common/ant_radio_sdk_ant.c. It had to be: this one is the LEN byte on a
+# reply the bridge composes, so no local substitute is legitimate, and while it
+# was unresolved the capabilities form of the request declined. Used at
+# apps/common/ant_radio_stub.c:254, where it bounds the memset; the #ifdef on
+# this name that stood in for it there now resolves, so the fallback has been
+# removed. [sdk-ant-shim + verify:sdk-ant-shim]
 MESG_CONFIG_ADV_BURST_REQ_CAPABILITIES_SIZE = 4
 
 # [info type, supported mode]. [bridge]
@@ -966,9 +967,9 @@ INVALID_SDU_MASK = 0xFF
 # apps/common/ant_radio_sdk_ant.c. Note that it shares its value with
 # INVALID_SDU_MASK's top bit, which is why the mask number must be range-
 # checked after the bit is cleared and not before. Used at
-# apps/common/ant_radio_stub.c:587; the local placeholder that stood in for it there
-# guessed the value correctly and has been retired. [sdk-ant-shim + verify:sdk-
-# ant-shim]
+# apps/common/ant_radio_stub.c:587; the local placeholder that stood in for it
+# there guessed the value correctly and has been retired. [sdk-ant-shim +
+# verify:sdk-ant-shim]
 SDU_MASK_ACK_CONFIG_BIT = 0x80
 
 # ---------------------------------------------------------------------------
@@ -1015,11 +1016,11 @@ ENCRYPTION_KEY_SIZE = 16
 # with, and the upper bound it range-checks a channel-enable against. It is the
 # highest of the encryption modes above - user-data request - rather than an
 # independent number. Not visible in this repository, so it was recovered by
-# the Wave 2 shim and is BUILD_ASSERTed in apps/common/ant_radio_sdk_ant.c. Used at
-# apps/common/ant_radio_stub.c:278 and :541; the local placeholder that stood in for it
-# there guessed 1 and was wrong, which is why a stub build's answer to
-# ENCRYPTION_INFO_GET_SUPPORTED_MODE changed when it retired. [sdk-ant-shim +
-# verify:sdk-ant-shim]
+# the Wave 2 shim and is BUILD_ASSERTed in apps/common/ant_radio_sdk_ant.c.
+# Used at apps/common/ant_radio_stub.c:278 and :541; the local placeholder that
+# stood in for it there guessed 1 and was wrong, which is why a stub build's
+# answer to ENCRYPTION_INFO_GET_SUPPORTED_MODE changed when it retired. [sdk-
+# ant-shim + verify:sdk-ant-shim]
 MAX_SUPPORTED_ENCRYPTION_MODE = 0x02
 
 # ---------------------------------------------------------------------------
@@ -1275,8 +1276,8 @@ CAPABILITIES_TIME_SYNC_ENABLED = 0x20
 CAPABILITIES_PA_LNA_SUPPORT_ENABLED = 0x40
 
 # Channel start offset - the second parameter of
-# radiant_ant_channel_open_with_offset(). Set in the observed reply, which is the
-# capability behind the offset form existing at all. [sdk-ant-shim +
+# radiant_ant_channel_open_with_offset(). Set in the observed reply, which is
+# the capability behind the offset form existing at all. [sdk-ant-shim +
 # verify:sdk-ant-shim]
 CAPABILITIES_CHANNEL_START_OFFSET_ENABLED = 0x01
 
