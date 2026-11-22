@@ -351,7 +351,19 @@ CHIP_ERROR BridgeManager::AddSingleDevice(MatterBridgedDevice *device, BridgedDe
 
 						err = CreateEndpoint(index, endpointId);
 
-						if (err != CHIP_NO_ERROR) {
+						/* RadiANT: CHIP_ERROR_SENTINEL means another dynamic
+						 * endpoint already holds endpointId, and the loop retries
+						 * with the next id. Upstream erased the pair before
+						 * retrying, so the retry's CreateEndpoint() failed
+						 * Contains(index) with CHIP_ERROR_INTERNAL and the device
+						 * was dropped. The pair now stays in the map across
+						 * retries. Termination: at most kMaxBridgedDevices - 1
+						 * other dynamic endpoints exist, Advance() steps (and
+						 * wraps) once per try, so a free id is reached within
+						 * kMaxBridgedDevices tries. Every retry that crosses the
+						 * stored mark writes it first (NeedsMark, above), so the
+						 * mark-before-visible rule holds on each try. */
+						if (err != CHIP_NO_ERROR && err != CHIP_ERROR_SENTINEL) {
 							if (err == CHIP_ERROR_NO_MEMORY) {
 								LOG_ERR("The device object was not constructed properly due to the lack of memory");
 							}
@@ -360,6 +372,9 @@ CHIP_ERROR BridgeManager::AddSingleDevice(MatterBridgedDevice *device, BridgedDe
 							 * goes back only if this Erase() removed it.) */
 							RadiantMatter::ProviderSlots::Erased(mNumberOfProviders, isNewProvider,
 											     mDevicesMap.Erase(index));
+						} else if (err == CHIP_ERROR_SENTINEL) {
+							LOG_WRN("Dynamic endpoint %u exists: retrying with %u", endpointId,
+								nextEndpointId);
 						}
 
 						/* Handle wrap condition (RadiANT: upstream's, in
