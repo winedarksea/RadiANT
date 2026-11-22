@@ -30,7 +30,7 @@
 
 #include <radiant/ant_radio.h>
 #include "ant_radio_radiant_priv.h"
-#include <radiant/ant_wire.h>
+#include <radiant/radiant_wire.h>
 
 BUILD_ASSERT(RADIANT_SEC_SW_CONF == 0x01,
 	     "0xF1 bit 0 is X_CONF; the wire and the module must agree");
@@ -63,14 +63,14 @@ static antr_err_t sec_err(int rc)
 {
 	switch (rc) {
 	case RADIANT_SEC_OK:
-		return (antr_err_t)ANTW_RESPONSE_NO_ERROR;
+		return (antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR;
 	case RADIANT_SEC_ENOKEY:
 	case RADIANT_SEC_ESTATE:   /* a node's epoch authority follows it */
-		return (antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE;
+		return (antr_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE;
 	case RADIANT_SEC_ENOTSUP:
 	case RADIANT_SEC_EINVAL:
 	default:
-		return (antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED;
+		return (antr_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED;
 	}
 }
 
@@ -109,14 +109,14 @@ static antr_err_t sec_config_locked(uint8_t channel, uint8_t switches, uint8_t w
 				    uint8_t page_lo, uint8_t page_hi)
 {
 	if (channel >= (uint8_t)RADIANT_CHANNEL_COUNT) {
-		return (antr_err_t)ANTW_INVALID_MESSAGE;
+		return (antr_err_t)RADIANT_WIRE_INVALID_MESSAGE;
 	}
 	if ((switches & ~SEC_SW_KNOWN_MASK) != 0u) {
 		/* A reserved bit set is a host speaking a later dialect. Refuse
 		 * rather than mask: masking would enable the switches it DOES
 		 * understand and silently drop the one it does not, which is
 		 * the worst of both answers. */
-		return (antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED;
+		return (antr_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED;
 	}
 
 	/* Not radiant_sec_configure() directly: on a master the change must be
@@ -131,7 +131,7 @@ static antr_err_t sec_key_set_locked(uint8_t channel, uint8_t bits,
 				     const uint8_t *key)
 {
 	if (channel >= (uint8_t)RADIANT_CHANNEL_COUNT || key == NULL) {
-		return (antr_err_t)ANTW_INVALID_MESSAGE;
+		return (antr_err_t)RADIANT_WIRE_INVALID_MESSAGE;
 	}
 
 	/*
@@ -144,10 +144,10 @@ static antr_err_t sec_key_set_locked(uint8_t channel, uint8_t bits,
 	struct radiant_channel_id id;
 
 	if (radiant_channel_id_get(channel, &id) != RADIANT_CH_OK) {
-		return (antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE;
+		return (antr_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE;
 	}
 	if (id.device_number == 0u) {
-		return (antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE;
+		return (antr_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE;
 	}
 	/*
 	 * A master with host acked data or a burst in flight is not keyed:
@@ -159,7 +159,7 @@ static antr_err_t sec_key_set_locked(uint8_t channel, uint8_t bits,
 	 * its own acked exchange on the channel.
 	 */
 	if (antr_master_xfer_busy(channel)) {
-		return (antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE;
+		return (antr_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE;
 	}
 
 	/* The on-air number starts equal to the provisioning one: set_key puts
@@ -178,20 +178,20 @@ static antr_err_t sec_epoch_set_locked(uint8_t channel, uint8_t flags,
 	uint16_t period;
 
 	if (channel >= (uint8_t)RADIANT_CHANNEL_COUNT) {
-		return (antr_err_t)ANTW_INVALID_MESSAGE;
+		return (antr_err_t)RADIANT_WIRE_INVALID_MESSAGE;
 	}
 	/* Bit 0 says the epoch is coarse real time vs. a bare ordinal; nothing
 	 * here behaves differently either way since both are monotonic. Every
 	 * other bit is reserved. */
 	if ((flags & (uint8_t)~0x01u) != 0u) {
-		return (antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED;
+		return (antr_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED;
 	}
 
 	/* The channel period, read rather than sent: a host-supplied value
 	 * that disagreed would desynchronise the counter in a way that looks
 	 * like clock drift. */
 	if (radiant_channel_period_get(channel, &period) != RADIANT_CH_OK) {
-		return (antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE;
+		return (antr_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE;
 	}
 
 	return sec_err(radiant_sec_set_epoch(channel, epoch, us_into_epoch,
@@ -236,10 +236,10 @@ antr_err_t antr_sec_status_get(uint8_t channel, uint8_t *out, uint8_t out_len)
 	struct radiant_sec_stats stats;
 
 	if (out == NULL || out_len < ANTR_SEC_STATUS_LEN) {
-		return (antr_err_t)ANTW_INVALID_MESSAGE;
+		return (antr_err_t)RADIANT_WIRE_INVALID_MESSAGE;
 	}
 	if (channel >= (uint8_t)RADIANT_CHANNEL_COUNT) {
-		return (antr_err_t)ANTW_INVALID_MESSAGE;
+		return (antr_err_t)RADIANT_WIRE_INVALID_MESSAGE;
 	}
 
 	/* An unkeyed channel answers with zeros and CLEAR rather than erroring
@@ -284,7 +284,7 @@ antr_err_t antr_sec_status_get(uint8_t channel, uint8_t *out, uint8_t out_len)
 	out[30] = (uint8_t)((state.keyed ? ANTR_SEC_STATUS_KEYED : 0u) |
 			    (state.secured ? ANTR_SEC_STATUS_ARMED : 0u));
 
-	return (antr_err_t)ANTW_RESPONSE_NO_ERROR;
+	return (antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR;
 }
 
 #if defined(CONFIG_RADIANT_SEC_PAIRING_X25519)
@@ -310,13 +310,13 @@ BUILD_ASSERT(RADIANT_SEC_PAIR_INITIATOR == 0u &&
  * table rather than a check per case: the pairing build has its own size
  * budget (release.yml, "pairing text"). ENTER's timeout byte is optional. */
 static const uint8_t pair_arg_len[] = {
-	[ANTW_RADIANT_PAIR_LEAVE]       = 0u,
-	[ANTW_RADIANT_PAIR_ENTER]       = 1u,  /* own path below: 0 or 1 byte */
-	[ANTW_RADIANT_PAIR_SCALAR]      = RADIANT_SEC_X25519_BYTES,
-	[ANTW_RADIANT_PAIR_EXCHANGE]    = RADIANT_SEC_X25519_BYTES,
-	[ANTW_RADIANT_PAIR_NONCE]       = 1u + RADIANT_SEC_PAIR_NONCE_BYTES,
-	[ANTW_RADIANT_PAIR_PEER_COMMIT] = RADIANT_SEC_BLOCK_BYTES,
-	[ANTW_RADIANT_PAIR_PEER_NONCE]  = RADIANT_SEC_PAIR_NONCE_BYTES,
+	[RADIANT_WIRE_RADIANT_PAIR_LEAVE]       = 0u,
+	[RADIANT_WIRE_RADIANT_PAIR_ENTER]       = 1u,  /* own path below: 0 or 1 byte */
+	[RADIANT_WIRE_RADIANT_PAIR_SCALAR]      = RADIANT_SEC_X25519_BYTES,
+	[RADIANT_WIRE_RADIANT_PAIR_EXCHANGE]    = RADIANT_SEC_X25519_BYTES,
+	[RADIANT_WIRE_RADIANT_PAIR_NONCE]       = 1u + RADIANT_SEC_PAIR_NONCE_BYTES,
+	[RADIANT_WIRE_RADIANT_PAIR_PEER_COMMIT] = RADIANT_SEC_BLOCK_BYTES,
+	[RADIANT_WIRE_RADIANT_PAIR_PEER_NONCE]  = RADIANT_SEC_PAIR_NONCE_BYTES,
 };
 
 static antr_err_t sec_pair_locked(uint8_t channel, uint8_t subcmd,
@@ -331,16 +331,16 @@ static antr_err_t sec_pair_locked(uint8_t channel, uint8_t subcmd,
 	 * sub-command can fail for want of room after it has changed state. */
 	if (channel >= (uint8_t)RADIANT_CHANNEL_COUNT || reply == NULL ||
 	    reply_len == NULL || reply_cap < 2u + RADIANT_SEC_X25519_BYTES) {
-		return (antr_err_t)ANTW_INVALID_MESSAGE;
+		return (antr_err_t)RADIANT_WIRE_INVALID_MESSAGE;
 	}
 	if (subcmd >= ARRAY_SIZE(pair_arg_len)) {
-		return (antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED;
+		return (antr_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED;
 	}
-	if (((subcmd == ANTW_RADIANT_PAIR_ENTER)
+	if (((subcmd == RADIANT_WIRE_RADIANT_PAIR_ENTER)
 		     ? (arg_len > 1u)
 		     : (arg_len != pair_arg_len[subcmd])) ||
 	    (arg_len != 0u && arg == NULL)) {
-		return (antr_err_t)ANTW_INVALID_MESSAGE;
+		return (antr_err_t)RADIANT_WIRE_INVALID_MESSAGE;
 	}
 
 	reply[0] = channel;
@@ -348,12 +348,12 @@ static antr_err_t sec_pair_locked(uint8_t channel, uint8_t subcmd,
 	*reply_len = 2u;
 
 	switch (subcmd) {
-	case ANTW_RADIANT_PAIR_LEAVE:
+	case RADIANT_WIRE_RADIANT_PAIR_LEAVE:
 		radiant_sec_pair_leave(channel);
 		rc = RADIANT_SEC_OK;
 		break;
 
-	case ANTW_RADIANT_PAIR_ENTER:
+	case RADIANT_WIRE_RADIANT_PAIR_ENTER:
 		/* arg[0] is the timeout in seconds; 0 means the default, never
 		 * "forever" - a node in pairing mode accepts a key from whoever
 		 * asks, so one forgotten command must not leave it open. */
@@ -363,7 +363,7 @@ static antr_err_t sec_pair_locked(uint8_t channel, uint8_t subcmd,
 						    : 0u);
 		break;
 
-	case ANTW_RADIANT_PAIR_SCALAR:
+	case RADIANT_WIRE_RADIANT_PAIR_SCALAR:
 		/* Answer with the public key it produced, which is what has to
 		 * go on the air next. */
 		rc = radiant_sec_pair_set_scalar(channel, arg);
@@ -373,12 +373,12 @@ static antr_err_t sec_pair_locked(uint8_t channel, uint8_t subcmd,
 		}
 		break;
 
-	case ANTW_RADIANT_PAIR_EXCHANGE:
+	case RADIANT_WIRE_RADIANT_PAIR_EXCHANGE:
 		/* DH only: no key, no fingerprint until the nonces cross. */
 		rc = radiant_sec_pair_peer(channel, arg);
 		break;
 
-	case ANTW_RADIANT_PAIR_NONCE:
+	case RADIANT_WIRE_RADIANT_PAIR_NONCE:
 		/* [role, nonce16]. A responder answers with its commitment,
 		 * which is what goes on the air next. */
 		rc = radiant_sec_pair_set_nonce(channel, arg[0], &arg[1],
@@ -388,11 +388,11 @@ static antr_err_t sec_pair_locked(uint8_t channel, uint8_t subcmd,
 		}
 		break;
 
-	case ANTW_RADIANT_PAIR_PEER_COMMIT:
+	case RADIANT_WIRE_RADIANT_PAIR_PEER_COMMIT:
 		rc = radiant_sec_pair_peer_commit(channel, arg);
 		break;
 
-	default: /* ANTW_RADIANT_PAIR_PEER_NONCE */
+	default: /* RADIANT_WIRE_RADIANT_PAIR_PEER_NONCE */
 		rc = radiant_sec_pair_peer_nonce(channel, arg, &fp);
 		/* The comparison fingerprint, six digits in a u24 LE: the only
 		 * defence against a MITM, and only if a human compares it. */
@@ -407,7 +407,7 @@ static antr_err_t sec_pair_locked(uint8_t channel, uint8_t subcmd,
 	 * refusal an out-of-order call gets. The bridge sends the reply only
 	 * on success, so a refused sub-command's reply_len is never read. */
 	if (rc == RADIANT_SEC_EBADMAC) {
-		return (antr_err_t)ANTW_RADIANT_PAIR_COMMIT_MISMATCH;
+		return (antr_err_t)RADIANT_WIRE_RADIANT_PAIR_COMMIT_MISMATCH;
 	}
 	return sec_err(rc);
 }

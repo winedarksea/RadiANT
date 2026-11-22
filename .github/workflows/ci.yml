@@ -281,7 +281,7 @@ jobs:
             twister-out/twister.json
             twister-out/twister.xml
 
-  # src/ant_wire.h and tools/ant_wire.py are generated from
+  # radiant/include/radiant/radiant_wire.h and tools/ant_wire.py are generated from
   # protocol/ant_wire.yaml and committed, so that a clone builds without
   # running the generator and the Python tools stay standalone-copyable.
   # Committed generated files rot silently the first time someone edits the

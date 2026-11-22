@@ -16,7 +16,7 @@
 #endif
 
 #include "ant_health.h"
-#include "ant_wire.h"
+#include <radiant/radiant_wire.h>
 
 /*
  * Saturating at 16 bits rather than counting at 32 and truncating on the wire.

@@ -577,7 +577,7 @@ K_cmd  = KDF(K_root, "cmd"  || epoch)      reliable-command page, not v1
 
 `0xF2 SET_KEY` installs **exactly one 16-byte value**, and everything else is
 derived. Keys are write-only: there is no read arm for `0xF2` anywhere, and
-`MESG_REQUEST` for `0xF2` answers `ANTW_INVALID_MESSAGE`. Keys and every derived
+`MESG_REQUEST` for `0xF2` answers `RADIANT_WIRE_INVALID_MESSAGE`. Keys and every derived
 value are wiped on reset.
 
 ### 3.5 The epoch, the reboot rule, and the counter wrap
@@ -793,7 +793,7 @@ headroom.
 than `INT32_MAX` channel periods, or one whose whole wraps (`phase / 65536`
 periods) would carry the epoch past that headroom, so `epoch + wraps` must
 itself be an epoch `0xF3` would accept. The refusal comes before anything is
-written, and is `ANTW_INVALID_PARAMETER_PROVIDED`. Until then such a phase was
+written, and is `RADIANT_WIRE_INVALID_PARAMETER_PROVIDED`. Until then such a phase was
 accepted and clamped. An accepted phase's wraps are not folded into the epoch
 at `0xF3`: the first packet a receiver resolves, or the first slot a master
 builds, advances them as it would after a long silence. Folding them at `0xF3`
@@ -982,7 +982,7 @@ a dead one.
 **Descriptor encryption is refused in v1.** It is underspecified rather than
 merely unbuilt: the descriptor has no counter — byte `[1]` is a frame index —
 so it has no nonce, and section 3.1's time-derived reconstruction has nothing to
-reconstruct. `0xF1` bit 3 returns `ANTW_INVALID_PARAMETER_PROVIDED`. The
+reconstruct. `0xF1` bit 3 returns `RADIANT_WIRE_INVALID_PARAMETER_PROVIDED`. The
 descriptor's transform bit 5 stays reserved for the version that specifies it,
 and the cost it will have to state is unchanged: **the node becomes
 undiscoverable to anything without the key.**
@@ -1061,7 +1061,7 @@ The transform applies to a host-set contiguous page range, **bounded to
 ANT+ common pages (`0x50`/`0x51`/`0x52`) in the clear **mechanically rather than
 by memory**, and it stops a host setting the low bound to `0x00` and making its
 own node undiscoverable by accident. A range outside `0x01..0x1F` is refused
-with `ANTW_INVALID_PARAMETER_PROVIDED`.
+with `RADIANT_WIRE_INVALID_PARAMETER_PROVIDED`.
 
 ### 5.6 Zero cost when off, asserted rather than intended
 
@@ -1849,17 +1849,17 @@ records what the IDs are for. The allocation below is the one in the YAML.
 
 | ID | Name | Purpose |
 |---|---|---|
-| `0xF1` | `ANTW_MESG_RADIANT_SEC_CONFIG_ID` | Per-channel switch bitmask (`X_CONF`/`X_AUTH`), the MAC window W, the secured page range, the drop-vs-deliver policy bit and the opt-in for `0xF8` (bit 4) |
-| `0xF2` | `ANTW_MESG_RADIANT_SET_KEY_ID` | Install the 16-byte `K_root` for a channel. Write-only. The root already installed is a no-op; a different one leaves the channel pending until `0xF3` (section 3.5). Not checked against other channels: the host gives each live channel a distinct root or base device number (section 3.5) |
-| `0xF3` | `ANTW_MESG_RADIANT_EPOCH_ID` | Set the epoch and its microsecond time anchor. Write-only: a request for it answers `ANTW_INVALID_MESSAGE`, and `0xF4` reads back the epoch and armed state |
-| `0xF4` | `ANTW_MESG_RADIANT_SEC_STATUS_ID` | Read back (structure version at `[1]`): epoch, expected index, window verdict counters, drop counters, enrolments, and at `[30]` whether the channel is keyed and armed |
-| `0xF5` | `ANTW_MESG_RADIANT_PAIRING_ID` | Enter/leave pairing mode; carry the host-supplied scalar and the X25519 exchange |
-| `0xF6` | `ANTW_MESG_RADIANT_HEALTH_ID` | Not a security message: the dongle's health counters (structure version at `[0]`), allocated from the same RadiANT block |
-| `0xF7` | `ANTW_MESG_RADIANT_DIAG_ID` | Not a security message: paged diagnostic counters (ADR 0023) |
-| `0xF8` | `ANTW_MESG_RADIANT_SEC_VERDICT_ID` | One window's verdict, `[channel, verdict, window_start u16 LE, W, seq u16 LE]`. Sent unsolicited, but only on a channel whose `0xF1` set bit 4. Safe to act on only under the host rule in section 3.2 |
+| `0xF1` | `RADIANT_WIRE_MESG_RADIANT_SEC_CONFIG_ID` | Per-channel switch bitmask (`X_CONF`/`X_AUTH`), the MAC window W, the secured page range, the drop-vs-deliver policy bit and the opt-in for `0xF8` (bit 4) |
+| `0xF2` | `RADIANT_WIRE_MESG_RADIANT_SET_KEY_ID` | Install the 16-byte `K_root` for a channel. Write-only. The root already installed is a no-op; a different one leaves the channel pending until `0xF3` (section 3.5). Not checked against other channels: the host gives each live channel a distinct root or base device number (section 3.5) |
+| `0xF3` | `RADIANT_WIRE_MESG_RADIANT_EPOCH_ID` | Set the epoch and its microsecond time anchor. Write-only: a request for it answers `RADIANT_WIRE_INVALID_MESSAGE`, and `0xF4` reads back the epoch and armed state |
+| `0xF4` | `RADIANT_WIRE_MESG_RADIANT_SEC_STATUS_ID` | Read back (structure version at `[1]`): epoch, expected index, window verdict counters, drop counters, enrolments, and at `[30]` whether the channel is keyed and armed |
+| `0xF5` | `RADIANT_WIRE_MESG_RADIANT_PAIRING_ID` | Enter/leave pairing mode; carry the host-supplied scalar and the X25519 exchange |
+| `0xF6` | `RADIANT_WIRE_MESG_RADIANT_HEALTH_ID` | Not a security message: the dongle's health counters (structure version at `[0]`), allocated from the same RadiANT block |
+| `0xF7` | `RADIANT_WIRE_MESG_RADIANT_DIAG_ID` | Not a security message: paged diagnostic counters (ADR 0023) |
+| `0xF8` | `RADIANT_WIRE_MESG_RADIANT_SEC_VERDICT_ID` | One window's verdict, `[channel, verdict, window_start u16 LE, W, seq u16 LE]`. Sent unsolicited, but only on a channel whose `0xF1` set bit 4. Safe to act on only under the host rule in section 3.2 |
 | `0xF9-0xFA` | reserved | The rest of the RadiANT family. Claim by PR against `docs/profile-registry.md` |
 
-`0xF1` bit 3 (descriptor encryption) returns `ANTW_INVALID_PARAMETER_PROVIDED`
+`0xF1` bit 3 (descriptor encryption) returns `RADIANT_WIRE_INVALID_PARAMETER_PROVIDED`
 in v1; see section 5.2. Bit 4 (the `0xF8` window-verdict event) without bit 1
 (`X_AUTH`) is refused the same way: only `X_AUTH` has a verdict, and accepting
 it would promise events that never come. Bits 7..5 are reserved and refused. A page range outside `0x01..0x1F` is refused the same
@@ -1875,7 +1875,7 @@ normal and accepted: the anchor then lies before its boot (section 3.1).
 `CONFIG_RADIANT_SEC_HOST_MESSAGES`, and reached from the host through
 `antr_sec_config()`, `antr_sec_key_set()`, `antr_sec_epoch_set()` and
 `antr_sec_status_get()`. Three orderings are mandatory, and all three answer
-`ANTW_CHANNEL_IN_WRONG_STATE` rather than guessing:
+`RADIANT_WIRE_CHANNEL_IN_WRONG_STATE` rather than guessing:
 
 - **The channel ID must be set before the key.** `base_devnum` is bound into the
   KDF and `0xF2` does not carry it — a device number the host had to repeat
@@ -1895,14 +1895,14 @@ normal and accepted: the anchor then lies before its boot (section 3.1).
   is not refused (section 3.2, "Non-broadcast traffic"; review 2026-11-14 item
   4 and review 2026-11-17 item 2).
 
-`ANTW_CHANNEL_IN_WRONG_STATE` rather than `ANTW_INVALID_PARAMETER_PROVIDED` is
+`RADIANT_WIRE_CHANNEL_IN_WRONG_STATE` rather than `RADIANT_WIRE_INVALID_PARAMETER_PROVIDED` is
 the useful distinction: the parameter is correct and arrived early, and a host
 that cannot tell those apart retries the wrong thing.
 
 ### What the key path promises, and what it cannot
 
 `0xF2` is write-only. There is no read arm anywhere, and `MESG_REQUEST` for it
-is answered `ANTW_INVALID_MESSAGE` — the same answer a device that had never
+is answered `RADIANT_WIRE_INVALID_MESSAGE` — the same answer a device that had never
 heard of `0xF2` would give.
 
 `src/ant_serial_bridge.c` wipes its frame buffer after dispatching one, because
@@ -1979,7 +1979,7 @@ stating:
   bidirectional variant `0xA5` by a resynchronising parser.
 - These are requestable: `MESG_REQUEST_ID` (`0x4D`) takes a message ID as its
   argument, so `0xF4` is readable with no new mechanism. `0xF2` is not: a
-  request for it answers `ANTW_INVALID_MESSAGE`, because keys are write-only.
+  request for it answers `RADIANT_WIRE_INVALID_MESSAGE`, because keys are write-only.
   `0xF3` is write-only too and a request for it gets the same answer. The
   epoch, the expected slot index and the armed state it set read back through
   `0xF4`; the exact phase and the real-time flag are not retained after the
@@ -1987,7 +1987,7 @@ stating:
   consumer (review 2026-11-21).
 
 **Lib config `0xE0` is a different namespace and has not moved.** The
-`ANTW_LIB_CONFIG_ALL_EXT_FIELDS` setting — channel ID + RSSI + RX timestamp — is
+`RADIANT_WIRE_LIB_CONFIG_ALL_EXT_FIELDS` setting — channel ID + RSSI + RX timestamp — is
 a payload byte of message `0x6E`, not a message ID, and it is unaffected by any
 of the above. The RadiANT message IDs no longer share a byte with it, but the
 reason they never conflicted was that the two namespaces are unrelated, not

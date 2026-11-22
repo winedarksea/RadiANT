@@ -16,7 +16,7 @@
  *
  * Everything here is prefixed antr_ because sdk-ant's error macros are
  * computed expressions, not literals - an unprefixed macro of the same name
- * would be a hard redefinition error, so ant_wire.h and ant_parameters.h
+ * would be a hard redefinition error, so radiant_wire.h and ant_parameters.h
  * could never share a translation unit and ant_radio_sdk_ant.c could not
  * assert one against the other.
  *
@@ -38,17 +38,17 @@
 #include <stdint.h>
 
 /*
- * ANTW_* names below are the ANT serial protocol's own response and event
- * codes, generated into src/ant_wire.h from protocol/ant_wire.yaml. Pulled in
+ * RADIANT_WIRE_* names below are the ANT serial protocol's own response and event
+ * codes, generated into radiant/include/radiant/radiant_wire.h from protocol/ant_wire.yaml. Pulled in
  * here so a caller acting on a return value has the codes in scope.
  */
-#include <radiant/ant_wire.h>
+#include <radiant/radiant_wire.h>
 
 /* ── Error convention ──────────────────────────────────────────────────────── */
 
 /*
  * Every function returns a response code that *is* the byte the serial
- * protocol puts on the wire: 0 is ANTW_RESPONSE_NO_ERROR, else an ANTW_*
+ * protocol puts on the wire: 0 is RADIANT_WIRE_RESPONSE_NO_ERROR, else an RADIANT_WIRE_*
  * channel response code, forwarded to the host unchanged.
  *
  * sdk-ant's ant_err_t instead carries a wide NRF error offset; narrowing that
@@ -73,14 +73,14 @@ typedef uint8_t antr_err_t;
  * alone distinguishes broadcast/acknowledged/burst/response/startup.
  */
 struct antr_msg {
-	/* ANT message ID - ANTW_MESG_BROADCAST_DATA_ID, _RESPONSE_EVENT_ID,
+	/* ANT message ID - RADIANT_WIRE_MESG_BROADCAST_DATA_ID, _RESPONSE_EVENT_ID,
 	 * _STARTUP_MESG_ID etc. Goes on the wire unchanged.
 	 */
 	uint8_t id;
 
 	/*
 	 * Valid bytes at `data`, becoming the frame's LEN byte - so it counts
-	 * the channel byte plus payload. Must be <= ANTW_MAX_SIZE_VALUE (38,
+	 * the channel byte plus payload. Must be <= RADIANT_WIRE_MAX_SIZE_VALUE (38,
 	 * not the 20 derived elsewhere from inbound-only messages: an
 	 * advanced-burst message reaches 25). Exceeding it drops the message
 	 * with a warning rather than overrunning the frame buffer.
@@ -116,7 +116,7 @@ struct antr_msg {
  *      burst semaphore.
  *   4. May run on the backend's own thread/work queue/callback context, but
  *      must not block.
- *   5. Three ANTW_EVENT_* codes carry buffer-ownership meaning as well as
+ *   5. Three RADIANT_WIRE_EVENT_* codes carry buffer-ownership meaning as well as
  *      status - see the burst contract below.
  *   6. An event caused by an antr_* call must not reach the host before that
  *      call's own response - see ANTR_HOST_THREAD_PRIORITY.
@@ -151,7 +151,7 @@ void antr_on_message(const struct antr_msg *msg);
  * The bridge holds one static 24-byte block behind a binary semaphore: each
  * incoming burst packet takes the semaphore, is copied into the block, and
  * the block is handed to antr_burst_tx(). The semaphore is given back only
- * on ANTW_EVENT_TRANSFER_NEXT_DATA_BLOCK, _TX_COMPLETED, _TX_FAILED, or
+ * on RADIANT_WIRE_EVENT_TRANSFER_NEXT_DATA_BLOCK, _TX_COMPLETED, _TX_FAILED, or
  * synchronously if antr_burst_tx() itself returns an error.
  *
  * Contract a backend must satisfy:
@@ -169,7 +169,7 @@ void antr_on_message(const struct antr_msg *msg);
  *       letting the next host packet overwrite an in-flight buffer.
  *
  * Missing B3: the bridge's k_sem_take() waits its full 1000 ms then answers
- * ANTW_TRANSFER_IN_PROGRESS - a burst stalls a second per packet with a
+ * RADIANT_WIRE_TRANSFER_IN_PROGRESS - a burst stalls a second per packet with a
  * plausible-looking error instead of failing outright, which is why this is
  * unit-tested (release-event count == accepted-block count) rather than
  * caught by inspection; radiant/tests owns it, on Linux CI since
@@ -196,9 +196,9 @@ void antr_on_message(const struct antr_msg *msg);
 #define ANTR_BURST_SEGMENT_END       0x02  /* last block of the transfer */
 
 /* The largest block antr_burst_tx() will ever be handed is
- * ANTW_ADV_BURST_BLOCK_MAX, from src/ant_wire.h. Advanced burst carries 8, 16
+ * RADIANT_WIRE_ADV_BURST_BLOCK_MAX, from radiant/include/radiant/radiant_wire.h. Advanced burst carries 8, 16
  * or 24 bytes per packet; plain burst carries 8. A backend must accept those
- * three and reject everything else with ANTW_INVALID_MESSAGE.
+ * three and reject everything else with RADIANT_WIRE_INVALID_MESSAGE.
  *
  * Deliberately not redefined here under an ANTR_ name. Two constants for one
  * buffer length is how a reply gets framed a byte short, and this one is
@@ -221,7 +221,7 @@ void antr_on_message(const struct antr_msg *msg);
  *
  * antr_on_message() must not be called before this returns 0.
  *
- * Returns 0, or ANTW_INVALID_PARAMETER_PROVIDED if the build's channel or
+ * Returns 0, or RADIANT_WIRE_INVALID_PARAMETER_PROVIDED if the build's channel or
  * network sizing cannot be satisfied. A backend that cannot start has no
  * useful wire code to report - main() logs the value and refuses to continue.
  */
@@ -255,7 +255,7 @@ antr_err_t antr_stack_reset(void);
  * Create a channel: bind a channel number to a type and a network.
  *
  * @param channel     0 .. (channel count - 1).
- * @param type        ANTW_CHANNEL_TYPE_* - slave/master, bidirectional,
+ * @param type        RADIANT_WIRE_CHANNEL_TYPE_* - slave/master, bidirectional,
  *                    shared, receive-only, transmit-only.
  * @param network     Network number, indexing the keys set by
  *                    antr_network_address_set().
@@ -267,9 +267,9 @@ antr_err_t antr_stack_reset(void);
  * The channel must be unassigned. Assignment does not put anything on air -
  * antr_channel_open_with_offset() does that.
  *
- * Returns 0, ANTW_INVALID_MESSAGE (channel number out of range),
- * ANTW_CHANNEL_IN_WRONG_STATE (already assigned) or
- * ANTW_INVALID_NETWORK_NUMBER.
+ * Returns 0, RADIANT_WIRE_INVALID_MESSAGE (channel number out of range),
+ * RADIANT_WIRE_CHANNEL_IN_WRONG_STATE (already assigned) or
+ * RADIANT_WIRE_INVALID_NETWORK_NUMBER.
  */
 antr_err_t antr_channel_assign(uint8_t channel, uint8_t type, uint8_t network,
 			       uint8_t ext_assign);
@@ -281,8 +281,8 @@ antr_err_t antr_channel_assign(uint8_t channel, uint8_t type, uint8_t network,
  * and is reported rather than silently closing it, because the host would
  * otherwise miss the channel-closed event it is waiting for.
  *
- * Returns 0, ANTW_INVALID_MESSAGE (channel out of range) or
- * ANTW_CHANNEL_IN_WRONG_STATE (still open, or never assigned).
+ * Returns 0, RADIANT_WIRE_INVALID_MESSAGE (channel out of range) or
+ * RADIANT_WIRE_CHANNEL_IN_WRONG_STATE (still open, or never assigned).
  */
 antr_err_t antr_channel_unassign(uint8_t channel);
 
@@ -290,14 +290,14 @@ antr_err_t antr_channel_unassign(uint8_t channel);
  * Change the extended assignment flags of an assigned, closed channel.
  *
  * This is the same byte antr_channel_assign() takes, for example
- * ANTW_EXT_PARAM_ALWAYS_SEARCH, which turns a slave into a background scan.
+ * RADIANT_WIRE_EXT_PARAM_ALWAYS_SEARCH, which turns a slave into a background scan.
  * Nothing else on the channel is reset: its ID, RF, period, search settings,
  * ID list and security context (keys, policy, epoch) all stay as configured.
  * Unassigning and assigning again would destroy them.
  *
- * Returns 0, ANTW_INVALID_MESSAGE (channel out of range, or a backend that has
+ * Returns 0, RADIANT_WIRE_INVALID_MESSAGE (channel out of range, or a backend that has
  * no in-place change; such a caller falls back to unassign and assign) or
- * ANTW_CHANNEL_IN_WRONG_STATE (unassigned, or open or closing).
+ * RADIANT_WIRE_CHANNEL_IN_WRONG_STATE (unassigned, or open or closing).
  */
 antr_err_t antr_channel_ext_assign_set(uint8_t channel, uint8_t ext_assign);
 
@@ -324,11 +324,11 @@ antr_err_t antr_channel_ext_assign_set(uint8_t channel, uint8_t ext_assign);
  *
  * A slave enters search; a master starts transmitting. Either way the outcome
  * arrives later as an event, not as a return value: the search result is an
- * ANTW_EVENT_RX_SEARCH_TIMEOUT or the first data message.
+ * RADIANT_WIRE_EVENT_RX_SEARCH_TIMEOUT or the first data message.
  *
- * Returns 0, ANTW_INVALID_MESSAGE (channel out of range),
- * ANTW_CHANNEL_IN_WRONG_STATE (unassigned, or already open) or
- * ANTW_CHANNEL_ID_NOT_SET (assigned but antr_channel_id_set() was never
+ * Returns 0, RADIANT_WIRE_INVALID_MESSAGE (channel out of range),
+ * RADIANT_WIRE_CHANNEL_IN_WRONG_STATE (unassigned, or already open) or
+ * RADIANT_WIRE_CHANNEL_ID_NOT_SET (assigned but antr_channel_id_set() was never
  * called).
  */
 antr_err_t antr_channel_open_with_offset(uint8_t channel, uint16_t offset);
@@ -352,12 +352,12 @@ static inline antr_err_t antr_channel_open(uint8_t channel)
  *
  * Asynchronous in the sense that matters: the channel is not closed when this
  * returns, it is closing. The host learns it is done from
- * ANTW_EVENT_CHANNEL_CLOSED, and a backend must raise that event exactly once
+ * RADIANT_WIRE_EVENT_CHANNEL_CLOSED, and a backend must raise that event exactly once
  * per successful close - a host library that reopens on the event will hang
  * without it.
  *
- * Returns 0, ANTW_INVALID_MESSAGE (channel out of range) or
- * ANTW_CHANNEL_IN_WRONG_STATE (not open).
+ * Returns 0, RADIANT_WIRE_INVALID_MESSAGE (channel out of range) or
+ * RADIANT_WIRE_CHANNEL_IN_WRONG_STATE (not open).
  */
 antr_err_t antr_channel_close(uint8_t channel);
 
@@ -376,8 +376,8 @@ antr_err_t antr_channel_close(uint8_t channel);
  * Must be called before the channel is opened; sdk-ant and every retail stick
  * reject it on an open channel rather than retuning underneath the host.
  *
- * Returns 0, ANTW_INVALID_MESSAGE (channel out of range) or
- * ANTW_CHANNEL_IN_WRONG_STATE (unassigned or open).
+ * Returns 0, RADIANT_WIRE_INVALID_MESSAGE (channel out of range) or
+ * RADIANT_WIRE_CHANNEL_IN_WRONG_STATE (unassigned or open).
  */
 antr_err_t antr_channel_id_set(uint8_t channel, uint16_t device_number,
 			       uint8_t device_type, uint8_t trans_type);
@@ -392,9 +392,9 @@ antr_err_t antr_channel_id_set(uint8_t channel, uint16_t device_number,
  *
  * Must be called before the channel is opened.
  *
- * Returns 0, ANTW_INVALID_MESSAGE (channel out of range),
- * ANTW_CHANNEL_IN_WRONG_STATE (unassigned or open) or
- * ANTW_INVALID_PARAMETER_PROVIDED (period outside what the backend can
+ * Returns 0, RADIANT_WIRE_INVALID_MESSAGE (channel out of range),
+ * RADIANT_WIRE_CHANNEL_IN_WRONG_STATE (unassigned or open) or
+ * RADIANT_WIRE_INVALID_PARAMETER_PROVIDED (period outside what the backend can
  * schedule).
  */
 antr_err_t antr_channel_period_set(uint8_t channel, uint16_t period);
@@ -408,9 +408,9 @@ antr_err_t antr_channel_period_set(uint8_t channel, uint16_t period);
  * backend on another part translates an index far more cheaply than it parses
  * a frequency.
  *
- * Returns 0, ANTW_INVALID_MESSAGE (channel out of range),
- * ANTW_CHANNEL_IN_WRONG_STATE (unassigned or open) or
- * ANTW_INVALID_PARAMETER_PROVIDED (offset > 124).
+ * Returns 0, RADIANT_WIRE_INVALID_MESSAGE (channel out of range),
+ * RADIANT_WIRE_CHANNEL_IN_WRONG_STATE (unassigned or open) or
+ * RADIANT_WIRE_INVALID_PARAMETER_PROVIDED (offset > 124).
  */
 antr_err_t antr_channel_radio_freq_set(uint8_t channel, uint8_t freq);
 
@@ -422,16 +422,16 @@ antr_err_t antr_channel_radio_freq_set(uint8_t channel, uint8_t freq);
  *                   so the bridge holds the requested level and reapplies it
  *                   after each successful assign. A backend does not need to
  *                   replicate that - it may reject an unassigned channel.
- * @param level      ANTW_RADIO_TX_POWER_LVL_0 .. _4 (-20, -12, -4, 0, +4 dBm),
- *                   or ANTW_RADIO_TX_POWER_LVL_5 (+8 dBm) where the part has
+ * @param level      RADIANT_WIRE_RADIO_TX_POWER_LVL_0 .. _4 (-20, -12, -4, 0, +4 dBm),
+ *                   or RADIANT_WIRE_RADIO_TX_POWER_LVL_5 (+8 dBm) where the part has
  *                   it - nRF52820, nRF52833 and nRF52840 only. Bit 7
- *                   (ANTW_RADIO_TX_POWER_LVL_CUSTOM) means `custom` names a
+ *                   (RADIANT_WIRE_RADIO_TX_POWER_LVL_CUSTOM) means `custom` names a
  *                   raw register value instead.
  * @param custom     Raw part-specific power value; ignored unless bit 7 of
  *                   `level` is set.
  *
- * Returns 0, ANTW_INVALID_MESSAGE (channel out of range),
- * ANTW_CHANNEL_IN_WRONG_STATE (unassigned) or ANTW_INVALID_PARAMETER_PROVIDED
+ * Returns 0, RADIANT_WIRE_INVALID_MESSAGE (channel out of range),
+ * RADIANT_WIRE_CHANNEL_IN_WRONG_STATE (unassigned) or RADIANT_WIRE_INVALID_PARAMETER_PROVIDED
  * (level the part cannot produce).
  */
 antr_err_t antr_channel_radio_tx_power_set(uint8_t channel, uint8_t level,
@@ -446,8 +446,8 @@ antr_err_t antr_channel_radio_tx_power_set(uint8_t channel, uint8_t level,
  * avoid. RadiANT schedules both modes the same way: the two timeouts only add
  * up to one search budget (see radiant_channel.c).
  *
- * Returns 0, ANTW_INVALID_MESSAGE (channel out of range) or
- * ANTW_CHANNEL_IN_WRONG_STATE (unassigned).
+ * Returns 0, RADIANT_WIRE_INVALID_MESSAGE (channel out of range) or
+ * RADIANT_WIRE_CHANNEL_IN_WRONG_STATE (unassigned).
  */
 antr_err_t antr_channel_search_timeout_set(uint8_t channel, uint8_t timeout);
 
@@ -459,8 +459,8 @@ antr_err_t antr_channel_search_timeout_set(uint8_t channel, uint8_t timeout);
  * infinite. Runs first; when it expires the search switches to high priority
  * for the high-priority timeout (Rev 5.1 section 9.5.2.15).
  *
- * Returns 0, ANTW_INVALID_MESSAGE (channel out of range) or
- * ANTW_CHANNEL_IN_WRONG_STATE (unassigned).
+ * Returns 0, RADIANT_WIRE_INVALID_MESSAGE (channel out of range) or
+ * RADIANT_WIRE_CHANNEL_IN_WRONG_STATE (unassigned).
  */
 antr_err_t antr_channel_low_priority_rx_search_timeout_set(uint8_t channel,
 							   uint8_t timeout);
@@ -469,8 +469,8 @@ antr_err_t antr_channel_low_priority_rx_search_timeout_set(uint8_t channel,
  * Select the CRC mode for a channel.
  *
  * @param channel  An assigned channel.
- * @param mode     The on-air CRC width. src/ant_wire.h names no constants for
- *                 the values - only ANTW_MESG_CHANNEL_CRC_MODE_SIZE for the
+ * @param mode     The on-air CRC width. radiant/include/radiant/radiant_wire.h names no constants for
+ *                 the values - only RADIANT_WIRE_MESG_CHANNEL_CRC_MODE_SIZE for the
  *                 message - because nothing in this project sends anything but
  *                 the default. A backend must therefore treat the byte as
  *                 opaque and validate it against its own supported set.
@@ -481,9 +481,9 @@ antr_err_t antr_channel_low_priority_rx_search_timeout_set(uint8_t channel,
  * accepting and ignoring it: a host that believes it configured a shorter CRC
  * and did not will see the link work and its own framing fail.
  *
- * Returns 0, ANTW_INVALID_MESSAGE (channel out of range),
- * ANTW_CHANNEL_IN_WRONG_STATE (unassigned or open) or
- * ANTW_INVALID_PARAMETER_PROVIDED (mode not supported).
+ * Returns 0, RADIANT_WIRE_INVALID_MESSAGE (channel out of range),
+ * RADIANT_WIRE_CHANNEL_IN_WRONG_STATE (unassigned or open) or
+ * RADIANT_WIRE_INVALID_PARAMETER_PROVIDED (mode not supported).
  */
 antr_err_t antr_channel_radio_crc_mode_set(uint8_t channel, uint8_t mode);
 
@@ -496,9 +496,9 @@ antr_err_t antr_channel_radio_crc_mode_set(uint8_t channel, uint8_t mode);
  * antr_channel_radio_freq_set(). ANT+ profiles forbid frequency agility, so
  * nothing in a standard session reaches this.
  *
- * Returns 0, ANTW_INVALID_MESSAGE (channel out of range),
- * ANTW_CHANNEL_IN_WRONG_STATE (unassigned or open) or
- * ANTW_INVALID_PARAMETER_PROVIDED (any offset > 124).
+ * Returns 0, RADIANT_WIRE_INVALID_MESSAGE (channel out of range),
+ * RADIANT_WIRE_CHANNEL_IN_WRONG_STATE (unassigned or open) or
+ * RADIANT_WIRE_INVALID_PARAMETER_PROVIDED (any offset > 124).
  */
 antr_err_t antr_auto_freq_hop_table_set(uint8_t channel, uint8_t freq0,
 					uint8_t freq1, uint8_t freq2);
@@ -511,9 +511,9 @@ antr_err_t antr_auto_freq_hop_table_set(uint8_t channel, uint8_t freq0,
  * A device-wide radio property, not a per-channel one, which is why it takes
  * no channel number. A backend that does not implement it should still accept
  * enable == 0 (the default state) and may reject a non-zero value with
- * ANTW_INVALID_PARAMETER_PROVIDED.
+ * RADIANT_WIRE_INVALID_PARAMETER_PROVIDED.
  *
- * Returns 0 or ANTW_INVALID_PARAMETER_PROVIDED.
+ * Returns 0 or RADIANT_WIRE_INVALID_PARAMETER_PROVIDED.
  */
 antr_err_t antr_enhanced_channel_spacing_enable(uint8_t enable);
 
@@ -528,14 +528,14 @@ antr_err_t antr_enhanced_channel_spacing_enable(uint8_t enable);
  *                 there is no ownership transfer and the caller may reuse the
  *                 buffer immediately.
  *
- * Broadcast is unacknowledged by design: the outcome is ANTW_EVENT_TX when the
+ * Broadcast is unacknowledged by design: the outcome is RADIANT_WIRE_EVENT_TX when the
  * slot fires, and there is no failure event because there is nothing to fail.
  * One payload per slot - queueing a second before the slot fires replaces the
  * first rather than sending both.
  *
- * Returns 0, ANTW_INVALID_MESSAGE (channel out of range, or bad size),
- * ANTW_CHANNEL_NOT_OPENED, ANTW_CHANNEL_IN_WRONG_STATE (a receive-only
- * channel) or ANTW_TRANSFER_IN_PROGRESS (a transfer this host started -
+ * Returns 0, RADIANT_WIRE_INVALID_MESSAGE (channel out of range, or bad size),
+ * RADIANT_WIRE_CHANNEL_NOT_OPENED, RADIANT_WIRE_CHANNEL_IN_WRONG_STATE (a receive-only
+ * channel) or RADIANT_WIRE_TRANSFER_IN_PROGRESS (a transfer this host started -
  * burst or acknowledged - still owns the channel; acknowledging a peer's
  * packet does not count).
  */
@@ -546,17 +546,17 @@ antr_err_t antr_broadcast_message_tx(uint8_t channel, uint8_t size,
  * Queue an 8-byte acknowledged payload.
  *
  * Same shape as broadcast, different guarantee: the receiver replies and the
- * outcome arrives as ANTW_EVENT_TRANSFER_TX_COMPLETED or
- * ANTW_EVENT_TRANSFER_TX_FAILED. A backend must raise exactly one of those two
+ * outcome arrives as RADIANT_WIRE_EVENT_TRANSFER_TX_COMPLETED or
+ * RADIANT_WIRE_EVENT_TRANSFER_TX_FAILED. A backend must raise exactly one of those two
  * per accepted message - this is how Zwift learns a trainer took a resistance
  * change, so a missing event is a stuck ERG session, not a cosmetic gap.
  *
  * @param data  Copied before this returns.
  *
- * Returns 0, ANTW_INVALID_MESSAGE (channel out of range, or bad size),
- * ANTW_CHANNEL_NOT_OPENED, ANTW_CHANNEL_IN_WRONG_STATE (a one-way channel,
+ * Returns 0, RADIANT_WIRE_INVALID_MESSAGE (channel out of range, or bad size),
+ * RADIANT_WIRE_CHANNEL_NOT_OPENED, RADIANT_WIRE_CHANNEL_IN_WRONG_STATE (a one-way channel,
  * or a master keyed for RadiANT security - see docs/radiant-security.md
- * section 3.2, "Non-broadcast traffic") or ANTW_TRANSFER_IN_PROGRESS (a
+ * section 3.2, "Non-broadcast traffic") or RADIANT_WIRE_TRANSFER_IN_PROGRESS (a
  * previous acknowledged message or burst has not finished). Inbound acked
  * data on a secured channel is not authenticated (same section).
  */
@@ -581,14 +581,14 @@ antr_err_t antr_acknowledge_message_tx(uint8_t channel, uint8_t size,
  * ant_burst_handler_request(); the mapping is recorded in
  * docs/sdk-ant-contract.md.
  *
- * Returns 0, ANTW_INVALID_MESSAGE (channel out of range, or a size that is not
- * 8/16/24), ANTW_CHANNEL_NOT_OPENED, ANTW_CHANNEL_IN_WRONG_STATE (a one-way
+ * Returns 0, RADIANT_WIRE_INVALID_MESSAGE (channel out of range, or a size that is not
+ * 8/16/24), RADIANT_WIRE_CHANNEL_NOT_OPENED, RADIANT_WIRE_CHANNEL_IN_WRONG_STATE (a one-way
  * channel, or a master keyed for RadiANT security; inbound bursts on a
  * secured channel are not authenticated - docs/radiant-security.md section
- * 3.2, "Non-broadcast traffic"), ANTW_TRANSFER_IN_PROGRESS (a different
+ * 3.2, "Non-broadcast traffic"), RADIANT_WIRE_TRANSFER_IN_PROGRESS (a different
  * transfer owns the channel, or this transfer has not consumed the previous
- * block), ANTW_TRANSFER_SEQUENCE_NUMBER_ERROR (a segment flag that does not
- * follow from the previous block) or ANTW_TRANSFER_IN_ERROR.
+ * block), RADIANT_WIRE_TRANSFER_SEQUENCE_NUMBER_ERROR (a segment flag that does not
+ * follow from the previous block) or RADIANT_WIRE_TRANSFER_IN_ERROR.
  *
  * On any non-zero return the backend owns nothing and must raise no event for
  * this block.
@@ -610,7 +610,7 @@ antr_err_t antr_burst_tx(uint8_t channel, uint16_t size, uint8_t *data,
  * other name is mechanical, so an omitted one shows up as a link error
  * rather than a silent behaviour change.
  *
- * Returns 0 or ANTW_INVALID_MESSAGE (channel out of range).
+ * Returns 0 or RADIANT_WIRE_INVALID_MESSAGE (channel out of range).
  */
 antr_err_t antr_pending_transmit_get(uint8_t channel, uint8_t *pending);
 
@@ -624,7 +624,7 @@ antr_err_t antr_pending_transmit_get(uint8_t channel, uint8_t *pending);
  * value: "there was nothing to clear" is not an error, and a host that asked
  * still gets a RESPONSE_NO_ERROR with a zero in the payload.
  *
- * Returns 0 or ANTW_INVALID_MESSAGE (channel out of range).
+ * Returns 0 or RADIANT_WIRE_INVALID_MESSAGE (channel out of range).
  */
 antr_err_t antr_pending_transmit_clear(uint8_t channel, uint8_t *success);
 
@@ -638,8 +638,8 @@ antr_err_t antr_pending_transmit_clear(uint8_t channel, uint8_t *success);
  *                  default; a smaller value narrows the window, finds sensors
  *                  more slowly and costs less power.
  *
- * Returns 0, ANTW_INVALID_MESSAGE (channel out of range) or
- * ANTW_CHANNEL_IN_WRONG_STATE (unassigned).
+ * Returns 0, RADIANT_WIRE_INVALID_MESSAGE (channel out of range) or
+ * RADIANT_WIRE_CHANNEL_IN_WRONG_STATE (unassigned).
  */
 antr_err_t antr_search_waveform_set(uint8_t channel, uint16_t waveform);
 
@@ -655,8 +655,8 @@ antr_err_t antr_search_waveform_set(uint8_t channel, uint16_t waveform);
  *                   supports it; 0 otherwise. Optional in the serial message,
  *                   so the bridge passes 0 when the host sent the short form.
  *
- * Returns 0, ANTW_INVALID_MESSAGE (channel out of range),
- * ANTW_CHANNEL_IN_WRONG_STATE (unassigned) or ANTW_INVALID_PARAMETER_PROVIDED
+ * Returns 0, RADIANT_WIRE_INVALID_MESSAGE (channel out of range),
+ * RADIANT_WIRE_CHANNEL_IN_WRONG_STATE (unassigned) or RADIANT_WIRE_INVALID_PARAMETER_PROVIDED
  * (threshold > 10).
  */
 antr_err_t antr_prox_search_set(uint8_t channel, uint8_t threshold,
@@ -668,8 +668,8 @@ antr_err_t antr_prox_search_set(uint8_t channel, uint8_t threshold,
  * @param channel   An assigned channel.
  * @param priority  0 low, 1 high.
  *
- * Returns 0, ANTW_INVALID_MESSAGE (channel out of range) or
- * ANTW_CHANNEL_IN_WRONG_STATE (unassigned).
+ * Returns 0, RADIANT_WIRE_INVALID_MESSAGE (channel out of range) or
+ * RADIANT_WIRE_CHANNEL_IN_WRONG_STATE (unassigned).
  */
 antr_err_t antr_search_channel_priority_set(uint8_t channel, uint8_t priority);
 
@@ -678,7 +678,7 @@ antr_err_t antr_search_channel_priority_set(uint8_t channel, uint8_t priority);
  *
  * @param priority  Out: 0 or 1.
  *
- * Returns 0 or ANTW_INVALID_MESSAGE (channel out of range).
+ * Returns 0 or RADIANT_WIRE_INVALID_MESSAGE (channel out of range).
  */
 antr_err_t antr_search_channel_priority_get(uint8_t channel, uint8_t *priority);
 
@@ -695,8 +695,8 @@ antr_err_t antr_search_channel_priority_get(uint8_t channel, uint8_t *priority);
  * must still accept and read back the value, because tools/ant_features.py
  * round-trips it.
  *
- * Returns 0, ANTW_INVALID_MESSAGE (channel out of range) or
- * ANTW_CHANNEL_IN_WRONG_STATE (unassigned).
+ * Returns 0, RADIANT_WIRE_INVALID_MESSAGE (channel out of range) or
+ * RADIANT_WIRE_CHANNEL_IN_WRONG_STATE (unassigned).
  */
 antr_err_t antr_active_search_sharing_cycles_set(uint8_t channel,
 						 uint8_t cycles);
@@ -706,7 +706,7 @@ antr_err_t antr_active_search_sharing_cycles_set(uint8_t channel,
  *
  * @param cycles  Out.
  *
- * Returns 0 or ANTW_INVALID_MESSAGE (channel out of range).
+ * Returns 0 or RADIANT_WIRE_INVALID_MESSAGE (channel out of range).
  */
 antr_err_t antr_active_search_sharing_cycles_get(uint8_t channel,
 						 uint8_t *cycles);
@@ -722,8 +722,8 @@ antr_err_t antr_active_search_sharing_cycles_get(uint8_t channel,
  *
  * The list is only consulted once antr_id_list_config() has given it a size.
  *
- * Returns 0, ANTW_INVALID_MESSAGE (channel out of range),
- * ANTW_CHANNEL_IN_WRONG_STATE (unassigned) or ANTW_INVALID_LIST_ID (index
+ * Returns 0, RADIANT_WIRE_INVALID_MESSAGE (channel out of range),
+ * RADIANT_WIRE_CHANNEL_IN_WRONG_STATE (unassigned) or RADIANT_WIRE_INVALID_LIST_ID (index
  * beyond what the backend supports). An open channel is fine: a retail ANT
  * USB-m accepts the list while searching, and Android rewrites it then.
  */
@@ -738,8 +738,8 @@ antr_err_t antr_id_list_add(uint8_t channel, const uint8_t *device_id,
  * @param inc_exc   0 for an inclusion list (acquire only these), 1 for an
  *                  exclusion list (acquire anything but these).
  *
- * Returns 0, ANTW_INVALID_MESSAGE (channel out of range),
- * ANTW_CHANNEL_IN_WRONG_STATE (unassigned) or ANTW_INVALID_LIST_ID (size
+ * Returns 0, RADIANT_WIRE_INVALID_MESSAGE (channel out of range),
+ * RADIANT_WIRE_CHANNEL_IN_WRONG_STATE (unassigned) or RADIANT_WIRE_INVALID_LIST_ID (size
  * beyond what the backend supports).
  */
 antr_err_t antr_id_list_config(uint8_t channel, uint8_t size,
@@ -759,13 +759,13 @@ antr_err_t antr_id_list_config(uint8_t channel, uint8_t size,
  * recover (fitting it from samples would be reverse-engineering). A
  * clean-room backend holds a small key -> address table, seeded with the
  * published ANT+ pair (B9A521FBBD72C345 -> A6 C5), and returns
- * ANTW_INVALID_PARAMETER_PROVIDED for any other key. This costs nothing on
+ * RADIANT_WIRE_INVALID_PARAMETER_PROVIDED for any other key. This costs nothing on
  * the path anyone actually runs, since every ANT+ profile uses that one key.
  *
  * sdk-ant has no such limitation - libant.a computes the address - so A/B
  * comparisons between backends must use the ANT+ key, not an arbitrary one.
  *
- * Returns 0, ANTW_INVALID_NETWORK_NUMBER, or ANTW_INVALID_PARAMETER_PROVIDED
+ * Returns 0, RADIANT_WIRE_INVALID_NETWORK_NUMBER, or RADIANT_WIRE_INVALID_PARAMETER_PROVIDED
  * for a key whose network address the backend cannot derive.
  */
 antr_err_t antr_network_address_set(uint8_t network, const uint8_t *key);
@@ -775,12 +775,12 @@ antr_err_t antr_network_address_set(uint8_t network, const uint8_t *key);
 /**
  * Turn on library configuration bits.
  *
- * @param config  ANTW_LIB_CONFIG_* bits, OR'd. The three that matter are
- *                ANTW_LIB_CONFIG_MESG_OUT_INC_DEVICE_ID,
- *                ANTW_LIB_CONFIG_MESG_OUT_INC_RSSI and
- *                ANTW_LIB_CONFIG_MESG_OUT_INC_TIME_STAMP on every received
+ * @param config  RADIANT_WIRE_LIB_CONFIG_* bits, OR'd. The three that matter are
+ *                RADIANT_WIRE_LIB_CONFIG_MESG_OUT_INC_DEVICE_ID,
+ *                RADIANT_WIRE_LIB_CONFIG_MESG_OUT_INC_RSSI and
+ *                RADIANT_WIRE_LIB_CONFIG_MESG_OUT_INC_TIME_STAMP on every received
  *                message; the tools request all three at once
- *                (ANTW_LIB_CONFIG_ALL_EXT_FIELDS, 0xE0) rather than the
+ *                (RADIANT_WIRE_LIB_CONFIG_ALL_EXT_FIELDS, 0xE0) rather than the
  *                device-ID-only 0x80.
  *
  * The RX timestamp must come from the backend's own capture of packet
@@ -790,7 +790,7 @@ antr_err_t antr_network_address_set(uint8_t network, const uint8_t *key);
  *
  * Bits are additive: setting one leaves the others alone.
  *
- * Returns 0 or ANTW_INVALID_PARAMETER_PROVIDED (a bit the backend does not
+ * Returns 0 or RADIANT_WIRE_INVALID_PARAMETER_PROVIDED (a bit the backend does not
  * implement).
  */
 antr_err_t antr_lib_config_set(uint8_t config);
@@ -798,18 +798,18 @@ antr_err_t antr_lib_config_set(uint8_t config);
 /**
  * Turn off library configuration bits.
  *
- * @param config  Bits to clear. ANTW_LIB_CONFIG_MASK_ALL clears everything,
+ * @param config  Bits to clear. RADIANT_WIRE_LIB_CONFIG_MASK_ALL clears everything,
  *                which is how the bridge implements the host's "set config to
  *                zero" - there is no separate clear message on the wire.
  *
- * Returns 0 or ANTW_INVALID_PARAMETER_PROVIDED.
+ * Returns 0 or RADIANT_WIRE_INVALID_PARAMETER_PROVIDED.
  */
 antr_err_t antr_lib_config_clear(uint8_t config);
 
 /**
  * Read the current library configuration bits.
  *
- * @param config  Out: one byte of ANTW_LIB_CONFIG_* flags.
+ * @param config  Out: one byte of RADIANT_WIRE_LIB_CONFIG_* flags.
  *
  * Returns 0.
  */
@@ -822,18 +822,18 @@ antr_err_t antr_lib_config_get(uint8_t *config);
  * @param filter  16-bit mask: bit N suppresses channel event code N+1 (codes
  *                1..16; ANT Message Protocol and Usage Rev 5.1, 9.5.2.28 and
  *                9.5.6.1), so 0x0002 is EVENT_RX_FAIL and 0x0004 EVENT_TX.
- *                src/ant_wire.h names no constants for the individual bits -
- *                only ANTW_MESG_EVENT_FILTER_CONFIG_ID and its reply size -
+ *                radiant/include/radiant/radiant_wire.h names no constants for the individual bits -
+ *                only RADIANT_WIRE_MESG_EVENT_FILTER_CONFIG_ID and its reply size -
  *                because the bridge passes the mask through whole.
  *
  * Exists to keep a busy multi-channel session from drowning the host in
- * ANTW_EVENT_RX_FAIL. The radiant backend applies it at delivery, after every
+ * RADIANT_WIRE_EVENT_RX_FAIL. The radiant backend applies it at delivery, after every
  * internal counter has seen the event, so loss accounting still counts the
  * RX_FAIL a host filtered out. 0, the default, passes everything. A backend
  * that does not filter must still store and return the value, because
  * tools/ant_features.py round-trips it.
  *
- * Returns 0 or ANTW_INVALID_PARAMETER_PROVIDED.
+ * Returns 0 or RADIANT_WIRE_INVALID_PARAMETER_PROVIDED.
  */
 antr_err_t antr_event_filtering_set(uint16_t filter);
 
@@ -864,7 +864,7 @@ antr_err_t antr_event_filtering_get(uint16_t *filter);
  * a dongle that takes 24-byte blocks and can never send one is worse than one
  * that refuses them.
  *
- * Returns 0 or ANTW_INVALID_PARAMETER_PROVIDED (size out of range, or a mode
+ * Returns 0 or RADIANT_WIRE_INVALID_PARAMETER_PROVIDED (size out of range, or a mode
  * the backend does not implement).
  */
 antr_err_t antr_adv_burst_config_set(const uint8_t *config, uint8_t size);
@@ -876,9 +876,9 @@ antr_err_t antr_adv_burst_config_set(const uint8_t *config, uint8_t size);
  *                      currently configured.
  * @param config        Out. For request_type 0 the backend writes the
  *                      capabilities block - supported RF payload sizes
- *                      (ANTW_ADV_BURST_MODES_SIZE_*), then supported optional
- *                      modes (ANTW_ADV_BURST_MODES_FREQ_HOP). For non-zero it
- *                      writes ANTW_MESG_CONFIG_ADV_BURST_REQ_CONFIG_SIZE (10)
+ *                      (RADIANT_WIRE_ADV_BURST_MODES_SIZE_*), then supported optional
+ *                      modes (RADIANT_WIRE_ADV_BURST_MODES_FREQ_HOP). For non-zero it
+ *                      writes RADIANT_WIRE_MESG_CONFIG_ADV_BURST_REQ_CONFIG_SIZE (10)
  *                      bytes: the block passed to the setter, minus its
  *                      leading enable byte.
  *
@@ -896,7 +896,7 @@ antr_err_t antr_adv_burst_config_get(uint8_t request_type, uint8_t *config);
  * One page of MESG_RADIANT_DIAG (0xF7, ADR 0023) into `out`, which must hold
  * RADIANT_DIAG_BODY_LEN (36) bytes: [0] page, [1] version, [2] flags,
  * [3] backend id, then eight u32 LE counters. Device-wide, not per channel.
- * Returns ANTW_INVALID_PARAMETER_PROVIDED for a page this build does not have.
+ * Returns RADIANT_WIRE_INVALID_PARAMETER_PROVIDED for a page this build does not have.
  */
 antr_err_t antr_diag_page(uint8_t page, uint8_t *out);
 #endif
@@ -910,7 +910,7 @@ antr_err_t antr_diag_page(uint8_t page, uint8_t *out);
  * @param mask        8 bytes, one bit per payload bit. Copied before this
  *                    returns.
  *
- * Returns 0 or ANTW_INVALID_PARAMETER_PROVIDED (mask_index out of range).
+ * Returns 0 or RADIANT_WIRE_INVALID_PARAMETER_PROVIDED (mask_index out of range).
  */
 antr_err_t antr_sdu_mask_set(uint8_t mask_index, const uint8_t *mask);
 
@@ -919,7 +919,7 @@ antr_err_t antr_sdu_mask_set(uint8_t mask_index, const uint8_t *mask);
  *
  * @param mask  Out: 8 bytes.
  *
- * Returns 0 or ANTW_INVALID_PARAMETER_PROVIDED (mask_index out of range).
+ * Returns 0 or RADIANT_WIRE_INVALID_PARAMETER_PROVIDED (mask_index out of range).
  */
 antr_err_t antr_sdu_mask_get(uint8_t mask_index, uint8_t *mask);
 
@@ -929,17 +929,17 @@ antr_err_t antr_sdu_mask_get(uint8_t mask_index, uint8_t *mask);
  * @param channel      An assigned channel.
  * @param mask_config  A mask index, optionally OR'd with the acknowledged-data
  *                     bit that applies the mask to acknowledged data as well.
- *                     ANTW_INVALID_SDU_MASK (0xFF) turns selective updates
+ *                     RADIANT_WIRE_INVALID_SDU_MASK (0xFF) turns selective updates
  *                     back off for the channel. A backend must mask that bit
  *                     off before range-checking the index, which is what
  *                     src/ant_radio_stub.c:586-587 does.
  *
  * Note the two different error codes: an out-of-range channel is
- * ANTW_INVALID_MESSAGE and an out-of-range mask is
- * ANTW_INVALID_PARAMETER_PROVIDED. The distinction is observable from the host
+ * RADIANT_WIRE_INVALID_MESSAGE and an out-of-range mask is
+ * RADIANT_WIRE_INVALID_PARAMETER_PROVIDED. The distinction is observable from the host
  * and tools/ant_conformance.py diffs it.
  *
- * Returns 0, ANTW_INVALID_MESSAGE or ANTW_INVALID_PARAMETER_PROVIDED.
+ * Returns 0, RADIANT_WIRE_INVALID_MESSAGE or RADIANT_WIRE_INVALID_PARAMETER_PROVIDED.
  */
 antr_err_t antr_sdu_mask_config(uint8_t channel, uint8_t mask_config);
 
@@ -948,7 +948,7 @@ antr_err_t antr_sdu_mask_config(uint8_t channel, uint8_t mask_config);
 /**
  * Report what the radio can do.
  *
- * @param capabilities  Out: ANTW_MESG_CAPABILITIES_SIZE bytes (9), in wire
+ * @param capabilities  Out: RADIANT_WIRE_MESG_CAPABILITIES_SIZE bytes (9), in wire
  *                      order - max channels, max networks, standard options,
  *                      advanced options, advanced options 2, max SensRcore
  *                      channels, advanced options 3, 4 and 5.
@@ -965,7 +965,7 @@ antr_err_t antr_capabilities_get(uint8_t *capabilities);
 /**
  * Report the stack version string.
  *
- * @param version  Out: ANTW_MESG_VERSION_SIZE bytes, NUL-padded.
+ * @param version  Out: RADIANT_WIRE_MESG_VERSION_SIZE bytes, NUL-padded.
  *
  * A backend should make its string identifiable - the stub reports
  * "STUB0.01B00" precisely so a stub image can be recognised from the host side
@@ -987,11 +987,11 @@ antr_err_t antr_version_get(uint8_t *version);
  * should derive it from something the host can cross-check. The radiant
  * backend uses the last four bytes of the hwinfo device ID, which on nRF are
  * the last eight hex digits of the USB iSerial string. A backend with no
- * serial returns ANTW_INVALID_MESSAGE. The bridge then refuses the request in
+ * serial returns RADIANT_WIRE_INVALID_MESSAGE. The bridge then refuses the request in
  * the same way, and antr_capabilities_get() must not set
- * ANTW_CAPABILITIES_SERIAL_NUMBER_ENABLED.
+ * RADIANT_WIRE_CAPABILITIES_SERIAL_NUMBER_ENABLED.
  *
- * Returns 0 or ANTW_INVALID_MESSAGE.
+ * Returns 0 or RADIANT_WIRE_INVALID_MESSAGE.
  */
 antr_err_t antr_serial_number_get(uint32_t *serial);
 
@@ -999,13 +999,13 @@ antr_err_t antr_serial_number_get(uint32_t *serial);
  * Read a channel's state.
  *
  * @param channel  Any channel number.
- * @param status   Out: ANTW_STATUS_UNASSIGNED_CHANNEL, _ASSIGNED_CHANNEL,
+ * @param status   Out: RADIANT_WIRE_STATUS_UNASSIGNED_CHANNEL, _ASSIGNED_CHANNEL,
  *                 _SEARCHING_CHANNEL or _TRACKING_CHANNEL in the low two bits,
  *                 with the channel type in the upper bits.
  *
  * Legal on an unassigned channel - that is the answer, not an error.
  *
- * Returns 0 or ANTW_INVALID_MESSAGE (channel out of range).
+ * Returns 0 or RADIANT_WIRE_INVALID_MESSAGE (channel out of range).
  */
 antr_err_t antr_channel_status_get(uint8_t channel, uint8_t *status);
 
@@ -1020,7 +1020,7 @@ antr_err_t antr_channel_status_get(uint8_t channel, uint8_t *status);
  * @param device_type    Out.
  * @param trans_type     Out.
  *
- * Returns 0 or ANTW_INVALID_MESSAGE (channel out of range).
+ * Returns 0 or RADIANT_WIRE_INVALID_MESSAGE (channel out of range).
  */
 antr_err_t antr_channel_id_get(uint8_t channel, uint16_t *device_number,
 			       uint8_t *device_type, uint8_t *trans_type);
@@ -1030,7 +1030,7 @@ antr_err_t antr_channel_id_get(uint8_t channel, uint16_t *device_number,
  *
  * @param period  Out.
  *
- * Returns 0 or ANTW_INVALID_MESSAGE (channel out of range).
+ * Returns 0 or RADIANT_WIRE_INVALID_MESSAGE (channel out of range).
  */
 antr_err_t antr_channel_period_get(uint8_t channel, uint16_t *period);
 
@@ -1039,7 +1039,7 @@ antr_err_t antr_channel_period_get(uint8_t channel, uint16_t *period);
  *
  * @param freq  Out: 0 .. 124.
  *
- * Returns 0 or ANTW_INVALID_MESSAGE (channel out of range).
+ * Returns 0 or RADIANT_WIRE_INVALID_MESSAGE (channel out of range).
  */
 antr_err_t antr_channel_radio_freq_get(uint8_t channel, uint8_t *freq);
 
@@ -1049,7 +1049,7 @@ antr_err_t antr_channel_radio_freq_get(uint8_t channel, uint8_t *freq);
  * @param mode  Out: the same opaque width byte antr_channel_radio_crc_mode_set()
  *              takes.
  *
- * Returns 0 or ANTW_INVALID_MESSAGE (channel out of range).
+ * Returns 0 or RADIANT_WIRE_INVALID_MESSAGE (channel out of range).
  */
 antr_err_t antr_channel_radio_crc_mode_get(uint8_t channel, uint8_t *mode);
 
@@ -1065,7 +1065,7 @@ antr_err_t antr_channel_radio_crc_mode_get(uint8_t channel, uint8_t *mode);
  * A clean-room backend need not implement ANT+'s own AES-CTR - no Windows
  * host can reach it, it is malleable and unauthenticated. The honest
  * implementation accepts the reads and refuses antr_crypto_channel_enable()
- * for any non-zero mode with ANTW_INVALID_PARAMETER_PROVIDED. Its
+ * for any non-zero mode with RADIANT_WIRE_INVALID_PARAMETER_PROVIDED. Its
  * replacement is a separate, optional design (docs/radiant-security.md), not
  * part of this contract.
  */
@@ -1078,8 +1078,8 @@ antr_err_t antr_channel_radio_crc_mode_get(uint8_t channel, uint8_t *mode);
  * @param key_num     Which key installed by antr_crypto_key_set().
  * @param decimation  Rate at which encryption-info pages are interleaved.
  *
- * Returns 0, ANTW_INVALID_PARAMETER_PROVIDED (channel, key number or mode out
- * of range, or encryption not implemented) or ANTW_CHANNEL_IN_WRONG_STATE.
+ * Returns 0, RADIANT_WIRE_INVALID_PARAMETER_PROVIDED (channel, key number or mode out
+ * of range, or encryption not implemented) or RADIANT_WIRE_CHANNEL_IN_WRONG_STATE.
  */
 antr_err_t antr_crypto_channel_enable(uint8_t channel, uint8_t enable,
 				      uint8_t key_num, uint8_t decimation);
@@ -1093,38 +1093,38 @@ antr_err_t antr_crypto_channel_enable(uint8_t channel, uint8_t enable,
  *                 message either - it is fixed at 128 bits by the protocol and
  *                 stated here because there is nowhere else to state it.
  *
- * Returns 0 or ANTW_INVALID_PARAMETER_PROVIDED (key_num out of range).
+ * Returns 0 or RADIANT_WIRE_INVALID_PARAMETER_PROVIDED (key_num out of range).
  */
 antr_err_t antr_crypto_key_set(uint8_t key_num, const uint8_t *key);
 
 /**
  * Write one piece of encryption configuration.
  *
- * @param type  ANTW_ENCRYPTION_INFO_SET_CRYPTO_ID (4 bytes of `info`),
- *              ANTW_ENCRYPTION_INFO_SET_CUSTOM_USER_DATA (19 bytes) or
- *              ANTW_ENCRYPTION_INFO_SET_RNG_SEED.
+ * @param type  RADIANT_WIRE_ENCRYPTION_INFO_SET_CRYPTO_ID (4 bytes of `info`),
+ *              RADIANT_WIRE_ENCRYPTION_INFO_SET_CUSTOM_USER_DATA (19 bytes) or
+ *              RADIANT_WIRE_ENCRYPTION_INFO_SET_RNG_SEED.
  * @param info  Copied before this returns. There is no length parameter, so
  *              the callee reads a fixed count per type and the *caller* must
  *              bound it. The bridge does exactly that, and refuses the RNG
  *              seed entirely because no size is defined for it anywhere - a
  *              backend must be able to assume the caller checked.
  *
- * Returns 0 or ANTW_INVALID_PARAMETER_PROVIDED (unknown type).
+ * Returns 0 or RADIANT_WIRE_INVALID_PARAMETER_PROVIDED (unknown type).
  */
 antr_err_t antr_crypto_info_set(uint8_t type, const uint8_t *info);
 
 /**
  * Read one piece of encryption configuration.
  *
- * @param type  ANTW_ENCRYPTION_INFO_GET_SUPPORTED_MODE (writes 1 byte),
- *              ANTW_ENCRYPTION_INFO_GET_CRYPTO_ID (4 bytes) or
- *              ANTW_ENCRYPTION_INFO_GET_CUSTOM_USER_DATA (19 bytes).
+ * @param type  RADIANT_WIRE_ENCRYPTION_INFO_GET_SUPPORTED_MODE (writes 1 byte),
+ *              RADIANT_WIRE_ENCRYPTION_INFO_GET_CRYPTO_ID (4 bytes) or
+ *              RADIANT_WIRE_ENCRYPTION_INFO_GET_CUSTOM_USER_DATA (19 bytes).
  * @param info  Out. Write exactly what the type accounts for and no more:
  *              the caller's buffer is sized for the largest reply *including*
  *              the leading info-type byte that the bridge supplies itself, so
  *              zeroing the whole thing overruns it.
  *
- * Returns 0 or ANTW_INVALID_PARAMETER_PROVIDED (unknown type).
+ * Returns 0 or RADIANT_WIRE_INVALID_PARAMETER_PROVIDED (unknown type).
  */
 antr_err_t antr_crypto_info_get(uint8_t type, uint8_t *info);
 
@@ -1143,7 +1143,7 @@ antr_err_t antr_crypto_info_get(uint8_t type, uint8_t *info);
  *
  * ORDERING: a channel needs its ID before its key (the device number is
  * bound into the KDF) and its period before its epoch (the period turns a
- * phase into a packet index). Both refused with ANTW_CHANNEL_IN_WRONG_STATE.
+ * phase into a packet index). Both refused with RADIANT_WIRE_CHANNEL_IN_WRONG_STATE.
  */
 
 /**
@@ -1159,8 +1159,8 @@ antr_err_t antr_crypto_info_get(uint8_t type, uint8_t *info);
  * @param page_hi   descriptor and the ANT+ common pages stay in the clear
  *                  mechanically rather than by memory.
  *
- * Returns 0, ANTW_INVALID_MESSAGE (channel out of range),
- * ANTW_INVALID_PARAMETER_PROVIDED or ANTW_CHANNEL_IN_WRONG_STATE (no key yet).
+ * Returns 0, RADIANT_WIRE_INVALID_MESSAGE (channel out of range),
+ * RADIANT_WIRE_INVALID_PARAMETER_PROVIDED or RADIANT_WIRE_CHANNEL_IN_WRONG_STATE (no key yet).
  */
 antr_err_t antr_sec_config(uint8_t channel, uint8_t switches, uint8_t w,
 			   uint8_t page_lo, uint8_t page_hi);
@@ -1172,13 +1172,13 @@ antr_err_t antr_sec_config(uint8_t channel, uint8_t switches, uint8_t w,
  * @param key   Copied before this returns.
  *
  * WRITE ONLY. There is no read arm anywhere and MESG_REQUEST for 0xF2 answers
- * ANTW_INVALID_MESSAGE rather than a key. The caller should wipe its own copy of
+ * RADIANT_WIRE_INVALID_MESSAGE rather than a key. The caller should wipe its own copy of
  * the message body afterwards; that is worth doing and is not sufficient, since
  * the bytes also passed through the USB ring and the transport buffer beneath
  * it, neither of which is reachable from here.
  *
- * Returns 0, ANTW_INVALID_MESSAGE, ANTW_INVALID_PARAMETER_PROVIDED (unsupported
- * key length) or ANTW_CHANNEL_IN_WRONG_STATE (no channel ID, or a wildcard one).
+ * Returns 0, RADIANT_WIRE_INVALID_MESSAGE, RADIANT_WIRE_INVALID_PARAMETER_PROVIDED (unsupported
+ * key length) or RADIANT_WIRE_CHANNEL_IN_WRONG_STATE (no channel ID, or a wildcard one).
  */
 antr_err_t antr_sec_key_set(uint8_t channel, uint8_t bits, const uint8_t *key);
 
@@ -1196,8 +1196,8 @@ antr_err_t antr_sec_key_set(uint8_t channel, uint8_t bits, const uint8_t *key);
  * restarted the counter under an unchanged epoch would be a two-time pad for
  * X_CONF and a full session replay against X_AUTH.
  *
- * Returns 0, ANTW_INVALID_MESSAGE, ANTW_INVALID_PARAMETER_PROVIDED or
- * ANTW_CHANNEL_IN_WRONG_STATE (no key, or no channel period).
+ * Returns 0, RADIANT_WIRE_INVALID_MESSAGE, RADIANT_WIRE_INVALID_PARAMETER_PROVIDED or
+ * RADIANT_WIRE_CHANNEL_IN_WRONG_STATE (no key, or no channel period).
  */
 antr_err_t antr_sec_epoch_set(uint8_t channel, uint8_t flags, uint32_t epoch,
 			      uint64_t us_into_epoch);
@@ -1225,7 +1225,7 @@ antr_err_t antr_sec_epoch_set(uint8_t channel, uint8_t flags, uint32_t epoch,
  * Read a channel's security state. Message 0xF4, via MESG_REQUEST.
  *
  * @param out      ANTR_SEC_STATUS_LEN bytes, laid out as
- *                 ANTW_MESG_RADIANT_SEC_STATUS_ID documents, with the structure
+ *                 RADIANT_WIRE_MESG_RADIANT_SEC_STATUS_ID documents, with the structure
  *                 version ANTR_SEC_STATUS_VERSION at [1]. Counters are u16 LE
  *                 and saturate rather than wrap.
  * @param out_len  Capacity of `out`; must be at least ANTR_SEC_STATUS_LEN.
@@ -1240,7 +1240,7 @@ antr_err_t antr_sec_epoch_set(uint8_t channel, uint8_t flags, uint32_t epoch,
  * "deliver but mark" only means something if unverified cannot be silently
  * treated as verified.
  *
- * Returns 0 or ANTW_INVALID_MESSAGE (channel out of range, or buffer too small).
+ * Returns 0 or RADIANT_WIRE_INVALID_MESSAGE (channel out of range, or buffer too small).
  */
 antr_err_t antr_sec_status_get(uint8_t channel, uint8_t *out, uint8_t out_len);
 
@@ -1249,7 +1249,7 @@ antr_err_t antr_sec_status_get(uint8_t channel, uint8_t *out, uint8_t out_len);
 /**
  * Drive the pairing exchange. Message 0xF5.
  *
- * @param subcmd     ANTW_RADIANT_PAIR_LEAVE / _ENTER / _SCALAR / _EXCHANGE /
+ * @param subcmd     RADIANT_WIRE_RADIANT_PAIR_LEAVE / _ENTER / _SCALAR / _EXCHANGE /
  *                   _NONCE / _PEER_COMMIT / _PEER_NONCE.
  * @param arg        The sub-command's argument: a timeout byte for _ENTER, 32
  *                   bytes for _SCALAR and _EXCHANGE, [role, 16-byte nonce] for
@@ -1263,7 +1263,7 @@ antr_err_t antr_sec_status_get(uint8_t channel, uint8_t *out, uint8_t out_len);
  *                   commitment; _PEER_NONCE appends the six-digit fingerprint
  *                   as a u24 LE.
  * @param reply_cap  Capacity of `reply`, at least 34 (the largest answer);
- *                   less is refused with ANTW_INVALID_MESSAGE.
+ *                   less is refused with RADIANT_WIRE_INVALID_MESSAGE.
  * @param reply_len  Out: bytes written.
  *
  * PAIRING HAPPENS IN THE CLEAR. An active attacker present during the exchange
@@ -1276,9 +1276,9 @@ antr_err_t antr_sec_status_get(uint8_t channel, uint8_t *out, uint8_t out_len);
  * pairing (a QR code, a typed key) is the recommended path for anything that
  * matters.
  *
- * Returns 0, ANTW_INVALID_MESSAGE (channel or lengths), ANTW_INVALID_PARAMETER_
+ * Returns 0, RADIANT_WIRE_INVALID_MESSAGE (channel or lengths), RADIANT_WIRE_INVALID_PARAMETER_
  * PROVIDED (unknown or out-of-order sub-command, a small-order peer key, or a
- * nonce that does not open the commitment) or ANTW_CHANNEL_IN_WRONG_STATE.
+ * nonce that does not open the commitment) or RADIANT_WIRE_CHANNEL_IN_WRONG_STATE.
  */
 antr_err_t antr_sec_pair(uint8_t channel, uint8_t subcmd, const uint8_t *arg,
 			 uint8_t arg_len, uint8_t *reply, uint8_t reply_cap,
@@ -1325,7 +1325,7 @@ typedef void (*antr_reply_plan_fn)(void *ctx, uint8_t channel,
 /*
  * Register (or, with fn NULL, remove) the hook for one channel. Survives
  * open/close; call it before antr_channel_open() so no packet is answered
- * half-registered. Returns 0 or ANTW_INVALID_MESSAGE (channel out of range).
+ * half-registered. Returns 0 or RADIANT_WIRE_INVALID_MESSAGE (channel out of range).
  */
 antr_err_t antr_reply_plan_hook_set(uint8_t channel, antr_reply_plan_fn fn,
 				    void *ctx);

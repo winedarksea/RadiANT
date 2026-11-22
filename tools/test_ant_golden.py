@@ -62,7 +62,7 @@ are pinned from the reply alone; `0x78`'s shape is chosen by the earlier
 
 Byte 0 of `MESG_BURST_DATA` and its two relatives is `[last | seq(2) |
 channel(5)]`, read by `src/ant_serial_bridge.c` with
-`ANTW_BURST_HEADER_CHANNEL_MASK` - the one place the serial protocol packs a
+`RADIANT_WIRE_BURST_HEADER_CHANNEL_MASK` - the one place the serial protocol packs a
 channel into fewer than 8 bits. Byte 0 of a plain `0x40` response is *not* a
 channel field on most messages, so the 5-bit ceiling must not be applied
 there (case `frame/sync-in-payload` legitimately uses channel `0xA4`). See
@@ -622,7 +622,7 @@ class ReplayMixin:
         if len(payload) == shape["len"]:
             return []
         return [f"{where}: {name} reply selected by {chosen_by} declares "
-                f"{shape['len']} bytes (ANTW_{shape['size']}), this carries "
+                f"{shape['len']} bytes (RADIANT_WIRE_{shape['size']}), this carries "
                 f"{len(payload)}"]
 
     # -- the five-bit ceiling, where it is actually imposed -------------------
@@ -994,7 +994,7 @@ class TestTheDirectionDependentLengthModel(ReplayMixin, unittest.TestCase):
             f"- < {self.ADV_BURST_CAPS}\n")
         self.assertIn("request index 0x01", problem)
         self.assertIn("declares 10 bytes "
-                      "(ANTW_MESG_CONFIG_ADV_BURST_REQ_CONFIG_SIZE)", problem)
+                      "(RADIANT_WIRE_MESG_CONFIG_ADV_BURST_REQ_CONFIG_SIZE)", problem)
         self.assertIn("this carries 4", problem)
 
     def test_the_other_direction_of_the_same_swap_fails(self):
@@ -1010,7 +1010,7 @@ class TestTheDirectionDependentLengthModel(ReplayMixin, unittest.TestCase):
         problem = self.only_problem(f"- < {bad}\n")
         self.assertIn("info type 0x01 at byte 0", problem)
         self.assertIn("declares 5 bytes "
-                      "(ANTW_MESG_CONFIG_ENCRYPT_REQ_CONFIG_ID_SIZE)", problem)
+                      "(RADIANT_WIRE_MESG_CONFIG_ENCRYPT_REQ_CONFIG_ID_SIZE)", problem)
 
     def test_an_undeclared_encrypt_info_type_fails(self):
         # 4d-request-encrypt-enable-3 exists precisely because index 3 must be
@@ -1046,7 +1046,7 @@ class TestTheDirectionDependentLengthModel(ReplayMixin, unittest.TestCase):
         problem = self.only_problem(
             f"- < {w.frame(w.MESG_EVENT_FILTER_CONFIG_ID, bytes(2)).hex()}\n")
         self.assertIn("its one declared reply shape declares 3 bytes "
-                      "(ANTW_MESG_EVENT_FILTER_CONFIG_REQ_SIZE)", problem)
+                      "(RADIANT_WIRE_MESG_EVENT_FILTER_CONFIG_REQ_SIZE)", problem)
 
     def test_an_unrequested_indexed_reply_falls_back_to_the_declared_set(self):
         # A real host log may start mid-session, so a reply with no request in

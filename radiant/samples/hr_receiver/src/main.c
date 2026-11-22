@@ -35,8 +35,8 @@ void antr_on_message(const struct antr_msg *msg)
 	static uint8_t count;
 	uint16_t device = 0u;
 
-	if ((msg->id != ANTW_MESG_BROADCAST_DATA_ID &&
-	     msg->id != ANTW_MESG_EXT_BROADCAST_DATA_ID) ||
+	if ((msg->id != RADIANT_WIRE_MESG_BROADCAST_DATA_ID &&
+	     msg->id != RADIANT_WIRE_MESG_EXT_BROADCAST_DATA_ID) ||
 	    msg->len < EXT_FLAGS_OFFSET || msg->data[0] != HR_CHANNEL) {
 		return;
 	}
@@ -57,7 +57,7 @@ void antr_on_message(const struct antr_msg *msg)
 #define TRY(call)                                                        \
 	do {                                                             \
 		antr_err_t rc = (call);                                  \
-		if (rc != ANTW_RESPONSE_NO_ERROR) {                      \
+		if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {                      \
 			printk("%s failed: 0x%02x\n", #call, rc);        \
 			return 0;                                        \
 		}                                                        \
@@ -68,7 +68,7 @@ int main(void)
 	TRY(antr_init());
 	TRY(antr_network_address_set(HR_NETWORK, ant_plus_key));
 
-	TRY(antr_channel_assign(HR_CHANNEL, ANTW_CHANNEL_TYPE_SLAVE, HR_NETWORK, 0u));
+	TRY(antr_channel_assign(HR_CHANNEL, RADIANT_WIRE_CHANNEL_TYPE_SLAVE, HR_NETWORK, 0u));
 	/* Device number 0 and transmission type 0 mean "any". */
 	TRY(antr_channel_id_set(HR_CHANNEL, 0u, HR_DEVICE_TYPE, 0u));
 	TRY(antr_channel_period_set(HR_CHANNEL, HR_PERIOD));
@@ -76,7 +76,7 @@ int main(void)
 	/* 0xFF searches until a sensor is found. */
 	TRY(antr_channel_search_timeout_set(HR_CHANNEL, 0xFFu));
 	/* Ask for the sender's device number on every message. */
-	TRY(antr_lib_config_set(ANTW_LIB_CONFIG_MESG_OUT_INC_DEVICE_ID));
+	TRY(antr_lib_config_set(RADIANT_WIRE_LIB_CONFIG_MESG_OUT_INC_DEVICE_ID));
 	TRY(antr_channel_open(HR_CHANNEL));
 
 	printk("Searching for a heart-rate sensor...\n");

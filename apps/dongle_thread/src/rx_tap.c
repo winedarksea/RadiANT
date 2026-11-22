@@ -75,7 +75,7 @@
 #include <zephyr/logging/log.h>
 
 #include "ant_radio.h"
-#include "ant_wire.h"
+#include <radiant/radiant_wire.h>
 
 #include "radiant_binding.h"
 #include "radiant_bridge.h"
@@ -228,7 +228,7 @@ void ant_dongle_rx_tap(const struct antr_msg *msg)
 	 * is not an error worth logging at this rate - it is a message class
 	 * this filter should have excluded - so it is simply not decoded.
 	 */
-	if (msg->id != ANTW_MESG_BROADCAST_DATA_ID || msg->len < 9u) {
+	if (msg->id != RADIANT_WIRE_MESG_BROADCAST_DATA_ID || msg->len < 9u) {
 		return;
 	}
 

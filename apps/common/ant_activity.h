@@ -30,7 +30,7 @@
 
 #include <zephyr/sys/atomic.h>
 
-#include "ant_wire.h"
+#include <radiant/radiant_wire.h>
 
 /*
  * Packets seen since a consumer last drained this. Written by
@@ -64,13 +64,13 @@ extern atomic_t ant_activity_pkts;
 static inline void ant_activity_note_msg(uint8_t msg_id)
 {
 	switch (msg_id) {
-	case ANTW_MESG_BROADCAST_DATA_ID:
-	case ANTW_MESG_ACKNOWLEDGED_DATA_ID:
-	case ANTW_MESG_BURST_DATA_ID:
-	case ANTW_MESG_EXT_BROADCAST_DATA_ID:
-	case ANTW_MESG_EXT_ACKNOWLEDGED_DATA_ID:
-	case ANTW_MESG_EXT_BURST_DATA_ID:
-	case ANTW_MESG_ADV_BURST_DATA_ID:
+	case RADIANT_WIRE_MESG_BROADCAST_DATA_ID:
+	case RADIANT_WIRE_MESG_ACKNOWLEDGED_DATA_ID:
+	case RADIANT_WIRE_MESG_BURST_DATA_ID:
+	case RADIANT_WIRE_MESG_EXT_BROADCAST_DATA_ID:
+	case RADIANT_WIRE_MESG_EXT_ACKNOWLEDGED_DATA_ID:
+	case RADIANT_WIRE_MESG_EXT_BURST_DATA_ID:
+	case RADIANT_WIRE_MESG_ADV_BURST_DATA_ID:
 		(void)atomic_inc(&ant_activity_pkts);
 		break;
 	default:

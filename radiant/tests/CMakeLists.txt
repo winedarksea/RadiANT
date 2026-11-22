@@ -299,7 +299,7 @@ target_include_directories(app PRIVATE
 # Nothing else is needed: the module's own zephyr_include_directories() puts
 # radiant/include - and only that, now - on the search path for this
 # target too. There used to be a second entry, ../src, for src/ant_radio.h and
-# the generated src/ant_wire.h; radiant_event.c reads radiant_msg.h and
+# the generated radiant/include/radiant/radiant_wire.h; radiant_event.c reads radiant_msg.h and
 # radiant_wire.h instead now, both inside radiant/include, so no suite
 # here has ever needed the application's src/ at all.
 target_include_directories(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -339,7 +339,7 @@ if(EXISTS "${RADIANT_TESTS_APPS_COMMON}/ant_rgb_led_curve.c")
 endif()
 
 # ant_health.c: pulled into src/test_ant_health.c by relative include, so its
-# "ant_wire.h" resolves through the forwarding header beside it.
+# "radiant_wire.h" resolves through the forwarding header beside it.
 if(EXISTS "${RADIANT_TESTS_APPS_COMMON}/ant_health.c")
   target_include_directories(app PRIVATE "${RADIANT_TESTS_APPS_COMMON}/ant")
 endif()

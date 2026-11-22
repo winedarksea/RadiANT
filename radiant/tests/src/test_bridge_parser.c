@@ -27,7 +27,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len);
 
 static unsigned int n_dispatched;
 static uint8_t last_id;
-static uint8_t last_body[ANTW_MAX_SIZE_VALUE];
+static uint8_t last_body[RADIANT_WIRE_MAX_SIZE_VALUE];
 static uint8_t last_len;
 static unsigned int n_desync;
 static unsigned int n_csum;
@@ -59,9 +59,9 @@ static void feed(const uint8_t *b, size_t n)
 /* A4 len id body... xor */
 static size_t frame(uint8_t *out, uint8_t id, const uint8_t *body, uint8_t len)
 {
-	uint8_t x = ANTW_SYNC_TX ^ len ^ id;
+	uint8_t x = RADIANT_WIRE_SYNC_TX ^ len ^ id;
 
-	out[0] = ANTW_SYNC_TX;
+	out[0] = RADIANT_WIRE_SYNC_TX;
 	out[1] = len;
 	out[2] = id;
 	for (uint8_t i = 0; i < len; i++) {
@@ -90,25 +90,25 @@ ZTEST(bridge_parser, test_a_valid_frame_dispatches)
 	uint8_t f[16];
 	const uint8_t body[] = {0x00, 0x39};
 
-	feed(f, frame(f, ANTW_MESG_CHANNEL_RADIO_FREQ_ID, body, sizeof(body)));
+	feed(f, frame(f, RADIANT_WIRE_MESG_CHANNEL_RADIO_FREQ_ID, body, sizeof(body)));
 	zassert_equal(1u, n_dispatched);
-	zassert_equal(ANTW_MESG_CHANNEL_RADIO_FREQ_ID, last_id);
+	zassert_equal(RADIANT_WIRE_MESG_CHANNEL_RADIO_FREQ_ID, last_id);
 	zassert_equal(2u, last_len);
 	zassert_equal(0u, n_desync + n_csum);
 }
 
 /* ASSIGN with its LEN byte lost: the id 0x42 would have been a 66-byte
- * length and swallowed the next frame. It is above ANTW_MAX_SIZE_VALUE, so
+ * length and swallowed the next frame. It is above RADIANT_WIRE_MAX_SIZE_VALUE, so
  * the parser hunts instead and the following frame gets through. */
 ZTEST(bridge_parser, test_a_lost_len_byte_costs_only_its_own_frame)
 {
 	uint8_t a[16], b[16];
 	const uint8_t assign[] = {0x00, 0x00, 0x00, 0x01};
 	const uint8_t freq[] = {0x00, 0x39};
-	size_t na = frame(a, ANTW_MESG_ASSIGN_CHANNEL_ID, assign, sizeof(assign));
-	size_t nb = frame(b, ANTW_MESG_CHANNEL_RADIO_FREQ_ID, freq, sizeof(freq));
+	size_t na = frame(a, RADIANT_WIRE_MESG_ASSIGN_CHANNEL_ID, assign, sizeof(assign));
+	size_t nb = frame(b, RADIANT_WIRE_MESG_CHANNEL_RADIO_FREQ_ID, freq, sizeof(freq));
 
-	zassert_true(ANTW_MESG_ASSIGN_CHANNEL_ID > ANTW_MAX_SIZE_VALUE);
+	zassert_true(RADIANT_WIRE_MESG_ASSIGN_CHANNEL_ID > RADIANT_WIRE_MAX_SIZE_VALUE);
 
 	/* Drop a[1], the LEN. */
 	process_byte(a[0]);
@@ -116,7 +116,7 @@ ZTEST(bridge_parser, test_a_lost_len_byte_costs_only_its_own_frame)
 	feed(b, nb);
 
 	zassert_equal(1u, n_dispatched, "the frame after the damaged one was lost");
-	zassert_equal(ANTW_MESG_CHANNEL_RADIO_FREQ_ID, last_id);
+	zassert_equal(RADIANT_WIRE_MESG_CHANNEL_RADIO_FREQ_ID, last_id);
 	zassert_true(n_desync > 0u, "the damage was not counted");
 	zassert_equal(0u, n_csum);
 }
@@ -129,18 +129,18 @@ ZTEST(bridge_parser, test_a_sync_in_the_checksum_slot_starts_the_next_frame)
 	uint8_t a[16], b[16];
 	const uint8_t unassign[] = {0x00};
 	const uint8_t assign[] = {0x00, 0x00, 0x00, 0x01};
-	size_t na = frame(a, ANTW_MESG_UNASSIGN_CHANNEL_ID, unassign,
+	size_t na = frame(a, RADIANT_WIRE_MESG_UNASSIGN_CHANNEL_ID, unassign,
 			  sizeof(unassign));
-	size_t nb = frame(b, ANTW_MESG_ASSIGN_CHANNEL_ID, assign, sizeof(assign));
+	size_t nb = frame(b, RADIANT_WIRE_MESG_ASSIGN_CHANNEL_ID, assign, sizeof(assign));
 
-	zassert_not_equal(ANTW_SYNC_TX, a[na - 1],
+	zassert_not_equal(RADIANT_WIRE_SYNC_TX, a[na - 1],
 			  "the test needs a checksum that is not SYNC");
 
 	feed(a, na - 1);
 	feed(b, nb);
 
 	zassert_equal(1u, n_dispatched);
-	zassert_equal(ANTW_MESG_ASSIGN_CHANNEL_ID, last_id);
+	zassert_equal(RADIANT_WIRE_MESG_ASSIGN_CHANNEL_ID, last_id);
 	zassert_equal(1u, n_csum);
 	zassert_equal(0u, n_desync, "the next frame was hunted past");
 }
@@ -154,18 +154,18 @@ ZTEST(bridge_parser, test_a_corrupt_checksum_of_a4_does_not_cost_the_next_frame)
 	uint8_t a[16], b[16];
 	const uint8_t unassign[] = {0x00};
 	const uint8_t freq[] = {0x00, 0x39};
-	size_t na = frame(a, ANTW_MESG_UNASSIGN_CHANNEL_ID, unassign,
+	size_t na = frame(a, RADIANT_WIRE_MESG_UNASSIGN_CHANNEL_ID, unassign,
 			  sizeof(unassign));
-	size_t nb = frame(b, ANTW_MESG_CHANNEL_RADIO_FREQ_ID, freq, sizeof(freq));
+	size_t nb = frame(b, RADIANT_WIRE_MESG_CHANNEL_RADIO_FREQ_ID, freq, sizeof(freq));
 
-	zassert_not_equal(ANTW_SYNC_TX, a[na - 1]);
-	a[na - 1] = ANTW_SYNC_TX;
+	zassert_not_equal(RADIANT_WIRE_SYNC_TX, a[na - 1]);
+	a[na - 1] = RADIANT_WIRE_SYNC_TX;
 
 	feed(a, na);
 	feed(b, nb);
 
 	zassert_equal(1u, n_dispatched);
-	zassert_equal(ANTW_MESG_CHANNEL_RADIO_FREQ_ID, last_id);
+	zassert_equal(RADIANT_WIRE_MESG_CHANNEL_RADIO_FREQ_ID, last_id);
 	zassert_equal(1u, n_csum);
 	zassert_equal(1u, n_desync);
 }
@@ -176,9 +176,9 @@ ZTEST(bridge_parser, test_a_corrupt_checksum_of_a4_does_not_cost_the_next_frame)
 ZTEST(bridge_parser, test_an_oversize_len_is_dropped_silently)
 {
 	uint8_t f[64];
-	uint8_t body[ANTW_MAX_SIZE_VALUE + 4] = {0};
+	uint8_t body[RADIANT_WIRE_MAX_SIZE_VALUE + 4] = {0};
 
-	feed(f, frame(f, ANTW_MESG_CHANNEL_RADIO_FREQ_ID, body, sizeof(body)));
+	feed(f, frame(f, RADIANT_WIRE_MESG_CHANNEL_RADIO_FREQ_ID, body, sizeof(body)));
 	zassert_equal(0u, n_dispatched);
 	zassert_true(n_desync > 0u);
 }

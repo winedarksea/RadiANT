@@ -351,7 +351,7 @@ config ANT_DONGLE_RADIO_SDK_ANT
 	help
 	  Compile apps/common/ant_radio_sdk_ant.c, ~50 one-line forwarders from the
 	  antr_* contract onto libant.a's antlib_* entry points, plus a
-	  BUILD_ASSERT block comparing every ANTW_* constant against its
+	  BUILD_ASSERT block comparing every RADIANT_WIRE_* constant against its
 	  sdk-ant counterpart.
 
 	  THE COMPARISON REFERENCE, AND NOT A SHIPPING CONFIGURATION. Release

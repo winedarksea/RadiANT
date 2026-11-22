@@ -51,7 +51,7 @@
 #include <zephyr/logging/log.h>
 
 #include "ant_radio.h"
-#include "ant_wire.h"
+#include <radiant/radiant_wire.h>
 #include "node_ident.h"
 #include "profile_common.h"
 #include "profile_fec.h"
@@ -661,11 +661,11 @@ void antr_on_message(const struct antr_msg *msg)
 	}
 #endif
 
-	if (msg->id == ANTW_MESG_RESPONSE_EVENT_ID &&
-	    msg->len >= ANTW_MESG_RESPONSE_EVENT_SIZE) {
+	if (msg->id == RADIANT_WIRE_MESG_RESPONSE_EVENT_ID &&
+	    msg->len >= RADIANT_WIRE_MESG_RESPONSE_EVENT_SIZE) {
 		/* data[0] channel, data[1] the message id being responded to
 		 * (0 for an event), data[2] the code. */
-		if (msg->data[2] != ANTW_EVENT_TX) {
+		if (msg->data[2] != RADIANT_WIRE_EVENT_TX) {
 			return;
 		}
 		if (msg->data[0] == FEC_CHANNEL) {
@@ -690,8 +690,8 @@ void antr_on_message(const struct antr_msg *msg)
 	 * is not portable to every backend for free. It is worth knowing that
 	 * before the first control page rather than at it.
 	 */
-	if ((msg->id == ANTW_MESG_ACKNOWLEDGED_DATA_ID ||
-	     msg->id == ANTW_MESG_EXT_ACKNOWLEDGED_DATA_ID) &&
+	if ((msg->id == RADIANT_WIRE_MESG_ACKNOWLEDGED_DATA_ID ||
+	     msg->id == RADIANT_WIRE_MESG_EXT_ACKNOWLEDGED_DATA_ID) &&
 	    msg->len >= 9u && msg->data[0] == FEC_CHANNEL) {
 		queue_control_page(&msg->data[1]);
 	}
@@ -702,15 +702,15 @@ static int ant_master_start(uint8_t channel, uint16_t devnum,
 {
 	antr_err_t rc;
 
-	rc = antr_channel_assign(channel, ANTW_CHANNEL_TYPE_MASTER, ANT_NETWORK,
+	rc = antr_channel_assign(channel, RADIANT_WIRE_CHANNEL_TYPE_MASTER, ANT_NETWORK,
 				 0u);
-	if (rc != ANTW_RESPONSE_NO_ERROR) {
+	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("ch%u assign: %d", channel, (int)rc);
 		return -EIO;
 	}
 
 	rc = antr_channel_id_set(channel, devnum, device_type, ANT_TRANS_TYPE);
-	if (rc != ANTW_RESPONSE_NO_ERROR) {
+	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("ch%u channel id: %d", channel, (int)rc);
 		return -EIO;
 	}
@@ -721,13 +721,13 @@ static int ant_master_start(uint8_t channel, uint16_t devnum,
 	 * never opens the channel and nothing anywhere names the period as the
 	 * reason. */
 	rc = antr_channel_period_set(channel, period);
-	if (rc != ANTW_RESPONSE_NO_ERROR) {
+	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("ch%u period: %d", channel, (int)rc);
 		return -EIO;
 	}
 
 	rc = antr_channel_radio_freq_set(channel, ANT_RF_FREQ);
-	if (rc != ANTW_RESPONSE_NO_ERROR) {
+	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("ch%u rf freq: %d", channel, (int)rc);
 		return -EIO;
 	}
@@ -740,7 +740,7 @@ static int ant_master_start(uint8_t channel, uint16_t devnum,
 	 * receivers ignore it) and EVENT_TX after that slot starts the real
 	 * stream, group-aligned. */
 	rc = antr_channel_open(channel);
-	if (rc != ANTW_RESPONSE_NO_ERROR) {
+	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("ch%u open: %d", channel, (int)rc);
 		return -EIO;
 	}
@@ -817,7 +817,7 @@ int main(void)
 #endif
 	LOG_INF("RadiANT treadmill: " ANT_BANNER);
 
-	if (antr_init() != ANTW_RESPONSE_NO_ERROR) {
+	if (antr_init() != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("antr_init failed");
 		return 0;
 	}
@@ -930,7 +930,7 @@ int main(void)
 	publish();
 
 	if (antr_network_address_set(ANT_NETWORK, ant_plus_key) !=
-	    ANTW_RESPONSE_NO_ERROR) {
+	    RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("network key");
 		return 0;
 	}

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Render protocol/ant_wire.yaml into the four committed outputs.
+"""Render protocol/ant_wire.yaml into the three committed outputs.
 
     C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe scripts\\gen_ant_wire.py
     C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe scripts\\gen_ant_wire.py --check
@@ -11,12 +11,10 @@ Outputs:
                                     RADIANT_WIRE_* macros - the module's own
                                     copy, so radiant never has to reach
                                     outside itself for a wire constant
-    src/ant_wire.h                 ANTW_* macros for the firmware, now a thin
-                                    alias of radiant_wire.h's definitions
     tools/ant_wire.py              module constants and lookup tables
     docs/ant-serial-protocol.md    only the region between the GENERATED markers
 
-All four are committed, so a clone builds and the tools run without anyone
+All three are committed, so a clone builds and the tools run without anyone
 having a YAML parser installed. ``--check`` renders into memory, diffs against
 what is on disk, prints a unified diff of any drift and exits 1. CI calls it.
 
@@ -67,15 +65,13 @@ except ImportError:  # pragma: no cover - user-facing guidance
 
 ROOT = Path(__file__).resolve().parent.parent
 SPEC_PATH = ROOT / "protocol" / "ant_wire.yaml"
-# The module's include/, beside radiant_wire.h, because the antr_* API that uses
-# these names is part of the module. apps/common/ant/ant_wire.h is a hand-written
-# one-line forward and is not an output. A stale path here is worse than a broken
-# one: the generator would CREATE a stray file at the wrong location, --check
-# would compare against that stray and find it "in sync", and the real header
-# could drift freely with CI green throughout. Anything added here must fail
-# loudly when its target is missing rather than quietly write a new file beside
-# it - see check_outputs() below.
-HEADER_PATH = ROOT / "radiant" / "include" / "radiant" / "ant_wire.h"
+# The module's include/, because the radiant_ant_* API that uses these names is
+# part of the module. A stale path here is worse than a broken one: the
+# generator would CREATE a stray file at the wrong location, --check would
+# compare against that stray and find it "in sync", and the real header could
+# drift freely with CI green throughout. Anything added here must fail loudly
+# when its target is missing rather than quietly write a new file beside it -
+# see check_outputs() below.
 RADIANT_WIRE_HEADER_PATH = ROOT / "radiant" / "include" / "radiant" / "radiant_wire.h"
 PYTHON_PATH = ROOT / "tools" / "ant_wire.py"
 DOC_PATH = ROOT / "docs" / "ant-serial-protocol.md"
@@ -89,8 +85,8 @@ BANNER_LINES = [
     "`scripts/gen_ant_wire.py --check` fails the build if these drift apart.",
 ]
 
-PREFIX_RATIONALE = """\
-Why every name here carries an ANTW_ prefix
+MODULE_RATIONALE = """\
+Why every name here carries the RADIANT_WIRE_ prefix
 
 This is not house style. sdk-ant's ant_parameters.h defines its error codes as
 computed expressions - NRF_ANT_ERROR_OFFSET + INVALID_MESSAGE - rather than as
@@ -99,47 +95,22 @@ sequence, so a header of ours that spelled a constant INVALID_MESSAGE could
 never share a translation unit with sdk-ant's: it is a hard redefinition error,
 not a warning, and no include order fixes it.
 
-The prefix is exactly what makes the two coexist. src/ant_radio_sdk_ant.c is
-the one file permitted to include both, and it is where every ANTW_* constant
-is BUILD_ASSERTed against its sdk-ant counterpart. That check costs nothing,
-runs only where sdk-ant is present - which is the only place it can run - and
-is why keeping the sdk-ant backend is worth more than a fallback.
+The prefix is exactly what makes the two coexist.
+apps/common/ant_radio_sdk_ant.c is the one file permitted to include both, and
+it is where every RADIANT_WIRE_* constant is BUILD_ASSERTed against its sdk-ant
+counterpart. It also keeps the bridge textually free of Garmin's API names,
+which matters for a clean-room rebuild (docs/decisions/0002-clean-room-policy.md).
 
-It also makes src/ant_serial_bridge.c textually free of Garmin's API names,
-which is not cosmetic either: this is a clean-room rebuild, and the boundary is
-easier to defend when it is visible in the source.
+This header lives inside the radiant module so that nothing in the module ever
+has to reach outside it for a wire constant: radiant is meant to be dropped into
+a project with nothing else from this repository on its include path. Until
+2026-11-22 a second generated header, ant_wire.h, aliased every value here
+under an ANTW prefix for application code; RadiANT's own prefix replaced it
+(ADR 0003, amended 2026-11-22).
 
 The Python module deliberately does NOT carry the prefix. The collision it
 solves is a C preprocessor problem, and Python already has module namespaces:
-`ant_wire.MESG_ASSIGN_CHANNEL_ID` is unambiguous, and keeping the bare spelling
-makes converting the five tools a matter of deleting a local definition and
-adding an import, with no renaming at all.
-
-Every ANTW_* name below is now an alias of radiant's own
-RADIANT_WIRE_* definition (radiant/include/radiant/radiant_wire.h) -
-not a second, independently-generated copy of the same value. That is what
-lets radiant reach no path outside itself for a wire constant while this
-file, and every ANTW_* call site in this application, stays untouched."""
-
-MODULE_RATIONALE = """\
-Why this header exists inside radiant, generated separately from
-src/ant_wire.h
-
-radiant is a Zephyr module meant to be dropped into a project with
-nothing else from this repository on its include path - see
-docs/decisions/0002-clean-room-policy.md and the module's own README. Before
-this header existed, every module source that needed a wire constant reached
-outside the module (`zephyr_include_directories(... ../src)`, then
-`#include "ant_wire.h"`) to get one - a self-containment violation that a
-`git filter-repo` split of this directory alone, or any out-of-tree consumer,
-would fail on at the first ANTW_ use.
-
-RADIANT_WIRE_* is the fix: the same values, generated from the same
-protocol/ant_wire.yaml entries, defined here instead so nothing in this module
-ever needs to leave it. src/ant_wire.h - the application-layer header every
-ant_radio_*.c backend and src/ant_serial_bridge.c already use - becomes a thin
-alias of this header under the ANTW_ names, so no application code changes;
-see that file for why ANTW_ is the name application code keeps."""
+`ant_wire.MESG_ASSIGN_CHANNEL_ID` is unambiguous."""
 
 
 # ---------------------------------------------------------------------------
@@ -385,38 +356,19 @@ def needs_shim(spec: dict) -> list[tuple[str, dict]]:
 
 
 # ---------------------------------------------------------------------------
-# src/ant_wire.h
+# radiant/include/radiant/radiant_wire.h
 # ---------------------------------------------------------------------------
 
 
 def render_wire_header(
     spec: dict,
     *,
-    prefix_name: str,
     guard: str,
     title_lines: list[str],
     rationale: str,
-    alias_of: str | None = None,
 ) -> str:
-    """Render one wire-constants header.
-
-    Two callers, two very different files from the same walk of `spec`:
-
-      alias_of=None       radiant/include/radiant/radiant_wire.h,
-                           the canonical definitions, RADIANT_WIRE_* named.
-      alias_of="RADIANT_WIRE"
-                           src/ant_wire.h, ANTW_* named, every #define a
-                           one-line alias of the constant above rather than a
-                           second literal - so the two can never independently
-                           drift the way two hand-written copies would.
-
-    The alias file skips the long per-constant descriptive comments (the
-    canonical header already carries them) but keeps the section dividers,
-    so it stays readable as a map from ANTW_ to RADIANT_WIRE_ names rather
-    than a wall of #defines.
-    """
-    prefix = prefix_name + "_"
-    alias_prefix = (alias_of + "_") if alias_of else None
+    """Render radiant/include/radiant/radiant_wire.h, RADIANT_WIRE_* named."""
+    prefix = spec["meta"]["prefix"] + "_"
     out: list[str] = []
     add = out.append
 
@@ -438,36 +390,29 @@ def render_wire_header(
     add("#ifndef %s" % guard)
     add("#define %s" % guard)
     add("")
-    if alias_of:
-        add("#include <radiant/radiant_wire.h>")
-    else:
-        add("#include <stdint.h>")
+    add("#include <stdint.h>")
     add("")
 
     def emit(entry: dict) -> None:
         name = prefix + entry["name"]
         if entry.get("value") is None:
-            if not alias_of:
-                desc = one_line(entry.get("desc"))
-                note = "[%s]" % provenance(entry)
-                out.extend(
-                    c_comment(
-                        "%s is UNRESOLVED. %s Recover it once the value is "
-                        "known, in protocol/ant_wire.yaml, and regenerate; "
-                        "see the unresolved table in "
-                        "docs/ant-serial-protocol.md. %s" % (name, desc, note),
-                        indent="",
-                    )
-                )
-                add("")
-            return
-        if alias_of:
-            add("#define %-52s %s" % (name, alias_prefix + entry["name"]))
-        else:
             desc = one_line(entry.get("desc"))
             note = "[%s]" % provenance(entry)
-            out.extend(c_comment("%s %s" % (desc, note), indent=""))
-            add("#define %-52s %s" % (name, fmt_value(entry["value"], entry.get("format", "hex"))))
+            out.extend(
+                c_comment(
+                    "%s is UNRESOLVED. %s Recover it once the value is "
+                    "known, in protocol/ant_wire.yaml, and regenerate; "
+                    "see the unresolved table in "
+                    "docs/ant-serial-protocol.md. %s" % (name, desc, note),
+                    indent="",
+                )
+            )
+            add("")
+            return
+        desc = one_line(entry.get("desc"))
+        note = "[%s]" % provenance(entry)
+        out.extend(c_comment("%s %s" % (desc, note), indent=""))
+        add("#define %-52s %s" % (name, fmt_value(entry["value"], entry.get("format", "hex"))))
         add("")
 
     def section(title: str, note: str = "") -> None:
@@ -535,16 +480,13 @@ def render_wire_header(
     )
     for byte in caps["bytes"]:
         cap_field = "CAPABILITIES_OFFSET_" + byte["field"].upper()
-        if alias_of:
-            add("#define %-52s %s" % (prefix + cap_field, alias_prefix + cap_field))
-        else:
-            out.extend(
-                c_comment(
-                    "byte %d - %s. %s" % (byte["index"], byte["field"], one_line(byte.get("desc"))),
-                    indent="",
-                )
+        out.extend(
+            c_comment(
+                "byte %d - %s. %s" % (byte["index"], byte["field"], one_line(byte.get("desc"))),
+                indent="",
             )
-            add("#define %-52s %s" % (prefix + cap_field, byte["index"]))
+        )
+        add("#define %-52s %s" % (prefix + cap_field, byte["index"]))
         add("")
         for bit in byte.get("bits") or []:
             item = dict(bit)
@@ -638,7 +580,7 @@ def render_python(spec: dict) -> str:
         textwrap.fill(
             "Standard library only, and no imports at all - this module is meant "
             "to be copied into another project on its own. The names are the "
-            "bare sdk-ant spellings rather than the ANTW_ ones the C header "
+            "bare sdk-ant spellings rather than the RADIANT_WIRE_ ones the C header "
             "uses: the prefix exists to dodge a C preprocessor collision, and "
             "Python already has module namespaces.",
             79,
@@ -886,7 +828,7 @@ def render_doc_region(spec: dict) -> str:
     add("|---|---|---|---|")
     for entry in spec["framing"]["constants"]:
         add(
-            "| `ANTW_%s` | `%s` | %s | %s |"
+            "| `RADIANT_WIRE_%s` | `%s` | %s | %s |"
             % (
                 entry["name"],
                 fmt_value(entry.get("value"), entry.get("format", "hex")),
@@ -912,7 +854,7 @@ def render_doc_region(spec: dict) -> str:
     for message in spec["messages"]:
         mid = message.get("id")
         add(
-            "| %s | `ANTW_%s` | %s | %s | %s | %s | %s | %s |"
+            "| %s | `RADIANT_WIRE_%s` | %s | %s | %s | %s | %s | %s |"
             % (
                 "`0x%02X`" % mid if mid is not None else "**unresolved**",
                 message["name"],
@@ -920,7 +862,7 @@ def render_doc_region(spec: dict) -> str:
                 md_cell(message["payload_len"]),
                 "yes" if message.get("bridged") else "no",
                 "`%s`" % message["reply"] if message.get("reply") else "-",
-                md_cell(message_desc(spec, message, "ANTW_")),
+                md_cell(message_desc(spec, message, "RADIANT_WIRE_")),
                 md_cell(provenance(message)),
             )
         )
@@ -965,10 +907,10 @@ def render_doc_region(spec: dict) -> str:
     for message, reply in paired:
         for index, shape in enumerate(reply["shapes"]):
             add(
-                "| %s | %s | %s | %s | %s | %d | `ANTW_%s` |"
+                "| %s | %s | %s | %s | %s | %d | `RADIANT_WIRE_%s` |"
                 % (
                     "`0x%02X`" % message["id"] if index == 0 else "",
-                    "`ANTW_%s`" % message["name"] if index == 0 else "",
+                    "`RADIANT_WIRE_%s`" % message["name"] if index == 0 else "",
                     md_cell(message["payload_len"]) if index == 0 else "",
                     "`%s`" % reply["selector"] if index == 0 else "",
                     "-" if shape["when"] is None else "`0x%02X`" % shape["when"],
@@ -995,7 +937,7 @@ def render_doc_region(spec: dict) -> str:
     add("|---|---|---|---|")
     for entry in sizes["values"]:
         add(
-            "| `ANTW_%s` | %s | %s | %s |"
+            "| `RADIANT_WIRE_%s` | %s | %s | %s |"
             % (
                 entry["name"],
                 fmt_value(entry.get("value"), entry.get("format", sizes.get("format", "dec"))),
@@ -1015,7 +957,7 @@ def render_doc_region(spec: dict) -> str:
         add("|---|---|---|---|")
         for item in group_entries(group):
             add(
-                "| `ANTW_%s` | `%s` | %s | %s |"
+                "| `RADIANT_WIRE_%s` | `%s` | %s | %s |"
                 % (
                     item["name"],
                     fmt_value(item.get("value"), item.get("format", "hex")),
@@ -1084,7 +1026,7 @@ def render_doc_region(spec: dict) -> str:
         for bit in bits:
             mask = bit["value"]
             add(
-                "| %d | `0x%02X` | `ANTW_%s` | %s | %s |"
+                "| %d | `0x%02X` | `RADIANT_WIRE_%s` | %s | %s |"
                 % (
                     mask.bit_length() - 1,
                     mask,
@@ -1128,7 +1070,7 @@ def render_doc_region(spec: dict) -> str:
     )
     add("")
     add(
-        "**Lib config `0xE0` (`ANTW_LIB_CONFIG_ALL_EXT_FIELDS` — channel id + "
+        "**Lib config `0xE0` (`RADIANT_WIRE_LIB_CONFIG_ALL_EXT_FIELDS` — channel id + "
         "RSSI + RX timestamp) is a third, unrelated namespace, and it has not "
         "moved.** One is the ID field of a frame; the other is a payload byte "
         "of message `0x6E`. Nothing relates them, and nothing ever did — the "
@@ -1139,7 +1081,7 @@ def render_doc_region(spec: dict) -> str:
     add("|---|---|---|---|---|")
     for message in radiant["values"]:
         add(
-            "| `0x%02X` | `ANTW_%s` | %s | %s | %s |"
+            "| `0x%02X` | `RADIANT_WIRE_%s` | %s | %s | %s |"
             % (
                 message["id"],
                 message["name"],
@@ -1245,8 +1187,8 @@ def render_doc_region(spec: dict) -> str:
     add(
         "These are used at a visible site in this repository but their numeric "
         "value is not recoverable from it, and Rev 5.1 does not name them "
-        "either. No macro is emitted for any of them. `src/ant_radio_sdk_ant.c` "
-        "is the one translation unit permitted to include both `ant_wire.h` and "
+        "either. No macro is emitted for any of them. `apps/common/ant_radio_sdk_ant.c` "
+        "is the one translation unit permitted to include both `radiant_wire.h` and "
         "sdk-ant's `ant_parameters.h`; it recovers each value and "
         "`BUILD_ASSERT`s it, and the value comes back here afterwards. "
         "Inventing a number would be worse than leaving the hole, because a "
@@ -1356,40 +1298,23 @@ def main() -> int:
     wanted = {
         RADIANT_WIRE_HEADER_PATH: render_wire_header(
             spec,
-            prefix_name="RADIANT_WIRE",
             guard="RADIANT_RADIANT_WIRE_H_",
-            title_lines=[
-                "ANT serial protocol wire constants, generated for radiant's",
-                "own internal use - see src/ant_wire.h for the application-facing",
-                "ANTW_* names these values are aliased under.",
-                "Source of truth: protocol/ant_wire.yaml",
-                "Naming authority: " + spec["meta"]["spec"],
-                "Human-readable companion: docs/ant-serial-protocol.md",
-            ],
-            rationale=MODULE_RATIONALE,
-            alias_of=None,
-        ),
-        HEADER_PATH: render_wire_header(
-            spec,
-            prefix_name=spec["meta"]["prefix"],
-            guard="ANT_WIRE_H_",
             title_lines=[
                 "ANT serial protocol constants (host <-> dongle, 0xA4-framed).",
                 "Source of truth: protocol/ant_wire.yaml",
                 "Naming authority: " + spec["meta"]["spec"],
                 "Human-readable companion: docs/ant-serial-protocol.md",
             ],
-            rationale=PREFIX_RATIONALE,
-            alias_of="RADIANT_WIRE",
+            rationale=MODULE_RATIONALE,
         ),
         PYTHON_PATH: render_python(spec),
         DOC_PATH: splice_doc(read_text(DOC_PATH), render_doc_region(spec)),
     }
 
     # EVERY OUTPUT MUST ALREADY EXIST, and this refuses rather than creating
-    # one. All four are committed files with committed readers; a path that no
+    # one. All three are committed files with committed readers; a path that no
     # longer resolves means the tree moved under this script, not that a new
-    # file is wanted there (see the note on HEADER_PATH). This runs before both
+    # file is wanted there (see the note on RADIANT_WIRE_HEADER_PATH). This runs before both
     # arms deliberately: --check has to fail on a missing output too, or CI is
     # exactly where the silence would survive.
     missing = [p.relative_to(ROOT).as_posix() for p in wanted if not p.exists()]

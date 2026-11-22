@@ -53,8 +53,8 @@ from ant_scan import (  # noqa: E402
 # here. See tools/ant_wire.py and protocol/ant_wire.yaml.
 #
 # MESG_EVENT_ID is the value body[1] of a 0x40 message carries when it is a
-# channel event rather than a reply to a command (ANTW_MESG_EVENT_ID in
-# src/ant_wire.h).
+# channel event rather than a reply to a command (RADIANT_WIRE_MESG_EVENT_ID in
+# radiant/include/radiant/radiant_wire.h).
 #
 # EVENT_CODES_BY_VALUE names events using the protocol's own names
 # (EVENT_RX_FAIL, not RX_FAIL), matching firmware, header and spec.

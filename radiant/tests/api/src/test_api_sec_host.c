@@ -10,7 +10,7 @@
  * period before its epoch (period turns a phase into a packet index).
  * Neither fails loudly if skipped - keys under device 0 verify against
  * nothing, a counter from the wrong period drifts like clock error - so
- * both are refused with ANTW_CHANNEL_IN_WRONG_STATE.
+ * both are refused with RADIANT_WIRE_CHANNEL_IN_WRONG_STATE.
  *
  * Compiled only into the radiant.api.sec_host scenario, the only one
  * that links the adapter.
@@ -28,7 +28,7 @@
 #include <string.h>
 
 #include <radiant/ant_radio.h>
-#include <radiant/ant_wire.h>
+#include <radiant/radiant_wire.h>
 #include "ant_radio_radiant_priv.h"
 
 #include <radiant/radiant_channel.h>
@@ -63,24 +63,24 @@ static const uint8_t host_net_key[8] = {
  * the radio, and an open channel would leave one armed for the next test. */
 static void host_assign(bool with_id, bool with_period)
 {
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_network_address_set(0u, host_net_key));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_channel_assign(HOST_CH,
-					  (uint8_t)ANTW_CHANNEL_TYPE_MASTER,
+					  (uint8_t)RADIANT_WIRE_CHANNEL_TYPE_MASTER,
 					  0u, 0u));
 	if (with_id) {
-		zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 			      antr_channel_id_set(HOST_CH, HOST_DEVNUM,
 						  HOST_DEVTYPE, HOST_TRANS));
 	}
 	if (with_period) {
 		zassert_equal(
-			(antr_err_t)ANTW_RESPONSE_NO_ERROR,
+			(antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 			antr_channel_period_set(
 				HOST_CH, RADIANT_CHANNEL_PERIOD_ANT_PLUS));
 	}
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_channel_radio_freq_set(HOST_CH, HOST_RF));
 }
 
@@ -109,15 +109,15 @@ ZTEST(api, test_sec_host_a_key_needs_a_channel_id_first)
 	 * early. A host that cannot tell those apart retries the wrong thing -
 	 * it re-sends the key rather than sending the channel ID.
 	 */
-	zassert_equal((antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE,
+	zassert_equal((antr_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE,
 		      antr_sec_key_set(HOST_CH, 128u, host_key),
 		      "a key was accepted on a channel with no ID; the KDF "
 		      "would have bound device number 0");
 
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_channel_id_set(HOST_CH, HOST_DEVNUM, HOST_DEVTYPE,
 					  HOST_TRANS));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_key_set(HOST_CH, 128u, host_key));
 	host_done();
 
@@ -128,11 +128,11 @@ ZTEST(api, test_sec_host_only_a_128_bit_key_is_taken)
 {
 	host_assign(true, true);
 
-	zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
+	zassert_equal((antr_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED,
 		      antr_sec_key_set(HOST_CH, 192u, host_key));
-	zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
+	zassert_equal((antr_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED,
 		      antr_sec_key_set(HOST_CH, 64u, host_key));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_key_set(HOST_CH, 128u, host_key));
 	host_done();
 
@@ -144,7 +144,7 @@ ZTEST(api, test_sec_host_a_reserved_switch_bit_is_refused_not_masked)
 	uint8_t bit;
 
 	host_assign(true, true);
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_key_set(HOST_CH, 128u, host_key));
 
 	/*
@@ -154,7 +154,7 @@ ZTEST(api, test_sec_host_a_reserved_switch_bit_is_refused_not_masked)
 	 * for, which is the one answer a security surface must never give.
 	 */
 	for (bit = 0x20u; bit != 0u; bit = (uint8_t)(bit << 1)) {
-		zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
+		zassert_equal((antr_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED,
 			      antr_sec_config(HOST_CH,
 					      (uint8_t)(RADIANT_SEC_SW_AUTH |
 							bit),
@@ -163,7 +163,7 @@ ZTEST(api, test_sec_host_a_reserved_switch_bit_is_refused_not_masked)
 			      (unsigned)bit);
 	}
 
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_config(HOST_CH, RADIANT_SEC_SW_AUTH, 2u, 0x01u,
 				      0x0Fu));
 	host_done();
@@ -174,23 +174,23 @@ ZTEST(api, test_sec_host_a_reserved_switch_bit_is_refused_not_masked)
 ZTEST(api, test_sec_host_the_config_refusals_reach_the_host)
 {
 	host_assign(true, true);
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_key_set(HOST_CH, 128u, host_key));
 
 	/* W must divide 256 and 65536. */
-	zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
+	zassert_equal((antr_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED,
 		      antr_sec_config(HOST_CH, RADIANT_SEC_SW_AUTH, 3u, 0x01u,
 				      0x0Fu));
 	/* 0x00 is the descriptor: securing it makes the node undiscoverable. */
-	zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
+	zassert_equal((antr_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED,
 		      antr_sec_config(HOST_CH, RADIANT_SEC_SW_AUTH, 2u, 0x00u,
 				      0x0Fu));
 	/* 0x50 is common page 80, which every ANT+ receiver understands. */
-	zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
+	zassert_equal((antr_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED,
 		      antr_sec_config(HOST_CH, RADIANT_SEC_SW_AUTH, 2u, 0x01u,
 				      0x50u));
 	/* The descriptor has no counter and therefore no nonce. */
-	zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
+	zassert_equal((antr_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED,
 		      antr_sec_config(HOST_CH,
 				      RADIANT_SEC_SW_CONF |
 					      RADIANT_SEC_SW_DESC_CONF,
@@ -205,15 +205,15 @@ ZTEST(api, test_sec_host_an_epoch_needs_a_key_and_only_moves_forwards)
 	host_assign(true, true);
 
 	/* No key yet: the epoch has nothing to anchor. */
-	zassert_equal((antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE,
+	zassert_equal((antr_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE,
 		      antr_sec_epoch_set(HOST_CH, 0u, 10u, 0u));
 
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_key_set(HOST_CH, 128u, host_key));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_config(HOST_CH, RADIANT_SEC_SW_AUTH, 2u, 0x01u,
 				      0x0Fu));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_epoch_set(HOST_CH, 0u, 10u, 0u));
 
 	/*
@@ -221,19 +221,19 @@ ZTEST(api, test_sec_host_an_epoch_needs_a_key_and_only_moves_forwards)
 	 * two-time pad for X_CONF and a full session replay against X_AUTH, so
 	 * the same epoch twice is refused rather than treated as idempotent.
 	 */
-	zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
+	zassert_equal((antr_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED,
 		      antr_sec_epoch_set(HOST_CH, 0u, 10u, 0u));
-	zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
+	zassert_equal((antr_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED,
 		      antr_sec_epoch_set(HOST_CH, 0u, 9u, 0u));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_epoch_set(HOST_CH, 0u, 11u, 0u));
 
 	/* The top of the range is reserved so a counter wrap has room. */
-	zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
+	zassert_equal((antr_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED,
 		      antr_sec_epoch_set(HOST_CH, 0u, 0xFFFFFFFFu, 0u));
 
 	/* Reserved flag bits. */
-	zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
+	zassert_equal((antr_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED,
 		      antr_sec_epoch_set(HOST_CH, 0x02u, 12u, 0u));
 	host_done();
 
@@ -256,26 +256,26 @@ ZTEST(api, test_sec_host_a_late_joiner_counts_from_the_epoch_not_from_boot)
 	uint8_t        st[ANTR_SEC_STATUS_LEN];
 
 	host_assign(true, true);
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_key_set(HOST_CH, 128u, host_key));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_config(HOST_CH, RADIANT_SEC_SW_AUTH, 2u, 0x01u,
 				      0x0Fu));
 	zassert_true((uint64_t)radiant_radio_now() < age_us);
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_epoch_set(HOST_CH, 0u, 20u, age_us));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_status_get(HOST_CH, st, sizeof(st)));
 	zassert_equal((uint16_t)200000u, rd16(&st[10]), "expected index %u",
 		      rd16(&st[10]));
 
-	zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
+	zassert_equal((antr_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED,
 		      antr_sec_epoch_set(HOST_CH, 0u, 21u, UINT64_MAX));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_status_get(HOST_CH, st, sizeof(st)));
 	zassert_equal(20u, rd32(&st[6]));
 	zassert_equal((uint16_t)200000u, rd16(&st[10]));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_epoch_set(HOST_CH, 0u, 21u, 0u));
 	host_done();
 
@@ -287,11 +287,11 @@ ZTEST(api, test_sec_host_status_reports_enrolments)
 	uint8_t st[ANTR_SEC_STATUS_LEN];
 
 	host_assign(true, true);
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_key_set(HOST_CH, 128u, host_key));
 
 	memset(st, 0xEE, sizeof(st));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_status_get(HOST_CH, st, sizeof(st)));
 	zassert_equal(0u, rd16(&st[24]),
 		      "a freshly keyed channel reports enrolments");
@@ -308,7 +308,7 @@ ZTEST(api, test_sec_host_status_reports_enrolments)
 	k_mutex_unlock(&api_lock);
 
 	memset(st, 0xEE, sizeof(st));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_status_get(HOST_CH, st, sizeof(st)));
 	zassert_equal((uint8_t)ANTR_SEC_STATUS_VERSION, st[1]);
 	zassert_equal(2u, rd16(&st[24]),
@@ -323,24 +323,24 @@ ZTEST(api, test_sec_host_status_reports_what_was_configured)
 	uint8_t st[ANTR_SEC_STATUS_LEN];
 
 	host_assign(true, true);
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_key_set(HOST_CH, 128u, host_key));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_config(HOST_CH,
 				      RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_CONF,
 				      4u, 0x02u, 0x1Fu));
 
 	/* Keyed, no epoch: pending, and the host can see it (item 5). */
 	memset(st, 0xEE, sizeof(st));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_status_get(HOST_CH, st, sizeof(st)));
 	zassert_equal(ANTR_SEC_STATUS_KEYED, st[30], "%u", st[30]);
 
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_epoch_set(HOST_CH, 0u, 0x00ABCDEFu, 0u));
 
 	memset(st, 0xEE, sizeof(st));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_status_get(HOST_CH, st, sizeof(st)));
 
 	zassert_equal(ANTR_SEC_STATUS_KEYED | ANTR_SEC_STATUS_ARMED, st[30],
@@ -372,7 +372,7 @@ ZTEST(api, test_sec_host_an_unkeyed_channel_reads_as_zeros_not_as_an_error)
 	 * ignore them all.
 	 */
 	memset(st, 0xEE, sizeof(st));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_status_get(HOST_CH, st, sizeof(st)));
 
 	zassert_equal(HOST_CH, st[0]);
@@ -402,31 +402,31 @@ ZTEST(api, test_sec_host_a_resent_key_keeps_the_channel_armed)
 	uint8_t st[ANTR_SEC_STATUS_LEN];
 
 	host_assign(true, true);
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_key_set(HOST_CH, 128u, host_key));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_config(HOST_CH, RADIANT_SEC_SW_AUTH, 2u, 0x01u,
 				      0x0Fu));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_epoch_set(HOST_CH, 0u, 500u, 0u));
 
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_key_set(HOST_CH, 128u, host_key));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_status_get(HOST_CH, st, sizeof(st)));
 	zassert_equal(ANTR_SEC_STATUS_KEYED | ANTR_SEC_STATUS_ARMED, st[30]);
 	zassert_equal(500u, rd32(&st[6]));
-	zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
+	zassert_equal((antr_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED,
 		      antr_sec_epoch_set(HOST_CH, 0u, 499u, 0u));
 
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_key_set(HOST_CH, 128u, other_key));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_status_get(HOST_CH, st, sizeof(st)));
 	zassert_equal(ANTR_SEC_STATUS_KEYED, st[30], "%u", st[30]);
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_epoch_set(HOST_CH, 0u, 9u, 0u));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_status_get(HOST_CH, st, sizeof(st)));
 	zassert_equal(ANTR_SEC_STATUS_KEYED | ANTR_SEC_STATUS_ARMED, st[30]);
 	host_done();
@@ -441,10 +441,10 @@ ZTEST(api, test_sec_host_a_short_status_buffer_is_refused)
 	/* Refused rather than truncated: a short reply on the wire would be
 	 * parsed by field offset and would misreport every counter after the
 	 * cut. */
-	zassert_equal((antr_err_t)ANTW_INVALID_MESSAGE,
+	zassert_equal((antr_err_t)RADIANT_WIRE_INVALID_MESSAGE,
 		      antr_sec_status_get(HOST_CH, st,
 					  ANTR_SEC_STATUS_LEN - 1u));
-	zassert_equal((antr_err_t)ANTW_INVALID_MESSAGE,
+	zassert_equal((antr_err_t)RADIANT_WIRE_INVALID_MESSAGE,
 		      antr_sec_status_get(HOST_CH, NULL, sizeof(st)));
 
 	api_assert_no_viol();
@@ -455,14 +455,14 @@ ZTEST(api, test_sec_host_a_channel_out_of_range_is_refused_everywhere)
 	uint8_t st[ANTR_SEC_STATUS_LEN];
 	uint8_t bad = (uint8_t)RADIANT_CHANNEL_COUNT;
 
-	zassert_equal((antr_err_t)ANTW_INVALID_MESSAGE,
+	zassert_equal((antr_err_t)RADIANT_WIRE_INVALID_MESSAGE,
 		      antr_sec_config(bad, RADIANT_SEC_SW_AUTH, 2u, 0x01u,
 				      0x0Fu));
-	zassert_equal((antr_err_t)ANTW_INVALID_MESSAGE,
+	zassert_equal((antr_err_t)RADIANT_WIRE_INVALID_MESSAGE,
 		      antr_sec_key_set(bad, 128u, host_key));
-	zassert_equal((antr_err_t)ANTW_INVALID_MESSAGE,
+	zassert_equal((antr_err_t)RADIANT_WIRE_INVALID_MESSAGE,
 		      antr_sec_epoch_set(bad, 0u, 1u, 0u));
-	zassert_equal((antr_err_t)ANTW_INVALID_MESSAGE,
+	zassert_equal((antr_err_t)RADIANT_WIRE_INVALID_MESSAGE,
 		      antr_sec_status_get(bad, st, sizeof(st)));
 
 	api_assert_no_viol();
@@ -527,28 +527,28 @@ static void vd_key_sender(uint8_t tx, uint16_t devnum, uint8_t switches,
 static void vd_setup_pair_ext(uint8_t rx, uint8_t tx, uint16_t devnum,
 			      uint8_t switches, uint8_t w, uint8_t ext_assign)
 {
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_network_address_set(0u, host_net_key));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_channel_assign(
-			      rx, (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY, 0u,
+			      rx, (uint8_t)RADIANT_WIRE_CHANNEL_TYPE_SLAVE_RX_ONLY, 0u,
 			      ext_assign));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_channel_id_set(rx, devnum, HOST_DEVTYPE,
 					  HOST_TRANS));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_channel_period_set(rx,
 					      RADIANT_CHANNEL_PERIOD_ANT_PLUS));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_channel_radio_freq_set(rx, HOST_RF));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_channel_open(rx));
 
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_key_set(rx, 128u, host_key));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_config(rx, switches, w, 0x01u, 0x0Fu));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_epoch_set(rx, 0u, VD_EPOCH, 0u));
 
 	vd_key_sender(tx, devnum, switches, w);
@@ -606,7 +606,7 @@ static uint32_t vd_count_bd(uint32_t from, uint8_t rx)
 		uint8_t        len;
 
 		d = api_msglog_get(k, &id, &len);
-		if (id == (uint8_t)ANTW_MESG_BROADCAST_DATA_ID && d[0] == rx) {
+		if (id == (uint8_t)RADIANT_WIRE_MESG_BROADCAST_DATA_ID && d[0] == rx) {
 			n++;
 		}
 	}
@@ -697,15 +697,15 @@ static void vd_expect_ch(uint32_t from, uint8_t rx, const struct vd_want *want,
 		uint8_t        len;
 
 		d = api_msglog_get(k, &id, &len);
-		if ((id != (uint8_t)ANTW_MESG_BROADCAST_DATA_ID &&
-		     id != (uint8_t)ANTW_MESG_RADIANT_SEC_VERDICT_ID) ||
+		if ((id != (uint8_t)RADIANT_WIRE_MESG_BROADCAST_DATA_ID &&
+		     id != (uint8_t)RADIANT_WIRE_MESG_RADIANT_SEC_VERDICT_ID) ||
 		    d[0] != rx) {
 			continue;
 		}
 		zassert_true(got < n, "message %u: more than the %u expected",
 			     k, n);
 		if (want[got].verdict == 0u) {
-			zassert_equal((uint8_t)ANTW_MESG_BROADCAST_DATA_ID, id,
+			zassert_equal((uint8_t)RADIANT_WIRE_MESG_BROADCAST_DATA_ID, id,
 				      "message %u: expected data for counter "
 				      "%u, got 0x%02X", got, want[got].ctr, id);
 			zassert_true(len >= 9u);
@@ -715,7 +715,7 @@ static void vd_expect_ch(uint32_t from, uint8_t rx, const struct vd_want *want,
 				      "message %u: data for the wrong counter",
 				      got);
 		} else {
-			zassert_equal((uint8_t)ANTW_MESG_RADIANT_SEC_VERDICT_ID,
+			zassert_equal((uint8_t)RADIANT_WIRE_MESG_RADIANT_SEC_VERDICT_ID,
 				      id,
 				      "message %u: expected the verdict on "
 				      "window %u, got 0x%02X", got,
@@ -833,7 +833,7 @@ ZTEST(api, test_sec_host_a_resent_key_keeps_a_tier2_trial_devnum)
 	for (uint32_t i = 0u; i < 4u; i++) {
 		(void)vd_hop(i, false);
 	}
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_key_set(VD_RX_CH, 128u, host_key));
 	for (uint32_t i = 4u; i < 8u; i++) {
 		(void)vd_hop(i, false);
@@ -980,9 +980,9 @@ static int vd_closed_at(uint32_t from, uint8_t rx)
 		uint8_t        len;
 
 		d = api_msglog_get(k, &id, &len);
-		if (id == (uint8_t)ANTW_MESG_RESPONSE_EVENT_ID && len >= 3u &&
-		    d[0] == rx && d[1] == (uint8_t)ANTW_MESG_EVENT_ID &&
-		    d[2] == (uint8_t)ANTW_EVENT_CHANNEL_CLOSED) {
+		if (id == (uint8_t)RADIANT_WIRE_MESG_RESPONSE_EVENT_ID && len >= 3u &&
+		    d[0] == rx && d[1] == (uint8_t)RADIANT_WIRE_MESG_EVENT_ID &&
+		    d[2] == (uint8_t)RADIANT_WIRE_EVENT_CHANNEL_CLOSED) {
 			return (int)k;
 		}
 	}
@@ -1018,9 +1018,9 @@ ZTEST(api, test_sec_host_nothing_follows_channel_closed)
 		uint8_t len;
 
 		(void)api_msglog_get(k, &id, &len);
-		zassert_not_equal((uint8_t)ANTW_MESG_BROADCAST_DATA_ID, id,
+		zassert_not_equal((uint8_t)RADIANT_WIRE_MESG_BROADCAST_DATA_ID, id,
 				  "data after CHANNEL_CLOSED");
-		zassert_not_equal((uint8_t)ANTW_MESG_RADIANT_SEC_VERDICT_ID, id,
+		zassert_not_equal((uint8_t)RADIANT_WIRE_MESG_RADIANT_SEC_VERDICT_ID, id,
 				  "a verdict after CHANNEL_CLOSED");
 	}
 	vd_done();
@@ -1092,7 +1092,7 @@ ZTEST(api, test_sec_host_a_lost_verdict_is_counted_and_leaves_a_seq_gap)
 		uint8_t        len;
 
 		d = api_msglog_get(k, &id, &len);
-		if (id != (uint8_t)ANTW_MESG_RADIANT_SEC_VERDICT_ID) {
+		if (id != (uint8_t)RADIANT_WIRE_MESG_RADIANT_SEC_VERDICT_ID) {
 			continue;
 		}
 		zassert_equal(VD_F8_LEN, len);
@@ -1118,7 +1118,7 @@ ZTEST(api, test_sec_host_a_lost_verdict_is_counted_and_leaves_a_seq_gap)
 		uint8_t f4[ANTR_SEC_STATUS_LEN];
 
 		zassert_equal(31u, ANTR_SEC_STATUS_LEN);
-		zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 			      antr_sec_status_get(VD_RX_CH, f4, sizeof(f4)));
 		zassert_equal(1u, f4[1], "0xF4 stays structure version 1");
 		zassert_equal(st.verdict_events_dropped, rd16(&f4[28]),
@@ -1265,7 +1265,7 @@ static void vd_stale_across(bool new_epoch)
 	if (new_epoch) {
 		int rc;
 
-		zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 			      antr_sec_epoch_set(VD_RX_CH, 0u, VD_EPOCH + 1u,
 						 0u));
 		k_mutex_lock(&api_lock, K_FOREVER);
@@ -1274,7 +1274,7 @@ static void vd_stale_across(bool new_epoch)
 		k_mutex_unlock(&api_lock);
 		zassert_equal(RADIANT_SEC_OK, rc);
 	} else {
-		zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 			      antr_sec_config(VD_RX_CH,
 					      RADIANT_SEC_SW_AUTH |
 						      RADIANT_SEC_SW_VERDICT_EVENT,
@@ -1321,7 +1321,7 @@ ZTEST(api, test_sec_host_an_identical_0xf1_retry_discards_nothing)
 	from = api_msglog_count();
 	for (uint32_t i = 0u; i < 8u; i++) {
 		if (i == 3u) {
-			zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+			zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 				      antr_sec_config(VD_RX_CH,
 						      RADIANT_SEC_SW_AUTH |
 							      RADIANT_SEC_SW_VERDICT_EVENT,
@@ -1374,7 +1374,7 @@ ZTEST(api, test_sec_host_without_the_bit_the_stream_is_unchanged)
 	struct rec {
 		uint8_t id;
 		uint8_t len;
-		uint8_t d[ANTW_MAX_SIZE_VALUE];
+		uint8_t d[RADIANT_WIRE_MAX_SIZE_VALUE];
 	};
 	static struct rec with[16];
 	uint32_t          n_with = 0u;
@@ -1394,7 +1394,7 @@ ZTEST(api, test_sec_host_without_the_bit_the_stream_is_unchanged)
 		uint8_t        len;
 
 		d = api_msglog_get(k, &id, &len);
-		if (id == (uint8_t)ANTW_MESG_RADIANT_SEC_VERDICT_ID) {
+		if (id == (uint8_t)RADIANT_WIRE_MESG_RADIANT_SEC_VERDICT_ID) {
 			n_f8++;
 			continue;
 		}
@@ -1422,7 +1422,7 @@ ZTEST(api, test_sec_host_without_the_bit_the_stream_is_unchanged)
 		uint8_t        len;
 
 		d = api_msglog_get(k, &id, &len);
-		zassert_not_equal((uint8_t)ANTW_MESG_RADIANT_SEC_VERDICT_ID, id,
+		zassert_not_equal((uint8_t)RADIANT_WIRE_MESG_RADIANT_SEC_VERDICT_ID, id,
 				  "0xF8 sent to a host that never asked");
 		zassert_true(n_without < n_with, "more messages than with it");
 		zassert_equal(with[n_without].id, id, "message %u", n_without);
@@ -1614,7 +1614,7 @@ static struct acq_bd acq_count(uint32_t from, uint8_t page)
 		uint8_t        len;
 
 		d = api_msglog_get(k, &id, &len);
-		if (id != (uint8_t)ANTW_MESG_BROADCAST_DATA_ID ||
+		if (id != (uint8_t)RADIANT_WIRE_MESG_BROADCAST_DATA_ID ||
 		    d[0] != VD_RX_CH || len < 9u) {
 			continue;
 		}
@@ -1748,7 +1748,7 @@ ZTEST(api, test_sec_host_a_keyed_scan_delivers_no_secured_page_unjudged)
 
 	vd_setup_pair_ext(VD_RX_CH, VD_TX_CH, HOST_DEVNUM,
 			  RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_DROP_UNVER, 2u,
-			  (uint8_t)ANTW_EXT_PARAM_ALWAYS_SEARCH);
+			  (uint8_t)RADIANT_WIRE_EXT_PARAM_ALWAYS_SEARCH);
 	from = api_msglog_count();
 	t = acq_search_t();
 	(void)acq_air_genuine(t, 1u);
@@ -1779,19 +1779,19 @@ ZTEST(api, test_sec_host_a_keyed_scan_delivers_no_secured_page_unjudged)
  * and RF, assigned with no extended flag and left closed. */
 static void vd_assign_closed(uint8_t rx)
 {
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_network_address_set(0u, host_net_key));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_channel_assign(
-			      rx, (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY, 0u,
+			      rx, (uint8_t)RADIANT_WIRE_CHANNEL_TYPE_SLAVE_RX_ONLY, 0u,
 			      0u));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_channel_id_set(rx, HOST_DEVNUM, HOST_DEVTYPE,
 					  HOST_TRANS));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_channel_period_set(rx,
 					      RADIANT_CHANNEL_PERIOD_ANT_PLUS));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_channel_radio_freq_set(rx, HOST_RF));
 }
 
@@ -1814,19 +1814,19 @@ ZTEST(api, test_sec_host_a_keyed_channel_turned_scan_keeps_its_policy)
 	uint32_t             from;
 
 	vd_assign_closed(VD_RX_CH);
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_key_set(VD_RX_CH, 128u, host_key));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_config(VD_RX_CH, sw, 2u, 0x01u, 0x0Fu));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_epoch_set(VD_RX_CH, 0u, VD_EPOCH, 0u));
 
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_channel_ext_assign_set(
-			      VD_RX_CH, (uint8_t)ANTW_EXT_PARAM_ALWAYS_SEARCH));
+			      VD_RX_CH, (uint8_t)RADIANT_WIRE_EXT_PARAM_ALWAYS_SEARCH));
 
 	memset(st, 0xEE, sizeof(st));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_status_get(VD_RX_CH, st, sizeof(st)));
 	zassert_equal(ANTR_SEC_STATUS_KEYED | ANTR_SEC_STATUS_ARMED, st[30],
 		      "the conversion dropped the key or the epoch (%u)",
@@ -1837,7 +1837,7 @@ ZTEST(api, test_sec_host_a_keyed_channel_turned_scan_keeps_its_policy)
 	zassert_equal(0x0Fu, st[5]);
 	zassert_equal(VD_EPOCH, rd32(&st[6]));
 
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_channel_open(VD_RX_CH));
 	vd_key_sender(VD_TX_CH, HOST_DEVNUM, sw, 2u);
 	(void)radiant_event_drain(0u);
@@ -1886,25 +1886,25 @@ ZTEST(api, test_sec_host_turning_a_channel_scan_keeps_its_configuration)
 	uint8_t              v;
 
 	vd_assign_closed(VD_RX_CH);
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_id_list_add(VD_RX_CH, entry, 0u));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_id_list_config(VD_RX_CH, 1u, 1u));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_channel_low_priority_rx_search_timeout_set(VD_RX_CH,
 								      3u));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_search_channel_priority_set(VD_RX_CH, 1u));
 
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_channel_ext_assign_set(
-			      VD_RX_CH, (uint8_t)ANTW_EXT_PARAM_ALWAYS_SEARCH));
+			      VD_RX_CH, (uint8_t)RADIANT_WIRE_EXT_PARAM_ALWAYS_SEARCH));
 
 	zassert_equal(RADIANT_CH_STATE_ASSIGNED,
 		      radiant_channel_state_get(VD_RX_CH));
-	zassert_equal((uint8_t)ANTW_EXT_PARAM_ALWAYS_SEARCH,
+	zassert_equal((uint8_t)RADIANT_WIRE_EXT_PARAM_ALWAYS_SEARCH,
 		      radiant_channel_ext_assign_get(VD_RX_CH));
-	zassert_equal((uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
+	zassert_equal((uint8_t)RADIANT_WIRE_CHANNEL_TYPE_SLAVE_RX_ONLY,
 		      radiant_channel_type_get(VD_RX_CH));
 	zassert_equal(0u, radiant_channel_network_get(VD_RX_CH));
 
@@ -2051,26 +2051,26 @@ static void acq_scan_setup(uint8_t switches)
 {
 	int rc[4];
 
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_network_address_set(0u, host_net_key));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_channel_assign(
-			      VD_RX_CH, (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
-			      0u, (uint8_t)ANTW_EXT_PARAM_ALWAYS_SEARCH));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+			      VD_RX_CH, (uint8_t)RADIANT_WIRE_CHANNEL_TYPE_SLAVE_RX_ONLY,
+			      0u, (uint8_t)RADIANT_WIRE_EXT_PARAM_ALWAYS_SEARCH));
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_channel_id_set(VD_RX_CH, HOST_DEVNUM, 0u, 0u));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_channel_period_set(VD_RX_CH,
 					      RADIANT_CHANNEL_PERIOD_ANT_PLUS));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_channel_radio_freq_set(VD_RX_CH, HOST_RF));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_channel_open(VD_RX_CH));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_key_set(VD_RX_CH, 128u, host_key));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_config(VD_RX_CH, switches, 2u, 0x01u, 0x0Fu));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_epoch_set(VD_RX_CH, 0u, VD_EPOCH, 0u));
 	k_mutex_lock(&api_lock, K_FOREVER);
 	rc[0] = radiant_sec_set_key(VD_TX_CH, host_key, 128, HOST_DEVNUM);
@@ -2100,7 +2100,7 @@ static uint16_t acq_bd_devnum(uint32_t from, uint8_t page)
 		uint8_t        len;
 		const uint8_t *d = api_msglog_get(k, &id, &len);
 
-		if (id == (uint8_t)ANTW_MESG_BROADCAST_DATA_ID &&
+		if (id == (uint8_t)RADIANT_WIRE_MESG_BROADCAST_DATA_ID &&
 		    d[0] == VD_RX_CH && len >= 14u && d[1] == page) {
 			dn = (uint16_t)(d[10] | ((uint16_t)d[11] << 8));
 		}
@@ -2120,18 +2120,18 @@ ZTEST(api, test_sec_host_a_rewildcarded_keyed_scan_keeps_the_sender_number)
 	 */
 	static const uint8_t clear[8] = { 0x50u, 0x00u, 1u, 2u, 3u, 4u, 5u,
 					  6u };
-	const uint8_t        cfg = (uint8_t)ANTW_LIB_CONFIG_MESG_OUT_INC_DEVICE_ID;
+	const uint8_t        cfg = (uint8_t)RADIANT_WIRE_LIB_CONFIG_MESG_OUT_INC_DEVICE_ID;
 	radiant_time_t       t;
 	uint32_t             from;
 	uint16_t             dn_sec;
 	uint16_t             dn_clr;
 
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_lib_config_set(cfg));
 	acq_scan_setup(RADIANT_SEC_SW_CONF);
 	zassert_ok(antr_channel_close(VD_RX_CH));
 	acq_run_to(radiant_radio_now() + 20000u);
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_channel_id_set(VD_RX_CH, 0u, 0u, 0u));
 	zassert_true(radiant_sec_channel_is_secured(VD_RX_CH),
 		     "setup: the key did not survive the close");
@@ -2167,8 +2167,8 @@ ZTEST(api, test_sec_host_a_released_scan_frame_keeps_its_sender_id)
 	 */
 	static const uint8_t clear[8] = { 0x50u, 0x00u, 1u, 2u, 3u, 4u, 5u,
 					  6u };
-	const uint8_t        cfg = (uint8_t)(ANTW_LIB_CONFIG_MESG_OUT_INC_DEVICE_ID |
-					     ANTW_LIB_CONFIG_MESG_OUT_INC_RSSI);
+	const uint8_t        cfg = (uint8_t)(RADIANT_WIRE_LIB_CONFIG_MESG_OUT_INC_DEVICE_ID |
+					     RADIANT_WIRE_LIB_CONFIG_MESG_OUT_INC_RSSI);
 	const uint8_t       *sec = NULL;
 	const uint8_t       *clr = NULL;
 	uint8_t              len_sec = 0u;
@@ -2176,7 +2176,7 @@ ZTEST(api, test_sec_host_a_released_scan_frame_keeps_its_sender_id)
 	radiant_time_t       t;
 	uint32_t             from;
 
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_lib_config_set(cfg));
 	acq_scan_setup(RADIANT_SEC_SW_CONF);
 	from = api_msglog_count();
@@ -2190,7 +2190,7 @@ ZTEST(api, test_sec_host_a_released_scan_frame_keeps_its_sender_id)
 		uint8_t        len;
 		const uint8_t *d = api_msglog_get(k, &id, &len);
 
-		if (id != (uint8_t)ANTW_MESG_BROADCAST_DATA_ID ||
+		if (id != (uint8_t)RADIANT_WIRE_MESG_BROADCAST_DATA_ID ||
 		    d[0] != VD_RX_CH) {
 			continue;
 		}
@@ -2299,16 +2299,16 @@ static bool acq_expect_not_credited(uint32_t from, uint32_t ctr,
 			continue;
 		}
 		if (k_forged < 0) {
-			if (id == (uint8_t)ANTW_MESG_BROADCAST_DATA_ID &&
+			if (id == (uint8_t)RADIANT_WIRE_MESG_BROADCAST_DATA_ID &&
 			    len >= 9u && d[4] == 0xEEu && d[7] == 0xEEu) {
 				k_forged = (int)k;
 			} else if (id ==
-				   (uint8_t)ANTW_MESG_RADIANT_SEC_VERDICT_ID) {
+				   (uint8_t)RADIANT_WIRE_MESG_RADIANT_SEC_VERDICT_ID) {
 				prev_seq = (int)vd_seq(d);
 			}
 			continue;
 		}
-		if (id != (uint8_t)ANTW_MESG_RADIANT_SEC_VERDICT_ID) {
+		if (id != (uint8_t)RADIANT_WIRE_MESG_RADIANT_SEC_VERDICT_ID) {
 			continue;
 		}
 		if (prev_seq < 0 ||
@@ -2443,7 +2443,7 @@ ZTEST(api, test_sec_host_the_first_window_after_an_acquisition_verifies)
 		uint8_t        len;
 
 		d = api_msglog_get(k, &id, &len);
-		if (id != (uint8_t)ANTW_MESG_RADIANT_SEC_VERDICT_ID ||
+		if (id != (uint8_t)RADIANT_WIRE_MESG_RADIANT_SEC_VERDICT_ID ||
 		    d[0] != VD_RX_CH || rd16(&d[2]) != (uint16_t)i0) {
 			continue;
 		}
@@ -2475,28 +2475,28 @@ ZTEST(api, test_sec_host_the_verdict_event_needs_x_auth)
 	uint8_t st[ANTR_SEC_STATUS_LEN];
 
 	host_assign(true, true);
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_key_set(HOST_CH, 128u, host_key));
 
 	/* Only X_AUTH has a verdict. Accepting the bit without it would
 	 * promise events that never come, and a host would read the silence
 	 * as nothing having failed. */
-	zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
+	zassert_equal((antr_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED,
 		      antr_sec_config(HOST_CH, RADIANT_SEC_SW_VERDICT_EVENT,
 				      2u, 0x01u, 0x0Fu));
-	zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
+	zassert_equal((antr_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED,
 		      antr_sec_config(HOST_CH,
 				      RADIANT_SEC_SW_CONF |
 					      RADIANT_SEC_SW_VERDICT_EVENT,
 				      2u, 0x01u, 0x0Fu));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_config(HOST_CH,
 				      RADIANT_SEC_SW_AUTH |
 					      RADIANT_SEC_SW_VERDICT_EVENT,
 				      2u, 0x01u, 0x0Fu));
 
 	/* And the host can read back that it is on. */
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_status_get(HOST_CH, st, sizeof(st)));
 	zassert_equal(RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_VERDICT_EVENT,
 		      st[2]);
@@ -2521,14 +2521,14 @@ ZTEST(api, test_sec_host_commands_hold_api_lock)
 	host_assign(true, true);
 	base = antr_api_lock_violations;
 
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_key_set(HOST_CH, 128u, host_key));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_config(HOST_CH, RADIANT_SEC_SW_AUTH, 2u, 0x01u,
 				      0x0Fu));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_epoch_set(HOST_CH, 0u, 1u, 0u));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_status_get(HOST_CH, st, sizeof(st)));
 	zassert_equal(base, antr_api_lock_violations,
 		      "a 0xF1-0xF4 command reached radiant_sec without "
@@ -2674,26 +2674,26 @@ static void f5_keys_cross(void)
 
 	host_assign(true, true);
 	zassert_ok(antr_channel_assign(PEER_CH,
-				       (uint8_t)ANTW_CHANNEL_TYPE_MASTER, 0u,
+				       (uint8_t)RADIANT_WIRE_CHANNEL_TYPE_MASTER, 0u,
 				       0u));
 	zassert_ok(antr_channel_id_set(PEER_CH, PEER_DEVNUM, HOST_DEVTYPE,
 				       HOST_TRANS));
 
-	zassert_ok(f5(HOST_CH, ANTW_RADIANT_PAIR_ENTER, NULL, 0u, reply, &rlen));
-	zassert_ok(f5(PEER_CH, ANTW_RADIANT_PAIR_ENTER, NULL, 0u, reply, &rlen));
-	zassert_ok(f5(HOST_CH, ANTW_RADIANT_PAIR_SCALAR, pair_sa,
+	zassert_ok(f5(HOST_CH, RADIANT_WIRE_RADIANT_PAIR_ENTER, NULL, 0u, reply, &rlen));
+	zassert_ok(f5(PEER_CH, RADIANT_WIRE_RADIANT_PAIR_ENTER, NULL, 0u, reply, &rlen));
+	zassert_ok(f5(HOST_CH, RADIANT_WIRE_RADIANT_PAIR_SCALAR, pair_sa,
 		      sizeof(pair_sa), reply, &rlen));
 	memcpy(pub_a, &reply[2], sizeof(pub_a));
-	zassert_ok(f5(PEER_CH, ANTW_RADIANT_PAIR_SCALAR, pair_sb,
+	zassert_ok(f5(PEER_CH, RADIANT_WIRE_RADIANT_PAIR_SCALAR, pair_sb,
 		      sizeof(pair_sb), reply, &rlen));
 	memcpy(pub_b, &reply[2], sizeof(pub_b));
 
 	/* DH only: the reply is the bare echo - no fingerprint exists yet,
 	 * which is what leaves no two-move path for a downgrade. */
-	zassert_ok(f5(HOST_CH, ANTW_RADIANT_PAIR_EXCHANGE, pub_b, sizeof(pub_b),
+	zassert_ok(f5(HOST_CH, RADIANT_WIRE_RADIANT_PAIR_EXCHANGE, pub_b, sizeof(pub_b),
 		      reply, &rlen));
 	zassert_equal(2u, rlen, "EXCHANGE answered with a fingerprint");
-	zassert_ok(f5(PEER_CH, ANTW_RADIANT_PAIR_EXCHANGE, pub_a, sizeof(pub_a),
+	zassert_ok(f5(PEER_CH, RADIANT_WIRE_RADIANT_PAIR_EXCHANGE, pub_a, sizeof(pub_a),
 		      reply, &rlen));
 	zassert_equal(2u, rlen);
 }
@@ -2703,8 +2703,8 @@ static void f5_done(void)
 	uint8_t reply[2 + RADIANT_SEC_X25519_BYTES];
 	uint8_t rlen = 0u;
 
-	(void)f5(HOST_CH, ANTW_RADIANT_PAIR_LEAVE, NULL, 0u, reply, &rlen);
-	(void)f5(PEER_CH, ANTW_RADIANT_PAIR_LEAVE, NULL, 0u, reply, &rlen);
+	(void)f5(HOST_CH, RADIANT_WIRE_RADIANT_PAIR_LEAVE, NULL, 0u, reply, &rlen);
+	(void)f5(PEER_CH, RADIANT_WIRE_RADIANT_PAIR_LEAVE, NULL, 0u, reply, &rlen);
 	(void)antr_channel_unassign(PEER_CH);
 	host_done();
 }
@@ -2728,29 +2728,29 @@ ZTEST(api, test_sec_host_pairing_commits_before_it_reveals)
 	f5_keys_cross();
 
 	/* B: NONCE as responder answers Cb, which B's host sends to A. */
-	zassert_ok(f5(PEER_CH, ANTW_RADIANT_PAIR_NONCE, pair_nb_arg,
+	zassert_ok(f5(PEER_CH, RADIANT_WIRE_RADIANT_PAIR_NONCE, pair_nb_arg,
 		      sizeof(pair_nb_arg), reply, &rlen));
 	zassert_equal(2u + RADIANT_SEC_BLOCK_BYTES, rlen);
 	zassert_equal(PEER_CH, reply[0]);
-	zassert_equal(ANTW_RADIANT_PAIR_NONCE, reply[1]);
+	zassert_equal(RADIANT_WIRE_RADIANT_PAIR_NONCE, reply[1]);
 	memcpy(cb, &reply[2], sizeof(cb));
 
 	/* A: its own nonce (bare echo), then the commitment, then Na out. */
-	zassert_ok(f5(HOST_CH, ANTW_RADIANT_PAIR_NONCE, pair_na_arg,
+	zassert_ok(f5(HOST_CH, RADIANT_WIRE_RADIANT_PAIR_NONCE, pair_na_arg,
 		      sizeof(pair_na_arg), reply, &rlen));
 	zassert_equal(2u, rlen, "an initiator's NONCE answered a commitment");
-	zassert_ok(f5(HOST_CH, ANTW_RADIANT_PAIR_PEER_COMMIT, cb, sizeof(cb),
+	zassert_ok(f5(HOST_CH, RADIANT_WIRE_RADIANT_PAIR_PEER_COMMIT, cb, sizeof(cb),
 		      reply, &rlen));
 	zassert_equal(2u, rlen);
 
 	/* B finishes on Na, and only then reveals Nb. */
-	zassert_ok(f5(PEER_CH, ANTW_RADIANT_PAIR_PEER_NONCE, &pair_na_arg[1],
+	zassert_ok(f5(PEER_CH, RADIANT_WIRE_RADIANT_PAIR_PEER_NONCE, &pair_na_arg[1],
 		      RADIANT_SEC_PAIR_NONCE_BYTES, reply, &rlen));
 	zassert_equal(5u, rlen);
 	fp_b = rd24(&reply[2]);
 
 	/* A checks Nb against Cb and finishes. */
-	zassert_ok(f5(HOST_CH, ANTW_RADIANT_PAIR_PEER_NONCE, &pair_nb_arg[1],
+	zassert_ok(f5(HOST_CH, RADIANT_WIRE_RADIANT_PAIR_PEER_NONCE, &pair_nb_arg[1],
 		      RADIANT_SEC_PAIR_NONCE_BYTES, reply, &rlen));
 	zassert_equal(5u, rlen);
 	fp_a = rd24(&reply[2]);
@@ -2782,54 +2782,54 @@ ZTEST(api, test_sec_host_pairing_refuses_out_of_order_and_unopened_commitments)
 
 		memcpy(long_arg, pair_nb_arg, sizeof(pair_nb_arg));
 		long_arg[sizeof(long_arg) - 1u] = 0x5Au;
-		zassert_equal((antr_err_t)ANTW_INVALID_MESSAGE,
-			      f5(PEER_CH, ANTW_RADIANT_PAIR_NONCE, long_arg,
+		zassert_equal((antr_err_t)RADIANT_WIRE_INVALID_MESSAGE,
+			      f5(PEER_CH, RADIANT_WIRE_RADIANT_PAIR_NONCE, long_arg,
 				 sizeof(long_arg), reply, &rlen));
-		zassert_equal((antr_err_t)ANTW_INVALID_MESSAGE,
-			      f5(HOST_CH, ANTW_RADIANT_PAIR_ENTER, long_arg, 2u,
+		zassert_equal((antr_err_t)RADIANT_WIRE_INVALID_MESSAGE,
+			      f5(HOST_CH, RADIANT_WIRE_RADIANT_PAIR_ENTER, long_arg, 2u,
 				 reply, &rlen));
 	}
-	zassert_equal((antr_err_t)ANTW_INVALID_MESSAGE,
-		      f5(PEER_CH, ANTW_RADIANT_PAIR_NONCE, pair_nb_arg,
+	zassert_equal((antr_err_t)RADIANT_WIRE_INVALID_MESSAGE,
+		      f5(PEER_CH, RADIANT_WIRE_RADIANT_PAIR_NONCE, pair_nb_arg,
 			 RADIANT_SEC_PAIR_NONCE_BYTES, reply, &rlen));
-	zassert_equal((antr_err_t)ANTW_INVALID_MESSAGE,
-		      f5(HOST_CH, ANTW_RADIANT_PAIR_PEER_COMMIT, cb,
+	zassert_equal((antr_err_t)RADIANT_WIRE_INVALID_MESSAGE,
+		      f5(HOST_CH, RADIANT_WIRE_RADIANT_PAIR_PEER_COMMIT, cb,
 			 RADIANT_SEC_BLOCK_BYTES - 1u, reply, &rlen));
-	zassert_equal((antr_err_t)ANTW_INVALID_MESSAGE,
-		      f5(HOST_CH, ANTW_RADIANT_PAIR_PEER_NONCE, cb,
+	zassert_equal((antr_err_t)RADIANT_WIRE_INVALID_MESSAGE,
+		      f5(HOST_CH, RADIANT_WIRE_RADIANT_PAIR_PEER_NONCE, cb,
 			 RADIANT_SEC_PAIR_NONCE_BYTES - 1u, reply, &rlen));
 
-	zassert_ok(f5(PEER_CH, ANTW_RADIANT_PAIR_NONCE, pair_nb_arg,
+	zassert_ok(f5(PEER_CH, RADIANT_WIRE_RADIANT_PAIR_NONCE, pair_nb_arg,
 		      sizeof(pair_nb_arg), reply, &rlen));
 	memcpy(cb, &reply[2], sizeof(cb));
-	zassert_ok(f5(HOST_CH, ANTW_RADIANT_PAIR_NONCE, pair_na_arg,
+	zassert_ok(f5(HOST_CH, RADIANT_WIRE_RADIANT_PAIR_NONCE, pair_na_arg,
 		      sizeof(pair_na_arg), reply, &rlen));
 
 	/* A reveal before the commitment, and a commitment to a responder. */
-	zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
-		      f5(HOST_CH, ANTW_RADIANT_PAIR_PEER_NONCE,
+	zassert_equal((antr_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED,
+		      f5(HOST_CH, RADIANT_WIRE_RADIANT_PAIR_PEER_NONCE,
 			 &pair_nb_arg[1], RADIANT_SEC_PAIR_NONCE_BYTES, reply,
 			 &rlen));
-	zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
-		      f5(PEER_CH, ANTW_RADIANT_PAIR_PEER_COMMIT, cb,
+	zassert_equal((antr_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED,
+		      f5(PEER_CH, RADIANT_WIRE_RADIANT_PAIR_PEER_COMMIT, cb,
 			 sizeof(cb), reply, &rlen));
 
 	/* A nonce that does not open the commitment: refused, nothing
 	 * installed or counted, and the exchange is gone. */
-	zassert_ok(f5(HOST_CH, ANTW_RADIANT_PAIR_PEER_COMMIT, cb, sizeof(cb),
+	zassert_ok(f5(HOST_CH, RADIANT_WIRE_RADIANT_PAIR_PEER_COMMIT, cb, sizeof(cb),
 		      reply, &rlen));
 	memcpy(bad_nb, &pair_nb_arg[1], sizeof(bad_nb));
 	bad_nb[0] ^= 0x01u;
 	/* Its own code: the MITM signature must not read as the out-of-order
 	 * refusal above (review 2026-11-13). */
-	zassert_equal((antr_err_t)ANTW_RADIANT_PAIR_COMMIT_MISMATCH,
-		      f5(HOST_CH, ANTW_RADIANT_PAIR_PEER_NONCE, bad_nb,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RADIANT_PAIR_COMMIT_MISMATCH,
+		      f5(HOST_CH, RADIANT_WIRE_RADIANT_PAIR_PEER_NONCE, bad_nb,
 			 sizeof(bad_nb), reply, &rlen));
-	zassert_not_equal((antr_err_t)ANTW_RADIANT_PAIR_COMMIT_MISMATCH,
-			  (antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED);
+	zassert_not_equal((antr_err_t)RADIANT_WIRE_RADIANT_PAIR_COMMIT_MISMATCH,
+			  (antr_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED);
 	zassert_equal(0u, enrolments_of(HOST_CH));
-	zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
-		      f5(HOST_CH, ANTW_RADIANT_PAIR_PEER_NONCE,
+	zassert_equal((antr_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED,
+		      f5(HOST_CH, RADIANT_WIRE_RADIANT_PAIR_PEER_NONCE,
 			 &pair_nb_arg[1], RADIANT_SEC_PAIR_NONCE_BYTES, reply,
 			 &rlen),
 		      "the right nonce was accepted after a wrong one");
@@ -2852,25 +2852,25 @@ ZTEST(api, test_sec_host_unassign_ends_the_pairing_exchange)
 	uint8_t rlen = 0u;
 
 	f5_keys_cross();
-	zassert_ok(f5(PEER_CH, ANTW_RADIANT_PAIR_NONCE, pair_nb_arg,
+	zassert_ok(f5(PEER_CH, RADIANT_WIRE_RADIANT_PAIR_NONCE, pair_nb_arg,
 		      sizeof(pair_nb_arg), reply, &rlen));
 	memcpy(cb, &reply[2], sizeof(cb));
-	zassert_ok(f5(HOST_CH, ANTW_RADIANT_PAIR_NONCE, pair_na_arg,
+	zassert_ok(f5(HOST_CH, RADIANT_WIRE_RADIANT_PAIR_NONCE, pair_na_arg,
 		      sizeof(pair_na_arg), reply, &rlen));
-	zassert_ok(f5(HOST_CH, ANTW_RADIANT_PAIR_PEER_COMMIT, cb, sizeof(cb),
+	zassert_ok(f5(HOST_CH, RADIANT_WIRE_RADIANT_PAIR_PEER_COMMIT, cb, sizeof(cb),
 		      reply, &rlen));
 
 	/* A's channel number is reused for another sensor mid-exchange. */
 	zassert_ok(antr_channel_unassign(HOST_CH));
 	zassert_ok(antr_channel_assign(HOST_CH,
-				       (uint8_t)ANTW_CHANNEL_TYPE_MASTER, 0u,
+				       (uint8_t)RADIANT_WIRE_CHANNEL_TYPE_MASTER, 0u,
 				       0u));
 	zassert_ok(antr_channel_id_set(HOST_CH, HOST_DEVNUM ^ 0x0101u,
 				       HOST_DEVTYPE, HOST_TRANS));
 
 	/* The reveal A was waiting for arrives late: refused, nothing keyed. */
-	zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
-		      f5(HOST_CH, ANTW_RADIANT_PAIR_PEER_NONCE,
+	zassert_equal((antr_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED,
+		      f5(HOST_CH, RADIANT_WIRE_RADIANT_PAIR_PEER_NONCE,
 			 &pair_nb_arg[1], RADIANT_SEC_PAIR_NONCE_BYTES, reply,
 			 &rlen),
 		      "a delayed completion keyed the reused channel");
@@ -2879,8 +2879,8 @@ ZTEST(api, test_sec_host_unassign_ends_the_pairing_exchange)
 	zassert_equal(0u, enrolments_of(HOST_CH));
 
 	/* And a fresh exchange starts at once, without waiting for a timeout. */
-	zassert_ok(f5(HOST_CH, ANTW_RADIANT_PAIR_ENTER, NULL, 0u, reply, &rlen));
-	zassert_ok(f5(HOST_CH, ANTW_RADIANT_PAIR_SCALAR, pair_sa,
+	zassert_ok(f5(HOST_CH, RADIANT_WIRE_RADIANT_PAIR_ENTER, NULL, 0u, reply, &rlen));
+	zassert_ok(f5(HOST_CH, RADIANT_WIRE_RADIANT_PAIR_SCALAR, pair_sa,
 		      sizeof(pair_sa), reply, &rlen));
 
 	f5_done();
@@ -2907,9 +2907,9 @@ ZTEST(api, test_sec_host_pairing_holds_api_lock_and_its_hold_time)
 	host_assign(true, true);
 	base = antr_api_lock_violations;
 
-	zassert_ok(f5(HOST_CH, ANTW_RADIANT_PAIR_ENTER, NULL, 0u, reply, &rlen));
+	zassert_ok(f5(HOST_CH, RADIANT_WIRE_RADIANT_PAIR_ENTER, NULL, 0u, reply, &rlen));
 	t0 = k_cycle_get_32();
-	zassert_ok(f5(HOST_CH, ANTW_RADIANT_PAIR_SCALAR, pair_sa,
+	zassert_ok(f5(HOST_CH, RADIANT_WIRE_RADIANT_PAIR_SCALAR, pair_sa,
 		      sizeof(pair_sa), reply, &rlen));
 	t_scalar = k_cycle_get_32() - t0;
 	zassert_equal(2u + RADIANT_SEC_X25519_BYTES, rlen);
@@ -2919,17 +2919,17 @@ ZTEST(api, test_sec_host_pairing_holds_api_lock_and_its_hold_time)
 	 * the responder, and the "initiator's" nonce is just another value. */
 	memcpy(peer, &reply[2], sizeof(peer));
 	t0 = k_cycle_get_32();
-	zassert_ok(f5(HOST_CH, ANTW_RADIANT_PAIR_EXCHANGE, peer, sizeof(peer),
+	zassert_ok(f5(HOST_CH, RADIANT_WIRE_RADIANT_PAIR_EXCHANGE, peer, sizeof(peer),
 		      reply, &rlen));
 	t_exchange = k_cycle_get_32() - t0;
 
 	t0 = k_cycle_get_32();
-	zassert_ok(f5(HOST_CH, ANTW_RADIANT_PAIR_NONCE, pair_nb_arg,
+	zassert_ok(f5(HOST_CH, RADIANT_WIRE_RADIANT_PAIR_NONCE, pair_nb_arg,
 		      sizeof(pair_nb_arg), reply, &rlen));
 	t_nonce = k_cycle_get_32() - t0;
 
 	t0 = k_cycle_get_32();
-	zassert_ok(f5(HOST_CH, ANTW_RADIANT_PAIR_PEER_NONCE, &pair_na_arg[1],
+	zassert_ok(f5(HOST_CH, RADIANT_WIRE_RADIANT_PAIR_PEER_NONCE, &pair_na_arg[1],
 		      RADIANT_SEC_PAIR_NONCE_BYTES, reply, &rlen));
 	t_reveal = k_cycle_get_32() - t0;
 	zassert_equal(5u, rlen);
@@ -2952,7 +2952,7 @@ ZTEST(api, test_sec_host_pairing_holds_api_lock_and_its_hold_time)
 		     "the commit/reveal holds api_lock for milliseconds: "
 		     "NONCE %u us, PEER_NONCE %u us", us_nonce, us_reveal);
 
-	(void)f5(HOST_CH, ANTW_RADIANT_PAIR_LEAVE, NULL, 0u, reply, &rlen);
+	(void)f5(HOST_CH, RADIANT_WIRE_RADIANT_PAIR_LEAVE, NULL, 0u, reply, &rlen);
 	host_done();
 
 	api_assert_no_viol();
@@ -3007,39 +3007,39 @@ static void pair_bridge_fn(void *p1, void *p2, void *p3)
 		}                                                         \
 	} while (0)
 
-	PAIR_STEP(f5(HOST_CH, ANTW_RADIANT_PAIR_ENTER, NULL, 0u, reply, &rlen),
+	PAIR_STEP(f5(HOST_CH, RADIANT_WIRE_RADIANT_PAIR_ENTER, NULL, 0u, reply, &rlen),
 		  2u);
-	PAIR_STEP(f5(PEER_CH, ANTW_RADIANT_PAIR_ENTER, NULL, 0u, reply, &rlen),
+	PAIR_STEP(f5(PEER_CH, RADIANT_WIRE_RADIANT_PAIR_ENTER, NULL, 0u, reply, &rlen),
 		  2u);
-	PAIR_STEP(f5(HOST_CH, ANTW_RADIANT_PAIR_SCALAR, pair_sa,
+	PAIR_STEP(f5(HOST_CH, RADIANT_WIRE_RADIANT_PAIR_SCALAR, pair_sa,
 		     sizeof(pair_sa), reply, &rlen),
 		  2u + RADIANT_SEC_X25519_BYTES);
 	memcpy(pub_a, &reply[2], sizeof(pub_a));
-	PAIR_STEP(f5(PEER_CH, ANTW_RADIANT_PAIR_SCALAR, pair_sb,
+	PAIR_STEP(f5(PEER_CH, RADIANT_WIRE_RADIANT_PAIR_SCALAR, pair_sb,
 		     sizeof(pair_sb), reply, &rlen),
 		  2u + RADIANT_SEC_X25519_BYTES);
 	memcpy(pub_b, &reply[2], sizeof(pub_b));
-	PAIR_STEP(f5(HOST_CH, ANTW_RADIANT_PAIR_EXCHANGE, pub_b, sizeof(pub_b),
+	PAIR_STEP(f5(HOST_CH, RADIANT_WIRE_RADIANT_PAIR_EXCHANGE, pub_b, sizeof(pub_b),
 		     reply, &rlen),
 		  2u);
-	PAIR_STEP(f5(PEER_CH, ANTW_RADIANT_PAIR_EXCHANGE, pub_a, sizeof(pub_a),
+	PAIR_STEP(f5(PEER_CH, RADIANT_WIRE_RADIANT_PAIR_EXCHANGE, pub_a, sizeof(pub_a),
 		     reply, &rlen),
 		  2u);
-	PAIR_STEP(f5(PEER_CH, ANTW_RADIANT_PAIR_NONCE, pair_nb_arg,
+	PAIR_STEP(f5(PEER_CH, RADIANT_WIRE_RADIANT_PAIR_NONCE, pair_nb_arg,
 		     sizeof(pair_nb_arg), reply, &rlen),
 		  2u + RADIANT_SEC_BLOCK_BYTES);
 	memcpy(cb, &reply[2], sizeof(cb));
-	PAIR_STEP(f5(HOST_CH, ANTW_RADIANT_PAIR_NONCE, pair_na_arg,
+	PAIR_STEP(f5(HOST_CH, RADIANT_WIRE_RADIANT_PAIR_NONCE, pair_na_arg,
 		     sizeof(pair_na_arg), reply, &rlen),
 		  2u);
-	PAIR_STEP(f5(HOST_CH, ANTW_RADIANT_PAIR_PEER_COMMIT, cb, sizeof(cb),
+	PAIR_STEP(f5(HOST_CH, RADIANT_WIRE_RADIANT_PAIR_PEER_COMMIT, cb, sizeof(cb),
 		     reply, &rlen),
 		  2u);
-	PAIR_STEP(f5(PEER_CH, ANTW_RADIANT_PAIR_PEER_NONCE, &pair_na_arg[1],
+	PAIR_STEP(f5(PEER_CH, RADIANT_WIRE_RADIANT_PAIR_PEER_NONCE, &pair_na_arg[1],
 		     RADIANT_SEC_PAIR_NONCE_BYTES, reply, &rlen),
 		  5u);
 	r->fp_b = rd24(&reply[2]);
-	PAIR_STEP(f5(HOST_CH, ANTW_RADIANT_PAIR_PEER_NONCE, &pair_nb_arg[1],
+	PAIR_STEP(f5(HOST_CH, RADIANT_WIRE_RADIANT_PAIR_PEER_NONCE, &pair_nb_arg[1],
 		     RADIANT_SEC_PAIR_NONCE_BYTES, reply, &rlen),
 		  5u);
 	r->fp_a = rd24(&reply[2]);
@@ -3055,7 +3055,7 @@ ZTEST(api, test_sec_host_pairing_runs_on_the_bridge_stack)
 
 	host_assign(true, true);
 	zassert_ok(antr_channel_assign(PEER_CH,
-				       (uint8_t)ANTW_CHANNEL_TYPE_MASTER, 0u,
+				       (uint8_t)RADIANT_WIRE_CHANNEL_TYPE_MASTER, 0u,
 				       0u));
 	zassert_ok(antr_channel_id_set(PEER_CH, PEER_DEVNUM, HOST_DEVTYPE,
 				       HOST_TRANS));
@@ -3092,8 +3092,8 @@ ZTEST(api, test_sec_host_pairing_runs_on_the_bridge_stack)
 	}
 #endif
 
-	(void)f5(HOST_CH, ANTW_RADIANT_PAIR_LEAVE, NULL, 0u, reply, &rlen);
-	(void)f5(PEER_CH, ANTW_RADIANT_PAIR_LEAVE, NULL, 0u, reply, &rlen);
+	(void)f5(HOST_CH, RADIANT_WIRE_RADIANT_PAIR_LEAVE, NULL, 0u, reply, &rlen);
+	(void)f5(PEER_CH, RADIANT_WIRE_RADIANT_PAIR_LEAVE, NULL, 0u, reply, &rlen);
 	(void)antr_channel_unassign(PEER_CH);
 	host_done();
 

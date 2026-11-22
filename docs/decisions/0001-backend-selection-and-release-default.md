@@ -94,7 +94,7 @@ Three things constrain the answer:
    implementation is `libant.a`. Delete the sdk-ant backend and every A/B gate
    in the plan becomes unrunnable.
 3. **The shim is self-checking, for free.** `src/ant_radio_sdk_ant.c` is about
-   50 one-line forwarders plus a `BUILD_ASSERT` block comparing every `ANTW_*`
+   50 one-line forwarders plus a `BUILD_ASSERT` block comparing every `RADIANT_WIRE_*`
    constant against its `MESG_*` counterpart in sdk-ant's headers. If sdk-ant
    changes a signature the file stops compiling; if one of our constants drifts
    from Garmin's value the assert fires. Both checks exist only where sdk-ant is
@@ -106,14 +106,14 @@ Three things constrain the answer:
 ### One seam, three backends
 
 A single contract, `src/ant_radio.h` (`antr_*`, about 50 functions) plus
-`src/ant_wire.h` (`ANTW_*` protocol constants), with three implementations
+`radiant/include/radiant/radiant_wire.h` (`RADIANT_WIRE_*` protocol constants), with three implementations
 behind it:
 
 ```
-src/ant_serial_bridge.c        unchanged logic; speaks only ANTW_*/antr_*
+src/ant_serial_bridge.c        unchanged logic; speaks only RADIANT_WIRE_*/antr_*
         |
    src/ant_radio.h             our ~50-function contract  (antr_*)
-   src/ant_wire.h              our protocol constants     (ANTW_*)
+   radiant/include/radiant/radiant_wire.h              our protocol constants     (RADIANT_WIRE_*)
         |
    +----+-----------------+----------------------+
    |                      |                      |
@@ -129,7 +129,7 @@ ant_radio_sdk_ant.c   ant_radio_stub.c      radiant/
 Everything is prefixed. This is not style: sdk-ant's error macros are computed
 expressions (`NRF_ANT_ERROR_OFFSET + INVALID_MESSAGE`), not literals, so
 identically *named* macros with non-identical token sequences are a hard
-redefinition error — `ant_wire.h` and `ant_parameters.h` could never coexist in
+redefinition error — `radiant_wire.h` and `ant_parameters.h` could never coexist in
 one translation unit without the prefix. The prefix is what lets the shim
 include both and assert them against each other. It also makes the bridge
 textually free of Garmin's API names, which the clean-room narrative needs.

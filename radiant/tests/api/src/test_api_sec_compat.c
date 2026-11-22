@@ -17,7 +17,7 @@
 #include <zephyr/ztest.h>
 
 #include <radiant/ant_radio.h>
-#include <radiant/ant_wire.h>
+#include <radiant/radiant_wire.h>
 #include <radiant/radiant_sec.h>
 #include <radiant/radiant_sec_compat.h>
 
@@ -40,9 +40,9 @@ static const uint8_t net_key[8] = {
 
 static void assign(uint8_t ch)
 {
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_channel_assign(ch,
-					  (uint8_t)ANTW_CHANNEL_TYPE_MASTER,
+					  (uint8_t)RADIANT_WIRE_CHANNEL_TYPE_MASTER,
 					  0u, 0u));
 }
 
@@ -65,13 +65,13 @@ static void key_both_run_a(void)
 
 ZTEST(api, test_sec_compat_unassign_releases_the_compat_context)
 {
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_network_address_set(0u, net_key));
 	assign(CA);
 	assign(CB);
 	key_both_run_a();
 
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_channel_unassign(CA));
 
 	zassert_false(radiant_sec_compat_live_twin(CB),
@@ -88,13 +88,13 @@ ZTEST(api, test_sec_compat_unassign_releases_the_compat_context)
 
 ZTEST(api, test_sec_compat_system_reset_releases_every_compat_context)
 {
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_network_address_set(0u, net_key));
 	assign(CA);
 	assign(CB);
 	key_both_run_a();
 
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR, antr_stack_reset());
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR, antr_stack_reset());
 
 	zassert_equal(RADIANT_SEC_ENOKEY,
 		      radiant_sec_compat_set_epoch(CA, 8u, 0u, 0u, PERIOD),

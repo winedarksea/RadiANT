@@ -11,8 +11,9 @@ Human-readable companion: docs/ant-serial-protocol.md
 
 Standard library only, and no imports at all - this module is meant to be
 copied into another project on its own. The names are the bare sdk-ant
-spellings rather than the ANTW_ ones the C header uses: the prefix exists to
-dodge a C preprocessor collision, and Python already has module namespaces.
+spellings rather than the RADIANT_WIRE_ ones the C header uses: the prefix
+exists to dodge a C preprocessor collision, and Python already has module
+namespaces.
 
 Nothing here describes the on-air link layer - this is bytes on a USB bulk
 endpoint or a UART, and nothing else.
@@ -201,19 +202,19 @@ MESG_ID_LIST_ADD_ID = 0x59
 MESG_ID_LIST_CONFIG_ID = 0x5A
 
 # Background scanning. Bridged as of 2026-08-10: refuses with
-# ANTW_CLOSE_ALL_CHANNELS unless every channel is closed, then opens channel 0
-# as a background-scan slave - the same mechanism MESG_ASSIGN_CHANNEL's
-# extended byte already reaches, one message at a time. Rev 5.1 sec 9.5.4.5
-# scans with channel 0 as the host assigned and configured it, so an assigned
-# channel 0 keeps its type, network, channel ID, RF and period across the
-# reassign (its ID list, low-priority timeout and search priority return to
-# defaults); a master channel 0 is refused with CHANNEL_IN_WRONG_STATE. An
-# unassigned channel 0 becomes a wildcard slave on network 0 at the default RF,
-# as before. The optional synchronous-channel-packets-only byte is accepted and
-# ignored; reporting everything is a superset of the restricted subset. radiant
-# backend only - the capabilities reply advertises this on radiant and OFF
-# elsewhere, which is why a host with the call (ANT_OpenRxScanMode) sends it
-# only there. [bridge]
+# RADIANT_WIRE_CLOSE_ALL_CHANNELS unless every channel is closed, then opens
+# channel 0 as a background-scan slave - the same mechanism
+# MESG_ASSIGN_CHANNEL's extended byte already reaches, one message at a time.
+# Rev 5.1 sec 9.5.4.5 scans with channel 0 as the host assigned and configured
+# it, so an assigned channel 0 keeps its type, network, channel ID, RF and
+# period across the reassign (its ID list, low-priority timeout and search
+# priority return to defaults); a master channel 0 is refused with
+# CHANNEL_IN_WRONG_STATE. An unassigned channel 0 becomes a wildcard slave on
+# network 0 at the default RF, as before. The optional synchronous-channel-
+# packets-only byte is accepted and ignored; reporting everything is a superset
+# of the restricted subset. radiant backend only - the capabilities reply
+# advertises this on radiant and OFF elsewhere, which is why a host with the
+# call (ANT_OpenRxScanMode) sends it only there. [bridge]
 MESG_OPEN_RX_SCAN_MODE_ID = 0x5B
 
 # Legacy extended broadcast: channel id inline instead of behind a flag byte.
@@ -755,7 +756,7 @@ STARTUP_WATCH_DOG_RESET = 0x02
 # which told hosts the stick had cold-booted and defeated the one thing this
 # byte is watched for - telling an unexpected reset apart from the host's own.
 # The basis for 0x20 is sdk-ant's own header, which ant_radio_sdk_ant.c pins
-# with ANTW_EQ(STARTUP_COMMAND_RESET, RESET_CMD); no observed retail-stick
+# with WIRE_EQ(STARTUP_COMMAND_RESET, RESET_CMD); no observed retail-stick
 # capture of this frame exists here, and the 0x20 frame vectors are tagged
 # hand, not observed. [tools (ant_probe)]
 STARTUP_COMMAND_RESET = 0x20
@@ -1058,8 +1059,8 @@ BURST_HEADER_LAST = 0x80
 # an order: enter, supply a scalar, exchange keys, commit to and reveal nonces,
 # leave. Separate ids would let a host skip a step and get a state error it
 # could not localise; here an out-of-order sub-command is refused with
-# ANTW_INVALID_PARAMETER_PROVIDED and changes nothing. The reply echoes the
-# sub-command in the same byte, because a public key, a commitment and a
+# RADIANT_WIRE_INVALID_PARAMETER_PROVIDED and changes nothing. The reply echoes
+# the sub-command in the same byte, because a public key, a commitment and a
 # fingerprint are all 'some bytes after a channel byte' otherwise. Host
 # sequence, A = initiator, B = responder, each host driving its own end and
 # carrying the values in brackets over the air: both ENTER, SCALAR (-> own
@@ -1120,7 +1121,7 @@ RADIANT_PAIR_PEER_COMMIT = 0x05
 
 # The peer's 16-byte nonce at [2..17]. On the initiator it must open the
 # commitment from PEER_COMMIT; if it does not, the exchange is wiped and the
-# reply is ANTW_RADIANT_PAIR_COMMIT_MISMATCH (0xF5), distinct from the
+# reply is RADIANT_WIRE_RADIANT_PAIR_COMMIT_MISMATCH (0xF5), distinct from the
 # INVALID_PARAMETER_PROVIDED an out-of-order call gets. An all-zero nonce is
 # refused. Then the root key is derived from the DH result, both public keys
 # and both nonces, and installed, and the reply carries the six-digit
@@ -1300,43 +1301,44 @@ CAPABILITIES_ID_MATCH_FIX_ON_SHARED_CHANNEL_RXBURST = 0x04
 # Configure the two payload transforms on one channel. [0] channel; [1] switch
 # bitmask - bit 0 X_CONF, bit 1 X_AUTH, bit 2 drop an unverified window instead
 # of delivering it (default 0, deliver), bit 3 encrypt the descriptor set
-# (REFUSED in v1 with ANTW_INVALID_PARAMETER_PROVIDED - the descriptor has no
-# counter and therefore no nonce), bit 4 send one MESG_RADIANT_SEC_VERDICT
-# (0xF8) per judged window (valid only with bit 1, X_AUTH; refused with
-# ANTW_INVALID_PARAMETER_PROVIDED otherwise), bits 7..5 reserved must be 0; [2]
-# MAC window W, the literal 2, 4 or 8 (W=1 is reserved for the reliable-command
-# page); [3] secured page range low and [4] high, both bounded to 0x01..0x1F so
-# the descriptor and the ANT+ common pages stay in the clear mechanically
-# rather than by memory. The two switches are independent, not a ladder: X_AUTH
-# alone is the most useful setting in the table. On a MASTER, a tuple different
-# from the installed one is REFUSED with ANTW_CHANNEL_IN_WRONG_STATE, changing
-# nothing, while host acknowledged data or a burst is in flight or the master
-# is answering a slave's burst; the host retries once it completes, as for
-# 0xF2. An accepted change takes back the slot and acknowledgement payload
-# already built, so the new policy is the one on the air when this answers, at
-# the cost of at most one silent slot. An identical tuple, and any tuple to a
-# slave, is never refused. An identical tuple (a retry) changes nothing:
-# windows in flight, the replay floor and the sender's tag in progress are
-# kept. A change discards the windows in flight and restarts the sender's tag
-# but keeps the replay floor (docs/radiant-security.md sec 3.2, 3.5 and 7.6).
-# [K4 (docs/radiant-security.md sec 3 and 9)]
+# (REFUSED in v1 with RADIANT_WIRE_INVALID_PARAMETER_PROVIDED - the descriptor
+# has no counter and therefore no nonce), bit 4 send one
+# MESG_RADIANT_SEC_VERDICT (0xF8) per judged window (valid only with bit 1,
+# X_AUTH; refused with RADIANT_WIRE_INVALID_PARAMETER_PROVIDED otherwise), bits
+# 7..5 reserved must be 0; [2] MAC window W, the literal 2, 4 or 8 (W=1 is
+# reserved for the reliable-command page); [3] secured page range low and [4]
+# high, both bounded to 0x01..0x1F so the descriptor and the ANT+ common pages
+# stay in the clear mechanically rather than by memory. The two switches are
+# independent, not a ladder: X_AUTH alone is the most useful setting in the
+# table. On a MASTER, a tuple different from the installed one is REFUSED with
+# RADIANT_WIRE_CHANNEL_IN_WRONG_STATE, changing nothing, while host
+# acknowledged data or a burst is in flight or the master is answering a
+# slave's burst; the host retries once it completes, as for 0xF2. An accepted
+# change takes back the slot and acknowledgement payload already built, so the
+# new policy is the one on the air when this answers, at the cost of at most
+# one silent slot. An identical tuple, and any tuple to a slave, is never
+# refused. An identical tuple (a retry) changes nothing: windows in flight, the
+# replay floor and the sender's tag in progress are kept. A change discards the
+# windows in flight and restarts the sender's tag but keeps the replay floor
+# (docs/radiant-security.md sec 3.2, 3.5 and 7.6). [K4 (docs/radiant-
+# security.md sec 3 and 9)]
 MESG_RADIANT_SEC_CONFIG_ID = 0xF1
 
 # Install the one 16-byte root key for a channel. [0] channel; [1] key length
 # in bits, 128 and nothing else in v1; [2..17] the key. Everything else -
 # K_enc, K_auth, K_id, K_cmd - is derived from it, so a pairing moves exactly
 # sixteen bytes. WRITE ONLY: there is no read arm anywhere, and MESG_REQUEST
-# for 0xF2 answers ANTW_INVALID_MESSAGE rather than a key. NOT checked against
-# other channels: the host gives each live channel a distinct root or base
-# device number, or two channels given one epoch by 0xF3 share a keystream
+# for 0xF2 answers RADIANT_WIRE_INVALID_MESSAGE rather than a key. NOT checked
+# against other channels: the host gives each live channel a distinct root or
+# base device number, or two channels given one epoch by 0xF3 share a keystream
 # (docs/radiant-security.md sec 3.5). On a MASTER, REFUSED with
-# ANTW_CHANNEL_IN_WRONG_STATE while host acknowledged data or a burst is in
-# flight. A different root (a real rekey) on a keyed, secured master takes back
-# the slot and acknowledgement payload built under the old key before this
-# answers, as a changed 0xF1 does; the channel is then pending until 0xF3. The
-# root already installed (a retry) changes nothing. On TI the take-back's
-# RF_flushCmd is asynchronous, so a frame already on the air may complete. [K4
-# (docs/radiant-security.md sec 3.4 and 9)]
+# RADIANT_WIRE_CHANNEL_IN_WRONG_STATE while host acknowledged data or a burst
+# is in flight. A different root (a real rekey) on a keyed, secured master
+# takes back the slot and acknowledgement payload built under the old key
+# before this answers, as a changed 0xF1 does; the channel is then pending
+# until 0xF3. The root already installed (a retry) changes nothing. On TI the
+# take-back's RF_flushCmd is asynchronous, so a frame already on the air may
+# complete. [K4 (docs/radiant-security.md sec 3.4 and 9)]
 MESG_RADIANT_SET_KEY_ID = 0xF2
 
 # Set the epoch and its time anchor. [0] channel; [1] flags, bit 0 = the epoch
@@ -1351,10 +1353,10 @@ MESG_RADIANT_SET_KEY_ID = 0xF2
 # has been set after a reset: a reboot that restarts the counter under an
 # unchanged epoch is a two-time pad for X_CONF and a full session replay
 # against X_AUTH. WRITE ONLY: MESG_REQUEST for 0xF3 answers
-# ANTW_INVALID_MESSAGE. The epoch, the expected slot index and the armed state
-# read back through 0xF4; the exact phase and the real-time flag are not
-# retained, so nothing could echo them. [K4 (docs/radiant-security.md sec 3.5
-# and 9)]
+# RADIANT_WIRE_INVALID_MESSAGE. The epoch, the expected slot index and the
+# armed state read back through 0xF4; the exact phase and the real-time flag
+# are not retained, so nothing could echo them. [K4 (docs/radiant-security.md
+# sec 3.5 and 9)]
 MESG_RADIANT_EPOCH_ID = 0xF3
 
 # Per-channel security state, requested with MESG_REQUEST (0x4D). [0] channel;
@@ -1825,7 +1827,7 @@ MESSAGES = {
         "payload_len": '1..2',
         "bridged": True,
         "reply": 'MESG_RESPONSE_EVENT_ID',
-        "desc": "Background scanning. Bridged as of 2026-08-10: refuses with ANTW_CLOSE_ALL_CHANNELS unless every channel is closed, then opens channel 0 as a background-scan slave - the same mechanism MESG_ASSIGN_CHANNEL's extended byte already reaches, one message at a time. Rev 5.1 sec 9.5.4.5 scans with channel 0 as the host assigned and configured it, so an assigned channel 0 keeps its type, network, channel ID, RF and period across the reassign (its ID list, low-priority timeout and search priority return to defaults); a master channel 0 is refused with CHANNEL_IN_WRONG_STATE. An unassigned channel 0 becomes a wildcard slave on network 0 at the default RF, as before. The optional synchronous-channel-packets-only byte is accepted and ignored; reporting everything is a superset of the restricted subset. radiant backend only - the capabilities reply advertises this on radiant and OFF elsewhere, which is why a host with the call (ANT_OpenRxScanMode) sends it only there.",
+        "desc": "Background scanning. Bridged as of 2026-08-10: refuses with RADIANT_WIRE_CLOSE_ALL_CHANNELS unless every channel is closed, then opens channel 0 as a background-scan slave - the same mechanism MESG_ASSIGN_CHANNEL's extended byte already reaches, one message at a time. Rev 5.1 sec 9.5.4.5 scans with channel 0 as the host assigned and configured it, so an assigned channel 0 keeps its type, network, channel ID, RF and period across the reassign (its ID list, low-priority timeout and search priority return to defaults); a master channel 0 is refused with CHANNEL_IN_WRONG_STATE. An unassigned channel 0 becomes a wildcard slave on network 0 at the default RF, as before. The optional synchronous-channel-packets-only byte is accepted and ignored; reporting everything is a superset of the restricted subset. radiant backend only - the capabilities reply advertises this on radiant and OFF elsewhere, which is why a host with the call (ANT_OpenRxScanMode) sends it only there.",
     },
     0x5D: {
         "name": 'MESG_EXT_BROADCAST_DATA_ID',
@@ -2121,19 +2123,19 @@ RADIANT_MESSAGES = {
         "name": 'MESG_RADIANT_SEC_CONFIG_ID',
         "direction": 'h2d',
         "payload_len": 5,
-        "desc": "Configure the two payload transforms on one channel. [0] channel; [1] switch bitmask - bit 0 X_CONF, bit 1 X_AUTH, bit 2 drop an unverified window instead of delivering it (default 0, deliver), bit 3 encrypt the descriptor set (REFUSED in v1 with ANTW_INVALID_PARAMETER_PROVIDED - the descriptor has no counter and therefore no nonce), bit 4 send one MESG_RADIANT_SEC_VERDICT (0xF8) per judged window (valid only with bit 1, X_AUTH; refused with ANTW_INVALID_PARAMETER_PROVIDED otherwise), bits 7..5 reserved must be 0; [2] MAC window W, the literal 2, 4 or 8 (W=1 is reserved for the reliable-command page); [3] secured page range low and [4] high, both bounded to 0x01..0x1F so the descriptor and the ANT+ common pages stay in the clear mechanically rather than by memory. The two switches are independent, not a ladder: X_AUTH alone is the most useful setting in the table. On a MASTER, a tuple different from the installed one is REFUSED with ANTW_CHANNEL_IN_WRONG_STATE, changing nothing, while host acknowledged data or a burst is in flight or the master is answering a slave's burst; the host retries once it completes, as for 0xF2. An accepted change takes back the slot and acknowledgement payload already built, so the new policy is the one on the air when this answers, at the cost of at most one silent slot. An identical tuple, and any tuple to a slave, is never refused. An identical tuple (a retry) changes nothing: windows in flight, the replay floor and the sender's tag in progress are kept. A change discards the windows in flight and restarts the sender's tag but keeps the replay floor (docs/radiant-security.md sec 3.2, 3.5 and 7.6).",
+        "desc": "Configure the two payload transforms on one channel. [0] channel; [1] switch bitmask - bit 0 X_CONF, bit 1 X_AUTH, bit 2 drop an unverified window instead of delivering it (default 0, deliver), bit 3 encrypt the descriptor set (REFUSED in v1 with RADIANT_WIRE_INVALID_PARAMETER_PROVIDED - the descriptor has no counter and therefore no nonce), bit 4 send one MESG_RADIANT_SEC_VERDICT (0xF8) per judged window (valid only with bit 1, X_AUTH; refused with RADIANT_WIRE_INVALID_PARAMETER_PROVIDED otherwise), bits 7..5 reserved must be 0; [2] MAC window W, the literal 2, 4 or 8 (W=1 is reserved for the reliable-command page); [3] secured page range low and [4] high, both bounded to 0x01..0x1F so the descriptor and the ANT+ common pages stay in the clear mechanically rather than by memory. The two switches are independent, not a ladder: X_AUTH alone is the most useful setting in the table. On a MASTER, a tuple different from the installed one is REFUSED with RADIANT_WIRE_CHANNEL_IN_WRONG_STATE, changing nothing, while host acknowledged data or a burst is in flight or the master is answering a slave's burst; the host retries once it completes, as for 0xF2. An accepted change takes back the slot and acknowledgement payload already built, so the new policy is the one on the air when this answers, at the cost of at most one silent slot. An identical tuple, and any tuple to a slave, is never refused. An identical tuple (a retry) changes nothing: windows in flight, the replay floor and the sender's tag in progress are kept. A change discards the windows in flight and restarts the sender's tag but keeps the replay floor (docs/radiant-security.md sec 3.2, 3.5 and 7.6).",
     },
     0xF2: {
         "name": 'MESG_RADIANT_SET_KEY_ID',
         "direction": 'h2d',
         "payload_len": 18,
-        "desc": "Install the one 16-byte root key for a channel. [0] channel; [1] key length in bits, 128 and nothing else in v1; [2..17] the key. Everything else - K_enc, K_auth, K_id, K_cmd - is derived from it, so a pairing moves exactly sixteen bytes. WRITE ONLY: there is no read arm anywhere, and MESG_REQUEST for 0xF2 answers ANTW_INVALID_MESSAGE rather than a key. NOT checked against other channels: the host gives each live channel a distinct root or base device number, or two channels given one epoch by 0xF3 share a keystream (docs/radiant-security.md sec 3.5). On a MASTER, REFUSED with ANTW_CHANNEL_IN_WRONG_STATE while host acknowledged data or a burst is in flight. A different root (a real rekey) on a keyed, secured master takes back the slot and acknowledgement payload built under the old key before this answers, as a changed 0xF1 does; the channel is then pending until 0xF3. The root already installed (a retry) changes nothing. On TI the take-back's RF_flushCmd is asynchronous, so a frame already on the air may complete.",
+        "desc": "Install the one 16-byte root key for a channel. [0] channel; [1] key length in bits, 128 and nothing else in v1; [2..17] the key. Everything else - K_enc, K_auth, K_id, K_cmd - is derived from it, so a pairing moves exactly sixteen bytes. WRITE ONLY: there is no read arm anywhere, and MESG_REQUEST for 0xF2 answers RADIANT_WIRE_INVALID_MESSAGE rather than a key. NOT checked against other channels: the host gives each live channel a distinct root or base device number, or two channels given one epoch by 0xF3 share a keystream (docs/radiant-security.md sec 3.5). On a MASTER, REFUSED with RADIANT_WIRE_CHANNEL_IN_WRONG_STATE while host acknowledged data or a burst is in flight. A different root (a real rekey) on a keyed, secured master takes back the slot and acknowledgement payload built under the old key before this answers, as a changed 0xF1 does; the channel is then pending until 0xF3. The root already installed (a retry) changes nothing. On TI the take-back's RF_flushCmd is asynchronous, so a frame already on the air may complete.",
     },
     0xF3: {
         "name": 'MESG_RADIANT_EPOCH_ID',
         "direction": 'h2d',
         "payload_len": 14,
-        "desc": "Set the epoch and its time anchor. [0] channel; [1] flags, bit 0 = the epoch is coarse real time (minutes since the RadiANT date) rather than a bare ordinal; [2..5] epoch (u32 LE); [6..13] microseconds into that epoch (u64 LE), which is the phase a receiver derives the slot counter from rather than from arrival history; it may exceed the dongle's uptime (the anchor then lies before its boot). REFUSES an epoch less than or equal to the current one, refuses epochs near 0xFFFFFFFF so a counter wrap always has headroom, and refuses a phase of more than INT32_MAX channel periods or whose whole wraps would pass that headroom, changing nothing. No transform enables until this has been set after a reset: a reboot that restarts the counter under an unchanged epoch is a two-time pad for X_CONF and a full session replay against X_AUTH. WRITE ONLY: MESG_REQUEST for 0xF3 answers ANTW_INVALID_MESSAGE. The epoch, the expected slot index and the armed state read back through 0xF4; the exact phase and the real-time flag are not retained, so nothing could echo them.",
+        "desc": "Set the epoch and its time anchor. [0] channel; [1] flags, bit 0 = the epoch is coarse real time (minutes since the RadiANT date) rather than a bare ordinal; [2..5] epoch (u32 LE); [6..13] microseconds into that epoch (u64 LE), which is the phase a receiver derives the slot counter from rather than from arrival history; it may exceed the dongle's uptime (the anchor then lies before its boot). REFUSES an epoch less than or equal to the current one, refuses epochs near 0xFFFFFFFF so a counter wrap always has headroom, and refuses a phase of more than INT32_MAX channel periods or whose whole wraps would pass that headroom, changing nothing. No transform enables until this has been set after a reset: a reboot that restarts the counter under an unchanged epoch is a two-time pad for X_CONF and a full session replay against X_AUTH. WRITE ONLY: MESG_REQUEST for 0xF3 answers RADIANT_WIRE_INVALID_MESSAGE. The epoch, the expected slot index and the armed state read back through 0xF4; the exact phase and the real-time flag are not retained, so nothing could echo them.",
     },
     0xF4: {
         "name": 'MESG_RADIANT_SEC_STATUS_ID',

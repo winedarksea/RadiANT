@@ -384,7 +384,7 @@ the analyser also tests for.
    that software has to mask by hand is how bit 3 gets forgotten.
 6. **Nothing in the frame can carry a burst sequence above 1**, so any design
    that assumed a 3-bit on-air sequence - including the serial protocol's
-   own 2-bit `ANTW_BURST_HEADER_SEQ_MASK` - is a serial-side concept that
+   own 2-bit `RADIANT_WIRE_BURST_HEADER_SEQ_MASK` - is a serial-side concept that
    must be translated, not forwarded.
 7. **A master's first transmission is one channel period after open** (see
    *Readings that stand from the two-radio runs* below) - `radiant_channel.c`

@@ -29,10 +29,10 @@ Division of labour between this file and the header:
   is the wrong place to say them once.
 
 ```
-src/ant_serial_bridge.c        unchanged logic; speaks only ANTW_* / antr_*
+src/ant_serial_bridge.c        unchanged logic; speaks only RADIANT_WIRE_* / antr_*
         |
    src/ant_radio.h             the 50-function contract     (antr_*)
-   src/ant_wire.h              the protocol constants       (ANTW_*)
+   radiant/include/radiant/radiant_wire.h              the protocol constants       (RADIANT_WIRE_*)
         |
    +----+--------------+---------------------+
    |                   |                     |
@@ -48,7 +48,7 @@ ant_radio_sdk_ant.c  ant_radio_stub.c    radiant/
 ### 1. The return value is the wire byte
 
 `antr_err_t` is a `uint8_t`, and the value **is** the response code the serial protocol puts on
-the wire. `0` is `ANTW_RESPONSE_NO_ERROR`; anything else is one of the `ANTW_*` channel response
+the wire. `0` is `RADIANT_WIRE_RESPONSE_NO_ERROR`; anything else is one of the `RADIANT_WIRE_*` channel response
 codes and the bridge forwards it to the host unchanged.
 
 A backend must not invent an error space. A code the host does not recognise is worse than a
@@ -73,11 +73,11 @@ it is the reason the prose does not try.
 Two distinctions in the sets are load-bearing and observable from the host, so they are called out
 here rather than left to be discovered:
 
-- **Bad channel number is `ANTW_INVALID_MESSAGE`; bad parameter is
-  `ANTW_INVALID_PARAMETER_PROVIDED`.** `antr_sdu_mask_config()` returns both, one per argument
+- **Bad channel number is `RADIANT_WIRE_INVALID_MESSAGE`; bad parameter is
+  `RADIANT_WIRE_INVALID_PARAMETER_PROVIDED`.** `antr_sdu_mask_config()` returns both, one per argument
   (`src/ant_radio_stub.c:578-592` is the existing reference behaviour).
-- **`ANTW_CHANNEL_IN_WRONG_STATE` is for a channel that exists in the wrong state;
-  `ANTW_CHANNEL_NOT_OPENED` is for a data-transfer call on a channel that is not on air.** They
+- **`RADIANT_WIRE_CHANNEL_IN_WRONG_STATE` is for a channel that exists in the wrong state;
+  `RADIANT_WIRE_CHANNEL_NOT_OPENED` is for a data-transfer call on a channel that is not on air.** They
   are not interchangeable.
 
 ### 3. `const` on the way in, ownership only for burst
@@ -102,9 +102,9 @@ link error rather than a silent behaviour change. Two names are not:
 | `ant_pending_transmit()` | `antr_pending_transmit_get()` | A verb-less name sitting next to `antr_pending_transmit_clear()` is how a getter gets called for its side effects. |
 | `ant_burst_handler_request()` | `antr_burst_tx()` | It belongs with `antr_broadcast_message_tx()` and `antr_acknowledge_message_tx()`, and it is the one function with a buffer-ownership contract — its name should not be the vaguest in the file. |
 
-### 5. Sizes come from `ant_wire.h`
+### 5. Sizes come from `radiant_wire.h`
 
-The header names sizes as `ANTW_*` constants rather than defining competing ones, because two
+The header names sizes as `RADIANT_WIRE_*` constants rather than defining competing ones, because two
 sources of truth for a buffer length is how a reply gets framed one byte short. `ant_radio.h`
 defines exactly three constants of its own — the `ANTR_BURST_SEGMENT_*` flags — and they are the
 one thing here with no wire counterpart at all: the serial protocol carries a burst *sequence*
@@ -123,14 +123,14 @@ repository, so `protocol/ant_wire.yaml` recorded them as unresolved and
 placeholders is K1's and it is worth keeping: **an unresolved constant may never appear, even
 conditionally, in a file that has to build with no sdk-ant present** — a `#define` reaching into
 sdk-ant from the stub would reintroduce exactly the dependency the stub exists to disprove, and it
-would do it invisibly. The shim recovered all three; they are generated into `src/ant_wire.h` now
+would do it invisibly. The shim recovered all three; they are generated into `radiant/include/radiant/radiant_wire.h` now
 and the placeholders are gone.
 
 | Constant | Placeholder | Real value | Consequence of the guess |
 |---|---|---|---|
-| `ANTW_SDU_MASK_ACK_CONFIG_BIT` | `0x80` | `0x80` | none — guessed correctly |
-| `ANTW_MAX_SUPPORTED_ENCRYPTION_MODE` | `1` | `2` | a stub build under-reported the supported encryption mode and refused `antr_crypto_channel_enable(.., 2, ..)` |
-| `ANTW_MESG_CONFIG_ADV_BURST_REQ_CAPABILITIES_SIZE` | `2`, behind an `#ifdef` on the generated name | `4` | none in practice — the `#ifdef` tracked the generated constant the moment it landed, and the LEN byte on that reply is the bridge's, not the stub's |
+| `RADIANT_WIRE_SDU_MASK_ACK_CONFIG_BIT` | `0x80` | `0x80` | none — guessed correctly |
+| `RADIANT_WIRE_MAX_SUPPORTED_ENCRYPTION_MODE` | `1` | `2` | a stub build under-reported the supported encryption mode and refused `antr_crypto_channel_enable(.., 2, ..)` |
+| `RADIANT_WIRE_MESG_CONFIG_ADV_BURST_REQ_CAPABILITIES_SIZE` | `2`, behind an `#ifdef` on the generated name | `4` | none in practice — the `#ifdef` tracked the generated constant the moment it landed, and the LEN byte on that reply is the bridge's, not the stub's |
 
 The third one is the one earlier revisions of this document missed: it was never listed alongside
 the other two, even though the stub guarded it the same way — at what was
@@ -139,11 +139,11 @@ Two of three guesses were right,
 which is the argument for the rule rather than against it — the one that was wrong was wrong
 silently, and only the shim could tell.
 
-**Two size constants in `src/ant_wire.h` are wrong today and must not be used to size a buffer
-until they are fixed.** `ANTW_MAX_SIZE_VALUE` is generated as 20, derived from the longest
+**Two size constants in `radiant/include/radiant/radiant_wire.h` are wrong today and must not be used to size a buffer
+until they are fixed.** `RADIANT_WIRE_MAX_SIZE_VALUE` is generated as 20, derived from the longest
 *inbound* message the parser sees (`MESG_SET_ENCRYPT_INFO` with 19 bytes of custom user data), and
-`ANTW_MAX_FRAME_SIZE` follows it at 24. But an advanced-burst data message is one channel byte plus
-`ANTW_ADV_BURST_BLOCK_MAX` (24) bytes, so the LEN byte reaches **25**, and
+`RADIANT_WIRE_MAX_FRAME_SIZE` follows it at 24. But an advanced-burst data message is one channel byte plus
+`RADIANT_WIRE_ADV_BURST_BLOCK_MAX` (24) bytes, so the LEN byte reaches **25**, and
 `src/usb_ant_class.c:30` independently states the maximum is 38 with a 42-byte frame. Sizing the
 parser's `msg_body[]` from 20 truncates every 24-byte burst packet silently; sizing a frame buffer
 from 24 writes the checksum past the end. See the change request in this wave's report — the fix
@@ -191,7 +191,7 @@ Constraints on a backend calling it, restated from the header because they are o
    itself, and it relies on that: it does not lock around the burst semaphore.
 4. The implementation may not block; it may run on the backend's thread, work queue or callback
    context. The bridge honours this by queueing to a writer thread rather than sending inline.
-5. Three `ANTW_EVENT_*` codes carry buffer-ownership meaning as well as status. See below.
+5. Three `RADIANT_WIRE_EVENT_*` codes carry buffer-ownership meaning as well as status. See below.
 
 ---
 
@@ -204,9 +204,9 @@ inbound event path (`:1002-1019`):
 
 | Event | Meaning |
 |---|---|
-| `ANTW_EVENT_TRANSFER_NEXT_DATA_BLOCK` | done with this block, send the next one |
-| `ANTW_EVENT_TRANSFER_TX_COMPLETED` | the whole transfer finished |
-| `ANTW_EVENT_TRANSFER_TX_FAILED` | the whole transfer failed |
+| `RADIANT_WIRE_EVENT_TRANSFER_NEXT_DATA_BLOCK` | done with this block, send the next one |
+| `RADIANT_WIRE_EVENT_TRANSFER_TX_COMPLETED` | the whole transfer finished |
+| `RADIANT_WIRE_EVENT_TRANSFER_TX_FAILED` | the whole transfer failed |
 
 plus a synchronous release when `antr_burst_tx()` returns non-zero, because a rejected block was
 never accepted.
@@ -226,7 +226,7 @@ never accepted.
   packet overwrites a buffer the radio is transmitting from.
 
 **Why this gets its own section.** Missing B3 does not fail loudly. The bridge's `k_sem_take()`
-waits its full 1000 ms timeout, then answers the host with `ANTW_TRANSFER_IN_PROGRESS` — so a
+waits its full 1000 ms timeout, then answers the host with `RADIANT_WIRE_TRANSFER_IN_PROGRESS` — so a
 burst does not break, it stalls **one second per packet** and then reports a plausible-looking
 error. An ANT-FS transfer that should take two seconds takes ten minutes, and nothing in the
 build, the log or the host library says why.
@@ -272,7 +272,7 @@ phasing its slot away from another channel's, and for `radiant`'s own scheduler.
 ## Ordering and state — what a backend may assume about call sequence
 
 The bridge does not enforce ordering; it forwards what the host sends. A backend must therefore
-police its own state machine and return `ANTW_CHANNEL_IN_WRONG_STATE` rather than misbehaving.
+police its own state machine and return `RADIANT_WIRE_CHANNEL_IN_WRONG_STATE` rather than misbehaving.
 
 ```
 UNASSIGNED --antr_channel_assign()--> ASSIGNED --antr_channel_open*()--> SEARCHING
@@ -286,14 +286,14 @@ UNASSIGNED --antr_channel_assign()--> ASSIGNED --antr_channel_open*()--> SEARCHI
   and `antr_auto_freq_hop_table_set()` all retune the radio, and retuning underneath a live host
   session is worse than refusing.
 - **`antr_channel_open_with_offset()` requires the channel ID to have been set** — otherwise
-  `ANTW_CHANNEL_ID_NOT_SET`.
+  `RADIANT_WIRE_CHANNEL_ID_NOT_SET`.
 - **`antr_channel_unassign()` requires the channel to be closed.** Silently closing it first would
-  swallow the `ANTW_EVENT_CHANNEL_CLOSED` the host is waiting on.
+  swallow the `RADIANT_WIRE_EVENT_CHANNEL_CLOSED` the host is waiting on.
 - **`antr_channel_ext_assign_set()` (added 2026-11-21, not in the stub table below) requires an
   assigned, closed channel** and changes only the extended assignment byte; ID, RF, period, ID
   list, search settings and security context stay. The bridge's Open RX Scan Mode (0x5B) uses it
   so a keyed channel 0 keeps its keys and policy. A backend without an in-place change returns
-  `ANTW_INVALID_MESSAGE`, and the bridge then falls back to unassign and reassign. sdk-ant and the
+  `RADIANT_WIRE_INVALID_MESSAGE`, and the bridge then falls back to unassign and reassign. sdk-ant and the
   stub do that, so sdk-ant's conformance transcript is unchanged.
 - **`antr_channel_radio_tx_power_set()` requires an assigned channel, and that is the constraint
   that shapes the bridge.** Hosts set power *before* assigning anything, so the bridge holds the
@@ -327,7 +327,7 @@ recursively from inside a call the bridge made.
 
 ## Permanent limitations — documented, not to-do
 
-**`antr_network_address_set()` for an unknown key returns `ANTW_INVALID_PARAMETER_PROVIDED`, and
+**`antr_network_address_set()` for an unknown key returns `RADIANT_WIRE_INVALID_PARAMETER_PROVIDED`, and
 always will.** The on-air network address is derived from the 8-byte key by a function that is not
 public. This project will not recover it: fitting it from samples is the activity most likely to
 be characterised as reverse-engineering, and the clean-room policy rules it out.
@@ -350,7 +350,7 @@ Two consequences worth writing down:
 **ANT+'s own AES-CTR encryption is not expected of a clean-room backend.** `ANT_DLL.dll` exports no
 encryption call at all, so no Windows host can reach it; the mode is malleable and unauthenticated;
 and it reserves RAM shared with the plain channels. The honest implementation is to accept the
-reads, return `ANTW_INVALID_PARAMETER_PROVIDED` from `antr_crypto_channel_enable()` for any
+reads, return `RADIANT_WIRE_INVALID_PARAMETER_PROVIDED` from `antr_crypto_channel_enable()` for any
 non-zero mode, and say so. The four crypto functions still have to *exist* — a backend stands in
 for `libant.a`, which exports them regardless — and `antr_capabilities_get()` still advertises the
 bit, because the bit describes what the radio layer can do rather than what the bridge exposes.
@@ -533,9 +533,9 @@ sdk-ant, which is what makes the boundary a scope rule rather than a promise.
      `struct antr_msg` from `ANT_MESSAGE_ucSize` / `ucMesgID` / `aucMesgData` and calls
      `antr_on_message()`. About ten lines. The `struct antr_msg` may be a stack local; its `data`
      pointer may point straight into the event, since the bridge copies before returning.
-- **The `BUILD_ASSERT` block is the point of this file**, not a garnish. Assert every `ANTW_*`
+- **The `BUILD_ASSERT` block is the point of this file**, not a garnish. Assert every `RADIANT_WIRE_*`
   constant against its `MESG_*` counterpart, the three `ANTR_BURST_SEGMENT_*` values against
-  sdk-ant's `BURST_SEGMENT_*`, and `ANTW_ADV_BURST_BLOCK_MAX` against sdk-ant's advanced-burst
+  sdk-ant's `BURST_SEGMENT_*`, and `RADIANT_WIRE_ADV_BURST_BLOCK_MAX` against sdk-ant's advanced-burst
   maximum.
   If a signature drifts the file stops compiling; if a constant drifts the assert fires. Both
   checks exist only where sdk-ant is present — exactly where they can be checked — and that is
@@ -549,11 +549,11 @@ sdk-ant, which is what makes the boundary a scope rule rather than a promise.
   `ant_cb_register()` together with the `stub_evt_cb` static it sets — with the inversion there is
   nothing to register and nothing to call.
 - Replace `#include "ant_interface.h"` / `"ant_parameters.h"` / `"ant_init.h"` with
-  `#include "ant_radio.h"` and `#include "ant_wire.h"`. That include set going away is the whole
+  `#include "ant_radio.h"` and `#include <radiant/radiant_wire.h>`. That include set going away is the whole
   point of the exercise.
-- `NRF_ANT_SUCCESS` becomes `ANTW_RESPONSE_NO_ERROR`; `NRF_ANT_ERROR_INVALID_PARAMETER_PROVIDED`
-  becomes `ANTW_INVALID_PARAMETER_PROVIDED`; `NRF_ANT_ERROR_INVALID_MESSAGE` becomes
-  `ANTW_INVALID_MESSAGE`. The offset is gone, not renamed — see the error convention above.
+- `NRF_ANT_SUCCESS` becomes `RADIANT_WIRE_RESPONSE_NO_ERROR`; `NRF_ANT_ERROR_INVALID_PARAMETER_PROVIDED`
+  becomes `RADIANT_WIRE_INVALID_PARAMETER_PROVIDED`; `NRF_ANT_ERROR_INVALID_MESSAGE` becomes
+  `RADIANT_WIRE_INVALID_MESSAGE`. The offset is gone, not renamed — see the error convention above.
 - **Do not move the prose header comment** at the top of the file. It is read at the moment
   someone edits the file, and it explains what the stub is for; docs link to it.
 - The existing note at `src/ant_radio_stub.c:410-421` — that the stub never raises

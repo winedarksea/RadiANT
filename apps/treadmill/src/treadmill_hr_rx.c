@@ -21,7 +21,7 @@
 #include <zephyr/logging/log.h>
 
 #include "ant_radio.h"
-#include "ant_wire.h"
+#include <radiant/radiant_wire.h>
 #include "profile_hr.h"
 #include "treadmill_hr_rx.h"
 #include "treadmill_state.h"
@@ -112,9 +112,9 @@ static int configure_channel(uint8_t channel)
 {
 	antr_err_t rc;
 
-	rc = antr_channel_assign(channel, ANTW_CHANNEL_TYPE_SLAVE, HR_NETWORK,
+	rc = antr_channel_assign(channel, RADIANT_WIRE_CHANNEL_TYPE_SLAVE, HR_NETWORK,
 				 0u);
-	if (rc != ANTW_RESPONSE_NO_ERROR) {
+	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("hr ch%u assign: %d", channel, (int)rc);
 		return -EIO;
 	}
@@ -123,19 +123,19 @@ static int configure_channel(uint8_t channel)
 	 * field means "any". The device TYPE is not wildcarded - a slave that
 	 * matched any type would acquire the treadmill's own FE-C master. */
 	rc = antr_channel_id_set(channel, 0u, PROFILE_HR_DEVICE_TYPE, 0u);
-	if (rc != ANTW_RESPONSE_NO_ERROR) {
+	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("hr ch%u channel id: %d", channel, (int)rc);
 		return -EIO;
 	}
 
 	rc = antr_channel_period_set(channel, HR_PERIOD);
-	if (rc != ANTW_RESPONSE_NO_ERROR) {
+	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("hr ch%u period: %d", channel, (int)rc);
 		return -EIO;
 	}
 
 	rc = antr_channel_radio_freq_set(channel, HR_RF_FREQ);
-	if (rc != ANTW_RESPONSE_NO_ERROR) {
+	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("hr ch%u rf freq: %d", channel, (int)rc);
 		return -EIO;
 	}
@@ -152,7 +152,7 @@ static int configure_channel(uint8_t channel)
 	 * implement it refuses here, which costs the "nearest strap" property
 	 * and nothing else, so it is not fatal. */
 	if (antr_prox_search_set(channel, prox_threshold, 0u) !=
-	    ANTW_RESPONSE_NO_ERROR) {
+	    RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_WRN("hr: no proximity search on this backend - the first "
 			"strap heard will be acquired, near or far");
 	}
@@ -161,8 +161,8 @@ static int configure_channel(uint8_t channel)
 	 * what names the strap in the log and the RSSI is what the hold-down
 	 * is measured in; without them this module still works and simply
 	 * cannot say which strap it has. */
-	(void)antr_lib_config_set(ANTW_LIB_CONFIG_MESG_OUT_INC_DEVICE_ID |
-				  ANTW_LIB_CONFIG_MESG_OUT_INC_RSSI);
+	(void)antr_lib_config_set(RADIANT_WIRE_LIB_CONFIG_MESG_OUT_INC_DEVICE_ID |
+				  RADIANT_WIRE_LIB_CONFIG_MESG_OUT_INC_RSSI);
 
 	return 0;
 }
@@ -179,7 +179,7 @@ int treadmill_hr_rx_start(uint8_t channel)
 	}
 
 	rc = antr_channel_open(channel);
-	if (rc != ANTW_RESPONSE_NO_ERROR) {
+	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("hr ch%u open: %d", channel, (int)rc);
 		return -EIO;
 	}
@@ -221,7 +221,7 @@ static void research_after_close(void)
 	research_pending = false;
 	(void)antr_prox_search_set(hr_channel, prox_threshold, 0u);
 	rc = antr_channel_open(hr_channel);
-	if (rc == ANTW_RESPONSE_NO_ERROR) {
+	if (rc == RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_INF("heart rate: search timed out, floor now bin %u",
 			prox_threshold);
 	} else {
@@ -273,19 +273,19 @@ bool treadmill_hr_rx_message(const struct antr_msg *msg)
 		return false;
 	}
 
-	if (msg->id == ANTW_MESG_RESPONSE_EVENT_ID &&
-	    msg->len >= ANTW_MESG_RESPONSE_EVENT_SIZE &&
+	if (msg->id == RADIANT_WIRE_MESG_RESPONSE_EVENT_ID &&
+	    msg->len >= RADIANT_WIRE_MESG_RESPONSE_EVENT_SIZE &&
 	    msg->data[0] == hr_channel) {
 		switch (msg->data[2]) {
-		case ANTW_EVENT_RX_SEARCH_TIMEOUT:
+		case RADIANT_WIRE_EVENT_RX_SEARCH_TIMEOUT:
 			relax_on_timeout();
 			break;
-		case ANTW_EVENT_CHANNEL_CLOSED:
+		case RADIANT_WIRE_EVENT_CHANNEL_CLOSED:
 			if (research_pending) {
 				research_after_close();
 			}
 			break;
-		case ANTW_EVENT_RX_FAIL_GO_TO_SEARCH:
+		case RADIANT_WIRE_EVENT_RX_FAIL_GO_TO_SEARCH:
 			/* The strap has gone (about 2 s of misses), not dropped
 			 * a packet: stop reporting its last bpm for the whole
 			 * search (B2-2). The proximity floor is untouched. */
@@ -298,8 +298,8 @@ bool treadmill_hr_rx_message(const struct antr_msg *msg)
 		return true;
 	}
 
-	if ((msg->id != ANTW_MESG_BROADCAST_DATA_ID &&
-	     msg->id != ANTW_MESG_EXT_BROADCAST_DATA_ID) ||
+	if ((msg->id != RADIANT_WIRE_MESG_BROADCAST_DATA_ID &&
+	     msg->id != RADIANT_WIRE_MESG_EXT_BROADCAST_DATA_ID) ||
 	    msg->len < 9u || msg->data[0] != hr_channel) {
 		return false;
 	}

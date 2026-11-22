@@ -34,7 +34,7 @@
 # product - the serial bridge, its transports, LEDs and boot sequence. The
 # module does not know any of it exists.
 
-# ant/ carries forwarding headers for ant_radio.h and ant_wire.h, the antr_*
+# ant/ carries forwarding headers for ant_radio.h and radiant_wire.h, the antr_*
 # contract and the wire constants, so bare includes keep working. PUBLIC (via
 # target_include_directories(app ...)) so a consuming application's own
 # sources (radiant-adjacent test doubles, apps/dongle_ti's not-yet-written

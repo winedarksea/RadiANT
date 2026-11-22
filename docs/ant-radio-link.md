@@ -382,7 +382,7 @@ throughout and goes to 1 **exactly once, on the final packet** — the same shap
 9-packet bursts. That is bit 5 doing precisely what the table above says it does, and it is why
 "last" is `[measured]` rather than inferred. What holds still across a burst is bits 7:6.
 
-That also settles what part 1 could not: `ANTW_BURST_HEADER_SEQ_MASK`, the serial protocol's own
+That also settles what part 1 could not: `RADIANT_WIRE_BURST_HEADER_SEQ_MASK`, the serial protocol's own
 2-bit sequence, is a **serial-side concept that must be translated, not forwarded**.
 
 ### Acknowledged data *is* a one-packet burst

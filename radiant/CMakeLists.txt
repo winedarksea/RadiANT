@@ -39,7 +39,7 @@
 # include/ carries the namespaced <radiant/...> headers - and nothing
 # else. There used to be a second directory here, ../src, reached for
 # src/radiant_event.c and src/radiant_api.c's output format (struct antr_msg,
-# antr_on_message(), the generated ANTW_* wire constants) - a self-containment
+# antr_on_message(), the generated RADIANT_WIRE_* wire constants) - a self-containment
 # violation for a module meant to be dropped into a project with nothing else
 # from this repository on its include path. radiant_msg.h and radiant_wire.h
 # (both in include/) are what replaced it: radiant_event.c now produces struct
@@ -47,10 +47,10 @@
 # headers' own comments for the full story.
 #
 # EXPOSED BEFORE THE CONFIG_RADIANT GUARD, unconditionally, and that is not an
-# accident either: radiant/include/radiant/ant_wire.h - the ANTW_* header every ANT_RADIO
-# backend compiles, sdk_ant included - is generated as a thin alias of
-# radiant_wire.h rather than a second independently-generated copy of the same
-# wire constants (see that file's own header). A header of pure constants
+# accident either: radiant/include/radiant/radiant_wire.h is the one header of
+# wire constants every ANT_RADIO backend compiles, sdk_ant included, so there
+# is no second independently-generated copy of the same wire constants (see
+# that file's own header). A header of pure constants
 # carries no object code and violates nothing the CONFIG_RADIANT gate below
 # protects; hiding the *path* here would just force a second copy of the same
 # values back into existence, which is the drift this design exists to avoid.

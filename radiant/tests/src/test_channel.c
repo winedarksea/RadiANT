@@ -61,7 +61,7 @@ BUILD_ASSERT(RADIANT_CHANNEL_DRIFT_WORST_US == 25u, "drift budget moved");
 #define TEST_DEVTYPE   0x0Bu
 #define TEST_TRANSTYPE 5u
 
-/* Channel types, spelled here rather than pulled from src/ant_wire.h: this
+/* Channel types, spelled here rather than pulled from radiant/include/radiant/radiant_wire.h: this
  * application does not include the serial layer's generated header, and
  * radiant_channel.h asserts the master bit against it wherever it is in scope. */
 #define TYPE_SLAVE          0x00u

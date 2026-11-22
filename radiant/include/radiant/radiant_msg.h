@@ -41,8 +41,7 @@ extern "C" {
  * RADIANT_WIRE_* channel response code, verbatim - the same convention
  * antr_err_t documents in src/ant_radio.h, and value-compatible with it by
  * construction, since both ultimately name the same generated constants (see
- * radiant/include/radiant/radiant_wire.h and src/ant_wire.h's
- * aliases of it).
+ * radiant/include/radiant/radiant_wire.h).
  */
 typedef uint8_t radiant_msg_err_t;
 

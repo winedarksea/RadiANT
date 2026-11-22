@@ -439,8 +439,8 @@ static void chan_begin_close(uint8_t channel, struct chan *c)
  * off. */
 /*
  * MESG_ASSIGN_CHANNEL's extended-assignment "always search" bit, named in
- * protocol/ant_wire.yaml as ANTW_EXT_PARAM_ALWAYS_SEARCH. This file is below
- * the wire layer and does not include ant_wire.h, so the value is restated here
+ * protocol/ant_wire.yaml as RADIANT_WIRE_EXT_PARAM_ALWAYS_SEARCH. This file is below
+ * the wire layer and does not include radiant_wire.h, so the value is restated here
  * the same way radiant_api.c restates it as API_EXT_ASSIGN_BACKGROUND_SCAN -
  * the byte reaches both of them through radiant_channel_assign() unchanged.
  */
@@ -464,7 +464,7 @@ static radiant_time_t search_deadline(const struct chan *c)
 	/*
 	 * A BACKGROUND SCAN HAS NO DEADLINE, WHATEVER THE TIMEOUT BYTES SAY.
 	 *
-	 * ANTW_EXT_PARAM_ALWAYS_SEARCH means the channel is a discovery channel
+	 * RADIANT_WIRE_EXT_PARAM_ALWAYS_SEARCH means the channel is a discovery channel
 	 * the host intends to leave open indefinitely. Nothing ever acquires on
 	 * it (see api_search_acquired()'s scan-mode branch), so the ordinary
 	 * search-timeout machinery - a deadline meant to stop hunting for one

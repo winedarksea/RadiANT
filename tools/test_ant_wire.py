@@ -10,7 +10,7 @@ no `pyusb`.
 
 ## Why this file exists, and the one rule for adding to it
 
-`protocol/ant_wire.yaml` generates both `src/ant_wire.h` and
+`protocol/ant_wire.yaml` generates both `radiant/include/radiant/radiant_wire.h` and
 `tools/ant_wire.py`, so the *constants* cannot drift apart. What generation
 cannot check is a **rule** - and a rule is exactly what firmware and tools
 both got wrong once: the parser seeded its running XOR at `0` instead of at

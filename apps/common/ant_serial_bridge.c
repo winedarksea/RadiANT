@@ -7,7 +7,7 @@
  * Inbound (host → chip):
  *   Parser thread drains ant_rx_ring_buf byte by byte through a state
  *   machine, validates the XOR checksum, and calls the matching antr_*
- *   function. Each command gets an ANTW_MESG_RESPONSE_EVENT_ID (0x40) ack.
+ *   function. Each command gets an RADIANT_WIRE_MESG_RESPONSE_EVENT_ID (0x40) ack.
  *
  * Outbound (chip → host):
  *   The radio backend calls antr_on_message() - implemented here - for every
@@ -24,7 +24,7 @@
  * bug once survived a passing test suite.
  *
  * Nothing here names a symbol from sdk-ant: protocol constants come from
- * src/ant_wire.h (ANTW_*) and every radio call goes through src/ant_radio.h
+ * <radiant/radiant_wire.h> (RADIANT_WIRE_*) and every radio call goes through src/ant_radio.h
  * (antr_*), which is what lets this file build with no sdk-ant present.
  */
 
@@ -48,7 +48,7 @@
 #endif
 #include "ant_reset_cause.h"
 #include "ant_serial_bridge.h"
-#include "ant_wire.h"
+#include <radiant/radiant_wire.h>
 
 LOG_MODULE_REGISTER(ant_bridge, LOG_LEVEL_INF);
 
@@ -85,15 +85,15 @@ static __noinline uint8_t key_msg_keep(uint8_t id, const uint8_t *body,
 				       size_t len)
 {
 	switch (id) {
-	case ANTW_MESG_NETWORK_KEY_ID:
-	case ANTW_MESG_SET_ENCRYPT_KEY_ID:
+	case RADIANT_WIRE_MESG_NETWORK_KEY_ID:
+	case RADIANT_WIRE_MESG_SET_ENCRYPT_KEY_ID:
 		return 1;
-	case ANTW_MESG_SET_ENCRYPT_INFO_ID:
-		return (len >= 1 && body[0] == ANTW_ENCRYPTION_INFO_SET_RNG_SEED)
+	case RADIANT_WIRE_MESG_SET_ENCRYPT_INFO_ID:
+		return (len >= 1 && body[0] == RADIANT_WIRE_ENCRYPTION_INFO_SET_RNG_SEED)
 			? 1 : KEY_MSG_NONE;
-	case ANTW_MESG_RADIANT_SET_KEY_ID:
+	case RADIANT_WIRE_MESG_RADIANT_SET_KEY_ID:
 		return 2;
-	case ANTW_MESG_RADIANT_PAIRING_ID:
+	case RADIANT_WIRE_MESG_RADIANT_PAIRING_ID:
 		return 0;
 	default:
 		return KEY_MSG_NONE;
@@ -124,7 +124,7 @@ static __noinline uint8_t key_msg_keep(uint8_t id, const uint8_t *body,
 static void trace_frame(const char *dir, const uint8_t *f, size_t n)
 {
 	static const char hex[] = "0123456789abcdef";
-	char line[3 * ANTW_MAX_FRAME_SIZE + 1];
+	char line[3 * RADIANT_WIRE_MAX_FRAME_SIZE + 1];
 	size_t redact_from = n;
 	size_t o = 0;
 
@@ -136,7 +136,7 @@ static void trace_frame(const char *dir, const uint8_t *f, size_t n)
 		}
 	}
 
-	for (size_t i = 0; i < n && i < ANTW_MAX_FRAME_SIZE; i++) {
+	for (size_t i = 0; i < n && i < RADIANT_WIRE_MAX_FRAME_SIZE; i++) {
 		bool mask = i >= redact_from;	/* checksum included */
 
 		line[o++] = mask ? 'x' : hex[f[i] >> 4];
@@ -163,7 +163,7 @@ static void trace_frame(const char *dir, const uint8_t *f, size_t n)
  * defines the symbol (8) and is unchanged.
  */
 #ifndef CONFIG_ANT_TOTAL_CHANNELS_ALLOCATED
-#define CONFIG_ANT_TOTAL_CHANNELS_ALLOCATED (ANTW_BURST_HEADER_CHANNEL_MASK + 1)
+#define CONFIG_ANT_TOTAL_CHANNELS_ALLOCATED (RADIANT_WIRE_BURST_HEADER_CHANNEL_MASK + 1)
 #endif
 
 /* The transport - USB on either stack, or a bare UART - is declared in
@@ -251,13 +251,13 @@ static atomic_t evt_inflight;
 
 /* ── Frame helpers ─────────────────────────────────────────────────────────── */
 
-/* Build and transmit an ANTW_MESG_RESPONSE_EVENT_ID (0x40) reply. */
+/* Build and transmit an RADIANT_WIRE_MESG_RESPONSE_EVENT_ID (0x40) reply. */
 static void send_response(uint8_t ch, uint8_t msg_id, uint8_t code)
 {
 	uint8_t buf[7];
-	buf[0] = ANTW_SYNC_TX;                  /* 0xA4 */
-	buf[1] = ANTW_MESG_RESPONSE_EVENT_SIZE; /* 3 */
-	buf[2] = ANTW_MESG_RESPONSE_EVENT_ID;   /* 0x40 */
+	buf[0] = RADIANT_WIRE_SYNC_TX;                  /* 0xA4 */
+	buf[1] = RADIANT_WIRE_MESG_RESPONSE_EVENT_SIZE; /* 3 */
+	buf[2] = RADIANT_WIRE_MESG_RESPONSE_EVENT_ID;   /* 0x40 */
 	buf[3] = ch;
 	buf[4] = msg_id;
 	buf[5] = code;
@@ -268,14 +268,14 @@ static void send_response(uint8_t ch, uint8_t msg_id, uint8_t code)
 
 /* The startup message, with its reason byte.
  *
- * Two callers. The ANTW_MESG_SYSTEM_RESET_ID arm of dispatch() sends
- * ANTW_STARTUP_COMMAND_RESET (0x20) after antr_stack_reset(), and that is the
+ * Two callers. The RADIANT_WIRE_MESG_SYSTEM_RESET_ID arm of dispatch() sends
+ * RADIANT_WIRE_STARTUP_COMMAND_RESET (0x20) after antr_stack_reset(), and that is the
  * only reason it ever reports for a reset the host asked for.
  * ant_serial_bridge_announce_boot() sends the hardware reset cause once at
  * boot, on UART builds only - see there for why.
  *
  * On the commanded reset's 0x20, not zero: sending 0x00
- * (ANTW_STARTUP_POWER_ON_RESET) after a commanded reset told every host
+ * (RADIANT_WIRE_STARTUP_POWER_ON_RESET) after a commanded reset told every host
  * the stick had just cold-booted, which is exactly what a host watches this
  * byte to rule out: it is how an unexpected brown-out or watchdog reset is
  * told apart from the reset the host itself asked for.
@@ -287,8 +287,8 @@ static void send_response(uint8_t ch, uint8_t msg_id, uint8_t code)
  * support 0x20:
  *
  *   - Garmin's own header. ant_radio_sdk_ant.c asserts
- *     ANTW_EQ(STARTUP_COMMAND_RESET, RESET_CMD) and
- *     ANTW_EQ(STARTUP_POWER_ON_RESET, RESET_POR), so the vendor's own SDK
+ *     WIRE_EQ(STARTUP_COMMAND_RESET, RESET_CMD) and
+ *     WIRE_EQ(STARTUP_POWER_ON_RESET, RESET_POR), so the vendor's own SDK
  *     names 0x20 the commanded reset and 0x00 the power-on one. That is the
  *     field's meaning from the source that defines it.
  *   - Every host-side fixture here independently encodes 0x20 as the answer to
@@ -313,9 +313,9 @@ static void send_response(uint8_t ch, uint8_t msg_id, uint8_t code)
 static void send_startup(uint8_t reason, bool queued)
 {
 	uint8_t buf[5];
-	buf[0] = ANTW_SYNC_TX;
-	buf[1] = ANTW_MESG_STARTUP_MESG_SIZE;  /* 1 */
-	buf[2] = ANTW_MESG_STARTUP_MESG_ID;    /* 0x6F */
+	buf[0] = RADIANT_WIRE_SYNC_TX;
+	buf[1] = RADIANT_WIRE_MESG_STARTUP_MESG_SIZE;  /* 1 */
+	buf[2] = RADIANT_WIRE_MESG_STARTUP_MESG_ID;    /* 0x6F */
 	buf[3] = reason;
 	buf[4] = buf[0] ^ buf[1] ^ buf[2] ^ buf[3];
 	TRACE_TX(buf, sizeof(buf));
@@ -358,16 +358,16 @@ void ant_serial_bridge_announce_boot(void)
 
 static void send_message(uint8_t msg_id, const uint8_t *payload, uint8_t len)
 {
-	/* ANTW_MAX_FRAME_SIZE is ANTW_MAX_SIZE_VALUE + ANTW_MSG_OVERHEAD, the
-	 * largest frame that can legally exist. Never ANTW_MESG_MAX_SIZE: that
-	 * is built from ANTW_MAX_DATA_SIZE, which does not count the leading
+	/* RADIANT_WIRE_MAX_FRAME_SIZE is RADIANT_WIRE_MAX_SIZE_VALUE + RADIANT_WIRE_MSG_OVERHEAD, the
+	 * largest frame that can legally exist. Never RADIANT_WIRE_MESG_MAX_SIZE: that
+	 * is built from RADIANT_WIRE_MAX_DATA_SIZE, which does not count the leading
 	 * channel byte the LEN byte does, so it is one short and a full-length
 	 * message would write its checksum past the end.
 	 */
-	uint8_t buf[ANTW_MAX_FRAME_SIZE];
-	uint8_t xor = ANTW_SYNC_TX ^ len ^ msg_id;
+	uint8_t buf[RADIANT_WIRE_MAX_FRAME_SIZE];
+	uint8_t xor = RADIANT_WIRE_SYNC_TX ^ len ^ msg_id;
 
-	buf[0] = ANTW_SYNC_TX;
+	buf[0] = RADIANT_WIRE_SYNC_TX;
 	buf[1] = len;
 	buf[2] = msg_id;
 
@@ -397,9 +397,9 @@ static void send_message(uint8_t msg_id, const uint8_t *payload, uint8_t len)
 #if defined(CONFIG_ANT_DONGLE_RADIO_SDK_ANT) && \
 	!(defined(CONFIG_SOC_NRF52840) || defined(CONFIG_SOC_NRF52833) || \
 	  defined(CONFIG_SOC_NRF52820))
-#define ANT_DONGLE_TX_POWER_MAX ANTW_RADIO_TX_POWER_LVL_4
+#define ANT_DONGLE_TX_POWER_MAX RADIANT_WIRE_RADIO_TX_POWER_LVL_4
 #else
-#define ANT_DONGLE_TX_POWER_MAX ANTW_RADIO_TX_POWER_LVL_5
+#define ANT_DONGLE_TX_POWER_MAX RADIANT_WIRE_RADIO_TX_POWER_LVL_5
 #endif
 
 /* What a channel transmits at when the host never says (and after every
@@ -409,7 +409,7 @@ static void send_message(uint8_t msg_id, const uint8_t *payload, uint8_t len)
 #if defined(CONFIG_ANT_DONGLE_TX_POWER_BOOST)
 #define ANT_DONGLE_TX_POWER_DEFAULT ANT_DONGLE_TX_POWER_MAX
 #else
-#define ANT_DONGLE_TX_POWER_DEFAULT ANTW_RADIO_TX_POWER_LVL_3
+#define ANT_DONGLE_TX_POWER_DEFAULT RADIANT_WIRE_RADIO_TX_POWER_LVL_3
 #endif
 
 /* What each channel should transmit at, whether or not it is assigned yet.
@@ -420,7 +420,7 @@ static void send_message(uint8_t msg_id, const uint8_t *payload, uint8_t len)
  */
 static uint8_t tx_power[CONFIG_ANT_TOTAL_CHANNELS_ALLOCATED];
 
-/* Raw register value paired with ANTW_RADIO_TX_POWER_LVL_CUSTOM, held per
+/* Raw register value paired with RADIANT_WIRE_RADIO_TX_POWER_LVL_CUSTOM, held per
  * channel for the same reason. Meaningless unless the matching tx_power[]
  * entry has the custom bit set, and not portable across parts.
  */
@@ -447,13 +447,13 @@ static void tx_power_reset(void)
  * 2026-11-07 sensitivity ladder's 0 dBm rung on the 54L15 was really +4 and
  * failed its dial check. A host that never sets power is not affected by
  * this - it gets the boosted default from tx_power_reset(), not level 3.
- * ANTW_RADIO_TX_POWER_LVL_CUSTOM (0x80) names a raw register value, passed
+ * RADIANT_WIRE_RADIO_TX_POWER_LVL_CUSTOM (0x80) names a raw register value, passed
  * through untouched.
  */
 static uint8_t tx_power_resolve(uint8_t requested)
 {
 #if defined(CONFIG_ANT_DONGLE_TX_POWER_BOOST)
-	if (requested == ANTW_RADIO_TX_POWER_LVL_4) {
+	if (requested == RADIANT_WIRE_RADIO_TX_POWER_LVL_4) {
 		return ANT_DONGLE_TX_POWER_MAX;
 	}
 #endif
@@ -473,11 +473,11 @@ static void tx_power_apply(uint8_t ch)
 static void handle_request(const uint8_t *body, uint8_t len)
 {
 	antr_err_t err = 0;
-	uint8_t payload[ANTW_MAX_SIZE_VALUE] = {0};
+	uint8_t payload[RADIANT_WIRE_MAX_SIZE_VALUE] = {0};
 	uint16_t value16;
 
 	if (len < 2) {
-		send_response(0, ANTW_MESG_REQUEST_ID, ANTW_INVALID_MESSAGE);
+		send_response(0, RADIANT_WIRE_MESG_REQUEST_ID, RADIANT_WIRE_INVALID_MESSAGE);
 		return;
 	}
 	uint8_t ch     = body[0];
@@ -485,7 +485,7 @@ static void handle_request(const uint8_t *body, uint8_t len)
 
 	switch (req_id) {
 #if defined(CONFIG_ANT_DONGLE_HEALTH_COUNTERS)
-	case ANTW_MESG_RADIANT_HEALTH_ID: {
+	case RADIANT_WIRE_MESG_RADIANT_HEALTH_ID: {
 		/*
 		 * REQUEST-ONLY, which is the whole reason it is safe to add at
 		 * all: nothing emits 0xF6 unsolicited, so a host that never
@@ -500,15 +500,15 @@ static void handle_request(const uint8_t *body, uint8_t len)
 		size_t n = ant_health_fill(payload, sizeof(payload));
 
 		if (n == 0u) {
-			err = (antr_err_t)ANTW_INVALID_MESSAGE;
+			err = (antr_err_t)RADIANT_WIRE_INVALID_MESSAGE;
 			break;
 		}
-		send_message(ANTW_MESG_RADIANT_HEALTH_ID, payload, (uint8_t)n);
+		send_message(RADIANT_WIRE_MESG_RADIANT_HEALTH_ID, payload, (uint8_t)n);
 		break;
 	}
 #endif
 #if defined(CONFIG_ANT_DONGLE_DIAG)
-	case ANTW_MESG_RADIANT_DIAG_ID:
+	case RADIANT_WIRE_MESG_RADIANT_DIAG_ID:
 		/*
 		 * Request-only, like 0xF6 beside it, and for the same reason:
 		 * a host that never asks sees an unchanged byte stream. The
@@ -516,14 +516,14 @@ static void handle_request(const uint8_t *body, uint8_t len)
 		 * page is device-wide.
 		 */
 		err = antr_diag_page(ch, payload);
-		if (err == (antr_err_t)ANTW_RESPONSE_NO_ERROR) {
-			send_message(ANTW_MESG_RADIANT_DIAG_ID, payload,
+		if (err == (antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR) {
+			send_message(RADIANT_WIRE_MESG_RADIANT_DIAG_ID, payload,
 				     (uint8_t)RADIANT_DIAG_BODY_LEN);
 		}
 		break;
 #endif
 
-	case ANTW_MESG_CAPABILITIES_ID: {
+	case RADIANT_WIRE_MESG_CAPABILITIES_ID: {
 		err = antr_capabilities_get(payload);
 #ifdef ANT_BRIDGE_SELF_CHANNEL_LOWEST
 		/*
@@ -543,20 +543,20 @@ static void handle_request(const uint8_t *body, uint8_t len)
 		BUILD_ASSERT(ANT_BRIDGE_SELF_CHANNEL_LOWEST > 0,
 			     "the self channels would leave the host no channel");
 		if (!err) {
-			payload[ANTW_CAPABILITIES_OFFSET_MAX_CHANNELS] =
-				MIN(payload[ANTW_CAPABILITIES_OFFSET_MAX_CHANNELS],
+			payload[RADIANT_WIRE_CAPABILITIES_OFFSET_MAX_CHANNELS] =
+				MIN(payload[RADIANT_WIRE_CAPABILITIES_OFFSET_MAX_CHANNELS],
 				    (uint8_t)ANT_BRIDGE_SELF_CHANNEL_LOWEST);
 		}
 #endif
 		if (!err) {
-			send_message(ANTW_MESG_CAPABILITIES_ID, payload,
-				     ANTW_MESG_CAPABILITIES_SIZE);
+			send_message(RADIANT_WIRE_MESG_CAPABILITIES_ID, payload,
+				     RADIANT_WIRE_MESG_CAPABILITIES_SIZE);
 		}
 		break;
 	}
 
-	case ANTW_MESG_GET_SERIAL_NUM_ID:
-	case ANTW_MESG_SERIAL_NUM_EXT_ID: {
+	case RADIANT_WIRE_MESG_GET_SERIAL_NUM_ID:
+	case RADIANT_WIRE_MESG_SERIAL_NUM_EXT_ID: {
 		/*
 		 * Both answered with the same 4-byte little-endian serial. 0xC6
 		 * appends one 0x00, the byte a real Garmin stick sends there and
@@ -571,172 +571,172 @@ static void handle_request(const uint8_t *body, uint8_t len)
 		err = antr_serial_number_get(&serial);
 		if (!err) {
 			sys_put_le32(serial, payload);
-			if (req_id == ANTW_MESG_GET_SERIAL_NUM_ID) {
-				send_message(ANTW_MESG_GET_SERIAL_NUM_ID, payload,
-					     ANTW_MESG_SERIAL_NUM_SIZE);
+			if (req_id == RADIANT_WIRE_MESG_GET_SERIAL_NUM_ID) {
+				send_message(RADIANT_WIRE_MESG_GET_SERIAL_NUM_ID, payload,
+					     RADIANT_WIRE_MESG_SERIAL_NUM_SIZE);
 			} else {
 				payload[4] = 0x00u;
-				send_message(ANTW_MESG_SERIAL_NUM_EXT_ID, payload,
-					     ANTW_MESG_SERIAL_NUM_EXT_SIZE);
+				send_message(RADIANT_WIRE_MESG_SERIAL_NUM_EXT_ID, payload,
+					     RADIANT_WIRE_MESG_SERIAL_NUM_EXT_SIZE);
 			}
 		}
 		break;
 	}
 
-	case ANTW_MESG_VERSION_ID: {
+	case RADIANT_WIRE_MESG_VERSION_ID: {
 		err = antr_version_get(payload);
 		if (!err) {
-			send_message(ANTW_MESG_VERSION_ID, payload,
-				     ANTW_MESG_VERSION_SIZE);
+			send_message(RADIANT_WIRE_MESG_VERSION_ID, payload,
+				     RADIANT_WIRE_MESG_VERSION_SIZE);
 		}
 		break;
 	}
 
-	case ANTW_MESG_CHANNEL_STATUS_ID: {
+	case RADIANT_WIRE_MESG_CHANNEL_STATUS_ID: {
 		payload[0] = ch;
 		err = antr_channel_status_get(ch, &payload[1]);
 		if (!err) {
-			send_message(ANTW_MESG_CHANNEL_STATUS_ID, payload,
-				     ANTW_MESG_CHANNEL_STATUS_SIZE);
+			send_message(RADIANT_WIRE_MESG_CHANNEL_STATUS_ID, payload,
+				     RADIANT_WIRE_MESG_CHANNEL_STATUS_SIZE);
 		}
 		break;
 	}
 
-	case ANTW_MESG_CHANNEL_ID_ID: {
+	case RADIANT_WIRE_MESG_CHANNEL_ID_ID: {
 		payload[0] = ch;
 		err = antr_channel_id_get(ch, &value16, &payload[3], &payload[4]);
 		if (!err) {
 			payload[1] = (uint8_t)value16;
 			payload[2] = (uint8_t)(value16 >> 8);
-			send_message(ANTW_MESG_CHANNEL_ID_ID, payload,
-				     ANTW_MESG_CHANNEL_ID_SIZE);
+			send_message(RADIANT_WIRE_MESG_CHANNEL_ID_ID, payload,
+				     RADIANT_WIRE_MESG_CHANNEL_ID_SIZE);
 		}
 		break;
 	}
 
-	case ANTW_MESG_CHANNEL_MESG_PERIOD_ID: {
+	case RADIANT_WIRE_MESG_CHANNEL_MESG_PERIOD_ID: {
 		payload[0] = ch;
 		err = antr_channel_period_get(ch, &value16);
 		if (!err) {
 			payload[1] = (uint8_t)value16;
 			payload[2] = (uint8_t)(value16 >> 8);
-			send_message(ANTW_MESG_CHANNEL_MESG_PERIOD_ID, payload,
-				     ANTW_MESG_CHANNEL_MESG_PERIOD_SIZE);
+			send_message(RADIANT_WIRE_MESG_CHANNEL_MESG_PERIOD_ID, payload,
+				     RADIANT_WIRE_MESG_CHANNEL_MESG_PERIOD_SIZE);
 		}
 		break;
 	}
 
-	case ANTW_MESG_CHANNEL_RADIO_FREQ_ID: {
+	case RADIANT_WIRE_MESG_CHANNEL_RADIO_FREQ_ID: {
 		payload[0] = ch;
 		err = antr_channel_radio_freq_get(ch, &payload[1]);
 		if (!err) {
-			send_message(ANTW_MESG_CHANNEL_RADIO_FREQ_ID, payload,
-				     ANTW_MESG_CHANNEL_RADIO_FREQ_SIZE);
+			send_message(RADIANT_WIRE_MESG_CHANNEL_RADIO_FREQ_ID, payload,
+				     RADIANT_WIRE_MESG_CHANNEL_RADIO_FREQ_SIZE);
 		}
 		break;
 	}
 
-	case ANTW_MESG_CHANNEL_CRC_MODE_ID: {
+	case RADIANT_WIRE_MESG_CHANNEL_CRC_MODE_ID: {
 		payload[0] = ch;
 		err = antr_channel_radio_crc_mode_get(ch, &payload[1]);
 		if (!err) {
-			send_message(ANTW_MESG_CHANNEL_CRC_MODE_ID, payload,
-				     ANTW_MESG_CHANNEL_CRC_MODE_SIZE);
+			send_message(RADIANT_WIRE_MESG_CHANNEL_CRC_MODE_ID, payload,
+				     RADIANT_WIRE_MESG_CHANNEL_CRC_MODE_SIZE);
 		}
 		break;
 	}
 
-	case ANTW_MESG_SET_SEARCH_CH_PRIORITY_ID: {
+	case RADIANT_WIRE_MESG_SET_SEARCH_CH_PRIORITY_ID: {
 		payload[0] = ch;
 		err = antr_search_channel_priority_get(ch, &payload[1]);
 		if (!err) {
-			send_message(ANTW_MESG_SET_SEARCH_CH_PRIORITY_ID, payload,
-				     ANTW_MESG_SET_SEARCH_CH_PRIORITY_SIZE);
+			send_message(RADIANT_WIRE_MESG_SET_SEARCH_CH_PRIORITY_ID, payload,
+				     RADIANT_WIRE_MESG_SET_SEARCH_CH_PRIORITY_SIZE);
 		}
 		break;
 	}
 
-	case ANTW_MESG_PENDING_TRANSMIT_CLEAR_ID: {
+	case RADIANT_WIRE_MESG_PENDING_TRANSMIT_CLEAR_ID: {
 		payload[0] = ch;
 		err = antr_pending_transmit_get(ch, &payload[1]);
 		if (!err) {
-			send_message(ANTW_MESG_PENDING_TRANSMIT_CLEAR_ID, payload,
-				     ANTW_MESG_PENDING_TRANSMIT_GET_SIZE);
+			send_message(RADIANT_WIRE_MESG_PENDING_TRANSMIT_CLEAR_ID, payload,
+				     RADIANT_WIRE_MESG_PENDING_TRANSMIT_GET_SIZE);
 		}
 		break;
 	}
 
 #ifdef CONFIG_RADIANT_SEC_HOST_MESSAGES
-	case ANTW_MESG_RADIANT_SEC_STATUS_ID: {
+	case RADIANT_WIRE_MESG_RADIANT_SEC_STATUS_ID: {
 		/*
 		 * The only read arm in the family. 0xF2 has none anywhere - a
 		 * root key goes in and never comes out, and a request for it
 		 * falls through to the default below and is answered
-		 * ANTW_INVALID_MESSAGE, which is the same answer a device that
+		 * RADIANT_WIRE_INVALID_MESSAGE, which is the same answer a device that
 		 * had never heard of 0xF2 would give.
 		 */
 		err = antr_sec_status_get(ch, payload, (uint8_t)sizeof(payload));
 		if (!err) {
-			send_message(ANTW_MESG_RADIANT_SEC_STATUS_ID, payload,
+			send_message(RADIANT_WIRE_MESG_RADIANT_SEC_STATUS_ID, payload,
 				     ANTR_SEC_STATUS_LEN);
 		}
 		break;
 	}
 #endif /* CONFIG_RADIANT_SEC_HOST_MESSAGES */
 
-	case ANTW_MESG_ANTLIB_CONFIG_ID: {
+	case RADIANT_WIRE_MESG_ANTLIB_CONFIG_ID: {
 		payload[0] = ch;
 		err = antr_lib_config_get(&payload[1]);
 		if (!err) {
-			send_message(ANTW_MESG_ANTLIB_CONFIG_ID, payload,
-				     ANTW_MESG_ANTLIB_CONFIG_SIZE);
+			send_message(RADIANT_WIRE_MESG_ANTLIB_CONFIG_ID, payload,
+				     RADIANT_WIRE_MESG_ANTLIB_CONFIG_SIZE);
 		}
 		break;
 	}
 
-	case ANTW_MESG_ACTIVE_SEARCH_SHARING_ID: {
+	case RADIANT_WIRE_MESG_ACTIVE_SEARCH_SHARING_ID: {
 		payload[0] = ch;
 		err = antr_active_search_sharing_cycles_get(ch, &payload[1]);
 		if (!err) {
-			send_message(ANTW_MESG_ACTIVE_SEARCH_SHARING_ID, payload,
-				     ANTW_MESG_ACTIVE_SEARCH_SHARING_REQ_SIZE);
+			send_message(RADIANT_WIRE_MESG_ACTIVE_SEARCH_SHARING_ID, payload,
+				     RADIANT_WIRE_MESG_ACTIVE_SEARCH_SHARING_REQ_SIZE);
 		}
 		break;
 	}
 
-	case ANTW_MESG_EVENT_FILTER_CONFIG_ID: {
+	case RADIANT_WIRE_MESG_EVENT_FILTER_CONFIG_ID: {
 		payload[0] = ch;
 		err = antr_event_filtering_get(&value16);
 		if (!err) {
 			payload[1] = (uint8_t)value16;
 			payload[2] = (uint8_t)(value16 >> 8);
-			send_message(ANTW_MESG_EVENT_FILTER_CONFIG_ID, payload,
-				     ANTW_MESG_EVENT_FILTER_CONFIG_REQ_SIZE);
+			send_message(RADIANT_WIRE_MESG_EVENT_FILTER_CONFIG_ID, payload,
+				     RADIANT_WIRE_MESG_EVENT_FILTER_CONFIG_REQ_SIZE);
 		}
 		break;
 	}
 
-	case ANTW_MESG_CONFIG_ADV_BURST_ID: {
+	case RADIANT_WIRE_MESG_CONFIG_ADV_BURST_ID: {
 		/* body[0] is 0 for "what can you do" and 1 for "what are you
 		 * set to", not a channel, and the two replies are different
 		 * lengths.
 		 */
 		uint8_t reply_len =
-			ch ? ANTW_MESG_CONFIG_ADV_BURST_REQ_CONFIG_SIZE :
-			     ANTW_MESG_CONFIG_ADV_BURST_REQ_CAPABILITIES_SIZE;
+			ch ? RADIANT_WIRE_MESG_CONFIG_ADV_BURST_REQ_CONFIG_SIZE :
+			     RADIANT_WIRE_MESG_CONFIG_ADV_BURST_REQ_CAPABILITIES_SIZE;
 
 		err = antr_adv_burst_config_get(ch, payload);
 		if (!err) {
-			send_message(ANTW_MESG_CONFIG_ADV_BURST_ID, payload,
+			send_message(RADIANT_WIRE_MESG_CONFIG_ADV_BURST_ID, payload,
 				     reply_len);
 		}
 		break;
 	}
 
-	case ANTW_MESG_SDU_SET_MASK_ID: {
+	case RADIANT_WIRE_MESG_SDU_SET_MASK_ID: {
 		/* [mask_index, mask[8]]. The 8 mask bytes start one in: the reply is
 		 * the same shape as the command that set them, and the size constant
-		 * is ANTW_ANT_MAX_PAYLOAD_SIZE *plus* ANTW_CHANNEL_NUM_SIZE precisely
+		 * is RADIANT_WIRE_ANT_MAX_PAYLOAD_SIZE *plus* RADIANT_WIRE_CHANNEL_NUM_SIZE precisely
 		 * because of that leading index byte. Writing the mask at payload[0]
 		 * instead fills the index slot with mask[0], shifts every byte down
 		 * one, and pads the end with a zero the host reads as mask[7].
@@ -744,14 +744,14 @@ static void handle_request(const uint8_t *body, uint8_t len)
 		payload[0] = ch;
 		err = antr_sdu_mask_get(ch, &payload[1]);
 		if (!err) {
-			send_message(ANTW_MESG_SDU_SET_MASK_ID, payload,
-				     ANTW_ANT_MAX_PAYLOAD_SIZE +
-				     ANTW_CHANNEL_NUM_SIZE);
+			send_message(RADIANT_WIRE_MESG_SDU_SET_MASK_ID, payload,
+				     RADIANT_WIRE_ANT_MAX_PAYLOAD_SIZE +
+				     RADIANT_WIRE_CHANNEL_NUM_SIZE);
 		}
 		break;
 	}
 
-	case ANTW_MESG_ENCRYPT_ENABLE_ID: {
+	case RADIANT_WIRE_MESG_ENCRYPT_ENABLE_ID: {
 		/* Same leading byte, same reason: the info type is echoed at
 		 * payload[0] and the requested data follows it. Each reply size below
 		 * counts that byte - 2 = type + 1 mode byte, 5 = type + a 4-byte
@@ -763,22 +763,22 @@ static void handle_request(const uint8_t *body, uint8_t len)
 			uint8_t reply_len = 0;
 
 			switch (ch) {
-			case ANTW_ENCRYPTION_INFO_GET_SUPPORTED_MODE:
-				reply_len = ANTW_MESG_CONFIG_ENCRYPT_REQ_CAPABILITIES_SIZE;
+			case RADIANT_WIRE_ENCRYPTION_INFO_GET_SUPPORTED_MODE:
+				reply_len = RADIANT_WIRE_MESG_CONFIG_ENCRYPT_REQ_CAPABILITIES_SIZE;
 				break;
-			case ANTW_ENCRYPTION_INFO_GET_CRYPTO_ID:
-				reply_len = ANTW_MESG_CONFIG_ENCRYPT_REQ_CONFIG_ID_SIZE;
+			case RADIANT_WIRE_ENCRYPTION_INFO_GET_CRYPTO_ID:
+				reply_len = RADIANT_WIRE_MESG_CONFIG_ENCRYPT_REQ_CONFIG_ID_SIZE;
 				break;
-			case ANTW_ENCRYPTION_INFO_GET_CUSTOM_USER_DATA:
-				reply_len = ANTW_MESG_CONFIG_ENCRYPT_REQ_CONFIG_USER_DATA_SIZE;
+			case RADIANT_WIRE_ENCRYPTION_INFO_GET_CUSTOM_USER_DATA:
+				reply_len = RADIANT_WIRE_MESG_CONFIG_ENCRYPT_REQ_CONFIG_USER_DATA_SIZE;
 				break;
 			default:
-				err = ANTW_INVALID_MESSAGE;
+				err = RADIANT_WIRE_INVALID_MESSAGE;
 				break;
 			}
 
 			if (!err) {
-				send_message(ANTW_MESG_ENCRYPT_ENABLE_ID, payload,
+				send_message(RADIANT_WIRE_MESG_ENCRYPT_ENABLE_ID, payload,
 					     reply_len);
 			}
 		}
@@ -786,13 +786,13 @@ static void handle_request(const uint8_t *body, uint8_t len)
 	}
 
 	default:
-		send_response(ch, ANTW_MESG_REQUEST_ID, ANTW_INVALID_MESSAGE);
+		send_response(ch, RADIANT_WIRE_MESG_REQUEST_ID, RADIANT_WIRE_INVALID_MESSAGE);
 		return;
 	}
 
 	if (err) {
 		LOG_WRN("Request 0x%02X failed: %d", req_id, err);
-		send_response(ch, ANTW_MESG_REQUEST_ID, err);
+		send_response(ch, RADIANT_WIRE_MESG_REQUEST_ID, err);
 	}
 }
 
@@ -802,7 +802,7 @@ static void handle_request(const uint8_t *body, uint8_t len)
  * antr_burst_tx() takes ownership of the buffer it is handed until the radio
  * has sent it, but `body` points into the parser's frame buffer, overwritten
  * by the next packet - so each block is copied somewhere that outlives the
- * call and held there. Advanced burst carries up to ANTW_ADV_BURST_BLOCK_MAX
+ * call and held there. Advanced burst carries up to RADIANT_WIRE_ADV_BURST_BLOCK_MAX
  * (24) bytes per packet; plain burst carries 8. Defined ahead of the reset
  * handler, which has to hand the block back.
  */
@@ -829,7 +829,7 @@ static void handle_request(const uint8_t *body, uint8_t len)
 #else
 #define BURST_BUFS 1
 #endif
-static uint8_t burst_block[BURST_BUFS][ANTW_ADV_BURST_BLOCK_MAX];
+static uint8_t burst_block[BURST_BUFS][RADIANT_WIRE_ADV_BURST_BLOCK_MAX];
 static K_SEM_DEFINE(burst_block_free, BURST_BUFS, BURST_BUFS);
 static struct k_spinlock burst_lock;
 static uint8_t  burst_owner[BURST_BUFS];   /* channel + 1, or 0 when free */
@@ -981,7 +981,7 @@ void ant_serial_bridge_host_state(uint8_t net, struct ant_bridge_host_state *out
 
 /* ── System reset ──────────────────────────────────────────────────────────── */
 
-/* ANTW_MESG_SYSTEM_RESET_ID resets the ANT protocol stack, not the MCU: every
+/* RADIANT_WIRE_MESG_SYSTEM_RESET_ID resets the ANT protocol stack, not the MCU: every
  * host library keeps using the same USB handle after sending reset, and
  * rebooting here would drop the device off the bus mid-session.
  */
@@ -1072,7 +1072,7 @@ static void handle_system_reset(void)
 #endif
 	/* Before the flag clears, so a queued STARTUP is ahead of any event
 	 * the new session raises. */
-	send_startup(ANTW_STARTUP_COMMAND_RESET, !fenced);
+	send_startup(RADIANT_WIRE_STARTUP_COMMAND_RESET, !fenced);
 	atomic_set(&reset_in_progress, 0);
 }
 
@@ -1085,20 +1085,20 @@ static void handle_burst(uint8_t msg_id, const uint8_t *body, uint8_t len)
 	 */
 	uint8_t size = (len >= 1) ? (uint8_t)(len - 1) : 0;
 
-	if (size < 8 || size > ANTW_ADV_BURST_BLOCK_MAX || (size % 8) != 0) {
-		send_response(0, msg_id, ANTW_INVALID_MESSAGE);
+	if (size < 8 || size > RADIANT_WIRE_ADV_BURST_BLOCK_MAX || (size % 8) != 0) {
+		send_response(0, msg_id, RADIANT_WIRE_INVALID_MESSAGE);
 		return;
 	}
 
-	uint8_t ch      = body[0] & ANTW_BURST_HEADER_CHANNEL_MASK;
-	uint8_t seq     = (body[0] >> ANTW_BURST_HEADER_SEQ_SHIFT) &
-			  ANTW_BURST_HEADER_SEQ_MASK;
+	uint8_t ch      = body[0] & RADIANT_WIRE_BURST_HEADER_CHANNEL_MASK;
+	uint8_t seq     = (body[0] >> RADIANT_WIRE_BURST_HEADER_SEQ_SHIFT) &
+			  RADIANT_WIRE_BURST_HEADER_SEQ_MASK;
 	uint8_t segment = ANTR_BURST_SEGMENT_CONTINUE;
 
 	if (seq == 0) {
 		segment |= ANTR_BURST_SEGMENT_START;
 	}
-	if (body[0] & ANTW_BURST_HEADER_LAST) {
+	if (body[0] & RADIANT_WIRE_BURST_HEADER_LAST) {
 		segment |= ANTR_BURST_SEGMENT_END;
 	}
 
@@ -1114,7 +1114,7 @@ static void handle_burst(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		 * burst, so a non-zero reading here is a different host's
 		 * problem and worth being able to see from one. */
 		ant_health_note(ANT_HEALTH_BURST_STALL);
-		send_response(ch, msg_id, ANTW_TRANSFER_IN_PROGRESS);
+		send_response(ch, msg_id, RADIANT_WIRE_TRANSFER_IN_PROGRESS);
 		return;
 	}
 
@@ -1125,7 +1125,7 @@ static void handle_burst(uint8_t msg_id, const uint8_t *body, uint8_t len)
 
 	if (idx < 0) {
 		k_sem_give(&burst_block_free);
-		send_response(ch, msg_id, ANTW_TRANSFER_IN_PROGRESS);
+		send_response(ch, msg_id, RADIANT_WIRE_TRANSFER_IN_PROGRESS);
 		return;
 	}
 	memcpy(burst_block[idx], &body[1], size);
@@ -1148,20 +1148,20 @@ static void handle_burst(uint8_t msg_id, const uint8_t *body, uint8_t len)
 static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 {
 	/* Starts as a failure so a too-short body falls through every
-	 * `if (len >= N)` below as ANTW_INVALID_MESSAGE, rather than silently
+	 * `if (len >= N)` below as RADIANT_WIRE_INVALID_MESSAGE, rather than silently
 	 * acknowledging a truncated command that never ran.
 	 */
-	antr_err_t err = ANTW_INVALID_MESSAGE;
+	antr_err_t err = RADIANT_WIRE_INVALID_MESSAGE;
 	/* body[0] is channel number (or network number for NETWORK_KEY) */
 	uint8_t ch = (len > 0) ? body[0] : 0;
 
 	switch (msg_id) {
 
-	case ANTW_MESG_SYSTEM_RESET_ID:
+	case RADIANT_WIRE_MESG_SYSTEM_RESET_ID:
 		handle_system_reset(); /* sends the STARTUP */
 		return; /* no RESPONSE_EVENT for reset */
 
-	case ANTW_MESG_NETWORK_KEY_ID:
+	case RADIANT_WIRE_MESG_NETWORK_KEY_ID:
 		/* body: [net_num, key[8]] */
 		if (len >= 9) {
 			err = antr_network_address_set(body[0], &body[1]);
@@ -1171,7 +1171,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		}
 		break;
 
-	case ANTW_MESG_ASSIGN_CHANNEL_ID:
+	case RADIANT_WIRE_MESG_ASSIGN_CHANNEL_ID:
 		/* body: [ch, type, net, (ext_assign optional)] */
 		if (len >= 3) {
 			uint8_t ext = (len >= 4) ? body[3] : 0x00;
@@ -1186,7 +1186,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		}
 		break;
 
-	case ANTW_MESG_CHANNEL_ID_ID:
+	case RADIANT_WIRE_MESG_CHANNEL_ID_ID:
 		/* body: [ch, dev_lsb, dev_msb, dev_type, trans_type] */
 		if (len >= 5) {
 			uint16_t dev = (uint16_t)body[1] |
@@ -1195,14 +1195,14 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		}
 		break;
 
-	case ANTW_MESG_CHANNEL_RADIO_FREQ_ID:
+	case RADIANT_WIRE_MESG_CHANNEL_RADIO_FREQ_ID:
 		/* body: [ch, freq_offset_from_2400MHz] */
 		if (len >= 2) {
 			err = antr_channel_radio_freq_set(body[0], body[1]);
 		}
 		break;
 
-	case ANTW_MESG_CHANNEL_MESG_PERIOD_ID:
+	case RADIANT_WIRE_MESG_CHANNEL_MESG_PERIOD_ID:
 		/* body: [ch, period_lsb, period_msb] (32 kHz counts) */
 		if (len >= 3) {
 			uint16_t period = (uint16_t)body[1] |
@@ -1211,14 +1211,14 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		}
 		break;
 
-	case ANTW_MESG_CHANNEL_SEARCH_TIMEOUT_ID:
+	case RADIANT_WIRE_MESG_CHANNEL_SEARCH_TIMEOUT_ID:
 		/* body: [ch, timeout] (2.5 s increments) */
 		if (len >= 2) {
 			err = antr_channel_search_timeout_set(body[0], body[1]);
 		}
 		break;
 
-	case ANTW_MESG_SET_LP_SEARCH_TIMEOUT_ID:
+	case RADIANT_WIRE_MESG_SET_LP_SEARCH_TIMEOUT_ID:
 		/* body: [ch, timeout] */
 		if (len >= 2) {
 			err = antr_channel_low_priority_rx_search_timeout_set(
@@ -1226,12 +1226,12 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		}
 		break;
 
-	case ANTW_MESG_CHANNEL_RADIO_TX_POWER_ID:
+	case RADIANT_WIRE_MESG_CHANNEL_RADIO_TX_POWER_ID:
 		/* body: [ch, tx_power] or [ch, tx_power, custom]
 		 *
 		 * The third byte is an additive extension: a two-byte message
 		 * means what it always did, and the byte is only read when the
-		 * level carries ANTW_RADIO_TX_POWER_LVL_CUSTOM. Without it, a
+		 * level carries RADIANT_WIRE_RADIO_TX_POWER_LVL_CUSTOM. Without it, a
 		 * custom-power request silently got register 0 (0 dBm on an
 		 * nRF52840) - a failure invisible from the far end of the link,
 		 * which is why tools/ant_sens.py checks against measured RSSI.
@@ -1252,7 +1252,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		}
 		break;
 
-	case ANTW_MESG_RADIO_TX_POWER_ID:
+	case RADIANT_WIRE_MESG_RADIO_TX_POWER_ID:
 		/* body: [filler, tx_power]. Device-wide form (ANT_SetTransmitPower);
 		 * 0x60 above is per-channel. The radio contract only exposes the
 		 * per-channel setter, so fan it out - failures not propagated,
@@ -1273,28 +1273,28 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		}
 		break;
 
-	case ANTW_MESG_OPEN_CHANNEL_ID:
+	case RADIANT_WIRE_MESG_OPEN_CHANNEL_ID:
 		/* body: [ch] */
 		if (len >= 1) {
 			err = antr_channel_open(body[0]);
 		}
 		break;
 
-	case ANTW_MESG_CLOSE_CHANNEL_ID:
+	case RADIANT_WIRE_MESG_CLOSE_CHANNEL_ID:
 		/* body: [ch] */
 		if (len >= 1) {
 			err = antr_channel_close(body[0]);
 		}
 		break;
 
-	case ANTW_MESG_UNASSIGN_CHANNEL_ID:
+	case RADIANT_WIRE_MESG_UNASSIGN_CHANNEL_ID:
 		/* body: [ch] */
 		if (len >= 1) {
 			err = antr_channel_unassign(body[0]);
 		}
 		break;
 
-	case ANTW_MESG_OPEN_RX_SCAN_MODE_ID: {
+	case RADIANT_WIRE_MESG_OPEN_RX_SCAN_MODE_ID: {
 		/*
 		 * body: [(synchronous channel packets only, optional)]. That flag
 		 * restricts reporting to already-tracked periods; accepted and
@@ -1302,9 +1302,9 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		 * not checked - nothing depends on it.
 		 *
 		 * Real scan mode takes over the whole radio, requiring every
-		 * other channel closed first (else ANTW_CLOSE_ALL_CHANNELS).
+		 * other channel closed first (else RADIANT_WIRE_CLOSE_ALL_CHANNELS).
 		 * Channel 0 becomes a background-scan slave via
-		 * MESG_ASSIGN_CHANNEL's extended byte (ANTW_EXT_PARAM_ALWAYS_
+		 * MESG_ASSIGN_CHANNEL's extended byte (RADIANT_WIRE_EXT_PARAM_ALWAYS_
 		 * SEARCH) - the same call ZwiftApp.exe resolves.
 		 *
 		 * Rev 5.1 section 9.5.4.5: scan mode opens channel 0 as the host
@@ -1337,7 +1337,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		uint8_t i;
 		bool restore = false;
 		bool in_place = false;
-		uint8_t saved_type = ANTW_CHANNEL_TYPE_SLAVE;
+		uint8_t saved_type = RADIANT_WIRE_CHANNEL_TYPE_SLAVE;
 		uint8_t saved_net = 0U;
 		uint16_t saved_dev = 0U;
 		uint8_t saved_dtype = 0U;
@@ -1347,29 +1347,29 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 
 		for (i = 0; i < CONFIG_ANT_TOTAL_CHANNELS_ALLOCATED; i++) {
 			if (antr_channel_status_get(i, &status) ==
-				    (antr_err_t)ANTW_RESPONSE_NO_ERROR &&
-			    (status & 0x03u) >= ANTW_STATUS_SEARCHING_CHANNEL) {
+				    (antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR &&
+			    (status & 0x03u) >= RADIANT_WIRE_STATUS_SEARCHING_CHANNEL) {
 				break;
 			}
 		}
 		if (i < CONFIG_ANT_TOTAL_CHANNELS_ALLOCATED) {
-			send_response(0, msg_id, ANTW_CLOSE_ALL_CHANNELS);
+			send_response(0, msg_id, RADIANT_WIRE_CLOSE_ALL_CHANNELS);
 			return;
 		}
 
 		if (antr_channel_status_get(0, &status) ==
-			    (antr_err_t)ANTW_RESPONSE_NO_ERROR &&
-		    (status & 0x03u) == ANTW_STATUS_ASSIGNED_CHANNEL) {
+			    (antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR &&
+		    (status & 0x03u) == RADIANT_WIRE_STATUS_ASSIGNED_CHANNEL) {
 			saved_type = status & 0xF0u;
 			saved_net = (status >> 2) & 0x03u;
 			/* Every master type has bit 4 set (0x10, 0x30, 0x50). */
-			if ((saved_type & ANTW_CHANNEL_TYPE_MASTER) != 0U) {
+			if ((saved_type & RADIANT_WIRE_CHANNEL_TYPE_MASTER) != 0U) {
 				send_response(0, msg_id,
-					      ANTW_CHANNEL_IN_WRONG_STATE);
+					      RADIANT_WIRE_CHANNEL_IN_WRONG_STATE);
 				return;
 			}
 			err = antr_channel_ext_assign_set(
-				0, ANTW_EXT_PARAM_ALWAYS_SEARCH);
+				0, RADIANT_WIRE_EXT_PARAM_ALWAYS_SEARCH);
 			if (!err) {
 				in_place = true;
 				/* An ID the host never set reads back as the
@@ -1385,7 +1385,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 						0, saved_dev, saved_dtype,
 						saved_ttype);
 				}
-			} else if (err == (antr_err_t)ANTW_INVALID_MESSAGE) {
+			} else if (err == (antr_err_t)RADIANT_WIRE_INVALID_MESSAGE) {
 				/* Channel 0 is always in range: the backend
 				 * has no in-place call. */
 				err = antr_channel_id_get(0, &saved_dev,
@@ -1405,11 +1405,11 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 				restore = true;
 			}
 		} else {
-			err = (antr_err_t)ANTW_RESPONSE_NO_ERROR;
+			err = (antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR;
 		}
 		if (!err && !in_place) {
 			err = antr_channel_assign(0, saved_type, saved_net,
-						  ANTW_EXT_PARAM_ALWAYS_SEARCH);
+						  RADIANT_WIRE_EXT_PARAM_ALWAYS_SEARCH);
 		}
 		if (!err && !in_place) {
 			err = antr_channel_id_set(0, saved_dev, saved_dtype,
@@ -1429,11 +1429,11 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 			tx_power_apply(0);
 			err = antr_channel_open(0);
 		}
-		send_response(0, msg_id, err ? err : ANTW_RESPONSE_NO_ERROR);
+		send_response(0, msg_id, err ? err : RADIANT_WIRE_RESPONSE_NO_ERROR);
 		return;
 	}
 
-	case ANTW_MESG_ANTLIB_CONFIG_ID:
+	case RADIANT_WIRE_MESG_ANTLIB_CONFIG_ID:
 		/* body: [filler, config_bits]. The value replaces the previous
 		 * one: 0xE0 then 0x80 leaves 0x80, as on any other ANT device.
 		 * Zero clears everything, which is how hosts drop the
@@ -1445,9 +1445,9 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		if (len >= 2) {
 			if (body[1] == 0U) {
 				err = antr_lib_config_clear(
-					ANTW_LIB_CONFIG_MASK_ALL);
+					RADIANT_WIRE_LIB_CONFIG_MASK_ALL);
 			} else {
-				uint8_t drop = (uint8_t)(ANTW_LIB_CONFIG_MASK_ALL &
+				uint8_t drop = (uint8_t)(RADIANT_WIRE_LIB_CONFIG_MASK_ALL &
 							 ~body[1]);
 
 				err = antr_lib_config_set(body[1]);
@@ -1458,7 +1458,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		}
 		break;
 
-	case ANTW_MESG_RX_EXT_MESGS_ENABLE_ID:
+	case RADIANT_WIRE_MESG_RX_EXT_MESGS_ENABLE_ID:
 		/* body: [filler, enable]. The older, narrower way of asking for
 		 * the channel id on every received message. Hosts still send it
 		 * instead of MESG_ANTLIB_CONFIG, and without it every broadcast
@@ -1467,13 +1467,13 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		if (len >= 2) {
 			err = body[1] ?
 			      antr_lib_config_set(
-				      ANTW_LIB_CONFIG_MESG_OUT_INC_DEVICE_ID) :
+				      RADIANT_WIRE_LIB_CONFIG_MESG_OUT_INC_DEVICE_ID) :
 			      antr_lib_config_clear(
-				      ANTW_LIB_CONFIG_MESG_OUT_INC_DEVICE_ID);
+				      RADIANT_WIRE_LIB_CONFIG_MESG_OUT_INC_DEVICE_ID);
 		}
 		break;
 
-	case ANTW_MESG_SEARCH_WAVEFORM_ID:
+	case RADIANT_WIRE_MESG_SEARCH_WAVEFORM_ID:
 		/* body: [ch, waveform_lsb, waveform_msb] */
 		if (len >= 3) {
 			uint16_t waveform = (uint16_t)body[1] |
@@ -1482,7 +1482,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		}
 		break;
 
-	case ANTW_MESG_PROX_SEARCH_CONFIG_ID:
+	case RADIANT_WIRE_MESG_PROX_SEARCH_CONFIG_ID:
 		/* body: [ch, threshold, (custom threshold optional)] */
 		if (len >= 2) {
 			uint8_t custom = (len >= 3) ? body[2] : 0;
@@ -1491,14 +1491,14 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		}
 		break;
 
-	case ANTW_MESG_SET_SEARCH_CH_PRIORITY_ID:
+	case RADIANT_WIRE_MESG_SET_SEARCH_CH_PRIORITY_ID:
 		/* body: [ch, priority] */
 		if (len >= 2) {
 			err = antr_search_channel_priority_set(body[0], body[1]);
 		}
 		break;
 
-	case ANTW_MESG_ACTIVE_SEARCH_SHARING_ID:
+	case RADIANT_WIRE_MESG_ACTIVE_SEARCH_SHARING_ID:
 		/* body: [ch, cycles] */
 		if (len >= 2) {
 			err = antr_active_search_sharing_cycles_set(body[0],
@@ -1506,7 +1506,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		}
 		break;
 
-	case ANTW_MESG_AUTO_FREQ_CONFIG_ID:
+	case RADIANT_WIRE_MESG_AUTO_FREQ_CONFIG_ID:
 		/* body: [ch, freq0, freq1, freq2] */
 		if (len >= 4) {
 			err = antr_auto_freq_hop_table_set(body[0], body[1],
@@ -1514,28 +1514,28 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		}
 		break;
 
-	case ANTW_MESG_CHANNEL_CRC_MODE_ID:
+	case RADIANT_WIRE_MESG_CHANNEL_CRC_MODE_ID:
 		/* body: [filler, mode] */
 		if (len >= 2) {
 			err = antr_channel_radio_crc_mode_set(body[0], body[1]);
 		}
 		break;
 
-	case ANTW_MESG_ID_LIST_ADD_ID:
+	case RADIANT_WIRE_MESG_ID_LIST_ADD_ID:
 		/* body: [ch, dev_lsb, dev_msb, dev_type, trans_type, index] */
 		if (len >= 6) {
 			err = antr_id_list_add(body[0], &body[1], body[5]);
 		}
 		break;
 
-	case ANTW_MESG_ID_LIST_CONFIG_ID:
+	case RADIANT_WIRE_MESG_ID_LIST_CONFIG_ID:
 		/* body: [ch, list_size, exclude_flag] */
 		if (len >= 3) {
 			err = antr_id_list_config(body[0], body[1], body[2]);
 		}
 		break;
 
-	case ANTW_MESG_EVENT_FILTER_CONFIG_ID:
+	case RADIANT_WIRE_MESG_EVENT_FILTER_CONFIG_ID:
 		/* body: [filler, filter_lsb, filter_msb] (Rev 5.1 sec 9.5.2.28),
 		 * or the legacy [filter_lsb, filter_msb] with no filler. Three
 		 * bytes is always the spec form; two is kept because the
@@ -1552,14 +1552,14 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		}
 		break;
 
-	case ANTW_MESG_CONFIG_ADV_BURST_ID:
+	case RADIANT_WIRE_MESG_CONFIG_ADV_BURST_ID:
 		/* body: [filler, config[8..11]]. The filler byte occupies the channel
 		 * slot every message has and is not part of the configuration, so the
 		 * buffer antr_adv_burst_config_set() documents starts at body[1]:
 		 * [enable, rf payload size, required modes, 0, 0, optional modes, 0, 0]
 		 * with an optional [stall lsb, stall msb, retry extension].
 		 *
-		 * Without this, ANTW_MESG_ADV_BURST_DATA_ID is accepted but advanced
+		 * Without this, RADIANT_WIRE_MESG_ADV_BURST_DATA_ID is accepted but advanced
 		 * burst is never on, so nothing ever leaves at more than 8 bytes a
 		 * packet.
 		 */
@@ -1569,16 +1569,16 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		}
 		break;
 
-	case ANTW_MESG_SDU_CONFIG_ID:
+	case RADIANT_WIRE_MESG_SDU_CONFIG_ID:
 		/* body: [ch, mask_config]. Binds one of the masks below to a channel;
-		 * ANTW_INVALID_SDU_MASK (0xFF) turns selective updates back off.
+		 * RADIANT_WIRE_INVALID_SDU_MASK (0xFF) turns selective updates back off.
 		 */
 		if (len >= 2) {
 			err = antr_sdu_mask_config(body[0], body[1]);
 		}
 		break;
 
-	case ANTW_MESG_SDU_SET_MASK_ID:
+	case RADIANT_WIRE_MESG_SDU_SET_MASK_ID:
 		/* body: [mask_index, mask[8]]. body[0] is a mask number, not a channel
 		 * - masks are defined here and attached to channels by MESG_SDU_CONFIG.
 		 */
@@ -1592,7 +1592,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 	 * by default since no host on this platform sends them. Matching reads
 	 * live in handle_request() and are always present.
 	 */
-	case ANTW_MESG_ENCRYPT_ENABLE_ID:
+	case RADIANT_WIRE_MESG_ENCRYPT_ENABLE_ID:
 		/* body: [ch, mode, key_num, decimation_rate] */
 		if (len >= 4) {
 			err = antr_crypto_channel_enable(body[0], body[1], body[2],
@@ -1600,17 +1600,17 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		}
 		break;
 
-	case ANTW_MESG_SET_ENCRYPT_KEY_ID:
+	case RADIANT_WIRE_MESG_SET_ENCRYPT_KEY_ID:
 		/* body: [key_num, key[16]]. No wire constant names the key length;
 		 * that it is 128 bits is stated only in the prose of
 		 * antr_crypto_key_set(), which takes a bare pointer.
 		 */
-		if (len >= 1 + ANTW_ENCRYPTION_KEY_SIZE) {
+		if (len >= 1 + RADIANT_WIRE_ENCRYPTION_KEY_SIZE) {
 			err = antr_crypto_key_set(body[0], &body[1]);
 		}
 		break;
 
-	case ANTW_MESG_SET_ENCRYPT_INFO_ID:
+	case RADIANT_WIRE_MESG_SET_ENCRYPT_INFO_ID:
 		/* body: [info_type, data]. How much data depends on the type, and the
 		 * length has to be checked against it here: antr_crypto_info_set()
 		 * reads a fixed count per type with no size to bound it, so a
@@ -1621,13 +1621,13 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 			uint8_t want = 0;
 
 			switch (body[0]) {
-			case ANTW_ENCRYPTION_INFO_SET_CRYPTO_ID:
-				want = ANTW_MESG_CONFIG_ENCRYPT_REQ_CONFIG_ID_SIZE;
+			case RADIANT_WIRE_ENCRYPTION_INFO_SET_CRYPTO_ID:
+				want = RADIANT_WIRE_MESG_CONFIG_ENCRYPT_REQ_CONFIG_ID_SIZE;
 				break;
-			case ANTW_ENCRYPTION_INFO_SET_CUSTOM_USER_DATA:
-				want = ANTW_MESG_CONFIG_ENCRYPT_REQ_CONFIG_USER_DATA_SIZE;
+			case RADIANT_WIRE_ENCRYPTION_INFO_SET_CUSTOM_USER_DATA:
+				want = RADIANT_WIRE_MESG_CONFIG_ENCRYPT_REQ_CONFIG_USER_DATA_SIZE;
 				break;
-			/* ANTW_ENCRYPTION_INFO_SET_RNG_SEED is deliberately absent.
+			/* RADIANT_WIRE_ENCRYPTION_INFO_SET_RNG_SEED is deliberately absent.
 			 * It is documented as platform specific with no size defined
 			 * for it anywhere, and the radio does not take its randomness
 			 * from the host regardless - a backend seeds itself at init.
@@ -1652,7 +1652,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 	 * symbol too - these have exactly one implementation, not a contract
 	 * every backend owes.
 	 */
-	case ANTW_MESG_RADIANT_SEC_CONFIG_ID:
+	case RADIANT_WIRE_MESG_RADIANT_SEC_CONFIG_ID:
 		/* body: [ch, switches, W, page_lo, page_hi] */
 		if (len >= 5) {
 			err = antr_sec_config(body[0], body[1], body[2],
@@ -1660,7 +1660,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		}
 		break;
 
-	case ANTW_MESG_RADIANT_SET_KEY_ID:
+	case RADIANT_WIRE_MESG_RADIANT_SET_KEY_ID:
 		/* body: [ch, key_bits, key[16]].
 		 *
 		 * process_byte() wipes its frame buffer after this dispatch
@@ -1672,7 +1672,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		}
 		break;
 
-	case ANTW_MESG_RADIANT_EPOCH_ID:
+	case RADIANT_WIRE_MESG_RADIANT_EPOCH_ID:
 		/* body: [ch, flags, epoch u32 LE, us_into_epoch u64 LE] */
 		if (len >= 14) {
 			uint32_t epoch;
@@ -1693,7 +1693,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		break;
 
 #ifdef CONFIG_RADIANT_SEC_PAIRING_X25519
-	case ANTW_MESG_RADIANT_PAIRING_ID: {
+	case RADIANT_WIRE_MESG_RADIANT_PAIRING_ID: {
 		/* body: [ch, subcmd, arg...]. Reply is a 0xF5 of its own, not a
 		 * response code, since the key, commitment and fingerprint
 		 * sub-commands carry data back. */
@@ -1708,7 +1708,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 				    (uint8_t)(len - 2), reply,
 				    (uint8_t)sizeof(reply), &reply_len);
 		if (!err && reply_len > 0u) {
-			send_message(ANTW_MESG_RADIANT_PAIRING_ID, reply,
+			send_message(RADIANT_WIRE_MESG_RADIANT_PAIRING_ID, reply,
 				     reply_len);
 		}
 		/*
@@ -1724,14 +1724,14 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 #endif /* CONFIG_RADIANT_SEC_PAIRING_X25519 */
 #endif /* CONFIG_RADIANT_SEC_HOST_MESSAGES */
 
-	case ANTW_MESG_ECS_ENABLE_ID:
+	case RADIANT_WIRE_MESG_ECS_ENABLE_ID:
 		/* body: [filler, enable] */
 		if (len >= 2) {
 			err = antr_enhanced_channel_spacing_enable(body[1]);
 		}
 		break;
 
-	case ANTW_MESG_PENDING_TRANSMIT_CLEAR_ID:
+	case RADIANT_WIRE_MESG_PENDING_TRANSMIT_CLEAR_ID:
 		/* body: [ch] */
 		if (len >= 1) {
 			uint8_t cleared;
@@ -1740,36 +1740,36 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		}
 		break;
 
-	case ANTW_MESG_REQUEST_ID:
+	case RADIANT_WIRE_MESG_REQUEST_ID:
 		handle_request(body, len);
 		return; /* handle_request sends its own response */
 
-	case ANTW_MESG_BROADCAST_DATA_ID:
+	case RADIANT_WIRE_MESG_BROADCAST_DATA_ID:
 		/* body: [ch, data[8]] */
 		if (len >= 9) {
 			err = antr_broadcast_message_tx(body[0], 8, &body[1]);
 		}
 		break;
 
-	case ANTW_MESG_ACKNOWLEDGED_DATA_ID:
+	case RADIANT_WIRE_MESG_ACKNOWLEDGED_DATA_ID:
 		/* body: [ch, data[8]] */
 		if (len >= 9) {
 			err = antr_acknowledge_message_tx(body[0], 8, &body[1]);
 		}
 		break;
 
-	case ANTW_MESG_BURST_DATA_ID:
-	case ANTW_MESG_ADV_BURST_DATA_ID:
+	case RADIANT_WIRE_MESG_BURST_DATA_ID:
+	case RADIANT_WIRE_MESG_ADV_BURST_DATA_ID:
 		handle_burst(msg_id, body, len);
 		return; /* handle_burst answers only on failure */
 
 	default:
 		LOG_WRN("Unknown msg_id 0x%02X len=%d", msg_id, len);
-		send_response(ch, msg_id, ANTW_INVALID_MESSAGE);
+		send_response(ch, msg_id, RADIANT_WIRE_INVALID_MESSAGE);
 		return;
 	}
 
-	send_response(ch, msg_id, err ? err : ANTW_RESPONSE_NO_ERROR);
+	send_response(ch, msg_id, err ? err : RADIANT_WIRE_RESPONSE_NO_ERROR);
 }
 
 #endif /* !ANT_BRIDGE_PARSER_ONLY */
@@ -1801,7 +1801,7 @@ static struct {
 	 * a *host* sends would fail handle_burst()'s size % 8 check and reject
 	 * every 24-byte burst packet without a word.
 	 */
-	uint8_t msg_body[ANTW_MAX_SIZE_VALUE]; /* channel + payload */
+	uint8_t msg_body[RADIANT_WIRE_MAX_SIZE_VALUE]; /* channel + payload */
 	uint8_t body_idx;
 	uint8_t running_xor;
 } parser = { .state = S_SYNC };
@@ -1824,7 +1824,7 @@ static void process_byte(uint8_t b)
 {
 	switch (parser.state) {
 	case S_SYNC:
-		if (b == ANTW_SYNC_TX) {
+		if (b == RADIANT_WIRE_SYNC_TX) {
 			/* Seed with SYNC, not 0: it is part of the checksum. */
 			parser.running_xor = b;
 			parser.state = S_LEN;
@@ -1837,8 +1837,8 @@ static void process_byte(uint8_t b)
 		break;
 
 	case S_LEN:
-		if (b == ANTW_SYNC_TX) {
-			/* 0xA4 can never be a LEN (> ANTW_MAX_SIZE_VALUE): the
+		if (b == RADIANT_WIRE_SYNC_TX) {
+			/* 0xA4 can never be a LEN (> RADIANT_WIRE_MAX_SIZE_VALUE): the
 			 * SYNC just taken was a stray byte and this is the real
 			 * frame's start. Re-seed rather than swallow ~164 bytes
 			 * of the host's next commands. */
@@ -1846,7 +1846,7 @@ static void process_byte(uint8_t b)
 			parser.running_xor = b;
 			break;		/* stay in S_LEN */
 		}
-		if (b > ANTW_MAX_SIZE_VALUE) {
+		if (b > RADIANT_WIRE_MAX_SIZE_VALUE) {
 			/* No message is this long, so this frame lost a byte
 			 * (on a UART, a receiver overrun). Most often it was
 			 * the LEN itself, and b is the message id: taken as a
@@ -1887,11 +1887,11 @@ static void process_byte(uint8_t b)
 		if (b == parser.running_xor) {
 #ifdef CONFIG_ANT_DONGLE_HOST_TRACE
 			{
-				uint8_t f[ANTW_MAX_FRAME_SIZE];
+				uint8_t f[RADIANT_WIRE_MAX_FRAME_SIZE];
 				uint8_t bl = MIN(parser.msg_len,
 						 (uint8_t)sizeof(parser.msg_body));
 
-				f[0] = ANTW_SYNC_TX;
+				f[0] = RADIANT_WIRE_SYNC_TX;
 				f[1] = parser.msg_len;
 				f[2] = parser.msg_id;
 				memcpy(&f[3], parser.msg_body, bl);
@@ -1959,7 +1959,7 @@ static void process_byte(uint8_t b)
 			 */
 			memset(parser.msg_body, 0, sizeof(parser.msg_body));
 		}
-		if (b != parser.running_xor && b == ANTW_SYNC_TX) {
+		if (b != parser.running_xor && b == RADIANT_WIRE_SYNC_TX) {
 			/* A failed checksum that is a SYNC: most often this frame
 			 * lost a byte and b is the NEXT frame's SYNC, read one
 			 * place early as the checksum. Re-seed on it, as S_LEN
@@ -2170,18 +2170,18 @@ static void on_message_forward(const struct antr_msg *msg)
 	 * them mean the burst handler has finished with the block it was given,
 	 * so the next packet from the host may overwrite it.
 	 */
-	if (msg_id == ANTW_MESG_RESPONSE_EVENT_ID && msg_len >= 3 &&
-	    msg_data[1] == ANTW_MESG_EVENT_ID) {
+	if (msg_id == RADIANT_WIRE_MESG_RESPONSE_EVENT_ID && msg_len >= 3 &&
+	    msg_data[1] == RADIANT_WIRE_MESG_EVENT_ID) {
 		switch (msg_data[2]) {
-		case ANTW_EVENT_TRANSFER_NEXT_DATA_BLOCK:
+		case RADIANT_WIRE_EVENT_TRANSFER_NEXT_DATA_BLOCK:
 			burst_buf_release_oldest(msg_data[0]);
 			/* Internal flow control for the buffer handover above.
 			 * A real stick frames bursts itself and never puts this
 			 * on the wire, so neither do we.
 			 */
 			return;
-		case ANTW_EVENT_TRANSFER_TX_COMPLETED:
-		case ANTW_EVENT_TRANSFER_TX_FAILED:
+		case RADIANT_WIRE_EVENT_TRANSFER_TX_COMPLETED:
+		case RADIANT_WIRE_EVENT_TRANSFER_TX_FAILED:
 			/* Only the burst's own channel, and only once: an acked
 			 * completion elsewhere must not free a block in flight. */
 			burst_buf_release_all(msg_data[0]);
@@ -2204,19 +2204,19 @@ static void on_message_forward(const struct antr_msg *msg)
 	}
 
 	/* Guard against oversized messages */
-	if (msg_len > ANTW_MAX_SIZE_VALUE) {
+	if (msg_len > RADIANT_WIRE_MAX_SIZE_VALUE) {
 		LOG_WRN("Oversized ANT event: id=0x%02X len=%d", msg_id, msg_len);
 		return;
 	}
 
-	/* Sized like send_message(), from ANTW_MAX_FRAME_SIZE - never
-	 * ANTW_MESG_MAX_SIZE, which is one byte short since it doesn't count
+	/* Sized like send_message(), from RADIANT_WIRE_MAX_FRAME_SIZE - never
+	 * RADIANT_WIRE_MESG_MAX_SIZE, which is one byte short since it doesn't count
 	 * the channel byte the LEN ceiling does.
 	 */
-	uint8_t buf[ANTW_MAX_FRAME_SIZE];
-	uint8_t xor = ANTW_SYNC_TX;
+	uint8_t buf[RADIANT_WIRE_MAX_FRAME_SIZE];
+	uint8_t xor = RADIANT_WIRE_SYNC_TX;
 
-	buf[0] = ANTW_SYNC_TX;
+	buf[0] = RADIANT_WIRE_SYNC_TX;
 	buf[1] = msg_len;   xor ^= msg_len;
 	buf[2] = msg_id;    xor ^= msg_id;
 

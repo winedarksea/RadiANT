@@ -4,31 +4,36 @@
  * by scripts/gen_ant_wire.py. Edit the YAML and re-run the generator;
  * `scripts/gen_ant_wire.py --check` fails the build if these drift apart.
  *
- * ANT serial protocol wire constants, generated for radiant's
- * own internal use - see src/ant_wire.h for the application-facing
- * ANTW_* names these values are aliased under.
+ * ANT serial protocol constants (host <-> dongle, 0xA4-framed).
  * Source of truth: protocol/ant_wire.yaml
  * Naming authority: ANT Message Protocol and Usage Rev 5.1 (D00000652)
  * Human-readable companion: docs/ant-serial-protocol.md
  *
- * Why this header exists inside radiant, generated separately from
- * src/ant_wire.h
+ * Why every name here carries the RADIANT_WIRE_ prefix
  *
- * radiant is a Zephyr module meant to be dropped into a project with
- * nothing else from this repository on its include path - see
- * docs/decisions/0002-clean-room-policy.md and the module's own README. Before
- * this header existed, every module source that needed a wire constant reached
- * outside the module (`zephyr_include_directories(... ../src)`, then
- * `#include "ant_wire.h"`) to get one - a self-containment violation that a
- * `git filter-repo` split of this directory alone, or any out-of-tree consumer,
- * would fail on at the first ANTW_ use.
+ * This is not house style. sdk-ant's ant_parameters.h defines its error codes as
+ * computed expressions - NRF_ANT_ERROR_OFFSET + INVALID_MESSAGE - rather than as
+ * literals. C permits a macro to be redefined only with an identical token
+ * sequence, so a header of ours that spelled a constant INVALID_MESSAGE could
+ * never share a translation unit with sdk-ant's: it is a hard redefinition error,
+ * not a warning, and no include order fixes it.
  *
- * RADIANT_WIRE_* is the fix: the same values, generated from the same
- * protocol/ant_wire.yaml entries, defined here instead so nothing in this module
- * ever needs to leave it. src/ant_wire.h - the application-layer header every
- * ant_radio_*.c backend and src/ant_serial_bridge.c already use - becomes a thin
- * alias of this header under the ANTW_ names, so no application code changes;
- * see that file for why ANTW_ is the name application code keeps.
+ * The prefix is exactly what makes the two coexist.
+ * apps/common/ant_radio_sdk_ant.c is the one file permitted to include both, and
+ * it is where every RADIANT_WIRE_* constant is BUILD_ASSERTed against its sdk-ant
+ * counterpart. It also keeps the bridge textually free of Garmin's API names,
+ * which matters for a clean-room rebuild (docs/decisions/0002-clean-room-policy.md).
+ *
+ * This header lives inside the radiant module so that nothing in the module ever
+ * has to reach outside it for a wire constant: radiant is meant to be dropped into
+ * a project with nothing else from this repository on its include path. Until
+ * 2026-11-22 a second generated header, ant_wire.h, aliased every value here
+ * under an ANTW prefix for application code; RadiANT's own prefix replaced it
+ * (ADR 0003, amended 2026-11-22).
+ *
+ * The Python module deliberately does NOT carry the prefix. The collision it
+ * solves is a C preprocessor problem, and Python already has module namespaces:
+ * `ant_wire.MESG_ASSIGN_CHANNEL_ID` is unambiguous.
  *
  * Nothing here describes the on-air link layer. This header is about
  * bytes on a USB bulk endpoint or a UART, and about nothing else.
@@ -286,19 +291,19 @@
 
 /*
  * Background scanning. Bridged as of 2026-08-10: refuses with
- * ANTW_CLOSE_ALL_CHANNELS unless every channel is closed, then opens channel
- * 0 as a background-scan slave - the same mechanism MESG_ASSIGN_CHANNEL's
- * extended byte already reaches, one message at a time. Rev 5.1 sec 9.5.4.5
- * scans with channel 0 as the host assigned and configured it, so an assigned
- * channel 0 keeps its type, network, channel ID, RF and period across the
- * reassign (its ID list, low-priority timeout and search priority return to
- * defaults); a master channel 0 is refused with CHANNEL_IN_WRONG_STATE. An
- * unassigned channel 0 becomes a wildcard slave on network 0 at the default
- * RF, as before. The optional synchronous-channel-packets-only byte is
- * accepted and ignored; reporting everything is a superset of the restricted
- * subset. radiant backend only - the capabilities reply advertises this on
- * radiant and OFF elsewhere, which is why a host with the call
- * (ANT_OpenRxScanMode) sends it only there. [bridge]
+ * RADIANT_WIRE_CLOSE_ALL_CHANNELS unless every channel is closed, then opens
+ * channel 0 as a background-scan slave - the same mechanism
+ * MESG_ASSIGN_CHANNEL's extended byte already reaches, one message at a time.
+ * Rev 5.1 sec 9.5.4.5 scans with channel 0 as the host assigned and
+ * configured it, so an assigned channel 0 keeps its type, network, channel
+ * ID, RF and period across the reassign (its ID list, low-priority timeout
+ * and search priority return to defaults); a master channel 0 is refused with
+ * CHANNEL_IN_WRONG_STATE. An unassigned channel 0 becomes a wildcard slave on
+ * network 0 at the default RF, as before. The optional synchronous-channel-
+ * packets-only byte is accepted and ignored; reporting everything is a
+ * superset of the restricted subset. radiant backend only - the capabilities
+ * reply advertises this on radiant and OFF elsewhere, which is why a host
+ * with the call (ANT_OpenRxScanMode) sends it only there. [bridge]
  */
 #define RADIANT_WIRE_MESG_OPEN_RX_SCAN_MODE_ID               0x5B
 
@@ -983,7 +988,7 @@
  * which told hosts the stick had cold-booted and defeated the one thing this
  * byte is watched for - telling an unexpected reset apart from the host's
  * own. The basis for 0x20 is sdk-ant's own header, which ant_radio_sdk_ant.c
- * pins with ANTW_EQ(STARTUP_COMMAND_RESET, RESET_CMD); no observed retail-
+ * pins with WIRE_EQ(STARTUP_COMMAND_RESET, RESET_CMD); no observed retail-
  * stick capture of this frame exists here, and the 0x20 frame vectors are
  * tagged hand, not observed. [tools (ant_probe)]
  */
@@ -1362,13 +1367,13 @@
  * with an order: enter, supply a scalar, exchange keys, commit to and
  * reveal nonces, leave. Separate ids would let a host skip a step and get
  * a state error it could not localise; here an out-of-order sub-command is
- * refused with ANTW_INVALID_PARAMETER_PROVIDED and changes nothing. The
- * reply echoes the sub-command in the same byte, because a public key, a
- * commitment and a fingerprint are all 'some bytes after a channel byte'
- * otherwise. Host sequence, A = initiator, B = responder, each host
- * driving its own end and carrying the values in brackets over the air:
- * both ENTER, SCALAR (-> own key), [keys cross], EXCHANGE. Then B:
- * NONCE(role 1, Nb) -> Cb, [Cb to A]. A: NONCE(role 0, Na),
+ * refused with RADIANT_WIRE_INVALID_PARAMETER_PROVIDED and changes
+ * nothing. The reply echoes the sub-command in the same byte, because a
+ * public key, a commitment and a fingerprint are all 'some bytes after a
+ * channel byte' otherwise. Host sequence, A = initiator, B = responder,
+ * each host driving its own end and carrying the values in brackets over
+ * the air: both ENTER, SCALAR (-> own key), [keys cross], EXCHANGE. Then
+ * B: NONCE(role 1, Nb) -> Cb, [Cb to A]. A: NONCE(role 0, Na),
  * PEER_COMMIT(Cb), and only then [Na to B]. B: PEER_NONCE(Na) -> fp, and
  * only then [Nb to A]. A: PEER_NONCE(Nb) -> fp, or a refusal if Nb does
  * not open Cb, which wipes A's exchange. Both humans compare the two fps.
@@ -1439,10 +1444,10 @@
 /*
  * The peer's 16-byte nonce at [2..17]. On the initiator it must open the
  * commitment from PEER_COMMIT; if it does not, the exchange is wiped and the
- * reply is ANTW_RADIANT_PAIR_COMMIT_MISMATCH (0xF5), distinct from the
- * INVALID_PARAMETER_PROVIDED an out-of-order call gets. An all-zero nonce is
- * refused. Then the root key is derived from the DH result, both public keys
- * and both nonces, and installed, and the reply carries the six-digit
+ * reply is RADIANT_WIRE_RADIANT_PAIR_COMMIT_MISMATCH (0xF5), distinct from
+ * the INVALID_PARAMETER_PROVIDED an out-of-order call gets. An all-zero nonce
+ * is refused. Then the root key is derived from the DH result, both public
+ * keys and both nonces, and installed, and the reply carries the six-digit
  * comparison fingerprint (CMAC_Na(PKa || PKb || Nb) mod 2^32 mod 10^6) as a
  * u24 LE from [2]. The key is LIVE from this answer, before the humans
  * compare; on a mismatch, an abort or a timeout at either end, the host
@@ -1707,27 +1712,27 @@
  * Configure the two payload transforms on one channel. [0] channel; [1]
  * switch bitmask - bit 0 X_CONF, bit 1 X_AUTH, bit 2 drop an unverified
  * window instead of delivering it (default 0, deliver), bit 3 encrypt the
- * descriptor set (REFUSED in v1 with ANTW_INVALID_PARAMETER_PROVIDED - the
- * descriptor has no counter and therefore no nonce), bit 4 send one
+ * descriptor set (REFUSED in v1 with RADIANT_WIRE_INVALID_PARAMETER_PROVIDED
+ * - the descriptor has no counter and therefore no nonce), bit 4 send one
  * MESG_RADIANT_SEC_VERDICT (0xF8) per judged window (valid only with bit 1,
- * X_AUTH; refused with ANTW_INVALID_PARAMETER_PROVIDED otherwise), bits 7..5
- * reserved must be 0; [2] MAC window W, the literal 2, 4 or 8 (W=1 is
- * reserved for the reliable-command page); [3] secured page range low and [4]
- * high, both bounded to 0x01..0x1F so the descriptor and the ANT+ common
+ * X_AUTH; refused with RADIANT_WIRE_INVALID_PARAMETER_PROVIDED otherwise),
+ * bits 7..5 reserved must be 0; [2] MAC window W, the literal 2, 4 or 8 (W=1
+ * is reserved for the reliable-command page); [3] secured page range low and
+ * [4] high, both bounded to 0x01..0x1F so the descriptor and the ANT+ common
  * pages stay in the clear mechanically rather than by memory. The two
  * switches are independent, not a ladder: X_AUTH alone is the most useful
  * setting in the table. On a MASTER, a tuple different from the installed one
- * is REFUSED with ANTW_CHANNEL_IN_WRONG_STATE, changing nothing, while host
- * acknowledged data or a burst is in flight or the master is answering a
- * slave's burst; the host retries once it completes, as for 0xF2. An accepted
- * change takes back the slot and acknowledgement payload already built, so
- * the new policy is the one on the air when this answers, at the cost of at
- * most one silent slot. An identical tuple, and any tuple to a slave, is
- * never refused. An identical tuple (a retry) changes nothing: windows in
- * flight, the replay floor and the sender's tag in progress are kept. A
- * change discards the windows in flight and restarts the sender's tag but
- * keeps the replay floor (docs/radiant-security.md sec 3.2, 3.5 and 7.6). [K4
- * (docs/radiant-security.md sec 3 and 9)]
+ * is REFUSED with RADIANT_WIRE_CHANNEL_IN_WRONG_STATE, changing nothing,
+ * while host acknowledged data or a burst is in flight or the master is
+ * answering a slave's burst; the host retries once it completes, as for 0xF2.
+ * An accepted change takes back the slot and acknowledgement payload already
+ * built, so the new policy is the one on the air when this answers, at the
+ * cost of at most one silent slot. An identical tuple, and any tuple to a
+ * slave, is never refused. An identical tuple (a retry) changes nothing:
+ * windows in flight, the replay floor and the sender's tag in progress are
+ * kept. A change discards the windows in flight and restarts the sender's tag
+ * but keeps the replay floor (docs/radiant-security.md sec 3.2, 3.5 and 7.6).
+ * [K4 (docs/radiant-security.md sec 3 and 9)]
  */
 #define RADIANT_WIRE_MESG_RADIANT_SEC_CONFIG_ID              0xF1
 
@@ -1736,16 +1741,16 @@
  * in bits, 128 and nothing else in v1; [2..17] the key. Everything else -
  * K_enc, K_auth, K_id, K_cmd - is derived from it, so a pairing moves exactly
  * sixteen bytes. WRITE ONLY: there is no read arm anywhere, and MESG_REQUEST
- * for 0xF2 answers ANTW_INVALID_MESSAGE rather than a key. NOT checked
- * against other channels: the host gives each live channel a distinct root or
- * base device number, or two channels given one epoch by 0xF3 share a
+ * for 0xF2 answers RADIANT_WIRE_INVALID_MESSAGE rather than a key. NOT
+ * checked against other channels: the host gives each live channel a distinct
+ * root or base device number, or two channels given one epoch by 0xF3 share a
  * keystream (docs/radiant-security.md sec 3.5). On a MASTER, REFUSED with
- * ANTW_CHANNEL_IN_WRONG_STATE while host acknowledged data or a burst is in
- * flight. A different root (a real rekey) on a keyed, secured master takes
- * back the slot and acknowledgement payload built under the old key before
- * this answers, as a changed 0xF1 does; the channel is then pending until
- * 0xF3. The root already installed (a retry) changes nothing. On TI the take-
- * back's RF_flushCmd is asynchronous, so a frame already on the air may
+ * RADIANT_WIRE_CHANNEL_IN_WRONG_STATE while host acknowledged data or a burst
+ * is in flight. A different root (a real rekey) on a keyed, secured master
+ * takes back the slot and acknowledgement payload built under the old key
+ * before this answers, as a changed 0xF1 does; the channel is then pending
+ * until 0xF3. The root already installed (a retry) changes nothing. On TI the
+ * take-back's RF_flushCmd is asynchronous, so a frame already on the air may
  * complete. [K4 (docs/radiant-security.md sec 3.4 and 9)]
  */
 #define RADIANT_WIRE_MESG_RADIANT_SET_KEY_ID                 0xF2
@@ -1763,10 +1768,10 @@
  * enables until this has been set after a reset: a reboot that restarts the
  * counter under an unchanged epoch is a two-time pad for X_CONF and a full
  * session replay against X_AUTH. WRITE ONLY: MESG_REQUEST for 0xF3 answers
- * ANTW_INVALID_MESSAGE. The epoch, the expected slot index and the armed
- * state read back through 0xF4; the exact phase and the real-time flag are
- * not retained, so nothing could echo them. [K4 (docs/radiant-security.md sec
- * 3.5 and 9)]
+ * RADIANT_WIRE_INVALID_MESSAGE. The epoch, the expected slot index and the
+ * armed state read back through 0xF4; the exact phase and the real-time flag
+ * are not retained, so nothing could echo them. [K4 (docs/radiant-security.md
+ * sec 3.5 and 9)]
  */
 #define RADIANT_WIRE_MESG_RADIANT_EPOCH_ID                   0xF3
 

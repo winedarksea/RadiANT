@@ -59,10 +59,10 @@ The seam below is what removed that, and it mirrors the transport pattern in
 already works and is already asserted in CI.
 
 ```
-apps/common/ant_serial_bridge.c   unchanged logic; speaks only ANTW_*/antr_*
+apps/common/ant_serial_bridge.c   unchanged logic; speaks only RADIANT_WIRE_*/antr_*
         |
    radiant/include/radiant/ant_radio.h    OUR ~50-function contract  (antr_*)
-   radiant/include/radiant/ant_wire.h     OUR protocol constants     (ANTW_*)
+   radiant/include/radiant/radiant_wire.h     OUR protocol constants     (RADIANT_WIRE_*)
         |
    +----+-----------------+----------------------+
    |                      |                      |
@@ -76,15 +76,15 @@ ant_radio_sdk_ant.c   ant_radio_stub.c    radiant/   (clean-room stack)
 
 | Backend | What it is | Why it exists |
 |---|---|---|
-| `sdk_ant` | ~50 one-line forwarders onto `libant.a`, plus a `BUILD_ASSERT` block comparing every `ANTW_*` constant against its `MESG_*` counterpart | **The A/B comparison reference, and nothing else** — not shipped, not built by CI, and reached only by an explicit `-DANT_RADIO=sdk_ant`. See [`sdk-ant-contract.md`](sdk-ant-contract.md) |
+| `sdk_ant` | ~50 one-line forwarders onto `libant.a`, plus a `BUILD_ASSERT` block comparing every `RADIANT_WIRE_*` constant against its `MESG_*` counterpart | **The A/B comparison reference, and nothing else** — not shipped, not built by CI, and reached only by an explicit `-DANT_RADIO=sdk_ant`. See [`sdk-ant-contract.md`](sdk-ant-contract.md) |
 | `core` | The clean-room rebuild in `radiant/` | **The shipping radio**, since the 2026-08-20 switchover in [ADR 0001](decisions/0001-backend-selection-and-release-default.md). Builds with zero sdk-ant present, and is a superset — 32 channels, background scan, the RadiANT extensions |
 | `stub` | A no-op radio, [`apps/common/ant_radio_stub.c`](../apps/common/ant_radio_stub.c) — the rename of the old `src/ant_stub.c` | The cheapest proof the seam holds. Builds in seconds, and is the only configuration today that runs with no sdk-ant at all |
 
 **The prefixes are load-bearing, not cosmetic.** sdk-ant's error macros are
 computed expressions (`NRF_ANT_ERROR_OFFSET + INVALID_MESSAGE`), not literals,
 so identical macro *names* with non-identical token sequences are a hard
-redefinition error — `ant_wire.h` and `ant_parameters.h` could never coexist in
-one translation unit. `ANTW_`/`antr_` is what lets the shim include both and
+redefinition error — `radiant_wire.h` and `ant_parameters.h` could never coexist in
+one translation unit. `RADIANT_WIRE_`/`antr_` is what lets the shim include both and
 `BUILD_ASSERT` them against each other. It also makes the bridge textually free
 of Garmin's API names, which matters for the clean-room narrative.
 
@@ -1165,7 +1165,7 @@ routes in from the wire. The first is ext-assign — the
 `radiant_api.c` reads to choose `RADIANT_SEARCH_MODE_SCAN` over
 `RADIANT_SEARCH_MODE_ACQUIRE` for one channel at a time. The second is
 `MESG_OPEN_RX_SCAN_MODE` (`0x5B`) itself, now handled in
-`apps/common/ant_serial_bridge.c`: it refuses with `ANTW_CLOSE_ALL_CHANNELS` unless
+`apps/common/ant_serial_bridge.c`: it refuses with `RADIANT_WIRE_CLOSE_ALL_CHANNELS` unless
 every channel is closed, then takes channel 0 through the same ext-assign path
 in one call instead of three.
 

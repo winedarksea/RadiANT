@@ -6,7 +6,7 @@
  * handling depends on: whether the channel has finished closing.
  *
  * The stub's contract is the real stack's (ant_radio.h): open() on a channel
- * that is still open or still CLOSING answers ANTW_CHANNEL_IN_WRONG_STATE, and
+ * that is still open or still CLOSING answers RADIANT_WIRE_CHANNEL_IN_WRONG_STATE, and
  * a search timeout closes the channel ITSELF - RX_SEARCH_TIMEOUT first, then
  * CHANNEL_CLOSED once any scan window bound to it has ended. That gap is the
  * whole of review 2026-10-31's B2-3: the module reopened on the timeout, the
@@ -21,7 +21,7 @@
 #include <zephyr/ztest.h>
 
 #include "ant_radio.h"
-#include "ant_wire.h"
+#include <radiant/radiant_wire.h>
 #include "treadmill_hr_rx.h"
 #include "treadmill_state.h"
 
@@ -59,7 +59,7 @@ antr_err_t antr_channel_assign(uint8_t channel, uint8_t type, uint8_t network,
 	ARG_UNUSED(network);
 	ARG_UNUSED(ext_assign);
 	stub.state = STUB_ASSIGNED;
-	return ANTW_RESPONSE_NO_ERROR;
+	return RADIANT_WIRE_RESPONSE_NO_ERROR;
 }
 
 antr_err_t antr_channel_id_set(uint8_t channel, uint16_t device_number,
@@ -69,35 +69,35 @@ antr_err_t antr_channel_id_set(uint8_t channel, uint16_t device_number,
 	ARG_UNUSED(device_number);
 	ARG_UNUSED(device_type);
 	ARG_UNUSED(trans_type);
-	return ANTW_RESPONSE_NO_ERROR;
+	return RADIANT_WIRE_RESPONSE_NO_ERROR;
 }
 
 antr_err_t antr_channel_period_set(uint8_t channel, uint16_t period)
 {
 	ARG_UNUSED(channel);
 	ARG_UNUSED(period);
-	return ANTW_RESPONSE_NO_ERROR;
+	return RADIANT_WIRE_RESPONSE_NO_ERROR;
 }
 
 antr_err_t antr_channel_radio_freq_set(uint8_t channel, uint8_t freq)
 {
 	ARG_UNUSED(channel);
 	ARG_UNUSED(freq);
-	return ANTW_RESPONSE_NO_ERROR;
+	return RADIANT_WIRE_RESPONSE_NO_ERROR;
 }
 
 antr_err_t antr_channel_search_timeout_set(uint8_t channel, uint8_t timeout)
 {
 	ARG_UNUSED(channel);
 	ARG_UNUSED(timeout);
-	return ANTW_RESPONSE_NO_ERROR;
+	return RADIANT_WIRE_RESPONSE_NO_ERROR;
 }
 
 antr_err_t antr_search_channel_priority_set(uint8_t channel, uint8_t priority)
 {
 	ARG_UNUSED(channel);
 	ARG_UNUSED(priority);
-	return ANTW_RESPONSE_NO_ERROR;
+	return RADIANT_WIRE_RESPONSE_NO_ERROR;
 }
 
 antr_err_t antr_prox_search_set(uint8_t channel, uint8_t threshold,
@@ -107,13 +107,13 @@ antr_err_t antr_prox_search_set(uint8_t channel, uint8_t threshold,
 	ARG_UNUSED(custom);
 	stub.last_prox = threshold;
 	stub.prox_calls++;
-	return ANTW_RESPONSE_NO_ERROR;
+	return RADIANT_WIRE_RESPONSE_NO_ERROR;
 }
 
 antr_err_t antr_lib_config_set(uint8_t config)
 {
 	ARG_UNUSED(config);
-	return ANTW_RESPONSE_NO_ERROR;
+	return RADIANT_WIRE_RESPONSE_NO_ERROR;
 }
 
 antr_err_t antr_channel_open_with_offset(uint8_t channel, uint16_t offset)
@@ -122,21 +122,21 @@ antr_err_t antr_channel_open_with_offset(uint8_t channel, uint16_t offset)
 	ARG_UNUSED(offset);
 	stub.open_calls++;
 	if (stub.state != STUB_ASSIGNED) {
-		return ANTW_CHANNEL_IN_WRONG_STATE;
+		return RADIANT_WIRE_CHANNEL_IN_WRONG_STATE;
 	}
 	stub.state = STUB_OPEN;
 	stub.open_ok++;
-	return ANTW_RESPONSE_NO_ERROR;
+	return RADIANT_WIRE_RESPONSE_NO_ERROR;
 }
 
 antr_err_t antr_channel_close(uint8_t channel)
 {
 	ARG_UNUSED(channel);
 	if (stub.state != STUB_OPEN) {
-		return ANTW_CHANNEL_IN_WRONG_STATE;
+		return RADIANT_WIRE_CHANNEL_IN_WRONG_STATE;
 	}
 	stub.state = STUB_ASSIGNED;
-	return ANTW_RESPONSE_NO_ERROR;
+	return RADIANT_WIRE_RESPONSE_NO_ERROR;
 }
 
 /* What main.c does with a reading: record it. */
@@ -150,9 +150,9 @@ void treadmill_node_heart_rate(uint8_t bpm)
 
 static void feed_event(uint8_t code)
 {
-	uint8_t data[3] = { HR_CH, ANTW_MESG_EVENT_ID, code };
+	uint8_t data[3] = { HR_CH, RADIANT_WIRE_MESG_EVENT_ID, code };
 	struct antr_msg m = {
-		.id = ANTW_MESG_RESPONSE_EVENT_ID,
+		.id = RADIANT_WIRE_MESG_RESPONSE_EVENT_ID,
 		.len = sizeof(data),
 		.data = data,
 	};
@@ -165,7 +165,7 @@ static void feed_bpm(uint8_t bpm)
 	/* [ch][page, x, x, x, event time lo, hi, count, computed bpm] */
 	uint8_t data[9] = { HR_CH, 0x04u, 0u, 0u, 0u, 0u, 0u, 1u, bpm };
 	struct antr_msg m = {
-		.id = ANTW_MESG_BROADCAST_DATA_ID,
+		.id = RADIANT_WIRE_MESG_BROADCAST_DATA_ID,
 		.len = sizeof(data),
 		.data = data,
 	};
@@ -202,13 +202,13 @@ ZTEST(treadmill_hr_rx, test_reopen_waits_for_channel_closed)
 	uint32_t opens = stub.open_calls;
 
 	stub.state = STUB_CLOSING;
-	feed_event(ANTW_EVENT_RX_SEARCH_TIMEOUT);
+	feed_event(RADIANT_WIRE_EVENT_RX_SEARCH_TIMEOUT);
 	zassert_equal(opens, stub.open_calls,
 		      "reopened on RX_SEARCH_TIMEOUT, before CHANNEL_CLOSED - "
 		      "refused while the channel is CLOSING");
 
 	stub.state = STUB_ASSIGNED;
-	feed_event(ANTW_EVENT_CHANNEL_CLOSED);
+	feed_event(RADIANT_WIRE_EVENT_CHANNEL_CLOSED);
 	zassert_equal(STUB_OPEN, stub.state,
 		      "the slave was not reopened after its search timed out: "
 		      "no strap will ever be acquired again until reboot");
@@ -225,7 +225,7 @@ ZTEST(treadmill_hr_rx, test_stray_channel_closed_does_not_reopen)
 	uint32_t opens = stub.open_calls;
 
 	stub.state = STUB_ASSIGNED;
-	feed_event(ANTW_EVENT_CHANNEL_CLOSED);
+	feed_event(RADIANT_WIRE_EVENT_CHANNEL_CLOSED);
 	zassert_equal(opens, stub.open_calls,
 		      "reopened on a CHANNEL_CLOSED no timeout asked for");
 }
@@ -238,7 +238,7 @@ ZTEST(treadmill_hr_rx, test_go_to_search_clears_bpm)
 	let_work_run();
 	zassert_equal(140u, last_bpm_seen, "setup: the reading was not delivered");
 
-	feed_event(ANTW_EVENT_RX_FAIL_GO_TO_SEARCH);
+	feed_event(RADIANT_WIRE_EVENT_RX_FAIL_GO_TO_SEARCH);
 	let_work_run();
 	zassert_equal(TREADMILL_HR_NONE, last_bpm_seen,
 		      "a strap that went away kept its last reading (%u bpm) "

@@ -60,7 +60,7 @@
  * B5), and it is released exactly once, by whichever of release_next() or
  * finish() reaches it first, gated by t->block_released (B3, B4). Getting
  * this wrong doesn't crash - the bridge's k_sem_take() times out after
- * 1000 ms and answers ANTW_TRANSFER_IN_PROGRESS, so a two-second transfer
+ * 1000 ms and answers RADIANT_WIRE_TRANSFER_IN_PROGRESS, so a two-second transfer
  * takes ten minutes with nothing in the log to explain why. Not catchable by
  * inspection, so radiant/tests/src/test_transfer.c counts released blocks
  * against accepted ones on every path (success, mid-transfer failure, abort,
@@ -725,7 +725,7 @@ int radiant_transfer_submit(struct radiant_transfer *t, uint8_t *block, uint8_t 
 	} else {
 		/* Mid-packet with a block already staged, or behind the END
 		 * block. The host must wait for NEXT_BLOCK; this is the
-		 * ANTW_TRANSFER_IN_PROGRESS the bridge already expects. */
+		 * RADIANT_WIRE_TRANSFER_IN_PROGRESS the bridge already expects. */
 		return RADIANT_TRANSFER_EBUSY;
 	}
 

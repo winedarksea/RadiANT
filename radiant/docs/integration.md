@@ -21,7 +21,7 @@ CONFIG_RADIANT_ANTR_API=y
 
 ### Open a channel
 
-Every call returns `ANTW_RESPONSE_NO_ERROR` (0) or an ANT response code.
+Every call returns `RADIANT_WIRE_RESPONSE_NO_ERROR` (0) or an ANT response code.
 
 ```c
 #include <radiant/ant_radio.h>
@@ -35,7 +35,7 @@ int main(void)
 	antr_init();
 	antr_network_address_set(0, ant_plus_key);
 
-	antr_channel_assign(0, ANTW_CHANNEL_TYPE_SLAVE, 0, 0);
+	antr_channel_assign(0, RADIANT_WIRE_CHANNEL_TYPE_SLAVE, 0, 0);
 	antr_channel_id_set(0, 0, 0x78, 0);        /* any heart-rate sensor */
 	antr_channel_period_set(0, 8070);          /* 4.06 Hz */
 	antr_channel_radio_freq_set(0, 57);        /* 2457 MHz */
@@ -56,7 +56,7 @@ block.
 ```c
 void antr_on_message(const struct antr_msg *msg)
 {
-	if (msg->id == ANTW_MESG_BROADCAST_DATA_ID && msg->len >= 9) {
+	if (msg->id == RADIANT_WIRE_MESG_BROADCAST_DATA_ID && msg->len >= 9) {
 		uint8_t channel = msg->data[0];
 		const uint8_t *page = &msg->data[1];
 
@@ -68,12 +68,12 @@ void antr_on_message(const struct antr_msg *msg)
 
 `data[0]` is the channel and the eight payload bytes follow. Byte 7 of every
 heart-rate page is the computed heart rate. Events arrive the same way, with `id`
-set to `ANTW_MESG_RESPONSE_EVENT_ID` and the event code in `data[2]`.
+set to `RADIANT_WIRE_MESG_RESPONSE_EVENT_ID` and the event code in `data[2]`.
 
 ### Transmit
 
-Assign the channel as `ANTW_CHANNEL_TYPE_MASTER`, give it your own device number,
-open it, and supply each next page when `ANTW_EVENT_TX` arrives. See
+Assign the channel as `RADIANT_WIRE_CHANNEL_TYPE_MASTER`, give it your own device number,
+open it, and supply each next page when `RADIANT_WIRE_EVENT_TX` arrives. See
 [`samples/hr_transmitter`](../samples/hr_transmitter/).
 
 ### Decode profiles

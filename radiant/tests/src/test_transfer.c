@@ -932,7 +932,7 @@ ZTEST(transfer, test_a_rejected_block_is_never_released)
 	zassert_equal(0u, radiant_transfer_stats(&xfer)->blocks_accepted);
 
 	/* And mid-packet with a block already staged, which is the
-	 * ANTW_TRANSFER_IN_PROGRESS the bridge already knows how to answer
+	 * RADIANT_WIRE_TRANSFER_IN_PROGRESS the bridge already knows how to answer
 	 * with. (Since 2026-11-12 the FIRST mid-packet continuation is staged,
 	 * not refused - see test_staging_refuses_a_second_block_and_anything_
 	 * after_end - so one is staged here before the stray is tried.) */

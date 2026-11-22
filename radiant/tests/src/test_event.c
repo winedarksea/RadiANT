@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Provenance: original work. Every expected byte here was written from
- * src/ant_wire.h (generated from protocol/ant_wire.yaml), from
+ * radiant/include/radiant/radiant_wire.h (generated from protocol/ant_wire.yaml), from
  * tools/ant_verify.py's extended_fields() - which this module must be the
  * exact inverse of - and from the t_sync contract in
  * radiant/include/radiant/radiant_radio_hal.h, not from running

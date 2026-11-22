@@ -37,7 +37,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len);
 
 #include "../../../apps/common/ant_serial_bridge.c"
 
-static char trace_line[4 * ANTW_MAX_FRAME_SIZE + 8];
+static char trace_line[4 * RADIANT_WIRE_MAX_FRAME_SIZE + 8];
 static unsigned int n_trace;
 static unsigned int n_dispatched;
 
@@ -68,9 +68,9 @@ static void trace_before(void *f)
 static size_t trace_frame_build(uint8_t *out, uint8_t id, const uint8_t *body,
 				uint8_t len)
 {
-	uint8_t x = ANTW_SYNC_TX ^ len ^ id;
+	uint8_t x = RADIANT_WIRE_SYNC_TX ^ len ^ id;
 
-	out[0] = ANTW_SYNC_TX;
+	out[0] = RADIANT_WIRE_SYNC_TX;
 	out[1] = len;
 	out[2] = id;
 	for (uint8_t i = 0; i < len; i++) {
@@ -131,7 +131,7 @@ static void check_network_key_masked(void)
 
 	body[0] = 0x00;
 	fill_key(&body[1], 8);
-	n = trace_frame_build(f, ANTW_MESG_NETWORK_KEY_ID, body, sizeof(body));
+	n = trace_frame_build(f, RADIANT_WIRE_MESG_NETWORK_KEY_ID, body, sizeof(body));
 	trace_feed(f, n);
 	zassert_equal(1u, n_trace);
 	expect_line("H>", f, 4, 8 + 1);
@@ -145,7 +145,7 @@ static void check_encrypt_key_masked(void)
 
 	body[0] = 0x03;
 	fill_key(&body[1], 16);
-	n = trace_frame_build(f, ANTW_MESG_SET_ENCRYPT_KEY_ID, body, sizeof(body));
+	n = trace_frame_build(f, RADIANT_WIRE_MESG_SET_ENCRYPT_KEY_ID, body, sizeof(body));
 	trace_feed(f, n);
 	zassert_equal(1u, n_trace);
 	expect_line("H>", f, 4, 16 + 1);
@@ -160,7 +160,7 @@ static void check_radiant_key_masked(void)
 	body[0] = 0x01;
 	body[1] = 128;
 	fill_key(&body[2], 16);
-	n = trace_frame_build(f, ANTW_MESG_RADIANT_SET_KEY_ID, body, sizeof(body));
+	n = trace_frame_build(f, RADIANT_WIRE_MESG_RADIANT_SET_KEY_ID, body, sizeof(body));
 	trace_feed(f, n);
 	zassert_equal(1u, n_trace);
 	expect_line("H>", f, 5, 16 + 1);
@@ -177,7 +177,7 @@ static void check_pairing_masked(void)
 	body[0] = 0x00;
 	body[1] = 0x02;
 	fill_key(&body[2], 32);
-	n = trace_frame_build(f, ANTW_MESG_RADIANT_PAIRING_ID, body, sizeof(body));
+	n = trace_frame_build(f, RADIANT_WIRE_MESG_RADIANT_PAIRING_ID, body, sizeof(body));
 	trace_feed(f, n);
 	zassert_equal(1u, n_trace);
 	expect_line("H>", f, 3, 34 + 1);
@@ -192,7 +192,7 @@ static void check_outbound_pairing_masked(void)
 	body[0] = 0x00;
 	body[1] = 0x03;
 	fill_key(&body[2], 32);
-	n = trace_frame_build(f, ANTW_MESG_RADIANT_PAIRING_ID, body, sizeof(body));
+	n = trace_frame_build(f, RADIANT_WIRE_MESG_RADIANT_PAIRING_ID, body, sizeof(body));
 	TRACE_TX(f, n);
 	zassert_equal(1u, n_trace);
 	expect_line("<D", f, 3, 34 + 1);
@@ -203,7 +203,7 @@ static void check_plain_frame_whole(void)
 {
 	const uint8_t body[] = {0x00, 0x39};
 	uint8_t f[8];
-	size_t n = trace_frame_build(f, ANTW_MESG_CHANNEL_RADIO_FREQ_ID, body,
+	size_t n = trace_frame_build(f, RADIANT_WIRE_MESG_CHANNEL_RADIO_FREQ_ID, body,
 				     sizeof(body));
 
 	trace_feed(f, n);
@@ -217,10 +217,10 @@ static void check_plain_frame_whole(void)
 static void check_key_bodies_wiped(void)
 {
 	static const uint8_t ids[] = {
-		ANTW_MESG_NETWORK_KEY_ID,
-		ANTW_MESG_SET_ENCRYPT_KEY_ID,
-		ANTW_MESG_RADIANT_SET_KEY_ID,
-		ANTW_MESG_RADIANT_PAIRING_ID,
+		RADIANT_WIRE_MESG_NETWORK_KEY_ID,
+		RADIANT_WIRE_MESG_SET_ENCRYPT_KEY_ID,
+		RADIANT_WIRE_MESG_RADIANT_SET_KEY_ID,
+		RADIANT_WIRE_MESG_RADIANT_PAIRING_ID,
 	};
 
 	for (size_t k = 0; k < ARRAY_SIZE(ids); k++) {
@@ -244,9 +244,9 @@ static void check_bad_checksum_key_wiped(void)
 
 	body[0] = 0x00;
 	fill_key(&body[1], 16);
-	n = trace_frame_build(f, ANTW_MESG_SET_ENCRYPT_KEY_ID, body, sizeof(body));
+	n = trace_frame_build(f, RADIANT_WIRE_MESG_SET_ENCRYPT_KEY_ID, body, sizeof(body));
 	f[n - 1] ^= 0x01;
-	zassert_not_equal(ANTW_SYNC_TX, f[n - 1]);
+	zassert_not_equal(RADIANT_WIRE_SYNC_TX, f[n - 1]);
 	trace_feed(f, n);
 	zassert_equal(0u, n_dispatched);
 	zassert_true(body_is_zero(), "a bad-checksum key frame was kept");
@@ -262,7 +262,7 @@ static void check_bad_checksum_any_id_wiped(void)
 
 	body[0] = 0x03;
 	fill_key(&body[1], 16);
-	n = trace_frame_build(f, ANTW_MESG_SET_ENCRYPT_KEY_ID, body, sizeof(body));
+	n = trace_frame_build(f, RADIANT_WIRE_MESG_SET_ENCRYPT_KEY_ID, body, sizeof(body));
 	/* Drop the id byte: LEN 0x11, then the key number read as the id. */
 	memmove(&f[2], &f[3], n - 3);
 	trace_feed(f, n - 1);
@@ -279,9 +279,9 @@ static void check_rng_seed_masked_and_wiped(void)
 	uint8_t body[17], f[24];
 	size_t n;
 
-	body[0] = ANTW_ENCRYPTION_INFO_SET_RNG_SEED;
+	body[0] = RADIANT_WIRE_ENCRYPTION_INFO_SET_RNG_SEED;
 	fill_key(&body[1], 16);
-	n = trace_frame_build(f, ANTW_MESG_SET_ENCRYPT_INFO_ID, body, sizeof(body));
+	n = trace_frame_build(f, RADIANT_WIRE_MESG_SET_ENCRYPT_INFO_ID, body, sizeof(body));
 	trace_feed(f, n);
 	zassert_equal(1u, n_trace);
 	expect_line("H>", f, 4, 16 + 1);
@@ -291,10 +291,10 @@ static void check_rng_seed_masked_and_wiped(void)
 /* Other 0x7F types are not secret: traced whole, not wiped. */
 static void check_crypto_id_info_whole(void)
 {
-	const uint8_t body[] = {ANTW_ENCRYPTION_INFO_SET_CRYPTO_ID,
+	const uint8_t body[] = {RADIANT_WIRE_ENCRYPTION_INFO_SET_CRYPTO_ID,
 				0x11, 0x22, 0x33, 0x44};
 	uint8_t f[12];
-	size_t n = trace_frame_build(f, ANTW_MESG_SET_ENCRYPT_INFO_ID, body,
+	size_t n = trace_frame_build(f, RADIANT_WIRE_MESG_SET_ENCRYPT_INFO_ID, body,
 				     sizeof(body));
 
 	trace_feed(f, n);

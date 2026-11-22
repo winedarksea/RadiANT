@@ -194,7 +194,7 @@ files in `boards/` are one `.conf` and one `.overlay` each.
 | `apps/dongle/` | The dongle application: build config (`CMakeLists.txt`, `Kconfig`, `prj.conf`, conf fragments) and `src/main.c` |
 | `apps/common/` | The firmware shared by all three dongle applications — the bridge, the transports, the USB class |
 | `radiant/` | The clean-room ANT-compatible link layer, as a Zephyr module: `include/radiant/` is its public surface, `Kconfig` selects its HAL backend, and `tests/` runs under ztest in CI as a standalone application that consumes the module the way any third party would |
-| `protocol/` | `ant_wire.yaml`, the single source of truth for protocol constants. `scripts/gen_ant_wire.py` generates `radiant/include/radiant/ant_wire.h`, `tools/ant_wire.py` and a marked region of the protocol doc from it |
+| `protocol/` | `ant_wire.yaml`, the single source of truth for protocol constants. `scripts/gen_ant_wire.py` generates `radiant/include/radiant/radiant_wire.h`, `tools/ant_wire.py` and a marked region of the protocol doc from it |
 | `tools/` | Host-side Python: probe, scan, session, bench, features, sim, verify, and the `test_*.py` that run in CI |
 | `apps/sim/` | Standalone ANT+ sensor firmware for the nRF54L15 DK. Not a dongle build — it is the reference transmitter every bench measurement is made against |
 | `boards/` | Per-board `.conf`/`.overlay`: output format, code partition, and prising the console off the USB device we need |
@@ -220,7 +220,7 @@ files in `boards/` are one `.conf` and one `.overlay` each.
 | `apps/common/ant_serial_bridge.c` | ANT serial protocol (`0xA4` framing) ↔ the radio backend |
 | `apps/common/ant_radio_stub.c` | No-op radio, compiled only when the stub backend is selected |
 | `apps/common/diag_flash_log.c` | Log backend that commits to flash, readable back over UF2 |
-| `radiant/include/radiant/ant_radio.h`, `radiant/include/radiant/ant_wire.h` | Our ~50-function radio contract and our protocol constants — the seam that lets the bridge speak to any backend. See [Backends](docs/backends.md) |
+| `radiant/include/radiant/ant_radio.h`, `radiant/include/radiant/radiant_wire.h` | Our ~50-function radio contract and our protocol constants — the seam that lets the bridge speak to any backend. See [Backends](docs/backends.md) |
 
 ### Building from source
 

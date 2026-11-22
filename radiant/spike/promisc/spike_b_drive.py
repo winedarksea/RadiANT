@@ -166,7 +166,7 @@ def enable_adv_burst(dev, reader, size_code: int = ADV_BURST_MODES_SIZE_24_BYTES
 def burst_seq(index: int) -> int:
     """The host-side burst sequence number for the index'th block.
 
-    Two bits on the wire (`ANTW_BURST_HEADER_SEQ_MASK` is 3), and it does
+    Two bits on the wire (`RADIANT_WIRE_BURST_HEADER_SEQ_MASK` is 3), and it does
     *not* count modulo 4: sequence 0 marks only the first packet of a
     transfer, so a long burst runs 0, 1, 2, 3, 1, 2, 3, ... (wrap skips 0).
     `src/ant_serial_bridge.c` derives ANTR_BURST_SEGMENT_START from

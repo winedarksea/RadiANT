@@ -62,7 +62,7 @@
 
 #include "ant_radio.h"
 #include "ant_serial_bridge.h"
-#include "ant_wire.h"
+#include <radiant/radiant_wire.h>
 
 #include "radiant_binding.h"
 #include "radiant_bridge.h"
@@ -358,7 +358,7 @@ static int assign_one(uint8_t i, antr_err_t *refusal)
 	antr_err_t rc;
 
 	*refusal = 0u;
-	rc = antr_channel_assign(ch, ANTW_CHANNEL_TYPE_SLAVE, SELF_NETWORK, 0u);
+	rc = antr_channel_assign(ch, RADIANT_WIRE_CHANNEL_TYPE_SLAVE, SELF_NETWORK, 0u);
 	if (rc != 0u) {
 		*refusal = rc;
 		return -EIO;
@@ -426,11 +426,11 @@ static void log_assign_refusal(uint8_t ch, int res, antr_err_t rc,
 	if (res == -EAGAIN) {
 		LOG_INF("self channel %u: host reset in progress - "
 			"re-establishing on the next poll", ch);
-	} else if (rc == (antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE &&
+	} else if (rc == (antr_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE &&
 		   why == SELF_ASSIGN_AFTER_TEARDOWN) {
 		LOG_INF("self channel %u: teardown still in progress, retrying "
 			"next poll", ch);
-	} else if (rc == (antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE) {
+	} else if (rc == (antr_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE) {
 		LOG_INF("self channel %u: the host assigned it first; it is the "
 			"host's until its next reset", ch);
 	} else {
@@ -443,7 +443,7 @@ static void log_assign_refusal(uint8_t ch, int res, antr_err_t rc,
  * The most device IDs one channel's exclusion list can hold, on either backend:
  * the radiant backend's API_ID_LIST_MAX (radiant/src/antr/ant_radio_radiant.c,
  * "what a retail stick accepts") and sdk-ant's ant_id_list_config() list size
- * (0-4, include/ant_interface.h). One more is ANTW_INVALID_LIST_ID.
+ * (0-4, include/ant_interface.h). One more is RADIANT_WIRE_INVALID_LIST_ID.
  */
 #define SELF_ID_LIST_MAX 4u
 
@@ -540,7 +540,7 @@ static void exclude_pinned(uint8_t ch)
  *
  * All four configuration calls are legal in exactly this state and in no
  * other: ant_radio.h says antr_channel_id_set(), antr_channel_period_set() and
- * antr_channel_radio_freq_set() answer ANTW_CHANNEL_IN_WRONG_STATE when the
+ * antr_channel_radio_freq_set() answer RADIANT_WIRE_CHANNEL_IN_WRONG_STATE when the
  * channel is "unassigned or open", and the radiant backend implements that as
  * require_assigned_closed() (radiant/src/radiant_channel.c). A channel whose
  * search has just timed out is precisely assigned-and-closed - the backend
@@ -942,12 +942,12 @@ static bool self_key_poll(uint32_t *gen)
 
 static enum radiant_self_radio radio_of(uint8_t status)
 {
-	switch (status & ANTW_STATUS_CHANNEL_STATE_MASK) {
-	case ANTW_STATUS_ASSIGNED_CHANNEL:
+	switch (status & RADIANT_WIRE_STATUS_CHANNEL_STATE_MASK) {
+	case RADIANT_WIRE_STATUS_ASSIGNED_CHANNEL:
 		return RADIANT_SELF_RADIO_ASSIGNED;
-	case ANTW_STATUS_SEARCHING_CHANNEL:
+	case RADIANT_WIRE_STATUS_SEARCHING_CHANNEL:
 		return RADIANT_SELF_RADIO_SEARCHING;
-	case ANTW_STATUS_TRACKING_CHANNEL:
+	case RADIANT_WIRE_STATUS_TRACKING_CHANNEL:
 		return RADIANT_SELF_RADIO_TRACKING;
 	default:
 		return RADIANT_SELF_RADIO_UNASSIGNED;

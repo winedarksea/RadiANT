@@ -127,7 +127,7 @@ int trainer_ackfault_attach(uint8_t channel)
 	af_channel = channel;
 
 	return (antr_reply_plan_hook_set(channel, reply_plan, NULL) ==
-		ANTW_RESPONSE_NO_ERROR)
+		RADIANT_WIRE_RESPONSE_NO_ERROR)
 		       ? 0
 		       : -EIO;
 }

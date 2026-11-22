@@ -301,7 +301,7 @@ static void report(void)
 #if defined(CONFIG_RADIANT)
 
 #include "ant_radio.h"
-#include "ant_wire.h"
+#include <radiant/radiant_wire.h>
 
 /*
  * Device profile numbers are irrelevant - nothing decodes these frames.
@@ -365,7 +365,7 @@ static void ant_load_start(void)
 		 * receive window after each slot that nothing will reply to,
 		 * which this measurement would misattribute to the transmit
 		 * blackout. */
-		rc = antr_channel_assign(ch, ANTW_CHANNEL_TYPE_MASTER_TX_ONLY,
+		rc = antr_channel_assign(ch, RADIANT_WIRE_CHANNEL_TYPE_MASTER_TX_ONLY,
 					 0u, 0u);
 		if (rc != 0) {
 			LOG_ERR("ch%u assign: %u", ch, (unsigned int)rc);
@@ -414,10 +414,10 @@ void antr_on_message(const struct antr_msg *msg)
 	if (msg == NULL || msg->data == NULL) {
 		return;
 	}
-	if (msg->id != ANTW_MESG_RESPONSE_EVENT_ID || msg->len < 3u) {
+	if (msg->id != RADIANT_WIRE_MESG_RESPONSE_EVENT_ID || msg->len < 3u) {
 		return;
 	}
-	if (msg->data[2] != ANTW_EVENT_TX) {
+	if (msg->data[2] != RADIANT_WIRE_EVENT_TX) {
 		return;
 	}
 

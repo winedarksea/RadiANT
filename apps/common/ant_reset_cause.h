@@ -21,7 +21,7 @@
 
 #include <zephyr/drivers/hwinfo.h>
 
-#include "ant_wire.h"
+#include <radiant/radiant_wire.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -62,12 +62,12 @@ bool ant_reset_cause(uint32_t *cause);
 static inline uint8_t ant_reset_cause_startup_reason(uint32_t cause)
 {
 	if (cause & (RESET_WATCHDOG | RESET_CPU_LOCKUP | RESET_SOFTWARE)) {
-		return ANTW_STARTUP_WATCH_DOG_RESET;
+		return RADIANT_WIRE_STARTUP_WATCH_DOG_RESET;
 	}
 	if (cause & (RESET_PIN | RESET_DEBUG)) {
-		return ANTW_STARTUP_HARDWARE_RESET_LINE;
+		return RADIANT_WIRE_STARTUP_HARDWARE_RESET_LINE;
 	}
-	return ANTW_STARTUP_POWER_ON_RESET;
+	return RADIANT_WIRE_STARTUP_POWER_ON_RESET;
 }
 
 #ifdef __cplusplus

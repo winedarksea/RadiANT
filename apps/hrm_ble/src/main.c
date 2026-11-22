@@ -31,7 +31,7 @@
 #include <zephyr/logging/log.h>
 
 #include "ant_radio.h"
-#include "ant_wire.h"
+#include <radiant/radiant_wire.h>
 #include "profile_hr.h"
 #include "node_ident.h"
 #include "hrm_sensor.h"
@@ -108,12 +108,12 @@ static void ant_suppression_update(void)
 		 * still consumed a page. open() posts the first slot from
 		 * whatever the buffer holds - the last page, after a resume -
 		 * and EVENT_TX after that slot starts the real stream. */
-		if (antr_channel_open(HR_CHANNEL) == ANTW_RESPONSE_NO_ERROR) {
+		if (antr_channel_open(HR_CHANNEL) == RADIANT_WIRE_RESPONSE_NO_ERROR) {
 			ant_open = true;
 			LOG_INF("ANT+ resumed (BLE disconnected)");
 		}
 	} else {
-		if (antr_channel_close(HR_CHANNEL) == ANTW_RESPONSE_NO_ERROR) {
+		if (antr_channel_close(HR_CHANNEL) == RADIANT_WIRE_RESPONSE_NO_ERROR) {
 			ant_open = false;
 			LOG_INF("ANT+ suppressed (BLE connected)");
 		}
@@ -218,11 +218,11 @@ void antr_on_message(const struct antr_msg *msg)
 		return;
 	}
 
-	if (msg->id == ANTW_MESG_RESPONSE_EVENT_ID &&
-	    msg->len >= ANTW_MESG_RESPONSE_EVENT_SIZE) {
+	if (msg->id == RADIANT_WIRE_MESG_RESPONSE_EVENT_ID &&
+	    msg->len >= RADIANT_WIRE_MESG_RESPONSE_EVENT_SIZE) {
 		/* data[0] channel, data[1] the message id being responded to
 		 * (0 for an event), data[2] the code. */
-		if (msg->data[0] == HR_CHANNEL && msg->data[2] == ANTW_EVENT_TX) {
+		if (msg->data[0] == HR_CHANNEL && msg->data[2] == RADIANT_WIRE_EVENT_TX) {
 			load_next_page();
 		}
 	}
@@ -233,14 +233,14 @@ static int ant_start(uint16_t devnum)
 	antr_err_t rc;
 
 	rc = antr_network_address_set(HR_NETWORK, ant_plus_key);
-	if (rc != ANTW_RESPONSE_NO_ERROR) {
+	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("network key: %d", (int)rc);
 		return -EIO;
 	}
 
-	rc = antr_channel_assign(HR_CHANNEL, ANTW_CHANNEL_TYPE_MASTER,
+	rc = antr_channel_assign(HR_CHANNEL, RADIANT_WIRE_CHANNEL_TYPE_MASTER,
 				 HR_NETWORK, 0u);
-	if (rc != ANTW_RESPONSE_NO_ERROR) {
+	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("assign: %d", (int)rc);
 		return -EIO;
 	}
@@ -248,19 +248,19 @@ static int ant_start(uint16_t devnum)
 	/* Transmission type 5, matching apps/sim and tools/ant_sim.py - part of
 	 * the channel id a receiver matches on. */
 	rc = antr_channel_id_set(HR_CHANNEL, devnum, HR_DEVICE_TYPE, 5u);
-	if (rc != ANTW_RESPONSE_NO_ERROR) {
+	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("channel id: %d", (int)rc);
 		return -EIO;
 	}
 
 	rc = antr_channel_period_set(HR_CHANNEL, HR_PERIOD_COUNTS);
-	if (rc != ANTW_RESPONSE_NO_ERROR) {
+	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("period: %d", (int)rc);
 		return -EIO;
 	}
 
 	rc = antr_channel_radio_freq_set(HR_CHANNEL, HR_RF_FREQ);
-	if (rc != ANTW_RESPONSE_NO_ERROR) {
+	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("rf freq: %d", (int)rc);
 		return -EIO;
 	}
@@ -275,7 +275,7 @@ static int ant_start(uint16_t devnum)
 	 * real stream.
 	 */
 	rc = antr_channel_open(HR_CHANNEL);
-	if (rc != ANTW_RESPONSE_NO_ERROR) {
+	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("open: %d", (int)rc);
 		return -EIO;
 	}
@@ -291,7 +291,7 @@ int main(void)
 
 	LOG_INF("RadiANT heart-rate node: ANT+ 0x78");
 
-	if (antr_init() != ANTW_RESPONSE_NO_ERROR) {
+	if (antr_init() != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("antr_init failed");
 		return 0;
 	}

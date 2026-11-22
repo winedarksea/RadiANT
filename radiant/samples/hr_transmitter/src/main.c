@@ -21,8 +21,8 @@
  * one never does. See CONFIG_HR_TX_ONE_WAY.
  */
 #define HR_CHANNEL_TYPE (IS_ENABLED(CONFIG_HR_TX_ONE_WAY) ?            \
-			 ANTW_CHANNEL_TYPE_MASTER_TX_ONLY :              \
-			 ANTW_CHANNEL_TYPE_MASTER)
+			 RADIANT_WIRE_CHANNEL_TYPE_MASTER_TX_ONLY :              \
+			 RADIANT_WIRE_CHANNEL_TYPE_MASTER)
 
 /* Pick your own, from 1 to 65535. Two sensors should not share a number. */
 #define DEVICE_NUMBER  12345u
@@ -57,9 +57,9 @@ static void send_next_page(void)
  */
 void antr_on_message(const struct antr_msg *msg)
 {
-	if (msg->id == ANTW_MESG_RESPONSE_EVENT_ID &&
-	    msg->len >= ANTW_MESG_RESPONSE_EVENT_SIZE &&
-	    msg->data[0] == HR_CHANNEL && msg->data[2] == ANTW_EVENT_TX) {
+	if (msg->id == RADIANT_WIRE_MESG_RESPONSE_EVENT_ID &&
+	    msg->len >= RADIANT_WIRE_MESG_RESPONSE_EVENT_SIZE &&
+	    msg->data[0] == HR_CHANNEL && msg->data[2] == RADIANT_WIRE_EVENT_TX) {
 		send_next_page();
 	}
 }
@@ -67,7 +67,7 @@ void antr_on_message(const struct antr_msg *msg)
 #define TRY(call)                                                        \
 	do {                                                             \
 		antr_err_t rc = (call);                                  \
-		if (rc != ANTW_RESPONSE_NO_ERROR) {                      \
+		if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {                      \
 			printk("%s failed: 0x%02x\n", #call, rc);        \
 			return 0;                                        \
 		}                                                        \

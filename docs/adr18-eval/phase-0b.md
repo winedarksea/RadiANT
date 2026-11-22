@@ -75,7 +75,7 @@ turns it on. On the leg image the DUT printed 98 `TDIAG frame` and 224
   comment in `ant_health.h`. 0xF6 `payload_len` is now `"30..32"`. The YAML
   documents `[30..31]` as optional and states that it clamps without the flag.
   `ant_wire.py`, `radiant_wire.h` and `docs/ant-serial-protocol.md` were
-  regenerated; `ant_wire.h` came out unchanged.
+  regenerated; `radiant_wire.h` came out unchanged.
 - `tools/ant_health.py`: `PAYLOAD_LEN` is still 30. The field is in a separate
   `OPTIONAL_FIELDS` table: its key appears only when the body holds it, and the
   text output prints `-  not in this build` instead of 0.

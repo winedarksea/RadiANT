@@ -14,7 +14,7 @@
 #include <string.h>
 
 #include <radiant/ant_radio.h>
-#include <radiant/ant_wire.h>
+#include <radiant/radiant_wire.h>
 #include "ant_radio_radiant.h"
 #include "ant_radio_radiant_priv.h"
 
@@ -68,19 +68,19 @@ static const uint8_t sec_net_addr[RADIANT_NET_ADDR_LEN] = {
 
 static void sec_open(uint8_t type)
 {
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_network_address_set(0u, sec_net_key));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_channel_assign(SEC_CH, type, 0u, 0u));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_channel_id_set(SEC_CH, SEC_DEVNUM, SEC_DEVTYPE,
 					  SEC_TRANSTYPE));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_channel_period_set(SEC_CH,
 					      RADIANT_CHANNEL_PERIOD_ANT_PLUS));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_channel_radio_freq_set(SEC_CH, SEC_RF));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_channel_open(SEC_CH));
 }
 
@@ -127,7 +127,7 @@ static void sec_write(void)
 	uint8_t buf[8];
 
 	memcpy(buf, sec_payload, sizeof(buf));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_broadcast_message_tx(SEC_CH, 8u, buf));
 }
 
@@ -170,7 +170,7 @@ ZTEST(api, test_sec_a_masters_body_is_the_hosts_payload_when_nothing_is_on)
 {
 	const struct fake_radio_arm *tx;
 
-	sec_open((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	sec_open((uint8_t)RADIANT_WIRE_CHANNEL_TYPE_MASTER);
 	tx = sec_slot_with_payload();
 	zassert_not_null(tx, "the master armed no transmit");
 
@@ -201,7 +201,7 @@ ZTEST(api, test_sec_a_retransmission_is_byte_identical)
 	 * of a copy, the second slot would encrypt already-encrypted bytes -
 	 * a receiver would decode only the first slot, looking like a range
 	 * problem. */
-	sec_open((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	sec_open((uint8_t)RADIANT_WIRE_CHANNEL_TYPE_MASTER);
 	tx = sec_slot_with_payload();
 	zassert_not_null(tx);
 	memcpy(first, &tx->body[SEC_BODY_D0], sizeof(first));
@@ -252,7 +252,7 @@ ZTEST(api, test_sec_the_on_air_address_is_the_one_the_channel_id_derives)
 					 sec_net_addr, &id, want,
 					 sizeof(want)));
 
-	sec_open((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	sec_open((uint8_t)RADIANT_WIRE_CHANNEL_TYPE_MASTER);
 	tx = sec_slot_with_payload();
 	zassert_not_null(tx);
 
@@ -304,7 +304,7 @@ ZTEST(api, test_sec_an_acknowledgement_carries_what_the_broadcast_put_on_air)
 	 * (both plaintext without the feature, both ciphertext with it),
 	 * unlike "the reply is not the plaintext" which only runs one way.
 	 */
-	sec_open((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	sec_open((uint8_t)RADIANT_WIRE_CHANNEL_TYPE_MASTER);
 
 #if defined(CONFIG_RADIANT_SEC)
 	{
@@ -397,7 +397,7 @@ ZTEST(api, test_sec_a_denied_secured_master_slot_is_posted_by_the_pump_under_the
 	uint32_t       tx_before;
 	int            rc[4];
 
-	sec_open((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	sec_open((uint8_t)RADIANT_WIRE_CHANNEL_TYPE_MASTER);
 	k_mutex_lock(&api_lock, K_FOREVER);
 	rc[0] = radiant_sec_set_key(SEC_CH, root, 128, SEC_DEVNUM);
 	rc[1] = radiant_sec_set_devnum(SEC_CH, SEC_DEVNUM);
@@ -488,7 +488,7 @@ ZTEST(api, test_sec_a_pending_master_sends_nothing_in_the_clear)
 
 	/* The slot armed at open, unkeyed; the host then writes a secured page
 	 * and keys the channel while that slot is still ahead. */
-	sec_open((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	sec_open((uint8_t)RADIANT_WIRE_CHANNEL_TYPE_MASTER);
 	tx = sec_last_tx();
 	zassert_not_null(tx);
 	t_tx = tx->t_sync_at;
@@ -529,7 +529,7 @@ ZTEST(api, test_sec_a_pending_master_sends_nothing_in_the_clear)
 
 	/* Outside the secured range: travels as on any channel. */
 	memcpy(buf, common, sizeof(buf));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_broadcast_message_tx(SEC_CH, 8u, buf));
 	fake_radio_advance_to(radiant_radio_now() + 2u * period);
 	zassert_true(sec_tx_carried(mark, common),
@@ -589,7 +589,7 @@ ZTEST(api, test_sec_an_ack_during_the_master_post_never_carries_plaintext)
 		RADIANT_CHANNEL_PERIOD_ANT_PLUS);
 	int            rc[4];
 
-	sec_open((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	sec_open((uint8_t)RADIANT_WIRE_CHANNEL_TYPE_MASTER);
 	k_mutex_lock(&api_lock, K_FOREVER);
 	rc[0] = radiant_sec_set_key(SEC_CH, root, 128, SEC_DEVNUM);
 	rc[1] = radiant_sec_set_devnum(SEC_CH, SEC_DEVNUM);
@@ -668,7 +668,7 @@ static radiant_time_t sec_dir_master(const struct fake_radio_arm **tx_out)
 	const struct fake_radio_arm *tx;
 	int                          rc[4];
 
-	sec_open((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	sec_open((uint8_t)RADIANT_WIRE_CHANNEL_TYPE_MASTER);
 	k_mutex_lock(&api_lock, K_FOREVER);
 	rc[0] = radiant_sec_set_key(SEC_CH, sec_dir_root, 128, SEC_DEVNUM);
 	rc[1] = radiant_sec_set_devnum(SEC_CH, SEC_DEVNUM);
@@ -823,13 +823,13 @@ ZTEST(api, test_sec_a_keyed_master_refuses_acked_and_burst)
 	static uint8_t blk[8] = { 0x10u, 1, 2, 3, 4, 5, 6, 7 };
 	uint32_t       arms;
 
-	sec_open((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	sec_open((uint8_t)RADIANT_WIRE_CHANNEL_TYPE_MASTER);
 	sec_key_pending();
 	arms = fake_radio_arm_count();
 
-	zassert_equal((antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE,
+	zassert_equal((antr_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE,
 		      antr_acknowledge_message_tx(SEC_CH, 8u, blk));
-	zassert_equal((antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE,
+	zassert_equal((antr_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE,
 		      antr_burst_tx(SEC_CH, 8u, blk,
 				    ANTR_BURST_SEGMENT_START |
 					    ANTR_BURST_SEGMENT_END));
@@ -843,9 +843,9 @@ ZTEST(api, test_sec_a_keyed_slave_still_sends_acked_data)
 {
 	static const uint8_t blk[8] = { 0x46u, 0xFF, 0xFF, 0xFF, 0xFF, 1, 2, 1 };
 
-	sec_open((uint8_t)ANTW_CHANNEL_TYPE_SLAVE);
+	sec_open((uint8_t)RADIANT_WIRE_CHANNEL_TYPE_SLAVE);
 	sec_key_pending();
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_acknowledge_message_tx(SEC_CH, 8u, blk));
 	sec_close();
 
@@ -866,19 +866,19 @@ ZTEST(api, test_sec_host_key_refused_while_master_acked_in_flight)
 {
 	static const uint8_t blk[8] = { 0x11u, 1, 2, 3, 4, 5, 6, 7 };
 
-	sec_open((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	sec_open((uint8_t)RADIANT_WIRE_CHANNEL_TYPE_MASTER);
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_acknowledge_message_tx(SEC_CH, 8u, blk));
-	zassert_equal((antr_err_t)ANTW_TRANSFER_IN_PROGRESS,
+	zassert_equal((antr_err_t)RADIANT_WIRE_TRANSFER_IN_PROGRESS,
 		      antr_acknowledge_message_tx(SEC_CH, 8u, blk),
 		      "the acked transfer is not in flight");
 
-	zassert_equal((antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE,
+	zassert_equal((antr_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE,
 		      antr_sec_key_set(SEC_CH, 128u, sec_dir_root),
 		      "a master was keyed with host acked data in flight");
 	/* No key went in, so 0xF1 has nothing to configure. is_secured()
 	 * alone would not show it: it needs the switches too (ctx_keyed()). */
-	zassert_not_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_not_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 			  antr_sec_config(SEC_CH, RADIANT_SEC_SW_AUTH, 2u,
 					  0x01u, 0x0Fu),
 			  "the refused key was installed anyway");
@@ -893,19 +893,19 @@ ZTEST(api, test_sec_host_key_refused_while_master_burst_in_flight)
 	static uint8_t       burst_blk[8] = { 0x10u, 1, 2, 3, 4, 5, 6, 7 };
 	static const uint8_t ack_blk[8] = { 0x11u, 1, 2, 3, 4, 5, 6, 7 };
 
-	sec_open((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	sec_open((uint8_t)RADIANT_WIRE_CHANNEL_TYPE_MASTER);
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_burst_tx(SEC_CH, 8u, burst_blk,
 				    ANTR_BURST_SEGMENT_START |
 					    ANTR_BURST_SEGMENT_END));
-	zassert_equal((antr_err_t)ANTW_TRANSFER_IN_PROGRESS,
+	zassert_equal((antr_err_t)RADIANT_WIRE_TRANSFER_IN_PROGRESS,
 		      antr_acknowledge_message_tx(SEC_CH, 8u, ack_blk),
 		      "the burst is not in flight");
 
-	zassert_equal((antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE,
+	zassert_equal((antr_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE,
 		      antr_sec_key_set(SEC_CH, 128u, sec_dir_root),
 		      "a master was keyed with a burst in flight");
-	zassert_not_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_not_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 			  antr_sec_config(SEC_CH, RADIANT_SEC_SW_AUTH, 2u,
 					  0x01u, 0x0Fu),
 			  "the refused key was installed anyway");
@@ -919,18 +919,18 @@ ZTEST(api, test_sec_host_slave_with_acked_in_flight_still_keys)
 {
 	static const uint8_t blk[8] = { 0x46u, 0xFF, 0xFF, 0xFF, 0xFF, 1, 2, 1 };
 
-	sec_open((uint8_t)ANTW_CHANNEL_TYPE_SLAVE);
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	sec_open((uint8_t)RADIANT_WIRE_CHANNEL_TYPE_SLAVE);
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_acknowledge_message_tx(SEC_CH, 8u, blk));
-	zassert_equal((antr_err_t)ANTW_TRANSFER_IN_PROGRESS,
+	zassert_equal((antr_err_t)RADIANT_WIRE_TRANSFER_IN_PROGRESS,
 		      antr_acknowledge_message_tx(SEC_CH, 8u, blk),
 		      "the acked transfer is not in flight");
 
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_key_set(SEC_CH, 128u, sec_dir_root));
 	/* Secured is key AND switches (ctx_keyed()), so configure before
 	 * asking; the key alone leaves is_secured() false. */
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_sec_config(SEC_CH, RADIANT_SEC_SW_AUTH, 2u, 0x01u,
 				      0x0Fu));
 	zassert_true(radiant_sec_channel_is_secured(SEC_CH));
@@ -945,14 +945,14 @@ ZTEST(api, test_sec_an_unkeyed_master_still_sends_acked_and_burst)
 	static uint8_t       burst_blk[8] = { 0x10u, 1, 2, 3, 4, 5, 6, 7 };
 	static const uint8_t ack_blk[8] = { 0x11u, 1, 2, 3, 4, 5, 6, 7 };
 
-	sec_open((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	sec_open((uint8_t)RADIANT_WIRE_CHANNEL_TYPE_MASTER);
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_burst_tx(SEC_CH, 8u, burst_blk,
 				    ANTR_BURST_SEGMENT_START |
 					    ANTR_BURST_SEGMENT_END));
 	sec_close();
-	sec_open((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	sec_open((uint8_t)RADIANT_WIRE_CHANNEL_TYPE_MASTER);
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      antr_acknowledge_message_tx(SEC_CH, 8u, ack_blk));
 	sec_close();
 
@@ -998,7 +998,7 @@ static bool sec_aired_since(radiant_time_t t, const uint8_t pay[8])
 
 static void sec_host_ok(antr_err_t rc, const char *what)
 {
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR, rc, "%s", what);
+	zassert_equal((antr_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR, rc, "%s", what);
 }
 
 /* A master with a slot of the host's page staged and not yet sent, built
@@ -1114,14 +1114,14 @@ ZTEST(api, test_sec_policy_refused_while_master_acked_in_flight)
 {
 	static const uint8_t blk[8] = { 0x11u, 1, 2, 3, 4, 5, 6, 7 };
 
-	sec_open((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	sec_open((uint8_t)RADIANT_WIRE_CHANNEL_TYPE_MASTER);
 	sec_host_key();
 	sec_host_ok(antr_acknowledge_message_tx(SEC_CH, 8u, blk), "acked");
-	zassert_equal((antr_err_t)ANTW_TRANSFER_IN_PROGRESS,
+	zassert_equal((antr_err_t)RADIANT_WIRE_TRANSFER_IN_PROGRESS,
 		      antr_acknowledge_message_tx(SEC_CH, 8u, blk),
 		      "the acked transfer is not in flight");
 
-	zassert_equal((antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE,
+	zassert_equal((antr_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE,
 		      antr_sec_config(SEC_CH, RADIANT_SEC_SW_CONF, 2u, 0x01u,
 				      0x0Fu),
 		      "X_CONF went on with host acked data in flight");
@@ -1137,17 +1137,17 @@ ZTEST(api, test_sec_policy_refused_while_master_burst_in_flight)
 	static uint8_t       burst_blk[8] = { 0x10u, 1, 2, 3, 4, 5, 6, 7 };
 	static const uint8_t ack_blk[8] = { 0x11u, 1, 2, 3, 4, 5, 6, 7 };
 
-	sec_open((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	sec_open((uint8_t)RADIANT_WIRE_CHANNEL_TYPE_MASTER);
 	sec_host_key();
 	sec_host_ok(antr_burst_tx(SEC_CH, 8u, burst_blk,
 				  ANTR_BURST_SEGMENT_START |
 					  ANTR_BURST_SEGMENT_END),
 		    "burst");
-	zassert_equal((antr_err_t)ANTW_TRANSFER_IN_PROGRESS,
+	zassert_equal((antr_err_t)RADIANT_WIRE_TRANSFER_IN_PROGRESS,
 		      antr_acknowledge_message_tx(SEC_CH, 8u, ack_blk),
 		      "the burst is not in flight");
 
-	zassert_equal((antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE,
+	zassert_equal((antr_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE,
 		      antr_sec_config(SEC_CH, RADIANT_SEC_SW_CONF, 2u, 0x01u,
 				      0x0Fu),
 		      "X_CONF went on with a burst in flight");
@@ -1166,7 +1166,7 @@ ZTEST(api, test_sec_policy_refused_while_master_answers_a_burst)
 	uint8_t                      frame[SEC_AIR_LEN];
 	radiant_time_t               t_tx;
 
-	sec_open((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	sec_open((uint8_t)RADIANT_WIRE_CHANNEL_TYPE_MASTER);
 	sec_host_armed(RADIANT_SEC_SW_AUTH, 0x01u, 0x0Fu);
 	tx = sec_staged();
 	t_tx = tx->t_sync_at;
@@ -1182,7 +1182,7 @@ ZTEST(api, test_sec_policy_refused_while_master_answers_a_burst)
 	zassert_not_null(sec_last_tx_with_ctrl(RADIANT_CTRL_ACK_SEQ1),
 			 "setup: the master did not answer the burst");
 
-	zassert_equal((antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE,
+	zassert_equal((antr_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE,
 		      antr_sec_config(SEC_CH, SEC_SW_AC, 2u, 0x01u, 0x0Fu),
 		      "the policy changed while the master answered a burst");
 	sec_switches_are(RADIANT_SEC_SW_AUTH);
@@ -1198,7 +1198,7 @@ ZTEST(api, test_sec_enabling_conf_takes_back_the_staged_broadcast)
 {
 	radiant_time_t t;
 
-	sec_open((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	sec_open((uint8_t)RADIANT_WIRE_CHANNEL_TYPE_MASTER);
 	(void)sec_staged();
 	sec_host_key();
 	t = radiant_radio_now();
@@ -1222,7 +1222,7 @@ ZTEST(api, test_sec_enabling_conf_after_the_epoch_takes_back_the_staged_broadcas
 {
 	radiant_time_t t;
 
-	sec_open((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	sec_open((uint8_t)RADIANT_WIRE_CHANNEL_TYPE_MASTER);
 	(void)sec_staged();
 	sec_host_key();
 	sec_host_ok(antr_sec_epoch_set(SEC_CH, 0u, 1u, 0u), "0xF3");
@@ -1246,7 +1246,7 @@ ZTEST(api, test_sec_adding_conf_to_auth_takes_back_slot_and_ack_payload)
 	uint8_t                      ack[8];
 	radiant_time_t               t;
 
-	sec_open((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	sec_open((uint8_t)RADIANT_WIRE_CHANNEL_TYPE_MASTER);
 	sec_host_armed(RADIANT_SEC_SW_AUTH, 0x01u, 0x0Fu);
 	tx = sec_staged();
 	zassert_mem_equal(&tx->body[SEC_BODY_D0 + 2u], &sec_payload[2], 5u,
@@ -1276,7 +1276,7 @@ ZTEST(api, test_sec_widening_the_range_takes_back_slot_and_ack_payload)
 	const struct fake_radio_arm *tx;
 	radiant_time_t               t;
 
-	sec_open((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	sec_open((uint8_t)RADIANT_WIRE_CHANNEL_TYPE_MASTER);
 	/* Page 0x05 is outside 0x01..0x04: clear by the host's choice. */
 	sec_host_armed(RADIANT_SEC_SW_CONF, 0x01u, 0x04u);
 	tx = sec_staged();
@@ -1304,7 +1304,7 @@ ZTEST(api, test_sec_a_policy_change_never_reuses_a_slot_index)
 	uint8_t  seen[32];
 	uint32_t n = 0u;
 
-	sec_open((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	sec_open((uint8_t)RADIANT_WIRE_CHANNEL_TYPE_MASTER);
 	sec_host_armed(RADIANT_SEC_SW_AUTH, 0x01u, 0x0Fu);
 	(void)sec_staged();
 	sec_host_ok(antr_sec_config(SEC_CH, SEC_SW_AC, 2u, 0x01u, 0x0Fu),
@@ -1348,7 +1348,7 @@ ZTEST(api, test_sec_an_identical_policy_disturbs_nothing)
 	uint32_t                     aborts;
 	radiant_time_t               t_tx;
 
-	sec_open((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	sec_open((uint8_t)RADIANT_WIRE_CHANNEL_TYPE_MASTER);
 	sec_host_armed(SEC_SW_AC, 0x01u, 0x0Fu);
 	tx = sec_staged();
 	t_tx = tx->t_sync_at;
@@ -1379,10 +1379,10 @@ ZTEST(api, test_sec_a_slave_policy_is_neither_refused_nor_flushed)
 	static const uint8_t blk[8] = { 0x46u, 0xFF, 0xFF, 0xFF, 0xFF, 1, 2, 1 };
 	uint32_t             aborts;
 
-	sec_open((uint8_t)ANTW_CHANNEL_TYPE_SLAVE);
+	sec_open((uint8_t)RADIANT_WIRE_CHANNEL_TYPE_SLAVE);
 	sec_host_key();
 	sec_host_ok(antr_acknowledge_message_tx(SEC_CH, 8u, blk), "acked");
-	zassert_equal((antr_err_t)ANTW_TRANSFER_IN_PROGRESS,
+	zassert_equal((antr_err_t)RADIANT_WIRE_TRANSFER_IN_PROGRESS,
 		      antr_acknowledge_message_tx(SEC_CH, 8u, blk),
 		      "the acked transfer is not in flight");
 	aborts = fake_radio_abort_calls();
@@ -1434,7 +1434,7 @@ ZTEST(api, test_sec_a_rekey_takes_back_the_staged_slot_and_ack_payload)
 	uint8_t                      ack[8];
 	radiant_time_t               t;
 
-	sec_open((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	sec_open((uint8_t)RADIANT_WIRE_CHANNEL_TYPE_MASTER);
 	sec_host_armed(SEC_SW_AC, 0x01u, 0x0Fu);
 	tx = sec_staged();
 	memcpy(staged, &tx->body[SEC_BODY_D0], sizeof(staged));
@@ -1477,7 +1477,7 @@ ZTEST(api, test_sec_an_identical_key_disturbs_nothing)
 	uint32_t                     aborts;
 	radiant_time_t               t_tx;
 
-	sec_open((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	sec_open((uint8_t)RADIANT_WIRE_CHANNEL_TYPE_MASTER);
 	sec_host_armed(SEC_SW_AC, 0x01u, 0x0Fu);
 	tx = sec_staged();
 	t_tx = tx->t_sync_at;
@@ -1506,7 +1506,7 @@ ZTEST(api, test_sec_a_slave_rekey_is_not_flushed)
 {
 	uint32_t aborts;
 
-	sec_open((uint8_t)ANTW_CHANNEL_TYPE_SLAVE);
+	sec_open((uint8_t)RADIANT_WIRE_CHANNEL_TYPE_SLAVE);
 	sec_host_armed(SEC_SW_AC, 0x01u, 0x0Fu);
 	sec_periods(1);
 	aborts = fake_radio_abort_calls();
@@ -1530,7 +1530,7 @@ ZTEST(api, test_sec_a_direct_set_key_does_not_flush)
 	uint32_t aborts;
 	int      rc;
 
-	sec_open((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	sec_open((uint8_t)RADIANT_WIRE_CHANNEL_TYPE_MASTER);
 	sec_host_armed(SEC_SW_AC, 0x01u, 0x0Fu);
 	(void)sec_staged();
 	zassert_true(antr_test_ack_payload(SEC_CH, before));

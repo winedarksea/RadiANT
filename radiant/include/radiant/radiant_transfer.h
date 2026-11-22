@@ -160,15 +160,15 @@ extern "C" {
  * would make a propagated error unattributable.
  *
  * radiant_api.c maps them onto the serial protocol's wire codes, which is where the
- * ANTW_* names belong. The intended mapping, stated here because it is the
+ * RADIANT_WIRE_* names belong. The intended mapping, stated here because it is the
  * reason these particular distinctions exist and nowhere else records it:
  *
- *   RADIANT_TRANSFER_EINVAL  -> ANTW_INVALID_MESSAGE
- *   RADIANT_TRANSFER_EBUSY   -> ANTW_TRANSFER_IN_PROGRESS
- *   RADIANT_TRANSFER_ESTATE  -> ANTW_CHANNEL_IN_WRONG_STATE
- *   RADIANT_TRANSFER_ESEQ    -> ANTW_TRANSFER_SEQUENCE_NUMBER_ERROR
- *   RADIANT_TRANSFER_ENOTSUP -> ANTW_INVALID_PARAMETER_PROVIDED
- *   RADIANT_TRANSFER_EIO     -> ANTW_TRANSFER_IN_ERROR
+ *   RADIANT_TRANSFER_EINVAL  -> RADIANT_WIRE_INVALID_MESSAGE
+ *   RADIANT_TRANSFER_EBUSY   -> RADIANT_WIRE_TRANSFER_IN_PROGRESS
+ *   RADIANT_TRANSFER_ESTATE  -> RADIANT_WIRE_CHANNEL_IN_WRONG_STATE
+ *   RADIANT_TRANSFER_ESEQ    -> RADIANT_WIRE_TRANSFER_SEQUENCE_NUMBER_ERROR
+ *   RADIANT_TRANSFER_ENOTSUP -> RADIANT_WIRE_INVALID_PARAMETER_PROVIDED
+ *   RADIANT_TRANSFER_EIO     -> RADIANT_WIRE_TRANSFER_IN_ERROR
  * ---------------------------------------------------------------------------
  */
 #define RADIANT_TRANSFER_OK        0
@@ -477,7 +477,7 @@ int radiant_transfer_build_body(const struct radiant_transfer_cfg *cfg, uint8_t 
 
 /*
  * The three events that carry buffer-ownership meaning, in the same order and
- * with the same meaning as the ANTW_EVENT_TRANSFER_* codes radiant_api.c turns them
+ * with the same meaning as the RADIANT_WIRE_EVENT_TRANSFER_* codes radiant_api.c turns them
  * into. There is no fourth: an event that does not release something has no
  * business on this path.
  */

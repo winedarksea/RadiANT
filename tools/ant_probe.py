@@ -32,7 +32,7 @@ sys.path.insert(0, __file__.rsplit("\\", 1)[0].rsplit("/", 1)[0])
 
 # Every protocol constant, and the framing rule itself, comes from the
 # generated module. It is produced from protocol/ant_wire.yaml alongside
-# src/ant_wire.h, so the firmware and the tools cannot disagree about a value
+# radiant/include/radiant/radiant_wire.h, so the firmware and the tools cannot disagree about a value
 # without the generator's --check failing first.
 #
 # The framing rule matters more than the constants. This file used to carry its
@@ -41,7 +41,7 @@ sys.path.insert(0, __file__.rsplit("\\", 1)[0].rsplit("/", 1)[0])
 # every real ANT host, and cost a week. There is now exactly one implementation
 # of that rule in Python and one in C, generated from the same description.
 #
-# The names are the bare sdk-ant spellings. The ANTW_ prefix in the C header
+# The names are the bare sdk-ant spellings. The RADIANT_WIRE_ prefix in the C header
 # exists only to dodge a preprocessor collision with sdk-ant's own macros;
 # Python has module namespaces and needs no such thing.
 from ant_wire import (  # noqa: E402
@@ -545,7 +545,7 @@ def main() -> int:
         # carry described 0x00 as "power-on / command reset" and 0x20 as
         # "command reset", which is two names for one thing and one name for
         # two; STARTUP_POWER_ON_RESET and STARTUP_COMMAND_RESET are what the
-        # protocol calls them and what src/ant_wire.h says as well.
+        # protocol calls them and what radiant/include/radiant/radiant_wire.h says as well.
         print(f"  OK: startup, reason 0x{reason:02X} "
               f"({STARTUP_REASONS_BY_VALUE.get(reason, 'unknown')})")
 
