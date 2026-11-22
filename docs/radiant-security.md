@@ -1838,7 +1838,7 @@ records what the IDs are for. The allocation below is the one in the YAML.
 |---|---|---|
 | `0xF1` | `ANTW_MESG_RADIANT_SEC_CONFIG_ID` | Per-channel switch bitmask (`X_CONF`/`X_AUTH`), the MAC window W, the secured page range, the drop-vs-deliver policy bit and the opt-in for `0xF8` (bit 4) |
 | `0xF2` | `ANTW_MESG_RADIANT_SET_KEY_ID` | Install the 16-byte `K_root` for a channel. Write-only. The root already installed is a no-op; a different one leaves the channel pending until `0xF3` (section 3.5). Not checked against other channels: the host gives each live channel a distinct root or base device number (section 3.5) |
-| `0xF3` | `ANTW_MESG_RADIANT_EPOCH_ID` | Set or read the epoch and its microsecond time anchor |
+| `0xF3` | `ANTW_MESG_RADIANT_EPOCH_ID` | Set the epoch and its microsecond time anchor. Write-only: a request for it answers `ANTW_INVALID_MESSAGE`, and `0xF4` reads back the epoch and armed state |
 | `0xF4` | `ANTW_MESG_RADIANT_SEC_STATUS_ID` | Read back (structure version at `[1]`): epoch, expected index, window verdict counters, drop counters, enrolments, and at `[30]` whether the channel is keyed and armed |
 | `0xF5` | `ANTW_MESG_RADIANT_PAIRING_ID` | Enter/leave pairing mode; carry the host-supplied scalar and the X25519 exchange |
 | `0xF6` | `ANTW_MESG_RADIANT_HEALTH_ID` | Not a security message: the dongle's health counters (structure version at `[0]`), allocated from the same RadiANT block |
@@ -1965,9 +1965,13 @@ stating:
 - `0xF1`-`0xF5` is not confusable with the SYNC byte `0xA4` or its
   bidirectional variant `0xA5` by a resynchronising parser.
 - These are requestable: `MESG_REQUEST_ID` (`0x4D`) takes a message ID as its
-  argument, so `0xF3` and `0xF4` are readable with no new mechanism. `0xF2` is
-  not: a request for it answers `ANTW_INVALID_MESSAGE`, because keys are
-  write-only.
+  argument, so `0xF4` is readable with no new mechanism. `0xF2` is not: a
+  request for it answers `ANTW_INVALID_MESSAGE`, because keys are write-only.
+  `0xF3` is write-only too and a request for it gets the same answer. The
+  epoch, the expected slot index and the armed state it set read back through
+  `0xF4`; the exact phase and the real-time flag are not retained after the
+  firmware validates them, so a readback would need new state for no known
+  consumer (review 2026-11-21).
 
 **Lib config `0xE0` is a different namespace and has not moved.** The
 `ANTW_LIB_CONFIG_ALL_EXT_FIELDS` setting — channel ID + RSSI + RX timestamp — is

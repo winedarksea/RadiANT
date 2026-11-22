@@ -1339,18 +1339,22 @@ MESG_RADIANT_SEC_CONFIG_ID = 0xF1
 # (docs/radiant-security.md sec 3.4 and 9)]
 MESG_RADIANT_SET_KEY_ID = 0xF2
 
-# Set or read the epoch and its time anchor. [0] channel; [1] flags, bit 0 =
-# the epoch is coarse real time (minutes since the RadiANT date) rather than a
-# bare ordinal; [2..5] epoch (u32 LE); [6..13] microseconds into that epoch
-# (u64 LE), which is the phase a receiver derives the slot counter from rather
-# than from arrival history; it may exceed the dongle's uptime (the anchor then
-# lies before its boot). REFUSES an epoch less than or equal to the current
-# one, refuses epochs near 0xFFFFFFFF so a counter wrap always has headroom,
-# and refuses a phase of more than INT32_MAX channel periods or whose whole
-# wraps would pass that headroom, changing nothing. No transform enables until
-# this has been set after a reset: a reboot that restarts the counter under an
+# Set the epoch and its time anchor. [0] channel; [1] flags, bit 0 = the epoch
+# is coarse real time (minutes since the RadiANT date) rather than a bare
+# ordinal; [2..5] epoch (u32 LE); [6..13] microseconds into that epoch (u64
+# LE), which is the phase a receiver derives the slot counter from rather than
+# from arrival history; it may exceed the dongle's uptime (the anchor then lies
+# before its boot). REFUSES an epoch less than or equal to the current one,
+# refuses epochs near 0xFFFFFFFF so a counter wrap always has headroom, and
+# refuses a phase of more than INT32_MAX channel periods or whose whole wraps
+# would pass that headroom, changing nothing. No transform enables until this
+# has been set after a reset: a reboot that restarts the counter under an
 # unchanged epoch is a two-time pad for X_CONF and a full session replay
-# against X_AUTH. [K4 (docs/radiant-security.md sec 3.5 and 9)]
+# against X_AUTH. WRITE ONLY: MESG_REQUEST for 0xF3 answers
+# ANTW_INVALID_MESSAGE. The epoch, the expected slot index and the armed state
+# read back through 0xF4; the exact phase and the real-time flag are not
+# retained, so nothing could echo them. [K4 (docs/radiant-security.md sec 3.5
+# and 9)]
 MESG_RADIANT_EPOCH_ID = 0xF3
 
 # Per-channel security state, requested with MESG_REQUEST (0x4D). [0] channel;
@@ -2127,9 +2131,9 @@ RADIANT_MESSAGES = {
     },
     0xF3: {
         "name": 'MESG_RADIANT_EPOCH_ID',
-        "direction": 'both',
+        "direction": 'h2d',
         "payload_len": 14,
-        "desc": "Set or read the epoch and its time anchor. [0] channel; [1] flags, bit 0 = the epoch is coarse real time (minutes since the RadiANT date) rather than a bare ordinal; [2..5] epoch (u32 LE); [6..13] microseconds into that epoch (u64 LE), which is the phase a receiver derives the slot counter from rather than from arrival history; it may exceed the dongle's uptime (the anchor then lies before its boot). REFUSES an epoch less than or equal to the current one, refuses epochs near 0xFFFFFFFF so a counter wrap always has headroom, and refuses a phase of more than INT32_MAX channel periods or whose whole wraps would pass that headroom, changing nothing. No transform enables until this has been set after a reset: a reboot that restarts the counter under an unchanged epoch is a two-time pad for X_CONF and a full session replay against X_AUTH.",
+        "desc": "Set the epoch and its time anchor. [0] channel; [1] flags, bit 0 = the epoch is coarse real time (minutes since the RadiANT date) rather than a bare ordinal; [2..5] epoch (u32 LE); [6..13] microseconds into that epoch (u64 LE), which is the phase a receiver derives the slot counter from rather than from arrival history; it may exceed the dongle's uptime (the anchor then lies before its boot). REFUSES an epoch less than or equal to the current one, refuses epochs near 0xFFFFFFFF so a counter wrap always has headroom, and refuses a phase of more than INT32_MAX channel periods or whose whole wraps would pass that headroom, changing nothing. No transform enables until this has been set after a reset: a reboot that restarts the counter under an unchanged epoch is a two-time pad for X_CONF and a full session replay against X_AUTH. WRITE ONLY: MESG_REQUEST for 0xF3 answers ANTW_INVALID_MESSAGE. The epoch, the expected slot index and the armed state read back through 0xF4; the exact phase and the real-time flag are not retained, so nothing could echo them.",
     },
     0xF4: {
         "name": 'MESG_RADIANT_SEC_STATUS_ID',
