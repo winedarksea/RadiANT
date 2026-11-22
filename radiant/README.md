@@ -35,14 +35,16 @@ manifest:
 
 The first release containing the API below is the one after v1.2.0.
 
-Then, before `find_package(Zephyr)` in your `CMakeLists.txt`:
+That entry is all west needs: the repository root carries a `zephyr/module.yml`
+that points at the module. Add only this project, and do not `import:` this
+repository's own `west.yml`, which pulls in all of sdk-nrf v3.4.0.
+
+Without west, copy `radiant/` anywhere and add it before `find_package(Zephyr)`
+in your `CMakeLists.txt`:
 
 ```cmake
-list(APPEND ZEPHYR_EXTRA_MODULES $ENV{ZEPHYR_BASE}/../modules/lib/radiant/radiant)
+list(APPEND ZEPHYR_EXTRA_MODULES path/to/radiant)
 ```
-
-The final `radiant` is the module directory inside the repository. Without west,
-copy `radiant/` anywhere and point that line at it.
 
 In `prj.conf`:
 

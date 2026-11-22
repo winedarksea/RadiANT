@@ -22,7 +22,7 @@ cmake_minimum_required(VERSION 3.20.0)
 # full tree, while CI's isolated run always passes the variable explicitly.
 if(NOT DEFINED RADIANT_MODULE_DIR)
   set(RADIANT_MODULE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant" CACHE PATH
-      "Path to a radiant/ checkout (the directory holding zephyr/module.yml)")
+      "Path to a radiant/ checkout, or to the repository root (each holds a zephyr/module.yml)")
 endif()
 
 if(NOT EXISTS "${RADIANT_MODULE_DIR}/zephyr/module.yml")

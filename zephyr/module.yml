@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Makes the repository root a Zephyr module, so a west project entry for this
+# repository is all a user needs: no ZEPHYR_EXTRA_MODULES line. The module
+# itself is the radiant/ directory; radiant/zephyr/module.yml describes the
+# same module for builds that point at radiant/ directly (the standalone
+# import check, tests/import_smoke, and this repository's own apps under a
+# plain NCS workspace).
+#
+# Both files use the name `radiant`. Zephyr keys modules by name and the last
+# one wins, and ZEPHYR_EXTRA_MODULES is processed after the west projects, so
+# an app that also appends radiant/ gets the same CMake and Kconfig directory
+# either way and nothing is added twice. Nothing reads
+# ZEPHYR_RADIANT_MODULE_DIR, whose value depends on which entry won.
+name: radiant
+build:
+  cmake: radiant
+  kconfig: radiant/Kconfig
+samples:
+  - radiant/samples
+tests:
+  - radiant/tests

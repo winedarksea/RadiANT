@@ -96,7 +96,10 @@ here is real and linked.
 
 ### 1. Bring the module in
 
-Before `find_package(Zephyr)`:
+With west, the project entry in the [README](../README.md) is enough; skip the
+`ZEPHYR_EXTRA_MODULES` line below. Do not `import:` this repository's
+`west.yml`: it pulls in all of sdk-nrf v3.4.0. Without west, add the module
+before `find_package(Zephyr)`:
 
 ```cmake
 list(APPEND ZEPHYR_EXTRA_MODULES path/to/radiant)

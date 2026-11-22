@@ -396,6 +396,22 @@ jobs:
             -p always \
             -- "-DRADIANT_MODULE_DIR=/tmp/radiant-isolated"
 
+      # The repository root's zephyr/module.yml, the path a west user takes.
+      # The workspace already holds the same module through the west project
+      # (west init -l app), so this also covers two module.yml entries with
+      # one name: the last one wins and both name the same directories.
+      - name: Build tests/import_smoke through the repository-root module.yml
+        env:
+          ZEPHYR_TOOLCHAIN_VARIANT: host
+        run: |
+          set -euxo pipefail
+          test -f app/zephyr/module.yml
+          west build app/tests/import_smoke \
+            -b native_sim \
+            -d build-root-module \
+            -p always \
+            -- "-DRADIANT_MODULE_DIR=$PWD/app"
+
       # The module's own tests and samples, from the isolated copy. Built, not
       # run: the ztest job runs the suites, and this job is about what the
       # module can reach. Each finds the module by relative path, so here that
