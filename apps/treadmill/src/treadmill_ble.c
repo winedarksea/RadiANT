@@ -1420,7 +1420,7 @@ int treadmill_ble_start(void)
 		 * below fails and says so with its own error.
 		 *
 		 * THIS APPLICATION LOADS SETTINGS TWICE, in an order unique to
-		 * it: node_ident_boot() has already run settings_subsys_init()
+		 * it: radiant_node_ident_boot() has already run settings_subsys_init()
 		 * + settings_load_subtree() from main() BEFORE bt_enable(),
 		 * and this is a second, whole-tree load after it. Both are
 		 * correct and neither is redundant - the first predates the

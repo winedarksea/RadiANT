@@ -68,7 +68,7 @@ look like Wi-Fi.
 
 ## Selection: the map is the argument
 
-`profile_freq_select()` is pure and is the only ranking function in the
+`radiant_profile_freq_select()` is pure and is the only ranking function in the
 project. It takes evidence — `{rf_index, have, busy_dbm, floor_dbm}` — and
 returns an index or a refusal; the node-side path feeds it
 `radiant_chanmap_get()`, a receiver feeds it its own map. **Two receivers given
@@ -90,7 +90,7 @@ receiver-side case arriving at the right answer by construction.
 
 ## The announcement is a page, not a descriptor frame
 
-The descriptor is where the RF index lives, but `profile_sched.c` encodes the
+The descriptor is where the RF index lives, but `radiant_profile_sched.c` encodes the
 descriptor set **once at init** and retransmits the bytes — the same reason
 RF-5a could put a downlink window on the wire but not announce a *live* one — 
 and a countdown must be recomputed every time the frame goes out. So the
@@ -103,7 +103,7 @@ nothing extra.
 ### The countdown is Layer C's arithmetic and deliberately only that
 
 The private-mode switch ([0008](0008-antplus-additive-pages-and-compat-security.md),
-`profile_private.h`) solved the identical problem — announce a move to N
+`radiant_profile_private.h`) solved the identical problem — announce a move to N
 listeners so all of them act on one message — and its arithmetic is reused
 rather than re-derived:
 
@@ -120,7 +120,7 @@ losing the tail of the old channel rather than the head of the new one.
 re-anchor must not run on the last announcement slot before the move: applied
 there it pushes the move one quantum further out, and the next announcement
 does it again, so the node announces forever and never leaves — "adaptive
-frequency does not work" with nothing in any log. `profile_freq.c` declines to
+frequency does not work" with nothing in any log. `radiant_profile_freq.c` declines to
 announce once `move_at <= msgs + 1`; `radiant/tests/src/test_freq.c` and
 `tools/test_ant_pages.py` pin it.
 
@@ -177,7 +177,7 @@ axis: the sweep covers all 256 values of `devnum_lo` and is *certain* to find
 any transmitting device within one sweep (`test_search.c`, seven tests by
 name); a second PHY or frequency axis would **multiply** the sweep rather than
 extend it. The retry list is a bounded walk over named indices that does not
-touch the sweep's set count — `profile_freq.c` never reaches
+touch the sweep's set count — `radiant_profile_freq.c` never reaches
 `radiant_search.c`.
 
 ## The merged window, and the price
@@ -282,7 +282,7 @@ one packet is 0.17 pp, so both scouted figures were noise, not signal.
   more confidence than it had earned.
 - The map's verdict agreeing independently with `tools/ant_sens.py` and the noise
   histogram. Not attempted; `CONFIG_RADIANT_ED_SCAN` was off in the image
-  used, so `profile_freq_select()` would have returned "no data" and refused to
+  used, so `radiant_profile_freq_select()` would have returned "no data" and refused to
   move — which is this record's own designed behaviour and is why nothing was
   selected automatically for this run. **The indices above were set by hand.**
 
@@ -302,7 +302,7 @@ one packet is 0.17 pp, so both scouted figures were noise, not signal.
   the air.
 - Whether any index anywhere is better. Four were tried out of 125.
 
-**No dB figure appears anywhere in this record, in `profile_freq.c`, or in
+**No dB figure appears anywhere in this record, in `radiant_profile_freq.c`, or in
 `test_freq.c`, and none should be added on the strength of the above.**
 
 What *is* verified: every rule above, as C assertions on real hardware through

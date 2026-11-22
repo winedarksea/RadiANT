@@ -8,10 +8,10 @@
 - **Related:** [0006 identity tiers](0006-security-v1-scope-and-x-priv-withdrawal.md),
   `../radiant-security.md` section 4 (Tier 0), `../hrm-reference-design.md`
   section 5.1, TODO item 5 of the 2026-11-07 security review
-- **Code:** `radiant/src/node/node_ident.c` (`self_provision()`, the trigger in
-  `node_ident_boot()`), `CONFIG_RADIANT_NODE_IDENT_SELF_PROVISION`,
+- **Code:** `radiant/src/node/radiant_node_ident.c` (`self_provision()`, the trigger in
+  `radiant_node_ident_boot()`), `CONFIG_RADIANT_NODE_IDENT_SELF_PROVISION`,
   `radiant/src/radiant_sec_rng_entropy.c` (`CONFIG_RADIANT_SEC_RNG_ENTROPY`),
-  `radiant/src/node/node_nvm_settings.c` (a record that fails to load is EIO),
+  `radiant/src/node/radiant_node_nvm_settings.c` (a record that fails to load is EIO),
   `radiant/tests/fake_rng.c`, `radiant/tests/src/test_node_ident.c`
 
 > **Provenance.** Clean-room. Written from this project's own source and
@@ -26,8 +26,8 @@ ADR 0009 made `K_dev` the root of a hostless node's identity: the Tier 0 device
 number is derived from it, and so is the deterministic pairing scalar. It said
 `K_dev` is "provisioned at manufacture" and left how to a later decision.
 
-Nothing in `apps/` ever called `node_ident_provision()`. So on every board in
-this tree `node_ident_boot()` returned `NODE_IDENT_ENOKEY`, the node fell back
+Nothing in `apps/` ever called `radiant_node_ident_provision()`. So on every board in
+this tree `radiant_node_ident_boot()` returned `RADIANT_NODE_IDENT_ENOKEY`, the node fell back
 to its Kconfig device number (4242, 4243, 4244), and **Tier 0 — the only
 privacy feature on by default — never ran**. Every unit flashed from one build
 shared one identity, which for a treadmill in a gym is twenty machines a
@@ -38,21 +38,21 @@ decision needing its own ADR. This is that ADR.
 ## Decision
 
 1. **`K_dev` is generated on the device, from its own TRNG, the first time it
-   boots with no `K_dev` record.** `node_ident_boot()` draws 16 bytes with
-   `radiant_sec_rng()`, hands them to the existing `node_ident_provision()`
+   boots with no `K_dev` record.** `radiant_node_ident_boot()` draws 16 bytes with
+   `radiant_sec_rng()`, hands them to the existing `radiant_node_ident_provision()`
    (which refuses an all-zero key, writes the key before the counters and
    confirms each by read-back), wipes its copy, and carries on booting. It
    logs `identity provisioned on first boot` once.
 2. **Only "never written" triggers it.** The storage seam already separates
-   `NODE_NVM_ENOENT` (record absent: a first boot) from every other failure.
+   `RADIANT_NODE_NVM_ENOENT` (record absent: a first boot) from every other failure.
    `ENOENT` provisions; any other `K_dev` load failure returns
-   `NODE_IDENT_EIO` and writes nothing. An RNG failure returns
-   `NODE_IDENT_ENOKEY` and writes nothing.
+   `RADIANT_NODE_IDENT_EIO` and writes nothing. An RNG failure returns
+   `RADIANT_NODE_IDENT_ENOKEY` and writes nothing.
 3. **Failure falls back loudly.** Any boot failure — no entropy backend, a
    storage error, an exhausted boot counter — leaves the node on its Kconfig
    device number with no transforms, which is exactly what every board did
    before this ADR, and the application logs it at error level on every boot
-   with the reason (`node_ident_strerror()`).
+   with the reason (`radiant_node_ident_strerror()`).
 4. **The node applications get an entropy backend.**
    `CONFIG_RADIANT_SEC_RNG_ENTROPY` is `radiant_sec_rng()` over Zephyr's
    entropy driver on the board's `zephyr,entropy` node: CRACEN's TRNG
@@ -108,13 +108,13 @@ First-boot generation wins for four reasons.
   section 4 titles Tier 0 "random at first boot, stable thereafter". Until now
   the firmware could not do what that heading says.
 
-A factory that does want to write its own key still can: `node_ident_provision()`
+A factory that does want to write its own key still can: `radiant_node_ident_provision()`
 is unchanged, and a node that finds a record at boot never draws (asserted by
 `test_a_factory_key_is_never_replaced`).
 
 ## The trigger rule
 
-**Only `NODE_NVM_ENOENT` may lead to a new key.** The tempting version is "no
+**Only `RADIANT_NODE_NVM_ENOENT` may lead to a new key.** The tempting version is "no
 usable key, so make one". It is wrong: a flash read that fails once, or a record
 whose size a firmware update changed, would then re-roll the identity silently.
 The device number moves, every receiver paired to it is orphaned, the pairing
@@ -122,14 +122,14 @@ counter restarts under a new key, and nothing logs an error, because from the
 node's point of view provisioning succeeded. So a read error is `EIO`, the node
 falls back for that boot, and the next boot with a working read gets the same
 identity back (`test_a_k_dev_read_error_is_eio_and_never_reprovisions`). A stored
-all-zero key is not `ENOENT` either and is not repaired; `node_ident_provision()`
+all-zero key is not `ENOENT` either and is not repaired; `radiant_node_ident_provision()`
 can never have written one.
 
 The rule is only as good as the storage backend's honesty, and the shipping one
-was not honest about it: `node_nvm_settings.c` left a record it found but could
-not load (wrong length, read error) looking *absent*, which `node_nvm.h` already
+was not honest about it: `radiant_node_nvm_settings.c` left a record it found but could
+not load (wrong length, read error) looking *absent*, which `radiant_node_nvm.h` already
 forbade and which under this ADR would have re-rolled the identity. It now
-marks such a record bad and answers `NODE_NVM_EIO`; a zero-length record (the
+marks such a record bad and answers `RADIANT_NODE_NVM_EIO`; a zero-length record (the
 settings subsystem's deletion) is still absent.
 
 ## Accepted costs
@@ -150,7 +150,7 @@ settings subsystem's deletion) is still absent.
   | nRF52840 DK | 86 956 / 42 666 B | 88 420 / 42 738 B | **+1 464 / +72 B** |
   | nRF54L15 DK | 97 368 / 42 466 B | 98 220 / 45 030 B | **+852 / +2 564 B** |
 
-  (The nRF52840 row was measured before the last `node_nvm_settings.c` change,
+  (The nRF52840 row was measured before the last `radiant_node_nvm_settings.c` change,
   which added 20 B of text on the nRF54L15.)
 
   On the nRF52840 that is the RNG peripheral's driver (~750 B), the
@@ -219,7 +219,7 @@ settings subsystem's deletion) is still absent.
   4. a different image (`sensor_example.conf`) flashed without erase:
      `device number 57338`, no provisioned line.
 
-  Repeated on the final image (with the `node_nvm_settings.c` change): flashed
+  Repeated on the final image (with the `radiant_node_nvm_settings.c` change): flashed
   without erase over the record above, `device number 57338`; then with a
   full erase, `identity provisioned on first boot` and `device number 30995`
   — the erase re-rolled it, as accepted above; then a reset, `30995` again

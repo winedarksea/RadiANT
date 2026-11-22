@@ -331,7 +331,7 @@ ZTEST(radiant_rules, test_a_common_page_counter_does_not_drive_worn)
 }
 
 /*
- * HR 0 is the profile's "no reading" (profile_hr.h), posted during a skin-
+ * HR 0 is the profile's "no reading" (radiant_profile_hr.h), posted during a skin-
  * contact dropout for liveness's sake. It must not satisfy the < 82 bpm rest
  * threshold (review 2026-10-31, C2-2): WORN holds for 20 s after the beats
  * stop, so the dropout used to assert AT_REST after the 3 s zone dwell.
@@ -859,7 +859,7 @@ ZTEST(radiant_rules, test_a_walk_break_does_not_flap_the_output)
 
 ZTEST(radiant_rules, test_reserved_states_are_not_occupied)
 {
-	/* Table 8-10 reserves 0 and 5..7, and profile_fec.c passes them
+	/* Table 8-10 reserves 0 and 5..7, and radiant_profile_fec.c passes them
 	 * through rather than remapping them - "reserved" there means a future
 	 * state, not an error. Anything that is not exactly IN_USE must read
 	 * as unoccupied, which is the safe direction: a future state read as

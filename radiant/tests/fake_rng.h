@@ -4,9 +4,9 @@
  *
  * Provenance: docs/decisions/0009-hostless-node-identity.md (the caps.has_rng
  * seam) and docs/decisions/0020-k-dev-is-generated-on-first-boot.md (its first
- * caller, node_ident_boot()'s self-provisioning).
+ * caller, radiant_node_ident_boot()'s self-provisioning).
  *
- * fake_rng.c is to radiant_sec_rng() what fake_nvm.c is to node_nvm.h: the one
+ * fake_rng.c is to radiant_sec_rng() what fake_nvm.c is to radiant_node_nvm.h: the one
  * implementation of the seam in this image, compiled when
  * CONFIG_RADIANT_TEST_FAKE_RNG selects RADIANT_SEC_HAS_RNG. It is
  * deterministic, so a suite can name the K_dev a first boot will draw, and it

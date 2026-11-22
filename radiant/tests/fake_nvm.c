@@ -1,9 +1,9 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * fake_nvm.c - src/node/node_nvm.h against RAM, with a reboot you can call.
+ * fake_nvm.c - src/node/radiant_node_nvm.h against RAM, with a reboot you can call.
  *
  * Provenance: docs/decisions/0009-hostless-node-identity.md and
- * src/node/node_nvm.h.
+ * src/node/radiant_node_nvm.h.
  *
  * See fake_nvm.h for why this exists: the properties this phase must assert
  * (a counter that survives a power cycle, a write that fails) belong to the
@@ -11,7 +11,7 @@
  * demand - as fake_radio.c is to the radio HAL.
  *
  * No allocation, no threads, fixed records. The record set is closed because
- * node_nvm.h's is: four names.
+ * radiant_node_nvm.h's is: four names.
  */
 
 #include <stdbool.h>
@@ -20,7 +20,7 @@
 #include <string.h>
 
 #include "fake_nvm.h"
-#include "node_nvm.h"
+#include "radiant_node_nvm.h"
 
 #define REC_MAX_LEN 16
 
@@ -31,10 +31,10 @@ struct rec {
 };
 
 static struct rec parts[] = {
-	{ NODE_NVM_KEY_BOOT, { 0 }, 0u },
-	{ NODE_NVM_KEY_PAIR, { 0 }, 0u },
-	{ NODE_NVM_KEY_KDEV, { 0 }, 0u },
-	{ NODE_NVM_KEY_EPOCH, { 0 }, 0u },
+	{ RADIANT_NODE_NVM_KEY_BOOT, { 0 }, 0u },
+	{ RADIANT_NODE_NVM_KEY_PAIR, { 0 }, 0u },
+	{ RADIANT_NODE_NVM_KEY_KDEV, { 0 }, 0u },
+	{ RADIANT_NODE_NVM_KEY_EPOCH, { 0 }, 0u },
 };
 
 static bool     initialised;
@@ -128,57 +128,57 @@ uint32_t fake_nvm_store_count(void)
 	return stores;
 }
 
-/* ── node_nvm.h ───────────────────────────────────────────────────────────── */
+/* ── radiant_node_nvm.h ───────────────────────────────────────────────────────────── */
 
-int node_nvm_init(void)
+int radiant_node_nvm_init(void)
 {
 	initialised = true;
-	return NODE_NVM_OK;
+	return RADIANT_NODE_NVM_OK;
 }
 
-int node_nvm_load(const char *key, void *out, size_t len)
+int radiant_node_nvm_load(const char *key, void *out, size_t len)
 {
 	const struct rec *r;
 
 	if (key == NULL || out == NULL || len == 0u || len > REC_MAX_LEN) {
-		return NODE_NVM_EINVAL;
+		return RADIANT_NODE_NVM_EINVAL;
 	}
 	if (!initialised) {
-		return NODE_NVM_EIO;
+		return RADIANT_NODE_NVM_EIO;
 	}
 	r = find(key);
 	if (r == NULL) {
-		return NODE_NVM_EINVAL;
+		return RADIANT_NODE_NVM_EINVAL;
 	}
 	if (load_fail_remaining > 0u) {
 		/* A read error, present record or not: never ENOENT, which is
 		 * the one answer a caller may act on as "first boot". */
 		load_fail_remaining--;
-		return NODE_NVM_EIO;
+		return RADIANT_NODE_NVM_EIO;
 	}
 	if (r->len == 0u) {
-		return NODE_NVM_ENOENT;
+		return RADIANT_NODE_NVM_ENOENT;
 	}
 	if (r->len != len) {
-		return NODE_NVM_EIO;
+		return RADIANT_NODE_NVM_EIO;
 	}
 	memcpy(out, r->buf, len);
-	return NODE_NVM_OK;
+	return RADIANT_NODE_NVM_OK;
 }
 
-int node_nvm_store(const char *key, const void *val, size_t len)
+int radiant_node_nvm_store(const char *key, const void *val, size_t len)
 {
 	struct rec *r;
 
 	if (key == NULL || val == NULL || len == 0u || len > REC_MAX_LEN) {
-		return NODE_NVM_EINVAL;
+		return RADIANT_NODE_NVM_EINVAL;
 	}
 	if (!initialised) {
-		return NODE_NVM_EIO;
+		return RADIANT_NODE_NVM_EIO;
 	}
 	r = find(key);
 	if (r == NULL) {
-		return NODE_NVM_EINVAL;
+		return RADIANT_NODE_NVM_EINVAL;
 	}
 
 	stores++;
@@ -187,15 +187,15 @@ int node_nvm_store(const char *key, const void *val, size_t len)
 		fail_skip--;
 	} else if (fail_remaining > 0u) {
 		fail_remaining--;
-		return NODE_NVM_EIO;
+		return RADIANT_NODE_NVM_EIO;
 	}
 	if (swallow) {
-		/* Reported as durable, never written; node_ident.c's re-read
+		/* Reported as durable, never written; radiant_node_ident.c's re-read
 		 * has to catch this. */
-		return NODE_NVM_OK;
+		return RADIANT_NODE_NVM_OK;
 	}
 
 	memcpy(r->buf, val, len);
 	r->len = len;
-	return NODE_NVM_OK;
+	return RADIANT_NODE_NVM_OK;
 }

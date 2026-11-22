@@ -3,8 +3,8 @@
  * radiant_rd_adapter.h - ANT+ Running Dynamics (device type 0x1E) onto the
  * sample bus.
  *
- * Wire layout is src/profiles/profile_rd.h's, decoded through
- * profile_rd_decode_a()/_b() rather than re-derived here. Vocabulary mapping
+ * Wire layout is src/profiles/radiant_profile_rd.h's, decoded through
+ * radiant_profile_rd_decode_a()/_b() rather than re-derived here. Vocabulary mapping
  * follows docs/radiant-bridge.md section 3.1's "one adapter per profile,
  * not one per profile per sink".
  *
@@ -18,7 +18,7 @@
  * in only one would be exactly the drift the mirror exists to prevent).
  * Ground contact time is the same unallocated slot as 0x27 time interval;
  * cadence is a second non-SI-rate gap like 0x26 heart rate. Both are still
- * readable from the struct profile_rd_metrics this adapter fills (hence
+ * readable from the struct radiant_profile_rd_metrics this adapter fills (hence
  * radiant_rd_adapter_decode() takes and keeps one rather than decoding into
  * a local) - nothing silently dropped.
  *
@@ -44,7 +44,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "profile_rd.h"
+#include "radiant_profile_rd.h"
 #include "radiant_bridge.h"
 
 #ifdef __cplusplus
@@ -67,7 +67,7 @@ struct radiant_rd_adapter {
 	/* The sensor's last complete picture: pages 0x00/0x01 carry disjoint
 	 * field sets (unlike heart rate's repeated tail), so this struct is
 	 * where the two halves meet. */
-	struct profile_rd_metrics m;
+	struct radiant_profile_rd_metrics m;
 	bool seen_a;
 	bool seen_b;
 

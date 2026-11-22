@@ -39,9 +39,9 @@
 
 #include "../fake_radio.h"
 
-#include "profile_bits.h"
-#include "profile_sched.h"
-#include "profile_telemetry.h"
+#include "radiant_profile_bits.h"
+#include "radiant_profile_sched.h"
+#include "radiant_profile_telemetry.h"
 
 /* ---------------------------------------------------------------------------
  * The node under test
@@ -57,27 +57,27 @@
  * envelope allows appears at least once: byte-aligned and not, signed and
  * unsigned, accumulating and instantaneous, and one field that straddles a
  * byte boundary in both directions. */
-static void build_node_descriptor(struct profile_descriptor *d)
+static void build_node_descriptor(struct radiant_profile_descriptor *d)
 {
 	memset(d, 0, sizeof(*d));
-	d->version = PROFILE_TLM_VERSION;
+	d->version = RADIANT_PROFILE_TLM_VERSION;
 	d->schema_id = NODE_SCHEMA;
 	d->period = NODE_PERIOD;
-	d->rf_index = PROFILE_TLM_RF_INDEX_DEFAULT;
+	d->rf_index = RADIANT_PROFILE_TLM_RF_INDEX_DEFAULT;
 	d->flags = 0u;
 	d->n_fields = NODE_FIELDS;
 
 	/* Heart rate, 8 bits, page 1 at offset 0. The motivating case of
 	 * section 1, and the one Matter has no cluster for. */
 	d->fields[0].id = 1u;
-	d->fields[0].type = PROFILE_TLM_TYPE_HEART_RATE;
+	d->fields[0].type = RADIANT_PROFILE_TLM_TYPE_HEART_RATE;
 	d->fields[0].width_code = 4u; /* 8 bits */
 	d->fields[0].page = 1u;
 	d->fields[0].bit_offset = 0u;
 
 	/* Temperature in kelvin, 16 bits, exp -2. 29315 -> 293.15 K. */
 	d->fields[1].id = 2u;
-	d->fields[1].type = PROFILE_TLM_TYPE_TEMPERATURE;
+	d->fields[1].type = RADIANT_PROFILE_TLM_TYPE_TEMPERATURE;
 	d->fields[1].width_code = 7u; /* 16 bits */
 	d->fields[1].exponent = -2;
 	d->fields[1].page = 1u;
@@ -86,7 +86,7 @@ static void build_node_descriptor(struct profile_descriptor *d)
 	/* Cumulative energy, 32 bits, accumulating - class 0x30, so the
 	 * accumulate bit is not optional. */
 	d->fields[2].id = 3u;
-	d->fields[2].type = PROFILE_TLM_TYPE_ENERGY;
+	d->fields[2].type = RADIANT_PROFILE_TLM_TYPE_ENERGY;
 	d->fields[2].accumulate = true;
 	d->fields[2].width_code = 10u; /* 32 bits */
 	d->fields[2].page = 2u;
@@ -96,7 +96,7 @@ static void build_node_descriptor(struct profile_descriptor *d)
 	 * 32 and runs to bit 44, so a receiver that packed little-endian gets
 	 * a plausible wrong number rather than an error. */
 	d->fields[3].id = 4u;
-	d->fields[3].type = PROFILE_TLM_TYPE_ACTIVE_POWER;
+	d->fields[3].type = RADIANT_PROFILE_TLM_TYPE_ACTIVE_POWER;
 	d->fields[3].is_signed = true;
 	d->fields[3].width_code = 6u; /* 12 bits */
 	d->fields[3].page = 2u;
@@ -150,12 +150,12 @@ ZTEST(profiles, test_bit_packer_vectors)
 		uint64_t back = 0u;
 
 		memset(area, 0, sizeof(area));
-		zassert_ok(profile_bits_pack(area, 48u, cases[i].off,
+		zassert_ok(radiant_profile_bits_pack(area, 48u, cases[i].off,
 					     cases[i].width, cases[i].value),
 			   "case %u", (unsigned)i);
 		zassert_mem_equal(area, cases[i].expect, sizeof(area), "case %u", (unsigned)i);
 
-		zassert_ok(profile_bits_unpack(area, 48u, cases[i].off,
+		zassert_ok(radiant_profile_bits_unpack(area, 48u, cases[i].off,
 					       cases[i].width, &back));
 		zassert_equal(back, cases[i].value, "case %u", (unsigned)i);
 	}
@@ -167,14 +167,14 @@ ZTEST(profiles, test_bit_packer_refuses_what_does_not_fit)
 	uint64_t out;
 
 	/* One bit past the end of the area. */
-	zassert_equal(-ERANGE, profile_bits_pack(area, 48u, 41u, 8u, 0u));
-	zassert_equal(-ERANGE, profile_bits_unpack(area, 48u, 41u, 8u, &out));
+	zassert_equal(-ERANGE, radiant_profile_bits_pack(area, 48u, 41u, 8u, 0u));
+	zassert_equal(-ERANGE, radiant_profile_bits_unpack(area, 48u, 41u, 8u, &out));
 	/* With X_AUTH the area is 40 bits, and the same field is now illegal
 	 * at an offset that was legal a moment ago. */
-	zassert_equal(-ERANGE, profile_bits_pack(area, 40u, 33u, 8u, 0u));
-	zassert_ok(profile_bits_pack(area, 40u, 32u, 8u, 0u));
+	zassert_equal(-ERANGE, radiant_profile_bits_pack(area, 40u, 33u, 8u, 0u));
+	zassert_ok(radiant_profile_bits_pack(area, 40u, 32u, 8u, 0u));
 	/* Zero width is not "no field", it is a malformed one. */
-	zassert_equal(-EINVAL, profile_bits_pack(area, 48u, 0u, 0u, 0u));
+	zassert_equal(-EINVAL, radiant_profile_bits_pack(area, 48u, 0u, 0u, 0u));
 }
 
 ZTEST(profiles, test_width_codes_are_the_documented_table)
@@ -185,28 +185,28 @@ ZTEST(profiles, test_width_codes_are_the_documented_table)
 	uint8_t code;
 
 	for (code = 0u; code < 13u; code++) {
-		zassert_equal((int)expect[code], profile_bits_width(code),
+		zassert_equal((int)expect[code], radiant_profile_bits_width(code),
 			      "width code %u", code);
-		zassert_equal((int)code, profile_bits_width_code(expect[code]));
+		zassert_equal((int)code, radiant_profile_bits_width_code(expect[code]));
 	}
 	/* 13..15 are reserved, and are rejected rather than clamped: a
 	 * receiver that guesses a width decodes every field after it at the
 	 * wrong offset. */
-	zassert_equal(-EINVAL, profile_bits_width(13u));
-	zassert_equal(-EINVAL, profile_bits_width(15u));
-	zassert_equal(-EINVAL, profile_bits_width_code(64u));
+	zassert_equal(-EINVAL, radiant_profile_bits_width(13u));
+	zassert_equal(-EINVAL, radiant_profile_bits_width(15u));
+	zassert_equal(-EINVAL, radiant_profile_bits_width_code(64u));
 }
 
 ZTEST(profiles, test_sign_extension_happens_in_the_fields_own_width)
 {
-	zassert_equal(-1, profile_bits_sign_extend(0xFFFu, 12u));
-	zassert_equal(-2048, profile_bits_sign_extend(0x800u, 12u));
-	zassert_equal(2047, profile_bits_sign_extend(0x7FFu, 12u));
-	zassert_equal(-1, profile_bits_sign_extend(0xFFu, 8u));
-	zassert_equal(127, profile_bits_sign_extend(0x7Fu, 8u));
+	zassert_equal(-1, radiant_profile_bits_sign_extend(0xFFFu, 12u));
+	zassert_equal(-2048, radiant_profile_bits_sign_extend(0x800u, 12u));
+	zassert_equal(2047, radiant_profile_bits_sign_extend(0x7FFu, 12u));
+	zassert_equal(-1, radiant_profile_bits_sign_extend(0xFFu, 8u));
+	zassert_equal(127, radiant_profile_bits_sign_extend(0x7Fu, 8u));
 	/* A one-bit signed field is a strange thing to declare, but it is
 	 * legal, and -1/0 is what two's complement says it means. */
-	zassert_equal(-1, profile_bits_sign_extend(1u, 1u));
+	zassert_equal(-1, radiant_profile_bits_sign_extend(1u, 1u));
 }
 
 /* ---------------------------------------------------------------------------
@@ -216,34 +216,34 @@ ZTEST(profiles, test_sign_extension_happens_in_the_fields_own_width)
 
 ZTEST(profiles, test_descriptor_round_trip_and_frame_layout)
 {
-	struct profile_descriptor d, back;
-	uint8_t frames[PROFILE_TLM_MAX_FRAMES * PROFILE_TLM_FRAME_LEN];
+	struct radiant_profile_descriptor d, back;
+	uint8_t frames[RADIANT_PROFILE_TLM_MAX_FRAMES * RADIANT_PROFILE_TLM_FRAME_LEN];
 	int n;
 	uint8_t i;
 
 	build_node_descriptor(&d);
-	n = profile_desc_encode(&d, frames, PROFILE_TLM_MAX_FRAMES);
+	n = radiant_profile_desc_encode(&d, frames, RADIANT_PROFILE_TLM_MAX_FRAMES);
 	zassert_equal(2 + (int)NODE_FIELDS, n);
 
 	/* Every frame claims page 0x00 and carries (index << 4) | (count - 1)
 	 * in byte [1] - a frame index, one of the two documented exceptions to
 	 * the counter invariant of section 4. */
 	for (i = 0u; i < (uint8_t)n; i++) {
-		const uint8_t *f = &frames[(size_t)i * PROFILE_TLM_FRAME_LEN];
+		const uint8_t *f = &frames[(size_t)i * RADIANT_PROFILE_TLM_FRAME_LEN];
 
-		zassert_equal(PROFILE_TLM_PAGE_DESCRIPTOR, f[0]);
+		zassert_equal(RADIANT_PROFILE_TLM_PAGE_DESCRIPTOR, f[0]);
 		zassert_equal((uint8_t)((i << 4) | (n - 1)), f[1], "frame %u", i);
 	}
 
 	/* Frame 0, byte by byte. */
-	zassert_equal((uint8_t)((PROFILE_TLM_VERSION << 4) | NODE_FIELDS), frames[2]);
+	zassert_equal((uint8_t)((RADIANT_PROFILE_TLM_VERSION << 4) | NODE_FIELDS), frames[2]);
 	zassert_equal(NODE_SCHEMA, frames[3]);
 	zassert_equal((uint8_t)(NODE_PERIOD & 0xFFu), frames[4]);
 	zassert_equal((uint8_t)(NODE_PERIOD >> 8), frames[5]);
-	zassert_equal(PROFILE_TLM_RF_INDEX_DEFAULT, frames[6]);
+	zassert_equal(RADIANT_PROFILE_TLM_RF_INDEX_DEFAULT, frames[6]);
 	zassert_equal(0u, frames[7]);
 
-	zassert_ok(profile_desc_decode(frames, (uint8_t)n, &back));
+	zassert_ok(radiant_profile_desc_decode(frames, (uint8_t)n, &back));
 	zassert_equal(d.version, back.version);
 	zassert_equal(d.schema_id, back.schema_id);
 	zassert_equal(d.period, back.period);
@@ -271,22 +271,22 @@ ZTEST(profiles, test_descriptor_round_trip_and_frame_layout)
  */
 ZTEST(profiles, test_every_reserved_field_is_zero)
 {
-	struct profile_descriptor d;
-	uint8_t frames[PROFILE_TLM_MAX_FRAMES * PROFILE_TLM_FRAME_LEN];
+	struct radiant_profile_descriptor d;
+	uint8_t frames[RADIANT_PROFILE_TLM_MAX_FRAMES * RADIANT_PROFILE_TLM_FRAME_LEN];
 	const uint8_t *f1;
 	int n;
 	uint8_t i;
 
 	build_node_descriptor(&d);
-	n = profile_desc_encode(&d, frames, PROFILE_TLM_MAX_FRAMES);
+	n = radiant_profile_desc_encode(&d, frames, RADIANT_PROFILE_TLM_MAX_FRAMES);
 	zassert_true(n > 0);
 
 	/* Frame 0 byte [7]: no transform bit, and INFO bit 3 - the withdrawn
 	 * X_PRIV - is reserved-must-be-zero. */
-	zassert_equal(0u, frames[7] & PROFILE_TLM_FLAG_TRANSFORM_MASK);
-	zassert_equal(0u, frames[7] & PROFILE_TLM_FLAG_RSVD_3);
+	zassert_equal(0u, frames[7] & RADIANT_PROFILE_TLM_FLAG_TRANSFORM_MASK);
+	zassert_equal(0u, frames[7] & RADIANT_PROFILE_TLM_FLAG_RSVD_3);
 
-	f1 = &frames[PROFILE_TLM_FRAME_LEN];
+	f1 = &frames[RADIANT_PROFILE_TLM_FRAME_LEN];
 	/* Not sparse, so the heartbeat byte is zero. */
 	zassert_equal(0u, f1[2]);
 	/* Byte [3]: W is reserved with no transform, k is meaningless off
@@ -298,7 +298,7 @@ ZTEST(profiles, test_every_reserved_field_is_zero)
 
 	/* Field frames: encoding byte bits 1..0 reserved, must be 0. */
 	for (i = 0u; i < d.n_fields; i++) {
-		const uint8_t *f = &frames[(size_t)(2u + i) * PROFILE_TLM_FRAME_LEN];
+		const uint8_t *f = &frames[(size_t)(2u + i) * RADIANT_PROFILE_TLM_FRAME_LEN];
 
 		zassert_equal(0u, f[4] & 0x03u, "field %u", i);
 	}
@@ -306,59 +306,59 @@ ZTEST(profiles, test_every_reserved_field_is_zero)
 
 ZTEST(profiles, test_the_encoder_refuses_a_malformed_schema)
 {
-	struct profile_descriptor d;
-	uint8_t frames[PROFILE_TLM_MAX_FRAMES * PROFILE_TLM_FRAME_LEN];
+	struct radiant_profile_descriptor d;
+	uint8_t frames[RADIANT_PROFILE_TLM_MAX_FRAMES * RADIANT_PROFILE_TLM_FRAME_LEN];
 
 	/* A class-0x30 type without the accumulate bit. Section 7: "a
 	 * descriptor that clears the bit on one of these types is
 	 * malformed." */
 	build_node_descriptor(&d);
 	d.fields[2].accumulate = false;
-	zassert_equal(-EINVAL, profile_desc_encode(&d, frames,
-						   PROFILE_TLM_MAX_FRAMES));
+	zassert_equal(-EINVAL, radiant_profile_desc_encode(&d, frames,
+						   RADIANT_PROFILE_TLM_MAX_FRAMES));
 
 	/* Two fields overlapping in one page: two wrong numbers with a valid
 	 * CRC, and no error anywhere to catch it. */
 	build_node_descriptor(&d);
 	d.fields[1].bit_offset = 4u; /* 16 bits from 4 collides with 8 from 0 */
-	zassert_equal(-EINVAL, profile_desc_encode(&d, frames,
-						   PROFILE_TLM_MAX_FRAMES));
+	zassert_equal(-EINVAL, radiant_profile_desc_encode(&d, frames,
+						   RADIANT_PROFILE_TLM_MAX_FRAMES));
 
 	/* A field running off the end of the field area. */
 	build_node_descriptor(&d);
 	d.fields[2].bit_offset = 20u; /* 32 bits from 20 needs 52 */
-	zassert_equal(-ERANGE, profile_desc_encode(&d, frames,
-						   PROFILE_TLM_MAX_FRAMES));
+	zassert_equal(-ERANGE, radiant_profile_desc_encode(&d, frames,
+						   RADIANT_PROFILE_TLM_MAX_FRAMES));
 
 	/* Two fields sharing an id: the envelope's topic name, ambiguous. */
 	build_node_descriptor(&d);
 	d.fields[1].id = d.fields[0].id;
-	zassert_equal(-EINVAL, profile_desc_encode(&d, frames,
-						   PROFILE_TLM_MAX_FRAMES));
+	zassert_equal(-EINVAL, radiant_profile_desc_encode(&d, frames,
+						   RADIANT_PROFILE_TLM_MAX_FRAMES));
 
 	/* The node's two statements about its own frequency disagreeing. */
 	build_node_descriptor(&d);
 	d.rf_index = 80u; /* off 57, but the informational bit is clear */
-	zassert_equal(-EINVAL, profile_desc_encode(&d, frames,
-						   PROFILE_TLM_MAX_FRAMES));
-	d.flags |= PROFILE_TLM_FLAG_OFF_RF57;
-	zassert_true(profile_desc_encode(&d, frames, PROFILE_TLM_MAX_FRAMES) > 0);
+	zassert_equal(-EINVAL, radiant_profile_desc_encode(&d, frames,
+						   RADIANT_PROFILE_TLM_MAX_FRAMES));
+	d.flags |= RADIANT_PROFILE_TLM_FLAG_OFF_RF57;
+	zassert_true(radiant_profile_desc_encode(&d, frames, RADIANT_PROFILE_TLM_MAX_FRAMES) > 0);
 
 	/* A sparse node with no heartbeat cannot be told from a dead one. */
 	build_node_descriptor(&d);
-	d.flags |= PROFILE_TLM_FLAG_SPARSE;
+	d.flags |= RADIANT_PROFILE_TLM_FLAG_SPARSE;
 	d.heartbeat_s = 0u;
-	zassert_equal(-EINVAL, profile_desc_encode(&d, frames,
-						   PROFILE_TLM_MAX_FRAMES));
+	zassert_equal(-EINVAL, radiant_profile_desc_encode(&d, frames,
+						   RADIANT_PROFILE_TLM_MAX_FRAMES));
 
 	/* Descriptor INFO bit 3: reserved-must-be-zero. ADR 0006 keeps it
 	 * reserved rather than reclaiming it, so revisiting rotation stays a
 	 * format-compatible change - and announcing a privacy posture in the
 	 * clear is itself a leak. */
 	build_node_descriptor(&d);
-	d.flags |= PROFILE_TLM_FLAG_RSVD_3;
-	zassert_equal(-EINVAL, profile_desc_encode(&d, frames,
-						   PROFILE_TLM_MAX_FRAMES));
+	d.flags |= RADIANT_PROFILE_TLM_FLAG_RSVD_3;
+	zassert_equal(-EINVAL, radiant_profile_desc_encode(&d, frames,
+						   RADIANT_PROFILE_TLM_MAX_FRAMES));
 }
 
 /* ---------------------------------------------------------------------------
@@ -414,17 +414,17 @@ static const uint8_t AUTH_WRONG_ROOT[16] = {
 static struct radiant_sec_key auth_root;
 static struct radiant_sec_key auth_wrong_root;
 
-static void build_cgm_descriptor(struct profile_descriptor *d, uint8_t flags)
+static void build_cgm_descriptor(struct radiant_profile_descriptor *d, uint8_t flags)
 {
 	memset(d, 0, sizeof(*d));
-	d->version = PROFILE_TLM_VERSION;
+	d->version = RADIANT_PROFILE_TLM_VERSION;
 	d->schema_id = 0x01u;
 	d->period = 65535u;
-	d->rf_index = PROFILE_TLM_RF_INDEX_DEFAULT;
+	d->rf_index = RADIANT_PROFILE_TLM_RF_INDEX_DEFAULT;
 	d->flags = flags;
-	d->w_code = (flags & PROFILE_TLM_FLAG_X_AUTH) != 0u
-			    ? PROFILE_TLM_W_CODE_4
-			    : PROFILE_TLM_W_CODE_RESERVED;
+	d->w_code = (flags & RADIANT_PROFILE_TLM_FLAG_X_AUTH) != 0u
+			    ? RADIANT_PROFILE_TLM_W_CODE_4
+			    : RADIANT_PROFILE_TLM_W_CODE_RESERVED;
 	d->n_fields = 4u;
 
 	/* Glucose, 12 bits at 0, exp -2. */
@@ -453,7 +453,7 @@ static void build_cgm_descriptor(struct profile_descriptor *d, uint8_t flags)
 	d->fields[3].bit_offset = 28u;
 }
 
-static void auth_init(struct profile_desc_auth *a, uint32_t epoch,
+static void auth_init(struct radiant_profile_desc_auth *a, uint32_t epoch,
 		      bool epoch_is_time)
 {
 	zassert_equal(RADIANT_SEC_OK,
@@ -474,190 +474,190 @@ static void auth_init(struct profile_desc_auth *a, uint32_t epoch,
  */
 ZTEST(profiles, test_a_transform_needs_the_sealed_encoder)
 {
-	static const uint8_t flags[2] = { PROFILE_TLM_FLAG_X_AUTH,
-					  PROFILE_TLM_FLAG_X_CONF };
-	static const uint8_t reserved[2] = { PROFILE_TLM_FLAG_RSVD_5,
-					     PROFILE_TLM_FLAG_RSVD_4 };
-	struct profile_descriptor d;
-	struct profile_desc_auth a;
-	uint8_t frames[PROFILE_TLM_MAX_FRAMES * PROFILE_TLM_FRAME_LEN];
+	static const uint8_t flags[2] = { RADIANT_PROFILE_TLM_FLAG_X_AUTH,
+					  RADIANT_PROFILE_TLM_FLAG_X_CONF };
+	static const uint8_t reserved[2] = { RADIANT_PROFILE_TLM_FLAG_RSVD_5,
+					     RADIANT_PROFILE_TLM_FLAG_RSVD_4 };
+	struct radiant_profile_descriptor d;
+	struct radiant_profile_desc_auth a;
+	uint8_t frames[RADIANT_PROFILE_TLM_MAX_FRAMES * RADIANT_PROFILE_TLM_FRAME_LEN];
 	size_t i;
 
 	auth_init(&a, AUTH_EPOCH, false);
 
 	for (i = 0u; i < ARRAY_SIZE(flags); i++) {
 		build_cgm_descriptor(&d, flags[i]);
-		zassert_equal(-ENOTSUP, profile_desc_encode(
-				&d, frames, PROFILE_TLM_MAX_FRAMES),
+		zassert_equal(-ENOTSUP, radiant_profile_desc_encode(
+				&d, frames, RADIANT_PROFILE_TLM_MAX_FRAMES),
 			      "flag 0x%02x", flags[i]);
-		zassert_equal((int)AUTH_FRAMES, profile_desc_encode_auth(
-				&d, &a, frames, PROFILE_TLM_MAX_FRAMES),
+		zassert_equal((int)AUTH_FRAMES, radiant_profile_desc_encode_auth(
+				&d, &a, frames, RADIANT_PROFILE_TLM_MAX_FRAMES),
 			      "flag 0x%02x", flags[i]);
 	}
 	for (i = 0u; i < ARRAY_SIZE(reserved); i++) {
-		build_cgm_descriptor(&d, PROFILE_TLM_FLAG_X_AUTH | reserved[i]);
-		zassert_equal(-ENOTSUP, profile_desc_encode(
-				&d, frames, PROFILE_TLM_MAX_FRAMES));
-		zassert_equal(-ENOTSUP, profile_desc_encode_auth(
-				&d, &a, frames, PROFILE_TLM_MAX_FRAMES));
+		build_cgm_descriptor(&d, RADIANT_PROFILE_TLM_FLAG_X_AUTH | reserved[i]);
+		zassert_equal(-ENOTSUP, radiant_profile_desc_encode(
+				&d, frames, RADIANT_PROFILE_TLM_MAX_FRAMES));
+		zassert_equal(-ENOTSUP, radiant_profile_desc_encode_auth(
+				&d, &a, frames, RADIANT_PROFILE_TLM_MAX_FRAMES));
 	}
 	/* Nothing to seal: the plain encoder is the path for this. */
 	build_cgm_descriptor(&d, 0u);
-	zassert_equal(-EINVAL, profile_desc_encode_auth(&d, &a, frames,
-							PROFILE_TLM_MAX_FRAMES));
+	zassert_equal(-EINVAL, radiant_profile_desc_encode_auth(&d, &a, frames,
+							RADIANT_PROFILE_TLM_MAX_FRAMES));
 
 	/* The receiver's half of the rule. A set announcing X_CONF or X_AUTH
 	 * still decodes - identity, period and RF are learned - but its data
 	 * is refused until the authentication frame verified. Fail closed
 	 * means "do not decode", not "do not listen". */
-	build_cgm_descriptor(&d, PROFILE_TLM_FLAG_X_CONF);
-	zassert_false(profile_desc_may_decode_data(&d));
+	build_cgm_descriptor(&d, RADIANT_PROFILE_TLM_FLAG_X_CONF);
+	zassert_false(radiant_profile_desc_may_decode_data(&d));
 	d.authenticated = true;
-	zassert_true(profile_desc_may_decode_data(&d));
-	d.flags |= PROFILE_TLM_FLAG_RSVD_4;
-	zassert_false(profile_desc_may_decode_data(&d));
+	zassert_true(radiant_profile_desc_may_decode_data(&d));
+	d.flags |= RADIANT_PROFILE_TLM_FLAG_RSVD_4;
+	zassert_false(radiant_profile_desc_may_decode_data(&d));
 	d.flags = 0u;
 	d.authenticated = false;
-	zassert_true(profile_desc_may_decode_data(&d));
+	zassert_true(radiant_profile_desc_may_decode_data(&d));
 }
 
 ZTEST(profiles, test_the_sealed_frames_are_the_shared_vectors)
 {
-	struct profile_descriptor d;
-	struct profile_desc_auth a;
-	uint8_t frames[PROFILE_TLM_MAX_FRAMES * PROFILE_TLM_FRAME_LEN];
+	struct radiant_profile_descriptor d;
+	struct radiant_profile_desc_auth a;
+	uint8_t frames[RADIANT_PROFILE_TLM_MAX_FRAMES * RADIANT_PROFILE_TLM_FRAME_LEN];
 
-	build_cgm_descriptor(&d, PROFILE_TLM_FLAG_X_AUTH);
+	build_cgm_descriptor(&d, RADIANT_PROFILE_TLM_FLAG_X_AUTH);
 
 	auth_init(&a, AUTH_EPOCH, true);
 	zassert_equal((int)AUTH_FRAMES,
-		      profile_desc_encode_auth(&d, &a, frames,
-					       PROFILE_TLM_MAX_FRAMES));
+		      radiant_profile_desc_encode_auth(&d, &a, frames,
+					       RADIANT_PROFILE_TLM_MAX_FRAMES));
 	zassert_mem_equal(frames, AUTH_VECTOR_TIME, sizeof(AUTH_VECTOR_TIME));
 
 	auth_init(&a, AUTH_EPOCH, false);
 	zassert_equal((int)AUTH_FRAMES,
-		      profile_desc_encode_auth(&d, &a, frames,
-					       PROFILE_TLM_MAX_FRAMES));
+		      radiant_profile_desc_encode_auth(&d, &a, frames,
+					       RADIANT_PROFILE_TLM_MAX_FRAMES));
 	zassert_mem_equal(frames, AUTH_VECTOR_HIDDEN, sizeof(AUTH_VECTOR_HIDDEN));
 
 	/* The descriptor's own epoch may be zero or the real one; frame 1
 	 * follows the item-4 rule either way. */
 	d.epoch = AUTH_EPOCH;
 	zassert_equal((int)AUTH_FRAMES,
-		      profile_desc_encode_auth(&d, &a, frames,
-					       PROFILE_TLM_MAX_FRAMES));
+		      radiant_profile_desc_encode_auth(&d, &a, frames,
+					       RADIANT_PROFILE_TLM_MAX_FRAMES));
 	zassert_mem_equal(frames, AUTH_VECTOR_HIDDEN, sizeof(AUTH_VECTOR_HIDDEN));
 
 	/* The plain encoder is untouched for a plain descriptor. */
 	build_node_descriptor(&d);
 	zassert_equal(2 + (int)NODE_FIELDS,
-		      profile_desc_encode(&d, frames, PROFILE_TLM_MAX_FRAMES));
-	zassert_equal(2 + (int)NODE_FIELDS, profile_desc_frame_count(&d));
+		      radiant_profile_desc_encode(&d, frames, RADIANT_PROFILE_TLM_MAX_FRAMES));
+	zassert_equal(2 + (int)NODE_FIELDS, radiant_profile_desc_frame_count(&d));
 }
 
 ZTEST(profiles, test_the_sealed_encoder_refuses_what_cannot_verify)
 {
-	struct profile_descriptor d;
-	struct profile_desc_auth a;
-	uint8_t frames[PROFILE_TLM_MAX_FRAMES * PROFILE_TLM_FRAME_LEN];
+	struct radiant_profile_descriptor d;
+	struct radiant_profile_desc_auth a;
+	uint8_t frames[RADIANT_PROFILE_TLM_MAX_FRAMES * RADIANT_PROFILE_TLM_FRAME_LEN];
 	uint8_t i;
 
 	auth_init(&a, AUTH_EPOCH, false);
 
 	/* X_AUTH with sparse never verifies: the spread tag lags one window
 	 * (TODO item 7). X_CONF alone with sparse is legal. */
-	build_cgm_descriptor(&d, PROFILE_TLM_FLAG_X_AUTH |
-				 PROFILE_TLM_FLAG_SPARSE);
+	build_cgm_descriptor(&d, RADIANT_PROFILE_TLM_FLAG_X_AUTH |
+				 RADIANT_PROFILE_TLM_FLAG_SPARSE);
 	d.heartbeat_s = 30u;
-	d.k_code = PROFILE_TLM_K_CODE_3;
-	zassert_equal(-EINVAL, profile_desc_encode_auth(&d, &a, frames,
-							PROFILE_TLM_MAX_FRAMES));
-	build_cgm_descriptor(&d, PROFILE_TLM_FLAG_X_CONF |
-				 PROFILE_TLM_FLAG_SPARSE);
+	d.k_code = RADIANT_PROFILE_TLM_K_CODE_3;
+	zassert_equal(-EINVAL, radiant_profile_desc_encode_auth(&d, &a, frames,
+							RADIANT_PROFILE_TLM_MAX_FRAMES));
+	build_cgm_descriptor(&d, RADIANT_PROFILE_TLM_FLAG_X_CONF |
+				 RADIANT_PROFILE_TLM_FLAG_SPARSE);
 	d.heartbeat_s = 30u;
-	d.k_code = PROFILE_TLM_K_CODE_3;
+	d.k_code = RADIANT_PROFILE_TLM_K_CODE_3;
 	zassert_equal((int)AUTH_FRAMES,
-		      profile_desc_encode_auth(&d, &a, frames,
-					       PROFILE_TLM_MAX_FRAMES));
+		      radiant_profile_desc_encode_auth(&d, &a, frames,
+					       RADIANT_PROFILE_TLM_MAX_FRAMES));
 
 	/* The decoder holds the same line, and a reserved transform bit does
 	 * not buy an exception: X_AUTH with sparse is malformed whatever else
 	 * is set. The window is made legal too, so that the sparse rule is the
 	 * only thing left to refuse these frames. */
-	frames[7] |= PROFILE_TLM_FLAG_X_AUTH;
-	frames[PROFILE_TLM_FRAME_LEN + 3u] |=
-		(uint8_t)(PROFILE_TLM_W_CODE_4 << 6);
-	zassert_equal(-EPROTO, profile_desc_decode(frames, (uint8_t)AUTH_FRAMES,
+	frames[7] |= RADIANT_PROFILE_TLM_FLAG_X_AUTH;
+	frames[RADIANT_PROFILE_TLM_FRAME_LEN + 3u] |=
+		(uint8_t)(RADIANT_PROFILE_TLM_W_CODE_4 << 6);
+	zassert_equal(-EPROTO, radiant_profile_desc_decode(frames, (uint8_t)AUTH_FRAMES,
 						   &d));
-	frames[7] |= PROFILE_TLM_FLAG_RSVD_5;
-	zassert_equal(-EPROTO, profile_desc_decode(frames, (uint8_t)AUTH_FRAMES,
+	frames[7] |= RADIANT_PROFILE_TLM_FLAG_RSVD_5;
+	zassert_equal(-EPROTO, radiant_profile_desc_decode(frames, (uint8_t)AUTH_FRAMES,
 						   &d));
-	frames[7] ^= PROFILE_TLM_FLAG_RSVD_5 | PROFILE_TLM_FLAG_RSVD_4;
-	zassert_equal(-EPROTO, profile_desc_decode(frames, (uint8_t)AUTH_FRAMES,
+	frames[7] ^= RADIANT_PROFILE_TLM_FLAG_RSVD_5 | RADIANT_PROFILE_TLM_FLAG_RSVD_4;
+	zassert_equal(-EPROTO, radiant_profile_desc_decode(frames, (uint8_t)AUTH_FRAMES,
 						   &d));
 
 	/* Fourteen fields and a transform is 17 frames; thirteen is the
 	 * budget. */
-	build_cgm_descriptor(&d, PROFILE_TLM_FLAG_X_AUTH);
+	build_cgm_descriptor(&d, RADIANT_PROFILE_TLM_FLAG_X_AUTH);
 	d.n_fields = 14u;
 	for (i = 0u; i < 14u; i++) {
 		memset(&d.fields[i], 0, sizeof(d.fields[i]));
 		d.fields[i].id = (uint8_t)(i + 1u);
-		d.fields[i].type = PROFILE_TLM_TYPE_TEMPERATURE;
+		d.fields[i].type = RADIANT_PROFILE_TLM_TYPE_TEMPERATURE;
 		d.fields[i].width_code = 4u; /* 8 bits */
 		d.fields[i].page = (uint8_t)(1u + i / 5u);
 		d.fields[i].bit_offset = (uint8_t)(8u * (i % 5u));
 	}
-	zassert_equal(17u, profile_desc_frame_count(&d));
-	zassert_equal(-EINVAL, profile_desc_encode_auth(&d, &a, frames,
-							PROFILE_TLM_MAX_FRAMES));
+	zassert_equal(17u, radiant_profile_desc_frame_count(&d));
+	zassert_equal(-EINVAL, radiant_profile_desc_encode_auth(&d, &a, frames,
+							RADIANT_PROFILE_TLM_MAX_FRAMES));
 	d.n_fields = 13u;
-	zassert_equal(16, profile_desc_encode_auth(&d, &a, frames,
-						   PROFILE_TLM_MAX_FRAMES));
+	zassert_equal(16, radiant_profile_desc_encode_auth(&d, &a, frames,
+						   RADIANT_PROFILE_TLM_MAX_FRAMES));
 
 	/* The descriptor and the seal disagreeing about the epoch. */
-	build_cgm_descriptor(&d, PROFILE_TLM_FLAG_X_AUTH);
+	build_cgm_descriptor(&d, RADIANT_PROFILE_TLM_FLAG_X_AUTH);
 	d.epoch = 7u;
-	zassert_equal(-EINVAL, profile_desc_encode_auth(&d, &a, frames,
-							PROFILE_TLM_MAX_FRAMES));
+	zassert_equal(-EINVAL, radiant_profile_desc_encode_auth(&d, &a, frames,
+							RADIANT_PROFILE_TLM_MAX_FRAMES));
 
 	/* No key: never a set announcing a transform without its tag. */
-	build_cgm_descriptor(&d, PROFILE_TLM_FLAG_X_AUTH);
+	build_cgm_descriptor(&d, RADIANT_PROFILE_TLM_FLAG_X_AUTH);
 	a.k_root = NULL;
-	zassert_equal(-EACCES, profile_desc_encode_auth(&d, &a, frames,
-							PROFILE_TLM_MAX_FRAMES));
+	zassert_equal(-EACCES, radiant_profile_desc_encode_auth(&d, &a, frames,
+							RADIANT_PROFILE_TLM_MAX_FRAMES));
 }
 
 ZTEST(profiles, test_with_a_schedule_frame_it_is_index_2_and_auth_is_last)
 {
-	struct profile_descriptor d;
-	struct profile_descriptor back;
-	struct profile_desc_auth a;
-	struct profile_desc_rx rx;
-	uint8_t frames[PROFILE_TLM_MAX_FRAMES * PROFILE_TLM_FRAME_LEN];
+	struct radiant_profile_descriptor d;
+	struct radiant_profile_descriptor back;
+	struct radiant_profile_desc_auth a;
+	struct radiant_profile_desc_rx rx;
+	uint8_t frames[RADIANT_PROFILE_TLM_MAX_FRAMES * RADIANT_PROFILE_TLM_FRAME_LEN];
 	static const uint8_t zeros[6] = { 0u };
 	uint32_t epoch = 0u;
 	uint8_t i;
 
-	build_cgm_descriptor(&d, PROFILE_TLM_FLAG_X_AUTH);
+	build_cgm_descriptor(&d, RADIANT_PROFILE_TLM_FLAG_X_AUTH);
 	d.has_schedule = true;
-	d.schedule = (struct profile_schedule)PROFILE_SCHED_INIT_DEFAULT;
+	d.schedule = (struct radiant_profile_schedule)RADIANT_PROFILE_SCHED_INIT_DEFAULT;
 	auth_init(&a, AUTH_EPOCH, false);
 
-	zassert_equal(8u, profile_desc_frame_count(&d));
-	zassert_equal(2, profile_desc_schedule_index(&d));
-	zassert_equal(8, profile_desc_encode_auth(&d, &a, frames,
-						  PROFILE_TLM_MAX_FRAMES));
+	zassert_equal(8u, radiant_profile_desc_frame_count(&d));
+	zassert_equal(2, radiant_profile_desc_schedule_index(&d));
+	zassert_equal(8, radiant_profile_desc_encode_auth(&d, &a, frames,
+						  RADIANT_PROFILE_TLM_MAX_FRAMES));
 	zassert_mem_equal(&frames[2u * 8u + 2u], zeros, 6u);
 	zassert_equal(1u, frames[3u * 8u + 2u]);
 	zassert_equal(0x77u, frames[7u * 8u + 1u]);
 
-	profile_desc_rx_init(&rx);
+	radiant_profile_desc_rx_init(&rx);
 	for (i = 0u; i < 8u; i++) {
-		(void)profile_desc_rx_feed(&rx, &frames[(size_t)i * 8u]);
+		(void)radiant_profile_desc_rx_feed(&rx, &frames[(size_t)i * 8u]);
 	}
-	zassert_ok(profile_desc_rx_take_auth(&rx, &a, AUTH_EPOCH - 2u, &back,
+	zassert_ok(radiant_profile_desc_rx_take_auth(&rx, &a, AUTH_EPOCH - 2u, &back,
 					     &epoch));
 	zassert_true(back.authenticated);
 	zassert_equal(AUTH_EPOCH, epoch);
@@ -668,38 +668,38 @@ ZTEST(profiles, test_with_a_schedule_frame_it_is_index_2_and_auth_is_last)
 
 ZTEST(profiles, test_a_keyless_receiver_learns_the_node_but_not_its_data)
 {
-	struct profile_descriptor back;
-	struct profile_desc_auth a;
-	struct profile_desc_rx rx;
+	struct radiant_profile_descriptor back;
+	struct radiant_profile_desc_auth a;
+	struct radiant_profile_desc_rx rx;
 	int64_t values[4] = { 0 };
 	uint8_t body[8] = { 0x01u, 0x00u, 0, 0, 0, 0, 0, 0 };
 	uint32_t epoch = 0xDEADu;
 	uint8_t i;
 
 	/* No key: the schema still decodes. */
-	zassert_ok(profile_desc_decode(&AUTH_VECTOR_HIDDEN[0][0], AUTH_FRAMES,
+	zassert_ok(radiant_profile_desc_decode(&AUTH_VECTOR_HIDDEN[0][0], AUTH_FRAMES,
 				       &back));
 	zassert_equal(0x01u, back.schema_id);
 	zassert_equal(65535u, back.period);
 	zassert_equal(4u, back.n_fields);
 	zassert_false(back.authenticated);
-	zassert_false(profile_desc_may_decode_data(&back));
-	zassert_equal(-EACCES, profile_data_decode(&back, body, values, 4u,
+	zassert_false(radiant_profile_desc_may_decode_data(&back));
+	zassert_equal(-EACCES, radiant_profile_data_decode(&back, body, values, 4u,
 						   NULL));
 
 	/* With the key, through the verified take. */
-	profile_desc_rx_init(&rx);
+	radiant_profile_desc_rx_init(&rx);
 	for (i = 0u; i < AUTH_FRAMES; i++) {
-		(void)profile_desc_rx_feed(&rx, AUTH_VECTOR_HIDDEN[i]);
+		(void)radiant_profile_desc_rx_feed(&rx, AUTH_VECTOR_HIDDEN[i]);
 	}
 	auth_init(&a, 0u, false);
-	zassert_ok(profile_desc_rx_take_auth(&rx, &a, AUTH_EPOCH - 5u, &back,
+	zassert_ok(radiant_profile_desc_rx_take_auth(&rx, &a, AUTH_EPOCH - 5u, &back,
 					     &epoch));
 	zassert_equal(AUTH_EPOCH, epoch);
 	zassert_true(back.authenticated);
-	zassert_true(profile_desc_may_decode_data(&back));
+	zassert_true(radiant_profile_desc_may_decode_data(&back));
 	zassert_equal(0u, back.epoch);
-	zassert_equal(4, profile_data_decode(&back, body, values, 4u, NULL));
+	zassert_equal(4, radiant_profile_data_decode(&back, body, values, 4u, NULL));
 
 	/* A wrong key: -EBADMSG, but the node's identity is still there and
 	 * its data is still refused. */
@@ -708,12 +708,12 @@ ZTEST(profiles, test_a_keyless_receiver_learns_the_node_but_not_its_data)
 					     128u));
 	a.k_root = &auth_wrong_root;
 	epoch = 0xDEADu;
-	zassert_equal(-EBADMSG, profile_desc_rx_take_auth(&rx, &a, AUTH_EPOCH,
+	zassert_equal(-EBADMSG, radiant_profile_desc_rx_take_auth(&rx, &a, AUTH_EPOCH,
 							  &back, &epoch));
 	zassert_equal(0xDEADu, epoch);
 	zassert_equal(0x01u, back.schema_id);
 	zassert_false(back.authenticated);
-	zassert_false(profile_desc_may_decode_data(&back));
+	zassert_false(radiant_profile_desc_may_decode_data(&back));
 }
 
 /*
@@ -726,7 +726,7 @@ ZTEST(profiles, test_every_altered_body_byte_fails_verification)
 {
 	const uint8_t (*const vectors[2])[8] = { AUTH_VECTOR_TIME,
 						 AUTH_VECTOR_HIDDEN };
-	struct profile_desc_auth a;
+	struct radiant_profile_desc_auth a;
 	uint8_t bad[AUTH_FRAMES * 8u];
 	uint32_t epoch;
 	size_t v;
@@ -737,7 +737,7 @@ ZTEST(profiles, test_every_altered_body_byte_fails_verification)
 
 	for (v = 0u; v < ARRAY_SIZE(vectors); v++) {
 		memcpy(bad, vectors[v], sizeof(bad));
-		zassert_ok(profile_desc_auth_verify(bad, AUTH_FRAMES, &a),
+		zassert_ok(radiant_profile_desc_auth_verify(bad, AUTH_FRAMES, &a),
 			   "vector %u", (unsigned)v);
 
 		for (i = 0u; i < AUTH_FRAMES - 1u; i++) {
@@ -745,15 +745,15 @@ ZTEST(profiles, test_every_altered_body_byte_fails_verification)
 				memcpy(bad, vectors[v], sizeof(bad));
 				bad[i * 8u + b] ^= 0x01u;
 				zassert_equal(-EBADMSG,
-					      profile_desc_auth_verify(
+					      radiant_profile_desc_auth_verify(
 						      bad, AUTH_FRAMES, &a),
 					      "vector %u frame %u byte %u",
 					      (unsigned)v, i, b);
 				zassert_equal(-EBADMSG,
-					      profile_desc_auth_find_epoch(
+					      radiant_profile_desc_auth_find_epoch(
 						      bad, AUTH_FRAMES, &a,
 						      AUTH_EPOCH,
-						      PROFILE_TLM_AUTH_EPOCH_SPAN,
+						      RADIANT_PROFILE_TLM_AUTH_EPOCH_SPAN,
 						      &epoch),
 					      "vector %u frame %u byte %u",
 					      (unsigned)v, i, b);
@@ -764,19 +764,19 @@ ZTEST(profiles, test_every_altered_body_byte_fails_verification)
 
 ZTEST(profiles, test_altered_sets_fail_verification)
 {
-	struct profile_descriptor d;
-	struct profile_desc_auth a;
-	struct profile_desc_auth w;
+	struct radiant_profile_descriptor d;
+	struct radiant_profile_desc_auth a;
+	struct radiant_profile_desc_auth w;
 	uint8_t next[AUTH_FRAMES * 8u];
 	uint8_t bad[(AUTH_FRAMES + 1u) * 8u];
 	const uint8_t *base = &AUTH_VECTOR_TIME[0][0];
 	uint32_t e;
 
 	/* The next epoch's set, real-time flavour, so frame 1 differs. */
-	build_cgm_descriptor(&d, PROFILE_TLM_FLAG_X_AUTH);
+	build_cgm_descriptor(&d, RADIANT_PROFILE_TLM_FLAG_X_AUTH);
 	auth_init(&a, AUTH_EPOCH + 1u, true);
 	zassert_equal((int)AUTH_FRAMES,
-		      profile_desc_encode_auth(&d, &a, next, AUTH_FRAMES));
+		      radiant_profile_desc_encode_auth(&d, &a, next, AUTH_FRAMES));
 
 	for (e = AUTH_EPOCH; e <= AUTH_EPOCH + 1u; e++) {
 		a.epoch = e;
@@ -785,14 +785,14 @@ ZTEST(profiles, test_altered_sets_fail_verification)
 		memcpy(bad, base, 3u * 8u);
 		memcpy(&bad[3u * 8u], &base[4u * 8u], 3u * 8u);
 		zassert_equal(-EBADMSG,
-			      profile_desc_auth_verify(bad, AUTH_FRAMES - 1u,
+			      radiant_profile_desc_auth_verify(bad, AUTH_FRAMES - 1u,
 						       &a), "dropped, %u", e);
 
 		/* A field frame duplicated. */
 		memcpy(bad, base, 4u * 8u);
 		memcpy(&bad[4u * 8u], &base[3u * 8u], 4u * 8u);
 		zassert_equal(-EBADMSG,
-			      profile_desc_auth_verify(bad, AUTH_FRAMES + 1u,
+			      radiant_profile_desc_auth_verify(bad, AUTH_FRAMES + 1u,
 						       &a), "duplicated, %u", e);
 
 		/* Two field frames swapped. */
@@ -800,48 +800,48 @@ ZTEST(profiles, test_altered_sets_fail_verification)
 		memcpy(&bad[2u * 8u], &base[3u * 8u], 8u);
 		memcpy(&bad[3u * 8u], &base[2u * 8u], 8u);
 		zassert_equal(-EBADMSG,
-			      profile_desc_auth_verify(bad, AUTH_FRAMES, &a),
+			      radiant_profile_desc_auth_verify(bad, AUTH_FRAMES, &a),
 			      "swapped, %u", e);
 
 		/* Frame 1 spliced in from the next epoch's set. */
 		memcpy(bad, base, AUTH_FRAMES * 8u);
 		memcpy(&bad[8u], &next[8u], 8u);
 		zassert_equal(-EBADMSG,
-			      profile_desc_auth_verify(bad, AUTH_FRAMES, &a),
+			      radiant_profile_desc_auth_verify(bad, AUTH_FRAMES, &a),
 			      "spliced frame 1, %u", e);
 
 		/* The next epoch's tag on this epoch's bodies. */
 		memcpy(bad, base, AUTH_FRAMES * 8u);
 		memcpy(&bad[6u * 8u], &next[6u * 8u], 8u);
 		zassert_equal(-EBADMSG,
-			      profile_desc_auth_verify(bad, AUTH_FRAMES, &a),
+			      radiant_profile_desc_auth_verify(bad, AUTH_FRAMES, &a),
 			      "spliced tag, %u", e);
 	}
 
 	/* The genuine set under the wrong device numbers or key. */
 	auth_init(&a, AUTH_EPOCH, false);
-	zassert_ok(profile_desc_auth_verify(base, AUTH_FRAMES, &a));
+	zassert_ok(radiant_profile_desc_auth_verify(base, AUTH_FRAMES, &a));
 	w = a;
 	w.devnum ^= 1u;
-	zassert_equal(-EBADMSG, profile_desc_auth_verify(base, AUTH_FRAMES, &w));
+	zassert_equal(-EBADMSG, radiant_profile_desc_auth_verify(base, AUTH_FRAMES, &w));
 	w = a;
 	w.base_devnum ^= 1u;
-	zassert_equal(-EBADMSG, profile_desc_auth_verify(base, AUTH_FRAMES, &w));
+	zassert_equal(-EBADMSG, radiant_profile_desc_auth_verify(base, AUTH_FRAMES, &w));
 	w = a;
 	w.devnum = AUTH_BASE_DEVNUM;
 	w.base_devnum = AUTH_DEVNUM;
-	zassert_equal(-EBADMSG, profile_desc_auth_verify(base, AUTH_FRAMES, &w));
+	zassert_equal(-EBADMSG, radiant_profile_desc_auth_verify(base, AUTH_FRAMES, &w));
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_key_import(&auth_wrong_root, AUTH_WRONG_ROOT,
 					     128u));
 	w = a;
 	w.k_root = &auth_wrong_root;
-	zassert_equal(-EBADMSG, profile_desc_auth_verify(base, AUTH_FRAMES, &w));
+	zassert_equal(-EBADMSG, radiant_profile_desc_auth_verify(base, AUTH_FRAMES, &w));
 }
 
 ZTEST(profiles, test_the_epoch_search_is_forward_only_and_bounded)
 {
-	struct profile_desc_auth a;
+	struct radiant_profile_desc_auth a;
 	const uint8_t *hidden = &AUTH_VECTOR_HIDDEN[0][0];
 	const uint8_t *shown = &AUTH_VECTOR_TIME[0][0];
 	uint32_t got;
@@ -850,38 +850,38 @@ ZTEST(profiles, test_the_epoch_search_is_forward_only_and_bounded)
 	auth_init(&a, 0u, false);
 
 	/* Frame 1 shows zero: found from every start within the span... */
-	for (k = 0u; k <= PROFILE_TLM_AUTH_EPOCH_SPAN; k++) {
+	for (k = 0u; k <= RADIANT_PROFILE_TLM_AUTH_EPOCH_SPAN; k++) {
 		got = 0u;
-		zassert_ok(profile_desc_auth_find_epoch(
+		zassert_ok(radiant_profile_desc_auth_find_epoch(
 				   hidden, AUTH_FRAMES, &a, AUTH_EPOCH - k,
-				   PROFILE_TLM_AUTH_EPOCH_SPAN, &got),
+				   RADIANT_PROFILE_TLM_AUTH_EPOCH_SPAN, &got),
 			   "k = %u", k);
 		zassert_equal(AUTH_EPOCH, got, "k = %u", k);
 	}
 	/* ...and not from one start further back. */
 	zassert_equal(-EBADMSG,
-		      profile_desc_auth_find_epoch(
+		      radiant_profile_desc_auth_find_epoch(
 			      hidden, AUTH_FRAMES, &a,
-			      AUTH_EPOCH - PROFILE_TLM_AUTH_EPOCH_SPAN - 1u,
-			      PROFILE_TLM_AUTH_EPOCH_SPAN, &got));
+			      AUTH_EPOCH - RADIANT_PROFILE_TLM_AUTH_EPOCH_SPAN - 1u,
+			      RADIANT_PROFILE_TLM_AUTH_EPOCH_SPAN, &got));
 	/* Never backwards: a receiver that knows a newer epoch does not find
 	 * this one. */
 	zassert_equal(-EBADMSG,
-		      profile_desc_auth_find_epoch(hidden, AUTH_FRAMES, &a,
+		      radiant_profile_desc_auth_find_epoch(hidden, AUTH_FRAMES, &a,
 						   AUTH_EPOCH + 1u,
-						   PROFILE_TLM_AUTH_EPOCH_SPAN,
+						   RADIANT_PROFILE_TLM_AUTH_EPOCH_SPAN,
 						   &got));
 
 	/* Frame 1 shows the epoch: exactly that one, and the replayed old
 	 * descriptor - below what the receiver knows - is refused. */
 	got = 0u;
-	zassert_ok(profile_desc_auth_find_epoch(shown, AUTH_FRAMES, &a,
+	zassert_ok(radiant_profile_desc_auth_find_epoch(shown, AUTH_FRAMES, &a,
 						AUTH_EPOCH, 0u, &got));
 	zassert_equal(AUTH_EPOCH, got);
 	zassert_equal(-EBADMSG,
-		      profile_desc_auth_find_epoch(shown, AUTH_FRAMES, &a,
+		      radiant_profile_desc_auth_find_epoch(shown, AUTH_FRAMES, &a,
 						   AUTH_EPOCH + 1u,
-						   PROFILE_TLM_AUTH_EPOCH_SPAN,
+						   RADIANT_PROFILE_TLM_AUTH_EPOCH_SPAN,
 						   &got));
 }
 
@@ -894,9 +894,9 @@ ZTEST(profiles, test_the_epoch_search_is_forward_only_and_bounded)
  */
 ZTEST(profiles, test_sealing_a_set_costs_one_kdf_and_one_cmac)
 {
-	struct profile_descriptor d;
-	struct profile_desc_auth a;
-	uint8_t frames[PROFILE_TLM_MAX_FRAMES * PROFILE_TLM_FRAME_LEN];
+	struct radiant_profile_descriptor d;
+	struct radiant_profile_desc_auth a;
+	uint8_t frames[RADIANT_PROFILE_TLM_MAX_FRAMES * RADIANT_PROFILE_TLM_FRAME_LEN];
 	uint32_t t0;
 	uint32_t dt;
 	uint64_t us7;
@@ -905,12 +905,12 @@ ZTEST(profiles, test_sealing_a_set_costs_one_kdf_and_one_cmac)
 
 	auth_init(&a, AUTH_EPOCH, false);
 
-	build_cgm_descriptor(&d, PROFILE_TLM_FLAG_X_AUTH);
+	build_cgm_descriptor(&d, RADIANT_PROFILE_TLM_FLAG_X_AUTH);
 	t0 = k_cycle_get_32();
 	for (i = 0u; i < 16u; i++) {
 		zassert_equal((int)AUTH_FRAMES,
-			      profile_desc_encode_auth(&d, &a, frames,
-						       PROFILE_TLM_MAX_FRAMES));
+			      radiant_profile_desc_encode_auth(&d, &a, frames,
+						       RADIANT_PROFILE_TLM_MAX_FRAMES));
 	}
 	dt = k_cycle_get_32() - t0;
 	us7 = k_cyc_to_us_floor64(dt) / 16u;
@@ -920,20 +920,20 @@ ZTEST(profiles, test_sealing_a_set_costs_one_kdf_and_one_cmac)
 	for (i = 0u; i < 13u; i++) {
 		memset(&d.fields[i], 0, sizeof(d.fields[i]));
 		d.fields[i].id = (uint8_t)(i + 1u);
-		d.fields[i].type = PROFILE_TLM_TYPE_TEMPERATURE;
+		d.fields[i].type = RADIANT_PROFILE_TLM_TYPE_TEMPERATURE;
 		d.fields[i].width_code = 4u;
 		d.fields[i].page = (uint8_t)(1u + i / 5u);
 		d.fields[i].bit_offset = (uint8_t)(8u * (i % 5u));
 	}
 	t0 = k_cycle_get_32();
 	for (i = 0u; i < 16u; i++) {
-		zassert_equal(16, profile_desc_encode_auth(
-				      &d, &a, frames, PROFILE_TLM_MAX_FRAMES));
+		zassert_equal(16, radiant_profile_desc_encode_auth(
+				      &d, &a, frames, RADIANT_PROFILE_TLM_MAX_FRAMES));
 	}
 	dt = k_cycle_get_32() - t0;
 	us16 = k_cyc_to_us_floor64(dt) / 16u;
 
-	TC_PRINT("profile_desc_encode_auth: %u us (7 frames), %u us "
+	TC_PRINT("radiant_profile_desc_encode_auth: %u us (7 frames), %u us "
 		 "(16 frames); cycle counter %u Hz\n", (unsigned)us7,
 		 (unsigned)us16, (unsigned)sys_clock_hw_cycles_per_sec());
 	zassert_true(us7 < 20000u, "%u us", (unsigned)us7);
@@ -951,15 +951,15 @@ static int32_t auth_phase_hook(radiant_time_t t_sync, void *user)
 
 ZTEST(profiles, test_a_reseal_mid_burst_never_yields_a_mixed_set)
 {
-	static struct profile_descriptor cgm;
-	struct profile_sched ps;
-	struct profile_sched_cfg cfg;
-	struct profile_desc_auth a1;
-	struct profile_desc_auth a2;
-	struct profile_desc_auth rxa;
-	struct profile_desc_rx rx;
-	struct profile_descriptor back;
-	const struct profile_sched_downlink dl = { .phase = auth_phase_hook };
+	static struct radiant_profile_descriptor cgm;
+	struct radiant_profile_sched ps;
+	struct radiant_profile_sched_cfg cfg;
+	struct radiant_profile_desc_auth a1;
+	struct radiant_profile_desc_auth a2;
+	struct radiant_profile_desc_auth rxa;
+	struct radiant_profile_desc_rx rx;
+	struct radiant_profile_descriptor back;
+	const struct radiant_profile_sched_downlink dl = { .phase = auth_phase_hook };
 	uint8_t old_set[AUTH_FRAMES * 8u];
 	uint8_t new_set[AUTH_FRAMES * 8u];
 	uint8_t mixed[AUTH_FRAMES * 8u];
@@ -970,7 +970,7 @@ ZTEST(profiles, test_a_reseal_mid_burst_never_yields_a_mixed_set)
 	uint32_t slot;
 	bool resealed = false;
 
-	build_cgm_descriptor(&cgm, PROFILE_TLM_FLAG_X_AUTH);
+	build_cgm_descriptor(&cgm, RADIANT_PROFILE_TLM_FLAG_X_AUTH);
 	auth_init(&a1, AUTH_EPOCH, true);
 	a2 = a1;
 	a2.epoch = AUTH_EPOCH + 1u;
@@ -980,42 +980,42 @@ ZTEST(profiles, test_a_reseal_mid_burst_never_yields_a_mixed_set)
 	 * continuing the burst after a reseal would hand a receiver -
 	 * verify under neither epoch. */
 	zassert_equal((int)AUTH_FRAMES,
-		      profile_desc_encode_auth(&cgm, &a1, old_set, AUTH_FRAMES));
+		      radiant_profile_desc_encode_auth(&cgm, &a1, old_set, AUTH_FRAMES));
 	zassert_equal((int)AUTH_FRAMES,
-		      profile_desc_encode_auth(&cgm, &a2, new_set, AUTH_FRAMES));
+		      radiant_profile_desc_encode_auth(&cgm, &a2, new_set, AUTH_FRAMES));
 	memcpy(mixed, old_set, 3u * 8u);
 	memcpy(&mixed[3u * 8u], &new_set[3u * 8u], 4u * 8u);
-	zassert_equal(-EBADMSG, profile_desc_auth_verify(mixed, AUTH_FRAMES,
+	zassert_equal(-EBADMSG, radiant_profile_desc_auth_verify(mixed, AUTH_FRAMES,
 							 &a1));
-	zassert_equal(-EBADMSG, profile_desc_auth_verify(mixed, AUTH_FRAMES,
+	zassert_equal(-EBADMSG, radiant_profile_desc_auth_verify(mixed, AUTH_FRAMES,
 							 &a2));
 
 	memset(&cfg, 0, sizeof(cfg));
 	cfg.desc = &cgm;
 	/* The plain init refuses a sealed descriptor... */
-	zassert_equal(-ENOTSUP, profile_sched_init(&ps, &cfg));
+	zassert_equal(-ENOTSUP, radiant_profile_sched_init(&ps, &cfg));
 	/* ...and the sealed one takes it, into the same 16-frame buffer. */
-	zassert_ok(profile_sched_init_auth(&ps, &cfg, &a1));
+	zassert_ok(radiant_profile_sched_init_auth(&ps, &cfg, &a1));
 	zassert_equal(AUTH_FRAMES, ps.n_frames);
 	zassert_mem_equal(ps.frames, old_set, sizeof(old_set));
 
-	profile_desc_rx_init(&rx);
-	for (slot = 0u; slot < 2u * PROFILE_TLM_CYCLE; slot++) {
-		enum profile_slot_kind kind = profile_sched_next(&ps, body);
+	radiant_profile_desc_rx_init(&rx);
+	for (slot = 0u; slot < 2u * RADIANT_PROFILE_TLM_CYCLE; slot++) {
+		enum radiant_profile_slot_kind kind = radiant_profile_sched_next(&ps, body);
 
-		if (kind != PROFILE_SLOT_DESCRIPTOR) {
+		if (kind != RADIANT_PROFILE_SLOT_DESCRIPTOR) {
 			continue;
 		}
 		if (!resealed && ps.burst_index == 3u) {
-			zassert_ok(profile_sched_reseal(&ps, &a2));
+			zassert_ok(radiant_profile_sched_reseal(&ps, &a2));
 			resealed = true;
 		}
-		if (profile_desc_rx_feed(&rx, body) == 1) {
+		if (radiant_profile_desc_rx_feed(&rx, body) == 1) {
 			epoch = 0u;
-			zassert_ok(profile_desc_rx_take_auth(&rx, &rxa, AUTH_EPOCH, &back, &epoch));
+			zassert_ok(radiant_profile_desc_rx_take_auth(&rx, &rxa, AUTH_EPOCH, &back, &epoch));
 			zassert_true(n_verified < ARRAY_SIZE(verified));
 			verified[n_verified++] = epoch;
-			profile_desc_rx_init(&rx);
+			radiant_profile_desc_rx_init(&rx);
 		}
 	}
 	zassert_true(resealed);
@@ -1025,33 +1025,33 @@ ZTEST(profiles, test_a_reseal_mid_burst_never_yields_a_mixed_set)
 
 	/* Refusals: a plain set, and a reseal that changes the shape. */
 	cgm.n_fields = 3u;
-	zassert_equal(-EINVAL, profile_sched_reseal(&ps, &a1));
+	zassert_equal(-EINVAL, radiant_profile_sched_reseal(&ps, &a1));
 	zassert_mem_equal(ps.frames, new_set, sizeof(new_set));
 	build_cgm_descriptor(&cgm, 0u);
 	memset(&cfg, 0, sizeof(cfg));
 	cfg.desc = &cgm;
-	zassert_ok(profile_sched_init(&ps, &cfg));
-	zassert_equal(-EINVAL, profile_sched_reseal(&ps, &a1));
+	zassert_ok(radiant_profile_sched_init(&ps, &cfg));
+	zassert_equal(-EINVAL, radiant_profile_sched_reseal(&ps, &a1));
 
 	/* A sealed set's schedule frame is under the MAC, so the per-frame
 	 * re-phase is refused rather than left to break every set. */
-	build_cgm_descriptor(&cgm, PROFILE_TLM_FLAG_X_AUTH);
+	build_cgm_descriptor(&cgm, RADIANT_PROFILE_TLM_FLAG_X_AUTH);
 	cgm.has_schedule = true;
-	cgm.schedule = (struct profile_schedule)PROFILE_SCHED_INIT_DEFAULT;
+	cgm.schedule = (struct radiant_profile_schedule)RADIANT_PROFILE_SCHED_INIT_DEFAULT;
 	memset(&cfg, 0, sizeof(cfg));
 	cfg.desc = &cgm;
-	zassert_ok(profile_sched_init_auth(&ps, &cfg, &a1));
-	zassert_equal(-ENOTSUP, profile_sched_set_downlink(&ps, &dl));
+	zassert_ok(radiant_profile_sched_init_auth(&ps, &cfg, &a1));
+	zassert_equal(-ENOTSUP, radiant_profile_sched_set_downlink(&ps, &dl));
 }
 
 ZTEST(profiles, test_a_receiver_rejects_a_version_it_does_not_implement)
 {
-	struct profile_descriptor d, back;
-	uint8_t frames[PROFILE_TLM_MAX_FRAMES * PROFILE_TLM_FRAME_LEN];
+	struct radiant_profile_descriptor d, back;
+	uint8_t frames[RADIANT_PROFILE_TLM_MAX_FRAMES * RADIANT_PROFILE_TLM_FRAME_LEN];
 	int n;
 
 	build_node_descriptor(&d);
-	n = profile_desc_encode(&d, frames, PROFILE_TLM_MAX_FRAMES);
+	n = radiant_profile_desc_encode(&d, frames, RADIANT_PROFILE_TLM_MAX_FRAMES);
 	zassert_true(n > 0);
 
 	/* Version 8 in the high nibble of frame 0 byte [2]. The version
@@ -1060,16 +1060,16 @@ ZTEST(profiles, test_a_receiver_rejects_a_version_it_does_not_implement)
 	 * rejected; 1..7 are layout-compatible (the extension rule, TODO
 	 * security item 9, and the shared vectors below). */
 	frames[2] = (uint8_t)(0x80u | NODE_FIELDS);
-	zassert_equal(-ENOTSUP, profile_desc_decode(frames, (uint8_t)n, &back));
+	zassert_equal(-ENOTSUP, radiant_profile_desc_decode(frames, (uint8_t)n, &back));
 	frames[2] = (uint8_t)(0xF0u | NODE_FIELDS);
-	zassert_equal(-ENOTSUP, profile_desc_decode(frames, (uint8_t)n, &back));
+	zassert_equal(-ENOTSUP, radiant_profile_desc_decode(frames, (uint8_t)n, &back));
 	frames[2] = (uint8_t)(0x00u | NODE_FIELDS);
-	zassert_equal(-ENOTSUP, profile_desc_decode(frames, (uint8_t)n, &back));
+	zassert_equal(-ENOTSUP, radiant_profile_desc_decode(frames, (uint8_t)n, &back));
 
 	/* Field count 15 is reserved for an extended descriptor: a different
 	 * frame set, not fifteen fields. */
-	frames[2] = (uint8_t)((PROFILE_TLM_VERSION << 4) | 0x0Fu);
-	zassert_equal(-ENOTSUP, profile_desc_decode(frames, (uint8_t)n, &back));
+	frames[2] = (uint8_t)((RADIANT_PROFILE_TLM_VERSION << 4) | 0x0Fu);
+	zassert_equal(-ENOTSUP, radiant_profile_desc_decode(frames, (uint8_t)n, &back));
 }
 
 /*
@@ -1090,18 +1090,18 @@ static const uint8_t ext_v1[6][8] = {
 
 ZTEST(profiles, test_the_extension_rule_shared_vectors)
 {
-	struct profile_descriptor v1, v2, v7, v8;
+	struct radiant_profile_descriptor v1, v2, v7, v8;
 	uint8_t set[6u * 8u];
 
 	memcpy(set, ext_v1, sizeof(set));
-	zassert_ok(profile_desc_decode(set, 6u, &v1));
+	zassert_ok(radiant_profile_desc_decode(set, 6u, &v1));
 	zassert_equal(1u, v1.version);
 	zassert_equal(4u, v1.n_fields);
 	zassert_equal(0x2Bu, v1.schema_id);
 
 	/* Version 2: accepted, decoded by the v1 layout, version kept. */
 	set[2] = 0x24u;
-	zassert_ok(profile_desc_decode(set, 6u, &v2));
+	zassert_ok(radiant_profile_desc_decode(set, 6u, &v2));
 	zassert_equal(2u, v2.version);
 	zassert_equal(v1.n_fields, v2.n_fields);
 	zassert_equal(v1.schema_id, v2.schema_id);
@@ -1110,21 +1110,21 @@ ZTEST(profiles, test_the_extension_rule_shared_vectors)
 			  sizeof(v1.fields[0]) * v1.n_fields);
 
 	set[2] = 0x74u;
-	zassert_ok(profile_desc_decode(set, 6u, &v7));
+	zassert_ok(radiant_profile_desc_decode(set, 6u, &v7));
 	zassert_equal(7u, v7.version);
 
 	/* Version 8: the first that changes the layout. Rejected. */
 	set[2] = 0x84u;
-	zassert_equal(-ENOTSUP, profile_desc_decode(set, 6u, &v8));
+	zassert_equal(-ENOTSUP, radiant_profile_desc_decode(set, 6u, &v8));
 
 	/* The node this build encodes is the version 1 vector, byte for byte. */
 	{
-		struct profile_descriptor d;
-		uint8_t frames[PROFILE_TLM_MAX_FRAMES * PROFILE_TLM_FRAME_LEN];
+		struct radiant_profile_descriptor d;
+		uint8_t frames[RADIANT_PROFILE_TLM_MAX_FRAMES * RADIANT_PROFILE_TLM_FRAME_LEN];
 
 		build_node_descriptor(&d);
-		zassert_equal(6, profile_desc_encode(&d, frames,
-						     PROFILE_TLM_MAX_FRAMES));
+		zassert_equal(6, radiant_profile_desc_encode(&d, frames,
+						     RADIANT_PROFILE_TLM_MAX_FRAMES));
 		zassert_mem_equal(frames, ext_v1, sizeof(ext_v1));
 	}
 }
@@ -1136,42 +1136,42 @@ ZTEST(profiles, test_the_extension_rule_shared_vectors)
 
 ZTEST(profiles, test_the_set_assembles_out_of_order_and_through_holes)
 {
-	struct profile_descriptor d, back;
-	struct profile_desc_rx rx;
-	uint8_t frames[PROFILE_TLM_MAX_FRAMES * PROFILE_TLM_FRAME_LEN];
+	struct radiant_profile_descriptor d, back;
+	struct radiant_profile_desc_rx rx;
+	uint8_t frames[RADIANT_PROFILE_TLM_MAX_FRAMES * RADIANT_PROFILE_TLM_FRAME_LEN];
 	int n;
 	int8_t i;
 
 	build_node_descriptor(&d);
-	n = profile_desc_encode(&d, frames, PROFILE_TLM_MAX_FRAMES);
-	profile_desc_rx_init(&rx);
+	n = radiant_profile_desc_encode(&d, frames, RADIANT_PROFILE_TLM_MAX_FRAMES);
+	radiant_profile_desc_rx_init(&rx);
 
 	/* Backwards, which is the same problem as "joined mid-set and wrapped
 	 * round" without needing two cycles to express. */
 	for (i = (int8_t)(n - 1); i >= 0; i--) {
-		int rc = profile_desc_rx_feed(&rx,
-			&frames[(size_t)i * PROFILE_TLM_FRAME_LEN]);
+		int rc = radiant_profile_desc_rx_feed(&rx,
+			&frames[(size_t)i * RADIANT_PROFILE_TLM_FRAME_LEN]);
 
 		zassert_true(rc >= 0, "frame %d", i);
 		zassert_equal(i == 0 ? 1 : 0, rc);
 	}
-	zassert_ok(profile_desc_rx_take(&rx, &back));
+	zassert_ok(radiant_profile_desc_rx_take(&rx, &back));
 	zassert_equal(NODE_SCHEMA, back.schema_id);
 	zassert_equal(NODE_FIELDS, back.n_fields);
 
 	/* A data page and a common page are not descriptor frames and must not
 	 * disturb an assembly in progress. */
-	profile_desc_rx_init(&rx);
-	zassert_equal(0, profile_desc_rx_feed(&rx, frames));
+	radiant_profile_desc_rx_init(&rx);
+	zassert_equal(0, radiant_profile_desc_rx_feed(&rx, frames));
 	{
 		uint8_t data[8] = { 0x01u, 0x07u, 0, 0, 0, 0, 0, 0 };
 		uint8_t p80[8] = { 0x50u, 0xFFu, 0xFFu, 1u, 0xFFu, 0, 1u, 0 };
 
-		zassert_equal(0, profile_desc_rx_feed(&rx, data));
-		zassert_equal(0, profile_desc_rx_feed(&rx, p80));
+		zassert_equal(0, radiant_profile_desc_rx_feed(&rx, data));
+		zassert_equal(0, radiant_profile_desc_rx_feed(&rx, p80));
 	}
-	zassert_false(profile_desc_rx_complete(&rx));
-	zassert_equal(-EAGAIN, profile_desc_rx_take(&rx, &back));
+	zassert_false(radiant_profile_desc_rx_complete(&rx));
+	zassert_equal(-EAGAIN, radiant_profile_desc_rx_take(&rx, &back));
 }
 
 /*
@@ -1182,38 +1182,38 @@ ZTEST(profiles, test_the_set_assembles_out_of_order_and_through_holes)
  */
 ZTEST(profiles, test_a_new_schema_id_abandons_the_partial_set)
 {
-	struct profile_descriptor d, back;
-	struct profile_desc_rx rx;
-	uint8_t old_frames[PROFILE_TLM_MAX_FRAMES * PROFILE_TLM_FRAME_LEN];
-	uint8_t new_frames[PROFILE_TLM_MAX_FRAMES * PROFILE_TLM_FRAME_LEN];
+	struct radiant_profile_descriptor d, back;
+	struct radiant_profile_desc_rx rx;
+	uint8_t old_frames[RADIANT_PROFILE_TLM_MAX_FRAMES * RADIANT_PROFILE_TLM_FRAME_LEN];
+	uint8_t new_frames[RADIANT_PROFILE_TLM_MAX_FRAMES * RADIANT_PROFILE_TLM_FRAME_LEN];
 	int n;
 	uint8_t i;
 
 	build_node_descriptor(&d);
-	n = profile_desc_encode(&d, old_frames, PROFILE_TLM_MAX_FRAMES);
+	n = radiant_profile_desc_encode(&d, old_frames, RADIANT_PROFILE_TLM_MAX_FRAMES);
 
 	d.schema_id = (uint8_t)(NODE_SCHEMA + 1u);
 	d.fields[0].bit_offset = 16u; /* the change the new id announces */
 	d.fields[1].bit_offset = 24u;
-	zassert_equal(n, profile_desc_encode(&d, new_frames,
-					     PROFILE_TLM_MAX_FRAMES));
+	zassert_equal(n, radiant_profile_desc_encode(&d, new_frames,
+					     RADIANT_PROFILE_TLM_MAX_FRAMES));
 
-	profile_desc_rx_init(&rx);
+	radiant_profile_desc_rx_init(&rx);
 	/* Half the old set... */
 	for (i = 0u; i < (uint8_t)(n - 1); i++) {
-		zassert_equal(0, profile_desc_rx_feed(&rx,
-			&old_frames[(size_t)i * PROFILE_TLM_FRAME_LEN]));
+		zassert_equal(0, radiant_profile_desc_rx_feed(&rx,
+			&old_frames[(size_t)i * RADIANT_PROFILE_TLM_FRAME_LEN]));
 	}
 	/* ...then frame 0 of the new one. */
-	zassert_equal(0, profile_desc_rx_feed(&rx, new_frames));
-	zassert_false(profile_desc_rx_complete(&rx));
+	zassert_equal(0, radiant_profile_desc_rx_feed(&rx, new_frames));
+	zassert_false(radiant_profile_desc_rx_complete(&rx));
 	zassert_equal(1u, rx.resets);
 
 	for (i = 1u; i < (uint8_t)n; i++) {
-		(void)profile_desc_rx_feed(&rx,
-			&new_frames[(size_t)i * PROFILE_TLM_FRAME_LEN]);
+		(void)radiant_profile_desc_rx_feed(&rx,
+			&new_frames[(size_t)i * RADIANT_PROFILE_TLM_FRAME_LEN]);
 	}
-	zassert_ok(profile_desc_rx_take(&rx, &back));
+	zassert_ok(radiant_profile_desc_rx_take(&rx, &back));
 	zassert_equal((uint8_t)(NODE_SCHEMA + 1u), back.schema_id);
 	zassert_equal(16u, back.fields[0].bit_offset);
 }
@@ -1225,7 +1225,7 @@ ZTEST(profiles, test_a_new_schema_id_abandons_the_partial_set)
 
 ZTEST(profiles, test_data_pages_round_trip_including_the_signed_field)
 {
-	struct profile_descriptor d;
+	struct radiant_profile_descriptor d;
 	int64_t in[NODE_FIELDS] = { 0 };
 	int64_t out[NODE_FIELDS] = { 0 };
 	uint8_t body[8];
@@ -1238,19 +1238,19 @@ ZTEST(profiles, test_data_pages_round_trip_including_the_signed_field)
 	in[2] = 0xFFFFFFF0ull; /* energy, near its wrap */
 	in[3] = -250;          /* watts, signed and unaligned */
 
-	zassert_equal(2, profile_data_encode(&d, 1u, 0x11u, in, NODE_FIELDS,
+	zassert_equal(2, radiant_profile_data_encode(&d, 1u, 0x11u, in, NODE_FIELDS,
 					     body));
 	zassert_equal(1u, body[0]);
 	zassert_equal(0x11u, body[1]);
 	zassert_equal(62u, body[2]);
-	zassert_equal(2, profile_data_decode(&d, body, out, NODE_FIELDS, &present));
+	zassert_equal(2, radiant_profile_data_decode(&d, body, out, NODE_FIELDS, &present));
 	zassert_equal(0x03u, present);
 	zassert_equal(62, out[0]);
 	zassert_equal(29315, out[1]);
 
-	zassert_equal(2, profile_data_encode(&d, 2u, 0x12u, in, NODE_FIELDS,
+	zassert_equal(2, radiant_profile_data_encode(&d, 2u, 0x12u, in, NODE_FIELDS,
 					     body));
-	zassert_equal(2, profile_data_decode(&d, body, out, NODE_FIELDS, &present));
+	zassert_equal(2, radiant_profile_data_decode(&d, body, out, NODE_FIELDS, &present));
 	zassert_equal(0x0Cu, present);
 	zassert_equal((int64_t)0xFFFFFFF0ull, out[2]);
 	zassert_equal(-250, out[3]);
@@ -1264,7 +1264,7 @@ ZTEST(profiles, test_data_pages_round_trip_including_the_signed_field)
 
 ZTEST(profiles, test_an_accumulating_field_wraps_rather_than_saturating)
 {
-	struct profile_descriptor d;
+	struct radiant_profile_descriptor d;
 	int64_t in[NODE_FIELDS] = { 0 };
 	int64_t out[NODE_FIELDS] = { 0 };
 	uint8_t body[8];
@@ -1276,8 +1276,8 @@ ZTEST(profiles, test_an_accumulating_field_wraps_rather_than_saturating)
 	 * counter must truncate, not refuse - otherwise every caller has to
 	 * own the masking, and therefore the wrap semantics. */
 	in[2] = 0x1000000FFull; /* 2^32 + 255 */
-	zassert_true(profile_data_encode(&d, 2u, 0u, in, NODE_FIELDS, body) > 0);
-	zassert_equal(2, profile_data_decode(&d, body, out, NODE_FIELDS, NULL));
+	zassert_true(radiant_profile_data_encode(&d, 2u, 0u, in, NODE_FIELDS, body) > 0);
+	zassert_equal(2, radiant_profile_data_decode(&d, body, out, NODE_FIELDS, NULL));
 	zassert_equal(255, out[2]);
 }
 
@@ -1286,13 +1286,13 @@ ZTEST(profiles, test_an_accumulating_field_wraps_rather_than_saturating)
  * ---------------------------------------------------------------------------
  */
 
-static struct profile_descriptor sched_desc;
+static struct radiant_profile_descriptor sched_desc;
 static int64_t sched_values[NODE_FIELDS];
 
 static int cb_data_page(uint8_t page, uint8_t counter, uint8_t *body, void *user)
 {
 	ARG_UNUSED(user);
-	return profile_data_encode(&sched_desc, page, counter, sched_values,
+	return radiant_profile_data_encode(&sched_desc, page, counter, sched_values,
 				   sched_desc.n_fields, body) < 0 ? -EINVAL : 0;
 }
 
@@ -1335,7 +1335,7 @@ static int cb_common_82(uint8_t *body, void *user)
 	return 0;
 }
 
-static void sched_cfg_init(struct profile_sched_cfg *cfg)
+static void sched_cfg_init(struct radiant_profile_sched_cfg *cfg)
 {
 	memset(cfg, 0, sizeof(*cfg));
 	cfg->desc = &sched_desc;
@@ -1346,8 +1346,8 @@ static void sched_cfg_init(struct profile_sched_cfg *cfg)
 
 ZTEST(profiles, test_the_interleave_is_119_120_over_121)
 {
-	struct profile_sched ps;
-	struct profile_sched_cfg cfg;
+	struct radiant_profile_sched ps;
+	struct radiant_profile_sched_cfg cfg;
 	uint8_t body[8];
 	uint32_t slot;
 	uint32_t cycle;
@@ -1355,20 +1355,20 @@ ZTEST(profiles, test_the_interleave_is_119_120_over_121)
 
 	build_node_descriptor(&sched_desc);
 	sched_cfg_init(&cfg);
-	zassert_ok(profile_sched_init(&ps, &cfg));
+	zassert_ok(radiant_profile_sched_init(&ps, &cfg));
 
 	/* Burn the power-up burst so the assertions below run over settled
 	 * cycles rather than over the first one. A node transmits its schema
 	 * before anything else on purpose - a receiver already listening
 	 * should not wait for message 0 of the second cycle. */
-	for (slot = 0u; slot < PROFILE_TLM_CYCLE; slot++) {
-		(void)profile_sched_next(&ps, body);
+	for (slot = 0u; slot < RADIANT_PROFILE_TLM_CYCLE; slot++) {
+		(void)radiant_profile_sched_next(&ps, body);
 	}
 
 	for (cycle = 0u; cycle < 3u; cycle++) {
-		for (slot = 0u; slot < PROFILE_TLM_CYCLE; slot++) {
-			enum profile_slot_kind kind =
-				profile_sched_next(&ps, body);
+		for (slot = 0u; slot < RADIANT_PROFILE_TLM_CYCLE; slot++) {
+			enum radiant_profile_slot_kind kind =
+				radiant_profile_sched_next(&ps, body);
 
 			if (slot <= 5u) {
 				/* 2 + 4 fields = 6 frames, consecutive, at
@@ -1376,20 +1376,20 @@ ZTEST(profiles, test_the_interleave_is_119_120_over_121)
 				 * would make a mid-stream join take six
 				 * cycles - over a minute at 4 Hz, over an
 				 * hour at 0.25 Hz. */
-				zassert_equal(PROFILE_SLOT_DESCRIPTOR, kind,
+				zassert_equal(RADIANT_PROFILE_SLOT_DESCRIPTOR, kind,
 					      "cycle %u slot %u", cycle, slot);
-				zassert_equal(PROFILE_TLM_PAGE_DESCRIPTOR,
+				zassert_equal(RADIANT_PROFILE_TLM_PAGE_DESCRIPTOR,
 					      body[0]);
 				zassert_equal((uint8_t)((slot << 4) | 5u),
 					      body[1]);
-			} else if (slot == PROFILE_TLM_SLOT_PAGE_80) {
-				zassert_equal(PROFILE_SLOT_COMMON_80, kind);
+			} else if (slot == RADIANT_PROFILE_TLM_SLOT_PAGE_80) {
+				zassert_equal(RADIANT_PROFILE_SLOT_COMMON_80, kind);
 				zassert_equal(0x50u, body[0]);
-			} else if (slot == PROFILE_TLM_SLOT_PAGE_81) {
-				zassert_equal(PROFILE_SLOT_COMMON_81, kind);
+			} else if (slot == RADIANT_PROFILE_TLM_SLOT_PAGE_81) {
+				zassert_equal(RADIANT_PROFILE_SLOT_COMMON_81, kind);
 				zassert_equal(0x51u, body[0]);
 			} else {
-				zassert_equal(PROFILE_SLOT_DATA, kind,
+				zassert_equal(RADIANT_PROFILE_SLOT_DATA, kind,
 					      "cycle %u slot %u", cycle, slot);
 				data_pages++;
 			}
@@ -1409,8 +1409,8 @@ ZTEST(profiles, test_the_interleave_is_119_120_over_121)
  */
 ZTEST(profiles, test_the_rotation_alternates_and_the_counter_is_the_slot_index)
 {
-	struct profile_sched ps;
-	struct profile_sched_cfg cfg;
+	struct radiant_profile_sched ps;
+	struct radiant_profile_sched_cfg cfg;
 	uint8_t body[8];
 	uint32_t slot;
 	uint32_t n_data = 0u;
@@ -1418,16 +1418,16 @@ ZTEST(profiles, test_the_rotation_alternates_and_the_counter_is_the_slot_index)
 
 	build_node_descriptor(&sched_desc);
 	sched_cfg_init(&cfg);
-	zassert_ok(profile_sched_init(&ps, &cfg));
+	zassert_ok(radiant_profile_sched_init(&ps, &cfg));
 
-	for (slot = 0u; slot < 3u * PROFILE_TLM_CYCLE; slot++) {
-		enum profile_slot_kind kind;
+	for (slot = 0u; slot < 3u * RADIANT_PROFILE_TLM_CYCLE; slot++) {
+		enum radiant_profile_slot_kind kind;
 
-		zassert_equal((uint8_t)slot, profile_sched_counter(&ps),
+		zassert_equal((uint8_t)slot, radiant_profile_sched_counter(&ps),
 			      "slot %u",
 			      slot - 1u);
-		kind = profile_sched_next(&ps, body);
-		if (kind != PROFILE_SLOT_DATA) {
+		kind = radiant_profile_sched_next(&ps, body);
+		if (kind != RADIANT_PROFILE_SLOT_DATA) {
 			continue;
 		}
 		zassert_equal(expect_page, body[0],
@@ -1442,7 +1442,7 @@ ZTEST(profiles, test_the_rotation_alternates_and_the_counter_is_the_slot_index)
 	 * the assertion above checked the wrap for real rather than checking
 	 * arithmetic that never reached it. */
 	zassert_equal(3u * 113u, n_data);
-	zassert_true(3u * PROFILE_TLM_CYCLE > 256u);
+	zassert_true(3u * RADIANT_PROFILE_TLM_CYCLE > 256u);
 }
 
 /*
@@ -1472,9 +1472,9 @@ static bool client_claim_every_third(uint32_t m, uint8_t *body, void *user)
 
 ZTEST(profiles, test_the_client_seam_takes_slots_but_never_the_cadence)
 {
-	struct profile_sched ps;
-	struct profile_sched_cfg cfg;
-	struct profile_sched_client client = {
+	struct radiant_profile_sched ps;
+	struct radiant_profile_sched_cfg cfg;
+	struct radiant_profile_sched_client client = {
 		.claim = client_claim_every_third,
 		.user = NULL,
 	};
@@ -1484,28 +1484,28 @@ ZTEST(profiles, test_the_client_seam_takes_slots_but_never_the_cadence)
 
 	build_node_descriptor(&sched_desc);
 	sched_cfg_init(&cfg);
-	zassert_ok(profile_sched_init(&ps, &cfg));
-	zassert_ok(profile_sched_set_client(&ps, &client));
+	zassert_ok(radiant_profile_sched_init(&ps, &cfg));
+	zassert_ok(radiant_profile_sched_set_client(&ps, &client));
 
 	client_offers = 0u;
 	client_claims = 0u;
 
-	for (slot = 0u; slot < PROFILE_TLM_CYCLE; slot++) {
-		enum profile_slot_kind kind = profile_sched_next(&ps, body);
+	for (slot = 0u; slot < RADIANT_PROFILE_TLM_CYCLE; slot++) {
+		enum radiant_profile_slot_kind kind = radiant_profile_sched_next(&ps, body);
 
 		if (slot <= 5u) {
-			zassert_equal(PROFILE_SLOT_DESCRIPTOR, kind,
+			zassert_equal(RADIANT_PROFILE_SLOT_DESCRIPTOR, kind,
 				      "slot %u", slot);
-		} else if (slot == PROFILE_TLM_SLOT_PAGE_80) {
-			zassert_equal(PROFILE_SLOT_COMMON_80, kind);
-		} else if (slot == PROFILE_TLM_SLOT_PAGE_81) {
-			zassert_equal(PROFILE_SLOT_COMMON_81, kind);
-		} else if (kind == PROFILE_SLOT_CLIENT) {
+		} else if (slot == RADIANT_PROFILE_TLM_SLOT_PAGE_80) {
+			zassert_equal(RADIANT_PROFILE_SLOT_COMMON_80, kind);
+		} else if (slot == RADIANT_PROFILE_TLM_SLOT_PAGE_81) {
+			zassert_equal(RADIANT_PROFILE_SLOT_COMMON_81, kind);
+		} else if (kind == RADIANT_PROFILE_SLOT_CLIENT) {
 			zassert_equal(0xF0u, body[0]);
 			zassert_equal((uint8_t)slot, body[1]);
 			claimed++;
 		} else {
-			zassert_equal(PROFILE_SLOT_DATA, kind);
+			zassert_equal(RADIANT_PROFILE_SLOT_DATA, kind);
 		}
 	}
 
@@ -1515,10 +1515,10 @@ ZTEST(profiles, test_the_client_seam_takes_slots_but_never_the_cadence)
 	zassert_true(claimed > 30u);
 
 	/* Removing the client hands every slot straight back. */
-	zassert_ok(profile_sched_set_client(&ps, NULL));
+	zassert_ok(radiant_profile_sched_set_client(&ps, NULL));
 	client_offers = 0u;
-	for (slot = 0u; slot < PROFILE_TLM_CYCLE; slot++) {
-		(void)profile_sched_next(&ps, body);
+	for (slot = 0u; slot < RADIANT_PROFILE_TLM_CYCLE; slot++) {
+		(void)radiant_profile_sched_next(&ps, body);
 	}
 	zassert_equal(0u, client_offers);
 }
@@ -1531,9 +1531,9 @@ ZTEST(profiles, test_the_client_seam_takes_slots_but_never_the_cadence)
  */
 ZTEST(profiles, test_a_client_with_no_descriptor_still_gets_the_interleave)
 {
-	struct profile_sched ps;
-	struct profile_sched_cfg cfg;
-	struct profile_sched_client client = {
+	struct radiant_profile_sched ps;
+	struct radiant_profile_sched_cfg cfg;
+	struct radiant_profile_sched_client client = {
 		.claim = client_claim_every_third,
 		.user = NULL,
 	};
@@ -1545,24 +1545,24 @@ ZTEST(profiles, test_a_client_with_no_descriptor_still_gets_the_interleave)
 	cfg.common_80 = cb_common_80;
 	cfg.common_81 = cb_common_81;
 
-	zassert_ok(profile_sched_init(&ps, &cfg));
-	zassert_ok(profile_sched_set_client(&ps, &client));
+	zassert_ok(radiant_profile_sched_init(&ps, &cfg));
+	zassert_ok(radiant_profile_sched_set_client(&ps, &client));
 	client_offers = 0u;
 
-	for (slot = 0u; slot < PROFILE_TLM_CYCLE; slot++) {
-		enum profile_slot_kind kind = profile_sched_next(&ps, body);
+	for (slot = 0u; slot < RADIANT_PROFILE_TLM_CYCLE; slot++) {
+		enum radiant_profile_slot_kind kind = radiant_profile_sched_next(&ps, body);
 
-		if (slot == PROFILE_TLM_SLOT_PAGE_80) {
-			zassert_equal(PROFILE_SLOT_COMMON_80, kind);
-		} else if (slot == PROFILE_TLM_SLOT_PAGE_81) {
-			zassert_equal(PROFILE_SLOT_COMMON_81, kind);
+		if (slot == RADIANT_PROFILE_TLM_SLOT_PAGE_80) {
+			zassert_equal(RADIANT_PROFILE_SLOT_COMMON_80, kind);
+		} else if (slot == RADIANT_PROFILE_TLM_SLOT_PAGE_81) {
+			zassert_equal(RADIANT_PROFILE_SLOT_COMMON_81, kind);
 		} else if ((slot % 3u) == 0u) {
-			zassert_equal(PROFILE_SLOT_CLIENT, kind, "slot %u",
+			zassert_equal(RADIANT_PROFILE_SLOT_CLIENT, kind, "slot %u",
 				      slot);
 		} else {
 			/* No descriptor and no data_page builder, so an
 			 * unclaimed slot is idle rather than invented. */
-			zassert_equal(PROFILE_SLOT_IDLE, kind, "slot %u", slot);
+			zassert_equal(RADIANT_PROFILE_SLOT_IDLE, kind, "slot %u", slot);
 		}
 	}
 	zassert_equal(119u, client_offers);
@@ -1573,18 +1573,18 @@ ZTEST(profiles, test_a_client_with_no_descriptor_still_gets_the_interleave)
  * ---------------------------------------------------------------------------
  */
 
-static void build_sparse_descriptor(struct profile_descriptor *d, uint8_t hb_s)
+static void build_sparse_descriptor(struct radiant_profile_descriptor *d, uint8_t hb_s)
 {
 	build_node_descriptor(d);
-	d->flags |= PROFILE_TLM_FLAG_SPARSE;
+	d->flags |= RADIANT_PROFILE_TLM_FLAG_SPARSE;
 	d->heartbeat_s = hb_s;
-	d->k_code = PROFILE_TLM_K_CODE_3; /* the documented default, 3x */
+	d->k_code = RADIANT_PROFILE_TLM_K_CODE_3; /* the documented default, 3x */
 }
 
 ZTEST(profiles, test_a_sparse_node_is_silent_between_heartbeats)
 {
-	struct profile_sched ps;
-	struct profile_sched_cfg cfg;
+	struct radiant_profile_sched ps;
+	struct radiant_profile_sched_cfg cfg;
 	uint8_t body[8];
 	uint32_t slot;
 	uint32_t descriptor_frames = 0u;
@@ -1599,19 +1599,19 @@ ZTEST(profiles, test_a_sparse_node_is_silent_between_heartbeats)
 	cfg.common_80 = NULL; /* section 8 gives a sparse node no 121 cycle to
 			       * hang a common page on */
 	cfg.common_81 = NULL;
-	zassert_ok(profile_sched_init(&ps, &cfg));
+	zassert_ok(radiant_profile_sched_init(&ps, &cfg));
 
 	hb_slots = (30u * 32768u) / NODE_PERIOD;
 	zassert_equal(120u, hb_slots);
 
 	for (slot = 0u; slot < 3u * hb_slots; slot++) {
-		enum profile_slot_kind kind = profile_sched_next(&ps, body);
+		enum radiant_profile_slot_kind kind = radiant_profile_sched_next(&ps, body);
 
-		if (kind == PROFILE_SLOT_IDLE) {
+		if (kind == RADIANT_PROFILE_SLOT_IDLE) {
 			continue;
 		}
 		transmissions++;
-		zassert_equal(PROFILE_SLOT_DESCRIPTOR, kind,
+		zassert_equal(RADIANT_PROFILE_SLOT_DESCRIPTOR, kind,
 			      "slot %u", slot);
 		descriptor_frames++;
 	}
@@ -1628,8 +1628,8 @@ ZTEST(profiles, test_a_sparse_node_is_silent_between_heartbeats)
 
 ZTEST(profiles, test_a_sparse_event_is_repeated_k_times)
 {
-	struct profile_sched ps;
-	struct profile_sched_cfg cfg;
+	struct radiant_profile_sched ps;
+	struct radiant_profile_sched_cfg cfg;
 	uint8_t body[8];
 	uint32_t slot;
 	uint32_t data_pages = 0u;
@@ -1639,21 +1639,21 @@ ZTEST(profiles, test_a_sparse_event_is_repeated_k_times)
 	sched_cfg_init(&cfg);
 	cfg.common_80 = NULL;
 	cfg.common_81 = NULL;
-	zassert_ok(profile_sched_init(&ps, &cfg));
+	zassert_ok(radiant_profile_sched_init(&ps, &cfg));
 
 	/* Clear the power-up heartbeat burst. */
 	for (slot = 0u; slot < 16u; slot++) {
-		(void)profile_sched_next(&ps, body);
+		(void)radiant_profile_sched_next(&ps, body);
 	}
 
-	zassert_ok(profile_sched_post_event(&ps, 1u));
+	zassert_ok(radiant_profile_sched_post_event(&ps, 1u));
 	for (slot = 0u; slot < 10u; slot++) {
-		enum profile_slot_kind kind = profile_sched_next(&ps, body);
+		enum radiant_profile_slot_kind kind = radiant_profile_sched_next(&ps, body);
 
-		if (kind == PROFILE_SLOT_IDLE) {
+		if (kind == RADIANT_PROFILE_SLOT_IDLE) {
 			continue;
 		}
-		zassert_equal(PROFILE_SLOT_DATA, kind);
+		zassert_equal(RADIANT_PROFILE_SLOT_DATA, kind);
 		zassert_equal(1u, body[0]);
 		counters[data_pages] = body[1];
 		data_pages++;
@@ -1672,12 +1672,12 @@ ZTEST(profiles, test_a_sparse_event_is_repeated_k_times)
 
 	/* Command 0x06, "send the descriptor set now" - how a receiver that
 	 * just joined gets a schema without waiting for the next heartbeat. */
-	profile_sched_request_descriptor(&ps);
+	radiant_profile_sched_request_descriptor(&ps);
 	for (slot = 0u; slot < 6u; slot++) {
-		zassert_equal(PROFILE_SLOT_DESCRIPTOR,
-			      profile_sched_next(&ps, body), "slot %u", slot);
+		zassert_equal(RADIANT_PROFILE_SLOT_DESCRIPTOR,
+			      radiant_profile_sched_next(&ps, body), "slot %u", slot);
 	}
-	zassert_equal(PROFILE_SLOT_IDLE, profile_sched_next(&ps, body));
+	zassert_equal(RADIANT_PROFILE_SLOT_IDLE, radiant_profile_sched_next(&ps, body));
 }
 
 /*
@@ -1693,42 +1693,42 @@ ZTEST(profiles, test_a_sparse_event_is_repeated_k_times)
  */
 ZTEST(profiles, test_the_asset_tag_is_the_envelope_with_everything_off)
 {
-	struct profile_sched ps;
-	struct profile_sched_cfg cfg;
-	struct profile_descriptor back;
-	struct profile_desc_rx rx;
+	struct radiant_profile_sched ps;
+	struct radiant_profile_sched_cfg cfg;
+	struct radiant_profile_descriptor back;
+	struct radiant_profile_desc_rx rx;
 	uint8_t body[8];
 	uint32_t slot;
 	uint32_t p82 = 0u;
 	uint32_t frames = 0u;
 
 	memset(&sched_desc, 0, sizeof(sched_desc));
-	sched_desc.version = PROFILE_TLM_VERSION;
+	sched_desc.version = RADIANT_PROFILE_TLM_VERSION;
 	sched_desc.schema_id = 0x01u;
 	sched_desc.period = NODE_PERIOD;
-	sched_desc.rf_index = PROFILE_TLM_RF_INDEX_DEFAULT;
-	sched_desc.flags = PROFILE_TLM_FLAG_SPARSE;
+	sched_desc.rf_index = RADIANT_PROFILE_TLM_RF_INDEX_DEFAULT;
+	sched_desc.flags = RADIANT_PROFILE_TLM_FLAG_SPARSE;
 	sched_desc.heartbeat_s = 30u;
-	sched_desc.k_code = PROFILE_TLM_K_CODE_3;
+	sched_desc.k_code = RADIANT_PROFILE_TLM_K_CODE_3;
 	sched_desc.n_fields = 0u;
 
 	memset(&cfg, 0, sizeof(cfg));
 	cfg.desc = &sched_desc;
 	cfg.common_82 = cb_common_82; /* configured, and suppressed below */
 
-	zassert_ok(profile_sched_init(&ps, &cfg));
-	profile_desc_rx_init(&rx);
+	zassert_ok(radiant_profile_sched_init(&ps, &cfg));
+	radiant_profile_desc_rx_init(&rx);
 
 	for (slot = 0u; slot < 240u; slot++) {
-		enum profile_slot_kind kind = profile_sched_next(&ps, body);
+		enum radiant_profile_slot_kind kind = radiant_profile_sched_next(&ps, body);
 
-		if (kind == PROFILE_SLOT_COMMON_82) {
+		if (kind == RADIANT_PROFILE_SLOT_COMMON_82) {
 			p82++;
-		} else if (kind == PROFILE_SLOT_DESCRIPTOR) {
+		} else if (kind == RADIANT_PROFILE_SLOT_DESCRIPTOR) {
 			frames++;
-			(void)profile_desc_rx_feed(&rx, body);
+			(void)radiant_profile_desc_rx_feed(&rx, body);
 		} else {
-			zassert_equal(PROFILE_SLOT_IDLE, kind,
+			zassert_equal(RADIANT_PROFILE_SLOT_IDLE, kind,
 				      "slot %u", slot);
 		}
 	}
@@ -1740,24 +1740,24 @@ ZTEST(profiles, test_the_asset_tag_is_the_envelope_with_everything_off)
 
 	/* The set still decodes, from the descriptor alone, to a node that
 	 * says everything a receiver needs and publishes nothing. */
-	zassert_ok(profile_desc_rx_take(&rx, &back));
+	zassert_ok(radiant_profile_desc_rx_take(&rx, &back));
 	zassert_equal(0u, back.n_fields);
 	zassert_equal(30u, back.heartbeat_s);
-	zassert_true((back.flags & PROFILE_TLM_FLAG_SPARSE) != 0u);
+	zassert_true((back.flags & RADIANT_PROFILE_TLM_FLAG_SPARSE) != 0u);
 
 	/* Now the privacy rule: page 82 suppressed. Nothing but the heartbeat
 	 * remains on the air. */
 	cfg.common_82 = NULL;
-	zassert_ok(profile_sched_init(&ps, &cfg));
+	zassert_ok(radiant_profile_sched_init(&ps, &cfg));
 	p82 = 0u;
 	frames = 0u;
 	for (slot = 0u; slot < 240u; slot++) {
-		enum profile_slot_kind kind = profile_sched_next(&ps, body);
+		enum radiant_profile_slot_kind kind = radiant_profile_sched_next(&ps, body);
 
-		if (kind == PROFILE_SLOT_DESCRIPTOR) {
+		if (kind == RADIANT_PROFILE_SLOT_DESCRIPTOR) {
 			frames++;
 		} else {
-			zassert_equal(PROFILE_SLOT_IDLE, kind);
+			zassert_equal(RADIANT_PROFILE_SLOT_IDLE, kind);
 		}
 	}
 	zassert_equal(4u, frames);
@@ -1800,7 +1800,7 @@ static int gate_data_page(uint8_t page, uint8_t counter, uint8_t *body,
 	sched_values[2] = (sched_values[2] + 7 + counter) & 0xFFFFFFFFll;
 	sched_values[3] = -1 * (int64_t)(counter % 400u);
 
-	if (profile_data_encode(&sched_desc, page, counter, sched_values,
+	if (radiant_profile_data_encode(&sched_desc, page, counter, sched_values,
 				sched_desc.n_fields, body) < 0) {
 		return -EINVAL;
 	}
@@ -1818,8 +1818,8 @@ static int gate_data_page(uint8_t page, uint8_t counter, uint8_t *body,
 /* The receiving half. It knows only a device number, device type and
  * transmission type - what a searching receiver recovers from a matched
  * address. */
-static struct profile_desc_rx heard_rx;
-static struct profile_descriptor heard_desc;
+static struct radiant_profile_desc_rx heard_rx;
+static struct radiant_profile_descriptor heard_desc;
 static bool heard_have_schema;
 static struct {
 	uint8_t body[8];
@@ -1846,12 +1846,12 @@ static void gate_on_rx(uint8_t ch, uint8_t filter_index,
 	payload = &evt->body[4];
 	heard_n_frames++;
 
-	if (payload[0] == PROFILE_TLM_PAGE_DESCRIPTOR) {
-		(void)profile_desc_rx_feed(&heard_rx, payload);
+	if (payload[0] == RADIANT_PROFILE_TLM_PAGE_DESCRIPTOR) {
+		(void)radiant_profile_desc_rx_feed(&heard_rx, payload);
 		return;
 	}
-	if (payload[0] >= PROFILE_TLM_PAGE_DATA_FIRST &&
-	    payload[0] <= PROFILE_TLM_PAGE_DATA_LAST &&
+	if (payload[0] >= RADIANT_PROFILE_TLM_PAGE_DATA_FIRST &&
+	    payload[0] <= RADIANT_PROFILE_TLM_PAGE_DATA_LAST &&
 	    heard_n_data < GATE_SLOTS) {
 		memcpy(heard_data[heard_n_data].body, payload, 8);
 		heard_n_data++;
@@ -1875,12 +1875,12 @@ static const struct radiant_sched_cbs gate_cbs = {
 
 ZTEST(profiles, test_gate_a_0x60_node_is_discovered_and_decoded_from_the_air)
 {
-	struct profile_sched ps;
-	struct profile_sched_cfg cfg;
+	struct radiant_profile_sched ps;
+	struct radiant_profile_sched_cfg cfg;
 	struct radiant_channel_id id = {
 		.device_number = NODE_DEVNUM,
-		.device_type = PROFILE_TLM_DEVICE_TYPE,
-		.trans_type = PROFILE_TLM_TRANS_TYPE,
+		.device_type = RADIANT_PROFILE_TLM_DEVICE_TYPE,
+		.trans_type = RADIANT_PROFILE_TLM_TRANS_TYPE,
 	};
 	struct radiant_rx_filter search_filter;
 	static uint8_t tx_body[10];
@@ -1899,7 +1899,7 @@ ZTEST(profiles, test_gate_a_0x60_node_is_discovered_and_decoded_from_the_air)
 	memset(sched_values, 0, sizeof(sched_values));
 	sched_cfg_init(&cfg);
 	cfg.data_page = gate_data_page;
-	zassert_ok(profile_sched_init(&ps, &cfg));
+	zassert_ok(radiant_profile_sched_init(&ps, &cfg));
 
 	/* Join mid-stream: spin the node to message 100 of its cycle, so the
 	 * 32 slots that reach the air straddle a cycle boundary, carrying
@@ -1909,8 +1909,8 @@ ZTEST(profiles, test_gate_a_0x60_node_is_discovered_and_decoded_from_the_air)
 	{
 		uint8_t scratch[8];
 
-		while (profile_sched_m(&ps) != 100u) {
-			(void)profile_sched_next(&ps, scratch);
+		while (radiant_profile_sched_m(&ps) != 100u) {
+			(void)radiant_profile_sched_next(&ps, scratch);
 		}
 	}
 	gate_n_air = 0u;
@@ -1933,15 +1933,15 @@ ZTEST(profiles, test_gate_a_0x60_node_is_discovered_and_decoded_from_the_air)
 	for (slot = 0u; slot < GATE_SLOTS; slot++) {
 		struct radiant_sched_tx tx;
 		uint8_t payload[8];
-		enum profile_slot_kind kind;
+		enum radiant_profile_slot_kind kind;
 
-		kind = profile_sched_next(&ps, payload);
-		if (kind == PROFILE_SLOT_DESCRIPTOR) {
+		kind = radiant_profile_sched_next(&ps, payload);
+		if (kind == RADIANT_PROFILE_SLOT_DESCRIPTOR) {
 			descriptor_frames++;
-		} else if (kind == PROFILE_SLOT_COMMON_80 ||
-			   kind == PROFILE_SLOT_COMMON_81) {
+		} else if (kind == RADIANT_PROFILE_SLOT_COMMON_80 ||
+			   kind == RADIANT_PROFILE_SLOT_COMMON_81) {
 			common_pages++;
-		} else if (kind == PROFILE_SLOT_IDLE) {
+		} else if (kind == RADIANT_PROFILE_SLOT_IDLE) {
 			/* Sparse mode's decline-to-transmit, expressed as not
 			 * posting. This node is periodic so it never happens;
 			 * the branch is here because "nothing" is the whole
@@ -1953,7 +1953,7 @@ ZTEST(profiles, test_gate_a_0x60_node_is_discovered_and_decoded_from_the_air)
 		memcpy(gate_air[gate_n_air], payload, 8);
 		gate_n_air++;
 
-		tx_body[0] = PROFILE_TLM_TRANS_TYPE;
+		tx_body[0] = RADIANT_PROFILE_TLM_TRANS_TYPE;
 		tx_body[1] = RADIANT_CTRL_BROADCAST;
 		memcpy(&tx_body[2], payload, 8);
 
@@ -1986,7 +1986,7 @@ ZTEST(profiles, test_gate_a_0x60_node_is_discovered_and_decoded_from_the_air)
 	 * opens a continuous search window and is handed eight bytes at a
 	 * time; everything below comes out of those bytes. */
 	fake_radio_reset();
-	profile_desc_rx_init(&heard_rx);
+	radiant_profile_desc_rx_init(&heard_rx);
 	heard_have_schema = false;
 	heard_n_data = 0u;
 	heard_n_frames = 0u;
@@ -2014,8 +2014,8 @@ ZTEST(profiles, test_gate_a_0x60_node_is_discovered_and_decoded_from_the_air)
 		uint8_t n;
 
 		n = fake_radio_build_ant_frame(frame, NODE_DEVNUM,
-					       PROFILE_TLM_DEVICE_TYPE,
-					       PROFILE_TLM_TRANS_TYPE,
+					       RADIANT_PROFILE_TLM_DEVICE_TYPE,
+					       RADIANT_PROFILE_TLM_TRANS_TYPE,
 					       gate_air[i]);
 		zassert_equal(15u, n);
 		zassert_ok(fake_radio_air_frame(
@@ -2051,26 +2051,26 @@ ZTEST(profiles, test_gate_a_0x60_node_is_discovered_and_decoded_from_the_air)
 	 * The gate itself.
 	 * ------------------------------------------------------------------
 	 */
-	zassert_true(profile_desc_rx_complete(&heard_rx));
-	zassert_ok(profile_desc_rx_take(&heard_rx, &heard_desc));
+	zassert_true(radiant_profile_desc_rx_complete(&heard_rx));
+	zassert_ok(radiant_profile_desc_rx_take(&heard_rx, &heard_desc));
 	heard_have_schema = true;
 
 	/* Everything below was learned from page 0x00 and nothing else. */
-	zassert_equal(PROFILE_TLM_VERSION, heard_desc.version);
+	zassert_equal(RADIANT_PROFILE_TLM_VERSION, heard_desc.version);
 	zassert_equal(NODE_SCHEMA, heard_desc.schema_id);
 	zassert_equal(NODE_PERIOD, heard_desc.period);
-	zassert_equal(PROFILE_TLM_RF_INDEX_DEFAULT, heard_desc.rf_index);
+	zassert_equal(RADIANT_PROFILE_TLM_RF_INDEX_DEFAULT, heard_desc.rf_index);
 	zassert_equal(0u, heard_desc.flags);
-	zassert_true(profile_desc_may_decode_data(&heard_desc));
+	zassert_true(radiant_profile_desc_may_decode_data(&heard_desc));
 	zassert_equal(NODE_FIELDS, heard_desc.n_fields);
 
-	zassert_equal(PROFILE_TLM_TYPE_HEART_RATE, heard_desc.fields[0].type);
-	zassert_equal(8, profile_bits_width(heard_desc.fields[0].width_code));
-	zassert_equal(PROFILE_TLM_TYPE_TEMPERATURE, heard_desc.fields[1].type);
+	zassert_equal(RADIANT_PROFILE_TLM_TYPE_HEART_RATE, heard_desc.fields[0].type);
+	zassert_equal(8, radiant_profile_bits_width(heard_desc.fields[0].width_code));
+	zassert_equal(RADIANT_PROFILE_TLM_TYPE_TEMPERATURE, heard_desc.fields[1].type);
 	zassert_equal(-2, heard_desc.fields[1].exponent);
-	zassert_equal(PROFILE_TLM_TYPE_ENERGY, heard_desc.fields[2].type);
+	zassert_equal(RADIANT_PROFILE_TLM_TYPE_ENERGY, heard_desc.fields[2].type);
 	zassert_true(heard_desc.fields[2].accumulate);
-	zassert_equal(PROFILE_TLM_TYPE_ACTIVE_POWER, heard_desc.fields[3].type);
+	zassert_equal(RADIANT_PROFILE_TLM_TYPE_ACTIVE_POWER, heard_desc.fields[3].type);
 	zassert_true(heard_desc.fields[3].is_signed);
 
 	/* And the data pages decode against that schema, to the numbers the
@@ -2084,7 +2084,7 @@ ZTEST(profiles, test_gate_a_0x60_node_is_discovered_and_decoded_from_the_air)
 		int n;
 		uint8_t f;
 
-		n = profile_data_decode(&heard_desc, heard_data[i].body, got,
+		n = radiant_profile_data_decode(&heard_desc, heard_data[i].body, got,
 					heard_desc.n_fields, &present);
 		zassert_equal(2, n, "page %u: %d", i, n);
 		zassert_equal(gate_sent[i].page, heard_data[i].body[0],

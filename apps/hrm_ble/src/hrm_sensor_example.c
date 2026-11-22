@@ -45,7 +45,7 @@ static K_TIMER_DEFINE(beat_timer, beat_timer_fn, NULL);
 /*
  * ISR CONTEXT. Everything this handler is allowed to do is in
  * hrm_sensor_report_beat()'s contract: one atomic store and one
- * k_work_submit(). It must not touch profile_hr, must not call into the BLE
+ * k_work_submit(). It must not touch radiant_profile_hr, must not call into the BLE
  * stack, and must not log at anything but the cheapest level - which is why it
  * does not log at all.
  */
@@ -85,7 +85,7 @@ static int example_stop(const struct hrm_sensor *sensor)
 {
 	ARG_UNUSED(sensor);
 	k_timer_stop(&beat_timer);
-	hrm_sensor_report_rate(0u); /* PROFILE_HR_INVALID_BPM: no reading. */
+	hrm_sensor_report_rate(0u); /* RADIANT_PROFILE_HR_INVALID_BPM: no reading. */
 	return 0;
 }
 

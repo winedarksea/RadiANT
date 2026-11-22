@@ -975,9 +975,9 @@ _TRK_DECODERS = {
 # ---------------------------------------------------------------------------
 # Controls, device type 0x10
 #
-# Mirror of src/profiles/profile_controls.c (ANT+ Device Profile - Controls
+# Mirror of src/profiles/radiant_profile_controls.c (ANT+ Device Profile - Controls
 # Rev 2.0, tables 6-1/6-2, 9-1, 9-2, 9-8, 9-9). Scope is the command surface
-# only (page 16 audio/video, page 73 generic); see profile_controls.h for the
+# only (page 16 audio/video, page 73 generic); see radiant_profile_controls.h for the
 # rest of the 64-page document.
 #
 # The sequence number is SHARED across page 16 and page 73 - one counter, not
@@ -1106,8 +1106,8 @@ _CTRL_DECODERS = {
 # Fitness Equipment Control (FE-C), device type 0x11
 # ---------------------------------------------------------------------------
 #
-# The mirror of radiant/src/profiles/profile_fec.c (decode) and
-# profile_fec_tx.c (encode). Until apps/treadmill this type had ONE copy (the
+# The mirror of radiant/src/profiles/radiant_profile_fec.c (decode) and
+# radiant_profile_fec_tx.c (encode). Until apps/treadmill this type had ONE copy (the
 # C decoder, per docs/device-profiles.md 3.16); these functions are the
 # second, so the three-copy vocabulary rule now applies to 0x11, asserted
 # byte-identical by tools/test_compat_capture.py.
@@ -1118,7 +1118,7 @@ _CTRL_DECODERS = {
 # looks at payload[0], and why _FEC_DECODERS is not merged into
 # _PAGE_DECODERS.
 #
-# The grade/incline trap is in profile_fec_tx.h at length and is not repeated
+# The grade/incline trap is in radiant_profile_fec_tx.h at length and is not repeated
 # here: grade is an unsigned u16 biased by -200.00 %, incline is a plain
 # sint16, both are 0.01 %, and their invalid values are 0xFFFF and 0x7FFF
 # respectively - each a legal-looking reading of the other.
@@ -1393,8 +1393,8 @@ def decode_fec_treadmill(payload: bytes) -> dict:
 def decode_fec_trainer(payload: bytes) -> dict:
     """Page 25 (0x19), Specific Trainer/Stationary Bike Data - Table 8-25.
 
-    The mirror of profile_fec_decode_trainer() in radiant/src/profiles/
-    profile_fec.c. Accumulated power is at bytes 3..4, one byte EARLIER than
+    The mirror of radiant_profile_fec_decode_trainer() in radiant/src/profiles/
+    radiant_profile_fec.c. Accumulated power is at bytes 3..4, one byte EARLIER than
     bicycle power page 0x10's. Instantaneous power is 12 bits split across a
     nibble boundary: byte 5 is the low 8 bits, byte 6's LOW nibble the high 4,
     and byte 6's HIGH nibble is the trainer status. 0xFFF condemns both power
@@ -1567,7 +1567,7 @@ def encode_fec_user_config(user_weight_10g: int | None) -> bytes:
 
     Bytes [3..7] are bicycle wheel diameter, bicycle weight and gear ratio in a
     sub-byte packing this project has not transcribed and has no use for; they
-    go out as the not-supplied sentinel. radiant/src/profiles/profile_fec_tx.h
+    go out as the not-supplied sentinel. radiant/src/profiles/radiant_profile_fec_tx.h
     records the same decision on the C side.
     """
     weight = INVALID_U16 if user_weight_10g is None else _u16(user_weight_10g)
@@ -1630,7 +1630,7 @@ _FEC_DECODERS = {
 # Stride Based Speed and Distance Monitor (SDM), device type 0x7C
 # ---------------------------------------------------------------------------
 #
-# The mirror of radiant/src/profiles/profile_sdm.c. Four things here are the
+# The mirror of radiant/src/profiles/radiant_profile_sdm.c. Four things here are the
 # opposite of every other profile in this file, and each produces a plausible
 # number rather than an error when got wrong:
 #
@@ -1971,7 +1971,7 @@ def decode_common_82(payload: bytes) -> dict:
 # transposes the descriptions of 7 and 8 (7 is NAMED the minimum and DESCRIBED
 # as "the maximum recorded temperature", 8 the mirror image) and the names are
 # the self-consistent half. Same call, and same register, as
-# radiant/src/profiles/profile_common.h's defect note and
+# radiant/src/profiles/radiant_profile_common.h's defect note and
 # docs/device-profiles.md section 3.14's note on Controls page 0x49.
 SUBPAGE_TEMPERATURE = 1
 SUBPAGE_PRESSURE = 2
@@ -2011,8 +2011,8 @@ def decode_common_84(payload: bytes) -> dict:
         [4..5] data field 1 (LE, 16-bit), per subpage 1
         [6..7] data field 2 (LE, 16-bit), per subpage 2
 
-    The C mirror is radiant/src/profiles/profile_common.c's
-    profile_common_decode_84(); the vocabulary-side conversions are
+    The C mirror is radiant/src/profiles/radiant_profile_common.c's
+    radiant_profile_common_decode_84(); the vocabulary-side conversions are
     radiant/src/bridge/radiant_common_adapter.c.
     Returns a two-element `slots` list, in wire order. Each slot is a dict of
     `subpage`, `name` (None for a reserved or invalid subpage), `raw` (the
@@ -2784,7 +2784,7 @@ def tlm_code_for_width(bits: int) -> int:
 # ---------------------------------------------------------------------------
 # The MSB-first bit packer
 #
-# Twin of src/profiles/profile_bits.c; vectors in tools/test_ant_pages.py are
+# Twin of src/profiles/radiant_profile_bits.c; vectors in tools/test_ant_pages.py are
 # shared with radiant/tests/src/test_profiles.c.
 #
 # Section 6: bit packing is MSB-first, both across bytes and within a value's
@@ -2883,7 +2883,7 @@ class TlmField:
 # ---------------------------------------------------------------------------
 # The schedule block - frame 1 byte [3] bits 3..0, plus one frame
 #
-# Mirror of src/profiles/profile_schedule.h. Three things live in the
+# Mirror of src/profiles/radiant_profile_schedule.h. Three things live in the
 # descriptor because it's a standing pointer a node already transmits: a
 # clock-accuracy ceiling, a published downlink window, and the coding
 # rate / TX power that the long-range PHY phase must not get to name twice.
@@ -3003,7 +3003,7 @@ class TlmSchedule:
 
 
 def _tlm_sched_validate(s: TlmSchedule, lr_phy: bool, clk_ppm: int) -> None:
-    """The same list src/profiles/profile_schedule.c carries. The two must
+    """The same list src/profiles/radiant_profile_schedule.c carries. The two must
     refuse the same blocks or the C node and the Python simulator are not the
     same node."""
     if not 0 <= s.dl_interval <= TLM_SCHED_INTERVAL_MAX:
@@ -3084,7 +3084,7 @@ def decode_tlm_schedule(body, lr_phy: bool = False,
     if len(body) != TLM_SCHED_AREA_BITS // 8:
         raise ValueError("the schedule block is 6 bytes")
     # Bits 42..47 are the next informational flags and are IGNORED here, as in
-    # profile_sched_unpack(): a layout-compatible version 2..7 node may set one.
+    # radiant_profile_sched_unpack(): a layout-compatible version 2..7 node may set one.
 
     power = unpack_bits(body, TLM_SCHED_AREA_BITS, TLM_SCHED_POWER_OFF,
                         TLM_SCHED_POWER_W)
@@ -3195,7 +3195,7 @@ class TlmDescriptor:
 def _tlm_validate(d: TlmDescriptor, decoding: bool = False) -> None:
     """Every check here exists because the failure it prevents is silent on air.
 
-    See src/profiles/profile_telemetry.c, which carries the same list - the C
+    See src/profiles/radiant_profile_telemetry.c, which carries the same list - the C
     node and the Python simulator must refuse identical descriptors.
     """
     # A node WRITES version 1; a receiver also accepts 2..7 (decode has already
@@ -3330,7 +3330,7 @@ def _desc_auth_mac(auth: TlmDescAuth, epoch: int, frames) -> bytes:
 
 
 def _tlm_check_transforms(d: TlmDescriptor) -> None:
-    """profile_telemetry.c's check_transforms(), for a sealed set."""
+    """radiant_profile_telemetry.c's check_transforms(), for a sealed set."""
     if d.flags & (TLM_FLAG_RSVD_5 | TLM_FLAG_RSVD_4):
         raise ValueError("transform bits 5 and 4 are reserved and specified "
                          "by nothing")
@@ -3361,7 +3361,7 @@ def tlm_desc_auth_verify(frames, auth: TlmDescAuth,
 
 def tlm_desc_auth_find_epoch(frames, auth: TlmDescAuth, from_epoch: int = 0,
                              span: int = TLM_AUTH_EPOCH_SPAN) -> int | None:
-    """profile_desc_auth_find_epoch(): the epoch the set was MAC'd under, or
+    """radiant_profile_desc_auth_find_epoch(): the epoch the set was MAC'd under, or
     None.
 
     Frame 1 carrying a non-zero epoch is verified under exactly that one and
@@ -3401,7 +3401,7 @@ def encode_tlm_descriptor(d: TlmDescriptor,
     correctly authenticated packets. Checked before field validation, since
     X_AUTH shrinks the field area.
 
-    With `auth` the set is SEALED: profile_desc_encode_auth()'s rules (a
+    With `auth` the set is SEALED: radiant_profile_desc_encode_auth()'s rules (a
     transform bit required, bits 5/4 refused, X_AUTH with sparse refused,
     d.epoch 0 or auth.epoch), frame 1's epoch only when auth.epoch_is_time,
     and the authentication frame last.
@@ -3801,7 +3801,7 @@ def decode_tlm_command_ack(body: bytes) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# The sync-handoff page, section 12 - mirror of src/profiles/profile_handoff.c
+# The sync-handoff page, section 12 - mirror of src/profiles/radiant_profile_handoff.c
 #
 # The one page a NODE does not send: a receiver already tracking a node
 # broadcasts it so a second receiver (or the same one after reboot) can
@@ -4041,7 +4041,7 @@ def tlm_handoff_next_slot(h: TlmHandoff, t_carrier_counts: int) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Adaptive frequency, page 0x13 - mirror of src/profiles/profile_freq.c
+# Adaptive frequency, page 0x13 - mirror of src/profiles/radiant_profile_freq.c
 #
 # The characterised ~0.4% loss floor on this bench is collision with Wi-Fi
 # channel 11 over 2457 MHz. A node leaves, once, to a quiet index, and stays,
@@ -4141,7 +4141,7 @@ def tlm_freq_countdown(move_at: int, msgs_after_this: int) -> tuple:
     the new one. Rounded up, since rounding down would shorten the countdown
     each time.
 
-    Returns (countdown, move_at). Mirrors countdown_now() in profile_freq.c.
+    Returns (countdown, move_at). Mirrors countdown_now() in radiant_profile_freq.c.
     """
     remaining = max(0, move_at - msgs_after_this)
     c = max(1, -(-remaining // TLM_FREQ_UNIT))
@@ -4197,7 +4197,7 @@ def tlm_freq_reacquire_order(last_target: int | None = None) -> list:
 
 
 # ---------------------------------------------------------------------------
-# The page scheduler - mirror of src/profiles/profile_sched.c
+# The page scheduler - mirror of src/profiles/radiant_profile_sched.c
 #
 # Which page goes in the next message slot, nothing else - no microsecond, no
 # radio; a master calls next() to fill the body it's about to transmit.
@@ -4240,7 +4240,7 @@ class TlmPageScheduler:
         self.common_82_every = common_82_every
         self.client = client
 
-        # `auth` seals the set (profile_sched_init_auth()); reseal() re-tags
+        # `auth` seals the set (radiant_profile_sched_init_auth()); reseal() re-tags
         # it for a new epoch.
         if auth is not None and descriptor is None:
             raise ValueError("a family with no descriptor has nothing to seal")
@@ -4290,7 +4290,7 @@ class TlmPageScheduler:
             self.burst_index = 0
 
     def reseal(self, auth: TlmDescAuth) -> None:
-        """profile_sched_reseal(): re-tag a sealed set for a new epoch.
+        """radiant_profile_sched_reseal(): re-tag a sealed set for a new epoch.
 
         Refuses a set that was not sealed and a re-encode of a different
         size (a schema change, which is a new scheduler's job). A burst in
@@ -4324,7 +4324,7 @@ class TlmPageScheduler:
 
         One call is one slot, and the counter advances on every call -
         descriptor, common, client and idle slots alike - so a data page's
-        byte [1] is the slot index (profile_sched_next_at() does the same).
+        byte [1] is the slot index (radiant_profile_sched_next_at() does the same).
         """
         m = self.m
         if self.sparse:

@@ -13,7 +13,7 @@
 #include <zephyr/toolchain.h>
 #include <zephyr/ztest.h>
 
-#include "profile_env.h"
+#include "radiant_profile_env.h"
 #include "radiant_bridge.h"
 #include "radiant_env_adapter.h"
 
@@ -115,7 +115,7 @@ static const uint8_t page0[8] = {
 static void build_page1(uint8_t *body, uint8_t event_count, uint16_t low12,
 			uint16_t high12, uint16_t cur16)
 {
-	body[0] = PROFILE_ENV_PAGE_TEMPERATURE;
+	body[0] = RADIANT_PROFILE_ENV_PAGE_TEMPERATURE;
 	body[1] = 0xFFu;
 	body[2] = event_count;
 	body[3] = (uint8_t)(low12 & 0xFFu);
@@ -144,9 +144,9 @@ ZTEST(profile_env, test_page1_builder_matches_the_hand_placed_vector)
 
 ZTEST(profile_env, test_page1_decode)
 {
-	struct profile_env_temperature t;
+	struct radiant_profile_env_temperature t;
 
-	zassert_equal(profile_env_decode_temperature(page1, &t), 0);
+	zassert_equal(radiant_profile_env_decode_temperature(page1, &t), 0);
 
 	zassert_equal(t.event_count, P1_EVENT_COUNT);
 
@@ -167,7 +167,7 @@ ZTEST(profile_env, test_page1_decode)
 
 ZTEST(profile_env, test_page1_rejects_the_wrong_page_number)
 {
-	struct profile_env_temperature t;
+	struct radiant_profile_env_temperature t;
 	uint8_t body[8];
 
 	memcpy(body, page1, sizeof(body));
@@ -175,22 +175,22 @@ ZTEST(profile_env, test_page1_rejects_the_wrong_page_number)
 	/* Byte [0] is the WHOLE page number - there is no page-change toggle
 	 * on this profile, so 0x81 is not "page 1 with a toggle set". */
 	body[0] = 0x81u;
-	zassert_equal(profile_env_decode_temperature(body, &t), -EINVAL);
+	zassert_equal(radiant_profile_env_decode_temperature(body, &t), -EINVAL);
 
-	body[0] = PROFILE_ENV_PAGE_CAPABILITIES;
-	zassert_equal(profile_env_decode_temperature(body, &t), -EINVAL);
+	body[0] = RADIANT_PROFILE_ENV_PAGE_CAPABILITIES;
+	zassert_equal(radiant_profile_env_decode_temperature(body, &t), -EINVAL);
 }
 
 /* ── The twelve-bit signed fields ──────────────────────────────────────── */
 
 ZTEST(profile_env, test_24h_fields_at_both_signed_extremes)
 {
-	struct profile_env_temperature t;
+	struct radiant_profile_env_temperature t;
 	uint8_t body[8];
 
 	/* 0x7FF is the largest positive code: +204.7 degC. */
 	build_page1(body, 0u, 0x07FFu, 0x07FFu, 0u);
-	zassert_equal(profile_env_decode_temperature(body, &t), 0);
+	zassert_equal(radiant_profile_env_decode_temperature(body, &t), 0);
 	zassert_true(t.low_24h_valid);
 	zassert_true(t.high_24h_valid);
 	zassert_equal(t.low_24h_deci, 2047);
@@ -200,7 +200,7 @@ ZTEST(profile_env, test_24h_fields_at_both_signed_extremes)
 	 * extension from bit 11 it reads as +2049, which is a temperature and
 	 * therefore not obviously wrong to anything downstream. */
 	build_page1(body, 0u, 0x0801u, 0x0801u, 0u);
-	zassert_equal(profile_env_decode_temperature(body, &t), 0);
+	zassert_equal(radiant_profile_env_decode_temperature(body, &t), 0);
 	zassert_true(t.low_24h_valid);
 	zassert_true(t.high_24h_valid);
 	zassert_equal(t.low_24h_deci, -2047);
@@ -209,28 +209,28 @@ ZTEST(profile_env, test_24h_fields_at_both_signed_extremes)
 	/* 0xFFF is -1, the smallest negative step, and the case a decoder that
 	 * masks to 12 bits without extending gets most spectacularly wrong. */
 	build_page1(body, 0u, 0x0FFFu, 0x0FFFu, 0u);
-	zassert_equal(profile_env_decode_temperature(body, &t), 0);
+	zassert_equal(radiant_profile_env_decode_temperature(body, &t), 0);
 	zassert_equal(t.low_24h_deci, -1);
 	zassert_equal(t.high_24h_deci, -1);
 }
 
 ZTEST(profile_env, test_24h_invalid_sentinel_is_not_a_temperature)
 {
-	struct profile_env_temperature t;
+	struct radiant_profile_env_temperature t;
 	uint8_t body[8];
 
 	/* 0x800 is "invalid" (section 6.4), NOT -204.8 degC - which is why
 	 * section 6.4's stated range stops at -204.7 rather than -204.8. Each
 	 * field carries its own sentinel independently, so one invalid must
 	 * not invalidate the other. */
-	build_page1(body, 0u, PROFILE_ENV_INVALID_12, 0x0138u, 0u);
-	zassert_equal(profile_env_decode_temperature(body, &t), 0);
+	build_page1(body, 0u, RADIANT_PROFILE_ENV_INVALID_12, 0x0138u, 0u);
+	zassert_equal(radiant_profile_env_decode_temperature(body, &t), 0);
 	zassert_false(t.low_24h_valid);
 	zassert_true(t.high_24h_valid);
 	zassert_equal(t.high_24h_deci, P1_HIGH_DECI);
 
-	build_page1(body, 0u, 0x0FCBu, PROFILE_ENV_INVALID_12, 0u);
-	zassert_equal(profile_env_decode_temperature(body, &t), 0);
+	build_page1(body, 0u, 0x0FCBu, RADIANT_PROFILE_ENV_INVALID_12, 0u);
+	zassert_equal(radiant_profile_env_decode_temperature(body, &t), 0);
 	zassert_true(t.low_24h_valid);
 	zassert_equal(t.low_24h_deci, P1_LOW_DECI);
 	zassert_false(t.high_24h_valid);
@@ -238,25 +238,25 @@ ZTEST(profile_env, test_24h_invalid_sentinel_is_not_a_temperature)
 
 ZTEST(profile_env, test_current_invalid_sentinel_is_a_different_width)
 {
-	struct profile_env_temperature t;
+	struct radiant_profile_env_temperature t;
 	uint8_t body[8];
 
 	/* The current field's sentinel is 0x8000, not 0x800. A decoder reusing
 	 * the 12-bit sentinel here would treat 0x0800 (+20.48 degC) as missing
 	 * and 0x8000 (-327.68 degC) as a reading. Both directions are checked. */
-	build_page1(body, 0u, 0x0000u, 0x0000u, PROFILE_ENV_INVALID_16);
-	zassert_equal(profile_env_decode_temperature(body, &t), 0);
+	build_page1(body, 0u, 0x0000u, 0x0000u, RADIANT_PROFILE_ENV_INVALID_16);
+	zassert_equal(radiant_profile_env_decode_temperature(body, &t), 0);
 	zassert_false(t.current_valid);
 
 	build_page1(body, 0u, 0x0000u, 0x0000u, 0x0800u);
-	zassert_equal(profile_env_decode_temperature(body, &t), 0);
+	zassert_equal(radiant_profile_env_decode_temperature(body, &t), 0);
 	zassert_true(t.current_valid);
 	zassert_equal(t.current_centi, 2048);
 
 	/* The most negative LEGAL current reading, one count above the
 	 * sentinel: 0x8001 = -327.67 degC. */
 	build_page1(body, 0u, 0x0000u, 0x0000u, 0x8001u);
-	zassert_equal(profile_env_decode_temperature(body, &t), 0);
+	zassert_equal(radiant_profile_env_decode_temperature(body, &t), 0);
 	zassert_true(t.current_valid);
 	zassert_equal(t.current_centi, -32767);
 }
@@ -265,37 +265,37 @@ ZTEST(profile_env, test_current_invalid_sentinel_is_a_different_width)
 
 ZTEST(profile_env, test_page0_capabilities)
 {
-	struct profile_env_capabilities c;
+	struct radiant_profile_env_capabilities c;
 
-	zassert_equal(profile_env_decode_capabilities(page0, &c), 0);
+	zassert_equal(radiant_profile_env_decode_capabilities(page0, &c), 0);
 
 	/* The rate bits are the LOW pair even though Table 6-3 lists them
 	 * last, and 0b00 is the SLOW rate - it would be easy to assume the
 	 * zero value meant the profile's more common 4 Hz. It does not. */
-	zassert_equal(c.default_rate, PROFILE_ENV_RATE_0P5_HZ);
-	zassert_equal(c.utc_time, PROFILE_ENV_TIME_SUPPORTED_SET);
-	zassert_equal(c.local_time, PROFILE_ENV_TIME_SUPPORTED_UNSET);
+	zassert_equal(c.default_rate, RADIANT_PROFILE_ENV_RATE_0P5_HZ);
+	zassert_equal(c.utc_time, RADIANT_PROFILE_ENV_TIME_SUPPORTED_SET);
+	zassert_equal(c.local_time, RADIANT_PROFILE_ENV_TIME_SUPPORTED_UNSET);
 
 	zassert_equal(c.supported_pages,
-		      PROFILE_ENV_SUPPORTED_PAGE_BIT(PROFILE_ENV_PAGE_CAPABILITIES) |
-		      PROFILE_ENV_SUPPORTED_PAGE_BIT(PROFILE_ENV_PAGE_TEMPERATURE));
+		      RADIANT_PROFILE_ENV_SUPPORTED_PAGE_BIT(RADIANT_PROFILE_ENV_PAGE_CAPABILITIES) |
+		      RADIANT_PROFILE_ENV_SUPPORTED_PAGE_BIT(RADIANT_PROFILE_ENV_PAGE_TEMPERATURE));
 }
 
 ZTEST(profile_env, test_page0_the_other_rate_and_the_reserved_ones)
 {
-	struct profile_env_capabilities c;
+	struct radiant_profile_env_capabilities c;
 	uint8_t body[8];
 
 	memcpy(body, page0, sizeof(body));
 
 	body[3] = 0x01u; /* bits 1:0 = 0b01 */
-	zassert_equal(profile_env_decode_capabilities(body, &c), 0);
-	zassert_equal(c.default_rate, PROFILE_ENV_RATE_4_HZ);
+	zassert_equal(radiant_profile_env_decode_capabilities(body, &c), 0);
+	zassert_equal(c.default_rate, RADIANT_PROFILE_ENV_RATE_4_HZ);
 
 	/* 0b10 and 0b11 are Reserved and are passed through raw rather than
 	 * folded into either real rate. */
 	body[3] = 0x03u;
-	zassert_equal(profile_env_decode_capabilities(body, &c), 0);
+	zassert_equal(radiant_profile_env_decode_capabilities(body, &c), 0);
 	zassert_equal(c.default_rate, 3u);
 }
 
@@ -307,25 +307,25 @@ ZTEST(profile_env, test_page0_the_other_rate_and_the_reserved_ones)
  */
 ZTEST(profile_env, test_period_counts_for_each_declared_rate)
 {
-	zassert_equal(profile_env_period_counts(PROFILE_ENV_RATE_0P5_HZ),
-		      PROFILE_ENV_PERIOD_0P5_HZ);
-	zassert_equal(profile_env_period_counts(PROFILE_ENV_RATE_4_HZ),
-		      PROFILE_ENV_PERIOD_4_HZ);
+	zassert_equal(radiant_profile_env_period_counts(RADIANT_PROFILE_ENV_RATE_0P5_HZ),
+		      RADIANT_PROFILE_ENV_PERIOD_0P5_HZ);
+	zassert_equal(radiant_profile_env_period_counts(RADIANT_PROFILE_ENV_RATE_4_HZ),
+		      RADIANT_PROFILE_ENV_PERIOD_4_HZ);
 
 	/* 0 is what struct radiant_binding::period already means by "never
 	 * set", and what radiant_liveness.c already abstains on. */
-	zassert_equal(profile_env_period_counts(2u), 0u);
-	zassert_equal(profile_env_period_counts(3u), 0u);
+	zassert_equal(radiant_profile_env_period_counts(2u), 0u);
+	zassert_equal(radiant_profile_env_period_counts(3u), 0u);
 }
 
 ZTEST(profile_env, test_page0_rejects_the_wrong_page_number)
 {
-	struct profile_env_capabilities c;
+	struct radiant_profile_env_capabilities c;
 	uint8_t body[8];
 
 	memcpy(body, page0, sizeof(body));
-	body[0] = PROFILE_ENV_PAGE_TEMPERATURE;
-	zassert_equal(profile_env_decode_capabilities(body, &c), -EINVAL);
+	body[0] = RADIANT_PROFILE_ENV_PAGE_TEMPERATURE;
+	zassert_equal(radiant_profile_env_decode_capabilities(body, &c), -EINVAL);
 }
 
 /* ── The adapter ───────────────────────────────────────────────────────── */
@@ -403,10 +403,10 @@ ZTEST(profile_env, test_adapter_does_not_publish_an_invalid_reading)
 	radiant_env_adapter_init(&a);
 
 	/* Only the event count is publishable, and not on the first page. */
-	build_page1(body, 5u, 0x0FCBu, 0x0138u, PROFILE_ENV_INVALID_16);
+	build_page1(body, 5u, 0x0FCBu, 0x0138u, RADIANT_PROFILE_ENV_INVALID_16);
 	zassert_equal(radiant_env_adapter_decode(&a, ENV_SOURCE, body, 1000u), 0u);
 
-	build_page1(body, 6u, 0x0FCBu, 0x0138u, PROFILE_ENV_INVALID_16);
+	build_page1(body, 6u, 0x0FCBu, 0x0138u, RADIANT_PROFILE_ENV_INVALID_16);
 	zassert_equal(radiant_env_adapter_decode(&a, ENV_SOURCE, body, 2000u), 1u);
 	zassert_equal(radiant_bridge_drain(), 1u);
 	zassert_equal(cap_n, 1u);
@@ -455,7 +455,7 @@ ZTEST(profile_env, test_adapter_absorbs_page0_and_declines_everything_else)
 	 * the adapter's state, nothing posted. */
 	zassert_equal(radiant_env_adapter_decode(&a, ENV_SOURCE, page0, 1000u), 0u);
 	zassert_true(a.have_caps);
-	zassert_equal(a.caps.default_rate, PROFILE_ENV_RATE_0P5_HZ);
+	zassert_equal(a.caps.default_rate, RADIANT_PROFILE_ENV_RATE_0P5_HZ);
 
 	/* A page in the reserved 2..63 range (section 6.5). Declining is a
 	 * normal answer; decoding it as page 1 would publish garbage. */

@@ -13,7 +13,7 @@
  * IT IS A BEAT GENERATOR, NOT A RATE SETTING, and it reports through exactly
  * the same two calls a real driver uses. That is what makes it a reference
  * rather than a special case: if the simulator needed a private path into
- * profile_hr, the seam would not be carrying its own weight.
+ * radiant_profile_hr, the seam would not be carrying its own weight.
  *
  * The schedule itself is NOT here. It is a pure function in hrm_sim_sched.c so
  * that a test can drive it; this file is only the kernel plumbing around it.

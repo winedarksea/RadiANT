@@ -134,11 +134,11 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/../common/sources.cmake")
 #    adapter owns it - see src/rx_tap.c. Omitting it does not disable a
 #    feature, it makes every weather-reporting sensor silent.
 #
-# 2. profile_power_decode.c, NOT profile_power.c. The latter is the
+# 2. radiant_profile_power_decode.c, NOT radiant_profile_power.c. The latter is the
 #    MASTER - page rotation, the ANT+ compat layer, RadiANT beacon
-#    insertion - so it calls profile_sched.c and profile_compat.c, and
-#    profile_compat.c reaches radiant_sec. Both are compiled by the module;
-#    calling profile_power.c from here to obtain one decoder would pull the
+#    insertion - so it calls radiant_profile_sched.c and radiant_profile_compat.c, and
+#    radiant_profile_compat.c reaches radiant_sec. Both are compiled by the module;
+#    calling radiant_profile_power.c from here to obtain one decoder would pull the
 #    entire transmit-side chain into an image whose whole job is to listen,
 #    and would let a linker decision nobody reviewed make a receive-only
 #    dongle capable of transmitting. See that file's header; the split exists
@@ -318,9 +318,9 @@ target_sources_ifdef(CONFIG_ANT_DONGLE_MQTT_SINK app PRIVATE
 # for the full rationale. Off by default here too: this application's epoch
 # authority is still the PC behind it, same as the plain dongle.
 if(CONFIG_RADIANT_NODE_IDENT)
-  target_sources(app PRIVATE ../../radiant/src/node/node_ident.c)
+  target_sources(app PRIVATE ../../radiant/src/node/radiant_node_ident.c)
   target_include_directories(app PRIVATE ../../radiant/src/node)
 endif()
 if(CONFIG_RADIANT_NODE_NVM_SETTINGS)
-  target_sources(app PRIVATE ../../radiant/src/node/node_nvm_settings.c)
+  target_sources(app PRIVATE ../../radiant/src/node/radiant_node_nvm_settings.c)
 endif()

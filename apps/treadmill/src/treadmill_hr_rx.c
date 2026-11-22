@@ -11,7 +11,7 @@
  * computed bpm, and pulling the bridge in to get it would put the sample bus,
  * the binding table and the sink registry on a treadmill that has no use for
  * any of them. The byte's position is the same fact in both files and it is
- * profile_hr.h's, cited here rather than re-derived.
+ * radiant_profile_hr.h's, cited here rather than re-derived.
  */
 
 #include <errno.h>
@@ -22,13 +22,13 @@
 
 #include <radiant/radiant_ant.h>
 #include <radiant/radiant_wire.h>
-#include "profile_hr.h"
+#include "radiant_profile_hr.h"
 #include "treadmill_hr_rx.h"
 #include "treadmill_state.h"
 
 LOG_MODULE_DECLARE(treadmill, CONFIG_TREADMILL_LOG_LEVEL);
 
-#define HR_PERIOD    PROFILE_HR_PERIOD  /* 8070, the profile's standard rate */
+#define HR_PERIOD    RADIANT_PROFILE_HR_PERIOD  /* 8070, the profile's standard rate */
 #define HR_RF_FREQ   57u
 #define HR_NETWORK   0u
 
@@ -74,7 +74,7 @@ static int8_t   tracked_rssi_dbm;
 static uint8_t  last_bpm;
 
 /* How many consecutive messages the tracked strap has reported no reading.
- * PROFILE_HR_INVALID_BPM is 0 on this profile - NOT 0xFF, which is a real
+ * RADIANT_PROFILE_HR_INVALID_BPM is 0 on this profile - NOT 0xFF, which is a real
  * 255 bpm - so "no reading" is a value the strap sends deliberately while it
  * has no skin contact, and one of them is not a reason to drop anything. */
 #define NO_READING_LIMIT 20u
@@ -122,7 +122,7 @@ static int configure_channel(uint8_t channel)
 	/* WILDCARD device number and WILDCARD transmission type: 0 in either
 	 * field means "any". The device TYPE is not wildcarded - a slave that
 	 * matched any type would acquire the treadmill's own FE-C master. */
-	rc = radiant_ant_channel_id_set(channel, 0u, PROFILE_HR_DEVICE_TYPE, 0u);
+	rc = radiant_ant_channel_id_set(channel, 0u, RADIANT_PROFILE_HR_DEVICE_TYPE, 0u);
 	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("hr ch%u channel id: %d", channel, (int)rc);
 		return -EIO;
@@ -326,18 +326,18 @@ bool treadmill_hr_rx_message(const struct radiant_ant_msg *msg)
 
 	/*
 	 * Byte [7] of every page of device type 0x78 is the sensor's own
-	 * COMPUTED heart rate - profile_hr.h's "bytes [4..7] are the same
+	 * COMPUTED heart rate - radiant_profile_hr.h's "bytes [4..7] are the same
 	 * heartbeat event time, beat count and computed heart rate on EVERY
 	 * page", which is why nothing here has to know or care which page
 	 * arrived, or mask byte [0]'s page-change toggle.
 	 *
 	 * 0 IS "NO READING" ON THIS PROFILE AND 0xFF IS A REAL 255 BPM. That
 	 * is the opposite of the common-page convention and it is
-	 * PROFILE_HR_INVALID_BPM's whole reason for existing.
+	 * RADIANT_PROFILE_HR_INVALID_BPM's whole reason for existing.
 	 */
 	bpm = payload[7];
 
-	if (bpm == PROFILE_HR_INVALID_BPM) {
+	if (bpm == RADIANT_PROFILE_HR_INVALID_BPM) {
 		/* A strap with no skin contact says this deliberately, and one
 		 * message of it is not a reason to drop a reading. A run of
 		 * them is. */

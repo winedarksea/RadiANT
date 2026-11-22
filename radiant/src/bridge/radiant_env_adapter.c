@@ -34,7 +34,7 @@ static void post(uint32_t source, uint8_t field_id, uint8_t field_type,
 uint32_t radiant_env_adapter_decode(struct radiant_env_adapter *a, uint32_t source,
 				    const uint8_t body8[8], uint64_t t_us)
 {
-	struct profile_env_temperature t;
+	struct radiant_profile_env_temperature t;
 	uint32_t n = 0u;
 
 	if (a == NULL || body8 == NULL) {
@@ -43,12 +43,12 @@ uint32_t radiant_env_adapter_decode(struct radiant_env_adapter *a, uint32_t sour
 
 	/* Page 0x00 first, because it is the cheaper test and because it is
 	 * the one that returns without touching the accumulator. */
-	if (profile_env_decode_capabilities(body8, &a->caps) == 0) {
+	if (radiant_profile_env_decode_capabilities(body8, &a->caps) == 0) {
 		a->have_caps = true;
 		return 0u;
 	}
 
-	if (profile_env_decode_temperature(body8, &t) != 0) {
+	if (radiant_profile_env_decode_temperature(body8, &t) != 0) {
 		/* Reserved pages 0x02..0x3F and the common data pages (which
 		 * have their own adapter, running on this same channel) both
 		 * land here. Declining is a normal answer, not an error. */
@@ -64,7 +64,7 @@ uint32_t radiant_env_adapter_decode(struct radiant_env_adapter *a, uint32_t sour
 	 * nothing drifts. See the header.
 	 *
 	 * Posted only when the sensor said the reading is real. An invalid
-	 * field must not be published as a zero here - unlike profile_rd.c,
+	 * field must not be published as a zero here - unlike radiant_profile_rd.c,
 	 * where zero IS the profile's sentinel, 0.00 degC is an ordinary
 	 * winter temperature and 273.15 K is what a sink would render.
 	 */

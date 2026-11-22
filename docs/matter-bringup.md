@@ -909,16 +909,16 @@ therefore reachable for the gated work and was reached**; 0.036 % of flash and
 | `bridge` (before the fix) | y | 694 | **701** | all seven |
 
 The seven are `radiant_power_adapter.c`, `radiant_env_adapter.c`,
-`radiant_common_adapter.c`, `profile_common.c`, `profile_power_decode.c`,
-`profile_fec.c` and `profile_env.c`; `radiant_hr_adapter.c` was already in both.
+`radiant_common_adapter.c`, `radiant_profile_common.c`, `radiant_profile_power_decode.c`,
+`radiant_profile_fec.c` and `radiant_profile_env.c`; `radiant_hr_adapter.c` was already in both.
 On the Matter arm all seven are in `app.dir` with 15-19 references each in
 `zephyr.map` (`radiant_common_adapter` 19, `radiant_power_adapter` 18,
-`profile_common` 18, `profile_env` 17, `radiant_env_adapter` 16, `profile_fec`
+`radiant_profile_common` 18, `profile_env` 17, `radiant_env_adapter` 16, `radiant_profile_fec`
 16, `profile_power_decode` 15); after the fix the `bridge` arm has zero of them.
 
-**`profile_power.c` is NOT compiled** — only `profile_power_decode.c`. That split
+**`radiant_profile_power.c` is NOT compiled** — only `radiant_profile_power_decode.c`. That split
 is the reason the CMake comment gives for existing (the master side reaches
-`profile_compat.c` and thence `radiant_sec`), and the object inventory is where
+`radiant_profile_compat.c` and thence `radiant_sec`), and the object inventory is where
 it can be checked rather than asserted. `radiant/tests` is unaffected: it
 compiles these sources unconditionally and knows nothing of the new symbol,
 verified by building it rather than assumed (`nrf5340dk/nrf5340/cpuapp`,

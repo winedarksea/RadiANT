@@ -451,7 +451,7 @@ ZTEST(treadmill_pages, test_ant_never_preempts_a_ble_owner)
 
 	/* The direction that must NOT work. An FE-C page 51 now gets -EACCES,
 	 * which main.c turns into page 71 status
-	 * PROFILE_FEC_CMD_STATUS_REJECTED (3) - the profile's own constant for
+	 * RADIANT_PROFILE_FEC_CMD_STATUS_REJECTED (3) - the profile's own constant for
 	 * this, and the only signal ANT+ has, since there is no connection to
 	 * drop and no status characteristic to notify. */
 	zassert_equal(treadmill_control_claim(TREADMILL_CTRL_ANT, false, 2000u),

@@ -88,7 +88,7 @@ static const struct base_row base_names[] = {
 /*
  * FE-C equipment type -> base name. The codes are Table 8-8's, spelled with
  * the PROFILE_FEC_TYPE_* names in the comments rather than by including
- * src/profiles/profile_fec.h: this file sits above the profile decoders, the
+ * src/profiles/radiant_profile_fec.h: this file sits above the profile decoders, the
  * same line radiant_rules.c draws for FEC_STATE_IN_USE.
  *
  * 0 IS NOT A ROW. Table 8-8 has no type 0, and the subtype is 0 for exactly as
@@ -96,12 +96,12 @@ static const struct base_row base_names[] = {
  * one both land on the default below, which is the honest answer for both.
  */
 static const struct base_row fec_names[] = {
-	{ 19u, "Treadmill" },    /* PROFILE_FEC_TYPE_TREADMILL */
-	{ 20u, "Elliptical" },   /* PROFILE_FEC_TYPE_ELLIPTICAL */
-	{ 22u, "Rower" },        /* PROFILE_FEC_TYPE_ROWER */
-	{ 23u, "Climber" },      /* PROFILE_FEC_TYPE_CLIMBER */
-	{ 24u, "Ski Erg" },      /* PROFILE_FEC_TYPE_NORDIC_SKIER */
-	{ 25u, "Indoor Bike" },  /* PROFILE_FEC_TYPE_TRAINER */
+	{ 19u, "Treadmill" },    /* RADIANT_PROFILE_FEC_TYPE_TREADMILL */
+	{ 20u, "Elliptical" },   /* RADIANT_PROFILE_FEC_TYPE_ELLIPTICAL */
+	{ 22u, "Rower" },        /* RADIANT_PROFILE_FEC_TYPE_ROWER */
+	{ 23u, "Climber" },      /* RADIANT_PROFILE_FEC_TYPE_CLIMBER */
+	{ 24u, "Ski Erg" },      /* RADIANT_PROFILE_FEC_TYPE_NORDIC_SKIER */
+	{ 25u, "Indoor Bike" },  /* RADIANT_PROFILE_FEC_TYPE_TRAINER */
 };
 
 #define FEC_DEVTYPE 0x11u

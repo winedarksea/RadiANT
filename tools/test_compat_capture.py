@@ -3,8 +3,8 @@
 
 """compat-C5's gate: the C compat master emits byte-exact ANT+ plus two pages.
 
-`radiant/tests/src/test_profile_compat.c` drives `src/profiles/profile_hr.c`
-and `src/profiles/profile_power.c` on a DK and prints every transmitted message
+`radiant/tests/src/test_profile_compat.c` drives `src/profiles/radiant_profile_hr.c`
+and `src/profiles/radiant_profile_power.c` on a DK and prints every transmitted message
 as a `.antcap` line. Those captures are committed to `tools/vectors/`, and this
 file decodes them with `tools/ant_pages.py` - written independently, from the
 layout tables rather than from the C - and **re-encodes every page, asserting
@@ -418,23 +418,23 @@ class TestTheAttestation(unittest.TestCase):
 
 
 class TestTheBoundary(unittest.TestCase):
-    """profile_hr.c and profile_power.c call radiant_sec nowhere.
+    """radiant_profile_hr.c and radiant_profile_power.c call radiant_sec nowhere.
 
     Greps rather than reasoning about the call graph, because the thing being
-    protected is a habit: the next profile author reads profile_hr.c, and if
+    protected is a habit: the next profile author reads radiant_profile_hr.c, and if
     a key ever appears there the reason it must not be is three documents
     away. The include closure is checked too (the stronger half):
-    profile_compat.h names no radiant_sec type, so these files do not reach
+    radiant_profile_compat.h names no radiant_sec type, so these files do not reach
     a radiant header even transitively.
     """
 
-    PROFILE_FILES = ("profile_hr.c", "profile_hr.h", "profile_power.c",
-                     "profile_power.h", "profile_common.c", "profile_common.h",
+    PROFILE_FILES = ("radiant_profile_hr.c", "radiant_profile_hr.h", "radiant_profile_power.c",
+                     "radiant_profile_power.h", "radiant_profile_common.c", "radiant_profile_common.h",
                      # apps/treadmill's two masters make the same claim about
                      # themselves, and the claim is only worth making if it is
                      # checked from outside the file that makes it.
-                     "profile_fec_tx.c", "profile_fec_tx.h",
-                     "profile_sdm.c", "profile_sdm.h")
+                     "radiant_profile_fec_tx.c", "radiant_profile_fec_tx.h",
+                     "radiant_profile_sdm.c", "radiant_profile_sdm.h")
 
     def test_no_profile_module_names_radiant_sec_in_code(self):
         for name in self.PROFILE_FILES:
@@ -461,19 +461,19 @@ class TestTheBoundary(unittest.TestCase):
 
     def test_profile_compat_is_the_one_file_that_does(self):
         """Or the boundary is a wall with nothing behind it."""
-        with open(os.path.join(SRC_PROFILES, "profile_compat.c"),
+        with open(os.path.join(SRC_PROFILES, "radiant_profile_compat.c"),
                   encoding="utf-8") as handle:
             text = handle.read()
         self.assertIn("#include <radiant/radiant_sec_compat.h>", text)
         self.assertIn("radiant_sec_compat_tx_attest", text)
 
-        with open(os.path.join(SRC_PROFILES, "profile_compat.h"),
+        with open(os.path.join(SRC_PROFILES, "radiant_profile_compat.h"),
                   encoding="utf-8") as handle:
             header = handle.read()
         for line in header.splitlines():
             if line.lstrip().startswith("#include"):
                 self.assertNotIn("radiant/", line,
-                                 "profile_compat.h must not export a "
+                                 "radiant_profile_compat.h must not export a "
                                  "radiant header to its includers")
 
 

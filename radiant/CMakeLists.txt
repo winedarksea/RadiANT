@@ -153,28 +153,28 @@ zephyr_library_sources_ifdef(CONFIG_RADIANT_SEC_HOST_MESSAGES src/ant_api/radian
 if(CONFIG_RADIANT_PROFILES)
   zephyr_include_directories(src/profiles)
   zephyr_library_sources(
-    src/profiles/profile_bits.c
-    src/profiles/profile_command.c
-    src/profiles/profile_common.c
-    src/profiles/profile_compat.c
-    src/profiles/profile_controls.c
-    src/profiles/profile_enrol.c
-    src/profiles/profile_env.c
-    src/profiles/profile_fec.c
-    src/profiles/profile_fec_tx.c
-    src/profiles/profile_freq.c
-    src/profiles/profile_handoff.c
-    src/profiles/profile_hr.c
-    src/profiles/profile_lev.c
-    src/profiles/profile_power.c
-    src/profiles/profile_power_decode.c
-    src/profiles/profile_private.c
-    src/profiles/profile_rd.c
-    src/profiles/profile_sched.c
-    src/profiles/profile_schedule.c
-    src/profiles/profile_sdm.c
-    src/profiles/profile_telemetry.c
-    src/profiles/profile_tracker.c
+    src/profiles/radiant_profile_bits.c
+    src/profiles/radiant_profile_command.c
+    src/profiles/radiant_profile_common.c
+    src/profiles/radiant_profile_compat.c
+    src/profiles/radiant_profile_controls.c
+    src/profiles/radiant_profile_enrol.c
+    src/profiles/radiant_profile_env.c
+    src/profiles/radiant_profile_fec.c
+    src/profiles/radiant_profile_fec_tx.c
+    src/profiles/radiant_profile_freq.c
+    src/profiles/radiant_profile_handoff.c
+    src/profiles/radiant_profile_hr.c
+    src/profiles/radiant_profile_lev.c
+    src/profiles/radiant_profile_power.c
+    src/profiles/radiant_profile_power_decode.c
+    src/profiles/radiant_profile_private.c
+    src/profiles/radiant_profile_rd.c
+    src/profiles/radiant_profile_sched.c
+    src/profiles/radiant_profile_schedule.c
+    src/profiles/radiant_profile_sdm.c
+    src/profiles/radiant_profile_telemetry.c
+    src/profiles/radiant_profile_tracker.c
   )
 endif()
 

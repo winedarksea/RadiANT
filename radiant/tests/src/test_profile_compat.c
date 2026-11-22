@@ -33,11 +33,11 @@
 
 #include <radiant/radiant_sec_compat.h>
 
-#include "profile_common.h"
-#include "profile_compat.h"
-#include "profile_hr.h"
-#include "profile_power.h"
-#include "profile_sched.h"
+#include "radiant_profile_common.h"
+#include "radiant_profile_compat.h"
+#include "radiant_profile_hr.h"
+#include "radiant_profile_power.h"
+#include "radiant_profile_sched.h"
 
 #define TX_CH 0u
 #define RX_CH 1u
@@ -77,7 +77,7 @@ static const uint8_t compat_root[16] = {
 /* Three cycles: enough for four Tier I intervals at the 20 s default and two
  * full passes of the beacon's two-frame set. */
 #define CYCLES 3u
-#define SLOTS  (CYCLES * PROFILE_TLM_CYCLE)
+#define SLOTS  (CYCLES * RADIANT_PROFILE_TLM_CYCLE)
 
 /* An origin above 2^32 microseconds: a test anchored at zero would pass an
  * implementation that truncated every instant to 32 bits (see
@@ -95,7 +95,7 @@ static uint64_t period_us(uint16_t counts)
 
 struct slot_log {
 	uint8_t                body[8];
-	enum profile_slot_kind kind;
+	enum radiant_profile_slot_kind kind;
 };
 
 static struct slot_log log_buf[SLOTS];
@@ -107,7 +107,7 @@ static void log_reset(void)
 	memset(log_buf, 0, sizeof(log_buf));
 }
 
-static void log_put(const uint8_t *body, enum profile_slot_kind kind)
+static void log_put(const uint8_t *body, enum radiant_profile_slot_kind kind)
 {
 	if (log_n < SLOTS) {
 		memcpy(log_buf[log_n].body, body, 8);
@@ -145,10 +145,10 @@ static void dump_capture(const char *name, uint8_t device_type,
  * device type that looks redundant. */
 static uint8_t sub_of(const uint8_t *body)
 {
-	uint8_t page = (uint8_t)(body[0] & PROFILE_COMPAT_PAGE_MASK);
+	uint8_t page = (uint8_t)(body[0] & RADIANT_PROFILE_COMPAT_PAGE_MASK);
 
-	if (page != PROFILE_COMPAT_PAGE_ATTEST_I &&
-	    page != PROFILE_COMPAT_PAGE_ATTEST_II) {
+	if (page != RADIANT_PROFILE_COMPAT_PAGE_ATTEST_I &&
+	    page != RADIANT_PROFILE_COMPAT_PAGE_ATTEST_II) {
 		return 0u;
 	}
 	return (uint8_t)(page & 0x0Fu);
@@ -159,7 +159,7 @@ static uint32_t count_page(uint8_t page)
 	uint32_t i, n = 0u;
 
 	for (i = 0u; i < log_n && i < SLOTS; i++) {
-		if ((log_buf[i].body[0] & PROFILE_COMPAT_PAGE_MASK) == page) {
+		if ((log_buf[i].body[0] & RADIANT_PROFILE_COMPAT_PAGE_MASK) == page) {
 			n++;
 		}
 	}
@@ -196,36 +196,36 @@ static void keys_up(uint8_t tx_sw, uint8_t rx_sw, uint16_t period_counts)
 						   0u, period_counts));
 }
 
-static void compat_up(struct profile_compat *pc)
+static void compat_up(struct radiant_profile_compat *pc)
 {
-	struct profile_compat_cfg cfg;
+	struct radiant_profile_compat_cfg cfg;
 
 	memset(&cfg, 0, sizeof(cfg));
 	cfg.ch = TX_CH;
 	cfg.epoch = TEST_EPOCH;
 	cfg.advertise = true;
 	cfg.attest_available = true;
-	cfg.policy = PROFILE_COMPAT_POLICY_NEVER;
+	cfg.policy = RADIANT_PROFILE_COMPAT_POLICY_NEVER;
 	cfg.window = TEST_N;
-	cfg.mode = PROFILE_COMPAT_MODE_FIXED;
+	cfg.mode = RADIANT_PROFILE_COMPAT_MODE_FIXED;
 
-	zassert_equal(0, profile_compat_init(pc, &cfg));
+	zassert_equal(0, radiant_profile_compat_init(pc, &cfg));
 }
 
 /* ── The two sensors ────────────────────────────────────────────────────── */
 
-static void hr_cfg_fill(struct profile_hr_cfg *cfg)
+static void hr_cfg_fill(struct radiant_profile_hr_cfg *cfg)
 {
 	memset(cfg, 0, sizeof(*cfg));
 	cfg->id.hw_revision = 1u;
 	cfg->id.manufacturer_id = 0x00FFu;
 	cfg->id.model_number = 0x0001u;
 	cfg->id.sw_revision_main = 1u;
-	cfg->id.sw_revision_supplemental = PROFILE_COMMON_INVALID_U8;
+	cfg->id.sw_revision_supplemental = RADIANT_PROFILE_COMMON_INVALID_U8;
 	/* The page 81 privacy rule, as the default a strap should ship with:
 	 * a 32-bit globally unique serial in the clear defeats identity tiers 1
 	 * and 2 outright, whatever else the node does. */
-	cfg->id.serial_number = PROFILE_COMMON_INVALID_U32;
+	cfg->id.serial_number = RADIANT_PROFILE_COMMON_INVALID_U32;
 	cfg->manufacturer_id_8 = 0xFFu;
 	cfg->serial_upper16 = 0x4553u;
 	cfg->model_number_8 = 1u;
@@ -233,16 +233,16 @@ static void hr_cfg_fill(struct profile_hr_cfg *cfg)
 	cfg->sw_version = 1u;
 }
 
-static void power_cfg_fill(struct profile_power_cfg *cfg)
+static void power_cfg_fill(struct radiant_profile_power_cfg *cfg)
 {
 	memset(cfg, 0, sizeof(*cfg));
 	cfg->id.hw_revision = 1u;
 	cfg->id.manufacturer_id = 0x00FFu;
 	cfg->id.model_number = 0x0001u;
 	cfg->id.sw_revision_main = 1u;
-	cfg->id.sw_revision_supplemental = PROFILE_COMMON_INVALID_U8;
-	cfg->id.serial_number = PROFILE_COMMON_INVALID_U32;
-	cfg->pages[0] = PROFILE_POWER_PAGE_STANDARD;
+	cfg->id.sw_revision_supplemental = RADIANT_PROFILE_COMMON_INVALID_U8;
+	cfg->id.serial_number = RADIANT_PROFILE_COMMON_INVALID_U32;
+	cfg->pages[0] = RADIANT_PROFILE_POWER_PAGE_STANDARD;
 	cfg->n_pages = 1u;
 }
 
@@ -251,30 +251,30 @@ static void power_cfg_fill(struct profile_power_cfg *cfg)
  * stream is reproducible: a capture whose values came from a random walk cannot
  * be committed and diffed.
  */
-static void run_hr(struct profile_hr *hr, struct profile_compat *pc,
+static void run_hr(struct radiant_profile_hr *hr, struct radiant_profile_compat *pc,
 		   uint32_t slots)
 {
-	uint64_t period = period_us(PROFILE_HR_PERIOD);
+	uint64_t period = period_us(RADIANT_PROFILE_HR_PERIOD);
 	uint32_t i;
 
 	log_reset();
-	profile_hr_set_computed(hr, 60u);
+	radiant_profile_hr_set_computed(hr, 60u);
 
 	for (i = 0u; i < slots; i++) {
 		uint8_t                body[8];
 		uint64_t               now = T_ORIGIN + (uint64_t)i * period;
-		enum profile_slot_kind kind;
+		enum radiant_profile_slot_kind kind;
 
 		/* One beat a second: 1024 counts of the profile's 1/1024 s
 		 * event time, and at ~4.06 Hz that is one beat every four
 		 * messages. */
 		if ((i % 4u) == 0u) {
-			profile_hr_beat(hr, (uint16_t)((i / 4u) * 1024u));
+			radiant_profile_hr_beat(hr, (uint16_t)((i / 4u) * 1024u));
 		}
-		profile_hr_set_operating_time(hr, i / 4u);
+		radiant_profile_hr_set_operating_time(hr, i / 4u);
 
-		kind = profile_hr_next(hr, now, body);
-		zassert_not_equal(PROFILE_SLOT_IDLE, kind, "slot %u", i);
+		kind = radiant_profile_hr_next(hr, now, body);
+		zassert_not_equal(RADIANT_PROFILE_SLOT_IDLE, kind, "slot %u", i);
 		log_put(body, kind);
 
 		if (pc != NULL) {
@@ -285,10 +285,10 @@ static void run_hr(struct profile_hr *hr, struct profile_compat *pc,
 	}
 }
 
-static void run_power(struct profile_power *pw, struct profile_compat *pc,
+static void run_power(struct radiant_profile_power *pw, struct radiant_profile_compat *pc,
 		      uint32_t slots)
 {
-	uint64_t period = period_us(PROFILE_POWER_PERIOD);
+	uint64_t period = period_us(RADIANT_PROFILE_POWER_PERIOD);
 	uint32_t i;
 
 	log_reset();
@@ -296,12 +296,12 @@ static void run_power(struct profile_power *pw, struct profile_compat *pc,
 	for (i = 0u; i < slots; i++) {
 		uint8_t                body[8];
 		uint64_t               now = T_ORIGIN + (uint64_t)i * period;
-		enum profile_slot_kind kind;
+		enum radiant_profile_slot_kind kind;
 
-		profile_power_event(pw, 200u, 80u);
+		radiant_profile_power_event(pw, 200u, 80u);
 
-		kind = profile_power_next(pw, now, body);
-		zassert_not_equal(PROFILE_SLOT_IDLE, kind, "slot %u", i);
+		kind = radiant_profile_power_next(pw, now, body);
+		zassert_not_equal(RADIANT_PROFILE_SLOT_IDLE, kind, "slot %u", i);
 		log_put(body, kind);
 
 		if (pc != NULL) {
@@ -319,23 +319,23 @@ static void compat_before_each(void *f)
 	log_reset();
 }
 
-ZTEST_SUITE(profile_compat, NULL, NULL, compat_before_each, NULL, NULL);
+ZTEST_SUITE(radiant_profile_compat, NULL, NULL, compat_before_each, NULL, NULL);
 
 /* ═══ The cadence is the cadence, with the compat pages in it ════════════ */
 
-ZTEST(profile_compat, test_hr_keeps_the_119_120_121_interleave)
+ZTEST(radiant_profile_compat, test_hr_keeps_the_119_120_121_interleave)
 {
-	struct profile_hr     hr;
-	struct profile_hr_cfg cfg;
-	struct profile_compat pc;
+	struct radiant_profile_hr     hr;
+	struct radiant_profile_hr_cfg cfg;
+	struct radiant_profile_compat pc;
 	uint32_t              i;
 
 	keys_up(TX_SWITCHES, RX_SWITCHES,
-		PROFILE_HR_PERIOD);
+		RADIANT_PROFILE_HR_PERIOD);
 	hr_cfg_fill(&cfg);
-	zassert_equal(0, profile_hr_init(&hr, &cfg));
+	zassert_equal(0, radiant_profile_hr_init(&hr, &cfg));
 	compat_up(&pc);
-	zassert_equal(0, profile_hr_set_compat(&hr, &pc));
+	zassert_equal(0, radiant_profile_hr_set_compat(&hr, &pc));
 
 	run_hr(&hr, &pc, SLOTS);
 
@@ -344,70 +344,70 @@ ZTEST(profile_compat, test_hr_keeps_the_119_120_121_interleave)
 	 * whose common-page gap exceeds 121. */
 	for (i = 0u; i < log_n; i++) {
 		uint8_t page = (uint8_t)(log_buf[i].body[0] &
-					 PROFILE_COMPAT_PAGE_MASK);
+					 RADIANT_PROFILE_COMPAT_PAGE_MASK);
 
-		if ((i % PROFILE_TLM_CYCLE) == PROFILE_TLM_SLOT_PAGE_80) {
-			zassert_equal(PROFILE_COMMON_PAGE_80, page, "message %u", i);
-		} else if ((i % PROFILE_TLM_CYCLE) == PROFILE_TLM_SLOT_PAGE_81) {
-			zassert_equal(PROFILE_COMMON_PAGE_81, page, "message %u", i);
+		if ((i % RADIANT_PROFILE_TLM_CYCLE) == RADIANT_PROFILE_TLM_SLOT_PAGE_80) {
+			zassert_equal(RADIANT_PROFILE_COMMON_PAGE_80, page, "message %u", i);
+		} else if ((i % RADIANT_PROFILE_TLM_CYCLE) == RADIANT_PROFILE_TLM_SLOT_PAGE_81) {
+			zassert_equal(RADIANT_PROFILE_COMMON_PAGE_81, page, "message %u", i);
 		} else {
-			zassert_true(page != PROFILE_COMMON_PAGE_80 &&
-					     page != PROFILE_COMMON_PAGE_81,
+			zassert_true(page != RADIANT_PROFILE_COMMON_PAGE_80 &&
+					     page != RADIANT_PROFILE_COMMON_PAGE_81,
 				     "message %u", i);
 		}
 	}
 }
 
-ZTEST(profile_compat, test_hr_emits_no_page_outside_the_allocation)
+ZTEST(radiant_profile_compat, test_hr_emits_no_page_outside_the_allocation)
 {
-	struct profile_hr     hr;
-	struct profile_hr_cfg cfg;
-	struct profile_compat pc;
+	struct radiant_profile_hr     hr;
+	struct radiant_profile_hr_cfg cfg;
+	struct radiant_profile_compat pc;
 	uint32_t              i;
 
 	keys_up(TX_SWITCHES, RX_SWITCHES,
-		PROFILE_HR_PERIOD);
+		RADIANT_PROFILE_HR_PERIOD);
 	hr_cfg_fill(&cfg);
-	zassert_equal(0, profile_hr_init(&hr, &cfg));
+	zassert_equal(0, radiant_profile_hr_init(&hr, &cfg));
 	compat_up(&pc);
-	zassert_equal(0, profile_hr_set_compat(&hr, &pc));
+	zassert_equal(0, radiant_profile_hr_set_compat(&hr, &pc));
 
 	run_hr(&hr, &pc, SLOTS);
 
 	for (i = 0u; i < log_n; i++) {
 		uint8_t page = (uint8_t)(log_buf[i].body[0] &
-					 PROFILE_COMPAT_PAGE_MASK);
-		bool    ant_plus = page <= PROFILE_HR_PAGE_PREVIOUS_BEAT ||
-				   page == PROFILE_COMMON_PAGE_80 ||
-				   page == PROFILE_COMMON_PAGE_81 ||
-				   page == PROFILE_COMMON_PAGE_82;
+					 RADIANT_PROFILE_COMPAT_PAGE_MASK);
+		bool    ant_plus = page <= RADIANT_PROFILE_HR_PAGE_PREVIOUS_BEAT ||
+				   page == RADIANT_PROFILE_COMMON_PAGE_80 ||
+				   page == RADIANT_PROFILE_COMMON_PAGE_81 ||
+				   page == RADIANT_PROFILE_COMMON_PAGE_82;
 
-		zassert_true(ant_plus || profile_compat_is_compat_page(page),
+		zassert_true(ant_plus || radiant_profile_compat_is_compat_page(page),
 			     "message %u page 0x%02X", i, page);
 	}
 
 	/* Every one of the profile's own pages appeared: a rotation stuck on
 	 * its background set would otherwise pass every assertion above. */
-	zassert_true(count_page(PROFILE_HR_PAGE_PREVIOUS_BEAT) > 0u);
-	zassert_true(count_page(PROFILE_HR_PAGE_DEFAULT) > 0u);
-	zassert_true(count_page(PROFILE_HR_PAGE_CUMULATIVE) > 0u);
-	zassert_true(count_page(PROFILE_HR_PAGE_MANUFACTURER) > 0u);
-	zassert_true(count_page(PROFILE_HR_PAGE_PRODUCT) > 0u);
+	zassert_true(count_page(RADIANT_PROFILE_HR_PAGE_PREVIOUS_BEAT) > 0u);
+	zassert_true(count_page(RADIANT_PROFILE_HR_PAGE_DEFAULT) > 0u);
+	zassert_true(count_page(RADIANT_PROFILE_HR_PAGE_CUMULATIVE) > 0u);
+	zassert_true(count_page(RADIANT_PROFILE_HR_PAGE_MANUFACTURER) > 0u);
+	zassert_true(count_page(RADIANT_PROFILE_HR_PAGE_PRODUCT) > 0u);
 }
 
-ZTEST(profile_compat, test_the_toggle_counts_transmitted_messages)
+ZTEST(radiant_profile_compat, test_the_toggle_counts_transmitted_messages)
 {
-	struct profile_hr     hr;
-	struct profile_hr_cfg cfg;
-	struct profile_compat pc;
+	struct radiant_profile_hr     hr;
+	struct radiant_profile_hr_cfg cfg;
+	struct radiant_profile_compat pc;
 	uint32_t              i;
 
 	keys_up(TX_SWITCHES, RX_SWITCHES,
-		PROFILE_HR_PERIOD);
+		RADIANT_PROFILE_HR_PERIOD);
 	hr_cfg_fill(&cfg);
-	zassert_equal(0, profile_hr_init(&hr, &cfg));
+	zassert_equal(0, radiant_profile_hr_init(&hr, &cfg));
 	compat_up(&pc);
-	zassert_equal(0, profile_hr_set_compat(&hr, &pc));
+	zassert_equal(0, radiant_profile_hr_set_compat(&hr, &pc));
 
 	run_hr(&hr, &pc, SLOTS);
 
@@ -415,48 +415,48 @@ ZTEST(profile_compat, test_the_toggle_counts_transmitted_messages)
 	 * compat pages count as messages too (docs/decisions/0008): inserted
 	 * pages must not disturb the toggle sequence. */
 	for (i = 0u; i < log_n; i++) {
-		bool want = ((i / PROFILE_HR_TOGGLE_INTERVAL) & 1u) != 0u;
-		bool got = (log_buf[i].body[0] & PROFILE_HR_PAGE_TOGGLE) != 0u;
+		bool want = ((i / RADIANT_PROFILE_HR_TOGGLE_INTERVAL) & 1u) != 0u;
+		bool got = (log_buf[i].body[0] & RADIANT_PROFILE_HR_PAGE_TOGGLE) != 0u;
 
 		zassert_equal(want, got, "message %u", i);
 	}
 }
 
-ZTEST(profile_compat, test_the_beacon_is_one_frame_per_cycle_and_alternates)
+ZTEST(radiant_profile_compat, test_the_beacon_is_one_frame_per_cycle_and_alternates)
 {
-	struct profile_hr     hr;
-	struct profile_hr_cfg cfg;
-	struct profile_compat pc;
+	struct radiant_profile_hr     hr;
+	struct radiant_profile_hr_cfg cfg;
+	struct radiant_profile_compat pc;
 	uint32_t              i;
 	uint32_t              seen = 0u;
 	uint8_t               expect_index = 0u;
 
 	keys_up(TX_SWITCHES, RX_SWITCHES,
-		PROFILE_HR_PERIOD);
+		RADIANT_PROFILE_HR_PERIOD);
 	hr_cfg_fill(&cfg);
-	zassert_equal(0, profile_hr_init(&hr, &cfg));
+	zassert_equal(0, radiant_profile_hr_init(&hr, &cfg));
 	compat_up(&pc);
-	zassert_equal(0, profile_hr_set_compat(&hr, &pc));
+	zassert_equal(0, radiant_profile_hr_set_compat(&hr, &pc));
 
 	run_hr(&hr, &pc, SLOTS);
 
 	for (i = 0u; i < log_n; i++) {
 		const uint8_t *b = log_buf[i].body;
-		uint8_t        page = (uint8_t)(b[0] & PROFILE_COMPAT_PAGE_MASK);
+		uint8_t        page = (uint8_t)(b[0] & RADIANT_PROFILE_COMPAT_PAGE_MASK);
 		uint8_t        index;
 		uint8_t        count;
 
-		if (page != PROFILE_COMPAT_PAGE_BEACON) {
+		if (page != RADIANT_PROFILE_COMPAT_PAGE_BEACON) {
 			continue;
 		}
 		index = (uint8_t)((b[1] >> 4) & 0x0Fu);
 		count = (uint8_t)((b[1] & 0x0Fu) + 1u);
 
-		zassert_equal(PROFILE_COMPAT_BEACON_FRAMES, count);
+		zassert_equal(RADIANT_PROFILE_COMPAT_BEACON_FRAMES, count);
 		zassert_equal(expect_index, index, "message %u", i);
 		zassert_equal(0u, b[7]);
 		expect_index = (uint8_t)((expect_index + 1u) %
-					 PROFILE_COMPAT_BEACON_FRAMES);
+					 RADIANT_PROFILE_COMPAT_BEACON_FRAMES);
 		seen++;
 	}
 
@@ -466,31 +466,31 @@ ZTEST(profile_compat, test_the_beacon_is_one_frame_per_cycle_and_alternates)
 	 * owes its first Tier I page on the beacon's slot, so a client that
 	 * treated a displaced frame as lost would emit two frames in three
 	 * cycles (the first run of this suite did, which is why
-	 * profile_compat.c owes the frame instead of dropping it).
+	 * radiant_profile_compat.c owes the frame instead of dropping it).
 	 */
 	zassert_equal(CYCLES, seen, "got %u in %u", seen, CYCLES);
 }
 
 /* ═══ The attestation half ═══════════════════════════════════════════════ */
 
-ZTEST(profile_compat, test_tier1_pages_ride_the_stream_and_verify)
+ZTEST(radiant_profile_compat, test_tier1_pages_ride_the_stream_and_verify)
 {
-	struct profile_hr               hr;
-	struct profile_hr_cfg           cfg;
-	struct profile_compat           pc;
+	struct radiant_profile_hr               hr;
+	struct radiant_profile_hr_cfg           cfg;
+	struct radiant_profile_compat           pc;
 	struct radiant_sec_compat_stats st;
 	uint32_t                        emitted;
 
 	keys_up(TX_SWITCHES, RX_SWITCHES,
-		PROFILE_HR_PERIOD);
+		RADIANT_PROFILE_HR_PERIOD);
 	hr_cfg_fill(&cfg);
-	zassert_equal(0, profile_hr_init(&hr, &cfg));
+	zassert_equal(0, radiant_profile_hr_init(&hr, &cfg));
 	compat_up(&pc);
-	zassert_equal(0, profile_hr_set_compat(&hr, &pc));
+	zassert_equal(0, radiant_profile_hr_set_compat(&hr, &pc));
 
 	run_hr(&hr, &pc, SLOTS);
 
-	emitted = count_page(PROFILE_COMPAT_PAGE_ATTEST_I);
+	emitted = count_page(RADIANT_PROFILE_COMPAT_PAGE_ATTEST_I);
 
 	/* T = 20 s at ~4.06 Hz is one page in ~81, so three cycles of 121 is
 	 * four intervals plus the one served at t = 0. The exact count is the
@@ -506,13 +506,13 @@ ZTEST(profile_compat, test_tier1_pages_ride_the_stream_and_verify)
 	zassert_equal(RADIANT_SEC_VERDICT_VERIFIED,
 		      radiant_sec_compat_stream_verdict(
 			      RX_CH, T_ORIGIN + (uint64_t)(SLOTS - 1u) *
-						       period_us(PROFILE_HR_PERIOD)));
+						       period_us(RADIANT_PROFILE_HR_PERIOD)));
 }
 
-ZTEST(profile_compat, test_a_strap_with_no_compat_layer_is_stock_ant_plus)
+ZTEST(radiant_profile_compat, test_a_strap_with_no_compat_layer_is_stock_ant_plus)
 {
-	struct profile_hr     hr;
-	struct profile_hr_cfg cfg;
+	struct radiant_profile_hr     hr;
+	struct radiant_profile_hr_cfg cfg;
 	uint32_t              i;
 
 	/* The configuration most straps should ship in, and not a degraded
@@ -521,15 +521,15 @@ ZTEST(profile_compat, test_a_strap_with_no_compat_layer_is_stock_ant_plus)
 	 * sensor, not a broken one. */
 	radiant_sec_compat_reset();
 	hr_cfg_fill(&cfg);
-	zassert_equal(0, profile_hr_init(&hr, &cfg));
+	zassert_equal(0, radiant_profile_hr_init(&hr, &cfg));
 
-	run_hr(&hr, NULL, PROFILE_TLM_CYCLE);
+	run_hr(&hr, NULL, RADIANT_PROFILE_TLM_CYCLE);
 
 	for (i = 0u; i < log_n; i++) {
 		uint8_t page = (uint8_t)(log_buf[i].body[0] &
-					 PROFILE_COMPAT_PAGE_MASK);
+					 RADIANT_PROFILE_COMPAT_PAGE_MASK);
 
-		zassert_false(profile_compat_is_compat_page(page),
+		zassert_false(radiant_profile_compat_is_compat_page(page),
 			      "message %u page 0x%02X", i, page);
 	}
 }
@@ -552,7 +552,7 @@ static bool busy_frame(void *user, uint8_t i, uint8_t *payload)
 	return true;
 }
 
-ZTEST(profile_compat, test_tier1_leaves_within_the_receivers_jitter_allowance)
+ZTEST(radiant_profile_compat, test_tier1_leaves_within_the_receivers_jitter_allowance)
 {
 	/*
 	 * radiant_sec_compat.c's receiver learns the sensor's phase from the
@@ -572,15 +572,15 @@ ZTEST(profile_compat, test_tier1_leaves_within_the_receivers_jitter_allowance)
 	 */
 	const uint8_t                   both = RADIANT_SEC_COMPAT_SW_TIER_I |
 					       RADIANT_SEC_COMPAT_SW_TIER_II;
-	const uint64_t                  period = period_us(PROFILE_HR_PERIOD);
+	const uint64_t                  period = period_us(RADIANT_PROFILE_HR_PERIOD);
 	const uint64_t                  t_us = (uint64_t)TEST_T_S * US_PER_S;
 	const uint32_t                  slots = (uint32_t)(100u * t_us / period);
 	const uint64_t                  skew = (uint64_t)5u * 86400u * US_PER_S +
 					       7300000u;
-	struct profile_hr               hr;
-	struct profile_hr_cfg           cfg;
-	struct profile_compat           pc;
-	struct profile_compat_client    client;
+	struct radiant_profile_hr               hr;
+	struct radiant_profile_hr_cfg           cfg;
+	struct radiant_profile_compat           pc;
+	struct radiant_profile_compat_client    client;
 	struct radiant_sec_compat_stats st;
 	uint64_t                        max_slip = 0u;
 	uint32_t                        pages = 0u;
@@ -588,32 +588,32 @@ ZTEST(profile_compat, test_tier1_leaves_within_the_receivers_jitter_allowance)
 	uint32_t                        i;
 
 	keys_up(both, (uint8_t)(both | RADIANT_SEC_COMPAT_SW_PIN),
-		PROFILE_HR_PERIOD);
+		RADIANT_PROFILE_HR_PERIOD);
 	hr_cfg_fill(&cfg);
-	zassert_equal(0, profile_hr_init(&hr, &cfg));
+	zassert_equal(0, radiant_profile_hr_init(&hr, &cfg));
 	compat_up(&pc);
 
 	memset(&client, 0, sizeof(client));
 	client.frames = busy_frames;
 	client.frame = busy_frame;
 	client.user = &client;
-	zassert_equal(0, profile_compat_set_client(&pc, &client));
-	zassert_equal(0, profile_hr_set_compat(&hr, &pc));
-	profile_hr_set_computed(&hr, 60u);
+	zassert_equal(0, radiant_profile_compat_set_client(&pc, &client));
+	zassert_equal(0, radiant_profile_hr_set_compat(&hr, &pc));
+	radiant_profile_hr_set_computed(&hr, 60u);
 
 	for (i = 0u; i < slots; i++) {
 		uint8_t                body[8];
 		uint64_t               now = T_ORIGIN + (uint64_t)i * period;
-		enum profile_slot_kind kind;
+		enum radiant_profile_slot_kind kind;
 		int                    rc;
 
 		if ((i % 4u) == 0u) {
-			profile_hr_beat(&hr, (uint16_t)((i / 4u) * 1024u));
+			radiant_profile_hr_beat(&hr, (uint16_t)((i / 4u) * 1024u));
 		}
-		profile_hr_set_operating_time(&hr, i / 4u);
+		radiant_profile_hr_set_operating_time(&hr, i / 4u);
 
-		kind = profile_hr_next(&hr, now, body);
-		zassert_not_equal(PROFILE_SLOT_IDLE, kind, "slot %u", i);
+		kind = radiant_profile_hr_next(&hr, now, body);
+		zassert_not_equal(RADIANT_PROFILE_SLOT_IDLE, kind, "slot %u", i);
 
 		if (sub_of(body) == RADIANT_SEC_COMPAT_SUBTYPE_TIER_I) {
 			uint32_t k = (uint32_t)body[1] | ((uint32_t)body[2] << 8);
@@ -668,74 +668,74 @@ ZTEST(profile_compat, test_tier1_leaves_within_the_receivers_jitter_allowance)
 
 /* ═══ Bicycle power, the other compat target ═════════════════════════════ */
 
-ZTEST(profile_compat, test_power_keeps_the_interleave_and_its_own_pages)
+ZTEST(radiant_profile_compat, test_power_keeps_the_interleave_and_its_own_pages)
 {
-	struct profile_power     pw;
-	struct profile_power_cfg cfg;
-	struct profile_compat    pc;
+	struct radiant_profile_power     pw;
+	struct radiant_profile_power_cfg cfg;
+	struct radiant_profile_compat    pc;
 	uint32_t                 i;
 
 	keys_up(TX_SWITCHES, RX_SWITCHES,
-		PROFILE_POWER_PERIOD);
+		RADIANT_PROFILE_POWER_PERIOD);
 	power_cfg_fill(&cfg);
-	zassert_equal(0, profile_power_init(&pw, &cfg));
+	zassert_equal(0, radiant_profile_power_init(&pw, &cfg));
 	compat_up(&pc);
-	zassert_equal(0, profile_power_set_compat(&pw, &pc));
+	zassert_equal(0, radiant_profile_power_set_compat(&pw, &pc));
 
 	run_power(&pw, &pc, SLOTS);
 
 	for (i = 0u; i < log_n; i++) {
 		uint8_t page = log_buf[i].body[0];
-		bool    ant_plus = page == PROFILE_POWER_PAGE_STANDARD ||
-				   page == PROFILE_COMMON_PAGE_80 ||
-				   page == PROFILE_COMMON_PAGE_81 ||
-				   page == PROFILE_COMMON_PAGE_82;
+		bool    ant_plus = page == RADIANT_PROFILE_POWER_PAGE_STANDARD ||
+				   page == RADIANT_PROFILE_COMMON_PAGE_80 ||
+				   page == RADIANT_PROFILE_COMMON_PAGE_81 ||
+				   page == RADIANT_PROFILE_COMMON_PAGE_82;
 
 		/* NO TOGGLE ON THIS DEVICE TYPE. Byte [0] is a whole page
 		 * number, so it is compared unmasked - a stray toggle bit would
 		 * make page 0x10 into page 0x90 and this is where that shows. */
-		zassert_true(ant_plus || profile_compat_is_compat_page(page),
+		zassert_true(ant_plus || radiant_profile_compat_is_compat_page(page),
 			     "message %u page 0x%02X", i, page);
-		zassert_false((page & PROFILE_COMPAT_PAGE_TOGGLE) != 0u, "message %u", i);
+		zassert_false((page & RADIANT_PROFILE_COMPAT_PAGE_TOGGLE) != 0u, "message %u", i);
 
-		if ((i % PROFILE_TLM_CYCLE) == PROFILE_TLM_SLOT_PAGE_80) {
-			zassert_equal(PROFILE_COMMON_PAGE_80, page);
-		} else if ((i % PROFILE_TLM_CYCLE) == PROFILE_TLM_SLOT_PAGE_81) {
-			zassert_equal(PROFILE_COMMON_PAGE_81, page);
+		if ((i % RADIANT_PROFILE_TLM_CYCLE) == RADIANT_PROFILE_TLM_SLOT_PAGE_80) {
+			zassert_equal(RADIANT_PROFILE_COMMON_PAGE_80, page);
+		} else if ((i % RADIANT_PROFILE_TLM_CYCLE) == RADIANT_PROFILE_TLM_SLOT_PAGE_81) {
+			zassert_equal(RADIANT_PROFILE_COMMON_PAGE_81, page);
 		}
 	}
 
-	zassert_equal(CYCLES, count_page(PROFILE_COMPAT_PAGE_BEACON));
-	zassert_true(count_page(PROFILE_COMPAT_PAGE_ATTEST_I) >= 4u);
+	zassert_equal(CYCLES, count_page(RADIANT_PROFILE_COMPAT_PAGE_BEACON));
+	zassert_true(count_page(RADIANT_PROFILE_COMPAT_PAGE_ATTEST_I) >= 4u);
 }
 
 /* ═══ The captures the Python gate reads ═════════════════════════════════ */
 
-ZTEST(profile_compat, test_emit_captures_for_the_python_cross_check)
+ZTEST(radiant_profile_compat, test_emit_captures_for_the_python_cross_check)
 {
-	struct profile_hr        hr;
-	struct profile_hr_cfg    hcfg;
-	struct profile_power     pw;
-	struct profile_power_cfg pcfg;
-	struct profile_compat    pc;
+	struct radiant_profile_hr        hr;
+	struct radiant_profile_hr_cfg    hcfg;
+	struct radiant_profile_power     pw;
+	struct radiant_profile_power_cfg pcfg;
+	struct radiant_profile_compat    pc;
 
 	keys_up(TX_SWITCHES, RX_SWITCHES,
-		PROFILE_HR_PERIOD);
+		RADIANT_PROFILE_HR_PERIOD);
 	hr_cfg_fill(&hcfg);
-	zassert_equal(0, profile_hr_init(&hr, &hcfg));
+	zassert_equal(0, radiant_profile_hr_init(&hr, &hcfg));
 	compat_up(&pc);
-	zassert_equal(0, profile_hr_set_compat(&hr, &pc));
+	zassert_equal(0, radiant_profile_hr_set_compat(&hr, &pc));
 	run_hr(&hr, &pc, SLOTS);
-	dump_capture("compat-hr", PROFILE_HR_DEVICE_TYPE, TEST_DEVNUM,
-		     period_us(PROFILE_HR_PERIOD));
+	dump_capture("compat-hr", RADIANT_PROFILE_HR_DEVICE_TYPE, TEST_DEVNUM,
+		     period_us(RADIANT_PROFILE_HR_PERIOD));
 
 	keys_up(TX_SWITCHES, RX_SWITCHES,
-		PROFILE_POWER_PERIOD);
+		RADIANT_PROFILE_POWER_PERIOD);
 	power_cfg_fill(&pcfg);
-	zassert_equal(0, profile_power_init(&pw, &pcfg));
+	zassert_equal(0, radiant_profile_power_init(&pw, &pcfg));
 	compat_up(&pc);
-	zassert_equal(0, profile_power_set_compat(&pw, &pc));
+	zassert_equal(0, radiant_profile_power_set_compat(&pw, &pc));
 	run_power(&pw, &pc, SLOTS);
-	dump_capture("compat-power", PROFILE_POWER_DEVICE_TYPE, TEST_DEVNUM,
-		     period_us(PROFILE_POWER_PERIOD));
+	dump_capture("compat-power", RADIANT_PROFILE_POWER_DEVICE_TYPE, TEST_DEVNUM,
+		     period_us(RADIANT_PROFILE_POWER_PERIOD));
 }

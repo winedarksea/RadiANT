@@ -106,16 +106,16 @@ the Multi-Link service after connecting.
 
 | Field # | Name | Scale | Matches this project's ANT+ constant |
 |---|---|---|---|
-| 1 | `vertical_oscillation_1_4ths_mm` | 0.25 mm | `PROFILE_RD_VERT_OSC_PER_MM` |
-| 2 | `ground_contact_time_ms` | 1 ms | `PROFILE_RD_INVALID_GCT`'s unit |
-| 3 | `stance_time_1_4ths_percent` | 0.25 % | `PROFILE_RD_STANCE_PER_PERCENT` |
-| 4 | `ground_contact_balance_1_32nds_percent` | 1/32 % | `PROFILE_RD_BALANCE_PER_PERCENT` |
-| 5 | `vertical_ratio_1_32nds_percent` | 1/32 % | `PROFILE_RD_VERT_RATIO_PER_PERCENT` |
+| 1 | `vertical_oscillation_1_4ths_mm` | 0.25 mm | `RADIANT_PROFILE_RD_VERT_OSC_PER_MM` |
+| 2 | `ground_contact_time_ms` | 1 ms | `RADIANT_PROFILE_RD_INVALID_GCT`'s unit |
+| 3 | `stance_time_1_4ths_percent` | 0.25 % | `RADIANT_PROFILE_RD_STANCE_PER_PERCENT` |
+| 4 | `ground_contact_balance_1_32nds_percent` | 1/32 % | `RADIANT_PROFILE_RD_BALANCE_PER_PERCENT` |
+| 5 | `vertical_ratio_1_32nds_percent` | 1/32 % | `RADIANT_PROFILE_RD_VERT_RATIO_PER_PERCENT` |
 | 6 | `step_length_mm` | 1 mm | matches |
-| 7 | `is_module_right_side_up` | bool | inverse of `profile_rd`'s `upside_down` |
-| 8 | `cadence_1_32_strides_per_min` | 1/32 strides/min | `PROFILE_RD_CADENCE_PER_STRIDE_MIN` |
+| 7 | `is_module_right_side_up` | bool | inverse of `radiant_profile_rd`'s `upside_down` |
+| 8 | `cadence_1_32_strides_per_min` | 1/32 strides/min | `RADIANT_PROFILE_RD_CADENCE_PER_STRIDE_MIN` |
 | 9 | `step_count` | 1 | matches |
-| 10 | `is_walking` | bool | matches `profile_rd_metrics::walking` |
+| 10 | `is_walking` | bool | matches `radiant_profile_rd_metrics::walking` |
 | 11 | `step_speed_loss_data` | undocumented | not in the ANT+ spec either; openrd never observed it in captures |
 
 `RunningMetrics.SpeedDistance` (protobuf field 2 of the same message):
@@ -124,9 +124,9 @@ carries at all (speed rides ANT+ page `0x10` from the *display*, in a
 different fixed-point shape: 1/256 m/s there too, so the scale at least
 agrees).
 
-**Every scale factor above already exists in `src/profiles/profile_rd.h`**,
+**Every scale factor above already exists in `src/profiles/radiant_profile_rd.h`**,
 independently derived from the ANT+ spec. A BLE encoder would reuse
-`struct profile_rd_metrics` as its source of truth and just re-pack the same
+`struct radiant_profile_rd_metrics` as its source of truth and just re-pack the same
 values into protobuf-shaped varints instead of ANT+'s bit-packed pages — the
 physiology layer is shared; only the wire format differs.
 
@@ -169,7 +169,7 @@ nothing but "runs on the BLE stack." A real attempt would want, roughly:
 2. A GFDI/COBS/Multi-Link framing layer — new code, unrelated to
    `radiant`'s ANT framing.
 3. A protobuf-varint encoder for `RunningMetrics.Dynamics` — small, and it
-   can share `struct profile_rd_metrics` as input.
+   can share `struct radiant_profile_rd_metrics` as input.
 4. The twelve-step handshake as an explicit state machine, since silent
    partial failure is the documented failure mode.
 5. A real Garmin watch (or the openrd ESP32 firmware acting as one) to test

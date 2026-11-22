@@ -20,9 +20,9 @@ config RADIANT_TEST_FAKE_RNG
 	help
 	  Compiles tests/fake_rng.c, a deterministic radiant_sec_rng() with
 	  injectable failures, and reports caps.has_rng - the same seam a real
-	  entropy backend fills (ADR 0009), so that node_ident_boot()'s
+	  entropy backend fills (ADR 0009), so that radiant_node_ident_boot()'s
 	  first-boot provisioning (ADR 0020) runs here against the real
-	  node_ident.c. Test images only: nothing outside radiant/tests sources
+	  radiant_node_ident.c. Test images only: nothing outside radiant/tests sources
 	  this file.
 
 source "Kconfig.zephyr"

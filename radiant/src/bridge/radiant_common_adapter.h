@@ -43,7 +43,7 @@
  * ---------------------------------------------------------------------------
  * Minimum and maximum operating temperature are NOT THE PRESENT TEMPERATURE,
  * on either reading of Table 6-17. The row NAMES say "Operating Temperature",
- * i.e. the device's rated limits; the (transposed - profile_common.h defect
+ * i.e. the device's rated limits; the (transposed - radiant_profile_common.h defect
  * (a)) description cells say "recorded temperature", i.e. extremes the device
  * has seen. A rated limit is a constant and a recorded extreme is a statistic
  * over an unstated window; neither is a measurement of the room. They are

@@ -141,12 +141,12 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/../common/sources.cmake")
 # WHAT THE LINKER SAYS IS NEEDED, WHICH IS MORE THAN THE PAGE NEEDS.
 #
 # The first four are the heart-rate page itself. The other two are pulled in by
-# the seam rather than by the profile: profile_sched.c's slot rotation calls
-# into profile_schedule.c to encode the descriptor, and profile_hr_next() calls
-# profile_compat_next() unconditionally - the compat client is a *seam*, and
+# the seam rather than by the profile: radiant_profile_sched.c's slot rotation calls
+# into radiant_profile_schedule.c to encode the descriptor, and radiant_profile_hr_next() calls
+# radiant_profile_compat_next() unconditionally - the compat client is a *seam*, and
 # whether it emits anything is a run-time question of whether a compat context
 # was attached, not a compile-time one. This application attaches none, so
-# profile_hr_set_compat() is never called and the strap stays a plain ANT+ 0x78
+# radiant_profile_hr_set_compat() is never called and the strap stays a plain ANT+ 0x78
 # sensor on the air.
 #
 # That distinction matters for P8b specifically. A strap being used to measure
@@ -156,14 +156,14 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/../common/sources.cmake")
 # LINKED and INERT, and the enrolment, private-mode, adaptive-frequency and
 # command layers are not linked at all - they join when there is a reason.
 target_sources(app PRIVATE
-  ../../radiant/src/profiles/profile_bits.c
-  ../../radiant/src/profiles/profile_common.c
-  ../../radiant/src/profiles/profile_sched.c
-  ../../radiant/src/profiles/profile_hr.c
-  ../../radiant/src/profiles/profile_schedule.c
-  ../../radiant/src/profiles/profile_compat.c
-  ../../radiant/src/profiles/profile_telemetry.c
-  ../../radiant/src/profiles/profile_handoff.c
+  ../../radiant/src/profiles/radiant_profile_bits.c
+  ../../radiant/src/profiles/radiant_profile_common.c
+  ../../radiant/src/profiles/radiant_profile_sched.c
+  ../../radiant/src/profiles/radiant_profile_hr.c
+  ../../radiant/src/profiles/radiant_profile_schedule.c
+  ../../radiant/src/profiles/radiant_profile_compat.c
+  ../../radiant/src/profiles/radiant_profile_telemetry.c
+  ../../radiant/src/profiles/radiant_profile_handoff.c
 )
 target_include_directories(app PRIVATE ../../radiant/src/profiles)
 
@@ -174,8 +174,8 @@ target_include_directories(app PRIVATE ../../radiant/src/profiles)
 # ADR 0009, and the settings-backed NVM implementation is the one the dongle
 # already uses.
 target_sources(app PRIVATE
-  ../../radiant/src/node/node_ident.c
-  ../../radiant/src/node/node_nvm_settings.c
+  ../../radiant/src/node/radiant_node_ident.c
+  ../../radiant/src/node/radiant_node_nvm_settings.c
 )
 target_include_directories(app PRIVATE ../../radiant/src/node)
 

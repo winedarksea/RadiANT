@@ -92,7 +92,7 @@ config TREADMILL_DEVICE_NUMBER
 	range 1 65535
 	default 4243
 	help
-	  Used only when node_ident_boot() fails - no entropy backend to make
+	  Used only when radiant_node_ident_boot() fails - no entropy backend to make
 	  K_dev from, a storage error, an exhausted boot counter - and the boot
 	  log then says so at error level. Normally the node generates K_dev on
 	  its first boot (ADR 0020) and takes its device number from the
@@ -376,7 +376,7 @@ config TREADMILL_CTRL_POLICY_EXCLUSIVE
 
 	  A refused command is REFUSED ON THE WIRE, with a code that already
 	  means this in each specification - page 71 status
-	  PROFILE_FEC_CMD_STATUS_REJECTED (3) to an FE-C controller, result
+	  RADIANT_PROFILE_FEC_CMD_STATUS_REJECTED (3) to an FE-C controller, result
 	  code CONTROL_NOT_PERMITTED (0x05) to an FTMS client. Neither is
 	  invented here, and silence would be worse than either: a controller
 	  reports a machine that ignores commands as broken.

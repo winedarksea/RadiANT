@@ -119,7 +119,7 @@ tests:
   # CONFIG_HRM_SENSOR_CUSTOM compiles no implementation of the seam at all. The
   # image must still LINK - if it does not, an integrator's first build fails
   # for a reason that has nothing to do with their driver - and it must still
-  # run, logging an error and transmitting PROFILE_HR_INVALID_BPM rather than
+  # run, logging an error and transmitting RADIANT_PROFILE_HR_INVALID_BPM rather than
   # falling back to the simulator. Only the link half is checkable here; the
   # rest is in hrm_sensor.c's hrm_sensor_start() and in the reference design's
   # section on porting.

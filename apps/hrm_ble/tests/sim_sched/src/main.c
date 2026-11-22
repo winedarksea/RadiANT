@@ -223,7 +223,7 @@ ZTEST(hrm_sim_sched, test_every_rate_in_range)
  * recovery branch inside the scheduler exists for.
  *
  * The failure this rules out is not cosmetic. A burst would push several
- * profile_hr_beat() calls through the seam in one tick, all carrying the same
+ * radiant_profile_hr_beat() calls through the seam in one tick, all carrying the same
  * instant; the event count would leap while the event time stood still, and a
  * receiver differencing the pair would compute an enormous rate from a strap
  * that had merely been told to slow down.

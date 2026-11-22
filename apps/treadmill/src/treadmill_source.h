@@ -19,7 +19,7 @@
  *
  *   1. the system workqueue, which advances the state and stages pages, and
  *   2. the radiant callback path - radiant_ant_on_message() -> load_next_page() ->
- *      profile_fec_tx_next() / profile_sdm_next().
+ *      radiant_profile_fec_tx_next() / radiant_profile_sdm_next().
  *
  * There is no lock in either. So treadmill_source_report_*() does NOT touch a
  * profile and does NOT touch treadmill_state: it stores one value atomically
@@ -76,7 +76,7 @@ struct treadmill_source_api {
 	 *
 	 * 0 or a negative errno. A failure is logged and the node keeps
 	 * running with a stopped belt, which is what a receiver sees as
-	 * PROFILE_FEC_STATE_READY and zero speed.
+	 * RADIANT_PROFILE_FEC_STATE_READY and zero speed.
 	 */
 	int (*start)(const struct treadmill_source *src);
 

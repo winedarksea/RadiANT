@@ -33,7 +33,7 @@
 #define DEVTYPE_FEC   0x11u
 #define DEVTYPE_ENV   0x19u
 
-/* Table 8-8 (radiant/src/profiles/profile_fec.h). */
+/* Table 8-8 (radiant/src/profiles/radiant_profile_fec.h). */
 #define FEC_TREADMILL  19u
 #define FEC_ELLIPTICAL 20u
 #define FEC_ROWER      22u

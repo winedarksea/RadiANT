@@ -1,0 +1,71 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * radiant_profile_power_decode.c - ANT+ Bicycle Power page 0x10, receive side.
+ *
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THIS IS ITS OWN TRANSLATION UNIT AND NOT THREE MORE LINES IN
+ * radiant_profile_power.c
+ * ---------------------------------------------------------------------------
+ *
+ * It was three more lines in radiant_profile_power.c, and that file cannot be linked
+ * into a receiver.
+ *
+ * radiant_profile_power.c is the MASTER: the page rotation, the ANT+ compatibility
+ * layer and the RadiANT beacon insertion, so it calls into radiant_profile_sched.c and
+ * radiant_profile_compat.c, and radiant_profile_compat.c reaches radiant_sec. Linking it into
+ * apps/dongle_thread to get one decoder would drag the whole transmit-side
+ * chain - a scheduler, a compat client and the security core - into an image
+ * whose entire job is to listen. That is not a size argument (though it is
+ * also that): a receive-only dongle that links a power-meter TRANSMITTER is a
+ * dongle that can be made to transmit by a linker decision nobody reviewed.
+ *
+ * The header is shared and that is fine: radiant_profile_power.h pulls in
+ * radiant_profile_compat.h and radiant_profile_sched.h, but a declaration costs no symbol.
+ * Only .c files create link dependencies, which is the whole point of the
+ * split.
+ *
+ * So: this file includes radiant_profile_power.h and nothing else, defines exactly one
+ * function, and is the file a receiver lists. If a second decoder is added for
+ * the torque pages (0x11/0x12) it belongs here beside this one, NOT back in
+ * radiant_profile_power.c.
+ */
+
+#include <errno.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#include "radiant_profile_power.h"
+
+int radiant_profile_power_decode_std(const uint8_t *body, struct radiant_profile_power_std *out)
+{
+	uint8_t pedal;
+
+	if (body == NULL || out == NULL) {
+		return -EINVAL;
+	}
+	if (body[0] != RADIANT_PROFILE_POWER_PAGE_STANDARD) {
+		/* Declining rather than masking: the torque pages put entirely
+		 * different quantities in bytes 4-7 and would decode here as a
+		 * plausible power figure. */
+		return -EINVAL;
+	}
+
+	out->event_count = body[1];
+	out->acc_power_w = (uint16_t)body[4] | ((uint16_t)body[5] << 8);
+	out->inst_power_w = (uint16_t)body[6] | ((uint16_t)body[7] << 8);
+
+	out->cadence_rpm = body[3];
+	out->cadence_valid = (body[3] != RADIANT_PROFILE_POWER_INVALID_CADENCE);
+
+	pedal = body[2];
+	out->pedal_valid = (pedal != RADIANT_PROFILE_POWER_INVALID_PEDAL_POWER);
+	/* Split unconditionally, reported as meaningful only when valid: 0xFF
+	 * masks to 127 % with the right-pedal bit set, which is a legal-looking
+	 * pair that a caller ignoring pedal_valid would happily publish. */
+	out->pedal_right_known = (pedal & RADIANT_PROFILE_POWER_PEDAL_RIGHT_BIT) != 0u;
+	out->pedal_percent = (uint8_t)(pedal & RADIANT_PROFILE_POWER_PEDAL_PERCENT_MASK);
+
+	return 0;
+}

@@ -44,7 +44,7 @@ static uint32_t decode_a(struct radiant_rd_adapter *a, uint32_t source,
 	uint32_t n = 0u;
 	uint8_t  steps;
 
-	if (profile_rd_decode_a(body8, &a->m, NULL) != 0) {
+	if (radiant_profile_rd_decode_a(body8, &a->m, NULL) != 0) {
 		return 0u;
 	}
 	a->seen_a = true;
@@ -52,7 +52,7 @@ static uint32_t decode_a(struct radiant_rd_adapter *a, uint32_t source,
 	/* An invalid field is not published as a zero: "no motion detected"
 	 * and "zero mm of vertical oscillation" are different statements a
 	 * sink can't tell apart afterward. */
-	if (a->m.vert_osc_quarter_mm != PROFILE_RD_INVALID_VERTICAL_OSC) {
+	if (a->m.vert_osc_quarter_mm != RADIANT_PROFILE_RD_INVALID_VERTICAL_OSC) {
 		post(source, RADIANT_RD_FIELD_VERTICAL_OSC,
 		     RADIANT_FIELD_LENGTH, 0u, -6,
 		     (int64_t)a->m.vert_osc_quarter_mm * RD_UM_PER_QUARTER_MM,
@@ -60,7 +60,7 @@ static uint32_t decode_a(struct radiant_rd_adapter *a, uint32_t source,
 		n++;
 	}
 
-	if (a->m.stance_quarter != PROFILE_RD_INVALID_STANCE) {
+	if (a->m.stance_quarter != RADIANT_PROFILE_RD_INVALID_STANCE) {
 		post(source, RADIANT_RD_FIELD_STANCE_TIME,
 		     RADIANT_FIELD_PERCENTAGE, 0u, -2,
 		     (int64_t)a->m.stance_quarter * RD_QUARTER_PCT_SCALE, t_us);
@@ -109,12 +109,12 @@ static uint32_t decode_b(struct radiant_rd_adapter *a, uint32_t source,
 {
 	uint32_t n = 0u;
 
-	if (profile_rd_decode_b(body8, &a->m, NULL) != 0) {
+	if (radiant_profile_rd_decode_b(body8, &a->m, NULL) != 0) {
 		return 0u;
 	}
 	a->seen_b = true;
 
-	if (a->m.balance_32 != PROFILE_RD_INVALID_BALANCE) {
+	if (a->m.balance_32 != RADIANT_PROFILE_RD_INVALID_BALANCE) {
 		post(source, RADIANT_RD_FIELD_BALANCE, RADIANT_FIELD_PERCENTAGE,
 		     0u, -5,
 		     (int64_t)a->m.balance_32 * RD_THIRTYSECOND_SCALE, t_us);
@@ -141,9 +141,9 @@ uint32_t radiant_rd_adapter_decode(struct radiant_rd_adapter *a, uint32_t source
 	}
 
 	switch (body8[0]) {
-	case PROFILE_RD_PAGE_A:
+	case RADIANT_PROFILE_RD_PAGE_A:
 		return decode_a(a, source, body8, t_us);
-	case PROFILE_RD_PAGE_B:
+	case RADIANT_PROFILE_RD_PAGE_B:
 		return decode_b(a, source, body8, t_us);
 	default:
 		/* 0x10, 0x20, 0x4A are the display's half of the conversation

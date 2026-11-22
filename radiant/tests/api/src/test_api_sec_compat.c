@@ -4,8 +4,8 @@
  * radiant_ant_stack_reset() (SYSTEM_RESET) used to release only the radiant_sec
  * context, so a compat context on an unassigned channel stayed installed with
  * its epoch. radiant_sec_compat_live_twin() then kept reporting it, and
- * node_ident_arm_compat() refused every later arm under the same root and
- * base device number with NODE_IDENT_EBUSY until reboot (review 2026-11-15).
+ * radiant_node_ident_arm_compat() refused every later arm under the same root and
+ * base device number with RADIANT_NODE_IDENT_EBUSY until reboot (review 2026-11-15).
  *
  * Compiled only into scenarios with CONFIG_RADIANT_SEC_COMPAT (sec_host).
  */

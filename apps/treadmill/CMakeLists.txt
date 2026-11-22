@@ -128,14 +128,14 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/../common/sources.cmake")
 #
 # WHAT THE LINKER SAYS IS NEEDED, WHICH IS MORE THAN THE PAGES NEED.
 #
-# profile_fec_tx.c and profile_sdm.c are the two masters. profile_common.c is
-# pages 80 and 81. profile_sched.c is the slot engine both masters drive, and it
-# pulls in profile_schedule.c and profile_telemetry.c for the descriptor path -
+# radiant_profile_fec_tx.c and radiant_profile_sdm.c are the two masters. radiant_profile_common.c is
+# pages 80 and 81. radiant_profile_sched.c is the slot engine both masters drive, and it
+# pulls in radiant_profile_schedule.c and radiant_profile_telemetry.c for the descriptor path -
 # which NEITHER master uses (both configure cfg.desc = NULL, because an ANT+
 # compatibility type announces no schema) but which the engine references
-# unconditionally. profile_bits.c is under those.
+# unconditionally. radiant_profile_bits.c is under those.
 #
-# profile_compat.c is deliberately ABSENT, unlike in apps/hrm_ble. That
+# radiant_profile_compat.c is deliberately ABSENT, unlike in apps/hrm_ble. That
 # application links the compat client inert so that a coexistence measurement is
 # taken against a strap broadcasting exactly what a commercial strap
 # broadcasts. Here there is no equivalent argument and no compat allocation for
@@ -143,28 +143,28 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/../common/sources.cmake")
 # registered on 0x0B and 0x78 only - so linking it would be linking a layer
 # with no page numbers to put anything on.
 #
-# profile_fec.c (the DECODER) is also absent, and that absence is the point of
+# radiant_profile_fec.c (the DECODER) is also absent, and that absence is the point of
 # the two-translation-unit split: a treadmill transmits and does not decode
 # another machine's pages.
 target_sources(app PRIVATE
-  ../../radiant/src/profiles/profile_bits.c
-  ../../radiant/src/profiles/profile_common.c
-  ../../radiant/src/profiles/profile_sched.c
-  ../../radiant/src/profiles/profile_schedule.c
-  ../../radiant/src/profiles/profile_telemetry.c
-  ../../radiant/src/profiles/profile_handoff.c
-  ../../radiant/src/profiles/profile_fec_tx.c
+  ../../radiant/src/profiles/radiant_profile_bits.c
+  ../../radiant/src/profiles/radiant_profile_common.c
+  ../../radiant/src/profiles/radiant_profile_sched.c
+  ../../radiant/src/profiles/radiant_profile_schedule.c
+  ../../radiant/src/profiles/radiant_profile_telemetry.c
+  ../../radiant/src/profiles/radiant_profile_handoff.c
+  ../../radiant/src/profiles/radiant_profile_fec_tx.c
 )
 if(CONFIG_TREADMILL_ANT_SDM)
-  target_sources(app PRIVATE ../../radiant/src/profiles/profile_sdm.c)
+  target_sources(app PRIVATE ../../radiant/src/profiles/radiant_profile_sdm.c)
 endif()
 if(CONFIG_TREADMILL_HR_RX)
   # Only the header is needed for the one byte the slave reads (see
-  # src/treadmill_hr_rx.c), but profile_hr.c is what defines
-  # PROFILE_HR_INVALID_BPM's neighbours and the encoders a future console
+  # src/treadmill_hr_rx.c), but radiant_profile_hr.c is what defines
+  # RADIANT_PROFILE_HR_INVALID_BPM's neighbours and the encoders a future console
   # would want. Compiled so the constants and the profile stay one file.
-  target_sources(app PRIVATE ../../radiant/src/profiles/profile_hr.c
-                             ../../radiant/src/profiles/profile_compat.c)
+  target_sources(app PRIVATE ../../radiant/src/profiles/radiant_profile_hr.c
+                             ../../radiant/src/profiles/radiant_profile_compat.c)
 endif()
 target_include_directories(app PRIVATE ../../radiant/src/profiles)
 
@@ -173,7 +173,7 @@ target_include_directories(app PRIVATE ../../radiant/src/profiles)
 # The identity record decides the device number under ADR 0009, and the
 # settings-backed NVM implementation is the one the dongle already uses.
 target_sources(app PRIVATE
-  ../../radiant/src/node/node_ident.c
-  ../../radiant/src/node/node_nvm_settings.c
+  ../../radiant/src/node/radiant_node_ident.c
+  ../../radiant/src/node/radiant_node_nvm_settings.c
 )
 target_include_directories(app PRIVATE ../../radiant/src/node)

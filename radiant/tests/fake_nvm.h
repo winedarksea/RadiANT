@@ -3,11 +3,11 @@
  * fake_nvm.h - the control surface for the test image's storage backend.
  *
  * Provenance: docs/decisions/0009-hostless-node-identity.md and
- * src/node/node_nvm.h, whose interface this implements.
+ * src/node/radiant_node_nvm.h, whose interface this implements.
  *
- * fake_nvm.c is to node_nvm.h what fake_radio.c is to radiant_radio_hal.h:
+ * fake_nvm.c is to radiant_node_nvm.h what fake_radio.c is to radiant_radio_hal.h:
  * the one implementation of the seam in this image, so suites drive the real
- * node_ident.c on a board that has no storage partition.
+ * radiant_node_ident.c on a board that has no storage partition.
  *
  * It models a power cycle, which the real backend cannot be asked to do on
  * demand: fake_nvm_reboot() throws away nothing. A boot counter is only a
@@ -30,7 +30,7 @@ extern "C" {
 void fake_nvm_wipe(void);
 
 /* A power cycle: contents survive, but the "initialised" flag does not, so
- * the next node_nvm_init() is a real one. */
+ * the next radiant_node_nvm_init() is a real one. */
 void fake_nvm_reboot(void);
 
 /* Make the next `n` stores fail, as a flash write that did not take (0 turns
@@ -48,16 +48,16 @@ void fake_nvm_fail_stores_after(uint32_t skip, uint32_t n);
 void fake_nvm_forget(const char *key);
 
 /* Sever the store from the load: reported as written but is not. Exercises
- * node_ident.c's confirm-by-re-reading and catches a backend that returns
+ * radiant_node_ident.c's confirm-by-re-reading and catches a backend that returns
  * early from a queued write. */
 void fake_nvm_swallow_stores(bool on);
 
-/* Make the next `n` loads fail with NODE_NVM_EIO whether or not the record
+/* Make the next `n` loads fail with RADIANT_NODE_NVM_EIO whether or not the record
  * exists - a read error, which is NOT "never written". ADR 0020's trigger rule
  * rests on telling the two apart: only ENOENT may lead to a new K_dev. */
 void fake_nvm_fail_loads(uint32_t n);
 
-/* Read a record straight out of the simulated part, bypassing node_nvm.h -
+/* Read a record straight out of the simulated part, bypassing radiant_node_nvm.h -
  * a suite asserting "the counter is in NVM by now" must not ask the layer
  * under test. Returns false when the record is absent or `len` is not the
  * stored length. */

@@ -37,7 +37,7 @@ static const struct radiant_sec_caps modes_caps = {
 	 * the single answer for the whole build, so it has to track those
 	 * symbols exactly as src/radiant_sec_aes.c's sw_caps does. Saying false
 	 * while the code is present makes every caller that checks the cap
-	 * first - node_ident_pair_begin(), radiant_sec_pair_set_scalar() and
+	 * first - radiant_node_ident_pair_begin(), radiant_sec_pair_set_scalar() and
 	 * all of Layer D underneath them - refuse work the build can do. */
 #if defined(CONFIG_RADIANT_SEC_PAIRING_X25519)
 	.has_x25519    = true,

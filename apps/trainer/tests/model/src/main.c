@@ -21,8 +21,8 @@
 
 #include <zephyr/ztest.h>
 
-#include "profile_fec.h"
-#include "profile_fec_tx.h"
+#include "radiant_profile_fec.h"
+#include "radiant_profile_fec_tx.h"
 #include "trainer_ackfault.h"
 #include "trainer_model.h"
 
@@ -58,7 +58,7 @@ ZTEST(trainer_model, test_flat_road_at_ten_metres_per_second)
 ZTEST(trainer_model, test_five_percent_climb)
 {
 	struct trainer_model                    m;
-	struct profile_fec_cmd_track_resistance t;
+	struct radiant_profile_fec_cmd_track_resistance t;
 
 	trainer_model_init(&m);
 	memset(&t, 0, sizeof(t));
@@ -81,7 +81,7 @@ ZTEST(trainer_model, test_five_percent_climb)
 ZTEST(trainer_model, test_headwind_adds_to_the_rider_speed)
 {
 	struct trainer_model                   m;
-	struct profile_fec_cmd_wind_resistance w;
+	struct radiant_profile_fec_cmd_wind_resistance w;
 
 	trainer_model_init(&m);
 	memset(&w, 0, sizeof(w));
@@ -106,7 +106,7 @@ ZTEST(trainer_model, test_headwind_adds_to_the_rider_speed)
 ZTEST(trainer_model, test_steep_descent_clamps_at_zero_newtons)
 {
 	struct trainer_model                    m;
-	struct profile_fec_cmd_track_resistance t;
+	struct radiant_profile_fec_cmd_track_resistance t;
 	float                                   flat;
 
 	trainer_model_init(&m);
@@ -128,8 +128,8 @@ ZTEST(trainer_model, test_steep_descent_clamps_at_zero_newtons)
 ZTEST(trainer_model, test_invalid_fields_fall_back_to_the_defaults)
 {
 	struct trainer_model                    m;
-	struct profile_fec_cmd_user_config      u;
-	struct profile_fec_cmd_track_resistance t;
+	struct radiant_profile_fec_cmd_user_config      u;
+	struct radiant_profile_fec_cmd_track_resistance t;
 
 	trainer_model_init(&m);
 
@@ -179,9 +179,9 @@ ZTEST(trainer_model, test_invalid_fields_fall_back_to_the_defaults)
 ZTEST(trainer_model, test_erg_reports_the_target_and_basic_brakes)
 {
 	struct trainer_model       m;
-	struct profile_fec_general g;
-	struct profile_fec_settings s;
-	struct profile_fec_trainer t;
+	struct radiant_profile_fec_general g;
+	struct radiant_profile_fec_settings s;
+	struct radiant_profile_fec_trainer t;
 
 	trainer_model_init(&m);
 	trainer_model_target_power(&m, 1000u); /* 250 W */
@@ -189,15 +189,15 @@ ZTEST(trainer_model, test_erg_reports_the_target_and_basic_brakes)
 	zassert_equal(m.power_w, 250u, "ERG reports the target, not the rider");
 	trainer_model_pages(&m, &g, &s, &t);
 	zassert_equal(t.inst_power_w, 250u, NULL);
-	zassert_equal(t.flags, PROFILE_FEC_TARGET_POWER_OK, NULL);
+	zassert_equal(t.flags, RADIANT_PROFILE_FEC_TARGET_POWER_OK, NULL);
 
 	/* Stop pedalling: no power, and the textbook "speed too low". */
 	trainer_model_set_rider(&m, 200u, 0u);
 	trainer_model_tick(&m, 250u);
 	trainer_model_pages(&m, &g, &s, &t);
 	zassert_equal(t.inst_power_w, 0u, NULL);
-	zassert_equal(t.flags, PROFILE_FEC_TARGET_POWER_SPEED_LOW, NULL);
-	zassert_equal(g.state, PROFILE_FEC_STATE_READY, NULL);
+	zassert_equal(t.flags, RADIANT_PROFILE_FEC_TARGET_POWER_SPEED_LOW, NULL);
+	zassert_equal(g.state, RADIANT_PROFILE_FEC_STATE_READY, NULL);
 
 	/* BASIC 10 %: a 200 N brake on a flat road, plus rolling. */
 	trainer_model_set_rider(&m, 200u, 90u);
@@ -213,10 +213,10 @@ ZTEST(trainer_model, test_erg_reports_the_target_and_basic_brakes)
 ZTEST(trainer_model, test_pages_carry_type_25_virtual_speed_and_the_grade)
 {
 	struct trainer_model                    m;
-	struct profile_fec_cmd_track_resistance tr;
-	struct profile_fec_general              g;
-	struct profile_fec_settings             s;
-	struct profile_fec_trainer              t;
+	struct radiant_profile_fec_cmd_track_resistance tr;
+	struct radiant_profile_fec_general              g;
+	struct radiant_profile_fec_settings             s;
+	struct radiant_profile_fec_trainer              t;
 	uint8_t                                 acc_before;
 
 	trainer_model_init(&m);
@@ -230,7 +230,7 @@ ZTEST(trainer_model, test_pages_carry_type_25_virtual_speed_and_the_grade)
 	trainer_model_tick(&m, 250u);
 	trainer_model_pages(&m, &g, &s, &t);
 
-	zassert_equal(g.equipment_type, PROFILE_FEC_TYPE_TRAINER, NULL);
+	zassert_equal(g.equipment_type, RADIANT_PROFILE_FEC_TYPE_TRAINER, NULL);
 	zassert_true(g.speed_virtual, "no wheel turns: the speed is virtual");
 	zassert_true(g.speed_valid, NULL);
 	zassert_equal(g.elapsed_time_qs, 2u, "two quarter-seconds");
@@ -242,7 +242,7 @@ ZTEST(trainer_model, test_pages_carry_type_25_virtual_speed_and_the_grade)
 		      "one tick adds one update's power");
 	zassert_equal(t.inst_power_w, 200u, NULL);
 	zassert_equal(t.cadence_rpm, 90u, NULL);
-	zassert_equal(g.state, PROFILE_FEC_STATE_IN_USE, NULL);
+	zassert_equal(g.state, RADIANT_PROFILE_FEC_STATE_IN_USE, NULL);
 }
 
 /* ── The fault model ────────────────────────────────────────────────────── */

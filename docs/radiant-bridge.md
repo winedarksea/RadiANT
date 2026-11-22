@@ -307,7 +307,7 @@ struct radiant_sink {
 RADIANT_SINK_DEFINE(mqtt_sink, ...);   /* STRUCT_SECTION_ITERABLE under the hood */
 ```
 
-This is the same shape `profile_sched.c` already uses for its client seam — a
+This is the same shape `radiant_profile_sched.c` already uses for its client seam — a
 registered callback getting first refusal — and the consistency is deliberate:
 one plugin idiom in the tree, not two.
 
@@ -1125,8 +1125,8 @@ archived consoles under `archive/captures/coex/`.
   steers re-acquisition. Compiled out where no arbiter exists; counted as
   `denial_escapes` on the SWEEP debug line, deliberately not in the `0xF6`
   health reply.
-- **`radiant/tests/CMakeLists.txt` never listed `src/profiles/profile_rd.c`**,
-  so `profile_rd`'s 25 tests had never run once. Fixed; they pass.
+- **`radiant/tests/CMakeLists.txt` never listed `src/profiles/radiant_profile_rd.c`**,
+  so `radiant_profile_rd`'s 25 tests had never run once. Fixed; they pass.
 
 ### 7.5 The bridge is never a border router
 
@@ -1347,8 +1347,8 @@ the map has to be able to express it.
 | Source | Status |
 |---|---|
 | A RadiANT `0x60` node whose descriptor announces `0x10`, `0x11` or `0x12` | **Free by construction.** The descriptor names the type, the bus carries it, the table maps it. No adapter, no per-profile code |
-| ANT+ Environment `0x19` | **Implemented** — `profile_env.c` + `radiant_env_adapter.c`, temperature ; `device-profiles.md` §3.7 |
-| ANT+ common page 84 | **Implemented** — `profile_common_decode_84()` + `radiant_common_adapter.c`. `device-profiles.md` §3.4. This is the "any device type" path and it is now the *widest* of the three, not the weakest |
+| ANT+ Environment `0x19` | **Implemented** — `radiant_profile_env.c` + `radiant_env_adapter.c`, temperature ; `device-profiles.md` §3.7 |
+| ANT+ common page 84 | **Implemented** — `radiant_profile_common_decode_84()` + `radiant_common_adapter.c`. `device-profiles.md` §3.4. This is the "any device type" path and it is now the *widest* of the three, not the weakest |
 
 The three rows used to differ in evidence, and they no longer do: all three are
 primary-derived. **What they still differ in is bench exposure.** No ANT+

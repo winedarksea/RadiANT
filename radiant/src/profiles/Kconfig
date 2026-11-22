@@ -12,7 +12,7 @@ menu "RadiANT profile policy"
 # back on the DEFAULTS of docs/radiant-security.md section 11.6's table rather
 # than on "unset". For a `bool` those two are indistinguishable from the
 # preprocessor, so this symbol is the difference: it is defined whenever this
-# menu exists, and profile_private.c reads section 11.6's default when it does
+# menu exists, and radiant_profile_private.c reads section 11.6's default when it does
 # not.
 config RADIANT_PROFILE_POLICY
 	bool

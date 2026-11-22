@@ -215,7 +215,7 @@ struct radiant_crc_cfg {
  * 8-byte ANT payload. Both 1 M ANT formats stay static-length at 10/12 bytes -
  * nothing ANT-shaped got longer, this constant grew only for the new
  * RadiANT-only format. The real duty-cycle bound is ADR 0007's 25%-of-period
- * rule, enforced by profile_sched_duty_check(); this is a buffer ceiling, not
+ * rule, enforced by radiant_profile_sched_duty_check(); this is a buffer ceiling, not
  * a licence.
  */
 #define RADIANT_RADIO_BODY_MAX 40

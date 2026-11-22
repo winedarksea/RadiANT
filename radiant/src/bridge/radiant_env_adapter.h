@@ -3,8 +3,8 @@
  * radiant_env_adapter.h - ANT+ Environment (device type 0x19) onto the sample
  * bus.
  *
- * Wire layout is src/profiles/profile_env.h's, decoded through
- * profile_env_decode_temperature()/_capabilities() rather than re-derived
+ * Wire layout is src/profiles/radiant_profile_env.h's, decoded through
+ * radiant_profile_env_decode_temperature()/_capabilities() rather than re-derived
  * here. Vocabulary mapping follows docs/radiant-bridge.md section 3.1's "one
  * adapter per profile, not one per profile per sink".
  *
@@ -33,7 +33,7 @@
  * WHY THE 24-HOUR LOW AND HIGH ARE DECIDEDLY NOT PUBLISHED
  * ---------------------------------------------------------------------------
  * They are decoded - a caller can read them straight out of the struct
- * profile_env_temperature this adapter keeps - but deliberately never posted.
+ * radiant_profile_env_temperature this adapter keeps - but deliberately never posted.
  *
  * They are STATISTICS OVER A 24-HOUR WINDOW, not measurements of the
  * present, and every consumer downstream treats a RADIANT_FIELD_TEMPERATURE
@@ -56,7 +56,7 @@
  * The capabilities page is a description of the sensor, not a reading, so it
  * has no place on a bus of measurements. It is kept because it carries the
  * declared default transmission rate, and this profile is the one that has two
- * (0.5 Hz and 4 Hz) - see profile_env.h's header on the liveness consequence.
+ * (0.5 Hz and 4 Hz) - see radiant_profile_env.h's header on the liveness consequence.
  */
 
 #ifndef RADIANT_ENV_ADAPTER_H_
@@ -65,7 +65,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "profile_env.h"
+#include "radiant_profile_env.h"
 #include "radiant_bridge.h"
 
 #ifdef __cplusplus
@@ -95,11 +95,11 @@ extern "C" {
 struct radiant_env_adapter {
 	/* The sensor's last page 0x01, kept whole so a caller can read the two
 	 * 24-hour statistics this adapter does not publish. */
-	struct profile_env_temperature t;
+	struct radiant_profile_env_temperature t;
 	bool have_temperature;
 
 	/* The sensor's last page 0x00. Not posted; see the header. */
-	struct profile_env_capabilities caps;
+	struct radiant_profile_env_capabilities caps;
 	bool have_caps;
 
 	/* Event count as last seen on the wire, for differencing at its own u8

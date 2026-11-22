@@ -5,7 +5,7 @@
 
 #include <string.h>
 
-#include "profile_common.h"
+#include "radiant_profile_common.h"
 #include "radiant_common_adapter.h"
 
 /* ---------------------------------------------------------------------------
@@ -91,12 +91,12 @@ static void post_temperature(uint32_t source, uint8_t field_id, uint16_t raw,
  * operating-limit subpages (7, 8), which are recorded and never posted.
  */
 static uint32_t post_subfield(struct radiant_common_adapter *a, uint32_t source,
-			      const struct profile_common_subfield *f,
+			      const struct radiant_profile_common_subfield *f,
 			      uint64_t t_us)
 {
 	uint16_t delta;
 
-	if (f->subpage == PROFILE_COMMON_SUBPAGE_INVALID ||
+	if (f->subpage == RADIANT_PROFILE_COMMON_SUBPAGE_INVALID ||
 	    f->subpage > RADIANT_COMMON_SUBPAGE_MAX ||
 	    f->subpage == 0u) {
 		a->declined++;
@@ -111,12 +111,12 @@ static uint32_t post_subfield(struct radiant_common_adapter *a, uint32_t source,
 	a->last_raw[f->subpage] = f->raw;
 
 	switch (f->subpage) {
-	case PROFILE_COMMON_SUBPAGE_TEMPERATURE:
+	case RADIANT_PROFILE_COMMON_SUBPAGE_TEMPERATURE:
 		post_temperature(source, RADIANT_COMMON_FIELD_TEMPERATURE,
 				 f->raw, t_us);
 		return 1u;
 
-	case PROFILE_COMMON_SUBPAGE_PRESSURE:
+	case RADIANT_PROFILE_COMMON_SUBPAGE_PRESSURE:
 		/* EXACT: 0.01 kPa is 10 Pa, which is exp = +1 on the wire
 		 * value itself. Unsigned per Table 6-17 (0 - 655.35 kPa). */
 		post(source, RADIANT_COMMON_FIELD_PRESSURE,
@@ -124,14 +124,14 @@ static uint32_t post_subfield(struct radiant_common_adapter *a, uint32_t source,
 		     (int64_t)f->raw, t_us);
 		return 1u;
 
-	case PROFILE_COMMON_SUBPAGE_HUMIDITY:
+	case RADIANT_PROFILE_COMMON_SUBPAGE_HUMIDITY:
 		/* EXACT: the vocabulary's humidity unit is % and the wire is
 		 * 0.01 %, so raw passes through at exp = -2. */
 		post(source, RADIANT_COMMON_FIELD_HUMIDITY,
 		     RADIANT_FIELD_HUMIDITY, 0u, -2, (int64_t)f->raw, t_us);
 		return 1u;
 
-	case PROFILE_COMMON_SUBPAGE_WIND_SPEED:
+	case RADIANT_PROFILE_COMMON_SUBPAGE_WIND_SPEED:
 		/* LOSSY, instantaneous, non-compounding. */
 		post(source, RADIANT_COMMON_FIELD_WIND_SPEED,
 		     RADIANT_FIELD_SPEED, 0u, -6,
@@ -140,7 +140,7 @@ static uint32_t post_subfield(struct radiant_common_adapter *a, uint32_t source,
 		     t_us);
 		return 1u;
 
-	case PROFILE_COMMON_SUBPAGE_WIND_DIRECTION:
+	case RADIANT_PROFILE_COMMON_SUBPAGE_WIND_DIRECTION:
 		/* LOSSY, instantaneous, non-compounding. */
 		post(source, RADIANT_COMMON_FIELD_WIND_DIRECTION,
 		     RADIANT_FIELD_ANGLE, 0u, -6,
@@ -149,7 +149,7 @@ static uint32_t post_subfield(struct radiant_common_adapter *a, uint32_t source,
 		     t_us);
 		return 1u;
 
-	case PROFILE_COMMON_SUBPAGE_CHARGE_CYCLES:
+	case RADIANT_PROFILE_COMMON_SUBPAGE_CHARGE_CYCLES:
 		/* The one accumulating quantity on this page. Differenced at
 		 * its own u16 wire width, where the subtraction wraps
 		 * correctly by construction (section 3.2/5's rule); the first
@@ -173,8 +173,8 @@ static uint32_t post_subfield(struct radiant_common_adapter *a, uint32_t source,
 		     (int64_t)a->acc_cycles, t_us);
 		return 1u;
 
-	case PROFILE_COMMON_SUBPAGE_TEMP_MIN:
-	case PROFILE_COMMON_SUBPAGE_TEMP_MAX:
+	case RADIANT_PROFILE_COMMON_SUBPAGE_TEMP_MIN:
+	case RADIANT_PROFILE_COMMON_SUBPAGE_TEMP_MAX:
 		/*
 		 * DECODED, DELIBERATELY NOT POSTED - see "Subpages 7 and 8 are
 		 * decoded, not posted" in radiant_common_adapter.h. Rated limits
@@ -184,7 +184,7 @@ static uint32_t post_subfield(struct radiant_common_adapter *a, uint32_t source,
 		 *
 		 * Table 6-17 NAMES subpage 7 the minimum and DESCRIBES it as
 		 * the maximum; subpage 8 is the mirror image. The names are
-		 * authoritative - profile_common.h defect (a) - and the two
+		 * authoritative - radiant_profile_common.h defect (a) - and the two
 		 * reserved field ids follow the names, so a later decision to
 		 * post them must not swap them back.
 		 *
@@ -207,14 +207,14 @@ static uint32_t post_subfield(struct radiant_common_adapter *a, uint32_t source,
 
 bool radiant_common_adapter_is_common_page(uint8_t page)
 {
-	return page >= PROFILE_COMMON_PAGE_RANGE_FIRST &&
-	       page <= PROFILE_COMMON_PAGE_RANGE_LAST;
+	return page >= RADIANT_PROFILE_COMMON_PAGE_RANGE_FIRST &&
+	       page <= RADIANT_PROFILE_COMMON_PAGE_RANGE_LAST;
 }
 
 uint32_t radiant_common_adapter_decode(struct radiant_common_adapter *a, uint32_t source,
 				       const uint8_t body8[8], uint64_t t_us)
 {
-	struct profile_common_84 d;
+	struct radiant_profile_common_84 d;
 	uint32_t n = 0u;
 	uint32_t i;
 
@@ -226,15 +226,15 @@ uint32_t radiant_common_adapter_decode(struct radiant_common_adapter *a, uint32_
 	 * and 85/86/87 are identity, battery, time, memory, pairing and error
 	 * reporting, and the sample bus carries measurements. Returning 0 for
 	 * those is the answer, not a gap - see the header. */
-	if (body8[0] != PROFILE_COMMON_PAGE_84) {
+	if (body8[0] != RADIANT_PROFILE_COMMON_PAGE_84) {
 		return 0u;
 	}
 
-	if (profile_common_decode_84(body8, &d) != 0) {
+	if (radiant_profile_common_decode_84(body8, &d) != 0) {
 		return 0u;
 	}
 
-	for (i = 0u; i < PROFILE_COMMON_84_SLOTS; i++) {
+	for (i = 0u; i < RADIANT_PROFILE_COMMON_84_SLOTS; i++) {
 		n += post_subfield(a, source, &d.slot[i], t_us);
 	}
 

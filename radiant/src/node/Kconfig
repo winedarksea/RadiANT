@@ -10,7 +10,7 @@ config RADIANT_NODE_IDENT
 	default n
 	depends on RADIANT_SEC
 	help
-	  src/node/node_ident.c: the NVM monotonic boot counter that becomes
+	  src/node/radiant_node_ident.c: the NVM monotonic boot counter that becomes
 	  this node's epoch, K_dev and the Tier 0 device number derived from
 	  it, and the deterministic pairing scalar
 	  KDF(K_dev, "pair" || pair_counter).
@@ -26,7 +26,7 @@ config RADIANT_NODE_IDENT
 	  0009 decision 7 keeps the persistence in the application, and the
 	  module still only ever receives an epoch through its existing API.
 
-	  Selecting this requires a node_nvm.h backend. There is no default and
+	  Selecting this requires a radiant_node_nvm.h backend. There is no default and
 	  no RAM fallback: a volatile store here is a boot counter that restarts
 	  at 1 on every power cycle, which is a replayed epoch and a repeated
 	  pairing scalar arriving silently. A build with no backend fails to
@@ -38,18 +38,18 @@ config RADIANT_NODE_IDENT_SELF_PROVISION
 	depends on RADIANT_NODE_IDENT && RADIANT_SEC_HAS_RNG
 	help
 	  docs/decisions/0020-k-dev-is-generated-on-first-boot.md. When
-	  node_ident_boot() finds NO K_dev record at all (the storage backend
+	  radiant_node_ident_boot() finds NO K_dev record at all (the storage backend
 	  says "never written"), it draws 16 bytes from radiant_sec_rng(),
-	  provisions them through node_ident_provision() - key first, then
+	  provisions them through radiant_node_ident_provision() - key first, then
 	  zeroed counters, each confirmed by read-back - and carries on
 	  booting. The key never leaves the part and no factory step needs to
 	  know it.
 
 	  ONLY "never written" triggers it. Any other storage failure returns
-	  NODE_IDENT_EIO and provisions nothing, because a flaky read that
+	  RADIANT_NODE_IDENT_EIO and provisions nothing, because a flaky read that
 	  re-rolled the identity would silently change the device number and
 	  orphan every receiver paired to it. An RNG failure writes nothing and
-	  returns NODE_IDENT_ENOKEY.
+	  returns RADIANT_NODE_IDENT_ENOKEY.
 
 	  Depends on an entropy backend (RADIANT_SEC_HAS_RNG): without one
 	  there is nothing safe to make a key from, and the node falls back to
@@ -76,13 +76,13 @@ config RADIANT_NODE_NVM_SETTINGS
 	select FLASH_MAP
 	select NVS
 	help
-	  src/node/node_nvm_settings.c: three records - two u32 counters and
+	  src/node/radiant_node_nvm_settings.c: three records - two u32 counters and
 	  K_dev - in the "radiant" settings subtree, over NVS in the board's
 	  storage_partition. The standard Zephyr answer, chosen because this
 	  repository had no persistence layer at all before this phase and a
 	  private one for three records would be the worse mistake.
 
-	  Turn it OFF to supply your own node_nvm.h implementation - a secure
+	  Turn it OFF to supply your own radiant_node_nvm.h implementation - a secure
 	  element, which is where ADR 0009 says the counters belong on a part
 	  that has one, or a test double. radiant/tests/fake_nvm.c is the
 	  second implementation that keeps this a seam rather than a layer with

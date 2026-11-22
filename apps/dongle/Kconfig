@@ -621,7 +621,7 @@ endmenu
 # directories up now that this application lives under apps/) - that move
 # does not change who decides whether to build against it. RADIANT_NODE_* is
 # application-side library material, same as it was at src/node/: nothing in
-# radiant's own CMakeLists.txt compiles node_ident.c, this application's
+# radiant's own CMakeLists.txt compiles radiant_node_ident.c, this application's
 # does, below.
 rsource "../../radiant/src/node/Kconfig"
 

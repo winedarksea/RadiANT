@@ -28,8 +28,8 @@
 #include <zephyr/toolchain.h>
 #include <zephyr/ztest.h>
 
-#include "profile_fec.h"
-#include "profile_power.h"
+#include "radiant_profile_fec.h"
+#include "radiant_profile_power.h"
 #include "radiant_bridge.h"
 #include "radiant_power_adapter.h"
 #include "radiant_rules.h"
@@ -111,7 +111,7 @@ static void power_body(uint8_t *out, uint8_t event_count, uint16_t inst_w)
 /* One FE-C page 0x19 (Rev 5.0 Table 8-25), IN_USE, cadence 85. */
 static void fec_trainer_body(uint8_t *out, uint8_t event_count, uint16_t inst_w)
 {
-	out[0] = PROFILE_FEC_PAGE_TRAINER;
+	out[0] = RADIANT_PROFILE_FEC_PAGE_TRAINER;
 	out[1] = event_count;
 	out[2] = 0x55u;
 	out[3] = 0xE8u;
@@ -125,9 +125,9 @@ static void fec_trainer_body(uint8_t *out, uint8_t event_count, uint16_t inst_w)
 
 ZTEST(radiant_power_adapter, test_power_page_fields)
 {
-	struct profile_power_std p;
+	struct radiant_profile_power_std p;
 
-	zassert_equal(profile_power_decode_std(power_std_200w, &p), 0, NULL);
+	zassert_equal(radiant_profile_power_decode_std(power_std_200w, &p), 0, NULL);
 	zassert_equal(p.event_count, 5u, NULL);
 	zassert_equal(p.acc_power_w, 1000u, NULL);
 	zassert_equal(p.inst_power_w, 200u, NULL);
@@ -141,12 +141,12 @@ ZTEST(radiant_power_adapter, test_power_page_fields)
 ZTEST(radiant_power_adapter, test_power_page_sentinels_are_ff_not_zero)
 {
 	uint8_t body[8];
-	struct profile_power_std p;
+	struct radiant_profile_power_std p;
 
 	memcpy(body, power_std_200w, sizeof(body));
 	body[2] = 0xFFu;
 	body[3] = 0xFFu;
-	zassert_equal(profile_power_decode_std(body, &p), 0, NULL);
+	zassert_equal(radiant_profile_power_decode_std(body, &p), 0, NULL);
 	zassert_false(p.pedal_valid, NULL);
 	zassert_false(p.cadence_valid, NULL);
 
@@ -154,7 +154,7 @@ ZTEST(radiant_power_adapter, test_power_page_sentinels_are_ff_not_zero)
 	 * 0 % contribution from the instrumented pedal. */
 	body[2] = 0x00u;
 	body[3] = 0x00u;
-	zassert_equal(profile_power_decode_std(body, &p), 0, NULL);
+	zassert_equal(radiant_profile_power_decode_std(body, &p), 0, NULL);
 	zassert_true(p.cadence_valid, NULL);
 	zassert_equal(p.cadence_rpm, 0u, NULL);
 	zassert_true(p.pedal_valid, NULL);
@@ -164,14 +164,14 @@ ZTEST(radiant_power_adapter, test_power_page_sentinels_are_ff_not_zero)
 ZTEST(radiant_power_adapter, test_pedal_differentiation_bit)
 {
 	uint8_t body[8];
-	struct profile_power_std p;
+	struct radiant_profile_power_std p;
 
 	memcpy(body, power_std_200w, sizeof(body));
 	/* Rev 5.1 section 8.2.1: bit 7 set means bits 0-6 are the RIGHT
 	 * pedal's share. 0xB2 = 0x80 | 50. */
 	body[2] = 0xB2u;
 
-	zassert_equal(profile_power_decode_std(body, &p), 0, NULL);
+	zassert_equal(radiant_profile_power_decode_std(body, &p), 0, NULL);
 	zassert_true(p.pedal_valid, NULL);
 	zassert_true(p.pedal_right_known, NULL);
 	zassert_equal(p.pedal_percent, 50u);
@@ -180,29 +180,29 @@ ZTEST(radiant_power_adapter, test_pedal_differentiation_bit)
 ZTEST(radiant_power_adapter, test_power_decoder_declines_other_pages)
 {
 	uint8_t body[8];
-	struct profile_power_std p;
+	struct radiant_profile_power_std p;
 
 	memcpy(body, power_std_200w, sizeof(body));
-	body[0] = PROFILE_POWER_PAGE_CRANK_TORQUE;
-	zassert_equal(profile_power_decode_std(body, &p), -EINVAL);
+	body[0] = RADIANT_PROFILE_POWER_PAGE_CRANK_TORQUE;
+	zassert_equal(radiant_profile_power_decode_std(body, &p), -EINVAL);
 
-	zassert_equal(profile_power_decode_std(NULL, &p), -EINVAL, NULL);
-	zassert_equal(profile_power_decode_std(power_std_200w, NULL), -EINVAL,
+	zassert_equal(radiant_profile_power_decode_std(NULL, &p), -EINVAL, NULL);
+	zassert_equal(radiant_profile_power_decode_std(power_std_200w, NULL), -EINVAL,
 		      NULL);
 }
 
 ZTEST(radiant_power_adapter, test_power_encode_decode_round_trip)
 {
 	uint8_t body[8];
-	struct profile_power_std p;
+	struct radiant_profile_power_std p;
 
 	/* The encoder and the decoder were written from the same table by
 	 * different hands; this is the check that they read it the same way,
 	 * including the byte order of the two 16-bit fields. */
-	zassert_equal(profile_power_encode_std(200u, 0xB4u, 0u, 60000u, 4095u,
+	zassert_equal(radiant_profile_power_encode_std(200u, 0xB4u, 0u, 60000u, 4095u,
 					       body),
 		      0, NULL);
-	zassert_equal(profile_power_decode_std(body, &p), 0, NULL);
+	zassert_equal(radiant_profile_power_decode_std(body, &p), 0, NULL);
 	zassert_equal(p.event_count, 200u, NULL);
 	zassert_equal(p.acc_power_w, 60000u, NULL);
 	zassert_equal(p.inst_power_w, 4095u, NULL);
@@ -403,7 +403,7 @@ ZTEST(radiant_power_adapter, test_adapter_ignores_pages_it_does_not_decode)
 	uint32_t n;
 
 	memcpy(body, power_std_200w, sizeof(body));
-	body[0] = PROFILE_POWER_PAGE_WHEEL_TORQUE;
+	body[0] = RADIANT_PROFILE_POWER_PAGE_WHEEL_TORQUE;
 	n = radiant_power_adapter_decode(&adapter, PWR_SOURCE, body, 0u);
 	radiant_bridge_drain();
 	zassert_equal(n, 0u, NULL);
@@ -450,7 +450,7 @@ ZTEST(radiant_power_adapter, test_fec_general_page_posts_type_state_and_speed)
 	radiant_bridge_drain();
 	zassert_equal(n, 3u);
 
-	/* Byte 1 is 0x19 = 25, PROFILE_FEC_TYPE_TREADMILL's neighbour
+	/* Byte 1 is 0x19 = 25, RADIANT_PROFILE_FEC_TYPE_TREADMILL's neighbour
 	 * "trainer". Decoded since the codec landed and posted since
 	 * radiant_naming.c needed it: it is what names the endpoint
 	 * "Indoor Bike 51234 In Use" instead of a hex string. */
@@ -463,7 +463,7 @@ ZTEST(radiant_power_adapter, test_fec_general_page_posts_type_state_and_speed)
 	s = cap_field(RADIANT_POWER_FIELD_FEC_STATE);
 	zassert_not_null(s, NULL);
 	zassert_equal(s->field_type, RADIANT_FIELD_ENUM_GENERIC, NULL);
-	zassert_equal(s->raw, (int64_t)PROFILE_FEC_STATE_IN_USE, NULL);
+	zassert_equal(s->raw, (int64_t)RADIANT_PROFILE_FEC_STATE_IN_USE, NULL);
 	zassert_equal(s->flags, RADIANT_SAMPLE_ROTATED);
 
 	s = cap_field(RADIANT_POWER_FIELD_FEC_SPEED);
@@ -567,7 +567,7 @@ ZTEST(radiant_power_adapter, test_fec_invalid_power_posts_nothing_but_keeps_time
 
 	/* Table 8-25's 0xFFF: both power fields invalid. Nothing publishable. */
 	pwr_cap_n = 0u;
-	fec_trainer_body(body, 1u, PROFILE_FEC_INVALID_INST_POWER);
+	fec_trainer_body(body, 1u, RADIANT_PROFILE_FEC_INVALID_INST_POWER);
 	n = radiant_power_adapter_decode_fec(&adapter, PWR_SOURCE, body,
 					     10u * US_PER_S);
 	radiant_bridge_drain();
@@ -602,7 +602,7 @@ ZTEST(radiant_power_adapter, test_fec_ignores_pages_it_does_not_decode)
 	uint32_t n;
 
 	/* Page 26 (0x1A), Specific Trainer Torque Data - a real page a real
-	 * trainer sends, deliberately not decoded (see profile_fec.h). */
+	 * trainer sends, deliberately not decoded (see radiant_profile_fec.h). */
 	memset(body, 0, sizeof(body));
 	body[0] = 0x1Au;
 	n = radiant_power_adapter_decode_fec(&adapter, PWR_SOURCE, body, 0u);

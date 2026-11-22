@@ -49,7 +49,7 @@ rsource "../common/Kconfig.ant_api"
 # session per flash operation, long after the gate has opened its own. With
 # `default 1` and D2 on, the gate's second session_open() took the slot NCS
 # had added for flash sync, every settings/NVS write then failed with
-# "mpsl_timeslot_session_open failed: -12" (-NRF_ENOMEM), node_ident_boot()
+# "mpsl_timeslot_session_open failed: -12" (-NRF_ENOMEM), radiant_node_ident_boot()
 # failed with it, and the node fell back to HRM_DEVICE_NUMBER 4242.
 # radiant_radio_nrf_gate_mpsl.c BUILD_ASSERTs this sum when flash sync is on.
 config MPSL_TIMESLOT_SESSION_COUNT
@@ -116,7 +116,7 @@ menuconfig HRM
 	default y
 	help
 	  A RadiANT NODE: radiant driving a master channel with
-	  radiant/src/profiles/profile_hr.c on top, broadcasting ANT+ heart rate
+	  radiant/src/profiles/radiant_profile_hr.c on top, broadcasting ANT+ heart rate
 	  (device type 0x78). No USB and no serial bridge - this is not a
 	  dongle, and the only host interface is the log.
 
@@ -134,7 +134,7 @@ config HRM_DEVICE_NUMBER
 	range 1 65535
 	default 4242
 	help
-	  Used only when node_ident_boot() fails - no entropy backend to make
+	  Used only when radiant_node_ident_boot() fails - no entropy backend to make
 	  K_dev from, a storage error, an exhausted boot counter - and the boot
 	  log then says so at error level. Normally the node generates K_dev on
 	  its first boot (ADR 0020) and takes its device number from the
@@ -214,7 +214,7 @@ config HRM_SENSOR_CUSTOM
 	  calls hrm_sensor_register() before main()'s hrm_sensor_start(), from a
 	  SYS_INIT() or from a driver's own init hook.
 
-	  If it does not, the node transmits PROFILE_HR_INVALID_BPM forever and
+	  If it does not, the node transmits RADIANT_PROFILE_HR_INVALID_BPM forever and
 	  logs an error at boot. That is the CORRECT failure and it is
 	  deliberately NOT a fallback to the simulator: a strap that quietly
 	  reports 72 bpm from a simulator on a real chest is a worse outcome
@@ -234,7 +234,7 @@ config HRM_SENSOR_SIM_BPM
 	  implementation of the seam. A custom driver has a real heart to read;
 	  a rate setting means nothing to it.
 
-	  30..220 is the range profile_hr's page 0 can represent as a computed
+	  30..220 is the range radiant_profile_hr's page 0 can represent as a computed
 	  value and that a receiver will believe. Note that the byte is not
 	  clamped at 255 as a sentinel: on this profile 0 means "no reading" and
 	  0xFF is a real 255 bpm.

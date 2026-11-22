@@ -1,0 +1,612 @@
+﻿/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * radiant_profile_command.c - response slots and the reliable-command state machine.
+ *
+ * Provenance: docs/radiant-telemetry.md section 9 and section 6's schedule
+ * block, this project's own written specification, authored in advance of any
+ * code. No ANT+ device profile document was read for this file,
+ * no sdk-ant source was consulted, and nothing here derives from libant.a. See
+ * docs/decisions/0002-clean-room-policy.md. The argument for every decision is
+ * in radiant_profile_command.h.
+ *
+ * The order of on_command() is section 9's order and must stay that way: tag,
+ * then duplicate, then window, then execute. Checking the window before the
+ * tag, for instance, turns the accept window into a free oracle for which
+ * sequence numbers are live. The extended sequence the tag is checked under
+ * is inferred before rule 1, but only from public state (last_ext and the
+ * wire's seq), so it answers nothing an observer could not compute.
+ */
+
+#include <errno.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
+
+#include "radiant_profile_command.h"
+
+/* ---------------------------------------------------------------------------
+ * The control-channel convention
+ * ---------------------------------------------------------------------------
+ */
+
+uint8_t radiant_profile_cmd_tag_bytes(enum radiant_frame_cfg cfg)
+{
+	return (cfg == RADIANT_FRAME_CFG_LR) ? (uint8_t)RADIANT_PROFILE_TLM_CMD_TAG_LR
+					     : (uint8_t)RADIANT_PROFILE_TLM_CMD_TAG_STD;
+}
+
+int radiant_profile_cmd_channel_check(const struct radiant_profile_schedule *s,
+			      enum radiant_frame_cfg cfg)
+{
+	if (s == NULL) {
+		return -EINVAL;
+	}
+
+	/* Third leg (besides radiant_profile_sched_check()'s announcement check):
+	 * announced coding vs. what the radio was actually handed. */
+	if (cfg == RADIANT_FRAME_CFG_LR) {
+		if (s->coding != RADIANT_PROFILE_CMD_CTRL_CODING) {
+			return -EINVAL;
+		}
+	} else if (s->coding != RADIANT_PROFILE_SCHED_CODING_NONE) {
+		return -EINVAL;
+	}
+
+	if (s->dl_interval == 0u) {
+		return -ENOENT;
+	}
+
+	return 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * Lifecycle
+ * ---------------------------------------------------------------------------
+ */
+
+static bool tag_len_ok(uint8_t tag_len)
+{
+	return tag_len == (uint8_t)RADIANT_PROFILE_TLM_CMD_TAG_STD ||
+	       tag_len == (uint8_t)RADIANT_PROFILE_TLM_CMD_TAG_LR;
+}
+
+int radiant_profile_cmd_init(struct radiant_profile_cmd_node *n, const struct radiant_profile_cmd_cfg *cfg)
+{
+	if (n == NULL || cfg == NULL) {
+		return -EINVAL;
+	}
+	if (!tag_len_ok(cfg->tag_len) || cfg->execute == NULL) {
+		return -EINVAL;
+	}
+
+	memset(n, 0, sizeof(*n));
+	n->cfg = *cfg;
+	return 0;
+}
+
+int radiant_profile_cmd_set_epoch(struct radiant_profile_cmd_node *n, uint32_t epoch)
+{
+	if (n == NULL) {
+		return -EINVAL;
+	}
+
+	/* The epoch is a u32 that never wraps (docs/radiant-security.md
+	 * 3.5). Rollback would re-validate every tag the older epoch made;
+	 * the same epoch again is a setter retry and must keep the history
+	 * that stops a replay (security review 2026-11-20, item 3). */
+	if (epoch < n->cfg.epoch) {
+		return -EINVAL;
+	}
+	if (epoch == n->cfg.epoch) {
+		return 0;
+	}
+
+	n->cfg.epoch = epoch;
+	/* See the header: a sequence number is meaningless outside the epoch
+	 * whose key authenticated it. */
+	n->seq_known = false;
+	n->stored_valid = false;
+	n->last_ext = 0u;
+	return 0;
+}
+
+const struct radiant_profile_cmd_stats *radiant_profile_cmd_stats(const struct radiant_profile_cmd_node *n)
+{
+	return (n == NULL) ? NULL : &n->stats;
+}
+
+/* ---------------------------------------------------------------------------
+ * The tag
+ * ---------------------------------------------------------------------------
+ */
+
+int radiant_profile_cmd_tag_ext(const struct radiant_profile_cmd_node *n, const uint8_t *body,
+			uint16_t ext, uint8_t *tag)
+{
+#if defined(CONFIG_RADIANT_SEC)
+	struct radiant_sec_cmac_ctx ctx;
+	struct radiant_sec_key k_cmd;
+	uint8_t nonce[RADIANT_SEC_BLOCK_BYTES];
+	uint8_t full[RADIANT_SEC_BLOCK_BYTES];
+	int rc;
+
+	if (n == NULL || body == NULL || tag == NULL ||
+	    (uint8_t)ext != body[1]) {
+		return -EINVAL;
+	}
+	if (n->cfg.k_root == NULL) {
+		return -EACCES;
+	}
+
+	/* K_cmd derived per call, destroyed before returning: a cached subkey
+	 * would outlive the epoch it was bound to, and the epoch is the whole
+	 * replay defence here. */
+	rc = radiant_sec_kdf(n->cfg.k_root, RADIANT_SEC_LABEL_CMD, n->cfg.epoch,
+			     n->cfg.devnum, &k_cmd);
+	if (rc != RADIANT_SEC_OK) {
+		return -EIO;
+	}
+
+	/* The EXTENDED sequence rides the nonce, so two pages differing only
+	 * in sequence never share a MAC block - including two whose wire
+	 * byte is the same a lap apart. For ext < 256 this is the eight-bit
+	 * nonce it replaced, byte for byte. */
+	radiant_sec_nonce_block(nonce, n->cfg.epoch, n->cfg.devnum, ext,
+				RADIANT_SEC_DOM_TLM_CMD);
+
+	rc = radiant_sec_cmac_init(&ctx, &k_cmd);
+	if (rc == RADIANT_SEC_OK) {
+		rc = radiant_sec_cmac_update(&ctx, nonce, sizeof(nonce));
+	}
+	if (rc == RADIANT_SEC_OK) {
+		rc = radiant_sec_cmac_update(&ctx, body, RADIANT_PROFILE_TLM_CMD_COVERED);
+	}
+	if (rc == RADIANT_SEC_OK) {
+		rc = radiant_sec_cmac_final(&ctx, full);
+	}
+	radiant_sec_key_destroy(&k_cmd);
+	if (rc != RADIANT_SEC_OK) {
+		return -EIO;
+	}
+
+	/* Truncation is a prefix, matching every other truncated tag here. */
+	memcpy(tag, full, n->cfg.tag_len);
+	memset(full, 0, sizeof(full));
+	return 0;
+#else
+	(void)n;
+	(void)body;
+	(void)ext;
+	(void)tag;
+	/* Never OK with an untouched buffer. See the header. */
+	return -ENOTSUP;
+#endif
+}
+
+int radiant_profile_cmd_tag(const struct radiant_profile_cmd_node *n, const uint8_t *body,
+		    uint8_t *tag)
+{
+	return radiant_profile_cmd_tag_ext(n, body, (body == NULL) ? 0u : body[1], tag);
+}
+
+bool radiant_profile_cmd_tag_ok_ext(const struct radiant_profile_cmd_node *n,
+			    const uint8_t *body, uint16_t ext,
+			    const uint8_t *tag)
+{
+	uint8_t want[RADIANT_PROFILE_TLM_CMD_TAG_LR];
+	uint8_t diff = 0u;
+	uint8_t i;
+
+	if (n == NULL || body == NULL || tag == NULL) {
+		return false;
+	}
+	if (radiant_profile_cmd_tag_ext(n, body, ext, want) != 0) {
+		return false;
+	}
+
+	/* Constant time over the configured width: an early return would leak
+	 * how much of a forged tag was right. */
+	for (i = 0u; i < n->cfg.tag_len; i++) {
+		diff |= (uint8_t)(want[i] ^ tag[i]);
+	}
+	memset(want, 0, sizeof(want));
+	return diff == 0u;
+}
+
+bool radiant_profile_cmd_tag_ok(const struct radiant_profile_cmd_node *n, const uint8_t *body,
+			const uint8_t *tag)
+{
+	return radiant_profile_cmd_tag_ok_ext(n, body, (body == NULL) ? 0u : body[1],
+				      tag);
+}
+
+/* ---------------------------------------------------------------------------
+ * The backoff
+ * ---------------------------------------------------------------------------
+ */
+
+static void backoff_note_failure(struct radiant_profile_cmd_node *n, radiant_time_t now)
+{
+	uint32_t shift;
+
+	if (n->fails < 0xFFu) {
+		n->fails++;
+	}
+	shift = (uint32_t)(n->fails - 1u);
+	if (shift > RADIANT_PROFILE_CMD_BACKOFF_SHIFT_MAX) {
+		shift = RADIANT_PROFILE_CMD_BACKOFF_SHIFT_MAX;
+	}
+	n->blocked_until = now + (radiant_time_t)((uint64_t)RADIANT_PROFILE_CMD_BACKOFF_BASE_US
+						  << shift);
+}
+
+static void backoff_clear(struct radiant_profile_cmd_node *n)
+{
+	n->fails = 0u;
+	n->blocked_until = 0u;
+}
+
+/* After any authenticated answer, at least RADIANT_PROFILE_CMD_RETRY_WINDOWS windows
+ * stay open: expect_left is raised to that count, never added to. Adding let
+ * one recorded command bank windows without bound (each replay spends one
+ * window and buys two). Raising keeps a retry of a retry working, penalty or
+ * not, and never takes away windows bought with radiant_profile_cmd_expect(). */
+static void retry_windows_top_up(struct radiant_profile_cmd_node *n)
+{
+	if (n->expect_left < RADIANT_PROFILE_CMD_RETRY_WINDOWS) {
+		n->expect_left = RADIANT_PROFILE_CMD_RETRY_WINDOWS;
+	}
+}
+
+/* ---------------------------------------------------------------------------
+ * The state machine - section 9's five rules, in section 9's order
+ * ---------------------------------------------------------------------------
+ */
+
+/* Unsigned difference on a counter that wraps at 256, so a window near the
+ * wrap behaves the same as one anywhere else. */
+static uint8_t delta_u8(uint8_t seq, uint8_t last)
+{
+	return (uint8_t)(seq - last);
+}
+
+/* The wire's eight bits, extended against last_ext (radiant_profile_command.h,
+ * RADIANT_PROFILE_CMD_EXT_LAST): d in 1..127 ahead, 0 duplicate, 128..255 behind by
+ * 256 - d. Before adoption the sender is at an epoch's start, so ext = seq.
+ * A behind that would go below zero (last_ext < 256 - d <= 128) can only be
+ * the first lap, where last_ext + d is the seq itself and below 256, so it
+ * cannot overflow; an ahead keeps last_ext + d (d <= 127) inside 16 bits
+ * because last_ext <= RADIANT_PROFILE_CMD_EXT_LAST. */
+static uint16_t ext_of(const struct radiant_profile_cmd_node *n, uint8_t seq)
+{
+	uint8_t d = delta_u8(seq, (uint8_t)n->last_ext);
+
+	if (!n->seq_known) {
+		return seq;
+	}
+	if (d == 0u) {
+		return n->last_ext;
+	}
+	if (d <= RADIANT_PROFILE_CMD_ACCEPT_WINDOW || n->last_ext < (uint16_t)(256u - d)) {
+		return (uint16_t)(n->last_ext + d);
+	}
+	return (uint16_t)(n->last_ext - (256u - d));
+}
+
+/* `ext` is the command's: the ack is tagged under the same extended
+ * sequence, so an earlier lap's ack cannot answer a later command. */
+static int emit_ack(struct radiant_profile_cmd_node *n,
+		    const struct radiant_profile_command_ack *a, uint16_t ext,
+		    uint8_t *ack, size_t ack_cap)
+{
+	uint8_t body[RADIANT_PROFILE_TLM_CMD_LEN_LR];
+	uint8_t tag[RADIANT_PROFILE_TLM_CMD_TAG_LR];
+	int rc;
+
+	/* Zero tag lays out covered bytes first; overwritten below and never
+	 * reaches the air. */
+	memset(tag, 0, sizeof(tag));
+	rc = radiant_profile_command_ack_encode_tag(a, tag, n->cfg.tag_len, body,
+					    sizeof(body));
+	if (rc < 0) {
+		return rc;
+	}
+
+	if (radiant_profile_cmd_tag_ext(n, body, ext, tag) != 0) {
+		return -EACCES;
+	}
+	rc = radiant_profile_command_ack_encode_tag(a, tag, n->cfg.tag_len, body,
+					    sizeof(body));
+	if (rc < 0) {
+		return rc;
+	}
+	if (ack_cap < (size_t)rc) {
+		return -EINVAL;
+	}
+	memcpy(ack, body, (size_t)rc);
+	return rc;
+}
+
+int radiant_profile_cmd_on_command(struct radiant_profile_cmd_node *n, const uint8_t *body,
+			   uint8_t len, radiant_time_t now, uint8_t *ack,
+			   size_t ack_cap)
+{
+	struct radiant_profile_command c;
+	struct radiant_profile_command_ack a;
+	uint8_t tag[RADIANT_PROFILE_TLM_CMD_TAG_LR];
+	uint8_t result;
+	uint16_t value = 0u;
+	uint16_t ext;
+	int rc;
+
+	if (n == NULL || body == NULL || ack == NULL) {
+		return -EINVAL;
+	}
+	if (len != (uint8_t)(RADIANT_PROFILE_TLM_CMD_COVERED + n->cfg.tag_len)) {
+		/* Wrong width = wrong channel, not malformed; refuse rather
+		 * than verify a truncated tag. */
+		return -EINVAL;
+	}
+
+	rc = radiant_profile_command_decode_tag(body, len, &c, tag, sizeof(tag));
+	if (rc < 0) {
+		return rc;
+	}
+
+	/* Counted before any verdict: this answers "did a response slot catch
+	 * this", not "was it legitimate". */
+	if (n->armed_close != 0u && now >= n->armed_open && now <= n->armed_close) {
+		n->stats.window_hits++;
+	}
+
+	/* Throttle sits in front of verification itself - verifying first and
+	 * declining to answer would still spend a CMAC per forged packet; on
+	 * a coin cell that's the cost, not airtime. */
+	if (n->fails != 0u && now < n->blocked_until) {
+		n->stats.throttled++;
+		return 0;
+	}
+
+	/* --- Rule 1: verify the tag first, under the inferred ext. --------
+	 * A failure changes no protocol state (not last_ext, not the stored
+	 * ack) - only the backoff counter moves.
+	 */
+	ext = ext_of(n, c.seq);
+	if (!radiant_profile_cmd_tag_ok_ext(n, body, ext, tag)) {
+		bool first = (n->fails == 0u);
+
+		n->stats.bad_tag++;
+		backoff_note_failure(n, now);
+		if (!first) {
+			return 0;
+		}
+
+		memset(&a, 0, sizeof(a));
+		a.seq = c.seq;
+		a.result = RADIANT_PROFILE_TLM_RESULT_BAD_TAG;
+		a.cmd = c.cmd;
+		a.value = 0u;
+		return emit_ack(n, &a, ext, ack, ack_cap);
+	}
+
+	/* A genuine tag is not yet a success. The duplicate and the 0x02 below
+	 * answer commands anyone can record off air, so the ladder clears only
+	 * where a fresh sequence is accepted (security review 2026-11-20
+	 * item 4). */
+
+	/* --- Rule 2: a duplicate executes nothing. -------------------------
+	 * Re-sends the stored content but reports 0x01 (already executed)
+	 * where the stored result was 0x00 (accepted) - otherwise 0x01 would
+	 * be unreachable in the result table. A stored REJECTION is repeated
+	 * verbatim instead: reporting "already executed" for an effect that
+	 * never ran would be a lie. Tag is recomputed either way since it
+	 * covers the result.
+	 */
+	if (n->seq_known && ext == n->last_ext && n->stored_valid) {
+		a = n->stored;
+		if (a.result == RADIANT_PROFILE_TLM_RESULT_OK) {
+			a.result = RADIANT_PROFILE_TLM_RESULT_ALREADY;
+		}
+		n->stats.repeats++;
+		retry_windows_top_up(n);
+		return emit_ack(n, &a, ext, ack, ack_cap);
+	}
+
+	/* --- Rules 3 and 4: the accept window, and adoption from nothing. ---
+	 * Rule 4 is safe because the tag check above already excludes a
+	 * command captured in a previous epoch. Outside the window, or past
+	 * the last ext an epoch may use, the answer is 0x02 and nothing moves.
+	 */
+	result = RADIANT_PROFILE_TLM_RESULT_OK;
+	if (n->seq_known && (ext <= n->last_ext ||
+			     ext - n->last_ext > RADIANT_PROFILE_CMD_ACCEPT_WINDOW)) {
+		n->stats.bad_seq++;
+		result = RADIANT_PROFILE_TLM_RESULT_BAD_SEQ;
+	} else if (ext > RADIANT_PROFILE_CMD_EXT_LAST) {
+		n->stats.seq_exhausted++;
+		result = RADIANT_PROFILE_TLM_RESULT_BAD_SEQ;
+	}
+	if (result != RADIANT_PROFILE_TLM_RESULT_OK) {
+		memset(&a, 0, sizeof(a));
+		a.seq = c.seq;
+		a.result = result;
+		a.cmd = c.cmd;
+		retry_windows_top_up(n);
+		return emit_ack(n, &a, ext, ack, ack_cap);
+	}
+	backoff_clear(n);
+	if (!n->seq_known) {
+		n->stats.adopted++;
+	}
+
+	result = n->cfg.execute(c.cmd, c.target, c.arg, &value, n->cfg.user);
+	if (result == RADIANT_PROFILE_TLM_RESULT_OK) {
+		n->stats.executed++;
+	} else {
+		n->stats.rejected++;
+	}
+
+	memset(&a, 0, sizeof(a));
+	a.seq = c.seq;
+	a.result = result;
+	a.cmd = c.cmd;
+	a.value = value;
+
+	/* Sequence advances on any answer, accepted or refused - storing only
+	 * successes would make a refused command retry forever. */
+	n->last_ext = ext;
+	n->seq_known = true;
+	n->stored = a;
+	n->stored_valid = true;
+
+	retry_windows_top_up(n);
+	return emit_ack(n, &a, ext, ack, ack_cap);
+}
+
+/* ---------------------------------------------------------------------------
+ * The response slot
+ * ---------------------------------------------------------------------------
+ */
+
+int radiant_profile_cmd_window_set(struct radiant_profile_cmd_node *n,
+			   const struct radiant_profile_schedule *s,
+			   radiant_time_t anchor, bool lr_phy, uint16_t clk_ppm)
+{
+	struct radiant_profile_schedule worst;
+	uint32_t counts;
+	int rc;
+
+	if (n == NULL || s == NULL) {
+		return -EINVAL;
+	}
+	counts = radiant_profile_sched_interval_counts(s);
+	if (counts == 0u) {
+		return -ENOENT;
+	}
+
+	/* Worst-case check radiant_profile_sched_rephase() cannot make: dwell must
+	 * cover twice the drift accumulated at the largest phase in the
+	 * interval, so a node that passes here can be re-phased to anything. */
+	worst = *s;
+	worst.dl_phase = (uint16_t)(counts - 1u);
+	rc = radiant_profile_sched_check(&worst, lr_phy, clk_ppm);
+	if (rc != 0) {
+		return rc;
+	}
+
+	n->sched = *s;
+	n->anchor = anchor;
+	n->have_window = true;
+	return 0;
+}
+
+void radiant_profile_cmd_expect(struct radiant_profile_cmd_node *n, uint32_t windows)
+{
+	if (n == NULL || windows == 0u) {
+		return;
+	}
+	if (n->expect_left > (UINT32_MAX - windows)) {
+		n->expect_left = UINT32_MAX;
+	} else {
+		n->expect_left += windows;
+	}
+}
+
+radiant_time_t radiant_profile_cmd_next_window(const struct radiant_profile_cmd_node *n,
+				       radiant_time_t now)
+{
+	struct radiant_profile_schedule at;
+	int32_t phase;
+
+	if (n == NULL || !n->have_window) {
+		return RADIANT_TIME_NEVER;
+	}
+
+	/* Reuses the announcing arithmetic rather than repeating it: the phase
+	 * from `now` IS the offset to the next window. */
+	phase = radiant_profile_sched_phase_for(&n->sched, n->anchor, now);
+	if (phase < 0) {
+		return RADIANT_TIME_NEVER;
+	}
+
+	/* Going through listen_at() rather than converting counts here keeps
+	 * the node's grid and the receiver's the same arithmetic. */
+	at = n->sched;
+	at.dl_phase = (uint16_t)phase;
+	return radiant_profile_sched_listen_at(&at, now, 0u);
+}
+
+int radiant_profile_cmd_arm_listen(struct radiant_profile_cmd_node *n, radiant_time_t now)
+{
+	struct radiant_sched_rx rx;
+	radiant_time_t open_at;
+	uint32_t dwell;
+	int rc;
+
+	if (n == NULL) {
+		return -EINVAL;
+	}
+	if (!n->have_window) {
+		return -ENOENT;
+	}
+	if (n->expect_left == 0u) {
+		/* Ordinary case: nothing expected, radio stays off. */
+		return -EAGAIN;
+	}
+	if (n->cfg.slot.fmt == NULL || n->cfg.slot.filters == NULL ||
+	    n->cfg.slot.n_filters == 0u) {
+		return -EINVAL;
+	}
+
+	open_at = radiant_profile_cmd_next_window(n, now);
+	if (open_at == RADIANT_TIME_NEVER) {
+		return -ENOENT;
+	}
+	dwell = radiant_profile_sched_dwell_us(n->sched.dl_dwell);
+	if (dwell == 0u) {
+		return -EINVAL;
+	}
+
+	memset(&rx, 0, sizeof(rx));
+	rx.fmt = n->cfg.slot.fmt;
+	rx.rf_index = n->cfg.slot.rf_index;
+	rx.filters = n->cfg.slot.filters;
+	rx.n_filters = n->cfg.slot.n_filters;
+	rx.t_open = open_at;
+	rx.t_close = open_at + (radiant_time_t)dwell;
+	/* One command per window; a second frame in the same dwell is either
+	 * a duplicate (rule 2 handles it next window) or other traffic. */
+	rx.stop_on_first = true;
+
+	rc = radiant_sched_request_rx(n->cfg.slot.ch, &rx);
+	if (rc != 0) {
+		return rc;
+	}
+
+	n->expect_left--;
+	n->armed_open = rx.t_open;
+	n->armed_close = rx.t_close;
+	n->stats.windows++;
+	return 0;
+}
+
+int32_t radiant_profile_cmd_sched_phase(radiant_time_t t_sync, void *user)
+{
+	struct radiant_profile_cmd_node *n = (struct radiant_profile_cmd_node *)user;
+
+	if (n == NULL || !n->have_window) {
+		return -1;
+	}
+	return radiant_profile_sched_phase_for(&n->sched, n->anchor, t_sync);
+}
+
+void radiant_profile_cmd_downlink(struct radiant_profile_cmd_node *n,
+			  struct radiant_profile_sched_downlink *out)
+{
+	if (out == NULL) {
+		return;
+	}
+	out->phase = radiant_profile_cmd_sched_phase;
+	out->user = n;
+}

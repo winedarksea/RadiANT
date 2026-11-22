@@ -1,13 +1,13 @@
 /*
  * SPDX-License-Identifier: Apache-2.0
  *
- * Provenance: original clean-room work against src/profiles/profile_fec.h/.c,
+ * Provenance: original clean-room work against src/profiles/radiant_profile_fec.h/.c,
  * which transcribes D000001231 "ANT+ Device Profile - Fitness Equipment"
  * Rev 5.0. Every vector below is hand-computed from a named table in that
  * document, and the comment on each says which - a vector produced by running
  * the decoder would only prove the decoder agrees with itself.
  *
- * What earns a case here is the four traps profile_fec.h names, because each
+ * What earns a case here is the four traps radiant_profile_fec.h names, because each
  * has a plausible wrong reading that produces a legal-looking number:
  * the state nibble inside a nibble (Table 8-10), the 0xFFF instantaneous power
  * that also condemns the accumulator (Table 8-25), distance being gated by an
@@ -23,7 +23,7 @@
 #include <zephyr/toolchain.h>
 #include <zephyr/ztest.h>
 
-#include "profile_fec.h"
+#include "radiant_profile_fec.h"
 
 /*
  * Table 8-7, a trainer mid-workout:
@@ -57,14 +57,14 @@ static const uint8_t fec_trainer_200w[8] = {
 	0x19u, 0x07u, 0x55u, 0xE8u, 0x03u, 0xC8u, 0x00u, 0x30u
 };
 
-ZTEST(profile_fec, test_general_page_fields)
+ZTEST(radiant_profile_fec, test_general_page_fields)
 {
-	struct profile_fec_general g;
+	struct radiant_profile_fec_general g;
 
-	zassert_equal(profile_fec_decode_general(fec_general_in_use, &g), 0,
+	zassert_equal(radiant_profile_fec_decode_general(fec_general_in_use, &g), 0,
 		      NULL);
 
-	zassert_equal(g.equipment_type, PROFILE_FEC_TYPE_TRAINER, NULL);
+	zassert_equal(g.equipment_type, RADIANT_PROFILE_FEC_TYPE_TRAINER, NULL);
 	zassert_equal(g.elapsed_time_qs, 40u);
 	zassert_equal(g.distance_m, 100u, NULL);
 	zassert_true(g.distance_valid);
@@ -73,15 +73,15 @@ ZTEST(profile_fec, test_general_page_fields)
 	zassert_false(g.speed_virtual, NULL);
 	zassert_equal(g.heart_rate_bpm, 80u, NULL);
 	zassert_true(g.heart_rate_valid, NULL);
-	zassert_equal(g.hr_source, PROFILE_FEC_HR_SRC_ANTPLUS, NULL);
-	zassert_equal(g.state, PROFILE_FEC_STATE_IN_USE, NULL);
+	zassert_equal(g.hr_source, RADIANT_PROFILE_FEC_HR_SRC_ANTPLUS, NULL);
+	zassert_equal(g.state, RADIANT_PROFILE_FEC_STATE_IN_USE, NULL);
 	zassert_false(g.lap_toggle, NULL);
 }
 
-ZTEST(profile_fec, test_equipment_type_reserved_bits_are_masked)
+ZTEST(radiant_profile_fec, test_equipment_type_reserved_bits_are_masked)
 {
 	uint8_t body[8];
-	struct profile_fec_general g;
+	struct radiant_profile_fec_general g;
 
 	memcpy(body, fec_general_in_use, sizeof(body));
 	/* Table 8-8: bits 5-7 are "Do Not Interpret". Setting all three must
@@ -89,14 +89,14 @@ ZTEST(profile_fec, test_equipment_type_reserved_bits_are_masked)
 	 * 0xF9 = 249 and match no defined equipment. */
 	body[1] = (uint8_t)(0x19u | 0xE0u);
 
-	zassert_equal(profile_fec_decode_general(body, &g), 0, NULL);
-	zassert_equal(g.equipment_type, PROFILE_FEC_TYPE_TRAINER, NULL);
+	zassert_equal(radiant_profile_fec_decode_general(body, &g), 0, NULL);
+	zassert_equal(g.equipment_type, RADIANT_PROFILE_FEC_TYPE_TRAINER, NULL);
 }
 
-ZTEST(profile_fec, test_lap_toggle_is_bit_3_of_the_state_nibble)
+ZTEST(radiant_profile_fec, test_lap_toggle_is_bit_3_of_the_state_nibble)
 {
 	uint8_t body[8];
-	struct profile_fec_general g;
+	struct radiant_profile_fec_general g;
 
 	memcpy(body, fec_general_in_use, sizeof(body));
 	/* Table 8-10: within byte 7's high nibble, bits 0-2 are the state and
@@ -105,22 +105,22 @@ ZTEST(profile_fec, test_lap_toggle_is_bit_3_of_the_state_nibble)
 	 * state would read 11, which is reserved. */
 	body[7] = 0xB5u;
 
-	zassert_equal(profile_fec_decode_general(body, &g), 0, NULL);
-	zassert_equal(g.state, PROFILE_FEC_STATE_IN_USE);
+	zassert_equal(radiant_profile_fec_decode_general(body, &g), 0, NULL);
+	zassert_equal(g.state, RADIANT_PROFILE_FEC_STATE_IN_USE);
 	zassert_true(g.lap_toggle, NULL);
 }
 
-ZTEST(profile_fec, test_general_page_instantaneous_sentinels)
+ZTEST(radiant_profile_fec, test_general_page_instantaneous_sentinels)
 {
 	uint8_t body[8];
-	struct profile_fec_general g;
+	struct radiant_profile_fec_general g;
 
 	memcpy(body, fec_general_in_use, sizeof(body));
 	body[4] = 0xFFu; /* Table 8-7: 0xFFFF speed is invalid */
 	body[5] = 0xFFu;
 	body[6] = 0xFFu; /* 0xFF heart rate is invalid */
 
-	zassert_equal(profile_fec_decode_general(body, &g), 0, NULL);
+	zassert_equal(radiant_profile_fec_decode_general(body, &g), 0, NULL);
 	zassert_false(g.speed_valid, NULL);
 	zassert_false(g.heart_rate_valid, NULL);
 	/* Still a legal distance and a legal elapsed time - the sentinels are
@@ -129,45 +129,45 @@ ZTEST(profile_fec, test_general_page_instantaneous_sentinels)
 	zassert_equal(g.distance_m, 100u, NULL);
 }
 
-ZTEST(profile_fec, test_distance_is_gated_by_a_bit_not_a_sentinel)
+ZTEST(radiant_profile_fec, test_distance_is_gated_by_a_bit_not_a_sentinel)
 {
 	uint8_t body[8];
-	struct profile_fec_general g;
+	struct radiant_profile_fec_general g;
 
 	memcpy(body, fec_general_in_use, sizeof(body));
 	body[3] = 0xFFu;             /* 255 m: a real distance, per 8.5.2.3 */
 	body[7] = 0x31u;             /* caps 0x1: distance-enabled bit CLEAR */
 
-	zassert_equal(profile_fec_decode_general(body, &g), 0, NULL);
+	zassert_equal(radiant_profile_fec_decode_general(body, &g), 0, NULL);
 	zassert_false(g.distance_valid);
 
 	/* And the mirror image: 255 with the bit set is 255 metres, not
 	 * "absent". This is the reading a sentinel habit gets wrong. */
 	body[7] = 0x35u;
-	zassert_equal(profile_fec_decode_general(body, &g), 0, NULL);
+	zassert_equal(radiant_profile_fec_decode_general(body, &g), 0, NULL);
 	zassert_true(g.distance_valid, NULL);
 	zassert_equal(g.distance_m, 255u, NULL);
 }
 
-ZTEST(profile_fec, test_virtual_speed_is_a_flag_on_a_valid_reading)
+ZTEST(radiant_profile_fec, test_virtual_speed_is_a_flag_on_a_valid_reading)
 {
 	uint8_t body[8];
-	struct profile_fec_general g;
+	struct radiant_profile_fec_general g;
 
 	memcpy(body, fec_general_in_use, sizeof(body));
 	body[7] = 0x3Du; /* caps 0xD = 0x5 | bit 3 (virtual speed) */
 
-	zassert_equal(profile_fec_decode_general(body, &g), 0, NULL);
+	zassert_equal(radiant_profile_fec_decode_general(body, &g), 0, NULL);
 	zassert_true(g.speed_valid);
 	zassert_true(g.speed_virtual, NULL);
 	zassert_equal(g.speed_mm_s, 5000u, NULL);
 }
 
-ZTEST(profile_fec, test_trainer_page_fields)
+ZTEST(radiant_profile_fec, test_trainer_page_fields)
 {
-	struct profile_fec_trainer t;
+	struct radiant_profile_fec_trainer t;
 
-	zassert_equal(profile_fec_decode_trainer(fec_trainer_200w, &t), 0, NULL);
+	zassert_equal(radiant_profile_fec_decode_trainer(fec_trainer_200w, &t), 0, NULL);
 
 	zassert_equal(t.event_count, 7u, NULL);
 	zassert_equal(t.cadence_rpm, 85u, NULL);
@@ -176,15 +176,15 @@ ZTEST(profile_fec, test_trainer_page_fields)
 	zassert_equal(t.inst_power_w, 200u);
 	zassert_true(t.power_valid, NULL);
 	zassert_equal(t.trainer_status, 0u, NULL);
-	zassert_equal(t.flags, PROFILE_FEC_TARGET_POWER_OK, NULL);
-	zassert_equal(t.state, PROFILE_FEC_STATE_IN_USE, NULL);
+	zassert_equal(t.flags, RADIANT_PROFILE_FEC_TARGET_POWER_OK, NULL);
+	zassert_equal(t.state, RADIANT_PROFILE_FEC_STATE_IN_USE, NULL);
 	zassert_false(t.lap_toggle, NULL);
 }
 
-ZTEST(profile_fec, test_trainer_power_uses_twelve_bits_across_two_bytes)
+ZTEST(radiant_profile_fec, test_trainer_power_uses_twelve_bits_across_two_bytes)
 {
 	uint8_t body[8];
-	struct profile_fec_trainer t;
+	struct radiant_profile_fec_trainer t;
 
 	memcpy(body, fec_trainer_200w, sizeof(body));
 	/* 4094 W, the field's maximum legal value per Table 8-25 (0xFFF is the
@@ -194,19 +194,19 @@ ZTEST(profile_fec, test_trainer_power_uses_twelve_bits_across_two_bytes)
 	body[5] = 0xFEu;
 	body[6] = 0x3Fu; /* status 0x3 = power cal + resistance cal required */
 
-	zassert_equal(profile_fec_decode_trainer(body, &t), 0, NULL);
+	zassert_equal(radiant_profile_fec_decode_trainer(body, &t), 0, NULL);
 	zassert_equal(t.inst_power_w, 4094u, NULL);
 	zassert_true(t.power_valid);
 	zassert_equal(t.trainer_status,
-		      PROFILE_FEC_TRAINER_STATUS_POWER_CAL |
-			      PROFILE_FEC_TRAINER_STATUS_RESISTANCE_CAL,
+		      RADIANT_PROFILE_FEC_TRAINER_STATUS_POWER_CAL |
+			      RADIANT_PROFILE_FEC_TRAINER_STATUS_RESISTANCE_CAL,
 		      NULL);
 }
 
-ZTEST(profile_fec, test_invalid_instantaneous_power_condemns_the_accumulator)
+ZTEST(radiant_profile_fec, test_invalid_instantaneous_power_condemns_the_accumulator)
 {
 	uint8_t body[8];
-	struct profile_fec_trainer t;
+	struct radiant_profile_fec_trainer t;
 
 	memcpy(body, fec_trainer_200w, sizeof(body));
 	/* Table 8-25: "0xFFF indicates BOTH the instantaneous and accumulated
@@ -215,53 +215,53 @@ ZTEST(profile_fec, test_invalid_instantaneous_power_condemns_the_accumulator)
 	body[5] = 0xFFu;
 	body[6] = 0x0Fu;
 
-	zassert_equal(profile_fec_decode_trainer(body, &t), 0, NULL);
+	zassert_equal(radiant_profile_fec_decode_trainer(body, &t), 0, NULL);
 	zassert_false(t.power_valid, NULL);
 	zassert_equal(t.acc_power_w, 1000u);
 }
 
-ZTEST(profile_fec, test_trainer_cadence_sentinel)
+ZTEST(radiant_profile_fec, test_trainer_cadence_sentinel)
 {
 	uint8_t body[8];
-	struct profile_fec_trainer t;
+	struct radiant_profile_fec_trainer t;
 
 	memcpy(body, fec_trainer_200w, sizeof(body));
 	body[2] = 0xFFu; /* section 8.6.7.2: cannot measure cadence */
 
-	zassert_equal(profile_fec_decode_trainer(body, &t), 0, NULL);
+	zassert_equal(radiant_profile_fec_decode_trainer(body, &t), 0, NULL);
 	zassert_false(t.cadence_valid, NULL);
 
 	/* Zero is NOT the sentinel - a stopped rider is a real 0 rpm. */
 	body[2] = 0x00u;
-	zassert_equal(profile_fec_decode_trainer(body, &t), 0, NULL);
+	zassert_equal(radiant_profile_fec_decode_trainer(body, &t), 0, NULL);
 	zassert_true(t.cadence_valid, NULL);
 	zassert_equal(t.cadence_rpm, 0u, NULL);
 }
 
-ZTEST(profile_fec, test_each_decoder_declines_the_other_page)
+ZTEST(radiant_profile_fec, test_each_decoder_declines_the_other_page)
 {
-	struct profile_fec_general g;
-	struct profile_fec_trainer t;
+	struct radiant_profile_fec_general g;
+	struct radiant_profile_fec_trainer t;
 
 	/* The pages carry different quantities at every offset, so decoding
 	 * one as the other would report a cadence as a distance. */
-	zassert_equal(profile_fec_decode_general(fec_trainer_200w, &g), -EINVAL,
+	zassert_equal(radiant_profile_fec_decode_general(fec_trainer_200w, &g), -EINVAL,
 		      NULL);
-	zassert_equal(profile_fec_decode_trainer(fec_general_in_use, &t),
+	zassert_equal(radiant_profile_fec_decode_trainer(fec_general_in_use, &t),
 		      -EINVAL, NULL);
 }
 
-ZTEST(profile_fec, test_null_arguments_are_declined)
+ZTEST(radiant_profile_fec, test_null_arguments_are_declined)
 {
-	struct profile_fec_general g;
-	struct profile_fec_trainer t;
+	struct radiant_profile_fec_general g;
+	struct radiant_profile_fec_trainer t;
 
-	zassert_equal(profile_fec_decode_general(NULL, &g), -EINVAL, NULL);
-	zassert_equal(profile_fec_decode_general(fec_general_in_use, NULL),
+	zassert_equal(radiant_profile_fec_decode_general(NULL, &g), -EINVAL, NULL);
+	zassert_equal(radiant_profile_fec_decode_general(fec_general_in_use, NULL),
 		      -EINVAL, NULL);
-	zassert_equal(profile_fec_decode_trainer(NULL, &t), -EINVAL, NULL);
-	zassert_equal(profile_fec_decode_trainer(fec_trainer_200w, NULL),
+	zassert_equal(radiant_profile_fec_decode_trainer(NULL, &t), -EINVAL, NULL);
+	zassert_equal(radiant_profile_fec_decode_trainer(fec_trainer_200w, NULL),
 		      -EINVAL, NULL);
 }
 
-ZTEST_SUITE(profile_fec, NULL, NULL, NULL, NULL, NULL);
+ZTEST_SUITE(radiant_profile_fec, NULL, NULL, NULL, NULL, NULL);

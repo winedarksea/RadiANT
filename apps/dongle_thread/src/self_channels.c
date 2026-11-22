@@ -130,7 +130,7 @@ struct self_profile {
 };
 
 static const struct self_profile self_profiles[] = {
-	/* PROFILE_HR_PERIOD, radiant/src/profiles/profile_hr.h: 8070 counts is
+	/* RADIANT_PROFILE_HR_PERIOD, radiant/src/profiles/radiant_profile_hr.h: 8070 counts is
 	 * ~4.06 Hz, the ANT+ heart rate profile's standard rate. (The profile
 	 * also defines 16140 and 32280 half/quarter rates; no strap on this
 	 * bench transmits at either, and every extra row costs the whole table
@@ -143,13 +143,13 @@ static const struct self_profile self_profiles[] = {
 	{ 0x78u, 8070u, SELF_SEARCH_TICKS_25_S, "heart rate" },
 
 #ifdef CONFIG_ANT_DONGLE_PROFILES_EXTRA
-	/* PROFILE_POWER_PERIOD, radiant/src/profiles/profile_power.h: 8182
+	/* RADIANT_PROFILE_POWER_PERIOD, radiant/src/profiles/radiant_profile_power.h: 8182
 	 * counts, ~4.005 Hz. Note it is NOT 8192 - the Bicycle Power profile is
 	 * one of the few that is not exactly 4 Hz, and a reader "tidying" this
 	 * to match its neighbours would silently delete power-meter support. */
 	{ 0x0Bu, 8182u, SELF_SEARCH_TICKS_25_S, "bicycle power" },
 
-	/* PROFILE_FEC_PERIOD, radiant/src/profiles/profile_fec.h: 8192 counts,
+	/* RADIANT_PROFILE_FEC_PERIOD, radiant/src/profiles/radiant_profile_fec.h: 8192 counts,
 	 * exactly 4 Hz, the one rate the Fitness Equipment profile defines.
 	 * This is the indoor-trainer path - the device type Zwift's own trainer
 	 * control speaks - and therefore the one that feeds "bike in use". */
@@ -159,8 +159,8 @@ static const struct self_profile self_profiles[] = {
 	 * Environment, device type 0x19. TWO ROWS, NOT ONE, AND THAT IS THE
 	 * WHOLE POINT.
 	 *
-	 * PROFILE_ENV_PERIOD_4_HZ (8192) and PROFILE_ENV_PERIOD_0P5_HZ (65535),
-	 * radiant/src/profiles/profile_env.h. The profile's section 5.1 permits
+	 * RADIANT_PROFILE_ENV_PERIOD_4_HZ (8192) and RADIANT_PROFILE_ENV_PERIOD_0P5_HZ (65535),
+	 * radiant/src/profiles/radiant_profile_env.h. The profile's section 5.1 permits
 	 * BOTH, and page 0's transmission-info field is where a sensor declares
 	 * which one it defaults to. The Garmin tempe - the ANT+ thermometer
 	 * anyone actually owns - is the 0.5 Hz one.
@@ -174,7 +174,7 @@ static const struct self_profile self_profiles[] = {
 	 * variant is a row, and costs one more step of the sweep rather than
 	 * any new mechanism.
 	 *
-	 * Both 0x19 rows get 45 s of search (PROFILE_ENV_SEARCH_TIMEOUT_S), not
+	 * Both 0x19 rows get 45 s of search (RADIANT_PROFILE_ENV_SEARCH_TIMEOUT_S), not
 	 * the ANT default 25 s; section 5.1 recommends that figure because at
 	 * one transmission every two seconds a 25 s window is a thin sample of
 	 * a slow master, and states it for the profile rather than one rate.

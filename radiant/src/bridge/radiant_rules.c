@@ -329,7 +329,7 @@ static void eval_zone(uint32_t source, const struct radiant_sample *s)
 
 	z->have_hr = true;
 	z->hr_bpm = (uint8_t)s->raw;
-	/* 0 is the profile's "no reading" (profile_hr.h), posted by the adapter
+	/* 0 is the profile's "no reading" (radiant_profile_hr.h), posted by the adapter
 	 * for liveness's sake. It satisfies neither threshold, so a contact
 	 * dropout clears both outputs after the dwell instead of asserting
 	 * AT_REST (review 2026-10-31, C2-2). */
@@ -366,7 +366,7 @@ static void eval_zone(uint32_t source, const struct radiant_sample *s)
  * include a profile header to learn: radiant_bridge.h's rule is that the
  * bridge sits strictly above the profile decoders and touches no ANT frame.
  * The one number it needs is the IN_USE code, spelled here with the citation
- * rather than by including src/profiles/profile_fec.h and dragging the whole
+ * rather than by including src/profiles/radiant_profile_fec.h and dragging the whole
  * page codec into the sample bus.
  *
  * 0 and 5..7 are reserved in Table 8-10 and are passed through by the decoder

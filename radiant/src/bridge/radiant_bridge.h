@@ -216,7 +216,7 @@ void radiant_bridge_reset(void);
 
 /* ---------------------------------------------------------------------------
  * Sinks. A sink is a registration, not a case in a switch (section 4) -
- * same callback-first-refusal shape as profile_sched.c's client seam, but
+ * same callback-first-refusal shape as radiant_profile_sched.c's client seam, but
  * N entries instead of one. STRUCT_SECTION_ITERABLE links every TU's
  * definition into one array with no central list to edit (as DEVICE_DEFINE
  * and SHELL_CMD_ARG_REGISTER do elsewhere in the tree).

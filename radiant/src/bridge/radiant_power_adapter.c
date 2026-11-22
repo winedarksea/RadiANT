@@ -6,8 +6,8 @@
 
 #include <string.h>
 
-#include "profile_fec.h"
-#include "profile_power.h"
+#include "radiant_profile_fec.h"
+#include "radiant_profile_power.h"
 #include "radiant_power_adapter.h"
 
 void radiant_power_adapter_init(struct radiant_power_adapter *a)
@@ -105,7 +105,7 @@ uint32_t radiant_power_adapter_decode(struct radiant_power_adapter *a,
 				      uint32_t source, const uint8_t body8[8],
 				      uint64_t t_us)
 {
-	struct profile_power_std p;
+	struct radiant_profile_power_std p;
 
 	if (a == NULL || body8 == NULL) {
 		return 0u;
@@ -114,7 +114,7 @@ uint32_t radiant_power_adapter_decode(struct radiant_power_adapter *a,
 	/* Every page other than 0x10 declines here, in the decoder, rather than
 	 * being filtered by a page test in this file: one implementation of
 	 * "is this that page" is one place for it to be wrong. */
-	if (profile_power_decode_std(body8, &p) != 0) {
+	if (radiant_profile_power_decode_std(body8, &p) != 0) {
 		return 0u;
 	}
 
@@ -127,7 +127,7 @@ uint32_t radiant_power_adapter_decode(struct radiant_power_adapter *a,
 }
 
 static uint32_t decode_fec_general(uint32_t source,
-				   const struct profile_fec_general *g,
+				   const struct radiant_profile_fec_general *g,
 				   uint64_t t_us)
 {
 	uint32_t n = 0u;
@@ -167,18 +167,18 @@ uint32_t radiant_power_adapter_decode_fec(struct radiant_power_adapter *a,
 					  uint32_t source,
 					  const uint8_t body8[8], uint64_t t_us)
 {
-	struct profile_fec_general g;
-	struct profile_fec_trainer tr;
+	struct radiant_profile_fec_general g;
+	struct radiant_profile_fec_trainer tr;
 
 	if (a == NULL || body8 == NULL) {
 		return 0u;
 	}
 
-	if (profile_fec_decode_general(body8, &g) == 0) {
+	if (radiant_profile_fec_decode_general(body8, &g) == 0) {
 		return decode_fec_general(source, &g, t_us);
 	}
 
-	if (profile_fec_decode_trainer(body8, &tr) == 0) {
+	if (radiant_profile_fec_decode_trainer(body8, &tr) == 0) {
 		if (!tr.power_valid) {
 			/*
 			 * Table 8-25's 0xFFF condemns the accumulator in bytes

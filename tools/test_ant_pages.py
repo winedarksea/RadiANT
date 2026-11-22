@@ -2492,7 +2492,7 @@ class TestTelemetryScheduleBlock(unittest.TestCase):
     def test_the_listen_window_is_relative_to_the_frame_that_carried_it(self):
         # Two receivers share no time base, so nothing absolute may cross the
         # air. The same rule the sync-handoff page's slot phase follows, and
-        # the same arithmetic profile_sched_listen_at() does in C.
+        # the same arithmetic radiant_profile_sched_listen_at() does in C.
         s = self.CANON_SCHED
         for t_carrier in (0, 1000000, 2 ** 31):
             with self.subTest(t_carrier=t_carrier):
@@ -2727,7 +2727,7 @@ class TestFrequencyMove(unittest.TestCase):
         while msgs < 4 * ap.TLM_FREQ_K_DEFAULT:
             after = msgs + 1
             # The last slot before the move is not announced - see
-            # profile_freq.c's claim().
+            # radiant_profile_freq.c's claim().
             if msgs % ap.TLM_FREQ_ANNOUNCE_EVERY == 0 and move_at > after:
                 _, move_at = ap.tlm_freq_countdown(move_at, after)
             msgs = after

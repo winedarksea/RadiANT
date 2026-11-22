@@ -16,8 +16,8 @@
  *
  * Real: every byte on air, every tag, every countdown, the beacon frame set,
  * the derived locator, policy resolution and every refusal - a genuine
- * profile_hr.c stream with profile_compat.c inserting pages, and receivers are
- * profile_private.c's own receiver half. Simulated: the radio (no channel is
+ * radiant_profile_hr.c stream with radiant_profile_compat.c inserting pages, and receivers are
+ * radiant_profile_private.c's own receiver half. Simulated: the radio (no channel is
  * opened) and the private channel's synthetic 8-byte bodies.
  *
  * The one modelled quantity is the retune cost: RETUNE_MSGS message periods,
@@ -35,11 +35,11 @@
 #include <radiant/radiant_channel.h>
 
 #include "fake_radio.h"
-#include "profile_common.h"
-#include "profile_compat.h"
-#include "profile_hr.h"
-#include "profile_private.h"
-#include "profile_sched.h"
+#include "radiant_profile_common.h"
+#include "radiant_profile_compat.h"
+#include "radiant_profile_hr.h"
+#include "radiant_profile_private.h"
+#include "radiant_profile_sched.h"
 
 #if defined(CONFIG_RADIANT_SEC_COMPAT)
 
@@ -89,14 +89,14 @@ static uint64_t period_us(uint16_t counts)
 
 static uint64_t at(uint32_t step)
 {
-	return T_ORIGIN + (uint64_t)step * period_us(PROFILE_HR_PERIOD);
+	return T_ORIGIN + (uint64_t)step * period_us(RADIANT_PROFILE_HR_PERIOD);
 }
 
 /* ── The node ───────────────────────────────────────────────────────────── */
 
-static struct profile_hr      g_hr;
-static struct profile_compat  g_pc;
-static struct profile_private g_pp;
+static struct radiant_profile_hr      g_hr;
+static struct radiant_profile_compat  g_pc;
+static struct radiant_profile_private g_pp;
 
 static uint32_t g_enter_calls;
 static uint32_t g_leave_calls;
@@ -163,7 +163,7 @@ static int policy_store(void *user, uint8_t policy)
 #define RETUNE_MSGS 1u
 
 struct follower {
-	struct profile_private_rx rx;
+	struct radiant_profile_private_rx rx;
 	bool     hears_announcements;  /* false models a receiver that missed
 					* every copy */
 	bool     retuning;
@@ -195,10 +195,10 @@ static uint32_t g_priv_msgs;
 static uint8_t  g_priv_cursor;
 
 /* A page number on device type 0x60 for the RETURN frames. THE ALLOCATION IS
- * DEFERRED - profile_enrol.h records the same deferral for the same six frames
+ * DEFERRED - radiant_profile_enrol.h records the same deferral for the same six frames
  * of a pairing set, because a page number in the telemetry envelope's own
  * namespace is an envelope change. This suite picks one so it can drive the
- * return countdown; nothing in profile_private.c depends on the value. */
+ * return countdown; nothing in radiant_profile_private.c depends on the value. */
 #define PRIVATE_PAGE 0x40u
 
 static bool g_log_enable;
@@ -238,10 +238,10 @@ static void deliver(struct follower *f, const uint8_t *body, uint64_t now,
 	}
 
 	if (announce_frame >= 0) {
-		rc = profile_private_rx_announce(&f->rx, (uint8_t)announce_frame,
+		rc = radiant_profile_private_rx_announce(&f->rx, (uint8_t)announce_frame,
 						 body, 8u, now);
 	} else {
-		rc = profile_private_rx_message(&f->rx, body, 8u, now);
+		rc = radiant_profile_private_rx_message(&f->rx, body, 8u, now);
 	}
 	if (rc == 1) {
 		f->announcements++;
@@ -255,8 +255,8 @@ static void deliver(struct follower *f, const uint8_t *body, uint64_t now,
 
 /*
  * One message of the node's life, on whichever channel it is on. The compat
- * half is a real profile_hr.c stream; the private half is synthetic (no radio)
- * but still drives profile_private_sent()/profile_private_frame(), so the
+ * half is a real radiant_profile_hr.c stream; the private half is synthetic (no radio)
+ * but still drives radiant_profile_private_sent()/radiant_profile_private_frame(), so the
  * countdown and tag logic are the shipped code either way.
  */
 static void step(void)
@@ -265,30 +265,30 @@ static void step(void)
 	uint8_t  body[8];
 	int      announce_frame = -1;
 	uint32_t i;
-	bool     was_private = profile_private_is_private(&g_pp);
+	bool     was_private = radiant_profile_private_is_private(&g_pp);
 
 	if (!was_private) {
-		enum profile_slot_kind kind;
+		enum radiant_profile_slot_kind kind;
 
 		if ((g_stream % 4u) == 0u) {
-			profile_hr_beat(&g_hr, (uint16_t)((g_stream / 4u) * 1024u));
+			radiant_profile_hr_beat(&g_hr, (uint16_t)((g_stream / 4u) * 1024u));
 		}
-		profile_hr_set_operating_time(&g_hr, g_stream / 4u);
-		kind = profile_hr_next(&g_hr, now, body);
-		zassert_not_equal(PROFILE_SLOT_IDLE, kind, "message %u", g_stream);
+		radiant_profile_hr_set_operating_time(&g_hr, g_stream / 4u);
+		kind = radiant_profile_hr_next(&g_hr, now, body);
+		zassert_not_equal(RADIANT_PROFILE_SLOT_IDLE, kind, "message %u", g_stream);
 
 		/* Is this one of the announcement's frames? Decided the way a
 		 * receiver decides it - from byte [0] and byte [1] - so the
 		 * test is reading the air rather than the node's state. */
-		if ((body[0] & PROFILE_COMPAT_PAGE_MASK) ==
-			    PROFILE_COMPAT_PAGE_BEACON &&
-		    ((body[1] & 0x0Fu) + 1u) == PROFILE_PRIVATE_SET_FRAMES) {
+		if ((body[0] & RADIANT_PROFILE_COMPAT_PAGE_MASK) ==
+			    RADIANT_PROFILE_COMPAT_PAGE_BEACON &&
+		    ((body[1] & 0x0Fu) + 1u) == RADIANT_PROFILE_PRIVATE_SET_FRAMES) {
 			uint8_t idx = (uint8_t)(body[1] >> 4);
 
-			if (idx == PROFILE_PRIVATE_SET_INDEX_A) {
-				announce_frame = PROFILE_PRIVATE_FRAME_A;
-			} else if (idx == PROFILE_PRIVATE_SET_INDEX_B) {
-				announce_frame = PROFILE_PRIVATE_FRAME_B;
+			if (idx == RADIANT_PROFILE_PRIVATE_SET_INDEX_A) {
+				announce_frame = RADIANT_PROFILE_PRIVATE_FRAME_A;
+			} else if (idx == RADIANT_PROFILE_PRIVATE_SET_INDEX_B) {
+				announce_frame = RADIANT_PROFILE_PRIVATE_FRAME_B;
 			}
 		}
 	} else {
@@ -298,37 +298,37 @@ static void step(void)
 		body[0] = 0x01u;   /* an ordinary telemetry page */
 		body[1] = (uint8_t)(g_priv_msgs & 0xFFu);
 
-		if ((g_priv_msgs % PROFILE_PRIVATE_COUNTDOWN_UNIT) == 0u &&
-		    profile_private_frame_count(&g_pp, now) ==
-			    PROFILE_PRIVATE_FRAMES) {
+		if ((g_priv_msgs % RADIANT_PROFILE_PRIVATE_COUNTDOWN_UNIT) == 0u &&
+		    radiant_profile_private_frame_count(&g_pp, now) ==
+			    RADIANT_PROFILE_PRIVATE_FRAMES) {
 			uint8_t which = (uint8_t)(g_priv_cursor % 2u);
 			uint8_t frame[8];
 
 			memset(frame, 0, sizeof(frame));
 			frame[0] = PRIVATE_PAGE;
-			frame[1] = (uint8_t)(((PROFILE_PRIVATE_SET_INDEX_A +
+			frame[1] = (uint8_t)(((RADIANT_PROFILE_PRIVATE_SET_INDEX_A +
 					       which) << 4) |
-					     (PROFILE_PRIVATE_SET_FRAMES - 1u));
-			if (profile_private_frame(&g_pp, which, &frame[2])) {
+					     (RADIANT_PROFILE_PRIVATE_SET_FRAMES - 1u));
+			if (radiant_profile_private_frame(&g_pp, which, &frame[2])) {
 				memcpy(body, frame, sizeof(body));
 				announce_frame = (int)which;
 				g_priv_cursor++;
 			}
 		}
-		(void)profile_private_tick(&g_pp, now);
-		profile_private_sent(&g_pp, body);
+		(void)radiant_profile_private_tick(&g_pp, now);
+		radiant_profile_private_sent(&g_pp, body);
 		g_priv_msgs++;
 	}
 
 	log_put(body);
 
-	/* The transition happens INSIDE profile_private_sent(), so this index is
+	/* The transition happens INSIDE radiant_profile_private_sent(), so this index is
 	 * the one every receiver's countdown should also expire on. */
-	if (!g_switched && profile_private_is_private(&g_pp)) {
+	if (!g_switched && radiant_profile_private_is_private(&g_pp)) {
 		g_switched = true;
 		g_switch_msg = g_stream;
 	}
-	if (g_switched && !g_returned && !profile_private_is_private(&g_pp)) {
+	if (g_switched && !g_returned && !radiant_profile_private_is_private(&g_pp)) {
 		g_returned = true;
 		g_return_msg = g_stream;
 	}
@@ -339,13 +339,13 @@ static void step(void)
 		deliver(f, body, now, announce_frame, was_private);
 
 		/* Did the countdown it heard just expire? */
-		if (!f->saw_target && profile_private_rx_due(&f->rx)) {
+		if (!f->saw_target && radiant_profile_private_rx_due(&f->rx)) {
 			uint8_t  type = 0u;
 			uint16_t devnum = 0u;
 			uint16_t per = 0u;
 			uint8_t  reason = 0u;
 
-			zassert_equal(0, profile_private_rx_target(&f->rx, &type,
+			zassert_equal(0, radiant_profile_private_rx_target(&f->rx, &type,
 								   &devnum, &per,
 								   &reason));
 			f->saw_target = true;
@@ -353,18 +353,18 @@ static void step(void)
 			f->target_devnum = devnum;
 			f->due_at = g_stream;
 			f->retuning = true;
-			f->retune_to_private = profile_private_is_private(&g_pp);
+			f->retune_to_private = radiant_profile_private_is_private(&g_pp);
 			f->retune_until = g_stream + 1u + RETUNE_MSGS;
-			profile_private_rx_clear(&f->rx);
+			radiant_profile_private_rx_clear(&f->rx);
 		} else if (!f->saw_target && !f->retuning &&
-			   f->on_private != profile_private_is_private(&g_pp) &&
-			   profile_private_rx_lost(&f->rx, now)) {
+			   f->on_private != radiant_profile_private_is_private(&g_pp) &&
+			   radiant_profile_private_rx_lost(&f->rx, now)) {
 			/* Nothing arrived for 8 message periods: the receiver
 			 * derives the locator from its own root/epoch and
 			 * retunes, with no announcement involved. */
 			uint16_t devnum = 0u;
 
-			zassert_equal(0, profile_private_rx_locator(&f->rx,
+			zassert_equal(0, radiant_profile_private_rx_locator(&f->rx,
 								    TEST_EPOCH,
 								    0u, &devnum));
 			f->saw_target = true;
@@ -372,7 +372,7 @@ static void step(void)
 			f->target_devnum = devnum;
 			f->due_at = g_stream;
 			f->retuning = true;
-			f->retune_to_private = profile_private_is_private(&g_pp);
+			f->retune_to_private = radiant_profile_private_is_private(&g_pp);
 			f->retune_until = g_stream + 1u + RETUNE_MSGS;
 		}
 	}
@@ -406,7 +406,7 @@ static void keys_up(void)
 						   TEST_T_S));
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_compat_set_epoch(NODE_CH, TEST_EPOCH, T_ORIGIN,
-						   0u, PROFILE_HR_PERIOD));
+						   0u, RADIANT_PROFILE_HR_PERIOD));
 
 	for (i = 0u; i < FOLLOWERS; i++) {
 		uint8_t ch = follower_ch[i];
@@ -422,34 +422,34 @@ static void keys_up(void)
 		zassert_equal(RADIANT_SEC_OK,
 			      radiant_sec_compat_set_epoch(ch, TEST_EPOCH,
 							   T_ORIGIN, 0u,
-							   PROFILE_HR_PERIOD));
+							   RADIANT_PROFILE_HR_PERIOD));
 	}
 }
 
 static void hr_up(void)
 {
-	struct profile_hr_cfg cfg;
+	struct radiant_profile_hr_cfg cfg;
 
 	memset(&cfg, 0, sizeof(cfg));
 	cfg.id.hw_revision = 1u;
 	cfg.id.manufacturer_id = 0x00FFu;
 	cfg.id.model_number = 0x0001u;
 	cfg.id.sw_revision_main = 1u;
-	cfg.id.sw_revision_supplemental = PROFILE_COMMON_INVALID_U8;
-	cfg.id.serial_number = PROFILE_COMMON_INVALID_U32;
+	cfg.id.sw_revision_supplemental = RADIANT_PROFILE_COMMON_INVALID_U8;
+	cfg.id.serial_number = RADIANT_PROFILE_COMMON_INVALID_U32;
 	cfg.manufacturer_id_8 = 0xFFu;
 	cfg.serial_upper16 = 0x4553u;
 	cfg.model_number_8 = 1u;
 	cfg.hw_version = 1u;
 	cfg.sw_version = 1u;
 
-	zassert_equal(0, profile_hr_init(&g_hr, &cfg));
-	profile_hr_set_computed(&g_hr, 60u);
+	zassert_equal(0, radiant_profile_hr_init(&g_hr, &cfg));
+	radiant_profile_hr_set_computed(&g_hr, 60u);
 }
 
 static void compat_up(uint8_t policy)
 {
-	struct profile_compat_cfg cfg;
+	struct radiant_profile_compat_cfg cfg;
 
 	memset(&cfg, 0, sizeof(cfg));
 	cfg.ch = NODE_CH;
@@ -458,15 +458,15 @@ static void compat_up(uint8_t policy)
 	cfg.attest_available = true;
 	cfg.policy = policy;
 	cfg.window = TEST_N;
-	cfg.mode = PROFILE_COMPAT_MODE_FIXED;
-	/* No locator here: profile_private.c publishes it, because the number
+	cfg.mode = RADIANT_PROFILE_COMPAT_MODE_FIXED;
+	/* No locator here: radiant_profile_private.c publishes it, because the number
 	 * is derived and this layer holds no key. */
 
-	zassert_equal(0, profile_compat_init(&g_pc, &cfg));
-	zassert_equal(0, profile_hr_set_compat(&g_hr, &g_pc));
+	zassert_equal(0, radiant_profile_compat_init(&g_pc, &cfg));
+	zassert_equal(0, radiant_profile_hr_set_compat(&g_hr, &g_pc));
 }
 
-static void private_cfg_fill(struct profile_private_cfg *cfg, uint8_t policy,
+static void private_cfg_fill(struct radiant_profile_private_cfg *cfg, uint8_t policy,
 			     uint8_t announce, uint16_t k)
 {
 	memset(cfg, 0, sizeof(*cfg));
@@ -478,9 +478,9 @@ static void private_cfg_fill(struct profile_private_cfg *cfg, uint8_t policy,
 	cfg->k = k;
 	cfg->private_device_type = PRIVATE_DEVICE_TYPE;
 	cfg->private_period = PRIVATE_PERIOD;
-	cfg->compat_device_type = PROFILE_HR_DEVICE_TYPE;
+	cfg->compat_device_type = RADIANT_PROFILE_HR_DEVICE_TYPE;
 	cfg->compat_devnum = NODE_DEVNUM;
-	cfg->compat_period = PROFILE_HR_PERIOD;
+	cfg->compat_period = RADIANT_PROFILE_HR_PERIOD;
 	cfg->policy_load = policy_load;
 	cfg->policy_store = policy_store;
 	cfg->enter_private = on_enter;
@@ -489,11 +489,11 @@ static void private_cfg_fill(struct profile_private_cfg *cfg, uint8_t policy,
 
 static void private_up(uint8_t policy, uint8_t announce, uint16_t k)
 {
-	struct profile_private_cfg cfg;
+	struct radiant_profile_private_cfg cfg;
 
 	private_cfg_fill(&cfg, policy, announce, k);
-	zassert_equal(0, profile_private_init(&g_pp, &cfg));
-	zassert_equal(0, profile_private_attach(&g_pp, &g_pc));
+	zassert_equal(0, radiant_profile_private_init(&g_pp, &cfg));
+	zassert_equal(0, radiant_profile_private_attach(&g_pp, &g_pc));
 }
 
 static void followers_up(void)
@@ -504,9 +504,9 @@ static void followers_up(void)
 		memset(&g_f[i], 0, sizeof(g_f[i]));
 		g_f[i].hears_announcements = true;
 		g_f[i].first_private = UINT32_MAX;
-		zassert_equal(0, profile_private_rx_init(&g_f[i].rx,
+		zassert_equal(0, radiant_profile_private_rx_init(&g_f[i].rx,
 							 follower_ch[i],
-							 period_us(PROFILE_HR_PERIOD)));
+							 period_us(RADIANT_PROFILE_HR_PERIOD)));
 	}
 }
 
@@ -554,7 +554,7 @@ static void private_before(void *f)
 	g_log_enable = false;
 }
 
-ZTEST_SUITE(profile_private, NULL, NULL, private_before, NULL, NULL);
+ZTEST_SUITE(radiant_profile_private, NULL, NULL, private_before, NULL, NULL);
 
 /* ═══ The load-bearing test ══════════════════════════════════════════════ */
 
@@ -566,16 +566,16 @@ ZTEST_SUITE(profile_private, NULL, NULL, private_before, NULL, NULL);
 static void build_command(uint8_t ch, uint8_t op, uint64_t now, uint8_t out[8])
 {
 	memset(out, 0, 8);
-	out[0] = PROFILE_COMPAT_PAGE_BEACON;
-	out[1] = PROFILE_PRIVATE_CMD_FRAME_BYTE;
+	out[0] = RADIANT_PROFILE_COMPAT_PAGE_BEACON;
+	out[1] = RADIANT_PROFILE_PRIVATE_CMD_FRAME_BYTE;
 	out[2] = op;
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_compat_cmd_tag(ch, now, out,
-						 PROFILE_PRIVATE_CMD_COVERED,
-						 &out[PROFILE_PRIVATE_CMD_COVERED]));
+						 RADIANT_PROFILE_PRIVATE_CMD_COVERED,
+						 &out[RADIANT_PROFILE_PRIVATE_CMD_COVERED]));
 }
 
-ZTEST(profile_private, test_three_keyed_receivers_follow_one_switch)
+ZTEST(radiant_profile_private, test_three_keyed_receivers_follow_one_switch)
 {
 	uint8_t  cmd[8];
 	uint32_t i;
@@ -583,19 +583,19 @@ ZTEST(profile_private, test_three_keyed_receivers_follow_one_switch)
 	/* THE WHOLE OF LAYER C IN ONE TEST: one of three keyed receivers sends
 	 * an authenticated command, and ~16 s later all three are on the
 	 * private channel, having left on the same message. */
-	node_up(PROFILE_PRIVATE_COMMAND, PROFILE_PRIVATE_BROADCAST,
-		PROFILE_PRIVATE_K_DEFAULT);
+	node_up(RADIANT_PROFILE_PRIVATE_COMMAND, RADIANT_PROFILE_PRIVATE_BROADCAST,
+		RADIANT_PROFILE_PRIVATE_K_DEFAULT);
 
 	/* Let the stream settle so the receivers are anchored and verifying. */
 	run(24u);
-	zassert_equal(PROFILE_PRIVATE_STATE_COMPAT,
-		      profile_private_state(&g_pp));
+	zassert_equal(RADIANT_PROFILE_PRIVATE_STATE_COMPAT,
+		      radiant_profile_private_state(&g_pp));
 
-	build_command(RX_A, PROFILE_PRIVATE_OP_GO_PRIVATE, at(g_stream), cmd);
-	zassert_equal(1, profile_private_on_command(&g_pp, at(g_stream), cmd,
+	build_command(RX_A, RADIANT_PROFILE_PRIVATE_OP_GO_PRIVATE, at(g_stream), cmd);
+	zassert_equal(1, radiant_profile_private_on_command(&g_pp, at(g_stream), cmd,
 						    sizeof(cmd)));
-	zassert_equal(PROFILE_PRIVATE_STATE_ANNOUNCING,
-		      profile_private_state(&g_pp));
+	zassert_equal(RADIANT_PROFILE_PRIVATE_STATE_ANNOUNCING,
+		      radiant_profile_private_state(&g_pp));
 
 	run(96u);
 
@@ -604,7 +604,7 @@ ZTEST(profile_private, test_three_keyed_receivers_follow_one_switch)
 	zassert_equal(1u, g_enter_calls);
 	zassert_equal(PRIVATE_DEVICE_TYPE, g_entered_type);
 	zassert_equal(PRIVATE_PERIOD, g_entered_period);
-	zassert_equal(profile_private_locator(&g_pp), g_entered_devnum);
+	zassert_equal(radiant_profile_private_locator(&g_pp), g_entered_devnum);
 
 	/* ── ...and all three followed, on the same message ─────────────── */
 	for (i = 0u; i < FOLLOWERS; i++) {
@@ -622,16 +622,16 @@ ZTEST(profile_private, test_three_keyed_receivers_follow_one_switch)
 
 	/* The countdown was as long as it said it was: K messages, less the at
 	 * most seven the re-anchoring gives up to land on the quantum. */
-	zassert_true(g_switch_msg >= 24u + PROFILE_PRIVATE_K_DEFAULT -
-					 PROFILE_PRIVATE_COUNTDOWN_UNIT,
+	zassert_true(g_switch_msg >= 24u + RADIANT_PROFILE_PRIVATE_K_DEFAULT -
+					 RADIANT_PROFILE_PRIVATE_COUNTDOWN_UNIT,
 		     "%u of %u",
-		     g_switch_msg - 24u, PROFILE_PRIVATE_K_DEFAULT);
-	zassert_true(g_switch_msg <= 24u + PROFILE_PRIVATE_K_DEFAULT + 8u,
+		     g_switch_msg - 24u, RADIANT_PROFILE_PRIVATE_K_DEFAULT);
+	zassert_true(g_switch_msg <= 24u + RADIANT_PROFILE_PRIVATE_K_DEFAULT + 8u,
 		     "%u of %u",
-		     g_switch_msg - 24u, PROFILE_PRIVATE_K_DEFAULT);
+		     g_switch_msg - 24u, RADIANT_PROFILE_PRIVATE_K_DEFAULT);
 }
 
-ZTEST(profile_private, test_a_receiver_joining_mid_countdown_follows)
+ZTEST(radiant_profile_private, test_a_receiver_joining_mid_countdown_follows)
 {
 	uint8_t  cmd[8];
 	uint32_t joined_at;
@@ -639,23 +639,23 @@ ZTEST(profile_private, test_a_receiver_joining_mid_countdown_follows)
 	/* A receiver that joins mid-countdown reads the REMAINING count out of
 	 * the frame rather than needing the first one - "act on expiry, not
 	 * receipt" is what buys this. */
-	node_up(PROFILE_PRIVATE_COMMAND, PROFILE_PRIVATE_BROADCAST,
-		PROFILE_PRIVATE_K_DEFAULT);
+	node_up(RADIANT_PROFILE_PRIVATE_COMMAND, RADIANT_PROFILE_PRIVATE_BROADCAST,
+		RADIANT_PROFILE_PRIVATE_K_DEFAULT);
 
 	/* Receiver C is not in the room yet. */
 	g_f[2].on_private = true;   /* hears nothing on the compat channel */
 
 	run(16u);
-	build_command(RX_A, PROFILE_PRIVATE_OP_GO_PRIVATE, at(g_stream), cmd);
-	zassert_equal(1, profile_private_on_command(&g_pp, at(g_stream), cmd,
+	build_command(RX_A, RADIANT_PROFILE_PRIVATE_OP_GO_PRIVATE, at(g_stream), cmd);
+	zassert_equal(1, radiant_profile_private_on_command(&g_pp, at(g_stream), cmd,
 						    sizeof(cmd)));
 
 	/* Half way through the countdown, C switches on. */
 	run(32u);
 	joined_at = g_stream;
 	g_f[2].on_private = false;
-	zassert_equal(0, profile_private_rx_init(&g_f[2].rx, RX_C,
-						 period_us(PROFILE_HR_PERIOD)));
+	zassert_equal(0, radiant_profile_private_rx_init(&g_f[2].rx, RX_C,
+						 period_us(RADIANT_PROFILE_HR_PERIOD)));
 
 	run(96u);
 
@@ -668,7 +668,7 @@ ZTEST(profile_private, test_a_receiver_joining_mid_countdown_follows)
 
 /* ═══ The derived locator ════════════════════════════════════════════════ */
 
-ZTEST(profile_private, test_the_locator_agrees_with_the_python_mirror)
+ZTEST(radiant_profile_private, test_the_locator_agrees_with_the_python_mirror)
 {
 	uint16_t devnum = 0u;
 	uint8_t  attempt;
@@ -702,7 +702,7 @@ ZTEST(profile_private, test_the_locator_agrees_with_the_python_mirror)
 	}
 }
 
-ZTEST(profile_private, test_the_wildcard_is_excluded_and_the_suffix_takes_over)
+ZTEST(radiant_profile_private, test_the_wildcard_is_excluded_and_the_suffix_takes_over)
 {
 	uint16_t devnum = 0u;
 
@@ -722,7 +722,7 @@ ZTEST(profile_private, test_the_wildcard_is_excluded_and_the_suffix_takes_over)
 	zassert_equal(0xDEABu, devnum);
 }
 
-ZTEST(profile_private, test_a_node_walks_the_candidates_on_a_collision)
+ZTEST(radiant_profile_private, test_a_node_walks_the_candidates_on_a_collision)
 {
 	uint16_t first;
 	uint16_t second;
@@ -732,35 +732,35 @@ ZTEST(profile_private, test_a_node_walks_the_candidates_on_a_collision)
 	/* A node learns of a collision by opening the channel and finding it
 	 * occupied, so it walks exactly as far as a searching keyholder looks,
 	 * then stops. */
-	node_up(PROFILE_PRIVATE_PHYSICAL, PROFILE_PRIVATE_BROADCAST,
-		PROFILE_PRIVATE_K_DEFAULT);
+	node_up(RADIANT_PROFILE_PRIVATE_PHYSICAL, RADIANT_PROFILE_PRIVATE_BROADCAST,
+		RADIANT_PROFILE_PRIVATE_K_DEFAULT);
 
-	first = profile_private_locator(&g_pp);
-	zassert_equal(0, profile_private_next_locator(&g_pp));
-	second = profile_private_locator(&g_pp);
+	first = radiant_profile_private_locator(&g_pp);
+	zassert_equal(0, radiant_profile_private_next_locator(&g_pp));
+	second = radiant_profile_private_locator(&g_pp);
 	zassert_not_equal(first, second);
 
-	for (i = 2u; i < PROFILE_PRIVATE_LOCATOR_TRIES; i++) {
-		zassert_equal(0, profile_private_next_locator(&g_pp));
+	for (i = 2u; i < RADIANT_PROFILE_PRIVATE_LOCATOR_TRIES; i++) {
+		zassert_equal(0, radiant_profile_private_next_locator(&g_pp));
 	}
-	rc = profile_private_next_locator(&g_pp);
+	rc = radiant_profile_private_next_locator(&g_pp);
 	zassert_equal(-ENOSPC, rc);
 }
 
-ZTEST(profile_private, test_a_receiver_that_missed_the_announcement_reacquires)
+ZTEST(radiant_profile_private, test_a_receiver_that_missed_the_announcement_reacquires)
 {
 	uint8_t cmd[8];
 
 	/* Receiver C hears the stream but misses every copy of the
 	 * announcement; it notices the silence, derives the locator from its
 	 * own root/epoch, and arrives where the node is. */
-	node_up(PROFILE_PRIVATE_COMMAND, PROFILE_PRIVATE_BROADCAST,
-		PROFILE_PRIVATE_K_DEFAULT);
+	node_up(RADIANT_PROFILE_PRIVATE_COMMAND, RADIANT_PROFILE_PRIVATE_BROADCAST,
+		RADIANT_PROFILE_PRIVATE_K_DEFAULT);
 	g_f[2].hears_announcements = false;
 
 	run(16u);
-	build_command(RX_A, PROFILE_PRIVATE_OP_GO_PRIVATE, at(g_stream), cmd);
-	zassert_equal(1, profile_private_on_command(&g_pp, at(g_stream), cmd,
+	build_command(RX_A, RADIANT_PROFILE_PRIVATE_OP_GO_PRIVATE, at(g_stream), cmd);
+	zassert_equal(1, radiant_profile_private_on_command(&g_pp, at(g_stream), cmd,
 						    sizeof(cmd)));
 	run(160u);
 
@@ -773,7 +773,7 @@ ZTEST(profile_private, test_a_receiver_that_missed_the_announcement_reacquires)
 
 /* ═══ broadcast against silent, measured ═════════════════════════════════ */
 
-ZTEST(profile_private, test_silent_says_nothing_and_everyone_still_reacquires)
+ZTEST(radiant_profile_private, test_silent_says_nothing_and_everyone_still_reacquires)
 {
 	uint32_t broadcast_gap[FOLLOWERS];
 	uint32_t silent_gap[FOLLOWERS];
@@ -789,11 +789,11 @@ ZTEST(profile_private, test_silent_says_nothing_and_everyone_still_reacquires)
 	 */
 
 	/* ── First, the broadcast run, for the number to compare against ── */
-	node_up(PROFILE_PRIVATE_COMMAND, PROFILE_PRIVATE_BROADCAST,
-		PROFILE_PRIVATE_K_DEFAULT);
+	node_up(RADIANT_PROFILE_PRIVATE_COMMAND, RADIANT_PROFILE_PRIVATE_BROADCAST,
+		RADIANT_PROFILE_PRIVATE_K_DEFAULT);
 	run(16u);
-	build_command(RX_A, PROFILE_PRIVATE_OP_GO_PRIVATE, at(g_stream), cmd);
-	zassert_equal(1, profile_private_on_command(&g_pp, at(g_stream), cmd,
+	build_command(RX_A, RADIANT_PROFILE_PRIVATE_OP_GO_PRIVATE, at(g_stream), cmd);
+	zassert_equal(1, radiant_profile_private_on_command(&g_pp, at(g_stream), cmd,
 						    sizeof(cmd)));
 	run(200u);
 	zassert_true(g_switched);
@@ -805,17 +805,17 @@ ZTEST(profile_private, test_silent_says_nothing_and_everyone_still_reacquires)
 
 	/* ── Then the silent run, same node, same three receivers ───────── */
 	private_before(NULL);
-	node_up(PROFILE_PRIVATE_COMMAND, PROFILE_PRIVATE_SILENT,
-		PROFILE_PRIVATE_K_DEFAULT);
+	node_up(RADIANT_PROFILE_PRIVATE_COMMAND, RADIANT_PROFILE_PRIVATE_SILENT,
+		RADIANT_PROFILE_PRIVATE_K_DEFAULT);
 	g_log_enable = true;
 	run(16u);
-	build_command(RX_A, PROFILE_PRIVATE_OP_GO_PRIVATE, at(g_stream), cmd);
-	zassert_equal(1, profile_private_on_command(&g_pp, at(g_stream), cmd,
+	build_command(RX_A, RADIANT_PROFILE_PRIVATE_OP_GO_PRIVATE, at(g_stream), cmd);
+	zassert_equal(1, radiant_profile_private_on_command(&g_pp, at(g_stream), cmd,
 						    sizeof(cmd)));
 	/* SILENT MEANS NOW: there is no countdown to wait for, because a
 	 * countdown with nothing to carry it is a delay rather than a warning. */
-	zassert_equal(PROFILE_PRIVATE_STATE_PRIVATE,
-		      profile_private_state(&g_pp));
+	zassert_equal(RADIANT_PROFILE_PRIVATE_STATE_PRIVATE,
+		      radiant_profile_private_state(&g_pp));
 	run(200u);
 
 	for (i = 0u; i < FOLLOWERS; i++) {
@@ -831,15 +831,15 @@ ZTEST(profile_private, test_silent_says_nothing_and_everyone_still_reacquires)
 		const uint8_t *b = g_log[i];
 		uint8_t        count;
 
-		if ((b[0] & PROFILE_COMPAT_PAGE_MASK) !=
-		    PROFILE_COMPAT_PAGE_BEACON) {
+		if ((b[0] & RADIANT_PROFILE_COMPAT_PAGE_MASK) !=
+		    RADIANT_PROFILE_COMPAT_PAGE_BEACON) {
 			continue;
 		}
 		count = (uint8_t)((b[1] & 0x0Fu) + 1u);
-		zassert_not_equal(PROFILE_PRIVATE_SET_FRAMES, count, "message %u", i);
+		zassert_not_equal(RADIANT_PROFILE_PRIVATE_SET_FRAMES, count, "message %u", i);
 		if ((b[1] >> 4) == 0u) {
 			zassert_equal(0u,
-				      (uint8_t)(b[3] & PROFILE_COMPAT_PENDING_SWITCH),
+				      (uint8_t)(b[3] & RADIANT_PROFILE_COMPAT_PENDING_SWITCH),
 				      "message %u", i);
 		}
 		if ((b[1] >> 4) == 1u) {
@@ -861,17 +861,17 @@ ZTEST(profile_private, test_silent_says_nothing_and_everyone_still_reacquires)
 	}
 	TC_PRINT("  at %u ms per message that is broadcast ~%u ms, "
 		 "silent ~%u ms\n",
-		 (unsigned int)(period_us(PROFILE_HR_PERIOD) / 1000u),
+		 (unsigned int)(period_us(RADIANT_PROFILE_HR_PERIOD) / 1000u),
 		 (unsigned int)(broadcast_gap[0] *
-				period_us(PROFILE_HR_PERIOD) / 1000u),
+				period_us(RADIANT_PROFILE_HR_PERIOD) / 1000u),
 		 (unsigned int)(silent_gap[0] *
-				period_us(PROFILE_HR_PERIOD) / 1000u));
+				period_us(RADIANT_PROFILE_HR_PERIOD) / 1000u));
 
 	for (i = 0u; i < FOLLOWERS; i++) {
 		zassert_true(silent_gap[i] > broadcast_gap[i],
 			     "receiver %u %u vs %u", i, silent_gap[i],
 			     broadcast_gap[i]);
-		zassert_true(silent_gap[i] >= PROFILE_PRIVATE_SILENCE_MSGS);
+		zassert_true(silent_gap[i] >= RADIANT_PROFILE_PRIVATE_SILENCE_MSGS);
 	}
 
 	/* The receiver that ASKED pays the same as the two that did not, in
@@ -885,89 +885,89 @@ ZTEST(profile_private, test_silent_says_nothing_and_everyone_still_reacquires)
 
 /* ═══ The announcement's tag ═════════════════════════════════════════════ */
 
-ZTEST(profile_private, test_an_announcement_that_does_not_verify_is_ignored)
+ZTEST(radiant_profile_private, test_an_announcement_that_does_not_verify_is_ignored)
 {
-	struct profile_private_rx rx;
+	struct radiant_profile_private_rx rx;
 	uint8_t frame_a[8];
 	uint8_t frame_b[8];
 	uint8_t tag[RADIANT_SEC_COMPAT_ANNOUNCE_TAG_BYTES];
 	uint64_t now = at(40u);
 
 	keys_up();
-	zassert_equal(0, profile_private_rx_init(&rx, RX_A,
-						 period_us(PROFILE_HR_PERIOD)));
+	zassert_equal(0, radiant_profile_private_rx_init(&rx, RX_A,
+						 period_us(RADIANT_PROFILE_HR_PERIOD)));
 
 	/* A well-formed announcement, built the way the node builds one. */
 	memset(frame_a, 0, sizeof(frame_a));
-	frame_a[0] = PROFILE_COMPAT_PAGE_BEACON;
-	frame_a[1] = (uint8_t)((PROFILE_PRIVATE_SET_INDEX_A << 4) |
-			       (PROFILE_PRIVATE_SET_FRAMES - 1u));
+	frame_a[0] = RADIANT_PROFILE_COMPAT_PAGE_BEACON;
+	frame_a[1] = (uint8_t)((RADIANT_PROFILE_PRIVATE_SET_INDEX_A << 4) |
+			       (RADIANT_PROFILE_PRIVATE_SET_FRAMES - 1u));
 	frame_a[2] = PRIVATE_DEVICE_TYPE;
 	frame_a[3] = 0x34u;
 	frame_a[4] = 0x12u;
 	frame_a[5] = 0x00u;
 	frame_a[6] = 0x20u;
-	frame_a[7] = (uint8_t)((PROFILE_PRIVATE_REASON_COMMAND << 6) | 2u);
+	frame_a[7] = (uint8_t)((RADIANT_PROFILE_PRIVATE_REASON_COMMAND << 6) | 2u);
 
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_compat_announce_tag(NODE_CH, now, frame_a, 8u,
 						      tag));
 	memset(frame_b, 0, sizeof(frame_b));
-	frame_b[0] = PROFILE_COMPAT_PAGE_BEACON;
-	frame_b[1] = (uint8_t)((PROFILE_PRIVATE_SET_INDEX_B << 4) |
-			       (PROFILE_PRIVATE_SET_FRAMES - 1u));
+	frame_b[0] = RADIANT_PROFILE_COMPAT_PAGE_BEACON;
+	frame_b[1] = (uint8_t)((RADIANT_PROFILE_PRIVATE_SET_INDEX_B << 4) |
+			       (RADIANT_PROFILE_PRIVATE_SET_FRAMES - 1u));
 	memcpy(&frame_b[2], tag, sizeof(tag));
 
 	/* ── It verifies, and arms the receiver ─────────────────────────── */
-	zassert_equal(0, profile_private_rx_message(&rx, frame_a, 8u, now));
-	zassert_equal(1, profile_private_rx_message(&rx, frame_b, 8u, now));
+	zassert_equal(0, radiant_profile_private_rx_message(&rx, frame_a, 8u, now));
+	zassert_equal(1, radiant_profile_private_rx_message(&rx, frame_b, 8u, now));
 	zassert_equal(1u, rx.verified);
 	zassert_equal(0x1234u, rx.target_devnum);
 
 	/* ── One bit of the LOCATOR moved, tag untouched ────────────────── */
-	profile_private_rx_clear(&rx);
+	radiant_profile_private_rx_clear(&rx);
 	rx.verified = 0u;
 	frame_a[3] ^= 0x01u;
-	zassert_equal(0, profile_private_rx_message(&rx, frame_a, 8u, now));
+	zassert_equal(0, radiant_profile_private_rx_message(&rx, frame_a, 8u, now));
 	/* Herding: a rewritten clear-text devnum must not move keyed receivers. */
 	zassert_equal(-EACCES,
-		      profile_private_rx_message(&rx, frame_b, 8u, now));
+		      radiant_profile_private_rx_message(&rx, frame_b, 8u, now));
 	zassert_equal(1u, rx.rejected);
 	zassert_false(rx.armed);
 	frame_a[3] ^= 0x01u;
 
 	/* ── One bit of the COUNTDOWN moved ─────────────────────────────── */
 	frame_a[7] ^= 0x01u;
-	zassert_equal(0, profile_private_rx_message(&rx, frame_a, 8u, now));
+	zassert_equal(0, radiant_profile_private_rx_message(&rx, frame_a, 8u, now));
 	zassert_equal(-EACCES,
-		      profile_private_rx_message(&rx, frame_b, 8u, now));
+		      radiant_profile_private_rx_message(&rx, frame_b, 8u, now));
 	frame_a[7] ^= 0x01u;
 
 	/* ── One bit of the TAG ─────────────────────────────────────────── */
 	frame_b[4] ^= 0x80u;
-	zassert_equal(0, profile_private_rx_message(&rx, frame_a, 8u, now));
+	zassert_equal(0, radiant_profile_private_rx_message(&rx, frame_a, 8u, now));
 	zassert_equal(-EACCES,
-		      profile_private_rx_message(&rx, frame_b, 8u, now));
+		      radiant_profile_private_rx_message(&rx, frame_b, 8u, now));
 	frame_b[4] ^= 0x80u;
 
 	/* ── Byte [1] is inside the tag too ─────────────────────────────── */
-	zassert_equal(0, profile_private_rx_message(&rx, frame_a, 8u, now));
-	frame_b[1] = (uint8_t)((PROFILE_PRIVATE_SET_INDEX_B << 4) |
-			       (PROFILE_PRIVATE_SET_FRAMES - 1u));
-	frame_a[1] = (uint8_t)((PROFILE_PRIVATE_SET_INDEX_A << 4) | 7u);
-	zassert_equal(0, profile_private_rx_message(&rx, frame_a, 8u, now));
-	frame_a[1] = (uint8_t)((PROFILE_PRIVATE_SET_INDEX_A << 4) |
-			       (PROFILE_PRIVATE_SET_FRAMES - 1u));
+	zassert_equal(0, radiant_profile_private_rx_message(&rx, frame_a, 8u, now));
+	frame_b[1] = (uint8_t)((RADIANT_PROFILE_PRIVATE_SET_INDEX_B << 4) |
+			       (RADIANT_PROFILE_PRIVATE_SET_FRAMES - 1u));
+	frame_a[1] = (uint8_t)((RADIANT_PROFILE_PRIVATE_SET_INDEX_A << 4) | 7u);
+	zassert_equal(0, radiant_profile_private_rx_message(&rx, frame_a, 8u, now));
+	frame_a[1] = (uint8_t)((RADIANT_PROFILE_PRIVATE_SET_INDEX_A << 4) |
+			       (RADIANT_PROFILE_PRIVATE_SET_FRAMES - 1u));
 
 	/* ── And a frame B with no frame A is not evidence of anything ─── */
-	profile_private_rx_clear(&rx);
-	zassert_equal(0, profile_private_rx_message(&rx, frame_b, 8u, now));
+	radiant_profile_private_rx_clear(&rx);
+	zassert_equal(0, radiant_profile_private_rx_message(&rx, frame_b, 8u, now));
 	zassert_false(rx.armed);
 }
 
-ZTEST(profile_private, test_a_replayed_announcement_fails_in_another_window)
+ZTEST(radiant_profile_private, test_a_replayed_announcement_fails_in_another_window)
 {
-	struct profile_private_rx rx;
+	struct radiant_profile_private_rx rx;
 	uint8_t  frame_a[8];
 	uint8_t  frame_b[8];
 	uint8_t  tag[RADIANT_SEC_COMPAT_ANNOUNCE_TAG_BYTES];
@@ -979,13 +979,13 @@ ZTEST(profile_private, test_a_replayed_announcement_fails_in_another_window)
 	 * time) has moved on: the same frame A produces a different tag in a
 	 * later interval. */
 	keys_up();
-	zassert_equal(0, profile_private_rx_init(&rx, RX_A,
-						 period_us(PROFILE_HR_PERIOD)));
+	zassert_equal(0, radiant_profile_private_rx_init(&rx, RX_A,
+						 period_us(RADIANT_PROFILE_HR_PERIOD)));
 
 	memset(frame_a, 0, sizeof(frame_a));
-	frame_a[0] = PROFILE_COMPAT_PAGE_BEACON;
-	frame_a[1] = (uint8_t)((PROFILE_PRIVATE_SET_INDEX_A << 4) |
-			       (PROFILE_PRIVATE_SET_FRAMES - 1u));
+	frame_a[0] = RADIANT_PROFILE_COMPAT_PAGE_BEACON;
+	frame_a[1] = (uint8_t)((RADIANT_PROFILE_PRIVATE_SET_INDEX_A << 4) |
+			       (RADIANT_PROFILE_PRIVATE_SET_FRAMES - 1u));
 	frame_a[2] = PRIVATE_DEVICE_TYPE;
 	frame_a[3] = 0x99u;
 	frame_a[7] = 4u;
@@ -994,67 +994,67 @@ ZTEST(profile_private, test_a_replayed_announcement_fails_in_another_window)
 		      radiant_sec_compat_announce_tag(NODE_CH, then, frame_a, 8u,
 						      tag));
 	memset(frame_b, 0, sizeof(frame_b));
-	frame_b[0] = PROFILE_COMPAT_PAGE_BEACON;
-	frame_b[1] = (uint8_t)((PROFILE_PRIVATE_SET_INDEX_B << 4) |
-			       (PROFILE_PRIVATE_SET_FRAMES - 1u));
+	frame_b[0] = RADIANT_PROFILE_COMPAT_PAGE_BEACON;
+	frame_b[1] = (uint8_t)((RADIANT_PROFILE_PRIVATE_SET_INDEX_B << 4) |
+			       (RADIANT_PROFILE_PRIVATE_SET_FRAMES - 1u));
 	memcpy(&frame_b[2], tag, sizeof(tag));
 
-	zassert_equal(0, profile_private_rx_message(&rx, frame_a, 8u, then));
-	zassert_equal(1, profile_private_rx_message(&rx, frame_b, 8u, then));
+	zassert_equal(0, radiant_profile_private_rx_message(&rx, frame_a, 8u, then));
+	zassert_equal(1, radiant_profile_private_rx_message(&rx, frame_b, 8u, then));
 
-	profile_private_rx_clear(&rx);
+	radiant_profile_private_rx_clear(&rx);
 	rx.rejected = 0u;
 
-	zassert_equal(0, profile_private_rx_message(&rx, frame_a, 8u, later));
+	zassert_equal(0, radiant_profile_private_rx_message(&rx, frame_a, 8u, later));
 	zassert_equal(-EACCES,
-		      profile_private_rx_message(&rx, frame_b, 8u, later));
+		      radiant_profile_private_rx_message(&rx, frame_b, 8u, later));
 	zassert_equal(1u, rx.rejected);
 	zassert_false(rx.armed);
 }
 
 /* ═══ Policy ═════════════════════════════════════════════════════════════ */
 
-ZTEST(profile_private, test_a_never_node_refuses_an_authenticated_command)
+ZTEST(radiant_profile_private, test_a_never_node_refuses_an_authenticated_command)
 {
 	uint8_t cmd[8];
 
 	/* `never` means never: the node refuses an otherwise-valid authenticated
 	 * command and COUNTS the refusal, so an owner can tell it apart from a
 	 * command that never arrived. */
-	node_up(PROFILE_PRIVATE_NEVER, PROFILE_PRIVATE_BROADCAST,
-		PROFILE_PRIVATE_K_DEFAULT);
+	node_up(RADIANT_PROFILE_PRIVATE_NEVER, RADIANT_PROFILE_PRIVATE_BROADCAST,
+		RADIANT_PROFILE_PRIVATE_K_DEFAULT);
 	run(8u);
 
-	build_command(RX_A, PROFILE_PRIVATE_OP_GO_PRIVATE, at(g_stream), cmd);
+	build_command(RX_A, RADIANT_PROFILE_PRIVATE_OP_GO_PRIVATE, at(g_stream), cmd);
 	zassert_equal(-EPERM,
-		      profile_private_on_command(&g_pp, at(g_stream), cmd,
+		      radiant_profile_private_on_command(&g_pp, at(g_stream), cmd,
 						 sizeof(cmd)));
 	zassert_equal(1u, g_pp.refused_policy);
 	zassert_equal(0u, g_pp.refused_unauth);
-	zassert_equal(PROFILE_PRIVATE_STATE_COMPAT,
-		      profile_private_state(&g_pp));
+	zassert_equal(RADIANT_PROFILE_PRIVATE_STATE_COMPAT,
+		      radiant_profile_private_state(&g_pp));
 
 	/* The physical action is refused too, and counted. */
 	zassert_equal(-EPERM,
-		      profile_private_physical_action(&g_pp, at(g_stream)));
+		      radiant_profile_private_physical_action(&g_pp, at(g_stream)));
 	zassert_equal(2u, g_pp.refused_policy);
 
 	run(64u);
 	zassert_equal(0u, g_enter_calls);
-	zassert_equal(0u, profile_private_locator(&g_pp));
+	zassert_equal(0u, radiant_profile_private_locator(&g_pp));
 
 	/* ...and the beacon says so, in both fields, which must agree. */
-	zassert_equal(PROFILE_PRIVATE_NEVER,
+	zassert_equal(RADIANT_PROFILE_PRIVATE_NEVER,
 		      (uint8_t)(g_pc.frames[0][3] & 0x03u));
 	zassert_equal(0u, (uint8_t)(g_pc.frames[0][2] &
-				    PROFILE_COMPAT_CAP_PRIVATE_AVAILABLE));
+				    RADIANT_PROFILE_COMPAT_CAP_PRIVATE_AVAILABLE));
 	zassert_equal(0u, (uint8_t)(g_pc.frames[0][3] &
-				    PROFILE_COMPAT_PENDING_SWITCH));
+				    RADIANT_PROFILE_COMPAT_PENDING_SWITCH));
 	zassert_equal(0u, g_pc.frames[1][2]);
 	zassert_equal(0u, (uint8_t)(g_pc.frames[1][3] | g_pc.frames[1][4]));
 }
 
-ZTEST(profile_private, test_an_unauthenticated_request_can_never_switch_a_node)
+ZTEST(radiant_profile_private, test_an_unauthenticated_request_can_never_switch_a_node)
 {
 	uint8_t cmd[8];
 	uint8_t i;
@@ -1062,24 +1062,24 @@ ZTEST(profile_private, test_an_unauthenticated_request_can_never_switch_a_node)
 	/* THE SECURITY PROPERTY: there is no unauthenticated path because a
 	 * stranger who could mute a power meter for every legacy receiver in
 	 * the room would have a one-packet DoS against everybody. */
-	node_up(PROFILE_PRIVATE_COMMAND, PROFILE_PRIVATE_BROADCAST,
-		PROFILE_PRIVATE_K_DEFAULT);
+	node_up(RADIANT_PROFILE_PRIVATE_COMMAND, RADIANT_PROFILE_PRIVATE_BROADCAST,
+		RADIANT_PROFILE_PRIVATE_K_DEFAULT);
 	run(8u);
 
 	/* No tag at all. */
 	memset(cmd, 0, sizeof(cmd));
-	cmd[0] = PROFILE_COMPAT_PAGE_BEACON;
-	cmd[1] = PROFILE_PRIVATE_CMD_FRAME_BYTE;
-	cmd[2] = PROFILE_PRIVATE_OP_GO_PRIVATE;
+	cmd[0] = RADIANT_PROFILE_COMPAT_PAGE_BEACON;
+	cmd[1] = RADIANT_PROFILE_PRIVATE_CMD_FRAME_BYTE;
+	cmd[2] = RADIANT_PROFILE_PRIVATE_OP_GO_PRIVATE;
 	zassert_equal(-EACCES,
-		      profile_private_on_command(&g_pp, at(g_stream), cmd,
+		      radiant_profile_private_on_command(&g_pp, at(g_stream), cmd,
 						 sizeof(cmd)));
 
 	/* A guessed tag, every byte of it, one at a time. */
 	for (i = 0u; i < 8u; i++) {
 		memset(&cmd[3], i, 5u);
 		zassert_equal(-EACCES,
-			      profile_private_on_command(&g_pp, at(g_stream),
+			      radiant_profile_private_on_command(&g_pp, at(g_stream),
 							 cmd, sizeof(cmd)));
 	}
 
@@ -1096,25 +1096,25 @@ ZTEST(profile_private, test_an_unauthenticated_request_can_never_switch_a_node)
 		zassert_equal(RADIANT_SEC_OK,
 			      radiant_sec_compat_set_epoch(RX_C, TEST_EPOCH,
 							   T_ORIGIN, 0u,
-							   PROFILE_HR_PERIOD));
-		build_command(RX_C, PROFILE_PRIVATE_OP_GO_PRIVATE, at(g_stream),
+							   RADIANT_PROFILE_HR_PERIOD));
+		build_command(RX_C, RADIANT_PROFILE_PRIVATE_OP_GO_PRIVATE, at(g_stream),
 			      stolen);
 		zassert_equal(-EACCES,
-			      profile_private_on_command(&g_pp, at(g_stream),
+			      radiant_profile_private_on_command(&g_pp, at(g_stream),
 							 stolen,
 							 sizeof(stolen)));
 	}
 
 	zassert_equal(10u, g_pp.refused_unauth);
 	zassert_equal(0u, g_pp.commands_ok);
-	zassert_equal(PROFILE_PRIVATE_STATE_COMPAT,
-		      profile_private_state(&g_pp));
+	zassert_equal(RADIANT_PROFILE_PRIVATE_STATE_COMPAT,
+		      radiant_profile_private_state(&g_pp));
 
 	run(64u);
 	zassert_equal(0u, g_enter_calls);
 }
 
-ZTEST(profile_private, test_no_over_air_path_can_change_policy)
+ZTEST(radiant_profile_private, test_no_over_air_path_can_change_policy)
 {
 	uint8_t cmd[8];
 	uint8_t op;
@@ -1123,36 +1123,36 @@ ZTEST(profile_private, test_no_over_air_path_can_change_policy)
 	 * a remote party can rewrite is not a policy. Sends a validly-tagged
 	 * command under every operation byte that isn't one of the two real
 	 * ones and asserts none of them are consumed as anything. */
-	node_up(PROFILE_PRIVATE_COMMAND, PROFILE_PRIVATE_BROADCAST,
-		PROFILE_PRIVATE_K_DEFAULT);
+	node_up(RADIANT_PROFILE_PRIVATE_COMMAND, RADIANT_PROFILE_PRIVATE_BROADCAST,
+		RADIANT_PROFILE_PRIVATE_K_DEFAULT);
 	run(8u);
 
 	for (op = 0u; op != 0xFFu; op++) {
-		if (op == PROFILE_PRIVATE_OP_GO_PRIVATE ||
-		    op == PROFILE_PRIVATE_OP_RETURN) {
+		if (op == RADIANT_PROFILE_PRIVATE_OP_GO_PRIVATE ||
+		    op == RADIANT_PROFILE_PRIVATE_OP_RETURN) {
 			continue;
 		}
 		build_command(RX_A, op, at(g_stream), cmd);
 		zassert_equal(-EPROTO,
-			      profile_private_on_command(&g_pp, at(g_stream),
+			      radiant_profile_private_on_command(&g_pp, at(g_stream),
 							 cmd, sizeof(cmd)),
 			      "op 0x%02X", op);
-		zassert_equal(PROFILE_PRIVATE_COMMAND,
-			      profile_private_policy(&g_pp),
+		zassert_equal(RADIANT_PROFILE_PRIVATE_COMMAND,
+			      radiant_profile_private_policy(&g_pp),
 			      "op 0x%02X", op);
 	}
 
 	/* Including the shapes a policy command would most plausibly take: an
 	 * operation byte carrying a policy value in its low bits. */
-	zassert_equal(PROFILE_PRIVATE_COMMAND, profile_private_policy(&g_pp));
-	zassert_false(profile_private_policy_from_nvm(&g_pp));
+	zassert_equal(RADIANT_PROFILE_PRIVATE_COMMAND, radiant_profile_private_policy(&g_pp));
+	zassert_false(radiant_profile_private_policy_from_nvm(&g_pp));
 	zassert_false(g_nvm_has);
 	zassert_true(g_pp.refused_malformed >= 253u);
 }
 
-ZTEST(profile_private, test_policy_precedence_is_nvm_then_kconfig)
+ZTEST(radiant_profile_private, test_policy_precedence_is_nvm_then_kconfig)
 {
-	struct profile_private_cfg cfg;
+	struct radiant_profile_private_cfg cfg;
 
 	/* NVM if provisioned, else Kconfig; the host message writes NVM rather
 	 * than shadowing it. */
@@ -1161,69 +1161,69 @@ ZTEST(profile_private, test_policy_precedence_is_nvm_then_kconfig)
 
 	/* ── Nothing provisioned: Kconfig's value, which on a shipped strap
 	 *    is `never` ───────────────────────────────────────────────────── */
-	compat_up(PROFILE_PRIVATE_NEVER);
-	private_cfg_fill(&cfg, PROFILE_PRIVATE_NEVER, PROFILE_PRIVATE_BROADCAST,
-			 PROFILE_PRIVATE_K_DEFAULT);
-	zassert_equal(0, profile_private_init(&g_pp, &cfg));
-	zassert_equal(PROFILE_PRIVATE_NEVER, profile_private_policy(&g_pp));
-	zassert_false(profile_private_policy_from_nvm(&g_pp));
+	compat_up(RADIANT_PROFILE_PRIVATE_NEVER);
+	private_cfg_fill(&cfg, RADIANT_PROFILE_PRIVATE_NEVER, RADIANT_PROFILE_PRIVATE_BROADCAST,
+			 RADIANT_PROFILE_PRIVATE_K_DEFAULT);
+	zassert_equal(0, radiant_profile_private_init(&g_pp, &cfg));
+	zassert_equal(RADIANT_PROFILE_PRIVATE_NEVER, radiant_profile_private_policy(&g_pp));
+	zassert_false(radiant_profile_private_policy_from_nvm(&g_pp));
 
 	/* ── A provisioned record OUTRANKS Kconfig ──────────────────────── */
 	g_nvm_has = true;
-	g_nvm_policy = PROFILE_PRIVATE_COMMAND;
-	private_cfg_fill(&cfg, PROFILE_PRIVATE_NEVER, PROFILE_PRIVATE_BROADCAST,
-			 PROFILE_PRIVATE_K_DEFAULT);
-	zassert_equal(0, profile_private_init(&g_pp, &cfg));
-	zassert_equal(PROFILE_PRIVATE_COMMAND, profile_private_policy(&g_pp));
-	zassert_true(profile_private_policy_from_nvm(&g_pp));
+	g_nvm_policy = RADIANT_PROFILE_PRIVATE_COMMAND;
+	private_cfg_fill(&cfg, RADIANT_PROFILE_PRIVATE_NEVER, RADIANT_PROFILE_PRIVATE_BROADCAST,
+			 RADIANT_PROFILE_PRIVATE_K_DEFAULT);
+	zassert_equal(0, radiant_profile_private_init(&g_pp, &cfg));
+	zassert_equal(RADIANT_PROFILE_PRIVATE_COMMAND, radiant_profile_private_policy(&g_pp));
+	zassert_true(radiant_profile_private_policy_from_nvm(&g_pp));
 
 	/* ── A record this firmware cannot interpret is not a licence to
 	 *    pick one ─────────────────────────────────────────────────────── */
 	g_nvm_policy = 0x7Fu;
-	private_cfg_fill(&cfg, PROFILE_PRIVATE_NEVER, PROFILE_PRIVATE_BROADCAST,
-			 PROFILE_PRIVATE_K_DEFAULT);
-	zassert_equal(0, profile_private_init(&g_pp, &cfg));
-	zassert_equal(PROFILE_PRIVATE_NEVER, profile_private_policy(&g_pp));
+	private_cfg_fill(&cfg, RADIANT_PROFILE_PRIVATE_NEVER, RADIANT_PROFILE_PRIVATE_BROADCAST,
+			 RADIANT_PROFILE_PRIVATE_K_DEFAULT);
+	zassert_equal(0, radiant_profile_private_init(&g_pp, &cfg));
+	zassert_equal(RADIANT_PROFILE_PRIVATE_NEVER, radiant_profile_private_policy(&g_pp));
 
 	/* ── The host writes the RECORD, and the running value comes back
 	 *    out of it ───────────────────────────────────────────────────── */
 	g_nvm_has = false;
-	private_cfg_fill(&cfg, PROFILE_PRIVATE_NEVER, PROFILE_PRIVATE_BROADCAST,
-			 PROFILE_PRIVATE_K_DEFAULT);
-	zassert_equal(0, profile_private_init(&g_pp, &cfg));
-	zassert_equal(0, profile_private_attach(&g_pp, &g_pc));
-	zassert_equal(0, profile_private_host_set_policy(&g_pp,
-							 PROFILE_PRIVATE_PHYSICAL));
-	zassert_equal(PROFILE_PRIVATE_PHYSICAL, profile_private_policy(&g_pp));
-	zassert_true(profile_private_policy_from_nvm(&g_pp));
+	private_cfg_fill(&cfg, RADIANT_PROFILE_PRIVATE_NEVER, RADIANT_PROFILE_PRIVATE_BROADCAST,
+			 RADIANT_PROFILE_PRIVATE_K_DEFAULT);
+	zassert_equal(0, radiant_profile_private_init(&g_pp, &cfg));
+	zassert_equal(0, radiant_profile_private_attach(&g_pp, &g_pc));
+	zassert_equal(0, radiant_profile_private_host_set_policy(&g_pp,
+							 RADIANT_PROFILE_PRIVATE_PHYSICAL));
+	zassert_equal(RADIANT_PROFILE_PRIVATE_PHYSICAL, radiant_profile_private_policy(&g_pp));
+	zassert_true(radiant_profile_private_policy_from_nvm(&g_pp));
 	zassert_true(g_nvm_has);
-	zassert_equal(PROFILE_PRIVATE_PHYSICAL, g_nvm_policy);
+	zassert_equal(RADIANT_PROFILE_PRIVATE_PHYSICAL, g_nvm_policy);
 
 	/* ── A write that does not stick changes NOTHING, which is the whole
 	 *    of "writes NVM rather than shadowing it" ──────────────────────── */
 	g_nvm_store_rc = -EIO;
-	zassert_equal(-EIO, profile_private_host_set_policy(&g_pp,
-							    PROFILE_PRIVATE_COMMAND));
-	zassert_equal(PROFILE_PRIVATE_PHYSICAL, profile_private_policy(&g_pp));
-	zassert_equal(PROFILE_PRIVATE_PHYSICAL, g_nvm_policy);
+	zassert_equal(-EIO, radiant_profile_private_host_set_policy(&g_pp,
+							    RADIANT_PROFILE_PRIVATE_COMMAND));
+	zassert_equal(RADIANT_PROFILE_PRIVATE_PHYSICAL, radiant_profile_private_policy(&g_pp));
+	zassert_equal(RADIANT_PROFILE_PRIVATE_PHYSICAL, g_nvm_policy);
 	g_nvm_store_rc = 0;
 
 	/* ── And a node with no record refuses the host outright rather than
 	 *    applying a policy that would not survive a reboot ────────────── */
-	private_cfg_fill(&cfg, PROFILE_PRIVATE_NEVER, PROFILE_PRIVATE_BROADCAST,
-			 PROFILE_PRIVATE_K_DEFAULT);
+	private_cfg_fill(&cfg, RADIANT_PROFILE_PRIVATE_NEVER, RADIANT_PROFILE_PRIVATE_BROADCAST,
+			 RADIANT_PROFILE_PRIVATE_K_DEFAULT);
 	cfg.policy_load = NULL;
 	cfg.policy_store = NULL;
-	zassert_equal(0, profile_private_init(&g_pp, &cfg));
+	zassert_equal(0, radiant_profile_private_init(&g_pp, &cfg));
 	zassert_equal(-ENOTSUP,
-		      profile_private_host_set_policy(&g_pp,
-						      PROFILE_PRIVATE_COMMAND));
-	zassert_equal(PROFILE_PRIVATE_NEVER, profile_private_policy(&g_pp));
+		      radiant_profile_private_host_set_policy(&g_pp,
+						      RADIANT_PROFILE_PRIVATE_COMMAND));
+	zassert_equal(RADIANT_PROFILE_PRIVATE_NEVER, radiant_profile_private_policy(&g_pp));
 }
 
-ZTEST(profile_private, test_attest_off_refuses_every_policy_but_the_exemption)
+ZTEST(radiant_profile_private, test_attest_off_refuses_every_policy_but_the_exemption)
 {
-	struct profile_private_cfg cfg;
+	struct radiant_profile_private_cfg cfg;
 	uint8_t policy;
 	uint8_t announce;
 
@@ -1238,25 +1238,25 @@ ZTEST(profile_private, test_attest_off_refuses_every_policy_but_the_exemption)
 	 */
 	keys_up();
 	hr_up();
-	compat_up(PROFILE_PRIVATE_NEVER);
+	compat_up(RADIANT_PROFILE_PRIVATE_NEVER);
 
-	for (policy = PROFILE_PRIVATE_NEVER; policy <= PROFILE_PRIVATE_ALWAYS;
+	for (policy = RADIANT_PROFILE_PRIVATE_NEVER; policy <= RADIANT_PROFILE_PRIVATE_ALWAYS;
 	     policy++) {
-		for (announce = PROFILE_PRIVATE_BROADCAST;
-		     announce <= PROFILE_PRIVATE_SILENT; announce++) {
-			bool with = PROFILE_PRIVATE_COMBINATION_OK(policy,
+		for (announce = RADIANT_PROFILE_PRIVATE_BROADCAST;
+		     announce <= RADIANT_PROFILE_PRIVATE_SILENT; announce++) {
+			bool with = RADIANT_PROFILE_PRIVATE_COMBINATION_OK(policy,
 								   announce,
 								   true);
-			bool without = PROFILE_PRIVATE_COMBINATION_OK(policy,
+			bool without = RADIANT_PROFILE_PRIVATE_COMBINATION_OK(policy,
 								      announce,
 								      false);
 
 			zassert_true(with, "policy %u announce %u", policy, announce);
 
-			if (policy == PROFILE_PRIVATE_NEVER) {
+			if (policy == RADIANT_PROFILE_PRIVATE_NEVER) {
 				zassert_true(without);
-			} else if (policy == PROFILE_PRIVATE_PHYSICAL &&
-				   announce == PROFILE_PRIVATE_SILENT) {
+			} else if (policy == RADIANT_PROFILE_PRIVATE_PHYSICAL &&
+				   announce == RADIANT_PROFILE_PRIVATE_SILENT) {
 				zassert_true(without);
 			} else {
 				zassert_false(without, "policy %u announce %u", policy, announce);
@@ -1265,58 +1265,58 @@ ZTEST(profile_private, test_attest_off_refuses_every_policy_but_the_exemption)
 			/* The runtime arm agrees with the predicate, value for
 			 * value. */
 			private_cfg_fill(&cfg, policy, announce,
-					 PROFILE_PRIVATE_K_DEFAULT);
+					 RADIANT_PROFILE_PRIVATE_K_DEFAULT);
 			cfg.attest = false;
 			if (without) {
 				zassert_equal(0,
-					      profile_private_init(&g_pp, &cfg),
+					      radiant_profile_private_init(&g_pp, &cfg),
 					      "policy %u announce %u", policy, announce);
 			} else {
 				zassert_equal(-ENOTSUP,
-					      profile_private_init(&g_pp, &cfg),
+					      radiant_profile_private_init(&g_pp, &cfg),
 					      "policy %u announce %u", policy, announce);
 			}
 		}
 	}
 }
 
-ZTEST(profile_private, test_the_exempted_combination_actually_switches)
+ZTEST(radiant_profile_private, test_the_exempted_combination_actually_switches)
 {
-	struct profile_private_cfg cfg;
+	struct radiant_profile_private_cfg cfg;
 
 	/* The exemption is not a hole, it's a supported node: a button, no
 	 * announcement, no attestation, and a private channel whose only on-air
 	 * security surface is the ciphertext itself. */
 	keys_up();
 	hr_up();
-	compat_up(PROFILE_PRIVATE_PHYSICAL);
-	private_cfg_fill(&cfg, PROFILE_PRIVATE_PHYSICAL, PROFILE_PRIVATE_SILENT,
-			 PROFILE_PRIVATE_K_DEFAULT);
+	compat_up(RADIANT_PROFILE_PRIVATE_PHYSICAL);
+	private_cfg_fill(&cfg, RADIANT_PROFILE_PRIVATE_PHYSICAL, RADIANT_PROFILE_PRIVATE_SILENT,
+			 RADIANT_PROFILE_PRIVATE_K_DEFAULT);
 	cfg.attest = false;
-	zassert_equal(0, profile_private_init(&g_pp, &cfg));
-	zassert_equal(0, profile_private_attach(&g_pp, &g_pc));
+	zassert_equal(0, radiant_profile_private_init(&g_pp, &cfg));
+	zassert_equal(0, radiant_profile_private_attach(&g_pp, &g_pc));
 	followers_up();
 
 	run(8u);
-	zassert_equal(0, profile_private_physical_action(&g_pp, at(g_stream)));
-	zassert_equal(PROFILE_PRIVATE_STATE_PRIVATE,
-		      profile_private_state(&g_pp));
+	zassert_equal(0, radiant_profile_private_physical_action(&g_pp, at(g_stream)));
+	zassert_equal(RADIANT_PROFILE_PRIVATE_STATE_PRIVATE,
+		      radiant_profile_private_state(&g_pp));
 	zassert_equal(1u, g_enter_calls);
-	zassert_equal(profile_private_locator(&g_pp), g_entered_devnum);
+	zassert_equal(radiant_profile_private_locator(&g_pp), g_entered_devnum);
 
 	/* And the button brings it back. */
 	run(8u);
-	zassert_equal(0, profile_private_physical_action(&g_pp, at(g_stream)));
-	zassert_equal(PROFILE_PRIVATE_STATE_COMPAT,
-		      profile_private_state(&g_pp));
+	zassert_equal(0, radiant_profile_private_physical_action(&g_pp, at(g_stream)));
+	zassert_equal(RADIANT_PROFILE_PRIVATE_STATE_COMPAT,
+		      radiant_profile_private_state(&g_pp));
 	zassert_equal(1u, g_leave_calls);
 }
 
 /* ═══ Coming back ════════════════════════════════════════════════════════ */
 
-ZTEST(profile_private, test_the_node_announces_the_return_and_reverts_on_timeout)
+ZTEST(radiant_profile_private, test_the_node_announces_the_return_and_reverts_on_timeout)
 {
-	struct profile_private_cfg cfg;
+	struct radiant_profile_private_cfg cfg;
 	uint32_t i;
 
 	/* A sensor that silently stays private is indistinguishable from a dead
@@ -1324,18 +1324,18 @@ ZTEST(profile_private, test_the_node_announces_the_return_and_reverts_on_timeout
 	 * same way the switch did, reason included. */
 	keys_up();
 	hr_up();
-	compat_up(PROFILE_PRIVATE_PHYSICAL);
-	private_cfg_fill(&cfg, PROFILE_PRIVATE_PHYSICAL,
-			 PROFILE_PRIVATE_BROADCAST, PROFILE_PRIVATE_K_DEFAULT);
+	compat_up(RADIANT_PROFILE_PRIVATE_PHYSICAL);
+	private_cfg_fill(&cfg, RADIANT_PROFILE_PRIVATE_PHYSICAL,
+			 RADIANT_PROFILE_PRIVATE_BROADCAST, RADIANT_PROFILE_PRIVATE_K_DEFAULT);
 	/* Sixty seconds rather than an hour, so the whole revert fits inside a
 	 * test that runs in a millisecond of simulated air. */
 	cfg.max_private_s = 60u;
-	zassert_equal(0, profile_private_init(&g_pp, &cfg));
-	zassert_equal(0, profile_private_attach(&g_pp, &g_pc));
+	zassert_equal(0, radiant_profile_private_init(&g_pp, &cfg));
+	zassert_equal(0, radiant_profile_private_attach(&g_pp, &g_pc));
 	followers_up();
 
 	run(8u);
-	zassert_equal(0, profile_private_physical_action(&g_pp, at(g_stream)));
+	zassert_equal(0, radiant_profile_private_physical_action(&g_pp, at(g_stream)));
 	run(96u);
 	zassert_true(g_switched);
 	for (i = 0u; i < FOLLOWERS; i++) {
@@ -1344,7 +1344,7 @@ ZTEST(profile_private, test_the_node_announces_the_return_and_reverts_on_timeout
 		 * now, and the announcement comes from there. */
 		g_f[i].saw_target = false;
 		g_f[i].announcements = 0u;
-		profile_private_rx_clear(&g_f[i].rx);
+		radiant_profile_private_rx_clear(&g_f[i].rx);
 	}
 
 	/* 60 s at ~4 Hz is ~244 messages; the countdown is another ~57. */
@@ -1353,8 +1353,8 @@ ZTEST(profile_private, test_the_node_announces_the_return_and_reverts_on_timeout
 	zassert_true(g_returned);
 	zassert_equal(1u, g_pp.reverts_timeout);
 	zassert_equal(1u, g_leave_calls);
-	zassert_equal(PROFILE_PRIVATE_STATE_COMPAT,
-		      profile_private_state(&g_pp));
+	zassert_equal(RADIANT_PROFILE_PRIVATE_STATE_COMPAT,
+		      radiant_profile_private_state(&g_pp));
 
 	for (i = 0u; i < FOLLOWERS; i++) {
 		zassert_true(g_f[i].announcements > 0u, "receiver %u", i);
@@ -1362,8 +1362,8 @@ ZTEST(profile_private, test_the_node_announces_the_return_and_reverts_on_timeout
 		zassert_equal(NODE_DEVNUM, g_f[i].target_devnum,
 			      "receiver %u 0x%04X", i,
 			      g_f[i].target_devnum);
-		zassert_equal(PROFILE_HR_DEVICE_TYPE, g_f[i].target_type);
-		zassert_equal(PROFILE_PRIVATE_REASON_TIMEOUT,
+		zassert_equal(RADIANT_PROFILE_HR_DEVICE_TYPE, g_f[i].target_type);
+		zassert_equal(RADIANT_PROFILE_PRIVATE_REASON_TIMEOUT,
 			      g_f[i].rx.target_reason);
 	}
 	zassert_equal(g_f[0].due_at, g_f[1].due_at);
@@ -1371,62 +1371,62 @@ ZTEST(profile_private, test_the_node_announces_the_return_and_reverts_on_timeout
 	zassert_equal(g_return_msg, g_f[0].due_at);
 }
 
-ZTEST(profile_private, test_a_power_cycle_reverts)
+ZTEST(radiant_profile_private, test_a_power_cycle_reverts)
 {
-	struct profile_private_cfg cfg;
+	struct radiant_profile_private_cfg cfg;
 
 	/* Private mode is RAM state, never persisted, so a rebooted node is an
 	 * ANT+ sensor again. Policy survives (it's in NVM); state does not -
 	 * the two being in different places is the design. */
 	keys_up();
 	hr_up();
-	compat_up(PROFILE_PRIVATE_PHYSICAL);
-	private_cfg_fill(&cfg, PROFILE_PRIVATE_PHYSICAL, PROFILE_PRIVATE_SILENT,
-			 PROFILE_PRIVATE_K_DEFAULT);
-	zassert_equal(0, profile_private_init(&g_pp, &cfg));
-	zassert_equal(0, profile_private_attach(&g_pp, &g_pc));
+	compat_up(RADIANT_PROFILE_PRIVATE_PHYSICAL);
+	private_cfg_fill(&cfg, RADIANT_PROFILE_PRIVATE_PHYSICAL, RADIANT_PROFILE_PRIVATE_SILENT,
+			 RADIANT_PROFILE_PRIVATE_K_DEFAULT);
+	zassert_equal(0, radiant_profile_private_init(&g_pp, &cfg));
+	zassert_equal(0, radiant_profile_private_attach(&g_pp, &g_pc));
 
-	zassert_equal(0, profile_private_physical_action(&g_pp, T_ORIGIN));
-	zassert_true(profile_private_is_private(&g_pp));
+	zassert_equal(0, radiant_profile_private_physical_action(&g_pp, T_ORIGIN));
+	zassert_true(radiant_profile_private_is_private(&g_pp));
 
 	/* The power cycle: everything in RAM is gone, the record is not. */
 	memset(&g_pp, 0xCD, sizeof(g_pp));
-	zassert_equal(0, profile_private_init(&g_pp, &cfg));
+	zassert_equal(0, radiant_profile_private_init(&g_pp, &cfg));
 
-	zassert_equal(PROFILE_PRIVATE_STATE_COMPAT,
-		      profile_private_state(&g_pp));
-	zassert_false(profile_private_is_private(&g_pp));
-	zassert_equal(PROFILE_PRIVATE_PHYSICAL, profile_private_policy(&g_pp));
+	zassert_equal(RADIANT_PROFILE_PRIVATE_STATE_COMPAT,
+		      radiant_profile_private_state(&g_pp));
+	zassert_false(radiant_profile_private_is_private(&g_pp));
+	zassert_equal(RADIANT_PROFILE_PRIVATE_PHYSICAL, radiant_profile_private_policy(&g_pp));
 }
 
-ZTEST(profile_private, test_always_boots_straight_into_private)
+ZTEST(radiant_profile_private, test_always_boots_straight_into_private)
 {
-	struct profile_private_cfg cfg;
+	struct radiant_profile_private_cfg cfg;
 
 	/* `always` is today's radiant_sec node, named as a policy state so the
 	 * axis is complete. Nothing is announced, because there was never a
 	 * compat channel with listeners on it. */
 	keys_up();
 	hr_up();
-	compat_up(PROFILE_PRIVATE_ALWAYS);
-	private_cfg_fill(&cfg, PROFILE_PRIVATE_ALWAYS, PROFILE_PRIVATE_BROADCAST,
-			 PROFILE_PRIVATE_K_DEFAULT);
-	zassert_equal(0, profile_private_init(&g_pp, &cfg));
+	compat_up(RADIANT_PROFILE_PRIVATE_ALWAYS);
+	private_cfg_fill(&cfg, RADIANT_PROFILE_PRIVATE_ALWAYS, RADIANT_PROFILE_PRIVATE_BROADCAST,
+			 RADIANT_PROFILE_PRIVATE_K_DEFAULT);
+	zassert_equal(0, radiant_profile_private_init(&g_pp, &cfg));
 
-	zassert_equal(PROFILE_PRIVATE_STATE_PRIVATE,
-		      profile_private_state(&g_pp));
+	zassert_equal(RADIANT_PROFILE_PRIVATE_STATE_PRIVATE,
+		      radiant_profile_private_state(&g_pp));
 	zassert_equal(1u, g_enter_calls);
-	zassert_equal(profile_private_locator(&g_pp), g_entered_devnum);
+	zassert_equal(radiant_profile_private_locator(&g_pp), g_entered_devnum);
 	zassert_equal(0u, g_pp.announcements);
 
 	/* There is nowhere for a physical action to take it. */
-	zassert_equal(-EPERM, profile_private_physical_action(&g_pp, T_ORIGIN));
+	zassert_equal(-EPERM, radiant_profile_private_physical_action(&g_pp, T_ORIGIN));
 	zassert_equal(1u, g_pp.refused_policy);
 }
 
 /* ═══ The rate limit and the interlock ═══════════════════════════════════ */
 
-ZTEST(profile_private, test_accepted_commands_are_rate_limited)
+ZTEST(radiant_profile_private, test_accepted_commands_are_rate_limited)
 {
 	uint8_t  cmd[8];
 	uint64_t t;
@@ -1434,49 +1434,49 @@ ZTEST(profile_private, test_accepted_commands_are_rate_limited)
 	/* Not a defence against an attacker (the tag is that) but a bound on
 	 * what one buggy/captured receiver can cost the other N-1 listeners,
 	 * each of whom pays a countdown and a retune per accepted command. */
-	node_up(PROFILE_PRIVATE_COMMAND, PROFILE_PRIVATE_SILENT,
-		PROFILE_PRIVATE_K_DEFAULT);
+	node_up(RADIANT_PROFILE_PRIVATE_COMMAND, RADIANT_PROFILE_PRIVATE_SILENT,
+		RADIANT_PROFILE_PRIVATE_K_DEFAULT);
 	run(8u);
 
 	t = at(g_stream);
-	build_command(RX_A, PROFILE_PRIVATE_OP_GO_PRIVATE, t, cmd);
-	zassert_equal(1, profile_private_on_command(&g_pp, t, cmd, sizeof(cmd)));
-	zassert_true(profile_private_is_private(&g_pp));
+	build_command(RX_A, RADIANT_PROFILE_PRIVATE_OP_GO_PRIVATE, t, cmd);
+	zassert_equal(1, radiant_profile_private_on_command(&g_pp, t, cmd, sizeof(cmd)));
+	zassert_true(radiant_profile_private_is_private(&g_pp));
 
 	/* Straight back out again, one second later. */
 	t += US_PER_S;
-	build_command(RX_A, PROFILE_PRIVATE_OP_RETURN, t, cmd);
+	build_command(RX_A, RADIANT_PROFILE_PRIVATE_OP_RETURN, t, cmd);
 	zassert_equal(-EAGAIN,
-		      profile_private_on_command(&g_pp, t, cmd, sizeof(cmd)));
+		      radiant_profile_private_on_command(&g_pp, t, cmd, sizeof(cmd)));
 	zassert_equal(1u, g_pp.refused_rate);
-	zassert_true(profile_private_is_private(&g_pp));
+	zassert_true(radiant_profile_private_is_private(&g_pp));
 
 	/* A refusal does not extend the floor: the clock still runs from the
 	 * last ACCEPTED command. */
-	t = at(g_stream) + (uint64_t)PROFILE_PRIVATE_CMD_MIN_S * US_PER_S;
-	build_command(RX_A, PROFILE_PRIVATE_OP_RETURN, t, cmd);
-	zassert_equal(1, profile_private_on_command(&g_pp, t, cmd, sizeof(cmd)));
-	zassert_false(profile_private_is_private(&g_pp));
+	t = at(g_stream) + (uint64_t)RADIANT_PROFILE_PRIVATE_CMD_MIN_S * US_PER_S;
+	build_command(RX_A, RADIANT_PROFILE_PRIVATE_OP_RETURN, t, cmd);
+	zassert_equal(1, radiant_profile_private_on_command(&g_pp, t, cmd, sizeof(cmd)));
+	zassert_false(radiant_profile_private_is_private(&g_pp));
 }
 
 /* A command node with a one-second rate floor, so the replay floor is what a
  * test meets rather than the rate limit. */
 static void replay_node_up(void)
 {
-	struct profile_private_cfg cfg;
+	struct radiant_profile_private_cfg cfg;
 
 	keys_up();
 	hr_up();
-	compat_up(PROFILE_PRIVATE_COMMAND);
-	private_cfg_fill(&cfg, PROFILE_PRIVATE_COMMAND, PROFILE_PRIVATE_SILENT,
-			 PROFILE_PRIVATE_K_DEFAULT);
+	compat_up(RADIANT_PROFILE_PRIVATE_COMMAND);
+	private_cfg_fill(&cfg, RADIANT_PROFILE_PRIVATE_COMMAND, RADIANT_PROFILE_PRIVATE_SILENT,
+			 RADIANT_PROFILE_PRIVATE_K_DEFAULT);
 	cfg.cmd_min_s = 1u;
-	zassert_equal(0, profile_private_init(&g_pp, &cfg));
-	zassert_equal(0, profile_private_attach(&g_pp, &g_pc));
+	zassert_equal(0, radiant_profile_private_init(&g_pp, &cfg));
+	zassert_equal(0, radiant_profile_private_attach(&g_pp, &g_pc));
 	followers_up();
 }
 
-ZTEST(profile_private, test_a_replay_inside_the_interval_is_refused)
+ZTEST(radiant_profile_private, test_a_replay_inside_the_interval_is_refused)
 {
 	uint8_t  go[8];
 	uint8_t  ret[8];
@@ -1489,27 +1489,27 @@ ZTEST(profile_private, test_a_replay_inside_the_interval_is_refused)
 	run(8u);
 
 	t = at(g_stream);
-	build_command(RX_A, PROFILE_PRIVATE_OP_GO_PRIVATE, t, go);
-	zassert_equal(1, profile_private_on_command(&g_pp, t, go, sizeof(go)));
-	zassert_true(profile_private_is_private(&g_pp));
+	build_command(RX_A, RADIANT_PROFILE_PRIVATE_OP_GO_PRIVATE, t, go);
+	zassert_equal(1, radiant_profile_private_on_command(&g_pp, t, go, sizeof(go)));
+	zassert_true(radiant_profile_private_is_private(&g_pp));
 
 	t += 2u * US_PER_S;
-	build_command(RX_A, PROFILE_PRIVATE_OP_RETURN, t, ret);
-	zassert_equal(1, profile_private_on_command(&g_pp, t, ret, sizeof(ret)));
-	zassert_false(profile_private_is_private(&g_pp));
+	build_command(RX_A, RADIANT_PROFILE_PRIVATE_OP_RETURN, t, ret);
+	zassert_equal(1, radiant_profile_private_on_command(&g_pp, t, ret, sizeof(ret)));
+	zassert_false(radiant_profile_private_is_private(&g_pp));
 
 	t += 2u * US_PER_S;
 	zassert_equal(-EALREADY,
-		      profile_private_on_command(&g_pp, t, go, sizeof(go)));
+		      radiant_profile_private_on_command(&g_pp, t, go, sizeof(go)));
 	zassert_equal(1u, g_pp.refused_replay);
 	zassert_equal(0u, g_pp.refused_rate);
-	zassert_equal(PROFILE_PRIVATE_STATE_COMPAT,
-		      profile_private_state(&g_pp));
+	zassert_equal(RADIANT_PROFILE_PRIVATE_STATE_COMPAT,
+		      radiant_profile_private_state(&g_pp));
 }
 
-ZTEST(profile_private, test_a_failed_announced_switch_does_not_arm_the_replay_floor)
+ZTEST(radiant_profile_private, test_a_failed_announced_switch_does_not_arm_the_replay_floor)
 {
-	struct profile_private_cfg cfg;
+	struct radiant_profile_private_cfg cfg;
 	uint8_t                    go[8];
 	uint64_t                   t0;
 	uint64_t                   t;
@@ -1525,28 +1525,28 @@ ZTEST(profile_private, test_a_failed_announced_switch_does_not_arm_the_replay_fl
 	 * ~6 s, resent at ~10 s. */
 	keys_up();
 	hr_up();
-	compat_up(PROFILE_PRIVATE_COMMAND);
-	private_cfg_fill(&cfg, PROFILE_PRIVATE_COMMAND,
-			 PROFILE_PRIVATE_BROADCAST, PROFILE_PRIVATE_K_MIN);
+	compat_up(RADIANT_PROFILE_PRIVATE_COMMAND);
+	private_cfg_fill(&cfg, RADIANT_PROFILE_PRIVATE_COMMAND,
+			 RADIANT_PROFILE_PRIVATE_BROADCAST, RADIANT_PROFILE_PRIVATE_K_MIN);
 	cfg.cmd_min_s = 8u;
-	zassert_equal(0, profile_private_init(&g_pp, &cfg));
-	zassert_equal(0, profile_private_attach(&g_pp, &g_pc));
+	zassert_equal(0, radiant_profile_private_init(&g_pp, &cfg));
+	zassert_equal(0, radiant_profile_private_attach(&g_pp, &g_pc));
 	followers_up();
 	run(8u);
 
 	g_enter_rc = -EIO;
 	t0 = at(g_stream);
-	build_command(RX_A, PROFILE_PRIVATE_OP_GO_PRIVATE, t0, go);
-	zassert_equal(1, profile_private_on_command(&g_pp, t0, go, sizeof(go)));
-	zassert_equal(PROFILE_PRIVATE_STATE_ANNOUNCING,
-		      profile_private_state(&g_pp));
+	build_command(RX_A, RADIANT_PROFILE_PRIVATE_OP_GO_PRIVATE, t0, go);
+	zassert_equal(1, radiant_profile_private_on_command(&g_pp, t0, go, sizeof(go)));
+	zassert_equal(RADIANT_PROFILE_PRIVATE_STATE_ANNOUNCING,
+		      radiant_profile_private_state(&g_pp));
 
 	/* The countdown runs out and the private channel will not open. */
 	run(24u);
 	zassert_equal(1u, g_pp.transitions_failed);
 	zassert_equal(0u, g_enter_calls);
-	zassert_equal(PROFILE_PRIVATE_STATE_COMPAT,
-		      profile_private_state(&g_pp));
+	zassert_equal(RADIANT_PROFILE_PRIVATE_STATE_COMPAT,
+		      radiant_profile_private_state(&g_pp));
 	zassert_true(at(g_stream) - t0 < (uint64_t)cfg.cmd_min_s * US_PER_S,
 		     "the countdown outlasted the rate floor");
 
@@ -1555,7 +1555,7 @@ ZTEST(profile_private, test_a_failed_announced_switch_does_not_arm_the_replay_fl
 	g_enter_rc = 0;
 	t = at(g_stream);
 	zassert_equal(-EAGAIN,
-		      profile_private_on_command(&g_pp, t, go, sizeof(go)));
+		      radiant_profile_private_on_command(&g_pp, t, go, sizeof(go)));
 	zassert_equal(1u, g_pp.refused_rate);
 	zassert_equal(0u, g_pp.refused_replay);
 
@@ -1568,18 +1568,18 @@ ZTEST(profile_private, test_a_failed_announced_switch_does_not_arm_the_replay_fl
 		     "still inside the rate floor");
 	zassert_true(t - T_ORIGIN < (uint64_t)TEST_T_S * US_PER_S,
 		     "the resend left interval 0");
-	zassert_equal(1, profile_private_on_command(&g_pp, t, go, sizeof(go)));
+	zassert_equal(1, radiant_profile_private_on_command(&g_pp, t, go, sizeof(go)));
 	zassert_equal(0u, g_pp.refused_replay);
-	zassert_equal(PROFILE_PRIVATE_STATE_ANNOUNCING,
-		      profile_private_state(&g_pp));
+	zassert_equal(RADIANT_PROFILE_PRIVATE_STATE_ANNOUNCING,
+		      radiant_profile_private_state(&g_pp));
 
 	run(24u);
-	zassert_true(profile_private_is_private(&g_pp));
+	zassert_true(radiant_profile_private_is_private(&g_pp));
 	zassert_equal(1u, g_enter_calls);
 	zassert_equal(1u, g_pp.transitions_failed);
 }
 
-ZTEST(profile_private, test_the_same_op_in_the_next_interval_is_accepted)
+ZTEST(radiant_profile_private, test_the_same_op_in_the_next_interval_is_accepted)
 {
 	uint8_t  cmd[8];
 	uint64_t t;
@@ -1588,21 +1588,21 @@ ZTEST(profile_private, test_the_same_op_in_the_next_interval_is_accepted)
 	run(8u);
 
 	t = at(g_stream);
-	build_command(RX_A, PROFILE_PRIVATE_OP_GO_PRIVATE, t, cmd);
-	zassert_equal(1, profile_private_on_command(&g_pp, t, cmd, sizeof(cmd)));
+	build_command(RX_A, RADIANT_PROFILE_PRIVATE_OP_GO_PRIVATE, t, cmd);
+	zassert_equal(1, radiant_profile_private_on_command(&g_pp, t, cmd, sizeof(cmd)));
 	t += 2u * US_PER_S;
-	build_command(RX_A, PROFILE_PRIVATE_OP_RETURN, t, cmd);
-	zassert_equal(1, profile_private_on_command(&g_pp, t, cmd, sizeof(cmd)));
+	build_command(RX_A, RADIANT_PROFILE_PRIVATE_OP_RETURN, t, cmd);
+	zassert_equal(1, radiant_profile_private_on_command(&g_pp, t, cmd, sizeof(cmd)));
 
 	/* A whole interval later the counter differs, so the bytes do. */
 	t += (uint64_t)TEST_T_S * US_PER_S;
-	build_command(RX_A, PROFILE_PRIVATE_OP_GO_PRIVATE, t, cmd);
-	zassert_equal(1, profile_private_on_command(&g_pp, t, cmd, sizeof(cmd)));
-	zassert_true(profile_private_is_private(&g_pp));
+	build_command(RX_A, RADIANT_PROFILE_PRIVATE_OP_GO_PRIVATE, t, cmd);
+	zassert_equal(1, radiant_profile_private_on_command(&g_pp, t, cmd, sizeof(cmd)));
+	zassert_true(radiant_profile_private_is_private(&g_pp));
 	zassert_equal(0u, g_pp.refused_replay);
 }
 
-ZTEST(profile_private, test_a_retransmission_in_the_target_state_stays_idempotent)
+ZTEST(radiant_profile_private, test_a_retransmission_in_the_target_state_stays_idempotent)
 {
 	uint8_t  cmd[8];
 	uint64_t t;
@@ -1613,12 +1613,12 @@ ZTEST(profile_private, test_a_retransmission_in_the_target_state_stays_idempoten
 	run(8u);
 
 	t = at(g_stream);
-	build_command(RX_A, PROFILE_PRIVATE_OP_GO_PRIVATE, t, cmd);
-	zassert_equal(1, profile_private_on_command(&g_pp, t, cmd, sizeof(cmd)));
-	zassert_equal(0, profile_private_on_command(&g_pp, t + US_PER_S, cmd,
+	build_command(RX_A, RADIANT_PROFILE_PRIVATE_OP_GO_PRIVATE, t, cmd);
+	zassert_equal(1, radiant_profile_private_on_command(&g_pp, t, cmd, sizeof(cmd)));
+	zassert_equal(0, radiant_profile_private_on_command(&g_pp, t + US_PER_S, cmd,
 						    sizeof(cmd)));
 	zassert_equal(0u, g_pp.refused_replay);
-	zassert_true(profile_private_is_private(&g_pp));
+	zassert_true(radiant_profile_private_is_private(&g_pp));
 }
 
 /* A stand-in for Layer D's window: a client of the same seam that says it is
@@ -1638,67 +1638,67 @@ static bool other_frame(void *user, uint8_t i, uint8_t *payload)
 {
 	ARG_UNUSED(user);
 	ARG_UNUSED(i);
-	memset(payload, 0xEE, PROFILE_PRIVATE_FRAME_PAYLOAD);
+	memset(payload, 0xEE, RADIANT_PROFILE_PRIVATE_FRAME_PAYLOAD);
 	g_other_frames++;
 	return true;
 }
 
-ZTEST(profile_private, test_a_countdown_and_an_open_window_refuse_each_other)
+ZTEST(radiant_profile_private, test_a_countdown_and_an_open_window_refuse_each_other)
 {
-	struct profile_compat_client other;
+	struct radiant_profile_compat_client other;
 	uint8_t                      cmd[8];
 
 	/* THE INTERLOCK: Layer D's frames and this announcement share indices,
 	 * and a switch closes the channel the window runs on. A countdown and a
 	 * window must not run at once; whichever arrives second is refused,
 	 * both directions, or the rule is a race. */
-	node_up(PROFILE_PRIVATE_COMMAND, PROFILE_PRIVATE_BROADCAST,
-		PROFILE_PRIVATE_K_DEFAULT);
+	node_up(RADIANT_PROFILE_PRIVATE_COMMAND, RADIANT_PROFILE_PRIVATE_BROADCAST,
+		RADIANT_PROFILE_PRIVATE_K_DEFAULT);
 
 	memset(&other, 0, sizeof(other));
 	other.frames = other_frame_count;
 	other.frame = other_frame;
 	other.user = &g_other_open;
-	zassert_equal(0, profile_compat_set_client(&g_pc, &other));
+	zassert_equal(0, radiant_profile_compat_set_client(&g_pc, &other));
 
 	g_other_open = true;
 	g_other_frames = 0u;
 	run(8u);
 
 	/* The window is open; the countdown is second and is refused. */
-	build_command(RX_A, PROFILE_PRIVATE_OP_GO_PRIVATE, at(g_stream), cmd);
+	build_command(RX_A, RADIANT_PROFILE_PRIVATE_OP_GO_PRIVATE, at(g_stream), cmd);
 	zassert_equal(-EBUSY,
-		      profile_private_on_command(&g_pp, at(g_stream), cmd,
+		      radiant_profile_private_on_command(&g_pp, at(g_stream), cmd,
 						 sizeof(cmd)));
 	zassert_equal(1u, g_pp.refused_busy);
 	zassert_equal(-EBUSY,
-		      profile_private_physical_action(&g_pp, at(g_stream)));
+		      radiant_profile_private_physical_action(&g_pp, at(g_stream)));
 	zassert_equal(2u, g_pp.refused_busy);
 
 	run(16u);
 	zassert_true(g_other_frames > 0u);
-	zassert_equal(PROFILE_PRIVATE_STATE_COMPAT,
-		      profile_private_state(&g_pp));
+	zassert_equal(RADIANT_PROFILE_PRIVATE_STATE_COMPAT,
+		      radiant_profile_private_state(&g_pp));
 
 	/* The window closes, and now the countdown is allowed. */
 	g_other_open = false;
 	run(1u);
-	build_command(RX_A, PROFILE_PRIVATE_OP_GO_PRIVATE, at(g_stream), cmd);
-	zassert_equal(1, profile_private_on_command(&g_pp, at(g_stream), cmd,
+	build_command(RX_A, RADIANT_PROFILE_PRIVATE_OP_GO_PRIVATE, at(g_stream), cmd);
+	zassert_equal(1, radiant_profile_private_on_command(&g_pp, at(g_stream), cmd,
 						    sizeof(cmd)));
-	zassert_equal(PROFILE_PRIVATE_STATE_ANNOUNCING,
-		      profile_private_state(&g_pp));
+	zassert_equal(RADIANT_PROFILE_PRIVATE_STATE_ANNOUNCING,
+		      radiant_profile_private_state(&g_pp));
 
 	/* ...and now the window is the one that would be second. The other
 	 * client's side of this is asserted in test_profile_enrol.c against the
 	 * real module; here it is the seam's answer that matters. */
-	zassert_true(profile_compat_client_busy(&g_pc, at(g_stream),
+	zassert_true(radiant_profile_compat_client_busy(&g_pc, at(g_stream),
 						&g_other_open));
 }
 
 /* ═══ The beacon, while a switch is pending ══════════════════════════════ */
 
-ZTEST(profile_private, test_the_beacon_carries_the_locator_and_the_pending_bit)
+ZTEST(radiant_profile_private, test_the_beacon_carries_the_locator_and_the_pending_bit)
 {
 	uint8_t  cmd[8];
 	uint32_t i;
@@ -1706,27 +1706,27 @@ ZTEST(profile_private, test_the_beacon_carries_the_locator_and_the_pending_bit)
 	bool     saw_locator = false;
 	bool     saw_four = false;
 
-	node_up(PROFILE_PRIVATE_COMMAND, PROFILE_PRIVATE_BROADCAST,
-		PROFILE_PRIVATE_K_DEFAULT);
+	node_up(RADIANT_PROFILE_PRIVATE_COMMAND, RADIANT_PROFILE_PRIVATE_BROADCAST,
+		RADIANT_PROFILE_PRIVATE_K_DEFAULT);
 
 	/* Before anything happens: the locator is published, because a receiver
 	 * has to be able to find this node whether or not it hears an
 	 * announcement, and private-available is set because the policy is not
 	 * `never`. */
 	zassert_equal(PRIVATE_DEVICE_TYPE, g_pc.frames[1][2]);
-	zassert_equal((uint8_t)(profile_private_locator(&g_pp) & 0xFFu),
+	zassert_equal((uint8_t)(radiant_profile_private_locator(&g_pp) & 0xFFu),
 		      g_pc.frames[1][3]);
-	zassert_equal((uint8_t)(profile_private_locator(&g_pp) >> 8),
+	zassert_equal((uint8_t)(radiant_profile_private_locator(&g_pp) >> 8),
 		      g_pc.frames[1][4]);
 	zassert_true((g_pc.frames[0][2] &
-		      PROFILE_COMPAT_CAP_PRIVATE_AVAILABLE) != 0u);
+		      RADIANT_PROFILE_COMPAT_CAP_PRIVATE_AVAILABLE) != 0u);
 	zassert_equal(0u, (uint8_t)(g_pc.frames[0][3] &
-				    PROFILE_COMPAT_PENDING_SWITCH));
+				    RADIANT_PROFILE_COMPAT_PENDING_SWITCH));
 
 	g_log_enable = true;
 	run(8u);
-	build_command(RX_A, PROFILE_PRIVATE_OP_GO_PRIVATE, at(g_stream), cmd);
-	zassert_equal(1, profile_private_on_command(&g_pp, at(g_stream), cmd,
+	build_command(RX_A, RADIANT_PROFILE_PRIVATE_OP_GO_PRIVATE, at(g_stream), cmd);
+	zassert_equal(1, radiant_profile_private_on_command(&g_pp, at(g_stream), cmd,
 						    sizeof(cmd)));
 	run(96u);
 
@@ -1735,17 +1735,17 @@ ZTEST(profile_private, test_the_beacon_carries_the_locator_and_the_pending_bit)
 		uint8_t        idx;
 		uint8_t        count;
 
-		if ((b[0] & PROFILE_COMPAT_PAGE_MASK) !=
-		    PROFILE_COMPAT_PAGE_BEACON) {
+		if ((b[0] & RADIANT_PROFILE_COMPAT_PAGE_MASK) !=
+		    RADIANT_PROFILE_COMPAT_PAGE_BEACON) {
 			continue;
 		}
 		idx = (uint8_t)(b[1] >> 4);
 		count = (uint8_t)((b[1] & 0x0Fu) + 1u);
-		if (count == PROFILE_PRIVATE_SET_FRAMES) {
+		if (count == RADIANT_PROFILE_PRIVATE_SET_FRAMES) {
 			saw_four = true;
 		}
-		if (idx == 0u && count == PROFILE_PRIVATE_SET_FRAMES &&
-		    (b[3] & PROFILE_COMPAT_PENDING_SWITCH) != 0u) {
+		if (idx == 0u && count == RADIANT_PROFILE_PRIVATE_SET_FRAMES &&
+		    (b[3] & RADIANT_PROFILE_COMPAT_PENDING_SWITCH) != 0u) {
 			saw_pending = true;
 		}
 		if (idx == 1u && b[2] == PRIVATE_DEVICE_TYPE) {

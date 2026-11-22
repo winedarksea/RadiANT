@@ -38,7 +38,7 @@
  * So an explicit claim outranks an implicit one, and each side already has the
  * wire signal needed to say no:
  *
- *   to an FE-C controller   page 71 status PROFILE_FEC_CMD_STATUS_REJECTED (3)
+ *   to an FE-C controller   page 71 status RADIANT_PROFILE_FEC_CMD_STATUS_REJECTED (3)
  *   to an FTMS client       result code CONTROL_NOT_PERMITTED (0x05)
  *
  * Neither is invented for this - both are pre-existing constants in the two
@@ -86,7 +86,7 @@ enum treadmill_ctrl_src {
 
 /*
  * The two FE-C pages the token gates, spelled here as well so this header does
- * not drag profile_fec_tx.h into the ztest that exercises the policy - the same
+ * not drag radiant_profile_fec_tx.h into the ztest that exercises the policy - the same
  * trick treadmill_state.h uses for the FE state values, and _Static_assert'd
  * equal to PROFILE_FEC_PAGE_* in main.c so the two spellings cannot drift.
  */

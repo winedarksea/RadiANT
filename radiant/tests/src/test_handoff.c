@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Provenance: original clean-room work, written against
- * src/profiles/profile_handoff.h, radiant/include/radiant/radiant_channel.h,
+ * src/profiles/radiant_profile_handoff.h, radiant/include/radiant/radiant_channel.h,
  * radiant/include/radiant/radiant_search.h and
  * radiant/tests/fake_radio.h, with layout expectations from
  * docs/radiant-telemetry.md section 12. See docs/decisions/0002-clean-room-policy.md.
@@ -34,7 +34,7 @@
 #include <radiant/radiant_radio_hal.h>
 #include <radiant/radiant_search.h>
 
-#include "profile_handoff.h"
+#include "radiant_profile_handoff.h"
 
 #define TYPE_SLAVE  0x00u
 #define TYPE_MASTER 0x10u
@@ -56,18 +56,18 @@ static const uint8_t payload8[8] = {
 /* The canonical handoff, and the sixteen bytes it must become. Next slot 5000
  * counts after frame 1's t_sync, at the 4 Hz period, with a 32 kHz crystal
  * announced. */
-static const struct profile_handoff CANON = {
+static const struct radiant_profile_handoff CANON = {
 	.device_number = 0xB1CEu,
 	.period = 8182u,
 	.phase = 5006u,
 	.device_type = 0x60u,
 	.trans_type = 0x05u,
-	.clock_accuracy = PROFILE_HANDOFF_CLK_30PPM,
+	.clock_accuracy = RADIANT_PROFILE_HANDOFF_CLK_30PPM,
 	.counter = 0x2Au,
 };
 
-static const uint8_t CANON_BYTES[PROFILE_HANDOFF_FRAMES *
-				 PROFILE_HANDOFF_FRAME_LEN] = {
+static const uint8_t CANON_BYTES[RADIANT_PROFILE_HANDOFF_FRAMES *
+				 RADIANT_PROFILE_HANDOFF_FRAME_LEN] = {
 	0x12, 0x2A, 0x01, 0xB1, 0xCE, 0xC0, 0x0A, 0x00,
 	0x12, 0x2A, 0x11, 0x1F, 0xF6, 0x9C, 0x76, 0x00,
 };
@@ -208,7 +208,7 @@ ZTEST(handoff, test_the_frames_are_byte_for_byte_what_the_python_encoder_emits)
 {
 	uint8_t out[sizeof(CANON_BYTES)];
 
-	zassert_ok(profile_handoff_encode(&CANON, out));
+	zassert_ok(radiant_profile_handoff_encode(&CANON, out));
 	zassert_mem_equal(out, CANON_BYTES, sizeof(CANON_BYTES));
 }
 
@@ -219,29 +219,29 @@ ZTEST(handoff, test_page_number_counter_and_frame_index)
 	uint8_t count;
 	uint8_t i;
 
-	zassert_ok(profile_handoff_encode(&CANON, out));
+	zassert_ok(radiant_profile_handoff_encode(&CANON, out));
 
-	for (i = 0u; i < PROFILE_HANDOFF_FRAMES; i++) {
-		const uint8_t *f = &out[i * PROFILE_HANDOFF_FRAME_LEN];
+	for (i = 0u; i < RADIANT_PROFILE_HANDOFF_FRAMES; i++) {
+		const uint8_t *f = &out[i * RADIANT_PROFILE_HANDOFF_FRAME_LEN];
 
-		zassert_equal(PROFILE_HANDOFF_PAGE, f[0]);
+		zassert_equal(RADIANT_PROFILE_HANDOFF_PAGE, f[0]);
 		/* Byte [1] is the COUNTER, not the frame index (that's byte [2]) -
 		 * avoids a third exception to the section 4 counter invariant,
 		 * which the security switches read a nonce out of. */
 		zassert_equal(CANON.counter, f[1]);
-		zassert_ok(profile_handoff_frame_index(f, &index, &count));
+		zassert_ok(radiant_profile_handoff_frame_index(f, &index, &count));
 		zassert_equal(i, index);
-		zassert_equal(PROFILE_HANDOFF_FRAMES, count);
+		zassert_equal(RADIANT_PROFILE_HANDOFF_FRAMES, count);
 	}
 }
 
 ZTEST(handoff, test_round_trip)
 {
 	uint8_t out[sizeof(CANON_BYTES)];
-	struct profile_handoff got;
+	struct radiant_profile_handoff got;
 
-	zassert_ok(profile_handoff_encode(&CANON, out));
-	zassert_ok(profile_handoff_decode(out, &got));
+	zassert_ok(radiant_profile_handoff_encode(&CANON, out));
+	zassert_ok(radiant_profile_handoff_decode(out, &got));
 
 	zassert_equal(CANON.device_number, got.device_number);
 	zassert_equal(CANON.device_type, got.device_type);
@@ -256,80 +256,80 @@ ZTEST(handoff, test_the_two_frames_are_order_insensitive)
 {
 	uint8_t out[sizeof(CANON_BYTES)];
 	uint8_t swapped[sizeof(CANON_BYTES)];
-	struct profile_handoff got;
+	struct radiant_profile_handoff got;
 
-	zassert_ok(profile_handoff_encode(&CANON, out));
-	memcpy(&swapped[0], &out[PROFILE_HANDOFF_FRAME_LEN],
-	       PROFILE_HANDOFF_FRAME_LEN);
-	memcpy(&swapped[PROFILE_HANDOFF_FRAME_LEN], &out[0],
-	       PROFILE_HANDOFF_FRAME_LEN);
+	zassert_ok(radiant_profile_handoff_encode(&CANON, out));
+	memcpy(&swapped[0], &out[RADIANT_PROFILE_HANDOFF_FRAME_LEN],
+	       RADIANT_PROFILE_HANDOFF_FRAME_LEN);
+	memcpy(&swapped[RADIANT_PROFILE_HANDOFF_FRAME_LEN], &out[0],
+	       RADIANT_PROFILE_HANDOFF_FRAME_LEN);
 
 	/* Frame 0 is timeless and frame 1 is self-dating, so a receiver that
 	 * hears them backwards or a rotation apart loses nothing but the wait. */
-	zassert_ok(profile_handoff_decode(swapped, &got));
+	zassert_ok(radiant_profile_handoff_decode(swapped, &got));
 	zassert_equal(CANON.device_number, got.device_number);
 	zassert_equal(CANON.phase, got.phase);
 }
 
 ZTEST(handoff, test_two_frames_of_different_handoffs_are_refused)
 {
-	struct profile_handoff other = CANON;
+	struct radiant_profile_handoff other = CANON;
 	uint8_t a[sizeof(CANON_BYTES)];
 	uint8_t b[sizeof(CANON_BYTES)];
 	uint8_t mixed[sizeof(CANON_BYTES)];
-	struct profile_handoff got;
+	struct radiant_profile_handoff got;
 
 	other.counter = 0x2Bu;
 	other.device_number = 0x0001u;
 
-	zassert_ok(profile_handoff_encode(&CANON, a));
-	zassert_ok(profile_handoff_encode(&other, b));
-	memcpy(&mixed[0], &a[0], PROFILE_HANDOFF_FRAME_LEN);
-	memcpy(&mixed[PROFILE_HANDOFF_FRAME_LEN], &b[PROFILE_HANDOFF_FRAME_LEN],
-	       PROFILE_HANDOFF_FRAME_LEN);
+	zassert_ok(radiant_profile_handoff_encode(&CANON, a));
+	zassert_ok(radiant_profile_handoff_encode(&other, b));
+	memcpy(&mixed[0], &a[0], RADIANT_PROFILE_HANDOFF_FRAME_LEN);
+	memcpy(&mixed[RADIANT_PROFILE_HANDOFF_FRAME_LEN], &b[RADIANT_PROFILE_HANDOFF_FRAME_LEN],
+	       RADIANT_PROFILE_HANDOFF_FRAME_LEN);
 
 	/* Two counters are two handoffs, and merging them would describe a
 	 * channel neither sender meant - well-formed, and pointing nowhere. */
-	zassert_equal(-EBADMSG, profile_handoff_decode(mixed, &got));
+	zassert_equal(-EBADMSG, radiant_profile_handoff_decode(mixed, &got));
 }
 
 ZTEST(handoff, test_an_incomplete_set_is_refused_rather_than_half_applied)
 {
 	uint8_t out[sizeof(CANON_BYTES)];
 	uint8_t doubled[sizeof(CANON_BYTES)];
-	struct profile_handoff got;
+	struct radiant_profile_handoff got;
 
-	zassert_ok(profile_handoff_encode(&CANON, out));
-	memcpy(&doubled[0], &out[0], PROFILE_HANDOFF_FRAME_LEN);
-	memcpy(&doubled[PROFILE_HANDOFF_FRAME_LEN], &out[0],
-	       PROFILE_HANDOFF_FRAME_LEN);
+	zassert_ok(radiant_profile_handoff_encode(&CANON, out));
+	memcpy(&doubled[0], &out[0], RADIANT_PROFILE_HANDOFF_FRAME_LEN);
+	memcpy(&doubled[RADIANT_PROFILE_HANDOFF_FRAME_LEN], &out[0],
+	       RADIANT_PROFILE_HANDOFF_FRAME_LEN);
 
-	zassert_equal(-EBADMSG, profile_handoff_decode(doubled, &got));
+	zassert_equal(-EBADMSG, radiant_profile_handoff_decode(doubled, &got));
 }
 
 ZTEST(handoff, test_every_reserved_field_is_zero_and_is_asserted_not_assumed)
 {
 	uint8_t out[sizeof(CANON_BYTES)];
-	struct profile_handoff got;
+	struct radiant_profile_handoff got;
 	uint8_t i;
 
-	zassert_ok(profile_handoff_encode(&CANON, out));
+	zassert_ok(radiant_profile_handoff_encode(&CANON, out));
 
-	for (i = 0u; i < PROFILE_HANDOFF_FRAMES; i++) {
+	for (i = 0u; i < RADIANT_PROFILE_HANDOFF_FRAMES; i++) {
 		/* Byte [7] is tag space, not padding: section 4 puts a RadiANT
 		 * page's authentication tag at the end and nowhere else, so no
 		 * field may ever be placed there. */
-		zassert_equal(0u, out[i * PROFILE_HANDOFF_FRAME_LEN + 7u]);
+		zassert_equal(0u, out[i * RADIANT_PROFILE_HANDOFF_FRAME_LEN + 7u]);
 	}
 	/* Frame 0's field area ends in one reserved bit. */
 	zassert_equal(0u, out[6] & 0x01u);
 
 	out[6] |= 0x01u;
-	zassert_equal(-EPROTO, profile_handoff_decode(out, &got));
+	zassert_equal(-EPROTO, radiant_profile_handoff_decode(out, &got));
 
-	zassert_ok(profile_handoff_encode(&CANON, out));
-	out[PROFILE_HANDOFF_FRAME_LEN + 7u] = 0xFFu;
-	zassert_equal(-EPROTO, profile_handoff_decode(out, &got));
+	zassert_ok(radiant_profile_handoff_encode(&CANON, out));
+	out[RADIANT_PROFILE_HANDOFF_FRAME_LEN + 7u] = 0xFFu;
+	zassert_equal(-EPROTO, radiant_profile_handoff_decode(out, &got));
 }
 
 ZTEST(handoff, test_the_page_has_no_room_for_an_epoch)
@@ -337,16 +337,16 @@ ZTEST(handoff, test_the_page_has_no_room_for_an_epoch)
 	/* No room for an epoch: for a hostless node the epoch is the boot
 	 * counter, and broadcasting it in the clear would fingerprint the
 	 * device and defeat per-boot device-number rotation. All 64 field bits
-	 * are already assigned; _Static_asserts in profile_handoff.c catch any
+	 * are already assigned; _Static_asserts in radiant_profile_handoff.c catch any
 	 * attempt to add one. */
 	const uint32_t assigned = 16u + 7u + 8u + 1u   /* who  */
 				  + 16u + 13u + 3u;    /* when */
 
-	zassert_equal(2u * PROFILE_HANDOFF_AREA_BITS, assigned);
+	zassert_equal(2u * RADIANT_PROFILE_HANDOFF_AREA_BITS, assigned);
 	/* And the area genuinely ends where the tag space begins: four bytes,
 	 * not five. */
-	zassert_equal(32u, PROFILE_HANDOFF_AREA_BITS);
-	zassert_equal(8u, PROFILE_HANDOFF_FRAME_LEN);
+	zassert_equal(32u, RADIANT_PROFILE_HANDOFF_AREA_BITS);
+	zassert_equal(8u, RADIANT_PROFILE_HANDOFF_FRAME_LEN);
 }
 
 ZTEST(handoff, test_the_clock_accuracy_ladder_is_the_documented_one)
@@ -355,23 +355,23 @@ ZTEST(handoff, test_the_clock_accuracy_ladder_is_the_documented_one)
 					75u, 50u, 30u, 20u };
 	uint8_t code;
 
-	for (code = 0u; code < PROFILE_HANDOFF_CLK_COUNT; code++) {
+	for (code = 0u; code < RADIANT_PROFILE_HANDOFF_CLK_COUNT; code++) {
 		uint8_t out[sizeof(CANON_BYTES)];
-		struct profile_handoff h = CANON;
-		struct profile_handoff got;
+		struct radiant_profile_handoff h = CANON;
+		struct radiant_profile_handoff got;
 
-		zassert_equal(ppm[code], profile_handoff_clk_ppm(code));
+		zassert_equal(ppm[code], radiant_profile_handoff_clk_ppm(code));
 
 		h.clock_accuracy = code;
-		zassert_ok(profile_handoff_encode(&h, out));
-		zassert_ok(profile_handoff_decode(out, &got));
+		zassert_ok(radiant_profile_handoff_encode(&h, out));
+		zassert_ok(radiant_profile_handoff_decode(out, &got));
 		zassert_equal(code, got.clock_accuracy);
 	}
 
 	/* Code 0 is "not stated", and on no evidence the worst case is the only
 	 * safe answer. A consumer must round outward from these. */
-	zassert_equal(500u, profile_handoff_clk_ppm(PROFILE_HANDOFF_CLK_UNKNOWN));
-	zassert_equal(0u, profile_handoff_clk_ppm(PROFILE_HANDOFF_CLK_COUNT));
+	zassert_equal(500u, radiant_profile_handoff_clk_ppm(RADIANT_PROFILE_HANDOFF_CLK_UNKNOWN));
+	zassert_equal(0u, radiant_profile_handoff_clk_ppm(RADIANT_PROFILE_HANDOFF_CLK_COUNT));
 }
 
 ZTEST(handoff, test_phase_resolution_stays_inside_the_guard_at_every_period)
@@ -395,13 +395,13 @@ ZTEST(handoff, test_phase_resolution_stays_inside_the_guard_at_every_period)
 		phases[3] = (uint32_t)period - 1u;
 
 		for (j = 0u; j < ARRAY_SIZE(phases); j++) {
-			struct profile_handoff h = CANON;
+			struct radiant_profile_handoff h = CANON;
 			uint32_t back;
 			uint32_t err_us;
 
 			h.period = period;
-			h.phase = profile_handoff_phase_encode(phases[j], period);
-			back = profile_handoff_phase_counts(&h);
+			h.phase = radiant_profile_handoff_phase_encode(phases[j], period);
+			back = radiant_profile_handoff_phase_counts(&h);
 
 			err_us = (uint32_t)radiant_channel_counts_to_us(
 				back > phases[j] ? back - phases[j]
@@ -417,50 +417,50 @@ ZTEST(handoff, test_a_phase_across_a_slot_boundary_is_reduced_not_refused)
 {
 	/* It is a phase. A caller one period out is not wrong, it is one period
 	 * out, and refusing would push modular arithmetic to every caller. */
-	zassert_equal(profile_handoff_phase_encode(5000u, 8182u),
-		      profile_handoff_phase_encode(8182u + 5000u, 8182u));
+	zassert_equal(radiant_profile_handoff_phase_encode(5000u, 8182u),
+		      radiant_profile_handoff_phase_encode(8182u + 5000u, 8182u));
 	/* An asynchronous node has no slot to hand over. */
-	zassert_equal(0u, profile_handoff_phase_encode(5000u, 0u));
+	zassert_equal(0u, radiant_profile_handoff_phase_encode(5000u, 0u));
 }
 
 ZTEST(handoff, test_an_unopenable_channel_is_refused_at_the_encoder)
 {
-	struct profile_handoff h;
+	struct radiant_profile_handoff h;
 	uint8_t out[sizeof(CANON_BYTES)];
 
 	h = CANON;
 	h.period = 0u;
-	zassert_equal(-EINVAL, profile_handoff_encode(&h, out));
+	zassert_equal(-EINVAL, radiant_profile_handoff_encode(&h, out));
 
 	/* The MSB of the on-air device type field is the pairing bit, which is
 	 * a property of a search rather than of the node, so it is not handed
 	 * over and 0x80..0xFF is not a device type. */
 	h = CANON;
 	h.device_type = 0xE0u;
-	zassert_equal(-EINVAL, profile_handoff_encode(&h, out));
+	zassert_equal(-EINVAL, radiant_profile_handoff_encode(&h, out));
 
 	h = CANON;
 	h.device_type = 0u;
-	zassert_equal(-EINVAL, profile_handoff_encode(&h, out));
+	zassert_equal(-EINVAL, radiant_profile_handoff_encode(&h, out));
 
 	h = CANON;
-	h.clock_accuracy = PROFILE_HANDOFF_CLK_COUNT;
-	zassert_equal(-EINVAL, profile_handoff_encode(&h, out));
+	h.clock_accuracy = RADIANT_PROFILE_HANDOFF_CLK_COUNT;
+	zassert_equal(-EINVAL, radiant_profile_handoff_encode(&h, out));
 }
 
 ZTEST(handoff, test_a_new_counter_abandons_a_partial_set)
 {
-	struct profile_handoff other = CANON;
-	struct profile_handoff got;
-	struct profile_handoff_rx rx;
+	struct radiant_profile_handoff other = CANON;
+	struct radiant_profile_handoff got;
+	struct radiant_profile_handoff_rx rx;
 	uint8_t a[sizeof(CANON_BYTES)];
 	uint8_t b[sizeof(CANON_BYTES)];
 
 	other.counter = 0x2Bu;
 	other.device_number = 0x0042u;
 
-	zassert_ok(profile_handoff_encode(&CANON, a));
-	zassert_ok(profile_handoff_encode(&other, b));
+	zassert_ok(radiant_profile_handoff_encode(&CANON, a));
+	zassert_ok(radiant_profile_handoff_encode(&other, b));
 
 	memset(&rx, 0, sizeof(rx));
 
@@ -468,12 +468,12 @@ ZTEST(handoff, test_a_new_counter_abandons_a_partial_set)
 	 * them would assemble a perfectly well-formed page describing a channel
 	 * that never existed, whose only symptom is a search timeout minutes
 	 * later - so the partial set is dropped instead. */
-	zassert_equal(0, profile_handoff_rx_frame(&rx, &a[0], &got));
-	zassert_equal(0, profile_handoff_rx_frame(
-				&rx, &b[PROFILE_HANDOFF_FRAME_LEN], &got));
+	zassert_equal(0, radiant_profile_handoff_rx_frame(&rx, &a[0], &got));
+	zassert_equal(0, radiant_profile_handoff_rx_frame(
+				&rx, &b[RADIANT_PROFILE_HANDOFF_FRAME_LEN], &got));
 
 	/* And the second handoff completes on its own terms. */
-	zassert_equal(1, profile_handoff_rx_frame(&rx, &b[0], &got));
+	zassert_equal(1, radiant_profile_handoff_rx_frame(&rx, &b[0], &got));
 	zassert_equal(0x0042u, got.device_number);
 	zassert_equal(0x2Bu, got.counter);
 }
@@ -523,11 +523,11 @@ static uint32_t sweep_acquire(void)
 
 ZTEST(handoff, test_a_handoff_lands_in_the_same_channel_state_a_sweep_does)
 {
-	struct profile_handoff h;
+	struct radiant_profile_handoff h;
 	struct radiant_channel_id swept_id;
 	struct radiant_channel_id handed_id;
-	uint8_t frames[PROFILE_HANDOFF_FRAMES * PROFILE_HANDOFF_FRAME_LEN];
-	struct profile_handoff received;
+	uint8_t frames[RADIANT_PROFILE_HANDOFF_FRAMES * RADIANT_PROFILE_HANDOFF_FRAME_LEN];
+	struct radiant_profile_handoff received;
 	radiant_time_t t_carrier;
 	radiant_time_t next_swept;
 	radiant_time_t next_handed;
@@ -545,15 +545,15 @@ ZTEST(handoff, test_a_handoff_lands_in_the_same_channel_state_a_sweep_does)
 	 * sends it as sixteen bytes; nothing else passes between the two
 	 * channels, so the comparison below tests the format, not this test. */
 	t_carrier = radiant_radio_now();
-	zassert_ok(profile_handoff_from_channel(SWEEP_CH, t_carrier, 0x2Au,
-						PROFILE_HANDOFF_CLK_30PPM, &h));
-	zassert_ok(profile_handoff_encode(&h, frames));
-	zassert_ok(profile_handoff_decode(frames, &received));
+	zassert_ok(radiant_profile_handoff_from_channel(SWEEP_CH, t_carrier, 0x2Au,
+						RADIANT_PROFILE_HANDOFF_CLK_30PPM, &h));
+	zassert_ok(radiant_profile_handoff_encode(&h, frames));
+	zassert_ok(radiant_profile_handoff_decode(frames, &received));
 
 	zassert_equal(RADIANT_CH_OK,
 		      radiant_channel_assign(HANDOFF_CH, TYPE_SLAVE, 0u, 0u));
 	zassert_equal(RADIANT_CH_OK,
-		      profile_handoff_apply(HANDOFF_CH, &received, t_carrier,
+		      radiant_profile_handoff_apply(HANDOFF_CH, &received, t_carrier,
 					    radiant_radio_now()));
 
 	/* ---- field by field ---- */
@@ -635,9 +635,9 @@ ZTEST(handoff, test_a_handoff_lands_in_the_same_channel_state_a_sweep_does)
 
 static void handoff_gate(bool long_match)
 {
-	struct profile_handoff h;
-	struct profile_handoff received;
-	uint8_t frames[PROFILE_HANDOFF_FRAMES * PROFILE_HANDOFF_FRAME_LEN];
+	struct radiant_profile_handoff h;
+	struct radiant_profile_handoff received;
+	uint8_t frames[RADIANT_PROFILE_HANDOFF_FRAMES * RADIANT_PROFILE_HANDOFF_FRAME_LEN];
 	radiant_time_t t_begin;
 	radiant_time_t t_first_slot_swept;
 	radiant_time_t t_carrier;
@@ -669,15 +669,15 @@ static void handoff_gate(bool long_match)
 	 * plan's own case: persisted across a reboot, or handed over by a
 	 * receiver that is already tracking - as here. */
 	t_carrier = radiant_radio_now();
-	zassert_ok(profile_handoff_from_channel(SWEEP_CH, t_carrier, 1u,
-						PROFILE_HANDOFF_CLK_30PPM, &h));
-	zassert_ok(profile_handoff_encode(&h, frames));
-	zassert_ok(profile_handoff_decode(frames, &received));
+	zassert_ok(radiant_profile_handoff_from_channel(SWEEP_CH, t_carrier, 1u,
+						RADIANT_PROFILE_HANDOFF_CLK_30PPM, &h));
+	zassert_ok(radiant_profile_handoff_encode(&h, frames));
+	zassert_ok(radiant_profile_handoff_decode(frames, &received));
 
 	zassert_equal(RADIANT_CH_OK,
 		      radiant_channel_assign(HANDOFF_CH, TYPE_SLAVE, 0u, 0u));
 	zassert_equal(RADIANT_CH_OK,
-		      profile_handoff_apply(HANDOFF_CH, &received, t_carrier,
+		      radiant_profile_handoff_apply(HANDOFF_CH, &received, t_carrier,
 					    t_carrier));
 
 	arms_after_handoff = fake_radio_stats()->arms_rx;
@@ -729,15 +729,15 @@ ZTEST(handoff, test_a_handoff_beats_a_one_window_short_match_sweep)
 
 ZTEST(handoff, test_only_a_tracking_channel_may_be_handed_over)
 {
-	struct profile_handoff h;
+	struct radiant_profile_handoff h;
 
 	bring_up();
 
 	/* Unassigned. */
 	zassert_equal(-ENOTCONN,
-		      profile_handoff_from_channel(HANDOFF_CH,
+		      radiant_profile_handoff_from_channel(HANDOFF_CH,
 						   radiant_radio_now(), 0u,
-						   PROFILE_HANDOFF_CLK_UNKNOWN,
+						   RADIANT_PROFILE_HANDOFF_CLK_UNKNOWN,
 						   &h));
 
 	/* Assigned and searching: no slot phase exists to give away yet. */
@@ -752,9 +752,9 @@ ZTEST(handoff, test_only_a_tracking_channel_may_be_handed_over)
 	zassert_equal(RADIANT_CH_STATE_SEARCHING,
 		      radiant_channel_state_get(SWEEP_CH));
 	zassert_equal(-ENOTCONN,
-		      profile_handoff_from_channel(SWEEP_CH,
+		      radiant_profile_handoff_from_channel(SWEEP_CH,
 						   radiant_radio_now(), 0u,
-						   PROFILE_HANDOFF_CLK_UNKNOWN,
+						   RADIANT_PROFILE_HANDOFF_CLK_UNKNOWN,
 						   &h));
 
 	end_of_test();
@@ -770,7 +770,7 @@ ZTEST(handoff, test_a_handoff_is_refused_on_a_master)
 	zassert_equal(RADIANT_CH_OK,
 		      radiant_channel_assign(HANDOFF_CH, TYPE_MASTER, 0u, 0u));
 	zassert_equal(RADIANT_CH_ERR_INVALID_PARAM,
-		      profile_handoff_apply(HANDOFF_CH, &CANON,
+		      radiant_profile_handoff_apply(HANDOFF_CH, &CANON,
 					    radiant_radio_now(),
 					    radiant_radio_now()));
 

@@ -550,7 +550,7 @@ ZTEST(sec_pair, test_enrolment_pairs_through_the_uncommitted_path)
 	uint32_t fp_b = 1u;
 	uint32_t fp = 2u;
 
-	/* profile_enrol.c's path on a sensor that holds no root yet: there is
+	/* radiant_profile_enrol.c's path on a sensor that holds no root yet: there is
 	 * nothing to deliver and nobody to lock out, so the exchange's
 	 * enrolment root becomes A's first, and B receives that one wrapped.
 	 * Both ends agree, and the values are the ones radiant_crypto.py

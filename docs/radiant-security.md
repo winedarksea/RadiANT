@@ -688,7 +688,7 @@ already on the air is cut short on nRF, and the TI backend's asynchronous
 two live channels with one root and one base device number and gives them the
 same epoch puts both on the same (root, epoch, device number), which is the
 two-time pad the node's arm guard exists to stop, and the firmware does not
-refuse it. Only a node arm is guarded (`NODE_IDENT_EBUSY`, section 3.5 below).
+refuse it. Only a node arm is guarded (`RADIANT_NODE_IDENT_EBUSY`, section 3.5 below).
 The host supplies the root and the plaintext, so only a faulty host reaches
 this; a check would cost security text for no protection against an attacker.
 **A host must give every live channel a distinct root or a distinct base
@@ -711,7 +711,7 @@ still keeps the floor below. Raw `0xF3` stays available for clockless hosts.
 NVM epoch ratcheting inside `radiant` is deferred; `radiant` supplies the two
 mechanisms an authority needs instead.
 
-**The reservation scheme (the hostless node, `node_ident.c`).** The node
+**The reservation scheme (the hostless node, `radiant_node_ident.c`).** The node
 persists `N`, the next epoch nobody has used, beside its boot counter. At boot
 it takes `E = max(N, boot counter, wall-clock minutes)`, persists `N = E + 2`
 with a confirmed write **before** `E` reaches `radiant`, and arms the channel
@@ -753,7 +753,7 @@ base device number, because a wrap on one may reach an epoch a later arm took:
 with `A` armed at `E`, a later arm `B` takes `E + 2`, its reservation raises
 `A`'s ceiling to `E + 3`, and `A`'s second wrap lands on `E + 2`; a channel a
 host epoched at `E` collides with no wrap at all. The node enforces this
-(review 2026-11-14 item 2): an arm is refused (`NODE_IDENT_EBUSY`) while
+(review 2026-11-14 item 2): an arm is refused (`RADIANT_NODE_IDENT_EBUSY`) while
 another channel of the same kind is running (an epoch set or the node's
 ceiling carried, whoever set it) under the same root (compared by key check
 value) and the same base device number. A channel keyed with no epoch yet does
@@ -1020,10 +1020,10 @@ under the same K_auth. The bodies fix the shape of the set, so adding, dropping
 or reordering a frame breaks the tag.
 
 It costs **one slot in 121** and **zero data-page bytes**, and it is
-implemented: `profile_desc_encode_auth()`, `profile_desc_auth_verify()`,
-`profile_desc_auth_find_epoch()` and `profile_desc_rx_take_auth()` in
-`radiant/src/profiles/profile_telemetry.c`, `profile_sched_init_auth()` and
-`profile_sched_reseal()` in `profile_sched.c`, `desc_auth_tag()` in
+implemented: `radiant_profile_desc_encode_auth()`, `radiant_profile_desc_auth_verify()`,
+`radiant_profile_desc_auth_find_epoch()` and `radiant_profile_desc_rx_take_auth()` in
+`radiant/src/profiles/radiant_profile_telemetry.c`, `radiant_profile_sched_init_auth()` and
+`radiant_profile_sched_reseal()` in `radiant_profile_sched.c`, `desc_auth_tag()` in
 `tools/radiant_crypto.py`, with shared vectors in `test_profiles.c` and
 `tools/test_ant_pages.py`. The plain encoder still refuses every transform bit,
 which keeps "no key, no transform" and keeps the sealed path out of every
@@ -1180,17 +1180,17 @@ v3.4.0:
 | | text | bss/data | time |
 |---|---|---|---|
 | `apps/hrm_ble`, `apps/treadmill` (nrf54l15dk, `CONFIG_RADIANT_SEC=y`), against the parent commit | **+20 B** | **0 B** | — |
-| a sealed node: `profile_desc_encode_auth` 398, `profile_desc_auth_tag` 224, `profile_sched_init_auth` 250, `profile_sched_reseal` 92, `check_transforms` 38 | **+1002 B** | 0 B | 497 µs per seal (7 frames), 726 µs (16 frames) |
-| a keyed receiver: `profile_desc_auth_tag` 224, `profile_desc_rx_take_auth` 202, `profile_desc_auth_find_epoch` 130, `profile_desc_auth_verify` 78 | **+634 B** | 0 B | one seal's worth per trial epoch, up to 17 |
+| a sealed node: `radiant_profile_desc_encode_auth` 398, `radiant_profile_desc_auth_tag` 224, `radiant_profile_sched_init_auth` 250, `radiant_profile_sched_reseal` 92, `check_transforms` 38 | **+1002 B** | 0 B | 497 µs per seal (7 frames), 726 µs (16 frames) |
+| a keyed receiver: `radiant_profile_desc_auth_tag` 224, `radiant_profile_desc_rx_take_auth` 202, `radiant_profile_desc_auth_find_epoch` 130, `radiant_profile_desc_auth_verify` 78 | **+634 B** | 0 B | one seal's worth per trial epoch, up to 17 |
 
 The standard devices link none of the new symbols (`nm --defined-only`); the
-+20 B is `profile_desc_frame_count()` learning the authentication frame (+8),
-`profile_desc_encode()` (+10) and `profile_sched_init()` (+2). The shared
++20 B is `radiant_profile_desc_frame_count()` learning the authentication frame (+8),
+`radiant_profile_desc_encode()` (+10) and `radiant_profile_sched_init()` (+2). The shared
 encoder body and the init tail are forced inline so the split itself costs the
 standard path nothing; a sealed node carries those bodies twice instead, which
-is most of `profile_desc_encode_auth`'s and `profile_sched_init_auth`'s size.
+is most of `radiant_profile_desc_encode_auth`'s and `radiant_profile_sched_init_auth`'s size.
 A sealed node's set lives in the 16-frame buffer every node already has, so
-sealing costs no RAM; `profile_sched_reseal()` uses 128 B of stack for a
+sealing costs no RAM; `radiant_profile_sched_reseal()` uses 128 B of stack for a
 scratch copy. Sizes are from the `radiant/tests` image (nRF5340 application
 core, `-Os`); the times are that core, 16 calls timed on the 32768 Hz kernel
 counter, and include the KDF, the CMAC over at most 106 bytes and the
@@ -1407,7 +1407,7 @@ reading six digits off *two* displays and checking they match.
 
 **And over-air enrolment has no commitment either** (amended 2026-11-13). The
 six-frame set of section 11.7.1 is one key each way with no room for the nonce
-round trip, so `profile_enrol.c` calls `radiant_sec_pair_peer_uncommitted()`,
+round trip, so `radiant_profile_enrol.c` calls `radiant_sec_pair_peer_uncommitted()`,
 a separately named function that `0xF5` cannot reach. It is unauthenticated
 Diffie-Hellman, and its fingerprint (both nonces zero, the keys ordered by
 value) is a function of the two public keys only, so it is **grindable** by a
@@ -1430,7 +1430,7 @@ named as mitigations:
   decided it should;
 - optionally **reduced transmit power** for the duration, so an attacker has to
   be in the room rather than in the car park. This is the node's to set and
-  `src/profiles/profile_enrol.c` does not touch the radio; it is named so its
+  `src/profiles/radiant_profile_enrol.c` does not touch the radio; it is named so its
   absence from the module is a decision.
 
 **And the recommendation is unchanged.** The pairing section of
@@ -1600,7 +1600,7 @@ authentication frame narrows that and does not remove it. What it does, plainly:
 - **It stops forgery of a schema or an epoch.** A changed offset, scale, W,
   transform bit, field count or frame-1 epoch fails the tag, and a receiver
   does not decode data against a schema that did not verify
-  (`profile_desc_may_decode_data()`).
+  (`radiant_profile_desc_may_decode_data()`).
 - **It stops a replayed descriptor only against a receiver that already knows
   a newer epoch.** The epoch search runs forward only, from the last epoch the
   receiver knew, and a frame-1 epoch below it is refused outright — so a
@@ -2350,12 +2350,12 @@ sensor, and unpinning is a deliberate user action.
 
 **Implementation status (2026-11-14): library only, no shipped caller.** Layer C
 (the state machine below, the command path of §11.6 and its replay floor) is
-implemented in `radiant/src/profiles/profile_private.c` and covered by
+implemented in `radiant/src/profiles/radiant_profile_private.c` and covered by
 `radiant/tests/src/test_profile_private.c`, but no shipped image runs it.
-Nothing outside the tests calls `profile_private_attach()` or
-`profile_private_on_command()`. `apps/hrm_ble` links `profile_compat.c` but
-never attaches a compat client (`profile_hr_set_compat()` is never called), and
-no transmitting app lists `profile_private.c` in its sources. The bridge and
+Nothing outside the tests calls `radiant_profile_private_attach()` or
+`radiant_profile_private_on_command()`. `apps/hrm_ble` links `radiant_profile_compat.c` but
+never attaches a compat client (`radiant_profile_hr_set_compat()` is never called), and
+no transmitting app lists `radiant_profile_private.c` in its sources. The bridge and
 Matter builds of `apps/dongle_thread` turn on `CONFIG_RADIANT_PROFILES`, so
 there the file is compiled into the radiant library but nothing references it,
 and the linker's section garbage collection drops it. What this section and
@@ -2608,7 +2608,7 @@ data** exactly as an enrolment frame does:
 `RADIANT_PRIVATE_ANNOUNCE_BROADCAST` / `_SILENT`, `RADIANT_ATTEST_ID`,
 `RADIANT_PRIVATE_COUNTDOWN` (K) and `RADIANT_PRIVATE_MAX_S`. The dependency
 above is expressed there as `depends on`, so the refused combinations cannot be
-selected, and again as a `BUILD_ASSERT` in `src/profiles/profile_private.c`, so
+selected, and again as a `BUILD_ASSERT` in `src/profiles/radiant_profile_private.c`, so
 they cannot be reached by a defconfig fragment that bypasses the choice.
 
 **On `devnum`:** `fixed` is the default because a stable device number is a
@@ -2728,7 +2728,7 @@ device number (for a receiver, the node's) and is pending until its epoch is
 set, as after any key install: nothing secured goes out in the clear or is
 accepted unverified in between. Installing a root the receiver already holds
 is a no-op that keeps its epoch. In the code: the node side is
-`radiant_sec_pair_peer_uncommitted()`, driven by `profile_enrol.c`; the
+`radiant_sec_pair_peer_uncommitted()`, driven by `radiant_profile_enrol.c`; the
 receiver side is `radiant_sec_pair_join()` then
 `radiant_sec_pair_accept_root()`, which no application wires yet.
 

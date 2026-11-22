@@ -5,7 +5,7 @@
  *
  * See docs/radiant-bridge.md section 3.1 (table) and 3.2 (the 1/1024s trap).
  * Bytes [4..7] (event time, beat count, computed hr) are the same on every
- * HR page per src/profiles/profile_hr.h's profile_hr_encode(), so this
+ * HR page per src/profiles/radiant_profile_hr.h's radiant_profile_hr_encode(), so this
  * decodes any heart-rate page, not just page 0x00.
  *
  * No radiant header, direct or transitive - one adapter per profile,

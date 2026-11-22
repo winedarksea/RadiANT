@@ -66,12 +66,12 @@ target_sources(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/fake_radio.c")
 
 # ── The mock NVM ────────────────────────────────────────────────────────────
 #
-# The same arrangement one layer up: fake_nvm.c implements src/node/node_nvm.h
-# against RAM, so src/node/node_ident.c is compiled unmodified and the two
+# The same arrangement one layer up: fake_nvm.c implements src/node/radiant_node_nvm.h
+# against RAM, so src/node/radiant_node_ident.c is compiled unmodified and the two
 # things a real backend cannot be asked to do on demand - a power cycle and a
 # write that fails - are callable from a suite.
 #
-# src/node/node_nvm_settings.c is deliberately NOT built here. It is the
+# src/node/radiant_node_nvm_settings.c is deliberately NOT built here. It is the
 # shipping backend (the settings subsystem over NVS) and it needs a storage
 # partition this test application does not have; linking both would be a
 # duplicate-symbol error, which is the same guard CONFIG_RADIANT_BACKEND_
@@ -81,7 +81,7 @@ target_sources(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/fake_nvm.c")
 # ── The mock entropy source ─────────────────────────────────────────────────
 #
 # And once more for radiant_sec_rng(): fake_rng.c is deterministic and can be
-# told to fail, so node_ident_boot()'s first-boot provisioning (ADR 0020) is
+# told to fail, so radiant_node_ident_boot()'s first-boot provisioning (ADR 0020) is
 # testable here. Conditional, unlike the two above, because the scenario with
 # the fake OFF is a real configuration - every dongle, which has no entropy
 # backend - and there src/radiant_sec.c's refusing radiant_sec_rng() is the
@@ -106,7 +106,7 @@ endif()
 #
 # Listed explicitly rather than globbed: unlike src/ above, this is a library
 # and not a suite drop box, and a new file here is a deliberate act.
-# profile_handoff.c and profile_schedule.c are the two files here that include a
+# radiant_profile_handoff.c and radiant_profile_schedule.c are the two files here that include a
 # radiant header: the page codecs are pure, but applying a handoff means
 # driving a channel and announcing a clock accuracy means widening one, and a
 # format with no consumer would not have been worth specifying. The dependency
@@ -116,79 +116,79 @@ endif()
 # CMakeLists.txt does not compile them into the module's library - only an
 # application that lists them, as this one does, links them at all.
 target_sources(app PRIVATE
-  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_bits.c"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_telemetry.c"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_sched.c"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_handoff.c"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_schedule.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/radiant_profile_bits.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/radiant_profile_telemetry.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/radiant_profile_sched.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/radiant_profile_handoff.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/radiant_profile_schedule.c"
   # The ANT+ compatibility profiles (compat-C5): heart rate 0x78 and bicycle
   # power 0x0B, the common pages they share, and the compat client that inserts
-  # the RadiANT beacon and attestation pages through profile_sched.c's seam.
+  # the RadiANT beacon and attestation pages through radiant_profile_sched.c's seam.
   #
-  # profile_compat.c is the THIRD file here that includes a radiant header,
+  # radiant_profile_compat.c is the THIRD file here that includes a radiant header,
   # and it is the only one of the four that does. That is the boundary the phase
-  # exists to draw: profile_hr.c and profile_power.c reach no radiant
+  # exists to draw: radiant_profile_hr.c and radiant_profile_power.c reach no radiant
   # header even transitively, so "the profile modules never call radiant_sec" is
   # a property of the include graph rather than a rule somebody remembers.
-  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_common.c"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_compat.c"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_hr.c"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_power.c"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_tracker.c"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_controls.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/radiant_profile_common.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/radiant_profile_compat.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/radiant_profile_hr.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/radiant_profile_power.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/radiant_profile_tracker.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/radiant_profile_controls.c"
   # Running dynamics. Listed here for the same reason as its two neighbours -
   # src/test_profile_rd.c is in this application's test sources, so leaving the
   # implementation out is a link error, not a missing test. It was exactly that
   # for a while: the RD phase added the decoder, the adapter in src/bridge and
   # the test, and the adapter's own CMake entry below, but never this line.
-  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_rd.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/radiant_profile_rd.c"
   # The Matter plan's packages A and B: the two page codecs that give the
-  # derived booleans a source. profile_fec.c is Fitness Equipment (0x11), the
+  # derived booleans a source. radiant_profile_fec.c is Fitness Equipment (0x11), the
   # indoor-trainer path, whose page 16 carries an explicit equipment STATE -
   # a more direct "bike in use" than inferring from an accumulator.
-  # profile_env.c is Environment (0x19), which is a thermometer and nothing
+  # radiant_profile_env.c is Environment (0x19), which is a thermometer and nothing
   # else; everything else environmental arrives on common page 84 instead,
   # which is why package C exists.
   #
   # Both are pure page codecs reaching no radiant header, the same claim
-  # profile_hr.c and profile_power.c make about themselves. Listed here for
-  # the reason the profile_rd.c line above records: the suites are globbed and
+  # radiant_profile_hr.c and radiant_profile_power.c make about themselves. Listed here for
+  # the reason the radiant_profile_rd.c line above records: the suites are globbed and
   # the implementations are not, so a missing line here is a link error rather
   # than a missing test, and this file has already been that once.
-  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_fec.c"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_env.c"
-  # The treadmill's two masters. profile_fec_tx.c is the TRANSMIT half of
-  # 0x11, deliberately a separate translation unit from profile_fec.c above
-  # (the same split profile_power_decode.c makes) so that a receiver links a
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/radiant_profile_fec.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/radiant_profile_env.c"
+  # The treadmill's two masters. radiant_profile_fec_tx.c is the TRANSMIT half of
+  # 0x11, deliberately a separate translation unit from radiant_profile_fec.c above
+  # (the same split radiant_profile_power_decode.c makes) so that a receiver links a
   # decoder and a treadmill links an encoder and neither drags in the other.
-  # profile_sdm.c is Stride Based Speed and Distance, 0x7C, which had no
+  # radiant_profile_sdm.c is Stride Based Speed and Distance, 0x7C, which had no
   # implementation anywhere in this tree before apps/treadmill.
   #
-  # Both are pure page codecs plus a profile_sched client, reaching no radiant
+  # Both are pure page codecs plus a radiant_profile_sched client, reaching no radiant
   # header - the same claim the four files above make. Listed here for the
-  # reason the profile_rd.c line records: the suites are globbed and the
+  # reason the radiant_profile_rd.c line records: the suites are globbed and the
   # implementations are not.
-  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_fec_tx.c"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_sdm.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/radiant_profile_fec_tx.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/radiant_profile_sdm.c"
   # Light Electric Vehicle (0x14): page codecs plus a master, no suite yet.
   # Listed so the file is compiled at all - the suites are globbed and the
   # implementations are not.
-  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_lev.c"
-  # Bicycle Power's page 0x10 decoder, deliberately NOT in profile_power.c -
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/radiant_profile_lev.c"
+  # Bicycle Power's page 0x10 decoder, deliberately NOT in radiant_profile_power.c -
   # see that file's own note. This application links both halves; a receiver
   # links only this one.
-  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_power_decode.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/radiant_profile_power_decode.c"
   # Layer D (compat-C7): the over-air enrolment window. The FOURTH file here
   # that includes a radiant header, and the second that has to - adding a
   # keyholder is a key operation. It names no page number and no frame index,
-  # so the boundary profile_compat.c draws is not widened by it.
-  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_enrol.c"
+  # so the boundary radiant_profile_compat.c draws is not widened by it.
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/radiant_profile_enrol.c"
   # Layer C (compat-C8): the private-mode switch. The FIFTH file here that
   # includes a radiant header and the third that has to - deriving the
   # locator needs K_id and verifying a command needs K_cmd, and both live where
   # the root key does. It names no page number of its own: the announcement is
-  # two frames of the beacon page's set, which profile_compat.h already owns.
-  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_private.c"
+  # two frames of the beacon page's set, which radiant_profile_compat.h already owns.
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/radiant_profile_private.c"
   # Adaptive frequency (RF-7): choosing a quieter RF index from the
   # channel-quality map, and announcing the move on page 0x13 before it happens.
   # The SIXTH file here that includes a radiant header and the fourth that
@@ -196,16 +196,16 @@ target_sources(app PRIVATE
   # and radiant_radio_hal.h for the index range. It reaches no scheduler and no
   # search header on purpose: "discovery never moves" is a property of the
   # include graph here, not a rule somebody remembers.
-  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_freq.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/radiant_profile_freq.c"
   # Response slots and the reliable-command state machine (RF-8): section 9's
   # idempotency rule, the inline tag at both widths, and the downlink window
-  # profile_schedule.c has been announcing since RF-5a. The SEVENTH file here
+  # radiant_profile_schedule.c has been announcing since RF-5a. The SEVENTH file here
   # that includes a radiant header and the fifth that has to - verifying a
   # command needs a key, and arming a listen slot needs the scheduler. It adds
   # no slot kind to radiant_sched.c and reaches no search header: a response
   # slot is an ordinary bounded receive window, which is the claim
   # test_command.c exists to keep honest.
-  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_command.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/radiant_profile_command.c"
 )
 target_include_directories(app PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles")
@@ -214,13 +214,13 @@ target_include_directories(app PRIVATE
 #
 # The sample bus and sink registry (P5 of the multiprotocol plan; see
 # docs/radiant-bridge.md sections 3-4). Reaches no radiant header, same
-# claim radiant/src/profiles/profile_hr.c makes about itself - this is
+# claim radiant/src/profiles/radiant_profile_hr.c makes about itself - this is
 # the layer above the profile decoder, and section 2's amended rule 3 draws
 # the line there.
 target_sources(app PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge/radiant_bridge.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge/radiant_hr_adapter.c"
-  # The running-dynamics adapter. It includes src/profiles/profile_rd.h for the
+  # The running-dynamics adapter. It includes src/profiles/radiant_profile_rd.h for the
   # two page decoders rather than re-deriving the bit splits, which is why the
   # src/profiles include directory above is not optional for this file.
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge/radiant_rd_adapter.c"
@@ -282,12 +282,12 @@ zephyr_linker_sources(SECTIONS "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge/radian
 # would hand every consumer of the module a flash dependency and a storage
 # backend to serve one class of node. So the dependency still runs
 # application -> core, the same direction as before this directory moved
-# inside radiant/src/ - only an application that lists node_ident.c
+# inside radiant/src/ - only an application that lists radiant_node_ident.c
 # itself, as this one does, links it. There is no new core entry point for a
-# node-derived epoch: node_ident.c calls radiant_sec_set_epoch(), which is the
+# node-derived epoch: radiant_node_ident.c calls radiant_sec_set_epoch(), which is the
 # same function the host adapter calls with a host-supplied value.
 target_sources(app PRIVATE
-  "${CMAKE_CURRENT_SOURCE_DIR}/../src/node/node_ident.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/node/radiant_node_ident.c"
 )
 target_include_directories(app PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/node")

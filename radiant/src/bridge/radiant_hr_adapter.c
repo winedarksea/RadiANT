@@ -48,7 +48,7 @@ uint32_t radiant_hr_adapter_decode(struct radiant_hr_adapter *a, uint32_t source
 	computed_hr = body8[7];
 
 	/* Instantaneous bpm (byte 7), posted unconditionally: 0 is a valid
-	 * RADIANT_FIELD_HEART_RATE value here (unlike PROFILE_HR_INVALID_BPM),
+	 * RADIANT_FIELD_HEART_RATE value here (unlike RADIANT_PROFILE_HR_INVALID_BPM),
 	 * so a sink needing liveness must use the accumulators instead
 	 * (section 6.1's rule). */
 	post(source, RADIANT_HR_FIELD_COMPUTED_BPM, RADIANT_FIELD_HEART_RATE,

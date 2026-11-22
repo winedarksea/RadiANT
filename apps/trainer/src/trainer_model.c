@@ -8,8 +8,8 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "profile_fec.h"
-#include "profile_fec_tx.h"
+#include "radiant_profile_fec.h"
+#include "radiant_profile_fec_tx.h"
 #include "trainer_model.h"
 
 #define G_MS2 9.81f
@@ -55,7 +55,7 @@ void trainer_model_target_power(struct trainer_model *m,
 }
 
 void trainer_model_wind(struct trainer_model *m,
-			const struct profile_fec_cmd_wind_resistance *w)
+			const struct radiant_profile_fec_cmd_wind_resistance *w)
 {
 	m->mode = TRAINER_MODE_SIM;
 	m->wind_coeff_centi = w->coefficient_valid
@@ -67,7 +67,7 @@ void trainer_model_wind(struct trainer_model *m,
 }
 
 void trainer_model_track(struct trainer_model *m,
-			 const struct profile_fec_cmd_track_resistance *t)
+			 const struct radiant_profile_fec_cmd_track_resistance *t)
 {
 	m->mode = TRAINER_MODE_SIM;
 	/* The decoder already turned the 0xFFFF sentinel into 0: SS8.8.4.1
@@ -78,7 +78,7 @@ void trainer_model_track(struct trainer_model *m,
 }
 
 void trainer_model_user(struct trainer_model *m,
-			const struct profile_fec_cmd_user_config *u)
+			const struct radiant_profile_fec_cmd_user_config *u)
 {
 	m->user_weight_10g = u->user_weight_valid
 				     ? u->user_weight_10g
@@ -189,15 +189,15 @@ void trainer_model_tick(struct trainer_model *m, uint32_t dt_ms)
 }
 
 void trainer_model_pages(const struct trainer_model *m,
-			 struct profile_fec_general *g,
-			 struct profile_fec_settings *s,
-			 struct profile_fec_trainer *t)
+			 struct radiant_profile_fec_general *g,
+			 struct radiant_profile_fec_settings *s,
+			 struct radiant_profile_fec_trainer *t)
 {
-	uint8_t state = (m->cadence_rpm != 0u) ? PROFILE_FEC_STATE_IN_USE
-					       : PROFILE_FEC_STATE_READY;
+	uint8_t state = (m->cadence_rpm != 0u) ? RADIANT_PROFILE_FEC_STATE_IN_USE
+					       : RADIANT_PROFILE_FEC_STATE_READY;
 
 	memset(g, 0, sizeof(*g));
-	g->equipment_type = PROFILE_FEC_TYPE_TRAINER;
+	g->equipment_type = RADIANT_PROFILE_FEC_TYPE_TRAINER;
 	g->elapsed_time_qs = (uint8_t)((m->elapsed_ms / 250u) & 0xFFu);
 	g->distance_m = (uint8_t)((m->distance_um / 1000000u) & 0xFFu);
 	g->distance_valid = true;
@@ -207,7 +207,7 @@ void trainer_model_pages(const struct trainer_model *m,
 	/* Capabilities bit 3: a real number for an unreal quantity. */
 	g->speed_virtual = true;
 	g->heart_rate_valid = false;
-	g->hr_source = PROFILE_FEC_HR_SRC_INVALID;
+	g->hr_source = RADIANT_PROFILE_FEC_HR_SRC_INVALID;
 	g->state = state;
 
 	memset(s, 0, sizeof(*s));
@@ -240,14 +240,14 @@ void trainer_model_pages(const struct trainer_model *m,
 	 * stand in for a page 55 that never came, and SS10.1.2.6 allows the
 	 * calibration bits to stay clear. */
 	t->trainer_status = 0u;
-	t->flags = m->erg_speed_low ? PROFILE_FEC_TARGET_POWER_SPEED_LOW
-				    : PROFILE_FEC_TARGET_POWER_OK;
+	t->flags = m->erg_speed_low ? RADIANT_PROFILE_FEC_TARGET_POWER_SPEED_LOW
+				    : RADIANT_PROFILE_FEC_TARGET_POWER_OK;
 	t->state = state;
 }
 
 void trainer_model_echo(const struct trainer_model *m,
-			struct profile_fec_cmd_wind_resistance *w,
-			struct profile_fec_cmd_track_resistance *t)
+			struct radiant_profile_fec_cmd_wind_resistance *w,
+			struct radiant_profile_fec_cmd_track_resistance *t)
 {
 	memset(w, 0, sizeof(*w));
 	w->coefficient_centi = m->wind_coeff_centi;

@@ -241,7 +241,7 @@ needed to say no.
 | FTMS `Request Control` (`0x00`) | Claims. **Preempts an ANT owner** — explicit beats implicit. |
 | FTMS `Reset` (`0x01`), or a disconnect | Releases. A disconnect changes nothing else: belt speed **and Training Status** stay as they were (see below). |
 | FE-C page 50/51, owner `NONE` or `ANT` | Claims or refreshes implicitly, and applies. |
-| FE-C page 50/51, owner `BLE` | **Refused: page 71 status `PROFILE_FEC_CMD_STATUS_REJECTED` (3).** |
+| FE-C page 50/51, owner `BLE` | **Refused: page 71 status `RADIANT_PROFILE_FEC_CMD_STATUS_REJECTED` (3).** |
 | FTMS command with no `Request Control` | `CONTROL_NOT_PERMITTED` (`0x05`), which this file already did. |
 | ANT owner idle > `TREADMILL_CTRL_ANT_TIMEOUT_MS` | Released. |
 
@@ -254,8 +254,8 @@ accepted instead is that the next client finds a session no client owns, and
 its `Start` answers Operation Failed (Table 4.24) until it sends `Stop` or
 `Reset` — which is an accurate answer, since the machine *is* started.
 
-Neither refusal code is new: `PROFILE_FEC_CMD_STATUS_REJECTED` is
-`profile_fec_tx.h:103` and `0x05` is FTMS Table 4.24. Both already mean exactly
+Neither refusal code is new: `RADIANT_PROFILE_FEC_CMD_STATUS_REJECTED` is
+`radiant_profile_fec_tx.h:103` and `0x05` is FTMS Table 4.24. Both already mean exactly
 this. **Silence would be worse than either** — §8.8 is explicit that a
 controller reports a machine that does not answer as broken, which is why every
 branch of the FE-C handler still ends in a page 71.
@@ -1110,7 +1110,7 @@ biometric data about a person.
   nRF52840 row is 8 % flash and 16 % RAM — but it is ANT+ only, and treat
   nRF54L15 as the target and nRF52840 as build-verified, exactly as `hrm_ble`'s
   own matrix does.
-- **Page layouts of varying strength.** `profile_fec_tx.h` and `profile_sdm.h`
+- **Page layouts of varying strength.** `radiant_profile_fec_tx.h` and `radiant_profile_sdm.h`
   both open with an honesty block separating the layouts that carry a table
   citation from the ones recorded by byte offset. Believe a bench run over
   either header.

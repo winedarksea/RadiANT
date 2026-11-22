@@ -48,7 +48,7 @@
  * And "B reveals Nb only after its PEER_NONCE" is the responder host's
  * obligation: the node never sees Nb leave, so it cannot enforce it.
  *
- * Over-air enrolment (profile_enrol.c) has no room for the commit/reveal round
+ * Over-air enrolment (radiant_profile_enrol.c) has no room for the commit/reveal round
  * trip and calls radiant_sec_pair_peer_uncommitted() (sensor) and
  * radiant_sec_pair_join() / _accept_root() (receiver) instead, which the 0xF5
  * host surface does not reach: unauthenticated DH whose fingerprint is

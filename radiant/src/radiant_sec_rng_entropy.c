@@ -16,7 +16,7 @@
  * Same failure contract as radiant_sec_rng_psa.c: a failed draw zero-fills the
  * buffer. The caller is about to treat these bytes as a private key, and a
  * partial draw that looks usable is the one outcome worse than none.
- * node_ident_provision() refuses an all-zero key, so a zeroed failure that
+ * radiant_node_ident_provision() refuses an all-zero key, so a zeroed failure that
  * somebody ignored still cannot become an identity.
  */
 

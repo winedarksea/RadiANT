@@ -7,9 +7,9 @@
 # so this image is two production .c files beside one test file - no radiant,
 # no backend, no radio - and ten thousand fault decisions take microseconds.
 #
-# profile_fec_tx.h is included for its STRUCTS only (the model fills page
+# radiant_profile_fec_tx.h is included for its STRUCTS only (the model fills page
 # structs); no profile .c file is linked, and nothing here needs one. Its
-# include chain (profile_sched.h -> profile_handoff.h) reaches
+# include chain (radiant_profile_sched.h -> radiant_profile_handoff.h) reaches
 # radiant/include for a type, hence that directory - headers only.
 #
 # On Windows there is no native_sim; use

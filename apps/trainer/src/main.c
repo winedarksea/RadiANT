@@ -43,10 +43,10 @@
 
 #include <radiant/radiant_ant.h>
 #include <radiant/radiant_wire.h>
-#include "node_ident.h"
-#include "profile_common.h"
-#include "profile_fec.h"
-#include "profile_fec_tx.h"
+#include "radiant_node_ident.h"
+#include "radiant_profile_common.h"
+#include "radiant_profile_fec.h"
+#include "radiant_profile_fec_tx.h"
 #include "trainer_model.h"
 #include "trainer_node.h"
 
@@ -67,7 +67,7 @@ static const uint8_t ant_plus_key[8] = {
 #define MODEL_TICK_MS 250u
 
 static struct trainer_model model;
-static struct profile_fec_tx fec;
+static struct radiant_profile_fec_tx fec;
 
 /* The rider, from the shell thread. -1 = no change pending. */
 static atomic_t rider_power_req = ATOMIC_INIT(-1);
@@ -84,20 +84,20 @@ static K_WORK_DELAYABLE_DEFINE(silence_end, silence_end_fn);
 
 static void publish(void)
 {
-	struct profile_fec_general              g;
-	struct profile_fec_settings             s;
-	struct profile_fec_trainer              t;
-	struct profile_fec_cmd_wind_resistance  w;
-	struct profile_fec_cmd_track_resistance tr;
+	struct radiant_profile_fec_general              g;
+	struct radiant_profile_fec_settings             s;
+	struct radiant_profile_fec_trainer              t;
+	struct radiant_profile_fec_cmd_wind_resistance  w;
+	struct radiant_profile_fec_cmd_track_resistance tr;
 
 	trainer_model_pages(&model, &g, &s, &t);
-	profile_fec_tx_set_general(&fec, &g);
-	profile_fec_tx_set_settings(&fec, &s);
-	profile_fec_tx_set_trainer(&fec, &t);
+	radiant_profile_fec_tx_set_general(&fec, &g);
+	radiant_profile_fec_tx_set_settings(&fec, &s);
+	radiant_profile_fec_tx_set_trainer(&fec, &t);
 
 	trainer_model_echo(&model, &w, &tr);
-	profile_fec_tx_set_wind(&fec, &w);
-	profile_fec_tx_set_track(&fec, &tr);
+	radiant_profile_fec_tx_set_wind(&fec, &w);
+	radiant_profile_fec_tx_set_track(&fec, &tr);
 }
 
 /* ── The control path: acknowledged pages in, page 71 out ───────────────── */
@@ -108,7 +108,7 @@ static uint8_t fec_sequence;
 
 /*
  * One acknowledged control page, ON THE SYSTEM WORKQUEUE. Every path ends in
- * profile_fec_tx_command_answered(), refusals included: SS8.8 makes page 71
+ * radiant_profile_fec_tx_command_answered(), refusals included: SS8.8 makes page 71
  * an obligation, and silence is what a controller reports as broken.
  *
  * A command the fault model marked MUTE arrives here like any other - MUTE is
@@ -118,76 +118,76 @@ static uint8_t fec_sequence;
  */
 static void apply_control_page(const uint8_t *body)
 {
-	uint8_t status = PROFILE_FEC_CMD_STATUS_NOT_SUPPORTED;
+	uint8_t status = RADIANT_PROFILE_FEC_CMD_STATUS_NOT_SUPPORTED;
 	uint8_t page = body[0];
 
 	fec_sequence++;
 
 	switch (page) {
-	case PROFILE_FEC_PAGE_BASIC_RESISTANCE: {
-		struct profile_fec_cmd_basic_resistance cmd;
+	case RADIANT_PROFILE_FEC_PAGE_BASIC_RESISTANCE: {
+		struct radiant_profile_fec_cmd_basic_resistance cmd;
 
-		if (profile_fec_decode_basic_resistance(body, &cmd) == 0) {
+		if (radiant_profile_fec_decode_basic_resistance(body, &cmd) == 0) {
 			trainer_model_basic_resistance(&model,
 						       cmd.resistance_half_pct);
-			status = PROFILE_FEC_CMD_STATUS_PASS;
+			status = RADIANT_PROFILE_FEC_CMD_STATUS_PASS;
 		}
 		break;
 	}
 
-	case PROFILE_FEC_PAGE_TARGET_POWER: {
-		struct profile_fec_cmd_target_power cmd;
+	case RADIANT_PROFILE_FEC_PAGE_TARGET_POWER: {
+		struct radiant_profile_fec_cmd_target_power cmd;
 
-		if (profile_fec_decode_target_power(body, &cmd) == 0) {
+		if (radiant_profile_fec_decode_target_power(body, &cmd) == 0) {
 			trainer_model_target_power(&model, cmd.power_quarter_w);
-			status = PROFILE_FEC_CMD_STATUS_PASS;
+			status = RADIANT_PROFILE_FEC_CMD_STATUS_PASS;
 		}
 		break;
 	}
 
-	case PROFILE_FEC_PAGE_WIND_RESISTANCE: {
-		struct profile_fec_cmd_wind_resistance cmd;
+	case RADIANT_PROFILE_FEC_PAGE_WIND_RESISTANCE: {
+		struct radiant_profile_fec_cmd_wind_resistance cmd;
 
-		if (profile_fec_decode_wind_resistance(body, &cmd) == 0) {
+		if (radiant_profile_fec_decode_wind_resistance(body, &cmd) == 0) {
 			trainer_model_wind(&model, &cmd);
-			status = PROFILE_FEC_CMD_STATUS_PASS;
+			status = RADIANT_PROFILE_FEC_CMD_STATUS_PASS;
 		}
 		break;
 	}
 
-	case PROFILE_FEC_PAGE_TRACK_RESISTANCE: {
-		struct profile_fec_cmd_track_resistance cmd;
+	case RADIANT_PROFILE_FEC_PAGE_TRACK_RESISTANCE: {
+		struct radiant_profile_fec_cmd_track_resistance cmd;
 
-		if (profile_fec_decode_track_resistance(body, &cmd) == 0) {
+		if (radiant_profile_fec_decode_track_resistance(body, &cmd) == 0) {
 			trainer_model_track(&model, &cmd);
-			status = PROFILE_FEC_CMD_STATUS_PASS;
+			status = RADIANT_PROFILE_FEC_CMD_STATUS_PASS;
 			LOG_DBG("page 51: grade %d", (int)cmd.grade_centi_pct);
 		}
 		break;
 	}
 
-	case PROFILE_FEC_PAGE_USER_CONFIG: {
-		struct profile_fec_cmd_user_config cmd;
+	case RADIANT_PROFILE_FEC_PAGE_USER_CONFIG: {
+		struct radiant_profile_fec_cmd_user_config cmd;
 
-		if (profile_fec_decode_user_config(body, &cmd) == 0) {
+		if (radiant_profile_fec_decode_user_config(body, &cmd) == 0) {
 			trainer_model_user(&model, &cmd);
-			status = PROFILE_FEC_CMD_STATUS_PASS;
+			status = RADIANT_PROFILE_FEC_CMD_STATUS_PASS;
 		}
 		break;
 	}
 
-	case PROFILE_FEC_PAGE_REQUEST: {
-		struct profile_fec_cmd_request cmd;
+	case RADIANT_PROFILE_FEC_PAGE_REQUEST: {
+		struct radiant_profile_fec_cmd_request cmd;
 
-		if (profile_fec_decode_request(body, &cmd) == 0 &&
-		    profile_fec_tx_request(&fec, cmd.page, cmd.tx_count) == 0) {
-			status = PROFILE_FEC_CMD_STATUS_PASS;
+		if (radiant_profile_fec_decode_request(body, &cmd) == 0 &&
+		    radiant_profile_fec_tx_request(&fec, cmd.page, cmd.tx_count) == 0) {
+			status = RADIANT_PROFILE_FEC_CMD_STATUS_PASS;
 		}
 		break;
 	}
 
 	default:
-		status = PROFILE_FEC_CMD_STATUS_NOT_SUPPORTED;
+		status = RADIANT_PROFILE_FEC_CMD_STATUS_NOT_SUPPORTED;
 		break;
 	}
 
@@ -195,7 +195,7 @@ static void apply_control_page(const uint8_t *body)
 	 * rather than at the next tick. */
 	publish();
 
-	profile_fec_tx_command_answered(&fec, page, fec_sequence, status,
+	radiant_profile_fec_tx_command_answered(&fec, page, fec_sequence, status,
 					&body[4]);
 }
 
@@ -251,9 +251,9 @@ static void fec_cmd_work_fn(struct k_work *w)
 			fec_sequence++;
 			LOG_WRN("FE-C page %u dropped: the command queue was "
 				"full", drop_page);
-			profile_fec_tx_command_answered(
+			radiant_profile_fec_tx_command_answered(
 				&fec, drop_page, fec_sequence,
-				PROFILE_FEC_CMD_STATUS_FAIL, no_echo);
+				RADIANT_PROFILE_FEC_CMD_STATUS_FAIL, no_echo);
 			continue;
 		}
 		break;
@@ -289,12 +289,12 @@ static void queue_control_page(const uint8_t *body)
 static void load_fec_page(void)
 {
 	uint8_t                body[8];
-	enum profile_slot_kind kind;
+	enum radiant_profile_slot_kind kind;
 
 	k_sched_lock();
-	kind = profile_fec_tx_next(&fec, body);
+	kind = radiant_profile_fec_tx_next(&fec, body);
 	k_sched_unlock();
-	if (kind == PROFILE_SLOT_IDLE) {
+	if (kind == RADIANT_PROFILE_SLOT_IDLE) {
 		return;
 	}
 	(void)radiant_ant_broadcast_message_tx(FEC_CHANNEL, sizeof(body), body);
@@ -371,13 +371,13 @@ static int ant_master_start(uint8_t channel, uint16_t devnum)
 		LOG_ERR("ch%u assign: %d", channel, (int)rc);
 		return -EIO;
 	}
-	rc = radiant_ant_channel_id_set(channel, devnum, PROFILE_FEC_DEVICE_TYPE,
+	rc = radiant_ant_channel_id_set(channel, devnum, RADIANT_PROFILE_FEC_DEVICE_TYPE,
 				 ANT_TRANS_TYPE);
 	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("ch%u channel id: %d", channel, (int)rc);
 		return -EIO;
 	}
-	rc = radiant_ant_channel_period_set(channel, PROFILE_FEC_PERIOD);
+	rc = radiant_ant_channel_period_set(channel, RADIANT_PROFILE_FEC_PERIOD);
 	if (rc != RADIANT_WIRE_RESPONSE_NO_ERROR) {
 		LOG_ERR("ch%u period: %d", channel, (int)rc);
 		return -EIO;
@@ -461,20 +461,20 @@ void trainer_node_print(const struct shell *sh)
 		    m.target_power_qw, m.resistance_half_pct, m.event_count);
 }
 
-static void fill_common_id(struct profile_common_id *id, uint16_t devnum)
+static void fill_common_id(struct radiant_profile_common_id *id, uint16_t devnum)
 {
 	memset(id, 0, sizeof(*id));
 	id->hw_revision = 1u;
 	id->manufacturer_id = CONFIG_TRAINER_MANUFACTURER_ID;
 	id->model_number = 1u;
 	id->sw_revision_main = 1u;
-	id->sw_revision_supplemental = PROFILE_COMMON_INVALID_U8;
+	id->sw_revision_supplemental = RADIANT_PROFILE_COMMON_INVALID_U8;
 	id->serial_number = devnum;
 }
 
 int main(void)
 {
-	struct profile_fec_tx_cfg fec_cfg;
+	struct radiant_profile_fec_tx_cfg fec_cfg;
 	uint16_t                  devnum = CONFIG_TRAINER_DEVICE_NUMBER;
 	int                       err;
 
@@ -493,36 +493,36 @@ int main(void)
 	 * first-boot provisioning off (ADR 0020) - and a record left in
 	 * storage by an hrm_ble or treadmill image flashed on the same DK
 	 * without an erase is ignored here rather than silently moving the
-	 * fixture to a derived number. node_ident_boot() still runs so the
+	 * fixture to a derived number. radiant_node_ident_boot() still runs so the
 	 * boot counter behaves as on the other nodes.
 	 */
-	err = node_ident_boot();
+	err = radiant_node_ident_boot();
 	if (err == 0) {
 		LOG_INF("device number %u, the fixture's fixed number (an "
 			"identity record is present and ignored)", devnum);
 	} else {
 		LOG_INF("device number %u, the fixture's fixed number (%s)",
-			devnum, node_ident_strerror(err));
+			devnum, radiant_node_ident_strerror(err));
 	}
 
 	trainer_model_init(&model);
 
 	memset(&fec_cfg, 0, sizeof(fec_cfg));
 	fill_common_id(&fec_cfg.id, devnum);
-	fec_cfg.equipment_type = PROFILE_FEC_TYPE_TRAINER;
+	fec_cfg.equipment_type = RADIANT_PROFILE_FEC_TYPE_TRAINER;
 	/* All three, because all three are honoured: page 48 drives BASIC,
 	 * page 49 ERG, pages 50/51 SIM. Declaring a mode and refusing its
-	 * page is the mistake profile_fec_tx.h warns about. */
-	fec_cfg.caps.capabilities = PROFILE_FEC_CAP_BASIC_RESISTANCE |
-				    PROFILE_FEC_CAP_TARGET_POWER |
-				    PROFILE_FEC_CAP_SIMULATION;
+	 * page is the mistake radiant_profile_fec_tx.h warns about. */
+	fec_cfg.caps.capabilities = RADIANT_PROFILE_FEC_CAP_BASIC_RESISTANCE |
+				    RADIANT_PROFILE_FEC_CAP_TARGET_POWER |
+				    RADIANT_PROFILE_FEC_CAP_SIMULATION;
 	fec_cfg.caps.max_resistance_n = TRAINER_MAX_RESISTANCE_N;
 	fec_cfg.caps.max_resistance_valid = true;
 	fec_cfg.metabolic = false;
 
-	err = profile_fec_tx_init(&fec, &fec_cfg);
+	err = radiant_profile_fec_tx_init(&fec, &fec_cfg);
 	if (err != 0) {
-		LOG_ERR("profile_fec_tx_init: %d", err);
+		LOG_ERR("radiant_profile_fec_tx_init: %d", err);
 		return 0;
 	}
 

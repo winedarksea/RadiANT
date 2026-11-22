@@ -34,8 +34,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "profile_fec.h"
-#include "profile_fec_tx.h"
+#include "radiant_profile_fec.h"
+#include "radiant_profile_fec_tx.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -113,11 +113,11 @@ void trainer_model_basic_resistance(struct trainer_model *m,
 void trainer_model_target_power(struct trainer_model *m,
 				uint16_t power_quarter_w);
 void trainer_model_wind(struct trainer_model *m,
-			const struct profile_fec_cmd_wind_resistance *w);
+			const struct radiant_profile_fec_cmd_wind_resistance *w);
 void trainer_model_track(struct trainer_model *m,
-			 const struct profile_fec_cmd_track_resistance *t);
+			 const struct radiant_profile_fec_cmd_track_resistance *t);
 void trainer_model_user(struct trainer_model *m,
-			const struct profile_fec_cmd_user_config *u);
+			const struct radiant_profile_fec_cmd_user_config *u);
 
 /* Total resistance in newtons at `speed_ms` on the current road, clamped at
  * zero. BASIC mode is a flat road plus the brake. */
@@ -131,18 +131,18 @@ float trainer_model_solve_speed(const struct trainer_model *m, float power_w);
 void trainer_model_tick(struct trainer_model *m, uint32_t dt_ms);
 
 /* The pages, from the model. Plain fills; the caller hands them to
- * profile_fec_tx's setters. Equipment type 25, speed flagged virtual, the
+ * radiant_profile_fec_tx's setters. Equipment type 25, speed flagged virtual, the
  * incline equal to the commanded grade (SS8.8.4.1), the page 17 resistance
  * as a share of page 54's maximum. */
 void trainer_model_pages(const struct trainer_model *m,
-			 struct profile_fec_general *g,
-			 struct profile_fec_settings *s,
-			 struct profile_fec_trainer *t);
+			 struct radiant_profile_fec_general *g,
+			 struct radiant_profile_fec_settings *s,
+			 struct radiant_profile_fec_trainer *t);
 
 /* The simulation settings as pages 50/51 echo them. */
 void trainer_model_echo(const struct trainer_model *m,
-			struct profile_fec_cmd_wind_resistance *w,
-			struct profile_fec_cmd_track_resistance *t);
+			struct radiant_profile_fec_cmd_wind_resistance *w,
+			struct radiant_profile_fec_cmd_track_resistance *t);
 
 #ifdef __cplusplus
 }

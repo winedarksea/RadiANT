@@ -40,8 +40,8 @@
 
 #include "fake_radio.h"
 
-#include "profile_schedule.h"
-#include "profile_telemetry.h"
+#include "radiant_profile_schedule.h"
+#include "radiant_profile_telemetry.h"
 
 /* Every case ends with this: fake_radio_viol_count() == 0, idle-agnostic.
  * Not an after() hook: on this Zephyr a zassert in after() cannot fail the
@@ -557,23 +557,23 @@ ZTEST(lr, test_a_change_of_phy_is_budgeted_and_a_repeat_is_not)
 ZTEST(lr, test_the_duty_bound_refuses_at_the_boundary)
 {
 	/* The vocabulary this phase inherits rather than redefines. */
-	zassert_equal(125u, profile_sched_coding_kbps(PROFILE_SCHED_CODING_S8),
+	zassert_equal(125u, radiant_profile_sched_coding_kbps(RADIANT_PROFILE_SCHED_CODING_S8),
 		      NULL);
-	zassert_true(profile_sched_coding_implemented(PROFILE_SCHED_CODING_S8));
-	zassert_false(profile_sched_coding_implemented(PROFILE_SCHED_CODING_S2));
+	zassert_true(radiant_profile_sched_coding_implemented(RADIANT_PROFILE_SCHED_CODING_S8));
+	zassert_false(radiant_profile_sched_coding_implemented(RADIANT_PROFILE_SCHED_CODING_S2));
 
 	/* Frame airtime through the profile layer is the frame layer's, which
 	 * is the point of the delegation. */
 	zassert_equal(1296u,
-		      profile_sched_frame_us(PROFILE_SCHED_CODING_S8, 12u),
+		      radiant_profile_sched_frame_us(RADIANT_PROFILE_SCHED_CODING_S8, 12u),
 		      NULL);
 	zassert_equal(144u,
-		      profile_sched_frame_us(PROFILE_SCHED_CODING_NONE, 10u),
+		      radiant_profile_sched_frame_us(RADIANT_PROFILE_SCHED_CODING_NONE, 10u),
 		      NULL);
 	/* A rate nothing builds budgets nothing, rather than budgeting as S=8 -
 	 * which is the conservative direction and therefore the bug that would
 	 * never be noticed. */
-	zassert_equal(0u, profile_sched_frame_us(PROFILE_SCHED_CODING_S2, 12u),
+	zassert_equal(0u, radiant_profile_sched_frame_us(RADIANT_PROFILE_SCHED_CODING_S2, 12u),
 		      NULL);
 
 	/*
@@ -582,25 +582,25 @@ ZTEST(lr, test_the_duty_bound_refuses_at_the_boundary)
 	 *   405 counts = 12359 us -> fits
 	 *   404 counts = 12329 us -> does not
 	 */
-	zassert_equal(0, profile_sched_duty_check(PROFILE_SCHED_CODING_S8, 405u, 40u));
-	zassert_equal(-EINVAL, profile_sched_duty_check(PROFILE_SCHED_CODING_S8, 404u, 40u));
+	zassert_equal(0, radiant_profile_sched_duty_check(RADIANT_PROFILE_SCHED_CODING_S8, 405u, 40u));
+	zassert_equal(-EINVAL, radiant_profile_sched_duty_check(RADIANT_PROFILE_SCHED_CODING_S8, 404u, 40u));
 
 	/* The bound binds only where BOTH factors are present. At 4 Hz - the
 	 * ordinary case - a full-length coded frame is 1.2 % and passes. */
-	zassert_equal(0, profile_sched_duty_check(PROFILE_SCHED_CODING_S8, 8192u, 40u));
+	zassert_equal(0, radiant_profile_sched_duty_check(RADIANT_PROFILE_SCHED_CODING_S8, 8192u, 40u));
 	/* And an eight-byte 1 M frame is never anywhere near it. */
-	zassert_equal(0, profile_sched_duty_check(PROFILE_SCHED_CODING_NONE,
+	zassert_equal(0, radiant_profile_sched_duty_check(RADIANT_PROFILE_SCHED_CODING_NONE,
 						  8192u, 10u),
 		      NULL);
 
 	/* A sparse node has no period, so the rule is skipped rather than
 	 * applied to zero (same as the drift bound with no announced clock) -
 	 * treating 0 as infinitely fast would refuse every asset tag. */
-	zassert_equal(0, profile_sched_duty_check(PROFILE_SCHED_CODING_S8, 0u, 40u));
+	zassert_equal(0, radiant_profile_sched_duty_check(RADIANT_PROFILE_SCHED_CODING_S8, 0u, 40u));
 
 	/* A body the format cannot carry is an error, not a duty verdict. */
 	zassert_equal(-EINVAL,
-		      profile_sched_duty_check(PROFILE_SCHED_CODING_S8, 8192u,
+		      radiant_profile_sched_duty_check(RADIANT_PROFILE_SCHED_CODING_S8, 8192u,
 					       41u),
 		      NULL);
 
@@ -612,26 +612,26 @@ ZTEST(lr, test_the_duty_bound_refuses_at_the_boundary)
  * ---------------------------------------------------------------------------
  */
 
-static void build_lr_descriptor(struct profile_descriptor *d, uint8_t n_fields)
+static void build_lr_descriptor(struct radiant_profile_descriptor *d, uint8_t n_fields)
 {
 	uint8_t i;
 
 	memset(d, 0, sizeof(*d));
-	d->version = PROFILE_TLM_VERSION;
+	d->version = RADIANT_PROFILE_TLM_VERSION;
 	d->schema_id = 0x42u;
 	d->period = 8192u; /* 4 Hz */
-	d->rf_index = PROFILE_TLM_RF_INDEX_DEFAULT;
+	d->rf_index = RADIANT_PROFILE_TLM_RF_INDEX_DEFAULT;
 	/* The LR bit and the coding rate are two statements about one PHY and
-	 * must agree - profile_sched_check() refuses them if they do not. */
-	d->flags = PROFILE_TLM_FLAG_LR_PHY;
+	 * must agree - radiant_profile_sched_check() refuses them if they do not. */
+	d->flags = RADIANT_PROFILE_TLM_FLAG_LR_PHY;
 	d->has_schedule = true;
-	d->schedule.coding = PROFILE_SCHED_CODING_S8;
-	d->schedule.tx_power_dbm = PROFILE_SCHED_TX_POWER_UNSTATED;
+	d->schedule.coding = RADIANT_PROFILE_SCHED_CODING_S8;
+	d->schedule.tx_power_dbm = RADIANT_PROFILE_SCHED_TX_POWER_UNSTATED;
 	d->n_fields = n_fields;
 
 	for (i = 0u; i < n_fields; i++) {
 		d->fields[i].id = (uint8_t)(i + 1u);
-		d->fields[i].type = PROFILE_TLM_TYPE_TEMPERATURE;
+		d->fields[i].type = RADIANT_PROFILE_TLM_TYPE_TEMPERATURE;
 		d->fields[i].width_code = 4u; /* 8 bits */
 		d->fields[i].page = (uint8_t)(1u + (i / 6u));
 		d->fields[i].bit_offset = (uint8_t)(8u * (i % 6u));
@@ -640,10 +640,10 @@ static void build_lr_descriptor(struct profile_descriptor *d, uint8_t n_fields)
 
 ZTEST(lr, test_the_collapse_round_trips_through_the_unchanged_accumulator)
 {
-	struct profile_descriptor d;
-	struct profile_descriptor got;
-	struct profile_desc_rx rx;
-	uint8_t frames[PROFILE_TLM_MAX_FRAMES * PROFILE_TLM_FRAME_LEN];
+	struct radiant_profile_descriptor d;
+	struct radiant_profile_descriptor got;
+	struct radiant_profile_desc_rx rx;
+	uint8_t frames[RADIANT_PROFILE_TLM_MAX_FRAMES * RADIANT_PROFILE_TLM_FRAME_LEN];
 	uint8_t payload[RADIANT_FRAME_PAYLOAD_LR_MAX];
 	int n_frames;
 	int bodies;
@@ -653,42 +653,42 @@ ZTEST(lr, test_the_collapse_round_trips_through_the_unchanged_accumulator)
 	/* Two fields plus a schedule frame: 2 + 1 + 2 = 5 frames. */
 	build_lr_descriptor(&d, 2u);
 
-	n_frames = profile_desc_encode(&d, frames, PROFILE_TLM_MAX_FRAMES);
+	n_frames = radiant_profile_desc_encode(&d, frames, RADIANT_PROFILE_TLM_MAX_FRAMES);
 	zassert_equal(5, n_frames);
 
 	/* Four whole 8-byte frames fit in a 36-byte payload; five frames
 	 * therefore take two transmissions rather than five. */
 	zassert_equal(4u,
-		      profile_desc_frames_per_body(RADIANT_FRAME_PAYLOAD_LR_MAX),
+		      radiant_profile_desc_frames_per_body(RADIANT_FRAME_PAYLOAD_LR_MAX),
 		      NULL);
-	bodies = profile_desc_long_count(&d, RADIANT_FRAME_PAYLOAD_LR_MAX);
+	bodies = radiant_profile_desc_long_count(&d, RADIANT_FRAME_PAYLOAD_LR_MAX);
 	zassert_equal(2, bodies);
 
 	/* Makes the collapse invisible to a receiver: bytes feed the same
-	 * profile_desc_rx_feed() accumulator a 1M receiver always used, with
+	 * radiant_profile_desc_rx_feed() accumulator a 1M receiver always used, with
 	 * the same ordering rules. */
-	profile_desc_rx_init(&rx);
+	radiant_profile_desc_rx_init(&rx);
 	for (i = 0; i < bodies; i++) {
-		int len = profile_desc_long_payload(&d, frames,
+		int len = radiant_profile_desc_long_payload(&d, frames,
 						    (uint8_t)n_frames,
 						    RADIANT_FRAME_PAYLOAD_LR_MAX,
 						    (uint8_t)i, payload,
 						    sizeof(payload));
 
 		zassert_true(len > 0, "payload %d: %d", i, len);
-		zassert_equal(0, len % PROFILE_TLM_FRAME_LEN);
-		rc = profile_desc_rx_feed_long(&rx, payload, (uint8_t)len);
+		zassert_equal(0, len % RADIANT_PROFILE_TLM_FRAME_LEN);
+		rc = radiant_profile_desc_rx_feed_long(&rx, payload, (uint8_t)len);
 		zassert_true(rc >= 0, "payload %d: %d", i, rc);
 	}
 	zassert_equal(1, rc);
-	zassert_true(profile_desc_rx_complete(&rx), NULL);
+	zassert_true(radiant_profile_desc_rx_complete(&rx), NULL);
 
-	zassert_equal(0, profile_desc_rx_take(&rx, &got), NULL);
+	zassert_equal(0, radiant_profile_desc_rx_take(&rx, &got), NULL);
 	zassert_equal(d.schema_id, got.schema_id, NULL);
 	zassert_equal(d.period, got.period, NULL);
 	zassert_equal(d.n_fields, got.n_fields, NULL);
 	zassert_equal(d.flags, got.flags, NULL);
-	zassert_equal(PROFILE_SCHED_CODING_S8, got.schedule.coding);
+	zassert_equal(RADIANT_PROFILE_SCHED_CODING_S8, got.schedule.coding);
 	zassert_mem_equal(d.fields, got.fields, sizeof(d.fields[0]) * d.n_fields);
 
 	assert_no_viol();
@@ -696,7 +696,7 @@ ZTEST(lr, test_the_collapse_round_trips_through_the_unchanged_accumulator)
 
 ZTEST(lr, test_how_complete_the_collapse_actually_is)
 {
-	struct profile_descriptor d;
+	struct radiant_profile_descriptor d;
 
 	/* The arithmetic the ADR corrects the plan on: four whole frames per
 	 * transmission is what 36 payload bytes buys. */
@@ -707,41 +707,41 @@ ZTEST(lr, test_how_complete_the_collapse_actually_is)
 	build_lr_descriptor(&d, 0u);
 	d.has_schedule = false;
 	d.flags = 0u; /* no LR bit without a rate to go with it */
-	zassert_equal(2u, profile_desc_frame_count(&d), NULL);
-	d.flags = PROFILE_TLM_FLAG_LR_PHY;
+	zassert_equal(2u, radiant_profile_desc_frame_count(&d), NULL);
+	d.flags = RADIANT_PROFILE_TLM_FLAG_LR_PHY;
 	d.has_schedule = true;
-	zassert_equal(3u, profile_desc_frame_count(&d), NULL);
-	zassert_equal(1, profile_desc_long_count(&d, RADIANT_FRAME_PAYLOAD_LR_MAX));
+	zassert_equal(3u, radiant_profile_desc_frame_count(&d), NULL);
+	zassert_equal(1, radiant_profile_desc_long_count(&d, RADIANT_FRAME_PAYLOAD_LR_MAX));
 
 	/* Eight fields plus a schedule frame is eleven frames: three wakes, not
 	 * one. The plan said one; one would need a ~76-byte body, which at S=8
 	 * is ~5.4 ms of airtime. Three is a 73 % cut and is the honest number. */
 	build_lr_descriptor(&d, 8u);
-	zassert_equal(11u, profile_desc_frame_count(&d), NULL);
-	zassert_equal(3, profile_desc_long_count(&d, RADIANT_FRAME_PAYLOAD_LR_MAX));
+	zassert_equal(11u, radiant_profile_desc_frame_count(&d), NULL);
+	zassert_equal(3, radiant_profile_desc_long_count(&d, RADIANT_FRAME_PAYLOAD_LR_MAX));
 
 	assert_no_viol();
 }
 
 ZTEST(lr, test_a_collapse_is_refused_where_the_phy_does_not_hide_it)
 {
-	struct profile_descriptor d;
-	uint8_t frames[PROFILE_TLM_MAX_FRAMES * PROFILE_TLM_FRAME_LEN];
+	struct radiant_profile_descriptor d;
+	uint8_t frames[RADIANT_PROFILE_TLM_MAX_FRAMES * RADIANT_PROFILE_TLM_FRAME_LEN];
 	uint8_t payload[RADIANT_FRAME_PAYLOAD_LR_MAX];
 	int n_frames;
 
 	build_lr_descriptor(&d, 2u);
-	n_frames = profile_desc_encode(&d, frames, PROFILE_TLM_MAX_FRAMES);
+	n_frames = radiant_profile_desc_encode(&d, frames, RADIANT_PROFILE_TLM_MAX_FRAMES);
 	zassert_true(n_frames > 0, NULL);
 
 	/* Length extension is permitted only where the PHY already makes us
 	 * invisible: a 32-byte frame on RF 57 under the ANT+ network address is
 	 * a frame every stock ANT receiver would try (and fail) to parse. */
-	d.flags &= (uint8_t)~PROFILE_TLM_FLAG_LR_PHY;
-	d.schedule.coding = PROFILE_SCHED_CODING_NONE;
-	zassert_equal(-EINVAL, profile_desc_long_check(&d, RADIANT_FRAME_PAYLOAD_LR_MAX));
+	d.flags &= (uint8_t)~RADIANT_PROFILE_TLM_FLAG_LR_PHY;
+	d.schedule.coding = RADIANT_PROFILE_SCHED_CODING_NONE;
+	zassert_equal(-EINVAL, radiant_profile_desc_long_check(&d, RADIANT_FRAME_PAYLOAD_LR_MAX));
 	zassert_equal(-EINVAL,
-		      profile_desc_long_payload(&d, frames, (uint8_t)n_frames,
+		      radiant_profile_desc_long_payload(&d, frames, (uint8_t)n_frames,
 						RADIANT_FRAME_PAYLOAD_LR_MAX,
 						0u, payload, sizeof(payload)));
 
@@ -749,17 +749,17 @@ ZTEST(lr, test_a_collapse_is_refused_where_the_phy_does_not_hide_it)
 	 * fallback: a fallback would make a node's transmission shape depend on
 	 * a number nobody looked at. */
 	build_lr_descriptor(&d, 2u);
-	zassert_equal(-EINVAL, profile_desc_long_count(&d, 7u), NULL);
+	zassert_equal(-EINVAL, radiant_profile_desc_long_count(&d, 7u), NULL);
 
 	/* A feed that is not a whole number of frames is refused rather than
 	 * partially accepted, which would accept exactly the corrupted cases
 	 * while looking like robustness. */
 	{
-		struct profile_desc_rx rx;
+		struct radiant_profile_desc_rx rx;
 
-		profile_desc_rx_init(&rx);
+		radiant_profile_desc_rx_init(&rx);
 		memset(payload, 0, sizeof(payload));
-		zassert_equal(-EPROTO, profile_desc_rx_feed_long(&rx, payload, 12u));
+		zassert_equal(-EPROTO, radiant_profile_desc_rx_feed_long(&rx, payload, 12u));
 	}
 
 	assert_no_viol();

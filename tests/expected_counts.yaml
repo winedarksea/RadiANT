@@ -64,7 +64,7 @@
 # decoder, security review 2026-11-20 item 2), reached through the ztest job's
 # `-T app/apps/dongle_thread/tests`.
 # 2026-11-20: 26, radiant.unit.pairing_no_rng (pairing on, entropy backend off:
-# the only build where node_ident_pair_begin() takes the KDF scalar, security
+# the only build where radiant_node_ident_pair_begin() takes the KDF scalar, security
 # review 2026-11-17 item 8).
 # 2026-11-20: 27, radiant.backend.d2 (the backend suite with
 # CONFIG_RADIANT_GATE_MPSL_D2, the staged branches' d2_settle_now()).
@@ -111,7 +111,7 @@ min_scenarios: 29
 # 5740 (+28) with fail-closed-until-armed (items 5+9): five sec cases in each unit
 # scenario, one in radiant.api.sec, two in radiant.api.sec_host.
 # 5772 (+32) with enrolment root delivery (item 6): five sec_pair and three
-# profile_enrol cases in each of the four unit scenarios that build pairing.
+# radiant_profile_enrol cases in each of the four unit scenarios that build pairing.
 # 5777 (+5) with the compat same-root rule: one compat case in each of the
 # five unit scenarios.
 # 5812 (+35) on fix/ti-cmd-stall (Bluefin twister, 2026-11-16): five
@@ -206,7 +206,7 @@ min_scenarios: 29
 # Merged (items 4, C, D, B on one tree): 6482 + 25 + 9 + 110 + 11 = 6637.
 # 2026-11-20: 6493 (+11), the Matter endpoint high-water mark (security review
 # 2026-11-20 item B, fix/matter-endpoint-hw): +11 in dongle_thread.matter_storage.
-# 2026-11-20: 7871 (+1234), node_ident_pair_begin() honours caps.has_rng
+# 2026-11-20: 7871 (+1234), radiant_node_ident_pair_begin() honours caps.has_rng
 # (security review 2026-11-17 item 8, sec/item8-pair-rng, Bluefin twister): +4
 # node_ident cases in each of the four unit scenarios with the fake RNG (RNG
 # scalar, counter before the draw, failed draw, all-zero draw) and the new

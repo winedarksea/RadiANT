@@ -42,11 +42,11 @@
 
 #include "../fake_radio.h"
 
-#include "profile_command.h"
-#include "profile_handoff.h"
-#include "profile_sched.h"
-#include "profile_schedule.h"
-#include "profile_telemetry.h"
+#include "radiant_profile_command.h"
+#include "radiant_profile_handoff.h"
+#include "radiant_profile_sched.h"
+#include "radiant_profile_schedule.h"
+#include "radiant_profile_telemetry.h"
 
 /* ---------------------------------------------------------------------------
  * Fixture
@@ -70,13 +70,13 @@
 #define DL_DWELL_CODE     2u       /* 1 ms */
 #define DL_DWELL_US       1000u
 
-static const struct profile_schedule LIVE_SCHED = {
+static const struct radiant_profile_schedule LIVE_SCHED = {
 	.dl_interval = DL_INTERVAL_UNITS,
 	.dl_phase = 0u, /* recomputed per frame; the announced value is never
 			 * this one */
 	.dl_dwell = DL_DWELL_CODE,
-	.coding = PROFILE_SCHED_CODING_NONE,
-	.tx_power_dbm = PROFILE_SCHED_TX_POWER_UNSTATED,
+	.coding = RADIANT_PROFILE_SCHED_CODING_NONE,
+	.tx_power_dbm = RADIANT_PROFILE_SCHED_TX_POWER_UNSTATED,
 };
 
 /* 30 ppm, the accuracy LIVE_SCHED's dwell is sized against. */
@@ -112,9 +112,9 @@ static uint8_t test_exec(uint8_t cmd, uint8_t target, uint16_t arg,
 	return g_exec_result;
 }
 
-static void node_init(struct profile_cmd_node *n, uint8_t tag_len, uint32_t epoch)
+static void node_init(struct radiant_profile_cmd_node *n, uint8_t tag_len, uint32_t epoch)
 {
-	struct profile_cmd_cfg cfg;
+	struct radiant_profile_cmd_cfg cfg;
 
 	memset(&cfg, 0, sizeof(cfg));
 	cfg.epoch = epoch;
@@ -124,22 +124,22 @@ static void node_init(struct profile_cmd_node *n, uint8_t tag_len, uint32_t epoc
 	cfg.execute = test_exec;
 	cfg.slot.ch = CMD_CH;
 	cfg.slot.fmt = radiant_frame_format(RADIANT_FRAME_CFG_TRACKING);
-	cfg.slot.rf_index = PROFILE_TLM_RF_INDEX_DEFAULT;
+	cfg.slot.rf_index = RADIANT_PROFILE_TLM_RF_INDEX_DEFAULT;
 	cfg.slot.filters = &track_filter;
 	cfg.slot.n_filters = 1u;
 
-	zassert_ok(profile_cmd_init(n, &cfg));
+	zassert_ok(radiant_profile_cmd_init(n, &cfg));
 }
 
 /* Build a signed page 0x10 the way a commanding receiver would: its own
  * 16-bit sequence for the epoch, the low byte on the wire, the whole of it in
  * the tag (security review 2026-11-20, item 3). */
-static int build_command_ext(struct profile_cmd_node *signer, uint16_t ext,
+static int build_command_ext(struct radiant_profile_cmd_node *signer, uint16_t ext,
 			     uint8_t cmd, uint8_t target, uint16_t arg,
 			     uint8_t *body, size_t cap)
 {
-	struct profile_command c;
-	uint8_t tag[PROFILE_TLM_CMD_TAG_LR];
+	struct radiant_profile_command c;
+	uint8_t tag[RADIANT_PROFILE_TLM_CMD_TAG_LR];
 	int rc;
 
 	memset(&c, 0, sizeof(c));
@@ -149,14 +149,14 @@ static int build_command_ext(struct profile_cmd_node *signer, uint16_t ext,
 	c.arg = arg;
 
 	memset(tag, 0, sizeof(tag));
-	rc = profile_command_encode_tag(&c, tag, signer->cfg.tag_len, body, cap);
+	rc = radiant_profile_command_encode_tag(&c, tag, signer->cfg.tag_len, body, cap);
 	zassert_true(rc > 0);
-	zassert_ok(profile_cmd_tag_ext(signer, body, ext, tag));
-	return profile_command_encode_tag(&c, tag, signer->cfg.tag_len, body, cap);
+	zassert_ok(radiant_profile_cmd_tag_ext(signer, body, ext, tag));
+	return radiant_profile_command_encode_tag(&c, tag, signer->cfg.tag_len, body, cap);
 }
 
 /* An epoch's first lap, where ext is the wire's seq. */
-static int build_command(struct profile_cmd_node *signer, uint8_t seq, uint8_t cmd,
+static int build_command(struct radiant_profile_cmd_node *signer, uint8_t seq, uint8_t cmd,
 			 uint8_t target, uint16_t arg, uint8_t *body, size_t cap)
 {
 	return build_command_ext(signer, seq, cmd, target, arg, body, cap);
@@ -180,7 +180,7 @@ static void cmd_before(void *fixture)
 	track_filter.addr_len = RADIANT_FRAME_ADDR_LEN_TRACKING;
 
 	g_exec_calls = 0u;
-	g_exec_result = PROFILE_TLM_RESULT_OK;
+	g_exec_result = RADIANT_PROFILE_TLM_RESULT_OK;
 	g_exec_value = 0x1234u;
 	g_last_arg = 0u;
 }
@@ -194,104 +194,104 @@ ZTEST_SUITE(command, NULL, NULL, cmd_before, NULL, NULL);
 
 ZTEST(command, test_the_tag_width_is_the_channels_and_never_the_nodes)
 {
-	struct profile_schedule s = LIVE_SCHED;
+	struct radiant_profile_schedule s = LIVE_SCHED;
 
-	zassert_equal(PROFILE_TLM_CMD_TAG_LR,
-		      profile_cmd_tag_bytes(RADIANT_FRAME_CFG_LR));
-	zassert_equal(PROFILE_TLM_CMD_TAG_STD,
-		      profile_cmd_tag_bytes(RADIANT_FRAME_CFG_TRACKING));
-	zassert_equal(PROFILE_TLM_CMD_TAG_STD,
-		      profile_cmd_tag_bytes(RADIANT_FRAME_CFG_SEARCH));
+	zassert_equal(RADIANT_PROFILE_TLM_CMD_TAG_LR,
+		      radiant_profile_cmd_tag_bytes(RADIANT_FRAME_CFG_LR));
+	zassert_equal(RADIANT_PROFILE_TLM_CMD_TAG_STD,
+		      radiant_profile_cmd_tag_bytes(RADIANT_FRAME_CFG_TRACKING));
+	zassert_equal(RADIANT_PROFILE_TLM_CMD_TAG_STD,
+		      radiant_profile_cmd_tag_bytes(RADIANT_FRAME_CFG_SEARCH));
 
 	/* A control channel is S=8 on the long-range configuration, and the two
 	 * halves have to arrive together. */
-	s.coding = PROFILE_CMD_CTRL_CODING;
-	zassert_ok(profile_cmd_channel_check(&s, RADIANT_FRAME_CFG_LR));
+	s.coding = RADIANT_PROFILE_CMD_CTRL_CODING;
+	zassert_ok(radiant_profile_cmd_channel_check(&s, RADIANT_FRAME_CFG_LR));
 	zassert_equal(-EINVAL,
-		      profile_cmd_channel_check(&s, RADIANT_FRAME_CFG_TRACKING));
+		      radiant_profile_cmd_channel_check(&s, RADIANT_FRAME_CFG_TRACKING));
 
-	s.coding = PROFILE_SCHED_CODING_NONE;
-	zassert_ok(profile_cmd_channel_check(&s, RADIANT_FRAME_CFG_TRACKING));
-	zassert_equal(-EINVAL, profile_cmd_channel_check(&s, RADIANT_FRAME_CFG_LR));
+	s.coding = RADIANT_PROFILE_SCHED_CODING_NONE;
+	zassert_ok(radiant_profile_cmd_channel_check(&s, RADIANT_FRAME_CFG_TRACKING));
+	zassert_equal(-EINVAL, radiant_profile_cmd_channel_check(&s, RADIANT_FRAME_CFG_LR));
 
 	/* A control channel with no window to be commanded in. */
 	s.dl_interval = 0u;
 	s.dl_phase = 0u;
 	s.dl_dwell = 0u;
 	zassert_equal(-ENOENT,
-		      profile_cmd_channel_check(&s, RADIANT_FRAME_CFG_TRACKING));
+		      radiant_profile_cmd_channel_check(&s, RADIANT_FRAME_CFG_TRACKING));
 
 	/* A width that is neither is a caller inventing a third format. */
 	{
-		struct profile_cmd_node n;
-		struct profile_cmd_cfg cfg;
+		struct radiant_profile_cmd_node n;
+		struct radiant_profile_cmd_cfg cfg;
 
 		memset(&cfg, 0, sizeof(cfg));
 		cfg.tag_len = 4u;
 		cfg.execute = test_exec;
-		zassert_equal(-EINVAL, profile_cmd_init(&n, &cfg));
+		zassert_equal(-EINVAL, radiant_profile_cmd_init(&n, &cfg));
 	}
 }
 
 ZTEST(command, test_the_short_tag_is_the_long_tags_prefix_and_the_rest_is_the_gain)
 {
-	struct profile_cmd_node short_n;
-	struct profile_cmd_node long_n;
-	uint8_t body_s[PROFILE_TLM_CMD_LEN_STD];
-	uint8_t body_l[PROFILE_TLM_CMD_LEN_LR];
-	uint8_t tag_s[PROFILE_TLM_CMD_TAG_LR];
-	uint8_t tag_l[PROFILE_TLM_CMD_TAG_LR];
+	struct radiant_profile_cmd_node short_n;
+	struct radiant_profile_cmd_node long_n;
+	uint8_t body_s[RADIANT_PROFILE_TLM_CMD_LEN_STD];
+	uint8_t body_l[RADIANT_PROFILE_TLM_CMD_LEN_LR];
+	uint8_t tag_s[RADIANT_PROFILE_TLM_CMD_TAG_LR];
+	uint8_t tag_l[RADIANT_PROFILE_TLM_CMD_TAG_LR];
 	int rc;
 
-	node_init(&short_n, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
-	node_init(&long_n, PROFILE_TLM_CMD_TAG_LR, EPOCH_A);
+	node_init(&short_n, RADIANT_PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
+	node_init(&long_n, RADIANT_PROFILE_TLM_CMD_TAG_LR, EPOCH_A);
 
-	rc = build_command(&short_n, 7u, PROFILE_TLM_CMD_SET_LEVEL, 0x01u, 0x0042u,
+	rc = build_command(&short_n, 7u, RADIANT_PROFILE_TLM_CMD_SET_LEVEL, 0x01u, 0x0042u,
 			   body_s, sizeof(body_s));
-	zassert_equal((int)PROFILE_TLM_CMD_LEN_STD, rc);
-	rc = build_command(&long_n, 7u, PROFILE_TLM_CMD_SET_LEVEL, 0x01u, 0x0042u,
+	zassert_equal((int)RADIANT_PROFILE_TLM_CMD_LEN_STD, rc);
+	rc = build_command(&long_n, 7u, RADIANT_PROFILE_TLM_CMD_SET_LEVEL, 0x01u, 0x0042u,
 			   body_l, sizeof(body_l));
-	zassert_equal((int)PROFILE_TLM_CMD_LEN_LR, rc);
+	zassert_equal((int)RADIANT_PROFILE_TLM_CMD_LEN_LR, rc);
 
 	/* Same six covered bytes either way: the tag grows off the end and the
 	 * fields in front of it do not move. */
-	zassert_mem_equal(body_s, body_l, PROFILE_TLM_CMD_COVERED);
+	zassert_mem_equal(body_s, body_l, RADIANT_PROFILE_TLM_CMD_COVERED);
 
 	memset(tag_s, 0, sizeof(tag_s));
 	memset(tag_l, 0, sizeof(tag_l));
-	zassert_ok(profile_cmd_tag(&short_n, body_s, tag_s));
-	zassert_ok(profile_cmd_tag(&long_n, body_l, tag_l));
+	zassert_ok(radiant_profile_cmd_tag(&short_n, body_s, tag_s));
+	zassert_ok(radiant_profile_cmd_tag(&long_n, body_l, tag_l));
 
 	/* Truncation is a prefix, so the short tag is the long one's first two
 	 * bytes. That is what makes the two widths one scheme. */
-	zassert_mem_equal(tag_s, tag_l, PROFILE_TLM_CMD_TAG_STD);
+	zassert_mem_equal(tag_s, tag_l, RADIANT_PROFILE_TLM_CMD_TAG_STD);
 
 	/* The point of the longer frame: a forgery right in its first two bytes
 	 * (2^-16 of guesses) is accepted at the short width and refused at the
 	 * long one. */
-	zassert_true(profile_cmd_tag_ok(&short_n, body_l,
-					&body_l[PROFILE_TLM_CMD_COVERED]));
-	body_l[PROFILE_TLM_CMD_COVERED + 2u] ^= 0x01u;
-	zassert_true(profile_cmd_tag_ok(&short_n, body_l,
-					&body_l[PROFILE_TLM_CMD_COVERED]));
-	zassert_false(profile_cmd_tag_ok(&long_n, body_l,
-					 &body_l[PROFILE_TLM_CMD_COVERED]));
+	zassert_true(radiant_profile_cmd_tag_ok(&short_n, body_l,
+					&body_l[RADIANT_PROFILE_TLM_CMD_COVERED]));
+	body_l[RADIANT_PROFILE_TLM_CMD_COVERED + 2u] ^= 0x01u;
+	zassert_true(radiant_profile_cmd_tag_ok(&short_n, body_l,
+					&body_l[RADIANT_PROFILE_TLM_CMD_COVERED]));
+	zassert_false(radiant_profile_cmd_tag_ok(&long_n, body_l,
+					 &body_l[RADIANT_PROFILE_TLM_CMD_COVERED]));
 }
 
 ZTEST(command, test_a_page_at_the_other_width_is_refused_rather_than_truncated)
 {
-	struct profile_cmd_node n;
-	struct profile_cmd_node signer;
-	uint8_t body[PROFILE_TLM_CMD_LEN_LR];
-	uint8_t ack[PROFILE_TLM_CMD_LEN_LR];
+	struct radiant_profile_cmd_node n;
+	struct radiant_profile_cmd_node signer;
+	uint8_t body[RADIANT_PROFILE_TLM_CMD_LEN_LR];
+	uint8_t ack[RADIANT_PROFILE_TLM_CMD_LEN_LR];
 
-	node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
-	node_init(&signer, PROFILE_TLM_CMD_TAG_LR, EPOCH_A);
-	(void)build_command(&signer, 1u, PROFILE_TLM_CMD_NOP, PROFILE_TLM_TARGET_NODE,
+	node_init(&n, RADIANT_PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
+	node_init(&signer, RADIANT_PROFILE_TLM_CMD_TAG_LR, EPOCH_A);
+	(void)build_command(&signer, 1u, RADIANT_PROFILE_TLM_CMD_NOP, RADIANT_PROFILE_TLM_TARGET_NODE,
 			    0u, body, sizeof(body));
 
 	zassert_equal(-EINVAL,
-		      profile_cmd_on_command(&n, body, PROFILE_TLM_CMD_LEN_LR,
+		      radiant_profile_cmd_on_command(&n, body, RADIANT_PROFILE_TLM_CMD_LEN_LR,
 					     1000u, ack, sizeof(ack)));
 	zassert_equal(0u, g_exec_calls);
 }
@@ -303,120 +303,120 @@ ZTEST(command, test_a_page_at_the_other_width_is_refused_rather_than_truncated)
 
 ZTEST(command, test_a_command_executes_once_however_many_times_it_arrives)
 {
-	struct profile_cmd_node n;
-	struct profile_command_ack a;
-	uint8_t body[PROFILE_TLM_CMD_LEN_STD];
-	uint8_t ack[PROFILE_TLM_CMD_LEN_LR];
-	uint8_t tag[PROFILE_TLM_CMD_TAG_LR];
+	struct radiant_profile_cmd_node n;
+	struct radiant_profile_command_ack a;
+	uint8_t body[RADIANT_PROFILE_TLM_CMD_LEN_STD];
+	uint8_t ack[RADIANT_PROFILE_TLM_CMD_LEN_LR];
+	uint8_t tag[RADIANT_PROFILE_TLM_CMD_TAG_LR];
 	int rc;
 
-	node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
-	(void)build_command(&n, 42u, PROFILE_TLM_CMD_SET_BOOL, 0x02u, 1u, body,
+	node_init(&n, RADIANT_PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
+	(void)build_command(&n, 42u, RADIANT_PROFILE_TLM_CMD_SET_BOOL, 0x02u, 1u, body,
 			    sizeof(body));
 
-	rc = profile_cmd_on_command(&n, body, sizeof(body), 1000u, ack, sizeof(ack));
-	zassert_equal((int)PROFILE_TLM_CMD_LEN_STD, rc);
+	rc = radiant_profile_cmd_on_command(&n, body, sizeof(body), 1000u, ack, sizeof(ack));
+	zassert_equal((int)RADIANT_PROFILE_TLM_CMD_LEN_STD, rc);
 	zassert_equal(1u, g_exec_calls);
-	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
+	zassert_true(radiant_profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
 						    sizeof(tag)) > 0);
-	zassert_equal(PROFILE_TLM_RESULT_OK, a.result);
+	zassert_equal(RADIANT_PROFILE_TLM_RESULT_OK, a.result);
 	zassert_equal(42u, a.seq);
-	zassert_equal(PROFILE_TLM_CMD_SET_BOOL, a.cmd);
+	zassert_equal(RADIANT_PROFILE_TLM_CMD_SET_BOOL, a.cmd);
 	zassert_equal(0x1234u, a.value);
 
 	/* Twice more. The effect runs once; the answer comes back every time,
 	 * which is what makes a retry free. */
-	rc = profile_cmd_on_command(&n, body, sizeof(body), 2000u, ack, sizeof(ack));
-	zassert_equal((int)PROFILE_TLM_CMD_LEN_STD, rc);
-	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
+	rc = radiant_profile_cmd_on_command(&n, body, sizeof(body), 2000u, ack, sizeof(ack));
+	zassert_equal((int)RADIANT_PROFILE_TLM_CMD_LEN_STD, rc);
+	zassert_true(radiant_profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
 						    sizeof(tag)) > 0);
-	zassert_equal(PROFILE_TLM_RESULT_ALREADY, a.result);
+	zassert_equal(RADIANT_PROFILE_TLM_RESULT_ALREADY, a.result);
 	zassert_equal(0x1234u, a.value);
 
-	rc = profile_cmd_on_command(&n, body, sizeof(body), 3000u, ack, sizeof(ack));
-	zassert_equal((int)PROFILE_TLM_CMD_LEN_STD, rc);
+	rc = radiant_profile_cmd_on_command(&n, body, sizeof(body), 3000u, ack, sizeof(ack));
+	zassert_equal((int)RADIANT_PROFILE_TLM_CMD_LEN_STD, rc);
 
 	zassert_equal(1u, g_exec_calls);
-	zassert_equal(1u, profile_cmd_stats(&n)->executed);
-	zassert_equal(2u, profile_cmd_stats(&n)->repeats);
+	zassert_equal(1u, radiant_profile_cmd_stats(&n)->executed);
+	zassert_equal(2u, radiant_profile_cmd_stats(&n)->repeats);
 
 	/* The acknowledgement is authenticated too, and its tag covers the
 	 * result - so the repeat's tag differs from the original's. */
-	zassert_true(profile_cmd_tag_ok(&n, ack, &ack[PROFILE_TLM_CMD_COVERED]));
+	zassert_true(radiant_profile_cmd_tag_ok(&n, ack, &ack[RADIANT_PROFILE_TLM_CMD_COVERED]));
 }
 
 ZTEST(command, test_a_rejection_repeats_as_a_rejection_and_never_as_already)
 {
-	struct profile_cmd_node n;
-	struct profile_command_ack a;
-	uint8_t body[PROFILE_TLM_CMD_LEN_STD];
-	uint8_t ack[PROFILE_TLM_CMD_LEN_LR];
-	uint8_t tag[PROFILE_TLM_CMD_TAG_LR];
+	struct radiant_profile_cmd_node n;
+	struct radiant_profile_command_ack a;
+	uint8_t body[RADIANT_PROFILE_TLM_CMD_LEN_STD];
+	uint8_t ack[RADIANT_PROFILE_TLM_CMD_LEN_LR];
+	uint8_t tag[RADIANT_PROFILE_TLM_CMD_TAG_LR];
 	int rc;
 
-	g_exec_result = PROFILE_TLM_RESULT_BAD_ARG;
-	node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
-	(void)build_command(&n, 9u, PROFILE_TLM_CMD_SET_LEVEL, 0x01u, 0xFFFFu, body,
+	g_exec_result = RADIANT_PROFILE_TLM_RESULT_BAD_ARG;
+	node_init(&n, RADIANT_PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
+	(void)build_command(&n, 9u, RADIANT_PROFILE_TLM_CMD_SET_LEVEL, 0x01u, 0xFFFFu, body,
 			    sizeof(body));
 
-	rc = profile_cmd_on_command(&n, body, sizeof(body), 1000u, ack, sizeof(ack));
+	rc = radiant_profile_cmd_on_command(&n, body, sizeof(body), 1000u, ack, sizeof(ack));
 	zassert_true(rc > 0);
-	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
+	zassert_true(radiant_profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
 						    sizeof(tag)) > 0);
-	zassert_equal(PROFILE_TLM_RESULT_BAD_ARG, a.result);
+	zassert_equal(RADIANT_PROFILE_TLM_RESULT_BAD_ARG, a.result);
 
-	rc = profile_cmd_on_command(&n, body, sizeof(body), 2000u, ack, sizeof(ack));
+	rc = radiant_profile_cmd_on_command(&n, body, sizeof(body), 2000u, ack, sizeof(ack));
 	zassert_true(rc > 0);
-	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
+	zassert_true(radiant_profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
 						    sizeof(tag)) > 0);
-	zassert_equal(PROFILE_TLM_RESULT_BAD_ARG, a.result);
-	zassert_equal(0u, profile_cmd_stats(&n)->executed);
-	zassert_equal(1u, profile_cmd_stats(&n)->rejected);
+	zassert_equal(RADIANT_PROFILE_TLM_RESULT_BAD_ARG, a.result);
+	zassert_equal(0u, radiant_profile_cmd_stats(&n)->executed);
+	zassert_equal(1u, radiant_profile_cmd_stats(&n)->rejected);
 }
 
 ZTEST(command, test_a_bad_tag_changes_no_state_including_last_seq)
 {
-	struct profile_cmd_node n;
-	struct profile_command_ack a;
-	uint8_t body[PROFILE_TLM_CMD_LEN_STD];
-	uint8_t ack[PROFILE_TLM_CMD_LEN_LR];
-	uint8_t tag[PROFILE_TLM_CMD_TAG_LR];
+	struct radiant_profile_cmd_node n;
+	struct radiant_profile_command_ack a;
+	uint8_t body[RADIANT_PROFILE_TLM_CMD_LEN_STD];
+	uint8_t ack[RADIANT_PROFILE_TLM_CMD_LEN_LR];
+	uint8_t tag[RADIANT_PROFILE_TLM_CMD_TAG_LR];
 	int rc;
 
-	node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
-	(void)build_command(&n, 200u, PROFILE_TLM_CMD_SET_BOOL, 0x01u, 1u, body,
+	node_init(&n, RADIANT_PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
+	(void)build_command(&n, 200u, RADIANT_PROFILE_TLM_CMD_SET_BOOL, 0x01u, 1u, body,
 			    sizeof(body));
-	body[PROFILE_TLM_CMD_COVERED] ^= 0x80u; /* a wrong tag */
+	body[RADIANT_PROFILE_TLM_CMD_COVERED] ^= 0x80u; /* a wrong tag */
 
-	rc = profile_cmd_on_command(&n, body, sizeof(body), 1000u, ack, sizeof(ack));
+	rc = radiant_profile_cmd_on_command(&n, body, sizeof(body), 1000u, ack, sizeof(ack));
 	zassert_true(rc > 0);
-	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
+	zassert_true(radiant_profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
 						    sizeof(tag)) > 0);
-	zassert_equal(PROFILE_TLM_RESULT_BAD_TAG, a.result);
+	zassert_equal(RADIANT_PROFILE_TLM_RESULT_BAD_TAG, a.result);
 
 	zassert_equal(0u, g_exec_calls);
 	zassert_false(n.seq_known);
-	zassert_equal(0u, profile_cmd_stats(&n)->adopted);
+	zassert_equal(0u, radiant_profile_cmd_stats(&n)->adopted);
 
 	/* Rule 4 still available: the first command that PASSES the tag check
 	 * is the one whose sequence is adopted. */
-	(void)build_command(&n, 7u, PROFILE_TLM_CMD_SET_BOOL, 0x01u, 1u, body,
+	(void)build_command(&n, 7u, RADIANT_PROFILE_TLM_CMD_SET_BOOL, 0x01u, 1u, body,
 			    sizeof(body));
-	rc = profile_cmd_on_command(&n, body, sizeof(body),
-				    1000u + (2u * PROFILE_CMD_BACKOFF_BASE_US),
+	rc = radiant_profile_cmd_on_command(&n, body, sizeof(body),
+				    1000u + (2u * RADIANT_PROFILE_CMD_BACKOFF_BASE_US),
 				    ack, sizeof(ack));
 	zassert_true(rc > 0);
 	zassert_equal(1u, g_exec_calls);
-	zassert_equal(1u, profile_cmd_stats(&n)->adopted);
+	zassert_equal(1u, radiant_profile_cmd_stats(&n)->adopted);
 	zassert_equal(7u, n.last_ext);
 }
 
 ZTEST(command, test_the_accept_window_is_one_to_one_hundred_twenty_seven_and_wraps)
 {
-	struct profile_command_ack a;
-	uint8_t body[PROFILE_TLM_CMD_LEN_STD];
-	uint8_t ack[PROFILE_TLM_CMD_LEN_LR];
-	uint8_t tag[PROFILE_TLM_CMD_TAG_LR];
+	struct radiant_profile_command_ack a;
+	uint8_t body[RADIANT_PROFILE_TLM_CMD_LEN_STD];
+	uint8_t ack[RADIANT_PROFILE_TLM_CMD_LEN_LR];
+	uint8_t tag[RADIANT_PROFILE_TLM_CMD_TAG_LR];
 	int rc;
 	uint8_t i;
 
@@ -441,34 +441,34 @@ ZTEST(command, test_the_accept_window_is_one_to_one_hundred_twenty_seven_and_wra
 	};
 
 	for (i = 0u; i < ARRAY_SIZE(cases); i++) {
-		struct profile_cmd_node n;
+		struct radiant_profile_cmd_node n;
 
 		g_exec_calls = 0u;
-		node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
+		node_init(&n, RADIANT_PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
 
-		(void)build_command(&n, cases[i].first, PROFILE_TLM_CMD_NOP,
-				    PROFILE_TLM_TARGET_NODE, 0u, body,
+		(void)build_command(&n, cases[i].first, RADIANT_PROFILE_TLM_CMD_NOP,
+				    RADIANT_PROFILE_TLM_TARGET_NODE, 0u, body,
 				    sizeof(body));
-		zassert_true(profile_cmd_on_command(&n, body, sizeof(body), 1000u,
+		zassert_true(radiant_profile_cmd_on_command(&n, body, sizeof(body), 1000u,
 						    ack, sizeof(ack)) > 0);
 		zassert_equal(1u, g_exec_calls);
 
-		(void)build_command_ext(&n, cases[i].second, PROFILE_TLM_CMD_NOP,
-					PROFILE_TLM_TARGET_NODE, 0u, body,
+		(void)build_command_ext(&n, cases[i].second, RADIANT_PROFILE_TLM_CMD_NOP,
+					RADIANT_PROFILE_TLM_TARGET_NODE, 0u, body,
 					sizeof(body));
-		rc = profile_cmd_on_command(&n, body, sizeof(body), 2000u, ack,
+		rc = radiant_profile_cmd_on_command(&n, body, sizeof(body), 2000u, ack,
 					    sizeof(ack));
 		zassert_true(rc > 0);
-		zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a,
+		zassert_true(radiant_profile_command_ack_decode_tag(ack, (uint8_t)rc, &a,
 							    tag, sizeof(tag)) > 0);
 
 		if (cases[i].accept) {
-			zassert_equal(PROFILE_TLM_RESULT_OK, a.result,
+			zassert_equal(RADIANT_PROFILE_TLM_RESULT_OK, a.result,
 				      "case %u: %u -> %u", i,
 				      cases[i].first, cases[i].second);
 			zassert_equal(2u, g_exec_calls);
 		} else {
-			zassert_equal(PROFILE_TLM_RESULT_BAD_SEQ, a.result,
+			zassert_equal(RADIANT_PROFILE_TLM_RESULT_BAD_SEQ, a.result,
 				      "case %u: %u -> %u", i,
 				      cases[i].first, cases[i].second);
 			zassert_equal(1u, g_exec_calls);
@@ -478,87 +478,87 @@ ZTEST(command, test_the_accept_window_is_one_to_one_hundred_twenty_seven_and_wra
 
 ZTEST(command, test_failed_verifications_back_off_and_a_success_clears_the_ladder)
 {
-	struct profile_cmd_node n;
-	uint8_t body[PROFILE_TLM_CMD_LEN_STD];
-	uint8_t ack[PROFILE_TLM_CMD_LEN_LR];
+	struct radiant_profile_cmd_node n;
+	uint8_t body[RADIANT_PROFILE_TLM_CMD_LEN_STD];
+	uint8_t ack[RADIANT_PROFILE_TLM_CMD_LEN_LR];
 	radiant_time_t t = 1000000u;
 	radiant_time_t blocked_1;
 	radiant_time_t blocked_2;
 	radiant_time_t blocked_3;
 
-	node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
-	(void)build_command(&n, 5u, PROFILE_TLM_CMD_SET_BOOL, 0x01u, 1u, body,
+	node_init(&n, RADIANT_PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
+	(void)build_command(&n, 5u, RADIANT_PROFILE_TLM_CMD_SET_BOOL, 0x01u, 1u, body,
 			    sizeof(body));
-	body[PROFILE_TLM_CMD_COVERED] ^= 0xFFu;
+	body[RADIANT_PROFILE_TLM_CMD_COVERED] ^= 0xFFu;
 
 	/* Failure 1: answered once, and the ladder starts at the base. */
-	zassert_true(profile_cmd_on_command(&n, body, sizeof(body), t, ack,
+	zassert_true(radiant_profile_cmd_on_command(&n, body, sizeof(body), t, ack,
 					    sizeof(ack)) > 0);
 	blocked_1 = n.blocked_until;
-	zassert_equal(t + PROFILE_CMD_BACKOFF_BASE_US, blocked_1);
+	zassert_equal(t + RADIANT_PROFILE_CMD_BACKOFF_BASE_US, blocked_1);
 
 	/* A second attempt inside the block is dropped WITHOUT verifying it,
 	 * which is the cost the throttle exists to save. */
-	zassert_equal(0, profile_cmd_on_command(&n, body, sizeof(body), t + 1u, ack,
+	zassert_equal(0, radiant_profile_cmd_on_command(&n, body, sizeof(body), t + 1u, ack,
 						sizeof(ack)));
-	zassert_equal(1u, profile_cmd_stats(&n)->throttled);
-	zassert_equal(1u, profile_cmd_stats(&n)->bad_tag);
+	zassert_equal(1u, radiant_profile_cmd_stats(&n)->throttled);
+	zassert_equal(1u, radiant_profile_cmd_stats(&n)->bad_tag);
 
 	/* Past the block: verified, failed, and the interval has doubled. */
 	t = blocked_1;
-	zassert_equal(0, profile_cmd_on_command(&n, body, sizeof(body), t, ack,
+	zassert_equal(0, radiant_profile_cmd_on_command(&n, body, sizeof(body), t, ack,
 						sizeof(ack)));
 	blocked_2 = n.blocked_until;
-	zassert_equal(t + (2u * PROFILE_CMD_BACKOFF_BASE_US), blocked_2);
-	zassert_equal(2u, profile_cmd_stats(&n)->bad_tag);
+	zassert_equal(t + (2u * RADIANT_PROFILE_CMD_BACKOFF_BASE_US), blocked_2);
+	zassert_equal(2u, radiant_profile_cmd_stats(&n)->bad_tag);
 
 	t = blocked_2;
-	zassert_equal(0, profile_cmd_on_command(&n, body, sizeof(body), t, ack,
+	zassert_equal(0, radiant_profile_cmd_on_command(&n, body, sizeof(body), t, ack,
 						sizeof(ack)));
 	blocked_3 = n.blocked_until;
-	zassert_equal(t + (4u * PROFILE_CMD_BACKOFF_BASE_US), blocked_3);
+	zassert_equal(t + (4u * RADIANT_PROFILE_CMD_BACKOFF_BASE_US), blocked_3);
 
 	/* A good command clears the ladder, so a legitimate receiver that was
 	 * merely unlucky never climbs it. */
-	(void)build_command(&n, 5u, PROFILE_TLM_CMD_SET_BOOL, 0x01u, 1u, body,
+	(void)build_command(&n, 5u, RADIANT_PROFILE_TLM_CMD_SET_BOOL, 0x01u, 1u, body,
 			    sizeof(body));
-	zassert_true(profile_cmd_on_command(&n, body, sizeof(body), blocked_3, ack,
+	zassert_true(radiant_profile_cmd_on_command(&n, body, sizeof(body), blocked_3, ack,
 					    sizeof(ack)) > 0);
 	zassert_equal(0u, n.fails);
 	zassert_equal(1u, g_exec_calls);
-	zassert_equal(3u, profile_cmd_stats(&n)->bad_tag);
+	zassert_equal(3u, radiant_profile_cmd_stats(&n)->bad_tag);
 }
 
 ZTEST(command, test_a_command_captured_in_a_previous_epoch_never_verifies)
 {
-	struct profile_cmd_node yesterday;
-	struct profile_cmd_node today;
-	uint8_t body[PROFILE_TLM_CMD_LEN_STD];
-	uint8_t ack[PROFILE_TLM_CMD_LEN_LR];
-	struct profile_command_ack a;
-	uint8_t tag[PROFILE_TLM_CMD_TAG_LR];
+	struct radiant_profile_cmd_node yesterday;
+	struct radiant_profile_cmd_node today;
+	uint8_t body[RADIANT_PROFILE_TLM_CMD_LEN_STD];
+	uint8_t ack[RADIANT_PROFILE_TLM_CMD_LEN_LR];
+	struct radiant_profile_command_ack a;
+	uint8_t tag[RADIANT_PROFILE_TLM_CMD_TAG_LR];
 	int rc;
 
-	node_init(&yesterday, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
-	node_init(&today, PROFILE_TLM_CMD_TAG_STD, EPOCH_B);
+	node_init(&yesterday, RADIANT_PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
+	node_init(&today, RADIANT_PROFILE_TLM_CMD_TAG_STD, EPOCH_B);
 
-	(void)build_command(&yesterday, 3u, PROFILE_TLM_CMD_SET_BOOL, 0x01u, 1u,
+	(void)build_command(&yesterday, 3u, RADIANT_PROFILE_TLM_CMD_SET_BOOL, 0x01u, 1u,
 			    body, sizeof(body));
 
-	rc = profile_cmd_on_command(&today, body, sizeof(body), 1000u, ack,
+	rc = radiant_profile_cmd_on_command(&today, body, sizeof(body), 1000u, ack,
 				    sizeof(ack));
 	zassert_true(rc > 0);
-	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
+	zassert_true(radiant_profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
 						    sizeof(tag)) > 0);
-	zassert_equal(PROFILE_TLM_RESULT_BAD_TAG, a.result);
+	zassert_equal(RADIANT_PROFILE_TLM_RESULT_BAD_TAG, a.result);
 	zassert_equal(0u, g_exec_calls);
 	zassert_false(today.seq_known);
 
 	/* And moving epoch forgets the sequence, for the same reason. */
-	zassert_true(profile_cmd_on_command(&yesterday, body, sizeof(body), 1000u,
+	zassert_true(radiant_profile_cmd_on_command(&yesterday, body, sizeof(body), 1000u,
 					    ack, sizeof(ack)) > 0);
 	zassert_true(yesterday.seq_known);
-	zassert_ok(profile_cmd_set_epoch(&yesterday, EPOCH_B));
+	zassert_ok(radiant_profile_cmd_set_epoch(&yesterday, EPOCH_B));
 	zassert_false(yesterday.seq_known);
 }
 
@@ -569,41 +569,41 @@ ZTEST(command, test_a_command_captured_in_a_previous_epoch_never_verifies)
  * bad tag. */
 ZTEST(command, test_a_command_from_an_earlier_lap_never_executes_again)
 {
-	struct profile_cmd_node n;
-	struct profile_command_ack a;
-	uint8_t original[PROFILE_TLM_CMD_LEN_STD];
-	uint8_t body[PROFILE_TLM_CMD_LEN_STD];
-	uint8_t ack[PROFILE_TLM_CMD_LEN_LR];
-	uint8_t tag[PROFILE_TLM_CMD_TAG_LR];
+	struct radiant_profile_cmd_node n;
+	struct radiant_profile_command_ack a;
+	uint8_t original[RADIANT_PROFILE_TLM_CMD_LEN_STD];
+	uint8_t body[RADIANT_PROFILE_TLM_CMD_LEN_STD];
+	uint8_t ack[RADIANT_PROFILE_TLM_CMD_LEN_LR];
+	uint8_t tag[RADIANT_PROFILE_TLM_CMD_TAG_LR];
 	uint32_t seq;
 	int rc;
 
-	node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
-	(void)build_command(&n, 10u, PROFILE_TLM_CMD_SET_BOOL, 0x01u, 1u,
+	node_init(&n, RADIANT_PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
+	(void)build_command(&n, 10u, RADIANT_PROFILE_TLM_CMD_SET_BOOL, 0x01u, 1u,
 			    original, sizeof(original));
-	zassert_true(profile_cmd_on_command(&n, original, sizeof(original), 1000u,
+	zassert_true(radiant_profile_cmd_on_command(&n, original, sizeof(original), 1000u,
 					    ack, sizeof(ack)) > 0);
 	zassert_equal(1u, g_exec_calls);
 
 	/* 10 -> 60 -> 110 -> 160 -> 210: four genuine commands, 200 past the
 	 * first, and delta_u8(10, 210) = 56 puts seq 10 back in the window. */
 	for (seq = 60u; seq <= 210u; seq += 50u) {
-		(void)build_command(&n, (uint8_t)seq, PROFILE_TLM_CMD_NOP,
-				    PROFILE_TLM_TARGET_NODE, 0u, body,
+		(void)build_command(&n, (uint8_t)seq, RADIANT_PROFILE_TLM_CMD_NOP,
+				    RADIANT_PROFILE_TLM_TARGET_NODE, 0u, body,
 				    sizeof(body));
-		zassert_true(profile_cmd_on_command(&n, body, sizeof(body), 2000u,
+		zassert_true(radiant_profile_cmd_on_command(&n, body, sizeof(body), 2000u,
 						    ack, sizeof(ack)) > 0);
 	}
 	zassert_equal(5u, g_exec_calls);
 
-	rc = profile_cmd_on_command(&n, original, sizeof(original), 3000u, ack,
+	rc = radiant_profile_cmd_on_command(&n, original, sizeof(original), 3000u, ack,
 				    sizeof(ack));
 	zassert_true(rc > 0);
-	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
+	zassert_true(radiant_profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
 						    sizeof(tag)) > 0);
-	zassert_equal(PROFILE_TLM_RESULT_BAD_TAG, a.result);
+	zassert_equal(RADIANT_PROFILE_TLM_RESULT_BAD_TAG, a.result);
 	zassert_equal(5u, g_exec_calls, "a replayed command executed twice");
-	zassert_equal(1u, profile_cmd_stats(&n)->bad_tag);
+	zassert_equal(1u, radiant_profile_cmd_stats(&n)->bad_tag);
 }
 
 /* The same review item's second half: re-applying the CURRENT epoch (an
@@ -611,54 +611,54 @@ ZTEST(command, test_a_command_from_an_earlier_lap_never_executes_again)
  * which sequence already ran. */
 ZTEST(command, test_resetting_the_same_epoch_keeps_the_duplicate_history)
 {
-	struct profile_cmd_node n;
-	struct profile_command_ack a;
-	uint8_t body[PROFILE_TLM_CMD_LEN_STD];
-	uint8_t ack[PROFILE_TLM_CMD_LEN_LR];
-	uint8_t tag[PROFILE_TLM_CMD_TAG_LR];
+	struct radiant_profile_cmd_node n;
+	struct radiant_profile_command_ack a;
+	uint8_t body[RADIANT_PROFILE_TLM_CMD_LEN_STD];
+	uint8_t ack[RADIANT_PROFILE_TLM_CMD_LEN_LR];
+	uint8_t tag[RADIANT_PROFILE_TLM_CMD_TAG_LR];
 	int rc;
 
-	node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
-	(void)build_command(&n, 33u, PROFILE_TLM_CMD_SET_BOOL, 0x01u, 1u, body,
+	node_init(&n, RADIANT_PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
+	(void)build_command(&n, 33u, RADIANT_PROFILE_TLM_CMD_SET_BOOL, 0x01u, 1u, body,
 			    sizeof(body));
-	zassert_true(profile_cmd_on_command(&n, body, sizeof(body), 1000u, ack,
+	zassert_true(radiant_profile_cmd_on_command(&n, body, sizeof(body), 1000u, ack,
 					    sizeof(ack)) > 0);
 	zassert_equal(1u, g_exec_calls);
 
-	zassert_ok(profile_cmd_set_epoch(&n, EPOCH_A));
+	zassert_ok(radiant_profile_cmd_set_epoch(&n, EPOCH_A));
 	zassert_true(n.seq_known);
 
-	rc = profile_cmd_on_command(&n, body, sizeof(body), 2000u, ack,
+	rc = radiant_profile_cmd_on_command(&n, body, sizeof(body), 2000u, ack,
 				    sizeof(ack));
 	zassert_true(rc > 0);
-	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
+	zassert_true(radiant_profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
 						    sizeof(tag)) > 0);
-	zassert_equal(PROFILE_TLM_RESULT_ALREADY, a.result);
+	zassert_equal(RADIANT_PROFILE_TLM_RESULT_ALREADY, a.result);
 	zassert_equal(1u, g_exec_calls, "a setter retry re-armed a replay");
-	zassert_equal(1u, profile_cmd_stats(&n)->adopted);
+	zassert_equal(1u, radiant_profile_cmd_stats(&n)->adopted);
 }
 
 ZTEST(command, test_an_older_epoch_is_refused_and_changes_nothing)
 {
-	struct profile_cmd_node n;
-	uint8_t body[PROFILE_TLM_CMD_LEN_STD];
-	uint8_t ack[PROFILE_TLM_CMD_LEN_LR];
+	struct radiant_profile_cmd_node n;
+	uint8_t body[RADIANT_PROFILE_TLM_CMD_LEN_STD];
+	uint8_t ack[RADIANT_PROFILE_TLM_CMD_LEN_LR];
 
-	node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_B);
-	(void)build_command(&n, 21u, PROFILE_TLM_CMD_NOP, PROFILE_TLM_TARGET_NODE,
+	node_init(&n, RADIANT_PROFILE_TLM_CMD_TAG_STD, EPOCH_B);
+	(void)build_command(&n, 21u, RADIANT_PROFILE_TLM_CMD_NOP, RADIANT_PROFILE_TLM_TARGET_NODE,
 			    0u, body, sizeof(body));
-	zassert_true(profile_cmd_on_command(&n, body, sizeof(body), 1000u, ack,
+	zassert_true(radiant_profile_cmd_on_command(&n, body, sizeof(body), 1000u, ack,
 					    sizeof(ack)) > 0);
 
 	/* A rollback would make every tag EPOCH_A ever produced valid again. */
-	zassert_equal(-EINVAL, profile_cmd_set_epoch(&n, EPOCH_A));
+	zassert_equal(-EINVAL, radiant_profile_cmd_set_epoch(&n, EPOCH_A));
 	zassert_equal(EPOCH_B, n.cfg.epoch);
 	zassert_true(n.seq_known);
 	zassert_true(n.stored_valid);
 	zassert_equal(21u, n.last_ext);
 
 	/* Only a real advance forgets the sequence. */
-	zassert_ok(profile_cmd_set_epoch(&n, EPOCH_B + 1u));
+	zassert_ok(radiant_profile_cmd_set_epoch(&n, EPOCH_B + 1u));
 	zassert_false(n.seq_known);
 	zassert_false(n.stored_valid);
 }
@@ -669,160 +669,160 @@ ZTEST(command, test_an_older_epoch_is_refused_and_changes_nothing)
  * verify it, so an earlier lap's ack cannot answer a later command. */
 ZTEST(command, test_second_lap_commands_tagged_with_their_ext_are_accepted)
 {
-	struct profile_cmd_node n;
-	struct profile_command_ack a;
-	uint8_t body[PROFILE_TLM_CMD_LEN_STD];
-	uint8_t ack[PROFILE_TLM_CMD_LEN_LR];
-	uint8_t tag[PROFILE_TLM_CMD_TAG_LR];
+	struct radiant_profile_cmd_node n;
+	struct radiant_profile_command_ack a;
+	uint8_t body[RADIANT_PROFILE_TLM_CMD_LEN_STD];
+	uint8_t ack[RADIANT_PROFILE_TLM_CMD_LEN_LR];
+	uint8_t tag[RADIANT_PROFILE_TLM_CMD_TAG_LR];
 	uint32_t ext;
 	int rc;
 
-	node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
+	node_init(&n, RADIANT_PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
 	for (ext = 10u; ext <= 210u; ext += 50u) {
-		(void)build_command_ext(&n, (uint16_t)ext, PROFILE_TLM_CMD_NOP,
-					PROFILE_TLM_TARGET_NODE, 0u, body,
+		(void)build_command_ext(&n, (uint16_t)ext, RADIANT_PROFILE_TLM_CMD_NOP,
+					RADIANT_PROFILE_TLM_TARGET_NODE, 0u, body,
 					sizeof(body));
-		zassert_true(profile_cmd_on_command(&n, body, sizeof(body), 1000u,
+		zassert_true(radiant_profile_cmd_on_command(&n, body, sizeof(body), 1000u,
 						    ack, sizeof(ack)) > 0);
 	}
 
 	/* 266 = 0x10A: seq 10 on the wire, 56 past 210. */
-	(void)build_command_ext(&n, 266u, PROFILE_TLM_CMD_SET_BOOL, 0x01u, 1u,
+	(void)build_command_ext(&n, 266u, RADIANT_PROFILE_TLM_CMD_SET_BOOL, 0x01u, 1u,
 				body, sizeof(body));
 	zassert_equal(10u, body[1]);
-	rc = profile_cmd_on_command(&n, body, sizeof(body), 2000u, ack,
+	rc = radiant_profile_cmd_on_command(&n, body, sizeof(body), 2000u, ack,
 				    sizeof(ack));
 	zassert_true(rc > 0);
-	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
+	zassert_true(radiant_profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
 						    sizeof(tag)) > 0);
-	zassert_equal(PROFILE_TLM_RESULT_OK, a.result);
+	zassert_equal(RADIANT_PROFILE_TLM_RESULT_OK, a.result);
 	zassert_equal(6u, g_exec_calls);
 	zassert_equal(266u, n.last_ext);
-	zassert_true(profile_cmd_tag_ok_ext(&n, ack, 266u,
-					    &ack[PROFILE_TLM_CMD_COVERED]));
-	zassert_false(profile_cmd_tag_ok(&n, ack, &ack[PROFILE_TLM_CMD_COVERED]));
+	zassert_true(radiant_profile_cmd_tag_ok_ext(&n, ack, 266u,
+					    &ack[RADIANT_PROFILE_TLM_CMD_COVERED]));
+	zassert_false(radiant_profile_cmd_tag_ok(&n, ack, &ack[RADIANT_PROFILE_TLM_CMD_COVERED]));
 
 	/* Its retry is a duplicate, as on the first lap. */
-	rc = profile_cmd_on_command(&n, body, sizeof(body), 3000u, ack,
+	rc = radiant_profile_cmd_on_command(&n, body, sizeof(body), 3000u, ack,
 				    sizeof(ack));
-	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
+	zassert_true(radiant_profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
 						    sizeof(tag)) > 0);
-	zassert_equal(PROFILE_TLM_RESULT_ALREADY, a.result);
+	zassert_equal(RADIANT_PROFILE_TLM_RESULT_ALREADY, a.result);
 	zassert_equal(6u, g_exec_calls);
 
 	/* Across the next byte wrap too (300 -> 0x12C, 520 -> 0x208). */
 	for (ext = 300u; ext <= 520u; ext += 55u) {
-		(void)build_command_ext(&n, (uint16_t)ext, PROFILE_TLM_CMD_NOP,
-					PROFILE_TLM_TARGET_NODE, 0u, body,
+		(void)build_command_ext(&n, (uint16_t)ext, RADIANT_PROFILE_TLM_CMD_NOP,
+					RADIANT_PROFILE_TLM_TARGET_NODE, 0u, body,
 					sizeof(body));
-		rc = profile_cmd_on_command(&n, body, sizeof(body), 4000u, ack,
+		rc = radiant_profile_cmd_on_command(&n, body, sizeof(body), 4000u, ack,
 					    sizeof(ack));
-		zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a,
+		zassert_true(radiant_profile_command_ack_decode_tag(ack, (uint8_t)rc, &a,
 							    tag, sizeof(tag)) > 0);
-		zassert_equal(PROFILE_TLM_RESULT_OK, a.result, "ext %u", (unsigned int)ext);
+		zassert_equal(RADIANT_PROFILE_TLM_RESULT_OK, a.result, "ext %u", (unsigned int)ext);
 	}
 	zassert_equal(11u, g_exec_calls);
 
 	/* A recent stale command still verifies and is refused as stale, not
 	 * as forged: 0x02, as before the extension. */
-	(void)build_command_ext(&n, 500u, PROFILE_TLM_CMD_NOP,
-				PROFILE_TLM_TARGET_NODE, 0u, body, sizeof(body));
-	rc = profile_cmd_on_command(&n, body, sizeof(body), 5000u, ack,
+	(void)build_command_ext(&n, 500u, RADIANT_PROFILE_TLM_CMD_NOP,
+				RADIANT_PROFILE_TLM_TARGET_NODE, 0u, body, sizeof(body));
+	rc = radiant_profile_cmd_on_command(&n, body, sizeof(body), 5000u, ack,
 				    sizeof(ack));
-	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
+	zassert_true(radiant_profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
 						    sizeof(tag)) > 0);
-	zassert_equal(PROFILE_TLM_RESULT_BAD_SEQ, a.result);
-	zassert_equal(0u, profile_cmd_stats(&n)->bad_tag);
+	zassert_equal(RADIANT_PROFILE_TLM_RESULT_BAD_SEQ, a.result);
+	zassert_equal(0u, radiant_profile_cmd_stats(&n)->bad_tag);
 
 	/* A tag whose ext disagrees with the wire byte is not a tag. */
-	zassert_equal(-EINVAL, profile_cmd_tag_ext(&n, body, 501u, tag));
+	zassert_equal(-EINVAL, radiant_profile_cmd_tag_ext(&n, body, 501u, tag));
 }
 
-/* PROFILE_CMD_EXT_LAST = 65408 is the last ext an epoch accepts; 65409, within
+/* RADIANT_PROFILE_CMD_EXT_LAST = 65408 is the last ext an epoch accepts; 65409, within
  * 127 of 65536, is refused so the ahead inference never wraps the 16-bit
  * counter. Walked there with genuine commands, not by writing last_ext. */
 ZTEST(command, test_the_extended_sequence_is_refused_before_it_can_wrap)
 {
-	struct profile_cmd_node n;
-	struct profile_command_ack a;
-	uint8_t body[PROFILE_TLM_CMD_LEN_STD];
-	uint8_t last[PROFILE_TLM_CMD_LEN_STD];
-	uint8_t ack[PROFILE_TLM_CMD_LEN_LR];
-	uint8_t tag[PROFILE_TLM_CMD_TAG_LR];
+	struct radiant_profile_cmd_node n;
+	struct radiant_profile_command_ack a;
+	uint8_t body[RADIANT_PROFILE_TLM_CMD_LEN_STD];
+	uint8_t last[RADIANT_PROFILE_TLM_CMD_LEN_STD];
+	uint8_t ack[RADIANT_PROFILE_TLM_CMD_LEN_LR];
+	uint8_t tag[RADIANT_PROFILE_TLM_CMD_TAG_LR];
 	uint32_t ext;
 	int rc;
 
-	zassert_equal(65408u, PROFILE_CMD_EXT_LAST);
+	zassert_equal(65408u, RADIANT_PROFILE_CMD_EXT_LAST);
 
-	node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
-	for (ext = 0u; ext <= 65405u; ext += PROFILE_CMD_ACCEPT_WINDOW) {
-		(void)build_command_ext(&n, (uint16_t)ext, PROFILE_TLM_CMD_NOP,
-					PROFILE_TLM_TARGET_NODE, 0u, body,
+	node_init(&n, RADIANT_PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
+	for (ext = 0u; ext <= 65405u; ext += RADIANT_PROFILE_CMD_ACCEPT_WINDOW) {
+		(void)build_command_ext(&n, (uint16_t)ext, RADIANT_PROFILE_TLM_CMD_NOP,
+					RADIANT_PROFILE_TLM_TARGET_NODE, 0u, body,
 					sizeof(body));
-		zassert_true(profile_cmd_on_command(&n, body, sizeof(body), 1000u,
+		zassert_true(radiant_profile_cmd_on_command(&n, body, sizeof(body), 1000u,
 						    ack, sizeof(ack)) > 0);
 	}
 	zassert_equal(65405u, n.last_ext);
 	zassert_equal(516u, g_exec_calls);
 
 	/* The last one an epoch may use. */
-	(void)build_command_ext(&n, PROFILE_CMD_EXT_LAST, PROFILE_TLM_CMD_SET_BOOL,
+	(void)build_command_ext(&n, RADIANT_PROFILE_CMD_EXT_LAST, RADIANT_PROFILE_TLM_CMD_SET_BOOL,
 				0x01u, 1u, last, sizeof(last));
-	rc = profile_cmd_on_command(&n, last, sizeof(last), 2000u, ack, sizeof(ack));
-	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
+	rc = radiant_profile_cmd_on_command(&n, last, sizeof(last), 2000u, ack, sizeof(ack));
+	zassert_true(radiant_profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
 						    sizeof(tag)) > 0);
-	zassert_equal(PROFILE_TLM_RESULT_OK, a.result);
+	zassert_equal(RADIANT_PROFILE_TLM_RESULT_OK, a.result);
 	zassert_equal(517u, g_exec_calls);
 
 	/* One more, and the top of the window: 0x02, counted, nothing runs. */
-	(void)build_command_ext(&n, PROFILE_CMD_EXT_LAST + 1u, PROFILE_TLM_CMD_NOP,
-				PROFILE_TLM_TARGET_NODE, 0u, body, sizeof(body));
-	rc = profile_cmd_on_command(&n, body, sizeof(body), 3000u, ack, sizeof(ack));
-	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
+	(void)build_command_ext(&n, RADIANT_PROFILE_CMD_EXT_LAST + 1u, RADIANT_PROFILE_TLM_CMD_NOP,
+				RADIANT_PROFILE_TLM_TARGET_NODE, 0u, body, sizeof(body));
+	rc = radiant_profile_cmd_on_command(&n, body, sizeof(body), 3000u, ack, sizeof(ack));
+	zassert_true(radiant_profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
 						    sizeof(tag)) > 0);
-	zassert_equal(PROFILE_TLM_RESULT_BAD_SEQ, a.result);
-	(void)build_command_ext(&n, 0xFFFFu, PROFILE_TLM_CMD_NOP,
-				PROFILE_TLM_TARGET_NODE, 0u, body, sizeof(body));
-	rc = profile_cmd_on_command(&n, body, sizeof(body), 4000u, ack, sizeof(ack));
-	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
+	zassert_equal(RADIANT_PROFILE_TLM_RESULT_BAD_SEQ, a.result);
+	(void)build_command_ext(&n, 0xFFFFu, RADIANT_PROFILE_TLM_CMD_NOP,
+				RADIANT_PROFILE_TLM_TARGET_NODE, 0u, body, sizeof(body));
+	rc = radiant_profile_cmd_on_command(&n, body, sizeof(body), 4000u, ack, sizeof(ack));
+	zassert_true(radiant_profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
 						    sizeof(tag)) > 0);
-	zassert_equal(PROFILE_TLM_RESULT_BAD_SEQ, a.result);
+	zassert_equal(RADIANT_PROFILE_TLM_RESULT_BAD_SEQ, a.result);
 	zassert_equal(517u, g_exec_calls);
-	zassert_equal(2u, profile_cmd_stats(&n)->seq_exhausted);
-	zassert_equal(0u, profile_cmd_stats(&n)->bad_seq);
-	zassert_equal(PROFILE_CMD_EXT_LAST, n.last_ext);
+	zassert_equal(2u, radiant_profile_cmd_stats(&n)->seq_exhausted);
+	zassert_equal(0u, radiant_profile_cmd_stats(&n)->bad_seq);
+	zassert_equal(RADIANT_PROFILE_CMD_EXT_LAST, n.last_ext);
 
 	/* The last accepted command still answers its retry. */
-	rc = profile_cmd_on_command(&n, last, sizeof(last), 5000u, ack, sizeof(ack));
-	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
+	rc = radiant_profile_cmd_on_command(&n, last, sizeof(last), 5000u, ack, sizeof(ack));
+	zassert_true(radiant_profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
 						    sizeof(tag)) > 0);
-	zassert_equal(PROFILE_TLM_RESULT_ALREADY, a.result);
+	zassert_equal(RADIANT_PROFILE_TLM_RESULT_ALREADY, a.result);
 
 	/* The way out is a new epoch, where the sender starts again at 0. */
-	zassert_ok(profile_cmd_set_epoch(&n, EPOCH_B));
-	(void)build_command(&n, 0u, PROFILE_TLM_CMD_NOP, PROFILE_TLM_TARGET_NODE,
+	zassert_ok(radiant_profile_cmd_set_epoch(&n, EPOCH_B));
+	(void)build_command(&n, 0u, RADIANT_PROFILE_TLM_CMD_NOP, RADIANT_PROFILE_TLM_TARGET_NODE,
 			    0u, body, sizeof(body));
-	rc = profile_cmd_on_command(&n, body, sizeof(body), 6000u, ack, sizeof(ack));
-	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
+	rc = radiant_profile_cmd_on_command(&n, body, sizeof(body), 6000u, ack, sizeof(ack));
+	zassert_true(radiant_profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
 						    sizeof(tag)) > 0);
-	zassert_equal(PROFILE_TLM_RESULT_OK, a.result);
+	zassert_equal(RADIANT_PROFILE_TLM_RESULT_OK, a.result);
 	zassert_equal(518u, g_exec_calls);
 }
 
 /* Reviewer finding 2026-11-20: a genuine sender more than 64 ahead was read as
  * behind, failed the tag and was locked out for the rest of the epoch. With
  * the window at 1..127 a sender 100 ahead is simply accepted. */
-static void walk_to(struct profile_cmd_node *n, uint16_t from, uint16_t to)
+static void walk_to(struct radiant_profile_cmd_node *n, uint16_t from, uint16_t to)
 {
-	uint8_t body[PROFILE_TLM_CMD_LEN_STD];
-	uint8_t ack[PROFILE_TLM_CMD_LEN_LR];
+	uint8_t body[RADIANT_PROFILE_TLM_CMD_LEN_STD];
+	uint8_t ack[RADIANT_PROFILE_TLM_CMD_LEN_LR];
 	uint32_t ext;
 
 	for (ext = from; ext <= to; ext += 100u) {
-		(void)build_command_ext(n, (uint16_t)ext, PROFILE_TLM_CMD_NOP,
-					PROFILE_TLM_TARGET_NODE, 0u, body,
+		(void)build_command_ext(n, (uint16_t)ext, RADIANT_PROFILE_TLM_CMD_NOP,
+					RADIANT_PROFILE_TLM_TARGET_NODE, 0u, body,
 					sizeof(body));
-		zassert_true(profile_cmd_on_command(n, body, sizeof(body), 1000u,
+		zassert_true(radiant_profile_cmd_on_command(n, body, sizeof(body), 1000u,
 						    ack, sizeof(ack)) > 0);
 	}
 	zassert_equal(to, n->last_ext);
@@ -830,39 +830,39 @@ static void walk_to(struct profile_cmd_node *n, uint16_t from, uint16_t to)
 
 ZTEST(command, test_a_sender_a_hundred_ahead_is_accepted)
 {
-	struct profile_cmd_node n;
-	struct profile_command_ack a;
-	uint8_t body[PROFILE_TLM_CMD_LEN_STD];
-	uint8_t ack[PROFILE_TLM_CMD_LEN_LR];
-	uint8_t tag[PROFILE_TLM_CMD_TAG_LR];
+	struct radiant_profile_cmd_node n;
+	struct radiant_profile_command_ack a;
+	uint8_t body[RADIANT_PROFILE_TLM_CMD_LEN_STD];
+	uint8_t ack[RADIANT_PROFILE_TLM_CMD_LEN_LR];
+	uint8_t tag[RADIANT_PROFILE_TLM_CMD_TAG_LR];
 	int rc;
 
-	node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
+	node_init(&n, RADIANT_PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
 	walk_to(&n, 0u, 200u);
 	zassert_equal(3u, g_exec_calls);
 
 	/* The reviewer's case: last_ext 200, next 300 (d = 100). */
-	(void)build_command_ext(&n, 300u, PROFILE_TLM_CMD_SET_BOOL, 0x01u, 1u,
+	(void)build_command_ext(&n, 300u, RADIANT_PROFILE_TLM_CMD_SET_BOOL, 0x01u, 1u,
 				body, sizeof(body));
-	rc = profile_cmd_on_command(&n, body, sizeof(body), 2000u, ack,
+	rc = radiant_profile_cmd_on_command(&n, body, sizeof(body), 2000u, ack,
 				    sizeof(ack));
-	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
+	zassert_true(radiant_profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
 						    sizeof(tag)) > 0);
-	zassert_equal(PROFILE_TLM_RESULT_OK, a.result);
+	zassert_equal(RADIANT_PROFILE_TLM_RESULT_OK, a.result);
 	zassert_equal(4u, g_exec_calls);
 	zassert_equal(300u, n.last_ext);
-	zassert_true(profile_cmd_tag_ok_ext(&n, ack, 300u,
-					    &ack[PROFILE_TLM_CMD_COVERED]));
-	zassert_equal(0u, profile_cmd_stats(&n)->bad_tag);
+	zassert_true(radiant_profile_cmd_tag_ok_ext(&n, ack, 300u,
+					    &ack[RADIANT_PROFILE_TLM_CMD_COVERED]));
+	zassert_equal(0u, radiant_profile_cmd_stats(&n)->bad_tag);
 
 	/* And it stays in step: the next ones follow at 100 apiece. */
-	(void)build_command_ext(&n, 400u, PROFILE_TLM_CMD_NOP,
-				PROFILE_TLM_TARGET_NODE, 0u, body, sizeof(body));
-	rc = profile_cmd_on_command(&n, body, sizeof(body), 3000u, ack,
+	(void)build_command_ext(&n, 400u, RADIANT_PROFILE_TLM_CMD_NOP,
+				RADIANT_PROFILE_TLM_TARGET_NODE, 0u, body, sizeof(body));
+	rc = radiant_profile_cmd_on_command(&n, body, sizeof(body), 3000u, ack,
 				    sizeof(ack));
-	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
+	zassert_true(radiant_profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
 						    sizeof(tag)) > 0);
-	zassert_equal(PROFILE_TLM_RESULT_OK, a.result);
+	zassert_equal(RADIANT_PROFILE_TLM_RESULT_OK, a.result);
 	zassert_equal(5u, g_exec_calls);
 }
 
@@ -874,44 +874,44 @@ ZTEST(command, test_a_sender_a_hundred_ahead_is_accepted)
  * went BACK into the window, which a monotonic sender never does. */
 ZTEST(command, test_a_sender_128_or_more_ahead_fails_the_tag_and_changes_no_state)
 {
-	struct profile_cmd_node n;
-	struct profile_command_ack a;
-	uint8_t body[PROFILE_TLM_CMD_LEN_STD];
-	uint8_t ack[PROFILE_TLM_CMD_LEN_LR];
-	uint8_t tag[PROFILE_TLM_CMD_TAG_LR];
+	struct radiant_profile_cmd_node n;
+	struct radiant_profile_command_ack a;
+	uint8_t body[RADIANT_PROFILE_TLM_CMD_LEN_STD];
+	uint8_t ack[RADIANT_PROFILE_TLM_CMD_LEN_LR];
+	uint8_t tag[RADIANT_PROFILE_TLM_CMD_TAG_LR];
 	radiant_time_t t = 10000u;
 	int rc;
 
-	node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
+	node_init(&n, RADIANT_PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
 	walk_to(&n, 0u, 300u);
 	zassert_equal(4u, g_exec_calls);
 
 	/* 128 ahead (ext 428, d = 128) and 130 ahead (ext 430). */
-	(void)build_command_ext(&n, 428u, PROFILE_TLM_CMD_SET_BOOL, 0x01u, 1u,
+	(void)build_command_ext(&n, 428u, RADIANT_PROFILE_TLM_CMD_SET_BOOL, 0x01u, 1u,
 				body, sizeof(body));
-	rc = profile_cmd_on_command(&n, body, sizeof(body), t, ack, sizeof(ack));
-	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
+	rc = radiant_profile_cmd_on_command(&n, body, sizeof(body), t, ack, sizeof(ack));
+	zassert_true(radiant_profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
 						    sizeof(tag)) > 0);
-	zassert_equal(PROFILE_TLM_RESULT_BAD_TAG, a.result);
+	zassert_equal(RADIANT_PROFILE_TLM_RESULT_BAD_TAG, a.result);
 
-	t += 2u * PROFILE_CMD_BACKOFF_BASE_US;
-	(void)build_command_ext(&n, 430u, PROFILE_TLM_CMD_SET_BOOL, 0x01u, 1u,
+	t += 2u * RADIANT_PROFILE_CMD_BACKOFF_BASE_US;
+	(void)build_command_ext(&n, 430u, RADIANT_PROFILE_TLM_CMD_SET_BOOL, 0x01u, 1u,
 				body, sizeof(body));
-	zassert_equal(0, profile_cmd_on_command(&n, body, sizeof(body), t, ack,
+	zassert_equal(0, radiant_profile_cmd_on_command(&n, body, sizeof(body), t, ack,
 						sizeof(ack)));
-	zassert_equal(2u, profile_cmd_stats(&n)->bad_tag);
+	zassert_equal(2u, radiant_profile_cmd_stats(&n)->bad_tag);
 	zassert_equal(4u, g_exec_calls);
 	zassert_equal(300u, n.last_ext);
 
 	/* last_ext is untouched: an ext inside the window, past the backoff,
 	 * is still accepted. */
-	t += 4u * PROFILE_CMD_BACKOFF_BASE_US;
-	(void)build_command_ext(&n, 427u, PROFILE_TLM_CMD_NOP,
-				PROFILE_TLM_TARGET_NODE, 0u, body, sizeof(body));
-	rc = profile_cmd_on_command(&n, body, sizeof(body), t, ack, sizeof(ack));
-	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
+	t += 4u * RADIANT_PROFILE_CMD_BACKOFF_BASE_US;
+	(void)build_command_ext(&n, 427u, RADIANT_PROFILE_TLM_CMD_NOP,
+				RADIANT_PROFILE_TLM_TARGET_NODE, 0u, body, sizeof(body));
+	rc = radiant_profile_cmd_on_command(&n, body, sizeof(body), t, ack, sizeof(ack));
+	zassert_true(radiant_profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
 						    sizeof(tag)) > 0);
-	zassert_equal(PROFILE_TLM_RESULT_OK, a.result);
+	zassert_equal(RADIANT_PROFILE_TLM_RESULT_OK, a.result);
 	zassert_equal(5u, g_exec_calls);
 	zassert_equal(427u, n.last_ext);
 }
@@ -920,31 +920,31 @@ ZTEST(command, test_a_sender_128_or_more_ahead_fails_the_tag_and_changes_no_stat
  * answered with an AUTHENTICATED 0x02, so its sender learns it is stale. */
 ZTEST(command, test_a_command_a_hundred_behind_gets_an_authenticated_0x02)
 {
-	struct profile_cmd_node n;
-	struct profile_command_ack a;
-	uint8_t stale[PROFILE_TLM_CMD_LEN_STD];
-	uint8_t ack[PROFILE_TLM_CMD_LEN_LR];
-	uint8_t tag[PROFILE_TLM_CMD_TAG_LR];
+	struct radiant_profile_cmd_node n;
+	struct radiant_profile_command_ack a;
+	uint8_t stale[RADIANT_PROFILE_TLM_CMD_LEN_STD];
+	uint8_t ack[RADIANT_PROFILE_TLM_CMD_LEN_LR];
+	uint8_t tag[RADIANT_PROFILE_TLM_CMD_TAG_LR];
 	int rc;
 
-	node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
+	node_init(&n, RADIANT_PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
 	walk_to(&n, 0u, 300u);
-	(void)build_command_ext(&n, 300u, PROFILE_TLM_CMD_NOP,
-				PROFILE_TLM_TARGET_NODE, 0u, stale, sizeof(stale));
+	(void)build_command_ext(&n, 300u, RADIANT_PROFILE_TLM_CMD_NOP,
+				RADIANT_PROFILE_TLM_TARGET_NODE, 0u, stale, sizeof(stale));
 	walk_to(&n, 400u, 400u);
 	zassert_equal(5u, g_exec_calls);
 
 	/* delta_u8(44, 144) = 156: behind by 100, ext 300. */
-	rc = profile_cmd_on_command(&n, stale, sizeof(stale), 2000u, ack,
+	rc = radiant_profile_cmd_on_command(&n, stale, sizeof(stale), 2000u, ack,
 				    sizeof(ack));
-	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
+	zassert_true(radiant_profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
 						    sizeof(tag)) > 0);
-	zassert_equal(PROFILE_TLM_RESULT_BAD_SEQ, a.result);
-	zassert_true(profile_cmd_tag_ok_ext(&n, ack, 300u,
-					    &ack[PROFILE_TLM_CMD_COVERED]));
+	zassert_equal(RADIANT_PROFILE_TLM_RESULT_BAD_SEQ, a.result);
+	zassert_true(radiant_profile_cmd_tag_ok_ext(&n, ack, 300u,
+					    &ack[RADIANT_PROFILE_TLM_CMD_COVERED]));
 	zassert_equal(5u, g_exec_calls);
-	zassert_equal(0u, profile_cmd_stats(&n)->bad_tag);
-	zassert_equal(1u, profile_cmd_stats(&n)->bad_seq);
+	zassert_equal(0u, radiant_profile_cmd_stats(&n)->bad_tag);
+	zassert_equal(1u, radiant_profile_cmd_stats(&n)->bad_seq);
 	zassert_equal(400u, n.last_ext);
 }
 
@@ -955,168 +955,168 @@ ZTEST(command, test_a_command_a_hundred_behind_gets_an_authenticated_0x02)
  * 0x03, and a 16-bit tag would fall in hours instead of about 625 days. */
 static void forge_from(const uint8_t *good, uint8_t *forged)
 {
-	memcpy(forged, good, PROFILE_TLM_CMD_LEN_STD);
-	forged[PROFILE_TLM_CMD_COVERED] ^= 0xFFu;
+	memcpy(forged, good, RADIANT_PROFILE_TLM_CMD_LEN_STD);
+	forged[RADIANT_PROFILE_TLM_CMD_COVERED] ^= 0xFFu;
 }
 
-static void replay_keeps_the_ladder(struct profile_cmd_node *n,
+static void replay_keeps_the_ladder(struct radiant_profile_cmd_node *n,
 				    const uint8_t *replay, uint8_t want_result,
 				    uint16_t want_ext, const uint8_t *forged)
 {
-	struct profile_command_ack a;
-	uint8_t ack[PROFILE_TLM_CMD_LEN_LR];
-	uint8_t tag[PROFILE_TLM_CMD_TAG_LR];
+	struct radiant_profile_command_ack a;
+	uint8_t ack[RADIANT_PROFILE_TLM_CMD_LEN_LR];
+	uint8_t tag[RADIANT_PROFILE_TLM_CMD_TAG_LR];
 	radiant_time_t t = 1000000u;
 	radiant_time_t blocked_1;
 	uint32_t exec_before = g_exec_calls;
 	int rc;
 
 	/* Forgery 1: answered once with 0x03, ladder at the base. */
-	zassert_true(profile_cmd_on_command(n, forged, PROFILE_TLM_CMD_LEN_STD, t,
+	zassert_true(radiant_profile_cmd_on_command(n, forged, RADIANT_PROFILE_TLM_CMD_LEN_STD, t,
 					    ack, sizeof(ack)) > 0);
 	zassert_equal(1u, n->fails);
 	blocked_1 = n->blocked_until;
-	zassert_equal(t + PROFILE_CMD_BACKOFF_BASE_US, blocked_1);
+	zassert_equal(t + RADIANT_PROFILE_CMD_BACKOFF_BASE_US, blocked_1);
 	/* Every window bought so far has been spent. */
 	n->expect_left = 0u;
 
 	/* The replay, once the block has run out: still answered, still
 	 * authenticated, still the same result - and the ladder stays put. */
 	t = blocked_1;
-	rc = profile_cmd_on_command(n, replay, PROFILE_TLM_CMD_LEN_STD, t, ack,
+	rc = radiant_profile_cmd_on_command(n, replay, RADIANT_PROFILE_TLM_CMD_LEN_STD, t, ack,
 				    sizeof(ack));
-	zassert_equal((int)PROFILE_TLM_CMD_LEN_STD, rc);
-	zassert_true(profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
+	zassert_equal((int)RADIANT_PROFILE_TLM_CMD_LEN_STD, rc);
+	zassert_true(radiant_profile_command_ack_decode_tag(ack, (uint8_t)rc, &a, tag,
 						    sizeof(tag)) > 0);
 	zassert_equal(want_result, a.result);
-	zassert_true(profile_cmd_tag_ok_ext(n, ack, want_ext,
-					    &ack[PROFILE_TLM_CMD_COVERED]));
+	zassert_true(radiant_profile_cmd_tag_ok_ext(n, ack, want_ext,
+					    &ack[RADIANT_PROFILE_TLM_CMD_COVERED]));
 	zassert_equal(exec_before, g_exec_calls);
 	zassert_equal(1u, n->fails);
 	zassert_equal(blocked_1, n->blocked_until);
 	/* The penalty does not make the node deaf: a sender whose answer was
 	 * lost again finds the retry windows open. The top-up is bounded, so
 	 * this buys an attacker nothing (see the banking test below). */
-	zassert_equal(PROFILE_CMD_RETRY_WINDOWS, n->expect_left);
+	zassert_equal(RADIANT_PROFILE_CMD_RETRY_WINDOWS, n->expect_left);
 
 	/* Forgery 2: silent, and the interval has doubled. */
-	zassert_equal(0, profile_cmd_on_command(n, forged, PROFILE_TLM_CMD_LEN_STD,
+	zassert_equal(0, radiant_profile_cmd_on_command(n, forged, RADIANT_PROFILE_TLM_CMD_LEN_STD,
 						t, ack, sizeof(ack)));
 	zassert_equal(2u, n->fails);
-	zassert_equal(t + (2u * PROFILE_CMD_BACKOFF_BASE_US), n->blocked_until);
-	zassert_equal(2u, profile_cmd_stats(n)->bad_tag);
+	zassert_equal(t + (2u * RADIANT_PROFILE_CMD_BACKOFF_BASE_US), n->blocked_until);
+	zassert_equal(2u, radiant_profile_cmd_stats(n)->bad_tag);
 
 	/* Inside the new block, the next forgery is not even verified. */
-	zassert_equal(0, profile_cmd_on_command(n, forged, PROFILE_TLM_CMD_LEN_STD,
+	zassert_equal(0, radiant_profile_cmd_on_command(n, forged, RADIANT_PROFILE_TLM_CMD_LEN_STD,
 						t + 1u, ack, sizeof(ack)));
-	zassert_equal(1u, profile_cmd_stats(n)->throttled);
-	zassert_equal(2u, profile_cmd_stats(n)->bad_tag);
+	zassert_equal(1u, radiant_profile_cmd_stats(n)->throttled);
+	zassert_equal(2u, radiant_profile_cmd_stats(n)->bad_tag);
 }
 
 ZTEST(command, test_a_replayed_duplicate_does_not_clear_the_backoff)
 {
-	struct profile_cmd_node n;
-	uint8_t dup[PROFILE_TLM_CMD_LEN_STD];
-	uint8_t next[PROFILE_TLM_CMD_LEN_STD];
-	uint8_t forged[PROFILE_TLM_CMD_LEN_STD];
-	uint8_t ack[PROFILE_TLM_CMD_LEN_LR];
+	struct radiant_profile_cmd_node n;
+	uint8_t dup[RADIANT_PROFILE_TLM_CMD_LEN_STD];
+	uint8_t next[RADIANT_PROFILE_TLM_CMD_LEN_STD];
+	uint8_t forged[RADIANT_PROFILE_TLM_CMD_LEN_STD];
+	uint8_t ack[RADIANT_PROFILE_TLM_CMD_LEN_LR];
 
-	node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
-	(void)build_command(&n, 5u, PROFILE_TLM_CMD_SET_BOOL, 0x01u, 1u, dup,
+	node_init(&n, RADIANT_PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
+	(void)build_command(&n, 5u, RADIANT_PROFILE_TLM_CMD_SET_BOOL, 0x01u, 1u, dup,
 			    sizeof(dup));
-	zassert_true(profile_cmd_on_command(&n, dup, sizeof(dup), 1000u, ack,
+	zassert_true(radiant_profile_cmd_on_command(&n, dup, sizeof(dup), 1000u, ack,
 					    sizeof(ack)) > 0);
 	zassert_equal(1u, g_exec_calls);
 
-	(void)build_command(&n, 6u, PROFILE_TLM_CMD_SET_BOOL, 0x01u, 0u, next,
+	(void)build_command(&n, 6u, RADIANT_PROFILE_TLM_CMD_SET_BOOL, 0x01u, 0u, next,
 			    sizeof(next));
 	forge_from(next, forged);
-	replay_keeps_the_ladder(&n, dup, PROFILE_TLM_RESULT_ALREADY, 5u, forged);
-	zassert_equal(1u, profile_cmd_stats(&n)->repeats);
+	replay_keeps_the_ladder(&n, dup, RADIANT_PROFILE_TLM_RESULT_ALREADY, 5u, forged);
+	zassert_equal(1u, radiant_profile_cmd_stats(&n)->repeats);
 	zassert_equal(5u, n.last_ext);
 }
 
 ZTEST(command, test_a_stale_replay_does_not_clear_the_backoff)
 {
-	struct profile_cmd_node n;
-	uint8_t stale[PROFILE_TLM_CMD_LEN_STD];
-	uint8_t next[PROFILE_TLM_CMD_LEN_STD];
-	uint8_t forged[PROFILE_TLM_CMD_LEN_STD];
+	struct radiant_profile_cmd_node n;
+	uint8_t stale[RADIANT_PROFILE_TLM_CMD_LEN_STD];
+	uint8_t next[RADIANT_PROFILE_TLM_CMD_LEN_STD];
+	uint8_t forged[RADIANT_PROFILE_TLM_CMD_LEN_STD];
 
-	node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
+	node_init(&n, RADIANT_PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
 	walk_to(&n, 0u, 0u);
-	(void)build_command_ext(&n, 50u, PROFILE_TLM_CMD_NOP,
-				PROFILE_TLM_TARGET_NODE, 0u, stale, sizeof(stale));
+	(void)build_command_ext(&n, 50u, RADIANT_PROFILE_TLM_CMD_NOP,
+				RADIANT_PROFILE_TLM_TARGET_NODE, 0u, stale, sizeof(stale));
 	walk_to(&n, 50u, 50u);
 	walk_to(&n, 100u, 100u);
 
 	/* Behind by 50, ext 50: an authenticated 0x02. */
-	(void)build_command_ext(&n, 101u, PROFILE_TLM_CMD_NOP,
-				PROFILE_TLM_TARGET_NODE, 0u, next, sizeof(next));
+	(void)build_command_ext(&n, 101u, RADIANT_PROFILE_TLM_CMD_NOP,
+				RADIANT_PROFILE_TLM_TARGET_NODE, 0u, next, sizeof(next));
 	forge_from(next, forged);
-	replay_keeps_the_ladder(&n, stale, PROFILE_TLM_RESULT_BAD_SEQ, 50u, forged);
-	zassert_equal(1u, profile_cmd_stats(&n)->bad_seq);
+	replay_keeps_the_ladder(&n, stale, RADIANT_PROFILE_TLM_RESULT_BAD_SEQ, 50u, forged);
+	zassert_equal(1u, radiant_profile_cmd_stats(&n)->bad_seq);
 	zassert_equal(100u, n.last_ext);
 }
 
 ZTEST(command, test_an_exhausted_sequence_0x02_keeps_the_backoff)
 {
-	struct profile_cmd_node n;
-	uint8_t body[PROFILE_TLM_CMD_LEN_STD];
-	uint8_t past[PROFILE_TLM_CMD_LEN_STD];
-	uint8_t forged[PROFILE_TLM_CMD_LEN_STD];
-	uint8_t ack[PROFILE_TLM_CMD_LEN_LR];
+	struct radiant_profile_cmd_node n;
+	uint8_t body[RADIANT_PROFILE_TLM_CMD_LEN_STD];
+	uint8_t past[RADIANT_PROFILE_TLM_CMD_LEN_STD];
+	uint8_t forged[RADIANT_PROFILE_TLM_CMD_LEN_STD];
+	uint8_t ack[RADIANT_PROFILE_TLM_CMD_LEN_LR];
 	uint32_t ext;
 
-	node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
-	for (ext = 0u; ext <= 65405u; ext += PROFILE_CMD_ACCEPT_WINDOW) {
-		(void)build_command_ext(&n, (uint16_t)ext, PROFILE_TLM_CMD_NOP,
-					PROFILE_TLM_TARGET_NODE, 0u, body,
+	node_init(&n, RADIANT_PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
+	for (ext = 0u; ext <= 65405u; ext += RADIANT_PROFILE_CMD_ACCEPT_WINDOW) {
+		(void)build_command_ext(&n, (uint16_t)ext, RADIANT_PROFILE_TLM_CMD_NOP,
+					RADIANT_PROFILE_TLM_TARGET_NODE, 0u, body,
 					sizeof(body));
-		zassert_true(profile_cmd_on_command(&n, body, sizeof(body), 1000u,
+		zassert_true(radiant_profile_cmd_on_command(&n, body, sizeof(body), 1000u,
 						    ack, sizeof(ack)) > 0);
 	}
-	(void)build_command_ext(&n, PROFILE_CMD_EXT_LAST, PROFILE_TLM_CMD_NOP,
-				PROFILE_TLM_TARGET_NODE, 0u, body, sizeof(body));
-	zassert_true(profile_cmd_on_command(&n, body, sizeof(body), 1000u, ack,
+	(void)build_command_ext(&n, RADIANT_PROFILE_CMD_EXT_LAST, RADIANT_PROFILE_TLM_CMD_NOP,
+				RADIANT_PROFILE_TLM_TARGET_NODE, 0u, body, sizeof(body));
+	zassert_true(radiant_profile_cmd_on_command(&n, body, sizeof(body), 1000u, ack,
 					    sizeof(ack)) > 0);
-	zassert_equal(PROFILE_CMD_EXT_LAST, n.last_ext);
+	zassert_equal(RADIANT_PROFILE_CMD_EXT_LAST, n.last_ext);
 
 	/* Inside the window but past the epoch's last ext: genuine, refused
 	 * with an authenticated 0x02 by the exhausted branch, not the window. */
-	(void)build_command_ext(&n, PROFILE_CMD_EXT_LAST + 1u, PROFILE_TLM_CMD_NOP,
-				PROFILE_TLM_TARGET_NODE, 0u, past, sizeof(past));
-	(void)build_command_ext(&n, PROFILE_CMD_EXT_LAST + 2u, PROFILE_TLM_CMD_NOP,
-				PROFILE_TLM_TARGET_NODE, 0u, body, sizeof(body));
+	(void)build_command_ext(&n, RADIANT_PROFILE_CMD_EXT_LAST + 1u, RADIANT_PROFILE_TLM_CMD_NOP,
+				RADIANT_PROFILE_TLM_TARGET_NODE, 0u, past, sizeof(past));
+	(void)build_command_ext(&n, RADIANT_PROFILE_CMD_EXT_LAST + 2u, RADIANT_PROFILE_TLM_CMD_NOP,
+				RADIANT_PROFILE_TLM_TARGET_NODE, 0u, body, sizeof(body));
 	forge_from(body, forged);
-	replay_keeps_the_ladder(&n, past, PROFILE_TLM_RESULT_BAD_SEQ,
-				PROFILE_CMD_EXT_LAST + 1u, forged);
-	zassert_equal(1u, profile_cmd_stats(&n)->seq_exhausted);
-	zassert_equal(0u, profile_cmd_stats(&n)->bad_seq);
-	zassert_equal(PROFILE_CMD_EXT_LAST, n.last_ext);
+	replay_keeps_the_ladder(&n, past, RADIANT_PROFILE_TLM_RESULT_BAD_SEQ,
+				RADIANT_PROFILE_CMD_EXT_LAST + 1u, forged);
+	zassert_equal(1u, radiant_profile_cmd_stats(&n)->seq_exhausted);
+	zassert_equal(0u, radiant_profile_cmd_stats(&n)->bad_seq);
+	zassert_equal(RADIANT_PROFILE_CMD_EXT_LAST, n.last_ext);
 }
 
 ZTEST(command, test_a_fresh_command_after_a_replay_still_clears_the_backoff)
 {
-	struct profile_cmd_node n;
-	uint8_t dup[PROFILE_TLM_CMD_LEN_STD];
-	uint8_t next[PROFILE_TLM_CMD_LEN_STD];
-	uint8_t forged[PROFILE_TLM_CMD_LEN_STD];
-	uint8_t ack[PROFILE_TLM_CMD_LEN_LR];
+	struct radiant_profile_cmd_node n;
+	uint8_t dup[RADIANT_PROFILE_TLM_CMD_LEN_STD];
+	uint8_t next[RADIANT_PROFILE_TLM_CMD_LEN_STD];
+	uint8_t forged[RADIANT_PROFILE_TLM_CMD_LEN_STD];
+	uint8_t ack[RADIANT_PROFILE_TLM_CMD_LEN_LR];
 
-	node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
-	(void)build_command(&n, 5u, PROFILE_TLM_CMD_SET_BOOL, 0x01u, 1u, dup,
+	node_init(&n, RADIANT_PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
+	(void)build_command(&n, 5u, RADIANT_PROFILE_TLM_CMD_SET_BOOL, 0x01u, 1u, dup,
 			    sizeof(dup));
-	zassert_true(profile_cmd_on_command(&n, dup, sizeof(dup), 1000u, ack,
+	zassert_true(radiant_profile_cmd_on_command(&n, dup, sizeof(dup), 1000u, ack,
 					    sizeof(ack)) > 0);
-	(void)build_command(&n, 6u, PROFILE_TLM_CMD_SET_BOOL, 0x01u, 0u, next,
+	(void)build_command(&n, 6u, RADIANT_PROFILE_TLM_CMD_SET_BOOL, 0x01u, 0u, next,
 			    sizeof(next));
 	forge_from(next, forged);
-	replay_keeps_the_ladder(&n, dup, PROFILE_TLM_RESULT_ALREADY, 5u, forged);
+	replay_keeps_the_ladder(&n, dup, RADIANT_PROFILE_TLM_RESULT_ALREADY, 5u, forged);
 
 	/* The genuine seq 6, once the doubled block runs out: accepted, and the
 	 * ladder is gone, so the sender is never punished for the attack. */
-	zassert_true(profile_cmd_on_command(&n, next, sizeof(next),
+	zassert_true(radiant_profile_cmd_on_command(&n, next, sizeof(next),
 					    n.blocked_until, ack, sizeof(ack)) > 0);
 	zassert_equal(0u, n.fails);
 	zassert_equal(0u, n.blocked_until);
@@ -1124,56 +1124,56 @@ ZTEST(command, test_a_fresh_command_after_a_replay_still_clears_the_backoff)
 	zassert_equal(6u, n.last_ext);
 }
 
-/* Duplicates and 0x02s top the windows up to PROFILE_CMD_RETRY_WINDOWS
+/* Duplicates and 0x02s top the windows up to RADIANT_PROFILE_CMD_RETRY_WINDOWS
  * rather than adding to them. Adding let anyone with one recorded command
  * bank windows while the ladder was clear (spend one, buy two), then forge
  * into them, and kept the receiver on for as long as the replays went on. */
 ZTEST(command, test_replays_cannot_bank_windows_past_the_retry_allowance)
 {
-	struct profile_cmd_node n;
-	uint8_t dup[PROFILE_TLM_CMD_LEN_STD];
-	uint8_t next[PROFILE_TLM_CMD_LEN_STD];
-	uint8_t ack[PROFILE_TLM_CMD_LEN_LR];
+	struct radiant_profile_cmd_node n;
+	uint8_t dup[RADIANT_PROFILE_TLM_CMD_LEN_STD];
+	uint8_t next[RADIANT_PROFILE_TLM_CMD_LEN_STD];
+	uint8_t ack[RADIANT_PROFILE_TLM_CMD_LEN_LR];
 	uint32_t i;
 
-	node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
-	(void)build_command(&n, 5u, PROFILE_TLM_CMD_SET_BOOL, 0x01u, 1u, dup,
+	node_init(&n, RADIANT_PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
+	(void)build_command(&n, 5u, RADIANT_PROFILE_TLM_CMD_SET_BOOL, 0x01u, 1u, dup,
 			    sizeof(dup));
-	zassert_true(profile_cmd_on_command(&n, dup, sizeof(dup), 1000u, ack,
+	zassert_true(radiant_profile_cmd_on_command(&n, dup, sizeof(dup), 1000u, ack,
 					    sizeof(ack)) > 0);
-	zassert_equal(PROFILE_CMD_RETRY_WINDOWS, n.expect_left);
+	zassert_equal(RADIANT_PROFILE_CMD_RETRY_WINDOWS, n.expect_left);
 
 	/* Ten duplicates, each landing in a window it spends. */
 	for (i = 0u; i < 10u; i++) {
 		n.expect_left--;
-		zassert_true(profile_cmd_on_command(&n, dup, sizeof(dup),
+		zassert_true(radiant_profile_cmd_on_command(&n, dup, sizeof(dup),
 						    2000u + i, ack,
 						    sizeof(ack)) > 0);
-		zassert_equal(PROFILE_CMD_RETRY_WINDOWS, n.expect_left);
+		zassert_equal(RADIANT_PROFILE_CMD_RETRY_WINDOWS, n.expect_left);
 	}
-	zassert_equal(10u, profile_cmd_stats(&n)->repeats);
+	zassert_equal(10u, radiant_profile_cmd_stats(&n)->repeats);
 
 	/* Seq 6 makes seq 5 stale; ten 0x02s bank nothing either. */
-	(void)build_command(&n, 6u, PROFILE_TLM_CMD_NOP, PROFILE_TLM_TARGET_NODE,
+	(void)build_command(&n, 6u, RADIANT_PROFILE_TLM_CMD_NOP, RADIANT_PROFILE_TLM_TARGET_NODE,
 			    0u, next, sizeof(next));
-	zassert_true(profile_cmd_on_command(&n, next, sizeof(next), 3000u, ack,
+	zassert_true(radiant_profile_cmd_on_command(&n, next, sizeof(next), 3000u, ack,
 					    sizeof(ack)) > 0);
-	zassert_equal(PROFILE_CMD_RETRY_WINDOWS, n.expect_left);
+	zassert_equal(RADIANT_PROFILE_CMD_RETRY_WINDOWS, n.expect_left);
 	for (i = 0u; i < 10u; i++) {
 		n.expect_left--;
-		zassert_true(profile_cmd_on_command(&n, dup, sizeof(dup),
+		zassert_true(radiant_profile_cmd_on_command(&n, dup, sizeof(dup),
 						    4000u + i, ack,
 						    sizeof(ack)) > 0);
-		zassert_equal(PROFILE_CMD_RETRY_WINDOWS, n.expect_left);
+		zassert_equal(RADIANT_PROFILE_CMD_RETRY_WINDOWS, n.expect_left);
 	}
-	zassert_equal(10u, profile_cmd_stats(&n)->bad_seq);
+	zassert_equal(10u, radiant_profile_cmd_stats(&n)->bad_seq);
 	zassert_equal(2u, g_exec_calls);
 
 	/* A window the application bought itself is never taken away. */
-	profile_cmd_expect(&n, 5u);
-	zassert_true(profile_cmd_on_command(&n, dup, sizeof(dup), 5000u, ack,
+	radiant_profile_cmd_expect(&n, 5u);
+	zassert_true(radiant_profile_cmd_on_command(&n, dup, sizeof(dup), 5000u, ack,
 					    sizeof(ack)) > 0);
-	zassert_equal(PROFILE_CMD_RETRY_WINDOWS + 5u, n.expect_left);
+	zassert_equal(RADIANT_PROFILE_CMD_RETRY_WINDOWS + 5u, n.expect_left);
 }
 
 /* ---------------------------------------------------------------------------
@@ -1183,17 +1183,17 @@ ZTEST(command, test_replays_cannot_bank_windows_past_the_retry_allowance)
 
 ZTEST(command, test_rephasing_touches_the_phase_and_nothing_else)
 {
-	struct profile_schedule s = LIVE_SCHED;
-	struct profile_schedule back;
+	struct radiant_profile_schedule s = LIVE_SCHED;
+	struct radiant_profile_schedule back;
 	uint8_t body[6];
 	uint8_t quiet[6];
-	const struct profile_schedule none = PROFILE_SCHED_INIT_DEFAULT;
+	const struct radiant_profile_schedule none = RADIANT_PROFILE_SCHED_INIT_DEFAULT;
 
 	s.dl_phase = 100u;
-	zassert_ok(profile_sched_pack(&s, false, NODE_CLK_PPM, body));
+	zassert_ok(radiant_profile_sched_pack(&s, false, NODE_CLK_PPM, body));
 
-	zassert_ok(profile_sched_rephase(body, 20000u));
-	zassert_ok(profile_sched_unpack(body, false, NODE_CLK_PPM, &back));
+	zassert_ok(radiant_profile_sched_rephase(body, 20000u));
+	zassert_ok(radiant_profile_sched_unpack(body, false, NODE_CLK_PPM, &back));
 	zassert_equal(20000u, back.dl_phase);
 	zassert_equal(s.dl_interval, back.dl_interval);
 	zassert_equal(s.dl_dwell, back.dl_dwell);
@@ -1202,19 +1202,19 @@ ZTEST(command, test_rephasing_touches_the_phase_and_nothing_else)
 
 	/* A phase at or past the interval is the next window described as this
 	 * one, and is refused at exactly the boundary. */
-	zassert_equal(-EINVAL, profile_sched_rephase(body, 32768u));
-	zassert_ok(profile_sched_rephase(body, 32767u));
+	zassert_equal(-EINVAL, radiant_profile_sched_rephase(body, 32768u));
+	zassert_ok(radiant_profile_sched_rephase(body, 32767u));
 
 	/* A block with no window has no phase to write. */
-	zassert_ok(profile_sched_pack(&none, false, 0u, quiet));
-	zassert_equal(-ENOENT, profile_sched_rephase(quiet, 0u));
-	zassert_equal(-EINVAL, profile_sched_rephase(NULL, 0u));
+	zassert_ok(radiant_profile_sched_pack(&none, false, 0u, quiet));
+	zassert_equal(-ENOENT, radiant_profile_sched_rephase(quiet, 0u));
+	zassert_equal(-EINVAL, radiant_profile_sched_rephase(NULL, 0u));
 }
 
 ZTEST(command, test_two_frames_sent_at_different_times_announce_the_same_window)
 {
-	struct profile_schedule a = LIVE_SCHED;
-	struct profile_schedule b = LIVE_SCHED;
+	struct radiant_profile_schedule a = LIVE_SCHED;
+	struct radiant_profile_schedule b = LIVE_SCHED;
 	const radiant_time_t anchor = 5000000u;
 	const radiant_time_t t1 = 4000123u;
 	const radiant_time_t t2 = t1 + 250000u; /* not a multiple of the interval */
@@ -1223,16 +1223,16 @@ ZTEST(command, test_two_frames_sent_at_different_times_announce_the_same_window)
 	radiant_time_t w1;
 	radiant_time_t w2;
 
-	p1 = profile_sched_phase_for(&LIVE_SCHED, anchor, t1);
-	p2 = profile_sched_phase_for(&LIVE_SCHED, anchor, t2);
+	p1 = radiant_profile_sched_phase_for(&LIVE_SCHED, anchor, t1);
+	p2 = radiant_profile_sched_phase_for(&LIVE_SCHED, anchor, t2);
 	zassert_true(p1 >= 0);
 	zassert_true(p2 >= 0);
 	zassert_not_equal(p1, p2);
 
 	a.dl_phase = (uint16_t)p1;
 	b.dl_phase = (uint16_t)p2;
-	w1 = profile_sched_listen_at(&a, t1, 0u);
-	w2 = profile_sched_listen_at(&b, t2, 0u);
+	w1 = radiant_profile_sched_listen_at(&a, t1, 0u);
+	w2 = radiant_profile_sched_listen_at(&b, t2, 0u);
 
 	/* One instant, described twice. The tolerance is the 1/32768 s
 	 * quantisation of the phase field and nothing else. */
@@ -1242,12 +1242,12 @@ ZTEST(command, test_two_frames_sent_at_different_times_announce_the_same_window)
 	zassert_true((w1 > anchor ? w1 - anchor : anchor - w1) <= 31u);
 
 	/* An anchor already in the past is reduced forward, not refused. */
-	zassert_true(profile_sched_phase_for(&LIVE_SCHED, 1000u, t1) >= 0);
+	zassert_true(radiant_profile_sched_phase_for(&LIVE_SCHED, 1000u, t1) >= 0);
 	/* A block with no window has no phase. */
 	{
-		const struct profile_schedule none = PROFILE_SCHED_INIT_DEFAULT;
+		const struct radiant_profile_schedule none = RADIANT_PROFILE_SCHED_INIT_DEFAULT;
 
-		zassert_equal(-1, profile_sched_phase_for(&none, anchor, t1));
+		zassert_equal(-1, radiant_profile_sched_phase_for(&none, anchor, t1));
 	}
 }
 
@@ -1256,7 +1256,7 @@ ZTEST(command, test_two_frames_sent_at_different_times_announce_the_same_window)
  * ---------------------------------------------------------------------------
  */
 
-static struct profile_descriptor g_desc;
+static struct radiant_profile_descriptor g_desc;
 
 /* How far `w` sits from the nearest point of the grid anchor + n * interval.
  * The phase field quantises at 1/32768 s, so anything under 31 us is exact. */
@@ -1272,27 +1272,27 @@ static int cb_data_page(uint8_t page, uint8_t counter, uint8_t *body, void *user
 {
 	ARG_UNUSED(user);
 
-	memset(body, 0, PROFILE_TLM_FRAME_LEN);
+	memset(body, 0, RADIANT_PROFILE_TLM_FRAME_LEN);
 	body[0] = page;
 	body[1] = counter;
 	return 0;
 }
 
-static void live_descriptor(struct profile_descriptor *d)
+static void live_descriptor(struct radiant_profile_descriptor *d)
 {
 	memset(d, 0, sizeof(*d));
-	d->version = PROFILE_TLM_VERSION;
+	d->version = RADIANT_PROFILE_TLM_VERSION;
 	d->schema_id = 0x2Bu;
 	d->period = 8182u;
-	d->rf_index = PROFILE_TLM_RF_INDEX_DEFAULT;
+	d->rf_index = RADIANT_PROFILE_TLM_RF_INDEX_DEFAULT;
 	d->clock_stated = true;
-	d->clock_accuracy = PROFILE_HANDOFF_CLK_30PPM;
+	d->clock_accuracy = RADIANT_PROFILE_HANDOFF_CLK_30PPM;
 	d->has_schedule = true;
 	d->schedule = LIVE_SCHED;
 
 	d->n_fields = 1u;
 	d->fields[0].id = 0x01u;
-	d->fields[0].type = PROFILE_TLM_TYPE_TEMPERATURE;
+	d->fields[0].type = RADIANT_PROFILE_TLM_TYPE_TEMPERATURE;
 	d->fields[0].is_signed = true;
 	d->fields[0].width_code = 7u;
 	d->fields[0].exponent = -2;
@@ -1302,13 +1302,13 @@ static void live_descriptor(struct profile_descriptor *d)
 
 ZTEST(command, test_the_page_scheduler_rephases_the_schedule_frame_it_hands_out)
 {
-	struct profile_sched ps;
-	struct profile_sched_cfg cfg;
-	struct profile_cmd_node n;
-	struct profile_sched_downlink dl;
-	struct profile_schedule heard_1;
-	struct profile_schedule heard_2;
-	uint8_t body[PROFILE_TLM_FRAME_LEN];
+	struct radiant_profile_sched ps;
+	struct radiant_profile_sched_cfg cfg;
+	struct radiant_profile_cmd_node n;
+	struct radiant_profile_sched_downlink dl;
+	struct radiant_profile_schedule heard_1;
+	struct radiant_profile_schedule heard_2;
+	uint8_t body[RADIANT_PROFILE_TLM_FRAME_LEN];
 	radiant_time_t t = 4000123u;
 	radiant_time_t carrier_1 = 0u;
 	radiant_time_t carrier_2 = 0u;
@@ -1319,41 +1319,41 @@ ZTEST(command, test_the_page_scheduler_rephases_the_schedule_frame_it_hands_out)
 	int idx;
 
 	live_descriptor(&g_desc);
-	node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
-	zassert_ok(profile_cmd_window_set(&n, &LIVE_SCHED, 5000000u, false,
+	node_init(&n, RADIANT_PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
+	zassert_ok(radiant_profile_cmd_window_set(&n, &LIVE_SCHED, 5000000u, false,
 					  NODE_CLK_PPM));
 
 	memset(&cfg, 0, sizeof(cfg));
 	cfg.desc = &g_desc;
 	cfg.data_page = cb_data_page;
-	zassert_ok(profile_sched_init(&ps, &cfg));
+	zassert_ok(radiant_profile_sched_init(&ps, &cfg));
 
-	idx = profile_desc_schedule_index(&g_desc);
+	idx = radiant_profile_desc_schedule_index(&g_desc);
 	zassert_equal(2, idx);
 
-	profile_cmd_downlink(&n, &dl);
-	zassert_ok(profile_sched_set_downlink(&ps, &dl));
+	radiant_profile_cmd_downlink(&n, &dl);
+	zassert_ok(radiant_profile_sched_set_downlink(&ps, &dl));
 
 	/*
 	 * Two whole cycles, so the schedule frame goes out twice at two
 	 * different instants. The slot spacing is not the downlink interval, so
 	 * the two announcements cannot be the same by accident.
 	 */
-	for (slot = 0u; slot < (2u * PROFILE_TLM_CYCLE) + 1u; slot++) {
-		enum profile_slot_kind kind;
-		uint32_t m_before = profile_sched_m(&ps);
+	for (slot = 0u; slot < (2u * RADIANT_PROFILE_TLM_CYCLE) + 1u; slot++) {
+		enum radiant_profile_slot_kind kind;
+		uint32_t m_before = radiant_profile_sched_m(&ps);
 
-		kind = profile_sched_next_at(&ps, body, t);
-		if (kind == PROFILE_SLOT_DESCRIPTOR && m_before % PROFILE_TLM_CYCLE ==
+		kind = radiant_profile_sched_next_at(&ps, body, t);
+		if (kind == RADIANT_PROFILE_SLOT_DESCRIPTOR && m_before % RADIANT_PROFILE_TLM_CYCLE ==
 							       (uint32_t)idx) {
 			if (seen == 0u) {
 				carrier_1 = t;
-				zassert_ok(profile_sched_unpack(&body[2], false,
+				zassert_ok(radiant_profile_sched_unpack(&body[2], false,
 								NODE_CLK_PPM,
 								&heard_1));
 			} else if (seen == 1u) {
 				carrier_2 = t;
-				zassert_ok(profile_sched_unpack(&body[2], false,
+				zassert_ok(radiant_profile_sched_unpack(&body[2], false,
 								NODE_CLK_PPM,
 								&heard_2));
 			}
@@ -1365,8 +1365,8 @@ ZTEST(command, test_the_page_scheduler_rephases_the_schedule_frame_it_hands_out)
 	zassert_true(seen >= 2u);
 	zassert_not_equal(heard_1.dl_phase, heard_2.dl_phase);
 
-	w1 = profile_sched_listen_at(&heard_1, carrier_1, 0u);
-	w2 = profile_sched_listen_at(&heard_2, carrier_2, 0u);
+	w1 = radiant_profile_sched_listen_at(&heard_1, carrier_1, 0u);
+	w2 = radiant_profile_sched_listen_at(&heard_2, carrier_2, 0u);
 
 	/*
 	 * The two frames are a whole cycle apart, so they point at two DIFFERENT
@@ -1386,50 +1386,50 @@ ZTEST(command, test_the_page_scheduler_rephases_the_schedule_frame_it_hands_out)
 
 ZTEST(command, test_a_node_that_announces_no_window_is_the_node_it_was_before)
 {
-	struct profile_sched with_hook;
-	struct profile_sched plain;
-	struct profile_sched_cfg cfg;
-	struct profile_cmd_node n;
-	struct profile_sched_downlink dl;
-	uint8_t a[PROFILE_TLM_FRAME_LEN];
-	uint8_t b[PROFILE_TLM_FRAME_LEN];
+	struct radiant_profile_sched with_hook;
+	struct radiant_profile_sched plain;
+	struct radiant_profile_sched_cfg cfg;
+	struct radiant_profile_cmd_node n;
+	struct radiant_profile_sched_downlink dl;
+	uint8_t a[RADIANT_PROFILE_TLM_FRAME_LEN];
+	uint8_t b[RADIANT_PROFILE_TLM_FRAME_LEN];
 	uint32_t slot;
 
 	/* No schedule frame at all. */
 	live_descriptor(&g_desc);
 	g_desc.has_schedule = false;
-	g_desc.schedule = (struct profile_schedule)PROFILE_SCHED_INIT_DEFAULT;
+	g_desc.schedule = (struct radiant_profile_schedule)RADIANT_PROFILE_SCHED_INIT_DEFAULT;
 
 	memset(&cfg, 0, sizeof(cfg));
 	cfg.desc = &g_desc;
 	cfg.data_page = cb_data_page;
-	zassert_ok(profile_sched_init(&with_hook, &cfg));
-	zassert_ok(profile_sched_init(&plain, &cfg));
+	zassert_ok(radiant_profile_sched_init(&with_hook, &cfg));
+	zassert_ok(radiant_profile_sched_init(&plain, &cfg));
 
-	node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
-	profile_cmd_downlink(&n, &dl);
+	node_init(&n, RADIANT_PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
+	radiant_profile_cmd_downlink(&n, &dl);
 
 	/* A hook on a node with nothing to re-phase is refused at start-up
 	 * rather than silently doing nothing forever. */
-	zassert_equal(-ENOENT, profile_sched_set_downlink(&with_hook, &dl));
+	zassert_equal(-ENOENT, radiant_profile_sched_set_downlink(&with_hook, &dl));
 
 	/* And with no window configured, nothing is armed and nothing is
 	 * announced. */
-	zassert_equal(-ENOENT, profile_cmd_arm_listen(&n, 1000u));
-	zassert_equal(RADIANT_TIME_NEVER, profile_cmd_next_window(&n, 1000u));
-	zassert_equal(-1, profile_cmd_sched_phase(1000u, &n));
+	zassert_equal(-ENOENT, radiant_profile_cmd_arm_listen(&n, 1000u));
+	zassert_equal(RADIANT_TIME_NEVER, radiant_profile_cmd_next_window(&n, 1000u));
+	zassert_equal(-1, radiant_profile_cmd_sched_phase(1000u, &n));
 
 	/* Byte for byte, slot for slot, told the time and not told it. */
-	for (slot = 0u; slot < (2u * PROFILE_TLM_CYCLE); slot++) {
-		enum profile_slot_kind ka;
-		enum profile_slot_kind kb;
+	for (slot = 0u; slot < (2u * RADIANT_PROFILE_TLM_CYCLE); slot++) {
+		enum radiant_profile_slot_kind ka;
+		enum radiant_profile_slot_kind kb;
 
 		memset(a, 0xA5u, sizeof(a));
 		memset(b, 0x5Au, sizeof(b));
-		ka = profile_sched_next_at(&with_hook, a, 4000123u + slot * 250000u);
-		kb = profile_sched_next(&plain, b);
+		ka = radiant_profile_sched_next_at(&with_hook, a, 4000123u + slot * 250000u);
+		kb = radiant_profile_sched_next(&plain, b);
 		zassert_equal(ka, kb, "slot %u", slot);
-		if (ka != PROFILE_SLOT_IDLE) {
+		if (ka != RADIANT_PROFILE_SLOT_IDLE) {
 			zassert_mem_equal(a, b, sizeof(a), "slot %u", slot);
 		}
 	}
@@ -1441,7 +1441,7 @@ ZTEST(command, test_a_node_that_announces_no_window_is_the_node_it_was_before)
  */
 
 static uint32_t g_rx_events;
-static uint8_t g_rx_payload[PROFILE_TLM_FRAME_LEN];
+static uint8_t g_rx_payload[RADIANT_PROFILE_TLM_FRAME_LEN];
 static radiant_time_t g_rx_t_sync;
 static bool g_rx_have;
 
@@ -1457,9 +1457,9 @@ static void on_rx(uint8_t ch, uint8_t filter_index,
 	}
 	g_rx_events++;
 	g_rx_t_sync = evt->t_sync;
-	if (evt->body_len >= (RADIANT_FRAME_HDR_LEN_TRACKING + PROFILE_TLM_FRAME_LEN)) {
+	if (evt->body_len >= (RADIANT_FRAME_HDR_LEN_TRACKING + RADIANT_PROFILE_TLM_FRAME_LEN)) {
 		memcpy(g_rx_payload, &evt->body[RADIANT_FRAME_HDR_LEN_TRACKING],
-		       PROFILE_TLM_FRAME_LEN);
+		       RADIANT_PROFILE_TLM_FRAME_LEN);
 		g_rx_have = true;
 	}
 }
@@ -1486,34 +1486,34 @@ static const struct radiant_sched_cbs slot_cbs = {
 
 ZTEST(command, test_a_response_slot_is_an_ordinary_bounded_receive_window)
 {
-	struct profile_cmd_node n;
+	struct radiant_profile_cmd_node n;
 	const struct fake_radio_arm *arm;
 	radiant_time_t now;
 	radiant_time_t open_at;
 
-	node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
+	node_init(&n, RADIANT_PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
 	zassert_ok(radiant_sched_init(&slot_cbs, NULL));
 	zassert_ok(radiant_radio_init(radiant_sched_radio_cbs(), NULL));
 	zassert_ok(radiant_radio_enable());
 
 	now = radiant_radio_now() + 10000u;
-	zassert_ok(profile_cmd_window_set(&n, &LIVE_SCHED, now + 400000u, false,
+	zassert_ok(radiant_profile_cmd_window_set(&n, &LIVE_SCHED, now + 400000u, false,
 					  NODE_CLK_PPM));
 
 	/* A node that expects nothing arms nothing, and that is not an error -
 	 * it is the whole of the energy saving. */
-	zassert_equal(-EAGAIN, profile_cmd_arm_listen(&n, now));
-	zassert_equal(0u, profile_cmd_stats(&n)->windows);
+	zassert_equal(-EAGAIN, radiant_profile_cmd_arm_listen(&n, now));
+	zassert_equal(0u, radiant_profile_cmd_stats(&n)->windows);
 
-	profile_cmd_expect(&n, 1u);
-	open_at = profile_cmd_next_window(&n, now);
+	radiant_profile_cmd_expect(&n, 1u);
+	open_at = radiant_profile_cmd_next_window(&n, now);
 	zassert_not_equal(RADIANT_TIME_NEVER, open_at);
 	zassert_true((open_at > now + 400000u ? open_at - (now + 400000u)
 					      : (now + 400000u) - open_at) <= 31u);
 
-	zassert_ok(profile_cmd_arm_listen(&n, now));
+	zassert_ok(radiant_profile_cmd_arm_listen(&n, now));
 	zassert_ok(radiant_sched_tick());
-	zassert_equal(1u, profile_cmd_stats(&n)->windows);
+	zassert_equal(1u, radiant_profile_cmd_stats(&n)->windows);
 	zassert_equal(0u, n.expect_left);
 
 	/* THE CLAIM THIS TEST EXISTS FOR: what reached the radio is an RX arm,
@@ -1534,9 +1534,9 @@ ZTEST(command, test_a_response_slot_is_an_ordinary_bounded_receive_window)
 
 ZTEST(command, test_a_command_lands_in_the_slot_the_node_armed)
 {
-	struct profile_cmd_node n;
-	uint8_t body[PROFILE_TLM_CMD_LEN_STD];
-	uint8_t ack[PROFILE_TLM_CMD_LEN_LR];
+	struct radiant_profile_cmd_node n;
+	uint8_t body[RADIANT_PROFILE_TLM_CMD_LEN_STD];
+	uint8_t ack[RADIANT_PROFILE_TLM_CMD_LEN_LR];
 	uint8_t frame[FAKE_RADIO_AIR_FRAME_MAX];
 	uint8_t frame_len;
 	radiant_time_t now;
@@ -1544,7 +1544,7 @@ ZTEST(command, test_a_command_lands_in_the_slot_the_node_armed)
 	radiant_time_t t_request;
 	int rc;
 
-	node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
+	node_init(&n, RADIANT_PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
 	zassert_ok(radiant_sched_init(&slot_cbs, NULL));
 	zassert_ok(radiant_radio_init(radiant_sched_radio_cbs(), NULL));
 	zassert_ok(radiant_radio_enable());
@@ -1553,19 +1553,19 @@ ZTEST(command, test_a_command_lands_in_the_slot_the_node_armed)
 	g_rx_have = false;
 
 	now = radiant_radio_now() + 10000u;
-	zassert_ok(profile_cmd_window_set(&n, &LIVE_SCHED, now + 700000u, false,
+	zassert_ok(radiant_profile_cmd_window_set(&n, &LIVE_SCHED, now + 700000u, false,
 					  NODE_CLK_PPM));
-	profile_cmd_expect(&n, 1u);
+	radiant_profile_cmd_expect(&n, 1u);
 
 	/* The host asks for the command here. Everything after this is the
 	 * latency being measured. */
 	t_request = now;
 
-	zassert_ok(profile_cmd_arm_listen(&n, now));
+	zassert_ok(radiant_profile_cmd_arm_listen(&n, now));
 	zassert_ok(radiant_sched_tick());
 	open_at = n.armed_open;
 
-	(void)build_command(&n, 11u, PROFILE_TLM_CMD_SET_LEVEL, 0x01u, 0x0055u,
+	(void)build_command(&n, 11u, RADIANT_PROFILE_TLM_CMD_SET_LEVEL, 0x01u, 0x0055u,
 			    body, sizeof(body));
 	frame_len = fake_radio_build_ant_frame(frame, NODE_DEVNUM, NODE_DEVTYPE,
 					       NODE_TRANSTYPE, body);
@@ -1578,15 +1578,15 @@ ZTEST(command, test_a_command_lands_in_the_slot_the_node_armed)
 
 	zassert_equal(1u, g_rx_events);
 	zassert_true(g_rx_have);
-	zassert_mem_equal(g_rx_payload, body, PROFILE_TLM_CMD_LEN_STD);
+	zassert_mem_equal(g_rx_payload, body, RADIANT_PROFILE_TLM_CMD_LEN_STD);
 	zassert_true(g_rx_t_sync >= open_at && g_rx_t_sync <= open_at + DL_DWELL_US);
 
-	rc = profile_cmd_on_command(&n, g_rx_payload, PROFILE_TLM_CMD_LEN_STD,
+	rc = radiant_profile_cmd_on_command(&n, g_rx_payload, RADIANT_PROFILE_TLM_CMD_LEN_STD,
 				    g_rx_t_sync, ack, sizeof(ack));
 	zassert_true(rc > 0);
 	zassert_equal(1u, g_exec_calls);
 	zassert_equal(0x0055u, g_last_arg);
-	zassert_equal(1u, profile_cmd_stats(&n)->window_hits);
+	zassert_equal(1u, radiant_profile_cmd_stats(&n)->window_hits);
 
 	/* SIMULATED latency, host request to node execution. Bounded by one
 	 * interval by construction; see the file comment on what this is not. */
@@ -1607,7 +1607,7 @@ ZTEST(command, test_a_command_lands_in_the_slot_the_node_armed)
 
 ZTEST(command, test_simulated_latency_is_bounded_by_one_interval_and_averages_half)
 {
-	struct profile_cmd_node n;
+	struct radiant_profile_cmd_node n;
 	const radiant_time_t anchor = 5000000u;
 	uint64_t total = 0u;
 	uint64_t worst = 0u;
@@ -1615,15 +1615,15 @@ ZTEST(command, test_simulated_latency_is_bounded_by_one_interval_and_averages_ha
 	const uint32_t k = 257u; /* prime, so the samples do not align with the
 				  * interval's factors */
 
-	node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
-	zassert_ok(profile_cmd_window_set(&n, &LIVE_SCHED, anchor, false,
+	node_init(&n, RADIANT_PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
+	zassert_ok(radiant_profile_cmd_window_set(&n, &LIVE_SCHED, anchor, false,
 					  NODE_CLK_PPM));
 
 	for (i = 0u; i < k; i++) {
 		radiant_time_t t_req = anchor + 3000000u +
 				       (radiant_time_t)(((uint64_t)i *
 							 DL_INTERVAL_US) / k);
-		radiant_time_t open_at = profile_cmd_next_window(&n, t_req);
+		radiant_time_t open_at = radiant_profile_cmd_next_window(&n, t_req);
 		uint64_t wait;
 
 		zassert_not_equal(RADIANT_TIME_NEVER, open_at);
@@ -1657,17 +1657,17 @@ ZTEST(command, test_simulated_latency_is_bounded_by_one_interval_and_averages_ha
 
 ZTEST(command, test_a_missed_response_slot_costs_exactly_one_interval_and_no_more)
 {
-	struct profile_cmd_node n;
+	struct radiant_profile_cmd_node n;
 	const radiant_time_t anchor = 5000000u;
 	const radiant_time_t t_req = anchor + 3000000u + 137u;
 	radiant_time_t first;
 	uint32_t misses;
 
-	node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
-	zassert_ok(profile_cmd_window_set(&n, &LIVE_SCHED, anchor, false,
+	node_init(&n, RADIANT_PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
+	zassert_ok(radiant_profile_cmd_window_set(&n, &LIVE_SCHED, anchor, false,
 					  NODE_CLK_PPM));
 
-	first = profile_cmd_next_window(&n, t_req);
+	first = radiant_profile_cmd_next_window(&n, t_req);
 	zassert_not_equal(RADIANT_TIME_NEVER, first);
 
 	/* A miss is a window that opened and caught nothing; the next attempt
@@ -1675,7 +1675,7 @@ ZTEST(command, test_a_missed_response_slot_costs_exactly_one_interval_and_no_mor
 	 * channel periods, which is the whole reason this phase exists. */
 	for (misses = 0u; misses <= 3u; misses++) {
 		radiant_time_t landed =
-			profile_cmd_next_window(&n, first + 1u +
+			radiant_profile_cmd_next_window(&n, first + 1u +
 						       (radiant_time_t)((uint64_t)misses *
 									DL_INTERVAL_US));
 		uint64_t latency = (uint64_t)(landed - t_req);
@@ -1697,52 +1697,52 @@ ZTEST(command, test_a_missed_response_slot_costs_exactly_one_interval_and_no_mor
 	/* And a retry is free at the protocol layer as well as the slot layer:
 	 * a duplicate that finally arrives executes nothing twice. */
 	{
-		uint8_t body[PROFILE_TLM_CMD_LEN_STD];
-		uint8_t ack[PROFILE_TLM_CMD_LEN_LR];
+		uint8_t body[RADIANT_PROFILE_TLM_CMD_LEN_STD];
+		uint8_t ack[RADIANT_PROFILE_TLM_CMD_LEN_LR];
 
-		(void)build_command(&n, 77u, PROFILE_TLM_CMD_SET_BOOL, 0x01u, 1u,
+		(void)build_command(&n, 77u, RADIANT_PROFILE_TLM_CMD_SET_BOOL, 0x01u, 1u,
 				    body, sizeof(body));
-		zassert_true(profile_cmd_on_command(&n, body, sizeof(body), t_req,
+		zassert_true(radiant_profile_cmd_on_command(&n, body, sizeof(body), t_req,
 						    ack, sizeof(ack)) > 0);
-		zassert_true(profile_cmd_on_command(&n, body, sizeof(body),
+		zassert_true(radiant_profile_cmd_on_command(&n, body, sizeof(body),
 						    t_req + DL_INTERVAL_US, ack,
 						    sizeof(ack)) > 0);
-		zassert_true(profile_cmd_on_command(&n, body, sizeof(body),
+		zassert_true(radiant_profile_cmd_on_command(&n, body, sizeof(body),
 						    t_req + (2u * DL_INTERVAL_US),
 						    ack, sizeof(ack)) > 0);
 		zassert_equal(1u, g_exec_calls);
-		zassert_equal(2u, profile_cmd_stats(&n)->repeats);
+		zassert_equal(2u, radiant_profile_cmd_stats(&n)->repeats);
 	}
 }
 
 ZTEST(command, test_a_received_command_buys_the_windows_a_retry_needs)
 {
-	struct profile_cmd_node n;
-	uint8_t body[PROFILE_TLM_CMD_LEN_STD];
-	uint8_t ack[PROFILE_TLM_CMD_LEN_LR];
+	struct radiant_profile_cmd_node n;
+	uint8_t body[RADIANT_PROFILE_TLM_CMD_LEN_STD];
+	uint8_t ack[RADIANT_PROFILE_TLM_CMD_LEN_LR];
 
-	node_init(&n, PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
-	zassert_ok(profile_cmd_window_set(&n, &LIVE_SCHED, 5000000u, false,
+	node_init(&n, RADIANT_PROFILE_TLM_CMD_TAG_STD, EPOCH_A);
+	zassert_ok(radiant_profile_cmd_window_set(&n, &LIVE_SCHED, 5000000u, false,
 					  NODE_CLK_PPM));
 
 	zassert_equal(0u, n.expect_left);
-	(void)build_command(&n, 1u, PROFILE_TLM_CMD_NOP, PROFILE_TLM_TARGET_NODE, 0u,
+	(void)build_command(&n, 1u, RADIANT_PROFILE_TLM_CMD_NOP, RADIANT_PROFILE_TLM_TARGET_NODE, 0u,
 			    body, sizeof(body));
-	zassert_true(profile_cmd_on_command(&n, body, sizeof(body), 1000u, ack,
+	zassert_true(radiant_profile_cmd_on_command(&n, body, sizeof(body), 1000u, ack,
 					    sizeof(ack)) > 0);
-	zassert_equal(PROFILE_CMD_RETRY_WINDOWS, n.expect_left);
+	zassert_equal(RADIANT_PROFILE_CMD_RETRY_WINDOWS, n.expect_left);
 
 	/* And so does a duplicate, or a retry of the retry would find the node
 	 * deaf. The retry spends the window it lands in, and its answer tops the
 	 * allowance back up - to RETRY_WINDOWS, not past it (the banking test). */
 	n.expect_left--;
-	zassert_true(profile_cmd_on_command(&n, body, sizeof(body), 2000u, ack,
+	zassert_true(radiant_profile_cmd_on_command(&n, body, sizeof(body), 2000u, ack,
 					    sizeof(ack)) > 0);
-	zassert_equal(PROFILE_CMD_RETRY_WINDOWS, n.expect_left);
+	zassert_equal(RADIANT_PROFILE_CMD_RETRY_WINDOWS, n.expect_left);
 
 	/* Every window spent, one more retry: still open afterwards. */
 	n.expect_left = 0u;
-	zassert_true(profile_cmd_on_command(&n, body, sizeof(body), 3000u, ack,
+	zassert_true(radiant_profile_cmd_on_command(&n, body, sizeof(body), 3000u, ack,
 					    sizeof(ack)) > 0);
-	zassert_equal(PROFILE_CMD_RETRY_WINDOWS, n.expect_left);
+	zassert_equal(RADIANT_PROFILE_CMD_RETRY_WINDOWS, n.expect_left);
 }

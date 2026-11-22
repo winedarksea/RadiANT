@@ -354,8 +354,8 @@ def desc_auth_tag(k_root: bytes, epoch: int, devnum: int, base_devnum: int,
     each, frame 1 showing zero where the epoch is not real time). `epoch` is
     the REAL epoch either way. `devnum` is the on-air device number, as in the
     nonce; `base_devnum` the provisioned one, as in the KDF - the split
-    radiant_sec.c uses. Mirrors profile_desc_auth_tag() in
-    radiant/src/profiles/profile_telemetry.c; like the rest of this module it
+    radiant_sec.c uses. Mirrors radiant_profile_desc_auth_tag() in
+    radiant/src/profiles/radiant_profile_telemetry.c; like the rest of this module it
     knows no page layout beyond "six bytes per frame".
     """
     message = nonce_block(epoch, devnum, schema_id & 0xFF, DOM_DESC_MAC)
@@ -663,7 +663,7 @@ def resolve_counter(expected: int, counter_low: int) -> tuple:
 # docs/decisions/0009-hostless-node-identity.md. K_dev is a per-device secret
 # provisioned at manufacture; it is the Tier 0 device-number source and the
 # pairing-scalar root, and it never goes on the air. These two functions are the
-# mirror of src/node/node_ident.c, and they exist so that the C side asserts
+# mirror of src/node/radiant_node_ident.c, and they exist so that the C side asserts
 # vectors an independent implementation produced rather than asserting that it
 # agrees with itself.
 

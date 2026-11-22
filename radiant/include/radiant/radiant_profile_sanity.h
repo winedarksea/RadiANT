@@ -65,7 +65,7 @@ extern "C" {
 
 /* General FE Data, the one page every FE type must send (section 8.5.2) and
  * the only broadcast page on this device type carrying an instantaneous
- * quantity with a physical ceiling. Matches PROFILE_FEC_PAGE_GENERAL and
+ * quantity with a physical ceiling. Matches RADIANT_PROFILE_FEC_PAGE_GENERAL and
  * tools/ant_pages.py's PAGE_FEC_GENERAL. */
 #define RADIANT_PROFILE_SANITY_PAGE_FEC_GENERAL 0x10u
 

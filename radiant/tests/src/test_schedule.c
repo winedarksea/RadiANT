@@ -41,9 +41,9 @@
 
 #include "../fake_radio.h"
 
-#include "profile_handoff.h"
-#include "profile_schedule.h"
-#include "profile_telemetry.h"
+#include "radiant_profile_handoff.h"
+#include "radiant_profile_schedule.h"
+#include "radiant_profile_telemetry.h"
 
 /* ---------------------------------------------------------------------------
  * The canonical block, pinned
@@ -58,11 +58,11 @@
  * that happened to be a whole number of anything would hide a packer that had
  * quietly dropped its low bits.
  */
-static const struct profile_schedule CANON_SCHED = {
+static const struct radiant_profile_schedule CANON_SCHED = {
 	.dl_interval = 64u,   /* units of 1/32 s: 2 s */
 	.dl_phase = 12000u,   /* counts of 1/32768 s from the carrying frame */
 	.dl_dwell = 1u,       /* 500 us */
-	.coding = PROFILE_SCHED_CODING_NONE,
+	.coding = RADIANT_PROFILE_SCHED_CODING_NONE,
 	.tx_power_dbm = 4,
 };
 
@@ -83,20 +83,20 @@ static const uint8_t CANON_DESC[4][8] = {
 	{ 0x00u, 0x33u, 0x01u, 0x10u, 0x5Cu, 0xFEu, 0x01u, 0x00u },
 };
 
-static void quiet_descriptor(struct profile_descriptor *d)
+static void quiet_descriptor(struct radiant_profile_descriptor *d)
 {
-	const struct profile_schedule quiet = PROFILE_SCHED_INIT_DEFAULT;
+	const struct radiant_profile_schedule quiet = RADIANT_PROFILE_SCHED_INIT_DEFAULT;
 
 	memset(d, 0, sizeof(*d));
-	d->version = PROFILE_TLM_VERSION;
+	d->version = RADIANT_PROFILE_TLM_VERSION;
 	d->schema_id = 0x2Bu;
 	d->period = 8182u;
-	d->rf_index = PROFILE_TLM_RF_INDEX_DEFAULT;
+	d->rf_index = RADIANT_PROFILE_TLM_RF_INDEX_DEFAULT;
 	d->schedule = quiet;
 
 	d->n_fields = 1u;
 	d->fields[0].id = 0x01u;
-	d->fields[0].type = PROFILE_TLM_TYPE_TEMPERATURE;
+	d->fields[0].type = RADIANT_PROFILE_TLM_TYPE_TEMPERATURE;
 	d->fields[0].is_signed = true;
 	d->fields[0].width_code = 7u; /* 16 bits */
 	d->fields[0].exponent = -2;
@@ -104,11 +104,11 @@ static void quiet_descriptor(struct profile_descriptor *d)
 	d->fields[0].bit_offset = 0u;
 }
 
-static void canon_descriptor(struct profile_descriptor *d)
+static void canon_descriptor(struct radiant_profile_descriptor *d)
 {
 	quiet_descriptor(d);
 	d->clock_stated = true;
-	d->clock_accuracy = PROFILE_HANDOFF_CLK_30PPM;
+	d->clock_accuracy = RADIANT_PROFILE_HANDOFF_CLK_30PPM;
 	d->has_schedule = true;
 	d->schedule = CANON_SCHED;
 }
@@ -202,11 +202,11 @@ ZTEST(schedule, test_the_clock_ladder_is_the_handoff_pages_and_not_a_second_one)
 {
 	uint8_t code;
 
-	for (code = 0u; code < PROFILE_HANDOFF_CLK_COUNT; code++) {
-		uint8_t nibble = profile_sched_clk_nibble(code, true);
+	for (code = 0u; code < RADIANT_PROFILE_HANDOFF_CLK_COUNT; code++) {
+		uint8_t nibble = radiant_profile_sched_clk_nibble(code, true);
 
-		zassert_equal(PROFILE_SCHED_CLK_STATED | code, nibble);
-		zassert_equal(profile_handoff_clk_ppm(code), profile_sched_clk_ppm(nibble));
+		zassert_equal(RADIANT_PROFILE_SCHED_CLK_STATED | code, nibble);
+		zassert_equal(radiant_profile_handoff_clk_ppm(code), radiant_profile_sched_clk_ppm(nibble));
 	}
 
 	/*
@@ -216,11 +216,11 @@ ZTEST(schedule, test_the_clock_ladder_is_the_handoff_pages_and_not_a_second_one)
 	 * block existed transmits, so with the stated bit clear they are silence
 	 * and not a claim of 500 ppm.
 	 */
-	zassert_equal(500u, profile_handoff_clk_ppm(PROFILE_HANDOFF_CLK_UNKNOWN));
-	zassert_equal(0u, profile_sched_clk_ppm(0x00u));
-	zassert_equal(500u, profile_sched_clk_ppm(PROFILE_SCHED_CLK_STATED));
-	zassert_equal(0u, profile_sched_clk_nibble(PROFILE_HANDOFF_CLK_COUNT, true));
-	zassert_equal(0u, profile_sched_clk_nibble(PROFILE_HANDOFF_CLK_20PPM, false));
+	zassert_equal(500u, radiant_profile_handoff_clk_ppm(RADIANT_PROFILE_HANDOFF_CLK_UNKNOWN));
+	zassert_equal(0u, radiant_profile_sched_clk_ppm(0x00u));
+	zassert_equal(500u, radiant_profile_sched_clk_ppm(RADIANT_PROFILE_SCHED_CLK_STATED));
+	zassert_equal(0u, radiant_profile_sched_clk_nibble(RADIANT_PROFILE_HANDOFF_CLK_COUNT, true));
+	zassert_equal(0u, radiant_profile_sched_clk_nibble(RADIANT_PROFILE_HANDOFF_CLK_20PPM, false));
 
 	assert_no_viol();
 }
@@ -230,25 +230,25 @@ ZTEST(schedule, test_the_coding_vocabulary_phase_six_inherits)
 	/* One rate implemented, one defined and refused, the rest reserved. The
 	 * kbps figures are what lets a consumer budget a window, which is why
 	 * "yes" alone was never enough in the registry's LR PHY column. */
-	zassert_equal(1000u, profile_sched_coding_kbps(PROFILE_SCHED_CODING_NONE));
-	zassert_equal(125u, profile_sched_coding_kbps(PROFILE_SCHED_CODING_S8));
-	zassert_equal(500u, profile_sched_coding_kbps(PROFILE_SCHED_CODING_S2));
-	zassert_equal(0u, profile_sched_coding_kbps(7u));
+	zassert_equal(1000u, radiant_profile_sched_coding_kbps(RADIANT_PROFILE_SCHED_CODING_NONE));
+	zassert_equal(125u, radiant_profile_sched_coding_kbps(RADIANT_PROFILE_SCHED_CODING_S8));
+	zassert_equal(500u, radiant_profile_sched_coding_kbps(RADIANT_PROFILE_SCHED_CODING_S2));
+	zassert_equal(0u, radiant_profile_sched_coding_kbps(7u));
 
-	zassert_true(profile_sched_coding_implemented(PROFILE_SCHED_CODING_NONE));
-	zassert_true(profile_sched_coding_implemented(PROFILE_SCHED_CODING_S8));
-	zassert_false(profile_sched_coding_implemented(PROFILE_SCHED_CODING_S2));
-	zassert_false(profile_sched_coding_implemented(7u));
+	zassert_true(radiant_profile_sched_coding_implemented(RADIANT_PROFILE_SCHED_CODING_NONE));
+	zassert_true(radiant_profile_sched_coding_implemented(RADIANT_PROFILE_SCHED_CODING_S8));
+	zassert_false(radiant_profile_sched_coding_implemented(RADIANT_PROFILE_SCHED_CODING_S2));
+	zassert_false(radiant_profile_sched_coding_implemented(7u));
 
 	assert_no_viol();
 }
 
 ZTEST(schedule, test_the_dwell_ladder)
 {
-	zassert_equal(250u, profile_sched_dwell_us(0u));
-	zassert_equal(500u, profile_sched_dwell_us(1u));
-	zassert_equal(32000u, profile_sched_dwell_us(PROFILE_SCHED_DWELL_CODE_MAX));
-	zassert_equal(0u, profile_sched_dwell_us(PROFILE_SCHED_DWELL_CODE_MAX + 1u));
+	zassert_equal(250u, radiant_profile_sched_dwell_us(0u));
+	zassert_equal(500u, radiant_profile_sched_dwell_us(1u));
+	zassert_equal(32000u, radiant_profile_sched_dwell_us(RADIANT_PROFILE_SCHED_DWELL_CODE_MAX));
+	zassert_equal(0u, radiant_profile_sched_dwell_us(RADIANT_PROFILE_SCHED_DWELL_CODE_MAX + 1u));
 
 	assert_no_viol();
 }
@@ -262,7 +262,7 @@ ZTEST(schedule, test_the_block_is_byte_for_byte_what_the_python_encoder_emits)
 {
 	uint8_t body[6];
 
-	zassert_ok(profile_sched_pack(&CANON_SCHED, false, 30u, body));
+	zassert_ok(radiant_profile_sched_pack(&CANON_SCHED, false, 30u, body));
 	zassert_mem_equal(body, CANON_SCHED_BODY, sizeof(body));
 
 	assert_no_viol();
@@ -270,31 +270,31 @@ ZTEST(schedule, test_the_block_is_byte_for_byte_what_the_python_encoder_emits)
 
 ZTEST(schedule, test_an_all_defaulted_block_is_forty_eight_zero_bits)
 {
-	const struct profile_schedule quiet = PROFILE_SCHED_INIT_DEFAULT;
+	const struct radiant_profile_schedule quiet = RADIANT_PROFILE_SCHED_INIT_DEFAULT;
 	static const uint8_t zeros[6] = { 0u, 0u, 0u, 0u, 0u, 0u };
-	struct profile_schedule got;
+	struct radiant_profile_schedule got;
 	uint8_t body[6];
 
-	zassert_ok(profile_sched_pack(&quiet, false, 0u, body));
+	zassert_ok(radiant_profile_sched_pack(&quiet, false, 0u, body));
 	zassert_mem_equal(body, zeros, sizeof(body));
 
 	/* And it decodes back to announcing nothing, rather than to 0 dBm -
 	 * which is why the power field is biased on the wire. */
-	zassert_ok(profile_sched_unpack(body, false, 0u, &got));
+	zassert_ok(radiant_profile_sched_unpack(body, false, 0u, &got));
 	zassert_equal(0u, got.dl_interval);
-	zassert_equal(PROFILE_SCHED_TX_POWER_UNSTATED, got.tx_power_dbm);
-	zassert_equal(PROFILE_SCHED_CODING_NONE, got.coding);
+	zassert_equal(RADIANT_PROFILE_SCHED_TX_POWER_UNSTATED, got.tx_power_dbm);
+	zassert_equal(RADIANT_PROFILE_SCHED_CODING_NONE, got.coding);
 
 	assert_no_viol();
 }
 
 ZTEST(schedule, test_round_trip)
 {
-	struct profile_schedule got;
+	struct radiant_profile_schedule got;
 	uint8_t body[6];
 
-	zassert_ok(profile_sched_pack(&CANON_SCHED, false, 30u, body));
-	zassert_ok(profile_sched_unpack(body, false, 30u, &got));
+	zassert_ok(radiant_profile_sched_pack(&CANON_SCHED, false, 30u, body));
+	zassert_ok(radiant_profile_sched_unpack(body, false, 30u, &got));
 
 	zassert_equal(CANON_SCHED.dl_interval, got.dl_interval);
 	zassert_equal(CANON_SCHED.dl_phase, got.dl_phase);
@@ -310,14 +310,14 @@ ZTEST(schedule, test_round_trip)
  * one and must not be rejected for it. They used to be refused. */
 ZTEST(schedule, test_the_next_flag_bits_are_ignored_not_refused)
 {
-	struct profile_schedule got;
-	struct profile_schedule base;
+	struct radiant_profile_schedule got;
+	struct radiant_profile_schedule base;
 	uint8_t body[6];
 
-	zassert_ok(profile_sched_pack(&CANON_SCHED, false, 30u, body));
-	zassert_ok(profile_sched_unpack(body, false, 30u, &base));
+	zassert_ok(radiant_profile_sched_pack(&CANON_SCHED, false, 30u, body));
+	zassert_ok(radiant_profile_sched_unpack(body, false, 30u, &base));
 	body[5] |= 0x3Fu; /* all six, bits 42..47 */
-	zassert_ok(profile_sched_unpack(body, false, 30u, &got));
+	zassert_ok(radiant_profile_sched_unpack(body, false, 30u, &got));
 	zassert_equal(base.dl_interval, got.dl_interval);
 	zassert_equal(base.dl_phase, got.dl_phase);
 	zassert_equal(base.dl_dwell, got.dl_dwell);
@@ -329,38 +329,38 @@ ZTEST(schedule, test_the_next_flag_bits_are_ignored_not_refused)
 
 ZTEST(schedule, test_the_phy_bit_and_the_coding_rate_must_agree)
 {
-	struct profile_schedule s = CANON_SCHED;
+	struct radiant_profile_schedule s = CANON_SCHED;
 	uint8_t body[6];
 
 	/* Long range with no coding rate tells a consumer nothing about how long
 	 * a frame takes. */
-	zassert_equal(-EINVAL, profile_sched_pack(&s, true, 30u, body));
+	zassert_equal(-EINVAL, radiant_profile_sched_pack(&s, true, 30u, body));
 
 	/* A coding rate on a 1 M channel is a node describing a PHY it is not
 	 * using. */
-	s.coding = PROFILE_SCHED_CODING_S8;
-	zassert_equal(-EINVAL, profile_sched_pack(&s, false, 30u, body));
+	s.coding = RADIANT_PROFILE_SCHED_CODING_S8;
+	zassert_equal(-EINVAL, radiant_profile_sched_pack(&s, false, 30u, body));
 
 	/* Agreed, and S=8 is the rate this project has committed to. */
-	zassert_ok(profile_sched_pack(&s, true, 30u, body));
+	zassert_ok(radiant_profile_sched_pack(&s, true, 30u, body));
 
 	/* S=2 is defined so that adding it later is a value and not a format
 	 * break, and refused so that nothing announces a rate no code
 	 * transmits. */
-	s.coding = PROFILE_SCHED_CODING_S2;
-	zassert_equal(-ENOTSUP, profile_sched_pack(&s, true, 30u, body));
+	s.coding = RADIANT_PROFILE_SCHED_CODING_S2;
+	zassert_equal(-ENOTSUP, radiant_profile_sched_pack(&s, true, 30u, body));
 
 	assert_no_viol();
 }
 
 ZTEST(schedule, test_a_rate_this_build_cannot_use_still_decodes)
 {
-	struct profile_schedule s = CANON_SCHED;
-	struct profile_schedule got;
+	struct radiant_profile_schedule s = CANON_SCHED;
+	struct radiant_profile_schedule got;
 	uint8_t body[6];
 
-	s.coding = PROFILE_SCHED_CODING_S8;
-	zassert_ok(profile_sched_pack(&s, true, 30u, body));
+	s.coding = RADIANT_PROFILE_SCHED_CODING_S8;
+	zassert_ok(radiant_profile_sched_pack(&s, true, 30u, body));
 
 	/* Hand-edit the coding field to S=2 - what a node from a later build
 	 * would send. The receiver decodes the node and declines the channel;
@@ -368,16 +368,16 @@ ZTEST(schedule, test_a_rate_this_build_cannot_use_still_decodes)
 	 * not the layout of these bytes. */
 	body[3] = (uint8_t)((body[3] & 0xFEu) | 0x00u);
 	body[4] = (uint8_t)((body[4] & 0x3Fu) | 0x80u);
-	zassert_ok(profile_sched_unpack(body, true, 30u, &got));
-	zassert_equal(PROFILE_SCHED_CODING_S2, got.coding);
-	zassert_false(profile_sched_coding_implemented(got.coding));
+	zassert_ok(radiant_profile_sched_unpack(body, true, 30u, &got));
+	zassert_equal(RADIANT_PROFILE_SCHED_CODING_S2, got.coding);
+	zassert_false(radiant_profile_sched_coding_implemented(got.coding));
 
 	assert_no_viol();
 }
 
 ZTEST(schedule, test_the_dwell_must_cover_the_clock_error_it_announces)
 {
-	struct profile_schedule s = CANON_SCHED;
+	struct radiant_profile_schedule s = CANON_SCHED;
 	uint8_t body[6];
 
 	/* Point at a window most of an interval away - 60000 counts, 1.83 s -
@@ -387,7 +387,7 @@ ZTEST(schedule, test_the_dwell_must_cover_the_clock_error_it_announces)
 	/* 500 us every 2 s is the plan's example duty, and a crystal node can
 	 * offer it: 80 ppm relative over 1.83 s is 146 us, and twice that
 	 * fits. */
-	zassert_ok(profile_sched_pack(&s, false, 30u, body));
+	zassert_ok(radiant_profile_sched_pack(&s, false, 30u, body));
 
 	/*
 	 * The same announcement from an RC node is a window the commanding
@@ -395,87 +395,87 @@ ZTEST(schedule, test_the_dwell_must_cover_the_clock_error_it_announces)
 	 * and a downlink that silently never works is worse than one that was
 	 * refused at the encoder.
 	 */
-	zassert_equal(-EINVAL, profile_sched_pack(&s, false, 500u, body));
+	zassert_equal(-EINVAL, radiant_profile_sched_pack(&s, false, 500u, body));
 
 	/* It can have the window; it has to open it wider. 2 ms is still short
 	 * of twice the drift, and 4 ms is not. */
 	s.dl_dwell = 3u; /* 2 ms */
-	zassert_equal(-EINVAL, profile_sched_pack(&s, false, 500u, body));
+	zassert_equal(-EINVAL, radiant_profile_sched_pack(&s, false, 500u, body));
 	s.dl_dwell = 4u; /* 4 ms */
-	zassert_ok(profile_sched_pack(&s, false, 500u, body));
+	zassert_ok(radiant_profile_sched_pack(&s, false, 500u, body));
 
 	assert_no_viol();
 }
 
 ZTEST(schedule, test_tx_power_is_biased_so_that_zero_can_mean_silence)
 {
-	struct profile_schedule s = CANON_SCHED;
-	struct profile_schedule got;
+	struct radiant_profile_schedule s = CANON_SCHED;
+	struct radiant_profile_schedule got;
 	uint8_t body[6];
 
 	s.tx_power_dbm = 0;
-	zassert_ok(profile_sched_pack(&s, false, 30u, body));
-	zassert_ok(profile_sched_unpack(body, false, 30u, &got));
+	zassert_ok(radiant_profile_sched_pack(&s, false, 30u, body));
+	zassert_ok(radiant_profile_sched_unpack(body, false, 30u, &got));
 	zassert_equal(0, got.tx_power_dbm);
 
-	s.tx_power_dbm = PROFILE_SCHED_TX_POWER_UNSTATED;
-	zassert_ok(profile_sched_pack(&s, false, 30u, body));
-	zassert_ok(profile_sched_unpack(body, false, 30u, &got));
-	zassert_equal(PROFILE_SCHED_TX_POWER_UNSTATED, got.tx_power_dbm);
+	s.tx_power_dbm = RADIANT_PROFILE_SCHED_TX_POWER_UNSTATED;
+	zassert_ok(radiant_profile_sched_pack(&s, false, 30u, body));
+	zassert_ok(radiant_profile_sched_unpack(body, false, 30u, &got));
+	zassert_equal(RADIANT_PROFILE_SCHED_TX_POWER_UNSTATED, got.tx_power_dbm);
 
 	s.tx_power_dbm = 40; /* outside the range any of this runs at */
-	zassert_equal(-EINVAL, profile_sched_pack(&s, false, 30u, body));
+	zassert_equal(-EINVAL, radiant_profile_sched_pack(&s, false, 30u, body));
 
 	/* Biased byte 228 is 128 once unbiased, which lands on the sentinel if
 	 * a receiver narrows before it checks. */
-	zassert_ok(profile_sched_pack(&CANON_SCHED, false, 30u, body));
+	zassert_ok(radiant_profile_sched_pack(&CANON_SCHED, false, 30u, body));
 	body[4] = (uint8_t)((body[4] & 0xC0u) | (228u >> 2));
 	body[5] = (uint8_t)((body[5] & 0x3Fu) | ((228u & 0x03u) << 6));
-	zassert_equal(-EINVAL, profile_sched_unpack(body, false, 30u, &got));
+	zassert_equal(-EINVAL, radiant_profile_sched_unpack(body, false, 30u, &got));
 
 	assert_no_viol();
 }
 
 ZTEST(schedule, test_a_window_the_node_does_not_open_carries_no_phase)
 {
-	struct profile_schedule s = PROFILE_SCHED_INIT_DEFAULT;
+	struct radiant_profile_schedule s = RADIANT_PROFILE_SCHED_INIT_DEFAULT;
 	uint8_t body[6];
 
 	s.dl_phase = 1u;
-	zassert_equal(-EINVAL, profile_sched_pack(&s, false, 0u, body));
+	zassert_equal(-EINVAL, radiant_profile_sched_pack(&s, false, 0u, body));
 
 	s.dl_phase = 0u;
 	s.dl_dwell = 2u;
-	zassert_equal(-EINVAL, profile_sched_pack(&s, false, 0u, body));
+	zassert_equal(-EINVAL, radiant_profile_sched_pack(&s, false, 0u, body));
 
 	/* A phase at or past the interval is a window in the next cycle
 	 * described as one in this one. */
 	s = CANON_SCHED;
 	s.dl_interval = 32u; /* 1 s, which is 32768 counts */
 	s.dl_phase = 32768u;
-	zassert_equal(-EINVAL, profile_sched_pack(&s, false, 30u, body));
+	zassert_equal(-EINVAL, radiant_profile_sched_pack(&s, false, 30u, body));
 	s.dl_phase = 32767u;
-	zassert_ok(profile_sched_pack(&s, false, 30u, body));
+	zassert_ok(radiant_profile_sched_pack(&s, false, 30u, body));
 
 	assert_no_viol();
 }
 
 ZTEST(schedule, test_the_listen_window_is_relative_to_the_frame_that_carried_it)
 {
-	const struct profile_schedule quiet = PROFILE_SCHED_INIT_DEFAULT;
+	const struct radiant_profile_schedule quiet = RADIANT_PROFILE_SCHED_INIT_DEFAULT;
 	radiant_time_t t_carrier = 1000000u;
 	radiant_time_t first;
 	radiant_time_t second;
 
-	first = profile_sched_listen_at(&CANON_SCHED, t_carrier, 0u);
-	second = profile_sched_listen_at(&CANON_SCHED, t_carrier, 1u);
+	first = radiant_profile_sched_listen_at(&CANON_SCHED, t_carrier, 0u);
+	second = radiant_profile_sched_listen_at(&CANON_SCHED, t_carrier, 1u);
 
 	/* 12000 counts is 366210 us, and 64/32 s is 2000000 us exactly. */
 	zassert_equal(t_carrier + 366210u, first);
 	zassert_equal(first + 2000000u, second);
 
 	/* Nothing announced is not "now": it is nothing. */
-	zassert_equal(RADIANT_TIME_NEVER, profile_sched_listen_at(&quiet, t_carrier, 0u));
+	zassert_equal(RADIANT_TIME_NEVER, radiant_profile_sched_listen_at(&quiet, t_carrier, 0u));
 
 	assert_no_viol();
 }
@@ -487,22 +487,22 @@ ZTEST(schedule, test_the_listen_window_is_relative_to_the_frame_that_carried_it)
 
 ZTEST(schedule, test_the_descriptor_set_is_byte_for_byte_what_python_emits)
 {
-	struct profile_descriptor d;
-	uint8_t frames[PROFILE_TLM_MAX_FRAMES * PROFILE_TLM_FRAME_LEN];
+	struct radiant_profile_descriptor d;
+	uint8_t frames[RADIANT_PROFILE_TLM_MAX_FRAMES * RADIANT_PROFILE_TLM_FRAME_LEN];
 
 	canon_descriptor(&d);
-	zassert_equal(4, profile_desc_encode(&d, frames, PROFILE_TLM_MAX_FRAMES));
+	zassert_equal(4, radiant_profile_desc_encode(&d, frames, RADIANT_PROFILE_TLM_MAX_FRAMES));
 	zassert_mem_equal(frames, CANON_DESC, sizeof(CANON_DESC));
-	zassert_equal(2, profile_desc_schedule_index(&d));
+	zassert_equal(2, radiant_profile_desc_schedule_index(&d));
 
 	assert_no_viol();
 }
 
 ZTEST(schedule, test_a_node_that_announces_nothing_is_the_node_it_was_before)
 {
-	struct profile_descriptor d;
-	uint8_t with[PROFILE_TLM_MAX_FRAMES * PROFILE_TLM_FRAME_LEN];
-	uint8_t without[PROFILE_TLM_MAX_FRAMES * PROFILE_TLM_FRAME_LEN];
+	struct radiant_profile_descriptor d;
+	uint8_t with[RADIANT_PROFILE_TLM_MAX_FRAMES * RADIANT_PROFILE_TLM_FRAME_LEN];
+	uint8_t without[RADIANT_PROFILE_TLM_MAX_FRAMES * RADIANT_PROFILE_TLM_FRAME_LEN];
 	int n_without;
 	int n_with;
 
@@ -514,40 +514,40 @@ ZTEST(schedule, test_a_node_that_announces_nothing_is_the_node_it_was_before)
 	 * phase transmits, so "compatible" and "identical" are the same claim.
 	 */
 	quiet_descriptor(&d);
-	n_without = profile_desc_encode(&d, without, PROFILE_TLM_MAX_FRAMES);
+	n_without = radiant_profile_desc_encode(&d, without, RADIANT_PROFILE_TLM_MAX_FRAMES);
 	zassert_equal(3, n_without);
-	zassert_equal(0u, without[PROFILE_TLM_FRAME_LEN + 3] & 0x0Fu);
-	zassert_equal(-ENOENT, profile_desc_schedule_index(&d));
+	zassert_equal(0u, without[RADIANT_PROFILE_TLM_FRAME_LEN + 3] & 0x0Fu);
+	zassert_equal(-ENOENT, radiant_profile_desc_schedule_index(&d));
 
 	/* The field frames sit at index 2 exactly as they did. */
-	zassert_equal(0x01u, without[2u * PROFILE_TLM_FRAME_LEN + 2]);
+	zassert_equal(0x01u, without[2u * RADIANT_PROFILE_TLM_FRAME_LEN + 2]);
 
 	/* Announcing only a clock accuracy costs a nibble and NOT a frame,
 	 * which is the whole reason it lives in frame 1: a sparse asset tag on
 	 * an RC oscillator announces it without lengthening its descriptor. */
 	d.clock_stated = true;
-	d.clock_accuracy = PROFILE_HANDOFF_CLK_UNKNOWN;
-	n_with = profile_desc_encode(&d, with, PROFILE_TLM_MAX_FRAMES);
+	d.clock_accuracy = RADIANT_PROFILE_HANDOFF_CLK_UNKNOWN;
+	n_with = radiant_profile_desc_encode(&d, with, RADIANT_PROFILE_TLM_MAX_FRAMES);
 	zassert_equal(n_without, n_with);
-	with[PROFILE_TLM_FRAME_LEN + 3] &= 0xF0u;
-	zassert_mem_equal(with, without, (size_t)n_with * PROFILE_TLM_FRAME_LEN);
+	with[RADIANT_PROFILE_TLM_FRAME_LEN + 3] &= 0xF0u;
+	zassert_mem_equal(with, without, (size_t)n_with * RADIANT_PROFILE_TLM_FRAME_LEN);
 
 	assert_no_viol();
 }
 
 ZTEST(schedule, test_the_set_round_trips_and_the_shape_is_derived)
 {
-	struct profile_descriptor d;
-	struct profile_descriptor got;
-	uint8_t frames[PROFILE_TLM_MAX_FRAMES * PROFILE_TLM_FRAME_LEN];
+	struct radiant_profile_descriptor d;
+	struct radiant_profile_descriptor got;
+	uint8_t frames[RADIANT_PROFILE_TLM_MAX_FRAMES * RADIANT_PROFILE_TLM_FRAME_LEN];
 
 	canon_descriptor(&d);
-	zassert_equal(4, profile_desc_encode(&d, frames, PROFILE_TLM_MAX_FRAMES));
-	zassert_ok(profile_desc_decode(frames, 4u, &got));
+	zassert_equal(4, radiant_profile_desc_encode(&d, frames, RADIANT_PROFILE_TLM_MAX_FRAMES));
+	zassert_ok(radiant_profile_desc_decode(frames, 4u, &got));
 
 	zassert_true(got.clock_stated);
-	zassert_equal(PROFILE_HANDOFF_CLK_30PPM, got.clock_accuracy);
-	zassert_equal(30u, profile_desc_clock_ppm(&got));
+	zassert_equal(RADIANT_PROFILE_HANDOFF_CLK_30PPM, got.clock_accuracy);
+	zassert_equal(30u, radiant_profile_desc_clock_ppm(&got));
 	zassert_true(got.has_schedule);
 	zassert_equal(CANON_SCHED.dl_interval, got.schedule.dl_interval);
 	zassert_equal(CANON_SCHED.dl_phase, got.schedule.dl_phase);
@@ -564,19 +564,19 @@ ZTEST(schedule, test_the_set_round_trips_and_the_shape_is_derived)
 	 * at, because guessing produces a schema nobody transmitted.
 	 */
 	frames[1] = (uint8_t)((frames[1] & 0xF0u) | 4u); /* claim 5 frames */
-	zassert_equal(-EPROTO, profile_desc_decode(frames, 4u, &got));
+	zassert_equal(-EPROTO, radiant_profile_desc_decode(frames, 4u, &got));
 
 	assert_no_viol();
 }
 
 ZTEST(schedule, test_a_ladder_code_with_nothing_stating_it_is_refused)
 {
-	struct profile_descriptor d;
-	uint8_t frames[PROFILE_TLM_MAX_FRAMES * PROFILE_TLM_FRAME_LEN];
+	struct radiant_profile_descriptor d;
+	uint8_t frames[RADIANT_PROFILE_TLM_MAX_FRAMES * RADIANT_PROFILE_TLM_FRAME_LEN];
 
 	quiet_descriptor(&d);
-	d.clock_accuracy = PROFILE_HANDOFF_CLK_50PPM;
-	zassert_equal(-EINVAL, profile_desc_encode(&d, frames, PROFILE_TLM_MAX_FRAMES));
+	d.clock_accuracy = RADIANT_PROFILE_HANDOFF_CLK_50PPM;
+	zassert_equal(-EINVAL, radiant_profile_desc_encode(&d, frames, RADIANT_PROFILE_TLM_MAX_FRAMES));
 
 	assert_no_viol();
 }
@@ -615,10 +615,10 @@ static void lock_estimator(uint8_t ch)
 ZTEST(schedule, test_an_announcement_only_ever_widens)
 {
 	static const uint8_t ladder[] = {
-		PROFILE_HANDOFF_CLK_20PPM,  PROFILE_HANDOFF_CLK_30PPM,
-		PROFILE_HANDOFF_CLK_50PPM,  PROFILE_HANDOFF_CLK_75PPM,
-		PROFILE_HANDOFF_CLK_100PPM, PROFILE_HANDOFF_CLK_150PPM,
-		PROFILE_HANDOFF_CLK_250PPM, PROFILE_HANDOFF_CLK_UNKNOWN,
+		RADIANT_PROFILE_HANDOFF_CLK_20PPM,  RADIANT_PROFILE_HANDOFF_CLK_30PPM,
+		RADIANT_PROFILE_HANDOFF_CLK_50PPM,  RADIANT_PROFILE_HANDOFF_CLK_75PPM,
+		RADIANT_PROFILE_HANDOFF_CLK_100PPM, RADIANT_PROFILE_HANDOFF_CLK_150PPM,
+		RADIANT_PROFILE_HANDOFF_CLK_250PPM, RADIANT_PROFILE_HANDOFF_CLK_UNKNOWN,
 	};
 	uint32_t baseline;
 	uint32_t previous;
@@ -636,15 +636,15 @@ ZTEST(schedule, test_an_announcement_only_ever_widens)
 	for (i = 0u; i < ARRAY_SIZE(ladder); i++) {
 		uint32_t guard;
 
-		zassert_equal(profile_handoff_clk_ppm(ladder[i]),
-			      profile_sched_apply_clock(
+		zassert_equal(radiant_profile_handoff_clk_ppm(ladder[i]),
+			      radiant_profile_sched_apply_clock(
 				      SCHED_CH,
-				      profile_sched_clk_nibble(ladder[i], true)));
+				      radiant_profile_sched_clk_nibble(ladder[i], true)));
 		guard = radiant_channel_guard_us(SCHED_CH);
 
 		zassert_true(guard >= baseline,
 			     "%u ppm: %u -> %u",
-			     profile_handoff_clk_ppm(ladder[i]),
+			     radiant_profile_handoff_clk_ppm(ladder[i]),
 			     (unsigned int)baseline, (unsigned int)guard);
 		zassert_true(guard >= previous);
 		previous = guard;
@@ -656,7 +656,7 @@ ZTEST(schedule, test_an_announcement_only_ever_widens)
 	zassert_true(previous > RADIANT_CHANNEL_GUARD_MAX_US);
 
 	/* And withdrawing the announcement puts it back exactly. */
-	zassert_equal(0u, profile_sched_apply_clock(SCHED_CH, 0x00u));
+	zassert_equal(0u, radiant_profile_sched_apply_clock(SCHED_CH, 0x00u));
 	zassert_equal(baseline, radiant_channel_guard_us(SCHED_CH));
 
 	zassert_equal(RADIANT_CH_OK,
@@ -667,9 +667,9 @@ ZTEST(schedule, test_an_announcement_only_ever_widens)
 
 ZTEST(schedule, test_an_all_defaulted_block_changes_no_scheduler_decision)
 {
-	struct profile_descriptor d;
-	uint8_t frames[PROFILE_TLM_MAX_FRAMES * PROFILE_TLM_FRAME_LEN];
-	struct profile_descriptor got;
+	struct radiant_profile_descriptor d;
+	uint8_t frames[RADIANT_PROFILE_TLM_MAX_FRAMES * RADIANT_PROFILE_TLM_FRAME_LEN];
+	struct radiant_profile_descriptor got;
 	radiant_time_t t0;
 	uint32_t miss;
 
@@ -686,11 +686,11 @@ ZTEST(schedule, test_an_all_defaulted_block_changes_no_scheduler_decision)
 	 */
 	quiet_descriptor(&d);
 	d.has_schedule = true;
-	d.schedule = (struct profile_schedule)PROFILE_SCHED_INIT_DEFAULT;
-	zassert_equal(4, profile_desc_encode(&d, frames, PROFILE_TLM_MAX_FRAMES));
-	zassert_ok(profile_desc_decode(frames, 4u, &got));
+	d.schedule = (struct radiant_profile_schedule)RADIANT_PROFILE_SCHED_INIT_DEFAULT;
+	zassert_equal(4, radiant_profile_desc_encode(&d, frames, RADIANT_PROFILE_TLM_MAX_FRAMES));
+	zassert_ok(radiant_profile_desc_decode(frames, 4u, &got));
 	zassert_true(got.has_schedule);
-	zassert_equal(0u, profile_desc_clock_ppm(&got));
+	zassert_equal(0u, radiant_profile_desc_clock_ppm(&got));
 
 	t0 = radiant_radio_now();
 	track_at(SCHED_CH, SLOW_PERIOD, t0);
@@ -699,8 +699,8 @@ ZTEST(schedule, test_an_all_defaulted_block_changes_no_scheduler_decision)
 	/* The block, applied. A defaulted one announces no clock, so this is a
 	 * write of zero - and the assertion is that a write of zero is the same
 	 * as no write at all. */
-	zassert_equal(0u, profile_sched_apply_clock(SCHED_CH,
-						    profile_sched_clk_nibble(
+	zassert_equal(0u, radiant_profile_sched_apply_clock(SCHED_CH,
+						    radiant_profile_sched_clk_nibble(
 							    got.clock_accuracy,
 							    got.clock_stated)));
 
@@ -858,7 +858,7 @@ ZTEST(schedule, test_an_rc_clocked_master_is_held_when_it_announces_itself)
 	/* What the descriptor's ladder code 0 means, arriving through the same
 	 * call the descriptor would use. */
 	heard = rc_master(SCHED_CH,
-			  profile_handoff_clk_ppm(PROFILE_HANDOFF_CLK_UNKNOWN),
+			  radiant_profile_handoff_clk_ppm(RADIANT_PROFILE_HANDOFF_CLK_UNKNOWN),
 			  slots);
 
 	zassert_equal(slots, heard, "%u of %u lost",

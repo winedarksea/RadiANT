@@ -972,7 +972,7 @@ static void rx_absorb(struct compat_ctx *c, const uint8_t *pay)
  * not the receiver's guess at the phase. So the anchor is learned from the
  * air, and it is the EARLIEST phase any verified page has proven. A genuine
  * page arrives at obs = t_sync - counter x T = A + d, where d is the sender's
- * slot slip (0..~4 periods: Tier II pre-empts a slot, and profile_compat.c's
+ * slot slip (0..~4 periods: Tier II pre-empts a slot, and radiant_profile_compat.c's
  * seam never offers messages 119/120). A replayed page arrives at
  * A + d + delay. So obs >= A always, and only a VERIFIED page moves the
  * anchor, as in the spread MAC's rx_close_window():

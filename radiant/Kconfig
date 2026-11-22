@@ -1233,7 +1233,7 @@ config RADIANT_PROFILES
 	bool "the ANT+ device profile library (src/profiles/)"
 	help
 	  Page encoders and decoders for heart rate, power, fitness equipment
-	  and the other profiles, on the include path as "profile_hr.h" and
+	  and the other profiles, on the include path as "radiant_profile_hr.h" and
 	  so on. Unused profiles are dropped at link time, so there is one
 	  switch rather than one per profile.
 

@@ -28,7 +28,7 @@
  *
  * ─── Why the seam is here and not lower ────────────────────────────────────
  *
- * `profile_hr_beat(&hr, event_time)` plus `profile_hr_set_computed(&hr, bpm)`
+ * `radiant_profile_hr_beat(&hr, event_time)` plus `radiant_profile_hr_set_computed(&hr, bpm)`
  * is precisely what ANT+ page 0x00 carries: an event count and an event time at
  * 1/1024 s, plus the sensor's own computed rate. A seam that did not match the
  * wire format would make every integrator write the same adapter to get back to
@@ -36,24 +36,24 @@
  *
  * ─── The concurrency detail that must not be got wrong ─────────────────────
  *
- * `profile_hr` is ALREADY reached from two contexts in this application:
+ * `radiant_profile_hr` is ALREADY reached from two contexts in this application:
  *
  *   1. the system workqueue, which advances the beat accumulators, and
  *   2. the radiant callback path - radiant_ant_on_message() -> load_next_page() ->
- *      profile_hr_next() - which reads them to build the next page.
+ *      radiant_profile_hr_next() - which reads them to build the next page.
  *
- * An ISR-driven sensor would make that three-way, and profile_hr has no lock.
- * So hrm_sensor_report_beat() does NOT touch profile_hr. It writes one 32-bit
+ * An ISR-driven sensor would make that three-way, and radiant_profile_hr has no lock.
+ * So hrm_sensor_report_beat() does NOT touch radiant_profile_hr. It writes one 32-bit
  * `{seq, event_time}` word with a single atomic store and submits one work
  * item; the handler runs on the system workqueue - context 1, which already
- * existed - and does profile_hr_beat(), profile_hr_set_computed() and the BLE
+ * existed - and does radiant_profile_hr_beat(), radiant_profile_hr_set_computed() and the BLE
  * notification together. Timestamp fidelity is preserved because the instant
  * travels in the word; the profile's context count stays at two.
  *
  * Two contexts with no lock is safe one way round only: the workqueue is
  * cooperative, so the event thread never interrupts a writer - but the
  * workqueue CAN preempt the event thread mid-encode. So the reader,
- * load_next_page(), wraps profile_hr_next() in k_sched_lock().
+ * load_next_page(), wraps radiant_profile_hr_next() in k_sched_lock().
  *
  * The word is single-producer by construction: exactly one sensor is
  * registered, so exactly one context calls report_beat(). Do not call it from
@@ -70,12 +70,12 @@ struct hrm_sensor;
 struct hrm_sensor_api {
 	/*
 	 * Bring the source up. Required. Called once from main(), between
-	 * profile_hr_init() and the ANT+ channel opening, so a source that
+	 * radiant_profile_hr_init() and the ANT+ channel opening, so a source that
 	 * needs the radio quiet has it, and a source that fails stops the node
 	 * before it ever claims to be transmitting.
 	 *
 	 * Return 0 or a negative errno; a failure is logged and the node keeps
-	 * running with no beats, which reads as PROFILE_HR_INVALID_BPM on the
+	 * running with no beats, which reads as RADIANT_PROFILE_HR_INVALID_BPM on the
 	 * air.
 	 */
 	int (*start)(const struct hrm_sensor *sensor);
@@ -144,7 +144,7 @@ void hrm_sensor_poll(void);
  * understand that doing so is what the push direction exists to avoid.
  *
  * ISR-SAFE BY CONSTRUCTION: one atomic store and one k_work_submit(). It does
- * not touch profile_hr and it does not call bt_hrs_notify(). See the header
+ * not touch radiant_profile_hr and it does not call bt_hrs_notify(). See the header
  * comment for why that matters.
  */
 void hrm_sensor_report_beat(uint16_t event_time_1024);
@@ -152,7 +152,7 @@ void hrm_sensor_report_beat(uint16_t event_time_1024);
 /*
  * The source's own computed rate - byte 7 of ANT+ pages 0x00 and 0x04.
  *
- * PROFILE_HR_INVALID_BPM (0) means "no reading", and is what a source should
+ * RADIANT_PROFILE_HR_INVALID_BPM (0) means "no reading", and is what a source should
  * report when it has lost contact. 0xFF IS A REAL 255 bpm ON THIS PROFILE and
  * is not a sentinel; do not use it to mean "unknown".
  *

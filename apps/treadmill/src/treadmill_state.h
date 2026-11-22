@@ -59,7 +59,7 @@ extern "C" {
 #endif
 
 /* The FE state values, spelled here as well so this header does not drag
- * profile_fec.h into the ztest that exercises the conversions. Asserted equal
+ * radiant_profile_fec.h into the ztest that exercises the conversions. Asserted equal
  * to PROFILE_FEC_STATE_* in treadmill_state.c. */
 #define TREADMILL_STATE_ASLEEP   1u
 #define TREADMILL_STATE_READY    2u

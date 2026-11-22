@@ -148,7 +148,7 @@ def page70(requested: int, count: int = 4) -> bytes:
     control probe against somebody else's machine.
 
     Byte 5: bits 0-6 are the transmission count, bit 7 asks for acknowledged
-    replies (0 here = broadcast). Not shifted (profile_fec_tx.c reads
+    replies (0 here = broadcast). Not shifted (radiant_profile_fec_tx.c reads
     body[5] & 0x7F)."""
     return bytes([PAGE_REQUEST, 0xFF, 0xFF, 0xFF, 0xFF,
                   count & 0x7F, requested & 0xFF, 0x01])
@@ -157,7 +157,7 @@ def page70(requested: int, count: int = 4) -> bytes:
 def decode_grade(body: bytes) -> float | None:
     """Page 17's incline, bytes 4-5: a SIGNED int16 in 0.01 %, sentinel 0x7FFF.
 
-    Byte 3 is the cycle length, not the incline (profile_fec_tx.c puts it at
+    Byte 3 is the cycle length, not the incline (radiant_profile_fec_tx.c puts it at
     out[4]).
 
     NOT the same encoding as page 51's grade, and getting them the same way

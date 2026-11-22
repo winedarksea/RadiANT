@@ -3,8 +3,8 @@
  * radiant_power_adapter.h - ANT+ Bicycle Power (device type 0x0B) and ANT+
  * Fitness Equipment (device type 0x11) onto the sample bus.
  *
- * Wire layouts are src/profiles/profile_power.h's and src/profiles/profile_fec.h's,
- * decoded through profile_power_decode_std() and profile_fec_decode_*() rather
+ * Wire layouts are src/profiles/radiant_profile_power.h's and src/profiles/radiant_profile_fec.h's,
+ * decoded through radiant_profile_power_decode_std() and profile_fec_decode_*() rather
  * than re-derived here. Vocabulary mapping follows docs/radiant-bridge.md
  * section 3.1's "one adapter per profile, not one per profile per sink".
  *

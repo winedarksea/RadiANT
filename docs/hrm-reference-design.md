@@ -34,7 +34,7 @@ repository where RadiANT transmits as a **master** with a profile on top.
   service, not Garmin's proprietary Multi-Link/GFDI, and there is no running
   dynamics. See `ble-running-dynamics-notes.md`.
 - **It carries no RadiANT extension pages.** The compat layer is linked and
-  inert: `profile_hr_set_compat()` is never called, so on the air this is a plain
+  inert: `radiant_profile_hr_set_compat()` is never called, so on the air this is a plain
   ANT+ 0x78 sensor. That was a P8b requirement — a strap used to measure BLE
   coexistence must broadcast exactly what a commercial strap broadcasts — and it
   is also the right default for a reference design.
@@ -144,22 +144,22 @@ strap reporting a constant simulated 72 bpm.
 
 ### Why the seam is here and not lower
 
-`profile_hr_beat(&hr, event_time)` plus `profile_hr_set_computed(&hr, bpm)` is
+`radiant_profile_hr_beat(&hr, event_time)` plus `radiant_profile_hr_set_computed(&hr, bpm)` is
 precisely what ANT+ page 0x00 carries. A seam that did not match the wire format
 would make every integrator write the same adapter to get back to it.
 
 ### The concurrency rule
 
-`profile_hr` has no lock and is **already** reached from two contexts: the system
+`radiant_profile_hr` has no lock and is **already** reached from two contexts: the system
 workqueue, which advances the accumulators, and the radiant callback path
-(`radiant_ant_on_message()` → `load_next_page()` → `profile_hr_next()`), which reads
+(`radiant_ant_on_message()` → `load_next_page()` → `radiant_profile_hr_next()`), which reads
 them. An ISR-driven sensor would make that three-way.
 
-So `hrm_sensor_report_beat()` does not touch `profile_hr` at all. It writes one
+So `hrm_sensor_report_beat()` does not touch `radiant_profile_hr` at all. It writes one
 32-bit `{seq, event_time}` word with a single atomic store — one word so the
 sequence number and the instant it belongs to can never tear apart — and submits
 one work item. The handler runs on the workqueue (context 1, which already
-existed) and does `profile_hr_beat()`, `profile_hr_set_computed()` and
+existed) and does `radiant_profile_hr_beat()`, `radiant_profile_hr_set_computed()` and
 `hrm_ble_notify_hr()` together, so a receiver on either radio cannot see a rate
 the other does not.
 
@@ -178,12 +178,12 @@ A `bool` ("enable the simulator") lets a manufacturer forget to turn it off. A
 
 Under `HRM_SENSOR_CUSTOM` **nothing in this tree implements the seam**. If your
 code does not call `hrm_sensor_register()`, the node logs an error and transmits
-`PROFILE_HR_INVALID_BPM` forever. That is the correct failure and is deliberately
+`RADIANT_PROFILE_HR_INVALID_BPM` forever. That is the correct failure and is deliberately
 **not** a fallback to the simulator: a strap quietly reporting a simulated rate
 on a real chest is invisible from the receiving end; a strap reporting nothing is
 not.
 
-Note that `PROFILE_HR_INVALID_BPM` is **0**. On this profile `0xFF` is a real
+Note that `RADIANT_PROFILE_HR_INVALID_BPM` is **0**. On this profile `0xFF` is a real
 255 bpm and is not a sentinel.
 
 ### A worked example
@@ -298,7 +298,7 @@ what you still check.
    its own TRNG on first boot (`identity provisioned on first boot`, once), so
    this needs an entropy backend in your build
    (`CONFIG_RADIANT_SEC_RNG_ENTROPY=y`, on in `prj.conf`) and nothing else. A
-   factory that writes its own key through `node_ident_provision()` keeps it.
+   factory that writes its own key through `radiant_node_ident_provision()` keeps it.
 5. **The 22-character BLE name budget.** Against the 31-byte legacy advertising
    payload: flags `1+1+1 = 3`, UUID16 list `1+1+2 = 4`, name `1+1+N = 2+N`, so
    `9 + N ≤ 31` and **N ≤ 22**. `src/hrm_ble.c` used to claim "~24" from memory
@@ -337,7 +337,7 @@ what you still check.
 ### 5.1 Identity: closed by ADR 0020
 
 This section used to record a gap: nothing in `apps/` called
-`node_ident_provision()`, so every board ran on the Kconfig number and items 3
+`radiant_node_ident_provision()`, so every board ran on the Kconfig number and items 3
 and 4 were unachievable. It listed three shapes for closing it — a bench-only
 `PROVISION_ON_FIRST_BOOT`, a one-shot provisioning image, a factory programmer
 step — and asked for an ADR.

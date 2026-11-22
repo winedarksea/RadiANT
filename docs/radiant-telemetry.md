@@ -390,7 +390,7 @@ beta; this rule defines what a v1 receiver accepts, not a new version.
   page. A coarse real-time epoch says nothing a clock does not, so it may go on
   the air. Otherwise frame 1 carries zero and a keyed receiver recovers the
   epoch by trial-verifying the authentication frame forward from the last epoch
-  it knew (`PROFILE_TLM_AUTH_EPOCH_SPAN` = 16 epochs). The 48-bit tag is the
+  it knew (`RADIANT_PROFILE_TLM_AUTH_EPOCH_SPAN` = 16 epochs). The 48-bit tag is the
   epoch check, so no separate hint field is spent on it.
 - **A command-only node** — the reliable-command page, no transform — has no
   authentication frame to recover an epoch from, so **it keeps broadcasting a
@@ -590,9 +590,9 @@ the numbers are still a lie.
 
 It costs **one slot in 121** and **zero data-page bytes**, which is why it is
 mandatory rather than a further opt-in. **It is implemented**:
-`profile_desc_encode_auth()` and the `profile_desc_auth_*()` receiver half in
-`radiant/src/profiles/profile_telemetry.c`, `profile_sched_init_auth()` and
-`profile_sched_reseal()` for a node, mirrored in `tools/ant_pages.py`, with
+`radiant_profile_desc_encode_auth()` and the `profile_desc_auth_*()` receiver half in
+`radiant/src/profiles/radiant_profile_telemetry.c`, `radiant_profile_sched_init_auth()` and
+`radiant_profile_sched_reseal()` for a node, mirrored in `tools/ant_pages.py`, with
 shared vectors in `radiant/tests/src/test_profiles.c` and
 `tools/test_ant_pages.py`. The plain encoder still refuses every transform bit,
 so a standard device never links the sealed path. Two rules belong to the node
@@ -624,8 +624,8 @@ announces its downlink phase as encoded.
   would renumber every field offset in every deployed schema.
   **Caveat: this holds only where the counter is derived from the slot's time.**
   On a secured channel `radiant_sec` derives it from `t_sync`, so a denied or
-  missed slot still advances it. On an **unsecured `profile_sched` node** it
-  advances only when the caller calls `profile_sched_next_at()`, and the apps call
+  missed slot still advances it. On an **unsecured `radiant_profile_sched` node** it
+  advances only when the caller calls `radiant_profile_sched_next_at()`, and the apps call
   that once per `EVENT_TX`: a slot the radio never got is not counted, and the
   counter then understates the holes. No 0x60 app exists yet, so nothing is wrong
   on air; the first one must either have the radio glue call `next_at()` for
@@ -1317,8 +1317,8 @@ period — which is the number a rider or an occupant would actually feel.
 so a Zwift resistance command still waits for the next FE-C slot; everything here
 is available only to RadiANT-native control device types.
 
-The mechanism lives in `src/profiles/profile_command.c`, the announcement in
-`src/profiles/profile_schedule.c`, and the slot placement is an ordinary bounded
+The mechanism lives in `src/profiles/radiant_profile_command.c`, the announcement in
+`src/profiles/radiant_profile_schedule.c`, and the slot placement is an ordinary bounded
 receive window through `radiant_sched_request_rx()` — **no new scheduler slot
 kind**, because a response slot has a format, a filter, an rf index, an open and
 a close, which is precisely what an RX window is. Posting it as one also lets
@@ -1341,9 +1341,9 @@ As built, that is:
 
 | File | What it is |
 |---|---|
-| `src/profiles/profile_bits.c` | The MSB-first packer, and nothing else. Its own file because its vectors are the shared contract |
-| `src/profiles/profile_telemetry.c` | The descriptor codec, receiver-side frame assembly, the data pages, the command-page layouts |
-| `src/profiles/profile_sched.c` | Which page goes in the next message slot: the 119/120/121 interleave, the consecutive descriptor set, the sparse cadence, and the client seam |
+| `src/profiles/radiant_profile_bits.c` | The MSB-first packer, and nothing else. Its own file because its vectors are the shared contract |
+| `src/profiles/radiant_profile_telemetry.c` | The descriptor codec, receiver-side frame assembly, the data pages, the command-page layouts |
+| `src/profiles/radiant_profile_sched.c` | Which page goes in the next message slot: the 119/120/121 interleave, the consecutive descriptor set, the sparse cadence, and the client seam |
 | `tools/ant_pages.py` | All three, mirrored, plus the section 7 vocabulary as a table a host can look a quantity up in |
 
 `src/profiles/` is deliberately outside `radiant/`: `docs/decisions/0002-clean-room-policy.md`
@@ -1569,7 +1569,7 @@ sweep skip, which is the entire value of this page, is untouched.
 The bit budget above is the enforcement: every one of the 64 bits is assigned,
 so there is no space a four-byte epoch could quietly occupy, and adding one
 would require a third frame and a visible format change rather than an edit.
-`profile_handoff.c` states that as two `_Static_assert`s, which is where an
+`radiant_profile_handoff.c` states that as two `_Static_assert`s, which is where an
 author who reaches for the space finds out it is not there.
 
 ---

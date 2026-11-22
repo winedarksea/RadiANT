@@ -49,7 +49,7 @@ That is the whole design, and it is worth stating plainly because the obvious
 alternative — invent an 8-byte layout per profile, the way every ANT+ profile
 does — was drafted first and is worse in four ways:
 
-- **Zero new codec.** `src/profiles/profile_telemetry.c` and its mirror in
+- **Zero new codec.** `src/profiles/radiant_profile_telemetry.c` and its mirror in
   `tools/ant_pages.py` already encode and decode every page a profile needs. A
   new profile adds a table, not a parser.
 - **The security layer applies for free.** `X_CONF` and `X_AUTH` need byte `[1]`
@@ -127,8 +127,8 @@ invites the same proposal again in a year.
 | `0x0B` | Bicycle Power | 8182 | pages `0x10`, `0x11`, `0x12`, `0x20` |
 | `0x10` | Controls | 8192 | pages `0x10`, `0x49` (command surface only) |
 | `0x11` | Fitness Equipment (FE-C) | 8192 | pages `0x10`, `0x11`, `0x12`, `0x13`, `0x30`–`0x33`, `0x36`, `0x37`, `0x46`, `0x47` |
-| `0x14` | Light Electric Vehicle (LEV) | 8192 | no — encoded and decoded in C only, `src/profiles/profile_lev.c` |
-| `0x19` | Environment | 65535 | no — decoded in C only, `src/profiles/profile_env.c` |
+| `0x14` | Light Electric Vehicle (LEV) | 8192 | no — encoded and decoded in C only, `src/profiles/radiant_profile_lev.c` |
+| `0x19` | Environment | 65535 | no — decoded in C only, `src/profiles/radiant_profile_env.c` |
 | `0x1E` | Running Dynamics | 4096 | pages `0x00`, `0x01`, `0x10`, `0x20`, `0x4A` |
 | `0x29` | Tracker (Asset Tracker) | 2048 | pages `0x01`, `0x02`, `0x03`, `0x10`, `0x11`, `0x20` |
 | `0x78` | Heart Rate | 8070 | pages `0x00`, `0x01`, `0x02`, `0x03`, `0x04` |
@@ -147,18 +147,18 @@ working rather than an oversight. The number comes from a document, not from
 this project's code — Core Temperature's is 8192 — and it is stated in section
 3.8 with its source. The column means "verified here", and widening it to mean
 "read somewhere" would make every other cell in it worth less. `0x14` used to
-sit here for the same reason and no longer does: `PROFILE_LEV_PERIOD` in
-`src/profiles/profile_lev.h` is now that verified constant.
+sit here for the same reason and no longer does: `RADIANT_PROFILE_LEV_PERIOD` in
+`src/profiles/radiant_profile_lev.h` is now that verified constant.
 
 **`0x11` and `0x19` used to carry `—` and no longer do.** Both are now
 transcribed from their primary documents into named constants in
-`src/profiles/` (`PROFILE_FEC_PERIOD`, `PROFILE_ENV_PERIOD_4_HZ`,
-`PROFILE_ENV_PERIOD_0P5_HZ`) and both reach the acquisition table in
+`src/profiles/` (`RADIANT_PROFILE_FEC_PERIOD`, `RADIANT_PROFILE_ENV_PERIOD_4_HZ`,
+`RADIANT_PROFILE_ENV_PERIOD_0P5_HZ`) and both reach the acquisition table in
 `apps/dongle_thread/src/self_channels.c`, so the numbers are this project's own
 rather than something read somewhere.
 
 **`0x11`'s last column changed with `apps/treadmill` and `0x19`'s has not.**
-FE-C now has an encoder (`src/profiles/profile_fec_tx.c`) *and* a Python mirror,
+FE-C now has an encoder (`src/profiles/radiant_profile_fec_tx.c`) *and* a Python mirror,
 so `tools/ant_pages.py` is a genuine second opinion about those bytes and the
 three-copy vocabulary rule applies to `0x11` from here on. Environment `0x19`
 is still C-only and still has one copy. **`0x19`'s period cell is its default
@@ -177,7 +177,7 @@ The table above records each type's **default**. Three of them permit more than
 one rate. The heart-rate and bicycle-power sets live in `tools/ant_pages.py` as
 `HRM_PERIODS` and `BPWR_PERIODS`, cross-checked against
 `docs/profile-registry.md` by `scripts/check_profile_registry.py`; Environment's
-pair lives in `src/profiles/profile_env.h` and has no Python mirror to be
+pair lives in `src/profiles/radiant_profile_env.h` and has no Python mirror to be
 checked against.
 
 | Type | Rate | Period | Approx. |
@@ -241,10 +241,10 @@ ANT+'s loss tolerance: the instantaneous value is a convenience, the
 accumulator is what survives a lost packet.
 
 **Page `0x10` is now decoded in C as well as encoded**. The decoder lives
-in `src/profiles/profile_power_decode.c` and **not** in `profile_power.c`, which
-is a link-dependency decision rather than a filing one: `profile_power.c` is the
+in `src/profiles/radiant_profile_power_decode.c` and **not** in `radiant_profile_power.c`, which
+is a link-dependency decision rather than a filing one: `radiant_profile_power.c` is the
 master — page rotation, the ANT+ compatibility layer and RadiANT beacon
-insertion — so it reaches `profile_sched.c`, `profile_compat.c` and through it
+insertion — so it reaches `radiant_profile_sched.c`, `radiant_profile_compat.c` and through it
 `radiant_sec`. Linking that into a receive-only dongle to get one decoder would
 put a power-meter *transmitter* into an image whose whole job is to listen, by a
 linker decision nobody reviewed. The header is shared; only `.c` files create
@@ -455,14 +455,14 @@ speed_mps   = delta_revs * wheel_circumference_m * 1024 / delta_event_time
 Voltage is `coarse + fractional/256`.
 
 **Page 82 is implemented and every profile in this document gets it for free.**
-`profile_common_82()` in `src/profiles/profile_common.c`, scheduled through
+`radiant_profile_common_82()` in `src/profiles/radiant_profile_common.c`, scheduled through
 `common_82_every`, mirrored as `ant_pages.encode_common_82`. **No profile in
 this document spends a payload byte on battery state of charge**, because a page
 every ANT+ receiver already understands carries it.
 
 #### Page `0x54` (84) — Subfield Data
 
-Decoded. `profile_common_decode_84()` in `src/profiles/profile_common.c`,
+Decoded. `radiant_profile_common_decode_84()` in `src/profiles/radiant_profile_common.c`,
 surfaced onto the sample bus by `radiant/src/bridge/radiant_common_adapter.c`.
 Derived from the **primary** document — `ANT+ Common Data Pages`, D00001198
 Rev 3.1, §4 Table 4-1, §6.13 Tables 6-16 and 6-17, and the §6.13.1 worked
@@ -502,7 +502,7 @@ that file's "never dispatch on the payload" rule, and it is an exception
 because the specification says the payload is what carries the keying here.
 The range test is the whole range and not `== 0x54`: what Table 4-1 removes
 from device-type keying is `0x40`–`0x5D`, so a profile adapter must not see any
-of it. `PROFILE_COMMON_PAGE_RANGE_LAST` is `0x5D` and not `0x5E` — the table's
+of it. `RADIANT_PROFILE_COMMON_PAGE_RANGE_LAST` is `0x5D` and not `0x5E` — the table's
 own decimal column says 64–93.
 
 The consequence is that **every bound channel now feeds a second decoder on
@@ -604,8 +604,8 @@ Subpage 1 = temperature, `0x0A6B` = 2667 → **26.67 °C**; subpage 3 = humidity
 `0x19EA` = 6634 → **66.34 % RH**. A conformance vector from the primary
 document, which is exactly what this section previously said the page lacked.
 It is the acceptance test for the decoder and is transcribed as
-`PROFILE_COMMON_84_GOLDEN_TEMP_CENTI` / `_HUMID_CENTI` in
-`profile_common.h`, so the C test, the Python test and the header cannot drift
+`RADIANT_PROFILE_COMMON_84_GOLDEN_TEMP_CENTI` / `_HUMID_CENTI` in
+`radiant_profile_common.h`, so the C test, the Python test and the header cannot drift
 apart.
 
 ##### Three defects in Table 6-17, recorded rather than silently fixed
@@ -677,7 +677,7 @@ cadence below.
 
 ### 3.6 Light Electric Vehicle, device type `0x14`
 
-Implemented in `src/profiles/profile_lev.c` — every page below, both
+Implemented in `src/profiles/radiant_profile_lev.c` — every page below, both
 directions, plus the travel-mode mapping of Table 6-1 and a master driving the
 4-page rotation. **Recorded in full because it is also the reason the e-bike
 profile of section 7.1 was not pursued**, and because a claimant needs the
@@ -1014,7 +1014,7 @@ section 7.1 is why the gap does not justify a profile of its own.
 
 ### 3.7 Environment, device type `0x19`
 
-Decoded. `src/profiles/profile_env.c` (page codec, decode only) and
+Decoded. `src/profiles/radiant_profile_env.c` (page codec, decode only) and
 `radiant/src/bridge/radiant_env_adapter.c` (the sample-bus mapping);
 `apps/dongle_thread/src/self_channels.c` carries two acquisition rows for it.
 
@@ -1031,7 +1031,7 @@ Device type 25, RF 57. §5.1 permits **two** channel periods — 65535 counts
 8192 counts (4 Hz) — and page 0's transmission-info field declares which one a
 sensor defaults to. §5.1 also **recommends a 45 second receiver search
 timeout**, in as many words, "to allow sufficient time for a 0.5 Hz master to
-be found"; that is where `PROFILE_ENV_SEARCH_TIMEOUT_S` comes from, against
+be found"; that is where `RADIANT_PROFILE_ENV_SEARCH_TIMEOUT_S` comes from, against
 ANT's own 25 s default.
 
 | Page | Byte | Field |
@@ -1061,7 +1061,7 @@ ends with no sentinel in the gap at all.
 The two 24-hour fields are packed in **opposite directions** and share byte 4,
 they are twelve-bit signed and need explicit sign extension from bit 11, and
 they use a different scale *and* a different sentinel from the current reading
-in the same page. `profile_env.c` keeps all of that in two helpers so there is
+in the same page. `radiant_profile_env.c` keeps all of that in two helpers so there is
 exactly one place to be wrong about the packing.
 
 **It is a thermometer, and that is the fact the rest of the design turns on.**
@@ -1201,7 +1201,7 @@ several source headers; a renumbering to put this in tidy order would break
 those citations to buy nothing. It is an implemented profile, not a
 reference-only one.
 
-Implemented in `src/profiles/profile_rd.c` and mirrored in
+Implemented in `src/profiles/radiant_profile_rd.c` and mirrored in
 `tools/ant_pages.py`; the two are checked against the same vectors by
 `tools/test_ant_pages.py` and `radiant/tests/src/test_profile_rd.c`.
 
@@ -1227,7 +1227,7 @@ as 63.75 %.
 
 Percentage fields reserve 101–127 rather than leaving them undefined, so a
 sensor clamping a computed percentage clamps to 100 and not to the field
-maximum. `profile_rd.c` refuses to encode a reserved value rather than
+maximum. `radiant_profile_rd.c` refuses to encode a reserved value rather than
 transmitting it.
 
 #### Three layout traps
@@ -1275,9 +1275,9 @@ and 4 is 2461**. The document states it twice and both statements agree, so it
 is transcribed as a table rather than computed. Code 0 means the RD channel is
 not open, and — critically — **any value outside the enumeration must not be
 interpreted**, because on a strap without running dynamics that byte is
-ordinary manufacturer-specific data. `profile_rd_rf_enum_index()` returns 0 for
+ordinary manufacturer-specific data. `radiant_profile_rd_rf_enum_index()` returns 0 for
 both cases so that "do not interpret" is the default rather than something a
-caller remembers. This is also why `profile_hr.c` writes `0xFF` there.
+caller remembers. This is also why `radiant_profile_hr.c` writes `0xFF` there.
 
 #### The page numbers do not collide with the RadiANT compat pages
 
@@ -1297,7 +1297,7 @@ published today; **cadence and ground contact time are not**, and that is a
 vocabulary gap rather than a decoder gap — see `docs/radiant-bridge.md` and the
 note in that adapter's header. Nothing is silently dropped: the decoder parses
 every field, and the two unpublished ones are readable from
-`struct profile_rd_metrics` by any caller that wants them before the vocabulary
+`struct radiant_profile_rd_metrics` by any caller that wants them before the vocabulary
 question is settled.
 
 #### Independent corroboration: the HRM 600's BLE side, and why it does not touch this section
@@ -1337,7 +1337,7 @@ ANT+ ancestry:
 
 Two independent reverse-engineering efforts against two unrelated transports
 recovering the same seven scale factors is strong corroboration that
-`profile_rd.c`'s wire-scale constants are right, without being a second source
+`radiant_profile_rd.c`'s wire-scale constants are right, without being a second source
 for anything this section states about ANT+ specifically — the BLE schema
 names its fields differently and carries them through protobuf, not through an
 8-byte ANT+ payload, so there is no byte offset or bit-packing fact to import
@@ -1378,8 +1378,8 @@ Table 9-1 and table 9-9 each carry a "Sequence #" byte, and the document is
 explicit both draw from the SAME counter: an audio command, a generic command,
 then another audio command are sequence numbers N, N+1, N+2. A node emitting
 both page types owns one counter and both encoders draw from it —
-`profile_controls_send_av()` and `_send_generic()` share
-`struct profile_controls::sequence`, and a node with two independent counters
+`radiant_profile_controls_send_av()` and `_send_generic()` share
+`struct radiant_profile_controls::sequence`, and a node with two independent counters
 would silently disagree with the profile the moment it used both page types in
 one session.
 
@@ -1396,7 +1396,7 @@ When a generic-command exchange has an odd number of real commands, the
 padding packet's command field must be `0xFFFF` and its serial/manufacturer
 bytes must equal the PRECEDING packet's — a "No Command" packet must not itself
 look like a new command to a receiver differencing sequence numbers, so it also
-does not advance the sequence counter. `profile_controls_encode_generic()`
+does not advance the sequence counter. `radiant_profile_controls_encode_generic()`
 enforces this: sequence increments on every command except `0xFFFF`.
 
 **What is deliberately not modelled**: audio-device-class support tiers
@@ -1412,7 +1412,7 @@ device number.** Pages 1, 2, 16 and 17 all carry it in byte `[1]` bits 0-4
 (reserved top 3 bits `0b111`). Indices are assigned sequentially from 0 and are
 **never reused or shifted** when an asset is removed: the document's own rule
 is that a removed index's pages simply stop being sent, leaving a hole rather
-than a renumbering. `struct profile_tracker` therefore holds 32 independent
+than a renumbering. `struct radiant_profile_tracker` therefore holds 32 independent
 asset slots, addressed by index, not one sensor's worth of state.
 
 **Location is split across TWO pages, and the split is not symmetric.** Page 1
@@ -1434,7 +1434,7 @@ so neither device needs π:**
 | Bradians (bearing) | `value = degrees * 256 / 360` | unsigned 8-bit, 0-255 = 0-360° |
 
 Both are stored as the raw wire integer by this module; degree conversion is
-the caller's, the same split `profile_rd.h` draws between wire scale and
+the caller's, the same split `radiant_profile_rd.h` draws between wire scale and
 physical units.
 
 **The asset situation enum is asset-type-dependent.** Table 7-5 defines five
@@ -1455,7 +1455,7 @@ is implemented here.
 
 Decoded **and** encoded since `apps/treadmill`; the two halves are separate
 translation units and the sub-section below covers the transmit one. The
-receive half is `src/profiles/profile_fec.c`, surfaced by
+receive half is `src/profiles/radiant_profile_fec.c`, surfaced by
 `radiant/src/bridge/radiant_power_adapter.c`. `tools/ant_pages.py` mirrors
 both halves (its FE-C section, `FEC_DEVICE_TYPE` and the `PAGE_FEC_*` pages),
 so the three-copy vocabulary rule applies to `0x11`. `tools/test_compat_capture.py`
@@ -1541,15 +1541,15 @@ for a workout timer, wrong as a basis for integrating power over time — which 
 why `radiant_power_adapter.c` integrates against the bridge's own `t_us`
 instead.
 
-#### The transmit half, and the treadmill pages — `src/profiles/profile_fec_tx.c`
+#### The transmit half, and the treadmill pages — `src/profiles/radiant_profile_fec_tx.c`
 
 `apps/treadmill` made this project fitness equipment as well as a receiver, so
 the paragraph that used to stand here ("there is no encoder either — nothing in
 this tree emulates fitness equipment") is retired. What replaced it is a
 **second translation unit**, deliberately not an extension of
-`profile_fec.c`: a receiver links the decoder and a treadmill links the
-encoder, which is the same split `profile_power_decode.c` makes against
-`profile_power.c`, and the linker is what enforces it.
+`radiant_profile_fec.c`: a receiver links the decoder and a treadmill links the
+encoder, which is the same split `radiant_profile_power_decode.c` makes against
+`radiant_profile_power.c`, and the linker is what enforces it.
 
 | Page | Name | What it carries |
 |---|---|---|
@@ -1588,7 +1588,7 @@ ranges and different sentinels.** This is the trap of the transmit half:
 produces an error anywhere.
 
 **The interleave is a spec requirement, and it is not the 119/120/121 cadence
-`profile_sched.c` implements.** §10.1 (p.68): page 16 twice consecutively every
+`radiant_profile_sched.c` implements.** §10.1 (p.68): page 16 twice consecutively every
 4 messages *or* once every 5th; the equipment-specific page (19 for a
 treadmill) at least once every 5; pages 17 and 18 at least once every 20;
 common 80 and 81 as **two consecutive** background pages every **66**. 66 is not
@@ -1610,7 +1610,7 @@ and the equipment-specific pages for the other machine types (20–24).
 
 ### 3.17 Stride-Based Speed and Distance (SDM), device type `0x7C`
 
-Implemented (encode) in `src/profiles/profile_sdm.c`, mirrored in
+Implemented (encode) in `src/profiles/radiant_profile_sdm.c`, mirrored in
 `tools/ant_pages.py`.
 
 **Why a treadmill emits this beside FE-C.** FE-C is what a control-capable head
@@ -1653,7 +1653,7 @@ than one channel with a wider page set.
 **The interleave** is `1, 1, X, X` repeating for 64 messages, then pages 80 and
 81 twice consecutively: a 66-message cycle, where X alternates between page 2
 and page 3 group by group. As with FE-C, 66 is not 121, so the common pair
-rides `profile_sched.c`'s client seam rather than its built-in cadence.
+rides `radiant_profile_sched.c`'s client seam rather than its built-in cadence.
 
 **Status byte** (`[7]` of pages 2 and 3): bits 7..6 location, 5..4 battery,
 3..2 health, 1..0 use state. A treadmill reports location **Other** — it is not
@@ -1810,8 +1810,8 @@ The consequence is stated rather than hidden: **this profile cannot ship until
 the security layer does.** `docs/radiant-security.md` owns that layer. Its
 descriptor authentication frame — without which an attacker who forges one
 descriptor frame gets wrong glucose numbers out of correctly MAC'd packets — is
-implemented (2026-11-07, `profile_desc_encode_auth()` and
-`profile_sched_init_auth()`), and this profile's schema is the one its shared
+implemented (2026-11-07, `radiant_profile_desc_encode_auth()` and
+`radiant_profile_sched_init_auth()`), and this profile's schema is the one its shared
 test vectors are built on. What remains is a node application that seals its
 descriptor, reseals it on every epoch change, and a receiver that gates every
 reading on its own verdict; no `0x61` node exists yet. That is the honest
@@ -2212,16 +2212,16 @@ is not recycled.
 
 | File | What it is |
 |---|---|
-| `src/profiles/profile_hr.c` | ANT+ heart rate `0x78` |
-| `src/profiles/profile_power.c` | ANT+ bicycle power `0x0B`, transmit side |
-| `src/profiles/profile_power_decode.c` | ANT+ bicycle power page `0x10`, receive side — its own translation unit so a receiver does not link a transmitter (§3.1) |
-| `src/profiles/profile_fec.c` | ANT+ fitness equipment `0x11`, pages 16 and 25, decode only (§3.16) |
-| `src/profiles/profile_fec_tx.c` | ANT+ fitness equipment `0x11`, the **transmit** half: a treadmill's pages 16, 17, 18, 19, 54 and 71, plus decoders for control pages 48–51, 55 and 70 (§3.16) |
-| `src/profiles/profile_sdm.c` | ANT+ stride-based speed and distance `0x7C`, pages 1, 2, 3, 16 and 22 (§3.17) |
-| `src/profiles/profile_env.c` | ANT+ Environment `0x19`, pages 0 and 1, decode only (§3.7) |
-| `src/profiles/profile_common.c` | Common pages 80, 81, 82 (encode) and 84 (decode) — two provenances, kept separate (§3.4) |
-| `src/profiles/profile_telemetry.c` | The `0x60` envelope, and therefore every profile in sections 5 and 6 |
-| `src/profiles/profile_bits.c` | The MSB-first packer whose vectors are the shared contract |
+| `src/profiles/radiant_profile_hr.c` | ANT+ heart rate `0x78` |
+| `src/profiles/radiant_profile_power.c` | ANT+ bicycle power `0x0B`, transmit side |
+| `src/profiles/radiant_profile_power_decode.c` | ANT+ bicycle power page `0x10`, receive side — its own translation unit so a receiver does not link a transmitter (§3.1) |
+| `src/profiles/radiant_profile_fec.c` | ANT+ fitness equipment `0x11`, pages 16 and 25, decode only (§3.16) |
+| `src/profiles/radiant_profile_fec_tx.c` | ANT+ fitness equipment `0x11`, the **transmit** half: a treadmill's pages 16, 17, 18, 19, 54 and 71, plus decoders for control pages 48–51, 55 and 70 (§3.16) |
+| `src/profiles/radiant_profile_sdm.c` | ANT+ stride-based speed and distance `0x7C`, pages 1, 2, 3, 16 and 22 (§3.17) |
+| `src/profiles/radiant_profile_env.c` | ANT+ Environment `0x19`, pages 0 and 1, decode only (§3.7) |
+| `src/profiles/radiant_profile_common.c` | Common pages 80, 81, 82 (encode) and 84 (decode) — two provenances, kept separate (§3.4) |
+| `src/profiles/radiant_profile_telemetry.c` | The `0x60` envelope, and therefore every profile in sections 5 and 6 |
+| `src/profiles/radiant_profile_bits.c` | The MSB-first packer whose vectors are the shared contract |
 | `tools/ant_pages.py` | All of the above, mirrored, plus the field-type vocabulary |
 
 A capture of the C stream is committed as `tools/vectors/compat-hr.antcap` and

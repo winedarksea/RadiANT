@@ -2,11 +2,11 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * The seam's plumbing: registration, the node's 1/1024 s clock, and the one
- * hop from "an ISR saw a beat" to "the workqueue may touch profile_hr".
+ * hop from "an ISR saw a beat" to "the workqueue may touch radiant_profile_hr".
  *
  * Read src/hrm_sensor.h first - the reasoning for the shape is there, and the
  * only thing worth repeating here is the invariant this file is responsible
- * for: NOTHING in the report_* path touches profile_hr, the BLE stack, or any
+ * for: NOTHING in the report_* path touches radiant_profile_hr, the BLE stack, or any
  * kernel object that can block. One atomic store, one k_work_submit(), return.
  */
 
@@ -15,7 +15,7 @@
 #include <errno.h>
 
 #include "hrm_sensor.h"
-#include "profile_hr.h"
+#include "radiant_profile_hr.h"
 
 LOG_MODULE_DECLARE(hrm, CONFIG_HRM_LOG_LEVEL);
 
@@ -46,7 +46,7 @@ static uint16_t producer_seq;
 /* The last rate the source reported. Its own word: a rate report and a beat are
  * independent events, and a source that only ever computes a rate (no edge
  * detector of its own to expose) must still work. */
-static atomic_t reported_bpm = ATOMIC_INIT(PROFILE_HR_INVALID_BPM);
+static atomic_t reported_bpm = ATOMIC_INIT(RADIANT_PROFILE_HR_INVALID_BPM);
 
 static void beat_work_fn(struct k_work *w);
 static K_WORK_DEFINE(beat_work, beat_work_fn);
@@ -163,7 +163,7 @@ static void beat_work_fn(struct k_work *w)
 {
 	/* Touched only here, on the system workqueue. */
 	static uint16_t consumed_seq;
-	static uint8_t applied_bpm = PROFILE_HR_INVALID_BPM;
+	static uint8_t applied_bpm = RADIANT_PROFILE_HR_INVALID_BPM;
 
 	uint32_t word = (uint32_t)atomic_get(&beat_word);
 	uint16_t seq = (uint16_t)(word >> 16);

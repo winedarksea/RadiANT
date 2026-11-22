@@ -9,7 +9,7 @@
  *   control-capable head unit pairs with; SDM (0x7C, 8134 counts) is what
  *   anything that only knows foot pods pairs with, Zwift Run included -
  *   different device types, different periods, no shared page space, so two
- *   channels and two profile_sched instances. CONFIG_TREADMILL_ANT_SDM turns
+ *   channels and two radiant_profile_sched instances. CONFIG_TREADMILL_ANT_SDM turns
  *   the second off, since two masters beating at 4.00 and 4.03 Hz beside BLE
  *   is more contention than anything this project has measured.
  *
@@ -19,7 +19,7 @@
  *   over either transport is immediately visible on the other. FE-C §8.8
  *   makes the page 71 command status an obligation, not a courtesy, which is
  *   why every branch of apply_control_page() - including refusals - ends in
- *   profile_fec_tx_command_answered().
+ *   radiant_profile_fec_tx_command_answered().
  *
  *   NO SUPPRESSION RULE, BUT A COMMAND OWNER. Unlike apps/hrm_ble (which
  *   stops ANT+ while a phone is connected), a treadmill is expected to serve
@@ -52,11 +52,11 @@
 
 #include <radiant/radiant_ant.h>
 #include <radiant/radiant_wire.h>
-#include "node_ident.h"
-#include "profile_common.h"
-#include "profile_fec.h"
-#include "profile_fec_tx.h"
-#include "profile_sdm.h"
+#include "radiant_node_ident.h"
+#include "radiant_profile_common.h"
+#include "radiant_profile_fec.h"
+#include "radiant_profile_fec_tx.h"
+#include "radiant_profile_sdm.h"
 #include "treadmill_source.h"
 #include "treadmill_state.h"
 
@@ -100,9 +100,9 @@ static const uint8_t ant_plus_key[8] = {
 #define SDM_LATENCY_32 ((NODE_TICK_MS * 32u) / 1000u)
 
 static struct treadmill_state  state;
-static struct profile_fec_tx   fec;
+static struct radiant_profile_fec_tx   fec;
 #if defined(CONFIG_TREADMILL_ANT_SDM)
-static struct profile_sdm      sdm;
+static struct radiant_profile_sdm      sdm;
 #endif
 
 static void node_tick_fn(struct k_work *w);
@@ -115,12 +115,12 @@ static K_WORK_DELAYABLE_DEFINE(node_tick, node_tick_fn);
 
 static void publish_fec(void)
 {
-	struct profile_fec_general   g;
-	struct profile_fec_settings  s;
-	struct profile_fec_treadmill t;
+	struct radiant_profile_fec_general   g;
+	struct radiant_profile_fec_settings  s;
+	struct radiant_profile_fec_treadmill t;
 
 	memset(&g, 0, sizeof(g));
-	g.equipment_type = PROFILE_FEC_TYPE_TREADMILL;
+	g.equipment_type = RADIANT_PROFILE_FEC_TYPE_TREADMILL;
 	/* 0.25 s units in a u8, so it rolls every 64 s - and is MEANT to. A
 	 * receiver differences it. */
 	g.elapsed_time_qs = (uint8_t)((state.elapsed_ms / 250u) & 0xFFu);
@@ -131,11 +131,11 @@ static void publish_fec(void)
 	g.speed_virtual = false; /* a belt speed is a measurement of something */
 	g.heart_rate_bpm = state.heart_rate_bpm;
 	g.heart_rate_valid = (state.heart_rate_bpm != TREADMILL_HR_NONE);
-	g.hr_source = state.hr_from_ant ? PROFILE_FEC_HR_SRC_ANTPLUS
-					: PROFILE_FEC_HR_SRC_INVALID;
+	g.hr_source = state.hr_from_ant ? RADIANT_PROFILE_FEC_HR_SRC_ANTPLUS
+					: RADIANT_PROFILE_FEC_HR_SRC_INVALID;
 	g.state = state.state;
 	g.lap_toggle = state.lap_toggle;
-	profile_fec_tx_set_general(&fec, &g);
+	radiant_profile_fec_tx_set_general(&fec, &g);
 
 	memset(&s, 0, sizeof(s));
 	s.cycle_length_cm = treadmill_stride_length_cm(state.distance_mm,
@@ -151,7 +151,7 @@ static void publish_fec(void)
 	s.resistance_valid = false; /* a treadmill has no resistance level */
 	s.state = state.state;
 	s.lap_toggle = state.lap_toggle;
-	profile_fec_tx_set_settings(&fec, &s);
+	radiant_profile_fec_tx_set_settings(&fec, &s);
 
 	memset(&t, 0, sizeof(t));
 	t.cadence_strides_min =
@@ -161,15 +161,15 @@ static void publish_fec(void)
 	 * count UP - the negative one is a magnitude of descent. */
 	t.neg_vertical_dm = (uint8_t)((state.neg_vertical_mm / 100u) & 0xFFu);
 	t.pos_vertical_dm = (uint8_t)((state.pos_vertical_mm / 100u) & 0xFFu);
-	t.capabilities = PROFILE_FEC_TREADMILL_CAP_NEG_VERTICAL |
-			 PROFILE_FEC_TREADMILL_CAP_POS_VERTICAL;
+	t.capabilities = RADIANT_PROFILE_FEC_TREADMILL_CAP_NEG_VERTICAL |
+			 RADIANT_PROFILE_FEC_TREADMILL_CAP_POS_VERTICAL;
 	t.state = state.state;
 	t.lap_toggle = state.lap_toggle;
-	profile_fec_tx_set_treadmill(&fec, &t);
+	radiant_profile_fec_tx_set_treadmill(&fec, &t);
 
 #if defined(CONFIG_TREADMILL_FEC_METABOLIC)
 	{
-		struct profile_fec_metabolic m;
+		struct radiant_profile_fec_metabolic m;
 
 		memset(&m, 0, sizeof(m));
 		/* The tick's own rate, not a delta of the total: publish() runs
@@ -187,10 +187,10 @@ static void publish_fec(void)
 		 * belt in a way that a calorie counter on a console is not. */
 		m.mets_valid = false;
 		m.calories = (uint8_t)((state.energy_mkcal / 1000u) & 0xFFu);
-		m.capabilities = PROFILE_FEC_METABOLIC_CAP_CALORIES;
+		m.capabilities = RADIANT_PROFILE_FEC_METABOLIC_CAP_CALORIES;
 		m.state = state.state;
 		m.lap_toggle = state.lap_toggle;
-		profile_fec_tx_set_metabolic(&fec, &m);
+		radiant_profile_fec_tx_set_metabolic(&fec, &m);
 	}
 #endif
 }
@@ -198,14 +198,14 @@ static void publish_fec(void)
 #if defined(CONFIG_TREADMILL_ANT_SDM)
 static void publish_sdm(void)
 {
-	profile_sdm_set_motion(&sdm, state.belt_speed_mm_s,
+	radiant_profile_sdm_set_motion(&sdm, state.belt_speed_mm_s,
 			       treadmill_cadence_strides_min(
 				       state.cadence_strides_min_16),
 			       (uint8_t)(state.cadence_strides_min_16 & 0x0Fu),
 			       state.state == TREADMILL_STATE_IN_USE);
-	profile_sdm_set_accumulators(&sdm, state.elapsed_ms, state.distance_mm,
+	radiant_profile_sdm_set_accumulators(&sdm, state.elapsed_ms, state.distance_mm,
 				     state.strides, SDM_LATENCY_32);
-	profile_sdm_set_calories(&sdm,
+	radiant_profile_sdm_set_calories(&sdm,
 				 (uint8_t)((state.energy_mkcal / 1000u) & 0xFFu));
 }
 #endif
@@ -265,12 +265,12 @@ void treadmill_node_deliver(uint32_t strides)
 static uint8_t fec_status_for(int rc)
 {
 	if (rc == 0) {
-		return PROFILE_FEC_CMD_STATUS_PASS;
+		return RADIANT_PROFILE_FEC_CMD_STATUS_PASS;
 	}
 	if (rc == -ENOTSUP) {
-		return PROFILE_FEC_CMD_STATUS_NOT_SUPPORTED;
+		return RADIANT_PROFILE_FEC_CMD_STATUS_NOT_SUPPORTED;
 	}
-	return PROFILE_FEC_CMD_STATUS_FAIL;
+	return RADIANT_PROFILE_FEC_CMD_STATUS_FAIL;
 }
 
 /*
@@ -288,25 +288,25 @@ static uint8_t fec_sequence;
 #if defined(CONFIG_TREADMILL_CTRL_POLICY_EXCLUSIVE)
 /*
  * treadmill_control.h spells these two page numbers itself so the ztest that
- * drives the policy does not have to pull profile_fec_tx.h in. This is the
+ * drives the policy does not have to pull radiant_profile_fec_tx.h in. This is the
  * cross-check that keeps the two spellings from drifting - the same guard
  * treadmill_state.c puts on its copy of the FE state values.
  */
 _Static_assert(TREADMILL_CTRL_PAGE_TRACK_RESISTANCE ==
-		       PROFILE_FEC_PAGE_TRACK_RESISTANCE,
+		       RADIANT_PROFILE_FEC_PAGE_TRACK_RESISTANCE,
 	       "treadmill_control.h's copy of FE-C page 51 has drifted from "
-	       "profile_fec_tx.h's");
+	       "radiant_profile_fec_tx.h's");
 _Static_assert(TREADMILL_CTRL_PAGE_WIND_RESISTANCE ==
-		       PROFILE_FEC_PAGE_WIND_RESISTANCE,
+		       RADIANT_PROFILE_FEC_PAGE_WIND_RESISTANCE,
 	       "treadmill_control.h's copy of FE-C page 50 has drifted from "
-	       "profile_fec_tx.h's");
+	       "radiant_profile_fec_tx.h's");
 #endif
 
 /*
  * One acknowledged control page, ON THE SYSTEM WORKQUEUE.
  *
  * `body` is the eight-byte payload. EVERY path through this function ends in
- * profile_fec_tx_command_answered() - including the unrecognised-page path,
+ * radiant_profile_fec_tx_command_answered() - including the unrecognised-page path,
  * because §8.8 wants a page 71 saying NOT_SUPPORTED rather than a silence, and
  * silence is what a controller reports as a broken machine.
  *
@@ -315,7 +315,7 @@ _Static_assert(TREADMILL_CTRL_PAGE_WIND_RESISTANCE ==
  */
 static void apply_control_page(const uint8_t *body)
 {
-	uint8_t status = PROFILE_FEC_CMD_STATUS_NOT_SUPPORTED;
+	uint8_t status = RADIANT_PROFILE_FEC_CMD_STATUS_NOT_SUPPORTED;
 	uint8_t page = body[0];
 
 	fec_sequence++;
@@ -332,20 +332,20 @@ static void apply_control_page(const uint8_t *body)
 	    treadmill_control_claim(TREADMILL_CTRL_ANT, false,
 				    (uint32_t)k_uptime_get_32()) != 0) {
 		LOG_INF("FE-C page %u refused: a BLE client holds control", page);
-		profile_fec_tx_command_answered(&fec, page, fec_sequence,
-						PROFILE_FEC_CMD_STATUS_REJECTED,
+		radiant_profile_fec_tx_command_answered(&fec, page, fec_sequence,
+						RADIANT_PROFILE_FEC_CMD_STATUS_REJECTED,
 						&body[4]);
 		return;
 	}
 #endif
 
 	switch (page) {
-	case PROFILE_FEC_PAGE_TRACK_RESISTANCE: {
-		struct profile_fec_cmd_track_resistance cmd;
+	case RADIANT_PROFILE_FEC_PAGE_TRACK_RESISTANCE: {
+		struct radiant_profile_fec_cmd_track_resistance cmd;
 		int32_t                                 adopted;
 		int                                     rc;
 
-		if (profile_fec_decode_track_resistance(body, &cmd) != 0) {
+		if (radiant_profile_fec_decode_track_resistance(body, &cmd) != 0) {
 			break;
 		}
 		/* cmd.grade_centi_pct is already 0 when the controller sent the
@@ -358,62 +358,62 @@ static void apply_control_page(const uint8_t *body)
 		status = fec_status_for(rc);
 		LOG_INF("FE-C page 51: grade %d.%02d %% -> %s",
 			adopted / 100, (adopted < 0 ? -adopted : adopted) % 100,
-			(status == PROFILE_FEC_CMD_STATUS_PASS) ? "pass"
+			(status == RADIANT_PROFILE_FEC_CMD_STATUS_PASS) ? "pass"
 								: "refused");
 		break;
 	}
 
-	case PROFILE_FEC_PAGE_WIND_RESISTANCE:
+	case RADIANT_PROFILE_FEC_PAGE_WIND_RESISTANCE:
 		/* Part of the simulation-mode parameter set, and a treadmill
 		 * has nothing to do with any of it. Accepted and acknowledged
 		 * rather than refused: refusing one parameter of a set the
 		 * machine advertises support for is how a controller decides
 		 * simulation mode is broken and stops sending page 51 too. */
-		status = PROFILE_FEC_CMD_STATUS_PASS;
+		status = RADIANT_PROFILE_FEC_CMD_STATUS_PASS;
 		break;
 
-	case PROFILE_FEC_PAGE_USER_CONFIG: {
-		struct profile_fec_cmd_user_config cmd;
+	case RADIANT_PROFILE_FEC_PAGE_USER_CONFIG: {
+		struct radiant_profile_fec_cmd_user_config cmd;
 
-		if (profile_fec_decode_user_config(body, &cmd) == 0 &&
+		if (radiant_profile_fec_decode_user_config(body, &cmd) == 0 &&
 		    cmd.user_weight_valid) {
 			treadmill_state_set_user_mass(&state,
 						      cmd.user_weight_10g);
-			status = PROFILE_FEC_CMD_STATUS_PASS;
+			status = RADIANT_PROFILE_FEC_CMD_STATUS_PASS;
 		} else {
-			status = PROFILE_FEC_CMD_STATUS_FAIL;
+			status = RADIANT_PROFILE_FEC_CMD_STATUS_FAIL;
 		}
 		break;
 	}
 
-	case PROFILE_FEC_PAGE_REQUEST: {
-		struct profile_fec_cmd_request cmd;
+	case RADIANT_PROFILE_FEC_PAGE_REQUEST: {
+		struct radiant_profile_fec_cmd_request cmd;
 
-		if (profile_fec_decode_request(body, &cmd) == 0 &&
-		    profile_fec_tx_request(&fec, cmd.page, cmd.tx_count) == 0) {
-			status = PROFILE_FEC_CMD_STATUS_PASS;
+		if (radiant_profile_fec_decode_request(body, &cmd) == 0 &&
+		    radiant_profile_fec_tx_request(&fec, cmd.page, cmd.tx_count) == 0) {
+			status = RADIANT_PROFILE_FEC_CMD_STATUS_PASS;
 		}
 		break;
 	}
 
-	case PROFILE_FEC_PAGE_BASIC_RESISTANCE:
-	case PROFILE_FEC_PAGE_TARGET_POWER:
+	case RADIANT_PROFILE_FEC_PAGE_BASIC_RESISTANCE:
+	case RADIANT_PROFILE_FEC_PAGE_TARGET_POWER:
 		/* Page 54 declares neither Basic Resistance mode nor Target
 		 * Power mode, so a conforming controller never sends these -
 		 * and one that does gets the answer the declaration implies.
 		 * The pairing is the point: declaring a capability and
 		 * honouring its command page go together in both directions. */
-		status = PROFILE_FEC_CMD_STATUS_NOT_SUPPORTED;
+		status = RADIANT_PROFILE_FEC_CMD_STATUS_NOT_SUPPORTED;
 		break;
 
 	default:
-		status = PROFILE_FEC_CMD_STATUS_NOT_SUPPORTED;
+		status = RADIANT_PROFILE_FEC_CMD_STATUS_NOT_SUPPORTED;
 		break;
 	}
 
 	/* Bytes [4..7] of the command, echoed position for position, so a
 	 * controller reads page 51's grade back at the offsets it wrote it. */
-	profile_fec_tx_command_answered(&fec, page, fec_sequence, status,
+	radiant_profile_fec_tx_command_answered(&fec, page, fec_sequence, status,
 					&body[4]);
 }
 
@@ -433,16 +433,16 @@ static void apply_control_page(const uint8_t *body)
  * can be kernel-free and therefore testable.
  *
  * THE HOP IS INVISIBLE ON AIR. Page 71 is not sent from here - it is staged
- * into profile_fec_tx and goes out on the next data slot, up to 250 ms later
+ * into radiant_profile_fec_tx and goes out on the next data slot, up to 250 ms later
  * either way. A workqueue turnaround is microseconds against that.
  *
- * IT ALSO DOES NOT CHANGE profile_fec_tx's CONTEXT RULES, which is worth
+ * IT ALSO DOES NOT CHANGE radiant_profile_fec_tx's CONTEXT RULES, which is worth
  * checking rather than assuming, because it moves a caller across a thread.
- * profile_fec_tx.h states them: "all plain stores: no locks, and reached only
+ * radiant_profile_fec_tx.h states them: "all plain stores: no locks, and reached only
  * from the system workqueue and the radio callback". Before this, the answer
  * and the request were made from the radio callback and the page setters from
  * the workqueue; now every setter is on the workqueue and only
- * profile_fec_tx_next() is on the callback. That is the same two contexts the
+ * radiant_profile_fec_tx_next() is on the callback. That is the same two contexts the
  * header allows, with the writers consolidated onto one of them rather than
  * split across both - strictly the tidier half of what was already sanctioned.
  * "Plain stores" is safe for the WRITERS only because the workqueue is
@@ -454,7 +454,7 @@ static void apply_control_page(const uint8_t *body)
  * consumer runs in microseconds, so the depth is never reached in practice.
  * What the ring buys is that no COMMAND is lost or reordered on the way to
  * apply_control_page(). It does NOT buy one page 71 per command: page 71 is a
- * single "last received command" slot in profile_fec_tx, so two commands
+ * single "last received command" slot in radiant_profile_fec_tx, so two commands
  * answered before the next slot 3 put only the second answer on the air -
  * which is what that page means. Four entries costs 32 bytes. The drop path
  * below is kept anyway, and still answers, because a command that is dropped
@@ -512,9 +512,9 @@ static void fec_cmd_work_fn(struct k_work *w)
 			fec_sequence++;
 			LOG_WRN("FE-C page %u dropped: the command queue was "
 				"full", drop_page);
-			profile_fec_tx_command_answered(
+			radiant_profile_fec_tx_command_answered(
 				&fec, drop_page, fec_sequence,
-				PROFILE_FEC_CMD_STATUS_FAIL, no_echo);
+				RADIANT_PROFILE_FEC_CMD_STATUS_FAIL, no_echo);
 			continue;
 		}
 		break;
@@ -610,16 +610,16 @@ void treadmill_node_heart_rate(uint8_t bpm)
 static void load_fec_page(void)
 {
 	uint8_t body[8];
-	enum profile_slot_kind kind;
+	enum radiant_profile_slot_kind kind;
 
 	/* The event thread is preemptible and publish() runs on the
 	 * cooperative workqueue, which can therefore land mid-encode and give
 	 * this page half old, half new fields. Lock the encode only - never
 	 * the send, which takes a mutex. */
 	k_sched_lock();
-	kind = profile_fec_tx_next(&fec, body);
+	kind = radiant_profile_fec_tx_next(&fec, body);
 	k_sched_unlock();
-	if (kind == PROFILE_SLOT_IDLE) {
+	if (kind == RADIANT_PROFILE_SLOT_IDLE) {
 		return;
 	}
 	(void)radiant_ant_broadcast_message_tx(FEC_CHANNEL, sizeof(body), body);
@@ -629,14 +629,14 @@ static void load_fec_page(void)
 static void load_sdm_page(void)
 {
 	uint8_t body[8];
-	enum profile_slot_kind kind;
+	enum radiant_profile_slot_kind kind;
 
 	/* As load_fec_page(): SDM page 1's distance_m/distance_frac pair torn
 	 * across a metre roll-over reads as a 255 m jump. */
 	k_sched_lock();
-	kind = profile_sdm_next(&sdm, body);
+	kind = radiant_profile_sdm_next(&sdm, body);
 	k_sched_unlock();
-	if (kind == PROFILE_SLOT_IDLE) {
+	if (kind == RADIANT_PROFILE_SLOT_IDLE) {
 		return;
 	}
 	(void)radiant_ant_broadcast_message_tx(SDM_CHANNEL, sizeof(body), body);
@@ -775,7 +775,7 @@ static void node_tick_fn(struct k_work *w)
 	k_work_schedule(&node_tick, K_MSEC(NODE_TICK_MS));
 }
 
-static void fill_common_id(struct profile_common_id *id, uint16_t devnum)
+static void fill_common_id(struct radiant_profile_common_id *id, uint16_t devnum)
 {
 	/*
 	 * The common-page identity (0x50/0x51), not the ANT channel id -
@@ -793,13 +793,13 @@ static void fill_common_id(struct profile_common_id *id, uint16_t devnum)
 	id->manufacturer_id = CONFIG_TREADMILL_MANUFACTURER_ID;
 	id->model_number = 1u;
 	id->sw_revision_main = 1u;
-	id->sw_revision_supplemental = PROFILE_COMMON_INVALID_U8;
+	id->sw_revision_supplemental = RADIANT_PROFILE_COMMON_INVALID_U8;
 	id->serial_number = devnum;
 }
 
 int main(void)
 {
-	struct profile_fec_tx_cfg fec_cfg;
+	struct radiant_profile_fec_tx_cfg fec_cfg;
 	uint16_t                  devnum = CONFIG_TREADMILL_DEVICE_NUMBER;
 	int                       err;
 
@@ -824,7 +824,7 @@ int main(void)
 
 	/*
 	 * Device number from the identity record (ADR 0009). On the first boot
-	 * of a part with no record, node_ident_boot() generates K_dev from the
+	 * of a part with no record, radiant_node_ident_boot() generates K_dev from the
 	 * on-chip TRNG and stores it first (ADR 0020), so every treadmill
 	 * flashed from one build gets its own number - which a gym needs.
 	 *
@@ -833,18 +833,18 @@ int main(void)
 	 * built from the same image shares one identity, which for a gym is
 	 * fatal. See docs/treadmill-reference-design.md.
 	 */
-	err = node_ident_boot();
+	err = radiant_node_ident_boot();
 	if (err == 0) {
 		uint16_t d;
 
-		if (node_ident_devnum(&d) == 0 && d != 0u) {
+		if (radiant_node_ident_devnum(&d) == 0 && d != 0u) {
 			devnum = d;
 			LOG_INF("device number %u from the identity record", d);
 		}
 	} else {
 		LOG_ERR("identity boot failed: %s (%d); falling back to Kconfig "
 			"device number %u, no transforms",
-			node_ident_strerror(err), err, devnum);
+			radiant_node_ident_strerror(err), err, devnum);
 	}
 
 	treadmill_state_init(&state);
@@ -855,7 +855,7 @@ int main(void)
 
 	memset(&fec_cfg, 0, sizeof(fec_cfg));
 	fill_common_id(&fec_cfg.id, devnum);
-	fec_cfg.equipment_type = PROFILE_FEC_TYPE_TREADMILL;
+	fec_cfg.equipment_type = RADIANT_PROFILE_FEC_TYPE_TREADMILL;
 	/*
 	 * SIMULATION MODE IS WHAT UNLOCKS PAGE 51, and declaring it is a claim
 	 * this node has to be able to keep: a controller reads page 54, sees
@@ -864,46 +864,46 @@ int main(void)
 	 * machine whose source returns -ENOTSUP from set_incline() should clear
 	 * it here as well as answering NOT_SUPPORTED.
 	 */
-	fec_cfg.caps.capabilities = PROFILE_FEC_CAP_SIMULATION;
+	fec_cfg.caps.capabilities = RADIANT_PROFILE_FEC_CAP_SIMULATION;
 	fec_cfg.caps.max_resistance_valid = false;
 #if defined(CONFIG_TREADMILL_FEC_METABOLIC)
 	fec_cfg.metabolic = true;
 #endif
 
-	err = profile_fec_tx_init(&fec, &fec_cfg);
+	err = radiant_profile_fec_tx_init(&fec, &fec_cfg);
 	if (err != 0) {
-		LOG_ERR("profile_fec_tx_init: %d", err);
+		LOG_ERR("radiant_profile_fec_tx_init: %d", err);
 		return 0;
 	}
 
 #if defined(CONFIG_TREADMILL_ANT_SDM)
 	{
-		struct profile_sdm_cfg sdm_cfg;
+		struct radiant_profile_sdm_cfg sdm_cfg;
 
 		memset(&sdm_cfg, 0, sizeof(sdm_cfg));
 		fill_common_id(&sdm_cfg.id, devnum);
 		/* OTHER, not laces and not midsole: this is not on anybody's
 		 * shoe, and a receiver that draws a foot-pod icon from the
 		 * location field should not draw one here. */
-		sdm_cfg.location = PROFILE_SDM_LOC_OTHER;
-		sdm_cfg.battery = PROFILE_SDM_BATTERY_NEW; /* mains */
-		sdm_cfg.health = PROFILE_SDM_HEALTH_OK;
+		sdm_cfg.location = RADIANT_PROFILE_SDM_LOC_OTHER;
+		sdm_cfg.battery = RADIANT_PROFILE_SDM_BATTERY_NEW; /* mains */
+		sdm_cfg.health = RADIANT_PROFILE_SDM_HEALTH_OK;
 		/* On this profile the capability bits ARE the validity signal -
 		 * there is no 0xFF sentinel anywhere - so these must name
 		 * exactly the fields this machine really produces. No calories
 		 * bit unless page 18's estimate is compiled in. */
-		sdm_cfg.caps.flags = PROFILE_SDM_CAP_TIME |
-				     PROFILE_SDM_CAP_DISTANCE |
-				     PROFILE_SDM_CAP_SPEED |
-				     PROFILE_SDM_CAP_LATENCY |
-				     PROFILE_SDM_CAP_CADENCE;
+		sdm_cfg.caps.flags = RADIANT_PROFILE_SDM_CAP_TIME |
+				     RADIANT_PROFILE_SDM_CAP_DISTANCE |
+				     RADIANT_PROFILE_SDM_CAP_SPEED |
+				     RADIANT_PROFILE_SDM_CAP_LATENCY |
+				     RADIANT_PROFILE_SDM_CAP_CADENCE;
 #if defined(CONFIG_TREADMILL_FEC_METABOLIC)
-		sdm_cfg.caps.flags |= PROFILE_SDM_CAP_CALORIES;
+		sdm_cfg.caps.flags |= RADIANT_PROFILE_SDM_CAP_CALORIES;
 #endif
 
-		err = profile_sdm_init(&sdm, &sdm_cfg);
+		err = radiant_profile_sdm_init(&sdm, &sdm_cfg);
 		if (err != 0) {
-			LOG_ERR("profile_sdm_init: %d", err);
+			LOG_ERR("radiant_profile_sdm_init: %d", err);
 			return 0;
 		}
 	}
@@ -935,8 +935,8 @@ int main(void)
 		return 0;
 	}
 
-	if (ant_master_start(FEC_CHANNEL, devnum, PROFILE_FEC_DEVICE_TYPE,
-			     PROFILE_FEC_PERIOD) != 0) {
+	if (ant_master_start(FEC_CHANNEL, devnum, RADIANT_PROFILE_FEC_DEVICE_TYPE,
+			     RADIANT_PROFILE_FEC_PERIOD) != 0) {
 		return 0;
 	}
 #if defined(CONFIG_TREADMILL_ANT_SDM)
@@ -956,8 +956,8 @@ int main(void)
 	 * phone as well. The FE-C master above still returns, because without
 	 * it there is no treadmill on the air at all.
 	 */
-	if (ant_master_start(SDM_CHANNEL, devnum, PROFILE_SDM_DEVICE_TYPE,
-			     PROFILE_SDM_PERIOD) != 0) {
+	if (ant_master_start(SDM_CHANNEL, devnum, RADIANT_PROFILE_SDM_DEVICE_TYPE,
+			     RADIANT_PROFILE_SDM_PERIOD) != 0) {
 		LOG_ERR("the SDM master did not start; continuing with FE-C "
 			"only. Anything that pairs with a foot pod - Zwift Run, "
 			"most watches - will not see this machine.");

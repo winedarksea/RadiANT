@@ -54,6 +54,6 @@ a new surface:
   treadmill is doing something the spec reserves for trainers.
 - If a future revision of the FE-C profile allocates a treadmill-specific
   control page, this record is what says the current choice was deliberate and
-  what would have to change: the page number in `profile_fec_tx.h`, the decode
+  what would have to change: the page number in `radiant_profile_fec_tx.h`, the decode
   branch in `apps/treadmill/src/main.c`, and nothing else — the state, the
   actuator call and the FTMS side are all downstream of the decode.

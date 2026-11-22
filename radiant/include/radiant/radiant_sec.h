@@ -317,7 +317,7 @@ bool radiant_sec_x25519_is_degenerate(const uint8_t *shared);
  * files (nRF52840, -Os, ARM GCC; 2026-11-17: PEER_NONCE's key install, 544 B),
  * rounded up to a multiple of 256. A thread that runs pairing should check its
  * stack against this at build time, as apps/common/ant_serial_bridge.c does
- * (node_ident.h and profile_enrol.h point their callers here);
+ * (radiant_node_ident.h and radiant_profile_enrol.h point their callers here);
  * scripts/check_stack_budget.py re-measures the chains in CI, so a change that
  * deepens one fails there and this number moves with a measurement behind it.
  */
@@ -642,7 +642,7 @@ void radiant_sec_nonce_block(uint8_t out[RADIANT_SEC_BLOCK_BYTES],
  * pairing scalar or half of one - an X25519 scalar is 32 bytes, this KDF
  * emits 16, and [L]_2 being part of the PRF input means the 256-bit
  * derivation's first block differs from this label's 128-bit output in every
- * byte. The node's derivation is in src/node/node_ident.c.
+ * byte. The node's derivation is in src/node/radiant_node_ident.c.
  */
 #define RADIANT_SEC_LABEL_PAIR "pair"
 
@@ -843,7 +843,7 @@ void radiant_sec_window_verdict(uint8_t ch, uint16_t window_start,
  * CALLER'S CONTEXT - the pump, under the port's lock, in the middle of a
  * transform - so an override must only DEFER work (record the epoch, submit a
  * work item) and must not block, write flash or call back into radiant_sec.
- * node_ident.c's override persists the next free epoch from a work item and
+ * radiant_node_ident.c's override persists the next free epoch from a work item and
  * then raises the ceiling below.
  */
 void radiant_sec_epoch_advanced(uint8_t ch, uint32_t epoch);
@@ -854,7 +854,7 @@ void radiant_sec_epoch_advanced(uint8_t ch, uint32_t epoch);
  * default; same context rule as above - DEFER ONLY. Called on every refused
  * attempt, so once per slot while TX is withheld. Without it a catch-up of
  * more than one wrap (a sender silent for over one wrap) would wait forever
- * for an advance the authority never hears of. node_ident.c's override
+ * for an advance the authority never hears of. radiant_node_ident.c's override
  * reserves `epoch` (persists N = epoch + 1) and then raises the ceiling to it.
  *
  * Both hooks fire ONLY for a channel that carries a ceiling (an authority is
@@ -1111,7 +1111,7 @@ struct radiant_sec_stats {
 	 * Counts pairings that took, not attempts (a refused small-order
 	 * peer key, an unopened commitment or a wrapped root whose tag fails
 	 * leaves it alone), for both the 0xF5 host exchange and
-	 * profile_enrol.c's over-air window - one event either way. Bumped by
+	 * radiant_profile_enrol.c's over-air window - one event either way. Bumped by
 	 * radiant_sec_pair_peer_nonce() when its key installs; on enrolment,
 	 * by the sensor when it wraps this context's root for delivery
 	 * (radiant_sec_pair_peer_uncommitted()) and by the receiver when

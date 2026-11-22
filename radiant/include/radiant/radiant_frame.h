@@ -330,7 +330,7 @@ enum radiant_frame_cfg {
  * At S=8, a full 40-byte body is ~3.2 ms (1.3% duty at 4 Hz, 0.16% at
  * 0.5 Hz). What actually limits battery spend is the duty rule - a frame
  * must stay under 25% of its channel period - enforced by
- * profile_sched_duty_check() at the encoder, not by any constant here. That
+ * radiant_profile_sched_duty_check() at the encoder, not by any constant here. That
  * binds only a node with both a long frame and a fast period: costs a
  * 0.5 Hz asset tag nothing, refuses a 4 Hz node wanting a 40-byte frame.
  */

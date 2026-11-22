@@ -221,8 +221,8 @@ definitions:
   `radiant_hr_adapter.c` are compiled twice (`radiant_bridge_binding_changed`,
   `radiant_hr_adapter_init`, ...). Before 1d0d821 the module did not list them
   (checked at 7df6ada and at 1d0d821^).
-- `thread.conf;matter.conf` (L15): as above, plus `profile_common.c`,
-  `profile_env.c`, `profile_fec.c`, `profile_power_decode.c` and
+- `thread.conf;matter.conf` (L15): as above, plus `radiant_profile_common.c`,
+  `radiant_profile_env.c`, `radiant_profile_fec.c`, `radiant_profile_power_decode.c` and
   `radiant_power_adapter.c`.
 
 master moved to 377f926 ("usability follow up") during this phase. That commit

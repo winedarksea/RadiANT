@@ -144,7 +144,7 @@ the last ~3 dB costs 0.64 ms extra per frame, a quarter of a percent of duty at
 
 **S=2 stays in the wire vocabulary with no code behind it.** RF-5a's 3-bit
 coding-rate field (`0` uncoded, `1` S=8, `2` S=2 reserved) means a second rate
-arriving later is a value, not a format break. `profile_sched_coding_implemented()`
+arriving later is a value, not a format break. `radiant_profile_sched_coding_implemented()`
 returns false for rate 2; the encoder refuses to announce it; the decoder
 accepts it and declines the channel. **Reconsider only** if a RadiANT-native
 control type needs a tighter slot budget, and re-check sensitivity against the
@@ -222,7 +222,7 @@ compound. The limit is a duty rule:
 Self-enforcing and no second constant — the period is in descriptor frame 0,
 the rate in the schedule block, so a receiver checks the claim as cheaply as
 the node makes it. Enforced by **encoder refusal**, following the
-dwell-versus-clock-drift rule RF-5a landed in `profile_sched_check()`. It binds
+dwell-versus-clock-drift rule RF-5a landed in `radiant_profile_sched_check()`. It binds
 only where both a fast rate and a long frame are present — a 0.5 Hz asset tag
 at 40 bytes is 0.16 %, an 8-byte S=8 frame is 1.3 ms against any real period,
 neither ever sees it. The longest frame (3088 µs) needs a period of at least
@@ -239,7 +239,7 @@ frame costs one, and mid-stream join drops from N periods to one.
 **Nothing about the 8-byte frames changes.** Each descriptor frame already
 carries its own page byte and `(index << 4) | (count - 1)` byte, so a
 concatenation is self-describing: a receiver splits a long payload into 8-byte
-chunks and feeds each to `profile_desc_rx_feed()` — the same accumulator,
+chunks and feeds each to `radiant_profile_desc_rx_feed()` — the same accumulator,
 ordering rules and schema-id invalidation a 1 M receiver has always used. No
 second encoder to keep in step.
 
@@ -376,8 +376,8 @@ sensor that switches to private mode *becomes* a RadiANT-native `0x60` node and
 is therefore eligible for this PHY, for the length extension, for frequency
 agility and for response slots — reframing private mode from a sacrifice
 ("Zwift sees nothing") into **the doorway to everything in this record**.
-Nothing in this phase touches `profile_private.c`, `profile_hr.c`,
-`profile_power.c` or `profile_compat.c`; the exclusion is structural, not
+Nothing in this phase touches `radiant_profile_private.c`, `radiant_profile_hr.c`,
+`radiant_profile_power.c` or `radiant_profile_compat.c`; the exclusion is structural, not
 remembered.
 
 **A private-mode switch lands on 1 M / RF 57**, and any PHY move happens

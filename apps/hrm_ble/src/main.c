@@ -20,7 +20,7 @@
  * now behind src/hrm_sensor.h's seam, with the simulator as one implementation
  * of it, because that constant was the single thing standing between this
  * application and being a reference design. Read hrm_sensor.h before changing
- * anything about how beats reach profile_hr; the context rules are stated
+ * anything about how beats reach radiant_profile_hr; the context rules are stated
  * there and they are not obvious.
  *
  * See docs/hrm-reference-design.md for the porting guide and the production
@@ -32,8 +32,8 @@
 
 #include <radiant/radiant_ant.h>
 #include <radiant/radiant_wire.h>
-#include "profile_hr.h"
-#include "node_ident.h"
+#include "radiant_profile_hr.h"
+#include "radiant_node_ident.h"
 #include "hrm_sensor.h"
 
 #if defined(CONFIG_HRM_BLE_HRS)
@@ -62,7 +62,7 @@ static const uint8_t ant_plus_key[8] = {
 #define HR_CHANNEL       0u
 #define HR_NETWORK       0u
 
-static struct profile_hr hr;
+static struct radiant_profile_hr hr;
 
 /*
  * The node's housekeeping cadence. It used to be the beat tick as well; now it
@@ -126,8 +126,8 @@ static void ant_suppression_update(void)
  *
  * RUNS ON THE SYSTEM WORKQUEUE, and that is the whole reason it exists as a
  * separate function rather than being done inside hrm_sensor_report_beat().
- * profile_hr has no lock and is already reached from the radiant callback path
- * (radiant_ant_on_message -> load_next_page -> profile_hr_next). Doing the profile
+ * radiant_profile_hr has no lock and is already reached from the radiant callback path
+ * (radiant_ant_on_message -> load_next_page -> radiant_profile_hr_next). Doing the profile
  * work here keeps that at two contexts however the source is driven, including
  * from an ISR. hrm_sensor.h's header states the rule in full.
  *
@@ -140,17 +140,17 @@ void hrm_node_deliver_beats(uint16_t beats, uint16_t event_time, uint8_t bpm)
 	for (uint16_t i = 0; i < beats; i++) {
 		/*
 		 * Every beat, with the same instant when more than one is being
-		 * accounted for. profile_hr_beat() increments the event count
+		 * accounted for. radiant_profile_hr_beat() increments the event count
 		 * and stores the event time, so replaying a coalesced pair
 		 * advances the count correctly and leaves the time at the
 		 * genuine latest instant - it does not invent an interval that
 		 * never happened. The count is the field that survives a lost
 		 * packet, so that is the right way round.
 		 */
-		profile_hr_beat(&hr, event_time);
+		radiant_profile_hr_beat(&hr, event_time);
 	}
 
-	profile_hr_set_computed(&hr, bpm);
+	radiant_profile_hr_set_computed(&hr, bpm);
 
 #if defined(CONFIG_HRM_BLE_HRS)
 	/* One heart, two radios: the SIG service is notified from the
@@ -168,7 +168,7 @@ static void node_tick_fn(struct k_work *w)
 
 	/* Uptime, not a count of wake-ups: a sum of NODE_TICK_MS drifted slow
 	 * by every late wake-up and wrapped a uint32 of ms at 49.7 days. */
-	profile_hr_set_operating_time(&hr, (uint32_t)(k_uptime_get() / 1000));
+	radiant_profile_hr_set_operating_time(&hr, (uint32_t)(k_uptime_get() / 1000));
 
 	/* Contact detection, AGC, battery - the slow, level-valued things a
 	 * source may want a thread context for. Never beats; see the seam. */
@@ -190,16 +190,16 @@ static void node_tick_fn(struct k_work *w)
 static void load_next_page(void)
 {
 	uint8_t body[8];
-	enum profile_slot_kind kind;
+	enum radiant_profile_slot_kind kind;
 
 	/* This runs on the (preemptible) event thread; the source publishes
 	 * from the cooperative system workqueue, which can preempt it mid-
 	 * encode and hand this page half old and half new fields. Lock for
 	 * the encode only - not the send, which takes a mutex. */
 	k_sched_lock();
-	kind = profile_hr_next(&hr, (uint64_t)k_uptime_get() * 1000u, body);
+	kind = radiant_profile_hr_next(&hr, (uint64_t)k_uptime_get() * 1000u, body);
 	k_sched_unlock();
-	if (kind == PROFILE_SLOT_IDLE) {
+	if (kind == RADIANT_PROFILE_SLOT_IDLE) {
 		/* A sparse node's silent slot. The radio stays off and the
 		 * channel period keeps running; nothing to stage. */
 		return;
@@ -285,7 +285,7 @@ static int ant_start(uint16_t devnum)
 
 int main(void)
 {
-	struct profile_hr_cfg cfg;
+	struct radiant_profile_hr_cfg cfg;
 	uint16_t devnum = CONFIG_HRM_DEVICE_NUMBER;
 	int err;
 
@@ -298,7 +298,7 @@ int main(void)
 
 	/*
 	 * Device number from the identity record (ADR 0009). On the first boot
-	 * of a part with no record, node_ident_boot() generates K_dev from the
+	 * of a part with no record, radiant_node_ident_boot() generates K_dev from the
 	 * on-chip TRNG and stores it first (ADR 0020,
 	 * CONFIG_RADIANT_NODE_IDENT_SELF_PROVISION), so every unit flashed from
 	 * one build gets its own number with no factory step.
@@ -309,18 +309,18 @@ int main(void)
 	 * every boot because a shipped strap on that branch shares its identity
 	 * with every other unit built from the same image.
 	 */
-	err = node_ident_boot();
+	err = radiant_node_ident_boot();
 	if (err == 0) {
 		uint16_t d;
 
-		if (node_ident_devnum(&d) == 0 && d != 0u) {
+		if (radiant_node_ident_devnum(&d) == 0 && d != 0u) {
 			devnum = d;
 			LOG_INF("device number %u from the identity record", d);
 		}
 	} else {
 		LOG_ERR("identity boot failed: %s (%d); falling back to Kconfig "
 			"device number %u, no transforms",
-			node_ident_strerror(err), err, devnum);
+			radiant_node_ident_strerror(err), err, devnum);
 	}
 
 	/*
@@ -339,7 +339,7 @@ int main(void)
 	cfg.id.manufacturer_id = CONFIG_HRM_MANUFACTURER_ID;
 	cfg.id.model_number = 1u;
 	cfg.id.sw_revision_main = 1u;
-	cfg.id.sw_revision_supplemental = PROFILE_COMMON_INVALID_U8;
+	cfg.id.sw_revision_supplemental = RADIANT_PROFILE_COMMON_INVALID_U8;
 	cfg.id.serial_number = devnum;
 	cfg.manufacturer_id_8 = CONFIG_HRM_MANUFACTURER_ID;
 	cfg.serial_upper16 = devnum;
@@ -348,14 +348,14 @@ int main(void)
 	cfg.sw_version = 1u;
 	cfg.common_82_every = 0u; /* no battery page rotation on a DK */
 
-	err = profile_hr_init(&hr, &cfg);
+	err = radiant_profile_hr_init(&hr, &cfg);
 	if (err != 0) {
-		LOG_ERR("profile_hr_init: %d", err);
+		LOG_ERR("radiant_profile_hr_init: %d", err);
 		return 0;
 	}
 
 	/*
-	 * Between profile_hr_init() and ant_start(), which is the only correct
+	 * Between radiant_profile_hr_init() and ant_start(), which is the only correct
 	 * window: the profile must exist before a beat can be delivered into
 	 * it, and the source must be running before the channel opens so the
 	 * first staged page can already carry a rate.
@@ -364,7 +364,7 @@ int main(void)
 	 * reads THEIR driver's name at boot - or the reference simulator's, and
 	 * there is no third answer. A -ENODEV here is the deliberate
 	 * CONFIG_HRM_SENSOR_CUSTOM failure; the node keeps running and
-	 * transmits PROFILE_HR_INVALID_BPM, which is visible from the receiving
+	 * transmits RADIANT_PROFILE_HR_INVALID_BPM, which is visible from the receiving
 	 * end in a way that a silent simulator fallback would not be.
 	 */
 	err = hrm_sensor_start();

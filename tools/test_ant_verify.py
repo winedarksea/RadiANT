@@ -514,7 +514,7 @@ def fec_trainer_page(event_count: int, cadence_rpm: int | None,
                      acc_power_w: int, inst_power_w: int | None,
                      trainer_status: int = 0, state: int = ap.FEC_STATE_IN_USE
                      ) -> bytes:
-    """FE-C page 25, packed as profile_fec_encode_trainer() packs it.
+    """FE-C page 25, packed as radiant_profile_fec_encode_trainer() packs it.
 
     ant_pages has a decoder for this page and no encoder; the C encoder is
     the reference, so the packing is restated here rather than invented.

@@ -60,21 +60,21 @@ target_sources(app PRIVATE
 include("${CMAKE_CURRENT_SOURCE_DIR}/../common/sources.cmake")
 
 # radiant/src/profiles: what the linker needs for the FE-C master, the same
-# list apps/treadmill links. profile_fec.c (the DECODER) is absent there and
+# list apps/treadmill links. radiant_profile_fec.c (the DECODER) is absent there and
 # absent here too - the trainer transmits page 25, it does not decode one.
 target_sources(app PRIVATE
-  ../../radiant/src/profiles/profile_bits.c
-  ../../radiant/src/profiles/profile_common.c
-  ../../radiant/src/profiles/profile_sched.c
-  ../../radiant/src/profiles/profile_schedule.c
-  ../../radiant/src/profiles/profile_telemetry.c
-  ../../radiant/src/profiles/profile_handoff.c
-  ../../radiant/src/profiles/profile_fec_tx.c
+  ../../radiant/src/profiles/radiant_profile_bits.c
+  ../../radiant/src/profiles/radiant_profile_common.c
+  ../../radiant/src/profiles/radiant_profile_sched.c
+  ../../radiant/src/profiles/radiant_profile_schedule.c
+  ../../radiant/src/profiles/radiant_profile_telemetry.c
+  ../../radiant/src/profiles/radiant_profile_handoff.c
+  ../../radiant/src/profiles/radiant_profile_fec_tx.c
 )
 target_include_directories(app PRIVATE ../../radiant/src/profiles)
 
 target_sources(app PRIVATE
-  ../../radiant/src/node/node_ident.c
-  ../../radiant/src/node/node_nvm_settings.c
+  ../../radiant/src/node/radiant_node_ident.c
+  ../../radiant/src/node/radiant_node_nvm_settings.c
 )
 target_include_directories(app PRIVATE ../../radiant/src/node)

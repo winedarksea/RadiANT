@@ -67,7 +67,7 @@ tests:
   # already said =y - was a no-op duplicate, and the default-n configuration
   # every shipping dongle uses was built by no ztest scenario at all (review
   # 2026-10-31, E3-2). This is that build. The X25519 suites (sec_x25519,
-  # sec_pair, profile_enrol, node_ident's pairing block) compile out here by
+  # sec_pair, radiant_profile_enrol, node_ident's pairing block) compile out here by
   # their own #if; min_cases.radiant.unit.no_pairing in
   # tests/expected_counts.yaml says how many cases that leaves, so a suite that
   # vanishes elsewhere is still caught.
@@ -95,7 +95,7 @@ tests:
   # The same suites with pairing ON and the entropy backend OFF: a hostless
   # node with no RNG (security review 2026-11-17 item 8). ADR 0009 gives it the
   # deterministic scalar KDF(K_dev, "pair" || pair_counter), and
-  # node_ident_pair_begin() must pick that path only when caps.has_rng is
+  # radiant_node_ident_pair_begin() must pick that path only when caps.has_rng is
   # false. Every other scenario that builds pairing has the fake RNG on, so
   # without this one the KDF branch of pair_begin() runs nowhere.
   # SELF_PROVISION goes off by dependency, so node_ident's cases provision
