@@ -89,7 +89,7 @@ FIELDS = (
      "USB bulk-IN transfers that timed out waiting on the host"),
 )
 
-# What the shortest reply carries - radiant/include/radiant/ant_health.h's
+# What the shortest reply carries - apps/common/ant_health.h's
 # ANT_HEALTH_PAYLOAD_LEN, which is the definition this mirrors. It is the
 # shortest body this tool accepts: a board that predates a later field still
 # decodes.
@@ -111,7 +111,7 @@ OPTIONAL_FIELDS = (
      "not measured (USB transport, older firmware, or no driver support)"),
 )
 
-# radiant/include/radiant/ant_health.h's ANT_HEALTH_NOT_MEASURED.
+# apps/common/ant_health.h's ANT_HEALTH_NOT_MEASURED.
 NOT_MEASURED = 0xFFFF
 
 

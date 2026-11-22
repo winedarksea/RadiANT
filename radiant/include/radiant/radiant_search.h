@@ -930,8 +930,8 @@ const struct radiant_search_stats *radiant_search_get_stats(const struct radiant
 #define RADIANT_SEARCH_COVERAGE_BINS      32u
 
 /* The sets_advanced_uncovered of the one running sweep, or 0 before it exists.
- * For ant_health_fill(): the application cannot name the instance and core
- * code cannot call ant_health_note(). Defined where the instance lives. */
+ * For the application's health reply, which cannot name the instance.
+ * Defined where the instance lives. */
 uint32_t radiant_search_sets_uncovered_get(void);
 #endif
 

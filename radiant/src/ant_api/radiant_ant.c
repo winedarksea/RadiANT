@@ -38,7 +38,6 @@
 #endif
 
 #include <radiant/radiant_wire.h>
-#include <radiant/ant_health.h>
 #include <radiant/radiant_ant.h>
 
 #include "radiant_ant_internal.h"
@@ -1828,7 +1827,7 @@ static void api_post_search_window(radiant_time_t now)
 		/* Only the BUSY half is noted: the idle half would climb forever and
 		 * saturate the reply. See ANT_HEALTH_SWEEP_BUSY. */
 		if (any_searching) {
-			ant_health_note(ANT_HEALTH_SWEEP_BUSY);
+			radiant_ant_health_note(RADIANT_ANT_HEALTH_SWEEP_BUSY);
 		}
 		return;
 	}
@@ -2624,7 +2623,7 @@ static void api_sched_rx(uint8_t ch, uint8_t filter_index,
 		if (radiant_channel_op_owner(api_ch[ch].op) != (int)ch) {
 			/* Same condition as the ownership check below, without LOG_DBG:
 			 * this runs on CRC_FAIL events. */
-			ant_health_note(ANT_HEALTH_RX_NOT_OWNER);
+			radiant_ant_health_note(RADIANT_ANT_HEALTH_RX_NOT_OWNER);
 			return;
 		}
 		if (!radiant_transfer_is_idle(&api_xfer[ch])) {
@@ -2668,7 +2667,7 @@ static void api_sched_rx(uint8_t ch, uint8_t filter_index,
 		LOG_DBG("rx drop ch=%u not-owner op=%d owner=%d", (unsigned)ch,
 			(int)api_ch[ch].op,
 			radiant_channel_op_owner(api_ch[ch].op));
-		ant_health_note(ANT_HEALTH_RX_NOT_OWNER);
+		radiant_ant_health_note(RADIANT_ANT_HEALTH_RX_NOT_OWNER);
 		return;
 	}
 
@@ -2872,12 +2871,12 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 	api_stats.sched_dones++;
 	if (why == RADIANT_SCHED_DONE_MISSED) {
 		api_stats.sched_missed++;
-		ant_health_note(ANT_HEALTH_SCHED_MISSED);
+		radiant_ant_health_note(RADIANT_ANT_HEALTH_SCHED_MISSED);
 	} else if (why == RADIANT_SCHED_DONE_FAILED) {
 		api_stats.sched_failed++;
-		ant_health_note(ANT_HEALTH_SCHED_FAILED);
+		radiant_ant_health_note(RADIANT_ANT_HEALTH_SCHED_FAILED);
 	} else if (why == RADIANT_SCHED_DONE_DENIED) {
-		ant_health_note(ANT_HEALTH_SCHED_DENIED);
+		radiant_ant_health_note(RADIANT_ANT_HEALTH_SCHED_DENIED);
 		/* Counted from `why`: api_done_to_status() folds a denial into
 		 * FAILED for the transfer engine, so this is the one point the
 		 * distinction survives. */
@@ -4042,7 +4041,7 @@ radiant_ant_err_t radiant_ant_network_address_set(uint8_t network, const uint8_t
 	 * RADIANT_WIRE_INVALID_PARAMETER_PROVIDED (see the file header). */
 	if (memcmp(key, api_ant_plus_key, sizeof(api_ant_plus_key)) != 0) {
 		api_stats.key_rejects++;
-		ant_health_note(ANT_HEALTH_KEY_REJECT);
+		radiant_ant_health_note(RADIANT_ANT_HEALTH_KEY_REJECT);
 		return (radiant_ant_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED;
 	}
 

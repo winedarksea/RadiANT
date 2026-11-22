@@ -18,6 +18,10 @@
 #include "ant_health.h"
 #include <radiant/radiant_wire.h>
 
+#if defined(CONFIG_RADIANT_ANT_HEALTH_HOOK)
+#include <radiant/radiant_ant.h>
+#endif
+
 /*
  * Saturating at 16 bits rather than counting at 32 and truncating on the wire.
  *
@@ -54,6 +58,41 @@ void ant_health_note(enum ant_health_counter c)
 		atomic_set(&saturated, 1);
 	}
 }
+
+#if defined(CONFIG_RADIANT_ANT_HEALTH_HOOK)
+/*
+ * The radiant module's report of its own loss and refusal events, mapped onto
+ * this application's counters. The module does not know the 0xF6 reply
+ * exists; it only reports through <radiant/radiant_ant.h>. Called from the
+ * radio interrupt for the SCHED_* and RX_NOT_OWNER events, which
+ * ant_health_note()'s atomics already allow.
+ */
+void radiant_ant_health_note(enum radiant_ant_health_event e)
+{
+	switch (e) {
+	case RADIANT_ANT_HEALTH_SWEEP_BUSY:
+		ant_health_note(ANT_HEALTH_SWEEP_BUSY);
+		break;
+	case RADIANT_ANT_HEALTH_RX_NOT_OWNER:
+		ant_health_note(ANT_HEALTH_RX_NOT_OWNER);
+		break;
+	case RADIANT_ANT_HEALTH_SCHED_MISSED:
+		ant_health_note(ANT_HEALTH_SCHED_MISSED);
+		break;
+	case RADIANT_ANT_HEALTH_SCHED_FAILED:
+		ant_health_note(ANT_HEALTH_SCHED_FAILED);
+		break;
+	case RADIANT_ANT_HEALTH_SCHED_DENIED:
+		ant_health_note(ANT_HEALTH_SCHED_DENIED);
+		break;
+	case RADIANT_ANT_HEALTH_KEY_REJECT:
+		ant_health_note(ANT_HEALTH_KEY_REJECT);
+		break;
+	default:
+		break;
+	}
+}
+#endif /* CONFIG_RADIANT_ANT_HEALTH_HOOK */
 
 void ant_health_depth(uint8_t which, uint32_t used)
 {

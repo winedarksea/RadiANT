@@ -18,12 +18,13 @@ config ANT_DONGLE_DIAG
 config ANT_DONGLE_HEALTH_COUNTERS
 	bool "Count what the dongle threw away, readable as MESG_RADIANT_HEALTH (0xF6)"
 	select RADIANT_SEARCH_COVERAGE if RADIANT_BACKEND_NRF_GATE_MPSL
+	select RADIANT_ANT_HEALTH_HOOK
 	help
 	  Counts silent, dongle-side loss - USB TX queue drops, event-queue
 	  overflows, RX backpressure, refused network keys, scheduler misses
 	  and denials, burst back-pressure stalls, and the two halves of the
 	  sweep's declined-to-post reason - and answers them to a host that
-	  sends MESG_REQUEST (0x4D) for 0xF6. See radiant/include/radiant/ant_health.h.
+	  sends MESG_REQUEST (0x4D) for 0xF6. See apps/common/ant_health.h.
 
 	  WHY IT MATTERS MORE THAN THE COUNTERS THEMSELVES.
 	  tools/ab_gates.toml's `unexplained_loss.max = 0` is a *sitting

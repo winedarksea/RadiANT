@@ -19,7 +19,7 @@
 #define CONFIG_ANT_DONGLE_HEALTH_COUNTERS 1
 #define ant_health_note test_parser_health_note
 
-#include <radiant/ant_health.h>
+#include "../../../apps/common/ant_health.h"
 
 static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len);
 

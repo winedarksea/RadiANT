@@ -1293,6 +1293,17 @@ config RADIANT_ANT_API
 	  and the radiant_event_* functions) that a project using the
 	  low-level API writes for itself.
 
+config RADIANT_ANT_HEALTH_HOOK
+	bool
+	help
+	  The application defines radiant_ant_health_note() and is told about
+	  the runtime's silent loss and refusal events (sweep busy, receive
+	  for a channel op that moved on, scheduler windows missed, failed or
+	  denied, refused network keys). No prompt: an application selects it
+	  when it has somewhere to put them, as the dongle's
+	  ANT_DONGLE_HEALTH_COUNTERS does. Off, every report compiles to
+	  nothing. See <radiant/radiant_ant.h>.
+
 config RADIANT_PHY_LR_CODED
 	bool "advertise the coded (LE Coded S=8) PHY"
 	depends on RADIANT_BACKEND_NRF

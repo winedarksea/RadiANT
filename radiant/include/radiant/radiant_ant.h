@@ -1342,4 +1342,37 @@ radiant_ant_err_t radiant_ant_reply_stats_get(uint8_t channel, struct radiant_an
 
 #endif /* CONFIG_RADIANT_ACK_FAULTS */
 
+/*
+ * Loss and refusal events the runtime can report to the application.
+ *
+ * Each is a silent, device-side event with no RX_FAIL or reply beside it: a
+ * sweep window that could not get on the air while a channel was still
+ * searching, a received frame whose channel op had already moved on, a
+ * scheduler window that never opened (MISSED, FAILED, or DENIED by the
+ * arbiter), or a frame refused for an unusable network key. The dongle
+ * application counts them for its 0xF6 health reply.
+ *
+ * OFF BY DEFAULT. Without CONFIG_RADIANT_ANT_HEALTH_HOOK every call compiles
+ * to nothing - a macro, not an empty function, so an image that does not want
+ * the hook is byte-identical to one built before the hook existed. With it,
+ * the application defines radiant_ant_health_note().
+ *
+ * RADIO INTERRUPT CONTEXT for the SCHED_* and RX_NOT_OWNER events: the
+ * implementation must be ISR-safe and must not block.
+ */
+enum radiant_ant_health_event {
+	RADIANT_ANT_HEALTH_SWEEP_BUSY,
+	RADIANT_ANT_HEALTH_RX_NOT_OWNER,
+	RADIANT_ANT_HEALTH_SCHED_MISSED,
+	RADIANT_ANT_HEALTH_SCHED_FAILED,
+	RADIANT_ANT_HEALTH_SCHED_DENIED,
+	RADIANT_ANT_HEALTH_KEY_REJECT,
+};
+
+#if defined(CONFIG_RADIANT_ANT_HEALTH_HOOK)
+void radiant_ant_health_note(enum radiant_ant_health_event e);
+#else
+#define radiant_ant_health_note(e) ((void)0)
+#endif
+
 #endif /* RADIANT_RADIANT_ANT_H_ */
