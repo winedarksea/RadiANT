@@ -36,9 +36,6 @@ Checks and decisions left over from work that has otherwise landed.
      retry (within 1 s) gets an id at or above it.
 - [ ] **Zwift shim key redaction end to end.** Run `ant_zwift_visible.py --dll`
   on the bench against the redacting shim (sec review 2026-11-20).
-- [ ] **HR dual transmission on air.** Since d530eac the default `ble.conf`
-  image sends ANT+ and BLE together for a whole connection. That has not been
-  run on air.
 - [ ] **Nordic report on MPSL assert 69:108.** A draft is in
   `archive/benchmarks/2026-11-15-assert-69108/nordic-report-draft.md`; posting
   it is your call. DevZone thread 128550 reports the same `69, 108` from

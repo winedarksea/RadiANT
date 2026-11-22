@@ -1,0 +1,8 @@
+[2026-11-22T10:51:41.932] [00:21:19.983,509] <inf> hrm: BLE connected
+[2026-11-22T10:51:43.953] [00:21:22.237,865] <inf> hrm: connection params updated: interval=11 (13 ms) latency=0 timeout=960 (9600 ms)
+[2026-11-22T10:51:43.953] [00:21:22.649,044] <inf> hrs: HRS notifications enabled
+[2026-11-22T10:51:45.974] [00:21:23.982,814] <inf> hrm: connection params updated: interval=35 (43 ms) latency=0 timeout=960 (9600 ms)
+[2026-11-22T10:51:46.978] [00:21:25.257,847] <inf> hrm: connection params updated: interval=800 (1000 ms) latency=0 timeout=400 (4000 ms)
+[2026-11-22T11:03:49.071] [00:33:27.275,313] <inf> hrs: HRS notifications disabled
+[2026-11-22T11:03:49.071] [00:33:27.275,333] <inf> hrm: BLE disconnected (0x13)
+[2026-11-22T11:03:49.071] [00:33:27.275,796] <inf> hrm: BLE: advertising again after disconnect

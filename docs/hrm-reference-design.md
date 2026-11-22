@@ -422,6 +422,13 @@ re-measures them.
   nothing is not evidence of a problem.
 - **The beat-count hold.** 60 s connected, count HRS notifications, expect 72 at
   the default rate. This is check 2 of §6 and is what found the drift bug.
+- **ANT+ and BLE together, 2026-11-22** (`archive/benchmarks/2026-11-22-hrm-dual/`).
+  The default `ble.conf` image, A/B/A of 600 s legs (advertising / connected /
+  advertising) against a same-window control on a second receiver: ANT+ loss
+  above the control was +5.30, +5.63 and +6.20 points, so a held connection at
+  the 1 s interval cost nothing measurable. 72 notifications in every 60 s
+  window. Use one receiver per transmitter: two HR channels at 8070 counts on
+  one stick collide with each other and measure the stick.
 
 ### Why the intervals are the policy, not a power setting
 
@@ -461,7 +468,11 @@ floor above. It is a real trade, made deliberately, in one direction.
 - **No signing, watchdog or version string** — §5, item 9.
 - **The MPSL gate's BLE arm is the less-measured one.** `radiant-bridge.md`
   records that bug 22's `elastic_skew_us` removal "has only been measured against
-  OpenThread. Re-measure the BLE arm before treating the advertiser case as
-  settled." The default `ble.conf` build is that arm.
+  OpenThread". One on-air A/B/A (§7, 2026-11-22) found a held 1 s connection
+  no worse than advertising alone. Not separated: the ~5-6 points the node
+  loses above the control in every leg, which mixes advertising events that
+  outrank ANT+ with the link to that receiver. A phone requesting a short
+  interval (the `le_param_req` rewrite) was not exercised; the Windows central
+  sets its interval directly.
 - **Wider RadiANT limits** — discovery, loss floor, the sweep gap — are the
   dongle's, and live with it rather than here.
